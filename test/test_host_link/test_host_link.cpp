@@ -632,6 +632,39 @@ void test_time() {
   TEST_ASSERT_TRUE(send(l, "@hello 1 back viz", 4000).event == E::Enter);  // 3 s after the exit
 }
 
+// @format (docs/HOST-STATUS.md, "@format"): only the question on the
+// board's screen (app/HostQuery asks the UI, and says whether it showed
+// it); fields after it ignored, as anywhere; the firmware's refusals as
+// its @err 4; as the other questions, in a session or not, declined or
+// not, and it keeps nothing alive. An older firmware's answer is @err 7.
+void test_format() {
+  HostLink l;
+  l.begin(kFw);
+  HostLink::Out o = send(l, "@format", 0);
+  TEST_ASSERT_TRUE(o.event == E::Format);
+  expectReply(o, "");
+  TEST_ASSERT_TRUE(send(l, "@format fat32 now", 0).event == E::Format);
+  TEST_ASSERT_EQUAL_UINT32(0, l.stats().errors);
+  expectReply(l.refuse(1000, HostLink::kBusy, "format", "ui"), "@err 4 format ui");
+  expectReply(l.refuse(1001, HostLink::kBusy, "format", "card"), "@err 4 format card");
+  // (The boot's format, failed: its last line, the same way.)
+  expectReply(l.refuse(1002, HostLink::kBusy, "format", "write"), "@err 4 format write");
+  expectReply(send(l, "@formatcard", 5000), "@err 7 formatcard");
+  expectReply(send(l, "@mkfs", 5000), "@err 7 mkfs");
+  TEST_ASSERT_FALSE(l.active());
+  // In a session: no line of it, nothing kept alive.
+  l = inSession(10000);
+  TEST_ASSERT_TRUE(send(l, "@format", 11000).event == E::Format);
+  TEST_ASSERT_EQUAL_UINT32(2, l.stats().lines);
+  TEST_ASSERT_TRUE(l.poll(13000, true).event == E::Exit);  // 3 s after @e: timed out
+  // Declined: answered, and the decline's quiet goes on through it.
+  l = inSession(0);
+  l.end(W::Touch, 1000);
+  TEST_ASSERT_TRUE(send(l, "@format", 2000).event == E::Format);
+  TEST_ASSERT_TRUE(l.declined());
+  TEST_ASSERT_TRUE(send(l, "@hello 1 back viz", 4000).event == E::Enter);  // 3 s after the exit
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_hello_enters);
@@ -656,5 +689,6 @@ int main(int, char**) {
   RUN_TEST(test_a_session_line_by_line);
   RUN_TEST(test_board_questions);
   RUN_TEST(test_time);
+  RUN_TEST(test_format);
   return UNITY_END();
 }

@@ -345,6 +345,31 @@ built without exFAT and without GPT (`lib/core/CardFormat`). The tree:
   or `/.player`, and it skips every name under `/music` that starts with
   a dot (`src/storage/LocalStorage.cpp`, `walk()`).
 
+**A card the player formats** (firmware 0.12.0; docs/HOST-STATUS.md,
+"@format"). The listener can have the player format a card: one that
+isn't FAT32 or can't be read, from the player's own no-card screen, or
+any card when the software asks with `@format`, which only brings up the
+player's question; the listener confirms it there, twice. The software
+never formats a card through the player otherwise. The card it leaves
+(`lib/core/CardMkfs`, host-tested on ChaN's FatFs as the Core2 builds
+it), which the software MAY rely on:
+
+- Sector 0 is an MBR with one primary partition, type 0x0C (FAT32,
+  LBA), from sector 8192 (4 MiB) to the card's last sector; the sectors
+  between, and the card's last 64, are zero (nothing of a GPT is left).
+- The partition is FAT32: 512-byte sectors, 2 FATs, 32 KB clusters on a
+  card of 2.16 GB or more (on a smaller one the largest cluster that
+  leaves FAT32 its 65,526), the data area from a 4 MiB boundary; the
+  boot sector's backup at 6, FSINFO at 1 and 7, its free count valid.
+- `/music`, empty, and `/.player/device.txt`, the firmware's (2.15), so
+  the software reads what the player takes (Opus, `read.mpdj=2`,
+  `history=1`) before the card's first boot in a player; nothing else:
+  no `/.mstream`, so the software's set-up makes the card's first commit
+  (and its `cardId`).
+- A new volume serial and disk signature: a card the software knew is
+  another card after it (its `/.mstream`, and the `cardId` in it, are
+  gone).
+
 ### 2.3 Conventions shared by every file
 
 #### 2.3.1 Bytes

@@ -111,3 +111,15 @@ const char* HostQuery::setTime(uint64_t unixMs) {
   Serial.printf("@time ok\n");
   return nullptr;
 }
+
+const char* HostQuery::format() {
+  const char* why = hooks_.askFormat ? hooks_.askFormat() : "ui";
+  if (why) {
+    Serial.printf("[host] format: a computer asked; the question not shown (%s)\n", why);
+    return why;
+  }
+  Serial.printf("@format ok\n");
+  Serial.printf("[host] format: a computer asked; the question is on the screen (nothing formats without the "
+                "listener's two taps there)\n");
+  return nullptr;
+}

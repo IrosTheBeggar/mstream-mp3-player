@@ -754,7 +754,11 @@ bool QueuePage::emptyState(EmptyState& e) {
 
 void QueuePage::onEmptyAction(int i) {
   if (noCard()) {
-    ui_.retryCard();
+    if (i == 1) {
+      ui_.askFormat(false);  // (Format...: a card that is in, not FAT32 or unreadable)
+    } else {
+      ui_.retryCard();
+    }
     return;
   }
   if (i == 0) {

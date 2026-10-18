@@ -613,10 +613,13 @@ bool LibraryPage::emptyState(EmptyState& e) {
 }
 
 void LibraryPage::onEmptyAction(int i) {
-  (void)i;
   const AppState& s = ui_.state();
   if (!s.card && s.libraryTracks == 0) {
-    ui_.retryCard();
+    if (i == 1) {
+      ui_.askFormat(false);  // (Format...: a card that is in, not FAT32 or unreadable)
+    } else {
+      ui_.retryCard();
+    }
     return;
   }
   ui_.toast(tr(S::library_looking_again), false);

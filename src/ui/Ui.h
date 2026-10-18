@@ -317,6 +317,29 @@ public:
   // .still: "Still no card: ...", "Still exFAT: ...", "Still GPT: ..."),
   // and the page drawn again if that changed.
   void retryCard();
+  // The format's question (docs/HOST-STATUS.md, "@format"): from a no-card
+  // page's Format… (a card that is in but isn't FAT32 or can't be read),
+  // or a computer's @format (`fromComputer`), which can do no more than
+  // this. Two dialogs, each with Cancel: first what it does ("Format this
+  // card?": the whole card erased, even what the player can't read; a
+  // card the player reads, its music named; a transfer that didn't finish
+  // on it, said; a damaged card's "Check it on a computer first"), then
+  // "Erase the whole card?" with Format, red, where the first one's
+  // Cancel was, and a touch in its first kFormatSettleMs ignored (a double
+  // tap never answers both). Cancel is the default: anything but a tap on
+  // Format closes it as Cancel (a tab, another dialog, another screen
+  // taking the display, the language changed, kFormatAskMs without an
+  // answer). Format: UiHost::formatCard(), the "Restarting to format"
+  // note. Taps tick, as every dialog's. The screen wakes for it. Asked
+  // again while it is up: it stays (a computer's ask is then the answer's
+  // too). False: the UI isn't up (not started, or another screen has the
+  // display).
+  static constexpr uint32_t kFormatAskMs = 60000;
+  static constexpr uint32_t kFormatSettleMs = 600;
+  bool askFormat(bool fromComputer);
+  bool formatAsking() const {
+    return dialog_.up() && (ownDialog_ == OwnDialog::FormatAsk || ownDialog_ == OwnDialog::FormatSure);
+  }
   bool toastUp() const { return toast_.up(); }
   void drawHeader(const Header& h);
 
@@ -431,7 +454,15 @@ private:
   bool playFailedDialog_ = false;  // ... is playFailed()'s
   // Which of the Ui's own dialogs onDialog() answers (the flags above are
   // cleared as a dialog closes, before its owner hears the button).
-  enum class OwnDialog : uint8_t { None, Lost, PlayFailed } ownDialog_ = OwnDialog::None;
+  enum class OwnDialog : uint8_t { None, Lost, PlayFailed, FormatAsk, FormatSure } ownDialog_ = OwnDialog::None;
+  // The format's question: a computer's @format asked it, when it opened
+  // (its minute, the second's settle), and why it goes when that isn't a
+  // button (the log's: set before it is closed).
+  bool formatFromComputer_ = false;
+  uint32_t formatOpenedMs_ = 0;
+  const char* formatGone_ = nullptr;
+  void openFormatSure();
+  void formatAnswered(OwnDialog which, int button);
   uint32_t gateFailuresSeen_ = 0;
   // The first boot: the tips seen (NVS "ui"/"coach"); a fresh unit's
   // language picker due or up; the tips (and the language's note) to show

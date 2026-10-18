@@ -848,10 +848,11 @@ int JumpGrid::onEvent(const InputEvent& e) {
 // ---- Dialog ----
 
 void Dialog::open(const char* title, const char* body, const char* const* buttons, int n, uint16_t accent,
-                  bool danger) {
+                  bool danger, int primary) {
   copy(title_, sizeof(title_), title);
   copy(body_, sizeof(body_), body);
   n_ = std::max(1, std::min(2, n));
+  primary_ = primary >= 0 && primary < n_ ? primary : n_ - 1;
   for (int i = 0; i < n_; ++i) copy(buttons_[i], sizeof(buttons_[i]), buttons[i]);
   accent_ = accent;
   danger_ = danger;
@@ -915,7 +916,7 @@ void Dialog::render() {
   const int bw = n_ == 1 ? kW - 24 : (kW - 30) / 2;
   for (int i = 0; i < n_; ++i) {
     const int x = 12 + i * (bw + 6);
-    const bool primary = i == n_ - 1;
+    const bool primary = i == primary_;
     const uint16_t b = i == pressed_ ? col::BTN_HI : primary ? (danger_ ? col::RED : accent_) : col::BTN;
     s.fillRoundRect(x, kH - 46, bw, 36, 8, b);
     // A label too wide for its button ("Play on speaker": 127 px of 123)

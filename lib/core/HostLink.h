@@ -41,6 +41,9 @@
 //       question (timeMs 0); with a time, set the board's clock to it: Unix
 //       ms, digits only (not one: @err 1), a time wallclock::believable()
 //       (2026 to 2099, else @err 5).
+//   @format                               Format (since 0.12.0): only brings
+//       up the question on the board's screen (the listener confirms a
+//       format there, twice, or not).
 // They change nothing here: not a session's timeout, nor its counters, nor
 // a decline's quiet (a player that asks for @status every second can start
 // the dancer again once its own user asks).
@@ -76,7 +79,9 @@ public:
   static constexpr float kMaxEnergy = 1e4f;
   static constexpr const char* kCaps = "viz,log";
 
-  enum class Event : uint8_t { None, Enter, Restart, Exit, Epoch, Prior, Hop, Clock, Log, Status, Count, Identify, Time };
+  enum class Event : uint8_t {
+    None, Enter, Restart, Exit, Epoch, Prior, Hop, Clock, Log, Status, Count, Identify, Time, Format,
+  };
   enum class Why : uint8_t { Bye, Timeout, Unplugged, Touch, Button, HeadsetKey, DanceGone };
   // Why an @hello can't start host mode now (the first that applies).
   enum class Busy : uint8_t { None, Ui, Screen, Pairing, Dance };

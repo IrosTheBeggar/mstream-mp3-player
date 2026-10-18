@@ -1335,8 +1335,10 @@ the player's state, the card's id and commit from the root the boot read,
 whether the clock is set, the paired headphones), `@count` (the card's free
 clusters counted once, on request: Storage, "The free space"),
 `@identify <label>` (a full-screen "This one" banner for 5 s and a buzz,
-to tell two boards apart) and `@time [<unix-ms>]` (the board's clock, or
-set it). `HostLink` routes them (in a session or not,
+to tell two boards apart), `@time [<unix-ms>]` (the board's clock, or
+set it) and `@format` (the question that formats the card, on the
+board's screen: the listener answers it there; Storage, "Formatting in
+the player"). `HostLink` routes them (in a session or not,
 declined or not, and none keeps a session alive or a decline going);
 `app/HostQuery` answers, with `lib/core/HostStatus` (the line, the FSINFO
 rule, the label's rule), `lib/core/FreeCount` and `storage/CardSpace` (the
@@ -1346,7 +1348,7 @@ when it goes), and `app/BoardClock` over `lib/core/WallClock` (the clock:
 the RTC, a BM8563, read at the boot with its voltage-low flag, written
 for a `@time`; then the time is that plus the board's monotonic ms, and
 `boardclock::now()` is how the firmware reads it). Older firmware answers
-`@err 7 status`, and before 0.12.0 `@err 7 time`.
+`@err 7 status`, and before 0.12.0 `@err 7 time` and `@err 7 format`.
 
 ## Storage
 
@@ -1449,7 +1451,10 @@ Playing, the Library and the Queue then names it, one message per kind
 
 The last covers a blank or unformatted card, Linux's, and a FAT card that
 failed to mount for another reason (a flaky contact, say), so it never says
-"format it": that card may hold music a second Try again finds. GPT's text
+"format it": that card may hold music a second Try again finds. Each but
+"No microSD card" has a second button, Format..., the player's own format
+(below), whose question for this last kind first sends the card to a
+computer's disk check. GPT's text
 uses macOS Disk Utility's words ("Master Boot Record" is its Scheme), since
 a card a Mac erased whole is the usual GPT one. Try again reads the sectors
 again when the card still doesn't mount, so its note follows what is in.
@@ -1467,6 +1472,36 @@ and can't-read states without such a card (`uiFn`: no card).
 true makes the SD driver's `sdcard_mount()` run `f_mkfs(FM_ANY)` on any card
 FatFs finds no FAT volume on (`FR_NO_FILESYSTEM`), which is every exFAT,
 NTFS, GPT and blank card: someone's music wiped at boot without a word.
+A card is formatted only when the listener confirms it, twice:
+
+**Formatting in the player** (0.12.0; [HOST-STATUS.md, "@format"](HOST-STATUS.md#format)).
+The no-card pages' Format... (a card that is in but isn't FAT32, or
+can't be read), or a computer's `@format`, which can do no more than
+bring up the same question: `Ui::askFormat()`'s two dialogs, "Format this
+card?" (the whole card erased, even what the player can't read; a card
+the player reads names its music, and a transfer that didn't finish on
+it; a damaged card's "Check it on a computer first") and "Erase the
+whole card?", whose red Format sits where the first one's Cancel was,
+with a settle for a double tap. Cancel is the default: a tab, another
+dialog or screen, a minute with no answer. Format restarts the player
+the CPU speed's orderly way (paused, the queue and the play log saved,
+the headphones let go), with the card's identity (the guard's: its
+size, the CRCs of sector 0 and of its first partition's first sector) in
+RTC slow memory, which a restart keeps and a power cut doesn't; the next
+boot formats that card before anything mounts it (`storage/CardFormatter`,
+the boot screen's bar), and only that card. The layout is
+`lib/core/CardMkfs`'s (host-tested on ChaN's FatFs as the Core2 builds
+it, `test_card_mkfs`): sector 0 an MBR with one partition of type 0x0C
+from sector 8192 (4 MiB) to the card's end, the gap before it and the
+card's last 64 sectors zeroed (nothing of a GPT left), then FatFs's own
+`f_mkfs()` in that partition (FatFs's `VolToPart[]` set to it for the
+call: ESP-IDF builds FatFs with `FF_MULTI_PARTITION`): FAT32, 2 FATs,
+32 KB clusters from 2.16 GB up, the data area on a 4 MiB boundary, a
+valid FSINFO count; its boot sector held back and written last, so a
+format cut short leaves no FAT volume ("Can't read this card": format it
+again); read back, then `/music`, `/.player` and `device.txt`. Then the
+boot mounts it, a new card (`cid=-`). docs/METADATA.md 2.2 has the card
+it leaves, for the transfer software.
 
 **The card's size, not its free space.** About's "microSD card, <n> GB"
 is `SD.cardSize()`: the sector count from the card's CSD that the SD driver
@@ -2959,7 +2994,8 @@ Queue, Dance and Output (with its Pair and About pages).
   row can stay up and show its new state, Now Playing's Shuffle, Repeat
   and Auto DJ) and a **dialog** (modal, the tab bar
   still works; optionally an icon, a live status line and a red primary
-  button) freeze the page under them; one that opens while a finger is
+  button, on the right or, the format's second question, the left)
+  freeze the page under them; one that opens while a finger is
   on the page (the headphones' drop dialog) ends that touch for the page (a
   Cancel), so its lift can't act or draw under it. When a toast goes, the
   header row it covered is drawn again (`Ui::uncover()`); a page with no

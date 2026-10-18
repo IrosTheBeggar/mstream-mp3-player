@@ -136,9 +136,9 @@ HostLink::Out HostLink::line(char* text, uint32_t nowMs, Busy busy) {
   // declined or not; the firmware carries them out. Not the dancer's
   // lines: a decline's quiet goes on through them (a player that asks for
   // @status every second can start the dancer again once its user asks).
-  if (split && (sameVerb(f, "status") || sameVerb(f, "count"))) {
+  if (split && (sameVerb(f, "status") || sameVerb(f, "count") || sameVerb(f, "format"))) {
     Out o;
-    o.event = sameVerb(f, "status") ? Event::Status : Event::Count;
+    o.event = sameVerb(f, "status") ? Event::Status : sameVerb(f, "count") ? Event::Count : Event::Format;
     return o;
   }
   if (split && sameVerb(f, "identify")) return identifyLine(f, nowMs);

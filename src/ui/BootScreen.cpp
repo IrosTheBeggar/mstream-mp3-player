@@ -8,6 +8,7 @@
 #include "BootLayout.h"
 #include "LogoArt.h"
 #include "RleImage.h"
+#include "UiStrings.h"
 #include "UiText.h"
 #include "ui/Fonts.h"
 #include "ui/LcdLock.h"
@@ -53,6 +54,34 @@ void BootScreen::begin(const char* version) {
   }
   Serial.printf("[boot] the boot screen: the logo (%d x %d px, %lu B of runs) and the version in %lu ms\n", logo::kW,
                 logo::kH, static_cast<unsigned long>(logo::kSize), static_cast<unsigned long>((micros() - t0) / 1000));
+}
+
+void BootScreen::formatting(uint8_t percent) {
+  auto& d = M5.Display;
+  ui::Fonts& fonts = ui::Fonts::instance();
+  LcdLock lock;
+  if (!formatShown_) {
+    formatShown_ = true;
+    formatBarW_ = 0;
+    d.fillRect(0, kVersionY + kBodyH / 2 + 1, kW, kH - (kVersionY + kBodyH / 2 + 1), ui::col::BG);
+    fonts.draw(d, ui::Font::Bold, uistr::tr(uistr::S::format_boot_title), kW / 2, kFormatTitleY, kTextW, ui::col::TXT,
+               ui::col::BG, ui::Fonts::Align::Centre);
+    d.fillRoundRect(kFormatBarX, kFormatBarY, kFormatBarW, kFormatBarH, kFormatBarH / 2, ui::col::BTN);
+    fonts.draw(d, ui::Font::Small, uistr::tr(uistr::S::format_boot_line), kW / 2, kHintY, kTextW, ui::col::DIM,
+               ui::col::BG, ui::Fonts::Align::Centre);
+  }
+  const int w = kFormatBarW * (percent > 100 ? 100 : percent) / 100;
+  if (w > formatBarW_ && w >= kFormatBarH) {
+    d.fillRoundRect(kFormatBarX, kFormatBarY, w, kFormatBarH, kFormatBarH / 2, ui::accent::Output);
+    formatBarW_ = w;
+  }
+}
+
+void BootScreen::formatDone() {
+  if (!formatShown_) return;
+  formatShown_ = false;
+  LcdLock lock;
+  M5.Display.fillRect(0, kVersionY + kBodyH / 2 + 1, kW, kH - (kVersionY + kBodyH / 2 + 1), ui::col::BG);
 }
 
 void BootScreen::hint(const char* text) {

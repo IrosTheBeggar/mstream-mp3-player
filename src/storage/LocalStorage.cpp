@@ -44,6 +44,17 @@ bool readRawSector(uint32_t lba, uint8_t* out, void* ctx) {
   return disk_read(*static_cast<const uint8_t*>(ctx), out, lba, 1) == RES_OK;
 }
 
+// The same disk as the guard's identity reads it.
+class RawCard final : public SectorCache::Device {
+public:
+  explicit RawCard(uint8_t pdrv) : pdrv_(pdrv) {}
+  bool read(uint32_t lba, uint8_t* out, uint32_t count) override { return disk_read(pdrv_, out, lba, count) == RES_OK; }
+  bool write(uint32_t, const uint8_t*, uint32_t) override { return false; }  // (only looked at)
+
+private:
+  uint8_t pdrv_;
+};
+
 struct Walk {
   char path[kPathMax];
   size_t prefix;  // the mount point's length: path + prefix is "/music/..."
@@ -102,6 +113,13 @@ const char* LocalStorage::stateDir() {
     stateDirMade_ = true;
   }
   return kStateDir;
+}
+
+cardformatter::Outcome LocalStorage::formatIfAsked(cardformatter::Progress progress, void* ctx) {
+  const int cs = M5.getPin(m5::pin_name_t::sd_spi_cs);
+  SPI.begin(M5.getPin(m5::pin_name_t::sd_spi_sclk), M5.getPin(m5::pin_name_t::sd_spi_miso),
+            M5.getPin(m5::pin_name_t::sd_spi_mosi), cs);  // (begin() again is nothing)
+  return cardformatter::runIfAsked(static_cast<uint8_t>(cs), SPI, kSdHz, progress, ctx);
 }
 
 bool LocalStorage::begin() {
@@ -168,6 +186,7 @@ void LocalStorage::lookAtCard(int cs) {
   cardKind_ = cardformat::Kind::Unreadable;
   cardAnswered_ = false;
   unmountedBytes_ = 0;
+  unmountedId_ = CachedDrive::Identity{};
   // The same driver SD.begin() used (it let go of its drive when the mount
   // failed), without the mount: the card initialised, its sectors read.
   uint8_t pdrv = sdcard_init(static_cast<uint8_t>(cs), &SPI, kSdHz);
@@ -178,6 +197,11 @@ void LocalStorage::lookAtCard(int cs) {
       unmountedBytes_ = static_cast<uint64_t>(sdcard_num_sectors(pdrv)) * cardformat::kSectorBytes;
       uint8_t sector[cardformat::kSectorBytes];
       cardKind_ = cardformat::classify(readRawSector, &pdrv, sector);
+      // Its identity, for a format the listener may confirm (two or three
+      // more reads; the card isn't anyone else's yet).
+      RawCard raw(pdrv);
+      unmountedId_ =
+          CachedDrive::identityOf(raw, static_cast<uint32_t>(unmountedBytes_ / cardformat::kSectorBytes), sector);
     }
     sdcard_uninit(pdrv);
   }

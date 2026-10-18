@@ -3,10 +3,11 @@
 The mStream terminal player (a Rust desktop app) shows each plugged-in
 Core2 on its MP3 Player tab: whether its firmware is up to date, its
 microSD card's size and free space, its library, its battery, and a way to
-tell two identical boards apart; and it sets the board's clock, for the
-play log's dates. It asks the **running firmware**, over
+tell two identical boards apart; it sets the board's clock, for the
+play log's dates; and it can bring up, on the board's own screen, the
+question that formats its card. It asks the **running firmware**, over
 the USB serial port, without resetting the board (the bootloader probe it
-used before resets it, stops the music and can't see the card). Four
+used before resets it, stops the music and can't see the card). Five
 lines, on the USB visualizer's `@` lines ([USB-VISUALIZER.md](USB-VISUALIZER.md)):
 
 | Line | Answer |
@@ -15,6 +16,7 @@ lines, on the USB visualizer's `@` lines ([USB-VISUALIZER.md](USB-VISUALIZER.md)
 | `@count` | one count of the card's free clusters, on request: `@count 0`, `@count <percent>` about every tenth, `@count 100`, `@count done free=<bytes>` |
 | `@identify <label>` | "This one" and the label on the board's screen for 5 s, one buzz: `@identify ok` |
 | `@time [<unix-ms>]` | the board's clock: alone, `@time <unix-ms>` or `@time unset`; with the computer's time, the board's RTC set to it: `@time ok` |
+| `@format` | the question "Format this card?" on the board's screen, nothing more: `@format ok`; then what the listener answered there, `@format no`, or `@format 0`, the board's restart, `@format <percent>` about every tenth and `@format done size=... free=... cluster=...` |
 
 Status: **built** (October 2026), in the release after v0.8.0 (0.9.0):
 the host tests below pass, and both firmware builds pass their guards. The
@@ -25,7 +27,9 @@ the MP3 Player tab's set in the mStream repository
 after v0.11.0 (0.12.0): host-tested and built; its device check is step 9
 of the plan. So are `@time` and `@status clock=` (the board's clock, for
 the play log), in 0.12.0 too: host-tested and built; their device check
-is step 10.
+is step 10. And `@format` (the card formatted in the player, from its own
+screen or at a computer's ask), in 0.12.0: host-tested and built; its
+device check is step 11, **on a spare card only**.
 
 ## The link
 
@@ -39,10 +43,12 @@ is step 10.
   in `\n` (strip a `\r`); each is written with one `printf`, and a log line
   from another task can still land between two of them: a reader skips the
   lines that don't start with `@`.
-- **No session.** The four are answered with or without a visualizer
+- **No session.** The five are answered with or without a visualizer
   session (`@hello`), and while the visualizer is declined (the listener
   ended it on the Core2): they drive nothing on the board's screen but the
-  identify banner, and change nothing but the clock (`@time`). They don't
+  identify banner and the format's question, and change nothing but the
+  clock (`@time`): a card is formatted only by the listener's two taps on
+  the board (`@format`). They don't
   keep a session alive, and they don't count as the computer talking for a
   decline's quiet, so a player that asks for `@status` every second can
   still start the dancer once its own user asks.
@@ -54,7 +60,8 @@ is step 10.
   the card needs a firmware update. A board that answers `@status` is new
   enough for `@count` and `@identify`. `@time` came in 0.12.0: an older
   board answers it `@err 7 time` (and its `@status` has no `clock=`), and
-  that answer is how a sender tells, never the version. No answer to
+  that answer is how a sender tells, never the version; so with
+  `@format`, also 0.12.0's (`@err 7 format`). No answer to
   either within about a second: not this firmware running (another
   firmware, or none booted); only a reset can say more. A key added to
   `@status` later is missing from an older firmware's line, and its
@@ -370,6 +377,144 @@ and the clock is `unset` or more than 2 s off. Always UTC: the board keeps no ti
   set too: a play's start, dated at its end), `source()` (the play log's
   clock byte: 1 the RTC's, 2 a computer's). Any task may read them.
 
+## @format
+
+```
+→ @format
+← @format ok                          ("Format this card?" on the board's screen)
+   (the listener taps Format..., then Format, on the board)
+← @format 0                           (the board restarts to format: its boot lines follow)
+← @format 10
+   ...
+← @format 100
+← @format done size=63864569856 free=63843467264 cluster=32768
+```
+
+The card formatted **in the player**, since 0.12.0. The computer can't
+format a card: `@format` only brings up the question on the board's
+screen, the one the board asks itself on a card it can't use (the
+no-card page's Format...), and the listener answers it there, twice, or
+not. Nothing on the computer's side formats, partitions or writes the
+card. Older firmware: `@err 7 format`.
+
+- **The answer**, at once: `@format ok`, the question is on the screen
+  (the screen wakes for it); or `@err 4 format <why>`, and nothing is
+  asked: `ui` the start-up screen; `screen` another screen has the
+  display (the touch calibration, a spike tool); `viz` a computer drives
+  the dancer; `busy` a restart is under way (the format's own, the CPU
+  speed's, the card guard's); `card` nothing answered in the slot
+  (`card=none`). Sent again while the question is up: `@format ok`
+  again, and the answer comes once.
+- **The question** (`ui/Ui::askFormat()`): two dialogs, each with Cancel.
+  - The first, "Format this card?" with Cancel and Format... (red), its
+    body by the card: one that isn't FAT32 (`card=exfat`, `ntfs`, `gpt`):
+    "It becomes an empty FAT32 card for this player. Everything on it is
+    erased, even what the player can't read." One the player reads (only
+    `@format` asks that): "Everything on it is erased: your music, the
+    player's files, and what the player can't read."; and when a
+    computer's transfer didn't finish on it (the root's plan,
+    `/.mstream/pending.bin`, docs/METADATA.md 2.12.5), that first: "A
+    transfer to it didn't finish. Everything on it is erased, ...". A
+    damaged card (`card=other`: blank, Linux's, a FAT that didn't mount;
+    or `unreadable`) is first sent to a computer: "Check it on a computer
+    first", "A computer's disk check may save what's on it. Formatting
+    erases it all, even what the player can't read."; erasing it is the
+    second, explicit step.
+  - The second, "Erase the whole card?", "This can't be undone. The
+    player restarts and formats the <n> GB card: leave it in until it's
+    back.", with Format (red) on the left, where the first one's Cancel
+    was, and Cancel on the right; a touch that starts in its first 0.6 s
+    goes nowhere (a double tap never answers both).
+  - **Cancel is the default**: anything but a tap on the second one's
+    Format ends it as Cancel: Cancel, a tab, another dialog in its place
+    (the headphones lost), another screen taking the display, the
+    language changed, a minute with no answer. Then `@format no` (to a
+    question `@format` asked) and the log's `[format] the question went
+    (<how>): nothing formatted`. Taps tick, as every dialog's.
+- **Format** (the second one's): `@format 0`, the note "Restarting to
+  format the card", and the CPU speed's orderly restart: paused first
+  (after it nothing plays by itself), the queue and the card jobs' state
+  saved, the headphones let go and the speaker's amp off (at most 3 s;
+  never while the library's files are written), the card worker's step
+  finished, the play log flushed. Just before it, the card's identity
+  (the card guard's: its size from the CSD, the CRC-32 of sector 0 and of
+  its first partition's first sector) and who asked go into RTC memory,
+  which a restart keeps and a power cut doesn't: a later power-on never
+  formats. Refused then, nothing restarts (the note "Couldn't format the
+  card: try again", the log's line, and to a question `@format` asked its
+  `@err 4 format <why>`): `card` (another card in the slot since the
+  boot, no card answering, no identity kept), `size` (a card FAT32 can't
+  take: under 41.9 MB, or 2 TiB and more), `busy`; and on the console's
+  pretend card states (`uiF...`), whose card isn't the one in the slot.
+- **The format, at the boot** (`storage/CardFormatter`, over
+  `lib/core/CardMkfs`), before anything mounts the card: the request
+  taken and cleared first (a crash or a cut doesn't format again), the
+  card initialised, its identity read and held to the request's (another
+  card, or none answering: nothing written, `@err 4 format card`); then
+  1. the partition's first 8 sectors zeroed, the MBR (one primary
+     partition, type 0x0C, from sector 8192, 4 MiB in, to the card's last
+     sector; a random disk signature), the gap before it zeroed (a GPT's
+     header and table, an old volume's boot sector) and the card's last
+     64 sectors (a GPT's backups);
+  2. FatFs's `f_mkfs()` in that partition: FAT32, 2 FATs, **32 KB
+     clusters on every card from 2.16 GB up** (a smaller one: the largest
+     cluster that keeps FAT32's 65,526), the data area from a 4 MiB
+     boundary, FSINFO's free count valid (the FSINFO rule: `free=` is
+     known at the next `@status`). Its boot sector and backup are held
+     back and written last, so a format cut short leaves no FAT volume
+     (the card reads "Can't read this card", `card=other`, and is
+     formatted again), never a FAT32 whose FAT is half the old card's;
+  3. read back: the MBR, the boot sector and its backup, FSINFO and its
+     backup, both FATs' first entries, as planned;
+  4. `/music` and `/.player` made, `/.player/device.txt` written (this
+     firmware's: the software can write Opus and Auto DJ before the card's
+     first boot in a player; docs/METADATA.md 2.2, "A card the player
+     formats");
+  5. the boot goes on and mounts it, another card to the card's guard (a
+     new volume serial and disk signature): `cid=-`.
+
+  The boot screen shows "Formatting the card" over a bar and "Leave the
+  card in and the player on"; the first screen after it, "Card
+  formatted: ready for your music", or "Couldn't format the card: try
+  again".
+- **The lines**: `@format <percent>` each time the percent reaches
+  another tenth, and every 5 s while it moves (`@count`'s rule,
+  `hoststatus::Progress`), the percent being the sectors written of the
+  format's whole (the gap's 4 MiB and the FATs, mostly); `@format 100`;
+  `@format done size=<bytes> free=<bytes> cluster=<bytes>`: the card's
+  size (`@status size=`), the free space FatFs counts once `/music`,
+  `/.player` and `device.txt` took a cluster each (the next `@status
+  free=`), the cluster size. Failed: `@err 4 format <why>`, the last
+  line: `card` (another card, or none answered), `size`, `write` (the
+  card refused a write), `mkfs` (`f_mkfs()` refused: the log names its
+  FRESULT), `check` (the card read back isn't what was written), `files`
+  (`/music` or `device.txt`). Between `@format 0` and the first percent
+  the board restarts: the ROM's and the boot's lines come between (a
+  reader skips what doesn't start with `@`), and nothing is answered
+  until the format ends and the loop runs. A format the board asked
+  itself (its no-card page) says the same lines, but for `ok` and `no`.
+- **The log**: `[format] asked before the restart (on a computer's
+  @format): the card of <n> sectors (<n> GB)`, `[format] FAT32 on an MBR:
+  the partition from sector 8192, ...; clusters of 32768 B (<n>); 2 FATs
+  of <n> sectors; the data area from sector <n>; <n> sectors to write`,
+  then `[format] done in <s> s: ...` or `[format] NOT FORMATTED (<why>):
+  <what was written>`.
+- **How long** (ESTIMATED: the device check measures it): it writes about
+  4 MB and the FATs, 8 bytes a cluster: a "64 GB" card 20 MB, 10-20 s at
+  1-2 MB/s over the card's SPI; "1 TB" 250 MB, 2-4 minutes; "2 TB" 490 MB,
+  4-8 minutes. The rest of the card isn't written: its old data stays in
+  clusters FAT32 calls free.
+
+The layouts (`cardmkfs::plan()`, which is `f_mkfs()`'s own arithmetic:
+`test_card_mkfs` formats each on ChaN's FatFs as the Core2 builds it and
+reads back the same):
+
+| Card (CSD sectors) | Clusters | Reserved | Each FAT | Data area from | Written |
+|---|---|---|---|---|---|
+| "4 GB" (7,744,512) | 120,752 of 32 KB | 6,302 | 945 | 16,384 | 5.2 MB |
+| "64 GB" (124,735,488) | 1,948,352 of 32 KB | 2,316 | 15,226 | 40,960 | 19.9 MB |
+| "1 TB" (1,953,525,168) | 30,516,150 of 32 KB | 6,394 | 238,467 | 491,520 | 248.5 MB |
+
 ## Errors
 
 The visualizer's codes ([USB-VISUALIZER.md, "Errors"](USB-VISUALIZER.md#errors)),
@@ -387,6 +532,8 @@ counted. An error changes nothing.
 | `@time` before 2026 or after 2099 | `@err 5 time` | (range) |
 | `@time <unix-ms>` | `@err 4 time rtc` | the RTC didn't take it |
 | `@time` on v0.9.0-v0.11.0 | `@err 7 time` | (verb: not in this firmware) |
+| `@format` | `@err 4 format <why>` | the question not shown: `ui`, `screen`, `viz`, `busy`, `card`; the listener's Format refused: `card`, `size`, `busy`; the boot's format failed (its last line): `card`, `size`, `write`, `mkfs`, `check`, `files` |
+| `@format` on v0.9.0-v0.11.0 | `@err 7 format` | (verb: not in this firmware) |
 
 ## A visit, line by line
 
@@ -423,11 +570,30 @@ counted. An error changes nothing.
 → @time 1792332202123
 ← @time ok
 
-(a v0.11.0 board: no cid=, no clock=)
+(a board whose card is exFAT, as it came: the tab offers to format it)
+→ @status
+← @status fw=v0.12.0 elf=63ee7a2b card=exfat size=63864569856 free=? tracks=- music=? bat=87 state=idle cid=- clock=ok bt=-
+→ @format
+← @format ok                          ("Format this card?" on the board)
+← @format no                          (the listener tapped Cancel)
+→ @format
+← @format ok
+← @format 0                           (Format..., then Format: the board restarts)
+   (the ROM's and the boot's lines)
+← @format 10
+   ...
+← @format 100
+← @format done size=63864569856 free=63843467264 cluster=32768
+→ @status
+← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=63843467264 tracks=0 music=? bat=87 state=idle cid=- clock=ok bt=-
+
+(a v0.11.0 board: no cid=, no clock=, no @format)
 → @status
 ← @status fw=v0.11.0 elf=5d0c9e41 card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 state=paused bt=Alex%27s%20headphones
 → @time 1792332202123
 ← @err 7 time                         (older than 0.12.0: no clock to set)
+→ @format
+← @err 7 format
 
 (a v0.8.0 board)
 → @status
@@ -460,19 +626,45 @@ counted. An error changes nothing.
   pieces, the per-piece counts, the pieces to read again, FatFs's window
   over the card's sectors, and one step under the lock (`step()` over a
   `Source`: the card's sectors and FatFs's window).
-- **`lib/core/HostLink`**: `@status` and `@count` are events (`Status`,
-  `Count`) with no reply of its own, `@identify` one (`Identify`) with its
-  label checked, `@time` one (`Time`) with its time checked (digits:
-  `parseHostU64()`, `HostLine`; the range), 0 for the question; in a
-  session or not, declined or not, and none of them keeps a session alive
-  or a decline going. `refuse()` gives the firmware's own refusals
-  HostLink's `@err` and rate limit. `test_host_link`'s
-  `test_board_questions` and `test_time`.
-- **`src/app/HostQuery`**: answers the four. `@status` from main.cpp's
+- **`lib/core/CardMkfs`** (portable, `test_card_mkfs`): the format's
+  layout (`plan()`: the partition at 8192, the cluster by the card's
+  size, `f_mkfs()`'s own arithmetic for the reserved sectors, the FATs,
+  the data area and the clusters, the sectors written; the refusals), the
+  MBR (`mbr()`), the `Writer` (what comes before `f_mkfs()`, its writes
+  counted, the boot sector and its backup held back to the last), the
+  read-back (`check()`), the files after (`finish()` over the platform's
+  `Files`), the whole (`run()`), and the request across the restart
+  (`Request`: the identity, its magic and CRC; `sameCard()`). Tested on
+  ChaN's FatFs as the Core2 builds it (`test/support/FatModel.h`, now
+  with ESP-IDF's `FF_MULTI_PARTITION` and `VolToPart[]`): cluster sizes
+  from 512 B at 41.9 MB to 32 KB at FatFs's last sector, each layout
+  against what `f_mkfs()` itself writes, the MBR's bytes, blank, exFAT,
+  GPT and old FAT32 cards formatted and mounted (FSINFO's count against a
+  count of the FAT; `/music`, `device.txt`; nothing of the old schemes
+  left; the guard's identity changed), a format cut at 14 points never
+  mounting as FAT, each step's refusal, the request's every bit.
+- **`lib/core/CachedDrive`**: `identityOf()`, the guard's identity rule
+  over any card (the format holds the card to it across the restart).
+- **`lib/core/HostLink`**: `@status`, `@count` and `@format` are events
+  (`Status`, `Count`, `Format`) with no reply of its own, `@identify` one
+  (`Identify`) with its label checked, `@time` one (`Time`) with its time
+  checked (digits: `parseHostU64()`, `HostLine`; the range), 0 for the
+  question; in a session or not, declined or not, and none of them keeps
+  a session alive or a decline going. `refuse()` gives the firmware's own
+  refusals HostLink's `@err` and rate limit. `test_host_link`'s
+  `test_board_questions`, `test_time` and `test_format`.
+- **`src/app/HostQuery`**: answers the five. `@status` from main.cpp's
   facts hook, `storage/CardSpace`'s free count and `app/BoardClock`'s
   `ok()`; `@count` started, stepped every loop pass and ended, with its
   lines; `@identify` through main.cpp's hook; `@time` through
-  `app/BoardClock`. `app/UsbViz` hands it the events.
+  `app/BoardClock`; `@format` through main.cpp's hook (`@format ok`).
+  `app/UsbViz` hands it the events.
+- **`src/storage/CardFormatter`**: the request in RTC slow memory
+  (`ask()`, a word at a time), and the boot's format (`runIfAsked()`):
+  the SD driver's disk functions behind the `Writer` for its time
+  (`ff_diskio_register()`), `f_mkfs()` with `VolToPart[]`'s partition 1,
+  its 64 KB work area in PSRAM, the files through FatFs (its `FATFS` and
+  `FIL` in PSRAM), the lines and the log.
 - **`src/app/BoardClock`**: the RTC read at the boot (`begin()`, after
   `M5.begin()`, which found the chip), written (`rtcWrites()`' three, to
   its registers through M5Unified's driver) and read back for a `@time`
@@ -484,10 +676,13 @@ counted. An error changes nothing.
   type, cluster size and count read as words, and the count's driver (the
   lock, the reads through the disk functions, the window, the commit).
 - **`src/storage/SectorDisk`**: `watchWrites()`, the count's write watch,
-  called in the wrapper's write under FatFs's lock.
+  called in the wrapper's write under FatFs's lock; `mountIdentity()`,
+  the mounted card's identity for the format.
 - **`src/storage/LocalStorage`**: `cardspace::begin()` after the mount; a
-  card that didn't mount keeps whether it answered and its CSD size
-  (`card=unreadable` against `none`, `size=` for an exFAT card).
+  card that didn't mount keeps whether it answered, its CSD size and its
+  identity (`card=unreadable` against `none`, `size=` for an exFAT card,
+  the format's card); `formatIfAsked()`, the boot's format, before
+  `begin()`.
 - **`src/ui/Ui`**: `identify()`, the banner, drawn through `ui/Gfx` over
   everything (the list band's hardware scroll mapped), then the UI's own
   drawing gated as while the screen is dark (`gfx::setDark()`), the list's
@@ -495,7 +690,13 @@ counted. An error changes nothing.
   A touch ends it (swallowed); the screen going dark or another screen
   taking the display end it too. `ui/Input::identifyBuzz()`. Its texts:
   `UiText.h` (`kIdentifyTitle` and its room), measured in
-  `test_ui_library`.
+  `test_ui_library`. `askFormat()`, the format's two questions (Ui's own
+  dialogs, `OwnDialog::FormatAsk` and `FormatSure`: the second's red
+  button on the left, `Dialog::open()`'s `primary`; its settle; the
+  minute; Cancel for anything else); the no-card pages' Format...
+  (`ui/EmptyState`); the boot screen's bar (`ui/BootScreen::formatting()`,
+  `BootLayout`'s rows, `test_boot_logo`). Their texts, in the ten
+  languages: `format.*` (`i18n/`; `test_ui_strings` measures each room).
 - **`src/main.cpp`**: `boardclock::begin()` early in `setup()`; the
   facts hook (`hostFacts()`; `cid=` from
   `Library::root()`, which `setup()` reads before the loop answers
@@ -504,7 +705,12 @@ counted. An error changes nothing.
   (`countBlocked()`), the identify hook (the screen woken first, the
   banner once the panel is awake), `hostQuery.loop()` every pass, the
   screen kept lit for the banner, the idle power-off held while a count
-  runs.
+  runs; the format's hook (`askFormatQuestion()`), its Format
+  (`MainUiHost::formatCard()`: the card's identity, the pause, the saves,
+  the headphones let go; `stepFormatRestart()`: the request, then
+  `restartNow()`), a question gone (`formatDeclined()`: `@format no`),
+  the boot's format before the storage's mount (the boot screen's bar),
+  and its note at the first screen.
 - **Cost**, 9899eb4 against aed9014 (v0.8.0 and the 0.9.0 version
   bump), both builds: IRAM unchanged (`.iram0.text` 124,883 B); internal
   DRAM +224 B (`.dram0.data` +16, `.dram0.bss` +208: the count's state,
@@ -534,6 +740,16 @@ counted. An error changes nothing.
   64 B: `firmware.bin` +256 B (4,363,776), IRAM and internal DRAM
   unchanged; the write is 15 bytes in three transactions where it was 7
   in one.
+  **`@format`** (0.12.0), against 015a3c5, core2: IRAM unchanged
+  (`.iram0.text` 124,883 B); internal DRAM +120 B (`.dram0.data` +32,
+  `.dram0.bss` +88: the format's restart and its outcome); RTC slow memory
+  28 B (`.rtc_noinit`: the request); flash `.text` +8,376 B, `.rodata`
+  +11,196 B (the format's texts in ten languages, its log lines);
+  `firmware.bin` +20,752 B (4,377,344 to 4,398,096), the app 70 % of its
+  slot. `f_mkfs()` was linked already (the SD library's
+  `format_if_empty`, never used), so it adds nothing. Every guard passes.
+  While the boot's format runs: 64 KB of PSRAM for its work area and
+  about 8.5 KB for FatFs's `FATFS` and `FIL`; nothing else runs then.
 
 ## Device test plan
 
@@ -620,3 +836,48 @@ each line whole with its `\n`. Close every other owner of the port first.
       (its voltage-low flag ...)`, `clock=unset`, until a `@time`.
     - **Old firmware.** On a v0.11.0 board: `@time <ms>` gives `@err 7
       time`.
+11. **@format** (0.12.0). **On the spare card only, never the music
+    card**: take the music card out first. Have a computer with a card
+    reader at hand to look at the spare after each format.
+    - **Declined.** With any card in: `@format` gives `@format ok` and the
+      question on the board. Tap Cancel: `@format no` and the log's
+      `[format] the question went (Cancel): nothing formatted`. Again, and
+      tap a tab: `@format no` (`closed ...`). Again, and wait a minute:
+      `@format no` (`no answer in a minute`). Again: Format..., then
+      Cancel on the second question: `@format no`. Again: double-tap
+      Format... quickly: the second question stays up, the log's `a touch
+      right after the second question opened, ignored`; Cancel. Nothing
+      on the card changed (the computer shows it as before).
+    - **exFAT.** Format the spare exFAT on the computer (or use it as it
+      came). The board: "This card is exFAT" with Try again and
+      Format...; Format..., Format: the note "Restarting to format the
+      card", `@format 0`, the restart, the boot screen's "Formatting the
+      card" and its bar, `@format 10` ... `@format 100`, `@format done
+      size=<bytes> free=<bytes> cluster=32768`, the log's `[format] done
+      in <s> s` (note the time and the card's size: the estimate above),
+      then "Card formatted: ready for your music" and "No music found".
+      `@status`: `card=fat32`, `free=` the done line's, `cid=-`. On the
+      computer: one MBR partition, FAT32, 32 KB allocation units
+      (Windows: the drive's Properties; `chkdsk X:` read-only finds no
+      errors), `/music` empty, `/.player/device.txt` with `history=1`;
+      a file copied on and off. The music doesn't skip afterwards (play
+      a track copied to `/music` and listen for a minute).
+    - **GPT.** Erase the spare on a Mac with "GUID Partition Map" (or
+      `diskpart` `convert gpt` on Windows): "This card uses GPT", then as
+      above; on the computer the card is MBR now (`diskpart` `list disk`:
+      no `*` under Gpt), one partition.
+    - **A card the player reads.** With the formatted spare in and a
+      file in `/music`: `@format` (the board can't be asked otherwise):
+      "Everything on it is erased: your music, ..."; Format..., Format:
+      as above, and the file is gone.
+    - **Pulled.** `@format` again, Format..., Format, and pull the card
+      at about 50 %: `@err 4 format write`, the log's `NOT FORMATTED`,
+      "Couldn't format the card: try again", and the card reads "Can't
+      read this card". Put it back, Try again: the same. Format...: the
+      damaged card's "Check it on a computer first"; Format..., Format:
+      whole again.
+    - **Playing.** A track playing on the speaker (and once on the
+      headphones): `@format`, Format..., Format: paused first, no pop, the
+      headphones let go, then the restart.
+    - **Old firmware.** On a v0.11.0 board: `@format` gives `@err 7
+      format`.

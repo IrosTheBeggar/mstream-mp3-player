@@ -65,7 +65,9 @@
 //           bar still works (a tab tap closes it, as "cancel"). Optionally
 //           an icon before its title, a live status line under its body
 //           (the headphones-lost dialog's "Reconnecting... try 2 of 3"),
-//           and a red primary button for what can't be taken back.
+//           and a red primary button for what can't be taken back (the
+//           right-hand one, or the left: the format's second question puts
+//           it where the first one's Cancel was).
 //   Coach   the first-boot tips (once, remembered in NVS; About shows them
 //           again): the three red touch buttons and what their clicks and
 //           holds do, then "tap the tab you're on again to go back to its
@@ -331,10 +333,10 @@ private:
 class Dialog {
 public:
   static constexpr int kX = 14, kY = 58, kW = 292, kH = 164;
-  // `buttons`: 1 or 2 labels, the last is the primary (red when `danger`).
-  // `accent`: its outline and primary button.
+  // `buttons`: 1 or 2 labels; `primary` is the primary's index (-1: the
+  // last), red when `danger`. `accent`: its outline and primary button.
   void open(const char* title, const char* body, const char* const* buttons, int n, uint16_t accent,
-            bool danger = false);
+            bool danger = false, int primary = -1);
   // An icon before the title (`slashed`: a red slash across it).
   void setIcon(const icons::Icon* icon, uint16_t colour, bool slashed);
   // A status line under the body (""): redrawn only when it changes.
@@ -358,6 +360,7 @@ private:
   char buttons_[2][48] = {};
   int n_ = 0;
   int pressed_ = -1;
+  int primary_ = 0;
   bool up_ = false;
   bool danger_ = false;
   uint16_t accent_ = 0;
