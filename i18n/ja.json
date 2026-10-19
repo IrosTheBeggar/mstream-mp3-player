@@ -336,6 +336,7 @@
   "format.sure_title": "カード全体を消去?",
   "format.sure_body": "元に戻せません。再起動して {0} GB のカードをフォーマットします。カードは抜かないで。",
   "format.sure_button": "フォーマット",
+  "format.hold_hint": "赤いボタンを2秒間押し続けて",
   "format.restarting": "再起動: カードをフォーマットします",
   "format.boot_title": "カードをフォーマット中",
   "format.boot_line": "カードを抜かず、電源を切らないで",

@@ -1472,7 +1472,8 @@ and can't-read states without such a card (`uiFn`: no card).
 true makes the SD driver's `sdcard_mount()` run `f_mkfs(FM_ANY)` on any card
 FatFs finds no FAT volume on (`FR_NO_FILESYSTEM`), which is every exFAT,
 NTFS, GPT and blank card: someone's music wiped at boot without a word.
-A card is formatted only when the listener confirms it, twice:
+A card is formatted only when the listener confirms it, twice (a tap,
+then a 2 s hold):
 
 **Formatting in the player** (0.12.0; [HOST-STATUS.md, "@format"](HOST-STATUS.md#format)).
 The no-card pages' Format... (a card that is in but isn't FAT32, or
@@ -1481,9 +1482,13 @@ bring up the same question: `Ui::askFormat()`'s two dialogs, "Format this
 card?" (the whole card erased, even what the player can't read; a card
 the player reads names its music, and a transfer that didn't finish on
 it; a damaged card's "Check it on a computer first") and "Erase the
-whole card?", whose red Format sits where the first one's Cancel was,
-with a settle for a double tap. Cancel is the default: a tab, another
-dialog or screen, a minute with no answer. Format restarts the player
+whole card?", whose red Format sits where the first one's Cancel was
+and answers only to a finger kept on it 2 s (the Dialog's hold mode,
+`lib/core/HoldButton`: it fills meanwhile; a tap, a hold let go or slid
+off, does nothing but show how), with a settle for a double tap
+(`lib/core/FormatAsk`). Cancel is the default: a tab, another dialog or
+screen, a minute with no answer (each step's, over a hold under way
+too). Format restarts the player
 the CPU speed's orderly way (paused, the queue and the play log saved,
 the headphones let go), with the card's identity (the guard's: its
 size, the CRCs of sector 0 and of its first partition's first sector) in

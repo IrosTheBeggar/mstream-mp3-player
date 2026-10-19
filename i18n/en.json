@@ -3528,7 +3528,7 @@
   },
   "format.sure_title": "Erase the whole card?",
   "@format.sure_title": {
-    "context": "The format's second question (after format.button in the first): its title. Its red button is format.sure_button, on the left (where the first's Cancel was), Cancel on the right.",
+    "context": "The format's second question (after format.button in the first): its title. Its red button is format.sure_button, on the left (where the first's Cancel was), answered only by holding it 2 s (format.hold_hint); Cancel on the right.",
     "room": {
       "font": "Bold",
       "px": 260,
@@ -3558,7 +3558,7 @@
   },
   "format.sure_button": "Format",
   "@format.sure_button": {
-    "context": "The format's second question's red button: the card is formatted (at the restart).",
+    "context": "The format's second question's red button, held 2 s to answer (it fills from the left meanwhile; a tap does nothing but show format.hold_hint): the card is formatted (at the restart).",
     "room": {
       "font": "Bold",
       "else": "Small",
@@ -3566,6 +3566,15 @@
       "const": "uitext::kDialogButtonTextW"
     },
     "bytes": 48
+  },
+  "format.hold_hint": "Hold the red button for 2 seconds",
+  "@format.hold_hint": {
+    "context": "The format's second question's hint (amber, a line of its own under the body), shown once a tap on its red button (format.sure_button), or a hold let go or slid off before its end, did nothing: only a finger kept on it 2 s answers it (the button fills meanwhile).",
+    "room": {
+      "font": "Small",
+      "px": 260
+    },
+    "bytes": 96
   },
   "format.restarting": "Restarting to format the card",
   "@format.restarting": {

@@ -755,7 +755,7 @@ older firmware answers `@err 7 status`. Since 0.12.0 it also reads and
 sets the board's clock (`@time`: the Core2's RTC, which dates the plays
 the player will log; `@status` says `clock=ok` or `unset`), and can put
 the question that formats the card on the board's screen (`@format`: only
-the listener's two taps there format it).
+the listener's two answers there, a tap and a 2 s hold, format it).
 
 ![The crab over two beats, phase 0/8 to 7/8 of each](docs/img/crab-phases.png)
 
@@ -934,6 +934,11 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       arithmetic), the MBR, the writer that holds the boot
                       sector to the last, the read-back, the request kept
                       across the restart
+  HoldButton, FormatAsk
+                      The format's second step, a 2 s hold (a press kept on
+                      the button, its fill, a lift or a slide that empties
+                      it); the question's clock (each step's minute, the
+                      second's settle)
   HostStatus, FreeCount
                       A computer's questions (docs/HOST-STATUS.md): the
                       @status line, the FSINFO rule, @identify's label; the
@@ -962,6 +967,7 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       the rotation, the trim by the root's ACKS), a play
                       from its start to its end, when the loop may write
   SheetLayout         Where a sheet sits (3 rows, or 4 from y 40)
+  DialogLayout        Where a dialog and its buttons sit, and their hit areas
   LibraryIndex, LibraryBuilder, LibraryBoot
                       The library index (library.idx v6), its build from
                       the tag records, the boot's decision

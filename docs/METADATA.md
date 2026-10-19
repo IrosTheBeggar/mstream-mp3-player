@@ -349,7 +349,8 @@ built without exFAT and without GPT (`lib/core/CardFormat`). The tree:
 "@format"). The listener can have the player format a card: one that
 isn't FAT32 or can't be read, from the player's own no-card screen, or
 any card when the software asks with `@format`, which only brings up the
-player's question; the listener confirms it there, twice. The software
+player's question; the listener confirms it there, twice (a tap, then a
+2 s hold). The software
 never formats a card through the player otherwise. The card it leaves
 (`lib/core/CardMkfs`, host-tested on ChaN's FatFs as the Core2 builds
 it), which the software MAY rely on:

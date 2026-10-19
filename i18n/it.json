@@ -370,6 +370,7 @@
   "format.sure_title": "Cancellare tutta la scheda?",
   "format.sure_body": "Non si può annullare. Il lettore si riavvia e formatta la scheda da {0} GB: lasciala inserita finché non torna.",
   "format.sure_button": "Formatta",
+  "format.hold_hint": "Tieni premuto il tasto rosso 2 secondi",
   "format.restarting": "Riavvio per formattare la scheda",
   "format.boot_title": "Formattazione della scheda",
   "format.boot_line": "Lascia la scheda inserita e il lettore acceso",

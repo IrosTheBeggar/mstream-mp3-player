@@ -406,6 +406,7 @@
   "format.sure_title": "Ganze Karte löschen?",
   "format.sure_body": "Nicht umkehrbar. Der Player startet neu und formatiert die Karte ({0} GB): bis dahin drinlassen.",
   "format.sure_button": "Formatieren",
+  "format.hold_hint": "Den roten Knopf 2 Sekunden halten",
   "format.restarting": "Neustart: die Karte wird formatiert",
   "format.boot_title": "Karte wird formatiert",
   "format.boot_line": "Karte drinlassen und Player nicht ausschalten",

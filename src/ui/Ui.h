@@ -4,6 +4,7 @@
 #pragma once
 #include <cstdint>
 
+#include "FormatAsk.h"
 #include "FrameClock.h"
 #include "HostStatus.h"
 #include "InputEvent.h"
@@ -320,22 +321,28 @@ public:
   // The format's question (docs/HOST-STATUS.md, "@format"): from a no-card
   // page's Format… (a card that is in but isn't FAT32 or can't be read),
   // or a computer's @format (`fromComputer`), which can do no more than
-  // this. Two dialogs, each with Cancel: first what it does ("Format this
-  // card?": the whole card erased, even what the player can't read; a
-  // card the player reads, its music named; a transfer that didn't finish
-  // on it, said; a damaged card's "Check it on a computer first"), then
-  // "Erase the whole card?" with Format, red, where the first one's
-  // Cancel was, and a touch in its first kFormatSettleMs ignored (a double
-  // tap never answers both). Cancel is the default: anything but a tap on
-  // Format closes it as Cancel (a tab, another dialog, another screen
-  // taking the display, the language changed, kFormatAskMs without an
-  // answer). Format: UiHost::formatCard(), the "Restarting to format"
-  // note. Taps tick, as every dialog's. The screen wakes for it. Asked
-  // again while it is up: it stays (a computer's ask is then the answer's
-  // too). False: the UI isn't up (not started, or another screen has the
-  // display).
-  static constexpr uint32_t kFormatAskMs = 60000;
-  static constexpr uint32_t kFormatSettleMs = 600;
+  // this, over any card (one the player reads too). Two dialogs, each with
+  // Cancel: first what it does ("Format this card?": the whole card
+  // erased, even what the player can't read; a card the player reads, its
+  // music named; a transfer that didn't finish on it, said; a damaged
+  // card's "Check it on a computer first"), answered by a tap on
+  // Format...; then "Erase the whole card?" with Format, red, where the
+  // first one's Cancel was, in the Dialog's hold mode: it acts only when
+  // held 2 s (HoldButton::kHoldMs), filling meanwhile; a tap on it, a
+  // hold let go or slid off, does nothing but show how (format.hold_hint),
+  // and a touch in that dialog's first 0.6 s goes nowhere (formatask:
+  // the double tap's second touch). No tap, double tap or run of taps
+  // answers both. Cancel is the default: anything but a hold kept to its
+  // end closes it as Cancel (Cancel, a tab, another dialog, another
+  // screen taking the display, the language changed, a minute without an
+  // answer: formatask::kAskMs, which wins over a hold under way). The
+  // touch buttons A, B and C keep their own work under it (ButtonPolicy:
+  // they never answer a dialog), the PWR key too. Format:
+  // UiHost::formatCard(), the "Restarting to format" note. Taps tick, as
+  // every dialog's; the hold's end the double tick, a hold that fell short
+  // the inert buzz. The screen wakes for it. Asked again while it is up:
+  // it stays (a computer's ask is then the answer's too). False: the UI
+  // isn't up (not started, or another screen has the display).
   bool askFormat(bool fromComputer);
   bool formatAsking() const {
     return dialog_.up() && (ownDialog_ == OwnDialog::FormatAsk || ownDialog_ == OwnDialog::FormatSure);
@@ -455,14 +462,19 @@ private:
   // Which of the Ui's own dialogs onDialog() answers (the flags above are
   // cleared as a dialog closes, before its owner hears the button).
   enum class OwnDialog : uint8_t { None, Lost, PlayFailed, FormatAsk, FormatSure } ownDialog_ = OwnDialog::None;
-  // The format's question: a computer's @format asked it, when it opened
-  // (its minute, the second's settle), and why it goes when that isn't a
-  // button (the log's: set before it is closed).
+  // The format's question: a computer's @format asked it, its steps'
+  // clock (each one's minute, the second's settle), and why it goes when
+  // that isn't a button (the log's: set before it is closed).
   bool formatFromComputer_ = false;
-  uint32_t formatOpenedMs_ = 0;
+  formatask::Question formatQuestion_;
   const char* formatGone_ = nullptr;
   void openFormatSure();
   void formatAnswered(OwnDialog which, int button);
+  // A dialog's button answered (a tap, or the hold kept to its end:
+  // `held`): its feedback, the dialog closed, its owner told.
+  void answerDialog(int button, bool held);
+  // What a touch did to the dialog's hold (Dialog::holdNews()).
+  void holdNews(HoldButton::News n);
   uint32_t gateFailuresSeen_ = 0;
   // The first boot: the tips seen (NVS "ui"/"coach"); a fresh unit's
   // language picker due or up; the tips (and the language's note) to show

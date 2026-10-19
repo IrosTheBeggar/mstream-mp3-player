@@ -375,6 +375,7 @@
   "format.sure_title": "清除整张存储卡?",
   "format.sure_body": "此操作无法撤销。播放器会重启并格式化这张 {0} GB 的卡: 完成前请不要取出。",
   "format.sure_button": "格式化",
+  "format.hold_hint": "按住红色按钮 2 秒",
   "format.restarting": "正在重启以格式化存储卡",
   "format.boot_title": "正在格式化存储卡",
   "format.boot_line": "请勿取出存储卡, 也不要关机",

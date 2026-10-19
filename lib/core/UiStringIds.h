@@ -283,6 +283,7 @@ enum class S : uint16_t {
   format_sure_title,  // Erase the whole card?
   format_sure_body,  // This can't be undone. The player restarts and formats the {0} GB ca...
   format_sure_button,  // Format
+  format_hold_hint,  // Hold the red button for 2 seconds
   format_restarting,  // Restarting to format the card
   format_boot_title,  // Formatting the card
   format_boot_line,  // Leave the card in and the player on
@@ -630,7 +631,7 @@ enum class S : uint16_t {
   format_hz,  // {0} Hz
   format_list_sep,  // , 
 };
-inline constexpr unsigned kStrings = 621;
+inline constexpr unsigned kStrings = 622;
 
 // The languages, English first: the mobile app's ten (one without a
 // catalogue yet draws English), and the pseudo-locale where UISTR_PSEUDO

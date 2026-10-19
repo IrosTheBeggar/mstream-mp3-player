@@ -337,7 +337,8 @@ bool Ui::askFormat(bool fromComputer) {
                /*danger=*/true);
   ownDialog_ = OwnDialog::FormatAsk;
   formatFromComputer_ = fromComputer;
-  formatOpenedMs_ = nowMs_;
+  formatQuestion_.end();
+  formatQuestion_.ask(nowMs_);
   formatGone_ = nullptr;
   applyCover();
   Serial.printf("[ui] format: \"%s\" (%s; %s%s)\n", tr(damaged ? S::format_damaged_title : S::format_ask_title),
@@ -348,15 +349,17 @@ bool Ui::askFormat(bool fromComputer) {
 }
 
 // The second question: "Erase the whole card?", Format (red) on the left,
-// where the first one's Cancel was.
+// where the first one's Cancel was, in the Dialog's hold mode: it acts
+// only when held 2 s (a tap shows format.hold_hint).
 void Ui::openFormatSure() {
   char body[256];
   trf(body, sizeof(body), S::format_sure_body, uistr::decimal(static_cast<double>(state_.cardBytes) / 1e9, 1));
   const char* const buttons[2] = {tr(S::format_sure_button), tr(S::dialog_cancel)};
   dialogOwner_ = this;
-  dialog_.open(tr(S::format_sure_title), body, buttons, 2, accent(), /*danger=*/true, /*primary=*/0);
+  dialog_.open(tr(S::format_sure_title), body, buttons, 2, accent(), /*danger=*/true, /*primary=*/0,
+               tr(S::format_hold_hint));
   ownDialog_ = OwnDialog::FormatSure;
-  formatOpenedMs_ = nowMs_;
+  formatQuestion_.sure(nowMs_);
   formatGone_ = nullptr;
   applyCover();
 }
@@ -369,6 +372,9 @@ void Ui::formatAnswered(OwnDialog which, int button) {
   }
   const bool fromComputer = formatFromComputer_;
   formatFromComputer_ = false;
+  formatQuestion_.end();
+  // (Button 0 of the second question: only its hold kept to the end gives
+  // it, Dialog's hold mode; never a tap.)
   if (which == OwnDialog::FormatSure && button == 0) {
     if (host_.formatCard(fromComputer)) {
       note(tr(S::format_restarting), 5000);
@@ -1169,6 +1175,46 @@ void Ui::onDialog(int button) {
   if (which == OwnDialog::Lost && button == 0) host_.selectOutput(false);
 }
 
+void Ui::answerDialog(int button, bool held) {
+  if (held) {
+    input_.holdTick();  // (the hold's end: the double tick)
+  } else {
+    tick();
+  }
+  OverlayOwner* owner = dialogOwner_;
+  dialog_.close();
+  lostDialog_ = false;
+  playFailedDialog_ = false;
+  repaintUnder();
+  if (owner) owner->onDialog(button);
+}
+
+void Ui::holdNews(HoldButton::News n) {
+  switch (n) {
+    case HoldButton::News::Began:
+      // The recogniser's own hold off for this touch: it stays a press while
+      // the finger rests, and says every move past its slop (the slide off).
+      input_.noHold();
+      Serial.println("[ui] format: Format pressed: held 2 s, it formats");
+      break;
+    case HoldButton::News::Short:
+    case HoldButton::News::Slid:
+      input_.missBuzz();  // (nothing happened: the hint says how)
+      Serial.printf("[ui] format: Format %s after %lu ms: nothing formatted (the hint shown)\n",
+                    n == HoldButton::News::Short ? "let go" : "slid off",
+                    static_cast<unsigned long>(dialog_.holdLastMs()));
+      break;
+    case HoldButton::News::Dropped:
+      Serial.println("[ui] format: Format's hold dropped (the touch was cancelled): nothing formatted");
+      break;
+    case HoldButton::News::Confirmed:  // (lifted at its end, before the loop's pass saw it)
+      Serial.printf("[ui] format: Format held %lu ms\n", static_cast<unsigned long>(dialog_.holdLastMs()));
+      break;
+    default:
+      break;
+  }
+}
+
 void Ui::volumeKeys() { volumeHudDue_ = true; }
 
 // A track that couldn't be played: a note, and a mark on its Queue row
@@ -1318,11 +1364,26 @@ void Ui::loop(uint32_t nowMs) {
     endIdentify();
     Serial.println("[ui] identify: over");
   }
-  // The format's question unanswered for a minute: Cancel, the default.
-  if (formatAsking() && static_cast<int32_t>(nowMs - formatOpenedMs_) >= static_cast<int32_t>(kFormatAskMs)) {
+  // The format's question unanswered for a minute: Cancel, the default
+  // (each of its steps: formatask; over a hold under way too).
+  if (formatAsking() && formatQuestion_.expired(nowMs)) {
+    if (dialog_.holding()) Serial.println("[ui] format: the minute ran out while Format was held");
     formatGone_ = "no answer in a minute";
     closeModal(true);
     repaintUnder();
+  }
+  // The dialog's hold (the format's second question): live only while the
+  // touch that began it is the dialog's (not one the dark, a banner or a
+  // screen took); kept to its end, the hold button's answer.
+  if (dialog_.up() && dialog_.holdMode()) {
+    if (dialog_.holding() && (touch_ != TouchOn::Dialog || identifying_ || dark_)) {
+      dialog_.dropHold();
+      Serial.println("[ui] format: Format's hold dropped (its touch was taken): nothing formatted");
+    } else if (dialog_.tick(nowMs) == HoldButton::News::Confirmed) {
+      touch_ = TouchOn::None;  // (the rest of that touch, its lift, goes nowhere)
+      Serial.printf("[ui] format: Format held %lu ms\n", static_cast<unsigned long>(dialog_.holdLastMs()));
+      answerDialog(dialog_.holdButton(), true);
+    }
   }
 
   updateHud(nowMs);
@@ -1598,8 +1659,7 @@ void Ui::route(const InputEvent& e) {
       // The fade toast's buttons, drawn over whatever is open (a sheet, the
       // volume sheet): the only controls that act on the timer, first.
       touch_ = TouchOn::Toast;
-    } else if (dialog_.up() && ownDialog_ == OwnDialog::FormatSure &&
-               static_cast<int32_t>(e.ms - formatOpenedMs_) < static_cast<int32_t>(kFormatSettleMs)) {
+    } else if (dialog_.up() && ownDialog_ == OwnDialog::FormatSure && !formatQuestion_.lands(e.ms)) {
       // The format's second question: a touch this soon after it opened is
       // the finger that answered the first (a double tap): it goes nowhere.
       touch_ = TouchOn::None;
@@ -1660,15 +1720,9 @@ void Ui::route(const InputEvent& e) {
       break;
     case TouchOn::Dialog: {
       const int b = dialog_.onEvent(e);
-      if (b >= 0) {
-        tick();
-        OverlayOwner* owner = dialogOwner_;
-        dialog_.close();
-        lostDialog_ = false;
-        playFailedDialog_ = false;
-        repaintUnder();
-        if (owner) owner->onDialog(b);
-      }
+      const HoldButton::News n = dialog_.holdNews();
+      if (n != HoldButton::News::None) holdNews(n);
+      if (b >= 0) answerDialog(b, n == HoldButton::News::Confirmed);
       break;
     }
     case TouchOn::Sheet: {

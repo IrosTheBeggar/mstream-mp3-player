@@ -403,6 +403,7 @@
   "format.sure_title": "¿Borrar toda la tarjeta?",
   "format.sure_body": "No se puede deshacer. El reproductor se reinicia y formatea la tarjeta de {0} GB: déjala puesta.",
   "format.sure_button": "Formatear",
+  "format.hold_hint": "Mantén el botón rojo 2 segundos",
   "format.restarting": "Reiniciando: se formatea la tarjeta",
   "format.boot_title": "Formateando la tarjeta",
   "format.boot_line": "No saques la tarjeta ni lo apagues",

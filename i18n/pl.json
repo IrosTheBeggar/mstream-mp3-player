@@ -437,6 +437,7 @@
   "format.sure_title": "Usunąć całą kartę?",
   "format.sure_body": "Nie da się cofnąć. Odtwarzacz uruchomi się ponownie i sformatuje kartę {0} GB: nie wyjmuj jej.",
   "format.sure_button": "Formatuj",
+  "format.hold_hint": "Przytrzymaj czerwony przycisk 2 s",
   "format.restarting": "Ponowne uruchamianie: formatowanie karty",
   "format.boot_title": "Formatowanie karty",
   "format.boot_line": "Nie wyjmuj karty i nie wyłączaj odtwarzacza",
