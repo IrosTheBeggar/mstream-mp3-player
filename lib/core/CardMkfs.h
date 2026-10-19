@@ -55,8 +55,6 @@
 //   - Request: the confirmed card's identity (CachedDrive's: its size, the
 //     CRCs of sector 0 and of its first partition's first sector), carried
 //     across the restart; the boot formats only that card.
-//   - refusal(): which card is formatted at all: one the player doesn't
-//     read, never one it does.
 namespace cardmkfs {
 
 constexpr uint32_t kSectorBytes = 512;
@@ -254,17 +252,5 @@ bool valid(const Request& r);
 // unreadable then must still be.
 bool sameCard(const Request& r, const CachedDrive::Identity& now);
 const char* originName(Origin o);  // "the player's screen", "a computer's @format"
-
-// ---- which card ----
-// Whether the card in the slot may be formatted, whoever asks (the
-// question shown, its Format taken): one that answered and that the
-// player doesn't read (exFAT, NTFS, a GPT, blank, a FAT that didn't
-// mount, its first sector unreadable). Never one it reads (`mounted`:
-// card=fat32, fat16), whatever is on it: the software sets such a card up
-// as it is (docs/METADATA.md 2.2), and a computer's @format can't put the
-// question over the music card. `answered`: a card answered at the boot
-// or the last Try again. nullptr: it may; else why not, @err 4 format's
-// word ("card").
-const char* refusal(bool mounted, bool answered);
 
 }  // namespace cardmkfs

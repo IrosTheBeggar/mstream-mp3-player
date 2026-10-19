@@ -430,6 +430,8 @@
   "format.button": "Formatuj…",
   "format.ask_title": "Sformatować tę kartę?",
   "format.ask_body": "Stanie się pustą kartą FAT32 dla tego odtwarzacza. Wszystko na niej zniknie, też to, czego odtwarzacz nie czyta.",
+  "format.music_body": "Wszystko zniknie: twoja muzyka, pliki odtwarzacza i to, czego nie umie odczytać.",
+  "format.plan_body": "Transfer na nią nie został ukończony. Wszystko zniknie, też to, czego odtwarzacz nie czyta.",
   "format.damaged_title": "Sprawdź ją w komputerze",
   "format.damaged_body": "Komputer może ją uratować. Formatowanie usuwa wszystko, też to, czego odtwarzacz nie czyta.",
   "format.sure_title": "Usunąć całą kartę?",

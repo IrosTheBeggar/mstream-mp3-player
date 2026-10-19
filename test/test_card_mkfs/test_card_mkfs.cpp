@@ -12,7 +12,7 @@
 // the FAT, /music and device.txt, and nothing left of the old card's
 // schemes; a format cut at any write never leaving a card FatFs takes for
 // a FAT volume; the refusals of each step; the progress; the request
-// carried across the restart; which card is formatted at all.
+// carried across the restart.
 // Run: pio test -e native -f test_card_mkfs
 #include <unity.h>
 
@@ -798,17 +798,6 @@ void test_request() {
   TEST_ASSERT_FALSE(cardmkfs::valid(cardmkfs::request(id, cardmkfs::Origin::None)));
 }
 
-// ---- which card ----
-
-// Only a card that answered and that the player doesn't read: one it
-// reads (mounted) is never formatted, whoever asks (a computer's @format
-// over the music card: @err 4 format card), nor an empty slot.
-void test_which_card() {
-  TEST_ASSERT_NULL(cardmkfs::refusal(false, true));  // exFAT, NTFS, a GPT, blank, unreadable
-  TEST_ASSERT_EQUAL_STRING("card", cardmkfs::refusal(true, true));
-  TEST_ASSERT_EQUAL_STRING("card", cardmkfs::refusal(false, false));
-}
-
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_cluster_sizes);
@@ -820,6 +809,5 @@ int main(int, char**) {
   RUN_TEST(test_refusals);
   RUN_TEST(test_writer_holds);
   RUN_TEST(test_request);
-  RUN_TEST(test_which_card);
   return UNITY_END();
 }

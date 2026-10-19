@@ -67,8 +67,11 @@ struct AppState {
   // the empty state's message); Unreadable with none in, or one mounted.
   cardformat::Kind cardKind = cardformat::Kind::Unreadable;
   // For the format's question (docs/HOST-STATUS.md, "@format"): the card's
-  // size, mounted or not (the CSD's: 0 not known).
+  // size, mounted or not (the CSD's: 0 not known); the mounted card's root
+  // has a transfer's plan on it (cardroot::Root::plan: a sync that didn't
+  // finish).
   uint64_t cardBytes = 0;
+  bool cardPlan = false;
   uint32_t libraryTracks = 0;
   // The card worker's news for the Library's status line (3.3.6): checking
   // the card, reading tags (done / total), updating, a transfer that didn't

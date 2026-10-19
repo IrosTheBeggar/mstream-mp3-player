@@ -368,6 +368,8 @@
   "format.button": "格式化…",
   "format.ask_title": "格式化这张存储卡?",
   "format.ask_body": "它会变成本播放器用的空 FAT32 存储卡。卡上的一切都会被清除, 包括播放器读不了的部分。",
+  "format.music_body": "卡上的一切都会被清除: 你的音乐、播放器的文件, 以及播放器读不了的部分。",
+  "format.plan_body": "向这张卡的传输没有完成。卡上的一切都会被清除, 包括播放器读不了的部分。",
   "format.damaged_title": "请先在电脑上检查",
   "format.damaged_body": "电脑上的磁盘检查也许能救回卡上的内容。格式化会清除整张卡, 包括播放器读不了的部分。",
   "format.sure_title": "清除整张存储卡?",

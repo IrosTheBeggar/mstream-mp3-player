@@ -3460,7 +3460,7 @@
   },
   "format.ask_title": "Format this card?",
   "@format.ask_title": {
-    "context": "The format's first question: its title, for a card that isn't FAT32 (exFAT, NTFS, GPT), from format.button or a computer's @format (never for a card the player reads). Cancel and format.button.",
+    "context": "The format's first question: its title, for a card that isn't FAT32 (exFAT, NTFS, GPT) or one the player reads (a computer's @format asked). Cancel and format.button.",
     "room": {
       "font": "Bold",
       "px": 260,
@@ -3471,6 +3471,30 @@
   "format.ask_body": "It becomes an empty FAT32 card for this player. Everything on it is erased, even what the player can't read.",
   "@format.ask_body": {
     "context": "The format's first question's body, for a card that isn't FAT32 (exFAT, NTFS, GPT): the whole card is erased, other partitions too, not only what the player shows.",
+    "room": {
+      "font": "Small",
+      "px": 260,
+      "lines": 3,
+      "layout": "wrap"
+    },
+    "bytes": 256,
+    "line_bytes": 96
+  },
+  "format.music_body": "Everything on it is erased: your music, the player's files, and what the player can't read.",
+  "@format.music_body": {
+    "context": "The format's first question's body for a card the player reads (only a computer's @format asks it): its music goes too.",
+    "room": {
+      "font": "Small",
+      "px": 260,
+      "lines": 3,
+      "layout": "wrap"
+    },
+    "bytes": 256,
+    "line_bytes": 96
+  },
+  "format.plan_body": "A transfer to it didn't finish. Everything on it is erased, even what the player can't read.",
+  "@format.plan_body": {
+    "context": "As format.music_body, for a card a computer's transfer (a sync) didn't finish on: said first, so it is never formatted unsaid.",
     "room": {
       "font": "Small",
       "px": 260,

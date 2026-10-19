@@ -346,14 +346,13 @@ built without exFAT and without GPT (`lib/core/CardFormat`). The tree:
   a dot (`src/storage/LocalStorage.cpp`, `walk()`).
 
 **A card the player formats** (firmware 0.12.0; docs/HOST-STATUS.md,
-"@format"). The listener can have the player format a card that isn't
-FAT32 or can't be read: from the player's own no-card screen, or when
-the software asks with `@format`, which only brings up the same
-question; the listener confirms it there, twice. Never a card the player
-reads (FAT32 or FAT16, mounted: `@err 4 format card`): the software sets
-such a card up as it is. The software never formats a card through the
-player otherwise. The card it leaves (`lib/core/CardMkfs`, host-tested
-on ChaN's FatFs as the Core2 builds it), which the software MAY rely on:
+"@format"). The listener can have the player format a card: one that
+isn't FAT32 or can't be read, from the player's own no-card screen, or
+any card when the software asks with `@format`, which only brings up the
+player's question; the listener confirms it there, twice. The software
+never formats a card through the player otherwise. The card it leaves
+(`lib/core/CardMkfs`, host-tested on ChaN's FatFs as the Core2 builds
+it), which the software MAY rely on:
 
 - Sector 0 is an MBR with one primary partition, type 0x0C (FAT32,
   LBA), from sector 8192 (4 MiB) to the card's last sector; the sectors

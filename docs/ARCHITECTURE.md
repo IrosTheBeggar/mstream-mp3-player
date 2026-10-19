@@ -1477,19 +1477,18 @@ A card is formatted only when the listener confirms it, twice:
 **Formatting in the player** (0.12.0; [HOST-STATUS.md, "@format"](HOST-STATUS.md#format)).
 The no-card pages' Format... (a card that is in but isn't FAT32, or
 can't be read), or a computer's `@format`, which can do no more than
-bring up the same question, and never over a card the player reads
-(`cardmkfs::refusal()`: the software sets such a card up as it is):
-`Ui::askFormat()`'s two dialogs, "Format this card?" (the whole card
-erased, even what the player can't read; a damaged card's "Check it on a
-computer first") and "Erase the whole card?", whose red Format sits
-where the first one's Cancel was, with a settle for a double tap. Cancel
-is the default: a tab, another dialog or screen, a minute with no
-answer. Format restarts the player the CPU speed's orderly way (paused,
-the queue and the play log saved, the headphones let go), with the
-card's identity (as the boot read it, by the guard's rule: its size, the
-CRCs of sector 0 and of its first partition's first sector) in RTC slow
-memory, which a restart keeps and a power cut doesn't; the next boot
-formats that card before anything mounts it (`storage/CardFormatter`,
+bring up the same question: `Ui::askFormat()`'s two dialogs, "Format this
+card?" (the whole card erased, even what the player can't read; a card
+the player reads names its music, and a transfer that didn't finish on
+it; a damaged card's "Check it on a computer first") and "Erase the
+whole card?", whose red Format sits where the first one's Cancel was,
+with a settle for a double tap. Cancel is the default: a tab, another
+dialog or screen, a minute with no answer. Format restarts the player
+the CPU speed's orderly way (paused, the queue and the play log saved,
+the headphones let go), with the card's identity (the guard's: its
+size, the CRCs of sector 0 and of its first partition's first sector) in
+RTC slow memory, which a restart keeps and a power cut doesn't; the next
+boot formats that card before anything mounts it (`storage/CardFormatter`,
 the boot screen's bar), and only that card. The layout is
 `lib/core/CardMkfs`'s (host-tested on ChaN's FatFs as the Core2 builds
 it, `test_card_mkfs`): sector 0 an MBR with one partition of type 0x0C

@@ -345,8 +345,4 @@ const char* originName(Origin o) {
   return "?";
 }
 
-// ---- which card ----
-
-const char* refusal(bool mounted, bool answered) { return mounted || !answered ? "card" : nullptr; }
-
 }  // namespace cardmkfs
