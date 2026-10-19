@@ -857,25 +857,17 @@ void Dialog::open(const char* title, const char* body, const char* const* button
                   bool danger, int primary, const char* holdHint) {
   copy(title_, sizeof(title_), title);
   copy(body_, sizeof(body_), body);
-  n_ = std::max(1, std::min(2, n));
-  primary_ = primary >= 0 && primary < n_ ? primary : n_ - 1;
-  for (int i = 0; i < n_; ++i) copy(buttons_[i], sizeof(buttons_[i]), buttons[i]);
+  // (1 or 2 buttons, the primary the last unless `primary` says: DialogTouch.)
+  touch_.open(n, primary, holdHint != nullptr);
+  for (int i = 0; i < touch_.n(); ++i) copy(buttons_[i], sizeof(buttons_[i]), buttons[i]);
   accent_ = accent;
   danger_ = danger;
   status_[0] = 0;
   icon_ = nullptr;
   slashed_ = false;
-  pressed_ = -1;
   news_ = HoldButton::News::None;
-  hintShown_ = false;
   fillDrawn_ = 0;
-  if (holdHint) {
-    copy(hint_, sizeof(hint_), holdHint);
-    hold_.arm(dialog::hitArea(primary_, n_));
-  } else {
-    hint_[0] = 0;
-    hold_.disarm();
-  }
+  copy(hint_, sizeof(hint_), holdHint ? holdHint : "");
   up_ = true;
   draw();
 }
@@ -903,15 +895,12 @@ int Dialog::titleRoom(bool icon) {
   return kW - (icon ? 12 : 16) - tx;
 }
 
-// (The right-hand button's hit area reaches the screen's edge:
-// dialog::buttonAt().)
-int Dialog::buttonAt(int x, int y) const { return dialog::buttonAt(x, y, n_); }
-
 void Dialog::renderButton(M5Canvas& s, int i, int x, int y, int fillPx) const {
   Fonts& f = Fonts::instance();
-  const int bw = dialog::buttonW(n_), bh = dialog::kButtonH;
-  const bool primary = i == primary_;
-  if (primary && hold_.armed()) {
+  const int bw = dialog::buttonW(touch_.n()), bh = dialog::kButtonH;
+  const bool primary = i == touch_.primary();
+  const int pressed = touch_.pressed();
+  if (primary && touch_.holdMode()) {
     // The hold button: empty, outlined in red, red from the left as far as
     // the hold has come; its label (Bold, or Small past its room) over
     // both, the glyphs alone (bg == fg).
@@ -927,12 +916,12 @@ void Dialog::renderButton(M5Canvas& s, int i, int x, int y, int fillPx) const {
     f.draw(s, font, buttons_[i], x + bw / 2, y + bh / 2, bw - 8, col::TXT, col::TXT, Fonts::Align::Centre);
     return;
   }
-  const uint16_t b = i == pressed_ ? col::BTN_HI : primary ? (danger_ ? col::RED : accent_) : col::BTN;
+  const uint16_t b = i == pressed ? col::BTN_HI : primary ? (danger_ ? col::RED : accent_) : col::BTN;
   s.fillRoundRect(x, y, bw, bh, 8, b);
   // A label too wide for its button ("Play on speaker": 127 px of 123)
   // in Small, not cut.
   const Font font = f.fitting(primary ? Font::Bold : Font::Body, buttons_[i], bw - 8);
-  f.draw(s, font, buttons_[i], x + bw / 2, y + bh / 2, bw - 8, primary && i != pressed_ ? col::DARK : col::TXT, b,
+  f.draw(s, font, buttons_[i], x + bw / 2, y + bh / 2, bw - 8, primary && i != pressed ? col::DARK : col::TXT, b,
          Fonts::Align::Centre);
 }
 
@@ -953,7 +942,7 @@ void Dialog::render() {
   // the bodies, which test_ui_strings holds every language's lines to.)
   // The hold mode keeps the body's three lines: its hint has a row of its
   // own under them (dialog::kHintY), and it has no status line.
-  const bool hold = hold_.armed();
+  const bool hold = touch_.holdMode();
   char lines[3][96];
   const int maxLines = status_[0] && !hold ? 2 : 3;
   const int nl =
@@ -965,9 +954,12 @@ void Dialog::render() {
     f.draw(s, Font::Small, status_, 16, dialog::kBodyY + nl * dialog::kLineH + dialog::kStatusGap, kW - 32,
            statusColour_, col::CARD);
   }
-  if (hold && hintShown_) f.draw(s, Font::Small, hint_, 16, dialog::kHintY, kW - 32, col::AMBER, col::CARD);
-  for (int i = 0; i < n_; ++i) {
-    renderButton(s, i, dialog::buttonX(i, n_), dialog::kButtonTop, i == primary_ ? fillDrawn_ : 0);
+  // The hint, how the hold button is answered: once a press on it fell
+  // short (a tap, a lift, a slide off: DialogTouch::hintAlert()).
+  if (hold && touch_.hintAlert()) f.draw(s, Font::Small, hint_, 16, dialog::kHintY, kW - 32, col::AMBER, col::CARD);
+  const int n = touch_.n();
+  for (int i = 0; i < n; ++i) {
+    renderButton(s, i, dialog::buttonX(i, n), dialog::kButtonTop, i == touch_.primary() ? fillDrawn_ : 0);
   }
 }
 
@@ -982,67 +974,40 @@ void Dialog::drawHoldButton(int fillPx) {
   if (!up_) return;
   // Through the shared strip, not the panel (which may hold another
   // overlay's pixels by now: the coach's), the card's colour in its corners.
-  const int bw = dialog::buttonW(n_), bh = dialog::kButtonH;
+  const int n = touch_.n(), p = touch_.primary();
+  const int bw = dialog::buttonW(n), bh = dialog::kButtonH;
   M5Canvas& s = gfx::strip();
   s.fillRect(0, 0, bw, bh, col::CARD);
-  renderButton(s, primary_, 0, 0, fillPx);
-  gfx::push(s, kX + dialog::buttonX(primary_, n_), kY + dialog::kButtonTop, bw, bh, true);
+  renderButton(s, p, 0, 0, fillPx);
+  gfx::push(s, kX + dialog::buttonX(p, n), kY + dialog::kButtonTop, bw, bh, true);
 }
 
+// (Which touch answers what, the hold's included: DialogTouch, host-tested;
+// this draws what it changed.)
 int Dialog::onEvent(const InputEvent& e) {
-  using T = InputEvent::Type;
   news_ = HoldButton::News::None;
   if (!up_) return -1;
-  if (hold_.armed()) {
-    // The hold button's touch is the hold's: no press highlight (its fill
-    // is one), and no tap answers it, only a hold kept to its end.
-    news_ = hold_.onEvent(e);
-    switch (news_) {
-      case HoldButton::News::Began:
-        fillDrawn_ = 0;  // (tick() draws it as it grows, from the first pass)
-        fillDrawnMs_ = e.ms - kFillFrameMs;
-        return -1;
-      case HoldButton::News::Short:
-      case HoldButton::News::Slid:
-        // Nothing happens: empty again, and how to answer it.
-        hintShown_ = true;
-        fillDrawn_ = 0;
-        draw();
-        return -1;
-      case HoldButton::News::Dropped:
-        drawHoldButton(0);
-        return -1;
-      case HoldButton::News::Confirmed:
-        return primary_;  // (lifted at its end, before tick() saw it)
-      default:
-        break;
-    }
-    if (hold_.holding()) return -1;  // (a move on it)
+  const DialogTouch::Result r = touch_.onEvent(e);
+  news_ = r.news;
+  if (r.news == HoldButton::News::Began) {
+    fillDrawn_ = 0;  // (tick() draws it as it grows, from the first pass)
+    fillDrawnMs_ = e.ms - kFillFrameMs;
+  } else if (r.news == HoldButton::News::Short || r.news == HoldButton::News::Slid) {
+    fillDrawn_ = 0;  // empty again (and the hint shown)
   }
-  if (e.type == T::Down) {
-    pressed_ = buttonAt(e.x, e.y);
-    if (hold_.armed() && pressed_ == primary_) pressed_ = -1;  // only a hold answers it
-    if (pressed_ >= 0) draw();
-    return -1;
+  if (r.redraw == DialogTouch::Redraw::All) {
+    draw();
+  } else if (r.redraw == DialogTouch::Redraw::HoldButton) {
+    drawHoldButton(0);
   }
-  if (e.type == T::DragStart || e.type == T::Cancel || e.type == T::Release) {
-    if (pressed_ >= 0) {
-      pressed_ = -1;
-      draw();
-    }
-    return -1;
-  }
-  if (e.type != T::Tap) return -1;
-  const int b = pressed_;
-  pressed_ = -1;
-  return b;
+  return r.answer;
 }
 
 HoldButton::News Dialog::tick(uint32_t nowMs) {
-  if (!up_ || !hold_.armed()) return HoldButton::News::None;
-  if (hold_.update(nowMs) == HoldButton::News::Confirmed) return HoldButton::News::Confirmed;
-  if (!hold_.holding()) return HoldButton::News::None;
-  const int px = hold_.fill(nowMs, dialog::buttonW(n_));
+  if (!up_ || !touch_.holdMode()) return HoldButton::News::None;
+  if (touch_.tick(nowMs) == HoldButton::News::Confirmed) return HoldButton::News::Confirmed;
+  if (!touch_.holding()) return HoldButton::News::None;
+  const int px = touch_.hold().fill(nowMs, dialog::buttonW(touch_.n()));
   if (px != fillDrawn_ && static_cast<int32_t>(nowMs - fillDrawnMs_) >= static_cast<int32_t>(kFillFrameMs)) {
     fillDrawnMs_ = nowMs;
     drawHoldButton(px);
@@ -1051,7 +1016,7 @@ HoldButton::News Dialog::tick(uint32_t nowMs) {
 }
 
 HoldButton::News Dialog::dropHold() {
-  const HoldButton::News n = hold_.drop();
+  const HoldButton::News n = touch_.dropHold();
   if (n == HoldButton::News::Dropped) drawHoldButton(0);
   return n;
 }

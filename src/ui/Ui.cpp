@@ -327,6 +327,8 @@ bool Ui::askFormat(bool fromComputer) {
   const S body = s.card ? (s.cardPlan ? S::format_plan_body : S::format_music_body)
                  : damaged ? S::format_damaged_body
                            : S::format_ask_body;
+  // (Format... on the right: formatask::kAskFormatButton.)
+  static_assert(formatask::kAskFormatButton == 1, "the first question's buttons: Cancel, Format...");
   const char* const buttons[2] = {tr(S::dialog_cancel), tr(S::format_button)};
   endPageTouch();
   closeModal(true);
@@ -350,32 +352,36 @@ bool Ui::askFormat(bool fromComputer) {
 
 // The second question: "Erase the whole card?", Format (red) on the left,
 // where the first one's Cancel was, in the Dialog's hold mode: it acts
-// only when held 2 s (a tap shows format.hold_hint).
+// only when held 2 s (a tap shows format.hold_hint). Its clock (the
+// minute, the settle) is already running, from the tap that answered the
+// first (formatAnswered()).
 void Ui::openFormatSure() {
   char body[256];
   trf(body, sizeof(body), S::format_sure_body, uistr::decimal(static_cast<double>(state_.cardBytes) / 1e9, 1));
+  static_assert(formatask::kSureFormatButton == 0, "the second question's buttons: Format, Cancel");
   const char* const buttons[2] = {tr(S::format_sure_button), tr(S::dialog_cancel)};
   dialogOwner_ = this;
-  dialog_.open(tr(S::format_sure_title), body, buttons, 2, accent(), /*danger=*/true, /*primary=*/0,
-               tr(S::format_hold_hint));
+  dialog_.open(tr(S::format_sure_title), body, buttons, 2, accent(), /*danger=*/true,
+               /*primary=*/formatask::kSureFormatButton, tr(S::format_hold_hint));
   ownDialog_ = OwnDialog::FormatSure;
-  formatQuestion_.sure(nowMs_);
   formatGone_ = nullptr;
   applyCover();
 }
 
-void Ui::formatAnswered(OwnDialog which, int button) {
-  if (which == OwnDialog::FormatAsk && button == 1) {
+void Ui::formatAnswered(int button) {
+  // (What the step's button means, and the second step's clock from the
+  // answer's own time, the tap's: formatask, host-tested.)
+  const formatask::Answer answer = formatQuestion_.answered(button, dialogAnsweredMs_);
+  if (answer == formatask::Answer::Second) {
     Serial.println("[ui] format: the first question answered Format...; the second");
     openFormatSure();
     return;
   }
   const bool fromComputer = formatFromComputer_;
   formatFromComputer_ = false;
-  formatQuestion_.end();
-  // (Button 0 of the second question: only its hold kept to the end gives
-  // it, Dialog's hold mode; never a tap.)
-  if (which == OwnDialog::FormatSure && button == 0) {
+  // (The second question's hold button: only its hold kept to the end
+  // gives it, the Dialog's hold mode; never a tap.)
+  if (answer == formatask::Answer::Format) {
     if (host_.formatCard(fromComputer)) {
       note(tr(S::format_restarting), 5000);
     } else {
@@ -1158,7 +1164,7 @@ void Ui::onDialog(int button) {
   const OwnDialog which = ownDialog_;
   ownDialog_ = OwnDialog::None;
   if (which == OwnDialog::FormatAsk || which == OwnDialog::FormatSure) {
-    formatAnswered(which, button);
+    formatAnswered(button);
     return;
   }
   if (which == OwnDialog::PlayFailed) {
@@ -1175,7 +1181,8 @@ void Ui::onDialog(int button) {
   if (which == OwnDialog::Lost && button == 0) host_.selectOutput(false);
 }
 
-void Ui::answerDialog(int button, bool held) {
+void Ui::answerDialog(int button, bool held, uint32_t ms) {
+  dialogAnsweredMs_ = ms;
   if (held) {
     input_.holdTick();  // (the hold's end: the double tick)
   } else {
@@ -1364,26 +1371,30 @@ void Ui::loop(uint32_t nowMs) {
     endIdentify();
     Serial.println("[ui] identify: over");
   }
-  // The format's question unanswered for a minute: Cancel, the default
-  // (each of its steps: formatask; over a hold under way too).
-  if (formatAsking() && formatQuestion_.expired(nowMs)) {
-    if (dialog_.holding()) Serial.println("[ui] format: the minute ran out while Format was held");
-    formatGone_ = "no answer in a minute";
-    closeModal(true);
-    repaintUnder();
-  }
-  // The dialog's hold (the format's second question): live only while the
-  // touch that began it is the dialog's (not one the dark, a banner or a
-  // screen took); kept to its end, the hold button's answer.
-  if (dialog_.up() && dialog_.holdMode()) {
-    if (dialog_.holding() && (touch_ != TouchOn::Dialog || identifying_ || dark_)) {
-      dialog_.dropHold();
+  // The format's question, a pass in formatask::pass()'s order (tested on
+  // the host): unanswered for a minute, Cancel, the default (each of its
+  // steps; over a hold under way too); then the dialog's hold (the second
+  // question's), live only while the touch that began it is the dialog's
+  // (not one the dark, a banner or a screen took), its fill drawn as it
+  // grows; kept to its end, the hold button's answer.
+  const bool dialogsTouch = touch_ == TouchOn::Dialog && !identifying_ && !dark_;
+  switch (formatask::pass(formatAsking(), formatQuestion_, dialog_, nowMs, dialogsTouch)) {
+    case formatask::Pass::Expired:
+      if (dialog_.holding()) Serial.println("[ui] format: the minute ran out while Format was held");
+      formatGone_ = "no answer in a minute";
+      closeModal(true);
+      repaintUnder();
+      break;
+    case formatask::Pass::Dropped:
       Serial.println("[ui] format: Format's hold dropped (its touch was taken): nothing formatted");
-    } else if (dialog_.tick(nowMs) == HoldButton::News::Confirmed) {
+      break;
+    case formatask::Pass::Confirmed:
       touch_ = TouchOn::None;  // (the rest of that touch, its lift, goes nowhere)
       Serial.printf("[ui] format: Format held %lu ms\n", static_cast<unsigned long>(dialog_.holdLastMs()));
-      answerDialog(dialog_.holdButton(), true);
-    }
+      answerDialog(dialog_.holdButton(), true, nowMs);
+      break;
+    default:
+      break;
   }
 
   updateHud(nowMs);
@@ -1636,6 +1647,8 @@ void Ui::onEvent(const InputEvent& e) {
   }
   if (e.type == T::Release && holdUnused_) {
     // Nothing held: a slow tap, if the finger is still where it pressed.
+    // (test_hold_button's Asker::pass() models this rule, and route()'s
+    // dialog touch below: keep them in step.)
     holdUnused_ = false;
     constexpr int kSlowTapSlop = 24;
     if (std::abs(e.x - hold_.x) <= kSlowTapSlop && std::abs(e.y - hold_.y) <= kSlowTapSlop) {
@@ -1662,6 +1675,7 @@ void Ui::route(const InputEvent& e) {
     } else if (dialog_.up() && ownDialog_ == OwnDialog::FormatSure && !formatQuestion_.lands(e.ms)) {
       // The format's second question: a touch this soon after it opened is
       // the finger that answered the first (a double tap): it goes nowhere.
+      // (test_hold_button's Asker::route() models this: keep it in step.)
       touch_ = TouchOn::None;
       Serial.println("[ui] format: a touch right after the second question opened, ignored");
     } else if (dialog_.up()) {
@@ -1722,7 +1736,7 @@ void Ui::route(const InputEvent& e) {
       const int b = dialog_.onEvent(e);
       const HoldButton::News n = dialog_.holdNews();
       if (n != HoldButton::News::None) holdNews(n);
-      if (b >= 0) answerDialog(b, n == HoldButton::News::Confirmed);
+      if (b >= 0) answerDialog(b, n == HoldButton::News::Confirmed, e.ms);
       break;
     }
     case TouchOn::Sheet: {

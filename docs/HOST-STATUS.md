@@ -432,18 +432,19 @@ sync: the card is in the computer's reader then, and the board answers
     player restarts and formats the <n> GB card: leave it in until it's
     back.", with Format on the left, where the first one's Cancel was,
     and Cancel on the right. **Format answers only to a hold** (the
-    Dialog's hold mode, `lib/core/HoldButton`): drawn empty with a red
-    outline, it fills with red from the left while a finger stays on it,
-    and at 2 s (`HoldButton::kHoldMs`, the finger still on it) it is the
-    answer, with the double tick. Lifted sooner, however quick or slow
-    the tap, or slid off it (past its hit area by 10 px:
-    `kSlackPx`, so a resting finger's drift and the panel's noise don't
-    count), it empties and nothing happens but the inert buzz and the
-    hint under the body, amber: "Hold the red button for 2 seconds"
+    Dialog's hold mode, `lib/core/DialogTouch` and `HoldButton`): drawn
+    empty with a red outline, it fills with red from the left while a
+    finger stays on it, and at 2 s (`HoldButton::kHoldMs`, the finger
+    still on it) it is the answer, with the double tick. Lifted sooner,
+    however quick or slow the tap, or slid off it (past its hit area by
+    10 px: `kSlackPx`, so a resting finger's drift and the panel's noise
+    don't count), it empties and nothing happens but the inert buzz and
+    the hint under the body, amber: "Hold the red button for 2 seconds"
     (`format.hold_hint`). Each press starts from nothing: no tap, double
     tap or run of taps adds up to an answer, and a lift the panel reads
     for a moment ends the hold. A touch that lands in the dialog's first
-    0.6 s goes nowhere (`formatask::kSettleMs`: a double tap's second
+    0.6 s goes nowhere (`formatask::kSettleMs`, from the tap that
+    answered the first question, its own time: a double tap's second
     touch, which would otherwise land on its Cancel). A hold under way
     when its touch is taken (the screen dark, the identify banner, a
     Cancel from the input layer) drops, nothing done.
@@ -683,14 +684,21 @@ counted. An error changes nothing.
   a session alive or a decline going. `refuse()` gives the firmware's own
   refusals HostLink's `@err` and rate limit. `test_host_link`'s
   `test_board_questions`, `test_time` and `test_format`.
-- **`lib/core/HoldButton`**, **`lib/core/FormatAsk`** and
-  **`lib/core/DialogLayout`** (portable, `test_hold_button`): the
-  Dialog's hold mode (a press that lands on the button, its fill, the
-  end at `kHoldMs`, a lift or a slide past `kSlackPx` that empties it,
-  a dropped touch), the dialog's buttons and their hit areas
-  (`dialog::buttonAt()`, Dialog's rule), and the question's clock
-  (`formatask::Question`: each step's minute, the second's settle).
-  Tested on the bits and then as the Ui routes the glass, a finger on
+- **`lib/core/HoldButton`**, **`lib/core/DialogTouch`**,
+  **`lib/core/FormatAsk`** and **`lib/core/DialogLayout`** (portable,
+  `test_hold_button`): the Dialog's hold mode (a press that lands on the
+  button, its fill, the end at `kHoldMs`, a lift or a slide past
+  `kSlackPx` that empties it, a dropped touch), which touch answers a
+  dialog (`DialogTouch`, `ui/Overlays`' Dialog's own: a press, its
+  highlight, a Tap its answer; in the hold mode no tap on the hold
+  button, the hint's alert), the dialog's buttons and their hit areas
+  (`dialog::buttonAt()`), and the question (`formatask::Question`: each
+  step's minute, the second's settle, a step's answers and the second's
+  clock from the answering tap's time; `formatask::pass()`, `Ui::loop()`'s
+  order: the minute, then the hold dropped or ticked). Tested on the bits
+  and then as the Ui routes the glass (the real `DialogTouch` and
+  `formatask`; `Ui::onEvent()`'s slow tap and `Ui::route()`'s settle
+  modelled, each place in `ui/Ui.cpp` naming the model), a finger on
   the real `TouchRecognizer` every 10 ms pass: a hold formats at 2 s to
   the pass; a lift at 1.98 s, a quick tap, a slide onto Cancel or up to
   the body don't (the hint); jitter inside the recogniser's slop and

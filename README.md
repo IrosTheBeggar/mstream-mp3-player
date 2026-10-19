@@ -938,7 +938,7 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       The format's second step, a 2 s hold (a press kept on
                       the button, its fill, a lift or a slide that empties
                       it); the question's clock (each step's minute, the
-                      second's settle)
+                      second's settle), its answers and a loop pass's order
   HostStatus, FreeCount
                       A computer's questions (docs/HOST-STATUS.md): the
                       @status line, the FSINFO rule, @identify's label; the
@@ -968,6 +968,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       from its start to its end, when the loop may write
   SheetLayout         Where a sheet sits (3 rows, or 4 from y 40)
   DialogLayout        Where a dialog and its buttons sit, and their hit areas
+  DialogTouch         Which touch answers a dialog (a press, a tap, the hold
+                      mode's hold button and its hint), the Dialog's own
   LibraryIndex, LibraryBuilder, LibraryBoot
                       The library index (library.idx v6), its build from
                       the tag records, the boot's decision

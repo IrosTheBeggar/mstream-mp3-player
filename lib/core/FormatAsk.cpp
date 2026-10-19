@@ -16,6 +16,16 @@ void Question::sure(uint32_t ms) {
   openedMs_ = ms;
 }
 
+Answer Question::answered(int button, uint32_t ms) {
+  const Step was = step_;
+  step_ = Step::Off;
+  if (was == Step::Ask && button == kAskFormatButton) {
+    sure(ms);
+    return Answer::Second;
+  }
+  return was == Step::Sure && button == kSureFormatButton ? Answer::Format : Answer::Declined;
+}
+
 bool Question::lands(uint32_t ms) const {
   // (The time since it opened as a signed span: an event stamped before the
   // step's own time is in its settle, never a wrap past it.)

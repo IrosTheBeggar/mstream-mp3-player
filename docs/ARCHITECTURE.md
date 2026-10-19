@@ -1484,11 +1484,12 @@ the player reads names its music, and a transfer that didn't finish on
 it; a damaged card's "Check it on a computer first") and "Erase the
 whole card?", whose red Format sits where the first one's Cancel was
 and answers only to a finger kept on it 2 s (the Dialog's hold mode,
-`lib/core/HoldButton`: it fills meanwhile; a tap, a hold let go or slid
-off, does nothing but show how), with a settle for a double tap
-(`lib/core/FormatAsk`). Cancel is the default: a tab, another dialog or
-screen, a minute with no answer (each step's, over a hold under way
-too). Format restarts the player
+`lib/core/DialogTouch` and `HoldButton`: it fills meanwhile; a tap, a
+hold let go or slid off, does nothing but show how), with a settle for
+a double tap (`lib/core/FormatAsk`, from the answering tap's own time).
+Cancel is the default: a tab, another dialog or screen, a minute with
+no answer (each step's, over a hold under way too: `formatask::pass()`,
+the loop's order). Format restarts the player
 the CPU speed's orderly way (paused, the queue and the play log saved,
 the headphones let go), with the card's identity (the guard's: its
 size, the CRCs of sector 0 and of its first partition's first sector) in
@@ -3001,7 +3002,9 @@ Queue, Dance and Output (with its Pair and About pages).
   still works; optionally an icon, a live status line and a red primary
   button, on the right or, the format's second question, the left; that
   question's in the hold mode, answered only by a finger kept on it 2 s,
-  `lib/core/HoldButton`, the buttons' hit areas `lib/core/DialogLayout`)
+  `lib/core/HoldButton`, the buttons' hit areas `lib/core/DialogLayout`;
+  which touch answers a dialog, `lib/core/DialogTouch`, host-tested, the
+  Dialog drawing what it says changed)
   freeze the page under them; one that opens while a finger is
   on the page (the headphones' drop dialog) ends that touch for the page (a
   Cancel), so its lift can't act or draw under it. When a toast goes, the

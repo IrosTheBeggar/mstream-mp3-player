@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "DialogLayout.h"
+#include "DialogTouch.h"
 #include "HoldButton.h"
 #include "InputEvent.h"
 #include "JumpIndex.h"
@@ -71,7 +72,8 @@
 //           right-hand one, or the left: the format's second question puts
 //           it where the first one's Cancel was). Its hold mode (that
 //           second question): the red button acts only when held 2 s,
-//           filling meanwhile; a tap shows how (HoldButton).
+//           filling meanwhile; a tap shows how (DialogTouch,
+//           HoldButton).
 //   Coach   the first-boot tips (once, remembered in NVS; About shows them
 //           again): the three red touch buttons and what their clicks and
 //           holds do, then "tap the tab you're on again to go back to its
@@ -344,7 +346,8 @@ public:
   // red, and fills with red from the left while a finger stays on it
   // (tick()); a tap on it, or a hold cut short (lifted, slid off), does
   // nothing but show `holdHint` (amber, under the body's three lines). The
-  // other button is a dialog's button as ever.
+  // other button is a dialog's button as ever. (Which touch answers what:
+  // DialogTouch.)
   void open(const char* title, const char* body, const char* const* buttons, int n, uint16_t accent,
             bool danger = false, int primary = -1, const char* holdHint = nullptr);
   // An icon before the title (`slashed`: a red slash across it).
@@ -355,7 +358,7 @@ public:
   static int titleRoom(bool icon);
   void close() {
     up_ = false;
-    hold_.disarm();
+    touch_.close();
   }
   bool up() const { return up_; }
   void draw();
@@ -365,10 +368,10 @@ public:
   int onEvent(const InputEvent& e);
 
   // ---- the hold mode ----
-  bool holdMode() const { return hold_.armed(); }
-  int holdButton() const { return primary_; }
-  bool holding() const { return hold_.holding(); }
-  uint32_t holdLastMs() const { return hold_.lastHeldMs(); }  // (the log's)
+  bool holdMode() const { return touch_.holdMode(); }
+  int holdButton() const { return touch_.primary(); }
+  bool holding() const { return touch_.holding(); }
+  uint32_t holdLastMs() const { return touch_.hold().lastHeldMs(); }  // (the log's)
   // What the last onEvent() did to the hold (HoldButton::News): Began (the
   // caller turns the recogniser's hold off for the touch: Input::noHold()),
   // Short or Slid (the hint shown), Confirmed (a lift at kHoldMs or after:
@@ -390,26 +393,23 @@ private:
   void renderButton(M5Canvas& s, int i, int x, int y, int fillPx) const;
   // The hold button alone, pushed (its fill grew).
   void drawHoldButton(int fillPx);
-  int buttonAt(int x, int y) const;
   char title_[96] = "";
   char body_[256] = "";
   char status_[96] = "";
   uint16_t statusColour_ = 0;
   char buttons_[2][48] = {};
-  int n_ = 0;
-  int pressed_ = -1;
-  int primary_ = 0;
+  // Its buttons as the glass answers them (the press, the hold, the
+  // hint's alert): what it draws.
+  DialogTouch touch_;
   bool up_ = false;
   bool danger_ = false;
   uint16_t accent_ = 0;
   const icons::Icon* icon_ = nullptr;
   uint16_t iconColour_ = 0;
   bool slashed_ = false;
-  // The hold mode: the hold, its hint (shown once a hold fell short), the
-  // fill as last drawn and when, the last onEvent()'s news.
-  HoldButton hold_;
+  // The hold mode: its hint, the fill as last drawn and when, the last
+  // onEvent()'s news.
   char hint_[96] = "";
-  bool hintShown_ = false;
   int fillDrawn_ = 0;
   uint32_t fillDrawnMs_ = 0;
   HoldButton::News news_ = HoldButton::News::None;

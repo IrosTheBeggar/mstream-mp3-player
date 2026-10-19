@@ -330,8 +330,10 @@ public:
   // first one's Cancel was, in the Dialog's hold mode: it acts only when
   // held 2 s (HoldButton::kHoldMs), filling meanwhile; a tap on it, a
   // hold let go or slid off, does nothing but show how (format.hold_hint),
-  // and a touch in that dialog's first 0.6 s goes nowhere (formatask:
-  // the double tap's second touch). No tap, double tap or run of taps
+  // and a touch in that dialog's first 0.6 s (from the tap that opened
+  // it) goes nowhere (formatask: the double tap's second touch).
+  // Which touch answers what: DialogTouch, formatask (the step's answer,
+  // a loop pass's order). No tap, double tap or run of taps
   // answers both. Cancel is the default: anything but a hold kept to its
   // end closes it as Cancel (Cancel, a tab, another dialog, another
   // screen taking the display, the language changed, a minute without an
@@ -469,10 +471,14 @@ private:
   formatask::Question formatQuestion_;
   const char* formatGone_ = nullptr;
   void openFormatSure();
-  void formatAnswered(OwnDialog which, int button);
+  // The step up answered with `button` (formatask::Question::answered(),
+  // at dialogAnsweredMs_), -1 closed.
+  void formatAnswered(int button);
   // A dialog's button answered (a tap, or the hold kept to its end:
-  // `held`): its feedback, the dialog closed, its owner told.
-  void answerDialog(int button, bool held);
+  // `held`) at `ms` (the tap's own time, or the loop pass's that saw the
+  // hold's end): its feedback, the dialog closed, its owner told.
+  void answerDialog(int button, bool held, uint32_t ms);
+  uint32_t dialogAnsweredMs_ = 0;  // (answerDialog()'s `ms`: the second question's clock starts there)
   // What a touch did to the dialog's hold (Dialog::holdNews()).
   void holdNews(HoldButton::News n);
   uint32_t gateFailuresSeen_ = 0;
