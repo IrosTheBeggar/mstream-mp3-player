@@ -2999,7 +2999,9 @@ Queue, Dance and Output (with its Pair and About pages).
   row can stay up and show its new state, Now Playing's Shuffle, Repeat
   and Auto DJ) and a **dialog** (modal, the tab bar
   still works; optionally an icon, a live status line and a red primary
-  button, on the right or, the format's second question, the left)
+  button, on the right or, the format's second question, the left; that
+  question's in the hold mode, answered only by a finger kept on it 2 s,
+  `lib/core/HoldButton`, the buttons' hit areas `lib/core/DialogLayout`)
   freeze the page under them; one that opens while a finger is
   on the page (the headphones' drop dialog) ends that touch for the page (a
   Cancel), so its lift can't act or draw under it. When a toast goes, the
