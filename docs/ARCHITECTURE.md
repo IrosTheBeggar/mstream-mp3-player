@@ -1482,11 +1482,12 @@ bring up the same question: `Ui::askFormat()`'s two dialogs, "Format this
 card?" (the whole card erased, even what the player can't read; a card
 the player reads names its music, and a transfer that didn't finish on
 it; a damaged card's "Check it on a computer first") and "Erase the
-whole card?", whose red Format sits where the first one's Cancel was
-and answers only to a finger kept on it 2 s (the Dialog's hold mode,
-`lib/core/DialogTouch` and `HoldButton`: it fills meanwhile; a tap, a
-hold let go or slid off, does nothing but show how), with a settle for
-a double tap (`lib/core/FormatAsk`, from the answering tap's own time).
+whole card?", whose red "Hold to erase" sits where the first one's
+Cancel was and answers only to a finger kept on it 2 s (the Dialog's
+hold mode, `lib/core/DialogTouch` and `HoldButton`: it fills meanwhile,
+and a hint under the body says how from the start; a tap, a hold let go
+or slid off, does nothing but turn the hint amber), with a settle for a
+double tap (`lib/core/FormatAsk`, from the answering tap's own time).
 Cancel is the default: a tab, another dialog or screen, a minute with
 no answer (each step's, over a hold under way too: `formatask::pass()`,
 the loop's order). Format restarts the player

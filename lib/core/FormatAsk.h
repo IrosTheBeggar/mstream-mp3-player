@@ -9,8 +9,8 @@
 // The format's question's clock (ui/Ui::askFormat(); docs/HOST-STATUS.md,
 // "@format"): its two steps, each a dialog with Cancel. Ask, "Format this
 // card?", answered by a tap on Format...; Sure, "Erase the whole card?",
-// answered only by holding its red Format HoldButton::kHoldMs (the
-// Dialog's hold mode: DialogTouch). Cancel is the default: a step up
+// answered only by holding its red "Hold to erase" HoldButton::kHoldMs
+// (the Dialog's hold mode: DialogTouch). Cancel is the default: a step up
 // kAskMs with no answer ends it (expired()), whatever is under way then, a
 // hold too: the minute wins (pass()). A touch that lands in Sure's first
 // kSettleMs goes nowhere (lands()): the finger that answered Ask, coming

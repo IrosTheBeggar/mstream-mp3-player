@@ -384,7 +384,7 @@
   "format.damaged_body": "Um computador pode salvar o que há nele. Formatar apaga tudo, até o que o player não lê.",
   "format.sure_title": "Apagar o cartão todo?",
   "format.sure_body": "Não dá para desfazer. O player reinicia e formata o cartão de {0} GB: deixe-o no lugar até ele voltar.",
-  "format.sure_button": "Formatar",
+  "format.sure_button": "Segure: apagar",
   "format.hold_hint": "Segure o botão vermelho por 2 s",
   "format.restarting": "Reiniciando para formatar o cartão",
   "format.boot_title": "Formatando o cartão",

@@ -954,9 +954,13 @@ void Dialog::render() {
     f.draw(s, Font::Small, status_, 16, dialog::kBodyY + nl * dialog::kLineH + dialog::kStatusGap, kW - 32,
            statusColour_, col::CARD);
   }
-  // The hint, how the hold button is answered: once a press on it fell
-  // short (a tap, a lift, a slide off: DialogTouch::hintAlert()).
-  if (hold && touch_.hintAlert()) f.draw(s, Font::Small, hint_, 16, dialog::kHintY, kW - 32, col::AMBER, col::CARD);
+  // The hint, how the hold button is answered: from the start, in the
+  // body's colour; amber once a press on it fell short (a tap, a lift, a
+  // slide off: DialogTouch::hintAlert()).
+  if (hold) {
+    f.draw(s, Font::Small, hint_, 16, dialog::kHintY, kW - 32, touch_.hintAlert() ? col::AMBER : col::SOFT,
+           col::CARD);
+  }
   const int n = touch_.n();
   for (int i = 0; i < n; ++i) {
     renderButton(s, i, dialog::buttonX(i, n), dialog::kButtonTop, i == touch_.primary() ? fillDrawn_ : 0);
@@ -993,7 +997,7 @@ int Dialog::onEvent(const InputEvent& e) {
     fillDrawn_ = 0;  // (tick() draws it as it grows, from the first pass)
     fillDrawnMs_ = e.ms - kFillFrameMs;
   } else if (r.news == HoldButton::News::Short || r.news == HoldButton::News::Slid) {
-    fillDrawn_ = 0;  // empty again (and the hint shown)
+    fillDrawn_ = 0;  // empty again (and the hint amber)
   }
   if (r.redraw == DialogTouch::Redraw::All) {
     draw();

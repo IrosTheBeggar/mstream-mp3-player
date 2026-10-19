@@ -402,7 +402,7 @@
   "format.damaged_body": "Un ordenador quizá salve su contenido. Formatear lo borra todo, incluso lo que el reproductor no lee.",
   "format.sure_title": "¿Borrar toda la tarjeta?",
   "format.sure_body": "No se puede deshacer. El reproductor se reinicia y formatea la tarjeta de {0} GB: déjala puesta.",
-  "format.sure_button": "Formatear",
+  "format.sure_button": "Mantén: borrar",
   "format.hold_hint": "Mantén el botón rojo 2 segundos",
   "format.restarting": "Reiniciando: se formatea la tarjeta",
   "format.boot_title": "Formateando la tarjeta",

@@ -405,7 +405,7 @@
   "format.damaged_body": "Ein Computer rettet vielleicht, was darauf ist. Formatieren löscht alles, auch was der Player nicht lesen kann.",
   "format.sure_title": "Ganze Karte löschen?",
   "format.sure_body": "Nicht umkehrbar. Der Player startet neu und formatiert die Karte ({0} GB): bis dahin drinlassen.",
-  "format.sure_button": "Formatieren",
+  "format.sure_button": "Halten: löschen",
   "format.hold_hint": "Den roten Knopf 2 Sekunden halten",
   "format.restarting": "Neustart: die Karte wird formatiert",
   "format.boot_title": "Karte wird formatiert",

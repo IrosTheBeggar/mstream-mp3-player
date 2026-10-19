@@ -335,7 +335,7 @@
   "format.damaged_body": "パソコンのディスクチェックで中身を救えるかもしれません。フォーマットはカード全体を消去します。",
   "format.sure_title": "カード全体を消去?",
   "format.sure_body": "元に戻せません。再起動して {0} GB のカードをフォーマットします。カードは抜かないで。",
-  "format.sure_button": "フォーマット",
+  "format.sure_button": "長押しで消去",
   "format.hold_hint": "赤いボタンを2秒間押し続けて",
   "format.restarting": "再起動: カードをフォーマットします",
   "format.boot_title": "カードをフォーマット中",

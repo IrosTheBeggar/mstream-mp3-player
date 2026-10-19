@@ -350,15 +350,15 @@ bool Ui::askFormat(bool fromComputer) {
   return true;
 }
 
-// The second question: "Erase the whole card?", Format (red) on the left,
-// where the first one's Cancel was, in the Dialog's hold mode: it acts
-// only when held 2 s (a tap shows format.hold_hint). Its clock (the
-// minute, the settle) is already running, from the tap that answered the
-// first (formatAnswered()).
+// The second question: "Erase the whole card?", "Hold to erase" (red) on
+// the left, where the first one's Cancel was, in the Dialog's hold mode:
+// it acts only when held 2 s, and its hint says so (format.hold_hint;
+// amber after a tap). Its clock (the minute, the settle) is already
+// running, from the tap that answered the first (formatAnswered()).
 void Ui::openFormatSure() {
   char body[256];
   trf(body, sizeof(body), S::format_sure_body, uistr::decimal(static_cast<double>(state_.cardBytes) / 1e9, 1));
-  static_assert(formatask::kSureFormatButton == 0, "the second question's buttons: Format, Cancel");
+  static_assert(formatask::kSureFormatButton == 0, "the second question's buttons: Hold to erase, Cancel");
   const char* const buttons[2] = {tr(S::format_sure_button), tr(S::dialog_cancel)};
   dialogOwner_ = this;
   dialog_.open(tr(S::format_sure_title), body, buttons, 2, accent(), /*danger=*/true,
@@ -1206,8 +1206,8 @@ void Ui::holdNews(HoldButton::News n) {
       break;
     case HoldButton::News::Short:
     case HoldButton::News::Slid:
-      input_.missBuzz();  // (nothing happened: the hint says how)
-      Serial.printf("[ui] format: Format %s after %lu ms: nothing formatted (the hint shown)\n",
+      input_.missBuzz();  // (nothing happened: the hint, amber now, says how)
+      Serial.printf("[ui] format: Format %s after %lu ms: nothing formatted (the hint amber)\n",
                     n == HoldButton::News::Short ? "let go" : "slid off",
                     static_cast<unsigned long>(dialog_.holdLastMs()));
       break;

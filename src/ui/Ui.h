@@ -326,12 +326,13 @@ public:
   // erased, even what the player can't read; a card the player reads, its
   // music named; a transfer that didn't finish on it, said; a damaged
   // card's "Check it on a computer first"), answered by a tap on
-  // Format...; then "Erase the whole card?" with Format, red, where the
-  // first one's Cancel was, in the Dialog's hold mode: it acts only when
-  // held 2 s (HoldButton::kHoldMs), filling meanwhile; a tap on it, a
-  // hold let go or slid off, does nothing but show how (format.hold_hint),
-  // and a touch in that dialog's first 0.6 s (from the tap that opened
-  // it) goes nowhere (formatask: the double tap's second touch).
+  // Format...; then "Erase the whole card?" with "Hold to erase", red,
+  // where the first one's Cancel was, in the Dialog's hold mode: it acts
+  // only when held 2 s (HoldButton::kHoldMs), filling meanwhile, and the
+  // hint under the body says so from the start (format.hold_hint); a tap
+  // on it, a hold let go or slid off, does nothing but turn the hint
+  // amber, and a touch in that dialog's first 0.6 s (from the tap that
+  // opened it) goes nowhere (formatask: the double tap's second touch).
   // Which touch answers what: DialogTouch, formatask (the step's answer,
   // a loop pass's order). No tap, double tap or run of taps
   // answers both. Cancel is the default: anything but a hold kept to its

@@ -386,7 +386,7 @@ and the clock is `unset` or more than 2 s off. Always UTC: the board keeps no ti
 ```
 → @format
 ← @format ok                          ("Format this card?" on the board's screen)
-   (the listener taps Format..., then holds Format 2 s, on the board)
+   (the listener taps Format..., then holds "Hold to erase" 2 s, on the board)
 ← @format 0                           (the board restarts to format: its boot lines follow)
 ← @format 10
    ...
@@ -430,29 +430,31 @@ sync: the card is in the computer's reader then, and the board answers
     second, explicit step.
   - The second, "Erase the whole card?", "This can't be undone. The
     player restarts and formats the <n> GB card: leave it in until it's
-    back.", with Format on the left, where the first one's Cancel was,
-    and Cancel on the right. **Format answers only to a hold** (the
-    Dialog's hold mode, `lib/core/DialogTouch` and `HoldButton`): drawn
-    empty with a red outline, it fills with red from the left while a
-    finger stays on it, and at 2 s (`HoldButton::kHoldMs`, the finger
-    still on it) it is the answer, with the double tick. Lifted sooner,
-    however quick or slow the tap, or slid off it (past its hit area by
-    10 px: `kSlackPx`, so a resting finger's drift and the panel's noise
-    don't count), it empties and nothing happens but the inert buzz and
-    the hint under the body, amber: "Hold the red button for 2 seconds"
-    (`format.hold_hint`). Each press starts from nothing: no tap, double
-    tap or run of taps adds up to an answer, and a lift the panel reads
-    for a moment ends the hold. A touch that lands in the dialog's first
-    0.6 s goes nowhere (`formatask::kSettleMs`, from the tap that
-    answered the first question, its own time: a double tap's second
-    touch, which would otherwise land on its Cancel). A hold under way
-    when its touch is taken (the screen dark, the identify banner, a
-    Cancel from the input layer) drops, nothing done.
+    back.", with "Hold to erase" (`format.sure_button`) on the left,
+    where the first one's Cancel was, and Cancel on the right; under the
+    body, from the start, "Hold the red button for 2 seconds"
+    (`format.hold_hint`, in the body's colour). **"Hold to erase" answers
+    only to a hold** (the Dialog's hold mode, `lib/core/DialogTouch` and
+    `HoldButton`): drawn empty with a red outline, it fills with red from
+    the left while a finger stays on it, and at 2 s
+    (`HoldButton::kHoldMs`, the finger still on it) it is the answer,
+    with the double tick. Lifted sooner, however quick or slow the tap,
+    or slid off it (past its hit area by 10 px: `kSlackPx`, so a resting
+    finger's drift and the panel's noise don't count), it empties and
+    nothing happens but the inert buzz and the hint turning amber. Each
+    press starts from nothing: no tap, double tap or run of taps adds up
+    to an answer, and a lift the panel reads for a moment ends the hold.
+    A touch that lands in the dialog's first 0.6 s goes nowhere
+    (`formatask::kSettleMs`, from the tap that answered the first
+    question, its own time: a double tap's second touch, which would
+    otherwise land on its Cancel). A hold under way when its touch is
+    taken (the screen dark, the identify banner, a Cancel from the input
+    layer) drops, nothing done.
   - **Cancel is the default**: anything but a hold on the second one's
-    Format kept to its end ends it as Cancel: Cancel, a tab, another
-    dialog in its place (the headphones lost), another screen taking the
-    display, the language changed, a minute with no answer (each
-    dialog's own minute, `formatask::kAskMs`; it wins over a hold under
+    "Hold to erase" kept to its end ends it as Cancel: Cancel, a tab,
+    another dialog in its place (the headphones lost), another screen
+    taking the display, the language changed, a minute with no answer
+    (each dialog's own minute, `formatask::kAskMs`; it wins over a hold under
     way). Then `@format no` (to a question `@format` asked) and the log's
     `[format] the question went (<how>): nothing formatted`. Taps tick,
     as every dialog's.
@@ -609,7 +611,7 @@ counted. An error changes nothing.
 ← @format no                          (the listener tapped Cancel)
 → @format
 ← @format ok
-← @format 0                           (Format..., then Format held 2 s: the board restarts)
+← @format 0                           (Format..., then its red button held 2 s: the board restarts)
    (the ROM's and the boot's lines)
 ← @format 10
    ...
@@ -747,7 +749,8 @@ counted. An error changes nothing.
   `test_ui_library`. `askFormat()`, the format's two questions (Ui's own
   dialogs, `OwnDialog::FormatAsk` and `FormatSure`: the second's red
   button on the left, `Dialog::open()`'s `primary`, in the hold mode
-  (`Dialog::open()`'s `holdHint`: the fill drawn through the shared
+  (`Dialog::open()`'s `holdHint`, drawn from the start, amber once a
+  press fell short; the fill drawn through the shared
   strip, its button alone, every 40 ms at most; `Dialog::tick()` every
   loop pass; `Input::noHold()` for the touch that began it, so it stays
   a press and says its moves; the hold dropped when the touch is no
@@ -818,8 +821,15 @@ counted. An error changes nothing.
   (`.iram0.text` 124,883 B); flash `.text` +1,772 B, `.rodata` +2,912 B;
   `firmware.bin` +4,848 B (4,400,640), of which the hold's is 2,544 B;
   the app 70 % of its slot. Every guard passes. While a finger holds
-  Format, its button (131 x 36 px, 9.4 KB) is drawn through the shared
-  strip and pushed about 25 times a second, 2 s at most.
+  the red button (131 x 36 px, 9.4 KB), it is drawn through the shared
+  strip and pushed about 25 times a second, 2 s at most. **The hold's
+  review fixes**, core2, against that image (4,400,640): the dialog's
+  touch and the loop's order moved into `lib/core` (`DialogTouch`,
+  `formatask::pass()`, `Question::answered()`) +176 B; "Hold to erase"
+  in ten languages and the hint drawn from the start +80 B (`.rodata`);
+  `firmware.bin` 4,400,896 (+256 B; core2-dio 4,400,960). IRAM
+  (`.iram0.text` 124,883 B), internal DRAM and RTC memory unchanged
+  (57,928 B of `.dram0.data` and `.bss`, as before). Every guard passes.
 
 ## Device test plan
 
@@ -909,8 +919,9 @@ each line whole with its `\n`. Close every other owner of the port first.
 11. **@format** (0.12.0). **On the spare card only, never the music
     card**: take the music card out first. Have a computer with a card
     reader at hand to look at the spare after each format. The second
-    question's Format answers only to a hold: "hold Format" below is a
-    finger kept on it until it has filled (2 s), then lifted.
+    question's red button, "Hold to erase", answers only to a hold:
+    "hold the red button" below is a finger kept on it until it has
+    filled (2 s), then lifted.
     - **Declined.** With any card in: `@format` gives `@format ok` and the
       question on the board. Tap Cancel: `@format no` and the log's
       `[format] the question went (Cancel): nothing formatted`. Again, and
@@ -921,10 +932,12 @@ each line whole with its `\n`. Close every other owner of the port first.
       right after the second question opened, ignored`; Cancel. Nothing
       on the card changed (the computer shows it as before).
     - **The hold, not taken.** Again: Format..., and on the second
-      question (its Format on the left, empty, outlined in red):
-      - Tap Format: nothing but the inert buzz and, under the body, the
-        amber "Hold the red button for 2 seconds"; the log's `[ui] format:
-        Format let go after <n> ms: nothing formatted (the hint shown)`.
+      question ("Hold to erase" on the left, empty, outlined in red; under
+      the body "Hold the red button for 2 seconds", in the body's grey;
+      in each language the label and the hint fit, uncut):
+      - Tap the red button: nothing but the inert buzz and the hint
+        turning amber; the log's `[ui] format: Format let go after <n>
+        ms: nothing formatted (the hint amber)`.
         Tap it five times quickly, then double-tap it: the same each
         time, the question still up.
       - Hold it about a second and let go: it fills about half way and
@@ -942,15 +955,15 @@ each line whole with its `\n`. Close every other owner of the port first.
         the glass, B and C do as ever (play/pause, next) under the
         question, which stays.
       - Cancel: `@format no`. Again: Format..., wait about 58 s on the
-        second question, then hold Format: at its minute the question
-        goes under the finger (the log's `the minute ran out while Format
-        was held`), `@format no`, nothing formatted.
+        second question, then hold the red button: at its minute the
+        question goes under the finger (the log's `the minute ran out
+        while Format was held`), `@format no`, nothing formatted.
       Nothing on the card changed.
     - **exFAT.** Format the spare exFAT on the computer (or use it as it
       came). The board: "This card is exFAT" with Try again and
-      Format...; Format..., then hold Format: it fills, the double tick
-      at its end (`[ui] format: Format held 2000 ms`, or a few ms more: the
-      loop pass that saw it), the note
+      Format...; Format..., then hold the red button: it fills, the
+      double tick at its end (`[ui] format: Format held 2000 ms`, or a
+      few ms more: the loop pass that saw it), the note
       "Restarting to format the card", `@format 0`, the restart, the boot
       screen's "Formatting the card" and its bar, `@format 10` ...
       `@format 100`, `@format done size=<bytes> free=<bytes>
@@ -969,16 +982,16 @@ each line whole with its `\n`. Close every other owner of the port first.
       no `*` under Gpt), one partition.
     - **A card the player reads.** With the formatted spare in and a
       file in `/music`: `@format` (the board can't be asked otherwise):
-      "Everything on it is erased: your music, ..."; Format..., hold
-      Format: as above, and the file is gone.
-    - **Pulled.** `@format` again, Format..., hold Format, and pull the
-      card at about 50 %: `@err 4 format write`, the log's `NOT
+      "Everything on it is erased: your music, ..."; Format..., hold the
+      red button: as above, and the file is gone.
+    - **Pulled.** `@format` again, Format..., hold the red button, and
+      pull the card at about 50 %: `@err 4 format write`, the log's `NOT
       FORMATTED`, "Couldn't format the card: try again", and the card
       reads "Can't read this card". Put it back, Try again: the same.
       Format...: the damaged card's "Check it on a computer first";
-      Format..., hold Format: whole again.
+      Format..., hold the red button: whole again.
     - **Playing.** A track playing on the speaker (and once on the
-      headphones): `@format`, Format..., hold Format: paused first, no
-      pop, the headphones let go, then the restart.
+      headphones): `@format`, Format..., hold the red button: paused
+      first, no pop, the headphones let go, then the restart.
     - **Old firmware.** On a v0.11.0 board: `@format` gives `@err 7
       format`.

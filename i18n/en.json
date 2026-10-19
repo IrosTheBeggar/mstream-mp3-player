@@ -3556,9 +3556,9 @@
     "bytes": 256,
     "line_bytes": 96
   },
-  "format.sure_button": "Format",
+  "format.sure_button": "Hold to erase",
   "@format.sure_button": {
-    "context": "The format's second question's red button, held 2 s to answer (it fills from the left meanwhile; a tap does nothing but show format.hold_hint): the card is formatted (at the restart).",
+    "context": "The format's second question's red button, saying how it is answered: held 2 s (it fills from the left meanwhile; a tap does nothing but turn format.hold_hint amber), the card is erased (formatted at the restart).",
     "room": {
       "font": "Bold",
       "else": "Small",
@@ -3569,7 +3569,7 @@
   },
   "format.hold_hint": "Hold the red button for 2 seconds",
   "@format.hold_hint": {
-    "context": "The format's second question's hint (amber, a line of its own under the body), shown once a tap on its red button (format.sure_button), or a hold let go or slid off before its end, did nothing: only a finger kept on it 2 s answers it (the button fills meanwhile).",
+    "context": "The format's second question's hint, a line of its own under the body from the moment it opens (in the body's colour), amber once a tap on its red button (format.sure_button), or a hold let go or slid off before its end, did nothing: only a finger kept on it 2 s answers it (the button fills meanwhile).",
     "room": {
       "font": "Small",
       "px": 260

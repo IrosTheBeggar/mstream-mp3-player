@@ -282,7 +282,7 @@ enum class S : uint16_t {
   format_damaged_body,  // A computer's disk check may save what's on it. Formatting erases it...
   format_sure_title,  // Erase the whole card?
   format_sure_body,  // This can't be undone. The player restarts and formats the {0} GB ca...
-  format_sure_button,  // Format
+  format_sure_button,  // Hold to erase
   format_hold_hint,  // Hold the red button for 2 seconds
   format_restarting,  // Restarting to format the card
   format_boot_title,  // Formatting the card

@@ -622,7 +622,7 @@ inline const Entry kEntries[] = {
      {{Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}}},
     {uistr::S::format_sure_body, "format.sure_body", false, "This can't be undone. The player restarts and formats the {0} GB card: leave it in until it's back.", "", Font::Small, Font::None, 260, 3, Layout::Wrap, 0, -1, false, false, false, 256, 96,
      {{Fill::Decimal, nullptr, 2199.0, 1, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}}},
-    {uistr::S::format_sure_button, "format.sure_button", false, "Format", "", Font::Bold, Font::Small, 123, 1, Layout::Line, 0, -1, false, false, false, 48, 0,
+    {uistr::S::format_sure_button, "format.sure_button", false, "Hold to erase", "", Font::Bold, Font::Small, 123, 1, Layout::Line, 0, -1, false, false, false, 48, 0,
      {{Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}}},
     {uistr::S::format_hold_hint, "format.hold_hint", false, "Hold the red button for 2 seconds", "", Font::Small, Font::None, 260, 1, Layout::Line, 0, -1, false, false, false, 96, 0,
      {{Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}}},

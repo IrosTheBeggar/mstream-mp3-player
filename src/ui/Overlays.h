@@ -72,8 +72,8 @@
 //           right-hand one, or the left: the format's second question puts
 //           it where the first one's Cancel was). Its hold mode (that
 //           second question): the red button acts only when held 2 s,
-//           filling meanwhile; a tap shows how (DialogTouch,
-//           HoldButton).
+//           filling meanwhile, and a hint under the body says so; a tap
+//           turns the hint amber (DialogTouch, HoldButton).
 //   Coach   the first-boot tips (once, remembered in NVS; About shows them
 //           again): the three red touch buttons and what their clicks and
 //           holds do, then "tap the tab you're on again to go back to its
@@ -344,10 +344,10 @@ public:
   // `holdHint`: the hold mode (the format's second question): the primary
   // acts only when held HoldButton::kHoldMs. It is drawn empty, outlined in
   // red, and fills with red from the left while a finger stays on it
-  // (tick()); a tap on it, or a hold cut short (lifted, slid off), does
-  // nothing but show `holdHint` (amber, under the body's three lines). The
-  // other button is a dialog's button as ever. (Which touch answers what:
-  // DialogTouch.)
+  // (tick()). `holdHint` says so from the start, a line under the body's
+  // three in the body's colour; a tap on it, or a hold cut short (lifted,
+  // slid off), does nothing but turn the hint amber. The other button is a
+  // dialog's button as ever. (Which touch answers what: DialogTouch.)
   void open(const char* title, const char* body, const char* const* buttons, int n, uint16_t accent,
             bool danger = false, int primary = -1, const char* holdHint = nullptr);
   // An icon before the title (`slashed`: a red slash across it).
@@ -374,7 +374,7 @@ public:
   uint32_t holdLastMs() const { return touch_.hold().lastHeldMs(); }  // (the log's)
   // What the last onEvent() did to the hold (HoldButton::News): Began (the
   // caller turns the recogniser's hold off for the touch: Input::noHold()),
-  // Short or Slid (the hint shown), Confirmed (a lift at kHoldMs or after:
+  // Short or Slid (the hint amber), Confirmed (a lift at kHoldMs or after:
   // the hold button's answer), Dropped (a Cancel).
   HoldButton::News holdNews() const { return news_; }
   // Every loop pass while it is up: the fill drawn as it grows (its button
