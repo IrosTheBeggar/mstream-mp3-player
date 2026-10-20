@@ -70,6 +70,9 @@ bool writeRtc(uint64_t second) {
 // NVS's "clock"/"phase" (nvslayout, schema 5).
 int32_t keptPhase() {
   Preferences p;
+  // (Read-write, though it only reads, as AutoDjStore's load(): a read-only
+  // open of a namespace not made yet fails with an [E] line at every boot
+  // until the first @time; read-write makes the namespace, no key.)
   if (!p.begin(nvslayout::kClockNamespace, false)) return rtcsync::kNoPhase;
   const bool have = p.isKey(nvslayout::kClockPhaseKey);
   const int32_t v = have ? p.getInt(nvslayout::kClockPhaseKey, 0) : 0;

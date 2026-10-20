@@ -305,15 +305,17 @@ up: the new label, 5 s from then.
 ```
 
 The board's clock, since 0.12.0: the Core2's RTC (a BM8563 on its
-internal I2C bus, M5Unified's `M5.Rtc`), read once at the boot, and set
-by a computer. The play log (docs/METADATA.md 2.20) takes its plays'
-start times from it, so the MP3 Player tab sets it when it sees the board
+internal I2C bus, M5Unified's `M5.Rtc`), read at the boot and made
+exact at its next tick (the catch below), and set by a computer. The
+play log (docs/METADATA.md 2.20) takes its plays' start times from it,
+so the MP3 Player tab sets it when it sees the board
 and the clock is `unset` or more than 2 s off. Always UTC: the board keeps no time zone.
 
 - **`@time`** alone asks: `@time <unix-ms>`, the board's time now in ms
   since 1970-01-01 00:00 UTC, or `@time unset`. At once, with no read of
-  the chip (the time is the boot's reading, or the last `@time`, plus the
-  board's monotonic ms since); not logged.
+  the chip (the time is the boot's reading, made exact at the RTC's tick
+  once the catch below has it, or the last `@time`, plus the board's
+  monotonic ms since); not logged.
 - **`@time <unix-ms>`** sets it: the computer's time in ms since
   1970-01-01 00:00 UTC (JavaScript's `Date.now()`; in Rust,
   `SystemTime::now()` since `UNIX_EPOCH`, as ms), digits only (the
@@ -348,7 +350,8 @@ and the clock is `unset` or more than 2 s off. Always UTC: the board keeps no ti
   the RTC didn't take 2026-10-18 14:03:23 UTC (...); written again at the
   next second (2 of 3)`, then `given up`): this boot's clock stays the
   computer's, and the RTC is as the cut rule below leaves it (as it was,
-  unset, or the time), which the tab's next look sets right. Nothing else
+  unset, or the time; no phase kept, "The phase" below), which the tab's
+  next look sets right. Nothing else
   refuses it: while music plays, in a session, declined or not. Sent
   again, the latest wins (a write or a catch under way dropped).
 - **Cut short**: the chip takes each byte as it comes, so a reset in the
@@ -409,7 +412,16 @@ and the clock is `unset` or more than 2 s off. Always UTC: the board keeps no ti
   phase of the time in the chip: a restart in between (a second or two)
   leaves none, and the boots add 0 until the next `@time` (exact to the
   write's lateness for the first kind of chip, within a second for the
-  other). **After a restart the clock is within a few tens of ms of the
+  other). So does a write given up: a write the bus reported failed may
+  still have reached the chip (its seconds, or the century bit), so the
+  older phase isn't put back. Kept, the phase holds only while a boot
+  leaves the chip's divider alone: `M5.begin()` writes two of its control
+  registers at every boot (00h as 0: STOP clear, the divider running;
+  0Eh as 03h: its timer off), which per the PCF8563's datasheet doesn't
+  touch it (ESTIMATED: device check 10's restarts check it; a phase gone
+  stale would still pass the catch's own check, a tick within a second
+  of the boot's reading, so only those offsets would show it, and the
+  stored phase would then have to go). **After a restart the clock is within a few tens of ms of the
   time set** (the two catches' half-gaps: within 30 ms at the loop's
   pace, either kind of chip, wherever its seconds and the `@time` fall:
   `test_rtc_sync`'s model), plus the chip's drift while off: far under
@@ -1003,10 +1015,12 @@ each line whole with its `\n`. Close every other owner of the port first.
       the last @time's)`, `<p>` the set's. Then `@time`: **the offset
       against the computer's within about 50 ms of A** (restart four
       times or more and note each: the previous image read 0.4-1.3 s
-      behind). A `@time <the computer's ms>` then says `(it was 0.0<n> s
-      behind/ahead)`, the same. `unset: the RTC says 19..` here would mean
-      the write's last step didn't take: a bug; `the RTC's tick not
-      caught`, a bug too (or a bus in trouble: note the reason).
+      behind; offsets that scatter by more than about 50 ms between
+      restarts would mean a boot moves the chip's seconds: "The phase" in
+      "@time" above). A `@time <the computer's ms>` then says `(it was
+      0.0<n> s behind/ahead)`, the same. `unset: the RTC says 19..` here
+      would mean the write's last step didn't take: a bug; `the RTC's
+      tick not caught`, a bug too (or a bus in trouble: note the reason).
     - **Restart in the write's second.** `@time <ms>` with the ms part
       near 000 (the write a second later), and an RTS pulse within that
       second: the boot reads the RTC as before the `@time` (its line says

@@ -1785,7 +1785,8 @@ ESP32-A2DP's `connected_bda` (last_bda: the remembered headphones); `power` (cpu
 bt_tx, boot_cpu, idle_after, off_idle); `screen` (off_after, bright); `ui`
 (coach, and schema 3's lang); `queue` (gen, pos, resume, and schema 2's
 repeat); `autodj` (schema 4's on, mode, floor, match); `plays` (schema
-5's epoch, seq, boots). Schema 4's are the same without `plays`, schema
+5's epoch, seq, boots); `clock` (schema 5's phase, an i32). Schema 4's
+are the same without `plays` and `clock`, schema
 3's without `autodj` too, schema 2's without `ui`/`lang` too, schema 1's
 without `queue`/`repeat` too. The Bluetooth stack keeps its bonds in
 its own namespace, which the firmware never touches.
