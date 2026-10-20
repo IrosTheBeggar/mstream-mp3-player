@@ -910,10 +910,13 @@ void Dialog::renderButton(M5Canvas& s, int i, int x, int y, int fillPx) const {
       s.fillRoundRect(x, y, bw, bh, 8, col::RED);
       s.clearClipRect();
     }
+    static_assert(dialog::kHoldOutline == 2, "the outline: two rounded rectangles");
     s.drawRoundRect(x, y, bw, bh, 8, col::RED);
     s.drawRoundRect(x + 1, y + 1, bw - 2, bh - 2, 7, col::RED);
-    const Font font = f.fitting(Font::Bold, buttons_[i], bw - 8);
-    f.draw(s, font, buttons_[i], x + bw / 2, y + bh / 2, bw - 8, col::TXT, col::TXT, Fonts::Align::Centre);
+    // Kept dialog::kHoldPad px clear of the outline (uitext::kDialogHoldTextW).
+    const int room = dialog::holdTextW(touch_.n());
+    const Font font = f.fitting(Font::Bold, buttons_[i], room);
+    f.draw(s, font, buttons_[i], x + bw / 2, y + bh / 2, room, col::TXT, col::TXT, Fonts::Align::Centre);
     return;
   }
   const uint16_t b = i == pressed ? col::BTN_HI : primary ? (danger_ ? col::RED : accent_) : col::BTN;

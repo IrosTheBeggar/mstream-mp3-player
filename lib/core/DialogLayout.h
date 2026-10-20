@@ -26,6 +26,13 @@ inline constexpr int kHintY = kBodyY + 3 * kLineH;
 // Button i's width and x (in the card) with `n` buttons.
 constexpr int buttonW(int n) { return n == 1 ? kW - 24 : (kW - 30) / 2; }
 constexpr int buttonX(int i, int n) { return 12 + i * (buttonW(n) + 6); }
+// The hold mode's button (HoldButton) is outlined: kHoldOutline px of red
+// inside its edge, and its label kHoldPad px clear of that at each end, so
+// a label as wide as its room (holdTextW(); uitext::kDialogHoldTextW, every
+// language measured in test_ui_strings) never reaches the outline. (A
+// filled button's label has its width less 8: uitext::kDialogButtonTextW.)
+inline constexpr int kHoldOutline = 2, kHoldPad = 6;
+constexpr int holdTextW(int n) { return buttonW(n) - 2 * (kHoldOutline + kHoldPad); }
 
 // The button a point (screen px) is on, -1 none (Dialog::onEvent()).
 constexpr int buttonAt(int x, int y, int n) {

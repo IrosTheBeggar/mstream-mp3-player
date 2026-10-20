@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "CjkGlyphs16.h"
+#include "DialogLayout.h"
 #include "GlyphStore.h"
 #include "SheetLayout.h"
 #include "TextFit.h"
@@ -938,6 +939,31 @@ void test_rooms_are_the_codes() {
   }
 }
 
+// The hold button's room is its width less its outline and the padding
+// inside it (DialogLayout): every language's label, as the Dialog draws it
+// (Bold, else Small), keeps kHoldPad px clear of the outline at each end.
+void test_the_hold_buttons_room() {
+  TEST_ASSERT_EQUAL_INT(uitext::kDialogHoldTextW, dialog::holdTextW(2));
+  TEST_ASSERT_EQUAL_INT(dialog::buttonW(2), uitext::kDialogHoldTextW + 2 * (dialog::kHoldOutline + dialog::kHoldPad));
+  TEST_ASSERT_EQUAL_INT(dialog::buttonW(2) - 8, uitext::kDialogButtonTextW);
+  const catalogue::Entry* e = entryOf(S::format_sure_button);
+  TEST_ASSERT_NOT_NULL(e);
+  TEST_ASSERT_EQUAL_INT(uitext::kDialogHoldTextW, e->px);
+  for (unsigned i = 0; i < uistr::kLangs; ++i) {
+    const Lang l = static_cast<Lang>(i);
+    if (!uistr::hasCatalogue(l) || l == Lang::EnXA) continue;
+    uistr::setLang(l);
+    const char* t = uistr::tr(S::format_sure_button);
+    const int bold = drawnWidth(font(catalogue::Font::Bold), t);
+    const int w = bold <= e->px ? bold : drawnWidth(font(catalogue::Font::Small), t);
+    const int clear = (dialog::buttonW(2) - w) / 2 - dialog::kHoldOutline;
+    printf("%s: \"%s\" %s %d px, %d px clear of the outline\n", uistr::tag(l), t, bold <= e->px ? "Bold" : "Small",
+           w, clear);
+    TEST_ASSERT_TRUE_MESSAGE(clear >= dialog::kHoldPad, uistr::tag(l));
+  }
+  uistr::setLang(Lang::En);
+}
+
 // A plural message is tried at each category's widest count up to its
 // worst: Russian's and Polish's "few" at 99,994 and 994, not only 1,002
 // and 22; Russian's "one" at 99,991.
@@ -1425,6 +1451,7 @@ int main(int, char**) {
   RUN_TEST(test_numbers);
   RUN_TEST(test_pseudo_locale);
   RUN_TEST(test_rooms_are_the_codes);
+  RUN_TEST(test_the_hold_buttons_room);
   RUN_TEST(test_counts_reach_every_category_at_its_widest);
   RUN_TEST(test_other_fills_are_tried);
   RUN_TEST(test_every_text_has_its_glyphs);

@@ -289,6 +289,12 @@ inline constexpr int kWaitButtonPad = 8;  // a label has the box less this
 // is 4 px too wide in Body, so the Dialog draws it in Small).
 inline constexpr int kDialogTitleW = 260;
 inline constexpr int kDialogButtonTextW = 123;
+// The format's red hold button (the Dialog's hold mode: "Hold to erase"),
+// outlined: its 131 px less the 2-px outline and 6 px clear inside it at
+// each end (dialog::holdTextW()). At 123, French's and Polish's labels in
+// Small touched the outline on the device (2026-10-20), and English's in
+// Bold came 3 px from it.
+inline constexpr int kDialogHoldTextW = 115;
 // A title after the dialog's icon (the lost dialog's struck-out headphones,
 // 22 px, from x 14, then 8 px): to 12 px from the dialog's right edge (the
 // body keeps its 16), so "Headphones disconnected" (235 px) is whole.

@@ -3558,12 +3558,12 @@
   },
   "format.sure_button": "Hold to erase",
   "@format.sure_button": {
-    "context": "The format's second question's red button, saying how it is answered: held 2 s (it fills from the left meanwhile; a tap does nothing but turn format.hold_hint amber), the card is erased (formatted at the restart).",
+    "context": "The format's second question's red button, saying how it is answered: held 2 s (it fills from the left meanwhile; a tap does nothing but turn format.hold_hint amber), the card is erased (formatted at the restart). The button is outlined: its room keeps the label 6 px clear inside the outline.",
     "room": {
       "font": "Bold",
       "else": "Small",
-      "px": 123,
-      "const": "uitext::kDialogButtonTextW"
+      "px": 115,
+      "const": "uitext::kDialogHoldTextW"
     },
     "bytes": 48
   },

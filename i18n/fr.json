@@ -378,7 +378,10 @@
   "format.damaged_body": "Un ordinateur pourra peut-être sauver son contenu. Formater efface tout, même ce que le lecteur ne lit pas.",
   "format.sure_title": "Effacer toute la carte ?",
   "format.sure_body": "C'est irréversible. Le lecteur redémarre et formate la carte de {0} Go : laissez-la en place jusqu'à son retour.",
-  "format.sure_button": "Maintenir : effacer",
+  "format.sure_button": "Tenir : effacer",
+  "@format.sure_button": {
+    "note": "« Maintenir : effacer » fait 120 px en Small, et le bouton du maintien n'en laisse que 115 hors de son contour (le texte touchait le contour sur l'appareil) : « Tenir : effacer » (93 px). À revoir par un francophone (« Maintenir » reste le mot de l'indication, format.hold_hint)."
+  },
   "format.hold_hint": "Maintenez le bouton rouge 2 secondes",
   "format.restarting": "Redémarrage : formatage de la carte",
   "format.boot_title": "Formatage de la carte",

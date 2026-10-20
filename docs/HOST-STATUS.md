@@ -910,6 +910,14 @@ counted. An error changes nothing.
   7-byte read each (about 0.25 ms of the bus at 400 kHz: ESTIMATED);
   nothing otherwise. A `@time` adds two NVS writes (the phase removed,
   then kept) and the RTC's write moves to the loop.
+  **The hold button's room** (0.12.0: its label 6 px clear inside the
+  outline, 115 px; French's and Polish's shorter), core2, against the
+  image above (from the source alone, 4,407,536): `.text` +8 B, `.rodata`
+  unchanged (the two labels' 8 B taken by alignment); `firmware.bin`
+  +16 B (4,407,552). IRAM, internal DRAM and RTC memory unchanged. Every
+  guard passes. Built in the repository with git's version: core2
+  4,406,928, core2-dio 4,406,992 (`.iram0.text` 124,883 B; 58,168 B of
+  `.dram0.data` and `.bss`).
 
 ## Device test plan
 

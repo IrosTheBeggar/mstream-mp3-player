@@ -436,7 +436,10 @@
   "format.damaged_body": "Komputer może ją uratować. Formatowanie usuwa wszystko, też to, czego odtwarzacz nie czyta.",
   "format.sure_title": "Usunąć całą kartę?",
   "format.sure_body": "Nie da się cofnąć. Odtwarzacz uruchomi się ponownie i sformatuje kartę {0} GB: nie wyjmuj jej.",
-  "format.sure_button": "Przytrzymaj: usuń",
+  "format.sure_button": "Trzymaj: usuń",
+  "@format.sure_button": {
+    "note": "'Przytrzymaj: usuń' is 117 px in Small; the hold button leaves 115 inside its outline (the label touched it on the device): 'Trzymaj: usuń' (93 px). For a native speaker to weigh ('Przytrzymaj' stays in the hint, format.hold_hint)."
+  },
   "format.hold_hint": "Przytrzymaj czerwony przycisk 2 s",
   "format.restarting": "Ponowne uruchamianie: formatowanie karty",
   "format.boot_title": "Formatowanie karty",
