@@ -45,6 +45,12 @@ struct Line {
   }
 };
 
+// `digits` lower-case hex digits of `v` into `out`, leading zeros kept.
+void hex(uint64_t v, int digits, char* out) {
+  static const char kHex[] = "0123456789abcdef";
+  for (int k = digits - 1; k >= 0; --k, v >>= 4) out[k] = kHex[v & 0x0F];
+}
+
 bool unreserved(unsigned char c) {
   return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '.' ||
          c == '_' || c == '~';
@@ -149,10 +155,32 @@ size_t format(const Facts& f, char* out, size_t size) {
   else l.num(static_cast<uint64_t>(f.battery > 100 ? 100 : f.battery));
   l.put(" state=");
   l.put(stateName(f.state));
+  // The keys after state=, each whole or left out: while they would leave
+  // bt= under kBtRoom, the last of them gives way, then the one before
+  // (docs/HOST-STATUS.md, "The budget"). cid=<16 hex>.<8 hex>, or '-'.
+  char cid[sizeof(" cid=") + 16 + 1 + 8] = " cid=";
+  size_t cidLen = sizeof(" cid=") - 1;
+  if (f.cidKnown) {
+    hex(f.cardId, 16, cid + cidLen);
+    cid[cidLen + 16] = '.';
+    hex(f.generation, 8, cid + cidLen + 17);
+    cidLen += 16 + 1 + 8;
+  } else {
+    cid[cidLen++] = '-';
+  }
+  const char* const give[] = {cid};
+  const size_t giveLen[] = {cidLen};
+  size_t keep = sizeof(giveLen) / sizeof(giveLen[0]);
+  size_t total = 0;
+  for (size_t i = 0; i < keep; ++i) total += giveLen[i];
+  const size_t btKey = std::strlen(" bt=");
+  while (keep && l.n + total + btKey + kBtRoom > kMaxLine) total -= giveLen[--keep];
+  for (size_t i = 0; i < keep; ++i) l.put(give[i], giveLen[i]);
   l.put(" bt=");
   // The headphones' name in what is left: whole characters, and "…" when
-  // it doesn't all fit (the fields before it take 219 bytes at most, so it
-  // keeps 36 at least: test_host_status).
+  // it doesn't all fit (the fields to state= alone leave it kBtRoom at
+  // least, even at the formatter's caps, and the keys above give way to
+  // that: test_host_status).
   const size_t len = f.bt ? std::strlen(f.bt) : 0;
   if (len == 0) {
     l.put('-');

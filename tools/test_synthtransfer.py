@@ -21,9 +21,11 @@ with no records, an AutoDJ index, the root written last).
 - The refusals and --replace: a /.mstream that isn't empty, no music
   folder, the system drive, a drive that isn't FAT32; --replace commits the
   next generation with the card's id and removes only contract files the
-  new root doesn't name; --replace refuses another program's /.mstream (a
-  transfer's) without --replace-foreign; nothing outside /.mstream is
-  touched; --dry-run writes nothing.
+  new root doesn't name, a subset of what a contract run's clean-up
+  deletes (card_fixtures.cleanup), keeping the private files and the
+  partials (METADATA 2.12.7, 2.12.8); --replace refuses another program's
+  /.mstream (a transfer's), or a run.lock, without --replace-foreign;
+  nothing outside /.mstream is touched; --dry-run writes nothing.
 """
 import contextlib
 import hashlib
@@ -40,6 +42,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import card_fixtures as cf  # noqa: E402  (cleanup, private_vectors: docs/METADATA.md 2.12.7)
 import mpdj  # noqa: E402
 import synthcard  # noqa: E402
 import synthtransfer as st  # noqa: E402
@@ -359,6 +362,65 @@ class CardTests(unittest.TestCase):
         res, _, _ = self.add(replace=True, replace_foreign=True)
         self.assertEqual(self.mstream(), ["autodj-00000001.bin", "manifest.bin", "tags-00000001.bin"])
         self.assertEqual(st.foreign(None, []), None)
+
+    def test_replace_keeps_the_private_files(self):
+        # METADATA 2.12.7, 2.12.8: the software's private files and its kept
+        # partials stay through --replace, and through --replace-foreign; a
+        # run.lock (a transfer writing the card, or a cut one) refuses
+        # --replace alone.
+        self.add(seed=3)
+        ms = os.path.join(self.card, st.MSTREAM)
+        state = lambda seq: ('{"format": "mstream-card-state", "version": 1, "seq": %d}\n' % seq).encode()  # noqa: E731
+        private = {"state.json": state(2), "state.new": state(3), "notes.txt": b"x", "cache/index.bin": b"y",
+                   "resume.json": b'{"format": "mstream-card-resume", "version": 1, "seq": 1, "parts": []}\n',
+                   "resume.new": b"torn", "resume/0000002a.part": b"z" * 100}
+        for name, data in private.items():
+            os.makedirs(os.path.dirname(os.path.join(ms, name)), exist_ok=True)
+            Path(ms, name).write_bytes(data)
+        res, ops, _ = self.add(replace=True, seed=4)
+        self.assertEqual(res["generation"], 2)
+        self.assertEqual({n: Path(ms, n).read_bytes() for n in private}, private)
+        self.assertEqual([s for s in ops if s[0] == "remove"], [("remove", "manifest.bin"),
+                                                               ("remove", "autodj-00000001.bin"),
+                                                               ("remove", "tags-00000001.bin")])
+        Path(ms, "run.lock").write_text('{"format": "mstream-card-run", "runId": "0x1", "started": 1}\n')
+        with self.assertRaises(st.Refused) as e:
+            self.add(replace=True, seed=5)
+        self.assertIn("run.lock", str(e.exception))
+        self.assertEqual(st.check_card(self.card)["root"]["generation"], 2, "nothing written")
+        res, _, _ = self.add(replace=True, seed=5, replace_foreign=True)
+        self.assertEqual(res["generation"], 3)
+        self.assertTrue(Path(ms, "run.lock").is_file(), "the run.lock is the other program's to take over")
+        self.assertEqual({n: Path(ms, n).read_bytes() for n in private}, private)
+
+    def test_replace_deletes_only_what_a_run_would(self):
+        # What --replace deletes is a subset of what a contract run deletes
+        # in the same place (2.12.1: step 4's clean-up, and the final
+        # commit's pending.bin, step 12), card_fixtures.cleanup being the
+        # reference; the private names never match a contract file's.
+        self.add(seed=3)
+        ms = os.path.join(self.card, st.MSTREAM)
+        extra = ["manifest.tmp", "pending.bin", "pending.tmp", "stage/00000001.tmp", "thumbs/ab/00000000.tmp",
+                 "resume/0000002a.part", "state.json", "resume.json", "notes.txt"]
+        for name in extra:
+            os.makedirs(os.path.dirname(os.path.join(ms, name)), exist_ok=True)
+            Path(ms, name).write_bytes(b"x")
+        listing = {}
+        for dirpath, _, names in os.walk(ms):
+            for n in names:
+                rel = os.path.relpath(os.path.join(dirpath, n), ms).replace(os.sep, "/")
+                listing[rel] = os.path.getsize(os.path.join(dirpath, n))
+        _, ops, _ = self.add(replace=True, seed=4)
+        removed = {s[1] for s in ops if s[0] == "remove"} - {"manifest.bin"}  # the root's own replacement
+        run = set(cf.cleanup(listing, ["tags-00000002.bin", "autodj-00000002.bin"], None)) | {"pending.bin"}
+        self.assertTrue(removed <= run, removed - run)
+        self.assertEqual(removed, {"manifest.tmp", "pending.bin", "pending.tmp", "autodj-00000001.bin",
+                                   "tags-00000001.bin"})
+        for e in cf.private_vectors()["names"]:
+            if e["ok"] and "/" not in e["name"]:
+                self.assertIsNone(st.CONTRACT.match(e["name"]), e["name"])
+        for name in cf.RESERVED:
+            self.assertIsNone(st.CONTRACT.match(name), name)
 
     def test_stale_manifest_tmp_goes_first(self):
         self.add()
