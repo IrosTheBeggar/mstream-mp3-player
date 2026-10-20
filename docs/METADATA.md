@@ -5411,7 +5411,7 @@ the next epoch). Then:
 - `gc`: `[cache] verify: N hits checked, 0 STALE` (any STALE fails L1: the
   sector's number follows); `[cache] ... writes W (S sectors, U cached
   sectors refreshed, 0 failed)`; the hit rate during the soak.
-- The firmware has no SD write bench: record the saves' times instead
+- The firmware had no SD write bench then (the console's `gx` since 2026-10-19, docs/SWAP-MODE.md section 7): record the saves' times instead
   (`g`'s `[index] the card's boot: ... save X ms`, the queue's `q` line)
   with `gc0` and with `gc1`; they should agree within noise.
 - A remount: restart. `[lib] library.idx matches the card: load (its

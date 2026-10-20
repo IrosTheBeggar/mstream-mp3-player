@@ -19,7 +19,8 @@ const char* const kHelp =
     "(1-50000), gs the scan's status (gs0 its figures from now), gt</music/...> one file's tags (read now, D, T, the "
     "winner), gr Rescan tags (gr! the transfer's files too), gw walk now, gb build now (gb! deferred to the next "
     "boot), gv verify the transfer's files; gc the sector cache (gc0 off, gc1 on, gc2 on and every hit checked), gl "
-    "the card's bench (glw with the walks)";
+    "the card's bench (glw with the walks), gx the card's write bench (gx<n> n MB a run, 1-64; gxs the clock soak at "
+    "20 and 26.67 MHz, gxs<n> n MB, 1-256; gxc the CRC16s timed, gxc0 the driver on the stock one, gxc1 on the fast)";
 
 namespace {
 
@@ -134,6 +135,41 @@ Parsed parse(const char* arg) {
       p.command = Command::Dump;
       p.path = path;  // (the caller's string: its trailing spaces are the caller's to trim)
     }
+    return p;
+  }
+  if (arg[0] == 'x') {
+    if (n >= 2 && arg[1] == 'c') {
+      // gxc: the CRC16s timed; gxc0, gxc1: the driver's switched.
+      if (n == 2) {
+        p.command = Command::CrcBench;
+        p.n = kCrcReport;
+      } else if (n == 3 && (arg[2] == '0' || arg[2] == '1')) {
+        p.command = Command::CrcBench;
+        p.n = static_cast<uint32_t>(arg[2] - '0');
+      }
+      return p;
+    }
+    // gx, gx<n>; gxs, gxs<n>: a size of 1 to the command's most, in MB.
+    size_t i = 1;
+    Command c = Command::WriteBench;
+    uint32_t v = kWriteBenchMb, most = kWriteBenchMaxMb;
+    if (i < n && arg[i] == 's') {
+      c = Command::WriteSoak;
+      v = kWriteSoakMb;
+      most = kWriteSoakMaxMb;
+      ++i;
+    }
+    if (i < n) {
+      v = 0;
+      for (; i < n; ++i) {
+        if (arg[i] < '0' || arg[i] > '9') return p;  // Bad
+        v = v * 10 + static_cast<uint32_t>(arg[i] - '0');
+        if (v > most) return p;  // Bad (and never past a uint32_t)
+      }
+      if (v == 0) return p;
+    }
+    p.command = c;
+    p.n = v;
     return p;
   }
   if (n == 1) {

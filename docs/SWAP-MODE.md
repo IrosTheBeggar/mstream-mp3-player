@@ -28,8 +28,10 @@ So the design:
 Two things aren't known yet: a transfer between two Core2s (only one was
 at hand) and what swap mode costs the battery.
 
-**Status (2026-10-19):** research and a spike. Nothing of swap mode is
-built, and the spike's code is not in the tree (section 5.1).
+**Status (2026-10-20):** research, a spike and a card bench. Nothing of
+swap mode is built, and the spike's code is not in the tree (section
+5.1). The card's write bench is (`gx`, `gxs`, `gxc`: section 7.2), and
+so is the driver's faster CRC16 (7.2.1).
 
 The other documents:
 
@@ -84,7 +86,8 @@ project's owner, who decides.
 - **Files:**
   - offered with their name, size and CRC-32;
   - sent as acknowledged frames;
-  - written to a hidden `.part` file in 4 KB pieces;
+  - written to a hidden `.part` file in 32 KB pieces, its room reserved
+    first;
   - checked, then renamed into `/music/Received/<sender>/`.
 - **The library:** nothing new. Leaving swap mode restarts the player,
   and the walk and the tag scan take the new files as they take files a
@@ -94,9 +97,13 @@ project's owner, who decides.
   - static internal RAM: +15,812 B, in every boot;
   - flash: +374 KB, 75 % of the slot.
 - **Speed:**
-  - MEASURED: 22.6 Mbit/s send-only at 54 Mbps.
-  - ESTIMATED: the card's writes (0.5-1 MB/s) set the pace, so a 5 MB
-    MP3 takes 5-10 s.
+  - MEASURED: the radio sent 22.6 Mbit/s at 54 Mbps. The card takes
+    1.53 MB/s in 32 KB pieces (1.02 in today's 4 KB pieces) and gives
+    1.36-1.39 MB/s back, with the driver's CRC16 two bytes a step since
+    2026-10-20 (1.47 and 1.31-1.34 before). 20 MHz is its clock's
+    ceiling.
+  - ESTIMATED: the sender's card reads set the pace, at about 1.35 MB/s
+    end to end, so a 5 MB MP3 takes about 4 s.
 - **Open:**
   - a transfer between two Core2s;
   - the battery;
@@ -300,11 +307,14 @@ framework, and the WiFi driver's WPA code already links part of it
     send's turnaround, not the airtime, limits one frame at a time.
   - The receiver acknowledges what it has, and the sender resends what's
     missing.
-- **On the card:**
-  1. The receiver gathers whole 4 KB pieces and writes them to
-     `/music/.swap/<id>.part`.
-  2. At the end it checks the CRC-32.
-  3. Then `rename()` to `/music/Received/<sender>/<the sender's path
+- **On the card** (the settings section 7.2 measured):
+  1. The receiver reserves the file's room with `f_expand` (one run of
+     clusters, no FAT writes mid-file). On a card with no such run, it
+     writes without.
+  2. It gathers whole 32 KB pieces (a cluster) and writes them to
+     `/music/.swap/<id>.part`, with one sync at the end.
+  3. At the end it checks the CRC-32.
+  4. Then `rename()` to `/music/Received/<sender>/<the sender's path
      below /music>`.
 - **Cancel and loss:** a Cancel on either side deletes the `.part`, and
   so does a link lost mid-file. Resuming could come later.
@@ -558,29 +568,162 @@ if the project moves to `custom_sdkconfig` anyway.
 
 ---
 
-## 7. Speed (ESTIMATED)
+## 7. Speed
 
-- **The radio:**
-  - MEASURED: 22.6 Mbit/s send-only at 54 Mbps.
-  - With acknowledgements, perhaps 80 % of that (the REPORTED ratio):
-    about 18 Mbit/s, or 2.2 MB/s.
-  - At ESP-NOW's default 1 Mbps it is 0.91 Mbit/s send-only (MEASURED),
-    and 214 kbit/s for unicast in the open (DOCUMENTED). That is about 3
-    minutes for a 5 MB file, so the rate must be raised.
-- **The card:** 0.5-1 MB/s to write (METADATA.md 3.3.7's estimate for
-  the device's own records).
-- **So the card sets the pace:** 0.5-1 MB/s end to end.
+### 7.1 The radio
 
-  | File | Time |
-  |---|---|
-  | 5 MB MP3 | 5-10 s |
-  | 30 MB FLAC | 30-60 s |
-  | 100 MB album | 1.5-3.5 minutes |
+- MEASURED: 22.6 Mbit/s send-only at 54 Mbps (section 5.3).
+- With acknowledgements, perhaps 80 % of that (the REPORTED ratio):
+  about 18 Mbit/s, or 2.2 MB/s (ESTIMATED).
+- At ESP-NOW's default 1 Mbps it is 0.91 Mbit/s send-only (MEASURED),
+  and 214 kbit/s for unicast in the open (DOCUMENTED). That is about 3
+  minutes for a 5 MB file, so the rate must be raised.
 - **Range against rate:** step the rate down when frames are lost (54,
   then 24, then 11 Mbps).
-- **SoftAP and TCP as a bulk path:** DOCUMENTED at 14.6-21.1 Mbit/s with
-  the IRAM options off. That is no faster than the card's writes, so it
-  isn't worth it unless the two-Core2 test disappoints.
+- **SoftAP and TCP as a bulk path:** DOCUMENTED at 14.6-21.1 Mbit/s
+  with the IRAM options off. That is no faster than the cards, so it
+  isn't worth it.
+
+### 7.2 The card (MEASURED, 2026-10-19: the console's `gx` and `gxs`)
+
+The bench (src/app/TagConsole.cpp; the driver's split in lib/SD's
+`sd_bench.h`):
+
+- It writes a file in `/.player` once per setting and prints each run's
+  MB/s, its pieces' p50, p99 and max, and the driver's split of the
+  time.
+- Some runs are read back and checked block by block; each 4 KB block's
+  first word is its offset, salted per run.
+- The file is deleted after each run.
+
+**The card:** the user's SanDisk, 1 TB (CID maker 0x03, "SN01T", CSD
+version 2, TRAN_SPEED 25 MHz). FAT32 with 32 KB clusters, its data area
+on a 4 MiB boundary, nearly empty.
+
+**The clock** is asked for 25 MHz and runs at 20 MHz. The SPI driver's
+divider rounds down to 80 MHz / 4, and the device's own figure says so.
+
+`gx`, 8 MB a run, music stopped, nothing drawn, with the stock CRC16
+(2026-10-19; 7.2.1 has the driver's since, about 3 % faster):
+
+| Setting | MB/s | A piece: p50, p99, max (ms) |
+|---|---|---|
+| 4 KB pieces, plain (today's writers) | 0.99 | 3.71, 5.97, 31.65 |
+| 16 KB pieces, plain | 1.37 | 10.81, 13.25, 16.82 |
+| 32 KB pieces, plain | 1.47 | 20.47, 24.82, 28.18 |
+| 64 KB pieces, plain | 1.47 | 42.06, 50.02, 51.09 |
+| 32 KB, `f_expand` (the receive path), read back | 1.47 (read 1.31) | 20.48, 22.82, 25.15 |
+| 32 KB, `f_expand`, a sync every MB | 1.47 | 20.48, 23.84, 24.92 |
+| 32 KB, `f_expand`, a sync every piece | 1.37 | 21.94, 24.81, 28.13 |
+| 32 KB, `f_expand`, no ACMD23 | 1.48 | 20.43, 22.66, 23.26 |
+| 32 KB raw CMD25s (no FatFs), read back | 1.47 (read 1.34) | 20.43, 22.58, 24.96 |
+
+Every block read back as written, with 0 CRC errors and 0 retries. A
+64 MB raw run at the same settings (`gxs`) gave 1.48 MB/s writing and
+1.34 MB/s reading.
+
+**Where a write's time goes**, the driver's split:
+
+| Piece | The wire | CRC16 | Each CMD25's end | The wait before each block | ACMD23, CMD13, FatFs, the rest |
+|---|---|---|---|---|---|
+| 4 KB | 47 % | 13 % | 26 % (the longest 19.3 ms) | 11 % | 3 % |
+| 32 KB | 69 % | 19 % | 8 % (the longest 3.1 ms) | 3 % | 1 % |
+
+What it says:
+
+1. **32 KB pieces are worth 49 %** over today's 4 KB. A 4 KB CMD25
+   pays the card's programming at its end every 8 blocks.
+2. **64 KB gains nothing.** FatFs writes at most a cluster per
+   `disk_write`, so its CMD25s were 32 KB too.
+3. **`f_expand` costs 8 ms per 8 MB** and changed nothing on this nearly
+   empty card. Its worth is on a fragmented card (not measured), and in
+   writing no FAT mid-file.
+4. **Syncs:** one every MB costs nothing; one every piece costs 7 %.
+5. **ACMD23 makes no difference** on this card, and **FatFs costs
+   about 1 %**: raw CMD25s ran at the same speed.
+6. **26.67 MHz (80 / 3) fails** at the first block, both times it was
+   tried (`gxs`, `gxs8`). The card's data response 0xE5 ("accepted")
+   arrives one bit late, and reads as 0xF2 (0x12 once masked). That is
+   the GPIO matrix's delay on MISO (GPIO 38, not an IOMUX pin), as
+   Espressif's timing notes predict. 20 MHz is the ceiling with this
+   driver.
+
+   Only the bench file's own sectors saw the faster clock: FatFs's reads
+   and writes stayed at 20 MHz. The two refused writes were the file's,
+   and the file was deleted.
+7. **The CRC16 was 19 % of a 32 KB write**, about 60 µs a block. Since
+   2026-10-20 the driver works it out two bytes a step (lib/core
+   `SdCrc16`, below), and writes went from 1.48 to 1.53 MB/s.
+
+#### 7.2.1 The CRC16 (MEASURED, 2026-10-20: `gxc`, then `gx` with each)
+
+The CRC over each data block is CRC-16/XMODEM. The driver used the
+framework's `CRC16()`, a byte a step through a 256-entry table in flash.
+lib/core `SdCrc16` does two bytes a step through two 256-entry tables
+(slicing by 2), with the same result. test_sd_crc16 checks it against
+`CRC16()` itself, a bit-at-a-time reference and the SD spec's 0x7FA1.
+
+`gxc` timed each variant on the Core2 at 240 MHz: a 512 B block from
+internal RAM, and 512 B blocks streamed from 64 KB of PSRAM, as the
+bench writes them. All gave the same CRCs.
+
+| Variant | From RAM (µs a block, cycles a byte) | From PSRAM (µs a block) |
+|---|---|---|
+| The stock table, a byte a step (`CRC16()`, the driver's before) | 43.8 (20.5) | 62.8 |
+| The ROM's, a byte a step (`esp_rom_crc16_be`) | 35.1 (16.5) | 53.6 |
+| Two bytes a step, tables in RAM (`SdCrc16`, the driver's now) | 32.9 (15.4) | 51.4 |
+| Two bytes a step, tables in flash | 36.1 (16.9) | 54.6 |
+
+`gx` with the driver on each (`gxc0`, then `gxc1`, in the same boot):
+
+| Setting | Stock CRC16 (MB/s) | Two bytes a step (MB/s) |
+|---|---|---|
+| 4 KB pieces | 1.01 | 1.02 |
+| 16 KB pieces | 1.38 | 1.42 |
+| 32 KB pieces (plain, `f_expand`, a sync every MB, no ACMD23) | 1.48 | 1.52-1.53 |
+| 32 KB raw CMD25s | 1.49 | 1.53 |
+| Read back (32 KB, `f_expand`; raw) | 1.32; 1.35 | 1.36; 1.39 |
+
+Writes and reads both gain about 3 %, and the CRC16's share of a 32 KB
+write fell from 19 % to 16 %. Why not more:
+
+1. **About 18 µs of each block's CRC time is PSRAM**, the same for every
+   variant: the block's 16 cache lines coming in. Whatever reads the
+   block first pays it. Without the CRC, the SPI copy into the FIFO
+   would.
+2. **The arithmetic is a chain of dependent loads.** Two bytes a step
+   still run at about 15 cycles a byte, not the 6-8 a byte the
+   instruction count suggests. Slicing by 4 or 8 would add 1-3 KB of
+   tables for perhaps 1-2 % more (ESTIMATED).
+3. **The tables' place matters little.** RAM against flash is 3 µs a
+   block, about 1 % of a write, for 1 KB of static RAM in every boot.
+   The ROM's routine costs no RAM and no flash, and is 2 µs a block
+   behind the RAM tables. The user kept the tables in RAM (2026-10-20).
+
+**What would gain more: overlapping the CRC with the wire.** The driver
+sends a block 64 bytes at a time through the SPI FIFO and waits about
+26 µs for each 64 bytes to go out at 20 MHz, doing nothing. Working out
+the CRC of the 64 bytes just queued during that wait would hide all of
+it. That is up to about 10 % more on a 32 KB write (about 1.7 MB/s,
+ESTIMATED). It means a FIFO loop of the driver's own, on the SPI
+registers, in place of the HAL's `writeBytes()`: a deeper change, not
+made.
+
+### 7.3 End to end (ESTIMATED)
+
+- The sender reads its file from its own card: 1.36-1.39 MB/s MEASURED
+  (the bench's read-backs, the fast CRC16), 1.2-1.7 MB/s in
+  METADATA.md.
+- The radio carries about 2.2 MB/s, and the receiver writes 1.53 MB/s.
+- With a ring on each side, so that reading, sending and writing
+  overlap, the slowest sets the pace: about 1.35 MB/s. One after
+  another, much less.
+
+| File | Time at 1.35 MB/s |
+|---|---|
+| 5 MB MP3 | about 4 s |
+| 30 MB FLAC | about 22 s |
+| 100 MB album | about 1.2 minutes |
 
 ---
 
@@ -635,7 +778,10 @@ if the project moves to `custom_sdkconfig` anyway.
      through.
 2. **The decisions** of section 10, and normal mode's internal RAM
    (section 8, item 1).
-3. **The build, in order:**
+3. **The CRC16 inside the wire's time** (section 7.2.1): the driver's
+   own FIFO loop, working out each 64 bytes' CRC while they go out,
+   measured with `gx`. A faster CRC alone is done: about 3 %.
+4. **The build, in order:**
    1. the swap boot: in, out, the flag, no Bluetooth, ESP-NOW up;
    2. the protocol in `lib/core`, host-tested with two players on a
       simulated link that loses, repeats and reorders frames: the

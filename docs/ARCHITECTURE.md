@@ -1334,7 +1334,7 @@ when it goes). Older firmware answers `@err 7 status`.
 
 ## Storage
 
-`LocalStorage` mounts the SD card (shared SPI bus with the LCD, 25 MHz) if one
+`LocalStorage` mounts the SD card (shared SPI bus with the LCD, asked for 25 MHz, which the SPI driver runs at 20: [SWAP-MODE.md](SWAP-MODE.md) section 7) if one
 is present, otherwise the 3.8 MB LittleFS partition ([Flash layout](#flash-layout)). It walks `/music` for
 the library (up to 8 folders deep, no cap, hidden names skipped) through the
 VFS's `readdir`, which names each entry and says whether it's a folder, rather
