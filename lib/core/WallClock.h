@@ -8,10 +8,12 @@
 // The board's wall clock (docs/HOST-STATUS.md, "@time"): Unix time in ms
 // (UTC), or unset. The Core2 keeps the time in its RTC, a BM8563 on the
 // internal I2C bus that counts seconds while the board is off (ESTIMATED:
-// the device check, HOST-STATUS.md step 10); the boot reads it once
+// the device check, HOST-STATUS.md step 10); the boot reads it
 // (app/BoardClock), and from then on the time is that reading plus the
-// board's monotonic ms since (esp_timer's: it never wraps or jumps). A
-// computer's @time sets the RTC and this. The play log (docs/METADATA.md 2.20) takes its startedAt and
+// board's monotonic ms since (esp_timer's: it never wraps or jumps), made
+// exact at the chip's next tick (refine(): lib/core RtcSync's catch). A
+// computer's @time sets this at once and the RTC on its next second
+// (RtcSync). The play log (docs/METADATA.md 2.20) takes its startedAt and
 // its clock byte from here. Portable: the firmware reads and writes the
 // chip and passes the monotonic ms; nothing here touches the hardware.
 // Host-tested: test_wall_clock.
@@ -47,20 +49,10 @@ bool fromCivil(const Civil& c, uint64_t* unixMs);
 // "2026-10-18 14:03:22" (19 bytes and the terminator), cut to `size`.
 void text(const Civil& c, char* out, size_t size);
 
-// The second a @time writes to the RTC (it counts whole seconds): the
-// nearest to `unixMs` (believable), 2099's last at most. Its seconds then
-// tick in the chip's own phase, not the write's (ESTIMATED: the BM8563's
-// divider runs on through a write, as the PCF8563's does), so its count
-// runs on average half a second ahead of the time set; and a boot reads
-// the second at a moment within it, half a second into it on average. The
-// two cancel: a restart reads the time within 1.5 s of it either way, two
-// times in three within 0.5 s, plus the drift while off (writing the
-// second it is in would read 0.5 s behind on average, up to 2 s).
-uint64_t rtcSecond(uint64_t unixMs);
-
-// How a @time writes it: the chip's time registers, 02h-08h (VL_seconds,
-// minutes, hours, days, weekdays, century_months, years: BCD), in three
-// I2C writes, each a run of registers from `reg`. Each byte takes as it
+// How a @time writes it (on a second: RtcSync): the chip's time
+// registers, 02h-08h (VL_seconds, minutes, hours, days, weekdays,
+// century_months, years: BCD), in three I2C writes, each a run of
+// registers from `reg`. Each byte takes as it
 // arrives, so in this order a cut at any byte (a reset, the flasher's RTS
 // pulse, a brown-out) leaves the chip as it was, read at the next boot as
 // 19yy (outside the range: unset, never a wrong time), or at `c`:
@@ -118,15 +110,29 @@ enum class Boot : uint8_t {
 };
 const char* bootName(Boot b);  // "ok", "no RTC", "unreadable", "voltage low", "out of range"
 
+// The boot's rules on a reading (Clock::boot()'s): Ok and its time (Unix
+// ms, a whole second) in *unixMs, or why not.
+Boot judge(const Reading& r, uint64_t* unixMs);
+// The time registers 02h-08h as one read of them gives them (the catch's
+// polls, RtcSync), decoded as M5Unified 0.2.23 decodes them
+// (PCF8563_Class::getDateTime(): its masks, BCD and range checks, 19yy for
+// the century bit; the flag is getVoltLow()'s bit): a chip that answered.
+Reading fromRegisters(const uint8_t (&regs)[7]);
+
 class Clock {
 public:
-  // The boot's reading, taken at `monoMs`: the clock is the RTC's (to the
-  // second) when the chip answered, its flag is clear and its date is a
+  // The boot's reading, taken at `monoMs`: the clock is the RTC's (the
+  // second it says, taken as its start: up to a second behind until
+  // refine()) when the chip answered, its flag is clear and its date is a
   // date believed; else unset.
   Boot boot(const Reading& r, uint64_t monoMs);
   // A computer's @time at `monoMs`: true and the clock set when the time
   // is believed; else false and nothing changes.
   bool set(uint64_t unixMs, uint64_t monoMs);
+  // The boot's reading made exact (RtcSync's catch of the chip's next
+  // tick): the time `unixMs` at `monoMs`, while the clock is the RTC's;
+  // false and nothing changes otherwise (unset, or a @time since).
+  bool refine(uint64_t unixMs, uint64_t monoMs);
   Source source() const { return source_; }
   bool ok() const { return source_ != Source::Unset; }
   // The time at `monoMs`, any moment of this boot: now, or earlier (before

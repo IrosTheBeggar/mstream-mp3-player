@@ -33,9 +33,12 @@
 // off), and older firmware leaves a schema-4 NVS as it is (it never reads
 // the namespace: no Auto DJ there). Schema 5 is schema 4's keys and the
 // "plays" namespace, the play log's ids (docs/METADATA.md 2.20.4: "epoch"
-// a u64, "seq" and "boots" u32s); its migrate(4, 5) step does nothing (no
-// epoch: the first boot draws one), and older firmware leaves a schema-5
-// NVS as it is (it never reads the namespace: it keeps no log). A unit
+// a u64, "seq" and "boots" u32s), and the "clock" namespace, the RTC's
+// phase ("phase", an i32: docs/HOST-STATUS.md, "@time"; 0.12.0 too, so no
+// number of its own); its migrate(4, 5) step does nothing (no epoch: the
+// first boot draws one; no phase: none added until a @time), and older
+// firmware leaves a schema-5 NVS as it is (it never reads the namespaces:
+// it keeps no log and reads the RTC to the second). A unit
 // that ran the Opus work before it joined the queue modes (schema 1 with a
 // kind-3 resume blob, no repeat key) takes the same steps and keeps its
 // resume point: a blob's kinds are its own version's business
@@ -193,6 +196,17 @@ struct PlaysIds {
 // boot count a cut new epoch left; with one, its seq and boot count (each
 // absent: 0).
 PlaysIds playsFrom(const PlaysStored& stored);
+
+// ---- the RTC's phase ("clock", schema 5) ----
+// docs/HOST-STATUS.md, "@time" (lib/core RtcSync): how many ms after the
+// true seconds the RTC's own begin, measured by the last @time's write (an
+// i32, -1999 to 1999: rtcsync::phaseFrom() takes anything else as none),
+// added to the chip's second at every boot's catch. Removed just before a
+// @time writes the RTC and written once its tick is caught, so an NVS that
+// holds one holds the one of the time in the chip. Absent (a @time not yet
+// sent, a restart between the two, an NVS erase): none, 0 added.
+inline constexpr const char* kClockNamespace = "clock";
+inline constexpr const char* kClockPhaseKey = "phase";
 
 // Writes r (valid or not: the caller removes the key for an invalid one)
 // as version kResumeVersion; returns kResumeBytes.

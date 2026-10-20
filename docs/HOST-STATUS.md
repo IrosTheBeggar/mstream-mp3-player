@@ -325,19 +325,32 @@ and the clock is `unset` or more than 2 s off. Always UTC: the board keeps no ti
   1980), seconds sent for ms (10 digits: January 1970) and microseconds
   (16 digits: past 2099) are refused, `@err 5 time`; not a number is
   `@err 1 time`. Either way nothing changes.
-- **Setting it**: the nearest second goes to the RTC (which counts whole
-  seconds; writing them clears its voltage-low flag; `wallclock::
-  rtcSecond()`, 2099's last at most), is read back, and the ms are kept
-  for this boot: `@time ok`, and the log's `[clock] 2026-10-18
-  14:03:22.123 UTC, set by a computer's @time (it was 1.4 s behind)` (or
-  `(it was unset)`). The system time follows (FatFs dates the files the
-  board writes by it, and `M5.begin()` copies it from the RTC at every
-  boot). A chip that doesn't take it (no RTC answered at the boot, a
-  write failed, the read-back isn't that second or one after, or the
-  flag is still set): `@err 4 time rtc`, the log's `[clock] @time: the
-  RTC didn't take it (...)`, and this boot's clock unchanged. Nothing
-  else refuses it: while music plays, in a session, declined or not. Sent
-  again, the latest wins.
+- **Setting it**: the board's clock takes the ms at once, and the
+  system time with it (FatFs dates the files the board writes by it, and
+  `M5.begin()` copies it from the RTC at every boot): `@time ok`, and the
+  log's `[clock] 2026-10-18 14:03:22.123 UTC, set by a computer's @time
+  (it was 1.400 s behind); the RTC at its next second` (or `(it was
+  unset)`). The RTC (which counts whole seconds; writing them clears its
+  voltage-low flag) is written **on a second**: when the clock just set
+  reaches its next whole second (at most a second later; at once on a
+  whole second, and in 2099's last), on the loop's first pass then,
+  nothing waiting on it (a pass more than 30 ms late waits for the next
+  second, twice at most: `lib/core/RtcSync`). It is read back at once
+  (the flag clear, that second or one after) and the chip's next tick
+  caught, as the boot's catch below: `[clock] the RTC set to 2026-10-18
+  14:03:23 UTC on its second (written 4 ms after it); its seconds begin
+  +5 ms from the true ones (within 6 ms): kept for the boots`. Refused at
+  once, nothing changed, only when no RTC answered at the boot or a read
+  of its time fails now: `@err 4 time rtc`, and `[clock] @time: ...;
+  nothing changed`. A write that doesn't go through, or a read-back that
+  isn't the second (or still has the flag, or none goes through), is
+  written again at the next second, three times in all (`[clock] @time:
+  the RTC didn't take 2026-10-18 14:03:23 UTC (...); written again at the
+  next second (2 of 3)`, then `given up`): this boot's clock stays the
+  computer's, and the RTC is as the cut rule below leaves it (as it was,
+  unset, or the time), which the tab's next look sets right. Nothing else
+  refuses it: while music plays, in a session, declined or not. Sent
+  again, the latest wins (a write or a catch under way dropped).
 - **Cut short**: the chip takes each byte as it comes, so a reset in the
   middle of the write (the flasher's RTS pulse, a crash, a brown-out)
   would leave part new, part old, and one write of its seven time
@@ -355,23 +368,54 @@ and the clock is `unset` or more than 2 s off. Always UTC: the board keeps no ti
   7 of its seconds register: set at the chip's first power-up and whenever
   its supply failed since, cleared only by setting the time), and its date
   is a real one in the range above: `[clock] 2026-10-18 14:03:22 UTC, from
-  the RTC (to the second)`. To the second: the chip's fraction of a second
-  isn't readable, and its seconds tick in its own phase, not the write's
-  (ESTIMATED: the BM8563's divider runs on through a write, as the
-  PCF8563's does), so they run on average half a second ahead of the time
-  set, and the boot reads one half a second into it on average. The two
-  cancel, as the nearest second was written: after a restart the clock is
-  **within 1.5 s of the time set, either way** (two times in three within
-  0.5 s, 96 % within 1 s, right on average: `test_rtc_second_restart`'s
-  model; within 1.5 s too if the chip restarts its count at a write),
-  plus the drift while off; under the tab's 2 s, so a restart alone
-  doesn't make it set the clock. (The second the time is in would read
-  0.5 s behind on average and up to 2 s.) Otherwise `clock=unset`,
-  and the line says why: `the RTC lost its time (its voltage-low flag:
-  ...)`, `the RTC says 2000-01-01 00:00:12 UTC, outside 2026-2099 (never
-  set, set wrong, or a @time cut short)` (a chip never set counts from
-  2000; the year is read first, so a 19yy is this too), `the RTC's reading
-  isn't a date`, `no RTC answered`.
+  the RTC (to the second; to a few ms at its next tick)`. Otherwise
+  `clock=unset`, and the line says why: `the RTC lost its time (its
+  voltage-low flag: ...)`, `the RTC says 2000-01-01 00:00:12 UTC, outside
+  2026-2099 (never set, set wrong, or a @time cut short)` (a chip never
+  set counts from 2000; the year is read first, so a 19yy is this too),
+  `the RTC's reading isn't a date`, `no RTC answered`.
+- **The catch**: the chip's fraction of a second can't be read, so the
+  boot's clock takes the second it read as that second's start (up to a
+  second behind) until the chip's next tick. From the loop's first pass
+  the RTC is read every 10 ms or more (one run of its seven time
+  registers, the boot's read's burst; nothing longer on the bus it shares
+  with the touch panel and the AXP192) until its second changes, and the
+  clock becomes the new second, plus the phase below, at the moment
+  between the last read of the old second and the first of the new
+  (within half the gap: a loop pass is 5-25 ms): `[clock] 2026-10-18
+  14:03:23.005 UTC at the RTC's tick, within 6 ms (its seconds +5 ms from
+  the true ones, the last @time's); the boot's second was 0.432 s
+  behind`. Earlier moments of the boot follow it (`at()`: a play's start,
+  dated at its end). A tick between reads more than 30 ms apart (a slow
+  pass) is kept while the catch looks for a closer one, 3.3 s at most;
+  reads that don't go through are skipped. Not caught (its second
+  unchanged for 1.1 s: the chip isn't counting; too few reads went
+  through in 3.3 s; a tick more than a second from the boot's reading):
+  `[clock] the RTC's tick not caught (...): the boot's reading kept, to
+  the second`.
+- **The phase**: where the chip's seconds begin depends on what it does
+  at a write (ESTIMATED either way: the BM8563's datasheet doesn't say;
+  the PCF8563's divider runs on through one). A chip that restarts its
+  divider at a write begins its seconds where the write was, so a write on
+  a second makes them the true ones, to the write's few ms (one that
+  holds its first tick after a write, as the PCF8563 does after its STOP
+  bit, begins them that much later); one that doesn't keeps its own,
+  anywhere within a second of the true ones. So a
+  `@time`'s catch measures how far after the true seconds the chip's
+  begin (the clock the `@time` set, at the chip's tick, less its new
+  second): the phase, kept in NVS (`clock`/`phase`, an i32 of ms; schema
+  5, ARCHITECTURE.md's NVS rules) and added at every boot's catch. It is
+  removed just before the write and kept once caught, so it is always the
+  phase of the time in the chip: a restart in between (a second or two)
+  leaves none, and the boots add 0 until the next `@time` (exact to the
+  write's lateness for the first kind of chip, within a second for the
+  other). **After a restart the clock is within a few tens of ms of the
+  time set** (the two catches' half-gaps: within 30 ms at the loop's
+  pace, either kind of chip, wherever its seconds and the `@time` fall:
+  `test_rtc_sync`'s model), plus the chip's drift while off: far under
+  the tab's 2 s, so a restart alone never makes it set the clock. (Before
+  the catch and the write on a second, a restart read to the second:
+  0.4-1.3 s behind on the device, 2026-10-20.)
 - **With the board off** the RTC runs on its own supply (ESTIMATED: step
   10 of the plan checks that it keeps the time while off). It drifts, by
   a second or two a day (ESTIMATED: a watch crystal's 20 ppm), which the
@@ -563,7 +607,7 @@ counted. An error changes nothing.
 | `@identify` | `@err 4 identify <why>` | `ui`, `screen`, `viz` |
 | `@time` with a time that isn't digits | `@err 1 time` | (syntax) |
 | `@time` before 2026 or after 2099 | `@err 5 time` | (range) |
-| `@time <unix-ms>` | `@err 4 time rtc` | the RTC didn't take it |
+| `@time <unix-ms>` | `@err 4 time rtc` | no RTC answered at the boot, or a read of it fails now (a write that fails later is tried again and logged) |
 | `@time` on v0.9.0-v0.11.0 | `@err 7 time` | (verb: not in this firmware) |
 | `@format` | `@err 4 format <why>` | the question not shown: `ui`, `screen`, `viz`, `busy`, `card`; the listener's Format refused: `card`, `size`, `busy`; the boot's format failed (its last line): `card`, `size`, `write`, `mkfs`, `check`, `files` |
 | `@format` on v0.9.0-v0.11.0 | `@err 7 format` | (verb: not in this firmware) |
@@ -652,9 +696,28 @@ counted. An error changes nothing.
   real date, the range), a `@time` (`set()`), the time at any moment of
   the boot (`at()`) and where it came from (`source()`); the range
   (`believable()`), the UTC calendar both ways (`toCivil()`,
-  `fromCivil()`: every day from 1970 to 2100 round-trips), and the RTC's
-  write: its second (`rtcSecond()`) and bytes (`rtcWrites()`, cut at
-  every byte against a model of the chip and M5Unified's read).
+  `fromCivil()`: every day from 1970 to 2100 round-trips), the RTC's
+  write (`rtcWrites()`, cut at every byte against a model of the chip and
+  M5Unified's read), the boot's rule on any reading (`judge()`), the
+  registers as one read gives them (`fromRegisters()`, M5Unified's
+  decode), and the boot's reading made exact (`refine()`).
+- **`lib/core/RtcSync`** (portable, `test_rtc_sync`): the clock against
+  the RTC's seconds, a loop pass at a time (`Sync::step()`: read, drop the
+  phase, write; the firmware does it and says what came of it): the
+  boot's catch (`boot()`, the closest bracket around the chip's tick, the
+  phase added, the check against the boot's reading), a `@time`'s write
+  on its second (`plan()`, the pass's lateness and its waits, the
+  read-back, the attempts) and its phase (the catch after it), the events
+  for the log, the phase as NVS holds it (`phaseFrom()`). Tested against a
+  model of the chip that restarts its divider at a seconds write, one
+  whose divider runs on and one that holds its first tick after a write,
+  read from a model of the loop: a `@time` then a
+  restart over a grid of the chip's own seconds and the `@time`'s
+  fraction (within 30 ms either kind, right on average), a slow loop, a
+  late pass, reads lost (every third, a burst over the tick, all), a chip
+  that stopped, a tick that disagrees, a restart before the write, after
+  the drop and after the write, the monotonic ms over 2^32, writes and
+  read-backs refused, the latest `@time` winning, 2099's last second.
 - **`lib/core/FreeCount`** (portable, `test_free_count`): the count's
   pieces, the per-piece counts, the pieces to read again, FatFs's window
   over the card's sectors, and one step under the lock (`step()` over a
@@ -722,11 +785,14 @@ counted. An error changes nothing.
   its 64 KB work area in PSRAM, the files through FatFs (its `FATFS` and
   `FIL` in PSRAM), the lines and the log.
 - **`src/app/BoardClock`**: the RTC read at the boot (`begin()`, after
-  `M5.begin()`, which found the chip), written (`rtcWrites()`' three, to
-  its registers through M5Unified's driver) and read back for a `@time`
-  (`set()`, with the system time), and the clock's words behind a
-  spinlock, so any task reads `now()`; the RTC itself only on the loop
-  task (its I2C port is the AXP192's and the touch panel's).
+  `M5.begin()`, which found the chip) with the kept phase (NVS
+  `clock`/`phase`); a `@time` (`set()`: a read of the chip, then the
+  clock and the system time at once, the write planned); `loop()`, every
+  pass, `RtcSync`'s steps (the registers read in one run, the phase
+  dropped and kept, `rtcWrites()`' three through M5Unified's driver) and
+  their `[clock]` lines; the clock's words behind a spinlock, so any task
+  reads `now()`; the RTC itself only on the loop task (its I2C port is
+  the AXP192's and the touch panel's).
 - **`src/storage/CardSpace`**: the volume's `FATFS`, found once after the
   mount (a FatFs directory of the root names it: no sector read), FatFs's
   type, cluster size and count read as words, and the count's driver (the
@@ -759,8 +825,8 @@ counted. An error changes nothing.
   (`ui/EmptyState`); the boot screen's bar (`ui/BootScreen::formatting()`,
   `BootLayout`'s rows, `test_boot_logo`). Their texts, in the ten
   languages: `format.*` (`i18n/`; `test_ui_strings` measures each room).
-- **`src/main.cpp`**: `boardclock::begin()` early in `setup()`; the
-  facts hook (`hostFacts()`; `cid=` from
+- **`src/main.cpp`**: `boardclock::begin()` early in `setup()`,
+  `boardclock::loop()` every pass; the facts hook (`hostFacts()`; `cid=` from
   `Library::root()`, which `setup()` reads before the loop answers
   anything, and nothing writes again; `-` once the card's guard has found
   another card, `sectordisk::guard().foreign`), what blocks a count
@@ -830,6 +896,20 @@ counted. An error changes nothing.
   `firmware.bin` 4,400,896 (+256 B; core2-dio 4,400,960). IRAM
   (`.iram0.text` 124,883 B), internal DRAM and RTC memory unchanged
   (57,928 B of `.dram0.data` and `.bss`, as before). Every guard passes.
+  **The clock's catch and its write on a second** (0.12.0), core2,
+  against d8855d7 (both built from the source alone, so with the same
+  version string): IRAM unchanged (`.iram0.text` 124,883 B); internal
+  DRAM +240 B (`.dram0.data`: `RtcSync`'s state, which starts with the
+  phase's "none"; `.bss` unchanged); RTC memory unchanged; flash `.text`
+  +4,056 B, `.rodata` +1,452 B (its log lines); `firmware.bin` +6,016 B
+  (4,401,520 to 4,407,536 in that pair; 4,406,928 built in the repository
+  with git's version, the image with the hold's room below), the app 70 %
+  of its slot. Every guard passes. While a catch runs (about a second
+  from the loop's start after a boot, up to two after a `@time`; 3.3 s at
+  most), the RTC's seven time registers are read every 10 ms or more, one
+  7-byte read each (about 0.25 ms of the bus at 400 kHz: ESTIMATED);
+  nothing otherwise. A `@time` adds two NVS writes (the phase removed,
+  then kept) and the RTC's write moves to the loop.
 
 ## Device test plan
 
@@ -888,23 +968,46 @@ each line whole with its `\n`. Close every other owner of the port first.
 10. **The clock** (0.12.0). The computer's time in ms comes from Python's
     `int(time.time() * 1000)`; note it beside each answer.
     - **The boot's line.** After a restart, the log's `[clock]` line:
-      `... UTC, from the RTC` or `unset: ...` and why (a board fresh from
-      the factory may hold a time of M5's, or count from 2000). `@status`'s
-      `clock=` agrees (`ok` or `unset`), and so does `@time` (a time, or
-      `@time unset`).
-    - **Set.** `@time <the computer's ms>`: `@time ok`, and the log's
-      `[clock] ..., set by a computer's @time (it was unset)` or `(it was
-      <n> s behind/ahead)`. `@status`: `clock=ok`. `@time`: within about
-      50 ms of the computer's. With music playing: no skip.
+      `... UTC, from the RTC (to the second; to a few ms at its next
+      tick)` or `unset: ...` and why (a board fresh from the factory may
+      hold a time of M5's, or count from 2000); with a time, within about
+      a second of the loop's start `[clock] ... UTC at the RTC's tick,
+      within <n> ms (...); the boot's second was <s> s behind`, `<n>`
+      under 15. `@status`'s `clock=` agrees (`ok` or `unset`), and so does
+      `@time` (a time, or `@time unset`).
+    - **Set.** `@time <the computer's ms>`: `@time ok` at once, and the
+      log's `[clock] ..., set by a computer's @time (it was unset); the
+      RTC at its next second` or `(it was <n> s behind/ahead)`; then
+      within two seconds `[clock] the RTC set to <the next second> UTC on
+      its second (written <l> ms after it); its seconds begin <p> ms from
+      the true ones (within <n> ms): kept for the boots`. Note `<l>` and
+      `<p>`: `<p>` within about 15 ms of `<l>` says the BM8563 restarts
+      its divider at a write; anything else (up to a second either way),
+      that it keeps its own. Either is right. `@status`: `clock=ok`.
+      `@time`: within about 50 ms of the computer's (note the offset: A).
+      With music playing: no skip.
     - **Refused.** `@time 1792332202` (seconds): `@err 5 time`;
       `@time 2026-10-18`: `@err 1 time`; `@time 4102444800000`: `@err 5
       time`. `@time` still says the time set above.
     - **Restart.** An RTS pulse (or the power button): `[clock] <the time>
-      UTC, from the RTC (to the second)`, and `@time` within 1.5 s of the
-      computer's (most often within 0.5 s; restart a few times and note
-      each: they spread over up to a second, never past 1.5 s). `unset:
-      the RTC says 19..` here would mean the write's last step didn't
-      take: a bug.
+      UTC, from the RTC (to the second; ...)`, then `[clock] ... at the
+      RTC's tick, within <n> ms (its seconds <p> ms from the true ones,
+      the last @time's)`, `<p>` the set's. Then `@time`: **the offset
+      against the computer's within about 50 ms of A** (restart four
+      times or more and note each: the previous image read 0.4-1.3 s
+      behind). A `@time <the computer's ms>` then says `(it was 0.0<n> s
+      behind/ahead)`, the same. `unset: the RTC says 19..` here would mean
+      the write's last step didn't take: a bug; `the RTC's tick not
+      caught`, a bug too (or a bus in trouble: note the reason).
+    - **Restart in the write's second.** `@time <ms>` with the ms part
+      near 000 (the write a second later), and an RTS pulse within that
+      second: the boot reads the RTC as before the `@time` (its line says
+      the older time, its catch the older phase). Again with the pulse
+      about 1.5 s after the `@time` (the write done, its tick maybe not
+      caught): `the RTC's tick ... (no phase kept: its seconds taken as
+      the true ones)` when it wasn't, and the offset within the write's
+      lateness of A (or within a second, for a chip that keeps its own
+      seconds) until the next `@time`.
     - **Off** (the RTC keeps time, ESTIMATED until this). On battery,
       off (a long press on the power button, or the idle power-off) for an
       hour at least, overnight better, then on: `from the RTC`, and `@time`

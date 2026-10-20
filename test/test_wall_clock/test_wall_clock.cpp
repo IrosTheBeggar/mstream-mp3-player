@@ -3,8 +3,10 @@
 
 // Host tests for WallClock (docs/HOST-STATUS.md, "@time"): the calendar
 // both ways (the RTC's fields and Unix ms), the times believed, what the
-// boot makes of the RTC's reading, a @time, and the time at a moment of
-// the boot.
+// boot makes of the RTC's reading, a @time, the time at a moment of the
+// boot, the boot's reading made exact (refine(): RtcSync's catch,
+// test_rtc_sync), the RTC's writes cut at every byte, and its registers
+// as one read gives them.
 // Run: pio test -e native -f test_wall_clock
 #include <unity.h>
 
@@ -227,52 +229,24 @@ void test_at_any_moment() {
   TEST_ASSERT_EQUAL_UINT64(1792332202123ull + 0x100000000ull, k.at(later));
 }
 
-// The second a @time writes: the nearest, 2099's last at most.
-void test_rtc_second() {
-  const uint64_t s = 1792332202000ull;  // 2026-10-18 14:03:22
-  TEST_ASSERT_EQUAL_UINT64(s, rtcSecond(s));
-  TEST_ASSERT_EQUAL_UINT64(s, rtcSecond(s + 123));
-  TEST_ASSERT_EQUAL_UINT64(s, rtcSecond(s + 499));
-  TEST_ASSERT_EQUAL_UINT64(s + 1000, rtcSecond(s + 500));
-  TEST_ASSERT_EQUAL_UINT64(s + 1000, rtcSecond(s + 999));
-  TEST_ASSERT_EQUAL_UINT64(kMinMs, rtcSecond(kMinMs));
-  TEST_ASSERT_EQUAL_UINT64(kMaxMs - 999, rtcSecond(kMaxMs - 500));
-  TEST_ASSERT_EQUAL_UINT64(kMaxMs - 999, rtcSecond(kMaxMs - 499));  // (not 2100-01-01)
-  TEST_ASSERT_EQUAL_UINT64(kMaxMs - 999, rtcSecond(kMaxMs));
-  TEST_ASSERT_TRUE(believable(rtcSecond(kMaxMs)));
-}
-
-// What a restart then reads, in a model of the chip: its first tick comes
-// any time up to a second after the write (its divider runs on: the
-// estimate rtcSecond() is made for), and the boot reads at any moment of a
-// later second. Every 10 ms of the time's fraction, the first tick and the
-// read: never 1.5 s off either way, right on average, two times in three
-// within 0.5 s. (The second the time is in, the earlier write, read 0.5 s
-// behind on average and up to 2 s.)
-void test_rtc_second_restart() {
-  const uint64_t base = 1792332202000ull;
-  int64_t worst = 0;
-  int64_t sum = 0;
-  int near = 0;
-  int n = 0;
-  for (int f = 0; f < 1000; f += 10) {
-    const uint64_t t = base + f;  // the @time
-    const uint64_t written = rtcSecond(t);
-    for (int first = 10; first <= 1000; first += 10) {
-      for (int r = 5000; r < 6000; r += 10) {  // the boot's read, r ms after the write
-        const int ticks = r < first ? 0 : (r - first) / 1000 + 1;
-        const uint64_t read = written + 1000ull * ticks;  // what it says, taken as the second's start
-        const int64_t e = static_cast<int64_t>(read) - static_cast<int64_t>(t + r);
-        if ((e < 0 ? -e : e) > worst) worst = e < 0 ? -e : e;
-        sum += e;
-        near += e >= -500 && e <= 500;
-        ++n;
-      }
-    }
-  }
-  TEST_ASSERT_TRUE(worst < 1500);
-  TEST_ASSERT_TRUE(sum / n >= -20 && sum / n <= 20);
-  TEST_ASSERT_TRUE(near * 100 >= n * 66);  // (2/3, to the grid's 1 %)
+// The boot's reading made exact at the chip's next tick (RtcSync's
+// catch): only while the clock is the RTC's; a @time since wins, and an
+// unset clock stays unset.
+void test_refine() {
+  Clock k;
+  TEST_ASSERT_FALSE(k.refine(1792332203000ull, 900));  // unset
+  TEST_ASSERT_FALSE(k.ok());
+  TEST_ASSERT_TRUE(k.boot(rtc(civil(2026, 10, 18, 14, 3, 22)), 2500) == Boot::Ok);
+  // The tick to :23 came 412 ms after the reading: the reading was 588 ms in.
+  TEST_ASSERT_TRUE(k.refine(1792332203000ull, 2912));
+  TEST_ASSERT_TRUE(k.source() == Source::Rtc);
+  TEST_ASSERT_EQUAL_UINT64(1792332202588ull, k.at(2500));
+  TEST_ASSERT_EQUAL_UINT64(1792332203000ull, k.at(2912));
+  TEST_ASSERT_FALSE(k.refine(kMaxMs + 1, 3000));  // not a time believed
+  TEST_ASSERT_EQUAL_UINT64(1792332203000ull, k.at(2912));
+  TEST_ASSERT_TRUE(k.set(1792332210123ull, 10000));
+  TEST_ASSERT_FALSE(k.refine(1792332211000ull, 10500));  // a @time since
+  TEST_ASSERT_EQUAL_UINT64(1792332210623ull, k.at(10500));
 }
 
 namespace {
@@ -418,6 +392,46 @@ void test_rtc_write_cut() {
   TEST_ASSERT_EQUAL_UINT64(ms(civil(2026, 10, 18, 13, 0, 1)), c.at(0));
 }
 
+// The registers as one read gives them (the catch's polls) decode as
+// M5Unified's read does (the model above): every chip a @time meets, cut
+// at every byte; and judge() is the boot's rule.
+void test_from_registers() {
+  Before bs[6];
+  befores(bs);
+  for (const Before& b : bs) {
+    RtcWrite w[kRtcWrites];
+    rtcWrites(b.target, w);
+    for (int cut = 0; cut <= 15; ++cut) {
+      const Chip k = cutShort(b.chip, w, kRtcWrites, cut);
+      const Reading want = readChip(k);
+      const Reading got = fromRegisters(k.r);
+      TEST_ASSERT_TRUE(got.chip);
+      TEST_ASSERT_EQUAL(want.voltLow, got.voltLow);
+      TEST_ASSERT_EQUAL(want.read, got.read);
+      if (want.read) {
+        uint64_t a = 0, c = 0;
+        Clock x, y;
+        TEST_ASSERT_TRUE(judge(want, &a) == x.boot(want, 0));
+        TEST_ASSERT_TRUE(judge(got, &c) == y.boot(got, 0));
+        TEST_ASSERT_TRUE(judge(want, &a) == judge(got, &c));
+        TEST_ASSERT_EQUAL_UINT64(a, c);
+        TEST_ASSERT_EQUAL_UINT64(x.at(0), y.at(0));
+      }
+    }
+  }
+  // A weekday past Saturday isn't a date to M5Unified (its validateDateTime()).
+  Chip k = chipAt(civil(2026, 10, 18, 14, 3, 22), false);
+  k.r[4] = 7;
+  TEST_ASSERT_FALSE(fromRegisters(k.r).read);
+  k.r[4] = 0;
+  TEST_ASSERT_TRUE(fromRegisters(k.r).read);
+  uint64_t v = 0;
+  TEST_ASSERT_TRUE(judge(fromRegisters(k.r), &v) == Boot::Ok);
+  TEST_ASSERT_EQUAL_UINT64(1792332202000ull, v);
+  k.r[0] |= 0x80;  // the flag
+  TEST_ASSERT_TRUE(judge(fromRegisters(k.r), &v) == Boot::VoltLow);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_known_days);
@@ -428,8 +442,8 @@ int main(int, char**) {
   RUN_TEST(test_boot);
   RUN_TEST(test_set);
   RUN_TEST(test_at_any_moment);
-  RUN_TEST(test_rtc_second);
-  RUN_TEST(test_rtc_second_restart);
+  RUN_TEST(test_refine);
+  RUN_TEST(test_from_registers);
   RUN_TEST(test_rtc_writes);
   RUN_TEST(test_rtc_write_cut);
   return UNITY_END();

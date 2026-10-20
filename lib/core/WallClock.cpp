@@ -69,11 +69,6 @@ void text(const Civil& c, char* out, size_t size) {
   std::snprintf(out, size, "%04d-%02d-%02d %02d:%02d:%02d", c.year, c.month, c.day, c.hour, c.minute, c.second);
 }
 
-uint64_t rtcSecond(uint64_t unixMs) {
-  const uint64_t s = (unixMs + 500) / 1000 * 1000;
-  return s > kMaxMs ? kMaxMs / 1000 * 1000 : s;  // (not 2100: the chip's 2000)
-}
-
 void rtcWrites(const Civil& c, RtcWrite (&out)[kRtcWrites]) {
   const auto bcd = [](int v) { return static_cast<uint8_t>(((v / 10) << 4) | (v % 10)); };
   RtcWrite time;
@@ -105,8 +100,7 @@ const char* bootName(Boot b) {
   return "?";
 }
 
-Boot Clock::boot(const Reading& r, uint64_t monoMs) {
-  source_ = Source::Unset;
+Boot judge(const Reading& r, uint64_t* unixMs) {
   uint64_t ms = 0;
   if (!r.chip) return Boot::NoChip;
   if (r.voltLow) return Boot::VoltLow;  // (whatever its registers say)
@@ -116,10 +110,53 @@ Boot Clock::boot(const Reading& r, uint64_t monoMs) {
   if (r.civil.year < kMinYear || r.civil.year > kMaxYear) return Boot::Range;
   if (!fromCivil(r.civil, &ms)) return Boot::Unreadable;
   if (!believable(ms)) return Boot::Range;  // (never, the year in it)
+  *unixMs = ms;
+  return Boot::Ok;
+}
+
+Reading fromRegisters(const uint8_t (&regs)[7]) {
+  const auto bcdOk = [](uint8_t v) { return (v & 0x0F) <= 9 && (v >> 4) <= 9; };
+  const auto dec = [](uint8_t v) { return (v >> 4) * 10 + (v & 0x0F); };
+  Reading r;
+  r.chip = true;
+  r.voltLow = (regs[0] & kRtcVoltLow) != 0;
+  const uint8_t sec = regs[0] & 0x7f, min = regs[1] & 0x7f, hour = regs[2] & 0x3f;
+  const uint8_t day = regs[3] & 0x3f, wd = regs[4] & 0x07, mo = regs[5] & 0x1f, yy = regs[6];
+  if (!bcdOk(sec) || !bcdOk(min) || !bcdOk(hour) || !bcdOk(day) || !bcdOk(mo) || !bcdOk(yy)) return r;
+  Civil c;
+  c.second = dec(sec);
+  c.minute = dec(min);
+  c.hour = dec(hour);
+  c.day = dec(day);
+  c.weekday = wd;
+  c.month = dec(mo);
+  c.year = dec(yy) + ((regs[5] & kRtcCentury) ? 1900 : 2000);
+  // (RTC_Base::validateDateTime())
+  if (c.second > 59 || c.minute > 59 || c.hour > 23 || c.day < 1 || c.day > 31 || c.month < 1 || c.month > 12 ||
+      c.weekday > 6) {
+    return r;
+  }
+  r.read = true;
+  r.civil = c;
+  return r;
+}
+
+Boot Clock::boot(const Reading& r, uint64_t monoMs) {
+  source_ = Source::Unset;
+  uint64_t ms = 0;
+  const Boot b = judge(r, &ms);
+  if (b != Boot::Ok) return b;
   source_ = Source::Rtc;
   unixMs_ = ms;
   monoMs_ = monoMs;
   return Boot::Ok;
+}
+
+bool Clock::refine(uint64_t unixMs, uint64_t monoMs) {
+  if (source_ != Source::Rtc || !believable(unixMs)) return false;
+  unixMs_ = unixMs;
+  monoMs_ = monoMs;
+  return true;
 }
 
 bool Clock::set(uint64_t unixMs, uint64_t monoMs) {

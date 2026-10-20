@@ -264,7 +264,8 @@ void test_resume_blob_unknown_kind_keeps_the_position() {
 // older version still read): no schema bump for that. A new key is a
 // layout change: schema 2 is schema 1's keys and "queue"/"repeat", schema
 // 3 schema 2's and "ui"/"lang", schema 4 schema 3's and the four of
-// "autodj", schema 5 schema 4's and the three of "plays".
+// "autodj", schema 5 schema 4's and the three of "plays" (and "clock"'s
+// phase, 0.12.0's too).
 void test_the_schema_is_five() {
   TEST_ASSERT_EQUAL_UINT16(5, nvslayout::kCurrent);
   TEST_ASSERT_EQUAL_UINT8(2, nvslayout::kResumeVersion);
@@ -458,6 +459,20 @@ void test_the_play_logs_ids_from_what_is_saved() {
   TEST_ASSERT_TRUE(std::strcmp(nvslayout::kPlaysNamespace, nvslayout::kMetaNamespace) != 0);
 }
 
+// The RTC's phase (schema 5, 0.12.0; docs/HOST-STATUS.md "@time"): a
+// namespace of its own, the names within NVS's 15 characters. (What a
+// stored value means, absent or out of range: test_rtc_sync's
+// test_phase_from.)
+void test_the_clocks_phase_names() {
+  TEST_ASSERT_EQUAL_STRING("clock", nvslayout::kClockNamespace);
+  TEST_ASSERT_EQUAL_STRING("phase", nvslayout::kClockPhaseKey);
+  TEST_ASSERT_TRUE(std::strlen(nvslayout::kClockNamespace) <= 15);
+  TEST_ASSERT_TRUE(std::strlen(nvslayout::kClockPhaseKey) <= 15);
+  const char* others[] = {nvslayout::kPlaysNamespace, nvslayout::kAutoDjNamespace, nvslayout::kUiNamespace,
+                          nvslayout::kMetaNamespace};
+  for (const char* n : others) TEST_ASSERT_TRUE(std::strcmp(nvslayout::kClockNamespace, n) != 0);
+}
+
 // The migration matrix: every unit this firmware can boot on, and what
 // the boot keeps of each. The Opus work added the resume blob's kind 3
 // under schema 1 (a blob's kinds are its own version's business, no
@@ -635,6 +650,7 @@ int main(int, char**) {
   RUN_TEST(test_language_picker_and_its_migration);
   RUN_TEST(test_auto_dj_from_what_is_saved);
   RUN_TEST(test_the_play_logs_ids_from_what_is_saved);
+  RUN_TEST(test_the_clocks_phase_names);
   RUN_TEST(test_migration_matrix);
   return UNITY_END();
 }

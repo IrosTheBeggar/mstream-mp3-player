@@ -3856,6 +3856,10 @@ void loop() {
   // A count of the card's free space a computer asked for: a piece of the
   // FAT a pass (docs/HOST-STATUS.md).
   hostQuery.loop(now);
+  // The clock against the RTC: the boot's catch of its next tick, a
+  // @time's write on its second (a read every 10 ms or more while one runs,
+  // a few seconds at most; nothing otherwise).
+  boardclock::loop();
   shot.poll();
   // The screen, last: the countdown, and what keeps it lit (a screen of its
   // own, a play waiting for the headphones, a pairing, a computer driving

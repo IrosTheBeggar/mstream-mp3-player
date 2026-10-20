@@ -944,9 +944,11 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       @status line, the FSINFO rule, @identify's label; the
                       card's free clusters counted a piece of the FAT at a
                       time, exact with FatFs writing between the pieces
-  WallClock           The board's clock: the RTC's boot reading (its
+  WallClock, RtcSync  The board's clock: the RTC's boot reading (its
                       voltage-low flag, the range 2026-2099), a computer's
-                      @time, the UTC calendar both ways
+                      @time, the UTC calendar both ways; the RTC's next
+                      tick caught (the boot's ms), a @time's write on its
+                      second and the phase it measures
   CardContract, CardContainer, CardTags, CardManifest, CardAutoDj
                       The card contract with the transfer software
                       (docs/METADATA.md part 2): its files' readers and
@@ -1029,7 +1031,8 @@ src/                  Core2 firmware
                       UsbViz (the USB visualizer), HostQuery (a computer's
                       @status, @count, @identify and @time:
                       docs/HOST-STATUS.md), BoardClock (the RTC at the
-                      boot and for a @time; now() for the firmware),
+                      boot, its tick caught from the loop, and for a
+                      @time; now() for the firmware),
                       AutoDj + AutoDjStore (Auto DJ on the device: the
                       card's AutoDJ index, its join, the loop step, the
                       console's D; its settings in NVS), PlayHistory (the

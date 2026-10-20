@@ -1344,10 +1344,12 @@ declined or not, and none keeps a session alive or a decline going);
 rule, the label's rule), `lib/core/FreeCount` and `storage/CardSpace` (the
 count), `Ui::identify()` (the banner: drawn over everything, then the
 UI's own drawing gated as while the screen is dark, everything drawn again
-when it goes), and `app/BoardClock` over `lib/core/WallClock` (the clock:
-the RTC, a BM8563, read at the boot with its voltage-low flag, written
-for a `@time`; then the time is that plus the board's monotonic ms, and
-`boardclock::now()` is how the firmware reads it). Older firmware answers
+when it goes), and `app/BoardClock` over `lib/core/WallClock` and `lib/core/RtcSync`
+(the clock: the RTC, a BM8563, read at the boot with its voltage-low
+flag and made exact at its next tick, caught from the loop with the phase
+the last `@time` measured; a `@time` sets the clock at once and writes the
+RTC on its next second; the time is that plus the board's monotonic ms,
+and `boardclock::now()` is how the firmware reads it). Older firmware answers
 `@err 7 status`, and before 0.12.0 `@err 7 time` and `@err 7 format`.
 
 ## Storage
@@ -1743,7 +1745,15 @@ epoch writes `seq` and `boots` first and `epoch` last. Its
 `migrate(4, 5)` step does nothing: no epoch, the first boot draws one.
 0.11.0 leaves a schema-5 NVS as it is and never reads the namespace (it
 keeps no log); an NVS erase drops the three, and the next boot's new
-epoch keeps the plays' ids new to mStream.
+epoch keeps the plays' ids new to mStream. Schema 5 also holds the
+`clock` namespace (0.12.0 too, so no number of its own): `phase`, an i32,
+how many ms after the true seconds the RTC's own begin, measured by the
+last `@time`'s write and added at every boot's catch of the RTC's tick
+([HOST-STATUS.md](HOST-STATUS.md), "@time"; `app/BoardClock`). It is
+removed just before a `@time` writes the RTC and written once the chip's
+tick is caught; absent (no `@time` yet, a restart between the two, an
+NVS erase), the boots add none. The step does nothing for it either, and
+0.11.0 never reads it.
 The rules:
 
 - **Never reuse a key name** (or a namespace) for anything else, even after
