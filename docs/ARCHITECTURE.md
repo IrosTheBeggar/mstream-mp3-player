@@ -3827,9 +3827,12 @@ their own (the player stopped first, so nothing follows them).
   changed the objects: its docstring says what to do) and warns about any
   name that no longer matches; a build logs `iram_diet: 51 of 51 libc
   objects moved to flash`. About 5 KB of IRAM is left (5,176 B from the
-  seek bar on; the MP3 pin below takes none). Adding WiFi will need
-  more: likely pioarduino's `custom_sdkconfig` to rebuild the framework
-  without the workaround.
+  seek bar on; the MP3 pin below takes none). WiFi fits in it. The
+  ESP-NOW link spike (2026-10-19) measured the WiFi driver and ESP-NOW,
+  without lwIP, at 2,676 B: 5,161 B free before, 2,485 B after. It
+  costs so little because Arduino's prebuilt libraries keep WiFi's
+  optional IRAM code in flash ([SWAP-MODE.md](SWAP-MODE.md) section 5.2;
+  section 6 ranks what to free next).
 - **The MP3 synth loop is pinned at the front of flash.** The same
   `tools/iram_diet.py` puts libmad's synthesis (`dct32`, `synth_full`,
   `mad_synth_frame_onens`), AudioGeneratorMP3's per-sample `GetOneSample`

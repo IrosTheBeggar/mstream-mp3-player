@@ -1063,7 +1063,8 @@ docs/                 ARCHITECTURE.md, POC-RESULTS.md, MASCOT-POC.md, UI-SPIKE.m
                       METADATA.md (the card contract), AUTODJ-INDEX.md
                       (the AutoDJ index, MPDJ v2), AUTODJ.md (the
                       device's Auto DJ), QUEUE-MODES.md (shuffle, repeat,
-                      the queue's cap; Auto DJ with them)
+                      the queue's cap; Auto DJ with them), SWAP-MODE.md
+                      (swap mode's research and the ESP-NOW link spike)
 LICENSES/             The licence texts THIRD-PARTY-NOTICES.md refers to
 THIRD-PARTY-NOTICES.md What else is in the firmware binary, and its licences
 ```
