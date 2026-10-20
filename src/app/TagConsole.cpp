@@ -3,9 +3,12 @@
 
 #include "app/TagConsole.h"
 
+#include <SPI.h>
 #include <esp_heap_caps.h>
+#include <esp_rom_crc.h>
 #include <esp_timer.h>
 
+#include <algorithm>
 #include <cstring>
 #include <ctime>
 #include <new>
@@ -16,6 +19,7 @@
 #include "CardWalk.h"
 #include "LibraryBuilder.h"
 #include "QueueView.h"
+#include "SdCrc16.h"
 #include "TagCheck.h"
 #include "TagScan.h"
 #include "TagStore.h"
@@ -23,8 +27,13 @@
 #include "UiText.h"
 #include "app/LoopStack.h"
 #include "app/Psram.h"
+#include "sd_bench.h"   // lib/SD: the driver's write bench
+#include "sd_diskio.h"  // lib/SD: the card's size
 #include "storage/CardFat.h"
+#include "storage/CardSpace.h"
 #include "storage/SectorDisk.h"
+#include "ff.h"
+#include "diskio.h"  // FatFs: disk_read(), disk_write() for gx's raw CMD25s (after ff.h's ffconf names them)
 
 namespace cc = cardcontract;
 namespace mptg = cardcontract::mptg;
@@ -155,6 +164,9 @@ void TagConsole::command(const tagtext::Parsed& p) {
       return;
     case C::Cache: cache(p.n); return;
     case C::Bench: bench(p.n == 1); return;
+    case C::WriteBench: writeBench(p.n); return;
+    case C::WriteSoak: writeSoak(p.n); return;
+    case C::CrcBench: crcBench(p.n); return;
     case C::Rescan:
     case C::RescanAll: {
       const bool all = p.command == C::RescanAll;
@@ -415,6 +427,562 @@ void TagConsole::bench(bool walks) {
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+}
+
+// ---- gx, gxs: the card's write bench (docs/SWAP-MODE.md section 7; lib/SD's sd_bench.h) ----
+
+namespace {
+namespace xbench {
+
+constexpr uint32_t kMb = 1024 * 1024;
+// The pattern: the largest piece, and the read-back's chunk.
+constexpr uint32_t kSrc = 64 * 1024;
+// Each 4 KB block's first word is its offset in the file, salted: a block
+// written at the wrong place, or one left from an earlier run, reads back
+// wrong.
+constexpr uint32_t kBlock = 4096;
+// The next clock step above the mount's: 80 MHz / 3 (the HAL rounds down).
+constexpr int kFastHz = 26666667;
+constexpr const char* kFile = "/.player/xbench.tmp";
+
+enum class Sync : uint8_t { End, EveryMb, EveryPiece };
+
+struct Setting {
+  const char* name;
+  uint32_t piece;  // bytes, a multiple of kBlock, at most kSrc
+  bool expand;     // f_expand first (opt 1: allocated now, one run of clusters)
+  Sync sync;
+  bool preErase;   // ACMD23 before each CMD25
+  bool raw;        // CMD25s straight to the expanded file's sectors (no f_write)
+  bool verify;     // read back and checked
+};
+
+// gx's runs: today's 4 KB pieces first, then one change at a time around
+// the proposed receive path (32 KB pieces, f_expand, one sync at the end).
+constexpr Setting kSweep[] = {
+    {"4 KB pieces, plain (today's writers)", 4096, false, Sync::End, true, false, false},
+    {"16 KB pieces, plain", 16384, false, Sync::End, true, false, false},
+    {"32 KB pieces, plain", 32768, false, Sync::End, true, false, false},
+    {"64 KB pieces, plain", 65536, false, Sync::End, true, false, false},
+    {"32 KB pieces, f_expand (the receive path)", 32768, true, Sync::End, true, false, true},
+    {"32 KB pieces, f_expand, a sync every MB", 32768, true, Sync::EveryMb, true, false, false},
+    {"32 KB pieces, f_expand, a sync every piece", 32768, true, Sync::EveryPiece, true, false, false},
+    {"32 KB pieces, f_expand, no ACMD23", 32768, true, Sync::End, false, false, false},
+    {"32 KB raw CMD25s (no FatFs)", 32768, true, Sync::End, true, true, true},
+};
+
+// In PSRAM (about 137 KB): too big for the loop task's stack.
+struct Work {
+  FIL fil;
+  uint8_t src[kSrc];   // the pattern, each piece stamped as it goes
+  uint8_t back[kSrc];  // a chunk read back
+  char path[48];
+};
+
+struct Result {
+  bool ok = false;
+  char why[96] = "";
+  uint32_t bytes = 0, pieces = 0;
+  uint64_t wallUs = 0;    // f_expand's start (or the first piece's) to the close's end
+  uint64_t writeUs = 0;   // the pieces (f_write or raw CMD25s) and their syncs
+  uint64_t expandUs = 0, closeUs = 0, verifyUs = 0;
+  uint32_t p50 = 0, p99 = 0, max = 0;  // a piece, in µs
+  bool fragmented = false;  // f_expand found no run of free clusters: plain writes
+  bool verified = false;
+  uint32_t badBlocks = 0;
+  sd_bench_stats_t drv{};  // the writes' and the close's; crcErrors and retries to the read-back's end
+  uint32_t cardWrites = 0, writeRetries = 0, writeFails = 0;  // the wrapper's (sectordisk)
+};
+
+void fillPattern(uint8_t* p, uint32_t n) {
+  uint32_t x = 0x9E3779B9u;  // xorshift32
+  for (uint32_t i = 0; i + 4 <= n; i += 4) {
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    memcpy(p + i, &x, 4);
+  }
+}
+
+void stamp(uint8_t* piece, uint32_t offset, uint32_t n, uint32_t salt) {
+  for (uint32_t b = 0; b < n; b += kBlock) {
+    const uint32_t v = (offset + b) ^ salt;
+    memcpy(piece + b, &v, 4);
+  }
+}
+
+// The 4 KB blocks of a chunk read back from `offset` (a multiple of kSrc)
+// that aren't what was written there.
+uint32_t badBlocks(const uint8_t* chunk, const uint8_t* src, uint32_t offset, uint32_t n, uint32_t salt) {
+  uint32_t bad = 0;
+  for (uint32_t b = 0; b < n; b += kBlock) {
+    uint32_t v;
+    memcpy(&v, chunk + b, 4);
+    if (v != ((offset + b) ^ salt) || memcmp(chunk + b + 4, src + b + 4, kBlock - 4) != 0) ++bad;
+  }
+  return bad;
+}
+
+// The expanded file's first sector on the drive: f_expand's opt 1 made its
+// clusters one run.
+LBA_t firstSector(const FIL& f) {
+  const FATFS* fs = f.obj.fs;
+  return fs->database + static_cast<LBA_t>(f.obj.sclust - 2) * fs->csize;
+}
+
+// Sectors of the bench's own file, under FatFs's volume lock as CardSpace's
+// count reads (the wrapper's cache and the free count's watch see them as
+// FatFs's own).
+bool raw(FATFS* fs, bool write, uint8_t* p, LBA_t lba, UINT count) {
+  if (!ff_mutex_take(fs->ldrv)) return false;
+  const bool ok = (write ? disk_write(fs->pdrv, p, lba, count) : disk_read(fs->pdrv, p, lba, count)) == RES_OK;
+  ff_mutex_give(fs->ldrv);
+  return ok;
+}
+
+// The clock the bus runs for what the driver asks (the HAL's rounding).
+uint32_t busHz(int asked) { return spiClockDivToFrequency(SPI.bus(), spiFrequencyToClockDiv(SPI.bus(), asked)); }
+
+// One run: the file made, written as `s` says, closed, maybe read back; it
+// is left on the card (the caller deletes it). `hz`: the clock for a raw
+// run's own sectors (FatFs's reads and writes stay at the mount's).
+void run(Work& w, uint32_t* times, const Setting& s, uint32_t bytes, uint32_t salt, int hz, uint8_t pdrv,
+         Result& r) {
+  r = Result{};
+  r.bytes = bytes;
+  f_unlink(w.path);  // (one an interrupted run left, usually none)
+  FRESULT fr = f_open(&w.fil, w.path, FA_CREATE_ALWAYS | FA_WRITE | FA_READ);
+  if (fr != FR_OK) {
+    snprintf(r.why, sizeof(r.why), "the open: FatFs %d", (int)fr);
+    return;
+  }
+  const int mountHz = sdcard_frequency(pdrv);
+  const sectordisk::Stats before = sectordisk::stats();
+  sdcard_set_pre_erase(s.preErase);
+  sdcard_bench(true);
+  const int64_t t0 = esp_timer_get_time();
+  bool contiguous = false;
+  if (s.expand) {
+    fr = f_expand(&w.fil, bytes, 1);
+    r.expandUs = static_cast<uint64_t>(esp_timer_get_time() - t0);
+    if (fr == FR_OK) {
+      contiguous = true;
+    } else if (fr == FR_DENIED && !s.raw) {
+      r.fragmented = true;
+    } else {
+      snprintf(r.why, sizeof(r.why), "f_expand: FatFs %d%s", (int)fr, fr == FR_DENIED ? " (no run of free clusters)" : "");
+      f_close(&w.fil);
+      sdcard_bench(false);
+      sdcard_set_pre_erase(true);
+      return;
+    }
+  }
+  FATFS* fs = w.fil.obj.fs;
+  const LBA_t base = contiguous ? firstSector(w.fil) : 0;
+  bool ok = true;
+  if (s.raw) sdcard_set_frequency(pdrv, hz);
+  const uint32_t n = bytes / s.piece;
+  for (uint32_t i = 0; i < n && ok; ++i) {
+    const uint32_t off = i * s.piece;
+    uint8_t* piece = w.src + off % kSrc;
+    stamp(piece, off, s.piece, salt);
+    const int64_t a = esp_timer_get_time();
+    if (s.raw) {
+      ok = raw(fs, true, piece, base + off / 512, s.piece / 512);
+      if (!ok) snprintf(r.why, sizeof(r.why), "a raw write at %lu", (unsigned long)off);
+    } else {
+      UINT done = 0;
+      fr = f_write(&w.fil, piece, s.piece, &done);
+      ok = fr == FR_OK && done == s.piece;
+      if (!ok) snprintf(r.why, sizeof(r.why), "f_write at %lu: FatFs %d, %u B", (unsigned long)off, (int)fr, done);
+      const bool mb = (off + s.piece) % kMb == 0;
+      if (ok && (s.sync == Sync::EveryPiece || (s.sync == Sync::EveryMb && mb))) {
+        fr = f_sync(&w.fil);
+        ok = fr == FR_OK;
+        if (!ok) snprintf(r.why, sizeof(r.why), "f_sync at %lu: FatFs %d", (unsigned long)off, (int)fr);
+      }
+    }
+    const uint32_t us = static_cast<uint32_t>(esp_timer_get_time() - a);
+    times[i] = us;
+    r.writeUs += us;
+    r.pieces = i + 1;
+  }
+  sdcard_set_frequency(pdrv, mountHz);  // before anything of FatFs's own
+  const int64_t c = esp_timer_get_time();
+  fr = f_close(&w.fil);
+  r.closeUs = static_cast<uint64_t>(esp_timer_get_time() - c);
+  r.wallUs = static_cast<uint64_t>(esp_timer_get_time() - t0);
+  if (ok && fr != FR_OK) {
+    ok = false;
+    snprintf(r.why, sizeof(r.why), "the close: FatFs %d", (int)fr);
+  }
+  r.drv = sdcard_bench_stats();
+  sdcard_bench(false);
+  sdcard_set_pre_erase(true);
+  const sectordisk::Stats after = sectordisk::stats();
+  r.cardWrites = after.cardWrites - before.cardWrites;
+  r.writeRetries = after.writeRetries - before.writeRetries;
+  r.writeFails = after.writeFails - before.writeFails;
+  if (r.pieces) {
+    std::sort(times, times + r.pieces);
+    r.p50 = times[r.pieces / 2];
+    r.p99 = times[std::min<uint32_t>(r.pieces - 1, r.pieces * 99 / 100)];
+    r.max = times[r.pieces - 1];
+  }
+  r.ok = ok;
+  if (!ok || !s.verify) return;
+  // The read-back: a raw run's at its own clock (MISO's test), FatFs's
+  // through f_read at the mount's.
+  const sd_bench_stats_t drvBefore = sdcard_bench_stats();
+  const int64_t v0 = esp_timer_get_time();
+  if (s.raw) {
+    sdcard_set_frequency(pdrv, hz);
+    for (uint32_t off = 0; off < bytes && ok; off += kSrc) {
+      ok = raw(fs, false, w.back, base + off / 512, kSrc / 512);
+      if (ok) r.badBlocks += badBlocks(w.back, w.src, off, kSrc, salt);
+    }
+    sdcard_set_frequency(pdrv, mountHz);
+  } else {
+    ok = f_open(&w.fil, w.path, FA_READ) == FR_OK;
+    for (uint32_t off = 0; off < bytes && ok; off += kSrc) {
+      UINT got = 0;
+      ok = f_read(&w.fil, w.back, kSrc, &got) == FR_OK && got == kSrc;
+      if (ok) r.badBlocks += badBlocks(w.back, w.src, off, kSrc, salt);
+    }
+    f_close(&w.fil);
+  }
+  r.verifyUs = static_cast<uint64_t>(esp_timer_get_time() - v0);
+  const sd_bench_stats_t drvAfter = sdcard_bench_stats();
+  r.drv.crcErrors += drvAfter.crcErrors - drvBefore.crcErrors;
+  r.drv.retries += drvAfter.retries - drvBefore.retries;
+  r.verified = ok;
+  if (!ok) snprintf(r.why, sizeof(r.why), "the read-back failed");
+}
+
+double mbps(uint32_t bytes, uint64_t us) { return us ? bytes / static_cast<double>(kMb) / (us / 1e6) : 0.0; }
+double pct(uint64_t part, uint64_t whole) { return whole ? 100.0 * part / whole : 0.0; }
+
+void print(const Setting& s, const Result& r) {
+  if (!r.ok && !r.pieces) {
+    Serial.printf("[xbench] %s: FAILED (%s)\n", s.name, r.why);
+    return;
+  }
+  char expand[48] = "";
+  if (r.expandUs) snprintf(expand, sizeof(expand), ", f_expand %.1f ms", r.expandUs / 1000.0);
+  if (r.ok) {
+    Serial.printf("[xbench] %s: %.1f MB at %.2f MB/s (%.2f s: the pieces %.2f s, the close %.1f ms%s%s); a piece "
+                  "p50 %.2f ms, p99 %.2f, max %.2f\n",
+                  s.name, r.bytes / static_cast<double>(kMb), mbps(r.bytes, r.wallUs), r.wallUs / 1e6,
+                  r.writeUs / 1e6, r.closeUs / 1000.0, expand, r.fragmented ? "; FRAGMENTED: plain writes" : "",
+                  r.p50 / 1000.0, r.p99 / 1000.0, r.max / 1000.0);
+  } else {
+    Serial.printf("[xbench] %s: FAILED at piece %lu of %lu (%s; %.1f ms)\n", s.name, (unsigned long)r.pieces,
+                  (unsigned long)(r.bytes / s.piece), r.why, r.writeUs / 1000.0);
+  }
+  const sd_bench_stats_t& d = r.drv;
+  // (The timers ran from before f_expand: its writes are in them.)
+  const uint64_t timed = d.preEraseUs + d.crcUs + d.blockBusyUs + d.wireUs + d.stopBusyUs + d.statusUs;
+  const uint64_t whole = r.expandUs + r.writeUs + r.closeUs;
+  char refusal[48] = "";
+  if (d.lastRefusal) snprintf(refusal, sizeof(refusal), " (the last refused block's response 0x%02x)", d.lastRefusal);
+  Serial.printf("[xbench]   the driver: %lu CMD25s (%.1f blocks each); of the run's time: the wire %.0f%%, the wait "
+                "before each block %.0f%%, each CMD25's end %.0f%% (the longest %.2f ms), ACMD23 %.0f%%, CRC16 %.0f%%, "
+                "CMD13 %.0f%%, the rest (FatFs, the wrapper, the bus's lock) %.0f%%; %lu CRC errors, %lu retries%s; "
+                "the wrapper: %lu writes (%lu again, %lu failed)\n",
+                (unsigned long)d.multiWrites, d.multiWrites ? d.blocks / static_cast<double>(d.multiWrites) : 0.0,
+                pct(d.wireUs, whole), pct(d.blockBusyUs, whole), pct(d.stopBusyUs, whole), d.maxStopBusyUs / 1000.0,
+                pct(d.preEraseUs, whole), pct(d.crcUs, whole), pct(d.statusUs, whole),
+                whole > timed ? pct(whole - timed, whole) : 0.0, (unsigned long)d.crcErrors, (unsigned long)d.retries,
+                refusal, (unsigned long)r.cardWrites, (unsigned long)r.writeRetries, (unsigned long)r.writeFails);
+  if (s.verify && r.ok) {
+    Serial.printf("[xbench]   read back in %.2f s (%.2f MB/s): %s\n", r.verifyUs / 1e6, mbps(r.bytes, r.verifyUs),
+                  !r.verified ? "FAILED" : r.badBlocks ? "BAD BLOCKS" : "every block as written");
+    if (r.verified && r.badBlocks) Serial.printf("[xbench]   %lu of %lu blocks wrong\n", (unsigned long)r.badBlocks,
+                                                 (unsigned long)(r.bytes / kBlock));
+  }
+  Serial.flush();
+}
+
+// The card, for the runs' context: its CID and CSD, the volume's layout,
+// the free space and the clock.
+void cardLines(uint8_t pdrv, const FATFS* fs) {
+  uint8_t cid[16], csd[16];
+  if (sdcard_read_cid(pdrv, cid)) {
+    char oid[3], pnm[6];
+    for (int i = 0; i < 2; ++i) oid[i] = cid[1 + i] >= 0x20 && cid[1 + i] < 0x7F ? static_cast<char>(cid[1 + i]) : '?';
+    for (int i = 0; i < 5; ++i) pnm[i] = cid[3 + i] >= 0x20 && cid[3 + i] < 0x7F ? static_cast<char>(cid[3 + i]) : '?';
+    oid[2] = pnm[5] = 0;
+    Serial.printf("[xbench] the card's CID: maker 0x%02x, OEM \"%s\", product \"%s\" rev %u.%u, made %u-%02u\n",
+                  cid[0], oid, pnm, cid[8] >> 4, cid[8] & 0x0F, 2000u + (((cid[13] & 0x0Fu) << 4) | (cid[14] >> 4)),
+                  cid[14] & 0x0Fu);
+  } else {
+    Serial.println("[xbench] the card's CID: not read");
+  }
+  if (sdcard_read_csd(pdrv, csd)) {
+    Serial.printf("[xbench] its CSD: version %u, TRAN_SPEED 0x%02x%s\n", (csd[0] >> 6) + 1u, csd[3],
+                  csd[3] == 0x32 ? " (25 MHz)" : csd[3] == 0x5A ? " (50 MHz)" : "");
+  }
+  uint64_t spare = 0;
+  char room[40];
+  if (cardspace::freeBytes(&spare)) {
+    snprintf(room, sizeof(room), "%.2f GB free", spare / 1e9);
+  } else {
+    snprintf(room, sizeof(room), "free space not counted");
+  }
+  if (fs) {
+    const uint32_t au = (4u * kMb) / 512;  // a 4 MiB allocation unit, the common one
+    Serial.printf("[xbench] the volume: %lu sectors on the card, FAT%s, %lu KB clusters, the data area from sector %lu "
+                  "(%s 4 MiB boundary), %s\n",
+                  (unsigned long)sdcard_num_sectors(pdrv), fs->fs_type == FS_FAT32 ? "32" : "16",
+                  (unsigned long)(fs->csize * 512u / 1024u), (unsigned long)fs->database,
+                  fs->database % au == 0 ? "on a" : "off a", room);
+  }
+  const int hz = sdcard_frequency(pdrv);
+  Serial.printf("[xbench] the clock: the driver asks %d Hz, the bus runs %lu Hz; gxs's faster step %lu Hz; the data "
+                "blocks' CRC16 %s\n",
+                hz, (unsigned long)busHz(hz), (unsigned long)busHz(kFastHz),
+                sdcard_crc16_fast() ? "two bytes a step (gxc1)" : "the stock one, a byte a step (gxc0)");
+}
+
+// The runs' common parts, in PSRAM: the Work and each piece's time.
+struct Bench {
+  Work* w = nullptr;
+  uint32_t* times = nullptr;
+  bool begin(uint32_t bytes) {
+    w = psramNew<Work>();
+    times = static_cast<uint32_t*>(psramAlloc((bytes / kBlock) * sizeof(uint32_t)));
+    if (!w || !times) return false;
+    fillPattern(w->src, kSrc);
+    return cardfat::fatPath(kFile, w->path, sizeof(w->path));
+  }
+  ~Bench() {
+    if (w) f_unlink(w->path);
+    psramDelete(w);
+    psramFree(times);
+  }
+  // The volume, for cardLines(): the file made and closed once.
+  const FATFS* volume() {
+    if (f_open(&w->fil, w->path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) return nullptr;
+    const FATFS* fs = w->fil.obj.fs;
+    f_close(&w->fil);
+    f_unlink(w->path);
+    return fs;
+  }
+};
+
+}  // namespace xbench
+}  // namespace
+
+bool TagConsole::writeBenchReady(const char* what, uint32_t bytes) {
+  if (!storage_.onCard() || !cardfat::ready() || !sectordisk::installed()) {
+    Serial.printf("[xbench] %s: a mounted card with the sector cache's wrapper (it counts the card's writes)\n", what);
+    return false;
+  }
+  if (sectordisk::guard().foreign) {
+    Serial.printf("[xbench] %s: another card is in: every write is refused until a restart\n", what);
+    return false;
+  }
+  if (jobs_.playing && jobs_.playing()) {
+    Serial.printf("[xbench] %s: not while music plays (the decoder shares the card and its lock): pause first\n", what);
+    return false;
+  }
+  if (jobs_.idle) jobs_.idle();
+  if (jobs_.busy && jobs_.busy()) {
+    Serial.printf("[xbench] %s: the card worker's step is still under way after 10 s: try again\n", what);
+    return false;
+  }
+  uint64_t spare = 0;
+  if (cardspace::freeBytes(&spare) && spare < bytes + 16ull * xbench::kMb) {
+    Serial.printf("[xbench] %s: %.1f MB free on the card, %lu MB wanted (and 16 MB to spare)\n", what,
+                  spare / static_cast<double>(xbench::kMb), (unsigned long)(bytes / xbench::kMb));
+    return false;
+  }
+  return true;
+}
+
+void TagConsole::writeBench(uint32_t mb) {
+  using namespace xbench;
+  const uint32_t bytes = mb * kMb;
+  if (!writeBenchReady("gx", bytes)) return;
+  Bench b;
+  if (!b.begin(bytes)) {
+    Serial.println("[xbench] gx: no PSRAM for the bench (about 140 KB, and 1 KB a MB)");
+    return;
+  }
+  const uint8_t pdrv = cardfat::drive();
+  cardLines(pdrv, b.volume());
+  const uint32_t runs = sizeof(kSweep) / sizeof(kSweep[0]);
+  Serial.printf("[xbench] gx: %lu runs of %lu MB to %s, the file deleted after each; the loop waits throughout "
+                "(nothing is drawn)\n",
+                (unsigned long)runs, (unsigned long)mb, kFile);
+  Serial.flush();
+  for (uint32_t i = 0; i < runs; ++i) {
+    Result r;
+    run(*b.w, b.times, kSweep[i], bytes, 0x5A17u * (i + 1), sdcard_frequency(pdrv), pdrv, r);
+    f_unlink(b.w->path);
+    print(kSweep[i], r);
+  }
+  Serial.println("[xbench] gx: done");
+}
+
+void TagConsole::writeSoak(uint32_t mb) {
+  using namespace xbench;
+  const uint32_t bytes = mb * kMb;
+  if (!writeBenchReady("gxs", bytes)) return;
+  Bench b;
+  if (!b.begin(bytes)) {
+    Serial.println("[xbench] gxs: no PSRAM for the bench (about 140 KB, and 1 KB a MB)");
+    return;
+  }
+  const uint8_t pdrv = cardfat::drive();
+  cardLines(pdrv, b.volume());
+  const int mountHz = sdcard_frequency(pdrv);
+  Serial.printf("[xbench] gxs: %lu MB written raw in 32 KB CMD25s inside one contiguous file and read back, at "
+                "%lu Hz, then at %lu Hz (FatFs's own reads and writes stay at %lu Hz)\n",
+                (unsigned long)mb, (unsigned long)busHz(mountHz), (unsigned long)busHz(kFastHz),
+                (unsigned long)busHz(mountHz));
+  Serial.flush();
+  const Setting slow = {"raw 32 KB CMD25s at the mount's clock", 32768, true, Sync::End, true, true, true};
+  const Setting fast = {"raw 32 KB CMD25s at 80/3 MHz", 32768, true, Sync::End, true, true, true};
+  Result a, c;
+  run(*b.w, b.times, slow, bytes, 0x51u, mountHz, pdrv, a);
+  f_unlink(b.w->path);
+  print(slow, a);
+  run(*b.w, b.times, fast, bytes, 0xFA57u, kFastHz, pdrv, c);
+  f_unlink(b.w->path);
+  print(fast, c);
+  const bool clean = c.ok && c.verified && !c.badBlocks && !c.drv.crcErrors && !c.drv.retries;
+  if (!c.ok) {
+    Serial.printf("[xbench] gxs: 80/3 MHz FAILED at piece %lu of %lu (%s; %lu retries, the last refused block's "
+                  "response 0x%02x): the mount's clock is the card's on this board\n",
+                  (unsigned long)c.pieces, (unsigned long)(c.bytes / fast.piece), c.why, (unsigned long)c.drv.retries,
+                  c.drv.lastRefusal);
+    return;
+  }
+  Serial.printf("[xbench] gxs: 80/3 MHz %s over %lu MB (%lu CRC errors, %lu retries, %lu bad blocks); writes %.2f "
+                "against %.2f MB/s, reads %.2f against %.2f\n",
+                clean ? "CLEAN" : "NOT CLEAN", (unsigned long)mb, (unsigned long)c.drv.crcErrors,
+                (unsigned long)c.drv.retries, (unsigned long)c.badBlocks, mbps(c.bytes, c.wallUs),
+                mbps(a.bytes, a.wallUs), mbps(c.bytes, c.verifyUs), mbps(a.bytes, a.verifyUs));
+}
+
+// ---- gxc: the data blocks' CRC16s, timed (docs/SWAP-MODE.md section 7.2) ----
+
+extern "C" unsigned short CRC16(const char* data, int length);  // lib/SD's sd_diskio_crc.c: the stock one
+
+namespace {
+namespace crcbench {
+
+// The driver's two-byte step (lib/core SdCrc16) again, its tables in flash
+// (const): what keeping them in RAM is worth.
+struct Tables {
+  uint16_t t0[256];
+  uint16_t t1[256];
+};
+constexpr Tables makeTables() {
+  Tables t{};
+  for (int i = 0; i < 256; ++i) {
+    uint16_t c = static_cast<uint16_t>(i << 8);
+    for (int bit = 0; bit < 8; ++bit) c = static_cast<uint16_t>((c & 0x8000) ? (c << 1) ^ 0x1021 : c << 1);
+    t.t0[i] = c;
+  }
+  for (int i = 0; i < 256; ++i) t.t1[i] = static_cast<uint16_t>((t.t0[i] << 8) ^ t.t0[t.t0[i] >> 8]);
+  return t;
+}
+const Tables kFlashTables = makeTables();
+
+uint16_t stock(const uint8_t* p, size_t n) { return CRC16(reinterpret_cast<const char*>(p), static_cast<int>(n)); }
+// CRC-16/XMODEM through the ROM: one '~' before and after (esp_rom_crc.h).
+uint16_t rom(const uint8_t* p, size_t n) {
+  return static_cast<uint16_t>(~esp_rom_crc16_be(static_cast<uint16_t>(~0u), p, static_cast<uint32_t>(n)));
+}
+uint16_t fast(const uint8_t* p, size_t n) { return sdcrc::crc16(p, n); }
+uint16_t fastFlash(const uint8_t* p, size_t n) {
+  uint16_t crc = 0;
+  for (; n >= 2; p += 2, n -= 2) {
+    const uint16_t x = static_cast<uint16_t>(crc ^ ((p[0] << 8) | p[1]));
+    crc = static_cast<uint16_t>(kFlashTables.t1[x >> 8] ^ kFlashTables.t0[x & 0xFF]);
+  }
+  if (n) crc = static_cast<uint16_t>((crc << 8) ^ kFlashTables.t0[(crc >> 8) ^ p[0]]);
+  return crc;
+}
+
+struct Variant {
+  const char* name;
+  uint16_t (*fn)(const uint8_t*, size_t);
+};
+constexpr Variant kVariants[] = {
+    {"the stock table, a byte a step (lib/SD's CRC16(): the driver's before)", stock},
+    {"the ROM's, a byte a step (esp_rom_crc16_be)", rom},
+    {"two bytes a step, tables in RAM (lib/core SdCrc16: the driver's now)", fast},
+    {"two bytes a step, tables in flash", fastFlash},
+};
+
+constexpr uint32_t kBlock = 512;
+constexpr uint32_t kStream = 64 * 1024;  // twice the cache: every block's lines come from PSRAM
+constexpr uint32_t kHotRounds = 2000;
+constexpr uint32_t kStreamPasses = 8;
+
+}  // namespace crcbench
+}  // namespace
+
+void TagConsole::crcBench(uint32_t n) {
+  using namespace crcbench;
+  if (n <= 1) {
+    sdcard_set_crc16(n == 1);
+    Serial.printf("[xbench] gxc%lu: the data blocks' CRC16 is now %s, until a restart\n", (unsigned long)n,
+                  n ? "two bytes a step (the default)" : "the stock one, a byte a step (the driver's before)");
+    return;
+  }
+  uint8_t* hot = static_cast<uint8_t*>(heap_caps_malloc(kBlock, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  uint8_t* stream = static_cast<uint8_t*>(psramAlloc(kStream));
+  if (!hot || !stream) {
+    Serial.println("[xbench] gxc: no memory for its buffers (512 B internal, 64 KB PSRAM)");
+    heap_caps_free(hot);
+    psramFree(stream);
+    return;
+  }
+  uint32_t x = 0x1F2E3D4Cu;  // xorshift32
+  for (uint32_t i = 0; i < kStream; ++i) {
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    stream[i] = static_cast<uint8_t>(x >> 24);
+  }
+  memcpy(hot, stream, kBlock);
+  uint8_t ones[kBlock];
+  memset(ones, 0xFF, sizeof(ones));
+  const uint32_t mhz = getCpuFrequencyMhz();
+  Serial.printf("[xbench] gxc: a 512 B block from internal RAM %lu times, and 512 B blocks streamed from %lu KB of "
+                "PSRAM %lu times over; the CPU at %lu MHz; the driver's now: %s\n",
+                (unsigned long)kHotRounds, (unsigned long)(kStream / 1024), (unsigned long)kStreamPasses,
+                (unsigned long)mhz, sdcard_crc16_fast() ? "two bytes a step" : "the stock one");
+  const uint16_t want = fast(hot, kBlock);
+  bool agree = true;
+  volatile uint16_t sink = 0;
+  for (const Variant& v : kVariants) {
+    // Each one's answers first: a block of 0xFF (the SD spec's 0x7FA1), the
+    // hot block, and every streamed block against the two-byte one's.
+    bool ok = v.fn(ones, kBlock) == 0x7FA1 && v.fn(hot, kBlock) == want;
+    for (uint32_t off = 0; off < kStream && ok; off += kBlock) ok = v.fn(stream + off, kBlock) == fast(stream + off, kBlock);
+    agree = agree && ok;
+    int64_t t0 = esp_timer_get_time();
+    for (uint32_t k = 0; k < kHotRounds; ++k) sink = static_cast<uint16_t>(sink ^ v.fn(hot, kBlock));
+    const double hotUs = (esp_timer_get_time() - t0) / static_cast<double>(kHotRounds);
+    t0 = esp_timer_get_time();
+    for (uint32_t pass = 0; pass < kStreamPasses; ++pass) {
+      for (uint32_t off = 0; off < kStream; off += kBlock) sink = static_cast<uint16_t>(sink ^ v.fn(stream + off, kBlock));
+    }
+    const double streamUs = (esp_timer_get_time() - t0) / static_cast<double>(kStreamPasses * (kStream / kBlock));
+    Serial.printf("[xbench]   %s: %.2f us a block from RAM (%.1f cycles a byte), %.2f us from PSRAM; %s\n", v.name,
+                  hotUs, hotUs * mhz / kBlock, streamUs, ok ? "the same CRCs" : "DIFFERENT CRCs");
+    Serial.flush();
+  }
+  (void)sink;
+  Serial.printf("[xbench] gxc: %s\n", agree ? "every variant gave the same CRCs (and 0x7FA1 for 512 B of 0xFF)"
+                                              : "the variants DISAGREE: see the lines above");
+  heap_caps_free(hot);
+  psramFree(stream);
 }
 
 void TagConsole::job(const char* what, bool (*fn)()) {

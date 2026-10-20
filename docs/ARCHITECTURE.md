@@ -1334,7 +1334,7 @@ when it goes). Older firmware answers `@err 7 status`.
 
 ## Storage
 
-`LocalStorage` mounts the SD card (shared SPI bus with the LCD, 25 MHz) if one
+`LocalStorage` mounts the SD card (shared SPI bus with the LCD, asked for 25 MHz, which the SPI driver runs at 20: [SWAP-MODE.md](SWAP-MODE.md) section 7) if one
 is present, otherwise the 3.8 MB LittleFS partition ([Flash layout](#flash-layout)). It walks `/music` for
 the library (up to 8 folders deep, no cap, hidden names skipped) through the
 VFS's `readdir`, which names each entry and says whether it's a folder, rather
@@ -3827,9 +3827,12 @@ their own (the player stopped first, so nothing follows them).
   changed the objects: its docstring says what to do) and warns about any
   name that no longer matches; a build logs `iram_diet: 51 of 51 libc
   objects moved to flash`. About 5 KB of IRAM is left (5,176 B from the
-  seek bar on; the MP3 pin below takes none). Adding WiFi will need
-  more: likely pioarduino's `custom_sdkconfig` to rebuild the framework
-  without the workaround.
+  seek bar on; the MP3 pin below takes none). WiFi fits in it. The
+  ESP-NOW link spike (2026-10-19) measured the WiFi driver and ESP-NOW,
+  without lwIP, at 2,676 B: 5,161 B free before, 2,485 B after. It
+  costs so little because Arduino's prebuilt libraries keep WiFi's
+  optional IRAM code in flash ([SWAP-MODE.md](SWAP-MODE.md) section 5.2;
+  section 6 ranks what to free next).
 - **The MP3 synth loop is pinned at the front of flash.** The same
   `tools/iram_diet.py` puts libmad's synthesis (`dct32`, `synth_full`,
   `mad_synth_frame_onens`), AudioGeneratorMP3's per-sample `GetOneSample`
