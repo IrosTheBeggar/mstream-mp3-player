@@ -436,7 +436,7 @@ void test_mbr() {
 // empty; device.txt the firmware's; the check passed; the progress went
 // up to the plan's total and stopped there.
 void test_blank_card() {
-  for (const uint64_t n : {41 * kMiB, 7744512ull, 124735488ull}) {
+  for (const uint64_t n : {uint64_t{41 * kMiB}, uint64_t{7744512}, uint64_t{124735488}}) {
     fatmodel::RamDisk disk(static_cast<uint32_t>(n));
     Card card(disk);
     const Layout l = cardmkfs::plan(n);
