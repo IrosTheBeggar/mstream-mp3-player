@@ -31,11 +31,18 @@
 // 2.13); its migrate(3, 4) step does nothing (absent keys read as the
 // defaults: off, Follow the vibe, 55 %, BPM continuity and Harmonic mixing
 // off), and older firmware leaves a schema-4 NVS as it is (it never reads
-// the namespace: no Auto DJ there). A unit that ran the Opus work before
-// it joined the queue modes (schema 1 with a kind-3 resume blob, no repeat
-// key) takes the same steps and keeps its resume point: a blob's kinds are
-// its own version's business (test_nvs_layout's migration matrix has every
-// such unit). One blob
+// the namespace: no Auto DJ there). Schema 5 is schema 4's keys and the
+// "plays" namespace, the play log's ids (docs/METADATA.md 2.20.4: "epoch"
+// a u64, "seq" and "boots" u32s), and the "clock" namespace, the RTC's
+// phase ("phase", an i32: docs/HOST-STATUS.md, "@time"; 0.12.0 too, so no
+// number of its own); its migrate(4, 5) step does nothing (no epoch: the
+// first boot draws one; no phase: none added until a @time), and older
+// firmware leaves a schema-5 NVS as it is (it never reads the namespaces:
+// it keeps no log and reads the RTC to the second). A unit
+// that ran the Opus work before it joined the queue modes (schema 1 with a
+// kind-3 resume blob, no repeat key) takes the same steps and keeps its
+// resume point: a blob's kinds are its own version's business
+// (test_nvs_layout's migration matrix has every such unit). One blob
 // is versioned by its own byte, not by this number: the resume point,
 // which on a schema-1 unit is beta.1's 20-byte form (version 0, until
 // v0.5.0 first saves), version 1's 24 bytes (v0.5.0), or version 2's 64
@@ -49,7 +56,7 @@ namespace nvslayout {
 
 inline constexpr const char* kMetaNamespace = "meta";
 inline constexpr const char* kSchemaKey = "schema";
-inline constexpr uint16_t kCurrent = 4;
+inline constexpr uint16_t kCurrent = 5;
 
 // What the boot does about the stored number.
 struct SchemaStep {
@@ -161,6 +168,45 @@ AutoDjSaved autoDjFrom(const AutoDjStored& stored);
 AutoDjStored autoDjTo(const AutoDjSaved& saved);
 // A strictness the settings take: 55-75 by 5.
 bool autoDjFloorValid(uint8_t pct);
+
+// ---- the play log ("plays", schema 5) ----
+// docs/METADATA.md 2.20.4 (lib/core PlayLog's Journal::Ids): the device's
+// epoch (a u64: a random one other than 0, drawn whenever NVS has none),
+// the last seq the log used or reserved (a u32, written before the slot
+// that uses it) and the boot count of that epoch (a u32, written at each
+// boot before any slot uses it). A new epoch writes its seq and boot count
+// (0) first and the epoch last. An NVS erase (the firmware's recovery, a
+// flasher's install) loses all three, and the next boot takes a new epoch:
+// that is why there is one (the plays' ids stay new to mStream).
+inline constexpr const char* kPlaysNamespace = "plays";
+inline constexpr const char* kPlaysEpochKey = "epoch";
+inline constexpr const char* kPlaysSeqKey = "seq";
+inline constexpr const char* kPlaysBootsKey = "boots";
+struct PlaysStored {
+  bool haveEpoch = false, haveSeq = false, haveBoots = false;
+  uint64_t epoch = 0;
+  uint32_t seq = 0, boots = 0;
+};
+struct PlaysIds {
+  uint64_t epoch = 0;  // 0: none (a new one is drawn)
+  uint32_t seq = 0;
+  uint32_t boots = 0;
+};
+// The ids to use: none without an epoch (absent or 0), whatever seq and
+// boot count a cut new epoch left; with one, its seq and boot count (each
+// absent: 0).
+PlaysIds playsFrom(const PlaysStored& stored);
+
+// ---- the RTC's phase ("clock", schema 5) ----
+// docs/HOST-STATUS.md, "@time" (lib/core RtcSync): how many ms after the
+// true seconds the RTC's own begin, measured by the last @time's write (an
+// i32, -1999 to 1999: rtcsync::phaseFrom() takes anything else as none),
+// added to the chip's second at every boot's catch. Removed just before a
+// @time writes the RTC and written once its tick is caught, so an NVS that
+// holds one holds the one of the time in the chip. Absent (a @time not yet
+// sent, a restart between the two, an NVS erase): none, 0 added.
+inline constexpr const char* kClockNamespace = "clock";
+inline constexpr const char* kClockPhaseKey = "phase";
 
 // Writes r (valid or not: the caller removes the key for an invalid one)
 // as version kResumeVersion; returns kResumeBytes.

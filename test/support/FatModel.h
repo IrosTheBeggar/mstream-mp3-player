@@ -103,11 +103,14 @@ private:
 // whose guard adds STA_PROTECT to the status once it found another card.
 // `noInit`: disk_status() says STA_NOINIT until FatFs
 // initialises the drive again (the SD driver's answer once a card stopped
-// answering: pulled, or another put in).
+// answering: pulled, or another put in). `front` (set: `cache` and
+// `wrapper` are ignored) takes every read and write in front of the disk:
+// the format in the player's writer (cardmkfs::Writer, test_card_mkfs).
 struct Drive {
   RamDisk* disk = nullptr;
   SectorCache* cache = nullptr;
   CachedDrive* wrapper = nullptr;
+  SectorCache::Device* front = nullptr;
   bool noInit = false;
   struct Asked {
     uint64_t reads = 0, singleReads = 0, readSectors = 0, writes = 0, trims = 0;
@@ -328,9 +331,10 @@ extern "C" DRESULT disk_read(BYTE pdrv, BYTE* buff, LBA_t sector, UINT count) {
   d.asked.singleReads += count == 1;
   d.asked.readSectors += count;
   const uint32_t lba = static_cast<uint32_t>(sector);
-  const bool ok = d.wrapper ? d.wrapper->read(lba, buff, count)
-                  : d.cache ? d.cache->read(*d.disk, lba, buff, count)
-                            : d.disk->read(lba, buff, count);
+  const bool ok = d.front     ? d.front->read(lba, buff, count)
+                  : d.wrapper ? d.wrapper->read(lba, buff, count)
+                  : d.cache   ? d.cache->read(*d.disk, lba, buff, count)
+                              : d.disk->read(lba, buff, count);
   return ok ? RES_OK : RES_ERROR;
 }
 
@@ -341,9 +345,10 @@ extern "C" DRESULT disk_write(BYTE pdrv, const BYTE* buff, LBA_t sector, UINT co
   ++d.asked.writes;
   if (st & STA_PROTECT) return RES_WRPRT;  // (FatFs refuses first; counted, so a test sees it never asks)
   const uint32_t lba = static_cast<uint32_t>(sector);
-  const bool ok = d.wrapper ? d.wrapper->write(lba, buff, count)
-                  : d.cache ? d.cache->write(*d.disk, lba, buff, count)
-                            : d.disk->write(lba, buff, count);
+  const bool ok = d.front     ? d.front->write(lba, buff, count)
+                  : d.wrapper ? d.wrapper->write(lba, buff, count)
+                  : d.cache   ? d.cache->write(*d.disk, lba, buff, count)
+                              : d.disk->write(lba, buff, count);
   return ok ? RES_OK : RES_ERROR;
 }
 

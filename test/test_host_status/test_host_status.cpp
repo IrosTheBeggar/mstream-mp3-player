@@ -3,9 +3,9 @@
 
 // Host tests for HostStatus (docs/HOST-STATUS.md): the @status line (its
 // fields in their order, each case of each, the percent-encoding, the
-// 255-byte cap, the budget and how bt= and the keys after state= give way
-// to it), @identify's label, the FSINFO rule, and when @count's progress
-// lines go out.
+// 255-byte cap, the budget and how bt= and the keys after state= (cid=,
+// clock=) give way to it), @identify's label, the FSINFO rule, and when
+// @count's progress lines go out.
 // Run: pio test -e native -f test_host_status
 #include <unity.h>
 
@@ -29,8 +29,8 @@ std::string line(const Facts& f) {
 }
 
 // A board playing from a 64 GB FAT32 card whose FSINFO count is valid and
-// whose root is generation 42 (the fixtures' card id), paired with "Alex's
-// headphones".
+// whose root is generation 42 (the fixtures' card id), its clock set,
+// paired with "Alex's headphones".
 Facts playing64() {
   Facts f;
   f.fw = "v0.12.0";
@@ -46,13 +46,10 @@ Facts playing64() {
   f.cidKnown = true;
   f.cardId = 0x5EEDC0DE0A1B2C3Dull;
   f.generation = 42;
+  f.clockOk = true;
   f.bt = "Alex's headphones";
   return f;
 }
-
-// " clock=unset": the room the budget keeps for a later release's key
-// (docs/HOST-STATUS.md, "The budget"), which goes in after cid=.
-constexpr size_t kReserved = 12;
 
 // The value of `key` in a line ("" when absent).
 std::string field(const std::string& l, const char* key) {
@@ -89,7 +86,7 @@ void tearDown() {}
 void test_status_line_exact() {
   TEST_ASSERT_EQUAL_STRING(
       "@status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 "
-      "state=playing cid=5eedc0de0a1b2c3d.0000002a bt=Alex%27s%20headphones",
+      "state=playing cid=5eedc0de0a1b2c3d.0000002a clock=ok bt=Alex%27s%20headphones",
       line(playing64()).c_str());
 }
 
@@ -100,7 +97,7 @@ void test_status_unknowns() {
   f.elf = "0123abcd";
   TEST_ASSERT_EQUAL_STRING(
       "@status fw=v0.9.0-3-gabc1234-dirty elf=0123abcd card=none size=- free=? tracks=- music=? bat=- state=idle "
-      "cid=- bt=-",
+      "cid=- clock=unset bt=-",
       line(f).c_str());
   f = playing64();
   f.freeKnown = false;  // FSINFO's count unknown: '?', never 0 or the size
@@ -136,6 +133,10 @@ void test_status_unknowns() {
   TEST_ASSERT_EQUAL_STRING("00abcdef01234567.0000beef", field(line(f), "cid").c_str());
   f.cidKnown = false;
   TEST_ASSERT_EQUAL_STRING("-", field(line(f), "cid").c_str());
+  // clock=: ok while the board's clock has a time it believes, else unset.
+  TEST_ASSERT_EQUAL_STRING("ok", field(line(f), "clock").c_str());
+  f.clockOk = false;
+  TEST_ASSERT_EQUAL_STRING("unset", field(line(f), "clock").c_str());
   // The states and the cards, each by its name.
   const State states[] = {State::Idle, State::Paused, State::Playing, State::Host};
   const char* stateNames[] = {"idle", "paused", "playing", "host"};
@@ -164,7 +165,7 @@ void test_status_is_a_host_line() {
   f.fw = "v1 2\t3";  // (can't happen: a space or a control byte would break the line)
   f.bt = "My @ headphones = 100% \xC3\xA9t\xC3\xA9 \xF0\x9F\x8E\xA7";
   const std::string l = line(f);
-  const char* keys[] = {"fw", "elf", "card", "size", "free", "tracks", "music", "bat", "state", "cid", "bt"};
+  const char* keys[] = {"fw", "elf", "card", "size", "free", "tracks", "music", "bat", "state", "cid", "clock", "bt"};
   size_t at = 0;
   for (const char* k : keys) {
     const size_t p = l.find(std::string(" ") + k + "=", at);
@@ -180,7 +181,7 @@ void test_status_is_a_host_line() {
   TEST_ASSERT_EQUAL_UINT32(1, std::count(l.begin(), l.end(), '@'));
   // The headphones' name comes back from a URL decoder byte for byte.
   TEST_ASSERT_EQUAL_STRING(f.bt, decode(field(l, "bt")).c_str());
-  // And the console reads it as one host line, its verb and eleven fields.
+  // And the console reads it as one host line, its verb and twelve fields.
   char buf[kMaxLine + 1];
   std::snprintf(buf, sizeof(buf), "%s", l.c_str());
   HostFields hf;
@@ -240,11 +241,15 @@ void test_status_cap_and_bt() {
   std::snprintf(msg, sizeof(msg), "the fields before bt's value: %u bytes", static_cast<unsigned>(before));
   TEST_MESSAGE(msg);
   TEST_ASSERT_EQUAL_size_t(219, before);
-  TEST_ASSERT_EQUAL_size_t(kMaxLine - kBtRoom, before);         // bt= keeps its 36 ...
-  TEST_ASSERT_TRUE(widest.find(" cid=") == std::string::npos);  // ... and cid= gave way to it
+  TEST_ASSERT_EQUAL_size_t(kMaxLine - kBtRoom, before);           // bt= keeps its 36 ...
+  TEST_ASSERT_TRUE(widest.find(" cid=") == std::string::npos);    // ... and cid= gave way to it,
+  TEST_ASSERT_TRUE(widest.find(" clock=") == std::string::npos);  // clock= before it
   f.cidKnown = false;
-  TEST_ASSERT_TRUE(line(f).find(" cid=") == std::string::npos);  // cid=- too (6 bytes would leave bt= 30)
+  f.clockOk = false;
+  const std::string l0 = line(f);  // cid=- too (6 bytes would leave bt= 30), and clock=unset
+  TEST_ASSERT_TRUE(l0.find(" cid=") == std::string::npos && l0.find(" clock=") == std::string::npos);
   f.cidKnown = true;
+  f.clockOk = true;
   TEST_ASSERT_EQUAL_size_t(48, field(widest, "fw").size());
   TEST_ASSERT_EQUAL_size_t(16, field(widest, "elf").size());
   // A name that fits exactly: whole, no "…".
@@ -285,9 +290,9 @@ void test_status_cap_and_bt() {
 }
 
 // The budget with the fields' real widths (docs/HOST-STATUS.md, "The
-// budget"): the widest line a board can send keeps cid= and the room kept
-// for a later key, and still leaves bt= more than its 36 bytes; that line
-// at the cap; and the edge where cid= gives way.
+// budget"): the widest line a board can send keeps cid= and clock=, and
+// still leaves bt= more than its 36 bytes; that line at the cap; and the
+// edges where clock= and then cid= give way.
 void test_status_budget() {
   Facts f = playing64();
   f.fw = "v0.12.0-rc.1-123-gabcdef1-dirty";  // 31: all the app description's version holds
@@ -303,28 +308,33 @@ void test_status_budget() {
   f.state = State::Playing;
   f.cardId = 0xFFFFFFFFFFFFFFFFull;
   f.generation = 0xFFFFFFFFu;
+  f.clockOk = false;  // "unset", the longer
   f.bt = "";
   const std::string widest = line(f);
   TEST_ASSERT_EQUAL_size_t(31, field(widest, "fw").size());
   TEST_ASSERT_EQUAL_size_t(13, field(widest, "size").size());
   TEST_ASSERT_EQUAL_STRING("ffffffffffffffff.ffffffff", field(widest, "cid").c_str());
+  TEST_ASSERT_EQUAL_STRING("unset", field(widest, "clock").c_str());
   const size_t before = widest.size() - 1;  // without bt's '-'
-  TEST_ASSERT_EQUAL_size_t(203, before);    // 169 to state='s value, 30 for cid=, 4 for " bt="
-  TEST_ASSERT_EQUAL_size_t(52, kMaxLine - before);
-  TEST_ASSERT_TRUE(kMaxLine - before >= kBtRoom + kReserved);  // 40 once the reserved key is in
+  TEST_ASSERT_EQUAL_size_t(215, before);    // 169 to state='s value, 30 for cid=, 12 for clock=, 4 for " bt="
+  TEST_ASSERT_EQUAL_size_t(40, kMaxLine - before);
+  TEST_ASSERT_TRUE(kMaxLine - before >= kBtRoom);  // 4 bytes to spare
   // The words the other cases put in a number's place are never longer.
   Facts g = f;
   g.counting = true;
   g.tracks = Tracks::Building;
+  g.clockOk = true;
   TEST_ASSERT_TRUE(line(g).size() <= widest.size());
-  // At the cap: a name that fills the line exactly is whole, cid= kept.
+  // At the cap: a name that fills the line exactly is whole, cid= and
+  // clock= kept.
   std::string name(kMaxLine - before, 'x');
   f.bt = name.c_str();
   std::string l = line(f);
   TEST_ASSERT_EQUAL_size_t(kMaxLine, l.size());
   TEST_ASSERT_EQUAL_STRING(name.c_str(), field(l, "bt").c_str());
   TEST_ASSERT_EQUAL_STRING("ffffffffffffffff.ffffffff", field(l, "cid").c_str());
-  // One byte more: bt= is cut ("…" at its end), never cid=.
+  TEST_ASSERT_EQUAL_STRING("unset", field(l, "clock").c_str());
+  // One byte more: bt= is cut ("…" at its end), never cid= or clock=.
   name += "y";
   f.bt = name.c_str();
   l = line(f);
@@ -332,29 +342,54 @@ void test_status_budget() {
   std::string v = field(l, "bt");
   TEST_ASSERT_EQUAL_STRING(kEllipsis, v.substr(v.size() - std::strlen(kEllipsis)).c_str());
   TEST_ASSERT_EQUAL_STRING("ffffffffffffffff.ffffffff", field(l, "cid").c_str());
-  // The give-way rule's edge, past the real widths (fw= up to its cap of
-  // 48 bytes): cid= stays while bt= keeps its 36, and is left out whole
-  // (never cut) one byte later; bt= then has the room.
-  const std::string fw47(47, 'v');
-  f.fw = fw47.c_str();
-  f.bt = "";
-  l = line(f);
-  TEST_ASSERT_EQUAL_STRING("ffffffffffffffff.ffffffff", field(l, "cid").c_str());
-  TEST_ASSERT_EQUAL_size_t(kMaxLine - kBtRoom, l.size() - 1);  // 185 + 30 + 4: bt= keeps 36 exactly
-  const std::string fw48(48, 'v');
+  TEST_ASSERT_EQUAL_STRING("unset", field(l, "clock").c_str());
+  // The give-way rule's edges, past the real widths (fw= up to its cap of
+  // 48 bytes; the fields to state='s value are 138 bytes and fw='s): both
+  // keys stay while bt= keeps its 36; one byte later clock=, the last, is
+  // left out whole (never cut); cid= stays until it alone would leave bt=
+  // under 36, and is left out whole one byte later; bt= then has the room.
+  struct Edge {
+    size_t fw;
+    bool clockOk;
+    bool cid, clock;  // kept
+    size_t before;    // the line without bt's '-'
+  };
+  const Edge edges[] = {
+      {35, false, true, true, 219},   // 173 + 30 + 12 + 4: bt= keeps 36 exactly
+      {36, false, true, false, 208},  // clock=unset left out: 174 + 30 + 4
+      {38, true, true, true, 219},    // clock=ok, 9 bytes: 176 + 30 + 9 + 4
+      {39, true, true, false, 211},   // 177 + 30 + 4
+      {47, false, true, false, 219},  // 185 + 30 + 4: cid= alone, bt= keeps 36 exactly
+      {48, false, false, false, 190},  // 186 + 4: bt= keeps 65
+  };
+  for (const Edge& e : edges) {
+    char msg[32];
+    std::snprintf(msg, sizeof(msg), "fw= %u bytes", static_cast<unsigned>(e.fw));
+    const std::string fw(e.fw, 'v');
+    f.fw = fw.c_str();
+    f.clockOk = e.clockOk;
+    f.bt = "";
+    l = line(f);
+    TEST_ASSERT_EQUAL_MESSAGE(e.cid, l.find(" cid=") != std::string::npos, msg);
+    TEST_ASSERT_EQUAL_MESSAGE(e.clock, l.find(" clock=") != std::string::npos, msg);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(e.before, l.size() - 1, msg);
+    TEST_ASSERT_TRUE_MESSAGE(kMaxLine - (l.size() - 1) >= kBtRoom, msg);
+    if (e.clock) TEST_ASSERT_EQUAL_STRING_MESSAGE(e.clockOk ? "ok" : "unset", field(l, "clock").c_str(), msg);
+  }
+  const std::string fw48(48, 'v');  // (the loop's strings are gone)
   f.fw = fw48.c_str();
-  l = line(f);
-  TEST_ASSERT_TRUE(l.find(" cid=") == std::string::npos);
-  TEST_ASSERT_EQUAL_size_t(190, l.size() - 1);  // 186 + 4: bt= keeps 65
   std::string full(kMaxLine, 'z');
   f.bt = full.c_str();
   l = line(f);
   TEST_ASSERT_TRUE(l.size() <= kMaxLine);
   TEST_ASSERT_TRUE(field(l, "bt").size() > kBtRoom);
-  // With no root: cid=- (6 bytes), by the same rule.
+  // With no root: cid=- (6 bytes), by the same rule: both stay.
   f.cidKnown = false;
   f.bt = "";
-  TEST_ASSERT_EQUAL_STRING("-", field(line(f), "cid").c_str());  // 186 + 6 + 4: bt= keeps 59
+  l = line(f);
+  TEST_ASSERT_EQUAL_STRING("-", field(l, "cid").c_str());
+  TEST_ASSERT_EQUAL_STRING("unset", field(l, "clock").c_str());
+  TEST_ASSERT_EQUAL_size_t(208, l.size() - 1);  // 186 + 6 + 12 + 4: bt= keeps 47
 }
 
 // ---- @identify's label ----

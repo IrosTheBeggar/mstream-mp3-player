@@ -75,7 +75,9 @@ After each text, `@<id>` holds what a translator needs:
 - `count`: the placeholder that picks a plural text's form.
 - `bytes`: the buffer the text goes through on the device, filled (its
   UTF-8, plus one): a Cyrillic letter takes two bytes, a CJK character
-  three. `line_bytes`: the same for each line. A text that doesn't fit
+  three. `line_bytes`: the same for each line (in a `wrap` room, each
+  line the code wraps the text into, where the fonts break it: a longer
+  one would lose its end on the screen). A text that doesn't fit
   fails the check (the generator for a text with no placeholders, the
   host test for the rest): shorten it, or the buffer grows in the code.
 - `translate`: `maybe` for technical words a language may keep

@@ -5,6 +5,7 @@
 
 #include <cstring>
 
+#include "app/BoardClock.h"
 #include "storage/CardSpace.h"
 
 namespace {
@@ -27,6 +28,7 @@ void HostQuery::status() {
   if (hooks_.facts) hooks_.facts(f);
   f.counting = cardspace::counting();
   if (fat(f.card) && !f.counting) f.freeKnown = cardspace::freeBytes(&f.freeBytes);
+  f.clockOk = boardclock::ok();
   char line[hoststatus::kMaxLine + 1];
   hoststatus::format(f, line, sizeof(line));
   Serial.printf("%s\n", line);
@@ -92,5 +94,32 @@ const char* HostQuery::identify(const char* label) {
   const char* why = hooks_.identify ? hooks_.identify(label) : "ui";
   if (why) return why;
   Serial.printf("@identify ok\n");
+  return nullptr;
+}
+
+void HostQuery::time() {
+  const uint64_t ms = boardclock::now();
+  if (ms) {
+    Serial.printf("@time %llu\n", static_cast<unsigned long long>(ms));
+  } else {
+    Serial.printf("@time unset\n");
+  }
+}
+
+const char* HostQuery::setTime(uint64_t unixMs) {
+  if (const char* why = boardclock::set(unixMs)) return why;
+  Serial.printf("@time ok\n");
+  return nullptr;
+}
+
+const char* HostQuery::format() {
+  const char* why = hooks_.askFormat ? hooks_.askFormat() : "ui";
+  if (why) {
+    Serial.printf("[host] format: a computer asked; the question not shown (%s)\n", why);
+    return why;
+  }
+  Serial.printf("@format ok\n");
+  Serial.printf("[host] format: a computer asked; the question is on the screen (nothing formats without the "
+                "listener's two taps there)\n");
   return nullptr;
 }

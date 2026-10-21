@@ -40,7 +40,7 @@ cc::Why openPlan(tagstore::Fs& fs, const char* path, uint8_t* scratch, uint32_t 
 
 }  // namespace
 
-void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out) {
+void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out, const uint8_t* acksOwn) {
   Root& r = *out;
   r.hasRoot = false;
   r.cardId = 0;
@@ -55,6 +55,8 @@ void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out) 
   r.rootCount = 0;
   r.plan = false;
   r.autoDj = Root::AutoDj();
+  r.acks = cc::msmf::Acks();
+  r.acksWhy = cc::Why::Missing;
 
   // The plan: pending.bin, else a valid pending.tmp (2.12.5).
   r.plan = fs.exists(kPendingBin) || openPlan(fs, kPendingTmp, scratch, scratchBytes) == cc::Why::Ok;
@@ -89,6 +91,8 @@ void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out) 
     const uint32_t roots = m.rootCount();
     for (uint32_t i = 0; i < roots && r.rootCount < kMaxRoots; ++i)
       if (m.root(i, r.roots[r.rootCount], sizeof(r.roots[0])) == cc::Why::Ok) ++r.rootCount;
+    // ACKS, on its own: one that fails is none (the root stays valid).
+    r.acksWhy = cc::msmf::readAcks(*f, scratch, scratchBytes, &r.acks, acksOwn);
   }
   fs.close(f);
   if (r.why != cc::Why::Ok) return;

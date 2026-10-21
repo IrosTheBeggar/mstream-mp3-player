@@ -467,6 +467,25 @@ void test_u32() {
   TEST_ASSERT_FALSE(parseHostU32(nullptr, &v));
 }
 
+void test_u64() {
+  uint64_t v = 7;
+  TEST_ASSERT_TRUE(parseHostU64("0", &v));
+  TEST_ASSERT_EQUAL_UINT64(0, v);
+  TEST_ASSERT_TRUE(parseHostU64("1792332202123", &v));  // @time's Unix ms
+  TEST_ASSERT_EQUAL_UINT64(1792332202123ull, v);
+  TEST_ASSERT_TRUE(parseHostU64("18446744073709551615", &v));
+  TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, v);
+  TEST_ASSERT_TRUE(parseHostU64("000018446744073709551615", &v));
+  TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, v);
+  for (const char* s : {"18446744073709551616", "18446744073709551620", "99999999999999999999", "-1", "+1", "",
+                        " 1", "1 ", "1a", "0x10", "1.0", "1e3"}) {
+    v = 7;
+    TEST_ASSERT_FALSE_MESSAGE(parseHostU64(s, &v), s);
+    TEST_ASSERT_EQUAL_UINT64(7, v);  // untouched
+  }
+  TEST_ASSERT_FALSE(parseHostU64(nullptr, &v));
+}
+
 void test_i32() {
   int32_t v = 7;
   TEST_ASSERT_TRUE(parseHostI32("-6615", &v));
@@ -530,6 +549,7 @@ int main(int, char**) {
   RUN_TEST(test_split_into_verb_and_fields);
   RUN_TEST(test_split_refuses_bad_verbs);
   RUN_TEST(test_u32);
+  RUN_TEST(test_u64);
   RUN_TEST(test_i32);
   RUN_TEST(test_f32);
   return UNITY_END();

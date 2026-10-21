@@ -345,6 +345,32 @@ built without exFAT and without GPT (`lib/core/CardFormat`). The tree:
   or `/.player`, and it skips every name under `/music` that starts with
   a dot (`src/storage/LocalStorage.cpp`, `walk()`).
 
+**A card the player formats** (firmware 0.12.0; docs/HOST-STATUS.md,
+"@format"). The listener can have the player format a card: one that
+isn't FAT32 or can't be read, from the player's own no-card screen, or
+any card when the software asks with `@format`, which only brings up the
+player's question; the listener confirms it there, twice (a tap, then a
+2 s hold). The software
+never formats a card through the player otherwise. The card it leaves
+(`lib/core/CardMkfs`, host-tested on ChaN's FatFs as the Core2 builds
+it), which the software MAY rely on:
+
+- Sector 0 is an MBR with one primary partition, type 0x0C (FAT32,
+  LBA), from sector 8192 (4 MiB) to the card's last sector; the sectors
+  between, and the card's last 64, are zero (nothing of a GPT is left).
+- The partition is FAT32: 512-byte sectors, 2 FATs, 32 KB clusters on a
+  card of 2.16 GB or more (on a smaller one the largest cluster that
+  leaves FAT32 its 65,526), the data area from a 4 MiB boundary; the
+  boot sector's backup at 6, FSINFO at 1 and 7, its free count valid.
+- `/music`, empty, and `/.player/device.txt`, the firmware's (2.15), so
+  the software reads what the player takes (Opus, `read.mpdj=2`,
+  `history=1`) before the card's first boot in a player; nothing else:
+  no `/.mstream`, so the software's set-up makes the card's first commit
+  (and its `cardId`).
+- A new volume serial and disk signature: a card the software knew is
+  another card after it (its `/.mstream`, and the `cardId` in it, are
+  gone).
+
 ### 2.3 Conventions shared by every file
 
 #### 2.3.1 Bytes
@@ -2294,7 +2320,7 @@ The device rewrites it at boot when its content would change.
 
 ```
 contract=1
-firmware=0.11.0
+firmware=0.12.0
 read.msmf=1
 read.mptg=1
 read.mpdj=2
@@ -2303,6 +2329,7 @@ codecs=mp3,flac,opus
 extensions=mp3,flac,opus
 max_rate=48000
 max_channels=2
+history=1
 ```
 
 - `read.*` lists the majors the firmware reads, separated by commas.
@@ -2314,8 +2341,8 @@ max_channels=2
   walk lists as audio (any case). The device recognises audio by
   extension, not by content, so both matter.
 - `history` lists the majors of the play log (2.20) the firmware writes:
-  `history=1` from the firmware that keeps it (not built yet); missing
-  or empty, it keeps none. It tells the software that this player logs
+  `history=1` from 0.12.0, the firmware that keeps it (3.10), the key
+  last; missing or empty, it keeps none (0.11.0 and older write no key). It tells the software that this player logs
   plays, so its clock is worth setting; the software reads the log files
   whatever the key says (an older firmware's log stays on the card), each
   slot by its own major (2.20.7).
@@ -2877,10 +2904,16 @@ says the firmware keeps one (2.15).
   slot that uses it (it MAY reserve several at once; the unused ones are
   skipped, and a reader takes no gap for a loss). **At boot:** the next
   seq is max(NVS's seq, the highest seq of a valid play slot of this
-  deviceId and epoch in the mounted card's log) + 1. Every valid slot
-  counts: twins, and both slots of a conflict, which a reader drops
-  (2.20.6, item 3), since that seq was used. A seq that would pass
-  2^32 − 1 takes a new epoch.
+  deviceId and epoch in the mounted card's log) + 1. Every valid slot of
+  the log's files (2.20.2's names) counts: both of a byte-equal pair,
+  which a reader takes once, and both slots of a conflict, which a reader
+  drops (2.20.6, item 3), since that seq was used. The twin names
+  (`plays.xl1` to `plays.xl9`) needn't be read: a twin holds the slots of
+  a `plays.1.jnl`, whose chain it still shares (read under that name), or
+  which it was until a rotation renamed it and moved `plays.jnl`, with
+  every later slot, to `plays.1.jnl`. So no twin holds a seq or a bootSeq
+  above those the log's files hold, or held before a trim. A seq that
+  would pass 2^32 − 1 takes a new epoch.
 - **bootSeq** counts the device's boots in one epoch, from 1; NVS keeps
   the count, stored at boot before any slot uses it. **At boot:** this
   boot's bootSeq is max(NVS's boot count, the highest bootSeq of a valid
@@ -5755,6 +5788,151 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   check's cases went with the job, 2026-10-13), `test_playback`
   (`playStartsEntry()`), `test_tag_store` (the compaction's memory at the
   firmware's buffers, under 120 KB).
+
+### 3.10 As built (B14): the play log
+
+2.20's writer, for 0.12.0: `lib/core/PlayLog` (portable, host-tested in
+`test_play_log`) and its glue, `app/PlayHistory`; `device.txt` says
+`history=1` (2.15). Built for `core2` with every guard, **not flashed**.
+What the code decided where 2.20 left room:
+
+- **A play** is `PlaybackController`'s (`setPlays()`, its class comment):
+  it begins at each start of the current entry from 0:00 or a start
+  point (a pick, a skip, a restart, a resume point's start, Repeat One's
+  loop, a wait's release) and at each gapless join heard; a seek, a pause
+  and a wait on the same entry go on with it. Its end says the outcome:
+  a natural end or a join Completed; the listener's move to another
+  entry or back to 0:00 (next, prev, a pick, a cue, a Play, a Remove or
+  an Undo of the current entry, a seek to 0:00) Skipped; anything else
+  (stop, Clear, a failure, a library update that took the track away,
+  a power-off or restart) Stopped. Plays of under 1 s of audio aren't
+  logged (2.20.5's MAY), nor the built-in tracks, nor files on the flash.
+- **playedMs** is the backend's position's steps while playing, each
+  counted when it moved no more than the board's clock did (plus 500 ms),
+  so a seek's jump, a step back and a start not taken up yet
+  (`positionKnown()` false) count nothing; a Completed play adds what its
+  last look didn't see of its length (at most 2 s). **durationMs** is the
+  backend's length, else the catalog's hint. **pauseCount** counts the
+  passes that found it Paused after Playing. **source**: Auto DJ's mark
+  on the entry 3, else the queue shuffled 2, else 1. **generation** is
+  the root's the boot read (`Library::root()`; 0 none). **pathHash** is
+  the library's path's (`cardcontract::pathHash()`); **size** and
+  **fatTime** are `f_stat`'s at the write. **startedAt** is
+  `boardclock::at()` of the play's monotonic start at the write (0 while
+  the clock is unset: B13's `@time` or the RTC), **clock** the clock's
+  source then, **uptimeMs** the monotonic start mod 2^32.
+- **When it is written.** On the loop task, never on the audio's: a play
+  waits (at most 8; past them the newest is lost and counted) until
+  `WriteGate` lets the loop touch the card: not within 2 s of a start or
+  a join (the backend's `trackSeq()`), not while a start isn't taken up,
+  not from 5 s before the heard track's end or while the decoder reads
+  the next one ahead (the gapless window), not with the PCM ring under
+  half while playing, not within 5 s of an underrun (ESTIMATED; the
+  device check measures it). Then one slot a pass: the seq to NVS
+  (`plays`/`seq`, nvslayout's schema 5), the append and its `f_sync`.
+- **The boot** (`setup()`, after Auto DJ): NVS's ids (a new epoch from
+  `esp_random()` when there is none), the deviceId from
+  `esp_efuse_mac_get_default()`, the cut-rename rule (2.20.2), the root's
+  ACKS (`msmf::readAcks()`: found by type in the directory, checked on its
+  own; `cardroot::Root::acks`, at most 16 entries kept, this board's
+  first: `Library::openRecords()` reads the root with the board's id, so
+  other boards' rows sorting before it never crowd out the ones its log
+  trims by; the boot's `[plays]` line gives the rows, this board's, and
+  any left out). Then the boot's scan, a piece a pass behind the same
+  gate (4 reads of 2,560 bytes, five whole sectors each): every valid
+  slot of `plays.jnl`,
+  `plays.1.jnl` and `plays.2-9.jnl`, for the boot rules (2.20.4) and the
+  trim (2.20.2; only with ACKS). A new epoch with no ACKS reads nothing.
+  The boot count goes to NVS at the scan's end, before any slot.
+- **A remount** of the same card (the card guard's, 3.8; whatever
+  follows it, a restart's flush included): the cut-rename rule again
+  (`Journal::remounted()`), and while no slot has been asked for this
+  boot, the boot's scan again from its start. A file the scan held open
+  across the remount reads nothing more (FatFs's mount changed), and a
+  scan that ran while the card was out found no file; the scan again
+  comes to the same boot count (NVS's at the mount, not one more) or a
+  higher one, and the same trim. After a slot, only the rule. **A rename
+  the card refuses** at the rule (not all nine twin names taken) holds
+  `plays.jnl` back only until one takes: each append tries it again, and
+  the play it can't place is lost, said so (`the card refused to
+  rename`); a remount settles again, so a log blocked before a disk check
+  goes on with the same card back.
+- **Power-offs and restarts.** `PlayHistory::flush()` ends the open play
+  (stopped), finishes the scan and writes every play waiting, gate or
+  not: before the idle power-off's `powerOff()` (after its last look at
+  USB power), before the CPU speed's restart, and in `restartNow()` (the
+  card guard's restarts, "Try again", the console's `Bf` and forget),
+  after the card worker's step. Not to another card in the slot (the
+  guard's foreign card refuses every write: those plays are lost, and
+  said so). A hard power-off (PWR held, a flat battery) loses the open
+  play and the ones waiting (2.20.5).
+- **Costs (MEASURED on the host FatFs model**, `test_play_log`, a 32 GB
+  FAT32 card with 16 KB clusters and the sector cache): 80 bytes of log a
+  play; an append 2.14 card writes on average (one sector each: the
+  data's and the directory entry's, a FAT sector when a cluster is
+  added), at most 6, and 0.16 reads past the cache; the cap's worst case
+  on the card 1,048,480 bytes (both files full), which the boot's scan
+  reads whole (13,106 slots, about 660 card reads, 103 passes); a
+  rotation reads `plays.1.jnl` once for its count (524,240 bytes, about
+  230 card reads, on the loop in one go), once every 6,553 plays. NVS: one u32 write a play, one at each boot. The
+  device's write time is ESTIMATED at 15-20 ms (below).
+- **Tests.** `test_play_log`: the slot and the drop note byte for byte;
+  log.json's events (boots, plays, a host's `@time`, a sync's ACKS, an NVS
+  erase) through the Journal give `plays/golden/` byte for byte and the
+  reference's ops one for one; the vectors' boot rules, in scan pieces of
+  1, 3 and 1,000 slots; a new epoch; NVS refusing the seq, the seq's last
+  value; a cut append's tail written over; ACKS on the golden root and the
+  four hardening files, and this board's rows kept first among 21 (other
+  boards' before them: trimmed with them, kept without); the trim's ten
+  cases; a rename the card refuses, tried again, and a blocked log going
+  on after a disk check and a remount; a power cut at each of 28
+  steps of appends and three rotations, three ways (CutFs): no chain freed
+  that another name uses, every valid slot one the journal wrote, no seq
+  twice, the log going on, the twins collected after a disk check; all
+  nine twin names taken (blocked); the drop note and what a rotation
+  counts (a note read or not, no ACKS, saturating); the Tracker; the
+  WriteGate; the card's commands; on the FatFs model, a cut append's tail
+  written over (37 bytes across a sector's end, 79, 1) and a remount
+  during the boot's scan (a file held open across it, the card out for
+  the whole scan, a scan again with the same count, none after a slot);
+  `history` in the vectors' `device.txt` texts. `test_playback`: the
+  controller's word for every action, at joins, Repeat One, failures, the
+  sleep timer's end of track, waits,
+  edits, the fence and the firmware's `endPlay()`. `test_nvs_layout`
+  (schema 5, `plays`), `test_card_contract` (`history=1`).
+- **The device check** (V2, on the spare card, never the music card):
+  1. Boot with the spare card: `[plays] the play log: epoch ... (new:
+     NVS had none)`, then `[plays] ready: boot 1 of this epoch, the next
+     seq 1`; `/.player/device.txt` ends `history=1`.
+  2. Set the clock (`@time`, HOST-STATUS.md), then play three tracks
+     through with gapless joins, skip a fourth after about 20 s, pause a
+     fifth once and stop it: one `[plays] seq N: ...` line each, about 2 s
+     into the next track, with its write time (expected 15-20 ms); the
+     `[stats]` lines' `underruns=` unchanged throughout, on the speaker
+     and on Bluetooth, and no click at the joins.
+  3. The card in a computer: `python tools/playlog.py read
+     .player/plays.jnl` lists seqs 1-5 with those outcomes, playedMs near
+     what played, one pause on the fifth, startedAt the wall time; a
+     sixth play made before `@time` (after a boot with the RTC unset)
+     has startedAt 0 and clock 0.
+  4. The orderly paths: on battery, pause mid-track and let the idle
+     power-off run (`Is30`; on USB it stays on and writes nothing):
+     `[plays] before the power-off: 1 play written`, and the play is in
+     the log, stopped. The same through the CPU speed's restart, and
+     through `Bf` (`restartNow()`; its next boot is a fresh unit for
+     Bluetooth, the pairing kept).
+  5. Cuts: hold PWR mid-track (a hard off): the next boot's log has every
+     play before it and not the open one, no damaged slot. Pull the card
+     while a slot is due (right after a skip), put it back: the card
+     guard's line, then the next slots written (or the restart's
+     `NOT written` line for another card). After a boot, before any play
+     ends, pull the card and put it back: `[plays] the card mounted again
+     before this boot's first slot: the boot's scan begins again`, then
+     the `ready` line again with `begun again after a remount` and the same
+     boot number.
+  6. NVS erased (the terminal's install with `--erase`): a new epoch at
+     the next boot; the old slots stay; new plays' seqs from 1 under the
+     new epoch.
 
 ---
 

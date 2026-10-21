@@ -373,13 +373,18 @@ struct Info {
   char extensions[kValueMax] = "mp3,flac";
   uint32_t maxRate = 48000;
   uint32_t maxChannels = 2;
+  // The majors of the play log (2.20) the firmware writes, as the read.*
+  // masks: none (no key) before the firmware that keeps one; this one
+  // writes major 1 (current(): lib/core PlayLog).
+  uint32_t history = 0;
 };
 // What a card with no device.txt means (firmware before this design):
-// majors 1 (MPDJ none), mp3 and flac, 48 kHz, 2 channels.
+// majors 1 (MPDJ none), mp3 and flac, 48 kHz, 2 channels, no play log.
 Info defaults();
 // This firmware's file (the example of 2.15, for `firmware`).
 Info current(const char* firmware);
-// The text, keys in 2.15's order; its length, 0 when it doesn't fit.
+// The text, keys in 2.15's order (`history` last, only when the firmware
+// keeps a log); its length, 0 when it doesn't fit.
 size_t format(const Info& info, char* out, size_t cap);
 // Reads `n` bytes of a file (CRLF tolerated) over the defaults: each known
 // key replaces its default, any other line is ignored (a longer value is

@@ -31,9 +31,19 @@
 //   @identify <label>  "This one" and the label over the whole screen for
 //                      5 s and one buzz (ui/Ui::identify(), main.cpp's hook):
 //                      "@identify ok".
+//   @time [<unix-ms>]  the board's clock (app/BoardClock): alone, "@time
+//                      <unix-ms>" or "@time unset"; with a time, the RTC
+//                      and the clock set to it: "@time ok". Refused when
+//                      the RTC doesn't take it ("rtc").
+//   @format            the question "Format this card?" on the board's
+//                      screen (ui/Ui::askFormat(), main.cpp's hook): "@format
+//                      ok" when it is up. The computer never formats: the
+//                      listener answers on the board, twice, and its lines
+//                      say what came of it (main.cpp, storage/CardFormatter).
 //
-// Logged: a count's start and end; an identify. Not a @status (a computer
-// may ask every second). Loop task.
+// Logged: a count's start and end; an identify; a @time that sets the
+// clock; a @format's question. Not a @status or a @time question (a
+// computer may ask every second). Loop task.
 class HostQuery {
 public:
   struct Hooks {
@@ -48,6 +58,9 @@ public:
     // or it will be once the screen is awake; else why not ("ui",
     // "screen", "viz").
     std::function<const char*(const char* label)> identify;
+    // The format's question on the screen. nullptr: it is up; else why not
+    // ("ui", "screen", "viz", "card", "busy").
+    std::function<const char*()> askFormat;
   };
 
   explicit HostQuery(Hooks hooks) : hooks_(std::move(hooks)) {}
@@ -60,6 +73,14 @@ public:
   // @identify: nullptr, "@identify ok" is the answer; else the refusal's
   // detail for "@err 4 identify <detail>".
   const char* identify(const char* label);
+  // @time alone: "@time <unix-ms>" or "@time unset", written now.
+  void time();
+  // @time <unix-ms> (believable: HostLink checked it): nullptr, "@time ok"
+  // written; else the refusal's detail for "@err 4 time <detail>".
+  const char* setTime(uint64_t unixMs);
+  // @format: nullptr, "@format ok" written (the question is up); else the
+  // refusal's detail for "@err 4 format <detail>".
+  const char* format();
   // Every loop pass: a step of the count under way, its lines.
   void loop(uint32_t nowMs);
   bool counting() const;

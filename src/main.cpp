@@ -10,7 +10,9 @@
 // from the card at boot; the first time it's the whole library followed by
 // the built-in test tones. A computer can drive the Dance tab's dancer over
 // the same USB serial port (app/UsbViz: the USB visualizer), and ask
-// what the board is and has (app/HostQuery: @status, @count, @identify).
+// what the board is and has, set its clock, and bring up the question
+// that formats its card (app/HostQuery: @status, @count, @identify, @time,
+// @format; the format itself at the next boot: storage/CardFormatter).
 
 #include <Arduino.h>
 #include <M5Unified.h>
@@ -25,6 +27,7 @@
 #include <vector>
 
 #include "ButtonPolicy.h"
+#include "CardMkfs.h"
 #include "ChipRevision.h"
 #include "DeviceInfo.h"
 #include "HeadsetKeys.h"
@@ -49,6 +52,7 @@
 #include "app/CardTasks.h"
 #include "app/CardWorker.h"
 #include "app/DanceMode.h"
+#include "app/BoardClock.h"
 #include "app/BoardGuard.h"
 #include "app/BoardPower.h"
 #include "app/Diagnostics.h"
@@ -57,6 +61,7 @@
 #include "app/IdlePower.h"
 #include "app/Library.h"
 #include "app/NvsSchema.h"
+#include "app/PlayHistory.h"
 #include "app/PowerLab.h"
 #include "app/PowerSettings.h"
 #include "app/Psram.h"
@@ -70,6 +75,7 @@
 #include "app/Version.h"
 #include "audio/Core2AudioBackend.h"
 #include "spike/Spike.h"
+#include "storage/CardFormatter.h"
 #include "storage/CardSpace.h"
 #include "storage/LocalStorage.h"
 #include "storage/SectorDisk.h"
@@ -126,6 +132,10 @@ static Frozen frozen;
 static QueueModel queue(psramAlloc, psramFree, esp_random);
 static PlaybackController player(audio, queue, library.catalog());
 static QueueStore queueStore(storage, queue, player, library.catalog());
+// The play log on the card (/.player/plays.jnl, docs/METADATA.md 2.20): the
+// player's plays, a slot each at its end, written on the loop out of the
+// gapless window; flushed before every orderly power-off and restart.
+static PlayHistory playHistory(library, player);
 static DanceMode danceMode(audio, player);
 static Screenshot shot;
 static Haptics haptics;
@@ -251,6 +261,7 @@ static void restartNow() {
   if (!cardWorker.waitIdle(kRestartWaitMs))
     Serial.printf("[card] the card worker's step still under way after %lu s: restarting once its SD call ends\n",
                   (unsigned long)(kRestartWaitMs / 1000));
+  playHistory.flush("restart");  // (the open play, stopped: not to another card)
   powerSettings.restart();  // (Serial flushed; doesn't return)
 }
 
@@ -617,8 +628,25 @@ static void applyRepeat(PlaybackController::Repeat r) {
 // page (the same): f exFAT, t NTFS, g a GPT, u nothing recognised ("Can't
 // read this card"); w play waiting for the headphones (Now Playing's
 // panel); uiF0 (or uiF) the real state. Display only: a button on a faked
-// card still does what it does.
+// card still does what it does, but for Format... (its question shows; its
+// Format is refused: the card in the slot isn't the one shown).
 static char uiFake = 0;
+
+// ---- the format in the player (docs/HOST-STATUS.md, "@format") ----
+
+// The listener confirmed it twice (MainUiHost::formatCard()): the card's
+// identity as the boot will hold it (the sector cache's mount identity,
+// or what LocalStorage read of a card that didn't mount), who asked, when;
+// stepFormatRestart() restarts once the player has let go of everything.
+struct FormatRestart {
+  bool on = false;
+  uint32_t askedMs = 0;
+  CachedDrive::Identity id;
+  cardmkfs::Origin origin = cardmkfs::Origin::None;
+};
+static FormatRestart formatRestart;
+// What this boot's format did (ran false: none was asked): the UI's note.
+static cardformatter::Outcome formatOutcome;
 
 // What the UI reads and asks for (ui/UiHost.h).
 struct MainUiHost : ui::UiHost {
@@ -693,6 +721,8 @@ struct MainUiHost : ui::UiHost {
     }
     s.card = storage.onCard();
     s.cardKind = s.card ? cardformat::Kind::Unreadable : storage.cardKind();
+    s.cardBytes = s.card ? storage.totalBytes() : storage.unmountedBytes();
+    s.cardPlan = s.card && library.root() && library.root()->plan;
     const LibraryIndex* index = library.index();
     s.libraryTracks = frozen.on ? frozen.libraryTracks : index && index->ready() ? index->trackCount() : 0;
     s.libraryStatus = cardTasks ? cardTasks->status() : librarytext::Status{};
@@ -762,6 +792,7 @@ struct MainUiHost : ui::UiHost {
                    : uiFake == 'g' ? Kind::Gpt
                    : uiFake == 'u' ? Kind::Other
                                    : Kind::Unreadable;
+      s.cardPlan = false;
       s.libraryTracks = 0;
       s.current = -1;
       return;
@@ -892,6 +923,8 @@ struct MainUiHost : ui::UiHost {
     return true;
   }
   void rescanLibrary() override;
+  bool formatCard(bool fromComputer) override;
+  void formatDeclined(bool fromComputer, const char* how) override;
   bool rescanTags() override {
     if (!cardTasks || !cardTasks->active() || frozen.on) return false;
     Serial.println("[ui] Rescan tags: the player's own files read again (the transfer's stay as they are)");
@@ -1924,7 +1957,25 @@ static const char* identifyBoard(const char* label) {
   return nullptr;
 }
 
-static HostQuery hostQuery({hostFacts, countBlocked, identifyBoard});
+// A restart asked for and not yet carried out (the format's, the CPU
+// speed's, the loop's restartAtMs: below).
+static bool restartPending();
+
+// @format: the format's question on the board's screen (ui/Ui::askFormat()),
+// all a computer can do: the listener answers it there, twice
+// (MainUiHost::formatCard(), formatDeclined()). Not on the start-up screen
+// or another screen's, nor under the dancer a computer drives, nor while a
+// restart is under way; nor with nothing in the slot.
+static const char* askFormatQuestion() {
+  if (!userInterface || !userInterface->started()) return "ui";
+  if (screenTaken() || uiHeld || userInterface->suspended()) return "screen";
+  if (hostModeOn()) return "viz";
+  if (restartPending()) return "busy";
+  if (!storage.onCard() && !storage.cardAnswered()) return "card";  // (card=none)
+  return userInterface->askFormat(true) ? nullptr : "ui";
+}
+
+static HostQuery hostQuery({hostFacts, countBlocked, identifyBoard, askFormatQuestion});
 
 static UsbViz usbViz(danceMode, hostQuery, {vizBusy, vizEnter, vizDanceGone});
 
@@ -2749,6 +2800,7 @@ static void stepIdle(uint32_t now, bool input) {
       return;
     }
     Serial.printf("[power] off now (%s)\n", bt.linkUp() ? "the headphones still linked after 3 s" : "headphones let go");
+    playHistory.flush("power-off");  // (the open play, paused: stopped)
     haptics.stop();
     idlePower.powerOff();  // (doesn't return)
   }
@@ -2841,8 +2893,90 @@ static void stepCpuRestart(uint32_t now) {
   Serial.printf("[power] restarting now at %u MHz (%s%s)\n", (unsigned)cpuRestartMhz,
                 linked ? "the headphones still linked after 3 s" : "headphones let go",
                 amp ? "; the speaker's amp still on after 3 s" : "");
+  playHistory.flush("restart");  // (the open play, paused first: stopped)
   haptics.stop();
   powerSettings.restart();  // (doesn't return)
+}
+
+// ---- the format in the player (docs/HOST-STATUS.md, "@format") ----
+
+static bool restartPending() { return formatRestart.on || cpuRestartMhz || restartAtMs; }
+
+// The format's question answered Format twice (ui/Ui::askFormat()): the
+// card in the slot formatted at the next boot (storage/CardFormatter),
+// before anything mounts it. The restart is the CPU speed's orderly one:
+// paused first (nothing plays after it by itself), the queue and the card
+// jobs' state saved, the headphones let go and the speaker's amp off, then
+// stepFormatRestart() once they are (at most 3 s; never while the
+// library's files are written), the play log flushed (restartNow()).
+// Refused: the console's pretend card (uiF...: the card in the slot isn't
+// the one on screen), a restart under way, no card answering, a card the
+// boot couldn't hold to (no identity), a size FAT32 can't take; each
+// said in the log, and to a computer that asked as its @err.
+bool MainUiHost::formatCard(bool fromComputer) {
+  auto refuse = [fromComputer](const char* why, const char* detail) {
+    Serial.printf("[format] confirmed, but not now (%s): nothing formatted\n", why);
+    if (fromComputer) Serial.printf("@err 4 format %s\n", detail);
+    return false;
+  };
+  if (uiFake) return refuse("the console's pretend card state is up (uiF0 ends it)", "card");
+  if (restartPending()) return refuse("a restart is under way", "busy");
+  CachedDrive::Identity id;
+  if (storage.onCard()) {
+    if (sectordisk::guard().foreign) return refuse("another card is in the slot since the boot", "card");
+    id = sectordisk::mountIdentity();
+    if (!id.valid) return refuse("the mounted card's identity isn't kept (no sector cache)", "card");
+  } else {
+    if (!storage.cardAnswered()) return refuse("no card answered", "card");
+    id = storage.unmountedIdentity();
+  }
+  const cardmkfs::Layout l = cardmkfs::plan(id.sectors);
+  if (!l.ok()) return refuse(cardmkfs::text(l.why), cardmkfs::detail(l.why));
+  const bool paused = pauseIfPlaying();
+  const bool amp = SpeakerSink::ampOn();
+  queueStore.flushNow();
+  if (cardTasks) cardTasks->flushNow();
+  releaseHeadphones("[format] restarting");
+  if (amp) audio.speaker().requestAmp(SpeakerSink::Amp::Off);
+  formatRestart.on = true;
+  formatRestart.askedMs = millis();
+  formatRestart.id = id;
+  formatRestart.origin = fromComputer ? cardmkfs::Origin::Computer : cardmkfs::Origin::Screen;
+  Serial.printf("@format 0\n");
+  Serial.printf("[format] confirmed twice (%s): restarting to format the card (%lu sectors, %s, %.1f GB) at the "
+                "boot%s\n",
+                cardmkfs::originName(formatRestart.origin), static_cast<unsigned long>(id.sectors),
+                storage.onCard() ? "mounted" : cardformat::name(storage.cardKind()), l.cardBytes() / 1e9,
+                paused ? "; paused first" : "");
+  return true;
+}
+
+void MainUiHost::formatDeclined(bool fromComputer, const char* how) {
+  Serial.printf("[format] the question went (%s): nothing formatted\n", how);
+  if (fromComputer) Serial.printf("@format no\n");
+}
+
+// Every loop pass: the format's restart, once the headphones are gone and
+// the speaker's amp is off (at most 3 s), and the library's files aren't
+// being written; the request goes into RTC memory just before it.
+static void stepFormatRestart(uint32_t now) {
+  if (!formatRestart.on) return;
+  const bool linked = audio.bluetooth().linkUp();
+  const bool amp = SpeakerSink::ampOn();
+  const bool libraryWrite = cardTasks && cardTasks->libraryWrite();
+  if (!powerchoice::cpuRestartDue(now, formatRestart.askedMs, linked, amp, libraryWrite)) return;
+  if (queueStore.busy()) queueStore.flushNow();
+  cardformatter::ask(formatRestart.id, formatRestart.origin);
+  Serial.printf("[format] restarting now (%s%s)\n", linked ? "the headphones still linked after 3 s" : "headphones let go",
+                amp ? "; the speaker's amp still on after 3 s" : "");
+  haptics.stop();
+  restartNow();  // (the card worker's step ends first, the play log flushed; doesn't return)
+}
+
+// The boot's format, as it goes: the boot screen's bar.
+static void formatProgress(uint8_t percent, void* ctx) {
+  (void)ctx;
+  bootScreen.formatting(percent);
 }
 
 // ---- a card swapped while on (docs/METADATA.md 3.8; storage/SectorDisk) ----
@@ -2892,6 +3026,10 @@ static void stepCardGuard() {
   }
   if (g.remounts == remountsSeen) return;
   remountsSeen = g.remounts;
+  // The play log first, whatever follows (a restart's flush() included):
+  // its cut-rename rule again, and before the boot's first slot its boot's
+  // scan again (a file it held open is gone).
+  playHistory.remounted();
   const bool active = cardTasks && cardTasks->active();
   if (!active) {
     Serial.println("[card] the card answered again (FatFs mounted it again: the same card)");
@@ -3111,6 +3249,29 @@ static void leaveFence() {
                   library.transferBad() ? "; T left out" : "", (unsigned)(index ? index->memory().buildPeak : 0));
   }
   if (s.journalsLeft) Serial.println("[lib] the journals couldn't be compacted first: built from tags.bin alone");
+}
+
+// Every loop pass, after the player's update() (a join taken first): the
+// play log's look at the backend, then a piece of its boot's scan or one
+// play's slot when this pass's audio lets it (lib/core PlayLog's
+// WriteGate: never in the gapless window or a start's refill).
+static void stepPlays(uint32_t now) {
+  PlayHistory::Look look;
+  look.state = player.state();
+  look.positionMs = audio.positionMs();
+  look.positionKnown = audio.positionKnown();
+  look.durationMs = audio.durationMs();
+  playlog::WriteGate::In in;
+  in.nowMs = now;
+  in.playing = look.state == PlayState::Playing;
+  in.ringMs = audio.bufferedMsNow();
+  in.ringCapacityMs = audio.ringCapacityMs();
+  in.underruns = audio.underrunsNow();
+  in.trackSeq = audio.trackSeq();
+  in.seeking = !look.positionKnown;
+  in.decoderAtEnd = in.playing && audio.heardSourceEnded();
+  in.trackLeftMs = trackLeftMs();
+  playHistory.loop(look, in, cardHeld);
 }
 
 // Every loop pass, after the UI's (its covers taken in, its list's motion
@@ -3346,10 +3507,17 @@ void setup() {
   uilang::log();
   powerSettings.begin();  // what the boot clock is, the Bluetooth power, and whether it restarted for the speed
   board::applyBootPower();  // the IMU suspended: nothing reads it
+  boardclock::begin();      // the RTC's time (M5.begin() found it), or unset: [clock]
   diag::logHeap("boot");
 
   bootScreen.begin(version::player());
 
+  // A format the listener confirmed before this restart (docs/HOST-STATUS.md,
+  // "@format"; storage/CardFormatter): the card formatted now, before
+  // anything mounts it, the boot screen's bar as it goes. Then the mount
+  // below finds it as a new card.
+  formatOutcome = storage.formatIfAsked(formatProgress, nullptr);
+  if (formatOutcome.ran) bootScreen.formatDone();
   storage.begin();
   diag::logHeap("storage");
 
@@ -3443,6 +3611,10 @@ void setup() {
   } else {
     Serial.println("[dj] no PSRAM for Auto DJ: off for this boot");
   }
+  // The play log: NVS's ids, the cut-rename rule, the root's ACKS; the
+  // boot's scan and the slots on the loop (Auto DJ's marks name a play's
+  // source).
+  playHistory.begin(autoDj);
   Serial.printf("[lib] library + queue: internal RAM %lu B free before, %lu B after\n",
                 (unsigned long)freeBeforeLibrary, (unsigned long)diag::heap().internalFree);
   diag::logHeap("library");
@@ -3524,7 +3696,7 @@ void setup() {
                  "internal RAM); "
                  "D Auto DJ (D status, D0/D1 off/on, D? its commands); "
                  "@ lines: a computer's (the USB visualizer, docs/USB-VISUALIZER.md; @status, @count, @identify, "
-                 "docs/HOST-STATUS.md), never commands");
+                 "@time, @format, docs/HOST-STATUS.md), never commands");
   // PSRAM's lowest from here is the running player's ([stats]' pmin=, the
   // [heap] lines' min=, the update step's line beside its fence's own):
   // setup()'s (the boot's library build among it) and the init's, once.
@@ -3564,11 +3736,13 @@ void loop() {
   stepIdle(now, anyInput);
   powerSettings.update(audio.bluetooth().connected());
   stepCpuRestart(now);
+  stepFormatRestart(now);
   audio.loop(now);
   powerLab.loop(now);
   stepCardGuard();
   stepAutoDj(now);
   if (!cardHeld) queueStore.loop(now);
+  stepPlays(now);
   // What a track's length is, once the backend knows it (read from the
   // file; or its estimate 20 s in, exact for a constant bitrate): the
   // Queue's "49 min"; once per entry (each change redoes the Queue's sum).
@@ -3667,6 +3841,12 @@ void loop() {
       if (idlePower.takeBootNote(note, sizeof(note)) || powerSettings.takeBootNote(note, sizeof(note))) {
         userInterface->note(note, 6000);
       }
+      // Or it restarted to format the card: what came of it.
+      if (formatOutcome.ok()) {
+        userInterface->note(uistr::tr(uistr::S::format_done), 6000);
+      } else if (formatOutcome.ran) {
+        userInterface->warn(uistr::tr(uistr::S::format_failed));
+      }
     }
     userInterface->loop(now);
   }
@@ -3676,6 +3856,10 @@ void loop() {
   // A count of the card's free space a computer asked for: a piece of the
   // FAT a pass (docs/HOST-STATUS.md).
   hostQuery.loop(now);
+  // The clock against the RTC: the boot's catch of its next tick, a
+  // @time's write on its second (a read every 10 ms or more while one runs,
+  // a few seconds at most; nothing otherwise).
+  boardclock::loop();
   shot.poll();
   // The screen, last: the countdown, and what keeps it lit (a screen of its
   // own, a play waiting for the headphones, a pairing, a computer driving

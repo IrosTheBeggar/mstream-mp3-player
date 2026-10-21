@@ -39,6 +39,12 @@ stops there (on battery it powers off after a minute).
   it doesn't recognise, such as a blank card).
 - Formatting erases the card: copy anything on it off first, and check
   the disk you pick is the card (by its size) before you erase.
+- Or let the player format it (since 0.12.0): a card it can't use offers
+  **Format...** beside Try again. It asks twice, restarts and formats the
+  card FAT32 on an MBR, with an empty `/music` (seconds on a small card, a
+  few minutes on a big one: a bar on the start-up screen). Everything on
+  the card goes, even what the player can't read; a card it can't read at
+  all is first sent to a computer's disk check.
 - Put the music under **`/music`**, e.g. `/music/Artist/Album/01 - Title.mp3`.
   An album's cover is the `cover.jpg` (or `folder.jpg`) next to its tracks.
 - The player reads the files' tags (ID3, FLAC and Opus comments) in the
@@ -489,7 +495,8 @@ again). With no microSD card (and no music on the flash), the pages say so
 and offer **Try again** (with a card in, the player restarts to use it);
 a card that is in but doesn't mount is named as what it is ("This card is
 exFAT", "This card is NTFS", "This card uses GPT", "Can't read this card"),
-with what to do ([The microSD card](#the-microsd-card)); a card without
+with what to do ([The microSD card](#the-microsd-card)) and **Format...**
+(the player formats it, after asking twice); a card without
 music offers the same, which looks through `/music` again.
 If the headphones drop out while playing, the music pauses (it never
 carries on out loud) and a message follows their reconnecting, with **Use
@@ -744,7 +751,11 @@ headphones (`@status`); counts the card's free space once when asked
 (`@count`, never while music plays, and FatFs keeps the count after it);
 and can light the screen with "This one" and the port's name for 5 s,
 with a buzz (`@identify COM5`), to tell two boards apart. Since 0.9.0;
-older firmware answers `@err 7 status`.
+older firmware answers `@err 7 status`. Since 0.12.0 it also reads and
+sets the board's clock (`@time`: the Core2's RTC, which dates the plays
+the player will log; `@status` says `clock=ok` or `unset`), and can put
+the question that formats the card on the board's screen (`@format`: only
+the listener's two answers there, a tap and a 2 s hold, format it).
 
 ![The crab over two beats, phase 0/8 to 7/8 of each](docs/img/crab-phases.png)
 
@@ -769,7 +780,7 @@ The serial console (115200 baud) is there for scripted testing:
 | | | `B...` | Bluetooth tests that leave your pairing alone: `B` status; `Bs` auto-pair by signal for the next scan (a device at -55 dBm or closer, whatever its name; RAM only, off at boot, logged; it starts that scan, with none remembered: `Bn` first), `Bs0` off; `Bf` the next boot as a fresh unit (a flag that boot clears: as if nothing were remembered and there were no `BT_SINK_NAME`, the stored address and the bond not read or touched; restarts now); `Bn` the same for this session (RAM only; not while linked or pairing), `Bn0` back |
 | | | `D...` | Auto DJ ([docs/AUTODJ.md](docs/AUTODJ.md)): `D` its status (the settings, the index or why there is none, the join, the session, the counters, the memory, the last pick's reads and time); `D0` / `D1` off / on; `Dm0` / `Dm1` Anchor: Follow the vibe / Stay on seed; `Df55`-`Df75` Match strictness, by 5; `Dt0` / `Dt1` BPM continuity off / on, `Dk0` / `Dk1` Harmonic mixing off / on (each saved, as the UI's); `Ds<hex>` the next session's seed (1-8 hex digits, for a reproducible run), `Dr` a new session now; `Dp` a pick appended now, whatever the trigger says (cued at a finished queue), with its decision; `Dn<k>` k dry-run picks (1-2,000) on a copy of the session, the live one untouched, `Db<n>` n slot reads of random rows (1-5,000), a bench, both one a loop pass, `Dx` stops either with its summary so far; `Dj` the join again (only while Auto DJ is on), `Dc` the index file closed and opened again (a new session); `Dh` / `Dh<id>` Auto DJ from here on the current track or on library track id, `De` the empty states' Auto DJ button (both play, as `qp` does); `D?` the list. None touches the output or the volume |
 | | | `a...` | touch and haptics: `a` touch calibration (9 crosses; `a5`-`a9` for fewer), `ac` test taps, `ab` the first-start touch check (`ab0`: ask it again at the next start), `as` status, `ad` remove the calibration (no correction), `ah0` / `ah1` haptics off / on, `ar0` / `ar1` the A-Z rail's ticks off / on, `aq` close (saved on the device) |
-| | | `@...` | not a command: a computer's line (the USB visualizer, [docs/USB-VISUALIZER.md](docs/USB-VISUALIZER.md); the board's status for the terminal player's MP3 Player tab, `@status`, `@count` and `@identify <port>`, [docs/HOST-STATUS.md](docs/HOST-STATUS.md)). Every byte from the `@` to the end of the line is the line's, never a key; an `@` abandons a half-typed command (logged), except inside an `R` argument that has text (`Rttone:1000@48000`). Typed by hand such a line gets an `@err` reply and does nothing else (but `@status` answers, `@count` counts and `@identify COM5` shows the banner, as a computer's would). `tools/usb_viz.py` sends the visualizer's (`--dry-run` prints them instead). If the Core2 starts reading in the middle of one (it booted while the computer sent, or input was lost), the rest of that line is dropped, not run as keys (`[console] dropped ...`); a command sent with its Enter in that moment goes too: send it again |
+| | | `@...` | not a command: a computer's line (the USB visualizer, [docs/USB-VISUALIZER.md](docs/USB-VISUALIZER.md); the board's status for the terminal player's MP3 Player tab, `@status`, `@count`, `@identify <port>`, `@time [<unix-ms>]` and `@format`, [docs/HOST-STATUS.md](docs/HOST-STATUS.md)). Every byte from the `@` to the end of the line is the line's, never a key; an `@` abandons a half-typed command (logged), except inside an `R` argument that has text (`Rttone:1000@48000`). Typed by hand such a line gets an `@err` reply and does nothing else (but `@status` answers, `@count` counts, `@identify COM5` shows the banner, `@time` says the board's time or sets it and `@format` puts up the format's question, as a computer's would). `tools/usb_viz.py` sends the visualizer's (`--dry-run` prints them instead). If the Core2 starts reading in the middle of one (it booted while the computer sent, or input was lost), the rest of that line is dropped, not run as keys (`[console] dropped ...`); a command sent with its Enter in that moment goes too: send it again |
 
 The UI spike's tools ([docs/UI-SPIKE.md](docs/UI-SPIKE.md)) measure the
 browsing UI's risks before its screens are built. Each is a letter, an
@@ -919,11 +930,25 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       build's name only; never by signal but for console Bs)
   CardFormat          What a card that didn't mount is (exFAT, NTFS, GPT),
                       from its first sectors
+  CardMkfs            The card a player formats: its FAT32 layout (f_mkfs's
+                      arithmetic), the MBR, the writer that holds the boot
+                      sector to the last, the read-back, the request kept
+                      across the restart
+  HoldButton, FormatAsk
+                      The format's second step, a 2 s hold (a press kept on
+                      the button, its fill, a lift or a slide that empties
+                      it); the question's clock (each step's minute, the
+                      second's settle), its answers and a loop pass's order
   HostStatus, FreeCount
                       A computer's questions (docs/HOST-STATUS.md): the
                       @status line, the FSINFO rule, @identify's label; the
                       card's free clusters counted a piece of the FAT at a
                       time, exact with FatFs writing between the pieces
+  WallClock, RtcSync  The board's clock: the RTC's boot reading (its
+                      voltage-low flag, the range 2026-2099), a computer's
+                      @time, the UTC calendar both ways; the RTC's next
+                      tick caught (the boot's ms), a @time's write on its
+                      second and the phase it measures
   CardContract, CardContainer, CardTags, CardManifest, CardAutoDj
                       The card contract with the transfer software
                       (docs/METADATA.md part 2): its files' readers and
@@ -939,7 +964,14 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       When Auto DJ adds a track; its loop step (sessions,
                       steering, the picks, the DJ marks); the console's D
   AutoDjView          What the UI shows and says of Auto DJ
+  PlayLog             The play log (/.player/plays.jnl, docs/METADATA.md
+                      2.20): its slot, the device's files (the boot rules,
+                      the rotation, the trim by the root's ACKS), a play
+                      from its start to its end, when the loop may write
   SheetLayout         Where a sheet sits (3 rows, or 4 from y 40)
+  DialogLayout        Where a dialog and its buttons sit, and their hit areas
+  DialogTouch         Which touch answers a dialog (a press, a tap, the hold
+                      mode's hold button and its hint), the Dialog's own
   LibraryIndex, LibraryBuilder, LibraryBoot
                       The library index (library.idx v6), its build from
                       the tag records, the boot's decision
@@ -954,7 +986,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       again, the card's identity: a card swapped while on
                       is write-protected), the SD driver's busy waits
   NvsLayout           The NVS schema number's boot step; the resume point's
-                      versioned blob; the repeat mode's key
+                      versioned blob; the repeat mode's key; the play
+                      log's ids
   hal/                IAudioBackend, IStorage
 lib/SD/               The Arduino core's SD library (Apache-2.0), with
                       sd_diskio.cpp patched to wait out the card's busy
@@ -996,10 +1029,15 @@ src/                  Core2 firmware
                       app description), BoardGuard (not a Core2: says so
                       and stops), NvsSchema (the NVS layout's number),
                       UsbViz (the USB visualizer), HostQuery (a computer's
-                      @status, @count and @identify: docs/HOST-STATUS.md),
+                      @status, @count, @identify and @time:
+                      docs/HOST-STATUS.md), BoardClock (the RTC at the
+                      boot, its tick caught from the loop, and for a
+                      @time; now() for the firmware),
                       AutoDj + AutoDjStore (Auto DJ on the device: the
                       card's AutoDJ index, its join, the loop step, the
-                      console's D; its settings in NVS)
+                      console's D; its settings in NVS), PlayHistory (the
+                      play log on the card: the player's plays, a slot
+                      each, written on the loop; NVS's ids)
   spike/              UI spike tools: input lab, scroll lab, font and thumbnail
                       probes (docs/UI-SPIKE.md)
   main.cpp            Wires it together; input events (the buttons' policy),

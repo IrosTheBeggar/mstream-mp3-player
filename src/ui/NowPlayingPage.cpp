@@ -701,7 +701,11 @@ void NowPlayingPage::onEmptyEvent(const InputEvent& e) {
   ui_.tick();
   const AppState& s = ui_.state();
   if (!s.card && s.libraryTracks == 0) {
-    ui_.retryCard();
+    if (was == 1) {
+      ui_.askFormat(false);  // (Format...: a card that is in, not FAT32 or unreadable)
+    } else {
+      ui_.retryCard();
+    }
   } else if (was == 0) {
     ui_.showTab(NavModel::Tab::Library);
   } else if (es.buttonIcons[1] == &icons::kAutoDj) {

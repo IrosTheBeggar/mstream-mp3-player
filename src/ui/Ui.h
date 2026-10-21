@@ -4,6 +4,7 @@
 #pragma once
 #include <cstdint>
 
+#include "FormatAsk.h"
 #include "FrameClock.h"
 #include "HostStatus.h"
 #include "InputEvent.h"
@@ -317,6 +318,38 @@ public:
   // .still: "Still no card: ...", "Still exFAT: ...", "Still GPT: ..."),
   // and the page drawn again if that changed.
   void retryCard();
+  // The format's question (docs/HOST-STATUS.md, "@format"): from a no-card
+  // page's Format… (a card that is in but isn't FAT32 or can't be read),
+  // or a computer's @format (`fromComputer`), which can do no more than
+  // this, over any card (one the player reads too). Two dialogs, each with
+  // Cancel: first what it does ("Format this card?": the whole card
+  // erased, even what the player can't read; a card the player reads, its
+  // music named; a transfer that didn't finish on it, said; a damaged
+  // card's "Check it on a computer first"), answered by a tap on
+  // Format...; then "Erase the whole card?" with "Hold to erase", red,
+  // where the first one's Cancel was, in the Dialog's hold mode: it acts
+  // only when held 2 s (HoldButton::kHoldMs), filling meanwhile, and the
+  // hint under the body says so from the start (format.hold_hint); a tap
+  // on it, a hold let go or slid off, does nothing but turn the hint
+  // amber, and a touch in that dialog's first 0.6 s (from the tap that
+  // opened it) goes nowhere (formatask: the double tap's second touch).
+  // Which touch answers what: DialogTouch, formatask (the step's answer,
+  // a loop pass's order). No tap, double tap or run of taps
+  // answers both. Cancel is the default: anything but a hold kept to its
+  // end closes it as Cancel (Cancel, a tab, another dialog, another
+  // screen taking the display, the language changed, a minute without an
+  // answer: formatask::kAskMs, which wins over a hold under way). The
+  // touch buttons A, B and C keep their own work under it (ButtonPolicy:
+  // they never answer a dialog), the PWR key too. Format:
+  // UiHost::formatCard(), the "Restarting to format" note. Taps tick, as
+  // every dialog's; the hold's end the double tick, a hold that fell short
+  // the inert buzz. The screen wakes for it. Asked again while it is up:
+  // it stays (a computer's ask is then the answer's too). False: the UI
+  // isn't up (not started, or another screen has the display).
+  bool askFormat(bool fromComputer);
+  bool formatAsking() const {
+    return dialog_.up() && (ownDialog_ == OwnDialog::FormatAsk || ownDialog_ == OwnDialog::FormatSure);
+  }
   bool toastUp() const { return toast_.up(); }
   void drawHeader(const Header& h);
 
@@ -431,7 +464,24 @@ private:
   bool playFailedDialog_ = false;  // ... is playFailed()'s
   // Which of the Ui's own dialogs onDialog() answers (the flags above are
   // cleared as a dialog closes, before its owner hears the button).
-  enum class OwnDialog : uint8_t { None, Lost, PlayFailed } ownDialog_ = OwnDialog::None;
+  enum class OwnDialog : uint8_t { None, Lost, PlayFailed, FormatAsk, FormatSure } ownDialog_ = OwnDialog::None;
+  // The format's question: a computer's @format asked it, its steps'
+  // clock (each one's minute, the second's settle), and why it goes when
+  // that isn't a button (the log's: set before it is closed).
+  bool formatFromComputer_ = false;
+  formatask::Question formatQuestion_;
+  const char* formatGone_ = nullptr;
+  void openFormatSure();
+  // The step up answered with `button` (formatask::Question::answered(),
+  // at dialogAnsweredMs_), -1 closed.
+  void formatAnswered(int button);
+  // A dialog's button answered (a tap, or the hold kept to its end:
+  // `held`) at `ms` (the tap's own time, or the loop pass's that saw the
+  // hold's end): its feedback, the dialog closed, its owner told.
+  void answerDialog(int button, bool held, uint32_t ms);
+  uint32_t dialogAnsweredMs_ = 0;  // (answerDialog()'s `ms`: the second question's clock starts there)
+  // What a touch did to the dialog's hold (Dialog::holdNews()).
+  void holdNews(HoldButton::News n);
   uint32_t gateFailuresSeen_ = 0;
   // The first boot: the tips seen (NVS "ui"/"coach"); a fresh unit's
   // language picker due or up; the tips (and the language's note) to show

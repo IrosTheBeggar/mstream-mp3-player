@@ -167,8 +167,41 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // length the player was told (lengthHint(); a skip's, none: never the
 // track before's); after, the backend's, with that length while the
 // backend knows none (shownTime()).
+//
+// The play log (lib/core PlayLog; docs/METADATA.md 2.20.5) is told when a
+// play begins and ends (setPlays()). A play begins when the backend is
+// asked to start the current entry from its beginning or a start point
+// (play(), a skip, a restart, a resume point's start, Repeat One's loop, a
+// wait's release) or a joined track is heard; it ends when the track the
+// backend holds is let go or replaced, or another entry takes its place.
+// A seek (and setStartPoint() on a play under way), a pause and its
+// resume, and a wait for the headphones on the same entry neither begin
+// nor end one: the play goes on from the new second. How it ended: a
+// natural end or a join heard is Completed; a listener's move to another
+// entry or back to 0:00 (next, prev, a pick, a cue, a Play, a Remove or an
+// Undo that moves the current entry) is Skipped; anything else (stop, a
+// Clear, a failure, a library update that took the track away) is
+// Stopped. The firmware ends an open play itself at a power-off or a
+// restart. Only one play is open at a time: an end always comes before
+// the next begin.
 class PlaybackController {
 public:
+  // The play log's watcher (setPlays()). Called inside the actions and
+  // update(), on the loop task: nothing slow (no card).
+  class Plays {
+  public:
+    // The slot's outcome values (docs/METADATA.md 2.20.3).
+    enum class End : uint8_t { Completed = 1, Skipped = 2, Stopped = 3 };
+    // The current entry (its key and track) begins, `fromMs` in (0: its
+    // start; a resume point's or a start point's second).
+    virtual void began(uint32_t key, uint32_t track, uint32_t fromMs) = 0;
+    // The play that began last ends.
+    virtual void ended(End how) = 0;
+
+  protected:
+    ~Plays() = default;
+  };
+
   // Whether a play must wait for the output (read at every start).
   class Hold {
   public:
@@ -195,6 +228,12 @@ public:
 
   // nullptr (the default): nothing waits.
   void setHold(const Hold* hold) { hold_ = hold; }
+  // nullptr (the default): nobody is told (see the class).
+  void setPlays(Plays* plays) { plays_ = plays; }
+  // A play has begun and not ended.
+  bool playOpen() const { return playOpen_; }
+  // The firmware's power-off or restart: the open play ends, Stopped.
+  void endPlay() { endPlayAs(Plays::End::Stopped); }
   // nullptr (the default): no sleep timer.
   void setNextGate(const NextGate* gate) { gate_ = gate; }
   // Gapless playback (the console's G0/G1): off, the backend is told that
@@ -505,11 +544,20 @@ public:
 
 private:
   // Every public action: the heard advance first, the word to the backend
-  // after (nested actions do it again: harmless).
+  // after (nested actions do it again: harmless). The outermost one says
+  // how a play it ends ends (`how`: a listener's move by default; nested
+  // actions keep the outer one's: next() at the queue's end stops, and its
+  // play was Skipped).
   class Act {
   public:
-    explicit Act(PlaybackController& p) : p_(p) { p_.syncHeard(); }
-    ~Act() { p_.refreshOffer(); }
+    explicit Act(PlaybackController& p, Plays::End how = Plays::End::Skipped) : p_(p) {
+      if (p_.acts_++ == 0) p_.how_ = how;
+      p_.syncHeard();
+    }
+    ~Act() {
+      p_.refreshOffer();
+      --p_.acts_;
+    }
 
   private:
     PlaybackController& p_;
@@ -606,7 +654,21 @@ private:
     startMs_ = 0;
     startKey_ = QueueModel::kNone;
     startAnchor_ = ResumeAnchor{};
+    startContinues_ = false;
   }
+  // The play log's word (setPlays()).
+  void beginPlay(uint32_t fromMs) {
+    playOpen_ = true;
+    if (plays_) plays_->began(queue_.currentKey(), queue_.currentTrack(), fromMs);
+  }
+  void endPlayAs(Plays::End how) {
+    if (!playOpen_) return;
+    playOpen_ = false;
+    if (plays_) plays_->ended(how);
+  }
+  // The next start continues the open play: its start point is a seek's
+  // (placed while the play was open), not a resume point's or a restart.
+  bool startContinues() const { return playOpen_ && startContinues_ && hasStartPoint(); }
   // Playing or Waiting from now: any play clears the timer's, the
   // computer's and Auto DJ's marks.
   void setPlaying(PlayState s) {
@@ -645,6 +707,13 @@ private:
   uint32_t startDurationMs_ = 0;
   uint32_t startKey_ = QueueModel::kNone;
   ResumeAnchor startAnchor_;
+  bool startContinues_ = false;  // placed while a play was open (startContinues())
+  // The play log's watcher, the open play, and how the outermost action
+  // under way ends one (Act).
+  Plays* plays_ = nullptr;
+  bool playOpen_ = false;
+  Plays::End how_ = Plays::End::Stopped;
+  uint8_t acts_ = 0;
   // Where the last play() asked to start (prevAction(): the position until
   // the backend takes that start up).
   uint32_t playedFromMs_ = 0;

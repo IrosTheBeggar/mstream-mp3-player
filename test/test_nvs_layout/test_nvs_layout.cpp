@@ -3,7 +3,8 @@
 
 // Host unit tests for nvslayout: the NVS schema number's boot step, the
 // resume point's versioned blob, the repeat mode's key, the UI's language
-// (schema 3) and Auto DJ's settings (schema 4). Run: pio test -e native
+// (schema 3), Auto DJ's settings (schema 4) and the play log's ids (schema
+// 5). Run: pio test -e native
 #include <unity.h>
 
 #include <cstdint>
@@ -35,21 +36,27 @@ void test_schema_steps() {
   s = nvslayout::schemaStep(true, 2, 1);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(s.action));
   TEST_ASSERT_EQUAL_UINT16(2, s.from);
-  TEST_ASSERT_EQUAL_UINT16(4, nvslayout::kCurrent);
-  s = nvslayout::schemaStep(true, 1);  // a schema-1 unit (v0.5.0 to v0.6.0): migrated to 4
+  TEST_ASSERT_EQUAL_UINT16(5, nvslayout::kCurrent);
+  s = nvslayout::schemaStep(true, 1);  // a schema-1 unit (v0.5.0 to v0.6.0): migrated to 5
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Migrate), static_cast<int>(s.action));
   TEST_ASSERT_EQUAL_UINT16(1, s.from);
-  s = nvslayout::schemaStep(true, 2);  // a schema-2 unit (0.7.0 to 0.9.0): migrated to 4
+  s = nvslayout::schemaStep(true, 2);  // a schema-2 unit (0.7.0 to 0.9.0): migrated to 5
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Migrate), static_cast<int>(s.action));
   TEST_ASSERT_EQUAL_UINT16(2, s.from);
-  s = nvslayout::schemaStep(true, 3);  // a schema-3 unit (0.10.0): migrated to 4
+  s = nvslayout::schemaStep(true, 3);  // a schema-3 unit (0.10.0): migrated to 5
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Migrate), static_cast<int>(s.action));
   TEST_ASSERT_EQUAL_UINT16(3, s.from);
+  s = nvslayout::schemaStep(true, 4);  // a schema-4 unit (0.11.0): migrated to 5
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Migrate), static_cast<int>(s.action));
+  TEST_ASSERT_EQUAL_UINT16(4, s.from);
   s = nvslayout::schemaStep(true, 3, 2);  // 0.9.0 on a schema-3 NVS: left as it is
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(s.action));
-  s = nvslayout::schemaStep(true, 4, 3);  // 0.10.0 on this firmware's NVS: left as it is
+  s = nvslayout::schemaStep(true, 4, 3);  // 0.10.0 on 0.11.0's NVS: left as it is
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(s.action));
   TEST_ASSERT_EQUAL_UINT16(4, s.from);
+  s = nvslayout::schemaStep(true, 5, 4);  // 0.11.0 on this firmware's NVS: left as it is
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(s.action));
+  TEST_ASSERT_EQUAL_UINT16(5, s.from);
   TEST_ASSERT_EQUAL_STRING("meta", nvslayout::kMetaNamespace);
   TEST_ASSERT_EQUAL_STRING("schema", nvslayout::kSchemaKey);  // (NVS keys: 15 characters at most)
 }
@@ -257,9 +264,10 @@ void test_resume_blob_unknown_kind_keeps_the_position() {
 // older version still read): no schema bump for that. A new key is a
 // layout change: schema 2 is schema 1's keys and "queue"/"repeat", schema
 // 3 schema 2's and "ui"/"lang", schema 4 schema 3's and the four of
-// "autodj".
-void test_the_schema_is_four() {
-  TEST_ASSERT_EQUAL_UINT16(4, nvslayout::kCurrent);
+// "autodj", schema 5 schema 4's and the three of "plays" (and "clock"'s
+// phase, 0.12.0's too).
+void test_the_schema_is_five() {
+  TEST_ASSERT_EQUAL_UINT16(5, nvslayout::kCurrent);
   TEST_ASSERT_EQUAL_UINT8(2, nvslayout::kResumeVersion);
   TEST_ASSERT_EQUAL_UINT32(64, nvslayout::kResumeMaxBytes);
 }
@@ -413,19 +421,74 @@ void test_auto_dj_from_what_is_saved() {
   for (const char* n : names) TEST_ASSERT_TRUE(std::strlen(n) <= 15);
 }
 
+// The play log's ids as saved (schema 5; docs/METADATA.md 2.20.4): no
+// epoch (absent, or 0) is none, whatever seq and boot count are there (a
+// new epoch cut after them: they are its 0s, or stale); with one, its seq
+// and boot count, each absent 0. The names fit NVS's 15 characters.
+void test_the_play_logs_ids_from_what_is_saved() {
+  using nvslayout::PlaysIds;
+  using nvslayout::PlaysStored;
+  PlaysStored s;
+  PlaysIds p = nvslayout::playsFrom(s);
+  TEST_ASSERT_EQUAL_UINT64(0, p.epoch);
+  s.haveSeq = s.haveBoots = true;
+  s.seq = 41;
+  s.boots = 3;
+  p = nvslayout::playsFrom(s);  // (no epoch: a new one, from 0)
+  TEST_ASSERT_EQUAL_UINT64(0, p.epoch);
+  TEST_ASSERT_EQUAL_UINT32(0, p.seq);
+  TEST_ASSERT_EQUAL_UINT32(0, p.boots);
+  s.haveEpoch = true;
+  s.epoch = 0;
+  TEST_ASSERT_EQUAL_UINT64(0, nvslayout::playsFrom(s).epoch);
+  s.epoch = 0xF0E1D2C3B4A59687ull;
+  p = nvslayout::playsFrom(s);
+  TEST_ASSERT_EQUAL_UINT64(0xF0E1D2C3B4A59687ull, p.epoch);
+  TEST_ASSERT_EQUAL_UINT32(41, p.seq);
+  TEST_ASSERT_EQUAL_UINT32(3, p.boots);
+  s.haveSeq = false;
+  TEST_ASSERT_EQUAL_UINT32(0, nvslayout::playsFrom(s).seq);
+  TEST_ASSERT_EQUAL_UINT32(3, nvslayout::playsFrom(s).boots);
+  TEST_ASSERT_EQUAL_STRING("plays", nvslayout::kPlaysNamespace);
+  const char* names[] = {nvslayout::kPlaysNamespace, nvslayout::kPlaysEpochKey, nvslayout::kPlaysSeqKey,
+                         nvslayout::kPlaysBootsKey};
+  for (const char* n : names) TEST_ASSERT_TRUE(std::strlen(n) <= 15);
+  // A namespace of its own, never another's.
+  TEST_ASSERT_TRUE(std::strcmp(nvslayout::kPlaysNamespace, nvslayout::kAutoDjNamespace) != 0);
+  TEST_ASSERT_TRUE(std::strcmp(nvslayout::kPlaysNamespace, nvslayout::kUiNamespace) != 0);
+  TEST_ASSERT_TRUE(std::strcmp(nvslayout::kPlaysNamespace, nvslayout::kMetaNamespace) != 0);
+}
+
+// The RTC's phase (schema 5, 0.12.0; docs/HOST-STATUS.md "@time"): a
+// namespace of its own, the names within NVS's 15 characters. (What a
+// stored value means, absent or out of range: test_rtc_sync's
+// test_phase_from.)
+void test_the_clocks_phase_names() {
+  TEST_ASSERT_EQUAL_STRING("clock", nvslayout::kClockNamespace);
+  TEST_ASSERT_EQUAL_STRING("phase", nvslayout::kClockPhaseKey);
+  TEST_ASSERT_TRUE(std::strlen(nvslayout::kClockNamespace) <= 15);
+  TEST_ASSERT_TRUE(std::strlen(nvslayout::kClockPhaseKey) <= 15);
+  const char* others[] = {nvslayout::kPlaysNamespace, nvslayout::kAutoDjNamespace, nvslayout::kUiNamespace,
+                          nvslayout::kMetaNamespace};
+  for (const char* n : others) TEST_ASSERT_TRUE(std::strcmp(nvslayout::kClockNamespace, n) != 0);
+}
+
 // The migration matrix: every unit this firmware can boot on, and what
 // the boot keeps of each. The Opus work added the resume blob's kind 3
 // under schema 1 (a blob's kinds are its own version's business, no
 // bump), and the queue modes moved the schema to 2 for "queue"/"repeat";
 // a unit may have run either build before this one, or 0.6.0, or 0.9.0
-// (schema 2), or 0.10.0 (schema 3), or none; schema 3 added "ui"/"lang",
-// schema 4 "autodj". The schema's step, the repeat mode, the resume point,
-// the UI's language and Auto DJ's settings, as the boot reads them
+// (schema 2), or 0.10.0 (schema 3), or 0.11.0 (schema 4), or none; schema
+// 3 added "ui"/"lang", schema 4 "autodj", schema 5 "plays". The schema's
+// step, the repeat mode, the resume point, the UI's language, Auto DJ's
+// settings and the play log's ids, as the boot reads them
 // (NvsSchema::check(), QueueStore::loadRepeat() and loadResume(),
-// app/UiLang, app/AutoDjStore): the resume point survives whole on every
-// row, the mode where a unit had one, every unit but a fresh one is in
-// English with no language picker unless it chose a language, and Auto DJ
-// is off with its defaults unless this firmware saved it.
+// app/UiLang, app/AutoDjStore, app/PlayHistory): the resume point survives
+// whole on every row, the mode where a unit had one, every unit but a
+// fresh one is in English with no language picker unless it chose a
+// language, Auto DJ is off with its defaults unless a firmware that has it
+// saved it, and the play log keeps its epoch where this firmware made one
+// (every other unit draws one at its first boot here).
 void test_migration_matrix() {
   using A = SchemaStep::Action;
   using Kind = ResumeAnchor::Kind;
@@ -444,6 +507,8 @@ void test_migration_matrix() {
     bool wantPicker;  // the first boot's language picker shows
     nvslayout::AutoDjStored dj;      // "autodj" (schema 4; none before it)
     nvslayout::AutoDjSaved wantDj;   // what the boot reads of it (app/AutoDjStore)
+    nvslayout::PlaysStored plays = {};  // "plays" (schema 5; none before it)
+    uint64_t wantEpoch = 0;             // the epoch the boot keeps (0: it draws one)
   };
   // This firmware's Auto DJ: on, Stay on seed, 70 %, Harmonic mixing.
   nvslayout::AutoDjStored stayOnSeed;
@@ -459,6 +524,12 @@ void test_migration_matrix() {
   stayOnSeedRead.matchKey = true;
   const nvslayout::AutoDjStored none;
   const nvslayout::AutoDjSaved off;
+  // This firmware's play log, some plays in.
+  nvslayout::PlaysStored logged;
+  logged.haveEpoch = logged.haveSeq = logged.haveBoots = true;
+  logged.epoch = 0x1122334455667788ull;
+  logged.seq = 97;
+  logged.boots = 12;
   const Unit units[] = {
       {"a fresh unit", false, 0, false, 0, Kind::None, nullptr, false, A::Write, 0, Lang::En, true, none, off},
       {"v0.5.0-beta.1 (no schema, the tips seen)", false, 0, false, 0, Kind::None, nullptr, true, A::Write, 0,
@@ -481,14 +552,20 @@ void test_migration_matrix() {
        false, none, off},
       {"0.10.0, its picker left without a choice (the tips not seen yet)", true, 3, false, 0, Kind::None, nullptr,
        false, A::Migrate, 0, Lang::En, true, none, off},
-      {"this firmware (schema 4, Auto DJ never touched)", true, 4, true, 1, Kind::Opus, "de", true, A::None, 1,
-       Lang::De, false, none, off},
-      {"this firmware (schema 4, Auto DJ on in Stay on seed)", true, 4, true, 0, Kind::Mp3, "en", true, A::None, 0,
+      {"0.11.0 (schema 4, Auto DJ never touched)", true, 4, true, 1, Kind::Opus, "de", true, A::Migrate, 1, Lang::De,
+       false, none, off},
+      {"0.11.0 (schema 4, Auto DJ on in Stay on seed)", true, 4, true, 0, Kind::Mp3, "en", true, A::Migrate, 0,
        Lang::En, false, stayOnSeed, stayOnSeedRead},
-      {"this firmware, back from a downgrade to 0.10.0 (schema 4 kept, Auto DJ on)", true, 4, true, 2, Kind::Flac,
-       "pl", true, A::None, 2, Lang::Pl, false, stayOnSeed, stayOnSeedRead},
-      {"this firmware, its picker left without a choice (the tips not seen yet)", true, 4, false, 0, Kind::None,
-       nullptr, false, A::None, 0, Lang::En, true, none, off},
+      {"0.11.0, back from a downgrade to 0.10.0 (schema 4 kept, Auto DJ on)", true, 4, true, 2, Kind::Flac, "pl", true,
+       A::Migrate, 2, Lang::Pl, false, stayOnSeed, stayOnSeedRead},
+      {"0.11.0, its picker left without a choice (the tips not seen yet)", true, 4, false, 0, Kind::None, nullptr,
+       false, A::Migrate, 0, Lang::En, true, none, off},
+      {"this firmware (schema 5, a play log, Auto DJ on)", true, 5, true, 1, Kind::Opus, "de", true, A::None, 1,
+       Lang::De, false, stayOnSeed, stayOnSeedRead, logged, 0x1122334455667788ull},
+      {"this firmware, back from a downgrade to 0.11.0 (schema 5 kept, its play log too)", true, 5, true, 2,
+       Kind::Flac, "pl", true, A::None, 2, Lang::Pl, false, none, off, logged, 0x1122334455667788ull},
+      {"this firmware, its picker left without a choice (no play yet)", true, 5, false, 0, Kind::None, nullptr, false,
+       A::None, 0, Lang::En, true, none, off},
   };
   for (const Unit& u : units) {
     const SchemaStep s = nvslayout::schemaStep(u.haveSchema, u.schema);
@@ -509,6 +586,11 @@ void test_migration_matrix() {
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(u.wantDj.floorPct, dj.floorPct, u.ran);
     TEST_ASSERT_EQUAL_MESSAGE(u.wantDj.matchTempo, dj.matchTempo, u.ran);
     TEST_ASSERT_EQUAL_MESSAGE(u.wantDj.matchKey, dj.matchKey, u.ran);
+    // The play log (app/PlayHistory): migrate(4, 5) writes nothing; no
+    // epoch, the first boot draws one.
+    const nvslayout::PlaysIds ids = nvslayout::playsFrom(u.plays);
+    TEST_ASSERT_EQUAL_UINT64_MESSAGE(u.wantEpoch, ids.epoch, u.ran);
+    if (u.wantEpoch) TEST_ASSERT_EQUAL_UINT32_MESSAGE(u.plays.seq, ids.seq, u.ran);
     QueueResume saved = u.kind == Kind::None ? sample() : anchored();
     saved.anchor.kind = u.kind;
     if (u.kind == Kind::Flac || u.kind == Kind::Opus) {  // the FLAC model: no byte fields
@@ -521,13 +603,15 @@ void test_migration_matrix() {
     assertSame(saved, r);
     TEST_ASSERT_EQUAL_INT_MESSAGE(static_cast<int>(u.kind), static_cast<int>(r.anchor.kind), u.ran);
   }
-  // The downgrade to 0.9.0 (schema 2) from 0.10.0 or this firmware: "newer,
-  // left as it is", every key as 0.9.0 wrote it ("lang" never read:
-  // English). To 0.10.0 (schema 3) from this firmware: the same, "autodj"
-  // never read (no Auto DJ there), and back here it is as it was.
+  // The downgrade to 0.9.0 (schema 2) from 0.10.0 or later: "newer, left
+  // as it is", every key as 0.9.0 wrote it ("lang" never read: English).
+  // To 0.10.0 (schema 3) from 0.11.0: the same, "autodj" never read (no
+  // Auto DJ there). To 0.11.0 (schema 4) from this firmware: the same,
+  // "plays" never read (no play log there); back here each is as it was.
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(nvslayout::schemaStep(true, 3, 2).action));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(nvslayout::schemaStep(true, 4, 2).action));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(nvslayout::schemaStep(true, 4, 3).action));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(nvslayout::schemaStep(true, 5, 4).action));
   // The downgrades from schema 2 (perhaps an Opus anchor),
   // each modelled by the rule that build has: to the queue modes build
   // (schema 2: nothing to do; its reader knew the kinds up to FLAC, so an
@@ -560,11 +644,13 @@ int main(int, char**) {
   RUN_TEST(test_resume_blob_unknown_is_ignored);
   RUN_TEST(test_resume_blob_opus_anchor);
   RUN_TEST(test_resume_blob_unknown_kind_keeps_the_position);
-  RUN_TEST(test_the_schema_is_four);
+  RUN_TEST(test_the_schema_is_five);
   RUN_TEST(test_repeat_from_what_is_saved);
   RUN_TEST(test_language_from_what_is_saved);
   RUN_TEST(test_language_picker_and_its_migration);
   RUN_TEST(test_auto_dj_from_what_is_saved);
+  RUN_TEST(test_the_play_logs_ids_from_what_is_saved);
+  RUN_TEST(test_the_clocks_phase_names);
   RUN_TEST(test_migration_matrix);
   return UNITY_END();
 }

@@ -157,7 +157,8 @@ size_t format(const Facts& f, char* out, size_t size) {
   l.put(stateName(f.state));
   // The keys after state=, each whole or left out: while they would leave
   // bt= under kBtRoom, the last of them gives way, then the one before
-  // (docs/HOST-STATUS.md, "The budget"). cid=<16 hex>.<8 hex>, or '-'.
+  // (docs/HOST-STATUS.md, "The budget"). cid=<16 hex>.<8 hex>, or '-';
+  // clock=ok or unset.
   char cid[sizeof(" cid=") + 16 + 1 + 8] = " cid=";
   size_t cidLen = sizeof(" cid=") - 1;
   if (f.cidKnown) {
@@ -168,8 +169,9 @@ size_t format(const Facts& f, char* out, size_t size) {
   } else {
     cid[cidLen++] = '-';
   }
-  const char* const give[] = {cid};
-  const size_t giveLen[] = {cidLen};
+  const char* const clock = f.clockOk ? " clock=ok" : " clock=unset";
+  const char* const give[] = {cid, clock};
+  const size_t giveLen[] = {cidLen, std::strlen(clock)};
   size_t keep = sizeof(giveLen) / sizeof(giveLen[0]);
   size_t total = 0;
   for (size_t i = 0; i < keep; ++i) total += giveLen[i];

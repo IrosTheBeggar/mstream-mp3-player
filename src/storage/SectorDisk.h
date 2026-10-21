@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "CachedDrive.h"
 #include "SectorCache.h"
 
 // The PSRAM sector cache under FatFs (docs/METADATA.md 3.2.4, 3.2.7;
@@ -114,6 +115,9 @@ Guard guard();
 // The mount's card identity (`last`: the last remount's), for the log:
 // "62333952 sectors, sector 0 CRC 1a2b3c4d, boot sector 8192 CRC ...".
 size_t identityText(char* buf, size_t size, bool last = false);
+// ... as it is: what the format's restart holds the card to
+// (storage/CardFormatter). Invalid without the wrapper, or unread.
+CachedDrive::Identity mountIdentity();
 
 // The free-space count's watch (storage/CardSpace, docs/HOST-STATUS.md):
 // `fn(lba, count, ctx)` for every write FatFs makes through the wrapper,

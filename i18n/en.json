@@ -911,7 +911,8 @@
       "lines": 2,
       "layout": "wrap"
     },
-    "bytes": 160
+    "bytes": 160,
+    "line_bytes": 112
   },
   "now_playing.unknown_artist": "Unknown artist",
   "@now_playing.unknown_artist": {
@@ -3033,7 +3034,8 @@
       }
     },
     "count": "0",
-    "bytes": 256
+    "bytes": 256,
+    "line_bytes": 96
   },
   "queue.clear_confirm_button": "Clear",
   "@queue.clear_confirm_button": {
@@ -3430,6 +3432,193 @@
   "card.unknown_still": "Still can't read it: check it on a computer",
   "@card.unknown_still": {
     "context": "Note after Try again still finds a card that answered but holds nothing it knows (never says 'format it': that would erase music): 'what: what to do'.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "bytes": 128
+  },
+  "format.button": "Format…",
+  "@format.button": {
+    "context": "The second button of the no-card screens (Now Playing, Library, Queue) when a card is in but isn't FAT32 or can't be read (not for 'No microSD card'), and the red button of the format's first question (format.ask_title, format.damaged_title): the second question (format.sure_title) follows.",
+    "room": [
+      {
+        "font": "Body",
+        "px": 112
+      },
+      {
+        "font": "Bold",
+        "else": "Small",
+        "px": 123,
+        "const": "uitext::kDialogButtonTextW"
+      }
+    ],
+    "bytes": 48,
+    "note": "The no-card screen's button has no icon: its whole 112 px."
+  },
+  "format.ask_title": "Format this card?",
+  "@format.ask_title": {
+    "context": "The format's first question: its title, for a card that isn't FAT32 (exFAT, NTFS, GPT) or one the player reads (a computer's @format asked). Cancel and format.button.",
+    "room": {
+      "font": "Bold",
+      "px": 260,
+      "const": "uitext::kDialogTitleW"
+    },
+    "bytes": 96
+  },
+  "format.ask_body": "It becomes an empty FAT32 card for this player. Everything on it is erased, even what the player can't read.",
+  "@format.ask_body": {
+    "context": "The format's first question's body, for a card that isn't FAT32 (exFAT, NTFS, GPT): the whole card is erased, other partitions too, not only what the player shows.",
+    "room": {
+      "font": "Small",
+      "px": 260,
+      "lines": 3,
+      "layout": "wrap"
+    },
+    "bytes": 256,
+    "line_bytes": 96
+  },
+  "format.music_body": "Everything on it is erased: your music, the player's files, and what the player can't read.",
+  "@format.music_body": {
+    "context": "The format's first question's body for a card the player reads (only a computer's @format asks it): its music goes too.",
+    "room": {
+      "font": "Small",
+      "px": 260,
+      "lines": 3,
+      "layout": "wrap"
+    },
+    "bytes": 256,
+    "line_bytes": 96
+  },
+  "format.plan_body": "A transfer to it didn't finish. Everything on it is erased, even what the player can't read.",
+  "@format.plan_body": {
+    "context": "As format.music_body, for a card a computer's transfer (a sync) didn't finish on: said first, so it is never formatted unsaid.",
+    "room": {
+      "font": "Small",
+      "px": 260,
+      "lines": 3,
+      "layout": "wrap"
+    },
+    "bytes": 256,
+    "line_bytes": 96
+  },
+  "format.damaged_title": "Check it on a computer first",
+  "@format.damaged_title": {
+    "context": "The format's first question's title for a card the player can't read (blank, damaged, a FAT that didn't mount, unreadable): a computer's disk check first; formatting is the second, explicit step. Cancel and format.button.",
+    "room": {
+      "font": "Bold",
+      "px": 260,
+      "const": "uitext::kDialogTitleW"
+    },
+    "bytes": 96
+  },
+  "format.damaged_body": "A computer's disk check may save what's on it. Formatting erases it all, even what the player can't read.",
+  "@format.damaged_body": {
+    "context": "Under format.damaged_title: why a computer first, and what formatting does.",
+    "room": {
+      "font": "Small",
+      "px": 260,
+      "lines": 3,
+      "layout": "wrap"
+    },
+    "bytes": 256,
+    "line_bytes": 96
+  },
+  "format.sure_title": "Erase the whole card?",
+  "@format.sure_title": {
+    "context": "The format's second question (after format.button in the first): its title. Its red button is format.sure_button, on the left (where the first's Cancel was), answered only by holding it 2 s (format.hold_hint); Cancel on the right.",
+    "room": {
+      "font": "Bold",
+      "px": 260,
+      "const": "uitext::kDialogTitleW"
+    },
+    "bytes": 96
+  },
+  "format.sure_body": "This can't be undone. The player restarts and formats the {0} GB card: leave it in until it's back.",
+  "@format.sure_body": {
+    "context": "The format's second question's body: the player restarts and formats the card at its boot (a progress bar on the start-up screen).",
+    "room": {
+      "font": "Small",
+      "px": 260,
+      "lines": 3,
+      "layout": "wrap"
+    },
+    "placeholders": {
+      "0": {
+        "means": "the card's size in GB",
+        "type": "decimal",
+        "worst": 2199.0,
+        "places": 1
+      }
+    },
+    "bytes": 256,
+    "line_bytes": 96
+  },
+  "format.sure_button": "Hold to erase",
+  "@format.sure_button": {
+    "context": "The format's second question's red button, saying how it is answered: held 2 s (it fills from the left meanwhile; a tap does nothing but turn format.hold_hint amber), the card is erased (formatted at the restart). The button is outlined: its room keeps the label 6 px clear inside the outline.",
+    "room": {
+      "font": "Bold",
+      "else": "Small",
+      "px": 115,
+      "const": "uitext::kDialogHoldTextW"
+    },
+    "bytes": 48
+  },
+  "format.hold_hint": "Hold the red button for 2 seconds",
+  "@format.hold_hint": {
+    "context": "The format's second question's hint, a line of its own under the body from the moment it opens (in the body's colour), amber once a tap on its red button (format.sure_button), or a hold let go or slid off before its end, did nothing: only a finger kept on it 2 s answers it (the button fills meanwhile).",
+    "room": {
+      "font": "Small",
+      "px": 260
+    },
+    "bytes": 96
+  },
+  "format.restarting": "Restarting to format the card",
+  "@format.restarting": {
+    "context": "Note after the format's second question's Format: the player restarts at once (a second or three).",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "bytes": 128
+  },
+  "format.boot_title": "Formatting the card",
+  "@format.boot_title": {
+    "context": "The start-up screen while the card is formatted (under the logo and the version, over a progress bar): seconds on a small card, a few minutes on a big one.",
+    "room": {
+      "font": "Bold",
+      "px": 304
+    },
+    "note": "Drawn on the start-up screen before the UI starts: the language is set before it."
+  },
+  "format.boot_line": "Leave the card in and the player on",
+  "@format.boot_line": {
+    "context": "The start-up screen's last line while the card is formatted (in the rescue line's place, boot.touch_hint).",
+    "room": {
+      "font": "Small",
+      "px": 304
+    },
+    "note": "Drawn on the start-up screen before the UI starts."
+  },
+  "format.done": "Card formatted: ready for your music",
+  "@format.done": {
+    "context": "Note at the first screen after the player formatted the card (6 s): an empty FAT32 card with /music.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "bytes": 128
+  },
+  "format.failed": "Couldn't format the card: try again",
+  "@format.failed": {
+    "context": "Note (amber) at the first screen after a format that failed (the card was pulled, refused a write, or another card was in): its Format is on the no-card screen again.",
     "room": {
       "font": "Body",
       "px": 284,
@@ -4318,7 +4507,8 @@
       "lines": 3,
       "layout": "wrap"
     },
-    "bytes": 256
+    "bytes": 256,
+    "line_bytes": 96
   },
   "settings.cpu_dialog_body_160": "Saves a little battery; lists scroll at half speed while music plays. Music pauses and picks up at the same second.",
   "@settings.cpu_dialog_body_160": {
@@ -4329,7 +4519,8 @@
       "lines": 3,
       "layout": "wrap"
     },
-    "bytes": 256
+    "bytes": 256,
+    "line_bytes": 96
   },
   "settings.cpu_restart": "Restart",
   "@settings.cpu_restart": {
@@ -4547,7 +4738,8 @@
       "lines": 3,
       "layout": "wrap"
     },
-    "bytes": 256
+    "bytes": 256,
+    "line_bytes": 96
   },
   "settings.cal_remove": "Remove",
   "@settings.cal_remove": {
@@ -4873,7 +5065,8 @@
       "lines": 3,
       "layout": "wrap"
     },
-    "bytes": 256
+    "bytes": 256,
+    "line_bytes": 96
   },
   "library_row.rescan_started": "Reading the tags again",
   "@library_row.rescan_started": {
@@ -5346,6 +5539,7 @@
       "layout": "wrap"
     },
     "bytes": 256,
+    "line_bytes": 96,
     "note": "'Pair new headphones' names the Output tab's row (output.pair_new)."
   },
   "bt.forget_button": "Forget",
@@ -5659,7 +5853,8 @@
         "worst": "WH-1000XM4"
       }
     },
-    "bytes": 256
+    "bytes": 256,
+    "line_bytes": 96
   },
   "pair.confirm_body_unnamed": "It replaces the headphones paired now once it's connected; if pairing fails, they stay.",
   "@pair.confirm_body_unnamed": {
@@ -5670,7 +5865,8 @@
       "lines": 3,
       "layout": "wrap"
     },
-    "bytes": 256
+    "bytes": 256,
+    "line_bytes": 96
   },
   "pair.confirm_button": "Pair",
   "@pair.confirm_button": {
@@ -6967,7 +7163,8 @@
         "worst": 95
       }
     },
-    "bytes": 160
+    "bytes": 160,
+    "line_bytes": 96
   },
   "check.verdict_left": "Taps land about {0} px to the left of your finger.",
   "@check.verdict_left": {
@@ -6986,7 +7183,8 @@
         "worst": 95
       }
     },
-    "bytes": 160
+    "bytes": 160,
+    "line_bytes": 96
   },
   "check.verdict_below": "Taps land about {0} px below your finger.",
   "@check.verdict_below": {
@@ -7005,7 +7203,8 @@
         "worst": 95
       }
     },
-    "bytes": 160
+    "bytes": 160,
+    "line_bytes": 96
   },
   "check.verdict_above": "Taps land about {0} px above your finger.",
   "@check.verdict_above": {
@@ -7024,7 +7223,8 @@
         "worst": 95
       }
     },
-    "bytes": 160
+    "bytes": 160,
+    "line_bytes": 96
   },
   "check.verdict_unknown": "Taps land away from your finger.",
   "@check.verdict_unknown": {
@@ -7036,7 +7236,8 @@
       "layout": "wrap",
       "const": "uitext::kCalLineW"
     },
-    "bytes": 160
+    "bytes": 160,
+    "line_bytes": 96
   },
   "check.ask": "Calibrate now?",
   "@check.ask": {
@@ -7249,7 +7450,8 @@
       "lines": 2,
       "layout": "wrap"
     },
-    "bytes": 192
+    "bytes": 192,
+    "line_bytes": 96
   },
   "dialog.lost_body_named": "{0}: paused, so the speaker doesn't suddenly play out loud.",
   "@dialog.lost_body_named": {
@@ -7267,7 +7469,8 @@
         "worst": "WH-1000XM4"
       }
     },
-    "bytes": 192
+    "bytes": 192,
+    "line_bytes": 96
   },
   "dialog.lost_body_headphones": "Headphones: paused, so the speaker doesn't suddenly play out loud.",
   "@dialog.lost_body_headphones": {
@@ -7278,7 +7481,8 @@
       "lines": 2,
       "layout": "wrap"
     },
-    "bytes": 192
+    "bytes": 192,
+    "line_bytes": 96
   },
   "dialog.lost_trying": "Trying to reconnect: try {0} of {1}",
   "@dialog.lost_trying": {
@@ -7401,7 +7605,8 @@
       "lines": 3,
       "layout": "wrap"
     },
-    "bytes": 192
+    "bytes": 192,
+    "line_bytes": 96
   },
   "dialog.failed_body_named": "{0}: on, out of the case, and not connected to your phone?",
   "@dialog.failed_body_named": {
@@ -7419,7 +7624,8 @@
         "worst": "WH-1000XM4"
       }
     },
-    "bytes": 192
+    "bytes": 192,
+    "line_bytes": 96
   },
   "dialog.failed_body_headphones": "the headphones: on, out of the case, and not connected to your phone?",
   "@dialog.failed_body_headphones": {
@@ -7430,7 +7636,8 @@
       "lines": 3,
       "layout": "wrap"
     },
-    "bytes": 192
+    "bytes": 192,
+    "line_bytes": 96
   },
   "dialog.failed_try_again": "Try again",
   "@dialog.failed_try_again": {

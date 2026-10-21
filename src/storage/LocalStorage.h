@@ -4,8 +4,10 @@
 #pragma once
 #include <FS.h>
 
+#include "CachedDrive.h"
 #include "CardFormat.h"
 #include "hal/IStorage.h"
+#include "storage/CardFormatter.h"
 
 // The player's local storage: the SD card if one is inserted, otherwise the
 // LittleFS partition on internal flash (test audio flashed with
@@ -21,6 +23,11 @@
 // no records, and the console's bench.
 class LocalStorage : public IStorage {
 public:
+  // Before begin(), at the boot: a format the listener confirmed before
+  // the restart carried out (storage/CardFormatter: docs/HOST-STATUS.md,
+  // "@format"), the card on the SD's pins and SPI; nothing when none was
+  // asked. `progress`: each new percent (the boot screen's bar).
+  cardformatter::Outcome formatIfAsked(cardformatter::Progress progress, void* ctx);
   bool begin() override;
   bool available() const override { return fs_ != nullptr; }
 
@@ -59,6 +66,10 @@ public:
   // (docs/HOST-STATUS.md) names an exFAT card's size too.
   bool cardAnswered() const { return cardAnswered_; }
   uint64_t unmountedBytes() const { return unmountedBytes_; }
+  // ... and its identity then (CachedDrive's: its size, the CRCs of sector
+  // 0 and of its first partition's first sector; invalid when they
+  // couldn't be read): what the format's restart holds the card to.
+  const CachedDrive::Identity& unmountedIdentity() const { return unmountedId_; }
   // The storage's size in bytes (0: none), for About: the card's (its
   // CSD's sector count, kept since the mount) or the flash partition's.
   // Never reads the card or takes its lock (not SD.totalBytes(), a hidden
@@ -78,6 +89,7 @@ private:
   cardformat::Kind cardKind_ = cardformat::Kind::Unreadable;
   bool cardAnswered_ = false;
   uint64_t unmountedBytes_ = 0;
+  CachedDrive::Identity unmountedId_;
 
   // SD.begin() failed: the card's sectors 0 (and its type 0x07 partition's
   // first), read raw, into cardKind_ (and cardAnswered_, unmountedBytes_).

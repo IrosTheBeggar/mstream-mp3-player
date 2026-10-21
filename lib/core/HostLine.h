@@ -106,5 +106,6 @@ bool splitHostLine(char* line, HostFields* out);
 // The protocol's numbers (docs/USB-VISUALIZER.md "Fields"), strictly: no
 // spaces, no '+', no hex, no nan or inf. False: not one, or out of range.
 bool parseHostU32(const char* s, uint32_t* out);  // [0-9]+, at most 4294967295
+bool parseHostU64(const char* s, uint64_t* out);  // [0-9]+, at most 18446744073709551615
 bool parseHostI32(const char* s, int32_t* out);   // -?[0-9]+
 bool parseHostF32(const char* s, float* out);     // -?[0-9]+(\.[0-9]*)?([eE][-+]?[0-9]+)?, finite as a float
