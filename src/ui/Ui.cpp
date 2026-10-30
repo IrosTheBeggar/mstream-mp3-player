@@ -1401,8 +1401,11 @@ void Ui::loop(uint32_t nowMs) {
 // ("[ui] rail scrub: ...": the band frames, then the frames of the rail
 // alone between them).
 void Ui::trackMotion(uint32_t nowMs) {
+  // (Under a modal the page draws no frame, so a motion ends there: a
+  // fling stopped by a finger on the rail that then opened the jump grid
+  // logged 46 s of "rail scrub" on the device, the grid's whole stay.)
   const bool rail = list_.attached() && list_.railTouch();
-  const bool moving = page_ && (page_->animating() || rail);
+  const bool moving = page_ && !modalUp() && (page_->animating() || rail);
   if (moving && !motion_.on) {
     motion_ = Motion{};
     motion_.on = true;
