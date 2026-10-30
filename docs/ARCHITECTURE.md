@@ -851,7 +851,10 @@ out what it returns.
   runs inquiry rounds back to back and lists every audio device (class of
   device: the rendering service or the Audio/Video major class; the name
   from the result or its EIR) into a `BtScanList` in PSRAM, under a
-  spinlock, connecting to none (the library would connect to the first
+  spinlock (its version, which the Pair page polls, moves only when what
+  the list shows changed: a device came, a name or a kind, a signal
+  crossed a bars step; every result moved it until 0.12.0, and the page
+  drew its whole list again several times a second), connecting to none (the library would connect to the first
   that matches), while the background search is held off (the Pair page
   stops it after 2 min, `PairSearch`, checked every UI pass so a dialog
   over the page doesn't keep it running, or when the screen goes off; it
@@ -1294,7 +1297,13 @@ happens during a session: its epochs are the computer's alone.)
   and the clock's state in place of the output latency.
 - **Cost.** Internal RAM: the serial receive buffer 256 B -> 1 KB (set
   before `M5.begin()`), the line buffer 256 B, `HostLink`/`HostClock` about
-  0.6 KB: about 1.6 KB in all. No `IRAM_ATTR`.
+  0.6 KB: about 1.6 KB in all. No `IRAM_ATTR`. Since 0.12.0 a 2 KB
+  **transmit buffer** too (`Serial.setTxBufferSize()`, before
+  `M5.begin()`): without one every print blocked the loop until its
+  bytes were in the UART's 128-byte FIFO, 87 us a byte, so a tap's two
+  `[touch]` lines and its `[ui] library: play ...` held the loop 20-30 ms
+  in the middle of frames; now the UART's interrupt drains the buffer and
+  a print waits only once 180 ms of output is queued.
 - **The reference sender** (`tools/usb_viz.py`, Python 3 + pyserial): a
   float32 port of `HopFrontEnd` and `ClickGen` (bit-exact on
   `test/test_hop_feed/hop_golden.h`, which `--selftest` checks), the session
@@ -2908,7 +2917,12 @@ Queue, Dance and Output (with its Pair and About pages).
   on the page (the headphones' drop dialog) ends that touch for the page (a
   Cancel), so its lift can't act or draw under it. When a toast goes, the
   header row it covered is drawn again (`Ui::uncover()`); a page with no
-  header (Now Playing, the Dance tab) draws all of itself for that, so every
+  header (Now Playing, the Dance tab) draws that row alone too since
+  0.12.0 (`repaintHeader()` overrides: Now Playing's top fills, the title
+  strip's and the cover's rows in it, from the cover's sprite as drawn;
+  the Dance tab's rows above its box and panels, the box's own, its two
+  top panels; each used to draw all of itself, ~40 and ~50 ms a toast),
+  and every
   sheet up over it (the "..." sheet, the Sleep timer sheet, the volume
   sheet) is drawn again after it (found on the device: the fade toast's
   +10 min over the Sleep timer sheet left the sheet up and live but unseen,
@@ -2976,8 +2990,22 @@ Queue, Dance and Output (with its Pair and About pages).
   that brings it on screen only pushes it. Drags and flings then drew in
   2-5 ms a frame on average, 10-25 ms at most; only very fast drags (over
   ~3,000 px/s, two new rows in one frame) still have one frame of 35-55
-  ms. `ui` counts the rows rendered ahead. The band can
-  be **shorter** (`Ui::setListBand()`: the Queue's selection mode, 72-197):
+  ms. `ui` counts the rows rendered ahead. **What changes in place stays
+  in place** (0.12.0, from the device's `ui` loop costs): a track change
+  draws again only the rows on screen whose mark changes (the Library:
+  usually none; the Queue: the one that played and the one that plays,
+  the whole band only for a jump), a failed track's "!" its Queue row, an
+  overlay's end pushes the rows as rendered without rendering them again
+  (`ListView::redraw()` through `Ui::repaintList()`, unless a cover
+  arrived under it), and the Output page's spinners push their patch
+  alone (`ListView::pushOnRow()`, `ListScroller::pushRectAtScreen()`,
+  through the scroll mapping: ~0.3 ms instead of a row rendered and
+  pushed whole, ~11 ms, 8 times a second). The band can
+  be **shorter** (`Ui::setListBand()`: the Queue's selection mode, 72-197;
+  the Library's status line, 72-219, set in `Ui::showTop()` before the
+  page's first frame since 0.12.0: it came a pass later, a second full
+  band draw and a flash at every Library open while the card worker had
+  something to say, 34 + 45 ms MEASURED):
   the LCD's scroll area is defined again with a bottom fixed area
   (VSCRDEF's BFA), so a bar under the list (198-239) stays put while the
   list scrolls; the rail's pushes stop at the band's end. An **empty list**
@@ -3653,7 +3681,13 @@ Queue, Dance and Output (with its Pair and About pages).
   a 5:20 LAME VBR track 15 s in, and 3:30 for a 3:13 FLAC.)
 - **Console** `ui`: each tab's stack with scroll positions, the list's state,
   frames and fps, the governor, the UI's bus holds (count, mean, max), the
-  overlays, the covers (above) and the loop task's stack never used since
+  overlays, the covers (above), **what a loop pass costs** since the last
+  `ui` (`[ui] loop: N passes, mean, longest (snapshot, tab bar, page,
+  status, covers at most); the longest event`; a pass or a glass event
+  over 35 ms logs itself as it happens, `[ui] slow pass ... on <page>:
+  a frame N us, snapshot, tab bar, status, covers` / `[ui] slow event
+  tap at x,y: N us`, so a page's open or a redraw that takes too long
+  shows up without a motion) and the loop task's stack never used since
   the boot ("The loop task's stack", above). `ui0`-`ui4`
   tap a tab, `uib` goes back, `uic` shows the coach cards, `uiL` lists the
   languages and `uiL<tag>` uses one (`uiL-` forgets it and the tips: the
