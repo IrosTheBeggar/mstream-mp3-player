@@ -141,9 +141,11 @@ public:
   // libraryChanged() follows.
   void libraryUpdating();
   // ---- for the card worker (app/CardTasks, ScanScheduler's inputs) ----
-  // A list moves (the page's animating(): a drag, a fling, a snap). None
-  // while its page draws no frame: the screen dark, identify()'s banner, a
-  // modal over it (loop() draws the page under none of them). The page
+  // A list moves (the page's animating(): a drag, a fling, a snap), or a
+  // finger is on a list's A-Z rail (ListView::railTouch(): a scrub, whose
+  // every position is a band drawn whole, or resting on it before one).
+  // None while its page draws no frame: the screen dark, identify()'s
+  // banner, a modal over it (loop() draws the page under none of them). The page
   // then owes its list's frame to the wake, or to the modal's end (a
   // reload in the dark leaves the list "animating" until then, and so does
   // a fling a dialog that opened by itself caught: the headphones lost, a
@@ -151,7 +153,8 @@ public:
   // save 260 s with the screen off. (ScanScheduler::listHolds() holds
   // nothing for one in the dark either.)
   bool listMoving() const {
-    return started_ && !suspended_ && !dark_ && !identifying_ && !modalUp() && page_ && page_->animating();
+    return started_ && !suspended_ && !dark_ && !identifying_ && !modalUp() && page_ &&
+           (page_->animating() || (railHold_ && list_.attached() && list_.railTouch()));
   }
   // A cover may be made now: the UI is up and lit.
   bool coversAllowed() const { return started_ && !suspended_ && !dark_ && !identifying_; }
@@ -489,16 +492,25 @@ private:
   uint32_t framesWindowStart_ = 0;
   uint32_t framesInWindow_ = 0;
   float fps_ = 0;
+  // A finger on the A-Z rail holds the card worker (listMoving()); off with
+  // the scrub's pacing (console uir0: as before 0.12.0, to compare by hand).
+  bool railHold_ = true;
   // The list's current motion, for its "[ui] scroll:" line (a page without
-  // a list, Now Playing's seek bar: "[ui] scrub:").
+  // a list, Now Playing's seek bar: "[ui] scrub:"; a finger on the A-Z
+  // rail: "[ui] rail scrub:", its band frames and its rail-only frames
+  // apart).
   struct Motion {
     bool on = false;
     bool list = false;  // a list moved (else a page's own animation: a scrub)
+    bool rail = false;  // a finger was on the list's A-Z rail
     uint32_t startMs = 0;
-    uint32_t frames = 0;
+    uint32_t frames = 0;    // band frames (every frame of a scroll)
     uint64_t sumUs = 0;
     uint32_t maxUs = 0;
     uint32_t slow = 0;      // frames over kSlowFrameUs
+    uint32_t railFrames = 0;  // a scrub's frames of the rail alone
+    uint64_t railSumUs = 0;
+    uint32_t railMaxUs = 0;
     uint32_t ringMin = 0;
     uint32_t underruns = 0;
   } motion_;

@@ -1353,10 +1353,17 @@ void Ui::loop(uint32_t nowMs) {
     ++framesInWindow_;
     if (motion_.on) {
       const uint32_t us = micros() - t0;
-      ++motion_.frames;
-      motion_.sumUs += us;
-      if (us > motion_.maxUs) motion_.maxUs = us;
-      if (us > kSlowFrameUs) ++motion_.slow;
+      if (list_.attached() && list_.lastFrame().kind == ListView::FrameCost::Kind::Rail) {
+        // A scrub's frame of the rail alone (ScrubPacer): counted apart.
+        ++motion_.railFrames;
+        motion_.railSumUs += us;
+        if (us > motion_.railMaxUs) motion_.railMaxUs = us;
+      } else {
+        ++motion_.frames;
+        motion_.sumUs += us;
+        if (us > motion_.maxUs) motion_.maxUs = us;
+        if (us > kSlowFrameUs) ++motion_.slow;
+      }
       if (us > 50000 && list_.attached()) {
         const ListView::FrameCost& fc = list_.lastFrame();
         Serial.printf("[ui] slow frame %lu us: offset %ld to %ld, %lu items rendered in %lu us\n", (unsigned long)us,
@@ -1389,9 +1396,16 @@ void Ui::loop(uint32_t nowMs) {
 // long they took to draw, the audio ring's low point and new underruns are
 // logged when it settles ("[ui] scroll: ..."), the numbers the scroll lab
 // printed for its stress runs. So is any other page that animates (Now
-// Playing while a finger scrubs its seek bar: "[ui] scrub: ...").
+// Playing while a finger scrubs its seek bar: "[ui] scrub: ..."), and a
+// finger on a list's A-Z rail, from its landing to the band's last catch-up
+// ("[ui] rail scrub: ...": the band frames, then the frames of the rail
+// alone between them).
 void Ui::trackMotion(uint32_t nowMs) {
-  const bool moving = page_ && page_->animating();
+  // (Under a modal the page draws no frame, so a motion ends there: a
+  // fling stopped by a finger on the rail that then opened the jump grid
+  // logged 46 s of "rail scrub" on the device, the grid's whole stay.)
+  const bool rail = list_.attached() && list_.railTouch();
+  const bool moving = page_ && !modalUp() && (page_->animating() || rail);
   if (moving && !motion_.on) {
     motion_ = Motion{};
     motion_.on = true;
@@ -1401,17 +1415,29 @@ void Ui::trackMotion(uint32_t nowMs) {
     motion_.ringMin = UINT32_MAX;
   }
   if (!motion_.on) return;
+  if (rail) motion_.rail = true;
   if (state_.ringMatters && state_.ringMs < motion_.ringMin) motion_.ringMin = state_.ringMs;
   if (moving) return;
   motion_.on = false;
   const uint32_t ms = nowMs - motion_.startMs;
-  if (motion_.frames < 2) return;  // a tap's highlight, not a scroll
+  if (motion_.frames + motion_.railFrames < 2) return;  // a tap's highlight, not a scroll
   char ring[24] = "n/a (not playing)";
   if (motion_.ringMin != UINT32_MAX) snprintf(ring, sizeof(ring), "%lu ms", (unsigned long)motion_.ringMin);
+  const float meanMs = motion_.frames ? motion_.sumUs / 1000.0f / motion_.frames : 0.0f;
+  if (motion_.rail) {
+    Serial.printf("[ui] rail scrub: %lu ms, %lu band frames (%.1f a second; draw mean %.1f max %.1f ms, %lu over 35), "
+                  "%lu rail frames (mean %.1f max %.1f ms), ring min %s, underruns +%lu, governor %s\n",
+                  (unsigned long)ms, (unsigned long)motion_.frames, ms ? motion_.frames * 1000.0f / ms : 0.0f, meanMs,
+                  motion_.maxUs / 1000.0f, (unsigned long)motion_.slow, (unsigned long)motion_.railFrames,
+                  motion_.railFrames ? motion_.railSumUs / 1000.0f / motion_.railFrames : 0.0f,
+                  motion_.railMaxUs / 1000.0f, ring, (unsigned long)(state_.underruns - motion_.underruns),
+                  ScrollGovernor::name(budget_.level));
+    return;
+  }
   Serial.printf("[ui] %s: %lu ms, %lu frames (%.1f fps), draw mean %.1f max %.1f ms (%lu over 35), ring min %s, underruns +%lu, "
                 "governor %s\n",
                 motion_.list ? "scroll" : "scrub", (unsigned long)ms, (unsigned long)motion_.frames,
-                ms ? motion_.frames * 1000.0f / ms : 0.0f, motion_.sumUs / 1000.0f / motion_.frames, motion_.maxUs / 1000.0f, (unsigned long)motion_.slow, ring,
+                ms ? motion_.frames * 1000.0f / ms : 0.0f, meanMs, motion_.maxUs / 1000.0f, (unsigned long)motion_.slow, ring,
                 (unsigned long)(state_.underruns - motion_.underruns), ScrollGovernor::name(budget_.level));
 }
 
@@ -2073,6 +2099,18 @@ void Ui::command(const char* a) {
   if (dark_) host_.wakeScreen("console ui");  // drawn again on the wake
   if (a[0] >= '0' && a[0] <= '4' && !a[1]) {
     tapTab(static_cast<NavModel::Tab>(a[0] - '0'));  // as a tap on that tab (again: to its root)
+  } else if (a[0] == 'r') {
+    // uir0 / uir1: the rail scrub as before 0.12.0 (every position a band
+    // draw at once, the card worker not held) / paced; uir: which.
+    if (a[1] == '0' || a[1] == '1') {
+      railHold_ = a[1] == '1';
+      list_.setScrubPacing(railHold_);
+    }
+    Serial.printf("[ui] rail scrub: %s\n",
+                  railHold_ ? "paced (the rail follows the finger on every frame, the band at ScrubPacer's cadence; "
+                              "the card worker is held while a finger is on the rail)"
+                            : "every position a band draw at once, the card worker not held (as before 0.12.0)");
+    return;
   } else if (a[0] == 'b') {
     back();
   } else if (a[0] == 'c') {

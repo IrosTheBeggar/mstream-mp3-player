@@ -10,6 +10,7 @@
 #include "KineticScroll.h"
 #include "ListLayout.h"
 #include "NavModel.h"
+#include "ScrubPacer.h"
 #include "UiStrings.h"
 #include "ui/EmptyState.h"
 #include "ui/Fonts.h"
@@ -46,7 +47,15 @@
 //     pushed full width over it), and drawn again when it settles, or at
 //     once when a finger lands on the rail (x 280 to the edge). A drag on it
 //     scrubs (a tick per new letter; resting on it first is no hold); a tap
-//     opens the jump grid (the RailHost's: the Ui's overlay).
+//     opens the jump grid (the RailHost's: the Ui's overlay). Every position
+//     a scrub asks for is a jump, the band drawn whole (50-78 ms on the
+//     device, 80-110 with an MP3 playing: a 695-artist list moves five rows
+//     a pixel of finger), so the band follows at ScrubPacer's cadence (at
+//     once when the finger rests) and the rail alone, the thumb and its
+//     letter, follows the finger on every frame between (a few ms). While
+//     a finger is on the rail (railTouch()) the card worker is held as for
+//     a moving list (Ui::listMoving()): no cover, no slice of the walk or
+//     the scan reads the card under the scrub.
 //
 // A move is drawn in steps of at most kMaxStep lines a frame, the hardware
 // scroll's one-hold step: a finger faster than that (over ~2,500 px/s at
@@ -233,6 +242,14 @@ public:
   bool update(uint32_t nowMs, bool frameDue, bool wholeRows);
   // Moving, or owing a frame: the UI keeps its frame cadence.
   bool animating() const;
+  // A finger is on the A-Z rail: scrubbing, or resting on it to read the
+  // letter (it still scrubs when it slides). The card worker is held
+  // meanwhile, as for a moving list.
+  bool railTouch() const { return src_ && touchOn_ == TouchOn::Rail; }
+  // The scrub's pacing (ScrubPacer) off: every position a band draw at
+  // once, as before 0.12.0 (console uir0, to compare by hand).
+  void setScrubPacing(bool on) { pacing_ = on; }
+  bool scrubPacing() const { return pacing_; }
   // Between frames while the list moves: the item just past the edge it
   // moves toward, rendered into a spare slot now, so the frame that
   // brings it on screen only pushes it. On the device a row's render
@@ -252,8 +269,11 @@ public:
   const ListLayout& layout() const { return layout_; }
   const KineticScroll& scroll() const { return scroll_; }
   uint32_t framesDrawn() const { return frames_; }
-  // The last frame's items rendered, the time that took, and its move.
+  // The last frame's items rendered, the time that took, and its move; or
+  // a scrub's frame of the rail alone (Kind::Rail: no items, no move).
   struct FrameCost {
+    enum class Kind : uint8_t { Band, Rail };
+    Kind kind = Kind::Band;
     uint32_t renders = 0, renderUs = 0;
     int32_t from = 0, to = 0;
   };
@@ -309,7 +329,9 @@ private:
   void drawRailSprite(int32_t off);
   void hideRail();
   void showRail(int32_t off);
-  void scrub(int y);
+  // The rail alone, for `off` (a scrub's frame between band draws).
+  void pushRail(int32_t off);
+  void scrub(uint32_t ms, int y);
   void drawEmpty();
   void saveRef();
   // ListScroller::Painter
@@ -336,7 +358,10 @@ private:
   bool railWanted_ = false;  // the rail should be on screen this pass
   bool railUp_ = false;      // it is
   bool railDue_ = false;     // prepareFixed() rendered it: pushFixed() pushes it
+  int32_t railOffset_ = -1;  // the offset the rail on screen was drawn for (-1: not up)
   int railKeyShown_ = -1;    // the scrub's last letter (a tick at each new one)
+  ScrubPacer pacer_;         // a scrub: when the band follows the finger
+  bool pacing_ = true;       // ... or at every position (uir0)
   int32_t pressedItem_ = -1;
   int pressedButton_ = -1;
   int pressedX_ = -1;       // the finger on the pressed row

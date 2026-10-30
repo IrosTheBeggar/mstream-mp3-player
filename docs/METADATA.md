@@ -2617,7 +2617,7 @@ back-to-back steps would halve the loop's share for minutes. So:
 **Before each step, in order:**
 
 1. A cover job is waiting: do it first.
-2. A list is moving: start nothing.
+2. A list is moving (or a finger is on its A-Z rail): start nothing.
 3. The PCM ring is below 50%: wait.
 4. An underrun since the last step: back off 30 s.
 5. The track-change window, from the decoder's end of file on track N
@@ -3185,8 +3185,12 @@ where 3.3.3-3.3.5 left room:
   one can't come back 24.8 days later (a device on USB for weeks).
 - **The glue's inputs (N10):** `listMoving` is the page's `animating()`
   (none while the page draws no frame: the screen dark, a modal over it,
-  since 2026-10-14);
-  `input` is `stepIdle()`'s; the ring and the underruns are the backend's
+  since 2026-10-14), or a finger on the list's A-Z rail (a scrub, or
+  resting on it: since 2026-10-30, when the walk and the covers were found
+  running under every scrub on a 19,478-track card);
+  `input` is `stepIdle()`'s, or `listMoving` (so the walk, the scan and a
+  compaction wait the input's 500 ms of quiet after a fling comes to
+  rest too); the ring and the underruns are the backend's
   `bufferedMsNow()` and `underrunsNow()`; `decodePassUs` needs a peak the
   decode task raises after each pass and the loop takes (swapped to 0);
   `decoderAtEnd` and `trackSeq` are the backend's join state and heard

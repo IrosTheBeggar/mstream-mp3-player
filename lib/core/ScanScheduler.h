@@ -22,7 +22,8 @@
 //   1. The update step's build, at priority 1 (the loop's): the listener
 //      waits for it behind the "Updating library" fence. Nothing here holds
 //      it: LibraryUpdate's safe point decides when it is asked (N12).
-//   2. A list is moving (on a lit screen: listHolds()): nothing else
+//   2. A list is moving (on a lit screen: listHolds()), or a finger is on
+//      its A-Z rail (a scrub, or resting on it before one): nothing else
 //      starts, covers included (Thumbs' rule).
 //   3. A cover, at priority 1, dropped to 0 while a list moves under it
 //      (Thumbs' rule): rows on screen come first (3.3.3, 0). The audio's
@@ -174,8 +175,10 @@ public:
     bool shownPending = false;      // one in the album or folder the Library tab shows
     bool restPending = false;       // D's to-do has one (canonical order)
     // ---- the UI ----
-    bool listMoving = false;  // a list scrolls, flings or follows a finger (Page::animating()); none while `dark`
-    bool input = false;       // any input this pass (a touch, a button, PWR, a headphone key, the console)
+    bool listMoving = false;  // a list scrolls, flings or follows a finger (Page::animating()), or a finger is on
+                              // its A-Z rail (Ui::listMoving()); none while `dark`
+    bool input = false;       // any input this pass (a touch, a button, PWR, a headphone key, the console; a
+                              // list moving counts, so the quiet window follows a fling's end)
     bool dark = false;        // the screen is dark: nothing to draw (a scan's slice, a compaction, the save at 1)
     // ---- the audio ----
     bool playing = false;         // the player is Playing: audio should flow
