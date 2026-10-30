@@ -492,6 +492,22 @@ private:
   uint32_t framesWindowStart_ = 0;
   uint32_t framesInWindow_ = 0;
   float fps_ = 0;
+  // What a loop pass costs (console ui, then counted again): the longest
+  // pass and event, each part's longest, the mean pass; a pass or an
+  // event over kSlowPassUs is logged as it happens ("[ui] slow pass").
+  struct PassCost {
+    uint32_t passes = 0;
+    uint64_t passSumUs = 0;
+    uint32_t passMaxUs = 0;
+    uint32_t snapshotMaxUs = 0;
+    uint32_t tabMaxUs = 0;
+    uint32_t pageMaxUs = 0;    // the page's update(), a frame or not
+    uint32_t statusMaxUs = 0;
+    uint32_t thumbsMaxUs = 0;
+    uint32_t eventMaxUs = 0;   // onEvent(), the glass
+    InputEvent::Type eventMaxType = InputEvent::Type::None;
+  };
+  mutable PassCost cost_;  // (printState() is const: it prints and counts again)
   // A finger on the A-Z rail holds the card worker (listMoving()); off with
   // the scrub's pacing (console uir0: as before 0.12.0, to compare by hand).
   bool railHold_ = true;

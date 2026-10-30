@@ -1223,10 +1223,46 @@ static constexpr uint32_t kAheadMinMs = 15;
 // A frame longer than this missed the 30 fps cadence (counted per motion).
 static constexpr uint32_t kSlowFrameUs = 35000;
 
+// A pass or an event longer than this is logged with its parts.
+static constexpr uint32_t kSlowPassUs = 35000;
+
 void Ui::loop(uint32_t nowMs) {
   nowMs_ = nowMs;
   if (!started_ || suspended_) return;
+  const uint32_t passT0 = micros();
+  uint32_t snapshotUs = 0, tabUs = 0, pageUs = 0, statusUs = 0, thumbsUs = 0;
+  bool frame = false;
+  // The pass's parts, and the whole, on the way out.
+  struct Timed {
+    Ui& ui;
+    uint32_t t0;
+    uint32_t& snapshotUs;
+    uint32_t& tabUs;
+    uint32_t& pageUs;
+    uint32_t& statusUs;
+    uint32_t& thumbsUs;
+    bool& frame;
+    ~Timed() {
+      const uint32_t us = micros() - t0;
+      PassCost& c = ui.cost_;
+      ++c.passes;
+      c.passSumUs += us;
+      c.passMaxUs = std::max(c.passMaxUs, us);
+      c.snapshotMaxUs = std::max(c.snapshotMaxUs, snapshotUs);
+      c.tabMaxUs = std::max(c.tabMaxUs, tabUs);
+      c.pageMaxUs = std::max(c.pageMaxUs, pageUs);
+      c.statusMaxUs = std::max(c.statusMaxUs, statusUs);
+      c.thumbsMaxUs = std::max(c.thumbsMaxUs, thumbsUs);
+      if (us > kSlowPassUs) {
+        Serial.printf("[ui] slow pass %lu us on %s: %s %lu us, snapshot %lu, tab bar %lu, status %lu, covers %lu\n",
+                      (unsigned long)us, ui.page_ ? ui.page_->name() : "no page", frame ? "a frame" : "the page (no frame)",
+                      (unsigned long)pageUs, (unsigned long)snapshotUs, (unsigned long)tabUs, (unsigned long)statusUs,
+                      (unsigned long)thumbsUs);
+      }
+    }
+  } timed{*this, passT0, snapshotUs, tabUs, pageUs, statusUs, thumbsUs, frame};
   host_.snapshot(state_);
+  snapshotUs = micros() - passT0;
   // The first boot, its language picked (or its picker left), and the
   // touch check main.cpp opened then closed (it suspended the UI until
   // now): the tips, and the language's note over them.
@@ -1339,7 +1375,11 @@ void Ui::loop(uint32_t nowMs) {
     thumbs_.loop(nowMs);
     return;
   }
-  if (!hud_.up()) tabBar_.update(tabState(nowMs));
+  if (!hud_.up()) {
+    const uint32_t t = micros();
+    tabBar_.update(tabState(nowMs));
+    tabUs = micros() - t;
+  }
 
   // The page: redraws what changed, and animation frames on the cadence.
   budget_ = governor_.update(nowMs, state_.ringMs, state_.underruns, state_.ringMatters);
@@ -1347,7 +1387,9 @@ void Ui::loop(uint32_t nowMs) {
   const bool due = budget_.draw && clock_.due(nowMs);
   const bool modal = modalUp();
   const uint32_t t0 = micros();
-  if (page_ && !modal && page_->update(nowMs, due, budget_.wholeRows)) {
+  frame = page_ && !modal && page_->update(nowMs, due, budget_.wholeRows);
+  pageUs = micros() - t0;
+  if (frame) {
     clock_.drawn(nowMs);
     ++frames_;
     ++framesInWindow_;
@@ -1381,9 +1423,13 @@ void Ui::loop(uint32_t nowMs) {
   // Covers: one that arrived is drawn where it shows (a modal's page draws
   // it all when the modal goes). New ones are the card worker's, never
   // started while a list moves (app/CardTasks).
+  const uint32_t t1 = micros();
   const uint32_t arrived = thumbs_.loop(nowMs);
   if (arrived != Thumbs::kNone && page_ && !modalUp()) page_->thumbReady(arrived);
+  const uint32_t t2 = micros();
+  thumbsUs = t2 - t1;
   updateStatus(nowMs);
+  statusUs = micros() - t2;
   if (nowMs - framesWindowStart_ >= 1000) {
     const uint32_t ms = nowMs - framesWindowStart_;
     if (framesInWindow_ > 1) fps_ = framesInWindow_ * 1000.0f / ms;
@@ -1497,6 +1543,24 @@ uint32_t Ui::idleMs(uint32_t nowMs) const {
 void Ui::onEvent(const InputEvent& e) {
   using T = InputEvent::Type;
   if (!started_ || suspended_ || !e.isGlass()) return;
+  // The event's cost (a tab's tap opens its page here: its header and
+  // more), the longest kept for the console's ui, a slow one logged.
+  struct Timed {
+    Ui& ui;
+    const InputEvent& e;
+    uint32_t t0 = micros();
+    ~Timed() {
+      const uint32_t us = micros() - t0;
+      if (us > ui.cost_.eventMaxUs) {
+        ui.cost_.eventMaxUs = us;
+        ui.cost_.eventMaxType = e.type;
+      }
+      if (us > kSlowPassUs) {
+        Serial.printf("[ui] slow event %s at %d,%d: %lu us (page %s after it)\n", InputEvent::name(e.type), e.x, e.y,
+                      (unsigned long)us, ui.page_ ? ui.page_->name() : "none");
+      }
+    }
+  } timed{*this, e};
   if (identifying_) {
     // identify()'s banner: a touch ends it and does nothing else (the rest
     // of it goes nowhere: touch_ None until the next one lands).
@@ -2057,6 +2121,13 @@ void Ui::printState() const {
   // This runs on the loop task (the console): its stack's low-water mark
   // since the boot (the console paints the stack again before each command,
   // so FreeRTOS's own mark is the command's: app/LoopStack).
+  Serial.printf("[ui] loop: %lu passes, mean %.2f ms, longest %.1f ms (snapshot %.1f, tab bar %.1f, page %.1f, "
+                "status %.1f, covers %.1f at most); the longest event %s %.1f ms; counted again from now\n",
+                (unsigned long)cost_.passes, cost_.passes ? cost_.passSumUs / 1000.0f / cost_.passes : 0.0f,
+                cost_.passMaxUs / 1000.0f, cost_.snapshotMaxUs / 1000.0f, cost_.tabMaxUs / 1000.0f,
+                cost_.pageMaxUs / 1000.0f, cost_.statusMaxUs / 1000.0f, cost_.thumbsMaxUs / 1000.0f,
+                InputEvent::name(cost_.eventMaxType), cost_.eventMaxUs / 1000.0f);
+  cost_ = PassCost{};
   Serial.printf("[ui] loop task stack: %lu B never used since the boot (of 8 KB)\n",
                 static_cast<unsigned long>(loopstack::lowestLeft()));
 }
