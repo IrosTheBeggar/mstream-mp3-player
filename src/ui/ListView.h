@@ -233,6 +233,19 @@ public:
   void collapse();
   // Something else drew over the band: all of it is drawn again.
   void invalidate();
+  // The same, from the rows as they were rendered (an overlay went: no
+  // row changed, so no row is rendered again, only pushed; the render of
+  // 4-5 rows is ~25-30 ms, the push alone ~23).
+  void redraw();
+  // Pushes the (w x h) rectangle of `c` at (sx, sy) onto data row `row`
+  // at (x, y) of the row's sprite, where the row shows now: a small live
+  // piece (a spinner) without the whole row rendered and pushed again
+  // (~11 ms). False, nothing pushed: the row isn't on screen, or the band
+  // isn't drawn (the next frame draws the row whole).
+  bool pushOnRow(uint32_t row, M5Canvas& c, int sx, int sy, int w, int h, int x, int y);
+  // The data row a finger presses (-1: none): a piece pushed onto it
+  // would show the row's resting look.
+  int32_t pressedRow() const;
   // The empty state changed (its buttons, a press): drawn again.
   void redrawEmpty() { if (src_ && layout_.rows() == 0) drawEmpty(); }
 

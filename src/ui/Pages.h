@@ -135,6 +135,10 @@ public:
   void enter(NavModel::PageRef& ref) override;
   void leave() override;
   void repaint() override;
+  // The header row alone (y 36-71, a toast's): the top fills, the title
+  // strip's and the cover's rows that reach it, not the whole page (~40
+  // ms at every toast's end until 0.12.0).
+  void repaintHeader() override;
   bool update(uint32_t nowMs, bool frameDue, bool wholeRows) override;
   // A finger scrubs the seek bar: the frame cadence (and the motion log).
   bool animating() const override { return bar_.scrubbing(); }
@@ -161,7 +165,8 @@ private:
   void drawCover();
   // The title strip (while a play waits: the title on one line and the
   // wait's status).
-  void drawTitle();
+  // `rows`: only the strip's top rows pushed (0: all of it).
+  void drawTitle(int rows = 0);
   void drawArtistAlbum();
   // The artist and album rows, or (waiting) the waiting panel's buttons in
   // their place.
@@ -464,6 +469,7 @@ public:
 
 private:
   enum class Ask : uint8_t { None, ClearSheet, ClearConfirm };
+  int32_t drawnCurrent_ = -2;  // the current position the rows show (a track change draws what moved)
   void setSelecting(bool on);
   void removeSelected();
   void playSelectedNext();
@@ -519,12 +525,17 @@ public:
   void enter(NavModel::PageRef& ref) override;
   void leave() override;
   void repaint() override;
+  // The header row alone (y 36-71, a toast's): the rows above the box and
+  // the panels, the box's own (the dancer's next frame is whole), the two
+  // panels that reach it; not the whole tab (~50 ms until 0.12.0).
+  void repaintHeader() override;
   bool update(uint32_t nowMs, bool frameDue, bool wholeRows) override;
   void onEvent(const InputEvent& e) override;
   void describe(char* buf, size_t size) const override;
 
 private:
-  void drawPanels(bool all);
+  // `topOnly`: the two panels in the header row (y 44-99) alone.
+  void drawPanels(bool all, bool topOnly = false);
   uint32_t nextPanelMs_ = 0;
   // What the panels show (redrawn when it changes, at most twice a second).
   int bpmX10_ = -1;
@@ -657,6 +668,10 @@ private:
   };
 
   void drawBtTop(ListView::Row& r);
+  // The spinner's step alone, pushed onto `row` at (cx, cy) over `bg`
+  // (ListView::pushOnRow), not the row rendered and pushed whole (~11 ms,
+  // 8 times a second while it spins). False: the row must be drawn whole.
+  bool spinPatch(uint32_t row, int cx, int cy, uint16_t colour, uint16_t bg);
   void drawBtButtons(ListView::Row& r);
   void drawSpeaker(ListView::Row& r);
   void drawSetting(ListView::Row& r, const icons::Icon& icon, const char* title, const char* sub, uint16_t ink,

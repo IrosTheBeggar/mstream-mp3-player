@@ -240,6 +240,10 @@ public:
   LibraryIndex* browseIndex() { return browse_ ? browse_ : library_.index(); }
   bool browsingSynthetic() const { return browse_ != nullptr; }
   Thumbs& thumbs() { return thumbs_; }
+  // A list page's repaint() after an overlay went: the band from the rows
+  // as rendered (ListView::redraw()), unless a cover arrived under the
+  // overlay (its row is rendered again: ListView::invalidate()).
+  void repaintList();
   // `viewKey`: the queue entry (its key) of the first track an add put in
   // the queue: the toast also offers "View" (the Queue, scrolled to it),
   // and the next visit to the Queue shows and highlights what was added.
@@ -508,6 +512,7 @@ private:
     InputEvent::Type eventMaxType = InputEvent::Type::None;
   };
   mutable PassCost cost_;  // (printState() is const: it prints and counts again)
+  bool thumbsStale_ = false;  // a cover arrived under a modal: repaintList() renders the rows again
   // A finger on the A-Z rail holds the card worker (listMoving()); off with
   // the scrub's pacing (console uir0: as before 0.12.0, to compare by hand).
   bool railHold_ = true;

@@ -137,6 +137,33 @@ void ListView::invalidate() {
   railOffset_ = -1;
 }
 
+void ListView::redraw() {
+  force_ = true;
+  railUp_ = false;
+  railOffset_ = -1;
+}
+
+bool ListView::pushOnRow(uint32_t row, M5Canvas& c, int sx, int sy, int w, int h, int x, int y) {
+  if (!src_ || !slots_ || row >= layout_.rows() || !vs_->active() || !vs_->map().valid() || drawnOffset_ < 0 ||
+      force_ || gfx::dark()) {
+    return false;
+  }
+  const int32_t off = vs_->map().offset();
+  const int32_t top = static_cast<int32_t>(layout_.itemOfRow(row)) * kPitch + y;  // the piece's first content line
+  const int32_t c0 = std::max(top, off);
+  const int32_t c1 = std::min(top + h, off + height_);
+  if (c0 >= c1) return false;  // off screen
+  vs_->pushRectAtScreen(c, sx, sy + static_cast<int>(c0 - top), w, static_cast<int>(c1 - c0), x,
+                        kTop + static_cast<int>(c0 - off), &gfx::holds());
+  return true;
+}
+
+int32_t ListView::pressedRow() const {
+  if (pressedItem_ < 0) return -1;
+  const ListLayout::Item it = layout_.item(static_cast<uint32_t>(pressedItem_));
+  return it.kind == ListLayout::Kind::Row ? it.row : -1;
+}
+
 void ListView::reload() {
   if (!src_) return;
   const int32_t exp = layout_.expanded();

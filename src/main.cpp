@@ -3309,6 +3309,14 @@ void setup() {
   // must outlast a slow loop pass: 1 KB (270 ms of them) instead of 256 B.
   // Only before begin(), which M5.begin() calls.
   Serial.setRxBufferSize(SerialConsole::kRxBuffer);
+  // And a transmit buffer: without one every Serial.print blocks the loop
+  // until its bytes are in the UART's 128-byte FIFO (87 us a byte at
+  // 115200: a tap's two [touch] lines and its "[ui] library: play ..."
+  // held the loop 20-30 ms, a cover's line 17 ms, in the middle of
+  // frames). With one the UART's interrupt drains it, and a print waits
+  // only when 2 KB (180 ms of output) are already queued: the console's
+  // long dumps (ql, l) still pace themselves on the line.
+  Serial.setTxBufferSize(2048);
   auto cfg = M5.config();
   cfg.serial_baudrate = 115200;  // M5Unified leaves Serial off unless asked
   cfg.internal_mic = false;      // the mic shares GPIO0 with the speaker's I2S clock

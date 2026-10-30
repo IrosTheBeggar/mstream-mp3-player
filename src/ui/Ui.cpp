@@ -433,10 +433,17 @@ void Ui::showTop() {
   }
   Page* next = pageFor(nav_.top().kind);
   if (page_) page_->leave();
-  // A page that shortened the list band (the Queue's selection mode, the
-  // Library's status line) has let it go in leave(); be sure.
-  if (list_.height() != ListView::kHeight) setListBand(ListView::kHeight);
-  statusBand_ = false;
+  // A page that shortened the list band (the Queue's selection mode) has
+  // let it go in leave(); be sure. The Library's status line (updateStatus())
+  // gets its shorter band here, before the page's first frame: it used to
+  // get it a pass later, a second full band draw and a flash on every
+  // Library page open while the card worker had something to say (the
+  // whole boot's walk on a big card: 34 + 45 ms more, MEASURED).
+  char status[64] = "";
+  if (next == &libraryPage_ && !browse_) librarytext::statusText(state_.libraryStatus, status, sizeof(status));
+  const int band = status[0] ? ListView::kHeight - kStatusH : ListView::kHeight;
+  if (list_.height() != band) setListBand(band);
+  statusBand_ = status[0] != 0;
   statusHash_ = 0;
   ensureScroller(next->scrolls());
   page_ = next;
@@ -649,6 +656,15 @@ bool Ui::closeModal(bool notify) {
   }
   if (closed) applyCover();
   return closed;
+}
+
+void Ui::repaintList() {
+  if (thumbsStale_) {
+    list_.invalidate();
+  } else {
+    list_.redraw();
+  }
+  thumbsStale_ = false;
 }
 
 void Ui::repaintUnder() {
@@ -1127,7 +1143,15 @@ void Ui::noteFailures() {
   }
   warn(text);
   host_.wakeScreen("a track couldn't be played");
-  if (page_ == &queuePage_) list_.refreshAll();
+  // Its Queue row's "!" (the whole band, 50-78 ms, until 0.12.0).
+  if (page_ == &queuePage_) {
+    const uint32_t pos = queue_.positionOf(f.key);
+    if (pos != QueueModel::kNone) {
+      list_.refreshRow(pos);
+    } else {
+      list_.refreshAll();
+    }
+  }
 }
 
 void Ui::updateHud(uint32_t nowMs) {
@@ -1425,7 +1449,13 @@ void Ui::loop(uint32_t nowMs) {
   // started while a list moves (app/CardTasks).
   const uint32_t t1 = micros();
   const uint32_t arrived = thumbs_.loop(nowMs);
-  if (arrived != Thumbs::kNone && page_ && !modalUp()) page_->thumbReady(arrived);
+  if (arrived != Thumbs::kNone) {
+    if (page_ && !modalUp()) {
+      page_->thumbReady(arrived);
+    } else {
+      thumbsStale_ = true;  // a list's rows are rendered again when the modal goes (repaintList())
+    }
+  }
   const uint32_t t2 = micros();
   thumbsUs = t2 - t1;
   updateStatus(nowMs);
