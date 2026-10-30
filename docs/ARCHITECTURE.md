@@ -2946,7 +2946,16 @@ Queue, Dance and Output (with its Pair and About pages).
   walk or the scan reads the card under the scrub (on the user's
   19,478-track card, 2026-10-30, the boot's walk and the covers ran under
   every scrub, and the only moments a scrub counted as "moving" were the
-  passes between a position and its frame). A tap on it opens the jump
+  passes between a position and its frame). MEASURED on that card with
+  the scripted finger (`uid300,80,300,230,3000`: the whole rail in 3 s,
+  695 artists, nothing playing): a band frame costs 48 ms (4 rows
+  rendered in 24.5 ms, the push 23 ms; 50-55 ms on the Albums list), so
+  the old way (`uir0`) drew 49 band frames, 15.4 a second, and the thumb
+  moved with them; paced (`uir1`) 21 band frames (6.6 a second) and 60
+  rail frames of 4.0 ms, the thumb at 19 a second. A scrub slow enough
+  to rest between positions (a pixel every 130 ms) draws the band for
+  every position, as before. Flings on the same lists: 30 fps, 2 ms a
+  frame. A tap on it opens the jump
   grid (above). A
   press that only touches the list (a tap) doesn't hide it. **A move is
   drawn in steps of at most 84 lines a frame** (the hardware scroll's
