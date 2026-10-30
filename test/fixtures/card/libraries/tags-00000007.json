@@ -1,0 +1,253 @@
+{
+ "format": "MPTG",
+ "file": "tags-00000007.bin",
+ "generation": 7,
+ "cardId": "0x5EEDC0DE0A1B2C3D",
+ "minor": 0,
+ "source": 2,
+ "parserVersion": 1,
+ "readRules": 1,
+ "producer": "mstream-terminal 0.13.0",
+ "note": "A card filled from several servers (2.5.5): each ledger row's 'server' is ORIG's server index, 0 the root's own; manifest-servers.json lists the others.",
+ "folders": [
+  {
+   "path": "Peer Artist",
+   "flags": 1
+  },
+  {
+   "path": "Peer Artist/Peer Album",
+   "flags": 1
+  }
+ ],
+ "records": [
+  {
+   "path": "Artist/Album/01 - Title.mp3",
+   "size": 2000,
+   "fatTime": "0x5D4949EA",
+   "durationMs": 200000,
+   "qfp": "0xEE40732D3BC7E799",
+   "known": 131071,
+   "container": 1,
+   "note": "the root's own server: 0",
+   "tags": {
+    "title": [
+     "Title"
+    ],
+    "artist": [
+     "Lantern Choir"
+    ],
+    "album": [
+     "Album"
+    ]
+   },
+   "ledger": {
+    "serverPath": "Music/Artist/Album/01 - Title.mp3",
+    "mstreamId": 100,
+    "albumId": 5,
+    "artistId": 2,
+    "audioHash": "f2fc37ba22b218936c31e3d7b74cd47a",
+    "fileHash": "9f949811d5702fdc590a1f11d372ea2f",
+    "serverModified": 1790500000000,
+    "serverSize": 2000,
+    "createdAt": 1790500000,
+    "hashV": 2,
+    "originFlags": 2,
+    "server": 0
+   }
+  },
+  {
+   "path": "Artist/Album/cover.jpg",
+   "size": 2053,
+   "fatTime": "0x5D4949EC",
+   "durationMs": 0,
+   "qfp": "0x0ECAB8D8846DE373",
+   "known": 0,
+   "container": 255,
+   "note": "an owned file with no server track: its album's server",
+   "ledger": {
+    "serverPath": "",
+    "originFlags": 0,
+    "server": 0
+   }
+  },
+  {
+   "path": "Second Artist/Album/01 - Song.flac",
+   "size": 2106,
+   "fatTime": "0x5D4949EE",
+   "durationMs": 202000,
+   "qfp": "0x51F83AF887506C62",
+   "known": 131071,
+   "container": 2,
+   "note": "server 1, reached by its own URL; mStream id 100 again (ids are each server's own)",
+   "tags": {
+    "title": [
+     "Song"
+    ],
+    "artist": [
+     "Second Artist"
+    ],
+    "album": [
+     "Album"
+    ]
+   },
+   "ledger": {
+    "serverPath": "Library/Second Artist/Album/01 - Song.flac",
+    "mstreamId": 102,
+    "albumId": 5,
+    "artistId": 2,
+    "audioHash": "69e24569847e76ae9f950ce1b656130f",
+    "fileHash": "b95de8b145f421f935010a0787e8e144",
+    "serverModified": 1790500000002,
+    "serverSize": 2106,
+    "createdAt": 1790500000,
+    "hashV": 2,
+    "originFlags": 2,
+    "server": 1
+   }
+  },
+  {
+   "path": "Both/One.mp3",
+   "size": 2159,
+   "fatTime": "0x5D4949F0",
+   "durationMs": 203000,
+   "qfp": "0x98EAA2922E7D61C1",
+   "known": 131071,
+   "container": 1,
+   "note": "one serverPath on two servers: the lower server keeps the name (2.8.3, step 6), though its mStream id is the higher",
+   "tags": {
+    "title": [
+     "One"
+    ]
+   },
+   "ledger": {
+    "serverPath": "Music/Both/One.mp3",
+    "mstreamId": 9,
+    "albumId": 5,
+    "artistId": 2,
+    "audioHash": "370bccf5a37cea286d651129ca97263f",
+    "fileHash": "e5cd9ba8a9e31d02335f2fe2c014d9e6",
+    "serverModified": 1790500000003,
+    "serverSize": 2159,
+    "createdAt": 1790500000,
+    "hashV": 2,
+    "originFlags": 2,
+    "server": 0
+   }
+  },
+  {
+   "path": "Both/One (2).mp3",
+   "size": 2212,
+   "fatTime": "0x5D4949F2",
+   "durationMs": 204000,
+   "qfp": "0xE2587C327385306C",
+   "known": 131071,
+   "container": 1,
+   "tags": {
+    "title": [
+     "One"
+    ]
+   },
+   "ledger": {
+    "serverPath": "Music/Both/One.mp3",
+    "mstreamId": 4,
+    "albumId": 5,
+    "artistId": 2,
+    "audioHash": "370bccf5a37cea286d651129ca97263f",
+    "fileHash": "e5cd9ba8a9e31d02335f2fe2c014d9e6",
+    "serverModified": 1790500000004,
+    "serverSize": 2212,
+    "createdAt": 1790500000,
+    "hashV": 2,
+    "originFlags": 2,
+    "server": 1
+   }
+  },
+  {
+   "path": "Peer Artist/Peer Album/01 - Tune.opus",
+   "size": 2265,
+   "fatTime": "0x5D4949F4",
+   "durationMs": 205000,
+   "qfp": "0x0E5AEB42C1196F80",
+   "known": 131071,
+   "container": 3,
+   "note": "server 2, a peer of the root's server: its own serverPath and ids, not its parent's",
+   "tags": {
+    "title": [
+     "Tune"
+    ],
+    "artist": [
+     "Peer Artist"
+    ],
+    "album": [
+     "Peer Album"
+    ]
+   },
+   "ledger": {
+    "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.opus",
+    "mstreamId": 105,
+    "albumId": 5,
+    "artistId": 2,
+    "audioHash": "2e5c9cadbcbc91b87a9892c9339a1047",
+    "fileHash": "c94cb2ba1b368cb03062e0fe3df26989",
+    "serverModified": 1790500000005,
+    "serverSize": 2265,
+    "createdAt": 1790500000,
+    "hashV": 2,
+    "originFlags": 2,
+    "server": 2
+   }
+  },
+  {
+   "path": "Peer Artist/Peer Album/cover.jpg",
+   "size": 2318,
+   "fatTime": "0x5D4949F6",
+   "durationMs": 0,
+   "qfp": "0x1DD8600C845B22BF",
+   "known": 0,
+   "container": 255,
+   "note": "an owned cover made for the peer's album: the peer's server",
+   "ledger": {
+    "serverPath": "",
+    "originFlags": 0,
+    "server": 2
+   }
+  },
+  {
+   "path": "Far Artist/Far Album/01 - Far.opus",
+   "size": 2371,
+   "fatTime": "0x5D4949F8",
+   "durationMs": 207000,
+   "qfp": "0xF3FB315062E6A5ED",
+   "known": 131071,
+   "container": 3,
+   "note": "server 3, a peer of server 1, converted on the PC: not VERIFIED",
+   "tags": {
+    "title": [
+     "Far"
+    ],
+    "artist": [
+     "Far Artist"
+    ],
+    "album": [
+     "Far Album"
+    ]
+   },
+   "ledger": {
+    "serverPath": "Music/Far Artist/Far Album/01 - Far.flac",
+    "mstreamId": 107,
+    "albumId": 5,
+    "artistId": 2,
+    "audioHash": "352c8904006e912073e950b1ca92059f",
+    "fileHash": "c432fd98604d09e9ea3873cc31271351",
+    "serverModified": 1790500000007,
+    "serverSize": 2371,
+    "createdAt": 1790500000,
+    "hashV": 2,
+    "originFlags": 0,
+    "server": 3,
+    "convertedTo": 3,
+    "convertKbps": 192
+   }
+  }
+ ]
+}

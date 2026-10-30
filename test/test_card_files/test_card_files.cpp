@@ -283,10 +283,15 @@ std::string formatOf(const Bytes& b) {
   return std::string(reinterpret_cast<const char*>(b.data()), 4);
 }
 
+// MSMF's SRVS (docs/METADATA.md 2.5.5): the software's list of the card's
+// other servers, which the player never reads.
+constexpr uint32_t kSrvs = cc::fourcc("SRVS");
+
 // The byte ranges a reader doesn't check: the gaps between sections (zero
-// padding, which readers ignore), and the sections a device-uses reader
-// skips (MPTG's HIDX, ORIG and OSTR; MPDJ's DJSL, whose slots the device
-// checks as it reads them).
+// padding, which readers ignore), MSMF's SRVS (skipped as any optional
+// section the player doesn't know, its CRC unchecked: 2.5.5), and the
+// sections a device-uses reader skips (MPTG's HIDX, ORIG and OSTR; MPDJ's
+// DJSL, whose slots the device checks as it reads them).
 std::vector<bool> unchecked(const Bytes& b, bool deviceUses) {
   std::vector<bool> skip(b.size(), false);
   const uint32_t hb = cc::get32(&b[8]), n = cc::get32(&b[12]);
@@ -295,7 +300,8 @@ std::vector<bool> unchecked(const Bytes& b, bool deviceUses) {
     const uint8_t* e = &b[hb + 32 * i];
     const uint32_t type = cc::get32(e), off = cc::get32(e + 8), len = cc::get32(e + 12);
     for (uint32_t k = end; k < off; ++k) skip[k] = true;
-    if (deviceUses && (type == mptg::kHidx || type == mptg::kOrig || type == mptg::kOstr || type == mpdj::kDjsl))
+    if (type == kSrvs ||
+        (deviceUses && (type == mptg::kHidx || type == mptg::kOrig || type == mptg::kOstr || type == mpdj::kDjsl)))
       for (uint32_t k = off; k < off + len; ++k) skip[k] = true;
     end = off + len;
   }
@@ -349,6 +355,26 @@ void reseal(Bytes& b) {
   }
   cc::put32(&b[32], 0);
   cc::put32(&b[32], cc::crc32(b.data(), hb + 32 * n));
+}
+
+// A file without its last section (of at least two): the directory one
+// entry shorter, so every offset 32 bytes lower (the padding unchanged),
+// the file ending where the section before it ends, its CRCs made right.
+Bytes withoutLastSection(const Bytes& b) {
+  const uint32_t hb = cc::get32(&b[8]), n = cc::get32(&b[12]);
+  const uint8_t* prev = &b[hb + 32 * (n - 2)];
+  const uint32_t end = cc::get32(prev + 8) + cc::get32(prev + 12);
+  Bytes out(b.begin(), b.begin() + hb);
+  for (uint32_t i = 0; i + 1 < n; ++i) {
+    Bytes e(b.begin() + hb + 32 * i, b.begin() + hb + 32 * (i + 1));
+    cc::put32(&e[8], cc::get32(&e[8]) - 32);
+    out.insert(out.end(), e.begin(), e.end());
+  }
+  out.insert(out.end(), b.begin() + hb + 32 * n, b.begin() + end);
+  cc::put32(&out[12], n - 1);
+  cc::put32(&out[16], static_cast<uint32_t>(out.size()));
+  reseal(out);
+  return out;
 }
 
 // An MPDJ description (docs/AUTODJ-INDEX.md 13.2) as the writer's input:
@@ -554,10 +580,11 @@ const char* const kAutoDjLibraries[] = {"autodj-00000029", "autodj-small-top", "
 
 // The goldens the byte loops run over (not autodj-mid's two: too big for
 // a check per flipped bit).
-const char* const kGoldenBinaries[] = {"tags-0000002a.bin",        "tags-device.bin",     "tags-00000001.bin",
-                                       "manifest.bin",             "manifest-min.bin",    "pending.bin",
-                                       "autodj-00000029.bin",      "autodj-small-top.bin", "autodj-small-default.bin",
-                                       "autodj-tiny.bin",          "autodj-pair.bin"};
+const char* const kGoldenBinaries[] = {"tags-0000002a.bin",    "tags-device.bin",          "tags-00000001.bin",
+                                       "tags-00000007.bin",    "manifest.bin",             "manifest-min.bin",
+                                       "manifest-servers.bin", "pending.bin",              "autodj-00000029.bin",
+                                       "autodj-small-top.bin", "autodj-small-default.bin", "autodj-tiny.bin",
+                                       "autodj-pair.bin"};
 
 }  // namespace
 
@@ -642,40 +669,110 @@ msmf::CompIn compFrom(const Bytes& file) {
   return c;
 }
 
+// A root description through the C++ writer (which writes no SRVS: 2.17).
+Bytes manifestFrom(const Value& d) {
+  std::vector<msmf::CompIn> comps;
+  for (size_t i = 0; i < d["companions"].size(); ++i) comps.push_back(compFrom(golden(d["companions"][i]["file"].str())));
+  std::vector<std::string> roots;
+  for (size_t i = 0; i < d["roots"].size(); ++i) roots.push_back(d["roots"][i].str());
+  std::vector<const char*> rp;
+  for (auto& r : roots) rp.push_back(r.c_str());
+  msmf::ManifestIn in;
+  in.generation = static_cast<uint32_t>(d["generation"].u64());
+  in.cardId = d["cardId"].u64();
+  in.commitTime = static_cast<uint32_t>(d["commitTime"].u64());
+  in.flags = static_cast<uint32_t>(d["flags"].u64());
+  in.commitId = d["commitId"].u64();
+  std::string uuid = d["serverInstance"].str();
+  uuid.erase(std::remove(uuid.begin(), uuid.end(), '-'), uuid.end());
+  const Bytes inst = hexBytes(uuid);
+  if (inst.size() == 16) std::memcpy(in.serverInstance, inst.data(), 16);
+  in.producer = d["producer"].c_str();
+  in.serverRevision = d["serverRevision"].c_str();
+  in.baseGeneration = static_cast<uint32_t>(d["baseGeneration"].u64());
+  in.serverUrlKey = d.has("serverUrl") ? cc::serverUrlKey(d["serverUrl"].c_str()) : d["serverUrlKey"].u64();
+  in.comps = comps.data();
+  in.compCount = static_cast<uint32_t>(comps.size());
+  in.roots = rp.data();
+  in.rootCount = static_cast<uint32_t>(rp.size());
+  VecSink out;
+  const char* error = nullptr;
+  TEST_ASSERT_TRUE_MESSAGE(msmf::write(out, in, nullptr, nullptr, &error), error ? error : d["file"].c_str());
+  return out.b;
+}
+
 void test_golden_manifests() {
   for (const char* name : {"manifest", "manifest-min"}) {
     const Value d = library(name);
-    std::vector<msmf::CompIn> comps;
-    for (size_t i = 0; i < d["companions"].size(); ++i) comps.push_back(compFrom(golden(d["companions"][i]["file"].str())));
-    std::vector<std::string> roots;
-    for (size_t i = 0; i < d["roots"].size(); ++i) roots.push_back(d["roots"][i].str());
-    std::vector<const char*> rp;
-    for (auto& r : roots) rp.push_back(r.c_str());
-    msmf::ManifestIn in;
-    in.generation = static_cast<uint32_t>(d["generation"].u64());
-    in.cardId = d["cardId"].u64();
-    in.commitTime = static_cast<uint32_t>(d["commitTime"].u64());
-    in.flags = static_cast<uint32_t>(d["flags"].u64());
-    in.commitId = d["commitId"].u64();
-    std::string uuid = d["serverInstance"].str();
-    uuid.erase(std::remove(uuid.begin(), uuid.end(), '-'), uuid.end());
-    const Bytes inst = hexBytes(uuid);
-    if (inst.size() == 16) std::memcpy(in.serverInstance, inst.data(), 16);
-    in.producer = d["producer"].c_str();
-    in.serverRevision = d["serverRevision"].c_str();
-    in.baseGeneration = static_cast<uint32_t>(d["baseGeneration"].u64());
-    in.serverUrlKey = d.has("serverUrl") ? cc::serverUrlKey(d["serverUrl"].c_str()) : d["serverUrlKey"].u64();
-    in.comps = comps.data();
-    in.compCount = static_cast<uint32_t>(comps.size());
-    in.roots = rp.data();
-    in.rootCount = static_cast<uint32_t>(rp.size());
-    VecSink out;
-    const char* error = nullptr;
-    TEST_ASSERT_TRUE_MESSAGE(msmf::write(out, in, nullptr, nullptr, &error), error ? error : name);
+    const Bytes got = manifestFrom(d);
     const Bytes want = golden(d["file"].str());
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(want.size(), out.b.size(), name);
-    TEST_ASSERT_EQUAL_MEMORY_MESSAGE(want.data(), out.b.data(), want.size(), name);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(want.size(), got.size(), name);
+    TEST_ASSERT_EQUAL_MEMORY_MESSAGE(want.data(), got.data(), want.size(), name);
   }
+}
+
+// A card filled from several servers (2.5.5, 2.6.6). The C++ writers
+// predate ORIG's server and SRVS (2.17, item 2), so their bytes for the two
+// goldens differ exactly there; the player reads both goldens as those
+// bytes, since it reads neither.
+void test_goldens_of_several_servers() {
+  // The tags file: the C++ writer's is the golden with every row's server
+  // 0, its CRCs made right.
+  const Value d = library("tags-00000007");
+  TagsInput in(d);
+  VecSink out;
+  const char* error = nullptr;
+  TEST_ASSERT_TRUE_MESSAGE(in.write(&out, d["producer"].str(), &error), error ? error : "tags-00000007");
+  const Bytes tags = golden("tags-00000007.bin");
+  cc::MemSource src(tags.data(), static_cast<uint32_t>(tags.size()));
+  mptg::File f;
+  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(f.open(src)));
+  const cc::Section& orig = f.container().section(mptg::kSecOrig);
+  TEST_ASSERT_TRUE(orig.present());
+  std::map<std::string, uint32_t> server;  // each record's, as the description gives it
+  for (size_t i = 0; i < d["records"].size(); ++i)
+    server[d["records"][i]["path"].str()] = static_cast<uint32_t>(d["records"][i]["ledger"]["server"].u64());
+  Bytes zeroed = tags;
+  std::set<uint32_t> seen;
+  for (uint32_t r = 0; r < f.info().recordCount; ++r) {
+    char path[300];
+    size_t len = 0;
+    TEST_ASSERT_TRUE(f.recordPath(r, path, sizeof(path), &len));
+    uint8_t* row = &zeroed[orig.offset + r * orig.stride];
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(server[path], cc::get16(row + 74), path);  // bytes 74-75, then 0s
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, cc::get32(row + 76), path);
+    seen.insert(cc::get16(row + 74));
+    cc::put16(row + 74, 0);
+  }
+  TEST_ASSERT_EQUAL_size_t(4, seen.size());  // servers 0-3
+  reseal(zeroed);
+  TEST_ASSERT_TRUE(zeroed == out.b);
+  for (uint32_t uses : {0u, mptg::kUseAll}) {
+    std::vector<Event> a, b;
+    TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(walk(tags, uses, &a)));
+    TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(walk(out.b, uses, &b)));
+    assertSameWalk(b, a);
+  }
+  // The root: SRVS is its last section, optional, three rows of 40 bytes;
+  // without it, the golden is the C++ writer's root of the same
+  // description. The player reads it as that root, naming that tags file.
+  const Value md = library("manifest-servers");
+  const Bytes root = golden("manifest-servers.bin");
+  const uint32_t hb = cc::get32(&root[8]), n = cc::get32(&root[12]);
+  const uint8_t* e = &root[hb + 32 * (n - 1)];
+  TEST_ASSERT_EQUAL_HEX32(kSrvs, cc::get32(e));
+  TEST_ASSERT_EQUAL_UINT32(0, cc::get32(e + 4));
+  TEST_ASSERT_EQUAL_UINT32(md["servers"].size(), cc::get32(e + 16));
+  TEST_ASSERT_EQUAL_UINT32(40, cc::get32(e + 20));
+  TEST_ASSERT_TRUE(withoutLastSection(root) == manifestFrom(md));
+  cc::MemSource rs(root.data(), static_cast<uint32_t>(root.size()));
+  uint8_t scratch[256];
+  msmf::Manifest m;
+  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(m.open(rs, scratch, sizeof(scratch))));
+  TEST_ASSERT_EQUAL_STRING("tags-00000007.bin", m.tagsName());
+  TEST_ASSERT_FALSE(m.hasAutoDj());
+  TEST_ASSERT_TRUE(m.serverUrlKey() == 0xED901EA3EE763AC7ull);
+  TEST_ASSERT_TRUE(msmf::companionMatches(m.tags(), f.info().frame, f.info().source, nullptr));
 }
 
 void test_golden_plan() {
@@ -1718,6 +1815,7 @@ int main(int, char**) {
   RUN_TEST(test_golden_tags_writer_is_order_free);
   RUN_TEST(test_golden_autodj_files);
   RUN_TEST(test_golden_manifests);
+  RUN_TEST(test_goldens_of_several_servers);
   RUN_TEST(test_golden_plan);
   RUN_TEST(test_golden_thumbnail);
   RUN_TEST(test_tags_read_back);

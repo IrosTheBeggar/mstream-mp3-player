@@ -1034,6 +1034,9 @@ tools/                make_test_audio.py; version.py (build pre-script: the
                       discover -s tools -p "test_usb_viz.py");
                       card_fixtures.py (the card contract's shared fixtures
                       -> test/fixtures/card, --check; docs/METADATA.md 2.17);
+                      cardnames.py (the card paths from mStream's, 2.8.3's
+                      reference namer; card_fixtures.py makes the vectors'
+                      names group with it);
                       mpdj.py + test_mpdj.py (the AutoDJ index's reference
                       writer, reader and test vectors, docs/AUTODJ-INDEX.md;
                       tests: python -m unittest discover -s tools -p

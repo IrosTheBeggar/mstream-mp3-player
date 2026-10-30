@@ -1,0 +1,40 @@
+{
+ "format": "MSMF",
+ "file": "manifest-servers.bin",
+ "generation": 7,
+ "cardId": "0x5EEDC0DE0A1B2C3D",
+ "commitTime": 1791500000,
+ "flags": 1,
+ "commitId": "0x00000007C0DEC0DE",
+ "producer": "mstream-terminal 0.13.0",
+ "serverRevision": "\"r-5-104-1790500000004-0\"",
+ "baseGeneration": 6,
+ "serverUrl": "http://music.example:3000",
+ "note": "The root of a card filled from several servers: SRVS lists the servers other than the root's (server i is entry i - 1; 2.5.5), each key from the URL given (2.5.1). The root's own instance is unknown.",
+ "companions": [
+  {
+   "file": "tags-00000007.bin"
+  }
+ ],
+ "roots": [],
+ "servers": [
+  {
+   "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677",
+   "serverUrl": "https://second.example/mstream",
+   "note": "server 1: another server, reached by its own URL, its instance known"
+  },
+  {
+   "parentUrl": "http://music.example:3000",
+   "peerId": 3,
+   "flags": 1,
+   "note": "server 2: peer 3 of the root's server, its instance unknown"
+  },
+  {
+   "serverInstance": "0f1e2d3c-4b5a-4968-8796-a5b4c3d2e1f0",
+   "parentUrl": "https://second.example/mstream",
+   "peerId": 1,
+   "flags": 1,
+   "note": "server 3: peer 1 of server 1, its instance known"
+  }
+ ]
+}

@@ -1,0 +1,367 @@
+[
+ {
+  "case": "sync-1",
+  "files": {
+   "plays.jnl": "golden/sync-1/plays.jnl",
+   "plays.1.jnl": "golden/sync-1/plays.1.jnl"
+  },
+  "ids": [
+   "core2-00005e005301-1122334455667788-1",
+   "core2-00005e005301-1122334455667788-2",
+   "core2-00005e005301-1122334455667788-3",
+   "core2-00005e005301-1122334455667788-4",
+   "core2-00005e005301-1122334455667788-5",
+   "core2-00005e005301-1122334455667788-6",
+   "core2-00005e005301-1122334455667788-7"
+  ],
+  "counts": {
+   "slots": 7,
+   "damaged": 0,
+   "tail": 0,
+   "newer": 0,
+   "unknownKinds": 0,
+   "unusable": 0,
+   "twins": 0,
+   "conflicts": 0,
+   "dropped": 0
+  },
+  "note": "the golden at the first sync"
+ },
+ {
+  "case": "end",
+  "files": {
+   "plays.jnl": "golden/end/plays.jnl",
+   "plays.1.jnl": "golden/end/plays.1.jnl"
+  },
+  "ids": [
+   "core2-00005e005301-f0e1d2c3b4a59687-5",
+   "core2-00005e005301-f0e1d2c3b4a59687-6",
+   "core2-00005e005301-f0e1d2c3b4a59687-7",
+   "core2-00005e005301-f0e1d2c3b4a59687-8",
+   "core2-00005e005301-f0e1d2c3b4a59687-9"
+  ],
+  "counts": {
+   "slots": 6,
+   "damaged": 0,
+   "tail": 0,
+   "newer": 0,
+   "unknownKinds": 0,
+   "unusable": 0,
+   "twins": 0,
+   "conflicts": 0,
+   "dropped": 4
+  },
+  "note": "the golden at the end: a new epoch; a drop note of 4 plays"
+ },
+ {
+  "case": "tail",
+  "files": {
+   "plays.jnl": "read/tail/plays.jnl",
+   "plays.1.jnl": "golden/sync-1/plays.1.jnl"
+  },
+  "ids": [
+   "core2-00005e005301-1122334455667788-1",
+   "core2-00005e005301-1122334455667788-2",
+   "core2-00005e005301-1122334455667788-3",
+   "core2-00005e005301-1122334455667788-4",
+   "core2-00005e005301-1122334455667788-5",
+   "core2-00005e005301-1122334455667788-6",
+   "core2-00005e005301-1122334455667788-7"
+  ],
+  "counts": {
+   "slots": 7,
+   "damaged": 0,
+   "tail": 1,
+   "newer": 0,
+   "unknownKinds": 0,
+   "unusable": 0,
+   "twins": 0,
+   "conflicts": 0,
+   "dropped": 0
+  },
+  "note": "a cut append: 37 bytes after the last slot, ignored"
+ },
+ {
+  "case": "torn",
+  "files": {
+   "plays.jnl": "golden/sync-1/plays.jnl",
+   "plays.1.jnl": "read/torn/plays.1.jnl"
+  },
+  "ids": [
+   "core2-00005e005301-1122334455667788-1",
+   "core2-00005e005301-1122334455667788-3",
+   "core2-00005e005301-1122334455667788-4",
+   "core2-00005e005301-1122334455667788-5",
+   "core2-00005e005301-1122334455667788-6",
+   "core2-00005e005301-1122334455667788-7"
+  ],
+  "counts": {
+   "slots": 7,
+   "damaged": 1,
+   "tail": 0,
+   "newer": 0,
+   "unknownKinds": 0,
+   "unusable": 0,
+   "twins": 0,
+   "conflicts": 0,
+   "dropped": 0
+  },
+  "note": "a torn sector: the second slot's bytes 20-59 zeroed, its CRC fails"
+ },
+ {
+  "case": "newer",
+  "files": {
+   "plays.jnl": "read/newer/plays.jnl",
+   "plays.1.jnl": "golden/sync-1/plays.1.jnl"
+  },
+  "ids": [
+   "core2-00005e005301-1122334455667788-1",
+   "core2-00005e005301-1122334455667788-2",
+   "core2-00005e005301-1122334455667788-3",
+   "core2-00005e005301-1122334455667788-4",
+   "core2-00005e005301-1122334455667788-5",
+   "core2-00005e005301-1122334455667788-6",
+   "core2-00005e005301-1122334455667788-7"
+  ],
+  "counts": {
+   "slots": 8,
+   "damaged": 0,
+   "tail": 0,
+   "newer": 1,
+   "unknownKinds": 0,
+   "unusable": 0,
+   "twins": 0,
+   "conflicts": 0,
+   "dropped": 0
+  },
+  "note": "a slot of major 2, its CRC good: a newer firmware's, skipped and counted"
+ },
+ {
+  "case": "unknown-kind",
+  "files": {
+   "plays.jnl": "read/unknown-kind/plays.jnl",
+   "plays.1.jnl": "golden/sync-1/plays.1.jnl"
+  },
+  "ids": [
+   "core2-00005e005301-1122334455667788-1",
+   "core2-00005e005301-1122334455667788-2",
+   "core2-00005e005301-1122334455667788-3",
+   "core2-00005e005301-1122334455667788-4",
+   "core2-00005e005301-1122334455667788-5",
+   "core2-00005e005301-1122334455667788-6",
+   "core2-00005e005301-1122334455667788-7"
+  ],
+  "counts": {
+   "slots": 8,
+   "damaged": 0,
+   "tail": 0,
+   "newer": 0,
+   "unknownKinds": 1,
+   "unusable": 0,
+   "twins": 0,
+   "conflicts": 0,
+   "dropped": 0
+  },
+  "note": "a valid slot of kind 9: skipped"
+ },
+ {
+  "case": "twins",
+  "files": {
+   "plays.jnl": "golden/sync-1/plays.1.jnl",
+   "plays.1.jnl": "golden/sync-1/plays.1.jnl"
+  },
+  "ids": [
+   "core2-00005e005301-1122334455667788-1",
+   "core2-00005e005301-1122334455667788-2",
+   "core2-00005e005301-1122334455667788-3",
+   "core2-00005e005301-1122334455667788-4"
+  ],
+  "counts": {
+   "slots": 8,
+   "damaged": 0,
+   "tail": 0,
+   "newer": 0,
+   "unknownKinds": 0,
+   "unusable": 0,
+   "twins": 4,
+   "conflicts": 0,
+   "dropped": 0
+  },
+  "note": "a rotation's rename cut between its two directory writes: both names, one chain"
+ },
+ {
+  "case": "conflict",
+  "files": {
+   "plays.jnl": "read/conflict/plays.jnl",
+   "plays.1.jnl": "golden/sync-1/plays.1.jnl"
+  },
+  "ids": [
+   "core2-00005e005301-1122334455667788-1",
+   "core2-00005e005301-1122334455667788-3",
+   "core2-00005e005301-1122334455667788-4"
+  ],
+  "counts": {
+   "slots": 5,
+   "damaged": 0,
+   "tail": 0,
+   "newer": 0,
+   "unknownKinds": 0,
+   "unusable": 0,
+   "twins": 0,
+   "conflicts": 1,
+   "dropped": 0
+  },
+  "note": "one key, two different slots: neither is used"
+ },
+ {
+  "case": "conflict-top",
+  "files": {
+   "plays.jnl": "read/conflict-top/plays.jnl",
+   "plays.1.jnl": "golden/sync-1/plays.1.jnl"
+  },
+  "ids": [
+   "core2-00005e005301-1122334455667788-1",
+   "core2-00005e005301-1122334455667788-2",
+   "core2-00005e005301-1122334455667788-3",
+   "core2-00005e005301-1122334455667788-4",
+   "core2-00005e005301-1122334455667788-5",
+   "core2-00005e005301-1122334455667788-6"
+  ],
+  "counts": {
+   "slots": 8,
+   "damaged": 0,
+   "tail": 0,
+   "newer": 0,
+   "unknownKinds": 0,
+   "unusable": 0,
+   "twins": 0,
+   "conflicts": 1,
+   "dropped": 0
+  },
+  "note": "a conflict at the log's end: seq 7's two slots differ, neither is used (the next seq at boot is still 8: vectors.json's plays.atBoot)"
+ },
+ {
+  "case": "unusable",
+  "files": {
+   "plays.jnl": "read/unusable/plays.jnl"
+  },
+  "ids": [],
+  "counts": {
+   "slots": 3,
+   "damaged": 0,
+   "tail": 0,
+   "newer": 0,
+   "unknownKinds": 0,
+   "unusable": 3,
+   "twins": 0,
+   "conflicts": 0,
+   "dropped": 0
+  },
+  "note": "valid slots without an epoch, a seq, or a deviceId"
+ },
+ {
+  "case": "magic",
+  "files": {
+   "plays.jnl": "read/magic/plays.jnl"
+  },
+  "ids": [
+   "core2-00005e005301-1122334455667788-1",
+   "core2-00005e005301-1122334455667788-2"
+  ],
+  "counts": {
+   "slots": 3,
+   "damaged": 1,
+   "tail": 0,
+   "newer": 0,
+   "unknownKinds": 0,
+   "unusable": 0,
+   "twins": 0,
+   "conflicts": 0,
+   "dropped": 0
+  },
+  "note": "a zeroed slot between two plays: reading goes on"
+ },
+ {
+  "case": "two-devices",
+  "files": {
+   "plays.jnl": "read/two-devices/plays.jnl"
+  },
+  "ids": [
+   "core2-00005e005301-1122334455667788-8",
+   "core2-00005e005302-0a0b0c0d0e0f1011-1",
+   "core2-00005e005302-0a0b0c0d0e0f1011-2"
+  ],
+  "counts": {
+   "slots": 3,
+   "damaged": 0,
+   "tail": 0,
+   "newer": 0,
+   "unknownKinds": 0,
+   "unusable": 0,
+   "twins": 0,
+   "conflicts": 0,
+   "dropped": 0
+  },
+  "note": "two devices on one card: by deviceId's bytes, then epoch, then seq"
+ },
+ {
+  "case": "enums",
+  "files": {
+   "plays.jnl": "read/enums/plays.jnl"
+  },
+  "ids": [
+   "core2-00005e005301-1122334455667788-1",
+   "core2-00005e005301-1122334455667788-2"
+  ],
+  "counts": {
+   "slots": 2,
+   "damaged": 0,
+   "tail": 0,
+   "newer": 0,
+   "unknownKinds": 0,
+   "unusable": 0,
+   "twins": 0,
+   "conflicts": 0,
+   "dropped": 0
+  },
+  "names": {
+   "core2-00005e005301-1122334455667788-1": [
+    "stopped",
+    "other"
+   ],
+   "core2-00005e005301-1122334455667788-2": [
+    "stopped",
+    "other"
+   ]
+  },
+  "note": "unknown values: outcome 9 and 0 read as stopped, source 7 as not said (other), clock 5 is ignored"
+ },
+ {
+  "case": "dating",
+  "files": {
+   "plays.jnl": "read/dating/plays.jnl"
+  },
+  "ids": [
+   "core2-00005e005302-0a0b0c0d0e0f1011-3",
+   "core2-00005e005302-0a0b0c0d0e0f1011-4",
+   "core2-00005e005302-0a0b0c0d0e0f1011-5"
+  ],
+  "counts": {
+   "slots": 3,
+   "damaged": 0,
+   "tail": 0,
+   "newer": 0,
+   "unknownKinds": 0,
+   "unusable": 0,
+   "twins": 0,
+   "conflicts": 0,
+   "dropped": 0
+  },
+  "dates": {
+   "core2-00005e005302-0a0b0c0d0e0f1011-3": 1792099991808,
+   "core2-00005e005302-0a0b0c0d0e0f1011-4": 1792100000000,
+   "core2-00005e005302-0a0b0c0d0e0f1011-5": null
+  },
+  "note": "no clock: dated by the next dated play of its boot, the uptime wrapping (0xFFFFF000 to 0x1000 is 8,192 ms); with none in its boot, no start"
+ }
+]

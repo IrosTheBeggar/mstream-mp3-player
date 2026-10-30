@@ -1,0 +1,315 @@
+{
+ "format": "MPPL",
+ "file": "log.json",
+ "cap": 4,
+ "device": {
+  "deviceId": "00:00:5e:00:53:01",
+  "epochs": [
+   "0x1122334455667788",
+   "0xF0E1D2C3B4A59687"
+  ]
+ },
+ "note": "The play log's goldens (2.20): the events of one device with the fixture card. A play's file is a record of tags-0000002a.bin (Hand Copied/...: of tags-device.bin, a file the ledger doesn't hold); its fields are given. A snapshot is the log's files at that point, in plays/golden/<name>/. The rotation's drop note takes the clock, startedAt, bootSeq and uptimeMs of the play written after it (2.20.3).",
+ "events": [
+  {
+   "boot": {
+    "clock": "unset"
+   },
+   "note": "the first boot: NVS has no epoch, so EPOCH_1 is made; no clock"
+  },
+  {
+   "play": {
+    "path": "Artist/Album/01 - Title.mp3",
+    "pathHash": "0xDA70B312760188D8",
+    "size": 1000,
+    "fatTime": "0x5D4773D5",
+    "generation": 42,
+    "outcome": 1,
+    "source": 1,
+    "playedMs": 180000,
+    "durationMs": 180000,
+    "uptimeMs": 5000,
+    "startedAt": 0,
+    "pauseCount": 0
+   }
+  },
+  {
+   "setClock": {},
+   "note": "a host's @time, during this boot"
+  },
+  {
+   "play": {
+    "path": "Artist/Album/02 - Other.mp3",
+    "pathHash": "0xCADB3EFDEF4B2DD9",
+    "size": 1037,
+    "fatTime": "0x5D4773D7",
+    "generation": 42,
+    "outcome": 2,
+    "source": 1,
+    "playedMs": 12000,
+    "durationMs": 181000,
+    "uptimeMs": 190000,
+    "startedAt": 1791900190000,
+    "pauseCount": 0
+   }
+  },
+  {
+   "play": {
+    "path": "Artist/Album/CD1/01 - Disc One.flac",
+    "pathHash": "0x6137B0E2A6715752",
+    "size": 1111,
+    "fatTime": "0x5D4773DB",
+    "generation": 42,
+    "outcome": 3,
+    "source": 3,
+    "playedMs": 90500,
+    "durationMs": 183000,
+    "uptimeMs": 205000,
+    "startedAt": 1791900205000,
+    "pauseCount": 2
+   }
+  },
+  {
+   "boot": {
+    "clock": "rtc"
+   },
+   "note": "the second boot: the RTC kept the time"
+  },
+  {
+   "play": {
+    "path": "A/x.mp3",
+    "pathHash": "0x954A7DE3A079A42E",
+    "size": 1222,
+    "fatTime": "0x5D4773E1",
+    "generation": 42,
+    "outcome": 1,
+    "source": 2,
+    "playedMs": 186000,
+    "durationMs": 186000,
+    "uptimeMs": 8000,
+    "startedAt": 1791986408000,
+    "pauseCount": 0
+   }
+  },
+  {
+   "play": {
+    "path": "Hand Copied/Album/01 - First.flac",
+    "pathHash": "0x715A6F73A08666C0",
+    "size": 4000,
+    "fatTime": "0x5A5CBF7D",
+    "generation": 42,
+    "outcome": 1,
+    "source": 2,
+    "playedMs": 200000,
+    "durationMs": 200000,
+    "uptimeMs": 200000,
+    "startedAt": 1791986600000,
+    "pauseCount": 0
+   }
+  },
+  {
+   "play": {
+    "path": "Artist/x.mp3",
+    "pathHash": "0xC48674AC937F2ADA",
+    "size": 1185,
+    "fatTime": "0x5D4773DF",
+    "generation": 42,
+    "outcome": 2,
+    "source": 1,
+    "playedMs": 30000,
+    "durationMs": 0,
+    "uptimeMs": 410000,
+    "startedAt": 1791986810000,
+    "pauseCount": 0
+   }
+  },
+  {
+   "play": {
+    "path": "Loose Intro.mp3",
+    "pathHash": "0xD2A06038FAABE1EE",
+    "size": 1518,
+    "fatTime": "0x5D4773F1",
+    "generation": 42,
+    "outcome": 1,
+    "source": 3,
+    "playedMs": 194000,
+    "durationMs": 194000,
+    "uptimeMs": 450000,
+    "startedAt": 1791986850000,
+    "pauseCount": 0
+   }
+  },
+  {
+   "snapshot": "sync-1",
+   "note": "the card goes into a PC; the software resolves the seven plays"
+  },
+  {
+   "acks": [
+    {
+     "deviceId": "00:00:5e:00:53:01",
+     "epoch": "0x1122334455667788",
+     "seq": 7
+    }
+   ],
+   "note": "the root of the sync's commit acknowledges them all (2.5.6)"
+  },
+  {
+   "eraseNvs": {},
+   "note": "a flasher's install erases NVS"
+  },
+  {
+   "boot": {
+    "clock": "rtc"
+   },
+   "note": "NVS has no epoch: EPOCH_2 is made; the acknowledged files go (2.20.2)"
+  },
+  {
+   "play": {
+    "path": "B/w.opus",
+    "pathHash": "0xED4CBABAE25E9A33",
+    "size": 1333,
+    "fatTime": "0x5D4773E7",
+    "generation": 42,
+    "outcome": 1,
+    "source": 1,
+    "playedMs": 189000,
+    "durationMs": 189000,
+    "uptimeMs": 10000,
+    "startedAt": 1792072810000,
+    "pauseCount": 0
+   }
+  },
+  {
+   "play": {
+    "path": "A B/y.mp3",
+    "pathHash": "0x9102F8D89AF82EE3",
+    "size": 1259,
+    "fatTime": "0x5D4773E3",
+    "generation": 42,
+    "outcome": 1,
+    "source": 2,
+    "playedMs": 187000,
+    "durationMs": 187000,
+    "uptimeMs": 310000,
+    "startedAt": 1792073110000,
+    "pauseCount": 0
+   }
+  },
+  {
+   "play": {
+    "path": "A-/z.flac",
+    "pathHash": "0xE924E361BC393377",
+    "size": 1296,
+    "fatTime": "0x5D4773E5",
+    "generation": 42,
+    "outcome": 1,
+    "source": 3,
+    "playedMs": 188000,
+    "durationMs": 188000,
+    "uptimeMs": 610000,
+    "startedAt": 1792073410000,
+    "pauseCount": 0
+   }
+  },
+  {
+   "play": {
+    "path": "Artist/Album/CD2/01 - Disc Two.opus",
+    "pathHash": "0x00C00E285AE08F8E",
+    "size": 1148,
+    "fatTime": "0x5D4773DD",
+    "generation": 42,
+    "outcome": 1,
+    "source": 1,
+    "playedMs": 184000,
+    "durationMs": 184000,
+    "uptimeMs": 910000,
+    "startedAt": 1792073710000,
+    "pauseCount": 0
+   }
+  },
+  {
+   "play": {
+    "path": "a/v.mp3",
+    "pathHash": "0xD8412B7E4B025204",
+    "size": 1370,
+    "fatTime": "0x5D4773E9",
+    "generation": 42,
+    "outcome": 1,
+    "source": 2,
+    "playedMs": 190000,
+    "durationMs": 190000,
+    "uptimeMs": 1210000,
+    "startedAt": 1792074010000,
+    "pauseCount": 0
+   }
+  },
+  {
+   "play": {
+    "path": "É/u.mp3",
+    "pathHash": "0x7640FBF976A948B2",
+    "size": 1407,
+    "fatTime": "0x5D4773EB",
+    "generation": 42,
+    "outcome": 1,
+    "source": 3,
+    "playedMs": 191000,
+    "durationMs": 191000,
+    "uptimeMs": 1510000,
+    "startedAt": 1792074310000,
+    "pauseCount": 0
+   }
+  },
+  {
+   "play": {
+    "path": "Café/Album/01 - Title.mp3",
+    "pathHash": "0xF1B24FC757494F2B",
+    "size": 1444,
+    "fatTime": "0x5D4773ED",
+    "generation": 42,
+    "outcome": 1,
+    "source": 1,
+    "playedMs": 192000,
+    "durationMs": 192000,
+    "uptimeMs": 1810000,
+    "startedAt": 1792074610000,
+    "pauseCount": 0
+   }
+  },
+  {
+   "play": {
+    "path": "Café/Album/01 - Title.mp3",
+    "pathHash": "0x57017C0CC011BB1B",
+    "size": 1481,
+    "fatTime": "0x5D4773EF",
+    "generation": 42,
+    "outcome": 1,
+    "source": 2,
+    "playedMs": 193000,
+    "durationMs": 193000,
+    "uptimeMs": 2110000,
+    "startedAt": 1792074910000,
+    "pauseCount": 0
+   }
+  },
+  {
+   "play": {
+    "path": "Artist/Album/01 - Title.mp3",
+    "pathHash": "0xDA70B312760188D8",
+    "size": 1000,
+    "fatTime": "0x5D4773D5",
+    "generation": 42,
+    "outcome": 1,
+    "source": 3,
+    "playedMs": 180000,
+    "durationMs": 180000,
+    "uptimeMs": 2410000,
+    "startedAt": 1792075210000,
+    "pauseCount": 0
+   }
+  },
+  {
+   "snapshot": "end",
+   "note": "no sync since: the rotation dropped four plays, and said so"
+  }
+ ]
+}
