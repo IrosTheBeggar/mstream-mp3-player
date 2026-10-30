@@ -3106,7 +3106,11 @@ static void stepCard(uint32_t now, bool input) {
   ScanScheduler::In in;
   in.nowMs = now;
   in.listMoving = userInterface && userInterface->listMoving();
-  in.input = input;
+  // A list moving counts as input too: the walk, the scan and a compaction
+  // then wait ScanScheduler::Config::inputQuietMs after a fling comes to
+  // rest, so a listener flicking through a long list doesn't get a slice
+  // of the card between flicks (a cover isn't held by that wait).
+  in.input = input || in.listMoving;
   in.playing = player.state() == PlayState::Playing;
   in.ringMs = audio.bufferedMsNow();
   in.ringCapacityMs = audio.ringCapacityMs();
@@ -3491,6 +3495,7 @@ void setup() {
                  "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes); "
                  "ui the UI's navigation (ui0-ui4 tab, uib back, uic coach cards, uiL<tag> language (uiL the list, "
                  "uiL- forget it), uiP the first boot's language picker, uit/uih/uis/uid/uip scripted finger, "
+                 "uir0/uir1 the A-Z rail's scrub as before 0.12.0 / paced (uir: which), "
                  "uk1/uk2/uk0 the scripted finger on a skewed panel (uk2 with jitter) or not, "
                  "uiF<c/s/p/r/l/n/f/t/g/u/w> show a faked Bluetooth, no-card, exFAT/NTFS/GPT/can't-read card or waiting state "
                  "(uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
