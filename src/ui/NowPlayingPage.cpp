@@ -217,12 +217,13 @@ void NowPlayingPage::drawCover() {
   gfx::pushRows(c, kCoverX - 1, kCoverY - 1, kCoverPx + 2, 0, shownRows);
 }
 
-void NowPlayingPage::drawTitle() {
+void NowPlayingPage::drawTitle(int rows) {
   using namespace uitext;
   const AppState& s = ui_.state();
   M5Canvas& c = gfx::strip();
   Fonts& f = Fonts::instance();
   const int w = kW - kColumnX;
+  const int h = rows > 0 && rows < kTitleH ? rows : kTitleH;
   const uint16_t bg = navBg();
   // The strip is filled here, so its lines are drawn with no background
   // (the ink as both colours: blended over the strip, Fonts::draw()). A
@@ -256,7 +257,7 @@ void NowPlayingPage::drawTitle() {
       trf(line, sizeof(line), S::now_playing_wait_connecting);
     }
     f.draw(c, Font::Small, line, kWaitTextX, 43, kWaitTextW, col::DIM, col::DIM);
-    gfx::push(c, kColumnX, kTitleY, w, kTitleH);
+    gfx::push(c, kColumnX, kTitleY, w, h);
     return;
   }
   // Two big lines (Title), else up to three smaller ones (Bold): too long
@@ -269,7 +270,33 @@ void NowPlayingPage::drawTitle() {
   for (int i = 0; i < l.count; ++i) {
     f.draw(c, l.bold ? Font::Bold : Font::Title, lines[i], x, titlelayout::lineY(l, i), kTextW, ink, ink);
   }
-  gfx::push(c, kColumnX, kTitleY, w, kTitleH);
+  gfx::push(c, kColumnX, kTitleY, w, h);
+}
+
+void NowPlayingPage::repaintHeader() {
+  // The states with a layout of their own (nothing loaded, no card, a play
+  // that waits): all of it, as before.
+  const AppState& s = ui_.state();
+  if (s.current < 0 || drawn_.empty || drawn_.noCard || drawn_.waiting || s.play == PlayState::Waiting) {
+    repaint();
+    return;
+  }
+  constexpr int kRowEnd = kContentY + Toast::kH;  // 72: the row a toast covers ends here
+  const uint16_t bg = navBg();
+  // The navigation area's fills in the row (fillNav()'s, cut at its end).
+  gfx::fill(0, kContentY, kW, kTitleY - kContentY, bg);
+  gfx::fill(0, kTitleY, kColumnX, kCoverY - 1 - kTitleY, bg);
+  gfx::fill(0, kCoverY - 1, kCoverX - 1, kRowEnd - (kCoverY - 1), bg);
+  gfx::fill(kCoverX + kCoverPx + 1, kCoverY - 1, kColumnX - (kCoverX + kCoverPx + 1), kRowEnd - (kCoverY - 1), bg);
+  // The cover's rows in it, from its sprite as drawn (none: the card's
+  // colour, as drawCover() has it then); the title strip's.
+  const int coverRows = kRowEnd - (kCoverY - 1);
+  if (cover_) {
+    gfx::pushRows(*cover_, kCoverX - 1, kCoverY - 1, kCoverPx + 2, 0, coverRows);
+  } else {
+    gfx::fill(kCoverX, kCoverY, kCoverPx, kRowEnd - kCoverY, col::CARD);
+  }
+  drawTitle(kRowEnd - kTitleY);
 }
 
 void NowPlayingPage::drawArtistAlbum() {

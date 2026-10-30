@@ -253,8 +253,12 @@ public:
   void clear() { n_ = 0; }
   // A scan result. `cod`: its class of device (0: unknown). A device seen
   // again updates its name (if it has one now) and signal. The weakest is
-  // dropped for a stronger one when the list is full.
-  void note(const uint8_t addr[6], const char* name, int rssi, uint32_t cod);
+  // dropped for a stronger one when the list is full. True when what a
+  // list of them shows changed: a device came (or took the weakest's
+  // place), a name or a kind came or changed, a signal crossed a bars()
+  // step; false for the same device at much the same signal (most results
+  // of a search: a repeat several times a second a device).
+  bool note(const uint8_t addr[6], const char* name, int rssi, uint32_t cod);
   int count() const { return n_; }
   const BtDevice& at(int i) const { return d_[i]; }
 

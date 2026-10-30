@@ -65,11 +65,20 @@ void DancePage::repaint() {
   drawPanels(true);
 }
 
-void DancePage::drawPanels(bool all) {
+void DancePage::repaintHeader() {
+  constexpr int kRowEnd = kContentY + Toast::kH;  // 72: the row a toast covers ends here
+  gfx::fill(0, kContentY, kW, kRowEnd - kContentY, col::BG);
+  DanceMode& d = ui_.dance();
+  d.view().enter();  // the box's top rows were cleared: its next frame is whole
+  drawPanels(true, true);
+}
+
+void DancePage::drawPanels(bool all, bool topOnly) {
   DanceMode& d = ui_.dance();
   const AppState& s = ui_.state();
   Fonts& f = Fonts::instance();
   M5Canvas& c = gfx::strip();
+  const bool rest = !topOnly;  // the panels below the header row
   const float bpm = d.bpm();
   const int bpmX10 = bpm > 0.0f ? static_cast<int>(std::lround(bpm * 10.0f)) : 0;
   const int lock = d.locked() ? 2 : bpm > 0.0f ? 1 : 0;
@@ -89,7 +98,7 @@ void DancePage::drawPanels(bool all) {
     f.draw(c, Font::Title, v, 50, 40, 96, col::TXT, col::BG, Fonts::Align::Centre);
     gfx::push(c, 0, 44, 100, 56);
   }
-  if (all || lock != lock_) {
+  if (rest && (all || lock != lock_)) {
     c.fillRect(0, 0, 100, 32, col::BG);
     const uint16_t pill = lock == 2 ? col::GREEN : lock == 1 ? col::AMBER : col::BTN;
     c.fillRoundRect(14, 4, 72, 24, 12, pill);
@@ -97,7 +106,7 @@ void DancePage::drawPanels(bool all) {
            68, lock ? col::DARK : col::DIM, pill, Fonts::Align::Centre);
     gfx::push(c, 0, 102, 100, 32);
   }
-  if (all || conf != conf_) {
+  if (rest && (all || conf != conf_)) {
     c.fillRect(0, 0, 100, 56, col::BG);
     f.draw(c, Font::Small, tr(S::dance_confidence), 50, 10, 96, col::DIM, col::BG, Fonts::Align::Centre);
     c.fillRoundRect(14, 22, 72, 6, 3, col::DIV);
@@ -133,7 +142,7 @@ void DancePage::drawPanels(bool all) {
     gfx::push(c, 220, 102, 100, 56);
   }
   // The bottom: the track, or the computer that drives the dancer.
-  if (all || s.trackId != track_ || host != host_) {
+  if (rest && (all || s.trackId != track_ || host != host_)) {
     c.fillRect(0, 0, kW, 40, col::BG);
     if (host) {
       f.draw(c, Font::Bold, tr(S::dance_viz_title), kW / 2, 12, uitext::kDanceBottomW, col::TXT, col::BG,
@@ -154,7 +163,7 @@ void DancePage::drawPanels(bool all) {
                            ? 0
                            : static_cast<int>(static_cast<uint64_t>(std::min(s.positionMs, s.durationMs)) * kW /
                                               s.durationMs);
-  if (all || progress != progress_ || host != host_) {
+  if (rest && (all || progress != progress_ || host != host_)) {
     c.fillRect(0, 0, kW, 2, host ? col::BG : col::DIV);  // (the computer's track: no line)
     if (progress > 0) c.fillRect(0, 0, progress, 2, accent::Dance);
     gfx::push(c, 0, kH - 2, kW, 2);

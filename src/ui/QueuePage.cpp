@@ -28,6 +28,7 @@
 //     replaced it) starts at the playing track with no row open: the
 //     remembered ones were positions in the old queue.
 #include <algorithm>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 
@@ -91,6 +92,7 @@ void QueuePage::enter(NavModel::PageRef& ref) {
   }
   content_ = s.contentVersion;
   position_ = s.positionVersion;
+  drawnCurrent_ = s.current;
   emptyDj_ = autodjview::emptyButton(s.autoDj, s.libraryTracks);
   selecting_ = false;
   touchOn_ = TouchOn::None;
@@ -127,7 +129,7 @@ void QueuePage::leave() {
 void QueuePage::repaint() {
   repaintHeader();
   if (selecting_) drawBar();
-  ui_.list().invalidate();
+  ui_.repaintList();
 }
 
 // ---- the header ----
@@ -251,6 +253,7 @@ bool QueuePage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
     // and an open row closes (it would be under another track now).
     content_ = s.contentVersion;
     position_ = s.positionVersion;
+    drawnCurrent_ = s.current;
     if (selecting_) {
       selection_.resize(s.queueSize);
       if (s.queueSize == 0) {
@@ -262,8 +265,19 @@ bool QueuePage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
     list.collapse();
     list.reload();
   } else if (s.positionVersion != position_) {
-    position_ = s.positionVersion;  // another track plays: its row and the last one change
-    list.refreshAll();
+    // Another track plays: its row, the last current one's and the rows
+    // between them (played or not) change. An advance by one or two (the
+    // usual: the next track) draws those in place; a jump the whole band
+    // (50-78 ms, which every track change cost until 0.12.0).
+    position_ = s.positionVersion;
+    const int32_t was = drawnCurrent_;
+    const int32_t now = s.current;
+    drawnCurrent_ = now;
+    if (was >= 0 && now >= 0 && std::abs(now - was) <= 2) {
+      for (int32_t r = std::min(was, now); r <= std::max(was, now); ++r) list.refreshRow(static_cast<uint32_t>(r));
+    } else {
+      list.refreshAll();
+    }
   }
   // Empty: Auto DJ's button comes or goes with a usable index (a card
   // mounted again): the empty state drawn again.
