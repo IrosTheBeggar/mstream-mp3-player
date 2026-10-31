@@ -61,6 +61,10 @@ inline void push(M5Canvas& sprite, int x, int y, bool over = false) {
 // Pushes rows [sy0, sy1) of the top-left w-wide part of `sprite` (sprite
 // row sy lands on screen row y + sy).
 void pushRows(M5Canvas& sprite, int x, int y, int w, int sy0, int sy1, bool over = false);
+// Pushes the w x h rectangle of `sprite` at (sx, sy) with its top-left at
+// screen (x, y): a piece of a panel kept in a sprite (a pressed button, a
+// grid cell, the dancer's box), mapped and clipped like the rest.
+void pushRect(M5Canvas& sprite, int sx, int sy, int w, int h, int x, int y, bool over = false);
 
 // Every hold the UI's drawing took (for the 'ui' console report).
 SpiHoldStats& holds();

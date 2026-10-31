@@ -607,38 +607,51 @@ void NowPlayingPage::drawWaiting() {
 void NowPlayingPage::drawTransport() {
   const AppState& s = ui_.state();
   M5Canvas& c = gfx::strip();
-  Fonts& f = Fonts::instance();
   c.fillRect(0, 0, kW, kTransportDrawH, col::BG);
   const int cy = kTransportDrawH / 2;  // y 204
   for (int z = 0; z < 5; ++z) {
-    const int cx = z * kZoneW + kZoneW / 2;
-    const bool down = pressed_ == static_cast<Zone>(Volume + z);
-    if (down && z != 2) c.fillCircle(cx, cy, 24, col::BTN_HI);
-    switch (z) {
-      case 0: {  // the output and its volume: tap for the volume sheet
-        const uint16_t off = s.btLost || s.btSession.failed() ? col::RED : col::AMBER;
-        const uint16_t ic = s.onBluetooth ? (s.btConnected ? col::CYAN : off) : col::SOFT;
-        icons::drawCentred(c, s.onBluetooth ? icons::kHeadphones : icons::kSpeaker, cx, cy - 9, ic);
-        char v[16];
-        trf(v, sizeof(v), S::format_percent, s.volume);
-        f.draw(c, Font::Small, v, cx, cy + 14, kZoneW, col::DIM, down ? col::BTN_HI : col::BG, Fonts::Align::Centre);
-        break;
-      }
-      case 1: icons::drawCentred(c, icons::kPrev, cx, cy, col::TXT); break;
-      case 2: drawPlayButton(c, cx, cy, down); break;
-      case 3: icons::drawCentred(c, icons::kNext, cx, cy, col::TXT); break;
-      default:
-        // The dots always at the same height (they don't jump when the
-        // indicator comes or goes); the indicator under them, on the
-        // control that changes it, as the volume's "60%" under its icon.
-        icons::drawCentred(c, icons::kMore, cx, cy - 9, col::SOFT);
-        drawModes(c, cx, cy + 14);
-        break;
-    }
+    drawZoneInto(c, z, z * kZoneW + kZoneW / 2, cy, pressed_ == static_cast<Zone>(Volume + z));
   }
   gfx::push(c, 0, kTransportDrawY, kW, kTransportDrawH);
   drawn_.shuffle = s.shuffle;
   drawn_.repeat = s.repeat;
+}
+
+void NowPlayingPage::drawZoneInto(M5Canvas& c, int z, int cx, int cy, bool down) {
+  const AppState& s = ui_.state();
+  Fonts& f = Fonts::instance();
+  if (down && z != 2) c.fillCircle(cx, cy, 24, col::BTN_HI);
+  switch (z) {
+    case 0: {  // the output and its volume: tap for the volume sheet
+      const uint16_t off = s.btLost || s.btSession.failed() ? col::RED : col::AMBER;
+      const uint16_t ic = s.onBluetooth ? (s.btConnected ? col::CYAN : off) : col::SOFT;
+      icons::drawCentred(c, s.onBluetooth ? icons::kHeadphones : icons::kSpeaker, cx, cy - 9, ic);
+      char v[16];
+      trf(v, sizeof(v), S::format_percent, s.volume);
+      f.draw(c, Font::Small, v, cx, cy + 14, kZoneW, col::DIM, down ? col::BTN_HI : col::BG, Fonts::Align::Centre);
+      break;
+    }
+    case 1: icons::drawCentred(c, icons::kPrev, cx, cy, col::TXT); break;
+    case 2: drawPlayButton(c, cx, cy, down); break;
+    case 3: icons::drawCentred(c, icons::kNext, cx, cy, col::TXT); break;
+    default:
+      // The dots always at the same height (they don't jump when the
+      // indicator comes or goes); the indicator under them, on the
+      // control that changes it, as the volume's "60%" under its icon.
+      icons::drawCentred(c, icons::kMore, cx, cy - 9, col::SOFT);
+      drawModes(c, cx, cy + 14);
+      break;
+  }
+}
+
+// One zone alone (64 x 56, 7 KB): its press look on a Down and off at the
+// lift, the spinner's next step. The whole strip (36 KB) drew for each of
+// those before: 12 ms a press, MEASURED.
+void NowPlayingPage::drawZone(int z) {
+  M5Canvas& c = gfx::strip();
+  c.fillRect(0, 0, kZoneW, kTransportDrawH, col::BG);
+  drawZoneInto(c, z, kZoneW / 2, kTransportDrawH / 2, pressed_ == static_cast<Zone>(Volume + z));
+  gfx::push(c, z * kZoneW, kTransportDrawY, kZoneW, kTransportDrawH);
 }
 
 void NowPlayingPage::drawModes(M5Canvas& c, int cx, int cy) {
@@ -681,12 +694,6 @@ void NowPlayingPage::drawPlayButton(M5Canvas& c, int cx, int cy, bool down) {
                      cy, col::DARK);
 }
 
-void NowPlayingPage::drawPlayZone() {
-  M5Canvas& c = gfx::strip();
-  c.fillRect(0, 0, kZoneW, kTransportDrawH, col::BG);
-  drawPlayButton(c, kZoneW / 2, kTransportDrawH / 2, pressed_ == PlayPause);
-  gfx::push(c, 2 * kZoneW, kTransportDrawY, kZoneW, kTransportDrawH);
-}
 
 bool NowPlayingPage::emptyState(EmptyState& e) const {
   const AppState& s = ui_.state();
@@ -835,7 +842,7 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
     // The spinner's next step: only its zone.
     nextSpinMs_ = nowMs + kSpinMs;
     spin_ = static_cast<uint8_t>((spin_ + 1) % 8);
-    drawPlayZone();
+    drawZone(2);
   }
   drawn_.valid = true;
   drawn_.waiting = waiting;
@@ -1103,7 +1110,7 @@ void NowPlayingPage::onEvent(const InputEvent& e) {
     // long press ends as a slow tap (Ui), the menu with the tap's tick.
     if (z == Nav && !waiting) drawNav();
     if (z == WaitSpeaker || z == WaitCancel) drawWaiting();
-    if (z >= Volume) drawTransport();
+    if (z >= Volume) drawZone(z - Volume);
     return;
   }
   if (e.type != T::Tap && e.type != T::DragStart && e.type != T::Release && e.type != T::Cancel) return;
@@ -1113,7 +1120,7 @@ void NowPlayingPage::onEvent(const InputEvent& e) {
   // view), and for a drag or a lift that does nothing.
   if (was == Nav && !waiting) drawNav();
   if (was == WaitSpeaker || was == WaitCancel) drawMiddle();  // (the wait may have ended meanwhile)
-  if (was >= Volume) drawTransport();
+  if (was >= Volume) drawZone(was - Volume);
   if (e.type != T::Tap || was == None) return;
   ui_.tick();
   switch (was) {

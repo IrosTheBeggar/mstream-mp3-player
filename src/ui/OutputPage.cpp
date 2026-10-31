@@ -312,12 +312,16 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
     }
     const uint32_t sc = screenSig(ui_.state());
     if (sc != drawnScreen_ && still) {
+      // Only the rows whose value changed (screenSig()'s fields): a tap on
+      // one cycles it, and the group's four other rows on screen drew again
+      // with it (49 ms a tap, MEASURED).
+      const uint32_t changed = sc ^ drawnScreen_;
       drawnScreen_ = sc;
-      list.refreshRow(ScreenOff);
-      list.refreshRow(Brightness);
-      list.refreshRow(IdleOff);
-      list.refreshRow(CpuSpeed);
-      list.refreshRow(BtPower);
+      if (changed & 0x0000F0u) list.refreshRow(ScreenOff);
+      if (changed & 0x00000Fu) list.refreshRow(Brightness);
+      if (changed & 0x000F00u) list.refreshRow(IdleOff);
+      if (changed & 0x038000u) list.refreshRow(CpuSpeed);
+      if (changed & 0x007000u) list.refreshRow(BtPower);
     }
     // The spinner, while something is under way.
     const AppState& s = ui_.state();

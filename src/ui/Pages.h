@@ -198,13 +198,16 @@ private:
   void endScrub();
   void seekTo(const SeekBar::Out& o, uint32_t nowMs);
   void drawTransport();
+  // One of its five zones into `c`, centred at (cx, cy), `down` in its
+  // press look; and one zone alone (its press look on or off, the spinner's
+  // next step), pushed by itself.
+  void drawZoneInto(M5Canvas& c, int z, int cx, int cy, bool down);
+  void drawZone(int z);
   // The shuffle and repeat indicator into `c`, centred at (cx, cy): the
   // glyphs that apply, nothing when neither does.
   void drawModes(M5Canvas& c, int cx, int cy);
   // The play button (a spinner while waiting) into `c`, centred at (cx, cy).
   void drawPlayButton(M5Canvas& c, int cx, int cy, bool down);
-  // Only the play button's zone (the spinner's next step).
-  void drawPlayZone();
   uint32_t waitSig() const;
   // The progress line's middle: at most this wide (between the times).
   static constexpr int kMidW = uitext::kNowPlayingMidW;
