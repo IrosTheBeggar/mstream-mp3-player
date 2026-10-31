@@ -3429,6 +3429,8 @@ void setup() {
     j.listMoving = [] { return userInterface && userInterface->listMoving(); };
     // (CardTasks' ScanScheduler::In::dark: nothing drawn.)
     j.dark = [] { return !userInterface || !userInterface->coversAllowed(); };
+    // gx and gxs refuse while music plays or waits for the headphones.
+    j.playing = [] { return player.state() == PlayState::Playing || player.state() == PlayState::Waiting; };
     tc->setJobs(j);
   }
   // Auto DJ: its settings, and the index the card's root names, opened and

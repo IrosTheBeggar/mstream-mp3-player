@@ -50,6 +50,24 @@
 //        glw also the stock walk (forEachFile) and 3.2.3's walk (CardWalk
 //        over FatFs), each uncached and cached (minutes at 20k: playback
 //        stopped)
+//   gx   the card's write bench (docs/SWAP-MODE.md section 7): a file of
+//        n MB (8, or gx<n>) in /.player written in turn with each setting
+//        (the piece's size, f_expand, the syncs, ACMD23, raw CMD25s), each
+//        run's MB/s, its pieces' p50/p99/max and the driver's split of its
+//        time (lib/SD's sd_bench.h), some read back and checked; the file
+//        deleted after each run. Not while music plays; the loop waits
+//        throughout (about 6 s a run at 8 MB, 65 s for the nine, MEASURED)
+//   gxs  ... its clock soak: n MB (64, or gxs<n>) written raw inside one
+//        contiguous file and read back, at the mount's clock (20 MHz),
+//        then at 80/3 = 26.67 MHz. Only the file's own sectors see the
+//        faster clock: FatFs's reads and writes stay at the mount's
+//   gxc  the data blocks' CRC16s timed, a 512 B block from internal RAM
+//        and 512 B blocks streamed from 64 KB of PSRAM: the stock
+//        byte-at-a-time table (the driver's before, gxc0), the ROM's, the
+//        driver's two bytes a step (lib/core SdCrc16, gxc1, the default)
+//        with its tables in RAM and, for the comparison, in flash; each
+//        checked against the others. gxc0 and gxc1 switch the driver's
+//        until a restart (gx's A/B)
 //
 // About 35 KB of PSRAM while a command runs (gs: until its last line; the
 // readers, the check's Walker, the records found, their buffers), none
@@ -95,6 +113,9 @@ public:
     // the scan's slices yield to it too).
     bool (*listMoving)() = nullptr;
     bool (*dark)() = nullptr;
+    // Music playing or waiting for the headphones: gx and gxs refuse (the
+    // decoder shares the card and its lock).
+    bool (*playing)() = nullptr;
   };
 
   // gs's piece of a pass: its units (lib/core TagCheck) until this long
@@ -144,6 +165,15 @@ private:
   void cache(uint32_t n);
   void cacheCounts(const char* when);
   void bench(bool walks);
+  // gx, gxs (the sizes in MB, tagtext's bounds).
+  void writeBench(uint32_t mb);
+  void writeSoak(uint32_t mb);
+  // gx's and gxs's checks before they write: a card that takes writes, no
+  // music, the card worker's step done, room for `bytes`. False: refused,
+  // and said why.
+  bool writeBenchReady(const char* what, uint32_t bytes);
+  // gxc (`n` tagtext::kCrcReport), gxc0, gxc1.
+  void crcBench(uint32_t n);
   void job(const char* what, bool (*fn)());
   void scanLine();
   // `rel`'s record in the tags file at `file` (D when `device`).

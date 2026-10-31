@@ -2,7 +2,8 @@
 
 The Arduino core's SD library, copied from framework-arduinoespressif32
 3.3.12 (`libraries/SD`, https://github.com/espressif/arduino-esp32/tree/3.3.12/libraries/SD)
-with two files changed: the driver, and the library's description. A
+with two files changed, the driver and the library's description, and
+one file of the project's added, the write bench's interface. A
 library named `SD` in the project's `lib/` comes
 before the framework's in PlatformIO's search, so `#include <SD.h>` and
 `<sd_diskio.h>` find this copy and the framework's isn't compiled (the
@@ -15,8 +16,11 @@ Licence: Apache-2.0, as each file's header says
 
 ## What changed
 
-- `src/sd_diskio.cpp`: the driver's busy waits (below). Its header says
+- `src/sd_diskio.cpp`: the driver's busy waits (below), the data blocks'
+  CRC16 and the console's write bench (further below). Its header says
   so, and every change is marked `mstream-mp3-player:`.
+- `src/sd_bench.h`, added: the write bench's interface. The project's own
+  file (GPL-3.0-or-later, its header says so), not the framework's.
 - `library.properties`: `version=3.3.12+mstream.1` (was `3.3.12`), so the
   dependency graph shows this copy, and `paragraph=` says what it is (was
   the stock library's description). Its other lines are the framework's.
@@ -51,8 +55,37 @@ host-tested in test_sd_busy):
   before it reports `STA_NOINIT`, which makes FatFs mount the volume again
   (every open file gone). No answer at all (0xFF) is reported at once.
 
+The write bench (2026-10-19; the console's `gx` and `gxs`, in
+src/app/TagConsole.cpp, docs/SWAP-MODE.md section 7):
+
+- **Its timers**, per CMD25: ACMD23, each block's CRC16, the wait for the
+  card before each block, the block on the wire, the end (the last
+  block's busy, Stop Tran, the card's programming) and the CMD13 after.
+  They run only while the bench is on; off, they cost a branch a call.
+- **Its counts**: CMD25s and their blocks, R1s with the CRC bit and data
+  blocks whose CRC16 failed, and CMD25s cut short by a refused block. The
+  last two are counted always.
+- **ACMD23's switch**: on unless the bench turns it off.
+- **The clock**, read and set uncapped: the mount's 25 MHz cap is the
+  stock code's, and the HAL makes 80 MHz / n of what is asked, rounded
+  down, so 25 MHz runs at 20.
+- **The CID** (CMD10; the enum's `SEND_CID` is SD mode's CMD2) **and the
+  CSD** (CMD9), read for the bench's report.
+
+The data blocks' CRC16 (2026-10-20; docs/SWAP-MODE.md section 7.2.1):
+
+- **Two bytes a step.** Each data block's CRC16, written or read, is now
+  lib/core `SdCrc16`'s, two bytes a step from two tables in RAM (1 KB).
+  It was `CRC16()`'s from `sd_diskio_crc.c`, a byte a step from one in
+  flash. The result is the same: test_sd_crc16 compiles
+  `sd_diskio_crc.c` in and compares the two.
+- **The gain:** writes and reads 3 % faster in 32 KB pieces, MEASURED.
+- **What is unchanged:** `CRC16()` stays for the bench's A/B (`gxc0`
+  puts the driver back on it until a restart), and `CRC7()` for the
+  commands; `sd_diskio_crc.c` itself is untouched.
+
 Upgrading the Arduino core: compare its `libraries/SD/src/sd_diskio.cpp`
 with the hash above. If it changed, copy the new library here and apply
-the marked changes again, and `library.properties`' two lines (the
+the marked changes again (`sd_bench.h` stays), and `library.properties`' two lines (the
 version as the new core's plus `+mstream.1`); or drop this copy if
 upstream waits for 0xFF.
