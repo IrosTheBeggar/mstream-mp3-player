@@ -7,6 +7,7 @@
 
 #include "NvsLayout.h"
 #include "QueueRemap.h"
+#include "app/NvsLater.h"
 #include "app/Psram.h"
 
 namespace {
@@ -171,14 +172,10 @@ PlaybackController::Repeat QueueStore::loadRepeat() {
   return static_cast<PlaybackController::Repeat>(mode);
 }
 
+// Queued: written once the taps rest (app/NvsLater; the "..." menu's Repeat
+// row cycles it in place), not under the finger.
 void QueueStore::saveRepeat(PlaybackController::Repeat r) {
-  Preferences p;
-  if (!p.begin(kNvsNamespace, false)) {
-    Serial.println("[queue] repeat: NVS can't be opened: not saved");
-    return;
-  }
-  if (p.putUChar(nvslayout::kRepeatKey, static_cast<uint8_t>(r)) != 1) Serial.println("[queue] repeat: NOT saved");
-  p.end();
+  nvslater::putU8(kNvsNamespace, nvslayout::kRepeatKey, static_cast<uint8_t>(r));
 }
 
 void QueueStore::loop(uint32_t nowMs) {

@@ -56,6 +56,7 @@
 #include "app/HostQuery.h"
 #include "app/IdlePower.h"
 #include "app/Library.h"
+#include "app/NvsLater.h"
 #include "app/NvsSchema.h"
 #include "app/PowerLab.h"
 #include "app/PowerSettings.h"
@@ -3560,6 +3561,7 @@ void loop() {
   const bool anyInput = idleInput || touchedThisPass || screen.takeInput();
   stepIdle(now, anyInput);
   powerSettings.update(audio.bluetooth().connected());
+  nvslater::loop(now);  // settings the taps changed: written once they rest
   stepCpuRestart(now);
   audio.loop(now);
   powerLab.loop(now);
