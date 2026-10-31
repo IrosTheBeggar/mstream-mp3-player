@@ -273,11 +273,25 @@ void Ui::ensureScroller(bool wanted) {
       Serial.println("[ui] the hardware scroll is unavailable: lists won't draw");
     }
   } else if (!wanted && vscroll_.active()) {
-    // The band's GRAM is in the rotated order: cleared first (all of it,
-    // whatever the rotation), then the address back to the identity.
-    gfx::fill(0, ListView::kTop, kW, ListView::kHeight, col::BG, true);
-    vscroll_.end();
+    // A page that doesn't scroll (Now Playing, the Dance tab) comes up over
+    // the band: the scroll mode stays on, and its drawing lands where it
+    // shows through the mapping (ui/Gfx, DanceView::pushRect()), so the
+    // band is neither cleared first (168 rows, 21 ms of black before the
+    // page painted, MEASURED) nor shown rotated. What the band's GRAM holds
+    // isn't the list's any more: the next list page draws it all again, in
+    // place (ListScroller::invalidate()).
+    vscroll_.invalidate();
   }
+}
+
+// A screen of its own takes the display (suspend()): it draws with plain
+// M5GFX calls, so the scroll mode ends. The band's GRAM is in the rotated
+// order: cleared first (all of it, whatever the rotation), then the address
+// back to the identity.
+void Ui::endScroller() {
+  if (!vscroll_.active()) return;
+  gfx::fill(0, ListView::kTop, kW, ListView::kHeight, col::BG, true);
+  vscroll_.end();
 }
 
 void Ui::setListBand(int height) {
@@ -1870,7 +1884,7 @@ void Ui::suspend() {
   if (page_) page_->leave();
   page_ = nullptr;
   applyCover();
-  ensureScroller(false);
+  endScroller();
   touch_ = TouchOn::None;
 }
 

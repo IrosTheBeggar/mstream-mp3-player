@@ -333,7 +333,11 @@ private:
   Page* pageFor(uint8_t kind);
   void showTop();
   void clearContent();
+  // The list band's hardware scroll: begun for a page that scrolls, kept
+  // on (the map invalidated) under one that doesn't; ended, the band
+  // cleared first, when a screen of its own takes the display.
   void ensureScroller(bool wanted);
+  void endScroller();
   void tapTab(NavModel::Tab t);
   // A glass event to whatever its touch landed on.
   void route(const InputEvent& e);
