@@ -1093,7 +1093,7 @@ ignored (HeadsetKeys); the Core2's play resumes. Console: `T` status,
 The device turns itself off after N minutes idle (docs/ENERGY.md item 4;
 `IdlePolicy`, host-tested in test_idle_policy): "Turn off when idle" on the
 Output tab, 10 / **20** / 60 min / Never, saved (NVS "power"/"idle_after",
-`app/IdlePower`). Idle means all of these: the player Stopped or Paused
+`app/IdlePower`, written once the taps rest). Idle means all of these: the player Stopped or Paused
 (not Playing, not Waiting for the headphones); not on USB (the power
 chip's status, read once a second by `ScreenControl`: by
 `M5.Power.getType()`, the AXP192's ACIN or VBUS, the AXP2101's VBUS (the
@@ -1650,8 +1650,9 @@ on 0.10.0 the language is still there. Schema 4 (from 0.11.0) is schema
 3's keys and the `autodj` namespace, Auto DJ's switch and settings: four
 u8s, `on` (1 on), `mode` (0 Follow the vibe, 1 Stay on seed), `floor`
 (Match strictness in percent: 55, 60, 65, 70 or 75) and `match` (bit 0
-BPM continuity, bit 1 Harmonic mixing), each written at once when it
-changes (`app/AutoDjStore`, [AUTODJ.md](AUTODJ.md)). Its `migrate(3, 4)`
+BPM continuity, bit 1 Harmonic mixing), each queued when it changes and
+written once the taps rest (`app/AutoDjStore` through `app/NvsLater`,
+[AUTODJ.md](AUTODJ.md)). Its `migrate(3, 4)`
 step does nothing: an absent key, or a value this firmware doesn't take,
 reads as its default (off, Follow the vibe, 55 %, both off). 0.10.0
 leaves a schema-4 NVS as it is and never reads the namespace.
@@ -1679,6 +1680,21 @@ The rules:
   would have kept v0.5.0's millisecond, but two writes per pause aren't
   atomic.
 - Keys are at most 15 characters (NVS's limit).
+- **What a tap changes is written once the taps rest** (0.12.0:
+  `app/NvsLater`; when, `lib/core/SaveLater`, host-tested in
+  test_save_later). The screen's off-after and brightness, the idle
+  power-off, the Bluetooth power, the repeat mode and Auto DJ's keys are
+  queued (the value applies at once) and written 1.5 s after the last
+  change, 6 s after the first at most, each namespace opened once, with
+  one `[nvs] saved ...` line; a key queued again is written once, with its
+  last value. A write held the loop a few ms in the middle of the tap that
+  made it (longer when NVS's page fills and a sector is erased), and the
+  other core's tasks that run from flash stand still while it lasts.
+  Before a restart or a power-off (`PowerSettings::restart()`,
+  `IdlePower::powerOff()`) what is queued is written first. The language,
+  the tips' flag, the CPU speed (its restart follows), the queue's
+  position and resume point and the Bluetooth stack's keys are written as
+  before.
 
 The keys of schema 4, by namespace: `meta` (schema); `input` (cal,
 cal_ask, haptics, railtick); `player` (bt_name, bt_forgot, bt_fresh);
@@ -2231,8 +2247,9 @@ the browsing UI hold its **track ids**, never strings.
   come back with the queue; not shuffled, the file is version 1 byte for
   byte. Older firmware reads a version 2 file as no queue file at all
   (`not a whole queue file, ignored`): a downgrade while shuffled loses the
-  queue once. The repeat mode is NVS's (`queue`/`repeat`, written at once
-  on a change, read at boot before the queue). The file is rewritten 2 s after the
+  queue once. The repeat mode is NVS's (`queue`/`repeat`, queued on a
+  change and written once the taps rest, `app/NvsLater`; read at boot
+  before the queue). The file is rewritten 2 s after the
   last edit, 32 lines a loop pass (a 10,000-track queue is ~700 KB and never
   holds the loop), into `queue.tmp`, then renamed over `queue.txt`; an
   edit while a write is under way drops that write. **Edits that never
@@ -3000,7 +3017,24 @@ Queue, Dance and Output (with its Pair and About pages).
   arrived under it), and the Output page's spinners push their patch
   alone (`ListView::pushOnRow()`, `ListScroller::pushRectAtScreen()`,
   through the scroll mapping: ~0.3 ms instead of a row rendered and
-  pushed whole, ~11 ms, 8 times a second). The band can
+  pushed whole, ~11 ms, 8 times a second), and a tap on one of the Output
+  page's screen and power rows draws that row alone (its group's four
+  other rows on screen drew again with it: 49 ms a tap, MEASURED). **A
+  press draws the control alone** (0.12.0): a sheet's row or its ✕ (the whole sheet rendered and
+  the row pushed was 39 ms, twice a tap, MEASURED), the sleep sheet's pill
+  (55 ms), the volume sheet's controls' row (36 ms), the jump grid's cell
+  or its header's pill (58 ms), a dialog's button (44 ms); each is drawn
+  again over the panel sprite as last rendered (rendered whole first when
+  another overlay drew in it since) and pushed by itself
+  (`gfx::pushRect()`). And **the band keeps its scroll mode under Now
+  Playing and the Dance tab** (`Ui::ensureScroller()`): their drawing goes
+  through the same mapping as an overlay's (the dancer's box too,
+  `DanceView::pushRect()`), so a switch from a list page neither clears
+  the band first (168 rows: 21 ms of black before the page painted) nor
+  shows it rotated, and the next list page draws it all again in place
+  (`ListScroller::invalidate()`). The scroll mode ends, the band cleared
+  first, only when a screen of its own takes the display
+  (`Ui::endScroller()`). The band can
   be **shorter** (`Ui::setListBand()`: the Queue's selection mode, 72-197;
   the Library's status line, 72-219, set in `Ui::showTop()` before the
   page's first frame since 0.12.0: it came a pass later, a second full
@@ -3262,8 +3296,10 @@ Queue, Dance and Output (with its Pair and About pages).
     redrawn: the cover when the album changes or its thumbnail arrives,
     the text when the track does (the title strip also when the wait's
     status does), the times once a second, the transport on a change (the
-    play state, the volume, the output, shuffle, repeat), and the bar on
-    the 30 fps frame deadlines while a finger scrubs it.
+    play state, the volume, the output, shuffle, repeat; a press on it
+    draws its zone alone, 64 x 56: the whole strip, twice a tap, was 12 ms
+    each, MEASURED), and the bar on the 30 fps frame deadlines while a
+    finger scrubs it.
 
   **The progress line is a seek bar.** Its design is
   [SEEK-BAR.md](SEEK-BAR.md); the mapping and the touch are
