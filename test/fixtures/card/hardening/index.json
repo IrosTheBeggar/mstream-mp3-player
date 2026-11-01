@@ -522,6 +522,71 @@
   "check": "a newer major"
  },
  {
+  "file": "mptg-orig-server.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "ORIG: rows naming servers 1, 2 and 65,535 (2.6.6): the same records; a server no SRVS entry names is the guard's unknown (2.11), not damage",
+  "same": "tags-0000002a.bin"
+ },
+ {
+  "file": "msmf-srvs-ignored.bin",
+  "format": "MSMF",
+  "uses": "device",
+  "expect": "present",
+  "why": "ok",
+  "check": "SRVS broken (rows of 32 bytes, below v1's 40), read by the device, which never reads SRVS (to a reader that uses it, the root is absent: 2.4.3)"
+ },
+ {
+  "file": "msmf-minor-1.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "a newer minor: SRVS rows of 48 bytes, read by their 40-byte prefix (the servers of manifest-servers.bin), and an unknown section"
+ },
+ {
+  "file": "msmf-srvs-rules.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "SRVS: entries that break 2.5.5's writer rules (the root's own URL key, one instance twice, a peer with no peerId): not damage, the root reads; their rows' servers are unknown (2.11)"
+ },
+ {
+  "file": "msmf-acks-damaged.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "ACKS: its CRC fails: the section is ignored, never the root (2.5.6)"
+ },
+ {
+  "file": "msmf-acks-order.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "ACKS: two entries out of order, its CRC good: ignored, the root reads"
+ },
+ {
+  "file": "msmf-acks-short.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "ACKS: rows of 16 bytes, below v1's 24: ignored, the root reads"
+ },
+ {
+  "file": "msmf-acks-minor-1.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "ACKS: rows of 32 bytes, a newer minor's, read by their 24-byte prefix"
+ },
+ {
   "file": "mspd-order.bin",
   "format": "MSPD",
   "uses": "all",

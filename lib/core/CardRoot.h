@@ -38,13 +38,21 @@ namespace cardroot {
 constexpr uint32_t kMaxRoots = 16;
 
 struct Root {
+  // The root that won the election (2.5.4), checked whole: the card's id
+  // and that commit's generation (2.5.2). Kept also when T then fails (the
+  // root still names the card: @status cid=, docs/HOST-STATUS.md). False:
+  // no root, or none valid.
+  bool hasRoot = false;
+  uint64_t cardId = 0;
+  uint32_t generation = 0;
   // T: the root's tags file, checked as above.
   bool present = false;
   tagstore::Identity identity;  // present: the commit (cardId, generation, commitId, T's headerCrc)
   char tagsPath[48] = "";       // "/.mstream/tags-0000002a.bin"
   uint32_t tagsBytes = 0;
   uint32_t tagsRecords = 0;     // T's header's record count (the update step's memory check)
-  // Why there is no transfer data (Ok when present; Missing: no root at all).
+  // Why there is no transfer data (Ok when present). Missing: no root at
+  // all, or (hasRoot) the root's T isn't on the card.
   cardcontract::Why why = cardcontract::Why::Missing;
   // manifest.bin and manifest.tmp are one commit seen twice (a rename cut
   // between its two directory writes): readers use either (2.5.4); the
@@ -82,7 +90,9 @@ private:
 void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out);
 
 // One line for the boot's log ("T tags-0000002a.bin, generation 42 (commit
-// 1122334455667788), 3 library roots", "no transfer data (no root)").
+// 1122334455667788), 3 library roots", "no transfer data (none on the
+// card)"; a root whose T failed: "no transfer data (the root's T
+// tags-0000002a.bin, generation 42: missing)").
 size_t describe(const Root& r, char* buf, size_t size);
 
 }  // namespace cardroot
