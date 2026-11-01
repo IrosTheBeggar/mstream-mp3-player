@@ -667,6 +667,2582 @@
    "an Opus stream the server stores as x.ogg goes on the card as x.opus, its bytes unchanged, convertedTo 0"
   ]
  },
+ "names": {
+  "who": "software",
+  "note": "2.8.3-2.8.6: card paths from mStream's. marks: step 5's mark of a name: the FNV-1a 64 of the name as steps 2-4 left it, uncut (a file's stem, without its extension). runs: one run on a card each: its layout ('default', or the vpath layout's libraries), device.txt's extensions, what the card lists ('folder': a folder, else a file; relative to /music, as stored), and the files the run names ('bytes': original when absent, oggOpus, a conversion's format, or notAudio; 'size' 4,000,000 when absent), named in order of (server, id). names: each file's path relative to /music, in the files' order, or {'refused': why}: noName, noRoot, unlisted, tooBig, tooLong, folderFull. Made by tools/cardnames.py.",
+  "marks": [
+   {
+    "name": "01 - Title.mp3",
+    "component": "01 - Title",
+    "mark": "~DBDB"
+   },
+   {
+    "name": "Album",
+    "component": "Album",
+    "mark": "~14CC"
+   },
+   {
+    "name": "Café",
+    "component": "Café",
+    "mark": "~0129"
+   },
+   {
+    "name": "8 - 9 - 10",
+    "component": "8 - 9 - 10",
+    "mark": "~8CDD"
+   }
+  ],
+  "runs": [
+   {
+    "note": "steps 1-4 on an empty card: the vpath dropped, names made safe, the extension gated, folders past the 8th joined",
+    "layout": "default",
+    "extensions": "mp3,flac,opus",
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "Music/Artist/Album/01 - Title.mp3"
+     },
+     {
+      "server": 0,
+      "id": 2,
+      "serverPath": "Music/a\"b*c:d<e>f?g\\h|i/x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 3,
+      "serverPath": "Music/  Lead/Trail. . /.dot/x.flac"
+     },
+     {
+      "server": 0,
+      "id": 4,
+      "serverPath": "Music/CON/aux.mp3"
+     },
+     {
+      "server": 0,
+      "id": 5,
+      "serverPath": "Music/Café/x.opus"
+     },
+     {
+      "server": 0,
+      "id": 6,
+      "serverPath": "Music/tab\there/\u0001x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 7,
+      "serverPath": "Music/1/2/3/4/5/6/7/8/9/10/x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 8,
+      "serverPath": "Music/A/x.ogg",
+      "bytes": "oggOpus"
+     },
+     {
+      "server": 0,
+      "id": 9,
+      "serverPath": "Music/A/y.ogg"
+     },
+     {
+      "server": 0,
+      "id": 10,
+      "serverPath": "Music/A/z.wav",
+      "bytes": "opus"
+     },
+     {
+      "server": 0,
+      "id": 11,
+      "serverPath": "Music/A/w.m4a"
+     },
+     {
+      "server": 0,
+      "id": 12,
+      "serverPath": "Music/A/huge.flac",
+      "size": 4294967296
+     },
+     {
+      "server": 0,
+      "id": 13,
+      "serverPath": "Music"
+     },
+     {
+      "server": 0,
+      "id": 14,
+      "serverPath": "Music/A/cover.jpg",
+      "bytes": "notAudio"
+     },
+     {
+      "server": 0,
+      "id": 15,
+      "serverPath": "Music/A/con.flac",
+      "bytes": "mp3"
+     }
+    ],
+    "names": [
+     "Artist/Album/01 - Title.mp3",
+     "a_b_c_d_e_f_g_h_i/x.mp3",
+     "Lead/Trail/_dot/x.flac",
+     "CON_/aux_.mp3",
+     "Café/x.opus",
+     "tab_here/_x.mp3",
+     "1/2/3/4/5/6/7/8 - 9 - 10/x.mp3",
+     "A/x.opus",
+     {
+      "refused": "unlisted"
+     },
+     "A/z.opus",
+     {
+      "refused": "unlisted"
+     },
+     {
+      "refused": "tooBig"
+     },
+     {
+      "refused": "noName"
+     },
+     "A/cover.jpg",
+     "A/con_.mp3"
+    ]
+   },
+   {
+    "note": "a card with no device.txt: mp3 and flac only (2.15)",
+    "layout": "default",
+    "extensions": "mp3,flac",
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "V/A/x.opus"
+     },
+     {
+      "server": 0,
+      "id": 2,
+      "serverPath": "V/A/x.ogg",
+      "bytes": "oggOpus"
+     },
+     {
+      "server": 0,
+      "id": 3,
+      "serverPath": "V/A/x.flac"
+     }
+    ],
+    "names": [
+     {
+      "refused": "unlisted"
+     },
+     {
+      "refused": "unlisted"
+     },
+     "A/x.flac"
+    ]
+   },
+   {
+    "note": "step 5: the file is the longest, its stem cut and marked with the stem's hash, to 255 bytes with /music/ (at a code point boundary: 254 for 3-byte characters); a tie goes to the deepest",
+    "layout": "default",
+    "extensions": "mp3,flac,opus",
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "V/Artist/Album/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mp3"
+     },
+     {
+      "server": 0,
+      "id": 2,
+      "serverPath": "V/Artist/Album/€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€.mp3"
+     },
+     {
+      "server": 0,
+      "id": 3,
+      "serverPath": "V/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.mp3"
+     }
+    ],
+    "names": [
+     "Artist/Album/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa~7E21.mp3",
+     "Artist/Album/€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€~96E5.mp3",
+     "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB/cccccccccccccccccccccccccccccccccccccc~F18D.mp3"
+    ]
+   },
+   {
+    "note": "step 5: the album folder is the longest: cut to end 64 bytes short of 255, so a sibling of 63 bytes fits whole and a longer one is cut itself",
+    "layout": "default",
+    "extensions": "mp3,flac,opus",
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "V/A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF/x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 2,
+      "serverPath": "V/A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF/sssssssssssssssssssssssssssssssssssssssssssssssssssssssssss.mp3"
+     },
+     {
+      "server": 0,
+      "id": 3,
+      "serverPath": "V/A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF/tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt.mp3"
+     }
+    ],
+    "names": [
+     "A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF~572D/x.mp3",
+     "A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF~572D/sssssssssssssssssssssssssssssssssssssssssssssssssssssssssss.mp3",
+     "A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF~572D/tttttttttttttttttttttttttttttttttttttttttttttttttttttt~0B05.mp3"
+    ]
+   },
+   {
+    "note": "the same album first named by a long file: the folder's cut is the same",
+    "layout": "default",
+    "extensions": "mp3,flac,opus",
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "V/A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF/tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt.mp3"
+     }
+    ],
+    "names": [
+     "A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF~572D/tttttttttttttttttttttttttttttttttttttttttttttttttttttt~C3E5.mp3"
+    ]
+   },
+   {
+    "note": "a folder still the longest name once 64 bytes short is cut again, as far as its file needs",
+    "layout": "default",
+    "extensions": "mp3,flac,opus",
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "V/A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF/uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu.mp3"
+     }
+    ],
+    "names": [
+     "A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF~572D/uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu.mp3"
+    ]
+   },
+   {
+    "note": "a later run, the card listing the cut folder and no ledger row: its files join it",
+    "layout": "default",
+    "extensions": "mp3,flac,opus",
+    "card": [
+     {
+      "path": "A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF~572D/x.mp3"
+     }
+    ],
+    "files": [
+     {
+      "server": 0,
+      "id": 2,
+      "serverPath": "V/A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF/tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt.mp3"
+     }
+    ],
+    "names": [
+     "A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF~572D/tttttttttttttttttttttttttttttttttttttttttttttttttttttt~C3E5.mp3"
+    ]
+   },
+   {
+    "note": "a folder the card has that leaves no room below it: refused, not misnamed",
+    "layout": "default",
+    "extensions": "mp3,flac,opus",
+    "card": [
+     {
+      "path": "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+      "folder": true
+     }
+    ],
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "V/GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG/x.mp3"
+     }
+    ],
+    "names": [
+     {
+      "refused": "tooLong"
+     }
+    ]
+   },
+   {
+    "note": "step 6 in one run: by match key; the lower (server, mStream id) keeps the name, the lower server first; an NFC and an NFD spelling are one name; folders merge",
+    "layout": "default",
+    "extensions": "mp3,flac,opus",
+    "files": [
+     {
+      "server": 0,
+      "id": 7,
+      "serverPath": "V/A/One.mp3"
+     },
+     {
+      "server": 0,
+      "id": 3,
+      "serverPath": "V/A/one.MP3"
+     },
+     {
+      "server": 0,
+      "id": 5,
+      "serverPath": "W/a/ONE.mp3"
+     },
+     {
+      "server": 1,
+      "id": 1,
+      "serverPath": "V/B/x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 9,
+      "serverPath": "V/B/x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 2,
+      "serverPath": "V/Café.mp3"
+     },
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "V/Café.mp3"
+     }
+    ],
+    "names": [
+     "A/One (3).mp3",
+     "A/one.MP3",
+     "A/ONE (2).mp3",
+     "B/x (2).mp3",
+     "B/x.mp3",
+     "Café (2).mp3",
+     "Café.mp3"
+    ]
+   },
+   {
+    "note": "step 6 against what the card lists: its folders keep their spelling and merge (an NFD one too); a file named like the listener's file, a file named like a folder and a folder named like a file each take ' (2)'",
+    "layout": "default",
+    "extensions": "mp3,flac,opus",
+    "card": [
+     {
+      "path": "Acme/Hits/01.mp3"
+     },
+     {
+      "path": "Mine/Song.mp3"
+     },
+     {
+      "path": "Mine/Live.mp3",
+      "folder": true
+     },
+     {
+      "path": "Intro"
+     },
+     {
+      "path": "Café/a.mp3"
+     }
+    ],
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "Music/ACME/Hits/02.mp3"
+     },
+     {
+      "server": 0,
+      "id": 2,
+      "serverPath": "Other/acme/HITS/03.mp3"
+     },
+     {
+      "server": 0,
+      "id": 3,
+      "serverPath": "V/Mine/song.mp3"
+     },
+     {
+      "server": 0,
+      "id": 4,
+      "serverPath": "V/Mine/Live.mp3"
+     },
+     {
+      "server": 0,
+      "id": 5,
+      "serverPath": "V/Intro/x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 6,
+      "serverPath": "V/Intro/y.mp3"
+     },
+     {
+      "server": 0,
+      "id": 7,
+      "serverPath": "V/Café/b.mp3"
+     }
+    ],
+    "names": [
+     "Acme/Hits/02.mp3",
+     "Acme/Hits/03.mp3",
+     "Mine/song (2).mp3",
+     "Mine/Live (2).mp3",
+     "Intro (2)/x.mp3",
+     "Intro (2)/y.mp3",
+     "Café/b.mp3"
+    ]
+   },
+   {
+    "note": "the vpath layout (2.8.6): a root per library, in order of (server, vpath); the card's own folder of a root's name becomes that root; another library of the same name takes ' (2)'; the root is the first of the 8 levels",
+    "layout": {
+     "vpath": [
+      {
+       "server": 1,
+       "vpath": "Music"
+      },
+      {
+       "server": 0,
+       "vpath": "Music"
+      },
+      {
+       "server": 0,
+       "vpath": "Audio Books"
+      },
+      {
+       "server": 0,
+       "vpath": "a:b"
+      }
+     ]
+    },
+    "extensions": "mp3,flac,opus",
+    "card": [
+     {
+      "path": "music/mine.mp3"
+     }
+    ],
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "Music/A/x.mp3"
+     },
+     {
+      "server": 1,
+      "id": 1,
+      "serverPath": "Music/A/x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 2,
+      "serverPath": "Audio Books/B/y.mp3"
+     },
+     {
+      "server": 0,
+      "id": 3,
+      "serverPath": "a:b/z.mp3"
+     },
+     {
+      "server": 2,
+      "id": 1,
+      "serverPath": "Music/A/x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 4,
+      "serverPath": "Other/x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 5,
+      "serverPath": "Music"
+     },
+     {
+      "server": 0,
+      "id": 6,
+      "serverPath": "Music/1/2/3/4/5/6/7/8/9/10/x.mp3"
+     }
+    ],
+    "names": [
+     "music/A/x.mp3",
+     "Music (2)/A/x.mp3",
+     "Audio Books/B/y.mp3",
+     "a_b/z.mp3",
+     {
+      "refused": "noRoot"
+     },
+     {
+      "refused": "noRoot"
+     },
+     {
+      "refused": "noName"
+     },
+     "music/1/2/3/4/5/6/7 - 8 - 9 - 10/x.mp3"
+    ]
+   },
+   {
+    "note": "a vpath too long for a root: cut as a folder, to end 64 bytes short of 255, whatever is below",
+    "layout": {
+     "vpath": [
+      {
+       "server": 0,
+       "vpath": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"
+      }
+     ]
+    },
+    "extensions": "mp3,flac,opus",
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL/A/x.mp3"
+     }
+    ],
+    "names": [
+     "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL~D665/A/x.mp3"
+    ]
+   }
+  ]
+ },
+ "servers": {
+  "who": "software",
+  "note": "2.5.5, 2.6.6, 2.11: a ledger row's server. origServer: ORIG's bytes 74-79 for a row's server index. rows: the golden tags file's records in record order with their server. srvs: the golden root's SRVS entries (entry i - 1 is server i), as stored. sameServer: 2.11's test of server 'index' of the card whose root description is 'card' against what the software reads: the server at 'url' ('serverInstance': its instance, when known; 'confirmed': keys the listener has called the same server as 'url'), or, with 'peerId', that peer of it ('peerInstance': the peer's instance, when known). brokenEntries: the same test on cards whose SRVS breaks a writer rule of 2.5.5, each 'card' a root description's server fields: the entry's server is unknown, the root stays valid. The device reads neither ORIG nor SRVS.",
+  "origServer": [
+   {
+    "server": 0,
+    "bytes74to79": "00 00 00 00 00 00",
+    "note": "a card filled from one server"
+   },
+   {
+    "server": 2,
+    "bytes74to79": "02 00 00 00 00 00"
+   },
+   {
+    "server": 258,
+    "bytes74to79": "02 01 00 00 00 00"
+   }
+  ],
+  "rows": {
+   "file": "tags-00000007.bin",
+   "rows": [
+    {
+     "path": "Artist/Album/01 - Title.mp3",
+     "server": 0
+    },
+    {
+     "path": "Artist/Album/cover.jpg",
+     "server": 0
+    },
+    {
+     "path": "Both/One (2).mp3",
+     "server": 1
+    },
+    {
+     "path": "Both/One.mp3",
+     "server": 0
+    },
+    {
+     "path": "Far Artist/Far Album/01 - Far.opus",
+     "server": 3
+    },
+    {
+     "path": "Peer Artist/Peer Album/01 - Tune.opus",
+     "server": 2
+    },
+    {
+     "path": "Peer Artist/Peer Album/cover.jpg",
+     "server": 2
+    },
+    {
+     "path": "Second Artist/Album/01 - Song.flac",
+     "server": 1
+    }
+   ]
+  },
+  "srvs": {
+   "file": "manifest-servers.bin",
+   "stride": 40,
+   "entries": [
+    {
+     "server": 1,
+     "stored": "88 99 AA BB CC DD 4E FF 80 11 22 33 44 55 66 77 6E 9D 52 CA 80 E7 CA 36 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+    },
+    {
+     "server": 2,
+     "stored": "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 C7 3A 76 EE A3 1E 90 ED 03 00 00 00 01 00 00 00"
+    },
+    {
+     "server": 3,
+     "stored": "0F 1E 2D 3C 4B 5A 49 68 87 96 A5 B4 C3 D2 E1 F0 00 00 00 00 00 00 00 00 6E 9D 52 CA 80 E7 CA 36 01 00 00 00 01 00 00 00"
+    }
+   ]
+  },
+  "sameServer": {
+   "card": "manifest-servers.json",
+   "cases": [
+    {
+     "index": 0,
+     "talk": {
+      "url": "http://music.example:3000"
+     },
+     "verdict": "same"
+    },
+    {
+     "index": 0,
+     "talk": {
+      "url": "HTTP://Music.Example:3000/"
+     },
+     "verdict": "same",
+     "note": "the URL normalised first (2.5.1)"
+    },
+    {
+     "index": 0,
+     "talk": {
+      "url": "http://192.0.2.10:3000"
+     },
+     "verdict": "unknown",
+     "note": "a second URL of the same server: another key"
+    },
+    {
+     "index": 0,
+     "talk": {
+      "url": "http://192.0.2.10:3000",
+      "confirmed": [
+       "0xED901EA3EE763AC7"
+      ]
+     },
+     "verdict": "same",
+     "note": "the listener has called the two the same server"
+    },
+    {
+     "index": 0,
+     "talk": {
+      "url": "http://music.example:3000",
+      "peerId": 3
+     },
+     "verdict": "unknown",
+     "note": "a peer is not its parent"
+    },
+    {
+     "index": 1,
+     "talk": {
+      "url": "http://music.example:3000"
+     },
+     "verdict": "unknown"
+    },
+    {
+     "index": 1,
+     "talk": {
+      "url": "https://second.example/mstream"
+     },
+     "verdict": "same"
+    },
+    {
+     "index": 1,
+     "talk": {
+      "url": "https://second.example/mstream",
+      "serverInstance": "00112233-4455-4677-8899-aabbccddeeff"
+     },
+     "verdict": "different",
+     "note": "both instances known and different, whatever the keys"
+    },
+    {
+     "index": 1,
+     "talk": {
+      "url": "http://192.0.2.20",
+      "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677"
+     },
+     "verdict": "same",
+     "note": "both instances known and equal, whatever the keys"
+    },
+    {
+     "index": 2,
+     "talk": {
+      "url": "http://music.example:3000",
+      "peerId": 3
+     },
+     "verdict": "same"
+    },
+    {
+     "index": 2,
+     "talk": {
+      "url": "http://music.example:3000",
+      "peerId": 4
+     },
+     "verdict": "unknown"
+    },
+    {
+     "index": 2,
+     "talk": {
+      "url": "http://music.example:3000"
+     },
+     "verdict": "unknown",
+     "note": "the parent is not its peer"
+    },
+    {
+     "index": 2,
+     "talk": {
+      "url": "https://second.example/mstream",
+      "peerId": 3
+     },
+     "verdict": "unknown",
+     "note": "peer 3 of another parent"
+    },
+    {
+     "index": 2,
+     "talk": {
+      "url": "http://192.0.2.10:3000",
+      "serverInstance": "00112233-4455-4677-8899-aabbccddeeff",
+      "peerId": 3
+     },
+     "verdict": "unknown",
+     "note": "its parent at a new URL: the root's instance is unknown, so only a key the listener confirmed ties the URL to it"
+    },
+    {
+     "index": 2,
+     "talk": {
+      "url": "http://192.0.2.10:3000",
+      "peerId": 3,
+      "confirmed": [
+       "0xED901EA3EE763AC7"
+      ]
+     },
+     "verdict": "same"
+    },
+    {
+     "index": 3,
+     "talk": {
+      "url": "https://second.example/mstream",
+      "peerId": 1
+     },
+     "verdict": "same"
+    },
+    {
+     "index": 3,
+     "talk": {
+      "url": "https://second.example/mstream",
+      "peerId": 1,
+      "peerInstance": "00112233-4455-4677-8899-aabbccddeeff"
+     },
+     "verdict": "different"
+    },
+    {
+     "index": 3,
+     "talk": {
+      "url": "http://music.example:3000",
+      "peerId": 1
+     },
+     "verdict": "unknown"
+    },
+    {
+     "index": 3,
+     "talk": {
+      "url": "http://192.0.2.20",
+      "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677",
+      "peerId": 1
+     },
+     "verdict": "same",
+     "note": "its parent at a new URL, known by its instance (server 1's)"
+    },
+    {
+     "index": 3,
+     "talk": {
+      "url": "https://second.example/mstream",
+      "serverInstance": "00112233-4455-4677-8899-aabbccddeeff",
+      "peerId": 1
+     },
+     "verdict": "unknown",
+     "note": "the server at its parent's URL is another server now, by instance: not its parent"
+    },
+    {
+     "index": 4,
+     "talk": {
+      "url": "http://music.example:3000"
+     },
+     "verdict": "unknown",
+     "note": "a server no SRVS entry names"
+    },
+    {
+     "index": 65535,
+     "talk": {
+      "url": "http://music.example:3000"
+     },
+     "verdict": "unknown"
+    }
+   ]
+  },
+  "brokenEntries": {
+   "cases": [
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "serverUrl": "http://music.example:3000"
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "http://music.example:3000"
+     },
+     "verdict": "unknown",
+     "note": "the root's own server again (its URL key)"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+        "serverUrl": "https://second.example/mstream"
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "https://second.example/mstream"
+     },
+     "verdict": "unknown",
+     "note": "the root's own server again (its instance)"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677",
+        "serverUrl": "https://second.example/mstream"
+       },
+       {
+        "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677",
+        "serverUrl": "http://192.0.2.20"
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "https://second.example/mstream",
+      "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677"
+     },
+     "verdict": "unknown",
+     "note": "two entries with one instance: both"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "serverUrl": "https://second.example/mstream"
+       },
+       {
+        "serverUrl": "HTTPS://Second.Example/mstream/"
+       }
+      ]
+     },
+     "index": 2,
+     "talk": {
+      "url": "https://second.example/mstream"
+     },
+     "verdict": "unknown",
+     "note": "two entries with one URL key (the URLs normalised: 2.5.1)"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677"
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "https://second.example/mstream",
+      "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677"
+     },
+     "verdict": "unknown",
+     "note": "no PEER and no URL key, though its instance is the one read"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "serverUrl": "https://second.example/mstream",
+        "peerId": 2
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "https://second.example/mstream"
+     },
+     "verdict": "unknown",
+     "note": "no PEER, and a peerId"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "parentUrl": "http://music.example:3000",
+        "peerId": 3,
+        "flags": 1,
+        "serverUrl": "https://second.example/mstream"
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "http://music.example:3000",
+      "peerId": 3
+     },
+     "verdict": "unknown",
+     "note": "a peer with a URL key"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "serverInstance": "0f1e2d3c-4b5a-4968-8796-a5b4c3d2e1f0",
+        "peerId": 3,
+        "flags": 1
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "http://music.example:3000",
+      "peerId": 3,
+      "peerInstance": "0f1e2d3c-4b5a-4968-8796-a5b4c3d2e1f0"
+     },
+     "verdict": "unknown",
+     "note": "a peer with no parentKey, though its instance is the one read"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "parentUrl": "http://music.example:3000",
+        "peerId": 0,
+        "flags": 1
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "http://music.example:3000",
+      "peerId": 0
+     },
+     "verdict": "unknown",
+     "note": "a peer with no peerId"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "parentUrl": "http://music.example:3000",
+        "peerId": 3,
+        "flags": 1
+       },
+       {
+        "parentUrl": "http://music.example:3000",
+        "peerId": 3,
+        "flags": 1
+       }
+      ]
+     },
+     "index": 2,
+     "talk": {
+      "url": "http://music.example:3000",
+      "peerId": 3
+     },
+     "verdict": "unknown",
+     "note": "two peers with one parentKey and peerId"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677",
+        "serverUrl": "https://second.example/mstream"
+       },
+       {
+        "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677",
+        "serverUrl": "http://192.0.2.20"
+       },
+       {
+        "serverUrl": "http://198.51.100.7"
+       }
+      ]
+     },
+     "index": 3,
+     "talk": {
+      "url": "http://198.51.100.7"
+     },
+     "verdict": "same",
+     "note": "the other entries keep their test"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "serverUrl": "https://second.example/mstream",
+        "flags": 2
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "https://second.example/mstream"
+     },
+     "verdict": "same",
+     "note": "a reserved flag bit is a newer minor's, ignored (2.4.5): no broken rule"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "parentUrl": "https://second.example/mstream",
+        "peerId": 1,
+        "flags": 1
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "https://second.example/mstream",
+      "peerId": 1
+     },
+     "verdict": "same",
+     "note": "a peer whose parent has no rows on the card: parentKey by the key rule alone"
+    }
+   ]
+  }
+ },
+ "privateFiles": {
+  "who": "software",
+  "note": "2.12.7, 2.12.8: the software's private files in /.mstream. names: may a private file have this path ('/' between names), and why. settle: the read with its recovery for X = stem, the two files' text (null: no file): which counts, its seq and the next write's, what a run deletes, whether it finishes the rename, whether step 3 stops for a disk check, whether an unknown version stops the software. cleanup: step 4 over a /.mstream listing (path: size), the companions the root names and the settled resume.json: the paths it deletes, every other file staying. resumeFetch: a listed partial at fetch time, its size on the card, the server's entry for the file now and the answer to the ranged GET: where it goes on from (null: it starts over) and the request's headers. run: what run.lock holds (informational, never trusted).",
+  "names": [
+   {
+    "name": "state.json",
+    "ok": true,
+    "why": "reserved: the private state"
+   },
+   {
+    "name": "state.new",
+    "ok": true,
+    "why": "reserved: its next write"
+   },
+   {
+    "name": "resume.json",
+    "ok": true,
+    "why": "reserved: the partials kept"
+   },
+   {
+    "name": "resume.new",
+    "ok": true,
+    "why": "reserved: its next write"
+   },
+   {
+    "name": "run.lock",
+    "ok": true,
+    "why": "reserved: a run is writing the card"
+   },
+   {
+    "name": "resume/0000002a.part",
+    "ok": true,
+    "why": "reserved: a partial (2.12.8)"
+   },
+   {
+    "name": "notes.txt",
+    "ok": true,
+    "why": "the software's own"
+   },
+   {
+    "name": "cache/index.bin",
+    "ok": true,
+    "why": "the software's own"
+   },
+   {
+    "name": "cache/old.tmp",
+    "ok": false,
+    "why": "*.tmp: step 4 deletes it"
+   },
+   {
+    "name": "State.json",
+    "ok": false,
+    "why": "not lowercase"
+   },
+   {
+    "name": "state.tmp",
+    "ok": false,
+    "why": "*.tmp: step 4 deletes it"
+   },
+   {
+    "name": "tags-0000002a.bin",
+    "ok": false,
+    "why": "a companion's name"
+   },
+   {
+    "name": "tags-backup.bin",
+    "ok": false,
+    "why": "a companion's name"
+   },
+   {
+    "name": "autodj-old.bin",
+    "ok": false,
+    "why": "a companion's name"
+   },
+   {
+    "name": "manifest.json",
+    "ok": false,
+    "why": "a contract file's name"
+   },
+   {
+    "name": "pending.txt",
+    "ok": false,
+    "why": "a contract file's name"
+   },
+   {
+    "name": "stage/keep.bin",
+    "ok": false,
+    "why": "inside stage/"
+   },
+   {
+    "name": "thumbs/state.json",
+    "ok": false,
+    "why": "inside thumbs/"
+   },
+   {
+    "name": "resume/notes.txt",
+    "ok": false,
+    "why": "resume/ holds only 2.12.8's partials"
+   },
+   {
+    "name": "resume/0000002A.part",
+    "ok": false,
+    "why": "not lowercase"
+   },
+   {
+    "name": "resume/old/0000002a.part",
+    "ok": false,
+    "why": "resume/ holds only 2.12.8's partials"
+   },
+   {
+    "name": "stage",
+    "ok": false,
+    "why": "a folder's name (2.2, 2.12.8)"
+   },
+   {
+    "name": "thumbs",
+    "ok": false,
+    "why": "a folder's name (2.2, 2.12.8)"
+   },
+   {
+    "name": "resume",
+    "ok": false,
+    "why": "a folder's name (2.2, 2.12.8)"
+   }
+  ],
+  "settle": [
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 3, \"label\": \"Card A\"}\n",
+    "new": null,
+    "pick": "state.json",
+    "seq": 3,
+    "nextSeq": 4,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "only state.json"
+   },
+   {
+    "stem": "state",
+    "json": null,
+    "new": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 4, \"label\": \"Card A\"}\n",
+    "pick": "state.new",
+    "seq": 4,
+    "nextSeq": 5,
+    "delete": [],
+    "rename": true,
+    "diskCheck": false,
+    "stops": false,
+    "note": "only state.new: a cut between the delete and the rename"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 3, \"label\": \"Card A\"}\n",
+    "new": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 4, \"label\": \"Card A\"}\n",
+    "pick": "state.new",
+    "seq": 4,
+    "nextSeq": 5,
+    "delete": [
+     "state.json"
+    ],
+    "rename": true,
+    "diskCheck": false,
+    "stops": false,
+    "note": "both, the new one higher: a cut before the delete"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 3, \"label\": \"Card A\"}\n",
+    "new": "{\"format\": \"mstream-card-state",
+    "pick": "state.json",
+    "seq": 3,
+    "nextSeq": 4,
+    "delete": [
+     "state.new"
+    ],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "a torn state.new"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state",
+    "new": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 4, \"label\": \"Card A\"}\n",
+    "pick": "state.new",
+    "seq": 4,
+    "nextSeq": 5,
+    "delete": [
+     "state.json"
+    ],
+    "rename": true,
+    "diskCheck": false,
+    "stops": false,
+    "note": "a torn state.json"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 4, \"label\": \"Card A\"}\n",
+    "new": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 4, \"label\": \"Card A\"}\n",
+    "pick": "state.json",
+    "seq": 4,
+    "nextSeq": 5,
+    "delete": [],
+    "rename": false,
+    "diskCheck": true,
+    "stops": false,
+    "note": "byte-equal: the rename cut between its two directory writes; neither deleted"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 4, \"label\": \"Card A\"}\n",
+    "new": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 4, \"label\": \"Card A\", \"note\": \"other\"}\n",
+    "pick": "state.json",
+    "seq": 4,
+    "nextSeq": 5,
+    "delete": [
+     "state.new"
+    ],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "equal seqs, different bytes: state.json"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 5, \"label\": \"Card A\"}\n",
+    "new": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 4, \"label\": \"Card A\"}\n",
+    "pick": "state.json",
+    "seq": 5,
+    "nextSeq": 6,
+    "delete": [
+     "state.new"
+    ],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "the higher seq wins"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state",
+    "new": "{\"format\": \"mstream-",
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "neither valid: no private state"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 2, \"seq\": 3}\n",
+    "new": null,
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": true,
+    "note": "a version this software doesn't know: it stops (2.4.5)"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 3, \"label\": \"Card A\"}\n",
+    "new": "{\"format\": \"mstream-card-state\", \"version\": 2, \"seq\": 4}\n",
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": true,
+    "note": "an unknown version in state.new stops it too"
+   },
+   {
+    "stem": "state",
+    "json": "﻿{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 3, \"label\": \"Card A\"}\n",
+    "new": null,
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "a byte-order mark: invalid"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": \"3\", \"label\": \"Card A\"}\n",
+    "new": null,
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "seq a string: invalid"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 0, \"label\": \"Card A\"}\n",
+    "new": null,
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "seq 0: invalid"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 3.0, \"label\": \"Card A\"}\n",
+    "new": null,
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "seq not an integer: invalid"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 3, \"seq\": 4, \"label\": \"Card A\"}\n",
+    "new": null,
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "a member named twice: invalid"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-resume\", \"version\": 1, \"seq\": 3}\n",
+    "new": null,
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "another format: invalid"
+   },
+   {
+    "stem": "state",
+    "json": "[{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 3}]\n",
+    "new": null,
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "not an object: invalid"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 3, \"label\": \"Card A\", \"gain\": NaN}\n",
+    "new": null,
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "NaN is not JSON: invalid"
+   },
+   {
+    "stem": "resume",
+    "json": "{\"format\": \"mstream-card-resume\", \"version\": 1, \"seq\": 2, \"parts\": []}\n",
+    "new": "{\"format\": \"mstream-card-resume\", \"version\": 1, \"seq\": 3, \"parts\": []}\n",
+    "pick": "resume.new",
+    "seq": 3,
+    "nextSeq": 4,
+    "delete": [
+     "resume.json"
+    ],
+    "rename": true,
+    "diskCheck": false,
+    "stops": false,
+    "note": "resume.json follows the same rule"
+   }
+  ],
+  "cleanup": [
+   {
+    "files": {
+     "manifest.bin": 480,
+     "tags-0000002a.bin": 6432,
+     "tags-00000029.bin": 6400,
+     "autodj-00000029.bin": 9000,
+     "manifest.tmp": 470,
+     "pending.bin": 300,
+     "stage/00000003.tmp": 5000,
+     "thumbs/B/B1F7E69F.565": 21656,
+     "thumbs/B/B1F7E69F.tmp": 21656,
+     "state.json": 200,
+     "resume.json": 900,
+     "resume/0000002a.part": 10485760,
+     "resume/0000002b.part": 52428801,
+     "resume/0000002c.part": 100,
+     "resume/0000002d.part": 4096,
+     "resume/old/0000002e.part": 10,
+     "run.lock": 120,
+     "notes.txt": 5,
+     "cache/index.bin": 64
+    },
+    "root": [
+     "tags-0000002a.bin",
+     "autodj-00000029.bin"
+    ],
+    "resume": "{\"format\": \"mstream-card-resume\", \"version\": 1, \"seq\": 7, \"parts\": [{\"name\": \"0000002a.part\", \"server\": {\"serverInstance\": \"\", \"serverUrlKey\": \"0x0\", \"parentKey\": \"0xED901EA3EE763AC7\", \"peerId\": 3}, \"serverPath\": \"Shared/Peer Artist/Peer Album/01 - Tune.flac\", \"size\": 31457280, \"etag\": \"W/\\\"1e00000-19a1b2c3d4e\\\"\", \"modified\": 1790500000005, \"have\": 10485760}, {\"name\": \"0000002b.part\", \"server\": {\"serverInstance\": \"\", \"serverUrlKey\": \"0xED901EA3EE763AC7\", \"parentKey\": \"0x0\", \"peerId\": 0}, \"serverPath\": \"Music/Artist/Album/02 - Long.flac\", \"size\": 52428800, \"etag\": \"\", \"modified\": 1790000000123, \"have\": 4194304}, {\"name\": \"0000002c.part\", \"server\": {\"serverInstance\": \"\", \"serverUrlKey\": \"0xED901EA3EE763AC7\", \"parentKey\": \"0x0\", \"peerId\": 0}, \"serverPath\": \"Music/Artist/Album/02 - Long.flac\", \"size\": 100, \"etag\": \"\", \"modified\": 1790000000123, \"have\": 4194304}]}\n",
+    "delete": [
+     "manifest.tmp",
+     "resume/0000002b.part",
+     "resume/0000002d.part",
+     "resume/old/0000002e.part",
+     "stage/00000003.tmp",
+     "tags-00000029.bin",
+     "thumbs/B/B1F7E69F.tmp"
+    ],
+    "note": "autodj-00000029.bin is named, tags-00000029.bin isn't; step 1 left manifest.tmp; 0000002a and 0000002c are listed and no longer than their size, 0000002b is longer, 0000002d isn't listed, resume/old/ is a folder; the private files stay"
+   },
+   {
+    "files": {
+     "manifest.bin": 480,
+     "tags-0000002a.bin": 6432,
+     "tags-00000029.bin": 6400,
+     "autodj-00000029.bin": 9000,
+     "manifest.tmp": 470,
+     "pending.bin": 300,
+     "stage/00000003.tmp": 5000,
+     "thumbs/B/B1F7E69F.565": 21656,
+     "thumbs/B/B1F7E69F.tmp": 21656,
+     "state.json": 200,
+     "resume.json": 900,
+     "resume/0000002a.part": 10485760,
+     "resume/0000002b.part": 52428801,
+     "resume/0000002c.part": 100,
+     "resume/0000002d.part": 4096,
+     "resume/old/0000002e.part": 10,
+     "run.lock": 120,
+     "notes.txt": 5,
+     "cache/index.bin": 64
+    },
+    "root": [
+     "tags-0000002a.bin",
+     "autodj-00000029.bin"
+    ],
+    "resume": null,
+    "delete": [
+     "manifest.tmp",
+     "resume/0000002a.part",
+     "resume/0000002b.part",
+     "resume/0000002c.part",
+     "resume/0000002d.part",
+     "resume/old/0000002e.part",
+     "stage/00000003.tmp",
+     "tags-00000029.bin",
+     "thumbs/B/B1F7E69F.tmp"
+    ],
+    "note": "no resume.json: every partial goes"
+   },
+   {
+    "files": {
+     "manifest.bin": 480,
+     "tags-0000002a.bin": 6432,
+     "tags-00000029.bin": 6400,
+     "autodj-00000029.bin": 9000,
+     "manifest.tmp": 470,
+     "pending.bin": 300,
+     "stage/00000003.tmp": 5000,
+     "thumbs/B/B1F7E69F.565": 21656,
+     "thumbs/B/B1F7E69F.tmp": 21656,
+     "state.json": 200,
+     "resume.json": 900,
+     "resume/0000002a.part": 10485760,
+     "resume/0000002b.part": 52428801,
+     "resume/0000002c.part": 100,
+     "resume/0000002d.part": 4096,
+     "resume/old/0000002e.part": 10,
+     "run.lock": 120,
+     "notes.txt": 5,
+     "cache/index.bin": 64
+    },
+    "root": [
+     "tags-0000002a.bin",
+     "autodj-00000029.bin"
+    ],
+    "resume": "{\"format\": \"mstream-card-resume\", \"versi",
+    "delete": [
+     "manifest.tmp",
+     "resume/0000002a.part",
+     "resume/0000002b.part",
+     "resume/0000002c.part",
+     "resume/0000002d.part",
+     "resume/old/0000002e.part",
+     "stage/00000003.tmp",
+     "tags-00000029.bin",
+     "thumbs/B/B1F7E69F.tmp"
+    ],
+    "note": "a torn resume.json keeps nothing"
+   },
+   {
+    "files": {
+     "resume/0000002a.part": 1,
+     "resume/0000002b.part": 1
+    },
+    "root": [
+     "tags-0000002a.bin",
+     "autodj-00000029.bin"
+    ],
+    "resume": "{\"format\": \"mstream-card-resume\", \"version\": 1, \"seq\": 2, \"parts\": [{\"name\": \"0000002a.part\", \"server\": {\"serverInstance\": \"\", \"serverUrlKey\": \"0x0\", \"parentKey\": \"0xED901EA3EE763AC7\", \"peerId\": 3}, \"serverPath\": \"Shared/Peer Artist/Peer Album/01 - Tune.flac\", \"size\": 5, \"etag\": \"W/\\\"1e00000-19a1b2c3d4e\\\"\", \"modified\": 1790500000005, \"have\": 10485760}, {\"name\": \"0000002a.part\", \"server\": {\"serverInstance\": \"\", \"serverUrlKey\": \"0x0\", \"parentKey\": \"0xED901EA3EE763AC7\", \"peerId\": 3}, \"serverPath\": \"Shared/Peer Artist/Peer Album/01 - Tune.flac\", \"size\": 9, \"etag\": \"W/\\\"1e00000-19a1b2c3d4e\\\"\", \"modified\": 1790500000005, \"have\": 10485760}, {\"name\": \"bad.part\", \"server\": {\"serverInstance\": \"\", \"serverUrlKey\": \"0xED901EA3EE763AC7\", \"parentKey\": \"0x0\", \"peerId\": 0}, \"serverPath\": \"Music/Artist/Album/02 - Long.flac\", \"size\": 52428800, \"etag\": \"\", \"modified\": 1790000000123, \"have\": 4194304}]}\n",
+    "delete": [
+     "resume/0000002a.part",
+     "resume/0000002b.part"
+    ],
+    "note": "a name listed twice keeps nothing; an entry whose name isn't a partial's keeps nothing"
+   }
+  ],
+  "resumeFetch": [
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": 10485760
+    },
+    "partSize": 10485760,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457280,
+     "modified": 1790500000005
+    },
+    "status": 206,
+    "from": 10485760,
+    "headers": {
+     "Range": "bytes=10485760-",
+     "If-Range": "W/\"1e00000-19a1b2c3d4e\""
+    },
+    "then": "continue",
+    "note": "the server's file unchanged: on from have, by its ETag"
+   },
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": 10485760
+    },
+    "partSize": 12000000,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457280,
+     "modified": 1790500000005
+    },
+    "status": 206,
+    "from": 10485760,
+    "headers": {
+     "Range": "bytes=10485760-",
+     "If-Range": "W/\"1e00000-19a1b2c3d4e\""
+    },
+    "then": "continue",
+    "note": "the bytes past have were never flushed: cut back to have"
+   },
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": 10485760
+    },
+    "partSize": 8000000,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457280,
+     "modified": 1790500000005
+    },
+    "status": 200,
+    "from": 8000000,
+    "headers": {
+     "Range": "bytes=8000000-",
+     "If-Range": "W/\"1e00000-19a1b2c3d4e\""
+    },
+    "then": "start over",
+    "note": "shorter than have; the server answers 200: its file changed"
+   },
+   {
+    "entry": {
+     "name": "0000002b.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0xED901EA3EE763AC7",
+      "parentKey": "0x0",
+      "peerId": 0
+     },
+     "serverPath": "Music/Artist/Album/02 - Long.flac",
+     "size": 52428800,
+     "etag": "",
+     "modified": 1790000000123,
+     "have": 4194304
+    },
+    "partSize": 4194304,
+    "server": {
+     "serverPath": "Music/Artist/Album/02 - Long.flac",
+     "file-size": 52428800,
+     "modified": 1790000000123
+    },
+    "status": 206,
+    "from": 4194304,
+    "headers": {
+     "Range": "bytes=4194304-",
+     "If-Range": "Mon, 21 Sep 2026 14:13:20 GMT"
+    },
+    "then": "continue",
+    "note": "no ETag: If-Range carries the HTTP date of modified (1790000000123 ms)"
+   },
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": 10485760
+    },
+    "partSize": 10485760,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457281,
+     "modified": 1790500000005
+    },
+    "status": null,
+    "from": null,
+    "headers": null,
+    "then": "start over",
+    "note": "the server's size changed: start over without asking"
+   },
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": 10485760
+    },
+    "partSize": 10485760,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457280,
+     "modified": 1790500000006
+    },
+    "status": null,
+    "from": null,
+    "headers": null,
+    "then": "start over",
+    "note": "modified changed: start over"
+   },
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": -5
+    },
+    "partSize": 10485760,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457280,
+     "modified": 1790500000005
+    },
+    "status": null,
+    "from": null,
+    "headers": null,
+    "then": "start over",
+    "note": "have below 0: not a count, so start over (step 4 kept the file by its name and size)"
+   },
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": 31457281
+    },
+    "partSize": 10485760,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457280,
+     "modified": 1790500000005
+    },
+    "status": null,
+    "from": null,
+    "headers": null,
+    "then": "start over",
+    "note": "have past size: start over"
+   },
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": 10485760.0
+    },
+    "partSize": 10485760,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457280,
+     "modified": 1790500000005
+    },
+    "status": null,
+    "from": null,
+    "headers": null,
+    "then": "start over",
+    "note": "have not an integer: start over"
+   },
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": "10485760"
+    },
+    "partSize": 10485760,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457280,
+     "modified": 1790500000005
+    },
+    "status": null,
+    "from": null,
+    "headers": null,
+    "then": "start over",
+    "note": "have a string: start over"
+   },
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": 5,
+     "modified": 1790500000005,
+     "have": 10485760
+    },
+    "partSize": 10485760,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457280,
+     "modified": 1790500000005
+    },
+    "status": null,
+    "from": null,
+    "headers": null,
+    "then": "start over",
+    "note": "etag not a string: start over"
+   }
+  ],
+  "resumeExample": {
+   "format": "mstream-card-resume",
+   "version": 1,
+   "seq": 7,
+   "parts": [
+    {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": 10485760
+    },
+    {
+     "name": "0000002b.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0xED901EA3EE763AC7",
+      "parentKey": "0x0",
+      "peerId": 0
+     },
+     "serverPath": "Music/Artist/Album/02 - Long.flac",
+     "size": 52428800,
+     "etag": "",
+     "modified": 1790000000123,
+     "have": 4194304
+    },
+    {
+     "name": "0000002c.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0xED901EA3EE763AC7",
+      "parentKey": "0x0",
+      "peerId": 0
+     },
+     "serverPath": "Music/Artist/Album/02 - Long.flac",
+     "size": 100,
+     "etag": "",
+     "modified": 1790000000123,
+     "have": 4194304
+    }
+   ]
+  },
+  "run": {
+   "format": "mstream-card-run",
+   "runId": "0x00C0FFEE00C0FFEE",
+   "started": 1791900000,
+   "producer": "mstream-terminal 0.14.0"
+  }
+ },
+ "plays": {
+  "who": "both",
+  "note": "2.20 and 2.5.6: the play log. slot: one play slot's fields and bytes; note: a drop note's. ids: a play's id. names: what an outcome and a source read as. atBoot: the next seq and the next bootSeq at boot from NVS's values and the card's log (the golden sync-1, or readCase's files in plays/index.json), every valid slot counting (2.20.4). deviceOps: what the device model did with log.json's events (informative). files: plays/'s files (the goldens, the reader's cases in plays/index.json). acks: ACKS's bytes, the golden root's entries, and the hardening files. resolve: a golden log through a golden tags file (the software's): each new play, sent or not (why: 'file' its file isn't a ledger row's, 'clock' no start), where to and its start; then the posted marks once the server settled the sent ones. resolveCases: single plays. peers: where a play of each row of the card of several servers goes. deviceTxt: the history key.",
+  "slot": {
+   "fields": {
+    "kind": 1,
+    "outcome": 1,
+    "source": 1,
+    "seq": 1,
+    "pauseCount": 0,
+    "clock": 0,
+    "epoch": "0x1122334455667788",
+    "deviceId": "00005e005301",
+    "startedAt": 0,
+    "bootSeq": 1,
+    "uptimeMs": 5000,
+    "playedMs": 180000,
+    "durationMs": 180000,
+    "pathHash": "0xDA70B312760188D8",
+    "size": 1000,
+    "fatTime": 1564963797,
+    "generation": 42
+   },
+   "bytes": "4D 50 50 4C 01 01 01 01 01 00 00 00 00 00 00 00 88 77 66 55 44 33 22 11 00 00 5E 00 53 01 00 00 00 00 00 00 00 00 00 00 01 00 00 00 88 13 00 00 20 BF 02 00 20 BF 02 00 D8 88 01 76 12 B3 70 DA E8 03 00 00 D5 73 47 5D 2A 00 00 00 6F CF F1 C2",
+   "crc": "0xC2F1CF6F",
+   "id": "core2-00005e005301-1122334455667788-1"
+  },
+  "dropNote": {
+   "fields": {
+    "kind": 2,
+    "clock": 1,
+    "epoch": "0xF0E1D2C3B4A59687",
+    "deviceId": "00005e005301",
+    "startedAt": 1792075210000,
+    "bootSeq": 1,
+    "uptimeMs": 2410000,
+    "dropped": 4
+   },
+   "bytes": "4D 50 50 4C 01 02 00 00 00 00 00 00 00 00 01 00 87 96 A5 B4 C3 D2 E1 F0 00 00 5E 00 53 01 00 00 10 9D 01 40 A1 01 00 00 01 00 00 00 10 C6 24 00 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 2E C7 E9 9F"
+  },
+  "ids": [
+   {
+    "deviceId": "00:00:5e:00:53:01",
+    "epoch": "0x1122334455667788",
+    "seq": 42,
+    "id": "core2-00005e005301-1122334455667788-42"
+   },
+   {
+    "deviceId": "00:00:5e:00:53:01",
+    "epoch": "0xF0E1D2C3B4A59687",
+    "seq": 1,
+    "id": "core2-00005e005301-f0e1d2c3b4a59687-1"
+   },
+   {
+    "deviceId": "FF:FF:FF:FF:FF:FE",
+    "epoch": "0xFFFFFFFFFFFFFFFF",
+    "seq": 4294967295,
+    "id": "core2-fffffffffffe-ffffffffffffffff-4294967295",
+    "note": "the longest: 46 characters"
+   },
+   {
+    "deviceId": "00:00:5e:00:53:01",
+    "epoch": "0x0000000000000001",
+    "seq": 1,
+    "id": "core2-00005e005301-0000000000000001-1",
+    "note": "the epoch's leading zeros are written"
+   }
+  ],
+  "names": {
+   "outcome": {
+    "0": "stopped",
+    "1": "completed",
+    "2": "skipped",
+    "3": "stopped",
+    "4": "stopped"
+   },
+   "source": {
+    "0": "other",
+    "1": "manual",
+    "2": "shuffle",
+    "3": "autodj",
+    "4": "other"
+   }
+  },
+  "atBoot": {
+   "log": "plays/golden/sync-1",
+   "cases": [
+    {
+     "nvsSeq": 0,
+     "nvsBoots": 0,
+     "deviceId": "00:00:5e:00:53:01",
+     "epoch": "0x1122334455667788",
+     "nextSeq": 8,
+     "nextBootSeq": 3,
+     "note": "NVS behind the card, for the seq and the boot count"
+    },
+    {
+     "nvsSeq": 9,
+     "nvsBoots": 5,
+     "deviceId": "00:00:5e:00:53:01",
+     "epoch": "0x1122334455667788",
+     "nextSeq": 10,
+     "nextBootSeq": 6,
+     "note": "NVS ahead (seqs reserved, boots with no play)"
+    },
+    {
+     "nvsSeq": 0,
+     "nvsBoots": 0,
+     "deviceId": "00:00:5e:00:53:01",
+     "epoch": "0xF0E1D2C3B4A59687",
+     "nextSeq": 1,
+     "nextBootSeq": 1,
+     "note": "a new epoch"
+    },
+    {
+     "nvsSeq": 3,
+     "nvsBoots": 1,
+     "deviceId": "00:00:5e:00:53:02",
+     "epoch": "0x1122334455667788",
+     "nextSeq": 4,
+     "nextBootSeq": 2,
+     "note": "another device's plays"
+    },
+    {
+     "readCase": "conflict-top",
+     "nvsSeq": 0,
+     "nvsBoots": 0,
+     "deviceId": "00:00:5e:00:53:01",
+     "epoch": "0x1122334455667788",
+     "nextSeq": 8,
+     "nextBootSeq": 3,
+     "note": "seq 7's two slots conflict, so a reader uses neither; the boot rule counts both"
+    }
+   ]
+  },
+  "deviceOps": [
+   [
+    "epoch",
+    "1122334455667788"
+   ],
+   [
+    "play",
+    1
+   ],
+   [
+    "play",
+    2
+   ],
+   [
+    "play",
+    3
+   ],
+   [
+    "play",
+    4
+   ],
+   [
+    "rename",
+    "plays.jnl",
+    "plays.1.jnl"
+   ],
+   [
+    "play",
+    5
+   ],
+   [
+    "play",
+    6
+   ],
+   [
+    "play",
+    7
+   ],
+   [
+    "epoch",
+    "f0e1d2c3b4a59687"
+   ],
+   [
+    "delete",
+    "plays.1.jnl",
+    "acknowledged"
+   ],
+   [
+    "delete",
+    "plays.jnl",
+    "acknowledged"
+   ],
+   [
+    "play",
+    1
+   ],
+   [
+    "play",
+    2
+   ],
+   [
+    "play",
+    3
+   ],
+   [
+    "play",
+    4
+   ],
+   [
+    "rename",
+    "plays.jnl",
+    "plays.1.jnl"
+   ],
+   [
+    "play",
+    5
+   ],
+   [
+    "play",
+    6
+   ],
+   [
+    "play",
+    7
+   ],
+   [
+    "play",
+    8
+   ],
+   [
+    "delete",
+    "plays.1.jnl",
+    "rotation"
+   ],
+   [
+    "rename",
+    "plays.jnl",
+    "plays.1.jnl"
+   ],
+   [
+    "note",
+    4
+   ],
+   [
+    "play",
+    9
+   ]
+  ],
+  "files": {
+   "golden": [
+    "plays/golden/end/plays.1.jnl",
+    "plays/golden/end/plays.jnl",
+    "plays/golden/sync-1/plays.1.jnl",
+    "plays/golden/sync-1/plays.jnl"
+   ]
+  },
+  "acks": {
+   "entry": {
+    "deviceId": "00:00:5e:00:53:01",
+    "epoch": "0x1122334455667788",
+    "seq": 7,
+    "stored": "00 00 5E 00 53 01 00 00 88 77 66 55 44 33 22 11 07 00 00 00 00 00 00 00"
+   },
+   "golden": {
+    "file": "manifest-acks.bin",
+    "stride": 24,
+    "entries": [
+     {
+      "deviceId": "00005e005301",
+      "epoch": "0x1122334455667788",
+      "seq": 7
+     },
+     {
+      "deviceId": "00005e005301",
+      "epoch": "0xF0E1D2C3B4A59687",
+      "seq": 2
+     },
+     {
+      "deviceId": "00005e005302",
+      "epoch": "0x0A0B0C0D0E0F1011",
+      "seq": 3
+     }
+    ],
+    "note": "EPOCH_2 has its top bit set: unsigned, it sorts after EPOCH_1"
+   },
+   "hardening": [
+    {
+     "file": "msmf-acks-damaged.bin",
+     "acks": null,
+     "root": "present",
+     "note": "its CRC fails"
+    },
+    {
+     "file": "msmf-acks-order.bin",
+     "acks": null,
+     "root": "present",
+     "note": "two entries out of order"
+    },
+    {
+     "file": "msmf-acks-short.bin",
+     "acks": null,
+     "root": "present",
+     "note": "rows of 16 bytes"
+    },
+    {
+     "file": "msmf-acks-minor-1.bin",
+     "acks": [
+      {
+       "deviceId": "00005e005301",
+       "epoch": "0x1122334455667788",
+       "seq": 7
+      },
+      {
+       "deviceId": "00005e005301",
+       "epoch": "0xF0E1D2C3B4A59687",
+       "seq": 2
+      },
+      {
+       "deviceId": "00005e005302",
+       "epoch": "0x0A0B0C0D0E0F1011",
+       "seq": 3
+      }
+     ],
+     "root": "present",
+     "note": "rows of 32 bytes, read by their 24-byte prefix: the golden's entries"
+    }
+   ]
+  },
+  "resolve": [
+   {
+    "log": "plays/golden/sync-1",
+    "ledger": "tags-0000002a.bin",
+    "skew": 0,
+    "posted": [],
+    "plays": [
+     {
+      "id": "core2-00005e005301-1122334455667788-1",
+      "send": true,
+      "filePath": "Music/Artist/Album/01 - Title.mp3",
+      "startedAt": 1791900005000,
+      "note": "no clock at its start: dated by play 2 of its boot, 185,000 ms of uptime later"
+     },
+     {
+      "id": "core2-00005e005301-1122334455667788-2",
+      "send": true,
+      "filePath": "Music/Artist/Album/02 - Other.mp3",
+      "startedAt": 1791900190000,
+      "note": "skipped"
+     },
+     {
+      "id": "core2-00005e005301-1122334455667788-3",
+      "send": true,
+      "filePath": "Music/Artist/Album/CD1/01 - Disc One.flac",
+      "startedAt": 1791900205000,
+      "note": "stopped, 2 pauses, Auto DJ"
+     },
+     {
+      "id": "core2-00005e005301-1122334455667788-4",
+      "send": true,
+      "filePath": "Music/A/x.mp3",
+      "startedAt": 1791986408000,
+      "note": "a second boot, the RTC's time"
+     },
+     {
+      "id": "core2-00005e005301-1122334455667788-5",
+      "send": false,
+      "why": "file",
+      "startedAt": null,
+      "note": "Hand Copied/...: no ledger row, the listener's file: counted, not sent"
+     },
+     {
+      "id": "core2-00005e005301-1122334455667788-6",
+      "send": false,
+      "why": "file",
+      "startedAt": null,
+      "note": "Artist/x.mp3: the ledger's stamp is invalid (sec2 31), so no time matches: counted, not sent"
+     },
+     {
+      "id": "core2-00005e005301-1122334455667788-7",
+      "send": true,
+      "filePath": "Music/Loose Intro.flac",
+      "startedAt": 1791986850000,
+      "note": "a converted file: its ledger row's server path"
+     }
+    ],
+    "settled": [
+     "core2-00005e005301-1122334455667788-1",
+     "core2-00005e005301-1122334455667788-2",
+     "core2-00005e005301-1122334455667788-3",
+     "core2-00005e005301-1122334455667788-4",
+     "core2-00005e005301-1122334455667788-7"
+    ],
+    "marks": [
+     {
+      "deviceId": "00005e005301",
+      "epoch": "0x1122334455667788",
+      "seq": 7
+     }
+    ]
+   },
+   {
+    "log": "plays/golden/end",
+    "ledger": "tags-0000002a.bin",
+    "skew": 0,
+    "posted": [
+     {
+      "deviceId": "00005e005301",
+      "epoch": "0x1122334455667788",
+      "seq": 7
+     }
+    ],
+    "plays": [
+     {
+      "id": "core2-00005e005301-f0e1d2c3b4a59687-5",
+      "send": true,
+      "filePath": "Music/a/v.mp3",
+      "startedAt": 1792074010000
+     },
+     {
+      "id": "core2-00005e005301-f0e1d2c3b4a59687-6",
+      "send": true,
+      "filePath": "Music/É/u.mp3",
+      "startedAt": 1792074310000
+     },
+     {
+      "id": "core2-00005e005301-f0e1d2c3b4a59687-7",
+      "send": true,
+      "filePath": "Music/Café/Album/01 - Title.mp3",
+      "startedAt": 1792074610000
+     },
+     {
+      "id": "core2-00005e005301-f0e1d2c3b4a59687-8",
+      "send": true,
+      "filePath": "Music/Café/Album/01 - Title.mp3",
+      "startedAt": 1792074910000
+     },
+     {
+      "id": "core2-00005e005301-f0e1d2c3b4a59687-9",
+      "send": true,
+      "filePath": "Music/Artist/Album/01 - Title.mp3",
+      "startedAt": 1792075210000
+     }
+    ],
+    "settled": [
+     "core2-00005e005301-f0e1d2c3b4a59687-5",
+     "core2-00005e005301-f0e1d2c3b4a59687-6",
+     "core2-00005e005301-f0e1d2c3b4a59687-7",
+     "core2-00005e005301-f0e1d2c3b4a59687-8",
+     "core2-00005e005301-f0e1d2c3b4a59687-9"
+    ],
+    "marks": [
+     {
+      "deviceId": "00005e005301",
+      "epoch": "0x1122334455667788",
+      "seq": 7
+     },
+     {
+      "deviceId": "00005e005301",
+      "epoch": "0xF0E1D2C3B4A59687",
+      "seq": 9
+     }
+    ],
+    "dropped": 4,
+    "note": "the epoch's plays 1-4 were dropped by the rotation before a sync read them"
+   }
+  ],
+  "resolveCases": [
+   {
+    "slot": {
+     "size": 1038
+    },
+    "skew": 0,
+    "send": false,
+    "why": "file",
+    "note": "Artist/Album/02 - Other.mp3, one byte longer: not the ledger's file"
+   },
+   {
+    "slot": {
+     "fatTime": "0x5D477BD7"
+    },
+    "skew": 3600,
+    "send": true,
+    "note": "an hour later under T's skew of +3,600: the ledger's file"
+   },
+   {
+    "slot": {
+     "fatTime": "0x5D477BD7"
+    },
+    "skew": 0,
+    "send": false,
+    "why": "file",
+    "note": "the same with no skew"
+   },
+   {
+    "slot": {
+     "fatTime": "0x00000000"
+    },
+    "skew": 0,
+    "send": false,
+    "why": "file",
+    "note": "a 0 stamp"
+   },
+   {
+    "slot": {
+     "startedAt": 0,
+     "clock": 0
+    },
+    "skew": 0,
+    "send": false,
+    "why": "clock",
+    "note": "no start, and no later dated play of its boot"
+   },
+   {
+    "slot": {
+     "seq": 3
+    },
+    "posted": 3,
+    "skew": 0,
+    "send": null,
+    "note": "at the posted mark: not new"
+   }
+  ],
+  "resolveCasesBase": {
+   "deviceId": "00:00:5e:00:53:01",
+   "epoch": "0x1122334455667788",
+   "seq": 4,
+   "path": "Artist/Album/02 - Other.mp3",
+   "ledger": "tags-0000002a.bin"
+  },
+  "peers": {
+   "card": "manifest-servers.json",
+   "ledger": "tags-00000007.bin",
+   "rows": [
+    {
+     "path": "Artist/Album/01 - Title.mp3",
+     "server": 0,
+     "to": {
+      "server": 0,
+      "peerId": null
+     }
+    },
+    {
+     "path": "Both/One (2).mp3",
+     "server": 1,
+     "to": {
+      "server": 1,
+      "peerId": null
+     }
+    },
+    {
+     "path": "Both/One.mp3",
+     "server": 0,
+     "to": {
+      "server": 0,
+      "peerId": null
+     }
+    },
+    {
+     "path": "Far Artist/Far Album/01 - Far.opus",
+     "server": 3,
+     "to": {
+      "server": 1,
+      "peerId": 1
+     }
+    },
+    {
+     "path": "Peer Artist/Peer Album/01 - Tune.opus",
+     "server": 2,
+     "to": {
+      "server": 0,
+      "peerId": 3
+     }
+    },
+    {
+     "path": "Second Artist/Album/01 - Song.flac",
+     "server": 1,
+     "to": {
+      "server": 1,
+      "peerId": null
+     }
+    }
+   ],
+   "note": "server 2 is peer 3 of the root's server (posted to server 0 with peerId 3), server 3 peer 1 of server 1"
+  },
+  "deviceTxt": [
+   {
+    "text": "contract=1\nhistory=1\n",
+    "history": [
+     1
+    ]
+   },
+   {
+    "text": "contract=1\nfirmware=0.11.0\n",
+    "history": [],
+    "note": "no key: no log"
+   },
+   {
+    "text": "contract=1\nhistory=\n",
+    "history": [],
+    "note": "empty: none"
+   },
+   {
+    "text": "contract=1\nhistory=1,2\n",
+    "history": [
+     1,
+     2
+    ]
+   },
+   {
+    "text": null,
+    "history": [],
+    "note": "no device.txt"
+   }
+  ]
+ },
  "deviceTxt": {
   "text": "contract=1\nfirmware=0.11.0\nread.msmf=1\nread.mptg=1\nread.mpdj=2\nread.mpth=1\ncodecs=mp3,flac,opus\nextensions=mp3,flac,opus\nmax_rate=48000\nmax_channels=2\n",
   "noFile": {

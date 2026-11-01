@@ -25,10 +25,15 @@ It never formats anything and never writes or deletes anything outside
 which then commits the next generation (the card's id kept) and, after the
 new root is in place, deletes only the contract's files the new root
 doesn't name (manifest.tmp, pending.bin and .tmp, tags-*.bin,
-autodj-*.bin); thumbs/, stage/ and private files stay. --replace takes
-only a /.mstream this tool wrote (its root's producer): one another
-program wrote (a transfer's, whose tags file, index and plan would go), or
-contract files with no root, are refused unless --replace-foreign.
+autodj-*.bin); thumbs/, stage/ and resume/ stay, and so do the software's
+private files (state.json, resume.json, run.lock, their .new, any other
+name: METADATA 2.12.7, 2.12.8), whose names never match a contract
+file's. --replace takes only a /.mstream this tool wrote (its root's
+producer): one another program wrote (a transfer's, whose tags file,
+index and plan would go), contract files with no root, or a run.lock (a
+transfer may be writing the card, or one was cut: 2.12.7) are refused
+unless --replace-foreign, which still leaves the run.lock and the private
+files alone.
 
 It is a test card's index, not a transfer's: DJRF's BPM, key and artist
 keys are synthesized here (as if the records carried mStream's analysis),
@@ -115,6 +120,9 @@ MAX_REL = 255 - len("/music/")  # a track's path below /music, in bytes (CardCon
 TAGS_JSONL = "synthcard-files.jsonl"
 MSTREAM = ".mstream"
 FINAL = 1                      # the root's flags: this commit ended a run
+# The contract's own files at /.mstream's top (2.2): a private file's name
+# never matches one (2.12.7; card_fixtures.private_name), so --replace keeps
+# them.
 CONTRACT = re.compile(r"^(manifest\.(bin|tmp)|pending\.(bin|tmp)|tags-[0-9a-f]{8}\.bin|autodj-[0-9a-f]{8}\.bin)$",
                       re.IGNORECASE)
 GENERATION_NAME = re.compile(r"^(tags|autodj)-([0-9a-f]{8})\.bin$", re.IGNORECASE)
@@ -764,9 +772,12 @@ def describe_check(c, w):
 # ---------------------------------------------------------------------------
 # --add-to
 # ---------------------------------------------------------------------------
-def foreign(old_root, contract):
+def foreign(old_root, contract, entries=()):
     """Why --replace would replace what another program wrote (None: this
-    tool's own /.mstream, or no contract file in it at all)."""
+    tool's own /.mstream, or no contract file in it at all). A run.lock
+    (METADATA 2.12.7) says a transfer is writing the card, or was cut."""
+    if any(n.lower() == "run.lock" for n in entries):
+        return "a run.lock (a transfer may be writing this card, or one was cut short)"
     if not contract:
         return None
     if old_root is None:
@@ -847,7 +858,7 @@ def add_to(card, synthetic=False, mpdj_file=None, tags_path=None, seed=1, genera
         shown = ", ".join(entries[:5]) + (" and %d more" % (len(entries) - 5) if len(entries) > 5 else "")
         raise Refused("%s\\%s isn't empty (%s): refusing (--replace commits a new generation over it)" % (
             card, MSTREAM, shown))
-    other = foreign(old_root, contract)
+    other = foreign(old_root, contract, entries)
     if other and not replace_foreign:
         raise Refused("%s\\%s holds %s: --replace would delete another program's files (a transfer's tags, "
                       "index and plan): refusing (--replace-foreign replaces them anyway)" % (card, MSTREAM, other))

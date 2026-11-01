@@ -12,13 +12,15 @@
 // from what it already holds (app/HostQuery, main.cpp's hook); nothing here
 // reads the card or a clock. Host-tested: test_host_status.
 //
-//   @status fw=v0.9.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87
-//           state=playing bt=Paul%27s%20headphones
+//   @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87
+//           state=playing cid=5eedc0de0a1b2c3d.0000002a bt=Alex%27s%20headphones
 //
 // (one line). The fields in this order, each key=value, one space between;
 // a value never holds a space ('?' unknown, '-' none). A reader ignores
-// keys it doesn't know: a field added later goes in before bt=, which
-// stays last (it is the one that gives way when the line runs long).
+// keys it doesn't know: a field added later goes in after state= and the
+// ones added before it, and before bt=, which stays last. When the line
+// runs long bt= gives way, down to kBtRoom bytes; past that the keys after
+// state= do, the last first (docs/HOST-STATUS.md, "The budget").
 namespace hoststatus {
 
 // A reply's bytes from its '@', as a host line's (HostLine::kMaxLine): the
@@ -28,6 +30,13 @@ constexpr size_t kMaxLine = 255;
 constexpr size_t kMaxFw = 48;
 // bt= cut short ends with this, "…" (U+2026) percent-encoded.
 constexpr const char* kEllipsis = "%E2%80%A6";
+// bt= keeps at least this many bytes for its value, whatever the other
+// fields hold: the keys after state= (cid=) are left out first, each whole.
+// With the fields' real widths they all fit, and a later key's room is
+// kept (docs/HOST-STATUS.md, "The budget": bt= keeps 40); only the
+// formatter's own caps (a 48-byte fw=, a 16-byte elf=, the 64-bit numbers
+// at 20 digits and tracks= at its 10) make one give way.
+constexpr size_t kBtRoom = 36;
 
 // card=: what is in the slot. Fat32 and Fat16 are mounted (FAT12, a card of
 // a few MB that FatFs mounts too, says fat16); the rest didn't mount, as
@@ -57,6 +66,12 @@ struct Facts {
   uint64_t musicBytes = 0;
   int battery = -1;  // 0-100 (more reads 100); negative: '-'
   State state = State::Idle;
+  // cid=: the card's id and its commit's generation (docs/METADATA.md
+  // 2.5.2), from the root the boot read (cardroot::Root: never a read of
+  // the card here); not known: '-'.
+  bool cidKnown = false;
+  uint64_t cardId = 0;
+  uint32_t generation = 0;
   const char* bt = nullptr;  // the paired headphones' name (UTF-8); null or "": '-'
 };
 
@@ -70,7 +85,7 @@ const char* stateName(State s);  // "idle", "paused", "playing", "host"
 // RFC 3986's unreserved bytes (A-Z a-z 0-9 - . _ ~) as they are, every
 // other byte as %XX (upper-case hex): a value with no space and nothing
 // outside 0x21-0x7E, which a URL decoder reads back to the same UTF-8
-// (Paul's headphones: Paul%27s%20headphones). Whole characters only, while
+// (Alex's headphones: Alex%27s%20headphones). Whole characters only, while
 // they fit in `room` bytes: a UTF-8 sequence (a lead byte and its
 // continuation bytes) is never split. `out` holds room + 1 bytes (the
 // terminator). Returns the bytes written; `*taken`, if given, the input
