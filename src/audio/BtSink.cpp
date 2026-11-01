@@ -1850,8 +1850,10 @@ uint32_t BtSink::scanList(BtScanList& out) const {
 void BtSink::noteScanResult(const uint8_t* addr, const char* name, int rssi, uint32_t cod) {
   if (!scan_) return;
   portENTER_CRITICAL(&scanLock_);
-  scan_->note(addr, name, rssi, cod);
-  scanVersion_.fetch_add(1, std::memory_order_relaxed);
+  // The version moves only when the list a page shows changed: every
+  // result bumped it, and the Pair page drew its whole list again (50-78
+  // ms) at each of the several a second the same devices send.
+  if (scan_->note(addr, name, rssi, cod)) scanVersion_.fetch_add(1, std::memory_order_relaxed);
   portEXIT_CRITICAL(&scanLock_);
 }
 

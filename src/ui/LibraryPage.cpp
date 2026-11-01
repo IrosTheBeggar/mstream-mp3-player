@@ -32,6 +32,8 @@ namespace {
 const uint16_t kDiscColours[] = {0xFB49, 0x3EBE, 0xFE07, 0x4ECF, 0xA45F, 0xF396};
 const S kActions[3] = {S::library_action_play, S::library_action_play_next, S::library_action_queue};
 const S kSegments[3] = {S::library_segment_artists, S::library_segment_albums, S::library_segment_folders};
+// The band shows at most 5 rows (4 whole ones and a part): room for them.
+constexpr uint32_t kMaxShownRows = 8;
 // The console's names for them (it speaks English, whatever the UI's language).
 const char* const kSegmentNames[3] = {"Artists", "Albums", "Folders"};
 
@@ -305,7 +307,7 @@ void LibraryPage::leave() {
 
 void LibraryPage::repaint() {
   repaintHeader();
-  ui_.list().invalidate();
+  ui_.repaintList();
 }
 
 void LibraryPage::repaintHeader() {
@@ -429,13 +431,27 @@ Header LibraryPage::header() const {
 }
 
 bool LibraryPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
-  // What plays is marked (tinted, the EQ glyph) in every list.
+  // What plays is marked (tinted, the EQ glyph) in every list: at a track
+  // change, the rows on screen whose mark changes are drawn again in
+  // place (the one that played, the one that plays: usually neither is on
+  // screen), not the whole band (50-78 ms, 80-110 with an MP3 playing, at
+  // every track change while the Library was up).
   const uint32_t t = ui_.state().trackId;
   if (t != drawnTrack_) {
     drawnTrack_ = t;
-    const uint32_t was = playTrack_;
+    ListView& list = ui_.list();
+    uint32_t first = 0, last = 0;
+    const bool shown = list.visibleRows(&first, &last) && last - first < kMaxShownRows;
+    bool before[kMaxShownRows] = {};
+    if (shown) {
+      for (uint32_t r = first; r <= last; ++r) before[r - first] = playing(rowAt(r));
+    }
     notePlaying();
-    if (playTrack_ != was) ui_.list().refreshAll();
+    if (shown) {
+      for (uint32_t r = first; r <= last; ++r) {
+        if (before[r - first] != playing(rowAt(r))) list.refreshRow(r);
+      }
+    }
   }
   return ui_.list().update(nowMs, frameDue, wholeRows);
 }

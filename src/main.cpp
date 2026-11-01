@@ -60,6 +60,7 @@
 #include "app/HostQuery.h"
 #include "app/IdlePower.h"
 #include "app/Library.h"
+#include "app/NvsLater.h"
 #include "app/NvsSchema.h"
 #include "app/PlayHistory.h"
 #include "app/PowerLab.h"
@@ -3283,7 +3284,11 @@ static void stepCard(uint32_t now, bool input) {
   ScanScheduler::In in;
   in.nowMs = now;
   in.listMoving = userInterface && userInterface->listMoving();
-  in.input = input;
+  // A list moving counts as input too: the walk, the scan and a compaction
+  // then wait ScanScheduler::Config::inputQuietMs after a fling comes to
+  // rest, so a listener flicking through a long list doesn't get a slice
+  // of the card between flicks (a cover isn't held by that wait).
+  in.input = input || in.listMoving;
   in.playing = player.state() == PlayState::Playing;
   in.ringMs = audio.bufferedMsNow();
   in.ringCapacityMs = audio.ringCapacityMs();
@@ -3482,6 +3487,14 @@ void setup() {
   // must outlast a slow loop pass: 1 KB (270 ms of them) instead of 256 B.
   // Only before begin(), which M5.begin() calls.
   Serial.setRxBufferSize(SerialConsole::kRxBuffer);
+  // And a transmit buffer: without one every Serial.print blocks the loop
+  // until its bytes are in the UART's 128-byte FIFO (87 us a byte at
+  // 115200: a tap's two [touch] lines and its "[ui] library: play ..."
+  // held the loop 20-30 ms, a cover's line 17 ms, in the middle of
+  // frames). With one the UART's interrupt drains it, and a print waits
+  // only when 2 KB (180 ms of output) are already queued: the console's
+  // long dumps (ql, l) still pace themselves on the line.
+  Serial.setTxBufferSize(2048);
   auto cfg = M5.config();
   cfg.serial_baudrate = 115200;  // M5Unified leaves Serial off unless asked
   cfg.internal_mic = false;      // the mic shares GPIO0 with the speaker's I2S clock
@@ -3679,6 +3692,7 @@ void setup() {
                  "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes); "
                  "ui the UI's navigation (ui0-ui4 tab, uib back, uic coach cards, uiL<tag> language (uiL the list, "
                  "uiL- forget it), uiP the first boot's language picker, uit/uih/uis/uid/uip scripted finger, "
+                 "uir0/uir1 the A-Z rail's scrub as before 0.12.0 / paced (uir: which), "
                  "uk1/uk2/uk0 the scripted finger on a skewed panel (uk2 with jitter) or not, "
                  "uiF<c/s/p/r/l/n/f/t/g/u/w> show a faked Bluetooth, no-card, exFAT/NTFS/GPT/can't-read card or waiting state "
                  "(uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
@@ -3735,6 +3749,7 @@ void loop() {
   const bool anyInput = idleInput || touchedThisPass || screen.takeInput();
   stepIdle(now, anyInput);
   powerSettings.update(audio.bluetooth().connected());
+  nvslater::loop(now);  // settings the taps changed: written once they rest
   stepCpuRestart(now);
   stepFormatRestart(now);
   audio.loop(now);

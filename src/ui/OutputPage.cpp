@@ -173,7 +173,7 @@ void OutputPage::leave() {
 
 void OutputPage::repaint() {
   repaintHeader();
-  ui_.list().invalidate();
+  ui_.repaintList();
 }
 
 // Its tab tapped again: Pair and About go back to the Output list (the Ui
@@ -312,20 +312,27 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
     }
     const uint32_t sc = screenSig(ui_.state());
     if (sc != drawnScreen_ && still) {
+      // Only the rows whose value changed (screenSig()'s fields): a tap on
+      // one cycles it, and the group's four other rows on screen drew again
+      // with it (49 ms a tap, MEASURED).
+      const uint32_t changed = sc ^ drawnScreen_;
       drawnScreen_ = sc;
-      list.refreshRow(ScreenOff);
-      list.refreshRow(Brightness);
-      list.refreshRow(IdleOff);
-      list.refreshRow(CpuSpeed);
-      list.refreshRow(BtPower);
+      if (changed & 0x0000F0u) list.refreshRow(ScreenOff);
+      if (changed & 0x00000Fu) list.refreshRow(Brightness);
+      if (changed & 0x000F00u) list.refreshRow(IdleOff);
+      if (changed & 0x038000u) list.refreshRow(CpuSpeed);
+      if (changed & 0x007000u) list.refreshRow(BtPower);
     }
     // The spinner, while something is under way.
     const AppState& s = ui_.state();
-    if (btCardView(s.btLink, s.btSession, s.btLost).spinner && still &&
-        static_cast<int32_t>(nowMs - nextSpinMs_) >= 0) {
+    const BtCardView v = btCardView(s.btLink, s.btSession, s.btLost);
+    if (v.spinner && still && static_cast<int32_t>(nowMs - nextSpinMs_) >= 0) {
       nextSpinMs_ = nowMs + kSpinMs;
       spin_ = static_cast<uint8_t>((spin_ + 1) % 8);
-      list.refreshRow(BtTop);
+      // (drawBtTop() draws it at (290, 21) on the card's own colour.)
+      if (!spinPatch(BtTop, 290, 21, toneColour(v.tone), s.onBluetooth ? col::ROW_SEL : col::CARD)) {
+        list.refreshRow(BtTop);
+      }
     }
   } else if (kind_ == PageKind::Pair) {
     if (searchEnded_) {
@@ -348,7 +355,7 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
     if (still && search_.searching() && static_cast<int32_t>(nowMs - nextSpinMs_) >= 0) {
       nextSpinMs_ = nowMs + kSpinMs;
       spin_ = static_cast<uint8_t>((spin_ + 1) % 8);
-      list.refreshRow(0);
+      if (!spinPatch(0, 24, 21, col::CYAN, col::BG)) list.refreshRow(0);  // (its row draws it at (24, 21))
     }
   } else if (kind_ == PageKind::AutoDj) {
     // A setting, the index's state, a hold: the rows in place (a tap's
@@ -742,6 +749,16 @@ void OutputPage::drawBtTop(ListView::Row& r) {
   } else {
     radio(r.c, 290, 21, active, accent::Output, bg);
   }
+}
+
+bool OutputPage::spinPatch(uint32_t row, int cx, int cy, uint16_t colour, uint16_t bg) {
+  ListView& list = ui_.list();
+  if (list.pressedRow() == static_cast<int32_t>(row)) return false;  // its press look: the row whole
+  constexpr int kR = 11;  // the ring (8 px) and its bright dot (2 px), with a margin
+  M5Canvas& c = gfx::strip();
+  c.fillRect(0, 0, 2 * kR, 2 * kR, bg);
+  spinner(c, kR, kR, spin_, colour);
+  return list.pushOnRow(row, c, 0, 0, 2 * kR, 2 * kR, cx - kR, cy - kR);
 }
 
 // (uitext has the boxes: test_ui_library checks every label fits its box.)

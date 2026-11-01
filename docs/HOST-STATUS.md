@@ -828,9 +828,11 @@ counted. An error changes nothing.
   dialogs, `OwnDialog::FormatAsk` and `FormatSure`: the second's red
   button on the left, `Dialog::open()`'s `primary`, in the hold mode
   (`Dialog::open()`'s `holdHint`, drawn from the start, amber once a
-  press fell short; the fill drawn through the shared
-  strip, its button alone, every 40 ms at most; `Dialog::tick()` every
-  loop pass; `Input::noHold()` for the touch that began it, so it stays
+  press fell short; the fill drawn over the panel as rendered, its button
+  alone and pushed by itself like every press (`Dialog::drawButton()`,
+  `gfx::pushRect()`), every 40 ms at most; a press cut short draws the
+  hold button and the hint's row alone, never the card; `Dialog::tick()`
+  every loop pass; `Input::noHold()` for the touch that began it, so it stays
   a press and says its moves; the hold dropped when the touch is no
   longer the dialog's); its settle and the minute (`formatask`); Cancel
   for anything else); the no-card pages' Format...
@@ -899,8 +901,9 @@ counted. An error changes nothing.
   (`.iram0.text` 124,883 B); flash `.text` +1,772 B, `.rodata` +2,912 B;
   `firmware.bin` +4,848 B (4,400,640), of which the hold's is 2,544 B;
   the app 70 % of its slot. Every guard passes. While a finger holds
-  the red button (131 x 36 px, 9.4 KB), it is drawn through the shared
-  strip and pushed about 25 times a second, 2 s at most. **The hold's
+  the red button (131 x 36 px, 9.4 KB), it is drawn (over the panel sprite
+  since the press drawing came from main, the strip before it; both in
+  PSRAM) and pushed about 25 times a second, 2 s at most. **The hold's
   review fixes**, core2, against that image (4,400,640): the dialog's
   touch and the loop's order moved into `lib/core` (`DialogTouch`,
   `formatask::pass()`, `Question::answered()`) +176 B; "Hold to erase"
@@ -1062,9 +1065,13 @@ each line whole with its `\n`. Close every other owner of the port first.
       in each language the label and the hint fit, uncut):
       - Tap the red button: nothing but the inert buzz and the hint
         turning amber; the log's `[ui] format: Format let go after <n>
-        ms: nothing formatted (the hint amber)`.
+        ms: nothing formatted (the hint amber)`. Only the button and the
+        hint's row change: the card around them doesn't flicker (each
+        drawn alone, `Dialog::drawButton()`, `drawHint()`).
         Tap it five times quickly, then double-tap it: the same each
         time, the question still up.
+      - Press Cancel and slide off it: only Cancel lights and goes dark;
+        the red button stays as it was, the hint too.
       - Hold it about a second and let go: it fills about half way and
         empties (`let go after ~1000 ms`). From the console, a scripted
         finger resting on it 1.88 s, `uid91,194,91,194,1700`: it fills

@@ -447,6 +447,31 @@ void test_scan_list_keeps_each_device_once_in_the_order_found() {
   TEST_ASSERT_EQUAL_STRING("speaker", BtScanList::kindName(l.at(1).kind));
 }
 
+// note() says whether a list of the devices would show something new (the
+// scan's version moves only then: the Pair page used to draw its whole
+// list at every result, several a second from the same devices).
+void test_scan_list_says_when_what_it_shows_changed() {
+  BtScanList l;
+  TEST_ASSERT_TRUE(l.note(kA, "WH-1000XM4", -70, cod(6)));  // a device came
+  TEST_ASSERT_FALSE(l.note(kA, "WH-1000XM4", -72, cod(6)));  // the same, the same bars (-67..-78: 2)
+  TEST_ASSERT_FALSE(l.note(kA, "", -75, 0));                 // no name, no class: nothing shown changes
+  TEST_ASSERT_TRUE(l.note(kA, "", -50, 0));                  // 4 bars now
+  TEST_ASSERT_FALSE(l.note(kA, "WH-1000XM4", -52, cod(6)));  // the name it has
+  TEST_ASSERT_TRUE(l.note(kA, "Sony WH-1000XM4", -52, cod(6)));  // another name
+  TEST_ASSERT_TRUE(l.note(kA, "", -52, cod(7)));             // another kind
+  TEST_ASSERT_TRUE(l.note(kB, "", -90, 0));                  // a second device, unnamed
+  TEST_ASSERT_TRUE(l.note(kB, "JBL Flip 5", -90, 0));        // its name came
+  uint8_t a[6] = {9, 9, 9, 9, 9, 0};
+  for (int i = 2; i < BtScanList::kMax; ++i) {
+    a[5] = static_cast<uint8_t>(i);
+    TEST_ASSERT_TRUE(l.note(a, "x", -60, cod(6)));
+  }
+  a[5] = 200;
+  TEST_ASSERT_FALSE(l.note(a, "weak", -100, cod(6)));  // full, weaker than all: not kept, nothing shown
+  a[5] = 201;
+  TEST_ASSERT_TRUE(l.note(a, "strong", -40, cod(6)));  // took the weakest's place
+}
+
 void test_scan_list_full_drops_the_weakest_for_a_stronger_one() {
   BtScanList l;
   uint8_t a[6] = {9, 9, 9, 9, 9, 0};
@@ -587,6 +612,7 @@ int main(int, char**) {
   RUN_TEST(test_a_connect_with_none_remembered_searches_then_fails);
   RUN_TEST(test_forget_needs_a_second_tap_within_3_s);
   RUN_TEST(test_scan_list_keeps_each_device_once_in_the_order_found);
+  RUN_TEST(test_scan_list_says_when_what_it_shows_changed);
   RUN_TEST(test_scan_list_full_drops_the_weakest_for_a_stronger_one);
   RUN_TEST(test_signal_bars_and_device_kinds);
   RUN_TEST(test_the_resting_card);

@@ -389,7 +389,7 @@ The rules that keep it deadlock- and glitch-free:
 | decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack); decodes and converts to 44.1 kHz (the converter, measured with `Rb`: 1.4 M cycles per second of audio for 44.1 kHz's passthrough, the old path, 5 cycles a frame cheaper (an MP3 still measures 0.8 points above the build before the converter, its decoder's loop 2 % slower in the new image: RESAMPLER.md section 10b); 5.8-5.9 % of a core at 240 MHz for 48 kHz, 8.8 % at 160: RESAMPLER.md sections 10 and 10b); after a track start, once 500 ms are buffered, it sleeps after each pass so it refills at most 1.5x realtime (`RefillPacer`, on by default: it halved the UI's stall at every start); at a file's end it opens the next track with the ring still full (a gapless join: no refill from empty at natural ends, GAPLESS.md). Its rests are `ulTaskNotifyTake()`, so a request or a new word (`setNext()`) wakes it |
 | speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake; switches the amp and I2S (M5.Speaker end/begin) off 2 s after it last queued audio and on again before the next buffer (`AmpGate`) |
 | M5.Speaker | 1 | 2 | mixes to 44.1 kHz mono (its input is always 44.1 kHz now); runs only while the amp is on |
-| the card worker (`card`, app/CardWorker) | 1 | 1 for a cover (0 while a list moves), the library update's build, a slice of the walk, and while the screen is dark a slice of the tag scan, a compaction and the update's save (a slice drops to 0, and ends after its unit, when a list moves or the scan's yields apply; a compaction or a save drops to 0 when the screen lights); 0 for the tag scan, compactions and the save while the screen is lit | one step at a time, only the one the loop hands it (app/CardTasks, ScanScheduler: docs/METADATA.md 3.3.4, 3.3.9, 3.8, 3.9): a cover (ui/Thumbs), a slice of the validation walk (its folders for 18 ms lit, 250 ms dark), a compaction of `tags.bin`, a file of the tag scan a loop source names or a slice of its rest's files, the update step's build of the index and its save of `library.idx` (lib/core LibraryUpdate); made for the first step, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device as the covers' worker; the card's jobs about 3.0 KB on N11's card, 3,140 B least left over 5,190 steps, MEASURED on df92c01 by `gs`; the deepest, ESTIMATED from the image, a compaction's reopen of D under its folders: about 4.0 KB (3,916 B MEASURED on 6c2a928, 2,228 B left), about 5.0 KB with the SD driver's log line on top, about 1.1 KB left before an interrupt's frame, 512 B more than before the 2026-10-09 review's `Container::open()`; the build MEASURED at 5,360 B on 6c2a928, 784 B left, its views' `std::sort` at libstdc++'s depth limit on the records' byte order, about 3.3-3.6 KB since `lib/core/IdSort` bounds the recursion at lg(n/16) + 1 frames, METADATA.md 3.9); reads the card in 4 KB pieces and writes it in 4 KB pieces that end on the file's 4 KB boundaries; covers level with the loop while nothing moves (at 0 they shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves; the tag scan, compactions and the update's save at 0 while the screen is lit, since the SD driver's reads busy-wait the CPU (the walk's slices, and while the screen is dark the scan's slices, a compaction and the save, at 1: above; at 0 the 2026-10-09 run measured a compaction about 1.75x its modelled card time, none having run at 1 there, and the save 2-4.5x its time on the loop at the boot); always below the decoder (below) |
+| the card worker (`card`, app/CardWorker) | 1 | 1 for a cover (0 while a list moves or a finger is on its A-Z rail), the library update's build, a slice of the walk, and while the screen is dark a slice of the tag scan, a compaction and the update's save (a slice drops to 0, and ends after its unit, when a list moves or the scan's yields apply; a compaction or a save drops to 0 when the screen lights); 0 for the tag scan, compactions and the save while the screen is lit | one step at a time, only the one the loop hands it (app/CardTasks, ScanScheduler: docs/METADATA.md 3.3.4, 3.3.9, 3.8, 3.9): a cover (ui/Thumbs), a slice of the validation walk (its folders for 18 ms lit, 250 ms dark), a compaction of `tags.bin`, a file of the tag scan a loop source names or a slice of its rest's files, the update step's build of the index and its save of `library.idx` (lib/core LibraryUpdate); made for the first step, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device as the covers' worker; the card's jobs about 3.0 KB on N11's card, 3,140 B least left over 5,190 steps, MEASURED on df92c01 by `gs`; the deepest, ESTIMATED from the image, a compaction's reopen of D under its folders: about 4.0 KB (3,916 B MEASURED on 6c2a928, 2,228 B left), about 5.0 KB with the SD driver's log line on top, about 1.1 KB left before an interrupt's frame, 512 B more than before the 2026-10-09 review's `Container::open()`; the build MEASURED at 5,360 B on 6c2a928, 784 B left, its views' `std::sort` at libstdc++'s depth limit on the records' byte order, about 3.3-3.6 KB since `lib/core/IdSort` bounds the recursion at lg(n/16) + 1 frames, METADATA.md 3.9); reads the card in 4 KB pieces and writes it in 4 KB pieces that end on the file's 4 KB boundaries; covers level with the loop while nothing moves (at 0 they shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves; the tag scan, compactions and the update's save at 0 while the screen is lit, since the SD driver's reads busy-wait the CPU (the walk's slices, and while the screen is dark the scan's slices, a compaction and the save, at 1: above; at 0 the 2026-10-09 run measured a compaction about 1.75x its modelled card time, none having run at 1 there, and the save 2-4.5x its time on the loop at the boot); always below the decoder (below) |
 | Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and the dancer's frames (10/s idle; dancing 30/s at 240 MHz, 24/s below: `DanceRate`); sleeps 1-5 ms every pass (less while a list frame is due), 20 ms while the screen is off (`Ui::idleMs`; with no UI, main's own 20 ms), at most 2 ms while Auto DJ's join works; Auto DJ's step (below) |
 
 ### The loop's pass
@@ -857,7 +857,10 @@ out what it returns.
   runs inquiry rounds back to back and lists every audio device (class of
   device: the rendering service or the Audio/Video major class; the name
   from the result or its EIR) into a `BtScanList` in PSRAM, under a
-  spinlock, connecting to none (the library would connect to the first
+  spinlock (its version, which the Pair page polls, moves only when what
+  the list shows changed: a device came, a name or a kind, a signal
+  crossed a bars step; every result moved it until 0.12.0, and the page
+  drew its whole list again several times a second), connecting to none (the library would connect to the first
   that matches), while the background search is held off (the Pair page
   stops it after 2 min, `PairSearch`, checked every UI pass so a dialog
   over the page doesn't keep it running, or when the screen goes off; it
@@ -1096,7 +1099,7 @@ ignored (HeadsetKeys); the Core2's play resumes. Console: `T` status,
 The device turns itself off after N minutes idle (docs/ENERGY.md item 4;
 `IdlePolicy`, host-tested in test_idle_policy): "Turn off when idle" on the
 Output tab, 10 / **20** / 60 min / Never, saved (NVS "power"/"idle_after",
-`app/IdlePower`). Idle means all of these: the player Stopped or Paused
+`app/IdlePower`, written once the taps rest). Idle means all of these: the player Stopped or Paused
 (not Playing, not Waiting for the headphones); not on USB (the power
 chip's status, read once a second by `ScreenControl`: by
 `M5.Power.getType()`, the AXP192's ACIN or VBUS, the AXP2101's VBUS (the
@@ -1304,7 +1307,13 @@ happens during a session: its epochs are the computer's alone.)
   and the clock's state in place of the output latency.
 - **Cost.** Internal RAM: the serial receive buffer 256 B -> 1 KB (set
   before `M5.begin()`), the line buffer 256 B, `HostLink`/`HostClock` about
-  0.6 KB: about 1.6 KB in all. No `IRAM_ATTR`.
+  0.6 KB: about 1.6 KB in all. No `IRAM_ATTR`. Since 0.12.0 a 2 KB
+  **transmit buffer** too (`Serial.setTxBufferSize()`, before
+  `M5.begin()`): without one every print blocked the loop until its
+  bytes were in the UART's 128-byte FIFO, 87 us a byte, so a tap's two
+  `[touch]` lines and its `[ui] library: play ...` held the loop 20-30 ms
+  in the middle of frames; now the UART's interrupt drains the buffer and
+  a print waits only once 180 ms of output is queued.
 - **The reference sender** (`tools/usb_viz.py`, Python 3 + pyserial): a
   float32 port of `HopFrontEnd` and `ClickGen` (bit-exact on
   `test/test_hop_feed/hop_golden.h`, which `--selftest` checks), the session
@@ -1731,8 +1740,9 @@ on 0.10.0 the language is still there. Schema 4 (from 0.11.0) is schema
 3's keys and the `autodj` namespace, Auto DJ's switch and settings: four
 u8s, `on` (1 on), `mode` (0 Follow the vibe, 1 Stay on seed), `floor`
 (Match strictness in percent: 55, 60, 65, 70 or 75) and `match` (bit 0
-BPM continuity, bit 1 Harmonic mixing), each written at once when it
-changes (`app/AutoDjStore`, [AUTODJ.md](AUTODJ.md)). Its `migrate(3, 4)`
+BPM continuity, bit 1 Harmonic mixing), each queued when it changes and
+written once the taps rest (`app/AutoDjStore` through `app/NvsLater`,
+[AUTODJ.md](AUTODJ.md)). Its `migrate(3, 4)`
 step does nothing: an absent key, or a value this firmware doesn't take,
 reads as its default (off, Follow the vibe, 55 %, both off). 0.10.0
 leaves a schema-4 NVS as it is and never reads the namespace. Schema 5
@@ -1778,6 +1788,21 @@ The rules:
   would have kept v0.5.0's millisecond, but two writes per pause aren't
   atomic.
 - Keys are at most 15 characters (NVS's limit).
+- **What a tap changes is written once the taps rest** (0.12.0:
+  `app/NvsLater`; when, `lib/core/SaveLater`, host-tested in
+  test_save_later). The screen's off-after and brightness, the idle
+  power-off, the Bluetooth power, the repeat mode and Auto DJ's keys are
+  queued (the value applies at once) and written 1.5 s after the last
+  change, 6 s after the first at most, each namespace opened once, with
+  one `[nvs] saved ...` line; a key queued again is written once, with its
+  last value. A write held the loop a few ms in the middle of the tap that
+  made it (longer when NVS's page fills and a sector is erased), and the
+  other core's tasks that run from flash stand still while it lasts.
+  Before a restart or a power-off (`PowerSettings::restart()`,
+  `IdlePower::powerOff()`) what is queued is written first. The language,
+  the tips' flag, the CPU speed (its restart follows), the queue's
+  position and resume point and the Bluetooth stack's keys are written as
+  before.
 
 The keys of schema 5, by namespace: `meta` (schema); `input` (cal,
 cal_ask, haptics, railtick); `player` (bt_name, bt_forgot, bt_fresh);
@@ -2103,8 +2128,10 @@ the browsing UI hold its **track ids**, never strings.
   queue's next ones, the Library tab's page, then the rest), a file a step,
   into `tags.jnl`; **compactions** fold the journals into `tags.bin`. Each
   hand-off is `ScanScheduler`'s, which holds the walk and the scan while a
-  list moves (on a lit screen, its page drawn: in the dark or under a
-  modal none is seen moving, whatever its page owes), input just came,
+  list moves or a finger is on its A-Z rail (on a lit screen, its page
+  drawn: in the dark or under a modal none is seen moving, whatever its
+  page owes), input just came (a list moving counts as input, so a fling's
+  end is followed by the same 500 ms of quiet as a touch),
   the ring is low, a track changes, a seek or a Bluetooth setup is under
   way, after an underrun or a long decode pass, and the scan below 10%
   battery off USB. A hand-off of the walk or of the scan's rest is a
@@ -2330,8 +2357,9 @@ the browsing UI hold its **track ids**, never strings.
   come back with the queue; not shuffled, the file is version 1 byte for
   byte. Older firmware reads a version 2 file as no queue file at all
   (`not a whole queue file, ignored`): a downgrade while shuffled loses the
-  queue once. The repeat mode is NVS's (`queue`/`repeat`, written at once
-  on a change, read at boot before the queue). The file is rewritten 2 s after the
+  queue once. The repeat mode is NVS's (`queue`/`repeat`, queued on a
+  change and written once the taps rest, `app/NvsLater`; read at boot
+  before the queue). The file is rewritten 2 s after the
   last edit, 32 lines a loop pass (a 10,000-track queue is ~700 KB and never
   holds the loop), into `queue.tmp`, then renamed over `queue.txt`; an
   edit while a write is under way drops that write. **Edits that never
@@ -3016,12 +3044,17 @@ Queue, Dance and Output (with its Pair and About pages).
   question's in the hold mode, answered only by a finger kept on it 2 s,
   `lib/core/HoldButton`, the buttons' hit areas `lib/core/DialogLayout`;
   which touch answers a dialog, `lib/core/DialogTouch`, host-tested, the
-  Dialog drawing what it says changed)
+  Dialog drawing what it says changed, that control alone)
   freeze the page under them; one that opens while a finger is
   on the page (the headphones' drop dialog) ends that touch for the page (a
   Cancel), so its lift can't act or draw under it. When a toast goes, the
   header row it covered is drawn again (`Ui::uncover()`); a page with no
-  header (Now Playing, the Dance tab) draws all of itself for that, so every
+  header (Now Playing, the Dance tab) draws that row alone too since
+  0.12.0 (`repaintHeader()` overrides: Now Playing's top fills, the title
+  strip's and the cover's rows in it, from the cover's sprite as drawn;
+  the Dance tab's rows above its box and panels, the box's own, its two
+  top panels; each used to draw all of itself, ~40 and ~50 ms a toast),
+  and every
   sheet up over it (the "..." sheet, the Sleep timer sheet, the volume
   sheet) is drawn again after it (found on the device: the fade toast's
   +10 min over the Sleep timer sheet left the sheet up and live but unseen,
@@ -3048,7 +3081,28 @@ Queue, Dance and Output (with its Pair and About pages).
   settles, or at once when a finger lands on the rail (x 280 to the edge).
   A drag on it scrubs (a haptic tick per new letter); the touch has no hold
   (`TouchRecognizer::noHold()`), so resting on it to read the letter and
-  then sliding still scrubs. A tap on it opens the jump grid (above). A
+  then sliding still scrubs. **A scrub's every position is a jump** (the
+  band drawn whole: 50-78 ms, 80-110 with an MP3 playing, and no touch
+  sampled meanwhile), so the band follows the finger at `ScrubPacer`'s
+  cadence (60 ms after the last band draw ended, or at once when the
+  finger has rested 40 ms) and **the rail alone follows the finger on
+  every frame between** (the thumb and its letter, a few ms, through the
+  scroll mapping). While a finger is on the rail the card worker is held
+  as for a moving list (`Ui::listMoving()`): no cover and no slice of the
+  walk or the scan reads the card under the scrub (on the user's
+  19,478-track card, 2026-10-30, the boot's walk and the covers ran under
+  every scrub, and the only moments a scrub counted as "moving" were the
+  passes between a position and its frame). MEASURED on that card with
+  the scripted finger (`uid300,80,300,230,3000`: the whole rail in 3 s,
+  695 artists, nothing playing): a band frame costs 48 ms (4 rows
+  rendered in 24.5 ms, the push 23 ms; 50-55 ms on the Albums list), so
+  the old way (`uir0`) drew 49 band frames, 15.4 a second, and the thumb
+  moved with them; paced (`uir1`) 21 band frames (6.6 a second) and 60
+  rail frames of 4.0 ms, the thumb at 19 a second. A scrub slow enough
+  to rest between positions (a pixel every 130 ms) draws the band for
+  every position, as before. Flings on the same lists: 30 fps, 2 ms a
+  frame. A tap on it opens the jump
+  grid (above). A
   press that only touches the list (a tap) doesn't hide it. **A move is
   drawn in steps of at most 84 lines a frame** (the hardware scroll's
   one-hold step, `ListLayout::stepToward()`): only flings were capped, so a
@@ -3068,8 +3122,41 @@ Queue, Dance and Output (with its Pair and About pages).
   that brings it on screen only pushes it. Drags and flings then drew in
   2-5 ms a frame on average, 10-25 ms at most; only very fast drags (over
   ~3,000 px/s, two new rows in one frame) still have one frame of 35-55
-  ms. `ui` counts the rows rendered ahead. The band can
-  be **shorter** (`Ui::setListBand()`: the Queue's selection mode, 72-197):
+  ms. `ui` counts the rows rendered ahead. **What changes in place stays
+  in place** (0.12.0, from the device's `ui` loop costs): a track change
+  draws again only the rows on screen whose mark changes (the Library:
+  usually none; the Queue: the one that played and the one that plays,
+  the whole band only for a jump), a failed track's "!" its Queue row, an
+  overlay's end pushes the rows as rendered without rendering them again
+  (`ListView::redraw()` through `Ui::repaintList()`, unless a cover
+  arrived under it), and the Output page's spinners push their patch
+  alone (`ListView::pushOnRow()`, `ListScroller::pushRectAtScreen()`,
+  through the scroll mapping: ~0.3 ms instead of a row rendered and
+  pushed whole, ~11 ms, 8 times a second), and a tap on one of the Output
+  page's screen and power rows draws that row alone (its group's four
+  other rows on screen drew again with it: 49 ms a tap, MEASURED). **A
+  press draws the control alone** (0.12.0): a sheet's row or its ✕ (the whole sheet rendered and
+  the row pushed was 39 ms, twice a tap, MEASURED), the sleep sheet's pill
+  (55 ms), the volume sheet's controls' row (36 ms), the jump grid's cell
+  or its header's pill (58 ms), a dialog's button (44 ms); each is drawn
+  again over the panel sprite as last rendered (rendered whole first when
+  another overlay drew in it since) and pushed by itself
+  (`gfx::pushRect()`). The hold mode's button goes the same way: its fill
+  as it grows and its emptying, and a press cut short the hint's row too,
+  so the panel always holds what the screen shows. And **the band keeps its scroll mode under Now
+  Playing and the Dance tab** (`Ui::ensureScroller()`): their drawing goes
+  through the same mapping as an overlay's (the dancer's box too,
+  `DanceView::pushRect()`), so a switch from a list page neither clears
+  the band first (168 rows: 21 ms of black before the page painted) nor
+  shows it rotated, and the next list page draws it all again in place
+  (`ListScroller::invalidate()`). The scroll mode ends, the band cleared
+  first, only when a screen of its own takes the display
+  (`Ui::endScroller()`). The band can
+  be **shorter** (`Ui::setListBand()`: the Queue's selection mode, 72-197;
+  the Library's status line, 72-219, set in `Ui::showTop()` before the
+  page's first frame since 0.12.0: it came a pass later, a second full
+  band draw and a flash at every Library open while the card worker had
+  something to say, 34 + 45 ms MEASURED):
   the LCD's scroll area is defined again with a bottom fixed area
   (VSCRDEF's BFA), so a bar under the list (198-239) stays put while the
   list scrolls; the rail's pushes stop at the band's end. An **empty list**
@@ -3326,8 +3413,10 @@ Queue, Dance and Output (with its Pair and About pages).
     redrawn: the cover when the album changes or its thumbnail arrives,
     the text when the track does (the title strip also when the wait's
     status does), the times once a second, the transport on a change (the
-    play state, the volume, the output, shuffle, repeat), and the bar on
-    the 30 fps frame deadlines while a finger scrubs it.
+    play state, the volume, the output, shuffle, repeat; a press on it
+    draws its zone alone, 64 x 56: the whole strip, twice a tap, was 12 ms
+    each, MEASURED), and the bar on the 30 fps frame deadlines while a
+    finger scrubs it.
 
   **The progress line is a seek bar.** Its design is
   [SEEK-BAR.md](SEEK-BAR.md); the mapping and the touch are
@@ -3745,13 +3834,22 @@ Queue, Dance and Output (with its Pair and About pages).
   a 5:20 LAME VBR track 15 s in, and 3:30 for a 3:13 FLAC.)
 - **Console** `ui`: each tab's stack with scroll positions, the list's state,
   frames and fps, the governor, the UI's bus holds (count, mean, max), the
-  overlays, the covers (above) and the loop task's stack never used since
+  overlays, the covers (above), **what a loop pass costs** since the last
+  `ui` (`[ui] loop: N passes, mean, longest (snapshot, tab bar, page,
+  status, covers at most); the longest event`; a pass or a glass event
+  over 35 ms logs itself as it happens, `[ui] slow pass ... on <page>:
+  a frame N us, snapshot, tab bar, status, covers` / `[ui] slow event
+  tap at x,y: N us`, so a page's open or a redraw that takes too long
+  shows up without a motion) and the loop task's stack never used since
   the boot ("The loop task's stack", above). `ui0`-`ui4`
   tap a tab, `uib` goes back, `uic` shows the coach cards, `uiL` lists the
   languages and `uiL<tag>` uses one (`uiL-` forgets it and the tips: the
   next boot is a fresh unit's), `uiP` shows the first boot's language
   picker, `uiT` decodes
-  the covers again (their timings), `uiV` shows the volume HUD, and
+  the covers again (their timings), `uiV` shows the volume HUD, `uir0` /
+  `uir1` has the A-Z rail's scrub as before 0.12.0 (every position a band
+  draw at once, the card worker not held) or paced (`uir` says which: to
+  compare the two by hand), and
   **`uiF<c/s/p/r/l/n/f/t/g/u/w>`** shows a faked state for screenshots of what a test
   can't safely cause (display only: the radio and the card are left
   alone): the Bluetooth card connecting, searching, pairing or resting, the
@@ -3776,7 +3874,10 @@ Queue, Dance and Output (with its Pair and About pages).
   up from the strip that flings the list (`uid...` the same as a drag).
   Every list motion logs `[ui] scroll: <ms>, <frames> (<fps>), draw mean/max
   (n over 35 ms), ring min, underruns +n, governor` when it settles (a scrub
-  of Now Playing's seek bar the same as `[ui] scrub: ...`), and a
+  of Now Playing's seek bar the same as `[ui] scrub: ...`; a finger on the
+  A-Z rail, from its landing to the band's last catch-up, as `[ui] rail
+  scrub: <ms>, <band frames> (<a second>; draw mean/max, n over 35), <rail
+  frames> (mean/max), ...`), and a
   frame over 50 ms logs `[ui] slow frame` with its move and its renders; every touch logs
   `[touch] down/tap/long press/fling x,y (raw x,y)` (with `scripted` for
   the scripted finger's), every move of the queue's current entry

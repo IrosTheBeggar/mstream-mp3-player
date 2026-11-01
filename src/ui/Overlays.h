@@ -216,7 +216,12 @@ public:
 
 private:
   static constexpr int kCross = -3;  // pressed_: the ✕ pill
+  // The whole panel; the title row's text and pill alone; row i alone
+  // (over the card as rendered: a press look costs one row, not a render
+  // of every row, which was 34 ms on the device).
   void render();
+  void renderTitle();
+  void renderRow(int i);
   void pushRow(int i);
   void pushTitle();
   char title_[96] = "";
@@ -259,7 +264,13 @@ public:
 private:
   static constexpr int kCross = -3;
   int pillAt(const InputEvent& e) const;
+  // Pill `id`'s place in the panel (false: none, or not shown now).
+  bool pillRect(int id, int& x, int& y, int& w) const;
   void render();
+  void renderTitle();
+  void renderPill(int id);
+  // Pill `id` (or the close pill) drawn again alone: its press look.
+  void drawPill(int id);
   int current_ = -1;
   bool running_ = false;
   bool extend_ = false;
@@ -294,7 +305,14 @@ private:
   enum Part : int8_t { None = -1, Minus, Slider, Plus };
   Part partAt(const InputEvent& e) const;
   static int valueAt(int x);
+  // The whole panel; its top row (the output, the value) and its controls'
+  // row (− + and the slider) alone, over the card as rendered.
   void render();
+  void renderTop();
+  void renderControls();
+  // The controls' row rendered and pushed again (the top row too when
+  // `value`): a press look, a step, the knob following a finger.
+  void drawPart(bool value);
   bool bluetooth_ = false;
   char name_[32] = "";
   int volume_ = 0;
@@ -326,6 +344,9 @@ public:
 private:
   int cellAt(const InputEvent& e) const;
   void renderGrid();
+  void renderCell(int i);
+  // Cell i drawn again alone: its press look.
+  void drawCell(int i);
   void drawHeader();
   char title_[64] = "";
   char labels_[jump::kGridCells][4] = {};
@@ -388,10 +409,16 @@ public:
 
 private:
   void render();
-  // Button i drawn into `s` at (x, y), as wide as the layout has it: the
-  // hold button with `fillPx` of it filled.
-  void renderButton(M5Canvas& s, int i, int x, int y, int fillPx) const;
-  // The hold button alone, pushed (its fill grew).
+  // Over the panel as rendered (a press look costs its button, not a render
+  // of the card): button i, the hold button with fillDrawn_ px of it filled;
+  // the hold mode's hint, in its colour now.
+  void renderButton(int i);
+  void renderHint();
+  // Button i drawn again alone: its press look, the hold's fill.
+  void drawButton(int i);
+  // The hint's row drawn again alone (its alert came on).
+  void drawHint();
+  // The hold button alone, `fillPx` of it filled.
   void drawHoldButton(int fillPx);
   char title_[96] = "";
   char body_[256] = "";

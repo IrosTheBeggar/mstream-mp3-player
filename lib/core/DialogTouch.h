@@ -23,14 +23,15 @@
 // routing, a finger on the real TouchRecognizer).
 class DialogTouch {
 public:
-  // What the dialog draws again after an event: nothing, all of it (a
-  // press highlight came or went, the hint's alert), or the hold button
-  // alone, empty (a hold dropped).
-  enum class Redraw : uint8_t { None, All, HoldButton };
+  // What the dialog draws again after an event, over the card as rendered
+  // (a press never renders it all: Dialog::drawButton(), the whole dialog
+  // was 44 ms, twice a tap): one button alone (a press highlight came or
+  // went, the hold button emptied), and the hint's row when its alert came on.
   struct Result {
     int answer = -1;  // a button's index: the dialog's answer (-1 none)
     HoldButton::News news = HoldButton::News::None;  // what the event did to the hold
-    Redraw redraw = Redraw::None;
+    int drawButton = -1;  // the button to draw again alone (-1 none)
+    bool drawHint = false;
   };
 
   // `n` buttons (1 or 2), `primary` the primary's index (-1 or out of

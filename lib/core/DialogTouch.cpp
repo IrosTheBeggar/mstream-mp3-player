@@ -33,12 +33,14 @@ DialogTouch::Result DialogTouch::onEvent(const InputEvent& e) {
         return r;  // (the fill: the dialog's tick() draws it as it grows)
       case News::Short:
       case News::Slid:
-        // Nothing happens: empty again, and the hint says how, amber.
+        // Nothing happens: empty again, and the hint says how, amber (its
+        // row only when it wasn't already).
+        r.drawButton = primary_;
+        r.drawHint = !hintAlert_;
         hintAlert_ = true;
-        r.redraw = Redraw::All;
         return r;
       case News::Dropped:
-        r.redraw = Redraw::HoldButton;
+        r.drawButton = primary_;
         return r;
       case News::Confirmed:
         r.answer = primary_;  // (lifted at its end, before tick() saw it)
@@ -51,14 +53,12 @@ DialogTouch::Result DialogTouch::onEvent(const InputEvent& e) {
   if (e.type == T::Down) {
     pressed_ = dialog::buttonAt(e.x, e.y, n_);
     if (hold_.armed() && pressed_ == primary_) pressed_ = -1;  // only a hold answers it
-    if (pressed_ >= 0) r.redraw = Redraw::All;
+    r.drawButton = pressed_;
     return r;
   }
   if (e.type == T::DragStart || e.type == T::Cancel || e.type == T::Release) {
-    if (pressed_ >= 0) {
-      pressed_ = -1;
-      r.redraw = Redraw::All;
-    }
+    r.drawButton = pressed_;
+    pressed_ = -1;
     return r;
   }
   if (e.type != T::Tap) return r;

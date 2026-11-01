@@ -6,7 +6,6 @@
 #include <M5Unified.h>
 
 #include "ui/Gfx.h"
-#include "ui/LcdLock.h"
 
 #include <algorithm>
 #include <cmath>
@@ -192,13 +191,12 @@ void DanceView::pushRect(const Rect& r) {
   const int y0 = std::max(kBoxY + r.y0, visTop_);
   const int y1 = std::min(kBoxY + r.y1, visBottom_);
   if (y1 <= y0) return;
-  auto& d = M5.Display;
-  // M5GFX clips the push to the display's clip rectangle: only these pixels
-  // are converted and sent. Each push is its own (short) bus hold.
-  LcdLock lock;
-  d.setClipRect(kBoxX + r.x0, y0, r.x1 - r.x0, y1 - y0);
-  sprite_.pushSprite(&d, kBoxX, kBoxY);
-  d.clearClipRect();
+  // Through ui/Gfx: only these pixels are converted and sent, each run its
+  // own (short) bus hold, and mapped through the list band's hardware
+  // scroll, which stays in scroll mode under the Dance tab
+  // (Ui::ensureScroller()). `over`: the rows an overlay holds are the
+  // visible rows' business (setVisibleRows()), not the cover's.
+  ui::gfx::pushRect(sprite_, r.x0, y0 - kBoxY, r.x1 - r.x0, y1 - y0, kBoxX + r.x0, y0, true);
 }
 
 void DanceView::push() {

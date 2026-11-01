@@ -626,8 +626,8 @@ void AutoDj::report(const Pass& p) {
 // The settings
 // ---------------------------------------------------------------------------
 void AutoDj::saveSettings(const char* what) {
-  const bool saved = autodjstore::save(dj_.settings());
-  Serial.printf("[dj] %s (%s)\n", what, saved ? "saved" : "NOT saved");
+  autodjstore::save(dj_.settings());
+  Serial.printf("[dj] %s (saved once the taps rest)\n", what);
 }
 
 bool AutoDj::setOn(bool on) {

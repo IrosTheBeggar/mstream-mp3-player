@@ -305,34 +305,45 @@ void test_a_dialogs_buttons() {
   // A tap on the left one: its highlight, then its answer.
   DialogTouch::Result r = d.onEvent(ev(T::Down, 100, kLeftX, kButtonY));
   TEST_ASSERT_EQUAL_INT(-1, r.answer);
-  TEST_ASSERT_TRUE(r.redraw == DialogTouch::Redraw::All);
+  TEST_ASSERT_EQUAL_INT(0, r.drawButton);  // (that button alone)
+  TEST_ASSERT_FALSE(r.drawHint);
   TEST_ASSERT_EQUAL_INT(0, d.pressed());
   r = d.onEvent(ev(T::Tap, 150, kLeftX, kButtonY));
   TEST_ASSERT_EQUAL_INT(0, r.answer);
   TEST_ASSERT_EQUAL_INT(-1, d.pressed());
   TEST_ASSERT_TRUE(r.news == News::None);
+  TEST_ASSERT_EQUAL_INT(-1, r.drawButton);  // (the answer closes it)
   // The right one, its hit area to the screen's edge.
   d.onEvent(ev(T::Down, 200, 319, kButtonY));
   TEST_ASSERT_EQUAL_INT(1, d.onEvent(ev(T::Tap, 250, 319, kButtonY)).answer);
   // A drag lets it go (redrawn), and its end answers nothing.
   d.onEvent(ev(T::Down, 300, kRightX, kButtonY));
   r = d.onEvent(ev(T::DragStart, 320, kRightX + 20, kButtonY));
-  TEST_ASSERT_TRUE(r.redraw == DialogTouch::Redraw::All);
+  TEST_ASSERT_EQUAL_INT(1, r.drawButton);
   TEST_ASSERT_EQUAL_INT(-1, d.pressed());
   TEST_ASSERT_EQUAL_INT(-1, d.onEvent(ev(T::DragEnd, 400, kRightX + 20, kButtonY)).answer);
   // A long press's lift (Release) and a Cancel: let go, no answer.
   d.onEvent(ev(T::Down, 500, kRightX, kButtonY));
-  TEST_ASSERT_EQUAL_INT(-1, d.onEvent(ev(T::LongPress, 1000, kRightX, kButtonY)).answer);
+  r = d.onEvent(ev(T::LongPress, 1000, kRightX, kButtonY));
+  TEST_ASSERT_EQUAL_INT(-1, r.answer);
+  TEST_ASSERT_EQUAL_INT(-1, r.drawButton);  // (still pressed: nothing changed)
   TEST_ASSERT_EQUAL_INT(1, d.pressed());
-  TEST_ASSERT_EQUAL_INT(-1, d.onEvent(ev(T::Release, 1200, kRightX, kButtonY)).answer);
+  r = d.onEvent(ev(T::Release, 1200, kRightX, kButtonY));
+  TEST_ASSERT_EQUAL_INT(-1, r.answer);
+  TEST_ASSERT_EQUAL_INT(1, r.drawButton);
   TEST_ASSERT_EQUAL_INT(-1, d.pressed());
   d.onEvent(ev(T::Down, 1300, kLeftX, kButtonY));
   r = d.onEvent(ev(T::Cancel, 1310, kLeftX, kButtonY));
-  TEST_ASSERT_TRUE(r.redraw == DialogTouch::Redraw::All);
+  TEST_ASSERT_EQUAL_INT(0, r.drawButton);
   TEST_ASSERT_EQUAL_INT(-1, d.onEvent(ev(T::Tap, 1320, kLeftX, kButtonY)).answer);
   // Elsewhere on the card (its body): nothing, nothing drawn.
   r = d.onEvent(ev(T::Down, 1400, 160, 120));
-  TEST_ASSERT_TRUE(r.redraw == DialogTouch::Redraw::None);
+  TEST_ASSERT_EQUAL_INT(-1, r.drawButton);
+  TEST_ASSERT_FALSE(r.drawHint);
+  // ... and a drag from there lets nothing go.
+  r = d.onEvent(ev(T::DragStart, 1420, 180, 120));
+  TEST_ASSERT_EQUAL_INT(-1, r.drawButton);
+  d.onEvent(ev(T::Down, 1430, 160, 120));
   TEST_ASSERT_EQUAL_INT(-1, d.onEvent(ev(T::Tap, 1450, 160, 120)).answer);
   // The answer is where the touch landed (the recogniser's Tap is within
   // its slop of it).
@@ -362,35 +373,44 @@ void test_a_dialogs_hold_mode() {
   TEST_ASSERT_EQUAL_INT(0, d.primary());
   TEST_ASSERT_FALSE(d.hintAlert());  // (no alert yet: the hint not amber)
   // A tap on it: its hold began (no highlight), then fell short: no
-  // answer, the hint's alert, drawn again.
+  // answer, the hint's alert, its row and the hold button drawn again, each
+  // alone (never the whole dialog).
   DialogTouch::Result r = d.onEvent(ev(T::Down, 1000, kLeftX, kButtonY));
   TEST_ASSERT_TRUE(r.news == News::Began);
-  TEST_ASSERT_TRUE(r.redraw == DialogTouch::Redraw::None);
+  TEST_ASSERT_EQUAL_INT(-1, r.drawButton);  // (its fill: the dialog's tick())
+  TEST_ASSERT_FALSE(r.drawHint);
   TEST_ASSERT_EQUAL_INT(-1, d.pressed());
   TEST_ASSERT_TRUE(d.holding());
   r = d.onEvent(ev(T::Tap, 1080, kLeftX, kButtonY));
   TEST_ASSERT_TRUE(r.news == News::Short);
   TEST_ASSERT_EQUAL_INT(-1, r.answer);
-  TEST_ASSERT_TRUE(r.redraw == DialogTouch::Redraw::All);
+  TEST_ASSERT_EQUAL_INT(formatask::kSureFormatButton, r.drawButton);
+  TEST_ASSERT_TRUE(r.drawHint);
   TEST_ASSERT_TRUE(d.hintAlert());
-  // A long press's lift there, short of the end: the same.
+  // A long press's lift there, short of the end: the same, the hint amber
+  // already (its row not drawn again).
   d.onEvent(ev(T::Down, 2000, kLeftX, kButtonY));
   r = d.onEvent(ev(T::Release, 3500, kLeftX, kButtonY));
   TEST_ASSERT_TRUE(r.news == News::Short);
   TEST_ASSERT_EQUAL_INT(-1, r.answer);
+  TEST_ASSERT_EQUAL_INT(formatask::kSureFormatButton, r.drawButton);
+  TEST_ASSERT_FALSE(r.drawHint);
+  TEST_ASSERT_TRUE(d.hintAlert());
   // Slid off onto Cancel and lifted there: Slid, and no Cancel either
   // (the touch began on the hold button: nothing was pressed).
   d.onEvent(ev(T::Down, 4000, kLeftX, kButtonY));
   r = d.onEvent(ev(T::DragStart, 4300, kRightX, kButtonY));
   TEST_ASSERT_TRUE(r.news == News::Slid);
-  TEST_ASSERT_TRUE(r.redraw == DialogTouch::Redraw::All);
+  TEST_ASSERT_EQUAL_INT(formatask::kSureFormatButton, r.drawButton);
+  TEST_ASSERT_FALSE(r.drawHint);
   TEST_ASSERT_EQUAL_INT(-1, d.onEvent(ev(T::DragMove, 4400, kRightX + 5, kButtonY)).answer);
   TEST_ASSERT_EQUAL_INT(-1, d.onEvent(ev(T::DragEnd, 4500, kRightX + 5, kButtonY)).answer);
   // A Cancel under a hold: Dropped, the hold button drawn empty.
   d.onEvent(ev(T::Down, 5000, kLeftX, kButtonY));
   r = d.onEvent(ev(T::Cancel, 5500, kLeftX, kButtonY));
   TEST_ASSERT_TRUE(r.news == News::Dropped);
-  TEST_ASSERT_TRUE(r.redraw == DialogTouch::Redraw::HoldButton);
+  TEST_ASSERT_EQUAL_INT(formatask::kSureFormatButton, r.drawButton);
+  TEST_ASSERT_FALSE(r.drawHint);
   TEST_ASSERT_EQUAL_INT(-1, r.answer);
   // dropHold(): the same for the Ui's (the dark, a banner); none when
   // nothing is under way.
@@ -411,6 +431,7 @@ void test_a_dialogs_hold_mode() {
   // Cancel is a tap button as ever: highlighted, answered.
   r = d.onEvent(ev(T::Down, 13000, kRightX, kButtonY));
   TEST_ASSERT_TRUE(r.news == News::None);
+  TEST_ASSERT_EQUAL_INT(1, r.drawButton);  // (that one alone, the hold button left as it is)
   TEST_ASSERT_EQUAL_INT(1, d.pressed());
   TEST_ASSERT_EQUAL_INT(1, d.onEvent(ev(T::Tap, 13050, kRightX, kButtonY)).answer);
   // A touch flagged from the button strip that lands on it (no press: the
@@ -428,9 +449,12 @@ void test_a_dialogs_hold_mode() {
   d.onEvent(ev(T::DragStart, 14100, kLeftX, kButtonY));
   TEST_ASSERT_EQUAL_INT(-1, d.onEvent(ev(T::DragEnd, 17000, kLeftX, kButtonY)).answer);
   TEST_ASSERT_TRUE(d.tick(17000) == News::None);
-  // Opened again: the alert gone; closed, or opened plain: no hold mode.
+  // Opened again: the alert gone (the first press cut short says so again);
+  // closed, or opened plain: no hold mode.
   d.open(2, formatask::kSureFormatButton, true);
   TEST_ASSERT_FALSE(d.hintAlert());
+  d.onEvent(ev(T::Down, 17500, kLeftX, kButtonY));
+  TEST_ASSERT_TRUE(d.onEvent(ev(T::Tap, 17550, kLeftX, kButtonY)).drawHint);
   d.onEvent(ev(T::Down, 18000, kLeftX, kButtonY));
   d.close();
   TEST_ASSERT_FALSE(d.holdMode());
@@ -439,6 +463,66 @@ void test_a_dialogs_hold_mode() {
   TEST_ASSERT_FALSE(d.holdMode());
   d.onEvent(ev(T::Down, 31000, kLeftX, kButtonY));
   TEST_ASSERT_EQUAL_INT(0, d.onEvent(ev(T::Tap, 31050, kLeftX, kButtonY)).answer);  // a plain dialog's tap
+}
+
+// What a press costs: the dialog draws only what the event says, each control
+// alone over the card as rendered (ui/Overlays' Dialog::drawButton(),
+// drawHint(); the whole card was 44 ms a press). So what those orders leave on
+// the screen has to be what the dialog's state says, after every event of any
+// touch: a button's press look, the hint's colour.
+void test_a_dialog_draws_each_control_alone() {
+  for (int hold = 0; hold <= 1; ++hold) {
+    Lcg rng(static_cast<uint32_t>(7 + hold));
+    DialogTouch d;
+    d.open(2, hold ? formatask::kSureFormatButton : -1, hold != 0);
+    int lit = -1;        // the button the screen shows in its press look
+    bool amber = false;  // the hint as the screen shows it
+    uint32_t ms = 1000;
+    const auto step = [&](T type, int x, int y) {
+      const DialogTouch::Result r = d.onEvent(ev(type, ms, x, y));
+      TEST_ASSERT_TRUE(r.drawButton >= -1 && r.drawButton < d.n());
+      if (r.drawButton >= 0) {
+        if (d.pressed() == r.drawButton) {
+          lit = r.drawButton;
+        } else if (lit == r.drawButton) {
+          lit = -1;
+        }
+      }
+      if (r.drawHint) amber = d.hintAlert();
+      if (r.answer >= 0) {  // (answered: the dialog closes, whatever it shows)
+        d.open(2, hold ? formatask::kSureFormatButton : -1, hold != 0);
+        lit = -1;
+        amber = false;
+      }
+      TEST_ASSERT_EQUAL_INT(d.pressed(), lit);
+      TEST_ASSERT_EQUAL(d.hintAlert(), amber);
+    };
+    for (int i = 0; i < 2000; ++i) {
+      static const int kXs[4] = {kLeftX, kRightX, kRightX + 60, 160};
+      const int x = kXs[rng.range(0, 3)];
+      const int y = rng.range(0, 3) == 0 ? 120 : kButtonY;  // (1 in 4 on the card's body)
+      step(T::Down, x, y);
+      ms += static_cast<uint32_t>(rng.range(10, 1900));  // (short of a hold's end)
+      switch (rng.range(0, 4)) {
+        case 0: step(T::Tap, x, y); break;
+        case 1:
+          step(T::LongPress, x, y);
+          step(T::Release, x, y);
+          break;
+        case 2: step(T::Cancel, x, y); break;
+        case 3:  // slid off, lifted elsewhere
+          step(T::DragStart, x, 60);
+          step(T::DragMove, x, 58);
+          step(T::DragEnd, x, 58);
+          break;
+        default:  // moved on it a little, then lifted
+          step(T::DragStart, x + 3, y);
+          step(T::DragEnd, x + 3, y);
+          break;
+      }
+      ms += static_cast<uint32_t>(rng.range(10, 300));
+    }
+  }
 }
 
 // ---- the question's answers, and a loop pass's order ----
@@ -988,6 +1072,7 @@ int main(int, char**) {
   RUN_TEST(test_the_question_clock);
   RUN_TEST(test_a_dialogs_buttons);
   RUN_TEST(test_a_dialogs_hold_mode);
+  RUN_TEST(test_a_dialog_draws_each_control_alone);
   RUN_TEST(test_the_answers);
   RUN_TEST(test_the_pass_order);
   RUN_TEST(test_two_steps_a_hold_formats);
