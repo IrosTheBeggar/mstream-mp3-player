@@ -682,8 +682,8 @@ def mpth(desc):
 
 def device_txt(desc):
     keys = ["contract", "firmware", "read.msmf", "read.mptg", "read.mpdj", "read.mpth", "codecs", "extensions",
-            "max_rate", "max_channels"]
-    return "".join("%s=%s\n" % (k, desc[k]) for k in keys).encode("ascii")
+            "max_rate", "max_channels", "history"]
+    return "".join("%s=%s\n" % (k, desc[k]) for k in keys if k in desc).encode("ascii")
 
 
 # ---------------------------------------------------------------------------
@@ -1118,9 +1118,9 @@ def thumb_main():
 
 
 def device_main():
-    return {"format": "device.txt", "file": "device.txt", "contract": "1", "firmware": "0.11.0", "read.msmf": "1",
+    return {"format": "device.txt", "file": "device.txt", "contract": "1", "firmware": "0.12.0", "read.msmf": "1",
             "read.mptg": "1", "read.mpdj": "2", "read.mpth": "1", "codecs": "mp3,flac,opus",
-            "extensions": "mp3,flac,opus", "max_rate": "48000", "max_channels": "2"}
+            "extensions": "mp3,flac,opus", "max_rate": "48000", "max_channels": "2", "history": "1"}
 
 
 LIBRARIES = [tags_transfer, tags_device, tags_empty, manifest_min, manifest_main, pending_main, thumb_main,

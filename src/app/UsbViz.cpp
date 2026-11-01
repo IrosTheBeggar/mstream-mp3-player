@@ -100,6 +100,16 @@ void UsbViz::apply(const HostLink::Out& o, uint32_t nowUs) {
         apply(link_.refuse(millis(), HostLink::kBusy, "identify", why), nowUs);
       }
       return;
+    case HostLink::Event::Time:
+      if (o.timeMs == 0) {
+        query_.time();
+      } else if (const char* why = query_.setTime(o.timeMs)) {
+        apply(link_.refuse(millis(), HostLink::kBusy, "time", why), nowUs);
+      }
+      return;
+    case HostLink::Event::Format:
+      if (const char* why = query_.format()) apply(link_.refuse(millis(), HostLink::kBusy, "format", why), nowUs);
+      return;
     case HostLink::Event::None:
       break;
   }

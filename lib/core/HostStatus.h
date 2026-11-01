@@ -13,7 +13,7 @@
 // reads the card or a clock. Host-tested: test_host_status.
 //
 //   @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87
-//           state=playing cid=5eedc0de0a1b2c3d.0000002a bt=Alex%27s%20headphones
+//           state=playing cid=5eedc0de0a1b2c3d.0000002a clock=ok bt=Alex%27s%20headphones
 //
 // (one line). The fields in this order, each key=value, one space between;
 // a value never holds a space ('?' unknown, '-' none). A reader ignores
@@ -31,11 +31,11 @@ constexpr size_t kMaxFw = 48;
 // bt= cut short ends with this, "…" (U+2026) percent-encoded.
 constexpr const char* kEllipsis = "%E2%80%A6";
 // bt= keeps at least this many bytes for its value, whatever the other
-// fields hold: the keys after state= (cid=) are left out first, each whole.
-// With the fields' real widths they all fit, and a later key's room is
-// kept (docs/HOST-STATUS.md, "The budget": bt= keeps 40); only the
-// formatter's own caps (a 48-byte fw=, a 16-byte elf=, the 64-bit numbers
-// at 20 digits and tracks= at its 10) make one give way.
+// fields hold: the keys after state= (cid=, clock=) are left out first,
+// each whole, the last first. With the fields' real widths they all fit
+// (docs/HOST-STATUS.md, "The budget": bt= keeps 40); only the formatter's
+// own caps (a 48-byte fw=, a 16-byte elf=, the 64-bit numbers at 20 digits
+// and tracks= at its 10) make one give way.
 constexpr size_t kBtRoom = 36;
 
 // card=: what is in the slot. Fat32 and Fat16 are mounted (FAT12, a card of
@@ -72,6 +72,9 @@ struct Facts {
   bool cidKnown = false;
   uint64_t cardId = 0;
   uint32_t generation = 0;
+  // clock=: ok while the board's clock has a time it believes (the RTC's
+  // at the boot, or a computer's @time: wallclock::Clock::ok()), else unset.
+  bool clockOk = false;
   const char* bt = nullptr;  // the paired headphones' name (UTF-8); null or "": '-'
 };
 

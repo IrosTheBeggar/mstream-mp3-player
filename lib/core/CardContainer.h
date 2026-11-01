@@ -127,6 +127,7 @@ enum class Why : uint8_t {
   PendOrder,        // PEND not in 2.12.5's order
   PendPath,         // a PEND path empty, absolute or not made of names
   PendOp,           // an op of 0
+  AcksOrder,        // ACKS's entries not strictly increasing by (deviceId, epoch): ACKS absent, never the root (2.5.6)
 };
 const char* whyName(Why w);
 

@@ -3244,7 +3244,7 @@
   ]
  },
  "deviceTxt": {
-  "text": "contract=1\nfirmware=0.11.0\nread.msmf=1\nread.mptg=1\nread.mpdj=2\nread.mpth=1\ncodecs=mp3,flac,opus\nextensions=mp3,flac,opus\nmax_rate=48000\nmax_channels=2\n",
+  "text": "contract=1\nfirmware=0.12.0\nread.msmf=1\nread.mptg=1\nread.mpdj=2\nread.mpth=1\ncodecs=mp3,flac,opus\nextensions=mp3,flac,opus\nmax_rate=48000\nmax_channels=2\nhistory=1\n",
   "noFile": {
    "read.msmf": "1",
    "read.mptg": "1",

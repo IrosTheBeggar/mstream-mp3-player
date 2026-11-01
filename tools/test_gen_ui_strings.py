@@ -152,6 +152,15 @@ class English(unittest.TestCase):
         self.bad(d, "a line of 6 bytes of UTF-8, its buffer holds 5")
         d["@a.two"]["line_bytes"] = 7
         checked(d)
+        # A wrap room: its lines are where the fonts break it (test_ui_strings
+        # measures them), and it says their buffer.
+        d = english()
+        d["@a.plain"]["room"] = {"font": "Small", "px": 40, "lines": 3, "layout": "wrap"}
+        self.bad(d, "a wrap room needs line_bytes")
+        d["@a.plain"]["line_bytes"] = 3  # (less than "Undo": not the generator's to measure)
+        checked(d)
+        d["@a.plain"]["room"] = [ROOM, {"font": "Small", "px": 40, "lines": 3, "layout": "wrap"}]
+        checked(d)
         for bad in (0, 1, "8", 2.5, True):
             d = english()
             d["@a.plain"]["bytes"] = bad

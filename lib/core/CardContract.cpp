@@ -881,6 +881,7 @@ Info current(const char* firmware) {
   i.readMpdj = 1u << (2 - 1);  // the AutoDJ index, major 2 (the engine design's M5)
   copyValue(i.codecs, "mp3,flac,opus", 13);
   copyValue(i.extensions, "mp3,flac,opus", 13);
+  i.history = 1u << (1 - 1);  // the play log, MPPL major 1 (2.20)
   return i;
 }
 
@@ -900,6 +901,7 @@ size_t format(const Info& info, char* out, size_t cap) {
   add("extensions=%s\n", info.extensions);
   add("max_rate=%u\n", static_cast<unsigned>(info.maxRate));
   add("max_channels=%u\n", static_cast<unsigned>(info.maxChannels));
+  if (info.history) n = putMajors(out, cap, n, "history", info.history);
   if (n >= cap) {
     out[0] = 0;
     return 0;
@@ -945,6 +947,8 @@ bool parse(const char* text, size_t n, Info* out) {
         out->maxRate = number(v, vl, out->maxRate);
       } else if (key("max_channels")) {
         out->maxChannels = number(v, vl, out->maxChannels);
+      } else if (key("history")) {
+        out->history = majors(v, vl);
       }
     }
     i = e + 1;

@@ -58,6 +58,7 @@ void noCardState(EmptyState& e, cardformat::Kind card) {
   e.title = uistr::tr(m.title);
   e.lines = uistr::tr(m.lines);
   e.buttons[0] = uistr::tr(uistr::S::empty_try_again);
+  if (card != cardformat::Kind::Unreadable) e.buttons[1] = uistr::tr(uistr::S::format_button);
 }
 
 void drawEmptyState(const EmptyState& e, int y0, int h, uint16_t accent, int pressed) {

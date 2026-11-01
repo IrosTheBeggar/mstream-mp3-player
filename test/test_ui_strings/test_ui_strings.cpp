@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "CjkGlyphs16.h"
+#include "DialogLayout.h"
 #include "GlyphStore.h"
 #include "SheetLayout.h"
 #include "TextFit.h"
@@ -241,6 +242,28 @@ bool drawable(const textfit::Font& f, const char* s) {
 // as what stands in for it, in pieces). Whether every glyph is there is
 // test_every_text_has_its_glyphs's.
 int drawnWidth(const Vlw& v, const char* s) { return textfit::drawnWidth(viewOf(v), s); }
+
+// The lines textfit::wrap() makes of `text` in the wrap room `e` (its
+// font, px and lines, as the device wraps it), into lines of `lineSize`
+// bytes, a NUL in each: the device's are `e.lineBytes`, and wrap() keeps
+// only a longer line's first bytes there (the rest of it is lost, the next
+// line starts after it). By default lines no text fills.
+std::vector<std::string> wrapLines(const catalogue::Entry& e, const std::string& text, size_t lineSize = 512) {
+  std::vector<char> out(static_cast<size_t>(e.lines) * lineSize);
+  const int n = textfit::wrap(viewOf(font(e.font)), text.c_str(), text.size(), e.px, e.lines, out.data(), lineSize);
+  std::vector<std::string> lines;
+  for (int i = 0; i < n; ++i) lines.emplace_back(out.data() + static_cast<size_t>(i) * lineSize);
+  return lines;
+}
+
+// The first of those lines its buffer on the device (`e.lineBytes`) can't
+// hold whole; empty: none.
+std::string wrapCut(const catalogue::Entry& e, const std::string& text) {
+  for (const std::string& line : wrapLines(e, text)) {
+    if (static_cast<int>(line.size()) + 1 > e.lineBytes) return line;
+  }
+  return {};
+}
 
 struct Fit {
   bool ok = true;
@@ -916,6 +939,31 @@ void test_rooms_are_the_codes() {
   }
 }
 
+// The hold button's room is its width less its outline and the padding
+// inside it (DialogLayout): every language's label, as the Dialog draws it
+// (Bold, else Small), keeps kHoldPad px clear of the outline at each end.
+void test_the_hold_buttons_room() {
+  TEST_ASSERT_EQUAL_INT(uitext::kDialogHoldTextW, dialog::holdTextW(2));
+  TEST_ASSERT_EQUAL_INT(dialog::buttonW(2), uitext::kDialogHoldTextW + 2 * (dialog::kHoldOutline + dialog::kHoldPad));
+  TEST_ASSERT_EQUAL_INT(dialog::buttonW(2) - 8, uitext::kDialogButtonTextW);
+  const catalogue::Entry* e = entryOf(S::format_sure_button);
+  TEST_ASSERT_NOT_NULL(e);
+  TEST_ASSERT_EQUAL_INT(uitext::kDialogHoldTextW, e->px);
+  for (unsigned i = 0; i < uistr::kLangs; ++i) {
+    const Lang l = static_cast<Lang>(i);
+    if (!uistr::hasCatalogue(l) || l == Lang::EnXA) continue;
+    uistr::setLang(l);
+    const char* t = uistr::tr(S::format_sure_button);
+    const int bold = drawnWidth(font(catalogue::Font::Bold), t);
+    const int w = bold <= e->px ? bold : drawnWidth(font(catalogue::Font::Small), t);
+    const int clear = (dialog::buttonW(2) - w) / 2 - dialog::kHoldOutline;
+    printf("%s: \"%s\" %s %d px, %d px clear of the outline\n", uistr::tag(l), t, bold <= e->px ? "Bold" : "Small",
+           w, clear);
+    TEST_ASSERT_TRUE_MESSAGE(clear >= dialog::kHoldPad, uistr::tag(l));
+  }
+  uistr::setLang(Lang::En);
+}
+
 // A plural message is tried at each category's widest count up to its
 // worst: Russian's and Polish's "few" at 99,994 and 994, not only 1,002
 // and 22; Russian's "one" at 99,991.
@@ -1030,10 +1078,12 @@ void test_every_text_has_its_glyphs() {
 // placeholders' other fills at their longest, each count a plural form can
 // show), fits the smallest buffer it goes through on the device (en.json's
 // "bytes", a NUL in it; "line_bytes" for each line where the code copies
-// it a line at a time). A text cut there would be cut at a character
-// boundary at best (uistr's copies), through one at worst (an snprintf):
-// so a translation that doesn't fit fails, whatever its width, and the
-// buffer grows or the text gets shorter. The pseudo-locale's are a report.
+// it a line at a time, or in a wrap room each line textfit::wrap() makes
+// of it with the firmware's fonts, which loses a longer line's end). A
+// text cut there would be cut at a character boundary at best (uistr's
+// copies), through one at worst (an snprintf): so a translation that
+// doesn't fit fails, whatever its width, and the buffer grows or the text
+// gets shorter. The pseudo-locale's are a report.
 void test_every_text_fits_its_buffers() {
   gCuts.clear();
   int bad = 0, checked = 0;
@@ -1057,7 +1107,19 @@ void test_every_text_fits_its_buffers() {
           gCuts.push_back({tag, e.name, text, bytes, e.bytes, false});
           cut = true;
         }
-        for (int k = 0; e.lineBytes && !cut && k < uistr::lineCount(text.c_str()); ++k) {
+        if (e.layout == catalogue::Layout::Wrap) {
+          // Each line the code wraps it into, its other fills the longest
+          // and the widest.
+          for (const std::string& t : {text, render(e, n, Pick{&font(e.font)})}) {
+            const std::string line = cut || !e.lineBytes ? std::string() : wrapCut(e, t);
+            if (line.empty()) continue;
+            gCuts.push_back({tag, e.name, line, static_cast<int>(line.size()) + 1, e.lineBytes, true});
+            cut = true;
+          }
+        }
+        for (int k = 0; e.lineBytes && e.layout != catalogue::Layout::Wrap && !cut &&
+                        k < uistr::lineCount(text.c_str());
+             ++k) {
           char line[512];
           const int lb = static_cast<int>(uistr::line(text.c_str(), k, line, sizeof(line))) + 1;
           if (lb > e.lineBytes) {
@@ -1082,6 +1144,63 @@ void test_every_text_fits_its_buffers() {
   uistr::setLang(Lang::En);
   printf("%d texts with a buffer, every language's\n", checked);
   TEST_ASSERT_EQUAL_INT_MESSAGE(0, bad, "texts longer than their buffers: above");
+}
+
+// The wrap rooms' lines against their buffers on the device (line_bytes:
+// a dialog's body 96 B a line, Dialog::render(); the touch check's verdict
+// 96; Now Playing's title 112, TitleLayout): each language's longest line,
+// every wrap room has its line_bytes, and the check's edge on the longest
+// line of all: in a buffer one byte short of it textfit::wrap() loses that
+// line's end (a line before the last silently, the rest of the text going
+// on after it; the last with an ellipsis), and the check above calls it a
+// cut; in its own buffer nothing is lost.
+void test_wrapped_lines_within_their_buffers() {
+  struct Longest {
+    const catalogue::Entry* e = nullptr;
+    std::string text, line;
+  } top;
+  for (unsigned i = 0; i < uistr::kLangs; ++i) {
+    const Lang l = static_cast<Lang>(i);
+    if (!uistr::hasCatalogue(l) || l == Lang::EnXA) continue;
+    uistr::setLang(l);
+    Longest mine;
+    for (const auto& e : catalogue::kEntries) {
+      if (e.layout != catalogue::Layout::Wrap) continue;
+      TEST_ASSERT_TRUE_MESSAGE(e.lineBytes > 0, e.name);
+      for (uint32_t n : countsFor(e)) {
+        for (const std::string& t : {render(e, n, Pick{}), render(e, n, Pick{&font(e.font)})}) {
+          for (const std::string& line : wrapLines(e, t)) {
+            if (mine.e && line.size() <= mine.line.size()) continue;
+            mine = {&e, t, line};
+          }
+        }
+      }
+    }
+    TEST_ASSERT_NOT_NULL(mine.e);
+    printf("%s: the longest wrapped line %d bytes of its %d (%s): \"%s\"\n", uistr::tag(l),
+           static_cast<int>(mine.line.size()) + 1, mine.e->lineBytes, mine.e->name, mine.line.c_str());
+    if (!top.e || mine.line.size() > top.line.size()) top = mine;
+  }
+  uistr::setLang(Lang::En);
+  const catalogue::Entry& e = *top.e;
+  const size_t need = top.line.size() + 1;
+  const std::vector<std::string> whole = wrapLines(e, top.text);
+  const std::vector<std::string> own = wrapLines(e, top.text, static_cast<size_t>(e.lineBytes));
+  TEST_ASSERT_TRUE(own == whole);
+  const std::vector<std::string> shy = wrapLines(e, top.text, need - 1);
+  TEST_ASSERT_EQUAL_size_t(whole.size(), shy.size());
+  int lost = 0;
+  for (size_t k = 0; k < whole.size(); ++k) {
+    if (shy[k] == whole[k]) continue;
+    ++lost;
+    TEST_ASSERT_TRUE(shy[k].size() + 1 < need);
+  }
+  TEST_ASSERT_TRUE(lost >= 1);  // (the longest, and any as long)
+  catalogue::Entry tight = e;
+  tight.lineBytes = static_cast<int>(need);
+  TEST_ASSERT_TRUE(wrapCut(tight, top.text).empty());
+  tight.lineBytes = static_cast<int>(need) - 1;
+  TEST_ASSERT_EQUAL_STRING(top.line.c_str(), wrapCut(tight, top.text).c_str());
 }
 
 // Every language with a catalogue, every message in every room it has, as
@@ -1332,10 +1451,12 @@ int main(int, char**) {
   RUN_TEST(test_numbers);
   RUN_TEST(test_pseudo_locale);
   RUN_TEST(test_rooms_are_the_codes);
+  RUN_TEST(test_the_hold_buttons_room);
   RUN_TEST(test_counts_reach_every_category_at_its_widest);
   RUN_TEST(test_other_fills_are_tried);
   RUN_TEST(test_every_text_has_its_glyphs);
   RUN_TEST(test_every_text_fits_its_buffers);
+  RUN_TEST(test_wrapped_lines_within_their_buffers);
   RUN_TEST(test_every_language_fits_its_rooms);  // (last: it writes UI_STRINGS_REPORT with the two above's)
   RUN_TEST(test_autonyms_fit);
   RUN_TEST(test_text_ink_rows_are_where_the_fonts_draw);

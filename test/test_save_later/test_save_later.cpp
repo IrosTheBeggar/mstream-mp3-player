@@ -2,12 +2,15 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 // Host tests for SaveLater: when a setting changed by taps is written to
-// NVS (app/NvsLater writes it then).
+// NVS (app/NvsLater writes it then); and OrderlyEnd: what a restart or a
+// power-off saves first.
 // Run: pio test -e native -f test_save_later
 #include <unity.h>
 
 #include <cstdint>
+#include <string>
 
+#include "OrderlyEnd.h"
 #include "SaveLater.h"
 
 namespace {
@@ -85,6 +88,25 @@ void test_the_clock_may_wrap() {
   TEST_ASSERT_TRUE(s.due(1244));
 }
 
+// An orderly end (the idle power-off, every restart): the settings the taps
+// queued first, then the play log (the card: it can take long, or hang), then
+// the end; a tap moments ago is written though its wait isn't over.
+void test_an_orderly_end_saves_settings_then_plays_then_ends() {
+  std::string order;
+  orderlyend::finish([&] { order += "settings "; }, [&] { order += "plays "; }, [&] { order += "end"; });
+  TEST_ASSERT_EQUAL_STRING("settings plays end", order.c_str());
+}
+
+void test_a_setting_tapped_moments_ago_is_saved_before_the_plays() {
+  SaveLater s = later();
+  s.changed(1000);  // a tap, then the restart at 1010
+  TEST_ASSERT_FALSE(s.due(1010));
+  bool owedAtThePlays = true, owedAtTheEnd = true;
+  orderlyend::finish([&] { s.written(); }, [&] { owedAtThePlays = s.pending(); }, [&] { owedAtTheEnd = s.pending(); });
+  TEST_ASSERT_FALSE(owedAtThePlays);
+  TEST_ASSERT_FALSE(owedAtTheEnd);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_nothing_is_owed_until_something_changes);
@@ -93,5 +115,7 @@ int main(int, char**) {
   RUN_TEST(test_taps_that_never_rest_are_written_by_the_latest);
   RUN_TEST(test_written_clears_it_and_the_next_change_starts_over);
   RUN_TEST(test_the_clock_may_wrap);
+  RUN_TEST(test_an_orderly_end_saves_settings_then_plays_then_ends);
+  RUN_TEST(test_a_setting_tapped_moments_ago_is_saved_before_the_plays);
   return UNITY_END();
 }

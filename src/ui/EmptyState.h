@@ -13,7 +13,7 @@
 // first is the primary, in the section's colour):
 //
 //   No microSD card     "Insert a card with your music in /music, ..."  [Try again]
-//   This card is exFAT  "Format it FAT32 (MBR) on a computer, ..."      [Try again]
+//   This card is exFAT  "Format it FAT32 (MBR) on a computer, ..."      [Try again] [Format...]
 //     (and "... NTFS", "This card uses GPT", "Can't read this card")
 //   No music found      "Put folders in /music/Artist/Album/"           [Try again]
 //   Your queue is empty "Pick an album, folder or track in the Library." [Open Library] [Shuffle all]
@@ -38,7 +38,9 @@ struct EmptyState {
 // (AppState::cardKind) says which (uitext::cardMessage()): "No microSD
 // card", or for a card that is in but didn't mount (the icon amber) "This
 // card is exFAT", "This card is NTFS", "This card uses GPT" or "Can't read
-// this card"; each with Try again (Ui::retryCard()).
+// this card"; each with Try again (Ui::retryCard()), and the card that is
+// in with Format... too (Ui::askFormat(): its question, twice; a damaged
+// card's first says to check it on a computer).
 void noCardState(EmptyState& e, cardformat::Kind card);
 
 // Draws `e` over screen lines [y0, y0 + h); `pressed`: the button under a

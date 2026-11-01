@@ -66,6 +66,12 @@ struct AppState {
   // None mounted: what the card that is in is (LocalStorage::cardKind(),
   // the empty state's message); Unreadable with none in, or one mounted.
   cardformat::Kind cardKind = cardformat::Kind::Unreadable;
+  // For the format's question (docs/HOST-STATUS.md, "@format"): the card's
+  // size, mounted or not (the CSD's: 0 not known); the mounted card's root
+  // has a transfer's plan on it (cardroot::Root::plan: a sync that didn't
+  // finish).
+  uint64_t cardBytes = 0;
+  bool cardPlan = false;
   uint32_t libraryTracks = 0;
   // The card worker's news for the Library's status line (3.3.6): checking
   // the card, reading tags (done / total), updating, a transfer that didn't
@@ -201,6 +207,16 @@ public:
   virtual bool retryCard() = 0;
   // "Try again" with no music: walks /music again (the queue follows).
   virtual void rescanLibrary() = 0;
+  // The format's question answered "Format" twice (docs/HOST-STATUS.md,
+  // "@format"; `fromComputer`: a computer's @format brought it up): the
+  // card in the slot is formatted at a restart, the CPU speed's orderly
+  // way (paused, the queue and the play log saved, the headphones let go;
+  // storage/CardFormatter at the next boot). False: refused (another
+  // restart under way, no card answering, the console's pretend card).
+  virtual bool formatCard(bool fromComputer) = 0;
+  // ... or it went without a format (Cancel, a tab, its minute up, another
+  // dialog in its place): logged, and "@format no" for a computer's.
+  virtual void formatDeclined(bool fromComputer, const char* how) = 0;
   // Rescan tags (the Output tab's Library row, after its dialog: 3.3.6):
   // the device's own files' tags read again, the transfer's left as they
   // are; the library updates at the scan's end. False: no card's records

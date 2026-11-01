@@ -867,14 +867,17 @@ void test_device_txt() {
   const std::string want = gVectors["deviceTxt"]["text"].str();
   TEST_ASSERT_EQUAL_STRING(cardfixtures::bytes("golden/device.txt").c_str(), want.c_str());
   char buf[512];
-  const size_t n = dt::format(dt::current("0.11.0"), buf, sizeof(buf));
+  const size_t n = dt::format(dt::current("0.12.0"), buf, sizeof(buf));
   TEST_ASSERT_EQUAL_size_t(want.size(), n);
   TEST_ASSERT_EQUAL_STRING(want.c_str(), buf);
   // Read back. This firmware reads the AutoDJ index's major 2, and only it
   // (docs/AUTODJ-INDEX.md 7.4: the engine ships with its UI, M5).
   dt::Info i;
   TEST_ASSERT_TRUE(dt::parse(buf, n, &i));
-  TEST_ASSERT_EQUAL_STRING("0.11.0", i.firmware);
+  TEST_ASSERT_EQUAL_STRING("0.12.0", i.firmware);
+  // This firmware keeps the play log (2.20): history=1, the key last.
+  TEST_ASSERT_EQUAL_UINT32(1, i.history);
+  TEST_ASSERT_TRUE(std::strstr(buf, "\nmax_channels=2\nhistory=1\n") != nullptr);
   TEST_ASSERT_TRUE(dt::readsMajor(i.readMptg, 1));
   TEST_ASSERT_FALSE(dt::readsMajor(i.readMptg, 2));
   TEST_ASSERT_EQUAL_UINT32(2, i.readMpdj);  // (bit 1: major 2)
@@ -896,6 +899,8 @@ void test_device_txt() {
     TEST_ASSERT_TRUE_MESSAGE(std::strstr(dflt, line.c_str()) != nullptr, kv.first.c_str());
   }
   TEST_ASSERT_EQUAL_UINT32(0, none.readMpdj);
+  TEST_ASSERT_EQUAL_UINT32(0, none.history);  // no log: no key
+  TEST_ASSERT_TRUE(std::strstr(dflt, "history") == nullptr);
   TEST_ASSERT_EQUAL_STRING(noFile["codecs"].c_str(), none.codecs);
   TEST_ASSERT_EQUAL_STRING(noFile["extensions"].c_str(), none.extensions);
   TEST_ASSERT_FALSE(dt::listHas(none.codecs, "opus"));
