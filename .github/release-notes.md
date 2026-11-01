@@ -7,88 +7,177 @@ ELF {{ELF}} for this build; ELF {{DIO_ELF}} for the `-dio-full.bin`).
 Source for this binary: {{SOURCE_URL}}, and with its libraries in
 `{{SOURCE_TAR}}` below.
 
-## What's new in 0.8.0
+## What's new in 0.11.0
 
-- **The library comes from the tags.** The player reads each file's tags
-  itself (ID3 in MP3s, Vorbis comments in FLAC, OpusTags in Opus), in the
-  background after it starts, while it plays and on battery too. The
-  Library, Now Playing and the Queue then name each track by its tags: its
-  title and artist (a guest artist shows under the title), and its
-  album's name, year and artist; an album plays in the tags' disc and
-  track order. Where a file has no tags, the names come from the file
-  name, as before. The artists and the albums are still the folders
-  (`/music/Artist/Album/`): the tags name them but don't regroup them. An
-  artist's albums are listed newest first, the A-Z lists follow the tags'
-  sort names where there are any, and the Folders list shows the card as
-  it is.
-- **Disc dividers:** an album of more than one disc (by its tags, or
-  `1-01`, `2-01` names) has a "Disc 1", "Disc 2" row before each disc's
-  first track. Now Playing shows the album with its year ("Glass Harbour ·
-  2001") when both fit.
-- **The Library says what the player is doing**, on a line at its bottom:
-  "Checking the card…", "Reading tags 1,234 / 19,410", "Updating
-  library…", then "Library updated". Files added on a computer are found
-  at the next start ("Found 12 new tracks") and show once their tags are
-  read (a big batch shows by its file names first). **Output > Library**
-  says how many tracks have tags, and its **Rescan** reads them all again
-  (it asks first). Below 10 % battery the reading waits for USB or 15 %.
-- **While the library updates** (a moment on a small card, up to about
-  20 s at 20,000 tracks) the music plays on. The lists say "Updating the
-  library…", and a skip, a seek or a change to the queue waits ("Updating
-  the library: a moment"). An update starts only when the playing track
-  has enough time left; should a track end meanwhile all the same, the
-  next one waits, paused, unless it was already joined gaplessly.
-- **Big cards start in seconds.** The player no longer reads through the
-  whole card at every start: it loads the library it saved and checks the
-  card in the background ("Checking the card…"). On a card of 20,000
-  tracks the library is ready about 1.5 s after the card mounts, where
-  0.7.0 took about 90 s at every start; the check takes about 20 s more,
-  behind the scenes. A new card of 20,000 tracks is ready in about 20 s the
-  first time (0.7.0: about 3 minutes).
-- **The first start of 0.8.0 on a card 0.7.0 used** lists the card once by
-  its folders and file names, as 0.7.0 did at every start (the start-up
-  screen stays up meanwhile: about 20 s for 20,000 tracks). Then it reads
-  every file's tags in the background, and until that's done the Library
-  shows the file names, as 0.7.0 did. For 20,000 tracks that takes several
-  minutes with nothing playing, and longer while music plays, which it
-  gives way to. Then "Updating library…" and "Library updated". It happens
-  once: the next starts load the library as it was left. The queue, its
-  place and the resume point are kept.
-- **The queue holds up to 5,000 tracks.** Play all, an artist's or a big
-  folder's Play, and Shuffle all on a bigger library take 5,000 of them
-  (the first 5,000 in order, or with shuffle on a random 5,000: each
-  Shuffle all another), and the message says so. Play next and + Queue on
-  a full queue first push out tracks you have heard, oldest first: the
-  message says how many, and its Undo puts them back. When no heard track
-  can make way the add is refused ("No played track can make way: the
-  queue holds 5,000 tracks"). A longer queue that 0.7.0 saved (on a new
-  card the first queue was the whole library) comes back as the 5,000
-  tracks around the one it was on.
-- **The start-up screen** shows the mStream logo and the player's version,
-  for about 3 s or until the library is ready; then the touch rescue's
-  line ("Touch trouble? Hold a finger on the screen.") shows at the bottom
-  for at least 1.5 s. What it used to list (the board and its chips,
-  memory, the battery, the library) is in **Output > About > Device
-  info**, with the CPU's clock, the battery's voltage, the uptime and the
-  build; it updates every 3 s while it's open.
-- **Writes to the card are more reliable.** The SD card driver (a patched
-  copy of the Arduino core's, in this repository) now waits until the card
-  has finished each write. The stock one sometimes took the card's busy
-  signal for its answer, and the write failed.
-- **A card swapped while the player is on** is never written to: the
-  player says "Another card: restarting" and restarts to use it, so one
-  card's queue or library can't end up on another. The same card taken
-  out and put back carries on (or restarts, "Card back: restarting", if it
-  was busy with the card).
-- All of this was tested on a Core2 with a card of 19,410 tracks, and what
-  those tests turned up was fixed first: the card writes above, a console
-  command that ran out of stack and restarted the player, and too little
-  stack to spare while the library rebuilds.
-- **Going back to 0.7.0 later:** 0.7.0 can't read 0.8.0's library file,
-  so its first start builds its own again from the folders and file names
-  (minutes on a big card). Coming back to 0.8.0 then builds the library
-  from the tags it read before, without reading them again. The queue is
-  kept both ways.
+- **Auto DJ keeps the music going.** When the queue's last track starts,
+  it adds one more, picked on the player itself (no network, no server),
+  so the music goes on without a gap. With an Auto DJ index on the card
+  it picks one that sounds like what has been playing; no card has one
+  yet (the index needs transfer software that isn't out: below), and
+  until then it picks at random from the library. It never starts music
+  by itself, and never changes the output or the volume. It is off until
+  you switch it on: in Now Playing's **"..."** menu, whose new fourth
+  row, Auto DJ, reads On, Off, Waiting or Paused (a tap switches it), or
+  in **Output > Auto DJ**. It stays on after a restart and waits there
+  for Play; switched on with nothing queued, it follows the next track
+  you play.
+- **Its matching needs an Auto DJ index on the card**
+  (`/.mstream/autodj-<gen>.bin`), which the transfer software is to
+  write from mStream's analysis of the audio. **The transfer software
+  isn't available yet,** so no card has an index today, and Auto DJ
+  picks at random (the next point). From 0.11.0 the player says on the
+  card that it reads the index (`read.mpdj=2` in `/.player/device.txt`,
+  checked at each start): that is how the transfer software will know to
+  write one. Once it is out, start the player once with the card in
+  before the first transfer. With an index, the tracks it doesn't cover
+  (files you copied yourself, tracks mStream hasn't analysed) play as
+  usual, but Auto DJ doesn't pick them and they don't steer it. The
+  index's format, for any transfer software, is `docs/AUTODJ-INDEX.md` in
+  the source, and `docs/AUTODJ.md` describes Auto DJ as built.
+- **Without an index** (a card filled by hand: every card, for now),
+  Auto DJ still keeps the queue going, with random tracks from the
+  library: never the one playing and, where it can, none of the last 50
+  tracks. It says so once ("No Auto DJ index: picks are random", when it
+  is switched on, or at its first pick after a start). Output > Auto DJ
+  says "No Auto DJ index on this card" over "picks are random"; Anchor,
+  Match strictness, BPM continuity and Harmonic mixing are dimmed, and a
+  tap on one says "Needs an Auto DJ index: a transfer to the card adds
+  one". The empty Queue and Now Playing keep Shuffle all, and a long
+  press has no "Auto DJ from here".
+- **Output > Auto DJ** ("keeps the queue going") has the switch;
+  **Anchor**, Follow the vibe (each pick close to one of the last five
+  tracks that played: the default) or Stay on seed (every pick close to
+  the first track, the seed); **Match strictness**, from "55% or closer"
+  (the default, the most variety) to "75% or closer" by 5, a tap for the
+  next step; **BPM continuity** (within 8 BPM, or at half or double the
+  tempo) and **Harmonic mixing** (keys that mix well), **both off by
+  default**; and a status line: how many of the library's tracks have
+  neighbours, and how many of those have a BPM and a key, or why Auto DJ
+  has no index, or why it waits ("Waiting: Repeat One is on"). The names
+  are the mobile app's.
+- **What steers it,** with an index: every track that plays, the ones
+  you add (Play next, + Queue) as well as its own, except one you skip in
+  its first 30 s. Each Play (a new queue) starts it afresh from the track
+  it plays. Where it can, it avoids the last 50 tracks and the last 3
+  artists. It draws at random among the tracks that are close enough, as
+  the mobile app does, rather than always taking the closest; when none
+  is, it draws from the 50 closest; and when every track it could draw
+  from played lately, from the 50 closest that didn't, before it repeats
+  one.
+- **An empty queue offers Auto DJ:** on a card with an Auto DJ index,
+  the empty Queue and the empty Now Playing show **Open Library** and
+  **Auto DJ** in Shuffle all's place. A tap plays a random track that has
+  neighbours and switches Auto DJ on ("Auto DJ: Tidewater", with Undo).
+  Without an index, Shuffle all stays. The play/pause button still does
+  nothing on an empty queue.
+- **Auto DJ from here:** a long press on a track the index knows has it
+  as its first row, with Play, Play next and + Queue in their places
+  under it. It plays the track as a new queue, Auto DJ on and starting
+  from it ("Auto DJ from here: Glass Harbour", with Undo). The Undo of
+  either puts the queue back and, if that tap switched Auto DJ on,
+  switches it off again.
+- **In the Queue,** a track Auto DJ added has a small DJ mark at its
+  right (on the last 64 it added; the marks aren't kept across a
+  restart). Its additions don't flash the Queue tab's badge, and don't
+  take your Undo: the Undo of your last change still works after Auto DJ
+  adds a track.
+- **At the end of the queue:** if the queue had already stopped at its
+  end (Auto DJ switched on after an album finished, or the sleep timer's
+  End of queue stopped it there), Auto DJ gets the next track ready,
+  paused at 0:00, and says "Auto DJ: the next track is ready, press
+  play". Nothing plays until you do (the headphones' play button doesn't
+  start it), so after a night's End of queue, Play starts a new track.
+  Repeat All doesn't come round to the first track while Auto DJ adds.
+  Repeat One and the sleep timer's End of queue make it wait (Waiting),
+  and three of its tracks in a row that fail to play pause it (Paused,
+  with a note) until a track plays or it is switched off and on.
+- **What it costs:** with an index, switching Auto DJ on matches the
+  index to the library in the background, about 1.5 s for 19,412 tracks
+  (3 s while an MP3 plays): a Play doesn't wait for it, only the first
+  pick does. The match holds about 155 KB of PSRAM at that size while
+  Auto DJ is on, and is given back when it is switched off; Auto DJ's
+  own 19 KB are held from the start, on or off. The match is made again
+  after each library update (about 6 s with an MP3 playing). A pick
+  takes a millisecond or two and reads at most two 512-byte pieces of
+  the card, usually none.
+- **In the ten languages:** Auto DJ's 51 new texts are in all ten, with
+  the mobile app's words where it has them (German's "Anker", "Der
+  Stimmung folgen", "Ähnlichkeitsschwelle"), and translated by an AI
+  agent (Anthropic's Claude Fable) otherwise: machine translations, not
+  yet read by a native speaker, like the rest of the nine languages.
+  Each was fitted to its place in every language: where Match
+  strictness's value doesn't fit beside its title (German, Spanish,
+  Italian and Portuguese), it goes on the line under it.
+- Tested on a Core2 in three rounds before the release (2026-10-13 to
+  16), on a synthetic card of 19,412 tracks with made-up names and an
+  Auto DJ index made by the repository's test tools: a two-hour run of
+  7,520 picks with no reset and no underrun; picks with each setting, at
+  240 and 160 MHz; library updates during a session; the card pulled and
+  put back, and its index replaced on a computer; damaged, broken and
+  missing indexes; the end of the queue; Undo from paused, stopped and
+  playing queues; and the screens in all ten languages. What those
+  rounds turned up was fixed first and checked again on the device:
+  picks that took 5-9 ms (now 0.4-1.7 ms), the queue's saves falling
+  behind over a long session, a library update put off to the next start
+  for the match's memory, Stay on seed at 75 % looping the few tracks
+  close enough to a seed, the match's time and the memory it left free
+  for a moment, Japanese and Chinese messages on two lines, and the Undo
+  below. The release build then ran on a card of 113 tracks with no
+  index: the update from 0.10.0, Auto DJ's random picks and its screens
+  without an index, and the library's work under music.
+- **Undo never starts the music after a silence.** The Undo of a Play
+  (the Library's Play, Play all, Shuffle all, Auto DJ's) or of a Clear
+  never starts what was silent when you made it: a queue that was paused
+  comes back paused, at the start of its track, and one that was stopped
+  or had finished stays stopped. Undoing a Play made over a playing queue
+  plays the old queue's track again from the start. 0.10.0 started the
+  old queue's track playing when a Library Play made over a paused,
+  stopped or finished queue was undone.
+- **Messages on two lines, placed by their letters.** A message with a
+  long name puts what happened over the name ("Plays next" over the
+  title). The two lines sat at fixed rows, and in Japanese and Chinese,
+  whose characters are taller than the Latin letters, the first ran into
+  the second and over the message's top edge (seen on Auto DJ's); in
+  Russian a "й" touched the line above. Each line now goes by the rows
+  its letters take, with a clear row between the two, and the message's
+  full height when they need it.
+- **Fixed: a list could hold the card's background work while the
+  screen was off.** A list reloaded, or a fling stopped, while the screen
+  was dark counted as moving until the screen woke, and held the tag
+  reading, the library update's save and the rest of the card's
+  background work: once over four minutes, for a save. 0.10.0 does this
+  too. Now a list that isn't drawn holds nothing: on the synthetic card,
+  a library update with the screen off saved 1.8 s after its build. The
+  same goes for a list under a dialog that opens by itself (the
+  headphones lost, a track that failed to play).
+- **Fixed: the serial console's `gs` froze the player's loop.** `gs`
+  (the check of the card's tag files) read them in one go, which stopped
+  the screen, the queue and everything else on the player's loop for
+  12.4 s on the synthetic card. It now reads a piece a pass (about
+  10 ms), and takes about 32 s there with the screen lit and 60 s dark
+  with playback paused, 52-75 s while tracks play; on a card of 113
+  tracks, under a second. It waits for a compaction under way rather
+  than read the file that compaction replaces, which could call a good
+  file ABSENT; `gt` says it can't read during one.
+- **The firmware is a little bigger:** about 4.36 MB, up from 4.27 MB in
+  0.10.0, for Auto DJ (69 % of the space it has on the flash, 68 %
+  before). The steps below are the same.
+- **The update from 0.10.0** keeps the settings, the paired headphones,
+  the queue and the library as they are: nothing is rebuilt, and Auto DJ
+  starts off, its settings at their defaults. A card that 0.9.0 or 0.8.0
+  used last gets 0.10.0's one rebuild of the library from the tags read
+  before (about 10 s for 20,000 tracks; no file is read again, and the
+  queue is kept), and a unit updated from 0.9.0 or older stays in
+  English, every setting kept, until a language is picked in Output >
+  Language. A card that 0.7.0 used last gets 0.8.0's first start instead
+  (0.8.0's notes say what it does).
+- **Going back to 0.10.0 later:** it sees that a newer version saved the
+  settings, leaves them as they are and uses every one it knows; Auto
+  DJ's switch and settings stay saved, unread, and are as they were back
+  on 0.11.0. The tracks Auto DJ added stay in the queue like any others.
+  0.10.0 writes its own `device.txt`, which doesn't ask for the Auto DJ
+  index (it says `read.mpdj=1`): start 0.11.0 once with the card in
+  before a transfer.
 
 ## Hardware
 
@@ -195,7 +284,29 @@ if unsure, install both. On Linux, add yourself to the `dialout` group.
   the music files isn't shown yet, and neither is a progressive JPEG (the
   album shows a note instead).
 - The queue holds up to 5,000 tracks.
-- Text is drawn in Latin scripts only.
+- Text is drawn in Latin (Vietnamese and some rarer letters without
+  their accents), Greek and Cyrillic, and Chinese, Japanese and Korean
+  names from a built-in 16 px set (KS X 1001's Hangul, JIS X 0208,
+  GB2312's level 1 and the kana; Han drawn the Japanese way, in the
+  Chinese menus too). Other scripts (Hebrew, Arabic, Thai, Devanagari
+  and others) and rarer characters show as `?`. The menus are in ten
+  languages, nine of them machine translations no native speaker has
+  read yet, Auto DJ's texts included; the serial console is in English,
+  but for the lines that quote the screen. In three of Auto DJ's
+  messages on two lines in Japanese and Chinese, shown only with an Auto
+  DJ index, the first line touches the message's outline.
+- **Auto DJ's matching needs an Auto DJ index,** which only the transfer
+  software will write, and that isn't available yet: until it is, Auto
+  DJ adds random tracks from the library. With an index, tracks it
+  doesn't cover are never picked and don't steer it. Its session (what
+  steers it, what it avoids) and the DJ marks aren't kept across a
+  restart; its switch and its settings are. Over a long session, Stay on
+  seed repeats: a seed has at most 169 neighbours in the index, and once
+  they have played, it starts again among them.
+- The card taken out while the player runs and put back (music copied
+  to it on a computer meanwhile) has its tag files and the Auto DJ index
+  read again, but its folders aren't walked again until the next start:
+  the new music shows up then. Another card makes the player restart.
 - No WiFi yet: syncing with an mStream server comes later.
 
 ## Files

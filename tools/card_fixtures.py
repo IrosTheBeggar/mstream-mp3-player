@@ -7,8 +7,9 @@ Writes test/fixtures/card/: the conformance vectors (vectors.json), the
 library descriptions (libraries/*.json), their golden files (golden/*), and
 the hardening files (hardening/*.bin, listed in hardening/index.json), each
 broken in one way under valid CRCs. The player's host tests
-(test/test_card_contract, test/test_card_files) read them, as the transfer
-software's tests in mstream-terminal will.
+(test/test_card_contract, test/test_card_files, test/test_card_autodj,
+test/test_name_key) read them, as the transfer software's tests in
+mstream-terminal will.
 
 This is a second implementation of the contract, written from the spec and
 kept apart from lib/core/CardContract*: the goldens come from here, so the
@@ -16,8 +17,11 @@ C++ writers matching them byte for byte is two implementations agreeing,
 not one agreeing with itself. Every vector of 2.18 is recomputed and
 checked before anything is written.
 
-    python tools/card_fixtures.py          write the fixtures
-    python tools/card_fixtures.py --check  fail if a file on disk differs
+    python tools/card_fixtures.py          write the fixtures, and delete every
+                                           other file in the folder (a retired
+                                           fixture; .gitattributes is kept)
+    python tools/card_fixtures.py --check  fail if a file on disk differs, or if
+                                           a file there isn't one it makes
 
 The fixtures are made-up libraries (no real names) and synthetic
 embeddings, under CC0 (test/fixtures/card/README.md; part 7, U18).
@@ -25,12 +29,13 @@ embeddings, under CC0 (test/fixtures/card/README.md; part 7, U18).
 import argparse
 import hashlib
 import json
-import math
 import struct
 import sys
-import unicodedata
 import zlib
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import mpdj  # noqa: E402  (every MPDJ fixture: AUTODJ-INDEX.md 13)
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "test" / "fixtures" / "card"
@@ -504,7 +509,8 @@ def mptg(desc, order="canonical", rec_stride=72, extra_header=b"", extra_run_fie
 
 
 # ---------------------------------------------------------------------------
-# MSMF (2.5), MSPD (2.12.5), MPDJ (2.13), MPTH (2.14.1), device.txt (2.15)
+# MSMF (2.5), MSPD (2.12.5), MPTH (2.14.1), device.txt (2.15); MPDJ is
+# tools/mpdj.py's (docs/AUTODJ-INDEX.md)
 # ---------------------------------------------------------------------------
 def companion_name(kind, gen):
     return ("tags-%08x.bin" if kind == "MPTG" else "autodj-%08x.bin") % gen
@@ -533,7 +539,7 @@ def msmf_raw(desc, comps_rows, roots, minor=0):
 def comp_row(name: str, data: bytes):
     """A COMP entry for the companion file `name` holding `data` (2.5.3)."""
     p = parse_container(data)
-    key = bytes(p["th"][16:32]) if p["magic"] == "MPDJ" else bytes(16)
+    key = bytes(p["th"][24:40]) if p["magic"] == "MPDJ" else bytes(16)  # MPDJ: selectionSig, bytes 64-79
     assert name == companion_name(p["magic"], p["generation"]), name
     return p["magic"], p["generation"], len(data), struct.unpack_from("<I", data, 32)[0], name, key
 
@@ -564,67 +570,6 @@ def mspd(desc):
         ops.append((op, o["path"], o.get("expectedSize", 0) if op == 1 else 0))
     ops.sort(key=lambda e: (RANK[e[0]], folder_key(e[1]) if e[0] == 3 else file_key(e[1])))
     return mspd_raw(desc, ops)
-
-
-def f32(v):
-    return struct.unpack("<f", struct.pack("<f", float(v)))[0]
-
-
-def round_half_away(v):
-    a = abs(v)
-    f = math.floor(a)
-    r = f + 1 if a - f >= 0.5 else f
-    return r if v >= 0 else -r
-
-
-def dj_score(a, b):
-    s = 0.0
-    for x, y in zip(a, b):
-        s += x * y
-    return max(0, min(255, round_half_away(s * 255.0)))
-
-
-def selection_signature(model_id, model_version, metric, k, hashes):
-    text = "MPDJ-SEL 1\nmodel %s %s\nmetric %s\nk %d\n" % (model_id, model_version, metric, k)
-    text += "".join(h + "\n" for h in sorted(hashes))
-    return hashlib.sha256(text.encode("utf-8")).digest()[:16]
-
-
-def mpdj(desc):
-    k = desc["k"]
-    rows = sorted(desc["rows"], key=lambda r: bytes.fromhex(r["hash"]))
-    n = len(rows)
-    ib = 2 if n <= 65535 else 4
-    unused = (1 << (8 * ib)) - 1
-    emb = [[f32(x) for x in r["embedding"]] for r in rows]
-    djrw, paths = bytearray(), []
-    for i, r in enumerate(rows):
-        ph = sorted(path_hash(p) for p in r["paths"])
-        paths += [(h, i) for h in ph]
-        ak = fnv(r["artistNameKey"].encode("utf-8")) & 0xFFFFFFFF if r.get("artistNameKey") else 0
-        djrw += struct.pack("<Q8sHBBI", ph[0], bytes.fromhex(r["hash"])[:8], r.get("bpm10", 0), r.get("camelot", 0),
-                            r.get("flags", 0), ak)
-    paths.sort()
-    djnb = bytearray()
-    for a in range(n):
-        cand = sorted((-dj_score(emb[a], emb[b]), b) for b in range(n)
-                      if b != a and rows[b]["songKey"] != rows[a]["songKey"])
-        for j in range(k):
-            if j < len(cand):
-                djnb += cand[j][1].to_bytes(ib, "little") + bytes([-cand[j][0]])
-            else:
-                djnb += unused.to_bytes(ib, "little") + b"\0"
-    sig = selection_signature(desc["modelId"], desc["modelVersion"], desc["metric"], k, [r["hash"] for r in rows])
-    strs = Strs()
-    th = struct.pack("<IIHBBI16sIIIIII", n, len(paths), k, ib, 1, desc.get("builtTime", 0), sig,
-                     strs.add(desc["modelId"]), strs.add(desc["modelVersion"]), strs.add(desc["metric"]),
-                     desc.get("tagsGeneration", 0), strs.add(desc.get("license", "")),
-                     strs.add(desc.get("attribution", "")))
-    sections = [("DJRW", REQUIRED, n, 24, bytes(djrw)), ("DJNB", REQUIRED, n, k * (ib + 1), bytes(djnb)),
-                ("DJPH", REQUIRED, len(paths), 12, b"".join(struct.pack("<QI", h, r) for h, r in paths)),
-                ("STRS", REQUIRED, 0, 0, bytes(strs.b))]
-    return build_container("MPDJ", desc["generation"], u64(desc.get("cardId", 0)), th, sections,
-                           minor=desc.get("minor", 0))
 
 
 def rgb565be(r, g, b):
@@ -769,57 +714,14 @@ def tags_empty():
             "folders": [{"path": "Owned Empty", "flags": FOLDER_OWNED}], "records": []}
 
 
-def autodj_main():
-    half = [0.5, 0.5, 0.5, 0.5]
-    rows = [
-        {"hash": "0123456789abcdef0123456789abcdef", "paths": ["Artist/Album/01 - Title.mp3"],
-         "artist": "Lantern Choir", "title": "Title", "artistNameKey": "lantern choir", "songKey": "lantern choir|title",
-         "bpm10": 1210, "camelot": 8, "embedding": half},
-        {"hash": "11111111111111111111111111111111", "paths": ["Artist/Album/02 - Other.mp3"],
-         "artist": "X", "title": "A B", "artistNameKey": "x", "songKey": "x, y|a b", "embedding": [0.5, 0.5, 0.5, -0.5]},
-        {"hash": "22222222222222222222222222222222",
-         "paths": [NFC_CAFE + "/Album/01 - Title.mp3", NFD_CAFE + "/Album/01 - Title.mp3"],
-         "artist": "Caf\u00e9 Trio", "title": "Title", "artistNameKey": "caf\u00e9 trio",
-         "songKey": "caf\u00e9 trio|title", "note": "one recording at two paths: one row",
-         "embedding": [0.625, 0.5, 0.375, 0.25]},
-        {"hash": "33333333333333333333333333333333", "paths": ["A B/y.mp3"], "artist": "Some Band, Other Band",
-         "title": "Why", "artistNameKey": "some band, other band", "songKey": "some band, other band|why",
-         "bpm10": 1280, "camelot": 13, "flags": 1, "embedding": [0.5, -0.5, 0.5, 0.5]},
-        {"hash": "44444444444444444444444444444444", "paths": ["B/w.opus"], "artist": "", "title": "Double U",
-         "artistNameKey": "", "songKey": "|double u", "embedding": [-0.5, 0.5, 0.5, 0.5]},
-        {"hash": "fedcba9876543210fedcba9876543210", "paths": ["Loose Intro.mp3"], "artist": "Lantern Choir",
-         "title": "Title", "artistNameKey": "lantern choir", "songKey": "lantern choir|title",
-         "note": "the same song as the first row: never its neighbour", "embedding": half},
-    ]
-    return {"format": "MPDJ", "file": "autodj-00000029.bin", "generation": 41, "cardId": CARD_ID, "k": 3,
-            "builtTime": 1790000000, "tagsGeneration": 41, "modelId": "synthetic-embedding", "modelVersion": "1",
-            "metric": "cosine", "license": "CC0-1.0", "attribution": "synthetic fixture vectors", "dim": 4,
-            "note": "Synthetic embeddings (multiples of 1/8, exact in f32 and in f64 products): a tie of three at "
-                    "the K boundary for the first row, a same-song pair, a recording at two paths. songKey and "
-                    "artistNameKey are nameKey's output (5.4), given.",
-            "rows": rows}
-
-
-def autodj_small():
-    rows = [
-        {"hash": "aa000000000000000000000000000000", "paths": ["A/x.mp3"], "artistNameKey": "",
-         "songKey": "|x", "embedding": [1.0, 0.0]},
-        {"hash": "bb000000000000000000000000000000", "paths": ["a/v.mp3"], "artistNameKey": "",
-         "songKey": "|v", "embedding": [-1.0, 0.0]},
-    ]
-    return {"format": "MPDJ", "file": "autodj-small.bin", "generation": 7, "cardId": CARD_ID, "k": 3,
-            "builtTime": 1790000000, "tagsGeneration": 7, "modelId": "synthetic-embedding", "modelVersion": "1",
-            "metric": "cosine", "license": "CC0-1.0", "attribution": "synthetic fixture vectors", "dim": 2,
-            "note": "Fewer rows than K: unused slots; a negative cosine scores 0.", "rows": rows}
-
-
 def manifest_main():
     return {"format": "MSMF", "file": "manifest.bin", "generation": 42, "cardId": CARD_ID, "commitTime": 1791400000,
             "flags": 1, "commitId": "0x0DDBA11CAFEF00D5", "serverInstance": "00112233-4455-6677-8899-aabbccddeeff",
             "producer": "mstream-terminal 0.13.0", "serverRevision": "\"r-412-99-1790000000999-300\"",
             "baseGeneration": 41, "serverUrl": "HTTP://Music.Example:3000/",
-            "note": "The root of the fixture card: the tags file of this commit and an AutoDJ table carried from "
-                    "the last (generation 41); the vpath layout's roots, given unsorted.",
+            "note": "The root of the fixture card: the tags file of this commit and an AutoDJ index (MPDJ v2, "
+                    "docs/AUTODJ-INDEX.md) carried from the last (generation 41); the vpath layout's roots, given "
+                    "unsorted.",
             "companions": [{"file": "tags-0000002a.bin"}, {"file": "autodj-00000029.bin"}],
             "roots": ["Lib B", "Lib A"]}
 
@@ -855,13 +757,13 @@ def thumb_main():
 
 
 def device_main():
-    return {"format": "device.txt", "file": "device.txt", "contract": "1", "firmware": "0.8.0", "read.msmf": "1",
-            "read.mptg": "1", "read.mpdj": "1", "read.mpth": "1", "codecs": "mp3,flac,opus",
+    return {"format": "device.txt", "file": "device.txt", "contract": "1", "firmware": "0.11.0", "read.msmf": "1",
+            "read.mptg": "1", "read.mpdj": "2", "read.mpth": "1", "codecs": "mp3,flac,opus",
             "extensions": "mp3,flac,opus", "max_rate": "48000", "max_channels": "2"}
 
 
-LIBRARIES = [tags_transfer, tags_device, tags_empty, autodj_main, autodj_small, manifest_min, manifest_main,
-             pending_main, thumb_main, device_main]
+LIBRARIES = [tags_transfer, tags_device, tags_empty, manifest_min, manifest_main, pending_main, thumb_main,
+             device_main]
 
 
 def build(desc, golden: dict):
@@ -870,8 +772,6 @@ def build(desc, golden: dict):
         return mptg(desc)
     if f == "MSMF":
         return msmf(desc, golden)
-    if f == "MPDJ":
-        return mpdj(desc)
     if f == "MSPD":
         return mspd(desc)
     if f == "MPTH":
@@ -901,7 +801,7 @@ def pairs_for(groups):
     return out
 
 
-def vectors():
+def vectors(golden: dict):
     v = {}
     v["note"] = ("docs/METADATA.md 2.18 as data. 'who': both (every implementation), software (the transfer "
                  "software only), builder (the device's builder, milestone N2). Hex strings are integers; "
@@ -966,16 +866,10 @@ def vectors():
                       "head0to15": "4D 50 54 48 01 00 00 00 59 6B 46 BD 9F E6 F7 B1", "head20to23": "28 00 60 00"},
         "serverInstance": {"uuid": "00112233-4455-6677-8899-aabbccddeeff",
                            "stored": "00 11 22 33 44 55 66 77 88 99 AA BB CC DD EE FF"},
-        "hashPrefix": {"audioHash": "0123456789abcdef0123456789abcdef", "stored": "01 23 45 67 89 AB CD EF"},
-        "selectionSigStored": "9F 0A E9 1F 22 0E 2E 76 EC 5A 40 E4 9F C8 0B 2D",
+        "audioHash": {"audioHash": "0123456789abcdef0123456789abcdef",
+                      "stored": "01 23 45 67 89 AB CD EF 01 23 45 67 89 AB CD EF"},
+        "selectionSigStored": " ".join("%02X" % b for b in golden["autodj-00000029.bin"][64:80]),
     }
-    v["selectionSignature"] = [
-        {"modelId": "discogs-effnet", "modelVersion": "1", "metric": "cosine", "k": 100,
-         "hashes": ["0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210"],
-         "sig": "9f0ae91f220e2e76ec5a40e49fc80b2d"},
-        {"modelId": "discogs-effnet", "modelVersion": "1", "metric": "cosine", "k": 100, "hashes": [],
-         "sig": "efdb6ffa02a177c18593a3ed34f7016b"},
-    ]
     v["canonicalOrder"] = {
         "siblings": ["A", "A B", "A-", "B", "a", "\u00c9"],
         "files": ["A/x.mp3", "A/B/y.mp3", "A B/y.mp3"],
@@ -1062,8 +956,10 @@ def vectors():
         "on macOS, a listed 'Cafe' + U+0301 is recorded in NFC (C3 A9), hash F1B24FC757494F2B",
         "an Opus stream the server stores as x.ogg goes on the card as x.opus, its bytes unchanged, convertedTo 0"]}
     v["deviceTxt"] = {"text": device_txt(device_main()).decode("ascii"),
-                      "noFile": {"read": "1", "codecs": "mp3,flac", "extensions": "mp3,flac", "max_rate": "48000",
+                      "noFile": {"read.msmf": "1", "read.mptg": "1", "read.mpdj": "", "read.mpth": "1",
+                                 "codecs": "mp3,flac", "extensions": "mp3,flac", "max_rate": "48000",
                                  "max_channels": "2"}}
+    v["mpdj"] = mpdj.fixture_vectors(golden)
     return v
 
 
@@ -1079,7 +975,7 @@ def hexint(s):
     return int(s, 16)
 
 
-def check_vectors(v):
+def check_vectors(v, golden: dict):
     """Recomputes every vector; raises on a mismatch."""
     bad = []
 
@@ -1112,11 +1008,28 @@ def check_vectors(v):
         want(d == e["skew"], "skew %r" % e["groups"])
         want(sum(time_matches(r, o, d) for r, o in pairs) == e["matching"], "skew matching %r" % e["groups"])
     want(fat_wall(0) is None and not time_matches(0, 0, 0), "zero stamps")
-    for e in v["selectionSignature"]:
-        want(selection_signature(e["modelId"], e["modelVersion"], e["metric"], e["k"], e["hashes"]).hex() == e["sig"],
-             "sig")
-    want(" ".join("%02X" % b for b in bytes.fromhex(v["selectionSignature"][0]["sig"])) == v["bytes"][
-        "selectionSigStored"], "sig bytes")
+    m = v["mpdj"]
+    want(bytes.fromhex(m["signature"]["sig"]).hex(" ").upper() == v["bytes"]["selectionSigStored"], "sig bytes")
+    want(mpdj.signature(m["signature"]["text"]).hex() == m["signature"]["sig"], "mpdj signature")
+    want(mpdj.prepare(next(d for d in mpdj.fixture_libraries() if d["file"] == m["signature"]["file"])).sig_text
+         == m["signature"]["text"], "mpdj signature text")
+    for e in m["levels"]:
+        want(mpdj.level(e["cos"]) == e["level"], "mpdj level %r" % e["cos"])
+    for e in m["floors"]["cases"]:
+        want(mpdj.floor_level(e["percent"]) == e["level"], "mpdj floor %r" % e["percent"])
+    for e in m["slotBytes"]:
+        want(mpdj.slot_bytes_for(e["k"]) == e["slotBytes"], "mpdj slotBytes %r" % e["k"])
+    for e in m["headerBytes"]:
+        want(mpdj.header_bytes_for(e["sectionCount"], e["slotBytes"], e["minimum"]) == e["headerBytes"],
+             "mpdj headerBytes %r" % e)
+    for e in m["stridedRanks"]:
+        ranks = list(range(e["k"])) if e["m"] <= e["k"] else mpdj.strided_ranks(e["k"], e["head"], e["m"])
+        want(ranks == e["ranks"] if "ranks" in e else all(ranks[q["j"]] == q["rank"] for q in e["pairs"]),
+             "mpdj stridedRanks %r" % ((e["k"], e["head"], e["m"]),))
+    sc = m["slotCrc"]
+    raw = mpdj.Reader(golden[sc["file"]]).slot_raw(sc["row"])
+    want(mpdj.slot_crc(raw, sc["row"]) == hexint(sc["crc"]) and mpdj.crc32(raw[:-4]) == hexint(sc["unseeded"]),
+         "mpdj slotCrc")
     sib = v["canonicalOrder"]["siblings"]
     want(sorted(sib, key=lambda s: s.encode("utf-8")) == sib, "siblings")
     files = v["canonicalOrder"]["files"]
@@ -1149,8 +1062,8 @@ def check_vectors(v):
          tb["path"], "thumb path")
     want(bytes.fromhex(v["bytes"]["serverInstance"]["uuid"].replace("-", "")).hex(" ").upper() ==
          v["bytes"]["serverInstance"]["stored"], "uuid")
-    want(bytes.fromhex(v["bytes"]["hashPrefix"]["audioHash"])[:8].hex(" ").upper() == v["bytes"]["hashPrefix"][
-        "stored"], "prefix")
+    want(bytes.fromhex(v["bytes"]["audioHash"]["audioHash"]).hex(" ").upper() == v["bytes"]["audioHash"]["stored"],
+         "audioHash")
     if bad:
         raise SystemExit("vectors that don't match: " + ", ".join(bad))
 
@@ -1576,44 +1489,6 @@ def hardening(golden: dict):
          msmf_raw(md, [t_row, d_row], ["L" * 120 + "/" + "M" * 127]))
     bad("msmf-major-2", "MSMF", "major", "a newer major", edit(major, man))
 
-    # MPDJ.
-    dj = golden["autodj-00000029.bin"]
-    bad("mpdj-index-bytes", "MPDJ", "enum", "header: indexBytes 4 for 6 rows", edit(header_field(50, 4, "<B"), dj))
-    bad("mpdj-k-zero", "MPDJ", "enum", "header: k 0", edit(header_field(48, 0, "<H"), dj))
-    bad("mpdj-score-kind", "MPDJ", "enum", "header: scoreKind 2", edit(header_field(51, 2, "<B"), dj))
-
-    def dj_rows(p):
-        s = section(p, "DJRW")
-        s[4][0:24], s[4][24:48] = s[4][24:48], s[4][0:24]
-
-    bad("mpdj-rows-unsorted", "MPDJ", "djRows", "DJRW: rows out of hashPrefix order", edit(dj_rows, dj))
-
-    def dj_paths(kind):
-        def fn(p):
-            s = section(p, "DJPH")
-            if kind == "swap":
-                s[4][0:12], s[4][12:24] = s[4][12:24], s[4][0:12]
-            else:
-                struct.pack_into("<I", s[4], 8, 6)
-        return fn
-
-    bad("mpdj-paths-unsorted", "MPDJ", "djPaths", "DJPH: entries out of order", edit(dj_paths("swap"), dj))
-    bad("mpdj-paths-row-range", "MPDJ", "djPaths", "DJPH: a row out of range", edit(dj_paths("range"), dj))
-
-    def dj_nb(p):
-        s = section(p, "DJNB")
-        struct.pack_into("<H", s[4], 0, 6)
-
-    bad("mpdj-neighbour-range", "MPDJ", "djNeighbours", "DJNB: an index out of range (not the unused all-ones)",
-        edit(dj_nb, dj))
-    pdj = parse_container(dj)
-    bad("mpdj-row-count", "MPDJ", "counts", "header: rowCount isn't DJRW's count",
-        edit(header_field(40, section(pdj, "DJRW")[2] + 1), dj))
-    bad("mpdj-path-count", "MPDJ", "counts", "header: pathCount isn't DJPH's count",
-        edit(header_field(44, section(pdj, "DJPH")[2] + 1), dj))
-    bad("mpdj-neighbour-stride", "MPDJ", "shape", "header: k 2, so DJNB's stride (9) isn't k x (indexBytes + 1)",
-        edit(header_field(48, 2, "<H"), dj))
-
     # MSPD.
     pd = pending_main()
     bad("mspd-order", "MSPD", "pendOrder", "PEND: a write before a delete",
@@ -1631,6 +1506,8 @@ def hardening(golden: dict):
          mspd_raw(pd, [(2, "L" * 120 + "/" + "M" * 123 + ".mp3", 0)]))
     good("mspd-op-9", "MSPD", "PEND: an op above 3: the plan reads, and stops the software",
          mspd_raw(pd, [(2, "A/x.mp3", 0), (9, "Z/z.mp3", 0), (1, "A B/y.mp3", 77)]))
+    # MPDJ (docs/AUTODJ-INDEX.md 13.6): tools/mpdj.py's, each already read back.
+    out += mpdj.fixture_hardening(golden)
     return out
 
 
@@ -1650,15 +1527,20 @@ U18, proposed). The player's code stays GPL-3.0-or-later.
 The shared fixtures of docs/METADATA.md 2.17, made by
 `tools/card_fixtures.py` (a second implementation of the contract, apart
 from `lib/core/CardContract*`) and frozen: `python tools/card_fixtures.py
---check` fails if a file here differs from what it makes. Made-up names
-only, synthetic embeddings.
+--check` fails if a file here differs from what it makes, or if a file
+here isn't one it makes. Writing them (`python tools/card_fixtures.py`)
+deletes any such file, `.gitattributes` excepted, so keep work in progress
+elsewhere. Made-up names only, synthetic embeddings.
 
 - `vectors.json`: the vectors of 2.18 as data. `who` says which side a
   group binds when it isn't both.
 - `libraries/*.json`: library descriptions, the input of a writer: every
   value a writer would otherwise choose is given (ids, times,
-  generations). Tag values are raw lists: each writer applies 2.3.6 and
-  sets TRUNCATED; flags, `known` and the enums are as given. Integers above
+  generations). The tags descriptions' tag values are raw lists: each
+  writer applies 2.3.6 and sets TRUNCATED; flags, `known` and the enums are
+  as given. The AutoDJ descriptions' titles and artists are instead an MPTG
+  record's values as stored, 2.3.6 already applied: an MPDJ writer cuts,
+  replaces and drops nothing in them (AUTODJ-INDEX.md 13.2). Integers above
   2^53 are hex strings. A manifest names its companions by file; their
   generation, length, header CRC and (MPDJ) selection signature come from
   the golden companion.
@@ -1668,41 +1550,60 @@ only, synthetic embeddings.
 - `hardening/`: files broken in one way each, with valid CRCs (2.17, item
   4), at least one for every check of 2.4.3, so a reader that skips a
   check fails on its file. `index.json` lists each with the reader's uses
-  (`all`: every section; `device`: FOLD, RECS and STRS only), whether it
-  must read as absent or present, the check it breaks, and the player's
-  reason code. A `present` file with `same` reads as the same records as
-  that golden file.
+  (`all`: every section; `device`: MPTG's FOLD, RECS and STRS, MPDJ's
+  DJRF, DJPH and STRS), whether it must read as absent or present, the
+  check it breaks, and the player's reason code. A `present` file with
+  `same` reads as the same records as that golden file (MPDJ: every row's
+  filter record and used slot entries, every DJPH hash's row, the five
+  strings). An MPDJ file's `slot` says how one slot reads when the device
+  reads it alone (`damaged`: its CRC fails; `broken`: a good CRC over a
+  bad list).
 
-The player's tests: `test/test_card_contract` (the vectors) and
+The AutoDJ index (MPDJ v2) is specified apart, in docs/AUTODJ-INDEX.md;
+its fixtures (section 13 there) come from `tools/mpdj.py`, which
+card_fixtures.py imports. `libraries/autodj-mid.f32` holds the vectors
+that `autodj-mid.json` and `autodj-mid-default.json` name (raw
+little-endian f32, 16 a row, in the descriptions' row order).
+
+The player's tests: `test/test_card_contract` (the vectors),
 `test/test_card_files` (the goldens, round trips, the hardening files,
-truncation at every byte and every flipped bit).
+truncation at every byte and every flipped bit), `test/test_card_autodj`
+(the AutoDJ index's own rules) and `test/test_name_key` (the keys the
+AutoDJ descriptions give).
 """
 
 
 def generate():
     files = {}
     descs = [f() for f in LIBRARIES]
-    golden = {}
-    # Companions first: a root reads their generation, length, header CRC
-    # and key from them.
+    dj_descs = mpdj.fixture_libraries()
+    # The AutoDJ goldens first (each read back and checked against the rule
+    # by tools/mpdj.py), then the other companions: a root reads their
+    # generation, length, header CRC and key from them.
+    golden = dict(mpdj.fixture_goldens())
     for d in sorted(descs, key=lambda d: d["format"] == "MSMF"):
         golden[d["file"]] = build(d, golden)
-    for d in descs:
+    for d in descs + dj_descs:
         files["libraries/" + d["file"].rsplit(".", 1)[0] + ".json"] = (
             json.dumps(d, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
+    for name, data in mpdj.fixture_sidecars().items():
+        files["libraries/" + name] = data
     for name, data in golden.items():
         files["golden/" + name] = data
-    v = vectors()
-    check_vectors(v)
+    v = vectors(golden)
+    check_vectors(v, golden)
     files["vectors.json"] = (json.dumps(v, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
     index = []
     for entry in hardening(golden):
         name, fmt, uses, expect, why, check, data = entry[:7]
         same = entry[7] if len(entry) > 7 else None
+        slot = entry[8] if len(entry) > 8 else None
         files["hardening/" + name + ".bin"] = data
         e = {"file": name + ".bin", "format": fmt, "uses": uses, "expect": expect, "why": why, "check": check}
         if same:
             e["same"] = same
+        if slot:
+            e["slot"] = slot
         index.append(e)
     files["hardening/index.json"] = (json.dumps(index, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
     files["README.md"] = README.encode("utf-8")
@@ -1714,17 +1615,25 @@ def main():
     ap.add_argument("--check", action="store_true", help="compare with the files on disk; write nothing")
     args = ap.parse_args()
     files = generate()
+    # A file in the folder that generate() doesn't make (a retired fixture)
+    # is stale too; .gitattributes is the folder's own.
+    extra = sorted(q.relative_to(OUT).as_posix() for q in OUT.rglob("*")
+                   if q.is_file() and q.relative_to(OUT).as_posix() not in files and q.name != ".gitattributes")
     if args.check:
         stale = [n for n, d in files.items() if not (OUT / n).is_file() or (OUT / n).read_bytes() != d]
-        if stale:
-            sys.exit("card fixtures differ from tools/card_fixtures.py: " + ", ".join(sorted(stale)))
+        if stale or extra:
+            sys.exit("card fixtures differ from tools/card_fixtures.py: " + ", ".join(sorted(stale)) +
+                     ("; not made by it: " + ", ".join(extra) if extra else ""))
         print("card fixtures: %d files up to date" % len(files))
         return
+    for n in extra:
+        (OUT / n).unlink()
     for n, d in files.items():
         path = OUT / n
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(d)
-    print("card fixtures: wrote %d files to %s" % (len(files), OUT.relative_to(ROOT)))
+    print("card fixtures: wrote %d files to %s%s" % (len(files), OUT.relative_to(ROOT).as_posix(),
+                                                       ", deleted %d stale" % len(extra) if extra else ""))
 
 
 if __name__ == "__main__":

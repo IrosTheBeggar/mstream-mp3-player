@@ -67,6 +67,14 @@ private:
 // The whole queue in one go (a small one, or a buffer in memory).
 bool write(const QueueModel& q, const TrackCatalog& catalog, uint32_t generation, ByteSink& out);
 
+// The file's lines from their values, as the Writer writes them (and
+// QueueSaver's snapshot, which holds the queue's tracks and ranks, not the
+// queue): the header (version 2 when `shuffled`); one entry's line, its
+// rank and a space first when `shuffled`, then its path (none for a track
+// the catalog doesn't know: the line count stays the entry count).
+bool writeHeader(bool shuffled, uint32_t entries, int32_t current, uint32_t generation, ByteSink& out);
+bool writeEntry(const TrackCatalog& catalog, uint32_t track, bool shuffled, uint32_t rank, ByteSink& out);
+
 struct Restored {
   bool ok = false;           // a queue file (false: none, or not one)
   uint32_t lines = 0;        // entries in the file

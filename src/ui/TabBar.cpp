@@ -5,6 +5,7 @@
 
 #include <cstdio>
 
+#include "UiStrings.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
 #include "ui/Icons.h"
@@ -56,8 +57,8 @@ void drawBattery(M5Canvas& c, int x, int y, const tabbar::State& s, uint16_t bg)
     c.fillRect(x + 22, y + 3, 2, 5, col::SOFT);
     c.fillRect(x + 2, y + 2, 18 * s.battery / 100, 7, fill);
   }
-  char t[6];
-  snprintf(t, sizeof(t), "%u%%", static_cast<unsigned>(s.battery));
+  char t[16];
+  trf(t, sizeof(t), uistr::S::format_percent, s.battery);
   f.draw(c, Font::Small, t, x + 12, 27, tabbar::kBatteryTextW, s.charging ? col::GREEN : col::DIM, bg,
          Fonts::Align::Centre);
 }
@@ -87,8 +88,10 @@ void TabBar::drawCell(int t, const tabbar::State& s) {
     c.fillRoundRect(plateX, 3, plateW, 30, 6, col::ACT_BG);
     bg = col::ACT_BG;
   }
-  // Active: the icon moves up for its label, and the accent underlines it.
-  const int iconTop = active ? 3 : 7;
+  // Active: the icon moves up for its label (none when the label fits
+  // nowhere: tabbar::labelFit()), and the accent underlines it.
+  const bool labelled = active && s.label != tabbar::LabelFit::None;
+  const int iconTop = labelled ? 3 : 7;
   const uint16_t ink = active ? acc : col::ICON;
   switch (tab) {
     case NavModel::Tab::NowPlaying:
@@ -132,16 +135,29 @@ void TabBar::drawCell(int t, const tabbar::State& s) {
       }
       // The volume, beside the icon: part of the Output tab (a separate
       // chip in the corner stole every tap meant for this tab).
-      char v[6];
-      snprintf(v, sizeof(v), "%u%%", static_cast<unsigned>(s.volume));
+      char v[16];
+      trf(v, sizeof(v), uistr::S::format_percent, s.volume);
       f.draw(c, Font::Small, v, tabbar::kVolumeX, iconTop + 9, tabbar::kVolumeW, active ? col::TXT : col::SOFT, bg);
       drawBattery(c, tabbar::kBatteryX, 6, s, col::SURF);
       break;
     }
   }
-  if (active) {
-    f.draw(c, Font::Small, tabbar::kLabels[t], cx, 27, plateW, acc, bg, Fonts::Align::Centre);
-    c.fillRect(cx - 12, 33, 24, 2, acc);
+  if (labelled && s.label == tabbar::LabelFit::Spill) {
+    // Wider than its plate (the Library's or the Queue's): centred over the
+    // plate's edges, glyphs only (blended into the strip, so neither the
+    // plate nor the bar behind is cut); its neighbours draw its ends.
+    f.draw(c, Font::Small, tabbar::label(t), cx, 27, tabbar::kLabelSpillW, acc, acc, Fonts::Align::Centre);
+  } else if (labelled) {
+    f.draw(c, Font::Small, tabbar::label(t), cx, 27, plateW, acc, bg, Fonts::Align::Centre);
+  }
+  if (active) c.fillRect(cx - 12, 33, 24, 2, acc);
+  if (!active && s.label == tabbar::LabelFit::Spill && (t == s.active - 1 || t == s.active + 1)) {
+    // The active neighbour's label runs into this cell's label row (its
+    // icon is clear of it): its end, at the active cell's centre (the strip
+    // is 320 wide; only this cell's columns are pushed).
+    const int ax = tabbar::cellX0(s.active) + tabbar::kTabW / 2 - x0;
+    const uint16_t aacc = accent::of(static_cast<NavModel::Tab>(s.active));
+    f.draw(c, Font::Small, tabbar::label(s.active), ax, 27, tabbar::kLabelSpillW, aacc, aacc, Fonts::Align::Centre);
   }
   c.drawFastHLine(0, tabbar::kHeight - 1, w, col::DIV);
   gfx::push(c, x0, 0, w, tabbar::kHeight, true);

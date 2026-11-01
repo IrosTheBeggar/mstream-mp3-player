@@ -57,16 +57,30 @@
 //   G... gapless playback (docs/GAPLESS.md): G status, G0/G1 off/on, Gt0/Gt1
 //        trimming by the LAME tag off/on, Gx<n> the ring's cut against a reader
 //        on the other core (stops the player)
+//   D... Auto DJ (lib/core AutoDjCommand.h has the list; app/AutoDj): D status,
+//        D0/D1 off/on, Dm0/Dm1 Anchor, Df55-Df75 strictness, Dt0/Dt1 and Dk0/Dk1
+//        BPM continuity and Harmonic mixing, Ds<hex> the next session's seed, Dr
+//        a new session, Dp a pick now, Dn<k> dry-run picks on a copy, Dj the
+//        join again, Dc the file reopened, Db<n> slot reads timed, Dh/Dh<id>
+//        and De "Auto DJ from here" and the Auto DJ button, Dx stop Dn/Db
+//        (Dn and Db run one step a loop pass: the loop never freezes)
 // '@' lines are a computer's, not commands (docs/USB-VISUALIZER.md: the USB
 // visualizer's protocol; HostLine): every byte from an '@' to the end of
 // its line goes to hostLine, never to the keys above, and is never echoed.
 // An '@' abandons a command still waiting for its argument (logged), except
 // inside an R argument that has text ("Rttone:1000@48000"). Typed by hand
-// such a line gets an "@err" reply and does nothing else. Reading that
-// starts mid-line (a boot while a computer sends, input lost to an
-// overflow) drops the line's tail instead of running it as keys (HostLine's
-// Sync, logged): the first key after a boot, sent with its Enter, may need
-// sending again.
+// such a line gets an "@err" reply and does nothing else, but for the
+// computer's questions about the board (docs/HOST-STATUS.md; app/HostQuery),
+// which answer anyone:
+//   @status            one line: the version, the card, its size and free
+//                      space, the tracks, the battery, the player, the headphones
+//   @count             the card's free space counted once (not while playing),
+//                      with progress lines
+//   @identify <label>  "This one" and the label on the screen for 5 s, a buzz
+// Reading that starts mid-line (a boot while a computer sends, input lost
+// to an overflow) drops the line's tail instead of running it as keys
+// (HostLine's Sync, logged): the first key after a boot, sent with its
+// Enter, may need sending again.
 // and the UI spike's tools (docs/UI-SPIKE.md), also ended with Enter, the
 // text after the letter passed on as it is:
 //   u...  input lab (u toggles; u0-u3 modes; us summary)
@@ -80,7 +94,10 @@
 // how much of the loop task's 8 KB stack the command left unused (the
 // stack under the console is painted again before each: app/LoopStack);
 // after any other key only when it left under loopstack::kMinLeft (the
-// line then says LOW):
+// line then says LOW). A command that goes on over the next loop passes
+// (gs: the card's records a piece a pass, app/TagConsole) prints it at its
+// end, the least left over the command and each piece
+// (loopstack::holdLine()):
 //   [console] gs: the loop task's stack: 4416 B never used during it (of 8 KB; 2008 B the lowest since the boot)
 class SerialConsole {
 public:
@@ -132,8 +149,10 @@ public:
     std::function<void(const char*)> gapless;
     // Opus (O): the argument as typed (may be "").
     std::function<void(const char*)> opus;
-    // The dancers (D, docs/DANCE-SPRITES.md F.2): the argument as typed (may be "").
+    // The dancers (M, docs/DANCE-SPRITES.md F.2): the argument as typed (may be "").
     std::function<void(const char*)> dance;
+    // Auto DJ (D): the argument as typed (may be "").
+    std::function<void(const char*)> autoDj;
     // A computer's '@' line: complete (HostLine::Byte::Line: `line` is its
     // text from the '@', writable) or not one (Bad, Long, Restart: `line`
     // nullptr).
@@ -163,7 +182,7 @@ private:
   enum class Pending {
     None, PlayIndex, Bench, HeadphonesName, Headroom, TempoPrior, DanceOffset, Freeze,
     InputLab, ScrollLab, LibraryIndex, FontProbe, ThumbProbe, Queue, Touch, Power, Sleep, Idle, BluetoothTest,
-    Rate, Gapless, Opus, Dance,
+    Rate, Gapless, Opus, Dance, AutoDj,
   };
 
   Actions actions_;

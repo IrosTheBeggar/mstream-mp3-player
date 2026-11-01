@@ -7,10 +7,10 @@
 
 // mStream's name helpers (src/db/name-key.js), as docs/METADATA.md 5.4
 // pins them for the card contract: the builder's votes and the artist
-// display join, and later AutoDJ's keys (DJRW's artistKey and the same-song
-// rule, 2.13.2), which one side writes and the other compares. Portable, no
-// allocation, little stack (no buffer of the whole string: the Final_Sigma
-// lookahead re-reads the input).
+// display join, and AutoDJ's keys (DJRF's artistKey and the song key,
+// docs/AUTODJ-INDEX.md 2.4), which one side writes and the other compares.
+// Portable, no allocation, little stack (no buffer of the whole string: the
+// Final_Sigma lookahead re-reads the input).
 //
 // nameKey(s): whitespace runs collapsed to one space and trimmed; the
 // Unicode quotes (U+2018 U+2019 U+201A U+201B U+2032 to ', U+201C U+201D
@@ -105,8 +105,11 @@ bool blank(const char* s, size_t n);
 constexpr size_t kDisplayMax = 1023 + 15;
 size_t displayJoin(const char* list, size_t n, char* out, size_t cap);
 
-// DJRW's artistKey (2.13.2): the low 32 bits of the FNV-1a 64 of the
-// nameKey of a list's first value; 0 when it has none.
+// DJRF's artistKey (docs/AUTODJ-INDEX.md 2.4): the low 32 bits of the
+// FNV-1a 64 of the nameKey of a list's first value that isn't blank; 0
+// when it has none. A device that keys a track without a row (its artist
+// cooldown) must use the same function of that track's record's artist
+// list; the Auto DJ engine keys none (they add nothing to its cooldown).
 uint32_t artistKey(const char* list, size_t n);
 
 }  // namespace namekey

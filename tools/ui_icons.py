@@ -323,6 +323,28 @@ def vibrate():
     return img
 
 
+def autodj():
+    # Auto DJ (the Output row, the empty states' button in Shuffle all's
+    # place: as wide as kShuffle, uitext::kEmptyIconW[1]): a record with
+    # its label, and a wave of sound beside it. A generic glyph (the engine
+    # design's 5.3), not the mobile app's.
+    img, d = canvas(20, 16)
+    d.ellipse((0, 1, 13, 14), outline=1, width=2)       # the record
+    d.ellipse((5, 6, 8, 9), fill=1)                     # its label
+    d.arc((8, 3, 18, 12), 305, 55, fill=1, width=2)     # the wave
+    return img
+
+
+def autodj_small():
+    # The Queue's mark on a row Auto DJ added (at the row's right, where a
+    # failed track's "!" goes; drawn dim): the same record and wave, 1 px.
+    img, d = canvas(12, 10)
+    d.ellipse((0, 1, 7, 8), outline=1)
+    d.rectangle((3, 4, 4, 5), fill=1)
+    d.arc((5, 1, 11, 8), 300, 60, fill=1)
+    return img
+
+
 # Now Playing's shuffle and repeat indicator (docs/QUEUE-MODES.md section
 # 4.2): small enough to sit under the "..." dots (18 x 4), 1 px strokes.
 # kShuffle (20 x 16, Shuffle all's) is too heavy there.
@@ -420,6 +442,8 @@ ICONS = [
     ("Gear", gear),
     ("Info", info),
     ("Vibrate", vibrate),
+    ("AutoDj", autodj),
+    ("AutoDjSmall", autodj_small),
     ("ShuffleSmall", lambda: from_art(SHUFFLE_SMALL)),
     ("RepeatSmall", lambda: from_art(REPEAT_SMALL)),
     ("RepeatOneSmall", lambda: from_art(REPEAT_ONE_SMALL)),

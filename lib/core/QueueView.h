@@ -66,6 +66,40 @@ Time upNextTime(const QueueModel& q, const DurationBook& book, uint32_t (*hintMs
 // the queue is matters more than how many are left. Returns buf.
 char* summary(uint32_t upNext, const Time& t, uint32_t position, uint32_t size, char* buf, size_t bufSize,
               bool withUpNext = true);
+// The Queue header's summary in a room (beside its title and the Edit
+// pill, uitext::headerSubRoom(): 169 px beside English's "Queue", 78
+// beside German's "Warteschlange"; or under the title): the first of its
+// forms that fits `room` px whole, in this order: the long one ("4 of 16 ·
+// 12 up next · 49 min"), the position and the time ("4 of 16 · 49 min"),
+// the position alone ("4 of 16": summary(0, Time{}, position, size, ...,
+// false)), and only when there is no position (nothing current) the count
+// and the time ("12 up next · 49 min"; with no position the first two say
+// the same). Where the queue is comes before how many are left (the
+// owner's call, 2026-10-12: with the count and the time before the
+// position alone, Russian at 100 of 120 with an hour next said "ещё 20 ·
+// 60 мин", where "100 из 120" fitted). `widths[k]`: form k's (Small), < 0
+// when it is empty (the position alone with no position). -1: none fits:
+// never one cut ("noch 9 · 3…").
+inline constexpr int kSummaryForms = 4;
+// The forms in the order they are tried.
+enum SummaryForm : int { kSummaryLong, kSummaryMid, kSummaryPosition, kSummaryShort };
+int pickSummary(const int (&widths)[kSummaryForms], int room);
+// Where the header draws it (QueuePage::header()): beside the title, the
+// first form that fits `beside` px (pickSummary()), while the position
+// alone fits there (the narrowest form that says where the queue is), or
+// there is none; else on the header's second line, under the title, the
+// first that fits `below` px there, in the same order (Header::subBelow:
+// the Folder page's two lines, in the same 36 px header; from the title's
+// x to 8 px before the pill: 235 px in English, 221 in German, whose
+// position alone doesn't fit beside "Warteschlange" once it takes six
+// digits, "100 von 120"; the count that would, "noch 20" with no time
+// known, would hide where the queue is); else none (form -1). English's
+// position alone always fits beside, so it never goes under its title.
+struct SummaryPick {
+  int form = -1;
+  bool below = false;  // on the second line
+};
+SummaryPick placeSummary(const int (&widths)[kSummaryForms], int beside, int below);
 
 // ---- what a Library add put in the queue ----
 //
@@ -74,34 +108,59 @@ char* summary(uint32_t upNext, const Time& t, uint32_t position, uint32_t size, 
 // entry's key is given when it joins and only grows, so everything added
 // since the first add after the last visit has a key at or above that
 // add's first key (a Play in between replaces the queue: clear()).
+//
+// Auto DJ's appends (the engine design's 2.14) come after the add with
+// higher keys, but aren't the listener's: `quiet` says which keys are its
+// (its DJ marks), and those are never marked, nor scrolled to.
+// Whether an entry (by its key) is Auto DJ's, not an add's.
+struct QuietKeys {
+  bool (*has)(uint32_t key, const void* ctx) = nullptr;
+  const void* ctx = nullptr;
+  bool of(uint32_t key) const { return has && has(key, ctx); }
+};
 class AddedMark {
 public:
   static constexpr uint32_t kNone = QueueModel::kNone;
+  using Quiet = QuietKeys;
   // An add; `firstKey` its first entry's key (keys are consecutive).
   void noteAdded(uint32_t firstKey) {
     if (since_ == kNone || firstKey < since_) since_ = firstKey;
   }
   void clear() { since_ = kNone; }
   bool pending() const { return since_ != kNone; }
-  bool marks(uint32_t key) const { return since_ != kNone && key != kNone && key >= since_; }
+  bool marks(uint32_t key, const Quiet& quiet = Quiet()) const {
+    return since_ != kNone && key != kNone && key >= since_ && !quiet.of(key);
+  }
   // The first position holding a marked entry (the one to scroll to), or
   // kNone (all undone or removed). A pass over the queue.
-  uint32_t firstPosition(const QueueModel& q) const;
+  uint32_t firstPosition(const QueueModel& q, const Quiet& quiet = Quiet()) const;
   uint32_t since() const { return since_; }
 
 private:
   uint32_t since_ = kNone;
 };
 
+// ---- the Queue tab's badge ----
+//
+// The badge flashes when "up next" grows (Ui's loop: a Library add, a
+// Play next), not for a change of mode (a shuffle toggle can grow it
+// with nothing added: UndoWatch::modeChanged()) and not for Auto DJ's own
+// appends (the engine design's 2.14: it adds one each time the last track
+// starts, and the badge would flash every track): `djAdds` of them since
+// the last pass. Growth beyond them (the listener's add in the same pass)
+// still flashes.
+bool badgeFlashes(uint32_t upNextWas, uint32_t upNextNow, bool contentChanged, bool modeChanged, uint32_t djAdds);
+
 // ---- the queue's cap (QueueModel::kMaxEntries: docs/QUEUE-MODES.md 15) ----
 //
-// `n` with its thousands grouped ("19,412"), as the cap's texts write
-// their counts. Returns buf.
+// `n` with its thousands grouped by commas ("19,412"): the console's and
+// the logs' way, whatever the UI's language (the UI's texts group as the
+// language does: uistr::grouped()). Returns buf.
 char* grouped(uint32_t n, char* buf, size_t size);
 // The toast of a Play, a Shuffle all or an add the cap cut short, `took`
 // of `asked`: "Shuffling 5,000 of 19,412: the queue holds 5,000 tracks",
 // "Playing ...", "Added 37 of 300: ...", "37 of 300 play next: ..."
-// (uitext's kCap* texts). Returns buf.
+// (the catalogue's queue_cap.* texts). Returns buf.
 enum class Capped : uint8_t { Shuffle, Play, Add, Next };
 char* cappedText(Capped what, uint32_t took, uint32_t asked, char* buf, size_t size);
 // The toast of an add (`what`: Next, Play next; anything else, + Queue)
@@ -109,7 +168,7 @@ char* cappedText(Capped what, uint32_t took, uint32_t asked, char* buf, size_t s
 // 15.8; `took` of `asked` went in): "Added 12 tracks: 12 played tracks made
 // way", "Plays next: 1 played track made way" (one track: its title gives
 // way to the news), "Added 37 of 300: 37 played tracks made way" (cut short
-// by the cap too). uitext's kPush* texts. Returns buf.
+// by the cap too). queue_cap.push_* and queue_cap.pushed. Returns buf.
 char* pushedText(Capped what, uint32_t took, uint32_t asked, uint32_t pushed, char* buf, size_t size);
 
 // ---- what an add did ----
@@ -133,42 +192,63 @@ struct AddOutcome {
 // `ok`: what the call returned.
 AddOutcome addOutcome(const QueueModel& q, uint32_t sizeBefore, uint32_t asked, bool next, bool ok);
 
-// ---- tracks that failed to play ----
+// ---- marked entries: tracks that failed to play ----
 //
-// The last few queue entries (by key) whose track couldn't be played, so
-// their rows keep a small amber "!" (spec §7). A ring: the oldest goes.
+// The last N queue entries (by key) whose rows carry a mark. A ring: the
+// oldest goes; a key in it already isn't added twice. Its size is its
+// user's: FailedKeys, the last 16 whose track couldn't be played, so their
+// rows keep a small amber "!" (spec §7).
+template <int N>
 class KeyRing {
 public:
-  static constexpr int kSize = 16;
-  void add(uint32_t key);
-  bool has(uint32_t key) const;
-  void clear() { n_ = 0; }
+  static constexpr int kSize = N;
+  void add(uint32_t key) {
+    if (key == QueueModel::kNone || has(key)) return;
+    k_[next_] = key;
+    next_ = (next_ + 1) % N;
+    if (n_ < N) ++n_;
+  }
+  bool has(uint32_t key) const {
+    for (int i = 0; i < n_; ++i) {
+      if (k_[i] == key) return true;
+    }
+    return false;
+  }
+  void clear() { n_ = next_ = 0; }
   int count() const { return n_; }
 
 private:
-  uint32_t k_[kSize] = {};
+  static_assert(N > 0, "a ring holds at least one key");
+  uint32_t k_[N] = {};
   int n_ = 0;
   int next_ = 0;
 };
+using FailedKeys = KeyRing<16>;
 
 // ---- the Undo toast, when the undo goes from under it ----
 //
 // The queue's one undo can go while a toast still offers it: a shuffle
-// toggle drops it (docs/QUEUE-MODES.md 2.6), and the console's qu uses it.
-// That toast's Undo would then answer "Nothing to undo", so it goes, and
-// the log says why. Ui calls pass() once a loop. Shuffle all's Play sets
-// the mode inside the edit (still undoable: its toast stays), so qu's undo
-// of it puts the mode back: a change of mode that is no toggle, which
-// undone() tells apart.
+// toggle drops it (docs/QUEUE-MODES.md 2.6), the console's qu uses it, and
+// Auto DJ's quiet append can drop it (QueueModel::appendQuiet(): the
+// snapshot at the cap or out of memory, an entry pushed out at a full
+// queue). That toast's Undo would then answer "Nothing to undo", so it
+// goes, and the log says why. Ui calls pass() once a loop. Shuffle all's
+// Play sets the mode inside the edit (still undoable: its toast stays), so
+// qu's undo of it puts the mode back: a change of mode that is no toggle,
+// which undone() tells apart.
 class UndoWatch {
 public:
-  enum class Gone : uint8_t { Stays, Toggle, Undone };
+  enum class Gone : uint8_t { Stays, Toggle, Undone, Dropped };
   // The console's qu undid the queue's last edit (since the last pass).
   void undone() { undone_ = true; }
+  // Auto DJ's pick dropped the undo (since the last pass): undoable() was
+  // an edit before addFromAutoDj() and None after.
+  void dropped() { dropped_ = true; }
   // `shuffled`: the mode now; `undoToast`: a toast offering Undo is up;
   // `undoable`: the queue's. Whether that toast goes, and why: Undone
-  // (qu undid since the last pass) before Toggle (the mode changed since
-  // the last pass); Stays while the undo is there, or nothing took it.
+  // (qu undid since the last pass), then Dropped (Auto DJ's pick took it),
+  // then Toggle (the mode changed since the last pass); Stays while the
+  // undo is there, or nothing took it.
   Gone pass(bool shuffled, bool undoToast, QueueModel::Edit undoable);
   // The last pass saw the mode change (a toggle, or an undo that put it
   // back): no Queue badge flash for it (Off can grow "up next" without
@@ -178,6 +258,7 @@ public:
 private:
   bool last_ = false;
   bool undone_ = false;
+  bool dropped_ = false;
   bool changed_ = false;
 };
 

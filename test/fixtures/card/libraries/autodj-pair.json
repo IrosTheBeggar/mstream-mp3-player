@@ -1,0 +1,58 @@
+{
+ "format": "MPDJ",
+ "file": "autodj-pair.bin",
+ "generation": 7,
+ "cardId": "0x5EEDC0DE0A1B2C3D",
+ "builtTime": 1790000000,
+ "tagsGeneration": 7,
+ "k": 3,
+ "selKind": 0,
+ "modelId": "synthetic-embedding",
+ "modelVersion": "1",
+ "metric": "cosine",
+ "license": "CC0-1.0",
+ "attribution": "synthetic test vectors",
+ "dim": 2,
+ "note": "Two title-less rows of one artist: neither has a song key, so each lists the other (a title taken from the file name would have made them one song). Each list: one entry, at level 0 (cosine -1).",
+ "rows": [
+  {
+   "hash": "aa000000000000000000000000000000",
+   "files": [
+    {
+     "path": "Generated Artist 32/01 - Sample Title 32.mp3",
+     "artists": [
+      "Generated Artist 32"
+     ],
+     "title": "   "
+    }
+   ],
+   "embedding": [
+    1.0,
+    0.0
+   ],
+   "note": "a title of three spaces: kept by METADATA 2.3.6, blank here",
+   "primaryPath": "Generated Artist 32/01 - Sample Title 32.mp3",
+   "artistNameKey": "generated artist 32",
+   "songKey": null
+  },
+  {
+   "hash": "bb000000000000000000000000000000",
+   "files": [
+    {
+     "path": "Generated Artist 32/02 - Sample Title 32.mp3",
+     "artists": [
+      "Generated Artist 32"
+     ]
+    }
+   ],
+   "embedding": [
+    -1.0,
+    0.0
+   ],
+   "note": "no title field",
+   "primaryPath": "Generated Artist 32/02 - Sample Title 32.mp3",
+   "artistNameKey": "generated artist 32",
+   "songKey": null
+  }
+ ]
+}

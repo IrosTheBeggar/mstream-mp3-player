@@ -3,20 +3,22 @@
 
 // Host tests for N10's portable glue (docs/METADATA.md 3.2.2, 3.2.3, 3.3;
 // milestone N10): the boot's decision (LibraryBoot), the transfer's root as
-// the boot reads it (CardRoot), and the card worker's jobs (CardJobs): the
-// validation walk, the compaction and the scan, one step at a time as the
-// firmware's card worker runs them, on fake FAT trees (test/support/
-// FakeFat.h) with real tagged files from the tag corpus, and the device's
-// records on a fake card (test/support/CutFs.h), then built into the index
-// as the boot would (LibraryBuilder). Sessions are boots: a new TagStore
-// over the same card, open()ed. The slices (2026-10-09): N11's synthetic
-// card walked a folder a step, several steps a hand-off on a fake clock;
-// the scan's rest a few files a hand-off; the loop's cut.
+// the boot reads it (CardRoot, with the AutoDJ index's entry it keeps), and
+// the card worker's jobs (CardJobs): the validation walk, the compaction
+// and the scan, one step at a time as the firmware's card worker runs
+// them, on fake FAT trees (test/support/FakeFat.h) with real tagged files
+// from the tag corpus, and the device's records on a fake card
+// (test/support/CutFs.h), then built into the index as the boot would
+// (LibraryBuilder). Sessions are boots: a new TagStore over the same card,
+// open()ed. The slices (2026-10-09): N11's synthetic card walked a folder
+// a step, several steps a hand-off on a fake clock; the scan's rest a few
+// files a hand-off; the loop's cut.
 // Run: pio test -e native
 #include <unity.h>
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <functional>
 #include <map>
 #include <memory>
@@ -313,10 +315,12 @@ struct Written {
   uint32_t fileBytes = 0, headerCrc = 0;
 };
 
-// A root naming `t` (generation `gen`), with `roots` as LIBR.
+// A root naming `t` (generation `gen`), with `roots` as LIBR, and `dj` as
+// its MPDJ entry when given.
 Written manifestFor(const std::vector<uint8_t>& t, uint32_t gen, uint64_t commitId,
-                    const std::vector<const char*>& roots = {}) {
-  cc::msmf::CompIn comp;
+                    const std::vector<const char*>& roots = {}, const cc::msmf::CompIn* dj = nullptr) {
+  cc::msmf::CompIn comps[2];
+  cc::msmf::CompIn& comp = comps[0];
   comp.kind = cc::kMagicMptg;
   comp.generation = gen;
   comp.fileBytes = static_cast<uint32_t>(t.size());
@@ -325,14 +329,15 @@ Written manifestFor(const std::vector<uint8_t>& t, uint32_t gen, uint64_t commit
   mptg::Info info;
   TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(mptg::openFile(c, src, &info)));
   comp.headerCrc = info.frame.headerCrc;
+  if (dj) comps[1] = *dj;
   cc::msmf::ManifestIn m;
   m.generation = gen;
   m.cardId = kCardId;
   m.flags = cc::msmf::kFinal;
   m.commitId = commitId;
   m.producer = "mstream-terminal test";
-  m.comps = &comp;
-  m.compCount = 1;
+  m.comps = comps;
+  m.compCount = dj ? 2 : 1;
   m.roots = roots.empty() ? nullptr : roots.data();
   m.rootCount = static_cast<uint32_t>(roots.size());
   struct V : cc::Sink {
@@ -547,6 +552,128 @@ void test_the_root() {
   // A plan on the card: the last transfer didn't finish.
   fs.put("/.mstream/pending.bin", std::vector<uint8_t>{1, 2, 3});
   TEST_ASSERT_TRUE(read()->plan);
+}
+
+// ---------------------------------------------------------------------------
+// The root's MPDJ entry (AUTODJ-INDEX.md 7.2): kept as COMP names it, only
+// while T is present; the file itself isn't opened (Auto DJ opens it and
+// checks it against the entry, msmf::companionMatches).
+// ---------------------------------------------------------------------------
+void test_the_roots_autodj_entry() {
+  CutFs fs;
+  TestCard card;
+  fill(card);
+  std::vector<uint8_t> scratch(512);
+  auto read = [&]() {
+    std::unique_ptr<cardroot::Root> r(new cardroot::Root());
+    cardroot::read(fs, scratch.data(), static_cast<uint32_t>(scratch.size()), r.get());
+    return r;
+  };
+  cc::msmf::CompIn dj;
+  dj.kind = cc::kMagicMpdj;
+  dj.generation = 0x29;  // a file carried from the commit before
+  dj.fileBytes = 10600000;
+  dj.headerCrc = 0xA1B2C3D4;
+  for (int i = 0; i < 16; ++i) dj.key[i] = static_cast<uint8_t>(0x40 + i);
+
+  // No root: none.
+  TEST_ASSERT_FALSE(read()->autoDj.present);
+  // A root naming T alone: none.
+  const std::vector<uint8_t> t5 = transferOf(card, 5);
+  fs.put(tagsName(5), t5);
+  fs.put("/.mstream/manifest.bin", manifestFor(t5, 5, 0xABC).bytes);
+  {
+    auto r = read();
+    TEST_ASSERT_TRUE(r->present);
+    TEST_ASSERT_FALSE(r->autoDj.present);
+    TEST_ASSERT_EQUAL_STRING("", r->autoDj.path);
+    TEST_ASSERT_EQUAL_UINT32(0, r->autoDj.entry.kind);
+  }
+  // T and an MPDJ: the entry and its path, the file not on the card (the
+  // root's read never opens it).
+  fs.put("/.mstream/manifest.bin", manifestFor(t5, 5, 0xABC, {"Lib A"}, &dj).bytes);
+  {
+    auto r = read();
+    TEST_ASSERT_TRUE(r->present);
+    TEST_ASSERT_EQUAL_UINT32(1, r->rootCount);
+    TEST_ASSERT_TRUE(r->autoDj.present);
+    TEST_ASSERT_EQUAL_STRING("/.mstream/autodj-00000029.bin", r->autoDj.path);
+    const cc::msmf::Comp& e = r->autoDj.entry;
+    TEST_ASSERT_EQUAL_HEX32(cc::kMagicMpdj, e.kind);
+    TEST_ASSERT_EQUAL_UINT32(0x29, e.generation);
+    TEST_ASSERT_EQUAL_UINT32(10600000, e.fileBytes);
+    TEST_ASSERT_EQUAL_HEX32(0xA1B2C3D4, e.headerCrc);
+    TEST_ASSERT_EQUAL_MEMORY(dj.key, e.key, 16);
+    // The entry as companionMatches takes it: the file whose header and
+    // selection signature are the entry's, and no other.
+    cc::Header h;
+    h.magic = cc::kMagicMpdj;
+    h.generation = 0x29;
+    h.fileBytes = 10600000;
+    h.headerCrc = 0xA1B2C3D4;
+    TEST_ASSERT_TRUE(cc::msmf::companionMatches(e, h, 0, dj.key));
+    uint8_t other[16];
+    std::memcpy(other, dj.key, 16);
+    other[15] ^= 1;
+    TEST_ASSERT_FALSE(cc::msmf::companionMatches(e, h, 0, other));
+    TEST_ASSERT_FALSE(cc::msmf::companionMatches(e, h, 0, nullptr));
+    h.headerCrc ^= 1;
+    TEST_ASSERT_FALSE(cc::msmf::companionMatches(e, h, 0, dj.key));
+  }
+  // A newer manifest.tmp names an MPDJ, its T not on the card: no transfer
+  // data, so no MPDJ either.
+  const std::vector<uint8_t> t6 = transferOf(card, 6);
+  cc::msmf::CompIn dj6 = dj;
+  dj6.generation = 6;
+  fs.put("/.mstream/manifest.tmp", manifestFor(t6, 6, 0xDEF, {}, &dj6).bytes);
+  {
+    auto r = read();
+    TEST_ASSERT_FALSE(r->present);
+    TEST_ASSERT_FALSE(r->autoDj.present);
+    TEST_ASSERT_EQUAL_STRING("", r->autoDj.path);
+  }
+  // Its T there: the winner's entry.
+  fs.put(tagsName(6), t6);
+  {
+    auto r = read();
+    TEST_ASSERT_TRUE(r->present);
+    TEST_ASSERT_EQUAL_UINT32(6, r->identity.generation);
+    TEST_ASSERT_TRUE(r->autoDj.present);
+    TEST_ASSERT_EQUAL_STRING("/.mstream/autodj-00000006.bin", r->autoDj.path);
+    TEST_ASSERT_EQUAL_UINT32(6, r->autoDj.entry.generation);
+  }
+  // T not the root's (another generation inside): none.
+  fs.put(tagsName(6), transferOf(card, 7));
+  {
+    auto r = read();
+    TEST_ASSERT_TRUE(r->why == cc::Why::Comp);
+    TEST_ASSERT_FALSE(r->autoDj.present);
+  }
+  // A root whose MPDJ entry names the wrong file (its name's digits not
+  // the entry's generation): the root isn't valid, so neither is T.
+  fs.remove("/.mstream/manifest.tmp");
+  std::vector<uint8_t> named = manifestFor(t5, 5, 0xABC, {}, &dj).bytes;
+  const std::string good = "autodj-00000029.bin";
+  auto at = std::search(named.begin(), named.end(), good.begin(), good.end());
+  TEST_ASSERT_TRUE(at != named.end());
+  at[14] = '8';  // "autodj-00000028.bin"
+  fs.put("/.mstream/manifest.bin", named);
+  {
+    auto r = read();
+    TEST_ASSERT_FALSE(r->present);
+    TEST_ASSERT_FALSE(r->autoDj.present);
+  }
+  // The same Root read again over a card without one: cleared.
+  fs.put("/.mstream/manifest.bin", manifestFor(t5, 5, 0xABC, {}, &dj).bytes);
+  std::unique_ptr<cardroot::Root> r(new cardroot::Root());
+  cardroot::read(fs, scratch.data(), static_cast<uint32_t>(scratch.size()), r.get());
+  TEST_ASSERT_TRUE(r->autoDj.present);
+  fs.put("/.mstream/manifest.bin", manifestFor(t5, 5, 0xABC).bytes);
+  cardroot::read(fs, scratch.data(), static_cast<uint32_t>(scratch.size()), r.get());
+  TEST_ASSERT_TRUE(r->present);
+  TEST_ASSERT_FALSE(r->autoDj.present);
+  TEST_ASSERT_EQUAL_STRING("", r->autoDj.path);
+  TEST_ASSERT_EQUAL_UINT32(0, r->autoDj.entry.kind);
 }
 
 // ---------------------------------------------------------------------------
@@ -1348,6 +1475,7 @@ int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_boots_decision);
   RUN_TEST(test_the_root);
+  RUN_TEST(test_the_roots_autodj_entry);
   RUN_TEST(test_a_hand_filled_card);
   RUN_TEST(test_new_to_the_index);
   RUN_TEST(test_the_loops_sources);

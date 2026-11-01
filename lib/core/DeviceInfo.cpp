@@ -4,34 +4,44 @@
 #include "DeviceInfo.h"
 
 #include <cstdio>
+#include <cstring>
 
 #include "ChipRevision.h"
 #include "LibraryText.h"
-#include "QueueView.h"
-#include "UiText.h"
+#include "UiStrings.h"
 
 namespace deviceinfo {
 
+using uistr::S;
+
 namespace {
 unsigned long kb(uint32_t bytes) { return static_cast<unsigned long>(bytes / 1024); }
+
+// The storage's word in the Library row: "SD" as it is; the flash and none
+// in the UI's language (LocalStorage::name() stays the log's word).
+const char* storageShown(const char* name) {
+  if (std::strcmp(name, "flash") == 0) return tr(S::device_info_storage_flash);
+  if (std::strcmp(name, "none") == 0) return tr(S::device_info_storage_none);
+  return name;
+}
 }  // namespace
 
 const char* label(Item i) {
   switch (i) {
-    case Item::Board: return "Board";
-    case Item::PowerChip: return "Power chip";
-    case Item::Imu: return "IMU";
-    case Item::Chip: return "Chip";
-    case Item::Cpu: return "CPU";
-    case Item::Flash: return "Flash";
-    case Item::Psram: return "PSRAM";
-    case Item::LastReset: return "Last reset";
-    case Item::Battery: return "Battery";
-    case Item::Library: return "Library";
-    case Item::RamFree: return "RAM free";
-    case Item::Uptime: return "Uptime";
-    case Item::Firmware: return "Firmware";
-    case Item::Build: return "Build";
+    case Item::Board: return tr(S::device_info_board);
+    case Item::PowerChip: return tr(S::device_info_power_chip);
+    case Item::Imu: return tr(S::device_info_imu);
+    case Item::Chip: return tr(S::device_info_chip);
+    case Item::Cpu: return tr(S::device_info_cpu);
+    case Item::Flash: return tr(S::device_info_flash);
+    case Item::Psram: return tr(S::device_info_psram);
+    case Item::LastReset: return tr(S::device_info_last_reset);
+    case Item::Battery: return tr(S::device_info_battery);
+    case Item::Library: return tr(S::device_info_library);
+    case Item::RamFree: return tr(S::device_info_ram_free);
+    case Item::Uptime: return tr(S::device_info_uptime);
+    case Item::Firmware: return tr(S::device_info_firmware);
+    case Item::Build: return tr(S::device_info_build);
   }
   return "";
 }
@@ -49,15 +59,16 @@ bool changes(Item i) {
 }
 
 void uptimeText(uint32_t s, char* out, size_t size) {
+  using uistr::Arg;
   const unsigned long m = s / 60, h = s / 3600, d = s / 86400;
   if (s < 60) {
-    snprintf(out, size, "%lu s", static_cast<unsigned long>(s));
+    trf(out, size, S::format_seconds, s);
   } else if (s < 3600) {
-    snprintf(out, size, "%lu min %02lu s", m, static_cast<unsigned long>(s % 60));
+    trf(out, size, S::format_minutes_seconds, m, Arg::digits(s % 60, 2));
   } else if (s < 86400) {
-    snprintf(out, size, "%lu h %02lu min", h, m % 60);
+    trf(out, size, S::format_hours_minutes, h, Arg::digits(m % 60, 2));
   } else {
-    snprintf(out, size, "%lu d %lu h", d, h % 24);
+    trf(out, size, S::format_days_hours, d, h % 24);
   }
 }
 
@@ -71,26 +82,31 @@ const char* value(Item i, const Facts& f, char* out, size_t size) {
     case Item::Chip: {
       char rev[8];
       chiprev::text(f.chipRevision, rev, sizeof(rev));
-      snprintf(out, size, "%s rev %s", f.chip, rev);
+      trf(out, size, S::device_info_chip_rev, f.chip, rev);
       break;
     }
-    case Item::Cpu: snprintf(out, size, "%u MHz", static_cast<unsigned>(f.cpuMhz)); break;
-    case Item::Flash:
-      snprintf(out, size, "%lu MB", static_cast<unsigned long>(f.flashBytes / (1024ul * 1024ul)));
-      break;
-    case Item::Psram: snprintf(out, size, "%luK (%luK free)", kb(f.psramBytes), kb(f.psramFree)); break;
+    case Item::Cpu: trf(out, size, S::format_mhz, f.cpuMhz); break;
+    case Item::Flash: trf(out, size, S::format_mb, f.flashBytes / (1024ul * 1024ul)); break;
+    case Item::Psram: trf(out, size, S::device_info_psram_value, kb(f.psramBytes), kb(f.psramFree)); break;
     case Item::LastReset: snprintf(out, size, "%s", f.lastReset); break;
     case Item::Battery: {
+      // "78%", "78%, 4.15 V" (and ", charging" after either); "not known".
+      char level[40];
       if (f.battery < 0) {
-        snprintf(out, size, "not known%s", f.charging ? ", charging" : "");
-        break;
-      }
-      int n = snprintf(out, size, "%d%%", f.battery);
-      if (f.batteryMv && n > 0 && static_cast<size_t>(n) < size) {
+        trf(level, sizeof(level), S::device_info_battery_unknown);
+      } else if (f.batteryMv) {
+        char pct[16];
+        trf(pct, sizeof(pct), S::format_percent, f.battery);
         const unsigned cv = (f.batteryMv + 5u) / 10u;  // centivolts, rounded
-        n += snprintf(out + n, size - n, ", %u.%02u V", cv / 100u, cv % 100u);
+        trf(level, sizeof(level), S::device_info_battery_volts, pct, uistr::fixed(cv, 2));
+      } else {
+        trf(level, sizeof(level), S::format_percent, f.battery);
       }
-      if (f.charging && n > 0 && static_cast<size_t>(n) < size) snprintf(out + n, size - n, ", charging");
+      if (f.charging) {
+        trf(out, size, S::about_battery_charging, level);
+      } else {
+        uistr::format(out, size, "{0}", level);
+      }
       break;
     }
     case Item::Library: {
@@ -98,25 +114,26 @@ const char* value(Item i, const Facts& f, char* out, size_t size) {
       // tab's Library row has it, and where the names come from in that
       // row's shortest form ("names from the files" with no tags read);
       // "updating..." behind the update's fence.
-      char n[16];
-      queueview::grouped(f.tracks, n, sizeof(n));
-      const int at = snprintf(out, size, "%s, %s %s", f.storage, n, f.tracks == 1 ? "track" : "tracks");
-      if (!f.tracks || at <= 0 || static_cast<size_t>(at) >= size) break;
+      char tracks[48];
+      trnf(tracks, sizeof(tracks), S::library_tracks_n, f.tracks, uistr::grouped(f.tracks));
+      const char* storage = storageShown(f.storage);
       librarytext::Sources src;
       src.transfer = f.fromTransfer;
       src.device = f.fromDevice;
       src.none = f.fromNone;
-      if (f.updating) {
-        snprintf(out + at, size - at, ", %s", uitext::kLibraryRowUpdating);
-      } else if (src.total()) {
-        char names[32];
+      if (f.tracks && f.updating) {
+        trf(out, size, S::device_info_library_more, storage, tracks, tr(S::library_row_updating));
+      } else if (f.tracks && src.total()) {
+        char names[64];
         librarytext::sourcesText(src, librarytext::kSourceForms - 1, names, sizeof(names));
-        snprintf(out + at, size - at, ", %s", names);
+        trf(out, size, S::device_info_library_more, storage, tracks, names);
+      } else {
+        trf(out, size, S::device_info_library_value, storage, tracks);
       }
       break;
     }
     case Item::RamFree:
-      snprintf(out, size, "%luK (min %luK, block %luK)", kb(f.ramFree), kb(f.ramMin), kb(f.ramBlock));
+      trf(out, size, S::device_info_ram_value, kb(f.ramFree), kb(f.ramMin), kb(f.ramBlock));
       break;
     case Item::Uptime: uptimeText(f.uptimeS, out, size); break;
     case Item::Firmware: snprintf(out, size, "%s", f.version); break;

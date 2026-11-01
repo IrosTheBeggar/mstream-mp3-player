@@ -45,6 +45,10 @@ SectorCache s_cache;
 SdCard s_card;
 CachedDrive s_drive(s_cache, s_card, nowUs);
 uint8_t* s_check = nullptr;  // verify's sector (PSRAM)
+// The free-space count's watch (watchWrites()): read and set under FatFs's
+// volume lock only.
+WriteWatch s_watch = nullptr;
+void* s_watchCtx = nullptr;
 
 // FatFs mounts the volume again by itself once the card stopped answering
 // (ff_sd_status()'s STA_NOINIT: a card pulled, or swapped, while on; the
@@ -74,6 +78,8 @@ DRESULT wRead(unsigned char pdrv, unsigned char* buff, uint32_t sector, unsigned
 DRESULT wWrite(unsigned char pdrv, const unsigned char* buff, uint32_t sector, unsigned count) {
   (void)pdrv;
   if (s_drive.foreign()) return RES_WRPRT;  // (FatFs refuses first: STA_PROTECT)
+  // (Before the write: one that fails may have changed the sectors too.)
+  if (s_watch) s_watch(sector, count, s_watchCtx);
   return s_drive.write(sector, buff, count) ? RES_OK : RES_ERROR;
 }
 
@@ -111,6 +117,11 @@ bool install(uint8_t pdrv) {
 }
 
 bool installed() { return s_installed; }
+
+void watchWrites(WriteWatch fn, void* ctx) {
+  s_watchCtx = ctx;
+  s_watch = fn;
+}
 
 void setEnabled(bool on) { s_drive.setEnabled(on); }
 

@@ -6,6 +6,7 @@
 #include <M5Unified.h>
 #include <Preferences.h>
 
+#include "app/NvsLater.h"
 #include "ui/Input.h"
 #include "ui/LcdLock.h"
 
@@ -207,18 +208,14 @@ void ScreenControl::apply(uint32_t nowMs) {
   if (!asleep_ && M5.Display.getBrightness() != power_.backlight()) M5.Display.setBrightness(power_.backlight());
 }
 
-void ScreenControl::save(const char* key, uint8_t value) {
-  Preferences p;
-  if (!p.begin(kPrefs, false)) return;
-  p.putUChar(key, value);
-  p.end();
-}
+// Queued: written once the taps rest (app/NvsLater), not under the finger.
+void ScreenControl::save(const char* key, uint8_t value) { nvslater::putU8(kPrefs, key, value); }
 
 void ScreenControl::setTimeout(int choice) {
   const int before = power_.timeout();
   power_.setTimeout(choice, millis());
   save(kKeyTimeout, static_cast<uint8_t>(power_.timeout()));
-  Serial.printf("[screen] off after: %s -> %s (saved)\n", ScreenPower::timeoutLabel(before),
+  Serial.printf("[screen] off after: %s -> %s (saved once the taps rest)\n", ScreenPower::timeoutLabel(before),
                 ScreenPower::timeoutLabel(power_.timeout()));
 }
 
@@ -227,7 +224,8 @@ void ScreenControl::setBrightness(int choice) {
   power_.setBrightness(choice);
   power_.overrideBacklight(0);  // the listener's choice wins over a console Pb
   save(kKeyBrightness, static_cast<uint8_t>(power_.brightness()));
-  Serial.printf("[screen] brightness: %s (%u) -> %s (%u) (saved)\n", ScreenPower::brightnessLabel(before),
+  Serial.printf("[screen] brightness: %s (%u) -> %s (%u) (saved once the taps rest)\n",
+                ScreenPower::brightnessLabel(before),
                 (unsigned)ScreenPower::brightnessLevel(before), ScreenPower::brightnessLabel(power_.brightness()),
                 (unsigned)ScreenPower::brightnessLevel(power_.brightness()));
   // (Applied by the next step(), at once if the screen is bright.)

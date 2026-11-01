@@ -539,6 +539,12 @@ LibraryUpdate::Out LibraryUpdate::update(const In& in) {
         o.wait = Wait::SafePoint;
         break;
       }
+      // Auto DJ's pick first (its join or reopen takes a second or so; the
+      // fence would take the index it joins and the queue it adds to).
+      if (in.autoDjOwed) {
+        o.wait = Wait::AutoDj;
+        break;
+      }
       // The worker's task, made now if it ended (3 s after its last step):
       // no internal RAM for its stack, and the step waits here, the index
       // as it is, never behind a fence whose build can't start.
@@ -580,8 +586,23 @@ LibraryUpdate::Out LibraryUpdate::update(const In& in) {
       }
       r.alsoFreed = in.alsoFreed;
       r.tableBytes = static_cast<size_t>(trackSlots()) * sizeof(LibraryIndex::Track);
-      room_ = r;
       verdict_ = roomToBuild(r);
+      // The new table's block, short only while memory that goes with the
+      // step anyway is held next to the largest one (setGiveBack()): given
+      // back, the heap measured again, checked again.
+      if (verdict_.shortOf == Short::Table && !deferAsked_ && giveBack_) {
+        size_t free = r.psramFree, largest = r.psramLargest;
+        const size_t given = giveBack_(giveBackCtx_, &free, &largest);
+        if (given) {
+          step_.givenBack = given;
+          step_.largestBefore = r.psramLargest;
+          r.psramFree = free;
+          r.psramLargest = largest;
+          r.alsoFreed -= std::min(given, r.alsoFreed);  // (in the free bytes now)
+          verdict_ = roomToBuild(r);
+        }
+      }
+      room_ = r;
       deferForced_ = deferAsked_;
       if (deferAsked_ || verdict_.shortOf != Short::None) {
         // The next boot builds before the UI, on a fresh heap (3.2.2's

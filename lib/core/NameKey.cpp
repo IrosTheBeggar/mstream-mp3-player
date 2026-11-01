@@ -349,12 +349,21 @@ size_t displayJoin(const char* list, size_t n, char* out, size_t cap) {
 }
 
 uint32_t artistKey(const char* list, size_t n) {
-  const char* sep = static_cast<const char*>(std::memchr(list, kSeparator, n));
-  Out o;
-  o.hashing = true;
-  o.h = 0xCBF29CE484222325ull;
-  keyInto(list, sep ? static_cast<size_t>(sep - list) : n, &o);
-  return o.len ? static_cast<uint32_t>(o.h) : 0;
+  // The first value that isn't blank: a blank one names no one.
+  for (size_t start = 0; list && start <= n;) {
+    const char* sep = static_cast<const char*>(std::memchr(list + start, kSeparator, n - start));
+    const size_t end = sep ? static_cast<size_t>(sep - list) : n;
+    if (!blank(list + start, end - start)) {
+      Out o;
+      o.hashing = true;
+      o.h = 0xCBF29CE484222325ull;
+      keyInto(list + start, end - start, &o);
+      return o.len ? static_cast<uint32_t>(o.h) : 0;
+    }
+    if (!sep) break;
+    start = end + 1;
+  }
+  return 0;
 }
 
 }  // namespace namekey

@@ -86,6 +86,20 @@ void UsbViz::apply(const HostLink::Out& o, uint32_t nowUs) {
     case HostLink::Event::Log:
       dance_.setHostLog(o.level);
       break;
+    // The board's questions (app/HostQuery writes their answers).
+    case HostLink::Event::Status:
+      query_.status();
+      return;
+    case HostLink::Event::Count: {
+      const uint32_t nowMs = millis();
+      if (const char* why = query_.count(nowMs)) apply(link_.refuse(nowMs, HostLink::kBusy, "count", why), nowUs);
+      return;
+    }
+    case HostLink::Event::Identify:
+      if (const char* why = query_.identify(o.label)) {
+        apply(link_.refuse(millis(), HostLink::kBusy, "identify", why), nowUs);
+      }
+      return;
     case HostLink::Event::None:
       break;
   }

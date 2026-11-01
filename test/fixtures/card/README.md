@@ -10,15 +10,20 @@ U18, proposed). The player's code stays GPL-3.0-or-later.
 The shared fixtures of docs/METADATA.md 2.17, made by
 `tools/card_fixtures.py` (a second implementation of the contract, apart
 from `lib/core/CardContract*`) and frozen: `python tools/card_fixtures.py
---check` fails if a file here differs from what it makes. Made-up names
-only, synthetic embeddings.
+--check` fails if a file here differs from what it makes, or if a file
+here isn't one it makes. Writing them (`python tools/card_fixtures.py`)
+deletes any such file, `.gitattributes` excepted, so keep work in progress
+elsewhere. Made-up names only, synthetic embeddings.
 
 - `vectors.json`: the vectors of 2.18 as data. `who` says which side a
   group binds when it isn't both.
 - `libraries/*.json`: library descriptions, the input of a writer: every
   value a writer would otherwise choose is given (ids, times,
-  generations). Tag values are raw lists: each writer applies 2.3.6 and
-  sets TRUNCATED; flags, `known` and the enums are as given. Integers above
+  generations). The tags descriptions' tag values are raw lists: each
+  writer applies 2.3.6 and sets TRUNCATED; flags, `known` and the enums are
+  as given. The AutoDJ descriptions' titles and artists are instead an MPTG
+  record's values as stored, 2.3.6 already applied: an MPDJ writer cuts,
+  replaces and drops nothing in them (AUTODJ-INDEX.md 13.2). Integers above
   2^53 are hex strings. A manifest names its companions by file; their
   generation, length, header CRC and (MPDJ) selection signature come from
   the golden companion.
@@ -28,11 +33,23 @@ only, synthetic embeddings.
 - `hardening/`: files broken in one way each, with valid CRCs (2.17, item
   4), at least one for every check of 2.4.3, so a reader that skips a
   check fails on its file. `index.json` lists each with the reader's uses
-  (`all`: every section; `device`: FOLD, RECS and STRS only), whether it
-  must read as absent or present, the check it breaks, and the player's
-  reason code. A `present` file with `same` reads as the same records as
-  that golden file.
+  (`all`: every section; `device`: MPTG's FOLD, RECS and STRS, MPDJ's
+  DJRF, DJPH and STRS), whether it must read as absent or present, the
+  check it breaks, and the player's reason code. A `present` file with
+  `same` reads as the same records as that golden file (MPDJ: every row's
+  filter record and used slot entries, every DJPH hash's row, the five
+  strings). An MPDJ file's `slot` says how one slot reads when the device
+  reads it alone (`damaged`: its CRC fails; `broken`: a good CRC over a
+  bad list).
 
-The player's tests: `test/test_card_contract` (the vectors) and
+The AutoDJ index (MPDJ v2) is specified apart, in docs/AUTODJ-INDEX.md;
+its fixtures (section 13 there) come from `tools/mpdj.py`, which
+card_fixtures.py imports. `libraries/autodj-mid.f32` holds the vectors
+that `autodj-mid.json` and `autodj-mid-default.json` name (raw
+little-endian f32, 16 a row, in the descriptions' row order).
+
+The player's tests: `test/test_card_contract` (the vectors),
 `test/test_card_files` (the goldens, round trips, the hardening files,
-truncation at every byte and every flipped bit).
+truncation at every byte and every flipped bit), `test/test_card_autodj`
+(the AutoDJ index's own rules) and `test/test_name_key` (the keys the
+AutoDJ descriptions give).

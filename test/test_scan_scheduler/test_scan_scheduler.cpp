@@ -6,7 +6,8 @@
 // while playing; one step at a time; covers first, the update step's build
 // before everything; each yield (input, the ring, an underrun, a long decode
 // pass, a track change, a seek, Bluetooth) holding the background work for
-// exactly its window, in its order; the battery floor and its hysteresis;
+// exactly its window, in its order; a list "moving" in the dark holding
+// nothing (2026-10-14); the battery floor and its hysteresis;
 // the jobs' and the scan's sources' order; millis()'s wrap; the build after a
 // walk (U11); a slice of the walk or the scan cut, and dropped to 0, by any
 // wait (2026-10-09); each step's units; and a random run against an
@@ -125,7 +126,7 @@ void test_one_step_at_a_time() {
   S s;
   S::In in = base(0);
   in.cover = in.build = in.save = in.walk = true;
-  const J kinds[] = {J::Cover, J::Build, J::Save, J::Walk, J::Compact, J::Scan, J::DjCheck};
+  const J kinds[] = {J::Cover, J::Build, J::Save, J::Walk, J::Compact, J::Scan};
   for (J running : kinds) {
     for (int moving = 0; moving < 2; ++moving) {
       for (int dark = 0; dark < 2; ++dark) {
@@ -140,17 +141,17 @@ void test_one_step_at_a_time() {
         // moves (Thumbs' rule); the build stays level with it (the listener
         // waits for it); the scan's slices, a compaction and the save are
         // level with it only while the screen is dark (3.3.9; the 2026-10-09
-        // device run); the DJNB check is below it.
-        const bool darkOnes = running == J::Scan || running == J::Compact || running == J::Save;
+        // device run). A list "moving" in the dark holds nothing
+        // (listHolds(): none is seen moving).
+        const bool held = moving == 1 && dark == 0;
         const uint8_t want = running == J::Build                         ? S::kHighPriority
-                             : running == J::Cover || running == J::Walk ? (moving ? S::kLowPriority : S::kHighPriority)
-                             : darkOnes                                  ? (dark && !moving ? S::kHighPriority
-                                                                                            : S::kLowPriority)
+                             : running == J::Cover || running == J::Walk ? (held ? S::kLowPriority : S::kHighPriority)
+                             : dark                                      ? S::kHighPriority
                                                                          : S::kLowPriority;
         TEST_ASSERT_EQUAL_UINT8(want, o.priority);
         TEST_ASSERT_EQUAL_UINT8(want, S::priorityOf(running, moving == 1, dark == 1));
         // A moving list cuts a slice (the walk's, the scan's) after its unit.
-        TEST_ASSERT_EQUAL(moving == 1 && (running == J::Walk || running == J::Scan), o.cut);
+        TEST_ASSERT_EQUAL(held && (running == J::Walk || running == J::Scan), o.cut);
       }
     }
   }
@@ -186,23 +187,15 @@ void test_one_step_at_a_time() {
   o = t.update(h);
   TEST_ASSERT_EQUAL(J::Save, o.job);
   TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);
-  // The DJNB check stays below it.
-  S u;
-  S::In d = base(0);
-  d.dark = true;
-  d.restPending = false;
-  d.djCheck = true;
-  o = u.update(d);
-  TEST_ASSERT_EQUAL(J::DjCheck, o.job);
-  TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, o.priority);
 }
 
 // A slice of the walk or the scan under way (CardJobs, 2026-10-09) is cut
 // after its unit, and dropped below the loop, by whatever would hold the
 // next one: input, the ring, an underrun, a long decode pass, a track
-// change, a seek, Bluetooth, a moving list, and for the scan the battery
-// floor. So a wait takes effect within a unit and a pass, as with one-unit
-// steps. A cover, a compaction, the build and the save aren't slices.
+// change, a seek, Bluetooth, a moving list (the screen lit: a list moves
+// only there), and for the scan the battery floor. So a wait takes effect
+// within a unit and a pass, as with one-unit steps. A cover, a compaction,
+// the build and the save aren't slices.
 void test_a_slice_is_cut_by_any_wait() {
   struct Cause {
     const char* name;
@@ -215,7 +208,10 @@ void test_a_slice_is_cut_by_any_wait() {
       {"track change", [](S::In& in) { in.decoderAtEnd = true; }},
       {"seek", [](S::In& in) { in.seeking = true; }},
       {"bluetooth", [](S::In& in) { in.btSetup = true; }},
-      {"list", [](S::In& in) { in.listMoving = true; }},
+      {"list", [](S::In& in) {
+         in.listMoving = true;
+         in.dark = false;
+       }},
   };
   const J kinds[] = {J::Walk, J::Scan, J::Cover, J::Compact, J::Build, J::Save};
   for (const Cause& c : causes) {
@@ -479,6 +475,87 @@ void test_input_and_lists() {
   TEST_ASSERT_EQUAL(J::Cover, s.update(in).job);  // (no quiet time after a list)
 }
 
+// A list "moving" while the screen is dark holds nothing (listHolds()):
+// none is seen moving then, whatever its page owes the wake. On 2026-10-14
+// the library update went live with the screen off on Library > Albums;
+// the list, reloaded in the dark, owed its frame (ListView::animating())
+// until the screen woke, and the save of library.idx waited for "a list
+// moving" 260 s (built 2055.0, the wake 2314.6, saved 2319.9). The same
+// save with the same list in the dark: handed at once, level with the
+// loop; the background work too, and a slice under way isn't cut.
+void test_a_dark_screen_holds_nothing_for_a_list() {
+  // The device's case: the update step live (its save asked, the worker
+  // held for it), nothing playing, the screen off, the list "animating".
+  S s;
+  S::In in = base(0);
+  in.playing = false;
+  in.restPending = false;
+  in.updating = true;
+  in.save = true;
+  in.dark = true;
+  in.listMoving = true;
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, firstStart(s, 0, 260000, in, J::Save),
+                                   "the save in the dark, a list owing its frame");
+  in.nowMs = 10;
+  in.running = J::Save;
+  S::Out o = s.update(in);
+  TEST_ASSERT_EQUAL(W::Step, o.wait);
+  TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);  // (dark: level with the loop)
+  TEST_ASSERT_EQUAL_UINT64(0, s.waitedMs(W::List));
+  // Lit, the same list moving: the save waits for it (frames first), and
+  // starts once it settles.
+  S lit;
+  in.running = J::None;
+  in.dark = false;
+  W seen = W::None;
+  TEST_ASSERT_EQUAL_UINT32(UINT32_MAX, firstStart(lit, 0, 10000, in, J::Save, &seen));
+  TEST_ASSERT_EQUAL(W::List, seen);
+  TEST_ASSERT_TRUE(lit.waitedMs(W::List) >= 9990);
+  in.listMoving = false;
+  TEST_ASSERT_EQUAL_UINT32(10010, firstStart(lit, 10010, 20000, in, J::Save));
+  // The background work in the dark, the list "moving": the walk, a
+  // compaction, the scan, each handed; a slice under way not cut, at the
+  // dark's priority; the screen lit, the same list cuts it.
+  S bg;
+  S::In b = base(0);
+  b.dark = true;
+  b.listMoving = true;
+  b.walk = true;
+  o = bg.update(b);
+  TEST_ASSERT_EQUAL(J::Walk, o.job);
+  TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);
+  b.walk = false;
+  b.compact = true;
+  b.nowMs = 10;
+  o = bg.update(b);
+  TEST_ASSERT_EQUAL(J::Compact, o.job);
+  TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);
+  b.compact = false;
+  b.nowMs = 20;
+  o = bg.update(b);
+  TEST_ASSERT_EQUAL(J::Scan, o.job);
+  TEST_ASSERT_EQUAL(Src::Rest, o.source);
+  for (J running : {J::Walk, J::Scan}) {
+    b.running = running;
+    b.dark = true;
+    b.nowMs += 10;
+    o = bg.update(b);
+    TEST_ASSERT_FALSE(o.cut);
+    TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);
+    b.dark = false;
+    b.nowMs += 10;
+    o = bg.update(b);
+    TEST_ASSERT_TRUE(o.cut);
+    TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, o.priority);
+  }
+  TEST_ASSERT_EQUAL_UINT64(0, bg.waitedMs(W::List));
+  // The rule.
+  TEST_ASSERT_FALSE(S::listHolds(false, false));
+  TEST_ASSERT_TRUE(S::listHolds(true, false));
+  TEST_ASSERT_FALSE(S::listHolds(true, true));
+  TEST_ASSERT_FALSE(S::listHolds(false, true));
+}
+
 // Several at once: the first in the order holds, and the next shows as each
 // window ends (shortened windows, so they end in order).
 void test_the_order_of_the_yields() {
@@ -534,9 +611,9 @@ void test_the_order_of_the_yields() {
   TEST_ASSERT_EQUAL(J::Scan, s.update(in).job);
 }
 
-// U13: below 10% off USB the scan and the DJNB check pause; 10-15% keeps
-// the state; above 15%, or USB, lets them go. A reading not known keeps it.
-// The rest doesn't stop for it.
+// U13: below 10% off USB the scan pauses; 10-15% keeps the state; above
+// 15%, or USB, lets it go. A reading not known keeps it. The rest doesn't
+// stop for it.
 void test_the_battery_floor() {
   S s;
   S::In in = base(0);
@@ -575,13 +652,10 @@ void test_the_battery_floor() {
   o = s.update(in);
   TEST_ASSERT_TRUE(o.batteryReleased);
   TEST_ASSERT_EQUAL(J::Scan, o.job);
-  // Held: the DJNB check too; the walk, a compaction, the save, a cover and
-  // the build go on.
+  // Held: the walk, a compaction, the save, a cover and the build go on.
   in.usb = false;
   s.update(in);
   TEST_ASSERT_TRUE(s.batteryLow());
-  in.restPending = false;
-  in.djCheck = true;
   TEST_ASSERT_EQUAL(W::Battery, s.update(in).wait);
   struct {
     bool S::In::*flag;
@@ -590,13 +664,12 @@ void test_the_battery_floor() {
             {&S::In::cover, J::Cover}, {&S::In::build, J::Build}};
   for (const auto& g : go) {
     S::In one = in;
-    one.restPending = true;
     one.*(g.flag) = true;
     o = s.update(one);
     TEST_ASSERT_EQUAL(g.job, o.job);
   }
   // The playing track's file is the scan's too: held.
-  in.djCheck = false;
+  in.restPending = false;
   in.playingPending = true;
   TEST_ASSERT_EQUAL(W::Battery, s.update(in).wait);
 }
@@ -616,7 +689,7 @@ void test_covers_come_first() {
   in.seeking = true;
   in.btSetup = true;
   in.battery = 3;
-  in.cover = in.save = in.walk = in.compact = in.djCheck = true;
+  in.cover = in.save = in.walk = in.compact = true;
   in.playingPending = true;
   S::Out o = s.update(in);
   TEST_ASSERT_EQUAL(J::Cover, o.job);
@@ -699,12 +772,12 @@ void test_the_update_step() {
   TEST_ASSERT_EQUAL(J::Scan, s.update(in).job);
 }
 
-// One job at a time, the first with work: the walk, a compaction, the scan,
-// the DJNB check; the scan's file from 3.3.3's sources in order.
+// One job at a time, the first with work: the walk, a compaction, the scan;
+// the scan's file from 3.3.3's sources in order.
 void test_the_order_of_the_work() {
   S s;
   S::In in = base(0);
-  in.walk = in.compact = in.djCheck = true;
+  in.walk = in.compact = true;
   in.playingPending = in.queueNextPending = in.queueSoonPending = in.shownPending = true;
   const J jobs[] = {J::Walk, J::Compact, J::Scan};
   for (J j : jobs) {
@@ -727,12 +800,9 @@ void test_the_order_of_the_work() {
       default: in.restPending = false; break;
     }
   }
-  S::Out o = s.update(in);
-  TEST_ASSERT_EQUAL(J::DjCheck, o.job);
-  TEST_ASSERT_EQUAL(Src::None, o.source);
-  in.djCheck = false;
-  o = s.update(in);
+  const S::Out o = s.update(in);
   TEST_ASSERT_EQUAL(J::None, o.job);
+  TEST_ASSERT_EQUAL(Src::None, o.source);
   TEST_ASSERT_EQUAL(W::None, o.wait);
 }
 
@@ -917,15 +987,17 @@ struct Model {
     else if (within(t, trackAt, c.trackSettleMs)) yield = W::TrackChange;
     else if (within(t, seekAt, c.seekSettleMs)) yield = W::Seek;
     else if (within(t, btAt, c.btSettleMs)) yield = W::Bluetooth;
+    // A list moves only on a lit screen.
+    const bool moving = in.listMoving && !in.dark;
     if (in.running != J::None) {
       o.wait = W::Step;
       const bool slice = in.running == J::Walk || in.running == J::Scan;
-      o.cut = slice && (in.listMoving || yield != W::None || (in.running == J::Scan && low));
+      o.cut = slice && (moving || yield != W::None || (in.running == J::Scan && low));
       if (o.cut) o.priority = 0;
       else if (in.running == J::Build) o.priority = 1;
-      else if (in.running == J::Cover || in.running == J::Walk) o.priority = in.listMoving ? 0 : 1;
+      else if (in.running == J::Cover || in.running == J::Walk) o.priority = moving ? 0 : 1;
       else if (in.running == J::Scan || in.running == J::Compact || in.running == J::Save)
-        o.priority = in.dark && !in.listMoving ? 1 : 0;
+        o.priority = in.dark ? 1 : 0;
       else o.priority = 0;
       return o;
     }
@@ -934,9 +1006,9 @@ struct Model {
       o.priority = 1;
       return o;
     }
-    const bool bg = in.walk || in.compact || scan || in.djCheck;
+    const bool bg = in.walk || in.compact || scan;
     if (!in.cover && !in.save && !bg) return o;
-    if (in.listMoving) {
+    if (moving) {
       o.wait = W::List;
       return o;
     }
@@ -945,14 +1017,12 @@ struct Model {
       o.priority = 1;
       return o;
     }
-    J next = in.save ? J::Save : in.updating ? J::None : in.walk ? J::Walk : in.compact ? J::Compact
-                                                     : scan     ? J::Scan
-                                                                : J::DjCheck;
+    J next = in.save ? J::Save : in.updating ? J::None : in.walk ? J::Walk : in.compact ? J::Compact : J::Scan;
     if (next == J::None) {
       o.wait = W::Updating;
       return o;
     }
-    const W w = (next == J::Scan || next == J::DjCheck) && low ? W::Battery : yield;
+    const W w = next == J::Scan && low ? W::Battery : yield;
     if (w != W::None) {
       o.wait = w;
       return o;
@@ -1004,7 +1074,6 @@ void test_random_against_a_model() {
     if (chance(1000)) in.cover = chance(40000);
     if (chance(300)) in.walk = chance(20000);
     if (chance(300)) in.compact = chance(20000);
-    if (chance(300)) in.djCheck = chance(20000);
     if (chance(500)) in.playingPending = chance(20000);
     if (chance(500)) in.queueNextPending = chance(30000);
     if (chance(500)) in.queueSoonPending = chance(40000);
@@ -1035,8 +1104,10 @@ void test_random_against_a_model() {
     if (got.cut) ++cuts;
     if (got.job != J::None) {
       TEST_ASSERT_EQUAL(J::None, in.running);
-      if ((got.job == J::Scan || got.job == J::DjCheck)) TEST_ASSERT_FALSE(s.batteryLow());
-      if (got.job == J::Scan) ++scans;
+      if (got.job == J::Scan) {
+        TEST_ASSERT_FALSE(s.batteryLow());
+        ++scans;
+      }
       if (got.job == J::Cover) ++covers;
       if (got.job == J::Build) ++builds;
       in.running = got.job;
@@ -1065,6 +1136,7 @@ int main(int, char**) {
   RUN_TEST(test_long_decode_passes);
   RUN_TEST(test_bluetooth);
   RUN_TEST(test_input_and_lists);
+  RUN_TEST(test_a_dark_screen_holds_nothing_for_a_list);
   RUN_TEST(test_the_order_of_the_yields);
   RUN_TEST(test_the_battery_floor);
   RUN_TEST(test_covers_come_first);

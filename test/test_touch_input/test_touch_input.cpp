@@ -547,7 +547,7 @@ void test_calibration_run_on_the_lab_panel() {
     TEST_ASSERT_FLOAT_WITHIN_MESSAGE(8.0f, lab.map(r), fitted.x.map(r), msg);
   }
   char line[64];
-  touchcheck::errorText("Now", touchcheck::Error{42.4f, 20.6f}, line, sizeof(line));
+  touchcheck::errorText(touchcheck::Table::InUse, touchcheck::Error{42.4f, 20.6f}, line, sizeof(line));
   TEST_ASSERT_EQUAL_STRING("Now: up to 42 px off, average 21", line);
 }
 

@@ -24,12 +24,12 @@
 //     slice of the walk, and while the screen is dark a slice of the scan,
 //     a compaction and the update step's save;
 //   - 0 (the idle task's) for the rest (the scan, a compaction and the
-//     save while the screen is lit; the DJNB check): the SD driver's reads
-//     busy-wait the CPU, so at the loop's priority a step time-slices with
-//     the loop for its whole length; at 0 the loop preempts it whenever it
-//     is ready, and it shares the rest with the idle task (half of it: the
-//     2026-10-09 device run's saves took 4.5-9.9 s on the worker at 0
-//     against 2.2 s on the loop at the boot).
+//     save while the screen is lit): the SD driver's reads busy-wait the
+//     CPU, so at the loop's priority a step time-slices with the loop for
+//     its whole length; at 0 the loop preempts it whenever it is ready, and
+//     it shares the rest with the idle task (half of it: the 2026-10-09
+//     device run's saves took 4.5-9.9 s on the worker at 0 against 2.2 s on
+//     the loop at the boot).
 // Its priority follows the step under way (a list that starts moving drops
 // a cover to 0; a list or a wait drops a slice to 0, and ends it after its
 // unit: ScanScheduler's Out::cut; the screen lit drops a compaction or the

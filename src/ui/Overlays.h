@@ -25,7 +25,12 @@
 //           next" small over the name, and the buttons as icons (Undo's
 //           arrow, View as the Queue tab's icon), so the name has 216 px
 //           (on one line View and Undo left it ~50 px: "Plays next: Aer…";
-//           two lines beside the word buttons, 168). It stays 36 px, out
+//           two lines beside the word buttons, 168). The icons too when a
+//           button's label doesn't fit its pill (German's "Rückgängig":
+//           uitext::toastIcons()). The two lines go by the rows they ink
+//           (uitext::toastLines()), never into each other or over the
+//           card's edge: Chinese and Japanese are 16 px in the Small role
+//           too. It stays 36 px, out
 //           of the list's hardware-scrolled band (from y 72), which would
 //           carry a taller toast's lower rows away with the list. The
 //           header's ‹ (x < 56), and its pill when the toast has no
@@ -122,16 +127,28 @@ public:
   const char* text() const { return text_; }
 
 private:
+  // Two lines: where they go (uitext::toastLines()); false: they don't fit
+  // without touching (one line, cut, instead).
+  bool placeLines();
   char text_[128] = "";
   bool undo_ = false;
   bool view_ = false;
   bool up_ = false;
-  bool compact_ = false;  // two lines, the buttons as icons
+  bool compact_ = false;  // two lines ("what" over the rest), the buttons as icons
+  bool icons_ = false;    // the buttons as icons (two lines, or a label too wide for its pill)
   bool sleep_ = false;    // the sleep timer's (showSleep())
   bool idle_ = false;     // the idle warning (showIdle())
   uint32_t idleSeconds_ = 0;
   uint16_t accent_ = 0;
   uint32_t untilMs_ = 0;
+  // Two lines (placeLines()): the rest in Small (too wide in Body, or too
+  // tall under the what), the card's rows (uitext::kToastBoxTop or
+  // kToastTallBoxTop) and outline (none for two lines of 17-row CJK), the
+  // lines' centres.
+  bool nameSmall_ = false;
+  int8_t boxTop_ = 2, boxH_ = 32;
+  bool border_ = true;
+  int8_t y1_ = 0, y2_ = 0;
 };
 
 class Hud {
@@ -154,7 +171,7 @@ private:
   Kind kind_ = Kind::Volume;
   int volume_ = 0;
   bool bluetooth_ = false;
-  char line_[48] = "";
+  char line_[96] = "";
   bool up_ = false;
   uint32_t untilMs_ = 0;
 };
@@ -191,11 +208,16 @@ public:
 
 private:
   static constexpr int kCross = -3;  // pressed_: the ✕ pill
+  // The whole panel; the title row's text and pill alone; row i alone
+  // (over the card as rendered: a press look costs one row, not a render
+  // of every row, which was 34 ms on the device).
   void render();
+  void renderTitle();
+  void renderRow(int i);
   void pushRow(int i);
   void pushTitle();
-  char title_[64] = "";
-  char rows_[kMaxRows][32] = {};
+  char title_[96] = "";
+  char rows_[kMaxRows][64] = {};
   char details_[kMaxRows][96] = {};
   int n_ = 0;
   int y0_ = 240;
@@ -234,11 +256,17 @@ public:
 private:
   static constexpr int kCross = -3;
   int pillAt(const InputEvent& e) const;
+  // Pill `id`'s place in the panel (false: none, or not shown now).
+  bool pillRect(int id, int& x, int& y, int& w) const;
   void render();
+  void renderTitle();
+  void renderPill(int id);
+  // Pill `id` (or the close pill) drawn again alone: its press look.
+  void drawPill(int id);
   int current_ = -1;
   bool running_ = false;
   bool extend_ = false;
-  char state_[40] = "";
+  char state_[96] = "";
   int pressed_ = -1;
   bool up_ = false;
   uint16_t accent_ = 0;
@@ -269,7 +297,14 @@ private:
   enum Part : int8_t { None = -1, Minus, Slider, Plus };
   Part partAt(const InputEvent& e) const;
   static int valueAt(int x);
+  // The whole panel; its top row (the output, the value) and its controls'
+  // row (− + and the slider) alone, over the card as rendered.
   void render();
+  void renderTop();
+  void renderControls();
+  // The controls' row rendered and pushed again (the top row too when
+  // `value`): a press look, a step, the knob following a finger.
+  void drawPart(bool value);
   bool bluetooth_ = false;
   char name_[32] = "";
   int volume_ = 0;
@@ -301,8 +336,11 @@ public:
 private:
   int cellAt(const InputEvent& e) const;
   void renderGrid();
+  void renderCell(int i);
+  // Cell i drawn again alone: its press look.
+  void drawCell(int i);
   void drawHeader();
-  char title_[40] = "";
+  char title_[64] = "";
   char labels_[jump::kGridCells][4] = {};
   bool enabled_[jump::kGridCells] = {};
   int current_ = -1;
@@ -333,12 +371,15 @@ public:
 
 private:
   void render();
+  void renderButton(int i);
+  // Button i drawn again alone: its press look.
+  void drawButton(int i);
   int buttonAt(int x, int y) const;
-  char title_[48] = "";
-  char body_[128] = "";
-  char status_[64] = "";
+  char title_[96] = "";
+  char body_[256] = "";
+  char status_[96] = "";
   uint16_t statusColour_ = 0;
-  char buttons_[2][20] = {};
+  char buttons_[2][48] = {};
   int n_ = 0;
   int pressed_ = -1;
   bool up_ = false;

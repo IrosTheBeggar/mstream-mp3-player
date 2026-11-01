@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include "HostLine.h"
+#include "HostStatus.h"
 
 // The USB visualizer's session on the Core2 (docs/USB-VISUALIZER.md
 // "Sessions", "The visualizer's messages", "Errors"): what each of the
@@ -29,6 +30,16 @@
 //   @c <epoch> <heard> <playing>          the heard clock (Clock).
 //   @log <0|1|2>                          the per-beat log (Log).
 // Lines for another epoch than the current one are stale: dropped, counted.
+//
+// The computer's questions about the board (docs/HOST-STATUS.md), in a
+// session or not, while declined too (they drive nothing on the Core2):
+//   @status                               Status (app/HostQuery answers it).
+//   @count                                Count (... starts one, or refuses).
+//   @identify <label>                     Identify, with the label (1 to 16
+//       bytes: hoststatus::validLabel()); none: @err 1, longer: @err 5.
+// They change nothing here: not a session's timeout, nor its counters, nor
+// a decline's quiet (a player that asks for @status every second can start
+// the dancer again once its own user asks).
 //
 // Any valid line keeps the session alive; poll() ends it after kTimeoutMs
 // without one (@bye timeout) or when USB power goes (Unplugged: no reply,
@@ -61,7 +72,7 @@ public:
   static constexpr float kMaxEnergy = 1e4f;
   static constexpr const char* kCaps = "viz,log";
 
-  enum class Event : uint8_t { None, Enter, Restart, Exit, Epoch, Prior, Hop, Clock, Log };
+  enum class Event : uint8_t { None, Enter, Restart, Exit, Epoch, Prior, Hop, Clock, Log, Status, Count, Identify };
   enum class Why : uint8_t { Bye, Timeout, Unplugged, Touch, Button, HeadsetKey, DanceGone };
   // Why an @hello can't start host mode now (the first that applies).
   enum class Busy : uint8_t { None, Ui, Screen, Pairing, Dance };
@@ -81,6 +92,7 @@ public:
     int32_t heard = 0;             // Clock
     bool playing = false;          // Clock
     uint8_t level = 0;             // Log
+    char label[hoststatus::kMaxLabel + 1] = "";  // Identify
     char reply[96] = "";           // a line to send back (without its '\n'), or ""
   };
 
@@ -95,6 +107,12 @@ public:
   // The Core2 ends it: Touch, Button, HeadsetKey (declines after), DanceGone,
   // Unplugged. Nothing when not active.
   Out end(Why why, uint32_t nowMs);
+  // A line refused for a reason only the firmware knows (a @count while
+  // playing: "@err 4 count playing"): its @err, within the rate limit and
+  // counted as any other. Changes nothing else.
+  Out refuse(uint32_t nowMs, uint8_t code, const char* verb, const char* detail = nullptr) {
+    return error(nowMs, code, verb, detail);
+  }
 
   bool active() const { return active_; }
   bool declined() const { return declined_; }
@@ -119,6 +137,7 @@ private:
   Out hopLine(const HostFields& f, uint32_t nowMs);
   Out clockLine(const HostFields& f, uint32_t nowMs);
   Out logLine(const HostFields& f, uint32_t nowMs);
+  Out identifyLine(const HostFields& f, uint32_t nowMs);
   void heardFrom(uint32_t nowMs);  // any line: the decline's quiet starts again
   void valid(uint32_t nowMs);      // a valid line in a session: alive
 

@@ -11,19 +11,24 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "NvsLayout.h"
 #include "RateConverter.h"
 #include "SleepTimer.h"
 #include "TextFit.h"
 #include "TextFold.h"
+#include "UiStrings.h"
 #include "UiText.h"
 #include "app/LoopStack.h"
 #include "app/Psram.h"
+#include "app/UiLang.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
 
 namespace ui {
+
+using uistr::S;
 
 namespace {
 
@@ -50,6 +55,8 @@ const char* pageKindName(uint8_t kind) {
     case PageKind::Pair: return "Pair";
     case PageKind::About: return "About";
     case PageKind::DeviceInfo: return "DeviceInfo";
+    case PageKind::Language: return "Language";
+    case PageKind::AutoDj: return "AutoDj";
     default: return "-";
   }
 }
@@ -59,8 +66,21 @@ void Page::describe(char* buf, size_t size) const { snprintf(buf, size, "%s", na
 int Header::hit(const InputEvent& e) const {
   if (e.y < kHeaderY || e.y >= kHeaderY + kHeaderH) return 0;
   if ((back || cross) && e.x < 56) return 1;
-  if (right && e.inRightEdgeZone(240)) return 2;
+  // The pill's: x 240 to the edge, or from its round end and chevron when
+  // it starts further left (uitext::headerPillZoneX(): Russian's crumb).
+  if (right && e.inRightEdgeZone(uitext::headerPillZoneX(kW - 6 - pillW(right, rightMaxW, rightBack), rightBack))) {
+    return 2;
+  }
   return 3;
+}
+
+Font Header::pillFont(const char* label, int maxW) {
+  return maxW > 0 ? Fonts::instance().fitting(Font::Bold, label, maxW) : Font::Bold;
+}
+
+int Header::pillW(const char* label, int maxW, bool chevron) {
+  return Fonts::instance().width(pillFont(label, maxW), label) + uitext::kHeaderPillPad +
+         (chevron ? uitext::kHeaderChevronW : 0);
 }
 
 Ui::Ui(UiHost& host, Input& input, PlaybackController& player, QueueModel& queue, Library& library, DanceMode& dance)
@@ -99,6 +119,14 @@ bool Ui::begin() {
   nav_.setRoot(NavModel::Tab::Queue, ref(PageKind::Queue));
   nav_.setRoot(NavModel::Tab::Dance, ref(PageKind::Dance));
   nav_.setRoot(NavModel::Tab::Output, ref(PageKind::Output));
+  // The first-boot tips seen (NVS "ui"/"coach"), and a fresh unit's
+  // language picker (no language saved either: nvslayout).
+  Preferences prefs;
+  if (prefs.begin(nvslayout::kUiNamespace, true)) {
+    coachSeen_ = prefs.getBool(nvslayout::kCoachKey, false);
+    prefs.end();
+  }
+  pickerDue_ = nvslayout::langPickerDue(uilang::chosen(), coachSeen_);
   return true;
 }
 
@@ -109,21 +137,88 @@ void Ui::start(uint32_t nowMs) {
   gateFailuresSeen_ = state_.gateFailures;
   lastContent_ = state_.contentVersion;
   lastUpNext_ = state_.upNext;
+  lastDjAdds_ = state_.autoDj.adds;
   failuresSeen_ = player_.lastFailure().count;
   started_ = true;
+  // A fresh unit: the language first (the touch check and the tips then
+  // speak it).
+  if (pickerDue_) {
+    pickerNav();
+    tipsAfterPicker_ = !coachSeen_;
+  }
   gfx::fill(0, 0, kW, kH, col::BG, true);
   tabBar_.invalidate();
   tabBar_.update(tabState(nowMs));
   showTop();
+  if (pickerDue_) {
+    Serial.println("[ui] up: the first boot's language picker (then the touch check and the tips; console ui: the "
+                   "navigation state)");
+    return;
+  }
   Serial.println("[ui] up: tab bar, Now Playing (console ui: the navigation state)");
   // The first-boot tips, once (NVS "ui"/"coach").
-  Preferences prefs;
-  bool seen = false;
-  if (prefs.begin("ui", true)) {
-    seen = prefs.getBool("coach", false);
-    prefs.end();
+  if (!coachSeen_) showCoach();
+}
+
+void Ui::pickerNav() {
+  nav_.popToRoot(NavModel::Tab::Output);
+  nav_.select(NavModel::Tab::Output);
+  nav_.push(ref(PageKind::Language, kFirstBootPicker));
+}
+
+bool Ui::pickerOnTop() const {
+  const NavModel::PageRef& top = nav_.top();
+  return nav_.tab() == NavModel::Tab::Output && static_cast<PageKind>(top.kind) == PageKind::Language &&
+         top.id == kFirstBootPicker;
+}
+
+void Ui::chooseLanguage(uistr::Lang l) {
+  const bool first = pickerDue_ && pickerOnTop();
+  uilang::choose(l);
+  // Said in the language itself, where its catalogue has it: never for
+  // English, nor for a language with no catalogue yet.
+  const bool note = uistr::lang() != uistr::Lang::En && uistr::translated(S::language_machine_note);
+  if (!started_ || suspended_) return;  // (resume() draws it all)
+  if (!first) {
+    languageChanged();
+    if (note) toast(tr(S::language_machine_note), false);
+    return;
   }
-  if (!seen) showCoach();
+  // The first boot goes on: Now Playing (the Output tab back at its root),
+  // the touch check if it is due (main.cpp, before the next loop()), then
+  // the tips and the note (loop()).
+  pickerDue_ = false;
+  noteAfterPicker_ = note;
+  closeModal(true);
+  if (toast_.up()) toast_.hide();
+  hud_.hide();
+  if (page_) page_->leave();
+  page_ = nullptr;
+  nav_.popToRoot(NavModel::Tab::Output);
+  nav_.select(NavModel::Tab::NowPlaying);
+  tabBar_.invalidate();  // its labels in the language picked
+  showTop();
+  Serial.println("[ui] first boot: the language picked; the touch check (if due), then the tips");
+}
+
+// What holds a text in the old language goes: a sheet or a dialog (closed
+// as a tab tap closes them), the toast (its Undo with it), the HUD. The
+// page is entered again where it was (its ref keeps the place), so what it
+// made of texts on its way in (the Folders root's "Play all N") is made
+// again; then the tab bar, and the tips over the page if they are up.
+void Ui::languageChanged() {
+  if (!started_ || suspended_) return;
+  closeModal(true);
+  if (toast_.up()) {
+    if (toast_.undo()) queue_.dropUndo();
+    toast_.hide();
+  }
+  if (hud_.up()) hud_.hide();
+  tabBar_.invalidate();
+  if (page_) page_->leave();
+  page_ = nullptr;
+  showTop();
+  if (coach_.up()) coach_.draw();
 }
 
 void Ui::showCoach() {
@@ -139,9 +234,10 @@ void Ui::showCoach() {
 void Ui::coachDone() {
   coach_.close();
   applyCover();
+  coachSeen_ = true;
   Preferences prefs;
-  if (prefs.begin("ui", false)) {
-    prefs.putBool("coach", true);
+  if (prefs.begin(nvslayout::kUiNamespace, false)) {
+    prefs.putBool(nvslayout::kCoachKey, true);
     prefs.end();
   }
   Serial.println("[ui] coach cards: seen (Output > About shows them again)");
@@ -159,7 +255,9 @@ Page* Ui::pageFor(uint8_t kind) {
     case PageKind::Output:
     case PageKind::Pair:
     case PageKind::About:
-    case PageKind::DeviceInfo: return &outputPage_;
+    case PageKind::DeviceInfo:
+    case PageKind::Language:
+    case PageKind::AutoDj: return &outputPage_;
     default: return &nowPlaying_;
   }
 }
@@ -175,11 +273,25 @@ void Ui::ensureScroller(bool wanted) {
       Serial.println("[ui] the hardware scroll is unavailable: lists won't draw");
     }
   } else if (!wanted && vscroll_.active()) {
-    // The band's GRAM is in the rotated order: cleared first (all of it,
-    // whatever the rotation), then the address back to the identity.
-    gfx::fill(0, ListView::kTop, kW, ListView::kHeight, col::BG, true);
-    vscroll_.end();
+    // A page that doesn't scroll (Now Playing, the Dance tab) comes up over
+    // the band: the scroll mode stays on, and its drawing lands where it
+    // shows through the mapping (ui/Gfx, DanceView::pushRect()), so the
+    // band is neither cleared first (168 rows, 21 ms of black before the
+    // page painted, MEASURED) nor shown rotated. What the band's GRAM holds
+    // isn't the list's any more: the next list page draws it all again, in
+    // place (ListScroller::invalidate()).
+    vscroll_.invalidate();
   }
+}
+
+// A screen of its own takes the display (suspend()): it draws with plain
+// M5GFX calls, so the scroll mode ends. The band's GRAM is in the rotated
+// order: cleared first (all of it, whatever the rotation), then the address
+// back to the identity.
+void Ui::endScroller() {
+  if (!vscroll_.active()) return;
+  gfx::fill(0, ListView::kTop, kW, ListView::kHeight, col::BG, true);
+  vscroll_.end();
 }
 
 void Ui::setListBand(int height) {
@@ -199,7 +311,7 @@ void Ui::setListBand(int height) {
 
 void Ui::retryCard() {
   if (host_.retryCard()) {
-    toast("Card found: starting again", false);
+    toast(tr(S::toast_card_found), false);
     return;
   }
   // What is in may have changed (an exFAT card taken out, or put in, or
@@ -208,17 +320,17 @@ void Ui::retryCard() {
   const cardformat::Kind was = state_.cardKind;
   host_.snapshot(state_);
   if (state_.cardKind != was && page_ && !modalUp()) page_->repaint();
-  warn(uitext::cardMessage(state_.cardKind).still);
+  warn(tr(uitext::cardMessage(state_.cardKind).still));
 }
 
 void Ui::shuffleAll() {
   if (state_.libraryFenced) {  // the library update's fence: the index is the build's
-    toast(uitext::kUpdatingWait, false);
+    toast(tr(S::library_updating_wait), false);
     return;
   }
   const LibraryIndex* index = library_.index();
   if (browse_ || !index || !index->ready() || index->trackCount() == 0) {
-    warn("No music on the card to shuffle");
+    warn(tr(S::toast_no_music_to_shuffle));
     return;
   }
   // The whole library from a random track, with shuffle on (the mode, not
@@ -245,18 +357,107 @@ void Ui::shuffleAll() {
   if (took < all.count) {
     queueview::cappedText(queueview::Capped::Shuffle, took, all.count, text, sizeof(text));
   } else {
-    snprintf(text, sizeof(text), "Shuffling %lu tracks", (unsigned long)all.count);
+    trnf(text, sizeof(text), S::toast_shuffling, all.count, all.count);
   }
-  toast(ok ? text : "Not enough memory for that", ok);
+  toast(ok ? text : tr(S::toast_no_memory), ok);
+}
+
+void Ui::autoDjStart() {
+  if (state_.libraryFenced) {  // the library update's fence: the index is the build's
+    toast(tr(S::library_updating_wait), false);
+    return;
+  }
+  const bool wasOn = state_.autoDj.on;
+  const autodjview::Started r = host_.autoDjStart();
+  if (r == autodjview::Started::Refused) {
+    Serial.println("[ui] the Auto DJ button: the Play was refused (no memory)");
+    toast(tr(S::toast_no_memory), false);
+    return;
+  }
+  if (r == autodjview::Started::NoIndex) {
+    // The index went (a remount, a check) since the button was drawn: the
+    // empty state draws Shuffle all again at the next pass.
+    warn(tr(S::toast_autodj_needs_index));
+    return;
+  }
+  if (r != autodjview::Started::Played) {
+    warn(tr(S::toast_autodj_no_start));  // (another tap draws again)
+    return;
+  }
+  added_.clear();  // a new queue: nothing "added" to show in it
+  char title[96], text[128];
+  if (!player_.catalog().title(queue_.currentTrack(), title, sizeof(title))) {
+    snprintf(title, sizeof(title), "%s", tr(S::queue_it));
+  }
+  if (player_.state() == PlayState::Waiting) {
+    // The headphones aren't connected: it plays once they are (as the
+    // Library's Play says it).
+    if (state_.btName[0]) {
+      trf(text, sizeof(text), S::library_waiting_for, state_.btName, title);
+    } else {
+      trf(text, sizeof(text), S::library_waiting_for_headphones, title);
+    }
+  } else {
+    trf(text, sizeof(text), S::toast_autodj_started, title);
+  }
+  Serial.printf("[ui] the Auto DJ button: %s\n", title);
+  autoDjToast(text, !wasOn);  // (Undo: the queue as it was, empty, and Auto DJ off if this tap switched it on)
+}
+
+void Ui::autoDjToast(const char* text, bool switchedOn) {
+  toast(text, true);
+  undoSwitchesDjOff_ = switchedOn;
+}
+
+void Ui::autoDjNews(uint8_t news) {
+  // An Undo toast up (a Play's, the button's, "Auto DJ from here"'s): what
+  // Auto DJ says waits until it goes, so its Undo stays offered for its 4
+  // s (a pick lands half a second after a one-track Play starts). The
+  // failure pause, a note, at once.
+  if (!(news & autodjview::kNewsPaused) && toast_.up() && toast_.undo()) {
+    pendingNews_ = static_cast<uint8_t>(pendingNews_ | news);
+    return;
+  }
+  news = static_cast<uint8_t>(news | pendingNews_);
+  pendingNews_ = 0;
+  autodjview::Toast t;
+  if (!autodjview::newsToast(news, &t)) return;
+  if (t.warn) {
+    warn(tr(t.text));
+  } else {
+    toast(tr(t.text), false);
+  }
+}
+
+queueview::QuietKeys Ui::djKeys() const {
+  queueview::QuietKeys q;
+  q.ctx = &host_;
+  q.has = [](uint32_t key, const void* ctx) { return static_cast<const UiHost*>(ctx)->autoDjMarked(key); };
+  return q;
 }
 
 void Ui::showTop() {
+  // The first boot's picker left without a pick (a tab tapped): English
+  // stays, nothing saved (the next boot asks again only if the tips haven't
+  // been seen by then); the touch check and the tips follow.
+  if (pickerDue_ && started_ && !pickerOnTop()) {
+    pickerDue_ = false;
+    nav_.popToRoot(NavModel::Tab::Output);
+    Serial.println("[ui] first boot: the language picker left: English (Output > Language changes it)");
+  }
   Page* next = pageFor(nav_.top().kind);
   if (page_) page_->leave();
-  // A page that shortened the list band (the Queue's selection mode, the
-  // Library's status line) has let it go in leave(); be sure.
-  if (list_.height() != ListView::kHeight) setListBand(ListView::kHeight);
-  statusBand_ = false;
+  // A page that shortened the list band (the Queue's selection mode) has
+  // let it go in leave(); be sure. The Library's status line (updateStatus())
+  // gets its shorter band here, before the page's first frame: it used to
+  // get it a pass later, a second full band draw and a flash on every
+  // Library page open while the card worker had something to say (the
+  // whole boot's walk on a big card: 34 + 45 ms more, MEASURED).
+  char status[64] = "";
+  if (next == &libraryPage_ && !browse_) librarytext::statusText(state_.libraryStatus, status, sizeof(status));
+  const int band = status[0] ? ListView::kHeight - kStatusH : ListView::kHeight;
+  if (list_.height() != band) setListBand(band);
+  statusBand_ = status[0] != 0;
   statusHash_ = 0;
   ensureScroller(next->scrolls());
   page_ = next;
@@ -471,6 +672,15 @@ bool Ui::closeModal(bool notify) {
   return closed;
 }
 
+void Ui::repaintList() {
+  if (thumbsStale_) {
+    list_.invalidate();
+  } else {
+    list_.redraw();
+  }
+  thumbsStale_ = false;
+}
+
 void Ui::repaintUnder() {
   applyCover();
   statusHash_ = 0;  // the status line again, if it shows (a sheet covered it)
@@ -509,6 +719,7 @@ void Ui::uncover(int oldBottom) {
 
 void Ui::toast(const char* text, bool undo, uint32_t viewKey) {
   viewKey_ = viewKey;
+  undoSwitchesDjOff_ = false;  // (autoDjToast() sets it after)
   // An add: the next visit to the Queue shows it (the review's graft).
   if (viewKey != QueueModel::kNone) added_.noteAdded(viewKey);
   // Not over the start-up screen or a screen of its own (the calibration):
@@ -619,8 +830,9 @@ void Ui::followSheet(int pressed) {
     const char* text = nullptr;
     switch (sheetFollow_[i]) {
       case SheetFollow::Sleep: text = state_.sleepRow; break;
-      case SheetFollow::Shuffle: text = uitext::kOnOff[state_.shuffle ? 1 : 0]; break;
-      case SheetFollow::Repeat: text = uitext::kRepeatModes[state_.repeat < 3 ? state_.repeat : 0]; break;
+      case SheetFollow::Shuffle: text = tr(state_.shuffle ? S::now_playing_on : S::now_playing_off); break;
+      case SheetFollow::Repeat: text = tr(uitext::repeatMode(state_.repeat)); break;
+      case SheetFollow::AutoDj: text = tr(autodjview::rowText(autodjview::rowState(state_.autoDj))); break;
       default: continue;
     }
     if (sheet_.setDetail(i, text) && i == pressed) pressedDrawn = true;
@@ -629,15 +841,16 @@ void Ui::followSheet(int pressed) {
 }
 
 void Ui::sleepTitle(char* buf, size_t size) const {
-  // Lower case after the colon, as the toasts say it ("Sleep timer: end of
-  // track"); the "..." row's detail alone is capitalised ("End of track").
-  snprintf(buf, size, "%s: %s", uitext::kSleepRow, state_.sleepTitle);
+  // SleepTimer::titleText()'s: lower case after the colon, as the toasts
+  // say it ("Sleep timer: end of track"); the "..." row's detail alone is
+  // capitalised ("End of track").
+  snprintf(buf, size, "%s", state_.sleepTitle);
 }
 
 void Ui::openSleepSheet() {
   endPageTouch();
   closeModal(true);
-  char title[40];
+  char title[96];
   sleepTitle(title, sizeof(title));
   sheetOpenedMs_ = millis();  // (the settle, as every sheet's)
   sleepSheet_.open(state_.sleepPick, state_.sleepRunning, state_.sleepCanExtend, title, accent::NowPlaying);
@@ -647,7 +860,7 @@ void Ui::openSleepSheet() {
 
 void Ui::refreshSleepSheet() {
   if (!sleepSheet_.up()) return;
-  char title[40];
+  char title[96];
   sleepTitle(title, sizeof(title));
   sleepSheet_.refresh(state_.sleepPick, state_.sleepRunning, state_.sleepCanExtend, title);
 }
@@ -666,7 +879,7 @@ void Ui::openVolume(int output) {
   endPageTouch();
   closeModal(true);
   const bool bt = output < 0 ? state_.onBluetooth : output == 1;
-  const char* name = !bt ? "Speaker" : state_.btName[0] ? state_.btName : "Headphones";
+  const char* name = !bt ? tr(S::volume_speaker) : state_.btName[0] ? state_.btName : tr(S::volume_headphones);
   const int v = bt ? state_.btVolume : state_.speakerVolume;
   volumeSheetBt_ = bt;
   volumeAsked_ = v;
@@ -734,8 +947,9 @@ void Ui::onJumpCell(int cell) {
       }
       labels[JumpGrid::kBack][0] = '<';
       enabled[JumpGrid::kBack] = true;
-      char title[40];
-      snprintf(title, sizeof(title), "%s, %c: %lu", jumpSource_->jumpTitle(), letter, (unsigned long)rows);
+      char title[64];
+      const char key[2] = {letter, 0};
+      trf(title, sizeof(title), S::jump_second_title, jumpSource_->jumpTitle(), key, rows);
       jumpLevel_ = 2;
       jumpGrid_.open(title, labels, enabled, -1, accent());
       return;
@@ -778,22 +992,31 @@ void Ui::headphonesLost() {
   input_.alertBuzz();  // felt in a pocket too (spec §8: 80 ms)
   host_.wakeScreen("the headphones dropped");  // the dialog needs the listener
   if (!started_ || suspended_) return;
-  // "SPYDRONE disconnected" if it fits beside the icon; else the name goes
-  // into the body ("WH-1000XM4 disconnected" is 15 px too wide).
-  const char* name = state_.btName[0] ? state_.btName : "Headphones";
-  char title[48], body[128];
-  snprintf(title, sizeof(title), "%s disconnected", name);
-  if (Fonts::instance().width(Font::Bold, title) <= Dialog::titleRoom(true)) {
-    snprintf(body, sizeof(body), "Paused, so the speaker doesn't suddenly play out loud.");
+  // "SPYDRONE disconnected" if it fits beside the icon (236 px:
+  // uitext::kDialogIconTitleW); else the name goes into the body
+  // ("WH-1000XM4 disconnected" is 9 px too wide). With no name, "Headphones
+  // disconnected" (a language's too wide for it: "Headphones:" in the body
+  // too).
+  const bool named = state_.btName[0] != 0;
+  char title[96], body[192];
+  if (named) {
+    trf(title, sizeof(title), S::dialog_lost_title, state_.btName);
   } else {
-    snprintf(title, sizeof(title), "Headphones disconnected");
-    snprintf(body, sizeof(body), "%s: paused, so the speaker doesn't suddenly play out loud.", name);
+    trf(title, sizeof(title), S::dialog_lost_title_generic);
   }
-  static const char* const kButtons[2] = {"Use speaker", "OK"};
+  if (Fonts::instance().width(Font::Bold, title) <= Dialog::titleRoom(true)) {
+    trf(body, sizeof(body), S::dialog_lost_body);
+  } else if (named) {
+    trf(title, sizeof(title), S::dialog_lost_title_generic);
+    trf(body, sizeof(body), S::dialog_lost_body_named, state_.btName);
+  } else {
+    trf(body, sizeof(body), S::dialog_lost_body_headphones);
+  }
+  const char* const buttons[2] = {tr(S::dialog_lost_use_speaker), tr(S::dialog_lost_ok)};
   endPageTouch();
   closeModal(true);
   dialogOwner_ = this;
-  dialog_.open(title, body, kButtons, 2, col::AMBER);
+  dialog_.open(title, body, buttons, 2, col::AMBER);
   dialog_.setIcon(&icons::kHeadphones, col::AMBER, true);
   lostDialog_ = true;
   ownDialog_ = OwnDialog::Lost;
@@ -804,26 +1027,29 @@ void Ui::headphonesLost() {
 void Ui::headphonesConnected() {
   input_.connectedTick();
   if (!started_ || suspended_) return;
-  char text[64];
-  snprintf(text, sizeof(text), "Now playing on %s", state_.btName[0] ? state_.btName : "the headphones");
+  char text[96];
+  if (state_.btName[0]) {
+    trf(text, sizeof(text), S::toast_now_playing_on, state_.btName);
+  } else {
+    trf(text, sizeof(text), S::toast_now_playing_on_headphones);
+  }
   toast(text, false);
 }
 
 void Ui::updateLostDialog() {
   if (!lostDialog_ || !dialog_.up()) return;
   const BtLink& l = state_.btLink;
-  char line[64];
+  char line[96];
   if (l.phase == BtLink::Phase::Paging && l.attempt > 0) {
-    snprintf(line, sizeof(line), "Trying to reconnect: try %u of %u", (unsigned)l.attempt,
-             (unsigned)std::max(l.attempt, l.attempts));
+    trf(line, sizeof(line), S::dialog_lost_trying, l.attempt, std::max(l.attempt, l.attempts));
   } else if (l.phase == BtLink::Phase::Off) {
-    snprintf(line, sizeof(line), "Not trying to reconnect");
+    trf(line, sizeof(line), S::dialog_lost_not_trying);
   } else if (l.phase == BtLink::Phase::Resting) {
     // (Lost: resting only after the whole back-off; they may be back in
     // range with their own reconnect given up.)
-    snprintf(line, sizeof(line), "%s", uitext::kBtLostRestingLine);
+    trf(line, sizeof(line), S::dialog_lost_resting);
   } else {
-    snprintf(line, sizeof(line), "Looking for them...");
+    trf(line, sizeof(line), S::dialog_lost_looking);
   }
   dialog_.setStatus(line, col::AMBER);
 }
@@ -835,22 +1061,31 @@ void Ui::playFailed() {
   input_.alertBuzz();  // they may be waiting with the device in a pocket
   host_.wakeScreen("couldn't reach the headphones");
   if (!started_ || suspended_) return;
-  const char* name = state_.btName[0] ? state_.btName : "the headphones";
-  char title[48], body[128];
-  snprintf(title, sizeof(title), "Couldn't reach %s", name);
+  const bool named = state_.btName[0] != 0;
+  char title[96], body[192];
+  if (named) {
+    trf(title, sizeof(title), S::dialog_failed_title, state_.btName);
+  } else {
+    trf(title, sizeof(title), S::dialog_failed_title_headphones);
+  }
   // No icon: the title's whole width (a name as long as "WH-1000XM4" fits).
   if (Fonts::instance().width(Font::Bold, title) <= Dialog::titleRoom(false)) {
-    snprintf(body, sizeof(body), "%s", uitext::kPlayFailedBody);
+    trf(body, sizeof(body), S::dialog_failed_body);
   } else {
-    // (A long name: it goes into the body, as headphonesLost() does.)
-    snprintf(title, sizeof(title), "Couldn't reach them");
-    snprintf(body, sizeof(body), "%s: on, out of the case, and not connected to your phone?", name);
+    // (A long name: it goes into the body, as headphonesLost() does; with
+    // none, English's "Couldn't reach the headphones" is too wide too.)
+    trf(title, sizeof(title), S::dialog_failed_title_them);
+    if (named) {
+      trf(body, sizeof(body), S::dialog_failed_body_named, state_.btName);
+    } else {
+      trf(body, sizeof(body), S::dialog_failed_body_headphones);
+    }
   }
-  static const char* const kButtons[2] = {uitext::kPlayOnSpeaker, "Try again"};
+  const char* const buttons[2] = {tr(S::now_playing_play_on_speaker), tr(S::dialog_failed_try_again)};
   endPageTouch();
   closeModal(true);
   dialogOwner_ = this;
-  dialog_.open(title, body, kButtons, 2, col::AMBER);
+  dialog_.open(title, body, buttons, 2, col::AMBER);
   playFailedDialog_ = true;
   ownDialog_ = OwnDialog::PlayFailed;
   applyCover();
@@ -897,28 +1132,40 @@ void Ui::noteFailures() {
   failuresSeen_ = f.count;
   failedKeys_.add(f.key);
   char title[64];
-  if (!player_.catalog().title(f.track, title, sizeof(title))) snprintf(title, sizeof(title), "a track");
+  const bool titled = player_.catalog().title(f.track, title, sizeof(title));
   // Why, when it was the track's sample rate: a refused rate isn't a
   // broken file, and at 160 MHz a setting would play it. Else the
   // backend's own few words when it has them (an Opus file refused at its
   // open: "surround Opus isn't supported"), else "can't play it".
-  char why[48];
+  char why[96];
   if (f.rate.hz != 0 && f.rate.needsCpu) {
-    snprintf(why, sizeof(why), "%s", uitext::kSkippedCpu);
+    trf(why, sizeof(why), S::toast_why_cpu);
   } else if (f.rate.hz != 0) {
-    char rate[16];
+    char rate[24];
     RateConverter::rateText(f.rate.hz, rate, sizeof(rate));
-    snprintf(why, sizeof(why), uitext::kSkippedRate, rate);
+    trf(why, sizeof(why), S::toast_why_rate, rate);
   } else if (f.note[0]) {
     snprintf(why, sizeof(why), "%s", f.note);
   } else {
-    snprintf(why, sizeof(why), "%s", uitext::kSkipped);
+    trf(why, sizeof(why), S::toast_why_cant_play);
   }
-  char text[112];
-  snprintf(text, sizeof(text), "Skipped %s: %s", title, why);
+  char text[128];
+  if (titled) {
+    trf(text, sizeof(text), S::toast_skipped, title, why);
+  } else {
+    trf(text, sizeof(text), S::toast_skipped_untitled, why);
+  }
   warn(text);
   host_.wakeScreen("a track couldn't be played");
-  if (page_ == &queuePage_) list_.refreshAll();
+  // Its Queue row's "!" (the whole band, 50-78 ms, until 0.12.0).
+  if (page_ == &queuePage_) {
+    const uint32_t pos = queue_.positionOf(f.key);
+    if (pos != QueueModel::kNone) {
+      list_.refreshRow(pos);
+    } else {
+      list_.refreshAll();
+    }
+  }
 }
 
 void Ui::updateHud(uint32_t nowMs) {
@@ -934,15 +1181,17 @@ void Ui::updateHud(uint32_t nowMs) {
       // from a button that works on every tab and from a pocket (its scan
       // would start from a press that asked for no such thing). The output
       // stays on the speaker; nothing plays.
-      warn(uitext::kNoHeadphones);
+      warn(tr(S::toast_no_headphones));
     } else if (f.kind == ButtonPolicy::Hud::Output) {
-      char line[48];
+      char line[96];
       if (f.refused) {
-        snprintf(line, sizeof(line), "%s", "Stays on the speaker (silent test mode)");
+        trf(line, sizeof(line), S::hud_silent_mode);
+      } else if (f.toBluetooth && state_.btConnected) {
+        trf(line, sizeof(line), S::hud_bluetooth, state_.btName);
       } else if (f.toBluetooth) {
-        snprintf(line, sizeof(line), "Bluetooth: %s", state_.btConnected ? state_.btName : "connecting...");
+        trf(line, sizeof(line), S::hud_bluetooth_connecting);
       } else {
-        snprintf(line, sizeof(line), "%s", f.paused ? "Speaker, paused: B plays" : "Speaker");
+        trf(line, sizeof(line), f.paused ? S::hud_speaker_paused : S::hud_speaker);
       }
       hud_.showOutput(f.toBluetooth && !f.refused, line, nowMs);
     }
@@ -993,7 +1242,18 @@ tabbar::State Ui::tabState(uint32_t nowMs) const {
   s.sleep = state_.sleepFading    ? tabbar::Sleep::Fading
             : state_.sleepRunning ? tabbar::Sleep::Running
                                   : tabbar::Sleep::None;
+  s.label = tabLabelFit(s.active);
   return s;
+}
+
+tabbar::LabelFit Ui::tabLabelFit(int tab) const {
+  const int lang = static_cast<int>(uistr::lang());
+  if (tabFitsLang_ != lang) {
+    Fonts& f = Fonts::instance();
+    for (int t = 0; t < tabbar::kTabs; ++t) tabFits_[t] = tabbar::labelFit(t, f.width(Font::Small, tabbar::label(t)));
+    tabFitsLang_ = lang;
+  }
+  return tabFits_[tab];
 }
 
 // A row renders in ~5 ms unhurried: renderAhead() only this far before a frame.
@@ -1001,10 +1261,60 @@ static constexpr uint32_t kAheadMinMs = 15;
 // A frame longer than this missed the 30 fps cadence (counted per motion).
 static constexpr uint32_t kSlowFrameUs = 35000;
 
+// A pass or an event longer than this is logged with its parts.
+static constexpr uint32_t kSlowPassUs = 35000;
+
 void Ui::loop(uint32_t nowMs) {
   nowMs_ = nowMs;
   if (!started_ || suspended_) return;
+  const uint32_t passT0 = micros();
+  uint32_t snapshotUs = 0, tabUs = 0, pageUs = 0, statusUs = 0, thumbsUs = 0;
+  bool frame = false;
+  // The pass's parts, and the whole, on the way out.
+  struct Timed {
+    Ui& ui;
+    uint32_t t0;
+    uint32_t& snapshotUs;
+    uint32_t& tabUs;
+    uint32_t& pageUs;
+    uint32_t& statusUs;
+    uint32_t& thumbsUs;
+    bool& frame;
+    ~Timed() {
+      const uint32_t us = micros() - t0;
+      PassCost& c = ui.cost_;
+      ++c.passes;
+      c.passSumUs += us;
+      c.passMaxUs = std::max(c.passMaxUs, us);
+      c.snapshotMaxUs = std::max(c.snapshotMaxUs, snapshotUs);
+      c.tabMaxUs = std::max(c.tabMaxUs, tabUs);
+      c.pageMaxUs = std::max(c.pageMaxUs, pageUs);
+      c.statusMaxUs = std::max(c.statusMaxUs, statusUs);
+      c.thumbsMaxUs = std::max(c.thumbsMaxUs, thumbsUs);
+      if (us > kSlowPassUs) {
+        Serial.printf("[ui] slow pass %lu us on %s: %s %lu us, snapshot %lu, tab bar %lu, status %lu, covers %lu\n",
+                      (unsigned long)us, ui.page_ ? ui.page_->name() : "no page", frame ? "a frame" : "the page (no frame)",
+                      (unsigned long)pageUs, (unsigned long)snapshotUs, (unsigned long)tabUs, (unsigned long)statusUs,
+                      (unsigned long)thumbsUs);
+      }
+    }
+  } timed{*this, passT0, snapshotUs, tabUs, pageUs, statusUs, thumbsUs, frame};
   host_.snapshot(state_);
+  snapshotUs = micros() - passT0;
+  // The first boot, its language picked (or its picker left), and the
+  // touch check main.cpp opened then closed (it suspended the UI until
+  // now): the tips, and the language's note over them.
+  if (tipsAfterPicker_ && !pickerDue_) {
+    tipsAfterPicker_ = false;
+    if (!coachSeen_) showCoach();
+    if (noteAfterPicker_) toast(tr(S::language_machine_note), false);
+    noteAfterPicker_ = false;
+  }
+  // identify()'s banner, its 5 s over: everything drawn again.
+  if (identifying_ && static_cast<int32_t>(nowMs - identifyUntilMs_) >= 0) {
+    endIdentify();
+    Serial.println("[ui] identify: over");
+  }
 
   updateHud(nowMs);
   noteFailures();
@@ -1059,9 +1369,10 @@ void Ui::loop(uint32_t nowMs) {
   }
   // The page's deadlines (under a modal too, and in the dark).
   if (page_) page_->tick(nowMs);
-  // A shuffle toggle drops the queue's undo (docs/QUEUE-MODES.md 2.6), and
-  // the console's qu uses it: an Undo toast still up would answer "Nothing
-  // to undo", so it goes, its line saying which. (Shuffle all's toast
+  // A shuffle toggle drops the queue's undo (docs/QUEUE-MODES.md 2.6), the
+  // console's qu uses it, and Auto DJ's pick can drop it (queueUndoDropped()):
+  // an Undo toast still up would answer "Nothing to undo", so it goes, its
+  // line saying which. (Shuffle all's toast
   // stays: its Play set the mode as part of the edit, and its Undo puts
   // both back; qu's undo of it changes the mode back, no toggle.) And no
   // badge flash for a change of mode: Off can grow "up next" without
@@ -1072,20 +1383,29 @@ void Ui::loop(uint32_t nowMs) {
     const int was = toast_.bottom();
     toast_.hide();
     uncover(was);
-    Serial.printf("[ui] the Undo toast went: %s\n", gone == queueview::UndoWatch::Gone::Undone
-                                                        ? "undone from the console"
-                                                        : "a shuffle toggle took the undo");
+    using Gone = queueview::UndoWatch::Gone;
+    Serial.printf("[ui] the Undo toast went: %s\n", gone == Gone::Undone    ? "undone from the console"
+                                                    : gone == Gone::Dropped ? "Auto DJ's pick took the undo"
+                                                                            : "a shuffle toggle took the undo");
   }
   const bool toggled = undoWatch_.modeChanged();
-  // Tracks added: the Queue badge flashes.
-  if (state_.contentVersion != lastContent_) {
-    if (state_.upNext > lastUpNext_ && !toggled) badgeUntilMs_ = nowMs + 1500;
-    lastContent_ = state_.contentVersion;
+  // What Auto DJ had to say while an Undo toast was up: now it has gone
+  // (moot if Auto DJ was switched off meanwhile).
+  if (pendingNews_ && !state_.autoDj.on) pendingNews_ = 0;
+  if (pendingNews_ && !(toast_.up() && toast_.undo())) autoDjNews(0);
+  // Tracks added: the Queue badge flashes (not for Auto DJ's own appends:
+  // one each time the last track starts; the engine design's 2.14).
+  const bool contentChanged = state_.contentVersion != lastContent_;
+  if (queueview::badgeFlashes(lastUpNext_, state_.upNext, contentChanged, toggled, state_.autoDj.adds - lastDjAdds_)) {
+    badgeUntilMs_ = nowMs + 1500;
   }
+  lastContent_ = state_.contentVersion;
   lastUpNext_ = state_.upNext;
-  if (dark_) {
-    // The screen is off: nothing drawn (the page, the tab bar, frames);
-    // what the cover worker made comes in, and no new job starts.
+  lastDjAdds_ = state_.autoDj.adds;
+  if (dark_ || identifying_) {
+    // The screen is off, or identify()'s banner covers it: nothing drawn
+    // (the page, the tab bar, frames); what the cover worker made comes
+    // in, and no new job starts.
     if (dance_.active()) {
       dance_.setActive(false);  // (a console tab change while dark)
       danceWasOn_ = true;
@@ -1093,7 +1413,11 @@ void Ui::loop(uint32_t nowMs) {
     thumbs_.loop(nowMs);
     return;
   }
-  if (!hud_.up()) tabBar_.update(tabState(nowMs));
+  if (!hud_.up()) {
+    const uint32_t t = micros();
+    tabBar_.update(tabState(nowMs));
+    tabUs = micros() - t;
+  }
 
   // The page: redraws what changed, and animation frames on the cadence.
   budget_ = governor_.update(nowMs, state_.ringMs, state_.underruns, state_.ringMatters);
@@ -1101,16 +1425,25 @@ void Ui::loop(uint32_t nowMs) {
   const bool due = budget_.draw && clock_.due(nowMs);
   const bool modal = modalUp();
   const uint32_t t0 = micros();
-  if (page_ && !modal && page_->update(nowMs, due, budget_.wholeRows)) {
+  frame = page_ && !modal && page_->update(nowMs, due, budget_.wholeRows);
+  pageUs = micros() - t0;
+  if (frame) {
     clock_.drawn(nowMs);
     ++frames_;
     ++framesInWindow_;
     if (motion_.on) {
       const uint32_t us = micros() - t0;
-      ++motion_.frames;
-      motion_.sumUs += us;
-      if (us > motion_.maxUs) motion_.maxUs = us;
-      if (us > kSlowFrameUs) ++motion_.slow;
+      if (list_.attached() && list_.lastFrame().kind == ListView::FrameCost::Kind::Rail) {
+        // A scrub's frame of the rail alone (ScrubPacer): counted apart.
+        ++motion_.railFrames;
+        motion_.railSumUs += us;
+        if (us > motion_.railMaxUs) motion_.railMaxUs = us;
+      } else {
+        ++motion_.frames;
+        motion_.sumUs += us;
+        if (us > motion_.maxUs) motion_.maxUs = us;
+        if (us > kSlowFrameUs) ++motion_.slow;
+      }
       if (us > 50000 && list_.attached()) {
         const ListView::FrameCost& fc = list_.lastFrame();
         Serial.printf("[ui] slow frame %lu us: offset %ld to %ld, %lu items rendered in %lu us\n", (unsigned long)us,
@@ -1128,9 +1461,19 @@ void Ui::loop(uint32_t nowMs) {
   // Covers: one that arrived is drawn where it shows (a modal's page draws
   // it all when the modal goes). New ones are the card worker's, never
   // started while a list moves (app/CardTasks).
+  const uint32_t t1 = micros();
   const uint32_t arrived = thumbs_.loop(nowMs);
-  if (arrived != Thumbs::kNone && page_ && !modalUp()) page_->thumbReady(arrived);
+  if (arrived != Thumbs::kNone) {
+    if (page_ && !modalUp()) {
+      page_->thumbReady(arrived);
+    } else {
+      thumbsStale_ = true;  // a list's rows are rendered again when the modal goes (repaintList())
+    }
+  }
+  const uint32_t t2 = micros();
+  thumbsUs = t2 - t1;
   updateStatus(nowMs);
+  statusUs = micros() - t2;
   if (nowMs - framesWindowStart_ >= 1000) {
     const uint32_t ms = nowMs - framesWindowStart_;
     if (framesInWindow_ > 1) fps_ = framesInWindow_ * 1000.0f / ms;
@@ -1143,9 +1486,16 @@ void Ui::loop(uint32_t nowMs) {
 // long they took to draw, the audio ring's low point and new underruns are
 // logged when it settles ("[ui] scroll: ..."), the numbers the scroll lab
 // printed for its stress runs. So is any other page that animates (Now
-// Playing while a finger scrubs its seek bar: "[ui] scrub: ...").
+// Playing while a finger scrubs its seek bar: "[ui] scrub: ..."), and a
+// finger on a list's A-Z rail, from its landing to the band's last catch-up
+// ("[ui] rail scrub: ...": the band frames, then the frames of the rail
+// alone between them).
 void Ui::trackMotion(uint32_t nowMs) {
-  const bool moving = page_ && page_->animating();
+  // (Under a modal the page draws no frame, so a motion ends there: a
+  // fling stopped by a finger on the rail that then opened the jump grid
+  // logged 46 s of "rail scrub" on the device, the grid's whole stay.)
+  const bool rail = list_.attached() && list_.railTouch();
+  const bool moving = page_ && !modalUp() && (page_->animating() || rail);
   if (moving && !motion_.on) {
     motion_ = Motion{};
     motion_.on = true;
@@ -1155,17 +1505,29 @@ void Ui::trackMotion(uint32_t nowMs) {
     motion_.ringMin = UINT32_MAX;
   }
   if (!motion_.on) return;
+  if (rail) motion_.rail = true;
   if (state_.ringMatters && state_.ringMs < motion_.ringMin) motion_.ringMin = state_.ringMs;
   if (moving) return;
   motion_.on = false;
   const uint32_t ms = nowMs - motion_.startMs;
-  if (motion_.frames < 2) return;  // a tap's highlight, not a scroll
+  if (motion_.frames + motion_.railFrames < 2) return;  // a tap's highlight, not a scroll
   char ring[24] = "n/a (not playing)";
   if (motion_.ringMin != UINT32_MAX) snprintf(ring, sizeof(ring), "%lu ms", (unsigned long)motion_.ringMin);
+  const float meanMs = motion_.frames ? motion_.sumUs / 1000.0f / motion_.frames : 0.0f;
+  if (motion_.rail) {
+    Serial.printf("[ui] rail scrub: %lu ms, %lu band frames (%.1f a second; draw mean %.1f max %.1f ms, %lu over 35), "
+                  "%lu rail frames (mean %.1f max %.1f ms), ring min %s, underruns +%lu, governor %s\n",
+                  (unsigned long)ms, (unsigned long)motion_.frames, ms ? motion_.frames * 1000.0f / ms : 0.0f, meanMs,
+                  motion_.maxUs / 1000.0f, (unsigned long)motion_.slow, (unsigned long)motion_.railFrames,
+                  motion_.railFrames ? motion_.railSumUs / 1000.0f / motion_.railFrames : 0.0f,
+                  motion_.railMaxUs / 1000.0f, ring, (unsigned long)(state_.underruns - motion_.underruns),
+                  ScrollGovernor::name(budget_.level));
+    return;
+  }
   Serial.printf("[ui] %s: %lu ms, %lu frames (%.1f fps), draw mean %.1f max %.1f ms (%lu over 35), ring min %s, underruns +%lu, "
                 "governor %s\n",
                 motion_.list ? "scroll" : "scrub", (unsigned long)ms, (unsigned long)motion_.frames,
-                ms ? motion_.frames * 1000.0f / ms : 0.0f, motion_.sumUs / 1000.0f / motion_.frames, motion_.maxUs / 1000.0f, (unsigned long)motion_.slow, ring,
+                ms ? motion_.frames * 1000.0f / ms : 0.0f, meanMs, motion_.maxUs / 1000.0f, (unsigned long)motion_.slow, ring,
                 (unsigned long)(state_.underruns - motion_.underruns), ScrollGovernor::name(budget_.level));
 }
 
@@ -1225,6 +1587,35 @@ uint32_t Ui::idleMs(uint32_t nowMs) const {
 void Ui::onEvent(const InputEvent& e) {
   using T = InputEvent::Type;
   if (!started_ || suspended_ || !e.isGlass()) return;
+  // The event's cost (a tab's tap opens its page here: its header and
+  // more), the longest kept for the console's ui, a slow one logged.
+  struct Timed {
+    Ui& ui;
+    const InputEvent& e;
+    uint32_t t0 = micros();
+    ~Timed() {
+      const uint32_t us = micros() - t0;
+      if (us > ui.cost_.eventMaxUs) {
+        ui.cost_.eventMaxUs = us;
+        ui.cost_.eventMaxType = e.type;
+      }
+      if (us > kSlowPassUs) {
+        Serial.printf("[ui] slow event %s at %d,%d: %lu us (page %s after it)\n", InputEvent::name(e.type), e.x, e.y,
+                      (unsigned long)us, ui.page_ ? ui.page_->name() : "none");
+      }
+    }
+  } timed{*this, e};
+  if (identifying_) {
+    // identify()'s banner: a touch ends it and does nothing else (the rest
+    // of it goes nowhere: touch_ None until the next one lands).
+    if (e.type == T::Down || (e.type == T::DragStart && e.fromStrip)) {
+      touch_ = TouchOn::None;
+      holdUnused_ = false;
+      endIdentify();
+      Serial.println("[ui] identify: ended by a touch");
+    }
+    return;
+  }
   if (e.type == T::LongPress) {
     // Whatever is under the finger says it used the hold (holdTick()).
     input_.takeHoldUsed();
@@ -1444,7 +1835,16 @@ void Ui::route(const InputEvent& e) {
           Serial.printf("[ui] undo: %s%s%s\n", undone ? "done" : "nothing to undo",
                         player_.shuffle() == shuffled ? "" : shuffled ? " (shuffle off again)" : " (shuffle on again)",
                         back);
-          toast_.show(undone ? "Undone" : "Nothing to undo", false, false, accent(), nowMs_);
+          // The Auto DJ button's or "Auto DJ from here"'s Play, which also
+          // switched Auto DJ on: undone whole, Auto DJ off again. What
+          // Auto DJ had to say about that queue goes with it.
+          pendingNews_ = 0;
+          if (undone && undoSwitchesDjOff_) {
+            Serial.println("[ui] undo: Auto DJ off again (the tap undone had switched it on)");
+            host_.autoDjSetOn(false);
+          }
+          undoSwitchesDjOff_ = false;
+          toast_.show(tr(undone ? S::toast_undone : S::toast_nothing_to_undo), false, false, accent(), nowMs_);
           uncover(was);
         } else if (hit == 3) {
           toast_.hide();
@@ -1472,6 +1872,7 @@ void Ui::route(const InputEvent& e) {
 void Ui::suspend() {
   if (suspended_) return;
   suspended_ = true;
+  identifying_ = false;  // (the screen that takes over draws its own)
   // The screen that takes the display draws as ever (it keeps it lit).
   gfx::setDark(false);
   danceWasOn_ = false;  // its page is left below
@@ -1483,7 +1884,7 @@ void Ui::suspend() {
   if (page_) page_->leave();
   page_ = nullptr;
   applyCover();
-  ensureScroller(false);
+  endScroller();
   touch_ = TouchOn::None;
 }
 
@@ -1502,6 +1903,7 @@ void Ui::resume() {
 void Ui::setDark(bool on) {
   if (on == dark_) return;
   dark_ = on;
+  if (on) identifying_ = false;  // (the banner goes with the light; the wake draws it all)
   if (on) {
     if (!suspended_) gfx::setDark(true);
     if (!started_ || suspended_) return;
@@ -1555,6 +1957,63 @@ void Ui::redrawAll() {
   Serial.printf("[ui] awake: drawn again in %lu ms\n", (unsigned long)(millis() - t0));
 }
 
+// ---- a computer's @identify ----
+
+bool Ui::identify(const char* label, uint32_t nowMs) {
+  if (!started_ || suspended_ || dark_) return false;
+  std::snprintf(identifyLabel_, sizeof(identifyLabel_), "%s", label);
+  identifyUntilMs_ = nowMs + kIdentifyMs;
+  if (!identifying_) {
+    // As the screen going dark: the page's touch ends, a fling stops where
+    // it is (the list's band must not move under the banner), the dancer
+    // stops (it draws its own frames); redrawAll() brings it back.
+    endPageTouch();
+    touch_ = TouchOn::None;
+    holdUnused_ = false;
+    if (list_.attached() && list_.animating()) list_.scrollTo(list_.offset());
+    if (dance_.active()) {
+      dance_.setActive(false);
+      danceWasOn_ = true;
+    }
+    identifying_ = true;
+  }
+  gfx::setDark(false);
+  drawIdentify();
+  gfx::setDark(true);  // the UI's own drawing goes nowhere until it ends
+  input_.identifyBuzz();
+  return true;
+}
+
+void Ui::drawIdentify() {
+  const uint16_t blue = accent::Output;
+  const int f = uitext::kIdentifyFrame;
+  // Over everything, through the list band's hardware scroll (gfx maps it).
+  gfx::fill(0, 0, kW, kH, col::BG, true);
+  gfx::fill(0, 0, kW, f, blue, true);
+  gfx::fill(0, kH - f, kW, f, blue, true);
+  gfx::fill(0, 0, f, kH, blue, true);
+  gfx::fill(kW - f, 0, f, kH, blue, true);
+  M5Canvas& s = gfx::strip();
+  Fonts& fonts = Fonts::instance();
+  const int w = kW - 2 * f;  // between the frame's sides
+  constexpr int kLineH = 34;
+  s.fillRect(0, 0, w, kLineH, col::BG);
+  fonts.draw(s, Font::Title, uitext::kIdentifyTitle, w / 2, kLineH / 2, uitext::kIdentifyW, col::TXT, col::BG,
+             Fonts::Align::Centre);
+  gfx::push(s, f, uitext::kIdentifyTitleY - kLineH / 2, w, kLineH, true);
+  s.fillRect(0, 0, w, kLineH, col::BG);
+  const Font lf = fonts.width(Font::Title, identifyLabel_) <= uitext::kIdentifyW ? Font::Title : Font::Bold;
+  fonts.draw(s, lf, identifyLabel_, w / 2, kLineH / 2, uitext::kIdentifyW, blue, col::BG, Fonts::Align::Centre);
+  gfx::push(s, f, uitext::kIdentifyLabelY - kLineH / 2, w, kLineH, true);
+}
+
+void Ui::endIdentify() {
+  if (!identifying_) return;
+  identifying_ = false;
+  gfx::setDark(dark_);
+  if (!dark_) redrawAll();
+}
+
 // ---- the header every list page has ----
 
 void Ui::drawHeader(const Header& h) {
@@ -1569,14 +2028,17 @@ void Ui::drawHeader(const Header& h) {
   }
   int right = kW - 10;
   if (h.right) {
-    const int iconW = h.rightBack ? 12 : 0;
-    const int w = f.width(Font::Bold, h.right) + 24 + iconW;
+    // As wide as its label: Bold, or Small past its budget (h.rightMaxW:
+    // the crumb's "Bibliothek"), so the title keeps its room.
+    const int iconW = h.rightBack ? uitext::kHeaderChevronW : 0;
+    const Font font = Header::pillFont(h.right, h.rightMaxW);
+    const int w = Header::pillW(h.right, h.rightMaxW, h.rightBack);
     const int px = kW - 6 - w;
     const uint16_t pill = h.rightDanger ? (h.pressed ? col::SOFT : col::RED) : h.pressed ? col::BTN_HI : col::BTN;
     s.fillRoundRect(px, 5, w, 26, 13, pill);
     if (h.rightBack) icons::drawCentred(s, icons::kChevronLeft, px + 14, 18, acc);
-    f.draw(s, Font::Bold, h.right, px + iconW + (w - iconW) / 2, 17, w - iconW, h.rightDanger ? col::DARK : col::TXT,
-           pill, Fonts::Align::Centre);
+    f.draw(s, font, h.right, px + iconW + (w - iconW) / 2, 17, w - iconW, h.rightDanger ? col::DARK : col::TXT, pill,
+           Fonts::Align::Centre);
     right = px - 8;
   }
   if (h.path) {
@@ -1607,9 +2069,30 @@ void Ui::drawHeader(const Header& h) {
     // descenders ("Discoverv" on the device).
     f.draw(s, Font::Bold, h.title, x, 10, right - x, col::TXT, col::HEAD);
   } else {
-    const int tw = f.draw(s, Font::Bold, h.title, x, 17, right - x, col::TXT, col::HEAD);
-    if (h.sub && h.sub[0] && x + tw + 8 < right - 16) {
-      f.draw(s, Font::Small, h.sub, x + tw + 8, 18, right - (x + tw + 8), col::DIM, col::HEAD);
+    // The sub beside the title in what it and the pill leave (their words
+    // in the UI's language): a name cut there, a phrase or a count whole or
+    // not at all, or under the title (uitext::headerSub(), from the widths
+    // as measured: as the tests and the Queue's summary measure them).
+    using uitext::HeaderSub;
+    const bool hasSub = h.sub && h.sub[0];
+    const int subW = hasSub && (h.subWhole || h.subBelow) ? f.width(Font::Small, h.sub) : 0;
+    const HeaderSub how =
+        hasSub ? uitext::headerSub(x, std::min(f.width(Font::Bold, h.title), right - x), right, subW, h.subWhole,
+                                   h.subBelow)
+               : HeaderSub::None;
+    if (how == HeaderSub::Below) {
+      // Two lines, as the Folder page's: the sub under the title (a name
+      // cut at its end), the title last (the line's background would cut
+      // its descenders).
+      f.draw(s, Font::Small, h.sub, x, 26, right - x, col::DIM, col::HEAD);
+      f.draw(s, Font::Bold, h.title, x, 10, right - x, col::TXT, col::HEAD);
+    } else {
+      const int tw = f.draw(s, Font::Bold, h.title, x, 17, right - x, col::TXT, col::HEAD);
+      const int sx = x + tw + uitext::kHeaderSubGap;
+      // (A whole one never cut, should the title draw a pixel wider than measured.)
+      if (how == HeaderSub::Beside) {
+        f.draw(s, Font::Small, h.sub, sx, 18, std::max(right - sx, subW), col::DIM, col::HEAD);
+      }
     }
   }
   s.fillRect(0, kHeaderH - 2, kW, 2, acc);
@@ -1670,6 +2153,9 @@ void Ui::printState() const {
                 state_.btSession.pairing() ? " pairing" : "", PlayGate::stateName(state_.gate),
                 (unsigned long)state_.gateFailures,
                 added_.pending() ? (long)added_.since() : -1L, failedKeys_.count());
+  Serial.printf("[ui] language: %s (%s)%s%s\n", uistr::tag(uistr::lang()), uistr::autonym(uistr::lang()),
+                uistr::hasCatalogue(uistr::lang()) ? "" : ", no catalogue yet: English's texts",
+                pickerDue_ ? "; the first boot's picker is up" : "");
   if (browse_) {
     Serial.printf("[ui] the Library browses a SYNTHETIC library: %lu tracks, %lu artists, %lu albums (uil0: the card's)\n",
                   (unsigned long)browse_->trackCount(), (unsigned long)browse_->artistCount(),
@@ -1679,8 +2165,41 @@ void Ui::printState() const {
   // This runs on the loop task (the console): its stack's low-water mark
   // since the boot (the console paints the stack again before each command,
   // so FreeRTOS's own mark is the command's: app/LoopStack).
+  Serial.printf("[ui] loop: %lu passes, mean %.2f ms, longest %.1f ms (snapshot %.1f, tab bar %.1f, page %.1f, "
+                "status %.1f, covers %.1f at most); the longest event %s %.1f ms; counted again from now\n",
+                (unsigned long)cost_.passes, cost_.passes ? cost_.passSumUs / 1000.0f / cost_.passes : 0.0f,
+                cost_.passMaxUs / 1000.0f, cost_.snapshotMaxUs / 1000.0f, cost_.tabMaxUs / 1000.0f,
+                cost_.pageMaxUs / 1000.0f, cost_.statusMaxUs / 1000.0f, cost_.thumbsMaxUs / 1000.0f,
+                InputEvent::name(cost_.eventMaxType), cost_.eventMaxUs / 1000.0f);
+  cost_ = PassCost{};
   Serial.printf("[ui] loop task stack: %lu B never used since the boot (of 8 KB)\n",
                 static_cast<unsigned long>(loopstack::lowestLeft()));
+}
+
+// uiL: the languages; uiL<tag> one of them (as a tap on its row); uiL-
+// the language and the tips forgotten (English now; the next boot is a
+// fresh unit's: its picker, the touch check if due, the tips).
+void Ui::languageCommand(const char* a) {
+  if (a[0] == '-') {
+    uilang::forget();
+    coachSeen_ = false;
+    languageChanged();
+    return;
+  }
+  if (a[0]) {
+    uistr::Lang l = uistr::Lang::En;
+    if (!uistr::langOf(a, &l)) {
+      Serial.printf("[ui] uiL%s: not one of the languages (uiL: the list)\n", a);
+      return;
+    }
+    chooseLanguage(l);
+    return;
+  }
+  for (unsigned i = 0; i < uistr::kLangs; ++i) {
+    const auto l = static_cast<uistr::Lang>(i);
+    Serial.printf("[ui] %s %-3s %s%s\n", l == uistr::lang() ? "*" : " ", uistr::tag(l), uistr::autonym(l),
+                  uistr::hasCatalogue(l) ? "" : " (no catalogue yet: English)");
+  }
 }
 
 void Ui::command(const char* a) {
@@ -1695,17 +2214,43 @@ void Ui::command(const char* a) {
   if (dark_) host_.wakeScreen("console ui");  // drawn again on the wake
   if (a[0] >= '0' && a[0] <= '4' && !a[1]) {
     tapTab(static_cast<NavModel::Tab>(a[0] - '0'));  // as a tap on that tab (again: to its root)
+  } else if (a[0] == 'r') {
+    // uir0 / uir1: the rail scrub as before 0.12.0 (every position a band
+    // draw at once, the card worker not held) / paced; uir: which.
+    if (a[1] == '0' || a[1] == '1') {
+      railHold_ = a[1] == '1';
+      list_.setScrubPacing(railHold_);
+    }
+    Serial.printf("[ui] rail scrub: %s\n",
+                  railHold_ ? "paced (the rail follows the finger on every frame, the band at ScrubPacer's cadence; "
+                              "the card worker is held while a finger is on the rail)"
+                            : "every position a band draw at once, the card worker not held (as before 0.12.0)");
+    return;
   } else if (a[0] == 'b') {
     back();
   } else if (a[0] == 'c') {
     showCoach();
+  } else if (a[0] == 'L') {
+    languageCommand(a + 1);
+    return;
+  } else if (a[0] == 'P') {
+    // The first boot's picker, now (no touch check or tips after it).
+    closeModal(true);
+    if (coach_.up()) coach_.close();
+    if (page_) page_->leave();
+    page_ = nullptr;
+    pickerDue_ = true;
+    pickerNav();
+    showTop();
   } else if (a[0] == 'T') {
     thumbs_.redecode();
     list_.refreshAll();  // the rows on screen ask again
   } else {
     Serial.println("[ui] ui: the navigation state; ui0-ui4 tap a tab (0 Now Playing, 1 Library, 2 Queue, 3 Dance, "
-                   "4 Output); uib back; uic the coach cards; uiT the covers decoded again (timings); uil<n> the Library browses a synthetic library of n "
-                   "tracks (uil0: the card's); uit/uih/uis/uid/uip a scripted finger");
+                   "4 Output); uib back; uic the coach cards; uiL<tag> the language (uiL the list, uiL- forget it and "
+                   "the tips: the next boot is a fresh unit's); uiP the first boot's language picker; uiT the covers "
+                   "decoded again (timings); uil<n> the Library browses a synthetic library of n tracks (uil0: the "
+                   "card's); uit/uih/uis/uid/uip a scripted finger");
     return;
   }
   printState();

@@ -11,6 +11,8 @@
 #include <cstdio>   // std::snprintf
 #include <cstring>  // std::memset, std::memcpy
 
+#include "UiStrings.h"
+
 #if defined(__GNUC__)
 #define RC_INLINE inline __attribute__((always_inline))
 #else
@@ -341,14 +343,14 @@ RateConverter::Plan RateConverter::plan(uint32_t srcHz, uint32_t cpuMhz, bool hi
 }
 
 void RateConverter::rateText(uint32_t hz, char* out, uint32_t size) {
+  using uistr::S;
   if (size == 0) return;
   if (hz % 1000 == 0) {
-    std::snprintf(out, size, "%lu kHz", static_cast<unsigned long>(hz / 1000));
+    trf(out, size, S::format_khz, hz / 1000);
   } else if (hz % 100 == 0) {
-    std::snprintf(out, size, "%lu.%lu kHz", static_cast<unsigned long>(hz / 1000),
-                  static_cast<unsigned long>(hz % 1000 / 100));
+    trf(out, size, S::format_khz, uistr::fixed(hz / 100, 1));
   } else {
-    std::snprintf(out, size, "%lu Hz", static_cast<unsigned long>(hz));  // (44056 Hz is no 44.1 kHz)
+    trf(out, size, S::format_hz, hz);  // (44056 Hz is no 44.1 kHz)
   }
 }
 

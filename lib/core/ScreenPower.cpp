@@ -3,12 +3,18 @@
 
 #include "ScreenPower.h"
 
+#include "UiStrings.h"
+
 namespace {
 
+using uistr::S;
 constexpr uint32_t kTimeoutMs[ScreenPower::kTimeouts] = {15000, 30000, 60000, 120000, 300000, 0};
-constexpr const char* kTimeoutLabel[ScreenPower::kTimeouts] = {"15 s", "30 s", "1 min", "2 min", "5 min", "Never"};
+constexpr S kTimeoutLabel[ScreenPower::kTimeouts] = {S::settings_screen_off_15s,  S::settings_screen_off_30s,
+                                                     S::settings_screen_off_1min, S::settings_screen_off_2min,
+                                                     S::settings_screen_off_5min, S::settings_screen_off_never};
 constexpr uint8_t kBrightness[ScreenPower::kBrightnesses] = {60, 100, 160, 255};
-constexpr const char* kBrightnessLabel[ScreenPower::kBrightnesses] = {"Low", "Medium", "High", "Max"};
+constexpr S kBrightnessLabel[ScreenPower::kBrightnesses] = {S::settings_brightness_low, S::settings_brightness_medium,
+                                                            S::settings_brightness_high, S::settings_brightness_max};
 
 // Wraparound-safe: `now` is at least `ms` after `since`.
 bool reached(uint32_t now, uint32_t since, uint32_t ms) { return now - since >= ms; }
@@ -16,9 +22,9 @@ bool reached(uint32_t now, uint32_t since, uint32_t ms) { return now - since >= 
 }  // namespace
 
 uint32_t ScreenPower::timeoutMs(int choice) { return kTimeoutMs[clampTimeout(choice)]; }
-const char* ScreenPower::timeoutLabel(int choice) { return kTimeoutLabel[clampTimeout(choice)]; }
+const char* ScreenPower::timeoutLabel(int choice) { return tr(kTimeoutLabel[clampTimeout(choice)]); }
 uint8_t ScreenPower::brightnessLevel(int choice) { return kBrightness[clampBrightness(choice)]; }
-const char* ScreenPower::brightnessLabel(int choice) { return kBrightnessLabel[clampBrightness(choice)]; }
+const char* ScreenPower::brightnessLabel(int choice) { return tr(kBrightnessLabel[clampBrightness(choice)]); }
 
 uint32_t ScreenPower::dimAtMs(uint32_t offAfterMs) {
   if (offAfterMs == 0) return 0;

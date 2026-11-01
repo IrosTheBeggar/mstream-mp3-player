@@ -11,7 +11,7 @@
  "serverRevision": "\"r-412-99-1790000000999-300\"",
  "baseGeneration": 41,
  "serverUrl": "HTTP://Music.Example:3000/",
- "note": "The root of the fixture card: the tags file of this commit and an AutoDJ table carried from the last (generation 41); the vpath layout's roots, given unsorted.",
+ "note": "The root of the fixture card: the tags file of this commit and an AutoDJ index (MPDJ v2, docs/AUTODJ-INDEX.md) carried from the last (generation 41); the vpath layout's roots, given unsorted.",
  "companions": [
   {
    "file": "tags-0000002a.bin"

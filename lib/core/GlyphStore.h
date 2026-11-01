@@ -1,0 +1,138 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
+#pragma once
+#include <cstddef>
+#include <cstdint>
+
+// Glyphs for the characters the VLW DejaVu fonts don't have, Chinese,
+// Japanese and Korean, from a glyph store (docs/I18N.md, phase 2). A store
+// is one pixel size of one font: for each glyph a tight box of 4-bit
+// coverage, the box's place from the pen and the baseline, and the advance,
+// found by its code point (32 bits: a store can reach past the BMP).
+// tools/glyph_store.py writes stores and describes the format; the built-in
+// one is kCjkGlyphs16 (CjkGlyphs16.h), 16 px, in flash.
+//
+// A store is read where it lies, flash or memory: no heap, no copy. open()
+// reads the header once. find() is a binary search over the store's pages
+// (256 code points each; 135 in the built-in store), then one word of the
+// page's presence bitmap and a bit count. It reads only the page tables
+// (6.5 KB in the built-in store, so they stay in the flash cache), and
+// advance() one word more: a string's width (TextFit measures each label
+// several times) costs a couple of hundred cycles a character. decode()
+// unpacks one glyph's coverage into the caller's buffer.
+namespace glyphstore {
+
+// A glyph's box and advance, in pixels.
+struct Metrics {
+  uint8_t w = 0;  // the box; 0 x 0 when there is nothing to draw (a space)
+  uint8_t h = 0;
+  int8_t x = 0;         // the box's left edge right of the pen (a mark's is left of it)
+  int8_t y = 0;         // its top edge above the baseline (below it: negative)
+  uint8_t advance = 0;  // how far the pen moves
+};
+
+// A glyph found in a store: false when the store has none.
+struct Glyph {
+  static constexpr uint32_t kNone = 0xFFFFFFFFu;
+  uint32_t index = kNone;  // in the store's order (by code point)
+  uint32_t page = 0;       // its page: which of the store's pages
+  explicit operator bool() const { return index != kNone; }
+};
+
+// Coverage as decode() writes it.
+enum class Alpha : uint8_t {
+  Nibble,  // 0-15, as stored
+  Byte,    // 0-255 (a nibble times 17)
+};
+
+// Where a glyph's box goes in a line of text (ui/Fonts draws the store's
+// glyphs in the DejaVu fonts' rows): nothing is drawn outside the line.
+struct Placement {
+  int top = 0;   // the box's first row, from the line's top
+  int rows = 0;  // its rows drawn, from its first: all of them unless the line is too short
+};
+// `m`'s box on the line's `baseline` (rows from its top) in a line `lineH`
+// rows tall: a glyph whose ink reaches above the line moves down into it,
+// only as far as it must (a few marks and kanji in the Small rows), and the
+// rows past the line's bottom aren't drawn.
+Placement place(const Metrics& m, int baseline, int lineH);
+
+// A synthetic bold (ui/Fonts draws the store's glyphs so in the Bold and
+// Title roles, beside DejaVu Sans Bold; a store has one weight): each row's
+// coverage spread a pixel to the right at half strength, on the 4-bit
+// values, a'(x) = min(15, a(x) + a(x - 1) / 2), from the values as they
+// were (not the ones already spread). A vertical stroke grows by a pixel, a
+// horizontal one doesn't; a 1 px gap between two strokes goes grey rather
+// than closing (docs/I18N.md, phase 2: the rules compared). The box grows
+// by a column, and the advance by a pixel, so two glyphs don't touch.
+constexpr int kBoldGrow = 1;
+// An advance as drawn bold: one that moves the pen a pixel longer (a mark's
+// 0 stays 0, a missing glyph's -1 stays -1).
+inline int boldAdvance(int advance) { return advance > 0 ? advance + kBoldGrow : advance; }
+// `m` as drawn bold: the box, if it has one, a column wider; the advance as
+// boldAdvance(). Its place (x, y) and height are the same.
+Metrics bold(const Metrics& m);
+// Makes a glyph's coverage bold in place: h rows of w 4-bit values
+// (decode()'s Alpha::Nibble), row r at a + r * stride, into the column at
+// w, which the row must have room for (stride > w; what is there is never
+// read).
+void embolden(uint8_t* a, int w, int h, size_t stride);
+
+class Store {
+public:
+  // Reads the header of the store at `data` (`size` bytes, staying there
+  // while the Store is used). False when it isn't one this reader knows
+  // (the magic, the version, sections out of bounds or out of order): the
+  // Store is then empty and finds nothing.
+  bool open(const void* data, size_t size);
+  bool valid() const { return bits_ != nullptr; }
+
+  int pixelSize() const { return pixelSize_; }
+  // The em box above and below the baseline (a CJK font's 0.88 and 0.12
+  // em: 14 and 2 px at 16 px).
+  int ascent() const { return ascent_; }
+  int descent() const { return descent_; }
+  // How far the glyphs' ink reaches above and below the baseline, at most.
+  int inkAscent() const { return inkAscent_; }
+  int inkDescent() const { return inkDescent_; }
+  // The widest and the tallest box: what a decode buffer must hold.
+  int maxWidth() const { return maxW_; }
+  int maxHeight() const { return maxH_; }
+  uint32_t glyphCount() const { return count_; }
+  // The baseline the glyphs take in a line `lineH` rows tall whose font's
+  // baseline is `fontBaseline` rows from its top: the font's, lower where
+  // the em box would reach above the line (DejaVu Sans 13's rows: 14 rows
+  // down, not 13), never so low that the em box leaves the line's bottom.
+  int baselineIn(int fontBaseline, int lineH) const;
+
+  Glyph find(uint32_t cp) const;
+  bool contains(uint32_t cp) const { return static_cast<bool>(find(cp)); }
+  // All 0 for no glyph.
+  Metrics metrics(const Glyph& g) const;
+  // `cp`'s advance in pixels; -1 when the store has no glyph for it.
+  int advance(uint32_t cp) const;
+
+  // `g`'s coverage into `out`, row by row: h rows of w values, row r at
+  // out + r * stride (stride >= w; `outSize` bytes from out). False, with
+  // nothing written, for no glyph or a buffer too small; false with the
+  // box all 0 for a bitmap that isn't well formed (a store from a card that
+  // went bad). A 0 x 0 glyph writes nothing and is true.
+  bool decode(const Glyph& g, uint8_t* out, size_t stride, size_t outSize, Alpha alpha = Alpha::Byte) const;
+
+private:
+  const uint8_t* pages_ = nullptr;    // PAGE: u16 a page, ascending
+  const uint8_t* pageMap_ = nullptr;  // PMAP: 48 B a page
+  const uint8_t* metrics_ = nullptr;  // METR: u32 a glyph
+  const uint8_t* offsets_ = nullptr;  // OFFS: u16 a glyph
+  const uint8_t* bits_ = nullptr;     // BITS
+  uint32_t bitsSize_ = 0;
+  uint32_t pageCount_ = 0;
+  uint32_t count_ = 0;
+  uint8_t pixelSize_ = 0;
+  uint8_t encoding_ = 0;
+  int8_t ascent_ = 0, descent_ = 0, inkAscent_ = 0, inkDescent_ = 0;
+  uint8_t maxW_ = 0, maxH_ = 0;
+};
+
+}  // namespace glyphstore

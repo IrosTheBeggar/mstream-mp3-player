@@ -18,10 +18,14 @@
 #include <string>
 #include <vector>
 
+#include "AutoDjView.h"
 #include "BootLayout.h"
 #include "CardContract.h"
 #include "CardTags.h"
+#include "CjkGlyphs16.h"
 #include "DeviceInfo.h"
+#include "GlyphStore.h"
+#include "HostStatus.h"
 #include "IdlePolicy.h"
 #include "JumpIndex.h"
 #include "LibraryIndex.h"
@@ -42,17 +46,36 @@
 #include "TagText.h"
 #include "TextFit.h"
 #include "TextFold.h"
+#include "TitleLayout.h"
 #include "TouchCalibration.h"
 #include "TouchCheck.h"
 #include "TrackCatalog.h"
+#include "UiStrings.h"
 #include "UiText.h"
 #include "../support/TagFixtures.h"
 
 // The fonts' data, as the firmware has it (src/ui/VlwFonts.cpp: arrays only).
 #include "../../src/ui/VlwFonts.cpp"
 
-void setUp() {}
-void tearDown() {}
+// The texts are the catalogue's (i18n/en.json, English here): uistr::tr().
+using uistr::S;
+
+namespace {
+// Line k of a message whose lines the layout places one by one.
+std::string lineOf(S id, int k) {
+  char b[256];
+  uistr::line(uistr::tr(id), k, b, sizeof(b));
+  return b;
+}
+// The ten languages, English first: a test that measures each sets it
+// (tearDown() puts English back); one with no catalogue draws English.
+constexpr uistr::Lang kAllLangs[] = {uistr::Lang::En, uistr::Lang::De, uistr::Lang::Es, uistr::Lang::Fr,
+                                     uistr::Lang::It, uistr::Lang::Ja, uistr::Lang::Pl, uistr::Lang::Pt,
+                                     uistr::Lang::Ru, uistr::Lang::Zh};
+}  // namespace
+
+void setUp() { uistr::setLang(uistr::Lang::En); }  // (a test that changes it may fail half-way)
+void tearDown() { uistr::setLang(uistr::Lang::En); }
 
 namespace {
 
@@ -70,47 +93,97 @@ int bucketOfRow(const std::vector<std::string>& v, uint32_t row) {
   return textfold::bucketOf(textfold::railKey(v[row].c_str()));
 }
 
+// ---- the glyph store behind the fonts (ui/Fonts: docs/I18N.md, phase 2) ----
+
+const glyphstore::Store& cjk() {
+  static const glyphstore::Store store = [] {
+    glyphstore::Store s;
+    s.open(kCjkGlyphs16, kCjkGlyphs16Size);
+    return s;
+  }();
+  return store;
+}
+
 // ---- the VLW fonts' metrics (what ui/Fonts measures with) ----
 
 struct Vlw {
   std::vector<std::pair<uint32_t, int>> advance;  // code point, xAdvance
+  struct Box {
+    uint32_t cp;
+    int height, top;  // rows, and the top's height above the baseline (dY)
+  };
+  std::vector<Box> boxes;
+  int ascent = 0, descent = 0;  // the header's
   int lineH = 0;  // the ascent and the descent (the header's)
-  explicit Vlw(const uint8_t* d) {
+  int space = 0;  // what a missing glyph measures (M5GFX's spaceWidth)
+  // M5GFX's line height (VLWfont::loadFont, what ui/Fonts::height() gives)
+  // and baseline: the header's ascent and descent, grown by any glyph of
+  // ASCII or above U+00FF that reaches further.
+  int maxAscent = 0, yAdvance = 0;
+  // The Bold and Title roles' fonts (DejaVu Sans Bold) draw the store's
+  // glyphs bold: a pixel further (glyphstore::boldAdvance()).
+  bool boldCjk = false;
+  explicit Vlw(const uint8_t* d) : boldCjk(d == kVlwSansBold16 || d == kVlwSansBold22) {
     auto be32 = [&](size_t at) {
       return static_cast<uint32_t>(d[at]) << 24 | static_cast<uint32_t>(d[at + 1]) << 16 |
              static_cast<uint32_t>(d[at + 2]) << 8 | d[at + 3];
     };
     const uint32_t n = be32(0);
-    lineH = static_cast<int>(be32(16) + be32(20));
+    ascent = static_cast<int>(be32(16));
+    descent = static_cast<int>(be32(20));
+    lineH = ascent + descent;
+    // VLWfont::loadFont: the larger of the size and the ascent + descent,
+    // times 2 / 7, before the glyphs' metrics move the line height.
+    space = std::max(static_cast<int>(be32(8)), lineH) * 2 / 7;
+    int maxDescent = descent;
+    maxAscent = ascent;
     for (uint32_t i = 0; i < n; ++i) {
       const size_t g = 24 + static_cast<size_t>(i) * 28;
-      advance.push_back({be32(g), static_cast<int>(be32(g + 12))});
+      const uint32_t cp = be32(g);
+      const int h = static_cast<int>(be32(g + 4));
+      const int top = static_cast<int>(static_cast<int32_t>(be32(g + 16)));
+      advance.push_back({cp, static_cast<int>(be32(g + 12))});
+      boxes.push_back({cp, h, top});
+      if (cp > 0xFF || (cp > 0x20 && cp < 0xA0 && cp != 0x7F)) {
+        maxAscent = std::max(maxAscent, top);
+        maxDescent = std::max(maxDescent, h - top);
+      }
     }
+    yAdvance = maxAscent + maxDescent;
   }
-  // Every character has a glyph (width() counts a missing one as nothing;
-  // the firmware draws it folded, and measures it as a space).
+  int find(uint32_t cp) const {
+    for (const auto& a : advance) {
+      if (a.first == cp) return a.second;
+    }
+    return -1;
+  }
+  // The font's glyph, else the glyph store's (as ui/Fonts: VLW first).
+  bool has(uint32_t cp) const { return find(cp) >= 0 || cjk().contains(cp); }
+  // Every character has a glyph (the firmware draws a missing one folded).
   bool hasAll(const char* s) const {
     for (const char* p = s; *p;) {
-      const uint32_t cp = textfold::decode(p);
-      bool found = false;
-      for (const auto& a : advance) found = found || a.first == cp;
-      if (!found) return false;
+      if (!has(textfold::decode(p))) return false;
     }
     return true;
   }
+  // As ui/Fonts measures: the font's advance, else the store's (bold in
+  // the Bold and Title roles), else (a missing glyph) the space width.
   int width(const char* s) const {
     int w = 0;
     for (const char* p = s; *p;) {
       const uint32_t cp = textfold::decode(p);
-      for (const auto& a : advance) {
-        if (a.first == cp) {
-          w += a.second;
-          break;
-        }
+      int a = find(cp);
+      if (a < 0) {
+        a = cjk().advance(cp);
+        if (boldCjk) a = glyphstore::boldAdvance(a);
       }
+      w += a >= 0 ? a : space;
     }
     return w;
   }
+  // A glyph the store draws in this font: one the font lacks and the store
+  // has (ui/Fonts::fromStore()'s test).
+  bool fromStore(uint32_t cp) const { return find(cp) < 0 && cjk().contains(cp); }
 };
 
 }  // namespace
@@ -292,9 +365,71 @@ void test_list_steps_in_whole_rows_never_exceed_the_cap() {
 
 void test_tabbar_texts_fit_in_every_state() {
   const Vlw small(kVlwSans13);
-  // The active tab's label on its plate, every tab.
+  // The active tab's label on its plate, every tab (English).
   for (int t = 0; t < tabbar::kTabs; ++t) {
-    TEST_ASSERT_TRUE_MESSAGE(small.width(tabbar::kLabels[t]) <= tabbar::labelWidth(t), tabbar::kLabels[t]);
+    TEST_ASSERT_TRUE_MESSAGE(small.width(tabbar::label(t)) <= tabbar::labelWidth(t), tabbar::label(t));
+    TEST_ASSERT_EQUAL(tabbar::LabelFit::Plate, tabbar::labelFit(t, small.width(tabbar::label(t))));
+  }
+  // Wider than its plate, the Library's and the Queue's label spills over
+  // the plate's edges, centred under the icon, up to kLabelSpillW: clear of
+  // what the neighbours draw in the label row (screen x; the icons as
+  // ui/TabBar draws them, centred, the Queue's 3 px left), and below the
+  // Queue's badge (y 1-14) and the sleep timer's moon (y 4-10).
+  {
+    using namespace tabbar;
+    const int lib = cellX0(1) + kTabW / 2, queue = cellX0(2) + kTabW / 2;  // 81, 135
+    const int hairlineRight = cellX0(0) + kTabW / 2 - kProgressW / 2 + kProgressW - 1;  // 42
+    const int libIconRight = lib - kLibraryIconW / 2 + kLibraryIconW - 1;            // 93
+    const int queueIconLeft = queue - kQueueIconShift - kQueueIconW / 2;              // 120
+    const int crabLeft = cellX0(3) + kTabW / 2 - kCrabIconW / 2;                      // 178
+    TEST_ASSERT_TRUE(lib - kLabelSpillW / 2 >= hairlineRight + 2);
+    TEST_ASSERT_TRUE(lib - kLabelSpillW / 2 + kLabelSpillW - 1 <= queueIconLeft - 2);
+    TEST_ASSERT_TRUE(queue - kLabelSpillW / 2 >= libIconRight + 2);
+    TEST_ASSERT_TRUE(queue - kLabelSpillW / 2 + kLabelSpillW - 1 <= crabLeft - 2);
+    TEST_ASSERT_TRUE(27 - small.yAdvance / 2 > 14);  // the label row's top (centred on y 27)
+    TEST_ASSERT_TRUE(27 - small.yAdvance / 2 + small.yAdvance - 1 <= kHeight - 1);  // its last row the bar's rule's (drawn after)
+    TEST_ASSERT_TRUE(spills(1) && spills(2) && !spills(0) && !spills(3) && !spills(4));
+    TEST_ASSERT_EQUAL_INT(kLabelSpillW, labelMax(1));
+    TEST_ASSERT_EQUAL_INT(kLabelW, labelMax(0));
+    TEST_ASSERT_EQUAL_INT(kOutputPlateW, labelMax(4));
+    TEST_ASSERT_EQUAL(LabelFit::Plate, labelFit(1, kLabelW));
+    TEST_ASSERT_EQUAL(LabelFit::Spill, labelFit(1, kLabelW + 1));
+    TEST_ASSERT_EQUAL(LabelFit::Spill, labelFit(2, kLabelSpillW));
+    TEST_ASSERT_EQUAL(LabelFit::None, labelFit(2, kLabelSpillW + 1));
+    TEST_ASSERT_EQUAL(LabelFit::None, labelFit(0, kLabelW + 1));  // Playing, Dance: their plate only
+    TEST_ASSERT_EQUAL(LabelFit::Plate, labelFit(4, kOutputPlateW));
+  }
+  // Each language's labels: where each goes. Those that spill (German's
+  // "Bibliothek"), those shown as the icon alone (Japanese's and Russian's
+  // Library, German's Queue).
+  {
+    using L = uistr::Lang;
+    std::string report;
+    for (L l : kAllLangs) {
+      if (!uistr::hasCatalogue(l)) continue;
+      uistr::setLang(l);
+      for (int t = 0; t < tabbar::kTabs; ++t) {
+        const tabbar::LabelFit fit = tabbar::labelFit(t, small.width(tabbar::label(t)));
+        TEST_ASSERT_TRUE(tabbar::spills(t) || fit != tabbar::LabelFit::Spill);
+        if (fit == tabbar::LabelFit::Plate) continue;
+        char m[96];
+        snprintf(m, sizeof(m), "%s %s %d px: %s; ", uistr::tag(l), tabbar::label(t), small.width(tabbar::label(t)),
+                 fit == tabbar::LabelFit::Spill ? "spills" : "icon alone");
+        report += m;
+      }
+    }
+    TEST_MESSAGE(report.c_str());
+    auto fitIn = [&](L l, int t) {
+      uistr::setLang(l);
+      return tabbar::labelFit(t, small.width(tabbar::label(t)));
+    };
+    TEST_ASSERT_EQUAL(tabbar::LabelFit::Spill, fitIn(L::De, 1));
+    TEST_ASSERT_EQUAL(tabbar::LabelFit::None, fitIn(L::De, 2));
+    TEST_ASSERT_EQUAL(tabbar::LabelFit::None, fitIn(L::Ru, 1));
+    TEST_ASSERT_EQUAL(tabbar::LabelFit::Spill, fitIn(L::Ru, 2));
+    TEST_ASSERT_EQUAL(tabbar::LabelFit::None, fitIn(L::Ja, 1));
+    TEST_ASSERT_EQUAL(tabbar::LabelFit::Plate, fitIn(L::Zh, 1));
+    uistr::setLang(L::En);
   }
   // The volume beside the output icon and the battery under its icon, at
   // every level (0-100 %).
@@ -322,28 +457,564 @@ void test_tabbar_texts_fit_in_every_state() {
 // ---- the other fixed texts (UiText: each next to its room) ----
 
 namespace {
+// It fits, and the font has every glyph of it: one it lacks would be drawn
+// folded ('?' for a letter of another script), so a text that fits by its
+// widths alone (a translation, say) could still not be what is drawn.
 void fits(const Vlw& font, const char* text, int room) {
   char msg[160];
   snprintf(msg, sizeof(msg), "\"%s\": %d px in %d", text, font.width(text), room);
   TEST_ASSERT_TRUE_MESSAGE(font.width(text) <= room, msg);
+  snprintf(msg, sizeof(msg), "\"%s\": a glyph the font doesn't have", text);
+  TEST_ASSERT_TRUE_MESSAGE(font.hasAll(text), msg);
 }
+
+// It fits in `font`, or else in `smaller` (the label's fallback: a
+// button's, a pill's, as ui/Fonts::fitting() picks).
+void fitsIn(const Vlw& font, const Vlw& smaller, const char* text, int room) {
+  fits(font.width(text) <= room ? font : smaller, text, room);
+}
+
 }  // namespace
+
+// ---- names as the screen draws them (docs/I18N.md, phase 0) ----
+
+namespace {
+
+int vlwWidth(void* ctx, const char* s) { return static_cast<const Vlw*>(ctx)->width(s); }
+bool vlwHas(void* ctx, uint32_t cp) { return static_cast<const Vlw*>(ctx)->has(cp); }
+bool vlwFromStore(void* ctx, uint32_t cp) { return static_cast<const Vlw*>(ctx)->fromStore(cp); }
+
+// The TextFit view of a font, as ui/Fonts::fit() makes it.
+textfit::Font viewOf(const Vlw& v) {
+  textfit::Font f;
+  f.ctx = const_cast<Vlw*>(&v);
+  f.width = vlwWidth;
+  f.has = vlwHas;
+  return f;
+}
+
+// ui/Fonts::fromStore(): a glyph from the store in the text as drawn.
+bool fromStore(const Vlw& v, const char* s) {
+  return textfit::drawnAny(viewOf(v), s, vlwFromStore, const_cast<Vlw*>(&v));
+}
+
+// `name` as ui/Fonts::draw fits it (its 200-byte buffer), in `font`.
+std::string drawn(const Vlw& font, const char* name, int maxW = 300) {
+  textfit::Font f;
+  f.ctx = const_cast<Vlw*>(&font);
+  f.width = vlwWidth;
+  f.has = vlwHas;
+  char buf[200];
+  textfit::fit(f, name, std::strlen(name), buf, sizeof(buf), maxW);
+  return buf;
+}
+
+}  // namespace
+
+// TextFit with the fonts the firmware draws with: decomposed text composed
+// first, a cp1252 byte (U+0080-009F) as its character, Greek, Cyrillic,
+// Romanian's and Pinyin's letters drawn as they are (phase 1), Chinese,
+// Japanese and Korean from the glyph store (phase 2), the Latin letters the
+// fonts still lack (Vietnamese's) as their base letters; the scripts with
+// no glyphs yet stay '?'. The tests measure a missing glyph as the firmware
+// does: the space width M5GFX gives it, 5 px in DejaVu Sans 16.
+void test_names_drawn_with_the_fonts() {
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  TEST_ASSERT_EQUAL_INT(5, body.space);
+  TEST_ASSERT_EQUAL_INT(4, small.space);
+  TEST_ASSERT_EQUAL_INT(body.width("a") + body.space + body.width("b"), body.width("a\xD5\x80" "b"));  // Հ
+  TEST_ASSERT_EQUAL_INT(body.width("a") + 16 + body.width("b"), body.width("a\xE4\xB8\xAD" "b"));  // 中: the store's
+  TEST_ASSERT_FALSE(body.hasAll("Հ"));
+  TEST_ASSERT_TRUE(body.hasAll("中"));
+  TEST_ASSERT_TRUE(body.hasAll("Ж"));
+  TEST_ASSERT_TRUE(body.hasAll("Café ’…€"));
+  TEST_ASSERT_EQUAL_STRING("Don’t Stop – Live…", drawn(body, "Don\xC2\x92t Stop \xC2\x96 Live\xC2\x85").c_str());
+  TEST_ASSERT_EQUAL_STRING("€ ™ Š Ÿ “x”", drawn(body, "\xC2\x80 \xC2\x99 \xC2\x8A \xC2\x9F \xC2\x93x\xC2\x94").c_str());
+  TEST_ASSERT_EQUAL_STRING("f^~?", drawn(body, "\xC2\x83\xC2\x88\xC2\x98\xC2\x81").c_str());  // no glyph: folded
+  TEST_ASSERT_EQUAL_STRING("Beyoncé", drawn(body, "Beyonce\xCC\x81").c_str());
+  TEST_ASSERT_EQUAL_STRING("Ștefan Bănică", drawn(body, "Ștefan Bănică").c_str());
+  TEST_ASSERT_EQUAL_STRING("Ştefan", drawn(body, "Ştefan").c_str());  // the cedilla spelling, Latin Extended-A's
+  TEST_ASSERT_EQUAL_STRING("My Tâm", drawn(body, "Mỹ Tâm").c_str());
+  TEST_ASSERT_EQUAL_STRING("My Tâm", drawn(body, "My\xCC\x83 Ta\xCC\x82m").c_str());  // NFD: â is the font's
+  TEST_ASSERT_EQUAL_STRING("ABC", drawn(body, "ＡＢＣ").c_str());
+  TEST_ASSERT_EQUAL_STRING("Кино", drawn(body, "Кино").c_str());
+  TEST_ASSERT_EQUAL_STRING("Χάρις Αλεξίου", drawn(body, "Χάρις Αλεξίου").c_str());
+  TEST_ASSERT_EQUAL_STRING("Ђорђе Балашевић", drawn(body, "Ђорђе Балашевић").c_str());
+  TEST_ASSERT_EQUAL_STRING("Łódź Wołanie", drawn(body, "Łódź Wołanie").c_str());
+  TEST_ASSERT_EQUAL_STRING("Lǚ", drawn(body, "Lǚ").c_str());
+  // NFD Greek and Cyrillic compose to the fonts' letters: Χάρις, Ёлка, Й.
+  TEST_ASSERT_EQUAL_STRING("Χάρις", drawn(body, "Χα\xCC\x81ρις").c_str());
+  TEST_ASSERT_EQUAL_STRING("Ёлка Й", drawn(body, "Е\xCC\x88лка И\xCC\x86").c_str());
+  // Chinese, Japanese and Korean from the glyph store (phase 2); NFD
+  // Hangul composed to the store's syllables; halfwidth katakana as the
+  // fullwidth.
+  TEST_ASSERT_EQUAL_STRING("中文", drawn(body, "中文").c_str());
+  TEST_ASSERT_EQUAL_STRING("王菲", drawn(body, "王菲").c_str());
+  TEST_ASSERT_EQUAL_STRING("周杰倫", drawn(small, "周杰倫").c_str());
+  TEST_ASSERT_EQUAL_STRING("宇多田ヒカル", drawn(body, "宇多田ヒカル").c_str());
+  TEST_ASSERT_EQUAL_STRING("坂本龍一", drawn(body, "坂本龍一").c_str());
+  TEST_ASSERT_EQUAL_STRING("아이유", drawn(body, "아이유").c_str());
+  TEST_ASSERT_EQUAL_STRING("한글", drawn(body, "\xE1\x84\x92\xE1\x85\xA1\xE1\x86\xAB\xE1\x84\x80\xE1\x85\xB3\xE1\x86\xAF").c_str());
+  TEST_ASSERT_EQUAL_STRING("カタカナ", drawn(body, "ｶﾀｶﾅ").c_str());
+  TEST_ASSERT_EQUAL_STRING("ガ パ ア゛", drawn(body, "ｶﾞ ﾊﾟ ｱﾞ").c_str());  // no ア with the mark: the spacing ゛
+  TEST_ASSERT_EQUAL_STRING("「東京」 ・ ㄱ ー", drawn(body, "「東京」 ・ ㄱ ー").c_str());
+  TEST_ASSERT_EQUAL_STRING("Tokyo 東京事変 – Live", drawn(body, "Tokyo 東京事変 \xE2\x80\x93 Live").c_str());
+  TEST_ASSERT_EQUAL_INT(16 * 6, body.width("宇多田ヒカル"));  // Han and kana 16 px, Hangul 15
+  TEST_ASSERT_EQUAL_INT(15 * 3, body.width("아이유"));
+  // Cut at a character to the room, with the font's "…".
+  const std::string cjkCut = drawn(body, "東京事変の夜明けのスキャット", 100);
+  TEST_ASSERT_EQUAL_STRING("東京事変の…", cjkCut.c_str());
+  TEST_ASSERT_TRUE(body.width(cjkCut.c_str()) <= 100);
+  // Scripts with no glyphs yet: '?' a letter, as before; the store's set
+  // has KS X 1001's Hangul and JIS X 0208 and GB2312's level 1, not all of them.
+  TEST_ASSERT_EQUAL_STRING("???", drawn(body, "Հայ").c_str());  // Armenian
+  TEST_ASSERT_EQUAL_STRING("?", drawn(body, "똠").c_str());     // a Hangul syllable outside KS X 1001
+  TEST_ASSERT_EQUAL_STRING("?", drawn(body, "\xF0\xA0\x80\x80").c_str());  // U+20000, past the BMP
+  TEST_ASSERT_EQUAL_STRING("Ninja ? Beats", drawn(body, "Ninja 🥷 Beats").c_str());
+  TEST_ASSERT_EQUAL_STRING("?", drawn(body, "\xE2\x9D\xA4\xEF\xB8\x8F").c_str());  // ❤ + VS16: one '?'
+  // Cut to the room as before, the composed text measured.
+  const std::string cut = drawn(body, "Beyonce\xCC\x81 Beyonce\xCC\x81 Beyonce\xCC\x81", 100);
+  TEST_ASSERT_TRUE(body.width(cut.c_str()) <= 100);
+  TEST_ASSERT_TRUE(body.hasAll(cut.c_str()));
+  TEST_ASSERT_EQUAL_STRING("Beyoncé…", cut.c_str());  // whole letters, the é one glyph
+}
+
+// What a page measures (ui/Fonts::width(): textfit::drawnWidth()) is what
+// is drawn: a halfwidth or NFD name as its composed glyphs, a missing glyph
+// as its fold. Measured raw, a halfwidth kana or a jamo is a 4-5 px blank,
+// a third of what the store draws: a path kept whole that the draw then
+// cuts at its end, an album line given its year and then cut.
+void test_names_measured_as_drawn() {
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  auto view = [](const Vlw& v) {
+    textfit::Font f;
+    f.ctx = const_cast<Vlw*>(&v);
+    f.width = vlwWidth;
+    f.has = vlwHas;
+    return f;
+  };
+  const char* nfdPath =
+      "/music/\xE1\x84\x8B\xE1\x85\xA1\xE1\x84\x8B\xE1\x85\xB5\xE1\x84\x8B\xE1\x85\xB2/"  // 아이유
+      "\xE1\x84\x89\xE1\x85\xA5\xE1\x84\x8B\xE1\x85\xAE\xE1\x86\xAF\xE1\x84\x8B\xE1\x85\xB4"  // 서울의
+      " \xE1\x84\x87\xE1\x85\xA1\xE1\x86\xB7";                                              // 밤
+  const char* names[] = {"/music/ｱﾆﾒ/ｻｳﾝﾄﾞﾄﾗｯｸ", "ﾀﾞﾌﾞﾙﾌｧﾝﾀｼﾞｰ · 2002", nfdPath, "Beyonce\xCC\x81",
+                         "Mỹ Tâm", "Հայ", "Ninja 🥷 Beats", "Don\xC2\x92t", "Tokyo 東京事変 – Live"};
+  for (const Vlw* v : {&body, &small}) {
+    for (const char* n : names) {
+      TEST_ASSERT_EQUAL_INT_MESSAGE(v->width(drawn(*v, n, 10000).c_str()), textfit::drawnWidth(view(*v), n), n);
+    }
+  }
+  TEST_ASSERT_EQUAL_INT(99, small.width("/music/ｱﾆﾒ/ｻｳﾝﾄﾞﾄﾗｯｸ"));  // raw: the 12 halfwidth ones blank
+  TEST_ASSERT_EQUAL_INT(227, textfit::drawnWidth(view(small), "/music/ｱﾆﾒ/ｻｳﾝﾄﾞﾄﾗｯｸ"));
+  // The Folders header and Go to folder: the last folders kept, as for
+  // the fullwidth path.
+  char out[160];
+  textfit::cutPathLeft(view(small), "/music/ｱﾆﾒ/ｻｳﾝﾄﾞﾄﾗｯｸ", 200, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("…/ｱﾆﾒ/ｻｳﾝﾄﾞﾄﾗｯｸ", out);
+  TEST_ASSERT_EQUAL_STRING("…/アニメ/サウンドトラック", drawn(small, out, 200).c_str());  // whole
+  textfit::cutPathLeft(view(small), nfdPath, 150, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("…/아이유/서울의 밤", drawn(small, out, 150).c_str());
+  // Now Playing's album line (190 px of Body): the year only when it fits.
+  TEST_ASSERT_EQUAL_INT(199, textfit::drawnWidth(view(body), "ﾀﾞﾌﾞﾙﾌｧﾝﾀｼﾞｰ · 2002"));
+}
+
+// The Bold and Title roles draw the store's glyphs bold, a pixel wider
+// (docs/I18N.md, phase 2), and measure them so: a Bold label, the current
+// row, a cut, all as wide as drawn. Body and Small as before; the VLW
+// glyphs unchanged in every role.
+void test_store_glyphs_bold_in_bold_and_title() {
+  const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
+  TEST_ASSERT_FALSE(body.boldCjk || small.boldCjk);
+  TEST_ASSERT_TRUE(bold.boldCjk && title.boldCjk);
+  TEST_ASSERT_EQUAL_INT(16 * 4, body.width("東京事変"));
+  TEST_ASSERT_EQUAL_INT(16 * 4, small.width("東京事変"));
+  TEST_ASSERT_EQUAL_INT(17 * 4, bold.width("東京事変"));
+  TEST_ASSERT_EQUAL_INT(17 * 4, title.width("東京事変"));
+  TEST_ASSERT_EQUAL_INT(15 * 3, body.width("아이유"));
+  TEST_ASSERT_EQUAL_INT(16 * 3, bold.width("아이유"));
+  TEST_ASSERT_EQUAL_INT(17, bold.width("\xE3\x80\x80"));  // the ideographic space moves the pen: a pixel more
+  TEST_ASSERT_EQUAL_INT(bold.width("Tokyo ") + 17 * 2, bold.width("Tokyo 東京"));
+  // A cut in Bold fits by the bold measure: in the Queue's 270 px, 14 Han
+  // and "…" where Body has 15.
+  const char* han = "東京事変の夜明けに歌う小さな歌とその続き";
+  const std::string inBody = drawn(body, han, 270), inBold = drawn(bold, han, 270);
+  TEST_ASSERT_TRUE(body.width(inBody.c_str()) <= 270);
+  TEST_ASSERT_TRUE(bold.width(inBold.c_str()) <= 270);
+  TEST_ASSERT_EQUAL_STRING("東京事変の夜明けに歌う小さな歌…", inBody.c_str());
+  TEST_ASSERT_EQUAL_STRING("東京事変の夜明けに歌う小さな…", inBold.c_str());
+  // What a page measures (Fonts::width(): textfit::drawnWidth()) is the
+  // bold width too: halfwidth kana as the fullwidth, bold.
+  TEST_ASSERT_EQUAL_INT(17 * 4, textfit::drawnWidth(viewOf(bold), "ｶﾀｶﾅ"));
+}
+
+// Now Playing's title (TitleLayout, 190 px): two lines of Title (22 px),
+// else three of Bold (16 px), centred in the strip. A title with a glyph
+// from the store goes to the Bold rows whatever its length: its CJK is
+// 16 px in every role, small beside 22 px Latin. Decided on the text as
+// drawn (composed and folded), with the real fonts and the store.
+void test_now_playing_title_rows() {
+  const Vlw bold(kVlwSansBold16), title(kVlwSansBold22);
+  constexpr int kW = uitext::kNowPlayingTextW;
+  char lines[titlelayout::kMaxLines][titlelayout::kLineSize];
+  auto lay = [&](const char* t) {
+    return titlelayout::wrap(viewOf(title), viewOf(bold), fromStore(title, t), t, kW, lines);
+  };
+  // Which texts have a glyph from the store, as drawn.
+  TEST_ASSERT_TRUE(fromStore(title, "只爱陌生人"));
+  TEST_ASSERT_TRUE(fromStore(title, "봄날"));
+  TEST_ASSERT_TRUE(fromStore(title, "Tokyo 東京 Live"));
+  TEST_ASSERT_TRUE(fromStore(title, "ｶﾀｶﾅ"));  // halfwidth: drawn as the store's カタカナ
+  TEST_ASSERT_TRUE(fromStore(title, "\xE1\x84\x92\xE1\x85\xA1\xE1\x86\xAB"));  // NFD 한
+  TEST_ASSERT_TRUE(fromStore(title, "Live\xE3\x80\x80"));  // the ideographic space is the store's
+  TEST_ASSERT_FALSE(fromStore(title, "Кино – Группа крови"));
+  TEST_ASSERT_FALSE(fromStore(title, "Minus \xE2\x88\x92" "1"));  // − (U+2212) is drawn as '-'
+  TEST_ASSERT_FALSE(fromStore(title, "ＡＢＣ"));                    // as ABC
+  TEST_ASSERT_FALSE(fromStore(title, "\xEB\x98\xA0"));           // 똠: not in the store, drawn '?'
+  TEST_ASSERT_FALSE(fromStore(title, ""));
+  TEST_ASSERT_FALSE(fromStore(title, nullptr));
+
+  // Latin as before: one Title line in the middle, two at 13 and 39.
+  titlelayout::Lines l = lay("Glass Harbour");
+  TEST_ASSERT_FALSE(l.bold);
+  TEST_ASSERT_EQUAL_INT(1, l.count);
+  TEST_ASSERT_EQUAL_INT(26, titlelayout::lineY(l, 0));
+  l = lay("Glass Harbour at Night");
+  TEST_ASSERT_FALSE(l.bold);
+  TEST_ASSERT_EQUAL_INT(2, l.count);
+  TEST_ASSERT_EQUAL_INT(13, titlelayout::lineY(l, 0));
+  TEST_ASSERT_EQUAL_INT(39, titlelayout::lineY(l, 1));
+  // Too long for two Title lines: Bold, three lines at 9, 26 and 43.
+  l = lay("The Longest Title Anyone Ever Gave a Song About a Very Long Road");
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_INT(3, l.count);
+  TEST_ASSERT_EQUAL_INT(9, titlelayout::lineY(l, 0));
+  TEST_ASSERT_EQUAL_INT(26, titlelayout::lineY(l, 1));
+  TEST_ASSERT_EQUAL_INT(43, titlelayout::lineY(l, 2));
+  // ... or two of Bold, centred: 17 and 34.
+  l = lay("Glass Harbour at Night and the Pier");
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_INT(2, l.count);
+  TEST_ASSERT_EQUAL_INT(17, titlelayout::lineY(l, 0));
+  TEST_ASSERT_EQUAL_INT(34, titlelayout::lineY(l, 1));
+  // CJK: Bold, however short. One line in the middle.
+  l = lay("只爱陌生人");
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_INT(1, l.count);
+  TEST_ASSERT_EQUAL_INT(26, titlelayout::lineY(l, 0));
+  TEST_ASSERT_EQUAL_STRING("只爱陌生人", lines[0]);
+  l = lay("봄날");
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_INT(1, l.count);
+  l = lay("ｶﾀｶﾅ ﾊﾟﾗﾀﾞｲｽ");
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_STRING("カタカナ パラダイス", lines[0]);
+  l = lay("Tokyo 東京事変 Live 2004");  // two Title lines would have held it
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_INT(2, l.count);
+  // Any glyph from the store, not only Han, kana and Hangul: JIS X 0208's
+  // symbols that the UI fonts lack are the store's too (16 px, bold here),
+  // and so is the ideographic space. A Latin title with one is Bold.
+  for (const char* sym : {"★", "☆", "♪", "→", "∞", "√", "※", "○", "●", "℃", "‥", "〜", "・", "\xE3\x80\x80"}) {
+    TEST_ASSERT_TRUE_MESSAGE(fromStore(title, sym), sym);
+  }
+  l = lay("Lucky ☆ Star");
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_INT(1, l.count);
+  TEST_ASSERT_EQUAL_INT(26, titlelayout::lineY(l, 0));
+  l = lay("A → B");
+  TEST_ASSERT_TRUE(l.bold);
+  l = lay("Hello\xE3\x80\x80World");
+  TEST_ASSERT_TRUE(l.bold);
+  // A sign the UI fonts draw stays theirs: Title.
+  l = lay("Star · 1° ©");
+  TEST_ASSERT_FALSE(l.bold);
+  TEST_ASSERT_EQUAL_INT(1, l.count);
+  // 11 bold Han to a line (17 px: 187 of 190), wrapped between them.
+  l = lay("東京の夜明けに歌う小さな歌とその続き");
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_INT(2, l.count);
+  TEST_ASSERT_EQUAL_STRING("東京の夜明けに歌う小さ", lines[0]);
+  TEST_ASSERT_EQUAL_STRING("な歌とその続き", lines[1]);
+  TEST_ASSERT_EQUAL_INT(17, titlelayout::lineY(l, 0));
+  // Three lines at most, the last ellipsised; every line in its 190 px.
+  l = lay("東京事変の夜明けに歌う小さな歌とその続きの物語、そして最後の朝の光と長い長い帰り道");
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_INT(3, l.count);
+  for (int i = 0; i < l.count; ++i) TEST_ASSERT_TRUE(bold.width(lines[i]) <= kW);
+  TEST_ASSERT_TRUE(titlelayout::cutShort(lines[2], "東京事変の夜明けに歌う小さな歌とその続きの物語、そして最後の朝の光と長い長い帰り道"));
+  // Only a '?' where the store has none: Title, as a Latin title.
+  l = lay("\xEB\x98\xA0");
+  TEST_ASSERT_FALSE(l.bold);
+  TEST_ASSERT_EQUAL_STRING("?", lines[0]);
+  l = lay("");
+  TEST_ASSERT_EQUAL_INT(0, l.count);
+  // cutShort(): the last line ends in an ellipsis the text didn't have.
+  TEST_ASSERT_TRUE(titlelayout::cutShort("abc…", "abcdef"));
+  TEST_ASSERT_TRUE(titlelayout::cutShort("abc...", "abcdef"));
+  TEST_ASSERT_FALSE(titlelayout::cutShort("abc…", "abc…"));
+  TEST_ASSERT_FALSE(titlelayout::cutShort("abc", "abc"));
+}
+
+// Phase 1's glyphs (docs/I18N.md; tools/vlw_font.py's RANGES) keep every
+// row of the UI as it was: M5GFX makes a font's line height its tallest
+// glyph's ascent plus its deepest one's descent, and the generator fits
+// the tall ones (Ǘ, Ă, ΐ) inside the header's. The line heights and
+// baselines are the 256-glyph fonts' (3a1835a), and no glyph at all, Latin-1
+// included (M5GFX doesn't measure it, so it would draw over the row
+// above), leaves the line.
+void test_fonts_keep_their_line_heights() {
+  struct Want {
+    const uint8_t* data;
+    int ascent, descent;
+  };
+  const Want want[] = {{kVlwSans16, 15, 4}, {kVlwSans13, 13, 4}, {kVlwSansBold16, 15, 4}, {kVlwSansBold22, 21, 6}};
+  const int line[] = {19, 17, 19, 27};
+  for (int i = 0; i < 4; ++i) {
+    const Vlw f(want[i].data);
+    TEST_ASSERT_EQUAL_INT(want[i].ascent, f.ascent);
+    TEST_ASSERT_EQUAL_INT(want[i].descent, f.descent);
+    TEST_ASSERT_EQUAL_INT(want[i].ascent, f.maxAscent);  // the baseline
+    TEST_ASSERT_EQUAL_INT(line[i], f.yAdvance);
+    for (const Vlw::Box& b : f.boxes) {
+      char msg[48];
+      snprintf(msg, sizeof(msg), "U+%04X in font %d", static_cast<unsigned>(b.cp), i);
+      TEST_ASSERT_TRUE_MESSAGE(b.top <= f.ascent && b.height - b.top <= f.descent, msg);
+    }
+  }
+  // The Body and Small heights the boot screen keeps room for.
+  TEST_ASSERT_EQUAL_INT(bootlayout::kBodyH, Vlw(kVlwSans16).yAdvance);
+  TEST_ASSERT_EQUAL_INT(bootlayout::kSmallH, Vlw(kVlwSans13).yAdvance);
+}
+
+// The glyph store's glyphs in the four rows (docs/I18N.md, phase 2), placed
+// as ui/Fonts places them: 16 px in every role, on the role's baseline, the
+// Small row's a pixel lower (on DejaVu Sans 13's, 13 rows down, 8,902 of
+// the 10,557 would reach above its 17 px: the em box is 14 above and 2
+// below), and nothing outside the row. A glyph whose ink reaches above the
+// row moves down into it (Å in Body and Bold; in Small, 31: box drawing,
+// Å, ヷ and nine kanji), and only the full-height box drawing lose a row,
+// in Small (12). No kana, Hangul or Han is cut in any role.
+void test_store_glyphs_sit_in_the_rows() {
+  const glyphstore::Store& s = cjk();
+  TEST_ASSERT_TRUE(s.valid());
+  struct Role {
+    const uint8_t* data;
+    int baseline, moved, cut;
+  };
+  const Role roles[] = {{kVlwSans16, 15, 1, 0}, {kVlwSans13, 14, 31, 12}, {kVlwSansBold16, 15, 1, 0},
+                        {kVlwSansBold22, 21, 0, 0}};
+  for (const Role& role : roles) {
+    const Vlw f(role.data);
+    const int base = s.baselineIn(f.maxAscent, f.yAdvance);
+    TEST_ASSERT_EQUAL_INT(role.baseline, base);
+    int moved = 0, cut = 0, glyphs = 0;
+    for (uint32_t cp = 0; cp <= 0xFFFF; ++cp) {
+      const glyphstore::Glyph g = s.find(cp);
+      if (!g) continue;
+      ++glyphs;
+      const glyphstore::Metrics m = s.metrics(g);
+      if (m.w == 0) continue;
+      const glyphstore::Placement p = glyphstore::place(m, base, f.yAdvance);
+      char msg[48];
+      snprintf(msg, sizeof(msg), "U+%04X in a %d px row", static_cast<unsigned>(cp), f.yAdvance);
+      TEST_ASSERT_TRUE_MESSAGE(p.top >= 0 && p.rows > 0 && p.top + p.rows <= f.yAdvance, msg);
+      if (p.top != base - m.y) ++moved;
+      if (p.rows < m.h) {
+        ++cut;
+        TEST_ASSERT_TRUE_MESSAGE(cp >= 0x2500 && cp <= 0x257F, msg);  // box drawing only
+        TEST_ASSERT_EQUAL_INT_MESSAGE(m.h - 1, p.rows, msg);
+      }
+    }
+    TEST_ASSERT_EQUAL_UINT32(s.glyphCount(), static_cast<uint32_t>(glyphs));
+    TEST_ASSERT_EQUAL_INT(role.moved, moved);
+    TEST_ASSERT_EQUAL_INT(role.cut, cut);
+  }
+}
+
+// Now Playing's title lines share rows (TitleLayout): each line's row,
+// centred on lineY() as draw() centres it, is taller than the pitch, so
+// the next line's row starts over its last rows: Bold's two (19 rows 17
+// apart, in two lines as in three) and Title's one (27 rows 26 apart). In
+// Bold the ink of the line above reaches them: 157 of DejaVu Sans Bold's
+// glyphs (J g j p q y _ { | }, letters with a cedilla or an ogonek, Greek's
+// and Cyrillic's descenders: ç ą ρ щ у) and the store's glyphs 3 px under
+// the baseline (283 Han, 19 Hangul, 20 box drawing); in Title nothing does.
+// So NowPlayingPage::drawTitle() fills its strip and draws the lines with
+// no background: a line's own would erase that row (docs/I18N.md, phase 2;
+// the drawing is checked on the PC).
+void test_now_playing_title_lines_share_rows() {
+  const glyphstore::Store& s = cjk();
+  struct Layout {
+    const uint8_t* data;
+    bool bold;
+    int count, shared, vlw, han, hangul, other;
+  };
+  const Layout layouts[] = {{kVlwSansBold16, true, 2, 2, 157, 283, 19, 20},
+                            {kVlwSansBold16, true, 3, 2, 157, 283, 19, 20},
+                            {kVlwSansBold22, false, 2, 1, 0, 0, 0, 0}};
+  for (const Layout& want : layouts) {
+    const Vlw f(want.data);
+    titlelayout::Lines l;
+    l.bold = want.bold;
+    l.count = want.count;
+    const int base = s.baselineIn(f.maxAscent, f.yAdvance);
+    for (int i = 0; i + 1 < l.count; ++i) {
+      const int top = titlelayout::lineY(l, i) - (f.yAdvance >> 1);
+      const int next = titlelayout::lineY(l, i + 1) - (f.yAdvance >> 1);
+      TEST_ASSERT_EQUAL_INT(want.shared, top + f.yAdvance - next);
+      const int from = next - top;  // line i's first row under the next line's
+      // A VLW glyph's rows start at the baseline less its top (M5GFX).
+      int vlw = 0;
+      std::string some;
+      for (const Vlw::Box& b : f.boxes) {
+        if (b.height > 0 && f.maxAscent - b.top + b.height - 1 >= from) {
+          ++vlw;
+          if (b.cp < 0x80) some += static_cast<char>(b.cp);
+        }
+      }
+      TEST_ASSERT_EQUAL_INT(want.vlw, vlw);
+      if (want.vlw) TEST_ASSERT_EQUAL_STRING("J_gjpqy{|}", some.c_str());
+      int han = 0, hangul = 0, other = 0;
+      for (uint32_t cp = 0; cp <= 0xFFFF; ++cp) {
+        const glyphstore::Glyph g = s.find(cp);
+        if (!g) continue;
+        const glyphstore::Metrics m = s.metrics(g);
+        if (m.w == 0) continue;
+        const glyphstore::Placement p = glyphstore::place(m, base, f.yAdvance);
+        if (p.top + p.rows - 1 < from) continue;
+        if (textfold::scriptOf(cp) == textfold::Script::Han) {
+          ++han;
+        } else if (cp >= 0xAC00 && cp <= 0xD7A3) {
+          ++hangul;
+        } else {
+          ++other;
+          TEST_ASSERT_TRUE(cp >= 0x2500 && cp <= 0x257F);  // box drawing
+        }
+      }
+      TEST_ASSERT_EQUAL_INT(want.han, han);
+      TEST_ASSERT_EQUAL_INT(want.hangul, hangul);
+      TEST_ASSERT_EQUAL_INT(want.other, other);
+    }
+  }
+}
+
+// What each of the four fonts covers since phase 1, and what it leaves to
+// TextFit (docs/I18N.md, phase 1: the blocks left out and their cost).
+void test_fonts_cover_greek_cyrillic_and_latin() {
+  const uint8_t* fonts[] = {kVlwSans16, kVlwSans13, kVlwSansBold16, kVlwSansBold22};
+  for (const uint8_t* data : fonts) {
+    const Vlw f(data);
+    TEST_ASSERT_EQUAL_UINT32(734, f.advance.size());
+    auto all = [&](uint32_t a, uint32_t b) {
+      for (uint32_t cp = a; cp <= b; ++cp) {
+        char msg[24];
+        snprintf(msg, sizeof(msg), "U+%04X", static_cast<unsigned>(cp));
+        TEST_ASSERT_TRUE_MESSAGE(f.find(cp) >= 0, msg);
+      }
+    };
+    auto none = [&](uint32_t a, uint32_t b) {
+      for (uint32_t cp = a; cp <= b; ++cp) {
+        char msg[24];
+        snprintf(msg, sizeof(msg), "U+%04X", static_cast<unsigned>(cp));
+        TEST_ASSERT_TRUE_MESSAGE(f.find(cp) < 0, msg);
+      }
+    };
+    all(0x20, 0x7E);
+    all(0xA0, 0xFF);
+    all(0x100, 0x17F);  // Latin Extended-A, all of it
+    all(0x1CD, 0x1DC);  // Pinyin: ǎ ě ǐ ǒ ǔ, ǖ ǘ ǚ ǜ and their capitals
+    all(0x218, 0x21B);  // Romanian: Ș ș Ț ț
+    // Greek: the letters with tonos and dialytika, the alphabet, final
+    // sigma, the symbols' letter forms and the archaic letters.
+    all(0x386, 0x386);
+    all(0x388, 0x38A);
+    all(0x38C, 0x38C);
+    all(0x38E, 0x3A1);
+    all(0x3A3, 0x3E1);
+    all(0x3F0, 0x3FF);
+    all(0x384, 0x385);  // tonos, dialytika tonos
+    all(0x37E, 0x37E);  // the Greek question mark, ano teleia
+    all(0x387, 0x387);
+    // Cyrillic: Russian, Ukrainian, Belarusian, Serbian, Macedonian,
+    // Bulgarian, and the Central Asian and Caucasian letters.
+    all(0x400, 0x482);
+    all(0x48A, 0x4FF);
+    // Left out: Church Slavonic's combining marks, the Coptic letters,
+    // Cyrillic Supplement, Armenian, Georgian, the rest of Latin
+    // Extended-B, Latin Extended Additional (Vietnamese), Greek Extended.
+    none(0x483, 0x489);
+    none(0x3E2, 0x3EF);
+    none(0x500, 0x52F);
+    none(0x531, 0x587);
+    none(0x10A0, 0x10FF);
+    none(0x180, 0x1CC);
+    none(0x1DD, 0x217);
+    none(0x21C, 0x24F);
+    none(0x1E00, 0x1EFF);
+    none(0x1F00, 0x1FFF);
+    // The sample names, every glyph.
+    TEST_ASSERT_TRUE(f.hasAll("Кино Земфира Ёлка Ђорђе Балашевић Ґанна Їжак Ўладзімір Қазақ"));
+    TEST_ASSERT_TRUE(f.hasAll("Χάρις Αλεξίου Ϊ ϋ ΐ ΰ ς"));
+    TEST_ASSERT_TRUE(f.hasAll("Ștefan Bănică Łódź Wołanie İstanbul Dvořák Ģirts Ļ ŀ ŉ ſ"));
+    TEST_ASSERT_TRUE(f.hasAll("Lǚ Nǚ ǎ Ǎ ǜ Ǜ"));
+  }
+}
 
 // The first-boot tips: the first screen a new user sees.
 void test_coach_texts_fit() {
   using namespace uitext;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
-  fits(bold, kCoachTitle, kCoachTextW);
-  fits(small, kCoachLine, kCoachTextW);
+  fits(bold, tr(S::coach_title), kCoachTextW);
+  fits(small, tr(S::coach_line), kCoachTextW);
   TEST_ASSERT_TRUE(3 * kCoachBoxW + 2 * 4 <= 320);
-  for (int b = 0; b < 3; ++b) {
-    fits(bold, kCoachClick[b], kCoachBoxTextW);
-    fits(small, kCoachHold[b], kCoachBoxTextW);
-    fits(small, kCoachHold2[b], kCoachBoxTextW);
+  for (S id : {S::coach_click_prev, S::coach_click_play, S::coach_click_next}) fits(bold, tr(id), kCoachBoxTextW);
+  for (S id : {S::coach_hold_prev, S::coach_hold_play, S::coach_hold_next}) {
+    for (int k = 0; k < 2; ++k) fits(small, lineOf(id, k).c_str(), kCoachBoxTextW);
   }
-  for (const char* t : kCoachTab) fits(title, t, kCoachTextW);
-  for (const char* t : kCoachTabMore) fits(small, t, kCoachTextW);
+  for (int k = 0; k < 2; ++k) {
+    fits(title, lineOf(S::coach_tab, k).c_str(), kCoachTextW);
+    fits(small, lineOf(S::coach_tab_more, k).c_str(), kCoachTextW);
+  }
+  fits(small, tr(S::coach_tips_where), kCoachTextW);
   (void)body;
+  // The header (Coach::drawHeader()), each card in each language: "Tip 1
+  // of 2" in its room, clear of the pill; the hint only whole, in what the
+  // tip and that card's pill (Next, then Got it) leave it, never under the
+  // pill (the device check: French's, German's and Russian's ran under it).
+  // English's, Japanese's and Chinese's show on both cards.
+  std::string report;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    for (int card = 1; card <= 2; ++card) {
+      char tip[48];
+      uistr::trf(tip, sizeof(tip), S::coach_header_tip, card, 2);
+      fits(bold, tip, kCoachTipW);
+      const char* label = tr(card == 1 ? S::coach_next : S::coach_got_it);
+      const int tipW = std::min(bold.width(tip), kCoachTipW);
+      const int pillX = coachPillX(bold.width(label));
+      TEST_ASSERT_TRUE_MESSAGE(kCoachTipX + tipW + 8 <= pillX, tip);
+      const char* hint = tr(S::coach_header_hint);
+      const int room = coachHintRoom(tipW, bold.width(label));
+      TEST_ASSERT_TRUE(room <= kCoachHintW);
+      if (small.width(hint) <= room) {
+        fits(small, hint, room);
+        TEST_ASSERT_TRUE_MESSAGE(kCoachTipX + tipW + 8 + small.width(hint) + 8 <= pillX, hint);
+      } else {
+        char m[96];
+        snprintf(m, sizeof(m), "%s card %d: no hint (%d px in %d); ", uistr::tag(l), card, small.width(hint), room);
+        report += m;
+      }
+      if (l == uistr::Lang::En || l == uistr::Lang::Ja || l == uistr::Lang::Zh) {
+        TEST_ASSERT_TRUE_MESSAGE(small.width(hint) <= room, uistr::tag(l));
+      }
+    }
+  }
+  TEST_MESSAGE(report.c_str());
+  uistr::setLang(uistr::Lang::En);
+  // English as before: the hint at x 12 + the tip + 8, 120 px at most.
+  TEST_ASSERT_EQUAL_INT(kCoachHintW, coachHintRoom(bold.width("Tip 1 of 2"), bold.width(tr(S::coach_next))));
+  TEST_ASSERT_EQUAL_INT(kCoachHintW, coachHintRoom(bold.width("Tip 2 of 2"), bold.width(tr(S::coach_got_it))));
 }
 
 // The play-next toast on two lines: a typical title in Body, mockup 12's
@@ -355,7 +1026,7 @@ void test_toast_names_fit() {
   fits(body, "Can'T Tell Me Nothing", room);
   fits(body, "One More Time", room);
   fits(small, "Harder, Better, Faster, Stronger", room);
-  fits(small, "Plays next", room);
+  fits(small, uistr::trn(S::queue_cap_push_next, 1), room);
 }
 
 // The queue's cap (docs/QUEUE-MODES.md 15): the refusal (full, and no
@@ -370,6 +1041,9 @@ void test_queue_cap_texts_fit() {
   using queueview::Capped;
   const Vlw body(kVlwSans16), small(kVlwSans13);
   {
+    char full[128];
+    uistr::trnf(full, sizeof(full), S::queue_cap_full, 5000, uistr::grouped(5000));
+    const char* kQueueFull = full;
     const std::string s(kQueueFull);
     const size_t colon = s.find(": ");
     TEST_ASSERT_TRUE(colon != std::string::npos);
@@ -447,17 +1121,20 @@ void test_push_out_texts_fit() {
     TEST_MESSAGE(msg);
   }
   // One played track's line is Body.
-  fits(body, kPushedOne, room);
+  char one[64];
+  uistr::trnf(one, sizeof(one), S::queue_cap_pushed, 1, 1);
+  fits(body, one, room);
 }
 
 // The empty states' two buttons (the empty queue, Nothing playing) and line.
 void test_empty_state_texts_fit() {
   using namespace uitext;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
-  TEST_ASSERT_TRUE(bold.width("Open Library") + kEmptyIconW[0] + 8 <= kEmptyPrimaryW - 12);
-  TEST_ASSERT_TRUE(body.width("Shuffle all") + kEmptyIconW[1] + 8 <= kEmptySecondW - 12);
+  TEST_ASSERT_TRUE(bold.width(tr(S::empty_open_library)) + kEmptyIconW[0] + 8 <= kEmptyPrimaryW - 12);
+  TEST_ASSERT_TRUE(body.width(tr(S::empty_shuffle_all)) + kEmptyIconW[1] + 8 <= kEmptySecondW - 12);
+  TEST_ASSERT_TRUE(body.width(tr(S::empty_autodj)) + kEmptyIconW[1] + 8 <= kEmptySecondW - 12);  // (Auto DJ's place)
   TEST_ASSERT_TRUE(kEmptyPrimaryX + kEmptyPrimaryW < kEmptySecondX && kEmptySecondX + kEmptySecondW <= 320 - 6);
-  fits(small, kPickInLibrary, kEmptyLineW);
+  fits(small, tr(S::empty_pick_in_library), kEmptyLineW);
 }
 
 // No card, and each kind of card that didn't mount (cardMessage(): exFAT,
@@ -467,20 +1144,23 @@ void test_no_card_texts_fit() {
   using namespace uitext;
   using cardformat::Kind;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
-  fits(bold, kTryAgain, 320 - 140 - 12);  // the one button: x 70, 180 px, 6 px in at each end
+  fits(bold, tr(S::empty_try_again), 320 - 140 - 12);  // the one button: x 70, 180 px, 6 px in at each end
   for (Kind k : {Kind::Unreadable, Kind::Other, Kind::ExFat, Kind::Ntfs, Kind::Gpt}) {
     const CardMessage& m = cardMessage(k);
-    fits(title, m.title, kEmptyTitleW);
-    for (const char* t : m.lines) fits(small, t, kEmptyLineW);
-    const std::string n(m.still);
+    fits(title, tr(m.title), kEmptyTitleW);
+    TEST_ASSERT_EQUAL_INT(2, uistr::lineCount(tr(m.lines)));
+    const std::string line0 = lineOf(m.lines, 0), line1 = lineOf(m.lines, 1);
+    fits(small, line0.c_str(), kEmptyLineW);
+    fits(small, line1.c_str(), kEmptyLineW);
+    const std::string n(tr(m.still));
     const size_t colon = n.find(": ");
     TEST_ASSERT_TRUE(colon != std::string::npos);
     fits(small, n.substr(0, colon).c_str(), kToastTwoLineW);
-    fits(body, m.still + colon + 2, kToastTwoLineW);
+    fits(body, tr(m.still) + colon + 2, kToastTwoLineW);
     char msg[200];
-    snprintf(msg, sizeof(msg), "%s: title %d; lines %d, %d; note %d, %d", cardformat::name(k), title.width(m.title),
-             small.width(m.lines[0]), small.width(m.lines[1]), small.width(n.substr(0, colon).c_str()),
-             body.width(m.still + colon + 2));
+    snprintf(msg, sizeof(msg), "%s: title %d; lines %d, %d; note %d, %d", cardformat::name(k),
+             title.width(tr(m.title)), small.width(line0.c_str()), small.width(line1.c_str()),
+             small.width(n.substr(0, colon).c_str()), body.width(tr(m.still) + colon + 2));
     TEST_MESSAGE(msg);
   }
 }
@@ -518,13 +1198,28 @@ void test_queue_texts_fit() {
       fits(bold, t, kRemoveW - 8);
     }
   }
-  fits(body, "Play next", kQueueNextW - 6);
-  fits(body, "Clear\xE2\x80\xA6", kQueueClearW - 8);
+  fits(body, tr(S::queue_play_next_bar), kQueueNextW - kQueueNextPad);
+  fits(body, tr(S::queue_clear_bar), kQueueClearW - kQueueClearPad);
   TEST_ASSERT_TRUE(kRemoveX + kRemoveW < kQueueNextX && kQueueNextX + kQueueNextW < kQueueClearX &&
                    kQueueClearX + kQueueClearW <= 320);
+  // Every language: Play next and Clear in Body, else Small.
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    fitsIn(body, small, tr(S::queue_play_next_bar), kQueueNextW - kQueueNextPad);
+    fitsIn(body, small, tr(S::queue_clear_bar), kQueueClearW - kQueueClearPad);
+  }
+  uistr::setLang(uistr::Lang::En);
   // The header: "4 of 16 · 49 min" beside "Queue" and the Edit pill (the
-  // room QueuePage::header() computes), up to 999 entries and 16 hours.
-  const int room = (320 - 6 - (bold.width("Edit") + 24) - 8) - (12 + bold.width("Queue") + 8);
+  // room QueuePage::header() computes: the pill's label in Bold within
+  // kQueuePillTextW, else Small, Header::pillW()), up to 999 entries and 16
+  // hours.
+  const char* edit = tr(S::queue_edit);
+  const int pillW = (bold.width(edit) <= kQueuePillTextW ? bold : small).width(edit) + kHeaderPillPad;
+  TEST_ASSERT_EQUAL_INT(bold.width(edit) + 24, pillW);  // English: Bold, as before
+  const int room = (320 - 6 - pillW - 8) - (12 + bold.width(tr(S::queue_title)) + 8);
+  TEST_ASSERT_EQUAL_INT(room, headerSubRoom(12, bold.width(tr(S::queue_title)), headerRight(pillW)));
+  TEST_ASSERT_EQUAL_INT(169, room);
   queueview::Time time;
   time.knownS = 999 * 60;
   time.unknown = 1;
@@ -537,6 +1232,337 @@ void test_queue_texts_fit() {
   fits(small, buf, room);
 }
 
+// The Queue header's summary in every language (QueuePage::header()): the
+// first of its forms that fits whole beside that language's title and Edit
+// pill (queueview::pickSummary(): the long one, the position and the time,
+// the position alone, and only with no position the count and the time:
+// the owner's call); when the position alone doesn't fit there, the first
+// that fits whole on the header's second line, under the title, in the
+// same order (queueview::placeSummary(): German's "Warteschlange", the
+// apps' word, leaves 78 px beside it, too little for the position from six
+// digits, and 221 under it); else none: never one cut (the device check's
+// German "noch 9 · 3…" in 78 px). Where the queue is shows at each of these
+// queues in every language, 4999 of 5000 too, and with no time known; each
+// language's picks are pinned. English never goes under its title, and its
+// picks are as before but near the end of a long queue with hours next:
+// "1980 of 2000" where "20 up next · 1 h 40+ min" was.
+void test_queue_summary_fits_every_language() {
+  using namespace uitext;
+  using queueview::kSummaryLong;
+  using queueview::kSummaryMid;
+  using queueview::kSummaryPosition;
+  using queueview::kSummaryShort;
+  const Vlw small(kVlwSans13), bold(kVlwSansBold16);
+  // The pick itself, the widths in the order the forms are tried: {long,
+  // mid, position, short}. The position alone before the count and the
+  // time, which never come while there is a position.
+  TEST_ASSERT_EQUAL_INT(kSummaryLong, queueview::pickSummary({100, 90, 40, 80}, 100));
+  TEST_ASSERT_EQUAL_INT(kSummaryMid, queueview::pickSummary({120, 95, 40, 80}, 100));
+  TEST_ASSERT_EQUAL_INT(kSummaryPosition, queueview::pickSummary({120, 110, 40, 80}, 100));
+  TEST_ASSERT_EQUAL_INT(-1, queueview::pickSummary({120, 110, 101, 60}, 100));
+  TEST_ASSERT_EQUAL_INT(kSummaryMid, queueview::pickSummary({-1, 60, -1, 50}, 100));  // an empty form is never picked
+  TEST_ASSERT_EQUAL_INT(-1, queueview::pickSummary({-1, -1, -1, -1}, 100));
+  // No position (nothing current): the count and the time, last (the long
+  // and the mid forms say the same then: "Nothing up next").
+  TEST_ASSERT_EQUAL_INT(kSummaryShort, queueview::pickSummary({-1, -1, -1, 80}, 100));
+  TEST_ASSERT_EQUAL_INT(kSummaryLong, queueview::pickSummary({90, 90, -1, 90}, 100));
+  TEST_ASSERT_EQUAL_INT(-1, queueview::pickSummary({120, 120, -1, 120}, 100));
+  // Where: beside the title while the position alone fits there (over a
+  // fuller form under it), the first form that fits there; else under it,
+  // the first that fits there in the same order, else none. A count that
+  // fits beside the title never hides where the queue is (German's "noch
+  // 20", 51 px in 78, under "100 von 120 · noch 20" when no time is known);
+  // with no position (nothing current), beside while a form fits there.
+  {
+    queueview::SummaryPick p = queueview::placeSummary({100, 90, 40, 80}, 100, 200);
+    TEST_ASSERT_EQUAL_INT(kSummaryLong, p.form);
+    TEST_ASSERT_FALSE(p.below);
+    p = queueview::placeSummary({120, 110, 40, 101}, 100, 200);
+    TEST_ASSERT_EQUAL_INT(kSummaryPosition, p.form);
+    TEST_ASSERT_FALSE(p.below);
+    p = queueview::placeSummary({120, 110, 40, 80}, 100, 200);  // the count and the time fit too
+    TEST_ASSERT_EQUAL_INT(kSummaryPosition, p.form);
+    TEST_ASSERT_FALSE(p.below);
+    p = queueview::placeSummary({190, 180, 101, 160}, 100, 200);
+    TEST_ASSERT_EQUAL_INT(kSummaryLong, p.form);
+    TEST_ASSERT_TRUE(p.below);
+    p = queueview::placeSummary({250, 180, 101, 160}, 100, 200);
+    TEST_ASSERT_EQUAL_INT(kSummaryMid, p.form);
+    TEST_ASSERT_TRUE(p.below);
+    // Under the title in the same order: the position alone, though the
+    // count and the time fit there (and beside the title).
+    p = queueview::placeSummary({250, 230, 101, 60}, 100, 200);
+    TEST_ASSERT_EQUAL_INT(kSummaryPosition, p.form);
+    TEST_ASSERT_TRUE(p.below);
+    p = queueview::placeSummary({250, 240, 201, 230}, 100, 200);
+    TEST_ASSERT_EQUAL_INT(-1, p.form);
+    TEST_ASSERT_FALSE(p.below);
+    p = queueview::placeSummary({250, 240, 201, 60}, 100, 200);
+    TEST_ASSERT_EQUAL_INT(-1, p.form);
+    TEST_ASSERT_FALSE(p.below);
+    p = queueview::placeSummary({-1, -1, -1, -1}, 100, 200);
+    TEST_ASSERT_EQUAL_INT(-1, p.form);
+    TEST_ASSERT_FALSE(p.below);
+    p = queueview::placeSummary({143, 80, 80, 51}, 78, 221);
+    TEST_ASSERT_EQUAL_INT(kSummaryLong, p.form);
+    TEST_ASSERT_TRUE(p.below);
+    p = queueview::placeSummary({100, 100, -1, 100}, 100, 200);
+    TEST_ASSERT_EQUAL_INT(kSummaryLong, p.form);
+    TEST_ASSERT_FALSE(p.below);
+    p = queueview::placeSummary({120, 120, -1, 120}, 100, 200);
+    TEST_ASSERT_EQUAL_INT(kSummaryLong, p.form);
+    TEST_ASSERT_TRUE(p.below);
+  }
+  struct Case {
+    uint32_t upNext, mins;
+    bool more;
+    uint32_t pos, size;
+  };
+  const Case cases[] = {
+      {9, 37, false, 1, 10},
+      {12, 49, false, 4, 16},
+      {500, 999, true, 999, 999},
+      {4999, 5999, true, 4999, 5000},
+      {0, 0, false, 10, 10},
+      {99, 120, false, 1, 100},
+      {999, 999, true, 1, 1000},
+      {8, 0, false, 2, 10},
+      {4998, 5999, true, 1, 4999},
+      {20, 0, false, 100, 120},     // no time known: "100 von 120 · noch 20", "noch 20"
+      {20, 60, false, 100, 120},    // an hour next: Russian's "ещё 20 · 60 мин" fits, "100 из 120" too
+      {20, 100, true, 1980, 2000},  // English's "20 up next · 1 h 40+ min" fits, "1980 of 2000" too
+      {0, 0, false, 0, 10},         // no position (nothing current)
+  };
+  // The UI's language's rooms and pick at a queue, as QueuePage::header()
+  // makes them: beside the title (to 8 px before the Edit pill, the pill's
+  // label in Bold within kQueuePillTextW, else Small: Header::pillW()) and
+  // under it (from x 12 to the same right).
+  struct Placed {
+    int titleW, right, beside, below;
+    char forms[queueview::kSummaryForms][64];
+    int widths[queueview::kSummaryForms];
+    queueview::SummaryPick pick;
+  };
+  auto place = [&](const Case& c, Placed& p) {
+    const char* edit = tr(S::queue_edit);
+    const int pillW = (bold.width(edit) <= kQueuePillTextW ? bold : small).width(edit) + kHeaderPillPad;
+    p.titleW = bold.width(tr(S::queue_title));
+    p.right = headerRight(pillW);
+    p.beside = headerSubRoom(12, p.titleW, p.right);
+    p.below = p.right - 12;
+    queueview::Time t;
+    t.knownS = c.mins * 60;
+    t.unknown = c.more ? 1 : 0;
+    char(&f)[queueview::kSummaryForms][64] = p.forms;
+    queueview::summary(c.upNext, t, c.pos, c.size, f[kSummaryLong], sizeof(f[0]));
+    queueview::summary(c.upNext, t, c.pos, c.size, f[kSummaryMid], sizeof(f[0]), false);
+    // The position alone only with a position (the header makes it only
+    // with a current entry).
+    f[kSummaryPosition][0] = 0;
+    if (c.pos > 0) queueview::summary(0, queueview::Time{}, c.pos, c.size, f[kSummaryPosition], sizeof(f[0]), false);
+    queueview::summary(c.upNext, t, 0, c.size, f[kSummaryShort], sizeof(f[0]));
+    for (int k = 0; k < queueview::kSummaryForms; ++k) p.widths[k] = f[k][0] ? small.width(f[k]) : -1;
+    p.pick = queueview::placeSummary(p.widths, p.beside, p.below);
+  };
+  static const char* const kFormNames[queueview::kSummaryForms] = {"long", "mid", "position", "short"};
+  // Each language's picks at the queues above, in their order: "<position
+  // or 0>/<size> [<minutes known>m] <form>[ under]".
+  struct Picks {
+    uistr::Lang lang;
+    const char* picks;
+  };
+  static const Picks kPicks[] = {
+      {uistr::Lang::En,
+       "1/10 37m mid, 4/16 49m mid, 999/999 999m mid, 4999/5000 5999m position, 10/10 long, 1/100 120m mid, "
+       "1/1000 999m mid, 2/10 long, 1/4999 5999m mid, 100/120 long, 100/120 60m mid, 1980/2000 100m position, "
+       "0/10 long"},
+      {uistr::Lang::De,
+       "1/10 37m position, 4/16 49m position, 999/999 999m mid under, 4999/5000 5999m mid under, 10/10 mid, "
+       "1/100 120m position, 1/1000 999m position, 2/10 mid, 1/4999 5999m position, 100/120 long under, "
+       "100/120 60m long under, 1980/2000 100m mid under, 0/10 long under"},
+      {uistr::Lang::Es,
+       "1/10 37m mid, 4/16 49m mid, 999/999 999m position, 4999/5000 5999m position, 10/10 long, 1/100 120m mid, "
+       "1/1000 999m mid, 2/10 long, 1/4999 5999m mid, 100/120 mid, 100/120 60m mid, 1980/2000 100m position, "
+       "0/10 long"},
+      {uistr::Lang::Fr,
+       "1/10 37m mid, 4/16 49m mid, 999/999 999m mid, 4999/5000 5999m position, 10/10 long, 1/100 120m mid, "
+       "1/1000 999m mid, 2/10 long, 1/4999 5999m mid, 100/120 long, 100/120 60m mid, 1980/2000 100m position, "
+       "0/10 long"},
+      {uistr::Lang::It,
+       "1/10 37m mid, 4/16 49m mid, 999/999 999m position, 4999/5000 5999m position, 10/10 mid, 1/100 120m mid, "
+       "1/1000 999m mid, 2/10 long, 1/4999 5999m mid, 100/120 long, 100/120 60m mid, 1980/2000 100m position, "
+       "0/10 long"},
+      {uistr::Lang::Ja,
+       "1/10 37m long, 4/16 49m long, 999/999 999m mid, 4999/5000 5999m position, 10/10 mid, 1/100 120m mid, "
+       "1/1000 999m mid, 2/10 long, 1/4999 5999m mid, 100/120 long, 100/120 60m mid, 1980/2000 100m position, "
+       "0/10 long"},
+      {uistr::Lang::Pl,
+       "1/10 37m mid, 4/16 49m mid, 999/999 999m position, 4999/5000 5999m position, 10/10 mid, "
+       "1/100 120m position, 1/1000 999m position, 2/10 long, 1/4999 5999m position, 100/120 mid, 100/120 60m mid, "
+       "1980/2000 100m position, 0/10 long"},
+      {uistr::Lang::Pt,
+       "1/10 37m mid, 4/16 49m mid, 999/999 999m mid, 4999/5000 5999m position, 10/10 long, 1/100 120m mid, "
+       "1/1000 999m mid, 2/10 long, 1/4999 5999m mid, 100/120 long, 100/120 60m mid, 1980/2000 100m position, "
+       "0/10 long"},
+      {uistr::Lang::Ru,
+       "1/10 37m mid, 4/16 49m mid, 999/999 999m position, 4999/5000 5999m position, 10/10 mid, "
+       "1/100 120m position, 1/1000 999m position, 2/10 long, 1/4999 5999m position, 100/120 mid, "
+       "100/120 60m position, 1980/2000 100m position, 0/10 long under"},
+      {uistr::Lang::Zh,
+       "1/10 37m long, 4/16 49m long, 999/999 999m mid, 4999/5000 5999m mid, 10/10 long, 1/100 120m mid, "
+       "1/1000 999m mid, 2/10 long, 1/4999 5999m mid, 100/120 long, 100/120 60m mid, 1980/2000 100m mid, 0/10 long"},
+  };
+  std::string report;
+  Placed p;
+  int pinned = 0;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    place(cases[0], p);
+    char m[160];
+    snprintf(m, sizeof(m), "%s (%d px beside, %d under): ", uistr::tag(l), p.beside, p.below);
+    report += m;
+    std::string picks;
+    for (const Case& c : cases) {
+      place(c, p);
+      const int k = p.pick.form;
+      const bool position = p.widths[kSummaryPosition] >= 0;
+      TEST_ASSERT_EQUAL_INT(c.pos > 0 ? 1 : 0, position ? 1 : 0);
+      // The first form tried that fits its room: none tried before it fits
+      // there (the count and the time aren't tried with a position).
+      const int room = p.pick.below ? p.below : p.beside;
+      const int tried = position ? static_cast<int>(kSummaryShort) : queueview::kSummaryForms;
+      for (int j = 0; j < (k < 0 ? tried : k); ++j) {
+        TEST_ASSERT_TRUE(p.widths[j] < 0 || p.widths[j] > room);
+      }
+      // A form at each of these queues, whole in its room, and drawn where
+      // the pick says by Ui::drawHeader(): beside the title, or under it
+      // (it doesn't fit beside).
+      TEST_ASSERT_TRUE_MESSAGE(k >= 0, p.forms[kSummaryLong]);
+      fits(small, p.forms[k], room);
+      const HeaderSub how = headerSub(12, p.titleW, p.right, p.widths[k], true, true);
+      TEST_ASSERT_TRUE(how == (p.pick.below ? HeaderSub::Below : HeaderSub::Beside));
+      if (position) {
+        // Under the title exactly when the position alone doesn't fit
+        // beside it.
+        TEST_ASSERT_EQUAL_INT_MESSAGE(p.widths[kSummaryPosition] > p.beside ? 1 : 0, p.pick.below ? 1 : 0,
+                                      p.forms[kSummaryPosition]);
+        // Where the queue is: a form that starts with the position, never
+        // the count and the time.
+        TEST_ASSERT_TRUE_MESSAGE(k != kSummaryShort, p.forms[kSummaryPosition]);
+        TEST_ASSERT_TRUE_MESSAGE(strncmp(p.forms[k], p.forms[kSummaryPosition], strlen(p.forms[kSummaryPosition])) == 0,
+                                 p.forms[kSummaryPosition]);
+      } else {
+        // No position: the count and the time ("Nothing up next"), the
+        // long form saying it first; under the title when it doesn't fit
+        // beside it.
+        TEST_ASSERT_EQUAL_INT(kSummaryLong, k);
+        TEST_ASSERT_EQUAL_STRING(p.forms[kSummaryShort], p.forms[k]);
+        TEST_ASSERT_EQUAL_STRING(tr(S::queue_summary_nothing_next), p.forms[k]);
+        TEST_ASSERT_EQUAL_INT(p.widths[k] > p.beside ? 1 : 0, p.pick.below ? 1 : 0);
+      }
+      // English: beside the title at every queue.
+      if (l == uistr::Lang::En) TEST_ASSERT_FALSE_MESSAGE(p.pick.below, p.forms[k]);
+      char mins[16] = "";
+      if (c.mins) snprintf(mins, sizeof(mins), " %um", static_cast<unsigned>(c.mins));
+      snprintf(m, sizeof(m), "%s%u/%u%s %s%s", picks.empty() ? "" : ", ", static_cast<unsigned>(c.pos),
+               static_cast<unsigned>(c.size), mins, kFormNames[k], p.pick.below ? " under" : "");
+      picks += m;
+    }
+    report += picks + "; ";
+    // The picks, pinned.
+    for (const Picks& want : kPicks) {
+      if (want.lang != l) continue;
+      TEST_ASSERT_EQUAL_STRING_MESSAGE(want.picks, picks.c_str(), uistr::tag(l));
+      ++pinned;
+    }
+  }
+  TEST_MESSAGE(report.c_str());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(sizeof(kPicks) / sizeof(kPicks[0])), pinned);
+  // German: the apps' word (the mobile app's and the terminal player's,
+  // as its other texts that name the queue), 78 px beside it and 221 under.
+  uistr::setLang(uistr::Lang::De);
+  TEST_ASSERT_EQUAL_STRING("Warteschlange", tr(S::queue_title));
+  place(cases[0], p);
+  TEST_ASSERT_EQUAL_INT(78, p.beside);
+  TEST_ASSERT_EQUAL_INT(221, p.below);
+  // The device check's queue, 1 of 10: the position alone, beside it.
+  TEST_ASSERT_EQUAL_INT(kSummaryPosition, p.pick.form);
+  TEST_ASSERT_FALSE(p.pick.below);
+  TEST_ASSERT_EQUAL_STRING("1 von 10", p.forms[p.pick.form]);
+  // From six digits the position alone doesn't fit beside it: under it,
+  // the fullest form that fits there.
+  place(cases[2], p);
+  TEST_ASSERT_EQUAL_INT(kSummaryMid, p.pick.form);
+  TEST_ASSERT_TRUE(p.pick.below);
+  TEST_ASSERT_EQUAL_STRING("999 von 999 \xC2\xB7 16 h 39+ min", p.forms[p.pick.form]);
+  place(cases[3], p);
+  TEST_ASSERT_EQUAL_INT(kSummaryMid, p.pick.form);
+  TEST_ASSERT_TRUE(p.pick.below);
+  TEST_ASSERT_EQUAL_STRING("4999 von 5000 \xC2\xB7 99 h 59+ min", p.forms[p.pick.form]);
+  place(cases[10], p);  // six digits: "100 von 120" is 80 px
+  TEST_ASSERT_EQUAL_INT(kSummaryLong, p.pick.form);
+  TEST_ASSERT_TRUE(p.pick.below);
+  TEST_ASSERT_EQUAL_STRING("100 von 120 \xC2\xB7 noch 20 \xC2\xB7 60 min", p.forms[p.pick.form]);
+  // With no time known the count alone, "noch 20", would fit beside it:
+  // under it, with the position, all the same.
+  place(cases[9], p);
+  TEST_ASSERT_EQUAL_STRING("noch 20", p.forms[kSummaryShort]);
+  TEST_ASSERT_TRUE(p.widths[kSummaryShort] <= p.beside);
+  TEST_ASSERT_EQUAL_INT(kSummaryLong, p.pick.form);
+  TEST_ASSERT_TRUE(p.pick.below);
+  TEST_ASSERT_EQUAL_STRING("100 von 120 \xC2\xB7 noch 20", p.forms[p.pick.form]);
+  // Russian at 100 of 120 with an hour next (the owner's call): the
+  // position alone beside "Очередь", where the count and the time fit too
+  // and were drawn before ("ещё 20 · 60 мин"); the position and the time
+  // don't fit there.
+  uistr::setLang(uistr::Lang::Ru);
+  place(cases[10], p);
+  TEST_ASSERT_EQUAL_INT(122, p.beside);
+  TEST_ASSERT_EQUAL_INT(kSummaryPosition, p.pick.form);
+  TEST_ASSERT_FALSE(p.pick.below);
+  TEST_ASSERT_EQUAL_STRING("100 \xD0\xB8\xD0\xB7 120", p.forms[p.pick.form]);
+  TEST_ASSERT_EQUAL_STRING("\xD0\xB5\xD1\x89\xD1\x91 20 \xC2\xB7 60 \xD0\xBC\xD0\xB8\xD0\xBD", p.forms[kSummaryShort]);
+  TEST_ASSERT_TRUE(p.widths[kSummaryShort] <= p.beside);
+  TEST_ASSERT_TRUE(p.widths[kSummaryMid] > p.beside);
+  // English: the position and the time, the long form when nothing is
+  // next; the position alone where both are too wide (all three were
+  // before: 4999 of 5000), and before the count and the time near the end
+  // of a long queue with hours next; beside the title, 169 px (235 under
+  // it, never used).
+  uistr::setLang(uistr::Lang::En);
+  place(cases[0], p);
+  TEST_ASSERT_EQUAL_INT(169, p.beside);
+  TEST_ASSERT_EQUAL_INT(235, p.below);
+  TEST_ASSERT_EQUAL_INT(kSummaryMid, p.pick.form);
+  TEST_ASSERT_EQUAL_STRING("1 of 10 \xC2\xB7 37 min", p.forms[p.pick.form]);
+  place(cases[1], p);
+  TEST_ASSERT_EQUAL_INT(kSummaryMid, p.pick.form);
+  place(cases[2], p);
+  TEST_ASSERT_EQUAL_INT(kSummaryMid, p.pick.form);
+  TEST_ASSERT_EQUAL_STRING("999 of 999 \xC2\xB7 16 h 39+ min", p.forms[p.pick.form]);
+  place(cases[4], p);
+  TEST_ASSERT_EQUAL_INT(kSummaryLong, p.pick.form);
+  TEST_ASSERT_EQUAL_STRING("10 of 10 \xC2\xB7 Nothing up next", p.forms[p.pick.form]);
+  place(cases[3], p);
+  TEST_ASSERT_EQUAL_INT(kSummaryPosition, p.pick.form);
+  TEST_ASSERT_FALSE(p.pick.below);
+  TEST_ASSERT_EQUAL_STRING("4999 of 5000", p.forms[p.pick.form]);
+  TEST_ASSERT_TRUE(p.widths[kSummaryShort] > p.beside);  // (as before: all three too wide)
+  place(cases[11], p);
+  TEST_ASSERT_EQUAL_INT(kSummaryPosition, p.pick.form);
+  TEST_ASSERT_FALSE(p.pick.below);
+  TEST_ASSERT_EQUAL_STRING("1980 of 2000", p.forms[p.pick.form]);
+  TEST_ASSERT_EQUAL_STRING("20 up next \xC2\xB7 1 h 40+ min", p.forms[kSummaryShort]);
+  TEST_ASSERT_TRUE(p.widths[kSummaryShort] <= p.beside);  // (what it drew before)
+  TEST_ASSERT_TRUE(p.widths[kSummaryMid] > p.beside);
+  place(cases[12], p);
+  TEST_ASSERT_EQUAL_INT(kSummaryLong, p.pick.form);
+  TEST_ASSERT_FALSE(p.pick.below);
+  TEST_ASSERT_EQUAL_STRING("Nothing up next", p.forms[p.pick.form]);
+  uistr::setLang(uistr::Lang::En);
+}
+
 // The Output tab: every button of every Bluetooth card in its box (the
 // armed Forget's "Tap again" too), the volume chip at 100 %, the status
 // lines, the speaker's line, the hints.
@@ -546,6 +1572,11 @@ void test_output_texts_fit() {
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
   const P phases[] = {P::Off, P::Paging, P::Scanning, P::Linked, P::PairScan, P::Pairing, P::Backoff, P::Resting};
   int cards = 0;
+  struct Box {
+    BtButton b;
+    int w;
+  };
+  std::vector<Box> boxes;  // every button in every box it is drawn in (for the other languages)
   for (int sess = 0; sess < 5; ++sess) {
     for (P phase : phases) {
       for (int remembered = 0; remembered < 2; ++remembered) {
@@ -582,7 +1613,8 @@ void test_output_texts_fit() {
               TEST_ASSERT_TRUE(18 <= room);  // its icon
             } else {
               fits(b == BtButton::Pair ? bold : body, btButtonLabel(b, w < kBtWideButtonW), room);
-              if (b == BtButton::Forget) fits(bold, kForgetArmed, room);
+              if (b == BtButton::Forget) fits(bold, tr(S::bt_tap_again), room);
+              boxes.push_back({b, w});
             }
           }
           char line[80];
@@ -591,8 +1623,8 @@ void test_output_texts_fit() {
           if (v.hint) {
             // Resting: its two lines beside the one button, right of it.
             TEST_ASSERT_EQUAL_INT(1, n);
-            fits(small, kBtHintLine1, kBtHintW);
-            fits(small, kBtHintLine2, kBtHintW);
+            fits(small, lineOf(S::bt_hint, 0).c_str(), kBtHintW);
+            fits(small, lineOf(S::bt_hint, 1).c_str(), kBtHintW);
           }
         }
       }
@@ -600,81 +1632,139 @@ void test_output_texts_fit() {
   }
   TEST_ASSERT_TRUE(cards > 100);
   TEST_ASSERT_TRUE(kBtButtons3X[2] + kBtButtons3W[2] <= 320 - 16);
+  // Every language: each label in its font (Bold for Pair and the armed
+  // Forget), else Small (OutputPage::drawBtButtons()).
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    for (const Box& x : boxes) {
+      const int room = x.w - kBtButtonPad;
+      fitsIn(x.b == BtButton::Pair ? bold : body, small, btButtonLabel(x.b, x.w < kBtWideButtonW), room);
+      if (x.b == BtButton::Forget) fitsIn(bold, small, tr(S::bt_tap_again), room);
+    }
+  }
+  uistr::setLang(uistr::Lang::En);
   // The speaker card: "Here until SPYDRONE connects" doesn't fit beside the
   // chip; its shorter form does (OutputPage::drawSpeaker picks).
   TEST_ASSERT_TRUE(small.width("Here until SPYDRONE connects") > kSpeakerLineW);
   fits(small, "Waits for SPYDRONE", kSpeakerLineW);
   fits(small, "Here until they connect", kSpeakerLineW);
-  fits(small, kSilentMode, kSpeakerLineW);
+  fits(small, tr(S::speaker_silent_mode), kSpeakerLineW);
   fits(body, "100%", kSpeakerChipW - 2);
   TEST_ASSERT_TRUE(52 + kSpeakerLineW <= kSpeakerChipX);
-  fits(small, kPairHint, kPairHintW);
+  fits(small, tr(S::pair_hint), kPairHintW);
   // The resting card's hint starts past its button and ends before the edge.
   TEST_ASSERT_TRUE(kBtHintX >= kBtButtons1X + kBtButtons1W + 8);
   TEST_ASSERT_TRUE(kBtHintX + kBtHintW <= 320 - 8);
-  // The lost dialog's line while resting (Small over the dialog's 288 px).
-  fits(small, kBtLostRestingLine, 320 - 32);
+  // The lost dialog's line while resting (Small over the dialog's text
+  // width: its body's, kDialogTitleW).
+  fits(small, tr(S::dialog_lost_resting), kDialogTitleW);
   // The resting card's hint when they dropped while the output.
-  fits(small, kBtLostHintLine1, kBtHintW);
-  fits(small, kBtLostHintLine2, kBtHintW);
+  fits(small, lineOf(S::bt_lost_hint, 0).c_str(), kBtHintW);
+  fits(small, lineOf(S::bt_lost_hint, 1).c_str(), kBtHintW);
   // The pocket rule's note (Ui::warn: Body on one line, no buttons).
-  fits(body, kTouchFirst, kToastTextRight - kToastTextX);
+  fits(body, tr(S::toast_touch_first), kToastTextRight - kToastTextX);
   // None paired (a B hold, a play on Bluetooth): too long for one line, so
   // the toast takes its two ("No headphones paired" in Small over "Output
   // > Pair new headphones" in Body).
   {
-    const char* colon = strstr(kNoHeadphones, ": ");
+    const char* colon = strstr(tr(S::toast_no_headphones), ": ");
     TEST_ASSERT_NOT_NULL(colon);
-    TEST_ASSERT_TRUE(body.width(kNoHeadphones) > kToastTextRight - kToastTextX);
-    const std::string what(kNoHeadphones, colon);
+    TEST_ASSERT_TRUE(body.width(tr(S::toast_no_headphones)) > kToastTextRight - kToastTextX);
+    const std::string what(tr(S::toast_no_headphones), colon);
     fits(small, what.c_str(), kToastTwoLineW);
     fits(body, colon + 2, kToastTwoLineW);
   }
   // A skipped track's why ("Skipped <title>: <why>"; a long title takes
   // the toast's two lines, the why in Body): each, with the widest rates
   // a refusal can name (RateConverter::rateText()).
-  fits(body, kSkipped, kToastTwoLineW);
-  fits(body, kSkippedCpu, kToastTwoLineW);
+  fits(body, tr(S::toast_why_cant_play), kToastTwoLineW);
+  fits(body, tr(S::toast_why_cpu), kToastTwoLineW);
   for (uint32_t hz : {96000u, 88200u, 176400u, 352800u, 705600u, 44056u, 655350u, 1048575u}) {
     char rate[16], why[48];
     RateConverter::rateText(hz, rate, sizeof(rate));
-    snprintf(why, sizeof(why), kSkippedRate, rate);
+    uistr::trf(why, sizeof(why), S::toast_why_rate, rate);
     fits(body, why, kToastTwoLineW);
   }
   // The Pair screen once its search stopped.
-  fits(bold, kPairSearchAgain, 320 - 60);
-  fits(small, kPairSearchStopped, kPairHintW);
-  fits(small, kLineOutSub, kSettingSubW);
-  // The screen settings: every choice in its pill, the lines beside it.
+  fits(bold, tr(S::pair_search_again), 320 - 60);
+  fits(small, tr(S::pair_search_stopped), kPairHintW);
+  fits(small, tr(S::output_line_out_sub), kSettingSubW);
+  // The screen settings: every choice in its pill, the lines beside it;
+  // in every language in Body, else Small.
   for (int c = 0; c < ScreenPower::kTimeouts; ++c) fits(body, ScreenPower::timeoutLabel(c), kSettingPillW - kSettingPillPad);
   for (int c = 0; c < ScreenPower::kBrightnesses; ++c) {
     fits(body, ScreenPower::brightnessLabel(c), kSettingPillW - kSettingPillPad);
   }
-  fits(body, kScreenOffTitle, kSettingValueSubW);
-  fits(body, kBrightnessTitle, kSettingValueSubW);
-  fits(small, kScreenOffSub, kSettingValueSubW);
-  fits(small, kScreenNeverSub, kSettingValueSubW);
-  fits(small, kBrightnessSub, kSettingValueSubW);
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    for (int c = 0; c < ScreenPower::kTimeouts; ++c) {
+      fitsIn(body, small, ScreenPower::timeoutLabel(c), kSettingPillW - kSettingPillPad);
+    }
+    for (int c = 0; c < ScreenPower::kBrightnesses; ++c) {
+      fitsIn(body, small, ScreenPower::brightnessLabel(c), kSettingPillW - kSettingPillPad);
+    }
+    fitsIn(body, small, tr(S::library_row_rescan), kRescanPillW - kSettingPillPad);
+  }
+  uistr::setLang(uistr::Lang::En);
+  fits(body, tr(S::settings_screen_off), kSettingValueSubW);
+  fits(body, tr(S::settings_brightness), kSettingValueSubW);
+  fits(small, tr(S::settings_screen_off_sub), kSettingValueSubW);
+  fits(small, tr(S::settings_screen_never_sub), kSettingValueSubW);
+  fits(small, tr(S::settings_brightness_sub), kSettingValueSubW);
   TEST_ASSERT_TRUE(kSettingValueSubW > 100);
   // About: a long value falls back to Small, which fits.
   char v[80];
-  snprintf(v, sizeof(v), kAboutMemory, 263ul, 158ul, 3.2f);
+  uistr::trf(v, sizeof(v), S::about_memory_value, 263ul, 158ul, uistr::decimal(3.2f, 1));
   fits(small, v, kAboutValueW);
-  snprintf(v, sizeof(v), kAboutLibrary, 10000ul, 600ul, 1500ul);
+  {
+    char tracks[40], artists[40], albums[40];
+    uistr::trnf(tracks, sizeof(tracks), S::library_tracks_n, 10000, 10000);
+    uistr::trnf(artists, sizeof(artists), S::library_artists_n, 600, 600);
+    uistr::trnf(albums, sizeof(albums), S::library_albums_n, 1500, 1500);
+    uistr::trf(v, sizeof(v), S::about_library_value, tracks, artists, albums);
+  }
   fits(small, v, kAboutValueW);
+  // Bigger still, the three counts don't fit in Small: the tracks and the
+  // albums (about.library_value_short, OutputPage::drawAbout()), in every
+  // language.
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    char tracks[40], artists[40], albums[40];
+    uistr::trnf(tracks, sizeof(tracks), S::library_tracks_n, 99999, uistr::grouped(99999));
+    uistr::trnf(artists, sizeof(artists), S::library_artists_n, 9999, 9999);
+    uistr::trnf(albums, sizeof(albums), S::library_albums_n, 1500, 1500);
+    uistr::trf(v, sizeof(v), S::about_library_value, tracks, artists, albums);
+    if (l == uistr::Lang::En) TEST_ASSERT_TRUE(small.width(v) > kAboutValueW);  // why it exists
+    uistr::trf(v, sizeof(v), S::about_library_value_short, tracks, albums);
+    fitsIn(body, small, v, kAboutValueW);
+    if (l == uistr::Lang::En) TEST_ASSERT_EQUAL_STRING("99,999 tracks, 1500 albums", v);
+  }
+  uistr::setLang(uistr::Lang::En);
+  // The volume sheet: "volume" whole beside the speaker's and the
+  // headphones' names at 100 % (VolumeSheet::render(): whole or not at all).
+  {
+    const Vlw title(kVlwSansBold22);
+    for (S name : {S::volume_speaker, S::volume_headphones}) {
+      const int room = 320 - 12 - title.width("100%") - 12 - (46 + bold.width(tr(name)) + 6);
+      fits(small, tr(S::volume_label), room);
+    }
+  }
   // The licence rows, each line in the font it's drawn in (the values fit
   // in Body), and the source row's two lines put back together are the URL.
-  fits(small, kAboutLicenceLabel, kAboutValueW);
-  fits(body, kAboutLicence, kAboutValueW);
-  fits(small, kAboutSourceLabel, kAboutValueW);
+  fits(small, tr(S::about_licence_label), kAboutValueW);
+  fits(body, tr(S::about_licence), kAboutValueW);
+  fits(small, tr(S::about_source_label), kAboutValueW);
   fits(body, kAboutSourceRepo, kAboutValueW);
-  const std::string url = std::string("https://") + (kAboutSourceLabel + strlen("Source: ")) + kAboutSourceRepo;
+  const std::string url = std::string("https://") + (tr(S::about_source_label) + strlen("Source: ")) + kAboutSourceRepo;
   TEST_ASSERT_EQUAL_STRING(kSourceUrl, url.c_str());
   // The version row: the label with the date and any 8 hex digits of the
   // ELF's hash; a release's version in Body, a long dev build's in Small
   // (tools/version.py: git describe, at most 31 characters in the image).
   for (const char* hex = "0123456789abcdef"; *hex; ++hex) {
-    snprintf(v, sizeof(v), kAboutVersionLabel, "2026-09-30", std::string(8, *hex).c_str());
+    uistr::trf(v, sizeof(v), S::about_version_label, "2026-09-30", std::string(8, *hex).c_str());
     fits(small, v, kAboutValueW);
   }
   fits(body, "v10.10.10", kAboutValueW);
@@ -693,7 +1783,7 @@ void test_output_texts_fit() {
 void test_seek_bar_texts_fit() {
   using namespace uitext;
   const Vlw small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
-  fits(bold, kSeekCancel, 296);
+  fits(bold, tr(S::now_playing_seek_cancel), 296);
   // The figures are all as wide (in both fonts), so the extremes below
   // stand for every time of as many digits.
   for (char d = '1'; d <= '9'; ++d) {
@@ -709,7 +1799,7 @@ void test_seek_bar_texts_fit() {
     SeekBar::timeText(len, big, sizeof(big));
     TEST_ASSERT_TRUE_MESSAGE(title.hasAll(big), big);
     const int room = kSeekReadoutW - title.width(big) - kSeekReadoutGap;
-    fits(small, kSeekStay, room);
+    fits(small, tr(S::now_playing_seek_stay), room);
     SeekBar::changeText(len, 0, change, sizeof(change));
     TEST_ASSERT_TRUE_MESSAGE(small.hasAll(change), change);
     fits(small, change, room);
@@ -733,26 +1823,41 @@ void test_waiting_texts_fit() {
   const int panelW = 320 - 112;  // the title strip and the rows under it
   fits(small, "Waiting for SPYDRONE\xE2\x80\xA6", kWaitTextW);
   fits(small, "Waiting for WH-1000XM4\xE2\x80\xA6", kWaitTextW);
-  fits(small, "Waiting for the headphones\xE2\x80\xA6", kWaitTextW);
+  fits(small, tr(S::now_playing_waiting_for_headphones), kWaitTextW);
   fits(small, "try 3 of 3", kWaitTextW);
-  fits(small, "looking for them", kWaitTextW);
+  fits(small, tr(S::now_playing_wait_looking), kWaitTextW);
   TEST_ASSERT_TRUE(kWaitTextX + kWaitTextW <= panelW);
-  fits(body, kPlayOnSpeaker, kWaitSpeakerW - kWaitButtonPad);
-  fits(body, kWaitCancel, kWaitCancelW - kWaitButtonPad);
+  fits(body, tr(S::now_playing_play_on_speaker), kWaitSpeakerW - kWaitButtonPad);
+  fits(body, tr(S::now_playing_wait_cancel), kWaitCancelW - kWaitButtonPad);
   TEST_ASSERT_TRUE(kWaitSpeakerX + kWaitSpeakerW < kWaitCancelX);
   TEST_ASSERT_TRUE(kWaitCancelX + kWaitCancelW <= panelW - 2);
   // The notice (a Dialog): its title, its buttons (the primary in Bold; a
   // label too wide for Body is drawn in Small).
   fits(bold, "Couldn't reach SPYDRONE", kDialogTitleW);
-  TEST_ASSERT_TRUE(body.width(kPlayOnSpeaker) > kDialogButtonTextW);
-  fits(small, kPlayOnSpeaker, kDialogButtonTextW);
-  fits(bold, "Try again", kDialogButtonTextW);
+  TEST_ASSERT_TRUE(body.width(tr(S::now_playing_play_on_speaker)) > kDialogButtonTextW);
+  fits(small, tr(S::now_playing_play_on_speaker), kDialogButtonTextW);
+  fits(bold, tr(S::dialog_failed_try_again), kDialogButtonTextW);
   // The progress line's middle.
   fits(small, "SPYDRONE (not connected)", kNowPlayingMidW);
   fits(small, "Waiting, 24 of 86", kNowPlayingMidW);
   fits(small, "24 of 86 \xC2\xB7 SPYDRONE", kNowPlayingMidW);
   // ... clear of the times either side (x 12 and 308), long ones too.
   TEST_ASSERT_TRUE(12 + small.width("88:88") + 4 <= 160 - kNowPlayingMidW / 2);
+  // The amber warning drawn alone has kNowPlayingWarnW: a 10-character
+  // name whole, and still clear of a 16-hour mix's "999:59".
+  char warn[96];
+  uistr::trf(warn, sizeof(warn), S::now_playing_not_connected, "WH-1000XM4");
+  TEST_ASSERT_TRUE(small.width(warn) > kNowPlayingMidW);
+  fits(small, warn, kNowPlayingWarnW);
+  fits(small, tr(S::now_playing_headphones_not_connected), kNowPlayingWarnW);
+  TEST_ASSERT_TRUE(12 + small.width("999:59") + 4 <= 160 - kNowPlayingWarnW / 2);
+  // The lost dialog's title beside its icon (x 14, the headphones' 22 px,
+  // 8 px) to 12 px from the dialog's right edge (292 wide): the title with
+  // no name whole; "SPYDRONE disconnected" too.
+  TEST_ASSERT_EQUAL_INT(292, 14 + 22 + 8 + kDialogIconTitleW + 12);
+  fits(bold, tr(S::dialog_lost_title_generic), kDialogIconTitleW);
+  uistr::trf(warn, sizeof(warn), S::dialog_lost_title, "SPYDRONE");
+  fits(bold, warn, kDialogIconTitleW);
 }
 
 // Now Playing's two menus (docs/QUEUE-MODES.md section 4.6): the rows'
@@ -763,27 +1868,36 @@ void test_waiting_texts_fit() {
 void test_now_playing_menu_texts_fit() {
   using namespace uitext;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
-  for (const char* l : {kGoTo[0], kGoTo[1], kGoTo[2], kShuffleRow, kRepeatRow, kSleepRow}) fits(body, l, 320 - 32);
+  const char* const kGoTo[3] = {tr(S::now_playing_go_to_artist), tr(S::now_playing_go_to_album),
+                                tr(S::now_playing_go_to_folder)};
+  for (const char* l : {kGoTo[0], kGoTo[1], kGoTo[2], tr(S::now_playing_shuffle), tr(S::now_playing_repeat),
+                        tr(S::now_playing_sleep_timer)}) {
+    fits(body, l, 320 - 32);
+  }
   // The rooms, as measured with the firmware's fonts.
   TEST_ASSERT_EQUAL_INT(183, sheet::detailRoom(body.width(kGoTo[0])));
   TEST_ASSERT_EQUAL_INT(174, sheet::detailRoom(body.width(kGoTo[1])));
   TEST_ASSERT_EQUAL_INT(177, sheet::detailRoom(body.width(kGoTo[2])));
-  TEST_ASSERT_EQUAL_INT(216, sheet::detailRoom(body.width(kShuffleRow)));
-  TEST_ASSERT_EQUAL_INT(215, sheet::detailRoom(body.width(kRepeatRow)));
-  TEST_ASSERT_EQUAL_INT(180, sheet::detailRoom(body.width(kSleepRow)));
-  for (const char* s : kOnOff) fits(small, s, sheet::detailRoom(body.width(kShuffleRow)));
-  for (const char* s : kRepeatModes) fits(small, s, sheet::detailRoom(body.width(kRepeatRow)));
+  TEST_ASSERT_EQUAL_INT(216, sheet::detailRoom(body.width(tr(S::now_playing_shuffle))));
+  TEST_ASSERT_EQUAL_INT(215, sheet::detailRoom(body.width(tr(S::now_playing_repeat))));
+  TEST_ASSERT_EQUAL_INT(180, sheet::detailRoom(body.width(tr(S::now_playing_sleep_timer))));
+  for (S s : {S::now_playing_off, S::now_playing_on}) {
+    fits(small, tr(s), sheet::detailRoom(body.width(tr(S::now_playing_shuffle))));
+  }
+  for (unsigned m = 0; m < 3; ++m) {
+    fits(small, tr(repeatMode(m)), sheet::detailRoom(body.width(tr(S::now_playing_repeat))));
+  }
   TEST_ASSERT_TRUE(small.width("One") <= 26);
   // The sleep states as before, against the Sleep timer row's room.
   for (const char* t : {"Off", "90 min", "59 s", "End of track", "End of album", "End of queue", "Fading"}) {
-    fits(small, t, sheet::detailRoom(body.width(kSleepRow)));
+    fits(small, t, sheet::detailRoom(body.width(tr(S::now_playing_sleep_timer))));
   }
-  fits(small, kNoArtistFolder, sheet::detailRoom(body.width(kGoTo[0])));
-  fits(small, kLooseTracks, sheet::detailRoom(body.width(kGoTo[1])));
+  fits(small, tr(S::library_no_artist_folder), sheet::detailRoom(body.width(kGoTo[0])));
+  fits(small, tr(S::library_loose_tracks), sheet::detailRoom(body.width(kGoTo[1])));
   // The refusals' toasts, and the sheet's title.
-  fits(body, kBuiltinNotInLibrary, kToastTextRight - kToastTextX);
-  fits(body, kLibraryNotReady, kToastTextRight - kToastTextX);
-  fits(small, kPlaybackTitle, kSleepTitleW);
+  fits(body, tr(S::now_playing_builtin_not_in_library), kToastTextRight - kToastTextX);
+  fits(body, tr(S::now_playing_library_not_ready), kToastTextRight - kToastTextX);
+  fits(small, tr(S::now_playing_playback_title), kSleepTitleW);
   // The folder: cut from the left by whole folders to Go to folder's room.
   textfit::Font f;
   f.ctx = const_cast<Vlw*>(&small);
@@ -824,19 +1938,19 @@ void test_sleep_timer_texts_fit() {
   // The playback menu's row (Body from x 16), its state right-aligned
   // (Small) in what the label leaves (Sheet::render: 16 px each side and
   // between).
-  const int stateRoom = sheet::detailRoom(body.width(kSleepRow));
+  const int stateRoom = sheet::detailRoom(body.width(tr(S::now_playing_sleep_timer)));
   for (const char* t : {"Off", "90 min", "59 s", "End of track", "End of album", "End of queue", "Fading"}) {
     fits(small, t, stateRoom);
   }
-  // The sheet's title (Small), left of its close pill: "Sleep timer: " and
-  // SleepTimer::titleText(), lower case after the colon (as the toasts), in
-  // every state: off, each end-of choice, the longest counts, fading.
+  // The sheet's title (Small), left of its close pill: SleepTimer::
+  // titleText(), "Sleep timer: " and its state lower case (as the toasts),
+  // in every state: off, each end-of choice, the longest counts, fading.
   {
     std::vector<std::string> titles;
     auto add = [&](const SleepTimer& t, uint32_t now) {
-      char buf[24];
+      char buf[96];
       t.titleText(now, buf, sizeof(buf));
-      titles.push_back(std::string(kSleepRow) + ": " + buf);
+      titles.push_back(buf);
     };
     SleepTimer t;
     add(t, 0);
@@ -860,24 +1974,25 @@ void test_sleep_timer_texts_fit() {
   // The pills: each label in its pill less the pad; the rows inside the
   // screen with gaps between the pills.
   for (int i = 0; i < 5; ++i) {
-    fits(body, kSleepMinutes[i], kSleepMinW[i] - kSleepPillPad);
+    fits(body, i < 4 ? kSleepMinutes[i] : tr(S::sleep_minutes_90), kSleepMinW[i] - kSleepPillPad);
     if (i > 0) TEST_ASSERT_TRUE(kSleepMinX[i - 1] + kSleepMinW[i - 1] < kSleepMinX[i]);
   }
   TEST_ASSERT_TRUE(kSleepMinX[4] + kSleepMinW[4] <= 312);
   for (int i = 0; i < 3; ++i) {
-    TEST_ASSERT_TRUE(body.width(kSleepEnds[1]) > kSleepEndW[1] - kSleepPillPad);  // why they are in Small
-    fits(small, kSleepEnds[i], kSleepEndW[i] - kSleepPillPad);
+    const S kSleepEnds[3] = {S::sleep_end_track, S::sleep_end_album, S::sleep_end_queue};
+    TEST_ASSERT_TRUE(body.width(tr(kSleepEnds[1])) > kSleepEndW[1] - kSleepPillPad);  // why they are in Small
+    fits(small, tr(kSleepEnds[i]), kSleepEndW[i] - kSleepPillPad);
     if (i > 0) TEST_ASSERT_TRUE(kSleepEndX[i - 1] + kSleepEndW[i - 1] < kSleepEndX[i]);
   }
   TEST_ASSERT_TRUE(kSleepEndX[2] + kSleepEndW[2] <= 312);
-  fits(body, kSleepExtend, kSleepExtendW - kSleepPillPad);
-  fits(body, kSleepTurnOff, kSleepOffW - kSleepPillPad);
+  fits(body, tr(S::sleep_extend), kSleepExtendW - kSleepPillPad);
+  fits(body, tr(S::sleep_turn_off), kSleepOffW - kSleepPillPad);
   TEST_ASSERT_TRUE(kSleepExtendX + kSleepExtendW < kSleepOffX && kSleepOffX + kSleepOffW <= 312);
-  fits(small, kSleepHint, kSleepHintW);
+  fits(small, tr(S::sleep_hint), kSleepHintW);
   // The fade's toast: its line (Small) before +10 min, the two buttons (Body).
-  fits(small, kSleepFading, kSleepToastPlusX - 6 - kToastTextX);
-  fits(body, kSleepExtend, kSleepToastPlusW - kSleepToastPad);
-  fits(body, kSleepTurnOff, kSleepToastOffW - kSleepToastPad);
+  fits(small, tr(S::sleep_fading_toast), kSleepToastPlusX - 6 - kToastTextX);
+  fits(body, tr(S::sleep_extend), kSleepToastPlusW - kSleepToastPad);
+  fits(body, tr(S::sleep_turn_off), kSleepToastOffW - kSleepToastPad);
   TEST_ASSERT_TRUE(kSleepToastPlusX + kSleepToastPlusW < kSleepToastOffX && kSleepToastOffX + kSleepToastOffW <= 312);
   // The toasts a choice gives (one line, no buttons).
   for (const char* t : {"Sleep timer: 90 min", "Sleep timer: end of album", "Sleep timer: end of queue",
@@ -939,14 +2054,14 @@ void test_idle_power_off_texts_fit() {
   using namespace uitext;
   const Vlw body(kVlwSans16), small(kVlwSans13);
   for (int c = 0; c < IdlePolicy::kChoices; ++c) fits(body, IdlePolicy::choiceLabel(c), kSettingPillW - kSettingPillPad);
-  fits(body, kIdleOffTitle, kSettingValueSubW);
-  fits(small, kIdleOffSub, kSettingValueSubW);
-  fits(small, kIdleNeverSub, kSettingValueSubW);
+  fits(body, tr(S::settings_idle_off), kSettingValueSubW);
+  fits(small, tr(S::settings_idle_off_sub), kSettingValueSubW);
+  fits(small, tr(S::settings_idle_never_sub), kSettingValueSubW);
   // The warning: its longest count, then [Keep on] to the edge.
   char t[48];
   IdlePolicy::warnText(30, t, sizeof(t));
   fits(body, t, kIdleToastKeepX - 6 - kToastTextX);
-  fits(body, kIdleKeepOn, kIdleToastKeepW - kIdleToastPad);
+  fits(body, tr(S::settings_idle_keep_on), kIdleToastKeepW - kIdleToastPad);
   TEST_ASSERT_TRUE(kIdleToastKeepX + kIdleToastKeepW <= 312);
   // The next boot's toast: each setting, and the console's test lengths.
   for (uint32_t ms : {10u * 60000u, 20u * 60000u, 60u * 60000u, 60000u, 59000u, 90u * 60000u}) {
@@ -963,8 +2078,8 @@ void test_power_settings_texts_fit() {
   using namespace uitext;
   namespace pc = powerchoice;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
-  fits(body, kCpuTitle, kSettingValueSubW);
-  fits(body, kBtPowerTitle, kSettingValueSubW);
+  fits(body, tr(S::settings_cpu), kSettingValueSubW);
+  fits(body, tr(S::settings_bt_power), kSettingValueSubW);
   char buf[64];
   for (uint16_t mhz : pc::kCpuMhz) {
     fits(body, pc::cpuLabel(mhz), kSettingPillW - kSettingPillPad);
@@ -998,11 +2113,11 @@ void test_power_settings_texts_fit() {
     for (int i = 0; i < n; ++i) joined += std::string(i ? " " : "") + lines[i];
     TEST_ASSERT_EQUAL_STRING(dialogBody, joined.c_str());
   }
-  fits(bold, kCpuRestart, kDialogButtonTextW);
-  fits(body, kCpuWaitPairing, kToastTextRight - kToastTextX);
+  fits(bold, tr(S::settings_cpu_restart), kDialogButtonTextW);
+  fits(body, tr(S::settings_cpu_wait_pairing), kToastTextRight - kToastTextX);
   // About: its label (Small), and every value in Body (all fit; Small is
   // the fallback).
-  fits(small, kAboutPower, kAboutValueW);
+  fits(small, tr(S::about_power), kAboutValueW);
   for (uint16_t mhz : pc::kCpuMhz) {
     for (int c = 0; c < pc::kBtChoices; ++c) {
       pc::aboutText(mhz, c, buf, sizeof(buf));
@@ -1019,64 +2134,75 @@ void test_touch_calibration_texts_fit() {
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
   // Output: the row, its sheet (Calibrate the primary, its detail beside
   // it), the dialog, the toast.
-  fits(body, kCalRowTitle, kSettingSubW);
-  fits(small, kCalSubOff, kSettingSubW);
-  fits(small, kCalSubOn, kSettingSubW);
+  fits(body, tr(S::settings_cal), kSettingSubW);
+  fits(small, tr(S::settings_cal_off), kSettingSubW);
+  fits(small, tr(S::settings_cal_on), kSettingSubW);
   const int sheetLabelW = 320 - 32;
-  fits(bold, kCalCalibrate, sheetLabelW);
-  fits(small, kCalCalibrateDetail, 320 - 16 - (16 + bold.width(kCalCalibrate) + 16));
-  fits(body, kCalCheckTitle, sheetLabelW);
-  fits(body, kCalRemoveRow, sheetLabelW);
-  fits(bold, kCalRemoveTitle, kDialogTitleW);
+  fits(bold, tr(S::settings_cal_calibrate), sheetLabelW);
+  fits(small, tr(S::settings_cal_calibrate_detail), 320 - 16 - (16 + bold.width(tr(S::settings_cal_calibrate)) + 16));
+  fits(body, tr(S::settings_cal_test_taps), sheetLabelW);
+  fits(body, tr(S::settings_cal_remove_row), sheetLabelW);
+  fits(bold, tr(S::settings_cal_remove_title), kDialogTitleW);
   textfit::Font f;
   f.ctx = const_cast<Vlw*>(&small);
   f.width = [](void* ctx, const char* t) { return static_cast<const Vlw*>(ctx)->width(t); };
   {
-    TEST_ASSERT_TRUE(strlen(kCalRemoveBody) < 128);
+    TEST_ASSERT_TRUE(strlen(tr(S::settings_cal_remove_body)) < 128);
     char lines[4][96];
-    const int n = textfit::wrap(f, kCalRemoveBody, strlen(kCalRemoveBody), kDialogTitleW, 3, &lines[0][0],
+    const char* removeBody = tr(S::settings_cal_remove_body);
+    const int n = textfit::wrap(f, removeBody, strlen(removeBody), kDialogTitleW, 3, &lines[0][0],
                                 sizeof(lines[0]));
     TEST_ASSERT_TRUE(n <= 3);
     std::string joined;
     for (int i = 0; i < n; ++i) joined += std::string(i ? " " : "") + lines[i];
-    TEST_ASSERT_EQUAL_STRING(kCalRemoveBody, joined.c_str());
+    TEST_ASSERT_EQUAL_STRING(tr(S::settings_cal_remove_body), joined.c_str());
   }
-  fits(bold, kCalRemove, kDialogButtonTextW);
-  fits(body, kCalRemoved, kToastTextRight - kToastTextX);
+  fits(bold, tr(S::settings_cal_remove), kDialogButtonTextW);
+  fits(body, tr(S::settings_cal_removed), kToastTextRight - kToastTextX);
 
   // The header: each pill before the title, the titles, the progress.
-  for (const char* pill : {kCalCancel, kCalSkip}) {
+  for (const char* pill : {tr(S::calibration_cancel), tr(S::calibration_skip)}) {
     TEST_ASSERT_TRUE(kCalPillX + bold.width(pill) + kCalPillPad <= kCalTitleX - 4);
   }
-  fits(bold, kCalTitle, kCalTitleW);
-  fits(bold, kCheckTitle, kCalTitleW);
-  fits(bold, kCalCheckTitle, kCalTitleW);
+  fits(bold, tr(S::calibration_title), kCalTitleW);
+  fits(bold, tr(S::calibration_check_title), kCalTitleW);
+  fits(bold, tr(S::settings_cal_test_taps), kCalTitleW);
   fits(small, "9 of 9", kCalProgressW);
-  fits(small, kCalSaved, kCalProgressW);
-  fits(small, kCalUndone, kCalProgressW);
   TEST_ASSERT_TRUE(kCalTitleX + kCalTitleW + 6 + kCalProgressW <= 312);
+  // The test taps page (no pill): its title from x 10, its status after a
+  // Save or an Undo in what that leaves (CalibrationScreen::drawHeader()).
+  fits(small, tr(S::calibration_saved), kCalStatusW);
+  fits(small, tr(S::calibration_undone), kCalStatusW);
+  TEST_ASSERT_TRUE(10 + kCalTitleW + 6 + kCalStatusW <= 312);
+  TEST_ASSERT_TRUE(kCalStatusW > kCalProgressW);
   // The Cancel pill's hit area covers it.
-  TEST_ASSERT_TRUE(kCalPillX + bold.width(kCalCancel) + kCalPillPad <= touchcheck::kCancelW);
+  TEST_ASSERT_TRUE(kCalPillX + bold.width(tr(S::calibration_cancel)) + kCalPillPad <= touchcheck::kCancelW);
   TEST_ASSERT_EQUAL_INT(kCalHeaderH, touchcheck::kCancelH);
 
   // The lines (Body; the result's numbers fall back to Small).
   char buf[96];
-  fits(body, kCalFirstHint[0], kCalLineW);
-  snprintf(buf, sizeof(buf), kCalFirstHint[1], 9);
+  char hint[160];
+  uistr::trnf(hint, sizeof(hint), S::calibration_first_hint, 9, 9);
+  fits(body, lineOf(S::calibration_first_hint, 0).c_str(), kCalLineW);
+  uistr::line(hint, 1, buf, sizeof(buf));
   fits(body, buf, kCalLineW);
-  for (const char* t : {kCalHint, kCalMissed, kCheckHint, kCheckMissed, kCheckFirstHint[0], kCheckFirstHint[1],
-                        kCalCheckLines[0], kCalCheckLines[1], kCalSaveLine, kCalAccurate, kCalNoBetter,
-                        kCalDisagree[0], kCalDisagree[1], kCheckGoOn}) {
-    fits(body, t, kCalLineW);
+  std::vector<std::string> calLines = {tr(S::calibration_hint), tr(S::calibration_missed), tr(S::check_hint),
+                                       tr(S::check_missed), tr(S::calibration_save_line), tr(S::calibration_accurate),
+                                       tr(S::calibration_no_better), tr(S::check_go_on)};
+  for (S two : {S::check_first_hint, S::calibration_check_lines, S::calibration_disagree}) {
+    for (int k = 0; k < 2; ++k) calLines.push_back(lineOf(two, k));
   }
-  fits(bold, kCheckAsk, kCalLineW);
-  fits(title, kCheckAccurate, kCalLineW);
+  for (const std::string& t : calLines) {
+    fits(body, t.c_str(), kCalLineW);
+  }
+  fits(bold, tr(S::check_ask), kCalLineW);
+  fits(title, tr(S::check_accurate), kCalLineW);
   // Typical results in Body; the widest possible in Small.
-  touchcheck::errorText(kCalNow, touchcheck::Error{42, 21}, buf, sizeof(buf));
+  touchcheck::errorText(touchcheck::Table::InUse, touchcheck::Error{42, 21}, buf, sizeof(buf));
   fits(body, buf, kCalLineW);
-  touchcheck::errorText(kCalNew, touchcheck::Error{5, 3}, buf, sizeof(buf));
+  touchcheck::errorText(touchcheck::Table::New, touchcheck::Error{5, 3}, buf, sizeof(buf));
   fits(body, buf, kCalLineW);
-  touchcheck::errorText(kCalNew, touchcheck::Error{999, 999}, buf, sizeof(buf));
+  touchcheck::errorText(touchcheck::Table::New, touchcheck::Error{999, 999}, buf, sizeof(buf));
   fits(small, buf, kCalLineW);
   // The check's verdict: two Body lines at most, the longest way and size.
   f.ctx = const_cast<Vlw*>(&body);
@@ -1089,32 +2215,75 @@ void test_touch_calibration_texts_fit() {
   }
 
   // The rows: centred labels, and labels with their details.
-  const int rowText = kCalRowW - 2 * kCalRowPad;
-  for (const char* t : {kCalSave, kCalTryAgain, kCalDiscard, kCalDone}) {
+  const int rowText = kCalRowTextW;
+  for (S id : {S::calibration_save, S::calibration_try_again, S::calibration_discard, S::calibration_done}) {
+    const char* t = tr(id);
     fits(bold, t, rowText);
     fits(body, t, rowText);
   }
-  TEST_ASSERT_TRUE(bold.width(kCalCalibrate) + small.width(kCalCalibrateDetail) + 3 * kCalRowPad <= kCalRowW);
-  TEST_ASSERT_TRUE(body.width(kCheckNotNow) + small.width(kCheckLater) + 3 * kCalRowPad <= kCalRowW);
+  TEST_ASSERT_TRUE(bold.width(tr(S::settings_cal_calibrate)) + small.width(tr(S::settings_cal_calibrate_detail)) +
+                       3 * kCalRowPad <=
+                   kCalRowW);
+  TEST_ASSERT_TRUE(body.width(tr(S::check_not_now)) + small.width(tr(S::check_later)) + 3 * kCalRowPad <= kCalRowW);
+  // ... in every language: the detail beside its label when it fits whole
+  // in what that language's label leaves it, else under it, whole
+  // (CalibrationScreen::drawRow(): German's "Ausgabe > Touch-Kalibrierung",
+  // 198 px beside "Nicht jetzt"'s 188, was cut). English's beside, as before.
+  {
+    // The two lines inside the button (y 2-37), neither over the other.
+    TEST_ASSERT_TRUE(kCalRowLabelY - body.yAdvance / 2 >= 2 && kCalRowLabelY - bold.yAdvance / 2 >= 2);
+    TEST_ASSERT_TRUE(kCalRowLabelY - body.yAdvance / 2 + body.yAdvance <= kCalRowDetailY - small.yAdvance / 2);
+    TEST_ASSERT_TRUE(kCalRowLabelY - bold.yAdvance / 2 + bold.yAdvance <= kCalRowDetailY - small.yAdvance / 2);
+    TEST_ASSERT_TRUE(kCalRowDetailY - small.yAdvance / 2 + small.yAdvance <= 38);
+    std::string report;
+    for (uistr::Lang l : kAllLangs) {
+      if (!uistr::hasCatalogue(l)) continue;
+      uistr::setLang(l);
+      struct CalRow {
+        S label, detail;
+        bool primary;
+      };
+      for (const CalRow r : {CalRow{S::settings_cal_calibrate, S::settings_cal_calibrate_detail, true},
+                             CalRow{S::check_not_now, S::check_later, false}}) {
+        const Vlw& lf = r.primary ? bold : body;
+        const char* label = tr(r.label);
+        const char* detail = tr(r.detail);
+        fits(lf, label, rowText);
+        if (!calDetailBelow(lf.width(label), small.width(detail))) {
+          fits(small, detail, kCalRowW - 3 * kCalRowPad - lf.width(label));
+          continue;
+        }
+        fits(small, detail, rowText);
+        TEST_ASSERT_TRUE_MESSAGE(l != uistr::Lang::En, detail);
+        char m[160];
+        snprintf(m, sizeof(m), "%s \"%s\" under \"%s\"; ", uistr::tag(l), detail, label);
+        report += m;
+      }
+    }
+    TEST_MESSAGE(report.c_str());
+    uistr::setLang(uistr::Lang::En);
+  }
   // Three rows, the lines above them, and the A hint under them.
   TEST_ASSERT_TRUE(kCalRowsBottom - 3 * 40 >= 86 + 11 && kCalRowsBottom <= kCalHintY);
 
   // The A hints: "A: " and each page's verb.
-  for (const char* verb : {kCalCancel, kCalSkip, kCheckNotNow, kCalDiscard, kCalDone, kCalUndo}) {
-    snprintf(buf, sizeof(buf), "A: %s", verb);
+  for (S id : {S::calibration_cancel, S::calibration_skip, S::check_not_now, S::calibration_discard,
+               S::calibration_done, S::calibration_undo}) {
+    const char* verb = tr(id);
+    uistr::trf(buf, sizeof(buf), S::calibration_a_hint, verb);
     fits(small, buf, kCalAHintW);
   }
   // The test taps page's key, after its A hint (Done, or Undo after a
   // Save; 6 px clear of it) and its dot, to the band's end.
-  for (const char* verb : {kCalDone, kCalUndo}) {
-    snprintf(buf, sizeof(buf), "A: %s", verb);
+  for (const char* verb : {tr(S::calibration_done), tr(S::calibration_undo)}) {
+    uistr::trf(buf, sizeof(buf), S::calibration_a_hint, verb);
     TEST_ASSERT_TRUE(kCalAHintX + small.width(buf) + 6 <= kCalKeyX);
   }
   TEST_ASSERT_TRUE(kCalKeyX + 6 < kCalKeyTextX);
-  fits(small, kCalCheckKey, kCalKeyTextW);
+  fits(small, tr(S::calibration_check_key), kCalKeyTextW);
   TEST_ASSERT_EQUAL_INT(312, kCalKeyTextX + kCalKeyTextW);
   // The boot screen's rescue line.
-  fits(small, kBootTouchHint, kCalLineW);
+  fits(small, tr(S::boot_touch_hint), kCalLineW);
 }
 
 // With no correction (the default, until the owner calibrates), a panel
@@ -1169,8 +2338,27 @@ void test_right_half_neighbours_survive_the_lab_panel() {
     TEST_ASSERT_TRUE(r.edge || r.x >= kSpeakerChipHitEnd);
   }
   // The compact toast still has the room its long names need (Small).
-  const Vlw small(kVlwSans13);
+  const Vlw small(kVlwSans13), bold(kVlwSansBold16);
   fits(small, "Harder, Better, Faster, Stronger", kToastCompactTextRight - kToastTextX);
+  // The buttons are icons (the geometry and hit test above) when a label
+  // doesn't fit its pill (toastIcons()): either one, both or neither.
+  TEST_ASSERT_FALSE(toastIcons(true, bold.width(tr(S::toast_undo)), true, bold.width(tr(S::toast_view))));
+  TEST_ASSERT_FALSE(toastIcons(true, kToastUndoW - kToastLabelPad, true, kToastViewW - kToastLabelPad));
+  TEST_ASSERT_TRUE(toastIcons(true, kToastUndoW - kToastLabelPad + 1, false, 0));  // Polish's "Cofnij", 51 px
+  TEST_ASSERT_TRUE(toastIcons(true, 46, true, kToastViewW - kToastLabelPad + 1));  // View alone too wide
+  TEST_ASSERT_FALSE(toastIcons(true, 46, false, 999));                              // no View: its label is no matter
+  TEST_ASSERT_FALSE(toastIcons(false, 999, false, 999));                            // no buttons
+  // Every language: words only where both fit their pills.
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    const int undoW = bold.width(tr(S::toast_undo)), viewW = bold.width(tr(S::toast_view));
+    if (!toastIcons(true, undoW, true, viewW)) {
+      fits(bold, tr(S::toast_undo), kToastUndoW - kToastLabelPad);
+      fits(bold, tr(S::toast_view), kToastViewW - kToastLabelPad);
+    }
+  }
+  uistr::setLang(uistr::Lang::En);
 }
 
 // ---- the Library's names from the tags (docs/METADATA.md 5.4, 3.6; N9) ----
@@ -1328,12 +2516,20 @@ void test_library_rows_from_tags() {
   TEST_ASSERT_EQUAL_STRING("2 tracks", albumSub(idx, demos, AlbumPlace::OfArtist).c_str());
   // The loose tracks keep no name and no year, whatever their tags say.
   TEST_ASSERT_EQUAL_STRING("1 track", albumSub(idx, loose, AlbumPlace::OfArtist).c_str());
-  TEST_ASSERT_EQUAL_STRING(uitext::kLooseTracks, librarytext::albumShown(idx, loose));
+  TEST_ASSERT_EQUAL_STRING(tr(S::library_loose_tracks), librarytext::albumShown(idx, loose));
   // The root's Albums: the line and the year; an album with no records
   // shows its artist's (elected) name.
   TEST_ASSERT_EQUAL_STRING("The Lantern Choir \xC2\xB7 2001", albumSub(idx, first, AlbumPlace::AZ).c_str());
   TEST_ASSERT_EQUAL_STRING("The Lantern Choir", albumSub(idx, demos, AlbumPlace::AZ).c_str());
   TEST_ASSERT_EQUAL_STRING("Various Artists \xC2\xB7 2015", albumSub(idx, mix, AlbumPlace::AZ).c_str());
+  // A compilation's line is the UI's words (LibraryIndex::kVarious): in
+  // the pseudo-locale here, the index keeping its English.
+  uistr::setLang(uistr::Lang::EnXA);
+  TEST_ASSERT_EQUAL_STRING(tr(S::library_various_artists), librarytext::albumArtist(idx, mix));
+  TEST_ASSERT_EQUAL_INT(0, static_cast<int>(albumSub(idx, mix, AlbumPlace::AZ).find(tr(S::library_various_artists))));
+  TEST_ASSERT_EQUAL_STRING("Various Artists", idx.albumArtistLine(mix));
+  TEST_ASSERT_EQUAL_STRING("The Lantern Choir", librarytext::albumArtist(idx, first));  // a name stays
+  uistr::setLang(uistr::Lang::En);
   TEST_ASSERT_EQUAL_STRING("The Lantern Choir \xC2\xB7 2001 \xC2\xB7 3 tracks",
                            text(librarytext::albumHeader, idx, first).c_str());
   TEST_ASSERT_EQUAL_STRING("The Lantern Choir \xC2\xB7 2 tracks", text(librarytext::albumHeader, idx, demos).c_str());
@@ -1391,9 +2587,9 @@ void test_library_rows_from_paths() {
   TEST_ASSERT_EQUAL_STRING("2 tracks", albumSub(idx, morning, AlbumPlace::OfArtist).c_str());
   TEST_ASSERT_EQUAL_STRING("Glass Orchard \xC2\xB7 2 tracks", text(librarytext::albumHeader, idx, morning).c_str());
   TEST_ASSERT_EQUAL_STRING("", trackSub(idx, "/music/Glass Orchard/Morning Set/01 - Opening.mp3", false).c_str());
-  TEST_ASSERT_EQUAL_STRING(uitext::kNoArtistFolder, albumSub(idx, top, AlbumPlace::AZ).c_str());
-  TEST_ASSERT_EQUAL_STRING(uitext::kNoArtistFolder, librarytext::artistShown(idx, idx.album(top).artist));
-  TEST_ASSERT_EQUAL_STRING(uitext::kLooseTracks, librarytext::albumShown(idx, top));
+  TEST_ASSERT_EQUAL_STRING(tr(S::library_no_artist_folder), albumSub(idx, top, AlbumPlace::AZ).c_str());
+  TEST_ASSERT_EQUAL_STRING(tr(S::library_no_artist_folder), librarytext::artistShown(idx, idx.album(top).artist));
+  TEST_ASSERT_EQUAL_STRING(tr(S::library_loose_tracks), librarytext::albumShown(idx, top));
   // The rail keys on the names (no sort tags): "The" aside, as before.
   for (uint32_t i = 0; i < idx.artistCount(); ++i) {
     const uint32_t a = idx.artistsAZ()[i];
@@ -1409,7 +2605,7 @@ void test_library_rows_from_paths() {
   TEST_ASSERT_EQUAL_STRING("Morning Set", c.album(opening));
   TEST_ASSERT_EQUAL_UINT16(0, c.year(opening));
   TEST_ASSERT_EQUAL_UINT32(0, c.durationHintMs(opening));
-  TEST_ASSERT_EQUAL_STRING("", c.artist(idx.findTrack("/music/Top Level.mp3")));  // Now Playing: kUnknownArtist
+  TEST_ASSERT_EQUAL_STRING("", c.artist(idx.findTrack("/music/Top Level.mp3")));  // Now Playing: now_playing.unknown_artist
   // "1-01", "1-02", "2-01": two discs from the names, a divider each.
   librarytext::Discs d;
   d.set(idx, late);
@@ -1781,13 +2977,13 @@ void test_names_without_tags() {
   const uint32_t loose = idx.track(stray).album, topAlbum = idx.track(top).album;
   TEST_ASSERT_TRUE(idx.album(loose).flags & LibraryIndex::kLoose);
   TEST_ASSERT_EQUAL_STRING("", idx.albumName(loose));
-  TEST_ASSERT_EQUAL_STRING("", c.album(stray));  // Now Playing: kLooseTracks
-  TEST_ASSERT_EQUAL_STRING(uitext::kLooseTracks, librarytext::albumShown(idx, loose));
+  TEST_ASSERT_EQUAL_STRING("", c.album(stray));  // Now Playing: library.loose_tracks
+  TEST_ASSERT_EQUAL_STRING(tr(S::library_loose_tracks), librarytext::albumShown(idx, loose));
   TEST_ASSERT_EQUAL_STRING("Orvel Tasse", librarytext::artistShown(idx, idx.album(loose).artist));
-  TEST_ASSERT_EQUAL_STRING(uitext::kLooseTracks, librarytext::albumShown(idx, topAlbum));
-  TEST_ASSERT_EQUAL_STRING(uitext::kNoArtistFolder, librarytext::artistShown(idx, idx.album(topAlbum).artist));
+  TEST_ASSERT_EQUAL_STRING(tr(S::library_loose_tracks), librarytext::albumShown(idx, topAlbum));
+  TEST_ASSERT_EQUAL_STRING(tr(S::library_no_artist_folder), librarytext::artistShown(idx, idx.album(topAlbum).artist));
   TEST_ASSERT_EQUAL_STRING("Orvel Tasse", albumSub(idx, loose, AlbumPlace::AZ).c_str());
-  TEST_ASSERT_EQUAL_STRING(uitext::kNoArtistFolder, albumSub(idx, topAlbum, AlbumPlace::AZ).c_str());
+  TEST_ASSERT_EQUAL_STRING(tr(S::library_no_artist_folder), albumSub(idx, topAlbum, AlbumPlace::AZ).c_str());
   // The overlay (the playing track's record read after the build): a blank
   // title or album is none there too, the index's names stay.
   TrackCatalog::Overlay o;
@@ -1812,10 +3008,13 @@ void test_names_without_tags() {
 void test_library_texts_fit() {
   using namespace uitext;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
-  fits(title, kNoMusicTitle, kEmptyTitleW);
-  for (const char* l : kNoMusicLines) fits(small, l, kEmptyLineW);
-  for (const char* l : kNoCard.lines) fits(small, l, kEmptyLineW);
-  for (const char* l : {kUnknownArtist, kNoArtistFolder, kLooseTracks}) fits(body, l, kNowPlayingTextW);
+  fits(title, tr(S::empty_no_music_title), kEmptyTitleW);
+  for (int k = 0; k < 2; ++k) fits(small, lineOf(S::empty_no_music_lines, k).c_str(), kEmptyLineW);
+  for (int k = 0; k < 2; ++k) fits(small, lineOf(kNoCard.lines, k).c_str(), kEmptyLineW);
+  for (const char* l :
+       {tr(S::now_playing_unknown_artist), tr(S::library_no_artist_folder), tr(S::library_loose_tracks)}) {
+    fits(body, l, kNowPlayingTextW);
+  }
   // The album row with its year: a short album name keeps it.
   fits(body, "First Light \xC2\xB7 2001", kNowPlayingTextW);
   char t[64];
@@ -1843,16 +3042,58 @@ void test_library_texts_fit() {
   librarytext::foundText(99999, t, sizeof(t));
   TEST_ASSERT_EQUAL_STRING("Found 99,999 new tracks", t);
   fits(body, t, kToastTextRight - kToastTextX);
-  fits(body, kLibraryUpdated, kToastTextRight - kToastTextX);
-  fits(body, kLibraryAtBoot, kToastTextRight - kToastTextX);
-  TEST_ASSERT_TRUE(small.hasAll(kStatusChecking) && small.hasAll(kStatusUpdating));
+  fits(body, tr(S::library_updated), kToastTextRight - kToastTextX);
+  fits(body, tr(S::library_updates_at_boot), kToastTextRight - kToastTextX);
+  TEST_ASSERT_TRUE(small.hasAll(tr(S::library_status_checking)) && small.hasAll(tr(S::library_status_updating)));
   // The update step's fence (N12): the lists' line, and the note for what waits.
-  fits(body, kUpdatingList, 320 - 24);
-  TEST_ASSERT_TRUE(body.hasAll(kUpdatingList));
-  fits(body, kUpdatingWait, kToastTextRight - kToastTextX);
+  fits(body, tr(S::library_updating_list), kListLineW);
+  TEST_ASSERT_TRUE(body.hasAll(tr(S::library_updating_list)));
+  // A list's other lone lines (centred, nothing beside them).
+  for (S id : {S::library_empty_no_music, S::library_empty_no_audio, S::library_empty_nothing, S::queue_empty_text}) {
+    fits(body, tr(id), kListLineW);
+  }
+  TEST_ASSERT_TRUE(320 - kListLineW >= 2 * 10);
+  // The action bars (ListView::renderBar()): the Folders root's two buttons
+  // beside the A-Z rail (a 284 px list), "Play all 19410" Bold; a row's
+  // three, in the Library's 284 px and the Queue's 312 (a scroll bar), each
+  // in its font, else Small, in every language.
+  {
+    const int rootW = (284 - 16 - 6) / 2 - kListBarPad;
+    const int rowW = (284 - 16 - 12) / 3 - kListBarPad;
+    const int queueW = (312 - 16 - 12) / 3 - kListBarPad;
+    TEST_ASSERT_EQUAL_INT(127, rootW);
+    char all[48];
+    uistr::trnf(all, sizeof(all), S::library_play_all, 19410, 19410);
+    TEST_ASSERT_EQUAL_STRING("Play all 19410", all);
+    fits(bold, all, rootW);
+    for (uistr::Lang l : kAllLangs) {
+      if (!uistr::hasCatalogue(l)) continue;
+      uistr::setLang(l);
+      for (uint32_t n : {1u, 2u, 5u, 1234u, 19410u, 99999u}) {
+        uistr::trnf(all, sizeof(all), S::library_play_all, n, n);
+        fitsIn(bold, small, all, rootW);
+      }
+      fitsIn(body, small, tr(S::library_action_queue), rootW);
+      fitsIn(bold, small, tr(S::library_action_play), rowW);
+      fitsIn(body, small, tr(S::library_action_play_next), rowW);
+      fitsIn(body, small, tr(S::library_action_queue), rowW);
+      fitsIn(bold, small, tr(S::queue_action_play_now), queueW);
+      fitsIn(body, small, tr(S::queue_action_play_next), queueW);
+      fitsIn(body, small, tr(S::queue_action_remove), queueW);
+      // The Library root's segments (Bold, else Small: Japanese's アーティスト).
+      for (S seg : {S::library_segment_artists, S::library_segment_albums, S::library_segment_folders}) {
+        fitsIn(bold, small, tr(seg), 100 - kSegmentPad);
+      }
+    }
+    uistr::setLang(uistr::Lang::En);
+    for (S seg : {S::library_segment_artists, S::library_segment_albums, S::library_segment_folders}) {
+      fits(bold, tr(seg), 100 - kSegmentPad);  // English in Bold
+    }
+  }
+  fits(body, tr(S::library_updating_wait), kToastTextRight - kToastTextX);
   // A card swapped while on: the toasts before the restart.
-  fits(body, kAnotherCard, kToastTextRight - kToastTextX);
-  fits(body, kCardBack, kToastTextRight - kToastTextX);
+  fits(body, tr(S::card_another), kToastTextRight - kToastTextX);
+  fits(body, tr(S::card_back), kToastTextRight - kToastTextX);
 }
 
 // ---- the console's tag commands (tagtext, docs/METADATA.md 3.3.6) ----
@@ -2053,12 +3294,49 @@ void test_console_sources() {
 // visualizer): the title in Bold, the hint in Small, each in kW - 16.
 void test_dance_texts_fit() {
   using namespace uitext;
-  const Vlw small(kVlwSans13), bold(kVlwSansBold16);
-  fits(bold, kVizTitle, kDanceBottomW);
-  fits(small, kVizHint, kDanceBottomW);
+  const Vlw small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
+  fits(bold, tr(S::dance_viz_title), kDanceBottomW);
+  fits(small, tr(S::dance_viz_hint), kDanceBottomW);
+  // The dancer's name: Title (English), else Bold (every language).
+  fits(title, tr(S::dance_crab), kDanceNameW);
+  fits(title, tr(S::dance_stick), kDanceNameW);
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    fitsIn(title, bold, tr(S::dance_crab), kDanceNameW);
+    fitsIn(title, bold, tr(S::dance_stick), kDanceNameW);
+  }
+  uistr::setLang(uistr::Lang::En);
   char msg[96];
-  snprintf(msg, sizeof(msg), "\"%s\" %d px, \"%s\" %d px, in %d", kVizTitle, bold.width(kVizTitle), kVizHint,
-           small.width(kVizHint), kDanceBottomW);
+  snprintf(msg, sizeof(msg), "\"%s\" %d px, \"%s\" %d px, in %d", tr(S::dance_viz_title),
+           bold.width(tr(S::dance_viz_title)), tr(S::dance_viz_hint),
+           small.width(tr(S::dance_viz_hint)), kDanceBottomW);
+  TEST_MESSAGE(msg);
+}
+
+// A computer's @identify (ui/Ui::identify()): "This one" in Title, and the
+// computer's name for its port in Title when it fits (the usual ones do),
+// else Bold, which takes 16 of the widest printable ASCII character
+// (hoststatus::kMaxLabel), so a label is never cut.
+void test_identify_texts_fit() {
+  using namespace uitext;
+  const Vlw bold(kVlwSansBold16), title(kVlwSansBold22);
+  TEST_ASSERT_TRUE(title.hasAll(kIdentifyTitle));
+  fits(title, kIdentifyTitle, kIdentifyW);
+  for (const char* port : {"COM5", "COM256", "ttyACM0", "ttyUSB10", "cu.usbmodem14101", "cu.SLAB_USBtoUART"}) {
+    fits(title, port, kIdentifyW);
+  }
+  // The widest of 0x21-0x7E in Bold, 16 of it.
+  char widest = '!';
+  for (char c = '!'; c <= '~'; ++c) {
+    const char a[2] = {c, 0}, b[2] = {widest, 0};
+    TEST_ASSERT_TRUE(bold.hasAll(a));
+    if (bold.width(a) > bold.width(b)) widest = c;
+  }
+  const std::string worst(hoststatus::kMaxLabel, widest);
+  fits(bold, worst.c_str(), kIdentifyW);
+  char msg[96];
+  snprintf(msg, sizeof(msg), "16 x '%c' in Bold: %d px in %d", widest, bold.width(worst.c_str()), kIdentifyW);
   TEST_MESSAGE(msg);
 }
 
@@ -2068,13 +3346,652 @@ void test_dance_texts_fit() {
 void test_boot_texts_fit() {
   using namespace bootlayout;
   const Vlw body(kVlwSans16), small(kVlwSans13);
-  TEST_ASSERT_EQUAL_INT(kBodyH, body.lineH);
-  TEST_ASSERT_EQUAL_INT(kSmallH, small.lineH);
+  TEST_ASSERT_EQUAL_INT(kBodyH, body.yAdvance);
+  TEST_ASSERT_EQUAL_INT(kSmallH, small.yAdvance);
   fits(body, "v10.10.10", kTextW);
   fits(body, "v10.10.10-rc.10", kTextW);
   fits(body, "v0.8.0-dev+abcdef1-dirty", kTextW);
   fits(small, "v10.10.10-rc.10-9999-gabcdef12-dirty", kTextW);
-  fits(small, uitext::kBootTouchHint, kTextW);
+  fits(small, tr(S::boot_touch_hint), kTextW);
+}
+
+// The header's pill (Ui::drawHeader(), Header::pillW()): as wide as its
+// label (Bold within its budget, else Small), the crumb's with its chevron.
+// In every language the label fits its budget in one of the two, and the
+// pill leaves the title its room: the crumb starts at x 196 or right of it
+// (the title from x 28 keeps 160 px); the Queue's Edit, All and None at
+// 230 or right of it. The pill's hit area (Header::hit(),
+// uitext::headerPillZoneX()) runs to the edge from x 240, or from the
+// pill's round end and the crumb's chevron when it starts further left:
+// no more of any pill is left of its zone than of English's crumb (from x
+// 215, hit from 240, as it always was). The titles drawn beside the crumb
+// (an artist's All tracks, an album's or a folder's while the index isn't
+// ready) fit what it leaves them, in Bold (Ui::drawHeader(): from x 28 to
+// 8 px short of the pill), with that language's crumb.
+void test_header_pills_fit() {
+  using namespace uitext;
+  const Vlw small(kVlwSans13), bold(kVlwSansBold16);
+  auto pill = [&](const char* label, int maxW, bool chevron) {
+    const Vlw& font = bold.width(label) <= maxW ? bold : small;
+    fits(font, label, maxW);
+    return 320 - 6 - (font.width(label) + kHeaderPillPad + (chevron ? kHeaderChevronW : 0));
+  };
+  TEST_ASSERT_EQUAL_INT(240, kHeaderPillZoneX);
+  std::string report;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    const int crumbX = pill(tr(S::library_crumb), kCrumbTextW, true);
+    TEST_ASSERT_TRUE_MESSAGE(crumbX >= 196, tr(S::library_crumb));
+    TEST_ASSERT_TRUE(28 + 160 + 8 <= crumbX);
+    // Its zone: at most its round end and its chevron left of it (25 px,
+    // English's), never right of x 240, and 40 px wide or more.
+    const int crumbZone = headerPillZoneX(crumbX, true);
+    TEST_ASSERT_TRUE_MESSAGE(crumbZone <= crumbX + kHeaderPillEndW + kHeaderChevronW, tr(S::library_crumb));
+    TEST_ASSERT_TRUE(crumbZone == kHeaderPillZoneX || crumbZone == crumbX + 25);
+    TEST_ASSERT_TRUE(320 - crumbZone >= 40);
+    for (S id : {S::library_all_tracks, S::library_header_album, S::library_header_folder}) {
+      TEST_ASSERT_TRUE_MESSAGE(bold.width(tr(id)) <= crumbX - 8 - 28, tr(id));
+    }
+    int leftmost = 320, zone = 320;
+    for (S id : {S::queue_edit, S::queue_all, S::queue_none}) {
+      const int x = pill(tr(id), kQueuePillTextW, false);
+      TEST_ASSERT_TRUE_MESSAGE(x >= 230, tr(id));
+      // At most its round end left of its zone.
+      TEST_ASSERT_TRUE_MESSAGE(headerPillZoneX(x, false) <= x + kHeaderPillEndW, tr(id));
+      leftmost = std::min(leftmost, x);
+      zone = std::min(zone, headerPillZoneX(x, false));
+    }
+    char m[96];
+    snprintf(m, sizeof(m), "%s: crumb from x %d (hit from %d), the Queue's pills from %d (hit from %d); ",
+             uistr::tag(l), crumbX, crumbZone, leftmost, zone);
+    report += m;
+  }
+  TEST_MESSAGE(report.c_str());
+  uistr::setLang(uistr::Lang::En);
+  // English: Bold, as before ("‹ Library" from x 215), and every pill hit
+  // from x 240 as before.
+  TEST_ASSERT_TRUE(bold.width(tr(S::library_crumb)) <= kCrumbTextW);
+  const int enCrumbX = pill(tr(S::library_crumb), kCrumbTextW, true);
+  TEST_ASSERT_EQUAL_INT(215, enCrumbX);
+  TEST_ASSERT_EQUAL_INT(240, headerPillZoneX(enCrumbX, true));
+  for (S id : {S::queue_edit, S::queue_all, S::queue_none}) {
+    TEST_ASSERT_TRUE(bold.width(tr(id)) <= kQueuePillTextW);
+    TEST_ASSERT_EQUAL_INT(240, headerPillZoneX(pill(tr(id), kQueuePillTextW, false), false));
+  }
+}
+
+// The headers' lines beside their titles (Ui::drawHeader(),
+// uitext::headerSub()), in every language, with what that language's title
+// and pill leave them: a phrase or a count whole, or not at all (Device
+// info's "este Core2" beside Spanish's title was "es…"); the pages' own
+// lines (Output, About, Language, the first boot's, the empty Queue's)
+// whole in every language; English's every one, as before.
+void test_header_subs_fit() {
+  using namespace uitext;
+  const Vlw small(kVlwSans13), bold(kVlwSansBold16);
+  // The rule itself: a name cut beside the title only with more than 16 px
+  // there (as before); a whole one or none; one that may go below.
+  TEST_ASSERT_TRUE(headerSub(28, 100, 310, 999, false, false) == HeaderSub::Beside);  // 174 px: cut there
+  TEST_ASSERT_TRUE(headerSub(28, 258, 310, 10, false, false) == HeaderSub::None);     // 16 px
+  TEST_ASSERT_TRUE(headerSub(28, 100, 310, 174, true, false) == HeaderSub::Beside);
+  TEST_ASSERT_TRUE(headerSub(28, 100, 310, 175, true, false) == HeaderSub::None);
+  TEST_ASSERT_TRUE(headerSub(28, 100, 310, 175, false, true) == HeaderSub::Below);
+  TEST_ASSERT_EQUAL_INT(310, headerRight(0));
+  TEST_ASSERT_EQUAL_INT(320 - 6 - 60 - 8, headerRight(60));
+  struct Line {
+    const char* page;
+    int x;
+    S title;
+    const char* sub;
+    int pillW;
+    bool always;  // shown in every language
+  };
+  std::string report;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    char found1[48], found99[48];
+    uistr::trnf(found1, sizeof(found1), S::pair_found, 1, 1);
+    uistr::trnf(found99, sizeof(found99), S::pair_found, 99, 99);
+    std::vector<Line> lines = {
+        {"Output", 12, S::output_title, tr(S::output_subtitle), 0, true},
+        {"About", 28, S::about_title, tr(S::about_subtitle), 0, true},
+        {"Language", 28, S::language_title, tr(S::language_subtitle), 0, true},
+        {"Auto DJ", 28, S::output_autodj, tr(S::autodj_subtitle), 0, true},
+        {"first boot", 12, S::language_title, tr(S::language_first_boot_sub), 0, true},
+        {"Queue (empty)", 12, S::queue_title, tr(S::queue_empty_sub), 0, true},
+        {"Device info", 28, S::about_device_info, tr(S::device_info_subtitle), 0, false},
+        {"Pair (1)", 28, S::pair_title, found1, 0, false},
+        {"Pair (99)", 28, S::pair_title, found99, 0, false},
+    };
+    for (const Line& ln : lines) {
+      const int right = headerRight(ln.pillW);
+      const int titleW = std::min(bold.width(tr(ln.title)), right - ln.x);
+      fits(bold, tr(ln.title), right - ln.x);
+      const HeaderSub how = headerSub(ln.x, titleW, right, small.width(ln.sub), true, false);
+      if (how == HeaderSub::Beside) {
+        fits(small, ln.sub, headerSubRoom(ln.x, titleW, right));
+      } else {
+        TEST_ASSERT_TRUE(how == HeaderSub::None);
+        char m[128];
+        snprintf(m, sizeof(m), "%s %s: no \"%s\" (%d px in %d); ", uistr::tag(l), ln.page, ln.sub,
+                 small.width(ln.sub), headerSubRoom(ln.x, titleW, right));
+        report += m;
+      }
+      if (ln.always || l == uistr::Lang::En) TEST_ASSERT_TRUE_MESSAGE(how == HeaderSub::Beside, ln.sub);
+    }
+    // Selection mode: "N selected" from x 36 (after the ✕), "of N" beside
+    // it, the All pill (None when every entry is selected).
+    struct Sel {
+      uint32_t n, size;
+    };
+    for (const Sel s : {Sel{1, 16}, Sel{12, 16}, Sel{12, 999}, Sel{998, 999}, Sel{12, 5000}, Sel{4999, 5000},
+                        Sel{16, 16}, Sel{120, 120}, Sel{999, 999}, Sel{5000, 5000}}) {
+      const char* pill = tr(s.n == s.size ? S::queue_none : S::queue_all);
+      const int pillW = (bold.width(pill) <= kQueuePillTextW ? bold : small).width(pill) + kHeaderPillPad;
+      const int right = headerRight(pillW);
+      char title[64], of[64];
+      uistr::trnf(title, sizeof(title), S::queue_selected, s.n, s.n);
+      uistr::trf(of, sizeof(of), S::queue_selected_of, s.size);
+      fits(bold, title, right - 36);
+      const int titleW = bold.width(title);
+      const HeaderSub how = headerSub(36, titleW, right, small.width(of), true, false);
+      if (how == HeaderSub::Beside) {
+        fits(small, of, headerSubRoom(36, titleW, right));
+      } else {
+        char m[128];
+        snprintf(m, sizeof(m), "%s %s: no \"%s\" (%d px in %d); ", uistr::tag(l), title, of, small.width(of),
+                 headerSubRoom(36, titleW, right));
+        report += m;
+      }
+      if (l == uistr::Lang::En) TEST_ASSERT_TRUE_MESSAGE(how == HeaderSub::Beside, of);
+    }
+    // The jump grid's header: what it jumps in, whole beside "Jump to"
+    // (the segment's name, and at the second level "Artists, W: 9999").
+    fits(bold, tr(S::jump_title), kJumpTitleW);
+    const int jumpRoom = jumpSubRoom(bold.width(tr(S::jump_title)));
+    for (S seg : {S::library_segment_artists, S::library_segment_albums, S::library_segment_folders}) {
+      fits(small, tr(seg), jumpRoom);
+      char second[64];
+      uistr::trf(second, sizeof(second), S::jump_second_title, tr(seg), "W", 9999);
+      fits(small, second, jumpRoom);
+    }
+  }
+  TEST_MESSAGE(report.c_str());
+  uistr::setLang(uistr::Lang::En);
+}
+
+// Sheet rows (ui/Overlays' Sheet: Now Playing's two menus, the Queue's
+// Clear, Output's touch calibration), in every language: each detail beside
+// its label when it fits whole in what that language's label leaves it,
+// else under the label (sheet::detailOnTwoLines()), whole there too: never
+// cut (Spanish's "Fin de la cola" beside "Temporizador de apagado" was
+// "Fin de l…"). English's all on one line, as before.
+void test_sheet_details_fit() {
+  using namespace uitext;
+  const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
+  // The two lines inside the 40 px row (its divider on y 0), neither over
+  // the other: the label (Body or Bold, 19 rows) at 13, the detail (Small,
+  // 17) at 31, as a list's two-line row.
+  for (const Vlw* f : {&body, &bold}) {
+    TEST_ASSERT_TRUE(sheet::kTwoLineLabelY - f->yAdvance / 2 >= 1);
+    TEST_ASSERT_TRUE(sheet::kTwoLineLabelY - f->yAdvance / 2 + f->yAdvance <=
+                     sheet::kTwoLineDetailY - small.yAdvance / 2);
+  }
+  TEST_ASSERT_TRUE(sheet::kTwoLineDetailY - small.yAdvance / 2 + small.yAdvance <= sheet::kRowH);
+  TEST_ASSERT_EQUAL_INT(288, sheet::kTwoLineW);
+  TEST_ASSERT_FALSE(sheet::detailOnTwoLines(100, 172));
+  TEST_ASSERT_TRUE(sheet::detailOnTwoLines(100, 173));
+  TEST_ASSERT_TRUE(sheet::detailOnTwoLines(248, 10));  // 24 px beside it: under it
+  struct Row {
+    S label;
+    bool primary;
+    std::vector<std::string> details;
+  };
+  std::string report;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    char minutes[32], seconds[32];
+    uistr::trf(minutes, sizeof(minutes), S::format_minutes, 999);
+    uistr::trf(seconds, sizeof(seconds), S::format_seconds, 59);
+    const std::vector<Row> rows = {
+        {S::now_playing_shuffle, false, {tr(S::now_playing_on), tr(S::now_playing_off)}},
+        {S::now_playing_repeat, false, {tr(repeatMode(0)), tr(repeatMode(1)), tr(repeatMode(2))}},
+        {S::now_playing_sleep_timer,
+         false,
+         {tr(S::sleep_row_off), tr(S::sleep_row_end_track), tr(S::sleep_row_end_album), tr(S::sleep_row_end_queue),
+          tr(S::sleep_row_fading), minutes, seconds}},
+        {S::now_playing_go_to_artist, false, {tr(S::library_no_artist_folder)}},
+        {S::now_playing_go_to_album, false, {tr(S::library_loose_tracks)}},
+        {S::now_playing_autodj,
+         false,
+         {tr(S::now_playing_autodj_on), tr(S::now_playing_autodj_off), tr(S::now_playing_autodj_waiting),
+          tr(S::now_playing_autodj_paused)}},
+        {S::queue_clear_up_next, false, {tr(S::queue_clear_up_next_detail)}},
+        {S::queue_clear_all, false, {tr(S::queue_clear_all_detail)}},
+        {S::settings_cal_calibrate, true, {tr(S::settings_cal_calibrate_detail)}},
+    };
+    for (const Row& r : rows) {
+      const Vlw& lf = r.primary ? bold : body;
+      const char* label = tr(r.label);
+      fits(lf, label, sheet::kTwoLineW);
+      const int labelW = lf.width(label);
+      for (const std::string& d : r.details) {
+        if (!sheet::detailOnTwoLines(labelW, small.width(d.c_str()))) {
+          fits(small, d.c_str(), sheet::detailRoom(labelW));
+          continue;
+        }
+        fits(small, d.c_str(), sheet::kTwoLineW);
+        TEST_ASSERT_TRUE_MESSAGE(l != uistr::Lang::En, d.c_str());  // English: one line, as before
+        char m[160];
+        snprintf(m, sizeof(m), "%s \"%s\" under \"%s\" (%d px in %d); ", uistr::tag(l), d.c_str(), label,
+                 small.width(d.c_str()), sheet::detailRoom(labelW));
+        report += m;
+      }
+    }
+  }
+  TEST_MESSAGE(report.c_str());
+  uistr::setLang(uistr::Lang::En);
+  // A name in the navigation sheet is cut to its row's room first (Now
+  // Playing), so it stays beside its label, as the sheet cut it before.
+  const textfit::Font f = viewOf(small);
+  const int room = sheet::detailRoom(body.width(tr(S::now_playing_go_to_artist)));
+  const char* name = "The Lantern Choir and the Very Long Orchestra of Somewhere";
+  char cut[96];
+  textfit::fit(f, name, strlen(name), cut, sizeof(cut), room);
+  TEST_ASSERT_TRUE(strstr(cut, "\xE2\x80\xA6") != nullptr);
+  TEST_ASSERT_FALSE(sheet::detailOnTwoLines(body.width(tr(S::now_playing_go_to_artist)), small.width(cut)));
+  TEST_ASSERT_EQUAL_STRING(drawn(small, name, room).c_str(), cut);
+}
+
+// Auto DJ on the screen (the engine design's 5; lib/core/AutoDjView), in
+// every language: Output's row (its title and line, every state and
+// Anchor), Output > Auto DJ's rows (the switches' titles and lines beside
+// the switch; Anchor's and Match strictness's values beside their titles
+// or on the second line, never cut; the hints; the status row's two lines
+// in every state of the index and every hold, at its worst counts), the
+// Library sheet's and the playback sheet's 4th rows, and the empty states'
+// button beside its icon. The "..." row's states: test_sheet_details_fit;
+// the page's header line: test_header_subs_fit; every text's own room and
+// the toasts: test_ui_strings.
+void test_auto_dj_texts_fit() {
+  using namespace uitext;
+  namespace dv = autodjview;
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  // The layout: two lines of Small (the status row) inside the 42 px row,
+  // neither over the other; the switch rows' lines end before the switch
+  // (Haptics', 58 px from the right), the value rows' at the scroll bar's
+  // 8 px.
+  TEST_ASSERT_TRUE(12 - small.yAdvance / 2 >= 1);
+  TEST_ASSERT_TRUE(12 - small.yAdvance / 2 + small.yAdvance <= 30 - small.yAdvance / 2);
+  TEST_ASSERT_TRUE(30 - small.yAdvance / 2 + small.yAdvance <= 42);
+  TEST_ASSERT_EQUAL_INT(232, kAutoDjSwitchW);
+  TEST_ASSERT_TRUE(kAutoDjX + kAutoDjSwitchW <= 312 - 58 - 6);
+  TEST_ASSERT_EQUAL_INT(288, kAutoDjLineW);
+  TEST_ASSERT_TRUE(autoDjValueBeside(100, 172));
+  TEST_ASSERT_FALSE(autoDjValueBeside(100, 173));
+  // Every state the page and the row can be in.
+  std::vector<dv::State> states;
+  for (int on = 0; on < 2; ++on) {
+    for (dv::Index ix : {dv::Index::None, dv::Index::Bad, dv::Index::Unreadable, dv::Index::TooBig,
+                         dv::Index::NoMemory, dv::Index::Found, dv::Index::Reading, dv::Index::Ready}) {
+      for (autodj::Hold hold :
+           {autodj::Hold::None, autodj::Hold::RepeatOne, autodj::Hold::SleepTimer, autodj::Hold::Failures}) {
+        for (autodj::Mode mode : {autodj::Mode::Rolling, autodj::Mode::Locked}) {
+          dv::State s;
+          s.on = on != 0;
+          s.index = ix;
+          s.hold = hold;
+          s.mode = mode;
+          s.usable = ix == dv::Index::Found || ix == dv::Index::Reading || ix == dv::Index::Ready;
+          s.rows = s.mapped = s.tracks = 99999;  // the widest counts (grouped: "99,999")
+          s.bpmPct = s.keyPct = 100;
+          states.push_back(s);
+          s.rows = s.mapped = s.tracks = 1;  // (the "one" forms)
+          states.push_back(s);
+        }
+      }
+    }
+  }
+  std::string report;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    // Output's row: the title and its line, from the icon's column to the
+    // chevron; the line with the Anchor when it fits whole (always in
+    // English), else the state alone (OutputPage), which always fits.
+    TEST_ASSERT_EQUAL_INT(312 - 26 - 44, kAutoDjRowW);
+    fits(body, tr(S::output_autodj), kAutoDjRowW);
+    for (const dv::State& s : states) {
+      char line[96];
+      dv::rootLine(s, line, sizeof(line));
+      if (small.width(line) > kAutoDjRowW) {
+        TEST_ASSERT_TRUE_MESSAGE(l != uistr::Lang::En, line);
+        char m[200];
+        snprintf(m, sizeof(m), "%s Output's line \"%s\" (%d px) as the state alone; ", uistr::tag(l), line,
+                 small.width(line));
+        if (report.find(m) == std::string::npos) report += m;
+        dv::rootLine(s, line, sizeof(line), false);
+      }
+      fits(small, line, kAutoDjRowW);
+      // The status row.
+      char a[96], b[96];
+      dv::statusLines(s, a, sizeof(a), b, sizeof(b));
+      fits(small, a, kAutoDjLineW);
+      fits(small, b, kAutoDjLineW);
+    }
+    // The switches.
+    for (S t : {S::output_autodj, S::autodj_bpm, S::autodj_harmonic}) fits(body, tr(t), kAutoDjSwitchW);
+    for (S t : {S::autodj_on_sub, S::autodj_bpm_sub, S::autodj_harmonic_sub, S::autodj_needs_index}) {
+      fits(small, tr(t), kAutoDjSwitchW);
+    }
+    // The value rows: each value beside its title, or on the line under
+    // it; the hints (and why they're dim) on that line. Dim without the
+    // index, the value shows too: beside its title with why under it, or
+    // under it in why's place (until 2026-10-16 why took that line, and
+    // Match strictness's value went unseen in de, es, it and pt).
+    struct Value {
+      S title;
+      std::vector<std::string> values;
+    };
+    std::vector<std::string> steps;
+    for (uint8_t p = 55; p <= 75; p = static_cast<uint8_t>(p + 5)) {
+      char v[48];
+      steps.push_back(dv::strictnessText(p, v, sizeof(v)));
+    }
+    char odd[48];
+    steps.push_back(dv::strictnessText(dv::shownFloor(55, 160), odd, sizeof(odd)));  // an index's own floor: 63 %
+    const std::vector<Value> rows = {
+        {S::autodj_anchor, {tr(S::autodj_anchor_rolling), tr(S::autodj_anchor_locked)}},
+        {S::autodj_strictness, steps},
+    };
+    const char* needs = tr(S::autodj_needs_index);
+    for (const Value& r : rows) {
+      const char* title = tr(r.title);
+      fits(body, title, kAutoDjLineW);
+      for (const std::string& v : r.values) {
+        const int vw = small.width(v.c_str());
+        const char* dim = autoDjSecondLine(body.width(title), vw, v.c_str(), needs);
+        fits(small, dim, kAutoDjLineW);
+        if (autoDjValueBeside(body.width(title), vw)) {
+          fits(small, v.c_str(), autoDjValueRoom(body.width(title)));
+          TEST_ASSERT_EQUAL_STRING(needs, dim);
+          continue;
+        }
+        TEST_ASSERT_EQUAL_STRING(v.c_str(), dim);
+        fits(small, v.c_str(), kAutoDjLineW);
+        TEST_ASSERT_TRUE_MESSAGE(l != uistr::Lang::En, v.c_str());  // English: beside its title
+        char m[160];
+        snprintf(m, sizeof(m), "%s \"%s\" under \"%s\" (%d px in %d); ", uistr::tag(l), v.c_str(), title, vw,
+                 autoDjValueRoom(body.width(title)));
+        report += m;
+      }
+    }
+    for (S t : {S::autodj_anchor_rolling_sub, S::autodj_anchor_locked_sub, S::autodj_strictness_sub,
+                S::autodj_needs_index}) {
+      fits(small, tr(t), kAutoDjLineW);
+    }
+    // The sheets' 4th rows (Body, 16 px in from each side).
+    fits(body, tr(S::library_autodj_here), sheet::kTwoLineW);
+    fits(body, tr(S::now_playing_autodj), sheet::kTwoLineW);
+    // The empty states' second button: Auto DJ's label, beside its icon
+    // (as wide as Shuffle's: kEmptyIconW[1]) or alone (EmptyState draws
+    // the icon only when both fit).
+    fits(body, tr(S::empty_autodj), kEmptySecondW - 12);
+    if (body.width(tr(S::empty_autodj)) + kEmptyIconW[1] + 8 > kEmptySecondW - 12) {
+      report += std::string(uistr::tag(l)) + " Auto DJ's button without its icon; ";
+    }
+  }
+  TEST_MESSAGE(report.c_str());
+  uistr::setLang(uistr::Lang::En);
+  // English: the button with its icon.
+  TEST_ASSERT_TRUE(body.width(tr(S::empty_autodj)) + kEmptyIconW[1] + 8 <= kEmptySecondW - 12);
+}
+
+// The Folder page's header counts (librarytext::folderHeaderCounts()), in
+// every language, beside its crumb (two levels down) and without it: the
+// first form that fits whole, never one cut (German's "14 Audiodateien, 1
+// sonst…"). English's two-part lines as before; its three-part line beside
+// the crumb, cut before, says "files".
+void test_folder_header_counts_fit() {
+  using namespace uitext;
+  const Vlw small(kVlwSans13), bold(kVlwSansBold16);
+  const textfit::Font f = viewOf(small);
+  struct Counts {
+    uint32_t folders, files, other;
+  };
+  const Counts counts[] = {{0, 14, 1}, {3, 12, 0}, {12, 140, 3}, {999, 9999, 9999}, {0, 0, 5},
+                           {5, 0, 0},  {0, 0, 0},  {1, 1, 1},   {999, 0, 9999},    {0, 9999, 0}};
+  std::string report;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    const char* crumb = tr(S::library_crumb);
+    const int pillW =
+        (bold.width(crumb) <= kCrumbTextW ? bold : small).width(crumb) + kHeaderPillPad + kHeaderChevronW;
+    for (const int right : {headerRight(pillW), headerRight(0)}) {
+      const int room = right - 28;
+      for (const Counts& c : counts) {
+        char t[64], all[64];
+        librarytext::folderHeaderCounts(f, room, c.folders, c.files, c.other, t, sizeof(t));
+        fits(small, t, room);
+        librarytext::folderCounts(c.folders, c.files, c.other, true, all, sizeof(all));
+        if (strcmp(t, all) != 0) {
+          char m[192];
+          snprintf(m, sizeof(m), "%s %d px: \"%s\" for \"%s\"; ", uistr::tag(l), room, t, all);
+          report += m;
+        }
+      }
+    }
+  }
+  TEST_MESSAGE(report.c_str());
+  uistr::setLang(uistr::Lang::En);
+  const int crumbRoom = headerRight(bold.width(tr(S::library_crumb)) + kHeaderPillPad + kHeaderChevronW) - 28;
+  TEST_ASSERT_EQUAL_INT(179, crumbRoom);
+  char t[64];
+  librarytext::folderHeaderCounts(f, crumbRoom, 0, 14, 1, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("14 audio files, 1 other", t);
+  librarytext::folderHeaderCounts(f, crumbRoom, 3, 12, 0, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("3 folders, 12 audio files", t);
+  librarytext::folderHeaderCounts(f, crumbRoom, 12, 140, 3, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("12 folders, 140 files", t);
+  librarytext::folderHeaderCounts(f, 282, 12, 140, 3, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("12 folders, 140 audio files, 3 other", t);
+  librarytext::folderHeaderCounts(f, crumbRoom, 0, 0, 0, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("empty", t);
+  librarytext::folderHeaderCounts(f, 40, 5, 0, 7, t, sizeof(t));  // one part: the folders
+  TEST_ASSERT_EQUAL_STRING("5 folders", t);
+  librarytext::folderHeaderCounts(f, 40, 0, 0, 7, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("7 other", t);
+  // A folder row's counts, as before ("files").
+  librarytext::folderCounts(3, 12, 1, false, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("3 folders, 12 files, 1 other", t);
+  uistr::setLang(uistr::Lang::De);
+  const char* crumb = tr(S::library_crumb);
+  const int deRoom =
+      headerRight((bold.width(crumb) <= kCrumbTextW ? bold : small).width(crumb) + kHeaderPillPad + kHeaderChevronW) -
+      28;
+  librarytext::folderHeaderCounts(f, deRoom, 0, 14, 1, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("14 Dateien, 1 sonstige", t);
+  uistr::setLang(uistr::Lang::En);
+}
+
+// The Library's headers with a line that may go under the title
+// (Header::subBelow): an artist's All tracks (the artist's name), an
+// Artist's counts, an Album's line; in every language, beside the crumb
+// where the page has it. Beside the title only whole; else on the second
+// line, where the counts are whole too (French's "Tous les morceaux" left
+// the name 16 px, Polish's 7: it wasn't drawn).
+void test_library_header_lines() {
+  using namespace uitext;
+  const Vlw small(kVlwSans13), bold(kVlwSansBold16);
+  std::string report;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    const char* crumb = tr(S::library_crumb);
+    const int pillW =
+        (bold.width(crumb) <= kCrumbTextW ? bold : small).width(crumb) + kHeaderPillPad + kHeaderChevronW;
+    // All tracks, two levels down (the crumb): a name beside the title, or
+    // under it with 160 px or more.
+    {
+      const int right = headerRight(pillW);
+      const int titleW = std::min(bold.width(tr(S::library_all_tracks)), right - 28);
+      for (const char* name : {"Air", "Daft Punk", "The Lantern Choir", "Harder, Better, Faster, Stronger"}) {
+        const HeaderSub how = headerSub(28, titleW, right, small.width(name), false, true);
+        if (how == HeaderSub::Beside) {
+          fits(small, name, headerSubRoom(28, titleW, right));
+        } else {
+          TEST_ASSERT_TRUE(how == HeaderSub::Below);
+          TEST_ASSERT_TRUE(right - 28 >= 160);
+        }
+      }
+      char m[96];
+      snprintf(m, sizeof(m), "%s All tracks: a name beside it in %d px, under it %d; ", uistr::tag(l),
+               headerSubRoom(28, titleW, right), right - 28);
+      report += m;
+    }
+    // An Artist (one level down: no crumb), "(no artist folder)" or a name:
+    // the counts beside it whole, or under it whole, at the most there are.
+    for (const char* artist : {tr(S::library_no_artist_folder), "Air", "The Very Long Name of an Artist Band"}) {
+      const int right = headerRight(0);
+      const int titleW = std::min(bold.width(artist), right - 28);
+      for (uint32_t albums : {1u, 3u, 1500u}) {
+        for (uint32_t tracks : {1u, 41u, 99999u}) {
+          char a[48], tk[48], line[96];
+          uistr::trnf(a, sizeof(a), S::library_albums_n, albums, albums);
+          uistr::trnf(tk, sizeof(tk), S::library_tracks_n, tracks, uistr::grouped(tracks));
+          uistr::trf(line, sizeof(line), S::library_artist_counts, a, tk);
+          const HeaderSub how = headerSub(28, titleW, right, small.width(line), false, true);
+          fits(small, line, how == HeaderSub::Beside ? headerSubRoom(28, titleW, right) : right - 28);
+        }
+      }
+    }
+    // An Album's line ("Artist · 2001 · 14 tracks"), one level down and two
+    // (beside the crumb), in the second line's room (beside the title it is
+    // drawn only whole): whole; else without the year; else the artist's
+    // name cut to what the count leaves; else the year and the count. A
+    // phrase whole or left out, never cut; the count always whole.
+    const textfit::Font f = viewOf(small);
+    struct AlbumArtist {
+      const char* name;
+      bool phrase;
+    };
+    for (const int right : {headerRight(0), headerRight(pillW)}) {
+      const int room = right - 28;
+      for (const AlbumArtist a : {AlbumArtist{"Air", false}, AlbumArtist{"Daft Punk", false},
+                                  AlbumArtist{"The Lantern Choir", false},
+                                  AlbumArtist{"The Lantern Choir and the Longest Name of All", false},
+                                  AlbumArtist{tr(S::library_various_artists), true},
+                                  AlbumArtist{tr(S::library_no_artist_folder), true}}) {
+        for (uint32_t year : {0u, 2001u}) {
+          for (uint32_t tracks : {1u, 14u, 999u}) {
+            char line[64], whole[160], count[48], noYear[160];
+            librarytext::albumHeaderLine(&f, room, a.name, a.phrase, year, tracks, line, sizeof(line));
+            librarytext::albumHeaderLine(nullptr, 0, a.name, a.phrase, year, tracks, whole, sizeof(whole));
+            librarytext::albumHeaderLine(nullptr, 0, a.name, a.phrase, 0, tracks, noYear, sizeof(noYear));
+            librarytext::trackCount(tracks, count, sizeof(count));
+            fits(small, line, room);
+            const size_t ln = strlen(line), cn = strlen(count);
+            TEST_ASSERT_TRUE_MESSAGE(ln >= cn && strcmp(line + ln - cn, count) == 0, line);  // the count, whole
+            if (strcmp(line, whole) == 0) continue;
+            TEST_ASSERT_TRUE_MESSAGE(small.width(whole) > room, whole);
+            if (strcmp(line, noYear) == 0) continue;  // the year gave way
+            TEST_ASSERT_TRUE_MESSAGE(small.width(noYear) > room, noYear);
+            if (a.phrase) {  // left out, never cut
+              TEST_ASSERT_NULL_MESSAGE(strstr(line, a.name), line);
+              TEST_ASSERT_NULL_MESSAGE(strstr(line, "\xE2\x80\xA6"), line);
+            }
+            if (tracks == 14 && year) {
+              char m[192];
+              snprintf(m, sizeof(m), "%s %d px: \"%s\" for \"%s\"; ", uistr::tag(l), room, line, a.name);
+              report += m;
+            }
+          }
+        }
+      }
+    }
+  }
+  TEST_MESSAGE(report.c_str());
+  uistr::setLang(uistr::Lang::En);
+  {
+    // English's Album lines: whole where they fit, as before; where they
+    // were cut, the year gives way, then the artist's name: never the count
+    // (beside the crumb "Daft Punk · 2001 · 14 tracks", 180 px in 179, was cut).
+    const textfit::Font f = viewOf(small);
+    const int crumbRoom = headerRight(bold.width(tr(S::library_crumb)) + kHeaderPillPad + kHeaderChevronW) - 28;
+    TEST_ASSERT_EQUAL_INT(179, crumbRoom);
+    char line[64];
+    librarytext::albumHeaderLine(&f, 282, "Daft Punk", false, 2001, 14, line, sizeof(line));
+    TEST_ASSERT_EQUAL_STRING("Daft Punk \xC2\xB7 2001 \xC2\xB7 14 tracks", line);
+    librarytext::albumHeaderLine(&f, crumbRoom, "Daft Punk", false, 2001, 14, line, sizeof(line));
+    TEST_ASSERT_EQUAL_STRING("Daft Punk \xC2\xB7 14 tracks", line);
+    librarytext::albumHeaderLine(&f, 282, "The Lantern Choir", false, 1999, 11, line, sizeof(line));
+    TEST_ASSERT_EQUAL_STRING("The Lantern Choir \xC2\xB7 1999 \xC2\xB7 11 tracks", line);
+    librarytext::albumHeaderLine(&f, crumbRoom, "The Lantern Choir", false, 1999, 11, line, sizeof(line));
+    TEST_ASSERT_EQUAL_INT(0, strncmp(line, "The Lantern", 11));
+    TEST_ASSERT_NOT_NULL(strstr(line, "\xE2\x80\xA6 \xC2\xB7 11 tracks"));
+    TEST_ASSERT_TRUE(small.width(line) <= crumbRoom);
+    librarytext::albumHeaderLine(&f, 100, tr(S::library_various_artists), true, 2001, 14, line, sizeof(line));
+    TEST_ASSERT_EQUAL_STRING("2001 \xC2\xB7 14 tracks", line);
+    librarytext::albumHeaderLine(&f, 40, "Daft Punk", false, 2001, 14, line, sizeof(line));
+    TEST_ASSERT_EQUAL_STRING("2001 \xC2\xB7 14 tracks", line);  // (no room: the name left out)
+    // A name that fits the pixels but not the header's buffer (two bytes a
+    // Cyrillic letter): cut in the buffer, with "…", the count whole.
+    const char* cyr = "\xD0\x90\xD0\xB1\xD0\xB2\xD0\xB3\xD0\xB4\xD0\xB5\xD0\xB6\xD0\xB7\xD0\xB8\xD0\xBA "
+                      "\xD0\xBB\xD0\xBC\xD0\xBD\xD0\xBE\xD0\xBF\xD1\x80\xD1\x81\xD1\x82\xD1\x83\xD1\x84 "
+                      "\xD1\x85\xD1\x86\xD1\x87\xD1\x88\xD1\x89\xD1\x8A\xD1\x8B\xD1\x8C";  // 28 letters: 58 B
+    TEST_ASSERT_TRUE(small.width(cyr) + small.width(" \xC2\xB7 2001 \xC2\xB7 14 tracks") <= 400);
+    librarytext::albumHeaderLine(&f, 400, cyr, false, 2001, 14, line, sizeof(line));
+    TEST_ASSERT_TRUE(strlen(line) < sizeof(line));
+    TEST_ASSERT_NOT_NULL(strstr(line, "\xE2\x80\xA6 \xC2\xB7 14 tracks"));
+    TEST_ASSERT_EQUAL_INT(0, strncmp(line, cyr, 20));
+  }
+  // English: a short name beside "All tracks" as before; a long one, cut
+  // there before, under it.
+  const int right = headerRight(bold.width(tr(S::library_crumb)) + kHeaderPillPad + kHeaderChevronW);
+  const int titleW = bold.width(tr(S::library_all_tracks));
+  TEST_ASSERT_TRUE(headerSub(28, titleW, right, small.width("Daft Punk"), false, true) == HeaderSub::Beside);
+  TEST_ASSERT_TRUE(headerSub(28, titleW, right, small.width("The Lantern Choir"), false, true) == HeaderSub::Below);
+}
+
+// The hold sheet's title (librarytext::holdTitle()): a long name is cut to
+// what the count leaves, never the count, in every language; a short one
+// is whole, as the message formats it.
+void test_hold_title_keeps_its_count() {
+  const Vlw small(kVlwSans13);
+  const textfit::Font f = viewOf(small);
+  const std::string longName = "The Very Long Name Of A Compilation Album Of Songs Remastered";  // 61 characters
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    for (uint32_t n : {1u, 14u, 1234u}) {
+      char t[128], rest[96], plain[128], digits[16];
+      librarytext::holdTitle(f, sheet::kTitleW, longName.c_str(), n, t, sizeof(t));
+      fits(small, t, sheet::kTitleW);
+      // The rest (the name empty) whole in it, and the count's digits.
+      uistr::trnf(rest, sizeof(rest), S::library_hold_title, n, "", n);
+      snprintf(digits, sizeof(digits), "%u", static_cast<unsigned>(n));
+      TEST_ASSERT_NOT_NULL_MESSAGE(strstr(t, digits), t);
+      TEST_ASSERT_TRUE_MESSAGE(strstr(t, "\xE2\x80\xA6") != nullptr, t);  // the name cut
+      TEST_ASSERT_TRUE_MESSAGE(small.width(rest) + 30 <= sheet::kTitleW, rest);  // a name keeps room
+      // A short name: whole, the message as it is.
+      librarytext::holdTitle(f, sheet::kTitleW, "Discovery", n, t, sizeof(t));
+      uistr::trnf(plain, sizeof(plain), S::library_hold_title, n, "Discovery", n);
+      TEST_ASSERT_EQUAL_STRING(plain, t);
+    }
+  }
+  uistr::setLang(uistr::Lang::En);
+  char t[128];
+  librarytext::holdTitle(f, sheet::kTitleW, "Harder, Better, Faster, Stronger, and Longer Still", 14, t, sizeof(t));
+  const size_t len = strlen(t);
+  TEST_ASSERT_TRUE(len > 11 && strcmp(t + len - 11, ", 14 tracks") == 0);
+  fits(small, t, sheet::kTitleW);
+  librarytext::holdTitle(f, sheet::kTitleW, "Discovery", 14, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("Discovery, 14 tracks", t);
+  TEST_ASSERT_EQUAL_INT(226, sheet::kTitleW);
 }
 
 // Device info (Output > About > Device info): About's row to it, the
@@ -2085,14 +4002,14 @@ void test_boot_texts_fit() {
 void test_device_info_texts_fit() {
   using namespace uitext;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
-  fits(body, kDeviceInfoTitle, kDeviceInfoRowW);
-  fits(small, kDeviceInfoRowSub, kDeviceInfoRowW);
+  fits(body, tr(S::about_device_info), kDeviceInfoRowW);
+  fits(small, tr(S::about_device_info_sub), kDeviceInfoRowW);
   // The header: the title (Bold) after the back chevron (x 28), the line
   // (Small) 8 px after it, to x 310; drawn only when it starts 16 px
   // before that (Ui::drawHeader()).
-  const int subX = 28 + bold.width(kDeviceInfoTitle) + 8;
+  const int subX = 28 + bold.width(tr(S::about_device_info)) + 8;
   TEST_ASSERT_TRUE(subX < 310 - 16);
-  fits(small, kDeviceInfoHeaderSub, 310 - subX);
+  fits(small, tr(S::device_info_subtitle), 310 - subX);
   TEST_ASSERT_EQUAL_INT(312 - 8, kDeviceInfoX + kDeviceInfoW);
 
   char v[96];
@@ -2252,27 +4169,29 @@ void test_library_row_texts() {
   s.none = 0;
   librarytext::sourcesText(s, 1, t, sizeof(t));
   fits(small, t, kLibraryRowW);
-  for (const char* l : {kLibraryRowPaths, kLibraryRowNoCard, kLibraryRowUpdating}) fits(small, l, kLibraryRowW);
-  TEST_ASSERT_TRUE(small.hasAll(kLibraryRowUpdating));
-  fits(body, kRescanPill, kRescanPillW - kSettingPillPad);
-  fits(body, kRescanStarted, kToastTextRight - kToastTextX);
-  fits(body, kRescanNoCard, kToastTextRight - kToastTextX);
+  for (S id : {S::library_row_paths, S::library_row_no_card, S::library_row_updating}) {
+    fits(small, tr(id), kLibraryRowW);
+  }
+  TEST_ASSERT_TRUE(small.hasAll(tr(S::library_row_updating)));
+  fits(body, tr(S::library_row_rescan), kRescanPillW - kSettingPillPad);
+  fits(body, tr(S::library_row_rescan_started), kToastTextRight - kToastTextX);
+  fits(body, tr(S::library_row_rescan_no_card), kToastTextRight - kToastTextX);
   // The dialog: its title in Bold, its body in Small on its 3 lines (as
   // the calibration's Remove), its button.
-  fits(bold, kRescanTitle, kDialogTitleW);
-  fits(bold, kRescanPill, kDialogButtonTextW);
+  fits(bold, tr(S::library_row_rescan_title), kDialogTitleW);
+  fits(bold, tr(S::library_row_rescan), kDialogButtonTextW);
   {
     textfit::Font f;
     f.ctx = const_cast<Vlw*>(&small);
     f.width = [](void* ctx, const char* text) { return static_cast<const Vlw*>(ctx)->width(text); };
-    TEST_ASSERT_TRUE(strlen(kRescanBody) < 128);
+    TEST_ASSERT_TRUE(strlen(tr(S::library_row_rescan_body)) < 128);
     char lines[4][96];
-    const int n =
-        textfit::wrap(f, kRescanBody, strlen(kRescanBody), kDialogTitleW, 3, &lines[0][0], sizeof(lines[0]));
+    const char* rescanBody = tr(S::library_row_rescan_body);
+    const int n = textfit::wrap(f, rescanBody, strlen(rescanBody), kDialogTitleW, 3, &lines[0][0], sizeof(lines[0]));
     TEST_ASSERT_TRUE(n <= 3);
     std::string joined;
     for (int i = 0; i < n; ++i) joined += std::string(i ? " " : "") + lines[i];
-    TEST_ASSERT_EQUAL_STRING(kRescanBody, joined.c_str());
+    TEST_ASSERT_EQUAL_STRING(tr(S::library_row_rescan_body), joined.c_str());
   }
   // A buffer too small: cut, never past it.
   char tiny[12];
@@ -2295,12 +4214,21 @@ int main(int, char**) {
   RUN_TEST(test_tabbar_texts_fit_in_every_state);
   RUN_TEST(test_coach_texts_fit);
   RUN_TEST(test_toast_names_fit);
+  RUN_TEST(test_names_drawn_with_the_fonts);
+  RUN_TEST(test_names_measured_as_drawn);
+  RUN_TEST(test_store_glyphs_bold_in_bold_and_title);
+  RUN_TEST(test_now_playing_title_rows);
+  RUN_TEST(test_fonts_keep_their_line_heights);
+  RUN_TEST(test_store_glyphs_sit_in_the_rows);
+  RUN_TEST(test_now_playing_title_lines_share_rows);
+  RUN_TEST(test_fonts_cover_greek_cyrillic_and_latin);
   RUN_TEST(test_queue_cap_texts_fit);
   RUN_TEST(test_push_out_texts_fit);
   RUN_TEST(test_empty_state_texts_fit);
   RUN_TEST(test_no_card_texts_fit);
   RUN_TEST(test_board_guard_texts_fit);
   RUN_TEST(test_queue_texts_fit);
+  RUN_TEST(test_queue_summary_fits_every_language);
   RUN_TEST(test_output_texts_fit);
   RUN_TEST(test_waiting_texts_fit);
   RUN_TEST(test_now_playing_menu_texts_fit);
@@ -2312,6 +4240,13 @@ int main(int, char**) {
   RUN_TEST(test_dance_texts_fit);
   RUN_TEST(test_boot_texts_fit);
   RUN_TEST(test_device_info_texts_fit);
+  RUN_TEST(test_header_pills_fit);
+  RUN_TEST(test_header_subs_fit);
+  RUN_TEST(test_sheet_details_fit);
+  RUN_TEST(test_auto_dj_texts_fit);
+  RUN_TEST(test_folder_header_counts_fit);
+  RUN_TEST(test_library_header_lines);
+  RUN_TEST(test_hold_title_keeps_its_count);
   RUN_TEST(test_right_half_neighbours_survive_the_lab_panel);
   RUN_TEST(test_library_rows_from_tags);
   RUN_TEST(test_library_rows_from_paths);
@@ -2319,6 +4254,7 @@ int main(int, char**) {
   RUN_TEST(test_catalog_names_and_overlay);
   RUN_TEST(test_rail_follows_the_sort_keys);
   RUN_TEST(test_names_without_tags);
+  RUN_TEST(test_identify_texts_fit);
   RUN_TEST(test_library_texts_fit);
   RUN_TEST(test_library_row_texts);
   RUN_TEST(test_console_tag_commands);

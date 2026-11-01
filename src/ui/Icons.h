@@ -43,6 +43,8 @@ extern const Icon kWarn;          // a track that couldn't be played
 extern const Icon kGear;          // settings rows
 extern const Icon kInfo;          // About
 extern const Icon kVibrate;       // Haptics
+extern const Icon kAutoDj;        // Auto DJ: the Output row, the empty states' button (20 x 16)
+extern const Icon kAutoDjSmall;   // the Queue's mark on what Auto DJ added (12 x 10)
 // Now Playing's shuffle and repeat indicator, under the "..." dots (11 rows).
 extern const Icon kShuffleSmall;    // 14 x 11
 extern const Icon kRepeatSmall;     // 14 x 11: the loop

@@ -77,15 +77,19 @@ void fill(int x, int y, int w, int h, uint16_t colour, bool over) {
   });
 }
 
-void pushRows(M5Canvas& s, int x, int y, int w, int sy0, int sy1, bool over) {
-  if (w <= 0 || sy1 <= sy0 || dark_) return;
+void pushRect(M5Canvas& s, int sx, int sy, int w, int h, int x, int y, bool over) {
+  if (w <= 0 || h <= 0 || dark_) return;
   auto& d = M5.Display;
-  forRuns(y + sy0, sy1 - sy0, over, [&](int sy, int g, int n) {
+  forRuns(y, h, over, [&](int ry, int g, int n) {
     LcdLock lock(&holds_);
     d.setClipRect(x, g, w, n);
-    s.pushSprite(&d, x, g - (sy - y));  // the sprite's row (sy - y) lands on GRAM row g
+    s.pushSprite(&d, x - sx, g - (ry - y) - sy);  // the sprite's row sy + (ry - y) lands on GRAM row g
     d.clearClipRect();
   });
+}
+
+void pushRows(M5Canvas& s, int x, int y, int w, int sy0, int sy1, bool over) {
+  pushRect(s, 0, sy0, w, sy1 - sy0, x, y + sy0, over);
 }
 
 void push(M5Canvas& s, int x, int y, int w, int h, bool over) { pushRows(s, x, y, w, 0, h, over); }

@@ -5,12 +5,14 @@
 
 #include <M5Unified.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 
 #include "SheetLayout.h"
 #include "TextFit.h"
+#include "UiStrings.h"
 #include "UiText.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
@@ -19,6 +21,7 @@
 
 using ui::Font;
 using ui::Fonts;
+using uistr::S;
 namespace col = ui::col;
 
 namespace {
@@ -91,10 +94,12 @@ void CalibrationScreen::drawHeader(const char* title, const char* pill, const ch
     x = kCalTitleX;
     room = kCalTitleW;
   }
+  // The right text: the progress beside a pill; on the test taps page (no
+  // pill) its status, which has what the title leaves (kCalStatusW).
+  const int rightW = pill ? kCalProgressW : kCalStatusW;
+  if (right && !pill) room = std::min(room, 312 - 6 - std::min(f.width(Font::Small, right), rightW) - x);
   f.draw(s, Font::Bold, title, x, kHeaderH / 2, room, col::TXT, col::SURF);
-  if (right) {
-    f.draw(s, Font::Small, right, 312, kHeaderH / 2, kCalProgressW, rightColour, col::SURF, Fonts::Align::Right);
-  }
+  if (right) f.draw(s, Font::Small, right, 312, kHeaderH / 2, rightW, rightColour, col::SURF, Fonts::Align::Right);
   s.fillRect(0, kHeaderH - 2, kW, 2, kAccent);
   ui::gfx::push(s, 0, 0, kW, kHeaderH, true);
 }
@@ -111,6 +116,14 @@ void CalibrationScreen::drawLine(int y, const char* text, uint16_t colour, int f
   ui::gfx::push(s, 0, y - kLineH / 2, kW, kLineH, true);
 }
 
+void CalibrationScreen::drawLines(int y, const char* text, uint16_t colour, int pitch) {
+  for (int k = 0; k < uistr::lineCount(text); ++k) {
+    char line[128];
+    uistr::line(text, k, line, sizeof(line));
+    drawLine(y + k * pitch, line, colour);
+  }
+}
+
 void CalibrationScreen::drawHintBand(int y, int lines) {
   ui::gfx::fill(0, y - 11, kW, 22 + (lines - 1) * 20, col::BG, true);
 }
@@ -125,8 +138,8 @@ void CalibrationScreen::drawAHint(const char* verb, const char* key) {
   s.fillRect(0, 0, kW, kBandH, col::BG);
   s.fillRect(52, 0, 4, 8, col::RED);
   s.fillTriangle(46, 7, 62, 7, 54, 16, col::RED);
-  char t[32];
-  snprintf(t, sizeof(t), "A: %s", verb);
+  char t[64];
+  trf(t, sizeof(t), S::calibration_a_hint, verb);
   f.draw(s, Font::Small, t, uitext::kCalAHintX, kBandH / 2, uitext::kCalAHintW, col::SOFT, col::BG);
   if (key) {
     s.fillCircle(uitext::kCalKeyX + 3, kBandH / 2, 3, col::DIM);
@@ -154,11 +167,21 @@ void CalibrationScreen::drawRow(int i, bool pressed) {
   const uint16_t ink = r.primary ? col::DARK : col::TXT;
   s.fillRoundRect(kCalRowX, 2, kCalRowW, kRowH - 4, 10, bg);
   const Font font = r.primary ? Font::Bold : Font::Body;
+  const int textW = kCalRowTextW;
   if (r.detail && r.detail[0]) {
-    const int w = f.draw(s, font, r.label, kCalRowX + kCalRowPad, kRowH / 2, kCalRowW - 2 * kCalRowPad, ink, bg);
-    const int room = kCalRowW - 3 * kCalRowPad - w;
-    f.draw(s, Font::Small, r.detail, kCalRowX + kCalRowW - kCalRowPad, kRowH / 2, room,
-           r.primary ? col::DARK : col::DIM, bg, Fonts::Align::Right);
+    const uint16_t dim = r.primary ? col::DARK : col::DIM;
+    const int dw = f.width(Font::Small, r.detail);
+    if (calDetailBelow(std::min(f.width(font, r.label), textW), dw)) {
+      // Under the label, whole (the label's words in the UI's language:
+      // German's "Nicht jetzt" leaves "Ausgabe > Touch-Kalibrierung" 188 px).
+      f.draw(s, font, r.label, kCalRowX + kCalRowPad, kCalRowLabelY, textW, ink, bg);
+      f.draw(s, Font::Small, r.detail, kCalRowX + kCalRowPad, kCalRowDetailY, textW, dim, bg);
+    } else {
+      const int w = f.draw(s, font, r.label, kCalRowX + kCalRowPad, kRowH / 2, textW, ink, bg);
+      const int room = std::max(kCalRowW - 3 * kCalRowPad - w, dw);  // (whole, as measured)
+      f.draw(s, Font::Small, r.detail, kCalRowX + kCalRowW - kCalRowPad, kRowH / 2, room, dim, bg,
+             Fonts::Align::Right);
+    }
   } else {
     f.draw(s, font, r.label, kW / 2, kRowH / 2, kCalRowW - 2 * kCalRowPad, ink, bg, Fonts::Align::Centre);
   }
@@ -396,14 +419,14 @@ void CalibrationScreen::startProbe() {
   nRows_ = 0;
   clear();
   drawProbeDot();
-  drawAHint(uitext::kCalSkip);
+  drawAHint(tr(S::calibration_skip));
 }
 
 void CalibrationScreen::drawProbeDot() {
   using namespace uitext;
-  char progress[16];
-  snprintf(progress, sizeof(progress), "%d of %d", dot_ + 1, touchcheck::kDots);
-  drawHeader(kCheckTitle, kCalSkip, progress, col::DIM);
+  char progress[32];
+  trf(progress, sizeof(progress), S::calibration_progress, dot_ + 1, touchcheck::kDots);
+  drawHeader(tr(S::calibration_check_title), tr(S::calibration_skip), progress, col::DIM);
   const touchcheck::Dot& d = touchcheck::kDot[dot_];
   {
     LcdLock lock;
@@ -414,10 +437,9 @@ void CalibrationScreen::drawProbeDot() {
   const int y = hintY(d.y, lines);
   drawHintBand(kHintBottomY, 2);  // (the last dot's, and its miss)
   if (dot_ == 0) {
-    drawLine(y, kCheckFirstHint[0], col::SOFT);
-    drawLine(y + 20, kCheckFirstHint[1], col::SOFT);
+    drawLines(y, tr(S::check_first_hint), col::SOFT, 20);
   } else {
-    drawLine(y, kCheckHint, col::SOFT);
+    drawLine(y, tr(S::check_hint), col::SOFT);
   }
   shown();
 }
@@ -448,7 +470,7 @@ void CalibrationScreen::onProbeTap(const InputEvent& e) {
     const int lines = dot_ == 0 ? 2 : 1;
     const int y = hintY(d.y, lines);
     drawHintBand(y, lines);
-    drawLine(y, uitext::kCheckMissed, col::AMBER);
+    drawLine(y, tr(S::check_missed), col::AMBER);
     rearm();
     return;
   }
@@ -476,7 +498,7 @@ void CalibrationScreen::finishProbe() {
   // (Not answered yet: the verdict page's buttons answer it.)
   verdict_ = touchcheck::verdict(dotTaps_);
   if (verdict_.calibrate) {
-    char text[80];
+    char text[160];
     touchcheck::verdictText(verdict_, text, sizeof(text));
     Serial.printf("[cal] the touch check: off: calibrate? (%s)\n", text);
   } else {
@@ -504,27 +526,27 @@ void CalibrationScreen::drawProbeMarks() {
 void CalibrationScreen::drawProbeResult() {
   using namespace uitext;
   clear();
-  drawHeader(kCheckTitle, nullptr, nullptr, 0);
+  drawHeader(tr(S::calibration_check_title), nullptr, nullptr, 0);
   drawProbeMarks();
   if (!verdict_.calibrate) {
     nRows_ = 0;
-    drawLine(52, kCheckAccurate, col::GREEN, static_cast<int>(Font::Title));
-    drawLine(170, kCheckGoOn, col::SOFT);
-    drawAHint(kCalDone);
+    drawLine(52, tr(S::check_accurate), col::GREEN, static_cast<int>(Font::Title));
+    drawLine(170, tr(S::check_go_on), col::SOFT);
+    drawAHint(tr(S::calibration_done));
     shown();
     return;
   }
-  char text[80];
+  char text[160];
   touchcheck::verdictText(verdict_, text, sizeof(text));
-  char lines[2][64];
+  char lines[2][96];
   Fonts& f = Fonts::instance();
   const int n = textfit::wrap(f.fit(Font::Body), text, strlen(text), kCalLineW, 2, &lines[0][0], sizeof(lines[0]));
   for (int i = 0; i < n; ++i) drawLine(40 + i * 20, lines[i], col::TXT);
-  drawLine(84, kCheckAsk, col::TXT, static_cast<int>(Font::Bold));
-  const Row rows[2] = {{kCalCalibrate, kCalCalibrateDetail, Act::Calibrate, true},
-                       {kCheckNotNow, kCheckLater, Act::NotNow, false}};
+  drawLine(84, tr(S::check_ask), col::TXT, static_cast<int>(Font::Bold));
+  const Row rows[2] = {{tr(S::settings_cal_calibrate), tr(S::settings_cal_calibrate_detail), Act::Calibrate, true},
+                       {tr(S::check_not_now), tr(S::check_later), Act::NotNow, false}};
   setRows(rows, 2);
-  drawAHint(kCheckNotNow);
+  drawAHint(tr(S::check_not_now));
   shown();
 }
 
@@ -537,7 +559,7 @@ void CalibrationScreen::startTargets() {
   flashing_ = false;
   clear();
   drawTarget();
-  drawAHint(uitext::kCalCancel);
+  drawAHint(tr(S::calibration_cancel));
 }
 
 void CalibrationScreen::drawCross(const Target& t, uint16_t colour) {
@@ -564,9 +586,9 @@ void CalibrationScreen::targetHint(const char* text, uint16_t colour) {
 void CalibrationScreen::drawTarget() {
   using namespace uitext;
   const Target& t = kTargets[next_];
-  char progress[16];
-  snprintf(progress, sizeof(progress), "%d of %d", next_ + 1, count_);
-  drawHeader(kCalTitle, kCalCancel, progress, col::DIM);
+  char progress[32];
+  trf(progress, sizeof(progress), S::calibration_progress, next_ + 1, count_);
+  drawHeader(tr(S::calibration_title), tr(S::calibration_cancel), progress, col::DIM);
   // The last cross's hint goes (it may have been at the other place).
   drawHintBand(kHintTopY, 2);
   drawHintBand(kHintBottomY, 2);
@@ -574,12 +596,11 @@ void CalibrationScreen::drawTarget() {
   tries_ = touchcheck::CrossTries{};
   if (next_ == 0) {
     const int y = hintY(t.y, 2);
-    char second[48];
-    snprintf(second, sizeof(second), kCalFirstHint[1], count_);
-    drawLine(y, kCalFirstHint[0], col::SOFT);
-    drawLine(y + 20, second, col::SOFT);
+    char hint[160];
+    trnf(hint, sizeof(hint), S::calibration_first_hint, count_, count_);
+    drawLines(y, hint, col::SOFT, 20);
   } else {
-    targetHint(kCalHint, col::SOFT);
+    targetHint(tr(S::calibration_hint), col::SOFT);
   }
   shown();
 }
@@ -596,7 +617,7 @@ void CalibrationScreen::onTargetTap(const InputEvent& e) {
       input_.missBuzz();
       Serial.printf("[cal] tap at raw (%d,%d), too far from the cross at (%d,%d): again (miss %d)%s\n", e.rawX, e.rawY,
                     t.x, t.y, tries_.misses, input_.scriptedNote());
-      targetHint(uitext::kCalMissed, col::AMBER);
+      targetHint(tr(S::calibration_missed), col::AMBER);
       rearm();
       return;
     case touchcheck::Take::Sample: break;
@@ -650,35 +671,37 @@ void CalibrationScreen::drawResult() {
   using namespace uitext;
   using O = touchcheck::Outcome;
   clear();
-  drawHeader(kCalTitle, nullptr, nullptr, 0);
+  drawHeader(tr(S::calibration_title), nullptr, nullptr, 0);
+  const char* save = tr(S::calibration_save);
+  const char* again = tr(S::calibration_try_again);
+  const char* discard = tr(S::calibration_discard);
   if (outcome_ == O::Disagree) {
-    drawLine(52, kCalDisagree[0], col::AMBER);
-    drawLine(74, kCalDisagree[1], col::AMBER);
-    const Row rows[2] = {{kCalTryAgain, nullptr, Act::TryAgain, true}, {kCalDiscard, nullptr, Act::Discard, false}};
+    drawLines(52, tr(S::calibration_disagree), col::AMBER, 22);
+    const Row rows[2] = {{again, nullptr, Act::TryAgain, true}, {discard, nullptr, Act::Discard, false}};
     setRows(rows, 2);
   } else {
-    char line[64];
-    touchcheck::errorText(kCalNow, nowErr_, line, sizeof(line));
+    char line[96];
+    touchcheck::errorText(touchcheck::Table::InUse, nowErr_, line, sizeof(line));
     drawLine(42, line, col::TXT);
-    touchcheck::errorText(kCalNew, newErr_, line, sizeof(line));
+    touchcheck::errorText(touchcheck::Table::New, newErr_, line, sizeof(line));
     drawLine(64, line, col::GREEN);
     if (outcome_ == O::Better) {
-      drawLine(86, kCalSaveLine, col::DIM);
-      const Row rows[3] = {{kCalSave, nullptr, Act::Save, true},
-                           {kCalTryAgain, nullptr, Act::TryAgain, false},
-                           {kCalDiscard, nullptr, Act::Discard, false}};
+      drawLine(86, tr(S::calibration_save_line), col::DIM);
+      const Row rows[3] = {{save, nullptr, Act::Save, true},
+                           {again, nullptr, Act::TryAgain, false},
+                           {discard, nullptr, Act::Discard, false}};
       setRows(rows, 3);
     } else {
       // A panel that reads true (or a table already good): a table fitted
       // to finger scatter helps nothing.
-      drawLine(86, outcome_ == O::Accurate ? kCalAccurate : kCalNoBetter, col::SOFT);
-      const Row rows[3] = {{kCalDiscard, nullptr, Act::Discard, true},
-                           {kCalSave, nullptr, Act::Save, false},
-                           {kCalTryAgain, nullptr, Act::TryAgain, false}};
+      drawLine(86, tr(outcome_ == O::Accurate ? S::calibration_accurate : S::calibration_no_better), col::SOFT);
+      const Row rows[3] = {{discard, nullptr, Act::Discard, true},
+                           {save, nullptr, Act::Save, false},
+                           {again, nullptr, Act::TryAgain, false}};
       setRows(rows, 3);
     }
   }
-  drawAHint(kCalDiscard);
+  drawAHint(discard);
   shown();
 }
 
@@ -693,7 +716,8 @@ void CalibrationScreen::openCheck() {
 // (Its taps' marks draw on it too: a tap on the header shows.)
 void CalibrationScreen::drawCheckHeader() {
   using namespace uitext;
-  drawHeader(kCalCheckTitle, nullptr, justSaved_ ? kCalSaved : undone_ ? kCalUndone : nullptr,
+  drawHeader(tr(S::settings_cal_test_taps), nullptr,
+             justSaved_ ? tr(S::calibration_saved) : undone_ ? tr(S::calibration_undone) : nullptr,
              justSaved_ ? col::GREEN : col::DIM);
 }
 
@@ -701,11 +725,11 @@ void CalibrationScreen::drawCheckPage() {
   using namespace uitext;
   clear();
   drawCheckHeader();
-  drawLine(42, kCalCheckLines[0], col::SOFT);
-  drawLine(62, kCalCheckLines[1], col::SOFT);
-  const Row done[1] = {{kCalDone, nullptr, Act::Done, true}};
+  drawLines(42, tr(S::calibration_check_lines), col::SOFT, 20);
+  const Row done[1] = {{tr(S::calibration_done), nullptr, Act::Done, true}};
   setRows(done, 1);
-  drawAHint(justSaved_ ? kCalUndo : kCalDone, input_.calibrated() ? kCalCheckKey : nullptr);
+  drawAHint(tr(justSaved_ ? S::calibration_undo : S::calibration_done),
+            input_.calibrated() ? tr(S::calibration_check_key) : nullptr);
   checkTaps_ = 0;
   shown();
 }

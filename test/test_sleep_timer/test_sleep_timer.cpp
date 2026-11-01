@@ -917,18 +917,20 @@ void test_texts() {
   TEST_ASSERT_EQUAL_STRING("End of album", row);
   TEST_ASSERT_EQUAL_STRING("album", sh);
   TEST_ASSERT_EQUAL_INT(-1, t.timedIndex());
-  // The sheet's title, lower case after "Sleep timer: ".
-  char title[24];
+  // The sheet's title, lower case after "Sleep timer: " (the toasts' too).
+  char title[48];
   t.titleText(0, title, sizeof(title));
-  TEST_ASSERT_EQUAL_STRING("end of album", title);
+  TEST_ASSERT_EQUAL_STRING("Sleep timer: end of album", title);
+  SleepTimer::endText(Choice::EndOfTrack, title, sizeof(title));
+  TEST_ASSERT_EQUAL_STRING("Sleep timer: end of track", title);
   t.setTimed(30 * 60000, 1000);
   t.titleText(1000 + 7 * 60000 + 1, title, sizeof(title));
-  TEST_ASSERT_EQUAL_STRING("23 min left", title);
+  TEST_ASSERT_EQUAL_STRING("Sleep timer: 23 min left", title);
   t.titleText(1000 + 30 * 60000 - 45000, title, sizeof(title));
-  TEST_ASSERT_EQUAL_STRING("45 s left", title);
+  TEST_ASSERT_EQUAL_STRING("Sleep timer: 45 s left", title);
   t.cancel();
   t.titleText(0, title, sizeof(title));
-  TEST_ASSERT_EQUAL_STRING("off", title);
+  TEST_ASSERT_EQUAL_STRING("Sleep timer: off", title);
 }
 
 void test_the_curve() {

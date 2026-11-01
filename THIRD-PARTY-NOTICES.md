@@ -10,7 +10,10 @@ The firmware binary also contains the third-party components below. Each
 entry gives the exact version, its licence, the copyright lines found in its
 sources, and where it comes from. The full licence texts are in
 [LICENSES/](LICENSES); GPL-3.0 is [LICENSE](LICENSE). Every licence here is
-compatible with distributing the whole under GPL-3.0-or-later.
+compatible with distributing the whole under GPL-3.0-or-later. (The words
+the UI's translations took from the terminal player, GPL-3.0-only there,
+are licensed here under GPL-3.0-or-later by their author, who is also this
+firmware's: [below](#the-uis-translations).)
 
 A binary release (firmware.bin, or firmware.factory.bin, the merged image
 flashed at 0x0) is built from the tagged source with the versions pinned in
@@ -400,13 +403,32 @@ It contains:
 
 - **DejaVu Sans and DejaVu Sans Bold 2.37**, rasterised to VLW by
   tools/vlw_font.py into src/ui/VlwFonts.cpp (16 and 13 px; Bold 16 and
-  22 px; ASCII, Latin-1 and common Latin Extended-A). Licence: the Bitstream
-  Vera Fonts licence ("Copyright (c) 2003 by Bitstream, Inc. All Rights
-  Reserved. Bitstream Vera is a trademark of Bitstream, Inc."); DejaVu's
-  changes are in the public domain; glyphs from Arev are "(c) Tavmjong Bah".
-  Text: [LICENSES/DejaVu-Fonts.txt](LICENSES/DejaVu-Fonts.txt), checked
-  against the licence text inside the TTF files used. Source:
+  22 px; ASCII, Latin-1, Latin Extended-A, a few Latin Extended-B letters,
+  Greek and Cyrillic). Licence: the Bitstream Vera Fonts licence
+  ("Copyright (c) 2003 by Bitstream, Inc. All Rights Reserved. Bitstream
+  Vera is a trademark of Bitstream, Inc.") and, for the glyphs imported
+  from Arev, the Arev Fonts licence ("Copyright (c) 2006 by Tavmjong Bah.
+  All Rights Reserved."); DejaVu's changes are in the public domain. Both
+  licences' texts: [LICENSES/DejaVu-Fonts.txt](LICENSES/DejaVu-Fonts.txt),
+  checked against the licence text inside the TTF files used. Source:
   https://github.com/dejavu-fonts/dejavu-fonts/releases/tag/version_2_37
+- **Noto Sans CJK Regular 2.004** (the Japanese face of
+  NotoSansCJK-Regular.ttc), rasterised by tools/glyph_store.py into a
+  16 px, 4-bit glyph store, lib/core/CjkGlyphs16.cpp: Hangul (KS X 1001's
+  syllables and the compatibility jamo), JIS X 0208, GB2312's level 1
+  hanzi, the kana and CJK punctuation, less what DejaVu draws (10,557
+  glyphs). Licence: the SIL Open Font License 1.1 (the font's notice:
+  "© 2014-2021 Adobe (http://www.adobe.com/)."; its upstream licence
+  reserves the font name "Source"). The glyph data is a Modified Version of
+  the font: it stays under the OFL, not the GPL, carries that notice in
+  its header, and is named without the font's names (kCjkGlyphs16). The
+  firmware binary contains it (src/ui/Fonts draws the CJK and Hangul
+  names from it: 1,098,296 B of the image), so a binary release carries
+  the notice above and the licence with it. The licence's text:
+  [LICENSES/OFL-1.1.txt](LICENSES/OFL-1.1.txt). Source:
+  https://github.com/notofonts/noto-cjk (Sans, version 2.004); the
+  generated file's header names the SHA-256 of the font file it was made
+  from.
 - **The UI icons** (src/ui/IconData.cpp): drawn for this project by
   tools/ui_icons.py (Pillow shapes and ASCII art in the script; no
   third-party images or icon fonts). GPL-3.0-or-later, like the rest.
@@ -425,3 +447,33 @@ It contains:
   under GPL-3.0-or-later, like the rest of the firmware (the text is
   [LICENSE](LICENSE)). Source:
   https://github.com/IrosTheBeggar/mStream/blob/v6.24.0/webapp/assets/img/mstream-logo.svg
+
+## The UI's translations
+
+The nine translations of the UI's texts (i18n/de.json, es, fr, it, ja, pl,
+pt, ru and zh; the firmware holds them in lib/core/UiStringsData.cpp) are
+machine translations made for this project by Fable agents (Claude), not
+yet reviewed by native speakers (docs/I18N.md, phase 3, "The
+translations"). Where they had the text or its words, they take them from
+two apps by the same author as this firmware (IrosTheBeggar), so that
+mStream's apps say the same thing; each file's `@@note` says what it took:
+
+- **The mStream mobile app** (mstream_music), `lib/l10n/app_<lang>.arb`,
+  branch master at commit bdb174e0ea3a6333f820b593888d5a662c9ae976
+  (2026-09-21). Licence: GPL-3.0 (its LICENSE). Its translations are
+  machine translations (its README says so). Source:
+  https://github.com/IrosTheBeggar/mstream_music
+- **The mStream terminal player** (mstream-terminal-player, mstream-player
+  0.12.1), `locales/<lang>.yml`, chiefly its MP3-player tab's words for
+  this device, branch main at commit
+  b89ad0a97d4add4d47ac0c7404953cc6a0147679 (2026-10-10). Licence:
+  GPL-3.0-only (its Cargo.toml; LICENSE is the GPL-3 text). Its
+  translations are machine translations (its docs say so). Source:
+  https://github.com/IrosTheBeggar/mstream-terminal-player
+
+The author of both, who is also this firmware's, licenses the strings
+taken from them here under GPL-3.0-or-later, like the rest of the firmware
+(the text is [LICENSE](LICENSE)). For the terminal player, GPL-3.0-only
+there, that covers every commit to its `locales/`: the five of 2026-08-25
+made under another git author name are the author's own too (confirmed
+2026-10-12).

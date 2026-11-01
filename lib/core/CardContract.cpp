@@ -878,6 +878,7 @@ Info defaults() { return Info(); }
 Info current(const char* firmware) {
   Info i;
   copyValue(i.firmware, firmware ? firmware : "", firmware ? std::strlen(firmware) : 0);
+  i.readMpdj = 1u << (2 - 1);  // the AutoDJ index, major 2 (the engine design's M5)
   copyValue(i.codecs, "mp3,flac,opus", 13);
   copyValue(i.extensions, "mp3,flac,opus", 13);
   return i;

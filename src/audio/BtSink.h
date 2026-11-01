@@ -250,8 +250,15 @@ public:
   // The scan's list, copied; returns its version (bumped when it changes).
   uint32_t scanList(BtScanList& out) const;
   uint32_t scanVersion() const { return scanVersion_.load(std::memory_order_relaxed); }
-  // "SBC 44.1 kHz" once the link's codec is known, else "".
-  const char* codec() const { return codecs_[codecIdx_.load()]; }
+  // The link's codec once it is known: its name ("SBC") and its sample
+  // rate in Hz (0 when its configuration names none); "" and 0 before.
+  // Numbers, so the screen writes the rate in the UI's language
+  // (btDetailText()). A copy, read as one.
+  struct Codec {
+    char name[8] = "";
+    uint32_t hz = 0;
+  };
+  Codec codec() const { return codecs_[codecIdx_.load()]; }
   // Frames handed to the Bluetooth stack, silence included: ~44100/s while
   // streaming, 0 while the stream is suspended.
   uint32_t framesPulled() const { return framesPulled_.load(std::memory_order_relaxed); }
@@ -318,7 +325,7 @@ private:
   QueueHandle_t events_ = nullptr;
   std::atomic<uint32_t> eventsDropped_{0};
 
-  void setCodec(const char* text);        // BtAppT
+  void setCodec(const char* name, uint32_t hz);  // BtAppT
   void flushAsks();                        // hands the Output screen's asks to BtAppT
   void noteScanResult(const uint8_t* addr, const char* name, int rssi, uint32_t cod);  // BTC task
   // The Pair screen's search in the log (PairFinds). postFind(): BTC task,
@@ -339,7 +346,7 @@ private:
   char deviceNames_[2][64] = {"", ""};
   std::atomic<uint8_t> deviceNameIdx_{0};
   char lastLogged_[64] = "";
-  char codecs_[2][24] = {"", ""};
+  Codec codecs_[2];
   std::atomic<uint8_t> codecIdx_{0};
 
   // The link for the Output screen, published by BtAppT (BtLink's fields).

@@ -8,6 +8,7 @@
 
 #include "LibraryIndex.h"
 #include "TrackCatalog.h"
+#include "UiStrings.h"
 #include "UiText.h"
 
 namespace {
@@ -249,12 +250,14 @@ int SleepTimer::timedIndex() const {
 }
 
 namespace {
+using uistr::S;
+
 // "23 min" (rounded up), or "45 s" in the last minute.
 void timeText(uint32_t ms, char* buf, size_t size) {
   if (ms > 60000) {
-    std::snprintf(buf, size, "%lu min", static_cast<unsigned long>((ms + 59999) / 60000));
+    trf(buf, size, S::format_minutes, (ms + 59999) / 60000);
   } else {
-    std::snprintf(buf, size, "%lu s", static_cast<unsigned long>((ms + 999) / 1000));
+    trf(buf, size, S::format_seconds, (ms + 999) / 1000);
   }
 }
 }  // namespace
@@ -263,12 +266,12 @@ void SleepTimer::rowText(uint32_t nowMs, char* buf, size_t size) const {
   switch (phase_) {
     case Phase::Counting: timeText(msLeft(nowMs), buf, size); return;
     case Phase::Armed:
-      std::snprintf(buf, size, "%s", choice_ == Choice::EndOfTrack   ? "End of track"
-                                     : choice_ == Choice::EndOfAlbum ? "End of album"
-                                                                     : "End of queue");
+      trf(buf, size, choice_ == Choice::EndOfTrack   ? S::sleep_row_end_track
+                     : choice_ == Choice::EndOfAlbum ? S::sleep_row_end_album
+                                                     : S::sleep_row_end_queue);
       return;
-    case Phase::Fading: std::snprintf(buf, size, "Fading"); return;
-    default: std::snprintf(buf, size, "Off"); return;
+    case Phase::Fading: trf(buf, size, S::sleep_row_fading); return;
+    default: trf(buf, size, S::sleep_row_off); return;
   }
 }
 
@@ -276,11 +279,11 @@ void SleepTimer::shortText(uint32_t nowMs, char* buf, size_t size) const {
   switch (phase_) {
     case Phase::Counting: timeText(msLeft(nowMs), buf, size); return;
     case Phase::Armed:
-      std::snprintf(buf, size, "%s", choice_ == Choice::EndOfTrack   ? "track"
-                                     : choice_ == Choice::EndOfAlbum ? "album"
-                                                                     : "queue");
+      trf(buf, size, choice_ == Choice::EndOfTrack   ? S::sleep_short_track
+                     : choice_ == Choice::EndOfAlbum ? S::sleep_short_album
+                                                     : S::sleep_short_queue);
       return;
-    case Phase::Fading: std::snprintf(buf, size, "fading"); return;
+    case Phase::Fading: trf(buf, size, S::sleep_short_fading); return;
     default:
       if (size) buf[0] = 0;
       return;
@@ -290,19 +293,21 @@ void SleepTimer::shortText(uint32_t nowMs, char* buf, size_t size) const {
 void SleepTimer::titleText(uint32_t nowMs, char* buf, size_t size) const {
   switch (phase_) {
     case Phase::Counting: {
-      char t[16];
+      char t[24];
       timeText(msLeft(nowMs), t, sizeof(t));
-      std::snprintf(buf, size, "%s left", t);
+      trf(buf, size, S::sleep_title_left, t);
       return;
     }
-    case Phase::Armed:
-      std::snprintf(buf, size, "%s", choice_ == Choice::EndOfTrack   ? "end of track"
-                                     : choice_ == Choice::EndOfAlbum ? "end of album"
-                                                                     : "end of queue");
-      return;
-    case Phase::Fading: std::snprintf(buf, size, "fading"); return;
-    default: std::snprintf(buf, size, "off"); return;
+    case Phase::Armed: endText(choice_, buf, size); return;
+    case Phase::Fading: trf(buf, size, S::sleep_title_fading); return;
+    default: trf(buf, size, S::sleep_title_off); return;
   }
+}
+
+void SleepTimer::endText(Choice c, char* buf, size_t size) {
+  trf(buf, size, c == Choice::EndOfTrack   ? S::sleep_title_end_track
+                 : c == Choice::EndOfAlbum ? S::sleep_title_end_album
+                                           : S::sleep_title_end_queue);
 }
 
 const char* SleepTimer::phaseName(Phase p) {

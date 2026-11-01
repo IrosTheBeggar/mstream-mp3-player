@@ -6,15 +6,19 @@
 // Where a sheet sits (ui/Overlays' Sheet: a title with a close pill, then
 // rows, from the bottom of the screen): every row kRowH, the 40 px touch
 // minimum, however many rows. Up to 3 rows it stays in the list's band
-// (from y 72; 3 rows from y 80, Now Playing's two menus: docs/QUEUE-MODES.md).
-// A 4-row sheet would rise into the header row (from y 40), as the dialog
-// and the jump grid do, never onto the tab bar; none has 4 rows now, and
-// kMaxRows keeps the room. A 4 px margin keeps its last row off the touch
+// (from y 72; 3 rows from y 80, Now Playing's navigation menu:
+// docs/QUEUE-MODES.md). A 4-row sheet rises into the header row (from y
+// 40), as the dialog and the jump grid do, never onto the tab bar: Now
+// Playing's playback menu (its 4th row Auto DJ) and the Library's
+// long-press sheet on a track the Auto DJ index knows ("Auto DJ from here"
+// its first row: the three below stay where a 3-row sheet has them);
+// kMaxRows is 4. A 4 px margin keeps its last row off the touch
 // strip. The panel sprite the sheets are drawn in (overlaysBegin()) is
 // kPanelH tall: the content area, the tallest any overlay needs. A row's
 // label (Body) starts 16 px in; its detail (Small, dim) is right-aligned
 // 16 px from the edge, in what the label leaves less 16 px between
-// (detailRoom()). Portable, host-tested (test_ui_nav).
+// (detailRoom()), or under the label when it doesn't fit there
+// (detailOnTwoLines()). Portable, host-tested (test_ui_nav, test_ui_library).
 namespace sheet {
 
 inline constexpr int kScreenW = 320;
@@ -25,14 +29,32 @@ inline constexpr int kRowH = 40;
 inline constexpr int kMaxRows = 4;
 inline constexpr int kMargin = 4;
 inline constexpr int kPanelH = kScreenH - kContentY;  // 204
+// The title (Small, dim): from x 16 to 8 px before the ✕ pill's hit area
+// (x 250 to the edge).
+inline constexpr int kTitleW = 226;
 
 // The sheet's height with `rows` rows (title, rows, margin).
 constexpr int height(int rows) { return kTitleH + rows * kRowH + kMargin; }
 // Its top on the screen.
 constexpr int top(int rows) { return kScreenH - height(rows); }
 // The room a row's detail has beside a label `labelW` px wide
-// (Sheet::render() draws it there; Now Playing cuts the folder to it).
+// (Sheet::render() draws it there; Now Playing cuts the folder, the artist's
+// name and the album's to it).
 constexpr int detailRoom(int labelW) { return kScreenW - 16 - (16 + labelW + 16); }
+// A detail (`detailW` px, Small) that doesn't fit whole beside its label
+// (or with kMinDetailRoom px or less there) is drawn under it, never cut:
+// the label centred on y kTwoLineLabelY of the row, the detail (Small, dim)
+// on kTwoLineDetailY, both from x 16, kTwoLineW wide, as a list's two-line
+// row (ui/ListView::lines()). Spanish's "Fin de la cola" under
+// "Temporizador de apagado", German's "der laufende Titel bleibt" under
+// "Alles danach entfernen". A label that leaves it room keeps one line, as
+// every English one does.
+inline constexpr int kMinDetailRoom = 24;
+inline constexpr int kTwoLineW = kScreenW - 32;
+inline constexpr int kTwoLineLabelY = 13, kTwoLineDetailY = 31;
+constexpr bool detailOnTwoLines(int labelW, int detailW) {
+  return detailW > detailRoom(labelW) || detailRoom(labelW) <= kMinDetailRoom;
+}
 
 static_assert(top(kMaxRows) >= kContentY, "a sheet never covers the tab bar");
 static_assert(height(kMaxRows) <= kPanelH, "the panel sprite holds the tallest sheet");

@@ -52,9 +52,13 @@ const char* whyName(Why w) {
     case Why::Orig: return "orig";
     case Why::Comp: return "comp";
     case Why::Libr: return "libr";
-    case Why::DjRows: return "djRows";
     case Why::DjPaths: return "djPaths";
-    case Why::DjNeighbours: return "djNeighbours";
+    case Why::DjLayout: return "djLayout";
+    case Why::DjSelection: return "djSelection";
+    case Why::DjSlotCrc: return "djSlotCrc";
+    case Why::DjSlotUnused: return "djSlotUnused";
+    case Why::DjSlotIndex: return "djSlotIndex";
+    case Why::DjSlotOrder: return "djSlotOrder";
     case Why::PendOrder: return "pendOrder";
     case Why::PendPath: return "pendPath";
     case Why::PendOp: return "pendOp";
@@ -89,7 +93,7 @@ Why Container::open(Source& src, const FormatSpec& spec, uint8_t* typeHeader) {
   header_.cardId = get64(buf + 24);
   header_.headerCrc = get32(buf + 32);
   if (header_.magic != spec.magic) return Why::Magic;
-  if (header_.major != kMajor) return Why::Major;
+  if (header_.major != spec.major) return Why::Major;
   if (header_.headerBytes % 8 || header_.headerBytes < spec.headerBytes) return Why::HeaderBytes;
   if (header_.sectionCount > kMaxSections) return Why::SectionCount;
   const uint64_t dirEnd = static_cast<uint64_t>(header_.headerBytes) + kDirEntryBytes * header_.sectionCount;
@@ -297,15 +301,17 @@ Why readStringAt(Source& src, const Section& strs, uint32_t off, char* out, size
 // ContainerWriter
 // ---------------------------------------------------------------------------
 bool ContainerWriter::begin(Sink& sink, const FileMeta& meta, const uint8_t* typeHeader, uint32_t headerBytes,
-                            const SectionOut* s, uint32_t n) {
+                            const SectionOut* s, uint32_t n, uint32_t typeBytes) {
   sink_ = &sink;
   meta_ = meta;
-  bad_ = headerBytes < kCommonHeaderBytes || headerBytes % 8 || headerBytes - kCommonHeaderBytes > sizeof(head_) ||
-         n > kMaxSections;
+  if (typeBytes == 0 && headerBytes >= kCommonHeaderBytes) typeBytes = headerBytes - kCommonHeaderBytes;
+  bad_ = headerBytes < kCommonHeaderBytes || headerBytes % 8 || typeBytes > headerBytes - kCommonHeaderBytes ||
+         typeBytes > sizeof(head_) || n > kMaxSections;
   if (bad_) return false;
   headerBytes_ = headerBytes;
+  typeBytes_ = typeBytes;
   std::memset(head_, 0, sizeof(head_));
-  if (typeHeader) std::memcpy(head_, typeHeader, headerBytes - kCommonHeaderBytes);
+  if (typeHeader) std::memcpy(head_, typeHeader, typeBytes);
   n_ = n;
   uint64_t at = static_cast<uint64_t>(headerBytes) + kDirEntryBytes * n;
   for (uint32_t i = 0; i < n; ++i) {
@@ -369,8 +375,17 @@ bool ContainerWriter::finish(uint32_t* fileBytes, uint32_t* headerCrc) {
   put32(common + 16, fileBytes_);
   put32(common + 20, meta_.generation);
   put64(common + 24, meta_.cardId);
+  // The type header, then its padding's zeros up to headerBytes (MPDJ's
+  // alignment rule pads its 104 bytes to as many as 384).
+  static const uint8_t kZeros[64] = {};
   uint32_t crc = crc32(common, kCommonHeaderBytes);
-  crc = crc32(head_, headerBytes_ - kCommonHeaderBytes, crc);
+  crc = crc32(head_, typeBytes_, crc);
+  for (uint32_t at = kCommonHeaderBytes + typeBytes_; at < headerBytes_;) {
+    const uint32_t k = headerBytes_ - at < sizeof(kZeros) ? headerBytes_ - at : static_cast<uint32_t>(sizeof(kZeros));
+    crc = crc32(kZeros, k, crc);
+    if (!sink_->write(at, kZeros, k)) return false;
+    at += k;
+  }
   for (uint32_t i = 0; i < n_; ++i) {
     uint8_t e[kDirEntryBytes] = {};
     put32(e, s_[i].type);
@@ -384,7 +399,7 @@ bool ContainerWriter::finish(uint32_t* fileBytes, uint32_t* headerCrc) {
     if (!sink_->write(headerBytes_ + kDirEntryBytes * i, e, kDirEntryBytes)) return false;
   }
   put32(common + 32, crc);
-  if (!sink_->write(kCommonHeaderBytes, head_, headerBytes_ - kCommonHeaderBytes)) return false;
+  if (!sink_->write(kCommonHeaderBytes, head_, typeBytes_)) return false;
   if (!sink_->write(0, common, kCommonHeaderBytes)) return false;
   if (fileBytes) *fileBytes = fileBytes_;
   if (headerCrc) *headerCrc = crc;
@@ -410,8 +425,10 @@ Election elect(const RootCandidate& bin, const RootCandidate& tmp) {
 bool unknownMajor(const uint8_t* head, size_t n) {
   if (!head || n < 6) return false;
   const uint32_t magic = get32(head);
-  if (magic != kMagicMsmf && magic != kMagicMptg && magic != kMagicMpdj && magic != kMagicMspd) return false;
-  return get16(head + 4) != kMajor;
+  const uint16_t major = get16(head + 4);
+  if (magic == kMagicMpdj) return major != kMajorMpdj && major != 1;
+  if (magic != kMagicMsmf && magic != kMagicMptg && magic != kMagicMspd) return false;
+  return major != kMajor;
 }
 
 }  // namespace cardcontract

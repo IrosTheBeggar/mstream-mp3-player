@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <cstdlib>
 
+#include "UiStrings.h"
+
 namespace touchcheck {
 
 namespace {
@@ -64,17 +66,16 @@ Verdict verdict(const Tap* taps, int n) {
 }
 
 void verdictText(const Verdict& v, char* buf, size_t size) {
+  using uistr::S;
   if (!buf || size == 0) return;
-  const char* way = v.dir == Dir::Right   ? "to the right of"
-                    : v.dir == Dir::Left  ? "to the left of"
-                    : v.dir == Dir::Below ? "below"
-                    : v.dir == Dir::Above ? "above"
-                                          : nullptr;
-  if (!way) {
-    std::snprintf(buf, size, "Taps land away from your finger.");
-    return;
+  switch (v.dir) {
+    case Dir::Right: trf(buf, size, S::check_verdict_right, v.px); return;
+    case Dir::Left: trf(buf, size, S::check_verdict_left, v.px); return;
+    case Dir::Below: trf(buf, size, S::check_verdict_below, v.px); return;
+    case Dir::Above: trf(buf, size, S::check_verdict_above, v.px); return;
+    case Dir::None: break;
   }
-  std::snprintf(buf, size, "Taps land about %d px %s your finger.", v.px, way);
+  trf(buf, size, S::check_verdict_unknown);
 }
 
 bool due(bool calibrated, bool answered) { return !calibrated && !answered; }
@@ -179,10 +180,11 @@ Outcome outcome(bool fitOk, const Error& now, const Error& unseen) {
   return Outcome::NoBetter;
 }
 
-void errorText(const char* what, const Error& e, char* buf, size_t size) {
+void errorText(Table which, const Error& e, char* buf, size_t size) {
+  using uistr::S;
   if (!buf || size == 0) return;
-  std::snprintf(buf, size, "%s: up to %ld px off, average %ld", what ? what : "", std::lround(e.max),
-                std::lround(e.mean));
+  trf(buf, size, which == Table::New ? S::calibration_error_calibrated : S::calibration_error_now,
+      std::lround(e.max), std::lround(e.mean));
 }
 
 }  // namespace touchcheck

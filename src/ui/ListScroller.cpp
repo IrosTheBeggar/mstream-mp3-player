@@ -139,6 +139,27 @@ void ListScroller::pushAtScreen(M5Canvas& sprite, int x, int screenY, SpiHoldSta
   }
 }
 
+void ListScroller::pushRectAtScreen(M5Canvas& sprite, int sx, int sy, int w, int h, int x, int screenY,
+                                    SpiHoldStats* stats) {
+  auto& d = M5.Display;
+  int y = screenY;
+  const int end = screenY + h;
+  while (y < end) {
+    // A run of screen lines whose GRAM lines are consecutive; the sprite's
+    // origin where its (sx, sy) lands on the run's first GRAM line.
+    const int g = gramLineForScreen(y);
+    int run = 1;
+    while (y + run < end && gramLineForScreen(y + run) == g + run) ++run;
+    {
+      LcdLock lock(stats ? stats : stats_);
+      d.setClipRect(x, g, w, run);
+      sprite.pushSprite(&d, x - sx, g - (y - screenY) - sy);
+      d.clearClipRect();
+    }
+    y += run;
+  }
+}
+
 int ListScroller::gramLineForScreen(int y) {
   // From the address the panel really has (the map may be invalidated, or
   // mid-plan): screen line top + k shows GRAM line top + (vsp - top + k) mod height.

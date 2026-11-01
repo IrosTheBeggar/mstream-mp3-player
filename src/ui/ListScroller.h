@@ -113,6 +113,11 @@ public:
   // not move with the list: the A-Z rail, overlays, toasts.
   // `h`: only its top h lines (0: all of it).
   void pushAtScreen(M5Canvas& sprite, int x, int screenY, SpiHoldStats* stats = nullptr, int h = 0);
+  // The same for the (w x h) rectangle of `sprite` at (sx, sy), shown at
+  // screen (x, screenY): a small live piece over a scrolled row (a
+  // spinner), pushed alone.
+  void pushRectAtScreen(M5Canvas& sprite, int sx, int sy, int w, int h, int x, int screenY,
+                        SpiHoldStats* stats = nullptr);
 
   // The GRAM line the panel shows at screen line `y` now (identity when no
   // scroller is active), and the start address in use (0 when none).

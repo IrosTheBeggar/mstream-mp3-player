@@ -108,6 +108,10 @@ void Input::alertBuzz() {
   if (hapticsOn_) haptics_.tick(80, Haptics::kTapLevel);
 }
 
+void Input::identifyBuzz() {
+  if (hapticsOn_) haptics_.tick(200, Haptics::kTapLevel);
+}
+
 void Input::tapTick() {
   if (hapticsOn_) haptics_.tap();
 }

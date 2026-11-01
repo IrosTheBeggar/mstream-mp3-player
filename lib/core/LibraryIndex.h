@@ -107,8 +107,19 @@ public:
   // Stage A's rules (docs/METADATA.md 5.4): a saved index of other rules
   // is Outdated, so a change of the votes or the orders rebuilds it. 2: a
   // blank title or album value (White_Space alone) names nothing (the file
-  // name's title; the folder's name when no other value votes).
-  static constexpr uint16_t kRulesVersion = 2;
+  // name's title; the folder's name when no other value votes). 3
+  // (docs/I18N.md, phase 0): textfold's new order and matching, in one
+  // step: names composed (NFC) to sort, U+0080-009F as cp1252, fullwidth
+  // ASCII and Latin Extended-B and Additional folded, other scripts by
+  // script and letter (not by length), and an artist folder in another
+  // script taking its tags' spelling and sort tag (sameName()). 4
+  // (phase 2): the kana as one script (katakana as hiragana, small kana as
+  // large), halfwidth katakana as the fullwidth, a Hangul consonant just
+  // before the syllables it begins. 5 (phase 3): a compilation's elected
+  // line, "Various Artists", is marked kVarious, so it is drawn in the UI's
+  // language (librarytext::albumArtist()); the stored text stays English,
+  // and the votes and orders are 4's.
+  static constexpr uint16_t kRulesVersion = 5;
   // The strings' chunks: an offset is its chunk's number, then its place.
   static constexpr uint32_t kChunkBits = 16;
   static constexpr uint32_t kChunkBytes = 1u << kChunkBits;
@@ -151,6 +162,10 @@ public:
   // /.mstream/thumbs has its cover, and no hand-added image beats it (2.14.3).
   static constexpr uint8_t kTransferThumb = 0x02;
   static constexpr uint8_t kTagged = 0x04;         // a track has a record: its names and order are Stage A's
+  // Its artist line is the one a compilation gets when no album artist is
+  // tagged ("Various Artists", stored in English): drawn in the UI's
+  // language. One a tag spells so itself is a name, not marked.
+  static constexpr uint8_t kVarious = 0x08;
   // addFile() options.
   static constexpr uint8_t kAddPending = 0x01;  // a track the scan should read (kTrackPending)
   // A file the transfer's ledger lists: its image doesn't beat a transfer
@@ -185,7 +200,7 @@ public:
     uint32_t artistLine;     // the elected artist line (the artist's name when nothing says otherwise)
     uint16_t year;           // the elected year; 0: none
     uint8_t discs;           // the highest disc number (at least 1)
-    uint8_t flags;           // kLoose, kTransferThumb, kTagged
+    uint8_t flags;           // kLoose, kTransferThumb, kTagged, kVarious
   };
   struct Folder {            // 36 bytes; folder 0 is the root
     uint32_t name;           // the root's is its whole path, "/music"

@@ -4,6 +4,7 @@
 #pragma once
 #include <cstdint>
 
+#include "AutoDjView.h"
 #include "ButtonPolicy.h"
 #include "CardFormat.h"
 #include "DeviceInfo.h"
@@ -104,9 +105,11 @@ struct AppState {
   bool sleepFading = false;
   bool sleepCanExtend = false;
   int8_t sleepPick = -1;
-  char sleepRow[16] = "Off";
-  char sleepTitle[24] = "off";
-  char sleepShort[12] = "";
+  // (Their texts are SleepTimer's, the snapshot's: the first one fills
+  // them before anything is drawn.)
+  char sleepRow[48] = "";
+  char sleepTitle[96] = "";
+  char sleepShort[32] = "";
   // The idle power-off (IdlePolicy; ENERGY.md item 4): the setting ("Turn
   // off when idle": its choice), and while it warns (its last 30 s), the
   // seconds left (0: no warning).
@@ -121,16 +124,21 @@ struct AppState {
   uint16_t cpuRunMhz = 160;
   uint8_t btPower = 1;
   bool btPowerPending = false;
+  // Auto DJ (app/AutoDj::view(); lib/core/AutoDjView): on or off, its
+  // settings, whether the card's index is usable (the empty states'
+  // button, "Auto DJ from here", Output > Auto DJ's live rows), what holds
+  // it, the index's state and coverage, its appends (no badge flash).
+  autodjview::State autoDj;
 };
 
 // About (the Output tab): what the device is and has.
 struct AboutInfo {
-  char storage[48] = "";   // "microSD card, 29.7 GB"
+  char storage[96] = "";   // "microSD card, 29.7 GB"
   char version[40] = "";   // "v0.5.0", "v0.5.0-3-gabc1234-dirty" (app/Version)
   char built[12] = "";     // the commit's date, "2026-09-30"
   char elf[12] = "";       // the ELF's SHA-256, 8 hex digits
-  char bluetooth[48] = ""; // "SPYDRONE (12:34:56:78:9A:BC)"
-  char power[48] = "";     // "160 MHz; Normal (-12..+3 dBm)" (PowerChoices::aboutText())
+  char bluetooth[96] = ""; // "WH-1000XM4, connected", "paired", "none paired"
+  char power[96] = "";     // "160 MHz; Normal (-12..+3 dBm)" (PowerChoices::aboutText())
   uint32_t ramFree = 0, ramMin = 0, psramFree = 0;
 };
 
@@ -239,6 +247,29 @@ public:
   // "Bluetooth power": PowerChoices' choice, saved and applied at once (a
   // link that is up keeps its level until the next connection).
   virtual void setBtPower(int choice) = 0;
+
+  // ---- Auto DJ (app/AutoDj; the engine design's 5.1) ----
+  // Its settings (Now Playing's "..." row, Output > Auto DJ): applied,
+  // saved in NVS and logged. True: changed (false: as it was). Switching
+  // on never starts playback: Auto DJ adds a track when the queue's last
+  // one starts (a finished queue's pick is cued, paused).
+  virtual bool autoDjSetOn(bool on) = 0;
+  virtual bool autoDjSetMode(autodj::Mode m) = 0;
+  virtual bool autoDjSetFloor(uint8_t pct) = 0;
+  virtual bool autoDjSetMatch(bool tempo, bool key) = 0;
+  // The empty states' Auto DJ button (D4, the listener's tap): a random
+  // track the index knows plays as a new queue, Auto DJ on (refused
+  // behind the library update's fence).
+  virtual autodjview::Started autoDjStart() = 0;
+  // "Auto DJ from here" (the Library's long-press sheet, the listener's
+  // tap): `track` plays as a new queue, Auto DJ on, seeded by it. False:
+  // nothing played (the fence, no memory).
+  virtual bool autoDjFromHere(uint32_t track) = 0;
+  // Library track `track` has neighbours in a usable index (the sheet's
+  // first row; a few small reads before the index is joined).
+  virtual bool autoDjHasNeighbours(uint32_t track) = 0;
+  // Queue entry `key` is one Auto DJ added (its DJ mark; no "added" mark).
+  virtual bool autoDjMarked(uint32_t key) const = 0;
 
   // ---- the screen's pocket rule (ScreenPower) ----
   // The touch on the glass now landed on a screen woken from off that

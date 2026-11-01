@@ -51,6 +51,7 @@ void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out) 
   r.sameCommitTwice = false;
   r.rootCount = 0;
   r.plan = false;
+  r.autoDj = Root::AutoDj();
 
   // The plan: pending.bin, else a valid pending.tmp (2.12.5).
   r.plan = fs.exists(kPendingBin) || openPlan(fs, kPendingTmp, scratch, scratchBytes) == cc::Why::Ok;
@@ -111,6 +112,14 @@ void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out) 
   r.identity.generation = m.frame().generation;
   r.identity.commitId = m.commitId();
   r.identity.tagsCrc = info.frame.headerCrc;
+
+  // The MPDJ entry, kept while T is present (AUTODJ-INDEX.md 7.2). Its
+  // name is the one open() checked against the entry's generation.
+  if (m.hasAutoDj()) {
+    r.autoDj.present = true;
+    r.autoDj.entry = m.autoDj();
+    std::snprintf(r.autoDj.path, sizeof(r.autoDj.path), "%s%s", kDir, m.autoDjName());
+  }
 }
 
 size_t describe(const Root& r, char* buf, size_t size) {

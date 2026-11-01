@@ -7,7 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <string>
+#include <utility>
 #include <vector>
 
 namespace cardcontract {
@@ -16,59 +16,160 @@ namespace mpdj {
 namespace {
 
 const SectionSpec kSections[kSecCount] = {
-    {kDjrw, kRowStride, true},
-    {kDjnb, 1, true},  // k x (indexBytes + 1): checked against the header
+    {kDjsl, kSmallSlot, true},  // slotBytes: checked against the header
+    {kDjrf, kFilterStride, true},
     {kDjph, kPathStride, true},
     {kStrs, 0, true},
 };
 
-void decodeRow(const uint8_t* e, Row* r) {
-  r->pathHash = get64(e);
-  std::memcpy(r->hashPrefix, e + 8, 8);
-  r->bpm10 = get16(e + 16);
-  r->camelot = e[18];
-  r->flags = e[19];
-  r->artistKey = get32(e + 20);
-}
+const char kHex[] = "0123456789abcdef";
 
 }  // namespace
 
-const FormatSpec kSpec = {kMagicMpdj, kHeaderBytes, kSections, kSecCount};
+const FormatSpec kSpec = {kMagicMpdj, kMinHeaderBytes, kSections, kSecCount, kMajor2};
 
+uint32_t slotBytesFor(uint32_t k) {
+  if (k >= kMinK && k <= kMaxSmallK) return kSmallSlot;
+  if (k > kMaxSmallK && k <= kMaxK) return kLargeSlot;
+  return 0;
+}
+
+uint32_t headerBytesFor(uint32_t sectionCount, uint32_t slotBytes, uint32_t minimum) {
+  if (slotBytes == 0 || slotBytes % 8) return 0;
+  uint32_t hb = (minimum + 7) & ~7u;
+  while ((hb + kDirEntryBytes * sectionCount) % slotBytes) hb += 8;
+  return hb;
+}
+
+uint32_t strideRank(uint32_t j, uint32_t k, uint32_t head, uint32_t m) {
+  // j itself in the head, and wherever the list isn't strided (m <= k: the
+  // top k; a head the header can't hold). (j - H)(m - 1 - H) is at most
+  // 166 x 65,533: 32 bits hold it.
+  if (j < head || m <= k || head + 2 > k) return j;
+  return head + (j - head) * (m - 1 - head) / (k - 1 - head);
+}
+
+uint8_t level(double cos) {
+  const double s = std::round(cos * 255.0);  // half away from zero
+  if (!(s > 0)) return 0;
+  if (s > 255) return 255;
+  return static_cast<uint8_t>(s);
+}
+
+uint8_t level(const float* a, const float* b, uint32_t dim) {
+  // Each product of two f32 is exact in f64, so a fused multiply-add can't
+  // change the sum: only its order matters, and it is the index order.
+  double dot = 0;
+  for (uint32_t i = 0; i < dim; ++i) dot += static_cast<double>(a[i]) * static_cast<double>(b[i]);
+  return level(dot);
+}
+
+uint32_t slotCrc(const uint8_t* slot, uint32_t slotBytes, uint32_t row) {
+  uint8_t r[4];
+  put32(r, row);
+  return crc32(slot, slotBytes - 4, crc32(r, sizeof(r)));
+}
+
+SlotRead checkSlot(const uint8_t* slot, uint32_t slotBytes, uint32_t k, uint32_t row, uint32_t rowCount, Entry* out,
+                   uint32_t* count, Why* why) {
+  if (count) *count = 0;
+  auto fail = [&](SlotRead r, Why w) {
+    if (why) *why = w;
+    return r;
+  };
+  if (slotBytes < 4 || k == 0 || 3 * k > slotBytes - 4) return fail(SlotRead::Broken, Why::Shape);
+  // S1: the CRC, seeded with the row (a slot read for another row fails).
+  if (slotCrc(slot, slotBytes, row) != get32(slot + slotBytes - 4)) return fail(SlotRead::Damaged, Why::DjSlotCrc);
+  const uint8_t* levels = slot + 2 * k;
+  uint32_t c = k;
+  for (uint32_t j = 0; j < k; ++j)
+    if (get16(slot + 2 * j) == kUnused) {
+      c = j;
+      break;
+    }
+  // S2: unused entries only after every used one.
+  for (uint32_t j = c; j < k; ++j)
+    if (get16(slot + 2 * j) != kUnused) return fail(SlotRead::Broken, Why::DjSlotUnused);
+  // S3: every used index a row, and not this one.
+  for (uint32_t j = 0; j < c; ++j) {
+    const uint32_t idx = get16(slot + 2 * j);
+    if (idx >= rowCount || idx == row) return fail(SlotRead::Broken, Why::DjSlotIndex);
+  }
+  // S4: (level desc, row asc), as the candidates are ranked.
+  for (uint32_t j = 1; j < c; ++j) {
+    if (levels[j] > levels[j - 1] || (levels[j] == levels[j - 1] && get16(slot + 2 * j) <= get16(slot + 2 * j - 2)))
+      return fail(SlotRead::Broken, Why::DjSlotOrder);
+  }
+  if (out)
+    for (uint32_t j = 0; j < c; ++j) {
+      out[j].row = get16(slot + 2 * j);
+      out[j].level = levels[j];
+    }
+  if (count) *count = c;
+  return fail(SlotRead::Ok, Why::Ok);
+}
+
+// ---------------------------------------------------------------------------
+// Table
+// ---------------------------------------------------------------------------
 Why Table::open(Source& src) {
-  uint8_t th[kHeaderBytes - kCommonHeaderBytes];
+  uint8_t th[kMinHeaderBytes - kCommonHeaderBytes];
   const Why w = c_.open(src, kSpec, th);
   if (w != Why::Ok) return w;
-  rowCount_ = get32(th);
-  pathCount_ = get32(th + 4);
-  k_ = get16(th + 8);
-  indexBytes_ = th[10];
-  const uint8_t scoreKind = th[11];
-  builtTime_ = get32(th + 12);
-  std::memcpy(sig_, th + 16, 16);
-  strings_[0] = get32(th + 32);  // modelId
-  strings_[1] = get32(th + 36);  // modelVersion
-  strings_[2] = get32(th + 40);  // metric
-  tagsGeneration_ = get32(th + 44);
-  strings_[3] = get32(th + 48);  // license
-  strings_[4] = get32(th + 52);  // attribution
-  if (scoreKind != kScoreCosine) return Why::Enum;
-  if (indexBytes_ != (rowCount_ <= 65535 ? 2u : 4u)) return Why::Enum;
-  if (k_ < 1) return Why::Enum;
-  const Section& rows = c_.section(kSecRows);
-  const Section& nb = c_.section(kSecNeighbours);
-  const Section& paths = c_.section(kSecPaths);
-  if (rows.count != rowCount_ || nb.count != rowCount_ || paths.count != pathCount_) return Why::Counts;
-  if (nb.stride != k_ * (indexBytes_ + 1)) return Why::Shape;
+  // The type header (4.1), file offsets 40-103.
+  rowCount_ = get32(th);                    // 40
+  pathCount_ = get32(th + 4);               // 44
+  k_ = get16(th + 8);                       // 48
+  slotBytes_ = get16(th + 10);              // 50
+  const uint8_t indexBytes = th[12];        // 52
+  const uint8_t scoreKind = th[13];         // 53
+  selKind_ = th[14];                        // 54
+  selHead_ = th[15];                        // 55
+  builtTime_ = get32(th + 16);              // 56
+  tagsGeneration_ = get32(th + 20);         // 60
+  std::memcpy(sig_, th + 24, 16);           // 64
+  for (uint32_t i = 0; i < 5; ++i) strings_[i] = get32(th + 40 + 4 * i);  // 80-99
+  selFloor_ = th[60];                       // 100
+  // 8.2, in its order.
+  if (rowCount_ < 1 || rowCount_ > kMaxRows) return Why::Enum;
+  if (k_ < kMinK || k_ > kMaxK) return Why::Enum;
+  if (slotBytes_ != slotBytesFor(k_)) return Why::Enum;
+  if (indexBytes != kIndexBytes || scoreKind != kScoreCosine) return Why::Enum;
+  if (selKind_ == kSelTop) {
+    if (selHead_ != k_ || selFloor_ != 0) return Why::DjSelection;
+  } else if (selKind_ == kSelStrided) {
+    if (selHead_ < 1 || selHead_ + 2 > k_ || selFloor_ < 1) return Why::DjSelection;
+  } else if (selHead_ > k_) {  // a later kind: readers use only selHead and selFloor
+    return Why::DjSelection;
+  }
+  const Section& slots = c_.section(kSecSlots);
+  if (slots.count != rowCount_ || c_.section(kSecFilters).count != rowCount_ ||
+      c_.section(kSecPaths).count != pathCount_)
+    return Why::Counts;
+  if (slots.stride != slotBytes_) return Why::Shape;
+  // DJSL first and on a slot boundary, the four in order (unknown sections
+  // may stand between them): their places in the directory, read again.
+  uint32_t at[kSecCount];
+  for (uint32_t& a : at) a = kMaxSections;
+  const Header& h = c_.header();
+  for (uint32_t i = 0; i < h.sectionCount; ++i) {
+    uint8_t t[4];
+    if (!src.read(h.headerBytes + kDirEntryBytes * i, t, sizeof(t))) return Why::Io;
+    for (uint32_t s = 0; s < kSecCount; ++s)
+      if (get32(t) == kSections[s].type) at[s] = i;
+  }
+  if (at[kSecSlots] != 0 || slots.offset % slotBytes_) return Why::DjLayout;
+  for (uint32_t s = 1; s < kSecCount; ++s)
+    if (at[s] <= at[s - 1]) return Why::DjLayout;
   return Why::Ok;
 }
 
 Why Table::check(uint32_t uses, uint8_t* scratch, uint32_t scratchBytes) const {
-  if (!scratch || scratchBytes < 64) return Why::Io;
+  if (!scratch || scratchBytes < 64 || ((uses & kUseSlots) && scratchBytes < 1024)) return Why::Io;
   Source* src = c_.source();
-  const Section& strs = c_.section(kSecStrs);
-  // The header's strings, front to back.
+  // STRS (8.3): the header's strings, front to back, then its CRC.
   {
+    const Section& strs = c_.section(kSecStrs);
     Stream s;
     s.begin(src, strs.offset, strs.offset + strs.bytes, scratch, scratchBytes);
     uint8_t b;
@@ -82,51 +183,43 @@ Why Table::check(uint32_t uses, uint8_t* scratch, uint32_t scratchBytes) const {
     if (!s.drain()) return Why::Io;
     if (s.crc() != strs.crc) return Why::SectionCrc;
   }
-  if (uses & kUseRows) {
-    const Section& sec = c_.section(kSecRows);
+  // DJRF: its CRC (its values are any; a camelot above 24 reads as 0).
+  if (uses & kUseFilters) {
+    const Section& sec = c_.section(kSecFilters);
     Stream s;
     s.begin(src, sec.offset, sec.offset + sec.bytes, scratch, scratchBytes);
-    uint8_t prev[8] = {};
-    for (uint32_t i = 0; i < sec.count; ++i) {
-      uint8_t e[kRowStride];
-      if (!s.read(e, kRowStride) || !s.skipTo(s.position() + sec.stride - kRowStride)) return Why::Io;
-      if (i > 0 && std::memcmp(e + 8, prev, 8) < 0) return Why::DjRows;
-      std::memcpy(prev, e + 8, 8);
-    }
     if (!s.drain()) return Why::Io;
     if (s.crc() != sec.crc) return Why::SectionCrc;
   }
+  // DJPH: rows in range, hashes strictly increasing (a hash two card files
+  // share was left out by the writer), then its CRC.
   if (uses & kUsePaths) {
     const Section& sec = c_.section(kSecPaths);
     Stream s;
     s.begin(src, sec.offset, sec.offset + sec.bytes, scratch, scratchBytes);
-    uint64_t prevHash = 0;
-    uint32_t prevRow = 0;
+    uint64_t prev = 0;
     for (uint32_t i = 0; i < sec.count; ++i) {
       uint8_t e[kPathStride];
       if (!s.read(e, kPathStride) || !s.skipTo(s.position() + sec.stride - kPathStride)) return Why::Io;
       const uint64_t h = get64(e);
-      const uint32_t r = get32(e + 8);
-      if (r >= rowCount_) return Why::DjPaths;
-      if (i > 0 && (h < prevHash || (h == prevHash && r <= prevRow))) return Why::DjPaths;
-      prevHash = h;
-      prevRow = r;
+      if (get16(e + 8) >= rowCount_ || (i > 0 && h <= prev)) return Why::DjPaths;
+      prev = h;
     }
     if (!s.drain()) return Why::Io;
     if (s.crc() != sec.crc) return Why::SectionCrc;
   }
-  if (uses & kUseNeighbours) {
-    const Section& sec = c_.section(kSecNeighbours);
+  // DJSL: every slot in row order (a whole-file check makes any bad slot
+  // the file's absence), then the section's CRC. The slot goes into the
+  // scratch's front, the stream reads through the rest.
+  if (uses & kUseSlots) {
+    const Section& sec = c_.section(kSecSlots);
+    uint8_t* slot = scratch;
     Stream s;
-    s.begin(src, sec.offset, sec.offset + sec.bytes, scratch, scratchBytes);
-    const uint32_t unused = indexBytes_ == 2 ? 0xFFFFu : 0xFFFFFFFFu;
-    for (uint32_t i = 0; i < sec.count; ++i) {
-      for (uint32_t j = 0; j < k_; ++j) {
-        uint8_t e[5];
-        if (!s.read(e, indexBytes_ + 1)) return Why::Io;
-        const uint32_t idx = indexBytes_ == 2 ? get16(e) : get32(e);
-        if (idx >= rowCount_ && idx != unused) return Why::DjNeighbours;
-      }
+    s.begin(src, sec.offset, sec.offset + sec.bytes, scratch + slotBytes_, scratchBytes - slotBytes_);
+    for (uint32_t r = 0; r < rowCount_; ++r) {
+      if (!s.read(slot, slotBytes_)) return Why::Io;
+      Why why = Why::Ok;
+      if (checkSlot(slot, slotBytes_, k_, r, rowCount_, nullptr, nullptr, &why) != SlotRead::Ok) return why;
     }
     if (!s.drain()) return Why::Io;
     if (s.crc() != sec.crc) return Why::SectionCrc;
@@ -143,37 +236,16 @@ Why Table::string(uint32_t which, char* out, size_t cap) const {
   return readStringAt(*c_.source(), c_.section(kSecStrs), strings_[which], out, cap);
 }
 
-bool Table::row(uint32_t i, Row* out) const {
-  const Section& sec = c_.section(kSecRows);
-  if (i >= sec.count) return false;
-  uint8_t e[kRowStride];
-  if (!c_.source()->read(sec.offset + i * sec.stride, e, kRowStride)) return false;
-  decodeRow(e, out);
+bool Table::filter(uint32_t r, Filter* out) const {
+  const Section& sec = c_.section(kSecFilters);
+  if (r >= sec.count) return false;
+  uint8_t e[kFilterStride];
+  if (!c_.source()->read(sec.offset + r * sec.stride, e, kFilterStride)) return false;
+  out->bpm10 = get16(e);
+  out->camelot = e[2] <= 24 ? e[2] : 0;
+  out->flags = e[3] & kFilterBpmAnalysed;
+  out->artistKey = get32(e + 4);
   return true;
-}
-
-uint32_t Table::neighbours(uint32_t i, Neighbour* out, uint32_t cap) const {
-  const Section& sec = c_.section(kSecNeighbours);
-  if (i >= sec.count) return 0;
-  const uint32_t unused = indexBytes_ == 2 ? 0xFFFFu : 0xFFFFFFFFu;
-  const uint32_t entry = indexBytes_ + 1;
-  uint32_t n = 0;
-  uint8_t buf[256];
-  for (uint32_t j = 0; j < k_ && n < cap;) {
-    uint32_t batch = static_cast<uint32_t>(sizeof(buf)) / entry;
-    if (batch > k_ - j) batch = k_ - j;
-    if (!c_.source()->read(sec.offset + i * sec.stride + j * entry, buf, batch * entry)) return n;
-    for (uint32_t b = 0; b < batch && n < cap; ++b) {
-      const uint8_t* e = buf + b * entry;
-      const uint32_t idx = indexBytes_ == 2 ? get16(e) : get32(e);
-      if (idx == unused || idx >= rowCount_) continue;
-      out[n].row = idx;
-      out[n].score = e[indexBytes_];
-      ++n;
-    }
-    j += batch;
-  }
-  return n;
 }
 
 uint32_t Table::rowOf(uint64_t pathHash) const {
@@ -191,8 +263,24 @@ uint32_t Table::rowOf(uint64_t pathHash) const {
   if (lo >= sec.count) return kNoRow;
   uint8_t e[kPathStride];
   if (!c_.source()->read(sec.offset + lo * sec.stride, e, kPathStride) || get64(e) != pathHash) return kNoRow;
-  const uint32_t r = get32(e + 8);
+  const uint32_t r = get16(e + 8);
   return r < rowCount_ ? r : kNoRow;
+}
+
+SlotRead Table::slot(uint32_t r, uint8_t* buf, Entry* out, uint32_t* count, Why* why) const {
+  if (count) *count = 0;
+  // Every row a reader holds came from DJPH or a list, both checked below
+  // rowCount: one past it is the reader's own state gone wrong, which no
+  // re-read mends.
+  if (r >= rowCount_) {
+    if (why) *why = Why::DjSlotIndex;
+    return SlotRead::Broken;
+  }
+  if (!c_.source()->read(slotsOffset() + r * slotBytes_, buf, slotBytes_)) {
+    if (why) *why = Why::Io;
+    return SlotRead::Damaged;
+  }
+  return checkSlot(buf, slotBytes_, k_, r, rowCount_, out, count, why);
 }
 
 // ---------------------------------------------------------------------------
@@ -287,43 +375,104 @@ void Sha256::final(uint8_t out[32]) {
   }
 }
 
-void selectionSignature(const char* modelId, const char* modelVersion, const char* metric, uint32_t k,
-                        const uint8_t (*hashes)[16], size_t n, uint8_t out[16]) {
+// ---------------------------------------------------------------------------
+// The selection signature (6)
+// ---------------------------------------------------------------------------
+void vecDigest(const float* const* rows, uint32_t rowCount, uint32_t dim, uint8_t out[32]) {
   Sha256 sha;
-  auto line = [&](const char* s) { sha.update(s, std::strlen(s)); };
-  char buf[32];
-  line("MPDJ-SEL 1\nmodel ");
-  line(modelId ? modelId : "");
-  line(" ");
-  line(modelVersion ? modelVersion : "");
-  line("\nmetric ");
-  line(metric ? metric : "");
-  std::snprintf(buf, sizeof(buf), "\nk %u\n", static_cast<unsigned>(k));
-  line(buf);
-  static const char kHex[] = "0123456789abcdef";
-  for (size_t i = 0; i < n; ++i) {
-    char hex[33];
-    for (int b = 0; b < 16; ++b) {
-      hex[2 * b] = kHex[hashes[i][b] >> 4];
-      hex[2 * b + 1] = kHex[hashes[i][b] & 15];
+  uint8_t buf[64];
+  for (uint32_t r = 0; r < rowCount; ++r)
+    for (uint32_t i = 0; i < dim;) {
+      uint32_t n = 0;
+      for (; n < sizeof(buf) / 4 && i < dim; ++n, ++i) {
+        uint32_t u;
+        std::memcpy(&u, &rows[r][i], 4);
+        put32(buf + 4 * n, u);
+      }
+      sha.update(buf, 4 * n);
     }
-    hex[32] = '\n';
-    sha.update(hex, 33);
+  sha.final(out);
+}
+
+void selectionSignature(const SigIn& in, uint8_t out[16]) {
+  Sha256 sha;
+  auto text = [&](const char* s) {
+    if (s) sha.update(s, std::strlen(s));
+  };
+  auto hex = [&](const uint8_t* b, size_t n) {
+    char h[2];
+    for (size_t i = 0; i < n; ++i) {
+      h[0] = kHex[b[i] >> 4];
+      h[1] = kHex[b[i] & 15];
+      sha.update(h, 2);
+    }
+  };
+  char buf[48];
+  text("MPDJ-SEL 2\nmodel ");
+  text(in.modelId);
+  text(" ");
+  text(in.modelVersion);
+  text("\nmetric ");
+  text(in.metric);
+  std::snprintf(buf, sizeof(buf), "\nk %u\n", static_cast<unsigned>(in.k));
+  text(buf);
+  if (in.selKind == kSelTop) {
+    text("sel top\n");
+  } else {
+    std::snprintf(buf, sizeof(buf), "sel strided %u %u\n", static_cast<unsigned>(in.selHead),
+                  static_cast<unsigned>(in.selFloor));
+    text(buf);
+  }
+  std::snprintf(buf, sizeof(buf), "vec %u ", static_cast<unsigned>(in.dim));
+  text(buf);
+  hex(in.vecSha256, 32);
+  text("\n");
+  for (uint32_t r = 0; r < in.rowCount; ++r) {
+    hex(in.hashes[r], 16);
+    text("\n");
+  }
+  uint32_t at = 0;
+  for (uint32_t g = 0; g < in.groupCount; ++g) {
+    text("same");
+    for (; at < in.groupEnds[g]; ++at) {
+      std::snprintf(buf, sizeof(buf), " %u", static_cast<unsigned>(in.groupRows[at]));
+      text(buf);
+    }
+    text("\n");
   }
   uint8_t digest[32];
   sha.final(digest);
   std::memcpy(out, digest, 16);
 }
 
-uint8_t score(const float* a, const float* b, uint32_t dim) {
-  // Each product of two f32 is exact in f64, so a fused multiply-add can't
-  // change the sum: only its order matters, and it is the index order.
-  double dot = 0;
-  for (uint32_t i = 0; i < dim; ++i) dot += static_cast<double>(a[i]) * static_cast<double>(b[i]);
-  const double s = std::round(dot * 255.0);  // half away from zero
-  if (!(s > 0)) return 0;
-  if (s > 255) return 255;
-  return static_cast<uint8_t>(s);
+// ---------------------------------------------------------------------------
+// The selection (5.3, 5.4) and the writer
+// ---------------------------------------------------------------------------
+uint32_t selectEntries(const uint16_t* levels, uint32_t n, uint8_t kind, uint32_t k, uint32_t head, uint32_t floor,
+                       Entry* out, uint16_t* order) {
+  // One counting sort (12.2): each level's candidates in a run, the best
+  // level's first, rows ascending within a run.
+  uint32_t start[256] = {};
+  for (uint32_t b = 0; b < n; ++b)
+    if (levels[b] < kNotCandidate) ++start[levels[b]];
+  uint32_t candidates = 0, m = 0;
+  for (int lv = 255; lv >= 0; --lv) {
+    const uint32_t c = start[lv];
+    start[lv] = candidates;
+    candidates += c;
+    if (static_cast<uint32_t>(lv) >= floor) m = candidates;
+  }
+  for (uint32_t b = 0; b < n; ++b)
+    if (levels[b] < kNotCandidate) order[start[levels[b]]++] = static_cast<uint16_t>(b);
+  // The top k; strided by rank when more than k candidates reach the floor.
+  const bool strided = kind == kSelStrided && m > k;
+  const uint32_t c = candidates < k ? candidates : k;
+  for (uint32_t j = 0; j < c; ++j) {
+    const uint16_t b = order[strided ? strideRank(j, k, head, m) : j];
+    out[j].row = b;
+    out[j].level = static_cast<uint8_t>(levels[b]);
+  }
+  return c;
 }
 
 bool write(Sink& out, const TableIn& in, uint8_t sig[16], uint32_t* fileBytes, uint32_t* headerCrc, const char** error) {
@@ -331,119 +480,182 @@ bool write(Sink& out, const TableIn& in, uint8_t sig[16], uint32_t* fileBytes, u
     if (error) *error = e;
     return false;
   };
-  if (in.k < 1 || in.k > 65535) return bad("k");
   const uint32_t n = in.rowCount;
-  std::vector<uint32_t> order(n);
-  for (uint32_t i = 0; i < n; ++i) {
-    order[i] = i;
-    if (!in.rows[i].paths || in.rows[i].pathCount == 0) return bad("a row with no path");
-    if (!in.rows[i].embedding && in.dim) return bad("a row with no embedding");
+  if (!in.rows || n < 1 || n > kMaxRows) return bad("rowCount must be 1-65,535");
+  const uint32_t k = in.k;
+  const uint32_t slotBytes = slotBytesFor(k);
+  if (!slotBytes) return bad("k must be 2-169");
+  uint32_t head = k, floor = 0;  // selKind 0
+  if (in.selKind == kSelStrided) {
+    head = in.selHead;
+    floor = in.selFloor;
+    if (head < 1 || head + 2 > k) return bad("selHead must be 1 to k - 2");
+    if (floor < 1 || floor > 255) return bad("selFloor must be 1-255");
+  } else if (in.selKind != kSelTop) {
+    return bad("selKind: this writer knows 0 and 1");
   }
-  std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
-    return std::memcmp(in.rows[a].hash, in.rows[b].hash, 16) < 0;
-  });
+  const char* strings[5] = {in.modelId, in.modelVersion, in.metric, in.license, in.attribution};
+  for (const char*& s : strings) {
+    if (!s) s = "";
+    if (std::strlen(s) > kMaxString) return bad("a string over 255 bytes");
+  }
+  if (in.dim == 0) return bad("dim must be at least 1");
+  std::vector<uint32_t> order(n);  // row r is in.rows[order[r]]
+  for (uint32_t i = 0; i < n; ++i) {
+    const RowIn& r = in.rows[i];
+    order[i] = i;
+    if (!r.paths || r.pathCount == 0) return bad("a row with no path");
+    if (!r.embedding) return bad("a row with no embedding");
+    for (uint32_t d = 0; d < in.dim; ++d)
+      if (!std::isfinite(r.embedding[d])) return bad("an embedding value isn't finite");
+  }
+  // Rows in canonical-hash order (5.1).
+  std::sort(order.begin(), order.end(),
+            [&](uint32_t a, uint32_t b) { return std::memcmp(in.rows[a].hash, in.rows[b].hash, 16) < 0; });
   for (uint32_t i = 1; i < n; ++i)
     if (std::memcmp(in.rows[order[i]].hash, in.rows[order[i - 1]].hash, 16) == 0) return bad("a hash twice");
-  const uint32_t ib = n <= 65535 ? 2 : 4;
-  const uint32_t unused = ib == 2 ? 0xFFFFu : 0xFFFFFFFFu;
+  auto row = [&](uint32_t r) -> const RowIn& { return in.rows[order[r]]; };
 
-  // DJRW, DJPH.
-  std::vector<uint8_t> rows(static_cast<size_t>(n) * kRowStride, 0);
-  std::vector<std::pair<uint64_t, uint32_t>> paths;
+  // The same-song groups: rows sharing a song key (rows without one never
+  // group). song[r] is the group's first row, or r itself.
+  std::vector<uint32_t> song(n), keyed;
+  for (uint32_t r = 0; r < n; ++r) {
+    song[r] = r;
+    if (row(r).songKey) keyed.push_back(r);
+  }
+  std::stable_sort(keyed.begin(), keyed.end(),
+                   [&](uint32_t a, uint32_t b) { return std::strcmp(row(a).songKey, row(b).songKey) < 0; });
+  std::vector<std::pair<uint32_t, uint32_t>> runs;  // [begin, end) of keyed, two or more rows
+  for (size_t i = 0; i < keyed.size();) {
+    size_t e = i + 1;
+    while (e < keyed.size() && std::strcmp(row(keyed[i]).songKey, row(keyed[e]).songKey) == 0) ++e;
+    for (size_t j = i; j < e; ++j) song[keyed[j]] = keyed[i];  // stable: keyed[i] is the group's lowest row
+    if (e - i >= 2) runs.emplace_back(static_cast<uint32_t>(i), static_cast<uint32_t>(e));
+    i = e;
+  }
+  std::sort(runs.begin(), runs.end(),
+            [&](const std::pair<uint32_t, uint32_t>& a, const std::pair<uint32_t, uint32_t>& b) {
+              return keyed[a.first] < keyed[b.first];
+            });
+  std::vector<uint32_t> groupRows, groupEnds;
+  for (const auto& g : runs) {
+    for (uint32_t j = g.first; j < g.second; ++j) groupRows.push_back(keyed[j]);
+    groupEnds.push_back(static_cast<uint32_t>(groupRows.size()));
+  }
+
+  // The signature (6).
+  std::vector<const float*> emb(n);
   std::vector<uint8_t> hashes(static_cast<size_t>(n) * 16);
   for (uint32_t r = 0; r < n; ++r) {
-    const RowIn& in_ = in.rows[order[r]];
-    std::vector<uint64_t> ph(in_.paths, in_.paths + in_.pathCount);
-    std::sort(ph.begin(), ph.end());
-    for (size_t k = 1; k < ph.size(); ++k)
-      if (ph[k] == ph[k - 1]) return bad("a path twice in a row");
-    for (uint64_t h : ph) paths.emplace_back(h, r);
-    uint8_t* e = rows.data() + static_cast<size_t>(r) * kRowStride;
-    put64(e, ph[0]);
-    std::memcpy(e + 8, in_.hash, 8);
-    put16(e + 16, in_.bpm10);
-    e[18] = in_.camelot;
-    e[19] = in_.flags;
-    put32(e + 20, in_.artistKey);
-    std::memcpy(hashes.data() + static_cast<size_t>(r) * 16, in_.hash, 16);
+    emb[r] = row(r).embedding;
+    std::memcpy(hashes.data() + static_cast<size_t>(r) * 16, row(r).hash, 16);
   }
-  std::sort(paths.begin(), paths.end());
-  std::vector<uint8_t> djph(paths.size() * kPathStride);
-  for (size_t i = 0; i < paths.size(); ++i) {
-    put64(djph.data() + i * kPathStride, paths[i].first);
-    put32(djph.data() + i * kPathStride + 8, paths[i].second);
-  }
+  SigIn si;
+  si.modelId = strings[0];
+  si.modelVersion = strings[1];
+  si.metric = strings[2];
+  si.k = k;
+  si.selKind = in.selKind;
+  si.selHead = head;
+  si.selFloor = floor;
+  si.dim = in.dim;
+  vecDigest(emb.data(), n, in.dim, si.vecSha256);
+  si.hashes = reinterpret_cast<const uint8_t(*)[16]>(hashes.data());
+  si.rowCount = n;
+  si.groupRows = groupRows.data();
+  si.groupEnds = groupEnds.data();
+  si.groupCount = static_cast<uint32_t>(groupEnds.size());
+  selectionSignature(si, sig);
 
-  // DJNB: quantise first, then the K best by (score desc, row asc).
-  const uint32_t stride = in.k * (ib + 1);
-  std::vector<uint8_t> djnb(static_cast<size_t>(n) * stride, 0);
-  std::vector<std::pair<int, uint32_t>> cand;  // (-score, row): ascending is the order wanted
-  for (uint32_t a = 0; a < n; ++a) {
-    const RowIn& ra = in.rows[order[a]];
-    cand.clear();
-    for (uint32_t b = 0; b < n; ++b) {
-      if (b == a) continue;
-      const RowIn& rb = in.rows[order[b]];
-      if (std::strcmp(ra.songKey ? ra.songKey : "", rb.songKey ? rb.songKey : "") == 0) continue;
-      cand.emplace_back(-static_cast<int>(score(ra.embedding, rb.embedding, in.dim)), b);
-    }
-    std::sort(cand.begin(), cand.end());
-    uint8_t* list = djnb.data() + static_cast<size_t>(a) * stride;
-    for (uint32_t j = 0; j < in.k; ++j) {
-      uint8_t* e = list + j * (ib + 1);
-      const bool used = j < cand.size();
-      const uint32_t idx = used ? cand[j].second : unused;
-      if (ib == 2)
-        put16(e, static_cast<uint16_t>(idx));
-      else
-        put32(e, idx);
-      e[ib] = used ? static_cast<uint8_t>(-cand[j].first) : 0;
-    }
+  // DJRF (4.4) and DJPH (4.5): every card file's path hash once, sorted; a
+  // hash two or more card files hold (a collision) left out altogether.
+  std::vector<uint8_t> djrf(static_cast<size_t>(n) * kFilterStride, 0);
+  std::vector<std::pair<uint64_t, uint32_t>> all;
+  for (uint32_t r = 0; r < n; ++r) {
+    const RowIn& x = row(r);
+    uint8_t* e = djrf.data() + static_cast<size_t>(r) * kFilterStride;
+    put16(e, x.bpm10);
+    e[2] = x.camelot <= 24 ? x.camelot : 0;
+    e[3] = x.flags & kFilterBpmAnalysed;
+    put32(e + 4, x.artistKey);
+    for (uint32_t p = 0; p < x.pathCount; ++p) all.emplace_back(x.paths[p], r);
   }
+  std::sort(all.begin(), all.end());
+  std::vector<uint8_t> djph;
+  for (size_t i = 0; i < all.size();) {
+    size_t e = i + 1;
+    while (e < all.size() && all[e].first == all[i].first) ++e;
+    if (e - i == 1) {
+      uint8_t ent[kPathStride];
+      put64(ent, all[i].first);
+      put16(ent + 8, static_cast<uint16_t>(all[i].second));
+      djph.insert(djph.end(), ent, ent + kPathStride);
+    }
+    i = e;
+  }
+  const uint32_t pathEntries = static_cast<uint32_t>(djph.size() / kPathStride);
 
-  // The signature, the strings, the header.
-  selectionSignature(in.modelId, in.modelVersion, in.metric, in.k, reinterpret_cast<const uint8_t(*)[16]>(hashes.data()),
-                     n, sig);
+  // STRS (4.6) and the header (4.1).
   std::vector<uint8_t> strs{0};
-  auto add = [&](const char* s) -> uint32_t {
-    if (!s || !*s) return 0;
-    const uint32_t off = static_cast<uint32_t>(strs.size());
-    strs.insert(strs.end(), s, s + std::strlen(s));
+  uint32_t offsets[5];
+  for (int i = 0; i < 5; ++i) {
+    offsets[i] = 0;
+    if (!*strings[i]) continue;
+    offsets[i] = static_cast<uint32_t>(strs.size());
+    strs.insert(strs.end(), strings[i], strings[i] + std::strlen(strings[i]));
     strs.push_back(0);
-    return off;
-  };
-  uint8_t th[kHeaderBytes - kCommonHeaderBytes] = {};
+  }
+  uint8_t th[kMinHeaderBytes - kCommonHeaderBytes] = {};
   put32(th, n);
-  put32(th + 4, static_cast<uint32_t>(paths.size()));
-  put16(th + 8, static_cast<uint16_t>(in.k));
-  th[10] = static_cast<uint8_t>(ib);
-  th[11] = kScoreCosine;
-  put32(th + 12, in.builtTime);
-  std::memcpy(th + 16, sig, 16);
-  put32(th + 32, add(in.modelId));
-  put32(th + 36, add(in.modelVersion));
-  put32(th + 40, add(in.metric));
-  put32(th + 44, in.tagsGeneration);
-  put32(th + 48, add(in.license));
-  put32(th + 52, add(in.attribution));
+  put32(th + 4, pathEntries);
+  put16(th + 8, static_cast<uint16_t>(k));
+  put16(th + 10, static_cast<uint16_t>(slotBytes));
+  th[12] = kIndexBytes;
+  th[13] = kScoreCosine;
+  th[14] = in.selKind;
+  th[15] = static_cast<uint8_t>(head);
+  put32(th + 16, in.builtTime);
+  put32(th + 20, in.tagsGeneration);
+  std::memcpy(th + 24, sig, 16);
+  for (int i = 0; i < 5; ++i) put32(th + 40 + 4 * i, offsets[i]);
+  th[60] = static_cast<uint8_t>(floor);
 
   SectionOut s[4] = {
-      SectionOut{kDjrw, kSectionRequired, n, kRowStride, static_cast<uint32_t>(rows.size())},
-      SectionOut{kDjnb, kSectionRequired, n, stride, static_cast<uint32_t>(djnb.size())},
-      SectionOut{kDjph, kSectionRequired, static_cast<uint32_t>(paths.size()), kPathStride,
-                 static_cast<uint32_t>(djph.size())},
+      SectionOut{kDjsl, kSectionRequired, n, slotBytes, n * slotBytes},
+      SectionOut{kDjrf, kSectionRequired, n, kFilterStride, static_cast<uint32_t>(djrf.size())},
+      SectionOut{kDjph, kSectionRequired, pathEntries, kPathStride, static_cast<uint32_t>(djph.size())},
       SectionOut{kStrs, kSectionRequired, 0, 0, static_cast<uint32_t>(strs.size())},
   };
-  const std::vector<uint8_t>* data[4] = {&rows, &djnb, &djph, &strs};
   FileMeta fm;
   fm.magic = kMagicMpdj;
+  fm.major = kMajor2;
   fm.minor = in.minor;
   fm.generation = in.generation;
   fm.cardId = in.cardId;
   ContainerWriter cw;
-  if (!cw.begin(out, fm, th, kHeaderBytes, s, 4)) return bad("layout");
-  for (int i = 0; i < 4; ++i)
-    if (s[i].bytes && !cw.write(data[i]->data(), s[i].bytes)) return bad("sink");
+  if (!cw.begin(out, fm, th, headerBytesFor(4, slotBytes), s, 4, sizeof(th))) return bad("layout");
+
+  // DJSL (4.3): each row's levels to every other row by the rule (5.2), its
+  // candidates ranked and selected, its slot written in row order.
+  std::vector<uint16_t> levels(n), ranked(n);
+  Entry entries[kMaxK];
+  uint8_t slot[kLargeSlot];
+  for (uint32_t a = 0; a < n; ++a) {
+    for (uint32_t b = 0; b < n; ++b)
+      levels[b] = b == a || song[b] == song[a] ? kNotCandidate : level(emb[a], emb[b], in.dim);
+    const uint32_t c = selectEntries(levels.data(), n, in.selKind, k, head, floor, entries, ranked.data());
+    std::memset(slot, 0, slotBytes);
+    for (uint32_t j = 0; j < k; ++j) {
+      put16(slot + 2 * j, j < c ? entries[j].row : kUnused);
+      slot[2 * k + j] = j < c ? entries[j].level : 0;
+    }
+    put32(slot + slotBytes - 4, slotCrc(slot, slotBytes, a));
+    if (!cw.write(slot, slotBytes)) return bad("sink");
+  }
+  if (!cw.write(djrf.data(), static_cast<uint32_t>(djrf.size())) ||
+      (!djph.empty() && !cw.write(djph.data(), static_cast<uint32_t>(djph.size()))) ||
+      !cw.write(strs.data(), static_cast<uint32_t>(strs.size())))
+    return bad("sink");
   if (!cw.finish(fileBytes, headerCrc)) return bad("sink");
   return true;
 }

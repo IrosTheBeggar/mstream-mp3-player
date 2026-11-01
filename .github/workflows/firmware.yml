@@ -104,14 +104,35 @@ jobs:
           path: .pio/libdeps
           key: libdeps-${{ runner.os }}-${{ env.PLATFORMIO_VERSION }}-${{ hashFiles('platformio.ini') }}
 
+      # The UI's texts (i18n/*.json): the catalogue checked, and the tables
+      # made from it (lib/core/UiStringIds.h, UiStringsData.cpp,
+      # test_ui_strings' catalogue.h) as tools/gen_ui_strings.py makes them.
+      - name: UI strings
+        run: |
+          python tools/gen_ui_strings.py --check
+          python -m unittest discover -s tools -p "test_gen_ui_strings.py"
+
       - name: Host tests
         run: pio test -e native
 
       # The card contract's shared fixtures (test/fixtures/card) are frozen:
       # tools/card_fixtures.py, their second implementation, must still make
-      # them byte for byte (docs/METADATA.md 2.17).
+      # them byte for byte (docs/METADATA.md 2.17); tools/mpdj.py, the AutoDJ
+      # index's reference (docs/AUTODJ-INDEX.md), passes its own tests.
       - name: Card fixtures
-        run: python tools/card_fixtures.py --check
+        run: |
+          python tools/card_fixtures.py --check
+          python -m unittest discover -s tools -p "test_mpdj.py"
+
+      # Auto DJ's pick rule has a Python reference (tools/autodj_ref.py) that
+      # writes the C++ engine's session fixtures (test/fixtures/autodj): they
+      # must still come out byte for byte, and the reference passes its tests,
+      # as does the device test card's tool (tools/synthtransfer.py).
+      - name: Auto DJ fixtures
+        run: |
+          python tools/autodj_ref.py --check
+          python -m unittest discover -s tools -p "test_autodj_ref.py"
+          python -m unittest discover -s tools -p "test_synthtransfer.py"
 
       # The dance pack reader and blitter under ASan and UBSan
       # (docs/DANCE-SPRITES.md, Appendix D.5): Linux g++ only.

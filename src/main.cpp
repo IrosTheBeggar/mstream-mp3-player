@@ -9,13 +9,15 @@
 // (touch buttons and glass) and a serial console. The queue is restored
 // from the card at boot; the first time it's the whole library followed by
 // the built-in test tones. A computer can drive the Dance tab's dancer over
-// the same USB serial port (app/UsbViz: the USB visualizer).
+// the same USB serial port (app/UsbViz: the USB visualizer), and ask
+// what the board is and has (app/HostQuery: @status, @count, @identify).
 
 #include <Arduino.h>
 #include <M5Unified.h>
 #include <esp_chip_info.h>
 #include <esp_heap_caps.h>
 #include <esp_random.h>
+#include <esp_rom_sys.h>
 #include <esp_timer.h>
 #include <nvs_flash.h>
 
@@ -26,6 +28,7 @@
 #include "ChipRevision.h"
 #include "DeviceInfo.h"
 #include "HeadsetKeys.h"
+#include "HostStatus.h"
 #include "IdlePolicy.h"
 #include "InputEvent.h"
 #include "LibraryText.h"
@@ -40,7 +43,9 @@
 #include "SleepTimer.h"
 #include "ToneTrack.h"
 #include "TrackCatalog.h"
+#include "UiStrings.h"
 #include "UiText.h"
+#include "app/AutoDj.h"
 #include "app/CardTasks.h"
 #include "app/CardWorker.h"
 #include "app/DanceMode.h"
@@ -48,8 +53,10 @@
 #include "app/BoardPower.h"
 #include "app/Diagnostics.h"
 #include "app/Haptics.h"
+#include "app/HostQuery.h"
 #include "app/IdlePower.h"
 #include "app/Library.h"
+#include "app/NvsLater.h"
 #include "app/NvsSchema.h"
 #include "app/PowerLab.h"
 #include "app/PowerSettings.h"
@@ -59,10 +66,12 @@
 #include "app/Screenshot.h"
 #include "app/SerialConsole.h"
 #include "app/TagConsole.h"
+#include "app/UiLang.h"
 #include "app/UsbViz.h"
 #include "app/Version.h"
 #include "audio/Core2AudioBackend.h"
 #include "spike/Spike.h"
+#include "storage/CardSpace.h"
 #include "storage/LocalStorage.h"
 #include "storage/SectorDisk.h"
 #include "ui/BootScreen.h"
@@ -89,6 +98,16 @@ static Library library(storage);
 // 3.3.4) and its loop side (app/CardTasks, in PSRAM, made at boot).
 static CardWorker cardWorker;
 static CardTasks* cardTasks = nullptr;
+// Auto DJ (app/AutoDj: the card's AutoDJ index, its join, the picks, the
+// console's D; in PSRAM, made at boot after the library and the queue). It
+// only ever appends to the queue (at a finished queue its pick is cued,
+// paused): it never starts playback, nor touches the output or the volume.
+static AutoDj* autoDj = nullptr;
+// What Auto DJ's step and its console commands are told of the rest of the
+// firmware this pass (below, with the card's guard and the restarts).
+static AutoDj::Env autoDjEnv(uint32_t now);
+// The loop's idle wait while Auto DJ's join works (loop()'s end).
+static constexpr uint32_t kJoinLoopDelayMs = 2;
 // The library update's fence (docs/METADATA.md 3.4.2; N12): while the
 // update step's build runs on the card worker, the queue's memory is the
 // build's and the index is hidden from the loop. What the loop shows and
@@ -137,6 +156,8 @@ static bool rescueFinger = false;
 static uint32_t rescueDownMs = 0;
 static uint32_t bootHintMs = 0;
 // The first boot's touch check was offered (or the rescue used) this boot.
+// On a fresh unit it waits for the language picker (Ui::languageFirst()),
+// so it speaks the language picked.
 static bool touchCheckOffered = false;
 // UI spike tools (docs/UI-SPIKE.md): input lab, scroll lab, library index,
 // font and thumbnail probes. Created in PSRAM on first use.
@@ -163,7 +184,7 @@ static ui::Ui* userInterface = nullptr;
 static bool waitsForLibrary(const char* what) {
   if (!frozen.on) return false;
   Serial.printf("[lib] the library is updating: %s waits (try again in a few seconds)\n", what);
-  if (userInterface) userInterface->note(uitext::kUpdatingWait, 1500);
+  if (userInterface) userInterface->note(uistr::tr(uistr::S::library_updating_wait), 1500);
   return true;
 }
 // B, the console's ' ', the UI's play and play/pause: behind the fence a
@@ -476,7 +497,7 @@ bool ButtonTransport::selectOutput(bool bluetooth) {
       return true;
     }
     if (bt.nothingToFind()) {
-      // (The UI's note says where: uitext::kNoHeadphones.)
+      // (The UI's note says where: toast.no_headphones.)
       Serial.println("[output] bluetooth: no headphones paired: pair them on Output > Pair new headphones (nothing is "
                      "scanned for); the output stays on the speaker");
       return false;
@@ -668,15 +689,8 @@ struct MainUiHost : ui::UiHost {
     s.gateFailures = playGate.failures();
     s.btDetail[0] = 0;
     if (s.btConnected) {
-      const uint32_t delayMs = bt.delayReportUs() / 1000;
-      const char* codec = bt.codec();
-      if (codec[0] && delayMs) {
-        snprintf(s.btDetail, sizeof(s.btDetail), "%s, %lu ms", codec, (unsigned long)delayMs);
-      } else if (codec[0]) {
-        snprintf(s.btDetail, sizeof(s.btDetail), "%s", codec);
-      } else if (delayMs) {
-        snprintf(s.btDetail, sizeof(s.btDetail), "%lu ms delay", (unsigned long)delayMs);
-      }
+      const BtSink::Codec codec = bt.codec();
+      btDetailText(codec.name, codec.hz, bt.delayReportUs() / 1000, s.btDetail, sizeof(s.btDetail));
     }
     s.card = storage.onCard();
     s.cardKind = s.card ? cardformat::Kind::Unreadable : storage.cardKind();
@@ -728,6 +742,11 @@ struct MainUiHost : ui::UiHost {
     s.cpuRunMhz = PowerSettings::cpuBootMhz();
     s.btPower = static_cast<uint8_t>(powerSettings.btChoice());
     s.btPowerPending = powerSettings.btPending();
+    if (autoDj) {
+      autoDj->view(&s.autoDj);
+    } else {
+      s.autoDj = autodjview::State{};  // (no PSRAM for it: off, no index)
+    }
     fake(s);
   }
   static void fake(ui::AppState& s) {
@@ -811,7 +830,7 @@ struct MainUiHost : ui::UiHost {
     // Refused: none paired (the card's Connect or Try again after the
     // fresh-unit test, say). Nothing is scanned: the note says where
     // pairing is, as for a B hold.
-    if (!ok && userInterface) userInterface->warn(uitext::kNoHeadphones);
+    if (!ok && userInterface) userInterface->warn(uistr::tr(uistr::S::toast_no_headphones));
     return ok;
   }
   void openCalibration(bool check) override;
@@ -822,7 +841,7 @@ struct MainUiHost : ui::UiHost {
     }
     if (audio.bluetooth().nothingToFind()) {
       Serial.println("[ui] bluetooth: connect: no headphones paired");
-      if (userInterface) userInterface->warn(uitext::kNoHeadphones);
+      if (userInterface) userInterface->warn(uistr::tr(uistr::S::toast_no_headphones));
       return;
     }
     btSession.connect(millis());
@@ -866,7 +885,7 @@ struct MainUiHost : ui::UiHost {
   bool retryCard() override {
     if (!storage.probeCard()) {
       Serial.printf("[storage] try again: still %s (\"%s\")\n", cardformat::name(storage.cardKind()),
-                    uitext::cardMessage(storage.cardKind()).title);
+                    uistr::tr(uitext::cardMessage(storage.cardKind()).title));
       return false;
     }
     Serial.println("[storage] try again: a card is in: restarting to use it");
@@ -885,24 +904,31 @@ struct MainUiHost : ui::UiHost {
     // About is open (OutputPage's refresh). No free space: counting it can
     // hold the card for minutes (LocalStorage::totalBytes()).
     const uint64_t bytes = storage.totalBytes();
+    using uistr::S;
     if (!storage.available()) {
-      snprintf(a.storage, sizeof(a.storage), "No storage");
+      uistr::trf(a.storage, sizeof(a.storage), S::about_storage_none);
     } else if (storage.onCard()) {
       if (bytes) {
-        snprintf(a.storage, sizeof(a.storage), "microSD card, %.1f GB", bytes / 1e9);
+        uistr::trf(a.storage, sizeof(a.storage), S::about_storage_card_size, uistr::decimal(bytes / 1e9, 1));
       } else {
-        snprintf(a.storage, sizeof(a.storage), "microSD card");  // its CSD didn't say (the driver's 0)
+        uistr::trf(a.storage, sizeof(a.storage), S::about_storage_card);  // its CSD didn't say (the driver's 0)
       }
     } else {
-      snprintf(a.storage, sizeof(a.storage), "Internal flash, %.1f MB (no card)", bytes / 1e6);
+      uistr::trf(a.storage, sizeof(a.storage), S::about_storage_flash, uistr::decimal(bytes / 1e6, 1));
     }
     snprintf(a.version, sizeof(a.version), "%s", version::player());
     snprintf(a.built, sizeof(a.built), "%s", version::commitDate());
     snprintf(a.elf, sizeof(a.elf), "%s", version::elfSha());
     BtSink& bt = audio.bluetooth();
     const BtLink l = bt.link();
-    snprintf(a.bluetooth, sizeof(a.bluetooth), "%s%s", l.remembered ? (bt.deviceName()[0] ? bt.deviceName() : "paired") : "none paired",
-             bt.connected() ? ", connected" : "");
+    const char* paired = !l.remembered          ? uistr::tr(S::about_headphones_none)
+                         : bt.deviceName()[0] ? bt.deviceName()
+                                              : uistr::tr(S::about_headphones_paired);
+    if (bt.connected()) {
+      uistr::trf(a.bluetooth, sizeof(a.bluetooth), S::about_headphones_connected, paired);
+    } else {
+      snprintf(a.bluetooth, sizeof(a.bluetooth), "%s", paired);
+    }
     powerchoice::aboutText(PowerSettings::cpuBootMhz(), powerSettings.btChoice(), a.power, sizeof(a.power));
     const diag::Heap h = diag::heap();
     a.ramFree = h.internalFree;
@@ -941,6 +967,21 @@ struct MainUiHost : ui::UiHost {
   }
   void setBrightness(int choice) override { screen.setBrightness(choice); }
   void wakeScreen(const char* why) override { screen.wake(why); }
+  // Auto DJ (app/AutoDj). Its own [dj] lines say what each did. The Plays
+  // (the button, "Auto DJ from here") are the listener's taps; behind the
+  // library update's fence they wait (the queue is the build's).
+  bool autoDjSetOn(bool on) override { return autoDj && autoDj->setOn(on); }
+  bool autoDjSetMode(autodj::Mode m) override { return autoDj && autoDj->setMode(m); }
+  bool autoDjSetFloor(uint8_t pct) override { return autoDj && autoDj->setFloor(pct); }
+  bool autoDjSetMatch(bool tempo, bool key) override { return autoDj && autoDj->setMatch(tempo, key); }
+  autodjview::Started autoDjStart() override {
+    if (!autoDj) return autodjview::Started::NoIndex;  // (no PSRAM for it at boot)
+    if (frozen.on) return autodjview::Started::Refused;
+    return autoDj->start();
+  }
+  bool autoDjFromHere(uint32_t track) override { return autoDj && !frozen.on && autoDj->fromHere(track); }
+  bool autoDjHasNeighbours(uint32_t track) override { return autoDj && !frozen.on && autoDj->hasNeighbours(track); }
+  bool autoDjMarked(uint32_t key) const override { return autoDj && autoDj->marked(key); }
 };
 static MainUiHost uiHost;
 
@@ -1763,6 +1804,10 @@ static bool pairingUnderWay();
 static HostLink::Busy vizBusy() {
   if (!userInterface || !userInterface->started()) return HostLink::Busy::Ui;  // the start-up screen
   if (screenTaken() || uiHeld || userInterface->suspended()) return HostLink::Busy::Screen;
+  // A computer's @identify banner (5 s at most): under it the UI stops the
+  // dancer as in the dark, and vizDanceGone() would end the session in the
+  // pass it began (@bye dance). The sender's retry comes after it.
+  if (userInterface->identifying()) return HostLink::Busy::Screen;
   if (pairingUnderWay()) return HostLink::Busy::Pairing;
   if (!danceMode.ready()) return HostLink::Busy::Dance;  // no PSRAM for the dancer: for good
   return HostLink::Busy::None;
@@ -1790,7 +1835,85 @@ static bool vizEnter() {
 // stops then, and comes back when it wakes (host mode wakes it, keeps it lit).
 static bool vizDanceGone() { return !danceMode.active() && !(userInterface && userInterface->dark()); }
 
-static UsbViz usbViz(danceMode, {vizBusy, vizEnter, vizDanceGone});
+// ---- the computer's questions (docs/HOST-STATUS.md; app/HostQuery) ----
+
+static bool hostModeOn();  // (the visualizer's session: below)
+
+// What @status says, from what the firmware holds (the free space is
+// app/HostQuery's: storage/CardSpace). No card I/O, no lock: the card's
+// size is the CSD's kept since the mount (About's), the battery the UI's
+// reading (every 10 s), the library the index's count.
+static void hostFacts(hoststatus::Facts& f) {
+  using hoststatus::Card;
+  f.fw = version::appDesc();
+  f.elf = version::elfSha();
+  if (storage.onCard()) {
+    f.card = cardspace::card();
+    f.sizeBytes = storage.totalBytes();
+  } else {
+    switch (storage.cardKind()) {
+      case cardformat::Kind::ExFat: f.card = Card::ExFat; break;
+      case cardformat::Kind::Ntfs: f.card = Card::Ntfs; break;
+      case cardformat::Kind::Gpt: f.card = Card::Gpt; break;
+      case cardformat::Kind::Other: f.card = Card::Other; break;
+      case cardformat::Kind::Unreadable: f.card = storage.cardAnswered() ? Card::Unreadable : Card::None; break;
+    }
+    f.sizeBytes = storage.unmountedBytes();
+  }
+  // Behind the library update's fence the index is hidden: "building".
+  const LibraryIndex* index = library.index();
+  if (!storage.onCard()) {
+    f.tracks = hoststatus::Tracks::None;
+  } else if (frozen.on) {
+    f.tracks = hoststatus::Tracks::Building;
+  } else if (index && index->ready()) {
+    f.tracks = hoststatus::Tracks::Count;
+    f.trackCount = index->trackCount();
+  }
+  f.battery = uiHost.batteryRaw;  // (-1 until the UI's first reading)
+  const PlayState s = player.state();
+  f.state = hostModeOn()                                         ? hoststatus::State::Host
+            : s == PlayState::Playing || s == PlayState::Waiting ? hoststatus::State::Playing
+            : s == PlayState::Paused                             ? hoststatus::State::Paused
+                                                                 : hoststatus::State::Idle;
+  // The paired headphones' name (theirs once linked, else the one saved at
+  // the pairing: BtSink::shownName()); none with nothing paired.
+  BtSink& bt = audio.bluetooth();
+  f.bt = bt.link().remembered ? bt.shownName() : nullptr;
+}
+
+// Why @count can't start, or go on, now: music (a play waiting for the
+// headphones, a console test track too), the library update (its build
+// behind the fence, then its save).
+static const char* countBlocked() {
+  const PlayState s = player.state();
+  if (s == PlayState::Playing || s == PlayState::Waiting || audio.isPlaying()) return "playing";
+  if (frozen.on || (cardTasks && cardTasks->updating())) return "library";
+  return nullptr;
+}
+
+// @identify: the banner (ui/Ui::identify()), once the panel is awake.
+static char identifyPending[hoststatus::kMaxLabel + 1] = "";
+static const char* identifyBoard(const char* label) {
+  if (!userInterface || !userInterface->started()) return "ui";  // the start-up screen
+  if (screenTaken() || uiHeld || userInterface->suspended()) return "screen";
+  if (hostModeOn()) return "viz";  // (the dancer is on screen for the computer already)
+  Serial.printf("[host] identify: \"%s\" and \"%s\" on the screen for %lu s\n", uitext::kIdentifyTitle, label,
+                static_cast<unsigned long>(ui::Ui::kIdentifyMs / 1000));
+  screen.wake("a computer's @identify");
+  if (screen.off() || screen.panelAsleep() || userInterface->dark()) {
+    snprintf(identifyPending, sizeof(identifyPending), "%s", label);  // loop(): once it is awake
+    return nullptr;
+  }
+  userInterface->identify(label, millis());
+  return nullptr;
+}
+
+static HostQuery hostQuery({hostFacts, countBlocked, identifyBoard});
+
+static UsbViz usbViz(danceMode, hostQuery, {vizBusy, vizEnter, vizDanceGone});
+
+static bool hostModeOn() { return usbViz.active(); }
 
 // (Behind the library update's fence, the commands that read the queue or
 // the library wait: waitsForLibrary(), cardBusyForConsole().)
@@ -1932,6 +2055,15 @@ static SerialConsole console({
     },
     opusCommand,
     [](const char* a) { danceMode.danceCommand(a); },
+    [](const char* a) {
+      if (!autoDj) {
+        Serial.println("[dj] Auto DJ isn't running (no PSRAM at boot)");
+        return;
+      }
+      autoDj->command(a, autoDjEnv(millis()));
+      // (Dp's pick can take the listener's undo: the toast's Undo goes.)
+      if (autoDj->takeUndoDropped() && userInterface) userInterface->queueUndoDropped();
+    },
     [](char* line, HostLine::Byte kind) { usbViz.onLine(line, kind); },
 });
 
@@ -1950,7 +2082,7 @@ static void handleButton(const InputEvent& e) {
       // has touched the glass since. A tap on the glass, then B plays.
       Serial.println("[button] B click: not played: the screen woke from off and nothing touched the glass since "
                      "(a pocket?); the speaker would play out loud");
-      if (userInterface) userInterface->warn(uitext::kTouchFirst);
+      if (userInterface) userInterface->warn(uistr::tr(uistr::S::toast_touch_first));
       return;
     }
     Serial.printf("[button] %c click: nothing to play\n", b);
@@ -2260,7 +2392,7 @@ static void stepPlayGate(uint32_t now) {
     case PlayGate::Do::NotPaired:
       // Nothing to wait for: paused, the output left as it is, no scan.
       Serial.println("[play] no headphones paired: not waiting (paused); pair them on Output > Pair new headphones");
-      if (userInterface) userInterface->warn(uitext::kNoHeadphones);
+      if (userInterface) userInterface->warn(uistr::tr(uistr::S::toast_no_headphones));
       break;
     case PlayGate::Do::Ended:
       // Cancelled (or the speaker, or stopped): a link that comes later
@@ -2312,7 +2444,7 @@ static uint32_t trackLeftMs() {
 
 static void printSleep() {
   const uint32_t now = millis();
-  char row[16];
+  char row[48];  // (AppState::sleepRow's: a translation's row whole)
   sleepTimer.rowText(now, row, sizeof(row));
   const uint16_t target = audio.fadeTargetQ15(), level = audio.fadeLevelQ15();
   char fade[40] = "none";
@@ -2330,18 +2462,16 @@ static void printSleep() {
 // SleepSheet's 0-4 (15-90 min), kTrack, kAlbum, kQueue, kExtend, kTurnOff.
 static void chooseSleep(int pick) {
   const uint32_t now = millis();
-  char text[48];
+  char text[96];  // (AppState::sleepTitle's: the sleep.title_* texts whole in any language)
   if (pick >= 0 && pick < SleepTimer::kTimedChoices) {
     sleepTimer.setTimed(SleepTimer::kMinutes[pick] * 60000u, now);
-    snprintf(text, sizeof(text), "Sleep timer: %lu min", (unsigned long)SleepTimer::kMinutes[pick]);
+    uistr::trf(text, sizeof(text), uistr::S::sleep_toast_minutes, SleepTimer::kMinutes[pick]);
   } else if (pick >= ui::SleepSheet::kTrack && pick <= ui::SleepSheet::kQueue) {
     const SleepTimer::Choice c = pick == ui::SleepSheet::kTrack   ? SleepTimer::Choice::EndOfTrack
                                  : pick == ui::SleepSheet::kAlbum ? SleepTimer::Choice::EndOfAlbum
                                                                   : SleepTimer::Choice::EndOfQueue;
     sleepTimer.setEnd(c);
-    snprintf(text, sizeof(text), "Sleep timer: %s", c == SleepTimer::Choice::EndOfTrack   ? "end of track"
-                                                    : c == SleepTimer::Choice::EndOfAlbum ? "end of album"
-                                                                                          : "end of queue");
+    SleepTimer::endText(c, text, sizeof(text));
     Serial.printf("[sleep] pauses at %s\n", sleepEndName(c));
   } else if (pick == ui::SleepSheet::kExtend) {
     if (!sleepTimer.extend(now, trackLeftMs())) {
@@ -2352,12 +2482,10 @@ static void chooseSleep(int pick) {
                                                                    : "no timer runs");
       return;
     }
-    char left[24];
-    sleepTimer.titleText(now, left, sizeof(left));
-    snprintf(text, sizeof(text), "Sleep timer: %s", left);
+    sleepTimer.titleText(now, text, sizeof(text));
   } else if (pick == ui::SleepSheet::kTurnOff) {
     sleepTimer.cancel();
-    snprintf(text, sizeof(text), "Sleep timer off");
+    uistr::trf(text, sizeof(text), uistr::S::sleep_toast_off);
   } else {
     return;
   }
@@ -2553,7 +2681,9 @@ static void stepIdle(uint32_t now, bool input) {
   in.pairing = pairingUnderWay();
   in.queueWrite = queueStore.busy();
   in.libraryWrite = cardTasks && cardTasks->libraryWrite();
-  in.busy = screenTaken() || usbViz.active();  // (the visualizer: someone is watching)
+  // (The visualizer: someone is watching. A count a computer asked for:
+  // it waits for the answer.)
+  in.busy = screenTaken() || usbViz.active() || hostQuery.counting();
   in.linked = bt.linkUp();  // (until the disconnect is done: connected() drops as it starts)
   IdlePolicy& p = idlePower.policy();
   const IdlePolicy::Phase before = p.phase();
@@ -2648,7 +2778,7 @@ bool MainUiHost::setCpuSpeed(uint16_t mhz) {
   // would cut a save.
   if (restart && cardTasks && cardTasks->libraryWrite()) {
     Serial.printf("[power] CPU speed %u MHz: not now, the library is updating (nothing saved)\n", (unsigned)mhz);
-    if (userInterface) userInterface->note(uitext::kUpdatingWait, 1500);
+    if (userInterface) userInterface->note(uistr::tr(uistr::S::library_updating_wait), 1500);
     return false;
   }
   const uint16_t before = powerSettings.cpuSaved();
@@ -2742,7 +2872,7 @@ static void stepCardGuard() {
     Serial.printf("[card] ANOTHER CARD in the slot (FatFs mounted it again: %s): every write to it refused; the card "
                   "jobs and the queue's saves stop; restarting to use it\n",
                   id);
-    if (userInterface) userInterface->note(uitext::kAnotherCard, 3000);
+    if (userInterface) userInterface->note(uistr::tr(uistr::S::card_another), 3000);
     restartAtMs = millis() + 1200;  // the toast first
     return;
   }
@@ -2761,7 +2891,7 @@ static void stepCardGuard() {
     Serial.println("[card] the card answered again (the same card) with a card job under way: the queue saved, "
                    "restarting");
     queueStore.flushNow();
-    if (userInterface) userInterface->note(uitext::kCardBack, 3000);
+    if (userInterface) userInterface->note(uistr::tr(uistr::S::card_back), 3000);
     restartAtMs = millis() + 1200;
     return;
   }
@@ -2772,6 +2902,79 @@ static void stepCardGuard() {
                 library.store()->device().present ? "present" : "none", (unsigned long)o.chunks,
                 begun ? "begun again" : "COULDN'T begin again",
                 library.store()->tmpKept() ? "; tags.tmp KEPT: alone and unchecked (no PSRAM for its check)" : "");
+}
+
+// ---- Auto DJ (app/AutoDj; the engine design's 2.3, 3.2) ----
+
+// The decoder fills the ring from empty after a start or a skip: flat out
+// until it holds 500 ms (Core2AudioBackend's pacer), above the loop on its
+// core. Auto DJ's due pick waits for that (autodj::Env::refilling: a pick
+// timed across it measured the decoder, 108 ms on 2026-10-13), until the
+// track's source has ended (one shorter than 500 ms: a jingle as the
+// queue's last entry would end before the pick), and at most
+// kRefillWaitMs after the start was seen (one that never fills: a file
+// that didn't open). A gapless join is no start: nothing waits then.
+static constexpr uint32_t kRefillWaitMs = 1500;
+static bool decoderRefilling(uint32_t now) {
+  static uint32_t seq = 0, seenMs = 0;
+  const Core2AudioBackend::StartTiming t = audio.startTiming();
+  if (t.seq != seq) {
+    seq = t.seq;
+    seenMs = now;
+  }
+  return t.ring500Ms < 0 && now - seenMs < kRefillWaitMs && !audio.heardSourceEnded();
+}
+
+// The library update's memory check (LibraryUpdate::setGiveBack()): a new
+// track table that doesn't fit the largest free block while Auto DJ's join
+// holds blocks at its top (AutoDjJoin's placement: those that fit no
+// smaller free block): the join given back, PSRAM measured again. It joins
+// again after the update's Live, or at once when the update waits for the
+// next boot after all.
+static size_t autoDjGiveBack(void*, size_t* psramFree, size_t* psramLargest) {
+  if (!autoDj) return 0;
+  const size_t before = *psramLargest;
+  const size_t given = autoDj->giveBack();
+  if (!given) return 0;
+  *psramFree = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+  *psramLargest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+  Serial.printf("[dj] the library update's memory check: the join given back (%u B): PSRAM's largest free block %u B "
+                "-> %u B (up to %u B: the join's blocks at its top); it joins again after the update\n",
+                (unsigned)given, (unsigned)before, (unsigned)*psramLargest,
+                (unsigned)(before + autoDj->joinTopBytes()));
+  return given;
+}
+
+static AutoDj::Env autoDjEnv(uint32_t now) {
+  AutoDj::Env e;
+  e.nowMs = now;
+  e.audioPlaying = audio.isPlaying();
+  e.positionKnown = audio.positionKnown();
+  e.trackSeq = audio.trackSeq();
+  e.positionMs = audio.positionMs();
+  e.cardHeld = cardHeld;
+  e.restartSet = restartAtMs != 0 || cpuRestartMhz != 0;
+  e.sleepEndOfQueue = sleepTimer.running() && sleepTimer.choice() == SleepTimer::Choice::EndOfQueue;
+  e.listMoving = userInterface && userInterface->listMoving();
+  e.uiStarted = !userInterface || userInterface->started();
+  e.refilling = decoderRefilling(now);
+  return e;
+}
+
+// Every loop pass, right after the card's guard (a remount is seen before
+// any read of the index) and before the card's step (a pick lands before
+// the update step can raise its fence in the same pass; its owed() holds
+// that fence while the index joins): a remount, a slice of the join, the
+// trigger and a pick (or a slot read ahead), a long D command's step.
+static void stepAutoDj(uint32_t now) {
+  if (!autoDj) return;
+  autoDj->step(autoDjEnv(now));
+  // Its pick took the listener's undo: an Undo toast still up goes.
+  if (autoDj->takeUndoDropped() && userInterface) userInterface->queueUndoDropped();
+  // What it has to say on the screen (a cued pick, the failure pause, a
+  // seed with no neighbours, picks at random): a toast.
+  const uint8_t news = autoDj->takeNews();
+  if (news && userInterface) userInterface->autoDjNews(news);
 }
 
 // ---- the card worker (docs/METADATA.md 3.3.4, 3.4.2) ----
@@ -2811,12 +3014,18 @@ static bool enterFence() {
   const LibraryIndex* index = library.index();
   f.libraryTracks = index && index->ready() ? index->trackCount() : 0;
   fencePsramBefore = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+  // Auto DJ's DJ marks: their positions while the queue is here.
+  if (autoDj) autoDj->beforeFence();
   // 1. queue.txt is the queue; its memory the build's.
   if (!queueStore.remapBegin(library.update()->spare())) return false;
   frozen = f;
   // 2. The readers: the names kept, the index hidden.
   library.fence(f.trackId);
   if (userInterface) userInterface->thumbs().lend();  // 3. Thumbs' pools (about 315 KB)
+  // Auto DJ's join (its maps hold the old index's ids; a join under way
+  // reads it): given back before the index goes (counted in the memory
+  // check's alsoFreed); it joins again after the fence.
+  const size_t djFreed = autoDj ? autoDj->fence() : 0;
   // 3. The old index (and the scan's memory); then the UI, which sees none.
   cardTasks->fenceUp();
   // The fence's own lowest PSRAM free (leaveFence()'s "lowest", the
@@ -2828,9 +3037,9 @@ static bool enterFence() {
   fenceLowWindow = diag::beginLowWindow();
   if (userInterface) userInterface->libraryUpdating();
   Serial.printf("[lib] the update step (%s): the fence is up; the build on the card worker (the loop goes on); PSRAM "
-                "free %u B before, %u B now\n",
+                "free %u B before, %u B now (Auto DJ's join gave back %u B)\n",
                 library.update()->why(), (unsigned)fencePsramBefore,
-                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)djFreed);
   return true;
 }
 
@@ -2861,6 +3070,9 @@ static void leaveFence() {
   // The same entry under a new key (the read back's): its time stays known
   // (the sleep timer's, the next update step's safe point).
   if (queueStore.remapFinish(s.built)) sleepEntry.rekey(queue.currentKey());
+  // Auto DJ: its DJ marks and its place in the queue under the new keys;
+  // the join again on the new index (its next steps).
+  if (autoDj) autoDj->live();
   const LibraryIndex* index = library.index();
   durations.reset(index && index->ready() ? index->trackCount() : 0);
   if (userInterface) {
@@ -2896,7 +3108,11 @@ static void stepCard(uint32_t now, bool input) {
   ScanScheduler::In in;
   in.nowMs = now;
   in.listMoving = userInterface && userInterface->listMoving();
-  in.input = input;
+  // A list moving counts as input too: the walk, the scan and a compaction
+  // then wait ScanScheduler::Config::inputQuietMs after a fling comes to
+  // rest, so a listener flicking through a long list doesn't get a slice
+  // of the card between flicks (a cover isn't held by that wait).
+  in.input = input || in.listMoving;
   in.playing = player.state() == PlayState::Playing;
   in.ringMs = audio.bufferedMsNow();
   in.ringCapacityMs = audio.ringCapacityMs();
@@ -2932,7 +3148,11 @@ static void stepCard(uint32_t now, bool input) {
   env.waiting = player.state() == PlayState::Waiting || cpuRestartMhz != 0;
   env.trackLeftMs = trackLeftMs();
   env.seekSeq = player.seeks();
-  env.alsoFreed = queue.memoryBytes() + (userInterface ? userInterface->thumbs().poolBytes() : 0);
+  env.alsoFreed = queue.memoryBytes() + queueStore.savingBytes() +
+                  (userInterface ? userInterface->thumbs().poolBytes() : 0) + (autoDj ? autoDj->fenceBytes() : 0);
+  // A pick owed while Auto DJ's index joins: no fence until it lands
+  // (autodj::decide(), this pass's: stepAutoDj() ran before).
+  env.autoDjOwed = autoDj && autoDj->owed();
   cardTasks->loop(in, src, userInterface ? &userInterface->thumbs() : nullptr,
                   userInterface && userInterface->coversAllowed(), env);
   switch (cardTasks->takeAct()) {
@@ -3019,6 +3239,28 @@ static void logNvs() {
   }
 }
 
+// The libraries' log lines (log_w()/log_e(), and ESP_LOGW/ESP_LOGE in
+// Arduino code, which the core turns into those: ESP32-A2DP's connect_to(),
+// the SD driver, Preferences) go out through the ROM's printf, straight
+// into the UART's FIFO, and then the Arduino core spins, with no yield,
+// until the line is idle. The console prints through the UART driver, so
+// during a long list printed in one go (ql, l) the line never goes idle: on
+// 2026-10-11 a page of the headphones during ql held Bluetooth's task on
+// CPU 0 in that spin past 5 s, and the task watchdog reset the board. With
+// the core's debug UART off, log lines skip the spin;
+// turning it off also unhooks the ROM printf's output, so put back the
+// ROM's own UART writer, the one the IDF installed at boot and every line
+// went through until now (in ROM: fine with the flash cache off, no IRAM).
+// The lines come out byte for byte as before; each character still waits
+// for room in the FIFO (87 us at 115200 under a flood), never for the line.
+// After M5.begin(): setDebugOutput() does nothing before Serial starts.
+// Nothing turns it on again (Serial.begin() leaves it; Serial.end() resets
+// it only while it is Serial's). docs/ARCHITECTURE.md, Tasks and cores.
+static void stopLogLineWait() {
+  Serial.setDebugOutput(false);
+  esp_rom_install_uart_printf();
+}
+
 // The build leaves the rev-1 PSRAM cache workaround out of the code it
 // compiles (tools/no_psram_fix.py, docs/ENERGY.md section 5, P3a), which is
 // safe only from revision 3 (every Core2 is an ESP32-D0WDQ6-V3), and the
@@ -3062,12 +3304,21 @@ void setup() {
   diag::restartLows();
   ensureNvs();  // before the first Preferences read
   nvsschema::check();  // the layout's number, migrated if older, before anything reads a key
+  uilang::begin();     // the UI's language, before any text is drawn (the boot screen's hint)
   // The CPU speed saved (or the default), before Bluetooth starts.
   PowerSettings::applyBootClock();
   // The computer's visualizer lines (docs/USB-VISUALIZER.md: ~3.7 KB/s)
   // must outlast a slow loop pass: 1 KB (270 ms of them) instead of 256 B.
   // Only before begin(), which M5.begin() calls.
   Serial.setRxBufferSize(SerialConsole::kRxBuffer);
+  // And a transmit buffer: without one every Serial.print blocks the loop
+  // until its bytes are in the UART's 128-byte FIFO (87 us a byte at
+  // 115200: a tap's two [touch] lines and its "[ui] library: play ..."
+  // held the loop 20-30 ms, a cover's line 17 ms, in the middle of
+  // frames). With one the UART's interrupt drains it, and a print waits
+  // only when 2 KB (180 ms of output) are already queued: the console's
+  // long dumps (ql, l) still pace themselves on the line.
+  Serial.setTxBufferSize(2048);
   auto cfg = M5.config();
   cfg.serial_baudrate = 115200;  // M5Unified leaves Serial off unless asked
   cfg.internal_mic = false;      // the mic shares GPIO0 with the speaker's I2S clock
@@ -3076,18 +3327,21 @@ void setup() {
   // 9, still to check by ear on battery). The console's Pe1 turns it on.
   cfg.output_power = false;
   M5.begin(cfg);
+  stopLogLineWait();  // before anything can print for long (the console, Bluetooth)
   // Before the banner (a sender waits for it): was a computer's line under
   // way as Serial started? (HostLine's Sync: its tail is no key.)
   console.begin();
   Serial.printf("\nmstream-mp3-player %s (commit %s, %s), ELF %s\n", version::player(),
                 version::commit()[0] ? version::commit() : "none", version::commitDate(), version::elfSha());
-  // The licence notice once (GPLv3 section 5(d); About shows it too).
-  Serial.printf("Copyright (C) 2026 IrosTheBeggar. Licence: %s.\n", uitext::kAboutLicence);
+  // The licence notice once (GPLv3 section 5(d); About shows it too, in the
+  // UI's language: about.licence).
+  Serial.printf("Copyright (C) 2026 IrosTheBeggar. Licence: %s.\n", "GPL-3.0-or-later, no warranty");
   Serial.printf("Source, licence texts and third-party notices: %s\n", uitext::kSourceUrl);
   board::requireCore2();  // another board: says so and stops here, before the card, audio and Bluetooth
   diag::logRunningPartition();  // the flash layout (console L: the whole table)
   logNvs();  // only when NVS needed ensureNvs()
   nvsschema::log();
+  uilang::log();
   powerSettings.begin();  // what the boot clock is, the Bluetooth power, and whether it restarted for the speed
   board::applyBootPower();  // the IMU suspended: nothing reads it
   diag::logHeap("boot");
@@ -3162,7 +3416,30 @@ void setup() {
       if (cardTasks) cardTasks->resetStats();
     };
     j.idle = [] { return !cardTasks || cardTasks->waitIdle(10000); };
+    // gs reads the records a piece a loop pass: the step under way taken
+    // in first, no new compaction meanwhile and D not read while one is
+    // under way (gt reads nothing then: it says so), no piece while a list
+    // moves on a lit screen (TagConsole reads the card's guard's remounts
+    // itself).
+    j.hold = [](tagcheck::Hold h) {
+      if (cardTasks) cardTasks->holdForConsole(h);
+    };
+    j.busy = [] { return cardTasks && cardTasks->worker().busy(); };
+    j.replacing = [] { return cardTasks && cardTasks->replacing(); };
+    j.compactions = []() -> uint32_t { return cardTasks ? cardTasks->compactions() : 0; };
+    j.listMoving = [] { return userInterface && userInterface->listMoving(); };
+    // (CardTasks' ScanScheduler::In::dark: nothing drawn.)
+    j.dark = [] { return !userInterface || !userInterface->coversAllowed(); };
     tc->setJobs(j);
+  }
+  // Auto DJ: its settings, and the index the card's root names, opened and
+  // checked (the join after the UI's first frame, in loop()).
+  autoDj = psramNew<AutoDj>(library, player);
+  if (autoDj) {
+    autoDj->begin();
+    if (library.update()) library.update()->setGiveBack(autoDjGiveBack, nullptr);
+  } else {
+    Serial.println("[dj] no PSRAM for Auto DJ: off for this boot");
   }
   Serial.printf("[lib] library + queue: internal RAM %lu B free before, %lu B after\n",
                 (unsigned long)freeBeforeLibrary, (unsigned long)diag::heap().internalFree);
@@ -3215,7 +3492,7 @@ void setup() {
   // to wait for (the fonts are BootScreen::begin()'s). A hold counts from
   // here on: loop() reads the glass.
   if (userInterface) {
-    bootScreen.hint(uitext::kBootTouchHint);
+    bootScreen.hint(uistr::tr(uistr::S::boot_touch_hint));
     bootHintMs = millis();
   }
   diag::logHeap("ui");
@@ -3226,9 +3503,11 @@ void setup() {
                  "a touch calibration (a5-a9 fewer crosses, ac check, ab first-boot check, ab0 ask it again, "
                  "as status, ad remove it, ah0/1 haptics, ar0/1 rail ticks), "
                  "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes), "
-                 "D dancers (D the cast, Dc<id> choose, Dl moves, Dm<move> next run, Df<move>.<step>[m] freeze / Df off, "
-                 "Dv move log, Dg<genre>, Ds<spot>); "
-                 "ui the UI's navigation (ui0-ui4 tab, uib back, uic coach cards, uit/uih/uis/uid/uip scripted finger, "
+                 "M dancers (M the cast, Mc<id> choose, Ml moves, Mm<move> next run, Mf<move>.<step>[m] freeze / Mf off, "
+                 "Mv move log, Mg<genre>, Ms<spot>); "
+                 "ui the UI's navigation (ui0-ui4 tab, uib back, uic coach cards, uiL<tag> language (uiL the list, "
+                 "uiL- forget it), uiP the first boot's language picker, uit/uih/uis/uid/uip scripted finger, "
+                 "uir0/uir1 the A-Z rail's scrub as before 0.12.0 / paced (uir: which), "
                  "uk1/uk2/uk0 the scripted finger on a skewed panel (uk2 with jitter) or not, "
                  "uiF<c/s/p/r/l/n/f/t/g/u/w> show a faked Bluetooth, no-card, exFAT/NTFS/GPT/can't-read card or waiting state "
                  "(uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
@@ -3244,7 +3523,9 @@ void setup() {
                  "the cut's stress test); O Opus (O status, Ol/Oi/Oh the decoder's state in the pinned block / internal "
                  "RAM / high PSRAM, Ot1/Ot0 the converter's table copy in the pinned PSRAM block (the default) / "
                  "internal RAM); "
-                 "@ lines: a computer's (the USB visualizer, docs/USB-VISUALIZER.md), never commands");
+                 "D Auto DJ (D status, D0/D1 off/on, D? its commands); "
+                 "@ lines: a computer's (the USB visualizer, docs/USB-VISUALIZER.md; @status, @count, @identify, "
+                 "docs/HOST-STATUS.md), never commands");
   // PSRAM's lowest from here is the running player's ([stats]' pmin=, the
   // [heap] lines' min=, the update step's line beside its fence's own):
   // setup()'s (the boot's library build among it) and the init's, once.
@@ -3283,10 +3564,12 @@ void loop() {
   const bool anyInput = idleInput || touchedThisPass || screen.takeInput();
   stepIdle(now, anyInput);
   powerSettings.update(audio.bluetooth().connected());
+  nvslater::loop(now);  // settings the taps changed: written once they rest
   stepCpuRestart(now);
   audio.loop(now);
   powerLab.loop(now);
   stepCardGuard();
+  stepAutoDj(now);
   if (!cardHeld) queueStore.loop(now);
   // What a track's length is, once the backend knows it (read from the
   // file; or its estimate 20 s in, exact for a constant bitrate): the
@@ -3364,9 +3647,14 @@ void loop() {
   if (userInterface) {
     // The first boot with nothing calibrated: the touch check, before the
     // UI (and so before its tips). The UI waits for it, and for a finger
-    // resting on the start-up screen (the rescue hold).
+    // resting on the start-up screen (the rescue hold). A fresh unit picks
+    // its language first (the UI starts on its picker: rows hit by y, as
+    // the check's), and the check follows the pick, in that language,
+    // before the tips (Ui::loop() shows them once the UI is back).
     const bool bootShown = now >= kBootScreenMs && now - bootHintMs >= kRescueWindowMs;
-    if (!userInterface->started() && bootShown && !screenTaken() && !rescueFinger && !touchCheckOffered) {
+    const bool checkNow = !touchCheckOffered && !screenTaken() && !userInterface->languageFirst() &&
+                          (userInterface->started() || (bootShown && !rescueFinger));
+    if (checkNow) {
       touchCheckOffered = true;
       if (touchcheck::due(input.calibrated(), input.touchCheckAnswered())) {
         openCalibration(CalibrationScreen::Start::FirstBoot);
@@ -3377,7 +3665,7 @@ void loop() {
       if (cardTasks) cardTasks->armWalk(now);  // the validation walk 2 s after the first frame (3.2.3)
       // It turned itself off last time, or restarted for a new CPU speed:
       // say so, once (stopped or paused where it was).
-      char note[48];
+      char note[96];  // (settings.idle_off_note_*, settings.cpu_boot_note: i18n/en.json's "bytes")
       if (idlePower.takeBootNote(note, sizeof(note)) || powerSettings.takeBootNote(note, sizeof(note))) {
         userInterface->note(note, 6000);
       }
@@ -3387,6 +3675,9 @@ void loop() {
   if (!cardHeld) stepCard(now, anyInput);
   // The computer's visualizer: its timeout, USB unplugged, the Dance tab gone.
   usbViz.loop(now, screen.externalPower());
+  // A count of the card's free space a computer asked for: a piece of the
+  // FAT a pass (docs/HOST-STATUS.md).
+  hostQuery.loop(now);
   shot.poll();
   // The screen, last: the countdown, and what keeps it lit (a screen of its
   // own, a play waiting for the headphones, a pairing, a computer driving
@@ -3404,7 +3695,8 @@ void loop() {
     const BtLink link = audio.bluetooth().link();
     // (A pairing under way, not one whose failure the card still shows.)
     const bool keepLit = screenTaken() || player.state() == PlayState::Waiting ||
-                         link.phase == BtLink::Phase::Pairing || btSession.pairingUnderWay() || usbViz.active();
+                         link.phase == BtLink::Phase::Pairing || btSession.pairingUnderWay() || usbViz.active() ||
+                         identifyPending[0] || (userInterface && userInterface->identifying());
     using Hold = ScreenControl::Hold;
     const Hold hold = idlePower.policy().phase() == IdlePolicy::Phase::Warning || sleepTimer.fadeCountingDown()
                           ? Hold::Toast
@@ -3415,6 +3707,12 @@ void loop() {
   // A calibration asked for in the dark: now that the panel is awake.
   if (calibrationPending && !screen.off() && !screen.panelAsleep()) {
     openCalibration(pendingHow, pendingTargets);
+  }
+  // A computer's @identify in the dark, likewise (dropped if another screen
+  // took the display meanwhile).
+  if (identifyPending[0] && !screen.off() && !screen.panelAsleep() && userInterface && !userInterface->dark()) {
+    if (!screenTaken() && !uiHeld && !usbViz.active()) userInterface->identify(identifyPending, now);
+    identifyPending[0] = 0;
   }
 
   static uint32_t lastStats = 0;
@@ -3432,5 +3730,10 @@ void loop() {
   // says so: nothing to draw, touches only wake; ENERGY.md item 9).
   // (A power measurement's Pd stretches the wait while nothing animates.)
   const uint32_t uiIdleMs = userInterface ? userInterface->idleMs(millis()) : screen.off() ? 20 : 5;
-  delay(powerLab.loopDelayMs(uiIdleMs, danceMode.active()));
+  uint32_t loopDelayMs = powerLab.loopDelayMs(uiIdleMs, danceMode.active());
+  // Auto DJ's join under way (a second or two): a short wait, as its slices
+  // come a pass at a time (2026-10-13: 20 ms a pass in the dark made a join
+  // 4.6-7.2 s).
+  if (autoDj && autoDj->joinWorking() && loopDelayMs > kJoinLoopDelayMs) loopDelayMs = kJoinLoopDelayMs;
+  delay(loopDelayMs);
 }

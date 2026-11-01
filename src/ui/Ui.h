@@ -5,12 +5,14 @@
 #include <cstdint>
 
 #include "FrameClock.h"
+#include "HostStatus.h"
 #include "InputEvent.h"
 #include "NavModel.h"
 #include "QueueModel.h"
 #include "QueueView.h"
 #include "ScrollGovernor.h"
 #include "TabBarModel.h"
+#include "UiStrings.h"
 #include "app/DanceMode.h"
 #include "app/Library.h"
 #include "ui/Input.h"
@@ -48,6 +50,12 @@
 //   - Overlays (ui/Overlays): the toast with Undo at the top of the content,
 //     the volume HUD over the tab bar, a bottom sheet, the volume sheet (per
 //     output), the A-Z jump grid, a dialog, the first-boot coach cards.
+//   - The language (docs/I18N.md, phase 3): every text is uistr's, in the
+//     language app/UiLang read at boot. Output > Language changes it at
+//     once (chooseLanguage()): everything is drawn again, and what held a
+//     text in the old one (a sheet, a dialog, the toast, the HUD) goes. A
+//     fresh unit (no language saved, the tips never seen) starts on that
+//     page as its picker, before the touch check and the tips.
 //   - States: a track that can't be played is a note (an amber toast) and
 //     a "!" on its Queue row; the headphones lost while playing are a
 //     dialog that follows their reconnecting; the pages have their empty
@@ -86,10 +94,18 @@ public:
   Ui(UiHost& host, Input& input, PlaybackController& player, QueueModel& queue, Library& library,
      DanceMode& dance);
 
-  // Fonts, sprites (PSRAM). False: can't run (no memory).
+  // Fonts, sprites (PSRAM), and whether this is a fresh unit's first boot
+  // (NVS: no language saved, the tips not seen). False: can't run (no
+  // memory).
   bool begin();
-  // The boot screen is done: draws the tab bar and the first page.
+  // The boot screen is done: draws the tab bar and the first page (the
+  // tips over it if they haven't been seen); on a fresh unit, the language
+  // picker first.
   void start(uint32_t nowMs);
+  // A fresh unit's language picker is due or up: main.cpp's first-boot
+  // touch check waits for it (then speaks the language picked), and the
+  // tips follow both.
+  bool languageFirst() const { return pickerDue_; }
   bool started() const { return started_; }
   // Every loop pass (after the input and the player).
   void loop(uint32_t nowMs);
@@ -125,10 +141,23 @@ public:
   // libraryChanged() follows.
   void libraryUpdating();
   // ---- for the card worker (app/CardTasks, ScanScheduler's inputs) ----
-  // A list moves (the page's animating(): a drag, a fling, a snap).
-  bool listMoving() const { return started_ && !suspended_ && page_ && page_->animating(); }
+  // A list moves (the page's animating(): a drag, a fling, a snap), or a
+  // finger is on a list's A-Z rail (ListView::railTouch(): a scrub, whose
+  // every position is a band drawn whole, or resting on it before one).
+  // None while its page draws no frame: the screen dark, identify()'s
+  // banner, a modal over it (loop() draws the page under none of them). The page
+  // then owes its list's frame to the wake, or to the modal's end (a
+  // reload in the dark leaves the list "animating" until then, and so does
+  // a fling a dialog that opened by itself caught: the headphones lost, a
+  // play that failed), and on 2026-10-14 that held the library update's
+  // save 260 s with the screen off. (ScanScheduler::listHolds() holds
+  // nothing for one in the dark either.)
+  bool listMoving() const {
+    return started_ && !suspended_ && !dark_ && !identifying_ && !modalUp() && page_ &&
+           (page_->animating() || (railHold_ && list_.attached() && list_.railTouch()));
+  }
   // A cover may be made now: the UI is up and lit.
-  bool coversAllowed() const { return started_ && !suspended_ && !dark_; }
+  bool coversAllowed() const { return started_ && !suspended_ && !dark_ && !identifying_; }
   // The Library tab's open album, artist or folder: its tracks (the scan's
   // "shown" source, 3.3.3); none when another page is up.
   LibraryIndex::Span shownTracks() const;
@@ -144,6 +173,20 @@ public:
   // tips: shown again at the next boot). False: the UI isn't up (not started,
   // or another screen has the display).
   bool showDance();
+  // A computer asked which board this is (@identify, docs/HOST-STATUS.md):
+  // "This one" over its label (its name for the port: COM5) on the whole
+  // screen, in a frame of the Output tab's blue, for kIdentifyMs or until
+  // a touch on the glass (which does nothing else), with one buzz
+  // (Input::identifyBuzz(): not with haptics off). Nothing else changes:
+  // the player plays on, the page and whatever is over it carry on under
+  // it with nothing drawn (as while the screen is dark: gfx's pushes go
+  // nowhere, the list's frames wait, the dancer stops), and all of it is
+  // drawn again when it goes (redrawAll(), as on a wake). Again while it is
+  // up: the new label, kIdentifyMs from now. False: the UI isn't up and lit
+  // (not started, suspended, dark: main.cpp wakes the screen first).
+  static constexpr uint32_t kIdentifyMs = 5000;
+  bool identify(const char* label, uint32_t nowMs);
+  bool identifying() const { return identifying_; }
   // The sleep timer's fade runs and the listener touched the device (or
   // the fade just began): the toast "Sleep timer: fading" with +10 min and
   // Turn off, the only controls that act on the timer. It goes when the
@@ -156,7 +199,18 @@ public:
 
   // ---- console ----
   void printState() const;     // ui
-  void command(const char* a); // ui<n>: tab n; uib back; uic the coach cards
+  // ui<n>: tab n; uib back; uic the coach cards; uiL<tag> the language
+  // (uiL the list, uiL- forget it and the tips); uiP the first boot's picker.
+  void command(const char* a);
+
+  // ---- the language ----
+  // The UI's language from now on (the Language page's tap, the console's
+  // uiL<tag>): saved (app/UiLang), and everything drawn again in it; a
+  // sheet, dialog or toast up (their texts are the old language's) goes.
+  // On the first boot's picker it goes on: Now Playing, then the touch
+  // check (main.cpp) and the tips. A language whose catalogue says so
+  // shows its machine translation's note (language.machine_note).
+  void chooseLanguage(uistr::Lang l);
 
   // ---- for the pages ----
   const AppState& state() const { return state_; }
@@ -186,6 +240,10 @@ public:
   LibraryIndex* browseIndex() { return browse_ ? browse_ : library_.index(); }
   bool browsingSynthetic() const { return browse_ != nullptr; }
   Thumbs& thumbs() { return thumbs_; }
+  // A list page's repaint() after an overlay went: the band from the rows
+  // as rendered (ListView::redraw()), unless a cover arrived under the
+  // overlay (its row is rendered again: ListView::invalidate()).
+  void repaintList();
   // `viewKey`: the queue entry (its key) of the first track an add put in
   // the queue: the toast also offers "View" (the Queue, scrolled to it),
   // and the next visit to the Queue shows and highlights what was added.
@@ -207,9 +265,10 @@ public:
                  const char* const* details = nullptr, int primary = -1, int danger = -1);
   // What a row of the sheet just opened shows as its detail, and follows
   // while it is up: the sleep timer's state ("23 min", "Fading", "Off"),
-  // shuffle ("On", "Off") or repeat ("Off", "All", "One"), from the
-  // snapshot each pass (a change from the console shows too).
-  enum class SheetFollow : uint8_t { None, Sleep, Shuffle, Repeat };
+  // shuffle ("On", "Off"), repeat ("Off", "All", "One") or Auto DJ ("On",
+  // "Off", "Waiting", "Paused"), from the snapshot each pass (a change
+  // from the console shows too).
+  enum class SheetFollow : uint8_t { None, Sleep, Shuffle, Repeat, AutoDj };
   void sheetFollows(int row, SheetFollow what);
   // A tap on row `row` of the sheet just opened doesn't close it: the
   // owner's onSheet(row) acts, the row's highlight goes and its followed
@@ -232,12 +291,34 @@ public:
   // (it scrolls to them and highlights them), and the entries whose track
   // failed (their "!").
   queueview::AddedMark& added() { return added_; }
-  const queueview::KeyRing& failedKeys() const { return failedKeys_; }
+  const queueview::FailedKeys& failedKeys() const { return failedKeys_; }
   // Shuffle all: the whole library, shuffled, playing (the empty states).
   void shuffleAll();
+  // The empty states' Auto DJ button (D4; in Shuffle all's place while the
+  // card has a usable index): a random track the index knows plays as a
+  // new queue, Auto DJ on (UiHost::autoDjStart()), and the toast says
+  // which (with Undo, as Shuffle all's: autoDjToast()); none found, or
+  // the index gone since the button was drawn, a note.
+  void autoDjStart();
+  // The toast after a Play that also switched Auto DJ on (the button,
+  // "Auto DJ from here"), with Undo: the queue as it was and, when this
+  // tap switched Auto DJ on (`switchedOn`), Auto DJ off again: the tap
+  // undone whole.
+  void autoDjToast(const char* text, bool switchedOn);
+  // What Auto DJ's loop step had to say (autodjview::News bits, main.cpp
+  // after its step): one toast (autodjview::newsToast(): a note for the
+  // failure pause). While a toast with Undo is up, it waits until that
+  // goes (the failure pause doesn't), and an Undo tapped drops it.
+  void autoDjNews(uint8_t news);
+  // The Queue's entries that are Auto DJ's (its DJ marks): never marked as
+  // a Library add, nor scrolled to (queueview::AddedMark).
+  queueview::QuietKeys djKeys() const;
   // The console's qu undid the queue's last edit: an Undo toast still up
   // goes at the next pass, and its line says so (UndoWatch).
   void queueUndone() { undoWatch_.undone(); }
+  // Auto DJ's pick dropped the queue's undo (QueueModel::appendQuiet()):
+  // the same, its line saying so.
+  void queueUndoDropped() { undoWatch_.dropped(); }
   // Try again on a no-card page: a card that mounts restarts the player
   // (a toast first); else the note, the kind's (uitext::cardMessage(kind)
   // .still: "Still no card: ...", "Still exFAT: ...", "Still GPT: ..."),
@@ -252,7 +333,11 @@ private:
   Page* pageFor(uint8_t kind);
   void showTop();
   void clearContent();
+  // The list band's hardware scroll: begun for a page that scrolls, kept
+  // on (the map invalidated) under one that doesn't; ended, the band
+  // cleared first, when a screen of its own takes the display.
   void ensureScroller(bool wanted);
+  void endScroller();
   void tapTab(NavModel::Tab t);
   // A glass event to whatever its touch landed on.
   void route(const InputEvent& e);
@@ -271,6 +356,9 @@ private:
   void applyCover();
   void updateHud(uint32_t nowMs);
   tabbar::State tabState(uint32_t nowMs) const;
+  // Where each tab's label goes in the UI's language (tabbar::labelFit()),
+  // measured once a language (not every pass).
+  tabbar::LabelFit tabLabelFit(int tab) const;
   void onDialog(int button) override;
   void trackMotion(uint32_t nowMs);
   bool modalUp() const {
@@ -295,6 +383,14 @@ private:
   uint32_t statusHash_ = 0;   // the text drawn (0: none, or to be drawn again)
   uint32_t statusAtMs_ = 0;   // when it was drawn
   void coachDone();
+  // The Output tab at its Language page as the first boot's picker (the
+  // nav only: showTop() draws it).
+  void pickerNav();
+  bool pickerOnTop() const;
+  // Every text drawn again in the language just set (chooseLanguage(), the
+  // console's uiL-).
+  void languageChanged();
+  void languageCommand(const char* a);
   void updateLostDialog();
   // A play that waited for the headphones failed (PlayGate): "Couldn't
   // reach SPYDRONE" with Play on speaker and Try again; it closes itself
@@ -319,6 +415,8 @@ private:
   ListScroller vscroll_;
   ListView list_;
   TabBar tabBar_;
+  mutable tabbar::LabelFit tabFits_[tabbar::kTabs] = {};
+  mutable int tabFitsLang_ = -1;  // the language tabFits_ were measured in (-1: none yet)
   Toast toast_;
   Hud hud_;
   Sheet sheet_;
@@ -346,9 +444,15 @@ private:
   // cleared as a dialog closes, before its owner hears the button).
   enum class OwnDialog : uint8_t { None, Lost, PlayFailed } ownDialog_ = OwnDialog::None;
   uint32_t gateFailuresSeen_ = 0;
-  bool coachDue_ = false;    // the first-boot tips haven't been seen (NVS)
+  // The first boot: the tips seen (NVS "ui"/"coach"); a fresh unit's
+  // language picker due or up; the tips (and the language's note) to show
+  // once it is done, after the touch check main.cpp opens then.
+  bool coachSeen_ = false;
+  bool pickerDue_ = false;
+  bool tipsAfterPicker_ = false;
+  bool noteAfterPicker_ = false;
   queueview::AddedMark added_;
-  queueview::KeyRing failedKeys_;
+  queueview::FailedKeys failedKeys_;
   uint32_t failuresSeen_ = 0;
 
   NowPlayingPage nowPlaying_;
@@ -365,6 +469,12 @@ private:
   bool started_ = false;
   bool suspended_ = false;
   bool dark_ = false;         // the screen is off: nothing drawn
+  // identify()'s banner is up, until identifyUntilMs_.
+  bool identifying_ = false;
+  uint32_t identifyUntilMs_ = 0;
+  char identifyLabel_[hoststatus::kMaxLabel + 1] = "";
+  void drawIdentify();
+  void endIdentify();
   bool danceWasOn_ = false;   // the dancer was up when it went dark
   // The screen woke: draw everything again.
   void redrawAll();
@@ -380,6 +490,9 @@ private:
   bool hudFollows_ = false;  // the HUD tracks the Bluetooth volume (the headphones' keys)
   uint32_t lastContent_ = 0;
   uint32_t lastUpNext_ = 0;
+  uint32_t lastDjAdds_ = 0;  // Auto DJ's appends the last pass saw (no badge flash for them)
+  uint8_t pendingNews_ = 0;  // Auto DJ's news held while an Undo toast is up (autoDjNews())
+  bool undoSwitchesDjOff_ = false;  // the toast's Undo also switches Auto DJ off (autoDjToast())
   uint32_t badgeUntilMs_ = 0;
   uint32_t nowMs_ = 0;
   // Frames, for 'ui'.
@@ -387,16 +500,42 @@ private:
   uint32_t framesWindowStart_ = 0;
   uint32_t framesInWindow_ = 0;
   float fps_ = 0;
+  // What a loop pass costs (console ui, then counted again): the longest
+  // pass and event, each part's longest, the mean pass; a pass or an
+  // event over kSlowPassUs is logged as it happens ("[ui] slow pass").
+  struct PassCost {
+    uint32_t passes = 0;
+    uint64_t passSumUs = 0;
+    uint32_t passMaxUs = 0;
+    uint32_t snapshotMaxUs = 0;
+    uint32_t tabMaxUs = 0;
+    uint32_t pageMaxUs = 0;    // the page's update(), a frame or not
+    uint32_t statusMaxUs = 0;
+    uint32_t thumbsMaxUs = 0;
+    uint32_t eventMaxUs = 0;   // onEvent(), the glass
+    InputEvent::Type eventMaxType = InputEvent::Type::None;
+  };
+  mutable PassCost cost_;  // (printState() is const: it prints and counts again)
+  bool thumbsStale_ = false;  // a cover arrived under a modal: repaintList() renders the rows again
+  // A finger on the A-Z rail holds the card worker (listMoving()); off with
+  // the scrub's pacing (console uir0: as before 0.12.0, to compare by hand).
+  bool railHold_ = true;
   // The list's current motion, for its "[ui] scroll:" line (a page without
-  // a list, Now Playing's seek bar: "[ui] scrub:").
+  // a list, Now Playing's seek bar: "[ui] scrub:"; a finger on the A-Z
+  // rail: "[ui] rail scrub:", its band frames and its rail-only frames
+  // apart).
   struct Motion {
     bool on = false;
     bool list = false;  // a list moved (else a page's own animation: a scrub)
+    bool rail = false;  // a finger was on the list's A-Z rail
     uint32_t startMs = 0;
-    uint32_t frames = 0;
+    uint32_t frames = 0;    // band frames (every frame of a scroll)
     uint64_t sumUs = 0;
     uint32_t maxUs = 0;
     uint32_t slow = 0;      // frames over kSlowFrameUs
+    uint32_t railFrames = 0;  // a scrub's frames of the rail alone
+    uint64_t railSumUs = 0;
+    uint32_t railMaxUs = 0;
     uint32_t ringMin = 0;
     uint32_t underruns = 0;
   } motion_;

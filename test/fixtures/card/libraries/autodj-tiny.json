@@ -1,0 +1,64 @@
+{
+ "format": "MPDJ",
+ "file": "autodj-tiny.bin",
+ "generation": 7,
+ "cardId": "0x5EEDC0DE0A1B2C3D",
+ "builtTime": 1790000000,
+ "tagsGeneration": 7,
+ "k": 2,
+ "selKind": 0,
+ "modelId": "synthetic-embedding",
+ "modelVersion": "1",
+ "metric": "cosine",
+ "license": "CC0-1.0",
+ "attribution": "synthetic test vectors",
+ "dim": 2,
+ "note": "Two rows of one song: every list is empty (c 0). The titles are one song only under the full lowercase with Final_Sigma (AUTODJ-INDEX.md 2.4): row cc's has 'i' + U+0307 where row dd's has U+0130, and a capital sigma ending a word where row dd's has the final sigma. The embedding values are f32(0.6) and f32(0.8), written as their shortest decimals; the second row's two files share one record.",
+ "rows": [
+  {
+   "hash": "cc000000000000000000000000000000",
+   "files": [
+    {
+     "path": "Generated Artist 31/01 - Sample Title 31.mp3",
+     "artists": [
+      "Generated Artist 31"
+     ],
+     "title": "Sample Ti̇tle 31 ΤΙΤΛΟΣ"
+    }
+   ],
+   "embedding": [
+    0.6000000238418579,
+    0.800000011920929
+   ],
+   "primaryPath": "Generated Artist 31/01 - Sample Title 31.mp3",
+   "artistNameKey": "generated artist 31",
+   "songKey": "generated artist 31|sample ti̇tle 31 τιτλος"
+  },
+  {
+   "hash": "dd000000000000000000000000000000",
+   "files": [
+    {
+     "path": "Generated Artist 31/Live/01 - Sample Title 31.mp3",
+     "artists": [
+      "generated artist 31"
+     ],
+     "title": "SAMPLE TİTLE 31 τιτλος"
+    },
+    {
+     "path": "Generated Artist 31/Copy/01 - Sample Title 31.mp3",
+     "artists": [
+      "generated artist 31"
+     ],
+     "title": "SAMPLE TİTLE 31 τιτλος"
+    }
+   ],
+   "embedding": [
+    1.0,
+    0.0
+   ],
+   "primaryPath": "Generated Artist 31/Live/01 - Sample Title 31.mp3",
+   "artistNameKey": "generated artist 31",
+   "songKey": "generated artist 31|sample ti̇tle 31 τιτλος"
+  }
+ ]
+}

@@ -7,6 +7,7 @@
 
 #include "NvsLayout.h"
 #include "QueueRemap.h"
+#include "app/NvsLater.h"
 #include "app/Psram.h"
 
 namespace {
@@ -70,7 +71,8 @@ const char* repeatName(uint8_t mode) { return mode == 2 ? "one" : mode == 1 ? "a
 
 QueueStore::QueueStore(LocalStorage& storage, QueueModel& queue, PlaybackController& player,
                        const TrackCatalog& catalog)
-    : storage_(storage), queue_(queue), player_(player), catalog_(catalog), saver_(*this, queue, catalog) {}
+    : storage_(storage), queue_(queue), player_(player), catalog_(catalog),
+      saver_(*this, queue, catalog, psramAlloc, psramFree) {}
 
 void QueueStore::paths(char* file, char* temp, size_t size) {
   const char* dir = storage_.stateDir();
@@ -170,14 +172,10 @@ PlaybackController::Repeat QueueStore::loadRepeat() {
   return static_cast<PlaybackController::Repeat>(mode);
 }
 
+// Queued: written once the taps rest (app/NvsLater; the "..." menu's Repeat
+// row cycles it in place), not under the finger.
 void QueueStore::saveRepeat(PlaybackController::Repeat r) {
-  Preferences p;
-  if (!p.begin(kNvsNamespace, false)) {
-    Serial.println("[queue] repeat: NVS can't be opened: not saved");
-    return;
-  }
-  if (p.putUChar(nvslayout::kRepeatKey, static_cast<uint8_t>(r)) != 1) Serial.println("[queue] repeat: NOT saved");
-  p.end();
+  nvslater::putU8(kNvsNamespace, nvslayout::kRepeatKey, static_cast<uint8_t>(r));
 }
 
 void QueueStore::loop(uint32_t nowMs) {
@@ -402,13 +400,18 @@ void QueueStore::printStatus() const {
                      : queue_.spare() == 0 ? " (full: an add pushes out what played)"
                                            : "";
   Serial.printf("[queue] %lu tracks%s (%lu KB of PSRAM, the undo's included), at %d, %lu up next; shuffle %s, repeat "
-                "%s; undo: %s%s%s; file generation %lu%s, %lu writes (last %lu ms), %lu failures\n",
+                "%s; undo: %s%s%s; file generation %lu%s, %lu writes (%lu from a snapshot; last %lu ms), %lu "
+                "failures\n",
                 (unsigned long)queue_.size(), full, (unsigned long)((queue_.memoryBytes() + 1023) / 1024),
                 queue_.current() + 1, (unsigned long)queue_.upNext(),
                 queue_.shuffled() ? "on" : "off", repeatName(static_cast<uint8_t>(player_.repeat())),
                 kEdits[static_cast<int>(queue_.undoable())], undoMode, undoBack, (unsigned long)saver_.generation(),
-                saver_.writing() ? " (writing)" : saver_.contentDirty() ? " (to write)" : "",
-                (unsigned long)saver_.writes(), (unsigned long)saver_.lastWriteMs(), (unsigned long)saver_.failures());
+                saver_.writingSnapshot() ? " (writing a snapshot)"
+                : saver_.writing()       ? " (writing)"
+                : saver_.contentDirty()  ? " (to write)"
+                                         : "",
+                (unsigned long)saver_.writes(), (unsigned long)saver_.snapshotWrites(),
+                (unsigned long)saver_.lastWriteMs(), (unsigned long)saver_.failures());
   // The resume point in NVS, and the player's start point (qs<sec>).
   const QueueResume& r = saver_.resume();
   char saved[160] = "none";

@@ -441,6 +441,34 @@ private:
   bool ok_ = false;
 };
 
+// D's rows by status, a piece at a time (the console's gs: lib/core
+// TagCheck, a piece a loop pass): what BuilderRows::row() gives for records
+// 0 to the header's count - 1 after its begin(), tallied by status, with
+// DSTA's CRC checked as the rows pass rather than whole first (BuilderRows
+// reads DSTA twice: 19 KB at 19,412 records, then its rows). All four 0
+// when D's frame or DSTA fails (its CRC, a read), as when BuilderRows'
+// begin() is refused.
+class RowTally {
+public:
+  // False: D's frame fails, or DSTA's first read (done(), all 0).
+  bool begin(cardcontract::Source& src, uint8_t* buf, uint32_t bufBytes);
+  // Up to `rows` more rows (0: all the rest); with the last, the rest of
+  // DSTA and its CRC. True: done().
+  bool step(uint32_t rows);
+  bool done() const { return done_; }
+  // By LibraryBuilder::Status (Scanned, Software, Pending, Unreadable).
+  const uint32_t* counts() const { return counts_; }
+
+private:
+  void refuse();
+  cardcontract::Section dsta_;
+  cardcontract::Stream s_;
+  uint32_t records_ = 0;
+  uint32_t next_ = 0;
+  uint32_t counts_[4] = {};
+  bool done_ = false;
+};
+
 class BuilderFacts : public LibraryBuilder::FolderFactsSource {
 public:
   bool begin(cardcontract::Source& src, uint8_t* buf, uint32_t bufBytes) { return cursor_.begin(src, buf, bufBytes); }
