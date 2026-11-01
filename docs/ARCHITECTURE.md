@@ -1143,8 +1143,10 @@ out:
    from CONNECTED until DISCONNECTED: the library's `connected()` goes
    false as soon as the disconnect starts, the stack's DISCONNECTING,
    0.15-1.5 s before the link is gone): the power status read once more (USB plugged in meanwhile:
-   it stays on), the play log's open play ended (stopped) and every play
-   waiting written (`PlayHistory::flush()`), haptics stopped,
+   it stays on), the settings the taps queued saved (`app/NvsLater`), then
+   the play log's open play ended (stopped) and every play waiting written
+   (`PlayHistory::flush()`; settings first, `lib/core/OrderlyEnd`: a card
+   gone bad costs the plays alone), haptics stopped,
    `Serial.flush()`, `M5.Power.powerOff()`
    (the AXP192's power-off bit; M5Unified then deep-sleeps with no wake
    source in case it didn't take). Input or a blocker during step 3's wait
@@ -1187,9 +1189,10 @@ host-tested in test_power_choices; `app/PowerSettings` keeps them in NVS
   (NVS "boot_cpu"), lets go of the headphones the idle power-off's way and
   asks the speaker's pump to switch the amp off (`requestAmp(Off)`, as
   `Pa0`: the AXP192 isn't reset by `esp_restart()`, so a live amp would pop
-  as its clock pins are reconfigured); `stepCpuRestart()` then flushes the
-  play log (the paused play ended, stopped, and written:
-  `PlayHistory::flush()`) and calls
+  as its clock pins are reconfigured); `stepCpuRestart()` then saves the
+  settings the taps queued (`app/NvsLater`), flushes the play log (the
+  paused play ended, stopped, and written: `PlayHistory::flush()`; in that
+  order, `lib/core/OrderlyEnd`) and calls
   `esp_restart()` (under the LCD lock) once the headphones are unlinked
   (`BtSink::linkUp()` false: the disconnect done, as the idle power-off
   waits) and the amp is off, at most 3 s later
@@ -1405,10 +1408,11 @@ boot count; the trim of the files the root's ACKS acknowledges whole:
 the root is read with the board's id, its ACKS rows kept first). The same
 card mounted again (`stepCardGuard()`): the cut-rename rule again, and
 before the boot's first slot the scan again from its start.
-Before every orderly power-off and restart the open play ends, stopped,
-and is written (`PlayHistory::flush()`: the idle power-off, the CPU
-speed's restart, `restartNow()`). Log lines: `[plays] ...`, one per slot
-with the time its write took.
+Before every orderly power-off and restart, after the settings the taps
+queued (`lib/core/OrderlyEnd`, main.cpp's `endInOrder()`), the open play
+ends, stopped, and is written (`PlayHistory::flush()`: the idle power-off,
+the CPU speed's restart, `restartNow()`). Log lines: `[plays] ...`, one per
+slot with the time its write took.
 
 **FatFs itself, for the card's records** (`storage/CardFat`, METADATA.md
 3.8): the validation walk lists `/music` with `f_readdir`, whose `FILINFO`
@@ -1502,7 +1506,7 @@ double tap (`lib/core/FormatAsk`, from the answering tap's own time).
 Cancel is the default: a tab, another dialog or screen, a minute with
 no answer (each step's, over a hold under way too: `formatask::pass()`,
 the loop's order). Format restarts the player
-the CPU speed's orderly way (paused, the queue and the play log saved,
+the CPU speed's orderly way (paused, the queue, the settings and the play log saved,
 the headphones let go), with the card's identity (the guard's: its
 size, the CRCs of sector 0 and of its first partition's first sector) in
 RTC slow memory, which a restart keeps and a power cut doesn't; the next
@@ -1798,6 +1802,8 @@ The rules:
   last value. A write held the loop a few ms in the middle of the tap that
   made it (longer when NVS's page fills and a sector is erased), and the
   other core's tasks that run from flash stand still while it lasts.
+  Before a restart or a power-off what is queued is written at once, ahead
+  of the play log's card writes (`lib/core/OrderlyEnd`).
   Before a restart or a power-off (`PowerSettings::restart()`,
   `IdlePower::powerOff()`) what is queued is written first. The language,
   the tips' flag, the CPU speed (its restart follows), the queue's
@@ -3635,8 +3641,8 @@ Queue, Dance and Output (with its Pair and About pages).
     and the status stay live. A value that can't sit beside its title
     (Match strictness's in de, es, it and pt) takes that line instead,
     dim or live (`uitext::autoDjSecondLine()`), so every language shows
-    it. Each change is saved at once (NVS `autodj`, schema 4) and applies
-    from the next pick. Switched on here with nothing queued and a usable
+    it. Each change is saved once the taps rest (NVS `autodj`, schema 4,
+    `app/NvsLater`) and applies from the next pick. Switched on here with nothing queued and a usable
     index: the toast "Auto DJ on: it follows the next track you play",
     and nothing starts.
   - **The empty states' button** (Now Playing's and the Queue's):

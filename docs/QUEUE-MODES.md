@@ -508,8 +508,9 @@ is learned once. main logs each loop from `repeats()` instead (section 6).
 
 ### 3.6 Saved: NVS `queue`/`repeat`, schema 2
 
-- A u8: 0 Off, 1 All, 2 One. Written at once on a change (a tap, the
-  console: flash wear is no concern at that rate). Read with `isKey()`
+- A u8: 0 Off, 1 All, 2 One. Written on a change (a tap, the console:
+  flash wear is no concern at that rate; since 0.12.0 once the taps rest,
+  `app/NvsLater`). Read with `isKey()`
   first (QueueStore's pattern: a missing key's read logs an `[E]` line).
   Absent: Off. Another value: Off, and logged.
 - **Schema 2.** A new key changes the layout the schema names (the key

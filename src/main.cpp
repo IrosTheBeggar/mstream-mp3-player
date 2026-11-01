@@ -35,6 +35,7 @@
 #include "IdlePolicy.h"
 #include "InputEvent.h"
 #include "LibraryText.h"
+#include "OrderlyEnd.h"
 #include "OutputModel.h"
 #include "PlayGate.h"
 #include "PlaybackController.h"
@@ -258,12 +259,18 @@ static uint32_t restartAtMs = 0;
 // driver) would leave the card in its data phase, where the next boot's
 // CMD0 may be taken as data, and SD.begin() fail until a power cycle.
 static constexpr uint32_t kRestartWaitMs = 5000;
+// The end of every orderly restart and power-off (lib/core OrderlyEnd's
+// order): the settings the taps queued, the play log (`why`: its log's
+// words; the open play, stopped; not to another card), then `end`.
+template <class End>
+static void endInOrder(const char* why, End end) {
+  orderlyend::finish([] { nvslater::flushNow(); }, [why] { playHistory.flush(why); }, end);
+}
 static void restartNow() {
   if (!cardWorker.waitIdle(kRestartWaitMs))
     Serial.printf("[card] the card worker's step still under way after %lu s: restarting once its SD call ends\n",
                   (unsigned long)(kRestartWaitMs / 1000));
-  playHistory.flush("restart");  // (the open play, stopped: not to another card)
-  powerSettings.restart();  // (Serial flushed; doesn't return)
+  endInOrder("restart", [] { powerSettings.restart(); });  // (Serial flushed; doesn't return)
 }
 
 static constexpr uint32_t kBootScreenMs = 3000;
@@ -2801,9 +2808,10 @@ static void stepIdle(uint32_t now, bool input) {
       return;
     }
     Serial.printf("[power] off now (%s)\n", bt.linkUp() ? "the headphones still linked after 3 s" : "headphones let go");
-    playHistory.flush("power-off");  // (the open play, paused: stopped)
-    haptics.stop();
-    idlePower.powerOff();  // (doesn't return)
+    endInOrder("power-off", [] {  // (the open play, paused: stopped)
+      haptics.stop();
+      idlePower.powerOff();  // (doesn't return)
+    });
   }
 }
 
@@ -2894,9 +2902,10 @@ static void stepCpuRestart(uint32_t now) {
   Serial.printf("[power] restarting now at %u MHz (%s%s)\n", (unsigned)cpuRestartMhz,
                 linked ? "the headphones still linked after 3 s" : "headphones let go",
                 amp ? "; the speaker's amp still on after 3 s" : "");
-  playHistory.flush("restart");  // (the open play, paused first: stopped)
-  haptics.stop();
-  powerSettings.restart();  // (doesn't return)
+  endInOrder("restart", [] {  // (the open play, paused first: stopped)
+    haptics.stop();
+    powerSettings.restart();  // (doesn't return)
+  });
 }
 
 // ---- the format in the player (docs/HOST-STATUS.md, "@format") ----
@@ -2909,7 +2918,8 @@ static bool restartPending() { return formatRestart.on || cpuRestartMhz || resta
 // paused first (nothing plays after it by itself), the queue and the card
 // jobs' state saved, the headphones let go and the speaker's amp off, then
 // stepFormatRestart() once they are (at most 3 s; never while the
-// library's files are written), the play log flushed (restartNow()).
+// library's files are written), the settings saved and the play log
+// flushed (restartNow()).
 // Refused: the console's pretend card (uiF...: the card in the slot isn't
 // the one on screen), a restart under way, no card answering, a card the
 // boot couldn't hold to (no identity), a size FAT32 can't take; each
@@ -2971,7 +2981,7 @@ static void stepFormatRestart(uint32_t now) {
   Serial.printf("[format] restarting now (%s%s)\n", linked ? "the headphones still linked after 3 s" : "headphones let go",
                 amp ? "; the speaker's amp still on after 3 s" : "");
   haptics.stop();
-  restartNow();  // (the card worker's step ends first, the play log flushed; doesn't return)
+  restartNow();  // (the card worker's step ends first, the settings and the play log saved; doesn't return)
 }
 
 // The boot's format, as it goes: the boot screen's bar.

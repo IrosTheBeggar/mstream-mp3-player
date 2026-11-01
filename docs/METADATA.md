@@ -5865,8 +5865,11 @@ What the code decided where 2.20 left room:
   (stopped), finishes the scan and writes every play waiting, gate or
   not: before the idle power-off's `powerOff()` (after its last look at
   USB power), before the CPU speed's restart, and in `restartNow()` (the
-  card guard's restarts, "Try again", the console's `Bf` and forget),
-  after the card worker's step. Not to another card in the slot (the
+  card guard's restarts, "Try again", the format's, the console's `Bf` and
+  forget), after the card worker's step. The settings the taps queued
+  (`app/NvsLater`) are written first (`lib/core/OrderlyEnd`): this is the
+  card, which can take long or hang when it has gone bad, and that costs
+  the plays alone. Not to another card in the slot (the
   guard's foreign card refuses every write: those plays are lost, and
   said so). A hard power-off (PWR held, a flat battery) loses the open
   play and the ones waiting (2.20.5).
@@ -5924,7 +5927,10 @@ What the code decided where 2.20 left room:
      `[plays] before the power-off: 1 play written`, and the play is in
      the log, stopped. The same through the CPU speed's restart, and
      through `Bf` (`restartNow()`; its next boot is a fresh unit for
-     Bluetooth, the pairing kept).
+     Bluetooth, the pairing kept). Tap a setting within a second before
+     one of them (the Bluetooth power, then Restart on the CPU speed's
+     dialog; or Pause, `Is1`): `[nvs] saved power/bt_tx` comes before the
+     `[plays] before the ...` line, and the setting is there after the boot.
   5. Cuts: hold PWR mid-track (a hard off): the next boot's log has every
      play before it and not the open one, no damaged slot. Pull the card
      while a slot is due (right after a skip), put it back: the card

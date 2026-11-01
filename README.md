@@ -973,6 +973,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   DialogTouch         Which touch answers a dialog (a press, a tap, the hold
                       mode's hold button and its hint), and which control
                       that draws again alone, the Dialog's own
+  OrderlyEnd          The last things before a restart or a power-off, in
+                      their order: the settings queued, the play log, the end
   LibraryIndex, LibraryBuilder, LibraryBoot
                       The library index (library.idx v6), its build from
                       the tag records, the boot's decision

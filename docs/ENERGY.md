@@ -566,8 +566,8 @@ down):
 beside the pill.)
 
 - **"Bluetooth power"** on the Output tab, after "CPU speed"; a tap takes
-  the next choice (after High, Low), saved at once in NVS
-  "power"/"bt_tx" (absent: Normal), 4 signal bars as its icon (2, 3 or 4
+  the next choice (after High, Low), saved in NVS "power"/"bt_tx" (since
+  0.12.0 once the taps rest, `app/NvsLater`; absent: Normal), 4 signal bars as its icon (2, 3 or 4
   lit).
 - **Applied** at once (`BtSink::setTxPower()`), and at every stack start:
   `PlayerA2dp::bt_start()` calls the library's controller start, then

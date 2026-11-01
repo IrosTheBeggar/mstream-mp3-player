@@ -525,7 +525,8 @@ sync: the card is in the computer's reader then, and the board answers
   (after it nothing plays by itself), the queue and the card jobs' state
   saved, the headphones let go and the speaker's amp off (at most 3 s;
   never while the library's files are written), the card worker's step
-  finished, the play log flushed. Just before it, the card's identity
+  finished, the settings the taps queued saved, the play log flushed.
+  Just before it, the card's identity
   (the card guard's: its size from the CSD, the CRC-32 of sector 0 and of
   its first partition's first sector) and who asked go into RTC memory,
   which a restart keeps and a power cut doesn't: a later power-on never
@@ -933,6 +934,14 @@ counted. An error changes nothing.
   guard passes. Built in the repository with git's version: core2
   4,406,928, core2-dio 4,406,992 (`.iram0.text` 124,883 B; 58,168 B of
   `.dram0.data` and `.bss`).
+  **With main merged** (0.12.0: the rail scrub's pacing, the redraws in
+  place, the press drawing, `app/NvsLater`, the settings saved before the
+  plays), core2, against 66127c9's image (4,406,912): `firmware.bin`
+  4,414,272 (+7,360 B), the app 70 % of its slot; IRAM unchanged
+  (`.iram0.text` 124,883 B), `.dram0.data` and `.bss` 58,336 B (+168 B).
+  Every guard passes. The hold's frame is the same size as before, the
+  panel and the strip both in PSRAM; a press on the dialog no longer
+  draws the card. NOT MEASURED on the device yet.
 
 ## Device test plan
 

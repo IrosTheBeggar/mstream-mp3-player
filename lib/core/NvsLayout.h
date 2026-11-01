@@ -97,8 +97,8 @@ inline constexpr size_t kResumeBytes = 64;
 inline constexpr size_t kResumeMaxBytes = kResumeBytes;
 
 // ---- the repeat mode ("queue"/"repeat", schema 2) ----
-// A u8: 0 Off, 1 All, 2 One (PlaybackController::Repeat's values),
-// written at once on a change.
+// A u8: 0 Off, 1 All, 2 One (PlaybackController::Repeat's values), queued
+// on a change and written once the taps rest (app/NvsLater).
 inline constexpr const char* kRepeatKey = "repeat";
 inline constexpr uint8_t kRepeatModes = 3;
 // The mode to use: `stored` if the key is there (`have`) and known; absent
@@ -129,8 +129,9 @@ bool langPickerDue(bool haveLang, bool coachSeen);
 bool migrateWritesLang(uint16_t from, bool haveLang);
 
 // ---- Auto DJ ("autodj", schema 4) ----
-// Four u8s, all four written at once whenever one changes (the console's
-// D, the "..." row and Output > Auto DJ), each read with isKey() first:
+// Four u8s, all four queued whenever one changes and written once the taps
+// rest (app/NvsLater; the console's D, the "..." row and Output > Auto DJ),
+// each read with isKey() first:
 //   on     1 on, 0 off (after a boot nothing plays until Play: the
 //          restored queue waits, and Auto DJ adds at its last entry)
 //   mode   0 Follow the vibe, 1 Stay on seed (autodj::Mode's values)

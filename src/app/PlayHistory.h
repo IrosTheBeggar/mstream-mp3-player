@@ -25,10 +25,11 @@ class AutoDj;
 //     (boardclock::at(): a clock set during the play still dates it; 0
 //     while unset) and the clock's source, the seq in NVS first ("plays",
 //     nvslayout's schema 5), then one append and its f_sync.
-//   - flush() before every orderly power-off and restart (main.cpp's:
-//     the idle power-off, the CPU speed's restart, restartNow(): the card
-//     guard's, "Try again"'s, the console's): the open play ended
-//     (stopped), every play waiting written at once.
+//   - flush() before every orderly power-off and restart (main.cpp's
+//     endInOrder(), after the settings the taps queued: the idle power-off,
+//     the CPU speed's restart, restartNow(): the card guard's, "Try again"'s,
+//     the format's, the console's): the open play ended (stopped), every
+//     play waiting written at once.
 //   - deviceId: the eFuse MAC (esp_efuse_mac_get_default()); a new epoch:
 //     the hardware RNG (esp_random()); ACKS: the root the boot read
 //     (Library::root()).
