@@ -5458,8 +5458,9 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
      scan and new walks hold; a walk under way goes on to its end; the
      journals are compacted (the worker's Compact step; one that fails
      leaves the build to `tags.bin` alone, as N10's); with the worker
-     free, the safe point holds (a CPU speed's restart asked counts as
-     none: its pause would make one, and the restart would cut the build),
+     free, the safe point holds (a restart asked counts as none, whichever:
+     the format's, a CPU speed's, the loop's, `powerchoice::restartAsked()`:
+     its pause would make one, and the restart would wait for the build),
      the worker's task is there (`Out::wantWorker`: `CardWorker::ensure()`
      makes it, since it ends 3 s after its last step, and keeps it to the
      build's hand-off; no internal RAM for its 6 KB stack and the step
@@ -5832,7 +5833,9 @@ What the code decided where 2.20 left room:
   not from 5 s before the heard track's end or while the decoder reads
   the next one ahead (the gapless window), not with the PCM ring under
   half while playing, not within 5 s of an underrun (ESTIMATED; the
-  device check measures it). Then one slot a pass: the seq to NVS
+  device check measures it), not while a list moves or a finger is on its
+  A-Z rail (`Ui::listMoving()`, as for the card worker: the loop draws its
+  frames). Then one slot a pass: the seq to NVS
   (`plays`/`seq`, nvslayout's schema 5), the append and its `f_sync`.
 - **The boot** (`setup()`, after Auto DJ): NVS's ids (a new epoch from
   `esp_random()` when there is none), the deviceId from

@@ -43,6 +43,8 @@ bool cpuRestartDue(uint32_t nowMs, uint32_t askedMs, bool linked, bool ampOn, bo
   return (!linked && !ampOn) || elapsedMs >= static_cast<int32_t>(kRestartWaitMs);
 }
 
+bool restartAsked(bool format, uint16_t cpuMhz, uint32_t atMs) { return format || cpuMhz != 0 || atMs != 0; }
+
 const char* cpuSub(uint16_t saved, uint16_t running, char* buf, size_t size) {
   saved = cpuMhzFromStored(saved);
   if (running != saved && size > 0) {

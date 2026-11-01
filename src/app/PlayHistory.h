@@ -20,8 +20,8 @@ class AutoDj;
 //   - The Journal writes on the loop task, never on the audio's tasks: a
 //     piece of the boot's scan, or one play's slot a pass, when the
 //     WriteGate lets it (out of the gapless window, a start's refill, a
-//     seek, a low ring, an underrun's wake). A slot is the file's size and
-//     FAT time (f_stat, at the write), the board's clock for its start
+//     seek, a low ring, an underrun's wake, a moving list). A slot is the
+//     file's size and FAT time (f_stat, at the write), the board's clock for its start
 //     (boardclock::at(): a clock set during the play still dates it; 0
 //     while unset) and the clock's source, the seq in NVS first ("plays",
 //     nvslayout's schema 5), then one append and its f_sync.
@@ -48,8 +48,8 @@ public:
 
   // Every loop pass, after the player's update() (a join is taken first):
   // the backend's position for the open play; then, when the gate lets it
-  // (`gate`: this pass's audio) and the card isn't held (`cardHeld`: the
-  // card guard's restart comes), a piece of the boot's scan or one slot.
+  // (`gate`: this pass's audio and list) and the card isn't held (`cardHeld`:
+  // the card guard's restart comes), a piece of the boot's scan or one slot.
   struct Look {
     PlayState state = PlayState::Stopped;
     uint32_t positionMs = 0;

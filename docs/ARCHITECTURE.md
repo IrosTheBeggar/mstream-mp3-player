@@ -425,8 +425,9 @@ The rules that keep it deadlock- and glitch-free:
    position and the resume point (Library and queue, below). Then
    **`stepPlays()`**: the play log's look at the backend's position for
    the play under way (`app/PlayHistory`, Storage below), and, when the
-   pass's audio lets it (lib/core `PlayLog`'s `WriteGate`) and the card
-   isn't held, a piece of the boot's scan of the log or one play's slot.
+   pass's audio and list let it (lib/core `PlayLog`'s `WriteGate`) and the
+   card isn't held, a piece of the boot's scan of the log or one play's
+   slot.
 5. A track's learned length, a restart that is due, the `[queue] now at`
    and Repeat One lines, the spike tools, the calibration, the dancer.
 6. **`userInterface->loop()`:** the snapshot (`MainUiHost::snapshot()`,
@@ -434,8 +435,8 @@ The rules that keep it deadlock- and glitch-free:
 7. **`stepCard()`** (not while the card is held): the card worker's loop
    side (`CardTasks::loop()`). Its `UpdateEnv` is what the library update
    step needs from the rest of the firmware (METADATA.md 3.4.2):
-   - the safe point's inputs (playing, waiting, what is left of the heard
-     track, the seeks);
+   - the safe point's inputs (playing, waiting or a restart asked, what is
+     left of the heard track, the seeks);
    - `alsoFreed`, what the step frees besides the index: the queue's
      entries and undo snapshot, a `queue.txt` snapshot write under way
      (`QueueStore::savingBytes()`), Thumbs' pools, and Auto DJ's join
@@ -1397,7 +1398,9 @@ and how it ends (completed, skipped, stopped: `setPlays()`); the
 waits; the loop writes it when `WriteGate` lets it (not from 5 s before
 the heard track's end to 2 s after the next one's start, not during a
 seek or a start's refill, not with the ring under half, not within 5 s of
-an underrun): the file's size and FAT time (`f_stat`), its start from the
+an underrun, not while a list moves or a finger is on its A-Z rail, the
+write being on the loop that draws the list's frames): the file's size and
+FAT time (`f_stat`), its start from the
 board's clock (`boardclock::at()`; 0 while unset), the seq in NVS
 ("plays"/"seq") first, then one append and its `f_sync`, rotating into
 `plays.1.jnl` at 6,553 slots with a drop note when plays no software read
@@ -2158,7 +2161,8 @@ the browsing UI hold its **track ids**, never strings.
   with the worker free and a safe point (nothing plays, or the heard track
   has the pause's length left and 5 s: the last step's measured fence, or
   1 ms a track before one, at least 20 s and at most 30 s; and no seek in
-  2 s), the worker's task there (made first: the build must start
+  2 s; none while a restart is asked, whose pause would make one), the
+  worker's task there (made first: the build must start
   at once), and memory for it (else `/.player/build.req`, and the next
   boot builds), the loop puts up a **fence**: the queue flushed and its
   memory lent to the build (the player fenced: pause and resume still
@@ -3095,7 +3099,8 @@ Queue, Dance and Output (with its Pair and About pages).
   every frame between** (the thumb and its letter, a few ms, through the
   scroll mapping). While a finger is on the rail the card worker is held
   as for a moving list (`Ui::listMoving()`): no cover and no slice of the
-  walk or the scan reads the card under the scrub (on the user's
+  walk or the scan reads the card under the scrub, and the play log's
+  `WriteGate` holds its slot on the loop too (on the user's
   19,478-track card, 2026-10-30, the boot's walk and the covers ran under
   every scrub, and the only moments a scrub counted as "moving" were the
   passes between a position and its frame). MEASURED on that card with

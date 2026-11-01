@@ -520,6 +520,7 @@ WriteGate::Wait WriteGate::update(const In& in) {
   if (in.playing && (in.decoderAtEnd || (in.trackLeftMs != 0 && in.trackLeftMs < kEndMs))) return Wait::TrackEnd;
   if (in.playing && in.ringCapacityMs != 0 && in.ringMs * 2 < in.ringCapacityMs) return Wait::Ring;
   if (underrun_) return Wait::Underrun;
+  if (in.listMoving) return Wait::List;
   return Wait::None;
 }
 
@@ -530,6 +531,7 @@ const char* WriteGate::waitName(Wait w) {
     case Wait::TrackEnd: return "the gapless window";
     case Wait::Ring: return "the ring";
     case Wait::Underrun: return "an underrun";
+    case Wait::List: return "a list moving";
   }
   return "?";
 }

@@ -86,7 +86,7 @@ public:
   // memory parts).
   struct UpdateEnv {
     bool playing = false;      // PlayState::Playing
-    bool waiting = false;      // PlayState::Waiting (a play waiting for the headphones)
+    bool waiting = false;      // PlayState::Waiting (a play waiting for the headphones), or a restart asked
     uint32_t trackLeftMs = 0;  // what is left of the heard track (0: not known)
     uint32_t seekSeq = 0;      // PlaybackController::seeks()
     size_t alsoFreed = 0;      // what the step frees besides the index: the queue's, Thumbs' pools

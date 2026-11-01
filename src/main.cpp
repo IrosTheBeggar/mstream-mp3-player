@@ -2887,10 +2887,9 @@ bool MainUiHost::setCpuSpeed(uint16_t mhz) {
 // Every loop pass: the restart setCpuSpeed() asked for, once the headphones
 // are gone and the speaker's amp is off (at most 3 s, as before the idle
 // power-off). Never while the card's library is written (LibraryWrite: a
-// compaction, or the update step from its fence to its save's end, which
-// the pause may have let start after the ask): that waits, however long,
-// as the idle power-off does (the update step itself doesn't start once a
-// restart is asked: stepCard()).
+// compaction, which may start after the ask, or the update step from its
+// fence to its save's end, which doesn't: stepCard()): that waits, however
+// long, as the idle power-off does.
 static void stepCpuRestart(uint32_t now) {
   if (!cpuRestartMhz) return;
   // (Until the disconnect is done: connected() drops as soon as it starts.)
@@ -2910,7 +2909,7 @@ static void stepCpuRestart(uint32_t now) {
 
 // ---- the format in the player (docs/HOST-STATUS.md, "@format") ----
 
-static bool restartPending() { return formatRestart.on || cpuRestartMhz || restartAtMs; }
+static bool restartPending() { return powerchoice::restartAsked(formatRestart.on, cpuRestartMhz, restartAtMs); }
 
 // The format's question answered Format twice (ui/Ui::askFormat()): the
 // card in the slot formatted at the next boot (storage/CardFormatter),
@@ -3116,7 +3115,7 @@ static AutoDj::Env autoDjEnv(uint32_t now) {
   e.trackSeq = audio.trackSeq();
   e.positionMs = audio.positionMs();
   e.cardHeld = cardHeld;
-  e.restartSet = restartAtMs != 0 || cpuRestartMhz != 0;
+  e.restartSet = restartPending();
   e.sleepEndOfQueue = sleepTimer.running() && sleepTimer.choice() == SleepTimer::Choice::EndOfQueue;
   e.listMoving = userInterface && userInterface->listMoving();
   e.uiStarted = !userInterface || userInterface->started();
@@ -3265,7 +3264,8 @@ static void leaveFence() {
 // Every loop pass, after the player's update() (a join taken first): the
 // play log's look at the backend, then a piece of its boot's scan or one
 // play's slot when this pass's audio lets it (lib/core PlayLog's
-// WriteGate: never in the gapless window or a start's refill).
+// WriteGate: never in the gapless window or a start's refill) and no list
+// moves (the write holds the loop that draws its frames).
 static void stepPlays(uint32_t now) {
   PlayHistory::Look look;
   look.state = player.state();
@@ -3282,6 +3282,8 @@ static void stepPlays(uint32_t now) {
   in.seeking = !look.positionKnown;
   in.decoderAtEnd = in.playing && audio.heardSourceEnded();
   in.trackLeftMs = trackLeftMs();
+  // (As the last pass's Ui::loop() left it: this pass's comes after.)
+  in.listMoving = userInterface && userInterface->listMoving();
   playHistory.loop(look, in, cardHeld);
 }
 
@@ -3329,9 +3331,10 @@ static void stepCard(uint32_t now, bool input) {
   // headphones isn't one) and what it frees besides the index.
   CardTasks::UpdateEnv env;
   env.playing = player.state() == PlayState::Playing;
-  // (A CPU speed's restart asked: not a safe point either. Its pause would
-  // make one, and the restart would cut the build it let start.)
-  env.waiting = player.state() == PlayState::Waiting || cpuRestartMhz != 0;
+  // (A restart asked, whichever: not a safe point either. Its pause would
+  // make one, and the restart would then wait for the whole build it let
+  // start, or cut it: restartNow() waits for the worker's step 5 s at most.)
+  env.waiting = player.state() == PlayState::Waiting || restartPending();
   env.trackLeftMs = trackLeftMs();
   env.seekSeq = player.seeks();
   env.alsoFreed = queue.memoryBytes() + queueStore.savingBytes() +

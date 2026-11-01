@@ -32,7 +32,7 @@
 //   - WriteGate: when the loop may write a slot (or read the boot's scan):
 //     never in the gapless window (the decoder reading the next track
 //     ahead, until the join has settled), a start's refill, a seek, or a
-//     ring under half.
+//     ring under half; nor while a list moves (the loop draws its frames).
 namespace playlog {
 
 // ---------------------------------------------------------------------------
@@ -365,7 +365,8 @@ private:
 
 // ---------------------------------------------------------------------------
 // When the loop may touch the log (a slot's write, a piece of the boot's
-// scan): the card's other reader is the decoder.
+// scan): the card's other reader is the decoder, and the write holds the
+// loop, which draws a moving list's frames.
 // ---------------------------------------------------------------------------
 class WriteGate {
 public:
@@ -379,6 +380,10 @@ public:
     bool seeking = false;         // a start not taken up yet (a seek's, a skip's)
     bool decoderAtEnd = false;    // the decoder past the heard track's end (the next read ahead)
     uint32_t trackLeftMs = 0;     // what is left of the heard track (0: not known)
+    // A list scrolls, flings or follows a finger, or a finger is on its A-Z
+    // rail (ui::Ui::listMoving(): none while its page draws no frame; the
+    // card worker waits for it too).
+    bool listMoving = false;
   };
   enum class Wait : uint8_t {
     None,      // now
@@ -386,6 +391,7 @@ public:
     TrackEnd,  // the gapless window: the heard track's last kEndMs, the decoder at its end
     Ring,      // playing, the ring below half
     Underrun,  // one in the last kUnderrunMs
+    List,      // a list moves, playing or not (no limit: it rests, or the finger lifts)
   };
   // ESTIMATED (ScanScheduler's TrackChange and Ring rules; the device
   // check measures the write).

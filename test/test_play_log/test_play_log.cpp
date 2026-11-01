@@ -28,7 +28,8 @@
 //   remount settling again;
 // - the Tracker (the time played, pauses excluded, a seek's jump not
 //   counted, the tail of a completed play, short plays, the queue) and the
-//   WriteGate (the gapless window, a start's settle, the ring, underruns);
+//   WriteGate (the gapless window, a start's settle, the ring, underruns, a
+//   moving list);
 // - what an append, a rotation and the boot's scan ask of the card, on the
 //   host FatFs model (ChaN's FatFs as the Core2 builds it, the sector
 //   cache in front: test_card_io's card): bytes per play and the cap's
@@ -1285,6 +1286,53 @@ void test_the_write_gate() {
   TEST_ASSERT_EQUAL_STRING("the gapless window", pl::WriteGate::waitName(W::TrackEnd));
 }
 
+// A list that moves holds the write (a fling, a finger on the A-Z rail: the
+// loop that writes draws its frames, and the card worker waits too), playing
+// or paused, for as long as it moves, and not a pass longer; what the audio
+// holds it for is counted from its own moment all the same.
+void test_the_write_gate_waits_for_a_moving_list() {
+  using W = pl::WriteGate::Wait;
+  pl::WriteGate g;
+  pl::WriteGate::In in;
+  in.nowMs = 10000;
+  in.playing = true;
+  in.ringMs = 1400;
+  in.ringCapacityMs = 1490;
+  in.trackLeftMs = 120000;
+  TEST_ASSERT_TRUE(g.update(in) == W::None);
+  in.listMoving = true;
+  TEST_ASSERT_TRUE(g.update(in) == W::List);
+  in.nowMs += 600000;  // (no limit: the finger stays on the rail)
+  TEST_ASSERT_TRUE(g.update(in) == W::List);
+  in.listMoving = false;
+  TEST_ASSERT_TRUE(g.update(in) == W::None);  // the pass it rests
+  // Paused or stopped too: the audio doesn't mind, the list's frames do.
+  in.playing = false;
+  in.listMoving = true;
+  TEST_ASSERT_TRUE(g.update(in) == W::List);
+  in.listMoving = false;
+  TEST_ASSERT_TRUE(g.update(in) == W::None);
+  in.playing = true;
+  // A join under the moving list: its settle from the join, not from the
+  // list's rest.
+  in.listMoving = true;
+  in.trackSeq = 1;
+  TEST_ASSERT_TRUE(g.update(in) == W::Start);  // (the audio's word first)
+  in.nowMs += pl::WriteGate::kSettleMs;
+  TEST_ASSERT_TRUE(g.update(in) == W::List);
+  in.listMoving = false;
+  TEST_ASSERT_TRUE(g.update(in) == W::None);
+  // An underrun under it the same: 5 s from the underrun.
+  in.listMoving = true;
+  in.underruns = 1;
+  TEST_ASSERT_TRUE(g.update(in) == W::Underrun);
+  in.nowMs += pl::WriteGate::kUnderrunMs;
+  TEST_ASSERT_TRUE(g.update(in) == W::List);
+  in.listMoving = false;
+  TEST_ASSERT_TRUE(g.update(in) == W::None);
+  TEST_ASSERT_EQUAL_STRING("a list moving", pl::WriteGate::waitName(W::List));
+}
+
 // ---------------------------------------------------------------------------
 // What the log asks of the card, on the host FatFs model.
 // ---------------------------------------------------------------------------
@@ -1553,6 +1601,7 @@ int main(int, char**) {
   RUN_TEST(test_what_a_rotation_counts);
   RUN_TEST(test_the_tracker);
   RUN_TEST(test_the_write_gate);
+  RUN_TEST(test_the_write_gate_waits_for_a_moving_list);
   RUN_TEST(test_what_the_card_is_asked);
   RUN_TEST(test_a_tail_on_the_fatfs_card);
   RUN_TEST(test_a_remount_and_the_boots_scan);

@@ -942,6 +942,11 @@ counted. An error changes nothing.
   Every guard passes. The hold's frame is the same size as before, the
   panel and the strip both in PSRAM; a press on the dialog no longer
   draws the card. NOT MEASURED on the device yet.
+  **The moving list and the restarts** (0.12.0: the play log's slot waits
+  for a list at rest, every restart asked holds the update step and Auto
+  DJ), core2, against the image above: `firmware.bin` 4,414,304 (+32 B),
+  the app 70 % of its slot; IRAM and internal DRAM unchanged (`.iram0.text`
+  124,883 B; 58,336 B of `.dram0.data` and `.bss`). Every guard passes.
 
 ## Device test plan
 
