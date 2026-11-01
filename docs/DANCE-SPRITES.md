@@ -22,8 +22,8 @@ tools/dancepack.py, its tests and the test dancer; a5a6fdd: the C++ reader
 and blitter; d46a4c5 and e55d4ec: the Choreographer, DrawnCharacter and the
 budget, then the unmirrored sway; 4428f66: the characters, the cast and the
 console, checked on the host only: no build of step 4 has run on a device,
-F.5); the rest is designed. The branch carries main up to 312b5f1 (the merge
-94200ae); main has none of the dance sprites yet.** Section 11 is the build
+F.5); the rest is designed. The branch carries main up to 274ae4f (the merges
+94200ae and 2d9ea28); main has none of the dance sprites yet.** Section 11 is the build
 order.
 The contributor guide, docs/DANCERS.md, comes with step 11. Appendices
 A-C freeze the contract for step 1: the MPDN v1 bytes, the shared
@@ -7584,8 +7584,8 @@ device runs (`L`, a key: no Enter), to put it back afterwards if the user
 wants (a build older than the device's may rebuild the card's library
 index first). Don't assume what it runs: another session may have flashed
 it, and it hasn't run v0.8.0 since those numbers were taken.
-(Note, after the merge of main: **B0 is now a build of main**, 312b5f1 or
-main as it stands at the flash, without step 4, and B1 that main with step 4
+(Note, after the merge of main: **B0 is now a build of main**, as it stands
+at the flash, without step 4, and B1 that main with step 4
 merged. F.5.1's comparisons and procedure P are against it. It replaces both
 e55d4ec and the merge 68e51c3 of the earlier notes. F.5.0 records the only
 device numbers captured so far, from v0.8.0.)
