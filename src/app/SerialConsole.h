@@ -27,8 +27,8 @@
 //   t<bpm> tempo prior for the beat tracker (t or t0 clears it; a track change does too)
 //   y<ms> dance latency offset, + later / - earlier (not saved)
 //   k<n> freeze the dancer at phase n/8 of a two-beat cycle, 0-15 (k alone: follow the beat)
-//   D... the dancers (docs/DANCE-SPRITES.md, F.2): D the cast, Dc<id>, Dl, Dm<move>,
-//        Df<move>.<step>[m] / Df, Dv, Dg<genre>, Ds<spot>
+//   M... the dancers (docs/DANCE-SPRITES.md, F.2): M the cast, Mc<id>, Ml, Mm<move>,
+//        Mf<move>.<step>[m] / Mf, Mv, Mg<genre>, Ms<spot>
 //   q... the queue: q status, qa play all, qb built-ins, ql albums, qp<n>/qn<n>/q+<n> album n:
 //        play / play next / add, qr<pos> remove, qc clear up next, qx clear, qu undo
 //   a... the input layer: a touch calibration (a5-a9 with fewer crosshairs), ac check the

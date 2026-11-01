@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 IrosTheBeggar
 
-// Host tests for the D console (DanceConsole: its parser, its replies, the
+// Host tests for the M console (DanceConsole: its parser, its replies, the
 // [move] lines, stepCount and stepStart): docs/DANCE-SPRITES.md, section 3.9
 // and Appendix F (F.1's DanceConsole.h, F.2 line for line, F.4's
 // test_dance_console list, item by item). Written from the doc alone,
@@ -14,8 +14,8 @@
 //   CardDancer and appended as cast entry 2 with Renderer::Drawn.
 // - `out` records the lines; every line handed to it is checked to be at
 //   most 255 bytes, with no newline (F.1: kConsoleLine).
-// - F.2's worked examples are checked as literal strings. Beyond them, D's
-//   and Dl's lines are compared with a reference formatter written here from
+// - F.2's worked examples are checked as literal strings. Beyond them, M's
+//   and Ml's lines are compared with a reference formatter written here from
 //   F.2's rules, so every move of every character is checked, and the
 //   [move] lines with one built from run() by F.2's format.
 // - Inputs come from beatscript::Script (test/support/dance/BeatScript.h).
@@ -251,7 +251,7 @@ const char* stateName(DanceState s) {
 
 std::string tenths(int v) { return fmt("%d.%d", v / 10, v % 10); }
 
-// D's line for cast entry i.
+// M's line for cast entry i.
 std::string refCastLine(const DanceCast& cast, int i, int chosen) {
   const dance::CharacterInfo& in = cast.at(i).character->info();
   std::string s = fmt("[dance] cast %d: %s \"%s\" by %s, %s, %s, %s, %d moves", i, dashIfEmpty(in.id),
@@ -331,7 +331,7 @@ struct Rig {
   }
   // run() expecting exactly these lines and the reply {false, 0}.
   void expect(const char* arg, const std::vector<std::string>& want) {
-    ctx("D%s", arg ? arg : "(null)");
+    ctx("M%s", arg ? arg : "(null)");
     const ConsoleReply r = run(arg);
     expectLines(out, want, "lines");
     CHECK(!r.choose && r.index == 0, "reply {%d, %d}, want {false, 0}", r.choose, r.index);
@@ -346,15 +346,15 @@ void advance(Choreographer& ch, Script& s, double secs) {
 }
 
 const char* const kUsageDf =
-    "[dance] Df: Df<move>.<step>, with m after the step for the mirrored form; Df alone unfreezes";
-const char* const kSpotUsage = "[dance] Ds: a spot is -1, 0 or +1";
+    "[dance] Mf: Mf<move>.<step>, with m after the step for the mirrored form; Mf alone unfreezes";
+const char* const kSpotUsage = "[dance] Ms: a spot is -1, 0 or +1";
 std::string unknownLine(const std::string& arg) {
-  return "[dance] D: unknown \"" + arg +
-         "\": D, Dc<id>, Dl, Dm<move>, Df<move>.<step>[m], Df, Dv, Dg<genre>, Ds<spot>";
+  return "[dance] M: unknown \"" + arg +
+         "\": M, Mc<id>, Ml, Mm<move>, Mf<move>.<step>[m], Mf, Mv, Mg<genre>, Ms<spot>";
 }
 
 // The no-dancer reply and the spot and freeze helpers.
-const char* const kNoDancer = "[dance] D: no dancer";
+const char* const kNoDancer = "[dance] M: no dancer";
 
 // Crab::frozen at k<n>, field for field.
 bool crabEq(const crab::Pose& a, const crab::Pose& b) {
@@ -390,7 +390,7 @@ const char* const kCast2 =
 void setUp() {}
 void tearDown() {}
 
-// 1. D: the cast, one line per entry, the chosen one marked.
+// 1. M: the cast, one line per entry, the chosen one marked.
 void test_cast_listing() {
   Rig r;
   builtIns(r.cast);
@@ -399,7 +399,7 @@ void test_cast_listing() {
   r.expect("", {std::string(kCast0) + " *", kCast1});
   r.chosen = 1;
   r.expect("", {kCast0, std::string(kCast1) + " *"});
-  // A null arg is D itself.
+  // A null arg is M itself.
   r.expect(nullptr, {kCast0, std::string(kCast1) + " *"});
   // No entry chosen (out of range): no mark.
   r.chosen = 5;
@@ -431,7 +431,7 @@ void test_cast_listing() {
                 "[dance] cast 1: some \"Some\" by Ann, CC0-1.0, card, in the cycle, 0 moves, 7 ignored *"});
 }
 
-// 2. Dc: choose by id, any entry; no line when found.
+// 2. Mc: choose by id, any entry; no line when found.
 void test_choose() {
   Rig r;
   builtIns(r.cast);
@@ -443,29 +443,29 @@ void test_choose() {
     int index;
   } found[] = {{"ccrab", 0}, {"cstick", 1}, {"c stick ", 1}, {"c  crab", 0}, {"cout", 2}};
   for (const Case& c : found) {
-    ctx("D%s", c.arg);
+    ctx("M%s", c.arg);
     const ConsoleReply rep = r.run(c.arg);
     CHECK(rep.choose && rep.index == c.index, "reply {%d, %d}, want {true, %d}", rep.choose, rep.index, c.index);
     expectLines(r.out, {}, "no line when found");
   }
-  r.expect1("cnope", "[dance] Dc: no dancer \"nope\" (D lists them)");
-  r.expect1("c", "[dance] Dc: no dancer \"\" (D lists them)");
-  r.expect1("cCrab", "[dance] Dc: no dancer \"Crab\" (D lists them)");
-  r.expect1("c   ", "[dance] Dc: no dancer \"\" (D lists them)");
-  // Dc doesn't touch the Choreographer: DanceMode chooses.
-  ctx("Dc leaves the Choreographer alone");
+  r.expect1("cnope", "[dance] Mc: no dancer \"nope\" (M lists them)");
+  r.expect1("c", "[dance] Mc: no dancer \"\" (M lists them)");
+  r.expect1("cCrab", "[dance] Mc: no dancer \"Crab\" (M lists them)");
+  r.expect1("c   ", "[dance] Mc: no dancer \"\" (M lists them)");
+  // Mc doesn't touch the Choreographer: DanceMode chooses.
+  ctx("Mc leaves the Choreographer alone");
   r.run("cstick");
-  CHECK(r.ch.character() == &theCrab(), "character() changed by Dc itself");
+  CHECK(r.ch.character() == &theCrab(), "character() changed by Mc itself");
 }
 
-// 3. Dl: the drawn character's moves, before any update and while dancing.
+// 3. Ml: the drawn character's moves, before any update and while dancing.
 void test_moves_listing() {
   {
     Rig r;
     builtIns(r.cast);
     r.ch.setCharacter(&theCrab());
     r.expect("l", kCrabDl);
-    ctx("Dl crab, reference");
+    ctx("Ml crab, reference");
     expectLines(r.out, refDl(r.ch), "the reference formatter");
   }
   {
@@ -487,7 +487,7 @@ void test_moves_listing() {
     s.acquire(120.0, 0.05);
     advance(r.ch, s, 6.0);
     r.run("l");
-    ctx("Dl crab after 6 s at 120 BPM");
+    ctx("Ml crab after 6 s at 120 BPM");
     expectLines(r.out, refDl(r.ch), "the reference formatter");
     TEST_ASSERT_EQUAL_INT(4, static_cast<int>(r.out.lines.size()));
     TEST_ASSERT_EQUAL_STRING("[dance] crab: 2 moves, T 120.0, last ranged k -", r.out.lines[0].c_str());
@@ -500,7 +500,7 @@ void test_moves_listing() {
       r.ch.update(s.frame());
       if (i % 5 == 0) {
         r.run("l");
-        ctx("Dl crab, unlocked, frame %d", i);
+        ctx("Ml crab, unlocked, frame %d", i);
         expectLines(r.out, refDl(r.ch), "the reference formatter");
       }
     }
@@ -512,7 +512,7 @@ void test_moves_listing() {
     r.ch.setCharacter(&fx());
     r.chosen = 2;
     r.run("l");
-    ctx("Dl fixture, no tempo");
+    ctx("Ml fixture, no tempo");
     expectLines(r.out, refDl(r.ch), "the reference formatter");
     TEST_ASSERT_EQUAL_INT(15, static_cast<int>(r.out.lines.size()));
     TEST_ASSERT_EQUAL_STRING("[dance] test: 13 moves, T -, last ranged k -", r.out.lines[0].c_str());
@@ -543,11 +543,11 @@ void test_moves_listing() {
       r.ch.update(s.frame());
       if (i % 30 == 29) {
         r.run("l");
-        ctx("Dl fixture at 120 BPM, frame %d", i);
+        ctx("Ml fixture at 120 BPM, frame %d", i);
         expectLines(r.out, refDl(r.ch), "the reference formatter");
       }
     }
-    ctx("Dl fixture at 120 BPM");
+    ctx("Ml fixture at 120 BPM");
     TEST_ASSERT_EQUAL_STRING("[dance] test: 13 moves, T 120.0, last ranged k ", r.out.lines[0].substr(0, 47).c_str());
     auto endsWith = [](const std::string& s, const char* tail) {
       const size_t n = std::strlen(tail);
@@ -560,7 +560,7 @@ void test_moves_listing() {
   }
 }
 
-// 4. Dm: force the next run, or cancel; idle and unknown moves refused.
+// 4. Mm: force the next run, or cancel; idle and unknown moves refused.
 void test_force() {
   Rig r;
   builtIns(r.cast);
@@ -582,26 +582,26 @@ void test_force() {
   };
   r.expect1("mshuffle", "[dance] next run: shuffle");
   RunInfo n = nextRun();
-  ctx("after Dmshuffle");
+  ctx("after Mmshuffle");
   CHECK(n.level == 4 && n.move == 0, "the next run: move %d, level %u, want 0 at level 4", n.move, n.level);
   n = nextRun();
   CHECK(n.level != 4, "the run after it: level %u (forced once only)", n.level);
 
-  r.expect1("midle", "[dance] Dm: idle is an idle move: only beat moves can be forced");
-  r.expect1("mnope", "[dance] Dm: crab has no move \"nope\" (Dl lists them)");
-  r.expect1("mShuffle", "[dance] Dm: crab has no move \"Shuffle\" (Dl lists them)");
+  r.expect1("midle", "[dance] Mm: idle is an idle move: only beat moves can be forced");
+  r.expect1("mnope", "[dance] Mm: crab has no move \"nope\" (Ml lists them)");
+  r.expect1("mShuffle", "[dance] Mm: crab has no move \"Shuffle\" (Ml lists them)");
   n = nextRun();
-  ctx("after the refused Dms");
-  CHECK(n.level != 4, "a refused Dm forces nothing (level %u)", n.level);
+  ctx("after the refused Mms");
+  CHECK(n.level != 4, "a refused Mm forces nothing (level %u)", n.level);
 
   r.expect1("mshuffle", "[dance] next run: shuffle");
   r.expect1("m", "[dance] next run: the picker's");
   n = nextRun();
-  ctx("after Dmshuffle, Dm");
-  CHECK(n.level != 4, "Dm alone cancels: level %u", n.level);
+  ctx("after Mmshuffle, Mm");
+  CHECK(n.level != 4, "Mm alone cancels: level %u", n.level);
   r.expect1("m shuffle ", "[dance] next run: shuffle");
   n = nextRun();
-  ctx("after Dm shuffle (spaces)");
+  ctx("after Mm shuffle (spaces)");
   CHECK(n.level == 4, "the operand is trimmed: level %u", n.level);
 
   // The stick's bounce.
@@ -609,12 +609,12 @@ void test_force() {
   builtIns(st.cast);
   st.ch.setCharacter(&theStick());
   st.expect1("mbounce", "[dance] next run: bounce");
-  st.expect1("msway", "[dance] Dm: sway is an idle move: only beat moves can be forced");
-  st.expect1("mshuffle", "[dance] Dm: stick has no move \"shuffle\" (Dl lists them)");
+  st.expect1("msway", "[dance] Mm: sway is an idle move: only beat moves can be forced");
+  st.expect1("mshuffle", "[dance] Mm: stick has no move \"shuffle\" (Ml lists them)");
 }
 
-// 5. Df on the crab: eighths of a move beat as steps, so Dfshuffle.<n> is
-// k<n>'s pose; the syntax, the checks in order, and Df alone.
+// 5. Mf on the crab: eighths of a move beat as steps, so Mfshuffle.<n> is
+// k<n>'s pose; the syntax, the checks in order, and Mf alone.
 void test_freeze_crab() {
   Rig r;
   builtIns(r.cast);
@@ -625,21 +625,21 @@ void test_freeze_crab() {
   r.expect1("fshuffle.5", "[dance] frozen: crab shuffle.5 at move beat 0.625");
   {
     const Cue& c = r.ch.update(s.frame());
-    ctx("the cue after Dfshuffle.5");
+    ctx("the cue after Mfshuffle.5");
     CHECK(c.beatMove == 0, "beatMove %d", c.beatMove);
     CHECK(c.beatPos16 == 491520u, "beatPos16 %u", c.beatPos16);
     CHECK(c.u == 0.625, "u %.9g", c.u);
     CHECK(c.weight == 1.0f, "weight %.9g", c.weight);
     CHECK(c.showDance, "showDance");
-    CHECK(!c.flash, "a Df freeze never lights the beat dot");
+    CHECK(!c.flash, "an Mf freeze never lights the beat dot");
     CHECK(crabEq(dance::CrabCharacter::pose(c, c.u), crab::Crab::frozen(5 / 8.0f, false)), "the pose is k5's");
   }
-  r.expect1("fshuffle.16", "[dance] Df: shuffle has steps 0-15");
-  r.expect1("fidle.0", "[dance] Df: idle has no steps");
+  r.expect1("fshuffle.16", "[dance] Mf: shuffle has steps 0-15");
+  r.expect1("fidle.0", "[dance] Mf: idle has no steps");
   r.expect1("fshuffle.15", "[dance] frozen: crab shuffle.15 at move beat 1.875");
   {
     const Cue& c = r.ch.update(s.frame());
-    ctx("the cue after Dfshuffle.15");
+    ctx("the cue after Mfshuffle.15");
     CHECK(c.beatPos16 == 15u * 98304u && c.u == 1.875, "beatPos16 %u, u %.9g", c.beatPos16, c.u);
     CHECK(crabEq(dance::CrabCharacter::pose(c, c.u), crab::Crab::frozen(7 / 8.0f, true)), "the pose is k15's");
   }
@@ -647,14 +647,14 @@ void test_freeze_crab() {
   r.expect1("fshuffle.05", "[dance] frozen: crab shuffle.5 at move beat 0.625");
   r.expect1("fshuffle.005", "[dance] frozen: crab shuffle.5 at move beat 0.625");
   r.expect1("f shuffle.8 ", "[dance] frozen: crab shuffle.8 at move beat 1.000");
-  r.expect1("fshuffle.5m", "[dance] Df: shuffle has no mirrored form");
+  r.expect1("fshuffle.5m", "[dance] Mf: shuffle has no mirrored form");
   // The checks in order: the move, its steps, the step, the mirror.
-  r.expect1("fnope.99", "[dance] Df: crab has no move \"nope\" (Dl lists them)");
-  r.expect1("fshuf.fle.3", "[dance] Df: crab has no move \"shuf.fle\" (Dl lists them)");  // before the last '.'
-  r.expect1("fshuffle..3", "[dance] Df: crab has no move \"shuffle.\" (Dl lists them)");
-  r.expect1("fidle.0m", "[dance] Df: idle has no steps");
-  r.expect1("fshuffle.16m", "[dance] Df: shuffle has steps 0-15");
-  r.expect1("fshuffle.999", "[dance] Df: shuffle has steps 0-15");
+  r.expect1("fnope.99", "[dance] Mf: crab has no move \"nope\" (Ml lists them)");
+  r.expect1("fshuf.fle.3", "[dance] Mf: crab has no move \"shuf.fle\" (Ml lists them)");  // before the last '.'
+  r.expect1("fshuffle..3", "[dance] Mf: crab has no move \"shuffle.\" (Ml lists them)");
+  r.expect1("fidle.0m", "[dance] Mf: idle has no steps");
+  r.expect1("fshuffle.16m", "[dance] Mf: shuffle has steps 0-15");
+  r.expect1("fshuffle.999", "[dance] Mf: shuffle has steps 0-15");
   const char* bad[] = {"fshuffle", "fshuffle.", "f.3", "fshuffle.x", "fshuffle.5mm", "fshuffle.5 m", "fshuffle.1234",
                        "fshuffle.-1", "fshuffle.5M", "fshuffle.+5", "f."};
   for (const char* b : bad) r.expect1(b, kUsageDf);
@@ -665,15 +665,15 @@ void test_freeze_crab() {
     CHECK(c.beatMove == 0 && c.beatPos16 == 8u * 98304u, "still shuffle.8: beatMove %d, beatPos16 %u", c.beatMove,
           c.beatPos16);
   }
-  r.expect1("f", "[dance] Df off");
+  r.expect1("f", "[dance] Mf off");
   {
     const Cue& c = r.ch.update(s.frame());
-    ctx("the cue after Df");
+    ctx("the cue after Mf");
     CHECK(c.beatMove == kNoMove, "unfrozen while quiet: beatMove %d", c.beatMove);
     CHECK(!c.showDance && c.weight == 0.0f, "unfrozen: showDance %d, weight %.9g", c.showDance, c.weight);
   }
 
-  // The stick counts eighths too: Dfbounce.3 is k3's pose.
+  // The stick counts eighths too: Mfbounce.3 is k3's pose.
   Rig st;
   builtIns(st.cast);
   st.ch.setCharacter(&theStick());
@@ -683,14 +683,14 @@ void test_freeze_crab() {
     Script s2(30);
     s2.heard(false);
     const Cue& c = st.ch.update(s2.frame());
-    ctx("the stick's cue after Dfbounce.3");
+    ctx("the stick's cue after Mfbounce.3");
     CHECK(c.beatMove == 0 && c.beatPos16 == 3u * 98304u, "beatMove %d, beatPos16 %u", c.beatMove, c.beatPos16);
     CHECK(stickEq(dance::ClassicStick::pose(c, c.u), dance::Dancer().frozen(3 / 8.0f, false)), "the pose is k3's");
   }
-  st.expect1("fsway.0", "[dance] Df: sway has no steps");
+  st.expect1("fsway.0", "[dance] Mf: sway has no steps");
 }
 
-// 6. Df on the fixture: a drawn character's steps from its MOVS record.
+// 6. Mf on the fixture: a drawn character's steps from its MOVS record.
 void test_freeze_fixture() {
   Rig r;
   withFixture(r.cast);
@@ -702,7 +702,7 @@ void test_freeze_fixture() {
   r.expect1("fpoint.2m", "[dance] frozen: test point.2m at move beat 1.000");
   {
     const Cue& c = r.ch.update(s.frame());
-    ctx("the cue after Dfpoint.2m");
+    ctx("the cue after Mfpoint.2m");
     CHECK(c.beatMove == 3 && c.beatPos16 == 786432u && c.beatMirror, "beatMove %d, beatPos16 %u, beatMirror %d",
           c.beatMove, c.beatPos16, c.beatMirror);
     CHECK(c.showDance && c.weight == 1.0f, "showDance %d, weight %.9g", c.showDance, c.weight);
@@ -710,14 +710,14 @@ void test_freeze_fixture() {
   r.expect1("fbounce.3", "[dance] frozen: test bounce.3 at move beat 1.500");
   {
     const Cue& c = r.ch.update(s.frame());
-    ctx("the cue after Dfbounce.3");
+    ctx("the cue after Mfbounce.3");
     CHECK(c.beatMove == 0 && c.beatPos16 == 18u * 65536u && !c.beatMirror, "beatMove %d, beatPos16 %u, mirror %d",
           c.beatMove, c.beatPos16, c.beatMirror);
   }
   r.expect1("flook.2", "[dance] frozen: test look.2 at 1500 ms");
   {
     const Cue& c = r.ch.update(s.frame());
-    ctx("the cue after Dflook.2");
+    ctx("the cue after Mflook.2");
     CHECK(c.idleMove == 12 && c.idleMs == 1500u && !c.idleMirror, "idleMove %d, idleMs %u, idleMirror %d",
           c.idleMove, c.idleMs, c.idleMirror);
     CHECK(!c.showDance && c.weight == 0.0f, "showDance %d, weight %.9g", c.showDance, c.weight);
@@ -725,17 +725,17 @@ void test_freeze_fixture() {
   r.expect1("flook.1m", "[dance] frozen: test look.1m at 500 ms");
   {
     const Cue& c = r.ch.update(s.frame());
-    ctx("the cue after Dflook.1m");
+    ctx("the cue after Mflook.1m");
     CHECK(c.idleMove == 12 && c.idleMs == 500u && c.idleMirror, "idleMove %d, idleMs %u, idleMirror %d", c.idleMove,
           c.idleMs, c.idleMirror);
   }
-  r.expect1("flook.3", "[dance] Df: look has steps 0-2");
-  r.expect1("fbounce.1m", "[dance] Df: bounce has no mirrored form");
-  r.expect1("ffuture.0", "[dance] Df: test has no move \"future\" (Dl lists them)");
-  r.expect1("fbounce.4", "[dance] Df: bounce has steps 0-3");
+  r.expect1("flook.3", "[dance] Mf: look has steps 0-2");
+  r.expect1("fbounce.1m", "[dance] Mf: bounce has no mirrored form");
+  r.expect1("ffuture.0", "[dance] Mf: test has no move \"future\" (Ml lists them)");
+  r.expect1("fbounce.4", "[dance] Mf: bounce has steps 0-3");
   r.expect1("fpoint.3", "[dance] frozen: test point.3 at move beat 2.000");
   r.expect1("flook.0", "[dance] frozen: test look.0 at 0 ms");
-  r.expect1("f", "[dance] Df off");
+  r.expect1("f", "[dance] Mf off");
 
   // stepCount and stepStart.
   ctx("stepCount");
@@ -789,16 +789,16 @@ void test_freeze_fixture() {
   TEST_ASSERT_EQUAL_UINT32(7u, pos);
 }
 
-// 7. Dv and the [move] lines: one per new beat run while on.
+// 7. Mv and the [move] lines: one per new beat run while on.
 void test_move_log() {
   Rig r;
   builtIns(r.cast);
   r.ch.setCharacter(&theCrab());
-  CHECK(!r.con.verbose(), "Dv starts off");
+  CHECK(!r.con.verbose(), "Mv starts off");
   r.expect1("v", "[dance] move log on");
-  CHECK(r.con.verbose(), "Dv on");
+  CHECK(r.con.verbose(), "Mv on");
   r.expect1("v", "[dance] move log off");
-  CHECK(!r.con.verbose(), "Dv off");
+  CHECK(!r.con.verbose(), "Mv off");
   r.expect1("v", "[dance] move log on");
 
   Script s(30);
@@ -823,7 +823,7 @@ void test_move_log() {
     r.ch.update(s.frame());
     r.out.clear();
     r.con.frame(r.ch, Out::put, &r.out);
-    ctx("Dv frame %ld", i);
+    ctx("Mv frame %ld", i);
     const RunInfo& ri = r.ch.run();
     const bool want = on && ri.status != RunStatus::None && (!any || !(key() == last));
     if (want) {
@@ -841,7 +841,7 @@ void test_move_log() {
   CHECK(printed.empty(), "no line before the lock");
   s.acquire(120.0, s.trackTime() + 0.1);
   for (; i < 30 + 300; ++i) frame(i, true);
-  ctx("Dv over 10 s locked");
+  ctx("Mv over 10 s locked");
   CHECK(printed.size() >= 4, "%u lines in 10 s at 120 BPM (one a run of 4 dance beats)",
         static_cast<unsigned>(printed.size()));
   for (size_t j = 0; j < runs.size(); ++j) {
@@ -863,15 +863,15 @@ void test_move_log() {
   r.expect1("v", "[dance] move log on");
   any = false;
   frame(i++, true);
-  ctx("Dv on again");
-  CHECK(r.out.lines.size() == 1, "the running run printed when Dv comes on again");
+  ctx("Mv on again");
+  CHECK(r.out.lines.size() == 1, "the running run printed when Mv comes on again");
   for (long e = i + 30; i < e; ++i) frame(i, true);
-  // reset(): forgets the last run printed, keeps Dv.
+  // reset(): forgets the last run printed, keeps Mv.
   r.con.reset();
-  CHECK(r.con.verbose(), "reset() keeps Dv on");
+  CHECK(r.con.verbose(), "reset() keeps Mv on");
   any = false;
   frame(i++, true);
-  ctx("Dv after reset()");
+  ctx("Mv after reset()");
   CHECK(r.out.lines.size() == 1, "the running run printed again after reset()");
   // A forced run prints level=4.
   r.expect1("mshuffle", "[dance] next run: shuffle");
@@ -880,15 +880,15 @@ void test_move_log() {
     frame(i, true);
     if (!r.out.lines.empty() && r.ch.run().level == 4) forced = true;
   }
-  CHECK(forced, "a [move] line with level=4 after Dmshuffle");
+  CHECK(forced, "a [move] line with level=4 after Mmshuffle");
   // A frame() while off prints nothing, whatever the run.
   r.expect1("v", "[dance] move log off");
   r.con.reset();
-  CHECK(!r.con.verbose(), "reset() keeps Dv off");
+  CHECK(!r.con.verbose(), "reset() keeps Mv off");
   frame(i++, false);
 }
 
-// 8. Dg: a genre for this track, by its folded key.
+// 8. Mg: a genre for this track, by its folded key.
 void test_genre() {
   {
     Rig r;
@@ -896,8 +896,8 @@ void test_genre() {
     r.ch.setCharacter(&theCrab());
     r.expect1("ghip hop", "[dance] genre \"hip hop\" for this track (key 5de39fa5)");
     r.expect1("gR&B", "[dance] genre \"R&B\" for this track (key 1bde7f5c)");
-    r.expect1("g--", "[dance] Dg: \"--\" folds to nothing, so no move can match it");
-    r.expect1("g", "[dance] Dg: \"\" folds to nothing, so no move can match it");
+    r.expect1("g--", "[dance] Mg: \"--\" folds to nothing, so no move can match it");
+    r.expect1("g", "[dance] Mg: \"\" folds to nothing, so no move can match it");
     r.expect1("g  hip hop  ", "[dance] genre \"hip hop\" for this track (key 5de39fa5)");
     // The fifth and later keys are ignored by the Choreographer; the line is printed anyway.
     r.expect1("gdrum n bass", "[dance] genre \"drum n bass\" for this track (key e6318a55)");
@@ -916,7 +916,7 @@ void test_genre() {
   TEST_ASSERT_TRUE(nod >= 0);
   auto nodLine = [&]() {
     r.run("l");
-    ctx("Dl at 87 BPM");
+    ctx("Ml at 87 BPM");
     expectLines(r.out, refDl(r.ch), "the reference formatter");
     return r.out.lines[1 + nod];
   };
@@ -925,33 +925,33 @@ void test_genre() {
     return s.size() >= n && s.compare(s.size() - n, n, tail) == 0;
   };
   std::string line = nodLine();
-  CHECK(endsWith(line, "3 genres, needs 0; now -"), "nod before Dg: %s", line.c_str());
-  r.expect1("g--", "[dance] Dg: \"--\" folds to nothing, so no move can match it");
+  CHECK(endsWith(line, "3 genres, needs 0; now -"), "nod before Mg: %s", line.c_str());
+  r.expect1("g--", "[dance] Mg: \"--\" folds to nothing, so no move can match it");
   line = nodLine();
-  CHECK(endsWith(line, "; now -"), "nod after Dg--: %s", line.c_str());
+  CHECK(endsWith(line, "; now -"), "nod after Mg--: %s", line.c_str());
   r.expect1("ghip hop", "[dance] genre \"hip hop\" for this track (key 5de39fa5)");
   line = nodLine();
-  CHECK(endsWith(line, "; now k 0"), "nod after Dghip hop: %s", line.c_str());
+  CHECK(endsWith(line, "; now k 0"), "nod after Mghip hop: %s", line.c_str());
   // A track change clears it.
   r.ch.onTrack(0x1234u, nullptr, 0);
   line = nodLine();
   CHECK(endsWith(line, "; now -"), "nod after a track change: %s", line.c_str());
 }
 
-// 9. Ds: refused for characters without travel moves; -1, 0, 1, +1.
+// 9. Ms: refused for characters without travel moves; -1, 0, 1, +1.
 void test_spot() {
   {
     Rig r;
     builtIns(r.cast);
     r.ch.setCharacter(&theCrab());
-    r.expect1("s-1", "[dance] Ds: crab has no travel moves: it dances at the centre");
+    r.expect1("s-1", "[dance] Ms: crab has no travel moves: it dances at the centre");
     CHECK(r.ch.cue().spot == 0, "the crab stays at the centre (spot %d)", r.ch.cue().spot);
-    r.expect1("s1", "[dance] Ds: crab has no travel moves: it dances at the centre");
-    r.expect1("sx", "[dance] Ds: crab has no travel moves: it dances at the centre");
+    r.expect1("s1", "[dance] Ms: crab has no travel moves: it dances at the centre");
+    r.expect1("sx", "[dance] Ms: crab has no travel moves: it dances at the centre");
     Rig st;
     builtIns(st.cast);
     st.ch.setCharacter(&theStick());
-    st.expect1("s+1", "[dance] Ds: stick has no travel moves: it dances at the centre");
+    st.expect1("s+1", "[dance] Ms: stick has no travel moves: it dances at the centre");
     CHECK(st.ch.cue().spot == 0, "the stick stays at the centre");
   }
   Rig r;
@@ -972,7 +972,7 @@ void test_spot() {
   const char* bad[] = {"s2", "s", "sx", "s-0", "s+-1", "s+0", "s-2", "s1x", "s 1 1"};
   for (const char* b : bad) {
     r.expect1(b, kSpotUsage);
-    CHECK(r.ch.cue().spot == -1, "a refused Ds leaves the spot (%d)", r.ch.cue().spot);
+    CHECK(r.ch.cue().spot == -1, "a refused Ms leaves the spot (%d)", r.ch.cue().spot);
   }
 }
 
@@ -981,7 +981,7 @@ void test_unknown() {
   Rig r;
   builtIns(r.cast);
   r.ch.setCharacter(&theCrab());
-  const char* args[] = {"x", "lx", "vv", "C", "L", "D", "?", "1", "l shuffle", "v1"};
+  const char* args[] = {"x", "lx", "vv", "C", "L", "M", "D", "?", "1", "l shuffle", "v1"};
   for (const char* a : args) r.expect1(a, unknownLine(a));
   r.expect(nullptr, {std::string(kCast0) + " *", kCast1});
   // A long argument: the line is cut at 255 bytes.
@@ -994,7 +994,7 @@ void test_unknown() {
   CHECK(full.compare(0, 255, r.out.lines[0]) == 0, "the cut line is the full line's first 255 bytes");
 }
 
-// 11. No dancer: Dl, Dm, Df and Ds need a drawn character.
+// 11. No dancer: Ml, Mm, Mf and Ms need a drawn character.
 void test_no_dancer() {
   Rig r;
   builtIns(r.cast);
@@ -1002,9 +1002,9 @@ void test_no_dancer() {
   for (const char* a : args) r.expect1(a, kNoDancer);
   // The rest don't.
   r.expect("", {std::string(kCast0) + " *", kCast1});
-  ctx("Dccrab with no dancer");
+  ctx("Mccrab with no dancer");
   const ConsoleReply rep = r.run("ccrab");
-  CHECK(rep.choose && rep.index == 0, "Dccrab: {%d, %d}", rep.choose, rep.index);
+  CHECK(rep.choose && rep.index == 0, "Mccrab: {%d, %d}", rep.choose, rep.index);
   r.expect1("v", "[dance] move log on");
   r.expect1("ghip hop", "[dance] genre \"hip hop\" for this track (key 5de39fa5)");
   r.out.clear();
@@ -1061,7 +1061,7 @@ void test_lengths() {
   }
   Rig r;
   // Renderer::Classic: a Drawn entry must hold a DrawnCharacter (F.1, which
-  // stepCount relies on), and this one is an InfoChar that Df reaches below.
+  // stepCount relies on), and this one is an InfoChar that Mf reaches below.
   TEST_ASSERT_TRUE(r.cast.add(&big, Renderer::Classic));
   r.ch.setCharacter(&big);
   const std::string line = std::string("[dance] cast 0: ") + id + " \"" + name + "\" by " + author + ", " + licence +
@@ -1069,7 +1069,7 @@ void test_lengths() {
   TEST_ASSERT_TRUE(line.size() <= 255);
   r.expect1("", line);
   r.run("l");
-  ctx("Dl at the limits");
+  ctx("Ml at the limits");
   expectLines(r.out, refDl(r.ch), "the reference formatter");
   TEST_ASSERT_EQUAL_INT(66, static_cast<int>(r.out.lines.size()));
   for (const std::string& l : r.out.lines) CHECK(l.size() <= 255, "%u bytes", static_cast<unsigned>(l.size()));
@@ -1080,12 +1080,12 @@ void test_lengths() {
   const std::string op(300, 'q');
   const char* subs[] = {"c", "m", "f", "g", "s", "x"};
   for (const char* sub : subs) {
-    ctx("D%s with a 300-byte operand", sub);
+    ctx("M%s with a 300-byte operand", sub);
     r.run((std::string(sub) + op).c_str());
     CHECK(r.out.lines.size() == 1, "%u lines", static_cast<unsigned>(r.out.lines.size()));
   }
   r.run((std::string("f") + op + ".1").c_str());
-  ctx("Df with a 300-byte move name");
+  ctx("Mf with a 300-byte move name");
   CHECK(r.out.lines.size() == 1, "%u lines", static_cast<unsigned>(r.out.lines.size()));
 }
 
@@ -1120,9 +1120,9 @@ bool endsWith(const std::string& s, const char* tail) {
 }  // namespace
 
 // F.2's sign rule ("a k or a spot prints as -1, 0 or +1") where the items
-// above only ever print 0 (and Dl's k -1): the fixture at 87 BPM, where fast
+// above only ever print 0 (and Ml's k -1): the fixture at 87 BPM, where fast
 // (150-180) is eligible at k +1 only, and at 120 BPM, where slow (36-60) is
-// eligible at k -1. Dl's `now`, and the [move] lines of forced runs (E.2.5: a
+// eligible at k -1. Ml's `now`, and the [move] lines of forced runs (E.2.5: a
 // forced move takes its eligibleK), one started at spot +1 (the run's start
 // spot is the current spot).
 void test_signed_fields() {
@@ -1180,8 +1180,8 @@ void test_signed_fields() {
   }
 }
 
-// Dm and Df alone (cancel, unfreeze) are Dm and Df: with no character they
-// print the no-dancer line too (F.2: Dl, Dm, Df and Ds act on the drawn
+// Mm and Mf alone (cancel, unfreeze) are Mm and Mf: with no character they
+// print the no-dancer line too (F.2: Ml, Mm, Mf and Ms act on the drawn
 // character). And <F> names only the six bits: a move with only other bits
 // set prints `-`, one with mirror and another bit `mirror`.
 void test_bare_forms_and_other_bits() {
@@ -1205,7 +1205,7 @@ void test_bare_forms_and_other_bits() {
   TEST_ASSERT_TRUE(r.cast.add(&odd, Renderer::Classic));
   r.ch.setCharacter(&odd);
   r.run("l");
-  ctx("Dl, flags with other bits");
+  ctx("Ml, flags with other bits");
   expectLines(r.out, refDl(r.ch), "the reference formatter");
   CHECK(r.out.lines[1].find(", flags -, ") != std::string::npos, "%s", r.out.lines[1].c_str());
   CHECK(endsWith(r.out.lines[2], ", flags mirror, needs 0"), "%s", r.out.lines[2].c_str());

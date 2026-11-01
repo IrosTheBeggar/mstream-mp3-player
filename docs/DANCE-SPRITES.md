@@ -17,10 +17,14 @@ The Dance tab gives the dancer a stage 320 px wide, and the first drawn
 set is a new stick figure that travels between three spots.
 
 **Status: designed (2026-10-07, at 2e1b5c5), with the user's decisions
-(section 12). Steps 1-3 are built (cbfed62: tools/dancepack.py, its
-tests and the test dancer; a5a6fdd: the C++ reader and blitter; d46a4c5
-and e55d4ec: the Choreographer, DrawnCharacter and the budget, then the
-unmirrored sway); the rest is designed.** Section 11 is the build order.
+(section 12). Steps 1-4 are built on this branch (cbfed62:
+tools/dancepack.py, its tests and the test dancer; a5a6fdd: the C++ reader
+and blitter; d46a4c5 and e55d4ec: the Choreographer, DrawnCharacter and the
+budget, then the unmirrored sway; 4428f66: the characters, the cast and the
+console, checked on the host only: no build of step 4 has run on a device,
+F.5); the rest is designed. The branch carries main up to 312b5f1 (the merge
+94200ae); main has none of the dance sprites yet.** Section 11 is the build
+order.
 The contributor guide, docs/DANCERS.md, comes with step 11. Appendices
 A-C freeze the contract for step 1: the MPDN v1 bytes, the shared
 integer algorithms and dancepack.py's interface. Appendix D freezes step
@@ -28,14 +32,18 @@ integer algorithms and dancepack.py's interface. Appendix D freezes step
 ASan env. Appendix E freezes step 3's: the character interface,
 DrawnCharacter, the budget and the Choreographer. Appendix F freezes step
 4's: the code characters, the cast, DanceMode on the Choreographer, the
-`D` console and the device checks of the first flash. Where they and the
+`M` console and the device checks of the first flash. Where they and the
 sections above differ, the appendices win.
 
 Where the facts come from:
 
 - **The code** at 2e1b5c5 (0.7.0). References name the function; a few
   `file:line` references point at the lines this design relies on or
-  changes.
+  changes. "Today", in sections 1-10 and the appendices, means that code
+  unless a note says otherwise. Main has moved on since: the tag scan
+  (0.8.0), other languages (0.9.0, 0.10.0), Auto DJ (0.11.0) and the UI
+  performance work after it (312b5f1). The notes "after the merge of main"
+  say where that changes a fact here.
 - **MASCOT-POC.md** ("The crab on the Core2"): the crab's and the stick
   figure's frame rate, draw and push times, and the 10-minute soak.
 - **BEAT-TRACKER-EVAL.md**: the first lock on music (median 9.7 s), the
@@ -66,7 +74,8 @@ Where the facts come from:
   the tracked beat to land in its range (reachable: 36-180). A running
   move whose pace leaves its range is cut at its next whole move beat.
   `song_bpm` is reserved for when tracks carry a BPM.
-- **Genre is a filter**, dormant until tracks carry genres. No fallback
+- **Genre is a filter**, dormant until a track's genres reach the dancer
+  (L1: the tag scan has had them since 0.8.0). No fallback
   relaxes the pace or genre filters; when nothing is eligible, an
   engine-made bounce plays.
 - **The format:** a PNG sheet (up to 15 colours) and `dancer.ini`,
@@ -362,12 +371,17 @@ Idle moves carry `when = quiet | listening | any`. The default is `any`.
 - **Matching.** A tagged move is eligible only when ANY of the track's up
   to 16 genres matches one of its tags. A match multiplies its weight
   by 3.
-- **Today** no track's genre is known, so tagged moves are dormant.
-  Untagged moves are always eligible.
-- **Later (L1).** Aliases (dnb, d&b, drum n bass → drumandbass; rnb →
-  randb) and families (electronic ⊃ house, techno, synthwave and so on)
-  arrive with the genre provider. They are a table only, so the format
-  doesn't change.
+- **Today** tagged moves are dormant, though the device has the tags. The
+  tag scan shipped in 0.8.0, and each track's record keeps its genres (up
+  to 16: `/.player/tags.bin`, docs/METADATA.md). But they aren't resident,
+  and nothing hands them to the dancer: DanceMode calls `onTrack(hash,
+  nullptr, 0)`, so only the console's `Mg` adds a genre. "Until tracks carry
+  genres", here and in the compiler's note (C.6), means until a track's
+  genres reach the Choreographer. Untagged moves are always eligible.
+- **Later (L1).** The genre provider, which isn't built. Aliases (dnb, d&b,
+  drum n bass → drumandbass; rnb → randb) and families (electronic ⊃ house,
+  techno, synthwave and so on) arrive with it. They are a table only, so
+  the format doesn't change.
 
 ### 2.8 When the filters leave nothing
 
@@ -419,7 +433,7 @@ otherwise auto-bounce.
   ignored: 45 of 48 ticks`.
 - **Dancers page:** the row reads "9 moves (1 ignored)" once the pack has
   been loaded in this session.
-- **Console:** `Dl` lists the moves.
+- **Console:** `Ml` lists the moves.
 
 ## 3. Choreography
 
@@ -541,7 +555,7 @@ position ≥ 0 (Appendix B.4).
 | Grid dropped, audio valid | grid invalid | Leaving, then Listening idles (the "no grid" case). |
 | Pause / resume | heard invalid / valid | Freeze. On resume the same grid applies at once, so Entering starts on the next beat and the phrase continues from A. |
 | Track change with a restart (skip, seek, start, output switch, host epoch) | a tracker restart: `BeatInput.restarts` changes | The Choreographer's track reset (E.2.4): history, latch, phrase and beat move are cleared, and it reseeds. The idle clock and the spot carry on, so nothing jumps. |
-| Gapless join | `DanceMode::onTrackChanged()` with no restart (a join keeps the epoch, so the lock carries through it) | `onTrack(pathHash, genres)`, which DanceMode calls on every track change: the new seed and the track's genres apply, and `Dg` is cleared. Phrase, latch and current move are kept. |
+| Gapless join | `DanceMode::onTrackChanged()` with no restart (a join keeps the epoch, so the lock carries through it) | `onTrack(pathHash, genres)`, which DanceMode calls on every track change: the new seed and the track's genres apply, and `Mg` is cleared. Phrase, latch and current move are kept. |
 
 ### 3.6 Weight and energy
 
@@ -576,26 +590,29 @@ position ≥ 0 (Appendix B.4).
   `Crab::frozen`, so ENERGY's k0 measurement and the k0-k15 sheet stay
   valid. (A 1-beat freeze move would wrap at k8: the freeze chain prefers
   2-beat moves.)
-- `Df` freezes, like `k`, are cleared on entering host mode, alongside
+- `Mf` freezes, like `k`, are cleared on entering host mode, alongside
   `frozen_` in `DanceMode::setHost()`.
 
 ### 3.9 The console
 
-It lands in step 4, on step 3's Choreographer and its hooks (E.2.8). `D`
-is free today. Appendix F.2 gives the exact syntax, replies and errors.
+It lands in step 4, on step 3's Choreographer and its hooks (E.2.8). Its
+letter is `M`: it was designed as `D`, but main gave the console's `D` to
+Auto DJ (lib/core/AutoDjCommand) while this branch was out, and the
+lowercase `m` stays the next dancer. Appendix F.2 gives the exact syntax,
+replies and errors.
 
-- `D` lists the cast; `Dc<id>` picks a character by id. Until the Dancers
+- `M` lists the cast; `Mc<id>` picks a character by id. Until the Dancers
   page (step 9), that is the only way to reach `stick-classic`.
-- `Dl` lists the moves, with their labels, and whether and at which k each
+- `Ml` lists the moves, with their labels, and whether and at which k each
   is eligible now.
-- `Dm<name>` forces the next run (`Dm` alone cancels it).
-- `Df<move>.<step>[m]` freezes a move at the start of a step, `m` meaning
-  mirrored; `Df` alone unfreezes. A code character's beat move counts
-  eighths of a move beat as its steps, so `Dfshuffle.5` is `k5`'s pose.
-- `Dg<genre>` injects a genre for the current track (cleared on a track
+- `Mm<name>` forces the next run (`Mm` alone cancels it).
+- `Mf<move>.<step>[m]` freezes a move at the start of a step, `m` meaning
+  mirrored; `Mf` alone unfreezes. A code character's beat move counts
+  eighths of a move beat as its steps, so `Mfshuffle.5` is `k5`'s pose.
+- `Mg<genre>` injects a genre for the current track (cleared on a track
   change).
-- `Dv` toggles `[move]` lines.
-- `Ds<spot>` moves the dancer to a spot (−1, 0, +1) for screenshots. It
+- `Mv` toggles `[move]` lines.
+- `Ms<spot>` moves the dancer to a spot (−1, 0, +1) for screenshots. It
   is refused for a character without travel moves (the crab, the
   classic stick), which stays at the centre (1.3).
 
@@ -788,11 +805,15 @@ reserved `song_bpm`; the other `[dancer]` keys are `key`, `palette`,
   UTF-8 with no control characters. The compiler warns about characters
   outside the device fonts' coverage: dancepack.py embeds the covered
   code points, and `dancepack.py --check` verifies them against the VLW
-  arrays in src/ui/VlwFonts.cpp (its four fonts cover the same 256 code
-  points), so no `vlw_font.py` change is needed. On the device a label
-  goes through TextFit, which replaces a glyph the font lacks with its
-  TextFold look-alike, or "?" (TextFit.h), and every name is ellipsized
-  by the usual fit rules.
+  arrays in src/ui/VlwFonts.cpp (its four fonts cover the same 734 code
+  points, Greek and Cyrillic among them), so no `vlw_font.py` change is
+  needed. On the device a label goes through TextFit, which replaces a
+  glyph the font lacks with its TextFold look-alike, or "?" (TextFit.h),
+  and every name is ellipsized by the usual fit rules. (Note, after the
+  merge of main: the firmware also draws 10,557 CJK and Hangul glyphs from
+  its built-in glyph store, docs/I18N.md, phase 2. `FONT_COVERAGE` holds only
+  the VLW fonts' code points, so a name in those scripts still gets the
+  compiler's warning, which overstates it: such a name is drawn.)
 - **Versioning.** `format = 1`. A manifest declaring a higher format than
   the tool knows is an error ("update dancepack.py"). In the binary,
   `minReader` covers changes that break meaning, and per-move `needs` bits
@@ -997,10 +1018,11 @@ attack surface.
 
 - NVS namespace `dance`, key `char`, holds the id string (≤ 24 B).
 - It is a schema bump with a no-op migrate step and a new test_nvs_layout
-  row, per NvsLayout.h's rules (`kCurrent` is 2 on main today). **The
-  number is taken at merge time:** if feature/metadata or another branch
-  lands its bump first, this one becomes the next number. That avoids a
-  clash like LibraryIndex's `kVersion` 3/4 → 5.
+  row, per NvsLayout.h's rules. `kCurrent` is 4 on main (3 added the UI's
+  language, 4 Auto DJ's settings), so as things stand this is 5. **The
+  number is taken at merge time:** if another branch lands its bump first,
+  this one becomes the next number. That avoids a clash like LibraryIndex's
+  `kVersion` 3/4 → 5. Step 4 doesn't touch NVS: the bump comes with step 9.
 - The key is written 5 s after the last switch, so cycling through
   characters costs one write.
 - A card id missing at boot falls back to the default without overwriting
@@ -1085,14 +1107,38 @@ Its geometry is a portable struct in `lib/core/DanceStage.h`,
 - Overlay clipping through `DanceView::setVisibleRows()` is unchanged.
   Nothing is pushed while the screen is dark.
 
+(Note, after the merge of main: **scroll mode stays on under the Dance
+tab.** Since #30 `Ui::ensureScroller(false)` only calls
+`vscroll_.invalidate()`; it never ends the hardware scroll. After a scrolled
+list the rows from y 72 down (`ListView::kTop`, 168 rows) are rotated in
+GRAM, and the stage (y 36-199) straddles that edge, so a bare `setClipRect` +
+`pushSprite` at screen rows would draw them rotated. Every stage push goes
+through `ui::gfx::pushRect(..., over = true)`, as DanceView::pushRect() does
+today, or through its mapping (`ListScroller::gramLineForScreen`). `over`
+leaves the rows an overlay holds to setVisibleRows(). pushRect works top-down
+inside a call and cuts a run at 40 rows (`gfx::kBand`) and wherever the GRAM
+rows stop being consecutive, each run its own LcdLock, so a hold can only come
+out shorter than planned. It knows nothing of the 8,000 px limit, so the hold
+plan stays DanceStage's, and bottom-up means one pushRect call per planned
+hold, the bottom one first.)
+
 **No whole-stage pushes in normal operation:**
 
-- **A page repaint** (tab entry, a wake, or any overlay closing: the
-  headerless Dance page repaints all of itself, through `Ui::uncover()`
-  and `Page::repaintHeader()`'s default) has already cleared to the
-  background. `enterClean()` adds only the ground line, the character rect
-  and the beat light. **`enterClean()` also discards any pending returned
-  rows.**
+- **A page repaint** (tab entry, a wake, or a sheet or dialog closing,
+  through `Ui::repaintUnder()`) has already cleared to the background.
+  `enterClean()` adds only the ground line, the character rect and the beat
+  light. **`enterClean()` also discards any pending returned rows.**
+- **A toast's end is a partial clear.** (Note, after the merge of main: this
+  design had it as a page repaint, through `Page::repaintHeader()`'s default.)
+  `Ui::uncover()` calls main's `DancePage::repaintHeader()`, which clears only
+  rows 36-71, draws the two panels that reach them (remembering only those:
+  lib/core/DancePanels.h, test_dance_panels) and calls `view().enter()`. From row 72 down the LCD still holds
+  the last frame, so `enterClean()` here would leave the old dancer's pixels
+  outside the new rect. Today's box is safe, because its enter() pushes all of
+  it. On this path step 5 pushes the union of the last frame's rect and this
+  frame's, with the beat light (the dot at box y 2-17 lies in the cleared rows
+  until step 6), or the whole stage, and discards returned rows as
+  `enterClean()` does. `enterClean()` stays for the full repaints above.
 - **Returned rows** are a safety net for a cover that shrinks with no
   repaint after it. They are pushed on the next frame only if no `enter()`
   came in between, banded as above. Today every close path repaints, so
@@ -1187,6 +1233,15 @@ at x 100-219, y 44-193, a BPM panel on the left, the dancer's name on the
 right, the track below at y 196-239 with a 2 px progress line. The new
 layout is Layout A (decision 1).
 
+(Note, after the merge of main: the tab and its page are translated since
+0.10.0, docs/I18N.md, phase 3. The tab's label is `tabs.dance`: Dance in
+English, German and Italian, and Baile, Danse, ダンス, Taniec, Dança, Танец
+and 跳舞 elsewhere. On the page the built-in dancers' names go by their ids
+through `dance.crab` and `dance.stick`, Krabbe and Figur in German, Cangrejo
+and Palitos in Spanish; any other dancer's name is its own, from its
+manifest. The logs, the console and `describe()` stay in English: the id,
+and `info().name` for `[dance] cast`.)
+
 ### 7.1 The stage
 
 - Screen x 0-319, y 36-199: 320×164 = 52,480 px, 2.9× today's box.
@@ -1224,8 +1279,11 @@ nothing outside host mode.
     and repaint the page on every switch.
 - **Dropped:** the 2 px progress line. The tab bar's Now Playing hairline
   already shows progress.
-- **Tested:** the new rooms and strings go in UiText.h, with fit tests in
-  test_ui_library.
+- **Tested:** the new rooms go in UiText.h, with fit tests in
+  test_ui_library. (Note, after the merge of main: the new strings go in
+  i18n/en.json and are drawn through `uistr::tr`, like the page's others, so
+  each must fit its room in all ten languages; a card dancer's name and
+  author are never translated.)
 
 ### 7.3 Switching
 
@@ -1237,7 +1295,7 @@ nothing outside host mode.
 - Re-tapping the Dance tab while on its root could also open the list, if
   the hold proves hard to discover (decision 11). DancePage doesn't
   override `Page::home()` today, so that tap is free.
-- Console: `m` (unchanged) and `Dc<id>`.
+- Console: `m` (unchanged) and `Mc<id>`.
 
 ### 7.4 The Dancers page
 
@@ -1276,8 +1334,10 @@ music takes a median 9.7 s. The fix:
 - `DancePage::enter()` calls `setDrawing(true)` when DanceMode is already
   active, so `setActive()`'s early return keeps the tracker. Then
   `enterClean()` runs.
-- The hardware scroller is ended (`Ui::ensureScroller()`) before DanceView
-  pushes again.
+- (Note, after the merge of main: this said the hardware scroller is ended
+  here.) Nothing ends it: `Ui::ensureScroller(false)` keeps scroll mode on and
+  only marks the band's GRAM stale, and DanceView pushes through the mapping
+  (6.5).
 - The screen going dark over the Dancers page still turns DanceMode off,
   and `Ui::redrawAll()` turns it back on only under the Dance page; going
   back after a wake starts a fresh lock, as any wake on another page does.
@@ -1303,12 +1363,12 @@ never starts under the list.
 - A Down on the stage switches the dancer (`DanceStage::inStage()`
   replaces `DanceView::inBox()`).
 - A Down on the rail, a tab, any button or PWR ends host mode, so
-  `kVizHint` ("Tap a button or a tab to stop") stays true.
+  `S::dance_viz_hint` ("Tap a button or a tab to stop") stays true.
 - The page doesn't claim holds in host mode, so a hold lifts as a slow tap
   and switches.
-- The rail hides the chip and the beat light, and shows `kVizTitle` and
-  `kVizHint` across x 8-311 (`kDanceBottomW`, 304). test_dance_texts_fit
-  is untouched.
+- The rail hides the chip and the beat light, and shows `S::dance_viz_title`
+  and `S::dance_viz_hint` across x 8-311 (`kDanceBottomW`, 304).
+  test_dance_texts_fit is untouched.
 - USB-VISUALIZER.md: `uit160,120` still switches; the "ends" check moves
   from `uit40,120` to `uit160,220`.
 
@@ -1454,7 +1514,7 @@ never starts under the list.
 | knee-up | 2 | 110-180 | 6 (4) | yes | double time on ~90 BPM tracks |
 | arm-wave | 4 | 60-100 | 8 (6) | yes | half time on fast tracks |
 | point | 4 | 90-130 | 4 (3) | yes | the disco point, exactly as in the section 4.5 example; `place = start` |
-| head-nod | 1 | 70-100 | 3 (3) | — | `genre = hip hop`: dormant; shows the field, testable with `Dg` |
+| head-nod | 1 | 70-100 | 3 (3) | — | `genre = hip hop`: dormant; shows the field, testable with `Mg` |
 | pose | 4 | any | 2 (2) | yes | `place = start`, weight 0.3, timing 1 3 |
 | grapevine | 4 | 90-140 | 8 (6) | yes | `travel = 1`; `go` on steps 1-6 |
 | chasse | 2 | 100-150 | 4 (3) | yes | `travel = 1`; a quick side gallop |
@@ -1637,6 +1697,7 @@ are integer-deterministic and need no pip install.
   - union versus split (the 1.3× rule);
   - the hold plan (≤ 40 rows and ≤ 8,000 px, bottom-up);
   - `enterClean` discarding returned rows;
+  - a toast's end pushing the last frame's rect too (6.5);
   - the spots on the stage;
   - the stage's hit zone under the lab's skews;
   - no hit zone on the rail outside host mode.
@@ -1647,7 +1708,7 @@ are integer-deterministic and need no pip install.
   load with step 10, which adds them to the cast.
 - **`test_code_characters`** and **`test_dance_console`** (step 4, F.4):
   the code characters' cue → pose mapping, a host harness of DanceMode's
-  frame, and the `D` console's lines.
+  frame, and the `M` console's lines.
 - **Extended suites:**
   - `test_beat_tracker`: `acquisitions()` counts every new grid,
     re-acquires included (E.4);
@@ -1664,11 +1725,11 @@ are integer-deterministic and need no pip install.
 ### 10.4 Log lines
 
 - New information never changes an existing `[dance]` line: no field is
-  added to the stats line and no format string changes (F.3). The `D`
+  added to the stats line and no format string changes (F.3). The `M`
   console's replies are new `[dance]` lines that no tool reads (F.2).
 - Dirty-area stats go on a separate
   `[stage] dirty=avg/max holds=n returned=n` line, printed with `s`.
-- `[move]` lines appear only with `Dv`.
+- `[move]` lines appear only with `Mv`.
 - So usb_viz's regexes are untouched.
 
 ### 10.5 Device checks
@@ -1719,7 +1780,7 @@ the baseline; this list is the release's, from step 5 on.
   - the NVS restore and its fallback.
 - **beat sync:** click120 still locks in ~2.6 s, with a ~2.7 ms median
   error.
-- **screenshots:** the `x`/`Df` readbacks show 0 px different. For the
+- **screenshots:** the `x`/`Mf` readbacks show 0 px different. For the
   crab's k0-k15 sheet, see steps 5 and 6 in section 11.
 - **overlays:** no stale pixels after a toast, a sheet or a dialog; the
   `[stage] returned=` counter stays 0.
@@ -1738,7 +1799,7 @@ the baseline; this list is the release's, from step 5 on.
   - `uit160,120` switches; `uit160,220` and the buttons end it;
   - starting the visualizer with the Dancers page up pops to the Dance
     root (and with the Dancers page left under another tab);
-  - a `Df` freeze is cleared on entry;
+  - a `Mf` freeze is cleared on entry;
   - the beat light is hidden.
 - **energy:** re-measure the Dance tab's USB mA idle and dancing (ENERGY
   item 8, now with banded pushes), and with the Dancers page up, where the
@@ -1783,10 +1844,10 @@ leaves its code out until step 4 calls it), so its check is E.6's build.
 | 1 | Dance sprites 1: the compiler | dancepack.py (PNG with tRNS and key, the INI rules, validation, the MPDN writer, build, check, info, builtin, `--check`, `--strict`, the budget mirror and the coverage report), test_dancepack.py, the shared eligibility, fold and budget vectors (test/support/dance/), the test dancer (tools/art/dancers/test/) → the TestPack fixture (test/support/dance/TestPack.h), the CI steps; Appendices A-C are its contract | unittest green on 3.10 and 3.12; byte-identical output on Windows and in CI |
 | 2 | 2: the reader and blitter | DanceRules.h (the limits, B.7's reach), DancePack (open with its report and the late-check hook, scan mode, region views), DanceBlit, Crc32, Fnv1a.h, GenreFold (B.8: a tag folding to nothing drops a move); dancepack.py's `scan_pack`, `read_pack` options and `reader_digest`, and the generated ReaderVectors.h; test_dance_pack (the fixture, the hand-built packs, scan mode, the truncations, the flips, the structure-aware fuzz, the vectors), test_dance_blit; the `native_asan` env and its CI step; Appendix D is its contract | the fuzz and every reader vector clean under ASan and UBSan (CI; the Docker command of D.5 on the laptop); every reader vector agrees with step 2's lists; the hashes equal the fixture's table; `pio test -e native`, the unittest suite and `--check` green; `pio run -e core2` builds with IRAM and DRAM unchanged |
 | 3 | 3: the choreographer | DanceCharacter.h, DanceChoreo (the pace rules, M recomputed, spots), DrawnCharacter, DanceBudget with D.2's split (the start spots in open()'s late-check hook, every pack; the budget after open(), in slices of simulated frames through `Pack::dropMove`, card packs), a minimal DanceStage.h (the geometry and rects), `acquisitions()`; test_dance_choreo, test_drawn_character, test_dance_budget (all three under native_asan too); test_dance_pack also on ReaderVectors' full lists; Appendix E is its contract | all suites green; the shared vectors agree with Python, ReaderVectors' full lists included; beat_eval builds and scores identically (E.5: the runner's outputs equal HEAD's, byte for byte, its timing aside); E.6 |
-| 4 | 4: characters, the cast and the console | CrabCharacter, ClassicStick (its id still `stick`), DanceCast replacing DanceSkin, DanceMode on the Choreographer with today's view (DanceFrame's facts → BeatInput, DanceHalf), `onTrack` for gapless joins, **the `D…` console** (D, Dc, Dl, Dm, Df, Dv, Dg, Ds; DanceConsole), Df cleared by host mode; test_character_set, test_code_characters, test_dance_console (all three under native_asan too); Appendix F is its contract | F.4's host checks; on the device (F.5, against the step 3 build): the crab's and the stick's k0-k15 sheets pixel-identical to 0.7.0's; fps, draw and push within ±10 %, logs and `usb_viz --measure` unchanged; IRAM unchanged, DRAM within +1 KB, cache_guard and the `b<n>` bench |
-| 5 | 5: the stage | DanceStage.h's hold plan and hit zone (its geometry and rects came with step 3), the DanceView rewrite (one RGB565 canvas, the renderers, direct blit, holds ≤ 40 rows and ≤ 8,000 px bottom-up, `enterClean`, returned rows as a safety net) **at the legacy rect, with the beat dot still in the box**; test_dance_stage | **the crab's k0-k15 sheet pixel-identical to 0.7.0 over the whole 120×150 window**; draw/push ±10 %; holds ≤ 6/10 ms; the classic figure measured in RGB565; overlays; soak |
+| 4 | 4: characters, the cast and the console | CrabCharacter, ClassicStick (its id still `stick`), DanceCast replacing DanceSkin, DanceMode on the Choreographer with today's view (DanceFrame's facts → BeatInput, DanceHalf), `onTrack` for gapless joins, **the `M…` console** (M, Mc, Ml, Mm, Mf, Mv, Mg, Ms; DanceConsole; `D` until main gave it to Auto DJ), Mf cleared by host mode; test_character_set, test_code_characters, test_dance_console (all three under native_asan too); Appendix F is its contract | Built (4428f66), host checks only so far. F.4's host checks; on the device (F.5, against a build of main and the numbers on record, F.5.0): the crab's and the stick's k0-k15 sheets pixel-identical to 0.7.0's; fps, draw and push within ±10 %, logs and `usb_viz --measure` unchanged; IRAM unchanged, DRAM within +1 KB, cache_guard and the `b<n>` bench |
+| 5 | 5: the stage | DanceStage.h's hold plan and hit zone (its geometry and rects came with step 3), the DanceView rewrite (one RGB565 canvas, the renderers, direct blit, holds ≤ 40 rows and ≤ 8,000 px bottom-up, each pushed through `ui::gfx::pushRect`'s mapping because scroll mode stays on under the tab, `enterClean`, a toast's end as a partial clear, 6.5, returned rows as a safety net) **at the legacy rect, with the beat dot still in the box**; test_dance_stage | **the crab's k0-k15 sheet pixel-identical to 0.7.0 over the whole 120×150 window**, coming from a scrolled list too; draw/push ±10 %; holds ≤ 6/10 ms; the classic figure measured in RGB565; overlays, a toast's end among them; soak |
 | 6 | 6: the Dance tab layout | the final stage geometry, the rail with no tap targets, the beat light in the rail (hidden in host mode), tap and flick, the host-mode rule, `x`/`X`, the "No PSRAM" message on the stage, the UiText rooms and tests | **the crab layer identical to step 5**, masking the old dot's square (box x 102-117, y 2-17, which `DanceView::drawDot()` clears around the dot at (110,10)) and the ground line's new pixels (screen x 100-103 and 216-219 on rows 189-190); host checks; fit tests; fps. Meanwhile a hold isn't claimed yet, so it lifts as a tap |
-| 7 | 7: the stick figure set | the runner, stick_frames.py (raster + retouch), the art, StickPack.cpp, test_stick_pack, the contact sheet; the classic figure becomes `stick-classic` (reachable with `Dc`) | the fps gates; draw ≤ 6.1 ms with an MP3; budget ≤ 16K; soak; the flash delta; the user's visual review of each move through `Dm`/`Df` |
+| 7 | 7: the stick figure set | the runner, stick_frames.py (raster + retouch), the art, StickPack.cpp, test_stick_pack, the contact sheet; the classic figure becomes `stick-classic` (reachable with `Mc`) | the fps gates; draw ≤ 6.1 ms with an MP3; budget ≤ 16K; soak; the flash delta; the user's visual review of each move through `Mm`/`Mf` |
 | 8 | 8: travel across three spots | the spots in DanceStage, `stageX`, travel eligibility and bias, two-rect pushes exercised, `x` following the spot, the coverage report's edge-fit column | grapevine and chasse travel on the device; dirty px and holds within the gates while travelling; no stale pixels at the edges; the crab unaffected |
 | 9 | 9: choosing dancers | the NVS schema bump (its number taken at merge), the Dancers page with thumbnails, `Page::leave(LeaveWhy)` + `setDrawing`, `showDance()` popping the Dance tab to its root, hold → page, the optional tab re-tap (decision 11) | the choice survives a reboot; test_nvs_layout; a hold gives the double tick; **hold → pick → back keeps the lock**; host mode pops the page; ENERGY item 9 re-measured |
 | 10 | 10: dancers from the card | the boot scan (with `avail`), the double-ended arena, the sliced loader (a reopen per slice, pause and resume), the device's own budget, failures, duplicates, overrides after load, greyed rows | 0 underruns with MP3 and 24/96 FLAC; loads during a queue save and a thumbnails job; a card pull; the corrupt set; the NVS card restore; the decoder addresses and the 10k-library bench |
@@ -1808,7 +1869,7 @@ together: only step-touch's mirrored budget cases moved (its median
 
 - The compiler lands before the blitter tests that need its hash table.
 - The console lands with the Choreographer (step 4), so steps 5-8 can use
-  `Df`, `Dm`, `Dg` and `Dc`.
+  `Mf`, `Mm`, `Mg` and `Mc`.
 - Stage parity with 0.7.0 is proven at the legacy rect (step 5), where it
   can hold exactly. After the layout change (step 6) only the crab layer
   is compared.
@@ -1822,8 +1883,12 @@ rebuild).
 
 **Later:**
 
-- L1: the genre provider (an MPTG lookup, or a library.idx v7 byte shared
-  with AutoDJ's U15), plus the alias and family table.
+- L1: the genre provider, plus the alias and family table. The genres are
+  in the tag scan's records (MPTG, since 0.8.0) and in no resident table: an
+  MPTG lookup at a track change, or a byte in library.idx, beside the
+  per-track BPM and key block U15 left in Auto DJ's backlog
+  (docs/AUTODJ-INDEX.md). A genre in a script Full folding can't spell has no
+  key (B.8) until L1 decides otherwise.
 - L2: walk-home, floor ticks, duets, custom spot sets.
 - L3: the web studio.
 - L4: an Aseprite/LibreSprite JSON importer.
@@ -1833,7 +1898,8 @@ rebuild).
 - L7: Layout B as an immersive toggle.
 - L8: pushing a pack over USB.
 - L9: energy-aware move choice.
-- L10: `song_bpm`, once tracks carry a BPM.
+- L10: `song_bpm`, once a track's BPM reaches the dancer (the tag scan's
+  records keep a stored one; few tracks have one, 2.4).
 
 ## 12. Decisions
 
@@ -1865,9 +1931,9 @@ rebuild).
    carry BPM.** Not the folded tempo taken literally (ranges only 72-176,
    the same ambiguity): the device can't tell 87 from 174 BPM, and stored
    BPM covers under 3 % of tracks.
-4. **Genre is a filter:** tagged moves dormant until tracks carry genres,
-   never relaxed. Not a preference (tagged moves anywhere, winning on a
-   match): "tied to genres" means a filter.
+4. **Genre is a filter:** tagged moves dormant until tracks' genres reach
+   the dancer (2.7), never relaxed. Not a preference (tagged moves anywhere,
+   winning on a match): "tied to genres" means a filter.
 5. **Move lengths are 1, 2, 4 or 8 beats.** Not any whole number to 8:
    powers of two keep the phrase grid.
 6. **The stick figure is crisp 2× pixel art at about today's height.** Not
@@ -1888,8 +1954,8 @@ rebuild).
     hard to discover. Not a rail button above BtnC (the usability walk
     removed exactly that, DancePage.cpp:8-10), nor tap and the list only.
 12. **In USB host mode a stage tap switches the dancer.** Not ending the
-    session: the rail, a tab and the buttons still do, so `kVizHint` stays
-    true.
+    session: the rail, a tab and the buttons still do, so `S::dance_viz_hint`
+    stays true.
 13. **The screen keeps its normal timeout.** Not a setting that keeps it
     lit while locked on the Dance tab: it costs power.
 14. **Built-ins are limited to the GPL-3-compatible allowlist**
@@ -2844,9 +2910,20 @@ For a 170-180 range at k = +1: T10 900 holds (180), 901 and 927 don't
 
 1. **Full folding.** Each code point below 0x80 stays; any other becomes
    its textfold Full replacement, exactly `textfold::replacement(cp,
-   Mode::Full)`: `punctuation()`, else `latin1Multi()`, else `symbols()`,
-   else `kLatin1` (when its entry isn't `\0`), else `kLatinExtA`, else
-   `?`.
+   Mode::Full)`. U+0080-009F first become Windows-1252's characters
+   (`fromC1()`: U+008A is Š, U+0092 is ’; the five cp1252 leaves undefined
+   stay as they are: a track's tags can hold these, a pack's can't, A.1).
+   Then, the first that has it:
+   - `punctuation()`;
+   - `dropped()`, which gives nothing: the combining marks, the variation
+     selectors and the tag characters;
+   - `latin1Multi()`, then `symbols()`;
+   - the base-letter tables, where an entry isn't `\0`: `kLatin1`,
+     `kLatinExtA`, `kLatinExtB`, `kLatinExtAdditional`;
+   - fullwidth ASCII (U+FF01-FF5E as U+0021-007E);
+   - `kFolds` (those blocks' digraphs, and the IPA and Latin Extended-C
+     letters that are a folded letter's other case);
+   - otherwise `?`.
 2. Lowercase A-Z.
 3. Replace every `&` and every `+` with ` and `.
 4. Split into words: the maximal runs of `[a-z0-9]`. Everything else
@@ -2859,14 +2936,32 @@ For a 170-180 range at k = +1: T10 900 holds (180), 901 and 927 don't
 The genre key is FNV-1a 32 (B.10) of the key's bytes. A tag that folds to
 nothing has no key, so FNV("") (0x811C9DC5) is never a key.
 
+**What folds to nothing.** A tag with no letter or digit Full folding can
+spell: spaces, punctuation or combining marks alone, and every letter of
+Greek, Cyrillic, Armenian, Hebrew, Arabic, Thai, Hangul, kana, Han and the
+other scripts, which are `?`. `compare()` and `sameName()` tell those letters
+apart, but `replacement()` doesn't, and B.8 folds through it. Fullwidth Latin
+no longer folds to nothing (`Ｋ－Ｐｏｐ` is kpop), and a tag written partly in
+another script keeps only what can be spelled (`Кино Rock` is rock).
+
 **Where the tables come from.** dancepack.py embeds `TEXTFOLD`, a dict
 from code point to replacement for every code point whose Full
-replacement isn't `?` (267 entries at 2e1b5c5; U+00BF `¿` isn't one, as
-it folds to `?`). `dancepack.py --check`
-rebuilds it from lib/core/TextFold.cpp's source (C.2) and reports any
-difference, so the two can't drift. The C++ GenreFold (step 2, D.1) calls
-`textfold::replacement()` itself and folds as a stream, with no buffer
-limit.
+replacement isn't `?` (1,529 entries at main 312b5f1; U+00BF `¿` and U+FF1F
+`？` aren't among them, as they fold to `?`). `dancepack.py --check`
+rebuilds it from lib/core/TextFold.cpp's and TextFoldTables.cpp's source
+(C.2) and reports any difference, so the two can't drift. The C++ GenreFold
+(step 2, D.1) calls `textfold::replacement()` itself and folds as a stream,
+with no buffer limit.
+
+**What main's fold changed** (its language work, docs/I18N.md, merged at
+94200ae). The 267 entries of 2e1b5c5 kept their replacements; 1,262 were added: 686
+dropped code points, 255 of Latin Extended Additional, 202 of Latin
+Extended-B and `kFolds`, 93 of fullwidth ASCII, 24 of U+0080-009F, and ˆ and
+˜. So a key moves only where the old `?` mattered: a letter now spelled
+(`Șlagăr` was lagar, `Nhạc Trẻ` nhctr, `STRAẞE` strae, `<U+008A>ka` ka), a tag
+that folded to nothing (`Ｒ＆Ｂ`), or a mark that split a word around a lone `n`
+(`Rock<U+0301>n<U+0301>Roll` was rockandroll). No tag of the test dancer's and
+no row of the table below that was there before moved.
 
 | Tag | Key | FNV-1a 32 |
 |---|---|---|
@@ -2895,6 +2990,15 @@ limit.
 | `Música Popular Brasileira` | musicapopularbrasileira | 0xC9B7E57E |
 | `AZ Zydeco` (both ends of step 2's A-Z) | azzydeco | 0x5B6EF8E2 |
 | `日本`, two spaces, the empty string | (folds to nothing) | — |
+| `<U+008A>ka` (cp1252's Š) | ska | 0xC52B829E |
+| `Drum <U+0092>n<U+0092> Bass` (cp1252's ’) | drumandbass | 0xE6318A55 |
+| `Rock<U+0301>n<U+0301>Roll` (a dropped mark doesn't split a word) | rocknroll | 0xB35D9181 |
+| `Șlagăr` (`kLatinExtB`) | slagar | 0x636CD271 |
+| `Nhạc Trẻ` (`kLatinExtAdditional`) | nhactre | 0x567844BC |
+| `STRAẞE` (`kFolds`) | strasse | 0x0581A214 |
+| `Ｋ－Ｐｏｐ` (fullwidth ASCII) | kpop | 0x9076A259 |
+| `Ｒ＆Ｂ` (its `＆` is step 3's) | randb | 0x1BDE7F5C |
+| `Кино`, `<U+0301>` alone | (folds to nothing) | — |
 
 ### B.9 Colours
 
@@ -3042,21 +3146,31 @@ python tools/dancepack.py --check
   checkout under `core.autocrlf`, as on the laptop, still passes). Each
   file that differs or is missing prints `stale: <path> (run python
   tools/dancepack.py builtin)`. It then checks the embedded tables:
-  - `TEXTFOLD` against lib/core/TextFold.cpp: in the bodies of
-    `punctuation()`, `latin1Multi()` and `symbols()`, each group of `case
-    0x…:` labels maps to the next `return "…";`; the string literals of
-    `kLatin1` and `kLatinExtA` are concatenated, with `\0`, `\"` and `\\`
-    decoded; the four are combined in `replacement()`'s order (B.8), and
-    entries equal to `?` are left out.
+  - `TEXTFOLD` against lib/core/TextFold.cpp and TextFoldTables.cpp, their
+    `//` comments ignored. In the bodies of `punctuation()`, `latin1Multi()`
+    and `symbols()`, each group of `case 0x…:` labels maps to the next
+    `return "…";`. The string literals of `kLatin1`, `kLatinExtA`,
+    `kLatinExtB` and `kLatinExtAdditional` are concatenated, with `\0`, `\"`
+    and `\\` decoded; an entry that isn't `\0` gives itself when it is
+    printable ASCII (`single()`), else `?`. `dropped()`'s `cp >= 0x… && cp <=
+    0x…` and `cp == 0x…` tests are the code points that give nothing. The
+    fullwidth range and its offset come from the line `if (cp >= 0x… && cp <=
+    0x…) return single(static_cast<char>(cp - 0x…));`, `kFolds` from its `{0x…,
+    "…"}` rows and `kCp1252`'s 32 values from its array (0: undefined). They
+    are combined in `replacement()`'s order (B.8) for U+0080-009F and every
+    code point they name, and entries equal to `?` are left out.
   - `FONT_COVERAGE` (sorted code point ranges) against
     src/ui/VlwFonts.cpp: every `const uint8_t kVlw<Name>[<n>] = { … };`
     array's bytes, whose glyph count is the big-endian u32 at byte 0 and
     whose glyph i has its code point in the big-endian u32 at 24 + 28·i;
-    the coverage is the intersection over the arrays (at 2e1b5c5 all four
-    hold the same 256 code points).
+    the coverage is the intersection over the arrays (at main 312b5f1 all
+    four hold the same 734 code points, in 20 ranges; 256 at 2e1b5c5).
   - A difference prints `stale: tools/dancepack.py (TEXTFOLD differs from
     lib/core/TextFold.cpp at U+00E9)`, or the same for `FONT_COVERAGE`
-    and src/ui/VlwFonts.cpp, naming the lowest code point that differs.
+    and src/ui/VlwFonts.cpp, naming the lowest code point that differs. A
+    missing source prints `stale: tools/dancepack.py (no
+    lib/core/TextFoldTables.cpp to check TEXTFOLD against)`, or the same for
+    the other two.
   - It prints nothing when everything matches.
 - **Outside the repository** (dancepack.py downloaded alone, so there is
   no lib/core beside tools/), `--check` and `builtin` without arguments
@@ -3673,8 +3787,9 @@ static const TraceFrame kTrace[] = { … };         // frames 0..N of each trace
   900, 901, 957, 969, 970, 1030, 1031, 1200, 1600, 1740, 1760; k in −1, 0,
   +1; (lo, hi) in the eligibility grid's ranges, then (100, 100). 585
   cases.
-- **The fold cases** are B.8's table, one row per tag, in its order (32
-  tags; the last three are `日本`, two spaces and the empty string). A
+- **The fold cases** are B.8's table, one row per tag, in its order (42
+  tags; the ten after `日本`, two spaces and the empty string came with main's
+  fold, B.8, and go last so the older rows keep their places). A
   tag's bytes of 0x80 and above are written as three-digit octal escapes
   (`\303\211`), `"` and `\` are escaped, and every other byte is written
   as itself.
@@ -3750,7 +3865,7 @@ read_png(data) -> (width, height, rows)   # rows[y][x] = (r, g, b, a), 8-bit (C.
 compile_dir(path, strict=False) -> Result
 read_pack(data, check_crc=True) -> Pack   # A.15 as for a card pack (budget included);
                                           # raises DanceError(reason)
-parse_textfold_cpp(text) -> {code point: replacement}
+parse_textfold_cpp(text, tables) -> {code point: replacement}   # TextFold.cpp's text, TextFoldTables.cpp's
 parse_vlw_coverage(text) -> [(first, last), ...]
 generated_files() -> [(path, text), ...]  # every registry output and vector header
 main(argv=None) -> int                # the command line; usage errors raise SystemExit(2)
@@ -4913,6 +5028,11 @@ tests`:
         run: pio test -e native_asan -f test_dance_pack -f test_dance_blit
 ```
 
+(Note, after the merge of main: the step now follows `Card fixtures` and `Auto
+DJ fixtures`, not `Host tests` directly. It starts with `sudo sysctl -w
+vm.mmap_rnd_bits=28`, for the hang noted above, and E.4 and F.4 added their
+suites to its list.)
+
 The libdeps cache's key follows platformio.ini, so the new env's Unity is
 cached with the rest. Step 2 is accepted as section 11's row says.
 
@@ -5363,7 +5483,7 @@ struct RunInfo {          // the current beat run (status None: the last one's f
   bool firstMirror;
   int8_t spot;            // its start spot
   int8_t phrase;          // p at its start, 0..7
-  uint8_t level;          // the ladder level that picked it: 0-2, 3 auto-bounce, 4 forced (Dm)
+  uint8_t level;          // the ladder level that picked it: 0-2, 3 auto-bounce, 4 forced (Mm)
   bool cut;               // its pace failed (2.5)
   RunStatus status;
   int64_t start, end;     // dance-clock beats: where it started, where it ends (E)
@@ -5375,11 +5495,12 @@ class Choreographer {
   Choreographer();                     // as after reset(0), with no character
   void reset(uint32_t pathHash);       // dance on (E.2.8): everything back but the character
   void onTrack(uint32_t pathHash, const uint32_t* genreKeys, int count);  // every track change
+  void syncPath(uint32_t pathHash);    // any queue key change (E.2.8; added after the merge of main)
   void setCharacter(const Character* c);                   // 3.7; null: none
-  void freeze(int move, uint32_t pos16, bool mirrored);    // Df; kNoMove unfreezes
-  void forceNext(int move);            // Dm: the next beat run
-  void setSpot(int spot);              // Ds
-  void addGenre(uint32_t key);         // Dg: a genre key for this track
+  void freeze(int move, uint32_t pos16, bool mirrored);    // Mf; kNoMove unfreezes
+  void forceNext(int move);            // Mm: the next beat run
+  void setSpot(int spot);              // Ms
+  void addGenre(uint32_t key);         // Mg: a genre key for this track
   const Cue& update(const BeatInput& in);                  // once a frame
   const Cue& cue() const;              // the last update's
   const Character* character() const;  // the current one, not a pending switch
@@ -5387,7 +5508,7 @@ class Choreographer {
   int t10() const;                     // the latched T in tenths, 0 = none yet
   int8_t prevK() const;                // kNoOctave = none
   double danceClock() const;           // E.2's clock
-  int8_t eligibleNow(int move) const;  // Dl: the k move would get now, or kNoOctave
+  int8_t eligibleNow(int move) const;  // Ml: the k move would get now, or kNoOctave
 };
 }  // namespace dance
 ```
@@ -5487,8 +5608,8 @@ state as it likes, as long as every observable (the Cue, `run()`,
 | genres | 16 track keys + 4 injected | none | |
 | pathHash, restartsSeen, started, lastAcqIn | | pathHash, 0, false, 0 | |
 | lastShowDance, lastEnergy | bool, uint32 | false, 39322 | the last update's, before any freeze |
-| Df | move, pos16, mirrored | off | the console's freeze |
-| forced | int8 | kNoMove | Dm |
+| Mf | move, pos16, mirrored | off | the console's freeze |
+| forced | int8 | kNoMove | Mm |
 
 #### E.2.3 update(in)
 
@@ -5634,7 +5755,7 @@ lastPlays = 0, recent = kNoMove ×3, prevTo = 0, cutExempt = kNoMove, prevK
 entering = false, sinceGrid = 0; the beat cue fields (E.2.7) to kNoMove,
 u 0, beatPos16 0, k 0, beatMirror false; firstRunBias = true. The weight,
 the idle clock, the idle run, the spot, the character, a pending switch,
-the genres, Df and forced stay.
+the genres, Mf and forced stay.
 
 **HOLD(u)**: run.uEnd = min(run.uEnd, u), run.status = Held, run.heldEnergy
 = lastEnergy. "At once" means u = run.lastU, the u the last frame drew
@@ -5661,7 +5782,7 @@ of a whole uNow is uNow: a cut on the beat holds at once.
 **SWITCH(c)** (3.7): END the run if any; character = c, pending = none;
 lastMove = kNoMove, lastPlays = 0, recent = kNoMove ×3, prevTo = 0,
 cutExempt = kNoMove (prevK stays: it is about the tempo); forced =
-kNoMove; Df off; when c isn't null and `!hasTravel(c)`, spot = 0; the beat
+kNoMove; Mf off; when c isn't null and `!hasTravel(c)`, spot = 0; the beat
 cue fields to kNoMove, u 0, beatPos16 0, k 0, beatMirror false; entering
 = false; idle.move = kNoMove and lastIdle = kNoMove, so the next idle step
 (U10: this update's, or the next one's for a switch made by setCharacter)
@@ -5754,7 +5875,7 @@ and after a run whose end key is unknown everything matches.
 (4 dance beats), unmirrored, no draws; lastMove = kAutoBounce, lastPlays =
 4, recent shifted, prevK kept, cutExempt = kNoMove, firstRunBias = false.
 
-**A forced move** (Dm): forced = kNoMove first. When the value is a beat
+**A forced move** (Mm): forced = kNoMove first. When the value is a beat
 move of the character (needs ignored): k = its eligibleK, or 0 when that
 is kNoOctave; O = its unmirrored and (with kMirror) mirrored orientations
 whose startSpotMask has the spot, or just unmirrored when none has; one
@@ -5866,7 +5987,7 @@ state is Listening.
 underneath, and the cue the state machine keeps (lastShowDance,
 lastEnergy) is the unfrozen one.
 
-- **Df** (when set; it wins over k): a beat move (kind Beat, or
+- **Mf** (when set; it wins over k): a beat move (kind Beat, or
   kAutoBounce): beatMove = it, beatPos16 = pos16, u = pos16 / 786432.0, k
   0, beatMirror = mirrored, showDance true, weight 1.0f, energy 65536,
   flash false. An idle move (kind Idle, or kAutoIdle): idleMove = it,
@@ -5901,6 +6022,9 @@ lastEnergy) is the unfrozen one.
   min(count, 16) of keys (null with count 0: none); the injected keys are
   cleared; seed(pathHash ^ restartsSeen ^ lastAcqIn). The phrase, the
   latch, the run and the history stay.
+- **syncPath(pathHash):** (Added after the merge of main, for F.1's two paths.)
+  onTrack(pathHash, nullptr, 0) when pathHash isn't the kept one; otherwise
+  nothing, so the injected keys and the draws stay.
 - **setCharacter(c):** c = the current character: a pending switch is
   dropped, nothing else. Otherwise SWITCH(c) at once when there is no
   character, the run isn't Running, or the last update's showDance was
@@ -5911,7 +6035,7 @@ lastEnergy) is the unfrozen one.
   behind the run's start). U7 then ends the run there, switches and picks afresh with
   the new character at the same spot (or the centre, SWITCH's rule). A
   second call while pending replaces the pending character.
-- **freeze(move, pos16, mirrored):** sets Df when move is a move index of
+- **freeze(move, pos16, mirrored):** sets Mf when move is a move index of
   the current character, kAutoBounce or kAutoIdle; any other value
   (kNoMove included) unfreezes. A switch unfreezes.
 - **forceNext(move):** forced = move; the next PICK takes it (E.2.5). A
@@ -5919,14 +6043,14 @@ lastEnergy) is the unfrozen one.
 - **setSpot(s):** s clamped to −1..1; END the run if any, then spot = s
   (overriding END's travel rule); entering = false. Dancing resumes
   through Entering at the next beat. (Note, step 3's integration: cue()'s
-  spot, rootX and rootY change at once, for Ds's screenshots; its other
+  spot, rootX and rootY change at once, for Ms's screenshots; its other
   fields wait for the next update.)
 - **addGenre(key):** appended to the injected keys while there are fewer
   than 4; otherwise ignored. Cleared by onTrack.
 - **eligibleNow(i):** kNoOctave for an i out of range, an idle move, a
   move with a needs bit, or a tagged move no key matches; with t10 = 0,
   0 for an unranged move and kNoOctave for a ranged one; otherwise
-  eligibleK(t10, lo, hi, prevK, beats, travel). (Dl's "at which k each is
+  eligibleK(t10, lo, hi, prevK, beats, travel). (Ml's "at which k each is
   eligible now"; alignment, place and travel feasibility aren't in it.)
 
 #### E.2.9 Section 3, where it lives
@@ -5950,8 +6074,8 @@ lastEnergy) is the unfrozen one.
 | 2.2 the must-show rule | E.2.7 |
 | 3.6 the weight and the energy | U3, E.2.1's e16, HOLD |
 | 3.7 switching | setCharacter, SWITCH, U7 |
-| 3.8 k<n>, Df | E.2.7 |
-| 3.9's hooks: Dm, Ds, Dg, Dl | E.2.8 |
+| 3.8 k<n>, Mf | E.2.7 |
+| 3.9's hooks: Mm, Ms, Mg, Ml | E.2.8 |
 | section 8: travel eligibility, the bias, the spot | E.2.5, END, SWITCH |
 
 ### E.3 Determinism
@@ -6153,7 +6277,7 @@ items below that use them were wrong without them):
 11. **Determinism:** every script above run twice from a new
     Choreographer gives equal cues; a different pathHash gives a
     different sequence of runs; a gapless join (onTrack mid-run) keeps the
-    run, the phrase count and t10, takes the new genres, clears Dg's, and
+    run, the phrase count and t10, takes the new genres, clears Mg's, and
     changes the later picks.
 12. **Discontinuities:** a nudge of −0.05 beat passes through (no hold);
     at 120 BPM a nudge of −0.2 is a jump within ¼ (the clock ends 0.2·S
@@ -6200,8 +6324,8 @@ items below that use them were wrong without them):
     n·98304, u = n/8, showDance, weight 1, energy 65536, flash exactly at
     k0 and k8; on a character whose freeze move has 1 beat, k9 gives u =
     1/8; the freeze chain (kFreeze, then unranged 2-beat, then unranged,
-    then kAutoBounce); Df on a beat move (exact pos16, mirrored) and on an
-    idle move (idleMs = 10·s for step start s); Df over k; freeze(kNoMove)
+    then kAutoBounce); Mf on a beat move (exact pos16, mirrored) and on an
+    idle move (idleMs = 10·s for step start s); Mf over k; freeze(kNoMove)
     and a switch unfreeze.
 17. **The console hooks:** forceNext (taken at the next pick, `run().level`
     4, even when not eligible, k 0 then); setSpot (the run ended, the cue's
@@ -6539,7 +6663,10 @@ for byte (test_crab_pose.cpp loses only `test_skins`, F.4). So do step 3's
 files (DanceChoreo, DanceCharacter.h, DrawnCharacter, DanceBudget,
 DanceStage.h), steps 1-2's, the BeatTracker, BeatScript.h and the vector
 headers. DanceView changes only its skin enum. Where F and the text above
-differ, F wins.
+differ, F wins. (Note, after the merge of main: moving the console from `D`
+to `M` changed DanceChoreo's and test_dance_choreo's comments and the names of
+their private freeze members, no behaviour; and FoldVectors.h gained B.8's ten
+new rows, its older rows untouched.)
 
 ### F.1 Files and the public API
 
@@ -6548,16 +6675,16 @@ differ, F wins.
 | `lib/core/CodeCharacters.h`, `.cpp` | new: `CrabCharacter` and `ClassicStick` (the two code characters behind E.1's interface, and their cue → pose functions), `codePhase` and `DanceHalf` |
 | `lib/core/DanceCast.h`, `.cpp` | new: the cast (1.5), replacing DanceSkin.h, and `findMove` |
 | `lib/core/DanceFrame.h`, `.cpp` | new: `FrameFacts`, `beatInput` (E.1's table) and `sceneOf` (DanceRate's scene from the cue) |
-| `lib/core/DanceConsole.h`, `.cpp` | new: the `D` console's parser and replies, and the `[move]` lines (F.2) |
+| `lib/core/DanceConsole.h`, `.cpp` | new: the `M` console's parser and replies, and the `[move]` lines (F.2) |
 | `lib/core/DanceSkin.h` | deleted |
 | `src/app/DanceMode.h`, `.cpp` | on the Choreographer (below) |
 | `src/ui/DanceView.h`, `.cpp` | `dance::Skin` becomes its own `DanceView::Skin`; nothing else |
-| `src/ui/DancePage.cpp` | the dancer's name, its dot, the tap and `describe()` from DanceMode's chosen entry (below) |
-| `src/app/SerialConsole.h`, `.cpp`, `src/main.cpp` | the `D` key, its action and the banner's help (below) |
+| `src/ui/DancePage.cpp` | the dancer's name, its dot, the tap and `describe()` from DanceMode's chosen entry (below). (Note, after the merge of main: what its panels last showed moved to `lib/core/DancePanels.h`, so a toast's end no longer remembers panels it didn't draw, 6.5; test_dance_panels) |
+| `src/app/SerialConsole.h`, `.cpp`, `src/main.cpp` | the `M` key, its action and the banner's help (below) |
 | `test/test_crab_pose/test_crab_pose.cpp` | `test_skins`, its `RUN_TEST` and the DanceSkin.h include removed; the header comment's "and the skin cycle" dropped; nothing else |
 | `test/test_character_set/`, `test/test_code_characters/`, `test/test_dance_console/` | new suites (F.4) |
 | `platformio.ini`, `.github/workflows/firmware.yml` | native_asan's suite list gains the three new suites (F.4); nothing else |
-| `docs/MASCOT-POC.md`, `README.md`, `docs/ARCHITECTURE.md` | DanceSkin's mentions become DanceCast's (README's lib/core list gains CodeCharacters, DanceCast, DanceFrame and DanceConsole); MASCOT-POC's Commands table gains a `D…` row pointing at F.2, and its `m` row and Skins paragraph say "the next dancer in the cast's tap cycle", the weight and the idle clock kept by the Choreographer |
+| `docs/MASCOT-POC.md`, `README.md`, `docs/ARCHITECTURE.md` | DanceSkin's mentions become DanceCast's (README's lib/core list gains CodeCharacters, DanceCast, DanceFrame and DanceConsole); MASCOT-POC's Commands table gains an `M…` row pointing at F.2, and its `m` row and Skins paragraph say "the next dancer in the cast's tap cycle", the weight and the idle clock kept by the Choreographer |
 
 **Rules.** D.1's rules for a new lib/core file hold, with two exceptions.
 CodeCharacters and DanceFrame use `float` where CrabPose, DancePose and
@@ -6757,7 +6884,7 @@ struct FrameFacts {      // what DanceMode::render() reads for a frame, before t
 // grid, as today's render() applies it only inside `if (beat)`. It never resets the
 // fold: DanceMode::restart() and hostRestart() still do, as today.
 BeatInput beatInput(const FrameFacts& f, TempoFold& fold);
-// DanceRate's scene for a frame drawn from cue c: frozen = f.freeze in 0..15 (k<n>; a Df
+// DanceRate's scene for a frame drawn from cue c: frozen = f.freeze in 0..15 (k<n>; an Mf
 // freeze shows through the cue's weight: 1 on a beat move, 0 on an idle one), beat =
 // f.grid, locked = f.locked, weight = c.weight.
 dancerate::Scene sceneOf(const FrameFacts& f, const Cue& c);
@@ -6790,7 +6917,7 @@ freeze.
 namespace dance {
 using ConsoleOut = void (*)(void* ctx, const char* line);  // one line, without its newline
 constexpr int kConsoleLine = 256;  // a line's buffer, NUL included; longer lines are cut
-struct ConsoleReply { bool choose; int index; };  // Dc: DanceMode chooses cast entry `index`
+struct ConsoleReply { bool choose; int index; };  // Mc: DanceMode chooses cast entry `index`
 
 // F.2's step count and step start of move `move` of c (pos16 as Choreographer::freeze
 // takes it). The cast says how c is drawn: an entry with Renderer::Drawn is a
@@ -6800,15 +6927,15 @@ bool stepStart(const DanceCast& cast, const Character& c, int move, int step, ui
 
 class DanceConsole {
  public:
-  // One D command: `arg` is the text after the D, as SerialConsole passes it (trimmed;
+  // One M command: `arg` is the text after the M, as SerialConsole passes it (trimmed;
   // null counts as ""). Replies through out (F.2); `chosen` is DanceMode's chosen entry.
   ConsoleReply run(const char* arg, Choreographer& ch, const DanceCast& cast, int chosen,
                    ConsoleOut out, void* ctx);
-  // Once a frame, after Choreographer::update(): while Dv is on, a [move] line for each
+  // Once a frame, after Choreographer::update(): while Mv is on, a [move] line for each
   // new beat run (F.2).
   void frame(const Choreographer& ch, ConsoleOut out, void* ctx);
-  void reset();           // dance on: forgets the last run printed (Dv's state stays)
-  bool verbose() const;   // Dv
+  void reset();           // dance on: forgets the last run printed (Mv's state stays)
+  bool verbose() const;   // Mv
 };
 }  // namespace dance
 ```
@@ -6830,7 +6957,7 @@ src/app/Psram.h's (the same calls; two definitions would be ambiguous).
 
 ```cpp
 void cycleSkin();                    // console m, a tap on the box: choose(cast_->next(chosen_))
-void danceCommand(const char* arg);  // console D<arg>: console_.run(); a Dc reply -> choose(index)
+void danceCommand(const char* arg);  // console M<arg>: console_.run(); an Mc reply -> choose(index)
 int dancer() const;                  // chosen_ (replaces skin())
 const char* dancerId() const;        // the chosen entry's info().id: "crab", "stick"
 const char* dancerName() const;      // its info().name: "Crab", "Stick"
@@ -6871,14 +6998,26 @@ string, so kFnvBasis), E.1's onTrack hash.
 **onTrackChanged().** As today, plus `choreo_.onTrack(pathHash(),
 nullptr, 0)` (no genres yet), on every call, host mode included: a
 gapless join keeps the phrase and the run (3.5), a skip's restart then
-resets through BeatInput.restarts (U2), and Dg's keys go. (Note, step
+resets through BeatInput.restarts (U2), and Mg's keys go. (Note, step
 4's build, after the 0.8.0 merge: main.cpp now calls onTrackChanged()
 only when the playing file changes, not for the same file re-keyed by a
 queue edit or a library update, and not behind the library update's
 fence; onTrack follows it, so "every track change" is every such call.)
 
+**onQueueKey().** `choreo_.syncPath(pathHash())` (E.2.8). (Note, after the
+merge of main: main.cpp calls it on every change of the queue's key outside the
+fence, right after the rule above, which stays as it is for the tempo prior.
+That rule misses two paths, which left FNV("") seeding every pick of the track:
+the dance on with an empty queue or after `qx`, then `qb`, `qa` or `qp` (the
+first key after none isn't a change, and Mg's keys carried over too); and the
+dance turned on or woken behind the fence (the queue is released, so the path
+is "", and after the fence the same file under a new key isn't a change). The
+same file re-keyed with the right hash already kept changes nothing, so Mg's
+keys stay. Nothing shows in step 4, where the crab and the stick have one beat
+move each; test_dance_choreo's test_sync_path checks it on the host.)
+
 **setHost(true).** As today (frozen_ = −1, with its line when it was
-set), plus `choreo_.freeze(dance::kNoMove, 0, false)`: a Df freeze is
+set), plus `choreo_.freeze(dance::kNoMove, 0, false)`: an Mf freeze is
 cleared too, silently (3.8).
 
 **render().** In this order:
@@ -6929,7 +7068,9 @@ reads `Skin::X`; nothing else changes.
 
 **DancePage.** `#include "DanceSkin.h"` goes. drawPanels' `skin` is
 `d.dancer()`, the name is `d.dancerName()` ("Crab", "Stick": today's
-strings), the two dots stay (`i < 2`, dot i lit when i equals
+strings; note, after the merge of main: `tr(S::dance_crab)` or
+`tr(S::dance_stick)` by `d.dancerId()`, section 7's translated names, and
+`d.dancerName()` for any other dancer), the two dots stay (`i < 2`, dot i lit when i equals
 `d.dancer()`: entries 0 and 1 are today's two dancers; step 6 replaces
 the panel). onEvent calls `cycleSkin()` as today, and `describe()` prints
 `d.dancerId()` where it printed `dance::skinName(d.skin())`. Pixels and
@@ -6937,7 +7078,7 @@ text are today's.
 
 **SerialConsole and main.cpp.**
 
-- `D` takes an argument ended with Enter, as `k` and `q` do:
+- `M` takes an argument ended with Enter, as `k` and `q` do:
   `Pending::Dance`, and on Enter `Serial.printf("> dance \"%s\"\n",
   arg_.c_str())` then `actions_.dance(arg_.c_str())` (arg_ trimmed, as
   for every command).
@@ -6945,18 +7086,18 @@ text are today's.
   dance;`, declared after `opus` and before `hostLine`, and main.cpp's
   initializer gains `[](const char* a) { danceMode.danceCommand(a); },`
   at the same place (the initializer is positional).
-- SerialConsole.h's key list gains `D... the dancers (docs/DANCE-SPRITES.md,
-  F.2): D the cast, Dc<id>, Dl, Dm<move>, Df<move>.<step>[m] / Df, Dv,
-  Dg<genre>, Ds<spot>`; the `m` line reads "m next dancer (the cast's
-  tap cycle)". main.cpp's `[console]` help line gains `D dancers (D the
-  cast, Dc<id> choose, Dl moves, Dm<move> next run, Df<move>.<step>[m]
-  freeze / Df off, Dv move log, Dg<genre>, Ds<spot>)` after `k<n> freeze
+- SerialConsole.h's key list gains `M... the dancers (docs/DANCE-SPRITES.md,
+  F.2): M the cast, Mc<id>, Ml, Mm<move>, Mf<move>.<step>[m] / Mf, Mv,
+  Mg<genre>, Ms<spot>`; the `m` line reads "m next dancer (the cast's
+  tap cycle)". main.cpp's `[console]` help line gains `M dancers (M the
+  cast, Mc<id> choose, Ml moves, Mm<move> next run, Mf<move>.<step>[m]
+  freeze / Mf off, Mv move log, Mg<genre>, Ms<spot>)` after `k<n> freeze
   pose 0-15 (k unfreezes)`. No tool reads that line (usb_viz waits for
   the `mstream-mp3-player ` banner).
 - (Note, step 4's build, after the 0.8.0 merge: SerialConsole now prints
-  `[console] D<arg>: the loop task's stack: <n> B never used during it …`
-  after every command ended with Enter, so each D command's replies are
-  followed by that 0.8.0 line; the D console's frames, two 256 B line
+  `[console] M<arg>: the loop task's stack: <n> B never used during it …`
+  after every command ended with Enter, so each M command's replies are
+  followed by that 0.8.0 line; the M console's frames, two 256 B line
   buffers and vsnprintf's, run on that 8 KB stack, and the line must not
   say LOW, F.5.3.)
 
@@ -6970,40 +7111,44 @@ Flash: the Choreographer, the console and the cast (estimate +15-25 KB),
 which is rodata and code that can move the MP3 loop's cache sets: section
 11's rule, F.5.
 
-### F.2 The D console
+### F.2 The M console
 
-**Syntax.** `D`, an optional argument, Enter. SerialConsole echoes `>
+(`M` since the merge of main 312b5f1, where `D` is Auto DJ's: it was `D` in
+this design and in step 4's first build, 4428f66. Only the letter and the
+replies' prefix changed.)
+
+**Syntax.** `M`, an optional argument, Enter. SerialConsole echoes `>
 dance "<arg>"` and hands the trimmed argument to DanceConsole::run. An
-empty argument is `D` itself. Otherwise its first byte is a sub-command
+empty argument is `M` itself. Otherwise its first byte is a sub-command
 letter, lowercase only: `c`, `l`, `m`, `f`, `v`, `g` or `s`. The rest of
 the argument, with leading and trailing spaces (0x20) removed, is the
 operand. `l` and `v` take none.
 
 | Typed | What | The Choreographer |
 |---|---|---|
-| `D` | the cast | none |
-| `Dc<id>` | choose a dancer by id: any entry, in the cycle or not | `setCharacter`, through DanceMode::choose |
-| `Dl` | the drawn character's moves, their labels, and the k each would get now | `character()`, `t10()`, `prevK()`, `eligibleNow(i)`, `cue()`, `run()` |
-| `Dm<move>`, `Dm` | force the next run; `Dm` alone cancels | `forceNext(i)`, `forceNext(kNoMove)` |
-| `Df<move>.<step>[m]`, `Df` | freeze at a step's start (`m`: the mirrored form); `Df` alone unfreezes | `freeze(i, pos16, m)`, `freeze(kNoMove, 0, false)` |
-| `Dv` | `[move]` lines on or off | none (`frame()` reads `run()`) |
-| `Dg<genre>` | a genre for the current track | `addGenre(genreKey(text))` |
-| `Ds<spot>` | move the dancer to spot −1, 0 or +1 | `setSpot(s)` |
+| `M` | the cast | none |
+| `Mc<id>` | choose a dancer by id: any entry, in the cycle or not | `setCharacter`, through DanceMode::choose |
+| `Ml` | the drawn character's moves, their labels, and the k each would get now | `character()`, `t10()`, `prevK()`, `eligibleNow(i)`, `cue()`, `run()` |
+| `Mm<move>`, `Mm` | force the next run; `Mm` alone cancels | `forceNext(i)`, `forceNext(kNoMove)` |
+| `Mf<move>.<step>[m]`, `Mf` | freeze at a step's start (`m`: the mirrored form); `Mf` alone unfreezes | `freeze(i, pos16, m)`, `freeze(kNoMove, 0, false)` |
+| `Mv` | `[move]` lines on or off | none (`frame()` reads `run()`) |
+| `Mg<genre>` | a genre for the current track | `addGenre(genreKey(text))` |
+| `Ms<spot>` | move the dancer to spot −1, 0 or +1 | `setSpot(s)` |
 | `m`, a tap on the dancer's box | the next dancer in the cast's tap cycle | `setCharacter`, through cycleSkin |
 
-`Dl`, `Dm`, `Df` and `Ds` act on the **drawn** character,
+`Ml`, `Mm`, `Mf` and `Ms` act on the **drawn** character,
 `choreo.character()`, not on a pending switch, which clears a forced
-move and a Df freeze when it lands (E.2.4's SWITCH). With no character
-(only in tests) they print `[dance] D: no dancer` and do nothing.
-(Note, step 4's integration: `Dm` and `Df` alone, the cancel and the
-unfreeze, are Dm and Df here too; test_dance_console checks it.)
+move and an Mf freeze when it lands (E.2.4's SWITCH). With no character
+(only in tests) they print `[dance] M: no dancer` and do nothing.
+(Note, step 4's integration: `Mm` and `Mf` alone, the cancel and the
+unfreeze, are Mm and Mf here too; test_dance_console checks it.)
 
 **Replies.** Each is one line through `out`, without its newline; `<id>`
 is the drawn character's `info().id` unless said otherwise. Numbers are
 plain decimals unless said otherwise; a k or a spot prints as `-1`, `0`
 or `+1`.
 
-**`D`.** One line per entry, in cast order (an empty cast prints
+**`M`.** One line per entry, in cast order (an empty cast prints
 `[dance] cast: empty`):
 
 `[dance] cast <i>: <id> "<name>" by <author>, <licence>, <origin>, <cycle>, <n> moves<ignored><mark>`
@@ -7015,12 +7160,12 @@ or `+1`.
 - `<ignored>`: `, <k> ignored` when info().ignoredMoves k > 0, else
   nothing; `<mark>`: ` *` on the chosen entry, else nothing.
 
-**`Dc<id>`.** `cast.find(operand)`: found, no line, and the reply
+**`Mc<id>`.** `cast.find(operand)`: found, no line, and the reply
 `{true, index}`; DanceMode then chooses it, printing `[dance] skin:
-<id>`. Otherwise `[dance] Dc: no dancer "<operand>" (D lists them)` and
+<id>`. Otherwise `[dance] Mc: no dancer "<operand>" (M lists them)` and
 `{false, 0}` (every other command replies `{false, 0}` too).
 
-**`Dl`.** A header, a line per move in index order, and a trailer:
+**`Ml`.** A header, a line per move in index order, and a trailer:
 
 ```
 [dance] <id>: <n> moves, T <T>, last ranged k <K>
@@ -7051,26 +7196,27 @@ or `+1`.
   or `auto-bounce`) and ` (running)`, ` (held)` or, with status None,
   ` (ended)`.
 
-**`Dm<move>`.** An empty operand: `forceNext(kNoMove)`, `[dance] next
+**`Mm<move>`.** An empty operand: `forceNext(kNoMove)`, `[dance] next
 run: the picker's`. Otherwise i = findMove(character, operand): −1 gives
-`[dance] Dm: <id> has no move "<operand>" (Dl lists them)`; an idle move
-gives `[dance] Dm: <name> is an idle move: only beat moves can be
+`[dance] Mm: <id> has no move "<operand>" (Ml lists them)`; an idle move
+gives `[dance] Mm: <name> is an idle move: only beat moves can be
 forced`; a beat move: `forceNext(i)`, `[dance] next run: <name>`. The
 next PICK takes it at level 4 (E.2.5), whatever its pace, genre and
-place.
+place. A switch (E.2.4) or the dance coming on again (E.2.8's reset) drops
+it.
 
-**`Df<move>.<step>[m]` and `Df`.** An empty operand: `freeze(kNoMove, 0,
-false)`, `[dance] Df off`. Otherwise, checked in this order:
+**`Mf<move>.<step>[m]` and `Mf`.** An empty operand: `freeze(kNoMove, 0,
+false)`, `[dance] Mf off`. Otherwise, checked in this order:
 
 1. **Syntax.** `<name>` is the operand's bytes before its last `.` (at
    least one); after the dot, 1-3 digits `0-9`, then nothing or exactly
-   one `m`. Anything else: `[dance] Df: Df<move>.<step>, with m after the
-   step for the mirrored form; Df alone unfreezes`.
-2. `findMove(character, name)` = −1: `[dance] Df: <id> has no move
-   "<name>" (Dl lists them)`.
-3. n = stepCount(...) is 0: `[dance] Df: <name> has no steps`.
-4. step ≥ n: `[dance] Df: <name> has steps 0-<n − 1>`.
-5. `m` on a move without kMirror: `[dance] Df: <name> has no mirrored
+   one `m`. Anything else: `[dance] Mf: Mf<move>.<step>, with m after the
+   step for the mirrored form; Mf alone unfreezes`.
+2. `findMove(character, name)` = −1: `[dance] Mf: <id> has no move
+   "<name>" (Ml lists them)`.
+3. n = stepCount(...) is 0: `[dance] Mf: <name> has no steps`.
+4. step ≥ n: `[dance] Mf: <name> has steps 0-<n − 1>`.
+5. `m` on a move without kMirror: `[dance] Mf: <name> has no mirrored
    form`.
 6. `freeze(i, pos16, m)`, pos16 = stepStart(...), and for a beat move
    `[dance] frozen: <id> <name>.<step><m> at move beat <U>`, for an idle
@@ -7088,20 +7234,23 @@ false)`, `[dance] Df off`. Otherwise, checked in this order:
   and 10 ms units for an idle one (B.4's pos16).
 - **A code character** (any other entry, or one not in the cast): its
   beat move counts **eighths** of a move beat as steps, n = 8·beats (16
-  for shuffle and bounce), step s at pos16 = s·98304, so `Df<move>.<n>`
-  shows exactly `k<n>`'s pose (the beat dot aside: a Df freeze never
+  for shuffle and bounce), step s at pos16 = s·98304, so `Mf<move>.<n>`
+  shows exactly `k<n>`'s pose (the beat dot aside: an Mf freeze never
   lights it, E.2.7); its continuous idle has none (n = 0).
 - stepStart is false, and leaves pos16 alone, for a move or step out of
   range.
 
-A Df freeze holds until `Df`, a switch (E.2.4) or host mode (F.1). `k`
-alone doesn't clear it and `Df` alone doesn't clear `k<n>`; with both
-set, Df shows (E.2.7).
+An Mf freeze holds until `Mf`, a switch (E.2.4), host mode (F.1) or the
+dance coming on again (E.2.8's reset, from setActive(true): back on the tab,
+a screen's wake, the end of a computer's `@identify`). `k<n>` differs: it is
+DanceMode's `frozen_`, not the Choreographer's, so the dance coming on again
+leaves it, and only `k` or host mode clears it. `k` alone doesn't clear an Mf
+freeze and `Mf` alone doesn't clear `k<n>`; with both set, Mf shows (E.2.7).
 
-**`Dv`.** Toggles: `[dance] move log on`, `[dance] move log off`. While
+**`Mv`.** Toggles: `[dance] move log on`, `[dance] move log off`. While
 on, `frame()` prints a line on each frame where `run()`'s status isn't
 None and its (move, start, k, plays, firstMirror, level) differ from the
-last line's, or no line was printed since `reset()` or since Dv was
+last line's, or no line was printed since `reset()` or since Mv was
 switched on:
 
 `[move] <id> <name> k=<k> plays=<plays> mirror=<0|1> spot=<spot> p=<phrase> level=<level> at=<start>`
@@ -7113,22 +7262,24 @@ one every 4 dance beats (shuffle: plays 2): the first after a lock at
 level 0, the next ones at level 2 (no-repeat gives way: the crab has one
 beat move), a forced one at level 4.
 
-**`Dg<genre>`.** `genreKey(operand, &key)` (B.8) false, for an empty
-operand too: `[dance] Dg: "<operand>" folds to nothing, so no move can
+**`Mg<genre>`.** `genreKey(operand, &key)` (B.8) false, for an empty
+operand too: `[dance] Mg: "<operand>" folds to nothing, so no move can
 match it`. Otherwise `addGenre(key)` and `[dance] genre "<operand>" for
 this track (key <key as 8 lowercase hex digits>)`. The Choreographer
 keeps the first 4 a track and ignores more (E.2.8; the line is printed
-anyway); the next track change clears them (onTrack).
+anyway); the next track change clears them (onTrack), and so does the dance
+coming on again (E.2.8's reset). The same file under a new key keeps them
+(syncPath, F.1).
 
-**`Ds<spot>`.** When `hasTravel(character)` is false: `[dance] Ds: <id>
+**`Ms<spot>`.** When `hasTravel(character)` is false: `[dance] Ms: <id>
 has no travel moves: it dances at the centre` (1.3: the crab and the
 classic stick never leave it). Otherwise the operand `-1`, `0`, `1` or
 `+1` gives `setSpot(s)` and `[dance] spot <s>`; anything else `[dance]
-Ds: a spot is -1, 0 or +1`.
+Ms: a spot is -1, 0 or +1`.
 
 **Anything else** (another letter, an uppercase one, text after `l` or
-`v`): `[dance] D: unknown "<arg>": D, Dc<id>, Dl, Dm<move>,
-Df<move>.<step>[m], Df, Dv, Dg<genre>, Ds<spot>`, `<arg>` the whole
+`v`): `[dance] M: unknown "<arg>": M, Mc<id>, Ml, Mm<move>,
+Mf<move>.<step>[m], Mf, Mv, Mg<genre>, Ms<spot>`, `<arg>` the whole
 argument.
 
 **`m` and the tap** go to `cast.next(chosen)` (F.1): crab → stick →
@@ -7149,13 +7300,13 @@ cue() is E.2.8's first one):
 > dance "fshuffle.5"
 [dance] frozen: crab shuffle.5 at move beat 0.625
 > dance "fshuffle.16"
-[dance] Df: shuffle has steps 0-15
+[dance] Mf: shuffle has steps 0-15
 > dance "fidle.0"
-[dance] Df: idle has no steps
+[dance] Mf: idle has no steps
 > dance "ghip hop"
 [dance] genre "hip hop" for this track (key 5de39fa5)
 > dance "s-1"
-[dance] Ds: crab has no travel moves: it dances at the centre
+[dance] Ms: crab has no travel moves: it dances at the centre
 ```
 
 The fixture (C.10) as a cast's entry 2 (BeatScript.h's CardDancer: a
@@ -7168,13 +7319,13 @@ card, in the cycle, Renderer::Drawn), chosen and drawn, no tempo yet:
 [dance] move 3 point: beat 4, pace 90-130, weight 0.3, repeat 2, flags mirror+start, from 1 to 2, mirrored 1 to 3, travel 0 any, 0 genres, needs 0; now -
 [dance] move 6 walk: beat 4, pace 90-140, weight 1.0, repeat auto, flags mirror, from 0 to 0, mirrored 0 to 0, travel 1 side, 0 genres, needs 0; now -
 [dance] move 12 look: idle, 3000 ms, listening, weight 1.0, flags mirror, needs 0
-Dfpoint.2m   [dance] frozen: test point.2m at move beat 1.000
-Dfbounce.3   [dance] frozen: test bounce.3 at move beat 1.500
-Dflook.2     [dance] frozen: test look.2 at 1500 ms
-Dflook.3     [dance] Df: look has steps 0-2
-Dfbounce.1m  [dance] Df: bounce has no mirrored form
-Dffuture.0   [dance] Df: test has no move "future" (Dl lists them)
-Ds+1         [dance] spot +1
+Mfpoint.2m   [dance] frozen: test point.2m at move beat 1.000
+Mfbounce.3   [dance] frozen: test bounce.3 at move beat 1.500
+Mflook.2     [dance] frozen: test look.2 at 1500 ms
+Mflook.3     [dance] Mf: look has steps 0-2
+Mfbounce.1m  [dance] Mf: bounce has no mirrored form
+Mffuture.0   [dance] Mf: test has no move "future" (Ml lists them)
+Ms+1         [dance] spot +1
 ```
 
 ### F.3 What stays byte-identical, and what changes by design
@@ -7186,26 +7337,26 @@ Ds+1         [dance] spot +1
 | The crab's k0-k15 box (all 18,000 px, the beat dot's corner included) | F.5's sheets against B0's, each readback `0 of 18000 px differ`; on the host, F.4's pose equalities |
 | The stick figure's k0-k15 box | the same |
 | The Dance page around the box (rows 36-239 of `X`, the crab at k0, nothing playing) | F.5 |
-| Every log line DanceMode and DancePage print today, and main.cpp's dance lines (`[dance] latency offset …`, `[dance] not while another screen is up …`): the same format strings, byte for byte (only main.cpp's `[console]` help line changes, gaining the `D` help, F.1); the `%s` that took `dance::skinName()` takes the chosen entry's `info().id`, the same strings `crab` and `stick`. Among them the ones tools read: `[dance] on (crab)`; `[dance] skin: <id>`; the 5 s stats line (`[dance] <on/off> skin=<id> fps=… draw=… push=… \| bpm=… \| <source> \| tracker=… resets=… lost=… \| ram=…K min=…K[ \| silent]`, whose `\| viz … hops= gaps= dup= stale= bad= errs= \| clock … snaps= … spread=` usb_viz.py's `_STATS` reads); `[dance] tracker reset (computer: epoch …`; `[dance] locked: … s after the reset[ (computer: epoch …)]`; `[beat]`; `[flash]`; `[dance] <n> fps (idle)` and `(dancing at <m> MHz)` | `git diff 68e51c3 -- src/app/DanceMode.cpp src/ui/DancePage.cpp src/main.cpp` (note, step 4's build: 68e51c3, the 0.8.0 merge, in place of e55d4ec, since 0.8.0 rewrote much of main.cpp and left the dance files alone): every removed line holding a format literal comes back with the same literal (only its arguments may change); F.5's masked-shape check; `tools/test_usb_viz.py` unchanged and passing |
-| `describe()`: `Dance: <id>, <bpm> BPM, confidence …` | the same diff |
+| Every log line DanceMode and DancePage print today, and main.cpp's dance lines (`[dance] latency offset …`, `[dance] not while another screen is up …`): the same format strings, byte for byte (only main.cpp's `[console]` help line changes, gaining the `M` help, F.1); the `%s` that took `dance::skinName()` takes the chosen entry's `info().id`, the same strings `crab` and `stick`. Among them the ones tools read: `[dance] on (crab)`; `[dance] skin: <id>`; the 5 s stats line (`[dance] <on/off> skin=<id> fps=… draw=… push=… \| bpm=… \| <source> \| tracker=… resets=… lost=… \| ram=…K min=…K[ \| silent]`, whose `\| viz … hops= gaps= dup= stale= bad= errs= \| clock … snaps= … spread=` usb_viz.py's `_STATS` reads); `[dance] tracker reset (computer: epoch …`; `[dance] locked: … s after the reset[ (computer: epoch …)]`; `[beat]`; `[flash]`; `[dance] <n> fps (idle)` and `(dancing at <m> MHz)` | `git diff 312b5f1 -- src/app/DanceMode.cpp src/ui/DancePage.cpp src/main.cpp` (note, after the merge of main: 312b5f1, the merge's parent on main, in place of 68e51c3 and e55d4ec, since main rewrote much of main.cpp and translated DancePage): every removed line holding a format literal comes back with the same literal (only its arguments may change); F.5's masked-shape check; `tools/test_usb_viz.py` unchanged and passing |
+| `describe()`: `Dance: <id>, <bpm> BPM, confidence …` (never translated) | the same diff |
 | The tracker and what it is fed | BeatTracker unchanged; F.5's lock times and errors |
 
 New lines are only the console's: the `> dance "…"` echo, F.2's replies
 (new `[dance]` texts that no tool reads), and `[move]` lines, only while
-`Dv` is on. The stats line gains no field (10.4).
+`Mv` is on. The stats line gains no field (10.4).
 
 **Changed by design**, all of it the Choreographer's (E.2), and none of
 it in a tool's regex:
 
 | What | Before (0.7.0) | Now | How it shows |
 |---|---|---|---|
-| Coming in | the dance half followed the beat from the first locked frame, faded in by the weight | no run until w > 0.5, then the next whole dance beat (Entering, ≤ 1 beat); meanwhile the dance half rests at its last u (0 after dance-on: the crab crouches into the hit) | with Dv, the first `[move]` line ≤ 1 beat after w passes 0.5; the `[dance] <n> fps (dancing …)` line comes at the lock as before (the scene is the same) |
+| Coming in | the dance half followed the beat from the first locked frame, faded in by the weight | no run until w > 0.5, then the next whole dance beat (Entering, ≤ 1 beat); meanwhile the dance half rests at its last u (0 after dance-on: the crab crouches into the hit) | with Mv, the first `[move]` line ≤ 1 beat after w passes 0.5; the `[dance] <n> fps (dancing …)` line comes at the lock as before (the scene is the same) |
 | The beat parity (which claw, which arm) | the tracker's beat index | the move beat counted from the run's start (1.3) | nothing in the logs |
 | A hit's frame | the phase as it fell | the first frame at most ⅛ beat late draws the beat exactly (2.2) | nothing |
-| A lost lock | the dance half froze at once | the run plays to its next whole move beat and holds that pose while it fades (Leaving) | `[dance] lost the beat`, then with Dv no new `[move]` line |
+| A lost lock | the dance half froze at once | the run plays to its next whole move beat and holds that pose while it fades (Leaving) | `[dance] lost the beat`, then with Mv no new `[move]` line |
 | A pause | the dance half froze at once | Freeze holds at once, the same; on resume the dancer comes back at the next whole beat (Entering), not at once | `usb_viz --pause-at` (F.5) |
 | The beat dot's phase | frac(trackerBeats·S) | frac(dance clock): at S = ½ the clock's beats can sit on the other tracker beat (REPHASE's shifts) | `[flash]` lines unchanged (they count tracker beats) |
-| A switch (`m`, a tap, `Dc`) | at once; the new skin started at the old one's weight, its idle clock at 0 | at once while idle; while dancing at the next whole dance beat; weight and idle clock carried on by the Choreographer | `[dance] skin: <id>` at the request, as before; with Dv the new dancer's first `[move]` line ≤ 1 beat later; no `10 fps (idle)` line between |
+| A switch (`m`, a tap, `Mc`) | at once; the new skin started at the old one's weight, its idle clock at 0 | at once while idle; while dancing at the next whole dance beat; weight and idle clock carried on by the Choreographer | `[dance] skin: <id>` at the request, as before; with Mv the new dancer's first `[move]` line ≤ 1 beat later; no `10 fps (idle)` line between |
 | The weight under `k<n>` | stood still (no update) | runs on underneath (E.2.7) | after `k` alone the fps line may change at once |
 | `[flash]` under a freeze in host mode | not printed | printed (F.1) | `usb_viz --flash` only scores lines; a freeze isn't part of its runs |
 | The crab's idle hiccup | every 1,000 s | every 2,000 s | nothing |
@@ -7339,59 +7490,59 @@ The built-in cast (addBuiltIns), a real Choreographer, an `out` that
 records the lines; the fixture through BeatScript.h's CardDancer for
 the drawn paths.
 
-1. **D:** F.2's two lines, the mark following the `chosen` argument
+1. **M:** F.2's two lines, the mark following the `chosen` argument
    (0, then 1); the reply `{false, 0}`; on a cast with the fixture
    appended, F.2's line for entry 2; the empty cast's line.
-2. **Dc:** `ccrab` → `{true, 0}` and no line; `cstick` and `c stick `
+2. **Mc:** `ccrab` → `{true, 0}` and no line; `cstick` and `c stick `
    (spaces trimmed) → `{true, 1}`; `cnope` and `c` → the no-dancer line
    with `"nope"` and `""`.
-3. **Dl:** F.2's four lines for the crab before any update; the
+3. **Ml:** F.2's four lines for the crab before any update; the
    stick's, with `stick`, `bounce` and `sway`. After 6 s of a Script
    locked at 120 BPM: the header's `T 120.0`, `now k 0` on shuffle, the
    trailer `now: dancing, spot 0, run shuffle (running)`. On the fixture:
    F.2's lines for moves 0, 3, 6 and 12 with no tempo; then locked at 120
    BPM, every beat move's `now` equal to `eligibleNow(i)` formatted
    (point `k 0`, slow `k -1`, fast `-`).
-4. **Dm:** `mshuffle` → `[dance] next run: shuffle`, and the next run's
+4. **Mm:** `mshuffle` → `[dance] next run: shuffle`, and the next run's
    `run().level` is 4 and its move 0; `midle` → the idle-move line;
    `mnope` → the no-move line; `mshuffle` then `m` → `[dance] next run:
    the picker's`, and the next run's level isn't 4.
-5. **Df on the crab:** F.2's lines for `fshuffle.5`, `fshuffle.16` and
+5. **Mf on the crab:** F.2's lines for `fshuffle.5`, `fshuffle.16` and
    `fidle.0`; after `fshuffle.5` the next update's cue has beatMove 0,
    beatPos16 491,520, u 0.625, weight 1.0f, showDance true, and
    `CrabCharacter::pose` of it equals `Crab::frozen(5 / 8.0f, false)`;
    `fshuffle.15` → `at move beat 1.875`; `fshuffle.5m` → the no-mirror
    line; `fshuffle`, `fshuffle.`, `f.3`, `fshuffle.x`, `fshuffle.5mm`,
-   `fshuffle.5 m`, `fshuffle.1234` → the usage line; `f` → `[dance] Df
+   `fshuffle.5 m`, `fshuffle.1234` → the usage line; `f` → `[dance] Mf
    off` and the next cue unfrozen (beatMove kNoMove while quiet).
-6. **Df on the fixture:** F.2's lines for `fpoint.2m`, `fbounce.3`,
+6. **Mf on the fixture:** F.2's lines for `fpoint.2m`, `fbounce.3`,
    `flook.2`, `flook.3`, `fbounce.1m` and `ffuture.0`; after `fpoint.2m`
    the cue's beatMove 3, beatPos16 786,432, beatMirror true; after
    `flook.2` its idleMove 12, idleMs 1,500, idleMirror false;
    `flook.1m` → `at 500 ms` and idleMirror true. stepCount: bounce 4,
    point 4, look 3; the crab's shuffle 16 and idle 0.
-7. **Dv and [move]:** `v` → `[dance] move log on`, again `off`. Switched
+7. **Mv and [move]:** `v` → `[dance] move log on`, again `off`. Switched
    on before a Script locks at 120 BPM, over its first 10 s locked,
    `frame()` after every update prints
    exactly one line per new run, each equal to F.2's format applied to
    `run()` (the first `level=0`, then `level=2`, `p=` alternating 0 and
    4, `plays=2`, `mirror=0`, `k=0`); none while off; after `reset()` the
    running run is printed again on the next frame.
-8. **Dg:** `ghip hop` → F.2's line (key 5de39fa5, FoldVectors' hash); on
+8. **Mg:** `ghip hop` → F.2's line (key 5de39fa5, FoldVectors' hash); on
    the fixture locked at 87 BPM, `nod`'s `now` goes from `-` to `k 0`
    after it; `g--` and `g` → the folds-to-nothing line with `"--"` and
    `""`.
-9. **Ds:** on the crab, `s-1` → the no-travel line and the spot stays 0.
+9. **Ms:** on the crab, `s-1` → the no-travel line and the spot stays 0.
    On the fixture: `s-1` → `[dance] spot -1` and cue().spot −1 at once;
    `s1` and `s+1` → `+1`; `s0` → `0`; `s2`, `s`, `sx`, `s-0` and `s+-1` →
    the spot line.
 10. **Unknown:** `x`, `lx`, `vv`, `C` and `L` → the unknown line with the
-    whole argument; null `arg` is `D`.
+    whole argument; null `arg` is `M`.
 11. **No dancer:** a Choreographer with no character: `l`, `mshuffle`,
-    `fshuffle.1` and `s0` print `[dance] D: no dancer`.
+    `fshuffle.1` and `s0` print `[dance] M: no dancer`.
 12. **Lengths:** with a test character whose id, name, author and
     licence are at A.5's limits (23, 24, 40, 40 B) and 63 ignored moves,
-    the D line is complete (≤ 255 B); no line handed to `out` is longer
+    the M line is complete (≤ 255 B); no line handed to `out` is longer
     than 255 B.
 13. (Note, step 4's integration: added.) **Signs:** on the fixture at 87
     BPM, `fast`'s `now` is `k +1` and a forced fast run started after
@@ -7419,7 +7570,9 @@ the drawn paths.
   `git diff e55d4ec --stat` shows, with no change either to CrabPose,
   CrabArt, DanceRate, step 3's files, test_dance_* or test_crab_pose
   (but test_skins). (Note, step 4's build: the 0.8.0 merge, 68e51c3,
-  changed none of these either, so the same holds against it.)
+  changed none of these either, so the same holds against it. Note, after the
+  merge of main: nor did 312b5f1; of what E.5 and F.5's poses compile, only
+  DanceView's push moved, to ui/Gfx, F.5. The rename's comments are F's note.)
 
 ### F.5 The device checks (for the later flash)
 
@@ -7427,18 +7580,75 @@ Flashing needs the user's go-ahead, each time; F.5.1 needs no device. **B0** is 
 and src/, plus the tracker's counter), **B1** step 4's. The same device,
 card, tracks and day for both, the procedure P run on each, everything
 in silent mode (`z`), Bluetooth idle. Note first which firmware the
-device runs (`L`), to put it back afterwards if the user wants (a build
-older than the device's may rebuild the card's library index first).
-(Note, step 4's build, after the 0.8.0 merge: the branch now carries
-0.8.0, so B0's device numbers are the ones captured from the device's
-v0.8.0 (ccef505), whose dance path is 0.7.0's and e55d4ec's byte for
-byte, and F.5.1's size and IRAM comparisons are against a build of the
-merge 68e51c3 without step 4, in place of e55d4ec's.)
+device runs (`L`, a key: no Enter), to put it back afterwards if the user
+wants (a build older than the device's may rebuild the card's library
+index first). Don't assume what it runs: another session may have flashed
+it, and it hasn't run v0.8.0 since those numbers were taken.
+(Note, after the merge of main: **B0 is now a build of main**, 312b5f1 or
+main as it stands at the flash, without step 4, and B1 that main with step 4
+merged. F.5.1's comparisons and procedure P are against it. It replaces both
+e55d4ec and the merge 68e51c3 of the earlier notes. F.5.0 records the only
+device numbers captured so far, from v0.8.0.)
+
+#### F.5.0 The numbers on record (v0.8.0, ccef505)
+
+Captured on the device from v0.8.0, whose dance path is 0.7.0's and
+e55d4ec's byte for byte. Their scratch folder is gone, so this is the record.
+
+The box: FNV-1a 32 of the raw big-endian RGB565 of the 120×150 box, from P3's
+`x` dumps.
+
+| k | crab | stick |
+|---|---|---|
+| 0 | 3e914943 | 482087da |
+| 1 | 5192f330 | cfe890ca |
+| 2 | a66d13d7 | 05a4aa47 |
+| 3 | 74055331 | 3c9e40ca |
+| 4 | ecc17653 | b991829f |
+| 5 | a46d2abf | d363f362 |
+| 6 | 23b978b7 | edc5e373 |
+| 7 | e93a0dc3 | adb5a506 |
+| 8 | 3d475f47 | 5ead1f3f |
+| 9 | fe6dcaf8 | ea66e1a2 |
+| 10 | ce3aba23 | 8a1b09a7 |
+| 11 | eeebe76d | 28196f9e |
+| 12 | 5b16ab77 | b991829f |
+| 13 | db6e7b77 | 4d82884a |
+| 14 | 3ac1dc4f | 179e6f6f |
+| 15 | b953c6db | ddc58b3e |
+
+Live, in silent mode:
+
+| What | Number |
+|---|---|
+| click120, the crab | 30.6 fps, draw 3.8 ms, push 6.2 ms |
+| click120, the stick | 30.4 fps, draw 7.7 ms, push 5.7 ms |
+| click120, the tracker | lock 2.62 s at 120.15 BPM; `err_med` 3.4 ms, `err_p95` 5.7 ms |
+| `usb_viz --click 120off` | lock 2.80 s, 120.01 BPM, median 3.6 ms, p95 5.8 ms |
+| The heap, playing | 70K free, minimum 65K |
+
+What to make of them:
+
+- **Two steps of the procedure read differently from how P was first
+  written.** `Pc160` is refused at runtime: 240 MHz and 160 MHz run the PLL
+  at different rates and the Bluetooth radio runs from it, so 160 MHz needs
+  `Pcb160` and a restart (P4). And `L` is a key, acted on at once, not a line
+  command ended with Enter (P1).
+- **The rest of the checklist has no number on record, and must be
+  recaptured on a current main build before step 4 is flashed:** P4's other
+  rows, the soak, the bench, `--flash`, `--pause-at` and the `X` dump, and
+  these numbers again, as B0.
+- **The box's hashes should carry over to main** (estimate: CrabPose, CrabArt,
+  DancePose and DanceView's drawing haven't changed); G1 still compares against
+  B0's own dumps. The timings may not: main's DanceView pushes through ui/Gfx
+  (`gfx::pushRect`, the UI performance work), under a Dance tab that stays in
+  scroll mode. The Dance page around the box is drawn through `uistr::tr`, so
+  run both builds in the same language.
 
 #### F.5.1 Before any flash: the builds
 
-- [ ] B0 built from a scratch checkout of e55d4ec (`git worktree add`,
-      removed afterwards) and B1 from step 4's tree, each from
+- [ ] B0 built from a scratch checkout of main, as F.5's note says (`git
+      worktree add`, removed afterwards) and B1 from step 4's tree, each from
       PowerShell with MSYSTEM removed (`pio run -e core2`); flash_guard
       and cache_guard pass on both.
 - [ ] **IRAM unchanged:** `.iram0.vectors` + `.iram0.text`
@@ -7458,8 +7668,8 @@ A serial logger holds COM3 with DTR and RTS low (the board isn't reset),
 logs every line with its time, and sends the keys; `x` and `X` dumps are
 kept as their `[shot]` lines.
 
-- **P1 Boot.** `z`, then wait for `out=speaker(silent test mode)`; `L`;
-  keep the `[heap] dance` and `[dance] tracker bench` lines.
+- **P1 Boot.** `z`, then wait for `out=speaker(silent test mode)`; `L`
+  (a key: no Enter); keep the `[heap] dance` and `[dance] tracker bench` lines.
 - **P2** Nothing playing (stopped); `d` → `[dance] on (crab)`.
 - **P3 The sheets.** For n = 0..15: `k<n>` Enter, 0.5 s, `x`, wait for
   `[shot] end`. Then `k` Enter; `m` → `[dance] skin: stick`; the same 16
@@ -7469,8 +7679,10 @@ kept as their `[shot]` lines.
   click120 from the queue (the built-ins `qb` adds, so the line measures
   its phase error) 60 s, an MP3 (Harder, Better, Faster, Stronger) 60 s,
   a 24/96 FLAC (Testarossa Autodrive) 60 s, paused 30 s; `m`, the stick
-  with click120 30 s and the MP3 60 s; `m`; `Pc160`, the crab with the
-  MP3 60 s; `Pc240`.
+  with click120 30 s and the MP3 60 s; `m`; `Pcb160` and a restart (`Pc160`
+  is refused at runtime, F.5.0), `z`, `d`, the crab with the MP3 60 s;
+  `Pcb0` and a restart, back to the default 240 MHz (or to the saved clock
+  `Pc` showed before P4, if it showed one).
 - **P5 Soak:** 10 minutes of MP3 with the crab, `s` at the end.
 - **P6 Bench:** `b</path>` on one MP3 (One More Time, the cache-set
   canary of section 6.8) and one FLAC, twice each.
@@ -7478,49 +7690,49 @@ kept as their `[shot]` lines.
   `python tools/usb_viz.py --port COM3 --click 120off --measure --expect
   "lock<=4,bpm<=0.5,med<=10,p95<=25"`; the same with `--click 174 --rate
   48000`; `--click 120 --measure --flash --seconds 40`; `--click 120off
-  --pause-at 20:5 --measure`. On B1 only, `Dv` before P7 and again
+  --pause-at 20:5 --measure`. On B1 only, `Mv` before P7 and again
   after it (on, then off): its only effect is the `[move]` lines in the
   runs' logs.
 - **P8** The queue and the player put back as found.
 
-#### F.5.3 B1 only: the D smoke list (after P8)
+#### F.5.3 B1 only: the M smoke list (after P8)
 
-- [ ] `D` → F.2's two cast lines, the crab marked; `Dl` → a header,
+- [ ] `M` → F.2's two cast lines, the crab marked; `Ml` → a header,
       F.2's two move lines and a trailer in F.2's format (nothing playing:
       `now: quiet`; the header's `T` is the last tempo latched since
       dance-on, `-` only before any lock).
-- [ ] click120 playing, locked: `Dl` → `T 120.0`, `now k 0`, `now:
+- [ ] click120 playing, locked: `Ml` → `T 120.0`, `now k 0`, `now:
       dancing, spot 0, run shuffle (running)`. (Note, step 4's
       integration: T is the tempo E.2.3 latched, to a tenth, and the
       device's tracker reads 119.9-120.15 on click120, so `T 120.1` or
       `T 120.2` passes too.)
-- [ ] `Dv` → `[dance] move log on`, then a `[move] crab shuffle k=0
+- [ ] `Mv` → `[dance] move log on`, then a `[move] crab shuffle k=0
       plays=2 mirror=0 spot=0 …` line every 4 dance beats (~2 s), the
       first after the lock at `level=0`, later ones `level=2`.
-- [ ] `Dmshuffle` → `[dance] next run: shuffle`, the next `[move]` line
-      `level=4`; `Dmidle` and `Dmnope` → their F.2 lines.
+- [ ] `Mmshuffle` → `[dance] next run: shuffle`, the next `[move]` line
+      `level=4`; `Mmidle` and `Mmnope` → their F.2 lines.
 - [ ] `m` while dancing → `[dance] skin: stick` at once, the first
       `[move] stick bounce …` line within a beat, and no `[dance] 10 fps
-      (idle)` line between; `Dccrab` → `[dance] skin: crab`; `Dcnope` →
+      (idle)` line between; `Mccrab` → `[dance] skin: crab`; `Mcnope` →
       its line.
-- [ ] `Dfshuffle.5` → `[dance] frozen: crab shuffle.5 at move beat
+- [ ] `Mfshuffle.5` → `[dance] frozen: crab shuffle.5 at move beat
       0.625`, and an `x` equal, row for row, to P3's crab k5;
-      `Dfshuffle.16`, `Dfshuffle.5m`, `Dfidle.0` and `Dfshuffle` → their
-      lines; `Df` → `[dance] Df off`, dancing again (two `x` 1 s apart
+      `Mfshuffle.16`, `Mfshuffle.5m`, `Mfidle.0` and `Mfshuffle` → their
+      lines; `Mf` → `[dance] Mf off`, dancing again (two `x` 1 s apart
       differ).
-- [ ] `Dghip hop` → `[dance] genre "hip hop" for this track (key
-      5de39fa5)`; `Dg--` → the folds-to-nothing line.
-- [ ] `Ds-1` → `[dance] Ds: crab has no travel moves: it dances at the
-      centre`; `Dx` → the unknown line.
+- [ ] `Mghip hop` → `[dance] genre "hip hop" for this track (key
+      5de39fa5)`; `Mg--` → the folds-to-nothing line.
+- [ ] `Ms-1` → `[dance] Ms: crab has no travel moves: it dances at the
+      centre`; `Mx` → the unknown line.
 - [ ] `uit160,120` (the scripted finger on the box) → `[dance] skin:
       stick`; again → `[dance] skin: crab`.
-- [ ] Host mode clears Df: `Dfshuffle.3` (an `x` equal to k3), then a
+- [ ] Host mode clears Mf: `Mfshuffle.3` (an `x` equal to k3), then a
       20 s `usb_viz --click 120` session; after it, with click120
       playing, two `x` 1 s apart differ.
-- [ ] `Dv` → `[dance] move log off`.
-- [ ] (Note, step 4's build, after the 0.8.0 merge:) every D command's
-      `[console] D…: the loop task's stack` line without `LOW`, `Dl`'s
-      and `D`'s included.
+- [ ] `Mv` → `[dance] move log off`.
+- [ ] (Note, step 4's build, after the 0.8.0 merge:) every M command's
+      `[console] M…: the loop task's stack` line without `LOW`, `Ml`'s
+      and `M`'s included.
 
 #### F.5.4 The gates (B1 against B0)
 
@@ -7535,7 +7747,7 @@ kept as their `[shot]` lines.
 - [ ] **G3 Logs:** the `[dance]`, `[beat]` and `[flash]` lines of B1's
       P1-P8, digits masked (`sed -E 's/-?[0-9]+(\.[0-9]+)?/N/g'`), sorted
       and made unique, against B0's: a shape only B1 has must be one of
-      e55d4ec's messages that B0's run happened not to print (a lock
+      B0's messages that its run happened not to print (a lock
       lost in one run only, say), never a new one; `[dance] on (crab)`
       and the `skin:` lines as in B0; `usb_viz.py --score` on B1's P7
       logs gives the same table, columns and `--expect` verdicts, as on
@@ -7549,7 +7761,7 @@ kept as their `[shot]` lines.
       `--pause-at` is by design (F.3) and recorded, not gated: the crab
       holds, then idles; after the resume B0 dances as the weight rises,
       B1 from the next whole beat after the weight passes 0.5 again (~0.3
-      s, then ≤ 1 beat; B1 with `Dv` switched on before P7 shows it as
+      s, then ≤ 1 beat; B1 with `Mv` switched on before P7 shows it as
       the first `[move]` line's time in the run's log).
 - [ ] **G6 Soak:** 0 underruns, the ring's minimum ≥ 1,400 ms, `min` ≥
       45K, the fps median within ±10 % of B0's.
@@ -7603,23 +7815,25 @@ Each is the simplest choice that keeps today's look:
     DanceMode's restart paths still do.
 11. **The console is portable** (DanceConsole), its replies are
     `[dance]` lines, and `[move]` lines cover beat runs only.
-12. **Df on a code character** counts eighths of a move beat as steps
-    (`Df<move>.<n>` shows `k<n>`'s pose, its beat dot off); its
+12. **Mf on a code character** counts eighths of a move beat as steps
+    (`Mf<move>.<n>` shows `k<n>`'s pose, its beat dot off); its
     continuous idle has no steps; `m` is refused for a move without
     kMirror.
-13. **Ds is refused for characters without travel moves,** keeping
+13. **Ms is refused for characters without travel moves,** keeping
     1.3's "always at the centre" for the crab and the classic stick.
-14. **Dm alone cancels a forced move;** an idle move can't be forced.
-15. **Dg prints the key** and doesn't echo the Choreographer's 4-key
+14. **Mm alone cancels a forced move;** an idle move can't be forced.
+15. **Mg prints the key** and doesn't echo the Choreographer's 4-key
     limit.
-16. **Host mode clears Df silently** (the existing `[dance] unfrozen`
+16. **Host mode clears Mf silently** (the existing `[dance] unfrozen`
     line stays k's), so the Choreographer's API doesn't change.
-17. **The scene's `frozen` is k<n> only:** a Df freeze shows through
+17. **The scene's `frozen` is k<n> only:** an Mf freeze shows through
     the cue's weight (1 on a beat move: dancing, 0 on an idle one).
 18. **The facts are computed under a freeze too,** so host mode's
     `[flash]` lines go on printing then.
 19. **onTrack on every track change,** host mode included, with no
-    genres; the path hash of no track is FNV(""), kFnvBasis.
+    genres; the path hash of no track is FNV(""), kFnvBasis. (Note, after
+    the merge of main: syncPath catches the paths main.cpp's rule misses,
+    F.1.)
 20. **test_dance_rate stays byte for byte;** the Choreographer-driven
     scene is checked in test_code_characters' harness (10.3's planned
     test_dance_rate extension).
@@ -7630,6 +7844,7 @@ Each is the simplest choice that keeps today's look:
     overrides (`replace`) come with step 10's loader. `kMaxCast` is 19.
 23. **The baseline B0 is e55d4ec** (0.7.0's dancer with the tracker's
     counter), flashed on the same device the same day, not the
-    device's own firmware or 0.7.0's old numbers.
+    device's own firmware or 0.7.0's old numbers. (Note, after the merge of
+    main: B0 is a build of main, F.5.)
 24. **Step 4 updates the docs that name DanceSkin** (README, ARCHITECTURE,
     MASCOT-POC's Commands and Skins); the rest of 10.6 stays with step 11.

@@ -37,11 +37,11 @@
 // the cast's (lib/core/DanceCast: the crab, then the classic stick figure),
 // each a Character with a pose function (lib/core/CodeCharacters) drawn
 // through DanceView's box. The dancer chosen last (cycleSkin, the console's
-// Dc) names the dancer everywhere at once: the logs, the page, describe().
+// Mc) names the dancer everywhere at once: the logs, the page, describe().
 // The one drawn is the Choreographer's, which while dancing switches at the
 // next whole dance beat, and the view's sprite format follows it. The
 // Choreographer keeps the dance weight, the idle clock and the spot across a
-// switch. The console's D commands are lib/core/DanceConsole's.
+// switch. The console's M commands are lib/core/DanceConsole's.
 //
 // Its frame rate (DanceRate, ENERGY.md item 8): 10 fps while it idles, 30
 // while it dances at 240 MHz, 24 below that; a change is logged ("[dance]
@@ -72,12 +72,17 @@ public:
   // Console.
   void setPrior(float bpm);          // 0 clears; also cleared by a track change
   void onTrackChanged();
+  // Any change of the queue's key, after onTrackChanged()'s rule, which main
+  // keeps for the tempo: the Choreographer learns the path that rule misses (the
+  // first track of an empty queue, a dance turned on behind the library's
+  // fence). The same file under a new key changes nothing (F.1).
+  void onQueueKey();
   void setOffsetMs(int ms) { offsetMs_ = ms; }
   void freeze(int n);                // phase n/8 of a two-beat cycle; -1 unfreezes
   // The dancers (the cast: docs/DANCE-SPRITES.md, F.1). Without the cast (no
   // PSRAM) cycleSkin and danceCommand say "[dance] not available (no PSRAM)".
   void cycleSkin();                    // console m, a tap on the box: the next in the cast's tap cycle
-  void danceCommand(const char* arg);  // console D<arg> (F.2); a Dc reply chooses that dancer
+  void danceCommand(const char* arg);  // console M<arg> (F.2); an Mc reply chooses that dancer
   int dancer() const { return chosen_; }  // the chosen cast entry (replaces skin()): 0 crab, 1 stick
   const char* dancerId() const;        // the chosen entry's info().id: "crab", "stick"
   const char* dancerName() const;      // its info().name: "Crab", "Stick"
@@ -147,7 +152,7 @@ private:
   TapReader reader_;
   dance::Choreographer choreo_;  // what the dancer does, frame by frame (~424 B)
   dance::DanceHalf half_;        // the code characters' dance half, held while no beat move shows
-  dance::DanceConsole console_;  // the console's D commands and Dv's [move] lines
+  dance::DanceConsole console_;  // the console's M commands and Mv's [move] lines
   int chosen_ = dance::kDefaultDancer;     // the cast entry asked for last
   int viewEntry_ = dance::kDefaultDancer;  // the cast entry whose sprite format the view holds
   dance::DanceCast* cast_ = nullptr;       // PSRAM, from begin(): the crab, the stick

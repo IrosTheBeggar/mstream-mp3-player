@@ -133,10 +133,10 @@ void Choreographer::reset(uint32_t pathHash) {
   lastAcqIn_ = 0;
   lastShowDance_ = false;
   lastEnergy_ = kIdleEnergy;
-  dfOn_ = false;
-  dfMove_ = kNoMove;
-  dfPos16_ = 0;
-  dfMirrored_ = false;
+  mfOn_ = false;
+  mfMove_ = kNoMove;
+  mfPos16_ = 0;
+  mfMirrored_ = false;
   forced_ = kNoMove;
   base_ = cue_ = firstCue();
 }
@@ -148,6 +148,10 @@ void Choreographer::onTrack(uint32_t pathHash, const uint32_t* genreKeys, int co
     for (int i = 0; i < count && i < kTrackGenres; ++i) genres_[genreCount_++] = genreKeys[i];
   injectedCount_ = 0;
   seed(pathHash_ ^ restartsSeen_ ^ lastAcqIn_);
+}
+
+void Choreographer::syncPath(uint32_t pathHash) {
+  if (pathHash != pathHash_) onTrack(pathHash, nullptr, 0);
 }
 
 void Choreographer::setCharacter(const Character* c) {
@@ -175,12 +179,12 @@ void Choreographer::setCharacter(const Character* c) {
 void Choreographer::freeze(int move, uint32_t pos16, bool mirrored) {
   const bool own = character_ && move >= 0 && move < character_->moveCount() && move < kMaxMoves;
   if (own || move == kAutoBounce || move == kAutoIdle) {
-    dfOn_ = true;
-    dfMove_ = static_cast<int8_t>(move);
-    dfPos16_ = pos16;
-    dfMirrored_ = mirrored;
+    mfOn_ = true;
+    mfMove_ = static_cast<int8_t>(move);
+    mfPos16_ = pos16;
+    mfMirrored_ = mirrored;
   } else {
-    dfOn_ = false;
+    mfOn_ = false;
   }
 }
 
@@ -194,7 +198,7 @@ void Choreographer::setSpot(int spot) {
   if (run_.status != RunStatus::None) endRun();
   spot_ = s;  // overrides END's travel rule
   entering_ = false;
-  // The cue's spot changes at once (3.9's Ds, for screenshots).
+  // The cue's spot changes at once (3.9's Ms, for screenshots).
   base_.spot = cue_.spot = s;
   base_.rootX = cue_.rootX = static_cast<int16_t>(spotX(s));
 }
@@ -345,7 +349,7 @@ void Choreographer::doSwitch(const Character* c) {
   prevTo_ = 0;
   cutExempt_ = kNoMove;
   forced_ = kNoMove;
-  dfOn_ = false;
+  mfOn_ = false;
   if (c && !hasTravel(*c)) spot_ = 0;
   clearBeatCue();
   entering_ = false;
@@ -403,7 +407,7 @@ void Choreographer::pick(int64_t start) {
   const int n = character_ ? (character_->moveCount() < kMaxMoves ? character_->moveCount() : kMaxMoves) : 0;
   const uint8_t spotBit = static_cast<uint8_t>(1u << (spot_ + 1));
 
-  // A forced move (Dm): pace, genre, alignment, place and no-repeat aren't checked.
+  // A forced move (Mm): pace, genre, alignment, place and no-repeat aren't checked.
   if (forced_ != kNoMove) {
     const int f = forced_;
     forced_ = kNoMove;
@@ -676,24 +680,24 @@ void Choreographer::buildCue(bool heard, bool gridOk, bool lockedOk, int8_t free
     c.state = DanceState::Listening;
   }
 
-  // Freezes override the shown cue only (3.8); Df wins over k<n>.
+  // Freezes override the shown cue only (3.8); Mf wins over k<n>.
   cue_ = c;
-  if (dfOn_) {
-    const bool beat = dfMove_ == kAutoBounce || (dfMove_ >= 0 && labels(dfMove_).kind == MoveKind::Beat &&
-                                                 character_ && dfMove_ < character_->moveCount());
+  if (mfOn_) {
+    const bool beat = mfMove_ == kAutoBounce || (mfMove_ >= 0 && labels(mfMove_).kind == MoveKind::Beat &&
+                                                 character_ && mfMove_ < character_->moveCount());
     if (beat) {
-      cue_.beatMove = dfMove_;
-      cue_.beatPos16 = dfPos16_;
-      cue_.u = dfPos16_ / kPos16PerBeat;
+      cue_.beatMove = mfMove_;
+      cue_.beatPos16 = mfPos16_;
+      cue_.u = mfPos16_ / kPos16PerBeat;
       cue_.k = 0;
-      cue_.beatMirror = dfMirrored_;
+      cue_.beatMirror = mfMirrored_;
       cue_.showDance = true;
       cue_.weight = 1.0f;
       cue_.energy = kFullEnergy;
     } else {
-      cue_.idleMove = dfMove_;
-      cue_.idleMs = static_cast<uint32_t>((static_cast<uint64_t>(dfPos16_) * 10) >> 16);
-      cue_.idleMirror = dfMirrored_;
+      cue_.idleMove = mfMove_;
+      cue_.idleMs = static_cast<uint32_t>((static_cast<uint64_t>(mfPos16_) * 10) >> 16);
+      cue_.idleMirror = mfMirrored_;
       cue_.showDance = false;
       cue_.weight = 0.0f;
       cue_.energy = kIdleEnergy;

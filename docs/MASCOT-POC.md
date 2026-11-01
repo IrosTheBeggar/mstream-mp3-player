@@ -367,12 +367,11 @@ figure), and the next frame pushes the whole box.
 
 **Skins** (the cast, `DanceCast`; docs/DANCE-SPRITES.md, F.1): `m`, or a
 tap inside the dancer's 120×150 box while dancing, goes to the next dancer
-in the cast's tap cycle, crab → stick → crab; a tap elsewhere above the
-button strip still leaves the dance screen. The dance weight and the idle
+in the cast's tap cycle, crab → stick → crab. The dance weight and the idle
 clock are the Choreographer's (lib/core/DanceChoreo), not the dancer's, so
 a switch mid-song doesn't fade out and back in; while the dancer dances the
 switch lands on the next whole dance beat. The choice isn't saved: every
-boot starts with the crab. `k<n>`, `x` and `X` work for both, and the `D`
+boot starts with the crab. `k<n>`, `x` and `X` work for both, and the `M`
 console (below) reaches the cast by id.
 
 On the device: see [The crab on the Core2](#the-crab-on-the-core2).
@@ -402,7 +401,7 @@ line and the title bar. All device tests of this proof of concept run in it.
 | `t<bpm>` + Enter | tempo prior; `t` or `t0` clears it, and so does a track change |
 | `y<ms>` + Enter | latency offset, + later / − earlier (not saved) |
 | `k<n>` + Enter | freeze the dancer (either one) at phase n/8 of a two-beat cycle (0-7 even beat, 8-15 odd); `k` alone follows the beat again |
-| `D…` + Enter | the dancers' console (docs/DANCE-SPRITES.md, F.2): `D` the cast, `Dc<id>` choose one, `Dl` its moves, `Dm<move>` force the next run (`Dm` cancels), `Df<move>.<step>[m]` freeze at a step (`Df` unfreezes), `Dv` a `[move]` line per run, `Dg<genre>` a genre for this track, `Ds<spot>` a spot (refused for the crab and the stick: they dance at the centre) |
+| `M…` + Enter | the dancers' console (docs/DANCE-SPRITES.md, F.2; `D…` is Auto DJ's): `M` the cast, `Mc<id>` choose one, `Ml` its moves, `Mm<move>` force the next run (`Mm` cancels), `Mf<move>.<step>[m]` freeze at a step (`Mf` unfreezes), `Mv` a `[move]` line per run, `Mg<genre>` a genre for this track, `Ms<spot>` a spot (refused for the crab and the stick: they dance at the centre) |
 
 The `[dance]` line has these fields:
 

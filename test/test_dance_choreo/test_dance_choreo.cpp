@@ -205,10 +205,11 @@ class Twin {
     compareCalls();
     historyCleared_ = true;
     noKeepCheck_ = true;
-    df_ = false;  // reset: every state back but the character (Df included, E.2.2)
+    mf_ = false;  // reset: every state back but the character (Mf included, E.2.2)
     forced_ = kNoMove;
     trackKeys_.clear();
     injected_.clear();
+    pathHash_ = pathHash;
     havePrev_ = false;
     w_ = 0.0f;
     runBroken_ = true;
@@ -220,6 +221,15 @@ class Twin {
     trackKeys_.clear();
     for (int i = 0; i < count && i < 16; ++i) trackKeys_.push_back(keys[i]);
     injected_.clear();
+    pathHash_ = pathHash;
+  }
+  void syncPath(uint32_t pathHash) {
+    a_.syncPath(pathHash);
+    b_.syncPath(pathHash);
+    if (pathHash == pathHash_) return;
+    trackKeys_.clear();
+    injected_.clear();
+    pathHash_ = pathHash;
   }
   void setCharacter(const dance::Character* c) {
     a_.setCharacter(c);
@@ -233,7 +243,7 @@ class Twin {
     a_.freeze(move, pos16, mirrored);
     b_.freeze(move, pos16, mirrored);
     const dance::Character* c = a_.character();
-    df_ = move == kAutoBounce || move == kAutoIdle || (c && move >= 0 && move < c->moveCount());
+    mf_ = move == kAutoBounce || move == kAutoIdle || (c && move >= 0 && move < c->moveCount());
   }
   void forceNext(int move) {
     a_.forceNext(move);
@@ -268,8 +278,8 @@ class Twin {
     r.t10 = a_.t10();
     r.prevK = a_.prevK();
     r.ch = a_.character();
-    if (r.ch != ch_) {  // a switch inside update (U7, U8): Df off, history cleared
-      df_ = false;
+    if (r.ch != ch_) {  // a switch inside update (U7, U8): Mf off, history cleared
+      mf_ = false;
       forced_ = kNoMove;
       historyCleared_ = true;
       noKeepCheck_ = true;
@@ -279,7 +289,7 @@ class Twin {
       historyCleared_ = true;
       noKeepCheck_ = true;
     }
-    r.frozen = (in.freeze >= 0 && in.freeze <= 15) || df_;
+    r.frozen = (in.freeze >= 0 && in.freeze <= 15) || mf_;
     stepWeight(in);
     stepShow(r);
     if (checks) checkFrame(r);
@@ -315,12 +325,13 @@ class Twin {
   bool show_ = false;
   double prevRaw_ = -1.0;
   bool runBroken_ = true;  // a call ended the run since the last update
-  bool df_ = false;
+  bool mf_ = false;
   int forced_ = kNoMove;
   bool historyCleared_ = true;
   bool noKeepCheck_ = true;
   const dance::Character* ch_ = nullptr;
   std::vector<uint32_t> trackKeys_, injected_;
+  uint32_t pathHash_ = 0;  // the hash the two keep (Choreographer(): as after reset(0))
   // The history E.2.5's no-repeat rule reads, from the runs seen.
   int lastMove_ = kNoMove, lastPlays_ = 0;
   bool lastFirstMirror_ = false;
@@ -375,7 +386,7 @@ class Twin {
   void syncCharacter() {
     if (a_.character() != ch_) {
       ch_ = a_.character();
-      df_ = false;
+      mf_ = false;
       forced_ = kNoMove;
       historyCleared_ = true;
     }
@@ -547,7 +558,7 @@ class Twin {
     const bool o = run.firstMirror;
     const int spotBit = 1 << (run.spot + 1);
     if (isBeatMove(r.ch, forced)) {
-      // Dm (E.2.5): the forced move at level 4, k its eligibleK or 0.
+      // Mm (E.2.5): the forced move at level 4, k its eligibleK or 0.
       CHECK_EQ(forced, run.move, "update %u: the forced move", u);
       CHECK_EQ(4, run.level, "update %u: a forced run's level", u);
       const int8_t k = ranged(l) ? dance::eligibleK(r.t10, l.paceLo, l.paceHi, prevKBefore, l.beats, l.travel) : 0;
@@ -1337,16 +1348,16 @@ void test_genre() {
     CHECK_EQ(kNoOctave, ch.eligibleNow(T), "not matching");
     for (const RunRec& r : ch.runs) CHECK(r.first.move != T, "a tagged move picked without a match");
     CHECK(ch.runCount() >= 30, "%d runs", ch.runCount());
-    // A matching key, injected (Dg) or the track's: eligible, and picked.
+    // A matching key, injected (Mg) or the track's: eligible, and picked.
     ch.addGenre(kHipHop);
-    CHECK_EQ(0, ch.eligibleNow(T), "matched through Dg");
+    CHECK_EQ(0, ch.eligibleNow(T), "matched through Mg");
     const int before = ch.runCount();
     feed(ch, s, 40.0);
     int tagged = 0;
     for (int i = before; i < ch.runCount(); ++i) tagged += ch.runs[i].first.move == T;
     CHECK(tagged > 0, "the matched tagged move never picked");
-    ch.onTrack(pathHashOf(2), nullptr, 0);  // clears Dg's key
-    CHECK_EQ(kNoOctave, ch.eligibleNow(T), "Dg cleared by onTrack");
+    ch.onTrack(pathHashOf(2), nullptr, 0);  // clears Mg's key
+    CHECK_EQ(kNoOctave, ch.eligibleNow(T), "Mg cleared by onTrack");
     ch.onTrack(pathHashOf(3), &tag, 1);
     CHECK_EQ(0, ch.eligibleNow(T), "matched through the track's genres");
   }
@@ -2030,15 +2041,15 @@ void test_gapless_join() {
   const RunInfo before = A.run();
   const int t10 = A.t10();
   CHECK(before.status == RunStatus::Running, "mid-run");
-  CHECK_EQ(0, A.eligibleNow(G2), "Dg's genre before the join");
+  CHECK_EQ(0, A.eligibleNow(G2), "Mg's genre before the join");
   CHECK_EQ(kNoOctave, A.eligibleNow(G1), "hip hop before the join");
   const int64_t anchor = before.start - before.phrase;  // A, mod 8
   A.onTrack(pathHashOf(7), &kh, 1);
   C.onTrack(pathHashOf(8), &kh, 1);
   CHECK(sameRun(before, A.run()), "the run kept by the call");
   CHECK_EQ(0, A.eligibleNow(G1), "the new track's genre");
-  CHECK_EQ(kNoOctave, A.eligibleNow(G2), "Dg's genre cleared");
-  CHECK_EQ(0, B.eligibleNow(G2), "B keeps Dg's genre");
+  CHECK_EQ(kNoOctave, A.eligibleNow(G2), "Mg's genre cleared");
+  CHECK_EQ(0, B.eligibleNow(G2), "B keeps Mg's genre");
   const size_t runsA = A.runs.size(), runsB = B.runs.size(), runsC = C.runs.size();
   for (int i = 0; i < 30 * 60; ++i) {
     const BeatInput in = s.frame();
@@ -2063,7 +2074,7 @@ void test_gapless_join() {
   CHECK(la != lc, "the new seed didn't change the later picks");
   int hip = 0;
   for (int m : la) {
-    CHECK(m != G2, "Dg's genre after the join");
+    CHECK(m != G2, "Mg's genre after the join");
     hip += m == G1;
   }
   CHECK(hip > 0, "the new track's genre never danced");
@@ -2536,7 +2547,7 @@ void test_switching() {
 }
 
 // ===========================================================================
-// 16. Freezes: k0-k15, the freeze chain, Df.
+// 16. Freezes: k0-k15, the freeze chain, Mf.
 
 void test_freeze_k() {
   CardDancer& d = fixture();
@@ -2705,7 +2716,7 @@ void test_df() {
   const dance::DrawnCharacter& c = d.character();
   const int stepTouch = d.viewIndex(kStepTouch), look = d.viewIndex(kLook);
   TEST_ASSERT_EQUAL_INT(12, look);
-  ctx("Df on the fixture");
+  ctx("Mf on the fixture");
   Twin ch;
   ch.setCharacter(&c);
   Script s(30);
@@ -2718,16 +2729,16 @@ void test_df() {
   step(ch, s);
   {
     const Cue& q = ch.cue();
-    CHECK_EQ(stepTouch, q.beatMove, "Df's move");
+    CHECK_EQ(stepTouch, q.beatMove, "Mf's move");
     CHECK_EQ(pos, q.beatPos16, "exact pos16");
     CHECK(q.u == pos / 786432.0, "u %.6f", q.u);
-    CHECK(q.beatMirror && q.showDance && q.weight == 1.0f && q.energy == 65536 && !q.flash && q.k == 0, "Df's cue");
+    CHECK(q.beatMirror && q.showDance && q.weight == 1.0f && q.energy == 65536 && !q.flash && q.k == 0, "Mf's cue");
   }
-  // Df wins over k.
+  // Mf wins over k.
   s.freezeK(5);
   step(ch, s);
-  CHECK_EQ(stepTouch, ch.cue().beatMove, "Df over k");
-  CHECK_EQ(pos, ch.cue().beatPos16, "Df over k");
+  CHECK_EQ(stepTouch, ch.cue().beatMove, "Mf over k");
+  CHECK_EQ(pos, ch.cue().beatPos16, "Mf over k");
   s.freezeK(-1);
   // An idle move: look's second step starts at 50 units (500 ms).
   const uint32_t ipos = static_cast<uint32_t>(stepStart(d.pack, kLook, 1)) * 65536u;
@@ -2735,17 +2746,17 @@ void test_df() {
   step(ch, s);
   {
     const Cue& q = ch.cue();
-    CHECK_EQ(look, q.idleMove, "Df's idle move");
+    CHECK_EQ(look, q.idleMove, "Mf's idle move");
     CHECK_EQ(500, q.idleMs, "idleMs = 10 * the step start");
-    CHECK(q.idleMirror && !q.showDance && q.weight == 0.0f && q.energy == 39322 && !q.flash, "Df's idle cue");
+    CHECK(q.idleMirror && !q.showDance && q.weight == 0.0f && q.energy == 39322 && !q.flash, "Mf's idle cue");
   }
   // The engine moves.
   ch.freeze(kAutoIdle, 200u * 65536u, false);
   step(ch, s);
-  CHECK(ch.cue().idleMove == kAutoIdle && ch.cue().idleMs == 2000 && !ch.cue().showDance, "Df on auto-idle");
+  CHECK(ch.cue().idleMove == kAutoIdle && ch.cue().idleMs == 2000 && !ch.cue().showDance, "Mf on auto-idle");
   ch.freeze(kAutoBounce, 98304, false);
   step(ch, s);
-  CHECK(ch.cue().beatMove == kAutoBounce && ch.cue().beatPos16 == 98304 && ch.cue().showDance, "Df on auto-bounce");
+  CHECK(ch.cue().beatMove == kAutoBounce && ch.cue().beatPos16 == 98304 && ch.cue().showDance, "Mf on auto-bounce");
   // freeze(kNoMove), or a value that isn't a move, unfreezes.
   ch.freeze(kNoMove, 0, false);
   step(ch, s);
@@ -2765,7 +2776,7 @@ void test_df() {
   for (int i = 0; i < 60 && ch.character() != &other; ++i) step(ch, s);
   CHECK(ch.character() == &other, "switched");
   step(ch, s);
-  CHECK(ch.cue().beatMove != stepTouch || ch.cue().beatPos16 != pos, "Df cleared by the switch");
+  CHECK(ch.cue().beatMove != stepTouch || ch.cue().beatPos16 != pos, "Mf cleared by the switch");
 }
 
 void test_freezes_leave_the_state_machine() {
@@ -3117,7 +3128,7 @@ void test_dt_and_the_idle_clock() {
   CHECK(d.cue().weight == w0, "the weight with a NaN dt");
 }
 
-// E.2.8 setSpot (Ds, for screenshots): the cue's spot and root change at
+// E.2.8 setSpot (Ms, for screenshots): the cue's spot and root change at
 // once, before the next update (E.4 item 17: "the cue's spot at once").
 void test_set_spot_at_once() {
   ScriptCharacter c;
@@ -3404,6 +3415,125 @@ void test_on_track_reseeds_exactly() {
     CHECK_EQ(0, ch.run().level, "level 0");
     CHECK_EQ(want, ch.run().move, "the move the new seed draws");
   }
+}
+
+// syncPath (E.2.8, F.1): what DanceMode does on any change of the queue's key.
+// Another path is onTrack's reseed and clears Mg; the kept path changes nothing.
+// The two paths that used to leave FNV("") seeding a whole track are the point:
+// a dance turned on with nothing to name, then the queue's first track (a
+// restart), and the same behind the library's fence (no restart).
+namespace {
+
+// The next n runs' picks, each drawn on its own frame.
+std::vector<int> nextPicks(Twin& ch, Script& s, int n) {
+  std::vector<int> picks;
+  for (int i = 0; i < n; ++i) {
+    TEST_ASSERT_TRUE_MESSAGE(untilNewRun(ch, s), g_ctx);
+    picks.push_back(ch.run().move * 16 + ch.run().plays);
+  }
+  return picks;
+}
+
+constexpr int kSyncPicks = 12;
+
+}  // namespace
+
+void test_sync_path() {
+  ScriptCharacter c;
+  c.beatMove("m0", 1, 0, 0, 10);
+  c.beatMove("m1", 1, 0, 0, 20);
+  c.beatMove("m2", 1, 0, 0, 30);
+  uint32_t tag = kHipHop;
+  dance::MoveLabels tagged = ScriptCharacter::defaults("tagged");
+  tagged.beats = 1;
+  tagged.genreCount = 1;
+  tagged.genreKeys = &tag;
+  const int T = c.add(tagged);
+
+  // The same path: nothing, whichever frame it lands on.
+  for (int i = 0; i < 50; ++i) {
+    ctx("syncPath, the kept path: trial %d", i);
+    const uint32_t h = pathHashOf(300000 + i);
+    Twin a, b;
+    a.setCharacter(&c);
+    b.setCharacter(&c);
+    a.reset(h);
+    b.reset(h);
+    a.addGenre(kHipHop);
+    b.addGenre(kHipHop);
+    Script sa(30), sb(30);
+    sa.acquire(120.0, 0.0);
+    sb.acquire(120.0, 0.0);
+    TEST_ASSERT_TRUE_MESSAGE(untilNewRun(a, sa), g_ctx);
+    TEST_ASSERT_TRUE_MESSAGE(untilNewRun(b, sb), g_ctx);
+    a.syncPath(h);  // the same file under a new key
+    CHECK_EQ(0, a.eligibleNow(T), "Mg's key kept");
+    CHECK(nextPicks(a, sa, kSyncPicks) == nextPicks(b, sb, kSyncPicks), "the draws untouched");
+    a.syncPath(h);
+    CHECK_EQ(0, a.eligibleNow(T), "Mg's key kept, again");
+  }
+
+  // Another path, the fence's case: FNV("") kept, the music already danced to
+  // and no restart. Exactly onTrack(h, nullptr, 0). Against no call at all, the
+  // hash alone differs (no Mg there), and it draws differently on some trial.
+  int staleDiffers = 0;
+  for (int i = 0; i < 50; ++i) {
+    ctx("syncPath, a new path with no restart: trial %d", i);
+    const uint32_t h = pathHashOf(310000 + i);
+    Twin a, b, stale;
+    for (Twin* t : {&a, &b, &stale}) {
+      t->setCharacter(&c);
+      t->reset(dance::kFnvBasis);
+    }
+    Script sa(30), sb(30), sc(30);
+    sa.acquire(120.0, 0.0);
+    sb.acquire(120.0, 0.0);
+    sc.acquire(120.0, 0.0);
+    TEST_ASSERT_TRUE_MESSAGE(untilNewRun(a, sa), g_ctx);
+    TEST_ASSERT_TRUE_MESSAGE(untilNewRun(b, sb), g_ctx);
+    TEST_ASSERT_TRUE_MESSAGE(untilNewRun(stale, sc), g_ctx);
+    a.addGenre(kHipHop);
+    a.syncPath(h);
+    b.onTrack(h, nullptr, 0);
+    CHECK_EQ(kNoOctave, a.eligibleNow(T), "Mg's key cleared");
+    const std::vector<int> picks = nextPicks(a, sa, kSyncPicks);
+    CHECK(picks == nextPicks(b, sb, kSyncPicks), "as onTrack draws");
+    staleDiffers += picks != nextPicks(stale, sc, kSyncPicks);
+    a.addGenre(kHipHop);
+    a.syncPath(h);  // the same file re-keyed after it: nothing
+    CHECK_EQ(0, a.eligibleNow(T), "a key added since is kept");
+  }
+  CHECK(staleDiffers > 0, "FNV(\"\") and the path never drew differently");
+
+  // Another path, the empty queue's case: the Dance tab up with no track, then
+  // the first track's restart. As if the dance had come on with the track.
+  staleDiffers = 0;
+  for (int i = 0; i < 50; ++i) {
+    ctx("syncPath, the first track of an empty queue: trial %d", i);
+    const uint32_t h = pathHashOf(320000 + i);
+    Twin fixed, want, stale;
+    fixed.setCharacter(&c);
+    want.setCharacter(&c);
+    stale.setCharacter(&c);
+    fixed.reset(dance::kFnvBasis);
+    want.reset(h);
+    stale.reset(dance::kFnvBasis);
+    Script sf(30), sw(30), ss(30);
+    feed(fixed, sf, 0.5);
+    feed(want, sw, 0.5);
+    feed(stale, ss, 0.5);
+    fixed.addGenre(kHipHop);
+    fixed.syncPath(h);
+    CHECK_EQ(kNoOctave, fixed.eligibleNow(T), "Mg's key cleared");
+    for (Script* s : {&sf, &sw, &ss}) {
+      s->restart();
+      s->acquire(120.0, s->trackTime());
+    }
+    const std::vector<int> picks = nextPicks(fixed, sf, kSyncPicks);
+    CHECK(picks == nextPicks(want, sw, kSyncPicks), "as a dance that came on with the track");
+    staleDiffers += picks != nextPicks(stale, ss, kSyncPicks);
+  }
+  CHECK(staleDiffers > 0, "FNV(\"\") and the path never drew differently");
 }
 
 // U8: a running run without lockedOk is ENDed as soon as w <= 0.5, before
@@ -4248,6 +4378,7 @@ int main(int, char**) {
   RUN_TEST(test_rephase_restarts_entering);
   RUN_TEST(test_rephase_edges);
   RUN_TEST(test_on_track_reseeds_exactly);
+  RUN_TEST(test_sync_path);
   RUN_TEST(test_lost_lock_fades_mid_run);
   RUN_TEST(test_must_show_once);
   RUN_TEST(test_bias_only_toward_the_centre);

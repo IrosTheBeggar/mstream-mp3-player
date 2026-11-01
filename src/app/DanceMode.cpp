@@ -22,7 +22,7 @@ constexpr uint32_t kScratchFrames = 2048;  // mono frames handed to the tracker 
 constexpr uint32_t kAimEarlyUs = 15000;
 constexpr uint32_t kErrorWindowMs = 10000; // the phase error's median/p95 over this long
 
-// The D console's replies and the [move] lines (lib/core/DanceConsole): a
+// The M console's replies and the [move] lines (lib/core/DanceConsole): a
 // line each, without its newline.
 void printLine(void*, const char* line) { Serial.println(line); }
 
@@ -150,9 +150,11 @@ void DanceMode::onTrackChanged() {
   // The Choreographer learns of every track change, host mode included
   // (E.2.8): a gapless join (no tracker restart) keeps the phrase and the
   // run; a skip's restart then resets it through BeatInput.restarts. The
-  // genres a track carries come later (none yet); Dg's go here.
+  // genres a track carries come later (none yet); Mg's go here.
   choreo_.onTrack(pathHash(), nullptr, 0);
 }
+
+void DanceMode::onQueueKey() { choreo_.syncPath(pathHash()); }
 
 uint32_t DanceMode::pathHash() const {
   char path[TrackCatalog::kMaxPath];
@@ -389,7 +391,7 @@ void DanceMode::setHost(bool on, const HostStats* stats) {
   if (on) {
     if (frozen_ >= 0) Serial.println("[dance] unfrozen: the computer drives the dancer");
     frozen_ = -1;
-    choreo_.freeze(dance::kNoMove, 0, false);  // a Df freeze too, silently (3.8)
+    choreo_.freeze(dance::kNoMove, 0, false);  // an Mf freeze too, silently (3.8)
     truth_ = false;  // (the computer measures: tools/usb_viz.py --measure)
     freshWhy_ = "the computer";
     clock_.start(hostRate_);

@@ -26,7 +26,7 @@
 //     It never resets the fold: DanceMode::restart() and hostRestart() do,
 //     as before.
 //   - sceneOf: DanceRate's scene (the next frame's rate) from the cue. Its
-//     `frozen` is k<n> only: a Df freeze shows through the cue's weight (1 on
+//     `frozen` is k<n> only: an Mf freeze shows through the cue's weight (1 on
 //     a beat move, dancing; 0 on an idle one).
 // The facts are gathered every frame, frozen or not: the Choreographer runs
 // on underneath a freeze (E.2.7).
@@ -52,7 +52,7 @@ struct FrameFacts {        // what DanceMode::render() reads for a frame, before
 // grid, as today's render() applies it only inside `if (beat)`. It never resets the
 // fold: DanceMode::restart() and hostRestart() still do, as today.
 BeatInput beatInput(const FrameFacts& f, TempoFold& fold);
-// DanceRate's scene for a frame drawn from cue c: frozen = f.freeze in 0..15 (k<n>; a Df
+// DanceRate's scene for a frame drawn from cue c: frozen = f.freeze in 0..15 (k<n>; an Mf
 // freeze shows through the cue's weight: 1 on a beat move, 0 on an idle one), beat =
 // f.grid, locked = f.locked, weight = c.weight.
 dancerate::Scene sceneOf(const FrameFacts& f, const Cue& c);

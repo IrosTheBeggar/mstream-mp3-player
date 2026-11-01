@@ -3616,6 +3616,7 @@ void loop() {
     char path[TrackCatalog::kMaxPath];
     const uint32_t file = player.currentPath(path, sizeof(path)) ? QueueSaver::pathHash(path) : 0;
     if (lastEntry != QueueModel::kNone && (file == 0 || file != lastFile)) danceMode.onTrackChanged();
+    danceMode.onQueueKey();  // the choreographer's path, which that rule can miss
     Serial.printf("[queue] now at %d of %lu (%s)\n", queue.current() + 1, (unsigned long)queue.size(), stateName());
     lastEntry = queue.currentKey();
     lastFile = file;

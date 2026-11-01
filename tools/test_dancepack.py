@@ -44,6 +44,7 @@ VECTOR_HEADERS = (
     READER_H,
 )
 TEXTFOLD_CPP = "lib/core/TextFold.cpp"
+TEXTFOLD_TABLES_CPP = "lib/core/TextFoldTables.cpp"
 VLWFONTS_CPP = "src/ui/VlwFonts.cpp"
 
 sys.path.insert(0, str(TOOLS))
@@ -963,8 +964,8 @@ def c_unescape(s):
     return re.sub(r'\\(0|"|\\)', lambda m: {"0": "\0", '"': '"', "\\": "\\"}[m.group(1)], s)
 
 
-def ref_textfold_table(src):
-    """C.2's TEXTFOLD, rebuilt from TextFold.cpp's text."""
+def ref_textfold_table(src, tables):
+    """C.2's TEXTFOLD, rebuilt from TextFold.cpp's text and TextFoldTables.cpp's, in B.8's order."""
     def switch(fn):
         body = re.search(r"const char\* " + fn + r"\(uint32_t cp\) \{(.*?)\n\}", src, re.S).group(1)
         out, pending = {}, []
@@ -978,20 +979,45 @@ def ref_textfold_table(src):
                 pending = []
         return out
 
-    def literal(name):
-        i = src.index(name + "[")
-        text = re.sub(r"//[^\n]*", "", src[i:src.index(";", i)])
-        return "".join(c_unescape(s) for s in re.findall(r'"((?:[^"\\]|\\.)*)"', text))
+    def literal(text, name):
+        i = text.index(name + "[")
+        chunk = re.sub(r"//[^\n]*", "", text[i:text.index(";", i)])
+        return "".join(c_unescape(s) for s in re.findall(r'"((?:[^"\\]|\\.)*)"', chunk))
 
-    table = {}
-    for fn in ("punctuation", "latin1Multi", "symbols"):
-        for cp, rep in switch(fn).items():
-            table.setdefault(cp, rep)
-    for base, chars in ((0xC0, literal("kLatin1")), (0x100, literal("kLatinExtA"))):
-        for i, c in enumerate(chars):
-            if c != "\0":
-                table.setdefault(base + i, c if c.isalpha() and ord(c) < 0x80 else "?")
-    return {cp: rep for cp, rep in table.items() if cp >= 0x80 and rep != "?"}
+    def one(c):
+        return c if 0x20 <= ord(c) < 0x7F else "?"
+
+    punctuation, multi, symbols = switch("punctuation"), switch("latin1Multi"), switch("symbols")
+    body = re.search(r"bool dropped\(uint32_t cp\) \{(.*?)\n\}", src, re.S).group(1)
+    dropped = {int(x, 16) for x in re.findall(r"cp == (0x[0-9A-Fa-f]+)", body)}
+    for lo, hi in re.findall(r"cp >= (0x[0-9A-Fa-f]+) && cp <= (0x[0-9A-Fa-f]+)", body):
+        dropped |= set(range(int(lo, 16), int(hi, 16) + 1))
+    first = tables.index("kCp1252[")
+    values = re.findall(r"0x[0-9A-F]{4}", tables[first:tables.index("};", first)])
+    assert len(values) == 32
+    c1 = {0x80 + i: int(v, 16) for i, v in enumerate(values) if int(v, 16)}
+    first = tables.index("kFolds[")
+    folds = {int(c, 16): r for c, r in re.findall(r'\{(0x[0-9A-Fa-f]+), "([^"]*)"\}',
+                                                  tables[first:tables.index("};", first)])}
+    latin = ((0xC0, literal(src, "kLatin1")), (0x100, literal(src, "kLatinExtA")),
+             (0x180, literal(tables, "kLatinExtB")), (0x1E00, literal(tables, "kLatinExtAdditional")))
+
+    def replacement(cp):
+        cp = c1.get(cp, cp)
+        for table in (punctuation, {d: "" for d in dropped}, multi, symbols):
+            if cp in table:
+                return table[cp]
+        for base, chars in latin:
+            if base <= cp < base + len(chars) and chars[cp - base] != "\0":
+                return one(chars[cp - base])
+        if 0xFF01 <= cp <= 0xFF5E:
+            return chr(cp - 0xFEE0)
+        return folds.get(cp, "?")
+
+    candidates = set(range(0x80, 0xA0)) | set(punctuation) | dropped | set(multi) | set(symbols) | set(folds)
+    candidates |= {base + i for base, chars in latin for i in range(len(chars))} | set(range(0xFF01, 0xFF5F))
+    table = {cp: replacement(cp) for cp in candidates if cp >= 0x80}
+    return {cp: rep for cp, rep in table.items() if rep != "?"}
 
 
 def ref_vlw_code_points(src):
@@ -1031,7 +1057,7 @@ def repo_text(rel):
 
 @functools.lru_cache(maxsize=None)
 def ref_textfold():
-    return ref_textfold_table(repo_text(TEXTFOLD_CPP))
+    return ref_textfold_table(repo_text(TEXTFOLD_CPP), repo_text(TEXTFOLD_TABLES_CPP))
 
 
 @functools.lru_cache(maxsize=None)
@@ -1155,6 +1181,16 @@ FOLD_TABLE = (
     ("日本", "", None),
     ("  ", "", None),
     ("", "", None),
+    ("\u008Aka", "ska", 0xC52B829E),                         # U+008A: cp1252's Š, so S
+    ("Drum \u0092n\u0092 Bass", "drumandbass", 0xE6318A55),   # U+0092: cp1252's ’, so '
+    ("RocḱńRoll", "rocknroll", 0xB35D9181),       # a combining mark is dropped: it doesn't split a word
+    ("Șlagăr", "slagar", 0x636CD271),                        # Latin Extended-B (kLatinExtB)
+    ("Nhạc Trẻ", "nhactre", 0x567844BC),                     # Latin Extended Additional
+    ("STRAẞE", "strasse", 0x0581A214),                       # kFolds: ẞ is SS
+    ("Ｋ－Ｐｏｐ", "kpop", 0x9076A259),                          # fullwidth ASCII
+    ("Ｒ＆Ｂ", "randb", 0x1BDE7F5C),                           # ...and its & is step 3's
+    ("Кино", "", None),                                      # a script Full folding can't spell
+    ("́", "", None),                                    # marks alone
 )
 
 ELIG_T10 = (720, 800, 870, 880, 900, 901, 957, 1200, 1600, 1740, 1760)
@@ -1466,6 +1502,21 @@ class HelperSelfTest(unittest.TestCase):
         self.assertEqual(table[0xDF], "ss")
         self.assertEqual(table[0xC6], "AE")
         self.assertNotIn(0xBF, table)        # its replacement is "?"
+        self.assertEqual(table[0x8A], "S")   # U+0080-009F as cp1252's: Š
+        self.assertEqual(table[0x92], "'")   # ...and ’
+        self.assertNotIn(0x81, table)        # cp1252 leaves it undefined: "?"
+        self.assertEqual(table[0x301], "")   # a combining mark is dropped
+        self.assertEqual(table[0xFE0F], "")  # a variation selector
+        self.assertEqual(table[0xE0067], "")  # a tag character
+        self.assertEqual(table[0x219], "s")  # kLatinExtB
+        self.assertEqual(table[0x1EA1], "a")  # kLatinExtAdditional
+        self.assertEqual(table[0x1C6], "dz")  # kFolds
+        self.assertEqual(table[0x1E9E], "SS")
+        self.assertEqual(table[0xFF21], "A")  # fullwidth ASCII
+        self.assertEqual(table[0xFF06], "&")
+        self.assertNotIn(0xFF1F, table)      # fullwidth ?: "?"
+        for cp in (0x41A, 0x3B1, 0x65E5, 0x3042, 0xD55C):  # the scripts it can't spell: К, α, 日, あ, 한
+            self.assertNotIn(cp, table)
         self.assertTrue(all(cp >= 0x80 for cp in table))
         self.assertNotIn("?", table.values())
 
@@ -2030,8 +2081,8 @@ class TablesTest(DpCase):
     def test_textfold(self):
         table = {int(k): v for k, v in dp.TEXTFOLD.items()}
         self.assertEqual(table, ref_textfold())
-        self.assertEqual({int(k): v for k, v in dp.parse_textfold_cpp(repo_text(TEXTFOLD_CPP)).items()},
-                         ref_textfold())
+        parsed = dp.parse_textfold_cpp(repo_text(TEXTFOLD_CPP), repo_text(TEXTFOLD_TABLES_CPP))
+        self.assertEqual({int(k): v for k, v in parsed.items()}, ref_textfold())
 
     def test_font_coverage(self):
         want = to_ranges(ref_font_coverage())
@@ -5365,7 +5416,7 @@ class CliTest(DpCase):
     def repo_copy(self):
         """What --check reads (C.2), copied with dancepack.py into a temporary tree."""
         root = self.tmp / "repo"
-        paths = [TEXTFOLD_CPP, VLWFONTS_CPP] + list(VECTOR_HEADERS)
+        paths = [TEXTFOLD_CPP, TEXTFOLD_TABLES_CPP, VLWFONTS_CPP] + list(VECTOR_HEADERS)
         for src, out in dp.BUILTINS:
             shutil.copytree(str(REPO / src), str(root / src))
             paths.append(out)
@@ -5430,6 +5481,18 @@ class CliTest(DpCase):
         self.assertEqual(sorted(out.splitlines()), sorted([
             "stale: tools/dancepack.py (TEXTFOLD differs from lib/core/TextFold.cpp at U+%04X)" % min(labels),
             "stale: tools/dancepack.py (FONT_COVERAGE differs from src/ui/VlwFonts.cpp at U+0041)"]))
+        # A change in the generated tables reads the same; without them --check can't compare.
+        write_lf(tf, text)
+        tables = root / TEXTFOLD_TABLES_CPP
+        table_text = tables.read_text(encoding="utf-8")
+        write_lf(tables, table_text.replace('{0x0195, "hv"}', '{0x0195, "qq"}'))
+        code, out, err = run_cli(["--check"], root, script)
+        self.assertEqual(code, 1)
+        self.assertIn("stale: tools/dancepack.py (TEXTFOLD differs from lib/core/TextFold.cpp at U+0195)", out)
+        tables.unlink()
+        code, out, err = run_cli(["--check"], root, script)
+        self.assertEqual(code, 1)
+        self.assertIn("stale: tools/dancepack.py (no lib/core/TextFoldTables.cpp to check TEXTFOLD against)", out)
 
 
 if __name__ == "__main__":

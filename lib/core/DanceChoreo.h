@@ -119,7 +119,7 @@ struct RunInfo {          // the current beat run (status None: the last one's f
   bool firstMirror;
   int8_t spot;            // its start spot
   int8_t phrase;          // p at its start, 0..7
-  uint8_t level;          // the ladder level that picked it: 0-2, 3 auto-bounce, 4 forced (Dm)
+  uint8_t level;          // the ladder level that picked it: 0-2, 3 auto-bounce, 4 forced (Mm)
   bool cut;               // its pace failed (2.5)
   RunStatus status;
   int64_t start, end;     // dance-clock beats: where it started, where it ends (E)
@@ -131,11 +131,15 @@ class Choreographer {
   Choreographer();                     // as after reset(0), with no character
   void reset(uint32_t pathHash);       // dance on (E.2.8): everything back but the character
   void onTrack(uint32_t pathHash, const uint32_t* genreKeys, int count);  // every track change
+  // Any change of the queue's key: onTrack(pathHash, nullptr, 0) when that isn't
+  // the hash reset() or onTrack() kept; otherwise nothing (E.2.8), so the same
+  // file under a new key keeps Mg's keys and the draws.
+  void syncPath(uint32_t pathHash);
   void setCharacter(const Character* c);                   // 3.7; null: none
-  void freeze(int move, uint32_t pos16, bool mirrored);    // Df; kNoMove unfreezes
-  void forceNext(int move);            // Dm: the next beat run
-  void setSpot(int spot);              // Ds
-  void addGenre(uint32_t key);         // Dg: a genre key for this track
+  void freeze(int move, uint32_t pos16, bool mirrored);    // Mf; kNoMove unfreezes
+  void forceNext(int move);            // Mm: the next beat run
+  void setSpot(int spot);              // Ms
+  void addGenre(uint32_t key);         // Mg: a genre key for this track
   const Cue& update(const BeatInput& in);                  // once a frame
   const Cue& cue() const;              // the last update's
   const Character* character() const;  // the current one, not a pending switch
@@ -143,7 +147,7 @@ class Choreographer {
   int t10() const;                     // the latched T in tenths, 0 = none yet
   int8_t prevK() const;                // kNoOctave = none
   double danceClock() const;           // E.2's clock
-  int8_t eligibleNow(int move) const;  // Dl: the k move would get now, or kNoOctave
+  int8_t eligibleNow(int move) const;  // Ml: the k move would get now, or kNoOctave
 
  private:
   static constexpr int kTrackGenres = 16, kInjectedGenres = 4;
@@ -180,7 +184,7 @@ class Choreographer {
   double prevU_, lastU_;
   uint32_t heldEnergy_;
   int t10_;
-  uint32_t acqSeen_, rng_, pathHash_, restartsSeen_, lastAcqIn_, lastEnergy_, dfPos16_;
+  uint32_t acqSeen_, rng_, pathHash_, restartsSeen_, lastAcqIn_, lastEnergy_, mfPos16_;
   double idleMsRun_;  // the idle run's ms
   uint32_t idleRunMs_;
   const Character* character_;
@@ -190,8 +194,8 @@ class Choreographer {
   Cue base_;  // the cue before any freeze: its beat fields persist while no run exists
   Cue cue_;   // the cue shown
   bool haveClock_, phraseValid_, entering_, leaving_, hasPending_, started_, lastShowDance_, show_;
-  bool firstRunBias_, lastFirstMirror_, idleMirror_, dfOn_, dfMirrored_;
-  int8_t spot_, lastMove_, prevK_, cutExempt_, idleMove_, lastIdle_, dfMove_, forced_;
+  bool firstRunBias_, lastFirstMirror_, idleMirror_, mfOn_, mfMirrored_;
+  int8_t spot_, lastMove_, prevK_, cutExempt_, idleMove_, lastIdle_, mfMove_, forced_;
   int8_t recent_[3];
   uint8_t lastPlays_, prevTo_, idleCls_, genreCount_, injectedCount_;
 };

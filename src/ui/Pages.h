@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "BitSet.h"
+#include "DancePanels.h"
 #include "LibraryIndex.h"
 #include "LibraryText.h"
 #include "OutputModel.h"
@@ -541,13 +542,7 @@ private:
   void drawPanels(bool all, bool topOnly = false);
   uint32_t nextPanelMs_ = 0;
   // What the panels show (redrawn when it changes, at most twice a second).
-  int bpmX10_ = -1;
-  int conf_ = -1;
-  int lock_ = -1;
-  int skin_ = -1;
-  uint32_t track_ = 0xFFFFFFFFu;
-  int progress_ = -1;
-  int host_ = -1;  // a computer drives the dancer (the USB visualizer): its texts at the bottom
+  dancepanels::Values shown_;
 };
 
 // ---- Output (spec §6.6, mockups 19-21, with the review's grafts) ----

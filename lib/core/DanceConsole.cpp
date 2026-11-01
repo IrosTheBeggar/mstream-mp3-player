@@ -38,7 +38,7 @@ void say(ConsoleOut out, void* ctx, const char* fmt, ...) {
 }
 
 const char* txt(const char* s) { return s ? s : ""; }
-const char* dash(const char* s) { return s && s[0] ? s : "-"; }  // D's empty strings
+const char* dash(const char* s) { return s && s[0] ? s : "-"; }  // M's empty strings
 // The sign of a k or a spot: "+" before a positive value (printed with %s%d).
 const char* sgn(int v) { return v > 0 ? "+" : ""; }
 
@@ -193,25 +193,25 @@ void forceMove(Choreographer& ch, const Character& c, const char* op, ConsoleOut
   }
   const int i = findMove(c, op);
   if (i < 0) {
-    say(out, ctx, "[dance] Dm: %s has no move \"%s\" (Dl lists them)", txt(c.info().id), op);
+    say(out, ctx, "[dance] Mm: %s has no move \"%s\" (Ml lists them)", txt(c.info().id), op);
     return;
   }
   const MoveLabels& m = c.move(i);
   if (m.kind != MoveKind::Beat) {
-    say(out, ctx, "[dance] Dm: %s is an idle move: only beat moves can be forced", txt(m.name));
+    say(out, ctx, "[dance] Mm: %s is an idle move: only beat moves can be forced", txt(m.name));
     return;
   }
   ch.forceNext(i);
   say(out, ctx, "[dance] next run: %s", txt(m.name));
 }
 
-// Df<move>.<step>[m]: `op` is the operand, held in buf (writable) or a view of the
+// Mf<move>.<step>[m]: `op` is the operand, held in buf (writable) or a view of the
 // argument; buf may receive the move's name.
 void freezeMove(Choreographer& ch, const DanceCast& cast, const Character& c, const char* op, char* buf,
                 ConsoleOut out, void* ctx) {
   if (!op[0]) {
     ch.freeze(kNoMove, 0, false);
-    say(out, ctx, "[dance] Df off");
+    say(out, ctx, "[dance] Mf off");
     return;
   }
   // 1. The syntax: a name (at least a byte) before the last '.', 1-3 digits, then
@@ -226,7 +226,7 @@ void freezeMove(Choreographer& ch, const DanceCast& cast, const Character& c, co
   const char* tail = p ? p + digits : nullptr;
   const bool mirrored = tail && tail[0] == 'm';
   if (!dot || dot == op || digits < 1 || digits > 3 || (mirrored ? tail[1] != '\0' : tail[0] != '\0')) {
-    say(out, ctx, "[dance] Df: Df<move>.<step>, with m after the step for the mirrored form; Df alone unfreezes");
+    say(out, ctx, "[dance] Mf: Mf<move>.<step>, with m after the step for the mirrored form; Mf alone unfreezes");
     return;
   }
   size_t len = static_cast<size_t>(dot - op);
@@ -239,21 +239,21 @@ void freezeMove(Choreographer& ch, const DanceCast& cast, const Character& c, co
   // 2-5. The move, its steps, the step, the mirrored form.
   const int i = findMove(c, name);
   if (i < 0) {
-    say(out, ctx, "[dance] Df: %s has no move \"%s\" (Dl lists them)", txt(c.info().id), name);
+    say(out, ctx, "[dance] Mf: %s has no move \"%s\" (Ml lists them)", txt(c.info().id), name);
     return;
   }
   const int n = stepCount(cast, c, i);
   if (n == 0) {
-    say(out, ctx, "[dance] Df: %s has no steps", name);
+    say(out, ctx, "[dance] Mf: %s has no steps", name);
     return;
   }
   if (step >= n) {
-    say(out, ctx, "[dance] Df: %s has steps 0-%d", name, n - 1);
+    say(out, ctx, "[dance] Mf: %s has steps 0-%d", name, n - 1);
     return;
   }
   const MoveLabels& m = c.move(i);
   if (mirrored && !(m.flags & kMirror)) {
-    say(out, ctx, "[dance] Df: %s has no mirrored form", name);
+    say(out, ctx, "[dance] Mf: %s has no mirrored form", name);
     return;
   }
   // 6. The freeze.
@@ -275,7 +275,7 @@ void freezeMove(Choreographer& ch, const DanceCast& cast, const Character& c, co
 void addGenre(Choreographer& ch, const char* op, ConsoleOut out, void* ctx) {
   uint32_t key = 0;
   if (!genreKey(op, &key)) {
-    say(out, ctx, "[dance] Dg: \"%s\" folds to nothing, so no move can match it", op);
+    say(out, ctx, "[dance] Mg: \"%s\" folds to nothing, so no move can match it", op);
     return;
   }
   ch.addGenre(key);
@@ -284,7 +284,7 @@ void addGenre(Choreographer& ch, const char* op, ConsoleOut out, void* ctx) {
 
 void moveToSpot(Choreographer& ch, const Character& c, const char* op, ConsoleOut out, void* ctx) {
   if (!hasTravel(c)) {
-    say(out, ctx, "[dance] Ds: %s has no travel moves: it dances at the centre", txt(c.info().id));
+    say(out, ctx, "[dance] Ms: %s has no travel moves: it dances at the centre", txt(c.info().id));
     return;
   }
   int s;
@@ -295,7 +295,7 @@ void moveToSpot(Choreographer& ch, const Character& c, const char* op, ConsoleOu
   } else if (std::strcmp(op, "1") == 0 || std::strcmp(op, "+1") == 0) {
     s = 1;
   } else {
-    say(out, ctx, "[dance] Ds: a spot is -1, 0 or +1");
+    say(out, ctx, "[dance] Ms: a spot is -1, 0 or +1");
     return;
   }
   ch.setSpot(s);
@@ -346,19 +346,19 @@ ConsoleReply DanceConsole::run(const char* arg, Choreographer& ch, const DanceCa
   const bool onDancer = letter == 'l' || letter == 'm' || letter == 'f' || letter == 's';
   const bool known = takesNone ? op[0] == '\0' : (onDancer || letter == 'c' || letter == 'g');
   if (!known) {
-    say(out, ctx, "[dance] D: unknown \"%s\": D, Dc<id>, Dl, Dm<move>, Df<move>.<step>[m], Df, Dv, Dg<genre>, Ds<spot>",
+    say(out, ctx, "[dance] M: unknown \"%s\": M, Mc<id>, Ml, Mm<move>, Mf<move>.<step>[m], Mf, Mv, Mg<genre>, Ms<spot>",
         arg);
     return none;
   }
   if (onDancer && !c) {
-    say(out, ctx, "[dance] D: no dancer");
+    say(out, ctx, "[dance] M: no dancer");
     return none;
   }
   switch (letter) {
     case 'c': {
       const int i = cast.find(op);
       if (i >= 0) return {true, i};
-      say(out, ctx, "[dance] Dc: no dancer \"%s\" (D lists them)", op);
+      say(out, ctx, "[dance] Mc: no dancer \"%s\" (M lists them)", op);
       return none;
     }
     case 'l': listMoves(ch, *c, out, ctx); break;

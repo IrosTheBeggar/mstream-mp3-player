@@ -705,9 +705,10 @@ void Ui::uncover(int oldBottom) {
   } else if (page_) {
     page_->repaintHeader();
   }
-  // A page with no header (Now Playing, the Dance tab) draws all of itself
-  // again for the header row (Page::repaintHeader()'s default): every sheet
-  // over it is drawn again too, else it stays up (live) but unseen. Seen on
+  // A page with no header (Now Playing, the Dance tab) draws what falls in the
+  // header row, or all of itself in Now Playing's own layouts, whatever a sheet
+  // holds there (their repaintHeader()s): every sheet over it is drawn again
+  // too, else it stays up (live) but unseen. Seen on
   // the device: +10 min on the fade toast over the Sleep timer sheet left
   // its pills invisible over the transport, and a tap on "..." hit Turn off.
   const bool wholePage = !jumpGrid_.up() && !coach_.up() && page_ && !page_->hasHeader();
