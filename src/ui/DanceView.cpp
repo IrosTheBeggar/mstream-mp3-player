@@ -24,13 +24,13 @@ constexpr int kFlashX = DanceView::kBoxW - 10;  // the beat dot's centre, in the
 constexpr int kFlashY = 10;
 }  // namespace
 
-bool DanceView::begin(dance::Skin skin) {
+bool DanceView::begin(Skin skin) {
   sprite_.setPsram(true);  // before createSprite(): otherwise internal RAM
   skin_ = skin;
   return create();
 }
 
-bool DanceView::setSkin(dance::Skin skin) {
+bool DanceView::setSkin(Skin skin) {
   if (skin == skin_ && ready_) return true;
   skin_ = skin;
   return create();
@@ -46,7 +46,7 @@ bool DanceView::create() {
   // 4-bit palette sprite, tried first, converted every pixel through the
   // palette during the push: ~4 ms more of held SPI bus per frame while an
   // MP3 played). Stick figure: RGB332.
-  sprite_.setColorDepth(static_cast<uint8_t>(skin_ == dance::Skin::Crab ? 16 : 8));
+  sprite_.setColorDepth(static_cast<uint8_t>(skin_ == Skin::Crab ? 16 : 8));
   ready_ = sprite_.createSprite(kBoxW, kBoxH) != nullptr;
   if (ready_) sprite_.fillSprite(kBg);
   return ready_;
@@ -117,7 +117,7 @@ void DanceView::drawDot(bool flash, int bg, int colour, bool smooth) {
 }
 
 void DanceView::drawFigure(const dance::Pose& p, bool flash, bool dancing) {
-  if (!ready_ || skin_ != dance::Skin::Stick) return;
+  if (!ready_ || skin_ != Skin::Stick) return;
   auto& s = sprite_;
   const uint16_t c = dancing ? kFg : kIdle;
   beginFrame(bounds(p), kBg);
@@ -153,7 +153,7 @@ void DanceView::drawFigure(const dance::Pose& p, bool flash, bool dancing) {
 }
 
 void DanceView::drawCrab(const crab::Pose& p, float weight, bool flash) {
-  if (!ready_ || skin_ != dance::Skin::Crab) return;
+  if (!ready_ || skin_ != Skin::Crab) return;
   auto& s = sprite_;
   // The palette, idle to dance, as RGB565. Every pixel in a crab colour is
   // inside this frame's dirty rectangle (it holds the last frame's crab), so

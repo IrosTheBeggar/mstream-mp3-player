@@ -2,8 +2,8 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 // Host tests for the dancing crab: the generated art (CrabArt), the mapping
-// from beat phase to frames and offsets (CrabPose), the palette blend, and
-// the skin cycle. Run: pio test -e native
+// from beat phase to frames and offsets (CrabPose) and the palette blend.
+// Run: pio test -e native
 #include <unity.h>
 
 #include <algorithm>
@@ -12,7 +12,6 @@
 #include <vector>
 
 #include "CrabPose.h"
-#include "DanceSkin.h"
 
 using crab::Pose;
 
@@ -485,14 +484,6 @@ void test_blit() {
   TEST_ASSERT_TRUE(most < 240);
 }
 
-void test_skins() {
-  TEST_ASSERT_TRUE(dance::kDefaultSkin == dance::Skin::Crab);
-  TEST_ASSERT_TRUE(dance::nextSkin(dance::Skin::Crab) == dance::Skin::Stick);
-  TEST_ASSERT_TRUE(dance::nextSkin(dance::Skin::Stick) == dance::Skin::Crab);
-  TEST_ASSERT_EQUAL_STRING("crab", dance::skinName(dance::Skin::Crab));
-  TEST_ASSERT_EQUAL_STRING("stick", dance::skinName(dance::Skin::Stick));
-}
-
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_art_tables);
@@ -509,6 +500,5 @@ int main(int, char**) {
   RUN_TEST(test_crab_state);
   RUN_TEST(test_palette_blend);
   RUN_TEST(test_blit);
-  RUN_TEST(test_skins);
   return UNITY_END();
 }

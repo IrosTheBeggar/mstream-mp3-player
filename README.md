@@ -778,7 +778,11 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   DancePose           The stick figure's joints as functions of the beat phase
   CrabPose, CrabArt   The crab's layer frames and offsets per beat phase; its
                       pixel art (generated from tools/art/crab.json)
-  DanceSkin           Which dancer is on screen (crab, stick)
+  DanceCast           The dancers, in order, and the tap cycle (crab, stick)
+  CodeCharacters      The crab and the stick figure as the choreographer's
+                      characters: their moves, and their poses from its cue
+  DanceFrame          What a dance frame measures, as the choreographer's input
+  DanceConsole        The console's D commands: the cast, moves, freezes
   DanceRate           The Dance tab's frame rate: 10 fps idle, 24-30 dancing
   LibraryIndex        The library in a few PSRAM blocks: string arena, records,
                       sorted views, A-Z buckets, folder tree; saved and loaded

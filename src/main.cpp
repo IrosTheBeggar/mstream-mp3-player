@@ -1931,6 +1931,7 @@ static SerialConsole console({
       if (!waitsForLibrary("G")) gaplessCommand(a);
     },
     opusCommand,
+    [](const char* a) { danceMode.danceCommand(a); },
     [](char* line, HostLine::Byte kind) { usbViz.onLine(line, kind); },
 });
 
@@ -3224,7 +3225,9 @@ void setup() {
                  "q queue (q? for its commands; qs<sec> a resume point), "
                  "a touch calibration (a5-a9 fewer crosses, ac check, ab first-boot check, ab0 ask it again, "
                  "as status, ad remove it, ah0/1 haptics, ar0/1 rail ticks), "
-                 "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes); "
+                 "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes), "
+                 "D dancers (D the cast, Dc<id> choose, Dl moves, Dm<move> next run, Df<move>.<step>[m] freeze / Df off, "
+                 "Dv move log, Dg<genre>, Ds<spot>); "
                  "ui the UI's navigation (ui0-ui4 tab, uib back, uic coach cards, uit/uih/uis/uid/uip scripted finger, "
                  "uk1/uk2/uk0 the scripted finger on a skewed panel (uk2 with jitter) or not, "
                  "uiF<c/s/p/r/l/n/f/t/g/u/w> show a faked Bluetooth, no-card, exFAT/NTFS/GPT/can't-read card or waiting state "

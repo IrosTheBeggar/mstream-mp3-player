@@ -9,8 +9,11 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
+#include "Fnv1a.h"
 #include "app/Diagnostics.h"
+#include "app/Psram.h"
 
 namespace {
 constexpr uint32_t kScratchFrames = 2048;  // mono frames handed to the tracker at a time (PSRAM)
@@ -18,15 +21,45 @@ constexpr uint32_t kScratchFrames = 2048;  // mono frames handed to the tracker 
 // ahead of the beat looks right, behind it looks late.
 constexpr uint32_t kAimEarlyUs = 15000;
 constexpr uint32_t kErrorWindowMs = 10000; // the phase error's median/p95 over this long
-constexpr float kFlashBeats = 0.12f;       // the beat dot shows this much of a beat
 
-void* psramAlloc(size_t n) { return heap_caps_malloc(n, MALLOC_CAP_SPIRAM); }
-void psramFree(void* p) { heap_caps_free(p); }
+// The D console's replies and the [move] lines (lib/core/DanceConsole): a
+// line each, without its newline.
+void printLine(void*, const char* line) { Serial.println(line); }
+
+// The view's sprite format for a cast entry's renderer (F.1): the crab's
+// RGB565, the classic stick figure's RGB332. False for a drawn character,
+// which only step 5's stage draws (none is in step 4's cast).
+bool viewSkin(dance::Renderer r, DanceView::Skin* out) {
+  switch (r) {
+    case dance::Renderer::Crab: *out = DanceView::Skin::Crab; return true;
+    case dance::Renderer::Classic: *out = DanceView::Skin::Stick; return true;
+    case dance::Renderer::Drawn: break;
+  }
+  return false;
+}
 }  // namespace
 
 bool DanceMode::begin() {
   scratch_ = static_cast<int16_t*>(psramAlloc(kScratchFrames * sizeof(int16_t)));
-  ready_ = scratch_ && tracker_.begin(BeatTracker::Config{}, psramAlloc, psramFree) && view_.begin(skin_);
+  // The cast (docs/DANCE-SPRITES.md, F.1): the two code characters (a vtable
+  // pointer each) and the list of them, in PSRAM; the crab is entry 0, the
+  // first-boot dancer. All or nothing: without them there is no dancer.
+  crabChar_ = psramNew<dance::CrabCharacter>();
+  stickChar_ = psramNew<dance::ClassicStick>();
+  cast_ = psramNew<dance::DanceCast>();
+  if (crabChar_ && stickChar_ && cast_ && dance::addBuiltIns(*cast_, *crabChar_, *stickChar_)) {
+    choreo_.setCharacter(cast_->at(chosen_).character);
+  } else {
+    psramDelete(cast_);
+    psramDelete(stickChar_);
+    psramDelete(crabChar_);
+    cast_ = nullptr;
+    stickChar_ = nullptr;
+    crabChar_ = nullptr;
+  }
+  // (The view starts in the crab's format: kDefaultDancer's.)
+  ready_ = scratch_ && cast_ && tracker_.begin(BeatTracker::Config{}, psramAlloc, psramFree) &&
+           view_.begin(DanceView::Skin::Crab);
   syncTaps();  // off until the Dance tab is up
   if (!ready_) {
     Serial.println("[dance] no PSRAM for the dance screen");
@@ -74,10 +107,14 @@ void DanceMode::setActive(bool on) {
     Serial.println("[dance] off");
     return;
   }
-  Serial.printf("[dance] on (%s)\n", dance::skinName(skin_));
+  Serial.printf("[dance] on (%s)\n", dancerId());
   view_.enter();
-  dancer_.reset();
-  crab_.reset();
+  // The dancer from the start (E.2.8): idle, its weight 0, its idle clock at
+  // 0, a switch still pending made at once; the dance half at its hit; the
+  // console's [move] lines from the run under way.
+  choreo_.reset(pathHash());
+  half_.reset();
+  console_.reset();
   if (!host_) {  // (in host mode the computer's hops feed the tracker, on or off)
     follow(audio_.output());
     freshWhy_ = "dance screen on";
@@ -110,6 +147,18 @@ void DanceMode::onTrackChanged() {
   // until the next epoch (a skip, a seek, a start).
   truth_ = false;
   if (!host_) tracker_.setPrior(0.0f);  // (in host mode the tracker has the computer's epoch's)
+  // The Choreographer learns of every track change, host mode included
+  // (E.2.8): a gapless join (no tracker restart) keeps the phrase and the
+  // run; a skip's restart then resets it through BeatInput.restarts. The
+  // genres a track carries come later (none yet); Dg's go here.
+  choreo_.onTrack(pathHash(), nullptr, 0);
+}
+
+uint32_t DanceMode::pathHash() const {
+  char path[TrackCatalog::kMaxPath];
+  path[0] = '\0';
+  player_.currentPath(path, sizeof(path));  // ("" with no track: kFnvBasis)
+  return dance::fnv1a32(path, strnlen(path, sizeof(path)));
 }
 
 void DanceMode::freeze(int n) {
@@ -123,28 +172,41 @@ void DanceMode::freeze(int n) {
 }
 
 void DanceMode::cycleSkin() {
-  const dance::Skin next = dance::nextSkin(skin_);
-  if (ready_ && !view_.setSkin(next)) {
-    // No PSRAM for the other format: stay as we were if that still works.
-    Serial.printf("[dance] no PSRAM for the %s sprite\n", dance::skinName(next));
-    ready_ = view_.setSkin(skin_);
-    if (!ready_) {
-      Serial.println("[dance] dance screen off: no sprite");
-      active_ = false;
-      syncTaps();
-    }
+  if (!cast_) {
+    Serial.println("[dance] not available (no PSRAM)");
     return;
   }
-  // The new skin takes over where the old one's dance weight was, so a
-  // switch mid-song doesn't fade out and back in.
-  const float w = skin_ == dance::Skin::Crab ? crab_.weight() : dancer_.weight();
-  if (next == dance::Skin::Crab) {
-    crab_.reset(w);
-  } else {
-    dancer_.reset(w);
+  const int next = cast_->next(chosen_);
+  if (next >= 0) choose(next);  // (-1: no dancer in the tap cycle; never in step 4's cast)
+}
+
+void DanceMode::danceCommand(const char* arg) {
+  if (!cast_) {
+    Serial.println("[dance] not available (no PSRAM)");
+    return;
   }
-  skin_ = next;
-  Serial.printf("[dance] skin: %s\n", dance::skinName(skin_));
+  const dance::ConsoleReply r = console_.run(arg, choreo_, *cast_, chosen_, printLine, nullptr);
+  if (r.choose) choose(r.index);
+}
+
+// The dancer asked for names it everywhere at once (the logs, the page,
+// describe()); the Choreographer switches to it at once while idle, and at
+// the next whole dance beat while it dances (E.2.8), keeping the dance
+// weight, the idle clock and the spot. The view follows the one drawn
+// (render()).
+void DanceMode::choose(int i) {
+  chosen_ = i;
+  choreo_.setCharacter(cast_->at(i).character);
+  Serial.printf("[dance] skin: %s\n", dancerId());
+}
+
+// (Without the cast, no PSRAM: the crab's, kDefaultDancer's, as before.)
+const char* DanceMode::dancerId() const {
+  return cast_ ? cast_->at(chosen_).character->info().id : dance::CrabCharacter().info().id;
+}
+
+const char* DanceMode::dancerName() const {
+  return cast_ ? cast_->at(chosen_).character->info().name : dance::CrabCharacter().info().name;
 }
 
 void DanceMode::setTracking(bool on) {
@@ -327,6 +389,7 @@ void DanceMode::setHost(bool on, const HostStats* stats) {
   if (on) {
     if (frozen_ >= 0) Serial.println("[dance] unfrozen: the computer drives the dancer");
     frozen_ = -1;
+    choreo_.freeze(dance::kNoMove, 0, false);  // a Df freeze too, silently (3.8)
     truth_ = false;  // (the computer measures: tools/usb_viz.py --measure)
     freshWhy_ = "the computer";
     clock_.start(hostRate_);
@@ -446,35 +509,24 @@ void DanceMode::render(uint32_t nowMs) {
   const float dt = lastFrameUs_ ? static_cast<int32_t>(nowUs - lastFrameUs_) * 1e-6f : 0.0f;
   lastFrameUs_ = nowUs;
 
-  bool flash = false, dancing = false, beat = false;
-  const bool isCrab = skin_ == dance::Skin::Crab;
-  dance::Pose pose;
-  crab::Pose crabPose;
-  float weight = 1.0f;
-  if (frozen_ >= 0) {
-    const float phi = (frozen_ % 8) / 8.0f;
-    if (isCrab) {
-      crabPose = crab::Crab::frozen(phi, frozen_ >= 8);
-    } else {
-      pose = dancer_.frozen(phi, frozen_ >= 8);
-    }
-    flash = phi < kFlashBeats;
-    dancing = true;
-  } else {
+  // The facts (docs/DANCE-SPRITES.md, F.1), every frame, frozen or not: the
+  // Choreographer runs on underneath a freeze (E.2.7).
+  dance::FrameFacts facts{};
+  {
     // The moment this frame will be on the LCD: after drawing and half the push.
     const auto lead = static_cast<uint32_t>(drawUs_ + pushUs_ / 2.0f) + kAimEarlyUs;
     const BeatTracker::Grid g = tracker_.grid();
-    double beats = 0.0;
     if (host_) {
       // The computer's heard frame at that moment (its output's latency is
       // in what it sends; the console's y<ms> moves it, + later).
       const HostClock::Heard heard = clock_.at(nowUs, static_cast<int32_t>(lead) - offsetMs_ * 1000);
-      beat = heard.valid && g.valid && !fresh_ && hostEpochOn_;
-      if (beat) beats = g.beatIndex + g.beatsAt(static_cast<uint32_t>(heard.frame), heard.frac);
-      if (beat && hostLog_ >= 2) {
+      facts.heard = heard.valid && hostEpochOn_;
+      facts.grid = facts.heard && g.valid && !fresh_;
+      if (facts.grid) facts.trackerBeats = g.beatIndex + g.beatsAt(static_cast<uint32_t>(heard.frame), heard.frac);
+      if (facts.grid && hostLog_ >= 2) {
         // A [flash] line per beat drawn: the clock's frame now (and the one
         // aimed at), for the computer to set against its own clock.
-        const auto n = static_cast<int64_t>(std::floor(beats));
+        const auto n = static_cast<int64_t>(std::floor(facts.trackerBeats));
         if (n != flashBeat_) {
           flashBeat_ = n;
           const HostClock::Heard now = clock_.at(nowUs);
@@ -486,37 +538,69 @@ void DanceMode::render(uint32_t nowMs) {
       char how[48];
       const uint32_t latency = latencyUs(how, sizeof(how));
       const TapReader::Audible heard = reader_.audibleAt(nowUs + lead, latency);
-      beat = heard.valid && g.valid && !fresh_ && heard.epoch == epoch_;
-      if (beat) beats = g.beatIndex + g.beatsAt(heard.trackFrame, heard.frac);
+      facts.heard = heard.valid;
+      facts.grid = heard.valid && g.valid && !fresh_ && heard.epoch == epoch_;
+      if (facts.grid) facts.trackerBeats = g.beatIndex + g.beatsAt(heard.trackFrame, heard.frac);
     }
-    dance::Step step;
-    if (beat) {
-      const float bpm = tracker_.bpm();
-      step = dance::danceStep(beats, bpm, fold_.apply(bpm));
-    }
-    // Danced only while the tracker is locked: an unlocked grid is a guess
-    // (its confidence may sit just under the lock for a while), and the
-    // dance weight's scale is the locked one (dance::danceWeight).
-    const bool lockedBeat = beat && tracker_.locked();
-    if (isCrab) {
-      crabPose = crab_.update(step.phi, step.odd, tracker_.confidence(), lockedBeat, dt);
-      weight = crab_.weight();
-    } else {
-      pose = dancer_.update(step.phi, step.odd, tracker_.confidence(), lockedBeat, dt);
-      weight = dancer_.weight();
-    }
-    dancing = weight > dancerate::kIdleWeight;
-    flash = beat && dancing && step.phi < kFlashBeats;
   }
-  scene_.frozen = frozen_ >= 0;
-  scene_.beat = beat;
-  scene_.locked = tracker_.locked();
-  scene_.weight = weight;
+  // The tracker's state. (The Choreographer dances only on a locked grid, as
+  // before: an unlocked one is a guess, and the dance weight's scale is the
+  // locked one; E.2.3's U3.)
+  facts.locked = tracker_.locked();
+  facts.confidence = tracker_.confidence();
+  facts.rawBpm = tracker_.bpm();
+  facts.restarts = resets_;
+  facts.acquisitions = tracker_.acquisitions();
+  facts.dt = dt;
+  facts.freeze = static_cast<int8_t>(frozen_ >= 0 && frozen_ <= 15 ? frozen_ : -1);
+  // What the dancer does: the fold applied on frames with a grid (as before),
+  // the Choreographer's cue, the console's [move] lines, the next frame's rate.
+  const dance::Cue& c = choreo_.update(dance::beatInput(facts, fold_));
+  console_.frame(choreo_, printLine, nullptr);
+  scene_ = dance::sceneOf(facts, c);
+  const double u = half_.follow(c);
+
+  // The view follows the dancer drawn, the Choreographer's (a switch while
+  // dancing lands on the next whole dance beat): its sprite format.
+  const int e = cast_->indexOf(choreo_.character());
+  DanceView::Skin format;
+  if (e < 0 || !viewSkin(cast_->at(e).renderer, &format)) return;  // nothing this view can draw
+  if (format != view_.skin()) {
+    if (e != chosen_) return;  // a switch back is pending: the box holds its pixels meanwhile
+    if (!view_.setSkin(format)) {
+      // No PSRAM for the other format: back as we were if that still works,
+      // and the dancer back with it.
+      Serial.printf("[dance] no PSRAM for the %s sprite\n", cast_->at(e).character->info().id);
+      DanceView::Skin back = DanceView::Skin::Crab;
+      viewSkin(cast_->at(viewEntry_).renderer, &back);
+      ready_ = view_.setSkin(back);
+      if (!ready_) {
+        Serial.println("[dance] dance screen off: no sprite");
+        active_ = false;
+        syncTaps();
+        return;
+      }
+      choose(viewEntry_);
+      return;
+    }
+    // (The next push is the whole box.)
+  }
+  viewEntry_ = e;
+
+  // The pose: the code characters' functions of the cue (lib/core/CodeCharacters).
+  dance::Pose pose;
+  crab::Pose crabPose;
+  const bool isCrab = format == DanceView::Skin::Crab;
+  if (isCrab) {
+    crabPose = dance::CrabCharacter::pose(c, u);
+  } else {
+    pose = dance::ClassicStick::pose(c, u);
+  }
   const int64_t t0 = esp_timer_get_time();
   if (isCrab) {
-    view_.drawCrab(crabPose, weight, flash);
+    view_.drawCrab(crabPose, c.weight, c.flash);
   } else {
-    view_.drawFigure(pose, flash, dancing);
+    view_.drawFigure(pose, c.flash, c.weight > dancerate::kIdleWeight);
   }
   const int64_t t1 = esp_timer_get_time();
   view_.push();
@@ -567,7 +651,7 @@ void DanceMode::printStats(uint32_t nowMs) {
   const diag::Heap h = diag::heap();
   Serial.printf("[dance] %s skin=%s fps=%.1f/%lu (%s) draw=%.1fms push=%.1fms | "
                 "bpm=%.2f conf=%.2f %s lock_after=%s %s | %s | tracker=%.2f%% resets=%lu lost=%lu | ram=%luK min=%luK%s\n",
-                active_ ? "on" : "off", dance::skinName(skin_), fps_, static_cast<unsigned long>(targetFps_),
+                active_ ? "on" : "off", dancerId(), fps_, static_cast<unsigned long>(targetFps_),
                 dancerate::modeName(dancerate::mode(scene_)), drawUs_ / 1000.0f, pushUs_ / 1000.0f,
                 tracker_.bpm(), tracker_.confidence(), tracker_.locked() ? "locked" : "unlocked", lockAfter, error,
                 source, trackerLoad_ * 100.0f, static_cast<unsigned long>(resets_),

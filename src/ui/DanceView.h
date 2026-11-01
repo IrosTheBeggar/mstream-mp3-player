@@ -7,7 +7,6 @@
 
 #include "CrabPose.h"
 #include "DancePose.h"
-#include "DanceSkin.h"
 
 // The dancer's box on the Dance tab (ui/DancePage draws the panels around
 // it: the beat, the dancer's name, the track). The character is drawn into a sprite in PSRAM
@@ -43,14 +42,19 @@ public:
   static constexpr int kBoxW = 120;
   static constexpr int kBoxH = 150;
 
+  // The sprite's format, and the draw function it serves: RGB565 for
+  // drawCrab, RGB332 for drawFigure (DanceMode picks it from the cast
+  // entry's renderer: docs/DANCE-SPRITES.md, F.1).
+  enum class Skin : uint8_t { Crab, Stick };
+
   // Creates the sprite for `skin`. False: no PSRAM for it (the dance screen
   // is then off).
-  bool begin(dance::Skin skin = dance::kDefaultSkin);
+  bool begin(Skin skin = Skin::Crab);
   bool ready() const { return ready_; }
   // Switches the sprite to another skin's format; the next frame pushes the
   // whole box. False: no PSRAM for it (the dance screen is then off).
-  bool setSkin(dance::Skin skin);
-  dance::Skin skin() const { return skin_; }
+  bool setSkin(Skin skin);
+  Skin skin() const { return skin_; }
   // A screen point inside the character's box.
   static bool inBox(int x, int y) { return x >= kBoxX && x < kBoxX + kBoxW && y >= kBoxY && y < kBoxY + kBoxH; }
 
@@ -88,7 +92,7 @@ private:
   void pushRect(const Rect& r);
 
   M5Canvas sprite_;
-  dance::Skin skin_ = dance::kDefaultSkin;
+  Skin skin_ = Skin::Crab;
   bool ready_ = false;
   int paletteStep_ = -1;  // crab: the palette in ink_, or -1 for none yet
   uint16_t ink_[crab::kPaletteSize] = {};  // crab: RGB565 of each palette index

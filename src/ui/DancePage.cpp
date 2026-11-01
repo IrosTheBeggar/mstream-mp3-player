@@ -5,7 +5,8 @@
 // frames a second, 10 while it idles, only the rectangle that moved), with the beat on the
 // left, the dancer's name on the right and the track at the bottom, redrawn
 // only when a value changes, at most twice a second. A tap on the dancer
-// switches it (crab, stick figure). There is no tap zone at the bottom any
+// switches it (the next in the cast's tap cycle: crab, stick figure; its
+// name and dot are DanceMode's chosen entry's). There is no tap zone at the bottom any
 // more (the usability walk: it sat right above BtnC, and a press meant as
 // "next" left the page).
 //
@@ -20,7 +21,6 @@
 #include <cstdio>
 #include <cstring>
 
-#include "DanceSkin.h"
 #include "UiText.h"
 #include "ui/DanceView.h"
 #include "ui/Fonts.h"
@@ -68,7 +68,7 @@ void DancePage::drawPanels(bool all) {
   const int bpmX10 = bpm > 0.0f ? static_cast<int>(std::lround(bpm * 10.0f)) : 0;
   const int lock = d.locked() ? 2 : bpm > 0.0f ? 1 : 0;
   const int conf = static_cast<int>(std::lround(d.confidence() * 100.0f));
-  const int skin = static_cast<int>(d.skin());
+  const int skin = d.dancer();  // the cast entry chosen last (F.1)
   const int host = d.host() ? 1 : 0;
   // The left panel: the beat.
   if (all || bpmX10 / 10 != bpmX10_ / 10) {
@@ -106,11 +106,11 @@ void DancePage::drawPanels(bool all) {
   if (all || skin != skin_) {
     c.fillRect(0, 0, 100, 56, col::BG);
     f.draw(c, Font::Small, "dancer", 50, 14, 96, col::DIM, col::BG, Fonts::Align::Centre);
-    const char* name = d.skin() == dance::Skin::Crab ? "Crab" : "Stick";
+    const char* name = d.dancerName();
     f.draw(c, Font::Title, name, 50, 40, 96, col::TXT, col::BG, Fonts::Align::Centre);
     gfx::push(c, 220, 44, 100, 56);
     c.fillRect(0, 0, 100, 56, col::BG);
-    for (int i = 0; i < 2; ++i) {  // which of the two dancers
+    for (int i = 0; i < 2; ++i) {  // which of the two dancers (the cast's entries 0 and 1; step 6 replaces this)
       if (i == skin) {
         c.fillCircle(42 + i * 16, 8, 4, accent::Dance);
       } else {
@@ -174,7 +174,7 @@ void DancePage::onEvent(const InputEvent& e) {
 
 void DancePage::describe(char* buf, size_t size) const {
   DanceMode& d = const_cast<Ui&>(ui_).dance();
-  snprintf(buf, size, "Dance: %s, %.1f BPM, confidence %.2f%s, %.0f fps (of %lu)%s", dance::skinName(d.skin()),
+  snprintf(buf, size, "Dance: %s, %.1f BPM, confidence %.2f%s, %.0f fps (of %lu)%s", d.dancerId(),
            d.bpm(), d.confidence(), d.locked() ? ", locked" : "", d.fps(), static_cast<unsigned long>(d.targetFps()),
            d.host() ? ", the computer's music (USB visualizer)" : "");
 }

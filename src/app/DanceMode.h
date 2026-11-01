@@ -6,10 +6,13 @@
 
 #include "BeatTracker.h"
 #include "ClickGen.h"
-#include "CrabPose.h"
+#include "CodeCharacters.h"
+#include "DanceCast.h"
+#include "DanceChoreo.h"
+#include "DanceConsole.h"
+#include "DanceFrame.h"
 #include "DanceRate.h"
 #include "DancePose.h"
-#include "DanceSkin.h"
 #include "HostClock.h"
 #include "HostLink.h"
 #include "PlaybackController.h"
@@ -26,6 +29,19 @@
 // the listener hears: the tap's clock minus the output's latency, a little
 // early for the LCD. On the click tracks the true beat is known, so the
 // tracker's phase error is measured as it plays.
+//
+// What the dancer does is the Choreographer's (docs/DANCE-SPRITES.md,
+// Appendices E.2 and F.1): each frame gathers the facts (is audio heard, the
+// tracker's grid at that moment, its lock, confidence and tempo), turns them
+// into its BeatInput (lib/core/DanceFrame) and draws its Cue. The dancers are
+// the cast's (lib/core/DanceCast: the crab, then the classic stick figure),
+// each a Character with a pose function (lib/core/CodeCharacters) drawn
+// through DanceView's box. The dancer chosen last (cycleSkin, the console's
+// Dc) names the dancer everywhere at once: the logs, the page, describe().
+// The one drawn is the Choreographer's, which while dancing switches at the
+// next whole dance beat, and the view's sprite format follows it. The
+// Choreographer keeps the dance weight, the idle clock and the spot across a
+// switch. The console's D commands are lib/core/DanceConsole's.
 //
 // Its frame rate (DanceRate, ENERGY.md item 8): 10 fps while it idles, 30
 // while it dances at 240 MHz, 24 below that; a change is logged ("[dance]
@@ -58,8 +74,13 @@ public:
   void onTrackChanged();
   void setOffsetMs(int ms) { offsetMs_ = ms; }
   void freeze(int n);                // phase n/8 of a two-beat cycle; -1 unfreezes
-  void cycleSkin();                  // crab -> stick -> crab (console m, a tap on the box)
-  dance::Skin skin() const { return skin_; }
+  // The dancers (the cast: docs/DANCE-SPRITES.md, F.1). Without the cast (no
+  // PSRAM) cycleSkin and danceCommand say "[dance] not available (no PSRAM)".
+  void cycleSkin();                    // console m, a tap on the box: the next in the cast's tap cycle
+  void danceCommand(const char* arg);  // console D<arg> (F.2); a Dc reply chooses that dancer
+  int dancer() const { return chosen_; }  // the chosen cast entry (replaces skin()): 0 crab, 1 stick
+  const char* dancerId() const;        // the chosen entry's info().id: "crab", "stick"
+  const char* dancerName() const;      // its info().name: "Crab", "Stick"
   void toggleVerbose();
   // Power measurements (the console's Pk): the beat tracker stops reading
   // the tap and the taps stop (the dancer idles); on again it starts over
@@ -114,15 +135,24 @@ private:
   void lockChanged(float rate);
   void render(uint32_t nowMs);
   uint32_t latencyUs(char* how, size_t howLen) const;
+  // chosen_ = i, the Choreographer asked for that dancer (at once, or at the next
+  // whole dance beat while dancing) and "[dance] skin: <id>", at the request.
+  void choose(int i);
+  uint32_t pathHash() const;  // FNV-1a 32 of the current track's path (kFnvBasis for none)
 
   Core2AudioBackend& audio_;
   PlaybackController& player_;
   DanceView view_;
   BeatTracker tracker_;
   TapReader reader_;
-  dance::Skin skin_ = dance::kDefaultSkin;
-  dance::Dancer dancer_;        // the stick figure's state
-  crab::Crab crab_;             // the crab's
+  dance::Choreographer choreo_;  // what the dancer does, frame by frame (~424 B)
+  dance::DanceHalf half_;        // the code characters' dance half, held while no beat move shows
+  dance::DanceConsole console_;  // the console's D commands and Dv's [move] lines
+  int chosen_ = dance::kDefaultDancer;     // the cast entry asked for last
+  int viewEntry_ = dance::kDefaultDancer;  // the cast entry whose sprite format the view holds
+  dance::DanceCast* cast_ = nullptr;       // PSRAM, from begin(): the crab, the stick
+  dance::CrabCharacter* crabChar_ = nullptr;  // PSRAM
+  dance::ClassicStick* stickChar_ = nullptr;  // PSRAM
   dance::TempoFold fold_;       // the dance tempo's octave, kept between frames
   int16_t* scratch_ = nullptr;  // PSRAM
   bool ready_ = false;

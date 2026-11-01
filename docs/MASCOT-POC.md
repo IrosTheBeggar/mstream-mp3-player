@@ -365,12 +365,15 @@ beat dot is a plain `fillCircle`, as crisp as the crab. A skin switch
 deletes the sprite and creates it in the other format (8-bit for the stick
 figure), and the next frame pushes the whole box.
 
-**Skins** (`DanceSkin`): `m`, or a tap inside the dancer's 120×150 box
-while dancing, cycles crab → stick → crab; a tap elsewhere above the button
-strip still leaves the dance screen. The new dancer starts at the old one's
-dance weight, so a switch mid-song doesn't fade out and back in. The choice
-isn't saved: every boot starts with the crab. `k<n>`, `x` and `X` work for
-both.
+**Skins** (the cast, `DanceCast`; docs/DANCE-SPRITES.md, F.1): `m`, or a
+tap inside the dancer's 120×150 box while dancing, goes to the next dancer
+in the cast's tap cycle, crab → stick → crab; a tap elsewhere above the
+button strip still leaves the dance screen. The dance weight and the idle
+clock are the Choreographer's (lib/core/DanceChoreo), not the dancer's, so
+a switch mid-song doesn't fade out and back in; while the dancer dances the
+switch lands on the next whole dance beat. The choice isn't saved: every
+boot starts with the crab. `k<n>`, `x` and `X` work for both, and the `D`
+console (below) reaches the cast by id.
 
 On the device: see [The crab on the Core2](#the-crab-on-the-core2).
 
@@ -391,7 +394,7 @@ line and the title bar. All device tests of this proof of concept run in it.
 |---|---|
 | `z` | silent test mode (until restart) |
 | `d`, or the Dance tab | the Dance tab (the UI's, since the tab bar; `d` again goes back to the tab you were on). The old "tap the screen to dance" is gone |
-| `m`, or a tap on the dancer's box on the Dance tab | next dancer: crab (default) → stick figure → crab |
+| `m`, or a tap on the dancer's box on the Dance tab | the next dancer in the cast's tap cycle: crab (default) → stick figure → crab; the weight and the idle clock kept by the Choreographer |
 | `s` | stats, including the `[dance]` line (also every 5 s while dancing) |
 | `v` | a `[beat]` line per tracker beat on/off |
 | `x` | screenshot of the dancer's box |
@@ -399,6 +402,7 @@ line and the title bar. All device tests of this proof of concept run in it.
 | `t<bpm>` + Enter | tempo prior; `t` or `t0` clears it, and so does a track change |
 | `y<ms>` + Enter | latency offset, + later / − earlier (not saved) |
 | `k<n>` + Enter | freeze the dancer (either one) at phase n/8 of a two-beat cycle (0-7 even beat, 8-15 odd); `k` alone follows the beat again |
+| `D…` + Enter | the dancers' console (docs/DANCE-SPRITES.md, F.2): `D` the cast, `Dc<id>` choose one, `Dl` its moves, `Dm<move>` force the next run (`Dm` cancels), `Df<move>.<step>[m]` freeze at a step (`Df` unfreezes), `Dv` a `[move]` line per run, `Dg<genre>` a genre for this track, `Ds<spot>` a spot (refused for the crab and the stick: they dance at the centre) |
 
 The `[dance]` line has these fields:
 
@@ -478,7 +482,8 @@ checks:
   legs not bobbing), the blend, the weight fading in and out, the palette
   fade;
 - the blitter (3× blocks, transparency, the mirror, merged runs, under 240
-  rectangles a frame) and the skin cycle.
+  rectangles a frame). (The skin cycle's test moved to test_character_set
+  with the cast: docs/DANCE-SPRITES.md, F.4.)
 
 Click trains with white noise at −30 dBFS RMS. The phase error is the grid's
 prediction for each true beat, scored from 4 s after the start:

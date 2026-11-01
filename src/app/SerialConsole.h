@@ -13,7 +13,7 @@
 //   n next   p prev   <space> play/pause   o switch output   + / - volume
 //   s stats  l list tracks   f forget the remembered Bluetooth device and restart
 //   z silent test mode (speaker at volume 0, Bluetooth doesn't take over; until restart)
-//   d dance screen on/off   m next dancer (crab, stick)
+//   d dance screen on/off   m next dancer (the cast's tap cycle)
 //   x / X screenshot of the dancer's box / the whole screen
 //   v per-beat log on/off
 //   L the partition table as flashed, the running app slot and its version, NVS use (bug reports)
@@ -27,6 +27,8 @@
 //   t<bpm> tempo prior for the beat tracker (t or t0 clears it; a track change does too)
 //   y<ms> dance latency offset, + later / - earlier (not saved)
 //   k<n> freeze the dancer at phase n/8 of a two-beat cycle, 0-15 (k alone: follow the beat)
+//   D... the dancers (docs/DANCE-SPRITES.md, F.2): D the cast, Dc<id>, Dl, Dm<move>,
+//        Df<move>.<step>[m] / Df, Dv, Dg<genre>, Ds<spot>
 //   q... the queue: q status, qa play all, qb built-ins, ql albums, qp<n>/qn<n>/q+<n> album n:
 //        play / play next / add, qr<pos> remove, qc clear up next, qx clear, qu undo
 //   a... the input layer: a touch calibration (a5-a9 with fewer crosshairs), ac check the
@@ -130,6 +132,8 @@ public:
     std::function<void(const char*)> gapless;
     // Opus (O): the argument as typed (may be "").
     std::function<void(const char*)> opus;
+    // The dancers (D, docs/DANCE-SPRITES.md F.2): the argument as typed (may be "").
+    std::function<void(const char*)> dance;
     // A computer's '@' line: complete (HostLine::Byte::Line: `line` is its
     // text from the '@', writable) or not one (Bad, Long, Restart: `line`
     // nullptr).
@@ -159,7 +163,7 @@ private:
   enum class Pending {
     None, PlayIndex, Bench, HeadphonesName, Headroom, TempoPrior, DanceOffset, Freeze,
     InputLab, ScrollLab, LibraryIndex, FontProbe, ThumbProbe, Queue, Touch, Power, Sleep, Idle, BluetoothTest,
-    Rate, Gapless, Opus,
+    Rate, Gapless, Opus, Dance,
   };
 
   Actions actions_;
