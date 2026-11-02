@@ -7,6 +7,7 @@
 #include <Preferences.h>
 
 #include "NvsLayout.h"
+#include "app/NvsLater.h"
 
 namespace autodjstore {
 
@@ -64,20 +65,14 @@ autodj::Settings load() {
   return s;
 }
 
-bool save(const autodj::Settings& s) {
+void save(const autodj::Settings& s) {
+  // Queued: written once the taps rest (app/NvsLater; the Auto DJ page's
+  // rows cycle their values), not under the finger.
   const AutoDjStored st = nvslayout::autoDjTo(savedOf(s));
-  Preferences p;
-  if (!p.begin(nvslayout::kAutoDjNamespace, false)) {
-    Serial.println("[dj] settings: NVS can't be opened: not saved (for this boot only)");
-    return false;
-  }
-  bool ok = p.putUChar(nvslayout::kAutoDjOnKey, st.on) == 1;
-  ok = p.putUChar(nvslayout::kAutoDjModeKey, st.mode) == 1 && ok;
-  ok = p.putUChar(nvslayout::kAutoDjFloorKey, st.floor) == 1 && ok;
-  ok = p.putUChar(nvslayout::kAutoDjMatchKey, st.match) == 1 && ok;
-  p.end();
-  if (!ok) Serial.println("[dj] settings: NOT saved (NVS): for this boot only");
-  return ok;
+  nvslater::putU8(nvslayout::kAutoDjNamespace, nvslayout::kAutoDjOnKey, st.on);
+  nvslater::putU8(nvslayout::kAutoDjNamespace, nvslayout::kAutoDjModeKey, st.mode);
+  nvslater::putU8(nvslayout::kAutoDjNamespace, nvslayout::kAutoDjFloorKey, st.floor);
+  nvslater::putU8(nvslayout::kAutoDjNamespace, nvslayout::kAutoDjMatchKey, st.match);
 }
 
 }  // namespace autodjstore

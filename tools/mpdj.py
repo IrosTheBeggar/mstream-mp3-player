@@ -270,14 +270,21 @@ def level_f32(a, b):
 def writes_v2(device_txt):
     """7.4: whether a writer writes MPDJ v2 for a card whose
     /.player/device.txt holds `device_txt` (None: no file): only when its
-    read.mpdj lists 2. No file, or no read.mpdj key, reads as none."""
+    read.mpdj lists 2. A text with no contract line isn't a device.txt, so
+    reads as no file. No file, or no read.mpdj key, reads as none; a key given
+    twice reads as its last. In the list, spaces in an item are ignored, and an
+    item that isn't a number is skipped."""
     if device_txt is None:
         return False
-    for line in device_txt.splitlines():
-        key, eq, value = line.partition("=")
-        if eq and key == "read.mpdj":
-            return "2" in [v.strip() for v in value.split(",")]
-    return False
+    contract, value = False, ""
+    for line in device_txt.split("\n"):
+        key, eq, rest = (line[:-1] if line.endswith("\r") else line).partition("=")
+        if eq and key == "contract":
+            contract = True
+        elif eq and key == "read.mpdj":
+            value = rest
+    items = [v.replace(" ", "") for v in value.split(",")]
+    return contract and any(v.isascii() and v.isdigit() and int(v) == 2 for v in items)
 
 
 def floor_level(percent):

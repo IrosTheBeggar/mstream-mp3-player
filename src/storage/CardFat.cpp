@@ -92,6 +92,15 @@ bool FatFile::truncate(uint32_t sz) {
   return f_lseek(&fil, sz) == FR_OK && f_truncate(&fil) == FR_OK;
 }
 
+FRESULT FatFile::openRead(const char* path) {
+  char p[300];
+  if (!fatPath(path, p, sizeof(p))) return FR_INVALID_DRIVE;
+  writable = false;
+  return f_open(&fil, p, FA_READ | FA_OPEN_EXISTING);
+}
+
+void FatFile::closeRead() { f_close(&fil); }
+
 // ---- FatFs ----
 
 tagstore::File* FatFs::open(const char* path, Mode mode) {
@@ -110,6 +119,21 @@ tagstore::File* FatFs::open(const char* path, Mode mode) {
   ++opened_;
   ++openNow_;
   return f;
+}
+
+FRESULT FatFs::openRead(const char* path, tagstore::File** out) {
+  *out = nullptr;
+  FatFile* f = psramNew<FatFile>();
+  if (!f) return FR_NOT_ENOUGH_CORE;
+  const FRESULT r = f->openRead(path);
+  if (r != FR_OK) {
+    psramDelete(f);
+    return r;
+  }
+  ++opened_;
+  ++openNow_;
+  *out = f;
+  return FR_OK;
 }
 
 bool FatFs::close(tagstore::File* file) {

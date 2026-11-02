@@ -1,0 +1,30 @@
+{
+ "format": "MSMF",
+ "file": "manifest-waves.bin",
+ "generation": 43,
+ "cardId": "0x5EEDC0DE0A1B2C3D",
+ "commitTime": 1792100000,
+ "flags": 1,
+ "commitId": "0x0000002BFACEC0DE",
+ "serverInstance": "00112233-4455-6677-8899-aabbccddeeff",
+ "producer": "mstream-terminal 0.13.0",
+ "serverRevision": "\"r-412-99-1790000000999-300\"",
+ "baseGeneration": 42,
+ "serverUrl": "HTTP://Music.Example:3000/",
+ "note": "A root that names all three companions (WAVEFORM-INDEX.md 7.2): its MPWF row after the MPTG and MPDJ rows, its name after theirs in STRS, its key zeros. Its companions are manifest.bin's and a waveform index carried from generation 42.",
+ "companions": [
+  {
+   "file": "tags-0000002a.bin"
+  },
+  {
+   "file": "autodj-00000029.bin"
+  },
+  {
+   "file": "waves-0000002a.bin"
+  }
+ ],
+ "roots": [
+  "Lib B",
+  "Lib A"
+ ]
+}

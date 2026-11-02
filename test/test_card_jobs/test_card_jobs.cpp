@@ -3,10 +3,11 @@
 
 // Host tests for N10's portable glue (docs/METADATA.md 3.2.2, 3.2.3, 3.3;
 // milestone N10): the boot's decision (LibraryBoot), the transfer's root as
-// the boot reads it (CardRoot, with the AutoDJ index's entry it keeps), and
-// the card worker's jobs (CardJobs): the validation walk, the compaction
-// and the scan, one step at a time as the firmware's card worker runs
-// them, on fake FAT trees (test/support/FakeFat.h) with real tagged files
+// the boot reads it (CardRoot, with the AutoDJ index's and the waveform
+// index's entries it keeps), and the card worker's jobs (CardJobs): the
+// validation walk, the compaction and the scan, one step at a time as the
+// firmware's card worker runs them, on fake FAT trees
+// (test/support/FakeFat.h) with real tagged files
 // from the tag corpus, and the device's records on a fake card
 // (test/support/CutFs.h), then built into the index as the boot would
 // (LibraryBuilder). Sessions are boots: a new TagStore over the same card,
@@ -26,6 +27,7 @@
 #include <string>
 #include <vector>
 
+#include "../support/CardFixtures.h"
 #include "../support/CutFs.h"
 #include "../support/FakeFat.h"
 #include "CardContract.h"
@@ -315,11 +317,12 @@ struct Written {
   uint32_t fileBytes = 0, headerCrc = 0;
 };
 
-// A root naming `t` (generation `gen`), with `roots` as LIBR, and `dj` as
-// its MPDJ entry when given.
+// A root naming `t` (generation `gen`), with `roots` as LIBR, and `dj` and
+// `waves` as its MPDJ and MPWF entries when given.
 Written manifestFor(const std::vector<uint8_t>& t, uint32_t gen, uint64_t commitId,
-                    const std::vector<const char*>& roots = {}, const cc::msmf::CompIn* dj = nullptr) {
-  cc::msmf::CompIn comps[2];
+                    const std::vector<const char*>& roots = {}, const cc::msmf::CompIn* dj = nullptr,
+                    const cc::msmf::CompIn* waves = nullptr) {
+  cc::msmf::CompIn comps[3];
   cc::msmf::CompIn& comp = comps[0];
   comp.kind = cc::kMagicMptg;
   comp.generation = gen;
@@ -329,7 +332,9 @@ Written manifestFor(const std::vector<uint8_t>& t, uint32_t gen, uint64_t commit
   mptg::Info info;
   TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(mptg::openFile(c, src, &info)));
   comp.headerCrc = info.frame.headerCrc;
-  if (dj) comps[1] = *dj;
+  uint32_t compCount = 1;
+  if (dj) comps[compCount++] = *dj;
+  if (waves) comps[compCount++] = *waves;
   cc::msmf::ManifestIn m;
   m.generation = gen;
   m.cardId = kCardId;
@@ -337,7 +342,7 @@ Written manifestFor(const std::vector<uint8_t>& t, uint32_t gen, uint64_t commit
   m.commitId = commitId;
   m.producer = "mstream-terminal test";
   m.comps = comps;
-  m.compCount = dj ? 2 : 1;
+  m.compCount = compCount;
   m.roots = roots.empty() ? nullptr : roots.data();
   m.rootCount = static_cast<uint32_t>(roots.size());
   struct V : cc::Sink {
@@ -466,6 +471,8 @@ void test_the_boots_decision() {
 // ---------------------------------------------------------------------------
 // The root as the boot reads it (2.5.4): the election, T's frame and header
 // against COMP, LIBR, the plan; anything that fails is "no transfer data".
+// The root that won names the card (its id and generation: @status cid=,
+// docs/HOST-STATUS.md) also when its T then fails.
 // ---------------------------------------------------------------------------
 void test_the_root() {
   CutFs fs;
@@ -482,6 +489,9 @@ void test_the_root() {
     TEST_ASSERT_FALSE(r->present);
     TEST_ASSERT_TRUE(r->why == cc::Why::Missing);
     TEST_ASSERT_FALSE(r->plan);
+    TEST_ASSERT_FALSE(r->hasRoot);
+    TEST_ASSERT_EQUAL_UINT64(0, r->cardId);
+    TEST_ASSERT_EQUAL_UINT32(0, r->generation);
     char line[160];
     cardroot::describe(*r, line, sizeof(line));
     TEST_ASSERT_EQUAL_STRING("no transfer data (none on the card)", line);
@@ -498,6 +508,9 @@ void test_the_root() {
     TEST_ASSERT_EQUAL_UINT64(kCardId, r->identity.cardId);
     TEST_ASSERT_EQUAL_UINT32(5, r->identity.generation);
     TEST_ASSERT_EQUAL_UINT64(0xABC, r->identity.commitId);
+    TEST_ASSERT_TRUE(r->hasRoot);
+    TEST_ASSERT_EQUAL_UINT64(kCardId, r->cardId);
+    TEST_ASSERT_EQUAL_UINT32(5, r->generation);
     cc::MemSource src(t5.data(), static_cast<uint32_t>(t5.size()));
     cc::Container c;
     mptg::Info info;
@@ -513,13 +526,22 @@ void test_the_root() {
     cardroot::describe(*r, line, sizeof(line));
     TEST_ASSERT_TRUE(std::strstr(line, "tags-00000005.bin") != nullptr);
   }
-  // A newer manifest.tmp wins the election; its T isn't on the card: absent.
+  // A newer manifest.tmp wins the election; its T isn't on the card: absent,
+  // and the card is still named by that root. The log's line says so (not
+  // "none on the card": @status cid= names this root).
   const std::vector<uint8_t> t6 = transferOf(card, 6);
   fs.put("/.mstream/manifest.tmp", manifestFor(t6, 6, 0xDEF).bytes);
   {
     auto r = read();
     TEST_ASSERT_FALSE(r->present);
     TEST_ASSERT_TRUE(r->why == cc::Why::Missing);
+    TEST_ASSERT_FALSE(r->identity.present);
+    TEST_ASSERT_TRUE(r->hasRoot);
+    TEST_ASSERT_EQUAL_UINT64(kCardId, r->cardId);
+    TEST_ASSERT_EQUAL_UINT32(6, r->generation);
+    char line[160];
+    cardroot::describe(*r, line, sizeof(line));
+    TEST_ASSERT_EQUAL_STRING("no transfer data (the root's T tags-00000006.bin, generation 6: missing)", line);
   }
   fs.put(tagsName(6), t6);
   {
@@ -531,7 +553,15 @@ void test_the_root() {
   // T replaced by another file of the same name (another generation inside,
   // or a header that isn't the entry's): not the root's.
   fs.put(tagsName(6), transferOf(card, 7));
-  TEST_ASSERT_TRUE(read()->why == cc::Why::Comp);
+  {
+    auto r = read();
+    TEST_ASSERT_TRUE(r->why == cc::Why::Comp);
+    TEST_ASSERT_TRUE(r->hasRoot);
+    TEST_ASSERT_EQUAL_UINT32(6, r->generation);
+    char line[160];
+    cardroot::describe(*r, line, sizeof(line));
+    TEST_ASSERT_EQUAL_STRING("no transfer data (the root's T tags-00000006.bin, generation 6: comp)", line);
+  }
   std::vector<uint8_t> broken = t6;
   broken[20] ^= 1;  // the header's CRC fails
   fs.put(tagsName(6), broken);
@@ -539,6 +569,13 @@ void test_the_root() {
     auto r = read();
     TEST_ASSERT_FALSE(r->present);
     TEST_ASSERT_TRUE(r->why != cc::Why::Ok);
+    TEST_ASSERT_TRUE(r->hasRoot);
+    TEST_ASSERT_EQUAL_UINT32(6, r->generation);
+    char line[160];
+    cardroot::describe(*r, line, sizeof(line));
+    const std::string want = std::string("no transfer data (the root's T tags-00000006.bin, generation 6: ") +
+                             cc::whyName(r->why) + ")";
+    TEST_ASSERT_EQUAL_STRING(want.c_str(), line);
   }
   // The .tmp damaged: the .bin's commit counts again.
   std::vector<uint8_t> m6 = fs.bytes("/.mstream/manifest.tmp");
@@ -548,10 +585,31 @@ void test_the_root() {
     auto r = read();
     TEST_ASSERT_TRUE(r->present);
     TEST_ASSERT_EQUAL_UINT32(5, r->identity.generation);
+    TEST_ASSERT_TRUE(r->hasRoot);
+    TEST_ASSERT_EQUAL_UINT32(5, r->generation);
   }
   // A plan on the card: the last transfer didn't finish.
   fs.put("/.mstream/pending.bin", std::vector<uint8_t>{1, 2, 3});
   TEST_ASSERT_TRUE(read()->plan);
+  // Both roots damaged: no root, nothing names the card; a Root read again
+  // (a remount's) forgets the one it held.
+  auto kept = read();
+  TEST_ASSERT_TRUE(kept->hasRoot);
+  std::vector<uint8_t> m5 = fs.bytes("/.mstream/manifest.bin");
+  m5[m5.size() - 1] ^= 0xFF;
+  fs.put("/.mstream/manifest.bin", m5);
+  cardroot::read(fs, scratch.data(), static_cast<uint32_t>(scratch.size()), kept.get());
+  TEST_ASSERT_FALSE(kept->present);
+  TEST_ASSERT_TRUE(kept->why != cc::Why::Ok && kept->why != cc::Why::Missing);
+  TEST_ASSERT_FALSE(kept->hasRoot);
+  TEST_ASSERT_EQUAL_UINT64(0, kept->cardId);
+  TEST_ASSERT_EQUAL_UINT32(0, kept->generation);
+  // ... and the log's line says why the root failed, with the plan.
+  char line[200];
+  cardroot::describe(*kept, line, sizeof(line));
+  const std::string want = std::string("no transfer data (") + cc::whyName(kept->why) +
+                           "); a transfer's plan is on the card (it didn't finish)";
+  TEST_ASSERT_EQUAL_STRING(want.c_str(), line);
 }
 
 // ---------------------------------------------------------------------------
@@ -674,6 +732,206 @@ void test_the_roots_autodj_entry() {
   TEST_ASSERT_FALSE(r->autoDj.present);
   TEST_ASSERT_EQUAL_STRING("", r->autoDj.path);
   TEST_ASSERT_EQUAL_UINT32(0, r->autoDj.entry.kind);
+}
+
+// ---------------------------------------------------------------------------
+// The root's MPWF entry (WAVEFORM-INDEX.md 7.2): kept as COMP names it, only
+// while T is present; the file itself isn't opened. Unlike the MPDJ's, a bad
+// row costs only itself: the root and T stay.
+// ---------------------------------------------------------------------------
+void test_the_roots_waves_entry() {
+  CutFs fs;
+  TestCard card;
+  fill(card);
+  std::vector<uint8_t> scratch(512);
+  auto read = [&]() {
+    std::unique_ptr<cardroot::Root> r(new cardroot::Root());
+    cardroot::read(fs, scratch.data(), static_cast<uint32_t>(scratch.size()), r.get());
+    return r;
+  };
+  cc::msmf::CompIn dj;
+  dj.kind = cc::kMagicMpdj;
+  dj.generation = 0x29;
+  dj.fileBytes = 10600000;
+  dj.headerCrc = 0xA1B2C3D4;
+  dj.key[0] = 0x40;
+  cc::msmf::CompIn waves;
+  waves.kind = cc::kMagicMpwf;
+  waves.generation = 0x2A;  // a file carried from the commit before
+  waves.fileBytes = 5120256;
+  waves.headerCrc = 0x0BADF00D;
+
+  // No root: none.
+  TEST_ASSERT_FALSE(read()->waves.present);
+  // A root naming T alone, or T and an MPDJ: none.
+  const std::vector<uint8_t> t5 = transferOf(card, 5);
+  fs.put(tagsName(5), t5);
+  fs.put("/.mstream/manifest.bin", manifestFor(t5, 5, 0xABC).bytes);
+  {
+    auto r = read();
+    TEST_ASSERT_TRUE(r->present);
+    TEST_ASSERT_FALSE(r->waves.present);
+    TEST_ASSERT_EQUAL_STRING("", r->waves.path);
+    TEST_ASSERT_EQUAL_UINT32(0, r->waves.entry.kind);
+  }
+  fs.put("/.mstream/manifest.bin", manifestFor(t5, 5, 0xABC, {}, &dj).bytes);
+  {
+    auto r = read();
+    TEST_ASSERT_TRUE(r->autoDj.present);
+    TEST_ASSERT_FALSE(r->waves.present);
+  }
+  // T and an MPWF: the entry and its path, the file not on the card (the
+  // root's read never opens it).
+  fs.put("/.mstream/manifest.bin", manifestFor(t5, 5, 0xABC, {"Lib A"}, nullptr, &waves).bytes);
+  {
+    auto r = read();
+    TEST_ASSERT_TRUE(r->present);
+    TEST_ASSERT_EQUAL_UINT32(1, r->rootCount);
+    TEST_ASSERT_FALSE(r->autoDj.present);
+    TEST_ASSERT_TRUE(r->waves.present);
+    TEST_ASSERT_EQUAL_STRING("/.mstream/waves-0000002a.bin", r->waves.path);
+    const cc::msmf::Comp& e = r->waves.entry;
+    TEST_ASSERT_EQUAL_HEX32(cc::kMagicMpwf, e.kind);
+    TEST_ASSERT_EQUAL_UINT32(0x2A, e.generation);
+    TEST_ASSERT_EQUAL_UINT32(5120256, e.fileBytes);
+    TEST_ASSERT_EQUAL_HEX32(0x0BADF00D, e.headerCrc);
+    // The entry as companionMatches takes it: the file whose header is the
+    // entry's, and no other.
+    cc::Header h;
+    h.magic = cc::kMagicMpwf;
+    h.generation = 0x2A;
+    h.fileBytes = 5120256;
+    h.headerCrc = 0x0BADF00D;
+    TEST_ASSERT_TRUE(cc::msmf::companionMatches(e, h, 0, nullptr));
+    h.headerCrc ^= 1;
+    TEST_ASSERT_FALSE(cc::msmf::companionMatches(e, h, 0, nullptr));
+  }
+  // All three: each its own.
+  fs.put("/.mstream/manifest.bin", manifestFor(t5, 5, 0xABC, {}, &dj, &waves).bytes);
+  {
+    auto r = read();
+    TEST_ASSERT_TRUE(r->present);
+    TEST_ASSERT_TRUE(r->autoDj.present);
+    TEST_ASSERT_EQUAL_STRING("/.mstream/autodj-00000029.bin", r->autoDj.path);
+    TEST_ASSERT_TRUE(r->waves.present);
+    TEST_ASSERT_EQUAL_STRING("/.mstream/waves-0000002a.bin", r->waves.path);
+  }
+  // A newer manifest.tmp names a waveform index, its T not on the card: no
+  // transfer data, so no waves entry either.
+  const std::vector<uint8_t> t6 = transferOf(card, 6);
+  cc::msmf::CompIn waves6 = waves;
+  waves6.generation = 6;
+  fs.put("/.mstream/manifest.tmp", manifestFor(t6, 6, 0xDEF, {}, nullptr, &waves6).bytes);
+  {
+    auto r = read();
+    TEST_ASSERT_FALSE(r->present);
+    TEST_ASSERT_FALSE(r->waves.present);
+    TEST_ASSERT_EQUAL_STRING("", r->waves.path);
+  }
+  // Its T there: the winner's entry.
+  fs.put(tagsName(6), t6);
+  {
+    auto r = read();
+    TEST_ASSERT_TRUE(r->present);
+    TEST_ASSERT_EQUAL_UINT32(6, r->identity.generation);
+    TEST_ASSERT_TRUE(r->waves.present);
+    TEST_ASSERT_EQUAL_STRING("/.mstream/waves-00000006.bin", r->waves.path);
+    TEST_ASSERT_EQUAL_UINT32(6, r->waves.entry.generation);
+  }
+  // T not the root's (another generation inside): none.
+  fs.put(tagsName(6), transferOf(card, 7));
+  {
+    auto r = read();
+    TEST_ASSERT_TRUE(r->why == cc::Why::Comp);
+    TEST_ASSERT_FALSE(r->waves.present);
+  }
+  // A row that names the wrong file (its name's digits not the row's
+  // generation): the root stays valid and T with it, the MPDJ too; no waves
+  // entry. The same mistake in an MPDJ row costs the root (above).
+  fs.remove("/.mstream/manifest.tmp");
+  std::vector<uint8_t> named = manifestFor(t5, 5, 0xABC, {}, &dj, &waves).bytes;
+  const std::string good = "waves-0000002a.bin";
+  auto at = std::search(named.begin(), named.end(), good.begin(), good.end());
+  TEST_ASSERT_TRUE(at != named.end());
+  at[13] = 'b';  // "waves-0000002b.bin"
+  // The CRCs made right: this is the writer's mistake, not the card's.
+  const uint32_t hb = cc::get32(&named[8]), sections = cc::get32(&named[12]);
+  for (uint32_t i = 0; i < sections; ++i) {
+    uint8_t* e = &named[hb + 32 * i];
+    cc::put32(e + 24, cc::crc32(named.data() + cc::get32(e + 8), cc::get32(e + 12)));
+  }
+  cc::put32(&named[32], 0);
+  cc::put32(&named[32], cc::crc32(named.data(), hb + 32 * sections));
+  fs.put("/.mstream/manifest.bin", named);
+  {
+    auto r = read();
+    TEST_ASSERT_TRUE(r->present);
+    TEST_ASSERT_EQUAL_UINT32(5, r->identity.generation);
+    TEST_ASSERT_TRUE(r->autoDj.present);
+    TEST_ASSERT_FALSE(r->waves.present);
+    TEST_ASSERT_EQUAL_STRING("", r->waves.path);
+  }
+  // The same Root read again over a card without one: cleared.
+  fs.put("/.mstream/manifest.bin", manifestFor(t5, 5, 0xABC, {}, nullptr, &waves).bytes);
+  std::unique_ptr<cardroot::Root> r(new cardroot::Root());
+  cardroot::read(fs, scratch.data(), static_cast<uint32_t>(scratch.size()), r.get());
+  TEST_ASSERT_TRUE(r->waves.present);
+  fs.put("/.mstream/manifest.bin", manifestFor(t5, 5, 0xABC).bytes);
+  cardroot::read(fs, scratch.data(), static_cast<uint32_t>(scratch.size()), r.get());
+  TEST_ASSERT_TRUE(r->present);
+  TEST_ASSERT_FALSE(r->waves.present);
+  TEST_ASSERT_EQUAL_STRING("", r->waves.path);
+  TEST_ASSERT_EQUAL_UINT32(0, r->waves.entry.kind);
+}
+
+// Every root of the shared fixtures, whatever its MPWF row holds, on the card
+// whose T it names: the row's verdict from the vectors (WAVEFORM-INDEX.md 13.3).
+void test_the_roots_waves_rows_of_the_fixtures() {
+  minijson::Value vectors;
+  TEST_ASSERT_TRUE(cardfixtures::json("vectors.json", &vectors));
+  const minijson::Value& v = vectors["mpwf"]["rootRow"];
+  auto bytesOf = [](const std::string& rel) {
+    const std::string s = cardfixtures::bytes(rel);
+    TEST_ASSERT_FALSE_MESSAGE(s.empty(), rel.c_str());
+    return std::vector<uint8_t>(s.begin(), s.end());
+  };
+  std::vector<std::pair<std::string, const minijson::Value*>> roots = {
+      {"golden/" + v["golden"]["file"].str(), &v["golden"]}};
+  for (size_t i = 0; i < v["hardening"].size(); ++i)
+    roots.emplace_back("hardening/" + v["hardening"][i]["file"].str(), &v["hardening"][i]);
+  TEST_ASSERT_EQUAL_size_t(12, roots.size());
+  std::vector<uint8_t> scratch(1024);
+  for (bool withT : {true, false}) {
+    for (const auto& root : roots) {
+      const char* what = root.first.c_str();
+      CutFs fs;
+      if (withT) fs.put("/.mstream/tags-0000002a.bin", bytesOf("golden/tags-0000002a.bin"));
+      fs.put("/.mstream/manifest.bin", bytesOf(root.first));
+      std::unique_ptr<cardroot::Root> r(new cardroot::Root());
+      cardroot::read(fs, scratch.data(), static_cast<uint32_t>(scratch.size()), r.get());
+      TEST_ASSERT_TRUE_MESSAGE(r->hasRoot, what);
+      TEST_ASSERT_EQUAL_MESSAGE(withT, r->present, what);
+      const bool named = !(*root.second)["waves"].isNull();
+      TEST_ASSERT_EQUAL_MESSAGE(withT && named, r->waves.present, what);
+      if (withT && named) {
+        const std::string path = "/.mstream/" + (*root.second)["waves"].str();
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(path.c_str(), r->waves.path, what);
+      } else {
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("", r->waves.path, what);
+      }
+    }
+  }
+  // The two a string rule fails: no root at all.
+  for (const char* name : {"hardening/msmf-waves-name-range.bin", "hardening/msmf-waves-name-order.bin"}) {
+    CutFs fs;
+    fs.put("/.mstream/tags-0000002a.bin", bytesOf("golden/tags-0000002a.bin"));
+    fs.put("/.mstream/manifest.bin", bytesOf(name));
+    std::unique_ptr<cardroot::Root> r(new cardroot::Root());
+    cardroot::read(fs, scratch.data(), static_cast<uint32_t>(scratch.size()), r.get());
+    TEST_ASSERT_FALSE_MESSAGE(r->hasRoot, name);
+    TEST_ASSERT_FALSE_MESSAGE(r->present, name);
+    TEST_ASSERT_FALSE_MESSAGE(r->waves.present, name);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1476,6 +1734,8 @@ int main(int, char**) {
   RUN_TEST(test_the_boots_decision);
   RUN_TEST(test_the_root);
   RUN_TEST(test_the_roots_autodj_entry);
+  RUN_TEST(test_the_roots_waves_entry);
+  RUN_TEST(test_the_roots_waves_rows_of_the_fixtures);
   RUN_TEST(test_a_hand_filled_card);
   RUN_TEST(test_new_to_the_index);
   RUN_TEST(test_the_loops_sources);

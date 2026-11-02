@@ -11,6 +11,7 @@
 #include "PlaybackController.h"
 #include "SeekBar.h"
 #include "UiText.h"
+#include "WaveBar.h"
 #include "ui/ListView.h"
 #include "ui/UiHost.h"
 #include "ui/Page.h"
@@ -65,15 +66,21 @@ struct Header {
 //            lines, else Bold 16 on up to 3
 //   90-112   the artist (Body, soft), x 120-310   } plain rows of 23 px:
 //   113-135  the album (Body, dim), x 120-310     } no "›", no taps of their own
-//   136-145  background
-//   113-145  the seek bar's readout while a finger scrubs, the full width
-//            (over the album row and the cover's lowest rows)
+//   136      background
+//   110-136  the seek bar's readout while a finger scrubs, the full width
+//            (over the album row, the artist row's last 3 and the cover's
+//            lowest rows)
+//   137-157  the seek bar's strip: the track's waveform (99 bars of 2 px,
+//            mirrored about y 147, x 12-307, and the playhead) when the card
+//            has one for it (app/Waves), else the plain line about the same
+//            row, in the same place
 //   138-167  the seek bar's touch, the full width, waiting or not
-//   146-167  the progress line, elapsed / "4 of 16 · SPYDRONE" / length
-//            (where it plays, when it fits: mockup 01's output line; the
+//   158-173  elapsed / "4 of 16 · SPYDRONE" / length (Small, centred on y
+//            165; where it plays, when it fits: mockup 01's output line; the
 //            headphones not connected, "SPYDRONE (not connected)" even
 //            when the rest doesn't fit, so a play that waits for them
 //            is no surprise)
+//   174-175  background
 //   168-239  [volume] [prev] [play/pause] [next] [...]   64 x 72 zones,
 //            drawn as one 56-row strip at y 176-231 (the play disc r 25;
 //            under the dots the shuffle and repeat indicator)
@@ -95,18 +102,20 @@ struct Header {
 // picks a row.
 //
 // The progress line is a seek bar (docs/SEEK-BAR.md; lib/core/SeekBar): a
-// knob at where it plays. A tap goes to the second under the finger (not a
-// tap on the knob); a sideways drag scrubs (from the knob without a jump,
-// from anywhere else the knob comes to the finger): the line thickens, a
-// marker shows where it plays, the readout ("2:31 +1:21") takes the row
-// above on the side away from the knob, and the music plays on until the
-// lift, which seeks once (PlaybackController::seek()). Lifting with the
-// knob back on the marker (it snaps there with a tick), or slid off the
-// bar (above y 106, onto the artist row, or onto the strip: "Release to
-// cancel"), seeks nothing, and so does a touch a sheet or a dialog takes.
-// Seeks are whole seconds, from 0:00 to the length less 6 s (the edge
-// readings reach both). Inert (no knob) while the length isn't known, the
-// track failed, or it is under 10 s.
+// knob, or on a waveform a playhead, at where it plays. A tap goes to the
+// second under the finger (not a tap on the knob); a sideways drag scrubs
+// (from the knob without a jump, from anywhere else the knob comes to the
+// finger): the line thickens, or the waveform dims with a knob on it, a marker
+// shows where it plays, the readout ("2:31 +1:21") takes the row above on
+// the side away from the knob, and the music plays on until the lift, which
+// seeks once (PlaybackController::seek()). Lifting with the knob back on the
+// marker (it snaps there with a tick), or slid off the bar (above y 103, onto
+// the artist row, or onto the strip: "Release to cancel"), seeks nothing, and
+// so does a touch a sheet or a dialog takes. Seeks are whole seconds, from
+// 0:00 to the length less 6 s (the edge readings reach both). Inert (no knob,
+// never a waveform) while the length isn't known, the track failed, or it is
+// under 10 s. A track or a card with no waveform, or one whose length doesn't
+// agree with the player's, works the same with the plain line.
 //
 // While play waits for the headphones (PlayState::Waiting, PlayGate): the
 // play button is a spinner (a tap, or B, cancels the wait: paused), the
@@ -120,9 +129,11 @@ struct Header {
 // last minute) after "4 of 16 · SPYDRONE", or in its place when both don't
 // fit. Only what changed is redrawn: the cover when the album changes or
 // its thumbnail arrives, the text when the track does (the title strip also
-// when the wait's status does), the times once a second, the transport on
-// a change (the play state, the volume, the output, shuffle, repeat), and
-// the seek bar's frames on the 30 fps deadlines while a finger scrubs.
+// when the wait's status does), the text row once a second, and with it the
+// part of the seek bar's strip a moved playhead needs (all of it on a look, a
+// shape, a track or a play state), the transport on a change (the play state,
+// the volume, the output, shuffle, repeat), and the seek bar's frames on the 30
+// fps deadlines while a finger scrubs.
 // Nothing queued: "Nothing playing" with Open Library and Shuffle all, or
 // Auto DJ in Shuffle all's place while the card has a usable Auto DJ index
 // (the user's D4: a random track it knows plays, Auto DJ on); with no card
@@ -135,6 +146,10 @@ public:
   void enter(NavModel::PageRef& ref) override;
   void leave() override;
   void repaint() override;
+  // The header row alone (y 36-71, a toast's): the top fills, the title
+  // strip's and the cover's rows that reach it, not the whole page (~40
+  // ms at every toast's end until 0.12.0).
+  void repaintHeader() override;
   bool update(uint32_t nowMs, bool frameDue, bool wholeRows) override;
   // A finger scrubs the seek bar: the frame cadence (and the motion log).
   bool animating() const override { return bar_.scrubbing(); }
@@ -148,8 +163,6 @@ private:
   // bar, not "Seek", which PlaybackController has. Nav: the navigation
   // area, the cover and the text.)
   enum Zone : int8_t { None = -1, Nav, WaitSpeaker, WaitCancel, Bar, Volume, Prev, PlayPause, Next, More };
-  // How the seek bar is drawn (docs/SEEK-BAR.md section 4.1).
-  enum class BarLook : uint8_t { Inert, Rest, Pressed, Scrubbing, Off };
   // The navigation menu's rows, in order.
   enum class Go : uint8_t { Artist, Album, Folders };
   // Which menu the sheet up is (onSheet()).
@@ -161,7 +174,8 @@ private:
   void drawCover();
   // The title strip (while a play waits: the title on one line and the
   // wait's status).
-  void drawTitle();
+  // `rows`: only the strip's top rows pushed (0: all of it).
+  void drawTitle(int rows = 0);
   void drawArtistAlbum();
   // The artist and album rows, or (waiting) the waiting panel's buttons in
   // their place.
@@ -175,31 +189,45 @@ private:
   // The navigation area in its look (the press look on or off): the gaps,
   // the title strip and the rows; the cover as it is.
   void drawNav();
-  // The progress band, in the seek bar's look (the knob drawn last: the
-  // text's background would cut it), and its text row (not while a finger
-  // scrubs: the readout above says it all).
-  void drawProgress();
-  void drawProgressText(M5Canvas& c, bool paused);
+  // The track for the waveform index (app/Waves): on a track change, and a
+  // repaint.
+  void wantWave();
+  // What a pass draws of the seek bar (docs/SEEK-BAR.md section 4.5): the strip,
+  // all of it or a part, and what `text` says of its text row (blank while a
+  // finger scrubs: the readout above says it all). As one push when it can be.
+  void drawSeekBar(const wave::Strip& now, int rx, int rw, wave::TextDraw text);
+  // The strip into `c`, in its look (section 4.1): all of it or the part a moved
+  // playhead needs (x rx..rx + rw - 1), the waveform or the plain line (drawLine():
+  // `rx` as drawBar()'s), the knob drawn last. The text row into `c`, the Small
+  // line's first row, the strip's last, on its row `top`.
+  void drawBar(M5Canvas& c, const wave::Strip& now, int rx, int rw);
+  void drawLine(M5Canvas& c, const wave::Strip& now, int rx);
+  void drawProgressText(M5Canvas& c, int top);
   // The seek bar: seekable now (a track that hasn't failed, 10 s or more,
   // and one the backend can start part of the way in: every format today,
-  // an Opus track since docs/OPUS.md section 9); its look; the readout row
-  // above the line (over the album row and the cover's lowest rows; while
-  // a play waits, the artist row cleared too, the first time); the end of
-  // a scrub (the rows, the cover's rows from its sprite; the band
-  // follows); a touch's seek, its tick and its log line.
+  // an Opus track since docs/OPUS.md section 9); what its strip shows now
+  // (its look, the bars or the line, the playhead); the readout row above
+  // the strip (over the album row, the artist row's last rows and the cover's
+  // lowest rows; while a play waits, the artist row cleared too, the first
+  // time); the end of a scrub (the rows, the cover's rows from its sprite;
+  // the strip and the text row follow); a touch's seek, its tick and its log
+  // line.
   bool seekable() const;
-  BarLook barLook() const;
+  wave::Strip stripNow() const;
   void drawReadout();
   void endScrub();
   void seekTo(const SeekBar::Out& o, uint32_t nowMs);
   void drawTransport();
+  // One of its five zones into `c`, centred at (cx, cy), `down` in its
+  // press look; and one zone alone (its press look on or off, the spinner's
+  // next step), pushed by itself.
+  void drawZoneInto(M5Canvas& c, int z, int cx, int cy, bool down);
+  void drawZone(int z);
   // The shuffle and repeat indicator into `c`, centred at (cx, cy): the
   // glyphs that apply, nothing when neither does.
   void drawModes(M5Canvas& c, int cx, int cy);
   // The play button (a spinner while waiting) into `c`, centred at (cx, cy).
   void drawPlayButton(M5Canvas& c, int cx, int cy, bool down);
-  // Only the play button's zone (the spinner's next step).
-  void drawPlayZone();
   uint32_t waitSig() const;
   // The progress line's middle: at most this wide (between the times).
   static constexpr int kMidW = uitext::kNowPlayingMidW;
@@ -222,6 +250,7 @@ private:
     uint32_t track = 0xFFFFFFFFu;
     uint32_t names = 0;  // TrackCatalog::namesVersion()
     PlayState play = PlayState::Stopped;
+    bool failed = false;
     uint32_t second = 0xFFFFFFFFu;
     uint32_t durationS = 0;
     int32_t current = -2;
@@ -238,13 +267,13 @@ private:
     bool waiting = false;     // the waiting panel is what's drawn
     uint32_t waitSig = 0;     // waitSig()
     uint32_t sleep = 0;       // the sleep timer's text on the progress line (a hash)
-    // The seek bar: its look (BarLook; 0xFF none), the knob's and the
-    // marker's screen x (-1: none), what the readout shows (its fields, not
-    // a hash: a readout that moved must never pass for the one drawn), and
-    // whether the readout row is up (the scrub's look).
-    uint8_t bar = 0xFF;
-    int16_t knobX = -1;
-    int16_t markerX = -1;
+    // The seek bar: what its strip shows (its look, the bars or the line, the
+    // wave's version, the playhead's and the marker's x), the text row, what
+    // the readout shows (its fields, not a hash: a readout that moved must
+    // never pass for the one drawn), and whether the readout row is up (the
+    // scrub's look).
+    wave::Strip strip;
+    wave::TextRow textRow = wave::TextRow::Unknown;
     SeekBar::Readout readout;
     bool scrubUp = false;
     // The indicator as drawn (repeat 0xFF: none yet).
@@ -464,6 +493,7 @@ public:
 
 private:
   enum class Ask : uint8_t { None, ClearSheet, ClearConfirm };
+  int32_t drawnCurrent_ = -2;  // the current position the rows show (a track change draws what moved)
   void setSelecting(bool on);
   void removeSelected();
   void playSelectedNext();
@@ -519,12 +549,17 @@ public:
   void enter(NavModel::PageRef& ref) override;
   void leave() override;
   void repaint() override;
+  // The header row alone (y 36-71, a toast's): the rows above the box and
+  // the panels, the box's own (the dancer's next frame is whole), the two
+  // panels that reach it; not the whole tab (~50 ms until 0.12.0).
+  void repaintHeader() override;
   bool update(uint32_t nowMs, bool frameDue, bool wholeRows) override;
   void onEvent(const InputEvent& e) override;
   void describe(char* buf, size_t size) const override;
 
 private:
-  void drawPanels(bool all);
+  // `topOnly`: the two panels in the header row (y 44-99) alone.
+  void drawPanels(bool all, bool topOnly = false);
   uint32_t nextPanelMs_ = 0;
   // What the panels show (redrawn when it changes, at most twice a second).
   int bpmX10_ = -1;
@@ -657,6 +692,10 @@ private:
   };
 
   void drawBtTop(ListView::Row& r);
+  // The spinner's step alone, pushed onto `row` at (cx, cy) over `bg`
+  // (ListView::pushOnRow), not the row rendered and pushed whole (~11 ms,
+  // 8 times a second while it spins). False: the row must be drawn whole.
+  bool spinPatch(uint32_t row, int cx, int cy, uint16_t colour, uint16_t bg);
   void drawBtButtons(ListView::Row& r);
   void drawSpeaker(ListView::Row& r);
   void drawSetting(ListView::Row& r, const icons::Icon& icon, const char* title, const char* sub, uint16_t ink,

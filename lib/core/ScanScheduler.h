@@ -8,25 +8,28 @@
 // what the one worker on the card does next, and when the background work
 // yields to the music and the listener. The worker (N10: Thumbs' worker,
 // generalised) takes one step at a time, and only the step it is handed: a
-// cover; the update step's build or its save (3.4.2, N12); a slice of the
-// validation walk (3.2.3: its folders, or passes of a big one, for about
-// 18 ms while the screen is lit, 250 ms while it is dark: the firmware's
-// CardTasks); a compaction of tags.bin (3.3.2); a file of the scan
-// (3.3.1) a loop source names, or a slice of its rest's files. The loop
-// calls update() every pass, where the inputs are, and hands the worker
-// what it says at the priority it says. So the jobs never overlap (a
-// build, a compaction and a scan never run at once), and each step starts
-// only when nothing it would disturb is under way.
+// cover; a waveform's read (docs/WAVEFORM-INDEX.md 11); the update step's
+// build or its save (3.4.2, N12); a slice of the validation walk (3.2.3: its
+// folders, or passes of a big one, for about 18 ms while the screen is lit,
+// 250 ms while it is dark: the firmware's CardTasks); a compaction of
+// tags.bin (3.3.2); a file of the scan (3.3.1) a loop source names, or a
+// slice of its rest's files. The loop calls update() every pass, where the
+// inputs are, and hands the worker what it says at the priority it says. So
+// the jobs never overlap (a build, a compaction and a scan never run at
+// once), and each step starts only when nothing it would disturb is under
+// way.
 //
 // What starts, when the worker is free (the first that applies):
 //   1. The update step's build, at priority 1 (the loop's): the listener
 //      waits for it behind the "Updating library" fence. Nothing here holds
 //      it: LibraryUpdate's safe point decides when it is asked (N12).
-//   2. A list is moving (on a lit screen: listHolds()): nothing else
-//      starts, covers included (Thumbs' rule).
-//   3. A cover, at priority 1, dropped to 0 while a list moves under it
-//      (Thumbs' rule): rows on screen come first (3.3.3, 0). The audio's
-//      yields below don't hold it.
+//   2. A list is moving (on a lit screen: listHolds()), or a finger is on
+//      its A-Z rail (a scrub, or resting on it before one): nothing else
+//      starts, covers and waveforms included (Thumbs' rule).
+//   3. A waveform's read, then a cover, one lane: at priority 1, dropped to 0
+//      while a list moves under it (Thumbs' rule): rows on screen come first
+//      (3.3.3, 0). The audio's yields below don't hold them. The read goes
+//      first: a few small reads, where a cover may be a decode.
 //   4. The update step's save of library.idx, at priority 0, 1 while the
 //      screen is dark (as the scan's slices): it ends the update step. It
 //      yields as the background work does, but not to the battery floor
@@ -60,8 +63,8 @@
 // The save and the background work wait (3.3.4, 3.3.5) for the first of:
 //   Battery     the scan only (U13): below 10% off USB it pauses, and goes
 //               on once on USB or above 15%. The walk, a compaction, the
-//               save, covers and the build don't: they are short, and they
-//               are what the listener sees.
+//               save, covers, waveforms and the build don't: they are short,
+//               and they are what the listener sees.
 //   Input       any input in the last 0.5 s: a tap's redraw comes first.
 //   Ring        playing, with the PCM ring below half: a start's refill, a
 //               dip.
@@ -91,12 +94,12 @@
 // (test_library_update runs the two together).
 class ScanScheduler {
 public:
-  // The worker's jobs. A step: a cover; the build (one step); the save (one
-  // step); a slice of the walk (its folders, or passes of a big one); a
-  // compaction (one step); a file of the scan from a loop source, or a
-  // slice of its rest.
-  enum class Job : uint8_t { None, Cover, Build, Save, Walk, Compact, Scan };
-  static constexpr int kJobs = 7;
+  // The worker's jobs. A step: a cover; a waveform's read; the build (one
+  // step); the save (one step); a slice of the walk (its folders, or passes
+  // of a big one); a compaction (one step); a file of the scan from a loop
+  // source, or a slice of its rest.
+  enum class Job : uint8_t { None, Cover, Wave, Build, Save, Walk, Compact, Scan };
+  static constexpr int kJobs = 8;
   // Where the scan's next file comes from (3.3.3).
   enum class Source : uint8_t { None, Playing, QueueNext, QueueSoon, Shown, Rest };
   // What the worker's next start waits for (the first that applies, in this
@@ -164,6 +167,7 @@ public:
     bool save = false;      // the update step asks for its save (step 6)
     bool updating = false;  // the update step holds the worker: its fence to its save's end
     bool cover = false;     // a cover is asked for (a row on screen)
+    bool wave = false;      // a waveform's read is asked for (Now Playing's track)
     bool walk = false;      // the validation walk has folders left
     bool compact = false;   // a compaction is wanted (the journal's limits, a scan's end, before a build)
     // The scan's sources (3.3.3), each true when it has a file to read. The
@@ -174,8 +178,10 @@ public:
     bool shownPending = false;      // one in the album or folder the Library tab shows
     bool restPending = false;       // D's to-do has one (canonical order)
     // ---- the UI ----
-    bool listMoving = false;  // a list scrolls, flings or follows a finger (Page::animating()); none while `dark`
-    bool input = false;       // any input this pass (a touch, a button, PWR, a headphone key, the console)
+    bool listMoving = false;  // a list scrolls, flings or follows a finger (Page::animating()), or a finger is on
+                              // its A-Z rail (Ui::listMoving()); none while `dark`
+    bool input = false;       // any input this pass (a touch, a button, PWR, a headphone key, the console; a
+                              // list moving counts, so the quiet window follows a fling's end)
     bool dark = false;        // the screen is dark: nothing to draw (a scan's slice, a compaction, the save at 1)
     // ---- the audio ----
     bool playing = false;         // the player is Playing: audio should flow
@@ -247,17 +253,17 @@ public:
   // The scan's source from In's flags (3.3.3's order).
   static Source sourceOf(const In& in);
   // A step's priority (3.3.4, 3.3.9) when no wait applies: the build 1; a
-  // cover and the walk 1, 0 while a list moves; the scan, a compaction and
-  // the save 1 while the screen is dark, else 0. (A list "moving" in the
-  // dark is none: listHolds().)
+  // cover, a waveform's read and the walk 1, 0 while a list moves; the scan,
+  // a compaction and the save 1 while the screen is dark, else 0. (A list
+  // "moving" in the dark is none: listHolds().)
   static uint8_t priorityOf(Job job, bool listMoving, bool dark = false);
-  // A list that moves holds work (the wait List, a slice cut, a cover or
-  // the walk below the loop) only while the screen is lit: in the dark
-  // (In::dark: nothing drawn) no list is seen moving, and one that owes the
-  // wake its frame (a reload, a fling the screen's off stopped) holds
-  // nothing. The console's gs paces its pieces by it too (lib/core
-  // TagCheck). Before 2026-10-14 a list reloaded in the dark held the
-  // update step's save 260 s, until the screen woke.
+  // A list that moves holds work (the wait List, a slice cut, a cover, a
+  // waveform's read or the walk below the loop) only while the screen is
+  // lit: in the dark (In::dark: nothing drawn) no list is seen moving, and
+  // one that owes the wake its frame (a reload, a fling the screen's off
+  // stopped) holds nothing. The console's gs paces its pieces by it too
+  // (lib/core TagCheck). Before 2026-10-14 a list reloaded in the dark held
+  // the update step's save 260 s, until the screen woke.
   static bool listHolds(bool listMoving, bool dark) { return listMoving && !dark; }
 
   static const char* jobName(Job j);

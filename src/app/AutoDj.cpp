@@ -176,23 +176,54 @@ void AutoDj::open(const cardroot::Root::AutoDj& e, const char* when) {
     Serial.printf("[dj] index %s: not read (%s): picks at random\n", filePath_, whyText_);
     return;
   }
+  tries_.reset();
+  openFile(when);
+}
+
+autodj::OpenTry AutoDj::tryFile(cc::Why* why) {
+  *why = cc::Why::Io;
   cardfat::FatFs* fs = lib_.fatfs();
-  const int64_t t0 = esp_timer_get_time();
-  tagstore::File* f = fs ? fs->open(filePath_, tagstore::Fs::Mode::Read) : nullptr;
-  if (!f) {
-    absent(cc::Why::Io, "the file the root names didn't open");
-    return;
-  }
+  if (!fs) return autodj::OpenTry::NotThere;
+  tagstore::File* f = nullptr;
+  const FRESULT r = fs->openRead(filePath_, &f);
+  openResult_ = static_cast<uint8_t>(r);
+  if (r != FR_OK) return r == FR_NO_FILE || r == FR_NO_PATH ? autodj::OpenTry::NotThere : autodj::OpenTry::Card;
   handle_ = static_cast<cardfat::FatFile*>(f);
-  const cc::Why w = table_.open(*handle_);
-  if (w != cc::Why::Ok) {
-    closeFile();
-    absent(w, "its header or directory failed a check");
+  *why = table_.open(*handle_);
+  if (*why == cc::Why::Ok && !cc::msmf::companionMatches(entry_, table_.frame(), 0, table_.selectionSig())) {
+    *why = cc::Why::Comp;
+  }
+  if (*why != cc::Why::Ok) {
+    fs->close(handle_);
+    handle_ = nullptr;
+  }
+  return autodj::openTryOf(*why);
+}
+
+void AutoDj::tryFailed(autodj::OpenTry t, cc::Why why) {
+  using T = autodj::OpenTry;
+  if (tries_.failed(t, static_cast<uint32_t>(millis()))) {
+    file_ = File::Again;
+    why_ = cc::Why::Io;
+    whyText_ = "the card failed opening it: tried again soon";
+    Serial.printf("[dj] index %s: the card failed opening it (FatFs's answer %u; 0: a read after): again in %lu s, %u "
+                  "of %u (picks at random meanwhile)\n",
+                  filePath_, (unsigned)openResult_, (unsigned long)(tries_.lastWaitMs() / 1000),
+                  (unsigned)tries_.used(), (unsigned)autodj::OpenTries::kAgain);
     return;
   }
-  if (!cc::msmf::companionMatches(entry_, table_.frame(), 0, table_.selectionSig())) {
-    closeFile();
-    absent(cc::Why::Comp, "not the file the root names (its generation, size, header CRC or selection)");
+  absent(why, t == T::NotThere       ? "the file the root names isn't on the card"
+              : t == T::Card         ? "the card failed every try at it"
+              : why == cc::Why::Comp ? "not the file the root names (its generation, size, header CRC or selection)"
+                                     : "its header or directory failed a check");
+}
+
+void AutoDj::openFile(const char* when) {
+  const int64_t t0 = esp_timer_get_time();
+  cc::Why why = cc::Why::Ok;
+  const autodj::OpenTry t = tryFile(&why);
+  if (t != autodj::OpenTry::Open) {
+    tryFailed(t, why);
     return;
   }
   file_ = File::Open;
@@ -283,6 +314,7 @@ autodj::Env AutoDj::driverEnv(const Env& env) const {
 
 void AutoDj::step(const Env& env) {
   remount(env);
+  stepOpen(env);
   stepJoin(env);
   const Pass p = dj_.step(player_, index(), driverEnv(env));
   report(p);
@@ -332,7 +364,7 @@ void AutoDj::remount(const Env& env) {
                     (!e.present || (e.entry.generation == entry_.generation && e.entry.fileBytes == entry_.fileBytes &&
                                     e.entry.headerCrc == entry_.headerCrc &&
                                     std::memcmp(e.entry.key, entry_.key, sizeof(entry_.key)) == 0));
-  if (same && file_ == File::Absent) {
+  if (same && (file_ == File::Absent || file_ == File::Again)) {
     open(e, "after a remount");  // (a check a read failed may pass now; the session kept)
     return;
   }
@@ -342,14 +374,12 @@ void AutoDj::remount(const Env& env) {
     const bool wasReady = joined();
     if (handle_) lib_.fatfs()->close(handle_);
     handle_ = nullptr;
-    tagstore::File* f = lib_.fatfs()->open(filePath_, tagstore::Fs::Mode::Read);
-    handle_ = static_cast<cardfat::FatFile*>(f);
-    const cc::Why w = handle_ ? table_.open(*handle_) : cc::Why::Io;
-    if (w != cc::Why::Ok || !cc::msmf::companionMatches(entry_, table_.frame(), 0, table_.selectionSig())) {
+    cc::Why why = cc::Why::Ok;
+    const autodj::OpenTry t = tryFile(&why);
+    if (t != autodj::OpenTry::Open) {
       join_.release();
-      if (handle_) lib_.fatfs()->close(handle_);
-      handle_ = nullptr;
-      absent(w != cc::Why::Ok ? w : cc::Why::Comp, "it failed its checks after the remount");
+      tries_.reset();
+      tryFailed(t, why);
       return;
     }
     dj_.engine().fileReopened();  // (the damaged ring: rows may read again; a broken mark goes)
@@ -382,6 +412,16 @@ void AutoDj::remount(const Env& env) {
     dj_.newSession(Began::IndexChanged, autodj::kNoTrackId, nullptr);
     logSession(Began::IndexChanged, autodj::kNoTrackId);
   }
+}
+
+// The file again, a try that failed on the card's account once its wait is
+// over: as the first try, on the loop, the session kept. Not before the UI's
+// first frame, while a list moves (a read behind the decoder costs a frame: H7)
+// or the card is held; not behind the update's fence (its memory check has
+// counted what is left, and a FIL is 4.1 KB of it).
+void AutoDj::stepOpen(const Env& env) {
+  if (file_ != File::Again || !env.uiStarted || env.listMoving || env.cardHeld || player_.fenced()) return;
+  if (tries_.due(env.nowMs)) openFile("tried again");
 }
 
 // The join while Auto DJ is on: begun once the UI's first frame is up;
@@ -626,8 +666,8 @@ void AutoDj::report(const Pass& p) {
 // The settings
 // ---------------------------------------------------------------------------
 void AutoDj::saveSettings(const char* what) {
-  const bool saved = autodjstore::save(dj_.settings());
-  Serial.printf("[dj] %s (%s)\n", what, saved ? "saved" : "NOT saved");
+  autodjstore::save(dj_.settings());
+  Serial.printf("[dj] %s (saved once the taps rest)\n", what);
 }
 
 bool AutoDj::setOn(bool on) {
@@ -751,12 +791,14 @@ void AutoDj::view(autodjview::State* v) const {
   v->adds = newsWatch_.adds();
   const LibraryIndex* index = lib_.index();
   if (file_ == File::Absent && why_ == cc::Why::Io) {
-    // A read failed (the file the root names didn't open, a card read
-    // error, no PSRAM to read the root after a remount): not the index's
-    // checks; a remount or the next boot tries again.
+    // A read failed (the file the root names isn't on the card, the card
+    // failed every try at it, no PSRAM to read the root after a remount): not
+    // the index's checks; a remount or the next boot tries again.
     v->index = Index::Unreadable;
   } else if (file_ == File::Absent || (file_ == File::Open && dj_.engine().broken())) {
     v->index = Index::Bad;
+  } else if (file_ == File::Again) {
+    v->index = Index::Reading;  // (a moment's wait, as the join's own retry)
   } else if (file_ != File::Open) {
     v->index = Index::None;
   } else if (index && index->ready() && index->trackCount() > autodj::kMaxTracks) {
@@ -1039,6 +1081,10 @@ void AutoDj::status(const Env& env) {
     case File::NotRead: Serial.printf("[dj] index %s: not read (%s)\n", filePath_, whyText_); break;
     case File::Absent:
       Serial.printf("[dj] index %s: ABSENT (%s: %s): picks at random\n", filePath_, whyText_, cc::whyName(why_));
+      break;
+    case File::Again:
+      Serial.printf("[dj] index %s: %s, %u of %u: picks at random\n", filePath_, whyText_, (unsigned)tries_.used(),
+                    (unsigned)autodj::OpenTries::kAgain);
       break;
     case File::Open: {
       const uint8_t* sig = table_.selectionSig();

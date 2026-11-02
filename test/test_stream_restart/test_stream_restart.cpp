@@ -163,14 +163,35 @@ void test_a_stall_without_start_does_not_restart() {
 }
 
 // From 1 s on the listener certainly heard silence: fade in, START or not.
-// Such a gap is left out of the gap statistics.
+// The gap statistics report it like any stall: a wait of a second or more
+// with no flush before it (the task parked, the stream still running) is
+// the one worth seeing, whole.
 void test_a_gap_of_a_second_restarts() {
   Callbacks c = running();
   TEST_ASSERT_FALSE(c.pull(1000 * kMs - 1));
+  TEST_ASSERT_EQUAL_UINT32(1000 * kMs - 1, c.r.statGapUs());
   TEST_ASSERT_TRUE(c.pull(1000 * kMs));
-  TEST_ASSERT_EQUAL_UINT32(0, c.r.statGapUs());
+  TEST_ASSERT_EQUAL_UINT32(1000 * kMs, c.r.statGapUs());
+  TEST_ASSERT_TRUE(c.pull(30000 * kMs));
+  TEST_ASSERT_EQUAL_UINT32(30000 * kMs, c.r.statGapUs());
   c.stream(2);
-  TEST_ASSERT_EQUAL_INT(2, c.restarts);
+  TEST_ASSERT_EQUAL_INT(3, c.restarts);
+}
+
+// The wait after a flush is the stream's stop (a suspend, a link's end), not
+// a late callback: left out of the gap statistics however short (a quick
+// pause and play isn't a stall) or long (the headphones' own suspend).
+void test_a_stop_is_not_a_gap() {
+  Callbacks c = running();
+  c.flush();
+  c.start();
+  TEST_ASSERT_TRUE(c.pull(300 * kMs));
+  TEST_ASSERT_EQUAL_UINT32(0, c.r.statGapUs());
+  c.stream(3);
+  c.flush();
+  TEST_ASSERT_TRUE(c.pull(20000 * kMs));
+  TEST_ASSERT_EQUAL_UINT32(0, c.r.statGapUs());
+  TEST_ASSERT_EQUAL_INT(3, c.restarts);
 }
 
 // A START of ours (a new epoch) counts as a new stream only after a wait of
@@ -202,6 +223,7 @@ int main(int, char**) {
   RUN_TEST(test_link_drop_without_flush);
   RUN_TEST(test_a_stall_without_start_does_not_restart);
   RUN_TEST(test_a_gap_of_a_second_restarts);
+  RUN_TEST(test_a_stop_is_not_a_gap);
   RUN_TEST(test_a_new_epoch_needs_a_gap_of_100_ms);
   return UNITY_END();
 }

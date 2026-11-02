@@ -349,18 +349,27 @@ void copyName(char* dst, size_t size, const char* src) {
 }
 }  // namespace
 
-void BtScanList::note(const uint8_t addr[6], const char* name, int rssi, uint32_t cod) {
-  if (!addr) return;
+bool BtScanList::note(const uint8_t addr[6], const char* name, int rssi, uint32_t cod) {
+  if (!addr) return false;
   if (rssi < -127) rssi = -127;
   if (rssi > 20) rssi = 20;
   const BtDevice::Kind kind = kindOf(cod);
   for (int i = 0; i < n_; ++i) {
     BtDevice& d = d_[i];
     if (std::memcmp(d.addr, addr, 6) != 0) continue;
+    bool changed = bars(d.rssi) != bars(rssi);
     d.rssi = static_cast<int8_t>(rssi);
-    if (name && name[0]) copyName(d.name, sizeof(d.name), name);
-    if (cod) d.kind = kind;
-    return;
+    if (name && name[0] && std::strcmp(d.name, name) != 0) {
+      char before[sizeof(d.name)];
+      std::memcpy(before, d.name, sizeof(before));
+      copyName(d.name, sizeof(d.name), name);
+      changed = changed || std::strcmp(before, d.name) != 0;
+    }
+    if (cod && d.kind != kind) {
+      d.kind = kind;
+      changed = true;
+    }
+    return changed;
   }
   int at = n_;
   if (n_ == kMax) {
@@ -369,7 +378,7 @@ void BtScanList::note(const uint8_t addr[6], const char* name, int rssi, uint32_
     for (int i = 1; i < n_; ++i) {
       if (d_[i].rssi < d_[at].rssi) at = i;
     }
-    if (d_[at].rssi >= rssi) return;
+    if (d_[at].rssi >= rssi) return false;
   } else {
     ++n_;
   }
@@ -378,6 +387,7 @@ void BtScanList::note(const uint8_t addr[6], const char* name, int rssi, uint32_
   copyName(d.name, sizeof(d.name), name);
   d.rssi = static_cast<int8_t>(rssi);
   d.kind = kind;
+  return true;
 }
 
 int BtScanList::bars(int rssi) {

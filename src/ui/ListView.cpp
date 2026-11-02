@@ -134,6 +134,34 @@ void ListView::invalidate() {
   }
   force_ = true;
   railUp_ = false;  // the frame redraws the band; the rail with it if it's wanted
+  railOffset_ = -1;
+}
+
+void ListView::redraw() {
+  force_ = true;
+  railUp_ = false;
+  railOffset_ = -1;
+}
+
+bool ListView::pushOnRow(uint32_t row, M5Canvas& c, int sx, int sy, int w, int h, int x, int y) {
+  if (!src_ || !slots_ || row >= layout_.rows() || !vs_->active() || !vs_->map().valid() || drawnOffset_ < 0 ||
+      force_ || gfx::dark()) {
+    return false;
+  }
+  const int32_t off = vs_->map().offset();
+  const int32_t top = static_cast<int32_t>(layout_.itemOfRow(row)) * kPitch + y;  // the piece's first content line
+  const int32_t c0 = std::max(top, off);
+  const int32_t c1 = std::min(top + h, off + height_);
+  if (c0 >= c1) return false;  // off screen
+  vs_->pushRectAtScreen(c, sx, sy + static_cast<int>(c0 - top), w, static_cast<int>(c1 - c0), x,
+                        kTop + static_cast<int>(c0 - off), &gfx::holds());
+  return true;
+}
+
+int32_t ListView::pressedRow() const {
+  if (pressedItem_ < 0) return -1;
+  const ListLayout::Item it = layout_.item(static_cast<uint32_t>(pressedItem_));
+  return it.kind == ListLayout::Kind::Row ? it.row : -1;
 }
 
 void ListView::reload() {
@@ -375,7 +403,9 @@ void ListView::push(const VScrollMap::Span& span, bool committing) {
 
 void ListView::prepareFixed(int32_t off) {
   railDue_ = edge_ != Edge::None && railWanted_ && rail_;
-  if (railDue_) drawRailSprite(off);
+  if (!railDue_) return;
+  drawRailSprite(off);
+  railOffset_ = off;  // (pushFixed() follows in the same frame)
 }
 
 // Under a scrub the rail stays up: it goes back to its place after every
@@ -458,6 +488,7 @@ void ListView::drawRailSprite(int32_t off) {
 void ListView::hideRail() {
   gfx::fill(railX(), kTop, kW - railX(), height_, col::BG);
   railUp_ = false;
+  railOffset_ = -1;
 }
 
 void ListView::showRail(int32_t off) {
@@ -465,10 +496,23 @@ void ListView::showRail(int32_t off) {
   drawRailSprite(off);
   gfx::push(*rail_, railX(), kTop, kW - railX(), height_);
   railUp_ = true;
+  railOffset_ = off;
 }
 
-void ListView::scrub(int y) {
+// A scrub's frame between two band draws: the thumb and its letter where
+// the finger is now, over the band as it stands (through the scroll
+// mapping, like pushFixed()).
+void ListView::pushRail(int32_t off) {
+  if (!rail_ || !vs_->active()) return;
+  drawRailSprite(off);
+  vs_->pushAtScreen(*rail_, railX(), kTop, &gfx::holds(), height_);
+  railUp_ = true;
+  railOffset_ = off;
+}
+
+void ListView::scrub(uint32_t ms, int y) {
   const int32_t o = ListLayout::scrubOffset(y - kTop, layout_.maxOffset(height_), height_, kThumbH);
+  if (o != offset()) pacer_.targetChanged(ms);
   scroll_.jumpTo(static_cast<float>(o));
   jumped_ = true;
   const ListLayout::Item it = layout_.item(static_cast<uint32_t>(o / kPitch));
@@ -515,11 +559,25 @@ bool ListView::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   if (!railWanted_ && railUp_) hideRail();
   const bool owed = off != drawnOffset_ || force_;
   if (owed && frameDue) {
+    // A scrub's position is a jump (the band drawn whole): it waits for
+    // the pacer's cadence, or the finger to rest, and until then the rail
+    // alone follows the finger (ScrubPacer).
+    if (pacing_ && touchOn_ == TouchOn::Rail && !force_ && drawnOffset_ >= 0 && pacer_.owed() &&
+        !pacer_.bandDue(nowMs)) {
+      if (railOffset_ == off || !rail_) return false;  // the rail is there already
+      cost_ = FrameCost{};
+      cost_.kind = FrameCost::Kind::Rail;
+      cost_.from = cost_.to = off;
+      pushRail(off);
+      ++frames_;
+      return true;
+    }
     cost_ = FrameCost{};
     cost_.from = drawnOffset_;
     cost_.to = off;
     if (drawnOffset_ >= 0 && off != drawnOffset_) lastDir_ = off > drawnOffset_ ? 1 : -1;
     render(off);
+    if (touchOn_ == TouchOn::Rail) pacer_.bandDrawn(millis());
     drawnOffset_ = off;
     force_ = false;
     jumped_ = false;
@@ -657,6 +715,7 @@ void ListView::onEvent(const InputEvent& e) {
       touchOn_ = TouchOn::Rail;
       railKeyShown_ = -1;
       railUp_ = false;
+      pacer_.begin(e.ms);
       input_->noHold();
       if (scroll_.moving()) {  // it stops the list, on a row
         scroll_.press(e.ms, e.y);
@@ -688,7 +747,7 @@ void ListView::onEvent(const InputEvent& e) {
   }
   const bool ends = e.type == T::Tap || e.type == T::Release || e.type == T::DragEnd || e.type == T::Cancel;
   if (touchOn_ == TouchOn::Rail) {
-    if (e.type == T::DragStart || e.type == T::DragMove) scrub(e.y);
+    if (e.type == T::DragStart || e.type == T::DragMove) scrub(e.ms, e.y);
     if (e.type == T::Tap && railHost_) {
       input_->tapTick();
       touchOn_ = TouchOn::None;

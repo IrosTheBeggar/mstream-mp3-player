@@ -42,6 +42,9 @@ cc::Why openPlan(tagstore::Fs& fs, const char* path, uint8_t* scratch, uint32_t 
 
 void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out) {
   Root& r = *out;
+  r.hasRoot = false;
+  r.cardId = 0;
+  r.generation = 0;
   r.present = false;
   r.identity = tagstore::Identity();
   r.tagsPath[0] = 0;
@@ -52,6 +55,7 @@ void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out) 
   r.rootCount = 0;
   r.plan = false;
   r.autoDj = Root::AutoDj();
+  r.waves = Root::Waves();
 
   // The plan: pending.bin, else a valid pending.tmp (2.12.5).
   r.plan = fs.exists(kPendingBin) || openPlan(fs, kPendingTmp, scratch, scratchBytes) == cc::Why::Ok;
@@ -80,6 +84,9 @@ void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out) 
   if (!f) return;
   r.why = m.open(*f, scratch, scratchBytes);
   if (r.why == cc::Why::Ok) {
+    r.hasRoot = true;
+    r.cardId = m.frame().cardId;
+    r.generation = m.frame().generation;
     const uint32_t roots = m.rootCount();
     for (uint32_t i = 0; i < roots && r.rootCount < kMaxRoots; ++i)
       if (m.root(i, r.roots[r.rootCount], sizeof(r.roots[0])) == cc::Why::Ok) ++r.rootCount;
@@ -120,12 +127,24 @@ void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out) 
     r.autoDj.entry = m.autoDj();
     std::snprintf(r.autoDj.path, sizeof(r.autoDj.path), "%s%s", kDir, m.autoDjName());
   }
+  // The MPWF entry, likewise (WAVEFORM-INDEX.md 7.2).
+  if (m.hasWaves()) {
+    r.waves.present = true;
+    r.waves.entry = m.waves();
+    std::snprintf(r.waves.path, sizeof(r.waves.path), "%s%s", kDir, m.wavesName());
+  }
 }
 
 size_t describe(const Root& r, char* buf, size_t size) {
   if (!size) return 0;
   int n;
-  if (!r.present) {
+  if (!r.present && r.hasRoot) {
+    // A root that names the card (@status cid=) and a T that failed: which
+    // T, of which generation, and why ("missing": not on the card).
+    const char* name = std::strrchr(r.tagsPath, '/');
+    n = std::snprintf(buf, size, "no transfer data (the root's T %s, generation %lu: %s)",
+                      name ? name + 1 : r.tagsPath, static_cast<unsigned long>(r.generation), cc::whyName(r.why));
+  } else if (!r.present) {
     n = std::snprintf(buf, size, "no transfer data (%s)",
                       r.why == cc::Why::Missing ? "none on the card" : cc::whyName(r.why));
   } else {

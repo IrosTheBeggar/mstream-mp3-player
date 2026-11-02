@@ -10,7 +10,7 @@ questions, on the USB visualizer's `@` lines ([USB-VISUALIZER.md](USB-VISUALIZER
 
 | Line | Answer |
 |---|---|
-| `@status` | at once, one line: `@status fw=... elf=... card=... size=... free=... tracks=... music=... bat=... state=... bt=...` |
+| `@status` | at once, one line: `@status fw=... elf=... card=... size=... free=... tracks=... music=... bat=... state=... cid=... bt=...` |
 | `@count` | one count of the card's free clusters, on request: `@count 0`, `@count <percent>` about every tenth, `@count 100`, `@count done free=<bytes>` |
 | `@identify <label>` | "This one" and the label on the board's screen for 5 s, one buzz: `@identify ok` |
 
@@ -19,6 +19,9 @@ the host tests below pass, and both firmware builds pass their guards. The
 device checks are the [plan](#device-test-plan) at the end. The design is
 the MP3 Player tab's set in the mStream repository
 (`docs/designs/mp3-tab`, cards 01 section 5 and 05: alternate A).
+`@status cid=` (which card, at which commit) is newer, in the release
+after v0.11.0 (0.12.0): host-tested and built; its device check is step 9
+of the plan.
 
 ## The link
 
@@ -46,21 +49,26 @@ the MP3 Player tab's set in the mStream repository
   the card needs a firmware update. A board that answers `@status` is new
   enough for all three. No answer to either within about a second: not
   this firmware running (another firmware, or none booted); only a reset
-  can say more.
+  can say more. A key added to `@status` later is missing from an older
+  firmware's line, and its absence is how a reader tells, never the
+  version: `cid=` came in 0.12.0.
 
 ## @status
 
 ```
 → @status
-← @status fw=v0.9.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 state=playing bt=Paul%27s%20headphones
+← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 state=playing cid=5eedc0de0a1b2c3d.0000002a bt=Alex%27s%20headphones
 ```
 
 One line, answered in the loop pass that reads the question, **never a
 read of the card**: every field is something the firmware holds already.
 The fields come in this order, each `key=value`, one space between them; a
 value never holds a space. `?` is unknown, `-` is none. **A reader must
-ignore keys it doesn't know**: a field added later goes in before `bt=`,
-which stays last (it is the one that gives way when the line runs long).
+ignore keys it doesn't know**, and take a key that is missing for an older
+firmware's line: a field added later goes in after `state=` and the ones
+added before it, and before `bt=`, which stays last. When the line runs
+long, `bt=` gives way first, down to 36 bytes; past that the keys after
+`state=` do, the last first ([the budget](#the-budget)).
 
 | Key | Values | From |
 |---|---|---|
@@ -73,20 +81,55 @@ which stays last (it is the one that gives way when the line runs long).
 | `music` | bytes or `?` | the indexed tracks' bytes. This firmware's index keeps no file sizes (a track's record is 32 bytes: its names, numbers and length), so it is always `?`; it is not read from the card. A later release can sum the sizes the walk records hold at the build and save the sum with `library.idx` |
 | `bat` | 0-100, or `-` | the power chip's battery reading the UI takes every 10 s (the tab bar's); `-` until the first |
 | `state` | `playing`, `paused`, `idle`, `host` | the player: `playing` also while a play waits for the headphones; `idle` stopped; `host` while a computer drives the dancer (the visualizer's host mode) |
+| `cid` | the card's id and its commit's generation, `<cardId>.<generation>`: 16 and 8 hex digits in lower case, leading zeros kept (`5eedc0de0a1b2c3d.0000002a`); or `-`. Since 0.12.0 | the root the boot read (docs/METADATA.md 2.5.2, 2.5.4: `/.mstream/manifest.bin` or `.tmp`, the one the election picked, checked whole; `Library::root()`): its `cardId`, and its `generation`, the number in the commit's file names (`tags-0000002a.bin`). Kept when the root's tags file then fails the boot's checks (the boot log's `[lib] the card:` line names that file, the generation and why: `no transfer data (the root's T tags-0000002a.bin, generation 42: missing)`; the library is the walk's alone): the root still names the card. `-`: no root (no `/.mstream`, or none valid), no PSRAM to read it, the internal flash, or no card mounted now (`card=` isn't `fat32` or `fat16`: a card pulled reads `none`). **Read once, at the boot**, never during `@status`: another card put in while on is a restart (the card's guard, at FatFs's remount, its first read of that card: ARCHITECTURE.md, Storage), and from the moment the guard finds it until that restart (about a second: FatFs has the other card mounted then, and `card=` says its kind) `cid=` is `-` (before that first read nothing on the board knows the card changed); but the same card pulled and put back keeps the boot's root until a restart, even if a computer wrote a new commit to it meanwhile |
 | `bt` | the paired headphones' name, percent-encoded, or `-` | their own name once linked, before that the one saved at the pairing (`BtSink::shownName()`, the Output tab's); `-` with nothing paired, or a pairing whose name the board never learnt |
 
 **Percent-encoding** (`bt=`): RFC 3986's unreserved bytes (`A-Z a-z 0-9 -
 . _ ~`) as they are, every other byte of the name's UTF-8 as `%XX` in
-upper-case hex: `Paul's headphones` is `Paul%27s%20headphones`. Any URL
+upper-case hex: `Alex's headphones` is `Alex%27s%20headphones`. Any URL
 decoder reads it back to the same bytes.
 
-**At most 255 bytes**, as any host line. The fields before `bt=` take 219
-bytes at their widest (a 48-byte version, every number at 20 digits), so
-`bt=` keeps 36 at least; the line above leaves it 135, a dev build's on a
-1 TB card about 110, so a name of up to 63 bytes (all BtSink keeps) fits
-whole unless most of it needs encoding. A name
-that doesn't fit is cut at a character (never inside a UTF-8 sequence or a
-`%XX`) and ends with `%E2%80%A6`, "…".
+### The budget
+
+**At most 255 bytes**, as any host line. The fields at their widest, as a
+board can send them:
+
+| Field | Bytes | At its widest |
+|---|---|---|
+| `@status` | 7 | |
+| ` fw=` | 4 + 31 | the app description's version: 31 characters (its field is 32 bytes with the terminator) |
+| ` elf=` | 5 + 8 | always 8 |
+| ` card=` | 6 + 10 | `unreadable` |
+| ` size=` | 6 + 13 | the CSD's sector count × 512: SDXC's most, 2 TiB (FatFs's sector numbers are 32 bits), `2199023255552` |
+| ` free=` | 6 + 13 | never more than the size (`counting` is 8) |
+| ` tracks=` | 8 + 10 | a u32 (`building` is 8) |
+| ` music=` | 7 + 13 | never more than the size (`?` in this firmware) |
+| ` bat=` | 5 + 3 | `100` |
+| ` state=` | 7 + 7 | `playing` |
+| ` cid=` | 5 + 25 | always 25 (`-` is 1) |
+| ` clock=` | 7 + 5 | **not in this firmware**: room kept for a later release's key (`ok` or `unset`), which goes in after `cid=` |
+| ` bt=` | 4 | |
+| **before `bt=`'s value** | **215** | |
+
+So `bt=` keeps 40 bytes at least (52 while there is no `clock=`). The
+section's first line leaves it 104, a dev build's on a 1 TB card about 88,
+so a name of up to 63 bytes (all BtSink keeps) fits whole unless much of
+it needs encoding. A name that doesn't fit is cut at a character (never
+inside a UTF-8 sequence or a `%XX`) and ends with `%E2%80%A6`, "…".
+
+**The give-way rule.** `bt=` keeps 36 bytes whatever the other fields hold
+(`hoststatus::kBtRoom`). The keys after `state=` (`cid=`, today) are each
+put whole or left out, never cut: while they would leave `bt=` under 36,
+the last of them is left out, then the one before it. With the widths
+above they all fit, with 4 bytes to spare. Only the formatter's own caps,
+wider than any field a board sends, can make one give way: with `fw=` at
+its cut of 48 bytes, `elf=` at 16, `size=`, `free=` and `music=` (64-bit)
+at 20 digits and `tracks=` (32-bit) at its 10, the fields to `state=` and
+` bt=` take 219 bytes, which leaves `bt=` its 36 exactly and no room for
+`cid=`. A key added later goes in after the last of these
+(so it gives way first), with its row in the table above; a key wider than
+the spare bytes would give way on a real line. `test_host_status` checks
+the widest line, the line at the cap, and the rule's edge.
 
 ### The FSINFO rule
 
@@ -248,8 +291,9 @@ counted. An error changes nothing.
 ```
 (the port opened with DTR and RTS low: no reset, the music plays on)
 → @status
-← @status fw=v0.9.0 elf=63ee7a2b card=fat32 size=63864569856 free=? tracks=1284 music=? bat=87 state=playing bt=Paul%27s%20headphones
-                                      (FSINFO's count unknown: the page offers a count)
+← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=? tracks=1284 music=? bat=87 state=playing cid=5eedc0de0a1b2c3d.0000002a bt=Alex%27s%20headphones
+                                      (FSINFO's count unknown: the page offers a count;
+                                       the card is the one whose root is generation 42)
 → @count
 ← @err 4 count playing                (paused on the board, or from the player)
 → @count
@@ -259,9 +303,17 @@ counted. An error changes nothing.
 ← @count 100
 ← @count done free=38214565888
 → @status
-← @status fw=v0.9.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 state=paused bt=Paul%27s%20headphones
+← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 state=paused cid=5eedc0de0a1b2c3d.0000002a bt=Alex%27s%20headphones
 → @identify COM5
 ← @identify ok                        ("This one / COM5" on the board for 5 s, one buzz)
+
+(a board whose card has no /.mstream)
+→ @status
+← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=31914983424 free=20401094656 tracks=412 music=? bat=100 state=idle cid=- bt=-
+
+(a v0.11.0 board: no cid=)
+→ @status
+← @status fw=v0.11.0 elf=5d0c9e41 card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 state=paused bt=Alex%27s%20headphones
 
 (a v0.8.0 board)
 → @status
@@ -272,9 +324,15 @@ counted. An error changes nothing.
 
 - **`lib/core/HostStatus`** (portable, host-tested in `test_host_status`):
   the `@status` line from its facts (`format()`: the order, the cases, the
-  255-byte cap and how `bt=` gives way), `percentEncode()`, the label's
+  255-byte cap, how `bt=` gives way and how the keys after `state=` give
+  way to its 36 bytes, `kBtRoom`), `percentEncode()`, the label's
   rule (`validLabel()`), the FSINFO rule (`freeCountValid()`), and when
   the count's progress lines go out (`Progress`).
+- **`lib/core/CardRoot`** (`test_card_jobs`' `test_the_root`): the root
+  that won the election keeps its card id and generation (`Root::hasRoot`,
+  `cardId`, `generation`), also when its tags file then fails: `cid=`.
+  The boot log's line (`describe()`) then names that file, the generation
+  and why, never "none on the card".
 - **`lib/core/FreeCount`** (portable, `test_free_count`): the count's
   pieces, the per-piece counts, the pieces to read again, FatFs's window
   over the card's sectors, and one step under the lock (`step()` over a
@@ -306,7 +364,10 @@ counted. An error changes nothing.
   taking the display end it too. `ui/Input::identifyBuzz()`. Its texts:
   `UiText.h` (`kIdentifyTitle` and its room), measured in
   `test_ui_library`.
-- **`src/main.cpp`**: the facts hook (`hostFacts()`), what blocks a count
+- **`src/main.cpp`**: the facts hook (`hostFacts()`; `cid=` from
+  `Library::root()`, which `setup()` reads before the loop answers
+  anything, and nothing writes again; `-` once the card's guard has found
+  another card, `sectordisk::guard().foreign`), what blocks a count
   (`countBlocked()`), the identify hook (the screen woken first, the
   banner once the panel is awake), `hostQuery.loop()` every pass, the
   screen kept lit for the banner, the idle power-off held while a count
@@ -321,6 +382,13 @@ counted. An error changes nothing.
   runs, 32 KB and its table in PSRAM; `@status` takes about 0.6 KB of the
   loop task's stack for its line (ESTIMATED: the console's stack line
   after it, `[console] ...`, isn't printed for an `@` line).
+  **`cid=`** (0.12.0), against 12a748e, core2: IRAM and internal DRAM
+  unchanged (`.iram0.text` 124,883 B); flash `.text` +320 B, `.rodata`
+  -32 B; `firmware.bin` +288 B (4,358,528 to 4,358,816). Its review's
+  fixes (the guard's flag read, the boot log's line for a root whose tags
+  file failed) add 144 B more (4,358,960), IRAM still 124,883 B. Every
+  guard passes. `@status` takes about 50 bytes more of the loop task's
+  stack (ESTIMATED: the key's 31-byte buffer and its lengths).
 
 ## Device test plan
 
@@ -337,9 +405,9 @@ each line whole with its `\n`. Close every other owner of the port first.
    rounding, `free=` bytes or `?` (the boot log's `[storage] the card's
    volume: ... its free count: known (FSINFO)` or `unknown (@count)` says
    which), `tracks=` the Library row's count, `music=?`, `bat=` near the
-   tab bar's, `state=playing`, `bt=` the headphones' name encoded (or
-   `-`). The music doesn't skip. Every second for a minute: the same, no
-   skip, no `[console]` line.
+   tab bar's, `state=playing`, `cid=` (step 9), `bt=` the headphones' name
+   encoded (or `-`). The music doesn't skip. Every second for a minute:
+   the same, no skip, no `[console]` line.
 3. **@count refused.** While it plays: `@count` gives `@err 4 count
    playing`, and `@status` still says the same `free=`.
 4. **@count.** Pause, `@count`: `@count 0` at once, a line about every
@@ -364,3 +432,15 @@ each line whole with its `\n`. Close every other owner of the port first.
    `@identify` alone: `@err 1 identify`; `@identify cu.usbserial-14130`:
    `@err 5 identify`.
 8. **Old firmware.** On a v0.8.0 board: `@status` gives `@err 7 status`.
+9. **cid=** (0.12.0). With a card a computer filled (a `/.mstream` root):
+   `cid=` the root's card id and generation, the generation the one the
+   boot log's `[lib] the card: T tags-<8 hex>.bin, generation <n>` names
+   (`<n>` in decimal there, 8 hex digits here). With a card that has no
+   `/.mstream`: `cid=-`. Pull the card while on: `card=none` and `cid=-`;
+   put it back: the boot's `cid=` again. Pull it and put in another card
+   while it plays from the card and `@status` goes every second: from the
+   log's `[card] ANOTHER CARD` line on, `cid=-` until the restart, then
+   the other card's. A root whose tags file is gone (renamed on a
+   computer): `cid=` still that root's, and the boot log's line `no
+   transfer data (the root's T tags-<8 hex>.bin, generation <n>:
+   missing)`. Every line still ends in `bt=`, whole for a usual name.

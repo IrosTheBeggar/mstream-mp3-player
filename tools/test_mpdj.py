@@ -111,6 +111,17 @@ class Primitives(unittest.TestCase):
         t = v["trap"]
         self.assertEqual((mpdj.level(t["cos"]), mpdj.level(t["cosF32"])), (t["level"], t["levelF32"]))
 
+    def test_device_txt_rules(self):
+        """M 2.15, as lib/core's parse() and the writer's parser read a file:
+        the contract line makes it a device.txt, wherever it stands and whatever
+        its number; a key given twice reads as its last."""
+        for text, want in (("read.mpdj=2\n", False), ("read.mpdj=2\ncontract=1\n", True),
+                           ("contract=2\nread.mpdj=2\n", True), ("contract=1\nread.mpdj=1\nread.mpdj=2\n", True),
+                           ("contract=1\nread.mpdj=2\nread.mpdj=1\n", False), ("contract=1\r\nread.mpdj=2\r\n", True),
+                           ("contract=1\nread.mpdj= 1 , 2\n", True), ("contract=1\nread.mpdj=02\n", True),
+                           ("contract=1\nread.mpdj=x2\n", False), ("contract=1\nread.mpdj=\t2\n", False)):
+            self.assertEqual(mpdj.writes_v2(text), want, text)
+
     def test_level_rounding(self):
         self.assertEqual(mpdj.level(0.5), 128)                       # 127.5: half away from zero
         self.assertEqual(mpdj.level(127.49999999999999 / 255), 127)

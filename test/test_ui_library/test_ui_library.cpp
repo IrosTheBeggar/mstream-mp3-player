@@ -52,6 +52,7 @@
 #include "TrackCatalog.h"
 #include "UiStrings.h"
 #include "UiText.h"
+#include "WaveBar.h"
 #include "../support/TagFixtures.h"
 
 // The fonts' data, as the firmware has it (src/ui/VlwFonts.cpp: arrays only).
@@ -829,6 +830,58 @@ void test_store_glyphs_sit_in_the_rows() {
     TEST_ASSERT_EQUAL_INT(role.moved, moved);
     TEST_ASSERT_EQUAL_INT(role.cut, cut);
   }
+}
+
+// The rows around Now Playing's waveform (lib/core/WaveBar.h) hold their lines.
+// The text row: a Small line centred on y 165 is y 157-173, and y 157 is the
+// strip's, so y 158-173 are pushed. Its first row has no ink but for 8 of the VLW
+// font's accented letters (ĺ Ů Ǖ Ǘ Ǚ Ǜ Ѯ Ѽ: none is in the ten languages' texts; a
+// headphones' name loses a row of the accent). The store's em box is the line's
+// rows 0-15, and 8,902 of its glyphs reach row 0. So a line with one of its glyphs
+// is centred on y 166 (NowPlayingPage::drawProgressText()), and rows 0-15 show:
+// what the band's y 152-167 showed. Its last row was never pushed: y 168 then,
+// y 174 now. The 332 glyphs that reach it lose it, 20 of them box drawing, as
+// they did. The readout row: Title's line fills its 27 rows, Small's on row 16
+// has the same baseline, Bold's fits.
+void test_now_playing_rows_around_the_waveform() {
+  const glyphstore::Store& s = cjk();
+  const Vlw small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
+  const int top = wave::kTextCentreY - (small.yAdvance >> 1);
+  TEST_ASSERT_EQUAL_INT(wave::kTextRowY - 1, top);
+  TEST_ASSERT_EQUAL_INT(wave::kTextRowY + wave::kTextRowH - 1, top + small.yAdvance - 1);
+  int vlw = 0;
+  for (const Vlw::Box& b : small.boxes) {
+    if (b.height > 0 && small.maxAscent - b.top == 0) {
+      ++vlw;
+      TEST_ASSERT_TRUE(b.cp == 0x13A || b.cp == 0x16E || (b.cp >= 0x1D5 && b.cp <= 0x1DB) || b.cp == 0x46E || b.cp == 0x47C);
+    }
+  }
+  TEST_ASSERT_EQUAL_INT(8, vlw);
+  const int base = s.baselineIn(small.maxAscent, small.yAdvance);
+  int first = 0, last = 0, box = 0;
+  for (uint32_t cp = 0; cp <= 0xFFFF; ++cp) {
+    const glyphstore::Glyph g = s.find(cp);
+    if (!g) continue;
+    const glyphstore::Metrics m = s.metrics(g);
+    if (m.w == 0) continue;
+    const glyphstore::Placement p = glyphstore::place(m, base, small.yAdvance);
+    if (p.top == 0) ++first;
+    if (p.top + p.rows - 1 == small.yAdvance - 1) {
+      ++last;
+      if (cp >= 0x2500 && cp <= 0x257F) ++box;
+    }
+  }
+  TEST_ASSERT_EQUAL_INT(8902, first);
+  TEST_ASSERT_EQUAL_INT(332, last);
+  TEST_ASSERT_EQUAL_INT(20, box);
+  const int bigTop = wave::kReadoutBigRow - (title.yAdvance >> 1);
+  TEST_ASSERT_EQUAL_INT(0, bigTop);
+  TEST_ASSERT_EQUAL_INT(wave::kReadoutH, bigTop + title.yAdvance);
+  const int smallTop = wave::kReadoutSmallRow - (small.yAdvance >> 1);
+  TEST_ASSERT_TRUE(smallTop >= 0 && smallTop + small.yAdvance <= wave::kReadoutH);
+  TEST_ASSERT_EQUAL_INT(bigTop + title.maxAscent, smallTop + small.maxAscent);
+  const int boldTop = wave::kReadoutBigRow - (bold.yAdvance >> 1);
+  TEST_ASSERT_TRUE(boldTop >= 0 && boldTop + bold.yAdvance <= wave::kReadoutH);
 }
 
 // Now Playing's title lines share rows (TitleLayout): each line's row,
@@ -3199,6 +3252,57 @@ void test_console_tag_commands() {
   TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gt</music/...>") != nullptr);
 }
 
+// The waveform index's letters (app/Waves). gw alone stays the walk, and gw?
+// asks for the state. What follows gw= and gw# is checked whole: anything but
+// exactly the digits a shape takes changes nothing.
+void test_console_wave_letters() {
+  using C = tagtext::Command;
+  TEST_ASSERT_EQUAL(C::Walk, tagtext::parse("w").command);
+  TEST_ASSERT_EQUAL(C::Walk, tagtext::parse(" w ").command);
+  TEST_ASSERT_EQUAL(C::Wave, tagtext::parse("w?").command);
+  TEST_ASSERT_EQUAL_STRING("?", tagtext::parse("w?").path);
+  TEST_ASSERT_EQUAL(C::Wave, tagtext::parse(" w- ").command);
+  TEST_ASSERT_EQUAL(C::Wave, tagtext::parse("w=123").command);
+  TEST_ASSERT_EQUAL_STRING("=123", tagtext::parse("w=123").path);
+  TEST_ASSERT_EQUAL(C::Wave, tagtext::parse("w#ab").command);
+  TEST_ASSERT_EQUAL_STRING("#ab", tagtext::parse("w#ab").path);
+  TEST_ASSERT_EQUAL(C::Wave, tagtext::parse("w=").command);  // (an empty text is the hook's to refuse)
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("w?x").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("w-1").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("wx").command);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gw walk now") != nullptr);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gw?") != nullptr);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gw=<99 digits 0-9>") != nullptr);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gw#<480 hex>") != nullptr);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gw-") != nullptr);
+
+  uint8_t out[6] = {};
+  TEST_ASSERT_TRUE(tagtext::digitsIn("012349", out, 6));
+  const uint8_t digits[6] = {0, 1, 2, 3, 4, 9};
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(digits, out, 6);
+  TEST_ASSERT_FALSE(tagtext::digitsIn("01234", out, 6));    // short
+  TEST_ASSERT_FALSE(tagtext::digitsIn("0123490", out, 6));  // long
+  TEST_ASSERT_FALSE(tagtext::digitsIn("0123a9", out, 6));
+  TEST_ASSERT_FALSE(tagtext::digitsIn("", out, 6));
+  TEST_ASSERT_TRUE(tagtext::hexIn("00ff7FaB", out, 4));
+  const uint8_t bytes[4] = {0x00, 0xFF, 0x7F, 0xAB};
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(bytes, out, 4);
+  TEST_ASSERT_FALSE(tagtext::hexIn("00ff7Fa", out, 4));    // short by a digit
+  TEST_ASSERT_FALSE(tagtext::hexIn("00ff7F", out, 4));     // ... by a byte
+  TEST_ASSERT_FALSE(tagtext::hexIn("00ff7FaB0", out, 4));  // long
+  TEST_ASSERT_FALSE(tagtext::hexIn("00ff7Fag", out, 4));
+  TEST_ASSERT_FALSE(tagtext::hexIn("", out, 4));
+  // The console's two sizes: a whole line of each.
+  std::string line(99, '7');
+  uint8_t heights[99];
+  TEST_ASSERT_TRUE(tagtext::digitsIn(line.c_str(), heights, sizeof(heights)));
+  TEST_ASSERT_EACH_EQUAL_UINT8(7, heights, sizeof(heights));
+  line.assign(480, 'c');
+  uint8_t bars[240];
+  TEST_ASSERT_TRUE(tagtext::hexIn(line.c_str(), bars, sizeof(bars)));
+  TEST_ASSERT_EACH_EQUAL_UINT8(0xCC, bars, sizeof(bars));
+}
+
 // A record as the console prints it: each text field the run has (lists
 // as "a" | "b"), the numbers on one line, the ReplayGain, the picture's
 // anchor, the flags; an UNREADABLE record in one line. And a real file's
@@ -4252,6 +4356,7 @@ int main(int, char**) {
   RUN_TEST(test_now_playing_title_rows);
   RUN_TEST(test_fonts_keep_their_line_heights);
   RUN_TEST(test_store_glyphs_sit_in_the_rows);
+  RUN_TEST(test_now_playing_rows_around_the_waveform);
   RUN_TEST(test_now_playing_title_lines_share_rows);
   RUN_TEST(test_fonts_cover_greek_cyrillic_and_latin);
   RUN_TEST(test_queue_cap_texts_fit);
@@ -4290,6 +4395,7 @@ int main(int, char**) {
   RUN_TEST(test_library_texts_fit);
   RUN_TEST(test_library_row_texts);
   RUN_TEST(test_console_tag_commands);
+  RUN_TEST(test_console_wave_letters);
   RUN_TEST(test_console_tag_dump);
   RUN_TEST(test_console_sources);
   return UNITY_END();

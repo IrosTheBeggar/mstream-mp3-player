@@ -208,7 +208,12 @@ public:
 
 private:
   static constexpr int kCross = -3;  // pressed_: the ✕ pill
+  // The whole panel; the title row's text and pill alone; row i alone
+  // (over the card as rendered: a press look costs one row, not a render
+  // of every row, which was 34 ms on the device).
   void render();
+  void renderTitle();
+  void renderRow(int i);
   void pushRow(int i);
   void pushTitle();
   char title_[96] = "";
@@ -251,7 +256,13 @@ public:
 private:
   static constexpr int kCross = -3;
   int pillAt(const InputEvent& e) const;
+  // Pill `id`'s place in the panel (false: none, or not shown now).
+  bool pillRect(int id, int& x, int& y, int& w) const;
   void render();
+  void renderTitle();
+  void renderPill(int id);
+  // Pill `id` (or the close pill) drawn again alone: its press look.
+  void drawPill(int id);
   int current_ = -1;
   bool running_ = false;
   bool extend_ = false;
@@ -286,7 +297,14 @@ private:
   enum Part : int8_t { None = -1, Minus, Slider, Plus };
   Part partAt(const InputEvent& e) const;
   static int valueAt(int x);
+  // The whole panel; its top row (the output, the value) and its controls'
+  // row (− + and the slider) alone, over the card as rendered.
   void render();
+  void renderTop();
+  void renderControls();
+  // The controls' row rendered and pushed again (the top row too when
+  // `value`): a press look, a step, the knob following a finger.
+  void drawPart(bool value);
   bool bluetooth_ = false;
   char name_[32] = "";
   int volume_ = 0;
@@ -318,6 +336,9 @@ public:
 private:
   int cellAt(const InputEvent& e) const;
   void renderGrid();
+  void renderCell(int i);
+  // Cell i drawn again alone: its press look.
+  void drawCell(int i);
   void drawHeader();
   char title_[64] = "";
   char labels_[jump::kGridCells][4] = {};
@@ -350,6 +371,9 @@ public:
 
 private:
   void render();
+  void renderButton(int i);
+  // Button i drawn again alone: its press look.
+  void drawButton(int i);
   int buttonAt(int x, int y) const;
   char title_[96] = "";
   char body_[256] = "";

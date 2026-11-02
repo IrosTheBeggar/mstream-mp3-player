@@ -15,7 +15,7 @@ const char* indexName(Index i) {
     case Index::TooBig: return "a library too big";
     case Index::NoMemory: return "no memory to join";
     case Index::Found: return "found (joined when on)";
-    case Index::Reading: return "joining";
+    case Index::Reading: return "reading";
     case Index::Ready: return "ready";
   }
   return "?";

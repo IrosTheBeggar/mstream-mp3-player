@@ -15,6 +15,7 @@
 #include "UiStrings.h"
 #include "app/DanceMode.h"
 #include "app/Library.h"
+#include "app/Waves.h"
 #include "ui/Input.h"
 #include "ui/ListScroller.h"
 #include "ui/ListView.h"
@@ -64,6 +65,8 @@
 //     the loop (app/CardWorker, handed by app/CardTasks), never started
 //     while a list moves; a page redraws the row (or the cover) that shows
 //     one when it arrives.
+//   - The playing track's waveform (app/Waves): read by the same worker in
+//     the same lane; Now Playing sees it by its version() in update().
 //   - The Library's status line (docs/METADATA.md 3.3.6): while the card
 //     worker checks the card, reads tags or the library updates, a Small
 //     line across the list's width at the bottom of a Library page (y
@@ -141,9 +144,11 @@ public:
   // libraryChanged() follows.
   void libraryUpdating();
   // ---- for the card worker (app/CardTasks, ScanScheduler's inputs) ----
-  // A list moves (the page's animating(): a drag, a fling, a snap). None
-  // while its page draws no frame: the screen dark, identify()'s banner, a
-  // modal over it (loop() draws the page under none of them). The page
+  // A list moves (the page's animating(): a drag, a fling, a snap), or a
+  // finger is on a list's A-Z rail (ListView::railTouch(): a scrub, whose
+  // every position is a band drawn whole, or resting on it before one).
+  // None while its page draws no frame: the screen dark, identify()'s
+  // banner, a modal over it (loop() draws the page under none of them). The page
   // then owes its list's frame to the wake, or to the modal's end (a
   // reload in the dark leaves the list "animating" until then, and so does
   // a fling a dialog that opened by itself caught: the headphones lost, a
@@ -151,7 +156,8 @@ public:
   // save 260 s with the screen off. (ScanScheduler::listHolds() holds
   // nothing for one in the dark either.)
   bool listMoving() const {
-    return started_ && !suspended_ && !dark_ && !identifying_ && !modalUp() && page_ && page_->animating();
+    return started_ && !suspended_ && !dark_ && !identifying_ && !modalUp() && page_ &&
+           (page_->animating() || (railHold_ && list_.attached() && list_.railTouch()));
   }
   // A cover may be made now: the UI is up and lit.
   bool coversAllowed() const { return started_ && !suspended_ && !dark_ && !identifying_; }
@@ -237,6 +243,11 @@ public:
   LibraryIndex* browseIndex() { return browse_ ? browse_ : library_.index(); }
   bool browsingSynthetic() const { return browse_ != nullptr; }
   Thumbs& thumbs() { return thumbs_; }
+  Waves& waves() { return waves_; }
+  // A list page's repaint() after an overlay went: the band from the rows
+  // as rendered (ListView::redraw()), unless a cover arrived under the
+  // overlay (its row is rendered again: ListView::invalidate()).
+  void repaintList();
   // `viewKey`: the queue entry (its key) of the first track an add put in
   // the queue: the toast also offers "View" (the Queue, scrolled to it),
   // and the next visit to the Queue shows and highlights what was added.
@@ -326,7 +337,11 @@ private:
   Page* pageFor(uint8_t kind);
   void showTop();
   void clearContent();
+  // The list band's hardware scroll: begun for a page that scrolls, kept
+  // on (the map invalidated) under one that doesn't; ended, the band
+  // cleared first, when a screen of its own takes the display.
   void ensureScroller(bool wanted);
+  void endScroller();
   void tapTab(NavModel::Tab t);
   // A glass event to whatever its touch landed on.
   void route(const InputEvent& e);
@@ -415,6 +430,7 @@ private:
   Dialog dialog_;
   Coach coach_;
   Thumbs thumbs_;
+  Waves waves_;
   LibraryIndex* browse_ = nullptr;  // uil<n>: a synthetic library in the Library tab
   int volumeAsked_ = -1;            // the volume sheet's last target (steps are relative)
   bool volumeSheetBt_ = false;      // the volume sheet's output
@@ -489,16 +505,42 @@ private:
   uint32_t framesWindowStart_ = 0;
   uint32_t framesInWindow_ = 0;
   float fps_ = 0;
+  // What a loop pass costs (console ui, then counted again): the longest
+  // pass and event, each part's longest, the mean pass; a pass or an
+  // event over kSlowPassUs is logged as it happens ("[ui] slow pass").
+  struct PassCost {
+    uint32_t passes = 0;
+    uint64_t passSumUs = 0;
+    uint32_t passMaxUs = 0;
+    uint32_t snapshotMaxUs = 0;
+    uint32_t tabMaxUs = 0;
+    uint32_t pageMaxUs = 0;    // the page's update(), a frame or not
+    uint32_t statusMaxUs = 0;
+    uint32_t thumbsMaxUs = 0;
+    uint32_t eventMaxUs = 0;   // onEvent(), the glass
+    InputEvent::Type eventMaxType = InputEvent::Type::None;
+  };
+  mutable PassCost cost_;  // (printState() is const: it prints and counts again)
+  bool thumbsStale_ = false;  // a cover arrived under a modal: repaintList() renders the rows again
+  // A finger on the A-Z rail holds the card worker (listMoving()); off with
+  // the scrub's pacing (console uir0: as before 0.12.0, to compare by hand).
+  bool railHold_ = true;
   // The list's current motion, for its "[ui] scroll:" line (a page without
-  // a list, Now Playing's seek bar: "[ui] scrub:").
+  // a list, Now Playing's seek bar: "[ui] scrub:"; a finger on the A-Z
+  // rail: "[ui] rail scrub:", its band frames and its rail-only frames
+  // apart).
   struct Motion {
     bool on = false;
     bool list = false;  // a list moved (else a page's own animation: a scrub)
+    bool rail = false;  // a finger was on the list's A-Z rail
     uint32_t startMs = 0;
-    uint32_t frames = 0;
+    uint32_t frames = 0;    // band frames (every frame of a scroll)
     uint64_t sumUs = 0;
     uint32_t maxUs = 0;
     uint32_t slow = 0;      // frames over kSlowFrameUs
+    uint32_t railFrames = 0;  // a scrub's frames of the rail alone
+    uint64_t railSumUs = 0;
+    uint32_t railMaxUs = 0;
     uint32_t ringMin = 0;
     uint32_t underruns = 0;
   } motion_;

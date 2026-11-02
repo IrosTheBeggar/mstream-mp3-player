@@ -69,7 +69,9 @@ public:
   static constexpr int kLineX = 12, kLineW = 296;  // the line: x 12-307
   static constexpr uint32_t kMinLengthMs = 10000;  // shorter tracks: inert
   static constexpr int kGrabPx = 16, kStayPx = 4;
-  static constexpr int kOffAboveY = 106, kBackAboveY = 114, kOffBelowY = 240, kBackBelowY = 232;
+  // Off and back. Now Playing's readout row starts at y 110: off 7 rows above
+  // it (onto the artist row), back from its second row.
+  static constexpr int kOffAboveY = 103, kBackAboveY = 111, kOffBelowY = 240, kBackBelowY = 232;
   // The readout goes to the side away from the knob: left once the knob is
   // right of kReadoutLeftX, right once it is left of kReadoutRightX; in
   // between it stays (at the scrub's start: left from kReadoutStartX).

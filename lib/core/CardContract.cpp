@@ -879,6 +879,7 @@ Info current(const char* firmware) {
   Info i;
   copyValue(i.firmware, firmware ? firmware : "", firmware ? std::strlen(firmware) : 0);
   i.readMpdj = 1u << (2 - 1);  // the AutoDJ index, major 2 (the engine design's M5)
+  i.readMpwf = 1u << (1 - 1);  // the waveform index, major 1 (docs/WAVEFORM-INDEX.md 7.4)
   copyValue(i.codecs, "mp3,flac,opus", 13);
   copyValue(i.extensions, "mp3,flac,opus", 13);
   return i;
@@ -895,6 +896,7 @@ size_t format(const Info& info, char* out, size_t cap) {
   n = putMajors(out, cap, n, "read.msmf", info.readMsmf);
   n = putMajors(out, cap, n, "read.mptg", info.readMptg);
   n = putMajors(out, cap, n, "read.mpdj", info.readMpdj);
+  n = putMajors(out, cap, n, "read.mpwf", info.readMpwf);
   n = putMajors(out, cap, n, "read.mpth", info.readMpth);
   add("codecs=%s\n", info.codecs);
   add("extensions=%s\n", info.extensions);
@@ -935,6 +937,8 @@ bool parse(const char* text, size_t n, Info* out) {
         out->readMptg = majors(v, vl);
       } else if (key("read.mpdj")) {
         out->readMpdj = majors(v, vl);
+      } else if (key("read.mpwf")) {
+        out->readMpwf = majors(v, vl);
       } else if (key("read.mpth")) {
         out->readMpth = majors(v, vl);
       } else if (key("codecs")) {

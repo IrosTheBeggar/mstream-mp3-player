@@ -56,6 +56,7 @@
 #include "app/HostQuery.h"
 #include "app/IdlePower.h"
 #include "app/Library.h"
+#include "app/NvsLater.h"
 #include "app/NvsSchema.h"
 #include "app/PowerLab.h"
 #include "app/PowerSettings.h"
@@ -1031,14 +1032,15 @@ static void printStats() {
   const auto& s = audio.stats();
   const diag::Heap h = diag::heap();
   Serial.printf(
-      "[stats] track=%d/%lu %s pos=%.1fs out=%s%s buf=%lums underruns=%lu bt=%lufps load=%.1f%% "
+      "[stats] track=%d/%lu %s pos=%.1fs out=%s%s buf=%lums underruns=%lu breaks=%lu bt=%lufps load=%.1f%% "
       "stack_free=%lu pass_max=%luus ram=%luK min=%luK psram=%luK pmin=%luK bat=%d%%\n",
       player.currentIndex() + 1, (unsigned long)queue.size(), stateName(), audio.positionMs() / 1000.0f,
       audio.output() == Output::Bluetooth ? "bt" : "speaker",
       audio.output() == Output::Bluetooth ? (audio.bluetooth().connected() ? "(connected)" : "(searching)")
       : silent                            ? "(silent test mode)"
                                           : "",
-      (unsigned long)s.bufferedMs, (unsigned long)s.underruns, (unsigned long)s.btFramesPerSec,
+      (unsigned long)s.bufferedMs, (unsigned long)s.underruns, (unsigned long)s.breaks,
+      (unsigned long)s.btFramesPerSec,
       s.decodeLoad * 100.0f, (unsigned long)s.decodeStackFree, (unsigned long)s.maxPassUs,
       (unsigned long)(h.internalFree / 1024), (unsigned long)(h.internalMin / 1024),
       (unsigned long)(h.psramFree / 1024), (unsigned long)(h.psramMin / 1024), (int)M5.Power.getBatteryLevel());
@@ -1055,7 +1057,13 @@ static void printStats() {
   // Core2). headphones: their last reported volume. gain: the Core2's gain
   // stage (the headroom with absolute volume). headroom: its fixed
   // attenuation (-2.0dB unless set with h<n>). gap: longest wait between two
-  // data callbacks since the last line (~10-30 ms is healthy). search: how
+  // data callbacks of a running stream since the last line (~10-30 ms is
+  // healthy; a stall of the Bluetooth task shows whole, a stream's stop and
+  // restart doesn't). rssi: the link's signal against the controller's
+  // golden receive range, read every 5 s (0dB: in it; -NdB: that much below
+  // it; ?: none read on this link yet). mode: the link's power mode (active
+  // while a stream plays; a sniff then would explain a stutter, and every
+  // change is logged as "[bt] link mode:"). search: how
   // the Core2 looks for them while unlinked (burst, backoff, resting, scan,
   // idle); radio: the share of the last minute spent paging or scanning.
   const BtSink::Stats b = bt.stats();
@@ -1063,10 +1071,16 @@ static void printStats() {
   if (b.gainQ15 > 0) snprintf(gain, sizeof(gain), "%.1fdB", 20.0f * log10f(b.gainQ15 / 32768.0f));
   char headset[8] = "?";
   if (b.headsetVolume >= 0) snprintf(headset, sizeof(headset), "%d", b.headsetVolume);
+  char rssi[12] = "?";
+  if (b.rssiKnown && b.rssiDelta == 0) {
+    strlcpy(rssi, "0dB", sizeof(rssi));
+  } else if (b.rssiKnown) {
+    snprintf(rssi, sizeof(rssi), "%+ddB", b.rssiDelta);
+  }
   Serial.printf("[stats] bt vol=%u%% control=%s headphones=%s/127 gain=%s headroom=%.1fdB stream=%s gap=%lums "
-                "events_dropped=%lu btapp_stack_free=%lu search=%s radio=%d%%/min\n",
+                "rssi=%s mode=%s events_dropped=%lu btapp_stack_free=%lu search=%s radio=%d%%/min\n",
                 (unsigned)b.volume, b.volumeControl, headset, gain, 20.0f * log10f(b.headroomQ15 / 32768.0f),
-                b.stream, (unsigned long)b.maxGapMs, (unsigned long)b.eventsDropped,
+                b.stream, (unsigned long)b.maxGapMs, rssi, b.linkMode, (unsigned long)b.eventsDropped,
                 (unsigned long)b.appTaskStackFree, b.reconnect, b.radioBusyPercent);
 }
 
@@ -1841,7 +1855,8 @@ static bool hostModeOn();  // (the visualizer's session: below)
 // What @status says, from what the firmware holds (the free space is
 // app/HostQuery's: storage/CardSpace). No card I/O, no lock: the card's
 // size is the CSD's kept since the mount (About's), the battery the UI's
-// reading (every 10 s), the library the index's count.
+// reading (every 10 s), the library the index's count, the card's id and
+// generation the root the boot read.
 static void hostFacts(hoststatus::Facts& f) {
   using hoststatus::Card;
   f.fw = version::appDesc();
@@ -1879,6 +1894,21 @@ static void hostFacts(hoststatus::Facts& f) {
   // the pairing: BtSink::shownName()); none with nothing paired.
   BtSink& bt = audio.bluetooth();
   f.bt = bt.link().remembered ? bt.shownName() : nullptr;
+  // cid=: the root the boot read (Library::root(): setup() reads it before
+  // the loop answers anything, and nothing writes it again), while a FAT
+  // card is mounted. Another card put in is a restart (the card's guard);
+  // the same card put back keeps the boot's root, as the library does.
+  // From the remount that found another card until that restart (the
+  // toast's 1.2 s, the worker's step), FatFs has that card mounted (card=
+  // says its kind) and the root is still the boot card's: '-'. (The
+  // guard's flag, an atomic read: no card I/O. cardHeld isn't the test:
+  // it also holds the same card for a restart, whose cid= is right.)
+  const cardroot::Root* root = library.root();
+  if ((f.card == Card::Fat32 || f.card == Card::Fat16) && root && root->hasRoot && !sectordisk::guard().foreign) {
+    f.cidKnown = true;
+    f.cardId = root->cardId;
+    f.generation = root->generation;
+  }
 }
 
 // Why @count can't start, or go on, now: music (a play waiting for the
@@ -2962,8 +2992,9 @@ static AutoDj::Env autoDjEnv(uint32_t now) {
 // Every loop pass, right after the card's guard (a remount is seen before
 // any read of the index) and before the card's step (a pick lands before
 // the update step can raise its fence in the same pass; its owed() holds
-// that fence while the index joins): a remount, a slice of the join, the
-// trigger and a pick (or a slot read ahead), a long D command's step.
+// that fence while the index joins): a remount, a try at opening the index that
+// is due, a slice of the join, the trigger and a pick (or a slot read ahead), a
+// long D command's step.
 static void stepAutoDj(uint32_t now) {
   if (!autoDj) return;
   autoDj->step(autoDjEnv(now));
@@ -3106,7 +3137,11 @@ static void stepCard(uint32_t now, bool input) {
   ScanScheduler::In in;
   in.nowMs = now;
   in.listMoving = userInterface && userInterface->listMoving();
-  in.input = input;
+  // A list moving counts as input too: the walk, the scan and a compaction
+  // then wait ScanScheduler::Config::inputQuietMs after a fling comes to
+  // rest, so a listener flicking through a long list doesn't get a slice
+  // of the card between flicks (a cover isn't held by that wait).
+  in.input = input || in.listMoving;
   in.playing = player.state() == PlayState::Playing;
   in.ringMs = audio.bufferedMsNow();
   in.ringCapacityMs = audio.ringCapacityMs();
@@ -3148,7 +3183,8 @@ static void stepCard(uint32_t now, bool input) {
   // (autodj::decide(), this pass's: stepAutoDj() ran before).
   env.autoDjOwed = autoDj && autoDj->owed();
   cardTasks->loop(in, src, userInterface ? &userInterface->thumbs() : nullptr,
-                  userInterface && userInterface->coversAllowed(), env);
+                  userInterface ? &userInterface->waves() : nullptr, userInterface && userInterface->coversAllowed(),
+                  env);
   switch (cardTasks->takeAct()) {
     case LibraryUpdate::Do::Fence:
       if (!enterFence()) {
@@ -3305,6 +3341,14 @@ void setup() {
   // must outlast a slow loop pass: 1 KB (270 ms of them) instead of 256 B.
   // Only before begin(), which M5.begin() calls.
   Serial.setRxBufferSize(SerialConsole::kRxBuffer);
+  // And a transmit buffer: without one every Serial.print blocks the loop
+  // until its bytes are in the UART's 128-byte FIFO (87 us a byte at
+  // 115200: a tap's two [touch] lines and its "[ui] library: play ..."
+  // held the loop 20-30 ms, a cover's line 17 ms, in the middle of
+  // frames). With one the UART's interrupt drains it, and a print waits
+  // only when 2 KB (180 ms of output) are already queued: the console's
+  // long dumps (ql, l) still pace themselves on the line.
+  Serial.setTxBufferSize(2048);
   auto cfg = M5.config();
   cfg.serial_baudrate = 115200;  // M5Unified leaves Serial off unless asked
   cfg.internal_mic = false;      // the mic shares GPIO0 with the speaker's I2S clock
@@ -3416,6 +3460,13 @@ void setup() {
     j.listMoving = [] { return userInterface && userInterface->listMoving(); };
     // (CardTasks' ScanScheduler::In::dark: nothing drawn.)
     j.dark = [] { return !userInterface || !userInterface->coversAllowed(); };
+    j.wave = [](const char* a) {
+      if (userInterface) {
+        userInterface->waves().command(a);
+      } else {
+        Serial.println("[wave] no UI, so no Now Playing and no waveforms (no PSRAM at boot)");
+      }
+    };
     // gx and gxs refuse while music plays or waits for the headphones.
     j.playing = [] { return player.state() == PlayState::Playing || player.state() == PlayState::Waiting; };
     tc->setJobs(j);
@@ -3493,6 +3544,7 @@ void setup() {
                  "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes); "
                  "ui the UI's navigation (ui0-ui4 tab, uib back, uic coach cards, uiL<tag> language (uiL the list, "
                  "uiL- forget it), uiP the first boot's language picker, uit/uih/uis/uid/uip scripted finger, "
+                 "uir0/uir1 the A-Z rail's scrub as before 0.12.0 / paced (uir: which), "
                  "uk1/uk2/uk0 the scripted finger on a skewed panel (uk2 with jitter) or not, "
                  "uiF<c/s/p/r/l/n/f/t/g/u/w> show a faked Bluetooth, no-card, exFAT/NTFS/GPT/can't-read card or waiting state "
                  "(uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
@@ -3549,10 +3601,13 @@ void loop() {
   const bool anyInput = idleInput || touchedThisPass || screen.takeInput();
   stepIdle(now, anyInput);
   powerSettings.update(audio.bluetooth().connected());
+  nvslater::loop(now);  // settings the taps changed: written once they rest
   stepCpuRestart(now);
   audio.loop(now);
   powerLab.loop(now);
   stepCardGuard();
+  // The waveform index: a remount seen before the card's step hands a read.
+  if (userInterface) userInterface->waves().remount(cardHeld);
   stepAutoDj(now);
   if (!cardHeld) queueStore.loop(now);
   // What a track's length is, once the backend knows it (read from the

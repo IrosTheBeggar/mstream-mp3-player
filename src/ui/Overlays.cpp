@@ -24,6 +24,9 @@ using uistr::S;
 namespace {
 
 M5Canvas* panel_ = nullptr;  // PSRAM, 320 x 204: a sheet, a dialog, the jump grid
+// Whose picture the panel holds (its last whole render): a press look draws
+// one control again over it, and renders it all first if it is another's.
+const void* panelOwner_ = nullptr;
 
 // A text too long for its buffer is cut at a character boundary, never
 // through a UTF-8 sequence (a translation's longer text; i18n/en.json's
@@ -345,14 +348,20 @@ bool Sheet::setDetail(int i, const char* text) {
   if (!up_ || i < 0 || i >= n_ || std::strcmp(details_[i], text ? text : "") == 0) return false;
   copy(details_[i], sizeof(details_[i]), text);
   if (!panel_) return false;
-  render();
-  pushRow(i);
+  drawRow(i);
   return true;
 }
 
 void Sheet::drawRow(int i) {
-  if (!up_ || !panel_ || i < 0 || i >= n_) return;
-  render();
+  if (!up_ || !panel_) return;
+  if (panelOwner_ != this) render();
+  if (i == kCross) {
+    renderTitle();
+    pushTitle();
+    return;
+  }
+  if (i < 0 || i >= n_) return;
+  renderRow(i);
   pushRow(i);
 }
 
@@ -363,41 +372,49 @@ static_assert(16 + sheet::kTitleW == kSheetCrossHitX - 8, "the title ends 8 px b
 }  // namespace
 
 void Sheet::render() {
+  sheetCard(*panel_, kH - y0_);
+  panelOwner_ = this;
+  renderTitle();
+  for (int i = 0; i < n_; ++i) renderRow(i);
+}
+
+void Sheet::renderTitle() {
   M5Canvas& s = *panel_;
   Fonts& f = Fonts::instance();
-  const int h = kH - y0_;
-  sheetCard(s, h);
   f.draw(s, Font::Small, title_, 16, 22, sheet::kTitleW, col::DIM, col::CARD);
   const uint16_t pill = pressed_ == kCross ? col::BTN_HI : col::BTN;
   s.fillRoundRect(kSheetCrossX, 9, kSheetCrossW, 24, 12, pill);
   icons::drawCentred(s, icons::kCross, kSheetCrossX + kSheetCrossW / 2, 21, col::TXT);
-  for (int i = 0; i < n_; ++i) {
-    const int y = kTitleH + i * kRowH;
-    const uint16_t bg = i == pressed_ ? col::ROW_SEL : col::CARD;
-    s.fillRect(0, y, kW, kRowH, bg);
-    s.drawFastHLine(16, y, kW - 32, col::DIV);
-    // Every row alike, but the main choice (Bold, the accent) and the one
-    // that can't be taken back (red).
-    const bool primary = i == primary_;
-    const uint16_t ink = primary ? accent_ : i == danger_ ? col::RED : col::TXT;
-    const Font lf = primary ? Font::Bold : Font::Body;
-    // The detail, right-aligned in what the label leaves; under the label
-    // when it doesn't fit whole there (the label's words in the UI's
-    // language: Spanish's "Temporizador de apagado" leaves 60 px), never
-    // cut (sheet::detailOnTwoLines(), as measured). A name the page cut to
-    // the room first stays beside it.
-    const int dw = details_[i][0] ? f.width(Font::Small, details_[i]) : -1;
-    if (dw >= 0 && sheet::detailOnTwoLines(std::min(f.width(lf, rows_[i]), sheet::kTwoLineW), dw)) {
-      f.draw(s, lf, rows_[i], 16, y + sheet::kTwoLineLabelY, sheet::kTwoLineW, ink, bg);
-      f.draw(s, Font::Small, details_[i], 16, y + sheet::kTwoLineDetailY, sheet::kTwoLineW, col::DIM, bg);
-      continue;
-    }
-    const int w = f.draw(s, lf, rows_[i], 16, y + kRowH / 2, kW - 32, ink, bg);
-    if (dw >= 0) {
-      // (Whole, should the label draw a pixel wider than measured.)
-      const int room = std::max(sheet::detailRoom(w), dw);
-      f.draw(s, Font::Small, details_[i], kW - 16, y + kRowH / 2, room, col::DIM, bg, Fonts::Align::Right);
-    }
+}
+
+void Sheet::renderRow(int i) {
+  M5Canvas& s = *panel_;
+  Fonts& f = Fonts::instance();
+  const int y = kTitleH + i * kRowH;
+  const uint16_t bg = i == pressed_ ? col::ROW_SEL : col::CARD;
+  s.fillRect(0, y, kW, kRowH, bg);
+  s.drawFastHLine(16, y, kW - 32, col::DIV);
+  // Every row alike, but the main choice (Bold, the accent) and the one
+  // that can't be taken back (red).
+  const bool primary = i == primary_;
+  const uint16_t ink = primary ? accent_ : i == danger_ ? col::RED : col::TXT;
+  const Font lf = primary ? Font::Bold : Font::Body;
+  // The detail, right-aligned in what the label leaves; under the label
+  // when it doesn't fit whole there (the label's words in the UI's
+  // language: Spanish's "Temporizador de apagado" leaves 60 px), never
+  // cut (sheet::detailOnTwoLines(), as measured). A name the page cut to
+  // the room first stays beside it.
+  const int dw = details_[i][0] ? f.width(Font::Small, details_[i]) : -1;
+  if (dw >= 0 && sheet::detailOnTwoLines(std::min(f.width(lf, rows_[i]), sheet::kTwoLineW), dw)) {
+    f.draw(s, lf, rows_[i], 16, y + sheet::kTwoLineLabelY, sheet::kTwoLineW, ink, bg);
+    f.draw(s, Font::Small, details_[i], 16, y + sheet::kTwoLineDetailY, sheet::kTwoLineW, col::DIM, bg);
+    return;
+  }
+  const int w = f.draw(s, lf, rows_[i], 16, y + kRowH / 2, kW - 32, ink, bg);
+  if (dw >= 0) {
+    // (Whole, should the label draw a pixel wider than measured.)
+    const int room = std::max(sheet::detailRoom(w), dw);
+    f.draw(s, Font::Small, details_[i], kW - 16, y + kRowH / 2, room, col::DIM, bg, Fonts::Align::Right);
   }
 }
 
@@ -427,17 +444,17 @@ int Sheet::onEvent(const InputEvent& e) {
   const int row = e.y >= y0_ + kTitleH ? (e.y - y0_ - kTitleH) / kRowH : -1;
   const bool onCross = e.y >= y0_ && e.y < y0_ + kTitleH && e.inRightEdgeZone(kSheetCrossHitX);
   const int inRow = onCross ? kCross : row >= 0 && row < n_ ? row : -1;
+  // Presses draw the row (or the pill) alone: the whole sheet rendered
+  // and the row pushed was 39 ms, twice a tap (MEASURED).
   if (e.type == T::Down) {
     pressed_ = inRow;
-    render();
-    pushRow(inRow);
+    drawRow(inRow);
     return -1;
   }
   if (e.type == T::DragStart || e.type == T::Cancel || e.type == T::Release) {
     const int was = pressed_;
     pressed_ = -1;
-    render();
-    pushRow(was);
+    drawRow(was);
     return -1;
   }
   if (e.type != T::Tap) return -1;
@@ -511,41 +528,81 @@ int SleepSheet::pillAt(const InputEvent& e) const {
   }
 }
 
+bool SleepSheet::pillRect(int id, int& x, int& y, int& w) const {
+  using namespace uitext;
+  if (id >= 0 && id < 5) {
+    x = kSleepMinX[id];
+    w = kSleepMinW[id];
+    y = kSleepRow0;
+    return true;
+  }
+  if (id >= kTrack && id <= kQueue) {
+    x = kSleepEndX[id - kTrack];
+    w = kSleepEndW[id - kTrack];
+    y = kSleepRow0 + kSleepPitch;
+    return true;
+  }
+  if (running_ && (id == kExtend || id == kTurnOff)) {
+    x = id == kExtend ? kSleepExtendX : kSleepOffX;
+    w = id == kExtend ? kSleepExtendW : kSleepOffW;
+    y = kSleepRow0 + 2 * kSleepPitch;
+    return true;
+  }
+  return false;
+}
+
+void SleepSheet::renderTitle() {
+  using namespace uitext;
+  M5Canvas& s = *panel_;
+  Fonts& f = Fonts::instance();
+  f.draw(s, Font::Small, state_, 16, 22, kSleepTitleW, col::DIM, col::CARD);
+  const uint16_t cross = pressed_ == kCross ? col::BTN_HI : col::BTN;
+  s.fillRoundRect(kSleepCrossX, 9, kSleepCrossW, 24, 12, cross);
+  icons::drawCentred(s, icons::kCross, kSleepCrossX + kSleepCrossW / 2, 21, col::TXT);
+}
+
+void SleepSheet::renderPill(int id) {
+  using namespace uitext;
+  int x, y, w;
+  if (!pillRect(id, x, y, w)) return;
+  M5Canvas& s = *panel_;
+  Fonts& f = Fonts::instance();
+  static const S kEnds[3] = {S::sleep_end_track, S::sleep_end_album, S::sleep_end_queue};
+  // +10 min dim when there is nothing to add to (End of album / queue
+  // before its last track: what is left isn't known).
+  const char* label = id < 4          ? kSleepMinutes[id]
+                      : id == 4       ? tr(S::sleep_minutes_90)
+                      : id <= kQueue  ? tr(kEnds[id - kTrack])
+                      : id == kExtend ? tr(S::sleep_extend)
+                                      : tr(S::sleep_turn_off);
+  const Font font = id >= kTrack && id <= kQueue ? Font::Small : Font::Body;
+  const uint16_t ink = id == kTurnOff ? col::RED : id == kExtend ? (extend_ ? accent_ : col::FAINT) : col::TXT;
+  const uint16_t bg = pressed_ == id ? col::BTN_HI : col::BTN;
+  s.fillRect(x, y, w, kSleepPillH, col::CARD);  // (its corners, drawn again alone)
+  s.fillRoundRect(x, y, w, kSleepPillH, 10, bg);
+  if (id == current_) {
+    // The running choice, outlined in the accent (2 px).
+    s.drawRoundRect(x, y, w, kSleepPillH, 10, accent_);
+    s.drawRoundRect(x + 1, y + 1, w - 2, kSleepPillH - 2, 9, accent_);
+  }
+  f.draw(s, f.fitting(font, label, w - kSleepPillPad), label, x + w / 2, y + kSleepPillH / 2, w - kSleepPillPad, ink,
+         bg, Fonts::Align::Centre);
+}
+
 void SleepSheet::render() {
   using namespace uitext;
   M5Canvas& s = *panel_;
   Fonts& f = Fonts::instance();
   sheetCard(s, kSleepH);
-  f.draw(s, Font::Small, state_, 16, 22, kSleepTitleW, col::DIM, col::CARD);
-  const uint16_t cross = pressed_ == kCross ? col::BTN_HI : col::BTN;
-  s.fillRoundRect(kSleepCrossX, 9, kSleepCrossW, 24, 12, cross);
-  icons::drawCentred(s, icons::kCross, kSleepCrossX + kSleepCrossW / 2, 21, col::TXT);
-  auto pill = [&](int id, int x, int w, int y, Font font, const char* label, uint16_t ink) {
-    const uint16_t bg = pressed_ == id ? col::BTN_HI : col::BTN;
-    s.fillRoundRect(x, y, w, kSleepPillH, 10, bg);
-    if (id == current_) {
-      // The running choice, outlined in the accent (2 px).
-      s.drawRoundRect(x, y, w, kSleepPillH, 10, accent_);
-      s.drawRoundRect(x + 1, y + 1, w - 2, kSleepPillH - 2, 9, accent_);
-    }
-    f.draw(s, f.fitting(font, label, w - kSleepPillPad), label, x + w / 2, y + kSleepPillH / 2, w - kSleepPillPad, ink,
-           bg, Fonts::Align::Centre);
-  };
-  for (int i = 0; i < 5; ++i) {
-    pill(i, kSleepMinX[i], kSleepMinW[i], kSleepRow0, Font::Body, i < 4 ? kSleepMinutes[i] : tr(S::sleep_minutes_90),
-         col::TXT);
-  }
-  static const S kEnds[3] = {S::sleep_end_track, S::sleep_end_album, S::sleep_end_queue};
-  for (int i = 0; i < 3; ++i) {
-    pill(kTrack + i, kSleepEndX[i], kSleepEndW[i], kSleepRow0 + kSleepPitch, Font::Small, tr(kEnds[i]), col::TXT);
-  }
-  const int y2 = kSleepRow0 + 2 * kSleepPitch;
+  panelOwner_ = this;
+  renderTitle();
+  for (int i = 0; i < 5; ++i) renderPill(i);
+  for (int i = kTrack; i <= kQueue; ++i) renderPill(i);
   if (running_) {
-    // +10 min dim when there is nothing to add to (End of album / queue
-    // before its last track: what is left isn't known).
-    pill(kExtend, kSleepExtendX, kSleepExtendW, y2, Font::Body, tr(S::sleep_extend), extend_ ? accent_ : col::FAINT);
-    pill(kTurnOff, kSleepOffX, kSleepOffW, y2, Font::Body, tr(S::sleep_turn_off), col::RED);
+    renderPill(kExtend);
+    renderPill(kTurnOff);
   } else {
+    const int y2 = kSleepRow0 + 2 * kSleepPitch;
     f.draw(s, Font::Small, tr(S::sleep_hint), kW / 2, y2 + kSleepPillH / 2, kSleepHintW, col::DIM, col::CARD,
            Fonts::Align::Centre);
   }
@@ -557,20 +614,36 @@ void SleepSheet::draw() {
   gfx::push(*panel_, 0, kY, kW, kSleepH, true);
 }
 
+void SleepSheet::drawPill(int id) {
+  if (!up_ || !panel_) return;
+  if (panelOwner_ != this) render();
+  if (id == kCross) {
+    renderTitle();
+    gfx::pushRows(*panel_, 0, kY, kW, 0, 36, true);
+    return;
+  }
+  int x, y, w;
+  if (!pillRect(id, x, y, w)) return;
+  renderPill(id);
+  gfx::pushRect(*panel_, x, y, w, kSleepPillH, x, kY + y, true);
+}
+
 int SleepSheet::onEvent(const InputEvent& e) {
   using T = InputEvent::Type;
   if (!up_) return -1;
   const bool onCross = e.y >= kY && e.y < kY + 36 && e.inRightEdgeZone(kSleepCrossHitX);
   const int at = onCross ? kCross : pillAt(e);
+  // Presses draw the pill alone (the whole sheet was 55 ms, twice a tap:
+  // MEASURED).
   if (e.type == T::Down) {
     pressed_ = at;
-    if (at != -1) draw();
+    if (at != -1) drawPill(at);
     return -1;
   }
   if (e.type == T::DragStart || e.type == T::Cancel || e.type == T::Release) {
     const int was = pressed_;
     pressed_ = -1;
-    if (was != -1) draw();
+    if (was != -1) drawPill(was);
     return -1;
   }
   if (e.type != T::Tap) return -1;
@@ -578,7 +651,7 @@ int SleepSheet::onEvent(const InputEvent& e) {
   pressed_ = -1;
   if (e.y < kY || was == kCross) return -2;  // above it, or the close pill
   if (at < 0) {
-    if (was != -1) draw();
+    if (was != -1) drawPill(was);
     return -1;
   }
   return at;
@@ -633,6 +706,18 @@ void VolumeSheet::render() {
   M5Canvas& s = *panel_;
   Fonts& f = Fonts::instance();
   sheetCard(s, kVolH);
+  panelOwner_ = this;
+  renderTop();
+  renderControls();
+  // The hint.
+  f.draw(s, Font::Small, tr(bluetooth_ ? S::volume_hint_headphones : S::volume_hint_speaker), kW / 2,
+         kRowY + kCtlH + 12, kW - 24, col::FAINT, col::CARD, Fonts::Align::Centre);
+}
+
+void VolumeSheet::renderTop() {
+  M5Canvas& s = *panel_;
+  Fonts& f = Fonts::instance();
+  s.fillRect(0, 12, kW, kRowY - 12, col::CARD);  // (under the card's corners and handle)
   // The output and the value.
   const uint16_t ic = bluetooth_ ? col::CYAN : col::SOFT;
   icons::drawCentred(s, bluetooth_ ? icons::kHeadphones : icons::kSpeaker, 28, 26, ic);
@@ -644,6 +729,11 @@ void VolumeSheet::render() {
   const int room = kW - 12 - vw - 12 - (46 + nameW + 6);
   const char* label = tr(S::volume_label);
   if (room >= f.width(Font::Small, label)) f.draw(s, Font::Small, label, 46 + nameW + 6, 27, room, col::DIM, col::CARD);
+}
+
+void VolumeSheet::renderControls() {
+  M5Canvas& s = *panel_;
+  s.fillRect(0, kRowY, kW, kCtlH, col::CARD);
   // − and +.
   const uint16_t minus = pressed_ == Minus ? col::BTN_HI : col::BTN;
   const uint16_t plus = pressed_ == Plus ? col::BTN_HI : col::BTN;
@@ -659,15 +749,24 @@ void VolumeSheet::render() {
   for (int t = 0; t <= 10; ++t) s.fillRect(kTrackX + t * kTrackW / 10, ty + 13, 1, 2, col::FAINT);
   s.fillCircle(kx, ty + 2, 11, pressed_ == Slider ? col::SOFT : col::TXT);
   s.fillCircle(kx, ty + 2, 5, accent_);
-  // The hint.
-  f.draw(s, Font::Small, tr(bluetooth_ ? S::volume_hint_headphones : S::volume_hint_speaker), kW / 2,
-         kRowY + kCtlH + 12, kW - 24, col::FAINT, col::CARD, Fonts::Align::Centre);
 }
 
 void VolumeSheet::draw() {
   if (!up_ || !panel_) return;
   render();
   gfx::push(*panel_, 0, kY, kW, kVolH, true);
+}
+
+void VolumeSheet::drawPart(bool value) {
+  if (!up_ || !panel_) return;
+  // The controls' row rendered and pushed again, and the output's row (its
+  // value) when it changed; the hint under them stays. The whole sheet was
+  // 36 ms a press, its texts rendered again 28 (MEASURED).
+  if (panelOwner_ != this) render();
+  if (value) renderTop();
+  renderControls();
+  if (value) gfx::pushRows(*panel_, 0, kY, kW, 0, kRowY, true);
+  gfx::pushRows(*panel_, 0, kY, kW, kRowY, kRowY + kCtlH, true);
 }
 
 void VolumeSheet::setVolume(int volume, bool bluetooth, uint32_t nowMs) {
@@ -706,21 +805,21 @@ VolumeSheet::Result VolumeSheet::onEvent(const InputEvent& e, uint32_t nowMs) {
       // resting on the slider must not move the volume).
       touching_ = e.y >= kY;
       pressed_ = partAt(e);
-      render();
-      gfx::push(*panel_, 0, kY, kW, kVolH, true);
+      drawPart(false);
       break;
     case T::DragStart:
     case T::DragMove:
       if (pressed_ == Slider) {
         const int before = volume_;
         set(valueAt(e.x));
-        if (volume_ != before) draw();
+        if (volume_ != before) drawPart(true);
       } else if (pressed_ != None) {
         pressed_ = None;  // a drag off a button doesn't press it
-        draw();
+        drawPart(false);
       }
       break;
-    case T::Tap:
+    case T::Tap: {
+      const int before = volume_;
       if (e.y < kY) {
         r.close = true;
       } else if (pressed_ == Minus) {
@@ -735,14 +834,15 @@ VolumeSheet::Result VolumeSheet::onEvent(const InputEvent& e, uint32_t nowMs) {
       }
       pressed_ = None;
       touching_ = false;
-      if (!r.close) draw();
+      if (!r.close) drawPart(volume_ != before);
       break;
+    }
     case T::Release:
     case T::DragEnd:
     case T::Cancel:
       pressed_ = None;
       touching_ = false;
-      draw();
+      drawPart(false);
       break;
     default:
       break;
@@ -779,33 +879,37 @@ void JumpGrid::drawHeader() {
 }
 
 void JumpGrid::renderGrid() {
+  panel_->fillSprite(col::BG);
+  panelOwner_ = this;
+  for (int i = 0; i < jump::kGridCells; ++i) renderCell(i);
+}
+
+void JumpGrid::renderCell(int i) {
   M5Canvas& s = *panel_;
   Fonts& f = Fonts::instance();
-  s.fillSprite(col::BG);
-  for (int i = 0; i < jump::kGridCells; ++i) {
-    const int x = kGridX + (i % 7) * kCellW + 2;
-    const int y = kGridY - kListY + (i / 7) * kCellH + 2;
-    const int w = kCellW - 4, h = kCellH - 4;
-    if (!labels_[i][0]) continue;
-    const bool on = enabled_[i];
-    const bool down = pressed_ == i;
-    uint16_t fg = col::FAINT, bg = col::BG;
-    if (on) {
-      bg = down ? accent_ : col::BTN;
-      fg = down ? col::DARK : col::TXT;
-      s.fillRoundRect(x, y, w, h, 8, bg);
-    }
-    if (i == current_ && on) {
-      s.drawRoundRect(x, y, w, h, 8, col::TXT);
-      s.drawRoundRect(x + 1, y + 1, w - 2, h - 2, 7, col::TXT);
-    }
-    if (i == kBack && labels_[i][0] == '<') {
-      icons::drawCentred(s, icons::kChevronLeft, x + w / 2, y + h / 2, fg);
-      continue;
-    }
-    const Font font = labels_[i][1] ? Font::Bold : Font::Title;  // "Ka" smaller than "K"
-    f.draw(s, font, labels_[i], x + w / 2, y + h / 2, w - 2, fg, bg, Fonts::Align::Centre);
+  const int x = kGridX + (i % 7) * kCellW + 2;
+  const int y = kGridY - kListY + (i / 7) * kCellH + 2;
+  const int w = kCellW - 4, h = kCellH - 4;
+  s.fillRect(x, y, w, h, col::BG);
+  if (!labels_[i][0]) return;
+  const bool on = enabled_[i];
+  const bool down = pressed_ == i;
+  uint16_t fg = col::FAINT, bg = col::BG;
+  if (on) {
+    bg = down ? accent_ : col::BTN;
+    fg = down ? col::DARK : col::TXT;
+    s.fillRoundRect(x, y, w, h, 8, bg);
   }
+  if (i == current_ && on) {
+    s.drawRoundRect(x, y, w, h, 8, col::TXT);
+    s.drawRoundRect(x + 1, y + 1, w - 2, h - 2, 7, col::TXT);
+  }
+  if (i == kBack && labels_[i][0] == '<') {
+    icons::drawCentred(s, icons::kChevronLeft, x + w / 2, y + h / 2, fg);
+    return;
+  }
+  const Font font = labels_[i][1] ? Font::Bold : Font::Title;  // "Ka" smaller than "K"
+  f.draw(s, font, labels_[i], x + w / 2, y + h / 2, w - 2, fg, bg, Fonts::Align::Centre);
 }
 
 void JumpGrid::draw() {
@@ -813,6 +917,15 @@ void JumpGrid::draw() {
   drawHeader();
   renderGrid();
   gfx::push(*panel_, 0, kListY, kW, kListH, true);
+}
+
+void JumpGrid::drawCell(int i) {
+  if (!up_ || !panel_ || i < 0 || i >= jump::kGridCells) return;
+  if (panelOwner_ != this) renderGrid();
+  renderCell(i);
+  const int x = kGridX + (i % 7) * kCellW + 2;
+  const int y = kGridY - kListY + (i / 7) * kCellH + 2;
+  gfx::pushRect(*panel_, x, y, kCellW - 4, kCellH - 4, x, kListY + y, true);
 }
 
 int JumpGrid::cellAt(const InputEvent& e) const {
@@ -826,17 +939,20 @@ int JumpGrid::onEvent(const InputEvent& e) {
   using T = InputEvent::Type;
   if (!up_) return -1;
   const bool onCross = e.y >= kHeaderY && e.y < kHeaderY + kHeaderH && e.inRightEdgeZone(250);
+  // Presses draw the cell (or the header's pill) alone: the whole grid
+  // rendered and pushed was 58 ms, twice a tap (MEASURED).
   if (e.type == T::Down) {
     const int c = onCross ? -2 : cellAt(e);
     pressed_ = c == -2 || (c >= 0 && enabled_[c]) ? c : -1;
-    if (pressed_ != -1) draw();
+    if (pressed_ == -2) drawHeader();
+    if (pressed_ >= 0) drawCell(pressed_);
     return -1;
   }
   if (e.type == T::DragStart || e.type == T::Cancel || e.type == T::Release) {
-    if (pressed_ != -1) {
-      pressed_ = -1;
-      draw();
-    }
+    const int was = pressed_;
+    pressed_ = -1;
+    if (was == -2) drawHeader();
+    if (was >= 0) drawCell(was);
     return -1;
   }
   if (e.type != T::Tap) return -1;
@@ -912,18 +1028,24 @@ void Dialog::render() {
       textfit::wrap(f.fit(Font::Small), body_, strlen(body_), kW - 32, maxLines, &lines[0][0], sizeof(lines[0]));
   for (int i = 0; i < nl; ++i) f.draw(s, Font::Small, lines[i], 16, 50 + i * 18, kW - 32, col::SOFT, col::CARD);
   if (status_[0]) f.draw(s, Font::Small, status_, 16, 50 + nl * 18 + 6, kW - 32, statusColour_, col::CARD);
+  panelOwner_ = this;
+  for (int i = 0; i < n_; ++i) renderButton(i);
+}
+
+void Dialog::renderButton(int i) {
+  M5Canvas& s = *panel_;
+  Fonts& f = Fonts::instance();
   const int bw = n_ == 1 ? kW - 24 : (kW - 30) / 2;
-  for (int i = 0; i < n_; ++i) {
-    const int x = 12 + i * (bw + 6);
-    const bool primary = i == n_ - 1;
-    const uint16_t b = i == pressed_ ? col::BTN_HI : primary ? (danger_ ? col::RED : accent_) : col::BTN;
-    s.fillRoundRect(x, kH - 46, bw, 36, 8, b);
-    // A label too wide for its button ("Play on speaker": 127 px of 123)
-    // in Small, not cut.
-    const Font font = f.fitting(primary ? Font::Bold : Font::Body, buttons_[i], bw - 8);
-    f.draw(s, font, buttons_[i], x + bw / 2, kH - 28, bw - 8,
-           primary && i != pressed_ ? col::DARK : col::TXT, b, Fonts::Align::Centre);
-  }
+  const int x = 12 + i * (bw + 6);
+  const bool primary = i == n_ - 1;
+  const uint16_t b = i == pressed_ ? col::BTN_HI : primary ? (danger_ ? col::RED : accent_) : col::BTN;
+  s.fillRect(x, kH - 46, bw, 36, col::CARD);  // (its corners, drawn again alone)
+  s.fillRoundRect(x, kH - 46, bw, 36, 8, b);
+  // A label too wide for its button ("Play on speaker": 127 px of 123)
+  // in Small, not cut.
+  const Font font = f.fitting(primary ? Font::Bold : Font::Body, buttons_[i], bw - 8);
+  f.draw(s, font, buttons_[i], x + bw / 2, kH - 28, bw - 8, primary && i != pressed_ ? col::DARK : col::TXT, b,
+         Fonts::Align::Centre);
 }
 
 void Dialog::draw() {
@@ -932,19 +1054,29 @@ void Dialog::draw() {
   gfx::push(*panel_, kX, kY, kW, kH, true);
 }
 
+void Dialog::drawButton(int i) {
+  if (!up_ || !panel_ || i < 0 || i >= n_) return;
+  if (panelOwner_ != this) render();
+  renderButton(i);
+  const int bw = n_ == 1 ? kW - 24 : (kW - 30) / 2;
+  const int x = 12 + i * (bw + 6);
+  gfx::pushRect(*panel_, x, kH - 46, bw, 36, kX + x, kY + kH - 46, true);
+}
+
 int Dialog::onEvent(const InputEvent& e) {
   using T = InputEvent::Type;
   if (!up_) return -1;
+  // Presses draw the button alone (the whole dialog was 44 ms, twice a
+  // tap: MEASURED).
   if (e.type == T::Down) {
     pressed_ = buttonAt(e.x, e.y);
-    if (pressed_ >= 0) draw();
+    if (pressed_ >= 0) drawButton(pressed_);
     return -1;
   }
   if (e.type == T::DragStart || e.type == T::Cancel || e.type == T::Release) {
-    if (pressed_ >= 0) {
-      pressed_ = -1;
-      draw();
-    }
+    const int was = pressed_;
+    pressed_ = -1;
+    if (was >= 0) drawButton(was);
     return -1;
   }
   if (e.type != T::Tap) return -1;
@@ -996,6 +1128,7 @@ void Coach::render() {
   M5Canvas& s = *panel_;
   Fonts& f = Fonts::instance();
   s.fillSprite(col::BG);
+  panelOwner_ = this;
   if (card_ == 0) {
     // The three red dots under the glass, and what each does (spec §4).
     // Every text fits its room (test_ui_library measures them).

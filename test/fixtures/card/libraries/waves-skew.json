@@ -1,0 +1,368 @@
+{
+ "format": "MPWF",
+ "file": "waves-skew.bin",
+ "generation": 9,
+ "cardId": "0x5EEDC0DE0A1B2C3D",
+ "note": "A search test (WAVEFORM-INDEX.md 13.4), hashes given, not paths: 40 rows from hash 0 up, one alone at 2^62, 8 rows up to 2^64 - 1. Hash 0 and hash 2^64 - 1 are valid in a slot: a reader's first bounds aren't slots. A lookup among the 40 creeps up one row a probe, four times, then bisects.",
+ "tracks": [
+  {
+   "hash": "0x0000000000000000",
+   "lengthMs": 0,
+   "peaks": [
+    0
+   ]
+  },
+  {
+   "hash": "0x0000000000000001",
+   "lengthMs": 1,
+   "peaks": [
+    1
+   ]
+  },
+  {
+   "hash": "0x0000000000000002",
+   "lengthMs": 2,
+   "peaks": [
+    2
+   ]
+  },
+  {
+   "hash": "0x0000000000000003",
+   "lengthMs": 3,
+   "peaks": [
+    3
+   ]
+  },
+  {
+   "hash": "0x0000000000000004",
+   "lengthMs": 4,
+   "peaks": [
+    4
+   ]
+  },
+  {
+   "hash": "0x0000000000000005",
+   "lengthMs": 5,
+   "peaks": [
+    5
+   ]
+  },
+  {
+   "hash": "0x0000000000000006",
+   "lengthMs": 6,
+   "peaks": [
+    6
+   ]
+  },
+  {
+   "hash": "0x0000000000000007",
+   "lengthMs": 7,
+   "peaks": [
+    7
+   ]
+  },
+  {
+   "hash": "0x0000000000000008",
+   "lengthMs": 8,
+   "peaks": [
+    8
+   ]
+  },
+  {
+   "hash": "0x0000000000000009",
+   "lengthMs": 9,
+   "peaks": [
+    9
+   ]
+  },
+  {
+   "hash": "0x000000000000000A",
+   "lengthMs": 10,
+   "peaks": [
+    10
+   ]
+  },
+  {
+   "hash": "0x000000000000000B",
+   "lengthMs": 11,
+   "peaks": [
+    11
+   ]
+  },
+  {
+   "hash": "0x000000000000000C",
+   "lengthMs": 12,
+   "peaks": [
+    12
+   ]
+  },
+  {
+   "hash": "0x000000000000000D",
+   "lengthMs": 13,
+   "peaks": [
+    13
+   ]
+  },
+  {
+   "hash": "0x000000000000000E",
+   "lengthMs": 14,
+   "peaks": [
+    14
+   ]
+  },
+  {
+   "hash": "0x000000000000000F",
+   "lengthMs": 15,
+   "peaks": [
+    15
+   ]
+  },
+  {
+   "hash": "0x0000000000000010",
+   "lengthMs": 16,
+   "peaks": [
+    16
+   ]
+  },
+  {
+   "hash": "0x0000000000000011",
+   "lengthMs": 17,
+   "peaks": [
+    17
+   ]
+  },
+  {
+   "hash": "0x0000000000000012",
+   "lengthMs": 18,
+   "peaks": [
+    18
+   ]
+  },
+  {
+   "hash": "0x0000000000000013",
+   "lengthMs": 19,
+   "peaks": [
+    19
+   ]
+  },
+  {
+   "hash": "0x0000000000000014",
+   "lengthMs": 20,
+   "peaks": [
+    20
+   ]
+  },
+  {
+   "hash": "0x0000000000000015",
+   "lengthMs": 21,
+   "peaks": [
+    21
+   ]
+  },
+  {
+   "hash": "0x0000000000000016",
+   "lengthMs": 22,
+   "peaks": [
+    22
+   ]
+  },
+  {
+   "hash": "0x0000000000000017",
+   "lengthMs": 23,
+   "peaks": [
+    23
+   ]
+  },
+  {
+   "hash": "0x0000000000000018",
+   "lengthMs": 24,
+   "peaks": [
+    24
+   ]
+  },
+  {
+   "hash": "0x0000000000000019",
+   "lengthMs": 25,
+   "peaks": [
+    25
+   ]
+  },
+  {
+   "hash": "0x000000000000001A",
+   "lengthMs": 26,
+   "peaks": [
+    26
+   ]
+  },
+  {
+   "hash": "0x000000000000001B",
+   "lengthMs": 27,
+   "peaks": [
+    27
+   ]
+  },
+  {
+   "hash": "0x000000000000001C",
+   "lengthMs": 28,
+   "peaks": [
+    28
+   ]
+  },
+  {
+   "hash": "0x000000000000001D",
+   "lengthMs": 29,
+   "peaks": [
+    29
+   ]
+  },
+  {
+   "hash": "0x000000000000001E",
+   "lengthMs": 30,
+   "peaks": [
+    30
+   ]
+  },
+  {
+   "hash": "0x000000000000001F",
+   "lengthMs": 31,
+   "peaks": [
+    31
+   ]
+  },
+  {
+   "hash": "0x0000000000000020",
+   "lengthMs": 32,
+   "peaks": [
+    32
+   ]
+  },
+  {
+   "hash": "0x0000000000000021",
+   "lengthMs": 33,
+   "peaks": [
+    33
+   ]
+  },
+  {
+   "hash": "0x0000000000000022",
+   "lengthMs": 34,
+   "peaks": [
+    34
+   ]
+  },
+  {
+   "hash": "0x0000000000000023",
+   "lengthMs": 35,
+   "peaks": [
+    35
+   ]
+  },
+  {
+   "hash": "0x0000000000000024",
+   "lengthMs": 36,
+   "peaks": [
+    36
+   ]
+  },
+  {
+   "hash": "0x0000000000000025",
+   "lengthMs": 37,
+   "peaks": [
+    37
+   ]
+  },
+  {
+   "hash": "0x0000000000000026",
+   "lengthMs": 38,
+   "peaks": [
+    38
+   ]
+  },
+  {
+   "hash": "0x0000000000000027",
+   "lengthMs": 39,
+   "peaks": [
+    39
+   ]
+  },
+  {
+   "hash": "0x4000000000000000",
+   "lengthMs": 500,
+   "peaks": [
+    100
+   ]
+  },
+  {
+   "hash": "0xFFFFFFFFFFFFFFFF",
+   "lengthMs": 1000,
+   "peaks": [
+    200
+   ]
+  },
+  {
+   "hash": "0xFFFFFFFFFFFFFFFE",
+   "lengthMs": 1001,
+   "peaks": [
+    201
+   ]
+  },
+  {
+   "hash": "0xFFFFFFFFFFFFFFFD",
+   "lengthMs": 1002,
+   "peaks": [
+    202
+   ]
+  },
+  {
+   "hash": "0xFFFFFFFFFFFFFFFC",
+   "lengthMs": 1003,
+   "peaks": [
+    203
+   ]
+  },
+  {
+   "hash": "0xFFFFFFFFFFFFFFFB",
+   "lengthMs": 1004,
+   "peaks": [
+    204
+   ]
+  },
+  {
+   "hash": "0xFFFFFFFFFFFFFFFA",
+   "lengthMs": 1005,
+   "peaks": [
+    205
+   ]
+  },
+  {
+   "hash": "0xFFFFFFFFFFFFFFF9",
+   "lengthMs": 1006,
+   "peaks": [
+    206
+   ]
+  },
+  {
+   "hash": "0xFFFFFFFFFFFFFFF8",
+   "lengthMs": 1007,
+   "peaks": [
+    207
+   ]
+  },
+  {
+   "hash": "0x8000000000000000",
+   "lengthMs": 5,
+   "peaks": [
+    5
+   ],
+   "note": "two tracks share this hash: both are left out, and the hash misses"
+  },
+  {
+   "hash": "0x8000000000000000",
+   "lengthMs": 5,
+   "peaks": [
+    5
+   ],
+   "note": "two tracks share this hash: both are left out, and the hash misses"
+  }
+ ]
+}

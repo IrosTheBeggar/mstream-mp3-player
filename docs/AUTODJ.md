@@ -693,7 +693,9 @@ root again into its own copy (never the library's) and compares the index
 entry:
 
 - **The same index:** the file reopened; the maps and the session kept; the
-  damaged ring cleared. A join under way starts again.
+  damaged ring cleared. A join under way starts again. A reopen the card fails
+  goes by 6.6's tries: the maps go, the session stays, and the join follows the
+  try that opens it.
 - **Another one, one now, or none now:** closed, opened, and, while Auto
   DJ is on, joined again and a new session (`Dc` starts one on or off).
 - No PSRAM for the root: the index closed until the next remount, its
@@ -717,7 +719,8 @@ opened in 2.8 ms", a new session ("another index on the card"), joined
 | An index of a major this build doesn't read | Picks by id | No Auto DJ index on this card |
 | The file failed its checks (frame, header, the root's entry; a section in the join) | Absent until a remount or the next boot: picks by id | The Auto DJ index failed its checks |
 | A broken slot (3.13) | Random picks over the index's rows until a remount or the next boot | The Auto DJ index failed its checks |
-| The file didn't open, a read failed, no PSRAM for the root after a remount | Absent until a remount or the next boot: picks by id | Can't read the Auto DJ index |
+| The file the root names isn't on the card (FatFs's FR_NO_FILE or FR_NO_PATH), no PSRAM for the root after a remount | Absent until a remount or the next boot: picks by id | Can't read the Auto DJ index |
+| Opening it, the card failed: a read, the volume's lock, or no PSRAM for its FIL | Picks by id; tried again after 2 s, then 10 s, then 30 s, the session kept; the last failing too, as the row above | Reading the Auto DJ index…, then Can't read the Auto DJ index |
 | A library over 65,534 tracks | Not joined | Too many tracks for the Auto DJ index |
 | No PSRAM for the join | Picks by id until the next library build, or until Auto DJ is switched off and on | Not enough memory for the Auto DJ index |
 | A read failed during the join | Picks by id; joined again 10 s later | Reading the Auto DJ index… |
@@ -725,6 +728,18 @@ opened in 2.8 ms", a new session ("another index on the card"), joined
 
 The status's second line is "picks are random" under each reason but
 "Reading" and the last.
+
+A fault of the card says nothing of the file. A read that gets no answer marks
+the card failed, so FatFs mounts the volume again at its next call once the card
+answers, and that remount reopens the file. A read that fails any other way (a
+select timeout, an R1 error, no data token, a CRC mismatch) sets nothing, so
+until 2026-11-02 one such glitch in the boot's open left picks by id for the
+session. The tries (`lib/core/AutoDjOpen.h`,
+test_autodj_open) are on the loop task, as the open is: a card that doesn't
+answer costs about a second of the driver's retries each (ESTIMATED), so there
+are few, the first soon, since most faults are a glitch. None starts before the
+UI's first frame, while a list moves, while the card is held or behind the
+update's fence. A remount or `Dc` counts from the first try again.
 
 ---
 
@@ -957,7 +972,8 @@ going"):
     key {n}%" (the mapped tracks' coverage);
   - Auto DJ off: "Auto DJ index: {n} tracks" over "read when Auto DJ is
     switched on";
-  - joining: "Reading the Auto DJ index…";
+  - joining, or a try at opening the file due (6.6), on or off: "Reading the
+    Auto DJ index…";
   - no index, or none usable: why (6.6) over "picks are random";
   - held: "Waiting: Repeat One is on", "Waiting: sleep timer set to End of
     queue" or "Paused: tracks failed to play", over the index's first line.
@@ -1087,7 +1103,7 @@ output or the volume; scripts drive them in silent test mode (`z`).
 | `Dp` | One pick appended now, whatever the trigger says (cued at a finished queue); its line, then the anchors and the pin. Refused behind the fence |
 | `Dn<k>` | k dry-run picks (1-2,000) on a copy of the session, each treated as played (the next follows it); a read ahead first when one is due, as the loop does. The live session is untouched. A summary: picks, dry, loosened, random, by id, repeats, artists, breaks, drawn statuses, reads, the time's p50 / p90 / max, the classes |
 | `Dj` | The join again from its start (its time and memory). Refused while Auto DJ is off |
-| `Dc` | The file closed and opened again, as a remount that found another index (a new session) |
+| `Dc` | The file closed and opened again, as a remount that found another index (a new session, and 6.6's tries from the first) |
 | `Db<n>` | The bench: n slot reads of random rows (1-5,000), the raw read timed apart from its check; p50 / p90 / max, a histogram, the check's mean and max |
 | `Dh` / `Dh<id>` | "Auto DJ from here" on the current entry's track, or on library track `<id>`. Refused behind the fence |
 | `De` | The empty states' Auto DJ button. Refused behind the fence |
@@ -1134,6 +1150,7 @@ output or the volume; scripts drive them in silent test mode (`z`).
 | `lib/core/AutoDjDriver.h/.cpp` | The loop pass: sessions, steering, the trigger, the pick, the read ahead, the DJ marks across a read-back, the dry run |
 | `lib/core/AutoDjCommand.h/.cpp` | The `D` command's parser |
 | `lib/core/AutoDjView.h/.cpp` | What the UI shows and says |
+| `lib/core/AutoDjOpen.h` | What a failed open of the index comes to: the card's fault tried again (6.6) |
 | `lib/core/CardAutoDj.h/.cpp` | The MPDJ v2 reader (`Table`, `slot()`, `rowOf()`) and a writer for the host tests |
 | `lib/core/QueueModel`, `PlaybackController`, `QueueSaver`, `LibraryUpdate`, `NvsLayout`, `QueueView`, `CardRoot`, `CardContract` | The hooks: the quiet append and the play epoch; `addFromAutoDj()`, `endedAtEnd()`, the cue, `naturalEnds()`; `queue.txt`'s snapshot writes; `autoDjOwed` and the give-back; schema 4; the marks' ring and the badge rule; the root's index entry; `read.mpdj=2` |
 | `src/app/AutoDj.h/.cpp` | The glue: the open file, the join's slices, remounts, the fence, the settings, the console, the UI's view and news |
@@ -1175,6 +1192,7 @@ files.
 | `test_autodj_join` | The goldens and the hardening files, written files, strides and CRCs, every slice boundary with a fence or a changed index, no memory, the library limit, a FAT model, memory at scale; the folders' hash against `trackPathHash()` (every spelling of the root, paths of 509-513 B, a folder too long, depths 31-35); the placement's order, and in a model of ESP-IDF's TLSF heap: free never under the margin (30 heap shapes and margins), the give-back leaving Auto DJ off's largest block, and a library update (the real `LibraryIndex` and `LibraryBuilder` at 19,412 tracks, main.cpp's order of frees and blocks) with Auto DJ off and on |
 | `test_autodj_trigger` | Every condition, the first that fails, the finished queue, the holds, `owed` only while joining, the failure pause |
 | `test_autodj_driver` | Sessions, steering, the cue, the marks across a read-back, refused and removed picks, the holds, the failure pause, the index arriving late, the seed before the join, the button's lookups, the refill wait, the dry run, the `D` parser; a quick skip's reason (before the join too); the Undo of "Auto DJ from here" and the button from a playing, paused, stopped, cued and empty queue, Auto DJ on and off before the tap; a slot whose CRC fails on the read ahead and again at the pick, named by that pick's pass once |
+| `test_autodj_open` | What a failed open comes to: the tries, their waits, a remount's new count; over the real reader, a read that fails is always the card's fault and a bad file never is |
 | `test_ui_autodj` | The row's state, the Output line and its fallback, the dim rows, the strictness steps, the status lines, the empty-state button, the toasts' rules |
 | `test_card_autodj` | The MPDJ v2 slots, header and selection |
 | `test_queue` | The quiet append (the listener's undo kept, its rank in the snapshot, at the cap), the play epoch, the snapshot writes under an hour of appends |
@@ -1303,12 +1321,13 @@ in 14.2.
 | 5 | **Soak.** Auto DJ on, the stubs, 2 hours, the queue reaching its 5,000 cap | No reset, no underrun; a word at every start; no row again within 50 picks; the cap pushing out the oldest; PSRAM and internal lows flat once the queue stops growing; the loop stack's low-water mark. **`queue.txt` keeps up:** `q`'s write count rises by at least 8 every 5 minutes (a write at least every ~35 s), most from a snapshot; a write's dip at most about 20 KB; after a pause, written within about 6 s, and a reboot restores at the paused entry. Live picks p90 at most 2 ms | **Pass, except two.** 7,520 picks, no reset, 0 underruns, 7,521 gapless joins with 0 cuts, all class 0, the closest repeat 51 apart, the cap at 79.5 min. **`queue.txt` failed:** no write for the last 59.5 min. PSRAM's low fell 446 → 400 KB with the queue's growth, then flat 54 min (partial). Live picks p90 8.4 ms (as check 3) |
 | 6 | **Fence.** `gb` during a session with the MP3 playing, then `n` right after "joined", three times; `gb` during the boot's join | The freed bytes equal the join's; `D` says the fence; the session and the marks kept; the last entry still gets its pick; the rejoin's time with the MP3 and the screen dark against 2026-10-15's 5.9-6.2 s (7.3); each rejoin's "PSRAM free at least" at least 65,536 B (2026-10-15: 177,388 B) and its blocks mostly in the rebuild's holes ("77640 B at the top of the largest free one, 2 of 3 kept and 7 transient blocks in smaller ones"), "PSRAM's largest free block now" about 80 KB under Auto DJ off's after a rebuild, not 175 KB (2026-10-14: 180,212 B; 2026-10-15: 73,728 B under; the model: 429,520 B against 510,608 B): `D0` and `D` ("the join given back", then the free and the largest block), `gb` with Auto DJ off and `D` again measure off's (also `main`'s own fragmentation: 7.4); the pick after `n` lands after the new track has 500 ms buffered, 0 reads, the usual time; "waited for a refill" +1 a skip. During the boot's join: aborted, one join after, no crash | **Pass,** with two findings since fixed: the rejoin took 7.2 s with the MP3 (4.6 s paused), and the first pick after it took 108.52 ms (the decoder's refill) |
 | 7 | **Card.** (a) Pull and reinsert mid-session, paused. (b) The index replaced on a PC (`synthtransfer.py --replace`, a new generation), reinserted while running. (c) A first boot with Auto DJ on of a card with new files the records don't have | (a) "the same index: the file reopened, the maps and the session kept"; picks go on, at most 2 reads; damaged 0. (b) The new generation opened "after a remount", a new session ("another index on the card"), joined again, picks go on. (c) No "the update step waits for the next boot (the track table …)"; if the give-back line comes, the largest block grows to about its "up to N B" (the join's bytes at that block's top; free bytes next to them join it too: 9,576 B more on 2026-10-16); after the build "the join again" and "joined" | **Not run** (the card had to move). In 2026-10-13's first boot, the 155 KB join was resident when a library update deferred to the next boot for its track table's block: the give-back answers that |
-| 8 | **Bad files.** (a) One slot's bytes changed so its CRC fails. (b) One slot rewritten with a bad list under a good CRC. (c) No index: the file renamed; and a card with no transfer data | (a) "its CRC failed (read again later)", then "DAMAGED …" for each row that `D` counts as damaged (the read ahead's line, or "read at the pick, row R: DAMAGED …", 3.13); picks go on; `D` damaged ≥ 1; the file stays in use. (b) "… BROKEN, picks at random …" once; then `[random]` picks; `D`'s index line says BROKEN; a remount clears it. (c) "ABSENT (the file the root names didn't open …)", picks `[by track id: no index]`, the page "Can't read the Auto DJ index", the settings dim, the empty states show Shuffle all, `De` plays nothing; with no transfer data, "No Auto DJ index on this card", and the toast once | **Not run.** (a) and (b) need a tool to change a slot (13) |
+| 8 | **Bad files.** (a) One slot's bytes changed so its CRC fails. (b) One slot rewritten with a bad list under a good CRC. (c) No index: the file renamed; and a card with no transfer data | (a) "its CRC failed (read again later)", then "DAMAGED …" for each row that `D` counts as damaged (the read ahead's line, or "read at the pick, row R: DAMAGED …", 3.13); picks go on; `D` damaged ≥ 1; the file stays in use. (b) "… BROKEN, picks at random …" once; then `[random]` picks; `D`'s index line says BROKEN; a remount clears it. (c) "ABSENT (the file the root names isn't on the card …)", picks `[by track id: no index]`, the page "Can't read the Auto DJ index", the settings dim, the empty states show Shuffle all, `De` plays nothing; with no transfer data, "No Auto DJ index on this card", and the toast once | **Not run.** (a) and (b) need a tool to change a slot (13) |
 | 9 | **A finished queue.** An album ends with Auto DJ off; `D1`. Then the sleep timer's End of queue | A pick cued, paused at 0:00; nothing starts; Play starts it and the next pick follows; the toast. While the timer runs, no pick and `D` names it; after its stop, a pick cued | **Pass** (3 cued picks, none started by itself) |
 | 10 | **UI.** Screenshots (`X`) in all ten languages | The "..." sheet in each state (On, Off, Waiting, Paused); Output's row line, with the Anchor and the state-only fallback; the Auto DJ page live, dim (Match strictness's value shown in every language: beside its title, or under it in de, es, it and pt: 9.2), and each status; the Queue's marks; both empty states with the Auto DJ button and with Shuffle all; the long-press sheet with "Auto DJ from here" first; the toasts, waiting behind an Undo toast, the two-line ones (ja and zh most: "Auto DJ from here", the empty states' button, no neighbours; ru's no neighbours) with their lines apart, a clear row between them, and inside the card (most ja and zh ones, and some Latin ones such as "Auto DJ from here: Burning Memory", in the card's 36 rows, y 36-71: their look accepted or not; two 17-row CJK lines, zh "正在等待耳机" over a title with 青 or 机, without the card's top and bottom lines but with its sides and corners); Undo switching Auto DJ off; a Library Play's Undo over a queue paused on Auto DJ's cued pick leaving it paused (`[ui] undo: done`, `[queue] now at … (paused)`, no pick after), over a stopped one, stopped, over a playing one, the old entry playing from 0:00; "Auto DJ from here" over a paused queue, then Undo: paused, and Auto DJ off again if the tap switched it on. The user's real-finger taps | **Not run** (no UI then) |
 | 11 | **Memory at 20k.** The running lowest PSRAM over 2 minutes of the MP3, Auto DJ off, then on and joined | On is about 155 KB lower than off (the join), read from psram= or `D` (pmin= keeps the join's moment, now at least 64 KB: 7.4); the engine's 19 KB is held either way | **Couldn't tell:** the build joined at boot either way (pmin 547 KB idle and with an MP3, 459 KB with a FLAC, in both). Resident 177,814 B, against the design's 180 KB |
 | 12 | **The Auto DJ button with Auto DJ off.** `D0`, `qx`, `De`; again in Stay on seed | At most 8 lookups (1 expected) in at most about 50 ms; playback at once; "joined" 1.5-2.5 s later; the first pick after it (a `D` before it shows "owed"). Stay on seed: `D`'s pin is the seed's row after the join | New since 2026-10-13 |
 | 13 | **Settings across a reboot.** Change each, reboot | Each comes back "(saved)"; the boot starts its own session | **Pass** |
+| 14a | **A card that fails the open.** Paused, the card pulled, `Dc` (FatFs answers FR_NOT_READY) | "the card failed opening it (FatFs's answer 3 …): again in 2 s, 1 of 3"; `D` says "1 of 3"; the page says Reading the Auto DJ index…; about 42 s later "ABSENT (the card failed every try at it: io)" and Can't read the Auto DJ index. The card back and a play: "(after a remount)", the join |
 | 14 | **The user's own card** (no transfer data) | No index: the toast once, the page's status, Shuffle all on the empty states; Auto DJ adds random library tracks | New since 2026-10-13 |
 
 After the checks, the device and the card are put back as the release

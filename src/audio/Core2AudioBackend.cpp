@@ -591,6 +591,7 @@ void Core2AudioBackend::loop(uint32_t nowMs) {
 
   stats_.bufferedMs = bufferedMsNow();
   stats_.underruns = shared_.underruns;
+  stats_.breaks = shared_.breaks;
   // Producing (decode and convert) against the audio produced, in ring frames.
   const uint64_t frames = producedFrames_.load();
   const uint64_t busyUs = busyUs_.load();

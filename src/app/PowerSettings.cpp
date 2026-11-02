@@ -5,6 +5,7 @@
 
 #include <Preferences.h>
 
+#include "app/NvsLater.h"
 #include "audio/BtSink.h"
 #include "ui/LcdLock.h"
 
@@ -113,6 +114,7 @@ bool PowerSettings::takeBootNote(char* buf, size_t size) {
 }
 
 void PowerSettings::restart() {
+  nvslater::flushNow();  // a setting changed moments ago, still queued
   Serial.flush();
   // The panel shares SPI with the card: nothing half-sent to either (the
   // lock is never released: nothing else runs after this).
@@ -126,15 +128,12 @@ void PowerSettings::setBt(int choice, BtSink& bt) {
   const int before = btChoice_;
   btChoice_ = pc::btChoiceFromStored(choice);
   ++btChanges_;
-  Preferences p;
-  if (p.begin(kPrefs, false)) {
-    p.putUChar(kKeyBt, static_cast<uint8_t>(btChoice_));
-    p.end();
-  }
+  // Queued: written once the taps rest (app/NvsLater), not under the finger.
+  nvslater::putU8(kPrefs, kKeyBt, static_cast<uint8_t>(btChoice_));
   char range[16];
   pc::btRangeText(btChoice_, range, sizeof(range));
-  Serial.printf("[power] bluetooth power: %s -> %s (%s, saved)\n", pc::btLabel(before), pc::btLabel(btChoice_),
-                range);
+  Serial.printf("[power] bluetooth power: %s -> %s (%s, saved once the taps rest)\n", pc::btLabel(before),
+                pc::btLabel(btChoice_), range);
   const pc::TxLevels l = pc::btLevels(btChoice_);
   bt.setTxPower(l.min, l.max);  // (its line says when it applies)
 }

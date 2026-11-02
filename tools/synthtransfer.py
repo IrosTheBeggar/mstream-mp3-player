@@ -16,7 +16,9 @@ writes, into the card's /.mstream only:
 - autodj-<g>.bin: an AutoDJ index (MPDJ v2, docs/AUTODJ-INDEX.md), either
   --synthetic (below) or --mpdj FILE (a file built elsewhere for this tree,
   restamped to this commit);
-- manifest.bin: the root (MSMF, 2.5) naming both, generation g, written
+- waves-<g>.bin, with --waves: a waveform index (MPWF v1, docs/WAVEFORM-
+  INDEX.md) of made-up shapes (below);
+- manifest.bin: the root (MSMF, 2.5) naming them, generation g, written
   last, through manifest.tmp (the commit order of 2.12.1 and AUTODJ-INDEX.md
   7.2): a cut before the rename leaves no root, or the old one.
 
@@ -25,10 +27,15 @@ It never formats anything and never writes or deletes anything outside
 which then commits the next generation (the card's id kept) and, after the
 new root is in place, deletes only the contract's files the new root
 doesn't name (manifest.tmp, pending.bin and .tmp, tags-*.bin,
-autodj-*.bin); thumbs/, stage/ and private files stay. --replace takes
-only a /.mstream this tool wrote (its root's producer): one another
-program wrote (a transfer's, whose tags file, index and plan would go), or
-contract files with no root, are refused unless --replace-foreign.
+autodj-*.bin, waves-*.bin); thumbs/, stage/ and resume/ stay, and so do the
+software's private files (state.json, resume.json, run.lock, their .new, any
+other name: METADATA 2.12.7, 2.12.8), whose names never match a contract
+file's. --replace takes only a /.mstream this tool wrote (its root's
+producer): one another program wrote (a transfer's, whose tags file,
+index and plan would go), contract files with no root, or a run.lock (a
+transfer may be writing the card, or one was cut: 2.12.7) are refused
+unless --replace-foreign, which still leaves the run.lock and the private
+files alone.
 
 It is a test card's index, not a transfer's: DJRF's BPM, key and artist
 keys are synthesized here (as if the records carried mStream's analysis),
@@ -37,8 +44,8 @@ the real transfer software follows METADATA 2.13.2.
 
 Usage:
 
-    python tools/synthtransfer.py --add-to CARD --synthetic [--seed S] [--dry-run]
-    python tools/synthtransfer.py --add-to CARD --mpdj FILE [--dry-run]
+    python tools/synthtransfer.py --add-to CARD --synthetic [--seed S] [--waves] [--dry-run]
+    python tools/synthtransfer.py --add-to CARD --mpdj FILE [--waves] [--dry-run]
     python tools/synthtransfer.py --check CARD
 
 CARD is a card's root (E:\\) or a folder holding a card tree (synthcard's
@@ -76,19 +83,33 @@ rewritten to this commit's and the header CRC made again (7.3's case with
 the same signature and the same DJRF, DJPH and STRS: tools/mpdj.py
 restamp's output, without its description).
 
+--waves adds a waveform index of made-up shapes to either, deterministic
+from --seed: one slot a track (a seeded --unshaped percent, default 1, left
+without one, as tracks the server has no peaks for). A track's 800 peaks are
+keyed by its path: sections of a song at their own levels, with a fade at
+each end; a few tracks are loud masters, near 255 throughout, and a few are
+silent. tools/mpwf.py makes the bars and the file from them, by the rule a
+transfer follows. lengthMs is the track's ms in synthcard-files.jsonl
+(CARD's, or --tags FILE: a copy with a track's ms changed gives a length
+that disagrees), or 0, unknown, for a track it doesn't list. Like the index,
+it is written whatever /.player/device.txt says. About 15 s for synthcard.py's
+default tree, standard library only.
+
 --dry-run builds and checks everything in memory and prints what it would
 write; nothing is written. --check reads a card's /.mstream back as the
-boot does (a Python mirror of cardroot::read and Auto DJ's open: the
-election, the root, T, the MPDJ entry, mpdj.py's check) and says how many
-of the card's tracks map to a row; exit 1 when there is no usable index.
+boot does (a Python mirror of cardroot::read, then Auto DJ's open and the
+waves job's: the election, the root, T, the MPDJ entry, mpdj.py's check, the
+MPWF entry, mpwf.py's check) and says how many of the card's tracks map to a
+row and how many have a shape; exit 1 when there is no usable index, or the
+root names a waveform index that doesn't read.
 
 The first boot after a new root rebuilds the library (the commit identity
 changed, Library.cpp) before the UI.
 
 Its tests: python -m unittest discover -s tools -p "test_synthtransfer.py"
 (the lists against tools/mpdj.py's rule; the files read back by the
-firmware's own readers on the host, cardroot::read and mpdj::Table, built
-with g++ when there is one; the refusals).
+firmware's own readers on the host, cardroot::read, mpdj::Table and
+mpwf::Table, built with g++ when there is one; the refusals).
 """
 import argparse
 import bisect
@@ -106,6 +127,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import card_fixtures as cf  # noqa: E402  (mptg, msmf_raw, comp_row, build_field: docs/METADATA.md 2.17)
 import mpdj  # noqa: E402  (prepare, write, check, encode_slot: docs/AUTODJ-INDEX.md)
+import mpwf  # noqa: E402  (build, Reader, companion_matches: docs/WAVEFORM-INDEX.md)
 import synthcard  # noqa: E402  (long_path, DriveProbe)
 
 PRODUCER = "mstream-mp3-player tools/synthtransfer.py 1"
@@ -115,9 +137,12 @@ MAX_REL = 255 - len("/music/")  # a track's path below /music, in bytes (CardCon
 TAGS_JSONL = "synthcard-files.jsonl"
 MSTREAM = ".mstream"
 FINAL = 1                      # the root's flags: this commit ended a run
-CONTRACT = re.compile(r"^(manifest\.(bin|tmp)|pending\.(bin|tmp)|tags-[0-9a-f]{8}\.bin|autodj-[0-9a-f]{8}\.bin)$",
+# The contract's own files at /.mstream's top (2.2): a private file's name
+# never matches one (2.12.7; card_fixtures.private_name), so --replace keeps
+# them.
+CONTRACT = re.compile(r"^(manifest\.(bin|tmp)|pending\.(bin|tmp)|(tags|autodj|waves)-[0-9a-f]{8}\.bin)$",
                       re.IGNORECASE)
-GENERATION_NAME = re.compile(r"^(tags|autodj)-([0-9a-f]{8})\.bin$", re.IGNORECASE)
+GENERATION_NAME = re.compile(r"^(tags|autodj|waves)-([0-9a-f]{8})\.bin$", re.IGNORECASE)
 
 # The synthetic index's strings (AUTODJ-INDEX.md 4.1): made-up vectors, CC0.
 STRINGS = {"modelId": "synthetic-embedding", "modelVersion": "1", "metric": "cosine", "license": "CC0-1.0",
@@ -127,6 +152,9 @@ WEIGHTS = (1.0, 0.9, 0.5, 0.85)              # the genre axis, the artist, the a
 GENRE_TEMPOS = (72, 84, 92, 98, 105, 112, 120, 124, 128, 132, 140, 150, 160, 172)
 PC_PRIOR = (1.0, 0.45, 0.85, 0.4, 0.7, 0.7, 0.4, 1.0, 0.45, 0.9, 0.55, 0.45)  # C to B
 NO_BPM, NO_KEY, HOME_KEY, OCTAVE = 0.05, 0.05, 0.35, 0.06
+# The synthetic waveform index's shapes.
+SERVER_PEAKS = 800                           # what the server's route gives a track (WAVEFORM-INDEX.md 5)
+SILENT, MASTERED = 0.02, 0.15                # shares of the tracks: all zero; a loud master, near 255 throughout
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -200,17 +228,24 @@ def record_values(tags):
     return (title.decode("utf-8") if title else None), (artists.decode("utf-8").split("\x1f") if artists else [])
 
 
-def read_tags(path):
-    """{rel: (title, artists)} from a synthcard-files.jsonl."""
-    out = {}
+def jsonl_rows(path):
+    """(rel, row) for each line of a synthcard-files.jsonl."""
     with open(path, encoding="utf-8") as fh:
         for line in fh:
             if not line.strip():
                 continue
             j = json.loads(line)
-            rel = j["path"][len("music/"):] if j["path"].startswith("music/") else j["path"]
-            out[rel] = record_values(j.get("tags") or {})
-    return out
+            yield (j["path"][len("music/"):] if j["path"].startswith("music/") else j["path"]), j
+
+
+def read_tags(path):
+    """{rel: (title, artists)} from a synthcard-files.jsonl."""
+    return {rel: record_values(j.get("tags") or {}) for rel, j in jsonl_rows(path)}
+
+
+def read_lengths(path):
+    """{rel: length in ms} from a synthcard-files.jsonl."""
+    return {rel: j["ms"] for rel, j in jsonl_rows(path) if j.get("ms")}
 
 
 def synthcard_line(card):
@@ -478,6 +513,62 @@ def synthetic_index(tracks, tags, seed, generation, card_id, built_time, k=mpdj.
 
 
 # ---------------------------------------------------------------------------
+# The synthetic waveform index (--waves)
+# ---------------------------------------------------------------------------
+def shape_peaks(r):
+    """A track's made-up peaks, the server's M = 800 of them, from its stream.
+    Sections of a song, each at its own level and noisy from peak to peak,
+    with a fade at each end. Some are silent (a silent track has a slot,
+    WAVEFORM-INDEX.md 4.3), and some are loud masters, near 255 throughout:
+    the brick a reader's stretch is there for (11)."""
+    kind = r.u()
+    if kind < SILENT:
+        return [0] * SERVER_PEAKS
+    if kind < SILENT + MASTERED:
+        gain, low, grain = 1.0, 0.93, 0.03
+    else:
+        gain, low, grain = 0.6 + 0.4 * r.u(), 0.15 + 0.35 * r.u(), 0.4
+    fade_in, fade_out = 1 + int(r.u() * 40), 1 + int(r.u() * 100)
+    peaks, left, level = [], 0, 0.0
+    for j in range(SERVER_PEAKS):
+        if left == 0:
+            left, level = 30 + int(r.u() * 170), gain * (low + (1.0 - low) * r.u())
+        left -= 1
+        v = 255.0 * level * (1.0 - grain * r.u())
+        if j < fade_in:
+            v *= (j + 1) / fade_in
+        elif SERVER_PEAKS - j <= fade_out:
+            v *= (SERVER_PEAKS - j) / fade_out
+        peaks.append(int(v + 0.5))
+    return peaks
+
+
+def synthetic_waves(tracks, lengths, seed, generation, card_id, unshaped=1.0):
+    """(the MPWF file's bytes, stats): a slot for each track but a seeded
+    `unshaped` percent, its lengthMs from `lengths` ({rel: ms}, 0 for a track
+    it doesn't list)."""
+    t0 = time.time()
+    stats = {"tracks": len(tracks), "unshaped": 0, "timed": 0}
+
+    def rows():
+        for rel in tracks:
+            r = Rng(seed, "track-shape", rel)
+            if r.u() * 100.0 < unshaped:
+                stats["unshaped"] += 1
+                continue
+            ms = lengths.get(rel, 0)
+            stats["timed"] += ms > 0
+            yield {"path": rel, "lengthMs": ms, "peaks": shape_peaks(r)}
+    try:
+        data = mpwf.build({"format": "MPWF", "generation": generation, "cardId": card_id, "tracks": rows()})
+    except mpwf.WriterError as e:
+        raise Refused("the waveform index: %s" % e)
+    stats["rows"] = mpwf.Reader(data).rows
+    stats["seconds"] = round(time.time() - t0, 1)
+    return data, stats
+
+
+# ---------------------------------------------------------------------------
 # A given index (--mpdj)
 # ---------------------------------------------------------------------------
 def restamp_header(data, generation, card_id, tags_generation):
@@ -534,13 +625,15 @@ def tags_file(generation, card_id):
                     "readRules": 1, "producer": PRODUCER, "records": []})
 
 
-def root_file(generation, card_id, base, commit_time, tags, autodj):
-    """The root naming T and the index (no LIBR: /music is the only root)."""
+def root_file(generation, card_id, base, commit_time, tags, autodj, waves=None):
+    """The root naming T, the index and the waveform index, in that order (no
+    LIBR: /music is the only root)."""
     rows = [cf.comp_row(cf.companion_name("MPTG", generation), tags)]
-    if autodj is not None:
-        rows.append(cf.comp_row(cf.companion_name("MPDJ", struct.unpack_from("<I", autodj, 20)[0]), autodj))
+    for kind, companion in (("MPDJ", autodj), ("MPWF", waves)):
+        if companion is not None:
+            rows.append(cf.comp_row(cf.companion_name(kind, struct.unpack_from("<I", companion, 20)[0]), companion))
     h = hashlib.sha256(b"synthtransfer commit\0" + struct.pack("<IQI", generation, card_id, commit_time) + tags +
-                       (autodj or b""))
+                       (autodj or b"") + (waves or b""))
     desc = {"generation": generation, "cardId": card_id, "commitTime": commit_time, "flags": FINAL,
             "commitId": int.from_bytes(h.digest()[:8], "little"), "producer": PRODUCER, "serverRevision": "",
             "baseGeneration": base, "serverUrlKey": 0}
@@ -553,7 +646,8 @@ def default_card_id(seed):
 
 # ---------------------------------------------------------------------------
 # Reading it back: a Python mirror of the boot's checks (cardroot::read,
-# then Auto DJ's open: mpdj::Table::open and msmf::companionMatches)
+# then Auto DJ's open: mpdj::Table::open and msmf::companionMatches; the
+# waves job's: mpwf::Table::open and the same)
 # ---------------------------------------------------------------------------
 COMMON = struct.Struct("<4sHHIIIIQII")
 DIR_ENTRY = struct.Struct("<4sIIIIIII")
@@ -618,20 +712,23 @@ def check_root(b):
     strs = b[so:so + sn]
     if stride < 40 or not strs or strs[0] != 0:
         return "shape", None
-    comps, order = [], []
+    comps, order, waves = [], [], []
     for i in range(count):
         kind, gen, fb, hc, name, _, key = struct.unpack_from("<4sIIIII16s", b, off + i * stride)
         nm = cstring(strs, name)
         if nm is None:
             return "string", None
         order.append(name)
-        if kind not in (b"MPTG", b"MPDJ"):
+        if kind not in (b"MPTG", b"MPDJ", b"MPWF"):
+            continue
+        row = {"kind": kind.decode(), "generation": gen, "fileBytes": fb, "headerCrc": hc, "name": nm, "key": key}
+        if kind == b"MPWF":
+            waves.append(row)
             continue
         want = cf.companion_name(kind.decode(), gen)
         if nm != want:
             return "compName", None
-        comps.append({"kind": kind.decode(), "generation": gen, "fileBytes": fb, "headerCrc": hc, "name": nm,
-                      "key": key})
+        comps.append(row)
     kinds = [c["kind"] for c in comps]
     if kinds not in (["MPTG"], ["MPTG", "MPDJ"]):
         return "comp", None
@@ -641,7 +738,10 @@ def check_root(b):
         return "stringOrder", None
     commit_time, flags, commit_id = struct.unpack_from("<IIQ", b, 40)
     base = struct.unpack_from("<I", b, 80)[0]
-    return "ok", dict(f, comps=comps, commitTime=commit_time, flags=flags, commitId=commit_id,
+    # An MPWF row costs only itself (WAVEFORM-INDEX.md 7.2): of two, neither
+    # counts, and neither does one with the wrong name. The root stays valid.
+    entry = waves[0] if len(waves) == 1 and waves[0]["name"] == mpwf.file_name(waves[0]["generation"]) else None
+    return "ok", dict(f, comps=comps, waves=entry, commitTime=commit_time, flags=flags, commitId=commit_id,
                       baseGeneration=base, producer=cstring(strs, producer), roots=secs.get(b"LIBR", (0, 0, 0, 0))[2])
 
 
@@ -654,15 +754,37 @@ def elect(roots):
     return ok[0]
 
 
+def check_waves(entry, read):
+    """The root's MPWF entry as the waves job opens it (WAVEFORM-INDEX.md 8.1,
+    8.2, 7.2), and here every slot too (8.4's all): {"present", "name", "why",
+    ...}."""
+    wv = {"present": False, "name": entry["name"]}
+    b = read(entry["name"])
+    if b is None:
+        wv["why"] = "missing"
+        return wv
+    r = mpwf.Reader(b)
+    why = r.check("all")
+    if why != "ok":
+        wv["why"] = why
+        return wv
+    if not mpwf.companion_matches(b, entry["generation"], entry["fileBytes"], entry["headerCrc"], entry["key"]):
+        wv["why"] = "not the one COMP names"
+        return wv
+    wv.update(present=True, why="ok", rows=r.rows, generation=r.generation, cardId=r.card_id, bytes=len(b), reader=r)
+    return wv
+
+
 def check_commit(read):
     """What the boot finds (read(name) -> bytes or None, a /.mstream name):
-    {"present", "why", "root", "tags", "autoDj": {...}}."""
+    {"present", "why", "root", "tags", "autoDj": {...}, "waves": {...}}."""
     roots = {}
     for name in ("manifest.bin", "manifest.tmp"):
         b = read(name)
         roots[name] = ("missing", None) if b is None else check_root(b)
     name, root = elect(roots)
-    out = {"present": False, "roots": {n: w for n, (w, _) in roots.items()}, "autoDj": {"present": False}}
+    out = {"present": False, "roots": {n: w for n, (w, _) in roots.items()}, "autoDj": {"present": False},
+           "waves": {"present": False}}
     if root is None:
         out["why"] = roots["manifest.bin"][0] if roots["manifest.bin"][0] != "missing" else roots["manifest.tmp"][0]
         return out
@@ -687,6 +809,8 @@ def check_commit(read):
         out["why"] = "%s: not the one COMP names" % t["name"]
         return out
     out.update(present=True, why="ok", tags={"name": t["name"], "records": records, "source": source})
+    if root["waves"] is not None:
+        out["waves"] = check_waves(root["waves"], read)
     if len(root["comps"]) < 2:
         return out
     d = root["comps"][1]
@@ -712,8 +836,9 @@ def check_commit(read):
 
 
 def check_card(card, tracks=None):
-    """check_commit over CARD/.mstream, and how many of the card's tracks map
-    to a row."""
+    """check_commit over CARD/.mstream, how many of the card's tracks map to
+    a row, and how many have a shape (each track's lookup, as the device
+    makes it)."""
     ms = os.path.join(card, MSTREAM)
 
     def read(name):
@@ -723,16 +848,24 @@ def check_card(card, tracks=None):
         with open(synthcard.long_path(p), "rb") as fh:
             return fh.read()
     out = check_commit(read)
-    dj = out["autoDj"]
-    if dj.get("present") and (tracks is not None or os.path.isdir(os.path.join(card, "music"))):
-        if tracks is None:
-            tracks, _ = walk_music(card)
+    dj, wv = out["autoDj"], out["waves"]
+    if (dj.get("present") or wv.get("present")) and tracks is None and os.path.isdir(os.path.join(card, "music")):
+        tracks, _ = walk_music(card)
+    if dj.get("present") and tracks is not None:
         rows = dict(dj["reader"].paths())
         mapped = [rows.get(mpdj.path_hash(rel)) for rel in tracks]
         dj["tracks"] = len(tracks)
         dj["mapped"] = sum(1 for x in mapped if x is not None)
         dj["rowsMapped"] = len({x for x in mapped if x is not None})
+    if wv.get("present") and tracks is not None:
+        r = wv["reader"]
+        before = r.reads
+        answers = [r.find(mpwf.path_hash(rel)).read for rel in tracks]
+        wv["tracks"] = len(tracks)
+        wv["hits"] = answers.count(mpwf.HIT)
+        wv["reads"] = r.reads - before
     dj.pop("reader", None)
+    wv.pop("reader", None)
     return out
 
 
@@ -759,14 +892,27 @@ def describe_check(c, w):
         if "tracks" in dj:
             w("tracks on the card: %d, %d with a row (%d rows), %d without\n" % (
                 dj["tracks"], dj["mapped"], dj["rowsMapped"], dj["tracks"] - dj["mapped"]))
+    wv = c["waves"]
+    if not wv.get("name"):
+        w("waveform index: none named\n")
+    elif not wv["present"]:
+        w("waveform index %s: absent (%s)\n" % (wv["name"], wv["why"]))
+    else:
+        w("waveform index %s: present, %d bytes, %d rows\n" % (wv["name"], wv["bytes"], wv["rows"]))
+        if wv.get("tracks"):
+            w("tracks on the card: %d, %d with a shape, %d without; %.1f slot reads a lookup\n" % (
+                wv["tracks"], wv["hits"], wv["tracks"] - wv["hits"], wv["reads"] / wv["tracks"]))
 
 
 # ---------------------------------------------------------------------------
 # --add-to
 # ---------------------------------------------------------------------------
-def foreign(old_root, contract):
+def foreign(old_root, contract, entries=()):
     """Why --replace would replace what another program wrote (None: this
-    tool's own /.mstream, or no contract file in it at all)."""
+    tool's own /.mstream, or no contract file in it at all). A run.lock
+    (METADATA 2.12.7) says a transfer is writing the card, or was cut."""
+    if any(n.lower() == "run.lock" for n in entries):
+        return "a run.lock (a transfer may be writing this card, or one was cut short)"
     if not contract:
         return None
     if old_root is None:
@@ -822,7 +968,7 @@ def write_file(path, data):
 def add_to(card, synthetic=False, mpdj_file=None, tags_path=None, seed=1, generation=None, card_id=None,
            commit_time=None, replace=False, dry_run=False, allow_missing=False, k=mpdj.DEFAULT_K,
            head=mpdj.DEFAULT_HEAD, floor=mpdj.DEFAULT_FLOOR, genres=16, unindexed=1.0, probe=None,
-           out=None, ops=None, replace_foreign=False):
+           out=None, ops=None, replace_foreign=False, waves=False, unshaped=1.0):
     """Writes CARD's /.mstream (or, dry_run, says what it would write).
     Returns a summary dict. `ops`, when given, gets each step in order
     (("write", name), ("remove", name), ("rename", from, to)): the tests'
@@ -847,7 +993,7 @@ def add_to(card, synthetic=False, mpdj_file=None, tags_path=None, seed=1, genera
         shown = ", ".join(entries[:5]) + (" and %d more" % (len(entries) - 5) if len(entries) > 5 else "")
         raise Refused("%s\\%s isn't empty (%s): refusing (--replace commits a new generation over it)" % (
             card, MSTREAM, shown))
-    other = foreign(old_root, contract)
+    other = foreign(old_root, contract, entries)
     if other and not replace_foreign:
         raise Refused("%s\\%s holds %s: --replace would delete another program's files (a transfer's tags, "
                       "index and plan): refusing (--replace-foreign replaces them anyway)" % (card, MSTREAM, other))
@@ -857,7 +1003,8 @@ def add_to(card, synthetic=False, mpdj_file=None, tags_path=None, seed=1, genera
         raise Refused("--generation: 1 to 0xFFFFFFFF")
     tags_name = cf.companion_name("MPTG", generation)
     dj_name = cf.companion_name("MPDJ", generation)
-    clash = [n for n in (tags_name, dj_name) if n.lower() in {c.lower() for c in contract}]
+    wv_name = cf.companion_name("MPWF", generation)
+    clash = [n for n in (tags_name, dj_name, wv_name) if n.lower() in {c.lower() for c in contract}]
     if clash:
         raise Refused("--generation %d: %s already there (a name is never reused, METADATA 2.5.2)" % (
             generation, ", ".join(clash)))
@@ -880,8 +1027,8 @@ def add_to(card, synthetic=False, mpdj_file=None, tags_path=None, seed=1, genera
         w(s + "\n")
         if hasattr(out, "flush"):
             out.flush()
+    tp = tags_path or os.path.join(card, TAGS_JSONL)
     if synthetic:
-        tp = tags_path or os.path.join(card, TAGS_JSONL)
         tags = read_tags(tp) if os.path.isfile(tp) else {}
         w("tags: %s\n" % ("%d files from %s" % (len(tags), tp) if tags else
                           "no %s: each track's top folder as its artist, no titles" % TAGS_JSONL))
@@ -900,13 +1047,28 @@ def add_to(card, synthetic=False, mpdj_file=None, tags_path=None, seed=1, genera
           "restamped\n" % (
             mpdj_file, stats["rows"], stats["paths"], stats["missing"], stats["from"]["generation"],
             stats["from"]["cardId"]))
+    wave_file, wave_stats = None, None
+    if waves:
+        wave_file, wave_stats = synthetic_waves(tracks, read_lengths(tp) if os.path.isfile(tp) else {}, seed,
+                                                generation, card_id, unshaped)
+        w("waves: %d rows (%d tracks, %d left without a slot), %d with a length from %s, in %.1f s\n" % (
+            wave_stats["rows"], wave_stats["tracks"], wave_stats["unshaped"], wave_stats["timed"], TAGS_JSONL,
+            wave_stats["seconds"]))
     tags = tags_file(generation, card_id)
-    root = root_file(generation, card_id, base, commit_time, tags, autodj)
+    root = root_file(generation, card_id, base, commit_time, tags, autodj, wave_file)
+
+    # The companions in COMP's order: their writes come first, in this order.
+    companions = {tags_name: tags, dj_name: autodj}
+    if wave_file is not None:
+        companions[wv_name] = wave_file
+
+    def reads_back(c):
+        return c["present"] and c["autoDj"].get("present") and (wave_file is None or c["waves"].get("present"))
 
     # Checked as the boot reads it, before anything is written.
-    mem = {tags_name: tags, dj_name: autodj, "manifest.bin": root}
+    mem = dict(companions, **{"manifest.bin": root})
     c = check_commit(mem.get)
-    if not (c["present"] and c["autoDj"].get("present")):
+    if not reads_back(c):
         raise AssertionError("the commit doesn't read back: %r" % {k_: v for k_, v in c.items() if k_ != "root"})
     # The steps, in the commit order (2.12.1; AUTODJ-INDEX.md 7.2): the
     # companions under their final names, then the root through
@@ -917,21 +1079,24 @@ def add_to(card, synthetic=False, mpdj_file=None, tags_path=None, seed=1, genera
     steps = []
     if "manifest.tmp" in lower:
         steps.append(("remove", lower["manifest.tmp"]))  # a cut run's (2.12.1, step 4)
-    steps += [("write", tags_name), ("write", dj_name), ("write", "manifest.tmp")]
+    steps += [("write", n) for n in companions]
+    steps.append(("write", "manifest.tmp"))
     if "manifest.bin" in lower:
         steps.append(("remove", lower["manifest.bin"]))
     steps.append(("rename", "manifest.tmp", "manifest.bin"))
     steps += [("remove", n) for n in contract if n.lower() not in ("manifest.bin", "manifest.tmp")]
-    data = {tags_name: tags, dj_name: autodj, "manifest.tmp": root}
+    data = dict(companions, **{"manifest.tmp": root})
     hc = lambda b: struct.unpack_from("<I", b, 32)[0]  # noqa: E731
     w("commit: generation %d (base %d), cardId 0x%016X, commitTime %d\n" % (generation, base, card_id, commit_time))
     w("  %s  %10d bytes  headerCrc 0x%08X  (MPTG source 2, no records)\n" % (tags_name, len(tags), hc(tags)))
     w("  %s  %10d bytes  headerCrc 0x%08X  selectionSig %s\n" % (dj_name, len(autodj), hc(autodj),
                                                                 autodj[64:80].hex()))
+    if wave_file is not None:
+        w("  %s  %10d bytes  headerCrc 0x%08X\n" % (wv_name, len(wave_file), hc(wave_file)))
     w("  manifest.bin  %10d bytes  headerCrc 0x%08X  commitId 0x%016X (written last, through manifest.tmp)\n" % (
         len(root), hc(root), c["root"]["commitId"]))
-    summary = {"generation": generation, "cardId": card_id, "stats": stats, "steps": steps,
-               "bytes": {tags_name: len(tags), dj_name: len(autodj), "manifest.bin": len(root)}}
+    summary = {"generation": generation, "cardId": card_id, "stats": stats, "waves": wave_stats, "steps": steps,
+               "bytes": {n: len(b) for n, b in mem.items()}}
     if dry_run:
         w("dry run: would, in %s:\n" % ms)
         for s in steps:
@@ -941,7 +1106,7 @@ def add_to(card, synthetic=False, mpdj_file=None, tags_path=None, seed=1, genera
             w("  and keep %s\n" % ", ".join(kept))
         w("nothing written\n")
         return dict(summary, written=False)
-    need = len(tags) + len(autodj) + len(root) + 3 * 65536
+    need = sum(map(len, data.values())) + len(data) * 65536
     try:
         free = shutil.disk_usage(card).free
     except OSError:
@@ -962,7 +1127,7 @@ def add_to(card, synthetic=False, mpdj_file=None, tags_path=None, seed=1, genera
 
     back = check_card(card, tracks)
     describe_check(back, w)
-    if not (back["present"] and back["autoDj"].get("present")):
+    if not reads_back(back):
         raise AssertionError("the card doesn't read back what was written")
     w("done in %.1f s; the first boot rebuilds the library (a new commit). Eject the card before taking it out.\n"
       % (time.time() - t_start))
@@ -976,9 +1141,11 @@ def main(argv=None):
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--synthetic", action="store_true", help="build the index here from synthesized vectors")
     g.add_argument("--mpdj", metavar="FILE", help="an index built for this tree, restamped to the commit")
-    ap.add_argument("--tags", metavar="JSONL", help="synthcard-files.jsonl for the record values (default: "
-                    "CARD's own, when there)")
-    ap.add_argument("--seed", type=int, default=1, help="--synthetic's seed (default 1); also the new card's id")
+    ap.add_argument("--waves", action="store_true", help="also write a waveform index of made-up shapes")
+    ap.add_argument("--tags", metavar="JSONL", help="synthcard-files.jsonl for the record values and the slots' "
+                    "lengths (default: CARD's own, when there)")
+    ap.add_argument("--seed", type=int, default=1, help="--synthetic's and --waves' seed (default 1); also the new "
+                    "card's id")
     ap.add_argument("--generation", type=lambda s: int(s, 0), help="the commit's generation (default: one more "
                     "than any on the card, else 1)")
     ap.add_argument("--card-id", type=lambda s: int(s, 0), help="the card's id (default: the root's, else from "
@@ -996,13 +1163,16 @@ def main(argv=None):
     ap.add_argument("--k", type=int, default=mpdj.DEFAULT_K, help="--synthetic: list length (default 169)")
     ap.add_argument("--head", type=int, default=mpdj.DEFAULT_HEAD, help="--synthetic: selHead (default 84)")
     ap.add_argument("--floor", type=int, default=mpdj.DEFAULT_FLOOR, help="--synthetic: selFloor (default 140)")
+    ap.add_argument("--unshaped", type=float, default=1.0, help="--waves: percent of tracks left without a slot "
+                    "(default 1)")
     a = ap.parse_args(argv)
     try:
         if a.check:
             card = card_root(a.check)
             c = check_card(card)
             describe_check(c, sys.stdout.write)
-            return 0 if c["present"] and c["autoDj"].get("present") else 1
+            waves_read = c["waves"]["present"] or not c["waves"].get("name")
+            return 0 if c["present"] and c["autoDj"].get("present") and waves_read else 1
         if not a.add_to:
             ap.error("--add-to CARD or --check CARD")
         if not (a.synthetic or a.mpdj):
@@ -1013,7 +1183,7 @@ def main(argv=None):
             ap.error("--replace-foreign goes with --replace")
         add_to(a.add_to, a.synthetic, a.mpdj, a.tags, a.seed, a.generation, a.card_id, a.time, a.replace,
                a.dry_run, a.allow_missing, a.k, a.head, a.floor, a.genres, a.unindexed,
-               replace_foreign=a.replace_foreign)
+               replace_foreign=a.replace_foreign, waves=a.waves, unshaped=a.unshaped)
     except Refused as e:
         print("refused: %s" % e, file=sys.stderr)
         return 2

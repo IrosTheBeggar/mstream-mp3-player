@@ -6,6 +6,7 @@
 #include <M5Unified.h>
 #include <Preferences.h>
 
+#include "app/NvsLater.h"
 #include "ui/LcdLock.h"
 
 namespace {
@@ -39,12 +40,9 @@ void IdlePower::begin(uint32_t nowMs) {
 void IdlePower::setChoice(int choice) {
   const int before = policy_.choice();
   policy_.setChoice(choice, millis());
-  Preferences p;
-  if (p.begin(kPrefs, false)) {
-    p.putUChar(kKeyChoice, static_cast<uint8_t>(policy_.choice()));
-    p.end();
-  }
-  Serial.printf("[power] turn off when idle: %s -> %s (saved)%s\n", IdlePolicy::choiceLabel(before),
+  // Queued: written once the taps rest (app/NvsLater), not under the finger.
+  nvslater::putU8(kPrefs, kKeyChoice, static_cast<uint8_t>(policy_.choice()));
+  Serial.printf("[power] turn off when idle: %s -> %s (saved once the taps rest)%s\n", IdlePolicy::choiceLabel(before),
                 IdlePolicy::choiceLabel(policy_.choice()),
                 policy_.testMs() ? "; the console's test length still wins until I0 or a restart" : "");
 }
@@ -71,6 +69,7 @@ bool IdlePower::takeBootNote(char* buf, size_t size) {
 }
 
 void IdlePower::powerOff() {
+  nvslater::flushNow();  // a setting changed moments ago, still queued
   Serial.flush();
   // The panel shares SPI with the card: its sleep command under the lock
   // (nothing else runs after this).
