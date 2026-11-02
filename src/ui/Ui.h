@@ -15,6 +15,7 @@
 #include "UiStrings.h"
 #include "app/DanceMode.h"
 #include "app/Library.h"
+#include "app/Waves.h"
 #include "ui/Input.h"
 #include "ui/ListScroller.h"
 #include "ui/ListView.h"
@@ -64,6 +65,8 @@
 //     the loop (app/CardWorker, handed by app/CardTasks), never started
 //     while a list moves; a page redraws the row (or the cover) that shows
 //     one when it arrives.
+//   - The playing track's waveform (app/Waves): read by the same worker in
+//     the same lane; Now Playing sees it by its version() in update().
 //   - The Library's status line (docs/METADATA.md 3.3.6): while the card
 //     worker checks the card, reads tags or the library updates, a Small
 //     line across the list's width at the bottom of a Library page (y
@@ -240,6 +243,7 @@ public:
   LibraryIndex* browseIndex() { return browse_ ? browse_ : library_.index(); }
   bool browsingSynthetic() const { return browse_ != nullptr; }
   Thumbs& thumbs() { return thumbs_; }
+  Waves& waves() { return waves_; }
   // A list page's repaint() after an overlay went: the band from the rows
   // as rendered (ListView::redraw()), unless a cover arrived under the
   // overlay (its row is rendered again: ListView::invalidate()).
@@ -426,6 +430,7 @@ private:
   Dialog dialog_;
   Coach coach_;
   Thumbs thumbs_;
+  Waves waves_;
   LibraryIndex* browse_ = nullptr;  // uil<n>: a synthetic library in the Library tab
   int volumeAsked_ = -1;            // the volume sheet's last target (steps are relative)
   bool volumeSheetBt_ = false;      // the volume sheet's output

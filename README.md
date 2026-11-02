@@ -402,7 +402,13 @@ pages do:
   The progress line: tap it, or drag along it and lift, to move in the
   track (never into its last 6 s; slide off it, or back onto where it
   plays, to leave it; paused, it stays paused, and play, or the next boot,
-  starts there). Then the volume (tap: a slider), prev / play-pause / next,
+  starts there). When the transfer software wrote the track's waveform to
+  the card, the line is that waveform, what has played in colour; a track or
+  a card without one has a plain line, in the same place, that works the
+  same. It writes waveforms only for a player that says it reads them: from
+  0.12.0 the player says so on the card (`/.player/device.txt`), so after the
+  update, start the player once with the card in before the next transfer.
+  Then the volume (tap: a slider), prev / play-pause / next,
   and "..." for **Shuffle** (on, off), **Repeat** (off, all, one), the
   **Sleep timer** and **Auto DJ** (below): a tap on Shuffle, Repeat or Auto
   DJ changes it there and then, the menu staying open. A small shuffle and
@@ -782,6 +788,7 @@ optional argument and Enter:
 | `g` (`g0`, `g<n>`) | library index: report (and where its names came from: tags or paths), `g0` walk the card and update the library (the queue follows by path; on a card the walk and the update run in the background), or a synthetic library of n tracks for the labs (the player keeps the real one) |
 | `gs` (`gs0`), `gt</music/...>`, `gr` (`gr!`, `gw`, `gb`, `gb!`, `gv`) | the tags ([docs/METADATA.md](docs/METADATA.md) 3.3.6): `gs` the scan's status (the card worker: what it waited for, each job's steps, its stack; the device's records in `/.player/tags.bin` by status, its journals, the transfer's root and tags file, an unfinished transfer; the sector cache), the two tags files checked a piece a loop pass (the player stays live; their lines follow, about 32 s later with the screen lit and 60 s dark on a 19,412-track card, 52-75 s while tracks play; after a compaction under way, which `gs` waits for and says so), `gs0` starts its waits, steps, stack and RAM figures again; `gt` one file: its tags read now, its records in both files, which one a build takes, and the names the library has for it; `gr` Rescan tags (`gr!` the transfer's files too, a diagnostic), `gw` walk the card now, `gb` build the library now (`gb!` defer it to the next boot, as a short memory would), `gv` check the transfer's files' fingerprints; `g?` lists them |
 | `gc` (`gc0`, `gc1`, `gc2`), `gl` (`glw`) | the card ([docs/METADATA.md](docs/METADATA.md) 6.3.1): `gc` the PSRAM sector cache's counts (hits, misses, the card's reads and their time), `gc0` off and `gc1` on (until restart, for A/B measurements), `gc2` on with every hit checked against the card (each prints the counts so far, then starts them again); `gl` the card's bench (its time per sector, the opens of a file under `/music`'s 1st, 353rd and 703rd entries with and without the cache), `glw` also the walks of `/music` (minutes on a big card; stop the music first) |
+| `gw?` (`gw=<99 digits>`, `gw#<480 hex>`, `gw-`) | the waveform index ([docs/WAVEFORM-INDEX.md](docs/WAVEFORM-INDEX.md)): `gw?` its state: the file, the track wanted, the record, the reads (hits, misses, damaged, the probes a read, the job's time); `gw=` a test shape with no card, a digit 0-9 for each of Now Playing's 99 columns, on whatever plays until `gw-`; `gw#` the same from 240 bars in hex, through the reduction. `gw` alone is the walk, above |
 | `e` (`e1`-`e5`) | font probe: list rows in FreeSans (folded) and the UI's VLW font, timed (efont only in a build with `-DUI_SPIKE_EFONT=1`) |
 | `j` (`j<n>`, `jw<n>`, `ja`) | thumbnail probe: cover.jpg to 40x40 / 80x80, decoder RAM, PSRAM and .565 caches |
 
@@ -878,6 +885,11 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   SeekBar             Now Playing's seek bar: x to whole seconds and back,
                       the ends and the reach, one touch's tap or scrub, the
                       stay detent and sliding off (docs/SEEK-BAR.md)
+  WaveShape, WaveBar, WaveState
+                      A track's waveform on it: a slot's bars brought down
+                      to the 99 columns, the rows and inks they are drawn
+                      in and which pass draws what, what is wanted of the
+                      card and what came back (docs/WAVEFORM-INDEX.md 11)
   PowerWindow         The power chip's (AXP192) ADC registers decoded, and
                       their mean/min/max over a window (console P)
   OutputModel         The Output tab's Bluetooth card (its state for every
@@ -924,11 +936,12 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       @status line, the FSINFO rule, @identify's label; the
                       card's free clusters counted a piece of the FAT at a
                       time, exact with FatFs writing between the pieces
-  CardContract, CardContainer, CardTags, CardManifest, CardAutoDj
+  CardContract, CardContainer, CardTags, CardManifest, CardAutoDj, CardWaves
                       The card contract with the transfer software
                       (docs/METADATA.md part 2): its files' readers and
                       writers, CRC-32, the path hash, the fingerprint;
-                      CardAutoDj the AutoDJ index (docs/AUTODJ-INDEX.md)
+                      CardAutoDj the AutoDJ index (docs/AUTODJ-INDEX.md),
+                      CardWaves the waveform index (docs/WAVEFORM-INDEX.md)
   AutoDjEngine, AutoDjTiers, AutoDjRng
                       Auto DJ's pick (docs/AUTODJ.md): a session's anchors,
                       seed and cooldowns, the gate over the AutoDJ index's
@@ -999,7 +1012,8 @@ src/                  Core2 firmware
                       @status, @count and @identify: docs/HOST-STATUS.md),
                       AutoDj + AutoDjStore (Auto DJ on the device: the
                       card's AutoDJ index, its join, the loop step, the
-                      console's D; its settings in NVS)
+                      console's D; its settings in NVS), Waves (the card's
+                      waveform index: Now Playing's shapes, the console's gw?)
   spike/              UI spike tools: input lab, scroll lab, font and thumbnail
                       probes (docs/UI-SPIKE.md)
   main.cpp            Wires it together; input events (the buttons' policy),
@@ -1041,13 +1055,18 @@ tools/                make_test_audio.py; version.py (build pre-script: the
                       writer, reader and test vectors, docs/AUTODJ-INDEX.md;
                       tests: python -m unittest discover -s tools -p
                       "test_mpdj.py");
+                      mpwf.py + test_mpwf.py (the waveform index's reference
+                      writer, reader and test vectors, docs/WAVEFORM-INDEX.md;
+                      tests: python -m unittest discover -s tools -p
+                      "test_mpwf.py");
                       autodj_ref.py + test_autodj_ref.py (Auto DJ's pick
                       rule in plain Python, the engine's reference; it
                       writes test/fixtures/autodj, --check; tests: python
                       -m unittest discover -s tools -p "test_autodj_ref.py");
                       synthtransfer.py + test_synthtransfer.py (a test
                       card's /.mstream: a tags file with no records, an
-                      AutoDJ index, synthetic or given, and the root
+                      AutoDJ index, synthetic or given, with --waves a
+                      waveform index of made-up shapes, and the root
                       written last, so a synthcard.py tree or any FAT32
                       card gets an index the firmware accepts; --dry-run,
                       --check; it writes nothing outside /.mstream;
@@ -1065,7 +1084,8 @@ docs/                 ARCHITECTURE.md, POC-RESULTS.md, MASCOT-POC.md, UI-SPIKE.m
                       RESAMPLER.md, BEAT-TRACKER-EVAL.md, HOST-STATUS.md,
                       METADATA.md (the card contract), AUTODJ-INDEX.md
                       (the AutoDJ index, MPDJ v2), AUTODJ.md (the
-                      device's Auto DJ), QUEUE-MODES.md (shuffle, repeat,
+                      device's Auto DJ), WAVEFORM-INDEX.md (the waveform
+                      index, MPWF v1), QUEUE-MODES.md (shuffle, repeat,
                       the queue's cap; Auto DJ with them)
 LICENSES/             The licence texts THIRD-PARTY-NOTICES.md refers to
 THIRD-PARTY-NOTICES.md What else is in the firmware binary, and its licences

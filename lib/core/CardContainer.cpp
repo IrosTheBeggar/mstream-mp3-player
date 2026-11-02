@@ -59,6 +59,9 @@ const char* whyName(Why w) {
     case Why::DjSlotUnused: return "djSlotUnused";
     case Why::DjSlotIndex: return "djSlotIndex";
     case Why::DjSlotOrder: return "djSlotOrder";
+    case Why::WvLayout: return "wvLayout";
+    case Why::WvSlotCrc: return "wvSlotCrc";
+    case Why::WvSlotOrder: return "wvSlotOrder";
     case Why::PendOrder: return "pendOrder";
     case Why::PendPath: return "pendPath";
     case Why::PendOp: return "pendOp";
@@ -427,6 +430,7 @@ bool unknownMajor(const uint8_t* head, size_t n) {
   const uint32_t magic = get32(head);
   const uint16_t major = get16(head + 4);
   if (magic == kMagicMpdj) return major != kMajorMpdj && major != 1;
+  if (magic == kMagicMpwf) return major != kMajorMpwf;
   if (magic != kMagicMsmf && magic != kMagicMptg && magic != kMagicMspd) return false;
   return major != kMajor;
 }

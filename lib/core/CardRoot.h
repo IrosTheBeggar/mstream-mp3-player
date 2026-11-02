@@ -29,7 +29,9 @@
 // kept as COMP names it, only while T is present: an MPDJ without a valid
 // MPTG companion isn't used. The file itself isn't opened here: Auto DJ
 // opens it after the library's load and checks it against the entry
-// (mpdj::Table::open, msmf::companionMatches).
+// (mpdj::Table::open, msmf::companionMatches). The root's MPWF entry (the
+// waveform index, docs/WAVEFORM-INDEX.md 7.2) is kept the same way, and a
+// card job opens that file when Now Playing wants a shape (mpwf::Table::open).
 namespace cardroot {
 
 // The library roots (LIBR, 2.8.6) the boot keeps: at most this many, each
@@ -80,6 +82,16 @@ struct Root {
     char path[48] = "";  // "/.mstream/autodj-00000029.bin"
     cardcontract::msmf::Comp entry;
   } autoDj;
+  // The waveform index the root names (WAVEFORM-INDEX.md 7.2): present only
+  // when T is and COMP has a good MPWF row (a bad one costs only itself:
+  // Manifest::open). `entry` is that row (its generation, fileBytes and
+  // headerCrc: msmf::companionMatches(entry, table.frame(), 0, nullptr) says
+  // whether the file opened is the one named).
+  struct Waves {
+    bool present = false;
+    char path[48] = "";  // "/.mstream/waves-0000002a.bin"
+    cardcontract::msmf::Comp entry;
+  } waves;
 
 private:
   const char* rootPtrs_[kMaxRoots] = {};

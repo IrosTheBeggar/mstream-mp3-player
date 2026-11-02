@@ -55,6 +55,7 @@ void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out) 
   r.rootCount = 0;
   r.plan = false;
   r.autoDj = Root::AutoDj();
+  r.waves = Root::Waves();
 
   // The plan: pending.bin, else a valid pending.tmp (2.12.5).
   r.plan = fs.exists(kPendingBin) || openPlan(fs, kPendingTmp, scratch, scratchBytes) == cc::Why::Ok;
@@ -125,6 +126,12 @@ void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out) 
     r.autoDj.present = true;
     r.autoDj.entry = m.autoDj();
     std::snprintf(r.autoDj.path, sizeof(r.autoDj.path), "%s%s", kDir, m.autoDjName());
+  }
+  // The MPWF entry, likewise (WAVEFORM-INDEX.md 7.2).
+  if (m.hasWaves()) {
+    r.waves.present = true;
+    r.waves.entry = m.waves();
+    std::snprintf(r.waves.path, sizeof(r.waves.path), "%s%s", kDir, m.wavesName());
   }
 }
 

@@ -700,7 +700,9 @@ copy, and refuses when the signatures differ.
   lists 2** (a comma-separated list of majors). Otherwise it writes no
   MPDJ: no reader of v1 exists, so there is nothing older to write
   instead.
-- No device.txt, or no `read.mpdj` key in it, reads as none.
+- No device.txt, or no `read.mpdj` key in it, reads as none. A file with no
+  `contract` line reads as no file, and a key given twice as its last
+  (M 2.15).
 - Released firmware 0.8.0-0.10.0 writes `read.mpdj=1`, yet reads no MPDJ:
   no MPDJ for them. From 0.11.0, which ships the AutoDJ engine, the
   firmware writes `read.mpdj=2` (a development build between them wrote

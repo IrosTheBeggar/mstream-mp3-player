@@ -50,6 +50,11 @@
 //        glw also the stock walk (forEachFile) and 3.2.3's walk (CardWalk
 //        over FatFs), each uncached and cached (minutes at 20k: playback
 //        stopped)
+//   gw?, gw=<99 digits>, gw#<480 hex>, gw-: the waveform index, handed in
+//        like the worker's jobs (setJobs(): app/Waves::command()): its state;
+//        a test shape with no card, as heights or through the reduction; that
+//        shape dropped. None of them reads the card. (gw alone is the walk,
+//        above.)
 //
 // About 35 KB of PSRAM while a command runs (gs: until its last line; the
 // readers, the check's Walker, the records found, their buffers), none
@@ -95,6 +100,9 @@ public:
     // the scan's slices yield to it too).
     bool (*listMoving)() = nullptr;
     bool (*dark)() = nullptr;
+    // gw?, gw=, gw#, gw- (app/Waves::command()): the text from the letter
+    // after the w.
+    void (*wave)(const char* arg) = nullptr;
   };
 
   // gs's piece of a pass: its units (lib/core TagCheck) until this long
@@ -110,7 +118,7 @@ public:
   TagConsole(LocalStorage& storage, Library& library) : storage_(storage), library_(library) {}
   void setJobs(const Jobs& jobs) { jobs_ = jobs; }
   // A parsed g command that is the tags' (Status, Dump, Rescan, RescanAll,
-  // Walk, Build, Verify).
+  // Walk, Build, Verify, Wave).
   void command(const tagtext::Parsed& p);
   // g's line: where the names came from, and the scan's state.
   void summary();

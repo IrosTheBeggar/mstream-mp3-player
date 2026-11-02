@@ -92,6 +92,15 @@ bool FatFile::truncate(uint32_t sz) {
   return f_lseek(&fil, sz) == FR_OK && f_truncate(&fil) == FR_OK;
 }
 
+FRESULT FatFile::openRead(const char* path) {
+  char p[300];
+  if (!fatPath(path, p, sizeof(p))) return FR_INVALID_DRIVE;
+  writable = false;
+  return f_open(&fil, p, FA_READ | FA_OPEN_EXISTING);
+}
+
+void FatFile::closeRead() { f_close(&fil); }
+
 // ---- FatFs ----
 
 tagstore::File* FatFs::open(const char* path, Mode mode) {

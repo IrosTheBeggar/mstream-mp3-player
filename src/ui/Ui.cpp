@@ -95,7 +95,8 @@ Ui::Ui(UiHost& host, Input& input, PlaybackController& player, QueueModel& queue
       queuePage_(*this),
       dancePage_(*this),
       outputPage_(*this),
-      thumbs_(library) {
+      thumbs_(library),
+      waves_(library) {
   // The list's safety net (UI spike): fewer frames, or whole rows, while
   // the decoder's buffer runs low.
   ScrollGovernor::Config g;
@@ -114,6 +115,8 @@ bool Ui::begin() {
   list_.setRailHost(this);
   // Covers: without PSRAM for them, every one is the placeholder.
   if (!thumbs_.begin()) Serial.println("[ui] no PSRAM for the cover thumbnails: placeholders");
+  // The waveform index the boot's root names (setup(): after the library).
+  waves_.begin();
   nav_.setRoot(NavModel::Tab::NowPlaying, ref(PageKind::NowPlaying));
   nav_.setRoot(NavModel::Tab::Library, ref(PageKind::Library, static_cast<uint32_t>(LibrarySegment::Artists)));
   nav_.setRoot(NavModel::Tab::Queue, ref(PageKind::Queue));
@@ -1411,6 +1414,7 @@ void Ui::loop(uint32_t nowMs) {
       danceWasOn_ = true;
     }
     thumbs_.loop(nowMs);
+    waves_.loop(nowMs);
     return;
   }
   if (!hud_.up()) {
@@ -1470,6 +1474,8 @@ void Ui::loop(uint32_t nowMs) {
       thumbsStale_ = true;  // a list's rows are rendered again when the modal goes (repaintList())
     }
   }
+  // A waveform's read: Now Playing sees it by its version(), a modal or not.
+  waves_.loop(nowMs);
   const uint32_t t2 = micros();
   thumbsUs = t2 - t1;
   updateStatus(nowMs);

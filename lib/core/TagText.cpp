@@ -19,11 +19,19 @@ const char* const kHelp =
     "(1-50000), gs the scan's status (gs0 its figures from now), gt</music/...> one file's tags (read now, D, T, the "
     "winner), gr Rescan tags (gr! the transfer's files too), gw walk now, gb build now (gb! deferred to the next "
     "boot), gv verify the transfer's files; gc the sector cache (gc0 off, gc1 on, gc2 on and every hit checked), gl "
-    "the card's bench (glw with the walks)";
+    "the card's bench (glw with the walks); gw? the waveform index's state (gw=<99 digits 0-9> a shape with no card, "
+    "gw#<480 hex> 240 bars through the reduction, gw- drops it)";
 
 namespace {
 
 bool isSpace(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
+
+int hexOf(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
 
 size_t clampLen(int n, size_t size) {
   if (size == 0 || n < 0) return 0;
@@ -152,6 +160,16 @@ Parsed parse(const char* arg) {
     }
     return p;
   }
+  if (arg[0] == 'w') {
+    // (gw alone is the walk, above.) What gw= and gw# hold is digitsIn()'s and
+    // hexIn()'s to judge.
+    const bool alone = arg[1] == '?' || arg[1] == '-';
+    if ((alone && n == 2) || arg[1] == '=' || arg[1] == '#') {
+      p.command = Command::Wave;
+      p.path = arg + 1;
+    }
+    return p;
+  }
   if (n == 2 && arg[0] == 'r' && arg[1] == '!') p.command = Command::RescanAll;
   if (n == 2 && arg[0] == 's' && arg[1] == '0') {
     p.command = Command::Status;
@@ -170,6 +188,24 @@ Parsed parse(const char* arg) {
     p.n = 1;
   }
   return p;
+}
+
+bool digitsIn(const char* text, uint8_t* out, size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    if (text[i] < '0' || text[i] > '9') return false;  // (the NUL of one too short too)
+    out[i] = static_cast<uint8_t>(text[i] - '0');
+  }
+  return text[count] == 0;
+}
+
+bool hexIn(const char* text, uint8_t* out, size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    const int hi = hexOf(text[2 * i]);
+    const int lo = hi < 0 ? -1 : hexOf(text[2 * i + 1]);  // (no read past the NUL of one too short)
+    if (lo < 0) return false;
+    out[i] = static_cast<uint8_t>(hi << 4 | lo);
+  }
+  return text[2 * count] == 0;
 }
 
 const char* statusName(LibraryBuilder::Status s) {

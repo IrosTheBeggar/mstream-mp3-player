@@ -8,8 +8,8 @@ library descriptions (libraries/*.json), their golden files (golden/*), and
 the hardening files (hardening/*.bin, listed in hardening/index.json), each
 broken in one way under valid CRCs. The player's host tests
 (test/test_card_contract, test/test_card_files, test/test_card_autodj,
-test/test_name_key) read them, as the transfer software's tests in
-mstream-terminal will.
+test/test_card_waves, test/test_name_key) read them, as the transfer
+software's tests in mstream-terminal will.
 
 This is a second implementation of the contract, written from the spec and
 kept apart from lib/core/CardContract*: the goldens come from here, so the
@@ -40,6 +40,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cardnames  # noqa: E402  (the card path rules: METADATA 2.8.3-2.8.6)
 import mpdj  # noqa: E402  (every MPDJ fixture: AUTODJ-INDEX.md 13)
+import mpwf  # noqa: E402  (every MPWF fixture: WAVEFORM-INDEX.md 13)
 import playlog  # noqa: E402  (the play log's fixtures: METADATA 2.20)
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -517,10 +518,14 @@ def mptg(desc, order="canonical", rec_stride=72, extra_header=b"", extra_run_fie
 
 # ---------------------------------------------------------------------------
 # MSMF (2.5), MSPD (2.12.5), MPTH (2.14.1), device.txt (2.15); MPDJ is
-# tools/mpdj.py's (docs/AUTODJ-INDEX.md)
+# tools/mpdj.py's (docs/AUTODJ-INDEX.md), MPWF tools/mpwf.py's
+# (docs/WAVEFORM-INDEX.md)
 # ---------------------------------------------------------------------------
+COMPANION_STEMS = {"MPTG": "tags", "MPDJ": "autodj", "MPWF": "waves"}
+
+
 def companion_name(kind, gen):
-    return ("tags-%08x.bin" if kind == "MPTG" else "autodj-%08x.bin") % gen
+    return "%s-%08x.bin" % (COMPANION_STEMS[kind], gen)
 
 
 PEER = 1  # SRVS flags bit 0 (2.5.5)
@@ -681,8 +686,8 @@ def mpth(desc):
 
 
 def device_txt(desc):
-    keys = ["contract", "firmware", "read.msmf", "read.mptg", "read.mpdj", "read.mpth", "codecs", "extensions",
-            "max_rate", "max_channels"]
+    keys = ["contract", "firmware", "read.msmf", "read.mptg", "read.mpdj", "read.mpwf", "read.mpth", "codecs",
+            "extensions", "max_rate", "max_channels"]
     return "".join("%s=%s\n" % (k, desc[k]) for k in keys).encode("ascii")
 
 
@@ -695,7 +700,7 @@ MAX_SEQ = (1 << 53) - 1
 RESERVED = {"state.json": "reserved: the private state", "state.new": "reserved: its next write",
             "resume.json": "reserved: the partials kept", "resume.new": "reserved: its next write",
             "run.lock": "reserved: a run is writing the card"}
-COMPANION_NAME = re.compile(r"^(tags|autodj)-[0-9a-f]{8}\.bin$")  # 2.4.3's COMP names
+COMPANION_NAME = re.compile(r"^(tags|autodj|waves)-[0-9a-f]{8}\.bin$")  # 2.4.3's COMP names
 PART_NAME = re.compile(r"^[0-9a-f]{8}\.part$")
 
 
@@ -715,7 +720,7 @@ def private_name(rel: str):
     name = parts[-1]
     if name.endswith(".tmp"):
         return False, "*.tmp: step 4 deletes it"
-    if len(parts) == 1 and (fnmatch.fnmatchcase(name, "tags-*.bin") or fnmatch.fnmatchcase(name, "autodj-*.bin")):
+    if len(parts) == 1 and any(fnmatch.fnmatchcase(name, "%s-*.bin" % s) for s in COMPANION_STEMS.values()):
         return False, "a companion's name"
     if len(parts) == 1 and (name.startswith("manifest.") or name.startswith("pending.")):
         return False, "a contract file's name"
@@ -1087,6 +1092,20 @@ def manifest_acks():
                      {"deviceId": DEVICE_A, "epoch": EPOCH_1, "seq": 7}]}
 
 
+def manifest_waves():
+    return {"format": "MSMF", "file": "manifest-waves.bin", "generation": 43, "cardId": CARD_ID,
+            "commitTime": 1792100000, "flags": 1, "commitId": "0x0000002BFACEC0DE",
+            "serverInstance": "00112233-4455-6677-8899-aabbccddeeff", "producer": "mstream-terminal 0.13.0",
+            "serverRevision": "\"r-412-99-1790000000999-300\"", "baseGeneration": 42,
+            "serverUrl": "HTTP://Music.Example:3000/",
+            "note": "A root that names all three companions (WAVEFORM-INDEX.md 7.2): its MPWF row after the MPTG and "
+                    "MPDJ rows, its name after theirs in STRS, its key zeros. Its companions are manifest.bin's and a "
+                    "waveform index carried from generation 42.",
+            "companions": [{"file": "tags-0000002a.bin"}, {"file": "autodj-00000029.bin"},
+                           {"file": "waves-0000002a.bin"}],
+            "roots": ["Lib B", "Lib A"]}
+
+
 def manifest_min():
     return {"format": "MSMF", "file": "manifest-min.bin", "generation": 1, "cardId": CARD_ID, "commitTime": 1791300000,
             "flags": 0, "commitId": "0x0000000000000001", "producer": "mstream-terminal 0.13.0",
@@ -1119,12 +1138,12 @@ def thumb_main():
 
 def device_main():
     return {"format": "device.txt", "file": "device.txt", "contract": "1", "firmware": "0.11.0", "read.msmf": "1",
-            "read.mptg": "1", "read.mpdj": "2", "read.mpth": "1", "codecs": "mp3,flac,opus",
+            "read.mptg": "1", "read.mpdj": "2", "read.mpwf": "1", "read.mpth": "1", "codecs": "mp3,flac,opus",
             "extensions": "mp3,flac,opus", "max_rate": "48000", "max_channels": "2"}
 
 
 LIBRARIES = [tags_transfer, tags_device, tags_empty, manifest_min, manifest_main, pending_main, thumb_main,
-             device_main, tags_servers, manifest_servers, manifest_acks]
+             device_main, tags_servers, manifest_servers, manifest_acks, manifest_waves]
 
 
 def build(desc, golden: dict):
@@ -1600,7 +1619,8 @@ def private_vectors():
         ("state.json", True), ("state.new", True), ("resume.json", True), ("resume.new", True), ("run.lock", True),
         ("resume/0000002a.part", True), ("notes.txt", True), ("cache/index.bin", True), ("cache/old.tmp", False),
         ("State.json", False), ("state.tmp", False), ("tags-0000002a.bin", False), ("tags-backup.bin", False),
-        ("autodj-old.bin", False), ("manifest.json", False), ("pending.txt", False), ("stage/keep.bin", False),
+        ("autodj-old.bin", False), ("waves-0000002a.bin", False), ("waves-old.bin", False), ("manifest.json", False),
+        ("pending.txt", False), ("stage/keep.bin", False),
         ("thumbs/state.json", False), ("resume/notes.txt", False), ("resume/0000002A.part", False),
         ("resume/old/0000002a.part", False), ("stage", False), ("thumbs", False), ("resume", False)]
     settle = [
@@ -1654,14 +1674,15 @@ def private_vectors():
                "thumbs/B/B1F7E69F.tmp": 21656, "state.json": 200, "resume.json": 900,
                "resume/0000002a.part": 10485760, "resume/0000002b.part": 52428801, "resume/0000002c.part": 100,
                "resume/0000002d.part": 4096, "resume/old/0000002e.part": 10, "run.lock": 120, "notes.txt": 5,
-               "cache/index.bin": 64}
-    root = ["tags-0000002a.bin", "autodj-00000029.bin"]
+               "cache/index.bin": 64, "waves-0000002a.bin": 2048, "waves-00000029.bin": 1792}
+    root = ["tags-0000002a.bin", "autodj-00000029.bin", "waves-0000002a.bin"]
     every = ["manifest.tmp", "resume/0000002a.part", "resume/0000002b.part", "resume/0000002c.part",
              "resume/0000002d.part", "resume/old/0000002e.part", "stage/00000003.tmp", "tags-00000029.bin",
-             "thumbs/B/B1F7E69F.tmp"]
+             "thumbs/B/B1F7E69F.tmp", "waves-00000029.bin"]
     clean = [
         (listing, root, resume, [n for n in every if n not in ("resume/0000002a.part", "resume/0000002c.part")],
-         "autodj-00000029.bin is named, tags-00000029.bin isn't; step 1 left manifest.tmp; 0000002a and 0000002c "
+         "autodj-00000029.bin and waves-0000002a.bin are named, tags-00000029.bin and waves-00000029.bin aren't; "
+         "step 1 left manifest.tmp; 0000002a and 0000002c "
          "are listed and no longer than their size, 0000002b is longer, 0000002d isn't listed, resume/old/ is a "
          "folder; the private files stay"),
         (listing, root, None, every, "no resume.json: every partial goes"),
@@ -2078,10 +2099,17 @@ def vectors(golden: dict):
     _, snaps, ops = plays_files(golden)
     v["plays"] = plays_vectors(golden, snaps, ops)
     v["deviceTxt"] = {"text": device_txt(device_main()).decode("ascii"),
-                      "noFile": {"read.msmf": "1", "read.mptg": "1", "read.mpdj": "", "read.mpth": "1",
-                                 "codecs": "mp3,flac", "extensions": "mp3,flac", "max_rate": "48000",
+                      "noFile": {"read.msmf": "1", "read.mptg": "1", "read.mpdj": "", "read.mpwf": "",
+                                 "read.mpth": "1", "codecs": "mp3,flac", "extensions": "mp3,flac", "max_rate": "48000",
                                  "max_channels": "2"}}
     v["mpdj"] = mpdj.fixture_vectors(golden)
+    v["mpwf"] = mpwf.fixture_vectors(golden)
+    v["mpwf"]["rootRow"] = {
+        "note": "WAVEFORM-INDEX.md 7.2: what a reader takes from a root's COMP. waves: the MPWF row's name, null for "
+                "none; matches: the row against the golden file of that name. Each hardening file's root reads.",
+        "golden": {"file": "manifest-waves.bin", "waves": "waves-0000002a.bin", "matches": True},
+        "hardening": [{"file": name + ".bin", "waves": waves, "matches": matches, "note": note}
+                      for name, (waves, matches, note) in WAVES_ROOTS.items()]}
     return v
 
 
@@ -2190,6 +2218,44 @@ def root_acks(b: bytes):
     return None
 
 
+# What a reader takes from each root that reads with a waves row out of the
+# common (WAVEFORM-INDEX.md 7.2): (the row's name or None, whether it matches
+# the golden file of that name, what the file shows).
+WAVES_ROOTS = {
+    "msmf-waves-no-mpdj": ("waves-0000002a.bin", True, "no MPDJ row: the root's second row"),
+    "msmf-waves-between": ("waves-0000002a.bin", True, "between MPTG and MPDJ: readers don't check its place"),
+    "msmf-waves-first": ("waves-0000002a.bin", True, "before MPTG: readers don't check its place"),
+    "msmf-waves-name-upper": (None, None, "waves-0000002A.bin: uppercase hex"),
+    "msmf-waves-name-generation": (None, None, "the name's digits aren't the row's generation"),
+    "msmf-waves-name-stem": (None, None, "wave-0000002a.bin: another stem"),
+    "msmf-waves-name-empty": (None, None, "the name's offset 0: the empty string"),
+    "msmf-waves-two": (None, None, "two MPWF rows: neither counts"),
+    "msmf-waves-key": ("waves-0000002a.bin", False, "the key isn't zeros: the row reads, the file doesn't match"),
+    "msmf-waves-file-bytes": ("waves-0000002a.bin", False, "fileBytes one more: the file doesn't match"),
+    "msmf-waves-header-crc": ("waves-0000002a.bin", False, "headerCrc wrong: the file doesn't match"),
+}
+
+
+def root_waves(b: bytes):
+    """The MPWF row a reader takes from a root (WAVEFORM-INDEX.md 7.2):
+    (name, generation, fileBytes, headerCrc, key), or None when the root has
+    none, has two, or its name isn't the rule's: then the root reads with no
+    waves entry. Its place in COMP isn't checked."""
+    p = parse_container(b)
+    comp, strs = section(p, "COMP"), bytes(section(p, "STRS")[4])
+    rows = []
+    for i in range(comp[2]):
+        kind, gen, fb, hc, name, _, key = struct.unpack_from("<4sIIIII16s", comp[4], comp[3] * i)
+        if kind == b"MPWF":
+            rows.append((strs[name:strs.index(0, name)].decode("utf-8"), gen, fb, hc, key))
+    return rows[0] if len(rows) == 1 and rows[0][0] == mpwf.file_name(rows[0][1]) else None
+
+
+def waves_matches(row, golden: dict):
+    """A root's MPWF row against the golden file of its name."""
+    return mpwf.companion_matches(golden[row[0]], *row[1:])
+
+
 def check_plays(pv, golden: dict, want):
     """The plays group recomputed (2.20, 2.5.6)."""
     snaps, _ = run_plays(plays_script(golden))
@@ -2267,6 +2333,60 @@ def check_plays(pv, golden: dict, want):
         want(history_majors(e["text"]) == e["history"], "history %r" % e["text"])
 
 
+def check_waves(w, golden: dict, want):
+    """The mpwf group recomputed (docs/WAVEFORM-INDEX.md 13.3), and the fixture
+    card's waveform index against its tags file."""
+    for e in w["names"]:
+        want(mpwf.file_name(e["generation"]) == e["name"], "mpwf name " + e["name"])
+    for e in w["sizes"]:
+        want(mpwf.size(e["rows"]) == e["fileBytes"], "mpwf size %d" % e["rows"])
+    for g in w["barRanges"]:
+        for e in g["cases"]:
+            want(mpwf.bar_range(e["i"], g["m"]) == (e["start"], e["end"]), "mpwf range %r" % e)
+    for e in w["bars"]:
+        peaks = list(bytes.fromhex(e["peaks"])) if "peaks" in e else [0] * e["m"]
+        bars = list(bytes.fromhex(e["bars"])) if "bars" in e else [0] * mpwf.BAR_COUNT
+        for i, b in e.get("peaksAt", {}).items():
+            peaks[int(i)] = b
+        for i, b in e.get("barsAt", {}).items():
+            bars[int(i)] = b
+        want(len(peaks) == e["m"] and list(mpwf.bars_from_peaks(peaks)) == bars, "mpwf bars " + e["note"])
+    for sc in (w["slot"], w["slotCrc"]):
+        raw = mpwf.Reader(golden[sc["file"]]).slot_raw(sc["row"])
+        want(mpwf.slot_crc(raw, sc["row"]) == hexint(sc["crc"]) and mpwf.crc32(raw[:-4]) == hexint(sc["unseeded"]),
+             "mpwf slotCrc " + sc["file"])
+    want(mpwf.Reader(golden[w["slot"]["file"]]).slot_raw(0).hex() == w["slot"]["bytes"], "mpwf slot bytes")
+    for e in w["sectionCrc"]:
+        r = mpwf.Reader(golden[e["file"]])
+        want(r.rows == e["rows"] and r.section.crc == hexint(e["crc"]), "mpwf section crc " + e["file"])
+    for e in w["pick"]:
+        want(mpwf.probe_row(u64(e["h"]), e["lo"], e["hi"], u64(e["loH"]), u64(e["hiH"]), e["probes"]) == e["row"],
+             "mpwf pick " + e["note"])
+    for name, cases in w["search"]["files"].items():
+        r = mpwf.Reader(golden[name])
+        for e in cases:
+            got = r.find(u64(e["hash"]))
+            want(got.read == e["read"] and got.probes == e["probes"] and got.row == e.get("row"),
+                 "mpwf search %s %s" % (name, e["hash"]))
+    for e in w["deviceTxt"]["cases"]:
+        want(mpwf.writes_waves(mpwf.device_text(e)) == e["writes"], "mpwf deviceTxt %r" % e)
+    for e in w["commit"]["cases"]:
+        got = mpwf.commit_outcome(mpwf.device_text(e), golden.get(e["old"]), mpwf.commit_rows(e, golden))
+        want(got == e["outcome"], "mpwf commit " + e["note"])
+    # Every slot of the fixture card's index is a track of its tags file, its
+    # lengthMs that record's durationMs (0 where the record has none).
+    records = {x["pathHash"]: x for x in ledger_rows(golden["tags-0000002a.bin"])}
+    r = mpwf.Reader(golden[mpwf.G1_FILE])
+    for i in range(r.rows):
+        slot = r.slot(i)[2]
+        want(slot.path_hash in records and records[slot.path_hash]["durationMs"] == slot.length_ms,
+             "mpwf slot %d against the tags file" % i)
+    rr = w["rootRow"]
+    row = root_waves(golden[rr["golden"]["file"]])
+    want(row is not None and row[0] == rr["golden"]["waves"] and waves_matches(row, golden) == rr["golden"]["matches"],
+         "mpwf root row")
+
+
 def check_vectors(v, golden: dict):
     """Recomputes every vector; raises on a mismatch."""
     bad = []
@@ -2322,6 +2442,7 @@ def check_vectors(v, golden: dict):
     raw = mpdj.Reader(golden[sc["file"]]).slot_raw(sc["row"])
     want(mpdj.slot_crc(raw, sc["row"]) == hexint(sc["crc"]) and mpdj.crc32(raw[:-4]) == hexint(sc["unseeded"]),
          "mpdj slotCrc")
+    check_waves(v["mpwf"], golden, want)
     sib = v["canonicalOrder"]["siblings"]
     want(sorted(sib, key=lambda s: s.encode("utf-8")) == sib, "siblings")
     files = v["canonicalOrder"]["files"]
@@ -2880,6 +3001,52 @@ def hardening(golden: dict):
     good("msmf-acks-minor-1", "MSMF", "ACKS: rows of 32 bytes, a newer minor's, read by their 24-byte prefix", longer)
     full = root_acks(golden["manifest-acks.bin"])
     assert full and [root_acks(b) for b in (bytes(damaged), order, short, longer)] == [None, None, None, full]
+
+    # MSMF's MPWF row (WAVEFORM-INDEX.md 7.2): a bad one costs only itself. The
+    # root reads, with or without a waves entry; its name is read in its place
+    # (2.4.4), as for any kind, so only a string rule can cost the root.
+    wd = manifest_waves()
+    wave_comps = [comp_row(c["file"], golden[c["file"]]) for c in wd["companions"]]
+    w_row = wave_comps[2]
+    roots = sorted(wd["roots"], key=lambda r: r.encode("utf-8"))
+
+    def named(row, name, **fields):
+        kind, gen, fb, hc, _, key = row
+        return (kind, fields.get("gen", gen), fields.get("fb", fb), fields.get("hc", hc), name,
+                fields.get("key", key))
+
+    waves_cases = {
+        "msmf-waves-no-mpdj": [t_row, w_row],
+        "msmf-waves-between": [t_row, w_row, d_row],
+        "msmf-waves-first": [w_row, t_row, d_row],
+        "msmf-waves-name-upper": [t_row, d_row, named(w_row, "waves-0000002A.bin")],
+        "msmf-waves-name-generation": [t_row, d_row, named(w_row, "waves-0000002b.bin")],
+        "msmf-waves-name-stem": [t_row, d_row, named(w_row, "wave-0000002a.bin")],
+        "msmf-waves-name-empty": [t_row, d_row, named(w_row, "")],
+        "msmf-waves-two": [t_row, d_row, w_row, named(w_row, "waves-00000029.bin", gen=41)],
+        "msmf-waves-key": [t_row, d_row, named(w_row, w_row[4], key=bytes([0xA5]) * 16)],
+        "msmf-waves-file-bytes": [t_row, d_row, named(w_row, w_row[4], fb=w_row[2] + 1)],
+        "msmf-waves-header-crc": [t_row, d_row, named(w_row, w_row[4], hc=w_row[3] ^ 1)],
+    }
+    assert list(waves_cases) == list(WAVES_ROOTS)
+    for name, rows_ in waves_cases.items():
+        data = msmf_raw(wd, rows_, roots)
+        waves, matches, note = WAVES_ROOTS[name]
+        row = root_waves(data)
+        assert (row[0] if row else None) == waves and (waves_matches(row, golden) if row else None) == matches, name
+        good(name, "MSMF", "COMP's MPWF row: " + note, data)
+
+    def waves_name_offset(fn):
+        p = parse_container(msmf_raw(wd, wave_comps, roots))
+        comp = section(p, "COMP")
+        struct.pack_into("<I", comp[4], 2 * comp[3] + 16, fn(p, comp))
+        return rebuild(p)
+
+    bad("msmf-waves-name-range", "MSMF", "string", "COMP: the MPWF row's name offset at STRS's end: a string rule, "
+        "which costs the root for any kind", waves_name_offset(lambda p, c: len(section(p, "STRS")[4])))
+    bad("msmf-waves-name-order", "MSMF", "stringOrder", "COMP: the MPWF row's name offset back at the MPTG row's: a "
+        "string rule, which costs the root for any kind",
+        waves_name_offset(lambda p, c: struct.unpack_from("<I", c[4], 16)[0]))
     # MSPD.
     pd = pending_main()
     bad("mspd-order", "MSPD", "pendOrder", "PEND: a write before a delete",
@@ -2899,6 +3066,8 @@ def hardening(golden: dict):
          mspd_raw(pd, [(2, "A/x.mp3", 0), (9, "Z/z.mp3", 0), (1, "A B/y.mp3", 77)]))
     # MPDJ (docs/AUTODJ-INDEX.md 13.6): tools/mpdj.py's, each already read back.
     out += mpdj.fixture_hardening(golden)
+    # MPWF (docs/WAVEFORM-INDEX.md 13.5): tools/mpwf.py's, each already read back.
+    out += mpwf.fixture_hardening(golden)
     return out
 
 
@@ -2946,20 +3115,32 @@ elsewhere. Made-up names only, synthetic embeddings.
   4), at least one for every check of 2.4.3, so a reader that skips a
   check fails on its file. `index.json` lists each with the reader's uses
   (`all`: every section; `device`: MPTG's FOLD, RECS and STRS, MPDJ's
-  DJRF, DJPH and STRS, MSMF's COMP, LIBR and STRS: the device never reads
-  ORIG, OSTR or SRVS), whether it must read as absent or present, the
-  check it breaks, and the player's reason code. A `present` file with
+  DJRF, DJPH and STRS, MSMF's COMP, LIBR and STRS, MPWF's frame: the device
+  never reads ORIG, OSTR or SRVS, and a slot of DJSL or WVSL only when it
+  needs one), whether it must read as absent or present, the check it
+  breaks, and the player's reason code. A `present` file with
   `same` reads as the same records as that golden file (MPDJ: every row's
   filter record and used slot entries, every DJPH hash's row, the five
-  strings). An MPDJ file's `slot` says how one slot reads when the device
-  reads it alone (`damaged`: its CRC fails; `broken`: a good CRC over a
-  bad list).
+  strings; MPWF: every slot's hash, length and bars). An MPDJ file's `slot`
+  says how one slot reads when the device reads it alone (`damaged`: its
+  CRC fails; `broken`: a good CRC over a bad list). An MPWF file's `slot` is
+  one lookup as the device makes it: the hash, what it reads (`hit`, `miss`,
+  `damaged`, `broken`) and how many slots it reads.
 
 The AutoDJ index (MPDJ v2) is specified apart, in docs/AUTODJ-INDEX.md;
 its fixtures (section 13 there) come from `tools/mpdj.py`, which
 card_fixtures.py imports. `libraries/autodj-mid.f32` holds the vectors
 that `autodj-mid.json` and `autodj-mid-default.json` name (raw
 little-endian f32, 16 a row, in the descriptions' row order).
+
+The waveform index (MPWF v1) is specified apart, in
+docs/WAVEFORM-INDEX.md; its fixtures (section 13 there) come from
+`tools/mpwf.py`, which card_fixtures.py imports. A description's tracks
+hold the server's peak bars as given, and a writer computes the bars.
+`golden/manifest-waves.bin` is a root that names all three companions. The
+`msmf-waves-*` hardening files are roots that read whatever their MPWF row
+holds (`vectors.json`'s `mpwf.rootRow` says what a reader takes from each),
+but for the two whose name breaks a string rule, as any kind's would.
 
 The play log (docs/METADATA.md 2.20) has its fixtures in `plays/`, made
 with `tools/playlog.py`, its reference reader and writer, which
@@ -2982,8 +3163,9 @@ and checks it on its own.
 The player's tests: `test/test_card_contract` (the vectors),
 `test/test_card_files` (the goldens, round trips, the hardening files,
 truncation at every byte and every flipped bit), `test/test_card_autodj`
-(the AutoDJ index's own rules) and `test/test_name_key` (the keys the
-AutoDJ descriptions give). The play log's fixtures are for the
+(the AutoDJ index's own rules), `test/test_card_waves` (the waveform
+index's own rules) and `test/test_name_key` (the keys the AutoDJ
+descriptions give). The play log's fixtures are for the
 firmware's log and the transfer software's reader, neither built yet;
 `tools/test_playlog.py` reads them today.
 """
@@ -2993,13 +3175,16 @@ def generate():
     files = {}
     descs = [f() for f in LIBRARIES]
     dj_descs = mpdj.fixture_libraries()
-    # The AutoDJ goldens first (each read back and checked against the rule
-    # by tools/mpdj.py), then the other companions: a root reads their
-    # generation, length, header CRC and key from them.
+    wf_descs = mpwf.fixture_libraries()
+    # The AutoDJ and waveform goldens first (each read back and checked
+    # against its rule by tools/mpdj.py and tools/mpwf.py), then the other
+    # companions: a root reads their generation, length, header CRC and key
+    # from them.
     golden = dict(mpdj.fixture_goldens())
+    golden.update(mpwf.fixture_goldens())
     for d in sorted(descs, key=lambda d: d["format"] == "MSMF"):
         golden[d["file"]] = build(d, golden)
-    for d in descs + dj_descs:
+    for d in descs + dj_descs + wf_descs:
         files["libraries/" + d["file"].rsplit(".", 1)[0] + ".json"] = (
             json.dumps(d, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
     for name, data in mpdj.fixture_sidecars().items():

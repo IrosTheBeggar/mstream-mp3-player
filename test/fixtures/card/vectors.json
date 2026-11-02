@@ -1806,6 +1806,16 @@
     "why": "a companion's name"
    },
    {
+    "name": "waves-0000002a.bin",
+    "ok": false,
+    "why": "a companion's name"
+   },
+   {
+    "name": "waves-old.bin",
+    "ok": false,
+    "why": "a companion's name"
+   },
+   {
     "name": "manifest.json",
     "ok": false,
     "why": "a contract file's name"
@@ -2151,11 +2161,14 @@
      "resume/old/0000002e.part": 10,
      "run.lock": 120,
      "notes.txt": 5,
-     "cache/index.bin": 64
+     "cache/index.bin": 64,
+     "waves-0000002a.bin": 2048,
+     "waves-00000029.bin": 1792
     },
     "root": [
      "tags-0000002a.bin",
-     "autodj-00000029.bin"
+     "autodj-00000029.bin",
+     "waves-0000002a.bin"
     ],
     "resume": "{\"format\": \"mstream-card-resume\", \"version\": 1, \"seq\": 7, \"parts\": [{\"name\": \"0000002a.part\", \"server\": {\"serverInstance\": \"\", \"serverUrlKey\": \"0x0\", \"parentKey\": \"0xED901EA3EE763AC7\", \"peerId\": 3}, \"serverPath\": \"Shared/Peer Artist/Peer Album/01 - Tune.flac\", \"size\": 31457280, \"etag\": \"W/\\\"1e00000-19a1b2c3d4e\\\"\", \"modified\": 1790500000005, \"have\": 10485760}, {\"name\": \"0000002b.part\", \"server\": {\"serverInstance\": \"\", \"serverUrlKey\": \"0xED901EA3EE763AC7\", \"parentKey\": \"0x0\", \"peerId\": 0}, \"serverPath\": \"Music/Artist/Album/02 - Long.flac\", \"size\": 52428800, \"etag\": \"\", \"modified\": 1790000000123, \"have\": 4194304}, {\"name\": \"0000002c.part\", \"server\": {\"serverInstance\": \"\", \"serverUrlKey\": \"0xED901EA3EE763AC7\", \"parentKey\": \"0x0\", \"peerId\": 0}, \"serverPath\": \"Music/Artist/Album/02 - Long.flac\", \"size\": 100, \"etag\": \"\", \"modified\": 1790000000123, \"have\": 4194304}]}\n",
     "delete": [
@@ -2165,9 +2178,10 @@
      "resume/old/0000002e.part",
      "stage/00000003.tmp",
      "tags-00000029.bin",
-     "thumbs/B/B1F7E69F.tmp"
+     "thumbs/B/B1F7E69F.tmp",
+     "waves-00000029.bin"
     ],
-    "note": "autodj-00000029.bin is named, tags-00000029.bin isn't; step 1 left manifest.tmp; 0000002a and 0000002c are listed and no longer than their size, 0000002b is longer, 0000002d isn't listed, resume/old/ is a folder; the private files stay"
+    "note": "autodj-00000029.bin and waves-0000002a.bin are named, tags-00000029.bin and waves-00000029.bin aren't; step 1 left manifest.tmp; 0000002a and 0000002c are listed and no longer than their size, 0000002b is longer, 0000002d isn't listed, resume/old/ is a folder; the private files stay"
    },
    {
     "files": {
@@ -2189,11 +2203,14 @@
      "resume/old/0000002e.part": 10,
      "run.lock": 120,
      "notes.txt": 5,
-     "cache/index.bin": 64
+     "cache/index.bin": 64,
+     "waves-0000002a.bin": 2048,
+     "waves-00000029.bin": 1792
     },
     "root": [
      "tags-0000002a.bin",
-     "autodj-00000029.bin"
+     "autodj-00000029.bin",
+     "waves-0000002a.bin"
     ],
     "resume": null,
     "delete": [
@@ -2205,7 +2222,8 @@
      "resume/old/0000002e.part",
      "stage/00000003.tmp",
      "tags-00000029.bin",
-     "thumbs/B/B1F7E69F.tmp"
+     "thumbs/B/B1F7E69F.tmp",
+     "waves-00000029.bin"
     ],
     "note": "no resume.json: every partial goes"
    },
@@ -2229,11 +2247,14 @@
      "resume/old/0000002e.part": 10,
      "run.lock": 120,
      "notes.txt": 5,
-     "cache/index.bin": 64
+     "cache/index.bin": 64,
+     "waves-0000002a.bin": 2048,
+     "waves-00000029.bin": 1792
     },
     "root": [
      "tags-0000002a.bin",
-     "autodj-00000029.bin"
+     "autodj-00000029.bin",
+     "waves-0000002a.bin"
     ],
     "resume": "{\"format\": \"mstream-card-resume\", \"versi",
     "delete": [
@@ -2245,7 +2266,8 @@
      "resume/old/0000002e.part",
      "stage/00000003.tmp",
      "tags-00000029.bin",
-     "thumbs/B/B1F7E69F.tmp"
+     "thumbs/B/B1F7E69F.tmp",
+     "waves-00000029.bin"
     ],
     "note": "a torn resume.json keeps nothing"
    },
@@ -2256,7 +2278,8 @@
     },
     "root": [
      "tags-0000002a.bin",
-     "autodj-00000029.bin"
+     "autodj-00000029.bin",
+     "waves-0000002a.bin"
     ],
     "resume": "{\"format\": \"mstream-card-resume\", \"version\": 1, \"seq\": 2, \"parts\": [{\"name\": \"0000002a.part\", \"server\": {\"serverInstance\": \"\", \"serverUrlKey\": \"0x0\", \"parentKey\": \"0xED901EA3EE763AC7\", \"peerId\": 3}, \"serverPath\": \"Shared/Peer Artist/Peer Album/01 - Tune.flac\", \"size\": 5, \"etag\": \"W/\\\"1e00000-19a1b2c3d4e\\\"\", \"modified\": 1790500000005, \"have\": 10485760}, {\"name\": \"0000002a.part\", \"server\": {\"serverInstance\": \"\", \"serverUrlKey\": \"0x0\", \"parentKey\": \"0xED901EA3EE763AC7\", \"peerId\": 3}, \"serverPath\": \"Shared/Peer Artist/Peer Album/01 - Tune.flac\", \"size\": 9, \"etag\": \"W/\\\"1e00000-19a1b2c3d4e\\\"\", \"modified\": 1790500000005, \"have\": 10485760}, {\"name\": \"bad.part\", \"server\": {\"serverInstance\": \"\", \"serverUrlKey\": \"0xED901EA3EE763AC7\", \"parentKey\": \"0x0\", \"peerId\": 0}, \"serverPath\": \"Music/Artist/Album/02 - Long.flac\", \"size\": 52428800, \"etag\": \"\", \"modified\": 1790000000123, \"have\": 4194304}]}\n",
     "delete": [
@@ -3244,11 +3267,12 @@
   ]
  },
  "deviceTxt": {
-  "text": "contract=1\nfirmware=0.11.0\nread.msmf=1\nread.mptg=1\nread.mpdj=2\nread.mpth=1\ncodecs=mp3,flac,opus\nextensions=mp3,flac,opus\nmax_rate=48000\nmax_channels=2\n",
+  "text": "contract=1\nfirmware=0.11.0\nread.msmf=1\nread.mptg=1\nread.mpdj=2\nread.mpwf=1\nread.mpth=1\ncodecs=mp3,flac,opus\nextensions=mp3,flac,opus\nmax_rate=48000\nmax_channels=2\n",
   "noFile": {
    "read.msmf": "1",
    "read.mptg": "1",
    "read.mpdj": "",
+   "read.mpwf": "",
    "read.mpth": "1",
    "codecs": "mp3,flac",
    "extensions": "mp3,flac",
@@ -3890,6 +3914,996 @@
    "cos": 0.5470588389514506,
    "cosF32": 0.5470588207244873,
    "note": "the rule's cosine x 255 is just above 139.5; a float32 sum's is just below it"
+  }
+ },
+ "mpwf": {
+  "note": "WAVEFORM-INDEX.md 13.3. 'who': both unless said. Byte strings are lowercase hex; integers in hex strings are 0x-prefixed.",
+  "names": [
+   {
+    "generation": 1,
+    "name": "waves-00000001.bin"
+   },
+   {
+    "generation": 42,
+    "name": "waves-0000002a.bin"
+   },
+   {
+    "generation": 4294967295,
+    "name": "waves-ffffffff.bin"
+   }
+  ],
+  "sizes": [
+   {
+    "rows": 1,
+    "fileBytes": 512
+   },
+   {
+    "rows": 7,
+    "fileBytes": 2048
+   },
+   {
+    "rows": 10000,
+    "fileBytes": 2560256
+   },
+   {
+    "rows": 20000,
+    "fileBytes": 5120256
+   },
+   {
+    "rows": 50000,
+    "fileBytes": 12800256
+   },
+   {
+    "rows": 250000,
+    "fileBytes": 64000256
+   }
+  ],
+  "barRanges": [
+   {
+    "m": 800,
+    "cases": [
+     {
+      "i": 0,
+      "start": 0,
+      "end": 3
+     },
+     {
+      "i": 1,
+      "start": 3,
+      "end": 6
+     },
+     {
+      "i": 2,
+      "start": 6,
+      "end": 10
+     },
+     {
+      "i": 3,
+      "start": 10,
+      "end": 13
+     },
+     {
+      "i": 119,
+      "start": 396,
+      "end": 400
+     },
+     {
+      "i": 120,
+      "start": 400,
+      "end": 403
+     },
+     {
+      "i": 239,
+      "start": 796,
+      "end": 800
+     }
+    ]
+   },
+   {
+    "m": 1,
+    "cases": [
+     {
+      "i": 0,
+      "start": 0,
+      "end": 1
+     },
+     {
+      "i": 239,
+      "start": 0,
+      "end": 1
+     }
+    ]
+   },
+   {
+    "m": 7,
+    "cases": [
+     {
+      "i": 0,
+      "start": 0,
+      "end": 1
+     },
+     {
+      "i": 34,
+      "start": 0,
+      "end": 1
+     },
+     {
+      "i": 35,
+      "start": 1,
+      "end": 2
+     },
+     {
+      "i": 239,
+      "start": 6,
+      "end": 7
+     }
+    ]
+   },
+   {
+    "m": 239,
+    "cases": [
+     {
+      "i": 0,
+      "start": 0,
+      "end": 1
+     },
+     {
+      "i": 1,
+      "start": 0,
+      "end": 1
+     },
+     {
+      "i": 2,
+      "start": 1,
+      "end": 2
+     },
+     {
+      "i": 239,
+      "start": 238,
+      "end": 239
+     }
+    ]
+   },
+   {
+    "m": 241,
+    "cases": [
+     {
+      "i": 0,
+      "start": 0,
+      "end": 1
+     },
+     {
+      "i": 238,
+      "start": 238,
+      "end": 239
+     },
+     {
+      "i": 239,
+      "start": 239,
+      "end": 241
+     }
+    ]
+   },
+   {
+    "m": 1000,
+    "cases": [
+     {
+      "i": 0,
+      "start": 0,
+      "end": 4
+     },
+     {
+      "i": 5,
+      "start": 20,
+      "end": 25
+     },
+     {
+      "i": 6,
+      "start": 25,
+      "end": 29
+     },
+     {
+      "i": 239,
+      "start": 995,
+      "end": 1000
+     }
+    ]
+   }
+  ],
+  "bars": [
+   {
+    "m": 1,
+    "peaks": "c8",
+    "bars": "c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8",
+    "note": "M = 1: every bar the one peak"
+   },
+   {
+    "m": 2,
+    "peaks": "0a14",
+    "bars": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414141414",
+    "note": "M = 2: each peak 120 bars"
+   },
+   {
+    "m": 3,
+    "peaks": "010203",
+    "bars": "010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010102020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303030303",
+    "note": "M = 3: each peak 80 bars"
+   },
+   {
+    "m": 7,
+    "peaks": "00326496c8faff",
+    "bars": "000000000000000000000000000000000000000000000000000000000000000000000032323232323232323232323232323232323232323232323232323232323232323232646464646464646464646464646464646464646464646464646464646464646464649696969696969696969696969696969696969696969696969696969696969696969696c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8fafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafafaffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "note": "M = 7: each peak 34 or 35 bars, none averaged"
+   },
+   {
+    "m": 239,
+    "peaks": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedee",
+    "bars": "00000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedee",
+    "note": "M = 239: bars 0 and 1 both peak 0, then one each"
+   },
+   {
+    "m": 240,
+    "peaks": "fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0efeeedecebeae9e8e7e6e5e4e3e2e1e0dfdedddcdbdad9d8d7d6d5d4d3d2d1d0cfcecdcccbcac9c8c7c6c5c4c3c2c1c0bfbebdbcbbbab9b8b7b6b5b4b3b2b1b0afaeadacabaaa9a8a7a6a5a4a3a2a1a09f9e9d9c9b9a999897969594939291908f8e8d8c8b8a898887868584838281807f7e7d7c7b7a797877767574737271706f6e6d6c6b6a696867666564636261605f5e5d5c5b5a595857565554535251504f4e4d4c4b4a494847464544434241403f3e3d3c3b3a393837363534333231302f2e2d2c2b2a292827262524232221201f1e1d1c1b1a19181716151413121110",
+    "bars": "fffefdfcfbfaf9f8f7f6f5f4f3f2f1f0efeeedecebeae9e8e7e6e5e4e3e2e1e0dfdedddcdbdad9d8d7d6d5d4d3d2d1d0cfcecdcccbcac9c8c7c6c5c4c3c2c1c0bfbebdbcbbbab9b8b7b6b5b4b3b2b1b0afaeadacabaaa9a8a7a6a5a4a3a2a1a09f9e9d9c9b9a999897969594939291908f8e8d8c8b8a898887868584838281807f7e7d7c7b7a797877767574737271706f6e6d6c6b6a696867666564636261605f5e5d5c5b5a595857565554535251504f4e4d4c4b4a494847464544434241403f3e3d3c3b3a393837363534333231302f2e2d2c2b2a292827262524232221201f1e1d1c1b1a19181716151413121110",
+    "note": "M = 240: the bars are the peaks"
+   },
+   {
+    "m": 241,
+    "peaks": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0",
+    "bars": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeef0",
+    "note": "M = 241: the last bar takes peaks 239 and 240: RMS 239.5005 reads 240"
+   },
+   {
+    "m": 480,
+    "peaks": "030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304030403040304",
+    "bars": "040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404",
+    "note": "M = 480: two peaks a bar"
+   },
+   {
+    "m": 800,
+    "peaksAt": {
+     "0": 200
+    },
+    "barsAt": {
+     "0": 115
+    },
+    "note": "M = 800: a width-3 bar: 200 of 3 peaks is sqrt(40000 / 3) = 115.47"
+   },
+   {
+    "m": 800,
+    "peaksAt": {
+     "6": 1
+    },
+    "barsAt": {
+     "2": 1
+    },
+    "note": "M = 800, a tie: sqrt(1 / 4) = 0.5 rounds up to 1"
+   },
+   {
+    "m": 800,
+    "peaksAt": {
+     "6": 3
+    },
+    "barsAt": {
+     "2": 2
+    },
+    "note": "M = 800, a tie: sqrt(9 / 4) = 1.5 rounds up to 2"
+   },
+   {
+    "m": 800,
+    "peaksAt": {
+     "6": 5
+    },
+    "barsAt": {
+     "2": 3
+    },
+    "note": "M = 800, a tie: sqrt(25 / 4) = 2.5 rounds up to 3; half to even gives 2"
+   },
+   {
+    "m": 800,
+    "peaksAt": {
+     "6": 253
+    },
+    "barsAt": {
+     "2": 127
+    },
+    "note": "M = 800, a tie: sqrt(64009 / 4) = 126.5 rounds up to 127; half to even gives 126"
+   },
+   {
+    "m": 800,
+    "peaksAt": {
+     "6": 2,
+     "7": 2,
+     "8": 1
+    },
+    "barsAt": {
+     "2": 2
+    },
+    "note": "M = 800, a tie from three peaks: 2, 2 and 1 are sqrt(9 / 4) = 1.5"
+   },
+   {
+    "m": 800,
+    "peaksAt": {
+     "6": 2,
+     "7": 2
+    },
+    "barsAt": {
+     "2": 1
+    },
+    "note": "M = 800, just under a tie: 2 and 2 are sqrt(8 / 4) = 1.41"
+   },
+   {
+    "m": 800,
+    "peaksAt": {
+     "0": 1,
+     "6": 1
+    },
+    "barsAt": {
+     "0": 1,
+     "2": 1
+    },
+    "note": "M = 800, under the first step: 1 of 3 peaks is sqrt(1 / 3) = 0.58, of 4 a tie at 0.5"
+   },
+   {
+    "m": 1000,
+    "peaksAt": {
+     "24": 10
+    },
+    "barsAt": {
+     "5": 4
+    },
+    "note": "M = 1000: 25 peaks over 6 bars: bar 5 takes 5"
+   },
+   {
+    "m": 800,
+    "peaks": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "bars": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "note": "all 255: 255, the largest bar"
+   }
+  ],
+  "slot": {
+   "file": "waves-one.bin",
+   "row": 0,
+   "path": "Artist/Album/01 - Title.mp3",
+   "pathHash": "0xDA70B312760188D8",
+   "lengthMs": 180000,
+   "barsAll": "0x40",
+   "bytes": "d888017612b370da20bf02004040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040404040401c4fefb0",
+   "crc": "0xB0EF4F1C",
+   "unseeded": "0x1B1A93B5",
+   "note": "CRC-32 over the row as u32 LE, then the slot's first 252 bytes; 'unseeded' is the CRC of those bytes alone"
+  },
+  "slotCrc": {
+   "file": "waves-0000002a.bin",
+   "row": 3,
+   "crc": "0x2977DAF4",
+   "unseeded": "0x0BA69241"
+  },
+  "sectionCrc": [
+   {
+    "rows": 1,
+    "file": "waves-one.bin",
+    "crc": "0xBD7B2A5F"
+   },
+   {
+    "rows": 7,
+    "file": "waves-0000002a.bin",
+    "crc": "0xD35B6D7E",
+    "note": "any 7 slots with good CRCs have this section CRC, whatever they hold: 4.2"
+   }
+  ],
+  "pick": [
+   {
+    "h": "0x8000000000000000",
+    "lo": 0,
+    "hi": 6,
+    "loH": "0x0000000000000000",
+    "hiH": "0xFFFFFFFFFFFFFFFF",
+    "probes": 0,
+    "row": 3,
+    "note": "the middle of the first bounds: 3 by rounding"
+   },
+   {
+    "h": "0x4924924924924924",
+    "lo": 0,
+    "hi": 6,
+    "loH": "0x0000000000000000",
+    "hiH": "0xFFFFFFFFFFFFFFFF",
+    "probes": 0,
+    "row": 2,
+    "note": "2/7 of the bounds: 1.71 rounds to 2, where a floor gives 1"
+   },
+   {
+    "h": "0x0000000000000000",
+    "lo": 0,
+    "hi": 249999,
+    "loH": "0x0000000000000000",
+    "hiH": "0xFFFFFFFFFFFFFFFF",
+    "probes": 0,
+    "row": 0,
+    "note": "h = loH: num is 0, so lo"
+   },
+   {
+    "h": "0xFFFFFFFFFFFFFFFF",
+    "lo": 0,
+    "hi": 249999,
+    "loH": "0x0000000000000000",
+    "hiH": "0xFFFFFFFFFFFFFFFF",
+    "probes": 0,
+    "row": 249999,
+    "note": "h = hiH: num = den, so hi, in 64 bits at the largest product"
+   },
+   {
+    "h": "0xFFFFFFFFFFFFFFFE",
+    "lo": 0,
+    "hi": 249999,
+    "loH": "0x0000000000000000",
+    "hiH": "0xFFFFFFFFFFFFFFFF",
+    "probes": 1,
+    "row": 249999,
+    "note": "nearly so: the top 32 bits still equal"
+   },
+   {
+    "h": "0x00000000FFFFFFFF",
+    "lo": 5,
+    "hi": 20,
+    "loH": "0x0000000000000000",
+    "hiH": "0xFFFFFFFFFFFFFFFF",
+    "probes": 0,
+    "row": 5,
+    "note": "h under 2^32 above loH: num is 0, so lo"
+   },
+   {
+    "h": "0x00000000800003E8",
+    "lo": 10,
+    "hi": 20,
+    "loH": "0x00000000000003E8",
+    "hiH": "0x00000001000003E7",
+    "probes": 0,
+    "row": 15,
+    "note": "a span under 2^32: den is 0, so it bisects"
+   },
+   {
+    "h": "0x00000000000003E8",
+    "lo": 7,
+    "hi": 7,
+    "loH": "0x00000000000003E8",
+    "hiH": "0x00000000000003E9",
+    "probes": 2,
+    "row": 7,
+    "note": "one row, den 0"
+   },
+   {
+    "h": "0x8000000000000000",
+    "lo": 0,
+    "hi": 249999,
+    "loH": "0x0000000000000000",
+    "hiH": "0xFFFFFFFFFFFFFFFF",
+    "probes": 3,
+    "row": 125000,
+    "note": "probe 3 still interpolates"
+   },
+   {
+    "h": "0x8000000000000000",
+    "lo": 0,
+    "hi": 249999,
+    "loH": "0x0000000000000000",
+    "hiH": "0xFFFFFFFFFFFFFFFF",
+    "probes": 4,
+    "row": 124999,
+    "note": "probe 4 bisects: (hi - lo) / 2 rounds down"
+   },
+   {
+    "h": "0xFFFFFFFFFFFFFFFF",
+    "lo": 3,
+    "hi": 6,
+    "loH": "0x0000000000000000",
+    "hiH": "0xFFFFFFFFFFFFFFFF",
+    "probes": 23,
+    "row": 4,
+    "note": "any later probe bisects, whatever h says"
+   }
+  ],
+  "search": {
+   "note": "each lookup's read, its row on a hit, and the rows it reads in order",
+   "files": {
+    "waves-0000002a.bin": [
+     {
+      "hash": "0x57017C0CC011BB1B",
+      "read": "hit",
+      "probes": [
+       2,
+       1,
+       0
+      ],
+      "row": 0
+     },
+     {
+      "hash": "0x6137B0E2A6715752",
+      "read": "hit",
+      "probes": [
+       2,
+       1
+      ],
+      "row": 1
+     },
+     {
+      "hash": "0x954A7DE3A079A42E",
+      "read": "hit",
+      "probes": [
+       3,
+       2
+      ],
+      "row": 2
+     },
+     {
+      "hash": "0xC48674AC937F2ADA",
+      "read": "hit",
+      "probes": [
+       5,
+       4,
+       3
+      ],
+      "row": 3
+     },
+     {
+      "hash": "0xCADB3EFDEF4B2DD9",
+      "read": "hit",
+      "probes": [
+       5,
+       4
+      ],
+      "row": 4
+     },
+     {
+      "hash": "0xDA70B312760188D8",
+      "read": "hit",
+      "probes": [
+       5
+      ],
+      "row": 5
+     },
+     {
+      "hash": "0xF1B24FC757494F2B",
+      "read": "hit",
+      "probes": [
+       6
+      ],
+      "row": 6
+     },
+     {
+      "hash": "0xACE8794819FC6784",
+      "read": "miss",
+      "probes": [
+       4,
+       3,
+       2
+      ],
+      "note": "a miss between rows 2 and 3"
+     },
+     {
+      "hash": "0x0000000000000000",
+      "read": "miss",
+      "probes": [
+       0
+      ],
+      "note": "below every row: hi reaches -1"
+     },
+     {
+      "hash": "0xFFFFFFFFFFFFFFFF",
+      "read": "miss",
+      "probes": [
+       6
+      ],
+      "note": "above every row"
+     }
+    ],
+    "waves-one.bin": [
+     {
+      "hash": "0xDA70B312760188D8",
+      "read": "hit",
+      "probes": [
+       0
+      ],
+      "row": 0
+     },
+     {
+      "hash": "0x0000000000000000",
+      "read": "miss",
+      "probes": [
+       0
+      ]
+     },
+     {
+      "hash": "0xFFFFFFFFFFFFFFFF",
+      "read": "miss",
+      "probes": [
+       0
+      ]
+     }
+    ],
+    "waves-skew.bin": [
+     {
+      "hash": "0x0000000000000000",
+      "read": "hit",
+      "probes": [
+       0
+      ],
+      "row": 0,
+      "note": "hash 0 in row 0: the first bound 0 isn't a slot"
+     },
+     {
+      "hash": "0xFFFFFFFFFFFFFFFF",
+      "read": "hit",
+      "probes": [
+       48
+      ],
+      "row": 48,
+      "note": "hash 2^64 - 1 in the last row: nor is the first bound 2^64 - 1"
+     },
+     {
+      "hash": "0x0000000000000003",
+      "read": "hit",
+      "probes": [
+       0,
+       1,
+       2,
+       3
+      ],
+      "row": 3,
+      "note": "creeping up: 3 probes, then the hit"
+     },
+     {
+      "hash": "0x0000000000000014",
+      "read": "hit",
+      "probes": [
+       0,
+       1,
+       2,
+       3,
+       26,
+       14,
+       20
+      ],
+      "row": 20,
+      "note": "four probes creep from row 0, then bisection"
+     },
+     {
+      "hash": "0x4000000000000000",
+      "read": "hit",
+      "probes": [
+       12,
+       22,
+       29,
+       34,
+       41,
+       37,
+       39,
+       40
+      ],
+      "row": 40,
+      "note": "the row alone: interpolation is far off"
+     },
+     {
+      "hash": "0xFFFFFFFFFFFFFFFA",
+      "read": "hit",
+      "probes": [
+       48,
+       47,
+       46,
+       45,
+       22,
+       33,
+       39,
+       42,
+       43
+      ],
+      "row": 43,
+      "note": "creeping down from the last row"
+     },
+     {
+      "hash": "0x8000000000000000",
+      "read": "miss",
+      "probes": [
+       24,
+       36,
+       42,
+       39,
+       40,
+       41
+      ],
+      "note": "the hash two tracks shared: left out, a miss"
+     },
+     {
+      "hash": "0x0000010000000000",
+      "read": "miss",
+      "probes": [
+       0,
+       1,
+       2,
+       3,
+       26,
+       37,
+       43,
+       40,
+       38,
+       39
+      ],
+      "note": "no such row"
+     }
+    ]
+   }
+  },
+  "scale": {
+   "note": "every row looked up and misses too, in a file of these hashes (the bars don't matter): the reads summed, and the most any lookup took. uniform: SplitMix64 from state 0, the rows' hashes first, then the misses'. paths: the path hash of pattern % (artist, album, track), artist 0-399, album 0-4, track 0-9; the misses', of missPattern % i, i 0-4999. MEASURED by the reference: the same search reads exactly these.",
+   "splitmix64": [
+    "0xE220A8397B1DCDAF",
+    "0x6E789E6AA1B965F4",
+    "0x06C45D188009454F"
+   ],
+   "pattern": "Generated Artist %03d/Sample Album %d/%d - Sample Title.mp3",
+   "missPattern": "Hand Copied/%05d.flac",
+   "uniform": {
+    "rows": 20000,
+    "hitReads": 91176,
+    "hitMax": 19,
+    "misses": 5000,
+    "missReads": 27204,
+    "missMax": 19
+   },
+   "paths": {
+    "rows": 20000,
+    "hitReads": 95654,
+    "hitMax": 19,
+    "misses": 5000,
+    "missReads": 28180,
+    "missMax": 19
+   }
+  },
+  "rowLimit": [
+   {
+    "rows": 250000,
+    "fileBytes": 64000256,
+    "head": "4d50574601000000e0000000010000000091d003010000003d2c1b0adec0ed5e41458ddb0000000000010000f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005756534c01000000000100000090d00390d00300000100000000000000000000",
+    "why": "ok",
+    "note": "uses device: a source of fileBytes whose first 256 bytes are head; no slot is read"
+   },
+   {
+    "rows": 250001,
+    "fileBytes": 64000512,
+    "head": "4d50574601000000e0000000010000000092d003010000003d2c1b0adec0ed5e8843173a0000000000010000f000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000005756534c01000000000100000091d00391d00300000100000000000000000000",
+    "why": "enum",
+    "note": "uses device: a source of fileBytes whose first 256 bytes are head; no slot is read"
+   }
+  ],
+  "deviceTxt": {
+   "who": "software",
+   "note": "a writer writes MPWF only when /.player/device.txt's read.mpwf lists 1; no file, or no read.mpwf key, reads as none. readMpwf is the value under a contract line; text is the file's whole text",
+   "cases": [
+    {
+     "readMpwf": "",
+     "writes": false
+    },
+    {
+     "readMpwf": "1",
+     "writes": true
+    },
+    {
+     "readMpwf": "2",
+     "writes": false
+    },
+    {
+     "readMpwf": "1,2",
+     "writes": true
+    },
+    {
+     "readMpwf": " 1 , 2",
+     "writes": true
+    },
+    {
+     "readMpwf": "01",
+     "writes": true
+    },
+    {
+     "readMpwf": "x1",
+     "writes": false
+    },
+    {
+     "readMpwf": "\t1",
+     "writes": false
+    },
+    {
+     "noFile": true,
+     "writes": false
+    },
+    {
+     "keyMissing": true,
+     "writes": false
+    },
+    {
+     "text": "read.mpwf=1\n",
+     "writes": false,
+     "note": "no contract line: not a device.txt, so no file"
+    },
+    {
+     "text": "read.mpwf=1\ncontract=1\n",
+     "writes": true,
+     "note": "the contract line may stand anywhere"
+    },
+    {
+     "text": "contract=2\nread.mpwf=1\n",
+     "writes": true,
+     "note": "whatever the contract number says"
+    },
+    {
+     "text": "contract=1\nread.mpwf=2\nread.mpwf=1\n",
+     "writes": true,
+     "note": "a key given twice reads as its last"
+    },
+    {
+     "text": "contract=1\nread.mpwf=1\nread.mpwf=2\n",
+     "writes": false,
+     "note": "a key given twice reads as its last"
+    },
+    {
+     "text": "contract=1\r\nread.mpwf=1\r\n",
+     "writes": true,
+     "note": "CRLF is read"
+    }
+   ]
+  },
+  "commit": {
+   "who": "software",
+   "note": "7.3's table, the first line that holds. readMpwf is the value under a contract line; old is the golden file the current root names, null for none; rows, the golden file whose rows the writer starts from (null: none), less drop (row numbers), with lengthMs ({row: value}) applied, then add ({hash, lengthMs, peaks}), sorted by hash. outcome: none, same or new",
+   "cases": [
+    {
+     "readMpwf": "2",
+     "old": "waves-0000002a.bin",
+     "rows": "waves-0000002a.bin",
+     "outcome": "none",
+     "note": "read.mpwf doesn't list 1: no MPWF, whatever there is to write"
+    },
+    {
+     "readMpwf": "1",
+     "old": null,
+     "rows": null,
+     "outcome": "none",
+     "note": "no file, and no row to write"
+    },
+    {
+     "readMpwf": "1",
+     "old": "waves-one.bin",
+     "rows": null,
+     "outcome": "none",
+     "note": "the old file's only track left the card and no other has peaks: no row to write, so no MPWF, not a file of 0 rows; the clean-up deletes the old file"
+    },
+    {
+     "readMpwf": "1",
+     "old": null,
+     "rows": "waves-0000002a.bin",
+     "outcome": "new",
+     "note": "a card's first waves"
+    },
+    {
+     "readMpwf": "1",
+     "old": "waves-0000002a.bin",
+     "rows": "waves-0000002a.bin",
+     "outcome": "same",
+     "note": "nothing changed; or a fetch stopped early, gained nothing, and no old row changed: either way the bytes are equal"
+    },
+    {
+     "readMpwf": "1",
+     "old": "waves-0000002a.bin",
+     "rows": "waves-0000002a.bin",
+     "drop": [
+      6
+     ],
+     "outcome": "new",
+     "note": "row 6's track left the card; a fetch stopped early and gained nothing: the bytes differ, so a new file leaves that row out"
+    },
+    {
+     "readMpwf": "1",
+     "old": "waves-0000002a.bin",
+     "rows": "waves-0000002a.bin",
+     "add": [
+      {
+       "hash": "0x0000000000000001",
+       "lengthMs": 1000,
+       "peaks": [
+        9
+       ]
+      }
+     ],
+     "outcome": "new",
+     "note": "a row gained: every row after it moves"
+    },
+    {
+     "readMpwf": "1",
+     "old": "waves-0000002a.bin",
+     "rows": "waves-0000002a.bin",
+     "lengthMs": {
+      "3": 1000
+     },
+     "outcome": "new",
+     "note": "one row's lengthMs: no CRC tells these bytes from the old file's (4.2), so compare them"
+    }
+   ]
+  },
+  "rootRow": {
+   "note": "WAVEFORM-INDEX.md 7.2: what a reader takes from a root's COMP. waves: the MPWF row's name, null for none; matches: the row against the golden file of that name. Each hardening file's root reads.",
+   "golden": {
+    "file": "manifest-waves.bin",
+    "waves": "waves-0000002a.bin",
+    "matches": true
+   },
+   "hardening": [
+    {
+     "file": "msmf-waves-no-mpdj.bin",
+     "waves": "waves-0000002a.bin",
+     "matches": true,
+     "note": "no MPDJ row: the root's second row"
+    },
+    {
+     "file": "msmf-waves-between.bin",
+     "waves": "waves-0000002a.bin",
+     "matches": true,
+     "note": "between MPTG and MPDJ: readers don't check its place"
+    },
+    {
+     "file": "msmf-waves-first.bin",
+     "waves": "waves-0000002a.bin",
+     "matches": true,
+     "note": "before MPTG: readers don't check its place"
+    },
+    {
+     "file": "msmf-waves-name-upper.bin",
+     "waves": null,
+     "matches": null,
+     "note": "waves-0000002A.bin: uppercase hex"
+    },
+    {
+     "file": "msmf-waves-name-generation.bin",
+     "waves": null,
+     "matches": null,
+     "note": "the name's digits aren't the row's generation"
+    },
+    {
+     "file": "msmf-waves-name-stem.bin",
+     "waves": null,
+     "matches": null,
+     "note": "wave-0000002a.bin: another stem"
+    },
+    {
+     "file": "msmf-waves-name-empty.bin",
+     "waves": null,
+     "matches": null,
+     "note": "the name's offset 0: the empty string"
+    },
+    {
+     "file": "msmf-waves-two.bin",
+     "waves": null,
+     "matches": null,
+     "note": "two MPWF rows: neither counts"
+    },
+    {
+     "file": "msmf-waves-key.bin",
+     "waves": "waves-0000002a.bin",
+     "matches": false,
+     "note": "the key isn't zeros: the row reads, the file doesn't match"
+    },
+    {
+     "file": "msmf-waves-file-bytes.bin",
+     "waves": "waves-0000002a.bin",
+     "matches": false,
+     "note": "fileBytes one more: the file doesn't match"
+    },
+    {
+     "file": "msmf-waves-header-crc.bin",
+     "waves": "waves-0000002a.bin",
+     "matches": false,
+     "note": "headerCrc wrong: the file doesn't match"
+    }
+   ]
   }
  }
 }
