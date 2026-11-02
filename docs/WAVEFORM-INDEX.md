@@ -464,17 +464,29 @@ does (7.4). docs/SEEK-BAR.md has the bar's look.
 - **On a track change,** Now Playing wants that track's path hash. A worker
   job in the covers' lane opens the file, checks the frame and the root's
   row (8.1, 8.2, 7.2), runs the lookup, closes the file and reduces the
-  bars. No handle is kept between jobs. About 20 ms (ESTIMATED).
-- **A shape shows** only when its length agrees with the player's: lengthMs
-  0 does, otherwise `|lengthMs - player's ms| ≤ max(2000, player's ms /
-  50)`. Anything else is the plain line, in the same place.
+  bars. No handle is kept between jobs. About 20 ms (ESTIMATED). An answer
+  for a track no longer wanted, or from before a remount, is dropped.
+- **One record** is kept, whichever hash it answers for: the shape, or that
+  there is none (a miss, a damaged slot). So a repaint and a library update's
+  new ids read no card.
+- **A shape shows** only when its length agrees with the player's (the bar's,
+  frozen at the Down, under a finger): lengthMs 0 does, otherwise `|lengthMs
+  - player's ms| ≤ max(2000, player's ms / 50)`. A track too short to seek, or
+  of no known length, or that failed never shows one. Anything else is the
+  plain line, in the same place.
 - **The reduction to 99 columns** (`lib/core/WaveShape`): each column is the
   RMS of its bars, then a stretch from the 10th percentile column to the
   loudest. At face value loud masters are a brick.
 - **Failures:** damaged is a plain line for this track. Broken, or a failure
-  of the file, is one log line and plain lines until a remount or the next
-  boot. An I/O error is retried once after 2 s, then no shape until the
-  track changes.
+  of the file, a file that isn't on the card included, is one log line and
+  plain lines until a remount or the next boot, and a shape read before goes
+  too. A read's I/O error, one in the file's open too, is retried once after
+  2 s, then no shape until the track changes.
+- **The console:** `gw?` prints the state (the file, the wanted hash, the
+  record, the counters: reads, hits, misses, damaged, the probes a read, the
+  job's ms); `gw=` and 99 digits, or `gw#` and 480 hex digits (240 bars,
+  through the reduction), set a test shape with no card, until `gw-`. `gw` alone
+  is the console's walk of the card, as it was.
 
 ## 12. Writer guidance (informative)
 

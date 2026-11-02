@@ -3182,7 +3182,8 @@ static void stepCard(uint32_t now, bool input) {
   // (autodj::decide(), this pass's: stepAutoDj() ran before).
   env.autoDjOwed = autoDj && autoDj->owed();
   cardTasks->loop(in, src, userInterface ? &userInterface->thumbs() : nullptr,
-                  userInterface && userInterface->coversAllowed(), env);
+                  userInterface ? &userInterface->waves() : nullptr, userInterface && userInterface->coversAllowed(),
+                  env);
   switch (cardTasks->takeAct()) {
     case LibraryUpdate::Do::Fence:
       if (!enterFence()) {
@@ -3458,6 +3459,13 @@ void setup() {
     j.listMoving = [] { return userInterface && userInterface->listMoving(); };
     // (CardTasks' ScanScheduler::In::dark: nothing drawn.)
     j.dark = [] { return !userInterface || !userInterface->coversAllowed(); };
+    j.wave = [](const char* a) {
+      if (userInterface) {
+        userInterface->waves().command(a);
+      } else {
+        Serial.println("[wave] no UI, so no Now Playing and no waveforms (no PSRAM at boot)");
+      }
+    };
     tc->setJobs(j);
   }
   // Auto DJ: its settings, and the index the card's root names, opened and
@@ -3595,6 +3603,8 @@ void loop() {
   audio.loop(now);
   powerLab.loop(now);
   stepCardGuard();
+  // The waveform index: a remount seen before the card's step hands a read.
+  if (userInterface) userInterface->waves().remount(cardHeld);
   stepAutoDj(now);
   if (!cardHeld) queueStore.loop(now);
   // What a track's length is, once the backend knows it (read from the

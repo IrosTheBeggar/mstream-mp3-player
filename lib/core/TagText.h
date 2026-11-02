@@ -36,6 +36,12 @@
 //                 file under /music's 1st, 353rd and 703rd entries,
 //                 uncached and cached;
 //                 glw also the stock walk of /music, uncached and cached
+//   gw?           the waveform index (app/Waves): the file, the track wanted,
+//                 the record and the counters. gw alone is the walk, above.
+//   gw=<99 digits> a shape with no card, for a test of Now Playing's bar:
+//                 each column's height, 0-9. On whatever plays, until gw-.
+//   gw#<480 hex>  the same from 240 bars, through the reduction (wave::reduce())
+//   gw-           drops that shape
 namespace tagtext {
 
 enum class Command : uint8_t {
@@ -51,6 +57,7 @@ enum class Command : uint8_t {
   Verify,     // gv
   Cache,      // gc, gc0, gc1, gc2: `n` the switch (kCacheReport, 0, 1, 2)
   Bench,      // gl, glw: `n` 1 with the walks
+  Wave,       // gw?, gw-, gw=<...>, gw#<...>: `path` from the letter after the w
   Bad,        // anything else (g<n> out of 1-50,000 included)
 };
 // Cache's `n` for gc alone: the counts, nothing switched.
@@ -58,12 +65,17 @@ constexpr uint32_t kCacheReport = 9;
 struct Parsed {
   Command command = Command::Bad;
   uint32_t n = 0;            // Synthetic's; Cache's, Bench's, Status's and Build's
-  const char* path = "";     // Dump's: the rest of the argument, from its first non-space
+  const char* path = "";     // Dump's: the rest of the argument, from its first non-space; Wave's: as above
 };
 // `arg`: what followed the 'g', trimmed (nullptr: "").
 Parsed parse(const char* arg);
 // The help line (the console's 'g' entry).
 extern const char* const kHelp;
+// gw='s text into `count` values: exactly that many digits 0-9. gw#'s into
+// `count` bytes: exactly twice that many hex digits, of either case. False:
+// anything else (`out` then holds what came before the fault).
+bool digitsIn(const char* text, uint8_t* out, size_t count);
+bool hexIn(const char* text, uint8_t* out, size_t count);
 
 // A line at a time (the firmware's Serial, a test's vector).
 using LineFn = void (*)(void* ctx, const char* line);

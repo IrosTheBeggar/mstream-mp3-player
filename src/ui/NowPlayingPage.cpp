@@ -18,19 +18,23 @@
 // pocket rule is asked). onEvent() only moves the model and plays the
 // touch's ticks; update() draws, the pressed look and the end of a scrub at
 // once, a scrub's frames only on the frame deadlines. One log line per
-// touch on the bar, when it ends.
+// touch on the bar, when it ends. The line is the track's waveform when the
+// card has one (app/Waves): lib/core/WaveBar has its rows, its inks and which
+// pass draws what, this page the drawing; the shape stays in Waves' record, so
+// a repaint draws it with no card read.
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 
+#include "AutoDjJoin.h"
 #include "LibraryText.h"
 #include "SheetLayout.h"
 #include "TextFit.h"
 #include "TitleLayout.h"
 #include "TrackCatalog.h"
-#include "TrackSeek.h"
 #include "UiStrings.h"
 #include "UiText.h"
+#include "WaveBar.h"
 #include "app/Psram.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
@@ -57,42 +61,51 @@ constexpr int kTitleY = 38, kTitleH = 52;
 // transport).
 constexpr int kArtistY = 90, kArtistH = 23;
 constexpr int kAlbumY = 113, kAlbumH = 23;
-constexpr int kProgressY = 146, kProgressH = 22;
+// The seek bar's strip (y 137-157), its text row (y 158-173) and the readout row
+// over the rows above (y 110-136) are WaveBar's.
+using wave::kReadoutH;
+using wave::kReadoutY;
+constexpr int kTextCellY = wave::kTextRowY - 1;  // y 157: the text row's Small line starts on the strip's last row
 // The transport takes touches on y 168-239 (five zones of 64 x 72) but is
 // drawn as one 56-row strip (gfx::kStripH) from y 176, 8 px of background
-// each side.
+// each side (the text row's last 6 rows in the upper 8: drawn there, and
+// the transport's to touch).
 constexpr int kTransportY = 168, kTransportH = 72;
 constexpr int kTransportDrawY = 176, kTransportDrawH = 56;
 constexpr int kZoneW = 64;
 constexpr uint32_t kSpinMs = 125;  // the waiting spinner: 8 steps a second
-// The seek bar's touch reaches this far above the band (y 138): the line is
-// drawn at the band's top (y 148-151), so a tap aimed at it lands on both
-// sides of y 146. Whether or not a play waits (the waiting buttons' touch
-// ends at y 137).
-constexpr int kSeekReachPx = 8;
-// The readout row while a finger scrubs: the 33 rows above the band, the
-// full width: over the album row and the cover's lowest 24 rows (its
-// frame's last included), which come back at the lift (endScrub()).
-constexpr int kReadoutY = 113, kReadoutH = 33;
 // The navigation area (the menu's touch, and its press look): everything
-// above the seek bar's reach; lit on x 0-319, y 36-136.
+// above the seek bar's touch; lit on x 0-319, y 36-136.
 constexpr int kNavBottom = kCoverY + kCoverPx + 1;  // 137: under the cover's frame
+// The seek bar's touch: from the row under the navigation area down to the
+// transport's (y 138-167), the full width, whether or not a play waits (the
+// waiting buttons' touch ends at y 137). It stays where the band's was: only
+// what is drawn in it moved.
+constexpr int kBarTouchY = 138;
 // The indicator's glyphs under the "..." dots, 4 px apart when both show.
 constexpr int kModesGap = 4;
 
-static_assert(SeekBar::kLineX + SeekBar::kLineW == kW - 12, "the seek bar's line is drawProgress()'s");
+static_assert(SeekBar::kLineX + SeekBar::kLineW == kW - 12, "the seek bar's line is drawBar()'s");
 static_assert(kTitleH == titlelayout::kStripH, "the title's lines are TitleLayout's");
 static_assert(kArtistY == kTitleY + kTitleH, "the artist row starts where the title strip ends");
 static_assert(kAlbumY == kArtistY + kArtistH, "the album row follows the artist's");
 static_assert(kAlbumY + kAlbumH == kCoverY + kCoverPx, "the album row ends on the cover's last row");
-static_assert(kReadoutY == kAlbumY, "the readout row starts on the album row");
-static_assert(kReadoutY + kReadoutH == kProgressY, "the readout row ends at the band");
-static_assert(kProgressY + kProgressH == kTransportY, "the transport's touch starts under the band");
+static_assert(wave::kScreenW == kW, "the strip is the screen's width");
+static_assert(wave::kStripY == kNavBottom, "the strip starts under the navigation area's lit rows");
+static_assert(kReadoutY + kReadoutH == wave::kStripY, "the readout row ends where the strip starts");
+static_assert(wave::kTextRowY == wave::kStripY + wave::kStripH, "the text row starts under the strip");
+static_assert(wave::kTextRowY + wave::kTextRowH <= kTransportDrawY, "the text row ends above what the transport draws");
+static_assert(wave::kTextRowY + wave::kTextRowH > kTransportY,
+              "the text row's last rows are in the transport's touch, drawing only");
+static_assert(wave::kStripAndTextH <= gfx::kStripH && kReadoutH <= gfx::kStripH,
+              "each is drawn in the strip sprite, the strip and the text row both at once");
+static_assert(wave::kStripAndTextH <= gfx::kBand, "the strip and the text row in one push are one bus hold");
 static_assert(kTransportY + kTransportH == kH, "the transport's touch reaches the button strip");
 static_assert(kTransportDrawH == gfx::kStripH, "the transport is drawn as one strip");
 static_assert(kTransportDrawY - kTransportY == kTransportY + kTransportH - (kTransportDrawY + kTransportDrawH),
               "the drawn transport sits in the middle of its touch");
-static_assert(kProgressY - kSeekReachPx == kNavBottom + 1, "the seek bar's touch starts under the navigation area");
+static_assert(kBarTouchY == kNavBottom + 1, "the seek bar's touch starts under the navigation area");
+static_assert(kBarTouchY < kTransportY, "the transport's touch starts under the seek bar's");
 // The seek bar's off and back rows (SeekBar.h) follow the layout: back on
 // the bar from the readout's second row, off 7 rows above the readout
 // (onto the artist row).
@@ -103,10 +116,25 @@ static_assert(SeekBar::kLineX + uitext::kSeekReadoutW < SeekBar::kReadoutLeftX &
               "the readout at its widest ends short of where the knob sends it across");
 
 // m:ss, as the seek bar's readout has it (what the finger read is what the
-// band shows after the lift).
+// text row shows after the lift).
 void mmss(uint32_t ms, char* buf, size_t size) { SeekBar::timeText(ms, buf, size); }
 
 const char* repeatName(uint8_t mode) { return mode == 2 ? "one" : mode == 1 ? "all" : "off"; }
+
+// A waveform's ink in the palette (Theme.h; WaveBar only names them).
+uint16_t colourOf(wave::Ink ink) {
+  switch (ink) {
+    case wave::Ink::Accent: return accent::NowPlaying;
+    case wave::Ink::Txt: return col::TXT;
+    case wave::Ink::Soft: return col::SOFT;
+    case wave::Ink::Dim: return col::DIM;
+    case wave::Ink::Faint: return col::FAINT;
+    case wave::Ink::BtnHi: return col::BTN_HI;
+    case wave::Ink::Btn: return col::BTN;
+    case wave::Ink::None: break;
+  }
+  return col::BG;
+}
 
 }  // namespace
 
@@ -178,10 +206,10 @@ void NowPlayingPage::repaint() {
     return;
   }
   // What the pieces don't cover: the navigation area's gaps (in its look),
-  // the rows between it and the band, and the transport's margins.
+  // the rows between the text row and the transport, and the transport's
+  // lower margin.
   fillNav();
-  gfx::fill(0, kNavBottom, kW, kProgressY - kNavBottom, col::BG);
-  gfx::fill(0, kTransportY, kW, kTransportDrawY - kTransportY, col::BG);
+  gfx::fill(0, wave::kTextRowY + wave::kTextRowH, kW, kTransportDrawY - (wave::kTextRowY + wave::kTextRowH), col::BG);
   gfx::fill(0, kTransportDrawY + kTransportDrawH, kW, kH - (kTransportDrawY + kTransportDrawH), col::BG);
   drawn_ = Drawn{};
   update(0, false, false);
@@ -335,97 +363,90 @@ bool NowPlayingPage::seekable() const {
   return s.current >= 0 && !s.failed && s.seekable && SeekBar::seekable(s.durationMs);
 }
 
-NowPlayingPage::BarLook NowPlayingPage::barLook() const {
-  switch (bar_.phase()) {
-    case SeekBar::Phase::Pressed: return BarLook::Pressed;
-    case SeekBar::Phase::Scrubbing: return BarLook::Scrubbing;
-    case SeekBar::Phase::Off: return BarLook::Off;
-    default: return seekable() ? BarLook::Rest : BarLook::Inert;
-  }
-}
-
-void NowPlayingPage::drawProgress() {
+wave::Strip NowPlayingPage::stripNow() const {
   const AppState& s = ui_.state();
-  M5Canvas& c = gfx::strip();
-  c.fillRect(0, 0, kW, kProgressH, col::BG);
-  const bool paused = s.play != PlayState::Playing;
-  const int x0 = SeekBar::kLineX, w = SeekBar::kLineW;
-  const BarLook look = barLook();
-  const bool scrub = look == BarLook::Scrubbing || look == BarLook::Off;
-  constexpr int kKnobY = 4;  // the knob's centre, on the line (band rows)
-  int knob = -1, marker = -1;
-  uint16_t knobInk = col::TXT;
-  if (look == BarLook::Inert || look == BarLook::Rest) {
-    if (s.durationMs > 0) {
-      c.fillRoundRect(x0, 2, w, 4, 2, col::DIV);
-      const int fill = SeekBar::xOf(s.positionMs, s.durationMs);
-      knobInk = paused ? col::DIM : accent::NowPlaying;
-      if (fill > 0) c.fillRoundRect(x0, 2, fill, 4, 2, knobInk);
-      if (look == BarLook::Rest) knob = x0 + fill;  // (it can be moved)
-    } else {
-      for (int x = x0; x < x0 + w; x += 6) c.fillRect(x, 3, 3, 2, col::DIV);  // unknown length: dotted
-    }
-  } else {
-    // A finger on it (pressed, scrubbing, off): the line thickens to 6 px.
-    const uint32_t len = bar_.lengthMs();
-    knob = bar_.knobX();
-    if (look == BarLook::Scrubbing) {
-      // To the reach (the length less 6 s); past it, faint dots: the knob
-      // stops there, and the dots say why. The marker shows where it plays
-      // (hidden while the knob is on it).
-      const int reach = SeekBar::xOf(trackseek::seekLimitMs(len), len);
-      c.fillRoundRect(x0, 1, reach, 6, 3, col::DIV);
-      for (int x = x0 + reach + 3; x + 3 <= x0 + w; x += 6) c.fillRect(x, 3, 3, 2, col::FAINT);
-      if (knob > x0) c.fillRoundRect(x0, 1, knob - x0, 6, 3, accent::NowPlaying);
-      if (!bar_.staying()) marker = bar_.markerX();
-    } else {
-      // Pressed: the accent, even paused (it is the active control); off:
-      // dim, to where it plays.
-      c.fillRoundRect(x0, 1, w, 6, 3, col::DIV);
-      const uint16_t ink = look == BarLook::Pressed ? accent::NowPlaying : col::DIM;
-      if (knob > x0) c.fillRoundRect(x0, 1, knob - x0, 6, 3, ink);
-      if (look == BarLook::Off) knobInk = col::DIM;
-    }
-  }
-  if (scrub) {
-    // The text row stays blank: the readout above says it all.
-    if (marker >= 0) c.fillRect(marker - 1, 0, 2, 9, col::DIM);
-  } else {
-    drawProgressText(c, paused);
-  }
-  // The knob last (the text's background fills its rows).
-  if (knob >= 0) {
-    if (look == BarLook::Rest) {
-      c.fillCircle(knob, kKnobY, 3, knobInk);
-    } else {
-      c.fillCircle(knob, kKnobY, 4, knobInk);
-      if (knobInk == col::TXT) c.fillCircle(knob, kKnobY, 2, accent::NowPlaying);
-    }
-  }
-  gfx::push(c, 0, kProgressY, kW, kProgressH);
-  drawn_.bar = static_cast<uint8_t>(look);
-  drawn_.knobX = static_cast<int16_t>(knob);
-  drawn_.markerX = static_cast<int16_t>(scrub ? bar_.markerX() : -1);
+  return wave::stripOf(bar_, seekable(), s.play == PlayState::Playing, s.positionMs, s.durationMs, ui_.waves().shape(),
+                       s.trackId, ui_.waves().version());
 }
 
-// The band's text row: the elapsed time, "Paused, 4 of 16 · SPYDRONE" and
-// the sleep timer's moon, the length.
-void NowPlayingPage::drawProgressText(M5Canvas& c, bool paused) {
+// The strip's x rx..rx + rw - 1, all of it or the part a moved playhead needs, into
+// `c`'s rows 0-20, the columns that overlap it: everything is drawn at x - rx, what
+// falls left of the part is the sprite's to clip, and what falls right of it isn't
+// pushed.
+void NowPlayingPage::drawBar(M5Canvas& c, const wave::Strip& now, int rx, int rw) {
+  c.fillRect(0, 0, rw, wave::kStripH, col::BG);
+  const wave::Inks in = wave::inksOf(now.look);
+  if (now.fill == wave::Fill::Bars) {
+    // (A Bars strip has the record: fillOf().)
+    const wave::Shape& shape = *ui_.waves().shape();
+    const int reach = wave::reachX(bar_.lengthMs());  // (only a scrub's inks ask: the rest have no reach)
+    const wave::ColumnRange columns = wave::columnsIn(rx, rw);
+    for (int i = columns.first; i <= columns.last; ++i) {
+      const int h = shape.heights[i];
+      c.fillRect(wave::columnX(i) - rx, wave::barTop(h) - wave::kStripY, wave::kColumnW, wave::barRows(h),
+                 colourOf(wave::barInk(now.look, i, now.playheadX, reach)));
+    }
+    if (in.marker != wave::Ink::None && !bar_.staying()) {
+      c.fillRect(now.markerX - 1 - rx, 0, wave::kPlayheadW, wave::kStripH, colourOf(in.marker));
+    }
+    c.fillRect(now.playheadX - 1 - rx, 0, wave::kPlayheadW, wave::kStripH, colourOf(in.playhead));
+  } else {
+    drawLine(c, now, rx);
+  }
+  // The knob last.
+  if (in.knob != wave::Ink::None) {
+    c.fillCircle(now.playheadX - rx, wave::kCentreRow, wave::kKnobR, colourOf(in.knob));
+    if (in.knobDot != wave::Ink::None) {
+      c.fillCircle(now.playheadX - rx, wave::kCentreRow, wave::kKnobDotR, colourOf(in.knobDot));
+    }
+  }
+}
+
+void NowPlayingPage::drawLine(M5Canvas& c, const wave::Strip& now, int rx) {
+  using namespace wave;
+  const int x0 = SeekBar::kLineX - rx, w = SeekBar::kLineW;
+  const int fill = now.playheadX - SeekBar::kLineX;  // the fill's width
+  if (now.look == Look::Inert || now.look == Look::RestPlaying || now.look == Look::RestPaused) {
+    if (now.fill == Fill::Dots) {
+      for (int x = x0; x < x0 + w; x += kDotStep) c.fillRect(x, kDotsRow, kDotW, kDotsH, col::DIV);  // unknown length
+      return;
+    }
+    const uint16_t ink = now.playing ? accent::NowPlaying : col::DIM;
+    c.fillRoundRect(x0, kThinRow, w, kThinH, kThinR, col::DIV);
+    if (fill > 0) c.fillRoundRect(x0, kThinRow, fill, kThinH, kThinR, ink);
+    if (now.look != Look::Inert) c.fillCircle(x0 + fill, kCentreRow, kRestKnobR, ink);  // (it can be moved)
+    return;
+  }
+  // A finger on it (pressed, scrubbing, off): the line thickens to 6 px.
+  if (now.look == Look::Scrubbing) {
+    // To the reach (the length less 6 s); past it, faint dots: the knob
+    // stops there, and the dots say why. The marker shows where it plays
+    // (hidden while the knob is on it).
+    const int reach = reachX(bar_.lengthMs()) - SeekBar::kLineX;
+    c.fillRoundRect(x0, kThickRow, reach, kThickH, kThickR, col::DIV);
+    for (int x = x0 + reach + kDotW; x + kDotW <= x0 + w; x += kDotStep) {
+      c.fillRect(x, kDotsRow, kDotW, kDotsH, col::FAINT);
+    }
+    if (fill > 0) c.fillRoundRect(x0, kThickRow, fill, kThickH, kThickR, accent::NowPlaying);
+    if (!bar_.staying()) c.fillRect(now.markerX - 1 - rx, kLineMarkerRow, kPlayheadW, kLineMarkerH, col::DIM);
+  } else {
+    // Pressed: the accent, even paused (it is the active control); off:
+    // dim, to where it plays.
+    c.fillRoundRect(x0, kThickRow, w, kThickH, kThickR, col::DIV);
+    if (fill > 0) c.fillRoundRect(x0, kThickRow, fill, kThickH, kThickR, colourOf(inksOf(now.look).played));
+  }
+}
+
+// The text row: the elapsed time, "Paused, 4 of 16 · SPYDRONE" and the sleep
+// timer's moon, the length. A draw of its own, y 158-173, into `c` with the Small
+// line's first row on its row `top`: that row, y 157, is the strip's, and isn't
+// pushed as the text row's.
+void NowPlayingPage::drawProgressText(M5Canvas& c, int top) {
   const AppState& s = ui_.state();
   Fonts& f = Fonts::instance();
+  const bool paused = s.play != PlayState::Playing;
   const int x0 = SeekBar::kLineX, w = SeekBar::kLineW;
-  constexpr int kTextY = 14;
-  char t[24];
-  if (s.current >= 0) {
-    mmss(s.positionMs, t, sizeof(t));
-    f.draw(c, Font::Small, t, x0, kTextY, 60, paused ? col::AMBER : col::SOFT, col::BG);
-    if (s.durationMs > 0) {
-      mmss(s.durationMs, t, sizeof(t));
-    } else {
-      snprintf(t, sizeof(t), "--:--");
-    }
-    f.draw(c, Font::Small, t, x0 + w, kTextY, 60, col::SOFT, col::BG, Fonts::Align::Right);
-  }
+  c.fillRect(0, top, kW, 1 + wave::kTextRowH, col::BG);
   char mid[128];
   char base[64] = "";  // "Paused, 4 of 16": the line without its output
   char warn[96] = "";  // "WH-1000XM4 (not connected)": never dropped for the timer
@@ -459,6 +480,22 @@ void NowPlayingPage::drawProgressText(M5Canvas& c, bool paused) {
       midW = uitext::kNowPlayingWarnW;
     }
   }
+  // A line with a glyph from the store goes a row lower, the times with it: the
+  // store's em box takes a Small line's rows 0-15, and row 0 isn't pushed. So
+  // it shows the rows it did before the strip took y 157 (test_ui_library).
+  const bool low = f.fromStore(Font::Small, mid) || f.fromStore(Font::Small, s.sleepShort);
+  const int textY = top + wave::kTextCentreY - kTextCellY + (low ? 1 : 0);
+  char t[24];
+  if (s.current >= 0) {
+    mmss(s.positionMs, t, sizeof(t));
+    f.draw(c, Font::Small, t, x0, textY, 60, paused ? col::AMBER : col::SOFT, col::BG);
+    if (s.durationMs > 0) {
+      mmss(s.durationMs, t, sizeof(t));
+    } else {
+      snprintf(t, sizeof(t), "--:--");
+    }
+    f.draw(c, Font::Small, t, x0 + w, textY, 60, col::SOFT, col::BG, Fonts::Align::Right);
+  }
   // The sleep timer: a moon and "23 min" ("track", "45 s", "fading") after
   // the line; what gives way when both don't fit is uitext::sleepLineFit()'s
   // (the output's name first; never the headphones' not-connected warning).
@@ -474,14 +511,45 @@ void NowPlayingPage::drawProgressText(M5Canvas& c, bool paused) {
     const uint16_t tc = fit.text == Text::Warn ? col::AMBER : mc;
     const int tw = !text[0] ? 0 : fit.text == Text::Warn ? warnW : f.width(Font::Small, text);
     const int x0 = kW / 2 - fit.width / 2;
-    if (text[0]) f.draw(c, Font::Small, text, x0, kTextY, tw, tc, col::BG);
+    if (text[0]) f.draw(c, Font::Small, text, x0, textY, tw, tc, col::BG);
     const int sx = text[0] ? x0 + tw + kSleepGap : x0;
     const uint16_t sc = s.sleepFading ? col::AMBER : col::SOFT;
-    if (fit.moon) icons::drawMoon(c, sx, kTextY - 6, 11, sc);
-    if (fit.moonText) f.draw(c, Font::Small, s.sleepShort, sx + kSleepMoonW, kTextY, sw - kSleepMoonW, sc, col::BG);
+    if (fit.moon) icons::drawMoon(c, sx, textY - 6, 11, sc);
+    if (fit.moonText) f.draw(c, Font::Small, s.sleepShort, sx + kSleepMoonW, textY, sw - kSleepMoonW, sc, col::BG);
   } else {
-    f.draw(c, Font::Small, mid, kW / 2, kTextY, midW, mc, col::BG, Fonts::Align::Centre);
+    f.draw(c, Font::Small, mid, kW / 2, textY, midW, mc, col::BG, Fonts::Align::Centre);
   }
+}
+
+// What a pass draws of the seek bar: the strip's x rx..rx + rw - 1, all of it, a
+// part, or none with no width, and what `text` says of the text row. A whole strip
+// with the text row due is one push, y 137-173: the same px, in one bus hold. The
+// text row goes into the sprite first: its Small line's first row is the strip's
+// last, which the strip's fill takes back. (A blank only comes with a whole strip:
+// only a finger's scrub has a look without text, and its frames are whole.)
+void NowPlayingPage::drawSeekBar(const wave::Strip& now, int rx, int rw, wave::TextDraw text) {
+  using wave::TextDraw;
+  M5Canvas& c = gfx::strip();
+  if (wave::pushedAsOne(wave::Region{rx, rw}, text)) {
+    if (text == TextDraw::Draw) {
+      drawProgressText(c, wave::kStripH - 1);
+    } else {
+      c.fillRect(0, wave::kStripH, kW, wave::kTextRowH, col::BG);
+    }
+    drawBar(c, now, 0, kW);
+    gfx::push(c, 0, wave::kStripY, kW, wave::kStripAndTextH);
+  } else {
+    if (rw > 0) {
+      drawBar(c, now, rx, rw);
+      gfx::push(c, rx, wave::kStripY, rw, wave::kStripH);
+    }
+    if (text == TextDraw::Draw) {
+      drawProgressText(c, 0);
+      gfx::pushRows(c, 0, kTextCellY, kW, 1, 1 + wave::kTextRowH);
+    }
+  }
+  if (rw > 0) drawn_.strip = now;
+  if (text != TextDraw::None) drawn_.textRow = text == TextDraw::Draw ? wave::TextRow::Shown : wave::TextRow::Blank;
 }
 
 void NowPlayingPage::drawReadout() {
@@ -489,9 +557,9 @@ void NowPlayingPage::drawReadout() {
   M5Canvas& c = gfx::strip();
   Fonts& f = Fonts::instance();
   c.fillRect(0, 0, kW, kReadoutH, col::BG);
-  // Title centred on the row's row 16, Small on row 19: their baselines
-  // roughly agree.
-  constexpr int kBigY = 16, kSmallY = 19;
+  // Title (and the cancel's Bold) centred on the row's row 13, Small on row
+  // 16: their baselines agree.
+  constexpr int kBigY = wave::kReadoutBigRow, kSmallY = wave::kReadoutSmallRow;
   if (bar_.phase() == SeekBar::Phase::Off) {
     f.draw(c, Font::Bold, tr(S::now_playing_seek_cancel), kW / 2, kBigY, SeekBar::kLineW, col::AMBER, col::BG,
            Fonts::Align::Centre);
@@ -515,7 +583,7 @@ void NowPlayingPage::drawReadout() {
     if (sw > 0) f.draw(c, Font::Small, small, x + bw + kSeekReadoutGap, kSmallY, sw, col::DIM, col::BG);
   }
   // Entering the scrub's look (or after the middle was drawn again) while
-  // a play waits: the buttons' upper halves (y 94-112) would stick out
+  // a play waits: the buttons' upper halves (y 94-109) would stick out
   // above the readout, so the artist row goes too.
   if (!drawn_.scrubUp && ui_.state().play == PlayState::Waiting) {
     gfx::fill(kColumnX, kArtistY, kW - kColumnX, kArtistH, col::BG);
@@ -528,8 +596,8 @@ void NowPlayingPage::drawReadout() {
 void NowPlayingPage::endScrub() {
   // The rows the readout took back: their background, the cover's lowest
   // rows from its sprite (no re-render, no thumbnail lookup), then the
-  // rows (or the waiting panel); the band follows in its rest look
-  // (update()).
+  // rows (or the waiting panel); the strip and the text row follow in their
+  // rest look (update()).
   gfx::fill(0, kReadoutY, kW, kReadoutH, col::BG);
   drawn_.scrubUp = false;
   const int from = kReadoutY - (kCoverY - 1);  // the sprite's row on the readout's first
@@ -745,6 +813,23 @@ void NowPlayingPage::onEmptyEvent(const InputEvent& e) {
   }
 }
 
+// What the waveform index is asked for (Waves reads nothing for the hash it
+// holds, so a repaint and a library update's new ids cost this walk of the
+// path in PSRAM, no card read). Behind the library update's fence there is no
+// index and the player can't change track: the last want stays, and the update's
+// end repaints. (Not inlined: the path's 512 B stay off update()'s frame.)
+__attribute__((noinline)) void NowPlayingPage::wantWave() {
+  const AppState& s = ui_.state();
+  uint64_t hash = 0;  // (a built-in tone has none)
+  if (!TrackCatalog::isBuiltin(s.trackId)) {
+    const LibraryIndex* index = ui_.library().index();
+    if (!index || !index->ready()) return;
+    char path[autodj::Join::kPathBytes];
+    if (!autodj::trackPathHash(*index, s.trackId, path, sizeof(path), &hash)) hash = 0;
+  }
+  ui_.waves().want(hash);
+}
+
 bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   (void)wholeRows;
   const AppState& s = ui_.state();
@@ -791,8 +876,7 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   const bool waiting = s.play == PlayState::Waiting;
   const uint32_t wsig = waiting ? waitSig() : 0;
   if (!waiting && (pressed_ == WaitSpeaker || pressed_ == WaitCancel)) pressed_ = None;
-  const BarLook look = barLook();
-  const bool scrub = look == BarLook::Scrubbing || look == BarLook::Off;
+  const bool scrub = bar_.scrubbing();
   // The title strip with the rows under it: it holds the wait's status
   // while a play waits, so it follows the wait too.
   if (newTrack || waiting != drawn_.waiting || wsig != drawn_.waitSig) {
@@ -807,32 +891,40 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
     }
   }
   // A scrub ended (a lift, a cancel): the rows and the cover's lowest rows
-  // back at once; the band below, in its rest look.
+  // back at once; the strip and the text row below, in their rest look.
   if (drawn_.scrubUp && !scrub) endScrub();
   // The cover: when the album changes (a track of the same album keeps it).
   if (all || (newTrack && playingAlbum() != drawn_.coverAlbum)) drawCover();
+  // The waveform: asked for when the track changes, seen by its version().
+  if (all || s.trackId != drawn_.track) wantWave();
   const uint32_t second = s.positionMs / 1000;
   const uint32_t durS = s.durationMs / 1000;
   const uint32_t output = outputSig();
   uint32_t sleep = s.sleepFading ? 1u : 0u;
   for (const char* p = s.sleepShort; *p; ++p) sleep = sleep * 31u + static_cast<unsigned char>(*p);
+  // The seek bar is two draws on two triggers (docs/SEEK-BAR.md 4.5). The strip
+  // when what it shows changed; the text row when what it says did.
+  const wave::Strip strip = stripNow();
+  const wave::Region region = wave::regionToDraw(drawn_.strip, strip);
+  const wave::TextDraw text = wave::textDraw(strip.look, drawn_.textRow,
+                                             second != drawn_.second || durS != drawn_.durationS || s.play != drawn_.play ||
+                                                 s.failed != drawn_.failed || s.current != drawn_.current ||
+                                                 s.queueSize != drawn_.size || output != drawn_.output ||
+                                                 sleep != drawn_.sleep);
   bool frame = false;
   if (scrub) {
-    // A finger scrubs: a frame (the band, and the readout when its text or
-    // side changed) only on the frame deadlines, when the look, the knob,
-    // the marker or the readout moved.
-    const bool text = !drawn_.scrubUp || bar_.readout() != drawn_.readout;
-    const bool moved = static_cast<uint8_t>(look) != drawn_.bar || bar_.knobX() != drawn_.knobX ||
-                       bar_.markerX() != drawn_.markerX;
-    if (all || ((text || moved) && frameDue)) {
-      if (text) drawReadout();
-      drawProgress();
+    // A finger scrubs: a frame (the whole strip, and the readout when its text
+    // or side changed) only on the frame deadlines, when the strip or the
+    // readout moved. The text row goes with the first frame, once.
+    const bool readout = !drawn_.scrubUp || bar_.readout() != drawn_.readout;
+    if (all || ((readout || region.w > 0) && frameDue)) {
+      if (readout) drawReadout();
+      drawSeekBar(strip, 0, kW, text);
       frame = !all;
     }
-  } else if (all || static_cast<uint8_t>(look) != drawn_.bar || second != drawn_.second || durS != drawn_.durationS ||
-             s.play != drawn_.play || s.current != drawn_.current || s.queueSize != drawn_.size ||
-             output != drawn_.output || sleep != drawn_.sleep) {
-    drawProgress();  // (a new look at once: the pressed one on a Down, the rest after a touch)
+  } else {
+    // (A new look at once: the pressed one on a Down, the rest after a touch.)
+    drawSeekBar(strip, region.x, region.w, text);
   }
   if (all || s.play != drawn_.play || s.volume != drawn_.volume || s.onBluetooth != drawn_.bluetooth ||
       output != drawn_.output || s.shuffle != drawn_.shuffle || s.repeat != drawn_.repeat) {
@@ -850,6 +942,7 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   drawn_.track = s.trackId;
   drawn_.names = names;
   drawn_.play = s.play;
+  drawn_.failed = s.failed;
   drawn_.second = second;
   drawn_.durationS = durS;
   drawn_.current = s.current;
@@ -868,9 +961,9 @@ NowPlayingPage::Zone NowPlayingPage::zoneAt(const InputEvent& e) const {
     const int z = e.x / kZoneW;
     return static_cast<Zone>(Volume + (z < 0 ? 0 : z > 4 ? 4 : z));
   }
-  // The seek bar: the full width, from 8 px above the band (the line is
-  // drawn at the band's top), whether or not a play waits.
-  if (e.y >= kProgressY - kSeekReachPx) return Bar;
+  // The seek bar: the full width, from under the navigation area, whether or
+  // not a play waits.
+  if (e.y >= kBarTouchY) return Bar;
   // The cover's column: the navigation menu, waiting or not.
   if (e.x < kColumnX) return Nav;
   if (ui_.state().play == PlayState::Waiting) {
@@ -1205,15 +1298,20 @@ void NowPlayingPage::describe(char* buf, size_t size) const {
   char* rest = buf + n;
   size_t room = size - static_cast<size_t>(n);
   int m = 0;
-  switch (barLook()) {
-    case BarLook::Inert: m = snprintf(rest, room, "; the bar: inert"); break;
-    case BarLook::Rest:
-      m = snprintf(rest, room, "; the bar: rest, the knob at x %d",
-                   SeekBar::kLineX + SeekBar::xOf(s.positionMs, s.durationMs));
+  const wave::Strip strip = stripNow();
+  const bool bars = strip.fill == wave::Fill::Bars;
+  switch (strip.look) {
+    case wave::Look::Inert: m = snprintf(rest, room, "; the bar: inert"); break;
+    case wave::Look::RestPlaying:
+    case wave::Look::RestPaused:
+      // (The live x, where a touch finds the knob: what is drawn stands on the
+      // whole second, up to a second's px behind it.)
+      m = snprintf(rest, room, "; the bar: rest, the %s at x %d", bars ? "playhead" : "knob",
+                   wave::playheadX(s.positionMs, s.durationMs));
       break;
-    case BarLook::Pressed: m = snprintf(rest, room, "; the bar: pressed"); break;
-    case BarLook::Off: m = snprintf(rest, room, "; the bar: off"); break;
-    case BarLook::Scrubbing: {
+    case wave::Look::Pressed: m = snprintf(rest, room, "; the bar: pressed"); break;
+    case wave::Look::Off: m = snprintf(rest, room, "; the bar: off"); break;
+    case wave::Look::Scrubbing: {
       if (bar_.staying()) {
         m = snprintf(rest, room, "; the bar: staying");
         break;
@@ -1228,8 +1326,8 @@ void NowPlayingPage::describe(char* buf, size_t size) const {
   }
   if (m < 0 || static_cast<size_t>(m) >= room) return;
   // The playback modes (docs/QUEUE-MODES.md), as the indicator shows them.
-  snprintf(rest + m, room - static_cast<size_t>(m), "; shuffle %s, repeat %s", s.shuffle ? "on" : "off",
-           repeatName(s.repeat));
+  snprintf(rest + m, room - static_cast<size_t>(m), "%s; shuffle %s, repeat %s", bars ? ", bars" : "",
+           s.shuffle ? "on" : "off", repeatName(s.repeat));
 }
 
 }  // namespace ui

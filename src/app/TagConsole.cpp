@@ -178,6 +178,13 @@ void TagConsole::command(const tagtext::Parsed& p) {
       }
       return;
     case C::Verify: job("verify the transfer's files (gv)", jobs_.verify); return;
+    case C::Wave:
+      if (jobs_.wave) {
+        jobs_.wave(p.path);
+      } else {
+        Serial.println("[wave] no waveforms in this build; nothing changed");
+      }
+      return;
     default: Serial.printf("[tags] %s\n", tagtext::kHelp); return;
   }
 }

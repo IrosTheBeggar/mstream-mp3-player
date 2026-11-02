@@ -3,11 +3,11 @@
 
 // Host tests for the card worker's scheduler (ScanScheduler,
 // docs/METADATA.md 3.3.3-3.3.5, milestone N7): the scan runs on battery and
-// while playing; one step at a time; covers first, the update step's build
-// before everything; each yield (input, the ring, an underrun, a long decode
-// pass, a track change, a seek, Bluetooth) holding the background work for
-// exactly its window, in its order; a list "moving" in the dark holding
-// nothing (2026-10-14); the battery floor and its hysteresis;
+// while playing; one step at a time; a waveform's read, then covers, first;
+// the update step's build before everything; each yield (input, the ring, an
+// underrun, a long decode pass, a track change, a seek, Bluetooth) holding the
+// background work for exactly its window, in its order; a list "moving" in the
+// dark holding nothing (2026-10-14); the battery floor and its hysteresis;
 // the jobs' and the scan's sources' order; millis()'s wrap; the build after a
 // walk (U11); a slice of the walk or the scan cut, and dropped to 0, by any
 // wait (2026-10-09); each step's units; and a random run against an
@@ -125,8 +125,8 @@ void test_runs_on_battery_and_while_playing() {
 void test_one_step_at_a_time() {
   S s;
   S::In in = base(0);
-  in.cover = in.build = in.save = in.walk = true;
-  const J kinds[] = {J::Cover, J::Build, J::Save, J::Walk, J::Compact, J::Scan};
+  in.cover = in.wave = in.build = in.save = in.walk = true;
+  const J kinds[] = {J::Cover, J::Wave, J::Build, J::Save, J::Walk, J::Compact, J::Scan};
   for (J running : kinds) {
     for (int moving = 0; moving < 2; ++moving) {
       for (int dark = 0; dark < 2; ++dark) {
@@ -137,17 +137,18 @@ void test_one_step_at_a_time() {
         const S::Out o = s.update(in);
         TEST_ASSERT_EQUAL(J::None, o.job);
         TEST_ASSERT_EQUAL(W::Step, o.wait);
-        // Covers and the walk's slices drop below the loop while a list
-        // moves (Thumbs' rule); the build stays level with it (the listener
-        // waits for it); the scan's slices, a compaction and the save are
-        // level with it only while the screen is dark (3.3.9; the 2026-10-09
-        // device run). A list "moving" in the dark holds nothing
+        // Covers, waveforms' reads and the walk's slices drop below the loop
+        // while a list moves (Thumbs' rule); the build stays level with it
+        // (the listener waits for it); the scan's slices, a compaction and the
+        // save are level with it only while the screen is dark (3.3.9; the
+        // 2026-10-09 device run). A list "moving" in the dark holds nothing
         // (listHolds(): none is seen moving).
         const bool held = moving == 1 && dark == 0;
-        const uint8_t want = running == J::Build                         ? S::kHighPriority
-                             : running == J::Cover || running == J::Walk ? (held ? S::kLowPriority : S::kHighPriority)
-                             : dark                                      ? S::kHighPriority
-                                                                         : S::kLowPriority;
+        const bool lane = running == J::Cover || running == J::Wave || running == J::Walk;
+        const uint8_t want = running == J::Build ? S::kHighPriority
+                             : lane              ? (held ? S::kLowPriority : S::kHighPriority)
+                             : dark              ? S::kHighPriority
+                                                 : S::kLowPriority;
         TEST_ASSERT_EQUAL_UINT8(want, o.priority);
         TEST_ASSERT_EQUAL_UINT8(want, S::priorityOf(running, moving == 1, dark == 1));
         // A moving list cuts a slice (the walk's, the scan's) after its unit.
@@ -194,8 +195,8 @@ void test_one_step_at_a_time() {
 // next one: input, the ring, an underrun, a long decode pass, a track
 // change, a seek, Bluetooth, a moving list (the screen lit: a list moves
 // only there), and for the scan the battery floor. So a wait takes effect
-// within a unit and a pass, as with one-unit steps. A cover, a compaction,
-// the build and the save aren't slices.
+// within a unit and a pass, as with one-unit steps. A cover, a waveform's read,
+// a compaction, the build and the save aren't slices.
 void test_a_slice_is_cut_by_any_wait() {
   struct Cause {
     const char* name;
@@ -213,7 +214,7 @@ void test_a_slice_is_cut_by_any_wait() {
          in.dark = false;
        }},
   };
-  const J kinds[] = {J::Walk, J::Scan, J::Cover, J::Compact, J::Build, J::Save};
+  const J kinds[] = {J::Walk, J::Scan, J::Cover, J::Wave, J::Compact, J::Build, J::Save};
   for (const Cause& c : causes) {
     for (J running : kinds) {
       S s;
@@ -451,7 +452,7 @@ void test_bluetooth() {
 }
 
 // Input: each touch holds it 0.5 s; a moving list holds everything (covers
-// too) for as long as it moves.
+// and waveforms' reads too) for as long as it moves.
 void test_input_and_lists() {
   S s;
   S::In in = base(0);
@@ -463,6 +464,7 @@ void test_input_and_lists() {
   TEST_ASSERT_EQUAL_UINT32(600, firstStart(s, 110, 2000, in));
   in.listMoving = true;
   in.cover = true;
+  in.wave = true;
   in.save = true;
   for (uint32_t t = 1000; t <= 9000; t += 10) {
     in.nowMs = t;
@@ -472,7 +474,20 @@ void test_input_and_lists() {
   }
   in.listMoving = false;
   in.nowMs = 9010;
-  TEST_ASSERT_EQUAL(J::Cover, s.update(in).job);  // (no quiet time after a list)
+  TEST_ASSERT_EQUAL(J::Wave, s.update(in).job);  // (no quiet time after a list)
+  in.wave = false;
+  in.nowMs = 9020;
+  TEST_ASSERT_EQUAL(J::Cover, s.update(in).job);  // (nor for a cover)
+  // A waveform's read alone, with nothing else asked, is held the same.
+  S w;
+  S::In one = base(0);
+  one.restPending = false;
+  one.wave = true;
+  one.listMoving = true;
+  TEST_ASSERT_EQUAL(W::List, w.update(one).wait);
+  one.listMoving = false;
+  one.nowMs = 10;
+  TEST_ASSERT_EQUAL(J::Wave, w.update(one).job);
 }
 
 // A list "moving" while the screen is dark holds nothing (listHolds()):
@@ -549,6 +564,37 @@ void test_a_dark_screen_holds_nothing_for_a_list() {
     TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, o.priority);
   }
   TEST_ASSERT_EQUAL_UINT64(0, bg.waitedMs(W::List));
+  // A waveform's read and a cover go by the same rule: handed in the dark, level
+  // with the loop, the list "moving"; held by it once the screen is lit, and
+  // below the loop if already under way.
+  for (J job : {J::Wave, J::Cover}) {
+    S lane;
+    S::In l = base(0);
+    l.restPending = false;
+    l.wave = job == J::Wave;
+    l.cover = job == J::Cover;
+    l.dark = true;
+    l.listMoving = true;
+    o = lane.update(l);
+    TEST_ASSERT_EQUAL(job, o.job);
+    TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);
+    TEST_ASSERT_EQUAL(W::None, o.wait);
+    l.running = job;
+    l.nowMs = 10;
+    o = lane.update(l);
+    TEST_ASSERT_EQUAL(W::Step, o.wait);
+    TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);
+    l.dark = false;
+    l.nowMs = 20;
+    o = lane.update(l);
+    TEST_ASSERT_EQUAL(W::Step, o.wait);
+    TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, o.priority);
+    l.running = J::None;
+    l.nowMs = 30;
+    o = lane.update(l);
+    TEST_ASSERT_EQUAL(J::None, o.job);
+    TEST_ASSERT_EQUAL(W::List, o.wait);
+  }
   // The rule.
   TEST_ASSERT_FALSE(S::listHolds(false, false));
   TEST_ASSERT_TRUE(S::listHolds(true, false));
@@ -652,7 +698,8 @@ void test_the_battery_floor() {
   o = s.update(in);
   TEST_ASSERT_TRUE(o.batteryReleased);
   TEST_ASSERT_EQUAL(J::Scan, o.job);
-  // Held: the walk, a compaction, the save, a cover and the build go on.
+  // Held: the walk, a compaction, the save, a cover, a waveform's read and the
+  // build go on.
   in.usb = false;
   s.update(in);
   TEST_ASSERT_TRUE(s.batteryLow());
@@ -661,7 +708,7 @@ void test_the_battery_floor() {
     bool S::In::*flag;
     J job;
   } go[] = {{&S::In::walk, J::Walk}, {&S::In::compact, J::Compact}, {&S::In::save, J::Save},
-            {&S::In::cover, J::Cover}, {&S::In::build, J::Build}};
+            {&S::In::cover, J::Cover}, {&S::In::wave, J::Wave},      {&S::In::build, J::Build}};
   for (const auto& g : go) {
     S::In one = in;
     one.*(g.flag) = true;
@@ -710,6 +757,92 @@ void test_covers_come_first() {
   TEST_ASSERT_EQUAL(W::Input, s.update(in).wait);
 }
 
+// A waveform's read is in the covers' lane, and takes it right before a cover:
+// whatever the audio, at the loop's priority; a moving list holds it, and a
+// build goes first. It is work by itself, and no audio's yield waits for it.
+void test_a_waves_read_comes_before_a_cover() {
+  S s;
+  S::In in = base(0);
+  in.underruns = 1;
+  s.update(in);
+  in.nowMs = 10;
+  in.underruns = 2;
+  in.input = true;
+  in.ringMs = 0;
+  in.decoderAtEnd = true;
+  in.seeking = true;
+  in.btSetup = true;
+  in.battery = 3;
+  in.wave = in.cover = in.save = in.walk = in.compact = true;
+  in.playingPending = true;
+  S::Out o = s.update(in);
+  TEST_ASSERT_EQUAL(J::Wave, o.job);
+  TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);
+  TEST_ASSERT_EQUAL(W::None, o.wait);
+  TEST_ASSERT_EQUAL(Src::None, o.source);
+  // A build asked with it goes first.
+  in.build = true;
+  TEST_ASSERT_EQUAL(J::Build, s.update(in).job);
+  in.build = false;
+  // A moving list: nothing starts.
+  in.listMoving = true;
+  o = s.update(in);
+  TEST_ASSERT_EQUAL(J::None, o.job);
+  TEST_ASSERT_EQUAL(W::List, o.wait);
+  // Under way when a list starts moving: below the loop until it stops, and it
+  // isn't cut (it isn't a slice).
+  in.running = J::Wave;
+  o = s.update(in);
+  TEST_ASSERT_EQUAL(W::Step, o.wait);
+  TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, o.priority);
+  TEST_ASSERT_FALSE(o.cut);
+  in.listMoving = false;
+  TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, s.update(in).priority);
+  // Done: the cover next, then the save held by the audio (here the input).
+  in.running = J::None;
+  in.wave = false;
+  TEST_ASSERT_EQUAL(J::Cover, s.update(in).job);
+  in.cover = false;
+  TEST_ASSERT_EQUAL(W::Input, s.update(in).wait);
+
+  // Asked with nothing else to do: it starts. Not asked: nothing does.
+  S alone;
+  S::In a = base(0);
+  a.restPending = false;
+  TEST_ASSERT_EQUAL(J::None, alone.update(a).job);
+  a.wave = true;
+  a.nowMs = 10;
+  TEST_ASSERT_EQUAL(J::Wave, alone.update(a).job);
+  a.wave = false;
+  a.nowMs = 20;
+  o = alone.update(a);
+  TEST_ASSERT_EQUAL(J::None, o.job);
+  TEST_ASSERT_EQUAL(W::None, o.wait);
+
+  // While the update step holds the worker it still goes, as a cover does: the
+  // read is its own, and nothing it reads moves under it.
+  S held;
+  S::In h = base(0);
+  h.updating = true;
+  TEST_ASSERT_EQUAL(W::Updating, held.update(h).wait);
+  h.wave = true;
+  h.nowMs = 10;
+  TEST_ASSERT_EQUAL(J::Wave, held.update(h).job);
+
+  // Its own line in the steps' count.
+  S count;
+  count.stepDone(J::Wave, 18);
+  count.stepDone(J::Wave, 24);
+  count.stepDone(J::Cover, 300);
+  TEST_ASSERT_EQUAL_UINT32(2, count.steps(J::Wave));
+  TEST_ASSERT_EQUAL_UINT32(21, count.meanStepMs(J::Wave));
+  TEST_ASSERT_EQUAL_UINT32(24, count.maxStepMs(J::Wave));
+  TEST_ASSERT_EQUAL_UINT32(2, count.units(J::Wave));
+  TEST_ASSERT_EQUAL_UINT32(1, count.steps(J::Cover));
+  count.resetStats();
+  TEST_ASSERT_EQUAL_UINT32(0, count.steps(J::Wave));
+}
+
 // The update step (3.4.2, N12): its build before everything and held by
 // nothing but a step under way; while it holds the worker the background
 // work waits, covers don't; its save yields as the background does, but
@@ -726,7 +859,7 @@ void test_the_update_step() {
   in.compact = false;
   // The fence; the build asked, with everything against it.
   in.nowMs = 20;
-  in.updating = in.build = in.cover = true;
+  in.updating = in.build = in.cover = in.wave = true;
   in.listMoving = true;
   in.battery = 2;
   in.ringMs = 0;
@@ -748,7 +881,7 @@ void test_the_update_step() {
   TEST_ASSERT_EQUAL(W::Step, o.wait);
   TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);
   // Built; the loop re-reads the queue (step 5): the scan waits, a cover
-  // doesn't.
+  // and a waveform's read don't.
   in = base(9000);
   in.updating = true;
   in.battery = 2;
@@ -758,6 +891,9 @@ void test_the_update_step() {
   in.cover = true;
   TEST_ASSERT_EQUAL(J::Cover, s.update(in).job);
   in.cover = false;
+  in.wave = true;
+  TEST_ASSERT_EQUAL(J::Wave, s.update(in).job);
+  in.wave = false;
   // The save: below the floor still, but after the audio's yields (the
   // underrun at 20 held it 30 s).
   in.save = true;
@@ -927,8 +1063,10 @@ void test_the_time_waited() {
 }
 
 void test_names() {
+  TEST_ASSERT_EQUAL_INT(8, S::kJobs);
   TEST_ASSERT_EQUAL_STRING("scan", S::jobName(J::Scan));
   TEST_ASSERT_EQUAL_STRING("compaction", S::jobName(J::Compact));
+  TEST_ASSERT_EQUAL_STRING("wave", S::jobName(J::Wave));
   TEST_ASSERT_EQUAL_STRING("the playing track", S::sourceName(Src::Playing));
   TEST_ASSERT_EQUAL_STRING("the ring below half", S::waitName(W::Ring));
   TEST_ASSERT_EQUAL_STRING("the battery (below the floor)", S::waitName(W::Battery));
@@ -995,7 +1133,7 @@ struct Model {
       o.cut = slice && (moving || yield != W::None || (in.running == J::Scan && low));
       if (o.cut) o.priority = 0;
       else if (in.running == J::Build) o.priority = 1;
-      else if (in.running == J::Cover || in.running == J::Walk) o.priority = moving ? 0 : 1;
+      else if (in.running == J::Cover || in.running == J::Wave || in.running == J::Walk) o.priority = moving ? 0 : 1;
       else if (in.running == J::Scan || in.running == J::Compact || in.running == J::Save)
         o.priority = in.dark ? 1 : 0;
       else o.priority = 0;
@@ -1007,9 +1145,14 @@ struct Model {
       return o;
     }
     const bool bg = in.walk || in.compact || scan;
-    if (!in.cover && !in.save && !bg) return o;
+    if (!in.wave && !in.cover && !in.save && !bg) return o;
     if (moving) {
       o.wait = W::List;
+      return o;
+    }
+    if (in.wave) {
+      o.job = J::Wave;
+      o.priority = 1;
       return o;
     }
     if (in.cover) {
@@ -1056,7 +1199,7 @@ void test_random_against_a_model() {
   S::In in = base(0);
   int64_t t = 0xFFFFFFFFll - 3600000ll;  // an hour before the wrap
   uint64_t runUntil = 0;
-  uint32_t scans = 0, covers = 0, builds = 0, cuts = 0, held[S::kWaits] = {};
+  uint32_t scans = 0, covers = 0, waves = 0, builds = 0, cuts = 0, held[S::kWaits] = {};
   for (int pass = 0; pass < 900000; ++pass) {
     t += 5 + rng() % 36;
     in.nowMs = static_cast<uint32_t>(t);
@@ -1072,6 +1215,7 @@ void test_random_against_a_model() {
     if (chance(500)) in.build = in.updating && chance(30000);
     if (chance(500)) in.save = in.updating && chance(50000);
     if (chance(1000)) in.cover = chance(40000);
+    if (chance(1000)) in.wave = chance(20000);
     if (chance(300)) in.walk = chance(20000);
     if (chance(300)) in.compact = chance(20000);
     if (chance(500)) in.playingPending = chance(20000);
@@ -1109,6 +1253,7 @@ void test_random_against_a_model() {
         ++scans;
       }
       if (got.job == J::Cover) ++covers;
+      if (got.job == J::Wave) ++waves;
       if (got.job == J::Build) ++builds;
       in.running = got.job;
       runUntil = static_cast<uint64_t>(t) + 5 + rng() % 80;
@@ -1117,6 +1262,7 @@ void test_random_against_a_model() {
   // It got through, and every wait came up.
   TEST_ASSERT_TRUE(scans > 10000);
   TEST_ASSERT_TRUE(covers > 1000);
+  TEST_ASSERT_TRUE(waves > 1000);
   TEST_ASSERT_TRUE(builds > 10);
   TEST_ASSERT_TRUE(cuts > 1000);
   for (int w = 1; w < S::kWaits; ++w) TEST_ASSERT_TRUE_MESSAGE(held[w] > 0, S::waitName(static_cast<W>(w)));
@@ -1140,6 +1286,7 @@ int main(int, char**) {
   RUN_TEST(test_the_order_of_the_yields);
   RUN_TEST(test_the_battery_floor);
   RUN_TEST(test_covers_come_first);
+  RUN_TEST(test_a_waves_read_comes_before_a_cover);
   RUN_TEST(test_the_update_step);
   RUN_TEST(test_the_order_of_the_work);
   RUN_TEST(test_the_wrap);

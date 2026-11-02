@@ -58,6 +58,13 @@ public:
   bool truncate(uint32_t size) override;
   // Its first cluster (FIL.obj.sclust; 0: empty).
   uint32_t firstCluster() const { return static_cast<uint32_t>(fil.obj.sclust); }
+  // For a caller that keeps a FatFile of its own from file to file (a job's PSRAM,
+  // so no open fails for want of memory): `path` open for reading in this one, and
+  // FatFs's own answer, which FatFs::open()'s nullptr doesn't give: FR_NO_FILE and
+  // FR_NO_PATH, it isn't on the card; anything else, the card didn't say. Each FR_OK
+  // takes a closeRead().
+  FRESULT openRead(const char* path);
+  void closeRead();
   FIL fil;
   bool writable = false;
 };

@@ -37,6 +37,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  HopFrontEnd  HostLine  HostLink  HostClock (USB visualizer)  |
               |  AutoDjEngine  AutoDjTiers  AutoDjJoin  AutoDjDriver          |
               |  AutoDjTrigger  AutoDjCommand  AutoDjView (Auto DJ)           |
+              |  WaveShape  WaveBar  WaveState (the waveform)                 |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -60,6 +61,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  app/Version (the version from git, the app description)      |
               |  app/UsbViz (the USB visualizer: a computer drives the dancer)|
               |  app/AutoDj + app/AutoDjStore (Auto DJ: its index, NVS)       |
+              |  app/Waves (the waveform index: Now Playing's shapes)         |
               |  main.cpp: input events, Bluetooth events, UiHost             |  ESP8266Audio
               +---------------------------------------------------------------+
 ```
@@ -402,7 +404,7 @@ The rules that keep it deadlock- and glitch-free:
 | decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack); decodes and converts to 44.1 kHz (the converter, measured with `Rb`: 1.4 M cycles per second of audio for 44.1 kHz's passthrough, the old path, 5 cycles a frame cheaper (an MP3 still measures 0.8 points above the build before the converter, its decoder's loop 2 % slower in the new image: RESAMPLER.md section 10b); 5.8-5.9 % of a core at 240 MHz for 48 kHz, 8.8 % at 160: RESAMPLER.md sections 10 and 10b); after a track start, once 500 ms are buffered, it sleeps after each pass so it refills at most 1.5x realtime (`RefillPacer`, on by default: it halved the UI's stall at every start); at a file's end it opens the next track with the ring still full (a gapless join: no refill from empty at natural ends, GAPLESS.md). Its rests are `ulTaskNotifyTake()`, so a request or a new word (`setNext()`) wakes it |
 | speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake; switches the amp and I2S (M5.Speaker end/begin) off 2 s after it last queued audio and on again before the next buffer (`AmpGate`) |
 | M5.Speaker | 1 | 2 | mixes to 44.1 kHz mono (its input is always 44.1 kHz now); runs only while the amp is on |
-| the card worker (`card`, app/CardWorker) | 1 | 1 for a cover (0 while a list moves or a finger is on its A-Z rail), the library update's build, a slice of the walk, and while the screen is dark a slice of the tag scan, a compaction and the update's save (a slice drops to 0, and ends after its unit, when a list moves or the scan's yields apply; a compaction or a save drops to 0 when the screen lights); 0 for the tag scan, compactions and the save while the screen is lit | one step at a time, only the one the loop hands it (app/CardTasks, ScanScheduler: docs/METADATA.md 3.3.4, 3.3.9, 3.8, 3.9): a cover (ui/Thumbs), a slice of the validation walk (its folders for 18 ms lit, 250 ms dark), a compaction of `tags.bin`, a file of the tag scan a loop source names or a slice of its rest's files, the update step's build of the index and its save of `library.idx` (lib/core LibraryUpdate); made for the first step, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device as the covers' worker; the card's jobs about 3.0 KB on N11's card, 3,140 B least left over 5,190 steps, MEASURED on df92c01 by `gs`; the deepest, ESTIMATED from the image, a compaction's reopen of D under its folders: about 4.0 KB (3,916 B MEASURED on 6c2a928, 2,228 B left), about 5.0 KB with the SD driver's log line on top, about 1.1 KB left before an interrupt's frame, 512 B more than before the 2026-10-09 review's `Container::open()`; the build MEASURED at 5,360 B on 6c2a928, 784 B left, its views' `std::sort` at libstdc++'s depth limit on the records' byte order, about 3.3-3.6 KB since `lib/core/IdSort` bounds the recursion at lg(n/16) + 1 frames, METADATA.md 3.9); reads the card in 4 KB pieces and writes it in 4 KB pieces that end on the file's 4 KB boundaries; covers level with the loop while nothing moves (at 0 they shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves; the tag scan, compactions and the update's save at 0 while the screen is lit, since the SD driver's reads busy-wait the CPU (the walk's slices, and while the screen is dark the scan's slices, a compaction and the save, at 1: above; at 0 the 2026-10-09 run measured a compaction about 1.75x its modelled card time, none having run at 1 there, and the save 2-4.5x its time on the loop at the boot); always below the decoder (below) |
+| the card worker (`card`, app/CardWorker) | 1 | 1 for a cover or a waveform's read (0 while a list moves or a finger is on its A-Z rail), the library update's build, a slice of the walk, and while the screen is dark a slice of the tag scan, a compaction and the update's save (a slice drops to 0, and ends after its unit, when a list moves or the scan's yields apply; a compaction or a save drops to 0 when the screen lights); 0 for the tag scan, compactions and the save while the screen is lit | one step at a time, only the one the loop hands it (app/CardTasks, ScanScheduler: docs/METADATA.md 3.3.4, 3.3.9, 3.8, 3.9): a cover (ui/Thumbs), a waveform's read (app/Waves), a slice of the validation walk (its folders for 18 ms lit, 250 ms dark), a compaction of `tags.bin`, a file of the tag scan a loop source names or a slice of its rest's files, the update step's build of the index and its save of `library.idx` (lib/core LibraryUpdate); made for the first step, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device as the covers' worker; the card's jobs about 3.0 KB on N11's card, 3,140 B least left over 5,190 steps, MEASURED on df92c01 by `gs`; the deepest, ESTIMATED from the image, a compaction's reopen of D under its folders: about 4.0 KB (3,916 B MEASURED on 6c2a928, 2,228 B left), about 5.0 KB with the SD driver's log line on top, about 1.1 KB left before an interrupt's frame, 512 B more than before the 2026-10-09 review's `Container::open()`; the build MEASURED at 5,360 B on 6c2a928, 784 B left, its views' `std::sort` at libstdc++'s depth limit on the records' byte order, about 3.3-3.6 KB since `lib/core/IdSort` bounds the recursion at lg(n/16) + 1 frames, METADATA.md 3.9); reads the card in 4 KB pieces and writes it in 4 KB pieces that end on the file's 4 KB boundaries; covers level with the loop while nothing moves (at 0 they shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves; the tag scan, compactions and the update's save at 0 while the screen is lit, since the SD driver's reads busy-wait the CPU (the walk's slices, and while the screen is dark the scan's slices, a compaction and the save, at 1: above; at 0 the 2026-10-09 run measured a compaction about 1.75x its modelled card time, none having run at 1 there, and the save 2-4.5x its time on the loop at the boot); always below the decoder (below) |
 | Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and the dancer's frames (10/s idle; dancing 30/s at 240 MHz, 24/s below: `DanceRate`); sleeps 1-5 ms every pass (less while a list frame is due), 20 ms while the screen is off (`Ui::idleMs`; with no UI, main's own 20 ms), at most 2 ms while Auto DJ's join works; Auto DJ's step (below) |
 
 ### The loop's pass
@@ -416,7 +418,8 @@ The rules that keep it deadlock- and glitch-free:
    speed's restart, `audio.loop()`, the power lab.
 2. **`stepCardGuard()`:** what the SD wrapper's guard found at FatFs's
    remounts (a card pulled and put back, or another put in: METADATA.md
-   3.8).
+   3.8). Then `Waves::remount()`: the same counter, for the waveform index
+   (the root read again, the record dropped).
 3. **`stepAutoDj()`:** Auto DJ's step (`app/AutoDj::step()`,
    [AUTODJ.md](AUTODJ.md)): a remount seen first; a slice of the join
    while Auto DJ is on (at most 8 ms of slices and one card read a pass,
@@ -2107,7 +2110,10 @@ the browsing UI hold its **track ids**, never strings.
   tags and records, and ask the worker for a Rescan, a walk, a build or a
   check of the transfer's files (`gb!` the update step deferred to the
   next boot, `gs0` the worker's figures from now: the device batch's L4
-  and L3); `gc` and `gl` are the sector cache's switches and L0's bench.
+  and L3); `gc` and `gl` are the sector cache's switches and L0's bench;
+  `gw?` is the waveform index's state, `gw=<99 digits>` and `gw#<480 hex>`
+  a test shape with no card, `gw-` drops it (`app/Waves`; `gw` alone is the
+  walk).
   `gs` checks `tags.bin` and the transfer's tags file a piece a loop pass
   (`lib/core/TagCheck`, about 10 ms a pass, none while a list moves on a
   lit screen), once the card worker's step under way is taken in, with no
@@ -2419,6 +2425,21 @@ the browsing UI hold its **track ids**, never strings.
   19,410 tracks, MEASURED 2026-10-13), so a listener who never uses Auto
   DJ keeps that PSRAM. All of it is in PSRAM; internal RAM holds
   main.cpp's pointer.
+- **Waveforms** ([WAVEFORM-INDEX.md](WAVEFORM-INDEX.md) 11): `app/Waves`,
+  a member of the `Ui`, takes the path and the row the boot's root names,
+  and opens nothing. Now Playing wants its track's path hash, with no card
+  read (`lib/core/WaveState`). The read is a step of the card worker, in the
+  covers' lane (`ScanScheduler::Job::Wave`): the file opened through FatFs,
+  checked against the root's row, its slots searched (4 or 5 small reads,
+  WAVEFORM-INDEX.md 6), the bars reduced, the file closed. So no file stays
+  open between reads, and a remount leaves nothing stale: `Waves::remount()`
+  reads the root again and asks again. The FIL's 4.1 KB of PSRAM is the job's,
+  kept, so an open can't fail for want of memory. One record is kept, so a
+  repaint reads no card. A file that isn't on the card, or fails its checks, is
+  one `[wave] index ...: ABSENT` line, and plain lines until a remount or the
+  next boot. An open the card fails is a failed read, as a slot's: read again
+  once, 2 s on, then none for that track. A library update needs nothing: the
+  key is a path hash, not a track id. All of it is in PSRAM.
 
 ## Input
 
@@ -3170,13 +3191,18 @@ Queue, Dance and Output (with its Pair and About pages).
                   and 72, one at 64
         90-112    the artist (Body, soft), centred at y 101, x 120-310
         113-135   the album (Body, dim), centred at y 124, x 120-310
-        136-145   background
-        146-167   the progress band: the line y 148-151 (the knob's centre
-                  y 150), the times and the middle (Small) centred at y 160
+        136       background
+        137-157   the seek bar's strip: the track's waveform (99 bars of 2
+                  px, x 12-307, mirrored about y 147; the playhead the
+                  strip's height), or the plain line y 145-148 (the knob's
+                  centre y 147)
+        158-173   the text row: the times and the middle (Small) centred at
+                  y 165 (a line with a glyph from the store at y 166)
+        174-175   background
         168-239   the transport's touch: five zones of 64 x 72
         176-231   the transport as drawn: one 320 x 56 strip
-                  (gfx::kStripH; 168-175 and 232-239 are background), the
-                  zones' centres at x 32, 96, 160, 224, 288 and y 204
+                  (gfx::kStripH; 232-239 is background), the zones' centres
+                  at x 32, 96, 160, 224, 288 and y 204
 
     The rows are 23 px (a Body line and 4): the artist's starts where the
     title strip ends and the album's ends on the cover's last row. Their
@@ -3187,8 +3213,8 @@ Queue, Dance and Output (with its Pair and About pages).
     row is the track's artist (its tag's, else its album's line, else its
     folder's), the album row its album and, when the whole fits, its year
     ("Album · 2001"); both are drawn again when the catalog's names change
-    under the playing track (`namesVersion()`). The band moved up 24 px
-    and the transport grew from 48 to 72 px. In it: the volume's icon
+    under the playing track (`namesVersion()`). The transport grew from 48
+    to 72 px when the bar moved up 24 px. In it: the volume's icon
     centred at y 195 over its "60%" (Small, dim) at y 218; prev and next at
     y 204; play a disc of r 25 at (160, 204), y 179-229 (r 23 at y 216
     touched the bezel); "..." its dots at y 195, and under them, at y 218,
@@ -3311,11 +3337,13 @@ Queue, Dance and Output (with its Pair and About pages).
   - The volume button opens the volume sheet. Only what changed is
     redrawn: the cover when the album changes or its thumbnail arrives,
     the text when the track does (the title strip also when the wait's
-    status does), the times once a second, the transport on a change (the
-    play state, the volume, the output, shuffle, repeat; a press on it
-    draws its zone alone, 64 x 56: the whole strip, twice a tap, was 12 ms
-    each, MEASURED), and the bar on the 30 fps frame deadlines while a
-    finger scrubs it.
+    status does), the text row once a second (320 x 16), and with it the part
+    of the bar's strip a moved playhead needs (all of it, 320 x 21, on a look, a
+    shape, a track or a play state, in one push with the text row when that is
+    due too: SEEK-BAR.md 4.5), the transport on a change (the play state, the
+    volume, the output, shuffle, repeat; a press on it draws its zone alone, 64
+    x 56: the whole strip, twice a tap, was 12 ms each, MEASURED), and the bar
+    on the 30 fps frame deadlines while a finger scrubs it.
 
   **The progress line is a seek bar.** Its design is
   [SEEK-BAR.md](SEEK-BAR.md); the mapping and the touch are
@@ -3323,9 +3351,10 @@ Queue, Dance and Output (with its Pair and About pages).
   `PlaybackController::seek()`.
   - **Where it takes touches:** the full width, from y 138 down to the
     transport (y 167), whether or not a play waits.
-    - The 8 rows above the band (y 138-145) are the gap under the album
-      row. The line is drawn at the band's top (y 148-151), so a tap
-      aimed at it lands on both sides of y 146.
+    - That is the bar's strip from its second row, and the text row down
+      to where the transport's touch starts (the text row's last 6 rows
+      are the transport's: drawing only). The line's centre is y 147, so a
+      tap aimed at it lands on both sides of it.
     - Above them is the navigation menu's area; while a play waits, Play
       on speaker and Cancel, whose touch ends at y 137.
   - **A tap** goes to the second under the finger.
@@ -3338,17 +3367,18 @@ Queue, Dance and Output (with its Pair and About pages).
     (the tail rule's 5 s and a second). The panel's clamped readings at
     either edge reach both ends.
   - **While a finger scrubs:**
-    - the line thickens;
+    - the line thickens, or the waveform dims with a knob on it;
     - a marker shows where it plays;
-    - a large readout ("2:31 +1:21") takes the row above the line
-      (y 113-145, the full width: over the album row, the cover's lowest
-      23 rows and its frame's last, which come back at the lift), on the
-      side away from the finger.
+    - a large readout ("2:31 +1:21") takes the row above the bar's strip
+      (y 110-136, the full width: over the album row, the artist row's last
+      3 rows, the cover's lowest 26 rows and its frame's last, which come
+      back at the lift), on the side away from the finger, and the text row
+      is blank.
   - **Nothing is seeked when:**
     - the knob ends within 4 px of the marker, or on the second already
       playing. It snaps there with a tick, and the readout says "no
       change". A tap there does nothing too;
-    - the finger slid off the bar, above y 106 (onto the artist row or
+    - the finger slid off the bar, above y 103 (onto the artist row or
       higher) or onto the strip. The readout says "Release to cancel",
       with a tick;
     - the track changed under the finger.
@@ -3370,6 +3400,15 @@ Queue, Dance and Output (with its Pair and About pages).
       by `PlaybackController::seekable()`, however it became current: no
       format today; an Opus track was refused until its seeks were built,
       [OPUS.md](OPUS.md) M3).
+  - **The waveform** (SEEK-BAR.md 4.1; `lib/core/WaveBar`, host-tested in
+    test_wave_bar): when the card's waveform index has a shape for the
+    track, and its length agrees with the player's, the line's place is 99
+    bars of 2 px, mirrored about the same centre row, played in the accent
+    (DIM unless playing) and the rest in BTN_HI, with a playhead of 2 px
+    and no knob at rest; under a finger a knob on it. A track or a card with
+    none has the plain line, in the same place, and nothing else moves. An
+    inert bar never has bars. The bars appear when they arrive, with no
+    animation, and a repaint draws them from `app/Waves`' record.
 - **The Library** (spec §6.2, mockups 07-15, with the grafts): the root's
   header is the segmented control **Artists | Albums | Folders** (the root
   PageRef's id is the segment; each keeps its own scroll; the Library opens
@@ -3723,6 +3762,30 @@ Queue, Dance and Output (with its Pair and About pages).
   session (the card's copies are rewritten), for those timings. A cover
   replaced under the same name keeps its old thumbnail until
   `/.player/thumbs` is deleted.
+- **A track's waveform** (`app/Waves`, Library and queue above) is the covers'
+  lane: the card worker's step, at priority 1, none while a list moves or the
+  screen is dark, and Now Playing the only one asking, by the track's path
+  hash. What it costs:
+  - **The worker:** the file opened, 4-5 slot reads on a card of 20,000 tracks
+    (18-19 at most: WAVEFORM-INDEX.md 6), closed, the bars reduced: about 20 ms
+    (ESTIMATED; `gw?` prints the job's mean and maximum). On its stack about
+    2 KB at the open, 3.6 KB with the SD driver's log line, ESTIMATED from the
+    image; `wave::reduce()`'s 496 B come after the last read. In PSRAM the job,
+    4.9 KB with its FIL of 4.1 KB, made when a root first names a file and kept,
+    so no open fails for want of memory.
+  - **The loop:** at a track change or a repaint, Now Playing walks the track's
+    path in PSRAM for its hash (`wantWave()`: a frame of 560 B, the path's
+    512 B, not inlined: `update()`'s stays 240 B); `Waves::loop()` takes the
+    answer in (a copy in PSRAM, the object 332 B with the Ui). No card read on
+    the loop but at a remount, the root read again (about 3.7 KB of stack,
+    ESTIMATED, `AutoDj::remount()`'s path; a Root and 1,024 B of scratch in
+    PSRAM, for the moment).
+  - **The bus:** a playing second pushes the text row, 5,120 px, where the band
+    was 7,040, and what it moved of the playhead, on the whole second: 210-315 px
+    of the strip from 52 s up, in a hold of its own. A whole strip is 6,720 px;
+    with the text row due too, one push of 11,840 px in one hold. A scrub's
+    readout is 8,640 where it was 10,560 (SEEK-BAR.md 4.5).
+  - **IRAM and static DRAM:** none.
 - **The length of a track** for the progress: the decoders don't expose it,
   so the backend reads it when the track opens (`TrackProgress`, host-tested):
   a FLAC file's from its STREAMINFO, a VBR MP3's from the Xing/Info or VBRI

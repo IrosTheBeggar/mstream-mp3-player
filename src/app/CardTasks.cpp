@@ -14,6 +14,7 @@
 #include "UiText.h"
 #include "app/Diagnostics.h"
 #include "app/Psram.h"
+#include "app/Waves.h"
 #include "storage/SectorDisk.h"
 #include "ui/Thumbs.h"
 
@@ -154,7 +155,8 @@ void CardTasks::sources(ScanScheduler::In& in, const Sources& src) {
   in.restPending = jobs_.restWork();
 }
 
-void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumbs, bool covers, const UpdateEnv& env) {
+void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumbs, Waves* waves, bool covers,
+                     const UpdateEnv& env) {
   const uint32_t now = in.nowMs;
   playing_ = src.playing;
   // The update step's fence is up and its build not handed yet: the
@@ -246,8 +248,10 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   // holdForConsole().)
   const bool free = !worker_.busy() && consoleHold_ != tagcheck::Hold::Worker;
   if (free) {
-    // (Not in the pass that puts the fence up: Thumbs' pools go with it.)
+    // (Not in the pass that puts the fence up: Thumbs' pools go with it, and
+    // the build must find the worker free.)
     in.cover = covers && thumbs && thumbs->wantsCover(now) && uo.act != LibraryUpdate::Do::Fence;
+    in.wave = covers && waves && waves->wantsRead(now) && uo.act != LibraryUpdate::Do::Fence;
     if (active_) {
       // A walk under way goes on to its end when the update step is asked:
       // the compaction before the build can't run while it writes walk.jnl
@@ -299,6 +303,8 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   // 6. The step.
   if (o.job == Job::Cover) {
     if (thumbs) thumbs->startCover(worker_, o.priority, now);
+  } else if (o.job == Job::Wave) {
+    if (waves) waves->start(worker_, o.priority, now);
   } else if (o.job == Job::Build) {
     if (up && worker_.start(Job::Build, o.priority, buildEntry, this, now)) {
       up->buildStarted();
@@ -362,9 +368,9 @@ void CardTasks::scanEnded() {
 }
 
 void CardTasks::taken(Job job, uint32_t nowMs, uint32_t ms) {
-  if (job == Job::Cover || job == Job::None) {
+  if (job == Job::Cover || job == Job::Wave || job == Job::None) {
     sched_.stepDone(job, ms);
-    return;  // Thumbs takes its own in
+    return;  // Thumbs and Waves take their own in
   }
   if (job == Job::Build || job == Job::Save) {
     sched_.stepDone(job, ms);

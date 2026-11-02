@@ -403,7 +403,7 @@ void Library::writeDeviceTxt() {
   char want[400];
   cardcontract::devicetxt::Info info = cardcontract::devicetxt::current(v);
   info.readMpdj = autoDjReadMpdj();  // (the contract's: major 2)
-  info.readMpwf = wavesReadMpwf();   // (the contract's: none until the build opens the file)
+  info.readMpwf = wavesReadMpwf();   // (the contract's: major 1)
   const size_t n = cardcontract::devicetxt::format(info, want, sizeof(want));
   if (n == 0) return;
   TxtCheck check;
