@@ -121,6 +121,21 @@ tagstore::File* FatFs::open(const char* path, Mode mode) {
   return f;
 }
 
+FRESULT FatFs::openRead(const char* path, tagstore::File** out) {
+  *out = nullptr;
+  FatFile* f = psramNew<FatFile>();
+  if (!f) return FR_NOT_ENOUGH_CORE;
+  const FRESULT r = f->openRead(path);
+  if (r != FR_OK) {
+    psramDelete(f);
+    return r;
+  }
+  ++opened_;
+  ++openNow_;
+  *out = f;
+  return FR_OK;
+}
+
 bool FatFs::close(tagstore::File* file) {
   if (!file) return false;
   auto* f = static_cast<FatFile*>(file);

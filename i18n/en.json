@@ -3853,7 +3853,7 @@
   },
   "autodj.status_reading": "Reading the Auto DJ index…",
   "@autodj.status_reading": {
-    "context": "The status row's first line while Auto DJ reads the index (a few seconds after it is switched on).",
+    "context": "The status row's first line while Auto DJ reads the index (a few seconds after it is switched on), or waits to try opening it again after the card failed, on or off.",
     "room": {
       "font": "Small",
       "px": 288,
@@ -3883,7 +3883,7 @@
   },
   "autodj.status_unreadable": "Can't read the Auto DJ index",
   "@autodj.status_unreadable": {
-    "context": "The status row's first line when a read of the index failed (the file the card's root names didn't open, a card read error, no memory to read the root after the card was mounted again): tried again when the card is mounted again, or at the next boot. As card.unknown_title says it of a card.",
+    "context": "The status row's first line when a read of the index failed (the file the card's root names isn't on it, the card failed every try at opening it, no memory to read the root after the card was mounted again): tried again when the card is mounted again, or at the next boot. As card.unknown_title says it of a card.",
     "room": {
       "font": "Small",
       "px": 288,

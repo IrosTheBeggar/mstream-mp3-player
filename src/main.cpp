@@ -2992,8 +2992,9 @@ static AutoDj::Env autoDjEnv(uint32_t now) {
 // Every loop pass, right after the card's guard (a remount is seen before
 // any read of the index) and before the card's step (a pick lands before
 // the update step can raise its fence in the same pass; its owed() holds
-// that fence while the index joins): a remount, a slice of the join, the
-// trigger and a pick (or a slot read ahead), a long D command's step.
+// that fence while the index joins): a remount, a try at opening the index that
+// is due, a slice of the join, the trigger and a pick (or a slot read ahead), a
+// long D command's step.
 static void stepAutoDj(uint32_t now) {
   if (!autoDj) return;
   autoDj->step(autoDjEnv(now));

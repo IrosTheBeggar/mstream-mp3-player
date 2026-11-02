@@ -817,7 +817,9 @@ rowCount-bit map. A writer never writes one twice.
 
 - **A failure in 8.1-8.3** makes the file absent: AutoDJ uses random with
   filters. The device MAY note the file in `/.player` by (generation,
-  headerCrc), so as not to try it again.
+  headerCrc), so as not to try it again. A read that fails is no such failure:
+  it says nothing of the file, and a reader MAY read again (the device's tries:
+  AUTODJ.md 6.6).
 - **A reader that verifies the whole file** (a writer's own check, a host
   tool, 8.6's "all") treats any slot failure as absent.
 - **A reader that checks slots as it reads them** (the device):
