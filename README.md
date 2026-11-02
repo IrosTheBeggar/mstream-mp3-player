@@ -924,11 +924,12 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       @status line, the FSINFO rule, @identify's label; the
                       card's free clusters counted a piece of the FAT at a
                       time, exact with FatFs writing between the pieces
-  CardContract, CardContainer, CardTags, CardManifest, CardAutoDj
+  CardContract, CardContainer, CardTags, CardManifest, CardAutoDj, CardWaves
                       The card contract with the transfer software
                       (docs/METADATA.md part 2): its files' readers and
                       writers, CRC-32, the path hash, the fingerprint;
-                      CardAutoDj the AutoDJ index (docs/AUTODJ-INDEX.md)
+                      CardAutoDj the AutoDJ index (docs/AUTODJ-INDEX.md),
+                      CardWaves the waveform index (docs/WAVEFORM-INDEX.md)
   AutoDjEngine, AutoDjTiers, AutoDjRng
                       Auto DJ's pick (docs/AUTODJ.md): a session's anchors,
                       seed and cooldowns, the gate over the AutoDJ index's
@@ -1041,13 +1042,18 @@ tools/                make_test_audio.py; version.py (build pre-script: the
                       writer, reader and test vectors, docs/AUTODJ-INDEX.md;
                       tests: python -m unittest discover -s tools -p
                       "test_mpdj.py");
+                      mpwf.py + test_mpwf.py (the waveform index's reference
+                      writer, reader and test vectors, docs/WAVEFORM-INDEX.md;
+                      tests: python -m unittest discover -s tools -p
+                      "test_mpwf.py");
                       autodj_ref.py + test_autodj_ref.py (Auto DJ's pick
                       rule in plain Python, the engine's reference; it
                       writes test/fixtures/autodj, --check; tests: python
                       -m unittest discover -s tools -p "test_autodj_ref.py");
                       synthtransfer.py + test_synthtransfer.py (a test
                       card's /.mstream: a tags file with no records, an
-                      AutoDJ index, synthetic or given, and the root
+                      AutoDJ index, synthetic or given, with --waves a
+                      waveform index of made-up shapes, and the root
                       written last, so a synthcard.py tree or any FAT32
                       card gets an index the firmware accepts; --dry-run,
                       --check; it writes nothing outside /.mstream;
@@ -1065,7 +1071,8 @@ docs/                 ARCHITECTURE.md, POC-RESULTS.md, MASCOT-POC.md, UI-SPIKE.m
                       RESAMPLER.md, BEAT-TRACKER-EVAL.md, HOST-STATUS.md,
                       METADATA.md (the card contract), AUTODJ-INDEX.md
                       (the AutoDJ index, MPDJ v2), AUTODJ.md (the
-                      device's Auto DJ), QUEUE-MODES.md (shuffle, repeat,
+                      device's Auto DJ), WAVEFORM-INDEX.md (the waveform
+                      index, MPWF v1), QUEUE-MODES.md (shuffle, repeat,
                       the queue's cap; Auto DJ with them)
 LICENSES/             The licence texts THIRD-PARTY-NOTICES.md refers to
 THIRD-PARTY-NOTICES.md What else is in the firmware binary, and its licences

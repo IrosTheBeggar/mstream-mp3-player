@@ -316,6 +316,7 @@ built without exFAT and without GPT (`lib/core/CardFormat`). The tree:
 │   ├─ manifest.tmp             only while a commit is being written
 │   ├─ tags-<gen>.bin           MPTG, source 2: the tag records and the ledger
 │   ├─ autodj-<gen>.bin         MPDJ v2: the AutoDJ index (optional; docs/AUTODJ-INDEX.md)
+│   ├─ waves-<gen>.bin          MPWF v1: the waveform index (optional; docs/WAVEFORM-INDEX.md)
 │   ├─ pending.bin              MSPD: an unfinished run's plan (only while one is; written through pending.tmp)
 │   ├─ stage/<8 hex>.tmp        files being downloaded
 │   ├─ thumbs/<h>/<8 HEX>.565   MPTH v1: album thumbnails
@@ -546,7 +547,7 @@ metascan section 5.1). No cheap check sees every retag.
 - **Paths:** names are stored as the card stores them (2.8.5); the names
   the software *creates* are NFC (2.8.3).
 
-### 2.4 The container (MSMF, MPTG, MPDJ, MSPD)
+### 2.4 The container (MSMF, MPTG, MPDJ, MPWF, MSPD)
 
 Every binary file in this contract except the thumbnails has one frame: a
 header, a section directory, then the sections, each 8-byte aligned.
@@ -555,7 +556,7 @@ header, a section directory, then the sections, each 8-byte aligned.
 
 | Off | Size | Field | Meaning |
 |---|---|---|---|
-| 0 | 4 | magic | fourcc: `MSMF`, `MPTG`, `MPDJ` or `MSPD` |
+| 0 | 4 | magic | fourcc: `MSMF`, `MPTG`, `MPDJ`, `MPWF` or `MSPD` |
 | 4 | 2 | major | incompatible format version (1; MPDJ: 2) |
 | 6 | 2 | minor | compatible additions (0) |
 | 8 | 4 | headerBytes | the whole header (common + type-specific), a multiple of 8; the directory starts here |
@@ -589,11 +590,13 @@ file.
 So that two writers produce the same bytes:
 
 - **Order.** Sections are written in the order of their format's section
-  table (2.5.3, 2.6.2, 2.12.5, AUTODJ-INDEX.md 4.2), and the directory
-  lists them in that order. The first starts right after the directory (at
-  headerBytes + 32 × sectionCount); each next one at the previous one's
-  end, rounded up to 8. (MPDJ pads its header so that its first section
-  starts on a slot boundary: AUTODJ-INDEX.md 3.3.)
+  table (2.5.3, 2.6.2, 2.12.5, AUTODJ-INDEX.md 4.2, WAVEFORM-INDEX.md 3.2),
+  and the directory lists them in that order. The first starts right after
+  the directory (at headerBytes + 32 × sectionCount); each next one at the
+  previous one's end, rounded up to 8. (MPDJ pads its header so that its
+  first section starts on a slot boundary: AUTODJ-INDEX.md 3.3. So does
+  MPWF, whose 224-byte header puts its one section at byte 256:
+  WAVEFORM-INDEX.md 3.)
 - **Presence.** A REQUIRED section is always present, even with no
   records. An optional section is present exactly when its format's
   table says so, and is never written empty.
@@ -621,7 +624,8 @@ A reader MUST treat a file as **absent** when any of these fails:
   count × stride; for each known blob, count and stride 0;
 - **the header's own fields:** the counts it states equal its sections'
   (MPTG recordCount and folderCount, MPDJ rowCount and pathCount), and
-  2.4.5's values that make a file absent (MPTG source, MPDJ scoreKind);
+  2.4.5's values that make a file absent (MPTG source, MPDJ scoreKind,
+  MPWF slotBytes and barCount);
 - the CRC of each section the reader uses;
 - the bounds checks of the section rules below.
 
@@ -667,7 +671,10 @@ absent:
   an entry of another kind is ignored wherever it stands (2.4.5); each
   name matches `^tags-[0-9a-f]{8}\.bin$` for MPTG or
   `^autodj-[0-9a-f]{8}\.bin$` for MPDJ, and its 8 digits are the entry's
-  generation.
+  generation. An `MPWF` entry isn't counted in this, and a bad one costs
+  only itself: a second one, or a name other than
+  `^waves-[0-9a-f]{8}\.bin$` with the entry's generation, leaves the root
+  valid with no waveform index (2.5.3).
 - **LIBR:** each root a relative path made of names (as above), the
   roots strictly increasing by bytes.
 - **ACKS**, the one optional section whose failure costs only itself
@@ -678,6 +685,11 @@ absent:
   its rows in range, and each slot as it is used (a slot whose own CRC
   fails is one bad slot to the device, not an absent file:
   AUTODJ-INDEX.md 8.5).
+- **MPWF:** WAVEFORM-INDEX.md section 8's checks: the header's values, WVSL
+  at byte 256 as the one section, its stride exactly 256, and each slot as
+  it is used (a slot whose own CRC fails costs one lookup, not the file; a
+  good CRC over a hash out of order makes the file absent:
+  WAVEFORM-INDEX.md 8.3).
 - **MSPD:** entries are in 2.12.5's order, each group strictly increasing;
   an op of 0 makes the plan absent; paths are non-empty, relative and
   made of names (no empty, `.` or `..` component), so no plan can name a
@@ -712,6 +724,7 @@ generation) and noted it in `/.player`.
   - MPTG: `producer`; then 2.6.8's order;
   - MPDJ: `modelId`, `modelVersion`, `metric`, `license`, `attribution`;
     nothing else in its minor 0 (AUTODJ-INDEX.md 4.6);
+  - MPWF: none, it has no string section (WAVEFORM-INDEX.md 3.2);
   - MSPD: the PEND paths in PEND order.
 - `OSTR` follows 2.6.8.
 - Readers check that the strings they use come in this order (2.4.3): a
@@ -724,12 +737,12 @@ generation) and noted it in `/.player`.
   it. The device then behaves as if the file weren't there. The software
   MUST NOT write to a card where **any** contract-named file in
   `/.mstream` (`manifest.bin`, `manifest.tmp`, `pending.bin`,
-  `pending.tmp`, `tags-*.bin`, `autodj-*.bin`) carries a known magic with
-  a major it doesn't know (for MPDJ it knows 1, the retired v1 draft, and
-  2). It checks the magic and the major alone, before any CRC, so a newer
-  writer's half-finished commit stops it too; it reports the card
-  read-only and asks for an update. The check comes before its first
-  write of any kind, `run.lock` and the private files included, and a
+  `pending.tmp`, `tags-*.bin`, `autodj-*.bin`, `waves-*.bin`) carries a
+  known magic with a major it doesn't know (for MPDJ it knows 1, the
+  retired v1 draft, and 2). It checks the magic and the major alone, before
+  any CRC, so a newer writer's half-finished commit stops it too; it reports
+  the card read-only and asks for an update. The check comes before its
+  first write of any kind, `run.lock` and the private files included, and a
   private file of 2.12.7 whose `version` it doesn't know stops it the
   same way.
 - **Minor.** Readers accept any minor.
@@ -746,6 +759,10 @@ generation) and noted it in `/.player`.
     the software's private state (`state.json`, 2.12.7).
 - **New sections** are skipped by readers that don't know them, unless
   flagged REQUIRED.
+- **MPWF has less room.** WVSL at byte 256, its stride 256, must end the
+  file: a new section, a longer header or a longer slot makes the file
+  absent, and so needs a new major. A minor has only the header's spare
+  bytes (WAVEFORM-INDEX.md 8.2, 9).
 - **New flag bits** are ignored by older readers. Writers set only bits
   they define.
 - **New enum values:** where 0 has a meaning of its own, "read it as 0"
@@ -761,6 +778,7 @@ generation) and noted it in `/.player`.
 | MPTG `source` (0, or above 3) | the file is absent |
 | MPDJ `scoreKind` (not 1) | the file is absent |
 | MPDJ `selKind` (above 1) | read: readers use only selHead and selFloor (AUTODJ-INDEX.md 9.3) |
+| MPWF `slotBytes` (not 256), `barCount` (not 240) | the file is absent |
 | MSMF COMP `kind` | the entry is ignored |
 | MSPD `op` (above 3) | the software MUST NOT write, as for an unknown major |
 | ORIG `convertedTo` (not a container code) | a conversion of unknown kind: not VERIFIED, never adopted |
@@ -769,7 +787,8 @@ generation) and noted it in `/.player`.
   older readers can't skip safely.
 - **Writers** write the newest minor they know, in the newest major both
   sides read (the device lists its majors in `/.player/device.txt`,
-  2.15). MPDJ has one: v2, written only when the device lists it.
+  2.15). MPDJ has one: v2, written only when the device lists it. So has
+  MPWF: v1, likewise.
 
 ### 2.5 `manifest.bin` (MSMF): the commit point
 
@@ -850,22 +869,29 @@ reads the root with one small read at every boot.
 
 | Off | Size | Field | Meaning |
 |---|---|---|---|
-| 0 | 4 | kind | the companion's fourcc: `MPTG` or `MPDJ` |
+| 0 | 4 | kind | the companion's fourcc: `MPTG`, `MPDJ` or `MPWF` |
 | 4 | 4 | generation | the companion's own header generation (older than the root's when a file was reused) |
 | 8 | 4 | fileBytes | its exact length |
 | 12 | 4 | headerCrc | its headerCrc |
 | 16 | 4 | name | STRS: its file name inside `/.mstream/` (`tags-0000002a.bin`) |
 | 20 | 4 | reserved | 0 |
-| 24 | 16 | key | MPDJ: the selection signature (AUTODJ-INDEX.md 6); zeros for MPTG |
+| 24 | 16 | key | MPDJ: the selection signature (AUTODJ-INDEX.md 6); zeros for MPTG and MPWF |
 
-- A root MUST list exactly one MPTG companion (source 2 or 3), and at most
-  one MPDJ, in that order. Each name is `tags-<gen>.bin` or
-  `autodj-<gen>.bin` with the entry's own generation (2.4.3).
+- A root MUST list exactly one MPTG companion (source 2 or 3), at most one
+  MPDJ and at most one MPWF, in that order. Each name is `tags-<gen>.bin`,
+  `autodj-<gen>.bin` or `waves-<gen>.bin` with the entry's own generation
+  (2.4.3).
 - A companion is valid only when **all** of these hold: the file exists;
   it validates (2.4.3); its header's generation, fileBytes and headerCrc
   equal the entry's; for an MPDJ, the selection signature in its header
-  equals the entry's key.
+  equals the entry's key; for an MPWF, the entry's key is zeros.
 - A companion that fails is absent. The root stays valid.
+- **A bad MPWF entry costs only itself** (WAVEFORM-INDEX.md 7.2), where a
+  bad MPTG or MPDJ entry makes the root absent: of two MPWF entries neither
+  counts, a name that isn't `waves-<gen>.bin` with the entry's generation
+  leaves the root valid with no waveform index, and readers don't check the
+  entry's place in COMP. Its name is still a string of the root: an offset
+  outside STRS, or out of 2.4.4's order, fails the root, as for any kind.
 
 #### 2.5.4 Which root counts
 
@@ -1769,10 +1795,16 @@ rules handle.
     bytes, and its header's pathHash is the folder's; rewrite any that
     isn't. (Whether the art changed is in the software's private state,
     which a cut can leave ahead of the card.)
-11. **AutoDJ:** when `device.txt`'s `read.mpdj` lists 2, write
-    `autodj-<g>.bin` when AUTODJ-INDEX.md 7.3 says so, and otherwise the
-    new root names the old one again; when it doesn't, no MPDJ (the new
-    root names none).
+11. **The indexes,** each under its final name:
+    1. **AutoDJ:** when `device.txt`'s `read.mpdj` lists 2, write
+       `autodj-<g>.bin` when AUTODJ-INDEX.md 7.3 says so, and otherwise the
+       new root names the old one again; when it doesn't, no MPDJ (the new
+       root names none);
+    2. **Waveforms:** when `read.mpwf` lists 1 and there is a row to write,
+       write `waves-<g>.bin` when WAVEFORM-INDEX.md 7.3 says so, and otherwise
+       the new root names the old one again; when it doesn't list 1, or there
+       is no row to write, no MPWF (the new root names none, and step 13
+       collects any old file).
 12. **The final commit** is step 9's write and rename with FINAL set; then
     delete `pending.bin`.
 13. **Collect:** delete the companions the root doesn't name, thumbnails
@@ -1929,9 +1961,9 @@ section and 2.12.8 say.
 
 - A private file's name is lowercase (2.2) and MUST NOT be one a run
   deletes or the device reads: not `manifest.*`, `pending.*`,
-  `tags-*.bin` or `autodj-*.bin`; not ending in `.tmp` (step 4 deletes
-  those); not inside `stage/` (step 4 empties it) or `thumbs/` (the
-  thumbnails': steps 4 and 13 delete in it); not `stage`, `thumbs` or
+  `tags-*.bin`, `autodj-*.bin` or `waves-*.bin`; not ending in `.tmp` (step
+  4 deletes those); not inside `stage/` (step 4 empties it) or `thumbs/`
+  (the thumbnails': steps 4 and 13 delete in it); not `stage`, `thumbs` or
   `resume` themselves, the folders' names (a file there would stand in
   the folder's way). `resume/` is 2.12.8's.
 - **The names this contract reserves:**
@@ -2289,8 +2321,9 @@ thumbnail covers them, since the PC decodes any format.
 ### 2.15 `/.player/device.txt`: what the firmware reads
 
 The `/.player` file the software relies on, with the play log (2.20).
-ASCII, LF line ends, one `key=value` per line; unknown keys are ignored.
-The device rewrites it at boot when its content would change.
+ASCII, LF line ends (a reader tolerates CRLF), one `key=value` per line;
+unknown keys are ignored. The device rewrites it at boot when its content
+would change.
 
 ```
 contract=1
@@ -2298,6 +2331,7 @@ firmware=0.11.0
 read.msmf=1
 read.mptg=1
 read.mpdj=2
+read.mpwf=
 read.mpth=1
 codecs=mp3,flac,opus
 extensions=mp3,flac,opus
@@ -2305,11 +2339,15 @@ max_rate=48000
 max_channels=2
 ```
 
-- `read.*` lists the majors the firmware reads, separated by commas.
+- `read.*` lists the majors the firmware reads, separated by commas; a
+  reader ignores spaces in an item and skips an item that isn't a number.
   Firmware 0.8.0-0.10.0 writes `read.mpdj=1`, though it reads no MPDJ;
   from 0.11.0, which ships the AutoDJ engine, the firmware writes
   `read.mpdj=2` (a development build between them wrote `read.mpdj=`,
-  none).
+  none). `read.mpwf=1` comes with the first firmware that opens the waveform
+  index (2.21): a build without that job writes `read.mpwf=`, none, as above
+  (`src/app/WavesContract.h`), and a firmware before the key writes no such
+  key.
 - `codecs` lists what it decodes; `extensions` the file extensions its
   walk lists as audio (any case). The device recognises audio by
   extension, not by content, so both matter.
@@ -2322,18 +2360,23 @@ max_channels=2
 - **The software** writes the newest major of each format that the device
   lists, and converts (or skips) anything not in `codecs`, or above
   `max_rate` or `max_channels`. A card file's extension MUST be one of
-  `extensions` (2.8.3, step 3). **MPDJ is the exception:** the software
-  writes MPDJ v2 only when `read.mpdj` lists 2, and no MPDJ otherwise
-  (AUTODJ-INDEX.md 7.4): no reader of v1 exists.
+  `extensions` (2.8.3, step 3). **MPDJ and MPWF are the exceptions:** the
+  software writes MPDJ v2 only when `read.mpdj` lists 2, and no MPDJ
+  otherwise (AUTODJ-INDEX.md 7.4): no reader of v1 exists. It writes MPWF v1
+  only when `read.mpwf` lists 1, and no MPWF otherwise (WAVEFORM-INDEX.md
+  7.4): firmware before it ignores the file, which only costs the card
+  space. So a card gets its first one after that firmware has run once with
+  the card in.
 - **No file** (a new card, or firmware before this design) means
-  `read.*=1` except `read.mpdj`, which is none, no `history`, and
-  `codecs=mp3,flac`, `extensions=mp3,flac`, `max_rate=48000` and
-  `max_channels=2`. Firmware 0.7.0 plays Opus but can't say so; the
+  `read.*=1` except `read.mpdj` and `read.mpwf`, which are none, no
+  `history`, and `codecs=mp3,flac`, `extensions=mp3,flac`, `max_rate=48000`
+  and `max_channels=2`. Firmware 0.7.0 plays Opus but can't say so; the
   software MAY ask the listener rather than convert.
 - **A key missing** from a file reads as its no-file value; a key with an
-  empty value (`read.mpdj=`) says "none". The `contract` line is what
-  makes a file a `device.txt`; a reader reads the keys it knows whatever
-  the contract number says.
+  empty value (`read.mpdj=`) says "none"; a key given twice reads as its
+  last. The `contract` line is what makes a file a `device.txt`: a file
+  without one reads as no file, and a reader reads the keys it knows
+  whatever the contract number says.
 
 ### 2.16 Compatibility summary
 
@@ -2347,11 +2390,12 @@ max_channels=2
 | An unknown COMP kind | Ignored |
 | An unknown flag bit | Ignored |
 | An unknown enum value | As 2.4.5's table says for that field |
-| Firmware with no `device.txt` | The software writes v1 of everything, and no MPDJ (2.15) |
-| Damage (any CRC) | That file is absent; a damaged root means no transfer data. One MPDJ slot whose own CRC fails is the exception: only that slot is unused (AUTODJ-INDEX.md 8.5); so is MSMF's ACKS, which is then ignored (2.5.6), and so is a play slot, which is skipped (2.20.6) |
+| Firmware with no `device.txt` | The software writes v1 of everything, and no MPDJ or MPWF (2.15) |
+| Damage (any CRC) | That file is absent; a damaged root means no transfer data. One MPDJ slot whose own CRC fails is the exception: only that slot is unused (AUTODJ-INDEX.md 8.5); so is one MPWF slot, where only that lookup misses (WAVEFORM-INDEX.md 8.3); so is MSMF's ACKS, which is then ignored (2.5.6), and so is a play slot, which is skipped (2.20.6) |
 | A new string field | Appended to the run; older readers stop at the fields they know |
 | A card filled from several servers (SRVS, ORIG's `server`) | The device: no change, it reads neither. The software: each row is paired and guarded with its own server (2.5.5, 2.11) |
 | The play log (2.20) and ACKS (2.5.6) | Firmware before the log: writes none, and skips ACKS. The software: reads the log whatever `device.txt` says; skips and counts a slot of a newer major or an unknown kind; writes ACKS only with a run's commits |
+| The waveform index (2.21) | Firmware before it: ignores the COMP entry and never opens the file. A bad entry or file costs only itself. Software that doesn't know MPWF: drops the entry at its next commit, and the file stays until a newer run's clean-up (WAVEFORM-INDEX.md 9) |
 
 ### 2.17 Conformance (no device needed)
 
@@ -2370,7 +2414,7 @@ on any difference. The folder's README says how to read them.
    writer would otherwise choose: ids, times, generations) goes into both
    writers. The C++ writer (host-built, `lib/core`) and the Rust writer
    MUST produce byte-identical MPTG files (2.6.8), and the same for MSMF,
-   MPDJ, MSPD and MPTH (an MPTH from given pixels: the scaling filter
+   MPDJ, MPWF, MSPD and MPTH (an MPTH from given pixels: the scaling filter
    isn't pinned, and PCs' JPEG decoders differ anyway). The C++ writers
    predate 2.5.5 and make the goldens of one server only (`server` 0, no
    SRVS): the player's tests check that their bytes for the two goldens
@@ -2379,7 +2423,9 @@ on any difference. The folder's README says how to read them.
    values go in raw: each writer applies 2.3.6 and sets TRUNCATED. MPDJ's
    fixtures (AUTODJ-INDEX.md 13) use small synthetic embeddings (no real
    index: 2.13.4's licence), with ties at the floor and at a stride,
-   same-song groups, title-less rows and a float32 trap.
+   same-song groups, title-less rows and a float32 trap. MPWF's
+   (WAVEFORM-INDEX.md 13) use made-up peaks, with exact ties for the
+   rounding and a file of skewed hashes for the lookup.
 3. **Reader parity.** A corpus of synthetic audio files (no real
    library's files) goes through the software's reference reader and the
    device's TagScan built on the host. Their records MUST be field-equal,
@@ -2398,10 +2444,11 @@ on any difference. The folder's README says how to read them.
    (a folder that is its own parent, records in path-string order, a
    wrong firstRecord, an unsorted DJPH, a slot that lists its own row):
    all make the file absent, with no crash and no endless loop (one MPDJ
-   slot whose own CRC fails is the exception the device reads past:
-   AUTODJ-INDEX.md 8.5). Fuzzed on the host. The shared `hardening/`
-   folder has a file for each check of 2.4.3 and of AUTODJ-INDEX.md 8
-   (13.6 there), so a reader that skips one fails there.
+   or MPWF slot whose own CRC fails is the exception the device reads past:
+   AUTODJ-INDEX.md 8.5, WAVEFORM-INDEX.md 8.3). Fuzzed on the host. The
+   shared `hardening/` folder has a file for each check of 2.4.3, of
+   AUTODJ-INDEX.md 8 (13.6 there) and of WAVEFORM-INDEX.md 8 (13.5 there),
+   so a reader that skips one fails there.
 5. **The builder** (host test): a walk listing plus T plus D gives the
    expected `library.idx` checksum; a card filled by the software and the
    same files scanned by the device give the same index (the research's
@@ -2431,6 +2478,12 @@ on any difference. The folder's README says how to read them.
    6). `golden/manifest-acks.bin` is a root with ACKS (2.5.6), and the
    `msmf-acks-*` hardening files roots that read whatever their ACKS
    holds.
+8. **The waveform index** (2.21), made with `tools/mpwf.py`, its reference
+   reader and writer. `golden/manifest-waves.bin` is a root that names all
+   three companions, and the `msmf-waves-*` hardening files roots that read
+   whatever their MPWF entry holds, but for the two whose name breaks a
+   string rule (`vectors.json`'s `mpwf.rootRow` says what a reader takes
+   from each).
 
 ### 2.18 Conformance vectors
 
@@ -2504,6 +2557,13 @@ zero, the float32 trap's pair), the slider's least levels, slotBytes and
 headerBytes, the strided ranks, a slot's seeded CRC, autodj-00000029's
 selection signature with its text and its vectors' digest, device.txt's
 cases, and the float32 trap.
+
+**The waveform index** (WAVEFORM-INDEX.md 13.3): its vectors are
+`vectors.json`'s `mpwf` group: the names and sizes, the bars' ranges and
+values (the ties that round up among them), a slot's seeded CRC, the section
+CRC's constants, each step of the lookup and the rows it reads, two sets of
+hashes with their reads summed, the row limit, device.txt's cases, when a
+commit writes a new file, and what a reader takes from a root's entry.
 
 **Canonical order** (2.6.8, 2.4.3):
 
@@ -2729,6 +2789,7 @@ made by `tools/cardnames.py`: runs on a card, each with its layout,
 | `manifest.bin` | under 4 KB (SRVS: 40 bytes for each server besides the root's) |
 | `tags-<g>.bin` | about 6.9 MB: RECS 1.44 MB, STRS about 2.4 MB (names about 31 B and runs about 87 B per track), HIDX 0.24 MB, ORIG 1.6 MB, OSTR about 1.2 MB. The device reads FOLD, RECS and STRS: about 3.9 MB, 2.3-3.3 s at 1.2-1.7 MB/s, during a build only |
 | `autodj-<g>.bin`, MPDJ v2 at k = 169 | about 10.6 MB (DJSL 10.24 MB; DJRF, DJPH and STRS 0.36 MB, the join's); one 512-byte slot read per pick (AUTODJ-INDEX.md 10.2) |
+| `waves-<g>.bin`, MPWF v1 | 5.12 MB when every track has a slot (256 bytes a track); 4 or 5 slot reads a lookup, one lookup per track change (WAVEFORM-INDEX.md 6, 10) |
 | `/.mstream/thumbs` | about 39 MB for 1,800 albums |
 | `/.mstream/state.json`, `resume.json`, `run.lock` | a few KB; `resume/` holds the partials a parked run keeps, while they wait (2.12.8) |
 | `/.player/tags.bin` | about 2.3 MB when the software covers every file (status rows, names); about 4.1 MB when the device scanned everything (HIDX, 0.24 MB, included) |
@@ -3017,6 +3078,34 @@ which settles it.
 - 2.4.5's rule that a minor's fields be re-derivable is for files a
   writer carries forward. Nobody rewrites a play slot: a field a minor
   adds is simply zero in the slots of a firmware older than it.
+
+### 2.21 Waveforms: `waves-<gen>.bin` (MPWF v1)
+
+- An optional companion of a commit, like 2.13's: for each card file the
+  software has the server's peaks for, its length and its shape, 240 bars in
+  a 256-byte slot, the slots sorted by path hash. The device reads the slot
+  of the track Now Playing shows. A track without one shows the plain line.
+- **Its format is specified apart, in docs/WAVEFORM-INDEX.md** (MPWF major
+  1, 2026-11-01): the header and the section, the bars, the lookup, when to
+  write a file, the reader's checks, the sizes, the device's notes
+  (informative) and the test vectors. Both sides follow it; this section
+  keeps only what ties the file to the rest of the contract.
+- **The root** names the file in COMP with a key of zeros (2.5.3); a bad
+  entry costs only itself. The file is valid only when the root names it and
+  it validates, its generation, fileBytes and headerCrc the entry's. When to
+  write a new file, and when to name the old one again, is WAVEFORM-INDEX.md
+  7.3. The software writes MPWF v1 only when `device.txt`'s `read.mpwf`
+  lists 1 (2.15) and it has a row to write; otherwise the root names no MPWF.
+- **Everything in it can be derived again** (2.4.5), and it holds no memory
+  of what was asked and no content hash: a track the server has no peaks for
+  has no slot, a later run may ask again, and a kept slot is matched through
+  the old root's ledger (2.6.6; WAVEFORM-INDEX.md 7.3).
+- **A fetch that stops short is no failed run,** unlike AutoDJ's no vectors,
+  no index: the software keeps what came, with the old rows that still hold,
+  and never deletes the old file while it names useful rows. Only with no row
+  left is there no file, as with AutoDJ's. No commit is made for the waves
+  alone unless the bytes change (2.5.6's reason: the device builds its library
+  again).
 
 ---
 
@@ -6837,6 +6926,8 @@ they disagreed:
 - **docs/AUTODJ.md:** the device's Auto DJ as built (2026-10-14): the
   engine that reads 2.13's file, its join and memory (3.4.2, 3.5), its
   settings, UI and console, and its device checks.
+- **docs/WAVEFORM-INDEX.md:** the waveform index's own specification (MPWF
+  v1, 2026-11-01); 2.21 points to it and keeps what ties it to the contract.
 - **docs/UI-SPIKE.md:** the per-track memory figures.
 - **docs/GAPLESS.md** and **docs/QUEUE-MODES.md:** the update step's safe
   point and the queue's remap through `queue.txt`.
@@ -6883,4 +6974,5 @@ they disagreed:
   `claude/gui-mp3-player`: `docs/ux-contracts/mp3-player-screen.md`.
 - **The test vectors** of 2.3 were computed for this document (a short
   Python check of CRC-32, FNV-1a 64, qfp, the FAT fields); the AutoDJ
-  index's come from `tools/mpdj.py` (AUTODJ-INDEX.md 13).
+  index's come from `tools/mpdj.py` (AUTODJ-INDEX.md 13), the waveform
+  index's from `tools/mpwf.py` (WAVEFORM-INDEX.md 13).

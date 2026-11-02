@@ -38,20 +38,32 @@ elsewhere. Made-up names only, synthetic embeddings.
   4), at least one for every check of 2.4.3, so a reader that skips a
   check fails on its file. `index.json` lists each with the reader's uses
   (`all`: every section; `device`: MPTG's FOLD, RECS and STRS, MPDJ's
-  DJRF, DJPH and STRS, MSMF's COMP, LIBR and STRS: the device never reads
-  ORIG, OSTR or SRVS), whether it must read as absent or present, the
-  check it breaks, and the player's reason code. A `present` file with
+  DJRF, DJPH and STRS, MSMF's COMP, LIBR and STRS, MPWF's frame: the device
+  never reads ORIG, OSTR or SRVS, and a slot of DJSL or WVSL only when it
+  needs one), whether it must read as absent or present, the check it
+  breaks, and the player's reason code. A `present` file with
   `same` reads as the same records as that golden file (MPDJ: every row's
   filter record and used slot entries, every DJPH hash's row, the five
-  strings). An MPDJ file's `slot` says how one slot reads when the device
-  reads it alone (`damaged`: its CRC fails; `broken`: a good CRC over a
-  bad list).
+  strings; MPWF: every slot's hash, length and bars). An MPDJ file's `slot`
+  says how one slot reads when the device reads it alone (`damaged`: its
+  CRC fails; `broken`: a good CRC over a bad list). An MPWF file's `slot` is
+  one lookup as the device makes it: the hash, what it reads (`hit`, `miss`,
+  `damaged`, `broken`) and how many slots it reads.
 
 The AutoDJ index (MPDJ v2) is specified apart, in docs/AUTODJ-INDEX.md;
 its fixtures (section 13 there) come from `tools/mpdj.py`, which
 card_fixtures.py imports. `libraries/autodj-mid.f32` holds the vectors
 that `autodj-mid.json` and `autodj-mid-default.json` name (raw
 little-endian f32, 16 a row, in the descriptions' row order).
+
+The waveform index (MPWF v1) is specified apart, in
+docs/WAVEFORM-INDEX.md; its fixtures (section 13 there) come from
+`tools/mpwf.py`, which card_fixtures.py imports. A description's tracks
+hold the server's peak bars as given, and a writer computes the bars.
+`golden/manifest-waves.bin` is a root that names all three companions. The
+`msmf-waves-*` hardening files are roots that read whatever their MPWF row
+holds (`vectors.json`'s `mpwf.rootRow` says what a reader takes from each),
+but for the two whose name breaks a string rule, as any kind's would.
 
 The play log (docs/METADATA.md 2.20) has its fixtures in `plays/`, made
 with `tools/playlog.py`, its reference reader and writer, which
@@ -74,7 +86,8 @@ and checks it on its own.
 The player's tests: `test/test_card_contract` (the vectors),
 `test/test_card_files` (the goldens, round trips, the hardening files,
 truncation at every byte and every flipped bit), `test/test_card_autodj`
-(the AutoDJ index's own rules) and `test/test_name_key` (the keys the
-AutoDJ descriptions give). The play log's fixtures are for the
+(the AutoDJ index's own rules), `test/test_card_waves` (the waveform
+index's own rules) and `test/test_name_key` (the keys the AutoDJ
+descriptions give). The play log's fixtures are for the
 firmware's log and the transfer software's reader, neither built yet;
 `tools/test_playlog.py` reads them today.
