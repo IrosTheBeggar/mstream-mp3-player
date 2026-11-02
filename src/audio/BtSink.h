@@ -102,7 +102,13 @@ public:
     uint16_t gainQ15;           // our gain stage now (32768 = 0 dB, headroom included)
     uint16_t headroomQ15;       // the fixed attenuation it keeps (setHeadroomDb())
     const char* stream;         // "started", "starting", "suspending", "suspended", "held off"
-    uint32_t maxGapMs;          // longest wait between data callbacks since the last stats()
+    uint32_t maxGapMs;          // longest wait between two data callbacks of a running stream since the
+                                // last stats(); a stream's stop and restart isn't one (StreamRestart)
+    bool rssiKnown;             // rssiDelta was read on this link (every 5 s while linked)
+    int rssiDelta;              // the link's signal against the controller's golden receive range, in
+                                // dB: 0 in it, negative that much below it (weak), positive above
+    const char* linkMode;       // the link's power mode: "active", "sniff", "hold", "park"; "?" unlinked
+    uint32_t modeChanges;       // mode changes the controller reported (a sniff mid-stream: a stutter's cause)
     uint32_t eventsDropped;     // events lost because the loop didn't collect them
     uint32_t appTaskStackFree;  // bytes of ESP32-A2DP's app task (BtAppT) stack never used
   };
@@ -379,6 +385,18 @@ private:
   std::atomic<bool> linked_{false};     // the A2DP link as reported to the loop
   std::atomic<bool> streaming_{false};  // the stack reports the stream started
   std::atomic<uint8_t> streamState_{0};  // for stats(): StreamControl::State, bit 7 = held off
+  // The link's signal and power mode, so a stutter can be told from a weak
+  // link or a sniff: the RSSI delta BtAppT asks the controller for every 5 s
+  // while linked (PlayerA2dp::pollLink), kept by the GAP callback (BTC task:
+  // stored, never logged); the power mode from each ESP_BT_GAP_MODE_CHG_EVT,
+  // with a count the loop logs every change by (update()). Unknown while
+  // unlinked. For stats() and the "[stats] bt" line.
+  static constexpr int16_t kRssiUnknown = INT16_MIN;
+  static constexpr uint8_t kModeUnknown = 0xFF;
+  std::atomic<int16_t> rssiDelta_{kRssiUnknown};
+  std::atomic<uint8_t> linkMode_{kModeUnknown};   // esp_bt_pm_mode_t
+  std::atomic<uint16_t> modeInterval_{0};         // the mode's interval, baseband slots of 0.625 ms
+  std::atomic<uint32_t> modeChanges_{0};
   // The volume state, published by PlayerA2dp (BtAppT) for the UI and stats.
   std::atomic<uint8_t> volume_{kDefaultVolume};
   std::atomic<uint8_t> control_{0};  // AbsVolumePolicy::Mode
@@ -388,6 +406,7 @@ private:
 
   // Loop task only.
   int8_t txMin_ = -1, txMax_ = -1;  // setTxPower()'s levels, -1: never set
+  uint32_t modeLogged_ = 0;         // modeChanges_ as last logged by update()
   bool wantAudio_ = false;      // as last handed to BtAppT
   uint32_t nextTickMs_ = 0;
   int16_t unsentVolume_ = -1;   // a setVolume() BtAppT's queue had no room for yet
@@ -413,6 +432,7 @@ private:
   DeclickReader reader_{kConsumerId};
   AudioTap* tap_ = nullptr;  // written only here; read by the loop
   StreamRestart restart_;  // when its audio fades in from 0
+  bool wasShort_ = false;  // the last callback came up short (AudioShared::noteRead: a break's first)
   std::atomic<uint32_t> maxGapUs_{0};
   std::atomic<uint32_t> framesPulled_{0};
 };

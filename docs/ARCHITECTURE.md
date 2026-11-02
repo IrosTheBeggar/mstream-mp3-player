@@ -124,6 +124,21 @@ The rules that keep it deadlock- and glitch-free:
 - **Pause happens in the outputs.** They fade the next 64 frames (~1.5 ms)
   out, then play silence without reading, so pause is near-instant and the
   buffered audio waits for resume, which fades back in.
+- **What the stats line can say about a stutter.** `[stats]`, every 5 s
+  (main.cpp's `printStats()`), carries `underruns=` (reads an output had to
+  pad with silence, ~2.9 ms each on Bluetooth) and `breaks=` (how many runs
+  of them: how often the audio broke off; `AudioShared::noteRead()`). Its
+  `bt` line carries `gap=` (the longest wait between two data callbacks of
+  a running stream since the last line: a stall of the Bluetooth task,
+  whatever its length; healthy is 10-30 ms; `StreamRestart::statGapUs()`),
+  `rssi=` (the link's signal against the controller's golden receive range,
+  asked of it every 5 s on BtAppT's tick: 0dB in it, -NdB that much below
+  it) and `mode=` (the link's power mode; every change is logged as
+  `[bt] link mode: ...`, since a sniff while a stream plays would explain a
+  stutter). A drop after the SBC encoder shows in none of them: ESP-IDF's
+  source keeps 27 frames (~78 ms) in its transmit queue and drops the
+  oldest when the link doesn't drain it, silently (the stack is built
+  without logging); a weak link shows in `rssi=` alone.
 - **Nothing starts, stops or jumps with a click.** Each output reads the ring
   through a `DeclickReader`: audio fades in after any gap; when it breaks off
   (underrun, output switch) the last frame is held and ramped to 0 over 64

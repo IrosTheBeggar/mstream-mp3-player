@@ -103,7 +103,8 @@ public:
 
   struct Stats {
     uint32_t bufferedMs;       // audio waiting in the ring
-    uint32_t underruns;        // gaps the active output had to fill with silence
+    uint32_t underruns;        // reads the active output had to pad with silence (AudioShared)
+    uint32_t breaks;           // ... in how many runs: how often the audio broke off
     uint32_t btFramesPerSec;   // pulled by the Bluetooth stack, ~44100 while streaming
     float decodeLoad;          // time spent producing / audio produced, current track
     uint32_t decodeStackFree;  // bytes never used by the decode task
@@ -261,8 +262,10 @@ public:
   // audio waiting in the ring now, in ms. The
   // scrolling lists back off when it runs low (ScrollGovernor).
   uint32_t bufferedMsNow() const;
-  // The outputs' underrun count (free-running).
+  // The outputs' underrun count (free-running), and how many breaks those
+  // were (AudioShared::breaks).
   uint32_t underrunsNow() const { return shared_.underruns.load(std::memory_order_relaxed); }
+  uint32_t breaksNow() const { return shared_.breaks.load(std::memory_order_relaxed); }
   // The ring's size in ms (about 1,490).
   uint32_t ringCapacityMs() const;
   // The card worker's inputs (docs/METADATA.md 3.3.9; ScanScheduler::In):
