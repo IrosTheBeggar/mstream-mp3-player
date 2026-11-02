@@ -69,6 +69,23 @@ const char* controlName(AbsVolumePolicy::Mode m) {
 
 constexpr uint8_t kHeldOffBit = 0x80;
 
+// How often BtAppT asks the controller for the link's RSSI delta while
+// linked (PlayerA2dp::pollLink): one HCI command, answered from the RSSI
+// the controller measures on every packet it receives, so nothing goes
+// over the air. In step with the loop's stats line.
+constexpr uint32_t kRssiEveryMs = 5000;
+
+// A link's power mode (esp_bt_pm_mode_t) by name, for the log and the stats.
+const char* modeName(uint8_t mode) {
+  switch (mode) {
+    case ESP_BT_PM_MD_ACTIVE: return "active";
+    case ESP_BT_PM_MD_HOLD: return "hold";
+    case ESP_BT_PM_MD_SNIFF: return "sniff";
+    case ESP_BT_PM_MD_PARK: return "park";
+    default: return "?";
+  }
+}
+
 const char* streamName(uint8_t published) {
   if (published & kHeldOffBit) return "held off";
   switch (static_cast<StreamControl::State>(published)) {
@@ -296,6 +313,9 @@ private:
   void heartbeat();
   // BtAppT's ticks and heartbeats: ReconnectPlanner decides, this carries it out.
   void planStep(uint32_t nowMs);
+  // BtAppT's ticks: the link's RSSI delta asked of the controller every
+  // kRssiEveryMs while linked; the answer is app_gap_callback's.
+  void pollLink(uint32_t nowMs);
   void notePhase(ReconnectPlanner::Phase before, uint32_t nowMs);
   ReconnectPlanner::Lib libState() const;
   void rememberPeer(const uint8_t* bda);
@@ -342,6 +362,7 @@ private:
   BtControl ctl_{*this, BtSink::kDefaultVolume};
   ReconnectPlanner reconnect_;
   RadioMeter radio_;  // the share of time paging or scanning, per minute
+  uint32_t rssiDueMs_ = 0;  // pollLink(): when the next read is due
   uint8_t label_ = kFirstLabel;
   bool codecLogged_ = false;
   bool delayLogged_ = false;
@@ -373,6 +394,7 @@ void PlayerA2dp::onWork(uint16_t work, void*) {
     case kTick:
       a2dp.ctl_.tick(now);
       a2dp.planStep(now);
+      a2dp.pollLink(now);
       a2dp.publishLink();
       break;
     case kSuspendNow:
@@ -559,6 +581,13 @@ void PlayerA2dp::beginLinkUp(const uint8_t* bda) {
   linkedBda_ = packBda(bda);
   linkUp_ = true;
   sink->streamEpoch_.fetch_add(1, std::memory_order_release);  // its first audio fades in
+  // Its signal is read from the next tick (pollLink()); a link is in active
+  // mode until the controller reports a change (one may have come while
+  // the link was set up: kept).
+  sink->rssiDelta_.store(BtSink::kRssiUnknown, std::memory_order_relaxed);
+  if (sink->linkMode_.load(std::memory_order_relaxed) == BtSink::kModeUnknown) {
+    sink->linkMode_.store(ESP_BT_PM_MD_ACTIVE, std::memory_order_relaxed);
+  }
   ctl_.linkUp(millis());
 }
 
@@ -594,6 +623,9 @@ void PlayerA2dp::linkDown(const esp_a2d_cb_param_t& a2d) {
   codecLogged_ = false;
   delayLogged_ = false;
   sink->delayReport_.store(0, std::memory_order_relaxed);  // the next headphones report their own
+  sink->rssiDelta_.store(BtSink::kRssiUnknown, std::memory_order_relaxed);  // the next link's is read afresh
+  sink->linkMode_.store(BtSink::kModeUnknown, std::memory_order_relaxed);
+  sink->modeInterval_.store(0, std::memory_order_relaxed);
   Serial.printf("[bt] A2DP down (%s)\n",
                 a2d.conn_stat.disc_rsn == ESP_A2D_DISC_RSN_ABNORMAL ? "signal lost" : "closed");
   ctl_.linkDown(millis());
@@ -643,6 +675,15 @@ void PlayerA2dp::heartbeat() {
   if (pairing_ || s_a2d_state == APP_AV_STATE_CONNECTING) BluetoothA2DPSource::bt_app_av_sm_hdlr(kHeartBeatEvt, nullptr);
   planStep(millis());
   publishLink();
+}
+
+// BtAppT's ticks (every 250 ms from the loop): the link's RSSI delta from
+// the controller every kRssiEveryMs while linked, for the stats line. The
+// answer comes to app_gap_callback (ESP_BT_GAP_READ_RSSI_DELTA_EVT).
+void PlayerA2dp::pollLink(uint32_t nowMs) {
+  if (!linkUp_ || static_cast<int32_t>(nowMs - rssiDueMs_) < 0) return;
+  rssiDueMs_ = nowMs + kRssiEveryMs;
+  esp_bt_gap_read_rssi_delta(peer_bd_addr);
 }
 
 ReconnectPlanner::Lib PlayerA2dp::libState() const {
@@ -1061,6 +1102,27 @@ void PlayerA2dp::app_gap_callback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_par
       const uint8_t* bda = param->acl_disconn_cmpl_stat.bda;
       if (packBda(bda) != linkedBda_.load() && std::memcmp(bda, peer_bd_addr, ESP_BD_ADDR_LEN) != 0) return;
       break;
+    }
+    case ESP_BT_GAP_READ_RSSI_DELTA_EVT: {
+      // pollLink()'s answer, for the stats line: stored, never logged (BTC task).
+      const auto& r = param->read_rssi_delta;
+      if (r.stat == ESP_BT_STATUS_SUCCESS && packBda(r.bda) == linkedBda_.load()) {
+        sink->rssiDelta_.store(r.rssi_delta, std::memory_order_relaxed);
+      }
+      return;
+    }
+    case ESP_BT_GAP_MODE_CHG_EVT: {
+      // The link's power mode as the controller reports each change: kept
+      // for the stats line and the loop's log (BtSink::update()). A sniff
+      // while a stream plays would explain a stutter. While unlinked the
+      // link being set up is the one it can be about.
+      const auto& m = param->mode_chg;
+      if (!linkUp_ || packBda(m.bda) == linkedBda_.load()) {
+        sink->linkMode_.store(m.mode, std::memory_order_relaxed);
+        sink->modeInterval_.store(m.interval, std::memory_order_relaxed);
+        sink->modeChanges_.fetch_add(1, std::memory_order_release);
+      }
+      break;  // (the library's logs it at debug level)
     }
     case ESP_BT_GAP_READ_REMOTE_NAME_EVT:  // asked for in finishLinkUp()
       if (param->read_rmt_name.stat == ESP_BT_STATUS_SUCCESS) {
@@ -1576,6 +1638,21 @@ void BtSink::update(uint32_t nowMs, bool wantAudio) {
   if (forgetPending_ && a2dp.requestForget()) forgetPending_ = false;
   flushAsks();
   drainFinds();  // what the Pair screen's search found since the last pass
+  // The link's power mode, as the controller reported each change (the GAP
+  // callback keeps it): every change in the log, since a sniff while a
+  // stream plays would explain a stutter.
+  const uint32_t modeChanges = modeChanges_.load(std::memory_order_acquire);
+  if (modeChanges != modeLogged_) {
+    modeLogged_ = modeChanges;
+    const uint8_t mode = linkMode_.load(std::memory_order_relaxed);
+    const unsigned interval = modeInterval_.load(std::memory_order_relaxed);
+    char slots[48] = "";
+    if (mode != ESP_BT_PM_MD_ACTIVE && interval) {
+      snprintf(slots, sizeof(slots), ", interval %u slots (%.1f ms)", interval, interval * 0.625f);
+    }
+    Serial.printf("[bt] link mode: %s%s%s\n", modeName(mode), slots,
+                  streaming_.load() && mode != ESP_BT_PM_MD_ACTIVE ? " while the stream plays" : "");
+  }
   if (unsentVolume_ >= 0 && a2dp.requestVolumeSet(static_cast<uint8_t>(unsentVolume_))) unsentVolume_ = -1;
   if (unsentVolume_ < 0 && unsentStep_ != 0 && a2dp.requestVolumeStep(unsentStep_)) unsentStep_ = 0;
   if (unsentHeadroom_ >= 0 && a2dp.requestHeadroom(static_cast<uint8_t>(unsentHeadroom_))) unsentHeadroom_ = -1;
@@ -1702,6 +1779,11 @@ BtSink::Stats BtSink::stats() {
   s.headroomQ15 = headroom_.load();
   s.stream = streamName(streamState_.load());
   s.maxGapMs = maxGapUs_.exchange(0, std::memory_order_relaxed) / 1000;
+  const int16_t rssi = rssiDelta_.load(std::memory_order_relaxed);
+  s.rssiKnown = rssi != kRssiUnknown;
+  s.rssiDelta = s.rssiKnown ? rssi : 0;
+  s.linkMode = modeName(linkMode_.load(std::memory_order_relaxed));
+  s.modeChanges = modeChanges_.load(std::memory_order_relaxed);
   s.eventsDropped = eventsDropped_.load(std::memory_order_relaxed);
   const TaskHandle_t task = a2dp.appTask();
   s.appTaskStackFree = task ? uxTaskGetStackHighWaterMark(task) : 0;
@@ -1966,9 +2048,9 @@ int32_t BtSink::onData(Frame* frames, int32_t count) {
   const DeclickReader::Result r = s.reader_.fill(out, want, playing);
   // A gap in audio that should be there. Not while paused (the fade-out may
   // find the ring empty) nor while the speaker has the ring (wanted is 0).
-  if (playing && r.read < r.wanted && s.shared_->expectingAudio.load(std::memory_order_relaxed)) {
-    s.shared_->underruns.fetch_add(1, std::memory_order_relaxed);
-  }
+  // Counted, the first short callback of a run as a break too.
+  s.shared_->noteRead(
+      playing && r.read < r.wanted && s.shared_->expectingAudio.load(std::memory_order_relaxed), &s.wasShort_);
   // A copy for the beat tracker, before the volume: all `want` frames (the
   // tap marks which were real audio, and where in the track). Copy only,
   // and nothing while the Dance tab isn't up (the tap is switched off).

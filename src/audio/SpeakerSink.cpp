@@ -150,6 +150,7 @@ void SpeakerSink::pump() {
   size_t idx = 0;
   int waited = 0;
   bool refilling = false;  // the ring was empty when last looked at
+  bool wasShort = false;   // the last pull came up short (AudioShared::noteRead: a break's first)
   for (;;) {
     takeAmpRequest();
     const bool paused = shared_->paused;
@@ -188,7 +189,7 @@ void SpeakerSink::pump() {
     // Up to kFrames of the ring's audio (faded in after a gap or skip); if it
     // came up short, paused or lost the ring, then a fade to 0 after it.
     const DeclickReader::Result r = reader_.pull(buffers_[idx], kFrames, !paused);
-    if (playing && r.read < r.wanted && shared_->expectingAudio) shared_->underruns++;
+    shared_->noteRead(playing && r.read < r.wanted && shared_->expectingAudio, &wasShort);
     if (r.total == 0) {
       // Nothing to send (stopped with the speaker the output, an underrun):
       // as quiet as paused. Also yields when the ring was busy: the task

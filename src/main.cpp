@@ -1032,14 +1032,15 @@ static void printStats() {
   const auto& s = audio.stats();
   const diag::Heap h = diag::heap();
   Serial.printf(
-      "[stats] track=%d/%lu %s pos=%.1fs out=%s%s buf=%lums underruns=%lu bt=%lufps load=%.1f%% "
+      "[stats] track=%d/%lu %s pos=%.1fs out=%s%s buf=%lums underruns=%lu breaks=%lu bt=%lufps load=%.1f%% "
       "stack_free=%lu pass_max=%luus ram=%luK min=%luK psram=%luK pmin=%luK bat=%d%%\n",
       player.currentIndex() + 1, (unsigned long)queue.size(), stateName(), audio.positionMs() / 1000.0f,
       audio.output() == Output::Bluetooth ? "bt" : "speaker",
       audio.output() == Output::Bluetooth ? (audio.bluetooth().connected() ? "(connected)" : "(searching)")
       : silent                            ? "(silent test mode)"
                                           : "",
-      (unsigned long)s.bufferedMs, (unsigned long)s.underruns, (unsigned long)s.btFramesPerSec,
+      (unsigned long)s.bufferedMs, (unsigned long)s.underruns, (unsigned long)s.breaks,
+      (unsigned long)s.btFramesPerSec,
       s.decodeLoad * 100.0f, (unsigned long)s.decodeStackFree, (unsigned long)s.maxPassUs,
       (unsigned long)(h.internalFree / 1024), (unsigned long)(h.internalMin / 1024),
       (unsigned long)(h.psramFree / 1024), (unsigned long)(h.psramMin / 1024), (int)M5.Power.getBatteryLevel());
@@ -1056,7 +1057,13 @@ static void printStats() {
   // Core2). headphones: their last reported volume. gain: the Core2's gain
   // stage (the headroom with absolute volume). headroom: its fixed
   // attenuation (-2.0dB unless set with h<n>). gap: longest wait between two
-  // data callbacks since the last line (~10-30 ms is healthy). search: how
+  // data callbacks of a running stream since the last line (~10-30 ms is
+  // healthy; a stall of the Bluetooth task shows whole, a stream's stop and
+  // restart doesn't). rssi: the link's signal against the controller's
+  // golden receive range, read every 5 s (0dB: in it; -NdB: that much below
+  // it; ?: none read on this link yet). mode: the link's power mode (active
+  // while a stream plays; a sniff then would explain a stutter, and every
+  // change is logged as "[bt] link mode:"). search: how
   // the Core2 looks for them while unlinked (burst, backoff, resting, scan,
   // idle); radio: the share of the last minute spent paging or scanning.
   const BtSink::Stats b = bt.stats();
@@ -1064,10 +1071,16 @@ static void printStats() {
   if (b.gainQ15 > 0) snprintf(gain, sizeof(gain), "%.1fdB", 20.0f * log10f(b.gainQ15 / 32768.0f));
   char headset[8] = "?";
   if (b.headsetVolume >= 0) snprintf(headset, sizeof(headset), "%d", b.headsetVolume);
+  char rssi[12] = "?";
+  if (b.rssiKnown && b.rssiDelta == 0) {
+    strlcpy(rssi, "0dB", sizeof(rssi));
+  } else if (b.rssiKnown) {
+    snprintf(rssi, sizeof(rssi), "%+ddB", b.rssiDelta);
+  }
   Serial.printf("[stats] bt vol=%u%% control=%s headphones=%s/127 gain=%s headroom=%.1fdB stream=%s gap=%lums "
-                "events_dropped=%lu btapp_stack_free=%lu search=%s radio=%d%%/min\n",
+                "rssi=%s mode=%s events_dropped=%lu btapp_stack_free=%lu search=%s radio=%d%%/min\n",
                 (unsigned)b.volume, b.volumeControl, headset, gain, 20.0f * log10f(b.headroomQ15 / 32768.0f),
-                b.stream, (unsigned long)b.maxGapMs, (unsigned long)b.eventsDropped,
+                b.stream, (unsigned long)b.maxGapMs, rssi, b.linkMode, (unsigned long)b.eventsDropped,
                 (unsigned long)b.appTaskStackFree, b.reconnect, b.radioBusyPercent);
 }
 
