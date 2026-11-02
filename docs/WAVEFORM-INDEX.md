@@ -494,9 +494,10 @@ does (7.4). docs/SEEK-BAR.md has the bar's look.
 
 - **The file keeps no "asked, none".** A track the server had no peaks for
   has no slot, and a later run may ask again.
-- **What has no row in v1:** peers, hand-copied files, files edited on the
-  card. A converted file takes its source's peaks, and lengthMs from the
-  card file's record.
+- **What has no row in v1:** a peer's file, unless the server has the same
+  recording (its peaks are the recording's, by the canonical hash),
+  hand-copied files, files edited on the card. A converted file takes its
+  source's peaks, and lengthMs from the card file's record.
 
 **What a commit costs.** The file costs 256 bytes a track. A commit makes
 the device build its library again at its next boot (M 2.5.6), 7-9 s at
@@ -511,6 +512,11 @@ table answer. **Never delete the old file while it names useful rows:** a run
 with no answers isn't a card with no shapes. This differs from Auto DJ's no
 vectors, no index. Only when no row is left is there no file, as there. Say so
 in a note; the next run asks for the rest.
+
+**A long fetch.** A fetch can take half an hour, and it comes ahead of the
+final commit's first write. A writer that copied files since its last
+checkpoint makes one more before it asks (M 2.12.1's step 9, after the last
+file), so a card pulled in that wait keeps them.
 
 **Two writers, one file.** They agree byte for byte when they agree on which
 tracks have rows, the paths as the card stores them, the peaks, lengthMs,

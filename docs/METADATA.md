@@ -1781,7 +1781,8 @@ rules handle.
    3. close it and rename it into its `/music` path, creating the plan's
       folders (OWNED) as needed;
    4. read back its name, size and fatTime; read its tags (2.7).
-9. **Checkpoint** every 500 files or 5 minutes, between two files:
+9. **Checkpoint** every 500 files or 5 minutes, between two files, and once
+   more after the last when a long index step follows (WAVEFORM-INDEX.md 12):
    1. write `tags-<g>.bin` (g = the root's generation + 1) under its final
       name;
    2. write `manifest.tmp` (FINAL clear), delete `manifest.bin`, rename;
