@@ -130,6 +130,10 @@ public:
   // whatever the card held: every writer here fills them).
   virtual bool sync() = 0;                  // f_sync: the data and the directory entry on the card
   virtual bool truncate(uint32_t size) = 0;  // f_truncate at `size` (at most the file's size)
+  // The read that last failed here failed on the file system's own records of the
+  // file (a start cluster or a FAT chain off the volume: FatFs's FR_INT_ERR). The
+  // card answered and no read again changes that: the file's fault, not the card's.
+  virtual bool damaged() const { return false; }
 };
 
 // How a write reaches the card (the 2026-10-09 device run, METADATA.md
@@ -166,6 +170,15 @@ public:
   virtual ~Fs() = default;
   // nullptr: missing (Read, Update), or it couldn't be opened.
   virtual File* open(const char* path, Mode mode) = 0;
+  // open(path, Mode::Read), with whose word a nullptr is. `cardFailed` false: the
+  // file isn't there, or the file system's records of the way to it are damaged
+  // (as File::damaged()). True: the card failed (a read, the volume's lock, no
+  // memory for the file), and nothing is known of the file. For a reader that takes
+  // the two differently (cardroot::read()).
+  virtual File* openRead(const char* path, bool* cardFailed) {
+    *cardFailed = false;
+    return open(path, Mode::Read);
+  }
   // f_close: a written file is synced first. The File is gone either way.
   virtual bool close(File* f) = 0;
   virtual bool exists(const char* path) = 0;

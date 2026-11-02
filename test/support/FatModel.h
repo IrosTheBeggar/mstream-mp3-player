@@ -109,6 +109,10 @@ struct Drive {
   SectorCache* cache = nullptr;
   CachedDrive* wrapper = nullptr;
   bool noInit = false;
+  // disk_read() calls numbered by asked.reads, from failFrom up to failTo, answer
+  // RES_ERROR with the status as it was: a read that got its command answered and
+  // no data token, or a CRC mismatch (the SD driver's sdReadSector()).
+  uint64_t failFrom = UINT64_MAX, failTo = UINT64_MAX;
   struct Asked {
     uint64_t reads = 0, singleReads = 0, readSectors = 0, writes = 0, trims = 0;
   } asked;
@@ -324,9 +328,11 @@ extern "C" DSTATUS disk_initialize(BYTE pdrv) {
 extern "C" DRESULT disk_read(BYTE pdrv, BYTE* buff, LBA_t sector, UINT count) {
   if (disk_status(pdrv) & STA_NOINIT) return RES_NOTRDY;
   fatmodel::Drive& d = fatmodel::drive(pdrv);
+  const uint64_t asked = d.asked.reads;
   ++d.asked.reads;
   d.asked.singleReads += count == 1;
   d.asked.readSectors += count;
+  if (asked >= d.failFrom && asked < d.failTo) return RES_ERROR;
   const uint32_t lba = static_cast<uint32_t>(sector);
   const bool ok = d.wrapper ? d.wrapper->read(lba, buff, count)
                   : d.cache ? d.cache->read(*d.disk, lba, buff, count)

@@ -575,7 +575,7 @@ void OutputPage::drawLibraryRow(ListView::Row& r) {
   librarytext::libraryRowTitle(s.libraryTracks, title, sizeof(title));
   if (f.width(Font::Body, title) > pillX - 8 - x) librarytext::libraryRowTitle(s.libraryTracks, title, sizeof(title), 1);
   const bool can = s.libraryRecords && !s.libraryFenced;
-  if (!s.libraryRecords) {
+  if (!s.libraryRecords && !s.libraryHeld) {
     trf(sub, sizeof(sub), S::library_row_no_card);
   } else if (s.libraryFenced) {
     trf(sub, sizeof(sub), S::library_row_updating);
@@ -597,7 +597,8 @@ void OutputPage::drawLibraryRow(ListView::Row& r) {
 uint32_t OutputPage::librarySig(const AppState& s) {
   uint32_t h = 2166136261u;
   for (uint32_t v : {s.libraryTracks, s.libTransfer, s.libDevice, s.libNone,
-                     static_cast<uint32_t>(s.libraryRecords) | static_cast<uint32_t>(s.libraryFenced) << 1}) {
+                     static_cast<uint32_t>(s.libraryRecords) | static_cast<uint32_t>(s.libraryFenced) << 1 |
+                         static_cast<uint32_t>(s.libraryHeld) << 2}) {
     h = (h ^ v) * 16777619u;
   }
   return h;
@@ -607,6 +608,10 @@ uint32_t OutputPage::librarySig(const AppState& s) {
 // a big card).
 void OutputPage::onRescan() {
   const AppState& s = ui_.state();
+  if (s.libraryHeld) {
+    ui_.warn(tr(S::library_row_rescan_unread));
+    return;
+  }
   if (!s.libraryRecords) {
     ui_.warn(tr(S::library_row_rescan_no_card));
     return;

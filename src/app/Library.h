@@ -30,7 +30,8 @@
 // card-reader card, or this firmware's first boot), walks /music through
 // walkMusic(); a build is saved. /.player/device.txt is rewritten when its
 // content would change (2.15). The validation walk, the scan and the
-// update step follow in the background (app/CardTasks runs LibraryUpdate's
+// update step follow in the background, unless the boot held them
+// (cardJobsHeld()) (app/CardTasks runs LibraryUpdate's
 // step: its build and its save on the card worker, its fence here: index()
 // is nullptr behind it, and the catalog answers from a held copy of the
 // playing track's names). An index loaded while the scan went on since its
@@ -79,6 +80,16 @@ public:
   // The index was loaded, but D or its journal changed since its build:
   // the scan's end rebuilds it.
   bool softStale() const { return softStale_; }
+  // The boot loaded a library built from a transfer whose root the card failed to
+  // read: no card jobs this session (libraryboot::Decision::holdJobs).
+  bool cardJobsHeld() const { return cardJobsHeld_; }
+  // The boot couldn't read the root, and the card jobs run all the same: a library
+  // with no transfer in it, or one this boot had to build or walk, which then has
+  // none (libraryboot::decide()). The root isn't read again on a timer this session:
+  // such a read with no answer makes FatFs's next call a remount, main.cpp's guard
+  // restarts at a remount with a job under way, and the next boot would do the same,
+  // before its walk ever began. A remount still asks, and Dc for Auto DJ.
+  bool jobsOnUnreadRoot() const { return root_ && root_->readFailed() && !cardJobsHeld_; }
   // The boot and the update step (lib/core LibraryUpdate); nullptr on the
   // flash (and before begin()).
   LibraryUpdate* update() { return update_; }
@@ -158,4 +169,5 @@ private:
   LibraryUpdate* update_ = nullptr;     // PSRAM
   TrackCatalog::Held* held_ = nullptr;  // PSRAM: Now Playing's names behind the fence
   bool softStale_ = false;
+  bool cardJobsHeld_ = false;
 };

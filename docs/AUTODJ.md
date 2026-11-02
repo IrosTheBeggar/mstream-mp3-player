@@ -550,7 +550,7 @@ anchor, the random stream. It is never saved.
 | A new queue while on: every Play (the Library's, Play all, Shuffle all), a Clear, and the undo of either, wherever asked | New (`QueueModel::playEpoch()`: no caller says so) | The new current track (an empty queue: none) |
 | "Auto DJ from here", the Auto DJ button (`Dh`, `De`) | New; Auto DJ on if it was off | That track |
 | `Dr` | New | None |
-| A remount that finds another index (or one now, or none now) while on; `Dc` | New | None |
+| A remount that finds another index (or one now, or none now) while on; `Dc` too, but after a read of the root the card failed, only when that read finds one of these (and not after the boot's: 6.5) | New | None |
 | Play next, + Queue, a jump in the Queue, Remove, a move, Clear up next, their undo | Kept | Played tracks join the ring as they start |
 | Skip, previous, seek | Kept | A quick skip leaves the ring (3.2) |
 | Anchor, strictness, BPM continuity, Harmonic mixing | Kept | From the next pick; Anchor drops the pin |
@@ -688,9 +688,9 @@ the next boot.
 
 ### 6.5 Remounts
 
-On every FatFs remount (the card's guard counts them) the glue reads the
-root again into its own copy (never the library's) and compares the index
-entry:
+On every FatFs remount (the card's guard counts them), but for one taken for the
+echo of a try the card failed (within 30 s of it: 6.6), the glue reads the root
+again into its own copy (never the library's) and compares the index entry:
 
 - **The same index:** the file reopened; the maps and the session kept; the
   damaged ring cleared. A join under way starts again. A reopen the card fails
@@ -700,6 +700,13 @@ entry:
   DJ is on, joined again and a new session (`Dc` starts one on or off).
 - No PSRAM for the root: the index closed until the next remount, its
   entry kept.
+- **The root unread** (the card failed a read of it: `cardroot::Root::readFailed()`,
+  at a remount or at the boot): no index is taken to have gone. The file closed and
+  the maps gone, the entry and the session kept, and the root read again by 6.6's
+  tries (none for a boot whose card jobs run: 6.6); then as above, but for the boot's,
+  which has no root to compare and keeps its session whatever it finds. Before
+  2026-11-02 this read as no index now, with a new session, and `Dc` couldn't bring
+  it back.
 - **The card isn't walked again:** a remount reopens the records and the
   index, but only a boot walks the card. Music files added to a card
   swapped while the player runs wait for the next boot (12).
@@ -719,8 +726,9 @@ opened in 2.8 ms", a new session ("another index on the card"), joined
 | An index of a major this build doesn't read | Picks by id | No Auto DJ index on this card |
 | The file failed its checks (frame, header, the root's entry; a section in the join) | Absent until a remount or the next boot: picks by id | The Auto DJ index failed its checks |
 | A broken slot (3.13) | Random picks over the index's rows until a remount or the next boot | The Auto DJ index failed its checks |
-| The file the root names isn't on the card (FatFs's FR_NO_FILE or FR_NO_PATH), no PSRAM for the root after a remount | Absent until a remount or the next boot: picks by id | Can't read the Auto DJ index |
-| Opening it, the card failed: a read, the volume's lock, or no PSRAM for its FIL | Picks by id; tried again after 2 s, then 10 s, then 30 s, the session kept; the last failing too, as the row above | Reading the Auto DJ index…, then Can't read the Auto DJ index |
+| The file the root names isn't on the card (FatFs's FR_NO_FILE or FR_NO_PATH), no PSRAM for the root | Absent until a remount or the next boot: picks by id | Can't read the Auto DJ index |
+| Opening it, or reading the root, the card failed: a read, the volume's lock, or no PSRAM for its FIL | Picks by id; tried again after 2 s, then 10 s, then 30 s, the session kept; the last failing too, as the row above | Reading the Auto DJ index…, then Can't read the Auto DJ index |
+| The boot's reads of the root failed, and its card jobs run (METADATA.md 3.2.2) | Picks by id; no tries: until a remount, `Dc` or the next boot | Can't read the Auto DJ index |
 | A library over 65,534 tracks | Not joined | Too many tracks for the Auto DJ index |
 | No PSRAM for the join | Picks by id until the next library build, or until Auto DJ is switched off and on | Not enough memory for the Auto DJ index |
 | A read failed during the join | Picks by id; joined again 10 s later | Reading the Auto DJ index… |
@@ -731,15 +739,39 @@ The status's second line is "picks are random" under each reason but
 
 A fault of the card says nothing of the file. A read that gets no answer marks
 the card failed, so FatFs mounts the volume again at its next call once the card
-answers, and that remount reopens the file. A read that fails any other way (a
-select timeout, an R1 error, no data token, a CRC mismatch) sets nothing, so
-until 2026-11-02 one such glitch in the boot's open left picks by id for the
-session. The tries (`lib/core/AutoDjOpen.h`,
+answers. A read that fails any other way (a select timeout, an R1 error, no data
+token, a CRC mismatch) sets nothing, so until 2026-11-02 one such glitch in the
+boot's open left picks by id for the session. The tries (`lib/core/AutoDjOpen.h`,
 test_autodj_open) are on the loop task, as the open is: a card that doesn't
-answer costs about a second of the driver's retries each (ESTIMATED), so there
-are few, the first soon, since most faults are a glitch. None starts before the
-UI's first frame, while a list moves, while the card is held or behind the
-update's fence. A remount or `Dc` counts from the first try again.
+answer costs about a second of the driver's retries each, a read of the root
+about 2.5 s, its four calls of FatFs (ESTIMATED), so there are few, the first soon,
+since most faults are a glitch. None starts before the UI's first frame, while a
+list moves, while the card is held or behind the update's fence. `Dc`, or a read
+of the root or an open that works, counts from the first try again, and so does a
+remount when the last try was no fault of the card's.
+
+After a read with no answer, though, the next call of FatFs, whoever's, is itself
+a remount: that read's echo. Taken for news of the card it would start the tries
+over and read at once, get no answer, and so on at every pass, seconds of the loop
+each, the waveform bar's reads of the root answering Auto DJ's and the other way
+about. So within 30 s of a try the card failed a remount does nothing and the wait
+stands; later than that it asks once, the count where it was. A card put back
+within those 30 s of the last try waits for the next remount or boot. A reader of
+the root makes that call itself, right after a read it failed
+(`cardfat::FatFs::echoNow()`): left to the next caller, on a player whose calls come
+far apart, the echo would come later than that, as news, a read and a new mark each
+time, and the open of a track that made the call would be cut. On a card that is out
+it costs one failed init a read, about 0.6 s (ESTIMATED).
+
+A remount with a card job under way restarts the player (`stepCardGuard()`,
+METADATA.md 3.8), and the job counts from the UI's first frame, when the walk is
+armed. The first try falls there, so a card that gets no answer to it would restart
+at every boot, before its walk began. So a boot that couldn't read the root and runs
+its card jobs all the same (a library with no transfer in it, or one it had to build
+or walk: METADATA.md 3.2.2) has no tries of the root. A remount or `Dc` still asks, once each. A boot that holds
+its jobs has them, as a session whose boot read the root does: the guard doesn't
+restart with no jobs, and at most once after a good boot, whose next boot is one of
+these.
 
 ---
 
@@ -1103,7 +1135,7 @@ output or the volume; scripts drive them in silent test mode (`z`).
 | `Dp` | One pick appended now, whatever the trigger says (cued at a finished queue); its line, then the anchors and the pin. Refused behind the fence |
 | `Dn<k>` | k dry-run picks (1-2,000) on a copy of the session, each treated as played (the next follows it); a read ahead first when one is due, as the loop does. The live session is untouched. A summary: picks, dry, loosened, random, by id, repeats, artists, breaks, drawn statuses, reads, the time's p50 / p90 / max, the classes |
 | `Dj` | The join again from its start (its time and memory). Refused while Auto DJ is off |
-| `Dc` | The file closed and opened again, as a remount that found another index (a new session, and 6.6's tries from the first) |
+| `Dc` | The file closed and opened again, as a remount that found another index (a new session, and 6.6's tries from the first). No root read yet: the root read again, from the first try, the session kept whatever it finds. The last read of it failed: the same, but while Auto DJ is on another index, one now or none now is a new session (6.5). A read with no answer with a card job under way restarts the player, as any remount then (6.6) |
 | `Db<n>` | The bench: n slot reads of random rows (1-5,000), the raw read timed apart from its check; p50 / p90 / max, a histogram, the check's mean and max |
 | `Dh` / `Dh<id>` | "Auto DJ from here" on the current entry's track, or on library track `<id>`. Refused behind the fence |
 | `De` | The empty states' Auto DJ button. Refused behind the fence |
@@ -1327,7 +1359,9 @@ in 14.2.
 | 11 | **Memory at 20k.** The running lowest PSRAM over 2 minutes of the MP3, Auto DJ off, then on and joined | On is about 155 KB lower than off (the join), read from psram= or `D` (pmin= keeps the join's moment, now at least 64 KB: 7.4); the engine's 19 KB is held either way | **Couldn't tell:** the build joined at boot either way (pmin 547 KB idle and with an MP3, 459 KB with a FLAC, in both). Resident 177,814 B, against the design's 180 KB |
 | 12 | **The Auto DJ button with Auto DJ off.** `D0`, `qx`, `De`; again in Stay on seed | At most 8 lookups (1 expected) in at most about 50 ms; playback at once; "joined" 1.5-2.5 s later; the first pick after it (a `D` before it shows "owed"). Stay on seed: `D`'s pin is the seed's row after the join | New since 2026-10-13 |
 | 13 | **Settings across a reboot.** Change each, reboot | Each comes back "(saved)"; the boot starts its own session | **Pass** |
-| 14a | **A card that fails the open.** Paused, the card pulled, `Dc` (FatFs answers FR_NOT_READY) | "the card failed opening it (FatFs's answer 3 …): again in 2 s, 1 of 3"; `D` says "1 of 3"; the page says Reading the Auto DJ index…; about 42 s later "ABSENT (the card failed every try at it: io)" and Can't read the Auto DJ index. The card back and a play: "(after a remount)", the join |
+| 14a | **A card that fails the open.** Paused, the card pulled, `Dc` (FatFs answers FR_NOT_READY) | "the card failed opening it (FatFs's answer 3 …): again in 2 s, 1 of 3"; `D` says "1 of 3"; the page says Reading the Auto DJ index…; about 42 s later "ABSENT (the card failed every try at it: io)" and Can't read the Auto DJ index. The card back at least 30 s after ABSENT, and a play: "(after a remount)", the join (back and read sooner: Absent until the next remount or boot, 6.6) |
+| 14b | **A root the card fails** (6.5, METADATA.md 3.2.2). A temporary build that fails every read under `/.mstream`, on a spare card holding a transfer's library, never the music card | Boot: "[lib] the card's root: a read of the card failed: read 4 times, and each failed", "library.idx built from a transfer: load", "[card] the card's root couldn't be read"; `library.idx` unchanged; no walk; `gs` says a restart asks again; `@status` says `cid=?`; the Library row shows its sources, a tap on Rescan its note. `D` says "the card failed reading its root: tried again soon, N of 3" (N rising to 3) and the page says Reading the Auto DJ index…; about 42 s on `D` says "ABSENT (the card failed every read of its root: io)" and the page says Can't read the Auto DJ index; no more root reads while it stays so. The fault off and a reboot: "matches the card", the same library, the index open | New since 2026-11-02 |
+| 14c | **A root the card fails, the jobs running** (6.6). The same build, each failed read also marking the card failed as a read with no answer does (`sd_diskio.cpp`), on a spare card whose `library.idx` has no transfer in it | Boot: "library.idx built with no transfer: load"; `D` says "ABSENT (the card failed every read of its root: io)" from the start, the page Can't read the Auto DJ index; the walk runs and ends; no restart, and no more root reads | New since 2026-11-02 |
 | 14 | **The user's own card** (no transfer data) | No index: the toast once, the page's status, Shuffle all on the empty states; Auto DJ adds random library tracks | New since 2026-10-13 |
 
 After the checks, the device and the card are put back as the release

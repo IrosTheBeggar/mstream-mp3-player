@@ -163,7 +163,7 @@ private:
     None,     // the root names no index (or there is no root: no transfer data)
     NotRead,  // ... one of a major this build doesn't read (read.mpdj)
     Absent,   // ... one that failed its checks (why_), isn't there, or the card failed every try at
-    Again,    // ... one a try at opening failed on the card's account: tried again soon (tries_)
+    Again,    // ... one a try at opening, or a read of the root, failed on the card's account: tried again soon (tries_)
     Open,     // open and checked: the join's, the picks'
   };
   // What keeps a join from starting: nothing; a failed read's wait
@@ -200,6 +200,9 @@ private:
   void closeFile();
   void absent(cardcontract::Why why, const char* what);
   void remount(const Env& env);
+  // The root read again, and what it says of the index against what is held.
+  void readRoot();
+  void rootFailed();
   void stepOpen(const Env& env);
   void stepJoin(const Env& env);
   void beginJoin(const LibraryIndex* index);
@@ -232,6 +235,8 @@ private:
   File file_ = File::None;
   autodj::OpenTries tries_;
   uint8_t openResult_ = 0;  // FatFs's answer to the try that last failed (0: its open did, then a read didn't)
+  bool rootAgain_ = false;  // the card failed a read of the root: what tries_ brings round is that, not the file's
+  bool rootRead_ = false;   // a root has been read, the boot's or since: what haveEntry_ and entry_ answer to
   cardcontract::Why why_ = cardcontract::Why::Missing;
   const char* whyText_ = "no transfer data on the card";
   cardcontract::msmf::Comp entry_;  // the entry the open file is

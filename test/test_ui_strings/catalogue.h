@@ -866,6 +866,8 @@ inline const Entry kEntries[] = {
      {{Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}}},
     {uistr::S::library_row_rescan_no_card, "library_row.rescan_no_card", false, "Tags are read on a card only", "", Font::Body, Font::None, 284, 1, Layout::Toast, 284, -1, false, false, false, 128, 0,
      {{Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}}},
+    {uistr::S::library_row_rescan_unread, "library_row.rescan_unread", false, "Card read failed at startup: restart to try again", "", Font::Body, Font::None, 284, 1, Layout::Toast, 284, -1, false, false, false, 128, 0,
+     {{Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}}},
     {uistr::S::bt_name_not_paired, "bt.name_not_paired", false, "Bluetooth headphones", "", Font::Bold, Font::None, 220, 1, Layout::Line, 0, -1, false, false, false, 0, 0,
      {{Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}, {Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}}},
     {uistr::S::bt_name_default, "bt.name_default", false, "Headphones", "", Font::Bold, Font::None, 220, 1, Layout::Line, 0, -1, false, false, false, 0, 0,

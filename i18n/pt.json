@@ -542,6 +542,7 @@
   "library_row.rescan_body": "O player relê as tags dos seus arquivos (as da transferência ficam). Leva minutos num cartão grande.",
   "library_row.rescan_started": "Relendo as tags",
   "library_row.rescan_no_card": "Tags só são lidas com cartão",
+  "library_row.rescan_unread": "Falha de leitura ao iniciar: reinicie para tentar de novo",
   "bt.name_not_paired": "Fones Bluetooth",
   "bt.name_default": "Fones de ouvido",
   "bt.status_not_paired": "Sem fones pareados",

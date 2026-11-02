@@ -277,6 +277,10 @@ public:
     ts::File* f = in_.open(path, mode);
     return f ? new F(f, path) : nullptr;
   }
+  ts::File* openRead(const char* path, bool* cardFailed) override {
+    ts::File* f = in_.openRead(path, cardFailed);
+    return f ? new F(f, path) : nullptr;
+  }
   bool close(ts::File* file) override {
     F* f = static_cast<F*>(file);
     const bool ok = in_.close(f->f_);
@@ -678,6 +682,131 @@ void test_the_safe_point_and_the_memory_check() {
 // ---------------------------------------------------------------------------
 // The boot (3.2.2): every row of the table, with the card's real files.
 // ---------------------------------------------------------------------------
+// A boot the card fails the root's reads at: nothing is known of the transfer,
+// which isn't to say there is none. Taken for none, this would build from D alone
+// over a good library.idx, every file T lists under its path.
+void test_a_root_the_card_fails_to_read_at_the_boot_keeps_the_library() {
+  using libraryboot::Action;
+  using libraryboot::Saved;
+  CutFs fs;
+  TestCard card;
+  fill(card);
+  commit(fs, card, 2);
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.booted.build.transferUsed);
+  }
+  const std::vector<uint8_t> idx = fs.bytes(LibraryUpdate::kIndexNames.path);
+  const uint32_t writes = static_cast<uint32_t>(fs.bytesWritten);
+  fs.faultPrefix = "/.mstream/";
+  fs.faultFrom = 0;
+  fs.faultTo = -1;
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.root->readFailed());
+    TEST_ASSERT_TRUE(d.booted.ok);
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Differs);
+    TEST_ASSERT_TRUE(d.booted.decision.action == Action::Load);
+    TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+    TEST_ASSERT_FALSE(d.booted.built);
+    TEST_ASSERT_FALSE(d.booted.walked);
+    // The tags T gave it, and not a byte written.
+    TEST_ASSERT_EQUAL_UINT32(kAudio, d.index.trackCount());
+    TEST_ASSERT_EQUAL_STRING("From T", titleOf(d.index, kFlac).c_str());
+    TEST_ASSERT_EQUAL_UINT32(writes, static_cast<uint32_t>(fs.bytesWritten));
+    TEST_ASSERT_TRUE(idx == fs.bytes(LibraryUpdate::kIndexNames.path));
+  }
+  // No PSRAM to load it: no library this session, and the jobs held all the same.
+  {
+    Device d(fs, card);
+    g_ceiling = g_live + 64;
+    d.boot();
+    g_ceiling = SIZE_MAX;
+    TEST_ASSERT_TRUE(d.booted.noMemory);
+    TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+    TEST_ASSERT_TRUE(idx == fs.bytes(LibraryUpdate::kIndexNames.path));
+  }
+  // T's reads alone: the same, the root naming the card.
+  fs.faultPrefix = "/.mstream/tags";
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.root->hasRoot);
+    TEST_ASSERT_TRUE(d.root->readFailed());
+    TEST_ASSERT_TRUE(d.booted.decision.action == Action::Load);
+    TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+    TEST_ASSERT_EQUAL_STRING("From T", titleOf(d.index, kFlac).c_str());
+    TEST_ASSERT_EQUAL_UINT32(writes, static_cast<uint32_t>(fs.bytesWritten));
+  }
+  fs.faultPrefix = "/.mstream/";
+  // A deferred build waits for a boot that can read it.
+  fs.put(LibraryUpdate::kMarker, {});
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.booted.marker);
+    TEST_ASSERT_TRUE(d.booted.decision.action == Action::Load);
+    TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+    TEST_ASSERT_FALSE(d.booted.markerRemoved);
+    TEST_ASSERT_TRUE(fs.exists(LibraryUpdate::kMarker));
+  }
+  fs.remove(LibraryUpdate::kMarker);
+  // The card answering again, the next boot finds what it left.
+  fs.faultFrom = -1;
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.root->present);
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Matches);
+    TEST_ASSERT_TRUE(d.booted.decision.action == Action::Load);
+    TEST_ASSERT_TRUE(idx == fs.bytes(LibraryUpdate::kIndexNames.path));
+  }
+  // No library.idx: no transfer's library to lose. Built from what can be read,
+  // saved with no transfer in it, the card jobs running; so loaded next, as a card
+  // with no transfer data, as long as the root stays unread.
+  fs.faultFrom = 0;
+  fs.remove(LibraryUpdate::kIndexNames.path);
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.root->readFailed());
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Missing);
+    TEST_ASSERT_TRUE(d.booted.decision.action != Action::Load);
+    TEST_ASSERT_FALSE(d.booted.decision.holdJobs);
+    TEST_ASSERT_TRUE(d.booted.ok);
+    TEST_ASSERT_FALSE(d.booted.build.transferUsed);
+  }
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Matches);
+    TEST_ASSERT_TRUE(d.booted.decision.action == Action::Load);
+    TEST_ASSERT_FALSE(d.booted.decision.holdJobs);
+  }
+  // Its deferred build runs, too: it can lose nothing. (From what can be read.)
+  fs.put(LibraryUpdate::kMarker, {});
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.booted.decision.action != Action::Load);
+    TEST_ASSERT_FALSE(d.booted.decision.holdJobs);
+    TEST_ASSERT_FALSE(d.booted.build.transferUsed);
+    TEST_ASSERT_TRUE(d.booted.markerRemoved);
+  }
+  // A boot that can read the root builds from it.
+  fs.faultFrom = -1;
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Differs);
+    TEST_ASSERT_TRUE(d.booted.decision.action == Action::Build);
+    TEST_ASSERT_TRUE(d.booted.build.transferUsed);
+    TEST_ASSERT_EQUAL_STRING("From T", titleOf(d.index, kFlac).c_str());
+  }
+}
+
 void test_every_row_of_the_boot() {
   using libraryboot::Action;
   using libraryboot::Saved;
@@ -2076,6 +2205,7 @@ int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_safe_point_and_the_memory_check);
   RUN_TEST(test_every_row_of_the_boot);
+  RUN_TEST(test_a_root_the_card_fails_to_read_at_the_boot_keeps_the_library);
   RUN_TEST(test_library_tmp_after_a_cut);
   RUN_TEST(test_a_deferral_then_a_boot_that_builds);
   RUN_TEST(test_a_track_end_near_the_safe_point);

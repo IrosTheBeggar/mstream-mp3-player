@@ -419,11 +419,14 @@ The rules that keep it deadlock- and glitch-free:
 2. **`stepCardGuard()`:** what the SD wrapper's guard found at FatFs's
    remounts (a card pulled and put back, or another put in: METADATA.md
    3.8). Then `Waves::remount()`: the same counter, for the waveform index
-   (the root read again, the record dropped).
+   (the root read again, the record dropped), and a read of the root the card
+   failed, again when its wait is over (about 2.5 s against a card that doesn't
+   answer, ESTIMATED; never while a list moves or behind the update's fence).
 3. **`stepAutoDj()`:** Auto DJ's step (`app/AutoDj::step()`,
    [AUTODJ.md](AUTODJ.md)): a remount seen first; a try at opening the
-   index when the card failed the last one (its 6.6, about a second against
-   a card that doesn't answer, three at most); a slice of the join
+   index, or at reading the root, when the card failed the last one (its 6.6,
+   about a second, or 2.5 s, against a card that doesn't answer, ESTIMATED, three
+   at most); a slice of the join
    while Auto DJ is on (at most 8 ms of slices and one card read a pass,
    never while a list moves or the card is held); the Driver's pass (a
    new session at a new queue, the tracks that steer, the trigger, and a
@@ -1903,7 +1906,12 @@ the browsing UI hold its **track ids**, never strings.
   the records otherwise (`LibraryBuilder` over the transfer's tags file and
   the device's `tags.bin`, the journals compacted first), and walks
   `/music` into a path-named index only on a card with no records at all (a
-  card-reader card, or this firmware's first boot). A build is saved aside
+  card-reader card, or this firmware's first boot). A root the card fails to
+  read at each of four tries (`cardroot::readAtBoot()`: 1.4 s of waits, about 10 s
+  more against a card that has stopped answering, ESTIMATED) isn't taken for no
+  transfer: a library built from a transfer is loaded as it is, and no card jobs run
+  that session; any other boots as on a card with no transfer data.
+  A build is saved aside
   and renamed in (METADATA.md 2.12.6's rule), with what it was built from;
   a build deferred for memory (`/.player/build.req`) runs at the next boot;
   a `library.tmp` a cut left whole is taken. All of it is lib/core
@@ -3684,7 +3692,8 @@ Queue, Dance and Output (with its Pair and About pages).
   player to use it (the backend, the library and the queue were set up on
   the flash); no automatic re-check (an SD init with no card could hold
   the loop). A card without music: "No music found", Try again walks
-  /music again (the `g0` path). A track that can't be played: an amber
+  /music again (the `g0` path; a session with no card jobs restarts instead, the
+  queue saved, since only a boot asks again). A track that can't be played: an amber
   note ("Skipped 07 - x: can't play it", or for a refused sample rate
   "...: 96 kHz isn't supported" / "...: needs the 240 MHz CPU speed", from
   `PlaybackController`'s failure record) and its "!". The headphones lost while playing: paused,
@@ -3778,8 +3787,9 @@ Queue, Dance and Output (with its Pair and About pages).
   - **The loop:** at a track change or a repaint, Now Playing walks the track's
     path in PSRAM for its hash (`wantWave()`: a frame of 560 B, the path's
     512 B, not inlined: `update()`'s stays 240 B); `Waves::loop()` takes the
-    answer in (a copy in PSRAM, the object 332 B with the Ui). No card read on
-    the loop but at a remount, the root read again (about 3.7 KB of stack,
+    answer in (a copy in PSRAM, the object 352 B with the Ui). No card read on
+    the loop but at a remount, or when a read of the root the card failed is tried
+    again: the root read again (about 3.7 KB of stack,
     ESTIMATED, `AutoDj::remount()`'s path; a Root and 1,024 B of scratch in
     PSRAM, for the moment).
   - **The bus:** a playing second pushes the text row, 5,120 px, where the band

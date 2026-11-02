@@ -635,7 +635,7 @@ void LibraryPage::onEmptyAction(int i) {
     ui_.retryCard();
     return;
   }
-  ui_.toast(tr(S::library_looking_again), false);
+  ui_.toast(tr(ui_.host().rescanRestarts() ? S::toast_card_found : S::library_looking_again), false);
   ui_.host().rescanLibrary();  // the Library starts over (libraryChanged)
 }
 

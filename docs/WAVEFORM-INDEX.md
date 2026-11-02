@@ -481,7 +481,12 @@ does (7.4). docs/SEEK-BAR.md has the bar's look.
   of the file, a file that isn't on the card included, is one log line and
   plain lines until a remount or the next boot, and a shape read before goes
   too. A read's I/O error, one in the file's open too, is retried once after
-  2 s, then no shape until the track changes.
+  2 s, then no shape until the track changes. A read of the root the card fails
+  (a remount's, or the boot's) says nothing of the file: plain lines, the root read
+  again after 2 s, 10 s and 30 s (not while a list moves or behind the update's
+  fence), then none until a remount or the next boot. A boot that failed it with its
+  card jobs running has no such reads, as Auto DJ's. A remount within 30 s of such a
+  read is taken for its echo (`docs/AUTODJ.md` 6.6).
 - **The console:** `gw?` prints the state (the file, the wanted hash, the
   record, the counters: reads, hits, misses, damaged, the probes a read, the
   job's ms); `gw=` and 99 digits, or `gw#` and 480 hex digits (240 bars,

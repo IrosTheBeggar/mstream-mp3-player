@@ -408,6 +408,7 @@ LibraryUpdate::Booted LibraryUpdate::boot() {
   in.marker = b.marker;
   in.transfer = c_.root && c_.root->present;
   in.device = c_.store && c_.store->device().present;
+  in.rootUnread = c_.root && c_.root->readFailed();
   libraryboot::Decision d = libraryboot::decide(in);
   auto load = [&]() {
     LibraryIndex::Load r = LibraryIndex::Load::Corrupt;

@@ -20,20 +20,37 @@ constexpr const char* kPendingBin = "/.mstream/pending.bin";
 constexpr const char* kPendingTmp = "/.mstream/pending.tmp";
 constexpr const char* kDir = "/.mstream/";
 
+// `path` for reading; nullptr, and `why`: Missing, or Io when the card failed.
+tagstore::File* openOr(tagstore::Fs& fs, const char* path, cc::Why* why) {
+  bool cardFailed = false;
+  tagstore::File* f = fs.openRead(path, &cardFailed);
+  if (!f) *why = cardFailed ? cc::Why::Io : cc::Why::Missing;
+  return f;
+}
+
+// What a reader's Io comes to: on a file whose own records are damaged it is the
+// file's fault, as a changed byte is, and a boot that took it for the card's would
+// hold on to it for ever.
+cc::Why ofFile(const tagstore::File& f, cc::Why w) {
+  return w == cc::Why::Io && f.damaged() ? cc::Why::FatRecords : w;
+}
+
 // Opens `path` and checks it as a root. Ok: `m` holds it.
 cc::Why openRoot(tagstore::Fs& fs, const char* path, cc::msmf::Manifest& m, uint8_t* scratch, uint32_t bytes) {
-  tagstore::File* f = fs.open(path, tagstore::Fs::Mode::Read);
-  if (!f) return cc::Why::Missing;
-  const cc::Why w = m.open(*f, scratch, bytes);
+  cc::Why w = cc::Why::Ok;
+  tagstore::File* f = openOr(fs, path, &w);
+  if (!f) return w;
+  w = ofFile(*f, m.open(*f, scratch, bytes));
   fs.close(f);
   return w;
 }
 
 cc::Why openPlan(tagstore::Fs& fs, const char* path, uint8_t* scratch, uint32_t bytes) {
-  tagstore::File* f = fs.open(path, tagstore::Fs::Mode::Read);
-  if (!f) return cc::Why::Missing;
+  cc::Why w = cc::Why::Ok;
+  tagstore::File* f = openOr(fs, path, &w);
+  if (!f) return w;
   cc::mspd::Plan p;
-  const cc::Why w = p.open(*f, scratch, bytes);
+  w = p.open(*f, scratch, bytes);
   fs.close(f);
   return w;
 }
@@ -69,6 +86,12 @@ void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out) 
     whys[k] = openRoot(fs, names[k], m, scratch, scratchBytes);
     if (whys[k] == cc::Why::Ok) cand[k] = m.candidate();
   }
+  // A read that failed says nothing of its candidate, which may be the newer
+  // of the two: no election over the other alone.
+  if (whys[0] == cc::Why::Io || whys[1] == cc::Why::Io) {
+    r.why = cc::Why::Io;
+    return;
+  }
   const cc::Election e = cc::elect(cand[0], cand[1]);
   if (e.pick == cc::Pick::None) {
     // No root: Missing when neither is there, else why the .bin (or the
@@ -80,16 +103,22 @@ void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out) 
   // The winner again (`m` holds the last one opened), kept open while its
   // library roots are read (root() reads through the file open() checked).
   const int k = e.pick == cc::Pick::Bin ? 0 : 1;
-  tagstore::File* f = fs.open(names[k], tagstore::Fs::Mode::Read);
+  tagstore::File* f = openOr(fs, names[k], &r.why);
   if (!f) return;
-  r.why = m.open(*f, scratch, scratchBytes);
+  r.why = ofFile(*f, m.open(*f, scratch, scratchBytes));
   if (r.why == cc::Why::Ok) {
     r.hasRoot = true;
     r.cardId = m.frame().cardId;
     r.generation = m.frame().generation;
     const uint32_t roots = m.rootCount();
-    for (uint32_t i = 0; i < roots && r.rootCount < kMaxRoots; ++i)
-      if (m.root(i, r.roots[r.rootCount], sizeof(r.roots[0])) == cc::Why::Ok) ++r.rootCount;
+    for (uint32_t i = 0; i < roots && r.rootCount < kMaxRoots; ++i) {
+      const cc::Why w = m.root(i, r.roots[r.rootCount], sizeof(r.roots[0]));
+      if (w == cc::Why::Ok) ++r.rootCount;
+      if (w == cc::Why::Io) {
+        r.why = ofFile(*f, w);  // (a root the card kept back would index its files under /music)
+        break;
+      }
+    }
   }
   fs.close(f);
   if (r.why != cc::Why::Ok) return;
@@ -97,14 +126,11 @@ void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out) 
   // T: the MPTG companion, its frame and header against COMP's entry.
   const cc::msmf::Comp& comp = m.tags();
   std::snprintf(r.tagsPath, sizeof(r.tagsPath), "%s%s", kDir, m.tagsName());
-  tagstore::File* t = fs.open(r.tagsPath, tagstore::Fs::Mode::Read);
-  if (!t) {
-    r.why = cc::Why::Missing;
-    return;
-  }
+  tagstore::File* t = openOr(fs, r.tagsPath, &r.why);
+  if (!t) return;
   cc::Container c;
   cc::mptg::Info info;
-  r.why = cc::mptg::openFile(c, *t, &info);
+  r.why = ofFile(*t, cc::mptg::openFile(c, *t, &info));
   r.tagsBytes = t->size();
   fs.close(t);
   if (r.why != cc::Why::Ok) return;
@@ -135,10 +161,29 @@ void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out) 
   }
 }
 
+uint32_t readAtBoot(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out, void (*wait)(uint32_t ms)) {
+  read(fs, scratch, scratchBytes, out);
+  uint32_t reads = 1;
+  for (uint32_t ms : kBootWaitsMs) {
+    if (!out->readFailed()) break;
+    wait(ms);
+    read(fs, scratch, scratchBytes, out);
+    ++reads;
+  }
+  return reads;
+}
+
 size_t describe(const Root& r, char* buf, size_t size) {
   if (!size) return 0;
   int n;
-  if (!r.present && r.hasRoot) {
+  if (r.readFailed() && r.hasRoot && r.tagsPath[0]) {
+    // The root was read, and names the card (@status cid=): only its T wasn't.
+    const char* name = std::strrchr(r.tagsPath, '/');
+    n = std::snprintf(buf, size, "its T %s, generation %lu, unread (a read of the card failed)",
+                      name ? name + 1 : r.tagsPath, static_cast<unsigned long>(r.generation));
+  } else if (r.readFailed()) {
+    n = std::snprintf(buf, size, "its root unread (a read of the card failed)");
+  } else if (!r.present && r.hasRoot && r.tagsPath[0]) {
     // A root that names the card (@status cid=) and a T that failed: which
     // T, of which generation, and why ("missing": not on the card).
     const char* name = std::strrchr(r.tagsPath, '/');

@@ -522,6 +522,7 @@
   "library_row.rescan_body": "播放器会重新扫描本机读取的文件的标签 (传输来的保持不变)。大容量卡需要几分钟。",
   "library_row.rescan_started": "正在重新读取标签",
   "library_row.rescan_no_card": "只能从存储卡读取标签",
+  "library_row.rescan_unread": "启动时读取存储卡失败: 请重启后再试",
   "bt.name_not_paired": "蓝牙耳机",
   "bt.name_default": "耳机",
   "bt.status_not_paired": "未配对耳机",

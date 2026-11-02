@@ -713,6 +713,7 @@ struct MainUiHost : ui::UiHost {
     s.libDevice = sources.device;
     s.libNone = sources.none;
     s.libraryRecords = cardTasks && cardTasks->active();
+    s.libraryHeld = library.cardJobsHeld();
     // The battery is an I2C read of the power chip: every 10 s is plenty.
     const uint32_t now = millis();
     if (batteryAtMs == 0 || now - batteryAtMs >= 10000) {
@@ -893,6 +894,8 @@ struct MainUiHost : ui::UiHost {
     return true;
   }
   void rescanLibrary() override;
+  // (Only a boot asks for a card's root, or its jobs' memory, again.)
+  bool rescanRestarts() const override { return library.records() && !(cardTasks && cardTasks->active()); }
   bool rescanTags() override {
     if (!cardTasks || !cardTasks->active() || frozen.on) return false;
     Serial.println("[ui] Rescan tags: the player's own files read again (the transfer's stay as they are)");
@@ -999,16 +1002,30 @@ static bool rebuildLibrary() {
 // g0 and the UI's "Try again" with no music: on the card, the validation
 // walk now and the update step after it (the card worker's: the Library's
 // status line follows them); on the flash, /music walked and built at once.
+// A card's records with no card jobs (their boot held them, or no PSRAM for
+// them): nothing walks, and the queue, the lengths and the UI's ids stay.
 static bool walkAndRebuild() {
   if (cardTasks && cardTasks->active()) {
     cardTasks->askWalkAndUpdate();
     Serial.println("[index] the card is walked now, and the library updated after it (gs follows them)");
     return false;
   }
+  if (library.records()) {
+    Serial.println(library.cardJobsHeld()
+                       ? "[index] the card's root couldn't be read at the boot: no walk this session, a restart asks again"
+                       : "[index] no PSRAM for the card jobs: no walk this session");
+    return false;
+  }
   return rebuildLibrary();
 }
 
 void MainUiHost::rescanLibrary() {
+  if (rescanRestarts()) {
+    Serial.println("[ui] try again: no card jobs this session: the queue saved, restarting");
+    queueStore.flushNow();
+    restartAtMs = millis() + 1200;  // the toast shows first
+    return;
+  }
   Serial.println("[ui] try again: walking /music");
   walkAndRebuild();
 }
@@ -1904,10 +1921,11 @@ static void hostFacts(hoststatus::Facts& f) {
   // guard's flag, an atomic read: no card I/O. cardHeld isn't the test:
   // it also holds the same card for a restart, whose cid= is right.)
   const cardroot::Root* root = library.root();
-  if ((f.card == Card::Fat32 || f.card == Card::Fat16) && root && root->hasRoot && !sectordisk::guard().foreign) {
-    f.cidKnown = true;
+  if ((f.card == Card::Fat32 || f.card == Card::Fat16) && root && !sectordisk::guard().foreign) {
+    f.cidKnown = root->hasRoot;
     f.cardId = root->cardId;
     f.generation = root->generation;
+    f.cidUnknown = !root->hasRoot && root->readFailed();  // (it may have one: '?', not '-')
   }
 }
 
@@ -3605,7 +3623,9 @@ void loop() {
   powerLab.loop(now);
   stepCardGuard();
   // The waveform index: a remount seen before the card's step hands a read.
-  if (userInterface) userInterface->waves().remount(cardHeld);
+  if (userInterface) {
+    userInterface->waves().remount(cardHeld, !userInterface->started() || userInterface->listMoving() || frozen.on);
+  }
   stepAutoDj(now);
   if (!cardHeld) queueStore.loop(now);
   // What a track's length is, once the backend knows it (read from the

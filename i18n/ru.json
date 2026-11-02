@@ -612,6 +612,7 @@
   "library_row.rescan_body": "Плеер заново прочитает теги своих файлов (теги переноса не тронет). На большой карте это минуты.",
   "library_row.rescan_started": "Теги читаются заново",
   "library_row.rescan_no_card": "Теги читаются только с карты",
+  "library_row.rescan_unread": "Ошибка чтения при запуске: перезапустите плеер",
   "bt.name_not_paired": "Bluetooth-наушники",
   "bt.name_default": "Наушники",
   "bt.status_not_paired": "Наушники не сопряжены",

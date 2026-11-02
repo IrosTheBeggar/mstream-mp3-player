@@ -521,6 +521,7 @@
   "library_row.rescan_body": "Il lettore rilegge i tag dei suoi file (quelli del trasferimento restano). Su una scheda grande servono minuti.",
   "library_row.rescan_started": "Rilettura dei tag in corso",
   "library_row.rescan_no_card": "Tag letti solo da scheda SD",
+  "library_row.rescan_unread": "Errore di lettura all’avvio: riavvia per riprovare",
   "bt.name_not_paired": "Cuffie Bluetooth",
   "bt.name_default": "Cuffie",
   "bt.status_not_paired": "Nessuna cuffia abbinata",

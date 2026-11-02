@@ -607,6 +607,7 @@
   "library_row.rescan_body": "Odtwarzacz odczyta tagi swoich plików ponownie (te z transferu zostają). Na dużej karcie: kilka minut.",
   "library_row.rescan_started": "Ponowny odczyt tagów",
   "library_row.rescan_no_card": "Tagi odczytuje się tylko z karty",
+  "library_row.rescan_unread": "Błąd odczytu karty przy starcie: uruchom ponownie",
   "bt.name_not_paired": "Słuchawki Bluetooth",
   "bt.name_default": "Słuchawki",
   "bt.status_not_paired": "Brak sparowanych słuchawek",

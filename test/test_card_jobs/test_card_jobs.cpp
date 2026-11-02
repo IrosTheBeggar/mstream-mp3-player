@@ -416,6 +416,58 @@ void test_the_boots_decision() {
       }
     }
   }
+  // None of these holds the card jobs.
+  for (Saved s : {Saved::Matches, Saved::Differs, Saved::Outdated, Saved::Corrupt, Saved::Missing}) {
+    for (int r = 0; r < 8; ++r) TEST_ASSERT_FALSE(at(s, r & 4, r & 1, r & 2).holdJobs);
+  }
+  // The card failed the root's reads: nothing is known of its transfer. A library
+  // built from one (against no root, a Differs) is loaded, no build goes over it, a
+  // marker's neither (it stays), and the card jobs hold. Any other has no transfer's
+  // library to lose: the rows above, as a card with no transfer data.
+  const auto unread = [](Saved s, bool marker, bool d) {
+    libraryboot::In in;
+    in.saved = s;
+    in.marker = marker;
+    in.device = d;
+    in.rootUnread = true;
+    return libraryboot::decide(in);
+  };
+  for (bool marker : {false, true}) {
+    for (bool dv : {false, true}) {
+      const libraryboot::Decision d = unread(Saved::Differs, marker, dv);
+      TEST_ASSERT_TRUE(d.action == Action::Load);
+      TEST_ASSERT_TRUE(d.holdJobs);
+      TEST_ASSERT_FALSE(d.removeMarker);
+      TEST_ASSERT_FALSE(d.compactFirst);
+      TEST_ASSERT_TRUE(d.why[0] != 0);
+    }
+  }
+  for (bool dv : {false, true}) {
+    libraryboot::Decision d = unread(Saved::Matches, false, dv);
+    TEST_ASSERT_TRUE(d.action == Action::Load);
+    TEST_ASSERT_FALSE(d.holdJobs);
+    TEST_ASSERT_TRUE(std::strcmp(d.why, "its inputs are the card's") != 0);
+    d = unread(Saved::Matches, true, dv);
+    TEST_ASSERT_TRUE(d.action == Action::Build);
+    TEST_ASSERT_TRUE(d.removeMarker);
+    TEST_ASSERT_FALSE(d.holdJobs);
+  }
+  for (Saved s : {Saved::Outdated, Saved::Corrupt, Saved::Missing}) {
+    for (bool marker : {false, true}) {
+      for (bool dv : {false, true}) {
+        const libraryboot::Decision d = unread(s, marker, dv);
+        TEST_ASSERT_TRUE(d.action == (dv ? Action::Build : Action::Walk));
+        TEST_ASSERT_EQUAL(marker, d.removeMarker);
+        TEST_ASSERT_FALSE(d.holdJobs);
+      }
+    }
+  }
+  // What the log calls them, where the card's data can't be compared.
+  TEST_ASSERT_EQUAL_STRING("built for other card data", libraryboot::savedName(Saved::Differs));
+  TEST_ASSERT_EQUAL_STRING("matches the card", libraryboot::savedName(Saved::Matches));
+  TEST_ASSERT_EQUAL_STRING("built from a transfer", libraryboot::savedName(Saved::Differs, true));
+  TEST_ASSERT_EQUAL_STRING("built with no transfer", libraryboot::savedName(Saved::Matches, true));
+  TEST_ASSERT_EQUAL_STRING("missing", libraryboot::savedName(Saved::Missing, true));
 
   // matches(): the identity, zeros for none; no path signature; T's use not asked.
   ts::Identity root;

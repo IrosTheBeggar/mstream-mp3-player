@@ -307,7 +307,7 @@
   },
   "toast.card_found": "Card found: starting again",
   "@toast.card_found": {
-    "context": "Toast after 'Try again' found a microSD card: the player restarts to use it.",
+    "context": "Toast when the player restarts to use a microSD card: 'Try again' found one, or it failed a read at startup and only a restart asks again.",
     "room": {
       "font": "Body",
       "px": 284,
@@ -3883,7 +3883,7 @@
   },
   "autodj.status_unreadable": "Can't read the Auto DJ index",
   "@autodj.status_unreadable": {
-    "context": "The status row's first line when a read of the index failed (the file the card's root names isn't on it, the card failed every try at opening it, no memory to read the root after the card was mounted again): tried again when the card is mounted again, or at the next boot. As card.unknown_title says it of a card.",
+    "context": "The status row's first line when a read of the index failed (the file the card's root names isn't on it, the card failed every try at opening it or every read of the root, no memory to read the root): tried again when the card is mounted again, or at the next boot. As card.unknown_title says it of a card.",
     "room": {
       "font": "Small",
       "px": 288,
@@ -4889,6 +4889,17 @@
   "library_row.rescan_no_card": "Tags are read on a card only",
   "@library_row.rescan_no_card": {
     "context": "Note when Rescan is tapped with the music on the internal flash.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "bytes": 128
+  },
+  "library_row.rescan_unread": "Card read failed at startup: restart to try again",
+  "@library_row.rescan_unread": {
+    "context": "Note when Rescan is tapped after a startup at which the microSD card failed the reads of its transfer data: no card job runs until a restart reads them again.",
     "room": {
       "font": "Body",
       "px": 284,

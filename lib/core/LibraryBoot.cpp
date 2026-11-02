@@ -8,6 +8,17 @@ namespace libraryboot {
 Decision decide(const In& in) {
   Decision d;
   const bool records = in.transfer || in.device;
+  // Nothing is known of the card's transfer, and this library was built from one:
+  // it stays, and nothing goes over it from D alone, neither a build (a marker waits
+  // for the next boot) nor, this session, the card jobs. Any other card in trouble
+  // has no transfer's library to lose, and gets what the rows below give it, as a
+  // card with no transfer data.
+  if (in.rootUnread && in.saved == Saved::Differs) {
+    d.action = Action::Load;
+    d.holdJobs = true;
+    d.why = "the card's root couldn't be read: no card jobs this session";
+    return d;
+  }
   if (in.saved == Saved::Matches) {
     if (in.marker) {
       // A build was deferred (the update step's memory check, 3.4.2): it
@@ -19,7 +30,7 @@ Decision decide(const In& in) {
       return d;
     }
     d.action = Action::Load;
-    d.why = "its inputs are the card's";
+    d.why = in.rootUnread ? "the card's root couldn't be read, and none went into it" : "its inputs are the card's";
     return d;
   }
   d.removeMarker = in.marker;  // whatever is built now is what it asked for
@@ -82,13 +93,13 @@ Saved savedOf(LibraryIndex::Load load, const LibraryIndex::Inputs& saved, const 
   }
 }
 
-const char* savedName(Saved s) {
+const char* savedName(Saved s, bool rootUnread) {
   switch (s) {
     case Saved::Missing: return "missing";
     case Saved::Corrupt: return "unreadable";
     case Saved::Outdated: return "outdated";
-    case Saved::Matches: return "matches the card";
-    case Saved::Differs: return "built for other card data";
+    case Saved::Matches: return rootUnread ? "built with no transfer" : "matches the card";
+    case Saved::Differs: return rootUnread ? "built from a transfer" : "built for other card data";
   }
   return "?";
 }

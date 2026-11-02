@@ -901,7 +901,8 @@ Readers look at both `manifest.bin` and `manifest.tmp`:
 2. If both are valid, the **higher generation** wins; on equal
    generations, `manifest.bin`.
 3. If only one is valid, it wins. If neither, the card has no transfer
-   data.
+   data. (A candidate the card fails to read isn't invalid: it may be the
+   newer, and the device takes no root from the other: 3.2.2.)
 
 A fully written `manifest.tmp` is a finished commit even if its rename
 never happened: every companion it names was complete before its first
@@ -2390,7 +2391,7 @@ max_channels=2
 | An unknown flag bit | Ignored |
 | An unknown enum value | As 2.4.5's table says for that field |
 | Firmware with no `device.txt` | The software writes v1 of everything, and no MPDJ or MPWF (2.15) |
-| Damage (any CRC) | That file is absent; a damaged root means no transfer data. One MPDJ slot whose own CRC fails is the exception: only that slot is unused (AUTODJ-INDEX.md 8.5); so is one MPWF slot, where only that lookup misses (WAVEFORM-INDEX.md 8.3); so is MSMF's ACKS, which is then ignored (2.5.6), and so is a play slot, which is skipped (2.20.6) |
+| Damage (any CRC) | That file is absent; a damaged root means no transfer data. A read the card fails is no damage: it says nothing of the file (3.2.2). One MPDJ slot whose own CRC fails is the exception: only that slot is unused (AUTODJ-INDEX.md 8.5); so is one MPWF slot, where only that lookup misses (WAVEFORM-INDEX.md 8.3); so is MSMF's ACKS, which is then ignored (2.5.6), and so is a play slot, which is skipped (2.20.6) |
 | A new string field | Appended to the run; older readers stop at the fields they know |
 | A card filled from several servers (SRVS, ORIG's `server`) | The device: no change, it reads neither. The software: each row is paired and guarded with its own server (2.5.5, 2.11) |
 | The play log (2.20) and ACKS (2.5.6) | Firmware before the log: writes none, and skips ACKS. The software: reads the log whatever `device.txt` says; skips and counts a slot of a newer major or an unknown kind; writes ACKS only with a run's commits |
@@ -3158,7 +3159,13 @@ labels; device times are to be measured in milestones L0-L5 (part 6).
 1. **Read the root:** `/.mstream/manifest.bin` and `manifest.tmp` (2.5.4),
    then the named MPTG companion's header and directory: three small
    reads, a few ms. Result: (cardId, generation, commitId, T's headerCrc),
-   or no transfer data.
+   or no transfer data, or **unread**: the card failed a read of a root or of T
+   (a read, the volume's lock, no memory for the file) at each of four tries
+   (`cardroot::readAtBoot()`: 1.4 s of waits between them, and about 10 s more
+   against a card that has stopped answering, ESTIMATED from the SD driver's
+   delays). That says nothing of the transfer, and isn't damage. A file whose own
+   directory entry or FAT chain is damaged (FatFs's FR_INT_ERR) is none of this:
+   the card answered, no read again changes it, and the file is invalid.
 2. **Read `library.idx`'s header:** its version, the rules version, the
    **hard inputs** (the transfer's identity above) and the **soft inputs**
    (D's headerCrc and its journal's sequence).
@@ -3169,9 +3176,19 @@ labels; device times are to be measured in milestones L0-L5 (part 6).
 | v6, hard inputs match, and the build-at-boot marker `/.player/build.req` present (a build was deferred: 3.4.2) | any | Compact the journals if any. **Build from the records** behind the boot screen, on a fresh heap, as in the next row; the marker goes after the save. Out of PSRAM even here: **load it** as the next row does (stale, but a library), the marker goes, and that session's short memory checks don't write it again (as built: 3.9). | The validation walk (3.2.3). |
 | v6, hard inputs match, no marker | any | **Load it:** 1.8 MB, 1.1-1.5 s at 20k (ESTIMATED). No walk. | The validation walk (3.2.3). If the soft inputs differ (the scan went on after the last build), resume the scan; rebuild at its end. |
 | v6, the transfer's identity differs (a transfer happened, or `/.mstream` is gone or damaged) | T valid, or D only | Compact the journals if any (0-3 s). **Build from T (if valid) and D** behind the boot screen, a new T's listing standing in for the walk (2.9): about 7-9 s at 20k (ESTIMATED from UI-SPIKE's measured rates: 3.5-5 s of reads, 2.2-2.6 s of adds, about 1.3 s to finish), then the save. Without T, D's rows for files T covered turn Pending. | The walk confirms; files it finds changed go Pending; the scan reads the Pending files. |
+| v6, built from a transfer (its identity isn't zeros), the root **unread**, whatever the marker | any | **Load it.** Nothing is built over it: taken for no transfer, the read would build from D alone, every file T lists under its path, and the scan would set out on them all. A marker stays. | None: no walk, no scan and no update step this session (`Decision::holdJobs`, `CardTasks::begin()`). The next boot asks again: a fault that lasts holds every boot, until a disk check or a PC mends or removes the file. Covers, Auto DJ and the waveform bar go on, the last two reading the root again (`docs/AUTODJ.md` 6.6, `docs/WAVEFORM-INDEX.md` 11). |
 | an older rules version, v1-v5 (today's is v5), missing or corrupt | some | Build from the records. No walk. | The walk. |
 | v1-v5, missing or corrupt | none: a card-reader card, or this firmware's first boot on a 0.7 card | **Walk now**, with a progress line, into a path-named index and a D of all-Pending entries: about 9-11 s of walk at 20k with the sector cache (89-148 s without), plus about 3.5-4 s to build; about 70 ms on today's card. | The scan (3.3). |
 | any | NoMemory | As today: no library; the built-in tracks still play. | none |
+
+Any other library takes these rows with the root unread, as a card with no
+transfer data. One with no transfer in it (its identity zeros) matches, and one the
+boot can't load is built or walked, its jobs running: none has a transfer's library
+to lose. What they save has no identity, so the first boot that reads a root builds
+from it. Auto DJ and the waveform bar stay without their files until a remount or
+that boot (Auto DJ by `Dc` too), and don't read the root on a timer as they do in a
+held session: a read with no answer makes FatFs's next call a remount, and one with a
+job under way restarts the player (3.8), at every boot (`docs/AUTODJ.md` 6.6).
 
 - The queue is then restored as today (`QueueStore::restore()`).
 - **A power cut mid-save:** if `library.idx` is missing and `library.tmp`
@@ -3186,7 +3203,7 @@ labels; device times are to be measured in milestones L0-L5 (part 6).
 - **Cut renames** of the device's own files are settled here, before
   anything is written (2.12.6).
 
-#### 3.2.3 The validation walk (the card worker, every boot, about 2 s after the UI's first frame)
+#### 3.2.3 The validation walk (the card worker, every boot that doesn't hold the card jobs, about 2 s after the UI's first frame)
 
 **The lister.** FatFs `f_opendir`/`f_readdir` on `"0:/music/..."` (the SD
 driver mounts drive `"0:"`). `FILINFO` gives `fsize`, `fdate` and `ftime`
@@ -5662,7 +5679,9 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   then "99% tagged", the longest that fits; "names from the files" when
   no track has a record), counted once a build or a load (the index's
   build stamp); "tags need a card" on the flash, "updating…" behind the
-  fence. Its "Rescan" pill (68 px: its one word) opens a dialog, "Rescan
+  fence. A boot that holds the card jobs (3.2.2) shows the sources, the pill
+  dim, and a tap says "Card read failed at startup: restart to try again".
+  Its "Rescan" pill (68 px: its one word) opens a dialog, "Rescan
   tags?", whose Rescan is `gr`'s (`CardTasks::rescan(false)`: the
   device's own records only) and a toast, "Reading the tags again"; the
   status line then counts the scan.

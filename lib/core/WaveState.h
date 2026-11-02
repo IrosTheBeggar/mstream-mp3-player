@@ -66,7 +66,8 @@ public:
   // The answer, on the loop. `nowMs` starts a retry's wait.
   Finish finished(const wave::ReadResult& r, uint32_t nowMs);
 
-  // The card was mounted again. `named`: the root read again names a file.
+  // The card was mounted again, or a read of the root that failed was tried again.
+  // `named`: the root read again names a file.
   void remounted(bool named);
 
   // The shape to draw: the wanted hash's record once it came, else nullptr.

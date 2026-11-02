@@ -147,11 +147,15 @@ void AutoDj::begin() {
     file_ = File::None;
     whyText_ = "no card records (the flash, or no PSRAM)";
     Serial.printf("[dj] index: none (%s): picks at random\n", whyText_);
+  } else if (root->readFailed()) {
+    rootFailed();
   } else if (!root->autoDj.present) {
+    rootRead_ = true;
     file_ = File::None;
     whyText_ = root->present ? "the card's root names none" : "no transfer data on the card";
     Serial.printf("[dj] index: none (%s): picks at random\n", whyText_);
   } else {
+    rootRead_ = true;
     open(root->autoDj, "the boot");
   }
   if (dj_.settings().on) logSession(Began::Boot, autodj::kNoTrackId);
@@ -227,6 +231,7 @@ void AutoDj::openFile(const char* when) {
     return;
   }
   file_ = File::Open;
+  tries_.reset();
   why_ = cc::Why::Ok;
   whyText_ = "";
   block_ = Block::None;
@@ -333,7 +338,8 @@ bool AutoDj::takeUndoDropped() {
 // Root (never Library::root(): the update step holds it, TagStore its
 // identity); the same index: the file reopened, the maps and the session
 // kept; another (or one now, or none now): closed, opened, joined again, a
-// new session.
+// new session. Soon after a try the card failed it is that try's echo, and the
+// try's wait stands (autodj::OpenTries).
 void AutoDj::remount(const Env& env) {
   if (!sectordisk::installed() || env.cardHeld) return;  // (cardHeld: another card, or a job: a restart comes)
   const uint32_t n = sectordisk::guard().remounts;
@@ -341,34 +347,92 @@ void AutoDj::remount(const Env& env) {
   remountsSeen_ = n;
   ++remounts_;
   if (!lib_.records() || !lib_.fatfs()) return;
+  if (tries_.remounted(env.nowMs)) readRoot();
+}
+
+// A read of the root the card failed says nothing of the index: what is named
+// stays named and the session stays, the file closed (its FIL may be gone with a
+// mount, and the maps go with it), and the root read again when tries_ says. After
+// the last, as a remount with no PSRAM to read it: Absent, the entry kept. So too,
+// at once, when the boot failed it and the card jobs run: no read on a timer then,
+// only at a remount or Dc (Library::jobsOnUnreadRoot()).
+void AutoDj::rootFailed() {
+  closeFile();
+  why_ = cc::Why::Io;
+  rootAgain_ = tries_.failed(autodj::OpenTry::Card, static_cast<uint32_t>(millis())) && !lib_.jobsOnUnreadRoot();
+  if (rootAgain_) {
+    file_ = File::Again;
+    whyText_ = "the card failed reading its root: tried again soon";
+    Serial.printf("[dj] the card's root: a read failed: again in %lu s, %u of %u (picks at random meanwhile)\n",
+                  (unsigned long)(tries_.lastWaitMs() / 1000), (unsigned)tries_.used(),
+                  (unsigned)autodj::OpenTries::kAgain);
+    return;
+  }
+  file_ = File::Absent;
+  whyText_ = "the card failed every read of its root";
+  Serial.println("[dj] the card's root: every read failed: picks at random until a remount or the next boot");
+}
+
+void AutoDj::readRoot() {
+  if (!lib_.records() || !lib_.fatfs()) return;
   if (!root_) root_ = psramNew<cardroot::Root>();
   auto* scratch = static_cast<uint8_t*>(psramAlloc(1024));
   if (!root_ || !scratch) {
     psramFree(scratch);
-    Serial.println("[dj] the card was mounted again: no PSRAM to read its root: the index is closed until the next "
-                   "remount");
+    Serial.println("[dj] no PSRAM to read the card's root: the index is closed until the next remount");
     closeFile();
     // Absent with its entry kept: the next remount with the same index
     // opens it again (the session kept); one with another index is new.
-    file_ = haveEntry_ ? File::Absent : File::None;
+    // (No root read yet to say there is none: Absent too.)
+    rootAgain_ = false;
+    tries_.reset();
+    file_ = haveEntry_ || !rootRead_ ? File::Absent : File::None;
     why_ = cc::Why::Io;
-    whyText_ = "no PSRAM to read the root after a remount";
+    whyText_ = "no PSRAM to read the root";
     return;
   }
   cardroot::read(*lib_.fatfs(), scratch, 1024, root_);
   psramFree(scratch);
+  if (root_->readFailed()) {
+    lib_.fatfs()->echoNow();
+    rootFailed();
+    return;
+  }
+  rootAgain_ = false;
+  tries_.reset();  // (the card answered: a try at the file counts from its first)
   const cardroot::Root::AutoDj& e = root_->autoDj;
+  // The boot's couldn't be read, so no root has named anything to compare this
+  // with: the boot's open at last, its session kept.
+  if (!rootRead_) {
+    rootRead_ = true;
+    if (e.present) {
+      open(e, "tried again");
+    } else {
+      file_ = File::None;
+      whyText_ = root_->present ? "the card's root names none" : "no transfer data on the card";
+      Serial.printf("[dj] index: none (%s): picks at random\n", whyText_);
+    }
+    return;
+  }
   // The same index: the same entry (generation, size, header CRC, the
   // selection), or none still.
   const bool same = e.present == haveEntry_ &&
                     (!e.present || (e.entry.generation == entry_.generation && e.entry.fileBytes == entry_.fileBytes &&
                                     e.entry.headerCrc == entry_.headerCrc &&
                                     std::memcmp(e.entry.key, entry_.key, sizeof(entry_.key)) == 0));
+  if (same && !e.present) {
+    // None still. (What a read of the root that failed left said nothing.)
+    if (file_ != File::Again && file_ != File::Absent) return;
+    file_ = File::None;
+    whyText_ = root_->present ? "the card's root names none" : "no transfer data on the card";
+    Serial.printf("[dj] index: none (%s): picks at random\n", whyText_);
+    return;
+  }
   if (same && (file_ == File::Absent || file_ == File::Again)) {
     open(e, "after a remount");  // (a check a read failed may pass now; the session kept)
     return;
   }
-  if (same && file_ != File::Open) return;  // (none still, or one this build doesn't read)
+  if (same && file_ != File::Open) return;  // (one this build doesn't read)
   if (same) {
     // The FIL again (the table's frame read again: one small read).
     const bool wasReady = joined();
@@ -421,7 +485,12 @@ void AutoDj::remount(const Env& env) {
 // counted what is left, and a FIL is 4.1 KB of it).
 void AutoDj::stepOpen(const Env& env) {
   if (file_ != File::Again || !env.uiStarted || env.listMoving || env.cardHeld || player_.fenced()) return;
-  if (tries_.due(env.nowMs)) openFile("tried again");
+  if (!tries_.due(env.nowMs)) return;
+  if (rootAgain_) {
+    readRoot();
+  } else {
+    openFile("tried again");
+  }
 }
 
 // The join while Auto DJ is on: begun once the UI's first frame is up;
@@ -792,8 +861,8 @@ void AutoDj::view(autodjview::State* v) const {
   const LibraryIndex* index = lib_.index();
   if (file_ == File::Absent && why_ == cc::Why::Io) {
     // A read failed (the file the root names isn't on the card, the card
-    // failed every try at it, no PSRAM to read the root after a remount): not
-    // the index's checks; a remount or the next boot tries again.
+    // failed every try at it or every read of the root, no PSRAM to read the
+    // root): not the index's checks; a remount or the next boot tries again.
     v->index = Index::Unreadable;
   } else if (file_ == File::Absent || (file_ == File::Open && dj_.engine().broken())) {
     v->index = Index::Bad;
@@ -903,6 +972,12 @@ void AutoDj::command(const char* arg, const Env& env) {
       return;
     case K::Reopen: {
       const cardroot::Root* root = root_ ? root_ : lib_.root();  // (a remount's, else the boot's)
+      if (lib_.records() && root && (!rootRead_ || root->readFailed())) {
+        Serial.println("[dj] Dc: the last read of the card's root failed: read again, from the first try");
+        tries_.reset();
+        readRoot();
+        return;
+      }
       if (!root || !root->autoDj.present) {
         Serial.println("[dj] Dc: the card's root names no index");
         return;
@@ -1080,11 +1155,12 @@ void AutoDj::status(const Env& env) {
     case File::None: Serial.printf("[dj] index: none (%s): picks at random\n", whyText_); break;
     case File::NotRead: Serial.printf("[dj] index %s: not read (%s)\n", filePath_, whyText_); break;
     case File::Absent:
-      Serial.printf("[dj] index %s: ABSENT (%s: %s): picks at random\n", filePath_, whyText_, cc::whyName(why_));
+      Serial.printf("[dj] index %s: ABSENT (%s: %s): picks at random\n", filePath_[0] ? filePath_ : "(unknown)",
+                    whyText_, cc::whyName(why_));
       break;
     case File::Again:
-      Serial.printf("[dj] index %s: %s, %u of %u: picks at random\n", filePath_, whyText_, (unsigned)tries_.used(),
-                    (unsigned)autodj::OpenTries::kAgain);
+      Serial.printf("[dj] index %s: %s, %u of %u: picks at random\n", filePath_[0] ? filePath_ : "(unknown)", whyText_,
+                    (unsigned)tries_.used(), (unsigned)autodj::OpenTries::kAgain);
       break;
     case File::Open: {
       const uint8_t* sig = table_.selectionSig();
