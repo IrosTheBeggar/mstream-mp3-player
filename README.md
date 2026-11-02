@@ -952,6 +952,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       When Auto DJ adds a track; its loop step (sessions,
                       steering, the picks, the DJ marks); the console's D
   AutoDjView          What the UI shows and says of Auto DJ
+  AutoDjOpen          What a failed open of its index comes to: the card's
+                      fault tried again
   SheetLayout         Where a sheet sits (3 rows, or 4 from y 40)
   LibraryIndex, LibraryBuilder, LibraryBoot
                       The library index (library.idx v6), its build from

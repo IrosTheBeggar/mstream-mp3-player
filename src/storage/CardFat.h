@@ -72,6 +72,11 @@ public:
 class FatFs final : public tagstore::Fs {
 public:
   tagstore::File* open(const char* path, Mode mode) override;
+  // As open(path, Mode::Read), with FatFs's own answer, which open()'s nullptr
+  // doesn't give: FR_OK and the file in `out`; FR_NO_FILE and FR_NO_PATH, it isn't
+  // on the card; anything else, the card didn't say (FR_NOT_ENOUGH_CORE: no PSRAM
+  // for its FIL).
+  FRESULT openRead(const char* path, tagstore::File** out);
   bool close(tagstore::File* f) override;
   bool exists(const char* path) override;
   bool remove(const char* path) override;

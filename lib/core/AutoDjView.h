@@ -40,11 +40,11 @@ namespace autodjview {
 enum class Index : uint8_t {
   None,      // no index on the card (or one of a major this build doesn't read)
   Bad,       // it failed its checks, or a slot's list broke a rule under a good CRC
-  Unreadable,  // a read failed (the file the root names didn't open, a card read error, no memory to read the root after a remount)
+  Unreadable,  // a read failed (the file the root names isn't on the card, the card failed every try at it, no memory to read the root after a remount)
   TooBig,    // a library over autodj::kMaxTracks tracks: it can't be joined
   NoMemory,  // the join found no memory: until the next library build (or off and on)
   Found,     // open and checked, Auto DJ off: joined when it is switched on
-  Reading,   // Auto DJ on: the join runs (or waits a moment: a retry, the update step)
+  Reading,   // Auto DJ on: the join runs (or waits a moment: a retry, the update step); on or off: a try at opening the file is due
   Ready,     // joined: the coverage known
 };
 const char* indexName(Index i);

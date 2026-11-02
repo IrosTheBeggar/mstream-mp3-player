@@ -421,7 +421,9 @@ The rules that keep it deadlock- and glitch-free:
    3.8). Then `Waves::remount()`: the same counter, for the waveform index
    (the root read again, the record dropped).
 3. **`stepAutoDj()`:** Auto DJ's step (`app/AutoDj::step()`,
-   [AUTODJ.md](AUTODJ.md)): a remount seen first; a slice of the join
+   [AUTODJ.md](AUTODJ.md)): a remount seen first; a try at opening the
+   index when the card failed the last one (its 6.6, about a second against
+   a card that doesn't answer, three at most); a slice of the join
    while Auto DJ is on (at most 8 ms of slices and one card read a pass,
    never while a list moves or the card is held); the Driver's pass (a
    new session at a new queue, the tracks that steer, the trigger, and a

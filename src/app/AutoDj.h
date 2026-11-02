@@ -8,6 +8,7 @@
 #include "AutoDjDriver.h"
 #include "AutoDjEngine.h"
 #include "AutoDjJoin.h"
+#include "AutoDjOpen.h"
 #include "AutoDjView.h"
 #include "CardAutoDj.h"
 #include "CardManifest.h"
@@ -37,12 +38,14 @@
 //     opened and checked against it (Table::open(), companionMatches(): 1-2
 //     small reads), on or off: usable() says the card has an index (the
 //     empty states' button, the Output page). Any failure: no index, picks
-//     at random (logged why).
+//     at random (logged why); a fault of the card's, tried again a few times
+//     first (autodj::OpenTries).
 //   every loop pass, after the card's guard and before the card's step
 //     (main.cpp's loop()): step(): a remount seen first (sectordisk's
 //     counter: the root read again into its own Root; the same index: the
 //     file reopened, the maps and the session kept; another: closed,
-//     opened, joined again, a new session); then the join's slices while
+//     opened, joined again, a new session); then a try at the file that is
+//     due; then the join's slices while
 //     Auto DJ is on (after the UI's first frame, never while a list moves
 //     or the card is held: Join::stepPass(), kJoinPassUs and one card read
 //     a pass; main.cpp shortens the loop's idle wait meanwhile:
@@ -159,7 +162,8 @@ private:
   enum class File : uint8_t {
     None,     // the root names no index (or there is no root: no transfer data)
     NotRead,  // ... one of a major this build doesn't read (read.mpdj)
-    Absent,   // ... one that failed its checks (why_)
+    Absent,   // ... one that failed its checks (why_), isn't there, or the card failed every try at
+    Again,    // ... one a try at opening failed on the card's account: tried again soon (tries_)
     Open,     // open and checked: the join's, the picks'
   };
   // What keeps a join from starting: nothing; a failed read's wait
@@ -184,11 +188,19 @@ private:
   autodj::Index index();  // (not const: its slot reader reads the file)
   autodj::Env driverEnv(const Env& env) const;
   bool joined() const { return file_ == File::Open && join_.status() == autodj::Join::Status::Ready; }
-  // The file the root's entry names, opened and checked.
+  // The file the root's entry names, opened and checked, from its first try.
   void open(const cardroot::Root::AutoDj& entry, const char* when);
+  // A try at the file entry_ names; open: all of it set up, or tryFailed().
+  void openFile(const char* when);
+  // One try: on Open the file is in handle_; else nothing is, and `why` says
+  // which check failed (Why::Io when none could say).
+  autodj::OpenTry tryFile(cardcontract::Why* why);
+  // What comes of a try that failed: tried again soon, or absent().
+  void tryFailed(autodj::OpenTry t, cardcontract::Why why);
   void closeFile();
   void absent(cardcontract::Why why, const char* what);
   void remount(const Env& env);
+  void stepOpen(const Env& env);
   void stepJoin(const Env& env);
   void beginJoin(const LibraryIndex* index);
   void joinStatus();
@@ -216,8 +228,10 @@ private:
   autodj::Join join_;
   cardcontract::mpdj::Table table_;
   Reader reader_{table_};
-  cardfat::FatFile* handle_ = nullptr;   // the open file (FatFs::open's, PSRAM)
+  cardfat::FatFile* handle_ = nullptr;   // the open file (FatFs::openRead's, PSRAM)
   File file_ = File::None;
+  autodj::OpenTries tries_;
+  uint8_t openResult_ = 0;  // FatFs's answer to the try that last failed (0: its open did, then a read didn't)
   cardcontract::Why why_ = cardcontract::Why::Missing;
   const char* whyText_ = "no transfer data on the card";
   cardcontract::msmf::Comp entry_;  // the entry the open file is
