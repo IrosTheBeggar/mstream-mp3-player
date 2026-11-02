@@ -2,10 +2,9 @@
 
 **Status (2026-11-01):** the format of record for the waveform index that
 the transfer software writes to the card, mstream-terminal first. The
-player's reader is `lib/core/CardWaves` (host-tested). A build says it reads
-the format only once it holds the job that opens the file (7.4). The
-reference writer and reader is `tools/mpwf.py`. Every test vector (13) is
-synthetic.
+player's reader is `lib/core/CardWaves` (host-tested), and Now Playing draws
+what it reads. The reference writer and reader is `tools/mpwf.py`. Every test
+vector (13) is synthetic.
 
 Reading a file needs nothing but this document, in any language. Writing one
 also follows a few rules of the card contract, docs/METADATA.md ("M" below);
@@ -300,7 +299,11 @@ At the final commit the writer works out **the rows it would write now:**
   hash (`audio-hash`, else `hash`, M 2.6.6) equals what the tags ledger of
   the root this run began from says for the slot's old path. The file has no
   content hash: the ledger is the only join. So a moved file keeps its bars
-  under its new path hash.
+  under its new path hash. **When that root is a checkpoint** (FINAL clear),
+  the slot's lengthMs MUST also equal the record's durationMs: a checkpoint's
+  ledger already shows a recording replaced before it, while the file it names
+  again still holds the old bars. A recording of the same length, or of none,
+  gets past this, and costs one wrong shape until its path next changes.
 - **A row takes** the new path's hash, lengthMs from the card file's own
   MPTG record, and the bars. Its CRC is computed for its new place: one row
   added moves all those after it.
@@ -337,10 +340,10 @@ A writer writes MPWF **only when `/.player/device.txt`'s `read.mpwf` lists
 - **In the list,** spaces in an item are ignored, and an item that isn't a
   number is skipped. A line ends in LF; CRLF is read too.
 
-**`read.mpwf=1` comes with the first firmware that opens the file:** a build
-without that job writes `read.mpwf=`, none (`src/app/WavesContract.h`). The
-firmware writes the key at boot, after `read.mpdj`. So a card gets its first
-waves after that firmware has run once with that card in.
+**`read.mpwf=1` comes with the first firmware that opens the file;** a
+firmware before it writes no such key. The firmware writes the key at boot,
+after `read.mpdj`. So a card gets its first waves after that firmware has run
+once with that card in.
 
 ## 8. Validation
 

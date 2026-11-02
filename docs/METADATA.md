@@ -2331,7 +2331,7 @@ firmware=0.11.0
 read.msmf=1
 read.mptg=1
 read.mpdj=2
-read.mpwf=
+read.mpwf=1
 read.mpth=1
 codecs=mp3,flac,opus
 extensions=mp3,flac,opus
@@ -2345,9 +2345,7 @@ max_channels=2
   from 0.11.0, which ships the AutoDJ engine, the firmware writes
   `read.mpdj=2` (a development build between them wrote `read.mpdj=`,
   none). `read.mpwf=1` comes with the first firmware that opens the waveform
-  index (2.21): a build without that job writes `read.mpwf=`, none, as above
-  (`src/app/WavesContract.h`), and a firmware before the key writes no such
-  key.
+  index (2.21): a firmware before it writes no such key, which reads as none.
 - `codecs` lists what it decodes; `extensions` the file extensions its
   walk lists as audio (any case). The device recognises audio by
   extension, not by content, so both matter.

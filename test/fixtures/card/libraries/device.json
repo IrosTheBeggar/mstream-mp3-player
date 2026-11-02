@@ -6,7 +6,7 @@
  "read.msmf": "1",
  "read.mptg": "1",
  "read.mpdj": "2",
- "read.mpwf": "",
+ "read.mpwf": "1",
  "read.mpth": "1",
  "codecs": "mp3,flac,opus",
  "extensions": "mp3,flac,opus",

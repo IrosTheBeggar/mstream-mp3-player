@@ -878,9 +878,8 @@ void test_device_txt() {
   TEST_ASSERT_EQUAL_size_t(want.size(), n);
   TEST_ASSERT_EQUAL_STRING(want.c_str(), buf);
   // Read back. This firmware reads the AutoDJ index's major 2, and only it
-  // (docs/AUTODJ-INDEX.md 7.4: the engine ships with its UI, M5), and says no
-  // waveform index until the build holds the job that opens the file
-  // (docs/WAVEFORM-INDEX.md 7.4, app/WavesContract.h).
+  // (docs/AUTODJ-INDEX.md 7.4: the engine ships with its UI, M5), and the
+  // waveform index's major 1 (docs/WAVEFORM-INDEX.md 7.4).
   dt::Info i;
   TEST_ASSERT_TRUE(dt::parse(buf, n, &i));
   TEST_ASSERT_EQUAL_STRING("0.11.0", i.firmware);
@@ -890,10 +889,11 @@ void test_device_txt() {
   TEST_ASSERT_TRUE(dt::readsMajor(i.readMpdj, 2));
   TEST_ASSERT_FALSE(dt::readsMajor(i.readMpdj, 1));
   TEST_ASSERT_TRUE(std::strstr(buf, "\nread.mpdj=2\n") != nullptr);
-  TEST_ASSERT_EQUAL_UINT32(0, i.readMpwf);
-  TEST_ASSERT_FALSE(dt::readsMajor(i.readMpwf, 1));
+  TEST_ASSERT_EQUAL_UINT32(1, i.readMpwf);  // (bit 0: major 1)
+  TEST_ASSERT_TRUE(dt::readsMajor(i.readMpwf, 1));
+  TEST_ASSERT_FALSE(dt::readsMajor(i.readMpwf, 2));
   // Its key on the line after read.mpdj's, before read.mpth's.
-  TEST_ASSERT_TRUE(std::strstr(buf, "\nread.mpdj=2\nread.mpwf=\nread.mpth=1\n") != nullptr);
+  TEST_ASSERT_TRUE(std::strstr(buf, "\nread.mpdj=2\nread.mpwf=1\nread.mpth=1\n") != nullptr);
   TEST_ASSERT_TRUE(dt::listHas(i.codecs, "opus"));
   TEST_ASSERT_TRUE(dt::listHas(i.extensions, "FLAC"));
   TEST_ASSERT_EQUAL_UINT32(48000, i.maxRate);

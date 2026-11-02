@@ -369,9 +369,9 @@ struct Info {
   // for a draft no reader read, so a writer writes none for them); this
   // firmware, which ships the AutoDJ engine, reads major 2 (current():
   // docs/AUTODJ-INDEX.md 7.4). MPWF none here too: firmware that doesn't
-  // name it ignores the file, so a writer saves the card the space; current()
-  // says major 1 only from the build that holds the job that opens the file
-  // (app/WavesContract.h, docs/WAVEFORM-INDEX.md 7.4).
+  // name it ignores the file, so a writer saves the card the space; this
+  // firmware, which draws the bars, reads major 1 (current():
+  // docs/WAVEFORM-INDEX.md 7.4).
   uint32_t readMsmf = 1, readMptg = 1, readMpdj = 0, readMpwf = 0, readMpth = 1;
   char codecs[kValueMax] = "mp3,flac";
   char extensions[kValueMax] = "mp3,flac";
