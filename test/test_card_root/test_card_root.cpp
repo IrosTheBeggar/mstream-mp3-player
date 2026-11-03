@@ -1078,14 +1078,16 @@ void test_on_fatfs_no_queue_txt_a_cut_or_damaged_one_are_no_queue() {
     TEST_ASSERT_EQUAL_UINT32(1, r.reads);
     TEST_ASSERT_EQUAL_size_t(0, waits.size());
     TEST_ASSERT_NULL(r.notWhole);
-    // Cut short, a line less than it says: every read answered.
-    std::string t = queueText({kTrackA, kTrackA, kTrackA});
-    t.resize(t.size() - std::strlen(kTrackA) - 1);
+    // Cut short, a line less than it says: every read answered. (Nothing asked of the
+    // card about its lines: it isn't a queue.)
+    std::string t = queueText({kTrackB, kTrackB, kTrackB});
+    t.resize(t.size() - std::strlen(kTrackB) - 1);
     c.put(kQueue, bytesOf(t));
     r = c.read();
     TEST_ASSERT_TRUE(r.got == queuefile::Got::None);
     TEST_ASSERT_EQUAL_UINT32(1, r.reads);
     TEST_ASSERT_EQUAL_STRING(kQueue, r.notWhole);
+    TEST_ASSERT_EQUAL_UINT32(0, c.lookup.kept() + c.lookup.gone() + c.lookup.unasked());
   }
   // Its own directory entry damaged (FR_INT_ERR, at the open or the first read): no read
   // again changes that.

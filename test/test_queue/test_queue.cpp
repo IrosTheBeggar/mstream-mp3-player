@@ -5242,6 +5242,11 @@ void test_unlisted_tracks_answer_by_their_paths() {
   for (const std::string& p : many) ids.push_back(table.add(p.c_str()));
   for (uint32_t i = 0; i < 300; ++i) TEST_ASSERT_EQUAL_STRING(many[i].c_str(), pathOf(c, ids[i]).c_str());
   TEST_ASSERT_EQUAL_UINT32(303, table.count());
+  // A path longer than a doubling takes it in. (No line is: the read's own limit.)
+  const std::string huge = "/music/" + std::string(100000, 'x');
+  const uint32_t hugeId = table.add(huge.c_str());
+  TEST_ASSERT_EQUAL_STRING(huge.c_str(), table.path(hugeId));
+  TEST_ASSERT_EQUAL_STRING(many[299].c_str(), table.path(ids[299]));
   TEST_ASSERT_GREATER_THAN(0, table.memoryBytes());
   // No memory for the next: kNone, and what it holds as it was.
   Heap::failing = true;
@@ -5517,6 +5522,84 @@ void test_no_room_for_by_path_lines_keeps_the_file() {
   TEST_ASSERT_EQUAL_STRING(file.c_str(), r.st.file.c_str());
 }
 
+// No memory for one line's path: none for those after it either, though it comes back,
+// so the read after settle() still finds each line's id by its place.
+void test_no_room_for_a_line_keeps_the_order_for_the_read_again() {
+  TrackCatalog::Unlisted table(Heap::alloc, Heap::release);
+  cutfs::CutFs fs;
+  queuefile::Lookup lookup(fs, table);
+  lookup.begin();
+  std::vector<std::string> lines;
+  for (uint32_t i = 0; i < 66; ++i) {
+    lines.push_back("/music/line " + std::to_string(i) + ".mp3");
+    if (i != 3) fs.put(lines.back(), {1});
+  }
+  // (64: the offsets' first block, the next needs another.)
+  for (uint32_t i = 0; i < 64; ++i) {
+    TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kUnlisted + i, lookup.track(lines[i].c_str()));
+  }
+  Heap::failing = true;
+  TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kNone, lookup.track(lines[64].c_str()));
+  Heap::failing = false;
+  TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kNone, lookup.track(lines[65].c_str()));
+  TEST_ASSERT_EQUAL_UINT32(2, lookup.held());
+  TEST_ASSERT_EQUAL_UINT32(64, table.count());
+  // Line 3 is gone: the read again leaves it out, each other line its own.
+  TEST_ASSERT_TRUE(lookup.settle());
+  TEST_ASSERT_EQUAL_UINT32(1, lookup.gone());
+  TEST_ASSERT_EQUAL_UINT32(63, lookup.kept());
+  for (uint32_t i = 0; i < 66; ++i) {
+    const uint32_t id = lookup.track(lines[i].c_str());
+    if (i == 3 || i >= 64) {
+      TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kNone, id);
+    } else {
+      TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kUnlisted + i, id);
+      TEST_ASSERT_EQUAL_STRING(lines[i].c_str(), table.path(id));
+    }
+  }
+  TEST_ASSERT_EQUAL_UINT32(2, lookup.held());
+}
+
+// The read again, for a line the card says is gone, doesn't come whole: the first read
+// stands, the queue as it was. That line names nothing: it doesn't play, and an edit's
+// write leaves it out.
+void test_a_read_again_that_fails_keeps_the_first() {
+  LibraryIndex idx;
+  build(idx, {kFiles[0]});
+  TrackCatalog::Unlisted table;
+  TrackCatalog c(&idx);
+  c.setUnlisted(&table);
+  cutfs::CutFs fs;
+  fs.put("/music/There.mp3", {1});
+  queuefile::Lookup lookup(fs, table);
+  const std::string text = std::string("mstream-queue 1 3 0 7\n") + kFiles[0] + "\n/music/There.mp3\n/music/Gone.mp3\n";
+  const std::string cut = text.substr(0, text.size() - 30);
+  for (const bool opens : {false, true}) {
+    QueueModel q;
+    lookup.begin();
+    int opened = 0;
+    std::unique_ptr<MemorySource> in;
+    const queuetext::Restored r = queuefile::readSettled(
+        [&]() -> ByteSource* {
+          if (++opened == 2 && !opens) return nullptr;
+          const std::string& t = opened == 1 ? text : cut;
+          in.reset(new MemorySource(t.data(), t.size(), 61));
+          return in.get();
+        },
+        []() {},
+        [&](ByteSource& s) { return queuetext::read(s, c, q, nullptr, nullptr, nullptr, nullptr, &lookup); }, &lookup);
+    TEST_ASSERT_EQUAL_INT(2, opened);
+    TEST_ASSERT_TRUE(r.ok);
+    TEST_ASSERT_EQUAL_UINT32(3, r.entries);
+    TEST_ASSERT_EQUAL_UINT32(0, r.dropped);
+    TEST_ASSERT_EQUAL_UINT32(3, q.size());
+    TEST_ASSERT_EQUAL_STRING("/music/There.mp3", pathOf(c, q.trackAt(1)).c_str());
+    TEST_ASSERT_EQUAL_STRING("", pathOf(c, q.trackAt(2)).c_str());
+    char title[16];
+    TEST_ASSERT_EQUAL_UINT32(0, c.title(q.trackAt(2), title, sizeof(title)));
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_empty_queue);
@@ -5631,5 +5714,7 @@ int main(int, char**) {
   RUN_TEST(test_the_update_step_asks_again_and_drops_what_is_gone);
   RUN_TEST(test_a_rebuild_with_no_library_asks_nothing);
   RUN_TEST(test_no_room_for_by_path_lines_keeps_the_file);
+  RUN_TEST(test_no_room_for_a_line_keeps_the_order_for_the_read_again);
+  RUN_TEST(test_a_read_again_that_fails_keeps_the_first);
   return UNITY_END();
 }
