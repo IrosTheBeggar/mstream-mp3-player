@@ -159,6 +159,8 @@ private:
   // The transfer's tags file (the root's companion: 2.5.4): its path, and
   // the root's commit.
   bool transferFile(Work& w, char* path, size_t size, uint64_t* commitId, uint32_t* generation);
+  // Why it found none.
+  void noRootLine();
 
   LocalStorage& storage_;
   Library& library_;

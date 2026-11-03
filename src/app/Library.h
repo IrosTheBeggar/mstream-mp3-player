@@ -88,7 +88,8 @@ public:
   // none (libraryboot::decide()). The root isn't read again on a timer this session:
   // such a read with no answer makes FatFs's next call a remount, main.cpp's guard
   // restarts at a remount with a job under way, and the next boot would do the same,
-  // before its walk ever began. A remount still asks, and Dc for Auto DJ.
+  // before its walk ever began. A remount still asks, and Dc for Auto DJ; the console's
+  // gs and g<path> don't.
   bool jobsOnUnreadRoot() const { return root_ && root_->readFailed() && !cardJobsHeld_; }
   // The boot and the update step (lib/core LibraryUpdate); nullptr on the
   // flash (and before begin()).
