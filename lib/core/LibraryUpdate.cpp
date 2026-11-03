@@ -542,7 +542,13 @@ LibraryUpdate::Booted LibraryUpdate::boot() {
       // or journals left, and it would list a part of the card.
       const bool whole = b.ok && !b.readErrors && !c_.store->hasJournals() && b.build.deviceUsed &&
                          (b.build.transferUsed || !in.transfer);
-      if (!whole) walkForSession();
+      if (!whole) {
+        b.decision.action = libraryboot::Action::Walk;
+        b.decision.compactFirst = false;
+        b.decision.why = "library.idx couldn't be read, and the records didn't give the whole library: /music walked "
+                         "for this session, nothing saved, no card jobs";
+        walkForSession();
+      }
       return b;  // (nothing saved, the marker kept)
     }
     // A read of T or D the card failed: nothing of the build counts, and nothing goes

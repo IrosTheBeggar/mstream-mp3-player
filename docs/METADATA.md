@@ -3237,7 +3237,7 @@ jobs sets up no default queue when `queue.txt` itself can't be read (`main.cpp`)
   files' fault: built around and saved, as records left out. The session's build alone takes
   neither: it stands in for a library that lists the card, so T or D left out means the walk.
 - **The rule's reads** (`settle()`, 2.12.6): a question of the card that fails stops it
-  (`Settle::Unread`, nothing changed): "no X" or "nothing shares this chain" may be only
+  (`Settle::Unread`, nothing more done): "no X" or "nothing shares this chain" may be only
   that read. `prepareTmp()` and `replace()` refuse likewise. A whole `tags.tmp` or
   `library.tmp` alone keeps through a check the card fails (`Settle::Kept`), and through a
   rename that fails; and `tags.tmp` kept for any reason, no memory for its check too, reads
@@ -3256,8 +3256,11 @@ jobs sets up no default queue when `queue.txt` itself can't be read (`main.cpp`)
   PC mends or removes the file. On `library.idx` that is the session's build at each boot
   (about 7-9 s more at 20k, ESTIMATED, and up to 1.4 s of waits) and no walk, scan or update
   step, where before the first boot's save healed it. Removing the file on a PC ends it; so
-  does a card that comes back. A boot with no library clears the queue's resume point, as any
-  boot with no library does. A build isn't read again for one read that fails, as the headers
+  does a card that comes back. A boot with no library, or a session's walk that doesn't list the
+  current track, clears the queue's resume point, as any boot with no library does. And a
+  read of T or D that fails as a boot's build reads them, with no `library.idx` to load, costs the
+  session its tags even when the build would have listed every track: a build that lost
+  tracks looks the same from here. A build isn't read again for one read that fails, as the headers
   are: it is long, and the session goes on from `library.idx` or the walk, and the next boot
   asks again.
 - **Not this work's, the queue's own:** a `queue.txt` whose own read fails, the rest whole, is
@@ -3286,8 +3289,9 @@ jobs sets up no default queue when `queue.txt` itself can't be read (`main.cpp`)
   and `library.idx` unchanged; Rescan says Card read failed at startup; a reboot with the fault
   off finds it all with nothing read again. (2) `/.player/library.idx`: `library.idx unread`,
   `build from the records`, the library whole, the file unchanged, a marker kept. (3) All of
-  `/.player/`: `/music` walked for the session, tracks by their paths, Try again on the Library
-  row's Rescan note restarts, `queue.txt` and everything else in `/.player/` unchanged. (4) The
+  `/.player/`: `/music` walked for the session, tracks by their paths, Rescan's note on the Library
+  row, `queue.txt` and everything else in `/.player/` unchanged. All of `/.player/` and `/music`
+  too: an empty Library tab with that note, whose Try again restarts. (4) The
   same builds with each failed read marking the card failed, as a read with no answer does: no
   restart in 3 minutes. (5) A walk to merge on the card and a body sector of `tags.bin` failing
   that way (the compaction first): `[card] compaction FAILED`, no restart, `tags.bin` unchanged.

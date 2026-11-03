@@ -913,6 +913,11 @@ void assertWhole(const Device& d, uint32_t tracks, const char* msg) {
   TEST_ASSERT_TRUE_MESSAGE(d.index.ready(), msg);
   TEST_ASSERT_EQUAL_UINT32_MESSAGE(tracks, d.index.trackCount(), msg);
   TEST_ASSERT_EQUAL_UINT32_MESSAGE(d.booted.sessionWalked() ? tracks : 0, pendingIn(d.index), msg);
+  // (What the log says of it, whichever way it came to walk.)
+  if (d.booted.sessionWalked()) {
+    TEST_ASSERT_FALSE_MESSAGE(d.booted.built, msg);
+    TEST_ASSERT_TRUE_MESSAGE(d.booted.decision.action == libraryboot::Action::Walk, msg);
+  }
 }
 
 // The queue's file against a boot's library, as QueueStore::restore() reads it: no track
@@ -1908,6 +1913,7 @@ void test_every_row_of_the_boot() {
     TEST_ASSERT_TRUE(d.booted.saved == Saved::Missing);
     TEST_ASSERT_TRUE(d.booted.decision.action == Action::Walk);
     TEST_ASSERT_TRUE(d.booted.walked);
+    TEST_ASSERT_FALSE(d.booted.sessionWalked());  // (saved, and the queue's restore believes it)
     TEST_ASSERT_EQUAL_UINT32(kAudio, d.index.trackCount());
     TEST_ASSERT_EQUAL_UINT32(kAudio, pendingIn(d.index));
     TEST_ASSERT_TRUE(fs.exists(LibraryUpdate::kIndexNames.path));
