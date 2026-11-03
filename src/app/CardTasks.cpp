@@ -66,7 +66,17 @@ bool CardTasks::indexed(const char* rel, size_t len, void* ctx) {
 
 bool CardTasks::begin() {
   active_ = false;
-  if (!lib_.records() || !lib_.update() || !card_.begin()) return false;
+  if (!lib_.records() || !lib_.update()) return false;
+  // The boot loaded a library built from a transfer whose root the card failed to
+  // read. A walk from D alone would take every file T lists for new, the scan read
+  // them all, and the update step build over library.idx from that. So no card jobs
+  // this session (covers go on): the next boot asks again. (A library with no
+  // transfer in it has none of that to lose: its jobs run, as on any such card.)
+  if (lib_.cardJobsHeld()) {
+    Serial.println("[card] the card's root couldn't be read: no walk, no scan and no update step this session");
+    return false;
+  }
+  if (!card_.begin()) return false;
   cardroot::Root* root = lib_.root();
   cardjobs::Config c;
   c.store = lib_.store();
@@ -668,8 +678,11 @@ void CardTasks::flushNow() {
 
 librarytext::Status CardTasks::status() const {
   librarytext::Status s;
-  if (!active_) return s;
   using P = librarytext::Status::Phase;
+  if (!active_) {
+    if (lib_.cardJobsHeld() && lib_.root() && lib_.root()->plan) s.phase = P::Unfinished;
+    return s;
+  }
   const LibraryUpdate::Phase up = const_cast<Library&>(lib_).update()->phase();
   // From the step's fence to its Live (the library hidden), and while it
   // waits only for the safe point, Auto DJ's pick or the worker (its
@@ -706,7 +719,9 @@ void CardTasks::toast(const char* text) { uistr::copy(toast_, sizeof(toast_), te
 void CardTasks::state(librarytext::Status* s, char* line, size_t size) const {
   *s = status();
   if (!active_) {
-    snprintf(line, size, "no records here (the flash, or no PSRAM): covers only");
+    snprintf(line, size, "%s",
+             lib_.cardJobsHeld() ? "the card's root couldn't be read at the boot: covers only, a restart asks again"
+                                 : "no records here (the flash, or no PSRAM): covers only");
     return;
   }
   const cardjobs::Jobs::Counts& c = jobs_.counts();

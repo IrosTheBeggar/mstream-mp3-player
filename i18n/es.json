@@ -563,6 +563,7 @@
   "library_row.rescan_body": "Relee las etiquetas de sus propios archivos (las de la transferencia se quedan). Minutos en una tarjeta grande.",
   "library_row.rescan_started": "Releyendo las etiquetas",
   "library_row.rescan_no_card": "Etiquetas: solo se leen de una tarjeta",
+  "library_row.rescan_unread": "Error de lectura al iniciar: reinicia para reintentar",
   "bt.name_not_paired": "Auriculares Bluetooth",
   "bt.name_default": "Auriculares",
   "bt.status_not_paired": "Sin auriculares emparejados",

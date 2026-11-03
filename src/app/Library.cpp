@@ -255,9 +255,13 @@ bool Library::openRecords() {
     return false;
   }
   int64_t t0 = esp_timer_get_time();
-  cardroot::read(*fat_, scratch, 1024, root_);
+  const uint32_t reads = cardroot::readAtBoot(*fat_, scratch, 1024, root_, [](uint32_t ms) { delay(ms); });
   psramFree(scratch);
   stats_.rootMs = msSince(t0);
+  if (reads > 1) {
+    Serial.printf("[lib] the card's root: a read of the card failed: read %lu times, %s\n", (unsigned long)reads,
+                  root_->readFailed() ? "and each failed" : "and the last was whole");
+  }
   snprintf(s_producer, sizeof(s_producer), "mstream-player %s", version::player());
   tagstore::TagStore::Config c;
   c.dir = "/.player";
@@ -334,6 +338,7 @@ bool Library::beginCard() {
   stats_.build = b.build;
   stats_.built = b.built;
   softStale_ = b.softStale;
+  cardJobsHeld_ = b.decision.holdJobs;
   if (b.compacted) {
     const tagstore::TagStore::Compacted& c = b.compaction;
     Serial.printf("[lib] the journals compacted into tags.bin in %.0f ms: %s (%lu records, %lu chunks merged%s)\n",
@@ -380,11 +385,12 @@ bool Library::beginCard() {
                 store_->tmpKept() ? "; tags.tmp KEPT: alone and unchecked (no PSRAM for its check), no compaction "
                                     "until the next boot checks it"
                                   : "");
-  Serial.printf("[lib] library.idx %s%s%s: %s (%s)%s in %.0f ms (header %.0f ms)\n", libraryboot::savedName(b.saved),
+  Serial.printf("[lib] library.idx %s%s%s: %s (%s)%s in %.0f ms (header %.0f ms)\n",
+                libraryboot::savedName(b.saved, root_->readFailed()),
                 b.tmpSettled.what == tagstore::Settle::Promoted ? " (library.tmp taken: a cut fell mid-save)" : "",
                 b.marker ? ", the build-at-boot marker set" : "", libraryboot::actionName(b.decision.action),
                 b.decision.why,
-                softStale_ ? "; the scan went on since its build: rebuilt at the scan's end" : "",
+                softStale_ && !cardJobsHeld_ ? "; the scan went on since its build: rebuilt at the scan's end" : "",
                 b.decision.action == libraryboot::Action::Load ? b.loadMs : b.buildMs + b.compactMs, b.peekMs);
   if (b.ok) {
     Serial.printf("[lib] %lu tracks, %lu artists, %lu albums; %u B of PSRAM; browsable %.0f ms after the mount; "
@@ -504,7 +510,8 @@ void Library::report() const {
   if (stats_.card) {
     Serial.printf("[index] the card's boot: library.idx %s, %s (%s); root %.1f ms, D %.1f ms, header %.1f ms, load "
                   "%.1f ms, compaction %.1f ms, build %.1f ms, save %.1f ms, device.txt %.1f ms%s\n",
-                  libraryboot::savedName(stats_.saved), libraryboot::actionName(stats_.action), stats_.why,
+                  libraryboot::savedName(stats_.saved, root_ && root_->readFailed()),
+                  libraryboot::actionName(stats_.action), stats_.why,
                   stats_.rootMs, stats_.openMs, stats_.peekMs, stats_.loadMs, stats_.compactMs, stats_.buildMs,
                   stats_.saveMs, stats_.deviceTxtMs, stats_.deviceTxtWritten ? " (rewritten)" : "");
     if (stats_.built) {

@@ -58,6 +58,7 @@ public:
   bool truncate(uint32_t size) override;
   // Its first cluster (FIL.obj.sclust; 0: empty).
   uint32_t firstCluster() const { return static_cast<uint32_t>(fil.obj.sclust); }
+  bool damaged() const override { return fil.err == FR_INT_ERR; }
   // For a caller that keeps a FatFile of its own from file to file (a job's PSRAM,
   // so no open fails for want of memory): `path` open for reading in this one, and
   // FatFs's own answer, which FatFs::open()'s nullptr doesn't give: FR_NO_FILE and
@@ -77,6 +78,7 @@ public:
   // on the card; anything else, the card didn't say (FR_NOT_ENOUGH_CORE: no PSRAM
   // for its FIL).
   FRESULT openRead(const char* path, tagstore::File** out);
+  tagstore::File* openRead(const char* path, bool* cardFailed) override;
   bool close(tagstore::File* f) override;
   bool exists(const char* path) override;
   bool remove(const char* path) override;
@@ -86,6 +88,10 @@ public:
   bool stat(const char* path, uint32_t* size, uint32_t* fatTime);
   // A folder, created if missing (f_mkdir); true if it is there.
   bool ensureDir(const char* path);
+  // A read with no answer marks the card failed, and FatFs's next call mounts it
+  // again, whoever's and however late (autodj::OpenTries). This is that call, now.
+  // (A card that is out costs one failed init.)
+  void echoNow() { exists("/.player"); }
   // Files opened and closed since boot, and open now (the console's gs).
   uint32_t opened() const { return opened_; }
   uint32_t openNow() const { return openNow_; }

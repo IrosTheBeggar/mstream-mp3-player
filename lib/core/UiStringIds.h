@@ -398,6 +398,7 @@ enum class S : uint16_t {
   library_row_rescan_body,  // The player reads the tags of its own files again (the transfer's st...
   library_row_rescan_started,  // Reading the tags again
   library_row_rescan_no_card,  // Tags are read on a card only
+  library_row_rescan_unread,  // Card read failed at startup: restart to try again
   bt_name_not_paired,  // Bluetooth headphones
   bt_name_default,  // Headphones
   bt_status_not_paired,  // No headphones paired
@@ -615,7 +616,7 @@ enum class S : uint16_t {
   format_hz,  // {0} Hz
   format_list_sep,  // , 
 };
-inline constexpr unsigned kStrings = 606;
+inline constexpr unsigned kStrings = 607;
 
 // The languages, English first: the mobile app's ten (one without a
 // catalogue yet draws English), and the pseudo-locale where UISTR_PSEUDO

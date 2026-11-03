@@ -136,6 +136,14 @@ FRESULT FatFs::openRead(const char* path, tagstore::File** out) {
   return FR_OK;
 }
 
+tagstore::File* FatFs::openRead(const char* path, bool* cardFailed) {
+  tagstore::File* f = nullptr;
+  const FRESULT r = openRead(path, &f);
+  // (FR_INT_ERR: FatFs read the card and found its records inconsistent: File::damaged().)
+  *cardFailed = r != FR_OK && r != FR_NO_FILE && r != FR_NO_PATH && r != FR_INT_ERR;
+  return f;
+}
+
 bool FatFs::close(tagstore::File* file) {
   if (!file) return false;
   auto* f = static_cast<FatFile*>(file);

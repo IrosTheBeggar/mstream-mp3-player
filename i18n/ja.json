@@ -474,6 +474,7 @@
   "library_row.rescan_body": "本体のファイルのタグを読み直します (転送分はそのまま)。大きなカードでは数分かかります。",
   "library_row.rescan_started": "タグを読み直しています",
   "library_row.rescan_no_card": "タグはカードでのみ読めます",
+  "library_row.rescan_unread": "起動時にカードを読めませんでした: 再起動してください",
   "bt.name_not_paired": "Bluetooth ヘッドホン",
   "bt.name_default": "ヘッドホン",
   "bt.status_not_paired": "ヘッドホン未ペアリング",

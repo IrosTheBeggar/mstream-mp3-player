@@ -98,7 +98,7 @@ public:
   CardTasks(Library& library, CardWorker& worker);
 
   // After Library::begin(): the jobs over the card's records (false: no
-  // records here: covers only). Again after the card's guard reopened the
+  // records here, or the boot held the jobs: covers only). Again after the card's guard reopened the
   // records (the same card back, nothing under way): the session's scan and
   // update state kept (what the scan's end asks, the journal's new records).
   bool begin();

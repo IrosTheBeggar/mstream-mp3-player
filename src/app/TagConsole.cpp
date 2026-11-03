@@ -488,6 +488,8 @@ void TagConsole::find(const char* path, const char* rel, bool device, Work& w, F
 }
 
 bool TagConsole::transferFile(Work& w, char* path, size_t size, uint64_t* commitId, uint32_t* generation) {
+  // (Under these jobs a read with no answer would restart the player: Library.h.)
+  if (library_.jobsOnUnreadRoot()) return false;
   cc::RootCandidate cand[2];
   const char* const names[2] = {"/.mstream/manifest.bin", "/.mstream/manifest.tmp"};
   for (int k = 0; k < 2; ++k) {
@@ -655,13 +657,23 @@ void TagConsole::journals() {
 
 bool TagConsole::root() {
   if (transferFile(*gsWork_, gsPath_, sizeof(gsPath_), &gsCommit_, &gsGeneration_)) return true;
-  Serial.println("[tags] T: no transfer data (no valid /.mstream/manifest.bin or manifest.tmp)");
+  noRootLine();
   return false;
 }
 
+void TagConsole::noRootLine() {
+  Serial.println(library_.jobsOnUnreadRoot()
+                     ? "[tags] T: not read: the card failed the boot's reads of its root, and its jobs are running"
+                     : "[tags] T: none read: no valid /.mstream/manifest.bin or manifest.tmp, or the card failed a read of "
+                       "them");
+}
+
 void TagConsole::plan() {
-  // An unfinished transfer (2.12.5): its plan's presence.
-  const bool pending = storage_.fs().exists("/.mstream/pending.bin") || storage_.fs().exists("/.mstream/pending.tmp");
+  // An unfinished transfer (2.12.5): its plan's presence. (Not asked of the card again
+  // under these jobs, as transferFile(): the boot's word.)
+  const bool pending = library_.jobsOnUnreadRoot() ? library_.root()->plan
+                                                   : storage_.fs().exists("/.mstream/pending.bin") ||
+                                                         storage_.fs().exists("/.mstream/pending.tmp");
   if (pending) Serial.println("[tags] a transfer's plan is on the card (pending.bin): the last transfer didn't finish");
 }
 
@@ -809,7 +821,7 @@ void TagConsole::dump(const char* arg) {
   uint32_t gen = 0;
   const Found& tf = w->t;  // (nothing found, as the Work came: no transfer data)
   if (!transferFile(*w, tpath, sizeof(tpath), &commit, &gen)) {
-    Serial.println("[tags] T: no transfer data");
+    noRootLine();
   } else {
     find(tpath, rel, false, *w, &w->t);
     if (!tf.file || !tf.valid) {

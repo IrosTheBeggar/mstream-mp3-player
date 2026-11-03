@@ -563,6 +563,7 @@
   "library_row.rescan_body": "Der Player liest die Tags seiner Dateien neu (die übertragenen bleiben). Große Karte: dauert Minuten.",
   "library_row.rescan_started": "Tags werden neu gelesen",
   "library_row.rescan_no_card": "Tags nur von einer Karte lesbar",
+  "library_row.rescan_unread": "Kartenfehler beim Start: zum Wiederholen neu starten",
   "bt.name_not_paired": "Bluetooth-Kopfhörer",
   "bt.name_default": "Kopfhörer",
   "bt.status_not_paired": "Keine Kopfhörer gekoppelt",

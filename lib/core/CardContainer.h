@@ -24,7 +24,7 @@
 // "Absent" (2.4.3): a reader that finds any check failed treats the file
 // as not there, never as an error the listener must clear. Why says which
 // check, for the tests and the console; to the caller every value but Ok
-// means the same.
+// means the same, but Io: a read that failed says nothing of the file.
 namespace cardcontract {
 
 constexpr uint32_t kMagicMsmf = fourcc("MSMF");
@@ -132,6 +132,7 @@ enum class Why : uint8_t {
   PendOrder,        // PEND not in 2.12.5's order
   PendPath,         // a PEND path empty, absolute or not made of names
   PendOp,           // an op of 0
+  FatRecords,       // a read failed on the file system's records of the file (tagstore::File::damaged())
 };
 const char* whyName(Why w);
 
@@ -234,6 +235,8 @@ public:
   uint32_t end() const { return end_; }
   uint32_t crc() const { return crc_; }
   bool failed() const { return failed_; }
+  // failed() because the card failed a read: nothing said of the file.
+  bool readFailed() const { return readFailed_; }
 
 private:
   bool fill();
@@ -246,6 +249,7 @@ private:
   uint32_t bufFill_ = 0;   // valid bytes in buf_
   uint32_t crc_ = 0;
   bool failed_ = false;
+  bool readFailed_ = false;
 };
 
 // A string read at random from a string section (not in a stream's order),

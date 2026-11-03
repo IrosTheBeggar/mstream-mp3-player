@@ -4,6 +4,7 @@
 #pragma once
 #include <cstdint>
 
+#include "AutoDjOpen.h"
 #include "CardManifest.h"
 #include "CardRoot.h"
 #include "WaveState.h"
@@ -42,7 +43,11 @@ class Library;
 //     (sectordisk's counter, as AutoDj::remount(), but simpler: nothing is
 //     open): the root read again into a Root of the moment (never
 //     Library::root(): the update step holds it, TagStore its identity), its
-//     row taken, the record dropped, the wanted hash asked for again.
+//     row taken, the record dropped, the wanted hash asked for again. A read of
+//     the root the card fails, here or at the boot, says nothing of the file:
+//     read again after Auto DJ's waits (autodj::OpenTries), plain lines meanwhile,
+//     and the remount such a read brings is taken for its echo, as Auto DJ's. (No
+//     such waits when the boot failed it and the card jobs run: only a remount.)
 //
 // Nothing to do at a library update: the key is the file's path hash, so its
 // Live keeps the record, and the page's want() on the new ids reads nothing.
@@ -56,7 +61,7 @@ class Library;
 // log line on top. The reduction's 500 B come after the file's last read. What
 // the job holds is in PSRAM: the Job (the FIL, the Table, the Slot, the result:
 // 4.9 KB), made when a root first names a file. This object is a member of ui::Ui,
-// in PSRAM too (332 B): nothing in internal RAM.
+// in PSRAM too (352 B): nothing in internal RAM.
 //
 // Loop task only, but for the step (stepEntry()), which touches only the job it
 // is handed.
@@ -84,7 +89,10 @@ public:
   void loop(uint32_t nowMs);
   // Every loop pass, right after the card's guard. `cardHeld`: another card,
   // or a remount with a job under way: a restart comes, and nothing is read.
-  void remount(bool cardHeld);
+  // `retryHeld`: a read of the root that failed waits to be tried again (as
+  // AutoDj::stepOpen(): before the UI's first frame, while a list moves, behind the
+  // update's fence); a remount doesn't.
+  void remount(bool cardHeld, bool retryHeld);
 
   // The console's gw letters: `arg` from the letter after the w (tagtext's
   // Command::Wave).
@@ -98,6 +106,8 @@ private:
   // The root's row into path_ and entry_ (and the job's memory made). False:
   // none to read, and whyNone_ says why.
   bool take(const cardroot::Root& root);
+  // The card failed a read of the root: read again soon, or none until a remount.
+  void rootFailed();
   void printState() const;
 
   Library& library_;
@@ -108,4 +118,6 @@ private:
   const char* whyNone_ = "no card records (the flash, or no PSRAM)";  // WaveState::File::None's
   uint32_t remountsSeen_ = 0;
   uint32_t remounts_ = 0;
+  autodj::OpenTries rootTries_;
+  bool rootAgain_ = false;  // a read of the root failed: read again when rootTries_ says
 };

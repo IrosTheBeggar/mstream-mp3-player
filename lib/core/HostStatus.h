@@ -68,8 +68,10 @@ struct Facts {
   State state = State::Idle;
   // cid=: the card's id and its commit's generation (docs/METADATA.md
   // 2.5.2), from the root the boot read (cardroot::Root: never a read of
-  // the card here); not known: '-'.
+  // the card here); none: '-'. `cidUnknown`: the card failed the boot's reads of
+  // it, which says nothing of whether it has one: '?'.
   bool cidKnown = false;
+  bool cidUnknown = false;
   uint64_t cardId = 0;
   uint32_t generation = 0;
   const char* bt = nullptr;  // the paired headphones' name (UTF-8); null or "": '-'

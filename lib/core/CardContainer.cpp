@@ -65,6 +65,7 @@ const char* whyName(Why w) {
     case Why::PendOrder: return "pendOrder";
     case Why::PendPath: return "pendPath";
     case Why::PendOp: return "pendOp";
+    case Why::FatRecords: return "fatRecords";
   }
   return "?";
 }
@@ -188,6 +189,7 @@ void Stream::begin(Source* src, uint32_t start, uint32_t end, uint8_t* buf, uint
   bufFill_ = 0;
   crc_ = 0;
   failed_ = !src || !buf || bufLen == 0;
+  readFailed_ = false;
 }
 
 bool Stream::fill() {
@@ -208,6 +210,7 @@ bool Stream::fill() {
   const uint32_t n = left < room ? left : room;
   if (n == 0 || !src_->read(bufAt_, buf_, n)) {
     failed_ = true;
+    readFailed_ = n != 0;
     bufFill_ = 0;
     return false;
   }

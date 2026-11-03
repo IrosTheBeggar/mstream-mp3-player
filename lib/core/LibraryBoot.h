@@ -14,7 +14,8 @@
 // decide: a matching index is loaded, a card with records builds from them
 // (LibraryBuilder), and only a card with no records at all walks /music
 // into a path-named index. The validation walk follows in the background
-// either way (3.2.3). Portable, host-tested (test_card_jobs).
+// either way (3.2.3), unless the decision holds the card jobs (holdJobs).
+// Portable, host-tested (test_card_jobs).
 namespace libraryboot {
 
 // library.idx as the boot found it.
@@ -31,6 +32,10 @@ struct In {
   bool marker = false;    // /.player/build.req: a build was deferred to this boot (3.4.2)
   bool transfer = false;  // T is present (cardroot::Root::present)
   bool device = false;    // D is present (TagStore::device().present)
+  // The card failed the root's reads (cardroot::Root::readFailed()): nothing is
+  // known of the transfer. Against no root, a Differs is an index built from a
+  // transfer, and a Matches one with no transfer in it.
+  bool rootUnread = false;
 };
 
 enum class Action : uint8_t {
@@ -43,6 +48,9 @@ struct Decision {
   Action action = Action::Walk;
   bool compactFirst = false;  // the journals are compacted before the build (D always is, 3.4.1)
   bool removeMarker = false;  // the marker goes once the build is saved
+  // No walk, no scan and no update step this session (CardTasks::begin()): the
+  // library is a transfer's, and they would go on from D alone (rootUnread).
+  bool holdJobs = false;
   const char* why = "";       // for the boot's log
 };
 
@@ -75,7 +83,7 @@ bool softStale(const LibraryIndex::Inputs& saved, uint32_t deviceCrc, uint32_t j
 // The Saved state for a peek() (`load` its result) and its inputs.
 Saved savedOf(LibraryIndex::Load load, const LibraryIndex::Inputs& saved, const tagstore::Identity& root);
 
-const char* savedName(Saved s);
+const char* savedName(Saved s, bool rootUnread = false);
 const char* actionName(Action a);
 
 }  // namespace libraryboot

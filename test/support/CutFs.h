@@ -51,6 +51,17 @@ public:
   long steps = 0;
   bool dead = false;
   bool refuse = false;  // a full card: no step succeeds, nothing is cut
+  // A card that fails reads with nothing else wrong (a CRC, no data token). The
+  // reads and openRead()s of files under `faultPrefix` are numbered from 0 in
+  // faultEvents; those from faultFrom up to faultTo (-1: for ever) fail. faultFrom
+  // -1: none.
+  std::string faultPrefix;
+  long faultFrom = -1, faultTo = -1, faultEvents = 0;
+  bool faulty(const std::string& path) {
+    if (faultFrom < 0 || path.compare(0, faultPrefix.size(), faultPrefix) != 0) return false;
+    const long k = faultEvents++;
+    return k >= faultFrom && (faultTo < 0 || k < faultTo);
+  }
   std::vector<std::string> violations;
   // What went through it.
   uint64_t bytesRead = 0, bytesWritten = 0;
@@ -70,7 +81,7 @@ public:
       return it == fs_->chains.end() ? 0 : static_cast<uint32_t>(it->second.data.size());
     }
     bool read(uint32_t offset, void* out, uint32_t n) override {
-      if (fs_->dead) return false;
+      if (fs_->dead || fs_->faulty(name_)) return false;
       auto it = fs_->chains.find(chain_);
       if (it == fs_->chains.end()) return false;
       const auto& d = it->second.data;
@@ -145,6 +156,10 @@ public:
     }
     if (it == dir.end()) return nullptr;
     return track(new F(this, p, it->second, mode == Mode::Update));
+  }
+  tagstore::File* openRead(const char* path, bool* cardFailed) override {
+    *cardFailed = dead || faulty(path);
+    return *cardFailed ? nullptr : open(path, Mode::Read);
   }
   bool close(tagstore::File* file) override {
     F* f = static_cast<F*>(file);

@@ -527,6 +527,7 @@
   "library_row.rescan_body": "Le lecteur relit les tags de ses fichiers (ceux du transfert ne changent pas). Des minutes sur une grande carte.",
   "library_row.rescan_started": "Relecture des tags",
   "library_row.rescan_no_card": "Tags lus sur une carte seulement",
+  "library_row.rescan_unread": "Échec de lecture au démarrage : redémarrez pour réessayer",
   "bt.name_not_paired": "Casque Bluetooth",
   "bt.name_default": "Casque",
   "bt.status_not_paired": "Aucun casque appairé",

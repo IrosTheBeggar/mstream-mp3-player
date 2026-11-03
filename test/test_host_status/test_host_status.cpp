@@ -136,6 +136,10 @@ void test_status_unknowns() {
   TEST_ASSERT_EQUAL_STRING("00abcdef01234567.0000beef", field(line(f), "cid").c_str());
   f.cidKnown = false;
   TEST_ASSERT_EQUAL_STRING("-", field(line(f), "cid").c_str());
+  // '?': the card failed the boot's reads of its root, which isn't to say it has none.
+  f.cidUnknown = true;
+  TEST_ASSERT_EQUAL_STRING("?", field(line(f), "cid").c_str());
+  f.cidUnknown = false;
   // The states and the cards, each by its name.
   const State states[] = {State::Idle, State::Paused, State::Playing, State::Host};
   const char* stateNames[] = {"idle", "paused", "playing", "host"};
