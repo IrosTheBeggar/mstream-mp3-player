@@ -80,6 +80,10 @@ public:
   FRESULT openRead(const char* path, tagstore::File** out);
   tagstore::File* openRead(const char* path, bool* cardFailed) override;
   Entry entry(const char* path) override;
+  // By f_stat's answer: FR_INT_ERR is Unknown here, where openRead() and entry() say
+  // it isn't there (a file behind damaged records may come back with a disk check), and
+  // a folder at that path is Gone (no such file).
+  Seen look(const char* path) override;
   bool close(tagstore::File* f) override;
   bool exists(const char* path) override;
   bool remove(const char* path) override;

@@ -14,30 +14,7 @@ namespace {
 void* heapAlloc(size_t n) { return std::malloc(n); }
 void heapFree(void* p) { std::free(p); }
 
-// A file of the card as LibraryIndex's streams.
-class FileIn : public ByteSource {
-public:
-  explicit FileIn(tagstore::File& f) : f_(f) {}
-  size_t read(void* data, size_t n) override {
-    const uint32_t left = f_.size() > at_ ? f_.size() - at_ : 0;
-    const uint32_t k = static_cast<uint32_t>(std::min<size_t>(n, left));
-    if (k == 0) return 0;
-    if (!f_.read(at_, data, k)) {
-      failed_ = !f_.damaged();
-      return 0;
-    }
-    at_ += k;
-    return k;
-  }
-  // The stream ended on a read the card failed, not at the file's end or on a file
-  // whose own records are damaged: what the reader made of it says nothing of the file.
-  bool failed() const { return failed_; }
-
-private:
-  tagstore::File& f_;
-  uint32_t at_ = 0;
-  bool failed_ = false;
-};
+using tagstore::FileIn;
 
 class FileOut : public ByteSink {
 public:

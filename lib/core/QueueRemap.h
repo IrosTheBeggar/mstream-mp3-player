@@ -59,6 +59,12 @@
 // moves meanwhile didn't touch): "Try again" after a boot with no library
 // brings the whole queue back where it was.
 //
+// A line the rebuilt library doesn't list leaves the file only when the card says its
+// file is gone (Card::unknownLines(): queuefile::Lookup, docs/METADATA.md 3.2.2): the
+// queue keeps the rest by their paths, the file stays the queue, and the track that plays
+// goes on. The same after a Via::Memory carry. No room for them: the file is kept
+// (keptFile()) from the line that was read as current.
+//
 // A card that can't take the file (none, full, a write that failed): the
 // queue is carried as that text in memory instead, sized exactly (two
 // passes over the queue), as before this but without the doubling; past
@@ -88,6 +94,14 @@ public:
   virtual void closeFile() = 0;
   // The rebuild itself; what it returns is the result's `rebuilt`.
   virtual bool rebuild() = 0;
+  // Just before the read back: the tracks by their paths of the last read forgotten, and
+  // what to ask about a line the library doesn't list; nullptr: such a line is dropped.
+  // `library`: there is a library to read against (with none, its lines stay in the
+  // file as ever: keptFile()).
+  virtual queuetext::UnknownLines* unknownLines(bool library) {
+    (void)library;
+    return nullptr;
+  }
 
 protected:
   ~Card() = default;

@@ -113,6 +113,8 @@ struct Drive {
   // RES_ERROR with the status as it was: a read that got its command answered and
   // no data token, or a CRC mismatch (the SD driver's sdReadSector()).
   uint64_t failFrom = UINT64_MAX, failTo = UINT64_MAX;
+  // A sector that fails the same way each time it is read.
+  uint64_t failSector = UINT64_MAX;
   struct Asked {
     uint64_t reads = 0, singleReads = 0, readSectors = 0, writes = 0, trims = 0;
   } asked;
@@ -333,6 +335,7 @@ extern "C" DRESULT disk_read(BYTE pdrv, BYTE* buff, LBA_t sector, UINT count) {
   d.asked.singleReads += count == 1;
   d.asked.readSectors += count;
   if (asked >= d.failFrom && asked < d.failTo) return RES_ERROR;
+  if (d.failSector >= sector && d.failSector < sector + count) return RES_ERROR;
   const uint32_t lba = static_cast<uint32_t>(sector);
   const bool ok = d.wrapper ? d.wrapper->read(lba, buff, count)
                   : d.cache ? d.cache->read(*d.disk, lba, buff, count)

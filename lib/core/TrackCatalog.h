@@ -11,7 +11,7 @@
 // track, in PSRAM); this turns one into a path to play or a name to show
 // when it's needed, into the caller's buffer. Portable, host-tested.
 //
-// Two kinds of id:
+// Three kinds of id:
 //   0 .. trackCount()-1   a track of the LibraryIndex
 //   kBuiltin + n          a built-in track: the test tones and the click
 //                         tracks with a known beat (paths "tone:..."), the
@@ -21,6 +21,9 @@
 //                         (kSilencePath) and the rate converter's test tracks
 //                         ("tone:1000@48000", "tone:silence@96000", ...:
 //                         rateTests())
+//   kUnlisted + n         a line of the queue's file that the library doesn't
+//                         list, and whose file isn't known to be gone
+//                         (Unlisted: its path, and a title from its name)
 // Anything else, or a library id while the index isn't ready (a rebuild),
 // is unknown: path() gives "", and the player skips it as a track that
 // can't be played.
@@ -36,6 +39,7 @@ class TrackCatalog {
 public:
   static constexpr uint32_t kNone = LibraryIndex::kNone;
   static constexpr uint32_t kBuiltin = 0x80000000u;
+  static constexpr uint32_t kUnlisted = 0x40000000u;
   // Long enough for any path the card walk passes on.
   static constexpr size_t kMaxPath = 256;
 
@@ -77,6 +81,47 @@ public:
     uint32_t durationMs = 0;
   };
 
+  // The tracks the queue holds by their paths: lines of its file that the library
+  // doesn't list, with the card not saying they are gone (docs/METADATA.md 3.2.2;
+  // queuefile::Lookup). They are the queue's like any entry, so the file stays the
+  // queue: an edit keeps them, positions and resume points mean its lines, and the
+  // library's next build, which may list them, finds them by their paths. Their ids
+  // change with each read of the file, as library ids do with each build. No names but
+  // a title from the file's name. Paths one after another in one block from the hooks
+  // (the firmware's PSRAM), which doubles as it fills: about what those tracks' names
+  // would cost in the index that leaves them out (3.5). Held by its owner; loop task
+  // only, like the queue.
+  class Unlisted {
+  public:
+    using AllocFn = void* (*)(size_t bytes);
+    using FreeFn = void (*)(void* p);
+
+    explicit Unlisted(AllocFn alloc = nullptr, FreeFn release = nullptr);
+    ~Unlisted();
+    Unlisted(const Unlisted&) = delete;
+    Unlisted& operator=(const Unlisted&) = delete;
+
+    // `path`'s id, or kNone: no memory for it.
+    uint32_t add(const char* path);
+    // An id's path; nullptr: not one this holds. "" once dropped.
+    const char* path(uint32_t id) const;
+    // The id names nothing from now on (the card says its file is gone); the ids after it
+    // stay theirs.
+    void drop(uint32_t id);
+    uint32_t count() const { return count_; }
+    size_t memoryBytes() const { return textCap_ + atCap_ * sizeof(uint32_t); }
+    // Every id forgotten, the memory given back.
+    void clear();
+
+  private:
+    AllocFn alloc_;
+    FreeFn free_;
+    char* text_ = nullptr;
+    uint32_t* at_ = nullptr;  // where each path starts in text_
+    size_t textUsed_ = 0, textCap_ = 0;
+    uint32_t count_ = 0, atCap_ = 0;
+  };
+
   explicit TrackCatalog(const LibraryIndex* index = nullptr) : index_(index) {}
   void setIndex(const LibraryIndex* index) { index_ = index; }
   const LibraryIndex* index() const { return index_; }
@@ -95,6 +140,8 @@ public:
     held_ = held;
     ++heldVersion_;
   }
+  // The tracks to answer kUnlisted ids from (nullptr: none); its owner keeps it alive.
+  void setUnlisted(const Unlisted* unlisted) { unlisted_ = unlisted; }
 
   // The power test's silence (the console's Pz): zeros for an hour.
   static constexpr const char* kSilencePath = "tone:silence";
@@ -134,7 +181,8 @@ public:
   // or a library track's length as its record gave it (the overlay's, else
   // the index's whole seconds); 0: unknown.
   uint32_t durationHintMs(uint32_t id) const;
-  // The id of `path` (the inverse of path()), or kNone.
+  // The id of `path` (the inverse of path()), or kNone. The library's and the
+  // built-ins': an Unlisted path is asked for once, as its line is read.
   uint32_t find(const char* path) const;
 
 private:
@@ -151,5 +199,6 @@ private:
   const LibraryIndex* index_;
   const Overlay* overlay_ = nullptr;
   const Held* held_ = nullptr;
+  const Unlisted* unlisted_ = nullptr;
   uint32_t heldVersion_ = 0;
 };

@@ -149,9 +149,11 @@ public:
   void loaded(uint32_t generation, bool rewrite, uint32_t nowMs);
   // The queue as it is now is less than the file of `generation`: what was
   // left of it when its library tracks couldn't be found (a boot or a
-  // rebuild with no library), or nothing (a queue that couldn't come across
-  // a rebuild). That isn't the listener's edit, so nothing is written: the
-  // file keeps the whole queue, and `fileLine` (its current line, as a boot
+  // rebuild with no library, or no room to keep them by their paths:
+  // lib/core QueueFile), or nothing (a queue that couldn't come across a
+  // rebuild, a file the boot couldn't read). That isn't the listener's
+  // edit, so nothing is written: the file keeps the whole queue, and
+  // `fileLine` (its current line, as a boot
   // picks it: the position saved for it, -1 for its header's) as the place
   // to come back to. Until the queue is the file's again (an edit written,
   // or loaded()), positions and resume points aren't saved (they would pair

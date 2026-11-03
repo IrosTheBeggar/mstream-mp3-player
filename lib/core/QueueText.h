@@ -75,11 +75,29 @@ bool write(const QueueModel& q, const TrackCatalog& catalog, uint32_t generation
 bool writeHeader(bool shuffled, uint32_t entries, int32_t current, uint32_t generation, ByteSink& out);
 bool writeEntry(const TrackCatalog& catalog, uint32_t track, bool shuffled, uint32_t rank, ByteSink& out);
 
+// What read() asks about a line the catalog doesn't know: the line's track all the
+// same, or kNone, dropped (queuefile::Lookup: whether its file is really gone).
+class UnknownLines {
+public:
+  virtual uint32_t track(const char* path) = 0;
+  // Of the lines it gave kNone, those that may still be on the card: there was no
+  // room for them (Restored::held).
+  virtual uint32_t held() const = 0;
+  // Once the read is whole and its file closed: anything to find out of the card (a
+  // question with no answer makes FatFs's next call a remount, which an open file
+  // doesn't survive). True: read the file once more through this, its answers known.
+  virtual bool settle() = 0;
+
+protected:
+  ~UnknownLines() = default;
+};
+
 struct Restored {
   bool ok = false;           // a queue file (false: none, or not one)
   uint32_t lines = 0;        // entries in the file
   uint32_t entries = 0;      // in the queue now
   uint32_t dropped = 0;      // paths the catalog doesn't know any more (of the lines read in)
+  uint32_t held = 0;         // of those, lines that may still be on the card: the file isn't the queue
   // Lines left out by the queue's cap (QueueModel::kMaxEntries): a file
   // longer than the queue holds (an older firmware's whole-library queue),
   // read in from line `first` only. lines = entries + dropped + capped.
@@ -108,8 +126,10 @@ struct Restored {
 // in (the header's count, at most the cap), 4 bytes a line, held until
 // assign() has copied them; a file with more lines than its header says
 // isn't whole either.
+// `unknown` (optional): asked about each line read in that the catalog doesn't know.
 Restored read(ByteSource& in, const TrackCatalog& catalog, QueueModel& q,
               int32_t (*pickCurrent)(const Header& h, void* ctx) = nullptr, void* ctx = nullptr,
-              MemorySink::AllocFn alloc = nullptr, MemorySink::FreeFn release = nullptr);
+              MemorySink::AllocFn alloc = nullptr, MemorySink::FreeFn release = nullptr,
+              UnknownLines* unknown = nullptr);
 
 }  // namespace queuetext

@@ -3,11 +3,13 @@
 
 #include "TrackCatalog.h"
 
+#include <cstdlib>
 #include <cstring>
 
 #include "CardContract.h"
 #include "LibraryText.h"
 #include "NameKey.h"
+#include "TrackName.h"
 
 namespace {
 
@@ -87,7 +89,9 @@ LibraryIndex::Span TrackCatalog::builtins() { return {kIds, kListed}; }
 
 LibraryIndex::Span TrackCatalog::rateTests() { return {kTestIds, kCount - kRateTests}; }
 
-bool TrackCatalog::valid(uint32_t id) const { return isBuiltin(id) || inIndex(id); }
+bool TrackCatalog::valid(uint32_t id) const {
+  return isBuiltin(id) || inIndex(id) || (unlisted_ && unlisted_->path(id));
+}
 
 size_t TrackCatalog::path(uint32_t id, char* buf, size_t size) const {
   if (isBuiltin(id)) {
@@ -95,7 +99,64 @@ size_t TrackCatalog::path(uint32_t id, char* buf, size_t size) const {
     return copyOut(p, std::strlen(p), buf, size);
   }
   if (inIndex(id)) return index_->trackPath(id, buf, size);
-  return copyOut("", 0, buf, size);
+  const char* p = unlisted_ ? unlisted_->path(id) : nullptr;
+  return p ? copyOut(p, std::strlen(p), buf, size) : copyOut("", 0, buf, size);
+}
+
+// ---- the tracks by their paths ----
+
+namespace {
+void* heapAlloc(size_t n) { return std::malloc(n); }
+void heapFree(void* p) { std::free(p); }
+}  // namespace
+
+TrackCatalog::Unlisted::Unlisted(AllocFn alloc, FreeFn release)
+    : alloc_(alloc && release ? alloc : heapAlloc), free_(alloc && release ? release : heapFree) {}
+
+TrackCatalog::Unlisted::~Unlisted() { clear(); }
+
+void TrackCatalog::Unlisted::clear() {
+  if (text_) free_(text_);
+  if (at_) free_(at_);
+  text_ = nullptr;
+  at_ = nullptr;
+  textUsed_ = textCap_ = 0;
+  count_ = atCap_ = 0;
+}
+
+uint32_t TrackCatalog::Unlisted::add(const char* path) {
+  const size_t bytes = std::strlen(path) + 1;
+  if (textUsed_ + bytes > textCap_) {
+    size_t cap = textCap_ ? textCap_ * 2 : 4096;
+    if (cap < textUsed_ + bytes) cap = textUsed_ + bytes;
+    auto* grown = static_cast<char*>(alloc_(cap));
+    if (!grown) return kNone;
+    if (textUsed_) std::memcpy(grown, text_, textUsed_);
+    if (text_) free_(text_);
+    text_ = grown;
+    textCap_ = cap;
+  }
+  if (count_ == atCap_) {
+    const uint32_t cap = atCap_ ? atCap_ * 2 : 64;
+    auto* grown = static_cast<uint32_t*>(alloc_(cap * sizeof(uint32_t)));
+    if (!grown) return kNone;
+    if (count_) std::memcpy(grown, at_, count_ * sizeof(uint32_t));
+    if (at_) free_(at_);
+    at_ = grown;
+    atCap_ = cap;
+  }
+  std::memcpy(text_ + textUsed_, path, bytes);
+  at_[count_] = static_cast<uint32_t>(textUsed_);
+  textUsed_ += bytes;
+  return kUnlisted + count_++;
+}
+
+const char* TrackCatalog::Unlisted::path(uint32_t id) const {
+  return id >= kUnlisted && id - kUnlisted < count_ ? text_ + at_[id - kUnlisted] : nullptr;
+}
+
+void TrackCatalog::Unlisted::drop(uint32_t id) {
+  if (id >= kUnlisted && id - kUnlisted < count_) text_[at_[id - kUnlisted]] = 0;
 }
 
 // ---- the overlay ----
@@ -153,6 +214,16 @@ size_t TrackCatalog::title(uint32_t id, char* buf, size_t size) const {
     uint8_t len = 0;
     const char* t = index_->trackTitle(id, &len);
     return copyCut(t, len, buf, size);
+  }
+  if (const char* p = unlisted_ ? unlisted_->path(id) : nullptr) {
+    // Its name, as a lone file's reads (trackname): "06 - Title.mp3", "Title".
+    const char* slash = std::strrchr(p, '/');
+    const char* name = slash ? slash + 1 : p;
+    const char* dot = std::strrchr(name, '.');
+    const size_t len = dot && dot != name ? static_cast<size_t>(dot - name) : std::strlen(name);
+    trackname::Name n;
+    trackname::plain(name, len, &n);
+    return copyCut(name + n.titleAt, len - n.titleAt, buf, size);
   }
   if (const Held* h = heldFor(id)) return copyCut(h->title, std::strlen(h->title), buf, size);
   return copyOut("", 0, buf, size);

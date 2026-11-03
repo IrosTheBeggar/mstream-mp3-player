@@ -214,7 +214,7 @@ bool writeEntry(const TrackCatalog& catalog, uint32_t track, bool shuffled, uint
 }
 
 Restored read(ByteSource& in, const TrackCatalog& catalog, QueueModel& q, int32_t (*pickCurrent)(const Header&, void*),
-              void* ctx, MemorySink::AllocFn alloc, MemorySink::FreeFn release) {
+              void* ctx, MemorySink::AllocFn alloc, MemorySink::FreeFn release, UnknownLines* unknown) {
   Restored r;
   LineReader lines(in);
   char* line = nullptr;
@@ -246,7 +246,8 @@ Restored read(ByteSource& in, const TrackCatalog& catalog, QueueModel& q, int32_
       ++r.capped;  // outside the window: not looked up, not kept
       continue;
     }
-    const uint32_t id = overflow || !*path ? TrackCatalog::kNone : catalog.find(path);
+    uint32_t id = overflow || !*path ? TrackCatalog::kNone : catalog.find(path);
+    if (id == TrackCatalog::kNone && unknown && !overflow && *path) id = unknown->track(path);
     const bool isTarget = static_cast<int32_t>(at) == target;
     if (id == TrackCatalog::kNone) {
       ++r.dropped;
@@ -266,6 +267,7 @@ Restored read(ByteSource& in, const TrackCatalog& catalog, QueueModel& q, int32_
   if (current >= static_cast<int32_t>(count)) current = static_cast<int32_t>(count) - 1;
   if (!q.assign(ids.data(), count, current, shuffled, shuffled ? ranks.data() : nullptr)) return r;
   r.entries = count;
+  r.held = unknown ? unknown->held() : 0;
   r.ok = true;
   return r;
 }

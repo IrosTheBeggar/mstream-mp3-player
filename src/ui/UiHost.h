@@ -86,6 +86,9 @@ struct AppState {
   uint32_t libTransfer = 0, libDevice = 0, libNone = 0;
   bool libraryRecords = false;
   bool libraryHeld = false;
+  // The boot couldn't read queue.txt, and nothing has replaced it (QueueStore::fileUnread()):
+  // the empty queue says a restart may bring it back.
+  bool queueUnread = false;
   // The rest.
   uint8_t battery = 0;
   bool charging = false;
