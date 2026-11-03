@@ -5242,7 +5242,9 @@ void test_unlisted_tracks_answer_by_their_paths() {
   for (const std::string& p : many) ids.push_back(table.add(p.c_str()));
   for (uint32_t i = 0; i < 300; ++i) TEST_ASSERT_EQUAL_STRING(many[i].c_str(), pathOf(c, ids[i]).c_str());
   TEST_ASSERT_EQUAL_UINT32(303, table.count());
-  // A path longer than a doubling takes it in. (No line is: the read's own limit.)
+  // Never one block for them all: about what they hold, and no doubling's slack.
+  TEST_ASSERT_LESS_THAN(40 * 1024, table.memoryBytes());
+  // A path longer than a block takes one of its own. (No line is: the read's own limit.)
   const std::string huge = "/music/" + std::string(100000, 'x');
   const uint32_t hugeId = table.add(huge.c_str());
   TEST_ASSERT_EQUAL_STRING(huge.c_str(), table.path(hugeId));
@@ -5522,6 +5524,38 @@ void test_no_room_for_by_path_lines_keeps_the_file() {
   TEST_ASSERT_EQUAL_STRING(file.c_str(), r.st.file.c_str());
 }
 
+// A source that says it failed is no whole file, however it reads: above all when the
+// failed read was in the last line, whose first part counts as that line. The queue is
+// left alone. The same file cut there with no failure is one line less, as ever.
+void test_a_source_that_failed_is_no_whole_file() {
+  LibraryIndex idx;
+  build(idx, {kFiles[0], kFiles[1]});
+  TrackCatalog c(&idx);
+  struct Failed : MemorySource {
+    using MemorySource::MemorySource;
+    bool failed() const override { return true; }
+  };
+  QueueModel q;
+  const uint32_t one = 0;
+  TEST_ASSERT_TRUE(q.assign(&one, 1, 0));
+  const uint32_t version = q.contentVersion();
+  const std::string whole = std::string("mstream-queue 1 2 0 7\n") + kFiles[0] + "\n" + kFiles[1] + "\n";
+  const std::string cut = whole.substr(0, whole.size() - 10);
+  Failed f1(cut.data(), cut.size());
+  TEST_ASSERT_FALSE(queuetext::read(f1, c, q).ok);
+  TEST_ASSERT_EQUAL_UINT32(version, q.contentVersion());
+  TEST_ASSERT_EQUAL_UINT32(1, q.size());
+  // Failed after the whole text: it can't know what it missed.
+  Failed f2(whole.data(), whole.size());
+  TEST_ASSERT_FALSE(queuetext::read(f2, c, q).ok);
+  // No failure: the cut line matches nothing.
+  MemorySource s(cut.data(), cut.size());
+  const queuetext::Restored r = queuetext::read(s, c, q);
+  TEST_ASSERT_TRUE(r.ok);
+  TEST_ASSERT_EQUAL_UINT32(1, r.entries);
+  TEST_ASSERT_EQUAL_UINT32(1, r.dropped);
+}
+
 // No memory for one line's path: none for those after it either, though it comes back,
 // so the read after settle() still finds each line's id by its place.
 void test_no_room_for_a_line_keeps_the_order_for_the_read_again() {
@@ -5714,6 +5748,7 @@ int main(int, char**) {
   RUN_TEST(test_the_update_step_asks_again_and_drops_what_is_gone);
   RUN_TEST(test_a_rebuild_with_no_library_asks_nothing);
   RUN_TEST(test_no_room_for_by_path_lines_keeps_the_file);
+  RUN_TEST(test_a_source_that_failed_is_no_whole_file);
   RUN_TEST(test_no_room_for_a_line_keeps_the_order_for_the_read_again);
   RUN_TEST(test_a_read_again_that_fails_keeps_the_first);
   return UNITY_END();

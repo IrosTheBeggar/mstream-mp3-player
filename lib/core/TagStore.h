@@ -266,7 +266,7 @@ public:
   }
   // The stream ended on a read the card failed, not at the file's end or on a file
   // whose own records are damaged: what the reader made of it says nothing of the file.
-  bool failed() const { return failed_; }
+  bool failed() const override { return failed_; }
 
 private:
   File& f_;

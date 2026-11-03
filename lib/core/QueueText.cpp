@@ -263,7 +263,9 @@ Restored read(ByteSource& in, const TrackCatalog& catalog, QueueModel& q, int32_
     if (shuffled && !ranks.push(rank)) return r;  // (dropped tracks leave gaps: fine)
     ++count;
   }
-  if (r.lines != r.header.entries) return r;  // cut short: leave the queue alone
+  // Cut short: leave the queue alone. So too a read that failed in the last line: what
+  // came before it reads as that line, and the count holds.
+  if (r.lines != r.header.entries || in.failed()) return r;
   if (current >= static_cast<int32_t>(count)) current = static_cast<int32_t>(count) - 1;
   if (!q.assign(ids.data(), count, current, shuffled, shuffled ? ranks.data() : nullptr)) return r;
   r.entries = count;

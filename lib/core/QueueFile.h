@@ -136,6 +136,9 @@ struct Read {
   queuetext::Restored read;    // Whole: what the read found
   uint32_t reads = 0;          // how many times the files were read
   const char* notWhole = nullptr;  // a file there that wasn't a whole queue file, of its own fault (the last read's)
+  // A read failed on the way, whatever it came to (one with no answer makes FatFs's next
+  // call a remount, which is better now than under a card job: FatFs::echoNow()).
+  bool faulted = false;
 };
 
 // `file`, else `temp` (only ever whole when power went between removing `file` and the

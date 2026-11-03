@@ -116,47 +116,51 @@ TrackCatalog::Unlisted::Unlisted(AllocFn alloc, FreeFn release)
 TrackCatalog::Unlisted::~Unlisted() { clear(); }
 
 void TrackCatalog::Unlisted::clear() {
-  if (text_) free_(text_);
+  while (blocks_) {
+    Block* next = blocks_->next;
+    free_(blocks_);
+    blocks_ = next;
+  }
   if (at_) free_(at_);
-  text_ = nullptr;
   at_ = nullptr;
-  textUsed_ = textCap_ = 0;
+  blockBytes_ = 0;
   count_ = atCap_ = 0;
 }
 
 uint32_t TrackCatalog::Unlisted::add(const char* path) {
   const size_t bytes = std::strlen(path) + 1;
-  if (textUsed_ + bytes > textCap_) {
-    size_t cap = textCap_ ? textCap_ * 2 : 4096;
-    if (cap < textUsed_ + bytes) cap = textUsed_ + bytes;
-    auto* grown = static_cast<char*>(alloc_(cap));
-    if (!grown) return kNone;
-    if (textUsed_) std::memcpy(grown, text_, textUsed_);
-    if (text_) free_(text_);
-    text_ = grown;
-    textCap_ = cap;
-  }
   if (count_ == atCap_) {
     const uint32_t cap = atCap_ ? atCap_ * 2 : 64;
-    auto* grown = static_cast<uint32_t*>(alloc_(cap * sizeof(uint32_t)));
+    auto* grown = static_cast<char**>(alloc_(cap * sizeof(char*)));
     if (!grown) return kNone;
-    if (count_) std::memcpy(grown, at_, count_ * sizeof(uint32_t));
+    if (count_) std::memcpy(grown, at_, count_ * sizeof(char*));
     if (at_) free_(at_);
     at_ = grown;
     atCap_ = cap;
   }
-  std::memcpy(text_ + textUsed_, path, bytes);
-  at_[count_] = static_cast<uint32_t>(textUsed_);
-  textUsed_ += bytes;
+  if (!blocks_ || bytes > blocks_->cap - blocks_->used) {
+    const size_t cap = bytes > kBlockBytes ? bytes : kBlockBytes;
+    auto* b = static_cast<Block*>(alloc_(sizeof(Block) + cap));
+    if (!b) return kNone;
+    b->next = blocks_;
+    b->used = 0;
+    b->cap = cap;
+    blocks_ = b;
+    blockBytes_ += sizeof(Block) + cap;
+  }
+  char* to = reinterpret_cast<char*>(blocks_ + 1) + blocks_->used;
+  std::memcpy(to, path, bytes);
+  blocks_->used += bytes;
+  at_[count_] = to;
   return kUnlisted + count_++;
 }
 
 const char* TrackCatalog::Unlisted::path(uint32_t id) const {
-  return id >= kUnlisted && id - kUnlisted < count_ ? text_ + at_[id - kUnlisted] : nullptr;
+  return id >= kUnlisted && id - kUnlisted < count_ ? at_[id - kUnlisted] : nullptr;
 }
 
 void TrackCatalog::Unlisted::drop(uint32_t id) {
-  if (id >= kUnlisted && id - kUnlisted < count_) text_[at_[id - kUnlisted]] = 0;
+  if (id >= kUnlisted && id - kUnlisted < count_) at_[id - kUnlisted][0] = 0;
 }
 
 // ---- the overlay ----

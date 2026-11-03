@@ -126,6 +126,7 @@ struct Restored {
 // in (the header's count, at most the cap), 4 bytes a line, held until
 // assign() has copied them; a file with more lines than its header says
 // isn't whole either.
+// A source that says it failed (ByteSource::failed()) is no whole file, wherever it failed.
 // `unknown` (optional): asked about each line read in that the catalog doesn't know.
 Restored read(ByteSource& in, const TrackCatalog& catalog, QueueModel& q,
               int32_t (*pickCurrent)(const Header& h, void* ctx) = nullptr, void* ctx = nullptr,

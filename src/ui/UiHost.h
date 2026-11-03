@@ -87,7 +87,7 @@ struct AppState {
   bool libraryRecords = false;
   bool libraryHeld = false;
   // The boot couldn't read queue.txt, and nothing has replaced it (QueueStore::fileUnread()):
-  // the empty queue says a restart may bring it back.
+  // Now Playing's and the Queue tab's empty states say a restart may bring it back.
   bool queueUnread = false;
   // The rest.
   uint8_t battery = 0;

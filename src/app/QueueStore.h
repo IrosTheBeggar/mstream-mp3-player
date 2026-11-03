@@ -61,8 +61,9 @@ public:
   // file keeps them, as with no library at all, for the next boot. `wait`: the boot's
   // waits between reads the card fails (tagstore::kBootWaitsMs); nullptr: one read.
   Restore restore(bool libraryListsCard = true, void (*wait)(uint32_t ms) = nullptr);
-  // The boot couldn't read the file, and nothing has replaced it since: an edit would.
-  bool fileUnread() const { return unread_ && !saver_.fileIsQueue(); }
+  // The boot couldn't read the file, and nothing has replaced it since: the first write of
+  // a queue with something in it will.
+  bool fileUnread() const { return unread_; }
   // The repeat mode saved (Off when none is, or an unknown value), logged.
   // At boot, before restore() and the first play.
   PlaybackController::Repeat loadRepeat();
@@ -124,9 +125,11 @@ private:
   // The card side of the remap (lib/core QueueRemap: queueremap::Card).
   struct RemapCard;
   void logRemap(const queueremap::Result& r);
-  // The queue's files through FatFs on the card, the VFS on the flash (restore()).
-  struct BootFiles;
+  // The queue's files, read: through FatFs on the card, the VFS on the flash.
+  struct QueueFiles;
   bool onCard() const { return storage_.onCard() && cardfat::ready(); }
+  // What leaves the queue empty of a file the boot couldn't read isn't saved over it.
+  void keepUnread();
 
   LocalStorage& storage_;
   QueueModel& queue_;

@@ -87,10 +87,10 @@ public:
   // queue: an edit keeps them, positions and resume points mean its lines, and the
   // library's next build, which may list them, finds them by their paths. Their ids
   // change with each read of the file, as library ids do with each build. No names but
-  // a title from the file's name. Paths one after another in one block from the hooks
-  // (the firmware's PSRAM), which doubles as it fills: about what those tracks' names
-  // would cost in the index that leaves them out (3.5). Held by its owner; loop task
-  // only, like the queue.
+  // a title from the file's name. Paths one after another in blocks of kBlockBytes from
+  // the hooks (the firmware's PSRAM), so never one large block and no doubling's peak:
+  // about what those tracks' names would cost in the index that leaves them out (3.5).
+  // Held by its owner; loop task only, like the queue.
   class Unlisted {
   public:
     using AllocFn = void* (*)(size_t bytes);
@@ -109,16 +109,21 @@ public:
     // stay theirs.
     void drop(uint32_t id);
     uint32_t count() const { return count_; }
-    size_t memoryBytes() const { return textCap_ + atCap_ * sizeof(uint32_t); }
+    size_t memoryBytes() const { return blockBytes_ + atCap_ * sizeof(char*); }
     // Every id forgotten, the memory given back.
     void clear();
 
   private:
+    static constexpr size_t kBlockBytes = 8192;
+    struct Block {  // its text follows
+      Block* next;
+      size_t used, cap;
+    };
     AllocFn alloc_;
     FreeFn free_;
-    char* text_ = nullptr;
-    uint32_t* at_ = nullptr;  // where each path starts in text_
-    size_t textUsed_ = 0, textCap_ = 0;
+    Block* blocks_ = nullptr;  // the one being filled first
+    char** at_ = nullptr;      // each id's path
+    size_t blockBytes_ = 0;
     uint32_t count_ = 0, atCap_ = 0;
   };
 

@@ -82,10 +82,10 @@ void QueueStore::paths(char* file, char* temp, size_t size) {
   snprintf(temp, size, "%s/queue.tmp", dir);
 }
 
-// The queue's files for queuefile::readAtBoot(): FatFs's answer on the card; on the
-// flash the VFS, which gives no reason for a failed open or read.
-struct QueueStore::BootFiles final : queuefile::Files {
-  explicit BootFiles(QueueStore& store) : store_(store), fat_(store.fat_) {}
+// The queue's files, read: FatFs's answer on the card; on the flash the VFS, which gives no
+// reason for a failed open or read.
+struct QueueStore::QueueFiles final : queuefile::Files {
+  explicit QueueFiles(QueueStore& store) : store_(store), fat_(store.fat_) {}
   ByteSource* open(const char* path, bool* cardFailed) override {
     if (store_.onCard()) return fat_.open(path, cardFailed);
     *cardFailed = false;
@@ -119,7 +119,7 @@ QueueStore::Restore QueueStore::restore(bool libraryListsCard, void (*wait)(uint
   const bool library = libraryListsCard && index && index->ready();
   queuefile::Lookup* lookup = onCard() && library ? &lookup_ : nullptr;
   lookup_.limit(lookupClock, queuefile::kBootLookupMs);
-  BootFiles files(*this);
+  QueueFiles files(*this);
   const queuefile::Read got = queuefile::readAtBoot(files, file, temp, catalog_, queue_, pickCurrent, &saved, psramAlloc,
                                                     psramFree, onCard() ? wait : nullptr, lookup);
   if (got.reads > 1) {
@@ -128,7 +128,7 @@ QueueStore::Restore QueueStore::restore(bool libraryListsCard, void (*wait)(uint
   }
   // A read with no answer makes FatFs's next call a remount: now, not under a card job
   // later (main.cpp's guard restarts at that one, and the next boot would do the same).
-  if (onCard() && (got.got == queuefile::Got::Unread || lookup_.failed())) fat_.echoNow();
+  if (onCard() && (got.faulted || lookup_.failed())) fat_.echoNow();
   if (got.got == queuefile::Got::Unread) {
     // Taken for no queue, a default one would be saved over a file that is only unread.
     // Nothing of it is known, so the saver isn't told otherwise: the file keeps its line
@@ -227,8 +227,15 @@ void QueueStore::saveRepeat(PlaybackController::Repeat r) {
   nvslater::putU8(kNvsNamespace, nvslayout::kRepeatKey, static_cast<uint8_t>(r));
 }
 
+void QueueStore::keepUnread() {
+  // (A shuffle toggled, an add undone before its write: nothing the listener chose
+  // instead of a queue that may yet come back.)
+  if (unread_ && queue_.empty()) saver_.keptFile(saver_.generation(), saver_.fileLine());
+}
+
 void QueueStore::loop(uint32_t nowMs) {
   if (!storage_.available() || carrying()) return;
+  keepUnread();
   noteTransport();
   saver_.loop(nowMs);
   noteFailures();
@@ -247,6 +254,7 @@ bool QueueStore::flushNow() {
     return true;
   }
   const uint32_t t0 = millis();
+  keepUnread();
   noteTransport();
   const bool wasWriting = saver_.writing(), wasDirty = saver_.contentDirty();
   const uint32_t writes = saver_.writes();
@@ -291,6 +299,8 @@ bool QueueStore::commitTemp() {
   if (!ok) {
     fs.remove(temp);
     Serial.printf("[queue] couldn't replace %s\n", file);
+  } else {
+    unread_ = false;
   }
   return ok;
 }
@@ -334,7 +344,8 @@ void QueueStore::saveResume(const QueueResume& r) {
 // The card and the caller's rebuild, for the portable sequence (flush,
 // free, rebuild, re-read: lib/core/QueueRemap, docs/METADATA.md 3.4.2).
 struct QueueStore::RemapCard : queueremap::Card {
-  RemapCard(QueueStore& store, bool (*rebuild)(void*), void* ctx) : store_(store), rebuild_(rebuild), ctx_(ctx) {}
+  RemapCard(QueueStore& store, bool (*rebuild)(void*), void* ctx)
+      : store_(store), rebuild_(rebuild), ctx_(ctx), files_(store) {}
   bool flush() override { return store_.storage_.available() && store_.flushNow(); }
   ByteSource* openFile() override {
     // A file the boot couldn't read isn't asked again under the update step: such a read
@@ -343,13 +354,13 @@ struct QueueStore::RemapCard : queueremap::Card {
     if (store_.fileUnread()) return nullptr;
     char file[48], temp[48];
     store_.paths(file, temp, sizeof(file));
-    file_ = store_.storage_.fs().open(file, FILE_READ);
+    bool cardFailed = false;
+    ByteSource* in = files_.open(file, &cardFailed);
     // Only queue.tmp: power went between removing queue.txt and the
     // rename, and a boot with no library kept it as it was (restore()).
-    if (!file_) file_ = store_.storage_.fs().open(temp, FILE_READ);
-    return file_ ? &source_ : nullptr;
+    return in ? in : files_.open(temp, &cardFailed);
   }
-  void closeFile() override { file_.close(); }
+  void closeFile() override { files_.close(); }
   bool rebuild() override { return rebuild_ && rebuild_(ctx_); }
   queuetext::UnknownLines* unknownLines(bool library) override {
     if (!store_.onCard()) return nullptr;
@@ -361,8 +372,7 @@ struct QueueStore::RemapCard : queueremap::Card {
   QueueStore& store_;
   bool (*rebuild_)(void*);
   void* ctx_;
-  File file_;
-  FileSource source_{file_};
+  QueueFiles files_;
 };
 
 bool QueueStore::remap(bool (*rebuild)(void* ctx), void* ctx) {

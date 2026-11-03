@@ -103,6 +103,7 @@ Read readAtBoot(Files& files, const char* file, const char* temp, const TrackCat
           [&]() { failed = files.close(); },
           [&](ByteSource& in) { return queuetext::read(in, catalog, q, pickCurrent, ctx, alloc, release, lookup); },
           lookup);
+      out.faulted = out.faulted || cardFailed || failed;
       if (r.ok) {
         out.got = Got::Whole;
         out.path = path;
