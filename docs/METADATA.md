@@ -3218,7 +3218,8 @@ doesn't list and writes the file again, and a partial library is taken for one t
 knows. Hence these rows' rule: **what such a boot shows is `library.idx`, or the same
 library built for the session, or `/music` walked for the session: never a part of one
 from the records**, and it writes no library and holds the card jobs. A boot that holds its
-jobs sets up no default queue when `queue.txt` itself can't be read (`main.cpp`).
+jobs sets up no default queue when `queue.txt` itself can't be read (`main.cpp`). The queue's
+own two rules are below (**The queue's file**).
 
 - **The session's walk** is the last of what such a boot can show: every track by its path,
   no tags, none of it saved, so the next boot asks again. It costs what a walk at boot does
@@ -3263,11 +3264,78 @@ jobs sets up no default queue when `queue.txt` itself can't be read (`main.cpp`)
   tracks looks the same from here. A build isn't read again for one read that fails, as the headers
   are: it is long, and the session goes on from `library.idx` or the walk, and the next boot
   asks again.
-- **Not this work's, the queue's own:** a `queue.txt` whose own read fails, the rest whole, is
-  still no queue, and the whole library takes its place. And a library that leaves files
-  out with no fault known still cuts the file down to itself: `/music` walked because there
-  are no records (a folder that failed to read looks empty), or T alone because D is absent
-  or failed its checks, and at the next boot the same library loaded.
+- **The queue's file** (`lib/core/QueueFile`, 2026-11-02). Nothing rebuilds `queue.txt`, so:
+  - **A read the card fails is no queue that's gone.** `QueueStore::restore()` reads through
+    FatFs on the card, whose answer the VFS doesn't pass on, and asks again after
+    `tagstore::kBootWaitsMs`, unless an earlier reader of this boot spent them
+    (`Library::bootReadsFailed()`). A whole `queue.tmp` stands in as ever. Each read failed
+    (`Restore::Unread`): the queue is empty for the session, no default queue, nothing
+    written, the file's NVS position and resume point left for the next boot, and the Queue
+    tab says so (`library_row_rescan_unread`). The file isn't asked again this session (such
+    a read with no answer at the update step is a remount under a job: one restart, measured).
+    A file that is missing, cut, or whose own directory entry or chain is damaged
+    (`FR_INT_ERR`, `File::damaged()`) is the file's word, as for the root: the default queue.
+  - **A line leaves the file only when the card says its file is gone.** A library can leave
+    files out with no fault known: `/music` walked through a VFS that can't tell a folder that
+    failed to read from an empty one, or T alone with D absent or failing its checks, and the
+    next boot loads the same library. So its word isn't enough, at any boot. A line it doesn't
+    list goes into the queue by its path (`TrackCatalog::Unlisted`, an id of its own). Then,
+    with the file closed (a question with no answer makes FatFs's next call a remount, which an
+    open file doesn't survive), `queuefile::Lookup` asks `Fs::look()`, FatFs's `f_stat`:
+    `FR_NO_FILE`, `FR_NO_PATH`, a name it can't write or a folder at that path say it's gone,
+    and the file is read once more to leave those lines out, and written again as ever. Anything
+    else is no such word: the line stays, and the first such answer ends the questions for that
+    read (at most about 0.6 s of a card that has stopped answering; `FR_INT_ERR` too: a disk
+    check may bring the file back). Questions stop after 5 s at the boot and 0.5 s at the
+    update step's read back, the lines left staying by their paths for the next read to ask
+    about. A library that lists every line asks nothing.
+  - **Why by path and not by keeping the file aside** (`QueueSaver::keptFile()`, which a first
+    version of this used for any library that might leave files out, and which still serves
+    no library at all and the session's walk). The file stays the queue, so what broke then
+    doesn't arise. It held for one boot, because the library is saved and the next boot loads it
+    as whole: the question is asked at each read now. Playback jumped at the next update step,
+    because `QueueRemap` returned to the file's line and `currentMoved()` started another track:
+    the file's lines are the queue's positions now, and the current line is the one that plays.
+    Position and resume were lost, in sessions with no fault too: they are saved as for any queue,
+    a resume point on a line by its path included. An Auto DJ pick or an edit overwrote the kept
+    file: those lines are entries, and go out with it. An update step that lists them gives them
+    library ids; one that doesn't asks again.
+
+MEASURED on the host, the rig above, before and after, a fault for the time named, `queue.txt` on
+the card after the session and at the next boot, the card mended:
+
+| Card | Before | Now |
+|---|---|---|
+| `queue.txt`'s first sector, a read error or no answer, once; a 2-line queue, 6 tracks | 6 lines: the whole library, for good | 2 lines, at its place: the second read has it |
+| The same, a read error or no answer, lasting; restarts in 180 s | 6 lines; 0 restarts | Queue empty that session; 2 lines, at its place at the next boot; 0 restarts |
+| The last sector of a 36-line queue, 306 tracks, a read error for all of `setup()` | 306 lines | 36 lines |
+| T alone (D and `library.idx` gone, or D failing its checks), a 6-line queue, T lists 4 | 4 lines | 6 lines |
+| T alone, a 36-line queue, T lists 4 of 306 | **4 lines, 2 s after the boot** | 36 lines, 36 entries from the start |
+| The same, the session cut before its walk, the next boot loading the same library | 4 lines | 36 lines |
+| No records, `/music` walked, a folder failing to read for `Library::begin()` alone, 36 lines | 31 lines | 36 lines |
+| No records, `/music` itself failing likewise, 6 lines | 0 lines | 6 lines |
+| T alone, playing a line by its path through the update step | (the line was gone) | The same file plays on: no start, 6 of 6 lines back with library ids |
+| T alone, an add or an Auto DJ pick before the walk | 5 lines (4 and the pick) | 7 lines (6 and the pick) |
+| T alone, a pause on a line by its path, a reboot | (the line was gone) | Back at that line and second |
+| No fault: nothing wrong | 12 sectors read at the boot, 0 written | The same |
+| No fault: a new T without a file also gone from the card, a pause, a reboot | 5 lines; 13 sectors; line and second back | The same, 15 sectors (one question, one read more) |
+
+A fault at each card read over 38 card states, run by run against the tree before: **queue cuts 35 to
+0 at 6 tracks (3,060 boot runs) and 734 to 0 at 306 (26,364 boot runs); 14 to 0 of 1,702 lasting sectors.
+Guard restarts the same: 11, 170, 4,530.** The 2,022 session runs match line for line, and no run has a
+new restart or fewer tracks. In 32 and 1,408 of the boot runs the file ends a line shorter: the
+listener's, where before the whole library went over it.
+
+- **The queue file's costs, left as they are.** A line by its path has its file's name for a title, and
+  no artist, album, cover or Auto DJ row; Go to album says the library isn't ready. The boot's questions
+  are one `f_stat` per line the library doesn't list: about 3-5 ms over the cached directories, about 30
+  ms cold (ESTIMATED from 3.2.1's sector times), so a boot that finds thousands of lines gone may stop
+  at 5 s and leave the rest in the queue until later boots drop them; each fails to play and is skipped
+  as any file gone. In a session with `queue.txt` unread, an edit replaces it, the listener's choice
+  with an empty queue before them (Auto DJ waits on an empty queue: `Wait::Empty`). No PSRAM for a line's
+  path (`Restored::held`): the queue goes without it, and the file is kept (`keptFile()`), with what
+  that costs. No PSRAM for the read's own blocks is still "not a whole queue file", and the default
+  queue goes over it: older than this, and unmeasured.
 - **The card guard** (3.8; the trap of `docs/AUTODJ.md` 6.6): none of this reads anything
   after the boot, and a held session has no job for a remount to restart it under. MEASURED
   on the same rig, a sector that never answers, 180 s: `tags.bin`, 33 restarts before and
@@ -3296,9 +3364,20 @@ jobs sets up no default queue when `queue.txt` itself can't be read (`main.cpp`)
   restart in 3 minutes. (5) A walk to merge on the card and a body sector of `tags.bin` failing
   that way (the compaction first): `[card] compaction FAILED`, no restart, `tags.bin` unchanged.
   (6) `gs` after a compaction: the worker's stack's least left, the deepest path about 100 B
-  deeper (ESTIMATED from `-fstack-usage`: two small frames at its open).
+  deeper (ESTIMATED from `-fstack-usage`: two small frames at its open). **For the queue's file**,
+  the same way: (7) `/.player/queue.txt` failing: `[queue] queue.txt: a read of the card failed: read
+  4 times, and each failed`, `queue.txt unread`; the Queue tab empty with Card read failed at startup;
+  `queue.txt` unchanged, and a reboot with the fault off finds the queue, its line and its second.
+  (8) The same failing once: `read 2 times, and the last was whole`, the queue as it was. (9) With no
+  temporary build: a spare card with T, a queue of tracks T doesn't all list (copy some by PC), then
+  `tags.bin` and `library.idx` removed on a PC: `[queue] restored N of N ... by their paths`; the
+  Queue tab lists those lines by their file names, and one plays; pause it, reboot before the walk
+  ends: that line and second; let the walk and scan run: `after the rebuild`, N of N, nothing heard
+  restarting. (10) One queued file deleted on a PC: `1 no longer there`, the file a line shorter.
+  (11) `ui` after (9): the loop task's lowest, against `loopstack::kMinLeft` (about 3 KB deep, ESTIMATED from `-fstack-usage`: `restore()` 1,056 B, the read's 704 B, or
+  `look()`'s 336 B and FatFs's name buffer on the way to a question).
 
-- The queue is then restored as today (`QueueStore::restore()`).
+- The queue is then restored (`QueueStore::restore()`; **The queue's file**, above).
 - **A power cut mid-save:** if `library.idx` is missing and `library.tmp`
   loads with a good checksum, it is used and renamed (power went between
   the remove and the rename). `queue.tmp` already follows this rule.
@@ -4680,6 +4759,7 @@ counts):
 | The queue, full (the cap: 5,000 entries), with its undo snapshot | −0.12 | 12 B per entry, twice (`QueueModel`). With no saved queue the boot queues the library's first 5,000 (`queueEverything`), so a full queue is the *default* on a big new card; `assign()` takes no snapshot (0.06 MB), and the first edit after it adds one. A whole-library queue of 20k was −0.48 (−0.96 untrimmed) before the cap |
 | AutoDJ: u16 maps, filters, 7 cached slots | −0.16 to −0.17 | MPDJ v2's engine, AUTODJ-INDEX.md 11.6 (the v1 draft's estimate was −0.17 to −0.33). As built (docs/AUTODJ.md): the join's maps and filters 160 KB at 20k, only while Auto DJ is on (155,284 B MEASURED at 19,410 tracks, 2026-10-13); the engine's one block, 19,016 B (its 7 slots in it), the glue's few KB and its `FIL`'s 4.1 KB from the boot, on or off |
 | The sector cache | −0.13 | 3.2.4: 256 sectors, 135,168 B (3.2.7: 0.06 MB more than the 128 first planned) |
+| The queue's tracks by their paths | 0 unless the library leaves queued files out | 3.2.2: their paths in a block that doubles, about as much as those tracks' names would cost in the index that lacks them |
 | `DurationBook` | −0.04, or 0 once lengths come from the index | `lib/core/QueueView.h` |
 | The card worker's job, only while one runs (one at a time) | −0.08 to −0.12 | the largest job: the compaction since 2026-10-09 (115 KB: its 4 KB section buffers, 1 KB run buffers, D's 8 KB; 66 KB before, 3.3.7), then the walk (about 110 KB: the 64 KB scratch, KnownD's 16 KB, DFLD's 8 KB buffer, the 2 KB Δ histogram, the journal's write buffer). The scan: its 4 KB buffer, the record, the `FIL`, a 100-record chunk, the resume set (about 60 KB), and its View (about 74 KB at 32 chunks, 53 KB before). The doubtful files go to `walk.jnl`, not RAM (3.2.3) |
 | **Headroom** | **about 0.34 to 0.66** | positive in the worst case since the queue's cap (it was about −0.16 to 0.29 with a whole-library queue); the sector cache's 256 sectors took 0.06 MB of it (3.2.7); 0.20 to 0.65 with the v1 draft's AutoDJ estimate |
@@ -5704,7 +5784,8 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   4. **Live** (`Do::Live`, one pass, `leaveFence()`): the catalog's index
      back, `CardTasks::live()` (`lived()`: the index readable; the jobs
      start over with it; "Library updated"), `remapFinish()` (`queue.txt`
-     read back with the new ids, the player unfenced and told),
+     read back with the new ids, a line the library doesn't list dropped
+     only when the card says it's gone: 3.2.2; the player unfenced and told),
      `sleepEntry` re-keyed when the same file plays on, the lengths
      learned forgotten, Thumbs' pools back, `libraryChanged()`.
   5. **The save** (`Out::save`: `Job::Save` at priority 0, 1 while the
