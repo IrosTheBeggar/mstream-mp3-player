@@ -5666,7 +5666,8 @@ void test_a_read_again_that_fails_keeps_the_first() {
   {
     // A read that isn't whole: nothing asked of the card, whatever its lines.
     QueueModel q;
-    TEST_ASSERT_FALSE(readAsking(cut, c, q, lookup).ok);
+    const std::string shortOfLines = std::string("mstream-queue 1 5 0 7\n") + kFiles[0] + "\n/music/There.mp3\n";
+    TEST_ASSERT_FALSE(readAsking(shortOfLines, c, q, lookup).ok);
     TEST_ASSERT_EQUAL_UINT32(0, lookup.kept() + lookup.gone() + lookup.unasked());
   }
   for (const bool opens : {false, true}) {

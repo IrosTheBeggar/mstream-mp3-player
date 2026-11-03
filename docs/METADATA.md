@@ -3264,7 +3264,7 @@ own two rules are below (**The queue's file**).
   tracks looks the same from here. A build isn't read again for one read that fails, as the headers
   are: it is long, and the session goes on from `library.idx` or the walk, and the next boot
   asks again.
-- **The queue's file** (`lib/core/QueueFile`, 2026-11-02). Nothing rebuilds `queue.txt`, so:
+- **The queue's file** (`lib/core/QueueFile`, 2026-11-03). Nothing rebuilds `queue.txt`, so:
   - **A read the card fails is no queue that's gone.** `QueueStore::restore()` reads through
     FatFs on the card, whose answer the VFS doesn't pass on, and asks again after
     `tagstore::kBootWaitsMs`, unless an earlier reader of this boot spent them
@@ -3391,8 +3391,9 @@ listener's, where before the whole library went over it.
   Queue tab lists those lines by their file names, and one plays; pause it, reboot before the walk
   ends: that line and second; let the walk and scan run: `after the rebuild`, N of N, nothing heard
   restarting. (10) One queued file deleted on a PC: `1 no longer there`, the file a line shorter.
-  (11) `ui` after (9): the loop task's lowest, against `loopstack::kMinLeft` (about 3 KB deep, ESTIMATED from `-fstack-usage`: `restore()` 1,056 B, the read's 704 B, or
-  `look()`'s 336 B and FatFs's name buffer on the way to a question).
+  (11) `ui` after (9): the loop task's lowest, against `loopstack::kMinLeft` (about 3 KB deep,
+  ESTIMATED from `-fstack-usage`: `restore()` 992 B, the read's 704 B, or `look()`'s 336 B and
+  FatFs's name buffer on the way to a question).
 
 - The queue is then restored (`QueueStore::restore()`; **The queue's file**, above).
 - **A power cut mid-save:** if `library.idx` is missing and `library.tmp`
