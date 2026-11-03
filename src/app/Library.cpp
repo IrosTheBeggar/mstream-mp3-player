@@ -255,7 +255,8 @@ bool Library::openRecords() {
     return false;
   }
   int64_t t0 = esp_timer_get_time();
-  const uint32_t reads = cardroot::readAtBoot(*fat_, scratch, 1024, root_, [](uint32_t ms) { delay(ms); });
+  void (*wait)(uint32_t) = [](uint32_t ms) { delay(ms); };
+  const uint32_t reads = cardroot::readAtBoot(*fat_, scratch, 1024, root_, wait);
   psramFree(scratch);
   stats_.rootMs = msSince(t0);
   if (reads > 1) {
@@ -272,8 +273,17 @@ bool Library::openRecords() {
   t0 = esp_timer_get_time();
   store_ = psramNew<tagstore::TagStore>(*fat_, c, psramAlloc, psramFree);
   if (!store_) return false;
-  stats_.opened = store_->open();
+  // The boot's waits are for a glitch: a card still failing after them won't be back
+  // for the next reader, which reads once.
+  if (root_->readFailed()) wait = nullptr;
+  uint32_t opens = 1;
+  stats_.opened = store_->openAtBoot(wait, &opens);
   stats_.openMs = msSince(t0);
+  if (opens > 1) {
+    Serial.printf("[lib] the device's records: a read of the card failed: read %lu times, %s\n", (unsigned long)opens,
+                  store_->readFailed() ? "and each failed" : "and the last was whole");
+  }
+  if (store_->readFailed()) wait = nullptr;
   LibraryUpdate::Config u;
   u.fs = fat_;
   u.store = store_;
@@ -285,6 +295,7 @@ bool Library::openRecords() {
   u.walk = walkMusic;
   u.walkCtx = this;
   u.nowUs = nowUs;
+  u.wait = wait;
   update_ = psramNew<LibraryUpdate>(u);
   if (!update_) {
     psramDelete(store_);
@@ -338,7 +349,8 @@ bool Library::beginCard() {
   stats_.build = b.build;
   stats_.built = b.built;
   softStale_ = b.softStale;
-  cardJobsHeld_ = b.decision.holdJobs;
+  if (b.decision.holdJobs) holdCardJobs(b.decision.why);
+  listsCard_ = !b.sessionWalked();
   if (b.compacted) {
     const tagstore::TagStore::Compacted& c = b.compaction;
     Serial.printf("[lib] the journals compacted into tags.bin in %.0f ms: %s (%lu records, %lu chunks merged%s)\n",
@@ -355,7 +367,11 @@ bool Library::beginCard() {
                   update_->transferBad() ? "; T left out" : "", (unsigned)index_->memory().buildPeak);
   }
   if (b.journalsLeft) Serial.println("[lib] the journals couldn't be compacted first: built from tags.bin alone");
-  if (b.readErrors) {
+  if (b.decision.holdJobs && b.readErrors) {
+    Serial.printf("[lib] a read of the card's records FAILED as they were built (the card?): nothing saved, the marker "
+                  "kept%s\n",
+                  b.keptSaved && b.ok ? ", library.idx loaded instead" : "");
+  } else if (b.readErrors) {
     Serial.println("[lib] a read of the card's records FAILED as they were built (the card?): what was built is "
                    "saved as one that left records out (the next boot rebuilds it at its scan's end)");
   }
@@ -367,10 +383,17 @@ bool Library::beginCard() {
   if (b.saveFailed) Serial.println("[lib] couldn't save library.idx (the next boot builds again)");
   if (b.noMemory && b.decision.action == libraryboot::Action::Load) {
     Serial.println("[lib] no PSRAM to load library.idx: no library (the built-in tracks still play)");
+  } else if (!b.ok && b.decision.sessionOnly) {
+    Serial.printf("[lib] no library this session (%s; the built-in tracks still play): a restart asks again\n",
+                  b.noMemory ? "out of PSRAM" : "no walk");
   } else if (!b.ok) {
     Serial.printf("[lib] the build from the records FAILED (%s)\n", b.noMemory ? "out of PSRAM" : "unreadable");
   }
-  writeDeviceTxt();
+  if (b.sessionWalked()) {
+    Serial.println("[lib] that walk is for this session, nothing of it saved: a restart asks again");
+  }
+  // (A boot that holds its jobs writes nothing it can leave for the next.)
+  if (!cardJobsHeld_) writeDeviceTxt();
   stats_.psramUsed = static_cast<int32_t>(psBefore) - static_cast<int32_t>(psramFreeNow());
   stats_.internalDelta = static_cast<int32_t>(internalFree()) - static_cast<int32_t>(stats_.internalFreeBefore);
   if (stats_.internalMinDuring == 0) stats_.internalMinDuring = internalFree();
@@ -379,11 +402,12 @@ bool Library::beginCard() {
   cardroot::describe(*root_, rootLine, sizeof(rootLine));
   const tagstore::DeviceInfo& di = store_->device();
   Serial.printf("[lib] the card: %s; D %s (%lu records, %lu journal chunks%s), read in %.0f ms + %.0f ms%s%s\n",
-                rootLine, di.present ? "present" : "none", (unsigned long)(di.present ? di.tags.recordCount : 0),
+                rootLine, store_->readFailed() ? "unread (a read of the card failed)" : di.present ? "present" : "none",
+                (unsigned long)(di.present ? di.tags.recordCount : 0),
                 (unsigned long)store_->chunkCount(), store_->hasWalk() ? ", a walk to merge" : "", stats_.rootMs,
                 stats_.openMs, store_->twins() || b.tmpSettled.twins ? "; TWINS: the card wants a disk check on a PC" : "",
-                store_->tmpKept() ? "; tags.tmp KEPT: alone and unchecked (no PSRAM for its check), no compaction "
-                                    "until the next boot checks it"
+                store_->tmpKept() ? "; tags.tmp KEPT: alone and unchecked or not renamed, no compaction until the next "
+                                    "boot takes it"
                                   : "");
   Serial.printf("[lib] library.idx %s%s%s: %s (%s)%s in %.0f ms (header %.0f ms)\n",
                 libraryboot::savedName(b.saved, root_->readFailed()),

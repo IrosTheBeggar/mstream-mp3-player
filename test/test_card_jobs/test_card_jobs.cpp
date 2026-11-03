@@ -462,7 +462,61 @@ void test_the_boots_decision() {
       }
     }
   }
+  // The card failed a read of D or its journals: nothing is known of the records. A
+  // library.idx that says it is one is loaded, whichever identity it has; none to load,
+  // /music walked for the session (a build without D would leave out every file T
+  // doesn't list). The jobs hold either way, and nothing is saved, so a marker stays.
+  for (bool marker : {false, true}) {
+    for (int r = 0; r < 4; ++r) {
+      for (Saved s : {Saved::Matches, Saved::Differs, Saved::Outdated, Saved::Corrupt, Saved::Missing, Saved::Unread}) {
+        libraryboot::In in;
+        in.saved = s;
+        in.marker = marker;
+        in.transfer = r & 1;
+        in.rootUnread = r & 2;
+        in.deviceUnread = true;
+        const libraryboot::Decision d = libraryboot::decide(in);
+        TEST_ASSERT_TRUE(d.holdJobs);
+        const bool load = s == Saved::Matches || s == Saved::Differs;
+        TEST_ASSERT_TRUE(d.action == (load ? Action::Load : Action::Walk));
+        TEST_ASSERT_EQUAL(!load, d.sessionOnly);
+        TEST_ASSERT_FALSE(d.removeMarker);
+        TEST_ASSERT_FALSE(d.compactFirst);
+        TEST_ASSERT_TRUE(d.why[0] != 0);
+      }
+    }
+  }
+  // The card failed a read of library.idx: it may well be whole, and nothing goes over
+  // it. Records that list the card give the library for the session, nothing saved. A
+  // root unread, or no D (T alone leaves out what it doesn't list): /music walked for it.
+  for (bool marker : {false, true}) {
+    for (int r = 0; r < 8; ++r) {
+      libraryboot::In in;
+      in.saved = Saved::Unread;
+      in.marker = marker;
+      in.transfer = r & 1;
+      in.device = in.recordsList = r & 2;
+      in.rootUnread = r & 4;
+      const libraryboot::Decision d = libraryboot::decide(in);
+      const bool build = in.recordsList && !in.rootUnread;
+      TEST_ASSERT_TRUE(d.holdJobs);
+      TEST_ASSERT_TRUE(d.action == (build ? Action::Build : Action::Walk));
+      TEST_ASSERT_TRUE(d.sessionOnly);
+      TEST_ASSERT_EQUAL(build, d.compactFirst);
+      TEST_ASSERT_FALSE(d.removeMarker);
+      TEST_ASSERT_TRUE(d.why[0] != 0);
+    }
+  }
+  // D there, and a build from it wouldn't list the card (never walked, no T): the walk.
+  {
+    libraryboot::In in;
+    in.saved = Saved::Unread;
+    in.device = true;
+    TEST_ASSERT_TRUE(libraryboot::decide(in).action == Action::Walk);
+    TEST_ASSERT_TRUE(libraryboot::decide(in).sessionOnly);
+  }
   // What the log calls them, where the card's data can't be compared.
+  TEST_ASSERT_EQUAL_STRING("unread (a read of the card failed)", libraryboot::savedName(Saved::Unread));
   TEST_ASSERT_EQUAL_STRING("built for other card data", libraryboot::savedName(Saved::Differs));
   TEST_ASSERT_EQUAL_STRING("matches the card", libraryboot::savedName(Saved::Matches));
   TEST_ASSERT_EQUAL_STRING("built from a transfer", libraryboot::savedName(Saved::Differs, true));

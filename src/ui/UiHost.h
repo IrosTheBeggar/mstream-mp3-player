@@ -80,8 +80,9 @@ struct AppState {
   // The Output tab's Library row (3.3.6): where the index's tracks' names
   // come from (librarytext::sourcesOf(), counted at each build or load),
   // and whether the card's records are here (Rescan tags is the card's).
-  // `libraryHeld`: they are, but the boot couldn't read the card's root, so no
-  // card jobs run this session: the sources shown, Rescan refused.
+  // `libraryHeld`: they are, but the card failed a read the jobs would have to trust
+  // (Library::cardJobsHeld()), so none run this session: the sources shown, Rescan
+  // refused.
   uint32_t libTransfer = 0, libDevice = 0, libNone = 0;
   bool libraryRecords = false;
   bool libraryHeld = false;

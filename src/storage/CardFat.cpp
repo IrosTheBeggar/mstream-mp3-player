@@ -144,6 +144,17 @@ tagstore::File* FatFs::openRead(const char* path, bool* cardFailed) {
   return f;
 }
 
+tagstore::Fs::Entry FatFs::entry(const char* path) {
+  Entry e;
+  tagstore::File* f = openRead(path, &e.cardFailed);
+  if (f) {
+    e.there = true;
+    e.firstCluster = static_cast<FatFile*>(f)->firstCluster();
+    close(f);
+  }
+  return e;
+}
+
 bool FatFs::close(tagstore::File* file) {
   if (!file) return false;
   auto* f = static_cast<FatFile*>(file);

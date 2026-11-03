@@ -45,8 +45,10 @@ public:
 
   // At boot, after the library: the saved queue and position, and the
   // resume point (the player's start point). False: none (or unreadable);
-  // the caller sets up a default queue.
-  bool restore();
+  // the caller sets up a default queue. `libraryListsCard` false
+  // (Library::listsCard()): tracks it doesn't list may still be on the card, so the
+  // file keeps them, as with no library at all, for the next boot.
+  bool restore(bool libraryListsCard = true);
   // The repeat mode saved (Off when none is, or an unknown value), logged.
   // At boot, before restore() and the first play.
   PlaybackController::Repeat loadRepeat();

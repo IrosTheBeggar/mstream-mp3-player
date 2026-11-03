@@ -113,10 +113,9 @@ private:
 // for the readers' streams. `out` is a few KB: a heap or PSRAM object.
 void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out);
 
-// read(), and again while the card fails it (readFailed()), with `wait` between:
-// most faults are a glitch, and at the boot nothing else is held up. These are
-// short, against what the boot decides from the answer. How many reads it took.
-constexpr uint32_t kBootWaitsMs[] = {100, 300, 1000};
+// read(), and again while the card fails it (readFailed()), with `wait` between (the
+// boot's: tagstore::kBootWaitsMs). How many reads it took.
+using tagstore::kBootWaitsMs;
 uint32_t readAtBoot(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out, void (*wait)(uint32_t ms));
 
 // One line for the boot's log ("T tags-0000002a.bin, generation 42 (commit

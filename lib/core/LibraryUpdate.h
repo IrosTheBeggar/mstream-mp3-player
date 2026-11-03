@@ -29,6 +29,15 @@
 // steps don't write it again for a short PSRAM (bootBuildShort(): the next
 // boot would only fail the same build).
 //
+// A read the card fails is none of those. library.idx's (the settling, the marker's
+// entry, the header, the load, each read again by Config::wait's waits) makes it
+// Saved::Unread, not missing or corrupt; D's is TagStore::readFailed(); one of T or D
+// as a build reads them brings back the library.idx it would have gone over, if there
+// is one. Such a boot writes no library and holds the card jobs (Decision::holdJobs);
+// what it shows is library.idx, or the same library built for the session, or /music
+// walked for the session (Booted::sessionWalked()): never a part of one from the records,
+// or the queue's restore would cut queue.txt down to it.
+//
 // The update step (3.4.2), asked by the scan's end, a walk that found new
 // files (U11), the console (gb, gb!, g0), the boot's soft-stale index:
 //
@@ -233,6 +242,10 @@ public:
     void* walkCtx = nullptr;
     // A microsecond clock for the timings (esp_timer); nullptr: none (0).
     uint64_t (*nowUs)() = nullptr;
+    // The boot's waits between reads of library.idx the card failed
+    // (tagstore::kBootWaitsMs); nullptr: one read. (A card still failing after an
+    // earlier reader's tries won't be back for this one.)
+    void (*wait)(uint32_t ms) = nullptr;
   };
 
   explicit LibraryUpdate(const Config& c);
@@ -263,6 +276,16 @@ public:
     // library.idx matches the card: loaded instead, the marker removed
     // (bootBuildShort()).
     bool loadedShort = false;
+    // The card failed a read of T or D as the build read them, with a library.idx that
+    // says it is one on the card: nothing of the build counts. library.idx is loaded
+    // instead, nothing saved, the marker kept, and the decision holds the card jobs.
+    // (With none, or that one failing too: the session's walk below, and the same.)
+    bool keptSaved = false;
+    // /music walked for this session at a boot that holds its jobs (Decision::sessionOnly):
+    // nothing of it saved, so the next boot asks again. Its listing can't be told whole on
+    // a card in trouble (a folder that failed to read looks empty), so what it doesn't list
+    // isn't known to be gone: the queue's restore keeps those lines (Library::listsCard()).
+    bool sessionWalked() const { return walked && decision.sessionOnly; }
     // The timings (Config::nowUs).
     float peekMs = 0, loadMs = 0, compactMs = 0, buildMs = 0, saveMs = 0;
   };
@@ -433,7 +456,11 @@ private:
   // The build of the records (T and D), or the walk (none): into the index.
   // `update`: the update step's (its files opened on the worker).
   // `readErrors`: a read of T or D failed (whatever came of it).
-  bool buildIndex(bool update, LibraryBuilder::Result* r, bool* walked, bool* noMemory, bool* cardGone,
+  // The boot's (not `update`): a read of T or D the card fails (its open too) ends it,
+  // the index cleared and nothing walked (*cardGone); one that fails on a file's own
+  // damaged records is the file's. `noWalk`: no records usable ends it with no walk
+  // (Decision::sessionOnly's: the boot walks, and saves nothing).
+  bool buildIndex(bool update, bool noWalk, LibraryBuilder::Result* r, bool* walked, bool* noMemory, bool* cardGone,
                   bool* readErrors);
   bool records() const;
   // No T in use and D there but never walked: a build lists only its rows.
