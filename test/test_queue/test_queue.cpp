@@ -5208,6 +5208,7 @@ queuetext::Restored readAsking(const std::string& text, const TrackCatalog& c, Q
 }  // namespace
 
 void test_unlisted_tracks_answer_by_their_paths() {
+  const long live0 = Heap::live;
   TrackCatalog::Unlisted table(Heap::alloc, Heap::release);
   TrackCatalog c(nullptr);
   c.setUnlisted(&table);
@@ -5243,6 +5244,9 @@ void test_unlisted_tracks_answer_by_their_paths() {
   for (uint32_t i = 0; i < 300; ++i) TEST_ASSERT_EQUAL_STRING(many[i].c_str(), pathOf(c, ids[i]).c_str());
   TEST_ASSERT_EQUAL_UINT32(303, table.count());
   // Never one block for them all: about what they hold, and no doubling's slack.
+  size_t held = table.count() * sizeof(char*);
+  for (uint32_t i = 0; i < table.count(); ++i) held += std::strlen(table.path(TrackCatalog::kUnlisted + i)) + 1;
+  TEST_ASSERT_GREATER_OR_EQUAL(held, table.memoryBytes());
   TEST_ASSERT_LESS_THAN(40 * 1024, table.memoryBytes());
   // A path longer than a block takes one of its own. (No line is: the read's own limit.)
   const std::string huge = "/music/" + std::string(100000, 'x');
@@ -5263,6 +5267,7 @@ void test_unlisted_tracks_answer_by_their_paths() {
   for (uint32_t i = 0; i < 300; ++i) TEST_ASSERT_EQUAL_STRING(many[i].c_str(), pathOf(c, ids[i]).c_str());
   // Forgotten, and the memory back.
   table.clear();
+  TEST_ASSERT_EQUAL_INT(live0, Heap::live);
   TEST_ASSERT_EQUAL_UINT32(0, table.count());
   TEST_ASSERT_EQUAL_size_t(0, table.memoryBytes());
   TEST_ASSERT_FALSE(c.valid(a));
@@ -5524,6 +5529,56 @@ void test_no_room_for_by_path_lines_keeps_the_file() {
   TEST_ASSERT_EQUAL_STRING(file.c_str(), r.st.file.c_str());
 }
 
+// A read back the card fails, once: read again, the queue and what plays as they were. For
+// good: the queue goes, and the file is kept from its line, as ever. The questions begin
+// again with each read.
+void test_a_read_back_that_fails_is_read_again() {
+  struct Failed : MemorySource {
+    using MemorySource::MemorySource;
+    bool failed() const override { return true; }
+  };
+  struct Flaky : ByPathCard {
+    using ByPathCard::ByPathCard;
+    int fails = 0, opens = 0;
+    std::unique_ptr<Failed> bad;
+    ByteSource* openFile() override {
+      ++opens;
+      if (fails-- > 0) {
+        bad.reset(new Failed(st.file.data(), st.file.size()));
+        return bad.get();
+      }
+      return MemCard::openFile();
+    }
+  };
+  ByPathRig r(10);
+  r.player.play(5);
+  for (uint32_t t = 0; t < 3000; t += 100) r.saver.loop(t);
+  const std::string file = r.st.file;
+  const int plays = r.audio.plays;
+  Flaky once(r.saver, r.st, r.player, r.lookup, [&] { return true; });
+  once.fails = 1;
+  queueremap::Result res = queueremap::run(r.q, r.saver, r.player, r.c, once, 5000);
+  TEST_ASSERT_EQUAL_INT(2, once.opens);
+  TEST_ASSERT_EQUAL_INT(2, once.asks);
+  TEST_ASSERT_TRUE(res.read.ok);
+  TEST_ASSERT_TRUE(res.read.currentKept);
+  TEST_ASSERT_EQUAL_INT(plays, r.audio.plays);
+  TEST_ASSERT_TRUE(paths(r.q, r.c) == r.lines);
+  TEST_ASSERT_EQUAL_UINT32(5, r.table.count());
+  TEST_ASSERT_TRUE(r.saver.fileIsQueue());
+  // Twice: cleared, and the file as it was, from the line that played.
+  Flaky twice(r.saver, r.st, r.player, r.lookup, [&] { return true; });
+  twice.fails = 2;
+  res = queueremap::run(r.q, r.saver, r.player, r.c, twice, 6000);
+  TEST_ASSERT_EQUAL_INT(2, twice.opens);
+  TEST_ASSERT_FALSE(res.read.ok);
+  TEST_ASSERT_EQUAL_UINT32(0, r.q.size());
+  TEST_ASSERT_FALSE(r.saver.fileIsQueue());
+  TEST_ASSERT_EQUAL_INT(5, r.saver.fileLine());
+  settle(r.saver, 6000);
+  TEST_ASSERT_EQUAL_STRING(file.c_str(), r.st.file.c_str());
+}
+
 // A source that says it failed is no whole file, however it reads: above all when the
 // failed read was in the last line, whose first part counts as that line. The queue is
 // left alone. The same file cut there with no failure is one line less, as ever.
@@ -5608,6 +5663,12 @@ void test_a_read_again_that_fails_keeps_the_first() {
   queuefile::Lookup lookup(fs, table);
   const std::string text = std::string("mstream-queue 1 3 0 7\n") + kFiles[0] + "\n/music/There.mp3\n/music/Gone.mp3\n";
   const std::string cut = text.substr(0, text.size() - 30);
+  {
+    // A read that isn't whole: nothing asked of the card, whatever its lines.
+    QueueModel q;
+    TEST_ASSERT_FALSE(readAsking(cut, c, q, lookup).ok);
+    TEST_ASSERT_EQUAL_UINT32(0, lookup.kept() + lookup.gone() + lookup.unasked());
+  }
   for (const bool opens : {false, true}) {
     QueueModel q;
     lookup.begin();
@@ -5748,6 +5809,7 @@ int main(int, char**) {
   RUN_TEST(test_the_update_step_asks_again_and_drops_what_is_gone);
   RUN_TEST(test_a_rebuild_with_no_library_asks_nothing);
   RUN_TEST(test_no_room_for_by_path_lines_keeps_the_file);
+  RUN_TEST(test_a_read_back_that_fails_is_read_again);
   RUN_TEST(test_a_source_that_failed_is_no_whole_file);
   RUN_TEST(test_no_room_for_a_line_keeps_the_order_for_the_read_again);
   RUN_TEST(test_a_read_again_that_fails_keeps_the_first);

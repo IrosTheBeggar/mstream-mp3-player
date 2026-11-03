@@ -59,6 +59,8 @@
 // moves meanwhile didn't touch): "Try again" after a boot with no library
 // brings the whole queue back where it was.
 //
+// The file that won't read back is read once more, at once, before the queue goes.
+//
 // A line the rebuilt library doesn't list leaves the file only when the card says its
 // file is gone (Card::unknownLines(): queuefile::Lookup, docs/METADATA.md 3.2.2): the
 // queue keeps the rest by their paths, the file stays the queue, and the track that plays

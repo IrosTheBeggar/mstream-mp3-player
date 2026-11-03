@@ -162,7 +162,16 @@ Result Carry::finish(QueueModel& queue, QueueSaver& saver, PlaybackController& p
     return queuetext::read(in, catalog, queue, thePosition, &position_, alloc_, free_, unknown);
   };
   if (res_.via == Via::File) {
-    res_.read = queuefile::readSettled([&]() { return card.openFile(); }, [&]() { card.closeFile(); }, readIn, unknown);
+    const auto fromFile = [&]() {
+      return queuefile::readSettled([&]() { return card.openFile(); }, [&]() { card.closeFile(); }, readIn, unknown);
+    };
+    res_.read = fromFile();
+    // Once more, at once: the queue goes for the session otherwise, and most read errors
+    // are a glitch. (With no answer FatFs's next call is a remount, whoever's: no worse here.)
+    if (!res_.read.ok) {
+      unknown = card.unknownLines(!res_.noLibrary);
+      res_.read = fromFile();
+    }
   } else if (res_.via == Via::Memory) {
     MemorySource text(text_, textSize_);
     res_.read = queuefile::readSettled(

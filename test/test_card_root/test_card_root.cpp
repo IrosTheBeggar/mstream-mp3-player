@@ -1043,6 +1043,7 @@ void test_on_fatfs_a_read_of_queue_txt_that_fails_is_never_no_queue() {
       d.failFrom = d.failTo = UINT64_MAX;
       QueueCard::s_waits = nullptr;
       TEST_ASSERT_TRUE_MESSAGE(r.got == queuefile::Got::Unread, msg);
+      TEST_ASSERT_TRUE_MESSAGE(r.faulted, msg);
       TEST_ASSERT_EQUAL_size_t_MESSAGE(0, c.q.size(), msg);
       TEST_ASSERT_EQUAL_UINT32_MESSAGE(4, r.reads, msg);
       TEST_ASSERT_EQUAL_size_t_MESSAGE(3, waits.size(), msg);

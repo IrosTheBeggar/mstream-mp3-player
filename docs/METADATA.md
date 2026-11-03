@@ -3277,9 +3277,11 @@ own two rules are below (**The queue's file**).
     shuffle toggled, an add undone before its write, are nothing the listener chose instead). A read
     that fails in the last line counts the same (`ByteSource::failed()`): what came before it reads
     as that line, and the count holds, so it would have dropped that line for good, at the update
-    step's read back too, which goes through FatFs now. A file that is missing, cut, or whose own
-    directory entry or chain is damaged (`FR_INT_ERR`, `File::damaged()`) is the file's word, as for
-    the root: the default queue.
+    step's read back too, which goes through FatFs now. That read back goes again at once if it fails
+    (no waits: the loop is held), and if that fails the session is in the same state as the boot's:
+    the queue empty, what plays stopped, and the file with its line and resume point for the next boot.
+    A file that is missing, cut, or whose own directory entry or chain is damaged (`FR_INT_ERR`,
+    `File::damaged()`) is the file's word, as for the root: the default queue.
   - **A line leaves the file only when the card says its file is gone.** A library can leave
     files out with no fault known: `/music` walked through a VFS that can't tell a folder that
     failed to read from an empty one, or T alone with D absent or failing its checks, and the
@@ -3338,8 +3340,9 @@ listener's, where before the whole library went over it.
   ms cold (ESTIMATED from 3.2.1's sector times). Each read asks from the first line, so a line past what
   5 s reaches stays in the queue until those before it are listed or gone, even if its file is gone: it
   fails to play and is skipped, as any file gone. In a session with `queue.txt` unread, a play or an add
-  replaces it, about 2 s later: Now Playing and the Queue tab say a restart may bring it back, but nothing
-  stops the listener (Auto DJ waits on an empty queue: `Wait::Empty`). **A question with no answer at
+  replaces it, about 2 s later: Now Playing and the Queue tab say a restart may bring it back (in words
+  that say at startup, for a read back's fault too), but nothing stops the listener (Auto DJ waits on an
+  empty queue: `Wait::Empty`). **A question with no answer at
   the update step's read back restarts the player once**, its save under way (MEASURED, with the
   directory sector cold, and no restart in the tree before: a file gone needs no read there). The queue
   is flushed, the next boot is fine and it doesn't repeat; the same holds for a read of `queue.txt` there,

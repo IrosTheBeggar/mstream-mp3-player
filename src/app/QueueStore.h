@@ -61,8 +61,8 @@ public:
   // file keeps them, as with no library at all, for the next boot. `wait`: the boot's
   // waits between reads the card fails (tagstore::kBootWaitsMs); nullptr: one read.
   Restore restore(bool libraryListsCard = true, void (*wait)(uint32_t ms) = nullptr);
-  // The boot couldn't read the file, and nothing has replaced it since: the first write of
-  // a queue with something in it will.
+  // The boot, or a read back (remapFinish()), couldn't read the file, and the queue is empty
+  // for it. Nothing has replaced it since: the first write of a queue with something in it will.
   bool fileUnread() const { return unread_; }
   // The repeat mode saved (Off when none is, or an unknown value), logged.
   // At boot, before restore() and the first play.
@@ -128,7 +128,11 @@ private:
   // The queue's files, read: through FatFs on the card, the VFS on the flash.
   struct QueueFiles;
   bool onCard() const { return storage_.onCard() && cardfat::ready(); }
-  // What leaves the queue empty of a file the boot couldn't read isn't saved over it.
+  // Nobody could read the file: the queue is empty, and the file keeps its line and its
+  // resume point for the next boot (no read of it again this session: such a read with no
+  // answer is a remount, with a job under way a restart).
+  void markUnread();
+  // What leaves the queue empty of such a file isn't saved over it.
   void keepUnread();
 
   LocalStorage& storage_;

@@ -131,11 +131,8 @@ QueueStore::Restore QueueStore::restore(bool libraryListsCard, void (*wait)(uint
   if (onCard() && (got.faulted || lookup_.failed())) fat_.echoNow();
   if (got.got == queuefile::Got::Unread) {
     // Taken for no queue, a default one would be saved over a file that is only unread.
-    // Nothing of it is known, so the saver isn't told otherwise: the file keeps its line
-    // and its resume point for the next boot (or the update step's read back) until an edit.
     saver_.keptFile(saved.generation, saved.have ? saved.position : -1);
-    saver_.loadedResume(QueueResume{});
-    unread_ = true;
+    markUnread();
     Serial.println("[queue] queue.txt unread (a read of the card failed): no queue this session, the file left as it is");
     return Restore::Unread;
   }
@@ -227,10 +224,17 @@ void QueueStore::saveRepeat(PlaybackController::Repeat r) {
   nvslater::putU8(kNvsNamespace, nvslayout::kRepeatKey, static_cast<uint8_t>(r));
 }
 
+void QueueStore::markUnread() {
+  unread_ = true;
+  saver_.loadedResume(QueueResume{});  // (so not removed for an empty queue: stepResume())
+}
+
 void QueueStore::keepUnread() {
   // (A shuffle toggled, an add undone before its write: nothing the listener chose
   // instead of a queue that may yet come back.)
-  if (unread_ && queue_.empty()) saver_.keptFile(saver_.generation(), saver_.fileLine());
+  if (!unread_ || !queue_.empty()) return;
+  saver_.abort();  // (a snapshot's write goes on without the queue, and would replace the file)
+  saver_.keptFile(saver_.generation(), saver_.fileLine());
 }
 
 void QueueStore::loop(uint32_t nowMs) {
@@ -403,6 +407,8 @@ bool QueueStore::remapBegin(size_t textRoom) {
 bool QueueStore::remapFinish(bool rebuilt) {
   if (!carrying()) return false;
   const queueremap::Result r = carry_->finish(queue_, saver_, player_, catalog_, *card_, rebuilt, millis());
+  // (finish() told the saver: keptFile().)
+  if (!r.read.ok) markUnread();
   logRemap(r);
   return r.read.ok && r.read.currentKept;
 }
