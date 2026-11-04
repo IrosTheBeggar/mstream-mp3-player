@@ -817,7 +817,7 @@ void CardTasks::report() const {
   const uint32_t internalMin = worker_.internalMin();
   char lowest[24] = "(no step)";
   if (internalMin != UINT32_MAX) snprintf(lowest, sizeof(lowest), "%lu B", (unsigned long)internalMin);
-  Serial.printf("[card] the worker: %s, %lu steps, its 6 KB stack's least left %lu B (this life %lu B)%s; internal "
+  Serial.printf("[card] the worker: %s, %lu steps, its 7.5 KB stack's least left %lu B (this life %lu B)%s; internal "
                 "RAM free %u B, lowest %s while a step ran, %u B since the boot\n",
                 worker_.alive() ? "up" : "not running", (unsigned long)worker_.steps(),
                 (unsigned long)worker_.stackLeastLeft(), (unsigned long)worker_.stackLeft(),

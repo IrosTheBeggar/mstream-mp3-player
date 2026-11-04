@@ -3757,7 +3757,7 @@ Queue, Dance and Output (with its Pair and About pages).
   the 96 px size costs more than the spike's 1/8, which skips the IDCT.)
   Its card reads are 4 KB each (while it
   holds the SPI bus or the FAT lock, priority inheritance lifts it, ~3 ms);
-  and **no new job starts while a list moves**. **Its RAM:** a 6 KB stack in
+  and **no new job starts while a list moves**. **Its RAM:** a 7.5 KB stack in
   internal RAM (a task that reads the card or the flash can't have its
   stack in PSRAM), only while it lives: it is made for the first job and
   ends after 3 s without one. It drives lgfx_tjpgd itself with its 3.9 KB
@@ -3886,7 +3886,7 @@ members, in PSRAM with the Ui); the Queue and Output screens added ~160 B more (
 Bluetooth session and the link's published state, the pairing's name; the
 scan list and the learned track lengths are in PSRAM). The boot log's
 `[ui] internal RAM ... before the UI, ... after` line has the rest. The covers add ~340 KB of PSRAM (the
-LRU and the worker's buffers) and, only while the worker lives, its 6 KB
+LRU and the worker's buffers) and, only while the worker lives, its 7.5 KB
 stack.
 
 ## UI spike (browsing UI groundwork)

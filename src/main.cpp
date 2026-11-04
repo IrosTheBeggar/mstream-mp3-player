@@ -1025,8 +1025,8 @@ static bool walkAndRebuild() {
 
 void MainUiHost::rescanLibrary() {
   if (rescanRestarts()) {
-    Serial.println("[ui] try again: no card jobs this session: the queue saved, restarting");
-    queueStore.flushNow();
+    Serial.println("[ui] try again: no card jobs this session: restarting");
+    queueStore.flushNow();  // (it says how that went)
     restartAtMs = millis() + 1200;  // the toast shows first
     return;
   }
@@ -3004,9 +3004,8 @@ static void stepCardGuard() {
   if (cardTasks->worker().busy() || cardTasks->libraryWrite() || cardTasks->updating() || phase == Phase::Checking ||
       phase == Phase::Updating) {
     cardHeld = true;
-    Serial.println("[card] the card answered again (the same card) with a card job under way: the queue saved, "
-                   "restarting");
-    queueStore.flushNow();
+    Serial.println("[card] the card answered again (the same card) with a card job under way: restarting");
+    queueStore.flushNow();  // (it says how that went)
     cardbreaker::noteRestart(cardBreakerWord);
     if (userInterface) userInterface->note(uistr::tr(uistr::S::card_back), 3000);
     restartAtMs = millis() + 1200;

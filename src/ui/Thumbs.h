@@ -46,7 +46,7 @@ class CardWorker;
 // The rows that stay on screen when a list stops are asked last, so they
 // come first.
 //
-// Its RAM: the worker's 6 KB stack in internal RAM (CardWorker); TJpgDec's
+// Its RAM: the worker's 7.5 KB stack in internal RAM (CardWorker); TJpgDec's
 // 3.9 KB work pool in PSRAM, not in internal RAM as M5GFX's drawJpg()
 // allocates it: the step drives lgfx_tjpgd itself, and reads the card with
 // POSIX calls (no stdio buffer); everything else in PSRAM: the input

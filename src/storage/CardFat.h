@@ -27,7 +27,7 @@
 // no current directory here (FF_FS_RPATH 0), so every call names the drive
 // the SD library mounted (its physical drive, set at the mount). FIL, DIR
 // and FILINFO are in PSRAM: a FIL is about 4.1 KB in this build (FF_MAX_SS
-// 4096, a sector buffer per file), too big for the card worker's 6 KB stack
+// 4096, a sector buffer per file), too big for the card worker's 7.5 KB stack
 // (3.3.1). FatFs's own long-name buffer (512 B) is on the caller's stack for
 // each call (CONFIG_FATFS_LFN_STACK). FatFs takes the volume's lock for each
 // call (FF_FS_REENTRANT): the decoder's reads of the playing file interleave
