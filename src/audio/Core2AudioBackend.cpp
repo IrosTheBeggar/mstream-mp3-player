@@ -572,7 +572,7 @@ void Core2AudioBackend::loop(uint32_t nowMs) {
   // after its last change (the decode task's put), so a run of opens (a
   // boot's resume, a seek) saves once, from here (the loop task, as the
   // queue is saved) and never on the decode task's start path; ten
-  // seconds after a write that failed.
+  // seconds after a write that failed, then at twice the wait.
   if (nowMs - opusCacheCheckMs_ >= 1000) {
     opusCacheCheckMs_ = nowMs;
     bool due = false;

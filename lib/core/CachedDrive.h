@@ -169,15 +169,17 @@ public:
   // saw of it was a status): the stopped reads are asked again, and the counts start over.
   bool remounted(uint32_t sectors);
   // The driver's init found no card answering, at FatFs's mount (remounted() comes at a later one).
-  void mountFailed() { mountFailed_ = true; }
+  void mountFailed();
   // Any task.
   bool armed() const { return armed_.load(); }
   bool foreign() const { return foreign_.load(); }
   uint32_t remounts() const { return remounts_.load(); }
-  // The card came back: remounts that are a card put back, or that followed a mount with no card
-  // answering (a card out for a while, whose first failure a look saw). Coarser than what the stops
-  // and the counts take for a put back: a card silent past its init can be one too, and what this
-  // brings on, the queue's save asked sooner, is bounded by them. Never reset.
+  // The card came back: remounts kCardOutUs or more after a mount with no card answering, for the
+  // queue's save, whose failures build up a wait (QueueSaver::cardBack()); a fault shorter than this
+  // has built up no longer a wait than itself. Not any remount: a save's own, or a window's, would
+  // set up the next try at once, and that one the next. A card silent past its init this long can
+  // be one, and what it brings on is bounded by the stops and the counts. Never reset.
+  static constexpr uint64_t kCardOutUs = 10ull * 1000000ull;
   uint32_t cardBacks() const { return cardBacks_.load(); }
   // remember()'s and the last remounted()'s (a diagnostic, as stats()).
   const Identity& mountIdentity() const { return mountId_; }
@@ -262,6 +264,7 @@ private:
   uint32_t silentWrites_ = 0;  // ... of them at a write (writeFailed())
   bool silentWrite_ = false;   // ... as silentFault_'s was
   bool mountFailed_ = false;   // mountFailed(), since the last remount
+  uint64_t mountFailedUs_ = 0;  // ... the first
   std::atomic<uint32_t> cardBacks_{0};
   std::atomic<bool> tooSilent_{false};
   bool windowFailing_ = false;  // windowFailed(): the sector's first time, no write of it taken since

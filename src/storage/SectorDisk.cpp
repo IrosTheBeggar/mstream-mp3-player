@@ -133,9 +133,9 @@ bool install(uint8_t pdrv) {
   // The mount's card, before the wrapper goes in (no other task reads the
   // card yet): the one FatFs's remounts are held to.
   // (A read of the mount's that failed, FSINFO's, which FatFs does without, can leave the
-  // driver's mark, or the card busy with none, or refusing commands: asked again for up to
-  // 4 s, the mark gone first, or none of these reads reaches the card. Still none: with no
-  // identity any remount restarts. No fault: the first ask.)
+  // driver's mark, or the card busy with none, or refusing commands: asked 8 times, 500 ms
+  // apart, about 13 s on a card holding DO low, the mark gone first, or none of these reads
+  // reaches the card. Still none: with no identity any remount restarts. No fault: the first ask.)
   for (int i = 0; i < 8; ++i) {
     ff_sd_initialize(pdrv);
     if (s_drive.remember(sdcard_num_sectors(pdrv))) break;

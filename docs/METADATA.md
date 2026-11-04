@@ -5185,10 +5185,12 @@ src/. What the code decided where 3.2-3.4 left room:
   once ...` once in 5 s at most), no remount, every open file and the cache
   kept, and FatFs hears that read's error. Another, or unreadable: the
   wrapper's status says `STA_NOINIT` (`remountDue()`), and FatFs's remount
-  gives the verdict. `install()` asks for the mount's identity for up to 4 s,
-  the driver's init before each ask, so a read of the mount's that left the card
+  gives the verdict. `install()` asks for the mount's identity 8 times, 500 ms
+  apart (4 s on a card that refuses, 8 s of inits on a silent one, about 13 s on one
+  holding DO low), the driver's init before each ask, so a read of the mount's that left the card
   busy or with no answer (FSINFO's, which FatFs does without) no longer makes
-  "another card" at every boot, when the card is back in that time. Nothing
+  "another card" at every boot, when the card is back in that time. Only a card
+  with a fault pays; a dead one's setup grows to about 38 s at each boot. Nothing
   changes in `lib/SD`, nor on a card with no failed read. **Costs:** a failed
   read pays a CMD13 and an init in its own disk call, on whichever task read
   (the decoder's 16 KB stack, the worker's 6 KB, the loop's 8 KB) and under the
@@ -5221,7 +5223,9 @@ src/. What the code decided where 3.2-3.4 left room:
   One silence is one count: a call of FatFs's that goes on past what it does without (FSINFO's read,
   the second FAT's write) with the mark standing reaches no card, and neither that read's sector nor
   the count hears of it. If one of those looks finds the card back, no remount comes of the silence and
-  nothing was cut, so it counts for nothing. A card put back is a remount with no such look since the card
+  nothing was cut, so it counts for nothing. (**Cost:** a second FAT silent 1.2-2 s holds the volume's lock 3-4 s
+  at every save for the session, with no count to end it: on the rig at most 13.7 s of silence in 9 breaks
+  in 10 minutes, at an edit a minute, against writes going off after two saves.) A card put back is a remount with no such look since the card
   last answered a read, the first anyone saw of it being a status: every stop is asked again. (A read
   that works in the call that owes a remount isn't that answer: a mount going on past FSINFO's read
   counts each time, and the stop comes.) `gc`: "reads not asked of
@@ -5246,10 +5250,12 @@ src/. What the code decided where 3.2-3.4 left room:
   Absent (`docs/AUTODJ.md` 6.6) and the waveform bar to plain lines; no cover is read, placeholders
   showing. Playing goes on: a cut in a track's own read ends only that track. **Cost:** 12 such cuts
   over a long session, however far apart, do the same; 3 bad Pending files or more leave the rest of a
-  scan unread at every boot; a session foreign since a remount, up only because the boot holds the card jobs
+  scan unread at every boot; a read that works and leaves the card silent past an init has no stop and no
+  count, a status seeing it first (the table's FSINFO row); a session foreign since a remount, up only because the boot holds the card jobs
   (the breaker's), has no look but the same stop and the same count; the only words on screen are Rescan's, which say "at startup" of a hold
-  that came later. A write that leaves the card silent has a bound of its own, 4 and writes off: its
-  reader, the queue's save, has no other. No more than that of a 10 s retry: every open still works.
+  that came later. A write that leaves the card silent, no look ending it, has a bound of its own, 4 and
+  writes off: its reader, the queue's save, has no other. No more than that of its retry's wait: every open
+  still works.
 - **FatFs's window** (2026-11-03; `CachedDrive::windowFailed()`, `wWrite()`, `test_fat_model`).
   FatFs keeps one sector of FAT or a directory in `FATFS::win`, and writes it back before it moves
   to another. A write that fails leaves it dirty, so every later move fails with no read: one
@@ -5279,8 +5285,9 @@ src/. What the code decided where 3.2-3.4 left room:
   empty it before anything new is safe, and hand FatFs the same clusters back. A flush behind the
   update's fence that the card refused says so now, the queue being text in PSRAM until the fence
   comes down. A failed save tries again 10 s on, then twice as long each time, up to 5 minutes, and
-  says the wait; one that works, or the card coming back (a remount that is a card put back, or that
-  follows a mount that found nothing answering: `QueueSaver::cardBack()`), starts that over.
+  says the wait; one that works, or the card coming back (a remount 10 s or more after a mount that
+  found nothing answering: `CachedDrive::cardBacks()`, `QueueSaver::cardBack()`), starts that over. (Not any
+  remount: a save's own, or a window's, set up the next try at once on the rig, the save 99% of the loop.)
   **Cost:** a fault that ends with no remount leaves edits, the position and the resume point unsaved
   for what is left of the wait, up to 5 minutes, against a hard cut (an orderly stop flushes: no wait).
 - **The breaker** (2026-11-02; `lib/core/CardBreaker.h`, `test_card_breaker`):
@@ -5319,13 +5326,18 @@ src/. What the code decided where 3.2-3.4 left room:
   | A cover, the waveform file's header | RRRR | .... | A placeholder, or plain lines after 2 reads a track. Jobs run |
   | Once, under a compaction or a build | R.. | ... | The job fails softly |
   | FSINFO | another card, every boot | .. | Normal |
+  | FSINFO's read at the mount: DO low 2.5-5 s, or R1 errors 1-3 s | RRRR | .... | Setup 1.5-6 s, 6 tracks: `install()` asks until the identity reads. DO low to 12 s the same |
+  | FSINFO's read at a re-seat: DO low 2-2.5 s, a track playing, 500 s | no end | 5 remounts, 2 cuts, 488 s of sound | The read stop holds: no read that works in that call clears the note |
+  | FSINFO's read works, then no answer for 1.2-8 s, each time, met at a re-seat | no end | no end: 34-129 remounts in 300 s, no track plays until a restart | A status sees it first, no look: no stop, no count. Rare, and a guess at a card |
+  | A second FAT's write silent 1.2-2 s, an edit every 30 s | RRRR | 20 saves of 20, no cut | The cost is in the read stop's words |
+  | A foreign held boot (the breaker's), an Auto DJ band DO low 5 s, 300 s | RRRR | 39 remounts, 7 cuts, 220.6 s of sound | The same stop and count; a waveform band 216 s |
   | A re-seat with nothing playing and the queue quiet, under the walk or with one asked | R.. | R.. | One restart at the walk or its retry, the queue saved |
   | The same under the scan, a build or a save | ... | R.. | One restart at the rest's retry or the next job's step. (Before: no remount at all that session) |
   | A re-seat some other call reaches first: a track playing, a queue's save, a scan's chunk waiting; a compaction that failed on the pull (no retry) | ... | ... | The records opened again, the jobs begun again, no restart: a file added on a PC waits for the next boot, unless a walk was owed |
   | A re-seat under a job's step, at every boot | RRRRRR | RR.RR. | One held session (each dot), then a power-on |
   | Silent past its init (2 s), a job's step taking it | RRRR | RR.R | Bounded; with no job's step under it (a compaction or the rest that failed, a held session), no restart and about 4 cuts: the read stop |
   | DO low for 2-3.7 s after the read, every read of it (the select times out, the init says yes, the identity can't be read) | RRRR | as silent past its init | One Auto DJ band: 12 cuts, 245 s of sound in 260 s |
-  | DO low until CMD0 | RRRR | RR.R | Bounded; the held session a dead card until a power-off |
+  | DO low until CMD0 | RRRR | RR.R | Bounded; the held session a dead card until a power-off. Setup about 38 s a boot, `install()`'s 14 s in it |
   | A lasting refusal of a write to a sector of FAT or a directory, a job writing there | RRRR | RR.RR. | Every open works: a remount at the second failure; a held session's writes go off after two; playing goes on. Nothing lost once mended |
   | The same with no job writing there: the queue's saves | .... and a cut at each try | .... | A cut or two, then the saves fail softly. Every open works |
   | A pull around Auto DJ's reads, 5-90 s | joined | joined | The maps kept; the file reopened at the remount |
@@ -5393,9 +5405,9 @@ src/. What the code decided where 3.2-3.4 left room:
   counted. A real failing card, if one turns up: its driver lines first. (13) What PR 35 alone did on the
   device on 2026-11-04 (a switch in `sdCommand()`: no command reaches the card, so the driver's own waits, log
   lines and mark), each to be gone here. No R1 at the first card read inside a compaction's
-  `FolderCursor::begin()`, a walk to merge: a restart at 3 boots of 8, a held session at the others: now
-  `kept`, no restart. A compaction failed that way: 48 KB lost a boot, `hidx.tmp`'s clusters (`@count` before
-  and after): now none. No R1 on `/.player`'s directory, a long track playing: cut at each of the queue's tries,
+  `FolderCursor::begin()`, a walk to merge: a restart at 3 boots of 9, a held session at the others: now
+  `kept`, no restart. No R1 on a sector half way through `tags.bin`, a walk to merge: 48 KB lost a boot, by
+  reading `hidx.tmp`'s clusters (`@count` before and after): now none. No R1 on `/.player`'s directory, a long track playing: cut at each of the queue's tries,
   every 10 s: now no cut, the tries at 10, 20, 40 s and on. No token there: a stall of 3 s every 10 s, 721
   underruns in 81 s of track: now the same stalls at those waits.
 - **The card worker** (`app/CardWorker`): Thumbs' worker, generalised: a

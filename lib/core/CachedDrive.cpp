@@ -285,7 +285,7 @@ bool CachedDrive::remounted(uint32_t sectors) {
     silences_ = 0;
     silentWrites_ = 0;
   }
-  if (!silentFault_ || mountFailed_) cardBacks_.fetch_add(1);
+  if (mountFailed_ && (!clock_ || clock_() - mountFailedUs_ >= kCardOutUs)) cardBacks_.fetch_add(1);
   mountFailed_ = false;
   if (!foreign_.load()) {  // (foreign until a restart, whatever comes back)
     lastId_ = readIdentity(sectors);
@@ -295,6 +295,12 @@ bool CachedDrive::remounted(uint32_t sectors) {
   // (the loop's poll reads the count first).
   remounts_.fetch_add(1);
   return !foreign_.load();
+}
+
+void CachedDrive::mountFailed() {
+  if (mountFailed_) return;
+  mountFailed_ = true;
+  mountFailedUs_ = clock_ ? clock_() : 0;
 }
 
 void CachedDrive::setEnabled(bool on) {
