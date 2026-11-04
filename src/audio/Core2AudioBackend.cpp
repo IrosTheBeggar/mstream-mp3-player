@@ -1755,6 +1755,7 @@ void Core2AudioBackend::saveOpusCache() {
   }
   if (ok) {
     ++opusCacheSaves_;
+    opusCacheRetryMs_ = kOpusCacheRetryMs;
   } else {
     // save() cleaned the cache as it made the blob, which the card never
     // got (the temp file wouldn't open: the mount's few file handles all
@@ -1766,7 +1767,8 @@ void Core2AudioBackend::saveOpusCache() {
     ++opusCacheSaveFails_;
     std::lock_guard<std::mutex> guard(opusCacheLock_);
     opusCache_.markDirty();
-    opusCacheDueMs_ = millis() + kOpusCacheRetryMs;
+    opusCacheDueMs_ = millis() + opusCacheRetryMs_;
+    opusCacheRetryMs_ = opusCacheRetryMs_ < kOpusCacheRetryMaxMs / 2 ? opusCacheRetryMs_ * 2 : kOpusCacheRetryMaxMs;
   }
   Serial.printf("[opus] the open cache %s %s: %lu entries, %lu B, %lu ms (saves %lu, failed %lu)\n",
                 ok ? "saved to" : "couldn't be saved to", opusCachePath_.c_str(), (unsigned long)entries,

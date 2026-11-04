@@ -323,7 +323,8 @@ Pass Driver::step(PlaybackController& player, const Index& ix, const Env& env) {
     p.prefetchUs = timed.us;
     if (p.prefetch != SlotResult::Ok) {
       readWait_ = true;
-      readAtMs_ = env.nowMs + kReadAgainMs;
+      // (From the read's end, up to 1.5 s after the pass began: time for the ring to fill.)
+      readAtMs_ = env.nowMs + p.prefetchUs / 1000 + kReadAgainMs;
     }
   } else if (s_.on && maps && !ix.joining && !env.listMoving && engine_.runDue(s_, *maps, ix.k, &row)) {
     // A cached slot whose run the maps outdated (the join ready again):

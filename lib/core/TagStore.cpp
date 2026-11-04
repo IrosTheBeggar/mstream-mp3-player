@@ -1415,6 +1415,7 @@ TagStore::Opened TagStore::open() {
   Opened o;
   walking_ = false;
   compactUnread_ = false;
+  journalsUnread_ = false;
   DeviceCheck check(cfg_, alloc_, free_);
   o.settled = settle(fs_, names_, &check);
   twins_ = o.settled.twins;
@@ -1444,6 +1445,7 @@ TagStore::Opened TagStore::open() {
   }
   if (!readFailed_) scanJournal(&o);
   if (!readFailed_) scanWalk(&o);
+  o.journalsUnread = journalsUnread_;
   if (readFailed_) {
     // Nothing of what was read counts: the rest may be what it left out.
     const Settled settled = o.settled;
@@ -1453,6 +1455,7 @@ TagStore::Opened TagStore::open() {
     o.settled = settled;
     o.deviceWhy = Why::Io;
     o.readFailed = true;
+    o.journalsUnread = journalsUnread_;
   }
   return o;
 }
@@ -1460,10 +1463,14 @@ TagStore::Opened TagStore::open() {
 TagStore::Opened TagStore::openAtBoot(void (*wait)(uint32_t ms), uint32_t* opens) {
   Opened o = open();
   uint32_t n = 1;
-  for (const uint32_t ms : kBootWaitsMs) {
-    if (!o.readFailed || !wait) break;
-    wait(ms);
+  const size_t waits = sizeof(kBootWaitsMs) / sizeof(kBootWaitsMs[0]);
+  for (size_t i = 0; i < waits && o.readFailed && wait; ++i) {
+    wait(kBootWaitsMs[i]);
+    // The last try, the journals all that failed: a fault that lasts, in files the card can
+    // give again, so they go as they read (healJournals_) and don't hold every boot's jobs.
+    healJournals_ = i + 1 == waits && journalsUnread_;
     o = open();
+    healJournals_ = false;
     ++n;
   }
   if (opens) *opens = n;
@@ -1514,7 +1521,17 @@ bool checkChunkEntries(cc::Stream& s, uint32_t count, char* prev, char* cur) {
 
 void TagStore::scanJournal(Opened* o) {
   File* file = fs_.openRead(jnlPath_, &readFailed_);
-  if (!file) return;
+  if (!file) {
+    if (readFailed_) {
+      journalsUnread_ = true;
+      if (healJournals_) {
+        readFailed_ = false;
+        jnlForeign_ = true;
+        o->journalTorn = true;
+      }
+    }
+    return;
+  }
   ReadWatch watch(file);
   ReadWatch* const f = &watch;
   const uint32_t size = f->size();
@@ -1568,7 +1585,9 @@ void TagStore::scanJournal(Opened* o) {
   extraChunks_ = extra;
   free_(mem);
   fs_.close(file);
-  readFailed_ = watch.failed();  // (not a torn tail, nor a foreign file: what it stopped at)
+  // (Not a torn tail, nor a foreign file: what it stopped at. Unless healJournals_: as one.)
+  journalsUnread_ = watch.failed();
+  readFailed_ = journalsUnread_ && !healJournals_;
   if (readFailed_) return;
   jnlForeign_ = chunkN_ == 0 && size > 0;
   jnlTail_ = chunkN_ > 0 && size > jnlEnd_;
@@ -1728,7 +1747,16 @@ bool checkWalkEntry(cc::Stream& s, RunKeys& k, char* cur) {
 
 void TagStore::scanWalk(Opened* o) {
   File* file = fs_.openRead(walkPath_, &readFailed_);
-  if (!file) return;
+  if (!file) {
+    if (readFailed_) {
+      journalsUnread_ = true;
+      if (healJournals_) {
+        readFailed_ = false;
+        o->walkStale = true;
+      }
+    }
+    return;
+  }
   ReadWatch watch(file);
   ReadWatch* const f = &watch;
   const uint32_t size = f->size();
@@ -1790,7 +1818,9 @@ void TagStore::scanWalk(Opened* o) {
     free_(mem);
   }
   fs_.close(file);
-  readFailed_ = watch.failed();  // (not a walk cut short: what it stopped at)
+  // (Not a walk cut short: what it stopped at. Unless healJournals_: as one.)
+  journalsUnread_ = journalsUnread_ || watch.failed();
+  readFailed_ = watch.failed() && !healJournals_;
   if (readFailed_) return;
   if (walkRuns_) {
     walkSeq_ = cc::get32(h + 12);
@@ -2794,8 +2824,10 @@ TagStore::Compacted TagStore::compact(bool rescan) {
   cleanup();
   w->~CompactWork();
   free_(mem);
-  // The store as the card now is.
+  // The store as the card now is. (D is whole there: a read the card failed here says
+  // nothing of it, asked again once, and else readFailed(): no D here isn't no D there.)
   loadDevice();
+  if (readFailed_) loadDevice();
   chunkN_ = 0;
   extraChunks_ = 0;
   jnlEnd_ = 0;

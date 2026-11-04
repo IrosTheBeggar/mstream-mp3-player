@@ -31,7 +31,8 @@ struct QueueResume {
 //   few dozen lines per loop pass (a long queue never holds the loop), into
 //   a temporary file that then replaces the queue file. An edit while a
 //   write is under way drops that write; it starts again once the edits
-//   settle. A failed write is tried again 10 s later.
+//   settle. A failed write is tried again 10 s later, then at twice the wait, up
+//   to 5 minutes (each try can hold the loop for seconds), until one works.
 // - Edits that never settle (Auto DJ appending a 1-second track every
 //   second, each also pushing out the oldest entry at the cap: the device's
 //   soak, 2026-10-13, wrote nothing for 59 minutes): once the queue has
@@ -88,7 +89,7 @@ public:
     virtual ByteSink* openTemp() = 0;
     // The temporary file is complete: flush and close it, and make it the
     // queue file. False: failed (the temporary file is removed; the queue
-    // file stays as it was).
+    // file stays as it was, or, gone already, the temporary file in its place).
     virtual bool commitTemp() = 0;
     // A write dropped: close and remove the temporary file.
     virtual void discardTemp() = 0;
@@ -104,6 +105,7 @@ public:
   static constexpr uint32_t kContentDelayMs = 2000;   // after the last edit
   static constexpr uint32_t kPositionDelayMs = 1000;  // after the last move
   static constexpr uint32_t kRetryMs = 10000;         // after a failed write
+  static constexpr uint32_t kRetryMaxMs = 300000;     // ... the longest, twice over each time
   static constexpr uint32_t kLinesPerPass = 32;       // ~2 KB of paths
   // The longest the file may lag the queue before a write that edits
   // don't drop (above): a full queue's write takes 3-6 s of passes, so the
@@ -260,6 +262,7 @@ private:
   uint32_t writeGeneration_ = 0;
   uint32_t writeStartMs_ = 0;
   uint32_t nextTryMs_ = 0;
+  uint32_t retryMs_ = kRetryMs;  // the next failed write's wait
   uint32_t lastWriteMs_ = 0;
   uint32_t writes_ = 0, snapshotWrites_ = 0, failures_ = 0;
 

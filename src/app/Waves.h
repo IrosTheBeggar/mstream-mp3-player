@@ -120,4 +120,5 @@ private:
   uint32_t remounts_ = 0;
   autodj::OpenTries rootTries_;
   bool rootAgain_ = false;  // a read of the root failed: read again when rootTries_ says
+  bool silenced_ = false;   // CachedDrive::tooSilent(): no more of its reads this session
 };

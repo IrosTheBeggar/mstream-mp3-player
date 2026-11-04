@@ -1871,15 +1871,57 @@ void test_flush_now_that_fails_keeps_the_last_file() {
   TEST_ASSERT_FALSE(saver.flushNow(2120));
   st.failOpen = false;
   saver.loop(5000);
-  TEST_ASSERT_EQUAL_STRING("last good", st.file.c_str());  // the retry waits its 10 s
-  for (uint32_t t = 12200; t < 12400; t += 20) saver.loop(t);
+  TEST_ASSERT_EQUAL_STRING("last good", st.file.c_str());  // the retry waits: the second failure's 20 s
+  for (uint32_t t = 22200; t < 22400; t += 20) saver.loop(t);
   TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 3).c_str(), st.file.c_str());
   TEST_ASSERT_EQUAL_UINT32(3, st.posGeneration);
   // An edit after a failure makes it busy again.
   const uint32_t more[] = {2};
   q.append(more, 1);
-  saver.loop(12500);
+  saver.loop(22500);
   TEST_ASSERT_TRUE(saver.busy());
+}
+
+// A write that keeps failing waits longer each time (each try can hold the loop for seconds), up to
+// 5 minutes; one that works starts it over.
+void test_a_failed_write_waits_longer_each_time() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  st.file = "last good";
+  QueueSaver saver(st, q, c);
+  saver.loaded(2, false, 0);
+  const uint32_t one[] = {1};
+  q.append(one, 1);
+  st.failOpen = true;
+  uint32_t t = 10;
+  saver.loop(t);
+  const auto tries = [&](uint32_t wait) {
+    const uint32_t before = saver.failures();
+    const uint32_t from = t;
+    while (saver.failures() == before && t < from + 400000) {
+      t += 100;
+      saver.loop(t);
+    }
+    TEST_ASSERT_EQUAL_UINT32(before + 1, saver.failures());
+    if (wait) TEST_ASSERT_EQUAL_UINT32(wait, t - from);
+  };
+  tries(0);  // (the first, 2 s after the edit)
+  for (const uint32_t wait : {10000u, 20000u, 40000u, 80000u, 160000u, 300000u, 300000u}) tries(wait);
+  TEST_ASSERT_EQUAL_STRING("last good", st.file.c_str());
+  st.failOpen = false;
+  while (saver.contentDirty()) {
+    t += 100;
+    saver.loop(t);
+  }
+  TEST_ASSERT_TRUE(st.file != "last good");
+  // Working, and failing again: from 10 s.
+  q.append(one, 1);
+  st.failOpen = true;
+  tries(0);
+  tries(10000);
 }
 
 // A write dropped for a library rebuild (remap), and the queue then kept
@@ -5225,6 +5267,7 @@ int main(int, char**) {
   RUN_TEST(test_flush_now_after_an_edit_during_the_write);
   RUN_TEST(test_flush_now_writes_an_edit_at_once);
   RUN_TEST(test_flush_now_that_fails_keeps_the_last_file);
+  RUN_TEST(test_a_failed_write_waits_longer_each_time);
   RUN_TEST(test_saver_abort_and_kept_file);
   RUN_TEST(test_resume_point_saved_at_a_pause_and_cleared_when_it_plays);
   RUN_TEST(test_resume_point_waits_for_the_file_and_follows_its_entry);

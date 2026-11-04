@@ -96,6 +96,7 @@ struct Stats {
   uint32_t verified = 0;     // hits compared with the card (verify on)
   uint32_t stale = 0;        // ... that differed: a cache bug (L1 fails)
   uint32_t staleLba = 0;     // the last such sector
+  uint32_t stoppedReads = 0;  // reads not asked of the card: they kept leaving it silent (CachedDrive)
 };
 Stats stats();
 void resetStats();
@@ -106,7 +107,12 @@ struct Guard {
   bool armed = false;    // install() kept the mount's card (the wrapper is in)
   bool known = false;    // ... and could read its identity (else any remount is foreign)
   bool foreign = false;  // a remount found another card: every write refused until a restart
+  bool lastKnown = false;  // ... and the last remount's: a card that couldn't be read says nothing of another card
+  bool writesOff = false;  // the card wouldn't take FatFs's window, twice: every write refused until a restart
+  bool tooSilent = false;  // reads kept leaving the card silent (CachedDrive::tooSilent()): until a restart
   uint32_t remounts = 0;  // FatFs mounted the volume again with a card answering
+  uint32_t kept = 0;      // commands with no answer the card came back from at once: no remount
+  uint32_t faultLba = 0;  // the last read or write that failed
   // The write counts (CachedDrive's; gc's reset starts them again).
   uint32_t writeRetries = 0, writeFails = 0, refused = 0;
 };

@@ -2085,7 +2085,8 @@ the browsing UI hold its **track ids**, never strings.
   save is another worker step, the scan and compactions waiting for its
   end. On a card that doesn't answer (pulled while on) it fails before the
   fence, and on one whose reads fail as the build reads it, at its end
-  (nothing walked or saved: the next boot loads the last `library.idx`);
+  (nothing walked or saved: the last `library.idx` loaded again at once, or,
+  a pulled card, at the next boot);
   a power cut at any step leaves a card the next boot reads whole.
   A file the scan reads
   stops being Pending in the index (a card walked into a path-named index

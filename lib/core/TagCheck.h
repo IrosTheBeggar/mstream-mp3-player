@@ -249,7 +249,8 @@ public:
   virtual void notRead(bool device, const Turn& t) = 0;
   virtual void journals() = 0;  // D's journals' line
   // T's root: true, it names a tags file (T's turn next); false, there's
-  // none (its line said so).
+  // none, or under jobs whose boot couldn't read it, it wasn't asked (its
+  // line said so).
   virtual bool root() = 0;
   virtual void plan() = 0;  // an unfinished transfer's plan: gs's last line
   virtual void end() = 0;   // the memory given back

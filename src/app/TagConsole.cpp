@@ -226,11 +226,12 @@ void TagConsole::cacheCounts(const char* when) {
                 (unsigned long)c.writes, (unsigned long)c.writtenSectors, (unsigned long)c.updated,
                 (unsigned long)c.failedWrites, (unsigned long)c.dropped, (unsigned long)c.evicted);
   Serial.printf("[cache] %sthe card: %lu reads (%lu of one sector; %lu sectors) in %.0f ms (%.2f ms a read), %lu "
-                "writes, %lu trims; %lu mounts\n",
+                "writes, %lu trims; %lu mounts, %lu no answers it came back from, %lu reads not asked of it\n",
                 when, (unsigned long)st.cardReads, (unsigned long)st.cardSingleReads, (unsigned long)st.cardReadSectors,
                 st.cardReadUs / 1000.0,
                 st.cardReads ? st.cardReadUs / 1000.0 / st.cardReads : 0.0, (unsigned long)st.cardWrites,
-                (unsigned long)st.trims, (unsigned long)st.inits);
+                (unsigned long)st.trims, (unsigned long)st.inits, (unsigned long)sectordisk::guard().kept,
+                (unsigned long)st.stoppedReads);
   if (sectordisk::verifying() || st.verified) {
     Serial.printf("[cache] %sverify: %lu hits checked, %lu STALE%s\n", when, (unsigned long)st.verified,
                   (unsigned long)st.stale, st.stale ? " (a cache bug: L1 fails)" : "");
@@ -488,7 +489,7 @@ void TagConsole::find(const char* path, const char* rel, bool device, Work& w, F
 }
 
 bool TagConsole::transferFile(Work& w, char* path, size_t size, uint64_t* commitId, uint32_t* generation) {
-  // (Under these jobs a read with no answer would restart the player: Library.h.)
+  // (Under these jobs a read on a card silent past its init would restart the player: Library.h.)
   if (library_.jobsOnUnreadRoot()) return false;
   cc::RootCandidate cand[2];
   const char* const names[2] = {"/.mstream/manifest.bin", "/.mstream/manifest.tmp"};
@@ -819,7 +820,7 @@ void TagConsole::dump(const char* arg) {
   char tpath[64];
   uint64_t commit = 0;
   uint32_t gen = 0;
-  const Found& tf = w->t;  // (nothing found, as the Work came: no transfer data)
+  const Found& tf = w->t;  // (nothing found, as the Work came: no transfer data, or it wasn't asked)
   if (!transferFile(*w, tpath, sizeof(tpath), &commit, &gen)) {
     noRootLine();
   } else {

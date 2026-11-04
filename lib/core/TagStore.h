@@ -721,6 +721,10 @@ public:
     bool walk = false;         // walk.jnl has a complete run that extends D
     bool walkStale = false;    // walk.jnl for another D, or cut short: dropped
     bool readFailed = false;   // readFailed(): deviceWhy Io, and the rest says nothing of the card
+    // The card failed a read of tags.jnl or walk.jnl. With readFailed: that is what held it.
+    // Without (openAtBoot()'s last try): what they hold past that read is the scan's and
+    // the walk's to read again.
+    bool journalsUnread = false;
   };
 
   struct Compacted {
@@ -753,7 +757,10 @@ public:
   // tags.tmp, the twins, hidx.tmp, D's frame, the journals.
   Opened open();
   // open(), and again while the card fails it (readFailed()), kBootWaitsMs between
-  // (`wait` nullptr: once). `opens`, when given: how many it took.
+  // (`wait` nullptr: once). `opens`, when given: how many it took. A fault in the journals
+  // alone that lasts through them isn't held to: the journals go as far as they read, as
+  // a torn tail does, and the scan and the walk read the rest again (Opened::journalsUnread),
+  // where a hold would stop the jobs at every boot over files the card can give again.
   Opened openAtBoot(void (*wait)(uint32_t ms), uint32_t* opens = nullptr);
   // The card failed a read of D, of its journals or of the way to them (a read, the
   // volume's lock, no memory for a file), or D may be a tags.tmp that couldn't be taken
@@ -878,6 +885,8 @@ private:
   bool tmpKept_ = false;  // open(): tags.tmp alone, unchecked (Settle::Kept)
   bool readFailed_ = false;  // open(): readFailed()
   bool compactUnread_ = false;  // compact(): compactionUnread()
+  bool journalsUnread_ = false;  // open(): Opened::journalsUnread
+  bool healJournals_ = false;    // openAtBoot()'s last try: journals taken as far as they read
   // tags.jnl
   Chunk* chunks_ = nullptr;  // maxChunks of them
   uint32_t chunkN_ = 0;

@@ -552,6 +552,8 @@ private:
   // and the save counts.
   static constexpr uint32_t kOpusCacheSaveDelayMs = 3000;
   static constexpr uint32_t kOpusCacheRetryMs = 10000;
+  static constexpr uint32_t kOpusCacheRetryMaxMs = 300000;  // (twice over each time: a try can hold the loop for seconds)
+  uint32_t opusCacheRetryMs_ = kOpusCacheRetryMs;
   OpusOpenCache opusCache_;
   std::mutex opusCacheLock_;
   std::string opusCachePath_;

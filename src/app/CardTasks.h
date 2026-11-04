@@ -56,7 +56,10 @@ class Waves;
 //     walk's changes, a Rescan, or a boot that loaded an index the scan had
 //     gone past (Library::softStale(): the first scan's end after the
 //     boot's walk, even with nothing to scan) ask for it; not when the rest
-//     stopped on a read error (the card pulled: the next boot has it).
+//     stopped on a read error (the card pulled: tried again a minute on, twice
+//     at most; then the next boot has it), nor, for what the scan read again,
+//     after two steps in a row that failed on a read and loaded library.idx
+//     again (scanEnded()).
 //     After an update step, built or failed or deferred, what the journal
 //     had asks for no other: only new records (or a walk's changes, a
 //     Rescan) do.
@@ -270,6 +273,10 @@ private:
   bool lastCompactFailed_ = false;
   tagcheck::Hold consoleHold_ = tagcheck::Hold::None;  // holdForConsole()
   bool pendingAfterScan_ = false;  // the scan's end rebuilds (a walk's changes, a soft-stale index, a Rescan)
+  uint32_t reloads_ = 0;  // update steps in a row that failed and loaded library.idx again
+  uint32_t restRetries_ = 0;
+  bool restRetryArmed_ = false;
+  uint32_t restRetryAtMs_ = 0;
   bool restFailed_ = false;        // the rest's last end was a read error (no update at the scan's end)
   bool scanOver_ = true;
   // The status line's counts.

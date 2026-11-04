@@ -119,8 +119,8 @@
 // Slots (docs/AUTODJ-INDEX.md 8.5): one whose CRC fails twice in a row (in
 // this pick if the budget allows, else at its next read) goes into a ring
 // of kDamagedRing rows never read again until fileReopened(); a failed
-// read (Why::Io: the card pulled, a FIL a remount invalidated) is skipped
-// and never goes there; a Broken one (a good CRC over a bad list: the
+// read (Why::Io: the card pulled, a FIL a remount invalidated) is skipped,
+// and goes there only at its second in a row on that row; a Broken one (a good CRC over a bad list: the
 // writer's bug) makes the file absent: every later pick is random until
 // fileReopened() (Pick::broken, broken()).
 //
@@ -201,9 +201,9 @@ struct Pick {
   bool keyBreak = false;    // a known key outside the anchor's 6 codes
   uint8_t reads = 0;        // slot reads this pick (0-kReadsPerPick)
   // The rows this pick's reads put in the damaged ring (a CRC that failed
-  // again: read twice here, or suspect since a read ahead), for the
-  // console's line, once a row: a damaged row isn't read again until the
-  // file is reopened. (A read ahead's says so in its SlotResult.)
+  // again: read twice here, or suspect since a read ahead; or a read that
+  // failed again), for the console's line, once a row: a damaged row isn't
+  // read again until the file is reopened. (A read ahead's says so in its SlotResult.)
   uint8_t damaged = 0;
   uint16_t damagedRow[kReadsPerPick] = {};
   bool broken = false;      // the file is broken: absent from now (until fileReopened())
@@ -215,7 +215,8 @@ enum class SlotResult : uint8_t {
   Ok,       // cached
   Suspect,  // its CRC failed: one more failure in a row and it is damaged
   Damaged,  // failed twice in a row: in the damaged ring
-  Io,       // the read failed (Why::Io): skipped, never in the ring
+  Io,       // the read failed (Why::Io): skipped
+  IoTwice,  // ... for the second time in a row on this row: in the damaged ring
   Broken,   // the file is broken
 };
 
@@ -466,6 +467,7 @@ private:
   MapsPrint print_;
   Ring<uint16_t, kDamagedRing> damaged_;
   uint16_t suspect_ = kNoRow;  // the row whose last read failed its CRC
+  uint16_t ioRow_ = kNoRow;  // the row whose last read failed on the card (Why::Io)
   bool broken_ = false;
   Stats stats_;
 };

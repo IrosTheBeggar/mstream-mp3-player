@@ -75,6 +75,7 @@ bool CardTasks::begin() {
   // its jobs run, as on any such card.)
   if (lib_.cardJobsHeld()) {
     Serial.printf("[card] %s: no walk, no scan and no update step\n", lib_.heldWhy());
+    walkRetryArmed_ = restRetryArmed_ = false;
     return false;
   }
   if (!card_.begin()) return false;
@@ -189,6 +190,13 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
                   (unsigned long)kWalkRetries);
     jobs_.askWalk();
   }
+  // (Not over a gv or a gr! under way: it would take its mode. Armed still, for after it.)
+  if (restRetryArmed_ && static_cast<int32_t>(now - restRetryAtMs_) >= 0 && jobs_.mode() == cardjobs::Mode::Normal) {
+    restRetryArmed_ = false;
+    Serial.printf("[card] the scan's rest again (retry %lu of %lu)\n", (unsigned long)restRetries_,
+                  (unsigned long)kWalkRetries);
+    jobs_.askRest(cardjobs::Mode::Normal);
+  }
   // 3. The update step (LibraryUpdate, 3.4.2): what it waits for, what it
   // holds, and what the loop carries out this pass.
   LibraryUpdate* up = active_ ? lib_.update() : nullptr;
@@ -261,7 +269,9 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   if (free) {
     // (Not in the pass that puts the fence up: Thumbs' pools go with it, and
     // the build must find the worker free.)
-    in.cover = covers && thumbs && thumbs->wantsCover(now) && uo.act != LibraryUpdate::Do::Fence;
+    // (No cover once the card keeps going silent: each is a new sector, and can be a cut.)
+    in.cover = covers && thumbs && thumbs->wantsCover(now) && uo.act != LibraryUpdate::Do::Fence &&
+               !sectordisk::guard().tooSilent;
     in.wave = covers && waves && waves->wantsRead(now) && uo.act != LibraryUpdate::Do::Fence;
     if (active_) {
       // A walk under way goes on to its end when the update step is asked:
@@ -366,13 +376,24 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
 // last build (reads the card refused are none: the build would find them
 // Pending again, and the scan would read them again, an update a pass), or
 // a walk's changes, a Rescan or a soft-stale boot ask for it. Not when the
-// rest stopped on a read error (the card pulled: the build would fail, and
-// the next boot's scan rebuilds what this one recorded).
+// rest stopped on a read error (the card pulled: the build would fail; a retry
+// a minute on, twice at most, and else the next boot's scan rebuilds what this
+// one recorded). Nor after steps that failed on a read of T or D and loaded
+// library.idx again: its Pending flags come back with it, the scan reads those
+// tracks again, and that moves the journal: a compaction and a fence each time
+// round, for as long as the sector stays bad (METADATA.md 3.4.2). A Rescan, or a
+// walk's changes, ask once each all the same: they aren't that round.
 void CardTasks::scanEnded() {
   if (!jobs_.newRecords() && !pendingAfterScan_) return;
   if (restFailed_) {
-    Serial.println("[card] the scan's end: its rest stopped on a read error (the card?): no update step now (the "
-                   "next boot's scan's end has it)");
+    Serial.printf("[card] the scan's end: its rest stopped on a read error (the card?): no update step now (%s)\n",
+                  restRetryArmed_ ? "its rest again in a minute" : "the next boot's scan's end has it");
+    return;
+  }
+  if (reloads_ >= kWalkRetries && !pendingAfterScan_) {
+    Serial.printf("[card] the scan's end: %lu update steps failed on a read of the records: none for what the scan "
+                  "read again (a Rescan, a walk's changes, gb or g0 ask; else the next boot's scan's end has it)\n",
+                  (unsigned long)reloads_);
     return;
   }
   askUpdate("the scan's end");
@@ -519,7 +540,14 @@ void CardTasks::afterWalk(const cardjobs::Done& d) {
 
 void CardTasks::afterScan(const cardjobs::Done& d, uint32_t nowMs) {
   lastScanStepMs_ = nowMs;
-  if (d.restEnded) restFailed_ = d.restFailed;
+  if (d.restEnded) {
+    restFailed_ = d.restFailed;
+    if (d.restFailed && restRetries_ < kWalkRetries) {
+      ++restRetries_;
+      restRetryArmed_ = true;
+      restRetryAtMs_ = nowMs + kWalkRetryMs;
+    }
+  }
   if (d.verifyEnded) {
     const cardjobs::Verified& v = jobs_.verified();
     Serial.printf("[card] verify: %lu software files, %lu their qfp T's, %lu NOT, %lu with no qfp in T, %lu unreadable\n",
@@ -603,14 +631,21 @@ void CardTasks::live() {
   pendingAfterScan_ = false;
   lastCompactFailed_ = false;
   if (s.built) {
+    reloads_ = 0;
     jobs_.libraryRebuilt();
     scanTotal_ = indexPending();
     scanDone_ = 0;
     toast(uistr::tr(uistr::S::library_updated));
+  } else if (s.reloaded) {
+    ++reloads_;
+    jobs_.libraryRebuilt();
+    scanTotal_ = indexPending();
+    scanDone_ = 0;
   }
   Serial.printf("[card] the update step (%s): %s%s\n", s.why,
-                s.built ? "the library is rebuilt (its save next, on the card worker)"
-                        : "FAILED (no library until the next boot, or Try again)",
+                s.built      ? "the library is rebuilt (its save next, on the card worker)"
+                : s.reloaded ? "FAILED: the last library.idx loaded again, as it was"
+                             : "FAILED (no library until the next boot, or Try again)",
                 s.cardGone && s.readErrors ? "; a read of the card's records failed as it built (the card?): "
                                              "nothing walked or saved"
                 : s.readErrors             ? "; a read of T failed: built from D alone, T tried again next time"

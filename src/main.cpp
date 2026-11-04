@@ -14,6 +14,7 @@
 
 #include <Arduino.h>
 #include <M5Unified.h>
+#include <esp_attr.h>
 #include <esp_chip_info.h>
 #include <esp_heap_caps.h>
 #include <esp_random.h>
@@ -25,6 +26,7 @@
 #include <vector>
 
 #include "ButtonPolicy.h"
+#include "CardBreaker.h"
 #include "ChipRevision.h"
 #include "DeviceInfo.h"
 #include "HeadsetKeys.h"
@@ -2884,6 +2886,10 @@ static void stepCpuRestart(uint32_t now) {
 // The card jobs and the queue's saves held until the restart (restartAtMs):
 // another card is in the slot, or the card came back with a job under way.
 static bool cardHeld = false;
+// The card's breaker (lib/core CardBreaker): RTC slow memory, which outlives
+// esp_restart(), not a power-on.
+RTC_NOINIT_ATTR static cardbreaker::Word cardBreakerWord;
+static bool heldByBreaker = false;
 
 // Every loop pass, before the queue's save and the card jobs: what the SD
 // wrapper's guard found at FatFs's remounts (the card pulled and put back,
@@ -2900,7 +2906,10 @@ static bool cardHeld = false;
 // the worker, a walk, a compaction, the update step): then the queue saved
 // and a restart. Either restart waits for the worker's step under way
 // (cardHeld hands no other) and holds the SPI bus (restartNow()). And the
-// card's refused writes, as they come.
+// card's refused writes, as they come. A command with no answer that the
+// card came back from at once isn't a remount at all (the look, METADATA.md
+// 3.8): its line only. What still restarts is counted (the breaker, 3.8):
+// two in a row and the next boot holds the card jobs.
 static void stepCardGuard() {
   if (!sectordisk::installed()) return;
   const sectordisk::Guard g = sectordisk::guard();
@@ -2912,15 +2921,62 @@ static void stepCardGuard() {
   }
   retriesSeen = g.writeRetries;  // (gc's reset brings them down: followed)
   failsSeen = g.writeFails;
+  // A command with no answer, the card back at its init, the same card: that read's error,
+  // and nothing else (CachedDrive::lookAfterFault()). One line in 5 s at most.
+  static uint32_t keptSeen = 0, keptSaidMs = 0;
+  if (g.kept != keptSeen && (keptSeen == 0 || millis() - keptSaidMs >= 5000)) {
+    keptSeen = g.kept;
+    keptSaidMs = millis();
+    Serial.printf("[card] a command got no answer, and the card was back at once, the same card: %lu since the "
+                  "boot, the last read or write that failed at sector %lu\n",
+                  (unsigned long)g.kept, (unsigned long)g.faultLba);
+  }
+  static bool writesOffSaid = false;
+  if (g.writesOff && !writesOffSaid) {
+    writesOffSaid = true;
+    Serial.println("[card] writes kept failing (FatFs's FAT or a directory refused twice, or the card silent at 4 "
+                   "writes): no more this session (the queue's saves and the card jobs fail, playing goes on); a "
+                   "restart asks again");
+  }
+  static bool calmed = false;
+  if (!calmed && millis() >= cardbreaker::kCalmMs) {
+    calmed = true;
+    cardbreaker::clear(cardBreakerWord);
+  }
   if (cardHeld) return;
   char id[112];
   if (g.foreign) {
+    // An identity that couldn't be read says nothing of another card, and the next boot may
+    // find the same. It counts; a boot already holding the jobs stays up, its writes refused.
+    const bool unread = !g.known || !g.lastKnown;
+    if (unread && heldByBreaker) {
+      static bool said = false;
+      if (!said) {
+        Serial.println("[card] the card's identity couldn't be read at a remount: every write to it refused; no "
+                       "restart (this boot holds the card jobs)");
+      }
+      said = true;
+      return;
+    }
+    if (unread) {
+      cardbreaker::noteRestart(cardBreakerWord);
+    } else {
+      cardbreaker::clear(cardBreakerWord);
+    }
     cardHeld = true;
-    sectordisk::identityText(id, sizeof(id), true);
-    Serial.printf("[card] ANOTHER CARD in the slot (FatFs mounted it again: %s): every write to it refused; the card "
-                  "jobs and the queue's saves stop; restarting to use it\n",
-                  id);
-    if (userInterface) userInterface->note(uistr::tr(uistr::S::card_another), 3000);
+    // (The one that couldn't be read: the mount's, or then the last remount's.)
+    sectordisk::identityText(id, sizeof(id), g.known);
+    if (unread) {
+      Serial.printf("[card] the card's identity couldn't be read at %s (%s): every write to it refused; the card jobs "
+                    "and the queue's saves stop; restarting\n",
+                    g.known ? "a remount" : "the mount", id);
+    } else {
+      Serial.printf("[card] ANOTHER CARD in the slot (FatFs mounted it again: %s): every write to it refused; the card "
+                    "jobs and the queue's saves stop; restarting to use it\n",
+                    id);
+    }
+    // (No word for an unread card: for a player with one card, "back" is the nearer.)
+    if (userInterface) userInterface->note(uistr::tr(unread ? uistr::S::card_back : uistr::S::card_another), 3000);
     restartAtMs = millis() + 1200;  // the toast first
     return;
   }
@@ -2931,16 +2987,6 @@ static void stepCardGuard() {
     Serial.println("[card] the card answered again (FatFs mounted it again: the same card)");
     return;
   }
-  // A compaction that stopped on a read of D with no answer, this remount: D and the
-  // journals stay as they are. A restart would only have the next boot's compaction
-  // meet the same sector, and so at every boot. So the jobs stop instead, until the next
-  // boot; what the worker has left of the step ends on its own.
-  if (library.store()->compactionUnread() || library.store()->readFailed()) {
-    Serial.println("[card] the card answered again (the same card), and a read of its records had failed");
-    library.holdCardJobs("a read of the card's records failed under a card job");
-    cardTasks->begin();
-    return;
-  }
   using Phase = librarytext::Status::Phase;
   const Phase phase = cardTasks->status().phase;
   if (cardTasks->worker().busy() || cardTasks->libraryWrite() || cardTasks->updating() || phase == Phase::Checking ||
@@ -2949,16 +2995,23 @@ static void stepCardGuard() {
     Serial.println("[card] the card answered again (the same card) with a card job under way: the queue saved, "
                    "restarting");
     queueStore.flushNow();
+    cardbreaker::noteRestart(cardBreakerWord);
     if (userInterface) userInterface->note(uistr::tr(uistr::S::card_back), 3000);
     restartAtMs = millis() + 1200;
     return;
   }
   const tagstore::TagStore::Opened o = library.store()->open();
+  // (This open may be a remount itself: FatFs's first read-mode call once writes are off, its
+  // write-mode calls having counted and mounted nothing. No job holds anything of it yet.)
+  remountsSeen = sectordisk::guard().remounts;
   // A read the card failed at this open says nothing of the records: the jobs, started
   // on what it left, would replace them. Off until the next boot, which asks again (no
-  // asking here: such a read with no answer makes the next call a remount, and the next
+  // asking here: a card silent past its init makes the next call a remount, and the next
   // pass would ask again).
   if (o.readFailed) library.holdCardJobs("the card failed a read of the records when it answered again");
+  // Read after read that left it silent, each a cut, and the jobs begin again at each: the
+  // stop can't end that when the files move on (CachedDrive::tooSilent()).
+  if (g.tooSilent) library.holdCardJobs("the card kept going silent: no card jobs this session");
   const bool begun = cardTasks->begin();
   Serial.printf("[card] the card answered again (the same card): its records opened again (D %s, %lu journal "
                 "chunks), the card jobs %s%s\n",
@@ -3136,7 +3189,7 @@ static void leaveFence() {
   if (queueStore.remapFinish(s.built)) sleepEntry.rekey(queue.currentKey());
   // Auto DJ: its DJ marks and its place in the queue under the new keys;
   // the join again on the new index (its next steps).
-  if (autoDj) autoDj->live();
+  if (autoDj) autoDj->live(s.built, s.reloaded);
   const LibraryIndex* index = library.index();
   durations.reset(index && index->ready() ? index->trackCount() : 0);
   if (userInterface) {
@@ -3145,10 +3198,10 @@ static void leaveFence() {
   }
   Serial.printf("[lib] the update step: %s in %.0f ms on the card worker (the loop live; the fence up %lu ms); PSRAM "
                 "free %u B before, %u B after, lowest %s\n",
-                s.built ? (s.walked ? "walked /music" : "built") : s.cardGone ? "FAILED (the card's records didn't "
-                                                                                 "open, or a read failed: the card "
-                                                                                 "pulled?)"
-                                                              : "FAILED (out of PSRAM)",
+                s.built      ? (s.walked ? "walked /music" : "built")
+                : s.reloaded ? "FAILED (a read of the card's records failed: the last library.idx loaded again)"
+                : s.cardGone ? "FAILED (the card's records didn't open, or a read failed: the card pulled?)"
+                             : "FAILED (out of PSRAM)",
                 s.buildMs, (unsigned long)s.fenceMs, (unsigned)fencePsramBefore,
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), lowest);
   if (s.built && !s.walked) {
@@ -3160,7 +3213,9 @@ static void leaveFence() {
                   r.restarted ? "; restarted without a file that failed its checks" : "",
                   library.transferBad() ? "; T left out" : "", (unsigned)(index ? index->memory().buildPeak : 0));
   }
-  if (s.journalsLeft) Serial.println("[lib] the journals couldn't be compacted first: built from tags.bin alone");
+  if (s.built && s.journalsLeft) {
+    Serial.println("[lib] the journals couldn't be compacted first: built from tags.bin alone");
+  }
 }
 
 // Every loop pass, after the UI's (its covers taken in, its list's motion
@@ -3433,6 +3488,16 @@ void setup() {
   // ~13 KB for its two copies).
   const uint32_t freeBeforeLibrary = diag::heap().internalFree;
   library.begin();
+  {
+    uint32_t restarts = 0;
+    heldByBreaker = cardbreaker::atBoot(cardBreakerWord, esp_reset_reason() == ESP_RST_SW, &restarts);
+    if (heldByBreaker) {
+      library.holdCardJobs("the guard restarted twice in a row for this card: no card jobs this session");
+      Serial.printf("[card] the guard restarted %lu times in a row: no card jobs this boot (covers, Auto DJ, the "
+                    "waveform and the queue go on)\n",
+                    (unsigned long)restarts);
+    }
+  }
   // The repeat mode saved (Off unless changed), before the queue and the
   // first play; shuffle comes back with the queue's file.
   player.setRepeat(queueStore.loadRepeat());
@@ -3747,6 +3812,8 @@ void loop() {
       char note[96];  // (settings.idle_off_note_*, settings.cpu_boot_note: i18n/en.json's "bytes")
       if (idlePower.takeBootNote(note, sizeof(note)) || powerSettings.takeBootNote(note, sizeof(note))) {
         userInterface->note(note, 6000);
+      } else if (heldByBreaker) {
+        userInterface->note(uistr::tr(uistr::S::library_row_rescan_unread), 6000);
       }
     }
     userInterface->loop(now);

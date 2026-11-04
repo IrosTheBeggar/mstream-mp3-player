@@ -210,6 +210,7 @@ void QueueSaver::stepWrite(uint32_t nowMs, uint32_t maxLines) {
 void QueueSaver::finishWrite(uint32_t nowMs) {
   writing_ = false;
   sink_ = nullptr;
+  retryMs_ = kRetryMs;
   // What the file holds: the queue (the plain writer's Done: unchanged
   // since begin()), or the snapshot's.
   const bool snapshot = snap_.ids != nullptr;
@@ -251,7 +252,8 @@ void QueueSaver::dropWrite() {
 void QueueSaver::failed(uint32_t nowMs) {
   ++failures_;
   failedSinceEdit_ = true;
-  nextTryMs_ = nowMs + kRetryMs;
+  nextTryMs_ = nowMs + retryMs_;
+  retryMs_ = retryMs_ < kRetryMaxMs / 2 ? retryMs_ * 2 : kRetryMaxMs;
 }
 
 void QueueSaver::savePosition() {

@@ -70,9 +70,11 @@ public:
     buf_ = buf;
     size_ = size;
     used_ = 0;
+    taken_ = 0;
   }
   bool write(const void* data, size_t n) override {
     if (!f_ || !buf_) return false;
+    taken_ += n;
     const auto* p = static_cast<const uint8_t*>(data);
     while (n) {
       if (used_ == size_ && !flush()) return false;
@@ -91,10 +93,13 @@ public:
     used_ = 0;
     return ok;
   }
+  // What write() took since reset().
+  size_t taken() const { return taken_; }
 
 private:
   fs::File* f_ = nullptr;
   uint8_t* buf_ = nullptr;
   size_t size_ = 0;
   size_t used_ = 0;
+  size_t taken_ = 0;
 };
