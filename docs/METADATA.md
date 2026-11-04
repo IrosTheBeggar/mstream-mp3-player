@@ -5292,7 +5292,10 @@ src/. What the code decided where 3.2-3.4 left room:
   save's own retry can be that remount, nothing else reading: hence the once.)
   **Cost:** a fault that ends with no such remount leaves edits, the position and the resume point unsaved
   for what is left of the wait, up to 5 minutes, against a hard cut (an orderly stop flushes: no wait). A re-seat
-  under about 12 s, or with nothing asking the card while it was out, is one; so is a second pull in a run of failures.
+  under about 12 s, or with nothing asking the card while it was out, is one; so is any pull once a run's card back
+  has been taken, a false one included. With the read stop under the save (its sector silent 4 times, 36-46 s on with
+  nothing else reading), a try or a flush in its 5 minutes fails at once, and the wait after that try still runs:
+  on the rig saved 644 s after the edit, against 72 s with no card back at all.
 - **The breaker** (2026-11-02; `lib/core/CardBreaker.h`, `test_card_breaker`):
   the backstop for a restart the look can't end, whatever brings it (what ends in
   no restart it never sees: the read stop's). Three words
@@ -5352,6 +5355,11 @@ src/. What the code decided where 3.2-3.4 left room:
   | A write of the queue's save refused once, in its close; or a FAT sector of the old `queue.txt` alone, for good | `queue.txt` empty, or both files gone | as before the save, or `queue.tmp` whole | The save says it failed, and tries again 10 s on, then at twice the wait |
   | The first save on a card with no `queue.txt`, a data sector of its cluster refusing writes | `queue.txt` empty, whole at the next | whole at the retry | The kept `queue.tmp` is named `queue.txt`, and FatFs moves on from its cluster |
   | A fresh card's first free cluster refusing a write, no `/.player` yet | a lost cluster, whole at boot 2 | whole at boot 1 | `stateDir()` asks until a mkdir works; a read that failed asks at the next boot |
+  | A pull of 25-700 s, an edit waiting, a track playing or a Play at the put-back | a try every 10 s | saved 0-1.1 s after the put-back | `cardBack()`. Nothing reading until the save's own try: up to 212 s |
+  | A re-seat under about 12 s, a track playing | a try every 10 s | at most 8.8 s after it; after a long failure up to 210 s | The signal needs a mount that failed 10 s before the remount |
+  | A window sector refusing writes for 2-12 s, a save under it | not measured | 1 failure, 9 saves, next boot whole | Over 12 s: writes off at 12 s |
+  | `/.player`'s directory: a read works, then no answer for 2-8 s, each time, an edit waiting, nothing playing, 900 s | not measured | 10 tries, 3-5% of the loop, passes of up to 4.7 s | With no card back 7 tries. A status sees it first, no look, no stop, no count |
+  | The same for 11-30 s, a track playing | not measured | 154-239 s of sound in 300 s, 5-6 remounts | With no card back 182-260 s; the saver's once is the bound. 3-10 s: no difference. Rare, and a guess at a card |
 
   Sweeps, one sector at a time, over three card states. 225 sectors read: 0 restarts
   (before, 147 of the 225 restarted at every boot), but for sector 0 and the boot sector,
