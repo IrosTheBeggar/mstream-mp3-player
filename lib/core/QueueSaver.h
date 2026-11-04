@@ -32,7 +32,8 @@ struct QueueResume {
 //   a temporary file that then replaces the queue file. An edit while a
 //   write is under way drops that write; it starts again once the edits
 //   settle. A failed write is tried again 10 s later, then at twice the wait, up
-//   to 5 minutes (each try can hold the loop for seconds), until one works.
+//   to 5 minutes (each try can hold the loop for seconds), until one works or
+//   the card comes back (cardBack()).
 // - Edits that never settle (Auto DJ appending a 1-second track every
 //   second, each also pushing out the oldest entry at the cap: the device's
 //   soak, 2026-10-13, wrote nothing for 59 minutes): once the queue has
@@ -198,6 +199,10 @@ public:
   uint32_t snapshotWrites() const { return snapshotWrites_; }  // of writes(), from a snapshot
   uint32_t resumeWrites() const { return resumeWrites_; }
   uint32_t failures() const { return failures_; }
+  // The last failure's wait, until its next try.
+  uint32_t lastWaitMs() const { return lastWaitMs_; }
+  // The card came back: the next write isn't held by what the failures before it built up.
+  void cardBack(uint32_t nowMs);
   uint32_t lastWriteMs() const { return lastWriteMs_; }
 
 private:
@@ -263,6 +268,7 @@ private:
   uint32_t writeStartMs_ = 0;
   uint32_t nextTryMs_ = 0;
   uint32_t retryMs_ = kRetryMs;  // the next failed write's wait
+  uint32_t lastWaitMs_ = kRetryMs;
   uint32_t lastWriteMs_ = 0;
   uint32_t writes_ = 0, snapshotWrites_ = 0, failures_ = 0;
 

@@ -70,7 +70,7 @@ bool CardTasks::begin() {
   // The card failed a read these would have to trust. A walk from D alone would take
   // every file T lists for new, one with no D would start the records over, the scan
   // would read them all, and a compaction and the update step replace what is there.
-  // So no card jobs this session (covers go on): the next boot asks again. (A library
+  // So no card jobs this session (covers go on, but for a card gone too silent): the next boot asks again. (A library
   // with no transfer in it, under a root that can't be read, has none of that to lose:
   // its jobs run, as on any such card.)
   if (lib_.cardJobsHeld()) {
@@ -756,7 +756,11 @@ void CardTasks::state(librarytext::Status* s, char* line, size_t size) const {
   *s = status();
   if (!active_) {
     if (lib_.cardJobsHeld()) {
-      snprintf(line, size, "%s: covers only, a restart asks again", lib_.heldWhy());
+      if (sectordisk::guard().tooSilent) {
+        snprintf(line, size, "%s: a restart asks again", lib_.heldWhy());
+      } else {
+        snprintf(line, size, "%s: covers only, a restart asks again", lib_.heldWhy());
+      }
     } else {
       snprintf(line, size, "no records here (the flash, or no PSRAM): covers only");
     }

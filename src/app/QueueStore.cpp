@@ -215,11 +215,13 @@ bool QueueStore::flushNow() {
   return ok;
 }
 
+void QueueStore::cardBack() { saver_.cardBack(millis()); }
+
 void QueueStore::noteFailures() {
   if (saver_.failures() == failuresSeen_) return;
   failuresSeen_ = saver_.failures();
   Serial.printf("[queue] saving the queue failed (card full or gone?): trying again in %lu s\n",
-                (unsigned long)(QueueSaver::kRetryMs / 1000));
+                (unsigned long)(saver_.lastWaitMs() / 1000));
 }
 
 ByteSink* QueueStore::openTemp() {
@@ -227,13 +229,23 @@ ByteSink* QueueStore::openTemp() {
   paths(file, temp, sizeof(file));
   if (!buf_) buf_ = static_cast<uint8_t*>(psramAlloc(kBufSize));
   // A queue.tmp a failed rename kept, with no queue.txt: it takes that name first. This open
-  // would empty it before anything new is safe, and give FatFs the same clusters back.
+  // would empty it before anything new is safe, and give FatFs the same clusters back. What
+  // the card can't say (out, a read that failed) isn't "no such file": no open until it can.
   fs::FS& fs = storage_.fs();
-  if (checkKept_ && !fs.exists(file) && fs.exists(temp) && !fs.rename(temp, file)) {
-    Serial.printf("[queue] couldn't name %s %s\n", temp, file);
-    return nullptr;
+  if (checkKept_) {
+    using Seen = LocalStorage::Seen;
+    const Seen txt = storage_.seen(file);
+    const Seen tmp = txt == Seen::No ? storage_.seen(temp) : Seen::No;
+    if (txt == Seen::Unknown || tmp == Seen::Unknown) {
+      Serial.printf("[queue] couldn't write %s\n", temp);
+      return nullptr;
+    }
+    if (tmp == Seen::Yes && !fs.rename(temp, file)) {
+      Serial.printf("[queue] couldn't name %s %s\n", temp, file);
+      return nullptr;
+    }
+    checkKept_ = false;
   }
-  checkKept_ = false;
   if (buf_) file_ = fs.open(temp, FILE_WRITE);
   if (!buf_ || !file_) {
     Serial.printf("[queue] couldn't write %s\n", temp);

@@ -68,6 +68,8 @@ public:
   // Something on its way to the card (a write under way, an edit or a
   // move waiting its delay; not a failed one waiting its retry).
   bool busy() const { return storage_.available() && saver_.busy(); }
+  // The card came back (a remount): QueueSaver::cardBack().
+  void cardBack();
   // The PSRAM a queue.txt write under way holds for its snapshot (lib/core
   // QueueSaver: at most 40 KB), which remapBegin()'s flush gives back (the
   // library update's memory check counts it in what the fence frees).

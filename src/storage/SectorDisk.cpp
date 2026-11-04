@@ -78,7 +78,11 @@ void* s_watchCtx = nullptr;
 DSTATUS wInit(unsigned char pdrv) {
   s_drive.init();
   const DSTATUS st = ff_sd_initialize(pdrv);
-  if (!(st & STA_NOINIT)) s_drive.remounted(sdcard_num_sectors(pdrv));
+  if (st & STA_NOINIT) {
+    s_drive.mountFailed();
+  } else {
+    s_drive.remounted(sdcard_num_sectors(pdrv));
+  }
   return s_drive.foreign() || s_drive.writesOff() ? static_cast<DSTATUS>(st | STA_PROTECT) : st;
 }
 DSTATUS wStatus(unsigned char pdrv) {
@@ -128,11 +132,15 @@ bool install(uint8_t pdrv) {
   s_drive.init();  // a mount: nothing kept from before
   // The mount's card, before the wrapper goes in (no other task reads the
   // card yet): the one FatFs's remounts are held to.
-  // (A read of the mount's that got no answer, FSINFO's, which FatFs does without, left
-  // its mark: gone first, or none of these reads reaches the card. No mark: at once. A
-  // card silent a while after it is waited for: with no identity any remount restarts.)
-  for (int i = 0; i < 8 && (ff_sd_initialize(pdrv) & STA_NOINIT); ++i) delay(500);
-  s_drive.remember(sdcard_num_sectors(pdrv));
+  // (A read of the mount's that failed, FSINFO's, which FatFs does without, can leave the
+  // driver's mark, or the card busy with none, or refusing commands: asked again for up to
+  // 4 s, the mark gone first, or none of these reads reaches the card. Still none: with no
+  // identity any remount restarts. No fault: the first ask.)
+  for (int i = 0; i < 8; ++i) {
+    ff_sd_initialize(pdrv);
+    if (s_drive.remember(sdcard_num_sectors(pdrv))) break;
+    delay(500);
+  }
   // The volume FatFs mounted on this drive, as CardSpace finds it: a directory of the root
   // names it (no sector read, one status command).
   char root[4] = {static_cast<char>('0' + pdrv), ':', '/', '\0'};
@@ -205,6 +213,7 @@ Guard guard() {
   g.writesOff = s_drive.writesOff();
   g.tooSilent = s_drive.tooSilent();
   g.kept = s_drive.kept();
+  g.cardBacks = s_drive.cardBacks();
   const CachedDrive::Stats d = s_drive.stats();
   g.faultLba = d.faultLba;
   g.writeRetries = d.writeRetries;

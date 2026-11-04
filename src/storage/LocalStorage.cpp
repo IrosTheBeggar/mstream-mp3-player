@@ -98,6 +98,14 @@ uint32_t LocalStorage::forEachFile(void (*fn)(const char* path, void* ctx), void
   return walk(w, static_cast<size_t>(len), 0);
 }
 
+LocalStorage::Seen LocalStorage::seen(const char* path) const {
+  char full[64];
+  snprintf(full, sizeof(full), "%s%s", mount_, path);
+  struct stat st;
+  if (::stat(full, &st) == 0) return Seen::Yes;
+  return errno == ENOENT ? Seen::No : Seen::Unknown;
+}
+
 const char* LocalStorage::stateDir() {
   if (available() && !stateDirMade_) {
     // A mkdir that failed is asked again: FatFs has moved on from the cluster the card

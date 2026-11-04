@@ -1760,7 +1760,7 @@ void Core2AudioBackend::saveOpusCache() {
     // save() cleaned the cache as it made the blob, which the card never
     // got (the temp file wouldn't open: the mount's few file handles all
     // taken by the track, the queue's write and the thumbnails; a short
-    // write; the rename): dirty again, and due in kOpusCacheRetryMs, so
+    // write; the rename): dirty again, and due in kOpusCacheRetryMs, then at twice the wait, so
     // the record reaches the card before a boot needs it, without a
     // further open to prompt it. A put meanwhile has dirtied it already
     // and brought the time forward: either is fine.

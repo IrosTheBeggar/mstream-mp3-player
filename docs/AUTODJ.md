@@ -514,7 +514,7 @@ track. docs/QUEUE-MODES.md section 16 has the modes.
 |---|---|
 | The decoder's refill | After a start or a skip, the decoder fills its ring from empty, flat out, above the loop. A due pick waits until the new track has 500 ms buffered, its source has ended (a track shorter than 500 ms), or 1.5 s have passed; nothing is read ahead meanwhile. A gapless join is no start: nothing waits. Counted: "waited for a refill". (A pick timed across the refill measured the decoder: 108 ms on 2026-10-13) |
 | A pick that gave no track, or one the queue refused | Tried again after 5 s |
-| A read ahead that failed | The next 2 s after its end (a pick still reads what it needs); the same row's second goes in the damaged ring (3.13) |
+| A read ahead that failed, or a pick's read | The next read ahead 2 s after its end (a pick still reads what it needs); the same row's second goes in the damaged ring (3.13) |
 | The index joining | No pick: it waits for the join (condition 1, 5), and the library update waits for it (4.6) |
 
 ### 4.6 The library update's fence

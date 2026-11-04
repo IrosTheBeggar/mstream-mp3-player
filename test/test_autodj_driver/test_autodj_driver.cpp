@@ -703,6 +703,27 @@ void test_a_failed_read_ahead_waits_from_its_end() {
   TEST_ASSERT_TRUE(r.pass().prefetched);
 }
 
+// The pick's own read failing: the read ahead waits the same, or it holds the card again
+// at once, the ring near empty.
+void test_a_failed_read_at_the_pick_holds_off_the_read_ahead() {
+  Rig r;
+  TEST_ASSERT_TRUE(r.dj.setOn(true));
+  r.playOne(r.card.trackOf(5));
+  r.reader.fail = true;
+  r.reader.holdUs = 1500000;
+  const uint32_t ioSkips = r.dj.engine().stats().ioSkips;
+  Pass a = r.playTo(700);
+  TEST_ASSERT_TRUE(a.picked);
+  TEST_ASSERT_TRUE(r.dj.engine().stats().ioSkips > ioSkips);
+  r.reader.holdUs = 0;
+  r.reader.fail = false;
+  TEST_ASSERT_FALSE(r.pass().prefetched);
+  r.env.nowMs += autodj::kReadAgainMs + 1000;  // (2 s and 1 of the 1.5 s)
+  TEST_ASSERT_FALSE(r.pass().prefetched);
+  r.env.nowMs += 600;
+  TEST_ASSERT_TRUE(r.pass().prefetched);
+}
+
 // A slot whose CRC fails on the read ahead and again when the next pick
 // reads it (the device check of 2026-10-15: an album's slots changed on
 // the card): the read ahead's pass says its first failure (Suspect), the
@@ -1650,6 +1671,7 @@ int main(int, char**) {
   RUN_TEST(test_picks_are_appended_marked_and_keep_the_undo);
   RUN_TEST(test_a_failed_read_ahead_waits);
   RUN_TEST(test_a_failed_read_ahead_waits_from_its_end);
+  RUN_TEST(test_a_failed_read_at_the_pick_holds_off_the_read_ahead);
   RUN_TEST(test_a_slot_damaged_at_the_pick_is_named_once);
   RUN_TEST(test_the_undo_it_drops_is_said);
   RUN_TEST(test_a_pick_removed_before_it_played_leaves_the_ring);

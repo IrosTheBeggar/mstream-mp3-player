@@ -2938,6 +2938,18 @@ static void stepCardGuard() {
                    "writes): no more this session (the queue's saves and the card jobs fail, playing goes on); a "
                    "restart asks again");
   }
+  static bool tooSilentSaid = false;
+  if (g.tooSilent && !tooSilentSaid) {
+    tooSilentSaid = true;
+    Serial.println("[card] the card kept going silent: no covers from now on and, at the next remount, no card jobs, "
+                   "Auto DJ index or waveform reads (playing goes on); a restart asks again");
+  }
+  // The card back: the queue's next save doesn't sit out the wait its failures built up.
+  static uint32_t cardBacksSeen = 0;
+  if (g.cardBacks != cardBacksSeen) {
+    cardBacksSeen = g.cardBacks;
+    queueStore.cardBack();
+  }
   static bool calmed = false;
   if (!calmed && millis() >= cardbreaker::kCalmMs) {
     calmed = true;

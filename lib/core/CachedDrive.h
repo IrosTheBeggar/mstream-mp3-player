@@ -168,10 +168,17 @@ public:
   // read the card answered that found it silent, it's a card put back (the first anyone
   // saw of it was a status): the stopped reads are asked again, and the counts start over.
   bool remounted(uint32_t sectors);
+  // The driver's init found no card answering, at FatFs's mount (remounted() comes at a later one).
+  void mountFailed() { mountFailed_ = true; }
   // Any task.
   bool armed() const { return armed_.load(); }
   bool foreign() const { return foreign_.load(); }
   uint32_t remounts() const { return remounts_.load(); }
+  // The card came back: remounts that are a card put back, or that followed a mount with no card
+  // answering (a card out for a while, whose first failure a look saw). Coarser than what the stops
+  // and the counts take for a put back: a card silent past its init can be one too, and what this
+  // brings on, the queue's save asked sooner, is bounded by them. Never reset.
+  uint32_t cardBacks() const { return cardBacks_.load(); }
   // remember()'s and the last remounted()'s (a diagnostic, as stats()).
   const Identity& mountIdentity() const { return mountId_; }
   const Identity& lastIdentity() const { return lastId_; }
@@ -212,7 +219,9 @@ private:
   // error. A card out, or not the mount's: FatFs's remount and the guard, as ever. (The
   // one reader outside FatFs, the free count, asks the status first: CardSpace.)
   // True: a new silence: nothing answered, or an identity the look couldn't read: FatFs's
-  // next call that finds a card answering makes a remount of this fault.
+  // next call that finds a card answering makes a remount of this fault. (A look that finds the
+  // card back with one noted, FatFs having gone on with the mark standing, ends it: no remount
+  // comes of it and nothing was cut, so it counts for nothing.) Foreign: the count alone.
   bool lookAfterFault(uint32_t lba);
   bool noteSilence();
   // The reads that left the card silent: the same first sector and count, kStopAfter times
@@ -251,6 +260,9 @@ private:
   bool silentFault_ = false;   // a look found the card silent, and it has answered no read since
   uint32_t silences_ = 0;      // ... this many times (tooSilent()), in FatFs's calls
   uint32_t silentWrites_ = 0;  // ... of them at a write (writeFailed())
+  bool silentWrite_ = false;   // ... as silentFault_'s was
+  bool mountFailed_ = false;   // mountFailed(), since the last remount
+  std::atomic<uint32_t> cardBacks_{0};
   std::atomic<bool> tooSilent_{false};
   bool windowFailing_ = false;  // windowFailed(): the sector's first time, no write of it taken since
   uint32_t windowLba_ = 0;

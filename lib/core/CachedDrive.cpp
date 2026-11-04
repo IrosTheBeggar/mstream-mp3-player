@@ -82,14 +82,22 @@ void CachedDrive::init() {
 
 bool CachedDrive::lookAfterFault(uint32_t lba) {
   stats_.faultLba = lba;
-  if (!link_ || !armed_.load() || foreign_.load() || remountDue_) return false;
+  if (!link_ || !armed_.load() || remountDue_) return false;
+  // Foreign until a restart: nothing to look for, and that session stays up only when a boot
+  // holds the card jobs (the breaker's): the count and the stop are all it has.
+  if (foreign_.load()) return !link_->answers() && noteSilence();
   if (link_->answers()) {  // that read's own fault, as a CRC's: FatFs's error to report
     silentFault_ = false;
     return false;
   }
   uint32_t sectors = 0;
   if (!link_->init(&sectors)) return noteSilence();  // nothing answers: the mark stands: FatFs's remount
-  silentFault_ = false;  // (the mark gone: no remount comes of it)
+  // The mark gone: no remount comes of it, so a silence noted for it was no cut: it doesn't count.
+  if (silentFault_) {
+    silentFault_ = false;
+    --silences_;
+    if (silentWrite_) --silentWrites_;
+  }
   lastId_ = readIdentity(sectors);
   if (mountId_.sameCard(lastId_)) {
     kept_.fetch_add(1);
@@ -107,6 +115,7 @@ bool CachedDrive::noteSilence() {
   // mark standing. Nothing reached the card: one fault, and that read is none of its own.)
   if (silentFault_) return false;
   silentFault_ = true;
+  silentWrite_ = false;
   if (++silences_ >= kTooSilentAfter) tooSilent_.store(true);
   return true;
 }
@@ -138,7 +147,8 @@ void CachedDrive::afterRead(uint32_t lba, uint32_t count, bool ok, bool reached)
   int i = 0;
   while (i < failedN_ && (failed_[i].lba != lba || failed_[i].count != count)) ++i;
   if (ok) {
-    if (reached) silentFault_ = false;
+    // (With a remount owed, FatFs going on in the call that owes it: not yet.)
+    if (reached && !remountDue_) silentFault_ = false;
     if (i < failedN_) failed_[i] = failed_[--failedN_];
     return;
   }
@@ -228,7 +238,9 @@ bool CachedDrive::write(uint32_t lba, const uint8_t* data, uint32_t count) {
 }
 
 void CachedDrive::writeFailed(uint32_t lba) {
-  if (lookAfterFault(lba) && ++silentWrites_ >= kStopAfter) writesOff_.store(true);
+  if (!lookAfterFault(lba)) return;
+  silentWrite_ = true;
+  if (++silentWrites_ >= kStopAfter) writesOff_.store(true);
 }
 
 void CachedDrive::trim(uint32_t first, uint32_t last) {
@@ -273,6 +285,8 @@ bool CachedDrive::remounted(uint32_t sectors) {
     silences_ = 0;
     silentWrites_ = 0;
   }
+  if (!silentFault_ || mountFailed_) cardBacks_.fetch_add(1);
+  mountFailed_ = false;
   if (!foreign_.load()) {  // (foreign until a restart, whatever comes back)
     lastId_ = readIdentity(sectors);
     if (!mountId_.sameCard(lastId_)) foreign_.store(true);

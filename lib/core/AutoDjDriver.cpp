@@ -348,9 +348,15 @@ void Driver::pickInto(PlaybackController& player, const Index& ix, const Env& en
   in.playingTrack = q.currentTrack();
   in.libraryTracks = env.libraryTracks;
   const uint64_t t0 = now();
+  const uint32_t ioSkips = engine_.stats().ioSkips;
   p->pick = engine_.pick(s_, in);
   p->pickUs = static_cast<uint32_t>(now() - t0);
   p->readUs = timed.us;
+  // A read that failed: the read ahead doesn't ask it again at once, as after its own.
+  if (engine_.stats().ioSkips != ioSkips) {
+    readWait_ = true;
+    readAtMs_ = env.nowMs + p->readUs / 1000 + kReadAgainMs;
+  }
   p->picked = true;
   const QueueModel::Edit before = q.undoable();
   if (p->pick.ok && player.addFromAutoDj(p->pick.track, cue)) {

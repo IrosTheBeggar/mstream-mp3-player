@@ -1845,7 +1845,7 @@ void test_flush_now_writes_an_edit_at_once() {
 
 // The card fails: flushNow() says so and the last file stays; the saver
 // isn't busy with a failed write (no reason to stay on for it), and tries
-// again 10 s later.
+// again 10 s later (then at twice the wait: the next test).
 void test_flush_now_that_fails_keeps_the_last_file() {
   LibraryIndex idx;
   build(idx, {std::begin(kFiles), std::end(kFiles)});
@@ -1871,14 +1871,15 @@ void test_flush_now_that_fails_keeps_the_last_file() {
   TEST_ASSERT_FALSE(saver.flushNow(2120));
   st.failOpen = false;
   saver.loop(5000);
-  TEST_ASSERT_EQUAL_STRING("last good", st.file.c_str());  // the retry waits: the second failure's 20 s
-  for (uint32_t t = 22200; t < 22400; t += 20) saver.loop(t);
+  saver.loop(22200);
+  TEST_ASSERT_EQUAL_STRING("last good", st.file.c_str());  // the retry waits: the third failure's 40 s (the first flush tried twice)
+  for (uint32_t t = 42200; t < 42400; t += 20) saver.loop(t);
   TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 3).c_str(), st.file.c_str());
   TEST_ASSERT_EQUAL_UINT32(3, st.posGeneration);
   // An edit after a failure makes it busy again.
   const uint32_t more[] = {2};
   q.append(more, 1);
-  saver.loop(22500);
+  saver.loop(42500);
   TEST_ASSERT_TRUE(saver.busy());
 }
 
@@ -1922,6 +1923,29 @@ void test_a_failed_write_waits_longer_each_time() {
   st.failOpen = true;
   tries(0);
   tries(10000);
+  TEST_ASSERT_EQUAL_UINT32(20000, saver.lastWaitMs());
+  // At the commit too, where every real write of a short queue goes.
+  st.failOpen = false;
+  st.failCommit = true;
+  tries(20000);
+  tries(40000);
+  TEST_ASSERT_EQUAL_UINT32(80000, saver.lastWaitMs());
+  // The card back: at once, and from 10 s.
+  saver.cardBack(t);
+  tries(100);
+  tries(10000);
+  // A flush that works leaves no wait: the next edit goes at its 2 s.
+  st.failCommit = false;
+  TEST_ASSERT_TRUE(saver.flushNow(t));
+  q.append(one, 1);
+  saver.loop(t);
+  const uint32_t edited = t;
+  while (saver.contentDirty() && t < edited + 400000) {
+    t += 100;
+    saver.loop(t);
+  }
+  TEST_ASSERT_FALSE(saver.contentDirty());
+  TEST_ASSERT_TRUE(t - edited <= QueueSaver::kContentDelayMs + 100);
 }
 
 // A write dropped for a library rebuild (remap), and the queue then kept

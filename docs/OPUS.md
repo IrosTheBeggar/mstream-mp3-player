@@ -1614,7 +1614,8 @@ found these; each was first checked against the code or re-measured.
   thumbnails), a short write or a failed rename only counted a failure,
   and the record waited for the next put. Fixed: `markDirty()`, which the
   backend calls on a failed write with the save due again in 10 s
-  (`kOpusCacheRetryMs`, the queue saver's wait; `opusCacheDueMs_` is now
+  (`kOpusCacheRetryMs`, the queue saver's wait; since 2026-11-03 twice as long
+  at each failure in a row, up to 5 minutes; `opusCacheDueMs_` is now
   the time the save is due rather than the time of the change); a put in
   between dirties it anyway. test_opus_open_cache's round trip marks the
   saved cache dirty again and saves the same blob once more.
