@@ -175,10 +175,11 @@ public:
   bool foreign() const { return foreign_.load(); }
   uint32_t remounts() const { return remounts_.load(); }
   // The card came back: remounts kCardOutUs or more after a mount with no card answering, for the
-  // queue's save, whose failures build up a wait (QueueSaver::cardBack()); a fault shorter than this
-  // has built up no longer a wait than itself. Not any remount: a save's own, or a window's, would
-  // set up the next try at once, and that one the next. A card silent past its init this long can
-  // be one, and what it brings on is bounded by the stops and the counts. Never reset.
+  // queue's save, whose failures build up a wait (QueueSaver::cardBack()); a pull shorter than this
+  // has built up its first wait at most. Not any remount: a save's own, or a window's, would set up
+  // the next try at once, and that one the next. A card silent this long, or a save's own retry
+  // that long after its failed mount, can be one: the saver takes one for a run of failures, so that
+  // ends there. Never reset.
   static constexpr uint64_t kCardOutUs = 10ull * 1000000ull;
   uint32_t cardBacks() const { return cardBacks_.load(); }
   // remember()'s and the last remounted()'s (a diagnostic, as stats()).

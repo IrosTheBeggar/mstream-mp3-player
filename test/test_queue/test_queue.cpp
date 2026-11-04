@@ -1930,10 +1930,13 @@ void test_a_failed_write_waits_longer_each_time() {
   tries(20000);
   tries(40000);
   TEST_ASSERT_EQUAL_UINT32(80000, saver.lastWaitMs());
-  // The card back: at once, and from 10 s.
+  // The card back: at once, and from 10 s. Once for a run of failures: that try failed, so
+  // whatever the next remount says, the waits go on.
   saver.cardBack(t);
   tries(100);
   tries(10000);
+  saver.cardBack(t);
+  tries(20000);
   // A flush that works leaves no wait: the next edit goes at its 2 s.
   st.failCommit = false;
   TEST_ASSERT_TRUE(saver.flushNow(t));
@@ -1946,6 +1949,14 @@ void test_a_failed_write_waits_longer_each_time() {
   }
   TEST_ASSERT_FALSE(saver.contentDirty());
   TEST_ASSERT_TRUE(t - edited <= QueueSaver::kContentDelayMs + 100);
+  // A write that works ends the run: the next one's card back counts again. With no failure, none.
+  saver.cardBack(t);
+  q.append(one, 1);
+  st.failOpen = true;
+  tries(0);
+  tries(10000);
+  saver.cardBack(t);
+  tries(100);
 }
 
 // A write dropped for a library rebuild (remap), and the queue then kept

@@ -5286,10 +5286,13 @@ src/. What the code decided where 3.2-3.4 left room:
   update's fence that the card refused says so now, the queue being text in PSRAM until the fence
   comes down. A failed save tries again 10 s on, then twice as long each time, up to 5 minutes, and
   says the wait; one that works, or the card coming back (a remount 10 s or more after a mount that
-  found nothing answering: `CachedDrive::cardBacks()`, `QueueSaver::cardBack()`), starts that over. (Not any
-  remount: a save's own, or a window's, set up the next try at once on the rig, the save 99% of the loop.)
-  **Cost:** a fault that ends with no remount leaves edits, the position and the resume point unsaved
-  for what is left of the wait, up to 5 minutes, against a hard cut (an orderly stop flushes: no wait).
+  found nothing answering: `CachedDrive::cardBacks()`, `QueueSaver::cardBack()`), starts that over: once
+  for a run of failures. (Not any remount: a save's own, or a window's, set up the next try at once on the
+  rig, the save 99% of the loop. A card silent 10 s after each read that worked looks out every time, and a
+  save's own retry can be that remount, nothing else reading: hence the once.)
+  **Cost:** a fault that ends with no such remount leaves edits, the position and the resume point unsaved
+  for what is left of the wait, up to 5 minutes, against a hard cut (an orderly stop flushes: no wait). A re-seat
+  under about 12 s, or with nothing asking the card while it was out, is one; so is a second pull in a run of failures.
 - **The breaker** (2026-11-02; `lib/core/CardBreaker.h`, `test_card_breaker`):
   the backstop for a restart the look can't end, whatever brings it (what ends in
   no restart it never sees: the read stop's). Three words

@@ -201,7 +201,8 @@ public:
   uint32_t failures() const { return failures_; }
   // The last failure's wait, until its next try.
   uint32_t lastWaitMs() const { return lastWaitMs_; }
-  // The card came back: the next write isn't held by what the failures before it built up.
+  // The card came back: the next write isn't held by what the failures before it built up. Once
+  // for a run of failures, until a write works.
   void cardBack(uint32_t nowMs);
   uint32_t lastWriteMs() const { return lastWriteMs_; }
 
@@ -269,6 +270,8 @@ private:
   uint32_t nextTryMs_ = 0;
   uint32_t retryMs_ = kRetryMs;  // the next failed write's wait
   uint32_t lastWaitMs_ = kRetryMs;
+  bool failedRun_ = false;  // a write has failed since the last that worked
+  bool backTaken_ = false;  // ... and cardBack() has been taken for them
   uint32_t lastWriteMs_ = 0;
   uint32_t writes_ = 0, snapshotWrites_ = 0, failures_ = 0;
 

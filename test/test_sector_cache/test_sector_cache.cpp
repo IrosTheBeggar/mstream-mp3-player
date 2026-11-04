@@ -1641,7 +1641,7 @@ uint64_t testClock() { return g_nowUs; }
 
 // Told to the queue's saver: a remount kCardOutUs or more after a mount that found nothing answering,
 // once. Not one with no such mount before it, a save's own or a window's, nor one sooner: each try's
-// failure would set up the next, and a blip's wait is no longer than the blip.
+// failure would set up the next, and a blip has built up its first wait at most.
 void test_drive_says_when_the_card_came_back() {
   RamDevice dev;
   formatLike(dev, 8192, 0xA);
