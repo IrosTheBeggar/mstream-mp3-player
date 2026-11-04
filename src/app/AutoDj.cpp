@@ -107,18 +107,20 @@ size_t psramFreeBytes() { return heap_caps_get_free_size(MALLOC_CAP_SPIRAM); }
 
 // What the join's placement leaves free at least while its spacers hold the
 // bottom of PSRAM's largest free block (AutoDjJoin.h), the few milliseconds
-// of begin() (the 'joined' line's "in X ms"): another task's block
+// of begin() (the 'joined' line's "in X ms"), so that another task's block
 // meanwhile still fits (a track's start: the MP3 probe's 4 KB, a seek's
 // 8 KB, the Opus packet buffer's 60 KB; the card worker's 4-16 KB buffers).
-// The spacers over the whole block took the free to 10 KB at every join
-// (MEASURED 2026-10-14). The maps taken after the spacers count (155 KB at
-// 19,410 tracks), and so does the free outside the largest block; when
+// It counts free bytes, not one block: that 60 KB needs a free block of
+// 62,464 B. The spacers over the whole block took the free to 10 KB at every
+// join (MEASURED 2026-10-14). The maps taken after the spacers count (155 KB
+// at 19,410 tracks), and so does the free outside the largest block; when
 // they fall short, the rest of the margin is left above the blocks, which
 // then sit that much under the block's top: so not more (128 KB put the
-// filters 39 KB under it after a library update in test_autodj_join's
-// model, where the runs had taken the holes). Not covered: the first Opus
-// track's 125 KB of buffers (OpusGenerator, once a boot) starting in that
-// window (the track would fail and be skipped: docs/AUTODJ.md 6.2).
+// filters 39 KB under it after a library update in test_autodj_join's model
+// as it was until 2026-11-02, where the runs had taken the holes). Not
+// covered: the first Opus track's 125 KB of buffers (OpusGenerator, once a
+// boot) starting in that window (the track would fail and be skipped:
+// docs/AUTODJ.md 6.2).
 constexpr size_t kJoinMarginBytes = 64 * 1024;
 
 }  // namespace
@@ -560,8 +562,9 @@ void AutoDj::joinStatus() {
                  "blocks in smaller ones", (unsigned)st.topBytes, (unsigned)st.keptElsewhere,
                  (unsigned long)st.runsElsewhere);
       } else {
-        snprintf(where, sizeof(where), "%u B where the heap put them (no spacer), %u of 3 kept and %lu transient "
-                 "blocks in smaller free ones", (unsigned)st.topBytes, (unsigned)st.keptElsewhere,
+        snprintf(where, sizeof(where), "%u B where the heap put them (%s), %u of 3 kept and %lu transient "
+                 "blocks in smaller free ones", (unsigned)st.topBytes,
+                 st.topShort ? "the room at the top fell short" : "no spacer", (unsigned)st.keptElsewhere,
                  (unsigned long)st.runsElsewhere);
       }
       Serial.printf("[dj] joined: %lu of %lu tracks have neighbours (%lu rows of %lu; BPM %u %%, key %u %% of them) in "
