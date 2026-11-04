@@ -2913,7 +2913,7 @@ void test_a_reload_that_fails_says_so() {
 
 // ---------------------------------------------------------------------------
 // The worker's task before the fence: it ends 3 s after its last step (a
-// long wait for the safe point), and the build needs it made again (a 6 KB
+// long wait for the safe point), and the build needs it made again (a 7.5 KB
 // stack in internal RAM). The step asks for it (Out::wantWorker) and puts
 // its fence up only once it is there: with no internal RAM for it, the step
 // waits, the index as it was and nothing held but the scan; once it can be

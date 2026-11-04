@@ -2432,7 +2432,7 @@ TagStore::Compacted TagStore::compact(bool rescan) {
   // Zeroed, then default-initialized in place: what `new (p) CompactWork()`
   // means, without the copy of it xtensa's GCC built on the stack for that
   // value-initialization (a 13 KB frame: compact() runs on the card
-  // worker's 6 KB stack; N12's review, -fstack-usage).
+  // worker's 7.5 KB stack; N12's review, -fstack-usage).
   void* wm = b.take(sizeof(CompactWork));
   std::memset(wm, 0, sizeof(CompactWork));
   CompactWork* w = new (wm) CompactWork;
