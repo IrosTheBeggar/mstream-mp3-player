@@ -119,12 +119,32 @@ bool trackPathHash(const LibraryIndex& index, uint32_t track, char* path, size_t
   return true;
 }
 
+namespace {
+
+// What blocks of `bytes` in all can take of the heap: each one's rounding to
+// its size class (at most a thirty-second of it), and 19 B or less of header,
+// poisoning and alignment (a join has at most 21 blocks).
+size_t carvedAtMost(size_t bytes) { return bytes + bytes / 32 + 1024; }
+
+// The largest request that takes at most `room` bytes of the heap, its header
+// aside: one just under a size class's boundary, which it is rounded up to
+// whatever the heap adds to a request (12 B of poisoning here), so it takes
+// that boundary and no more. Asked any higher, it would take the next one, a
+// thirty-second of it more than it asked for.
+size_t requestWithin(size_t room) {
+  constexpr size_t kUnderBoundary = 64;
+  if (room < 4096) return 0;
+  int fl = 0;
+  for (size_t r = room >> 1; r; r >>= 1) ++fl;
+  return (room & ~((static_cast<size_t>(1) << (fl - 5)) - 1)) - kUnderBoundary;
+}
+
+}  // namespace
+
 size_t spacerFor(size_t largest, size_t bytes) {
-  // (The spacer's request rounded up, by at most a thirty-second of it,
-  // stays within the block when what it leaves is that much.)
-  const size_t keep = std::max(bytes + bytes / 32 + 1024, largest / 32 + 1);
+  const size_t keep = carvedAtMost(bytes);
   // (A few KB of spacer wouldn't move anything worth it.)
-  return largest > keep + 4096 ? largest - keep : 0;
+  return largest > keep + 4096 ? requestWithin(largest - keep) : 0;
 }
 
 bool takeSpacers(size_t bytes, size_t keepFree, size_t (*largest)(), size_t (*freeBytes)(), void* (*alloc)(size_t),
@@ -139,7 +159,7 @@ bool takeSpacers(size_t bytes, size_t keepFree, size_t (*largest)(), size_t (*fr
       // and the difference above them.
       const size_t free = freeBytes();
       const size_t most = free > keepFree + 1024 ? free - keepFree - 1024 : 0;
-      if (s > most) s = most;
+      if (s > most) s = requestWithin(most);
     }
     if (s < 4096) break;  // (spacerFor()'s: a few KB wouldn't move anything worth it)
     void* p = alloc(s);
@@ -157,11 +177,12 @@ bool takeSpacers(size_t bytes, size_t keepFree, size_t (*largest)(), size_t (*fr
       continue;
     }
     // From the largest: its top is what is left of it. Another block is
-    // the largest now: that's it; else the top is closed in once more
-    // (spacerFor() is 0 when it is as tight as it gets).
+    // the largest now: that's it (the block itself was up to a thirty-second
+    // over what largest() said, so its top may be too); else the top is
+    // closed in once more (spacerFor() is 0 when it is as tight as it gets).
     out->p[out->n++] = p;
     placed = true;
-    if (after > before - s) break;
+    if (after > before - s + before / 32) break;
   }
   return placed;
 }
@@ -380,18 +401,21 @@ void Join::noteFree() {
   if (f < stats_.lowestFree) stats_.lowestFree = f;
 }
 
-void* Join::probe(size_t bytes, size_t largest, size_t* minTop, bool* failed) {
+void* Join::probe(size_t bytes, size_t largest, size_t* minTop, void** low, bool* failed) {
   if (bytes >= *minTop) return nullptr;
   void* p = take(bytes);
   if (!p) {
     *failed = true;
     return nullptr;
   }
-  if (place_.largest() >= largest) {
+  // (The largest's low end, once known, is the sure sign: place_.largest() only
+  // says its size class, which a block under a class of it may leave as it was.)
+  if (p != *low && place_.largest() >= largest) {
     noteFree();
     return p;
   }
   give(p, bytes);  // (from the largest: it joins it again, as it was)
+  *low = p;
   *minTop = bytes;
   return nullptr;
 }
@@ -412,6 +436,7 @@ bool Join::takePlaced(uint32_t n, uint32_t rows) {
   // free block.
   const size_t largest = place_.largest();
   size_t minTop = SIZE_MAX;
+  void* low = nullptr;
   bool failed = false;
   void** const kept[3] = {reinterpret_cast<void**>(&maps_.filters), reinterpret_cast<void**>(&maps_.rowToTrack),
                           reinterpret_cast<void**>(&maps_.trackToRow)};
@@ -421,7 +446,7 @@ bool Join::takePlaced(uint32_t n, uint32_t rows) {
   size_t topKept = 0, topTransient = 0;
   for (int i = 0; i < 3; ++i) {
     if (keptBytes[i] == 0) continue;  // (trackToRow, with no tracks)
-    *kept[i] = probe(keptBytes[i], largest, &minTop, &failed);
+    *kept[i] = probe(keptBytes[i], largest, &minTop, &low, &failed);
     if (failed) return false;
     if (*kept[i]) {
       ++stats_.keptElsewhere;
@@ -432,7 +457,7 @@ bool Join::takePlaced(uint32_t n, uint32_t rows) {
   }
   for (uint32_t r = 0; r < runCount_; ++r) {
     runs_[r].cap = r + 1 < runCount_ ? cfg_.runTracks : n - r * cfg_.runTracks;
-    void* block = probe(static_cast<size_t>(runs_[r].cap) * 6, largest, &minTop, &failed);
+    void* block = probe(static_cast<size_t>(runs_[r].cap) * 6, largest, &minTop, &low, &failed);
     if (failed) return false;
     if (block) {
       runs_[r].keys = static_cast<uint32_t*>(block);
@@ -443,7 +468,7 @@ bool Join::takePlaced(uint32_t n, uint32_t rows) {
     }
   }
   if (folderCount_) {
-    void* block = probe(folderBytes(), largest, &minTop, &failed);
+    void* block = probe(folderBytes(), largest, &minTop, &low, &failed);
     if (failed) {
       folderCount_ = 0;
       return false;
@@ -455,7 +480,7 @@ bool Join::takePlaced(uint32_t n, uint32_t rows) {
       topTransient += folderBytes();
     }
   }
-  buf_ = static_cast<uint8_t*>(probe(cfg_.sliceBytes, largest, &minTop, &failed));
+  buf_ = static_cast<uint8_t*>(probe(cfg_.sliceBytes, largest, &minTop, &low, &failed));
   if (failed) return false;
   if (buf_) {
     bufBytes_ = cfg_.sliceBytes;
@@ -479,10 +504,11 @@ bool Join::takePlaced(uint32_t n, uint32_t rows) {
   }
   const size_t underBytes = topTransient + (under >= 0 ? keptBytes[under] : 0);
   Spacers sp;
-  stats_.placed = takeSpacers(stats_.topBytes, underBytes + place_.margin, place_.largest, place_.freeBytes, alloc_,
-                              free_, &sp);
+  stats_.placed = takeSpacers(stats_.topBytes, carvedAtMost(underBytes) + place_.margin, place_.largest,
+                              place_.freeBytes, alloc_, free_, &sp);
   if (!stats_.placed) giveSpacers(&sp, free_);  // (none placed: where the heap puts them, the kept ones first)
   noteFree();
+  const uint32_t folders = folderCount_;
   bool ok = true;
   auto takeKeptOnTop = [&](int i) {
     *kept[i] = take(keptBytes[i]);
@@ -507,15 +533,20 @@ bool Join::takePlaced(uint32_t n, uint32_t rows) {
     if (ok) takeTransientOnTop();
     noteFree();
     giveSpacers(&sp, free_);
-    for (int i = 0; i < 3 && ok; ++i) {
-      if (onTop[i] && i != under) takeKeptOnTop(i);
+    if (!ok) {
+      // The room above the spacers fell short (another task's block took
+      // some of it meanwhile): the rest where the heap puts them, with the
+      // spacers gone. A failed block isn't a heap with no room for it.
+      ok = true;
+      folderCount_ = folders;
+      stats_.placed = false;
+      stats_.topShort = true;
     }
-  } else {
-    for (int i = 0; i < 3 && ok; ++i) {
-      if (onTop[i]) takeKeptOnTop(i);
-    }
-    if (ok) takeTransientOnTop();
   }
+  for (int i = 0; i < 3 && ok; ++i) {
+    if (onTop[i] && !*kept[i]) takeKeptOnTop(i);
+  }
+  if (ok) takeTransientOnTop();  // (placed: nothing left to take)
   noteFree();
   return ok;
 }
