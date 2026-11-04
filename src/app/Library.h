@@ -80,9 +80,20 @@ public:
   // The index was loaded, but D or its journal changed since its build:
   // the scan's end rebuilds it.
   bool softStale() const { return softStale_; }
-  // The boot loaded a library built from a transfer whose root the card failed to
-  // read: no card jobs this session (libraryboot::Decision::holdJobs).
+  // The card failed a read the jobs would have to trust (the root under a transfer's
+  // library, D, its journals, library.idx, or T or D as a build read them), at the boot
+  // (libraryboot::Decision::holdJobs) or when the guard opened the records again: no
+  // card jobs this session, and nothing goes over what is on the card. A restart asks
+  // again. heldWhy(): the log's words.
   bool cardJobsHeld() const { return cardJobsHeld_; }
+  const char* heldWhy() const { return heldWhy_; }
+  // False: /music walked for this session, at a boot that holds its jobs
+  // (LibraryUpdate::Booted::sessionWalked()). What it doesn't list isn't known to be gone.
+  bool listsCard() const { return listsCard_; }
+  void holdCardJobs(const char* why) {
+    cardJobsHeld_ = true;
+    heldWhy_ = why;
+  }
   // The boot couldn't read the root, and the card jobs run all the same: a library
   // with no transfer in it, or one this boot had to build or walk, which then has
   // none (libraryboot::decide()). The root isn't read again on a timer this session:
@@ -171,4 +182,6 @@ private:
   TrackCatalog::Held* held_ = nullptr;  // PSRAM: Now Playing's names behind the fence
   bool softStale_ = false;
   bool cardJobsHeld_ = false;
+  const char* heldWhy_ = "";
+  bool listsCard_ = true;
 };

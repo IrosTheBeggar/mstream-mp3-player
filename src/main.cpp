@@ -1011,9 +1011,11 @@ static bool walkAndRebuild() {
     return false;
   }
   if (library.records()) {
-    Serial.println(library.cardJobsHeld()
-                       ? "[index] the card's root couldn't be read at the boot: no walk this session, a restart asks again"
-                       : "[index] no PSRAM for the card jobs: no walk this session");
+    if (library.cardJobsHeld()) {
+      Serial.printf("[index] %s: no walk, a restart asks again\n", library.heldWhy());
+    } else {
+      Serial.println("[index] no PSRAM for the card jobs: no walk this session");
+    }
     return false;
   }
   return rebuildLibrary();
@@ -2929,6 +2931,16 @@ static void stepCardGuard() {
     Serial.println("[card] the card answered again (FatFs mounted it again: the same card)");
     return;
   }
+  // A compaction that stopped on a read of D with no answer, this remount: D and the
+  // journals stay as they are. A restart would only have the next boot's compaction
+  // meet the same sector, and so at every boot. So the jobs stop instead, until the next
+  // boot; what the worker has left of the step ends on its own.
+  if (library.store()->compactionUnread() || library.store()->readFailed()) {
+    Serial.println("[card] the card answered again (the same card), and a read of its records had failed");
+    library.holdCardJobs("a read of the card's records failed under a card job");
+    cardTasks->begin();
+    return;
+  }
   using Phase = librarytext::Status::Phase;
   const Phase phase = cardTasks->status().phase;
   if (cardTasks->worker().busy() || cardTasks->libraryWrite() || cardTasks->updating() || phase == Phase::Checking ||
@@ -2942,10 +2954,15 @@ static void stepCardGuard() {
     return;
   }
   const tagstore::TagStore::Opened o = library.store()->open();
+  // A read the card failed at this open says nothing of the records: the jobs, started
+  // on what it left, would replace them. Off until the next boot, which asks again (no
+  // asking here: such a read with no answer makes the next call a remount, and the next
+  // pass would ask again).
+  if (o.readFailed) library.holdCardJobs("the card failed a read of the records when it answered again");
   const bool begun = cardTasks->begin();
   Serial.printf("[card] the card answered again (the same card): its records opened again (D %s, %lu journal "
                 "chunks), the card jobs %s%s\n",
-                library.store()->device().present ? "present" : "none", (unsigned long)o.chunks,
+                o.readFailed ? "unread" : library.store()->device().present ? "present" : "none", (unsigned long)o.chunks,
                 begun ? "begun again" : "COULDN'T begin again",
                 library.store()->tmpKept() ? "; tags.tmp KEPT: alone and unchecked (no PSRAM for its check)" : "");
 }
@@ -3419,7 +3436,12 @@ void setup() {
   // The repeat mode saved (Off unless changed), before the queue and the
   // first play; shuffle comes back with the queue's file.
   player.setRepeat(queueStore.loadRepeat());
-  if (!queueStore.restore()) {
+  const bool queueRead = queueStore.restore(library.listsCard());
+  if (!queueRead && library.cardJobsHeld()) {
+    // The card failed a read at this boot, and this may be another: a default queue
+    // would be saved over a queue.txt that is only unread. Empty until a boot reads it.
+    Serial.println("[queue] no queue read at a boot that holds the card jobs: queue.txt left as it is");
+  } else if (!queueRead) {
     queueEverything(false);
     // Past the queue's cap, the library's first 5,000 (QueueModel::assign()).
     const LibraryIndex* lib = library.index();

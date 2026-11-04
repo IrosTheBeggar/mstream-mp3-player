@@ -3166,9 +3166,15 @@ labels; device times are to be measured in milestones L0-L5 (part 6).
    delays). That says nothing of the transfer, and isn't damage. A file whose own
    directory entry or FAT chain is damaged (FatFs's FR_INT_ERR) is none of this:
    the card answered, no read again changes it, and the file is invalid.
-2. **Read `library.idx`'s header:** its version, the rules version, the
-   **hard inputs** (the transfer's identity above) and the **soft inputs**
-   (D's headerCrc and its journal's sequence).
+2. **Read D (`TagStore::open()`) and `library.idx`'s header:** D's frame and its
+   journals; the index's version, the rules version, the **hard inputs** (the
+   transfer's identity above) and the **soft inputs** (D's headerCrc and its
+   journal's sequence). Each of the two, like the root, says what is there, or that
+   it isn't, or that it is damaged, or **unread**: the card failed a read of it (the
+   same read, volume's lock or no memory for the file), or of the way to it, and
+   nothing is known of it (`TagStore::readFailed()`, `Saved::Unread`). `readAtBoot()`'s
+   waits apply to the first that meets a fault: a card still failing after them won't be
+   back for the next reader, which reads once.
 3. **Decide:**
 
 | `library.idx` | Records on the card | At boot | Then, in the background |
@@ -3177,7 +3183,11 @@ labels; device times are to be measured in milestones L0-L5 (part 6).
 | v6, hard inputs match, no marker | any | **Load it:** 1.8 MB, 1.1-1.5 s at 20k (ESTIMATED). No walk. | The validation walk (3.2.3). If the soft inputs differ (the scan went on after the last build), resume the scan; rebuild at its end. |
 | v6, the transfer's identity differs (a transfer happened, or `/.mstream` is gone or damaged) | T valid, or D only | Compact the journals if any (0-3 s). **Build from T (if valid) and D** behind the boot screen, a new T's listing standing in for the walk (2.9): about 7-9 s at 20k (ESTIMATED from UI-SPIKE's measured rates: 3.5-5 s of reads, 2.2-2.6 s of adds, about 1.3 s to finish), then the save. Without T, D's rows for files T covered turn Pending. | The walk confirms; files it finds changed go Pending; the scan reads the Pending files. |
 | v6, built from a transfer (its identity isn't zeros), the root **unread**, whatever the marker | any | **Load it.** Nothing is built over it: taken for no transfer, the read would build from D alone, every file T lists under its path, and the scan would set out on them all. A marker stays. | None: no walk, no scan and no update step this session (`Decision::holdJobs`, `CardTasks::begin()`). The next boot asks again: a fault that lasts holds every boot, until a disk check or a PC mends or removes the file. Covers, Auto DJ and the waveform bar go on, the last two reading the root again (`docs/AUTODJ.md` 6.6, `docs/WAVEFORM-INDEX.md` 11). |
-| an older rules version, v1-v5 (today's is v5), missing or corrupt | some | Build from the records. No walk. | The walk. |
+| v6, whatever its identity | D or its journals **unread** | **Load it.** Nothing is built, whatever the marker: the marker stays. | None, as the row above: `Decision::holdJobs`. Taken for no D, the walk and the scan would start the records over, and their compaction replace them. |
+| v1-v5, missing or corrupt | D or its journals **unread** | **`/music` walked for this session**, by its paths, nothing saved: a build without D leaves out every file T doesn't list. | None. |
+| **Unread** | D there and read, listing the card (T in use, or walked), and the root read | The journals compacted if any, then **built from the records for this session alone**: nothing saved, `library.idx` as it is, a marker kept. It stands only as the whole library: T or D left out, or journals left, and `/music` is walked instead. | None. |
+| **Unread** | Anything else (no D, D not listing the card, the root unread) | **`/music` walked for this session**, nothing saved. | None. |
+| an older rules version, v1-v5 (today's is v5), missing or corrupt | some | Build from the records. No walk. (A read the card fails in that build: `/music` walked for the session, below.) | The walk. |
 | v1-v5, missing or corrupt | none: a card-reader card, or this firmware's first boot on a 0.7 card | **Walk now**, with a progress line, into a path-named index and a D of all-Pending entries: about 9-11 s of walk at 20k with the sector cache (89-148 s without), plus about 3.5-4 s to build; about 70 ms on today's card. | The scan (3.3). |
 | any | NoMemory | As today: no library; the built-in tracks still play. | none |
 
@@ -3189,6 +3199,132 @@ from it. Auto DJ and the waveform bar stay without their files until a remount o
 that boot (Auto DJ by `Dc` too), and don't read the root on a timer as they do in a
 held session: a read with no answer makes FatFs's next call a remount, and one with a
 job under way restarts the player (3.8), at every boot (`docs/AUTODJ.md` 6.6).
+
+**A read the card fails is never a file that's missing or damaged** (2026-11-02). Taken
+for one, on a card in the shape it is on (MEASURED on the host, the firmware's own
+`Library`, `CardTasks`, `QueueStore` and FatFs over a modelled SD driver, one boot's fault,
+the sector back before the session goes on; counts per the 6 tracks of that card, whose
+queue held them all):
+
+| Sector failing, for `Library::begin()` alone | Then | After the session |
+|---|---|---|
+| `library.idx` | Built from T and D, and saved | The same bytes: a slow boot, no more |
+| `tags.bin` | Loaded; the walk starts D over | D replaced; every file T doesn't list read again (2 of 6 with T, 6 of 6 without, 0 of 6 all from T). 3-6 min at 20k with no T (ESTIMATED, 3.3.4) |
+| `/.player`'s directory (D and `library.idx` together) | With T: T alone, 4 of 6 | **`queue.txt` cut from 6 lines to 4, for good**; D replaced |
+| `/.player`'s and `/music`'s directories, no T | Walked: 0 tracks | **`queue.txt` cut from 6 lines to 0, for good**; D replaced |
+
+So the worst costs far more than a slow boot. The queue's restore drops what the library
+doesn't list and writes the file again, and a partial library is taken for one that
+knows. Hence these rows' rule: **what such a boot shows is `library.idx`, or the same
+library built for the session, or `/music` walked for the session: never a part of one
+from the records**, and it writes no library and holds the card jobs. A boot that holds its
+jobs sets up no default queue when `queue.txt` itself can't be read (`main.cpp`).
+
+- **The session's walk** is the last of what such a boot can show: every track by its path,
+  no tags, none of it saved, so the next boot asks again. It costs what a walk at boot does
+  (16-18 s at 19,412 tracks, MEASURED on the device below). Its listing can't be told whole on a
+  card in trouble (the VFS's can't tell a folder that failed to read from an empty one, or
+  FatFs's FR_INT_ERR from a fault), so tracks it doesn't list aren't known to be gone: the
+  queue's restore keeps them in the file (`QueueSaver::keptFile()`, `Booted::sessionWalked()`,
+  `Library::listsCard()`), for the next boot. Meanwhile an edit of the queue, the listener's or
+  Auto DJ's, replaces the file, as it does after a boot with no library. No PSRAM for the
+  walk, or a card that gives it nothing: no library, as today, or none of its tracks.
+- **A build's own reads:** a read of T or D the card fails as a boot's build reads them (an
+  open too; the compaction before it, and that compaction's reload of the new D) ends the
+  build: nothing saved, a marker kept, the card jobs held. A `library.idx` that says it is a
+  library (Matches or Differs) comes back (`Booted::keptSaved`); else the session's walk,
+  whatever row the build came from. T or D that fail on their own records or checks are the
+  files' fault: built around and saved, as records left out. The session's build alone takes
+  neither: it stands in for a library that lists the card, so T or D left out means the walk.
+- **The rule's reads** (`settle()`, 2.12.6): a question of the card that fails stops it
+  (`Settle::Unread`, nothing more done): "no X" or "nothing shares this chain" may be only
+  that read. `prepareTmp()` and `replace()` refuse likewise. A whole `tags.tmp` or
+  `library.tmp` alone keeps through a check the card fails (`Settle::Kept`), and through a
+  rename that fails; and `tags.tmp` kept for any reason, no memory for its check too, reads
+  as D unread (`TagStore::tmpKept()`): the jobs on no D would be the same harm.
+- **A compaction's reads of D** (3.3.2) fail it, D and the journals as they are, unless
+  they fail on D's own records (below). Before, one read left D out, and the walk and the
+  scan began again; its journals alone replaced it. The update step after such a compaction
+  ends before its fence (`TagStore::compactionUnread()`): its build would read the same D,
+  and leave no library until the next boot. And no chunk, walk, compaction or update step
+  goes through on records that are unread (`readFailed()`, a compaction's reload too).
+- **What is the file's fault:** one whose own directory entry or FAT chain is damaged
+  (FatFs's FR_INT_ERR, `File::damaged()`), cut, or failing its checks, as for the root. The
+  card answered, no read again changes it: D is absent, `library.idx` corrupt, and the rows
+  above that say so apply.
+- **Costs left as they are:** a fault that lasts holds every boot, until a disk check or a
+  PC mends or removes the file. On `library.idx` that is the session's build at each boot
+  (12-17 s more at 19,412 tracks, MEASURED, the failed reads' own time and up to 1.4 s of waits in it) and no walk, scan or update
+  step, where before the first boot's save healed it. Removing the file on a PC ends it; so
+  does a card that comes back. A boot with no library, a session's walk that doesn't list the
+  current track, or a boot that couldn't read `queue.txt`, clears the queue's resume point: the queue and its
+  position come back, the second within the track doesn't. And a
+  read of T or D that fails as a boot's build reads them, with no `library.idx` to load, costs the
+  session its tags even when the build would have listed every track: a build that lost
+  tracks looks the same from here. A build isn't read again for one read that fails, as the headers
+  are: it is long, and the session goes on from `library.idx` or the walk, and the next boot
+  asks again.
+- **Not this work's, the queue's own:** a `queue.txt` whose own read fails, the rest whole, is
+  still no queue, and the whole library takes its place. And a library that leaves files
+  out with no fault known still cuts the file down to itself: `/music` walked because there
+  are no records (a folder that failed to read looks empty), or T alone because D is absent
+  or failed its checks, and at the next boot the same library loaded.
+- **The card guard** (3.8; the trap of `docs/AUTODJ.md` 6.6): none of this reads anything
+  after the boot, and a held session has no job for a remount to restart it under. MEASURED
+  on the same rig, a sector that never answers, 180 s: `tags.bin`, 33 restarts before and
+  none now; `/.player`'s directory, 3 and none (a setup of about 6 s, 28 s before, on 6 tracks; at 19,412 on the device, 27-28 s, and 44 s with no data token);
+  `library.idx`, none before or now. A sector that fails once and then answers: the second
+  read has it, the jobs run, and the guard's first pass opens the records again, with no
+  restart. **A compaction that stops on a read of D with no answer** gets no restart either:
+  one would have the next boot's compaction meet the same sector, at every boot, now that
+  it no longer leaves D out. The jobs stop until the next boot (`stepCardGuard()`,
+  `TagStore::compactionUnread()`): 306 tracks with a walk to merge, the sector a body one, 120 s:
+  1 restart and D replaced before (with a read error instead, D cut to the journal's 1 record
+  and every other file read again); now 0 (but for the race the device found at another sector, below), and D as it was. **Not changed:** with no compaction
+  first, the walk meets such a sector, and restarts at every boot: 26 restarts in 180 s at
+  306 tracks, before and now (a read error there, none: the walk fails and says so).
+- **Device check** (2026-11-03 and 04, a Core2 v1.3 and a spare 32 GB card of 19,412 tracks, nearly all very short (two in `/music/zz Bench` run over a minute), whose T holds no records, never the music card; temporary builds). MEASURED, first with reads failing above the
+  driver: (1) `tags.bin`'s first sector: `D unread`, `library.idx` loaded, no walk, both files unchanged, Rescan's
+  note, and a reboot with the fault off read nothing again. (2) `library.idx`'s: `library.idx unread`, built from the
+  records for the session, the library whole, the file unchanged, a marker kept. (3) `/.player`'s directory: `/music`
+  walked for the session, tracks by their paths, Rescan's note on the Library row; with `/music`'s too: an empty Library
+  tab with that note, whose Try again restarts. (4) Each with no R1: no restart in 3 minutes. (5) A body sector
+  of `tags.bin` under a compaction: `compaction FAILED`, no restart. (6) The worker's stack, below.
+  Then with the switch inside `sdCommand()`, no command reaching the card, so the driver's own waits (no data
+  token: 3 x 500 ms spinning under the SPI lock; no R1: 3 x 100 ms), log lines and mark; and the same switch on main,
+  the control:
+
+  | Failing | main | Now |
+  |---|---|---|
+  | `/.player`'s and `/music`'s directories, until `Library::begin()` returns | 0 tracks; **`queue.txt` cut from 3 tracks to none, for good**; with no token D replaced too (3,661,520 B to 2,428,944 B) | 0 tracks for the session; `queue.txt`, `tags.bin` and `library.idx` the same by CRC within it, 0 writes; the next boot 19,412 tracks, 3 of 3 at the same position |
+  | `/.player`'s alone, until it returns, no token | not run | `/music` walked, 19,412 tracks, 3 of 3, the files the same by CRC, 0 writes |
+  | `tags.bin`'s and `library.idx`'s first sectors, for good, no token | 0 tracks, `queue.txt` cut to none, D and `library.idx` replaced | With a queued album's folder failing too: `/music` walked, 19,410 tracks, 1 of 3 restored, `queue.txt` the same by CRC; the next boot 3 of 3 |
+  | `tags.bin`'s first sector, for good, no token | D none: 19,412 added, every file to be read again (1,661 read, 2,806 writes in 90 s) | `library.idx` loaded, no card jobs; a track plays, a queue edit saves, 0 underruns, no read of it after the boot |
+  | The same, no R1 | a restart every 8.4 s | no restart; the same |
+  | `/.player`'s directory, for good, no R1 | a restart every 35 s, 0 tracks each boot | no restart, `/music` walked |
+  | `library.idx`'s first sector, for good, no token | built and saved, the same bytes: browsable after 14.7 s, one boot | the session's build at every boot (above the driver, the first run: 18.3 s, 13.7 s with no R1) |
+  | A body sector of `tags.bin` under a compaction, a walk to merge, no R1 | a restart, and D replaced from the journal alone: 3,661,520 B to 568 B | `compaction FAILED`, no restart, 3 boots of 3; `tags.bin` the same by CRC in that session, the switch stepped aside for the read |
+  | `walk.jnl`'s first sector, for good, no R1 | not run | `D unread`, no card jobs, no restart |
+  | `tags.bin`'s body in a boot's build, the marker set, no R1 | not run | `FAILED as they were built`, `library.idx` loaded, the marker kept, 0 writes |
+  | `tags.bin`'s first sector, once, either kind | not run | read 2 times, the last whole; the jobs run, no restart |
+  | `tags.bin`'s first sector from a remount on, at the guard's reopen, idle | not run | `D unread`, the jobs COULDN'T begin again, no restart |
+
+  What main does here is its worst: T holds nothing, so what the records would have listed is gone; the table
+  above this list has the scale with T. And a cut needs the fault to end, or two sectors at once: under a fault that lasts on
+  `/.player`, main's `queue.txt` can't be written either. **Found:**
+  - **A restart after all:** no R1 at the first card read inside the compaction's `FolderCursor::begin()` (2 sectors
+    or so of D: the pass goes on to open `walk.jnl`, a remount, before `compactUnread_` is set, and the guard
+    may run first): 3 boots of 9 restarted, the rest held, and each boot after a restart held. No harm in the logs.
+    The screen was dark, so the compaction ran at the loop's priority, time-slicing with it; by reading, lit it runs below the loop and loses that race more often. Not run lit.
+  - **Clusters lost:** a compaction failed with no R1 at a sector half way through D loses 3 clusters, 48 KB, at each boot of a lasting fault (`@count` before and after, twice over; by reading `hidx.tmp`'s, whose entry never gets its first cluster, so as much as the first pass had written: more further into D, none at the race's read above, which wrote 2 sectors; neither counted), and only a disk check gets them back. `@status`'s `free=` is FSINFO's and doesn't show it.
+  - **The worker's stack:** 1,632-1,980 B left after a compaction failed with the driver's log lines on that stack: 6.3.1's "under 2 KB left is a finding" (L4's item 6), over its 1 KB failure. Main's same path wasn't measured. A
+    whole compaction: 2,184 B on main, 2,076-2,080 B here, about 100 B deeper as estimated.
+  - **Playing with `/.player` failing for good:** no R1: a long track is cut at each try of the queue's save, every 10 s. No token: each try holds the loop about 3 s, every 10 s, and the track stops for about 1.4 s of it, once the ring's 1.4 s have run out: 721 underruns in 81 s of track. Covers' card copies and the Opus open cache's saves fail there too (a cover's copy up to 4.5 s; the Opus save tried about every 11 s). No comparison with main on this card: it has no tracks there.
+  - **Words that misled:** `gs` still says `ABSENT, it fails its checks` of a D it couldn't read, and that the
+    walk and the scan make it again in a session that holds them. Nothing acts on it.
+  - **Left unexplained or untouched:** the run as a whole ended 30 clusters short of its start, on both firmwares, and only the ones above are placed (no `@count` between the last of them and the end). `opus.idx` can't tell a read the card fails from no file (`no cache yet`), spends a boot's first waits, and its save would replace the file with this session's entries: not seen healed. Sessions of very short tracks under a lasting fault paused by themselves (`Auto DJ: the next track is ready, press play`), with no healthy session of them to compare.
+
+  **Not run on a device:** a T with records (where a session's walk also costs its tags); a compaction fault with no data token, with the screen lit or under a track playing, in its second pass or in the boot's compaction before a build; the driver's fast failures (a data error token, a CRC, an R1 error); `library.idx` alone, and `/.player`'s and `/music`'s directories for good, on the driver's path; a sector of `library.idx` or of a directory that fails once (the one try at `/.player`'s: its failure went to the Opus cache's read, before the library's); a walk that meets a bad sector of D with no compaction first (the restarts above are the rig's); `tags.jnl`, T, `tags.tmp`, `library.tmp`; a fault under the update step's build; playing over Bluetooth (the faults above played in silent test mode); a real failing card.
 
 - The queue is then restored as today (`QueueStore::restore()`).
 - **A power cut mid-save:** if `library.idx` is missing and `library.tmp`
@@ -3759,7 +3895,8 @@ fake FAT trees into it). What the code decided where 3.3.2 left room:
   records at 2.3.6's limits as with 96 chunks (MEASURED on the host). `albumValues`
   and `artistValues` are exact to 128 values, then a linear-counting
   estimate (they only pre-size). D failing its checks partway through the
-  first pass is left out (3.4.1): the journals alone make the new D, its
+  first pass (its own fault, not a read the card failed: 3.2.2) is left out
+  (3.4.1): the journals alone make the new D, its
   DHDR unwalked, and the next walk compares the whole card.
 - **The journal's limits:** 512 KB or 32 chunks asks for a compaction
   (`wantsCompaction()`, also when D was read by another parser), and
@@ -5022,7 +5159,12 @@ src/. What the code decided where 3.2-3.4 left room:
   opened again (`TagStore::open()`) and the jobs begun again
   (`CardTasks::begin()`, which runs `Jobs::begin()` as `CardJobs.h`
   asks after a remount): `[card] the card answered again (the same
-  card): its records opened again ...`. The session's scan and update
+  card): its records opened again ...`. A read of them the card fails
+  there (`TagStore::readFailed()`, 3.2.2) leaves the jobs off until the
+  next boot: begun on what it left, they would start the records over; and
+  asked again at the next remount, such a read with no answer would ask at
+  every pass (`docs/AUTODJ.md` 6.6). So does a remount a compaction's read
+  of D brought on: no restart for it, but for the race the device found (3.2.2). The session's scan and update
   state is kept through it (the 2026-10-09 review: `begin()` took the
   boot's `softStale()` and the records' mark again, so an update step
   this session had run was asked again at the scan's end, and records the

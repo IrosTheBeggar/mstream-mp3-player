@@ -9,8 +9,10 @@
 // damaged, its directory entry too, never reads as the card's fault, since a boot
 // that took it so would keep a dead root for ever; a card with no root or no
 // /.mstream says Missing; a Root read again; and the boot's reads, how many and with
-// what waits. What the boot then does with it is test_library_update's. Run: pio
-// test -e native
+// what waits. What the boot then does with it is test_library_update's. The boot's
+// other two reads the same way, on the real FatFs: D and its journals
+// (TagStore::open()), library.idx (LibraryUpdate::boot()), and their damaged directory
+// entries. Run: pio test -e native
 #include <unity.h>
 
 #include <cstdint>
@@ -25,6 +27,7 @@
 #include "CardManifest.h"
 #include "CardRoot.h"
 #include "CardTags.h"
+#include "LibraryUpdate.h"
 // The firmware's own say on what is the card's fault (FatFs::openRead(),
 // FatFile::damaged()), over the real FatFs.
 #include "../../src/storage/CardFat.cpp"
@@ -571,6 +574,337 @@ void test_on_fatfs_each_sector_read_failed_in_its_turn_is_never_no_root() {
   }
 }
 
+// ---- the boot's other reads, on the real FatFs ----
+
+namespace {
+
+namespace ts = tagstore;
+constexpr const char* kD = "/.player/tags.bin";
+constexpr const char* kIdx = "/.player/library.idx";
+constexpr uint32_t kWhen = 0x5D4773D5;
+
+ts::TagStore::Config storeConfig() {
+  ts::TagStore::Config c;
+  c.producer = "mstream-player test";
+  c.parserVersion = 3;
+  return c;
+}
+
+void* heapAlloc(size_t n) { return std::malloc(n ? n : 1); }
+void heapFree(void* p) { std::free(p); }
+
+bool walkInto(ts::TagStore& st, const char* rel) {
+  std::vector<uint8_t> buf(4096);
+  ts::WalkWriter w;
+  if (!st.beginWalk(ts::Identity(), buf.data(), 4096, &w)) return false;
+  ts::FolderFacts f;
+  f.digest = 7;
+  f.audio = 1;
+  const std::string path(rel);
+  const std::string folder = path.substr(0, path.find('/'));
+  bool ok = w.file(rel, path.size(), 1000, kWhen, 1, LibraryBuilder::Status::Pending);
+  ok = ok && w.folder(folder.data(), folder.size(), f);
+  ok = ok && w.endRun(0) && w.endRun(0);
+  return w.finish() && ok;
+}
+
+// The device's files, by their real writers: D, library.idx from a build of it, then a
+// chunk and a walk for it to read: every file an open and a boot read. A big enough D
+// and index to reach past a sector or two.
+void putRecords(Card& c) {
+  TEST_ASSERT_EQUAL_INT(FR_OK, f_mkdir(fatmodel::path(0, ".player").c_str()));
+  TEST_ASSERT_EQUAL_INT(FR_OK, f_mkdir(fatmodel::path(0, "music").c_str()));
+  {
+    ts::TagStore st(c.fs, storeConfig());
+    st.open();
+    std::vector<uint8_t> buf(4096);
+    ts::WalkWriter w;
+    TEST_ASSERT_TRUE(st.beginWalk(ts::Identity(), buf.data(), 4096, &w));
+    ts::FolderFacts f;
+    f.digest = 7;
+    for (int folder = 0; folder < 12; ++folder) {
+      char dir[32];
+      std::snprintf(dir, sizeof(dir), "Artist %02d", folder);
+      f.audio = 8;
+      for (int k = 0; k < 8; ++k) {
+        char rel[64];
+        std::snprintf(rel, sizeof(rel), "%s/%02d - a track with a fair name.mp3", dir, k);
+        TEST_ASSERT_TRUE(w.file(rel, std::strlen(rel), 1000u + k, kWhen, 1u + k, LibraryBuilder::Status::Pending));
+      }
+      TEST_ASSERT_TRUE(w.folder(dir, std::strlen(dir), f));
+    }
+    TEST_ASSERT_TRUE(w.endRun(0));
+    TEST_ASSERT_TRUE(w.endRun(0));
+    TEST_ASSERT_TRUE(w.finish());
+    const ts::TagStore::Compacted r = st.compact();
+    TEST_ASSERT_TRUE_MESSAGE(r.ok, r.error);
+    std::unique_ptr<Root> root(new Root());
+    LibraryIndex index(heapAlloc, heapFree);
+    LibraryUpdate::Config u;
+    u.fs = &c.fs;
+    u.store = &st;
+    u.root = root.get();
+    u.index = &index;
+    LibraryUpdate update(u);
+    const LibraryUpdate::Booted b = update.boot();
+    TEST_ASSERT_TRUE(b.built);
+    TEST_ASSERT_FALSE(b.saveFailed);
+    uint8_t chunkBuf[2048];
+    ts::ChunkBuilder chunk;
+    chunk.begin(chunkBuf, sizeof(chunkBuf));
+    cc::mptg::Record rec;
+    rec.size = 1000;
+    rec.fatTime = kWhen;
+    const char* fields[cc::kRunFields] = {};
+    for (auto& x : fields) x = "";
+    TEST_ASSERT_TRUE(chunk.add("Artist 00/00 - a track with a fair name.mp3", 43, LibraryBuilder::Status::Scanned, rec, fields));
+    TEST_ASSERT_TRUE(st.append(chunk));
+    TEST_ASSERT_TRUE(walkInto(st, "Artist 99/new.mp3"));
+  }
+  c.remount();
+}
+
+std::vector<uint8_t> bytesOf(Card& c, const char* path) {
+  tagstore::File* f = c.fs.open(path, tagstore::Fs::Mode::Read);
+  TEST_ASSERT_NOT_NULL_MESSAGE(f, path);
+  std::vector<uint8_t> b(f->size());
+  if (!b.empty()) TEST_ASSERT_TRUE(f->read(0, b.data(), f->size()));
+  c.fs.close(f);
+  return b;
+}
+
+// Reading the disk from `first` on, for `count` reads, what `read` does; from a mount
+// made anew, so it reads the card from the boot sector up.
+template <class Read>
+void withDiskFault(Card& c, uint64_t first, uint64_t count, Read read) {
+  fatmodel::Drive& d = fatmodel::drive(0);
+  c.remount();
+  d.failFrom = d.asked.reads + first;
+  d.failTo = count == UINT64_MAX ? UINT64_MAX - 1 : d.failFrom + count;
+  read();
+  d.failFrom = d.failTo = UINT64_MAX;
+}
+
+}  // namespace
+
+// D, tags.jnl and walk.jnl, each sector read failed in its turn, and every read from
+// there on: the records are read whole, or the open says the card failed. Never no D.
+void test_on_fatfs_the_records_are_never_gone_for_a_read_that_failed() {
+  Card c;
+  putRecords(c);
+  const std::vector<uint8_t> d0 = bytesOf(c, kD), j0 = bytesOf(c, "/.player/tags.jnl"), w0 = bytesOf(c, "/.player/walk.jnl");
+  fatmodel::Drive& d = fatmodel::drive(0);
+  c.remount();
+  const uint64_t asked0 = d.asked.reads;
+  {
+    ts::TagStore st(c.fs, storeConfig());
+    const ts::TagStore::Opened o = st.open();
+    TEST_ASSERT_FALSE(o.readFailed);
+    TEST_ASSERT_TRUE(st.device().present);
+    TEST_ASSERT_EQUAL_UINT32(1, st.chunkCount());
+    TEST_ASSERT_TRUE(st.hasWalk());
+  }
+  const uint64_t reads = d.asked.reads - asked0;
+  TEST_ASSERT_GREATER_THAN_UINT32(6, static_cast<uint32_t>(reads));
+  uint32_t unread = 0;
+  for (uint64_t k = 0; k < reads; ++k) {
+    char msg[64];
+    std::snprintf(msg, sizeof(msg), "disk read %lu of %lu", (unsigned long)k, (unsigned long)reads);
+    for (const uint64_t count : {uint64_t{1}, uint64_t{UINT64_MAX}}) {
+      ts::TagStore st(c.fs, storeConfig());
+      ts::TagStore::Opened o;
+      withDiskFault(c, k, count, [&] { o = st.open(); });
+      TEST_ASSERT_TRUE_MESSAGE(o.readFailed, msg);
+      TEST_ASSERT_TRUE_MESSAGE(st.readFailed(), msg);
+      TEST_ASSERT_FALSE_MESSAGE(st.device().present, msg);
+      TEST_ASSERT_FALSE_MESSAGE(st.compact().ok, msg);
+      ++unread;
+      // A read later, the card answering: all there, and nothing touched.
+      const ts::TagStore::Opened again = st.open();
+      TEST_ASSERT_FALSE_MESSAGE(again.readFailed, msg);
+      TEST_ASSERT_TRUE_MESSAGE(st.device().present, msg);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, st.chunkCount(), msg);
+      TEST_ASSERT_TRUE_MESSAGE(st.hasWalk(), msg);
+    }
+  }
+  TEST_ASSERT_GREATER_THAN_UINT32(0, unread);
+  TEST_ASSERT_TRUE(d0 == bytesOf(c, kD));
+  TEST_ASSERT_TRUE(j0 == bytesOf(c, "/.player/tags.jnl"));
+  TEST_ASSERT_TRUE(w0 == bytesOf(c, "/.player/walk.jnl"));
+}
+
+// library.idx, the same: the boot's every sector failed in its turn. It says unread, or
+// reads it whole; never missing or corrupt. It writes nothing, and holds the jobs.
+void test_on_fatfs_library_idx_is_never_missing_or_corrupt_for_a_read_that_failed() {
+  Card c;
+  putRecords(c);
+  std::unique_ptr<Root> root(new Root());
+  // (Merged and built again, so a boot's own reads are library.idx's, its marker's and
+  // its settling's, and a build for the session gives the library it holds.)
+  {
+    ts::TagStore st(c.fs, storeConfig());
+    st.open();
+    TEST_ASSERT_TRUE(st.compact().ok);
+    TEST_ASSERT_TRUE(c.fs.remove(kIdx));
+    LibraryIndex index(heapAlloc, heapFree);
+    LibraryUpdate::Config u;
+    u.fs = &c.fs;
+    u.store = &st;
+    u.root = root.get();
+    u.index = &index;
+    LibraryUpdate update(u);
+    const LibraryUpdate::Booted b = update.boot();
+    TEST_ASSERT_TRUE(b.built);
+    TEST_ASSERT_FALSE(b.saveFailed);
+  }
+  const std::vector<uint8_t> idx0 = bytesOf(c, kIdx), d0 = bytesOf(c, kD);
+  const auto bootOn = [&](bool withFault, uint64_t k, uint64_t count) {
+    ts::TagStore st(c.fs, storeConfig());
+    st.open();
+    TEST_ASSERT_TRUE(st.device().present);
+    LibraryIndex index(heapAlloc, heapFree);
+    LibraryUpdate::Config u;
+    u.fs = &c.fs;
+    u.store = &st;
+    u.root = root.get();
+    u.index = &index;
+    LibraryUpdate update(u);
+    LibraryUpdate::Booted b;
+    if (withFault) {
+      fatmodel::Drive& d = fatmodel::drive(0);
+      d.failFrom = d.asked.reads + k;
+      d.failTo = count == UINT64_MAX ? UINT64_MAX - 1 : d.failFrom + count;
+    }
+    b = update.boot();
+    fatmodel::drive(0).failFrom = fatmodel::drive(0).failTo = UINT64_MAX;
+    if (b.ok) TEST_ASSERT_EQUAL_UINT32(97, index.trackCount());  // (whole, or none: no walk here)
+    return b;
+  };
+  fatmodel::Drive& d = fatmodel::drive(0);
+  c.remount();
+  // The clean boot's count of disk reads after the store's open.
+  uint64_t reads = 0;
+  {
+    ts::TagStore st(c.fs, storeConfig());
+    st.open();
+    LibraryIndex index(heapAlloc, heapFree);
+    LibraryUpdate::Config u;
+    u.fs = &c.fs;
+    u.store = &st;
+    u.root = root.get();
+    u.index = &index;
+    LibraryUpdate update(u);
+    const uint64_t asked0 = d.asked.reads;
+    const LibraryUpdate::Booted b = update.boot();
+    reads = d.asked.reads - asked0;
+    TEST_ASSERT_TRUE(b.saved == libraryboot::Saved::Matches);
+    TEST_ASSERT_TRUE(b.decision.action == libraryboot::Action::Load);
+    TEST_ASSERT_TRUE(b.ok);
+    TEST_ASSERT_EQUAL_UINT32(97, index.trackCount());
+  }
+  // (Past the clean count too: from a fresh mount a read of the directory comes first.)
+  uint32_t unread = 0;
+  for (uint64_t k = 0; k < reads + 4; ++k) {
+    char msg[64];
+    std::snprintf(msg, sizeof(msg), "disk read %lu of %lu", (unsigned long)k, (unsigned long)reads);
+    for (const uint64_t count : {uint64_t{1}, uint64_t{UINT64_MAX}}) {
+      c.remount();
+      const LibraryUpdate::Booted b = bootOn(true, k, count);
+      TEST_ASSERT_TRUE_MESSAGE(b.saved == libraryboot::Saved::Unread || b.saved == libraryboot::Saved::Matches, msg);
+      if (b.saved == libraryboot::Saved::Unread) {
+        ++unread;
+        TEST_ASSERT_TRUE_MESSAGE(b.decision.holdJobs, msg);
+        TEST_ASSERT_TRUE_MESSAGE(b.decision.action != libraryboot::Action::Load, msg);
+      }
+      TEST_ASSERT_TRUE_MESSAGE(idx0 == bytesOf(c, kIdx), msg);
+      TEST_ASSERT_TRUE_MESSAGE(d0 == bytesOf(c, kD), msg);
+    }
+  }
+  TEST_ASSERT_GREATER_THAN_UINT32(0, unread);
+}
+
+// FatFs reads the card, every read answered, and finds a file's records inconsistent
+// (FR_INT_ERR): no read again changes that. So it is the file's fault, and a boot that
+// took it for the card's would hold on to it for ever.
+void test_on_fatfs_a_damaged_directory_entry_is_the_files_fault_at_the_boot_too() {
+  for (const uint32_t cluster : {0u, 1u, 0x0FFFFFF0u}) {
+    // D's: absent, with the journals of a D no more.
+    {
+      Card c;
+      putRecords(c);
+      c.damageEntry(".player", "TAGS    BIN", cluster);
+      ts::TagStore st(c.fs, storeConfig());
+      const ts::TagStore::Opened o = st.open();
+      TEST_ASSERT_FALSE(o.readFailed);
+      TEST_ASSERT_FALSE(st.device().present);
+      TEST_ASSERT_EQUAL_STRING("fatRecords", cc::whyName(o.deviceWhy));
+    }
+    // A journal's: D stands, and it is dropped as a torn one is.
+    for (const char* jnl : {"TAGS    JNL", "WALK    JNL"}) {
+      Card c;
+      putRecords(c);
+      c.damageEntry(".player", jnl, cluster);
+      ts::TagStore st(c.fs, storeConfig());
+      const ts::TagStore::Opened o = st.open();
+      TEST_ASSERT_FALSE_MESSAGE(o.readFailed, jnl);
+      TEST_ASSERT_TRUE_MESSAGE(st.device().present, jnl);
+    }
+    // library.idx's: corrupt, and built over as one is. Nothing held.
+    {
+      Card c;
+      putRecords(c);
+      c.damageEntry(".player", "LIBRARY IDX", cluster);
+      ts::TagStore st(c.fs, storeConfig());
+      st.open();
+      std::unique_ptr<Root> root(new Root());
+      LibraryIndex index(heapAlloc, heapFree);
+      LibraryUpdate::Config u;
+      u.fs = &c.fs;
+      u.store = &st;
+      u.root = root.get();
+      u.index = &index;
+      LibraryUpdate update(u);
+      const LibraryUpdate::Booted b = update.boot();
+      TEST_ASSERT_TRUE(b.saved == libraryboot::Saved::Corrupt);
+      TEST_ASSERT_FALSE(b.decision.holdJobs);
+      TEST_ASSERT_TRUE(b.decision.action == libraryboot::Action::Build);
+      TEST_ASSERT_TRUE(b.ok);
+    }
+  }
+  // /.player's own, off the volume: the way to the files is gone. Its word too.
+  Card c;
+  putRecords(c);
+  c.damageEntry(nullptr, "~1      PLA", 0x0FFFFFF0u);  // (FatFs's short name for it)
+  ts::TagStore st(c.fs, storeConfig());
+  const ts::TagStore::Opened o = st.open();
+  TEST_ASSERT_FALSE(o.readFailed);
+  TEST_ASSERT_FALSE(st.device().present);
+}
+
+// entry(): FatFs's word, and what it says of a chain.
+void test_on_fatfs_an_entry_says_whose_word_it_is() {
+  Card c;
+  putRecords(c);
+  tagstore::Fs::Entry e = c.fs.entry(kD);
+  TEST_ASSERT_TRUE(e.there);
+  TEST_ASSERT_FALSE(e.cardFailed);
+  TEST_ASSERT_NOT_EQUAL(0, e.firstCluster);
+  TEST_ASSERT_EQUAL_UINT32(c.fs.firstCluster(kD), e.firstCluster);
+  e = c.fs.entry("/.player/no such file");
+  TEST_ASSERT_FALSE(e.there);
+  TEST_ASSERT_FALSE(e.cardFailed);
+  e = c.fs.entry("/no such folder/file");
+  TEST_ASSERT_FALSE(e.there);
+  TEST_ASSERT_FALSE(e.cardFailed);
+  bool failed = false;
+  withDiskFault(c, 0, UINT64_MAX, [&] {
+    e = c.fs.entry(kD);
+    failed = e.cardFailed;
+  });
+  TEST_ASSERT_TRUE(failed);
+  TEST_ASSERT_FALSE(e.there);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_whole_card_reads_whole_and_says_no_fault);
@@ -588,5 +922,9 @@ int main(int, char**) {
   RUN_TEST(test_on_fatfs_no_folder_and_no_file_are_its_word_not_a_fault);
   RUN_TEST(test_on_fatfs_a_damaged_directory_entry_is_the_files_fault_not_the_cards);
   RUN_TEST(test_on_fatfs_each_sector_read_failed_in_its_turn_is_never_no_root);
+  RUN_TEST(test_on_fatfs_the_records_are_never_gone_for_a_read_that_failed);
+  RUN_TEST(test_on_fatfs_library_idx_is_never_missing_or_corrupt_for_a_read_that_failed);
+  RUN_TEST(test_on_fatfs_a_damaged_directory_entry_is_the_files_fault_at_the_boot_too);
+  RUN_TEST(test_on_fatfs_an_entry_says_whose_word_it_is);
   return UNITY_END();
 }

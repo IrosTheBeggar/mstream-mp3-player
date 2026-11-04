@@ -67,13 +67,14 @@ bool CardTasks::indexed(const char* rel, size_t len, void* ctx) {
 bool CardTasks::begin() {
   active_ = false;
   if (!lib_.records() || !lib_.update()) return false;
-  // The boot loaded a library built from a transfer whose root the card failed to
-  // read. A walk from D alone would take every file T lists for new, the scan read
-  // them all, and the update step build over library.idx from that. So no card jobs
-  // this session (covers go on): the next boot asks again. (A library with no
-  // transfer in it has none of that to lose: its jobs run, as on any such card.)
+  // The card failed a read these would have to trust. A walk from D alone would take
+  // every file T lists for new, one with no D would start the records over, the scan
+  // would read them all, and a compaction and the update step replace what is there.
+  // So no card jobs this session (covers go on): the next boot asks again. (A library
+  // with no transfer in it, under a root that can't be read, has none of that to lose:
+  // its jobs run, as on any such card.)
   if (lib_.cardJobsHeld()) {
-    Serial.println("[card] the card's root couldn't be read: no walk, no scan and no update step this session");
+    Serial.printf("[card] %s: no walk, no scan and no update step\n", lib_.heldWhy());
     return false;
   }
   if (!card_.begin()) return false;
@@ -719,9 +720,11 @@ void CardTasks::toast(const char* text) { uistr::copy(toast_, sizeof(toast_), te
 void CardTasks::state(librarytext::Status* s, char* line, size_t size) const {
   *s = status();
   if (!active_) {
-    snprintf(line, size, "%s",
-             lib_.cardJobsHeld() ? "the card's root couldn't be read at the boot: covers only, a restart asks again"
-                                 : "no records here (the flash, or no PSRAM): covers only");
+    if (lib_.cardJobsHeld()) {
+      snprintf(line, size, "%s: covers only, a restart asks again", lib_.heldWhy());
+    } else {
+      snprintf(line, size, "no records here (the flash, or no PSRAM): covers only");
+    }
     return;
   }
   const cardjobs::Jobs::Counts& c = jobs_.counts();

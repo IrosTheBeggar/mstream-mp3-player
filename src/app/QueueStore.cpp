@@ -80,7 +80,7 @@ void QueueStore::paths(char* file, char* temp, size_t size) {
   snprintf(temp, size, "%s/queue.tmp", dir);
 }
 
-bool QueueStore::restore() {
+bool QueueStore::restore(bool libraryListsCard) {
   if (!storage_.available()) return false;
   char file[48], temp[48];
   paths(file, temp, sizeof(file));
@@ -107,13 +107,14 @@ bool QueueStore::restore() {
     // Not for tracks dropped because there's no library at all this time (a
     // card that failed to read, say): the file keeps them, and its line,
     // for when the library is back (the next boot, or the rebuild of "Try
-    // again", which reads the file again from that line: QueueRemap).
+    // again", which reads the file again from that line: QueueRemap). Nor by
+    // a library that may leave them out (`libraryListsCard`).
     const LibraryIndex* index = catalog_.index();
     const uint32_t generation =
         r.header.generation > saved.generation ? r.header.generation : saved.generation;
     // A file longer than the queue holds (written before its cap) is read
     // in as its window: written again, at the queue's size.
-    if (r.dropped > 0 && !(index && index->ready())) {
+    if (r.dropped > 0 && !(libraryListsCard && index && index->ready())) {
       saver_.keptFile(generation, line);
     } else {
       saver_.loaded(generation, r.dropped > 0 || r.capped > 0 || path == temp, millis());

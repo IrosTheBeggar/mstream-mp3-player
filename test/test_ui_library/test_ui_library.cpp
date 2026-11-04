@@ -3063,6 +3063,7 @@ void test_library_texts_fit() {
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
   fits(title, tr(S::empty_no_music_title), kEmptyTitleW);
   for (int k = 0; k < 2; ++k) fits(small, lineOf(S::empty_no_music_lines, k).c_str(), kEmptyLineW);
+  fits(small, tr(S::library_row_rescan_unread), kEmptyLineW);  // (in its place at a boot that holds the jobs)
   for (int k = 0; k < 2; ++k) fits(small, lineOf(kNoCard.lines, k).c_str(), kEmptyLineW);
   for (const char* l :
        {tr(S::now_playing_unknown_artist), tr(S::library_no_artist_folder), tr(S::library_loose_tracks)}) {

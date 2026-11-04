@@ -379,83 +379,125 @@ namespace {
 
 constexpr size_t kNameCap = 96;
 
+// The rule's questions of the card, the first it fails noted: from there on the
+// answers say nothing, and nothing may be done on them.
+class Asking {
+public:
+  explicit Asking(Fs& fs) : fs_(fs) {}
+  Fs::Entry ask(const char* path) {
+    const Fs::Entry e = failed_ ? Fs::Entry() : fs_.entry(path);
+    failed_ = failed_ || e.cardFailed;
+    return e;
+  }
+  bool failed() const { return failed_; }
+  Fs& fs() { return fs_; }
+
+private:
+  Fs& fs_;
+  bool failed_ = false;
+};
+
 // The first twin name not on the card; 0 when all are taken.
-int freeTwin(Fs& fs, const Names& n, char* out) {
+int freeTwin(Asking& a, const Names& n, char* out) {
   for (int i = 1; i <= kMaxTwins; ++i)
-    if (twinName(n, i, out, kNameCap) && !fs.exists(out)) return i;
+    if (twinName(n, i, out, kNameCap) && !a.ask(out).there) return a.failed() ? 0 : i;
   return 0;
 }
 
 // A twin shares cluster `c` (non-zero).
-bool twinShares(Fs& fs, const Names& n, uint32_t c, int except) {
+bool twinShares(Asking& a, const Names& n, uint32_t c, int except) {
   char t[kNameCap];
   for (int i = 1; i <= kMaxTwins; ++i) {
     if (i == except || !twinName(n, i, t, sizeof(t))) continue;
-    if (fs.exists(t) && fs.firstCluster(t) == c) return true;
+    const Fs::Entry e = a.ask(t);
+    if (e.there && e.firstCluster == c) return true;
   }
   return false;
 }
 
 // Renames `from` to a free twin (a rename frees nothing).
-bool toTwin(Fs& fs, const Names& n, const char* from) {
+bool toTwin(Asking& a, const Names& n, const char* from) {
   char t[kNameCap];
-  return freeTwin(fs, n, t) && fs.rename(from, t);
+  return freeTwin(a, n, t) && a.fs().rename(from, t);
+}
+
+uint32_t collectTwinsOf(Asking& a, const Names& n) {
+  uint32_t left = 0;
+  char t[kNameCap];
+  for (int i = 1; i <= kMaxTwins; ++i) {
+    if (!twinName(n, i, t, sizeof(t))) continue;
+    const Fs::Entry e = a.ask(t);
+    if (!e.there) continue;
+    bool shared = false;
+    if (e.firstCluster != 0) {
+      const Fs::Entry path = a.ask(n.path), tmp = a.ask(n.tmp);
+      shared = (path.there && path.firstCluster == e.firstCluster) || (tmp.there && tmp.firstCluster == e.firstCluster) ||
+               twinShares(a, n, e.firstCluster, i);
+    }
+    if (a.failed()) return left;
+    if (shared || !a.fs().remove(t)) ++left;
+  }
+  return left;
 }
 
 }  // namespace
 
 Settled settle(Fs& fs, const Names& n, TmpCheck* check) {
   Settled s;
-  if (fs.exists(n.tmp)) {
-    const uint32_t ct = fs.firstCluster(n.tmp);
-    const bool shared = ct != 0 && ((fs.exists(n.path) && fs.firstCluster(n.path) == ct) || twinShares(fs, n, ct, 0));
-    const TmpCheck::Verdict v = shared || fs.exists(n.path) || !check ? TmpCheck::Verdict::Torn
-                                                                       : check->check(fs, n.tmp);
-    if (shared) {
-      s.what = toTwin(fs, n, n.tmp) ? Settle::Quarantined : Settle::Failed;
-    } else if (v == TmpCheck::Verdict::Whole) {
-      s.what = fs.rename(n.tmp, n.path) ? Settle::Promoted : Settle::Failed;
-    } else if (v == TmpCheck::Verdict::Unknown) {
-      s.what = Settle::Kept;  // no verdict: the next settle() checks it again
-    } else {
-      s.what = fs.remove(n.tmp) ? Settle::Removed : Settle::Failed;
+  Asking a(fs);
+  const Fs::Entry tmp = a.ask(n.tmp);
+  if (tmp.there) {
+    const Fs::Entry path = a.ask(n.path);
+    const bool shared = tmp.firstCluster != 0 &&
+                        ((path.there && path.firstCluster == tmp.firstCluster) || twinShares(a, n, tmp.firstCluster, 0));
+    if (!a.failed()) {
+      const TmpCheck::Verdict v = shared || path.there || !check ? TmpCheck::Verdict::Torn : check->check(fs, n.tmp);
+      if (shared) {
+        s.what = toTwin(a, n, n.tmp) ? Settle::Quarantined : Settle::Failed;
+      } else if (v == TmpCheck::Verdict::Whole) {
+        // (A rename that failed leaves it the only copy.)
+        s.what = fs.rename(n.tmp, n.path) ? Settle::Promoted : Settle::Kept;
+      } else if (v == TmpCheck::Verdict::Unknown) {
+        s.what = Settle::Kept;  // no verdict: the next settle() checks it again
+      } else {
+        s.what = fs.remove(n.tmp) ? Settle::Removed : Settle::Failed;
+      }
     }
   }
-  s.twins = collectTwins(fs, n);
+  if (!a.failed()) s.twins = collectTwinsOf(a, n);
+  if (a.failed()) s.what = Settle::Unread;
   return s;
 }
 
 bool prepareTmp(Fs& fs, const Names& n) {
-  if (!fs.exists(n.tmp)) return true;
-  const uint32_t c = fs.firstCluster(n.tmp);
-  const bool shared = c != 0 && ((fs.exists(n.path) && fs.firstCluster(n.path) == c) || twinShares(fs, n, c, 0));
-  return shared ? toTwin(fs, n, n.tmp) : fs.remove(n.tmp);
+  Asking a(fs);
+  const Fs::Entry tmp = a.ask(n.tmp);
+  if (!tmp.there) return !a.failed();
+  const Fs::Entry path = a.ask(n.path);
+  const bool shared = tmp.firstCluster != 0 &&
+                      ((path.there && path.firstCluster == tmp.firstCluster) || twinShares(a, n, tmp.firstCluster, 0));
+  if (a.failed()) return false;
+  return shared ? toTwin(a, n, n.tmp) : fs.remove(n.tmp);
 }
 
 bool replace(Fs& fs, const Names& n) {
-  if (fs.exists(n.path)) {
-    const uint32_t c = fs.firstCluster(n.path);
-    if (c != 0 && fs.exists(n.tmp) && fs.firstCluster(n.tmp) == c) return false;  // never: the tmp is new
-    const bool shared = c != 0 && twinShares(fs, n, c, 0);
-    if (shared ? !toTwin(fs, n, n.path) : !fs.remove(n.path)) return false;
+  Asking a(fs);
+  const Fs::Entry path = a.ask(n.path);
+  if (a.failed()) return false;
+  if (path.there) {
+    const uint32_t c = path.firstCluster;
+    const Fs::Entry tmp = a.ask(n.tmp);
+    if (c != 0 && tmp.there && tmp.firstCluster == c) return false;  // never: the tmp is new
+    const bool shared = c != 0 && twinShares(a, n, c, 0);
+    if (a.failed()) return false;
+    if (shared ? !toTwin(a, n, n.path) : !fs.remove(n.path)) return false;
   }
   return fs.rename(n.tmp, n.path);
 }
 
 uint32_t collectTwins(Fs& fs, const Names& n) {
-  uint32_t left = 0;
-  char t[kNameCap];
-  for (int i = 1; i <= kMaxTwins; ++i) {
-    if (!twinName(n, i, t, sizeof(t)) || !fs.exists(t)) continue;
-    const uint32_t c = fs.firstCluster(t);
-    bool shared = false;
-    if (c != 0) {
-      shared = (fs.exists(n.path) && fs.firstCluster(n.path) == c) ||
-               (fs.exists(n.tmp) && fs.firstCluster(n.tmp) == c) || twinShares(fs, n, c, i);
-    }
-    if (shared || !fs.remove(t)) ++left;
-  }
-  return left;
+  Asking a(fs);
+  return collectTwinsOf(a, n);
 }
 
 // ---------------------------------------------------------------------------
@@ -999,6 +1041,8 @@ struct Merge {
   File* walkF = nullptr;
   File* jnlF = nullptr;
   // D
+  ReadWatch binWatch;
+  bool binOpenFailed = false;  // the card failed its open
   bool useBin = false;
   bool binConvert = false;  // D read by another parser, or at another epoch
   bool binEnded = false;
@@ -1296,8 +1340,11 @@ public:
   DeviceCheck(TagStore::Config c, void* (*alloc)(size_t), void (*release)(void*))
       : cfg_(c), alloc_(alloc), free_(release) {}
   Verdict check(Fs& fs, const char* tmp) override {
-    File* f = fs.open(tmp, Fs::Mode::Read);
-    if (!f) return Verdict::Torn;
+    // (A read the card fails is no verdict either: removing a whole tags.tmp on one
+    // would remove the only D.)
+    bool failed = false;
+    File* f = fs.openRead(tmp, &failed);
+    if (!f) return failed ? Verdict::Unknown : Verdict::Torn;
     uint32_t scratchBytes = cfg_.deviceBuffer > DeviceReader::kMinScratch ? cfg_.deviceBuffer
                                                                            : DeviceReader::kMinScratch;
     size_t bytes = sizeof(DeviceReader) + scratchBytes + 16;
@@ -1316,12 +1363,14 @@ public:
       DeviceReader* r = new (rm) DeviceReader;
       uint8_t* scratch = static_cast<uint8_t*>(b.take(scratchBytes));
       v = Verdict::Torn;
-      if (r->begin(*f, scratch, scratchBytes, nullptr, true) == Why::Ok) {
+      ReadWatch watch(f);
+      if (r->begin(watch, scratch, scratchBytes, nullptr, true) == Why::Ok) {
         DeviceReader::Step s;
         while ((s = r->next()) == DeviceReader::Step::Folder || s == DeviceReader::Step::Record) {
         }
         if (s == DeviceReader::Step::End) v = Verdict::Whole;
       }
+      if (watch.failed()) v = Verdict::Unknown;
       r->~DeviceReader();
       free_(mem);
     }
@@ -1339,37 +1388,85 @@ private:
 
 bool TagStore::loadDevice() {
   dev_ = DeviceInfo();
-  File* f = fs_.open(binPath_, Fs::Mode::Read);
+  File* f = fs_.openRead(binPath_, &readFailed_);
   if (!f) return false;
-  const Why w = openDevice(*f, &dev_);
+  ReadWatch watch(f);
+  const Why w = openDevice(watch, &dev_);
   fs_.close(f);
+  readFailed_ = watch.failed();
   if (w != Why::Ok) dev_ = DeviceInfo();
   return w == Why::Ok;
+}
+
+void TagStore::forgetJournals() {
+  chunkN_ = 0;
+  extraChunks_ = 0;
+  jnlEnd_ = 0;
+  jnlTail_ = false;
+  jnlForeign_ = false;
+  walkRuns_ = 0;
+  walkSeq_ = 0;
+  walkSkew_ = 0;
+  walkUnsettled_ = false;
+  walkId_ = Identity();
 }
 
 TagStore::Opened TagStore::open() {
   Opened o;
   walking_ = false;
+  compactUnread_ = false;
   DeviceCheck check(cfg_, alloc_, free_);
   o.settled = settle(fs_, names_, &check);
   twins_ = o.settled.twins;
   tmpKept_ = o.settled.what == Settle::Kept;
-  if (fs_.exists(hidxPath_)) fs_.remove(hidxPath_);
+  // (Kept: D may be the tmp, which is no use yet. As unread: taken for no D, the jobs
+  // would start it over, and an update step build without it.)
+  readFailed_ = o.settled.what == Settle::Unread || tmpKept_;
   dev_ = DeviceInfo();
-  if (fs_.exists(binPath_)) {
-    File* f = fs_.open(binPath_, Fs::Mode::Read);
+  forgetJournals();
+  if (!readFailed_) {
+    const Fs::Entry hidx = fs_.entry(hidxPath_);
+    readFailed_ = hidx.cardFailed;
+    if (hidx.there) fs_.remove(hidxPath_);
+  }
+  if (!readFailed_) {
+    File* f = fs_.openRead(binPath_, &readFailed_);
     if (f) {
-      o.deviceWhy = openDevice(*f, &dev_);
+      ReadWatch watch(f);
+      o.deviceWhy = openDevice(watch, &dev_);
+      if (o.deviceWhy == Why::Io && f->damaged()) o.deviceWhy = Why::FatRecords;
       fs_.close(f);
+      readFailed_ = watch.failed();
       if (o.deviceWhy != Why::Ok) dev_ = DeviceInfo();
     } else {
-      o.deviceWhy = Why::Io;
+      o.deviceWhy = Why::Missing;
     }
-  } else {
-    o.deviceWhy = Why::Missing;
   }
-  scanJournal(&o);
-  scanWalk(&o);
+  if (!readFailed_) scanJournal(&o);
+  if (!readFailed_) scanWalk(&o);
+  if (readFailed_) {
+    // Nothing of what was read counts: the rest may be what it left out.
+    const Settled settled = o.settled;
+    dev_ = DeviceInfo();
+    forgetJournals();
+    o = Opened();
+    o.settled = settled;
+    o.deviceWhy = Why::Io;
+    o.readFailed = true;
+  }
+  return o;
+}
+
+TagStore::Opened TagStore::openAtBoot(void (*wait)(uint32_t ms), uint32_t* opens) {
+  Opened o = open();
+  uint32_t n = 1;
+  for (const uint32_t ms : kBootWaitsMs) {
+    if (!o.readFailed || !wait) break;
+    wait(ms);
+    o = open();
+    ++n;
+  }
+  if (opens) *opens = n;
   return o;
 }
 
@@ -1416,18 +1513,15 @@ bool checkChunkEntries(cc::Stream& s, uint32_t count, char* prev, char* cur) {
 }  // namespace
 
 void TagStore::scanJournal(Opened* o) {
-  chunkN_ = 0;
-  extraChunks_ = 0;
-  jnlEnd_ = 0;
-  jnlTail_ = false;
-  jnlForeign_ = false;
-  File* f = fs_.open(jnlPath_, Fs::Mode::Read);
-  if (!f) return;
+  File* file = fs_.openRead(jnlPath_, &readFailed_);
+  if (!file) return;
+  ReadWatch watch(file);
+  ReadWatch* const f = &watch;
   const uint32_t size = f->size();
   void* mem = alloc_(cfg_.runBuffer + 2 * (cc::kMaxRelPath + 1));
   if (!mem || !chunks_) {
     if (mem) free_(mem);
-    fs_.close(f);
+    fs_.close(file);
     jnlForeign_ = size > 0;
     return;
   }
@@ -1473,7 +1567,9 @@ void TagStore::scanJournal(Opened* o) {
   }
   extraChunks_ = extra;
   free_(mem);
-  fs_.close(f);
+  fs_.close(file);
+  readFailed_ = watch.failed();  // (not a torn tail, nor a foreign file: what it stopped at)
+  if (readFailed_) return;
   jnlForeign_ = chunkN_ == 0 && size > 0;
   jnlTail_ = chunkN_ > 0 && size > jnlEnd_;
   o->chunks = chunkN_;
@@ -1482,7 +1578,7 @@ void TagStore::scanJournal(Opened* o) {
 
 bool TagStore::append(ChunkBuilder& c) {
   if (c.count_ == 0) return true;
-  if (!chunks_ || chunkN_ >= cfg_.maxChunks || extraChunks_ > 0 || walking_) return false;
+  if (!chunks_ || chunkN_ >= cfg_.maxChunks || extraChunks_ > 0 || walking_ || readFailed_) return false;
   // Sort the offsets by path, then by when they were added (an offset grows
   // with each add): a path added twice keeps its last.
   uint32_t* idx = reinterpret_cast<uint32_t*>(c.buf_ + c.cap_ - 4 * c.count_);
@@ -1631,13 +1727,10 @@ bool checkWalkEntry(cc::Stream& s, RunKeys& k, char* cur) {
 }  // namespace
 
 void TagStore::scanWalk(Opened* o) {
-  walkRuns_ = 0;
-  walkSeq_ = 0;
-  walkSkew_ = 0;
-  walkUnsettled_ = false;
-  walkId_ = Identity();
-  File* f = fs_.open(walkPath_, Fs::Mode::Read);
-  if (!f) return;
+  File* file = fs_.openRead(walkPath_, &readFailed_);
+  if (!file) return;
+  ReadWatch watch(file);
+  ReadWatch* const f = &watch;
   const uint32_t size = f->size();
   uint8_t h[kWalkHeader];
   bool ok = size >= kWalkHeader && f->read(0, h, kWalkHeader) && cc::get32(h) == kWalkMagic &&
@@ -1696,7 +1789,9 @@ void TagStore::scanWalk(Opened* o) {
     }
     free_(mem);
   }
-  fs_.close(f);
+  fs_.close(file);
+  readFailed_ = watch.failed();  // (not a walk cut short: what it stopped at)
+  if (readFailed_) return;
   if (walkRuns_) {
     walkSeq_ = cc::get32(h + 12);
     const uint32_t flags = cc::get32(h + 16);
@@ -1711,7 +1806,7 @@ void TagStore::scanWalk(Opened* o) {
 }
 
 bool TagStore::beginWalk(const Identity& id, uint8_t* buf, uint32_t bytes, WalkWriter* w) {
-  if (!w || walking_ || walkRuns_ > 0 || !buf || bytes < 1024) return false;
+  if (!w || walking_ || walkRuns_ > 0 || !buf || bytes < 1024 || readFailed_) return false;
   *w = WalkWriter();
   w->store_ = this;
   w->buf_ = buf;
@@ -2050,6 +2145,8 @@ struct CompactWork {
   // The folders' facts.
   bool binFacts = false;
   FolderCursor binFolders;
+  ReadWatch factsWatch;
+  bool factsOpenFailed = false;  // the card failed its open
   WalkFolders walk[2];
   uint32_t walkRuns = 0;
   FolderFacts facts, tmpFacts;
@@ -2231,8 +2328,9 @@ bool TagStore::beginMerge(Merge& m, uint8_t* arena, size_t arenaBytes, bool useB
     if (!dev || !run || !scratch) return false;
     m.dev = new (dev) DeviceReader();
     m.binRun = new (run) cc::RunFields();
-    m.binF = fs_.open(binPath_, Fs::Mode::Read);
-    const Why w = m.binF ? m.dev->begin(*m.binF, scratch, cfg_.deviceBuffer, m.binRun, false) : Why::Io;
+    m.binF = fs_.openRead(binPath_, &m.binOpenFailed);
+    m.binWatch.watch(m.binF);
+    const Why w = m.binF ? m.dev->begin(m.binWatch, scratch, cfg_.deviceBuffer, m.binRun, false) : Why::Io;
     if (w != Why::Ok) {
       m.binFailed = true;  // D is left out
       return false;
@@ -2286,9 +2384,12 @@ TagStore::Compacted TagStore::compact(bool rescan) {
     res.error = e;
     return res;
   };
+  compactUnread_ = false;
   if (walking_) return fail("a walk is being written");
   // (prepareTmp() would remove a tags.tmp open() couldn't check: the only D.)
   if (tmpKept_) return fail("tags.tmp alone, unchecked (no memory for its check at the open): the next open checks it");
+  // (Without D, what it writes would replace it.)
+  if (readFailed_) return fail("the card failed a read of the records at the open: the next open reads them");
   const uint32_t epoch = (dev_.present ? dev_.header.epoch : 0) + (rescan ? 1u : 0u);
 
   // The work memory: the fixed part, then the arena.
@@ -2368,8 +2469,9 @@ TagStore::Compacted TagStore::compact(bool rescan) {
     w->binFacts = false;
     if (binFacts) {
       if (binF) fs_.close(binF);
-      binF = fs_.open(binPath_, Fs::Mode::Read);
-      w->binFacts = binF && w->binFolders.begin(*binF, w->binFolderBuf, 3 * cfg_.runBuffer);
+      binF = fs_.openRead(binPath_, &w->factsOpenFailed);
+      w->factsWatch = ReadWatch(binF);
+      w->binFacts = binF && w->binFolders.begin(w->factsWatch, w->binFolderBuf, 3 * cfg_.runBuffer);
     }
     if (walkF) fs_.close(walkF);
     walkF = nullptr;
@@ -2402,6 +2504,16 @@ TagStore::Compacted TagStore::compact(bool rescan) {
     return 1;
   };
 
+  // A read of D the card failed, in the pass just run: it says nothing of D, which
+  // stays as it is, with the journals: no compaction now.
+  auto deviceUnread = [&]() {
+    return w->m.binOpenFailed || w->m.binWatch.failed() || w->factsOpenFailed || w->factsWatch.failed();
+  };
+  auto unread = [&]() {
+    res.readFailed = compactUnread_ = true;
+    return finish("read");
+  };
+
   // Pass 1: the counts, and HIDX's pairs into hidx.tmp.
   Cursor* outs[7] = {&w->fold, &w->recs, &w->strsF, &w->strsR, &w->dsta, &w->dfld, &w->hidx};
   int r;
@@ -2413,6 +2525,7 @@ TagStore::Compacted TagStore::compact(bool rescan) {
     if (!hidxF) return finish("hidx.tmp");
     w->hidx.begin(hidxF, 0, w->outBuf[6], cfg_.writeBuffer);
     r = pass(false);
+    if (deviceUnread()) return unread();
     if (r == 0 && useBin) {
       // D failed its checks: without it (3.4.1); the walk and the scan rebuild it.
       res.deviceWhy = w->m.dev ? w->m.dev->why() : Why::Io;
@@ -2485,6 +2598,7 @@ TagStore::Compacted TagStore::compact(bool rescan) {
     if (!w->dfld.put(f, kDfldHeader)) return finish("write");
   }
   r = pass(true);
+  if (deviceUnread()) return unread();
   if (r != 1) return finish(r == 0 ? "D changed between the passes" : "read");
   if (w->records != records || w->folders != folders || w->strsFolder != strsFolder || w->strsRecords != strsRecords ||
       w->dfldBytes != dfldBytes)

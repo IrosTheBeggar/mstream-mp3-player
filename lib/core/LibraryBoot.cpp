@@ -19,6 +19,34 @@ Decision decide(const In& in) {
     d.why = "the card's root couldn't be read: no card jobs this session";
     return d;
   }
+  // D or its journals unread: the jobs would start the records over and replace them.
+  // A library.idx that says it is one is kept, whichever identity it has. With none to
+  // load, /music is walked for the session: a build without D leaves out every file T
+  // doesn't list.
+  if (in.deviceUnread) {
+    d.holdJobs = true;
+    const bool load = in.saved == Saved::Matches || in.saved == Saved::Differs;
+    d.action = load ? Action::Load : Action::Walk;
+    d.sessionOnly = !load;
+    d.why = load ? "the device's records couldn't be read: no card jobs this session"
+                 : "the device's records couldn't be read, and no library.idx to load: /music walked for this "
+                   "session, nothing saved, no card jobs";
+    return d;
+  }
+  // library.idx unread, and it may well be whole: nothing goes over it. Records that
+  // can be read and list the card give the same library, for this session; else /music
+  // is walked for it.
+  if (in.saved == Saved::Unread) {
+    d.holdJobs = true;
+    d.sessionOnly = true;
+    const bool build = in.recordsList && !in.rootUnread;
+    d.action = build ? Action::Build : Action::Walk;
+    d.compactFirst = build;
+    d.why = build ? "library.idx couldn't be read: built for this session, nothing saved, no card jobs"
+                  : "library.idx couldn't be read, nor a build from the records: /music walked for this session, "
+                    "nothing saved, no card jobs";
+    return d;
+  }
   if (in.saved == Saved::Matches) {
     if (in.marker) {
       // A build was deferred (the update step's memory check, 3.4.2): it
@@ -100,6 +128,7 @@ const char* savedName(Saved s, bool rootUnread) {
     case Saved::Outdated: return "outdated";
     case Saved::Matches: return rootUnread ? "built with no transfer" : "matches the card";
     case Saved::Differs: return rootUnread ? "built from a transfer" : "built for other card data";
+    case Saved::Unread: return "unread (a read of the card failed)";
   }
   return "?";
 }

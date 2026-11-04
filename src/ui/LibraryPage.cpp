@@ -621,7 +621,8 @@ bool LibraryPage::emptyState(EmptyState& e) {
     e.icon = &icons::kFolder;
     e.iconColour = col::AMBER;
     e.title = tr(S::empty_no_music_title);
-    e.lines = tr(S::empty_no_music_lines);
+    // (Held: the card failed a read at the boot, and the music may all be there.)
+    e.lines = tr(s.libraryHeld ? S::library_row_rescan_unread : S::empty_no_music_lines);
     e.buttons[0] = tr(S::empty_try_again);
     return true;
   }

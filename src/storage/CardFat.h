@@ -79,6 +79,7 @@ public:
   // for its FIL).
   FRESULT openRead(const char* path, tagstore::File** out);
   tagstore::File* openRead(const char* path, bool* cardFailed) override;
+  Entry entry(const char* path) override;
   bool close(tagstore::File* f) override;
   bool exists(const char* path) override;
   bool remove(const char* path) override;
