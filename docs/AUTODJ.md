@@ -1020,6 +1020,7 @@ going"):
     key {n}%" (the mapped tracks' coverage);
   - Auto DJ off: "Auto DJ index: {n} tracks" over "read when Auto DJ is
     switched on";
+  - on with no library (6.6): "Auto DJ index: {n} tracks", alone;
   - joining, or a try at opening the file due (6.6), on or off: "Reading the
     Auto DJ index…";
   - no index, or none usable: why (6.6) over "picks are random";

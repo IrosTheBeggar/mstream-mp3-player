@@ -5361,7 +5361,7 @@ src/. What the code decided where 3.2-3.4 left room:
   read clears it, one unread counts. (6) Stacks: faults on the worker, the decode task and the
   loop, the worker's least left in `gs`, the decoder's, and the loop's `[ui] loop task stack` line: the
   init runs one FatFs read deeper than a remount did. (7) `gb` with a fault in T: the fence, the library
-  back, the queue and its position, Auto DJ rejoining (a NO PSRAM there is the join's own, PR 36); PSRAM's
+  back, the queue and its position, Auto DJ rejoining; PSRAM's
   lowest and the worker's stack through the reload. A card whose `library.idx` was saved with Pending
   tracks, T's body failing, one of them playing: two `(the scan's end): FAILED: the last library.idx loaded
   again`, then `[card] the scan's end: 2 update steps failed ...` and no third fence; Rescan then asks one.

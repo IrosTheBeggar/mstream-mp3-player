@@ -948,7 +948,8 @@ void AutoDj::view(autodjview::State* v) const {
   if (file_ == File::Absent && why_ == cc::Why::Io) {
     // A read failed (the file the root names isn't on the card, the card
     // failed every try at it or every read of the root, no PSRAM to read the
-    // root): not the index's checks; a remount or the next boot tries again.
+    // root): not the index's checks; a remount or the next boot tries again. (A
+    // card too silent, offForSilence(): the next boot, or Dc until the next remount.)
     v->index = Index::Unreadable;
   } else if (file_ == File::Absent || (file_ == File::Open && dj_.engine().broken())) {
     v->index = Index::Bad;

@@ -163,7 +163,7 @@ private:
   enum class File : uint8_t {
     None,     // the root names no index (or there is no root: no transfer data)
     NotRead,  // ... one of a major this build doesn't read (read.mpdj)
-    Absent,   // ... one that failed its checks (why_), isn't there, or the card failed every try at
+    Absent,   // ... one that failed its checks (why_), isn't there, the card failed every try at, or closed for a card too silent
     Again,    // ... one a try at opening, or a read of the root, failed on the card's account: tried again soon (tries_)
     Open,     // open and checked: the join's, the picks'
   };
