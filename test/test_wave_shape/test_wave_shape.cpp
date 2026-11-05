@@ -796,7 +796,7 @@ void test_the_jobs_memory_is_used_again() {
 }
 
 // ---------------------------------------------------------------------------
-// The card worker's 6 KB of stack: no heap, and frames that stay small.
+// The card worker's 7.5 KB of stack: no heap, and frames that stay small.
 // ---------------------------------------------------------------------------
 void test_no_heap_and_little_stack() {
   // Static: this frame's own objects aren't what's measured.

@@ -80,7 +80,7 @@ Why Container::open(Source& src, const FormatSpec& spec, uint8_t* typeHeader) {
   const uint32_t size = src.size();
   // One small buffer for the common header, the header's CRC and each
   // directory entry: this runs under the card's reads on the loop task's
-  // 8 KB and the card worker's 6 KB (the boot's compaction, gs, gt; with
+  // 8 KB and the card worker's 7.5 KB (the boot's compaction, gs, gt; with
   // the SD driver's log line on top), so its frame stays small (2026-10-09:
   // 672 B with a 256 B buffer and a table of the types seen).
   uint8_t buf[64];

@@ -75,13 +75,14 @@ using Entries = std::vector<std::pair<uint16_t, uint8_t>>;  // (row, level), bes
 // The tests' SlotReader: a real mpdj::Table (a golden or a hardening file),
 // or lists encoded as slots; faults by row as tools/autodj_ref.py's
 // SlotSource: damaged (the CRC always fails), flaky (on the first read),
-// io (the first read fails, Why::Io), broken (a good CRC over a bad list).
+// io (the first read fails, Why::Io), ioAlways (every read does, a sector the card
+// keeps failing), broken (a good CRC over a bad list).
 class FakeReader : public SlotReader {
 public:
   const mpdj::Table* table = nullptr;
   const std::vector<Entries>* lists = nullptr;
   uint32_t k = 0;
-  std::set<uint16_t> damaged, flaky, io, broken;
+  std::set<uint16_t> damaged, flaky, io, ioAlways, broken;
   std::map<uint16_t, int> count;
   int reads = 0;
 
@@ -93,7 +94,7 @@ public:
       *why = cc::Why::DjSlotOrder;
       return mpdj::SlotRead::Broken;
     }
-    if (io.count(row) && seen == 0) {
+    if (ioAlways.count(row) || (io.count(row) && seen == 0)) {
       *why = cc::Why::Io;
       return mpdj::SlotRead::Damaged;
     }
@@ -1174,7 +1175,7 @@ void test_damaged_failed_and_the_ring_of_8() {
   TEST_ASSERT_TRUE(e->prefetchDue(settings(), &row));
   TEST_ASSERT_EQUAL(2, row);  // never re-read
   TEST_ASSERT_EQUAL(static_cast<int>(SlotResult::Io), static_cast<int>(e->prefetch(t.reader, 2)));
-  TEST_ASSERT_FALSE(e->rowDamaged(2));  // Io: skipped, never in the ring
+  TEST_ASSERT_FALSE(e->rowDamaged(2));  // Io: skipped, not in the ring for one
   TEST_ASSERT_EQUAL(1, e->damagedRows());
   Pick p = e->pick(settings(), t.in(3));
   TEST_ASSERT_EQUAL(2, p.reads);  // 2 (good now), then 1 (flaky: suspect)
@@ -1287,7 +1288,7 @@ void test_a_pick_names_the_rows_it_found_damaged() {
   TEST_ASSERT_TRUE(u.random);
   TEST_ASSERT_EQUAL(0, u.reads);
   TEST_ASSERT_EQUAL(0, u.damaged);
-  // A read that failed (the card pulled): skipped, never damaged.
+  // A read that failed (the card pulled): skipped, not damaged for one.
   Table w(full(30));
   w.reader.io = {7};
   auto h = engine();
@@ -1297,6 +1298,109 @@ void test_a_pick_names_the_rows_it_found_damaged() {
   TEST_ASSERT_EQUAL(0, v.damaged);
   TEST_ASSERT_EQUAL(1, h->stats().ioSkips);
   TEST_ASSERT_FALSE(h->rowDamaged(7));
+}
+
+// A read the card keeps failing: the second in a row on the row puts it in the ring (each costs the loop
+// the driver's retries, and a read ahead would ask every 2 s): the pin gives way, and a pick reads it no
+// more. One read that works between starts over; a remount or Dc (fileReopened()) asks again.
+void test_a_row_whose_read_keeps_failing() {
+  Table t(full(30));
+  const Maps* m = &t.maps.m;
+  t.reader.ioAlways = {5};
+  auto e = engine();
+  e->newSession(1, 5, m);
+  const Settings stay = settings(Mode::Locked);
+  uint16_t row = 0;
+  TEST_ASSERT_TRUE(e->prefetchDue(stay, &row));
+  TEST_ASSERT_EQUAL(5, row);
+  TEST_ASSERT_EQUAL(static_cast<int>(SlotResult::Io), static_cast<int>(e->prefetch(t.reader, 5)));
+  TEST_ASSERT_FALSE(e->rowDamaged(5));
+  TEST_ASSERT_TRUE(e->prefetchDue(stay, &row));
+  TEST_ASSERT_EQUAL(5, row);
+  TEST_ASSERT_EQUAL(static_cast<int>(SlotResult::IoTwice), static_cast<int>(e->prefetch(t.reader, 5)));
+  TEST_ASSERT_TRUE(e->rowDamaged(5));
+  TEST_ASSERT_FALSE(e->prefetchDue(stay, &row));
+  TEST_ASSERT_EQUAL(2, e->stats().ioSkips);
+  TEST_ASSERT_EQUAL(1, e->stats().damaged);
+  const int reads = t.reader.reads;
+  const Pick p = e->pick(stay, t.in(5));
+  TEST_ASSERT_TRUE(p.ok);
+  TEST_ASSERT_EQUAL(reads, t.reader.reads);  // the pin gave way: nothing read of it
+  // A remount: asked again, from the start.
+  e->fileReopened();
+  TEST_ASSERT_FALSE(e->rowDamaged(5));
+  TEST_ASSERT_EQUAL(static_cast<int>(SlotResult::Io), static_cast<int>(e->prefetch(t.reader, 5)));
+  TEST_ASSERT_FALSE(e->rowDamaged(5));
+  // One read that works between: the count starts over.
+  t.reader.ioAlways = {};
+  t.reader.io = {7};
+  auto g = engine();
+  g->newSession(1, 7, m);
+  TEST_ASSERT_EQUAL(static_cast<int>(SlotResult::Io), static_cast<int>(g->prefetch(t.reader, 7)));
+  TEST_ASSERT_EQUAL(static_cast<int>(SlotResult::Ok), static_cast<int>(g->prefetch(t.reader, 7)));
+  TEST_ASSERT_FALSE(g->rowDamaged(7));
+  // (prefetch() reads whatever the cache holds: no reopen needed to read it again.)
+  t.reader.ioAlways = {7};
+  TEST_ASSERT_EQUAL(static_cast<int>(SlotResult::Io), static_cast<int>(g->prefetch(t.reader, 7)));
+  TEST_ASSERT_FALSE(g->rowDamaged(7));
+  TEST_ASSERT_EQUAL(static_cast<int>(SlotResult::IoTwice), static_cast<int>(g->prefetch(t.reader, 7)));
+  TEST_ASSERT_TRUE(g->rowDamaged(7));
+}
+
+void test_a_remount_between_two_failed_reads_starts_over() {
+  Table t(full(30));
+  t.reader.ioAlways = {7};
+  auto h = engine();
+  h->newSession(1, 7, &t.maps.m);
+  TEST_ASSERT_EQUAL(static_cast<int>(SlotResult::Io), static_cast<int>(h->prefetch(t.reader, 7)));
+  h->fileReopened();
+  TEST_ASSERT_EQUAL(static_cast<int>(SlotResult::Io), static_cast<int>(h->prefetch(t.reader, 7)));
+  TEST_ASSERT_FALSE(h->rowDamaged(7));
+}
+
+void test_a_session_copy_carries_a_failed_read() {
+  Table t(full(30));
+  t.reader.ioAlways = {7};
+  auto i = engine();
+  i->newSession(1, 7, &t.maps.m);
+  TEST_ASSERT_EQUAL(static_cast<int>(SlotResult::Io), static_cast<int>(i->prefetch(t.reader, 7)));
+  auto c = engine();
+  c->copySession(*i);
+  TEST_ASSERT_EQUAL(static_cast<int>(SlotResult::IoTwice), static_cast<int>(c->prefetch(t.reader, 7)));
+  TEST_ASSERT_TRUE(c->rowDamaged(7));
+  TEST_ASSERT_FALSE(i->rowDamaged(7));
+}
+
+void test_another_rows_good_read_leaves_a_failed_one() {
+  Table t(full(30));
+  t.reader.ioAlways = {7};
+  auto j = engine();
+  j->newSession(1, 7, &t.maps.m);
+  TEST_ASSERT_EQUAL(static_cast<int>(SlotResult::Io), static_cast<int>(j->prefetch(t.reader, 7)));
+  TEST_ASSERT_EQUAL(static_cast<int>(SlotResult::Ok), static_cast<int>(j->prefetch(t.reader, 8)));
+  TEST_ASSERT_EQUAL(static_cast<int>(SlotResult::IoTwice), static_cast<int>(j->prefetch(t.reader, 7)));
+  TEST_ASSERT_TRUE(j->rowDamaged(7));
+}
+
+// The row's second failure in a row inside a pick: the ring has it, the pick names it for the console's
+// line, and the same pick goes on with the others.
+void test_a_pick_names_a_row_whose_read_failed_twice() {
+  Table t(full(30));
+  t.reader.ioAlways = {5};
+  auto e = engine();
+  e->newSession(1, 5, &t.maps.m);
+  const Settings stay = settings(Mode::Locked);
+  Pick p = e->pick(stay, t.in(5));
+  TEST_ASSERT_TRUE(p.ok);
+  TEST_ASSERT_EQUAL(1, p.reads);
+  TEST_ASSERT_FALSE(e->rowDamaged(5));
+  TEST_ASSERT_EQUAL(0, p.damaged);
+  p = e->pick(stay, t.in(5));
+  TEST_ASSERT_TRUE(p.ok);
+  TEST_ASSERT_EQUAL(1, p.reads);
+  TEST_ASSERT_TRUE(e->rowDamaged(5));
+  TEST_ASSERT_EQUAL(1, p.damaged);
+  TEST_ASSERT_EQUAL(5, p.damagedRow[0]);
 }
 
 void test_a_broken_slot() {
@@ -1517,6 +1621,11 @@ int main(int, char**) {
   RUN_TEST(test_damaged_failed_and_the_ring_of_8);
   RUN_TEST(test_every_anchor_damaged_gives_a_random_pick);
   RUN_TEST(test_a_pick_names_the_rows_it_found_damaged);
+  RUN_TEST(test_a_row_whose_read_keeps_failing);
+  RUN_TEST(test_a_remount_between_two_failed_reads_starts_over);
+  RUN_TEST(test_a_session_copy_carries_a_failed_read);
+  RUN_TEST(test_another_rows_good_read_leaves_a_failed_one);
+  RUN_TEST(test_a_pick_names_a_row_whose_read_failed_twice);
   RUN_TEST(test_a_broken_slot);
   RUN_TEST(test_damaged_and_broken_in_real_files);
   RUN_TEST(test_no_index_by_track_id);

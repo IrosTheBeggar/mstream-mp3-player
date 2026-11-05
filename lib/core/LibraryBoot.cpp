@@ -66,7 +66,7 @@ Decision decide(const In& in) {
     d.action = Action::Build;
     d.compactFirst = true;
     switch (in.saved) {
-      case Saved::Differs: d.why = "another transfer's, or an older firmware's walk"; break;
+      case Saved::Differs: d.why = "another transfer's, an older firmware's walk, or saved when the root couldn't be read"; break;
       case Saved::Outdated: d.why = "an older version's"; break;
       case Saved::Corrupt: d.why = "unreadable"; break;
       default: d.why = "none yet"; break;

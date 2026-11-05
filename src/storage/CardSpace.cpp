@@ -177,6 +177,13 @@ Step stepCount() {
   if (s_fs->fs_type != s_type || s_fs->id != s_id) {
     s_failure = "the card was mounted again";
     r = Step::Failed;
+  } else if (disk_status(s_fs->pdrv) & STA_NOINIT) {
+    // As every FatFs call begins: a card that was out is seen here, and left to FatFs's
+    // remount and the guard. Asked nothing first, a read on a card put back would have
+    // the wrapper's look take it for that read's own fault (CachedDrive::lookAfterFault()),
+    // and a card written on a PC go unread: its files overwritten at the next write.
+    s_failure = "the card stopped answering";
+    r = Step::Failed;
   } else {
     Volume vol;
     const FreeCount::Step s = s_count.step(vol, s_buf);

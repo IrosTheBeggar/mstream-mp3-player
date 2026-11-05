@@ -375,13 +375,15 @@ bool LibraryUpdate::buildIndex(bool update, bool noWalk, LibraryBuilder::Result*
   c_.release(bufs);
   // A read that failed is the card's trouble, not a file's checks. In the
   // update step (the old index in use until the fence, and saved on the
-  // card): one of D's, or T's with no whole build from D after it, fails
-  // the step rather than walking a card that may be gone (an empty /music:
-  // "Library updated", nothing in it) or saving a path-named index over
-  // library.idx (a glitch the card came back from).
+  // card): one of D's, one of T's the card failed, or T's with no whole build
+  // from D after it, fails the step rather than walking a card that may be gone
+  // (an empty /music: "Library updated", nothing in it) or saving a path-named
+  // index over library.idx (a glitch the card came back from, or a sector that
+  // stays bad: built from D alone, every file T lists would go over the library
+  // that has their tags). stepBuild() loads that library again.
   const bool tFailed = o.transferFailed(), dFailed = o.deviceFailed();
   *readErrors = tFailed || dFailed;
-  if (update && (dFailed || (tFailed && !(r->built && r->deviceUsed)))) {
+  if (update && (dFailed || o.wt.cardFailed() || (tFailed && !(r->built && r->deviceUsed)))) {
     *cardGone = true;
     *noMemory = r->noMemory;
     index.clear();
@@ -534,7 +536,15 @@ LibraryUpdate::Booted LibraryUpdate::boot() {
       cardGone = b.compacted && (b.compaction.readFailed || c_.store->readFailed());
     }
     t0 = now();
-    if (!cardGone) b.ok = buildIndex(false, d.sessionOnly, &b.build, &b.walked, &b.noMemory, &cardGone, &b.readErrors);
+    if (!cardGone) {
+      b.ok = buildIndex(false, d.sessionOnly, &b.build, &b.walked, &b.noMemory, &cardGone, &b.readErrors);
+      // Most likely a glitch: asked again once, before it costs the session its jobs and
+      // the new library. (No waits: a card that failed an earlier reader's tries.)
+      if (cardGone && c_.wait) {
+        c_.wait(tagstore::kBootWaitsMs[0]);
+        b.ok = buildIndex(false, d.sessionOnly, &b.build, &b.walked, &b.noMemory, &cardGone, &b.readErrors);
+      }
+    }
     b.built = !b.walked && b.ok;
     b.buildMs = msSince(t0);
     if (d.sessionOnly) {
@@ -691,8 +701,8 @@ LibraryUpdate::Out LibraryUpdate::update(const In& in) {
       step_.why = why_;
       // The card answers first (it may have been pulled while on): a step
       // on an absent card leaves the index as it is. So does one whose compaction the
-      // card failed a read of D: the build would read it next, behind the fence, and
-      // leave no library until the next boot. And one whose records read as none only
+      // card failed a read of D: the build would read it next, behind the fence, for
+      // nothing. And one whose records read as none only
       // because the card failed the read (the compaction's reload): built without them
       // and saved, it would cut the library, and the queue with it, down to T.
       if (!cardAnswers() || (c_.store && (c_.store->compactionUnread() || c_.store->readFailed()))) {
@@ -825,6 +835,18 @@ void LibraryUpdate::stepBuild() {
   const uint64_t t0 = now();
   step_.built =
       buildIndex(true, false, &step_.build, &step_.walked, &step_.noMemory, &step_.cardGone, &step_.readErrors);
+  // The card failed it: the last library.idx back, as the boot would load it.
+  if (!step_.built && step_.cardGone) {
+    if (tagstore::File* f = c_.fs->open(kIndexNames.path, tagstore::Fs::Mode::Read)) {
+      FileIn head(*f);
+      LibraryIndex::Inputs saved;
+      if (LibraryIndex::peek(head, &saved) == LibraryIndex::Load::Loaded) {
+        FileIn all(*f);
+        step_.reloaded = c_.index->load(all, saved) == LibraryIndex::Load::Loaded;
+      }
+      c_.fs->close(f);
+    }
+  }
   step_.buildMs = msSince(t0);
   // What the save writes (3.4.3): taken now, as the build read them (the
   // scan, which moves the journal on, waits for the save). A read that
@@ -848,8 +870,8 @@ void LibraryUpdate::lived() {
   if (phase_ != Phase::Live) return;
   liveDue_ = false;
   ++steps_;
-  // Nothing to save (the build failed: no library until the next boot,
-  // whose load finds the last library.idx): the step is over.
+  // Nothing to save (the build failed: the last library.idx is back, or, that too
+  // failing, the next boot's load finds it): the step is over.
   if (!step_.built) {
     phase_ = Phase::Idle;
     savedDue_ = true;

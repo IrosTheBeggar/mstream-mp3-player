@@ -181,14 +181,16 @@ value (`free=` is FatFs's count again, which it now follows).
 
 **Stopped part way** for the same reasons: a play that starts during the
 count (`@err 4 count playing`), the library update beginning (`@err 4
-count library`), a read error, the card mounted again, or FatFs's volume
-lock not had in its own 10 s (`@err 4 count card`). That `@err` is the
+count library`), a read error, a card that stopped answering (the status
+each piece asks first: a card that was out goes to FatFs's remount), the
+card mounted again, or FatFs's volume lock not had in its own 10 s (`@err
+4 count card`). That `@err` is the
 count's last line; nothing changed (`free=` is what it was).
 
 **How it counts** (`lib/core/FreeCount`, `storage/CardSpace`):
 
 - The FAT is read in **pieces of 32 KB** (64 sectors: about 13 ms on the
-  Core2's card at 25 MHz, one card command), **one piece per loop pass**,
+  Core2's card at 25 MHz, one card command and its status), **one piece per loop pass**,
   each under **FatFs's own volume lock**: `ff_mutex_take()` of the
   volume's drive, the lock every FatFs call takes (`lock_volume()` in
   FatFs; the decoder's reads, the card worker's, the queue's saves all

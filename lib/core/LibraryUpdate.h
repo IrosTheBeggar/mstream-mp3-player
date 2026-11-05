@@ -83,12 +83,15 @@
 //             (the merge of T and D, LibraryBuilder; a T that fails its checks
 //             restarts it from D alone; no records, the caller's walk), then
 //             buildDone() on the loop. A read that fails meanwhile is the
-//             card's (pulled, failing), not a file's checks: on D's files, or
-//             on T with no whole build from D after it, the step fails
-//             (Step::cardGone: nothing walked, nothing saved; the next boot
-//             loads the last library.idx); on T with D read whole, the build
-//             from D alone stands and is saved as one that left records out
-//             (the next boot finds it soft-stale; T isn't marked bad).
+//             card's (pulled, failing), not a file's checks: on D's files, on
+//             T where the card failed it, or on T's own damage or past its end
+//             with no whole build from D after it, the step fails
+//             (Step::cardGone: nothing walked, nothing saved; T isn't marked
+//             bad; the last library.idx loaded again at once, Step::reloaded, or
+//             a pulled card's next boot loads it). T's own damage or a read past
+//             its end with D read whole: the build from D alone stands and is
+//             saved as one that left records out (the next boot finds it
+//             soft-stale).
 //   Live      Do::Live, once: the loop takes the fence down and calls lived()
 //             in the same pass (step 5: the queue read back from queue.txt
 //             with the new ids, the readers back, Thumbs' pools back).
@@ -391,12 +394,13 @@ public:
   // ---- what happened ----
   struct Step {
     const char* why = "";
-    bool built = false;          // the index is ready (else: no library until the next boot or "Try again")
+    bool built = false;          // the index is new (else: `reloaded`, or no library until the next boot or "Try again")
+    bool reloaded = false;       // a read failed as it built: the last library.idx loaded again
     bool walked = false;         // no records: /music walked
     bool noMemory = false;
     bool cardGone = false;       // a file that opened before the fence didn't on the worker, or a read of it failed
     bool unlisted = false;       // Do::Failed: the records don't list the card (recordsListCard()): the index untouched
-    bool readErrors = false;     // a read failed (cardGone, or T's with D read whole: saved as records left out)
+    bool readErrors = false;     // a read failed (cardGone, or one past T's end with D read whole: saved as records left out)
     LibraryBuilder::Result build;
     bool journalsLeft = false;   // the compaction before it failed: tags.bin alone
     LibraryIndex::Inputs inputs;  // what the save writes

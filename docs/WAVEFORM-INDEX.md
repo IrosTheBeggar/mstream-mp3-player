@@ -486,7 +486,10 @@ does (7.4). docs/SEEK-BAR.md has the bar's look.
   again after 2 s, 10 s and 30 s (not while a list moves or behind the update's
   fence), then none until a remount or the next boot. A boot that failed it with its
   card jobs running has no such reads, as Auto DJ's. A remount within 30 s of such a
-  read is taken for its echo (`docs/AUTODJ.md` 6.6).
+  read is taken for its echo (`docs/AUTODJ.md` 6.6). On a card silent after a sector of the file
+  each read of it makes a remount, which cuts whatever plays, and the count above starts over
+  at each track: the wrapper stops asking after 4 reads of it (the read stop, `docs/METADATA.md` 3.8), and
+  when a whole region is so, a new sector a track, 12 such faults leave plain lines until the next boot (too silent).
 - **The console:** `gw?` prints the state (the file, the wanted hash, the
   record, the counters: reads, hits, misses, damaged, the probes a read, the
   job's ms); `gw=` and 99 digits, or `gw#` and 480 hex digits (240 bars,

@@ -572,7 +572,7 @@ void Core2AudioBackend::loop(uint32_t nowMs) {
   // after its last change (the decode task's put), so a run of opens (a
   // boot's resume, a seek) saves once, from here (the loop task, as the
   // queue is saved) and never on the decode task's start path; ten
-  // seconds after a write that failed.
+  // seconds after a write that failed, then at twice the wait.
   if (nowMs - opusCacheCheckMs_ >= 1000) {
     opusCacheCheckMs_ = nowMs;
     bool due = false;
@@ -1755,18 +1755,20 @@ void Core2AudioBackend::saveOpusCache() {
   }
   if (ok) {
     ++opusCacheSaves_;
+    opusCacheRetryMs_ = kOpusCacheRetryMs;
   } else {
     // save() cleaned the cache as it made the blob, which the card never
     // got (the temp file wouldn't open: the mount's few file handles all
     // taken by the track, the queue's write and the thumbnails; a short
-    // write; the rename): dirty again, and due in kOpusCacheRetryMs, so
+    // write; the rename): dirty again, and due in kOpusCacheRetryMs, then at twice the wait, so
     // the record reaches the card before a boot needs it, without a
     // further open to prompt it. A put meanwhile has dirtied it already
     // and brought the time forward: either is fine.
     ++opusCacheSaveFails_;
     std::lock_guard<std::mutex> guard(opusCacheLock_);
     opusCache_.markDirty();
-    opusCacheDueMs_ = millis() + kOpusCacheRetryMs;
+    opusCacheDueMs_ = millis() + opusCacheRetryMs_;
+    opusCacheRetryMs_ = opusCacheRetryMs_ < kOpusCacheRetryMaxMs / 2 ? opusCacheRetryMs_ * 2 : kOpusCacheRetryMaxMs;
   }
   Serial.printf("[opus] the open cache %s %s: %lu entries, %lu B, %lu ms (saves %lu, failed %lu)\n",
                 ok ? "saved to" : "couldn't be saved to", opusCachePath_.c_str(), (unsigned long)entries,

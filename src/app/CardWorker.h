@@ -35,7 +35,7 @@
 // after its unit: ScanScheduler's Out::cut; the screen lit drops a compaction
 // or the save to 0).
 //
-// Its 6 KB stack is in internal RAM (a task that reads the card or the
+// Its 7.5 KB stack is in internal RAM (a task that reads the card or the
 // flash can't have its stack in PSRAM), only while there is work: the task
 // is made for the first step (or just before one that must start at once:
 // ensure(), the library update's build) and ends itself kIdleExitMs after
@@ -45,7 +45,9 @@
 // buffer, the frames (the deepest: a compaction's reopen of D, about 3.9
 // KB MEASURED; the build's, its views' sort, measured at 5.36 KB on the
 // 2026-10-09 run with std::sort and about 3.3-3.6 KB since idsort:
-// METADATA.md 3.9). The 'gs' line prints its
+// METADATA.md 3.9; with a read that fails under that reopen, the driver's
+// log lines and the look's init on top: 5.4 KB MEASURED, hence 7.5 KB and
+// not the 6 of before: METADATA.md 3.8). The 'gs' line prints its
 // stack's high-water mark, the least left over every life of the task
 // since the boot or `gs0` (a task's own mark starts again when it is
 // made), and the internal RAM's lowest while a step ran (L3 and L4 measure
@@ -56,7 +58,7 @@ class CardWorker {
 public:
   using Job = ScanScheduler::Job;
   using StepFn = void (*)(void* ctx);
-  static constexpr uint32_t kStackBytes = 6144;
+  static constexpr uint32_t kStackBytes = 7680;
   static constexpr uint32_t kIdleExitMs = 3000;
 
   // A step of `job` at FreeRTOS `priority` (ScanScheduler's 0 or 1): `fn(ctx)`

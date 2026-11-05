@@ -1801,8 +1801,8 @@ void test_a_session_walk_that_cant_run_is_no_library() {
 }
 
 // The update step, after a compaction the card failed a read of D in: the build would
-// read the same D, behind the fence, and leave no library until the next boot. It ends
-// before its fence, the library as it was.
+// read the same D, behind the fence, for nothing. It ends before its fence, the library
+// as it was.
 void test_a_read_of_d_the_card_fails_in_the_compaction_ends_the_step_before_its_fence() {
   CutFs fs;
   TestCard card;
@@ -2288,6 +2288,7 @@ void test_the_safe_point_follows_the_pause() {
   d.update("gb");
   g_ceiling = SIZE_MAX;
   TEST_ASSERT_FALSE(d.upd->last().built);
+  TEST_ASSERT_FALSE(d.upd->last().reloaded);  // (not the card's: nothing reloaded, and nothing for CardTasks to count)
   TEST_ASSERT_EQUAL_UINT32(measured, d.upd->lastPauseMs());
 }
 
@@ -2617,11 +2618,12 @@ void test_the_steps_order_and_a_card_that_doesnt_answer() {
 // after its opens worked (the card answered at the ask and on the worker):
 // the card's trouble, not "no records". Nothing is walked (an absent /music
 // would give an empty library and "Library updated"; a glitch the card came
-// back from, a path-named one saved over library.idx) or saved, T isn't
-// marked bad, and the next boot loads the last library.idx. A read of T
-// failing while D reads whole: the build from D alone stands, saved as one
-// that left records out: the next boot finds it soft-stale, and its update
-// step reads T again.
+// back from, a path-named one saved over library.idx) or saved, and T isn't
+// marked bad. A read that failed with the card answering: the last library.idx
+// loaded again, at once. A card pulled: no library until the next boot, which
+// loads it, or Try again. A read of T the card failed fails the step as D's does;
+// only T's own damage, or a read past its end, leaves the build from D alone
+// (below), saved as one that left records out.
 // ---------------------------------------------------------------------------
 void test_a_card_that_fails_mid_build() {
   for (int withT = 0; withT < 2; ++withT) {
@@ -2666,7 +2668,7 @@ void test_a_card_that_fails_mid_build() {
         TEST_ASSERT_FALSE_MESSAGE(s.saved, msg);
         TEST_ASSERT_TRUE_MESSAGE(std::find(d.steps.begin(), d.steps.end(), Job::Save) == d.steps.end(), msg);
         TEST_ASSERT_FALSE_MESSAGE(d.upd->transferBad(), msg);
-        TEST_ASSERT_FALSE_MESSAGE(d.index.ready(), msg);  // no library until the next boot
+        TEST_ASSERT_TRUE_MESSAGE(s.reloaded == (how == 1) && d.index.ready() == (how == 1), msg);  // the last library.idx back
         TEST_ASSERT_TRUE_MESSAGE(d.upd->phase() == Phase::Idle, msg);
       }
       // library.idx as it was: the next boot loads it.
@@ -2679,9 +2681,10 @@ void test_a_card_that_fails_mid_build() {
       TEST_ASSERT_TRUE_MESSAGE(fs.violations.empty(), msg);
     }
   }
-  // One read of T fails, D reads whole: built from D alone, T not marked
-  // bad, saved as records left out; the next boot loads it soft-stale and
-  // its update step reads T again.
+  // One read of T fails, D reads whole: the step fails as for D's. Built from D alone
+  // it would save every file T lists under its path over the library.idx that has
+  // their tags. T not marked bad; the next boot loads what was there, and its update
+  // step reads T again.
   CutFs fs;
   TestCard card;
   transferCard(fs, card);
@@ -2696,22 +2699,19 @@ void test_a_card_that_fails_mid_build() {
     d.update("gb");
     g_failRead = nullptr;
     const LibraryUpdate::Step& s = d.upd->last();
-    TEST_ASSERT_TRUE(s.built);
+    TEST_ASSERT_FALSE(s.built);
     TEST_ASSERT_TRUE(s.readErrors);
-    TEST_ASSERT_FALSE(s.cardGone);
-    TEST_ASSERT_FALSE(s.build.transferUsed);
-    TEST_ASSERT_TRUE(s.build.transferWhy == cc::Why::Io);
-    TEST_ASSERT_TRUE(s.build.deviceUsed);
+    TEST_ASSERT_TRUE(s.cardGone);
     TEST_ASSERT_FALSE(d.upd->transferBad());
-    TEST_ASSERT_TRUE(s.saved);
-    TEST_ASSERT_EQUAL_UINT32(libraryboot::kJournalsLeftOut, s.inputs.journalSeq);
-    TEST_ASSERT_EQUAL_UINT32(kAudio, d.index.trackCount());
+    TEST_ASSERT_FALSE(s.saved);
+    TEST_ASSERT_TRUE(s.reloaded);  // the last library back, at once
+    TEST_ASSERT_EQUAL_STRING("From T", titleOf(d.index, kFlac).c_str());
   }
   {
     Device d(fs, card);
     d.boot();
     TEST_ASSERT_TRUE(d.booted.decision.action == libraryboot::Action::Load);
-    TEST_ASSERT_TRUE(d.booted.softStale);
+    TEST_ASSERT_EQUAL_STRING("From T", titleOf(d.index, kFlac).c_str());
     d.update("the scan's end");
     TEST_ASSERT_TRUE(d.upd->last().build.transferUsed);
     TEST_ASSERT_FALSE(d.upd->last().readErrors);
@@ -2725,9 +2725,195 @@ void test_a_card_that_fails_mid_build() {
   TEST_ASSERT_TRUE(fs.violations.empty());
 }
 
+// The root read, and a read of a new T the card fails as the boot builds: the library
+// that has its names stays (the unread root's row), and no card jobs this session. A
+// card with no records to lose, or a T that fails a check, goes as ever.
+void test_a_read_of_t_the_card_fails_at_the_boot_keeps_the_library() {
+  CutFs fs;
+  TestCard card;
+  transferCard(fs, card);
+  std::string before;
+  {
+    Device d(fs, card);
+    d.boot();
+    before = titleOf(d.index, kFlac);
+  }
+  const std::vector<uint8_t> idx = fs.bytes(LibraryUpdate::kIndexNames.path);
+  commit(fs, card, 2);  // another transfer: the saved index differs
+  const uint32_t writes = static_cast<uint32_t>(fs.bytesWritten);
+  // Every read of T from the n-th on: the root reads its head, and each of the build's two tries fails,
+  // one wait between them, as the firmware boots (Library::openRecords()).
+  bool tested = false;
+  int firstOfTheBuild = 0;
+  for (int n = 1; n < 400 && !tested; ++n) {
+    int tReads = 0;
+    g_failRead = [&](const std::string& path) { return path == tagsName(2) && ++tReads >= n; };
+    g_waits.clear();
+    Device d(fs, card);
+    d.wait = noteWait;
+    d.boot();
+    g_failRead = nullptr;
+    if (!d.root->present || d.root->readFailed()) continue;  // (the root's own reads of T)
+    TEST_ASSERT_TRUE(tReads >= n);
+    tested = true;
+    firstOfTheBuild = n;
+    TEST_ASSERT_TRUE(d.booted.ok);
+    TEST_ASSERT_TRUE(d.booted.decision.action == libraryboot::Action::Load);
+    TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+    TEST_ASSERT_EQUAL_STRING(before.c_str(), titleOf(d.index, kFlac).c_str());
+    TEST_ASSERT_TRUE(idx == fs.bytes(LibraryUpdate::kIndexNames.path));
+    TEST_ASSERT_EQUAL_size_t(1, g_waits.size());
+    TEST_ASSERT_EQUAL_UINT32(ts::kBootWaitsMs[0], g_waits[0]);
+  }
+  TEST_ASSERT_TRUE(tested);
+  // One read that fails, a one-off: asked again, the new T's build, the jobs on.
+  {
+    int tReads = 0;
+    g_failRead = [&](const std::string& path) { return path == tagsName(2) && ++tReads == firstOfTheBuild; };
+    g_waits.clear();
+    Device d(fs, card);
+    d.wait = noteWait;
+    d.boot();
+    g_failRead = nullptr;
+    TEST_ASSERT_EQUAL_size_t(1, g_waits.size());
+    TEST_ASSERT_TRUE(d.booted.build.transferUsed);
+    TEST_ASSERT_FALSE(d.booted.decision.holdJobs);
+    TEST_ASSERT_FALSE(d.booted.readErrors);
+  }
+}
+
+// The same fault in D from the build's first read: one wait, asked again, the jobs held; the build
+// from T's listing saved or not as 3.2.2 says, nothing of D's touched.
+void test_a_lasting_fault_of_d_at_the_boot_with_the_waits() {
+  CutFs fs;
+  TestCard card;
+  const uint32_t tracks = filledCard(fs, card, Filled::Mixed);
+  commit(fs, card, 2);
+  const auto files = filesOf(fs);
+  const char* prefix = "/.player/tags.bin";
+  CutFs counted = fs.reboot(cutfs::Variant::InOrder);
+  arm(counted, prefix, 1000000, -1);
+  long head = 0;
+  {
+    ts::TagStore st(counted, storeConfig());
+    st.open();
+    head = counted.faultEvents;
+  }
+  // From the build's first read on, every try.
+  CutFs lasting = fs.reboot(cutfs::Variant::InOrder);
+  arm(lasting, prefix, head, -1);
+  g_waits.clear();
+  Device d(lasting, card);
+  d.wait = noteWait;
+  d.boot();
+  lasting.faultFrom = -1;
+  TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+  TEST_ASSERT_TRUE(d.booted.keptSaved);
+  TEST_ASSERT_TRUE(d.booted.ok);
+  TEST_ASSERT_EQUAL_UINT32(tracks, d.index.trackCount());
+  TEST_ASSERT_EQUAL_size_t(1, g_waits.size());
+  TEST_ASSERT_TRUE(filesOf(lasting) == files);
+}
+
+// T's own records damaged (FatFs's FR_INT_ERR: the card answered), D whole: the row 3.4.2 keeps: the build
+// from D alone stands, saved as one that left records out.
+void test_t_s_own_damage_with_d_whole_stands() {
+  CutFs fs;
+  TestCard card;
+  transferCard(fs, card);
+  Device d(fs, card);
+  d.boot();
+  g_onRead = [&] {
+    if (d.upd->phase() == Phase::Building) fs.damagedPrefix = tagsName(1);
+  };
+  d.update("gb");
+  g_onRead = nullptr;
+  fs.damagedPrefix.clear();
+  const LibraryUpdate::Step& s = d.upd->last();
+  TEST_ASSERT_TRUE(s.readErrors);
+  TEST_ASSERT_FALSE(s.cardGone);
+  TEST_ASSERT_TRUE(s.built);
+  TEST_ASSERT_FALSE(s.reloaded);
+  TEST_ASSERT_FALSE(s.build.transferUsed);
+  TEST_ASSERT_TRUE(s.build.deviceUsed);
+  TEST_ASSERT_TRUE(s.saved);
+  TEST_ASSERT_EQUAL_UINT32(libraryboot::kJournalsLeftOut, s.inputs.journalSeq);
+  TEST_ASSERT_FALSE(d.upd->transferBad());
+}
+
+// T's own records damaged and no D to build from: the step fails, the library back, nothing walked.
+void test_t_s_own_damage_with_no_d_fails_the_step() {
+  CutFs fs;
+  TestCard card;
+  fill(card);
+  commit(fs, card, 1);
+  Device d(fs, card);
+  d.boot();
+  TEST_ASSERT_TRUE(d.booted.build.transferUsed);
+  TEST_ASSERT_FALSE(d.store->device().present);
+  const std::vector<uint8_t> idx = fs.bytes(LibraryUpdate::kIndexNames.path);
+  const int walks = g_walks;
+  g_onRead = [&] {
+    if (d.upd->phase() == Phase::Building) fs.damagedPrefix = tagsName(1);
+  };
+  d.update("gb");
+  g_onRead = nullptr;
+  fs.damagedPrefix.clear();
+  const LibraryUpdate::Step& s = d.upd->last();
+  TEST_ASSERT_TRUE(s.readErrors);
+  TEST_ASSERT_TRUE(s.cardGone);
+  TEST_ASSERT_FALSE(s.built);
+  TEST_ASSERT_FALSE(s.walked);
+  TEST_ASSERT_EQUAL_INT(walks, g_walks);
+  TEST_ASSERT_TRUE(s.reloaded);
+  TEST_ASSERT_TRUE(idx == fs.bytes(LibraryUpdate::kIndexNames.path));
+}
+
+// The reload's own reads failing: no library until the next boot, which loads it, and it says so;
+// library.idx as it was. Step::reloaded means an index that loaded.
+void test_a_reload_that_fails_says_so() {
+  bool past = false;
+  for (int n = 1; n < 2000 && !past; ++n) {
+    char msg[48];
+    std::snprintf(msg, sizeof(msg), "read %d of library.idx", n);
+    CutFs fs;
+    TestCard card;
+    transferCard(fs, card);
+    const std::vector<uint8_t> idx = fs.bytes(LibraryUpdate::kIndexNames.path);
+    Device d(fs, card);
+    d.boot();
+    int tReads = 0, idxReads = 0;
+    g_failRead = [&](const std::string& path) {
+      if (d.upd->phase() != Phase::Building) return false;
+      if (path == tagsName(1)) return ++tReads == 3;
+      if (path == LibraryUpdate::kIndexNames.path) return ++idxReads == n;
+      return false;
+    };
+    d.update("gb");
+    g_failRead = nullptr;
+    const LibraryUpdate::Step& s = d.upd->last();
+    TEST_ASSERT_TRUE_MESSAGE(s.cardGone, msg);
+    TEST_ASSERT_FALSE_MESSAGE(s.built, msg);
+    if (idxReads < n) {
+      past = true;
+      TEST_ASSERT_TRUE_MESSAGE(s.reloaded, msg);
+      TEST_ASSERT_TRUE_MESSAGE(d.index.ready(), msg);
+      break;
+    }
+    TEST_ASSERT_FALSE_MESSAGE(s.reloaded, msg);
+    TEST_ASSERT_FALSE_MESSAGE(d.index.ready(), msg);
+    TEST_ASSERT_TRUE_MESSAGE(idx == fs.bytes(LibraryUpdate::kIndexNames.path), msg);
+    Device again(fs, card);
+    again.boot();
+    TEST_ASSERT_TRUE_MESSAGE(again.booted.ok, msg);
+    TEST_ASSERT_TRUE_MESSAGE(again.booted.decision.action == libraryboot::Action::Load, msg);
+  }
+  TEST_ASSERT_TRUE(past);
+}
+
 // ---------------------------------------------------------------------------
 // The worker's task before the fence: it ends 3 s after its last step (a
-// long wait for the safe point), and the build needs it made again (a 6 KB
+// long wait for the safe point), and the build needs it made again (a 7.5 KB
 // stack in internal RAM). The step asks for it (Out::wantWorker) and puts
 // its fence up only once it is there: with no internal RAM for it, the step
 // waits, the index as it was and nothing held but the scan; once it can be
@@ -3293,6 +3479,58 @@ void test_the_memory_check_has_auto_djs_join_given_back() {
   TEST_ASSERT_TRUE(fs.violations.empty());
 }
 
+// T won't open on the worker (the card failed the open; a read of /.mstream's directory, say) with library.idx
+// elsewhere: cardGone with no read error. The same rule as a read that fails: the library back, nothing saved.
+void test_t_that_wont_open_on_the_worker_gets_the_library_back() {
+  CutFs fs;
+  TestCard card;
+  transferCard(fs, card);
+  Device d(fs, card);
+  d.boot();
+  const std::string before = titleOf(d.index, kFlac);
+  const std::vector<uint8_t> idx = fs.bytes(LibraryUpdate::kIndexNames.path);
+  // (Armed once the step is past its ask, whose root and T's checks would end it before its fence.)
+  d.upd->ask("gb");
+  d.runUntil([&] { return d.upd->phase() == Phase::Build || d.upd->phase() == Phase::Building; });
+  arm(fs, tagsName(1).c_str(), 0, -1);
+  d.runUntil([&] { return d.did(Do::Saved); });
+  fs.faultFrom = -1;
+  const LibraryUpdate::Step& s = d.upd->last();
+  TEST_ASSERT_TRUE(s.cardGone);
+  TEST_ASSERT_FALSE(s.built);
+  TEST_ASSERT_FALSE(s.saved);
+  TEST_ASSERT_TRUE(s.reloaded);
+  TEST_ASSERT_TRUE(d.index.ready());
+  TEST_ASSERT_EQUAL_STRING(before.c_str(), titleOf(d.index, kFlac).c_str());
+  TEST_ASSERT_FALSE(d.upd->transferBad());
+  TEST_ASSERT_TRUE(idx == fs.bytes(LibraryUpdate::kIndexNames.path));
+}
+
+// The reload closes what it opened (a FIL of PSRAM a time on the device), loaded or not.
+void test_the_reload_closes_library_idx() {
+  for (int fail = 0; fail < 2; ++fail) {
+    CutFs fs;
+    TestCard card;
+    transferCard(fs, card);
+    Device d(fs, card);
+    d.boot();
+    const int openBefore = fs.openNow;
+    int tReads = 0, idxReads = 0;
+    g_failRead = [&](const std::string& path) {
+      if (d.upd->phase() != Phase::Building) return false;
+      if (path == tagsName(1)) return ++tReads == 3;
+      if (fail && path == LibraryUpdate::kIndexNames.path) return ++idxReads == 1;
+      return false;
+    };
+    d.update("gb");
+    g_failRead = nullptr;
+    TEST_ASSERT_TRUE(d.upd->last().cardGone);
+    TEST_ASSERT_EQUAL(fail == 0, d.upd->last().reloaded);
+    d.drain();  // (the jobs' own files)
+    TEST_ASSERT_EQUAL_INT(openBefore, fs.openNow);
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_safe_point_and_the_memory_check);
@@ -3319,6 +3557,13 @@ int main(int, char**) {
   RUN_TEST(test_the_fence);
   RUN_TEST(test_the_steps_order_and_a_card_that_doesnt_answer);
   RUN_TEST(test_a_card_that_fails_mid_build);
+  RUN_TEST(test_a_read_of_t_the_card_fails_at_the_boot_keeps_the_library);
+  RUN_TEST(test_a_lasting_fault_of_d_at_the_boot_with_the_waits);
+  RUN_TEST(test_t_s_own_damage_with_d_whole_stands);
+  RUN_TEST(test_t_s_own_damage_with_no_d_fails_the_step);
+  RUN_TEST(test_a_reload_that_fails_says_so);
+  RUN_TEST(test_t_that_wont_open_on_the_worker_gets_the_library_back);
+  RUN_TEST(test_the_reload_closes_library_idx);
   RUN_TEST(test_the_worker_s_task_before_the_fence);
   RUN_TEST(test_the_marker_s_build_out_of_psram);
   RUN_TEST(test_a_failed_first_walk_keeps_the_library);

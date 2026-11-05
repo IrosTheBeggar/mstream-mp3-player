@@ -107,12 +107,15 @@ public:
   std::vector<uint8_t> bytes;
 };
 
+uint64_t s_us = 0;
+
 class TableReader : public autodj::SlotReader {
 public:
   explicit TableReader(const mpdj::Table& t) : t_(t) {}
   mpdj::SlotRead read(uint16_t row, uint8_t* bytes, uint32_t* count, cc::Why* why) override {
     ++reads;
     if (fail) {  // (the card pulled: the read fails)
+      s_us += holdUs;
       if (why) *why = cc::Why::Io;
       return mpdj::SlotRead::Damaged;
     }
@@ -124,6 +127,7 @@ public:
   }
   int reads = 0;
   bool fail = false;
+  uint64_t holdUs = 0;  // what a failed read takes
   std::set<uint16_t> crc;
 
 private:
@@ -203,7 +207,6 @@ struct Card {
 
 uint32_t s_random = 0x5EED0001u;
 uint32_t fixedRandom() { return s_random++; }
-uint64_t s_us = 0;
 uint64_t clockUs() { return s_us += 7; }
 
 Driver::Config config() {
@@ -679,6 +682,46 @@ void test_a_failed_read_ahead_waits() {
   TEST_ASSERT_TRUE(a.prefetch == autodj::SlotResult::Ok);
   TEST_ASSERT_EQUAL_UINT8(0, r.dj.engine().damagedRows());
   TEST_ASSERT_TRUE(r.dj.engine().stats().ioSkips >= 1);
+}
+
+// The wait counts from the read's end: a failed read holds the loop up to 1.5 s, and the ring
+// wants the time to fill before the next one holds it again.
+void test_a_failed_read_ahead_waits_from_its_end() {
+  Rig r;
+  TEST_ASSERT_TRUE(r.dj.setOn(true));
+  r.playOne(r.card.trackOf(5));
+  TEST_ASSERT_TRUE(r.playTo(700).added);
+  r.reader.fail = true;
+  r.reader.holdUs = 1500000;
+  Pass a = r.pass();
+  TEST_ASSERT_TRUE(a.prefetched);
+  TEST_ASSERT_TRUE(a.prefetch == autodj::SlotResult::Io);
+  r.reader.holdUs = 0;
+  r.env.nowMs += autodj::kReadAgainMs + 1000;  // (2 s and 1 of the 1.5 s)
+  TEST_ASSERT_FALSE(r.pass().prefetched);
+  r.env.nowMs += 600;
+  TEST_ASSERT_TRUE(r.pass().prefetched);
+}
+
+// The pick's own read failing: the read ahead waits the same, or it holds the card again
+// at once, the ring near empty.
+void test_a_failed_read_at_the_pick_holds_off_the_read_ahead() {
+  Rig r;
+  TEST_ASSERT_TRUE(r.dj.setOn(true));
+  r.playOne(r.card.trackOf(5));
+  r.reader.fail = true;
+  r.reader.holdUs = 1500000;
+  const uint32_t ioSkips = r.dj.engine().stats().ioSkips;
+  Pass a = r.playTo(700);
+  TEST_ASSERT_TRUE(a.picked);
+  TEST_ASSERT_TRUE(r.dj.engine().stats().ioSkips > ioSkips);
+  r.reader.holdUs = 0;
+  r.reader.fail = false;
+  TEST_ASSERT_FALSE(r.pass().prefetched);
+  r.env.nowMs += autodj::kReadAgainMs + 1000;  // (2 s and 1 of the 1.5 s)
+  TEST_ASSERT_FALSE(r.pass().prefetched);
+  r.env.nowMs += 600;
+  TEST_ASSERT_TRUE(r.pass().prefetched);
 }
 
 // A slot whose CRC fails on the read ahead and again when the next pick
@@ -1627,6 +1670,8 @@ int main(int, char**) {
   RUN_TEST(test_a_finished_queue_gets_a_cued_pick_and_no_quick_skip);
   RUN_TEST(test_picks_are_appended_marked_and_keep_the_undo);
   RUN_TEST(test_a_failed_read_ahead_waits);
+  RUN_TEST(test_a_failed_read_ahead_waits_from_its_end);
+  RUN_TEST(test_a_failed_read_at_the_pick_holds_off_the_read_ahead);
   RUN_TEST(test_a_slot_damaged_at_the_pick_is_named_once);
   RUN_TEST(test_the_undo_it_drops_is_said);
   RUN_TEST(test_a_pick_removed_before_it_played_leaves_the_ring);

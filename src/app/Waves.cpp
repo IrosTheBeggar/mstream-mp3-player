@@ -167,15 +167,25 @@ void Waves::loop(uint32_t nowMs) {
 // Soon after a read of the root the card failed, a remount is that read's echo
 // (autodj::OpenTries). And the same again for that read, when its wait is over.
 void Waves::remount(bool cardHeld, bool retryHeld) {
-  if (cardHeld) return;
+  if (cardHeld || silenced_) return;
   const uint32_t nowMs = static_cast<uint32_t>(millis());
   bool moved = false;
   if (sectordisk::installed()) {
-    const uint32_t n = sectordisk::guard().remounts;
-    moved = n != remountsSeen_;
+    const sectordisk::Guard g = sectordisk::guard();
+    moved = g.remounts != remountsSeen_;
     if (moved) {
-      remountsSeen_ = n;
+      remountsSeen_ = g.remounts;
       ++remounts_;
+    }
+    if (moved && g.tooSilent) {
+      // Read after read that left the card silent, whoever's, each a cut, and a track's
+      // read here can be one (CachedDrive::tooSilent()). Nothing here is worth another.
+      silenced_ = true;
+      rootAgain_ = false;
+      whyNone_ = "the card keeps going silent";
+      state_.remounted(false);
+      Serial.println("[wave] the card keeps going silent: plain lines until the next boot");
+      return;
     }
   }
   const bool news = moved && rootTries_.remounted(nowMs);

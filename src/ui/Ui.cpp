@@ -383,6 +383,7 @@ void Ui::autoDjStart() {
     warn(tr(S::toast_autodj_needs_index));
     return;
   }
+  if (r == autodjview::Started::CardFailed) return;  // (the page says so, and Shuffle all takes the button's place)
   if (r != autodjview::Started::Played) {
     warn(tr(S::toast_autodj_no_start));  // (another tap draws again)
     return;

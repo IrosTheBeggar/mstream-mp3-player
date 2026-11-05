@@ -21,7 +21,7 @@
 // then on), 8.3. The device compares the file with the root's COMP row
 // (msmf::companionMatches, 7.2).
 //
-// A lookup runs on the card worker's 6 KB of stack: no heap, and no buffer of
+// A lookup runs on the card worker's 7.5 KB of stack: no heap, and no buffer of
 // its own, since each slot is read into the caller's Slot. No 128-bit integer:
 // 6's arithmetic stays below 2^51.
 //

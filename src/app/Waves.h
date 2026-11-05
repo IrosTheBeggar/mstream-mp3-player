@@ -55,7 +55,7 @@ class Library;
 // stays. In the dark, under a modal or on another tab nothing wants: the page's
 // update() doesn't run.
 //
-// On the worker's 6 KB of stack: the deepest is the file's open, about 2 KB
+// On the worker's 7.5 KB of stack: the deepest is the file's open, about 2 KB
 // ESTIMATED from the image's frames (FatFile::openRead()'s path and f_open()'s
 // long-name buffer, 960 B, over a read of the card), 3.6 KB with the SD driver's
 // log line on top. The reduction's 500 B come after the file's last read. What
@@ -120,4 +120,5 @@ private:
   uint32_t remounts_ = 0;
   autodj::OpenTries rootTries_;
   bool rootAgain_ = false;  // a read of the root failed: read again when rootTries_ says
+  bool silenced_ = false;   // CachedDrive::tooSilent(): no more of its reads this session
 };

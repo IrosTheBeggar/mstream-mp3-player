@@ -34,6 +34,23 @@ public:
   void abort() override { inner.abort(); }
 };
 
+// T as the walk reads it, the reads the card failed noted (ts::ReadWatch): such a read
+// says nothing of T: the walk stops and is walked again, with T. Only a T read whole
+// that fails a check is left out.
+class WatchedTransfer final : public cw::Transfer {
+public:
+  void watch(cw::Transfer* t, const ts::ReadWatch* src) {
+    t_ = t;
+    src_ = src;
+  }
+  bool find(const char* rel, size_t len, cw::TransferRecord* out) override { return t_->find(rel, len, out); }
+  bool finish() override { return t_->finish() && !src_->failed(); }
+
+private:
+  cw::Transfer* t_ = nullptr;
+  const ts::ReadWatch* src_ = nullptr;
+};
+
 // The walk's memory (about 110 KB): PSRAM, never the worker's stack.
 struct Jobs::WalkWork {
   cw::CardWalk walk;
@@ -41,6 +58,8 @@ struct Jobs::WalkWork {
   CountingSink sink;
   cw::StreamedTransfer streamed;
   cw::IndexedTransfer indexed;
+  ts::ReadWatch watchedT;
+  WatchedTransfer checkedT;
   ts::File* t = nullptr;  // T, open while the walk reads it
   bool begun = false;
   bool again = false;  // askWalk() during it: another after it
@@ -344,11 +363,24 @@ void Jobs::stepWalk() {
     if (useT) {
       id = c_.root;
       first = !(d.present && d.header.walked && d.header.walk == id);
-      w.t = c_.fs->open(c_.transferPath, ts::Fs::Mode::Read);
+      bool cardFailed = false;
+      w.t = c_.fs->openRead(c_.transferPath, &cardFailed);
+      w.watchedT = ts::ReadWatch(w.t);
       cc::Why why = cc::Why::Missing;
-      if (w.t) why = first ? w.streamed.begin(*w.t, w.transferBuf, sizeof(w.transferBuf)) : w.indexed.begin(*w.t);
+      if (w.t) why = first ? w.streamed.begin(w.watchedT, w.transferBuf, sizeof(w.transferBuf)) : w.indexed.begin(w.watchedT);
+      if (cardFailed || w.watchedT.failed()) {
+        // The card's fault, not T's: this walk stops, nothing of it counts (the sink
+        // isn't begun), T as it was.
+        endWalk();
+        done_.walk.state = cw::CardWalk::State::Failed;
+        done_.walk.error = cw::CardWalk::Error::TransferRead;
+        ++counts_.walksFailed;
+        return;
+      }
       if (why == cc::Why::Ok) {
-        cfg.transfer = first ? static_cast<cw::Transfer*>(&w.streamed) : static_cast<cw::Transfer*>(&w.indexed);
+        w.checkedT.watch(first ? static_cast<cw::Transfer*>(&w.streamed) : static_cast<cw::Transfer*>(&w.indexed),
+                         &w.watchedT);
+        cfg.transfer = &w.checkedT;
       } else {
         // A T that won't even open as one is absent from now on.
         transferBad_ = true;
@@ -402,7 +434,10 @@ void Jobs::stepWalk() {
   endWalk();
   if (s == cw::CardWalk::State::Failed) {
     ++counts_.walksFailed;
-    if (done_.walk.error == cw::CardWalk::Error::Transfer) {
+    if (done_.walk.error == cw::CardWalk::Error::Transfer && w.watchedT.failed()) {
+      // A read the card failed: as a listing's. T stays.
+      done_.walk.error = cw::CardWalk::Error::TransferRead;
+    } else if (done_.walk.error == cw::CardWalk::Error::Transfer) {
       // T failed a check as it streamed: nothing of the walk counts; walked
       // again without T, which is absent for the rest of the session.
       transferBad_ = true;
@@ -540,8 +575,8 @@ bool Jobs::nextRow(char* rel, size_t* len, uint32_t* size, uint32_t* fatTime, ui
     if (appendChunk()) readSetClear();
     ++counts_.viewsOpened;
     if (!c_.store->openView(&s.view)) {
-      // No memory, or D or a journal can't be read: no rest this session
-      // (the walk at the next boot looks again).
+      // No memory, or D or a journal can't be read: no rest now (CardTasks tries
+      // again a minute on, twice at most; the walk at the next boot looks again).
       s.view.~View();
       new (&s.view) ts::TagStore::View();
       *ended = true;

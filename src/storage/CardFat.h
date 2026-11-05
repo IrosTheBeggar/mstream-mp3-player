@@ -27,7 +27,7 @@
 // no current directory here (FF_FS_RPATH 0), so every call names the drive
 // the SD library mounted (its physical drive, set at the mount). FIL, DIR
 // and FILINFO are in PSRAM: a FIL is about 4.1 KB in this build (FF_MAX_SS
-// 4096, a sector buffer per file), too big for the card worker's 6 KB stack
+// 4096, a sector buffer per file), too big for the card worker's 7.5 KB stack
 // (3.3.1). FatFs's own long-name buffer (512 B) is on the caller's stack for
 // each call (CONFIG_FATFS_LFN_STACK). FatFs takes the volume's lock for each
 // call (FF_FS_REENTRANT): the decoder's reads of the playing file interleave
@@ -59,6 +59,15 @@ public:
   // Its first cluster (FIL.obj.sclust; 0: empty).
   uint32_t firstCluster() const { return static_cast<uint32_t>(fil.obj.sclust); }
   bool damaged() const override { return fil.err == FR_INT_ERR; }
+  // A read that failed left FatFs's error on the FIL (f_read's ABORT): no read on it works
+  // again, and a new FIL is the way on. Not after a failed status alone, nor a remount.
+  bool errorKept() const { return fil.err != FR_OK; }
+  // A read failed, for whatever reason, since this was last asked.
+  bool takeReadFailed() {
+    const bool failed = readFailed_;
+    readFailed_ = false;
+    return failed;
+  }
   // For a caller that keeps a FatFile of its own from file to file (a job's PSRAM,
   // so no open fails for want of memory): `path` open for reading in this one, and
   // FatFs's own answer, which FatFs::open()'s nullptr doesn't give: FR_NO_FILE and
@@ -68,6 +77,9 @@ public:
   void closeRead();
   FIL fil;
   bool writable = false;
+
+private:
+  bool readFailed_ = false;
 };
 
 class FatFs final : public tagstore::Fs {
@@ -89,9 +101,9 @@ public:
   bool stat(const char* path, uint32_t* size, uint32_t* fatTime);
   // A folder, created if missing (f_mkdir); true if it is there.
   bool ensureDir(const char* path);
-  // A read with no answer marks the card failed, and FatFs's next call mounts it
-  // again, whoever's and however late (autodj::OpenTries). This is that call, now.
-  // (A card that is out costs one failed init.)
+  // A read on a card silent past its init (CachedDrive::lookAfterFault()) leaves it marked
+  // failed, and FatFs's next call mounts it again, whoever's and however late
+  // (autodj::OpenTries). This is that call, now. (A card that is out costs one failed init.)
   void echoNow() { exists("/.player"); }
   // Files opened and closed since boot, and open now (the console's gs).
   uint32_t opened() const { return opened_; }

@@ -27,7 +27,7 @@
 // exact, and two energies that differ do so by at least 0.0003.
 //
 // Portable, host-tested (test_wave_shape). The read runs on the card worker's
-// 6 KB of stack: no heap, and the Table, the Slot and the result are its
+// 7.5 KB of stack: no heap, and the Table, the Slot and the result are its
 // caller's (650 B, in the job's PSRAM).
 namespace wave {
 

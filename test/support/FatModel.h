@@ -113,6 +113,16 @@ struct Drive {
   // RES_ERROR with the status as it was: a read that got its command answered and
   // no data token, or a CRC mismatch (the SD driver's sdReadSector()).
   uint64_t failFrom = UINT64_MAX, failTo = UINT64_MAX;
+  // The SD driver's no answer: a read of this sector gets no R1, and sets the mark
+  // (card->status & STA_NOINIT). `silent`: CMD13 gets no R1 either: the card went (a
+  // card back in the slot is in SD mode, until the next init's CMD0).
+  uint32_t noAnswerLba = UINT32_MAX;
+  uint32_t noAnswerWriteLba = UINT32_MAX;  // ... a write's (the mark too)
+  bool errorWriteLba = false;  // ... with no mark: an R1 error, a data response's refusal (noAnswerWriteLba's sector)
+  FATFS* fs = nullptr;  // the volume, for its window (the firmware's wWrite())
+  bool marked = false;
+  bool silent = false;
+  bool silentForGood = false;  // ... and its init fails too (the card is out)
   struct Asked {
     uint64_t reads = 0, singleReads = 0, readSectors = 0, writes = 0, trims = 0;
   } asked;
@@ -129,12 +139,47 @@ class Slot : public SectorCache::Device {
 public:
   explicit Slot(BYTE pdrv) : pdrv_(pdrv) {}
   bool read(uint32_t lba, uint8_t* out, uint32_t n) override {
-    RamDisk* d = drive(pdrv_).disk;
+    Drive& dr = drive(pdrv_);
+    // The SD driver: a mark stops every read; no R1 sets it.
+    if (dr.marked) return false;
+    if (lba <= dr.noAnswerLba && dr.noAnswerLba < lba + n) {
+      dr.marked = true;
+      return false;
+    }
+    RamDisk* d = dr.disk;
     return d && d->read(lba, out, n);
   }
   bool write(uint32_t lba, const uint8_t* data, uint32_t n) override {
-    RamDisk* d = drive(pdrv_).disk;
+    Drive& dr = drive(pdrv_);
+    if (dr.marked) return false;
+    if (lba <= dr.noAnswerWriteLba && dr.noAnswerWriteLba < lba + n) {
+      dr.marked = !dr.errorWriteLba;
+      return false;
+    }
+    RamDisk* d = dr.disk;
     return d && d->write(lba, data, n);
+  }
+
+private:
+  BYTE pdrv_;
+};
+
+// The firmware's SdLink over the model's driver.
+class Link : public CachedDrive::Link {
+public:
+  explicit Link(BYTE pdrv) : pdrv_(pdrv) {}
+  bool answers() override {
+    Drive& d = drive(pdrv_);
+    if (d.silent) d.marked = true;
+    return !d.marked;
+  }
+  bool init(uint32_t* sectors) override {
+    Drive& d = drive(pdrv_);
+    if (d.silentForGood) return false;
+    d.marked = false;
+    d.silent = false;
+    *sectors = d.disk->sectors();
+    return true;
   }
 
 private:
@@ -303,15 +348,18 @@ inline uint32_t folderSectors(BYTE pdrv, const std::string& rel, uint32_t* entri
 // ---- the disk functions FatFs calls ----
 
 // The firmware's wrapper adds STA_PROTECT once its guard found another
-// card in the slot (storage/SectorDisk's wStatus and wInit).
+// card in the slot, or the card wouldn't take FatFs's window (storage/SectorDisk's
+// wStatus and wInit).
 inline DSTATUS guarded(const fatmodel::Drive& d, DSTATUS st) {
-  return d.wrapper && d.wrapper->foreign() ? static_cast<DSTATUS>(st | STA_PROTECT) : st;
+  return d.wrapper && (d.wrapper->foreign() || d.wrapper->writesOff()) ? static_cast<DSTATUS>(st | STA_PROTECT) : st;
 }
 
 extern "C" DSTATUS disk_status(BYTE pdrv) {
   if (pdrv >= FF_VOLUMES || !fatmodel::drive(pdrv).disk) return STA_NOINIT;
-  const fatmodel::Drive& d = fatmodel::drive(pdrv);
-  return guarded(d, d.noInit ? STA_NOINIT : 0);
+  fatmodel::Drive& d = fatmodel::drive(pdrv);
+  if (d.silent) d.marked = true;
+  // The firmware's wStatus() over the SD driver's status.
+  return guarded(d, d.noInit || d.marked || (d.wrapper && d.wrapper->remountDue()) ? STA_NOINIT : 0);
 }
 
 extern "C" DSTATUS disk_initialize(BYTE pdrv) {
@@ -320,7 +368,10 @@ extern "C" DSTATUS disk_initialize(BYTE pdrv) {
   // The firmware's wInit(): the cache cleared, the SD driver's init, then
   // (a card answering) its identity held to the mount's.
   if (d.wrapper) d.wrapper->init();
+  if (d.silentForGood) return guarded(d, STA_NOINIT);  // (the SD driver's init: no card answers)
   d.noInit = false;
+  d.marked = false;
+  d.silent = false;
   if (d.wrapper) d.wrapper->remounted(d.disk->sectors());
   return guarded(d, 0);
 }
@@ -350,6 +401,8 @@ extern "C" DRESULT disk_write(BYTE pdrv, const BYTE* buff, LBA_t sector, UINT co
   const bool ok = d.wrapper ? d.wrapper->write(lba, buff, count)
                   : d.cache ? d.cache->write(*d.disk, lba, buff, count)
                             : d.disk->write(lba, buff, count);
+  // The firmware's wWrite(): the window's own write.
+  if (!ok && d.wrapper && d.fs && d.fs->wflag && d.fs->winsect == sector && buff == d.fs->win) d.wrapper->windowFailed(lba);
   return ok ? RES_OK : RES_ERROR;
 }
 

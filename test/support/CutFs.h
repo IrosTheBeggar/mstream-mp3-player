@@ -52,11 +52,12 @@ public:
   bool dead = false;
   bool refuse = false;  // a full card: no step succeeds, nothing is cut
   // A card that fails reads with nothing else wrong (a CRC, no data token). The
-  // reads and openRead()s of files under `faultPrefix` are numbered from 0 in
+  // reads and opens to read of files under `faultPrefix` are numbered from 0 in
   // faultEvents; those from faultFrom up to faultTo (-1: for ever) fail. faultFrom
   // -1: none. (entry()s too: each one a question of the card.)
   std::string faultPrefix;
   long faultFrom = -1, faultTo = -1, faultEvents = 0;
+  bool inOpenRead_ = false;
   bool faulty(const std::string& path) {
     if (faultFrom < 0 || path.compare(0, faultPrefix.size(), faultPrefix) != 0) return false;
     const long k = faultEvents++;
@@ -162,11 +163,17 @@ public:
       return track(new F(this, p, c, true));
     }
     if (it == dir.end()) return nullptr;
+    // (The firmware's open() says no file for any failure, a read the card failed too.)
+    if (mode == Mode::Read && !inOpenRead_ && faulty(p)) return nullptr;
     return track(new F(this, p, it->second, mode == Mode::Update));
   }
   tagstore::File* openRead(const char* path, bool* cardFailed) override {
     *cardFailed = dead || faulty(path);
-    return *cardFailed ? nullptr : open(path, Mode::Read);
+    if (*cardFailed) return nullptr;
+    inOpenRead_ = true;
+    tagstore::File* f = open(path, Mode::Read);
+    inOpenRead_ = false;
+    return f;
   }
   Entry entry(const char* path) override {
     Entry e;

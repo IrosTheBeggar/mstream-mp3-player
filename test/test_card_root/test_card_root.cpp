@@ -532,6 +532,81 @@ void test_on_fatfs_a_damaged_directory_entry_is_the_files_fault_not_the_cards() 
   TEST_ASSERT_TRUE_MESSAGE(r->why == cc::Why::Missing, cc::whyName(r->why));
 }
 
+// A glitch on the sector of /.mstream's entries, the card answering all the while (the look keeps it):
+// one read of the root asks it 4 times, and the boot's waits are for this. None of it is the wrapper's to
+// stop: the try after the glitch reads it.
+int g_mendAtWait = 0;
+void mendAtWait(uint32_t) {
+  if (--g_mendAtWait == 0) fatmodel::drive(0).noAnswerLba = UINT32_MAX;
+}
+void test_on_fatfs_a_glitch_on_a_folders_sector_is_read_again_at_the_boot() {
+  Card c;
+  TEST_ASSERT_EQUAL_INT(FR_OK, f_mkdir(fatmodel::path(0, ".mstream").c_str()));
+  c.put(kBin, manifest());
+  c.put(kTags, tags());
+  static SectorCache cache;
+  TEST_ASSERT_TRUE(cache.capacity() || cache.begin(SectorCache::kDefaultEntries));
+  static uint8_t scratch[fatmodel::kSS];
+  fatmodel::Slot slot(0);
+  fatmodel::Link link(0);
+  CachedDrive wrapper(cache, slot);
+  wrapper.setScratch(scratch);
+  wrapper.setLink(&link);
+  fatmodel::Drive& d = fatmodel::drive(0);
+  d.wrapper = &wrapper;
+  d.fs = &Card::fatfs;
+  DIR dir;
+  TEST_ASSERT_EQUAL_INT(FR_OK, f_opendir(&dir, fatmodel::path(0, ".mstream").c_str()));
+  const uint32_t folder =
+      static_cast<uint32_t>(Card::fatfs.database) + (static_cast<uint32_t>(dir.obj.sclust) - 2) * Card::fatfs.csize;
+  f_closedir(&dir);
+  c.remount();
+  TEST_ASSERT_TRUE(wrapper.remember(d.disk->sectors()));
+  std::unique_ptr<Root> r(new Root());
+  std::vector<uint8_t> work(1024);
+  d.noAnswerLba = folder;
+  g_mendAtWait = 2;
+  TEST_ASSERT_EQUAL_UINT32(3, cardroot::readAtBoot(c.fs, work.data(), static_cast<uint32_t>(work.size()), r.get(), mendAtWait));
+  TEST_ASSERT_TRUE(r->present);
+  TEST_ASSERT_FALSE(r->readFailed());
+  TEST_ASSERT_GREATER_OR_EQUAL_UINT32(2 * CachedDrive::kStopAfter, wrapper.kept());
+  TEST_ASSERT_EQUAL_UINT32(0, wrapper.stats().stoppedReads);
+}
+
+// Which FIL holds an error, on the firmware's own FatFile: Auto DJ's new FIL turns on it.
+void test_on_fatfs_which_fil_keeps_an_error() {
+  Card c;
+  std::vector<uint8_t> bytes(40000, 0x5A);
+  c.put("/a.bin", bytes);
+  c.remount();
+  auto* f = static_cast<cardfat::FatFile*>(c.fs.open("/a.bin", tagstore::Fs::Mode::Read));
+  TEST_ASSERT_NOT_NULL(f);
+  uint8_t buf[512];
+  TEST_ASSERT_TRUE(f->read(0, buf, sizeof(buf)));
+  TEST_ASSERT_FALSE(f->errorKept());
+  TEST_ASSERT_FALSE(f->takeReadFailed());
+  // A status the card failed: the read refused, nothing kept: the remount's to reopen.
+  fatmodel::Drive& d = fatmodel::drive(0);
+  d.noInit = true;
+  TEST_ASSERT_FALSE(f->read(16384, buf, sizeof(buf)));
+  TEST_ASSERT_FALSE(f->errorKept());
+  TEST_ASSERT_TRUE(f->takeReadFailed());
+  TEST_ASSERT_FALSE(f->takeReadFailed());
+  d.noInit = false;
+  TEST_ASSERT_TRUE(f->read(16384, buf, sizeof(buf)));
+  TEST_ASSERT_FALSE(f->takeReadFailed());
+  // A read that failed: kept, for good, whatever comes back.
+  d.failFrom = d.asked.reads;
+  d.failTo = UINT64_MAX - 1;
+  TEST_ASSERT_FALSE(f->read(32768, buf, sizeof(buf)));
+  d.failFrom = d.failTo = UINT64_MAX;
+  TEST_ASSERT_TRUE(f->errorKept());
+  TEST_ASSERT_TRUE(f->takeReadFailed());
+  TEST_ASSERT_FALSE(f->read(32768, buf, sizeof(buf)));
+  TEST_ASSERT_TRUE(f->errorKept());
+  c.fs.close(f);
+}
+
 void test_on_fatfs_each_sector_read_failed_in_its_turn_is_never_no_root() {
   for (const std::vector<uint8_t>* root : {&manifest(), &longRoot()}) {
   Card c;
@@ -921,6 +996,8 @@ int main(int, char**) {
   RUN_TEST(test_the_boot_waits_between_its_reads_and_not_after_the_last);
   RUN_TEST(test_on_fatfs_no_folder_and_no_file_are_its_word_not_a_fault);
   RUN_TEST(test_on_fatfs_a_damaged_directory_entry_is_the_files_fault_not_the_cards);
+  RUN_TEST(test_on_fatfs_a_glitch_on_a_folders_sector_is_read_again_at_the_boot);
+  RUN_TEST(test_on_fatfs_which_fil_keeps_an_error);
   RUN_TEST(test_on_fatfs_each_sector_read_failed_in_its_turn_is_never_no_root);
   RUN_TEST(test_on_fatfs_the_records_are_never_gone_for_a_read_that_failed);
   RUN_TEST(test_on_fatfs_library_idx_is_never_missing_or_corrupt_for_a_read_that_failed);
