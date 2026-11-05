@@ -149,6 +149,10 @@ private:
   void logRemap(const queueremap::Result& r);
   // The queue's files, read: through FatFs on the card, the VFS on the flash.
   struct QueueFiles;
+  // The card's word on the queue's own files for its writes (2.12.6's rule, a size after a
+  // close), through a FIL and a FILINFO it keeps (PSRAM, from the boot): no question fails for
+  // want of memory later.
+  struct CardQuestions;
   bool onCard() const { return storage_.onCard() && cardfat::ready(); }
   // Nobody could read the file: the queue is empty, and the file keeps its line and its
   // resume point for the next boot (no read of it again this session: such a read on a card
@@ -174,6 +178,7 @@ private:
   // session's first write counts them), else how many. While there are any, a commit asks
   // whose chain queue.txt is on before it removes it.
   int32_t twins_ = -1;
+  CardQuestions* questions_ = nullptr;  // PSRAM, on the card
   uint32_t failuresSeen_ = 0;
 
   File file_;

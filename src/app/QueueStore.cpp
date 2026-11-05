@@ -74,6 +74,44 @@ uint32_t lookupClock() { return millis(); }
 
 }  // namespace
 
+// The card's word on the queue's own files (2.12.6's rule, a size after a close): FatFs, through
+// a FatFile and a FILINFO this keeps (PSRAM, taken at the boot), so that none of these questions
+// fails for want of memory later, where cardfat::FatFs::entry() and stat() take a new one each
+// time (a 4.1 KB FIL; a session's first write asks about ten things).
+struct QueueStore::CardQuestions final : tagstore::Fs {
+  explicit CardQuestions(cardfat::FatFs& fat) : fat_(fat) {}
+  tagstore::File* open(const char* path, Mode mode) override { return fat_.open(path, mode); }
+  tagstore::File* openRead(const char* path, bool* cardFailed) override { return fat_.openRead(path, cardFailed); }
+  Entry entry(const char* path) override {
+    // (As cardfat::FatFs::openRead() reads FatFs's answer: FR_INT_ERR is the file's word.)
+    Entry e;
+    const FRESULT r = file_.openRead(path);
+    e.cardFailed = r != FR_OK && r != FR_NO_FILE && r != FR_NO_PATH && r != FR_INT_ERR;
+    if (r == FR_OK) {
+      e.there = true;
+      e.firstCluster = file_.firstCluster();
+      file_.closeRead();
+    }
+    return e;
+  }
+  bool close(tagstore::File* f) override { return fat_.close(f); }
+  bool exists(const char* path) override { return entry(path).there; }
+  bool remove(const char* path) override { return fat_.remove(path); }
+  bool rename(const char* from, const char* to) override { return fat_.rename(from, to); }
+  uint32_t firstCluster(const char* path) override { return entry(path).firstCluster; }
+  // `path`'s size on the card (f_stat). False: not there, or the card didn't say.
+  bool size(const char* path, uint32_t* out) {
+    char p[300];
+    if (!cardfat::fatPath(path, p, sizeof(p)) || f_stat(p, &info_) != FR_OK) return false;
+    *out = static_cast<uint32_t>(info_.fsize);
+    return true;
+  }
+
+  cardfat::FatFs& fat_;
+  cardfat::FatFile file_;
+  FILINFO info_;
+};
+
 QueueStore::QueueStore(LocalStorage& storage, QueueModel& queue, PlaybackController& player,
                        const TrackCatalog& catalog, TrackCatalog::Unlisted& unlisted)
     : storage_(storage), queue_(queue), player_(player), catalog_(catalog),
@@ -109,6 +147,8 @@ struct QueueStore::QueueFiles final : queuefile::Files {
 
 QueueStore::Restore QueueStore::restore(bool libraryListsCard, void (*wait)(uint32_t ms)) {
   if (!storage_.available()) return Restore::None;
+  // The writes' questions of the card, their memory taken now, while there is plenty.
+  if (onCard() && !questions_) questions_ = psramNew<CardQuestions>(fat_);
   char file[48], temp[48];
   paths(file, temp, sizeof(file));
   SavedPosition saved = readPosition();
@@ -306,9 +346,16 @@ void QueueStore::noteFailures() {
 ByteSink* QueueStore::openTemp() {
   char file[48], temp[48];
   paths(file, temp, sizeof(file));
+  // (Their memory is taken at the boot; a boot that had none for them asks again here.)
+  if (onCard() && !questions_) questions_ = psramNew<CardQuestions>(fat_);
+  if (onCard() && !questions_) {
+    Serial.printf("[queue] couldn't write %s: no PSRAM for the card's questions\n", temp);
+    return nullptr;
+  }
   if (!readyTemp(file, temp)) {
-    Serial.printf("[queue] couldn't write %s: what is there is left as it is (%s)\n", temp,
-                  tmpHeld_ ? "it holds the queue, and couldn't take queue.txt's place" : "the card didn't say what it is");
+    Serial.printf("[queue] couldn't write %s: %s\n", temp,
+                  tmpHeld_ ? "it holds the queue, and couldn't take queue.txt's place (left as it is)"
+                           : "the card failed a question, a remove or a rename (what is there is left as it is)");
     return nullptr;
   }
   if (!buf_) buf_ = static_cast<uint8_t*>(psramAlloc(kBufSize));
@@ -322,10 +369,10 @@ ByteSink* QueueStore::openTemp() {
 }
 
 bool QueueStore::tmpWhole(const char* temp, size_t bytes) {
-  uint32_t size = 0, time = 0;
+  uint32_t size = 0;
   bool asked = false;
   if (onCard()) {
-    asked = fat_.stat(temp, &size, &time);
+    asked = questions_ && questions_->size(temp, &size);
   } else {
     File f = storage_.fs().open(temp, FILE_READ);
     asked = static_cast<bool>(f);
@@ -337,7 +384,7 @@ bool QueueStore::tmpWhole(const char* temp, size_t bytes) {
     Serial.printf("[queue] %s isn't whole after its close: %lu B there, %lu written\n", temp, (unsigned long)size,
                   (unsigned long)bytes);
   } else {
-    // (Not there, the card failed the question, or no PSRAM for it: no word that it's whole.)
+    // (Not there, or the card failed the question: no word that it's whole.)
     Serial.printf("[queue] %s after its close: its size couldn't be had\n", temp);
   }
   return false;
@@ -348,7 +395,7 @@ bool QueueStore::replaceFile(const char* file, const char* temp) {
   // queue.txt is renamed to a twin when it shares a twin's chain, since removing it would
   // free clusters the twin holds, and a question the card fails stops it. Else, and on the
   // flash, as ever.
-  if (onCard() && twins_ != 0) return tagstore::replace(fat_, kQueueNames);
+  if (onCard() && twins_ != 0) return questions_ && tagstore::replace(*questions_, kQueueNames);
   fs::FS& fs = storage_.fs();
   fs.remove(file);
   return fs.rename(temp, file);
@@ -376,9 +423,9 @@ bool QueueStore::readyTemp(const char* file, const char* temp) {
     // counted (a rename to one that FatFs said failed may have been done all the same), and
     // those a disk check parted removed. A question the card fails: nothing written, asked
     // again at the next write.
-    if (!tagstore::prepareTmp(fat_, kQueueNames)) return false;
+    if (!tagstore::prepareTmp(*questions_, kQueueNames)) return false;
     bool unread = false;
-    const uint32_t left = tagstore::collectTwins(fat_, kQueueNames, &unread);
+    const uint32_t left = tagstore::collectTwins(*questions_, kQueueNames, &unread);
     if (unread) return false;
     twins_ = static_cast<int32_t>(left);
     if (left) {
@@ -403,14 +450,14 @@ bool QueueStore::settleTemp(const char* file, const char* temp) {
   // queue.txt holds the same queue, and queue.tmp goes to a twin, which frees nothing. And
   // the twins are counted again after (readyTemp()): any of these renames may have made one.
   twins_ = -1;
-  const tagstore::Fs::Entry t = fat_.entry(temp);
+  const tagstore::Fs::Entry t = questions_->entry(temp);
   if (t.cardFailed) return false;
   if (t.there) {
-    const tagstore::Fs::Entry f = fat_.entry(file);
+    const tagstore::Fs::Entry f = questions_->entry(file);
     if (f.cardFailed) return false;
     const bool oneChain = f.there && t.firstCluster != 0 && f.firstCluster == t.firstCluster;
     if (oneChain) {
-      if (!tagstore::prepareTmp(fat_, kQueueNames)) return false;
+      if (!tagstore::prepareTmp(*questions_, kQueueNames)) return false;
       Serial.printf("[queue] %s and %s shared a chain (a rename failed between its writes): %s kept as a twin; the "
                     "card wants a disk check on a PC\n",
                     file, temp, temp);

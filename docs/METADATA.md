@@ -3438,6 +3438,8 @@ queue. Twins on one chain are the rule at work, counted apart:
 | Two faults around a commit, every kind and place, 6 lines of 12, five endings; one sector / two | 350-590 / 660-1,364 lost (and 72 later) | 0 / 462-702 later | 0 / 0 of 7,185 and 9,048 runs each |
 | The update step's carry, two faults; one sector / two | 384 / 608 lost | 0 / 619 later | 0 / 0 of 7,854 and 10,500 |
 | The boot finding `queue.tmp` alone, beside a `queue.txt` it couldn't read, or beside a cut one, then a fault in its writes; four endings | 10-67 lost in each | 6-12 later | 0 |
+| Twins already on the card (on `queue.txt`'s chain, on `queue.tmp`'s, on each other's, parted by a disk check, four pairs), single faults; 5 layouts of `/.player`, four endings | | | 0 of 35,424 runs (parted twins removed at the first write) |
+| PSRAM refused a FIL's size after the boot, an edit | Saved | Saved | Saved (the first version of this round: not saved) |
 
 - **The queue file's costs, left as they are.** A line by its path has its file's name for a title, and
   no artist, album, cover or Auto DJ row; Go to album says the library isn't ready. The boot's questions
