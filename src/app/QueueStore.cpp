@@ -147,8 +147,6 @@ struct QueueStore::QueueFiles final : queuefile::Files {
 
 QueueStore::Restore QueueStore::restore(bool libraryListsCard, void (*wait)(uint32_t ms)) {
   if (!storage_.available()) return Restore::None;
-  // The writes' questions of the card, their memory taken now, while there is plenty.
-  if (onCard() && !questions_) questions_ = psramNew<CardQuestions>(fat_);
   char file[48], temp[48];
   paths(file, temp, sizeof(file));
   SavedPosition saved = readPosition();
@@ -165,6 +163,9 @@ QueueStore::Restore QueueStore::restore(bool libraryListsCard, void (*wait)(uint
   QueueFiles files(*this);
   const queuefile::Read got = queuefile::readAtBoot(files, file, temp, catalog_, queue_, pickCurrent, &saved, psramAlloc,
                                                     psramFree, onCard() ? wait : nullptr, lookup);
+  // The writes' questions of the card, their memory taken now, while there is plenty (after the
+  // read, which comes first).
+  if (onCard() && !questions_) questions_ = psramNew<CardQuestions>(fat_);
   // (No PSRAM for the read's blocks or the queue's: no more the file's word than a fault.)
   const char* why = !got.noMemory ? "a read of the card failed"
                     : got.faulted ? "a read of the card failed, or found no PSRAM"
