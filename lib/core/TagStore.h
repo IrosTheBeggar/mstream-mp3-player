@@ -338,7 +338,9 @@ struct Settled {
 Settled settle(Fs& fs, const Names& n, TmpCheck* check);
 bool prepareTmp(Fs& fs, const Names& n);
 bool replace(Fs& fs, const Names& n);
-uint32_t collectTwins(Fs& fs, const Names& n);  // the twins left
+// The twins left. `unread` (optional): a question the card failed stopped it, so some may be
+// left uncounted.
+uint32_t collectTwins(Fs& fs, const Names& n, bool* unread = nullptr);
 
 // The boot's waits between reads of a file the card failed, whichever it is
 // (cardroot::readAtBoot(), TagStore::openAtBoot(), LibraryUpdate::boot()): most faults

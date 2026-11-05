@@ -94,7 +94,10 @@ protected:
 };
 
 struct Restored {
-  bool ok = false;           // a queue file (false: none, or not one)
+  bool ok = false;           // a queue file (false: none, or not one, or noMemory)
+  // Not ok for want of memory: the read's blocks, or the queue's own (QueueModel::assign()).
+  // That says nothing of the file: it may be whole (docs/METADATA.md 3.2.2).
+  bool noMemory = false;
   uint32_t lines = 0;        // entries in the file
   uint32_t entries = 0;      // in the queue now
   uint32_t dropped = 0;      // paths the catalog doesn't know any more (of the lines read in)
@@ -126,7 +129,8 @@ struct Restored {
 // ids and (version 2) their ranks, each a block of exactly the lines read
 // in (the header's count, at most the cap), 4 bytes a line, held until
 // assign() has copied them; a file with more lines than its header says
-// isn't whole either.
+// isn't whole either. No memory for those blocks, or for the queue's own,
+// is noMemory: not ok, and nothing said of the file.
 // A source that says it failed (ByteSource::failed()) is no whole file, wherever it failed.
 // `unknown` (optional): asked about each line read in that the catalog doesn't know.
 Restored read(ByteSource& in, const TrackCatalog& catalog, QueueModel& q,

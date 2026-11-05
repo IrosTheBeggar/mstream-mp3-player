@@ -15,7 +15,8 @@
 // files out (docs/METADATA.md 3.2.2). Nothing rebuilds queue.txt, so two rules:
 //
 // - A read the card fails isn't a file that's gone or isn't one (readAtBoot()): Unread,
-//   read again by the boot's waits, and nothing goes over a file nobody could read.
+//   read again by the boot's waits, and nothing goes over a file nobody could read. No
+//   memory to read it is the same (Restored::noMemory, a FIL's FR_NOT_ENOUGH_CORE).
 // - A line leaves the file only when the card says its file is gone (Lookup). A library
 //   can leave files out with no fault known: /music walked through a VFS that can't tell
 //   a folder that failed to read from an empty one, or T alone with D absent or failing
@@ -127,7 +128,9 @@ private:
 enum class Got : uint8_t {
   Whole,   // a whole queue file, read into the queue
   None,    // none: not there, or not a whole queue file (its own fault: cut, damaged)
-  Unread,  // the card failed a read of it, and nothing whole took its place
+  // The card failed a read of it, or there was no memory to read it, and nothing whole
+  // took its place.
+  Unread,
 };
 
 struct Read {
@@ -139,6 +142,9 @@ struct Read {
   // A read failed on the way, whatever it came to (one on a card silent past its init makes
   // FatFs's next call a remount, which is better now than under a card job: FatFs::echoNow()).
   bool faulted = false;
+  // A read found no memory for its blocks or the queue's (Restored::noMemory), whatever
+  // it came to.
+  bool noMemory = false;
 };
 
 // `file`, else `temp` (only ever whole when power went between removing `file` and the

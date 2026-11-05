@@ -104,13 +104,16 @@ Read readAtBoot(Files& files, const char* file, const char* temp, const TrackCat
           [&](ByteSource& in) { return queuetext::read(in, catalog, q, pickCurrent, ctx, alloc, release, lookup); },
           lookup);
       out.faulted = out.faulted || cardFailed || failed;
+      out.noMemory = out.noMemory || r.noMemory;
       if (r.ok) {
         out.got = Got::Whole;
         out.path = path;
         out.read = r;
         return;
       }
-      if (cardFailed || failed) {
+      // (No memory says nothing of the file either: taken for a file that isn't whole,
+      // the boot's default queue would go over it. Read again too: memory may come back.)
+      if (cardFailed || failed || r.noMemory) {
         unread = true;
       } else if (opened) {
         out.notWhole = path;

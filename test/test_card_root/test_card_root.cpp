@@ -1214,6 +1214,96 @@ void test_on_fatfs_a_read_again_that_fails_says_so() {
   TEST_ASSERT_EQUAL_UINT32(0, c.catalog.path(c.q.trackAt(2), path, sizeof(path)));
 }
 
+namespace {
+
+// The read's memory (the firmware's PSRAM) with a block of one size refused: `refusals`
+// more times, or every time (-1).
+struct Short {
+  static size_t refuse;
+  static int refusals;
+  static void* alloc(size_t n) {
+    if (n == refuse && refusals != 0) {
+      if (refusals > 0) --refusals;
+      return nullptr;
+    }
+    return std::malloc(n ? n : 1);
+  }
+  static void release(void* p) { std::free(p); }
+};
+size_t Short::refuse = 0;
+int Short::refusals = 0;
+
+}  // namespace
+
+// No memory for the read's blocks, or for the queue's own (Restored::noMemory), is no word
+// on the file either: Unread, read again after the boot's waits, the queue left alone. Taken
+// for a file that isn't whole, the boot's default queue went over it (3.2.2). Memory back by
+// a later read: the file, at its place. A whole queue.tmp stands in, as for a read the card
+// fails.
+void test_on_fatfs_no_memory_to_read_queue_txt_is_unread_not_no_queue() {
+  QueueCard c;
+  c.put(kQueue, bytesOf(queueText({kTrackA, kTrackA, kTrackA}, 1)));
+  const auto read = [&](QueueModel& q, std::vector<uint32_t>* waits) {
+    QueueCard::s_waits = waits;
+    const queuefile::Read r = queuefile::readAtBoot(c.files, kQueue, kQueueTmp, c.catalog, q, nullptr, nullptr,
+                                                    Short::alloc, Short::release, QueueCard::noteWait, &c.lookup);
+    QueueCard::s_waits = nullptr;
+    return r;
+  };
+  // The read's ids (3 lines, 12 B), then the queue's own block (12 B an entry).
+  for (const size_t block : {size_t{3 * 4}, size_t{3 * 12}}) {
+    char msg[32];
+    std::snprintf(msg, sizeof(msg), "a block of %u B", static_cast<unsigned>(block));
+    QueueModel q(Short::alloc, Short::release);
+    const uint32_t old[] = {0, 0};
+    TEST_ASSERT_TRUE(q.assign(old, 2, 0));
+    Short::refuse = block;
+    Short::refusals = -1;
+    std::vector<uint32_t> waits;
+    queuefile::Read r = read(q, &waits);
+    TEST_ASSERT_TRUE_MESSAGE(r.got == queuefile::Got::Unread, msg);
+    TEST_ASSERT_TRUE_MESSAGE(r.noMemory, msg);
+    TEST_ASSERT_FALSE_MESSAGE(r.faulted, msg);  // (no card read failed: nothing for FatFs to mount again)
+    TEST_ASSERT_NULL_MESSAGE(r.notWhole, msg);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(4, r.reads, msg);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(3, waits.size(), msg);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(2, q.size(), msg);  // left alone
+    // Refused once: the read after the first wait has it, at its line.
+    Short::refusals = 1;
+    waits.clear();
+    r = read(q, &waits);
+    TEST_ASSERT_TRUE_MESSAGE(r.got == queuefile::Got::Whole, msg);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(kQueue, r.path, msg);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(2, r.reads, msg);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(1, waits.size(), msg);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(3, q.size(), msg);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, q.current(), msg);
+  }
+  // A whole queue.tmp beside it (2 lines: blocks of another size) stands in, read once.
+  c.put(kQueueTmp, bytesOf(queueText({kTrackB, kTrackA}, 0)));
+  {
+    QueueModel q(Short::alloc, Short::release);
+    Short::refuse = 3 * 4;
+    Short::refusals = -1;
+    const queuefile::Read r = read(q, nullptr);
+    TEST_ASSERT_TRUE(r.got == queuefile::Got::Whole);
+    TEST_ASSERT_EQUAL_STRING(kQueueTmp, r.path);
+    TEST_ASSERT_TRUE(r.noMemory);
+    TEST_ASSERT_EQUAL_UINT32(1, r.reads);
+    TEST_ASSERT_EQUAL_UINT32(2, q.size());
+  }
+  // No memory for it either: unread, not queue.tmp's word.
+  c.put(kQueueTmp, bytesOf(queueText({kTrackB, kTrackA, kTrackA}, 0)));
+  {
+    QueueModel q(Short::alloc, Short::release);
+    const queuefile::Read r = read(q, nullptr);
+    TEST_ASSERT_TRUE(r.got == queuefile::Got::Unread);
+    TEST_ASSERT_EQUAL_UINT32(4, r.reads);
+  }
+  Short::refuse = 0;
+  Short::refusals = 0;
+}
+
 // What is the file's own fault, or no file at all: None, read once, so the caller's
 // default queue goes on as it always has.
 void test_on_fatfs_no_queue_txt_a_cut_or_damaged_one_are_no_queue() {
@@ -1550,6 +1640,7 @@ int main(int, char**) {
   RUN_TEST(test_on_fatfs_a_read_of_queue_txt_that_fails_is_never_no_queue);
   RUN_TEST(test_on_fatfs_a_read_that_fails_in_the_last_line_is_no_whole_file);
   RUN_TEST(test_on_fatfs_a_read_again_that_fails_says_so);
+  RUN_TEST(test_on_fatfs_no_memory_to_read_queue_txt_is_unread_not_no_queue);
   RUN_TEST(test_on_fatfs_no_queue_txt_a_cut_or_damaged_one_are_no_queue);
   RUN_TEST(test_on_fatfs_queue_tmp_stands_in);
   RUN_TEST(test_on_fatfs_a_line_leaves_only_when_its_file_is_gone);
