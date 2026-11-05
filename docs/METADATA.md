@@ -3332,20 +3332,22 @@ file**): no boot sets one up over a `queue.txt` it couldn't read.
     for its read`; Now Playing and the Queue tab say what they say for a read the card fails. A
     header that claims more lines than memory holds is the same: the read can't tell its file
     from a whole one.
-  - **Only a whole `queue.tmp` replaces the file, and a whole one is kept** (2026-11-05). The write
-    goes through the VFS, whose close writes the last of it (newlib's 4 KB buffer, all of a queue
-    of about 60 lines of 70-byte paths; FatFs's last sector; the file's directory entry) and says
-    nothing: a card that refused those writes, or stopped answering, left `queue.tmp` cut or
-    empty, and the rename put that in `queue.txt`'s place. So `queue.tmp`'s size as the storage
-    has it (FatFs's `f_stat` on the card) must be what was written before `queue.txt` goes. Then a
-    rename that fails keeps `queue.tmp`: `queue.txt` may be gone by then, and it was removed,
-    which left no file. A kept `queue.tmp`, or one the boot read, takes `queue.txt`'s place before
-    anything opens it for writing (`QueueStore::settleTemp()`): the retry 10 s later truncated it,
-    and a cut in that write, or an edit that dropped it, left none. FatFs is asked first: a rename
+  - **Only a whole `queue.tmp` replaces the file, and a whole one is kept** (2026-11-05; 3.8's save
+    check, taken further). The write goes through the VFS, whose close writes the last of it (newlib's
+    4 KB buffer, all of a queue of about 60 lines of 70-byte paths; FatFs's last sector; the file's
+    directory entry) and says nothing: a card that refused those writes, or stopped answering, left
+    `queue.tmp` cut or empty, and the rename put that in `queue.txt`'s place. So `queue.tmp`'s size as
+    the storage has it (FatFs's `f_stat` on the card) must be what the sink took before `queue.txt`
+    goes. One that isn't whole is removed, and `queue.txt` stays as it was. Then a rename that fails
+    keeps a whole `queue.tmp`, whether or not `queue.txt` has gone. A kept `queue.tmp`, or one the boot
+    read, takes `queue.txt`'s place before anything opens it for writing (`QueueStore::settleTemp()`):
+    a cut in that write, or an edit that dropped it, would leave none. FatFs is asked first: a rename
     it said failed may be done in its view all the same (its directory sector written again by the
     next call), and `queue.txt` is then the queue, which removing would lose; a question the card
     fails, and nothing is done. Until it can, nothing is written over it, and the saver tries again
-    every 10 s.
+    10 s on, then twice as long each time (3.8). And at the boot's first save, a `queue.tmp` with no
+    `queue.txt`, whatever the boot made of it, takes that name first (3.8), before the rule below
+    would remove it as a leftover.
   - **The cut-rename rule (2.12.6) holds for `queue.txt` on the card** (2026-11-05). A rename that
     fails, or is cut, between its two directory writes (the two entries in different sectors of
     `/.player`, which has more than 16 entries then) leaves `queue.txt` and `queue.tmp` on one chain,
@@ -3404,7 +3406,8 @@ the library's 6 tracks, which the default queue replaces unseen.) The rig has no
 waveform index; on the device their reads ask first where they can, so it restarted less (**Device check**,
 below).
 
-MEASURED likewise for the last two (2026-11-05), on a rig rebuilt for them: the firmware's own
+MEASURED likewise for the last two (2026-11-05, on d8b7af9 and the commits over it, before main's
+#38 came under them: "Before" there is #37 with none of 3.8's save check), on a rig rebuilt for them: the firmware's own
 `QueueStore`, `CardFat`, `lib/core` and FatFs over a modelled card, the boot's queue lines as
 `setup()` has them, and the VFS modelled call for call on Arduino-ESP32 3.3.12's `vfs_api.cpp`
 (newlib's 4 KB buffer, a close that says nothing). A disk write refused is one the card refused
@@ -3467,8 +3470,24 @@ queue. Twins on one chain are the rule at work, counted apart:
   (`Restored::held`): the queue goes without it, and the file is kept (`keptFile()`), with what that costs:
   the update step's jump comes back for that session. Their paths stay in PSRAM through the update step's
   build (not in `alsoFreed`), so a memory check that comes up short defers to the build at the next boot,
-  as it does for anything else. No PSRAM for the read's own blocks is still "not a whole queue file", and
-  the default queue goes over it: older than this.
+  as it does for anything else. No PSRAM to read the file at the boot costs the session its queue (up to
+  1.4 s of waits and three more reads first), in the words of a card read failed at startup, and the update
+  step doesn't read it again (`fileUnread()`), as for the card's fault. Each write of the file asks FatFs for
+  its size once more (2 sector reads on the rig, which has no cache), and a session's first write asks about
+  `queue.tmp` and the nine twin names (20 more), as does the first after a failure; on the device those are
+  the cached directory sectors. With twins on the card, each commit asks the same (with 8 twins, about 22
+  reads a commit). Those questions go through a FIL and a FILINFO kept from the boot
+  (`QueueStore::CardQuestions`, about 4.4 KB of PSRAM for the session), so none fails later for want of
+  memory; a boot with none for them takes them at the first write, which waits until it can. While a kept
+  `queue.tmp` can't take `queue.txt`'s place (a rename the card keeps refusing), no edit is saved: the card
+  keeps the last whole queue. Twins stay on the card until a disk check on a PC: the console says so (`it
+  wants a disk check`), no screen does (nor for `library.idx`'s: the Library row's word above isn't built),
+  and after nine of them `queue.txt` can't be replaced, as 2.12.6 has it: about five rename faults with no
+  disk check between. The rule takes a disk check that copies a shared chain apart; one that truncates the
+  second file instead (as dosfstools' `fsck.fat` may) and picks `queue.txt`, while it still shares a twin's
+  chain at a session's end, would leave it not whole, and the boot's default queue would go over it. The
+  sweeps never ended a session in that state (only twins share, or `queue.tmp` and `queue.txt`, which the
+  boot reads as `queue.tmp`).
 - **The card guard** (3.8; the trap of `docs/AUTODJ.md` 6.6): none of the rules for the records
   and the library reads anything after the boot (the queue's file does: its costs, above), and a
   held session has no job for a remount to restart it under. A read with
@@ -5538,7 +5557,9 @@ src/. What the code decided where 3.2-3.4 left room:
   sink took, before the last good file goes. And a rename that fails with `queue.txt` gone (the window's
   second failure can land between the two) keeps `queue.tmp`, which the boot's `restore()` reads. The
   next save, and a boot's first, gives such a `queue.tmp` the name `queue.txt` first: its own open would
-  empty it before anything new is safe, and hand FatFs the same clusters back. A flush behind the
+  empty it before anything new is safe, and hand FatFs the same clusters back. (3.2.2's **The queue's
+  file** has what these became since: the size asked of FatFs, a whole `queue.tmp` kept and settled first,
+  one that isn't whole removed, and the cut-rename rule. The boot's first save still does this.) A flush behind the
   update's fence that the card refused says so now, the queue being text in PSRAM until the fence
   comes down. A failed save tries again 10 s on, then twice as long each time, up to 5 minutes, and
   says the wait; one that works, or the card coming back (a remount 10 s or more after a mount that
