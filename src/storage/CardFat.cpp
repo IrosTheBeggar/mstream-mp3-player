@@ -161,6 +161,19 @@ tagstore::Fs::Entry FatFs::entry(const char* path) {
   return e;
 }
 
+tagstore::Fs::Seen FatFs::look(const char* path) {
+  char p[300];
+  if (!fatPath(path, p, sizeof(p))) return Seen::Unknown;
+  FILINFO* fi = psramNew<FILINFO>();
+  if (!fi) return Seen::Unknown;
+  const FRESULT r = f_stat(p, fi);
+  const bool folder = r == FR_OK && (fi->fattrib & AM_DIR) != 0;
+  psramDelete(fi);
+  if (r == FR_OK) return folder ? Seen::Gone : Seen::There;
+  // (A name FatFs can't write can't be on the card either.)
+  return r == FR_NO_FILE || r == FR_NO_PATH || r == FR_INVALID_NAME ? Seen::Gone : Seen::Unknown;
+}
+
 bool FatFs::close(tagstore::File* file) {
   if (!file) return false;
   auto* f = static_cast<FatFile*>(file);

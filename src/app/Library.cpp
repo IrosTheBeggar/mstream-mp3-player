@@ -93,7 +93,9 @@ char s_producer[48] = "";
 
 }  // namespace
 
-Library::Library(LocalStorage& storage) : storage_(storage) {}
+Library::Library(LocalStorage& storage) : storage_(storage), unlisted_(psramAlloc, psramFree) {
+  catalog_.setUnlisted(&unlisted_);
+}
 
 bool Library::ensureIndex() {
   if (!index_) {

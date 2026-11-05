@@ -28,6 +28,7 @@
 #include "CardRoot.h"
 #include "CardTags.h"
 #include "LibraryUpdate.h"
+#include "QueueFile.h"
 // The firmware's own say on what is the card's fault (FatFs::openRead(),
 // FatFile::damaged()), over the real FatFs.
 #include "../../src/storage/CardFat.cpp"
@@ -980,6 +981,548 @@ void test_on_fatfs_an_entry_says_whose_word_it_is() {
   TEST_ASSERT_FALSE(e.there);
 }
 
+
+// ---- the queue's file, on the real FatFs (lib/core QueueFile) ----
+
+namespace {
+
+constexpr const char* kQueue = "/.player/queue.txt";
+constexpr const char* kQueueTmp = "/.player/queue.tmp";
+constexpr const char* kTrackA = "/music/Band/Live/01 - a.mp3";
+constexpr const char* kTrackB = "/music/Band/Live/02 - b.mp3";
+constexpr const char* kTrackC = "/music/Loose/03 - c.mp3";
+
+std::vector<uint8_t> bytesOf(const std::string& s) { return std::vector<uint8_t>(s.begin(), s.end()); }
+
+// A queue's file of a track a line.
+std::string queueText(const std::vector<std::string>& lines, int current = 0, int generation = 5) {
+  std::string t = "mstream-queue 1 " + std::to_string(lines.size()) + " " + std::to_string(current) + " " +
+                  std::to_string(generation) + "\n";
+  for (const std::string& l : lines) t += l + "\n";
+  return t;
+}
+
+// The library the queue reads against, the player's own files on the card under `c`.
+struct QueueCard : Card {
+  LibraryIndex idx;
+  TrackCatalog::Unlisted table;
+  TrackCatalog catalog{&idx};
+  QueueModel q;
+  queuefile::Lookup lookup{fs, table};
+  queuefile::FsFiles files{fs};
+  std::vector<uint32_t> waits;
+  QueueCard() {
+    catalog.setUnlisted(&table);
+    TEST_ASSERT_TRUE(idx.begin("/music"));
+    TEST_ASSERT_TRUE(idx.addFile(kTrackA) == LibraryIndex::Add::Added);
+    TEST_ASSERT_TRUE(idx.finish());
+    TEST_ASSERT_EQUAL_INT(FR_OK, f_mkdir(fatmodel::path(0, ".player").c_str()));
+    TEST_ASSERT_EQUAL_INT(FR_OK, f_mkdir(fatmodel::path(0, "music").c_str()));
+    TEST_ASSERT_EQUAL_INT(FR_OK, f_mkdir(fatmodel::path(0, "music/Band").c_str()));
+    TEST_ASSERT_EQUAL_INT(FR_OK, f_mkdir(fatmodel::path(0, "music/Band/Live").c_str()));
+    TEST_ASSERT_EQUAL_INT(FR_OK, f_mkdir(fatmodel::path(0, "music/Loose").c_str()));
+    put(kTrackA, bytesOf("a"));
+    put(kTrackB, bytesOf("b"));
+  }
+  queuefile::Read read(bool waiting = true, bool asking = true) {
+    return queuefile::readAtBoot(files, kQueue, kQueueTmp, catalog, q, nullptr, nullptr, nullptr, nullptr,
+                                 waiting ? noteWait : nullptr, asking ? &lookup : nullptr);
+  }
+  static std::vector<uint32_t>* s_waits;
+  static void noteWait(uint32_t ms) {
+    if (s_waits) s_waits->push_back(ms);
+  }
+};
+std::vector<uint32_t>* QueueCard::s_waits = nullptr;
+
+uint32_t g_lookupNow = 0, g_lookupStep = 0;
+uint32_t lookupNow() { return g_lookupNow += g_lookupStep; }
+
+}  // namespace
+
+// look(): FatFs's word, on a file, a folder, and what isn't there.
+void test_on_fatfs_look_says_whose_word_it_is() {
+  QueueCard c;
+  using Seen = tagstore::Fs::Seen;
+  TEST_ASSERT_TRUE(c.fs.look(kTrackA) == Seen::There);
+  TEST_ASSERT_TRUE(c.fs.look("/music/Band/Live/09 - no.mp3") == Seen::Gone);  // FR_NO_FILE
+  TEST_ASSERT_TRUE(c.fs.look("/music/No Band/Live/09 - no.mp3") == Seen::Gone);  // FR_NO_PATH
+  TEST_ASSERT_TRUE(c.fs.look("/music/Band/Live") == Seen::Gone);  // a folder: no such file
+  TEST_ASSERT_TRUE(c.fs.look("/music/Band/Li*ve.mp3") == Seen::Gone);  // a name FatFs can't write
+  // The card fails: it says nothing, wherever the read falls on the way.
+  c.remount();
+  fatmodel::Drive& d = fatmodel::drive(0);
+  uint64_t asked0 = d.asked.reads;
+  TEST_ASSERT_TRUE(c.fs.look(kTrackA) == Seen::There);
+  const uint64_t reads = d.asked.reads - asked0;
+  TEST_ASSERT_GREATER_THAN_UINT32(2, static_cast<uint32_t>(reads));
+  for (uint64_t k = 0; k < reads; ++k) {
+    c.remount();
+    d.failFrom = d.asked.reads + k;
+    d.failTo = d.failFrom + 1;
+    const Seen s = c.fs.look(kTrackA);
+    d.failFrom = d.failTo = UINT64_MAX;
+    TEST_ASSERT_TRUE(s == Seen::Unknown);
+    TEST_ASSERT_TRUE(c.fs.look(kTrackA) == Seen::There);
+  }
+  // The file system's records of the way to it are damaged (FR_INT_ERR): no fault of the
+  // card's, and no word that it is gone: a disk check may bring it back.
+  c.damageEntry(nullptr, "MUSIC", 0x0FFFFFF0u);
+  TEST_ASSERT_TRUE(c.fs.look(kTrackA) == Seen::Unknown);
+}
+
+// Case 1 of 3.2.2: a read of queue.txt the card fails, in its turn, is never no queue.
+void test_on_fatfs_a_read_of_queue_txt_that_fails_is_never_no_queue() {
+  for (const size_t lines : {size_t{2}, size_t{40}}) {
+    QueueCard c;
+    std::vector<std::string> want;
+    for (size_t i = 0; i < lines; ++i) want.push_back(kTrackA);
+    c.put(kQueue, bytesOf(queueText(want, 1)));
+    fatmodel::Drive& d = fatmodel::drive(0);
+    c.remount();
+    uint64_t asked0 = d.asked.reads;
+    queuefile::Read r = c.read();
+    TEST_ASSERT_TRUE(r.got == queuefile::Got::Whole);
+    TEST_ASSERT_EQUAL_UINT32(1, r.reads);
+    TEST_ASSERT_EQUAL_size_t(lines, c.q.size());
+    const uint64_t reads = d.asked.reads - asked0;
+    TEST_ASSERT_GREATER_THAN_UINT32(2, static_cast<uint32_t>(reads));
+    for (uint64_t k = 0; k < reads; ++k) {
+      char msg[80];
+      std::snprintf(msg, sizeof(msg), "disk read %lu of %lu, %lu lines", (unsigned long)k, (unsigned long)reads,
+                    (unsigned long)lines);
+      // Once: a glitch. The next read has it, after one wait.
+      c.remount();
+      c.q.release();
+      std::vector<uint32_t> waits;
+      QueueCard::s_waits = &waits;
+      d.failFrom = d.asked.reads + k;
+      d.failTo = d.failFrom + 1;
+      r = c.read();
+      d.failFrom = d.failTo = UINT64_MAX;
+      QueueCard::s_waits = nullptr;
+      TEST_ASSERT_TRUE_MESSAGE(r.got == queuefile::Got::Whole, msg);
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(lines, c.q.size(), msg);
+      TEST_ASSERT_EQUAL_STRING_MESSAGE(kQueue, r.path, msg);
+      TEST_ASSERT_EQUAL_INT_MESSAGE(1, c.q.current(), msg);
+      TEST_ASSERT_LESS_OR_EQUAL_UINT32_MESSAGE(2, r.reads, msg);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(r.reads - 1, waits.size(), msg);
+      // Every read from there on: unread, the queue left alone, the waits spent in order.
+      c.remount();
+      c.q.release();
+      waits.clear();
+      QueueCard::s_waits = &waits;
+      d.failFrom = d.asked.reads + k;
+      d.failTo = UINT64_MAX - 1;
+      r = c.read();
+      d.failFrom = d.failTo = UINT64_MAX;
+      QueueCard::s_waits = nullptr;
+      TEST_ASSERT_TRUE_MESSAGE(r.got == queuefile::Got::Unread, msg);
+      TEST_ASSERT_TRUE_MESSAGE(r.faulted, msg);
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(0, c.q.size(), msg);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(4, r.reads, msg);
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(3, waits.size(), msg);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(tagstore::kBootWaitsMs[0], waits[0], msg);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(tagstore::kBootWaitsMs[2], waits[2], msg);
+      // No waits to spend (an earlier reader spent them): one read.
+      c.remount();
+      d.failFrom = d.asked.reads + k;
+      d.failTo = UINT64_MAX - 1;
+      r = c.read(false);
+      d.failFrom = d.failTo = UINT64_MAX;
+      TEST_ASSERT_TRUE_MESSAGE(r.got == queuefile::Got::Unread, msg);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, r.reads, msg);
+      // The card answers again: all of it, in its place.
+      c.remount();
+      r = c.read();
+      TEST_ASSERT_TRUE_MESSAGE(r.got == queuefile::Got::Whole, msg);
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(lines, c.q.size(), msg);
+    }
+  }
+}
+
+// The read that fails in the last line, on a sector that holds only its tail: the line
+// before it reads as that line, and the count holds. Still no queue, and no line lost.
+void test_on_fatfs_a_read_that_fails_in_the_last_line_is_no_whole_file() {
+  QueueCard c;
+  const std::string track(kTrackA);
+  std::vector<std::string> lines;
+  std::string text = queueText({});
+  // Lines until the file ends a few bytes into a sector.
+  for (size_t n = 0; n < 200; ++n) {
+    lines.push_back(kTrackA);
+    text = queueText(lines);
+    if (text.size() % 512 > 0 && text.size() % 512 < track.size()) break;
+  }
+  TEST_ASSERT_LESS_THAN(track.size(), text.size() % 512);
+  c.put(kQueue, bytesOf(text));
+  tagstore::File* f = c.fs.open(kQueue, tagstore::Fs::Mode::Read);
+  TEST_ASSERT_NOT_NULL(f);
+  uint8_t b[8];
+  TEST_ASSERT_TRUE(f->read(text.size() - 4, b, sizeof(b) - 4));
+  const uint32_t tail = static_cast<uint32_t>(static_cast<cardfat::FatFile*>(f)->fil.sect);
+  c.fs.close(f);
+  fatmodel::Drive& d = fatmodel::drive(0);
+  // For good: unread, four reads, the queue left alone.
+  c.remount();
+  d.failSector = tail;
+  queuefile::Read r = c.read();
+  d.failSector = UINT64_MAX;
+  TEST_ASSERT_TRUE(r.got == queuefile::Got::Unread);
+  TEST_ASSERT_EQUAL_UINT32(4, r.reads);
+  TEST_ASSERT_TRUE(r.faulted);
+  TEST_ASSERT_EQUAL_size_t(0, c.q.size());
+  // Mended: every line.
+  c.remount();
+  r = c.read();
+  TEST_ASSERT_TRUE(r.got == queuefile::Got::Whole);
+  TEST_ASSERT_FALSE(r.faulted);
+  TEST_ASSERT_EQUAL_UINT32(lines.size(), r.read.entries);
+  TEST_ASSERT_EQUAL_UINT32(0, r.read.dropped);
+}
+
+// A read again, to leave out a line the card says is gone, fails with the file already
+// whole: the first read stands, and the caller hears of the fault (a read with no answer
+// makes FatFs's next call a remount: main.cpp's guard restarts at one under a card job).
+void test_on_fatfs_a_read_again_that_fails_says_so() {
+  QueueCard c;
+  c.put(kQueue, bytesOf(queueText({kTrackA, kTrackB, "/music/Band/Live/09 - gone.mp3"})));
+  fatmodel::Drive& d = fatmodel::drive(0);
+  c.remount();
+  const uint64_t asked0 = d.asked.reads;
+  queuefile::Read r = c.read();
+  TEST_ASSERT_TRUE(r.got == queuefile::Got::Whole);
+  TEST_ASSERT_FALSE(r.faulted);
+  TEST_ASSERT_EQUAL_UINT32(1, c.lookup.gone());
+  TEST_ASSERT_EQUAL_UINT32(2, r.read.entries);
+  const uint64_t reads = d.asked.reads - asked0;
+  // The last disk read is the read again's.
+  c.remount();
+  c.q.release();
+  d.failFrom = d.asked.reads + reads - 1;
+  d.failTo = d.failFrom + 1;
+  r = c.read();
+  d.failFrom = d.failTo = UINT64_MAX;
+  TEST_ASSERT_TRUE(r.got == queuefile::Got::Whole);
+  TEST_ASSERT_TRUE(r.faulted);
+  TEST_ASSERT_EQUAL_UINT32(1, r.reads);
+  TEST_ASSERT_EQUAL_UINT32(3, r.read.entries);  // the first read's, the gone line named nothing
+  TEST_ASSERT_EQUAL_size_t(3, c.q.size());
+  char path[TrackCatalog::kMaxPath];
+  c.catalog.path(c.q.trackAt(1), path, sizeof(path));
+  TEST_ASSERT_EQUAL_STRING(kTrackB, path);
+  TEST_ASSERT_EQUAL_UINT32(0, c.catalog.path(c.q.trackAt(2), path, sizeof(path)));
+}
+
+// What is the file's own fault, or no file at all: None, read once, so the caller's
+// default queue goes on as it always has.
+void test_on_fatfs_no_queue_txt_a_cut_or_damaged_one_are_no_queue() {
+  {
+    QueueCard c;  // (no file: FR_NO_FILE, no waits)
+    std::vector<uint32_t> waits;
+    QueueCard::s_waits = &waits;
+    queuefile::Read r = c.read();
+    QueueCard::s_waits = nullptr;
+    TEST_ASSERT_TRUE(r.got == queuefile::Got::None);
+    TEST_ASSERT_EQUAL_UINT32(1, r.reads);
+    TEST_ASSERT_EQUAL_size_t(0, waits.size());
+    TEST_ASSERT_NULL(r.notWhole);
+    // Cut short, a line less than it says: every read answered. (Nothing asked of the
+    // card about its lines: it isn't a queue.)
+    std::string t = queueText({kTrackB, kTrackB, kTrackB});
+    t.resize(t.size() - std::strlen(kTrackB) - 1);
+    c.put(kQueue, bytesOf(t));
+    r = c.read();
+    TEST_ASSERT_TRUE(r.got == queuefile::Got::None);
+    TEST_ASSERT_EQUAL_UINT32(1, r.reads);
+    TEST_ASSERT_EQUAL_STRING(kQueue, r.notWhole);
+    TEST_ASSERT_EQUAL_UINT32(0, c.lookup.kept() + c.lookup.gone() + c.lookup.unasked());
+  }
+  // Its own directory entry damaged (FR_INT_ERR, at the open or the first read): no read
+  // again changes that.
+  for (const uint32_t cluster : {1u, 0x0FFFFFF0u}) {
+    QueueCard c;
+    c.put(kQueue, bytesOf(queueText({kTrackA, kTrackA})));
+    c.damageEntry(".player", "QUEUE", cluster);
+    const queuefile::Read r = c.read();
+    TEST_ASSERT_TRUE(r.got == queuefile::Got::None);
+    TEST_ASSERT_EQUAL_UINT32(1, r.reads);
+  }
+}
+
+// queue.tmp is only whole when a cut fell after its flush: the newest. It stands in for a
+// queue.txt that is gone, as ever, and for one nobody could read; one that isn't whole, for neither.
+void test_on_fatfs_queue_tmp_stands_in() {
+  {
+    QueueCard c;
+    c.put(kQueueTmp, bytesOf(queueText({kTrackA})));
+    queuefile::Read r = c.read();
+    TEST_ASSERT_TRUE(r.got == queuefile::Got::Whole);
+    TEST_ASSERT_EQUAL_STRING(kQueueTmp, r.path);
+    // Beside a queue.txt: queue.txt's, as ever.
+    c.put(kQueue, bytesOf(queueText({kTrackA, kTrackA})));
+    r = c.read();
+    TEST_ASSERT_EQUAL_STRING(kQueue, r.path);
+    TEST_ASSERT_EQUAL_size_t(2, c.q.size());
+    // queue.txt's data sector fails, for good: queue.tmp.
+    c.remount();
+    tagstore::File* f = c.fs.open(kQueue, tagstore::Fs::Mode::Read);
+    TEST_ASSERT_NOT_NULL(f);
+    uint8_t b[8];
+    TEST_ASSERT_TRUE(f->read(0, b, sizeof(b)));
+    const uint32_t sector = static_cast<uint32_t>(static_cast<cardfat::FatFile*>(f)->fil.sect);
+    c.fs.close(f);
+    fatmodel::Drive& d = fatmodel::drive(0);
+    c.remount();
+    d.failSector = sector;
+    r = c.read();
+    d.failSector = UINT64_MAX;
+    TEST_ASSERT_TRUE(r.got == queuefile::Got::Whole);
+    TEST_ASSERT_EQUAL_STRING(kQueueTmp, r.path);
+    TEST_ASSERT_EQUAL_size_t(1, c.q.size());
+    // And with queue.tmp not whole: unread, not no queue.
+    c.put(kQueueTmp, bytesOf(std::string("not a queue")));
+    c.remount();
+    d.failSector = sector;
+    r = c.read();
+    d.failSector = UINT64_MAX;
+    TEST_ASSERT_TRUE(r.got == queuefile::Got::Unread);
+  }
+}
+
+// Case 2 of 3.2.2: a line the library doesn't list leaves only when the card says it's gone.
+void test_on_fatfs_a_line_leaves_only_when_its_file_is_gone() {
+  QueueCard c;
+  const std::string gone = "/music/Band/Live/09 - gone.mp3";
+  const std::string noFolder = "/music/No Band/Album/01 - gone.mp3";
+  c.put(kQueue, bytesOf(queueText({kTrackA, kTrackB, gone, noFolder, "tone:no such tone", kTrackB}, 2)));
+  queuefile::Read r = c.read();
+  TEST_ASSERT_TRUE(r.got == queuefile::Got::Whole);
+  TEST_ASSERT_EQUAL_UINT32(3, r.read.entries);
+  TEST_ASSERT_EQUAL_UINT32(3, r.read.dropped);
+  TEST_ASSERT_EQUAL_UINT32(0, r.read.held);
+  TEST_ASSERT_EQUAL_UINT32(2, c.lookup.kept());
+  TEST_ASSERT_EQUAL_UINT32(2, c.lookup.gone());
+  TEST_ASSERT_EQUAL_UINT32(0, c.lookup.unasked());
+  TEST_ASSERT_FALSE(c.lookup.failed());
+  char path[TrackCatalog::kMaxPath];
+  c.catalog.path(c.q.trackAt(1), path, sizeof(path));
+  TEST_ASSERT_EQUAL_STRING(kTrackB, path);
+  c.catalog.path(c.q.trackAt(2), path, sizeof(path));
+  TEST_ASSERT_EQUAL_STRING(kTrackB, path);
+  // The current line was the first gone: the next that stayed.
+  TEST_ASSERT_EQUAL_INT(2, c.q.current());
+  TEST_ASSERT_FALSE(r.read.currentKept);
+  // A library that lists it: no question.
+  c.put(kQueue, bytesOf(queueText({kTrackA})));
+  r = c.read();
+  TEST_ASSERT_EQUAL_UINT32(1, r.reads);
+  TEST_ASSERT_EQUAL_UINT32(0, c.lookup.kept() + c.lookup.gone() + c.lookup.unasked());
+  // No lookup given (no library to read against): dropped, no question.
+  c.put(kQueue, bytesOf(queueText({kTrackB, kTrackA})));
+  r = c.read(true, false);
+  TEST_ASSERT_EQUAL_UINT32(1, r.read.entries);
+  TEST_ASSERT_EQUAL_UINT32(1, r.read.dropped);
+}
+
+// A question the card fails, wherever it falls: that line stays, and every line after it
+// with no more questions (a card that has stopped answering costs about 0.6 s a question).
+void test_on_fatfs_a_question_that_fails_keeps_the_lines_and_stops_asking() {
+  QueueCard c;
+  c.put(kTrackC, bytesOf("c"));
+  const std::vector<std::string> lines = {kTrackB, "/music/Band/Live/09 - gone.mp3", kTrackB, kTrackC};
+  fatmodel::Drive& d = fatmodel::drive(0);
+  // The queue's file read first, on its own, so the fault below falls on a question.
+  const std::string text = queueText(lines);
+  c.put(kQueue, bytesOf(text));
+  c.remount();
+  const auto asked = [&](queuefile::Lookup& lookup) {
+    lookup.begin();
+    MemorySource first(text.data(), text.size());
+    queuetext::Restored r = queuetext::read(first, c.catalog, c.q, nullptr, nullptr, nullptr, nullptr, &lookup);
+    if (r.ok && lookup.settle()) {
+      MemorySource again(text.data(), text.size());
+      r = queuetext::read(again, c.catalog, c.q, nullptr, nullptr, nullptr, nullptr, &lookup);
+    }
+    return r;
+  };
+  // Read through memory: only the questions go to the card.
+  for (uint64_t k = 0; k < 8; ++k) {
+    c.q.release();
+    c.remount();
+    d.failFrom = d.asked.reads + k;
+    d.failTo = d.failFrom + 1;
+    const queuetext::Restored r = asked(c.lookup);
+    d.failFrom = d.failTo = UINT64_MAX;
+    TEST_ASSERT_TRUE(r.ok);
+    // No line that may be on the card left out, and only the card's own word drops one.
+    TEST_ASSERT_EQUAL_UINT32(4 - c.lookup.gone(), r.entries);
+    TEST_ASSERT_EQUAL_UINT32(c.lookup.kept() + c.lookup.unasked(), r.entries);
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32(1, c.lookup.gone());
+    if (c.lookup.failed()) TEST_ASSERT_GREATER_THAN_UINT32(0, c.lookup.unasked());
+  }
+  // Every read failing: nothing asked past the first, all four by their paths.
+  c.q.release();
+  c.remount();
+  d.failFrom = d.asked.reads;
+  d.failTo = UINT64_MAX - 1;
+  const uint64_t asked0 = d.asked.reads;
+  const queuetext::Restored r = asked(c.lookup);
+  const uint64_t reads = d.asked.reads - asked0;
+  d.failFrom = d.failTo = UINT64_MAX;
+  TEST_ASSERT_TRUE(r.ok);
+  TEST_ASSERT_EQUAL_UINT32(4, r.entries);
+  TEST_ASSERT_EQUAL_UINT32(4, c.lookup.unasked());
+  TEST_ASSERT_TRUE(c.lookup.failed());
+  TEST_ASSERT_LESS_OR_EQUAL_UINT32(2, static_cast<uint32_t>(reads));
+}
+
+// The time is up: the lines left stay by their paths, for the next read to ask about.
+void test_on_fatfs_a_read_asks_no_longer_than_its_time() {
+  QueueCard c;
+  const std::vector<std::string> lines = {"/music/Band/Live/09 - gone.mp3", "/music/Band/Live/08 - gone.mp3"};
+  const std::string text = queueText(lines);
+  c.put(kQueue, bytesOf(text));
+  c.lookup.limit(lookupNow, 100);
+  g_lookupStep = 0;
+  queuefile::Read r = c.read();
+  TEST_ASSERT_EQUAL_UINT32(2, c.lookup.gone());
+  TEST_ASSERT_EQUAL_UINT32(0, r.read.entries);
+  // Each look of the clock 60 ms on: time for two, the settle's first read of it the start.
+  g_lookupStep = 60;
+  r = c.read();
+  TEST_ASSERT_EQUAL_UINT32(1, c.lookup.gone());
+  TEST_ASSERT_EQUAL_UINT32(1, c.lookup.unasked());
+  TEST_ASSERT_EQUAL_UINT32(1, r.read.entries);
+  TEST_ASSERT_FALSE(c.lookup.failed());
+  // Nothing past the time, no file gone: one read of the file.
+  g_lookupStep = 1000;
+  r = c.read();
+  TEST_ASSERT_EQUAL_UINT32(0, c.lookup.gone());
+  TEST_ASSERT_EQUAL_UINT32(2, c.lookup.unasked());
+  TEST_ASSERT_EQUAL_UINT32(2, r.read.entries);
+  c.lookup.limit(nullptr, 0);
+  g_lookupStep = 0;
+}
+
+// Under the wrapper, as the firmware. A read of queue.txt with no answer, the card back at once
+// (the look, docs/METADATA.md 3.8): that read's error and no remount, and the boot's next read has
+// the file. A question the same: the line stays by its path, and nothing mounts. A card silent past
+// its init: the mark stands, and the boot's next read is FatFs's remount (at the boot, not under a
+// job: QueueStore::restore()'s echoNow() is the same call).
+void mendSilence(uint32_t) {
+  fatmodel::Drive& d = fatmodel::drive(0);
+  d.noAnswerLba = UINT32_MAX;
+  d.silentForGood = false;
+}
+void test_on_fatfs_queue_txt_under_the_look() {
+  QueueCard c;
+  c.put(kQueue, bytesOf(queueText({kTrackA, kTrackB}, 1)));
+  static SectorCache cache;
+  TEST_ASSERT_TRUE(cache.capacity() || cache.begin(SectorCache::kDefaultEntries));
+  static uint8_t scratch[fatmodel::kSS];
+  fatmodel::Slot slot(0);
+  fatmodel::Link link(0);
+  CachedDrive wrapper(cache, slot);
+  wrapper.setScratch(scratch);
+  wrapper.setLink(&link);
+  fatmodel::Drive& d = fatmodel::drive(0);
+  d.wrapper = &wrapper;
+  d.fs = &Card::fatfs;
+  const auto sectorOf = [](DWORD cluster) {
+    return static_cast<uint32_t>(Card::fatfs.database) + (static_cast<uint32_t>(cluster) - 2) * Card::fatfs.csize;
+  };
+  FIL f;
+  TEST_ASSERT_EQUAL_INT(FR_OK, f_open(&f, fatmodel::path(0, ".player/queue.txt").c_str(), FA_READ));
+  const uint32_t data = sectorOf(f.obj.sclust);
+  f_close(&f);
+  DIR dir;
+  TEST_ASSERT_EQUAL_INT(FR_OK, f_opendir(&dir, fatmodel::path(0, "music/Band/Live").c_str()));
+  const uint32_t folder = sectorOf(dir.obj.sclust);
+  f_closedir(&dir);
+  c.remount();
+  TEST_ASSERT_TRUE(wrapper.remember(d.disk->sectors()));
+  const auto read = [&]() {
+    c.q.release();
+    return queuefile::readAtBoot(c.files, kQueue, kQueueTmp, c.catalog, c.q, nullptr, nullptr, nullptr, nullptr,
+                                 mendSilence, &c.lookup);
+  };
+
+  // The file's own sector.
+  d.noAnswerLba = data;
+  queuefile::Read r = read();
+  TEST_ASSERT_TRUE(r.got == queuefile::Got::Whole);
+  TEST_ASSERT_EQUAL_UINT32(2, r.reads);
+  TEST_ASSERT_TRUE(r.faulted);
+  TEST_ASSERT_EQUAL_UINT32(2, c.q.size());
+  TEST_ASSERT_EQUAL_UINT32(1, c.lookup.kept());  // the second line, by its path: the card has it
+  TEST_ASSERT_EQUAL_UINT32(0, wrapper.remounts());
+  TEST_ASSERT_EQUAL_UINT32(1, wrapper.kept());
+
+  // A question: the folder of the line the library doesn't list.
+  c.remount();
+  uint32_t remounts = wrapper.remounts();
+  d.noAnswerLba = folder;
+  r = read();
+  d.noAnswerLba = UINT32_MAX;
+  TEST_ASSERT_TRUE(r.got == queuefile::Got::Whole);
+  TEST_ASSERT_EQUAL_UINT32(1, r.reads);
+  TEST_ASSERT_FALSE(r.faulted);
+  TEST_ASSERT_EQUAL_UINT32(2, c.q.size());
+  TEST_ASSERT_TRUE(c.lookup.failed());
+  TEST_ASSERT_EQUAL_UINT32(1, c.lookup.unasked());
+  TEST_ASSERT_EQUAL_UINT32(remounts, wrapper.remounts());
+  TEST_ASSERT_EQUAL_UINT32(2, wrapper.kept());
+
+  // The file's sector, the card silent past its init.
+  c.remount();
+  remounts = wrapper.remounts();
+  d.noAnswerLba = data;
+  d.silentForGood = true;
+  r = read();
+  TEST_ASSERT_TRUE(r.got == queuefile::Got::Whole);
+  TEST_ASSERT_EQUAL_UINT32(2, r.reads);
+  TEST_ASSERT_TRUE(r.faulted);
+  TEST_ASSERT_EQUAL_UINT32(2, c.q.size());
+  TEST_ASSERT_EQUAL_UINT32(remounts + 1, wrapper.remounts());
+  TEST_ASSERT_FALSE(wrapper.foreign());
+  TEST_ASSERT_EQUAL_UINT32(2, wrapper.kept());
+}
+
+// The reason the questions wait for the file to close: one on a card silent past its init makes
+// FatFs's next call a remount, and an open file doesn't survive it. That read, on the way to a
+// line the library leaves out, leaves the queue whole.
+void test_on_fatfs_a_question_with_no_answer_doesnt_lose_the_read() {
+  QueueCard c;
+  c.put(kTrackC, bytesOf("c"));
+  c.put(kQueue, bytesOf(queueText({kTrackB, kTrackC, "/music/Band/Live/09 - gone.mp3", kTrackA})));
+  fatmodel::Drive& d = fatmodel::drive(0);
+  c.remount();
+  // The read of the file itself, then the card stops answering at the first question.
+  const queuefile::Read clean = c.read();
+  TEST_ASSERT_TRUE(clean.got == queuefile::Got::Whole);
+  TEST_ASSERT_EQUAL_UINT32(3, clean.read.entries);
+  c.remount();
+  c.lookup.begin();
+  bool cardFailed = false;
+  ByteSource* in = c.files.open(kQueue, &cardFailed);
+  TEST_ASSERT_NOT_NULL(in);
+  const queuetext::Restored first = queuetext::read(*in, c.catalog, c.q, nullptr, nullptr, nullptr, nullptr, &c.lookup);
+  TEST_ASSERT_FALSE(c.files.close());
+  TEST_ASSERT_TRUE(first.ok);
+  TEST_ASSERT_EQUAL_UINT32(4, first.entries);  // every line, the card not asked yet
+  d.noInit = true;  // (what a read with no answer leaves: STA_NOINIT, FatFs's next call mounts again)
+  d.failFrom = d.asked.reads;
+  d.failTo = UINT64_MAX - 1;
+  const bool again = c.lookup.settle();
+  d.failFrom = d.failTo = UINT64_MAX;
+  d.noInit = false;
+  TEST_ASSERT_FALSE(again);
+  TEST_ASSERT_TRUE(c.lookup.failed());
+  TEST_ASSERT_EQUAL_UINT32(3, c.lookup.unasked());
+  TEST_ASSERT_EQUAL_UINT32(4, c.q.size());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_whole_card_reads_whole_and_says_no_fault);
@@ -1003,5 +1546,16 @@ int main(int, char**) {
   RUN_TEST(test_on_fatfs_library_idx_is_never_missing_or_corrupt_for_a_read_that_failed);
   RUN_TEST(test_on_fatfs_a_damaged_directory_entry_is_the_files_fault_at_the_boot_too);
   RUN_TEST(test_on_fatfs_an_entry_says_whose_word_it_is);
+  RUN_TEST(test_on_fatfs_look_says_whose_word_it_is);
+  RUN_TEST(test_on_fatfs_a_read_of_queue_txt_that_fails_is_never_no_queue);
+  RUN_TEST(test_on_fatfs_a_read_that_fails_in_the_last_line_is_no_whole_file);
+  RUN_TEST(test_on_fatfs_a_read_again_that_fails_says_so);
+  RUN_TEST(test_on_fatfs_no_queue_txt_a_cut_or_damaged_one_are_no_queue);
+  RUN_TEST(test_on_fatfs_queue_tmp_stands_in);
+  RUN_TEST(test_on_fatfs_a_line_leaves_only_when_its_file_is_gone);
+  RUN_TEST(test_on_fatfs_a_question_that_fails_keeps_the_lines_and_stops_asking);
+  RUN_TEST(test_on_fatfs_a_read_asks_no_longer_than_its_time);
+  RUN_TEST(test_on_fatfs_queue_txt_under_the_look);
+  RUN_TEST(test_on_fatfs_a_question_with_no_answer_doesnt_lose_the_read);
   return UNITY_END();
 }

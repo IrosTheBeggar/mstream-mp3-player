@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "ByteStream.h"
 #include "CardContainer.h"
 #include "CardContract.h"
 #include "CardTags.h"
@@ -226,6 +227,14 @@ public:
     e.firstCluster = e.there ? firstCluster(path) : 0;
     return e;
   }
+  // Whether `path` is a file on the card, for whoever drops what isn't (queuefile::Lookup).
+  // Gone: the card was read, and it isn't there. Unknown: the card failed (as openRead()),
+  // or the file system's records of the way to it are damaged: it may be there all the same.
+  enum class Seen : uint8_t { There, Gone, Unknown };
+  virtual Seen look(const char* path) {
+    const Entry e = entry(path);
+    return e.cardFailed ? Seen::Unknown : e.there ? Seen::There : Seen::Gone;
+  }
   // f_close: a written file is synced first. The File is gone either way.
   virtual bool close(File* f) = 0;
   virtual bool exists(const char* path) = 0;
@@ -238,6 +247,31 @@ public:
   // give the same non-zero value share a chain. 0: missing, or empty (no
   // cluster).
   virtual uint32_t firstCluster(const char* path) = 0;
+};
+
+// A file of the card as a ByteSource (LibraryIndex's streams, the queue's text).
+class FileIn : public ByteSource {
+public:
+  explicit FileIn(File& f) : f_(f) {}
+  size_t read(void* data, size_t n) override {
+    const uint32_t left = f_.size() > at_ ? f_.size() - at_ : 0;
+    const uint32_t k = static_cast<uint32_t>(n < left ? n : left);
+    if (k == 0) return 0;
+    if (!f_.read(at_, data, k)) {
+      failed_ = !f_.damaged();
+      return 0;
+    }
+    at_ += k;
+    return k;
+  }
+  // The stream ended on a read the card failed, not at the file's end or on a file
+  // whose own records are damaged: what the reader made of it says nothing of the file.
+  bool failed() const override { return failed_; }
+
+private:
+  File& f_;
+  uint32_t at_ = 0;
+  bool failed_ = false;
 };
 
 // ---------------------------------------------------------------------------

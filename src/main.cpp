@@ -128,7 +128,7 @@ static Frozen frozen;
 // (Shuffles draw from esp_random(): fresh hardware entropy for each one.)
 static QueueModel queue(psramAlloc, psramFree, esp_random);
 static PlaybackController player(audio, queue, library.catalog());
-static QueueStore queueStore(storage, queue, player, library.catalog());
+static QueueStore queueStore(storage, queue, player, library.catalog(), library.unlisted());
 static DanceMode danceMode(audio, player);
 static Screenshot shot;
 static Haptics haptics;
@@ -716,6 +716,7 @@ struct MainUiHost : ui::UiHost {
     s.libNone = sources.none;
     s.libraryRecords = cardTasks && cardTasks->active();
     s.libraryHeld = library.cardJobsHeld();
+    s.queueUnread = queueStore.fileUnread();
     // The battery is an I2C read of the power chip: every 10 s is plenty.
     const uint32_t now = millis();
     if (batteryAtMs == 0 || now - batteryAtMs >= 10000) {
@@ -3499,6 +3500,9 @@ void setup() {
   // ~13 KB for its two copies).
   const uint32_t freeBeforeLibrary = diag::heap().internalFree;
   library.begin();
+  // (Before the breaker's hold, which says nothing of this boot's reads: the queue's file still
+  // gets the boot's waits under it.)
+  const bool bootReadsFailed = library.bootReadsFailed();
   {
     uint32_t restarts = 0;
     heldByBreaker = cardbreaker::atBoot(cardBreakerWord, esp_reset_reason() == ESP_RST_SW, &restarts);
@@ -3512,12 +3516,15 @@ void setup() {
   // The repeat mode saved (Off unless changed), before the queue and the
   // first play; shuffle comes back with the queue's file.
   player.setRepeat(queueStore.loadRepeat());
-  const bool queueRead = queueStore.restore(library.listsCard());
-  if (!queueRead && library.cardJobsHeld()) {
-    // The card failed a read at this boot, and this may be another: a default queue
-    // would be saved over a queue.txt that is only unread. Empty until a boot reads it.
+  void (*bootWait)(uint32_t) = [](uint32_t ms) { delay(ms); };
+  const QueueStore::Restore queueRead =
+      queueStore.restore(library.listsCard(), bootReadsFailed ? nullptr : bootWait);
+  if (queueRead == QueueStore::Restore::None && library.cardJobsHeld()) {
+    // The card is in trouble at this boot, and the file's read may have come to nothing for
+    // another reason (no PSRAM for it): a default queue would be saved over a queue.txt that
+    // may only be unread. Empty until a boot reads it.
     Serial.println("[queue] no queue read at a boot that holds the card jobs: queue.txt left as it is");
-  } else if (!queueRead) {
+  } else if (queueRead == QueueStore::Restore::None) {
     queueEverything(false);
     // Past the queue's cap, the library's first 5,000 (QueueModel::assign()).
     const LibraryIndex* lib = library.index();

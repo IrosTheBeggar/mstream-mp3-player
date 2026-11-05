@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "LibraryIndex.h"
+#include "QueueFile.h"
 
 namespace queueremap {
 
@@ -152,21 +153,42 @@ Result Carry::finish(QueueModel& queue, QueueSaver& saver, PlaybackController& p
   player.setFenced(false);
 
   // 4. Read back.
+  const LibraryIndex* index = catalog.index();
+  // (A rebuild that failed before touching the index leaves the ids as
+  // they were: the queue reads back the same.)
+  res_.noLibrary = !index || !index->ready() || index->trackCount() == 0;
+  queuetext::UnknownLines* unknown = card.unknownLines(!res_.noLibrary);
+  const auto readIn = [&](ByteSource& in) {
+    return queuetext::read(in, catalog, queue, thePosition, &position_, alloc_, free_, unknown);
+  };
   if (res_.via == Via::File) {
-    if (ByteSource* in = card.openFile()) {
-      res_.read = queuetext::read(*in, catalog, queue, thePosition, &position_, alloc_, free_);
-      card.closeFile();
+    const auto fromFile = [&]() {
+      return queuefile::readSettled([&]() { return card.openFile(); }, [&]() { card.closeFile(); }, readIn, unknown);
+    };
+    res_.read = fromFile();
+    // Once more, at once: the queue goes for the session otherwise, and most read errors
+    // are a glitch. (On a card silent past its init FatFs's next call is a remount, whoever's:
+    // no worse here.)
+    if (!res_.read.ok) {
+      unknown = card.unknownLines(!res_.noLibrary);
+      res_.read = fromFile();
     }
   } else if (res_.via == Via::Memory) {
-    MemorySource in(text_, textSize_);
-    res_.read = queuetext::read(in, catalog, queue, thePosition, &position_, alloc_, free_);
+    MemorySource text(text_, textSize_);
+    res_.read = queuefile::readSettled(
+        [&]() -> ByteSource* {
+          text = MemorySource(text_, textSize_);
+          return &text;
+        },
+        []() {}, readIn, unknown);
   }
   dropText();
   Result& res = res_;
   if (!res.read.ok) {
     // Cleared (release() kept the mode). The file keeps the last queue
     // saved, and its line: nothing is written over it until the listener
-    // edits this one, and the next remap reads it from that line.
+    // edits this one, and whoever reads it next (the next boot; the next remap,
+    // where Card::openFile() still gives it) reads it from that line.
     player.queueReplaced(false);
     saver.keptFile(saver.generation(), saver.fileLine());
     return res;
@@ -175,10 +197,6 @@ Result Carry::finish(QueueModel& queue, QueueSaver& saver, PlaybackController& p
   uint32_t after = 0;
   res.read.currentKept = hadCurrent_ && currentFile(queue, catalog, &after) && after == before_;
 
-  const LibraryIndex* index = catalog.index();
-  // (A rebuild that failed before touching the index leaves the ids as
-  // they were: the queue reads back the same.)
-  res.noLibrary = !index || !index->ready() || index->trackCount() == 0;
   const uint32_t generation =
       res.read.header.generation > saver.generation() ? res.read.header.generation : saver.generation();
   if (res.noLibrary) {
@@ -198,10 +216,16 @@ Result Carry::finish(QueueModel& queue, QueueSaver& saver, PlaybackController& p
     }
   } else {
     player.queueReplaced(res.read.currentKept);
-    // The file is this queue unless tracks were dropped or left out by the
-    // cap (a file from before it), or it never got there (the text came
-    // through memory): then written again.
-    saver.loaded(generation, res.read.dropped > 0 || res.read.capped > 0 || res.via == Via::Memory, nowMs);
+    if (res.read.held > 0) {
+      // Lines that may be on the card with no room here: the file keeps them. The
+      // read was from the file's own line.
+      saver.keptFile(generation, position_);
+    } else {
+      // The file is this queue unless tracks were dropped or left out by the
+      // cap (a file from before it), or it never got there (the text came
+      // through memory): then written again.
+      saver.loaded(generation, res.read.dropped > 0 || res.read.capped > 0 || res.via == Via::Memory, nowMs);
+    }
   }
   if (hadStart_ && res.read.currentKept) {
     player.setStartPoint(startMs_, startDurationMs_, &startAnchor_);

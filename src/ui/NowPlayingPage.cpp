@@ -771,7 +771,8 @@ bool NowPlayingPage::emptyState(EmptyState& e) const {
   }
   e.icon = &icons::kNote;
   e.title = tr(S::empty_nothing_playing_title);
-  e.lines = tr(S::empty_pick_in_library);  // (fits: the longer one didn't)
+  // (Fits: the longer one didn't. Unread: what plays next replaces the file, and a restart may bring it back.)
+  e.lines = tr(s.queueUnread ? S::library_row_rescan_unread : S::empty_pick_in_library);
   e.buttons[0] = tr(S::empty_open_library);
   e.buttonIcons[0] = &icons::kLibrary;
   if (autodjview::emptyButton(s.autoDj, s.libraryTracks)) {

@@ -7,10 +7,12 @@
 
 #include "PlaybackController.h"
 #include "QueueModel.h"
+#include "QueueFile.h"
 #include "QueueRemap.h"
 #include "QueueSaver.h"
 #include "QueueText.h"
 #include "TrackCatalog.h"
+#include "storage/CardFat.h"
 #include "storage/FileStream.h"
 #include "storage/LocalStorage.h"
 
@@ -39,16 +41,29 @@
 // When and what to write is QueueSaver's (lib/core, host-tested); this is
 // its card and NVS. After a boot the queue is where it was, stopped (at
 // the second it paused at, if it did): nothing starts by itself.
+//
+// A line the library doesn't list stays in the queue by its path, on the card, unless
+// the card says its file is gone (lib/core QueueFile: `unlisted` holds them, the
+// catalog answers for them).
 class QueueStore : private QueueSaver::Store {
 public:
-  QueueStore(LocalStorage& storage, QueueModel& queue, PlaybackController& player, const TrackCatalog& catalog);
+  QueueStore(LocalStorage& storage, QueueModel& queue, PlaybackController& player, const TrackCatalog& catalog,
+             TrackCatalog::Unlisted& unlisted);
 
+  enum class Restore : uint8_t {
+    Read,    // the queue is the file's
+    None,    // none, or not a whole file: the caller sets up a default queue
+    Unread,  // the card failed each read of it: the queue is empty, and nothing goes over the file
+  };
   // At boot, after the library: the saved queue and position, and the
-  // resume point (the player's start point). False: none (or unreadable);
-  // the caller sets up a default queue. `libraryListsCard` false
+  // resume point (the player's start point). `libraryListsCard` false
   // (Library::listsCard()): tracks it doesn't list may still be on the card, so the
-  // file keeps them, as with no library at all, for the next boot.
-  bool restore(bool libraryListsCard = true);
+  // file keeps them, as with no library at all, for the next boot. `wait`: the boot's
+  // waits between reads the card fails (tagstore::kBootWaitsMs); nullptr: one read.
+  Restore restore(bool libraryListsCard = true, void (*wait)(uint32_t ms) = nullptr);
+  // The boot, or a read back (remapFinish()), couldn't read the file, and the queue is empty
+  // for it. Nothing has replaced it since: the first write of a queue with something in it will.
+  bool fileUnread() const { return unread_; }
   // The repeat mode saved (Off when none is, or an unknown value), logged.
   // At boot, before restore() and the first play.
   PlaybackController::Repeat loadRepeat();
@@ -62,8 +77,10 @@ public:
   // changed since it began), an edit not yet written, the position, the
   // resume point. True: the card has the queue as it is (or there is no
   // storage; or it is carried across a build: queue.txt was flushed then,
-  // and the queue's memory is the build's). Carried as text, the card having
-  // refused that flush: false: queue.txt keeps the last one saved.
+  // and the queue's memory is the build's; or the queue is empty for a file
+  // nobody could read, fileUnread(): nothing to save, the file as it is).
+  // Carried as text, the card having refused that flush: false: queue.txt
+  // keeps the last one saved.
   bool flushNow();
   // Something on its way to the card (a write under way, an edit or a
   // move waiting its delay; not a failed one waiting its retry).
@@ -113,12 +130,25 @@ private:
   // The card side of the remap (lib/core QueueRemap: queueremap::Card).
   struct RemapCard;
   void logRemap(const queueremap::Result& r);
+  // The queue's files, read: through FatFs on the card, the VFS on the flash.
+  struct QueueFiles;
+  bool onCard() const { return storage_.onCard() && cardfat::ready(); }
+  // Nobody could read the file: the queue is empty, and the file keeps its line and its
+  // resume point for the next boot (no read of it again this session: such a read on a card
+  // silent past its init is a remount, with a job under way a restart).
+  void markUnread();
+  // What leaves the queue empty of such a file isn't saved over it.
+  void keepUnread();
 
   LocalStorage& storage_;
   QueueModel& queue_;
   PlaybackController& player_;
   const TrackCatalog& catalog_;
   QueueSaver saver_;
+  TrackCatalog::Unlisted& unlisted_;
+  cardfat::FatFs fat_;
+  queuefile::Lookup lookup_;
+  bool unread_ = false;
   uint32_t failuresSeen_ = 0;
 
   File file_;
