@@ -442,6 +442,14 @@ struct SleepGate : PlaybackController::NextGate {
 };
 static SleepGate sleepGate;
 
+// The player's card (PlaybackController::Card): the SD wrapper says the card is out, FatFs's last
+// mount having found nothing answering (CachedDrive::cardOut(); never without the wrapper). A
+// track that fails to start then holds where it is, and is tried again (docs/METADATA.md 3.8).
+struct CardWatch : PlaybackController::Card {
+  bool out() const override { return sectordisk::cardOut(); }
+};
+static CardWatch cardWatch;
+
 // What the touch buttons drive (ButtonPolicy decides which button does what).
 struct ButtonTransport : ButtonPolicy::Transport {
   void prev() override { prevTrack(); }
@@ -3610,6 +3618,7 @@ void setup() {
                       : "paired on Output > Pair new headphones only (never picked by the Core2 itself)");
   }
   player.setHold(&outputHold);  // a play waits while the headphones aren't connected (PlayGate)
+  player.setCard(&cardWatch);   // a play that fails with the card out holds there (the card hold)
   // Gapless playback (docs/GAPLESS.md): the player names what follows, the
   // backend joins it; never past the sleep timer's end.
   player.setNextGate(&sleepGate);
@@ -3774,6 +3783,34 @@ void loop() {
     Serial.printf("[queue] now at %d of %lu (%s)\n", queue.current() + 1, (unsigned long)queue.size(), stateName());
     lastEntry = queue.currentKey();
     lastFile = file;
+  }
+  // The card hold (PlaybackController's, docs/METADATA.md 3.8): a play that failed with the
+  // card out holds at its entry, tried again, instead of the queue running out.
+  {
+    static PlaybackController::CardHolds seen;
+    const PlaybackController::CardHolds& h = player.cardHolds();
+    if (h.begun != seen.begun) {
+      Serial.printf("[queue] the card is out: %d of %lu holds there, not skipped; tried again in %lu s, then twice as "
+                    "long, up to %lu s, for %lu s, then paused\n",
+                    queue.current() + 1, (unsigned long)queue.size(),
+                    (unsigned long)(PlaybackController::kCardRetryMs / 1000),
+                    (unsigned long)(PlaybackController::kCardRetryMaxMs / 1000),
+                    (unsigned long)(PlaybackController::kCardWaitMs / 1000));
+    }
+    if (h.retries != seen.retries) {
+      Serial.printf("[queue] the card hold: %d of %lu tried again (%lu since the boot)\n", queue.current() + 1,
+                    (unsigned long)queue.size(), (unsigned long)h.retries);
+    }
+    if (h.resumed != seen.resumed) {
+      Serial.printf("[queue] the card answered: %d of %lu plays on\n", queue.current() + 1,
+                    (unsigned long)queue.size());
+    }
+    if (h.paused != seen.paused) {
+      Serial.printf("[queue] the card still out after %lu s: paused at %d of %lu; Play tries again\n",
+                    (unsigned long)(PlaybackController::kCardWaitMs / 1000), queue.current() + 1,
+                    (unsigned long)queue.size());
+    }
+    seen = h;
   }
   // Repeat One's loops: the same entry again (no new key, so no line above;
   // the dancer keeps its tempo: the same song).

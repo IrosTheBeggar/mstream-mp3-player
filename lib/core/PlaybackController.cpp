@@ -25,6 +25,7 @@ uint32_t hashOfPath(const char* path) {
 
 void PlaybackController::startCurrent() {
   if (!hasTrack()) return;
+  if (!cardTry_) endCardHold();  // (any start but the card hold's own try: the listener's, a skip's)
   endedAtEnd_ = false;  // (a start, or one that waits: the queue isn't finished)
   if (held()) {
     // The output can't be heard yet: this entry waits, selected. The
@@ -52,6 +53,10 @@ void PlaybackController::startNow() {
   start.ms = at;
   start.hintMs = hint;
   if (at > 0) start.anchor = startAnchor_;  // (it goes with the start point)
+  // (Kept for the card hold, which puts it back if this start fails with the card out.)
+  askedDurationMs_ = at > 0 ? startDurationMs_ : 0;
+  askedAnchor_ = start.anchor;
+  askedKey_ = queue_.currentKey();
   clearStartPoint();  // once: a later start of the entry is from its beginning
   playedFromMs_ = at;
   noteLength(hint);  // (a resume point's length, a seek's, a built-in track's)
@@ -358,6 +363,14 @@ bool PlaybackController::startPoint(uint32_t* ms, uint32_t* durationMs, ResumeAn
 
 bool PlaybackController::resumePoint(uint32_t* ms, uint32_t* durationMs, ResumeAnchor* anchor) const {
   if (startPoint(ms, durationMs, anchor)) return true;
+  // The card hold's try under way (its start point taken by the play): where it asked to start,
+  // as while it waits, so the saved point isn't cleared and written again at every try.
+  if (heldForCard() && playedFromMs_ > 0 && askedKey_ == queue_.currentKey()) {
+    *ms = playedFromMs_;
+    *durationMs = askedDurationMs_;
+    if (anchor) *anchor = askedAnchor_;
+    return true;
+  }
   if ((state_ != PlayState::Paused && state_ != PlayState::Waiting) || cued_ || !hasTrack()) return false;
   if (!audio_.positionKnown()) {
     // Paused before the backend took the start up (within ~150 ms of a
@@ -466,13 +479,74 @@ void PlaybackController::pauseAtBoundary() {
 }
 
 void PlaybackController::update(uint32_t nowMs) {
-  (void)nowMs;  // the backend owns the clock via its own loop(); reserved here
+  // (The backend owns the playing clock via its own loop(); `nowMs` times the card hold.)
   if (fenced_) return;  // the queue is away: a natural end is queueReplaced()'s
   Act act(*this);  // a joined track heard first: its end, if it ended too, is its own
-  checkEnd();
+  // A pause, a stop or a wait for the headphones since: the hold's over (the listener's, or
+  // PlayGate's, from there; a cued entry stays cued).
+  if (cardRun_ && state_ != PlayState::Playing) endCardHold();
+  if (cardWaiting_) {
+    stepCardHold(nowMs);  // (the backend let go: no end or failure of its to read till the try)
+    return;
+  }
+  checkEnd(nowMs);
 }
 
-void PlaybackController::checkEnd() {
+bool PlaybackController::cardSaysNothing() const {
+  if (!card_ || !card_->out()) return false;
+  // A reason of the track's own (its rate refused, the reader's words, no RAM for its decoder):
+  // the track's, whatever the card. A file that can't be opened has none.
+  if (audio_.rateRefusal().hz != 0) return false;
+  char note[4];
+  return audio_.failureNote(note, sizeof(note)) == 0;
+}
+
+void PlaybackController::putBackStart() {
+  // (Its own entry's only: a start point belongs to its key.)
+  if (playedFromMs_ == 0 || askedKey_ != queue_.currentKey()) return;
+  startMs_ = playedFromMs_;
+  startDurationMs_ = askedDurationMs_;
+  startKey_ = askedKey_;
+  startAnchor_ = askedAnchor_;
+}
+
+void PlaybackController::holdForCard(uint32_t nowMs) {
+  putBackStart();
+  audio_.stop();  // the failed request let go: the backend holds nothing
+  cued_ = true;
+  if (!cardRun_) {
+    cardRun_ = true;
+    cardSinceMs_ = nowMs;
+    cardWaitMs_ = kCardRetryMs;
+    ++cardHolds_.begun;
+  } else if (nowMs - cardSinceMs_ >= kCardWaitMs) {
+    // Still out: paused there, its place and start point kept. Nothing starts by itself from
+    // here; a play asks again.
+    state_ = PlayState::Paused;
+    endCardHold();
+    ++cardHolds_.paused;
+    return;
+  } else {
+    cardWaitMs_ = std::min(cardWaitMs_ * 2, kCardRetryMaxMs);
+  }
+  cardWaiting_ = true;
+  // (A last try at kCardWaitMs, not past it.)
+  cardRetryAtMs_ = nowMs + std::min(cardWaitMs_, kCardWaitMs - (nowMs - cardSinceMs_));
+}
+
+void PlaybackController::stepCardHold(uint32_t nowMs) {
+  // (The card answering someone else's mount meanwhile: at once.)
+  const bool answers = !card_ || !card_->out();
+  if (!answers && static_cast<int32_t>(nowMs - cardRetryAtMs_) < 0) return;
+  cardWaiting_ = false;
+  ++cardHolds_.retries;
+  // From where it would have started (its start point put back); its open is FatFs's next mount.
+  cardTry_ = true;
+  startCurrent();  // (held for the headphones: it waits, and the wait takes over)
+  cardTry_ = false;
+}
+
+void PlaybackController::checkEnd(uint32_t nowMs) {
   if (state_ != PlayState::Playing) return;
   // A natural end with nothing heard (the position never left 0:00): a
   // track with no samples to play, which every format can hold (an Opus
@@ -486,6 +560,13 @@ void PlaybackController::checkEnd() {
   // queue of nothing but such entries stops (docs/QUEUE-MODES.md).
   const bool empty = !audio_.failed() && audio_.finished() && audio_.positionKnown() && audio_.positionMs() == 0;
   if (audio_.failed() || empty) {
+    // The card out: nothing of the track's (the card hold, the class comment).
+    if (!empty && cardSaysNothing()) {
+      holdForCard(nowMs);
+      return;
+    }
+    // (A try that failed with the card answering is the track's own, as any failure: the skip's
+    // start, or the stop, ends the hold.)
     ++failure_.count;
     failure_.track = queue_.currentTrack();
     failure_.key = queue_.currentKey();
@@ -506,6 +587,11 @@ void PlaybackController::checkEnd() {
       return;
     }
     advance(false);  // a failure moves on (a skip), even with Repeat One
+  } else if (cardRun_ && audio_.positionKnown()) {
+    // The hold's try was taken up: the card answered, the entry plays (an end that came with
+    // it already: the next pass's).
+    ++cardHolds_.resumed;
+    endCardHold();
   } else if (audio_.finished()) {
     failuresInARow_ = 0;
     ++naturalEnds_;

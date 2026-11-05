@@ -277,6 +277,7 @@ bool CachedDrive::remember(uint32_t sectors) {
 }
 
 bool CachedDrive::remounted(uint32_t sectors) {
+  out_.store(false);  // (a card answers: whichever, the guard's verdict below)
   if (!armed_.load()) return true;
   // (The note goes when the card answers a read, the mount's first: not here, where a write-mode
   // call under STA_PROTECT comes and goes with nothing mounted.)
@@ -298,6 +299,7 @@ bool CachedDrive::remounted(uint32_t sectors) {
 }
 
 void CachedDrive::mountFailed() {
+  out_.store(true);
   if (mountFailed_) return;
   mountFailed_ = true;
   mountFailedUs_ = clock_ ? clock_() : 0;

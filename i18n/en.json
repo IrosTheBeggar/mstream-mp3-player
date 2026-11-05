@@ -3305,7 +3305,7 @@
   },
   "card.none_still": "Still no card: is it all the way in?",
   "@card.none_still": {
-    "context": "Note after Try again still finds no card at all (cardformat Unreadable): 'what: what to do'.",
+    "context": "Note after Try again still finds no card at all (cardformat Unreadable): 'what: what to do'. Also the note when a track can't start because the card stopped answering while the player was on (pulled, or loose): the player holds at that track and tries it again.",
     "room": {
       "font": "Body",
       "px": 284,

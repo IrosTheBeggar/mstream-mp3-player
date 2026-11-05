@@ -1689,6 +1689,55 @@ void test_drive_says_when_the_card_came_back() {
   TEST_ASSERT_EQUAL_UINT32(1, d.cardBacks());
 }
 
+// The card out, for the player's card hold: from a mount that found nothing answering to one that
+// finds a card, whichever card (another's verdict is the guard's), armed or not. A read that fails,
+// the look finding the card silent, says nothing of it yet: only FatFs's mounts do.
+void test_drive_says_the_card_is_out_from_a_failed_mount_to_the_next() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev, testClock);
+  uint8_t scratch[kSS], buf[kSS * 2];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  g_nowUs = 1000000;
+  TEST_ASSERT_FALSE(d.cardOut());
+  // Nothing remembered yet (no guard armed): the same.
+  d.init();
+  d.mountFailed();
+  TEST_ASSERT_TRUE(d.cardOut());
+  d.init();  // a mount begun: no answer yet
+  TEST_ASSERT_TRUE(d.cardOut());
+  TEST_ASSERT_TRUE(d.remounted(kCardSectors));
+  TEST_ASSERT_FALSE(d.cardOut());
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  link.answersNow = false;
+  link.initWorks = false;
+  dev.failReads = 1;
+  TEST_ASSERT_FALSE(d.read(100, buf, 2));
+  TEST_ASSERT_FALSE(d.cardOut());
+  // FatFs's remount finds nothing, and again: out all along.
+  d.init();
+  d.mountFailed();
+  TEST_ASSERT_TRUE(d.cardOut());
+  d.init();
+  d.mountFailed();
+  TEST_ASSERT_TRUE(d.cardOut());
+  d.init();
+  TEST_ASSERT_TRUE(d.remounted(kCardSectors));
+  TEST_ASSERT_FALSE(d.cardOut());
+  // Another card answering: in, and foreign.
+  d.init();
+  d.mountFailed();
+  formatLike(dev, 8192, 0xB);
+  d.init();
+  TEST_ASSERT_FALSE(d.remounted(kCardSectors));
+  TEST_ASSERT_TRUE(d.foreign());
+  TEST_ASSERT_FALSE(d.cardOut());
+}
+
 // With a clock: asked once more each kStopUs after the last, so a card that mends is read again. More
 // reads than it keeps: the one longest since a failure goes.
 void test_drive_asks_again_after_a_while() {
@@ -2153,6 +2202,7 @@ int main(int, char**) {
   RUN_TEST(test_drive_foreign_still_stops_and_counts);
   RUN_TEST(test_drive_a_taken_back_read_silence_leaves_the_write_count);
   RUN_TEST(test_drive_says_when_the_card_came_back);
+  RUN_TEST(test_drive_says_the_card_is_out_from_a_failed_mount_to_the_next);
   RUN_TEST(test_drive_asks_again_after_a_while);
   RUN_TEST(test_drive_a_write_elsewhere_leaves_the_stop);
   RUN_TEST(test_drive_the_stops_are_kept_entry_by_entry);

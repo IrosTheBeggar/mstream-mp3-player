@@ -222,6 +222,8 @@ Guard guard() {
   return g;
 }
 
+bool cardOut() { return s_installed && s_drive.cardOut(); }
+
 size_t identityText(char* buf, size_t size, bool last) {
   if (!buf || size == 0) return 0;
   const CachedDrive::Identity& id = last ? s_drive.lastIdentity() : s_drive.mountIdentity();
