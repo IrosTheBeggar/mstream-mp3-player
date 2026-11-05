@@ -1926,7 +1926,9 @@ device MUST NOT write `/.mstream` in any other role.
   `tags.bin`, renames, then deletes the journal (section 3.3).
 - **`library.idx`, `queue.txt`, the thumbnails and `opus.idx`** keep
   today's write-aside-then-rename; when only the tmp is there, it is the
-  newest whole file.
+  newest whole file. (`queue.tmp` replaces `queue.txt` only once its size
+  on the card is what was written, and is kept when its rename fails:
+  3.2.2, "The queue's file".)
 - **`device.txt`** is written through `device.tmp` and a rename.
 - **A cut inside one of these renames** (2.12.1, "Cut renames") leaves
   `X` and `X.tmp` on one cluster chain, and the device's next write of
@@ -3320,6 +3322,29 @@ file**): no boot sets one up over a `queue.txt` it couldn't read.
     a resume point on a line by its path included. An Auto DJ pick or an edit overwrote the kept
     file: those lines are entries, and go out with it. An update step that lists them gives them
     library ids; one that doesn't asks again.
+  - **No memory to read it is no word on it either** (2026-11-05). No PSRAM for the read's own
+    blocks (the ids, and shuffled the ranks, 4 bytes a line each) or for the queue's
+    (`QueueModel::assign()`) read as "not a whole queue file", and the boot's default queue went
+    over a whole one. It is unread now (`Restored::noMemory`), as no PSRAM for the file's FIL
+    already was (`FR_NOT_ENOUGH_CORE`): read again after the boot's waits, a whole `queue.tmp`
+    standing in, then the queue empty for the session and nothing written. The log says `no PSRAM
+    for its read`; Now Playing and the Queue tab say what they say for a read the card fails. A
+    header that claims more lines than memory holds is the same: the read can't tell its file
+    from a whole one.
+  - **Only a whole `queue.tmp` replaces the file, and a whole one is kept** (2026-11-05). The write
+    goes through the VFS, whose close writes the last of it (newlib's 4 KB buffer, all of a queue
+    of about 60 lines of 70-byte paths; FatFs's last sector; the file's directory entry) and says
+    nothing: a card that refused those writes, or stopped answering, left `queue.tmp` cut or
+    empty, and the rename put that in `queue.txt`'s place. So `queue.tmp`'s size as the storage
+    has it (FatFs's `f_stat` on the card) must be what was written before `queue.txt` goes. Then a
+    rename that fails keeps `queue.tmp`: `queue.txt` may be gone by then, and it was removed,
+    which left no file. A kept `queue.tmp`, or one the boot read, takes `queue.txt`'s place before
+    anything opens it for writing (`QueueStore::settleTemp()`): the retry 10 s later truncated it,
+    and a cut in that write, or an edit that dropped it, left none. FatFs is asked first: a rename
+    it said failed may be done in its view all the same (its directory sector written again by the
+    next call), and `queue.txt` is then the queue, which removing would lose; two entries on one
+    chain (a rename cut between its writes, 2.12.6) are left alone; a question the card fails, and
+    nothing is done. Until it can, nothing is written over it, and the saver tries again every 10 s.
 
 MEASURED on the host, the rig above with the look and the breaker in it (3.8), the tree before (main
 at 96ba08b) and after, a fault for the time named, a read with no answer the card is back from at
@@ -3365,6 +3390,24 @@ the same save that went over the file. (A cut counts only a shorter file, and mo
 the library's 6 tracks, which the default queue replaces unseen.) The rig has no Auto DJ index and no
 waveform index; on the device their reads ask first where they can, so it restarted less (**Device check**,
 below).
+
+MEASURED likewise for the last two (2026-11-05), on a rig rebuilt for them: the firmware's own
+`QueueStore`, `CardFat`, `lib/core` and FatFs over a modelled card, the boot's queue lines as
+`setup()` has them, and the VFS modelled call for call on Arduino-ESP32 3.3.12's `vfs_api.cpp`
+(newlib's 4 KB buffer, a close that says nothing). A disk write refused is one the card refused
+twice (the wrapper writes again once). The listener's queue is not the default one, and is lost
+when the next boot finds the default queue:
+
+| Card | Before | Now |
+|---|---|---|
+| No PSRAM for the read's block or the queue's, for `restore()`; 6 lines, 12 tracks (or shuffled) | Not whole: the default queue, 12 lines, over it | Unread: nothing written; 6 lines at their place at the next boot |
+| The same, 36 lines of 306 tracks | 306 lines | 36 lines |
+| Each of `restore()`'s 3 allocations (the FIL, the read's block, the queue's) refused once, in turn; 4 shuffled | 2 of 3 lose the queue; 3 of 4 | 0: the read after the first wait has it |
+| The same from that allocation on, through `restore()` | 0 of 3 (unread: `queue.tmp`'s FIL refused too) | 0 of 3 |
+| An edit, then each disk write or read of its write refused in its turn: once, lasting, or with no answer; then a cut 1 s later, or 40 s on and the power-off flush, or a cut in the retry's write, or an edit that drops the retry's write and a cut; 6 lines of 12 tracks, 100 of 120 | **38 of 236 runs and 46 of 260 lose the queue**: 32 and 36 with the commit taken as done (`queue.txt` cut or empty), 6 and 10 after `couldn't replace` (no file left) | 0 of 252, 0 of 276 |
+| Of those, only a whole `queue.tmp` kept after a failed rename (the change alone) | | 33 and 41: what the close leaves isn't seen |
+| ... and `queue.tmp`'s size asked after its close, nothing settled before the next write | | 0 and 5: all a cut in the retry's write over the kept file |
+| No fault: a boot, an edit, its write | 13 disk reads, 11 writes | 15 reads (the size asked), 11 writes |
 
 - **The queue file's costs, left as they are.** A line by its path has its file's name for a title, and
   no artist, album, cover or Auto DJ row; Go to album says the library isn't ready. The boot's questions
