@@ -5184,7 +5184,8 @@ src/. What the code decided where 3.2-3.4 left room:
   this session had run was asked again at the scan's end, and records the
   scan appended before the remount, or a walk's changes, asked none);
   with something under way, the
-  queue saved, "Card back: restarting" and a restart. What the guard
+  queue saved, "Card back: restarting" and a restart (which waits for a flush that works, 30 s
+  at most: the restart's wait, below). What the guard
   can't tell: two cards alike in all three (a sector-for-sector clone)
   are one card to it, and a card written on a PC while out of the player
   keeps its identity (its records are read again; the index in RAM is the
@@ -5343,6 +5344,64 @@ src/. What the code decided where 3.2-3.4 left room:
   replays 2 restarts a power-on. A held boot foreign for an identity it couldn't read stays so,
   whatever comes back: another card put in later isn't noticed, its writes refused and the old
   library showing, until a restart.
+- **The card hold** (2026-11-05, after the device check; `PlaybackController`'s, host-tested in
+  `test_playback`; `CachedDrive::cardOut()`, `test_sector_cache`). The check's pull ran the queue
+  out: with the card out every open fails, about 2 s an entry, each a failure (counted, a toast, a
+  mark on its row), until every entry had failed, and the queue's next save kept that as the place:
+  a 25 s pull ended a 12-track album. Now a track that fails to start while the card is out
+  (`cardOut()`: FatFs's last mount found no card answering, and none has since; `mountFailed()`
+  sets it, `remounted()` clears it, whichever card answers), with no reason of its own (no refused
+  rate, none of the backend's words), isn't counted and nothing moves on: the entry stays current
+  and Playing, the backend holding nothing, its start point put back (a resume point's second and
+  anchor, a seek's), and it is started again 2 s later, then 4, 8 and 16, then every 30 s, or at
+  once once the card answers someone else's mount. Each try's open is FatFs's next mount, so the
+  card put back plays that entry from where it would have started, and the queue goes on. A try
+  that fails with the card answering, or any failure with a reason of its own, is the track's:
+  skipped and named as ever, so a track that really can't play isn't hidden. Still out 2 minutes
+  after the hold began (a last try then): paused, cued at that entry, the place and the start
+  point kept; nothing starts by itself after that, and Play asks again. A pause, a skip, a Play, a
+  seek or an edit ends the hold (a start that fails with the card still out holds again, from 2 s);
+  a wait for the headphones takes over from it. One toast a hold: "Still no card: is it all the
+  way in?" (`card.none_still`, the no-card screen's: no new text). The log: `[queue] the card is
+  out: N of M holds there, not skipped ...`, a line a try, then `[queue] the card answered: N of M
+  plays on` or `... paused at N of M; Play tries again`. The resume point the saver reads stays the
+  same through the tries, so NVS isn't cleared and written again at each. **Costs:** each try with
+  the card still out is a failed open, 1-2 s of the driver's tries on the decoder's task with the
+  SPI bus the panel shares held: at most 7 in the 2 minutes (at about 2, 6, 14, 30, 60, 90 and
+  120 s), against one an entry before. A put-back is noticed at the next try, up to 30 s late near
+  the end, or at once when something else asks the card first. Sound can start by itself up to 2
+  minutes after it stopped: a silence the listener didn't make (past that, Play). The track a pull
+  cuts mid-way still ends where its read failed (the backend takes that read's error for the
+  file's end: Found, below), so the hold is at the entry after it. While it holds the player is
+  Playing with no sound, so the idle power-off waits up to 2 minutes more. A track whose own
+  failure meets the card out is held until the card answers, then skipped. A read the read stop
+  refuses fails with the card answering: no hold, a queue under such a folder runs on as before.
+  No change without the wrapper, or with the music on the flash. The rig's table below was
+  measured before the hold.
+- **The restart's wait for the queue's flush** (2026-11-05, after the device check; lib/core
+  `RestartWait`, host-tested in `test_card_breaker`; `main.cpp`'s `stepRestartWait()`). The same
+  card back under a job flushed the queue once and restarted 1.2 s later whatever that did; with
+  the card silent again the flush failed and the edits since the last save were gone (Found,
+  below). Now: a flush that works, the restart 1.2 s on, as before; one that fails, tried again on
+  the queue saver's own backoff (`QueueSaver::lastWaitMs()`: 10 s, then 20 s), so the card is
+  asked no more often than the saver would ask it, and 30 s after the guard's decision a last try,
+  then the restart whatever it did. A restart that comes once the guard's toast has gone says
+  "Card back: restarting" again first. No flush can work (writes off, another card put in since,
+  the queue text in PSRAM behind an update step's fence): the restart as before. An edit made
+  after a flush that worked is flushed once more just before the restart (as the CPU speed's
+  restart does). The breaker counts the restart when the guard decides it, as before
+  (`CardBreaker.h` unchanged), and its 30-minute calm doesn't clear the count while a counted
+  restart waits. Logs: `[card] the queue not saved: the restart waits for a flush that works, the
+  next in N s, at most 30 s`, then `[card] the queue saved N s after the card came back (flush K):
+  restarting` or `[card] restarting with the queue unsaved after K flushes in N s: queue.txt keeps
+  the last one saved`. **Costs:** the restart can come about 32 s after "Card back: restarting"
+  rather than 1.2 s, the card jobs and the queue's own saves held meanwhile (`cardHeld`), playing
+  going on. Each failed flush stalls the loop with the card silent, a second or two, maybe a cut:
+  at most 3 (at 0, 10 and 30 s). Each also counts in the saver, whose next wait doubles and whose
+  line names that wait; the restart forgets both. A card silent past 30 s still loses the edits,
+  30 s later. The guard's other restarts (another card; an identity it couldn't read) don't wait:
+  writes are refused there. Rescan's restart (`rescanLibrary()`) flushes once the same way and
+  isn't changed.
 - **What such a card does** (MEASURED on a host rig, not in the tree: the real
   `sd_diskio.cpp`, `SectorDisk.cpp`, `Library`, `CardTasks`, `AutoDj`, `Waves` and FatFs
   over a byte-level model of a card; a sector with no answer unless it says
@@ -5469,15 +5528,15 @@ src/. What the code decided where 3.2-3.4 left room:
   - **A silence under a compaction still loses clusters.** Each guard restart in its first pass, at `tags.bin`'s middle, silent 3 s: 3 clusters, 48 KB, `hidx.tmp`'s as in 3.2.2, 96 KB a held cycle, only a disk check gets them back. The look's cases (no R1, once, no token) lose none. A restart under the walk or at the compaction's opening: none.
   - **A failed write of a FAT sector in a queue's save** loses a cluster, 16 KB: the file is whole, as the table says.
   - **A kept read under the decoder ends the track.** The look finds the card fine, and that read's error is the file's end: 3:53 of a 4:00 track gone, the next one plays, no word. As before the look, where it was a cut. No re-read: a choice to make.
-  - **A pull runs the queue out,** about 2 s an entry as each open fails, to the end, paused; the put-back then saves that as the place. Older than this work; `cardBack()` only saves it sooner.
-  - **The guard's restart doesn't wait for the queue's flush:** the card silent again, the save fails and 1.2 s later the edits since the last save are gone (`saved now ...: FAILED`, then the old queue at the next boot). The line said "the queue saved" before the flush; it no longer does.
+  - **A pull runs the queue out,** about 2 s an entry as each open fails, to the end, paused; the put-back then saves that as the place. Older than this work; `cardBack()` only saves it sooner. **Since** (host-tested, not on a device): the card hold, above.
+  - **The guard's restart doesn't wait for the queue's flush:** the card silent again, the save fails and 1.2 s later the edits since the last save are gone (`saved now ...: FAILED`, then the old queue at the next boot). The line said "the queue saved" before the flush; it no longer does. **Since** (host-tested, not on a device): the restart's wait for the queue's flush, above.
   - **`@status`** says `card=fat32` until a FatFs call finds the card out, then `card=none`; `size=-` after a size read that failed, until an init answers it: a CMD9 unanswered at an init, or none sent, the select timing out under DO low at the mount; and `card=none size=- cid=-` for a held session whose first commands met DO low, the card answering.
   - **A silent or DO low fault meets jobs more often than (10) said:** a remount begins the jobs again, the walk under the next one restarts. So the rig's "about 4 cuts" and "12 cuts" came here as 4 and 12 remounts, in a held boot or dark after the walk, R R first in the others, few of them over sound: the player paused itself after the first ones, so the rig's seconds of sound aren't measured. The bound held each time.
   - **The card's ledger:** 546 clusters fewer at the end: 279 cover copies (lit sessions over many albums), 236 from the check's own restart under a compaction, 27 from nine of those guard restarts, 2 from those saves, 2 not placed. The `/.player` files back by CRC at the clean-up, but for the Opus open cache and `device.txt`.
 
   **What the switch can't show:** the card never saw the command, answers everything else at once (but for a 500 ms select at 3 boots' first init right after a restart), and a silence ends by a clock and doesn't outlive a restart. So "no restart" is for such a card, and R R then a held boot its best case. A write fault never reached flash. A shot reads the panel back between frames, and no frame is drawn during a look.
 
-  **Not run on a device:** real pulls (no contact moved, one card, no file added on a PC, none under a scan, a build or a save, no second brand); a real power cycle; playing over Bluetooth; a T with records, or a body beyond T's one sector; a real failing card; a look under a list actually scrolling; (7)'s second FAILED at a scan's end and its third-fence line, Rescan's words and the page's Can't read on screen; two long presses; a no-token switch on one slot's sector; all but sector 0, the boot sector and FSINFO; DO low until CMD0 (the switch's ends by a clock); FSINFO's R1 errors for 1-3 s at the mount; a FAT sector of the old `queue.txt` alone, for good, the first save on a card with no `queue.txt`, a fresh card's first free cluster; a window sector for 2-12 s; FSINFO's read at a re-seat, the second FAT, a band under a foreign held boot (such a boot itself ran), 9 or more Pending files, and any read that works and then leaves the card silent (the switch has no such kind).
+  **Not run on a device:** the card hold and the restart's wait for the queue's flush (2026-11-05, after this check: host tests and a `core2` build alone); real pulls (no contact moved, one card, no file added on a PC, none under a scan, a build or a save, no second brand); a real power cycle; playing over Bluetooth; a T with records, or a body beyond T's one sector; a real failing card; a look under a list actually scrolling; (7)'s second FAILED at a scan's end and its third-fence line, Rescan's words and the page's Can't read on screen; two long presses; a no-token switch on one slot's sector; all but sector 0, the boot sector and FSINFO; DO low until CMD0 (the switch's ends by a clock); FSINFO's R1 errors for 1-3 s at the mount; a FAT sector of the old `queue.txt` alone, for good, the first save on a card with no `queue.txt`, a fresh card's first free cluster; a window sector for 2-12 s; FSINFO's read at a re-seat, the second FAT, a band under a foreign held boot (such a boot itself ran), 9 or more Pending files, and any read that works and then leaves the card silent (the switch has no such kind).
 - **The card worker** (`app/CardWorker`): Thumbs' worker, generalised: a
   task on core 1, made for the first step and gone 3 s after the last, a
   7.5 KB internal stack, handed one step at a time by the loop (a function
@@ -6874,7 +6933,9 @@ the next epoch). Then:
   (`gs`'s jobs line: the update steps' count as before it); during the
   walk, a scan step or an update step, `[card] the card answered again
   (the same card) with a card job under way: restarting`, `[queue] saved
-  now ...` (how the flush went), the toast "Card back: restarting", and a boot that loads
+  now ...` (how the flush went; FAILED: `[card] the queue not saved: the restart waits for a flush
+  that works ...`, flushes at 10 and 30 s at most, then the restart: the restart's wait, 3.8), the
+  toast "Card back: restarting", and a boot that loads
   the library and the queue as they were (the step under way ends first,
   at most 5 s: rarely `[card] the card worker's step still under way
   after 5 s: restarting once its SD call ends`; then the boot's

@@ -423,6 +423,7 @@ is Off.**
 | `pauseAtBoundary()` (:394) | end | the next cued; at the last: stop | the next cued (the first after the last) | this entry cued at 0:00 |
 | `next()`: `advance(false)` (:120) | skip | the next; at the last: stop | wrap | wrap |
 | `checkEnd()`: failed, `advance(false)` (:412) | skip | as next() | wrap | wrap: a failure moves on |
+| `checkEnd()`: failed with the card out, `holdForCard()` (METADATA.md 3.8's card hold) | hold | stays, tried again | stays | stays |
 | `prev()` (:165) | skip | at the first: the first again | to the last | to the last |
 | `cue()` (:215) | skip | stays at the ends | wrap | wrap |
 
