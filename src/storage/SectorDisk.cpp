@@ -212,6 +212,8 @@ Guard guard() {
   g.lastKnown = s_drive.lastIdentity().valid;
   g.writesOff = s_drive.writesOff();
   g.tooSilent = s_drive.tooSilent();
+  // Healed first: a heal counts after its kept, so the two seen here never have more healed.
+  g.healed = s_drive.healed();
   g.kept = s_drive.kept();
   g.cardBacks = s_drive.cardBacks();
   const CachedDrive::Stats d = s_drive.stats();

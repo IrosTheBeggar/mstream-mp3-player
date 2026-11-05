@@ -217,6 +217,7 @@ void TagConsole::cache(uint32_t n) {
 
 void TagConsole::cacheCounts(const char* when) {
   const sectordisk::Stats st = sectordisk::stats();
+  const sectordisk::Guard g = sectordisk::guard();
   const SectorCache::Stats& c = st.cache;
   const uint32_t reads = c.hits + c.misses;
   Serial.printf("[cache] %ssingle-sector reads %lu: %lu hits (%.1f%%), %lu misses; multi-sector %lu (%lu sectors); "
@@ -226,11 +227,12 @@ void TagConsole::cacheCounts(const char* when) {
                 (unsigned long)c.writes, (unsigned long)c.writtenSectors, (unsigned long)c.updated,
                 (unsigned long)c.failedWrites, (unsigned long)c.dropped, (unsigned long)c.evicted);
   Serial.printf("[cache] %sthe card: %lu reads (%lu of one sector; %lu sectors) in %.0f ms (%.2f ms a read), %lu "
-                "writes, %lu trims; %lu mounts, %lu no answers it came back from, %lu reads not asked of it\n",
+                "writes, %lu trims; %lu mounts, %lu no answers it came back from (%lu reads asked once more read), %lu "
+                "reads not asked of it\n",
                 when, (unsigned long)st.cardReads, (unsigned long)st.cardSingleReads, (unsigned long)st.cardReadSectors,
                 st.cardReadUs / 1000.0,
                 st.cardReads ? st.cardReadUs / 1000.0 / st.cardReads : 0.0, (unsigned long)st.cardWrites,
-                (unsigned long)st.trims, (unsigned long)st.inits, (unsigned long)sectordisk::guard().kept,
+                (unsigned long)st.trims, (unsigned long)st.inits, (unsigned long)g.kept, (unsigned long)g.healed,
                 (unsigned long)st.stoppedReads);
   if (sectordisk::verifying() || st.verified) {
     Serial.printf("[cache] %sverify: %lu hits checked, %lu STALE%s\n", when, (unsigned long)st.verified,

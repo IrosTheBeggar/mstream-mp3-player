@@ -56,6 +56,7 @@ using fatmodel::path;
 void detach(BYTE pdrv) {
   f_mount(nullptr, path(pdrv, "").c_str(), 0);
   drive(pdrv).noAnswerLba = UINT32_MAX;
+  drive(pdrv).noAnswerReads = UINT32_MAX;
   drive(pdrv).noAnswerWriteLba = UINT32_MAX;
   drive(pdrv).errorWriteLba = false;
   drive(pdrv).fs = nullptr;
@@ -702,10 +703,10 @@ void test_another_card_is_write_protected() {
 // writes go on. What was open before the pull is gone (FR_INVALID_OBJECT:
 // the volume's id changed), which is why main.cpp opens the card's
 // records again, or restarts when a job was under way.
-// One sector that gets no answer, the card answering its status: the read fails, and
-// nothing else: no remount, every other file open still good, the cache kept. The FIL
-// that took it keeps FatFs's error, until opened again. Then a real pull: the remount,
-// and what was open gone.
+// One sector that gets no answer, for good, the card answering its status: the read fails
+// (its second try too), and nothing else: no remount, every other file open still good, the
+// cache kept. The FIL that took it keeps FatFs's error, until opened again. Then a real pull:
+// the remount, and what was open gone.
 void test_a_read_with_no_answer_is_no_remount() {
   static RamDisk a(524288);
   a = RamDisk(524288);
@@ -742,7 +743,8 @@ void test_a_read_with_no_answer_is_no_remount() {
 
   TEST_ASSERT_EQUAL(FR_OK, f_lseek(&scanned, 4096));
   TEST_ASSERT_EQUAL(FR_DISK_ERR, f_read(&scanned, buf, sizeof(buf), &n));
-  TEST_ASSERT_EQUAL_UINT32(1, wrapper.kept());
+  TEST_ASSERT_EQUAL_UINT32(2, wrapper.kept());  // (the read, and its second try: no answer for good)
+  TEST_ASSERT_EQUAL_UINT32(0, wrapper.healed());
   // The next call, whoever's: nothing mounted again, nothing lost.
   TEST_ASSERT_EQUAL(FR_OK, f_read(&playing, buf, sizeof(buf), &n));
   TEST_ASSERT_EQUAL_UINT32(0, wrapper.remounts());
@@ -832,6 +834,78 @@ void createThenLookElsewhere() {
   f_stat(path(0, kOtherFile).c_str(), &fi);
 }
 }  // namespace
+
+// The same no answer once (a one-off), the card back at the look's init: the read asked once more in
+// that call, so FatFs never hears of it, whoever reads: a run of a file's sectors (the decoder's, a
+// compaction's: past the cache), its last sector through the FIL's buffer, the folder's sector at an
+// open. The bytes are the file's, the FIL goes on with no error kept, nothing is mounted again, and the
+// file open beside it reads on. For good, the run: both tries, and FatFs's error, as before.
+void test_a_read_with_no_answer_once_is_read_again() {
+  auto* card = new Wrapped();
+  CachedDrive& wrapper = card->wrapper;
+  const char* const rel = "music/First Artist/03 - a.mp3";  // 9,003 B, putFile()'s seed 3
+  const std::string p = path(0, rel);
+  static FIL playing, probe;
+  TEST_ASSERT_EQUAL(FR_OK, f_open(&playing, path(0, "music/First Artist/02 - a.mp3").c_str(), FA_READ));
+  // A sector of the file, by the FIL that read it; and the folder's, its entry's.
+  const auto sectorAt = [&](FSIZE_t at) {
+    TEST_ASSERT_EQUAL(FR_OK, f_open(&probe, p.c_str(), FA_READ));
+    TEST_ASSERT_EQUAL(FR_OK, f_lseek(&probe, at));
+    uint8_t b = 0;
+    UINT got = 0;
+    TEST_ASSERT_EQUAL(FR_OK, f_read(&probe, &b, 1, &got));
+    const uint32_t s = static_cast<uint32_t>(probe.sect);
+    TEST_ASSERT_EQUAL(FR_OK, f_close(&probe));
+    return s;
+  };
+  const uint32_t mid = sectorAt(2560);  // (in the second cluster of 2 KB: its four sectors in one call)
+  const uint32_t last = sectorAt(9002);  // (a part sector: one, into the FIL's buffer)
+  TEST_ASSERT_EQUAL(FR_OK, f_open(&probe, p.c_str(), FA_READ));
+  const uint32_t folder = static_cast<uint32_t>(probe.dir_sect);
+  TEST_ASSERT_EQUAL(FR_OK, f_close(&probe));
+  const auto onceAt = [&](uint32_t lba) {
+    card->cache.clear();  // (each read on the card)
+    drive(0).noAnswerLba = lba;
+    drive(0).noAnswerReads = 1;
+  };
+  onceAt(mid);
+  checkFile(0, rel, 9003, 3);
+  TEST_ASSERT_EQUAL_UINT32(0, drive(0).noAnswerReads);  // (it was met)
+  TEST_ASSERT_EQUAL_UINT32(1, wrapper.kept());
+  TEST_ASSERT_EQUAL_UINT32(1, wrapper.healed());
+  onceAt(last);
+  checkFile(0, rel, 9003, 3);
+  TEST_ASSERT_EQUAL_UINT32(0, drive(0).noAnswerReads);
+  TEST_ASSERT_EQUAL_UINT32(2, wrapper.healed());
+  onceAt(folder);
+  checkFile(0, rel, 9003, 3);
+  TEST_ASSERT_EQUAL_UINT32(0, drive(0).noAnswerReads);
+  TEST_ASSERT_EQUAL_UINT32(3, wrapper.healed());
+  TEST_ASSERT_EQUAL_UINT32(3, wrapper.kept());
+  TEST_ASSERT_EQUAL_UINT32(0, wrapper.remounts());
+  uint8_t buf[64];
+  UINT n = 0;
+  TEST_ASSERT_EQUAL(FR_OK, f_read(&playing, buf, sizeof(buf), &n));
+  TEST_ASSERT_EQUAL_UINT32(sizeof(buf), n);
+  // For good: FatFs's error, the FIL keeps it; nothing mounted again.
+  onceAt(mid);
+  drive(0).noAnswerReads = UINT32_MAX;
+  static FIL f;
+  TEST_ASSERT_EQUAL(FR_OK, f_open(&f, p.c_str(), FA_READ));
+  std::vector<uint8_t> whole(9003);
+  TEST_ASSERT_EQUAL(FR_DISK_ERR, f_read(&f, whole.data(), static_cast<UINT>(whole.size()), &n));
+  TEST_ASSERT_EQUAL_UINT32(5, wrapper.kept());
+  TEST_ASSERT_EQUAL_UINT32(3, wrapper.healed());
+  TEST_ASSERT_EQUAL(FR_DISK_ERR, f_read(&f, whole.data(), 512, &n));
+  TEST_ASSERT_EQUAL(FR_OK, f_close(&f));
+  TEST_ASSERT_EQUAL_UINT32(0, wrapper.remounts());
+  drive(0).noAnswerLba = UINT32_MAX;
+  checkFile(0, rel, 9003, 3);
+  TEST_ASSERT_EQUAL(FR_OK, f_read(&playing, buf, sizeof(buf), &n));
+  TEST_ASSERT_EQUAL(FR_OK, f_close(&playing));
+  tearDown();
+  delete card;
+}
 
 // A write with no answer to a sector of a directory, under FatFs. Once: the window stands, FatFs writes
 // it at its next move, nothing lost and no remount. For good: the second try drops it by a remount, so the
@@ -1058,6 +1132,7 @@ int main(int, char**) {
   RUN_TEST(test_another_card_is_write_protected);
   RUN_TEST(test_same_card_back);
   RUN_TEST(test_a_read_with_no_answer_is_no_remount);
+  RUN_TEST(test_a_read_with_no_answer_once_is_read_again);
   RUN_TEST(test_a_window_that_wont_write_doesnt_stop_the_volume);
   RUN_TEST(test_a_window_a_write_error_refuses_doesnt_stop_the_volume);
   RUN_TEST(test_a_write_fatfs_does_without_is_no_window);

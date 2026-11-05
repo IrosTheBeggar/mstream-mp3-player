@@ -112,6 +112,7 @@ struct Guard {
   bool tooSilent = false;  // reads kept leaving the card silent (CachedDrive::tooSilent()): until a restart
   uint32_t remounts = 0;  // FatFs mounted the volume again with a card answering
   uint32_t kept = 0;      // commands with no answer the card came back from at once: no remount
+  uint32_t healed = 0;    // ... of them reads that worked when asked once more: FatFs never heard of them
   uint32_t cardBacks = 0;  // CachedDrive::cardBacks()
   uint32_t faultLba = 0;  // the last read or write that failed
   // The write counts (CachedDrive's; gc's reset starts them again).
