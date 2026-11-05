@@ -260,6 +260,10 @@ bool QueueStore::flushNow() {
                      "PSRAM, queue.txt keeps the last one saved");
       return false;
     }
+    if (unread_) {
+      Serial.println("[queue] nothing to save: queue.txt couldn't be read, and is left as it is");
+      return true;
+    }
     Serial.println("[queue] saved now: queue.txt has the queue (flushed as the library update began)");
     return true;
   }
@@ -270,6 +274,10 @@ bool QueueStore::flushNow() {
   const uint32_t writes = saver_.writes();
   const bool ok = saver_.flushNow(t0);
   noteFailures();
+  if (unread_ && queue_.empty()) {
+    Serial.println("[queue] nothing to save: queue.txt couldn't be read, and is left as it is");
+    return ok;
+  }
   Serial.printf("[queue] saved now%s%s in %lu ms: %s\n", wasWriting ? " (a write under way finished)" : "",
                 saver_.writes() != writes ? ", the file written" : wasDirty ? "" : " (the file was up to date)",
                 (unsigned long)(millis() - t0), ok ? "the card has the queue as it is" : "FAILED (the last file stays)");
@@ -446,9 +454,16 @@ bool QueueStore::remapBegin(size_t textRoom) {
 
 bool QueueStore::remapFinish(bool rebuilt) {
   if (!carrying()) return false;
+  const bool wasUnread = unread_;
   const queueremap::Result r = carry_->finish(queue_, saver_, player_, catalog_, *card_, rebuilt, millis());
   // (finish() told the saver: keptFile().)
   if (!r.read.ok) markUnread();
+  if (wasUnread && !r.read.ok) {
+    // (Nothing to carry, and no read of it tried: RemapCard::openFile().)
+    noteFailures();
+    Serial.println("[queue] the queue stays empty across the update step: queue.txt couldn't be read, and is left as it is");
+    return false;
+  }
   logRemap(r);
   return r.read.ok && r.read.currentKept;
 }

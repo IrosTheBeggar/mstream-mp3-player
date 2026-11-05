@@ -187,7 +187,8 @@ Result Carry::finish(QueueModel& queue, QueueSaver& saver, PlaybackController& p
   if (!res.read.ok) {
     // Cleared (release() kept the mode). The file keeps the last queue
     // saved, and its line: nothing is written over it until the listener
-    // edits this one, and the next remap reads it from that line.
+    // edits this one, and whoever reads it next (the next boot; the next remap,
+    // where Card::openFile() still gives it) reads it from that line.
     player.queueReplaced(false);
     saver.keptFile(saver.generation(), saver.fileLine());
     return res;

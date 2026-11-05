@@ -161,8 +161,8 @@ public:
   // to come back to. Until the queue is the file's again (an edit written,
   // or loaded()), positions and resume points aren't saved (they would pair
   // this queue's positions with the file's lines), and fileIsQueue() is
-  // false: the remap then reads the file from fileLine(), as a boot would,
-  // not from the queue's own current entry.
+  // false: a remap that can read the file reads it from fileLine(), as a boot
+  // would, not from the queue's own current entry.
   void keptFile(uint32_t generation, int32_t fileLine);
   // Whether the file's lines are the queue's positions (or will be once the
   // write waiting is done): false after keptFile().

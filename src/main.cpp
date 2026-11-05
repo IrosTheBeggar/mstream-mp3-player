@@ -3520,8 +3520,9 @@ void setup() {
   const QueueStore::Restore queueRead =
       queueStore.restore(library.listsCard(), bootReadsFailed ? nullptr : bootWait);
   if (queueRead == QueueStore::Restore::None && library.cardJobsHeld()) {
-    // The card failed a read at this boot, and this may be another: a default queue
-    // would be saved over a queue.txt that is only unread. Empty until a boot reads it.
+    // The card is in trouble at this boot, and the file's read may have come to nothing for
+    // another reason (no PSRAM for it): a default queue would be saved over a queue.txt that
+    // may only be unread. Empty until a boot reads it.
     Serial.println("[queue] no queue read at a boot that holds the card jobs: queue.txt left as it is");
   } else if (queueRead == QueueStore::Restore::None) {
     queueEverything(false);

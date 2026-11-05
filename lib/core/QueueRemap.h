@@ -76,7 +76,9 @@
 // isn't rewritten (it keeps the library's tracks for the next boot, or the
 // next remap), and playback stops if its track is gone. A queue that can't
 // come back (cleared) keeps the mode, and the file keeps the last queue
-// saved (the next remap brings it back from its own line).
+// saved: the next boot brings it back from its own line (or the next remap,
+// where Card::openFile() still gives the file: QueueStore's doesn't, once a
+// read of it has failed).
 //
 // Portable, host-tested (test_queue). Loop task only: nothing else may
 // touch the queue, the saver or the index while it runs.
