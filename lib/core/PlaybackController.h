@@ -101,7 +101,12 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // that, and a play asks again. Any start but the hold's own (a play, a skip,
 // a seek, an edit that moves the current entry), a pause or a stop ends it;
 // a start that fails with the card still out holds again, from the first
-// wait. A wait for the headphones (Hold) takes over from it. cardHolds()
+// wait. A pause or a stop while a try opens (its start not taken up) leaves
+// the entry at the second it asked for, the backend holding nothing (paused:
+// cued), so a play starts it afresh rather than resuming a request that
+// failed, which with the card back would count against the track; so does a
+// pause under the first open after a pull, once that fails with the card
+// out. A wait for the headphones (Hold) takes over from it. cardHolds()
 // counts them; a pull used to run the queue out, a failed open (about 2 s)
 // an entry, and the queue's save then kept that as the place.
 //
@@ -603,6 +608,9 @@ private:
   void holdForCard(uint32_t nowMs);
   // Waiting: the try again when it's due, or at once once the card answers.
   void stepCardHold(uint32_t nowMs);
+  // Not Playing since (a pause, a stop, a wait for the headphones): a hold's over, and a start
+  // its try or the card's being out left unopened is let go, the entry cued at its second.
+  void letGoOfCardFailure();
   // The start point the failed play asked for, back on its entry.
   void putBackStart();
   void endCardHold() { cardRun_ = cardWaiting_ = false; }

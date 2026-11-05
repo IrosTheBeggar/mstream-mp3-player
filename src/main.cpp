@@ -2933,12 +2933,16 @@ static void stepRestartWait(const sectordisk::Guard& g) {
       return;
     case RestartWait::Do::Restart:
       if (restartWait.flushed()) {
-        if (queueStore.busy()) queueStore.flushNow();  // an edit since the flush that worked (as stepCpuRestart())
+        // An edit or a move since the flush that worked: once more, nothing written when there's
+        // none. Not if busy(): the saver notes changes in its loop() and flushNow() only, and
+        // cardHeld holds its loop.
+        queueStore.flushNow();
       } else {
         Serial.printf("[card] restarting with the queue unsaved after %lu flushes in %lu s%s: queue.txt keeps the "
                       "last one saved\n",
                       (unsigned long)restartWait.tries(), (unsigned long)((millis() - restartWait.sinceMs()) / 1000),
-                      canFlush ? "" : " (no flush can work: the card refuses writes, or the queue is in PSRAM)");
+                      restartWait.cantFlush() ? " (no flush can work: the card refuses writes, or the queue is in PSRAM)"
+                                              : "");
       }
       restartAtMs = millis();  // (restartNow(), at the loop's check)
       return;

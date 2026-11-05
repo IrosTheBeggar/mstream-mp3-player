@@ -5361,7 +5361,10 @@ src/. What the code decided where 3.2-3.4 left room:
   after the hold began (a last try then): paused, cued at that entry, the place and the start
   point kept; nothing starts by itself after that, and Play asks again. A pause, a skip, a Play, a
   seek or an edit ends the hold (a start that fails with the card still out holds again, from 2 s);
-  a wait for the headphones takes over from it. One toast a hold: "Still no card: is it all the
+  a wait for the headphones takes over from it. A pause or a stop while a try opens leaves the
+  entry at the second it asked for, the backend holding nothing, so Play starts it afresh rather
+  than resuming a request that failed, which with the card back would count against the track
+  (review: it did, and the resume point went); so does a pause under the first open after a pull. One toast a hold: "Still no card: is it all the
   way in?" (`card.none_still`, the no-card screen's: no new text). The log: `[queue] the card is
   out: N of M holds there, not skipped ...`, a line a try, then `[queue] the card answered: N of M
   plays on` or `... paused at N of M; Play tries again`. The resume point the saver reads stays the

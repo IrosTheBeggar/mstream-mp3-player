@@ -40,6 +40,7 @@ void PlaybackController::startCurrent() {
 
 void PlaybackController::startNow() {
   if (!hasTrack()) return;
+  if (!cardTry_) endCardHold();  // (a wait's release too: any start but the hold's own try)
   // An unknown id gives "": the backend fails it and update() skips on.
   char path[TrackCatalog::kMaxPath];
   const uint32_t id = queue_.currentTrack();
@@ -482,9 +483,7 @@ void PlaybackController::update(uint32_t nowMs) {
   // (The backend owns the playing clock via its own loop(); `nowMs` times the card hold.)
   if (fenced_) return;  // the queue is away: a natural end is queueReplaced()'s
   Act act(*this);  // a joined track heard first: its end, if it ended too, is its own
-  // A pause, a stop or a wait for the headphones since: the hold's over (the listener's, or
-  // PlayGate's, from there; a cued entry stays cued).
-  if (cardRun_ && state_ != PlayState::Playing) endCardHold();
+  letGoOfCardFailure();
   if (cardWaiting_) {
     stepCardHold(nowMs);  // (the backend let go: no end or failure of its to read till the try)
     return;
@@ -494,11 +493,38 @@ void PlaybackController::update(uint32_t nowMs) {
 
 bool PlaybackController::cardSaysNothing() const {
   if (!card_ || !card_->out()) return false;
-  // A reason of the track's own (its rate refused, the reader's words, no RAM for its decoder):
-  // the track's, whatever the card. A file that can't be opened has none.
+  // A reason of the track's own (its rate refused; the backend's words: an Opus file it refuses,
+  // no RAM for the Opus decoder): the track's, whatever the card. A file that can't be opened has
+  // none, and nor does a decoder that gives up: held, and skipped at the try once the card answers.
   if (audio_.rateRefusal().hz != 0) return false;
   char note[4];
   return audio_.failureNote(note, sizeof(note)) == 0;
+}
+
+void PlaybackController::letGoOfCardFailure() {
+  if (state_ == PlayState::Playing) return;
+  if (cardRun_) {
+    // A pause, a stop or a wait for the headphones since: the hold's over (the listener's, or
+    // PlayGate's, from there). Its try under way then (opened, the hold would have ended), and
+    // not opened since: the entry at the second it asked for, the backend holding nothing.
+    const bool tryCut = !cardWaiting_ && !(audio_.positionKnown() && !audio_.failed());
+    endCardHold();
+    if (!tryCut) return;
+    putBackStart();
+    if (state_ != PlayState::Stopped && !cued_) {
+      audio_.stop();
+      cued_ = true;
+    }
+    return;
+  }
+  // A start the card's being out failed under a pause (the first open after a pull): let go, cued
+  // at its second, so the next play starts it afresh (and holds if the card is still out) rather
+  // than resuming the failed request and counting it against the track once the card is back.
+  if (state_ != PlayState::Stopped && !cued_ && hasTrack() && audio_.failed() && cardSaysNothing()) {
+    putBackStart();
+    audio_.stop();
+    cued_ = true;
+  }
 }
 
 void PlaybackController::putBackStart() {
@@ -539,7 +565,7 @@ void PlaybackController::stepCardHold(uint32_t nowMs) {
   const bool answers = !card_ || !card_->out();
   if (!answers && static_cast<int32_t>(nowMs - cardRetryAtMs_) < 0) return;
   cardWaiting_ = false;
-  ++cardHolds_.retries;
+  if (!held()) ++cardHolds_.retries;  // (held: no open, a wait for the headphones instead)
   // From where it would have started (its start point put back); its open is FatFs's next mount.
   cardTry_ = true;
   startCurrent();  // (held for the headphones: it waits, and the wait takes over)
@@ -565,8 +591,9 @@ void PlaybackController::checkEnd(uint32_t nowMs) {
       holdForCard(nowMs);
       return;
     }
-    // (A try that failed with the card answering is the track's own, as any failure: the skip's
-    // start, or the stop, ends the hold.)
+    // (A try that failed with the card answering is the track's own, as any failure: over now,
+    // so a stop at the queue's end below puts no start point back.)
+    endCardHold();
     ++failure_.count;
     failure_.track = queue_.currentTrack();
     failure_.key = queue_.currentKey();

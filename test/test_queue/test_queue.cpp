@@ -2011,6 +2011,18 @@ void test_the_guards_restart_flushes_on_the_savers_backoff() {
   TEST_ASSERT_TRUE(w.flushed());
   TEST_ASSERT_FALSE(saver.contentDirty());
   TEST_ASSERT_TRUE(st.file != "last good");  // the edit on the card before the restart
+  // An edit in the 1.2 s after that flush: busy() can't say so, the saver's loop() held
+  // (cardHeld), so the restart flushes once more whatever it says.
+  const std::string saved = st.file;
+  q.append(one, 1);
+  TEST_ASSERT_FALSE(saver.busy());
+  TEST_ASSERT_TRUE(saver.flushNow(t));
+  TEST_ASSERT_TRUE(st.file != saved);
+  const uint32_t writes = saver.writes();
+  const int opens = st.opens;
+  TEST_ASSERT_TRUE(saver.flushNow(t));  // (and with nothing new: nothing written)
+  TEST_ASSERT_EQUAL_UINT32(writes, saver.writes());
+  TEST_ASSERT_EQUAL_INT(opens, st.opens);
 }
 
 // A write dropped for a library rebuild (remap), and the queue then kept

@@ -17,7 +17,8 @@
 //     last try is made. The first try that works, or that last one whatever it did: the restart
 //     kShowMs later.
 //   - No flush can work (writes off, another card, the queue carried as text through an update
-//     step): the restart now, as ever.
+//     step): the restart as ever, kShowMs after the guard's decision (found later, kShowMs on,
+//     the toast again first).
 //   - A restart decided once the guard's toast has gone (kToastMs) says so again first
 //     (Do::Announce), kShowMs before it.
 //
@@ -55,7 +56,10 @@ public:
   // Each pass while active(). `canFlush` false: no flush can work now.
   Do step(uint32_t nowMs, bool canFlush) {
     if (!active_) return Do::Nothing;
-    if (!decided_ && !canFlush) decide(nowMs);
+    if (!decided_ && !canFlush) {
+      cantFlush_ = true;
+      decide(nowMs);
+    }
     if (announce_) {
       announce_ = false;
       return Do::Announce;
@@ -85,6 +89,8 @@ public:
   bool decided() const { return active_ && decided_; }
   // The last flush worked: the card has the queue as it is.
   bool flushed() const { return flushed_; }
+  // The restart was set because no flush could work (step()'s `canFlush` false), not by a flush.
+  bool cantFlush() const { return cantFlush_; }
   // Flushes made, the guard's own included.
   uint32_t tries() const { return tries_; }
   // The next try's wait from `nowMs` (0: due, or none to come).
@@ -116,6 +122,7 @@ private:
   bool decided_ = false;
   bool announce_ = false;
   bool flushed_ = false;
+  bool cantFlush_ = false;
   uint32_t sinceMs_ = 0;
   uint32_t nextTryMs_ = 0;
   uint32_t restartAtMs_ = 0;

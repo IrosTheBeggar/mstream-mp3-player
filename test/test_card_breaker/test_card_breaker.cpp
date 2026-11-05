@@ -133,6 +133,7 @@ void test_the_restart_comes_at_its_bound_unflushed() {
   quietUntil(w, 31000, 32200);
   TEST_ASSERT_EQUAL_INT((int)Do::Restart, (int)w.step(32200, true));
   TEST_ASSERT_EQUAL_UINT32(3, w.tries());
+  TEST_ASSERT_FALSE(w.cantFlush());  // (the bound's: flushes that failed)
 }
 
 // The saver's wait long already (its failures before the card came back): one last flush, at the
@@ -157,7 +158,9 @@ void test_a_saver_wait_past_the_bound_is_cut_to_it() {
 void test_no_flush_that_can_work_restarts_as_before() {
   RestartWait w;
   w.begin(0, false, 10000);
+  TEST_ASSERT_FALSE(w.cantFlush());
   quietUntil(w, 0, 1200, false);
+  TEST_ASSERT_TRUE(w.cantFlush());  // (the log's why)
   TEST_ASSERT_EQUAL_INT((int)Do::Restart, (int)w.step(1200, false));
   TEST_ASSERT_EQUAL_UINT32(1, w.tries());
   RestartWait v;
