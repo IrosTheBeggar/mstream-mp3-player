@@ -3283,8 +3283,9 @@ jobs sets up no default queue when `queue.txt` itself can't be read (`main.cpp`)
   or failed its checks, and at the next boot the same library loaded.
 - **The card guard** (3.8; the trap of `docs/AUTODJ.md` 6.6): none of this reads anything
   after the boot, and a held session has no job for a remount to restart it under. A read with
-  no answer the card comes back from at once is a plain read error here (the look, 3.8), so
-  these rules are what answer it, with no remount. A card silent past its init still gets one:
+  no answer the card comes back from at once is read once more in that call, and when that
+  fails too it is a plain read error here (the look and its second try, 3.8), so these rules
+  are what answer it, with no remount. A card silent past its init still gets one:
   with a job's step under way a restart, which the breaker (3.8) bounds at 2 a power-on; with
   none the records opened again and the jobs begun again, which the read stop (3.8) bounds. A
   compaction that failed on its read has ended, so a remount after it, a real re-seat's too,
@@ -5213,7 +5214,8 @@ src/. What the code decided where 3.2-3.4 left room:
   The same card: counted (`Guard::kept`, `gc`'s "no answers it came back
   from", `[card] a command got no answer, and the card was back at
   once ...` once in 5 s at most), no remount, every open file and the cache
-  kept, and FatFs hears that read's error. Another, or unreadable: the
+  kept, and a read asked once more in that call (the second try, below):
+  FatFs hears that read's error only when that fails too, a write's at once. Another, or unreadable: the
   wrapper's status says `STA_NOINIT` (`remountDue()`), and FatFs's remount
   gives the verdict. `install()` asks for the mount's identity 8 times, 500 ms
   apart (4 s on a card that refuses, 8 s of inits on a silent one, about 13 s on one
@@ -5226,11 +5228,42 @@ src/. What the code decided where 3.2-3.4 left room:
   (the decoder's 16 KB stack, the worker's 7.5 KB, the loop's 8 KB) and under the
   volume's lock: about 45 ms on top of the driver's 300 ms of retries on the rig, 53-67 ms on
   a card (the device check below). A re-seat inside one
-  failing call, under about a second, is kept with no re-read: no PC can have
-  written the card in that time, and the identity catches a swap. A bad sector
-  under the playing file still ends that track. FatFs keeps a failed read's
+  failing call, under about a second, is kept, and the cache with it: no PC can have
+  written the card in that time, and the identity catches a swap. A lasting bad sector
+  under the playing file still ends that track; a one-off the look keeps no longer
+  does (the second try). FatFs keeps a failed read's
   error on the `FIL`, so a reader that goes on opens the file again (`AutoDj`'s
   `refreshFile()`, `docs/AUTODJ.md` 6.6).
+- **The second try** (2026-11-05; `CachedDrive::afterRead()`, host-tested in `test_sector_cache` and
+  under FatFs in `test_fat_model`). The device check below found a read the look keeps ending the
+  track under the decoder: the card fine, and that read's error taken for the file's end. So such a
+  read is asked once more, in the same disk call, and once only. It is sound there. The look has just
+  put the card through its init and found the mount's card, by its size and both sectors' CRCs. The
+  driver's own three tries all came before that init, which is what brings back a card that stopped
+  answering, so this is the first try with a chance. The volume's lock is held from the first try to
+  the second, so nothing wrote the card between, and the cache holds no byte the card doesn't. And the
+  bytes come with the card's CRC16, as any read's do. A one-off then heals for every reader, FatFs never
+  hearing of it: the decoder's track plays on, a cover shows, the walk, the scan and the compaction go
+  on, Auto DJ's slot reads. Counted (`CachedDrive::healed()`, never reset: `gc`'s "reads asked once
+  more read", the kept line's "of them reads that worked when asked once more"). Only after a look
+  that kept the card: a read the card answered (a CRC, an R1 error, no data token: the driver's tries
+  were for those, so a no-token read keeps its 1.5 s, not 3), one that left it silent, another card or
+  an identity the look couldn't read, a remount owed, a foreign session, no link or nothing armed: read
+  once, as before. Not a write: its two tries (`sdbusy::kWriteTries`) and the window's and the saver's
+  rules stand as they were. The second try's failure has its own look. Kept again: FatFs's error, and
+  `kept` counts it (a lasting sector's read counts 2). Silent: one silence for that read, as a first
+  try's would be, so the stop's 4 and too silent's 12 count the same reads and silences as before,
+  never two for one read. A read the second try reads is a read that works, and its count in the stop
+  goes. A loop in `read()`, not a call: the second read and its look run at the first one's depth. The
+  core2 build's frames on that path (`-fstack-usage`) are the same before and after: `wRead()` 32 B,
+  `CachedDrive::read()` 48, `afterRead()` 32, `lookAfterFault()` 80, `readIdentity()` 48 and its
+  lambda 32, `Card::read()` 32. So the worker's worst path, a read failing inside the compaction's
+  reopen of D with the identity's lines inside the look, keeps its 2,288-2,652 B ((6) below, MEASURED
+  before; not run again). 8 B more of internal RAM (`.bss`); `.iram0.text` unchanged at 124,883 B.
+  **Costs** (ESTIMATED; not run on a device): a one-off pays a read more, a millisecond, on the look's
+  ~360 ms. A sector that keeps getting no answer pays a second round of the driver's 3 × 100 ms and a
+  second look at each read of it: about 710-730 ms under the volume's lock, where it was 355-365 ms.
+  What that does to the device check's rows: after its Found list.
 - **The read stop** (2026-11-03; `CachedDrive::readStopped()`, `test_sector_cache`). The
   look ends a restart, not a repeat. A reader's own count starts over at a remount or the next
   track (Auto DJ's joins, the waveform bar's reads), the jobs begin again at a remount, and on a
@@ -5245,7 +5278,7 @@ src/. What the code decided where 3.2-3.4 left room:
   count has to know: the join's bound, the scan's rest, a compaction begun again at each remount and
   the waveform bar each come to about 4 reads of the sector and as many cuts, then none.
   Only such reads count. A read that fails with the card answering (a CRC, an R1 error, no data
-  token), or that the look keeps, costs a moment and no cut, and is asked every time: its reader's
+  token), or that the look keeps (both its tries), costs a moment and no cut, and is asked every time: its reader's
   tries and waits are for a glitch, and a sector every reader shares (the root's, `/.mstream`'s,
   `/.player`'s) takes 4 failed reads within milliseconds, each FatFs call reading it again: the VFS's
   `exists()` alone is 3. (The first version counted them. On the rig a 5 ms fault there lost the
@@ -5468,16 +5501,27 @@ src/. What the code decided where 3.2-3.4 left room:
   **Found:**
   - **A silence under a compaction still loses clusters.** Each guard restart in its first pass, at `tags.bin`'s middle, silent 3 s: 3 clusters, 48 KB, `hidx.tmp`'s as in 3.2.2, 96 KB a held cycle, only a disk check gets them back. The look's cases (no R1, once, no token) lose none. A restart under the walk or at the compaction's opening: none.
   - **A failed write of a FAT sector in a queue's save** loses a cluster, 16 KB: the file is whole, as the table says.
-  - **A kept read under the decoder ends the track.** The look finds the card fine, and that read's error is the file's end: 3:53 of a 4:00 track gone, the next one plays, no word. As before the look, where it was a cut. No re-read: a choice to make.
+  - **A kept read under the decoder ends the track.** The look finds the card fine, and that read's error is the file's end: 3:53 of a 4:00 track gone, the next one plays, no word. As before the look, where it was a cut. Since then (2026-11-05) the second try (above) reads it again in that call: such a one-off plays on, for every reader, and a lasting one ends the track a round later, as below. Not run on a device.
   - **A pull runs the queue out,** about 2 s an entry as each open fails, to the end, paused; the put-back then saves that as the place. Older than this work; `cardBack()` only saves it sooner.
   - **The guard's restart doesn't wait for the queue's flush:** the card silent again, the save fails and 1.2 s later the edits since the last save are gone (`saved now ...: FAILED`, then the old queue at the next boot). The line said "the queue saved" before the flush; it no longer does.
   - **`@status`** says `card=fat32` until a FatFs call finds the card out, then `card=none`; `size=-` after a size read that failed, until an init answers it: a CMD9 unanswered at an init, or none sent, the select timing out under DO low at the mount; and `card=none size=- cid=-` for a held session whose first commands met DO low, the card answering.
   - **A silent or DO low fault meets jobs more often than (10) said:** a remount begins the jobs again, the walk under the next one restarts. So the rig's "about 4 cuts" and "12 cuts" came here as 4 and 12 remounts, in a held boot or dark after the walk, R R first in the others, few of them over sound: the player paused itself after the first ones, so the rig's seconds of sound aren't measured. The bound held each time.
   - **The card's ledger:** 546 clusters fewer at the end: 279 cover copies (lit sessions over many albums), 236 from the check's own restart under a compaction, 27 from nine of those guard restarts, 2 from those saves, 2 not placed. The `/.player` files back by CRC at the clean-up, but for the Opus open cache and `device.txt`.
 
+  **With the second try** (2026-11-05, after this check: ESTIMATED from its own figures and `lib/SD`'s code; no build with it has run on a device, and the rig's table above is from before it too). A read the look keeps is read once more in its disk call. A one-off reads then, whoever asked, and the rows' failure is gone where the switch failed the read once. A sector that keeps getting no answer pays a second round at each read, the driver's 3 × 100 ms (three `no token received` lines, then `Card Failed!`) and a second look (53-67 ms): about 710-730 ms under the volume's lock where it was 355-365 ms. The SPI bus is held through each round and free for a moment between. The ring holds 65,536 frames, 1.49 s, and the decoder refills it when two 1,024-frame passes won't fit, so steady play has about 1.44 s in it: one such hold leaves about 0.7 s, where it left 1.1 s, and FatFs lets the lock go at the end of each call. So:
+  - (2) The Auto DJ index's first sector: passes of up to about 730 ms, not 363; 0 underruns still the projection; `kept` 2 a try. `library.idx`'s first: about 1.4 s more setup, still before the Play.
+  - (3) A cover's own sector: the placeholder a round later. `/.player/thumbs`'s directory: about 2.4 s a cover, not 1.3 (6 looks, not 3), on the worker; 0 underruns projected. The waveform file's first sector: its two reads a track about 730 ms each. The listing, the Pending file, `tags.bin`, `tags.jnl` and T: the same outcomes, each failing read a round longer.
+  - (8) The pass of 408 ms about 770 ms; the drags' downs of 619 and 624 ms, over two looks each, about 1.2-1.4 s over four, still a tap.
+  - (11) DJRF's first sector: each try of the join a round longer. DJPH's middle entry: 4 looks, not 2, the button's answer a round later.
+  - (12) CMD9 at a re-init only: if the read's fault lasts, two inits of 352 ms, about 1.3 s in all.
+  - (13) The first read inside `FolderCursor::begin()`: if the switch failed that read alone, the second try reads it and the compaction goes on; if it lasts, `kept` 4 a boot and the same `compaction FAILED`. `/.player`'s directory under a long track: passes of about 690 ms, not 327; 0 underruns projected; the save's waits as they were.
+  - The decoder's own read of a lasting sector (the Found item's): the track ends about 730 ms after that read began, not 365 ms, and the ring then holds about 0.7 s for the next track's open.
+  - The same as before: every no-token row (one try, 1.5 s: (10)'s 786 underruns, (11)'s 998, (13)'s 13), every row whose look found the card silent, DO low past the look's end included (no second try), the breaker's rows, and the writes ((9)). A DO low that ends inside the look ((6)'s 1.5 s) can now be kept and read again; that read is no deeper than the look before it.
+  The risk the projection can't rule out is a hold soon after a track starts, while the ring is still filling (flat out to 500 ms, then 1.5x): one there that left no underrun at 365 ms may leave one at 730.
+
   **What the switch can't show:** the card never saw the command, answers everything else at once (but for a 500 ms select at 3 boots' first init right after a restart), and a silence ends by a clock and doesn't outlive a restart. So "no restart" is for such a card, and R R then a held boot its best case. A write fault never reached flash. A shot reads the panel back between frames, and no frame is drawn during a look.
 
-  **Not run on a device:** real pulls (no contact moved, one card, no file added on a PC, none under a scan, a build or a save, no second brand); a real power cycle; playing over Bluetooth; a T with records, or a body beyond T's one sector; a real failing card; a look under a list actually scrolling; (7)'s second FAILED at a scan's end and its third-fence line, Rescan's words and the page's Can't read on screen; two long presses; a no-token switch on one slot's sector; all but sector 0, the boot sector and FSINFO; DO low until CMD0 (the switch's ends by a clock); FSINFO's R1 errors for 1-3 s at the mount; a FAT sector of the old `queue.txt` alone, for good, the first save on a card with no `queue.txt`, a fresh card's first free cluster; a window sector for 2-12 s; FSINFO's read at a re-seat, the second FAT, a band under a foreign held boot (such a boot itself ran), 9 or more Pending files, and any read that works and then leaves the card silent (the switch has no such kind).
+  **Not run on a device:** the second try (2026-11-05), at all: no build with it has run on a Core2, so no row above says what it does, and its costs are the ESTIMATED ones above; real pulls (no contact moved, one card, no file added on a PC, none under a scan, a build or a save, no second brand); a real power cycle; playing over Bluetooth; a T with records, or a body beyond T's one sector; a real failing card; a look under a list actually scrolling; (7)'s second FAILED at a scan's end and its third-fence line, Rescan's words and the page's Can't read on screen; two long presses; a no-token switch on one slot's sector; all but sector 0, the boot sector and FSINFO; DO low until CMD0 (the switch's ends by a clock); FSINFO's R1 errors for 1-3 s at the mount; a FAT sector of the old `queue.txt` alone, for good, the first save on a card with no `queue.txt`, a fresh card's first free cluster; a window sector for 2-12 s; FSINFO's read at a re-seat, the second FAT, a band under a foreign held boot (such a boot itself ran), 9 or more Pending files, and any read that works and then leaves the card silent (the switch has no such kind).
 - **The card worker** (`app/CardWorker`): Thumbs' worker, generalised: a
   task on core 1, made for the first step and gone 3 s after the last, a
   7.5 KB internal stack, handed one step at a time by the loop (a function
