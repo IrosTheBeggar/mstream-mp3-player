@@ -1496,7 +1496,8 @@ void test_on_fatfs_a_read_asks_no_longer_than_its_time() {
 }
 
 // Under the wrapper, as the firmware. A read of queue.txt with no answer, the card back at once
-// (the look, docs/METADATA.md 3.8): that read's error and no remount, and the boot's next read has
+// (the look and its second try, docs/METADATA.md 3.8): that read's error when the second try gets
+// none either, and no remount, and the boot's next read has
 // the file. A question the same: the line stays by its path, and nothing mounts. A card silent past
 // its init: the mark stands, and the boot's next read is FatFs's remount (at the boot, not under a
 // job: QueueStore::restore()'s echoNow() is the same call).
@@ -1547,7 +1548,7 @@ void test_on_fatfs_queue_txt_under_the_look() {
   TEST_ASSERT_EQUAL_UINT32(2, c.q.size());
   TEST_ASSERT_EQUAL_UINT32(1, c.lookup.kept());  // the second line, by its path: the card has it
   TEST_ASSERT_EQUAL_UINT32(0, wrapper.remounts());
-  TEST_ASSERT_EQUAL_UINT32(1, wrapper.kept());
+  TEST_ASSERT_EQUAL_UINT32(2, wrapper.kept());  // the read and its second try: the sector still has no answer
 
   // A question: the folder of the line the library doesn't list.
   c.remount();
@@ -1562,7 +1563,7 @@ void test_on_fatfs_queue_txt_under_the_look() {
   TEST_ASSERT_TRUE(c.lookup.failed());
   TEST_ASSERT_EQUAL_UINT32(1, c.lookup.unasked());
   TEST_ASSERT_EQUAL_UINT32(remounts, wrapper.remounts());
-  TEST_ASSERT_EQUAL_UINT32(2, wrapper.kept());
+  TEST_ASSERT_EQUAL_UINT32(4, wrapper.kept());
 
   // The file's sector, the card silent past its init.
   c.remount();
@@ -1576,7 +1577,7 @@ void test_on_fatfs_queue_txt_under_the_look() {
   TEST_ASSERT_EQUAL_UINT32(2, c.q.size());
   TEST_ASSERT_EQUAL_UINT32(remounts + 1, wrapper.remounts());
   TEST_ASSERT_FALSE(wrapper.foreign());
-  TEST_ASSERT_EQUAL_UINT32(2, wrapper.kept());
+  TEST_ASSERT_EQUAL_UINT32(4, wrapper.kept());  // silent past its init: one try, nothing kept
 }
 
 // The reason the questions wait for the file to close: one on a card silent past its init makes

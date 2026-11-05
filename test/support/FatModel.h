@@ -119,6 +119,7 @@ struct Drive {
   // (card->status & STA_NOINIT). `silent`: CMD13 gets no R1 either: the card went (a
   // card back in the slot is in SD mode, until the next init's CMD0).
   uint32_t noAnswerLba = UINT32_MAX;
+  uint32_t noAnswerReads = UINT32_MAX;     // ... for this many reads of it, then it answers (1: a one-off)
   uint32_t noAnswerWriteLba = UINT32_MAX;  // ... a write's (the mark too)
   bool errorWriteLba = false;  // ... with no mark: an R1 error, a data response's refusal (noAnswerWriteLba's sector)
   FATFS* fs = nullptr;  // the volume, for its window (the firmware's wWrite())
@@ -144,7 +145,8 @@ public:
     Drive& dr = drive(pdrv_);
     // The SD driver: a mark stops every read; no R1 sets it.
     if (dr.marked) return false;
-    if (lba <= dr.noAnswerLba && dr.noAnswerLba < lba + n) {
+    if (lba <= dr.noAnswerLba && dr.noAnswerLba < lba + n && dr.noAnswerReads != 0) {
+      if (dr.noAnswerReads != UINT32_MAX) --dr.noAnswerReads;
       dr.marked = true;
       return false;
     }

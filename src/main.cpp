@@ -2922,15 +2922,17 @@ static void stepCardGuard() {
   }
   retriesSeen = g.writeRetries;  // (gc's reset brings them down: followed)
   failsSeen = g.writeFails;
-  // A command with no answer, the card back at its init, the same card: that read's error,
-  // and nothing else (CachedDrive::lookAfterFault()). One line in 5 s at most.
+  // A command with no answer, the card back at its init, the same card: a read asked once
+  // more, and that read's error only when that fails too; nothing else (CachedDrive::
+  // lookAfterFault(), afterRead()). One line in 5 s at most.
   static uint32_t keptSeen = 0, keptSaidMs = 0;
   if (g.kept != keptSeen && (keptSeen == 0 || millis() - keptSaidMs >= 5000)) {
     keptSeen = g.kept;
     keptSaidMs = millis();
     Serial.printf("[card] a command got no answer, and the card was back at once, the same card: %lu since the "
-                  "boot, the last read or write that failed at sector %lu\n",
-                  (unsigned long)g.kept, (unsigned long)g.faultLba);
+                  "boot, %lu of them reads that worked when asked once more; the last read or write that failed "
+                  "at sector %lu\n",
+                  (unsigned long)g.kept, (unsigned long)g.healed, (unsigned long)g.faultLba);
   }
   static bool writesOffSaid = false;
   if (g.writesOff && !writesOffSaid) {

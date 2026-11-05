@@ -779,8 +779,9 @@ at 417,780 B; about 15 s later, the block at 303,092 B, they joined (MEASURED
 
 A fault of the card says nothing of the file. A command that gets no answer sets
 the SD driver's mark, and the wrapper looks at once, in that read's own disk call
-(METADATA.md 3.8): the card back at its init, the same card, and all FatFs hears is
-that read's error, with nothing open lost. A read that fails any other way (a select
+(METADATA.md 3.8): the card back at its init, the same card, the read is asked once
+more there (a one-off reads, and FatFs never hears of it), and all FatFs hears when
+that fails too is that read's error, with nothing open lost. A read that fails any other way (a select
 timeout, an R1 error, no data token, a CRC mismatch) sets nothing. Until 2026-11-02 one
 such glitch in the boot's open left picks by id for the session. FatFs keeps a failed
 read's error on its `FIL`, whoever read (a slot, a join, the lookup behind "Auto DJ from
