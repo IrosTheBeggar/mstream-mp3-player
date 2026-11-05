@@ -127,10 +127,16 @@ private:
   void discardTemp() override;
   // queue.tmp, closed, is `bytes` long on the storage (FatFs's word on the card).
   bool tmpWhole(const char* temp, size_t bytes);
-  // A whole queue.tmp into queue.txt's place (queue.txt removed first, as ever).
+  // A whole queue.tmp into queue.txt's place: on the card by 2.12.6's rule (queue.txt
+  // removed, or renamed to a twin when it shares a twin's chain), on the flash as ever.
   bool replaceFile(const char* file, const char* temp);
-  // The held queue.tmp (tmpHeld_), before anything writes over it: into queue.txt's place,
-  // or nothing left of it to keep. False: neither can be done now (nothing done).
+  // Before queue.tmp is opened for writing (FA_CREATE_ALWAYS frees what it holds): at the
+  // boot's first save one with no queue.txt takes that name, a held one is settled, else on
+  // the card a leftover is removed, or one on queue.txt's chain renamed to a twin. False:
+  // nothing to be done now, and nothing written.
+  bool readyTemp(const char* file, const char* temp);
+  // The held queue.tmp (tmpHeld_): into queue.txt's place, or to a twin when it shares
+  // queue.txt's chain, or nothing left of it to keep. False: none of that now (nothing done).
   bool settleTemp(const char* file, const char* temp);
   void savePosition(uint32_t generation, int32_t current) override;
   void saveResume(const QueueResume& r) override;
@@ -162,8 +168,12 @@ private:
   bool unread_ = false;
   // queue.tmp is whole and the newest queue on the card: a commit's rename failed (queue.txt
   // may be gone), or the boot read it. Nothing opens it for writing, or removes it, until
-  // it has taken queue.txt's place (replaceFile()).
+  // it has taken queue.txt's place, or gone to a twin (settleTemp()).
   bool tmpHeld_ = false;
+  // The card's twins of queue.txt (/.player/queue.xl1-9, 2.12.6): -1 not counted yet (the
+  // session's first write counts them), else how many. While there are any, a commit asks
+  // whose chain queue.txt is on before it removes it.
+  int32_t twins_ = -1;
   uint32_t failuresSeen_ = 0;
 
   File file_;

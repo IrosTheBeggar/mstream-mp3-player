@@ -1878,6 +1878,50 @@ void test_cut_rename_rule() {
   }
 }
 
+// collectTwins() says when a question the card failed stopped it (a caller that keeps a
+// count of the twins, as the queue's file does, mustn't take that count for the card's):
+// wherever the question falls, nothing goes that shares a chain, and the count is no more
+// than what is there. With every answer, unread is false.
+void test_collect_twins_says_when_the_card_failed_a_question() {
+  const ts::Names n{"/p/x.idx", "/p/x.tmp", "/p/x"};
+  const auto shape = [&](CutFs& fs) {
+    fs.put("/p/x.idx", {1, 2, 3});
+    fs.link("/p/x.idx", "/p/x.xl1");  // a twin on X's chain: stays
+    fs.put("/p/x.xl2", {4});
+    fs.link("/p/x.xl2", "/p/x.xl3");  // two twins on one chain: both stay
+    fs.put("/p/x.xl4", {5});          // one a disk check parted: goes
+  };
+  {
+    CutFs fs;
+    shape(fs);
+    bool unread = true;
+    TEST_ASSERT_EQUAL_UINT32(3, ts::collectTwins(fs, n, &unread));
+    TEST_ASSERT_FALSE(unread);
+    TEST_ASSERT_FALSE(fs.exists("/p/x.xl4"));
+    TEST_ASSERT_TRUE(fs.violations.empty());
+  }
+  CutFs counted;
+  shape(counted);
+  arm(counted, "/p/", 1000000, -1);
+  ts::collectTwins(counted, n);
+  const long events = counted.faultEvents;
+  TEST_ASSERT_GREATER_THAN_INT32(3, events);
+  for (long k = 0; k < events; ++k) {
+    char msg[48];
+    std::snprintf(msg, sizeof(msg), "question %ld of %ld", k, events);
+    CutFs fs;
+    shape(fs);
+    arm(fs, "/p/", k, k + 1);
+    bool unread = false;
+    const uint32_t left = ts::collectTwins(fs, n, &unread);
+    fs.faultFrom = -1;
+    TEST_ASSERT_TRUE_MESSAGE(unread, msg);
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32_MESSAGE(3, left, msg);
+    TEST_ASSERT_TRUE_MESSAGE(fs.violations.empty(), msg);
+    TEST_ASSERT_TRUE_MESSAGE(fs.exists("/p/x.idx") && fs.exists("/p/x.xl1"), msg);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // A whole tags.tmp alone (a cut between replace()'s remove of tags.bin and
 // its rename: the only D left) and an open() short of memory for its check
@@ -2500,6 +2544,7 @@ int main(int, char**) {
   RUN_TEST(test_a_bad_device_is_left_out);
   RUN_TEST(test_rescan_and_new_parser);
   RUN_TEST(test_cut_rename_rule);
+  RUN_TEST(test_collect_twins_says_when_the_card_failed_a_question);
   RUN_TEST(test_a_failed_check_allocation_keeps_a_whole_tmp);
   RUN_TEST(test_power_cut_at_every_step);
   RUN_TEST(test_power_cut_during_recovery);

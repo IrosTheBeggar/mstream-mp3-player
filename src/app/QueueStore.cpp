@@ -14,6 +14,9 @@ namespace {
 
 constexpr const char* kNvsNamespace = "queue";
 constexpr size_t kBufSize = 2048;
+// The queue's files on the card, for 2.12.6's cut-rename rule (lib/core TagStore): its twins
+// are /.player/queue.xl1 to .xl9. (LocalStorage::stateDir() is /.player.)
+const tagstore::Names kQueueNames{"/.player/queue.txt", "/.player/queue.tmp", "/.player/queue"};
 
 struct SavedPosition {
   bool have = false;
@@ -303,33 +306,13 @@ void QueueStore::noteFailures() {
 ByteSink* QueueStore::openTemp() {
   char file[48], temp[48];
   paths(file, temp, sizeof(file));
-  // A queue.tmp that holds the queue (queue.txt may be gone) takes queue.txt's place before
-  // it is opened for writing: truncated first, a cut or a write dropped would leave none.
-  if (tmpHeld_ && !settleTemp(file, temp)) {
-    Serial.printf("[queue] couldn't replace %s: %s, which holds the queue, not written over\n", file, temp);
+  if (!readyTemp(file, temp)) {
+    Serial.printf("[queue] couldn't write %s: what is there is left as it is (%s)\n", temp,
+                  tmpHeld_ ? "it holds the queue, and couldn't take queue.txt's place" : "the card didn't say what it is");
     return nullptr;
   }
   if (!buf_) buf_ = static_cast<uint8_t*>(psramAlloc(kBufSize));
-  // At the boot's first save, a queue.tmp with no queue.txt (one the boot read whole is held,
-  // above): it takes that name first. This open would empty it before anything new is safe,
-  // and give FatFs the same clusters back. What the card can't say (out, a read that failed)
-  // isn't "no such file": no open until it can.
-  fs::FS& fs = storage_.fs();
-  if (checkKept_) {
-    using Seen = LocalStorage::Seen;
-    const Seen txt = storage_.seen(file);
-    const Seen tmp = txt == Seen::No ? storage_.seen(temp) : Seen::No;
-    if (txt == Seen::Unknown || tmp == Seen::Unknown) {
-      Serial.printf("[queue] couldn't write %s\n", temp);
-      return nullptr;
-    }
-    if (tmp == Seen::Yes && !fs.rename(temp, file)) {
-      Serial.printf("[queue] couldn't name %s %s\n", temp, file);
-      return nullptr;
-    }
-    checkKept_ = false;
-  }
-  if (buf_) file_ = fs.open(temp, FILE_WRITE);
+  if (buf_) file_ = storage_.fs().open(temp, FILE_WRITE);
   if (!buf_ || !file_) {
     Serial.printf("[queue] couldn't write %s\n", temp);
     return nullptr;
@@ -339,44 +322,104 @@ ByteSink* QueueStore::openTemp() {
 }
 
 bool QueueStore::tmpWhole(const char* temp, size_t bytes) {
+  uint32_t size = 0, time = 0;
+  bool asked = false;
   if (onCard()) {
-    uint32_t size = 0, time = 0;
-    return fat_.stat(temp, &size, &time) && size == bytes;
+    asked = fat_.stat(temp, &size, &time);
+  } else {
+    File f = storage_.fs().open(temp, FILE_READ);
+    asked = static_cast<bool>(f);
+    if (asked) size = static_cast<uint32_t>(f.size());
+    f.close();
   }
-  File f = storage_.fs().open(temp, FILE_READ);
-  const bool whole = f && f.size() == bytes;
-  f.close();
-  return whole;
+  if (asked && size == bytes) return true;
+  if (asked) {
+    Serial.printf("[queue] %s isn't whole after its close: %lu B there, %lu written\n", temp, (unsigned long)size,
+                  (unsigned long)bytes);
+  } else {
+    // (Not there, the card failed the question, or no PSRAM for it: no word that it's whole.)
+    Serial.printf("[queue] %s after its close: its size couldn't be had\n", temp);
+  }
+  return false;
 }
 
 bool QueueStore::replaceFile(const char* file, const char* temp) {
+  // With twins on the card (or none counted yet), 2.12.6's rule (tagstore::replace()):
+  // queue.txt is renamed to a twin when it shares a twin's chain, since removing it would
+  // free clusters the twin holds, and a question the card fails stops it. Else, and on the
+  // flash, as ever.
+  if (onCard() && twins_ != 0) return tagstore::replace(fat_, kQueueNames);
   fs::FS& fs = storage_.fs();
   fs.remove(file);
-  if (!fs.rename(temp, file)) return false;
-  tmpHeld_ = false;
+  return fs.rename(temp, file);
+}
+
+bool QueueStore::readyTemp(const char* file, const char* temp) {
+  // At the boot's first save, a queue.tmp with no queue.txt, whatever the boot made of it: it
+  // takes that name first. The open to write it would empty it before anything new is safe,
+  // and give FatFs the same clusters back, and the rule below would remove it. What the card
+  // can't say (out, a read that failed) isn't "no such file": nothing done until it can.
+  if (checkKept_) {
+    using Seen = LocalStorage::Seen;
+    const Seen txt = storage_.seen(file);
+    const Seen tmp = txt == Seen::No ? storage_.seen(temp) : Seen::No;
+    if (txt == Seen::Unknown || tmp == Seen::Unknown) return false;
+    if (tmp == Seen::Yes && !storage_.fs().rename(temp, file)) return false;
+    checkKept_ = false;
+  }
+  if (tmpHeld_ && !settleTemp(file, temp)) return false;
+  if (onCard() && twins_ < 0) {
+    // The first write of a session, or the first after a commit or settle that failed. A
+    // queue.tmp left on queue.txt's own chain (a rename cut, or failed, between its two
+    // directory writes, here or in an earlier session), which FA_CREATE_ALWAYS would free,
+    // goes to a twin, and a leftover is removed, as 2.12.6 has it. Then the twins are
+    // counted (a rename to one that FatFs said failed may have been done all the same), and
+    // those a disk check parted removed. A question the card fails: nothing written, asked
+    // again at the next write.
+    if (!tagstore::prepareTmp(fat_, kQueueNames)) return false;
+    bool unread = false;
+    const uint32_t left = tagstore::collectTwins(fat_, kQueueNames, &unread);
+    if (unread) return false;
+    twins_ = static_cast<int32_t>(left);
+    if (left) {
+      Serial.printf("[queue] %lu copies of queue.txt share a chain on the card (/.player/queue.xl*): it wants a disk "
+                    "check on a PC\n",
+                    (unsigned long)left);
+    }
+  }
   return true;
 }
 
 bool QueueStore::settleTemp(const char* file, const char* temp) {
-  if (onCard()) {
-    // FatFs's word first. A rename it said failed may be done in its view all the same (its
-    // directory sector to be written again by the next call): queue.txt is the queue then,
-    // and removing it would lose it. Two entries on one chain are a rename cut between its
-    // writes, which only a disk check parts (docs/METADATA.md 2.12.6): neither is touched.
-    // A question the card fails answers nothing: nothing done.
-    const tagstore::Fs::Entry t = fat_.entry(temp);
-    if (t.cardFailed) return false;
-    if (!t.there) {
-      tmpHeld_ = false;  // (nothing of it left to keep)
-      return true;
-    }
-    const tagstore::Fs::Entry f = fat_.entry(file);
-    if (f.cardFailed || (f.there && t.firstCluster != 0 && f.firstCluster == t.firstCluster)) return false;
-  } else if (!storage_.fs().exists(temp)) {
+  if (!onCard()) {
+    if (storage_.fs().exists(temp) && !replaceFile(file, temp)) return false;
     tmpHeld_ = false;
     return true;
   }
-  return replaceFile(file, temp);
+  // FatFs's word first, and a question the card fails answers nothing: nothing done. A
+  // rename it said failed may be done in its view all the same (its directory sector written
+  // again by the next call): no queue.tmp then, and queue.txt is the queue. Or half done,
+  // when the two entries are in different sectors of the directory: both on one chain, so
+  // queue.txt holds the same queue, and queue.tmp goes to a twin, which frees nothing. And
+  // the twins are counted again after (readyTemp()): any of these renames may have made one.
+  twins_ = -1;
+  const tagstore::Fs::Entry t = fat_.entry(temp);
+  if (t.cardFailed) return false;
+  if (t.there) {
+    const tagstore::Fs::Entry f = fat_.entry(file);
+    if (f.cardFailed) return false;
+    const bool oneChain = f.there && t.firstCluster != 0 && f.firstCluster == t.firstCluster;
+    if (oneChain) {
+      if (!tagstore::prepareTmp(fat_, kQueueNames)) return false;
+      Serial.printf("[queue] %s and %s shared a chain (a rename failed between its writes): %s kept as a twin; the "
+                    "card wants a disk check on a PC\n",
+                    file, temp, temp);
+    } else if (!replaceFile(file, temp)) {
+      return false;
+    }
+  }
+  tmpHeld_ = false;
+  return true;
 }
 
 bool QueueStore::commitTemp() {
@@ -388,10 +431,7 @@ bool QueueStore::commitTemp() {
   // it doesn't say: a card that refused it would leave queue.tmp cut, or empty, and the
   // rename would put that in queue.txt's place. So queue.tmp's size, as the storage has it,
   // against what the sink took.
-  if (ok && !tmpWhole(temp, sink_.taken())) {
-    ok = false;
-    Serial.printf("[queue] %s isn't whole on the card after its close\n", temp);
-  }
+  if (ok && !tmpWhole(temp, sink_.taken())) ok = false;
   if (!ok) {
     storage_.fs().remove(temp);
     Serial.printf("[queue] couldn't replace %s: it stays as it was\n", file);
@@ -401,9 +441,12 @@ bool QueueStore::commitTemp() {
   // gone already, and the boot takes a whole queue.tmp in its place.
   tmpHeld_ = true;
   if (!replaceFile(file, temp)) {
+    // (Held now: the next write settles it first, and counts the twins again after, since a
+    // rename that failed may have made one all the same.)
     Serial.printf("[queue] couldn't replace %s: %s kept, whole (a boot reads it if %s is gone)\n", file, temp, file);
     return false;
   }
+  tmpHeld_ = false;
   unread_ = false;
   return true;
 }

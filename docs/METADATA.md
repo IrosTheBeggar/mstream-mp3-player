@@ -1927,7 +1927,8 @@ device MUST NOT write `/.mstream` in any other role.
 - **`library.idx`, `queue.txt`, the thumbnails and `opus.idx`** keep
   today's write-aside-then-rename; when only the tmp is there, it is the
   newest whole file. (`queue.tmp` replaces `queue.txt` only once its size
-  on the card is what was written, and is kept when its rename fails:
+  on the card is what was written, is kept when its rename fails, and on
+  the card the cut rule below holds for it, its twins `queue.xl1`-`.xl9`:
   3.2.2, "The queue's file".)
 - **`device.txt`** is written through `device.tmp` and a rename.
 - **A cut inside one of these renames** (2.12.1, "Cut renames") leaves
@@ -3342,9 +3343,21 @@ file**): no boot sets one up over a `queue.txt` it couldn't read.
     anything opens it for writing (`QueueStore::settleTemp()`): the retry 10 s later truncated it,
     and a cut in that write, or an edit that dropped it, left none. FatFs is asked first: a rename
     it said failed may be done in its view all the same (its directory sector written again by the
-    next call), and `queue.txt` is then the queue, which removing would lose; two entries on one
-    chain (a rename cut between its writes, 2.12.6) are left alone; a question the card fails, and
-    nothing is done. Until it can, nothing is written over it, and the saver tries again every 10 s.
+    next call), and `queue.txt` is then the queue, which removing would lose; a question the card
+    fails, and nothing is done. Until it can, nothing is written over it, and the saver tries again
+    every 10 s.
+  - **The cut-rename rule (2.12.6) holds for `queue.txt` on the card** (2026-11-05). A rename that
+    fails, or is cut, between its two directory writes (the two entries in different sectors of
+    `/.player`, which has more than 16 entries then) leaves `queue.txt` and `queue.tmp` on one chain,
+    in FatFs's view at once. Before, the next write of `queue.tmp` (`FA_CREATE_ALWAYS`) or a remove of
+    either freed that chain under the other, and the queue went in a later session. Now
+    `tagstore::prepareTmp()` sends such a `queue.tmp` to a twin (`queue.xl1`: a rename frees nothing)
+    before it is opened for writing, and `tagstore::replace()` renames `queue.txt` to a twin, not
+    removes it, while it shares a twin's chain: the twins stay until a disk check parts them, and are
+    removed then (`collectTwins()`). The session's first write asks: a `queue.tmp` left over, and the
+    twins counted; while there are none, a commit removes and renames as ever. A commit or a settle
+    that fails counts them again before the next write, since a rename FatFs said failed may have
+    made one all the same.
 
 MEASURED on the host, the rig above with the look and the breaker in it (3.8), the tree before (main
 at 96ba08b) and after, a fault for the time named, a read with no answer the card is back from at
@@ -3404,12 +3417,27 @@ when the next boot finds the default queue:
 | The same, 36 lines of 306 tracks | 306 lines | 36 lines |
 | Each of `restore()`'s 3 allocations (the FIL, the read's block, the queue's) refused once, in turn; 4 shuffled | 2 of 3 lose the queue; 3 of 4 | 0: the read after the first wait has it |
 | The same from that allocation on, through `restore()` | 0 of 3 (unread: `queue.tmp`'s FIL refused too) | 0 of 3 |
-| An edit, then each disk write or read of its write refused in its turn: once, lasting, or with no answer; then a cut 1 s later, or 40 s on and the power-off flush, or a cut in the retry's write, or an edit that drops the retry's write and a cut; 6 lines of 12 tracks, 100 of 120 | **38 of 236 runs and 46 of 260 lose the queue**: 32 and 36 with the commit taken as done (`queue.txt` cut or empty), 6 and 10 after `couldn't replace` (no file left) | 0 of 252, 0 of 276 |
+| An edit, then each disk write or read of its write refused in its turn: once, lasting, or with no answer; then a cut 1 s later, or 40 s on and the power-off flush, or a cut in the retry's write, or an edit that drops the retry's write and a cut; 6 lines of 12 tracks, 100 of 120 | **38 of 236 runs and 46 of 260 lose the queue**: 32 and 36 with the commit taken as done (`queue.txt` cut or empty), 6 and 10 after `couldn't replace` (no file left) | 0 of 412, 0 of 436 (more calls to fail: the questions) |
 | Of those, only a whole `queue.tmp` kept after a failed rename (the change alone) | | 33 and 41: what the close leaves isn't seen |
 | ... and `queue.tmp`'s size asked after its close, nothing settled before the next write | | 0 and 5: all a cut in the retry's write over the kept file |
 | The boot finds `queue.tmp` alone (a cut between the remove and the rename) and writes it again 2 s later; a cut in that write, or an edit that drops it and a cut; 100 lines of 120 | No whole file: the default queue | `queue.txt`, 100 lines: put in place before the write |
-| The rename failed, then a read the retry's settle asks failed too, and a cut in the retry's write, each of its first 5 reads | (lost at the first) | 0 of 5 lost (asked through the VFS instead of FatFs: 2 of 5) |
-| No fault: a boot, an edit, its write | 13 disk reads, 11 writes | 15 reads (the size asked), 11 writes |
+| The rename failed, then a read the retry's settle asks failed too, and a cut in the retry's write, each of its first 7 reads | (lost at the first) | 0 of 7 lost (asked through the VFS instead of FatFs: 2 of 7) |
+| No fault: a boot, an edit, its write (the session's first) | 13 disk reads, 11 writes | 35 reads (`queue.tmp` and the twins asked, the size), 11 writes; each write after it 2 reads more |
+
+And on a second rig, the review's, which adds `/.player` with 13 or 29 files more (so the two entries
+of a rename fall in different sectors), a power cut that drops open files, the decoder's read with no
+answer, a FAT check after each run (a cluster in two chains, a chain through a free one), and two later
+sessions (an edit, a cut in its write, a boot; another file written, a boot) that must still find the
+queue. Twins on one chain are the rule at work, counted apart:
+
+| Card | Before | The first version of this | Now |
+|---|---|---|---|
+| Each disk write or read of a commit refused in its turn (6 kinds), 100 lines of 120, one sector of `/.player` | 10-19 lost at the next boot, 9 later | 0 | 0 |
+| The same, `/.player` in two sectors, the session going on | 10 lost, 2-4 later, 2-4 FAT damaged | 0 lost, **3-8 later** | 0 (3-5 runs leave twins) |
+| The same, a cut 1 s after the fault | 25-31 lost, 18-21 later | 0 lost, 3-6 later | 0 (3 leave twins) |
+| Two faults around a commit, every kind and place, 6 lines of 12, five endings; one sector / two | 350-590 / 660-1,364 lost (and 72 later) | 0 / 462-702 later | 0 / 0 of 7,185 and 9,048 runs each |
+| The update step's carry, two faults; one sector / two | 384 / 608 lost | 0 / 619 later | 0 / 0 of 7,854 and 10,500 |
+| The boot finding `queue.tmp` alone, beside a `queue.txt` it couldn't read, or beside a cut one, then a fault in its writes; four endings | 10-67 lost in each | 6-12 later | 0 |
 
 - **The queue file's costs, left as they are.** A line by its path has its file's name for a title, and
   no artist, album, cover or Auto DJ row; Go to album says the library isn't ready. The boot's questions
