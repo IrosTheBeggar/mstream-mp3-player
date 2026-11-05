@@ -21,7 +21,11 @@
 // - The tracks: /.player/queue.txt on the card, as paths (QueueText), so a
 //   rebuilt library (new ids) finds them again. Rewritten 2 s after the
 //   last edit, a few dozen lines per loop pass (a long queue never holds
-//   the loop), into queue.tmp, which then replaces queue.txt.
+//   the loop), into queue.tmp, which then replaces queue.txt: only once the
+//   storage has all of it (the VFS's close says nothing of what it wrote
+//   then), and a whole queue.tmp that couldn't take queue.txt's place is
+//   kept (queue.txt may be gone by then), for the boot, and put in place
+//   before anything writes over it.
 // - The position: NVS ("queue": generation, position), at most once a
 //   second while it moves, so a track change doesn't rewrite the file. It
 //   only counts for the file with the same generation: a position saved
@@ -121,6 +125,13 @@ private:
   ByteSink* openTemp() override;
   bool commitTemp() override;
   void discardTemp() override;
+  // queue.tmp, closed, is `bytes` long on the storage (FatFs's word on the card).
+  bool tmpWhole(const char* temp, size_t bytes);
+  // A whole queue.tmp into queue.txt's place (queue.txt removed first, as ever).
+  bool replaceFile(const char* file, const char* temp);
+  // The held queue.tmp (tmpHeld_), before anything writes over it: into queue.txt's place,
+  // or nothing left of it to keep. False: neither can be done now (nothing done).
+  bool settleTemp(const char* file, const char* temp);
   void savePosition(uint32_t generation, int32_t current) override;
   void saveResume(const QueueResume& r) override;
   // The player's resume point, for the saver.
@@ -149,11 +160,15 @@ private:
   cardfat::FatFs fat_;
   queuefile::Lookup lookup_;
   bool unread_ = false;
+  // queue.tmp is whole and the newest queue on the card: a commit's rename failed (queue.txt
+  // may be gone), or the boot read it. Nothing opens it for writing, or removes it, until
+  // it has taken queue.txt's place (replaceFile()).
+  bool tmpHeld_ = false;
   uint32_t failuresSeen_ = 0;
 
   File file_;
   uint8_t* buf_ = nullptr;  // PSRAM
-  bool checkKept_ = true;   // a queue.tmp may be all there is: at the boot's first save, and after a failed rename
+  bool checkKept_ = true;   // a queue.tmp may be all there is: at the boot's first save
   BufferedFileSink sink_;
   queueremap::Carry* carry_ = nullptr;  // PSRAM: the two-halves remap's state (remapBegin())
   RemapCard* card_ = nullptr;           // PSRAM

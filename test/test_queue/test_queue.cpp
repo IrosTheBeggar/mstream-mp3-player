@@ -3459,9 +3459,77 @@ void test_text_read_is_sized_by_its_header() {
   const char* huge = "mstream-queue 1 2000000000 0 1\n/music/Root Track.flac\n";
   MemorySource h(huge, std::strlen(huge));
   Meter::ceiling = 1 << 20;
-  TEST_ASSERT_FALSE(queuetext::read(h, c, back, nullptr, nullptr, Meter::alloc, Meter::release).ok);
+  const queuetext::Restored hr = queuetext::read(h, c, back, nullptr, nullptr, Meter::alloc, Meter::release);
+  TEST_ASSERT_FALSE(hr.ok);
+  TEST_ASSERT_FALSE(hr.noMemory);  // (the file's own fault: the line count)
   TEST_ASSERT_EQUAL_UINT32(8, back.size());
   TEST_ASSERT_EQUAL_size_t(8 * 12 * 2, Meter::live);
+}
+
+// No memory for the read's blocks, or for the queue's own, is no word on the file: not ok
+// and noMemory, whichever block it was, the queue as it was. (Taken for a file that isn't
+// whole, the boot's default queue went over it: docs/METADATA.md 3.2.2.) The same file with
+// the memory back reads whole; one that isn't whole says so, noMemory false.
+void test_text_read_without_memory_is_no_word_on_the_file() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  const uint32_t ids[] = {0, 1, 2, 3, 4, 5, 2};
+  q.assign(ids, 7, 4);
+  for (const bool shuffled : {false, true}) {
+    q.setShuffled(shuffled);
+    const std::string text = textOf(q, c, 9);
+    // The blocks in turn: the ids (7 lines, 28 B), the ranks (shuffled: 28 B more), the
+    // queue's (12 B an entry), each refused by a ceiling just short of it.
+    std::vector<size_t> ceilings = {27, 28 + 7 * 12 - 1};
+    if (shuffled) ceilings = {27, 28 + 27, 56 + 7 * 12 - 1};
+    for (const size_t ceiling : ceilings) {
+      char msg[48];
+      std::snprintf(msg, sizeof(msg), "shuffled %d, ceiling %u", shuffled, static_cast<unsigned>(ceiling));
+      Meter::reset();
+      QueueModel back(Meter::alloc, Meter::release);
+      const uint32_t old[] = {5, 5};
+      Meter::ceiling = SIZE_MAX;
+      TEST_ASSERT_TRUE(back.assign(old, 2, 1));
+      Meter::ceiling = ceiling + 2 * 12;  // (the queue's own 2 entries are live)
+      MemorySource in(text.data(), text.size(), 5);
+      const queuetext::Restored r = queuetext::read(in, c, back, nullptr, nullptr, Meter::alloc, Meter::release);
+      TEST_ASSERT_FALSE_MESSAGE(r.ok, msg);
+      TEST_ASSERT_TRUE_MESSAGE(r.noMemory, msg);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(2, back.size(), msg);  // left alone
+      TEST_ASSERT_EQUAL_INT_MESSAGE(1, back.current(), msg);
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(2 * 12, Meter::live, msg);  // what it took, given back
+      // The memory back: whole.
+      Meter::ceiling = SIZE_MAX;
+      MemorySource again(text.data(), text.size(), 5);
+      const queuetext::Restored w = queuetext::read(again, c, back, nullptr, nullptr, Meter::alloc, Meter::release);
+      TEST_ASSERT_TRUE_MESSAGE(w.ok, msg);
+      TEST_ASSERT_FALSE_MESSAGE(w.noMemory, msg);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(7, back.size(), msg);
+      TEST_ASSERT_EQUAL_INT_MESSAGE(q.current(), back.current(), msg);
+      TEST_ASSERT_EQUAL_MESSAGE(shuffled, back.shuffled(), msg);
+      expectTracks(back, tracks(q));
+    }
+  }
+  // Not whole (a line short), the memory there: its own fault, not noMemory.
+  Meter::reset();
+  QueueModel back(Meter::alloc, Meter::release);
+  std::string cut = textOf(q, c, 9);
+  cut.resize(cut.size() - 1);
+  cut.resize(cut.rfind('\n') + 1);
+  MemorySource in(cut.data(), cut.size());
+  const queuetext::Restored r = queuetext::read(in, c, back, nullptr, nullptr, Meter::alloc, Meter::release);
+  TEST_ASSERT_FALSE(r.ok);
+  TEST_ASSERT_FALSE(r.noMemory);
+  // A header that claims more than memory holds (the window's 5,000 lines, 20 KB): no word
+  // either, as for a whole file.
+  const char* huge = "mstream-queue 1 2000000000 0 1\n/music/Root Track.flac\n";
+  MemorySource h(huge, std::strlen(huge));
+  Meter::ceiling = 5000 * 4 - 1;
+  const queuetext::Restored hr = queuetext::read(h, c, back, nullptr, nullptr, Meter::alloc, Meter::release);
+  TEST_ASSERT_FALSE(hr.ok);
+  TEST_ASSERT_TRUE(hr.noMemory);
 }
 
 // ---- the remap through queue.txt (QueueRemap: docs/METADATA.md 3.4.2, N3) ----
@@ -5859,6 +5927,7 @@ int main(int, char**) {
   RUN_TEST(test_a_push_out_is_saved_at_the_next_generation);
   RUN_TEST(test_random_push_outs_match_a_simple_model);
   RUN_TEST(test_text_read_is_sized_by_its_header);
+  RUN_TEST(test_text_read_without_memory_is_no_word_on_the_file);
   RUN_TEST(test_remap_of_a_full_queue_within_its_budget);
   RUN_TEST(test_remap_keeps_a_shuffled_queue_and_its_ranks);
   RUN_TEST(test_remap_when_the_current_track_is_gone);

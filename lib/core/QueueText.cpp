@@ -120,7 +120,8 @@ private:
 // 20 KB (40 KB shuffled) next to the queue's own 60 KB, and a longer file
 // (written before the queue's cap) no more, since only the cap's window is
 // read in (docs/METADATA.md section 3.4.2, step 5). A header that claims
-// more than memory holds fails here, as its file would at the line count.
+// more than memory holds fails here, as no memory (Restored::noMemory): the
+// read can't tell such a file from a whole one, and says nothing of it.
 class Words {
 public:
   Words(MemorySink::AllocFn alloc, MemorySink::FreeFn release)
@@ -229,7 +230,12 @@ Restored read(ByteSource& in, const TrackCatalog& catalog, QueueModel& q, int32_
   r.first = w.first;
   Words ids(alloc, release);    // the tracks that survive
   Words ranks(alloc, release);  // version 2: their ranks
-  if (!ids.reserve(w.count) || (shuffled && !ranks.reserve(w.count))) return r;
+  // No room for them is no word on the file: taken for one that isn't whole, the boot's
+  // default queue would go over it (QueueFile: unread).
+  if (!ids.reserve(w.count) || (shuffled && !ranks.reserve(w.count))) {
+    r.noMemory = true;
+    return r;
+  }
   uint32_t count = 0;
   int32_t current = -1;
   while (lines.next(&line, &overflow)) {
@@ -267,7 +273,11 @@ Restored read(ByteSource& in, const TrackCatalog& catalog, QueueModel& q, int32_
   // came before it reads as that line, and the count holds.
   if (r.lines != r.header.entries || in.failed()) return r;
   if (current >= static_cast<int32_t>(count)) current = static_cast<int32_t>(count) - 1;
-  if (!q.assign(ids.data(), count, current, shuffled, shuffled ? ranks.data() : nullptr)) return r;
+  // (A whole file, and no room for the queue's block: the same.)
+  if (!q.assign(ids.data(), count, current, shuffled, shuffled ? ranks.data() : nullptr)) {
+    r.noMemory = true;
+    return r;
+  }
   r.entries = count;
   r.held = unknown ? unknown->held() : 0;
   r.ok = true;

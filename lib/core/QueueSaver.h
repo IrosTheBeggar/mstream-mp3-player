@@ -86,11 +86,15 @@ public:
   class Store {
   public:
     // The temporary file, opened (truncated) for writing: a sink for its
-    // bytes, or nullptr (can't).
+    // bytes, or nullptr (can't). Never over one kept by commitTemp() below:
+    // that one is made the queue file first, or this fails.
     virtual ByteSink* openTemp() = 0;
     // The temporary file is complete: flush and close it, and make it the
-    // queue file. False: failed (the temporary file is removed; the queue
-    // file stays as it was, or, gone already, the temporary file in its place).
+    // queue file. False: failed. Then the queue file stays as it was if the
+    // temporary file isn't whole on the storage (it is removed); if it is,
+    // and couldn't take the queue file's place (which may be gone by then),
+    // it is kept, whole, for a boot to read in place of a queue file that's
+    // gone or can't be read.
     virtual bool commitTemp() = 0;
     // A write dropped: close and remove the temporary file.
     virtual void discardTemp() = 0;

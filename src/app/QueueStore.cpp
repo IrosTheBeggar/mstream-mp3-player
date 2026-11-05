@@ -122,8 +122,12 @@ QueueStore::Restore QueueStore::restore(bool libraryListsCard, void (*wait)(uint
   QueueFiles files(*this);
   const queuefile::Read got = queuefile::readAtBoot(files, file, temp, catalog_, queue_, pickCurrent, &saved, psramAlloc,
                                                     psramFree, onCard() ? wait : nullptr, lookup);
+  // (No PSRAM for the read's blocks or the queue's: no more the file's word than a fault.)
+  const char* why = !got.noMemory ? "a read of the card failed"
+                    : got.faulted ? "a read of the card failed, or found no PSRAM"
+                                  : "no PSRAM for its read";
   if (got.reads > 1) {
-    Serial.printf("[queue] queue.txt: a read of the card failed: read %lu times, %s\n", (unsigned long)got.reads,
+    Serial.printf("[queue] queue.txt: %s: read %lu times, %s\n", why, (unsigned long)got.reads,
                   got.got == queuefile::Got::Unread ? "and each failed" : "and the last was whole");
   }
   // A read on a card silent past its init (CachedDrive::lookAfterFault()) makes FatFs's next
@@ -134,12 +138,15 @@ QueueStore::Restore QueueStore::restore(bool libraryListsCard, void (*wait)(uint
     // Taken for no queue, a default one would be saved over a file that is only unread.
     saver_.keptFile(saved.generation, saved.have ? saved.position : -1);
     markUnread();
-    Serial.println("[queue] queue.txt unread (a read of the card failed): no queue this session, the file left as it is");
+    Serial.printf("[queue] queue.txt unread (%s): no queue this session, the file left as it is\n", why);
     return Restore::Unread;
   }
   if (got.notWhole) Serial.printf("[queue] %s: not a whole queue file, ignored\n", got.notWhole);
   if (got.got == queuefile::Got::None) return Restore::None;
   const char* path = got.path;
+  // queue.txt gone, not whole or unread, and queue.tmp whole: the newest queue on the card,
+  // held until it takes queue.txt's place (openTemp()).
+  tmpHeld_ = path == temp;
   const queuetext::Restored& r = got.read;
   player_.queueReplaced(r.currentKept);
   const bool fromNvs = saved.have && saved.generation == r.header.generation;
@@ -296,10 +303,17 @@ void QueueStore::noteFailures() {
 ByteSink* QueueStore::openTemp() {
   char file[48], temp[48];
   paths(file, temp, sizeof(file));
+  // A queue.tmp that holds the queue (queue.txt may be gone) takes queue.txt's place before
+  // it is opened for writing: truncated first, a cut or a write dropped would leave none.
+  if (tmpHeld_ && !settleTemp(file, temp)) {
+    Serial.printf("[queue] couldn't replace %s: %s, which holds the queue, not written over\n", file, temp);
+    return nullptr;
+  }
   if (!buf_) buf_ = static_cast<uint8_t*>(psramAlloc(kBufSize));
-  // A queue.tmp a failed rename kept, with no queue.txt: it takes that name first. This open
-  // would empty it before anything new is safe, and give FatFs the same clusters back. What
-  // the card can't say (out, a read that failed) isn't "no such file": no open until it can.
+  // At the boot's first save, a queue.tmp with no queue.txt (one the boot read whole is held,
+  // above): it takes that name first. This open would empty it before anything new is safe,
+  // and give FatFs the same clusters back. What the card can't say (out, a read that failed)
+  // isn't "no such file": no open until it can.
   fs::FS& fs = storage_.fs();
   if (checkKept_) {
     using Seen = LocalStorage::Seen;
@@ -324,44 +338,81 @@ ByteSink* QueueStore::openTemp() {
   return &sink_;
 }
 
+bool QueueStore::tmpWhole(const char* temp, size_t bytes) {
+  if (onCard()) {
+    uint32_t size = 0, time = 0;
+    return fat_.stat(temp, &size, &time) && size == bytes;
+  }
+  File f = storage_.fs().open(temp, FILE_READ);
+  const bool whole = f && f.size() == bytes;
+  f.close();
+  return whole;
+}
+
+bool QueueStore::replaceFile(const char* file, const char* temp) {
+  fs::FS& fs = storage_.fs();
+  fs.remove(file);
+  if (!fs.rename(temp, file)) return false;
+  tmpHeld_ = false;
+  return true;
+}
+
+bool QueueStore::settleTemp(const char* file, const char* temp) {
+  if (onCard()) {
+    // FatFs's word first. A rename it said failed may be done in its view all the same (its
+    // directory sector to be written again by the next call): queue.txt is the queue then,
+    // and removing it would lose it. Two entries on one chain are a rename cut between its
+    // writes, which only a disk check parts (docs/METADATA.md 2.12.6): neither is touched.
+    // A question the card fails answers nothing: nothing done.
+    const tagstore::Fs::Entry t = fat_.entry(temp);
+    if (t.cardFailed) return false;
+    if (!t.there) {
+      tmpHeld_ = false;  // (nothing of it left to keep)
+      return true;
+    }
+    const tagstore::Fs::Entry f = fat_.entry(file);
+    if (f.cardFailed || (f.there && t.firstCluster != 0 && f.firstCluster == t.firstCluster)) return false;
+  } else if (!storage_.fs().exists(temp)) {
+    tmpHeld_ = false;
+    return true;
+  }
+  return replaceFile(file, temp);
+}
+
 bool QueueStore::commitTemp() {
   char file[48], temp[48];
   paths(file, temp, sizeof(file));
   bool ok = sink_.flush();
   file_.close();
-  fs::FS& fs = storage_.fs();
-  // close() says nothing, and the file's last bytes, its FAT chain and its size go to the
-  // card in it: one that failed leaves a short or an empty file. The card is asked before
-  // the last good file goes.
-  if (ok) {
-    fs::File written = fs.open(temp, FILE_READ);
-    ok = written && written.size() == sink_.taken();
-    written.close();
-  }
-  if (ok) {
-    fs.remove(file);
-    ok = fs.rename(temp, file);
+  // What the close wrote (the VFS's last 4 KB, FatFs's last sector and the file's entry)
+  // it doesn't say: a card that refused it would leave queue.tmp cut, or empty, and the
+  // rename would put that in queue.txt's place. So queue.tmp's size, as the storage has it,
+  // against what the sink took.
+  if (ok && !tmpWhole(temp, sink_.taken())) {
+    ok = false;
+    Serial.printf("[queue] %s isn't whole on the card after its close\n", temp);
   }
   if (!ok) {
-    // (The last good file gone and the rename failing: this one is what's left, and the
-    // boot's restore() reads it. The next save names it queue.txt first: openTemp().)
-    if (fs.exists(file)) {
-      fs.remove(temp);
-    } else {
-      checkKept_ = true;
-    }
-    Serial.printf("[queue] couldn't replace %s\n", file);
-  } else {
-    unread_ = false;
+    storage_.fs().remove(temp);
+    Serial.printf("[queue] couldn't replace %s: it stays as it was\n", file);
+    return false;
   }
-  return ok;
+  // Whole: kept from here until it is queue.txt. A rename that fails may have queue.txt
+  // gone already, and the boot takes a whole queue.tmp in its place.
+  tmpHeld_ = true;
+  if (!replaceFile(file, temp)) {
+    Serial.printf("[queue] couldn't replace %s: %s kept, whole (a boot reads it if %s is gone)\n", file, temp, file);
+    return false;
+  }
+  unread_ = false;
+  return true;
 }
 
 void QueueStore::discardTemp() {
   char file[48], temp[48];
   paths(file, temp, sizeof(file));
   file_.close();
-  storage_.fs().remove(temp);
+  if (!tmpHeld_) storage_.fs().remove(temp);  // (one that holds the queue is never opened for a write: to be sure)
 }
 
 void QueueStore::savePosition(uint32_t generation, int32_t current) {
@@ -473,8 +524,9 @@ void QueueStore::logRemap(const queueremap::Result& r) {
   const queuetext::Restored& got = r.read;
   if (!got.ok) {
     const char* why = r.via == queueremap::Via::None ? "the card couldn't take queue.txt, and no PSRAM for its text"
-                      : r.via == queueremap::Via::File ? "queue.txt couldn't be read back"
-                                                       : "no PSRAM to read its text back";
+                      : r.via != queueremap::Via::File ? "no PSRAM to read its text back"
+                      : got.noMemory                   ? "no PSRAM to read queue.txt back"
+                                                       : "queue.txt couldn't be read back";
     Serial.printf("[queue] couldn't carry the queue across the rebuild (%s): cleared; queue.txt keeps the last one "
                   "saved\n",
                   why);
