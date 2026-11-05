@@ -3612,6 +3612,8 @@ endings (a cut at 3 s or 14 s, a flush 60 s on, the fault lifted); two later ses
   | Those twins, the next boots | `restored 3 of 3`, at its line by NVS; first write `2 copies of queue.txt share a chain ...: it wants a disk check on a PC`, the queue right at each boot, `tags.bin` and `library.idx` the same by CRC |
   | `queue.xl3`, a small file on a chain of its own (as a disk check would leave one) | Gone at the session's first write, `queue.xl1` and `xl2` still there |
   | `queue.txt`'s entry's sector, for good, twins on the card, a track playing | `queue.tmp kept, whole`; a remount at once, the second at the Opus cache's save 7 s on, then `writes kept failing`; `couldn't write /.player/queue.tmp: it holds the queue, and couldn't take queue.txt's place` at waits of 10, 20, 40, 80 s (saying up to 160 s), the track on to its end, 0 underruns; the session's Auto DJ picks not saved. A boot with the fault off: `queue.txt` as it was, 5 of 5, at its line by NVS; the first write removed the `queue.tmp` left over |
+  | `chkdsk /f` on a PC (Windows 10, an admin prompt), after those | `\.player\queue.xl2 is cross-linked on allocation unit 30618`, `Cross link resolved by copying`; every file the same by CRC after it; 874 clusters in lost chains freed, 871 of them older than this check |
+  | Back in the board, a session's first write | No `copies of queue.txt` line; `queue.xl1` and `queue.xl2` gone, 2 clusters freed; `queue.txt` the edit's; `tags.bin` and `library.idx` the same by CRC |
 
   **What a save costs here** (`gwF?`'s card reads and writes, idle, the walk over; the cache in front): a session's first write 1 read and 11 writes, each
   after it 0 and 11. With 2 twins, 2 and 12; each after it 0 and 12. **The loop task's stack,** against `loopstack::kMinLeft`'s 1,536 B: 3,776-3,780 B
@@ -3619,12 +3621,14 @@ endings (a cut at 3 s or 14 s, a flush 60 s on, the fault lifted); two later ses
   160 MHz, the deepest ESTIMATED above, twins on the card:** 4,444 B left during it, in 35 ms, read by a line in a temporary build; about 3.7 KB deep with
   the tap's own frames. **Image:** `.iram0.text` 124,883 B, unchanged; static RAM 58,344 B, 8 B more.
 
-  **The card after:** `tags.bin`, `library.idx`, `opus.idx` and `plays.jnl` the same by CRC as before the check, `device.txt` the firmware's label. Left on the spare for
-  the disk check: `queue.xl1`, `queue.xl2` and the 13 small files; and an `opus.idx.tmp` the last row's refused save left (that save's own close-then-rename: above). `@count` 18
-  clusters (288 KB) fewer: those 13, the twins' chain, that file, and 3 lost: the FAT sector's row one, 2 not placed. The board: 439c86d with no switch, the spare in it.
+  **The card after:** `tags.bin`, `library.idx`, `opus.idx`, `plays.jnl` and the root's manifest the same by CRC as before the check, `device.txt` the firmware's
+  label, `queue.txt` the check's last queue (NVS paired with it). On the PC after `chkdsk`, the 13 small files, the backups and an `opus.idx.tmp` removed (the last
+  row's refused save left it: that save's own close-then-rename, above); the board removed the twins. Before `chkdsk`, `@count` was 18 clusters (288 KB) fewer than
+  at the start: those 13, the twins' chain, that file, and 3 lost (the FAT sector's row one, 2 not placed). After it all, 1,202 more: the backups' 331, and 871 in lost
+  chains older than this check, which `chkdsk` freed with its 3. The board: e532239 with no switch, the spare in it.
 
   **Not run on a device:** a real failing card or a real shortage of PSRAM (the switch refuses this one block); a cut in a write (the resets above come after the
-  fault's write, not inside one); a shuffled file; a nine-twin card; **`chkdsk /f` on a PC and the first write after it** (the small file on its own chain stands in for what it should leave).
+  fault's write, not inside one); a shuffled file; a nine-twin card; a disk check other than Windows' (one that truncates a cross-linked file instead of copying it: above).
 
 - The queue is then restored (`QueueStore::restore()`; **The queue's file**, above).
 - **A power cut mid-save:** if `library.idx` is missing and `library.tmp`
