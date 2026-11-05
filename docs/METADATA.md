@@ -3407,6 +3407,8 @@ when the next boot finds the default queue:
 | An edit, then each disk write or read of its write refused in its turn: once, lasting, or with no answer; then a cut 1 s later, or 40 s on and the power-off flush, or a cut in the retry's write, or an edit that drops the retry's write and a cut; 6 lines of 12 tracks, 100 of 120 | **38 of 236 runs and 46 of 260 lose the queue**: 32 and 36 with the commit taken as done (`queue.txt` cut or empty), 6 and 10 after `couldn't replace` (no file left) | 0 of 252, 0 of 276 |
 | Of those, only a whole `queue.tmp` kept after a failed rename (the change alone) | | 33 and 41: what the close leaves isn't seen |
 | ... and `queue.tmp`'s size asked after its close, nothing settled before the next write | | 0 and 5: all a cut in the retry's write over the kept file |
+| The boot finds `queue.tmp` alone (a cut between the remove and the rename) and writes it again 2 s later; a cut in that write, or an edit that drops it and a cut; 100 lines of 120 | No whole file: the default queue | `queue.txt`, 100 lines: put in place before the write |
+| The rename failed, then a read the retry's settle asks failed too, and a cut in the retry's write, each of its first 5 reads | (lost at the first) | 0 of 5 lost (asked through the VFS instead of FatFs: 2 of 5) |
 | No fault: a boot, an edit, its write | 13 disk reads, 11 writes | 15 reads (the size asked), 11 writes |
 
 - **The queue file's costs, left as they are.** A line by its path has its file's name for a title, and
