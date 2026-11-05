@@ -2273,8 +2273,9 @@ the browsing UI hold its **track ids**, never strings.
 - **Persistence** (`app/QueueStore` over `QueueSaver`, `QueueText`): the queue is saved as paths,
   one a line (`queue.txt`, header `mstream-queue 1 <entries> <current>
   <generation>`), so a rebuilt library, whose ids differ, finds its tracks
-  again; paths that are gone are dropped, and if the current one is among them
-  the next one that stayed is current. A shuffled queue is **version 2**
+  again; paths that are gone are dropped (the card's word, not only the library's: one
+  it doesn't list stays by its path, METADATA.md 3.2.2), and if the current one is among
+  them the next one that stayed is current. A shuffled queue is **version 2**
   (`mstream-queue 2 ...`, each line `<rank> <path>`: QUEUE-MODES.md
   section 2.9), written only while shuffled, so the mode and the own order
   come back with the queue; not shuffled, the file is version 1 byte for

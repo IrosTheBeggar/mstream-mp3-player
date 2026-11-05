@@ -495,9 +495,11 @@ bool replace(Fs& fs, const Names& n) {
   return fs.rename(n.tmp, n.path);
 }
 
-uint32_t collectTwins(Fs& fs, const Names& n) {
+uint32_t collectTwins(Fs& fs, const Names& n, bool* unread) {
   Asking a(fs);
-  return collectTwinsOf(a, n);
+  const uint32_t left = collectTwinsOf(a, n);
+  if (unread) *unread = a.failed();
+  return left;
 }
 
 // ---------------------------------------------------------------------------
