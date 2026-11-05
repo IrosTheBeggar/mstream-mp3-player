@@ -3444,6 +3444,20 @@ queue. Twins on one chain are the rule at work, counted apart:
 | Twins already on the card (on `queue.txt`'s chain, on `queue.tmp`'s, on each other's, parted by a disk check, four pairs), single faults; 5 layouts of `/.player`, four endings | | | 0 of 35,424 runs (parted twins removed at the first write) |
 | PSRAM refused a FIL's size after the boot, an edit | Saved | Saved | Saved (the first version of this round: not saved) |
 
+Those tables came before main's 3.8 was under this, and their rigs weren't run again. MEASURED on main's tree since (439c86d against 35662de), on the
+rig the queue's last work left, with 3.8's look, breaker and guard in it. Its scenarios print the same, line for line. A fault at each card read over 50
+card states, 6,006 runs and the lasting faults: the same run by run. A fuzz across sessions (faults in reads and writes, once and lasting, silent or
+not, a re-seat; edits, update steps, restarts, cuts): 0 bad of 6,100 runs, and over the 2,300 run on both, the same guard restarts (92 and 182, 2 in a
+row at most), so the card's new questions don't bring the guard on sooner. The first review's fuzz: 0 bad of 9,000. And a sweep made for the rebase:
+each disk write and read from the boot's end through an edit's save, refused once, twice, for good, or with no answer; a card with `queue.txt` alone,
+`queue.tmp` alone, `queue.tmp` beside a cut `queue.txt`, a cut `queue.tmp` alone, or a leftover beside a whole `queue.txt`; `/.player` in one sector or two; four
+endings (a cut at 3 s or 14 s, a flush 60 s on, the fault lifted); two later sessions that must still find the queue:
+
+| Queue | Main | Now |
+|---|---|---|
+| 4 lines | 70 of 2,784 runs lost, all `queue.tmp` beside a cut `queue.txt`: its first save empties the whole copy | 0 of 2,960 (`kept as a twin` 118 times) |
+| 180 lines, past the VFS's buffer | 131 of 16,704 lost: 99 at the next boot (94 `queue.tmp` beside a cut `queue.txt`, 5 with `/.player` in two sectors), 32 at a later one (two sectors) | 0 of 16,880 |
+
 - **The queue file's costs, left as they are.** A line by its path has its file's name for a title, and
   no artist, album, cover or Auto DJ row; Go to album says the library isn't ready. The boot's questions
   are one `f_stat` per line the library doesn't list: about 3-5 ms over the cached directories, about 30
@@ -3475,8 +3489,9 @@ queue. Twins on one chain are the rule at work, counted apart:
   step doesn't read it again (`fileUnread()`), as for the card's fault. Each write of the file asks FatFs for
   its size once more (2 sector reads on the rig, which has no cache), and a session's first write asks about
   `queue.tmp` and the nine twin names (20 more), as does the first after a failure; on the device those are
-  the cached directory sectors. With twins on the card, each commit asks the same (with 8 twins, about 22
-  reads a commit). Those questions go through a FIL and a FILINFO kept from the boot
+  the cached directory sectors (MEASURED: its first write 1 card read more, each after it none: the device check
+  below). With twins on the card, each commit asks the same (with 8 twins, about 22
+  reads a commit on the rig; 0 on the device with 2). Those questions go through a FIL and a FILINFO kept from the boot
   (`QueueStore::CardQuestions`, about 4.4 KB of PSRAM for the session), so none fails later for want of
   memory; a boot with none for them takes them at the first write, which waits until it can. While a kept
   `queue.tmp` can't take `queue.txt`'s place (a rename the card keeps refusing), no edit is saved: the card
@@ -3576,6 +3591,40 @@ queue. Twins on one chain are the rule at work, counted apart:
 
   **Not run on a device:** a real failing card or a pull at this read; a read back's fault in `queue.txt` itself; `queue.tmp` standing in; no PSRAM for
   a line's path; a shuffled file; a line by its path over Bluetooth; a question silent at the read back with no Auto DJ index, where the rig restarts.
+
+- **Device check, the queue's memory and its writes** (2026-11-05: a Core2 v1.3 and the same spare card, never the music card;
+  439c86d with 3.8's temporary switch and four more of its kind: every block of the boot's read of `queue.txt` refused, or the next
+  one; the next rename of `queue.tmp` failed; its next size said short; a directory entry's sector as the switch's target. Silent test
+  mode). MEASURED:
+
+  | Failing | On the device |
+  |---|---|
+  | Every block of the boot's read | `no PSRAM for its read: read 4 times, and each failed`, `queue.txt unread (no PSRAM for its read)`, 1.5 s of setup in it; Now Playing and the Queue tab empty, with Card read failed at startup; the file the same by CRC through the walk, a minute on. A boot with the fault off: 4 of 4, at its line by NVS, `resume point: 0:12 into 2` |
+  | The next block only | `read 2 times, and the last was whole`, the queue, its line and its second as they were |
+  | `queue.tmp`'s rename after an edit, `queue.txt` gone; the reset 1.3 s on, no flush | `couldn't replace ...: /.player/queue.tmp kept, whole`. The next boot: `restored 3 of 3 tracks from /.player/queue.tmp`, the edit in it, at its line (its second dropped: NVS's was paired with the file before the edit). Its first write: `queue.txt` the queue, no `queue.tmp` |
+  | The same, left on | 10 s on, `queue.tmp` in place first, then the new write: `queue.txt` the edit's, no `queue.tmp`, 1 failure counted |
+  | `queue.tmp`'s size said 5 B short | `isn't whole after its close: 210 B there, 215 written`, `it stays as it was`, `queue.txt` the same; whole 10 s on |
+  | The next free cluster's first sector, one write's (R1 error, as below), in the close | `isn't whole after its close: 0 B there, 215 written`, as above (3.8's size check, asked of FatFs now) |
+  | The same for good, no `queue.txt` | `0 B there, 178 written`, no `queue.tmp` left, FatFs on to the next cluster: whole 10 s on |
+  | The same for good, a boot: no `queue.txt`, a cut `queue.tmp` | `not a whole queue file, ignored`, the library's first 5,000 tracks, its first save refused in its write; 387 KB whole at the retry |
+  | The FAT sector of the old `queue.txt`'s first cluster, alone, for good | `queue.tmp kept, whole`, one remount, whole 10 s on, later saves as ever; a cluster lost. The stack's least here, below |
+  | 13 small files more in `/.player`; queue.tmp's entry's sector, refused twice (the rename's second write, and again at FatFs's next call), `queue.txt` gone before it | `queue.tmp kept, whole`; the remount and the settle at the retry: `/.player/queue.txt and /.player/queue.tmp shared a chain ...: /.player/queue.tmp kept as a twin`, `1 copies of queue.txt share a chain`; the new write replaces `queue.txt` by a twin: `queue.xl1`, `queue.xl2`, `queue.txt` the edit's |
+  | Those twins, the next boots | `restored 3 of 3`, at its line by NVS; first write `2 copies of queue.txt share a chain ...: it wants a disk check on a PC`, the queue right at each boot, `tags.bin` and `library.idx` the same by CRC |
+  | `queue.xl3`, a small file on a chain of its own (as a disk check would leave one) | Gone at the session's first write, `queue.xl1` and `xl2` still there |
+  | `queue.txt`'s entry's sector, for good, twins on the card, a track playing | `queue.tmp kept, whole`; a remount at once, the second at the Opus cache's save 7 s on, then `writes kept failing`; `couldn't write /.player/queue.tmp: it holds the queue, and couldn't take queue.txt's place` at waits of 10, 20, 40, 80 s (saying up to 160 s), the track on to its end, 0 underruns; the session's Auto DJ picks not saved. A boot with the fault off: `queue.txt` as it was, 5 of 5, at its line by NVS; the first write removed the `queue.tmp` left over |
+
+  **What a save costs here** (`gwF?`'s card reads and writes, idle, the walk over; the cache in front): a session's first write 1 read and 11 writes, each
+  after it 0 and 11. With 2 twins, 2 and 12; each after it 0 and 12. **The loop task's stack,** against `loopstack::kMinLeft`'s 1,536 B: 3,776-3,780 B
+  through the rows above (the boot's own), 3,676 B the FAT sector's row. **A session's first write through `flushNow()` from the tap on Restart at
+  160 MHz, the deepest ESTIMATED above, twins on the card:** 4,444 B left during it, in 35 ms, read by a line in a temporary build; about 3.7 KB deep with
+  the tap's own frames. **Image:** `.iram0.text` 124,883 B, unchanged; static RAM 58,344 B, 8 B more.
+
+  **The card after:** `tags.bin`, `library.idx`, `opus.idx` and `plays.jnl` the same by CRC as before the check, `device.txt` the firmware's label. Left on the spare for
+  the disk check: `queue.xl1`, `queue.xl2` and the 13 small files; and an `opus.idx.tmp` the last row's refused save left (that save's own close-then-rename: above). `@count` 18
+  clusters (288 KB) fewer: those 13, the twins' chain, that file, and 3 lost: the FAT sector's row one, 2 not placed. The board: 439c86d with no switch, the spare in it.
+
+  **Not run on a device:** a real failing card or a real shortage of PSRAM (the switch refuses this one block); a cut in a write (the resets above come after the
+  fault's write, not inside one); a shuffled file; a nine-twin card; **`chkdsk /f` on a PC and the first write after it** (the small file on its own chain stands in for what it should leave).
 
 - The queue is then restored (`QueueStore::restore()`; **The queue's file**, above).
 - **A power cut mid-save:** if `library.idx` is missing and `library.tmp`
@@ -5630,7 +5679,7 @@ src/. What the code decided where 3.2-3.4 left room:
   | The same under 9 or more Pending files, a track playing | no end | 12 cuts | Then no jobs until a restart. 1 or 2 files: 4 cuts each, and the library updated |
   | A sector of a free cluster that leaves the card silent at a write, the queue's save on it | a cut every 10 s, no end | 4 cuts | Then no more writes this session: the saves fail softly |
   | A write of the queue's save refused once, in its close; or a FAT sector of the old `queue.txt` alone, for good | `queue.txt` empty, or both files gone | as before the save, or `queue.tmp` whole | The save says it failed, and tries again 10 s on, then at twice the wait |
-  | The first save on a card with no `queue.txt`, a data sector of its cluster refusing writes | `queue.txt` empty, whole at the next | whole at the retry | The kept `queue.tmp` is named `queue.txt`, and FatFs moves on from its cluster |
+  | The first save on a card with no `queue.txt`, a data sector of its cluster refusing writes | `queue.txt` empty, whole at the next | whole at the retry | The `queue.tmp` that isn't whole is removed (3.2.2), and FatFs moves on from its cluster |
   | A fresh card's first free cluster refusing a write, no `/.player` yet | a lost cluster, whole at boot 2 | whole at boot 1 | `stateDir()` asks until a mkdir works; a read that failed asks at the next boot |
   | A pull of 25-700 s, an edit waiting, a track playing or a Play at the put-back | a try every 10 s | saved 0-1.1 s after the put-back | `cardBack()`. Nothing reading until the save's own try: up to 212 s |
   | A re-seat under about 12 s, a track playing | a try every 10 s | at most 8.8 s after it; after a long failure up to 210 s | The signal needs a mount that failed 10 s before the remount |
