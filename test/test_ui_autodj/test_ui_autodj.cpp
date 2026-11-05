@@ -244,6 +244,9 @@ void test_the_status_row() {
   s.rows = 1;
   TEST_ASSERT_EQUAL_STRING("Auto DJ index: 1 track", line(s, 0).c_str());
   s.on = true;
+  // (On, with no library to join: an update step failed, and library.idx with it.)
+  TEST_ASSERT_EQUAL_STRING("Auto DJ index: 1 track", line(s, 0).c_str());
+  TEST_ASSERT_EQUAL_STRING("", line(s, 1).c_str());
   s.index = Index::Reading;
   TEST_ASSERT_EQUAL_STRING("Reading the Auto DJ index\xE2\x80\xA6", line(s, 0).c_str());
   TEST_ASSERT_EQUAL_STRING("", line(s, 1).c_str());

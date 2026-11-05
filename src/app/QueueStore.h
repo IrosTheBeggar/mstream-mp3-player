@@ -77,11 +77,14 @@ public:
   // changed since it began), an edit not yet written, the position, the
   // resume point. True: the card has the queue as it is (or there is no
   // storage; or it is carried across a build: queue.txt was flushed then,
-  // and the queue's memory is the build's).
+  // and the queue's memory is the build's). Carried as text, the card having
+  // refused that flush: false: queue.txt keeps the last one saved.
   bool flushNow();
   // Something on its way to the card (a write under way, an edit or a
   // move waiting its delay; not a failed one waiting its retry).
   bool busy() const { return storage_.available() && saver_.busy(); }
+  // The card came back (CachedDrive::cardBacks()): QueueSaver::cardBack().
+  void cardBack();
   // The PSRAM a queue.txt write under way holds for its snapshot (lib/core
   // QueueSaver: at most 40 KB), which remapBegin()'s flush gives back (the
   // library update's memory check counts it in what the fence frees).
@@ -129,8 +132,8 @@ private:
   struct QueueFiles;
   bool onCard() const { return storage_.onCard() && cardfat::ready(); }
   // Nobody could read the file: the queue is empty, and the file keeps its line and its
-  // resume point for the next boot (no read of it again this session: such a read with no
-  // answer is a remount, with a job under way a restart).
+  // resume point for the next boot (no read of it again this session: such a read on a card
+  // silent past its init is a remount, with a job under way a restart).
   void markUnread();
   // What leaves the queue empty of such a file isn't saved over it.
   void keepUnread();
@@ -148,6 +151,7 @@ private:
 
   File file_;
   uint8_t* buf_ = nullptr;  // PSRAM
+  bool checkKept_ = true;   // a queue.tmp may be all there is: at the boot's first save, and after a failed rename
   BufferedFileSink sink_;
   queueremap::Carry* carry_ = nullptr;  // PSRAM: the two-halves remap's state (remapBegin())
   RemapCard* card_ = nullptr;           // PSRAM

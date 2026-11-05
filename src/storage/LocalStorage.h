@@ -34,6 +34,10 @@ public:
 
   // The folder for the player's own files, created if missing ("/.player").
   const char* stateDir();
+  // One stat of a path under the mount: there, not there, or the card couldn't say (out, a
+  // read that failed), which exists() takes for not there.
+  enum class Seen : uint8_t { Yes, No, Unknown };
+  Seen seen(const char* path) const;
 
   // The mounted filesystem; only valid when available().
   fs::FS& fs() { return *fs_; }

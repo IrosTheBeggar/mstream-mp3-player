@@ -84,8 +84,9 @@ public:
   bool softStale() const { return softStale_; }
   // The card failed a read the jobs would have to trust (the root under a transfer's
   // library, D, its journals, library.idx, or T or D as a build read them), at the boot
-  // (libraryboot::Decision::holdJobs) or when the guard opened the records again: no
-  // card jobs this session, and nothing goes over what is on the card. A restart asks
+  // (libraryboot::Decision::holdJobs) or when the guard opened the records again; or the
+  // guard restarted twice in a row, whatever for (cardbreaker): no card jobs this
+  // session, and nothing they would write goes over what is on the card. A restart asks
   // again. heldWhy(): the log's words.
   bool cardJobsHeld() const { return cardJobsHeld_; }
   const char* heldWhy() const { return heldWhy_; }
@@ -103,11 +104,11 @@ public:
   }
   // The boot couldn't read the root, and the card jobs run all the same: a library
   // with no transfer in it, or one this boot had to build or walk, which then has
-  // none (libraryboot::decide()). The root isn't read again on a timer this session:
-  // such a read with no answer makes FatFs's next call a remount, main.cpp's guard
-  // restarts at a remount with a job under way, and the next boot would do the same,
-  // before its walk ever began. A remount still asks, and Dc for Auto DJ; the console's
-  // gs and g<path> don't.
+  // none (libraryboot::decide()). The root isn't read again on a timer this session: on
+  // a card silent past its init such a read makes FatFs's next call a remount, main.cpp's
+  // guard restarts at a remount with a job under way, and the next boot would do the same,
+  // before its walk ever began, twice a power-on (cardbreaker). A remount still asks, and
+  // Dc for Auto DJ; the console's gs and gt<path> don't.
   bool jobsOnUnreadRoot() const { return root_ && root_->readFailed() && !cardJobsHeld_; }
   // The boot and the update step (lib/core LibraryUpdate); nullptr on the
   // flash (and before begin()).

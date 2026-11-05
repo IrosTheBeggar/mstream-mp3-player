@@ -167,7 +167,8 @@ Result Carry::finish(QueueModel& queue, QueueSaver& saver, PlaybackController& p
     };
     res_.read = fromFile();
     // Once more, at once: the queue goes for the session otherwise, and most read errors
-    // are a glitch. (With no answer FatFs's next call is a remount, whoever's: no worse here.)
+    // are a glitch. (On a card silent past its init FatFs's next call is a remount, whoever's:
+    // no worse here.)
     if (!res_.read.ok) {
       unknown = card.unknownLines(!res_.noLibrary);
       res_.read = fromFile();

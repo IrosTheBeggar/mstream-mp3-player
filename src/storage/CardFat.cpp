@@ -45,12 +45,18 @@ uint32_t FatFile::size() const { return static_cast<uint32_t>(f_size(&fil)); }
 bool FatFile::read(uint32_t offset, void* out, uint32_t n) {
   const uint32_t sz = size();
   if (offset > sz || n > sz - offset) return false;
-  if (static_cast<uint32_t>(f_tell(&fil)) != offset && f_lseek(&fil, offset) != FR_OK) return false;
+  if (static_cast<uint32_t>(f_tell(&fil)) != offset && f_lseek(&fil, offset) != FR_OK) {
+    readFailed_ = true;
+    return false;
+  }
   auto* p = static_cast<uint8_t*>(out);
   while (n) {
     const UINT want = n < kPiece ? n : kPiece;
     UINT got = 0;
-    if (f_read(&fil, p, want, &got) != FR_OK || got != want) return false;
+    if (f_read(&fil, p, want, &got) != FR_OK || got != want) {
+      readFailed_ = true;
+      return false;
+    }
     p += got;
     n -= got;
     if (n) taskYIELD();

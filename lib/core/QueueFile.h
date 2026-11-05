@@ -62,8 +62,8 @@ public:
   uint32_t kept() const { return kept_; }        // by their paths: the card has them
   uint32_t unasked() const { return unasked_; }  // by their paths: it wasn't asked, or didn't say
   uint32_t gone() const { return gone_; }
-  // A question met a fault: such a read with no answer makes FatFs's next call a
-  // remount, which is better now than under a card job (FatFs::echoNow()).
+  // A question met a fault: such a read on a card silent past its init makes FatFs's next
+  // call a remount, which is better now than under a card job (FatFs::echoNow()).
   bool failed() const { return failed_; }
 
 private:
@@ -136,17 +136,18 @@ struct Read {
   queuetext::Restored read;    // Whole: what the read found
   uint32_t reads = 0;          // how many times the files were read
   const char* notWhole = nullptr;  // a file there that wasn't a whole queue file, of its own fault (the last read's)
-  // A read failed on the way, whatever it came to (one with no answer makes FatFs's next
-  // call a remount, which is better now than under a card job: FatFs::echoNow()).
+  // A read failed on the way, whatever it came to (one on a card silent past its init makes
+  // FatFs's next call a remount, which is better now than under a card job: FatFs::echoNow()).
   bool faulted = false;
 };
 
 // `file`, else `temp` (only ever whole when power went between removing `file` and the
-// rename, or after its flush: the newest, as it is when `file` can't be read), through
-// queuetext::read(). Read again after kBootWaitsMs while it comes to Unread and `wait`
-// is given (nullptr: one read. A card still failing after an earlier reader's tries
-// won't be back for this one). `lookup` (optional) begins again at each read, and asks
-// once the file is read whole. Nothing changes in `q` unless it comes to Whole.
+// rename, or that rename failed, or after its flush: the newest, as it is when `file`
+// can't be read), through queuetext::read(). Read again after kBootWaitsMs while it comes
+// to Unread and `wait` is given (nullptr: one read. A card still failing after an earlier
+// reader's tries won't be back for this one). `lookup` (optional) begins again at each
+// read, and asks once the file is read whole. Nothing changes in `q` unless it comes to
+// Whole.
 Read readAtBoot(Files& files, const char* file, const char* temp, const TrackCatalog& catalog, QueueModel& q,
                 int32_t (*pickCurrent)(const queuetext::Header& h, void* ctx), void* ctx, MemorySink::AllocFn alloc,
                 MemorySink::FreeFn release, void (*wait)(uint32_t ms), Lookup* lookup);

@@ -126,8 +126,9 @@ QueueStore::Restore QueueStore::restore(bool libraryListsCard, void (*wait)(uint
     Serial.printf("[queue] queue.txt: a read of the card failed: read %lu times, %s\n", (unsigned long)got.reads,
                   got.got == queuefile::Got::Unread ? "and each failed" : "and the last was whole");
   }
-  // A read with no answer makes FatFs's next call a remount: now, not under a card job
-  // later (main.cpp's guard restarts at that one, and the next boot would do the same).
+  // A read on a card silent past its init (CachedDrive::lookAfterFault()) makes FatFs's next
+  // call a remount: now, not under a card job later (main.cpp's guard restarts at that one,
+  // and the next boot would do the same).
   if (onCard() && (got.faulted || lookup_.failed())) fat_.echoNow();
   if (got.got == queuefile::Got::Unread) {
     // Taken for no queue, a default one would be saved over a file that is only unread.
@@ -254,6 +255,11 @@ void QueueStore::noteTransport() {
 bool QueueStore::flushNow() {
   if (!storage_.available()) return true;  // nothing is saved without storage
   if (carrying()) {
+    if (carry_->result().via == queueremap::Via::Memory) {
+      Serial.println("[queue] NOT saved: the card refused queue.txt as the library update began: the queue is text in "
+                     "PSRAM, queue.txt keeps the last one saved");
+      return false;
+    }
     Serial.println("[queue] saved now: queue.txt has the queue (flushed as the library update began)");
     return true;
   }
@@ -270,18 +276,38 @@ bool QueueStore::flushNow() {
   return ok;
 }
 
+void QueueStore::cardBack() { saver_.cardBack(millis()); }
+
 void QueueStore::noteFailures() {
   if (saver_.failures() == failuresSeen_) return;
   failuresSeen_ = saver_.failures();
   Serial.printf("[queue] saving the queue failed (card full or gone?): trying again in %lu s\n",
-                (unsigned long)(QueueSaver::kRetryMs / 1000));
+                (unsigned long)(saver_.lastWaitMs() / 1000));
 }
 
 ByteSink* QueueStore::openTemp() {
   char file[48], temp[48];
   paths(file, temp, sizeof(file));
   if (!buf_) buf_ = static_cast<uint8_t*>(psramAlloc(kBufSize));
-  if (buf_) file_ = storage_.fs().open(temp, FILE_WRITE);
+  // A queue.tmp a failed rename kept, with no queue.txt: it takes that name first. This open
+  // would empty it before anything new is safe, and give FatFs the same clusters back. What
+  // the card can't say (out, a read that failed) isn't "no such file": no open until it can.
+  fs::FS& fs = storage_.fs();
+  if (checkKept_) {
+    using Seen = LocalStorage::Seen;
+    const Seen txt = storage_.seen(file);
+    const Seen tmp = txt == Seen::No ? storage_.seen(temp) : Seen::No;
+    if (txt == Seen::Unknown || tmp == Seen::Unknown) {
+      Serial.printf("[queue] couldn't write %s\n", temp);
+      return nullptr;
+    }
+    if (tmp == Seen::Yes && !fs.rename(temp, file)) {
+      Serial.printf("[queue] couldn't name %s %s\n", temp, file);
+      return nullptr;
+    }
+    checkKept_ = false;
+  }
+  if (buf_) file_ = fs.open(temp, FILE_WRITE);
   if (!buf_ || !file_) {
     Serial.printf("[queue] couldn't write %s\n", temp);
     return nullptr;
@@ -296,12 +322,26 @@ bool QueueStore::commitTemp() {
   bool ok = sink_.flush();
   file_.close();
   fs::FS& fs = storage_.fs();
+  // close() says nothing, and the file's last bytes, its FAT chain and its size go to the
+  // card in it: one that failed leaves a short or an empty file. The card is asked before
+  // the last good file goes.
+  if (ok) {
+    fs::File written = fs.open(temp, FILE_READ);
+    ok = written && written.size() == sink_.taken();
+    written.close();
+  }
   if (ok) {
     fs.remove(file);
     ok = fs.rename(temp, file);
   }
   if (!ok) {
-    fs.remove(temp);
+    // (The last good file gone and the rename failing: this one is what's left, and the
+    // boot's restore() reads it. The next save names it queue.txt first: openTemp().)
+    if (fs.exists(file)) {
+      fs.remove(temp);
+    } else {
+      checkKept_ = true;
+    }
     Serial.printf("[queue] couldn't replace %s\n", file);
   } else {
     unread_ = false;
@@ -352,9 +392,9 @@ struct QueueStore::RemapCard : queueremap::Card {
       : store_(store), rebuild_(rebuild), ctx_(ctx), files_(store) {}
   bool flush() override { return store_.storage_.available() && store_.flushNow(); }
   ByteSource* openFile() override {
-    // A file the boot couldn't read isn't asked again under the update step: such a read
-    // with no answer makes the next call a remount, with a job under way a restart. The
-    // next boot asks.
+    // A file the boot couldn't read isn't asked again under the update step: such a read on
+    // a card silent past its init makes the next call a remount, with a job under way a
+    // restart. The next boot asks.
     if (store_.fileUnread()) return nullptr;
     char file[48], temp[48];
     store_.paths(file, temp, sizeof(file));
@@ -443,15 +483,16 @@ void QueueStore::logRemap(const queueremap::Result& r) {
     snprintf(capped, sizeof(capped), " (%lu left out: the queue holds %lu)", (unsigned long)got.capped,
              (unsigned long)QueueModel::kMaxEntries);
   }
+  const char* const after = r.rebuilt ? "the rebuild" : "the update step that failed";
   if (lookup_.kept() || lookup_.unasked() || lookup_.held()) {
-    Serial.printf("[queue] after the rebuild, by their paths, the library not listing them: %lu the card has, %lu it "
-                  "didn't say, %lu with no room; %lu gone\n",
-                  (unsigned long)lookup_.kept(), (unsigned long)lookup_.unasked(), (unsigned long)lookup_.held(),
-                  (unsigned long)lookup_.gone());
+    Serial.printf("[queue] after %s, by their paths, the library not listing them: %lu the card has, %lu it didn't "
+                  "say, %lu with no room; %lu gone\n",
+                  after, (unsigned long)lookup_.kept(), (unsigned long)lookup_.unasked(),
+                  (unsigned long)lookup_.held(), (unsigned long)lookup_.gone());
   }
-  Serial.printf("[queue] after the rebuild, carried %s: %lu of %lu tracks still there%s, at %d%s%s; the queue gave "
-                "%lu KB to the rebuild and holds %lu KB\n",
-                via, (unsigned long)got.entries, (unsigned long)got.lines, capped, queue_.current() + 1,
+  Serial.printf("[queue] after %s, carried %s: %lu of %lu tracks still there%s, at %d%s%s; the queue gave "
+                "%lu KB to it and holds %lu KB\n",
+                after, via, (unsigned long)got.entries, (unsigned long)got.lines, capped, queue_.current() + 1,
                 got.currentKept ? "" : " (the current one is gone)", r.startCarried ? " (its start point kept)" : "",
                 (unsigned long)(r.freedBytes / 1024), (unsigned long)(queue_.memoryBytes() / 1024));
   if (player_.fenceStops() != fenceStopsSeen_) {

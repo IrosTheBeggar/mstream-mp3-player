@@ -1459,6 +1459,127 @@ void test_a_bad_transfer_is_walked_without() {
 // read whose record never reached tags.jnl is no news for the update
 // step; a rest whose View can't be read says so.
 // ---------------------------------------------------------------------------
+// A read of T the card fails, at each read in turn, on the first walk after a commit
+// and on one at the same commit: the walk stops, nothing of it counts; T stays, and the
+// next walk reads it. (A T that fails a check: the test before.)
+// The walk the firmware retries a minute on is in the same session: T stays, the same Jobs walks it whole.
+void test_a_walk_a_read_of_t_stopped_is_walked_again_in_the_session() {
+  CutFs fs;
+  TestCard card;
+  fill(card);
+  const ts::Identity id = commit(fs, card, 5);
+  const std::string tPath = tagsName(5);
+  for (long k = 0; k < 8; ++k) {
+    CutFs once = fs;
+    once.faultPrefix = tPath;
+    once.faultEvents = 0;
+    once.faultFrom = k;
+    once.faultTo = k + 1;
+    Session s(once, card);
+    s.begin(tPath.c_str(), id);
+    s.jobs.askWalk();
+    for (;;) {
+      const cj::Done& d = s.run(Job::Walk);
+      if (!d.walkEnded) continue;
+      TEST_ASSERT_TRUE(d.walk.state == cardwalk::CardWalk::State::Failed);
+      TEST_ASSERT_TRUE(d.walk.error == cardwalk::CardWalk::Error::TransferRead);
+      break;
+    }
+    TEST_ASSERT_EQUAL_UINT32(1, s.jobs.counts().walksFailed);
+    TEST_ASSERT_FALSE(s.jobs.transferBad());
+    TEST_ASSERT_FALSE(s.jobs.walkWork());
+    s.jobs.askWalk();
+    TEST_ASSERT_TRUE(s.jobs.walkWork());
+    for (;;) {
+      const cj::Done& d = s.run(Job::Walk);
+      if (!d.walkEnded) continue;
+      TEST_ASSERT_TRUE(d.walk.state == cardwalk::CardWalk::State::Done);
+      break;
+    }
+    TEST_ASSERT_TRUE(s.store.hasWalk());
+    TEST_ASSERT_FALSE(s.jobs.transferBad());
+  }
+}
+
+void test_a_read_fault_of_t_is_no_bad_t() {
+  CutFs fs;
+  TestCard card;
+  fill(card);
+  const ts::Identity id = commit(fs, card, 5);
+  const std::string tPath = tagsName(5);
+  fs.faultPrefix = tPath;
+  uint32_t failed = 0;
+  long k = 0;
+  bool whole = false;
+  for (; !whole; ++k) {
+    TEST_ASSERT_TRUE_MESSAGE(k < 100000, "the reads never ran out");
+    fs.faultEvents = 0;
+    fs.faultFrom = k;
+    fs.faultTo = k + 1;
+    Session s(fs, card);
+    s.begin(tPath.c_str(), id);
+    s.jobs.askWalk();
+    bool ended = false;
+    while (!ended) {
+      const cj::Done& d = s.run(Job::Walk);
+      if (!d.walkEnded) continue;
+      ended = true;
+      TEST_ASSERT_FALSE(d.walkRetried);
+      TEST_ASSERT_FALSE(s.jobs.transferBad());
+      if (d.walk.state == cardwalk::CardWalk::State::Done) {
+        whole = true;
+      } else {
+        ++failed;
+        TEST_ASSERT_TRUE(d.walk.error == cardwalk::CardWalk::Error::TransferRead);
+        TEST_ASSERT_FALSE(s.store.hasWalk());  // nothing of it counts
+      }
+    }
+  }
+  TEST_ASSERT_TRUE(failed > 0);
+  // The walk that read it, merged: D at the commit.
+  fs.faultFrom = -1;
+  {
+    Session s(fs, card);
+    s.begin(tPath.c_str(), id);
+    TEST_ASSERT_FALSE(s.jobs.transferBad());
+    s.jobs.askCompact();
+    s.drain();
+    TEST_ASSERT_TRUE(s.store.device().header.walk.present);
+  }
+  // A new file: the walk at the same commit asks T for it by T's index. A read of the
+  // index that fails answers "T has none", with nothing wrong at T's end: the watch on
+  // T's reads is what says so.
+  card.addNoise("Late/Album/01 - n.mp3", 5000, 77);
+  failed = 0;
+  whole = false;
+  for (k = 0; !whole; ++k) {
+    TEST_ASSERT_TRUE_MESSAGE(k < 100000, "the reads never ran out");
+    fs.faultEvents = 0;
+    fs.faultFrom = k;
+    fs.faultTo = k + 1;
+    Session s(fs, card);
+    s.begin(tPath.c_str(), id);
+    s.jobs.askWalk();
+    bool ended = false;
+    while (!ended) {
+      const cj::Done& d = s.run(Job::Walk);
+      if (!d.walkEnded) continue;
+      ended = true;
+      TEST_ASSERT_FALSE(d.walkRetried);
+      TEST_ASSERT_FALSE(s.jobs.transferBad());
+      if (d.walk.state == cardwalk::CardWalk::State::Done) {
+        TEST_ASSERT_TRUE_MESSAGE(fs.faultEvents <= k, "a read of T failed and the walk ended well");
+        whole = true;
+      } else {
+        ++failed;
+        TEST_ASSERT_TRUE(d.walk.error == cardwalk::CardWalk::Error::TransferRead);
+        TEST_ASSERT_FALSE(s.store.hasWalk());
+      }
+    }
+  }
+  TEST_ASSERT_TRUE(failed > 0);
+}
+
 void test_a_card_that_refuses() {
   CutFs fs;
   TestCard card;
@@ -1853,5 +1974,7 @@ int main(int, char**) {
   RUN_TEST(test_the_synthetic_cards_walk);
   RUN_TEST(test_slices_of_the_scan);
   RUN_TEST(test_begun_again_after_a_remount);
+  RUN_TEST(test_a_read_fault_of_t_is_no_bad_t);
+  RUN_TEST(test_a_walk_a_read_of_t_stopped_is_walked_again_in_the_session);
   return UNITY_END();
 }

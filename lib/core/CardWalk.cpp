@@ -411,6 +411,7 @@ const char* CardWalk::errorName(Error e) {
     case Error::Known: return "reading tags.bin";
     case Error::Sink: return "the journal's write";
     case Error::Transfer: return "the transfer's tags file";
+    case Error::TransferRead: return "reading the transfer's tags file: the card?";
   }
   return "?";
 }

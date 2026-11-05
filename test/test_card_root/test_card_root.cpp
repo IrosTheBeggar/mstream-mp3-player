@@ -533,6 +533,81 @@ void test_on_fatfs_a_damaged_directory_entry_is_the_files_fault_not_the_cards() 
   TEST_ASSERT_TRUE_MESSAGE(r->why == cc::Why::Missing, cc::whyName(r->why));
 }
 
+// A glitch on the sector of /.mstream's entries, the card answering all the while (the look keeps it):
+// one read of the root asks it 4 times, and the boot's waits are for this. None of it is the wrapper's to
+// stop: the try after the glitch reads it.
+int g_mendAtWait = 0;
+void mendAtWait(uint32_t) {
+  if (--g_mendAtWait == 0) fatmodel::drive(0).noAnswerLba = UINT32_MAX;
+}
+void test_on_fatfs_a_glitch_on_a_folders_sector_is_read_again_at_the_boot() {
+  Card c;
+  TEST_ASSERT_EQUAL_INT(FR_OK, f_mkdir(fatmodel::path(0, ".mstream").c_str()));
+  c.put(kBin, manifest());
+  c.put(kTags, tags());
+  static SectorCache cache;
+  TEST_ASSERT_TRUE(cache.capacity() || cache.begin(SectorCache::kDefaultEntries));
+  static uint8_t scratch[fatmodel::kSS];
+  fatmodel::Slot slot(0);
+  fatmodel::Link link(0);
+  CachedDrive wrapper(cache, slot);
+  wrapper.setScratch(scratch);
+  wrapper.setLink(&link);
+  fatmodel::Drive& d = fatmodel::drive(0);
+  d.wrapper = &wrapper;
+  d.fs = &Card::fatfs;
+  DIR dir;
+  TEST_ASSERT_EQUAL_INT(FR_OK, f_opendir(&dir, fatmodel::path(0, ".mstream").c_str()));
+  const uint32_t folder =
+      static_cast<uint32_t>(Card::fatfs.database) + (static_cast<uint32_t>(dir.obj.sclust) - 2) * Card::fatfs.csize;
+  f_closedir(&dir);
+  c.remount();
+  TEST_ASSERT_TRUE(wrapper.remember(d.disk->sectors()));
+  std::unique_ptr<Root> r(new Root());
+  std::vector<uint8_t> work(1024);
+  d.noAnswerLba = folder;
+  g_mendAtWait = 2;
+  TEST_ASSERT_EQUAL_UINT32(3, cardroot::readAtBoot(c.fs, work.data(), static_cast<uint32_t>(work.size()), r.get(), mendAtWait));
+  TEST_ASSERT_TRUE(r->present);
+  TEST_ASSERT_FALSE(r->readFailed());
+  TEST_ASSERT_GREATER_OR_EQUAL_UINT32(2 * CachedDrive::kStopAfter, wrapper.kept());
+  TEST_ASSERT_EQUAL_UINT32(0, wrapper.stats().stoppedReads);
+}
+
+// Which FIL holds an error, on the firmware's own FatFile: Auto DJ's new FIL turns on it.
+void test_on_fatfs_which_fil_keeps_an_error() {
+  Card c;
+  std::vector<uint8_t> bytes(40000, 0x5A);
+  c.put("/a.bin", bytes);
+  c.remount();
+  auto* f = static_cast<cardfat::FatFile*>(c.fs.open("/a.bin", tagstore::Fs::Mode::Read));
+  TEST_ASSERT_NOT_NULL(f);
+  uint8_t buf[512];
+  TEST_ASSERT_TRUE(f->read(0, buf, sizeof(buf)));
+  TEST_ASSERT_FALSE(f->errorKept());
+  TEST_ASSERT_FALSE(f->takeReadFailed());
+  // A status the card failed: the read refused, nothing kept: the remount's to reopen.
+  fatmodel::Drive& d = fatmodel::drive(0);
+  d.noInit = true;
+  TEST_ASSERT_FALSE(f->read(16384, buf, sizeof(buf)));
+  TEST_ASSERT_FALSE(f->errorKept());
+  TEST_ASSERT_TRUE(f->takeReadFailed());
+  TEST_ASSERT_FALSE(f->takeReadFailed());
+  d.noInit = false;
+  TEST_ASSERT_TRUE(f->read(16384, buf, sizeof(buf)));
+  TEST_ASSERT_FALSE(f->takeReadFailed());
+  // A read that failed: kept, for good, whatever comes back.
+  d.failFrom = d.asked.reads;
+  d.failTo = UINT64_MAX - 1;
+  TEST_ASSERT_FALSE(f->read(32768, buf, sizeof(buf)));
+  d.failFrom = d.failTo = UINT64_MAX;
+  TEST_ASSERT_TRUE(f->errorKept());
+  TEST_ASSERT_TRUE(f->takeReadFailed());
+  TEST_ASSERT_FALSE(f->read(32768, buf, sizeof(buf)));
+  TEST_ASSERT_TRUE(f->errorKept());
+  c.fs.close(f);
+}
+
 void test_on_fatfs_each_sector_read_failed_in_its_turn_is_never_no_root() {
   for (const std::vector<uint8_t>* root : {&manifest(), &longRoot()}) {
   Card c;
@@ -1330,8 +1405,92 @@ void test_on_fatfs_a_read_asks_no_longer_than_its_time() {
   g_lookupStep = 0;
 }
 
-// The reason the questions wait for the file to close: one with no answer makes FatFs's
-// next call a remount, and an open file doesn't survive it. That read, on the way to a
+// Under the wrapper, as the firmware. A read of queue.txt with no answer, the card back at once
+// (the look, docs/METADATA.md 3.8): that read's error and no remount, and the boot's next read has
+// the file. A question the same: the line stays by its path, and nothing mounts. A card silent past
+// its init: the mark stands, and the boot's next read is FatFs's remount (at the boot, not under a
+// job: QueueStore::restore()'s echoNow() is the same call).
+void mendSilence(uint32_t) {
+  fatmodel::Drive& d = fatmodel::drive(0);
+  d.noAnswerLba = UINT32_MAX;
+  d.silentForGood = false;
+}
+void test_on_fatfs_queue_txt_under_the_look() {
+  QueueCard c;
+  c.put(kQueue, bytesOf(queueText({kTrackA, kTrackB}, 1)));
+  static SectorCache cache;
+  TEST_ASSERT_TRUE(cache.capacity() || cache.begin(SectorCache::kDefaultEntries));
+  static uint8_t scratch[fatmodel::kSS];
+  fatmodel::Slot slot(0);
+  fatmodel::Link link(0);
+  CachedDrive wrapper(cache, slot);
+  wrapper.setScratch(scratch);
+  wrapper.setLink(&link);
+  fatmodel::Drive& d = fatmodel::drive(0);
+  d.wrapper = &wrapper;
+  d.fs = &Card::fatfs;
+  const auto sectorOf = [](DWORD cluster) {
+    return static_cast<uint32_t>(Card::fatfs.database) + (static_cast<uint32_t>(cluster) - 2) * Card::fatfs.csize;
+  };
+  FIL f;
+  TEST_ASSERT_EQUAL_INT(FR_OK, f_open(&f, fatmodel::path(0, ".player/queue.txt").c_str(), FA_READ));
+  const uint32_t data = sectorOf(f.obj.sclust);
+  f_close(&f);
+  DIR dir;
+  TEST_ASSERT_EQUAL_INT(FR_OK, f_opendir(&dir, fatmodel::path(0, "music/Band/Live").c_str()));
+  const uint32_t folder = sectorOf(dir.obj.sclust);
+  f_closedir(&dir);
+  c.remount();
+  TEST_ASSERT_TRUE(wrapper.remember(d.disk->sectors()));
+  const auto read = [&]() {
+    c.q.release();
+    return queuefile::readAtBoot(c.files, kQueue, kQueueTmp, c.catalog, c.q, nullptr, nullptr, nullptr, nullptr,
+                                 mendSilence, &c.lookup);
+  };
+
+  // The file's own sector.
+  d.noAnswerLba = data;
+  queuefile::Read r = read();
+  TEST_ASSERT_TRUE(r.got == queuefile::Got::Whole);
+  TEST_ASSERT_EQUAL_UINT32(2, r.reads);
+  TEST_ASSERT_TRUE(r.faulted);
+  TEST_ASSERT_EQUAL_UINT32(2, c.q.size());
+  TEST_ASSERT_EQUAL_UINT32(1, c.lookup.kept());  // the second line, by its path: the card has it
+  TEST_ASSERT_EQUAL_UINT32(0, wrapper.remounts());
+  TEST_ASSERT_EQUAL_UINT32(1, wrapper.kept());
+
+  // A question: the folder of the line the library doesn't list.
+  c.remount();
+  uint32_t remounts = wrapper.remounts();
+  d.noAnswerLba = folder;
+  r = read();
+  d.noAnswerLba = UINT32_MAX;
+  TEST_ASSERT_TRUE(r.got == queuefile::Got::Whole);
+  TEST_ASSERT_EQUAL_UINT32(1, r.reads);
+  TEST_ASSERT_FALSE(r.faulted);
+  TEST_ASSERT_EQUAL_UINT32(2, c.q.size());
+  TEST_ASSERT_TRUE(c.lookup.failed());
+  TEST_ASSERT_EQUAL_UINT32(1, c.lookup.unasked());
+  TEST_ASSERT_EQUAL_UINT32(remounts, wrapper.remounts());
+  TEST_ASSERT_EQUAL_UINT32(2, wrapper.kept());
+
+  // The file's sector, the card silent past its init.
+  c.remount();
+  remounts = wrapper.remounts();
+  d.noAnswerLba = data;
+  d.silentForGood = true;
+  r = read();
+  TEST_ASSERT_TRUE(r.got == queuefile::Got::Whole);
+  TEST_ASSERT_EQUAL_UINT32(2, r.reads);
+  TEST_ASSERT_TRUE(r.faulted);
+  TEST_ASSERT_EQUAL_UINT32(2, c.q.size());
+  TEST_ASSERT_EQUAL_UINT32(remounts + 1, wrapper.remounts());
+  TEST_ASSERT_FALSE(wrapper.foreign());
+  TEST_ASSERT_EQUAL_UINT32(2, wrapper.kept());
+}
+
+// The reason the questions wait for the file to close: one on a card silent past its init makes
+// FatFs's next call a remount, and an open file doesn't survive it. That read, on the way to a
 // line the library leaves out, leaves the queue whole.
 void test_on_fatfs_a_question_with_no_answer_doesnt_lose_the_read() {
   QueueCard c;
@@ -1380,6 +1539,8 @@ int main(int, char**) {
   RUN_TEST(test_the_boot_waits_between_its_reads_and_not_after_the_last);
   RUN_TEST(test_on_fatfs_no_folder_and_no_file_are_its_word_not_a_fault);
   RUN_TEST(test_on_fatfs_a_damaged_directory_entry_is_the_files_fault_not_the_cards);
+  RUN_TEST(test_on_fatfs_a_glitch_on_a_folders_sector_is_read_again_at_the_boot);
+  RUN_TEST(test_on_fatfs_which_fil_keeps_an_error);
   RUN_TEST(test_on_fatfs_each_sector_read_failed_in_its_turn_is_never_no_root);
   RUN_TEST(test_on_fatfs_the_records_are_never_gone_for_a_read_that_failed);
   RUN_TEST(test_on_fatfs_library_idx_is_never_missing_or_corrupt_for_a_read_that_failed);
@@ -1394,6 +1555,7 @@ int main(int, char**) {
   RUN_TEST(test_on_fatfs_a_line_leaves_only_when_its_file_is_gone);
   RUN_TEST(test_on_fatfs_a_question_that_fails_keeps_the_lines_and_stops_asking);
   RUN_TEST(test_on_fatfs_a_read_asks_no_longer_than_its_time);
+  RUN_TEST(test_on_fatfs_queue_txt_under_the_look);
   RUN_TEST(test_on_fatfs_a_question_with_no_answer_doesnt_lose_the_read);
   return UNITY_END();
 }

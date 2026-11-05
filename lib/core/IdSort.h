@@ -19,7 +19,7 @@
 // 'Z' in bytes). That tail drags every median-of-3 pivot to the low end,
 // each partition peels off one folder, and the recursion runs to the depth
 // limit (2 lg n: 29 frames of 112 B at 19,410 ids, 3.2 KB of the card
-// worker's 6 KB stack; the device measured 784 B left after a build).
+// worker's 6 KB stack of then; the device measured 784 B left after a build).
 //
 // Here: the recursion takes the smaller part and the loop the larger (at
 // most lg(n / 16) + 1 frames: 12 at 20k, 13 at 64k; about 128 B a frame on

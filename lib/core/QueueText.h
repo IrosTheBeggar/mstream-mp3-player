@@ -84,8 +84,9 @@ public:
   // room for them (Restored::held).
   virtual uint32_t held() const = 0;
   // Once the read is whole and its file closed: anything to find out of the card (a
-  // question with no answer makes FatFs's next call a remount, which an open file
-  // doesn't survive). True: read the file once more through this, its answers known.
+  // question on a card silent past its init makes FatFs's next call a remount, which an
+  // open file doesn't survive). True: read the file once more through this, its answers
+  // known.
   virtual bool settle() = 0;
 
 protected:

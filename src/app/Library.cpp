@@ -283,7 +283,10 @@ bool Library::openRecords() {
   stats_.openMs = msSince(t0);
   if (opens > 1) {
     Serial.printf("[lib] the device's records: a read of the card failed: read %lu times, %s\n", (unsigned long)opens,
-                  store_->readFailed() ? "and each failed" : "and the last was whole");
+                  store_->readFailed()        ? "and each failed"
+                  : stats_.opened.journalsUnread ? "and tags.bin read, the journals each failed: taken as far as they "
+                                                   "read, the scan and the walk read the rest again"
+                                                 : "and the last was whole");
   }
   if (store_->readFailed()) wait = nullptr;
   LibraryUpdate::Config u;

@@ -3197,8 +3197,8 @@ boot can't load is built or walked, its jobs running: none has a transfer's libr
 to lose. What they save has no identity, so the first boot that reads a root builds
 from it. Auto DJ and the waveform bar stay without their files until a remount or
 that boot (Auto DJ by `Dc` too), and don't read the root on a timer as they do in a
-held session: a read with no answer makes FatFs's next call a remount, and one with a
-job under way restarts the player (3.8), at every boot (`docs/AUTODJ.md` 6.6).
+held session: on a card silent past its init such a read makes FatFs's next call a remount,
+and one with a job under way restarts the player (3.8), twice a power-on (`docs/AUTODJ.md` 6.6).
 
 **A read the card fails is never a file that's missing or damaged** (2026-11-02). Taken
 for one, on a card in the shape it is on (MEASURED on the host, the firmware's own
@@ -3218,12 +3218,12 @@ doesn't list and writes the file again, and a partial library is taken for one t
 knows. Hence these rows' rule: **what such a boot shows is `library.idx`, or the same
 library built for the session, or `/music` walked for the session: never a part of one
 from the records**, and it writes no library and holds the card jobs. A boot that holds its
-jobs sets up no default queue when `queue.txt` itself can't be read (`main.cpp`). The queue's
-own two rules are below (**The queue's file**).
+jobs sets up no default queue (`main.cpp`). The queue's own two rules are below (**The queue's
+file**): no boot sets one up over a `queue.txt` it couldn't read.
 
 - **The session's walk** is the last of what such a boot can show: every track by its path,
   no tags, none of it saved, so the next boot asks again. It costs what a walk at boot does
-  (about 9-11 s at 20k with the sector cache, ESTIMATED). Its listing can't be told whole on a
+  (16-18 s at 19,412 tracks, MEASURED on the device below). Its listing can't be told whole on a
   card in trouble (the VFS's can't tell a folder that failed to read from an empty one, or
   FatFs's FR_INT_ERR from a fault), so tracks it doesn't list aren't known to be gone: the
   queue's restore keeps them in the file (`QueueSaver::keptFile()`, `Booted::sessionWalked()`,
@@ -3247,7 +3247,7 @@ own two rules are below (**The queue's file**).
   they fail on D's own records (below). Before, one read left D out, and the walk and the
   scan began again; its journals alone replaced it. The update step after such a compaction
   ends before its fence (`TagStore::compactionUnread()`): its build would read the same D,
-  and leave no library until the next boot. And no chunk, walk, compaction or update step
+  behind the fence, for nothing. And no chunk, walk, compaction or update step
   goes through on records that are unread (`readFailed()`, a compaction's reload too).
 - **What is the file's fault:** one whose own directory entry or FAT chain is damaged
   (FatFs's FR_INT_ERR, `File::damaged()`), cut, or failing its checks, as for the root. The
@@ -3255,15 +3255,28 @@ own two rules are below (**The queue's file**).
   above that say so apply.
 - **Costs left as they are:** a fault that lasts holds every boot, until a disk check or a
   PC mends or removes the file. On `library.idx` that is the session's build at each boot
-  (about 7-9 s more at 20k, ESTIMATED, and up to 1.4 s of waits) and no walk, scan or update
+  (12-17 s more at 19,412 tracks, MEASURED, the failed reads' own time and up to 1.4 s of waits in it) and no walk, scan or update
   step, where before the first boot's save healed it. Removing the file on a PC ends it; so
   does a card that comes back. A boot with no library, or a session's walk that doesn't list the
-  current track, clears the queue's resume point, as any boot with no library does. And a
+  current track, clears the queue's resume point: the queue and its
+  position come back, the second within the track doesn't. And a
   read of T or D that fails as a boot's build reads them, with no `library.idx` to load, costs the
   session its tags even when the build would have listed every track: a build that lost
-  tracks looks the same from here. A build isn't read again for one read that fails, as the headers
-  are: it is long, and the session goes on from `library.idx` or the walk, and the next boot
-  asks again.
+  tracks looks the same from here. A build is read again once after such a read, 100 ms on, so
+  a one-off costs neither the session's jobs nor a new library (not where the boot's waits
+  no longer apply); no more, as it is long, and the session goes on from `library.idx` or the
+  walk, and the next boot asks again.
+- **The journals' own fault that lasts:** `tags.jnl` or `walk.jnl` failing all four of the boot's
+  opens, with `tags.bin` read. The last open takes them as far as they read, as a torn tail
+  (`TagStore::Opened::journalsUnread`), and the jobs run: the scan reads those files again, the
+  walk walks, and the next chunk or compaction replaces the file. Held, the jobs would stop at
+  every boot over files the card can give again, until a PC removed one. The cost is the scan's
+  work past that read. A boot whose waits no longer apply (the root failed first), and the
+  guard's open after a remount, hold as for D. FatFs's create takes back the file's own clusters,
+  so a new journal goes over the sector that failed: that heals on a card that remaps a sector
+  it is told to write, as flash does. On the rig, whose bad sector stays bad through a write it
+  took, the same reads fail at every boot: 0 restarts, D and the library as they were, the same
+  scan again.
 - **The queue's file** (`lib/core/QueueFile`, 2026-11-03). Nothing rebuilds `queue.txt`, so:
   - **A read the card fails is no queue that's gone.** `QueueStore::restore()` reads through
     FatFs on the card, whose answer the VFS doesn't pass on, and asks again after
@@ -3272,7 +3285,7 @@ own two rules are below (**The queue's file**).
     (`Restore::Unread`): the queue is empty for the session, no default queue, nothing
     written, the file's NVS position and resume point left for the next boot, and Now Playing and
     the Queue tab say so (`library_row_rescan_unread`). The file isn't asked again this session
-    (such a read with no answer at the update step is a remount under a job: one restart, measured).
+    (on a card silent past its init, such a read at the update step is a remount under a job: a restart).
     Only the first write of a queue with something in it goes over it (`QueueStore::keepUnread()`: a
     shuffle toggled, an add undone before its write, are nothing the listener chose instead). A read
     that fails in the last line counts the same (`ByteSource::failed()`): what came before it reads
@@ -3287,8 +3300,8 @@ own two rules are below (**The queue's file**).
     failed to read from an empty one, or T alone with D absent or failing its checks, and the
     next boot loads the same library. So its word isn't enough, at any boot. A line it doesn't
     list goes into the queue by its path (`TrackCatalog::Unlisted`, an id of its own). Then,
-    with the file closed (a question with no answer makes FatFs's next call a remount, which an
-    open file doesn't survive), `queuefile::Lookup` asks `Fs::look()`, FatFs's `f_stat`:
+    with the file closed (on a card silent past its init, a question makes FatFs's next call a remount,
+    which an open file doesn't survive), `queuefile::Lookup` asks `Fs::look()`, FatFs's `f_stat`:
     `FR_NO_FILE`, `FR_NO_PATH`, a name it can't write or a folder at that path say it's gone,
     and the file is read once more to leave those lines out, and written again as ever. Anything
     else is no such word: the line stays, and the first such answer ends the questions for that
@@ -3308,8 +3321,9 @@ own two rules are below (**The queue's file**).
     file: those lines are entries, and go out with it. An update step that lists them gives them
     library ids; one that doesn't asks again.
 
-MEASURED on the host, the rig above, before and after, a fault for the time named, `queue.txt` on
-the card after the session and at the next boot, the card mended:
+MEASURED on the host, the rig above with the look and the breaker in it (3.8), the tree before (main
+at 96ba08b) and after, a fault for the time named, a read with no answer the card is back from at
+once, `queue.txt` on the card after the session and at the next boot, the card mended:
 
 | Card | Before | Now |
 |---|---|---|
@@ -3330,9 +3344,16 @@ the card after the session and at the next boot, the card mended:
 
 A fault at each card read over 38 card states, run by run against the tree before: **queue cuts 35 to
 0 at 6 tracks (3,060 boot runs) and 734 to 0 at 306 (26,364 boot runs); 14 to 0 of 1,702 lasting sectors.
-Guard restarts the same: 11, 170, 4,530.** The 2,022 session runs match line for line, and no run has a
-new restart or fewer tracks. In 32 and 1,408 of the boot runs the file ends a line shorter: the
-listener's, where before the whole library went over it.
+Guard restarts 0 before and now in each**, the look keeping every read with no answer, and the 2,022
+session runs match line for line. In 32 and 1,408 of the boot runs the file ends a line shorter: the
+listener's, where before the whole library went over it. No run has fewer tracks.
+
+The same with the card silent for 2 s past its init, so the mark stands and a remount comes of it: queue
+cuts 37 to 0, 855 to 0 and 14 to 0; restarts **152 to 0 and 3,420 to 0 at the boot** (`restore()`'s
+`echoNow()` takes the remount before any job), 436 to 322 on lasting sectors. In the session runs 20
+to 30, all of them where a job's next step meets the card coming back, so the silence's length decides
+it, and the read back's second try moves that by 0.64 s: over the same kinds of fault, a silence of 0.3
+s 0 and 0, 1 s 64 and 64, 1.4 s 34 and 38, 3 s 2 and 2, 5 s 0 and 0.
 
 - **The queue file's costs, left as they are.** A line by its path has its file's name for a title, and
   no artist, album, cover or Auto DJ row; Go to album says the library isn't ready. The boot's questions
@@ -3342,58 +3363,89 @@ listener's, where before the whole library went over it.
   fails to play and is skipped, as any file gone. In a session with `queue.txt` unread, a play or an add
   replaces it, about 2 s later: Now Playing and the Queue tab say a restart may bring it back (in words
   that say at startup, for a read back's fault too), but nothing stops the listener (Auto DJ waits on an
-  empty queue: `Wait::Empty`). **A question with no answer at
-  the update step's read back restarts the player once**, its save under way (MEASURED, with the
-  directory sector cold, and no restart in the tree before: a file gone needs no read there). The queue
-  is flushed, the next boot is fine and it doesn't repeat; the same holds for a read of `queue.txt` there,
-  which is older. No PSRAM for a line's path (`Restored::held`): the queue goes without it, and the file is
-  kept (`keptFile()`), with what that costs: the update step's jump comes back for that session. Their
-  paths stay in PSRAM through the update step's build (not in `alsoFreed`), so a memory check that comes
-  up short defers to the build at the next boot, as it does for anything else. No PSRAM for the read's own
-  blocks is still "not a whole queue file", and the default queue goes over it; a failed rename removes
-  `queue.tmp` when `queue.txt` has just gone: older than this.
+  empty queue: `Wait::Empty`). A question with no answer at the update step's read back is that
+  read's error when the card is back at once: the line stays by its path until the next read of the file
+  asks, and nothing restarts (MEASURED, with the directory sector cold). **On a card silent past its
+  init such a question can restart the player once**, when the card comes back under the step's save
+  (MEASURED: silent for 1 s, a restart; 0.3, 1.4 and 3 s, none; none in the tree before, where a file gone
+  needs no read). The queue is flushed, the breaker (3.8) counts it, the next boot is fine and it doesn't
+  repeat; the same holds for a read of `queue.txt` there, which is older. No PSRAM for a line's path
+  (`Restored::held`): the queue goes without it, and the file is kept (`keptFile()`), with what that costs:
+  the update step's jump comes back for that session. Their paths stay in PSRAM through the update step's
+  build (not in `alsoFreed`), so a memory check that comes up short defers to the build at the next boot,
+  as it does for anything else. No PSRAM for the read's own blocks is still "not a whole queue file", and
+  the default queue goes over it: older than this.
 - **The card guard** (3.8; the trap of `docs/AUTODJ.md` 6.6): none of this reads anything
-  after the boot, and a held session has no job for a remount to restart it under. MEASURED
-  on the same rig, a sector that never answers, 180 s: `tags.bin`, 33 restarts before and
-  none now; `/.player`'s directory, 3 and none (a setup of about 6 s, 28 s before);
-  `library.idx`, none before or now. A sector that fails once and then answers: the second
-  read has it, the jobs run, and the guard's first pass opens the records again, with no
-  restart. **A compaction that stops on a read of D with no answer** gets no restart either:
-  one would have the next boot's compaction meet the same sector, at every boot, now that
-  it no longer leaves D out. The jobs stop until the next boot (`stepCardGuard()`,
-  `TagStore::compactionUnread()`): 306 tracks with a walk to merge, the sector a body one, 120 s:
-  1 restart and D replaced before (with a read error instead, D cut to the journal's 1 record
-  and every other file read again); now 0, and D as it was. **Not changed:** with no compaction
-  first, the walk meets such a sector, and restarts at every boot: 26 restarts in 180 s at
-  306 tracks, before and now (a read error there, none: the walk fails and says so).
-- **Device check owed.** Nothing of this has run on a device. On a spare card, never the music
-  card, with a temporary build whose reads fail under one path: (1) `/.player/tags.bin`:
-  `[lib] the device's records: a read of the card failed: read 4 times`, `D unread`, `library.idx
-  matches the card: load`, `[card] the device's records couldn't be read`; no walk, `tags.bin`
-  and `library.idx` unchanged; Rescan says Card read failed at startup; a reboot with the fault
-  off finds it all with nothing read again. (2) `/.player/library.idx`: `library.idx unread`,
-  `build from the records`, the library whole, the file unchanged, a marker kept. (3) All of
-  `/.player/`: `/music` walked for the session, tracks by their paths, Rescan's note on the Library
-  row, `queue.txt` and everything else in `/.player/` unchanged. All of `/.player/` and `/music`
-  too: an empty Library tab with that note, whose Try again restarts. (4) The
-  same builds with each failed read marking the card failed, as a read with no answer does: no
-  restart in 3 minutes. (5) A walk to merge on the card and a body sector of `tags.bin` failing
-  that way (the compaction first): `[card] compaction FAILED`, no restart, `tags.bin` unchanged.
-  (6) `gs` after a compaction: the worker's stack's least left, the deepest path about 100 B
-  deeper (ESTIMATED from `-fstack-usage`: two small frames at its open). **For the queue's file**,
-  the same way: (7) `/.player/queue.txt` failing: `[queue] queue.txt: a read of the card failed: read
-  4 times, and each failed`, `queue.txt unread`; Now Playing and the Queue tab empty, with Card read
-  failed at startup; `queue.txt` unchanged, and a reboot with the fault off finds the queue, its line
-  and its second.
-  (8) The same failing once: `read 2 times, and the last was whole`, the queue as it was. (9) With no
-  temporary build: a spare card with T, a queue of tracks T doesn't all list (copy some by PC), then
-  `tags.bin` and `library.idx` removed on a PC: `[queue] restored N of N ... by their paths`; the
-  Queue tab lists those lines by their file names, and one plays; pause it, reboot before the walk
-  ends: that line and second; let the walk and scan run: `after the rebuild`, N of N, nothing heard
-  restarting. (10) One queued file deleted on a PC: `1 no longer there`, the file a line shorter.
-  (11) `ui` after (9): the loop task's lowest, against `loopstack::kMinLeft` (about 3 KB deep,
-  ESTIMATED from `-fstack-usage`: `restore()` 992 B, the read's 704 B, or `look()`'s 336 B and
-  FatFs's name buffer on the way to a question).
+  after the boot, and a held session has no job for a remount to restart it under. A read with
+  no answer the card comes back from at once is a plain read error here (the look, 3.8), so
+  these rules are what answer it, with no remount. A card silent past its init still gets one:
+  with a job's step under way a restart, which the breaker (3.8) bounds at 2 a power-on; with
+  none the records opened again and the jobs begun again, which the read stop (3.8) bounds. A
+  compaction that failed on its read has ended, so a remount after it, a real re-seat's too,
+  restarts nothing and opens the records again, as before these rules. (They first stopped the
+  jobs at such a remount until the next boot, before the look and the breaker.)
+- **Device check** (2026-11-03 and 04, of these rules alone, before the look and the breaker of 3.8: a Core2 v1.3 and a spare 32 GB card of 19,412 tracks, nearly all very short (two in `/music/zz Bench` run over a minute), whose T holds no records, never the music card; temporary builds). MEASURED, first with reads failing above the
+  driver: (1) `tags.bin`'s first sector: `D unread`, `library.idx` loaded, no walk, both files unchanged, Rescan's
+  note, and a reboot with the fault off read nothing again. (2) `library.idx`'s: `library.idx unread`, built from the
+  records for the session, the library whole, the file unchanged, a marker kept. (3) `/.player`'s directory: `/music`
+  walked for the session, tracks by their paths, Rescan's note on the Library row; with `/music`'s too: an empty Library
+  tab with that note, whose Try again restarts. (4) Each with no R1: no restart in 3 minutes. (5) A body sector
+  of `tags.bin` under a compaction: `compaction FAILED`, no restart. (6) The worker's stack, below.
+  Then with the switch inside `sdCommand()`, no command reaching the card, so the driver's own waits (no data
+  token: 3 x 500 ms spinning under the SPI lock; no R1: 3 x 100 ms), log lines and mark; and the same switch on main,
+  the control:
+
+  | Failing | main | Now |
+  |---|---|---|
+  | `/.player`'s and `/music`'s directories, until `Library::begin()` returns | 0 tracks; **`queue.txt` cut from 3 tracks to none, for good**; with no token D replaced too (3,661,520 B to 2,428,944 B) | 0 tracks for the session; `queue.txt`, `tags.bin` and `library.idx` the same by CRC within it, 0 writes; the next boot 19,412 tracks, 3 of 3 at the same position |
+  | `/.player`'s alone, until it returns, no token | not run | `/music` walked, 19,412 tracks, 3 of 3, the files the same by CRC, 0 writes |
+  | `tags.bin`'s and `library.idx`'s first sectors, for good, no token | 0 tracks, `queue.txt` cut to none, D and `library.idx` replaced | With a queued album's folder failing too: `/music` walked, 19,410 tracks, 1 of 3 restored, `queue.txt` the same by CRC; the next boot 3 of 3 |
+  | `tags.bin`'s first sector, for good, no token | D none: 19,412 added, every file to be read again (1,661 read, 2,806 writes in 90 s) | `library.idx` loaded, no card jobs; a track plays, a queue edit saves, 0 underruns, no read of it after the boot |
+  | The same, no R1 | a restart every 8.4 s | no restart; the same |
+  | `/.player`'s directory, for good, no R1 | a restart every 35 s, 0 tracks each boot | no restart, `/music` walked |
+  | `library.idx`'s first sector, for good, no token | built and saved, the same bytes: browsable after 14.7 s, one boot | the session's build at every boot (above the driver, the first run: 18.3 s, 13.7 s with no R1) |
+  | A body sector of `tags.bin` under a compaction, a walk to merge, no R1 | a restart, and D replaced from the journal alone: 3,661,520 B to 568 B | `compaction FAILED`, no restart, 3 boots of 3; `tags.bin` the same by CRC in that session, the switch stepped aside for the read |
+  | `walk.jnl`'s first sector, for good, no R1 | not run | `D unread`, no card jobs, no restart |
+  | `tags.bin`'s body in a boot's build, the marker set, no R1 | not run | `FAILED as they were built`, `library.idx` loaded, the marker kept, 0 writes |
+  | `tags.bin`'s first sector, once, either kind | not run | read 2 times, the last whole; the jobs run, no restart |
+  | `tags.bin`'s first sector from a remount on, at the guard's reopen, idle | not run | `D unread`, the jobs COULDN'T begin again, no restart |
+
+  What main does here is its worst: T holds nothing, so what the records would have listed is gone; the table
+  above this list has the scale with T. And a cut needs the fault to end, or two sectors at once: under a fault that lasts on
+  `/.player`, main's `queue.txt` can't be written either. **Found, before the look (3.8's device check says what changed):**
+  - **A restart after all:** no R1 at the first card read inside the compaction's `FolderCursor::begin()` (2 sectors
+    or so of D: the pass goes on to open `walk.jnl`, a remount, before `compactUnread_` is set, and the guard
+    may run first): 3 boots of 9 restarted, the rest held, and each boot after a restart held. No harm in the logs.
+    The screen was dark, so the compaction ran at the loop's priority, time-slicing with it; by reading, lit it runs below the loop and loses that race more often. Not run lit.
+  - **Clusters lost:** a compaction failed with no R1 at a sector half way through D loses 3 clusters, 48 KB, at each boot of a lasting fault (`@count` before and after, twice over; by reading `hidx.tmp`'s, whose entry never gets its first cluster, so as much as the first pass had written: more further into D, none at the race's read above, which wrote 2 sectors; neither counted), and only a disk check gets them back. `@status`'s `free=` is FSINFO's and doesn't show it.
+  - **The worker's stack:** 1,632-1,980 B left after a compaction failed with the driver's log lines on that stack: 6.3.1's "under 2 KB left is a finding" (L4's item 6), over its 1 KB failure. Main's same path wasn't measured. A
+    whole compaction: 2,184 B on main, 2,076-2,080 B here, about 100 B deeper as estimated.
+  - **Playing with `/.player` failing for good:** no R1: a long track is cut at each try of the queue's save, every 10 s. No token: each try holds the loop about 3 s, every 10 s, and the track stops for about 1.4 s of it, once the ring's 1.4 s have run out: 721 underruns in 81 s of track. Covers' card copies and the Opus open cache's saves fail there too (a cover's copy up to 4.5 s; the Opus save tried about every 11 s). No comparison with main on this card: it has no tracks there.
+  - **Words that misled:** `gs` still says `ABSENT, it fails its checks` of a D it couldn't read, and that the
+    walk and the scan make it again in a session that holds them. Nothing acts on it.
+  - **Left unexplained or untouched:** the run as a whole ended 30 clusters short of its start, on both firmwares, and only the ones above are placed (no `@count` between the last of them and the end). `opus.idx` can't tell a read the card fails from no file (`no cache yet`), spends a boot's first waits, and its save would replace the file with this session's entries: not seen healed. Sessions of very short tracks under a lasting fault paused by themselves (`Auto DJ: the next track is ready, press play`), with no healthy session of them to compare.
+
+  **Not run on a device:** a T with records (where a session's walk also costs its tags); a compaction fault with no data token, with the screen lit or under a track playing, in its second pass or in the boot's compaction before a build; the driver's fast failures (a data error token, a CRC, an R1 error); `library.idx` alone, and `/.player`'s and `/music`'s directories for good, on the driver's path; a sector of `library.idx` or of a directory that fails once (the one try at `/.player`'s: its failure went to the Opus cache's read, before the library's); a walk that meets a bad sector of D with no compaction first (the restarts above are the rig's); `tags.jnl`, T, `tags.tmp`, `library.tmp`; a fault under the update step's build; playing over Bluetooth (the faults above played in silent test mode); a real failing card.
+
+- **Device check owed, the queue's file.** Nothing of it has run on a device. On a spare card, never
+  the music card. (1) and (2) with a temporary build: reads failing under one path, and 3.8's switch
+  inside `sdCommand()` (no token, no R1). (1) `/.player/queue.txt` failing: `[queue] queue.txt: a read
+  of the card failed: read 4 times, and each failed`, `queue.txt unread`; Now Playing and the Queue tab
+  empty, with Card read failed at startup; no restart (no R1: `[card] a command got no answer, and the
+  card was back at once`); `queue.txt` unchanged, and a reboot with the fault off finds the queue, its
+  line and its second. (2) The same failing once: `read 2 times, and the last was whole`, the queue as
+  it was. (3) With no temporary build: a spare card with T, a queue of tracks T doesn't all list (copy
+  some by PC), then `tags.bin` and `library.idx` removed on a PC: `[queue] restored N of N ... by their
+  paths`; the Queue tab lists those lines by their file names, and one plays; pause it, reboot before
+  the walk ends: that line and second; let the walk and scan run: `after the rebuild`, N of N, nothing
+  heard restarting. (4) With the switch again: the folder of such a line, no R1, at the boot's question
+  and at the update step's read back: `it didn't say`, the line stays, no restart. (5) One queued file
+  deleted on a PC: `1 no longer there`, the file a line shorter. (6) `ui` after (1), (3) and (4): the
+  loop task's lowest, against `loopstack::kMinLeft`: about 5.1 KB deep at most, about 3 KB left
+  (ESTIMATED from the ELF's frames, the boot's open of the file: `restore()` 992 B, `FatFile::openRead()`
+  336 B, `f_open` 624 B, then the look and the driver's log line inside it, about 2.1 KB; the read's 704 B
+  or a question's `look()` and `f_stat` come to about the same). 3.8 read 3,444-4,204 B left under the
+  look on shallower reads.
 
 - The queue is then restored (`QueueStore::restore()`; **The queue's file**, above).
 - **A power cut mid-save:** if `library.idx` is missing and `library.tmp`
@@ -3733,8 +3785,9 @@ close: 10-60 ms. `TagScan` reads through a FatFs `Source` (`f_lseek` +
 with its NUL) are in PSRAM, and so is the `FIL`. In this build a `FIL`
 is about 4.1 KB, since it embeds a sector buffer (`FF_MAX_SS` is 4096 through
 `CONFIG_WL_SECTOR_SIZE`, `FF_FS_TINY` 0 for the per-file cache, no
-`CONFIG_FATFS_USE_DYN_BUFFERS`): on the worker's 6 KB stack it would
-overflow at the first file. One `FIL` per worker is allocated once and
+`CONFIG_FATFS_USE_DYN_BUFFERS`): on the worker's 7.5 KB stack it would leave
+about 0.5 KB over a file's read (about 3.0 KB of frames, N11's card) and
+overflow at the SD driver's log line. One `FIL` per worker is allocated once and
 reused, for the scan and the qfp checks alike. (Today's Thumbs worker
 opens through POSIX `open()`, whose VFS allocates the `FIL` with PSRAM
 preferred.) Durations come from the existing helpers
@@ -3777,7 +3830,7 @@ end (part 7, U11: decided so).
 #### 3.3.4 Yielding (a portable `ScanScheduler`, host-tested like `test_idle_policy`)
 
 **One card worker, shared with the thumbnails.** It generalises Thumbs'
-worker: core 1, always below the decoder's 2; a 6 KB internal stack that
+worker: core 1, always below the decoder's 2; a 7.5 KB internal stack that
 exists only while there is work, gone 3 s after the last step. A step is
 one file, or one folder of the walk. Its jobs run one at a time, so a
 build, a compaction and a scan never overlap (3.4.2).
@@ -3829,7 +3882,8 @@ card time (no compaction ran at 1 on the device: the share of that
 excess that is the merge's own CPU is unmeasured, 3.3.7) and the save
 2-4.5x its time on the loop at the boot (priority 1).
 
-**Risk:** the worker's 6 KB stack is held for the whole scan, and
+**Risk:** the worker's stack (7.5 KB; 6 KB until 3.8's device check, the
+figures here its) is held for the whole scan, and
 Bluetooth mode has the least internal RAM. Nothing large lives on it:
 the `FIL`, `DIR` and `FILINFO` are in PSRAM (3.2.3, 3.3.1), and what
 remains is TagScan's about 1 KB, FatFs's 512 B long-name buffer and the
@@ -4873,8 +4927,9 @@ counts):
   boot rather than fail, and the build-at-boot marker makes sure that
   boot builds. (As built, 3.8: a build takes its strings in 64 KB chunks,
   and the index keeps its track table's block across the update step's
-  rebuild, taken again when the new table fits, so only a load at boot
-  asks for the arena whole, on a fresh heap.)
+  rebuild, taken again when the new table fits, so only a load asks for
+  the arena whole: a boot's, on a fresh heap, and a failed step's, in the
+  hole the boot's arena left: 3.9.)
 - **Nothing is read whole** into PSRAM by the walk, the scan or the
   compaction: their temporaries are fixed buffers (above), whatever the
   card holds.
@@ -5202,7 +5257,9 @@ src/. What the code decided where 3.2-3.4 left room:
   `disk_initialize` (`wInit()`), once the SD driver's init has a card
   answering, reads the slot's card's and compares (`remounted()`): not the
   same, or either unreadable, and the card is **foreign** until a restart
-  (whatever comes back after, the first card included). From then the
+  (whatever comes back after, the first card included). A size of 0 is the
+  driver's CMD9 failing, which says nothing of the card: the two sectors
+  tell. From then the
   wrapper's status adds `STA_PROTECT`, so FatFs refuses every write-mode
   open, unlink, mkdir and rename with `FR_WRITE_PROTECTED` before it
   writes, the call that found the card included (a remount is always
@@ -5212,7 +5269,10 @@ src/. What the code decided where 3.2-3.4 left room:
   (`main.cpp`'s `stepCardGuard()`, before the queue's save each pass):
   another card holds the card jobs and the queue's saves, toasts "Another
   card: restarting", logs `[card] ANOTHER CARD in the slot (...)` and
-  restarts 1.2 s later through `restartAtMs` (Try again's path); the boot
+  restarts 1.2 s later through `restartAtMs` (Try again's path; an identity
+  that couldn't be read says nothing of another card: "Card back:
+  restarting" and `[card] the card's identity couldn't be read at a remount
+  (...)`, the same restart); the boot
   reads that card's root, records, `library.idx` and `queue.txt`. Every
   restart through `restartAtMs` (and the console's forget) waits for the
   card worker's step under way first, at most 5 s (the guard holds new
@@ -5232,9 +5292,8 @@ src/. What the code decided where 3.2-3.4 left room:
   card): its records opened again ...`. A read of them the card fails
   there (`TagStore::readFailed()`, 3.2.2) leaves the jobs off until the
   next boot: begun on what it left, they would start the records over; and
-  asked again at the next remount, such a read with no answer would ask at
-  every pass (`docs/AUTODJ.md` 6.6). So does a remount a compaction's read
-  of D brought on: no restart for it (3.2.2). The session's scan and update
+  asked again at the next remount, on a card silent past its init such a
+  read would ask at every pass (`docs/AUTODJ.md` 6.6). The session's scan and update
   state is kept through it (the 2026-10-09 review: `begin()` took the
   boot's `softStale()` and the records' mark again, so an update step
   this session had run was asked again at the scan's end, and records the
@@ -5247,10 +5306,314 @@ src/. What the code decided where 3.2-3.4 left room:
   boot's until the next update step or boot). With no wrapper (no PSRAM
   for the cache, or `MSTREAM_SECTOR_CACHE=0`) there is no guard, and the
   boot's line says so. No identity at the mount (both reads failed): any
-  remount restarts.
+  remount restarts, and counts (the breaker, below).
+- **The look after a fault** (2026-11-02; `CachedDrive::lookAfterFault()`,
+  host-tested in `test_sector_cache` and under FatFs in `test_fat_model`).
+  A command with no answer sets the SD driver's mark, and FatFs's next call
+  mounts the volume again, every open file gone; with a job under way the
+  guard restarted, so a sector that never answers, read at every boot,
+  restarted at every boot. But FatFs asks `disk_status` at the start of every
+  call, so a card that was out is always first seen by a status with no
+  answer, which goes to the remount and the guard as ever. (The one reader
+  outside FatFs, `@count`'s `Volume::read()`, asks it first for that reason:
+  `cardspace::stepCount()`; with no status, a card written on a PC went
+  unread and its files were overwritten at the next write.) A read or a
+  write that fails inside a call whose status the card has just answered
+  can't be a card that went to a PC, so the answer is sought there, under
+  the volume's lock, with no clock. CMD13: R1 0 and no mark is that read's
+  own fault (a CRC, no data token), FatFs's to report. Else the driver's
+  init, which does nothing when no mark was set (a select timeout, an R1
+  error: no CMD0 to a card that may be programming). It fails: the mark
+  stands, and the remount and the guard act as ever. It works: the identity.
+  The same card: counted (`Guard::kept`, `gc`'s "no answers it came back
+  from", `[card] a command got no answer, and the card was back at
+  once ...` once in 5 s at most), no remount, every open file and the cache
+  kept, and FatFs hears that read's error. Another, or unreadable: the
+  wrapper's status says `STA_NOINIT` (`remountDue()`), and FatFs's remount
+  gives the verdict. `install()` asks for the mount's identity 8 times, 500 ms
+  apart (4 s on a card that refuses, 8 s of inits on a silent one, about 13 s on one
+  holding DO low), the driver's init before each ask, so a read of the mount's that left the card
+  busy or with no answer (FSINFO's, which FatFs does without) no longer makes
+  "another card" at every boot, when the card is back in that time. Only a card
+  with a fault pays; a dead one's setup grows to about 38 s at each boot. Nothing
+  changes in `lib/SD`, nor on a card with no failed read. **Costs:** a failed
+  read pays a CMD13 and an init in its own disk call, on whichever task read
+  (the decoder's 16 KB stack, the worker's 7.5 KB, the loop's 8 KB) and under the
+  volume's lock: about 45 ms on top of the driver's 300 ms of retries on the rig, 53-67 ms on
+  a card (the device check below). A re-seat inside one
+  failing call, under about a second, is kept with no re-read: no PC can have
+  written the card in that time, and the identity catches a swap. A bad sector
+  under the playing file still ends that track. FatFs keeps a failed read's
+  error on the `FIL`, so a reader that goes on opens the file again (`AutoDj`'s
+  `refreshFile()`, `docs/AUTODJ.md` 6.6).
+- **The read stop** (2026-11-03; `CachedDrive::readStopped()`, `test_sector_cache`). The
+  look ends a restart, not a repeat. A reader's own count starts over at a remount or the next
+  track (Auto DJ's joins, the waveform bar's reads), the jobs begin again at a remount, and on a
+  card silent past its init each such read makes that remount, with a cut in whatever plays. So the
+  wrapper keeps the last 8 reads (first sector and count) whose look found the card silent (its init
+  failed, or it said yes and the identity after it couldn't be read: a select that timed out leaves no
+  mark, so the init does nothing): one that has done so 4 times, no read of it working between, isn't
+  asked of the card again until 5 minutes after the last. It fails at once, with no look; then it is
+  asked once, and so on. A read that
+  works, a write over the sector (a card may remap it), a card put back or a restart ends that; the
+  remount the read's own fault makes doesn't, since every such loop goes through one. No reader's own
+  count has to know: the join's bound, the scan's rest, a compaction begun again at each remount and
+  the waveform bar each come to about 4 reads of the sector and as many cuts, then none.
+  Only such reads count. A read that fails with the card answering (a CRC, an R1 error, no data
+  token), or that the look keeps, costs a moment and no cut, and is asked every time: its reader's
+  tries and waits are for a glitch, and a sector every reader shares (the root's, `/.mstream`'s,
+  `/.player`'s) takes 4 failed reads within milliseconds, each FatFs call reading it again: the VFS's
+  `exists()` alone is 3. (The first version counted them. On the rig a 5 ms fault there lost the
+  session its library, jobs, Auto DJ and waveform bar, and one after a re-seat ran the queue out.)
+  One silence is one count: a call of FatFs's that goes on past what it does without (FSINFO's read,
+  the second FAT's write) with the mark standing reaches no card, and neither that read's sector nor
+  the count hears of it. If one of those looks finds the card back, no remount comes of the silence and
+  nothing was cut, so it counts for nothing. (**Cost:** a second FAT silent 1.2-2 s holds the volume's lock 3-4 s
+  at every save for the session, with no count to end it: on the rig at most 13.7 s of silence in 9 breaks
+  in 10 minutes, at an edit a minute, against writes going off after two saves.) A card put back is a remount with no such look since the card
+  last answered a read, the first anyone saw of it being a status: every stop is asked again. (A read
+  that works in the call that owes a remount isn't that answer: a mount going on past FSINFO's read
+  counts each time, and the stop comes.) `gc`: "reads not asked of
+  it". **Costs:** a sector of this kind that
+  mends by itself, unwritten and with no re-seat, goes unread for up to 5 minutes, and a reader whose
+  tries are over by then (Auto DJ's and the waveform bar's, 42 s; the walk's, 120 s) doesn't ask
+  again until a remount, `Dc` or the next boot. A stop on a folder's sector fails every track's
+  open under it at once, so a queue runs to its end, as under any lasting failure there
+  (`docs/QUEUE-MODES.md` 16.5). A re-seat before the card has answered a read since a silent look, however
+  long after it, is that look's own remount and leaves the stops; a second re-seat, or the 5 minutes, ends them.
+  A lasting no-token sector holds the loop 1.5 s a read, as it always did, for as long as something
+  asks: the root's, about 53 s of setup, then passes of up to 16 s until the tries and the queue end; a
+  long press on one under DJPH, until two have failed (`docs/AUTODJ.md` 6.6); `/.player`'s directory, at
+  each try of the queue's save and the Opus record's, which wait twice as long each time, up to 5 minutes.
+  About 200 B of internal RAM.
+- **Too silent** (2026-11-03; `CachedDrive::tooSilent()`). The stop holds a read, 8 at most. Reads
+  that move on get past it: 9 bad Pending files evict one another for ever, and a band of bad sectors
+  under the index's or the waveform file's slots is a new sector a track. So 12 silent faults
+  (`kTooSilentAfter`, three sectors' worth), whichever reads or writes they were, since the boot or the last
+  card put back, and the readers a session can do without stop until a restart. At the next
+  remount the card jobs are held (`Library::holdCardJobs()`, the status's words), an open Auto DJ file goes
+  Absent (`docs/AUTODJ.md` 6.6) and the waveform bar to plain lines; no cover is read, placeholders
+  showing. Playing goes on: a cut in a track's own read ends only that track. **Cost:** 12 such cuts
+  over a long session, however far apart, do the same; 3 bad Pending files or more leave the rest of a
+  scan unread at every boot; a read that works and leaves the card silent past an init has no stop and no
+  count, a status seeing it first (the table's FSINFO row); a session foreign since a remount, up only because the boot holds the card jobs
+  (the breaker's), has no look but the same stop and the same count; the only words on screen are Rescan's, which say "at startup" of a hold
+  that came later. A write that leaves the card silent, no look ending it, has a bound of its own, 4 and
+  writes off: its reader, the queue's save, has no other. No more than that of its retry's wait: every open
+  still works.
+- **FatFs's window** (2026-11-03; `CachedDrive::windowFailed()`, `wWrite()`, `test_fat_model`).
+  FatFs keeps one sector of FAT or a directory in `FATFS::win`, and writes it back before it moves
+  to another. A write that fails leaves it dirty, so every later move fails with no read: one
+  sector that won't take a write stops every open on the volume until a remount drops it. A refusal
+  with no mark (an R1 error, a data response) has always done that; a no-answer's mark brought
+  a remount, which the look took away. The wrapper can tell that write (the bytes are the window,
+  dirty, at that sector). The first failure stands: FatFs writes it again at its next move, and a
+  one-off keeps its update, no remount. The same sector again, no write of it taken between:
+  `remountDue()`: FatFs's remount drops the window, and what was open goes with it (a file left open
+  could go on to write a directory entry over clusters the FAT doesn't have); the guard acts as at
+  any remount. The second such remount: no more writes this session (`writesOff()`, `STA_PROTECT`
+  as for another card, `[card] writes kept failing ...`), so
+  no more remounts for them: the queue's saves and the jobs fail softly, reading and playing go
+  on, and a restart asks again. Writes go off the same way for 4 writes of any sector that left the
+  card silent (Too silent, above). (Until a read-mode call mounts, each write-mode call counts a remount
+  and clears the cache: FatFs takes the status for a mount's, and refuses before it mounts. The guard's
+  own open may be the one that does, and takes no restart for it.) FSINFO and the second FAT's copy,
+  which FatFs does without, count for nothing.
+- **A queue's save that fails at its close** (2026-11-03; `QueueStore::commitTemp()`). `File::close()`
+  says nothing, and stdio holds up to 4 KB past the flush, so the file's last bytes, its FAT chain and
+  its size reach the card in a call no one can ask. One that failed left `queue.tmp` empty, the save
+  removed `queue.txt`, renamed the empty file over it and told the saver it worked: no retry, and the
+  next boot had no queue. (So it was at b2f47ca.) The card is asked now, the file's size against what the
+  sink took, before the last good file goes. And a rename that fails with `queue.txt` gone (the window's
+  second failure can land between the two) keeps `queue.tmp`, which the boot's `restore()` reads. The
+  next save, and a boot's first, gives such a `queue.tmp` the name `queue.txt` first: its own open would
+  empty it before anything new is safe, and hand FatFs the same clusters back. A flush behind the
+  update's fence that the card refused says so now, the queue being text in PSRAM until the fence
+  comes down. A failed save tries again 10 s on, then twice as long each time, up to 5 minutes, and
+  says the wait; one that works, or the card coming back (a remount 10 s or more after a mount that
+  found nothing answering: `CachedDrive::cardBacks()`, `QueueSaver::cardBack()`), starts that over: once
+  for a run of failures. (Not any remount: a save's own, or a window's, set up the next try at once on the
+  rig, the save 99% of the loop. A card silent 10 s after each read that worked looks out every time, and a
+  save's own retry can be that remount, nothing else reading: hence the once.)
+  **Cost:** a fault that ends with no such remount leaves edits, the position and the resume point unsaved
+  for what is left of the wait, up to 5 minutes, against a hard cut (an orderly stop flushes: no wait). A re-seat
+  under about 12 s, or with nothing asking the card while it was out, is one; so is any pull once a run's card back
+  has been taken, a false one included. With the read stop under the save (its sector silent 4 times, 36-46 s on with
+  nothing else reading), a try or a flush in its 5 minutes fails at once, and the wait after that try still runs:
+  on the rig saved 644 s after the edit, against 72 s with no card back at all.
+- **The breaker** (2026-11-02; `lib/core/CardBreaker.h`, `test_card_breaker`):
+  the backstop for a restart the look can't end, whatever brings it (what ends in
+  no restart it never sees: the read stop's). Three words
+  in RTC slow memory (`RTC_NOINIT_ATTR`: magic, restarts, check), which
+  outlive `esp_restart()`, not a power-on. Counted: the guard's "Card back"
+  restart, and "another card" when either identity couldn't be read. Cleared:
+  a reset other than `ESP_RST_SW`, a bad check, another card with its identity
+  read, and 30 minutes of a session. At a count of 2 the next boot holds the card
+  jobs (`Library::holdCardJobs()`), logs `[card] the guard restarted 2 times in
+  a row: ...` and shows "Card read failed at startup: restart to try again" for
+  6 s. The hold is that boot's alone: a power-on, or any restart from the held
+  session, asks again. A held boot doesn't restart for an unreadable identity;
+  its writes stay refused. **Costs:** two real re-seats under jobs within 30
+  minutes give one session without jobs, and a lasting fault of the kinds below
+  replays 2 restarts a power-on. A held boot foreign for an identity it couldn't read stays so,
+  whatever comes back: another card put in later isn't noticed, its writes refused and the old
+  library showing, until a restart.
+- **What such a card does** (MEASURED on a host rig, not in the tree: the real
+  `sd_diskio.cpp`, `SectorDisk.cpp`, `Library`, `CardTasks`, `AutoDj`, `Waves` and FatFs
+  over a byte-level model of a card; a sector with no answer unless it says
+  otherwise, restarts over 4 boots of 120 s; the device check below says which rows a Core2 has run):
+
+  | The sector | Before | Now | The listener |
+  |---|---|---|---|
+  | The Auto DJ index's first | RRRR | .... | Tries at 2, 10 and 30 s, then random picks and a line. Normal once mended |
+  | All but sector 0, the boot sector and FSINFO | RRRR | .... | About 9 s of setup, no library, jobs held. Nothing lost once mended |
+  | A listing | RRRR | .... | The walk fails, again at 60 s, twice at most. The library as saved; that folder's tracks can't open |
+  | A Pending file's | RRRR | .... | The others read and the library updated. That file keeps its path name and is tried once a boot |
+  | `tags.bin`'s head | RRRR | .... | Jobs held, `library.idx` loaded, D untouched, Rescan says why. No new tracks until mended |
+  | `tags.bin`'s middle | RRRR | .... | The walk fails, D as it was, the library as saved |
+  | `tags.jnl` | RRRR | .... | Those files read again, D rebuilt: heals (3.2.2) |
+  | T's body, with a new file | R... | .... | The old library kept; the new file not shown until mended |
+  | A new T's body | RRRR | .... | The old library with its names, jobs held |
+  | A cover, the waveform file's header | RRRR | .... | A placeholder, or plain lines after 2 reads a track. Jobs run |
+  | Once, under a compaction or a build | R.. | ... | The job fails softly |
+  | FSINFO | another card, every boot | .. | Normal |
+  | FSINFO's read at the mount: DO low 2.5-5 s, or R1 errors 1-3 s | RRRR | .... | Setup 1.5-6 s, 6 tracks: `install()` asks until the identity reads. DO low to 12 s the same |
+  | FSINFO's read at a re-seat: DO low 2-2.5 s, a track playing, 500 s | no end | 5 remounts, 2 cuts, 488 s of sound | The read stop holds: no read that works in that call clears the note |
+  | FSINFO's read works, then no answer for 1.2-8 s, each time, met at a re-seat | no end | no end: 34-129 remounts in 300 s, no track plays until a restart | A status sees it first, no look: no stop, no count. Rare, and a guess at a card |
+  | A second FAT's write silent 1.2-2 s, an edit every 30 s | RRRR | 20 saves of 20, no cut | The cost is in the read stop's words |
+  | A foreign held boot (the breaker's), an Auto DJ band DO low 5 s, 300 s | RRRR | 39 remounts, 7 cuts, 220.6 s of sound | The same stop and count; a waveform band 216 s |
+  | A re-seat with nothing playing and the queue quiet, under the walk or with one asked | R.. | R.. | One restart at the walk or its retry, the queue saved |
+  | The same under the scan, a build or a save | ... | R.. | One restart at the rest's retry or the next job's step. (Before: no remount at all that session) |
+  | A re-seat some other call reaches first: a track playing, a queue's save, a scan's chunk waiting; a compaction that failed on the pull (no retry) | ... | ... | The records opened again, the jobs begun again, no restart: a file added on a PC waits for the next boot, unless a walk was owed |
+  | A re-seat under a job's step, at every boot | RRRRRR | RR.RR. | One held session (each dot), then a power-on |
+  | Silent past its init (2 s), a job's step taking it | RRRR | RR.R | Bounded; with no job's step under it (a compaction or the rest that failed, a held session), no restart and about 4 cuts: the read stop |
+  | DO low for 2-3.7 s after the read, every read of it (the select times out, the init says yes, the identity can't be read) | RRRR | as silent past its init | One Auto DJ band: 12 cuts, 245 s of sound in 260 s |
+  | DO low until CMD0 | RRRR | RR.R | Bounded; the held session a dead card until a power-off. Setup about 38 s a boot, `install()`'s 14 s in it |
+  | A lasting refusal of a write to a sector of FAT or a directory, a job writing there | RRRR | RR.RR. | Every open works: a remount at the second failure; a held session's writes go off after two; playing goes on. Nothing lost once mended |
+  | The same with no job writing there: the queue's saves | .... and a cut at each try | .... | A cut or two, then the saves fail softly. Every open works |
+  | A pull around Auto DJ's reads, 5-90 s | joined | joined | The maps kept; the file reopened at the remount |
+  | A slot's sector, read ahead | one read, the FIL's error after | two | That row out of the anchors until a remount or `Dc` |
+  | T's body with Pending tracks in `library.idx` (a save between) | one step: no library for the session (a CRC mismatch: D alone saved over it) | at most two steps a session | The last `library.idx` back each time; a Rescan, a walk's changes, `gb` or g0 ask again, once each |
+  | A band silent past its init (2 s), every slot of the Auto DJ index, 40 rows | 125 cuts in 300 s | 12 cuts | Then picks by id until a restart: too silent. Over one row's sector, 4 cuts |
+  | The same under 9 or more Pending files, a track playing | no end | 12 cuts | Then no jobs until a restart. 1 or 2 files: 4 cuts each, and the library updated |
+  | A sector of a free cluster that leaves the card silent at a write, the queue's save on it | a cut every 10 s, no end | 4 cuts | Then no more writes this session: the saves fail softly |
+  | A write of the queue's save refused once, in its close; or a FAT sector of the old `queue.txt` alone, for good | `queue.txt` empty, or both files gone | as before the save, or `queue.tmp` whole | The save says it failed, and tries again 10 s on, then at twice the wait |
+  | The first save on a card with no `queue.txt`, a data sector of its cluster refusing writes | `queue.txt` empty, whole at the next | whole at the retry | The kept `queue.tmp` is named `queue.txt`, and FatFs moves on from its cluster |
+  | A fresh card's first free cluster refusing a write, no `/.player` yet | a lost cluster, whole at boot 2 | whole at boot 1 | `stateDir()` asks until a mkdir works; a read that failed asks at the next boot |
+  | A pull of 25-700 s, an edit waiting, a track playing or a Play at the put-back | a try every 10 s | saved 0-1.1 s after the put-back | `cardBack()`. Nothing reading until the save's own try: up to 212 s |
+  | A re-seat under about 12 s, a track playing | a try every 10 s | at most 8.8 s after it; after a long failure up to 210 s | The signal needs a mount that failed 10 s before the remount |
+  | A window sector refusing writes for 2-12 s, a save under it | not measured | 1 failure, 9 saves, next boot whole | Over 12 s: writes off at 12 s |
+  | `/.player`'s directory: a read works, then no answer for 2-8 s, each time, an edit waiting, nothing playing, 900 s | not measured | 10 tries, 3-5% of the loop, passes of up to 4.7 s | With no card back 7 tries. A status sees it first, no look, no stop, no count |
+  | The same for 11-30 s, a track playing | not measured | 154-239 s of sound in 300 s, 5-6 remounts | With no card back 182-260 s; the saver's once is the bound. 3-10 s: no difference. Rare, and a guess at a card |
+
+  Sweeps, one sector at a time, over three card states. 225 sectors read: 0 restarts
+  (before, 147 of the 225 restarted at every boot), but for sector 0 and the boot sector,
+  which no boot mounts past. 71 written: 0 restarts for FSINFO, the second FAT and all that a session
+  writes; a sector of FAT or a directory with a job writing there, 4 of the 71, RR.RR. Hung until
+  CMD0 after the read that worked, 9 of 225 restart, 2 a power-on: the status sees it, not
+  the look. Random re-seats, out 0.1-40 s under anything, the model's queue saving every 30 s: 458
+  of 460 end as before (81 restart, 379 don't), and the other two in the same library. **What this model
+  may flatter:** a sector tied to "no R1" is a guess; a real bad sector more often answers R1 and
+  then gives no data token, which never needed the look, only the read-fault rules of 3.2.2.
+  An init costs about 45 ms in it, and every other command works. Its queue saves
+  every 30 s unless told not to, where the firmware saves after an edit: such a save is the first
+  call after a put-back, so the table's re-seats ran with a quiet queue (`NO_SAVES`). Its worker runs a
+  step whole within a pass, so a remount lands under a step more rarely than on a device. Its bad
+  sector stays bad through a write it took, which flash shouldn't.
+- **Device check** (2026-11-04: a Core2 v1.3 and the spare 32 GB card of 3.2.2, never the music card: T with no records, an Auto DJ index of 19,410 rows, and a waveform index of 100 rows put there for the check and taken off. Temporary builds: this tree and a switch inside `sdCommand()`, no command reaching the card, so the driver's own waits, log lines and mark run and all that follows is real traffic with a card that stayed healthy; for writes too. Plays in silent test mode, but for about 8 minutes on the speaker after restarts, which don't keep it.) About 210 boots; every one of the logs' 203 resets asked for or the guard's, and no crash but the panic asked for, by independent readers of the logs as well. MEASURED, no R1 unless it says:
+
+  | Item | Failing | On the device |
+  |---|---|---|
+  | (1) | Nothing | Boot, walk 21.5 s, scan, compaction 20.9 s, update step, save, Auto DJ rejoined: `gc`'s no answers 0, reads not asked 0, no new lines |
+  | (2) | The Auto DJ index's first sector, a track playing, 5 boots | No restart, no cut, 0 underruns, passes of up to 363 ms. Tries again after 2, 10 and 30 s, then `ABSENT` (`picks at random` is the line's word: no pick was due) |
+  | (2) | `library.idx`'s first sector, the same | No restart. Its 4 reads a boot all in setup, 14-20 s before the Play, so no look under the track: no cut, 0 underruns, passes of up to 23 ms. The session's build, 10.6 s |
+  | (3) | A cover's own sector | `a read failed: the placeholder`. No restart |
+  | (3) | `/.player/thumbs`'s directory | Covers decoded and shown, 1.3 s each against 0.19 s: 3 looks, the card copy unwritten. 0 underruns |
+  | (3) | The waveform file's first sector | Two reads a track, `no shape for this track until it changes`, plain lines |
+  | (3) | A listing | `the walk FAILED (a listing ...)`, again at 60 s, twice at most; the library as saved; that folder's tracks can't open |
+  | (3) | A Pending file | The library updated, that file by its path. Read once more at the next boot, and twice in the session a walk adds it: the update step's compaction starts the scan's rest again |
+  | (3) | `tags.bin`'s head | `D unread`, `library.idx` loaded, no card jobs; both the same by CRC |
+  | (3) | `tags.bin`'s middle, no walk to merge | `the walk FAILED (reading tags.bin)`, again at 60 s; both the same by CRC |
+  | (3) | `tags.jnl` | `taken as far as they read`; the compaction and the update step go on, and it heals |
+  | (3) | T's one sector, a new file | `the update step ...: FAILED: the last library.idx loaded again, as it was`; the same by CRC |
+  | (3) | A new T (a root of generation 4), its one sector | `its T ... unread`, the old library, no card jobs |
+  | (3) | FSINFO for good: no R1; an R1 error | A normal boot but for the free count (`unknown (@count)`, `free=?`) and, no R1, setup 5.4 s (two failed reads, one the switch's own look); not another card |
+  | (3) | FSINFO's read at the mount alone, DO low 3, 5, 12 s | Setup 8.2, 9.7, 17.7 s (4.7-4.8 s healthy); the identity read, with 0 sectors; a normal idle session but for `size=-`. (At every read of it, 2.2-3 s: R R held, but the switch's own look at the root runs inside that hold, and the firmware makes no such call) |
+  | (3) | `tags.bin`'s middle, once, under a compaction | `compaction FAILED`, no restart, the next boot merges |
+  | (5) | Silent 3 s under a compaction, a walk to merge | The breaker finds 0, 1, 2: R R, a held boot, its note; a restart from it, the same again: RR.RR. |
+  | (5) | One restart counted, then a panic; a reset by RTS (a flash's, and a power-on's reason); another card, its identity read; 31 minutes of a session | Each time 0 found at the next boot |
+  | (5) | One restart counted, DO low 6 s: the identity unread | Counted: 2 found, a held boot, `no restart (this boot holds the card jobs)` |
+  | (7) | `gb`, T's one sector | Fence up 16.7 s, FAILED, `library.idx` back, the queue 3 of 3 at its place, Auto DJ rejoined in 1.5 s. PSRAM's lowest 889,360 B in the fence, 72,284 B in the rejoin after it; nothing failed |
+  | (7) | T's one sector, `library.idx` saved with a Pending track | One FAILED at the scan's end and no second fence in 7 minutes, that track played 3 times, under 0.1 s each (512 B, `Unreadable` once read). `gb` then asked one: nothing playing, a second FAILED, fence up 16.4 s, `library.idx` back, Auto DJ rejoined in 1.5 s; short tracks playing, no fence in 4.5 minutes. Not reached: two at the scan's end, `2 update steps failed` (that file not read again, so no new records) |
+  | (8) | `/music`'s listing, `/.player/thumbs`'s directory, drags on a list | 9 looks, none under a scroll. One with a drag just asked: a pass of 408 ms, the loop waiting for the bus, the finger down after it; that drag and the next 23 fps. Six around a run of drags: two drags' `down` took 619 and 624 ms, the press's draw waiting for the bus over two looks each, the scripted finger's whole 580 ms over by then, so each read as a tap, no scroll: the first opened an album, the second a track's bar on it, nothing played; the next drag 23 fps. Two with no drag: dark; as a shot's rows went out, a pass of 368 ms. The panel read back after, each time: clean |
+  | (9) | `/.player`'s directory, one write's sends | `kept`, no remount, `queue.txt` new from that save, no failure |
+  | (9) | The same, for good, a track playing | `couldn't replace`; the second failed write of each of the first two saves a remount, each remount a cut (at about 3.4 s and 10.3 s of track); after two, `[card] writes kept failing`; then the saves fail softly after waits of 20, 40, 80 s, saying 40, 80, 160 s; 0 underruns |
+  | (9) | The same, a walk to merge, at what by its time is the compaction's first open | R R, a held boot. Nothing lost |
+  | (9) | A FAT sector, one write's, in a queue's save (the old file's and the next free cluster's: one sector here, so both times the new file's chain in the save's close) | `couldn't replace`, `queue.txt` as it was, saved 10 s on. A cluster lost, below |
+  | (10) | Silent 3 s at the waveform file's first sector, lit | R R first, the reads meeting the boot's walk. Then, in the held boot: 4 remounts in 12.8 s and no cut: nothing was playing, and a Prev's two tracks failed to open; `gc`'s reads not asked 4, 6, 20, 41 ... 422, no driver lines; one real read 301 s after the last failure. A write over the sector: 4 more. The switch's silence of 3 s, no contact moved: 4 more, the count of silences from 0 |
+  | (10) | No token there | 42 faults: remounts 0, stopped 0. Two reads a track that lasts, at most one a short track, 1.5 s each: 786 underruns in 21 breaks by track 30 of 32, the two long ones 53 in 2 and 81 in 2 |
+  | (10) | Silent 3 s, every slot of the Auto DJ index | After the boot's walk, dark at the Play: remounts, and the one that met the job the last began restarts: R R. In the held boot, paused 5 s in, 9 remounts in 60 s, no read reaching the card for 4:44, then a skip and the last 3: `[card] the card kept going silent`, `[wave] ...`, `[dj] ...`, picks with no row, no restart |
+  | (10) | DO low 3 s after a read, the same band | After the boot's walk: 12 remounts, `the card jobs COULDN'T begin again`, too silent, no restart |
+  | (10) | Silent 3 s at a write, 4 clusters from the next free, edits | Saves fail, each a cut, waits of 10, 20, 40 s; `[card] writes kept failing` at the 4th; that remount met a job: R R, held, in 2.5 minutes |
+  | (11) | Every slot, no token, joined | Picks go on, all at random, 1.5 s a pick (its first read; a second fails at once on the FIL's error), 998 underruns in 25 breaks; a row's two failures running, `DAMAGED (the read failed twice ...)`; no remount |
+  | (11) | One row's sector, silent 3 s | 4 remounts, 2 stopped reads, `DAMAGED`; a new session from that track doesn't read it |
+  | (11) | DJRF's first sector | `the join: a read ... failed`, again at +10, +10, then `3 times`; `De` plays nothing; with the fault off `Dc` joins and `De` plays |
+  | (11) | DJPH's middle entry, Auto DJ off | The button twice: 2 looks, `Found no track with Auto DJ neighbours: try again` at the first, no toast at the second, then Shuffle all in its place |
+  | (12) | CMD9 at a re-init only | `Card Failed! cmd: 0x09`, the init 352 ms, `kept` counted, no restart |
+  | (13) | The first card read inside a compaction's `FolderCursor::begin()`, a walk to merge | 13 boots (4 of them lit): no restart, `kept` 2 a boot, `compaction FAILED`; the files the same by CRC over the 9 dark ones. PR 35: a restart at 3 of 9 |
+  | (13) | `tags.bin`'s middle, a walk to merge | `@count` the same over 3 boots, none lost; no token, over one boot, the same. PR 35: 3 clusters a boot |
+  | (13) | `/.player`'s directory, a long track | No cut, 0 underruns in 180 s of track; tries at +10, +20, +40, +80 s and the next said for 160 s, passes of 327 ms. PR 35: a cut at each try, every 10 s |
+  | (13) | The same, no token | One read a try, 1.5 s, not 3: 13 underruns in 180 s of track, at those waits. PR 35: 721 in 81 s |
+  | (4) | Every command silent 20-30 s, 8 s for the flipped byte (the switch: no contact moved) | Under a walk, stopped, nothing asking till its retry: `the walk FAILED`, one restart at the retry, the next boot's walk `1 added` (a file the switch made before the walk and the silence); a status first: `its records opened again`, no restart. No `kept` line in any. Playing: cut, the remount at the first read after. `@count`: `@err 4 count card` while out and after, until a read made the remount. Out 50 s: the console answers, no hang. Auto DJ: `the maps and the session kept`. A flipped byte of sector 0: `ANOTHER CARD`, restart |
+
+  **Real pulls** (the same day, by hand, no switch: the clean firmware of this tree, e27515b, the spare, and a second card, 16 GB, FAT32, its brand not noted. The console asked for the walks, `gw` again 2 s after each end, but in the row for the walk's own retry.) No `kept` line in any, no crash, every restart accounted for:
+
+  | Item | Pulled | On the device |
+  |---|---|---|
+  | (4) | Under those walks, 2 min 40 s out, an mp3 added on a PC | `the walk FAILED`, 50 times; at the first `gw` to find the card back, one restart, `Card back: restarting`; the next boot's walk `1 added`, `Found 1 new track`. The update step took its tags two boots on: the walks left the scan's end no room |
+  | (4) | One walk, about 30 s out, nothing asking till its retry | `the walk FAILED (a listing ...) (walked again in 60 s)`; 60 s on `the walk again (retry 1 of 2)`, `the card answered again ... with a card job under way`, one restart |
+  | (5) | Under those walks, 25 s, the restart before it counted | One restart, the second in a row. A held boot, its note on the screen, no card jobs |
+  | (5) | Under them, a restart; a real power cycle (USB out, the power button held till dark, USB in); under them again, a restart | The boot after the second pull not held: the power cycle cleared the count |
+  | (4) | A track playing, 2:38 into 4:00, silent mode, about 20 s | The track cut, 137 underruns in 1 break. The next track's read and Auto DJ's pick fail, another pick cued and paused, the toast `the next track is ready, press play`, 9 s after the pull; two healthy rows `DAMAGED`. The queue's save fails; its try 10 s on makes the remount: `its records opened again`, no restart. The place in the track gone |
+  | (4) | A track playing over Bluetooth, 1 s from its end, 18-37 s | The next track's first read ends it, 66 underruns in 1 break; the same pick, cued and paused. Saves fail, waits of 10 and 20 s; the third try makes the remount, no restart. Play from the console works, from the pick's start |
+  | (4) | About a minute, under a `@count`, the panel woken and two tabs tapped | No hang: the console and the panel answer. `@status`: `card=fat32`, its size and free as held, throughout. `@count`: `@err 4 count card` 11 times of 11, at least the last 3 after the put-back, until a Play from the console: the next track's open made the remount, 1.6 s after the key; then whole |
+  | (4) | Under a scan (Rescan), 18-46 s, 14 journal chunks waiting | `compaction FAILED` at its first open, `the update step ...: FAILED before its fence`; 28 s on, nothing asked, by the timing the refused chunk's retry: `its records opened again`, no restart. The scan went on and merged them, and the Rescan ended in its update step |
+  | (4) | A track playing over Bluetooth, 7 s: the spare out, the second card in | `ANOTHER CARD`, `Another card: restarting`; up on it, 0 tracks, with a `/.player` written as on any card |
+  | (4) | The second card, under its free count, the same card back | `@err 4 count card` until a walk's read: `the same card`, a job under way, the board restarted: `Card back: restarting` |
+  | (4) | The second card out, the spare back | `ANOTHER CARD` at the next read; up with 19,413 tracks, the queue at the entry its file had, the place in the track gone, the Rescan's journal kept |
+
+  A walk under a Bluetooth play on 7.5 KB, and a scan, are in the stacks below. Beside the rows: a touch during a pull seeks, as any touch (a tap on the bar; it put the next play 2:08 in). A lit panel's worst under the walks' failures: `awake in 775 ms`, a pass of 583 ms. One `A2DP down (signal lost)` 164 ms after a pull's first error, back by itself in 14 s, the only one, no cause in the log. And `the card doesn't answer (/music, or its records: the card pulled?)` on the second card, answering, 10 s before any pull there: it has no `/music`; the words are wrong and nothing else is.
+
+  **(6) The stacks,** least left, `gs`, the driver's log lines on them. The worker:
+
+  | The path | On 6 KB | On 7.5 KB |
+  |---|---|---|
+  | A whole compaction and update step, no fault | 2,044 B | 3,592-3,612 B |
+  | The first read in the cursor's begin | 1,512-1,660 B | |
+  | `tags.bin`'s middle | 1,576-1,848 B; no token 2,076 B | |
+  | `/.player`'s directory at the compaction's first open (`hidx.tmp`) | 1,604-1,904 B; DO low 1,500-1,636 B | |
+  | The next free cluster's FAT sector under the compaction's writes | 1,844-1,852 B | |
+  | The first card read inside the reopen of D (`beginMerge`, the cache cleared by the switch) | 1,112-1,116 B | 2,640-2,652 B |
+  | The same, DO low 1.5 s: the identity's lines inside the look | 720-912 B | 2,288-2,524 B |
+
+  Under 6.3.1's 1 KB, so the stack grew, 6 KB to 7.5 KB. That read needs a sector that fails there and not at the `hidx.tmp` before it, and a cache miss. Internal RAM's lowest while a step ran on it, nothing playing: 55,696-55,952 B with the headphones linked, 70,092-70,168 B with no link (the 1.5 KB asked). A whole walk under a Bluetooth play on it: 45,468 B, `min=44K`, `ram=52K` with the worker gone, 0 underruns, passes of up to 27 ms, no failure. Then the Rescan's scan under the next Bluetooth play, 52 s: `ram=48K`, `min=43K`, the day's lowest, no new underruns, no `gs` in it. OPUS.md's G5 holds, steady 50 KB with no step and 42 KB the session's lowest. 6.3.1 asks of a scan the 50 KB the soaks kept: under it while a step runs, as 6 KB would have been, 1.5 KB higher (on 6 KB a step under a play on the speaker reached 45,396 B). Not a soak, and no failure. The decoder, of 16 KB: 13,160 B on the 320 kbps MP3, a fault in its file no deeper; 13,108 B the lowest on any MP3; under an open that fails, 11,752 B with the look, 12,260-12,556 B with a silence or DO low; 5,356 B on Opus. The loop, of 8 KB: the look on its own read left 3,444-4,204 B, with DO low and its remounts 3,248 B; a boot's lowest with no fault 3,480-3,788 B; 2,548 B the lowest of all, a held boot under DO low at every read of FSINFO.
+
+  **Found:**
+  - **A silence under a compaction still loses clusters.** Each guard restart in its first pass, at `tags.bin`'s middle, silent 3 s: 3 clusters, 48 KB, `hidx.tmp`'s as in 3.2.2, 96 KB a held cycle, only a disk check gets them back. The look's cases (no R1, once, no token) lose none. A restart under the walk or at the compaction's opening: none.
+  - **A failed write of a FAT sector in a queue's save** loses a cluster, 16 KB: the file is whole, as the table says.
+  - **A kept read under the decoder ends the track.** The look finds the card fine, and that read's error is the file's end: 3:53 of a 4:00 track gone, the next one plays, no word. As before the look, where it was a cut. No re-read: a choice to make.
+  - **A pull runs the queue out,** about 2 s an entry as each open fails, to the end, paused; the put-back then saves that as the place. Older than this work; `cardBack()` only saves it sooner.
+  - **The guard's restart doesn't wait for the queue's flush:** the card silent again, the save fails and 1.2 s later the edits since the last save are gone (`saved now ...: FAILED`, then the old queue at the next boot). The line said "the queue saved" before the flush; it no longer does.
+  - **`@status`** says `card=fat32` until a FatFs call finds the card out, then `card=none`; `size=-` after a size read that failed, until an init answers it: a CMD9 unanswered at an init, or none sent, the select timing out under DO low at the mount; and `card=none size=- cid=-` for a held session whose first commands met DO low, the card answering.
+  - **A silent or DO low fault meets jobs more often than (10) said:** a remount begins the jobs again, the walk under the next one restarts. So the rig's "about 4 cuts" and "12 cuts" came here as 4 and 12 remounts, in a held boot or dark after the walk, R R first in the others, few of them over sound: the player paused itself after the first ones, so the rig's seconds of sound aren't measured. The bound held each time.
+  - **The card's ledger:** 546 clusters fewer at the end: 279 cover copies (lit sessions over many albums), 236 from the check's own restart under a compaction, 27 from nine of those guard restarts, 2 from those saves, 2 not placed. The `/.player` files back by CRC at the clean-up, but for the Opus open cache and `device.txt`.
+
+  **What the switch can't show** (the real pulls answer only for a card gone by hand, then back or swapped: none met a write on the wire, none outlived a restart): the card never saw the command, answers everything else at once (but for a 500 ms select at 3 boots' first init right after a restart), and a silence ends by a clock and doesn't outlive a restart. So "no restart" is for such a card, and R R then a held boot its best case. A write fault never reached flash. A shot reads the panel back between frames, and no frame is drawn during a look.
+
+  **Not run on a device:** real pulls under a build, a compaction's writes or any write in flight, or a second brand for certain; a file added on a PC on a pull under a scan; a card out past 2 min 41 s, or a boot with it out; a cover as the read that remounts; a fault other than a pull under a Bluetooth play; a soak of a step under one; a T with records, or a body beyond T's one sector; a real failing card; a look under a list actually scrolling; (7)'s second FAILED at a scan's end and its third-fence line, Rescan's words and the page's Can't read on screen; two long presses; a no-token switch on one slot's sector; all but sector 0, the boot sector and FSINFO; DO low until CMD0 (the switch's ends by a clock); FSINFO's R1 errors for 1-3 s at the mount; a FAT sector of the old `queue.txt` alone, for good, the first save on a card with no `queue.txt`, a fresh card's first free cluster; a window sector for 2-12 s; FSINFO's read at a re-seat, the second FAT, a band under a foreign held boot (such a boot itself ran), 9 or more Pending files, and a sector that reads and then leaves the card silent, each time (the switch has no such kind).
 - **The card worker** (`app/CardWorker`): Thumbs' worker, generalised: a
   task on core 1, made for the first step and gone 3 s after the last, a
-  6 KB internal stack, handed one step at a time by the loop (a function
+  7.5 KB internal stack, handed one step at a time by the loop (a function
   and its context) at the priority ScanScheduler says, raised or lowered
   while it runs (a cover drops to 0 when a list starts moving). A cover is
   one of its steps: Thumbs keeps its job and its PSRAM buffers, and no
@@ -5382,8 +5745,13 @@ src/. What the code decided where 3.2-3.4 left room:
   chunk the card refused (full) isn't news: the build would find the track
   Pending again and the scan read it again (2026-10-08 review: an update
   step every few seconds, each holding the loop, on a full card). Not when
-  the rest stopped on a read error (`Done::restFailed`: the card pulled;
-  the next boot's scan's end has it). After an update step, built, failed
+  the rest stopped on a read error (`Done::restFailed`: the card pulled): its
+  rest is asked again a minute on, twice at most (`restRetries_`), and else the
+  next boot's scan's end has it. Nor after two update steps in a row that failed
+  on a read and loaded `library.idx` again (`reloads_`): its Pending flags come
+  back with it, the scan reads those tracks again, and that moves the journal:
+  a compaction and a fence each time round, for as long as the sector stays
+  bad (a Rescan, a walk's changes, `gb` and g0 still ask, once each). After an update step, built, failed
   or deferred, what the journal had asks for no other: only new records
   (or a walk's changes, a Rescan) do.
 - **The update step at N10** (3.4.2; N12 moved its build and its save to
@@ -5481,7 +5849,7 @@ src/. What the code decided where 3.2-3.4 left room:
   buffer; the types seen read again, not kept in a table of 64): the
   boot's compaction with the SD driver's log line on top was about 7.0-7.1
   KB deep, about 1.1 KB left, and is about 6.5-6.6 KB now; the card
-  worker's compaction, the same reopen of D on its 6 KB, about 5.0 KB with
+  worker's compaction, the same reopen of D on its 6 KB of then, about 5.0 KB with
   the log line, about 1.1 KB left (ARCHITECTURE.md). Each
   command ended with Enter is followed by its own depth: `[console] gs:
   the loop task's stack: N B never used during it (of 8 KB; M B the
@@ -5746,7 +6114,7 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
      none: its pause would make one, and the restart would cut the build),
      the worker's task is there (`Out::wantWorker`: `CardWorker::ensure()`
      makes it, since it ends 3 s after its last step, and keeps it to the
-     build's hand-off; no internal RAM for its 6 KB stack and the step
+     build's hand-off; no internal RAM for its 7.5 KB stack and the step
      waits here, the index as it is, never behind a fence whose build
      can't start), the card answers (`/music` exists, T and D open: a
      pulled card fails the step here, `Do::Failed`, the index untouched),
@@ -5788,15 +6156,23 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
      read that fails (the four files watched: the walkers say `Why::Io`,
      but D's rows and its folders' facts read on without a word, and a
      builder that restarts without both says "no records") is the card's,
-     pulled or failing, not a file's checks: on D's files, or on T with no
-     whole build from D after it, the step fails (`Step::cardGone`,
-     `readErrors`: nothing walked, which on a pulled card gave an empty
-     library and "Library updated", nor saved, which after a glitch the
-     card came back from put a path-named index over `library.idx`; T not
-     marked bad; the next boot loads the last `library.idx`); on T with D
-     read whole, the build from D alone stands, T is tried again next
-     time, and the save marks it as records left out (the next boot loads
-     it soft-stale and its scan's end reads T again). Another card put in
+     pulled or failing, not a file's checks: on D's files, on T where the
+     card failed it, or on T past its end with no whole build from D after
+     it, the step fails (`Step::cardGone`, `readErrors`: nothing walked,
+     which on a pulled card gave an empty library and "Library updated",
+     nor saved, which after a glitch the card came back from put a
+     path-named index over `library.idx`; T not marked bad). The last
+     `library.idx` is loaded again at once, behind the same fence
+     (`Step::reloaded`; else no library until the next boot or Try again),
+     so the library, the queue and its position come back with no restart
+     and nothing for the next step to ask until the journal moves (its Pending
+     flags may move it: at most two such steps a session, above). (Until
+     2026-11-02 one read of T with D read whole saved the build from D alone,
+     every file T lists under its path, over the library that had their
+     tags, and a sector of T that stayed bad kept it so.) A read past T's
+     end with D read whole: the build from D alone stands, T is tried again
+     next time, and the save marks it as records left out (the next boot
+     loads it soft-stale and its scan's end reads T again). Another card put in
      during the step is write-protected from the remount that finds it
      (3.8's guard): the save can't reach it, and the loop restarts.
   4. **Live** (`Do::Live`, one pass, `leaveFence()`): the catalog's index
@@ -5994,7 +6370,7 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   the compares. ESTIMATED: the build about 3.3-3.6 KB used, 2.5-2.9 KB
   left, and the compaction's 3.9 KB the worker's deepest again; with an
   SD driver's log line on top of the compaction about 1.0 KB left, as
-  before (ARCHITECTURE.md). The worker's stack stays 6 KB. A boot that
+  before (ARCHITECTURE.md). The worker's stack stayed 6 KB then (7.5 KB since 3.8's device check). A boot that
   builds the index (the marker, a missing or v5 `library.idx`) runs the
   same sort on the loop task's 8 KB: about 6.2 KB used before, about 4.4
   KB now (ESTIMATED). The save about 1.5 KB (`save()` 368 B, a rename's
@@ -6034,10 +6410,10 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   entry; the fence at every read and allocation of the build; the
   phases' order, LibraryWrite's span, and a pulled card failing before
   the fence; the review's three more: a card that fails while the build
-  reads it (pulled, or one read of D: nothing walked or saved, T not
-  marked bad, the next boot loads the last `library.idx`; one read of T:
-  built from D alone, saved soft-stale, the next boot's update reads T
-  again), the worker's task before the fence (no internal RAM: the step
+  reads it (pulled, or one read of D or T: nothing walked or saved, T not
+  marked bad; one read: the last `library.idx` loaded again at once; pulled:
+  no library until the next boot, which loads it, or Try again), the worker's task before
+  the fence (no internal RAM: the step
   waits, the index untouched), and the marker's build out of PSRAM at the
   boot (loaded instead, the marker gone, not written again that
   session; `gb!` writes it); and `spareOf()` at its edges. Since
@@ -6631,8 +7007,8 @@ the next epoch). Then:
   update step the session had already run asked again at the scan's end
   (`gs`'s jobs line: the update steps' count as before it); during the
   walk, a scan step or an update step, `[card] the card answered again
-  (the same card) with a card job under way: the queue saved,
-  restarting`, the toast "Card back: restarting", and a boot that loads
+  (the same card) with a card job under way: restarting`, `[queue] saved
+  now ...` (how the flush went), the toast "Card back: restarting", and a boot that loads
   the library and the queue as they were (the step under way ends first,
   at most 5 s: rarely `[card] the card worker's step still under way
   after 5 s: restarting once its SD call ends`; then the boot's
@@ -6753,7 +7129,7 @@ page) and `gs` at its end.
    saved it (the rest's View skips them). The status line's M after the restart is that
    index's Pending count (every file, on a walked card's first index), not
    the files left.
-4. The worker's stack: `gs`'s `[card] the worker: ... its 6 KB stack's
+4. The worker's stack: `gs`'s `[card] the worker: ... its 7.5 KB stack's
    least left N B (this life L B)` (the least over every life of the
    task since `gs0`: 1 KB left at least; less is a finding: the stack
    grows before release). Internal RAM: the same line's `lowest X B while
@@ -6860,9 +7236,9 @@ figures through it are what L4 records.
    matches the card, the build-at-boot marker set: build from the records
    (a build was deferred to this boot)`, the marker gone after.
 6. The worker's stack during a build: `gs0` before `gb`, `gs` after the
-   save: `[card] the worker: ... its 6 KB stack's least left N B` against
+   save: `[card] the worker: ... its 7.5 KB stack's least left N B` against
    3.9 (since the r3 fixes' `idsort`, ESTIMATED: about 3.3-3.6 KB used,
-   2.5-2.9 KB left; 784 B MEASURED on 6c2a928, `std::sort` at its depth
+   2.5-2.9 KB left of the 6 KB of then; 784 B MEASURED on 6c2a928, `std::sort` at its depth
    limit); under 2 KB left is a finding, under 1 KB a failure. Then a
    compaction alone: `gs0` in the scan, and `gs` after its next
    `[card] compaction done` line, before the scan's end (the scan's end

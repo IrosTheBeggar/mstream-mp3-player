@@ -220,6 +220,10 @@ void QueueSaver::finishWrite(uint32_t nowMs) {
     failed(nowMs);
     return;
   }
+  // (It works: no wait left of the failures before it.)
+  retryMs_ = kRetryMs;
+  nextTryMs_ = nowMs;
+  failedRun_ = backTaken_ = false;
   generation_ = writeGeneration_;
   savedContent_ = version;
   contentDirty_ = queue_.contentVersion() != version;
@@ -251,7 +255,19 @@ void QueueSaver::dropWrite() {
 void QueueSaver::failed(uint32_t nowMs) {
   ++failures_;
   failedSinceEdit_ = true;
-  nextTryMs_ = nowMs + kRetryMs;
+  failedRun_ = true;
+  lastWaitMs_ = retryMs_;
+  nextTryMs_ = nowMs + retryMs_;
+  retryMs_ = retryMs_ < kRetryMaxMs / 2 ? retryMs_ * 2 : kRetryMaxMs;
+}
+
+void QueueSaver::cardBack(uint32_t nowMs) {
+  // One for a run of failures: a try this set up that failed says the card isn't back, whatever
+  // the next remount says (a card that goes silent after each read that worked looks out every time).
+  if (!failedRun_ || backTaken_) return;
+  backTaken_ = true;
+  retryMs_ = kRetryMs;
+  nextTryMs_ = nowMs;
 }
 
 void QueueSaver::savePosition() {

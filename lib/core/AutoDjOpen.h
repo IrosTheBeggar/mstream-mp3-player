@@ -10,9 +10,11 @@
 // The glue (app/AutoDj) opens the file at the boot, at a remount and on the
 // console's Dc. A file that isn't there, or fails a check, stays so until a
 // remount changes it. A fault of the card says nothing of the file. A read that
-// gets no answer marks the card failed, so FatFs mounts the volume again at its
-// next call once the card answers. A read that fails any other way (a select
-// timeout, an R1 error, no data token, a CRC mismatch) sets nothing, nor do the
+// gets no answer from a card that stays silent past the look at it
+// (CachedDrive::lookAfterFault()), and a card that is out, leave the SD driver's mark,
+// so FatFs mounts the volume again at its next call once the card answers. A read
+// that fails any other way (a select timeout, an R1 error, no data token, a CRC
+// mismatch, no answer the card came back from at once) sets nothing, nor do the
 // volume's lock or no PSRAM for the FIL, so one such glitch at the boot would leave
 // picks at random for the whole session.
 //
@@ -22,8 +24,8 @@
 // a glitch. After the last the file is off until a remount or a boot, as any
 // other failure.
 //
-// The remount a read with no answer brings is that read's own echo, whoever's next
-// FatFs call makes it (another reader of the root's, too). Taken for news of the
+// The remount such a mark brings is that read's own echo, whoever's next FatFs call
+// makes it (another reader of the root's, too). Taken for news of the
 // card it would start the tries over and read at once, get no answer again, and so
 // on at every pass, seconds of the loop each. So while the last try failed on the
 // card's account a remount neither reads nor starts the count over until kEchoMs

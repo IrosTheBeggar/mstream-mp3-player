@@ -1530,7 +1530,7 @@ void test_the_search_on_paths_of_the_synthetic_cards_shape() {
 }
 
 // ---------------------------------------------------------------------------
-// The card worker's 6 KB of stack: no heap, and frames that stay small.
+// The card worker's 7.5 KB of stack: no heap, and frames that stay small.
 // ---------------------------------------------------------------------------
 class StackProbe : public cc::Source {
 public:
