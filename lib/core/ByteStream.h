@@ -22,6 +22,9 @@ public:
   virtual ~ByteSource() = default;
   // Up to `n` bytes; how many were read (0: the end, or an error).
   virtual size_t read(void* data, size_t n) = 0;
+  // The stream ended on a read that failed, for a source that can tell
+  // (tagstore::FileIn): what came before is no whole file, though it may read like one.
+  virtual bool failed() const { return false; }
 };
 
 // Reads exactly `n` bytes (false: the source ended first).

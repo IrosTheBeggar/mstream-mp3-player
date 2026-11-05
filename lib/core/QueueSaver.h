@@ -86,11 +86,16 @@ public:
   class Store {
   public:
     // The temporary file, opened (truncated) for writing: a sink for its
-    // bytes, or nullptr (can't).
+    // bytes, or nullptr (can't). Never over one that holds the queue (kept
+    // by commitTemp() below, or the one a boot read): that one is made the
+    // queue file first, or this fails.
     virtual ByteSink* openTemp() = 0;
     // The temporary file is complete: flush and close it, and make it the
-    // queue file. False: failed (the temporary file is removed; the queue
-    // file stays as it was, or, gone already, the temporary file in its place).
+    // queue file. False: failed. Then the queue file stays as it was if the
+    // temporary file isn't whole on the storage (it is removed); if it is,
+    // and couldn't take the queue file's place (which may be gone by then),
+    // it is kept, whole, for a boot to read in place of a queue file that's
+    // gone or can't be read.
     virtual bool commitTemp() = 0;
     // A write dropped: close and remove the temporary file.
     virtual void discardTemp() = 0;
@@ -152,15 +157,17 @@ public:
   void loaded(uint32_t generation, bool rewrite, uint32_t nowMs);
   // The queue as it is now is less than the file of `generation`: what was
   // left of it when its library tracks couldn't be found (a boot or a
-  // rebuild with no library), or nothing (a queue that couldn't come across
-  // a rebuild). That isn't the listener's edit, so nothing is written: the
-  // file keeps the whole queue, and `fileLine` (its current line, as a boot
+  // rebuild with no library, or no room to keep them by their paths:
+  // lib/core QueueFile), or nothing (a queue that couldn't come across a
+  // rebuild, a file the boot couldn't read). That isn't the listener's
+  // edit, so nothing is written: the file keeps the whole queue, and
+  // `fileLine` (its current line, as a boot
   // picks it: the position saved for it, -1 for its header's) as the place
   // to come back to. Until the queue is the file's again (an edit written,
   // or loaded()), positions and resume points aren't saved (they would pair
   // this queue's positions with the file's lines), and fileIsQueue() is
-  // false: the remap then reads the file from fileLine(), as a boot would,
-  // not from the queue's own current entry.
+  // false: a remap that can read the file reads it from fileLine(), as a boot
+  // would, not from the queue's own current entry.
   void keptFile(uint32_t generation, int32_t fileLine);
   // Whether the file's lines are the queue's positions (or will be once the
   // write waiting is done): false after keptFile().

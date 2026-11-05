@@ -51,7 +51,10 @@
 //     write() refuses every write (the firmware's wrapper also answers
 //     STA_PROTECT, so FatFs refuses them before it gets this far).
 //   - A read or a write that fails, in a call whose status the card answered: a look at
-//     the card there and then (lookAfterFault(), docs/METADATA.md 3.8).
+//     the card there and then (lookAfterFault(), docs/METADATA.md 3.8). A read the look
+//     keeps (the same card, back at its init) is asked once more in that call (afterRead()):
+//     a one-off heals, whoever read, and FatFs never hears of it; a second failure is
+//     FatFs's error, as a kept one was. Not a write: its two tries and its rules stand.
 //   - A read that keeps leaving the card silent past its init isn't asked of it again for
 //     a while (readStopped()), whoever asks: every reader's own count starts over at a
 //     remount, or at the next track, and each such read makes a remount.
@@ -203,7 +206,11 @@ public:
   Stats stats() const { return stats_; }
   // Commands with no answer from a card that was back at once, the same card:
   // FatFs told nothing but that read's error (lookAfterFault()). Never reset.
+  // A lasting fault of a read counts two, its own and the second try's.
   uint32_t kept() const { return kept_.load(); }
+  // ... of them reads that the second try read (afterRead()): one-offs FatFs never heard
+  // of. Never reset.
+  uint32_t healed() const { return healed_.load(); }
   // kTooSilentAfter silent faults since the boot or the last card put back. Stays, until a restart.
   bool tooSilent() const { return tooSilent_.load(); }
 
@@ -220,18 +227,24 @@ private:
   };
   // The requests from other tasks (the stats' reset, the clear).
   void settle();
+  // What a look found (lookAfterFault()). Error: FatFs's error and nothing more (the card
+  // answered: that read's own fault; no look; another card, the remount's to judge). Kept:
+  // the same card, back at its init: no remount, and a read is asked once more. Silent: a
+  // new silence: the stop's and too silent's count.
+  enum class Look : uint8_t { Error, Kept, Silent };
   // A read or a write failed, in a FatFs call whose status the card answered a moment
   // ago: no card can have been out and written elsewhere since. No answer left the
   // driver's mark, which would have FatFs's next call mount the volume, every file open
   // on it gone: the driver's init now, the identity, and FatFs hears only that read's
   // error. A card out, or not the mount's: FatFs's remount and the guard, as ever. (The
   // one reader outside FatFs, the free count, asks the status first: CardSpace.)
-  // True: a new silence: nothing answered, or an identity the look couldn't read: FatFs's
-  // next call that finds a card answering makes a remount of this fault. (A look that finds the
-  // card back with one noted, FatFs having gone on with the mark standing, ends it: no remount
-  // comes of it and nothing was cut, so it counts for nothing.) Foreign: the count alone.
-  bool lookAfterFault(uint32_t lba);
-  bool noteSilence();
+  // Silent: nothing answered, or an identity the look couldn't read: FatFs's next call that
+  // finds a card answering makes a remount of this fault. (A look that finds the card back
+  // with one noted, FatFs having gone on with the mark standing, ends it: no remount comes of
+  // it and nothing was cut, so it counts for nothing.) Foreign: the count alone.
+  Look lookAfterFault(uint32_t lba);
+  // Silent, or Error when one is noted already (one silence, one count).
+  Look noteSilence();
   // The reads that left the card silent: the same first sector and count, kStopAfter times
   // with no read of it working between, and no reader asks the card again until kStopUs
   // after the last (with no clock, until a write). Only these: each costs a remount, which
@@ -249,8 +262,12 @@ private:
   };
   static constexpr int kFailedReads = 8;
   bool readStopped(uint32_t lba, uint32_t count);
-  // A read done: its failure's look, and what it says of the stop. `reached`: it went to the card.
-  void afterRead(uint32_t lba, uint32_t count, bool ok, bool reached);
+  // A read done: its failure's look, and what it says of the stop. `reached`: it went to the card;
+  // `again`: it is the read asked once more. True: ask it once more: its look kept the card, and it
+  // was the first try. The card is back from its init then, the first read since that can work: the
+  // driver's own three tries came before it. A second failure is FatFs's error, as a kept one was,
+  // through its own look: the same card again, or a silence counted once for that read, as ever.
+  bool afterRead(uint32_t lba, uint32_t count, bool ok, bool reached, bool again);
   void noteWritten(uint32_t lba, uint32_t count);
   // A write the card refused: its look. One that leaves the card silent has no bound of
   // its reader's: the queue's save tries again, and each is a cut in whatever plays, and
@@ -279,6 +296,7 @@ private:
   uint32_t windowDrops_ = 0;
   std::atomic<bool> writesOff_{false};
   std::atomic<uint32_t> kept_{0};
+  std::atomic<uint32_t> healed_{0};
   Card counted_{*this};
   uint8_t* check_ = nullptr;
   std::atomic<bool> enabled_{true};

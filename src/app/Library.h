@@ -61,6 +61,8 @@ public:
   LibraryIndex* index() { return update_ ? update_->readable() : index_; }
   LocalStorage& storage() { return storage_; }
   const TrackCatalog& catalog() const { return catalog_; }
+  // The tracks the queue holds by their paths, which the catalog answers for (QueueStore's).
+  TrackCatalog::Unlisted& unlisted() { return unlisted_; }
   // The [index] report (console g).
   void report() const;
 
@@ -88,6 +90,11 @@ public:
   // again. heldWhy(): the log's words.
   bool cardJobsHeld() const { return cardJobsHeld_; }
   const char* heldWhy() const { return heldWhy_; }
+  // A reader at this boot met a read the card failed, and it spent the boot's waits: a
+  // card still failing after them won't be back for the next reader, which reads once.
+  bool bootReadsFailed() const {
+    return cardJobsHeld_ || (root_ && root_->readFailed()) || (store_ && store_->readFailed());
+  }
   // False: /music walked for this session, at a boot that holds its jobs
   // (LibraryUpdate::Booted::sessionWalked()). What it doesn't list isn't known to be gone.
   bool listsCard() const { return listsCard_; }
@@ -172,6 +179,7 @@ private:
   LocalStorage& storage_;
   LibraryIndex* index_ = nullptr;  // PSRAM
   TrackCatalog catalog_;
+  TrackCatalog::Unlisted unlisted_;
   Stats stats_;
   // The card's records (PSRAM).
   cardfat::FatFs* fat_ = nullptr;
