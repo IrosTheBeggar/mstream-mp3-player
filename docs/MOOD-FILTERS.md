@@ -4,7 +4,7 @@ Mood filters narrow the Albums list and Auto DJ's picks by mood, using the scale
 
 ## 1. Status
 
-**Status (2026-11-06):** S0, S1 and S2 are built, from main af72b50: S0 on its own branch (`claude/status-line-under-modal`), S1 and S2 stacked on `claude/mood-filters-implementation-0aec6e`; not merged. S1 and S2 are host-tested (S0 has no host test). S2 ran on the user's Core2 against the spare synthetic card in 9.6's Runs A to E, which also checked S1's heap rule, and S0 was checked on the same unit (9.4). S3 is built on `claude/mood-filters-s3`, stacked on S2, host-tested and building, and its device pass (9.7's table) ran on the same unit and card. S4 is built, all seven of its commits and the review's fixes, on `claude/mood-filters-s4`, stacked on S2, host-tested only: no device check has run on it (9.8). `claude/mood-filters-s5` is S3's tip with S4 merged in, S5's base; S5 onward are not started. Each stage's result follows its plan (9.4, 9.5, 9.6, 9.7, 9.8), and the figures from those runs are MEASURED 2026-11-06. A read-only study found it possible, and this document is the build plan.
+**Status (2026-11-06):** S0, S1 and S2 are built, from main af72b50: S0 on its own branch (`claude/status-line-under-modal`), S1 and S2 stacked on `claude/mood-filters-implementation-0aec6e`; not merged. S1 and S2 are host-tested (S0 has no host test). S2 ran on the user's Core2 against the spare synthetic card in 9.6's Runs A to E, which also checked S1's heap rule, and S0 was checked on the same unit (9.4). S3 is built on `claude/mood-filters-s3`, stacked on S2, host-tested and building, and its device pass (9.7's table) ran on the same unit and card. S4 is built, all seven of its commits and the review's fixes, on `claude/mood-filters-s4`, stacked on S2, host-tested only: no device check has run on it (9.8). S5 is built, its three commits, on `claude/mood-filters-s5`: S3's tip with S4 merged in. It is host-tested and building, and no device check has run on it (9.9). S6 onward are not started. Each stage's result follows its plan (9.4, 9.5, 9.6, 9.7, 9.8, 9.9), and the figures from those runs are MEASURED 2026-11-06. A read-only study found it possible, and this document is the build plan.
 
 **Picked by the user, on the design canvas:**
 - The editor: the one-screen grid of 7.1.
@@ -704,6 +704,7 @@ terminal #56, #68 ----> S7 (stacked)
 - S4: no line of its own for listeners. A filter can be set only from the console (`Dq`) until S5's page, and with none every pick and the Auto DJ button's draws are as before (6.6). Its NVS goes to schema 5 (`autodj`/`moods`): nothing to do on the update, and going back to 0.12.0 loses nothing (it never reads the key: its picks are unfiltered, and the filter is there again on coming back). If #27 ships in the same release, the two share schema 5 and one line (10).
 - S4's string, `autodj.status_waits_fit`, is machine-made in nine languages and owes a native review, with S3's and S5's (8.2).
 - S5's strings: `mood.smart_filters`, `mood.any` and `mood.no_data` are the phone app's (ARB at d17c3fa5) in all ten languages; the ten of 8.2 (`autodj.smart_sub`, `autodj.status_fits`, `autodj.status_coverage_mood`, `autodj.status_few`, `autodj.status_few_sub`, `toast.autodj_few`, `toast.autodj_no_close`, `toast.autodj_plays_once`, `toast.autodj_no_mood`, `empty.no_track_fits`) are machine-made in nine and owe a native review (each file's `@@note` says which). For the room, de and fr write `autodj.status_coverage_mood` with no space before %, it with commas, ru with `тон.`; es, fr, ja, pt and ru split `toast.autodj_plays_once` at ": " (8.2's rule); ja's `empty.no_track_fits` is the app's `autoDjSeedNoMatch`, the card left out.
+- S5: Output > Auto DJ gains a fourth row, Smart filters. It opens the Albums list's one-screen editor, in blue and counting tracks ("1,204 of 19,412 tracks"), each tap applied at once, and the filter is saved. Every pick then stays inside the mood: its neighbours first, then any track that fits, then repeats, oldest first. The status row says how many tracks fit; at 50 or fewer, in amber, that they will repeat; with none, Auto DJ adds nothing and reads Waiting, and the empty Queue and Now Playing say no track on the card fits. The "..." menu's Auto DJ row says what is set. Three toasts: "Only 37 tracks fit: they will repeat", "Plays once, then the filters apply" (the track already up next), "No close match: any track that fits". On a card without mood scores (every card until a writer build carries them, S7) the row is dim, "No mood data", and a tap says to sync the card from mStream. Hence 9.2's table: merge S5, but hold it out of a release until then, and write this line only into the release that also carries S7's scores. With no filter, Auto DJ's picks, button and toasts are as before. Console `Dq` sets the same filter.
 
 ### 9.3 Console, one list
 
@@ -1002,7 +1003,7 @@ pio test -e native
 
 **Effort:** 3.5-5 (guess; device pass 0.5-1).
 
-**Result (2026-11-06).** Commits 1 to 7 built on `claude/mood-filters-s3`, stacked on S2; the device pass below has not run, so nothing here has been seen on a screen. As built, with the drift from the plan above:
+**Result (2026-11-06).** Commits 1 to 7 built on `claude/mood-filters-s3`, stacked on S2; written before the device pass below, which ran later the same day. As built, with the drift from the plan above:
 - 1, `lib/core/FilterGrid`: 7.3's rules, 7.4's hits, the first row's and the dot's numbers. Two rules come from the frames where 7.3's text is silent or differs: a chip row still too wide in Small gives its overflow up evenly instead of scaling (Russian's tags 103/80/109, as 7.3's golden; scaled would be 102/82/108), and an even share rounds a half down (the es and fr voice trays, 140 and 138). Every golden of 7.3 holds with the firmware's fonts; the least margin at a cell's centre is 20 px in every language, lab panel and true (MEASURED-HOST). 18 `mood.*` ids, the 15 of 8.1 from the ARB in all ten languages.
 - 2, translations: S3's three ids in nine languages, machine-made, the native review owed (9.2). fr's and pt's empty line take a shorter verb than the app's (323 and 312 px against the line's 300; the widest left is pt's 298). ru's count at 9,999 of 9,999 is 165 px in the row's 160 and shows the short form, as 7.2 planned.
 - 3, `kFunnel` (14 x 14, ASCII art in `tools/ui_icons.py`), pixel for pixel the frames'. This Mac has no Pillow: `src/ui/IconData.cpp` was made by a stand-in for it (exact for art icons) and the funnel's lines spliced in, so "`python tools/ui_icons.py` leaves `IconData.cpp` unchanged" is not checked.
@@ -1237,6 +1238,44 @@ Needs S3's editor and S4. One PR. Merged, then held out of a release until S7 (9
 - the editor from Output through `uiMe`.
 
 **Effort:** 1.5-2.5 (guess, translations and device run included).
+
+**Result (2026-11-06).** All three commits built on `claude/mood-filters-s5`, which is S3's tip with S4 merged in (a6d4001). Host-tested only. No device check has run (the Core2 was busy with another stage), so nothing here has been seen on a screen, and S4's device list (9.8) is still open too. As built, with the drift from the plan above:
+- 1, the view (6318736):
+  - `State` gains `moods`, `moodData`, `moodOn`, `fit` and `moodPct`, and also `fitOf` (not in the plan: the line's "of 19,412"). `AutoDj::view()` fills them from `stepMood()`'s last count, so they keep their values behind the fence.
+  - `FilterRow` is the fourth row, and `rowLive(FilterRow)` is `moodData`.
+  - `filterValue()` gives the row's value. Its hint `autodj.smart_sub` stays when the row is dim.
+  - `statusLines()` gives 4.4's lines, the held form included, and `statusAmber()` its amber.
+  - `sheetDetail()` gives the text and an `Ink`. `emptyNoFit()` picks the empty line, and `emptyButton()` follows it.
+  - The 13 strings of 8 for S5: three from the ARB in ten languages, ten machine-made in nine (9.2).
+  - This Mac has no Pillow, so the widths were measured with a host harness over the firmware's VLW arrays and CJK store, and by `test_ui_strings` and `test_ui_library`.
+- 2, the page (afe2aa6):
+  - The row is drawn by `drawAutoDjValue`, all FAINT when dim, as `dj-nodata`.
+  - A tap opens `Ui::openFilters()` in Output's blue, counting tracks. `OutputPage` is a `FilterOwner`.
+  - `UiHost::autoDjSetMoods(q)` returns the editor's count. `autoDjMoodSettled()` settles a changed close, and D5's log line moved into it; `Dq` calls it at once.
+  - A dim row's tap says `toast.autodj_no_mood`, before the index's note. Behind the fence a tap says `library.updating_wait`. `uiMe` over Output opens Auto DJ's editor.
+  - The "..." sheet has a per-row ink (`Ui::autoDjDetail()`), and the detail is cut beside its label.
+  - The empty states say `empty.no_track_fits` and show [Open Library] alone.
+  - Not in the plan: a `Dq` typed while Auto DJ's editor is up doesn't redraw the open editor. Albums' `uiMa` does (`filters_.sync()`), but Auto DJ's console has no hook into the Ui.
+- 3, the toasts (67dc760), as 4.5, with this drift:
+  - **A take, not a pass.** `NewsWatch` keeps the news until `AutoDj::takeNews()` (`AutoDj::news_` moved into it), so 4.5's "pass" is one take: what the Ui makes one toast of. A mood bit is raised only with no bit above it in the take. A bit that a later call in the same take outranks is taken back, and Few's or Jump's flag reset. Not in the plan: switching on with 1 to 50 fitting while the last track plays appends the session's first pick in the same loop. Its "no neighbours" would have taken Few's place with `fewSaid_` already set, so Few would never be said.
+  - **Few** is tried at every appended pick while unsaid and few. That gives 4.5's "first appended pick after a boot or a `playFrom` switch-on" and the retry in one rule. `counted(few)`, from each `stepMood()`, clears the flag when few goes false.
+  - **Jump** unraised tries again at the next pick that jumps, not at any next pick: its words describe the pick. A repeat after a jump keeps the jump's code, so it counts (4.5's `jump != None`).
+  - **Only while on.** Few and Once are raised at a settle only while Auto DJ is on (4.5 names "while on" for Few only). With it off, "then the filters apply" would apply to nothing. Off, the settle still clears both flags, so the switch on says Few.
+  - **The fence.** A settle there says nothing but clears the flags too, so Few comes at the first pick after the fence, with the new count.
+  - **The count.** main.cpp passes `fewCount()` of the view at that moment (`Ui::autoDjNews(news, few)`), and the Ui's flush uses the snapshot's. The snapshot alone would not do: it is a pass old when main.cpp hands the news over, and after a `Dq` it holds the old count. `newsToast` skips Few with no count: the filter went, or stopped being few, while the toast waited.
+  - **The hold.** `Ui::autoDjNews` and the flush (`Ui.cpp:1398` at a1566fe) hold everything while `filters_.up()`, for either owner. Not in the plan: when Auto DJ's editor closes on a change with its owner told, it drops the held Few, Jump and Once. They were an older filter's, and the settle says the new one's.
+  - **An edge left.** The Ui's own holds (an Undo toast, the editor) merge takes. A Few held there can lose to an old bit that comes later, as the old bits already do among themselves. The page's amber line still says it.
+  - **Docs:** `docs/AUTODJ.md` (the status, 0, 3.14, 9.1-9.3, 9.6, 9's 65 messages, 11.3) and `docs/ARCHITECTURE.md`'s toasts and `UiHost` calls.
+
+Host (MEASURED-HOST):
+- `test_ui_autodj` has 26 cases, 6 of them commit 3's: the toasts' order and counts (with any of the old five, all 256 bytes answer as before), `fewCount()`, Few, Jump, Once, one outranked waiting, and no index with 37 fitting (Random at the first pick, Few at the next). `test_the_news_under_a_mood_filter` now expects a jump's Jump.
+- With `test_ui_library` (69) and `test_ui_strings` (20): 115 of 115.
+- Each of these mutations fails a test: no take-back; a take-back that keeps the flag; `sessionBegan` keeping `jumpSaid_`; `counted(false)` not clearing; a settle not clearing; Few raised while off.
+- `python3.12 tools/gen_ui_strings.py --check`: clean.
+- The whole `pio test -e native`: 2,144 cases in 102 suites, 2,136 passed. The 5 failures are this Mac's known ones on clean main (`test_host_clock` 2, `test_hop_feed` 2, `test_queue` 1).
+- `pio run -e core2 -e core2-dio`: both build with no new warnings. core2's flash is 4,349,231 B: +596 B over commit 2's 4,348,635 B, and +9,556 B over S5's base at a6d4001 (4,339,675 B). core2-dio's is 4,349,263 B. RAM 58,480 B, unchanged.
+
+Not run: the whole device list above, and S4's (9.8).
 
 ### 9.10 S6: the mStream route
 
