@@ -43,10 +43,10 @@ to the placement's first day. Fixed and checked on the device that day
 
 **Mood filters (2026-11-06):** a mood filter keeps every pick inside it
 (3.14; docs/MOOD-FILTERS.md's stage S4), set on Output > Auto DJ's Smart
-filters row (9.2; stage S5) or with `Dq`. The engine's part was checked
-on the Core2 on 2026-11-06 (MOOD-FILTERS.md 9.8); the page is host-tested
-only, its device check next (9.9 lists it). With no filter, every pick,
-the Auto DJ button's draws and the toasts are as before.
+filters row (9.2; stage S5) or with `Dq`. Both were checked on the Core2
+on 2026-11-06: the engine (MOOD-FILTERS.md 9.8) and the page (9.9). With
+no filter, every pick, the Auto DJ button's draws and the toasts are as
+before.
 
 The other documents:
 
