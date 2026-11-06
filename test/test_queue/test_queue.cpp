@@ -33,6 +33,7 @@
 #include "QueueRemap.h"
 #include "QueueSaver.h"
 #include "QueueText.h"
+#include "RestartWait.h"
 #include "Shuffle.h"
 #include "TrackCatalog.h"
 #include "hal/IAudioBackend.h"
@@ -1959,6 +1960,71 @@ void test_a_failed_write_waits_longer_each_time() {
   tries(10000);
   saver.cardBack(t);
   tries(100);
+}
+
+// The card guard's restart (lib/core RestartWait, main.cpp's stepRestartWait()) tries its flush
+// again on this saver's own backoff: the wait lastWaitMs() names after each flush that failed,
+// 10 s then 20 s, never past the 30 s bound. The card back first (cardBack()) has started the
+// waits over, so the failures while it was out don't push the restart's first try away.
+void test_the_guards_restart_flushes_on_the_savers_backoff() {
+  using Do = RestartWait::Do;
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  st.file = "last good";
+  QueueSaver saver(st, q, c);
+  saver.loaded(2, false, 0);
+  const uint32_t one[] = {1};
+  q.append(one, 1);  // an edit the card hasn't got
+  st.failOpen = true;
+  uint32_t t = 10;
+  for (int i = 0; i < 4; ++i, t += 1000) TEST_ASSERT_FALSE(saver.flushNow(t));  // the card out
+  TEST_ASSERT_EQUAL_UINT32(80000, saver.lastWaitMs());
+  saver.cardBack(t);                              // it came back under a job:
+  TEST_ASSERT_FALSE(saver.flushNow(t));           // the guard's flush, the card silent again
+  RestartWait w;
+  w.begin(t, false, saver.lastWaitMs());
+  TEST_ASSERT_EQUAL_UINT32(10000, w.nextTryInMs(t));
+  const uint32_t t0 = t;
+  std::vector<uint32_t> flushes;
+  uint32_t restartAt = 0;
+  for (; t < t0 + 40000 && !restartAt; t += 10) {
+    switch (w.step(t, true)) {
+      case Do::Flush: {
+        flushes.push_back(t - t0);
+        if (flushes.size() == 2) st.failOpen = false;  // the card answers at last
+        const bool ok = saver.flushNow(t);
+        w.tried(t, ok, saver.lastWaitMs());
+        break;
+      }
+      case Do::Restart:
+        restartAt = t - t0;
+        break;
+      default:
+        break;
+    }
+  }
+  TEST_ASSERT_EQUAL_UINT32(2, flushes.size());
+  TEST_ASSERT_EQUAL_UINT32(10000, flushes[0]);
+  TEST_ASSERT_EQUAL_UINT32(30000, flushes[1]);  // 10 s, then the saver's 20 s
+  TEST_ASSERT_EQUAL_UINT32(30000 + RestartWait::kShowMs, restartAt);
+  TEST_ASSERT_TRUE(w.flushed());
+  TEST_ASSERT_FALSE(saver.contentDirty());
+  TEST_ASSERT_TRUE(st.file != "last good");  // the edit on the card before the restart
+  // An edit in the 1.2 s after that flush: busy() can't say so, the saver's loop() held
+  // (cardHeld), so the restart flushes once more whatever it says.
+  const std::string saved = st.file;
+  q.append(one, 1);
+  TEST_ASSERT_FALSE(saver.busy());
+  TEST_ASSERT_TRUE(saver.flushNow(t));
+  TEST_ASSERT_TRUE(st.file != saved);
+  const uint32_t writes = saver.writes();
+  const int opens = st.opens;
+  TEST_ASSERT_TRUE(saver.flushNow(t));  // (and with nothing new: nothing written)
+  TEST_ASSERT_EQUAL_UINT32(writes, saver.writes());
+  TEST_ASSERT_EQUAL_INT(opens, st.opens);
 }
 
 // A write dropped for a library rebuild (remap), and the queue then kept
@@ -5895,6 +5961,7 @@ int main(int, char**) {
   RUN_TEST(test_flush_now_writes_an_edit_at_once);
   RUN_TEST(test_flush_now_that_fails_keeps_the_last_file);
   RUN_TEST(test_a_failed_write_waits_longer_each_time);
+  RUN_TEST(test_the_guards_restart_flushes_on_the_savers_backoff);
   RUN_TEST(test_saver_abort_and_kept_file);
   RUN_TEST(test_resume_point_saved_at_a_pause_and_cleared_when_it_plays);
   RUN_TEST(test_resume_point_waits_for_the_file_and_follows_its_entry);

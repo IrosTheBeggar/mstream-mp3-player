@@ -91,6 +91,9 @@ public:
   bool busy() const { return storage_.available() && saver_.busy(); }
   // The card came back (CachedDrive::cardBacks()): QueueSaver::cardBack().
   void cardBack();
+  // The wait the saver's failures built up, after its last (QueueSaver::lastWaitMs()): the
+  // guard's restart tries its flush again on it (lib/core RestartWait).
+  uint32_t retryWaitMs() const { return saver_.lastWaitMs(); }
   // The PSRAM a queue.txt write under way holds for its snapshot (lib/core
   // QueueSaver: at most 40 KB), which remapBegin()'s flush gives back (the
   // library update's memory check counts it in what the fence frees).

@@ -173,6 +173,15 @@ public:
   bool remounted(uint32_t sectors);
   // The driver's init found no card answering, at FatFs's mount (remounted() comes at a later one).
   void mountFailed();
+  // FatFs's last mount found no card answering (mountFailed()), and no mount has found one since
+  // (remounted(), armed or not): the card is out, or silent past its init. A read failed with the
+  // card answering, or kept by the look, says nothing here: only a mount does. Any task.
+  bool cardOut() const { return out_.load(); }
+  // The mount's card isn't in the slot: none answering (cardOut()), or another card answering
+  // (foreign(), until the restart the guard makes for it). Any task: the player's card hold asks it
+  // of a track that failed to start (PlaybackController::Card), so another card's missing files
+  // aren't each skipped in the moments before that restart.
+  bool mountCardOut() const { return out_.load() || foreign_.load(); }
   // Any task.
   bool armed() const { return armed_.load(); }
   bool foreign() const { return foreign_.load(); }
@@ -283,6 +292,7 @@ private:
   bool silentWrite_ = false;   // ... as silentFault_'s was
   bool mountFailed_ = false;   // mountFailed(), since the last remount
   uint64_t mountFailedUs_ = 0;  // ... the first
+  std::atomic<bool> out_{false};  // cardOut()
   std::atomic<uint32_t> cardBacks_{0};
   std::atomic<bool> tooSilent_{false};
   bool windowFailing_ = false;  // windowFailed(): the sector's first time, no write of it taken since

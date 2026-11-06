@@ -41,6 +41,7 @@
 #include "QueueModel.h"
 #include "QueueView.h"
 #include "RateConverter.h"
+#include "RestartWait.h"
 #include "RingCutStress.h"
 #include "SleepTimer.h"
 #include "ToneTrack.h"
@@ -441,6 +442,15 @@ struct SleepGate : PlaybackController::NextGate {
   bool endsHere() const override { return sleepEndsAtCurrent(); }
 };
 static SleepGate sleepGate;
+
+// The player's card (PlaybackController::Card): the SD wrapper says the mount's card is out, FatFs's
+// last mount having found nothing answering, or another card having answered (CachedDrive::
+// mountCardOut(); never without the wrapper). A track that fails to start then holds where it is,
+// and is tried again (docs/METADATA.md 3.8); with another card, until the guard's restart.
+struct CardWatch : PlaybackController::Card {
+  bool out() const override { return sectordisk::cardOut(); }
+};
+static CardWatch cardWatch;
 
 // What the touch buttons drive (ButtonPolicy decides which button does what).
 struct ButtonTransport : ButtonPolicy::Transport {
@@ -2887,10 +2897,59 @@ static void stepCpuRestart(uint32_t now) {
 // The card jobs and the queue's saves held until the restart (restartAtMs):
 // another card is in the slot, or the card came back with a job under way.
 static bool cardHeld = false;
+// The guard's restart for the same card back under a job, waiting for the queue's flush (lib/core
+// RestartWait): the flush tried again on the saver's backoff, the restart once one works, or 30 s on.
+static RestartWait restartWait;
 // The card's breaker (lib/core CardBreaker): RTC slow memory, which outlives
 // esp_restart(), not a power-on.
 RTC_NOINIT_ATTR static cardbreaker::Word cardBreakerWord;
 static bool heldByBreaker = false;
+
+// Every pass while the guard's restart waits for the queue's flush (restartWait: the same card
+// back with a job under way, its first flush failed): a flush again on the saver's backoff, the
+// toast again if the restart comes after it has gone, the restart once a flush works or 30 s on.
+// No flush can work while the card refuses every write (writes off, another card put in since)
+// or while the queue is text in PSRAM behind an update step's fence: the restart then, as ever.
+static bool flushCanWork(const sectordisk::Guard& g) { return !g.writesOff && !g.foreign && !queueStore.carrying(); }
+static void stepRestartWait(const sectordisk::Guard& g) {
+  const bool canFlush = flushCanWork(g);
+  switch (restartWait.step(millis(), canFlush)) {
+    case RestartWait::Do::Nothing:
+      return;
+    case RestartWait::Do::Flush: {
+      const bool ok = queueStore.flushNow();  // (it says how that went)
+      const uint32_t now = millis();
+      restartWait.tried(now, ok, queueStore.retryWaitMs());
+      const unsigned long secs = (now - restartWait.sinceMs()) / 1000;
+      if (ok) {
+        Serial.printf("[card] the queue saved %lu s after the card came back (flush %lu): restarting\n", secs,
+                      (unsigned long)restartWait.tries());
+      } else if (!restartWait.decided()) {
+        Serial.printf("[card] the queue not saved yet (flush %lu): the restart waits; the next flush in %lu s\n",
+                      (unsigned long)restartWait.tries(), (unsigned long)(restartWait.nextTryInMs(now) / 1000));
+      }
+      return;
+    }
+    case RestartWait::Do::Announce:
+      if (userInterface) userInterface->note(uistr::tr(uistr::S::card_back), RestartWait::kToastMs);
+      return;
+    case RestartWait::Do::Restart:
+      if (restartWait.flushed()) {
+        // An edit or a move since the flush that worked: once more, nothing written when there's
+        // none. Not if busy(): the saver notes changes in its loop() and flushNow() only, and
+        // cardHeld holds its loop.
+        queueStore.flushNow();
+      } else {
+        Serial.printf("[card] restarting with the queue unsaved after %lu flushes in %lu s%s: queue.txt keeps the "
+                      "last one saved\n",
+                      (unsigned long)restartWait.tries(), (unsigned long)((millis() - restartWait.sinceMs()) / 1000),
+                      restartWait.cantFlush() ? " (no flush can work: the card refuses writes, or the queue is in PSRAM)"
+                                              : "");
+      }
+      restartAtMs = millis();  // (restartNow(), at the loop's check)
+      return;
+  }
+}
 
 // Every loop pass, before the queue's save and the card jobs: what the SD
 // wrapper's guard found at FatFs's remounts (the card pulled and put back,
@@ -2905,8 +2964,10 @@ static bool heldByBreaker = false;
 // cardjobs::Jobs::begin() asks for this; the session's scan and update
 // state kept: CardTasks::begin()), unless a job was under way (a step on
 // the worker, a walk, a compaction, the update step): then the queue saved
-// and a restart. Either restart waits for the worker's step under way
-// (cardHeld hands no other) and holds the SPI bus (restartNow()). And the
+// and a restart, which waits for a flush that works, at most 30 s
+// (stepRestartWait(): the card can be silent again). Either restart waits for
+// the worker's step under way (cardHeld hands no other) and holds the SPI bus
+// (restartNow()). And the
 // card's refused writes, as they come. A command with no answer that the
 // card came back from at once isn't a remount at all (the look, METADATA.md
 // 3.8): its line only. What still restarts is counted (the breaker, 3.8):
@@ -2954,10 +3015,12 @@ static void stepCardGuard() {
     queueStore.cardBack();
   }
   static bool calmed = false;
-  if (!calmed && millis() >= cardbreaker::kCalmMs) {
+  // (Not while a restart the guard counted waits: it's counted, whenever it comes.)
+  if (!calmed && !cardHeld && millis() >= cardbreaker::kCalmMs) {
     calmed = true;
     cardbreaker::clear(cardBreakerWord);
   }
+  if (restartWait.active()) stepRestartWait(g);
   if (cardHeld) return;
   char id[112];
   if (g.foreign) {
@@ -3008,10 +3071,17 @@ static void stepCardGuard() {
       phase == Phase::Updating) {
     cardHeld = true;
     Serial.println("[card] the card answered again (the same card) with a card job under way: restarting");
-    queueStore.flushNow();  // (it says how that went)
+    const bool flushed = queueStore.flushNow();  // (it says how that went)
     cardbreaker::noteRestart(cardBreakerWord);
-    if (userInterface) userInterface->note(uistr::tr(uistr::S::card_back), 3000);
-    restartAtMs = millis() + 1200;
+    if (userInterface) userInterface->note(uistr::tr(uistr::S::card_back), RestartWait::kToastMs);
+    // Flushed: the restart 1.2 s on, as ever. Not: it waits for a flush that works (stepRestartWait()).
+    restartWait.begin(millis(), flushed, queueStore.retryWaitMs());
+    if (!flushed && flushCanWork(g)) {
+      Serial.printf("[card] the queue not saved: the restart waits for a flush that works, the next in %lu s, "
+                    "at most %lu s\n",
+                    (unsigned long)(restartWait.nextTryInMs(millis()) / 1000),
+                    (unsigned long)(RestartWait::kMaxMs / 1000));
+    }
     return;
   }
   const tagstore::TagStore::Opened o = library.store()->open();
@@ -3619,6 +3689,7 @@ void setup() {
                       : "paired on Output > Pair new headphones only (never picked by the Core2 itself)");
   }
   player.setHold(&outputHold);  // a play waits while the headphones aren't connected (PlayGate)
+  player.setCard(&cardWatch);   // a play that fails with the card out holds there (the card hold)
   // Gapless playback (docs/GAPLESS.md): the player names what follows, the
   // backend joins it; never past the sleep timer's end.
   player.setNextGate(&sleepGate);
@@ -3783,6 +3854,34 @@ void loop() {
     Serial.printf("[queue] now at %d of %lu (%s)\n", queue.current() + 1, (unsigned long)queue.size(), stateName());
     lastEntry = queue.currentKey();
     lastFile = file;
+  }
+  // The card hold (PlaybackController's, docs/METADATA.md 3.8): a play that failed with the
+  // card out holds at its entry, tried again, instead of the queue running out.
+  {
+    static PlaybackController::CardHolds seen;
+    const PlaybackController::CardHolds& h = player.cardHolds();
+    if (h.begun != seen.begun) {
+      Serial.printf("[queue] the card is out: %d of %lu holds there, not skipped; tried again in %lu s, then twice as "
+                    "long, up to %lu s, for %lu s, then paused\n",
+                    queue.current() + 1, (unsigned long)queue.size(),
+                    (unsigned long)(PlaybackController::kCardRetryMs / 1000),
+                    (unsigned long)(PlaybackController::kCardRetryMaxMs / 1000),
+                    (unsigned long)(PlaybackController::kCardWaitMs / 1000));
+    }
+    if (h.retries != seen.retries) {
+      Serial.printf("[queue] the card hold: %d of %lu tried again (%lu since the boot)\n", queue.current() + 1,
+                    (unsigned long)queue.size(), (unsigned long)h.retries);
+    }
+    if (h.resumed != seen.resumed) {
+      Serial.printf("[queue] the card answered: %d of %lu plays on\n", queue.current() + 1,
+                    (unsigned long)queue.size());
+    }
+    if (h.paused != seen.paused) {
+      Serial.printf("[queue] the card still out after %lu s: paused at %d of %lu; Play tries again\n",
+                    (unsigned long)(PlaybackController::kCardWaitMs / 1000), queue.current() + 1,
+                    (unsigned long)queue.size());
+    }
+    seen = h;
   }
   // Repeat One's loops: the same entry again (no new key, so no line above;
   // the dancer keeps its tempo: the same song).

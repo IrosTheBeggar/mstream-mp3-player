@@ -402,6 +402,9 @@ private:
   void playFailed();
   void updatePlayFailed();
   void noteFailures();
+  // A play held for the card (PlaybackController's card hold): "Still no card: is it all the
+  // way in?", once a hold, not at each try.
+  void noteCardHolds();
   // The A-Z rail's tap (ListView::RailHost): the jump grid, and its taps.
   void onRailTap() override;
   void openJumpLetters();
@@ -459,6 +462,7 @@ private:
   queueview::AddedMark added_;
   queueview::FailedKeys failedKeys_;
   uint32_t failuresSeen_ = 0;
+  uint32_t cardHoldsSeen_ = 0;
 
   NowPlayingPage nowPlaying_;
   LibraryPage libraryPage_;

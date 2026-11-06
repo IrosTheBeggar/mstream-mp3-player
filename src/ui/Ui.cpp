@@ -142,6 +142,7 @@ void Ui::start(uint32_t nowMs) {
   lastUpNext_ = state_.upNext;
   lastDjAdds_ = state_.autoDj.adds;
   failuresSeen_ = player_.lastFailure().count;
+  cardHoldsSeen_ = player_.cardHolds().begun;
   started_ = true;
   // A fresh unit: the language first (the touch check and the tips then
   // speak it).
@@ -1172,6 +1173,17 @@ void Ui::noteFailures() {
   }
 }
 
+// The track didn't start because the card is out: the player holds there and tries again
+// (nothing skipped, so no note of noteFailures()'). Its words are the no-card screen's Try
+// again note's, a toast already in every language.
+void Ui::noteCardHolds() {
+  const uint32_t begun = player_.cardHolds().begun;
+  if (begun == cardHoldsSeen_) return;
+  cardHoldsSeen_ = begun;
+  warn(tr(S::card_none_still));
+  host_.wakeScreen("the card is out");
+}
+
 void Ui::updateHud(uint32_t nowMs) {
   const ButtonPolicy::Feedback& f = state_.feedback;
   if (f.seq != hudSeq_) {
@@ -1322,6 +1334,7 @@ void Ui::loop(uint32_t nowMs) {
 
   updateHud(nowMs);
   noteFailures();
+  noteCardHolds();
   if (toast_.expired(nowMs)) {
     if (toast_.undo()) queue_.dropUndo();  // Undo was offered until now
     const int was = toast_.bottom();
