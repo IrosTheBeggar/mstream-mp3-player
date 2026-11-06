@@ -49,6 +49,27 @@ elsewhere. Made-up names only, synthetic embeddings.
   CRC fails; `broken`: a good CRC over a bad list). An MPWF file's `slot` is
   one lookup as the device makes it: the hash, what it reads (`hit`, `miss`,
   `damaged`, `broken`) and how many slots it reads.
+- `moods.json`, `golden/tags-moods.bin` and the hardening files
+  `mptg-moods-longer`, `mptg-tail-invalid` and `mptg-stride-76`: mood
+  filters (docs/MOOD-FILTERS.md 5.3, 5.4; METADATA 2.6.4's mood tail and
+  3.4.3's mood word), made with `tools/moodfilter.py`, which
+  card_fixtures.py imports. A tags description's record `scores` are
+  mStream's eight mood scores in `moods.json`'s `heads` order (null where a
+  head has none), or null for no server row: each writer derives the
+  record's tail from them (RECS rows of 80 bytes, minor 1). An MPTG file's
+  `same` covers its records' scores too. In `moods.json`: `values` (a
+  score's value byte and bucket), `levels` (each level's code in a filter,
+  its `need` and `under`), `bars` (its `on` and `mirror`), `predicates` (the
+  eleven of MOOD-FILTERS.md 4.1, each a one-group filter's bits at
+  Standard), `rows` (scores, the tail a writer makes of them, the word a
+  builder makes of the tail, and `holds`: for each level, `strict`,
+  `standard` and `loose`, the predicates that hold, in `predicates` order;
+  any other fails), `tails` (whether a reader takes each, and its word),
+  `filters` (a filter's bits, what they read as, and the rows it
+  `matches`, by index from 0) and `albums` (rows as one album's tracks
+  under a filter: `pass` of `analysed`, and whether 2 × pass > analysed).
+  `tools/test_mood_vectors.py` checks every `holds` and `matches` against
+  mStream's own predicate, run by SQLite.
 
 The AutoDJ index (MPDJ v2) is specified apart, in docs/AUTODJ-INDEX.md;
 its fixtures (section 13 there) come from `tools/mpdj.py`, which
