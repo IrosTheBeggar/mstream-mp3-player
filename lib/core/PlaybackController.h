@@ -191,9 +191,11 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // or the computer's marks, and leaves the queue, its undo and "pause after
 // this track" as they are. Until the backend takes a start up, what Now
 // Playing shows is where it asked to start (pendingStart()), with the
-// length the player was told (lengthHint(); a skip's, none: never the
+// length the player was told (lengthHint(): the play's hint, never the
 // track before's); after, the backend's, with that length while the
-// backend knows none (shownTime()).
+// backend knows none. An entry nothing holds (stopped, cued) shows 0:00
+// and its length as told, else the catalog's: a stopped bar can be sought
+// and Now Playing's waveform shows before the first play (shownTime()).
 class PlaybackController {
 public:
   // Whether a play must wait for the output (read at every start).
@@ -375,13 +377,17 @@ public:
   uint32_t lengthHint() const { return lengthKey_ == queue_.currentKey() ? lengthMs_ : 0; }
   // Where the current entry is and how long it is, as Now Playing shows
   // them (MainUiHost::snapshot(); 0 and 0 with no entry). A start point
-  // that waits: its second and the length it went with. A start the
+  // that waits: its second and the length it went with. An entry nothing
+  // holds (stopped; cued: let go at 0:00, or after next while paused): 0:00
+  // and lengthHint(), else the catalog's hint (a library track's record,
+  // to the second; 0 with no record), as placeStart() would take it; the
+  // backend's figures are the track before's, or none. A start the
   // backend hasn't taken up yet (pendingStart()): where it was asked to
   // start, and lengthHint() alone: the backend's length may still be the
   // track before's (a skip's request before the decode task takes it up),
   // and the seek bar would take it for this entry's. Otherwise the
   // backend's, with lengthHint() while it knows none (a header-less file's
-  // first second, a track let go at 0:00) unless the track failed.
+  // first second). Either way no length for a failed track.
   void shownTime(uint32_t* positionMs, uint32_t* durationMs) const;
 
   // ---- the sleep timer ----
