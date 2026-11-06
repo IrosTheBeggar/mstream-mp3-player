@@ -920,7 +920,9 @@ At 19,410 rows and 19,412 tracks, all in PSRAM:
 | ... PSRAM's largest free block with them, against a control in the same script (MEASURED 2026-11-06, 14.3) | -32,768 at every step: the boot off and joined, each update joined, `Dc` | |
 
 - Internal RAM: main.cpp's pointer (READ). The pick allocates nothing; its
-  frames are about 420 bytes on the loop stack (READ, the engine's note).
+  frames are about 512 bytes on the loop stack, `pick()` and `pickOnce()`
+  (MEASURED-HOST 2026-11-06: the ESP32 compiler's `-fstack-usage` at `-Os`;
+  416 bytes before the re-pin split them, docs/MOOD-FILTERS.md 9.8).
 - MEASURED 2026-10-13: the resident set was 177,814 B (with the old
   engine), against the design's 180 KB. The running player's lowest free
   PSRAM was 547 KB idle or with an MP3, 459 KB with a FLAC: the join's peak

@@ -154,9 +154,10 @@
 // into), the runs (kSlotCache x (kMaxK + 1) entries of 8 bytes) and the
 // pick's scratch (kMaxUnion keys and 4-byte candidates, the pool's counts,
 // the tempo table: 512 bytes). pick() allocates nothing; its frames stay
-// small (the anchors and the cooled rows sorted: pick() about 420 bytes on
-// the ESP32, randomPick() and choose() under 200; no slot or list on the
-// stack; a mood filter's scan keeps its tracks in the scratch). The object
+// small (the anchors and the cooled rows sorted: pickOnce() about 384 bytes
+// on the ESP32 and pick() 128 over it, randomPick(), moodPick() and
+// choose() under 200; no slot or list on the stack; a mood filter's scan
+// keeps its tracks in the scratch). The object
 // itself is about 750 bytes (rings, counters).
 //
 // Not thread-safe: the firmware's loop task owns it.
