@@ -440,7 +440,15 @@ pages do:
   **Auto DJ from here** first: below). What plays is tinted in every
   list. Every change to the queue shows a message at the top with **Undo** (and **View** after an
   add: the Queue at the added tracks). Two levels down, "‹ Library" in the
-  header goes straight back to the lists.
+  header goes straight back to the lists. On a card with mood scores from
+  mStream, the Albums list starts with a **Filters** row: a tap opens one
+  screen of moods (Happy, Neutral or Sad; Relaxed, Neutral or Aggressive;
+  Instrumental or Vocals; Acoustic, Party, Danceable; how strict), each tap
+  applied at once with the count of albums that fit, and the list then
+  shows only the albums where most of the analysed tracks fit. The row says
+  what is set and how many remain, its cross clears it, and a dot on
+  Albums says a filter is on once the row is scrolled away. A restart
+  forgets it ([docs/MOOD-FILTERS.md](docs/MOOD-FILTERS.md)).
 - **Queue**: the queue, opened on the playing track, with what's left in
   the header ("4 of 16 · 12 up next · 49 min": lengths are learned as
   tracks play, "49+ min" until they all are). Tap a track for Play now /
@@ -774,7 +782,7 @@ The serial console (115200 baud) is there for scripted testing:
 | `s` / `l` | stats / list the queue | `t<bpm>` | tempo prior for the dance (`t` clears) |
 | `f` | forget the paired headphones and restart | `y<ms>` | dance latency offset (not saved) |
 | `z` | silent test mode: speaker at volume 0, Bluetooth doesn't take over (until restart) | `k<n>` | freeze the dance pose, 0-15 (`k` unfreezes) |
-| `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag, `uip<x>,<ms>` a press on the button strip (y >= 240 is the strip in all of them); `uir0` / `uir1` the A-Z rail's scrub as before 0.12.0 (every position drawn at once, the card worker not held) / paced, to compare by hand (`uir` says which); `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uic` the coach cards, `uiL` the languages (`uiL<tag>` uses one, `uiL-` forgets it and the tips, `uiP` the first start's picker), `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/r/l/n/f/t/g/u/w>` show a faked Bluetooth (connecting, searching, pairing, resting, lost), no-card, exFAT-card, NTFS-card, GPT-card, can't-read-the-card or waiting-for-the-headphones state for screenshots, `uiF0` the real one; `uk1` the scripted finger on a skewed panel (the measured one's x), `uk2` the same with up to 4 px of jitter, `uk0` off: the touch check and the calibration run end to end without a hand |
+| `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag, `uip<x>,<ms>` a press on the button strip (y >= 240 is the strip in all of them); `uir0` / `uir1` the A-Z rail's scrub as before 0.12.0 (every position drawn at once, the card worker not held) / paced, to compare by hand (`uir` says which); `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uiM` the Albums list's mood filter ([docs/MOOD-FILTERS.md](docs/MOOD-FILTERS.md) 9.3: what is set, the albums it holds, the last pass's time, the editor), `uiMa<hex>` set it (bare hex, as `gm<hex>`: `uiMa127`; each pass logs its us), `uiMa0` clear it, `uiMe` open the editor (its taps then the scripted finger's; while the library updates both say so and do nothing); `uic` the coach cards, `uiL` the languages (`uiL<tag>` uses one, `uiL-` forgets it and the tips, `uiP` the first start's picker), `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/r/l/n/f/t/g/u/w>` show a faked Bluetooth (connecting, searching, pairing, resting, lost), no-card, exFAT-card, NTFS-card, GPT-card, can't-read-the-card or waiting-for-the-headphones state for screenshots, `uiF0` the real one; `uk1` the scripted finger on a skewed panel (the measured one's x), `uk2` the same with up to 4 px of jitter, `uk0` off: the touch check and the calibration run end to end without a hand |
 | `m` | next dancer: crab (default) / stick figure | | |
 | `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | `q...` | the queue: `q` status, `qa` play everything, `qb` the built-in tracks, `ql` list albums, `qp<n>` / `qn<n>` / `q+<n>` album n: play / play next / add, `qr<n>` remove entry n, `qc` clear up next, `qx` clear, `qu` undo, `qs<sec>` start the current entry that far in, as a resume point would (`qs0` none), `qS` shuffle on/off (`qS0` / `qS1`), `qR` repeat off / all / one in turn (`qR0`-`qR2`) |
 | `L` | the partition table as flashed, the running app slot and the next, NVS use (the boot log has a `[flash]` line too) | `P...` | power measurement ([ARCHITECTURE.md](docs/ARCHITECTURE.md#power-measurement)): `P` a line (5 s of the power chip's readings: USB in, battery, the state), `Pl` one every 5 s, `Pw` to `/.player/power.csv`, `Pm<name>` a marker, `Pq1` the coulomb counter; A/B knobs (`P?`): backlight, screen off, CPU clock, Bluetooth TX power, 5 V boost, LED, IMU, speaker amp, loop delay, the dance tracker, the background reconnect; `Pz` plays an hour of silence |
@@ -972,6 +980,12 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       (docs/MOOD-FILTERS.md 4.1, 5.3, 5.4): a T record's
                       mood tail, a track's word in library.idx, a
                       filter's 11 bits, the song and album rules
+  FilterGrid, FilteredAlbums
+                      The mood filters' editor and the Albums list's
+                      first row as numbers (docs/MOOD-FILTERS.md 7): the
+                      cells, their font, widths and hits in every
+                      language, a tap's new filter, the summary and the
+                      count; the albums a filter lets through, in A-Z order
   CardWalk, TagStore, TagStoreWalk, TagScan, TagRules, CardRoot, CardJobs
                       The card's check, the device's tag records and their
                       journals, the tag reader, the transfer's root, the
@@ -1000,7 +1014,8 @@ src/                  Core2 firmware
   ui/                 Ui (the one owner of the display: navigation, tab bar,
                       overlays, pages), TabBar, ListView (lists on the
                       hardware scroll), Overlays (toast, HUD, sheet, volume
-                      sheet, jump grid, dialog, coach cards), EmptyState,
+                      sheet, jump grid, dialog, coach cards), FilterSheet
+                      (the mood filters' editor), EmptyState,
                       the pages (NowPlaying, Library, Queue, Dance, Output
                       with Pair and About), Thumbs (album covers: the
                       card worker decodes them below the loop),

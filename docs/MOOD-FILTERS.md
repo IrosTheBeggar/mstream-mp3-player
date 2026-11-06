@@ -4,7 +4,7 @@ Mood filters narrow the Albums list and Auto DJ's picks by mood, using the scale
 
 ## 1. Status
 
-**Status (2026-11-06):** S0, S1 and S2 are built, from main af72b50: S0 on its own branch (`claude/status-line-under-modal`), S1 and S2 stacked on `claude/mood-filters-implementation-0aec6e`; not merged. S1 and S2 are host-tested (S0 has no host test). S2 ran on the user's Core2 against the spare synthetic card in 9.6's Runs A to E, which also checked S1's heap rule, and S0 was checked on the same unit (9.4). S3 onward are not started. Each stage's result follows its plan (9.4, 9.5, 9.6), and the figures from those runs are MEASURED 2026-11-06. A read-only study found it possible, and this document is the build plan.
+**Status (2026-11-06):** S0, S1 and S2 are built, from main af72b50: S0 on its own branch (`claude/status-line-under-modal`), S1 and S2 stacked on `claude/mood-filters-implementation-0aec6e`; not merged. S1 and S2 are host-tested (S0 has no host test). S2 ran on the user's Core2 against the spare synthetic card in 9.6's Runs A to E, which also checked S1's heap rule, and S0 was checked on the same unit (9.4). S3 is built on `claude/mood-filters-s3`, stacked on S2, host-tested and building; its device pass (9.7's table) has not run. S4 onward are not started. Each stage's result follows its plan (9.4, 9.5, 9.6, 9.7), and the figures from those runs are MEASURED 2026-11-06. A read-only study found it possible, and this document is the build plan.
 
 **Picked by the user, on the design canvas:**
 - The editor: the one-screen grid of 7.1.
@@ -699,6 +699,8 @@ terminal #56, #68 ----> S7 (stacked)
 **Owed to the 0.13.0 release commit** (2026-11-06). Not written into `.github/release-notes.md`: feature branches here never edit it, only "Release x.y.z: the release notes" commits do.
 - S2: every unit rebuilds the library once at its first start on the new firmware (`library.idx` v7): about 11 s at 19,400 tracks from D, about 14-16 s from a transfer's records; the queue kept. Going back to 0.12.0 rebuilds once the other way (it reads v7 as corrupt).
 - S0: a status line (Checking the card..., Reading tags...) that ends while a sheet or dialog is up no longer wipes it.
+- S3: on a card with mood scores, the Albums list starts with a Filters row; a tap opens one screen of moods (Happy / Neutral / Sad, Relaxed / Neutral / Aggressive, Instrumental / Vocals, Acoustic, Party, Danceable, and how strict), each tap applied at once with the count of albums that fit, and the list then shows only the albums where most analysed tracks fit. The row says what is set and how many remain, its cross clears it, a dot on Albums says a filter is on once the row is scrolled away, and a restart forgets it. No card carries scores until a writer build does (S7), so the notes say what it needs, not that today's cards have it. Console `uiM`, `uiMa<hex>`, `uiMe`.
+- S3's strings: the 15 mood words are the phone app's (ARB at d17c3fa5, `THIRD-PARTY-NOTICES.md`) in all ten languages; `mood.albums_of`, `mood.tracks_of` and `mood.no_albums` are machine-translated in nine, and their native review is owed (each file's `@@note` says which).
 
 ### 9.3 Console, one list
 
@@ -995,6 +997,22 @@ pio test -e native
 | Colours, redraw feel | The user's eye |
 
 **Effort:** 3.5-5 (guess; device pass 0.5-1).
+
+**Result (2026-11-06).** Commits 1 to 7 built on `claude/mood-filters-s3`, stacked on S2; the device pass below has not run, so nothing here has been seen on a screen. As built, with the drift from the plan above:
+- 1, `lib/core/FilterGrid`: 7.3's rules, 7.4's hits, the first row's and the dot's numbers. Two rules come from the frames where 7.3's text is silent or differs: a chip row still too wide in Small gives its overflow up evenly instead of scaling (Russian's tags 103/80/109, as 7.3's golden; scaled would be 102/82/108), and an even share rounds a half down (the es and fr voice trays, 140 and 138). Every golden of 7.3 holds with the firmware's fonts; the least margin at a cell's centre is 20 px in every language, lab panel and true (MEASURED-HOST). 18 `mood.*` ids, the 15 of 8.1 from the ARB in all ten languages.
+- 2, translations: S3's three ids in nine languages, machine-made, the native review owed (9.2). fr's and pt's empty line take a shorter verb than the app's (323 and 312 px against the line's 300; the widest left is pt's 298). ru's count at 9,999 of 9,999 is 165 px in the row's 160 and shows the short form, as 7.2 planned.
+- 3, `kFunnel` (14 x 14, ASCII art in `tools/ui_icons.py`), pixel for pixel the frames'. This Mac has no Pillow: `src/ui/IconData.cpp` was made by a stand-in for it (exact for art icons) and the funnel's lines spliced in, so "`python tools/ui_icons.py` leaves `IconData.cpp` unchanged" is not checked.
+- 4, `ListView`: the hook as 7.6 (`topBarIsRow()`, `drawTopRow()`, `onTopRowTap(x, rightEdge)`), the row pressed whole with no hold, the empty line under it (the strip at y 114, the text at y 150). `ListView` isn't host-built: checked by the builds and by reading.
+- 5, `lib/core/FilteredAlbums` and `src/ui/FilterSheet`, with the Ui's wiring as listed. The block comes from allocator hooks (PSRAM), room for every album (6.8 KB at 1,707), used again while the album count stays; no memory keeps what was held. 7.6's accessor for the panel is `overlayPanel()`, with `panelOwner()` and `setPanelOwner()`. `uiMa` takes bare hex, as `gm<hex>`.
+- 6, the row in `LibraryPage`, as 4.2's table and 7.2. Drift: the list reads the albums through `FilteredAlbums::shown()`, which also checks they were picked over as many albums as the index has and that it has words (a guard beside 4.6's drops). They are worked out again when the Albums list is about to show (`enter()` at its root, or the segment's tap), not at every `enter()`. A change made while the Albums list didn't show (`uiMa`, or `uiMe` over another page) opens it at its top once, as a close over it does (7.5 names only the close). A finger on the cross lights its disc, not the row. `uil<n>` (`Ui::browse()`) drops the albums too, and a synthetic library drops the filter at `enter()`. `onTopRowTap` takes the list's width from the row as last drawn. `describe()` (the `ui` report) adds the row's filter and the dot.
+- 7, docs: `src/ui/Pages.h`, `docs/ARCHITECTURE.md`, `README.md`, this note. `.github/release-notes.md` is not edited (feature branches never do): S3's lines are in 9.2's owed list.
+
+Host (MEASURED-HOST):
+- `pio test -e native`: 2,107 cases, only the 5 known macOS failures (`test_host_clock` 2, `test_hop_feed` 2, `test_queue` 1); 2,077 after S2. `test_ui_filter` 22 cases, and with `test_ui_library`, `test_ui_strings` and `test_ui_nav` 142, all pass.
+- `python tools/gen_ui_strings.py --check` clean; `test_gen_ui_strings` 29 pass (Python 3.12: the Mac's 3.9 can't run the generator).
+- `pio run -e core2 -e core2-dio`: both build with no new warnings. core2's flash 4,333,743 B, +15,292 B over S2's 4,318,451 B (68.9 %; the app 70 % of its slot); RAM 58,480 B and IRAM 5,161 B left, unchanged.
+
+Device: not run. The spare card holds gen 5 with scores (9.6, Run C), which the table above needs; `python tools/synthtransfer.py --check <card> --mood-filter 127` re-checks it, read-only. Until S0 merges, a Library status line ending under the editor wipes its grid (9.4).
 
 ### 9.8 S4: the engine
 

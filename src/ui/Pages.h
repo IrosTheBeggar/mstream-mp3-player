@@ -318,13 +318,36 @@ private:
 // plays now (the artist, the album, the track, the folders on its path) is
 // tinted, and a page opened from Now Playing opens scrolled to it.
 //
-// The Albums list's mood filter (docs/MOOD-FILTERS.md 4.2, 4.6) is the
-// page's, in RAM: kept through leave(), enter() and resetLibraryTab(),
-// forgotten by a boot (D6). The mood filters' editor (ui/FilterSheet) and
-// the console's uiMa set it; each change works out the albums that fit
-// (FilteredAlbums, its block in PSRAM) and logs the pass's time. The
-// library update's fence and a rebuild drop those albums (their ids are
-// stale), the filter kept.
+// Mood filters (docs/MOOD-FILTERS.md 4.2, 7.2; the frames in-rest, inA-on,
+// inA-scrolled, A-empty-line, A-few): on the card's library with mood
+// words, the Albums list's first row is the filters' (ListView's top row,
+// scrolling with the list):
+//   at rest   [funnel]  Filters                                   >
+//                       1,741 albums
+//   on        [funnel]  Relaxed · Instrumental                   (✕)
+//                       312 of 1,741 albums
+// The funnel DIM at rest, in the accent on a 40 x 40 plate when on; what
+// is set in the accent (Body, else Small, then cut); the cross's disc at
+// 232, 284 or 292 as the list is 284 (the rail), 312 (the scroll bar) or
+// 320 wide (filtergrid::crossX()). A tap opens the editor
+// (ui/FilterSheet), the cross clears the filter (no Undo) and the list
+// reloads at its top. The list then holds only the albums that fit
+// (FilteredAlbums: rowAt(), rows(), railRows(), so the rail, the jump
+// grid, the covers and the tint follow), "No albums match these filters"
+// under the row when none does. Scrolled past the row (42 px), a dot on
+// the Albums segment; a tap there goes back to the top. No row on a card
+// without mood data, behind the fence or on a synthetic library.
+//
+// The filter is the page's, in RAM: kept through leave(), enter() and
+// resetLibraryTab(), forgotten by a boot (D6). The editor and the
+// console's uiMa set it; each change works out the albums that fit (their
+// block in PSRAM) and logs the pass's time, and a change closed over the
+// Albums list reloads it at its top once (7.5; elsewhere, when it next
+// shows). The library update's fence and a rebuild drop those albums
+// (their ids are stale), the filter kept: worked out again when Albums
+// shows. A card with no mood data, or a synthetic library, drops it at
+// enter(); no memory for its albums: the filter reverts, and a toast says
+// so (none, when the old one's albums can't be held either).
 class LibraryPage : public Page, public ListView::Source, public FilterOwner {
 public:
   explicit LibraryPage(Ui& ui);
