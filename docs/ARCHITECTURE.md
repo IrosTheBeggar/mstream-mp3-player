@@ -3727,11 +3727,18 @@ Queue, Dance and Output (with its Pair and About pages).
     (Follow the vibe) or "...: the first pick becomes the seed" (Stay on
     seed); "No Auto DJ index: picks are random", once a switch on or a
     boot (each Play is a session, so once a session would repeat it at
-    every album's end). A pick the queue refused says nothing. **They
-    wait while a toast with Undo is up** (`Ui::pendingNews_`: a pick
-    lands about half a second after a one-track Play starts, and would
-    take its Undo off the screen); the failure pause doesn't wait. A tap
-    on Undo, or Auto DJ switched off, drops what waits. When a pick takes
+    every album's end); under a mood filter, below those
+    (`NewsWatch`, docs/MOOD-FILTERS.md 4.5): "Only 37 tracks fit: they
+    will repeat" (amber, its count main.cpp's `fewCount()` of the view at
+    that moment), "Plays once, then the filters apply" and "No close
+    match: any track that fits". A pick the queue refused says nothing.
+    **They wait while a toast with Undo is up** (`Ui::pendingNews_`: a
+    pick lands about half a second after a one-track Play starts, and
+    would take its Undo off the screen); the failure pause doesn't wait.
+    **All of them wait while the mood filters' editor is up**, the
+    failure pause too, and Auto DJ's editor closed on a change drops the
+    filter's own that waited (the change says its own). A tap on Undo, or
+    Auto DJ switched off, drops what waits. When a pick takes
     the listener's undo (`appendQuiet()`, above), main.cpp calls
     `Ui::queueUndoDropped()` and the Undo toast goes (`[ui] the Undo toast
     went: Auto DJ's pick took the undo`).
@@ -3740,7 +3747,8 @@ Queue, Dance and Output (with its Pair and About pages).
     `autoDjSetMatch()` (applied, saved, logged; true when changed);
     `autoDjSetMoods(q)` (the same, returning the tracks that fit, counted
     at once: the editor's count) and `autoDjMoodSettled()` (the editor
-    closed on a change: a queued pick outside it plays once, said);
+    closed on a change: 1 to 50 fitting, or a queued pick outside it
+    that plays once, said);
     `autoDjStart()` (the button: `autodjview::Started` Played, NoTrack,
     NoIndex or Refused, Refused behind the fence or with no memory);
     `autoDjFromHere(track)` (false behind the fence or with no memory);

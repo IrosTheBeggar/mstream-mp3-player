@@ -359,6 +359,8 @@ void AutoDj::stepMood() {
   fitOn_ = v.on();
   fitData_ = index->hasMoods();
   fitWords_ = index->moodTracks();
+  // The UI's Few toast (MOOD-FILTERS.md 4.5): 1 to 50 fit, they repeat.
+  newsWatch_.counted(fitOn_ && fit_ >= 1 && fit_ <= autodj::kTrackCooldown);
   // The words may be new where the old ones were (a fence's end): the runs
   // remade. Not with no filter, then or now: those picks are as before.
   if (fitOn_ || wasOn) dj_.engine().mapsChanged();
@@ -866,7 +868,7 @@ void AutoDj::report(const Pass& p) {
   // the failure pause; a session's first pick random because its track
   // has no row (Stay on seed: that pick becomes the seed); picks by track
   // id for want of an index (once a switch on, or a boot).
-  news_ |= newsWatch_.pass(p, dj_.settings().mode, dj_.settings().on);
+  newsWatch_.pass(p, dj_.settings().mode, dj_.settings().on);
   const bool broken = (p.picked && p.pick.broken) || (p.prefetched && p.prefetch == autodj::SlotResult::Broken);
   if (broken && !brokenSaid_) {
     brokenSaid_ = true;
@@ -903,8 +905,10 @@ bool AutoDj::setOn(bool on) {
   // library too big fails again at once).
   if (on && (block_ == Block::Build || block_ == Block::Reads)) block_ = Block::None;
   // No index it can use: its picks are random (the UI says so now, and
-  // not again until the next switch on).
-  if (on) news_ |= newsWatch_.switchedOn(usable());
+  // not again until the next switch on); a mood filter that 1 to 50
+  // tracks fit: they repeat (said again at the next switch on).
+  if (on) newsWatch_.switchedOn(usable());
+  if (!on) newsWatch_.switchedOff();
   if (!on) releaseJoin("Auto DJ off");
   return true;
 }
@@ -943,12 +947,18 @@ bool AutoDj::setMoods(uint16_t q) {
 
 void AutoDj::moodSettled() {
   const LibraryIndex* index = lib_.index();
-  if (!index || !index->ready() || !fitCounted_) return;  // (the fence: its count is old)
+  if (!index || !index->ready() || !fitCounted_) {
+    // The fence: its count is old, so nothing is said (MOOD-FILTERS.md
+    // 4.5); Few and Jump are due again after it.
+    newsWatch_.settled(dj_.settings().on, false, false);
+    return;
+  }
   // A pick queued before the change plays once (D5).
   const uint32_t pending = dj_.pendingTrack();
-  if (pending != autodj::kNoTrackId && !moodView().passes(pending)) {
-    Serial.printf("[dj] the pick up next is outside the filter: it plays once: %s\n", pathOf(pending));
-  }
+  const bool outside = pending != autodj::kNoTrackId && !moodView().passes(pending);
+  if (outside) Serial.printf("[dj] the pick up next is outside the filter: it plays once: %s\n", pathOf(pending));
+  // The UI's toasts: 1 to 50 fit (they repeat), else that pick's once.
+  newsWatch_.settled(dj_.settings().on, true, outside);
 }
 
 bool AutoDj::fromHere(uint32_t track) {
@@ -1029,11 +1039,7 @@ autodjview::Started AutoDj::start() {
   return autodjview::Started::Played;
 }
 
-uint8_t AutoDj::takeNews() {
-  const uint8_t n = news_;
-  news_ = 0;
-  return n;
-}
+uint8_t AutoDj::takeNews() { return newsWatch_.take(); }
 
 void AutoDj::view(autodjview::State* v) const {
   using autodjview::Index;
@@ -1141,7 +1147,7 @@ void AutoDj::command(const char* arg, const Env& env) {
       const Pass p = dj_.pickNow(player_, index(), driverEnv(env));
       logPick(p, "Dp");
       if (p.undoDropped) undoDropped_ = true;
-      news_ |= newsWatch_.pass(p, dj_.settings().mode, dj_.settings().on);  // (its append: no badge flash)
+      newsWatch_.pass(p, dj_.settings().mode, dj_.settings().on);  // (its append: no badge flash)
       Serial.print("[dj] Dp: the anchors (rows, oldest first):");
       const autodj::Engine& e = dj_.engine();
       for (uint8_t i = 0; i < e.anchors(); ++i) Serial.printf(" %u", (unsigned)e.anchor(i));

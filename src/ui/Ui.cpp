@@ -415,23 +415,33 @@ void Ui::autoDjToast(const char* text, bool switchedOn) {
   undoSwitchesDjOff_ = switchedOn;
 }
 
-void Ui::autoDjNews(uint8_t news) {
+void Ui::autoDjNews(uint8_t news, uint32_t few) {
   // An Undo toast up (a Play's, the button's, "Auto DJ from here"'s): what
   // Auto DJ says waits until it goes, so its Undo stays offered for its 4
   // s (a pick lands half a second after a one-track Play starts). The
-  // failure pause, a note, at once.
-  if (!(news & autodjview::kNewsPaused) && toast_.up() && toast_.undo()) {
+  // failure pause, a note, at once. The mood filters' editor up: all of
+  // it waits, the failure pause too (MOOD-FILTERS.md 4.5): a toast would
+  // cover its title row, and the count it shows says the rest.
+  if (filters_.up() || (!(news & autodjview::kNewsPaused) && toast_.up() && toast_.undo())) {
     pendingNews_ = static_cast<uint8_t>(pendingNews_ | news);
     return;
   }
   news = static_cast<uint8_t>(news | pendingNews_);
   pendingNews_ = 0;
   autodjview::Toast t;
-  if (!autodjview::newsToast(news, &t)) return;
+  if (!autodjview::newsToast(news, &t, few)) return;
+  // A count (Toast::count): its text says it, "Only 37 tracks fit: they
+  // will repeat"; the others are their message as it is.
+  char text[160];
+  const char* say = tr(t.text);
+  if (t.count) {
+    trnf(text, sizeof(text), t.text, t.count, t.count);
+    say = text;
+  }
   if (t.warn) {
-    warn(tr(t.text));
+    warn(say);
   } else {
-    toast(tr(t.text), false);
+    toast(say, false);
   }
 }
 
@@ -687,6 +697,16 @@ bool Ui::closeModal(bool notify) {
     const bool changed = filters_.changed();
     filters_.close();
     closed = true;
+    // Auto DJ's filter changed, its owner told: the filter's own news that
+    // waited under the editor are an older filter's (its few tracks, a
+    // jump); the change says its own, from its count (onFiltersClosed():
+    // AutoDj::moodSettled(), MOOD-FILTERS.md 4.5). The rest still waits
+    // for the next pass. (At a suspend() the owner isn't told: what waited
+    // stays, Few said by the count at the resume.)
+    if (notify && changed && owner && owner->filterScope() == filtergrid::Scope::Tracks) {
+      pendingNews_ = static_cast<uint8_t>(pendingNews_ &
+                                          ~(autodjview::kNewsFew | autodjview::kNewsJump | autodjview::kNewsOnce));
+    }
     Serial.printf("[ui] filters: the editor closed%s\n", changed ? ", the filter changed" : "");
     if (notify && owner) owner->onFiltersClosed(changed);
   }
@@ -1472,8 +1492,11 @@ void Ui::loop(uint32_t nowMs) {
   const bool toggled = undoWatch_.modeChanged();
   // What Auto DJ had to say while an Undo toast was up: now it has gone
   // (moot if Auto DJ was switched off meanwhile).
+  // (Nor while the mood filters' editor is up: MOOD-FILTERS.md 4.5.)
   if (pendingNews_ && !state_.autoDj.on) pendingNews_ = 0;
-  if (pendingNews_ && !(toast_.up() && toast_.undo())) autoDjNews(0);
+  if (pendingNews_ && !(toast_.up() && toast_.undo()) && !filters_.up()) {
+    autoDjNews(0, autodjview::fewCount(state_.autoDj));
+  }
   // Tracks added: the Queue badge flashes (not for Auto DJ's own appends:
   // one each time the last track starts; the engine design's 2.14).
   const bool contentChanged = state_.contentVersion != lastContent_;

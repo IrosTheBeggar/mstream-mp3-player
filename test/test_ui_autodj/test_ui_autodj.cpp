@@ -10,8 +10,13 @@
 // index and each hold, with a mood filter on and off, and which are amber,
 // the empty states' button (and none when the filter fits no track), and
 // which toast Auto DJ's news makes (and when: picks by id once a switch
-// on, only picks appended; none of it for a mood filter's jumps, repeats
-// and re-pins, nor "no index" for its picks by id while joined). The
+// on, only picks appended; none of the old ones for a mood filter's jumps,
+// repeats and re-pins, nor "no index" for its picks by id while joined),
+// with a mood filter's own three below them (MOOD-FILTERS.md 4.5): few
+// tracks that fit, with its count, once until a change; a jump, once a
+// session; a pick up next that plays once; each raised only with nothing
+// above it in that take, Few and Jump then tried again, Once gone (no
+// index and 37 fitting: Random at the first pick, Few at the next). The
 // widths of these texts in every language are test_ui_library's
 // (test_auto_dj_texts_fit) and test_ui_strings'.
 // Run: pio test -e native -f test_ui_autodj
@@ -653,6 +658,71 @@ void test_the_news_toasts() {
   TEST_ASSERT_TRUE(newsToast(kNewsNoNeighbours | kNewsRandom, &t));
   TEST_ASSERT_TRUE(t.text == S::toast_autodj_no_neighbours);
   TEST_ASSERT_EQUAL_STRING("Auto DJ: the next track is ready, press play", uistr::tr(S::toast_autodj_cued));
+  TEST_ASSERT_EQUAL_UINT32(0, t.count);
+  // A mood filter's (MOOD-FILTERS.md 4.5): few that fit, a note with its
+  // count; a pick that plays once; no close match.
+  TEST_ASSERT_TRUE(newsToast(kNewsFew, &t, 37));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_few && t.warn);
+  TEST_ASSERT_EQUAL_UINT32(37, t.count);
+  TEST_ASSERT_TRUE(newsToast(kNewsOnce, &t, 37));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_plays_once && !t.warn);
+  TEST_ASSERT_EQUAL_UINT32(0, t.count);
+  TEST_ASSERT_TRUE(newsToast(kNewsJump, &t));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_no_close && !t.warn);
+  TEST_ASSERT_EQUAL_UINT32(0, t.count);
+  // Below the old five, then Few, Once, Jump.
+  TEST_ASSERT_TRUE(newsToast(kNewsFew | kNewsOnce | kNewsJump, &t, 37));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_few);
+  TEST_ASSERT_TRUE(newsToast(kNewsOnce | kNewsJump, &t, 37));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_plays_once);
+  // Few with no count now (the filter off, none fitting or more than 50):
+  // moot, the next one down.
+  TEST_ASSERT_TRUE(newsToast(kNewsFew | kNewsJump, &t, 0));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_no_close);
+  TEST_ASSERT_FALSE(newsToast(kNewsFew, &t, 0));
+  TEST_ASSERT_FALSE(newsToast(kNewsFew, &t, autodj::kTrackCooldown + 1));
+  TEST_ASSERT_TRUE(newsToast(kNewsFew, &t, autodj::kTrackCooldown));
+  TEST_ASSERT_TRUE(newsToast(kNewsFew, &t, 1));
+  // With any of the old five, the toast is the old one's, as before the
+  // mood filter: every byte.
+  const uint8_t old = kNewsCued | kNewsPaused | kNewsNoNeighbours | kNewsSeedMoved | kNewsRandom;
+  for (unsigned n = 0; n < 256; ++n) {
+    if (!(n & old)) continue;
+    Toast a, b;
+    TEST_ASSERT_TRUE(newsToast(static_cast<uint8_t>(n), &a, 37));
+    TEST_ASSERT_TRUE(newsToast(static_cast<uint8_t>(n & old), &b));
+    TEST_ASSERT_TRUE(a.text == b.text && a.warn == b.warn && a.count == 0);
+  }
+  // The words, with the count: one and other.
+  char b[128];
+  uistr::trnf(b, sizeof(b), S::toast_autodj_few, 37u, 37u);
+  TEST_ASSERT_EQUAL_STRING("Only 37 tracks fit: they will repeat", b);
+  uistr::trnf(b, sizeof(b), S::toast_autodj_few, 1u, 1u);
+  TEST_ASSERT_EQUAL_STRING("Only 1 track fits: it will repeat", b);
+  TEST_ASSERT_EQUAL_STRING("Plays once, then the filters apply", uistr::tr(S::toast_autodj_plays_once));
+  TEST_ASSERT_EQUAL_STRING("No close match: any track that fits", uistr::tr(S::toast_autodj_no_close));
+}
+
+// The Few toast's count: a filter on, Auto DJ on, 1 to 50 fitting (they
+// repeat). Not off, not with no filter on (a small library's fit is all
+// of it), not with none or more than 50.
+void test_the_few_count() {
+  State s = filtered(37);
+  TEST_ASSERT_EQUAL_UINT32(0, fewCount(s));  // (off)
+  s.on = true;
+  TEST_ASSERT_EQUAL_UINT32(37, fewCount(s));
+  s.fit = 1;
+  TEST_ASSERT_EQUAL_UINT32(1, fewCount(s));
+  s.fit = autodj::kTrackCooldown;
+  TEST_ASSERT_EQUAL_UINT32(autodj::kTrackCooldown, fewCount(s));
+  s.fit = autodj::kTrackCooldown + 1;
+  TEST_ASSERT_EQUAL_UINT32(0, fewCount(s));
+  s.fit = 0;
+  TEST_ASSERT_EQUAL_UINT32(0, fewCount(s));
+  s.fit = 30;
+  s.moodOn = false;  // (no filter on: fit counts every track, 30 of 30)
+  s.fitOf = 30;
+  TEST_ASSERT_EQUAL_UINT32(0, fewCount(s));
 }
 
 namespace {
@@ -664,6 +734,15 @@ autodj::Pass picked(bool random, bool noIndex) {
   p.pick.random = random;
   p.pick.noIndex = noIndex;
   p.added = true;
+  return p;
+}
+
+// A pick of a mood filter's, appended: a jump (`jump`), else a pick from
+// the anchors' lists.
+autodj::Pass jumped(autodj::Jump jump = autodj::Jump::NoCandidate) {
+  autodj::Pass p = picked(true, jump == autodj::Jump::NoRow);
+  p.pick.byIdJoined = p.pick.noIndex;
+  p.pick.jump = jump;
   return p;
 }
 
@@ -772,7 +851,9 @@ void test_the_news_under_a_mood_filter() {
       if (kind <= 1) p.pick.jump = kind ? autodj::Jump::NoRow : autodj::Jump::NoCandidate;
       p.pick.repeated = kind == 2 || kind == 4;
       p.pick.repinned = kind == 3;
-      TEST_ASSERT_EQUAL_UINT8(0, w.pass(p, m, true));
+      // (A jump says its own: test_the_jump_toast.)
+      TEST_ASSERT_EQUAL_UINT8(kind <= 1 ? kNewsJump : 0, w.pass(p, m, true));
+      TEST_ASSERT_EQUAL_UINT8(kind <= 1 ? kNewsJump : 0, w.take());
     }
   }
   w.sessionBegan();
@@ -784,6 +865,220 @@ void test_the_news_under_a_mood_filter() {
   TEST_ASSERT_EQUAL_UINT8(kNewsSeedMoved, w.pass(joined, Mode::Locked, true));
   TEST_ASSERT_EQUAL_UINT8(kNewsRandom, w.pass(picked(true, true), Mode::Locked, true));
   TEST_ASSERT_EQUAL_UINT8(0, w.pass(picked(true, true), Mode::Locked, true));
+}
+
+// Few (MOOD-FILTERS.md 4.5): 1 to 50 tracks fit, while on. Said at the
+// first appended pick after a boot or after a Play that switched Auto DJ
+// on, at a switch on and at a settled change; once, until a change, a
+// switch off or the count leaving few and coming back; not again at a
+// session. Behind the fence a settle says nothing, and Few comes at the
+// first pick after it.
+void test_the_few_toast() {
+  NewsWatch w;
+  w.sessionBegan();  // (the boot's)
+  w.counted(true);   // (37 fit)
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.pass(picked(false, false), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.take());
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(picked(false, false), Mode::Rolling, true));
+  w.sessionBegan();  // (a Play: not again)
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(picked(false, false), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(0, w.take());
+  // Switched off: nothing while off (the console's Dp); at the switch on,
+  // at once, and not again at its first pick.
+  w.switchedOff();
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(picked(false, false), Mode::Rolling, false));
+  w.sessionBegan();
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.switchedOn(true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.take());
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(picked(false, false), Mode::Rolling, true));
+  // A Play that switched it on (no switch on of the glue's): the first
+  // appended pick.
+  w.switchedOff();
+  w.sessionBegan();
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(picked(false, false), Mode::Rolling, false));
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.pass(picked(false, false), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.take());
+  // A settled change: at once, and not at the next pick.
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.settled(true, true, false));
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.take());
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(picked(false, false), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(0, w.take());
+  // The count leaving few (above 50, or none) and coming back without a
+  // change (a library update's end): at the next pick.
+  w.counted(false);
+  w.counted(true);
+  TEST_ASSERT_EQUAL_UINT8(0, w.take());
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.pass(picked(false, false), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.take());
+  // Few still, a count again (the editor's next tap): nothing new.
+  w.counted(true);
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(picked(false, false), Mode::Rolling, true));
+  // Not few: nothing anywhere.
+  w.counted(false);
+  TEST_ASSERT_EQUAL_UINT8(0, w.settled(true, true, false));
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(picked(false, false), Mode::Rolling, true));
+  w.switchedOff();
+  w.sessionBegan();
+  TEST_ASSERT_EQUAL_UINT8(0, w.switchedOn(true));
+  TEST_ASSERT_EQUAL_UINT8(0, w.take());
+  // A change settled while off says nothing; the switch on says it.
+  w.counted(true);
+  w.switchedOff();
+  TEST_ASSERT_EQUAL_UINT8(0, w.settled(false, true, false));
+  w.sessionBegan();
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.switchedOn(true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.take());
+  // Behind the fence: a settle says nothing (its count is old), and Few
+  // comes at the first pick after it.
+  TEST_ASSERT_EQUAL_UINT8(0, w.settled(true, false, true));
+  TEST_ASSERT_EQUAL_UINT8(0, w.take());
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.pass(picked(false, false), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.take());
+}
+
+// Jump (MOOD-FILTERS.md 4.5): a pick with no close match inside the
+// filter, appended: once a session, and again after a settled change; a
+// jump outranked (Few, a cued pick) is said at the next pick that jumps,
+// not at one that doesn't.
+void test_the_jump_toast() {
+  NewsWatch w;
+  w.sessionBegan();
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, w.pass(jumped(), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, w.take());
+  // Not again this session: the other jumps, a repeat after one (it keeps
+  // the jump's code), a jump's re-pin.
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(jumped(autodj::Jump::AllCooled), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(jumped(autodj::Jump::NoRow), Mode::Rolling, true));
+  autodj::Pass rep = jumped(autodj::Jump::AllCooled);
+  rep.pick.repeated = true;
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(rep, Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(0, w.take());
+  // A new session: again (by id with no row, a jump too); a refused one
+  // says nothing and the retry that lands does.
+  w.sessionBegan();
+  autodj::Pass refused = jumped(autodj::Jump::NoRow);
+  refused.added = false;
+  refused.refused = true;
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(refused, Mode::Locked, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, w.pass(jumped(autodj::Jump::NoRow), Mode::Locked, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, w.take());
+  // A settled change: again, at the next jump (the change says no Jump).
+  TEST_ASSERT_EQUAL_UINT8(0, w.settled(true, true, false));
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(picked(false, false), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, w.pass(jumped(), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, w.take());
+  // ... and behind the fence too.
+  TEST_ASSERT_EQUAL_UINT8(0, w.settled(true, false, false));
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, w.pass(jumped(), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, w.take());
+  // Outranked by Few at the first pick after a boot: Few now; a pick that
+  // doesn't jump says nothing of it; the next jump does.
+  NewsWatch v;
+  v.sessionBegan();
+  v.counted(true);
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, v.pass(jumped(), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, v.take());
+  TEST_ASSERT_EQUAL_UINT8(0, v.pass(picked(false, false), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, v.pass(jumped(), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, v.take());
+  // A finished queue's cued pick that jumped: the cue now, the jump at the
+  // next one.
+  NewsWatch c;
+  c.sessionBegan();
+  autodj::Pass cued = jumped();
+  cued.cued = true;
+  TEST_ASSERT_EQUAL_UINT8(kNewsCued, c.pass(cued, Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsCued, c.take());
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, c.pass(jumped(), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, c.take());
+}
+
+// Once (MOOD-FILTERS.md 4.5, D5): a settled change that Auto DJ's pick up
+// next fails, while on, with the count known. Under Few, or outranked
+// later in the same take, it goes: its moment has passed.
+void test_the_once_toast() {
+  NewsWatch w;
+  w.sessionBegan();
+  TEST_ASSERT_EQUAL_UINT8(kNewsOnce, w.settled(true, true, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsOnce, w.take());
+  TEST_ASSERT_EQUAL_UINT8(0, w.settled(true, true, false));   // (inside the new filter)
+  TEST_ASSERT_EQUAL_UINT8(0, w.settled(false, true, true));   // (off)
+  TEST_ASSERT_EQUAL_UINT8(0, w.settled(true, false, true));   // (behind the fence)
+  TEST_ASSERT_EQUAL_UINT8(0, w.take());
+  // Few too: Few, and the once goes (not at a later pick).
+  w.counted(true);
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.settled(true, true, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.take());
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(picked(false, false), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(0, w.take());
+  // A cued pick in the same take (a Dq, then the loop's pass): the cue.
+  w.counted(false);
+  TEST_ASSERT_EQUAL_UINT8(kNewsOnce, w.settled(true, true, true));
+  autodj::Pass cued = picked(false, false);
+  cued.cued = true;
+  TEST_ASSERT_EQUAL_UINT8(kNewsCued, w.pass(cued, Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsCued, w.take());
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(picked(false, false), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(0, w.take());
+}
+
+// A raised Few outranked later in its take: switched on with 1 to 50
+// fitting, and the loop's pass in the same take appends the session's
+// first pick, random (its track has no row): that toast; Few at the next
+// pick, not lost.
+void test_a_mood_toast_outranked_waits() {
+  NewsWatch w;
+  w.counted(true);
+  w.sessionBegan();
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.switchedOn(true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsNoNeighbours, w.pass(picked(true, false), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsNoNeighbours, w.take());
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.pass(picked(false, false), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.take());
+  // A jump raised, then Few in the same take (a settled change): Few, and
+  // the jump at the next one.
+  w.sessionBegan();
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, w.pass(jumped(), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.settled(true, true, false));
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.take());
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, w.pass(jumped(), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, w.take());
+}
+
+// A card with no index Auto DJ can use and a filter 37 tracks fit
+// (MOOD-FILTERS.md 4.5): on after a boot, Random at the first pick (said
+// at once, so it is marked said), Few at the next, then nothing; switched
+// on there, Random at the switch and Few at the first pick. The toasts as
+// the UI makes them.
+void test_no_index_and_37_fitting() {
+  State s = filtered(37);
+  s.on = true;
+  s.usable = false;
+  s.index = Index::None;
+  char text[128];
+  Toast t;
+  NewsWatch w;
+  w.sessionBegan();  // (the boot's)
+  w.counted(true);
+  TEST_ASSERT_EQUAL_UINT8(kNewsRandom, w.pass(picked(true, true), Mode::Rolling, true));
+  uint8_t n = w.take();
+  TEST_ASSERT_TRUE(newsToast(n, &t, fewCount(s)));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_random && t.count == 0);
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.pass(picked(true, true), Mode::Rolling, true));
+  n = w.take();
+  TEST_ASSERT_TRUE(newsToast(n, &t, fewCount(s)));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_few && t.warn);
+  uistr::trnf(text, sizeof(text), t.text, t.count, t.count);
+  TEST_ASSERT_EQUAL_STRING("Only 37 tracks fit: they will repeat", text);
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(picked(true, true), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(0, w.take());
+  // Switched off and on there.
+  w.switchedOff();
+  w.sessionBegan();
+  TEST_ASSERT_EQUAL_UINT8(kNewsRandom, w.switchedOn(false));
+  TEST_ASSERT_EQUAL_UINT8(kNewsRandom, w.take());
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.pass(picked(true, true), Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.take());
 }
 
 void test_the_index_names() {
@@ -812,8 +1107,14 @@ int main(int, char**) {
   RUN_TEST(test_the_status_amber);
   RUN_TEST(test_the_sheet_detail);
   RUN_TEST(test_the_news_toasts);
+  RUN_TEST(test_the_few_count);
   RUN_TEST(test_the_news_from_the_passes);
   RUN_TEST(test_the_news_under_a_mood_filter);
+  RUN_TEST(test_the_few_toast);
+  RUN_TEST(test_the_jump_toast);
+  RUN_TEST(test_the_once_toast);
+  RUN_TEST(test_a_mood_toast_outranked_waits);
+  RUN_TEST(test_no_index_and_37_fitting);
   RUN_TEST(test_the_index_names);
   return UNITY_END();
 }

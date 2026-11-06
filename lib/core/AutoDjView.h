@@ -35,7 +35,9 @@
 //   - The Queue: the DJ mark on what Auto DJ added; no badge flash for its
 //     appends (queueview::badgeFlashes()).
 //   - Toasts (newsToast()): a seed with no neighbours, a finished queue's
-//     cued pick, picks at random for want of an index, the failure pause.
+//     cued pick, picks at random for want of an index, the failure pause;
+//     under a mood filter, 1 to 50 tracks that fit, a queued pick outside a
+//     new filter, a pick with no close match (MOOD-FILTERS.md 4.5).
 // Nothing here starts playback or changes the output or the volume: the
 // only taps that play are the empty states' button and "Auto DJ from here"
 // (the listener's own), and switching Auto DJ on never does (B stays inert
@@ -182,21 +184,33 @@ enum class Started : uint8_t {
 };
 
 // ---- what Auto DJ's loop step has to say (the toasts) ----
-// Bits (app/AutoDj::takeNews(), since its last call).
+// Bits (app/AutoDj::takeNews(), since its last call). The byte is full.
 enum News : uint8_t {
   kNewsCued = 1,          // a finished queue: a pick cued, paused at 0:00 (toast.autodj_cued)
   kNewsPaused = 2,        // 3 picks in a row failed to play: paused (a note: toast.autodj_paused)
   kNewsNoNeighbours = 4,  // a session's first pick was random: its track has no row (Follow the vibe)
   kNewsSeedMoved = 8,     // ... in Stay on seed: that pick becomes the seed
   kNewsRandom = 16,       // picks at random for want of a usable index (once a switch on, or a boot)
+  // A mood filter's (MOOD-FILTERS.md 4.5), below all of those:
+  kNewsFew = 32,    // 1 to 50 tracks fit: they repeat (a note: toast.autodj_few, its count)
+  kNewsJump = 64,   // a pick with no close match inside the filter: any track that fits (toast.autodj_no_close)
+  kNewsOnce = 128,  // a filter changed with Auto DJ's pick up next outside it: it plays once (toast.autodj_plays_once)
 };
 struct Toast {
   uistr::S text = uistr::S::toast_autodj_random;
-  bool warn = false;  // an amber note (Ui::warn), else a toast
+  bool warn = false;   // an amber note (Ui::warn), else a toast
+  uint32_t count = 0;  // the text's {0} and its plural form (toast.autodj_few's tracks); 0: a text with none
 };
+// The tracks inside Auto DJ's mood filter while it is on and 1 to 50 fit
+// (fewer than the track cooldown: they repeat), else 0: the Few toast's
+// count, as the status row's amber "Only 37 tracks fit" (statusLines()).
+uint32_t fewCount(const State& s);
 // The one toast for `news` (one a pass: the most pressing, in this order:
-// the failure pause, the cued pick, the seed, no index). False: none.
-bool newsToast(uint8_t news, Toast* out);
+// the failure pause, the cued pick, the seed, no index; then a mood
+// filter's: few that fit, a pick that plays once, no close match). Few
+// says `few` (fewCount() now), and with `few` 0 it is moot: the next one
+// down. With no filter's bits, as before the mood filter. False: none.
+bool newsToast(uint8_t news, Toast* out, uint32_t few = 0);
 
 // What app/AutoDj has to say, from the Driver's passes (the engine
 // design's 2.1, 2.3.1, 2.3.2, 2.5): a finished queue's cued pick; the
@@ -208,26 +222,73 @@ bool newsToast(uint8_t news, Toast* out);
 // no index would say it at every album's last track. Only picks that
 // were appended speak (one the queue refused is tried again). A mood
 // filter's jumps, repeats and re-pins say neither, and its picks by id
-// with the index joined (Pick::byIdJoined) aren't for want of one
-// (MOOD-FILTERS.md 4.5: their own toasts are S5's). And Auto DJ's appends,
-// counted (State::adds: no Queue badge flash).
+// with the index joined (Pick::byIdJoined) aren't for want of one. And
+// Auto DJ's appends, counted (State::adds: no Queue badge flash).
+//
+// A mood filter's own (MOOD-FILTERS.md 4.5), while Auto DJ is on:
+//   - Few, 1 to 50 tracks fit (they repeat): at a settled change (the
+//     editor closed on it, a Dq), at a switch on, and at an appended pick
+//     while not said (the first after a boot, or after a Play that
+//     switched Auto DJ on). Said once: again after a change, a switch off,
+//     or the count going above 50 (or to none) and back; not at a session.
+//   - Jump, a pick with no close match (Pick::jump): once a session, and
+//     again after a settled change.
+//   - Once, a settled change that Auto DJ's pick up next fails: it plays
+//     once (D5).
+// They come below the old five, and newsToast() answers one toast a take:
+// one is raised only while no bit above it waits in this take, and one
+// that a later bit above it outranks goes again. Few and Jump unraised
+// stay unsaid, so the next appended pick tries again (Jump: the next pick
+// that jumps); Once unraised goes, its moment passed. So with no index,
+// Random comes at the first pick and Few at the next.
 class NewsWatch {
 public:
   // A session began (every one: the switch on, a Play, the button, "Auto
   // DJ from here", a boot, an index changed): its first pick next.
-  void sessionBegan() { picks_ = 0; }
+  void sessionBegan() {
+    picks_ = 0;
+    jumpSaid_ = false;
+  }
   // Switched on (after its session began): with no usable index its picks
   // are random, said now (and not again until the next switch on); with
-  // one, said if it goes (a remount without it).
+  // one, said if it goes (a remount without it). Few, if it holds.
   uint8_t switchedOn(bool usable);
+  // Switched off: Few is said again at the next switch on.
+  void switchedOff() { fewSaid_ = false; }
+  // app/AutoDj::stepMood()'s count: `few`, a filter on with 1 to 50
+  // tracks inside it. Not few: said again once it is.
+  void counted(bool few) {
+    few_ = few;
+    if (!few) fewSaid_ = false;
+  }
+  // The filter changed, its change settled (the editor closed on it, a
+  // Dq): Few and Jump are said again. With the count known (`known`;
+  // behind the library update's fence it is old and nothing is said now:
+  // Few comes at a pick after it) and Auto DJ on: Few, else Once when
+  // `outside`, Auto DJ's pick up next failing the new filter.
+  uint8_t settled(bool on, bool known, bool outside);
   // One pass of the Driver's (or the console's Dp), Auto DJ's settings
   // then: its news bits.
   uint8_t pass(const autodj::Pass& p, autodj::Mode mode, bool on);
+  // The news since the last take (app/AutoDj::takeNews(): the UI's toast).
+  uint8_t take() {
+    const uint8_t n = news_;
+    news_ = 0;
+    return n;
+  }
   uint32_t adds() const { return adds_; }
 
 private:
+  // `bits` into this take's news; a mood filter's bit outranked there by
+  // one above it is not raised (Few and Jump unsaid). This call's bits
+  // that stand.
+  uint8_t add(uint8_t bits);
+  uint8_t news_ = 0;         // since the last take()
   uint32_t picks_ = 0;       // this session's picks appended
   bool randomSaid_ = false;  // since the last switch on (or the boot)
+  bool few_ = false;         // counted(): 1 to 50 fit
+  bool fewSaid_ = false;     // Few raised since the boot, the last change, switch off, or count from few
+  bool jumpSaid_ = false;    // Jump raised this session, since the last change
   uint32_t adds_ = 0;
 };
 

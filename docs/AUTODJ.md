@@ -42,10 +42,11 @@ to the placement's first day. Fixed and checked on the device that day
 (7.4, 14.3).
 
 **Mood filters (2026-11-06):** a mood filter keeps every pick inside it
-(3.14; docs/MOOD-FILTERS.md's stage S4). Console only (`Dq`) until its
-page (S5). Host-tested only: no device check has run on it yet
-(MOOD-FILTERS.md 9.8 lists them). With no filter, every pick and the Auto
-DJ button's draws are as before.
+(3.14; docs/MOOD-FILTERS.md's stage S4), set on Output > Auto DJ's Smart
+filters row (9.2; stage S5) or with `Dq`. Host-tested only: no device
+check has run on either yet (MOOD-FILTERS.md 9.8 and 9.9 list them). With
+no filter, every pick, the Auto DJ button's draws and the toasts are as
+before.
 
 The other documents:
 
@@ -98,9 +99,10 @@ this document describes.
   5. a missing BPM or key gets the same odds as the candidates that have
      one;
   6. one uniform draw in the best class. It never ranks by similarity.
-- **A mood filter** (`Dq`, saved): every pick stays inside it: the
-  neighbours inside it, then any track that fits (a jump), then repeats,
-  oldest first. No track fits: no pick, and Auto DJ reads Waiting (3.14).
+- **A mood filter** (Smart filters on Output > Auto DJ, or `Dq`; saved):
+  every pick stays inside it: the neighbours inside it, then any track
+  that fits (a jump), then repeats, oldest first. No track fits: no pick,
+  and Auto DJ reads Waiting (3.14).
 - **No usable index:** random picks from the library, with a 50-track
   cooldown.
 - **Cost:** at most 2 slot reads a pick, usually 0 (a read ahead between
@@ -109,10 +111,10 @@ this document describes.
 - **Memory:** the engine's 19 KB of PSRAM from boot; the join's 155 KB at
   19,410 tracks, only while Auto DJ is on (on against off: 155 KB lower,
   MEASURED 2026-10-14).
-- **The UI:** a 4th row in Now Playing's "..." menu; Output > Auto DJ; an
-  Auto DJ button on the empty Queue and Now Playing; "Auto DJ from here" in
-  the Library's long-press sheet; a small DJ mark on the Queue rows it
-  added.
+- **The UI:** a 4th row in Now Playing's "..." menu; Output > Auto DJ,
+  with Smart filters for the mood filter; an Auto DJ button on the empty
+  Queue and Now Playing; "Auto DJ from here" in the Library's long-press
+  sheet; a small DJ mark on the Queue rows it added.
 
 ---
 
@@ -475,8 +477,8 @@ docs/MOOD-FILTERS.md has the design (4.4, 6), its figures and its
 sessions. What the engine does with a filter (READ; host-tested, no
 device check yet):
 
-- **The filter:** 11 bits, `q` (MOOD-FILTERS.md 5.4), set by `Dq` and
-  saved (section 8), over the library's mood words (`library.idx` v7, a
+- **The filter:** 11 bits, `q` (MOOD-FILTERS.md 5.4), set by the Smart
+  filters row's editor (9.2) or `Dq` and saved (section 8), over the library's mood words (`library.idx` v7, a
   u16 a track). It is on when the card has words and a group is set. A
   level alone is no filter, and nor is any filter on a card with no mood
   data: the picks are unfiltered there (D4).
@@ -509,7 +511,7 @@ device check yet):
   pointer, which a score-only rebuild leaves as they were. Behind the
   fence the filter is off and the count kept.
 - **A filter changed** keeps the session (section 5). A pick already
-  queued plays once (D5).
+  queued plays once (D5), and a toast says so (9.6).
 - **No filter:** every new branch is behind the filter being on, a moved
   pin or a field that is false without one, and adds no random draw. The
   26 sessions from before the filter replay identically and are held by
@@ -1128,16 +1130,23 @@ At 19,410 rows and 19,412 tracks, all in PSRAM:
 
 The rules are in `lib/core/AutoDjView` (host-tested: `test_ui_autodj`);
 the drawing in `src/ui`. docs/ARCHITECTURE.md's "UI" section has the
-pages, the sheets and `UiHost`'s Auto DJ calls. 52 messages, in all ten
+pages, the sheets and `UiHost`'s Auto DJ calls. 65 messages, in all ten
 languages (machine translations, not yet reviewed by native speakers;
-the mobile app's words where its English matches).
+the mobile app's words where its English matches). 13 of them are the
+mood filter's of 2026-11-06 (docs/MOOD-FILTERS.md 8, stage S5); the
+editor's own words are MOOD-FILTERS.md's.
 
 ### 9.1 Now Playing's "..." menu
 
 A 4th row, **Auto DJ**, its state the detail: **On**, **Off**,
-**Waiting** (Repeat One, the sleep timer's End of queue) or **Paused**
-(failures). A tap switches it in place, the sheet staying, as Shuffle.
-The 4-row sheet rises into the header row.
+**Waiting** (Repeat One, the sleep timer's End of queue, a mood filter no
+track fits) or **Paused** (failures). A tap switches it in place, the
+sheet staying, as Shuffle. The 4-row sheet rises into the header row.
+
+Under a mood filter (3.14) the detail says what is set, "On · Relaxed ·
+Instrumental", in the accent (whole words, as many as fit beside the
+label); "Waiting" for want of a track that fits, in amber. Every other
+detail is dim, as the other rows' (`autodjview::sheetDetail()`).
 
 ### 9.2 Output > Auto DJ
 
@@ -1152,14 +1161,29 @@ going"):
 | Auto DJ | a switch; "adds a track as the last one starts" | switches it |
 | Anchor | Follow the vibe / Stay on seed; its hint | swaps |
 | Match strictness | "55% or closer"; "how similar each pick must sound" | the next step: 55, 60, 65, 70, 75, 55 (from the value shown) |
+| Smart filters | "Any", or what is set ("Relaxed · Instrumental"); "keeps every pick inside these moods" | the mood filter's editor (below) |
 | BPM continuity | a switch; "within 8 BPM, or half/double tempo" | switches it |
 | Harmonic mixing | a switch; "keys that mix well" | switches it |
 | Status | two lines (below) | nothing |
 
-- **Without a usable index** the four in between are dim, "needs an Auto
-  DJ index" on their second line; a tap gives the amber note "Needs an
-  Auto DJ index: a transfer to the card adds one". The switch and the
-  status stay live.
+- **Without a usable index** Anchor, Match strictness and the two
+  switches are dim, "needs an Auto DJ index" on their second line; a tap
+  gives the amber note "Needs an Auto DJ index: a transfer to the card
+  adds one". The switch, Smart filters and the status stay live.
+- **Smart filters** (docs/MOOD-FILTERS.md 4.4) lives by the card's mood
+  data, not the index: with none it is dim, "No mood data", and a tap
+  gives the amber note "No mood data: sync this card from mStream" (a
+  filter set before is kept, its picks unfiltered). With data and no
+  index Auto DJ can use, it stays live and the picks are random inside the
+  filter. Its value is "Any" with no group set (a level alone filters
+  nothing), else what is set, beside the title when it fits whole, else
+  on the second line in the hint's place, cut to it. A tap opens the
+  Albums list's editor (one screen of moods, MOOD-FILTERS.md 4.3, 7.1) in
+  Output's blue, counting tracks: "1,204 of 19,412 tracks". Each tap there
+  is applied and saved at once, its count the glue's; the cross closes
+  it, and a change settles then (9.6's toasts). Behind the library
+  update's fence the row keeps its last value and a tap says "Updating the
+  library: a moment".
 - **A dim row keeps its value.** Anchor's and Match strictness's values
   sit beside the title when they fit there, as on a live row. Otherwise
   the value takes the second line, in the reason's place
@@ -1181,7 +1205,19 @@ going"):
     Auto DJ index…";
   - no index, or none usable: why (6.6) over "picks are random";
   - held: "Waiting: Repeat One is on", "Waiting: sleep timer set to End of
-    queue" or "Paused: tracks failed to play", over the index's first line.
+    queue" or "Paused: tracks failed to play", over the index's first line;
+    a filter no track fits: "Waiting: no track fits the filters", in
+    amber, over the coverage once joined;
+  - with mood data on the card, the coverage adds it: "BPM 95% · key 97%
+    · mood 92%";
+  - a mood filter on (3.14), joined or with no index Auto DJ can use:
+    "1,204 of 19,412 tracks fit", or 1 to 50 (fewer than the track
+    cooldown: they repeat) "Only 37 tracks fit" in amber, over the coverage
+    ("They will repeat · BPM 95% · key 97%" for 1 to 50) once joined, else
+    over the index's first line. Found and Reading say what the index does,
+    as with no filter.
+- The first line is amber for the failure pause and the mood filter's
+  Waiting and few; the second is dim (`autodjview::statusAmber()`).
 - Switching on here with nothing queued and a usable index: "Auto DJ on:
   it follows the next track you play". Nothing starts.
 
@@ -1202,6 +1238,9 @@ The button:
 
 Under a mood filter its track is inside the filter (3.14). When no track
 with neighbours fits, it plays nothing, as when the draws find none.
+When no track on the card fits the filter, the empty states say "No track
+on this card fits these filters" and show [Open Library] alone
+(`autodjview::emptyNoFit()`; frame `dj-empty`).
 
 Its toast is "Auto DJ: {title}", with Undo. No track in the draws: "Found
 no track with Auto DJ neighbours: try again". During a library update it
@@ -1256,8 +1295,12 @@ empty Queue's Auto DJ button; a Clear's (the console's `qx`, `qu`).
 | A session's first pick was random: its track has no row (Stay on seed) | This track has no Auto DJ neighbours yet: the first pick becomes the seed | toast |
 | ... (Follow the vibe) | This track has no Auto DJ neighbours yet: the next track is random | toast |
 | Picks by id: no usable index (once a switch-on, or a boot) | No Auto DJ index: picks are random | toast |
+| A mood filter that 1 to 50 tracks fit (3.14) | Only 37 tracks fit: they will repeat | amber note |
+| ... changed while Auto DJ's pick up next fails it (D5) | Plays once, then the filters apply | toast |
+| ... a pick with no close match inside it (a jump) | No close match: any track that fits | toast |
 
-- One a pass: the most pressing, in the table's order.
+- One a pass: the most pressing, in the table's order. With no filter
+  the last three never come, and the toasts are as before.
 - **Two lines:** a toast too wide for one line ("Auto DJ from here: {title}",
   the no-neighbours toasts) splits at its ": ", the part before it in
   Small over the rest. Each line goes by the rows it inks with the
@@ -1287,11 +1330,36 @@ empty Queue's Auto DJ button; a Clear's (the console's `qx`, `qu`).
 - "No Auto DJ index" is said once per switch-on or boot, not once a
   session: every Play is a session.
 - **Under a mood filter** (3.14) a jump, a repeat or a re-pin says none of
-  these: a jump's anchors had lists, a repeat is for want of tracks that
-  fit, and the pin stays or moves onto the playing track. A pick by id with the index joined (a jump's track with
-  no row, or the only one that fits) isn't for want of an index, so it
-  says no "No Auto DJ index". The filter's own toasts are the Auto DJ
-  page's (MOOD-FILTERS.md 4.5).
+  the first five: a jump's anchors had lists, a repeat is for want of
+  tracks that fit, and the pin stays or moves onto the playing track. A
+  pick by id with the index joined (a jump's track with no row, or the
+  only one that fits) isn't for want of an index, so it says no "No Auto
+  DJ index".
+- **The filter's own three** (`autodjview::NewsWatch`; MOOD-FILTERS.md
+  4.5), only while Auto DJ is on:
+  - **Only {n} tracks fit:** when a change settles (the editor closed on
+    it, a `Dq`), at a switch on, and at the first appended pick after a
+    boot or after a Play that switched Auto DJ on. Then not again until
+    the filter changes, Auto DJ is switched off, or more than 50 fit (or
+    none) and then 50 or fewer again; not once a session. Its count is
+    the one at the moment it shows.
+  - **No close match:** at a pick that jumped (a repeat after a jump
+    keeps its code), once a session and again after a change settles.
+  - **Plays once:** when a change settles with Auto DJ's pick up next
+    outside the new filter. That pick stays and plays (D5).
+  - Each is raised only when nothing above it is said in the same pass.
+    Otherwise "Only {n} tracks fit" waits for the next appended pick and
+    "No close match" for the next pick that jumps; "Plays once" goes, its
+    moment past. So on a card with no index and 37 tracks inside the
+    filter, the first pick says "No Auto DJ index" and the next "Only 37
+    tracks fit".
+  - A change settled behind the library update's fence says nothing (its
+    count is from before the update): "Only {n} tracks fit" comes at a
+    pick after it.
+- **While the mood filters' editor is up** (Albums' or Auto DJ's), all of
+  Auto DJ's toasts wait until it closes, the failure pause too. Auto DJ's
+  editor closed on a change drops the filter's own that waited: the
+  change says its own, from its count.
 - Only a pick that was appended speaks; a refused one is tried again
   quietly.
 
@@ -1420,7 +1488,7 @@ files.
 | `test_autodj_trigger` | Every condition, the first that fails, the finished queue, the holds (a mood filter no track fits among them), `owed` only while joining, the failure pause |
 | `test_autodj_driver` | Sessions, steering, the cue, the marks across a read-back, refused and removed picks, the holds, the failure pause, the index arriving late, the seed before the join, the button's lookups, the refill wait, the dry run, the `D` parser; a quick skip's reason (before the join too); the Undo of "Auto DJ from here" and the button from a playing, paused, stopped, cued and empty queue, Auto DJ on and off before the tap; a slot whose CRC fails on the read ahead and again at the pick, named by that pick's pass once; a mood filter: the picks and the button inside it (the button with none drawing as before), the hold when no track fits (nothing owed), `Dq`'s parse, a filter changed keeping the session and the pick up next, `Dn`'s tallies under it |
 | `test_autodj_open` | What a failed open comes to: the tries, their waits, a remount's new count; over the real reader, a read that fails is always the card's fault and a bad file never is |
-| `test_ui_autodj` | The row's state, the Output line and its fallback, the dim rows, the strictness steps, the status lines, the empty-state button, the toasts' rules |
+| `test_ui_autodj` | The row's state, the Output line and its fallback, the dim rows, the strictness steps, the status lines, the empty-state button, the toasts' rules; under a mood filter the sheet's detail, Smart filters' value, the status lines and their amber, no second button when nothing fits, and the filter's three toasts (when each is said and said again, the order, one outranked waiting or going, no index with 37 fitting) |
 | `test_card_autodj` | The MPDJ v2 slots, header and selection |
 | `test_queue` | The quiet append (the listener's undo kept, its rank in the snapshot, at the cap), the play epoch, the snapshot writes under an hour of appends |
 | `test_playback` | The pick's gapless word, refused behind the fence, Repeat All, the holds, the cue, every Play and Clear bumping the epoch, natural ends; the Undo of a Play, Shuffle all's Play and a Clear from every play state (playing, paused, paused by the timer, cued by Auto DJ, stopped, finished, waiting for the headphones), never starting what was silent |

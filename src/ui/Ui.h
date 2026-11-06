@@ -327,9 +327,14 @@ public:
   void autoDjToast(const char* text, bool switchedOn);
   // What Auto DJ's loop step had to say (autodjview::News bits, main.cpp
   // after its step): one toast (autodjview::newsToast(): a note for the
-  // failure pause). While a toast with Undo is up, it waits until that
-  // goes (the failure pause doesn't), and an Undo tapped drops it.
-  void autoDjNews(uint8_t news);
+  // failure pause and for few tracks fitting its mood filter, `few` of
+  // them now: autodjview::fewCount()). While a toast with Undo is up, it
+  // waits until that goes (the failure pause doesn't), and an Undo tapped
+  // drops it. While the mood filters' editor is up, all of it waits until
+  // the editor goes, the failure pause too (MOOD-FILTERS.md 4.5); Auto
+  // DJ's editor closed on a change drops the filter's own news that waited
+  // (the change says its own, from its count).
+  void autoDjNews(uint8_t news, uint32_t few);
   // The Queue's entries that are Auto DJ's (its DJ marks): never marked as
   // a Library add, nor scrolled to (queueview::AddedMark).
   queueview::QuietKeys djKeys() const;
@@ -521,7 +526,7 @@ private:
   uint32_t lastContent_ = 0;
   uint32_t lastUpNext_ = 0;
   uint32_t lastDjAdds_ = 0;  // Auto DJ's appends the last pass saw (no badge flash for them)
-  uint8_t pendingNews_ = 0;  // Auto DJ's news held while an Undo toast is up (autoDjNews())
+  uint8_t pendingNews_ = 0;  // Auto DJ's news held while an Undo toast or the editor is up (autoDjNews())
   bool undoSwitchesDjOff_ = false;  // the toast's Undo also switches Auto DJ off (autoDjToast())
   uint32_t badgeUntilMs_ = 0;
   uint32_t nowMs_ = 0;

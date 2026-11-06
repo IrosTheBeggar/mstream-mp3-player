@@ -4,6 +4,7 @@
 #include "AutoDjView.h"
 
 #include <algorithm>
+#include <initializer_list>
 
 #include "FilterGrid.h"
 #include "MoodFilter.h"
@@ -238,9 +239,57 @@ bool emptyButton(const State& s, uint32_t libraryTracks) {
   return s.usable && libraryTracks > 0 && !emptyNoFit(s);
 }
 
+uint32_t fewCount(const State& s) { return s.on && s.moodOn && few(s) ? s.fit : 0; }
+
+namespace {
+
+constexpr uint8_t kOldNews = kNewsCued | kNewsPaused | kNewsNoNeighbours | kNewsSeedMoved | kNewsRandom;
+
+// The bits newsToast() answers before a mood filter's `bit`.
+uint8_t above(uint8_t bit) {
+  switch (bit) {
+    case kNewsFew: return kOldNews;
+    case kNewsOnce: return kOldNews | kNewsFew;
+    case kNewsJump: return kOldNews | kNewsFew | kNewsOnce;
+    default: return 0;
+  }
+}
+
+}  // namespace
+
+uint8_t NewsWatch::add(uint8_t bits) {
+  news_ = static_cast<uint8_t>(news_ | bits);
+  for (uint8_t b : {kNewsFew, kNewsOnce, kNewsJump}) {
+    if (!(news_ & b) || !(news_ & above(b))) continue;
+    // Outranked in this take (by this call's bits or an earlier call's):
+    // not raised. Few and Jump stay unsaid; Once goes.
+    news_ = static_cast<uint8_t>(news_ & ~b);
+    if (b == kNewsFew) fewSaid_ = false;
+    if (b == kNewsJump) jumpSaid_ = false;
+  }
+  return static_cast<uint8_t>(bits & news_);
+}
+
 uint8_t NewsWatch::switchedOn(bool usable) {
   randomSaid_ = !usable;
-  return usable ? 0 : kNewsRandom;
+  uint8_t news = usable ? 0 : kNewsRandom;
+  if (few_ && !fewSaid_) {
+    news |= kNewsFew;
+    fewSaid_ = true;
+  }
+  return add(news);
+}
+
+uint8_t NewsWatch::settled(bool on, bool known, bool outside) {
+  fewSaid_ = jumpSaid_ = false;  // (a changed filter: said again)
+  if (!known || !on) return 0;
+  uint8_t news = 0;
+  if (few_) {
+    news |= kNewsFew;
+    fewSaid_ = true;
+  }
+  if (outside) news |= kNewsOnce;
+  return add(news);
 }
 
 uint8_t NewsWatch::pass(const autodj::Pass& p, autodj::Mode mode, bool on) {
@@ -254,19 +303,29 @@ uint8_t NewsWatch::pass(const autodj::Pass& p, autodj::Mode mode, bool on) {
       // A mood filter's jump, repeat or re-pin (MOOD-FILTERS.md 6.2, 6.4)
       // says none of these: a jump's anchors had lists, a repeat is for
       // want of tracks that fit, the pin stays or moves onto the playing
-      // track. Their own toasts are S5's (4.5).
+      // track. A jump says its own (a repeat after one keeps its code).
+      if (k.jump != autodj::Jump::None && !jumpSaid_) {
+        news |= kNewsJump;
+        jumpSaid_ = true;
+      }
     } else if (k.noIndex && !k.byIdJoined) {
       if (!randomSaid_) news |= kNewsRandom;
       randomSaid_ = true;
     } else if (k.random && picks_ == 0) {
       news |= mode == autodj::Mode::Locked ? kNewsSeedMoved : kNewsNoNeighbours;
     }
+    // Few, while it holds and isn't said (the first pick after a boot or
+    // a Play that switched Auto DJ on; one outranked before).
+    if (on && few_ && !fewSaid_) {
+      news |= kNewsFew;
+      fewSaid_ = true;
+    }
     ++picks_;
   }
-  return news;
+  return add(news);
 }
 
-bool newsToast(uint8_t news, Toast* out) {
+bool newsToast(uint8_t news, Toast* out, uint32_t few) {
   if (!out) return false;
   if (news & kNewsPaused) {
     *out = Toast{S::toast_autodj_paused, true};
@@ -278,6 +337,12 @@ bool newsToast(uint8_t news, Toast* out) {
     *out = Toast{S::toast_autodj_no_neighbours, false};
   } else if (news & kNewsRandom) {
     *out = Toast{S::toast_autodj_random, false};
+  } else if ((news & kNewsFew) && few >= 1 && few <= autodj::kTrackCooldown) {
+    *out = Toast{S::toast_autodj_few, true, few};
+  } else if (news & kNewsOnce) {
+    *out = Toast{S::toast_autodj_plays_once, false};
+  } else if (news & kNewsJump) {
+    *out = Toast{S::toast_autodj_no_close, false};
   } else {
     return false;
   }

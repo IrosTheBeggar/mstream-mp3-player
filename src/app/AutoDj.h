@@ -149,8 +149,10 @@ public:
   // count from before it.
   uint32_t moodFit() const { return fit_; }
   // The filter's change is settled (the editor closed on it, or a Dq): a
-  // pick queued before it and outside it plays once (D5), said here.
-  // Behind the fence, nothing: the count is old (MOOD-FILTERS.md 4.5).
+  // pick queued before it and outside it plays once (D5), logged here; the
+  // UI's toasts (takeNews(), MOOD-FILTERS.md 4.5): 1 to 50 fit, else that
+  // pick's once, while on. Behind the fence nothing is said: the count is
+  // old (Few is due at a pick after it).
   void moodSettled();
   // "Auto DJ from here" on `track`; the empty states' button. False /
   // not Played: nothing played.
@@ -323,9 +325,9 @@ private:
   // main.cpp's.
   bool undoDropped_ = false;
   // The UI's: its news since takeNews() (autodjview::News), from the
-  // passes and the switch (NewsWatch: the toasts' rule, host-tested; it
-  // counts Auto DJ's appends too: no Queue badge flash for them).
+  // passes, the switch, the mood filter's count and its settled changes
+  // (NewsWatch: the toasts' rule, host-tested; it counts Auto DJ's appends
+  // too: no Queue badge flash for them).
   autodjview::NewsWatch newsWatch_;
-  uint8_t news_ = 0;
   char path_[TrackCatalog::kMaxPath] = "";
 };
