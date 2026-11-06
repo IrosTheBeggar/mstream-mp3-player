@@ -472,8 +472,8 @@ Before 2026-10-16 a row damaged at a pick had no line: only `D`'s
 ### 3.14 The mood filter
 
 docs/MOOD-FILTERS.md has the design (4.4, 6), its figures and its
-sessions. What the engine does with a filter (READ; host-tested, no
-device check yet):
+sessions. What the engine does with a filter (READ; host-tested, and
+checked on the Core2 2026-11-06, MOOD-FILTERS.md 9.8):
 
 - **The filter:** 11 bits, `q` (MOOD-FILTERS.md 5.4), set by `Dq` and
   saved (section 8), over the library's mood words (`library.idx` v7, a
@@ -503,8 +503,8 @@ device check yet):
 - **No track fits:** the trigger's ninth condition (4.1), a hold. Auto DJ
   adds nothing, reads Waiting, and the status says "Waiting: no track
   fits the filters". The glue counts the tracks inside the filter
-  (`AutoDj::stepMood()`, one pass over the words, 2-5 ms at 19,400 tracks,
-  MODELLED) when `q` changes and when the library comes back (the first
+  (`AutoDj::stepMood()`, one pass over the words, 4.8-5.6 ms at 19,413
+  tracks, MEASURED) when `q` changes and when the library comes back (the first
   pass, each fence's end); not by the library's stamp, track count or
   pointer, which a score-only rebuild leaves as they were. Behind the
   fence the filter is off and the count kept.
