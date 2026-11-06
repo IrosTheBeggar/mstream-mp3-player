@@ -21,7 +21,8 @@ tests the reference itself.
   selFloor and each row's used slot entries as hex, 6 digits an entry (the
   row, then the level).
 - `sessions`: each a table (none: no index), the maps (`trackToRow`,
-  `rowToTrack`, 65535 none), the filter words (bpm | camelot << 8 |
+  many to one in mood-shared-rows, and `rowToTrack`, the track a pick of
+  the row plays; 65535 none), the filter words (bpm | camelot << 8 |
   artist16 << 16; BPM_ANALYSED and "present" in bits 13 and 15), the
   library's mood words (`moods`, a u16 a track as `library.idx` v7 holds
   them, docs/MOOD-FILTERS.md 5.4; left out: no mood data), the

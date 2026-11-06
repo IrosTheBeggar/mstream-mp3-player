@@ -821,7 +821,7 @@ Pick Engine::moodPick(const Settings& s, const PickIn& in, const Scope& sc, Pick
   });
   if (t != kNoTrackId) {
     out.jump = Jump::NoRow;
-    out.noIndex = true;
+    out.noIndex = out.byIdJoined = true;
     out.ok = true;
     out.track = t;
     out.row = kNoRow;
@@ -946,6 +946,7 @@ Pick Engine::byId(const Settings& s, const PickIn& in, Pick out) {
 Pick Engine::moodById(const Settings& s, const PickIn& in, const MoodView& mood, Pick out) {
   out.random = true;
   out.noIndex = true;
+  out.byIdJoined = in.maps != nullptr;  // (moodPick's 9: not for want of an index)
   const uint32_t n = in.libraryTracks;
   const uint32_t playing = in.playingTrack;
   uint32_t t = oneOf(n, [&](uint32_t x) { return x != playing && mood.passes(x) && !ses_.ids.has(x); });

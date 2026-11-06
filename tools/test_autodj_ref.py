@@ -16,10 +16,11 @@ before repeating (the device's case, dry and loosened at once, every
 listed row cooled), dry and random picks, the read budget, damaged,
 failed and broken slots, the stream, a mood filter's candidates and its
 own ladder: jumps that keep the classes, the scan's 64, repeats oldest
-first, the only track that fits, nothing that fits; the button inside it;
-Stay on seed's re-pin in the read budget, a moved pin gone at a quick skip,
-a seed's kept); and the fixture up to date, its first 26 sessions and their
-seven tables frozen by hash, and its first 35, every pick under a filter
+first, the only track that fits, nothing that fits, the scan past a shared
+row's copies and the playing row; the button inside it; Stay on seed's
+re-pin in the read budget, a moved pin gone at a quick skip, a seed's
+kept); and the fixture up to date, its first 26 sessions and their seven
+tables frozen by hash, and its first 35 and 38, every pick under a filter
 inside it, and 9.8's coverage.
 """
 import hashlib
@@ -779,15 +780,38 @@ class EngineRules(unittest.TestCase):
         self.assertEqual(p.candidates, 2)                   # rows 3 and 5
         self.assertIn(p.row, (3, 5))
         # The scan the same (6.3): row 0 lists only row 1, sad, so the pick
-        # jumps; track 9 is a hit, but its row's track fails.
+        # jumps; track 9 is a hit, but its row's track fails. Track 10 on
+        # row 3, happy as track 3 is: two hits of one row, kept once.
         lists = [[(1, 200)]] + [[(0, 200)] for _ in range(5)]
-        maps.mood = A.MoodView(maps.mood.words, M.pack("happy"))
+        maps = table(lists, tracks=[0, 1, 2, 3, 4, 5, A.NO_ROW, A.NO_ROW, A.NO_ROW, 2, 3])
+        maps.mood = A.MoodView([HAPPY, SAD, SAD, HAPPY, SAD, HAPPY, 0, 0, 0, HAPPY, HAPPY], M.pack("happy"))
+        rows = set()
         for seed in range(12):
             e = A.Engine()
             e.new_session(seed, 0, maps)
             p = e.pick(A.Settings(), self.pin(maps, A.SlotSource(lists), 0))
             self.assertEqual((p.jump, p.candidates), (A.J_NO_CANDIDATE, 2))
-            self.assertIn(p.row, (3, 5))
+            self.assertIn((p.row, p.track), ((3, 3), (5, 5)))
+            rows.add(p.row)
+        self.assertEqual(rows, {3, 5})
+
+    def test_the_scan_skips_the_playing_row(self):
+        # Stay on seed, the pin (row 0) damaged: no anchor, so the random
+        # pick, the scan (6.3), skips the pin's row and the playing track's,
+        # here the listener's track 3, not the pin: rows 1-8 are happy, so 7
+        # candidates; the pick's row the pin from then.
+        lists = star(10)
+        maps = table(lists)
+        maps.mood = A.MoodView([SAD] + [HAPPY] * 8 + [SAD], M.pack("happy"))
+        for seed in range(12):
+            src = A.SlotSource(lists, {"damaged": {0}})
+            e = A.Engine()
+            e.new_session(seed, 0, maps)
+            e.track_started(3, maps, False)
+            p = e.pick(A.Settings(A.LOCKED), self.pin(maps, src, 3))
+            self.assertEqual((p.ok, p.random, p.jump, p.reads, p.candidates), (True, True, A.J_NONE, 2, 7))
+            self.assertNotIn(p.row, (0, 3, 9))
+            self.assertEqual(e.pin, p.row)
 
     def jump_table(self):
         """Row 0 lists rows 1-4, of which only row 1 is happy; rows 5-8, happy,
@@ -1110,6 +1134,10 @@ FROZEN_TABLES_SHA = "6f876196d0be133cf4bc669a8a5f6cbf70497fc7cf30b4e340af71e8d9a
 # after them: none of these reaches it, 6.4).
 FROZEN_BEFORE_REPIN = 35
 FROZEN_BEFORE_REPIN_SHA = "9142951641b5d03e59d7caf6a14fceaff7e7f120ff98ae42f02337132d283304"
+# ... and the first 38, as at S4's commit 7 (mood-shared-rows came after
+# the review).
+FROZEN_BEFORE_SHARED = 38
+FROZEN_BEFORE_SHARED_SHA = "795ea5234ed168b5282265bfe13f9a884b0fddeec09fc11b826a6de58ebea747"
 
 
 class Fixture(unittest.TestCase):
@@ -1119,9 +1147,10 @@ class Fixture(unittest.TestCase):
 
     def test_the_fixture_covers_the_rules(self):
         doc = json.loads((FIX / "autodj" / "sessions.json").read_text(encoding="utf-8"))
-        self.assertEqual(len(doc["sessions"]), 38)
+        self.assertEqual(len(doc["sessions"]), 39)
         self.assertEqual(digest(doc["sessions"][:FROZEN_SESSIONS]), FROZEN_SESSIONS_SHA)
         self.assertEqual(digest(doc["sessions"][:FROZEN_BEFORE_REPIN]), FROZEN_BEFORE_REPIN_SHA)
+        self.assertEqual(digest(doc["sessions"][:FROZEN_BEFORE_SHARED]), FROZEN_BEFORE_SHARED_SHA)
         self.assertEqual(digest({n: doc["tables"][n] for n in FROZEN_TABLES}), FROZEN_TABLES_SHA)
         picks = [e["expect"] for s in doc["sessions"] for e in s["events"] if e["op"] == "pick"]
         self.assertGreaterEqual(len(picks), 300)
@@ -1271,6 +1300,39 @@ class Fixture(unittest.TestCase):
         ia = inside["mood-index-away"]
         self.assertEqual((len(ia), repins("mood-index-away"), count("mood-index-away", "noIndex")), (18, 3, 7))
         self.assertEqual([e["on"] for e in by["mood-index-away"]["events"] if e["op"] == "index"], [0, 1, 0, 1])
+        # Shared rows (6.3's leak guard): copies on rows other tracks hold,
+        # inside the mood with their row's track, or with it outside; rows
+        # whose track isn't their lowest id. Every pick plays a row's track
+        # (or one with no row, by id), so it is inside the mood (above).
+        sh = by["mood-shared-rows"]
+        t2r, r2t, words = sh["trackToRow"], sh["rowToTrack"], sh["moods"]
+        copies = [t for t in range(len(t2r)) if t2r[t] != A.NO_ROW and r2t[t2r[t]] != t]
+        self.assertGreaterEqual(len(copies), 70)
+        self.assertTrue(any(r2t[t2r[t]] > t for t in copies))
+        for q in (e["q"] for e in sh["events"] if e["op"] == "filter"):
+            self.assertTrue(any(M.matches(words[t], q) and M.matches(words[r2t[t2r[t]]], q) for t in copies))
+            self.assertTrue(any(M.matches(words[t], q) and not M.matches(words[r2t[t2r[t]]], q) for t in copies))
+        self.assertEqual(len(inside["mood-shared-rows"]), 110)
+        self.assertEqual([count("mood-shared-rows", "jump", j) for j in (1, 2, 3)], [4, 19, 2])
+        self.assertEqual((count("mood-shared-rows", "rep"), repins("mood-shared-rows")), (17, 10))
+        # The first pick of the sessions from a seed that lists nothing, the
+        # listener's copy playing: outside the mood on a row whose track is
+        # inside, a re-pin; inside on a row whose track isn't, a jump. Then
+        # the first after each reopen, the pin damaged.
+        ev = sh["events"]
+        q = [e["q"] for e in ev if e["op"] == "filter"][-1]
+        marks = [i for i, e in enumerate(ev) if e["op"] == "reopen" or (e["op"] == "new" and e["seed"] > 4800)]
+        fits = []
+        for i in marks:
+            e = next(e for e in ev[i:] if e["op"] == "pick")
+            fits.append((M.matches(words[e["playing"]], q), M.matches(words[r2t[t2r[e["playing"]]]], q), e["expect"]))
+        self.assertEqual([(a, b, x.get("repin", 0), x.get("jump", 0)) for a, b, x in fits[:2]],
+                         [(False, True, 1, 0), (True, False, 0, 1)])
+        # A damaged pin, the listener's copy inside the mood playing: the
+        # scan, past both rows.
+        for a, b, x in fits[2:]:
+            self.assertEqual((a, b, x.get("random"), x.get("reads"), x.get("cand")), (True, True, 1, 2, 49))
+        self.assertEqual((len(fits), sh["stats"]["damaged"]), (5, 3))
 
     def test_the_mood_coverage(self):
         # MOOD-FILTERS.md 9.8's coverage, required from commit 5: under a

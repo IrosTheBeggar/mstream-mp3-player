@@ -237,6 +237,10 @@ struct Pick {
   bool loosened = false;    // that pool was all in the track cooldown: the kDry best sums outside it
   bool random = false;      // no anchor's list: drawn over the rows (or by id)
   bool noIndex = false;     // by track id
+  // ... with the index joined: a mood filter's (MOOD-FILTERS.md 6.2, 7 and
+  // 9), not for want of an index (the toasts', the pick line's; not in the
+  // fixture). (In a padding byte: Pick stays 40 B.)
+  bool byIdJoined = false;
   bool imputedTempo = false, imputedKey = false;  // D3 drew its status
   bool tempoBreak = false;  // a known BPM outside the tight windows of a known reference
   bool keyBreak = false;    // a known key outside the anchor's 6 codes

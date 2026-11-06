@@ -156,8 +156,11 @@ bool newsToast(uint8_t news, Toast* out);
 // usable index, once a switch on or a boot (said at the switch on when it
 // has none), not once a session: every Play is a session, and a card with
 // no index would say it at every album's last track. Only picks that
-// were appended speak (one the queue refused is tried again). And Auto
-// DJ's appends, counted (State::adds: no Queue badge flash).
+// were appended speak (one the queue refused is tried again). A mood
+// filter's jumps, repeats and re-pins say neither, and its picks by id
+// with the index joined (Pick::byIdJoined) aren't for want of one
+// (MOOD-FILTERS.md 4.5: their own toasts are S5's). And Auto DJ's appends,
+// counted (State::adds: no Queue badge flash).
 class NewsWatch {
 public:
   // A session began (every one: the switch on, a Play, the button, "Auto

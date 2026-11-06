@@ -1112,18 +1112,24 @@ def encode_lists(lists):
     return ["".join("%04x%02x" % (r, lv) for r, lv in lst) for lst in lists]
 
 
-def make_maps(g, rows, extra, unmapped, base_filters, drop_bpm=0, drop_key=0):
+def make_maps(g, rows, extra, unmapped, base_filters, drop_bpm=0, drop_key=0, shared=0):
     """Tracks for the table's rows in a shuffled order, `extra` tracks with no
     row among them, `unmapped` rows with no track (per mille); BPMs and keys
-    dropped on a share of rows (per mille)."""
+    dropped on a share of rows (per mille). `shared` more tracks (per mille
+    of the rows mapped) on rows another track holds: trackToRow many to one,
+    and the row's track (rowToTrack's) the first of its files the join finds,
+    the smallest path hash (AutoDjJoin.cpp), so any of them."""
     mapped = [r for r in range(rows) if g.below(1000) >= unmapped]
     tracks = mapped + [NO_ROW] * (len(mapped) * extra // 1000)
+    if shared:
+        tracks += [mapped[g.below(len(mapped))] for _ in range(len(mapped) * shared // 1000)]
     for i in range(len(tracks) - 1, 0, -1):     # Fisher-Yates from the end
         j = g.below(i + 1)
         tracks[i], tracks[j] = tracks[j], tracks[i]
     row_to_track = [NO_ROW] * rows
+    hashes = [g.below(1 << 30) for _ in tracks] if shared else None
     for t, r in enumerate(tracks):
-        if r != NO_ROW:
+        if r != NO_ROW and (hashes is None or row_to_track[r] == NO_ROW or hashes[t] < hashes[row_to_track[r]]):
             row_to_track[r] = t
     filters = []
     for f in base_filters:
@@ -1347,8 +1353,8 @@ def scenes():
     g = Pcg32(20261013, SCENE_STREAM)
     both = Settings(ROLLING, 55, True, True)
 
-    def maps_for(t, extra=100, unmapped=30, drop_bpm=0, drop_key=0):
-        return make_maps(g, t["rows"], extra, unmapped, t["filters"], drop_bpm, drop_key)
+    def maps_for(t, extra=100, unmapped=30, drop_bpm=0, drop_key=0, shared=0):
+        return make_maps(g, t["rows"], extra, unmapped, t["filters"], drop_bpm, drop_key, shared)
 
     # 1. The defaults (D2: both off), Follow the vibe, the listener's tracks and skips.
     sc = Scene("defaults-rolling", mid, "autodj-mid", maps_for(mid), seed=11,
@@ -1961,6 +1967,65 @@ def scenes():
     sc.start(sc.playing, True)
     sc.run(lock, 4)
     out.append(sc)
+
+    # 39. Shared rows under a mood filter (MOOD-FILTERS.md 6.3: trackToRow is
+    # many to one, and a pick of a row plays its track): a quarter more tracks
+    # on rows other tracks hold, the row's track any of them, a copy's word
+    # its row's track's half the time (the same song). The runs, the scan
+    # (each row once, and only if its own track passes), the repeats and the
+    # re-pin (6.4) test the row's track, not the copy. Stay on seed with its
+    # pin damaged and the listener's copy inside the mood playing: the scan
+    # skips that row as well as the pin's.
+    m = maps_for(syn, shared=250)
+    words = mood_words(g, m.tracks)
+    for t in range(m.tracks):
+        r = m.track_to_row[t]
+        if r != NO_ROW and m.row_to_track[r] != t and g.below(2) == 0:
+            words[t] = words[m.row_to_track[r]]
+    sc = Scene("mood-shared-rows", syn, "syn", m, seed=48, words=words,
+               note="a quarter more tracks on rows other tracks hold, under Happy and Party, then a narrow Strict "
+                    "filter, then Relaxed and Vocals: jumps whose scan meets a row twice (kept once) or a copy "
+                    "whose row's track fails (left out); repeats; Stay on seed's re-pins onto the listener's copy, "
+                    "by its row's track; a damaged pin with the listener's copy inside the mood playing: the scan "
+                    "skips its row")
+    sc.filter(moodfilter.pack("happy", tags=("party",)))
+    sc.new(4800, sc.user_track())
+    sc.run(Settings(ROLLING, 60, True, True), 50, user=80, skips=60,
+           flips=[Settings(ROLLING, 60, True, True), Settings(ROLLING, 70), Settings(ROLLING, 55, True, False)])
+    sc.filter(moodfilter.pack("happy", "relaxed", "vocals", level="strict"))
+    sc.run(Settings(ROLLING, 60, True, True), 25, user=150)
+    sc.filter(moodfilter.pack(energy="relaxed", voice="vocals"))
+    sc.mode()
+    sc.run(lock, 20, user=60, flips=flips)
+
+    def copy_of(inside, row_inside, not_row=NO_ROW):
+        """A track on a row another track holds, not cooled by id and not on
+        `not_row`: inside the mood or not, its row's track inside it or not."""
+        return next(t for t in range(m.tracks) if m.track_to_row[t] not in (NO_ROW, not_row) and
+                    m.row_to_track[m.track_to_row[t]] != t and sc.mood.passes(t) == inside and
+                    sc.mood.passes(m.row_to_track[m.track_to_row[t]]) == row_inside and t not in sc.e.ids)
+
+    # From a seed that lists nothing, the listener's copy playing: outside
+    # the mood on a row whose track is inside (a re-pin), then inside it on
+    # a row whose track isn't (no re-pin: a jump).
+    seed = m.row_to_track[next(r for r in bare if m.row_to_track[r] != NO_ROW)]
+    for n, (inside, row_inside) in enumerate(((False, True), (True, False))):
+        sc.new(4801 + n, seed)
+        sc.start(copy_of(inside, row_inside), False)
+        p = sc.pick(lock)
+        sc.left(sc.playing, 150000, True)
+        sc.start(p.track, True)
+        sc.run(lock, 2)
+    for _ in range(3):
+        sc.set_faults(damaged=[sc.e.pin])
+        sc.reopen()
+        sc.left(sc.playing, 150000, True)
+        sc.start(copy_of(True, True, sc.e.pin), False)
+        p = sc.pick(lock)
+        sc.left(sc.playing, 150000, True)
+        sc.start(p.track, True)
+        sc.run(lock, 2)
+    out.append(sc)
     return tables, out
 
 
@@ -1989,7 +2054,8 @@ tests the reference itself.
   selFloor and each row's used slot entries as hex, 6 digits an entry (the
   row, then the level).
 - `sessions`: each a table (none: no index), the maps (`trackToRow`,
-  `rowToTrack`, 65535 none), the filter words (bpm | camelot << 8 |
+  many to one in mood-shared-rows, and `rowToTrack`, the track a pick of
+  the row plays; 65535 none), the filter words (bpm | camelot << 8 |
   artist16 << 16; BPM_ANALYSED and "present" in bits 13 and 15), the
   library's mood words (`moods`, a u16 a track as `library.idx` v7 holds
   them, docs/MOOD-FILTERS.md 5.4; left out: no mood data), the

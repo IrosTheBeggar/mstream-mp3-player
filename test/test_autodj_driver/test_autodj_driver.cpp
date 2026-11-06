@@ -27,8 +27,9 @@
 //   quick skip's row (none for a file the index doesn't have);
 // - a slot whose CRC fails again at a pick: the pass names its row, once;
 // - a mood filter given as the firmware gives it: the picks inside it; the
-//   empty states' button inside it, joined and before a join, and with no
-//   filter as before there was one; a filter no track fits holds, and owes
+//   empty states' button inside it, joined and before a join (its
+//   reservoir keeping each track alike), and with no filter as before there
+//   was one; a filter no track fits holds, and owes
 //   nothing; the filter as a setting (Dq): refused when invalid, a change
 //   keeping the session and the pick up next; Dn's tallies under it.
 // An AutoDJ index written with mpdj::write for a made-up library, joined
@@ -41,6 +42,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <memory>
 #include <set>
 #include <string>
@@ -1698,6 +1700,59 @@ void test_the_button_inside_the_filter() {
   TEST_ASSERT_FALSE(r.dj.surprise(r.index()).ok);
 }
 
+// The button's reservoir before a join (MOOD-FILTERS.md 6.3): of 9 tracks
+// inside the mood, kSurpriseTries (8) kept, each with the same odds. So each,
+// alone with a row, is the button's track 8 times in 9 (when it is kept;
+// else 8 lookups and none), and with every one with a row each is a ninth.
+// (The Driver's own xorshift: the counts repeat. 6 standard deviations.)
+void test_the_buttons_reservoir_keeps_each_track_alike() {
+  auto wordOf = [](double happy) {
+    const double scores[moodfilter::kHeads] = {0.5, happy, 1 - happy, 0.5, 0.5, 0.5, 0.5, 0.1};
+    uint8_t tail[8];
+    moodfilter::tailOf(scores, tail);
+    return moodfilter::wordOfTail(tail);
+  };
+  const uint32_t n = 40;
+  std::vector<uint16_t> words(n, wordOf(0.1));
+  std::vector<uint32_t> inside;
+  for (uint32_t t = 2; inside.size() < 9; t += 4) {
+    words[t] = wordOf(0.8);
+    inside.push_back(t);
+  }
+  moodfilter::Filter f;
+  f.valence = moodfilter::Scale::First;
+  const autodj::MoodView mood(words.data(), n, f.pack());
+  struct Only {
+    uint32_t track;  // the one with a row (kNoTrackId: every one)
+  };
+  auto hasRow = [](uint32_t t, void* ctx) {
+    const uint32_t only = static_cast<Only*>(ctx)->track;
+    return only == autodj::kNoTrackId || t == only;
+  };
+  Driver d;
+  const int trials = 2700;
+  for (uint32_t one : inside) {
+    Only o{one};
+    int got = 0;
+    for (int i = 0; i < trials; ++i) {
+      uint8_t tries = 0;
+      const uint32_t t = d.surpriseTrack(n, hasRow, &o, &tries, mood);
+      TEST_ASSERT_TRUE(t == one || (t == autodj::kNoTrackId && tries == autodj::kSurpriseTries));
+      got += t == one;
+    }
+    TEST_ASSERT_INT_WITHIN(100, trials * 8 / 9, got);  // (sd 16)
+  }
+  Only all{autodj::kNoTrackId};
+  std::map<uint32_t, int> each;
+  for (int i = 0; i < 9 * 1000; ++i) {
+    uint8_t tries = 0;
+    ++each[d.surpriseTrack(n, hasRow, &all, &tries, mood)];
+    TEST_ASSERT_EQUAL_UINT8(1, tries);
+  }
+  TEST_ASSERT_EQUAL(9, each.size());
+  for (uint32_t t : inside) TEST_ASSERT_INT_WITHIN(180, 1000, each[t]);  // (sd 30)
+}
+
 // The button with no filter draws as today (MOOD-FILTERS.md 6.3, 6.6): a
 // level alone, or a filter with no words, gives the same tracks, the same
 // lookups and the same draws as no filter, joined or not.
@@ -2031,6 +2086,7 @@ int main(int, char**) {
   RUN_TEST(test_a_seed_before_the_join_is_the_pin);
   RUN_TEST(test_the_button_looks_tracks_up_by_their_path);
   RUN_TEST(test_the_button_inside_the_filter);
+  RUN_TEST(test_the_buttons_reservoir_keeps_each_track_alike);
   RUN_TEST(test_the_button_with_no_filter_draws_as_today);
   RUN_TEST(test_runs_are_made_again_for_new_maps);
   RUN_TEST(test_a_mood_filter_keeps_the_picks_inside_it);

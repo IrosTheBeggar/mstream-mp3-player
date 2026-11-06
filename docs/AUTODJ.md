@@ -1286,6 +1286,12 @@ empty Queue's Auto DJ button; a Clear's (the console's `qx`, `qu`).
   pause doesn't wait). An Undo tap, or Auto DJ switched off, drops them.
 - "No Auto DJ index" is said once per switch-on or boot, not once a
   session: every Play is a session.
+- **Under a mood filter** (3.14) a jump, a repeat or a re-pin says none of
+  these: a jump's anchors had lists, a repeat is for want of tracks that
+  fit, and the pin stays or moves onto the playing track. A pick by id with the index joined (a jump's track with
+  no row, or the only one that fits) isn't for want of an index, so it
+  says no "No Auto DJ index". The filter's own toasts are the Auto DJ
+  page's (MOOD-FILTERS.md 4.5).
 - Only a pick that was appended speaks; a refused one is tried again
   quietly.
 
@@ -1331,7 +1337,8 @@ output or the volume; scripts drive them in silent test mode (`z`).
 - **The pick line:** `[dj] pick: <path> (row R, level L, class C:
   cooldown c, rank r; N candidates, G gated, I in its class; R reads; T
   ms, reads T' ms)`, then tags: `[dry: the 50 closest]`, `[loosened: …]`,
-  `[random]`, `[by track id: no index]`, `[tempo drawn]`, `[key drawn]`,
+  `[random]`, `[by track id: no index]` (`[by track id]` under a mood
+  filter with the index joined), `[tempo drawn]`, `[key drawn]`,
   `[tempo break]`, `[key break]`, then a mood filter's (3.14) `[re-pinned:
   …]`, `[jump: nothing listed fits the filter]`, `[jump: all listed that
   fits played lately]`, `[jump: a track with no row, by id]`, `[a repeat:
@@ -1387,13 +1394,14 @@ output or the volume; scripts drive them in silent test mode (`z`).
   - 8 tables: 4 goldens of `test/fixtures/card/golden`, 4 synthetic (one
     for dry ties, one that starves, `islands` for the mood filter's
     jumps);
-  - 38 sessions: 1,850 picks and 1,551 reads ahead, with listener tracks,
+  - 39 sessions: 1,960 picks and 1,653 reads ahead, with listener tracks,
     quick skips, Anchor changes, damaged, flaky, failed and broken slots,
     the index going and coming, reopens and renumbers, every pick's
     expected fields and the counters at the end. The first 26 (1,151
     picks, 956 reads ahead) are from before the mood filter, and
-    `tools/test_autodj_ref.py` holds them by hash; the other 12 run under
-    one (3.14; docs/MOOD-FILTERS.md 9.8). 871,028 B.
+    `tools/test_autodj_ref.py` holds them by hash; the other 13 run under
+    one (3.14; docs/MOOD-FILTERS.md 9.8), the last with rows that several
+    tracks share (`trackToRow` many to one). 915,293 B.
   - Its README has the format.
 - **`tools/test_autodj_ref.py`** tests the reference itself (the stream,
   the tiers against a port of mStream's waterfall, each rule, the fixture

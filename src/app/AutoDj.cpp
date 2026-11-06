@@ -830,7 +830,8 @@ void AutoDj::logPickLine(const Pass& p, const char* how) {
                 k.dry ? " [dry: the 50 closest]" : "",
                 k.loosened ? " [loosened: the gate's rows all played lately: the 50 closest not]" : "",
                 k.random && !k.noIndex ? " [random]" : "",
-                k.noIndex ? " [by track id: no index]" : "", k.imputedTempo ? " [tempo drawn]" : "",
+                !k.noIndex ? "" : k.byIdJoined ? " [by track id]" : " [by track id: no index]",
+                k.imputedTempo ? " [tempo drawn]" : "",
                 k.imputedKey ? " [key drawn]" : "", k.tempoBreak ? " [tempo break]" : "",
                 k.keyBreak ? " [key break]" : "",
                 // (A mood filter's, MOOD-FILTERS.md 6.2-6.4: none without one.)

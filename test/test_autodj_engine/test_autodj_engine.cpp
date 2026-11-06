@@ -460,6 +460,9 @@ void test_sessions_match_the_reference() {
         const int readsBefore = reader.reads;
         const Pick p = op == "pick" ? e.pick(s, in) : e.surprise(s, in);
         expectPick(w, ev["expect"], p);
+        // (Not in the fixture: by id with the index joined is a mood
+        // filter's, every one of its picks by id with the maps.)
+        TEST_ASSERT_EQUAL_MESSAGE(p.noIndex && maps && maps->mood.on(), p.byIdJoined, w.msg("byIdJoined").c_str());
         TEST_ASSERT_EQUAL_MESSAGE(p.reads, reader.reads - readsBefore, w.msg("reader's reads").c_str());
         TEST_ASSERT_TRUE(p.reads <= kReadsPerPick);
         if (op == "pick" && !lazy) ++picks;
@@ -478,7 +481,7 @@ void test_sessions_match_the_reference() {
                 static_cast<unsigned>(sessions), static_cast<unsigned>(picks), static_cast<unsigned>(prefetches));
   TEST_MESSAGE(line);
   TEST_ASSERT_GREATER_OR_EQUAL(300, picks);
-  TEST_ASSERT_GREATER_OR_EQUAL(38, sessions);
+  TEST_ASSERT_GREATER_OR_EQUAL(39, sessions);
 }
 
 // D2: BPM continuity and Harmonic mixing off by default (the design's 4.1
@@ -1182,11 +1185,26 @@ void test_a_filter_changed_remakes_the_runs() {
     p = c->pick(settings(), t.in(4));
     TEST_ASSERT_EQUAL(1, p.track % 2);  // the odd tracks are happy now
   }
+  // Other words (a block at another address), the same q: the print tells,
+  // with no mapsChanged().
+  std::vector<uint16_t> other;
+  for (uint16_t w : words) other.push_back(w == kHappy ? kSad : kHappy);
+  m->mood = MoodView(other.data(), 30, kHappyQ);
+  remade = 0;
+  while (e->runDue(settings(), *m, k, &row)) {
+    e->makeRun(row, *m, k);
+    ++remade;
+  }
+  TEST_ASSERT_EQUAL(5, remade);
+  c = engine();
+  c->copySession(*e);
+  TEST_ASSERT_EQUAL(0, c->pick(settings(), t.in(4)).track % 2);
 }
 
 // Tracks 2 and 9 share row 2, whose track (rowToTrack's, the one a pick of
 // it plays) is 2: sad, so under Happy the row is no candidate though track 9
-// is happy (MOOD-FILTERS.md 6.3: testing the track alone could leak).
+// is happy (MOOD-FILTERS.md 6.3: testing the track alone could leak). In the
+// scan, track 10 shares row 3 with track 3, both happy: the row once.
 void test_a_shared_row_is_tested_by_its_first_track() {
   Table t(star(6), {}, {0, 1, 2, 3, 4, 5, kNoRow, kNoRow, kNoRow, 2});
   TEST_ASSERT_EQUAL(2, t.maps.r2t[2]);
@@ -1201,15 +1219,46 @@ void test_a_shared_row_is_tested_by_its_first_track() {
     TEST_ASSERT_TRUE(p.row == 3 || p.row == 5);
   }
   // The scan the same (6.3): row 0 lists only row 1, sad, so the pick
-  // jumps; track 9 is a hit, but its row's track fails.
-  t.lists[0] = {{1, 200}};
+  // jumps; track 9 is a hit, but its row's track fails; tracks 3 and 10 are
+  // two hits of row 3, kept once.
+  Table u(star(6), {}, {0, 1, 2, 3, 4, 5, kNoRow, kNoRow, kNoRow, 2, 3});
+  u.lists[0] = {{1, 200}};
+  const std::vector<uint16_t> uw = {kHappy, kSad, kSad, kHappy, kSad, kHappy, 0, 0, 0, kHappy, kHappy};
+  u.maps.m.mood = MoodView(uw.data(), static_cast<uint32_t>(uw.size()), kHappyQ);
+  std::set<uint16_t> rows;
   for (uint32_t seed = 0; seed < 12; ++seed) {
     auto e = engine();
-    e->newSession(seed, 0, &t.maps.m);
-    const Pick p = e->pick(settings(), t.in(0));
+    e->newSession(seed, 0, &u.maps.m);
+    const Pick p = e->pick(settings(), u.in(0));
     TEST_ASSERT_TRUE(p.jump == Jump::NoCandidate);
     TEST_ASSERT_EQUAL(2, p.candidates);
-    TEST_ASSERT_TRUE(p.row == 3 || p.row == 5);
+    TEST_ASSERT_TRUE((p.row == 3 && p.track == 3) || (p.row == 5 && p.track == 5));
+    rows.insert(p.row);
+  }
+  TEST_ASSERT_EQUAL(2, rows.size());
+}
+
+// Stay on seed, its pin (row 0) damaged: no anchor, so the random pick, the
+// scan (MOOD-FILTERS.md 6.3), skips the pin's row and the playing track's,
+// the listener's track 3 here, not the pin. Rows 1-8 are happy: 7
+// candidates, and the pick's row the pin from then.
+void test_the_scan_skips_the_playing_row() {
+  Table t(star(10));
+  std::vector<uint16_t> words(10, kHappy);
+  words[0] = words[9] = kSad;
+  t.maps.m.mood = MoodView(words.data(), 10, kHappyQ);
+  for (uint32_t seed = 0; seed < 12; ++seed) {
+    t.reader.damaged = {0};
+    t.reader.count.clear();
+    auto e = engine();
+    e->newSession(seed, 0, &t.maps.m);
+    e->trackStarted(3, &t.maps.m, false);
+    const Pick p = e->pick(settings(Mode::Locked), t.in(3));
+    TEST_ASSERT_TRUE(p.ok && p.random && p.jump == Jump::None);
+    TEST_ASSERT_EQUAL(2, p.reads);
+    TEST_ASSERT_EQUAL(7, p.candidates);
+    TEST_ASSERT_TRUE(p.row != 0 && p.row != 3 && p.row != 9);
+    TEST_ASSERT_EQUAL(p.row, e->pin());
   }
 }
 
@@ -1348,7 +1397,7 @@ void test_a_track_with_no_row_before_repeats() {
   TEST_ASSERT_TRUE(got[0].track != got[1].track && got[0].track + got[1].track == 3);  // 1 and 2
   TEST_ASSERT_EQUAL(6, got[2].track);
   TEST_ASSERT_EQUAL_HEX16(kNoRow, got[2].row);
-  TEST_ASSERT_TRUE(got[2].jump == Jump::NoRow && got[2].noIndex && !got[2].repeated);
+  TEST_ASSERT_TRUE(got[2].jump == Jump::NoRow && got[2].noIndex && got[2].byIdJoined && !got[2].repeated);
   TEST_ASSERT_TRUE(got[3].repeated && got[4].repeated && got[3].row != kNoRow);
 }
 
@@ -1373,6 +1422,7 @@ void test_the_only_track_repeats() {
     for (int i = 0; i < 3; ++i) {
       const Pick p = e->pick(settings(), in);
       TEST_ASSERT_TRUE(p.ok && p.repeated && p.noIndex);
+      TEST_ASSERT_EQUAL(indexed, p.byIdJoined);  // (without the index, for want of one)
       TEST_ASSERT_EQUAL(3, p.track);
       TEST_ASSERT_EQUAL(indexed ? 3 : kNoRow, p.row);
     }
@@ -2285,6 +2335,7 @@ int main(int, char**) {
   RUN_TEST(test_a_level_alone_is_no_filter);
   RUN_TEST(test_a_filter_changed_remakes_the_runs);
   RUN_TEST(test_a_shared_row_is_tested_by_its_first_track);
+  RUN_TEST(test_the_scan_skips_the_playing_row);
   RUN_TEST(test_a_jump_keeps_the_classes);
   RUN_TEST(test_the_scan_keeps_64);
   RUN_TEST(test_repeats_oldest_first);

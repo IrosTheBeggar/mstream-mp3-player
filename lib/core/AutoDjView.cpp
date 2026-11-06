@@ -150,10 +150,16 @@ uint8_t NewsWatch::pass(const autodj::Pass& p, autodj::Mode mode, bool on) {
   if (p.cued) news |= kNewsCued;
   if (p.paused && on) news |= kNewsPaused;
   if (p.picked && p.pick.ok && p.added) {  // (a cued pick is appended too)
-    if (p.pick.noIndex) {
+    const autodj::Pick& k = p.pick;
+    if (k.jump != autodj::Jump::None || k.repeated || k.repinned) {
+      // A mood filter's jump, repeat or re-pin (MOOD-FILTERS.md 6.2, 6.4)
+      // says none of these: a jump's anchors had lists, a repeat is for
+      // want of tracks that fit, the pin stays or moves onto the playing
+      // track. Their own toasts are S5's (4.5).
+    } else if (k.noIndex && !k.byIdJoined) {
       if (!randomSaid_) news |= kNewsRandom;
       randomSaid_ = true;
-    } else if (p.pick.random && picks_ == 0) {
+    } else if (k.random && picks_ == 0) {
       news |= mode == autodj::Mode::Locked ? kNewsSeedMoved : kNewsNoNeighbours;
     }
     ++picks_;
