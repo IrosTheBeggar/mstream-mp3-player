@@ -5678,12 +5678,13 @@ src/. What the code decided where 3.2-3.4 left room:
   whatever comes back: another card put in later isn't noticed, its writes refused and the old
   library showing, until a restart.
 - **The card hold** (2026-11-05, after the device check; `PlaybackController`'s, host-tested in
-  `test_playback`; `CachedDrive::cardOut()`, `test_sector_cache`). The check's pull ran the queue
+  `test_playback`; `CachedDrive::mountCardOut()`, `test_sector_cache`). The check's pull ran the queue
   out: with the card out every open fails, about 2 s an entry, each a failure (counted, a toast, a
   mark on its row), until every entry had failed, and the queue's next save kept that as the place:
-  a 25 s pull ended a 12-track album. Now a track that fails to start while the card is out
-  (`cardOut()`: FatFs's last mount found no card answering, and none has since; `mountFailed()`
-  sets it, `remounted()` clears it, whichever card answers), with no reason of its own (no refused
+  a 25 s pull ended a 12-track album. Now a track that fails to start while the mount's card is out
+  (`mountCardOut()`: FatFs's last mount found no card answering, and none has since, `mountFailed()`
+  setting it and `remounted()` clearing it, whichever card answers; or another card answered,
+  `foreign()`, which lasts until the guard's restart for it), with no reason of its own (no refused
   rate, none of the backend's words), isn't counted and nothing moves on: the entry stays current
   and Playing, the backend holding nothing, its start point put back (a resume point's second and
   anchor, a seek's), and it is started again 2 s later, then 4, 8 and 16, then every 30 s, or at
@@ -5922,7 +5923,7 @@ src/. What the code decided where 3.2-3.4 left room:
   | A pull of 25 s, the bench's MP3 8 s in | That track cut where its read failed (193 underruns, 1 break), as before; `the card is out: 2 of 11 holds there, not skipped`, the screen woken; tries 2, 8 and 18 s on, the third 0.3 s after the silence's end: `the card answered: 2 of 11 plays on`; `queue.txt`'s place that entry. The loop's longest pass 1.8 s, the panel waiting on the bus |
   | A real pull by hand, the bench's MP3 16 s in, the card out about 24 s | As the switch's: that track cut (109 underruns, 1 break); `the card is out: 2 of 15 holds there, not skipped`, `Still no card: is it all the way in?` with the screen woken; tries 2, 8 and 18 s on, the card back by the third: `the card answered again (the same card)`, `the card answered: 2 of 15 plays on`. The loop's longest pass 1.76 s. A restart then: `restored 15 of 15 ... at 2 of 15` |
   | A real pull under a Bluetooth play, the card out 24-42 s | The link stayed up: each try started the stream about 0.3 s after playback asked, and it suspended between tries (the link to sniff); at the put-back `the card answered: 3 of 15 plays on`, the stream started 0.53 s later, in the headphones. The pull's cut held a lit screen 3.6 s (the playing track's failing reads, before the hold began); each try after it 1.2-1.9 s |
-  | Another card (16 GB) put in during a hold | `ANOTHER CARD in the slot`, `Another card: restarting`. **Found:** in the 0.7 s before that restart, every entry after the held one failed on that card and was skipped (`can't play it`, ten toasts): the hold asks only whether a mount found a card, any card. The place stayed: the queue's loop, which writes its position, is held from that line on; the spare back, `at 5 of 15` |
+  | Another card (16 GB) put in during a hold | `ANOTHER CARD in the slot`, `Another card: restarting`. **Found:** in the 0.7 s before that restart, every entry after the held one failed on that card and was skipped (`can't play it`, ten toasts): the hold asked only whether a mount found a card, any card. The place stayed: the queue's loop, which writes its position, is held from that line on; the spare back, `at 5 of 15`. **Fixed since** (the hold asks `mountCardOut()`): the same swap by hand, the try that met the 16 GB card failed and held, no skip, `Another card: restarting`, the 16 GB card's boot; the spare back, found by the next read, `at 5 of 15` |
   | A real pull under the boot's walk, put back before the walk's retry, no edit waiting | The walk's retry found the card: `with a card job under way: restarting`; the flush `the file was up to date`, the restart 1.2 s on, as before; the queue at its entry |
   | A pull of 150 s | Seven tries, at 2, 8, 18, 36, 68, 99 and 120 s (each failing open about 1.9 s), then `the card still out after 120 s: paused at 2 of 11`; Play after the put-back played that entry |
   | A resume point (paused at 0:20, a restart), a pull of 30 s, Play | Held, 0:20 kept; a pause during a try kept `start point waiting: 0:20 (anchored)`; Play after the put-back played from 0:21, no Skipped |
