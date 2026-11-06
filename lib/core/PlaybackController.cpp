@@ -324,8 +324,8 @@ void PlaybackController::placeStart(uint32_t ms, uint32_t durationMs, const Resu
     } else if (lengthHint() > 0) {
       // Stopped or cued (the sleep timer's end-of-track pause with Repeat
       // One cues the entry that just played): the length told for this
-      // entry, which the bar shows meanwhile. The catalog's hint (0 for a
-      // library track) would leave the bar inert until a play.
+      // entry, which the bar shows meanwhile (shownTime()): the backend's,
+      // to the ms, where the catalog's is the record's to the second.
       durationMs = lengthHint();
     } else {
       durationMs = catalog_.durationHintMs(queue_.currentTrack());
@@ -433,10 +433,23 @@ void PlaybackController::shownTime(uint32_t* positionMs, uint32_t* durationMs) c
     *durationMs = length;
     return;
   }
+  if (state_ == PlayState::Stopped || cued_) {
+    // Nothing held (a boot with no resume point; next or the queue's end
+    // while stopped; an entry cued while paused or waiting, or by the card
+    // hold): 0:00, never the backend's figures, the track before's until
+    // its decode task takes the stop up. The length a start point placed
+    // now would take (placeStart()): the one told for the entry, else the
+    // catalog's (a library track's record, to the second; none without
+    // one: the dotted line). None for a failed track.
+    if (!audio_.failed()) {
+      *durationMs = lengthHint() > 0 ? lengthHint() : catalog_.durationHintMs(queue_.currentTrack());
+    }
+    return;
+  }
   if (pendingStart(&ms)) {
     // Never the backend's length here: a skip's is the track before's until
-    // the decode task takes the request up. A library track has no hint: no
-    // length for that moment, and the seek bar is inert.
+    // the decode task takes the request up. The length told: the play's
+    // hint (a library track's record, to the second; none without one).
     *positionMs = ms;
     *durationMs = lengthHint();
     return;

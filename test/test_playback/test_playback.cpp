@@ -173,6 +173,35 @@ struct Rig {
     queue.assign(ids, tracks, 0);
   }
 };
+
+// Rig's, its tracks with records of these lengths (0: no record, named by
+// its path), which the catalog gives as its hint to the second.
+struct LengthRig {
+  LibraryIndex index;
+  TrackCatalog catalog{&index};
+  QueueModel queue;
+  FakeAudioBackend audio;
+  PlaybackController player{audio, queue, catalog};
+
+  explicit LengthRig(std::initializer_list<uint32_t> lengths) {
+    const char* files[] = {"/music/a.mp3", "/music/b.mp3", "/music/c.mp3", "/music/d.mp3"};
+    index.begin("/music");
+    uint32_t n = 0;
+    for (uint32_t ms : lengths) {
+      LibraryIndex::TagView tags;
+      tags.durationMs = ms;
+      if (ms) {
+        index.addRecord(files[n], tags);
+      } else {
+        index.addFile(files[n]);
+      }
+      ++n;
+    }
+    index.finish();
+    const uint32_t ids[] = {0, 1, 2, 3};
+    queue.assign(ids, n, 0);
+  }
+};
 }  // namespace
 
 void setUp() {}
@@ -3115,7 +3144,7 @@ void test_the_resume_point_while_a_start_is_pending() {
 void test_the_shown_time_never_lends_the_track_befores_length() {
   Rig r(2);
   uint32_t pos = 1, len = 1;
-  r.player.shownTime(&pos, &len);  // (stopped at entry 0, nothing held)
+  r.player.shownTime(&pos, &len);  // (stopped at entry 0, nothing held, no record)
   TEST_ASSERT_EQUAL_UINT32(0, pos);
   TEST_ASSERT_EQUAL_UINT32(0, len);
   r.audio.asyncStarts = true;
@@ -3180,6 +3209,62 @@ void test_a_seek_to_0_while_a_start_is_pending_keeps_the_bars_length() {
   TEST_ASSERT_EQUAL_UINT32(180000, r.player.lengthHint());
   r.player.shownTime(&pos, &len);
   TEST_ASSERT_EQUAL_UINT32(180000, len);
+}
+
+// An entry nothing holds (stopped; cued at 0:00) shows 0:00 and a length, so
+// its bar can be sought and Now Playing's waveform shows before the first
+// play: the length told for the entry, else the catalog's (the record's, to
+// the second). Never the backend's figures, still the track before's until
+// its decode task takes the stop up. No record, no length (the dotted
+// line); none for a failed track.
+void test_an_entry_nothing_holds_shows_its_records_length() {
+  LengthRig r({181400, 207000, 0});
+  TEST_ASSERT_EQUAL_UINT32(181000, r.catalog.durationHintMs(0));  // (the rig: rounded)
+  TEST_ASSERT_EQUAL_UINT32(0, r.catalog.durationHintMs(2));
+  uint32_t pos = 1, len = 1;
+  r.player.shownTime(&pos, &len);  // stopped after a boot, no resume point
+  TEST_ASSERT_EQUAL_UINT32(0, pos);
+  TEST_ASSERT_EQUAL_UINT32(181000, len);
+  // Its bar sought: a start point at that length, the next play from there.
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Waits, r.player.seek(r.queue.keyAt(0), 60000, len));
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(60000, pos);
+  TEST_ASSERT_EQUAL_UINT32(181000, len);
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_UINT32(60000, r.audio.lastStartMs);
+  TEST_ASSERT_EQUAL_UINT32(181000, r.audio.lastHintMs);
+  // Paused 2 min in, then prev's restart: let go, cued at 0:00, with the
+  // backend's length to the ms (told), not the record's.
+  r.audio.position = 120000;
+  r.audio.duration = 181400;
+  r.player.togglePlayPause();
+  r.player.prev();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(0, pos);
+  TEST_ASSERT_EQUAL_UINT32(181400, len);
+  // Next while paused: cued on entry 1, its record's length, though the
+  // backend still says entry 0's.
+  r.player.cueNext();
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(0, pos);
+  TEST_ASSERT_EQUAL_UINT32(207000, len);
+  // Stopped, next: entry 2 has no record.
+  r.player.stop();
+  r.player.cueNext();
+  TEST_ASSERT_EQUAL_INT(2, r.player.currentIndex());
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(0, pos);
+  TEST_ASSERT_EQUAL_UINT32(0, len);
+  // Back to entry 1 with the backend's track failed: none.
+  r.player.cuePrev();
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(207000, len);
+  r.audio.failedFlag = true;
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(0, len);
 }
 
 // ---- Auto DJ (the engine design's 2.3, 2.3.1, 2.11 and 2.12) ----
@@ -4372,6 +4457,7 @@ int main(int, char**) {
   RUN_TEST(test_the_resume_point_while_a_start_is_pending);
   RUN_TEST(test_the_shown_time_never_lends_the_track_befores_length);
   RUN_TEST(test_a_seek_to_0_while_a_start_is_pending_keeps_the_bars_length);
+  RUN_TEST(test_an_entry_nothing_holds_shows_its_records_length);
   RUN_TEST(test_auto_dj_s_pick_sends_the_word_at_once);
   RUN_TEST(test_auto_dj_s_pick_is_refused_behind_the_fence);
   RUN_TEST(test_repeat_all_never_wraps_with_auto_dj);

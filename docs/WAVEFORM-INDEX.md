@@ -473,7 +473,10 @@ does (7.4). docs/SEEK-BAR.md has the bar's look.
   frozen at the Down, under a finger): lengthMs 0 does, otherwise `|lengthMs
   - player's ms| ≤ max(2000, player's ms / 50)`. A track too short to seek, or
   of no known length, or that failed never shows one. Anything else is the
-  plain line, in the same place.
+  plain line, in the same place. A stopped track the player doesn't hold
+  takes its record's length (docs/SEEK-BAR.md 5.3), so its shape shows before
+  the first play; the check then compares the record with itself, and a file
+  that isn't the record's shows as the plain line from the play on.
 - **The reduction to 99 columns** (`lib/core/WaveShape`): each column is the
   RMS of its bars, then a stretch from the 10th percentile column to the
   loudest. At face value loud masters are a brick.
