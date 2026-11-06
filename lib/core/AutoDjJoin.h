@@ -151,12 +151,23 @@ struct MoodView {
   uint32_t tracks = 0;              // ... how many
   uint16_t q = 0;                   // the filter's 11 bits (5.4), as read: an invalid q is 0
   moodfilter::Filter f;             // ... unpacked
+  // ... made ready once: passes() runs once a track in the scan and the
+  // passes by id (6.3), where matches() made it again each time. On the
+  // Core2 at 19,413 tracks a jump's pick took 29.5 ms that way, 11.7 ms
+  // this way, idle (MEASURED 2026-11-06, MOOD-FILTERS.md 9.8).
+  moodfilter::Test test;
+  bool active = false;  // f.active()
   MoodView() = default;
   MoodView(const uint16_t* w, uint32_t n, uint16_t bits)
-      : words(w), tracks(n), q(moodfilter::valid(bits) ? bits : 0), f(moodfilter::Filter::unpack(bits)) {}
-  bool on() const { return words && f.active(); }
+      : words(w),
+        tracks(n),
+        q(moodfilter::valid(bits) ? bits : 0),
+        f(moodfilter::Filter::unpack(bits)),
+        test(moodfilter::Test::of(f)),
+        active(f.active()) {}
+  bool on() const { return words && active; }
   // A track with no word (beyond `tracks`) passes no active filter.
-  bool passes(uint32_t track) const { return !on() || (track < tracks && moodfilter::matches(words[track], f)); }
+  bool passes(uint32_t track) const { return !on() || (track < tracks && test.holds(words[track])); }
 };
 
 // The join's product. The coverage counts are in tracks, so the Auto DJ

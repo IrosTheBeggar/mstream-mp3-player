@@ -113,6 +113,27 @@ void tailOf(const double* scores, uint8_t out[8]);
 // without kAnalysed.
 bool matches(uint16_t word, const Filter& f);
 
+// A filter as the field values each group holds for, a bit each, so one
+// word is a handful of shifts: matches(w, f) is Test::of(f).holds(w). A
+// loop over many words makes it once (count() and tally() do, and so does
+// autodj::MoodView): of() costs more than holds(), and Auto DJ's scan asks
+// once a track (docs/MOOD-FILTERS.md 6.3). A scale field is 0-7 (4 NULL);
+// the voice is NULL<<2 | the instrumental bucket; a tag is its bucket. An
+// inactive filter's Test asks for no kAnalysed and keeps every mask full,
+// so it holds for every word (4.1).
+struct Test {
+  uint16_t analysed = kAnalysed;
+  uint8_t valence = 0xFF, energy = 0xFF, voice = 0xFF;
+  uint8_t acoustic = 0xF, party = 0xF, danceable = 0xF;
+
+  static Test of(const Filter& f);
+  bool holds(uint16_t w) const {
+    return (w & analysed) == analysed && (valence >> ((w >> 11) & 7) & 1) && (energy >> ((w >> 8) & 7) & 1) &&
+           (voice >> (((w >> 12) & 4) | ((w >> 6) & 3)) & 1) && (acoustic >> ((w >> 4) & 3) & 1) &&
+           (party >> ((w >> 2) & 3) & 1) && (danceable >> (w & 3) & 1);
+  }
+};
+
 // An album (4.1): under an active filter it matches when 2*pass > analysed,
 // counting only its analysed songs, so one with none never matches; under
 // an inactive one every album matches. As moodfilter.py's album_counts and
