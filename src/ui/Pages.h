@@ -352,6 +352,10 @@ public:
   void drawRow(ListView::Row& r) override;
   uint16_t accent() override;
   bool topBar() override;
+  // The Albums list's top bar is its first row, the mood filters'.
+  bool topBarIsRow() override;
+  void drawTopRow(ListView::Row& r) override;
+  void onTopRowTap(int x, bool rightEdge) override;
   int actions(int32_t row, const char* labels[3]) override;
   void onAction(int32_t row, int action) override;
   ListView::Tap onTap(uint32_t row) override;
@@ -452,10 +456,32 @@ private:
   // The Albums list's mood filter (4.6), the albums that fit it, the last
   // pass's time.
   const LibraryIndex* filterIndex() const;
+  // The Albums root with its first row: the card's library (not a
+  // synthetic one), with mood data (4.2).
+  bool moodRow() const;
+  // The Albums list's albums: the filter's when held over this index
+  // (FilteredAlbums::shown()), else albumsAZ().
+  LibraryIndex::Span albumsShown(const LibraryIndex& i) const;
+  // On the way in (enter()): a card with no mood data, or a synthetic
+  // library, drops the filter (4.2's "No data", "Update ends"); the Albums
+  // list then works out its albums again (albumsShowing()).
+  void enterFilter(NavModel::PageRef& ref);
+  // The Albums list about to show (enter(), switchSegment()): its albums
+  // worked out again if the fence or a rebuild dropped them, and its top
+  // once after a filter change it didn't show (7.5).
+  void albumsShowing(NavModel::PageRef& ref);
+  // A changed filter on the Albums list shown: read again, from its top.
+  void reloadAlbums();
+  // The dot on the Albums segment is due (7.2): a filter on, the list
+  // scrolled past its first row.
+  bool dotDue();
   moodfilter::Filter filter_;
   FilteredAlbums albums_;
   uint32_t passUs_ = 0;
   uint32_t passes_ = 0;
+  bool drawnDot_ = false;   // the dot as drawSegments() last drew it
+  bool albumsTop_ = false;  // the filter changed while the Albums list didn't show
+  int topRight_ = 320;      // the first row's right edge as last drawn (284, 312, 320)
 };
 
 // ---- Queue (spec §6.4, mockups 16-18, with the review's grafts and the

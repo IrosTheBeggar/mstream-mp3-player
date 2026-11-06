@@ -97,9 +97,14 @@ LibraryPage::RowRef LibraryPage::rowAt(uint32_t row) const {
       if (segment() == LibrarySegment::Artists && row < i->artistCount()) {
         r.kind = RowKind::Artist;
         r.id = i->artistsAZ()[row];
-      } else if (segment() == LibrarySegment::Albums && row < i->albumCount()) {
-        r.kind = RowKind::Album;
-        r.id = i->albumsAZ()[row];
+      } else if (segment() == LibrarySegment::Albums) {
+        // Under a mood filter, the albums that fit (4.2): the rail, the
+        // jump grid, the covers and playingRow() follow from here.
+        const LibraryIndex::Span albums = albumsShown(*i);
+        if (row < albums.count) {
+          r.kind = RowKind::Album;
+          r.id = albums[row];
+        }
       } else if (segment() == LibrarySegment::Folders) {
         folderRow(LibraryIndex::rootFolder());
       }
@@ -288,6 +293,7 @@ void LibraryPage::enter(NavModel::PageRef& ref) {
     const uint32_t n = index()->treeTracks(LibraryIndex::rootFolder()).count;
     trnf(playAll_, sizeof(playAll_), S::library_play_all, n, n);
   }
+  enterFilter(ref);
   repaintHeader();
   const bool showPlaying = ref.scrollPx == kShowPlaying;
   if (showPlaying) ref.scrollPx = -1;
@@ -345,6 +351,13 @@ void LibraryPage::drawSegments() {
     f.draw(s, f.fitting(Font::Bold, label, room), label, x + w / 2, 18, room, active ? col::TXT : col::DIM, bg,
            Fonts::Align::Centre);
   }
+  // The dot on Albums: a filter on, its first row scrolled away (7.2, frame
+  // inA-scrolled); a tap on the segment goes back to it (switchSegment()).
+  drawnDot_ = dotDue();
+  if (drawnDot_) {
+    s.fillRoundRect(filtergrid::kDotX, filtergrid::kDotY, filtergrid::kDotD, filtergrid::kDotD, filtergrid::kDotD / 2,
+                    accent::Library);
+  }
   s.fillRect(0, kHeaderH - 2, kW, 2, accent::Library);
   gfx::push(s, 0, kHeaderY, kW, kHeaderH);
 }
@@ -364,6 +377,7 @@ void LibraryPage::switchSegment(LibrarySegment seg) {
     const uint32_t n = index()->treeTracks(LibraryIndex::rootFolder()).count;
     trnf(playAll_, sizeof(playAll_), S::library_play_all, n, n);
   }
+  if (seg == LibrarySegment::Albums) albumsShowing(*ref_);
   drawSegments();
   list.attach(this, ref_, 0);
   Serial.printf("[ui] library: %s\n", kSegmentNames[static_cast<int>(seg)]);
@@ -457,7 +471,11 @@ bool LibraryPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       }
     }
   }
-  return ui_.list().update(nowMs, frameDue, wholeRows);
+  const bool frame = ui_.list().update(nowMs, frameDue, wholeRows);
+  // The Albums segment's dot comes and goes once the list rests, never a
+  // header push in the middle of a fling (7.5).
+  if (root() && !ui_.list().animating() && dotDue() != drawnDot_) drawSegments();
+  return frame;
 }
 
 bool LibraryPage::animating() const { return ui_.list().animating(); }
@@ -518,11 +536,21 @@ void LibraryPage::onEvent(const InputEvent& e) {
 }
 
 void LibraryPage::describe(char* buf, size_t size) const {
-  snprintf(buf, size, "Library%s: %s %lu%s%s, %lu rows, what plays: track %ld", real() ? "" : " (SYNTHETIC)",
-           pageKindName(static_cast<uint8_t>(kind_)), static_cast<unsigned long>(id_), root() ? " " : "",
-           root() ? kSegmentNames[static_cast<int>(segment())] : "",
-           static_cast<unsigned long>(const_cast<LibraryPage*>(this)->rows()),
-           playTrack_ == LibraryIndex::kNone ? -1L : static_cast<long>(playTrack_));
+  const int n = snprintf(buf, size, "Library%s: %s %lu%s%s, %lu rows, what plays: track %ld",
+                         real() ? "" : " (SYNTHETIC)", pageKindName(static_cast<uint8_t>(kind_)),
+                         static_cast<unsigned long>(id_), root() ? " " : "",
+                         root() ? kSegmentNames[static_cast<int>(segment())] : "",
+                         static_cast<unsigned long>(const_cast<LibraryPage*>(this)->rows()),
+                         playTrack_ == LibraryIndex::kNone ? -1L : static_cast<long>(playTrack_));
+  if (!moodRow() || n < 0 || static_cast<size_t>(n) >= size) return;
+  // The Albums list's first row: its filter and what it holds (uiM says more).
+  if (!filter_.active()) {
+    snprintf(buf + n, size - n, ", the filters row (no filter)");
+  } else {
+    snprintf(buf + n, size - n, ", the filters row (0x%03X: %lu of %lu albums)%s",
+             static_cast<unsigned>(filter_.pack()), static_cast<unsigned long>(albums_.count()),
+             static_cast<unsigned long>(albums_.total()), drawnDot_ ? ", the dot on Albums" : "");
+  }
 }
 
 // ---- the list ----
@@ -534,7 +562,7 @@ uint32_t LibraryPage::rows() {
     case PageKind::Library:
       switch (segment()) {
         case LibrarySegment::Artists: return i->artistCount();
-        case LibrarySegment::Albums: return i->albumCount();
+        case LibrarySegment::Albums: return albumsShown(*i).count;
         default: {
           const uint32_t f = LibraryIndex::rootFolder();
           return i->subfolders(f).count + i->filesIn(f).count;
@@ -552,8 +580,12 @@ uint16_t LibraryPage::accent() { return accent::Library; }
 
 bool LibraryPage::topBar() {
   if (!index()) return false;
+  // Albums: the mood filters' first row, on a card with mood data (4.2).
+  if (root() && segment() == LibrarySegment::Albums) return moodRow();
   return !root() || segment() == LibrarySegment::Folders;
 }
+
+bool LibraryPage::topBarIsRow() { return root() && segment() == LibrarySegment::Albums; }
 
 bool LibraryPage::alphabetical() { return railRows() > 0; }
 
@@ -561,7 +593,7 @@ uint32_t LibraryPage::railRows() {
   const LibraryIndex* i = index();
   if (!i) return 0;
   if (root() && segment() == LibrarySegment::Artists) return i->artistCount();
-  if (root() && segment() == LibrarySegment::Albums) return i->albumCount();
+  if (root() && segment() == LibrarySegment::Albums) return albumsShown(*i).count;  // (30 or under: no rail)
   if (folderList()) return i->subfolders(folderId()).count;  // its files after them aren't in the grid
   return 0;
 }
@@ -608,6 +640,8 @@ const char* LibraryPage::emptyText() {
   if (real() && ui_.state().libraryFenced) return tr(S::library_updating_list);  // (the status line says it too)
   const LibraryIndex* i = const_cast<Ui&>(ui_).browseIndex();
   if (!i || !i->ready()) return tr(S::library_empty_no_music);
+  // No album fits the filter: the line under the first row (4.2, D12).
+  if (moodRow() && filter_.active() && albums_.held()) return tr(S::mood_no_albums);
   return tr(folderList() ? S::library_empty_no_audio : S::library_empty_nothing);
 }
 
@@ -1001,12 +1035,114 @@ void LibraryPage::autoDjFromHere(uint32_t track) {
   ui_.autoDjToast(text, !wasOn);  // (Undo: the queue as it was, and Auto DJ off if this switched it on)
 }
 
-
 // ---- the Albums list's mood filter (docs/MOOD-FILTERS.md 4.2, 4.6) ----
 
 const LibraryIndex* LibraryPage::filterIndex() const {
   const LibraryIndex* i = const_cast<Ui&>(ui_).browseIndex();
   return i && i->ready() ? i : nullptr;
+}
+
+bool LibraryPage::moodRow() const {
+  if (!root() || segment() != LibrarySegment::Albums || !real()) return false;
+  const LibraryIndex* i = index();
+  return i && i->hasMoods();
+}
+
+LibraryIndex::Span LibraryPage::albumsShown(const LibraryIndex& i) const {
+  return real() ? albums_.shown(i) : i.albumsAZ();
+}
+
+void LibraryPage::enterFilter(NavModel::PageRef& ref) {
+  const LibraryIndex* i = filterIndex();
+  if (i && filter_.pack() && (!real() || !i->hasMoods())) {
+    // No first row to show it or clear it (4.2): it goes, not kept for a
+    // card it can't filter.
+    Serial.printf("[ui] filters: the albums filter 0x%03X goes (%s)\n", static_cast<unsigned>(filter_.pack()),
+                  real() ? "no mood data on this card" : "a synthetic library");
+    filter_ = moodfilter::Filter();
+    albums_.drop();
+  }
+  if (root() && segment() == LibrarySegment::Albums) albumsShowing(ref);
+}
+
+void LibraryPage::albumsShowing(NavModel::PageRef& ref) {
+  refreshFilter();
+  if (albumsTop_ && ref.scrollPx != kShowPlaying) ref.scrollPx = 0;
+  albumsTop_ = false;
+}
+
+void LibraryPage::reloadAlbums() {
+  ListView& list = ui_.list();
+  list.reload();  // (only marks it: drawn at the next frame)
+  list.scrollTo(0);
+  if (ref_) ref_->scrollPx = 0;
+}
+
+bool LibraryPage::dotDue() {
+  if (!moodRow() || !filter_.active()) return false;
+  ListView& list = ui_.list();
+  // Where the list is, or (before attach(), after detach()) where it will be.
+  const int32_t off = list.source() == this ? list.offset() : ref_ ? ref_->scrollPx : 0;
+  return filtergrid::dotShown(true, true, off);
+}
+
+// The first row (7.2; frames in-rest, inA-on, A-few, A-empty-line, lang-row-ru):
+// at rest the funnel DIM, "Filters", "1,741 albums" DIM and a chevron; a
+// filter on, the funnel in the accent on its plate, what is set in the
+// accent (Body, else Small, then cut), "312 of 1,741 albums" DIM, and a
+// cross on a disc in the chevron's place. Its right is the list's: 284
+// beside the rail, 312 beside the scroll bar, 320 with neither.
+void LibraryPage::drawTopRow(ListView::Row& r) {
+  namespace fg = filtergrid;
+  topRight_ = r.right;
+  const LibraryIndex* i = index();
+  if (!i) return;
+  Fonts& f = Fonts::instance();
+  const bool on = filter_.active();
+  const int room = fg::textRoom(r.right, on);
+  char count[fg::kCountBytes];
+  fg::countText(f.fit(Font::Small), room, fg::Scope::Albums, on, filterFits(), filterTotal(), count, sizeof(count));
+  if (!on) {
+    icons::drawCentred(r.c, icons::kFunnel, fg::kFunnelX, fg::kFunnelY, col::DIM);
+    icons::drawCentred(r.c, icons::kChevronRight, r.right - fg::kChevronInset, 21, col::FAINT);
+    f.draw(r.c, Font::Body, tr(S::mood_filters), fg::kTopTextX, fg::kTopTitleY, room, col::TXT, r.bg);
+    f.draw(r.c, Font::Small, count, fg::kTopTextX, fg::kTopCountY, room, col::DIM, r.bg);
+    return;
+  }
+  // A finger on the cross lights its disc, not the row.
+  const int cx = fg::crossX(r.right);
+  const bool crossDown = r.pressed && fg::topHit(r.pressX, r.pressX >= kW - 1, r.right, true) == fg::Top::Cross;
+  if (crossDown) {
+    r.bg = col::BG;
+    r.c.fillSprite(r.bg);
+  }
+  r.c.fillRoundRect(fg::kPlateX, fg::kPlateY, fg::kPlateD, fg::kPlateD, fg::kPlateR, col::BTN_HI);
+  icons::drawCentred(r.c, icons::kFunnel, fg::kFunnelX, fg::kFunnelY, accent::Library);
+  r.c.fillCircle(cx, 21, fg::kDiscR, crossDown ? col::BTN_HI : col::BTN);
+  icons::drawCentred(r.c, icons::kCross, cx, 21, col::TXT);
+  char what[fg::kSummaryBytes];
+  fg::summary(filter_, what, sizeof(what));
+  f.draw(r.c, f.fitting(Font::Body, what, room), what, fg::kTopTextX, fg::kTopTitleY, room, accent::Library, r.bg);
+  f.draw(r.c, Font::Small, count, fg::kTopTextX, fg::kTopCountY, room, col::DIM, r.bg);
+}
+
+// The cross clears the filter (no Undo: 3.2) and the list reloads at its
+// top; the rest of the row opens the editor (7.4).
+void LibraryPage::onTopRowTap(int x, bool rightEdge) {
+  if (!moodRow()) return;
+  switch (filtergrid::topHit(x, rightEdge, topRight_, filter_.active())) {
+    case filtergrid::Top::Cross:
+      Serial.printf("[ui] filters: the first row's cross clears 0x%03X\n", static_cast<unsigned>(filter_.pack()));
+      setFilterWord(0);  // (can't fail: no filter holds nothing)
+      reloadAlbums();
+      break;
+    case filtergrid::Top::Rail:
+      break;  // (the rail's: a Down there went to it)
+    default:
+      refreshFilter();
+      ui_.openFilters(this);
+      break;
+  }
 }
 
 bool LibraryPage::setFilterWord(uint16_t q) {
@@ -1052,7 +1188,8 @@ bool LibraryPage::setFilterWord(uint16_t q) {
 }
 
 void LibraryPage::refreshFilter() {
-  if (!filter_.active() || albums_.held() || !filterIndex()) return;
+  const LibraryIndex* i = filterIndex();
+  if (!filter_.active() || !i || (albums_.held() && albums_.total() == i->albumCount())) return;
   if (!setFilterWord(filter_.pack())) filter_ = moodfilter::Filter();  // (no memory: said)
 }
 
@@ -1066,12 +1203,13 @@ uint32_t LibraryPage::filterTotal() {
 void LibraryPage::onFiltersClosed(bool changed) {
   if (!changed) return;  // (the band pushed again as it was: Ui::repaintUnder())
   // The Albums list on screen: read again, from its top, once (reload()
-  // only marks it: a close through a tab tap draws nothing here).
-  ListView& list = ui_.list();
-  if (!root() || segment() != LibrarySegment::Albums || list.source() != this || !ref_) return;
-  list.reload();
-  list.scrollTo(0);
-  ref_->scrollPx = 0;
+  // only marks it: a close through a tab tap draws nothing here). Not on
+  // screen (uiMa, uiMe elsewhere): from its top when it next shows.
+  if (!moodRow() || ui_.list().source() != this || !ref_) {
+    albumsTop_ = true;
+    return;
+  }
+  reloadAlbums();
 }
 
 void LibraryPage::printFilter() const {
@@ -1088,7 +1226,7 @@ void LibraryPage::printFilter() const {
     Serial.printf("[ui] filters: no albums held (%s), nothing carved; %lu passes, the last %lu us\n",
                   !filter_.active() ? "no filter: every album shows"
                   : !filterIndex()  ? "the library is updating"
-                                    : "dropped when the library updated or changed",
+                                    : "dropped by a library update or change: worked out again when Albums shows",
                   static_cast<unsigned long>(passes_), static_cast<unsigned long>(passUs_));
   }
   const LibraryIndex* i = filterIndex();

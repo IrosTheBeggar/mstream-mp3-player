@@ -776,6 +776,37 @@ void test_filtered_albums_recompute() {
   TEST_ASSERT_EQUAL_INT(2, frees);
 }
 
+// What the Albums list shows (shown()): albumsAZ() until a filter's albums
+// are held, then those; over an index with another album count (a rebuild
+// not yet dropped) or one without words, albumsAZ() again.
+void test_filtered_albums_shown() {
+  static LibraryIndex idx, plain;
+  buildMoodLibrary(idx);
+  buildPlainLibrary(plain);
+  FilteredAlbums fa;
+  const LibraryIndex::Span az = idx.albumsAZ();
+  TEST_ASSERT_EQUAL_PTR(az.ids, fa.shown(idx).ids);
+  TEST_ASSERT_EQUAL_UINT32(7, fa.shown(idx).count);
+  fa.recompute(idx, kSadRelaxed);
+  const LibraryIndex::Span s = fa.shown(idx);
+  TEST_ASSERT_EQUAL_UINT32(4, s.count);
+  for (uint32_t i = 0; i < s.count; ++i) TEST_ASSERT_EQUAL_UINT32(fa[i], s[i]);
+  TEST_ASSERT_EQUAL_PTR(plain.albumsAZ().ids, fa.shown(plain).ids);  // 2 albums, not 7
+  TEST_ASSERT_EQUAL_UINT32(2, fa.shown(plain).count);
+  // Held over the plain library: none fit, but with no words it shows them all.
+  fa.recompute(plain, kSadRelaxed);
+  TEST_ASSERT_TRUE(fa.held());
+  TEST_ASSERT_EQUAL_UINT32(0, fa.count());
+  TEST_ASSERT_EQUAL_UINT32(2, fa.shown(plain).count);
+  // A filter none fits, over the words: no rows (the empty line).
+  fa.recompute(idx, Filter::unpack(0x00F));  // Sad, Aggressive
+  TEST_ASSERT_TRUE(fa.held());
+  TEST_ASSERT_EQUAL_UINT32(0, fa.count());
+  TEST_ASSERT_EQUAL_UINT32(0, fa.shown(idx).count);
+  fa.drop();
+  TEST_ASSERT_EQUAL_UINT32(7, fa.shown(idx).count);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_second_tap_lets_go);
@@ -799,5 +830,6 @@ int main(int, char**) {
   RUN_TEST(test_filtered_albums_unfiltered_and_dropped);
   RUN_TEST(test_filtered_albums_allocator_failure);
   RUN_TEST(test_filtered_albums_recompute);
+  RUN_TEST(test_filtered_albums_shown);
   return UNITY_END();
 }

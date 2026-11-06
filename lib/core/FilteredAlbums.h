@@ -50,6 +50,13 @@ public:
   uint32_t count() const { return held_ ? count_ : 0; }
   uint32_t operator[](uint32_t i) const { return ids_[i]; }
   LibraryIndex::Span span() const { return {ids_, count()}; }
+  // The Albums list's rows over `index` (4.2): the held albums, when they
+  // were picked from as many albums as it has, else albumsAZ() itself; an
+  // index without words shows albumsAZ() too (no first row, 4.2's "No
+  // data"). The count is a guard: the owner drops them at a rebuild.
+  LibraryIndex::Span shown(const LibraryIndex& index) const {
+    return held_ && total_ == index.albumCount() && index.hasMoods() ? span() : index.albumsAZ();
+  }
   // The albums they were picked from (albumsAZ()'s count then), and the
   // filter, packed (Filter::pack()): 0 when nothing is held.
   uint32_t total() const { return held_ ? total_ : 0; }
