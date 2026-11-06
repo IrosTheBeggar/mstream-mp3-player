@@ -136,9 +136,10 @@ static Haptics haptics;
 // The one input layer: the glass (corrected) and the button strip, as events.
 static Input input(haptics);
 // The screen policy (docs/ENERGY.md item 2; ScreenPower): lit, dim for the
-// last 10 s, then off after the chosen time without input; a touch or the
-// PWR key on a screen that isn't lit only wakes it (swallowed by the input
-// layer), and so do the events that need the listener.
+// last 10 s, then off after the chosen time without input, or at once by
+// the PWR key; a touch on a screen that isn't lit only wakes it (swallowed
+// by the input layer), and so do the PWR key on an off one and the events
+// that need the listener.
 static ScreenControl screen(input);
 // What the touch buttons do, the same on every screen.
 static ButtonPolicy buttonPolicy;
@@ -2171,15 +2172,19 @@ static bool touchedThisPass = false;
 // ends it, and does nothing else: the rest of that touch, or of that
 // button's hold, is dropped. A tap on the dancer still switches it.
 static bool vizSwallowTouch = false;  // until the next touch lands
-static int vizSwallowButton = -1;     // until this button's HoldEnd
+static int vizSwallowButton = -1;     // until this button's HoldEnd, or its next press
 
 // True: the event is taken (it ended host mode, or belongs to what did).
 static bool vizInput(const InputEvent& e) {
   using T = InputEvent::Type;
   if (e.isButton()) {
     if (vizSwallowButton == e.button) {
-      if (e.type == T::HoldEnd) vizSwallowButton = -1;
-      return true;
+      if (e.type == T::Repeat) return true;
+      const bool ended = e.type == T::HoldEnd;
+      vizSwallowButton = -1;
+      if (ended) return true;
+      // A Click or a Hold: a new press. That hold's HoldEnd never came (the
+      // PWR key turned the screen off under it: the wake latch drops it).
     }
     if (!usbViz.active()) return false;
     Serial.printf("[button] %c %s: ends the computer's visualizer\n", static_cast<char>('A' + e.button),
@@ -2206,9 +2211,9 @@ static void handleInput(uint32_t now) {
   // The screen: the PWR key, USB, and whether a touch now would only wake
   // it (dim or off: the input layer swallows that touch through its lift).
   screen.beginPass(now);
-  // (The PWR key only wakes the screen or counts as input there: ending
-  // the visualizer is all it does here.)
-  if (usbViz.active() && M5.BtnPWR.wasClicked()) {
+  // (The visualizer keeps the screen lit, so the PWR key only counts as
+  // input there: ending the visualizer is all it does.)
+  if (usbViz.active() && screen.powerKeyClicked()) {
     Serial.println("[button] PWR click: ends the computer's visualizer");
     usbViz.userEnded(HostLink::Why::Button);
   }
@@ -3787,7 +3792,7 @@ void loop() {
   btSession.update(audio.bluetooth().link(), now);
   stepPlayGate(now);
   // The fade's toast: a touch (swallowed as a wake, or on a lit screen) or
-  // the PWR key while it fades; only its buttons act on the timer.
+  // the PWR key's wake while it fades; only its buttons act on the timer.
   const bool woken = screen.takeWoken();
   if (sleepTimer.fading() && (woken || touchedThisPass) && userInterface) userInterface->sleepFading();
   stepSleep(now);
@@ -3944,10 +3949,11 @@ void loop() {
   // FAT a pass (docs/HOST-STATUS.md).
   hostQuery.loop(now);
   shot.poll();
-  // The screen, last: the countdown, and what keeps it lit (a screen of its
-  // own, a play waiting for the headphones, a pairing, a computer driving
-  // the dancer). Going off, the UI goes dark first; waking, it draws
-  // everything before the panel's sleep-out. A toast with a countdown (the
+  // The screen, last: the countdown, and what keeps it lit (the start-up
+  // screen, a screen of its own, a play waiting for the headphones, a
+  // pairing, a computer driving the dancer). Going off, the UI goes dark
+  // first; waking, it draws everything before the panel's sleep-out. A toast
+  // with a countdown (the
   // idle power-off's warning, the sleep timer's fade while it counts down
   // to the pause) holds a lit screen lit until it ends, and leaves an off
   // one off (it may be night). A track's fade held after a skip (until the
@@ -3959,9 +3965,10 @@ void loop() {
   {
     const BtLink link = audio.bluetooth().link();
     // (A pairing under way, not one whose failure the card still shows.)
-    const bool keepLit = screenTaken() || player.state() == PlayState::Waiting ||
-                         link.phase == BtLink::Phase::Pairing || btSession.pairingUnderWay() || usbViz.active() ||
-                         identifyPending[0] || (userInterface && userInterface->identifying());
+    const bool keepLit = (userInterface && !userInterface->started()) || screenTaken() ||
+                         player.state() == PlayState::Waiting || link.phase == BtLink::Phase::Pairing ||
+                         btSession.pairingUnderWay() || usbViz.active() || identifyPending[0] ||
+                         (userInterface && userInterface->identifying());
     using Hold = ScreenControl::Hold;
     const Hold hold = idlePower.policy().phase() == IdlePolicy::Phase::Warning || sleepTimer.fadeCountingDown()
                           ? Hold::Toast

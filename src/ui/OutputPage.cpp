@@ -184,14 +184,16 @@ void OutputPage::home() { ui_.list().scrollTo(0); }
 // stops, as after its 2 minutes; the row offers "Search again" on the wake.
 // A pairing under way keeps the screen lit, so it isn't one, and the
 // search itself holds a lit screen lit (pairSearching(): main.cpp's
-// ScreenControl::Hold): what turns a held screen off still does (the
-// sleep timer's pause, the console's Ps0). Before, it dimmed and went off
-// as ever: the dim screen swallowed the listener's taps as wakes, and the
-// screen going off stopped the search (2026-10-04: three tries to pair).
+// ScreenControl::Hold): what turns a held screen off still does (the PWR
+// key, the sleep timer's pause, the console's Ps0). Before, it dimmed and
+// went off as ever: the dim screen swallowed the listener's taps as wakes,
+// and the screen going off stopped the search (2026-10-04: three tries to
+// pair).
 void OutputPage::screenOff() {
   if (kind_ != PageKind::Pair || !search_.searching()) return;
   if (ui_.state().btLink.phase == BtLink::Phase::Pairing) return;
   search_.stop();
+  searchEnded_ = true;  // (the wake pushes the row as it was: "Searching", its spinner stopped)
   ui_.host().btPairScanPause();  // (the page stays: nothing else is tried until it closes)
   Serial.println("[ui] output: pair screen: the search stopped (the screen went off; tap Search again)");
 }
@@ -337,7 +339,7 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   } else if (kind_ == PageKind::Pair) {
     if (searchEnded_) {
       searchEnded_ = false;
-      list.refreshRow(0);  // "Search again" (tick() stopped it)
+      list.refreshRow(0);  // "Search again" (tick() or screenOff() stopped it)
     }
     if (static_cast<int32_t>(nowMs - nextScanMs_) >= 0) {
       nextScanMs_ = nowMs + kScanPollMs;

@@ -372,6 +372,14 @@ still counts as a tap. Volume is per output: the speaker and
 Bluetooth keep their own. A hold shows the volume (or where the output
 went) over the tab bar for a moment.
 
+**The power button** on the side: a short press turns the screen off at
+once, and the music plays on; another short press lights it again. (By
+itself the screen goes off after the time in **Screen off after**, on the
+Output tab.) The press doesn't turn it off while something keeps it lit,
+such as the start-up screen, the touch calibration, a pairing or a play
+waiting for the headphones. Held for about 4 s, the button turns the Core2
+off.
+
 **Gapless playback**: when a track ends by itself the next one starts on
 the very next sample, with no gap and no fade, so albums whose tracks run
 into each other (live albums, mixes, classical movements) play as one
@@ -459,8 +467,9 @@ pages do:
   **Pair new headphones** lists the audio devices in pairing mode nearby
   (with their signal); tap one to pair it, in place of the ones paired
   before (they stay if the new pairing fails). Its search runs for 2
-  minutes and the screen stays lit meanwhile (no dim, no off, so a tap
-  always acts), then the normal screen timeout again; **Search again**
+  minutes and the screen stays lit meanwhile (no dim and no timeout, so a
+  tap always acts; the power button still turns it off, which stops the
+  search), then the normal screen timeout again; **Search again**
   starts another. Each search is in the serial log: every audio device
   it found, and at its end how many devices it saw. Then the line-out
   module's place (not fitted yet), **Auto DJ** (below), **Haptics**

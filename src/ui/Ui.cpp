@@ -1427,7 +1427,9 @@ void Ui::loop(uint32_t nowMs) {
       dance_.setActive(false);  // (a console tab change while dark)
       danceWasOn_ = true;
     }
-    thumbs_.loop(nowMs);
+    // (A list's rows are rendered again on the wake, as when a modal goes:
+    // the row that asked for this cover still holds the placeholder.)
+    if (thumbs_.loop(nowMs) != Thumbs::kNone) thumbsStale_ = true;
     waves_.loop(nowMs);
     return;
   }
@@ -1927,12 +1929,14 @@ void Ui::setDark(bool on) {
   if (on) {
     if (!suspended_) gfx::setDark(true);
     if (!started_ || suspended_) return;
-    // (No finger is on: a touch keeps the screen lit. The console's Ps0 can.)
+    // (No finger is on, as a rule: a touch keeps the screen lit. The PWR key
+    // and the console's Ps0 can leave one on.)
     endPageTouch();
     touch_ = TouchOn::None;
     holdUnused_ = false;
     // A fling stops where it is (not carried on, or caught up, on the wake).
     if (list_.attached() && list_.animating()) list_.scrollTo(list_.offset());
+    motion_.on = false;  // (not logged: its time would count the whole dark)
     if (page_) page_->screenOff();
     if (dance_.active()) {
       dance_.setActive(false);

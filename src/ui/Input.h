@@ -50,9 +50,9 @@
 // that touch, its lift included, and of any other finger until none has
 // been on for 400 ms; the recognisers keep following, so nothing fires
 // afterwards. takeWake() hands the wake to the screen policy. A finger
-// already resting as the screen dimmed is taken too (its touch ends with
-// a Cancel), but it isn't a wake. The scripted finger isn't a finger
-// here: it acts in the dark.
+// already resting as the screen dimmed, or on the panel as the PWR key
+// turned it off, is taken too (its touch ends with a Cancel), but it isn't
+// a wake. The scripted finger isn't a finger here: it acts in the dark.
 //
 // Saved in NVS (namespace "input"): the touch calibration ("cal", the
 // TouchCalibration bytes; no correction when absent), whether the first

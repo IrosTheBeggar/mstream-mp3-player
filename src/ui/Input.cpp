@@ -153,8 +153,9 @@ void Input::update(uint32_t nowMs) {
   }
   const WakeLatch::Result w = latch_.update(nowMs, fingers, lit_);
   if (w.took && !suspended_) {
-    // A finger resting as the screen dimmed: taken, not a wake. Its touch
-    // ends here for the page (nothing more comes of it until it lifts).
+    // A finger on the panel as the screen dimmed (one resting) or the PWR
+    // key turned it off: taken, not a wake. Its touch ends here for the page
+    // (nothing more comes of it until it lifts).
     const InputEvent c = glass_.cancel(nowMs);
     if (c.type != InputEvent::Type::None) push(c);
   }

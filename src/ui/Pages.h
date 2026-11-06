@@ -762,7 +762,7 @@ private:
   // Pair: the scan's list as last copied, and the device picked.
   BtScanList scan_;
   PairSearch search_;  // its scan stops by itself after 2 min
-  bool searchEnded_ = false;  // ... just now (tick()): the status row to redraw
+  bool searchEnded_ = false;  // ... just now (tick(), screenOff()): the status row to redraw
   uint32_t scanVersion_ = 0;
   uint32_t nextScanMs_ = 0;
   int picked_ = -1;
