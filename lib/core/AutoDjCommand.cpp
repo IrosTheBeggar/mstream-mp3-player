@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstring>
 
+#include "MoodFilter.h"
 #include "NvsLayout.h"
 
 namespace autodj {
@@ -104,6 +105,12 @@ Command parseCommand(const char* arg) {
         c.n = v;
       }
       break;
+    case 'q':
+      if (rn <= 4 && hex(rest, rn, &v) && moodfilter::valid(static_cast<uint16_t>(v))) {
+        c.kind = K::Moods;
+        c.n = v;
+      }
+      break;
     case 'n':
       if (decimal(rest, rn, Command::kMaxDryRun, &v) && v > 0) {
         c.kind = K::DryRun;
@@ -150,10 +157,10 @@ Command parseCommand(const char* arg) {
 
 const char* commandHelp() {
   return "D status, D0/D1 off/on, Dm0/Dm1 Follow the vibe/Stay on seed, Df55..Df75 strictness, Dt0/Dt1 BPM "
-         "continuity, Dk0/Dk1 Harmonic mixing, Ds<hex> the next session's seed, Dr a new session, Dp a pick now, "
-         "Dn<k> k dry-run picks on a copy of the session (1-2000), Dj the join again, Dc the file reopened, "
-         "Db<n> n slot reads timed (1-5000), Dh / Dh<id> Auto DJ from the current track / library track id, "
-         "De the Auto DJ button, Dx stop Dn/Db, D? this";
+         "continuity, Dk0/Dk1 Harmonic mixing, Dq<hex>/Dq0 the mood filter (its q) / none, Ds<hex> the next "
+         "session's seed, Dr a new session, Dp a pick now, Dn<k> k dry-run picks on a copy of the session "
+         "(1-2000), Dj the join again, Dc the file reopened, Db<n> n slot reads timed (1-5000), Dh / Dh<id> Auto "
+         "DJ from the current track / library track id, De the Auto DJ button, Dx stop Dn/Db, D? this";
 }
 
 }  // namespace autodj

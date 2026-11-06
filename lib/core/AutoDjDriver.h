@@ -251,6 +251,16 @@ public:
   // 55-75 by 5 (nvslayout::autoDjFloorValid()); false: unchanged.
   bool setFloor(uint8_t pct);
   bool setMatch(bool tempo, bool key);
+  // The mood filter (Settings::moods, MOOD-FILTERS.md 5.4); false: invalid
+  // (moodfilter::valid()) or unchanged. The session stays, its rings and
+  // its pin with it: the next pick is inside the new filter (the engine
+  // remakes its runs for a q it hasn't seen), and a pick queued before it
+  // plays once (D5: pendingTrack()). The glue's MoodView, and its count of
+  // the tracks inside (Index::fit), follow it.
+  bool setMoods(uint16_t q);
+  // Auto DJ's pick appended and not started yet (kNoTrackId: none): what a
+  // filter changed now lets play once (D5).
+  uint32_t pendingTrack() const { return pending_ != QueueModel::kNone ? pendingTrack_ : kNoTrackId; }
   // The next session's seed (the console's Ds; reproducible sessions).
   void setSeed(uint32_t seed);
   bool seedSet() const { return seedSet_; }
@@ -381,7 +391,9 @@ private:
 // untouched), one loop pass each (a slot read ahead when one is due, as
 // the loop's, else a pick), each treated as played (the next pick follows
 // it). Its tallies: the classes, the breaks, the repeats (a row this run
-// picked before), the artists, the reads and the times.
+// picked before), the artists, the reads and the times; under a mood
+// filter, the engine's jumps, re-pins, repeats inside it and picks that
+// found none fits (MOOD-FILTERS.md 6.2).
 class DryRun {
 public:
   static constexpr uint32_t kMaxPicks = 2000;
@@ -397,6 +409,7 @@ public:
     uint32_t readsAtPick[kReadsPerPick + 1] = {};
     uint32_t prefetchReads = 0;
     uint32_t leftOut = 0;
+    uint32_t jumps = 0, repins = 0, moodRepeats = 0, noFit = 0;  // Stats' (0 with no filter)
   };
   DryRun() = default;
   ~DryRun() { end(); }

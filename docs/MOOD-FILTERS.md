@@ -4,7 +4,7 @@ Mood filters narrow the Albums list and Auto DJ's picks by mood, using the scale
 
 ## 1. Status
 
-**Status (2026-11-06):** S0, S1 and S2 are built, from main af72b50: S0 on its own branch (`claude/status-line-under-modal`), S1 and S2 stacked on `claude/mood-filters-implementation-0aec6e`; not merged. S1 and S2 are host-tested (S0 has no host test). S2 ran on the user's Core2 against the spare synthetic card in 9.6's Runs A to E, which also checked S1's heap rule, and S0 was checked on the same unit (9.4). S4's commits 1 to 5 of 7 are built on `claude/mood-filters-s4`, stacked on S2, host-tested only (9.8). The other stages from S3 on were not started when S4 began. Each stage's result follows its plan (9.4, 9.5, 9.6), and the figures from those runs are MEASURED 2026-11-06. A read-only study found it possible, and this document is the build plan.
+**Status (2026-11-06):** S0, S1 and S2 are built, from main af72b50: S0 on its own branch (`claude/status-line-under-modal`), S1 and S2 stacked on `claude/mood-filters-implementation-0aec6e`; not merged. S1 and S2 are host-tested (S0 has no host test). S2 ran on the user's Core2 against the spare synthetic card in 9.6's Runs A to E, which also checked S1's heap rule, and S0 was checked on the same unit (9.4). S4 is built, all seven of its commits, on `claude/mood-filters-s4`, stacked on S2, host-tested only: no device check has run on it (9.8). The other stages from S3 on were not started when S4 began. Each stage's result follows its plan (9.4, 9.5, 9.6), and the figures from those runs are MEASURED 2026-11-06. A read-only study found it possible, and this document is the build plan.
 
 **Picked by the user, on the design canvas:**
 - The editor: the one-screen grid of 7.1.
@@ -699,7 +699,8 @@ terminal #56, #68 ----> S7 (stacked)
 **Owed to the 0.13.0 release commit** (2026-11-06). Not written into `.github/release-notes.md`: feature branches here never edit it, only "Release x.y.z: the release notes" commits do.
 - S2: every unit rebuilds the library once at its first start on the new firmware (`library.idx` v7): about 11 s at 19,400 tracks from D, about 14-16 s from a transfer's records; the queue kept. Going back to 0.12.0 rebuilds once the other way (it reads v7 as corrupt).
 - S0: a status line (Checking the card..., Reading tags...) that ends while a sheet or dialog is up no longer wipes it.
-- S4, commits 1 to 5: no line. No filter can be set before commit 7's `Dq` and settings, and with none every pick and the Auto DJ button's draws are as before (6.6).
+- S4: no line of its own for listeners. A filter can be set only from the console (`Dq`) until S5's page, and with none every pick and the Auto DJ button's draws are as before (6.6). Its NVS goes to schema 5 (`autodj`/`moods`): nothing to do on the update, and going back to 0.12.0 loses nothing (it never reads the key: its picks are unfiltered, and the filter is there again on coming back). If #27 ships in the same release, the two share schema 5 and one line (10).
+- S4's string, `autodj.status_waits_fit`, is machine-made in nine languages and owes a native review, with S3's and S5's (8.2).
 
 ### 9.3 Console, one list
 
@@ -1073,7 +1074,7 @@ pio test -e native -f test_autodj_engine -f test_autodj_trigger -f test_autodj_d
 
 **Effort:** 3-5 (guess). It is two implementations of the whole ladder, engine and `tools/autodj_ref.py`, plus 12 sessions.
 
-**Progress (2026-11-06).** Commits 1 to 5 built, on `claude/mood-filters-s4` (from S2's tip). As built, with the drift from the plan above:
+**Result (2026-11-06).** All seven commits built, on `claude/mood-filters-s4` (from S2's tip), host-tested only. As built, with the drift from the plan above:
 - 1: both hashes hold at this tip, as at a1566fe. "The seven old tables" is hashed as those seven names, so `islands` won't move it. `stats_json` writes `LATER_STATS` only when not 0; the list is empty until a counter comes. The Python check also counts the sessions exactly: 26, then 29.
 - 2: `MoodView` sits beside `Maps` in `lib/core/AutoDjJoin.h`: `words`, `tracks`, `q` as read (invalid is 0), `f`; `on()` needs words and an active filter. `Maps::mood` feeds `buildRun` and the print; `PickIn::mood` is there for `byId`, which doesn't read it yet. Not in the plan: the Driver's `Index` gains `mood` too, which `pickInto` and `DryRun::step` copy into `PickIn` (the button's `surprise` waits for commit 4). `AutoDj::index()` copies the join's maps into `maps_` and sets `.mood` from `Library::index()` (ready, with words); its q is `AutoDj::moods_`, 0 until commit 7's settings carry one.
 - Python: `MoodView`, `Maps.mood`, `PickIn.mood`, `Scene.filter()`, `mood_words()` (`moodfilter.word_of` over uniform 4-place scores, 92 % with a row, 1 % of heads NULL). Sessions gain `moods` (a word a track) and the `filter` event.
@@ -1117,7 +1118,37 @@ pio test -e native -f test_autodj_engine -f test_autodj_trigger -f test_autodj_d
   - mood-index-away, `syn`, 18 picks under Sad at Loose: a re-pin, then the index away (7 picks by id inside the mood, the moved pin kept) and back (the pin steers with no read). Then a session from a seed that lists nothing, begun while the index is away: its row is the pin at `arrived`, then 2 re-pins.
   - In all: 38 sessions, 1,850 picks, 1,551 prefetch passes; `sessions.json` 871,028 B, by additions only. `test_the_mood_coverage` asserts 9.8's coverage, and all of it holds.
 - Tests at commit 5: `test_autodj_engine` 54 (`test_the_repin_stays_in_the_budget`, `test_a_moved_pin_goes_at_a_quick_skip`, `test_a_seed_pin_stays`; the sessions' bound is 38). `test_autodj_ref` 55 (the same three, the coverage, the new sessions' counts, the 35-session hash). Each of these mutations fails the replay: no quick-skip drop, `modeChanged` keeping the mark, no re-pin at 4b, a second round with its own reads, a re-pin onto a row outside the mood. All but the 4b one fail a unit test too.
-- Owed by commits 6 and 7 (from these notes): `docs/AUTODJ.md` 11.2's counts (38 sessions, 1,850 picks, 1,551 prefetch passes), 3.3 on the re-pin and 3.8 on the filtered repeat; the console's `D` lines for `repinned` and `jump`. Device checks (9.8's list) wait for the Core2: nothing in commits 4 and 5 changes a pick with no filter.
+- 6 and 7 change no pick, so `tools/autodj_ref.py` and the fixture stay as commit 5 left them (`sessions.json` 871,028 B, both hashes holding): the reference models the engine, not the trigger, the Driver or the settings. 9.8's "each commit changes reference, engine, tests and fixture together" holds for 1-5.
+- 6: the hold (6.5).
+  - `TriggerIn::noFit`, `Wait::NoFit` last, the ninth condition ("no track fits the filters", after the failure pause), and `Hold::NoFit` last in the hold chain. `owed` needs nothing: a hold never owes, so a filter nothing fits never holds up a library update.
+  - Not in the plan: the Driver's `Index` gains `fit`, the glue's count, and `triggerIn()` sets `noFit = ix.mood.on() && ix.fit == 0`. A caller that sets a filter with no count would hold, so the test rig counts too, as the glue does.
+  - `rowState()` gives Waiting. The status row's first line is "Waiting: no track fits the filters", over the index's first line as for the other holds; 4.4's amber and coverage line under it are S5's.
+  - `autodj.status_waits_fit` (Small 288, 96 B) in ten languages, from the mobile app's `autoDjSeedNoMatch` and `moodFilters` at d17c3fa5. Five were shortened to fit: es 314 px, fr 345, ja 296, pt 327 and ru 292 as first written. Not in the plan: THIRD-PARTY-NOTICES.md names d17c3fa5 now, since S4 took words from it before S3 did (8.1 gave that to S3's commit 2).
+- 7: the settings.
+  - `Settings::moods` (the pick never reads it). `Driver::setMoods()`: false for an invalid q or the same one; a change keeps the session. `Driver::load()` drops an invalid one. `Driver::pendingTrack()`: Auto DJ's pick not started yet, for D5.
+  - NVS: `kAutoDjMoodsKey` "moods", `AutoDjStored::haveMoods` and `moods`, `AutoDjSaved::moods`. `autoDjFrom()` and `autoDjTo()` take only a q `moodfilter::valid()` takes, else 0. `kCurrent` 5; `migrate(4, 5)` does nothing. `src/app/AutoDjStore.cpp` reads it with `isKey()` and `getUShort()`, queues all five keys through `nvslater` (`putU16`), and the boot's `[dj] settings:` line ends "mood filter none" or "0x...".
+  - The console: `Dq<hex>` (1-4 hex digits, a valid q only) and `Dq0`. `Dq800`, `Dq30`, `Dq600`, a bare `Dq` and five digits are Bad.
+  - `AutoDj::stepMood()` runs first in `step()` and at once in `setMoods()`, with 6.5's key: q changed, or `lib_.index()` from null (or not ready) to ready. It counts with `moodfilter::count()` (`fit_` of `fitOf_`, timed). Not in the plan: it calls `mapsChanged()` only while a filter is or was on, so with none the engine sees no new call. A changed q needs no call: `MapsPrint` holds it.
+  - The `D` lines: a mood line after the settings: the filter (`tagtext::filterText()`), "N of M tracks fit (counted in T ms)", ending ": none, so Auto DJ waits (a hold)" at 0 or ": they will repeat" at 50 or fewer; or "no mood data on this card: the picks are unfiltered (D4)"; or the count waiting for the library. Then the engine's jumps, re-pins, repeats and none-fits since the boot. The session line names a pin the filter moved.
+  - The pick line's tags: `[re-pinned: …]`, `[jump: …]` in three wordings, `[a repeat: …]`; "no track fits the mood filter" when there is none (`Dp`'s: the loop holds instead).
+  - `Dn`: `DryRun::Result` gains `jumps`, `repins`, `moodRepeats` and `noFit`. Its first line names the filter, and one line more gives those, only while a filter is on. With none, the `Dn` lines are as before, which 9.8's parity check compares.
+  - `Dq` while Auto DJ's pick is queued and outside the new filter: "the pick up next is outside the filter: it plays once" (D5). The toast is S5's.
+  - Docs: `docs/AUTODJ.md` (the status; 0; 1.2; 3.3 the re-pin; 3.7's "never stops" amended; 3.8 a filtered repeat; 3.12; a new 3.14; 4.1's ninth row; 4.2; 4.6; 5's table; 8's row and NVS text; 9's 52 messages; 9.3 the button; 10's `Dq`, `D`, `Dn` and pick line; 11.1-11.3, 11.2 with 38 sessions, 1,850 picks, 1,551 reads ahead); `docs/QUEUE-MODES.md` 16.1; `docs/ARCHITECTURE.md`'s NVS rules (schema 5); README's `D` row; `src/app/SerialConsole.h`.
+- Tests at commits 6 and 7 (MEASURED-HOST):
+  - `test_autodj_trigger` 7: the condition, the order, a finished queue held by it, the holds shown, `owed` over 12 bits (4,096 cases, 12 owed).
+  - `test_ui_autodj` 13: Waiting, the line, Output's line.
+  - `test_autodj_driver` 41:
+    - nothing fits: held once, nothing owed while the index joins, the engine never asked; a track then fitting is picked at once; a filter that isn't on never holds;
+    - the parse table;
+    - a filter change keeps the session, the pin, the rings and the pick up next, and the picks after it are inside;
+    - the boot drops an invalid q;
+    - `Dn`'s tallies: 0 with no filter; jumps and repeats under one; `failed` = `noFit` with nothing fitting.
+  - `test_nvs_layout` 14: schema 5; the key; every u16 (the 1,152 valid q read back as themselves, the rest as none); the matrix's schema-4 units and #27's schema-5 ones.
+  - `test_ui_library` and `test_ui_strings` with the new hold and string.
+  - The done set: 155 of 155. The whole `pio test -e native`: 2,098 cases in 101 suites, 2,090 passed; the 5 failures are this Mac's known ones on clean main (test_host_clock 2, test_hop_feed 2, test_queue 1). `test_autodj_ref` 55, `test_mood_vectors` 20, `test_gen_ui_strings` 29, `test_glyph_store` 25 (5 skipped).
+  - `pio run -e core2`: flash 4,324,147 B (+2,920 B over commit 5's 4,321,227 B), IRAM 5,161 B left.
+- Left for S5: the page's row and the view's mood fields (4.4), the three toasts and their news bits (4.5), and the hold's amber line with the coverage under it.
+- Device checks (9.8's list) wait for the Core2. With no filter, nothing in commits 1-7 changes a pick or the button's draws.
 
 ### 9.9 S5: the Auto DJ page
 

@@ -191,6 +191,10 @@ struct Settings {
   uint8_t floorPct = kFloorMin;  // Match strictness, 55..75 (any percent works; the clamp is selFloor)
   bool matchTempo = false;       // "BPM continuity" (D2: off by default)
   bool matchKey = false;         // "Harmonic mixing" (D2: off by default)
+  // The mood filter's 11 bits (docs/MOOD-FILTERS.md 5.4; 0 none, an invalid
+  // q never kept): saved with the rest. The pick doesn't read it: the glue
+  // makes Maps::mood and PickIn::mood of it over the library's words.
+  uint16_t moods = 0;
 };
 
 // The firmware's: mpdj::Table::slot() on the open file. Fills `bytes` (the

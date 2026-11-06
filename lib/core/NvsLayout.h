@@ -31,11 +31,18 @@
 // 2.13); its migrate(3, 4) step does nothing (absent keys read as the
 // defaults: off, Follow the vibe, 55 %, BPM continuity and Harmonic mixing
 // off), and older firmware leaves a schema-4 NVS as it is (it never reads
-// the namespace: no Auto DJ there). A unit that ran the Opus work before
-// it joined the queue modes (schema 1 with a kind-3 resume blob, no repeat
-// key) takes the same steps and keeps its resume point: a blob's kinds are
-// its own version's business (test_nvs_layout's migration matrix has every
-// such unit). One blob
+// the namespace: no Auto DJ there). Schema 5 is schema 4's keys and
+// "autodj"/"moods", Auto DJ's mood filter (a u16, its 11 bits:
+// docs/MOOD-FILTERS.md 4.6, 5.4); its migrate(4, 5) step does nothing (no
+// key: no filter), and older firmware leaves a schema-5 NVS as it is (it
+// never reads the key: its picks are unfiltered). PR #27's card transfer
+// also takes schema 5 (its "plays" and "clock" namespaces): released
+// together they share it, one paragraph and no bump, and a unit that ran
+// either reads the other's keys as absent. A unit that ran the Opus work
+// before it joined the queue modes (schema 1 with a kind-3 resume blob, no
+// repeat key) takes the same steps and keeps its resume point: a blob's
+// kinds are its own version's business (test_nvs_layout's migration matrix
+// has every such unit). One blob
 // is versioned by its own byte, not by this number: the resume point,
 // which on a schema-1 unit is beta.1's 20-byte form (version 0, until
 // v0.5.0 first saves), version 1's 24 bytes (v0.5.0), or version 2's 64
@@ -49,7 +56,7 @@ namespace nvslayout {
 
 inline constexpr const char* kMetaNamespace = "meta";
 inline constexpr const char* kSchemaKey = "schema";
-inline constexpr uint16_t kCurrent = 4;
+inline constexpr uint16_t kCurrent = 5;
 
 // What the boot does about the stored number.
 struct SchemaStep {
@@ -121,21 +128,26 @@ bool langPickerDue(bool haveLang, bool coachSeen);
 // was there before, and a downgrade left its choice).
 bool migrateWritesLang(uint16_t from, bool haveLang);
 
-// ---- Auto DJ ("autodj", schema 4) ----
-// Four u8s, all four written at once whenever one changes (the console's
-// D, the "..." row and Output > Auto DJ), each read with isKey() first:
+// ---- Auto DJ ("autodj", schema 4; "moods" schema 5) ----
+// Four u8s and a u16, all five written at once whenever one changes (the
+// console's D, the "..." row and Output > Auto DJ), each read with isKey()
+// first:
 //   on     1 on, 0 off (after a boot nothing plays until Play: the
 //          restored queue waits, and Auto DJ adds at its last entry)
 //   mode   0 Follow the vibe, 1 Stay on seed (autodj::Mode's values)
 //   floor  Match strictness in percent: 55, 60, 65, 70 or 75
 //   match  bit 0 BPM continuity, bit 1 Harmonic mixing (other bits ignored)
+//   moods  the mood filter's q (u16: docs/MOOD-FILTERS.md 5.4; 0 none);
+//          one moodfilter::valid() refuses reads as 0
 // An absent key, or a value this firmware doesn't take (a later one's),
-// reads as its default: off, Follow the vibe, 55, both off (the user's D2).
+// reads as its default: off, Follow the vibe, 55, both off (the user's D2),
+// no mood filter.
 inline constexpr const char* kAutoDjNamespace = "autodj";
 inline constexpr const char* kAutoDjOnKey = "on";
 inline constexpr const char* kAutoDjModeKey = "mode";
 inline constexpr const char* kAutoDjFloorKey = "floor";
 inline constexpr const char* kAutoDjMatchKey = "match";
+inline constexpr const char* kAutoDjMoodsKey = "moods";
 inline constexpr uint8_t kAutoDjMatchTempo = 1;
 inline constexpr uint8_t kAutoDjMatchKeys = 2;
 inline constexpr uint8_t kAutoDjModes = 2;
@@ -146,6 +158,8 @@ inline constexpr uint8_t kAutoDjFloorStep = 5;
 struct AutoDjStored {
   bool haveOn = false, haveMode = false, haveFloor = false, haveMatch = false;
   uint8_t on = 0, mode = 0, floor = 0, match = 0;
+  bool haveMoods = false;  // (schema 5)
+  uint16_t moods = 0;
 };
 // The settings to use.
 struct AutoDjSaved {
@@ -154,10 +168,12 @@ struct AutoDjSaved {
   uint8_t floorPct = kAutoDjFloorMin;
   bool matchTempo = false;
   bool matchKey = false;
+  uint16_t moods = 0;  // the mood filter's q: 0, or one moodfilter::valid() takes
 };
 AutoDjSaved autoDjFrom(const AutoDjStored& stored);
 // The values to write: every key (have* all true), each a value
-// autoDjFrom() reads back as `saved` (a strictness it doesn't take as 55).
+// autoDjFrom() reads back as `saved` (a strictness it doesn't take as 55,
+// an invalid mood filter as none).
 AutoDjStored autoDjTo(const AutoDjSaved& saved);
 // A strictness the settings take: 55-75 by 5.
 bool autoDjFloorValid(uint8_t pct);

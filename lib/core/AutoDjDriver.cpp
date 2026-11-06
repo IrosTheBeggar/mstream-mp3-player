@@ -96,6 +96,7 @@ bool Driver::begin() { return engine_.begin(cfg_.alloc, cfg_.release); }
 void Driver::load(const Settings& s) {
   s_ = s;
   if (!nvslayout::autoDjFloorValid(s_.floorPct)) s_.floorPct = kFloorMin;
+  if (!moodfilter::valid(s_.moods)) s_.moods = 0;
   if (s_.on) newSession(Began::Boot, kNoTrackId, nullptr);
 }
 
@@ -126,6 +127,12 @@ bool Driver::setMatch(bool tempo, bool key) {
   if (s_.matchTempo == tempo && s_.matchKey == key) return false;
   s_.matchTempo = tempo;
   s_.matchKey = key;
+  return true;
+}
+
+bool Driver::setMoods(uint16_t q) {
+  if (!moodfilter::valid(q) || s_.moods == q) return false;
+  s_.moods = q;
   return true;
 }
 
@@ -588,6 +595,10 @@ bool DryRun::step(const Settings& s, const Index& ix, uint32_t libraryTracks, Ti
   r_.noIndex = st.noIndex - base_.noIndex;
   r_.prefetchReads = st.prefetchReads - base_.prefetchReads;
   r_.leftOut = st.leftOut - base_.leftOut;
+  r_.jumps = st.jumps - base_.jumps;
+  r_.repins = st.repins - base_.repins;
+  r_.moodRepeats = st.moodRepeats - base_.moodRepeats;
+  r_.noFit = st.noFit - base_.noFit;
   if (done_ == want_) std::sort(times_, times_ + done_);
   return done_ < want_;
 }

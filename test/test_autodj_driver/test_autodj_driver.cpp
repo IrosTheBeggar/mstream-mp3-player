@@ -29,7 +29,8 @@
 // - a mood filter given as the firmware gives it: the picks inside it; the
 //   empty states' button inside it, joined and before a join, and with no
 //   filter as before there was one; a filter no track fits holds, and owes
-//   nothing.
+//   nothing; the filter as a setting (Dq): refused when invalid, a change
+//   keeping the session and the pick up next; Dn's tallies under it.
 // An AutoDJ index written with mpdj::write for a made-up library, joined
 // (AutoDjJoin), its slots read through mpdj::Table::slot(), and a real
 // PlaybackController over a small backend.
@@ -326,6 +327,11 @@ void test_the_command_parses_every_form() {
       {" 1 ", K::On, 0},           {"m0", K::Mode, 0},          {"m1", K::Mode, 1},        {"f55", K::Floor, 55},
       {"f60", K::Floor, 60},       {"f75", K::Floor, 75},       {"t0", K::Tempo, 0},       {"t1", K::Tempo, 1},
       {"k0", K::Key, 0},           {"k1", K::Key, 1},           {"s1", K::Seed, 1},
+      // The mood filter's q (MOOD-FILTERS.md 5.4, 9.3): Sad, Relaxed, Vocals
+      // and Danceable at Standard; a level alone; Happy, Acoustic and Party
+      // at Loose; none.
+      {"q127", K::Moods, 0x127},   {"q200", K::Moods, 0x200},   {"q4c1", K::Moods, 0x4C1}, {"q0", K::Moods, 0},
+      {"q0001", K::Moods, 1},
       {"sDEADbeef", K::Seed, 0xDEADBEEF},
       {"s0", K::Seed, 0},          {"r", K::Renew, 0},          {"p", K::Pick, 0},         {"n1", K::DryRun, 1},
       {"n200", K::DryRun, 200},    {"n2000", K::DryRun, 2000},  {"j", K::Join, 0},         {"c", K::Reopen, 0},
@@ -346,6 +352,8 @@ void test_the_command_parses_every_form() {
                        "t2",   "k",    "k10",  "s",   "sxyz", "s123456789", "n", "n0",    "n2001", "nx",  "b",
                        "b0",   "b5001", "rr",  "p1",  "j1",  "c0",   "e1",    "hx",    "h-1",  "x1",    "??",
                        "z",    "D",    "q",    "1 1",
+                       // Not a filter: bit 11, voice 3, level 3; 5 digits; junk.
+                       "q800", "q30",  "q600", "qFFFF", "q00001", "q10000", "qx", "q-1", "q 1", "q1g",
                        // Ten digits and more: never wrapped round to a small number.
                        "h4294967296", "n4294967297", "b10000000000", "f0000000055", "h0000000012"};
   for (const char* b : bad) TEST_ASSERT_TRUE_MESSAGE(autodj::parseCommand(b).kind == K::Bad, b);
@@ -1862,6 +1870,130 @@ void test_a_filter_nothing_fits_holds_and_owes_nothing() {
   }
 }
 
+// The filter as a setting (Dq, Settings::moods; MOOD-FILTERS.md 4.6, 9.3):
+// an invalid q is refused and the same one is no change. A change keeps
+// the session (its seed, the pin, the rings and the cooldowns) and the
+// pick up next, which plays once (D5: pendingTrack()); the pick after it
+// is inside the filter. The boot's settings drop an invalid one.
+void test_a_filter_change_keeps_the_session() {
+  Rig r;
+  auto wordOf = [](double happy, double sad) {
+    const double scores[moodfilter::kHeads] = {0.5, happy, sad, 0.5, 0.5, 0.5, 0.5, 0.1};
+    uint8_t tail[8];
+    moodfilter::tailOf(scores, tail);
+    return moodfilter::wordOfTail(tail);
+  };
+  const uint32_t n = r.card.index.trackCount();
+  std::vector<uint16_t> words(n, wordOf(0.8, 0.1));
+  for (int i = 3; i < kRows; i += 4) words[r.card.trackOf(i)] = wordOf(0.1, 0.8);
+  TEST_ASSERT_TRUE(r.dj.setOn(true));
+  r.dj.setMode(autodj::Mode::Locked);
+  r.playOne(r.card.trackOf(5));
+  Pass a = r.playTo(700);
+  TEST_ASSERT_TRUE(a.added);
+  TEST_ASSERT_EQUAL_UINT32(a.pick.track, r.dj.pendingTrack());
+  const uint32_t sessions = r.dj.sessions(), seed = r.dj.sessionSeed();
+  const uint8_t anchors = r.dj.engine().anchors(), cooled = r.dj.engine().cooledRows();
+  TEST_ASSERT_EQUAL_UINT16(5, r.dj.engine().pin());
+  // Refused: bit 11, voice 3, level 3.
+  for (uint16_t bad : {uint16_t(0x800), uint16_t(0x30), uint16_t(0x600), uint16_t(0xFFFF)}) {
+    TEST_ASSERT_FALSE(r.dj.setMoods(bad));
+    TEST_ASSERT_EQUAL_HEX16(0, r.dj.settings().moods);
+  }
+  moodfilter::Filter happy;
+  happy.valence = moodfilter::Scale::First;
+  TEST_ASSERT_TRUE(r.dj.setMoods(happy.pack()));
+  TEST_ASSERT_FALSE(r.dj.setMoods(happy.pack()));  // (no change)
+  TEST_ASSERT_EQUAL_HEX16(happy.pack(), r.dj.settings().moods);
+  r.mood = autodj::MoodView(words.data(), n, r.dj.settings().moods);  // (the glue's moodView())
+  Pass p = r.pass();
+  TEST_ASSERT_TRUE(p.began == Began::None);
+  TEST_ASSERT_EQUAL_UINT32(sessions, r.dj.sessions());
+  TEST_ASSERT_EQUAL_UINT32(seed, r.dj.sessionSeed());
+  TEST_ASSERT_EQUAL_UINT16(5, r.dj.engine().pin());
+  TEST_ASSERT_EQUAL_UINT8(anchors, r.dj.engine().anchors());
+  TEST_ASSERT_EQUAL_UINT8(cooled, r.dj.engine().cooledRows());
+  TEST_ASSERT_EQUAL_UINT32(a.pick.track, r.dj.pendingTrack());  // (queued: it plays, filter or not)
+  TEST_ASSERT_EQUAL_UINT32(2, r.queue.size());
+  // It starts, and the next pick is inside the filter.
+  for (int i = 0; i < 6; ++i) {
+    p = r.end();
+    TEST_ASSERT_TRUE(p.started && p.added);
+    TEST_ASSERT_TRUE(r.mood.passes(p.pick.track));
+    TEST_ASSERT_TRUE(r.card.rowOf(p.pick.track) % 4 != 3);
+    TEST_ASSERT_EQUAL_UINT32(p.pick.track, r.dj.pendingTrack());
+    TEST_ASSERT_FALSE(r.playTo(700).picked);  // (it plays: no failure pause)
+    for (int j = 0; j < 3; ++j) r.pass();
+  }
+  TEST_ASSERT_EQUAL_UINT32(sessions, r.dj.sessions());
+  // Cleared: the same session again.
+  TEST_ASSERT_TRUE(r.dj.setMoods(0));
+  TEST_ASSERT_EQUAL_UINT32(sessions, r.dj.sessions());
+  // The boot's: an invalid one is none.
+  autodj::Settings s;
+  s.moods = 0x800;
+  Driver boot{config()};
+  boot.load(s);
+  TEST_ASSERT_EQUAL_HEX16(0, boot.settings().moods);
+  s.moods = happy.pack();
+  boot.load(s);
+  TEST_ASSERT_EQUAL_HEX16(happy.pack(), boot.settings().moods);
+  TEST_ASSERT_EQUAL_UINT32(autodj::kNoTrackId, boot.pendingTrack());
+}
+
+// Dn under a mood filter (MOOD-FILTERS.md 6.2): its jumps, repeats inside
+// the filter and picks that found none fits, tallied as the engine counts
+// them; all 0 with no filter. Two rows far from the seed fit (9 and 10):
+// a jump to one, a neighbour's pick of the other, then repeats.
+void test_the_dry_run_tallies_the_filter() {
+  Rig r;
+  auto wordOf = [](double happy, double sad) {
+    const double scores[moodfilter::kHeads] = {0.5, happy, sad, 0.5, 0.5, 0.5, 0.5, 0.1};
+    uint8_t tail[8];
+    moodfilter::tailOf(scores, tail);
+    return moodfilter::wordOfTail(tail);
+  };
+  const uint32_t n = r.card.index.trackCount();
+  std::vector<uint16_t> words(n, wordOf(0.1, 0.8));
+  words[r.card.trackOf(9)] = words[r.card.trackOf(10)] = wordOf(0.8, 0.1);
+  TEST_ASSERT_TRUE(r.dj.setOn(true));
+  r.playOne(r.card.trackOf(0));
+  TEST_ASSERT_TRUE(r.playTo(700).added);
+  r.pass();
+  autodj::DryRun run;
+  TEST_ASSERT_TRUE(run.begin(r.dj.engine(), 30, r.queue.currentTrack()));
+  while (run.step(r.dj.settings(), r.index(), r.env.libraryTracks, clockUs)) {
+  }
+  const autodj::DryRun::Result none = run.result();
+  TEST_ASSERT_EQUAL_UINT32(30, none.picks);
+  TEST_ASSERT_EQUAL_UINT32(0, none.jumps + none.repins + none.moodRepeats + none.noFit);
+  // Happy: rows 9 and 10.
+  moodfilter::Filter happy;
+  happy.valence = moodfilter::Scale::First;
+  TEST_ASSERT_TRUE(r.dj.setMoods(happy.pack()));
+  r.mood = autodj::MoodView(words.data(), n, r.dj.settings().moods);
+  TEST_ASSERT_TRUE(run.begin(r.dj.engine(), 30, r.queue.currentTrack()));
+  while (run.step(r.dj.settings(), r.index(), r.env.libraryTracks, clockUs)) {
+  }
+  const autodj::DryRun::Result in = run.result();
+  TEST_ASSERT_EQUAL_UINT32(30, in.picks);
+  TEST_ASSERT_TRUE(in.jumps >= 1);
+  TEST_ASSERT_TRUE(in.moodRepeats >= 20);  // (two rows: every pick after the first two)
+  TEST_ASSERT_TRUE(in.moodRepeats <= in.repeats);
+  TEST_ASSERT_EQUAL_UINT32(0, in.repins + in.noFit);
+  // Nothing fits: each dry pick gives none.
+  moodfilter::Filter relaxedSad = happy;
+  relaxedSad.valence = moodfilter::Scale::Second;
+  relaxedSad.energy = moodfilter::Scale::Second;
+  TEST_ASSERT_TRUE(r.dj.setMoods(relaxedSad.pack()));
+  r.mood = autodj::MoodView(words.data(), n, r.dj.settings().moods);
+  TEST_ASSERT_TRUE(run.begin(r.dj.engine(), 5, r.queue.currentTrack()));
+  while (run.step(r.dj.settings(), r.index(), r.env.libraryTracks, clockUs)) {
+  }
+  TEST_ASSERT_EQUAL_UINT32(5, run.result().failed);
+  TEST_ASSERT_EQUAL_UINT32(5, run.result().noFit);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_command_parses_every_form);
@@ -1903,5 +2035,7 @@ int main(int, char**) {
   RUN_TEST(test_runs_are_made_again_for_new_maps);
   RUN_TEST(test_a_mood_filter_keeps_the_picks_inside_it);
   RUN_TEST(test_a_filter_nothing_fits_holds_and_owes_nothing);
+  RUN_TEST(test_a_filter_change_keeps_the_session);
+  RUN_TEST(test_the_dry_run_tallies_the_filter);
   return UNITY_END();
 }
