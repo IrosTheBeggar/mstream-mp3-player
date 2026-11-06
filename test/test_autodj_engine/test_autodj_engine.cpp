@@ -9,8 +9,8 @@
 // same row, track, level, class, imputed statuses, breaks, reads and
 // counts, every prefetch read and the counters at the end, on the golden
 // MPDJ files (read through mpdj::Table) and synthetic tables, with slots
-// damaged, failing or broken by a fake reader, and the index away and back;
-// each session twice, the slots' runs made at the read ahead and at the
+// damaged, failing or broken by a fake reader, the index away and back, and
+// a mood filter set, changed and cleared; each session twice, the slots' runs made at the read ahead and at the
 // pick. Then the rules one by one on small tables: the defaults (D2: both
 // off); the gate at every step and its clamp at selFloor; dry (the 50 best
 // sums, ties by row); the ring (5, move-to-end, rows only, D1's joins, the
@@ -22,7 +22,10 @@
 // dry and loosened at once); cooldown before music; no BPM or key
 // anywhere; empty lists; the read budget and the prefetch; the runs
 // following the maps (mapsChanged(), runDue(), moved arrays, arrays filled
-// again unannounced); the cache keeping the ring and the pin; damaged (a
+// again unannounced); a mood filter (MOOD-FILTERS.md 6.1: the candidates
+// inside it, a level alone or no words as none, the runs remade for a
+// changed filter or words filled again, a shared row tested by its first
+// track); the cache keeping the ring and the pin; damaged (a
 // damaged pin giving way; the rows a pick's reads damaged, named once),
 // failed and broken slots, in hand-made readers and in the hardening
 // files; picks by track id; the empty states' button;
@@ -49,6 +52,7 @@
 #include "CardAutoDj.h"
 #include "CardContainer.h"
 #include "CardContract.h"
+#include "MoodFilter.h"
 
 namespace cc = cardcontract;
 namespace mpdj = cardcontract::mpdj;
@@ -363,6 +367,9 @@ void test_sessions_match_the_reference() {
     TEST_ASSERT_TRUE_MESSAGE(!indexed || t, w.msg("table").c_str());
     MapsHolder mh;
     FakeReader reader;
+    std::vector<uint16_t> words;  // the library's mood words (none: no mood data)
+    for (const Value& v : sv["moods"].items) words.push_back(static_cast<uint16_t>(v.u64()));
+    MoodView mood;
     if (indexed) {
       for (const Value& v : sv["trackToRow"].items) mh.t2r.push_back(static_cast<uint16_t>(v.u64()));
       for (const Value& v : sv["rowToTrack"].items) mh.r2t.push_back(static_cast<uint16_t>(v.u64()));
@@ -404,6 +411,11 @@ void test_sessions_match_the_reference() {
         e.tracksRenumbered();
       } else if (op == "faults") {
         setFaults(&reader, ev);
+      } else if (op == "filter") {
+        // AutoDj::index()'s: the maps' and the pick's.
+        mood = MoodView(sv.has("moods") ? words.data() : nullptr, static_cast<uint32_t>(words.size()),
+                        static_cast<uint16_t>(ev["q"].u64()));
+        mh.m.mood = mood;
       } else if (op == "prefetch") {
         Settings s = settings(ev["m"].u64() ? Mode::Locked : Mode::Rolling);
         uint16_t row = kNoRow;
@@ -421,6 +433,7 @@ void test_sessions_match_the_reference() {
                                     static_cast<uint8_t>(sj["f"].u64(55)), sj["t"].u64() != 0, sj["k"].u64() != 0);
         PickIn in;
         in.maps = maps;
+        in.mood = mood;
         in.slots = maps ? &reader : nullptr;
         if (t) {
           in.k = static_cast<uint16_t>(t->k);
@@ -973,6 +986,193 @@ void test_runs_follow_the_maps() {
     redrawn += a.candidates == 1;
   }
   TEST_ASSERT_TRUE(redrawn >= 10);  // 24 in 25 draws
+}
+
+// ---------------------------------------------------------------------------
+// A mood filter (docs/MOOD-FILTERS.md 6.1)
+// ---------------------------------------------------------------------------
+namespace {
+
+// A track's word from its scores, as the library builder takes it (the
+// writer's tail, then the word): the valence's heads given, the rest even.
+uint16_t wordOf(double happy, double sad) {
+  const double scores[moodfilter::kHeads] = {0.5, happy, sad, 0.5, 0.5, 0.5, 0.5, 0.1};
+  uint8_t tail[8];
+  moodfilter::tailOf(scores, tail);
+  return moodfilter::wordOfTail(tail);
+}
+const uint16_t kHappy = wordOf(0.8, 0.1);
+const uint16_t kSad = wordOf(0.1, 0.8);
+
+uint16_t qOf(moodfilter::Scale valence, moodfilter::Level level = moodfilter::Level::Standard) {
+  moodfilter::Filter f;
+  f.valence = valence;
+  f.level = level;
+  return f.pack();
+}
+const uint16_t kHappyQ = qOf(moodfilter::Scale::First);
+const uint16_t kSadQ = qOf(moodfilter::Scale::Second);
+
+}  // namespace
+
+// Row 0 lists rows 1-9; the even tracks are happy, the odd sad: under
+// Happy only rows 2, 4, 6, 8 are candidates, and the picks are those.
+void test_a_filter_keeps_the_candidates_inside_the_mood() {
+  Table t(star(10));
+  std::vector<uint16_t> words;
+  for (int tr = 0; tr < 10; ++tr) words.push_back(tr % 2 == 0 ? kHappy : kSad);
+  t.maps.m.mood = MoodView(words.data(), static_cast<uint32_t>(words.size()), kHappyQ);
+  TEST_ASSERT_TRUE(t.maps.m.mood.on());
+  auto e = engine();
+  e->newSession(9, 0, &t.maps.m);
+  std::set<uint16_t> seen;
+  for (int i = 0; i < 4; ++i) {
+    const Pick p = e->pick(settings(), t.in(0));
+    TEST_ASSERT_TRUE(p.ok && !p.random);
+    TEST_ASSERT_EQUAL(0, p.row % 2);
+    TEST_ASSERT_EQUAL(4 - i, p.candidates);  // (the ring's picks are anchors)
+    seen.insert(p.row);
+  }
+  TEST_ASSERT_EQUAL(4, seen.size());
+  // A track past the words passes no active filter; every track passes an inactive one.
+  TEST_ASSERT_FALSE(MoodView(words.data(), 10, kHappyQ).passes(10));
+  TEST_ASSERT_TRUE(MoodView(words.data(), 10, 0).passes(10));
+}
+
+// A level alone, an invalid q (voice 3) or no words: off, the same picks as
+// no filter from the same stream, and the same print (the runs stay).
+void test_a_level_alone_is_no_filter() {
+  Table t(full(12));
+  std::vector<uint16_t> words;
+  for (int tr = 0; tr < 12; ++tr) words.push_back(tr % 3 ? kHappy : kSad);
+  const uint16_t strict = qOf(moodfilter::Scale::Any, moodfilter::Level::Strict);
+  const MoodView views[] = {MoodView(), MoodView(words.data(), 12, strict), MoodView(words.data(), 12, 0x30),
+                            MoodView(nullptr, 0, kHappyQ)};
+  std::vector<uint16_t> first;
+  for (const MoodView& v : views) {
+    TEST_ASSERT_FALSE(v.on());
+    t.maps.m.mood = v;
+    auto e = engine();
+    e->newSession(21, 0, &t.maps.m);
+    std::vector<uint16_t> rows;
+    uint32_t playing = 0;
+    for (int i = 0; i < 10; ++i) {
+      const Pick p = e->pick(settings(), t.in(playing));
+      rows.push_back(p.row);
+      rows.push_back(p.candidates);
+      playing = p.track;
+    }
+    if (first.empty()) first = rows;
+    TEST_ASSERT_TRUE(rows == first);
+  }
+  TEST_ASSERT_EQUAL_HEX16(0, MoodView(words.data(), 12, 0x30).q);  // read as 0
+  // Runs made with no filter stay fresh under a level alone.
+  t.maps.m.mood = MoodView();
+  const Maps* m = &t.maps.m;
+  const uint16_t k = static_cast<uint16_t>(t.k);
+  auto e = engine();
+  e->newSession(5, 0, m);
+  for (uint32_t tr = 1; tr <= 4; ++tr) e->trackStarted(tr, m, false);
+  uint16_t row = 0;
+  while (e->prefetchDue(settings(), &row)) e->prefetch(t.reader, row, m, k);
+  TEST_ASSERT_FALSE(e->runDue(settings(), *m, k, &row));
+  t.maps.m.mood = views[1];
+  TEST_ASSERT_FALSE(e->runDue(settings(), *m, k, &row));
+}
+
+// A changed filter makes the cached runs stale (its q is in their maps'
+// print): runDue() names each anchor and makeRun() remakes it without a
+// read, or the pick does. The words filled again in place under the same
+// q are the maps' arrays filled again: mapsChanged() says so.
+void test_a_filter_changed_remakes_the_runs() {
+  Table t(full(30));
+  std::vector<uint16_t> words;
+  for (int tr = 0; tr < 30; ++tr) words.push_back(tr % 2 == 0 ? kHappy : kSad);
+  Maps* m = &t.maps.m;
+  m->mood = MoodView(words.data(), 30, kHappyQ);
+  const uint16_t k = static_cast<uint16_t>(t.k);
+  auto e = engine();
+  e->newSession(5, 0, m);
+  for (uint32_t tr = 1; tr <= 4; ++tr) e->trackStarted(tr, m, false);
+  uint16_t row = 0;
+  while (e->prefetchDue(settings(), &row)) e->prefetch(t.reader, row, m, k);
+  TEST_ASSERT_FALSE(e->runDue(settings(), *m, k, &row));
+  auto c = engine();
+  c->copySession(*e);
+  Pick p = c->pick(settings(), t.in(4));
+  TEST_ASSERT_EQUAL(0, p.track % 2);
+  TEST_ASSERT_EQUAL(0, p.reads);
+  // Sad now: every cached run remade, no read.
+  m->mood = MoodView(words.data(), 30, kSadQ);
+  int remade = 0;
+  const int reads = t.reader.reads;
+  while (e->runDue(settings(), *m, k, &row)) {
+    e->makeRun(row, *m, k);
+    ++remade;
+  }
+  TEST_ASSERT_EQUAL(5, remade);
+  TEST_ASSERT_EQUAL(reads, t.reader.reads);
+  c = engine();
+  c->copySession(*e);
+  p = c->pick(settings(), t.in(4));
+  TEST_ASSERT_EQUAL(1, p.track % 2);
+  // ... or at the pick, from runs still Sad's, after the filter went back.
+  m->mood = MoodView(words.data(), 30, kHappyQ);
+  for (uint32_t seed = 0; seed < 10; ++seed) {
+    c = engine();
+    c->copySession(*e);
+    c->newSession(seed, 0, m);
+    for (uint32_t tr = 1; tr <= 4; ++tr) c->trackStarted(tr, m, false);
+    p = c->pick(settings(), t.in(4));
+    TEST_ASSERT_EQUAL(0, p.track % 2);
+    TEST_ASSERT_EQUAL(0, p.reads);
+  }
+  // Off: the runs hold every row again.
+  m->mood = MoodView();
+  TEST_ASSERT_TRUE(e->runDue(settings(), *m, k, &row));
+  while (e->runDue(settings(), *m, k, &row)) e->makeRun(row, *m, k);
+  c = engine();
+  c->copySession(*e);
+  TEST_ASSERT_EQUAL(25, c->pick(settings(), t.in(4)).candidates);
+  // The same words' block filled again (a library rebuilt there), the same
+  // q: the print can't tell, mapsChanged() does.
+  m->mood = MoodView(words.data(), 30, kHappyQ);
+  while (e->runDue(settings(), *m, k, &row)) e->makeRun(row, *m, k);
+  for (uint16_t& w : words) w = w == kHappy ? kSad : kHappy;
+  TEST_ASSERT_FALSE(e->runDue(settings(), *m, k, &row));
+  e->mapsChanged();
+  remade = 0;
+  while (e->runDue(settings(), *m, k, &row)) {
+    e->makeRun(row, *m, k);
+    ++remade;
+  }
+  TEST_ASSERT_EQUAL(5, remade);
+  for (uint32_t seed = 0; seed < 10; ++seed) {
+    c = engine();
+    c->copySession(*e);
+    c->newSession(seed, 0, m);
+    for (uint32_t tr = 1; tr <= 4; ++tr) c->trackStarted(tr, m, false);
+    p = c->pick(settings(), t.in(4));
+    TEST_ASSERT_EQUAL(1, p.track % 2);  // the odd tracks are happy now
+  }
+}
+
+// Tracks 2 and 9 share row 2, whose track (rowToTrack's, the one a pick of
+// it plays) is 2: sad, so under Happy the row is no candidate though track 9
+// is happy (MOOD-FILTERS.md 6.3: testing the track alone could leak).
+void test_a_shared_row_is_tested_by_its_first_track() {
+  Table t(star(6), {}, {0, 1, 2, 3, 4, 5, kNoRow, kNoRow, kNoRow, 2});
+  TEST_ASSERT_EQUAL(2, t.maps.r2t[2]);
+  const std::vector<uint16_t> words = {kHappy, kSad, kSad, kHappy, kSad, kHappy, 0, 0, 0, kHappy};
+  t.maps.m.mood = MoodView(words.data(), static_cast<uint32_t>(words.size()), kHappyQ);
+  TEST_ASSERT_TRUE(t.maps.m.mood.passes(9) && !t.maps.m.mood.passes(2));
+  for (uint32_t seed = 0; seed < 8; ++seed) {
+    auto e = engine();
+    e->newSession(seed, 0, &t.maps.m);
+    const Pick p = e->pick(settings(), t.in(0));
+    TEST_ASSERT_EQUAL(2, p.candidates);  // rows 3 and 5
+    TEST_ASSERT_TRUE(p.row == 3 || p.row == 5);
+  }
 }
 
 // trackLeft() says whether the track stopped steering: a row in the ring
@@ -1611,6 +1811,10 @@ int main(int, char**) {
   RUN_TEST(test_loosen_in_follow_the_vibe);
   RUN_TEST(test_dry_and_loosened);
   RUN_TEST(test_runs_follow_the_maps);
+  RUN_TEST(test_a_filter_keeps_the_candidates_inside_the_mood);
+  RUN_TEST(test_a_level_alone_is_no_filter);
+  RUN_TEST(test_a_filter_changed_remakes_the_runs);
+  RUN_TEST(test_a_shared_row_is_tested_by_its_first_track);
   RUN_TEST(test_a_quick_skip_says_whether_it_steered);
   RUN_TEST(test_cooldown_before_music);
   RUN_TEST(test_no_bpm_or_key_anywhere);

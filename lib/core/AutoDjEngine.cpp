@@ -367,6 +367,10 @@ Engine::MapsPrint Engine::printOf(const Maps& m) {
   p.rows = m.rows;
   p.tracks = m.tracks;
   p.mapped = m.mapped;
+  if (m.mood.on()) {
+    p.moods = m.mood.words;
+    p.q = m.mood.q;
+  }
   return p;
 }
 
@@ -375,8 +379,10 @@ bool Engine::runFresh(int i, const Maps& m, uint32_t k) const {
 }
 
 // Slot i's run for these maps and k: its first min(count, k) entries (the
-// levels from byte 2k), those whose row maps to a track, sorted by row
-// (then by place: a row listed twice keeps both, as the union does).
+// levels from byte 2k), those whose row maps to a track that passes the
+// mood filter (MOOD-FILTERS.md 6.1: the row's first track, which a pick of
+// it plays), sorted by row (then by place: a row listed twice keeps both,
+// as the union does).
 void Engine::buildRun(int i, const Maps& m, uint32_t k) {
   const MapsPrint p = printOf(m);
   if (!(print_ == p)) {
@@ -386,9 +392,11 @@ void Engine::buildRun(int i, const Maps& m, uint32_t k) {
   const uint8_t* b = slotBytes_ + i * kSlotSpan;
   const uint32_t n = cache_[i].count < k ? cache_[i].count : k;
   uint32_t nk = 0;
+  const bool mood = m.mood.on();
   for (uint32_t j = 0; j < n; ++j) {
     const uint16_t row = cardcontract::get16(b + 2 * j);
     if (row >= m.rows || m.rowToTrack[row] == kNoTrack) continue;
+    if (mood && !m.mood.passes(m.rowToTrack[row])) continue;
     keys_[nk++] = static_cast<uint32_t>(row) << 8 | j;
   }
   idsort::sort(keys_, keys_ + nk, std::less<uint32_t>());

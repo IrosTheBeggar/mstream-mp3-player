@@ -188,6 +188,10 @@ private:
   };
 
   autodj::Index index();  // (not const: its slot reader reads the file)
+  // Auto DJ's mood filter over the library's words (MOOD-FILTERS.md 6.1):
+  // off behind the update step's fence (no index) and on a card with no
+  // mood data, where picks are unfiltered (D4).
+  autodj::MoodView moodView();
   autodj::Env driverEnv(const Env& env) const;
   bool joined() const { return file_ == File::Open && join_.status() == autodj::Join::Status::Ready; }
   // The file the root's entry names, opened and checked, from its first try.
@@ -241,6 +245,8 @@ private:
   PlaybackController& player_;
   autodj::Driver dj_;
   autodj::Join join_;
+  autodj::Maps maps_;      // index()'s: the join's, with the mood filter
+  uint16_t moods_ = 0;     // the mood filter's q (MOOD-FILTERS.md 5.4): 0, none, until the settings keep one (9.8)
   cardcontract::mpdj::Table table_;
   Reader reader_{table_};
   cardfat::FatFile* handle_ = nullptr;   // the open file (FatFs::openRead's, PSRAM)

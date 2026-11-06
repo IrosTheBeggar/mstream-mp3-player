@@ -14,8 +14,9 @@ and whether it steered, the pin (a seed before the join's maps too), the
 key anchor, both cooldowns, loosen
 before repeating (the device's case, dry and loosened at once, every
 listed row cooled), dry and random picks, the read budget, damaged,
-failed and broken slots, the stream); and the fixture up to date, its
-first 26 sessions and their seven tables frozen by hash.
+failed and broken slots, the stream, a mood filter's candidates); and the
+fixture up to date, its first 26 sessions and their seven tables frozen
+by hash, every pick under a filter inside it.
 """
 import hashlib
 import json
@@ -25,6 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autodj_ref as A  # noqa: E402
+import moodfilter as M  # noqa: E402
 import mpdj  # noqa: E402
 
 FIX = Path(__file__).resolve().parent.parent / "test" / "fixtures"
@@ -710,6 +712,61 @@ class EngineRules(unittest.TestCase):
         self.assertFalse(p.ok)                              # the only track is the playing one
         self.assertEqual(e.stats.failed, 1)
 
+    def test_a_filter_keeps_the_candidates_inside_the_mood(self):
+        # Row 0 lists rows 1-9; the even tracks are happy, the odd sad: under
+        # Happy only rows 2, 4, 6, 8 are candidates (MOOD-FILTERS.md 6.1).
+        lists = star(10)
+        maps = table(lists)
+        maps.mood = A.MoodView([HAPPY if t % 2 == 0 else SAD for t in range(10)], M.pack("happy"))
+        src = A.SlotSource(lists)
+        e = A.Engine()
+        e.new_session(9, 0, maps)
+        seen = set()
+        for i in range(4):
+            p = e.pick(A.Settings(), self.pin(maps, src, 0))
+            self.assertIn(p.row, (2, 4, 6, 8))
+            self.assertEqual((p.candidates, p.cooldown_level), (4 - i, 0))   # the ring's picks are anchors
+            seen.add(p.row)
+        self.assertEqual(seen, {2, 4, 6, 8})
+
+    def test_a_level_alone_is_no_filter(self):
+        # Strict with no group, an invalid q, or no words: every row, the
+        # same picks as no filter.
+        lists = full(12)
+        words = [HAPPY if t % 3 else SAD for t in range(12)]
+        got = []
+        for mood in (A.MoodView(), A.MoodView(words, M.pack(level="strict")), A.MoodView(words, 0x30),
+                     A.MoodView(None, M.pack("happy"))):
+            self.assertFalse(mood.on())
+            maps = table(lists)
+            maps.mood = mood
+            src = A.SlotSource(lists)
+            e = A.Engine()
+            e.new_session(21, 0, maps)
+            playing, rows = 0, []
+            for _ in range(10):
+                p = e.pick(A.Settings(), self.pin(maps, src, playing))
+                rows.append((p.row, p.candidates))
+                playing = p.track
+            got.append(rows)
+        self.assertEqual(got[1:], got[:1] * 3)
+        self.assertTrue(A.MoodView(words, M.pack("happy")).on())
+
+    def test_a_shared_row_is_tested_by_its_first_track(self):
+        # Tracks 2 and 9 share row 2; the maps give the row its first track,
+        # 2, which plays when the row is picked: it fails, so row 2 is no
+        # candidate though track 9 passes.
+        lists = star(6)
+        maps = table(lists, tracks=[0, 1, 2, 3, 4, 5, A.NO_ROW, A.NO_ROW, A.NO_ROW, 2])
+        self.assertEqual(maps.row_to_track[2], 2)
+        maps.mood = A.MoodView([HAPPY, SAD, SAD, HAPPY, SAD, HAPPY, 0, 0, 0, HAPPY], M.pack("happy"))
+        self.assertTrue(maps.mood.passes(9) and not maps.mood.passes(2))
+        e = A.Engine()
+        e.new_session(2, 0, maps)
+        p = e.pick(A.Settings(), self.pin(maps, A.SlotSource(lists), 0))
+        self.assertEqual(p.candidates, 2)                   # rows 3 and 5
+        self.assertIn(p.row, (3, 5))
+
     def test_surprise(self):
         lists = star(6)
         maps = table(lists, tracks=[0, 2, 4])
@@ -726,6 +783,11 @@ class EngineRules(unittest.TestCase):
         again = {s.name: s.json() for s in A.scenes()[1]}
         for s in sc:
             self.assertEqual(s.json(), again[s.name])
+
+
+# Two words of moodfilter.py's: a happy track and a sad one (Standard's bars).
+HAPPY = M.word_of([0.5, 0.8, 0.1, 0.5, 0.5, 0.5, 0.5, 0.1])
+SAD = M.word_of([0.5, 0.1, 0.8, 0.5, 0.5, 0.5, 0.5, 0.1])
 
 
 def digest(x):
@@ -751,7 +813,7 @@ class Fixture(unittest.TestCase):
 
     def test_the_fixture_covers_the_rules(self):
         doc = json.loads((FIX / "autodj" / "sessions.json").read_text(encoding="utf-8"))
-        self.assertEqual(len(doc["sessions"]), 26)
+        self.assertEqual(len(doc["sessions"]), 29)
         self.assertEqual(digest(doc["sessions"][:FROZEN_SESSIONS]), FROZEN_SESSIONS_SHA)
         self.assertEqual(digest({n: doc["tables"][n] for n in FROZEN_TABLES}), FROZEN_TABLES_SHA)
         picks = [e["expect"] for s in doc["sessions"] for e in s["events"] if e["op"] == "pick"]
@@ -771,6 +833,40 @@ class Fixture(unittest.TestCase):
         rng = doc["rng"]
         p = A.Pcg32(rng["seed"], rng["stream"])
         self.assertEqual(rng["next"], [p.next() for _ in range(6)])
+
+    def test_the_mood_sessions(self):
+        doc = json.loads((FIX / "autodj" / "sessions.json").read_text(encoding="utf-8"))
+        by = {s["name"]: s for s in doc["sessions"]}
+        # Every pick under an active filter, with words, passes its word.
+        inside = {}
+        for s in doc["sessions"]:
+            words, q = s.get("moods"), 0
+            for e in s["events"]:
+                if e["op"] == "filter":
+                    q = e["q"]
+                elif e["op"] == "pick" and words is not None and M.active(q):
+                    x = e["expect"]
+                    self.assertTrue(x.get("ok") and M.matches(words[x.get("track", 0)], q), s["name"])
+                    inside.setdefault(s["name"], []).append(x)
+        # Dry and loosened inside the mood (6.1), the runs made again for a
+        # second filter; no pick random or a repeat of a cooled row, which
+        # the mood's own ladder takes (6.2).
+        picks = inside["mood-dry-loosen"]
+        self.assertEqual(len(picks), 70)
+        self.assertEqual([e["q"] for e in by["mood-dry-loosen"]["events"] if e["op"] == "filter"], [0x420, 0x500])
+        for flag in ("dry", "loose", "impT", "impK", "tb", "kb"):
+            self.assertTrue(any(p.get(flag) for p in picks), flag)
+        self.assertEqual(sum(1 for p in picks if p.get("dry")), 30)
+        self.assertEqual(sum(1 for p in picks if p.get("loose")), 34)
+        self.assertTrue(any(p.get("cl") == 1 for p in picks))
+        self.assertFalse(any(p.get("random") or p.get("noIndex") or p.get("cl") == 2 for p in picks))
+        # A filter with no words filters nothing (D4): the control's picks.
+        nd, control = by["mood-no-data"], by["mood-no-data-control"]
+        self.assertNotIn("moods", nd)
+        self.assertEqual([e["q"] for e in nd["events"] if e["op"] == "filter"], [0x127, 0x40A, 0])
+        self.assertEqual([e for e in nd["events"] if e["op"] != "filter"], control["events"])
+        self.assertEqual(nd["stats"], control["stats"])
+        self.assertEqual(sum(1 for e in control["events"] if e["op"] == "pick"), 30)
 
 
 if __name__ == "__main__":

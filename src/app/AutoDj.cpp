@@ -305,8 +305,13 @@ bool AutoDj::hasRow(uint32_t track) {
 // ---------------------------------------------------------------------------
 autodj::Index AutoDj::index() {
   autodj::Index ix;
+  ix.mood = moodView();
   if (joined()) {
-    ix.maps = join_.maps();
+    // The join's maps with the mood filter: a copy (MOOD-FILTERS.md 6.1),
+    // the join's own as it made them.
+    maps_ = *join_.maps();
+    maps_.mood = ix.mood;
+    ix.maps = &maps_;
     ix.slots = &reader_;
     ix.k = static_cast<uint16_t>(table_.k());
     ix.selHead = static_cast<uint16_t>(table_.selHead());
@@ -314,6 +319,12 @@ autodj::Index AutoDj::index() {
   }
   ix.joining = file_ == File::Open && !joined() && block_ == Block::None;
   return ix;
+}
+
+autodj::MoodView AutoDj::moodView() {
+  const LibraryIndex* index = lib_.index();
+  if (!index || !index->ready() || !index->hasMoods()) return autodj::MoodView();
+  return autodj::MoodView(index->moodWords(), index->trackCount(), moods_);
 }
 
 autodj::Env AutoDj::driverEnv(const Env& env) const {

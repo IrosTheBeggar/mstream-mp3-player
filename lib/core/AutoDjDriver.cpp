@@ -341,6 +341,7 @@ void Driver::pickInto(PlaybackController& player, const Index& ix, const Env& en
   TimedReader timed(ix.slots, cfg_.nowUs);
   PickIn in;
   in.maps = ix.maps;
+  in.mood = ix.mood;
   in.slots = ix.slots ? &timed : nullptr;
   in.k = ix.k;
   in.selHead = ix.selHead;
@@ -524,6 +525,7 @@ bool DryRun::step(const Settings& s, const Index& ix, uint32_t libraryTracks, Ti
   TimedReader timed(ix.slots, nowUs);
   PickIn in;
   in.maps = ix.maps;
+  in.mood = ix.mood;
   in.slots = ix.slots ? &timed : nullptr;
   in.k = ix.k;
   in.selHead = ix.selHead;

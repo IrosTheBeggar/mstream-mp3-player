@@ -1072,6 +1072,16 @@ pio test -e native -f test_autodj_engine -f test_autodj_trigger -f test_autodj_d
 
 **Effort:** 3-5 (guess). It is two implementations of the whole ladder, engine and `tools/autodj_ref.py`, plus 12 sessions.
 
+**Progress (2026-11-06).** Commits 1 and 2 built, on `claude/mood-filters-s4` (from S2's tip). As built, with the drift from the plan above:
+- 1: both hashes hold at this tip, as at a1566fe. "The seven old tables" is hashed as those seven names, so `islands` won't move it. `stats_json` writes `LATER_STATS` only when not 0; the list is empty until a counter comes. The Python check also counts the sessions exactly: 26, then 29.
+- 2: `MoodView` sits beside `Maps` in `lib/core/AutoDjJoin.h`: `words`, `tracks`, `q` as read (invalid is 0), `f`; `on()` needs words and an active filter. `Maps::mood` feeds `buildRun` and the print; `PickIn::mood` is there for `byId`, which doesn't read it yet. Not in the plan: the Driver's `Index` gains `mood` too, which `pickInto` and `DryRun::step` copy into `PickIn` (the button's `surprise` waits for commit 4). `AutoDj::index()` copies the join's maps into `maps_` and sets `.mood` from `Library::index()` (ready, with words); its q is `AutoDj::moods_`, 0 until commit 7's settings carry one.
+- Python: `MoodView`, `Maps.mood`, `PickIn.mood`, `Scene.filter()`, `mood_words()` (`moodfilter.word_of` over uniform 4-place scores, 92 % with a row, 1 % of heads NULL). Sessions gain `moods` (a word a track) and the `filter` event.
+- Sessions, with real words (MEASURED-HOST):
+  - mood-dry-loosen, `starve`, 70 picks, Follow the vibe at 75 % and 100 %: Vocals at Loose, then Danceable at Loose (69 and 63 of 105 tracks). Dry 30 and loosened 34 inside the mood (the toy gave 30 and 33), with impT, impK, tb, kb and class 1. No pick is random or a repeat, so commits 3-5 leave it as it is. A narrower filter (about 27-48 % of the tracks) emptied the fresh pool: repeats, which commit 3 turns into jumps.
+  - mood-no-data and mood-no-data-control, `syn`, 30 + 30: the same picks and counters.
+  - In all: 29 sessions, 1,281 picks, 1,086 reads ahead; `sessions.json` 618,426 B, by additions only.
+- Tests: `test_autodj_engine` 44 cases (a filter keeps the candidates inside it; a level alone, an invalid q and no words are none; a changed filter remakes the runs, and so does `mapsChanged()` after words filled again in place; a shared row is tested by its first track). `test_autodj_driver` 36 (a filter through `Index` keeps the picks inside it). `test_autodj_ref` 45. Dropping the predicate, or leaving q out of the print, fails the replay of mood-dry-loosen.
+
 ### 9.9 S5: the Auto DJ page
 
 Needs S3's editor and S4. One PR. Merged, then held out of a release until S7 (9.2).

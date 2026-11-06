@@ -126,11 +126,12 @@ private:
 
 // What the glue knows of the index this pass.
 struct Index {
-  const Maps* maps = nullptr;   // the join's (Ready); null: picks by track id
+  const Maps* maps = nullptr;   // the join's (Ready), with the mood filter; null: picks by track id
   SlotReader* slots = nullptr;  // null with no index
   uint16_t k = 0, selHead = 0;
   uint8_t selFloor = 0;
   bool joining = false;         // the file reopens, or the join runs (the trigger's)
+  MoodView mood;                // the mood filter (MOOD-FILTERS.md 6.1), the maps' too: also without them
 };
 
 // The rest of the pass's inputs.

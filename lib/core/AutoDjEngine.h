@@ -87,6 +87,10 @@
 //      the lowest class (a loosened pool has no level 2: the artist
 //      cooldown, then the tempo and key preferences order it, as any).
 //   5. The pick joins the ring and the cooldowns; the key anchor, the pin.
+// A mood filter (Maps::mood, docs/MOOD-FILTERS.md 6.1): on, a row whose
+// track (the row's first, rowToTrack's) fails it is left out of the runs,
+// so the candidates, the gate, dry, loosening and the classes hold only
+// rows inside the mood. Off, nothing changes: no word read, no draw.
 // Random picks (no usable anchor, no candidate, a broken file):
 // kRandomDraws uniform draws over the rows, each kept once unless it maps
 // to no track or is an anchor or the playing track's; then the classes and
@@ -112,7 +116,8 @@
 // sort and its scans (tools/autodj_ref.py; test_autodj_engine). Runs
 // belong to the maps they were made from: a maps generation, bumped by
 // mapsChanged() (the join ready again) and when the maps' arrays or counts
-// differ from the last seen; a pick that still draws a row with no track
+// differ from the last seen (the mood filter's words and q among them, while
+// it is on); a pick that still draws a row with no track
 // (maps changed in place, unannounced) remakes its runs and picks again
 // from the same stream.
 //
@@ -178,6 +183,7 @@ public:
 
 struct PickIn {
   const Maps* maps = nullptr;  // null: no index (picks by track id)
+  MoodView mood;               // the maps' (Maps::mood), also given without them: picks by id
   SlotReader* slots = nullptr;  // null with no index
   uint16_t k = 0;               // the table's k: where a slot's levels start (2k)
   uint16_t selHead = 0;         // not used by v1 (two-hop, M7)
@@ -332,7 +338,9 @@ public:
   // The join's maps were made again (its Ready after a fence or a remount):
   // every cached slot's run is remade before it is used (runDue() on the
   // next loop passes, else at the pick). The engine also notices maps whose
-  // arrays or counts changed; this covers the same arrays filled again.
+  // arrays or counts changed, and a mood filter whose words or q did; this
+  // covers the same arrays filled again (the mood words too: a library
+  // rebuilt may put its new ones where the old ones were).
   void mapsChanged() { ++mapsGen_; }
 
   // ---- reads ----
@@ -407,14 +415,17 @@ private:
     uint32_t word;
   };
   // What the runs were made from (their maps generation moves on when it
-  // changes).
+  // changes). The mood filter's words and q only while it is on (null, 0
+  // off: the print with no filter is as before there was one).
   struct MapsPrint {
     const uint32_t* filters = nullptr;
     const uint16_t* rowToTrack = nullptr;
     uint32_t rows = 0, tracks = 0, mapped = 0;
+    const uint16_t* moods = nullptr;
+    uint16_t q = 0;
     bool operator==(const MapsPrint& o) const {
       return filters == o.filters && rowToTrack == o.rowToTrack && rows == o.rows && tracks == o.tracks &&
-             mapped == o.mapped;
+             mapped == o.mapped && moods == o.moods && q == o.q;
     }
   };
   // A candidate of the pool: its row, its best level, and its cooldown

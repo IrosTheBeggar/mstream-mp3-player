@@ -23,6 +23,8 @@ tests the reference itself.
 - `sessions`: each a table (none: no index), the maps (`trackToRow`,
   `rowToTrack`, 65535 none), the filter words (bpm | camelot << 8 |
   artist16 << 16; BPM_ANALYSED and "present" in bits 13 and 15), the
+  library's mood words (`moods`, a u16 a track as `library.idx` v7 holds
+  them, docs/MOOD-FILTERS.md 5.4; left out: no mood data), the
   library's track count, the faults the slot reader injects by row
   (`damaged`: the CRC always fails; `flaky`: on the first read only;
   `io`: the first read fails, Why::Io; `broken`: a good CRC over a bad
@@ -34,7 +36,8 @@ tests the reference itself.
   library rebuilt: the by-id cooldown cleared), `index` (`on` 0: the index
   away from now, the engine given no maps and no slots; 1: back),
   `arrived` (the index joined: a seed track given without maps becomes the
-  pin), `prefetch` (one loop pass
+  pin), `filter` (Auto DJ's mood filter from now: its 11 bits `q`, 0
+  none; with no `moods` it filters nothing), `prefetch` (one loop pass
   in mode `m`: the row it reads, 65535 none, and the read's result),
   `pick` and `surprise` (the settings, the playing track, and every field
   of the result, a field left out being 0).

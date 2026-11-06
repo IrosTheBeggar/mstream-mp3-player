@@ -25,7 +25,8 @@
 //   run on a copy (the live session untouched);
 // - a due pick waiting while the decoder refills the ring from empty; a
 //   quick skip's row (none for a file the index doesn't have);
-// - a slot whose CRC fails again at a pick: the pass names its row, once.
+// - a slot whose CRC fails again at a pick: the pass names its row, once;
+// - a mood filter given as the firmware gives it: the picks inside it.
 // An AutoDJ index written with mpdj::write for a made-up library, joined
 // (AutoDjJoin), its slots read through mpdj::Table::slot(), and a real
 // PlaybackController over a small backend.
@@ -49,6 +50,7 @@
 #include "CardContainer.h"
 #include "CardContract.h"
 #include "LibraryIndex.h"
+#include "MoodFilter.h"
 #include "PlaybackController.h"
 #include "QueueModel.h"
 #include "TrackCatalog.h"
@@ -227,16 +229,23 @@ struct Rig {
   autodj::Env env;
   bool indexed = true;  // the index joined (else: picks by id, or `joining`)
   bool joining = false;
+  autodj::MoodView mood;  // the mood filter (off: none)
+  autodj::Maps maps;      // index()'s copy of the join's, with it
 
   Rig() {
     TEST_ASSERT_TRUE(dj.begin());
     player.setRepeat(PlaybackController::Repeat::Off);
     env.libraryTracks = card.index.trackCount();
   }
+  // As the firmware's AutoDj::index(): the join's maps copied, with the
+  // mood filter, which also goes beside them.
   autodj::Index index() {
     autodj::Index i;
+    i.mood = mood;
     if (indexed) {
-      i.maps = card.join.maps();
+      maps = *card.join.maps();
+      maps.mood = mood;
+      i.maps = &maps;
       i.slots = &reader;
       i.k = static_cast<uint16_t>(card.table.k());
       i.selHead = static_cast<uint16_t>(card.table.selHead());
@@ -1660,6 +1669,40 @@ void test_runs_are_made_again_for_new_maps() {
   TEST_ASSERT_FALSE(r.pass().runMade);
 }
 
+// A mood filter as the firmware gives it (MOOD-FILTERS.md 6.1), on the
+// maps' copy and beside them: the runs the read ahead makes and the picks
+// hold only tracks inside it. Every fourth row's track is sad, the rest
+// happy, under Happy.
+void test_a_mood_filter_keeps_the_picks_inside_it() {
+  Rig r;
+  auto wordOf = [](double happy, double sad) {
+    const double scores[moodfilter::kHeads] = {0.5, happy, sad, 0.5, 0.5, 0.5, 0.5, 0.1};
+    uint8_t tail[8];
+    moodfilter::tailOf(scores, tail);
+    return moodfilter::wordOfTail(tail);
+  };
+  std::vector<uint16_t> words(r.card.index.trackCount(), wordOf(0.8, 0.1));
+  for (int i = 3; i < kRows; i += 4) words[r.card.trackOf(i)] = wordOf(0.1, 0.8);
+  moodfilter::Filter happy;
+  happy.valence = moodfilter::Scale::First;
+  r.mood = autodj::MoodView(words.data(), static_cast<uint32_t>(words.size()), happy.pack());
+  TEST_ASSERT_TRUE(r.mood.on());
+  TEST_ASSERT_TRUE(r.dj.setOn(true));
+  r.playOne(r.card.trackOf(5));
+  Pass a = r.playTo(700);  // (the only entry: picked at once)
+  for (int i = 0; i < 8; ++i) {
+    TEST_ASSERT_TRUE(a.picked && a.added);
+    TEST_ASSERT_FALSE(a.pick.random);
+    TEST_ASSERT_TRUE(r.mood.passes(a.pick.track));
+    TEST_ASSERT_TRUE(r.card.rowOf(a.pick.track) % 4 != 3);
+    TEST_ASSERT_FALSE(r.playTo(700).picked);
+    for (int j = 0; j < 3; ++j) r.pass();  // (the read ahead)
+    a = r.end();  // the pick starts: the next one in the same pass
+  }
+  TEST_ASSERT_EQUAL_UINT32(9, r.dj.engine().stats().picks);
+  TEST_ASSERT_TRUE(r.dj.engine().stats().prefetchReads > 0);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_command_parses_every_form);
@@ -1697,5 +1740,6 @@ int main(int, char**) {
   RUN_TEST(test_a_seed_before_the_join_is_the_pin);
   RUN_TEST(test_the_button_looks_tracks_up_by_their_path);
   RUN_TEST(test_runs_are_made_again_for_new_maps);
+  RUN_TEST(test_a_mood_filter_keeps_the_picks_inside_it);
   return UNITY_END();
 }
