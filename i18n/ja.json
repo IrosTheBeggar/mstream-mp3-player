@@ -1,7 +1,7 @@
 {
   "@@locale": "ja",
   "@@autonym": "日本語",
-  "@@note": "Machine translation, not yet reviewed by a native speaker. Made from the mobile app's (mstream_music, lib/l10n/app_ja.arb, master at bdb174e) and the terminal player's (mstream-terminal-player, locales/ja.yml, main at b89ad0a) Japanese where they had the text or the phrase, both GPL-3.0 by this repository's owner; the rest translated by a Fable agent (Claude), in their words and register, then reviewed message by message by a second Fable agent. Fullwidth punctuation written as ASCII, as the device draws it. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review).",
+  "@@note": "Machine translation, not yet reviewed by a native speaker. Made from the mobile app's (mstream_music, lib/l10n/app_ja.arb, master at bdb174e) and the terminal player's (mstream-terminal-player, locales/ja.yml, main at b89ad0a) Japanese where they had the text or the phrase, both GPL-3.0 by this repository's owner; the rest translated by a Fable agent (Claude), in their words and register, then reviewed message by message by a second Fable agent. Fullwidth punctuation written as ASCII, as the device draws it. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_ja.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
   "boot.touch_hint": "タッチがおかしい? 画面を長押し",
   "coach.header_tip": "ヒント {0}/{1}",
   "coach.header_hint": "タップで次へ",
@@ -249,6 +249,13 @@
   "mood.standard": "標準",
   "mood.loose": "緩め",
   "mood.clear": "クリア",
+  "mood.albums_of": {
+    "other": "{0} / {1} アルバム"
+  },
+  "mood.tracks_of": {
+    "other": "{0} / {1} 曲"
+  },
+  "mood.no_albums": "フィルターに合うアルバムがありません",
   "card.another": "別のカード: 再起動します",
   "card.back": "カードが戻りました: 再起動します",
   "queue_cap.full": {
