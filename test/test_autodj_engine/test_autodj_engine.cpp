@@ -25,12 +25,14 @@
 // again unannounced); a mood filter (MOOD-FILTERS.md 6.1: the candidates
 // inside it, a level alone or no words as none, the runs remade for a
 // changed filter or words filled again, a shared row tested by its first
-// track); the cache keeping the ring and the pin; damaged (a
+// track; its own ladder, 6.2: a jump keeping the classes, the scan's 64,
+// repeats oldest first, a track with no row before them, the only track
+// that fits, nothing that fits); the cache keeping the ring and the pin; damaged (a
 // damaged pin giving way; the rows a pick's reads damaged, named once),
 // failed and broken slots, in hand-made readers and in the hardening
 // files; picks by track id; the empty states' button;
-// the same seed giving the same session; no allocation in pick(); the
-// console's dry-run copy.
+// the same seed giving the same session; no allocation in pick() or in a
+// jump; the console's dry-run copy.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -164,6 +166,7 @@ struct Table {
     p.selFloor = selFloor;
     p.playingTrack = playing;
     p.libraryTracks = maps.m.tracks;
+    p.mood = maps.m.mood;
     return p;
   }
 };
@@ -287,6 +290,10 @@ void expectPick(const Where& w, const Value& x, const Pick& p) {
   expectField(w, x, "cand", p.candidates);
   expectField(w, x, "gated", p.gated);
   expectField(w, x, "inClass", p.inClass);
+  expectField(w, x, "jump", static_cast<uint64_t>(p.jump));
+  expectField(w, x, "repin", p.repinned);
+  expectField(w, x, "rep", p.repeated);
+  expectField(w, x, "noFit", p.noFit);
 }
 
 void expectArray(const Where& w, const Value& x, const char* key, const uint32_t* got, size_t n) {
@@ -314,6 +321,11 @@ void expectStats(const Where& w, const Value& x, const Stats& s) {
   expectArray(w, x, "tempoBreaks", s.tempoBreaks, 2);
   expectArray(w, x, "keyBreaks", s.keyBreaks, 2);
   expectField(w, x, "quickSkips", s.quickSkips);
+  // (Counters added since the first 26 sessions: absent, 0.)
+  expectField(w, x, "jumps", s.jumps);
+  expectField(w, x, "repins", s.repins);
+  expectField(w, x, "moodRepeats", s.moodRepeats);
+  expectField(w, x, "noFit", s.noFit);
 }
 
 }  // namespace
@@ -1066,6 +1078,18 @@ void test_a_level_alone_is_no_filter() {
     TEST_ASSERT_TRUE(rows == first);
   }
   TEST_ASSERT_EQUAL_HEX16(0, MoodView(words.data(), 12, 0x30).q);  // read as 0
+  // By id the same: no word read, no draw added.
+  std::vector<uint32_t> ids[2];
+  for (int i = 0; i < 2; ++i) {
+    auto e = engine();
+    e->newSession(21, 2);
+    PickIn in;
+    in.mood = i ? MoodView(words.data(), 12, qOf(moodfilter::Scale::Any, moodfilter::Level::Loose)) : MoodView();
+    in.playingTrack = 2;
+    in.libraryTracks = 12;
+    for (int n = 0; n < 14; ++n) ids[i].push_back(e->pick(settings(), in).track);
+  }
+  TEST_ASSERT_TRUE(ids[0] == ids[1]);
   // Runs made with no filter stay fresh under a level alone.
   t.maps.m.mood = MoodView();
   const Maps* m = &t.maps.m;
@@ -1172,6 +1196,190 @@ void test_a_shared_row_is_tested_by_its_first_track() {
     const Pick p = e->pick(settings(), t.in(0));
     TEST_ASSERT_EQUAL(2, p.candidates);  // rows 3 and 5
     TEST_ASSERT_TRUE(p.row == 3 || p.row == 5);
+  }
+  // The scan the same (6.3): row 0 lists only row 1, sad, so the pick
+  // jumps; track 9 is a hit, but its row's track fails.
+  t.lists[0] = {{1, 200}};
+  for (uint32_t seed = 0; seed < 12; ++seed) {
+    auto e = engine();
+    e->newSession(seed, 0, &t.maps.m);
+    const Pick p = e->pick(settings(), t.in(0));
+    TEST_ASSERT_TRUE(p.jump == Jump::NoCandidate);
+    TEST_ASSERT_EQUAL(2, p.candidates);
+    TEST_ASSERT_TRUE(p.row == 3 || p.row == 5);
+  }
+}
+
+// Row 0 lists rows 1-4, of which only row 1 is happy; rows 5-8, happy, are
+// listed by none. Row 5 shares row 0's artist; at 120 BPM row 6 is tight,
+// 7 wide, 8 wrong.
+std::unique_ptr<Table> jumpTable(std::vector<uint16_t>* words) {
+  std::vector<Entries> lists = {{{1, 200}, {2, 199}, {3, 198}, {4, 197}}};
+  for (int r = 1; r <= 8; ++r) lists.push_back({{0, 200}});
+  const uint16_t bpm[] = {1200, 1200, 1200, 1200, 1200, 1200, 1220, 1300, 1600};
+  const uint32_t art[] = {9, 1, 2, 3, 4, 9, 6, 7, 8};
+  std::vector<uint32_t> f;
+  for (int r = 0; r < 9; ++r) f.push_back(filterWord(bpm[r], 0, 0, art[r]));
+  std::unique_ptr<Table> t(new Table(lists, f));
+  *words = {kSad, kHappy, kSad, kSad, kSad, kHappy, kHappy, kHappy, kHappy};
+  t->maps.m.mood = MoodView(words->data(), 9, kHappyQ);
+  return t;
+}
+
+// A jump keeps the classes (MOOD-FILTERS.md 6.3): with row 1 an anchor,
+// nothing listed is inside the mood (Jump::NoCandidate); with row 1 cooled
+// and out of the ring, all of it is cooled (Jump::AllCooled), and no
+// neighbour repeats. Either way the scan's rows, the artist cooldown and the
+// tempo's tiers: row 6, alone in the best class.
+void test_a_jump_keeps_the_classes() {
+  std::vector<uint16_t> words;
+  auto t = jumpTable(&words);
+  const Maps* m = &t->maps.m;
+  const Settings tempo = settings(Mode::Rolling, 55, true, false);
+  for (uint32_t seed = 0; seed < 10; ++seed) {
+    auto e = engine();
+    e->newSession(seed, 0, m);
+    e->trackStarted(1, m, false);
+    Pick p = e->pick(tempo, t->in(1));
+    TEST_ASSERT_TRUE(p.ok && p.random && !p.noIndex && p.jump == Jump::NoCandidate);
+    TEST_ASSERT_EQUAL(6, p.row);
+    TEST_ASSERT_EQUAL(0, p.cooldownLevel);
+    TEST_ASSERT_EQUAL(0, p.musicRank);
+    TEST_ASSERT_EQUAL(4, p.candidates);  // rows 5-8
+    TEST_ASSERT_EQUAL(1, p.inClass);
+    TEST_ASSERT_EQUAL(0, p.level);
+    e = engine();
+    e->newSession(seed, 0, m);
+    e->trackStarted(1, m, false);
+    TEST_ASSERT_TRUE(e->trackLeft(1, m, 1000, false));
+    e->trackStarted(0, m, false);
+    p = e->pick(tempo, t->in(0));
+    TEST_ASSERT_TRUE(p.jump == Jump::AllCooled);
+    TEST_ASSERT_EQUAL(6, p.row);
+    TEST_ASSERT_FALSE(p.dry || p.loosened || p.repeated);
+    TEST_ASSERT_EQUAL(5, p.candidates);  // row 1 too, cooled: its class last
+    TEST_ASSERT_EQUAL(1, e->stats().jumps);
+  }
+  // No filter: that pick repeats a neighbour (cooldown level 2), as before.
+  t->maps.m.mood = MoodView(words.data(), 9, 0);
+  auto e = engine();
+  e->newSession(3, 0, m);
+  for (uint32_t tr = 1; tr <= 4; ++tr) {
+    e->trackStarted(tr, m, false);
+    e->trackLeft(tr, m, 1000, false);
+  }
+  e->trackStarted(0, m, false);
+  const Pick p = e->pick(tempo, t->in(0));
+  TEST_ASSERT_TRUE(p.jump == Jump::None && !p.random);
+  TEST_ASSERT_EQUAL(2, p.cooldownLevel);
+  TEST_ASSERT_EQUAL(0, e->stats().jumps);
+}
+
+// 200 happy rows that no list holds: every jump's sample is 64 of them,
+// the later ones taking a place at below(n) < 64.
+void test_the_scan_keeps_64() {
+  std::vector<Entries> lists = {{{1, 200}}};
+  for (int r = 1; r <= 201; ++r) lists.push_back({{0, 200}});
+  Table t(lists);
+  std::vector<uint16_t> words(202, kHappy);
+  words[0] = words[1] = kSad;
+  t.maps.m.mood = MoodView(words.data(), 202, kHappyQ);
+  std::set<uint16_t> rows;
+  for (uint32_t seed = 0; seed < 300; ++seed) {
+    auto e = engine();
+    e->newSession(seed, 0, &t.maps.m);
+    const Pick p = e->pick(settings(), t.in(0));
+    TEST_ASSERT_TRUE(p.jump == Jump::NoCandidate);
+    TEST_ASSERT_EQUAL(64, p.candidates);
+    TEST_ASSERT_EQUAL(64, p.inClass);
+    rows.insert(p.row);
+  }
+  TEST_ASSERT_TRUE(rows.size() > 150);
+  TEST_ASSERT_TRUE(*rows.begin() < 66 && *rows.rbegin() > 66);
+}
+
+// Tracks 1-4 fit. Once each is picked they are the anchors or cooled, and
+// the picks repeat them in the order they were first picked: the track
+// cooldown's oldest first, not playing (6.2, 8).
+void test_repeats_oldest_first() {
+  Table t(full(8));
+  const std::vector<uint16_t> words = {kSad, kHappy, kHappy, kHappy, kHappy, kSad, kSad, kSad};
+  t.maps.m.mood = MoodView(words.data(), 8, kHappyQ);
+  auto e = engine();
+  e->newSession(17, 0, &t.maps.m);
+  uint32_t playing = 0;
+  std::vector<uint16_t> rows;
+  for (int i = 0; i < 12; ++i) {
+    const Pick p = e->pick(settings(), t.in(playing));
+    rows.push_back(p.row);
+    if (i >= 4) {
+      TEST_ASSERT_TRUE(p.repeated && p.random && !p.noIndex);
+      TEST_ASSERT_EQUAL(2, p.cooldownLevel);
+    }
+    playing = p.track;
+  }
+  std::vector<uint16_t> first(rows.begin(), rows.begin() + 4);
+  std::sort(first.begin(), first.end());
+  TEST_ASSERT_TRUE(first == std::vector<uint16_t>({1, 2, 3, 4}));
+  for (int i = 4; i < 12; ++i) TEST_ASSERT_EQUAL(rows[i - 4], rows[i]);
+  TEST_ASSERT_EQUAL(8, e->stats().moodRepeats);
+  TEST_ASSERT_EQUAL(8, e->stats().classes[2 * kRanks]);
+}
+
+// Rows 1-2 fit and are cooled; track 6, with no row, fits: it goes first,
+// by id (Jump::NoRow), then the repeats.
+void test_a_track_with_no_row_before_repeats() {
+  Table t(full(5), {}, {0, 1, 2, 3, 4, kNoRow, kNoRow});
+  const std::vector<uint16_t> words = {kSad, kHappy, kHappy, kSad, kSad, kSad, kHappy};
+  t.maps.m.mood = MoodView(words.data(), 7, kHappyQ);
+  auto e = engine();
+  e->newSession(4, 0, &t.maps.m);
+  uint32_t playing = 0;
+  std::vector<Pick> got;
+  for (int i = 0; i < 5; ++i) {
+    const Pick p = e->pick(settings(), t.in(playing));
+    got.push_back(p);
+    playing = p.track;
+    e->trackStarted(p.track, &t.maps.m, true);
+  }
+  TEST_ASSERT_TRUE(got[0].track != got[1].track && got[0].track + got[1].track == 3);  // 1 and 2
+  TEST_ASSERT_EQUAL(6, got[2].track);
+  TEST_ASSERT_EQUAL_HEX16(kNoRow, got[2].row);
+  TEST_ASSERT_TRUE(got[2].jump == Jump::NoRow && got[2].noIndex && !got[2].repeated);
+  TEST_ASSERT_TRUE(got[3].repeated && got[4].repeated && got[3].row != kNoRow);
+}
+
+// Track 3 alone fits, and plays: it again, by id (6.2, 9), with the index or
+// without; nothing fits: no pick.
+void test_the_only_track_repeats() {
+  Table t(full(6));
+  const std::vector<uint16_t> words = {kSad, kSad, kSad, kHappy, kSad, kSad};
+  moodfilter::Filter none;
+  none.valence = moodfilter::Scale::First;
+  none.energy = moodfilter::Scale::Second;
+  none.voice = moodfilter::Voice::Instrumental;
+  for (int indexed = 1; indexed >= 0; --indexed) {
+    t.maps.m.mood = MoodView(words.data(), 6, kHappyQ);
+    PickIn in = t.in(3);
+    if (!indexed) {
+      in.maps = nullptr;
+      in.slots = nullptr;
+    }
+    auto e = engine();
+    e->newSession(8, 3, indexed ? &t.maps.m : nullptr);
+    for (int i = 0; i < 3; ++i) {
+      const Pick p = e->pick(settings(), in);
+      TEST_ASSERT_TRUE(p.ok && p.repeated && p.noIndex);
+      TEST_ASSERT_EQUAL(3, p.track);
+      TEST_ASSERT_EQUAL(indexed ? 3 : kNoRow, p.row);
+    }
+    t.maps.m.mood = in.mood = MoodView(words.data(), 6, none.pack());
+    const Pick p = e->pick(settings(), in);
+    TEST_ASSERT_TRUE(!p.ok && p.noFit);
+    TEST_ASSERT_EQUAL_UINT32(kNoTrackId, p.track);
+    TEST_ASSERT_EQUAL(1, e->stats().noFit);
+    TEST_ASSERT_EQUAL(1, e->stats().failed);
+    TEST_ASSERT_EQUAL(3, e->stats().picks);
   }
 }
 
@@ -1753,6 +1961,46 @@ void test_no_allocation_in_pick() {
   TEST_ASSERT_EQUAL(frees + 1, gFrees);  // begin()'s one block
 }
 
+// The mood's ladder allocates nothing: jumps, the scan, a track with no
+// row, repeats, picks by id and nothing that fits (6.3).
+void test_no_allocation_in_a_jump() {
+  std::vector<uint16_t> tracks;
+  for (uint16_t r = 0; r < 40; ++r) tracks.push_back(r);
+  for (int i = 0; i < 5; ++i) tracks.push_back(kNoRow);
+  Table t(full(40), {}, tracks);
+  std::vector<uint16_t> words(45, kSad);
+  for (int tr = 0; tr < 40; tr += 5) words[tr] = kHappy;
+  words[42] = kHappy;
+  t.maps.m.mood = MoodView(words.data(), 45, kHappyQ);
+  auto e = engine();
+  const long allocs = gAllocs;
+  e->newSession(1, 0, &t.maps.m);
+  uint32_t playing = 0;
+  uint16_t row;
+  bool noRow = false;
+  for (int i = 0; i < 60; ++i) {
+    if (e->prefetchDue(settings(), &row)) e->prefetch(t.reader, row, &t.maps.m, static_cast<uint16_t>(t.k));
+    const Pick p = e->pick(settings(Mode::Rolling, 55, true, true), t.in(playing));
+    TEST_ASSERT_TRUE(p.ok && words[p.track] == kHappy);
+    noRow = noRow || p.jump == Jump::NoRow;
+    playing = p.track;
+    e->trackStarted(playing, &t.maps.m, true);
+  }
+  PickIn byId = t.in(playing);
+  byId.maps = nullptr;
+  byId.slots = nullptr;
+  for (int i = 0; i < 10; ++i) TEST_ASSERT_TRUE(e->pick(settings(), byId).ok);
+  moodfilter::Filter none;
+  none.valence = moodfilter::Scale::First;
+  none.voice = moodfilter::Voice::Instrumental;
+  t.maps.m.mood = MoodView(words.data(), 45, none.pack());
+  TEST_ASSERT_TRUE(e->pick(settings(), t.in(playing)).noFit);
+  TEST_ASSERT_EQUAL(allocs, gAllocs);
+  TEST_ASSERT_TRUE(noRow);
+  TEST_ASSERT_TRUE(e->stats().jumps > 0 && e->stats().moodRepeats > 0);
+  TEST_ASSERT_EQUAL(1, e->stats().noFit);
+}
+
 void test_a_failed_begin_picks_by_id() {
   gFail = true;
   Engine e;
@@ -1815,6 +2063,11 @@ int main(int, char**) {
   RUN_TEST(test_a_level_alone_is_no_filter);
   RUN_TEST(test_a_filter_changed_remakes_the_runs);
   RUN_TEST(test_a_shared_row_is_tested_by_its_first_track);
+  RUN_TEST(test_a_jump_keeps_the_classes);
+  RUN_TEST(test_the_scan_keeps_64);
+  RUN_TEST(test_repeats_oldest_first);
+  RUN_TEST(test_a_track_with_no_row_before_repeats);
+  RUN_TEST(test_the_only_track_repeats);
   RUN_TEST(test_a_quick_skip_says_whether_it_steered);
   RUN_TEST(test_cooldown_before_music);
   RUN_TEST(test_no_bpm_or_key_anywhere);
@@ -1836,6 +2089,7 @@ int main(int, char**) {
   RUN_TEST(test_surprise);
   RUN_TEST(test_the_same_seed_gives_the_same_session);
   RUN_TEST(test_no_allocation_in_pick);
+  RUN_TEST(test_no_allocation_in_a_jump);
   RUN_TEST(test_a_failed_begin_picks_by_id);
   RUN_TEST(test_copy_session_for_dry_runs);
   return UNITY_END();

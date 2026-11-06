@@ -14,9 +14,11 @@ and whether it steered, the pin (a seed before the join's maps too), the
 key anchor, both cooldowns, loosen
 before repeating (the device's case, dry and loosened at once, every
 listed row cooled), dry and random picks, the read budget, damaged,
-failed and broken slots, the stream, a mood filter's candidates); and the
-fixture up to date, its first 26 sessions and their seven tables frozen
-by hash, every pick under a filter inside it.
+failed and broken slots, the stream, a mood filter's candidates and its
+own ladder: jumps that keep the classes, the scan's 64, repeats oldest
+first, the only track that fits, nothing that fits); and the fixture up to
+date, its first 26 sessions and their seven tables frozen by hash, every
+pick under a filter inside it.
 """
 import hashlib
 import json
@@ -751,6 +753,14 @@ class EngineRules(unittest.TestCase):
             got.append(rows)
         self.assertEqual(got[1:], got[:1] * 3)
         self.assertTrue(A.MoodView(words, M.pack("happy")).on())
+        # By id the same: no word read, no draw added.
+        ids = []
+        for mood in (A.MoodView(), A.MoodView(words, M.pack(level="loose"))):
+            e = A.Engine()
+            e.new_session(21, 2)
+            ids.append([e.pick(A.Settings(), A.PickIn(None, None, playing=2, library_tracks=12, mood=mood)).track
+                        for _ in range(14)])
+        self.assertEqual(ids[0], ids[1])
 
     def test_a_shared_row_is_tested_by_its_first_track(self):
         # Tracks 2 and 9 share row 2; the maps give the row its first track,
@@ -766,6 +776,141 @@ class EngineRules(unittest.TestCase):
         p = e.pick(A.Settings(), self.pin(maps, A.SlotSource(lists), 0))
         self.assertEqual(p.candidates, 2)                   # rows 3 and 5
         self.assertIn(p.row, (3, 5))
+        # The scan the same (6.3): row 0 lists only row 1, sad, so the pick
+        # jumps; track 9 is a hit, but its row's track fails.
+        lists = [[(1, 200)]] + [[(0, 200)] for _ in range(5)]
+        maps.mood = A.MoodView(maps.mood.words, M.pack("happy"))
+        for seed in range(12):
+            e = A.Engine()
+            e.new_session(seed, 0, maps)
+            p = e.pick(A.Settings(), self.pin(maps, A.SlotSource(lists), 0))
+            self.assertEqual((p.jump, p.candidates), (A.J_NO_CANDIDATE, 2))
+            self.assertIn(p.row, (3, 5))
+
+    def jump_table(self):
+        """Row 0 lists rows 1-4, of which only row 1 is happy; rows 5-8, happy,
+        are listed by none. Row 5 shares row 0's artist; at 120 BPM row 6 is
+        tight, 7 wide, 8 wrong."""
+        lists = [[(1, 200), (2, 199), (3, 198), (4, 197)]] + [[(0, 200)] for _ in range(8)]
+        bpm = [1200, 1200, 1200, 1200, 1200, 1200, 1220, 1300, 1600]
+        art = [9, 1, 2, 3, 4, 9, 6, 7, 8]
+        maps = table(lists, [A.pack_filter(b, 0, True, a) for b, a in zip(bpm, art)])
+        maps.mood = A.MoodView([SAD, HAPPY, SAD, SAD, SAD, HAPPY, HAPPY, HAPPY, HAPPY], M.pack("happy"))
+        return lists, maps
+
+    def test_a_jump_keeps_the_classes(self):
+        # Row 1 an anchor: nothing listed inside the mood (jump 1). Row 1
+        # cooled and out of the ring (a quick skip): all of it cooled (jump
+        # 2), not a repeat. Either way the scan's rows 5-8, the artist
+        # cooldown and the tempo's tiers kept: row 6.
+        lists, maps = self.jump_table()
+        tempo = A.Settings(A.ROLLING, 55, True, False)
+        for seed in range(10):
+            e = A.Engine()
+            e.new_session(seed, 0, maps)
+            e.track_started(1, maps, False)
+            p = e.pick(tempo, self.pin(maps, A.SlotSource(lists), 1))
+            self.assertEqual((p.ok, p.jump, p.random, p.row, p.cooldown_level, p.music_rank), (True, A.J_NO_CANDIDATE,
+                                                                                              True, 6, 0, 0))
+            self.assertEqual((p.candidates, p.in_class, p.level), (4, 1, 0))
+            e = A.Engine()
+            e.new_session(seed, 0, maps)
+            e.track_started(1, maps, False)
+            self.assertTrue(e.track_left(1, maps, 1000, False))
+            e.track_started(0, maps, False)
+            p = e.pick(tempo, self.pin(maps, A.SlotSource(lists), 0))
+            # (Row 1 in the sample too, cooled: its class is last.)
+            self.assertEqual((p.jump, p.row, p.dry, p.loosened, p.candidates), (A.J_ALL_COOLED, 6, False, False, 5))
+            self.assertEqual(e.stats.jumps, 1)
+        # Off, the same pick repeats row 1 (cooldown level 2), as before.
+        maps.mood = A.MoodView(maps.mood.words)
+        e = A.Engine()
+        e.new_session(3, 0, maps)
+        for t in (1, 2, 3, 4):
+            e.track_started(t, maps, False)
+            e.track_left(t, maps, 1000, False)
+        e.track_started(0, maps, False)
+        p = e.pick(tempo, self.pin(maps, A.SlotSource(lists), 0))
+        self.assertEqual((p.jump, p.random, p.cooldown_level), (A.J_NONE, False, 2))
+
+    def test_the_scan_keeps_64(self):
+        # 200 happy rows that no list holds: every jump's sample is 64 of
+        # them, the later ones taking a place at below(n) < 64.
+        lists = [[(1, 200)]] + [[(0, 200)] for _ in range(201)]
+        maps = table(lists)
+        maps.mood = A.MoodView([SAD, SAD] + [HAPPY] * 200, M.pack("happy"))
+        rows = set()
+        for seed in range(300):
+            e = A.Engine()
+            e.new_session(seed, 0, maps)
+            p = e.pick(A.Settings(), self.pin(maps, A.SlotSource(lists), 0))
+            self.assertEqual((p.jump, p.candidates, p.gated, p.in_class), (A.J_NO_CANDIDATE, 64, 64, 64))
+            rows.add(p.row)
+        self.assertGreater(len(rows), 150)
+        self.assertTrue(min(rows) < 66 < max(rows))
+
+    def test_repeats_oldest_first(self):
+        # Tracks 1-4 fit. Once each is picked they are the anchors or cooled,
+        # and the picks repeat them in the order they were first picked: the
+        # track cooldown's oldest first, not playing (6.2, 8).
+        lists = full(8)
+        maps = table(lists)
+        maps.mood = A.MoodView([SAD, HAPPY, HAPPY, HAPPY, HAPPY, SAD, SAD, SAD], M.pack("happy"))
+        src = A.SlotSource(lists)
+        e = A.Engine()
+        e.new_session(17, 0, maps)
+        playing, rows = 0, []
+        for _ in range(12):
+            p = e.pick(A.Settings(), self.pin(maps, src, playing))
+            rows.append(p.row)
+            if len(rows) > 4:
+                self.assertEqual((p.repeated, p.cooldown_level, p.random, p.no_index), (True, 2, True, False))
+            playing = p.track
+        self.assertEqual(sorted(rows[:4]), [1, 2, 3, 4])
+        self.assertEqual(rows[4:], rows[:4] * 2)
+        self.assertEqual((e.stats.mood_repeats, e.stats.classes[16]), (8, 8))
+
+    def test_a_track_with_no_row_before_repeats(self):
+        # Rows 1-2 fit and are cooled; track 6, with no row, fits: it goes
+        # first, by id (jump 3), then the repeats.
+        lists = full(5)
+        maps = table(lists, tracks=[0, 1, 2, 3, 4, A.NO_ROW, A.NO_ROW])
+        maps.mood = A.MoodView([SAD, HAPPY, HAPPY, SAD, SAD, SAD, HAPPY], M.pack("happy"))
+        e = A.Engine()
+        e.new_session(4, 0, maps)
+        src = A.SlotSource(lists)
+        playing, got = 0, []
+        for _ in range(5):
+            p = e.pick(A.Settings(), self.pin(maps, src, playing))
+            got.append((p.track, p.jump, p.no_index, p.repeated))
+            playing = p.track
+            e.track_started(p.track, maps, True)
+        self.assertEqual(sorted(t for t, _, _, _ in got[:2]), [1, 2])
+        self.assertEqual(got[2], (6, A.J_NO_ROW, True, False))
+        self.assertEqual([r for _, _, _, r in got[3:]], [True, True])
+
+    def test_the_only_track_repeats(self):
+        # Track 3 alone fits, and plays: it again, by id (6.2, 9), with the
+        # index or without; nothing fits: no pick.
+        lists = full(6)
+        maps = table(lists)
+        maps.mood = A.MoodView([SAD, SAD, SAD, HAPPY, SAD, SAD], M.pack("happy"))
+        for pin in (self.pin(maps, A.SlotSource(lists), 3), A.PickIn(None, None, playing=3, library_tracks=6,
+                                                                      mood=maps.mood)):
+            e = A.Engine()
+            e.new_session(8, 3, maps if pin.maps else None)
+            for _ in range(3):
+                p = e.pick(A.Settings(), pin)
+                self.assertEqual((p.ok, p.track, p.repeated, p.no_index), (True, 3, True, True))
+                self.assertEqual(p.row, 3 if pin.maps else A.NO_ROW)
+            none = A.MoodView(maps.mood.words, M.pack("happy", "aggressive", "instrumental"))
+            if pin.maps:
+                maps.mood = none
+            pin.mood = none
+            p = e.pick(A.Settings(), pin)
+            self.assertEqual((p.ok, p.no_fit, p.track), (False, True, A.NO_TRACK))
+            self.assertEqual((e.stats.no_fit, e.stats.failed, e.stats.picks), (1, 1, 3))
+            maps.mood = A.MoodView(maps.mood.words, M.pack("happy"))
 
     def test_surprise(self):
         lists = star(6)
@@ -813,7 +958,7 @@ class Fixture(unittest.TestCase):
 
     def test_the_fixture_covers_the_rules(self):
         doc = json.loads((FIX / "autodj" / "sessions.json").read_text(encoding="utf-8"))
-        self.assertEqual(len(doc["sessions"]), 29)
+        self.assertEqual(len(doc["sessions"]), 34)
         self.assertEqual(digest(doc["sessions"][:FROZEN_SESSIONS]), FROZEN_SESSIONS_SHA)
         self.assertEqual(digest({n: doc["tables"][n] for n in FROZEN_TABLES}), FROZEN_TABLES_SHA)
         picks = [e["expect"] for s in doc["sessions"] for e in s["events"] if e["op"] == "pick"]
@@ -837,7 +982,8 @@ class Fixture(unittest.TestCase):
     def test_the_mood_sessions(self):
         doc = json.loads((FIX / "autodj" / "sessions.json").read_text(encoding="utf-8"))
         by = {s["name"]: s for s in doc["sessions"]}
-        # Every pick under an active filter, with words, passes its word.
+        # Every pick under an active filter, with words, passes its word, or
+        # is none because nothing fits.
         inside = {}
         for s in doc["sessions"]:
             words, q = s.get("moods"), 0
@@ -846,8 +992,13 @@ class Fixture(unittest.TestCase):
                     q = e["q"]
                 elif e["op"] == "pick" and words is not None and M.active(q):
                     x = e["expect"]
-                    self.assertTrue(x.get("ok") and M.matches(words[x.get("track", 0)], q), s["name"])
+                    if x.get("noFit"):
+                        self.assertFalse(x.get("ok") or any(M.matches(w, q) for w in words), s["name"])
+                    else:
+                        self.assertTrue(x.get("ok") and M.matches(words[x.get("track", 0)], q), s["name"])
                     inside.setdefault(s["name"], []).append(x)
+                elif e["op"] == "pick":
+                    self.assertFalse(any(e["expect"].get(f) for f in ("jump", "repin", "rep", "noFit")), s["name"])
         # Dry and loosened inside the mood (6.1), the runs made again for a
         # second filter; no pick random or a repeat of a cooled row, which
         # the mood's own ladder takes (6.2).
@@ -867,6 +1018,49 @@ class Fixture(unittest.TestCase):
         self.assertEqual([e for e in nd["events"] if e["op"] != "filter"], control["events"])
         self.assertEqual(nd["stats"], control["stats"])
         self.assertEqual(sum(1 for e in control["events"] if e["op"] == "pick"), 30)
+        # The mood's own ladder (6.2): every rung, its counts pinned.
+        def count(name, flag, value=None):
+            return sum(1 for p in inside[name] if (p.get(flag) == value if value is not None else p.get(flag)))
+        rolling = inside["mood-rolling"]
+        self.assertEqual(len(rolling), 50)                  # 15 more with no filter
+        self.assertEqual([count("mood-rolling", "jump", j) for j in (1, 2, 3)], [0, 8, 1])
+        self.assertEqual((count("mood-rolling", "rep"), count("mood-rolling", "dry"),
+                          count("mood-rolling", "loose")), (4, 3, 1))
+        self.assertEqual(len(inside["mood-jump"]), 150)
+        self.assertEqual([count("mood-jump", "jump", j) for j in (1, 2, 3)], [7, 27, 0])
+        jumps = [p for p in inside["mood-jump"] if p.get("jump")]
+        self.assertTrue(all(p.get("random") and not p.get("rep") for p in jumps))
+        self.assertTrue(any(p.get("cand") == 64 for p in jumps))
+        for flag in ("impT", "impK", "kb"):                 # D3 and the key's tiers inside a jump
+            self.assertTrue(any(p.get(flag) for p in jumps), flag)
+        self.assertTrue(any(p.get("mr") for p in jumps))
+        # Repeats: once the 21 tracks that fit are cooled, each comes back
+        # after the other 20.
+        rp = by["mood-repeats"]
+        q = next(e["q"] for e in rp["events"] if e["op"] == "filter")
+        fit = [t for t, w in enumerate(rp["moods"]) if M.matches(w, q)]
+        self.assertEqual(len(fit), 21)
+        tracks = [p["track"] for p in inside["mood-repeats"]]
+        self.assertEqual((len(tracks), set(tracks)), (100, set(fit)))
+        gaps = [j - i for i in range(100) for j in range(i + 1, 100) if tracks[j] == tracks[i]]
+        self.assertEqual(min(gaps), 21)
+        reps = [p for p in inside["mood-repeats"] if p.get("rep")]
+        self.assertEqual(len(reps), 80)
+        self.assertTrue(all(p.get("cl") == 2 and p.get("row", 0) != 65535 and not p.get("noIndex") for p in reps))
+        # No index: by id inside the mood, oldest first, the playing track
+        # alone, then nothing.
+        ni = inside["mood-no-index"]
+        self.assertEqual(len(ni), 36)
+        self.assertTrue(all(p.get("noIndex") for p in ni))
+        self.assertEqual((count("mood-no-index", "rep"), count("mood-no-index", "noFit")), (20, 3))
+        self.assertEqual(by["mood-no-index"]["stats"]["noFit"], 3)
+        playing = [e for e in by["mood-no-index"]["events"] if e["op"] == "pick" and e["expect"].get("rep")]
+        self.assertTrue(any(e["expect"]["track"] == e["playing"] for e in playing))
+        # No anchor: random picks inside the mood, from the scan.
+        na = inside["mood-no-anchor"]
+        self.assertEqual((len(na), count("mood-no-anchor", "random"), count("mood-no-anchor", "broken")), (24, 14, 5))
+        self.assertEqual(sum(1 for p in na if p.get("random") and p.get("reads") == 2), 8)
+        self.assertFalse(any(p.get("jump") or p.get("rep") for p in na))
 
 
 if __name__ == "__main__":

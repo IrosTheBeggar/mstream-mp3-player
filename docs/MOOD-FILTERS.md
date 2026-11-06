@@ -1072,7 +1072,7 @@ pio test -e native -f test_autodj_engine -f test_autodj_trigger -f test_autodj_d
 
 **Effort:** 3-5 (guess). It is two implementations of the whole ladder, engine and `tools/autodj_ref.py`, plus 12 sessions.
 
-**Progress (2026-11-06).** Commits 1 and 2 built, on `claude/mood-filters-s4` (from S2's tip). As built, with the drift from the plan above:
+**Progress (2026-11-06).** Commits 1 to 3 built, on `claude/mood-filters-s4` (from S2's tip). As built, with the drift from the plan above:
 - 1: both hashes hold at this tip, as at a1566fe. "The seven old tables" is hashed as those seven names, so `islands` won't move it. `stats_json` writes `LATER_STATS` only when not 0; the list is empty until a counter comes. The Python check also counts the sessions exactly: 26, then 29.
 - 2: `MoodView` sits beside `Maps` in `lib/core/AutoDjJoin.h`: `words`, `tracks`, `q` as read (invalid is 0), `f`; `on()` needs words and an active filter. `Maps::mood` feeds `buildRun` and the print; `PickIn::mood` is there for `byId`, which doesn't read it yet. Not in the plan: the Driver's `Index` gains `mood` too, which `pickInto` and `DryRun::step` copy into `PickIn` (the button's `surprise` waits for commit 4). `AutoDj::index()` copies the join's maps into `maps_` and sets `.mood` from `Library::index()` (ready, with words); its q is `AutoDj::moods_`, 0 until commit 7's settings carry one.
 - Python: `MoodView`, `Maps.mood`, `PickIn.mood`, `Scene.filter()`, `mood_words()` (`moodfilter.word_of` over uniform 4-place scores, 92 % with a row, 1 % of heads NULL). Sessions gain `moods` (a word a track) and the `filter` event.
@@ -1081,6 +1081,22 @@ pio test -e native -f test_autodj_engine -f test_autodj_trigger -f test_autodj_d
   - mood-no-data and mood-no-data-control, `syn`, 30 + 30: the same picks and counters.
   - In all: 29 sessions, 1,281 picks, 1,086 reads ahead; `sessions.json` 618,426 B, by additions only.
 - Tests: `test_autodj_engine` 44 cases (a filter keeps the candidates inside it; a level alone, an invalid q and no words are none; a changed filter remakes the runs, and so does `mapsChanged()` after words filled again in place; a shared row is tested by its first track). `test_autodj_driver` 36 (a filter through `Index` keeps the picks inside it). `test_autodj_ref` 45. Dropping the predicate, or leaving q out of the print, fails the replay of mood-dry-loosen.
+- 3: the mood's own ladder (6.2), in the engine and `tools/autodj_ref.py`.
+  - 4a and 4b set `Pick::jump` (`Jump::NoCandidate`, `AllCooled`: the fixture's `jump` 1, 2) and go to `randomPick`, whose first line goes to `moodPick` with a filter on. 4b clears `dry`: the pool it named is gone. `byId`'s first line goes to `moodById`. These read the maps' `MoodView` when there are maps, and `PickIn::mood` only without them, so a caller that sets only `Maps::mood` can't leak.
+  - The scan skips only the anchors and the playing row, as 6.3 says, so its sample keeps cooled rows, as `randomPick`'s draws do. The classes put a cooled row last, and "a fresh row in the sample" is `Counts::fresh()`. Tracks kept in `keys_`, rows in `cand_`: nothing allocated.
+  - Not in the plan: step 7 (`Jump::NoRow`, 3) and `moodById`'s fresh track are each one pass with a reservoir of one (a `below(i)` for each track admitted after the first). `moodById` needs no scratch, so it works after a failed `begin()`. A step-7 pick is by id, so `noIndex` and `random` are set.
+  - A repeat (step 8) is ranked by its statuses as known, with no D3 draw, and so are its `tempoBreak` and `keyBreak`. It keeps the jump's code, so `Stats::jumps` counts the repeats that followed a jump: 82 jumps in mood-repeats, 80 of them repeats. `moodById`'s oldest-in-the-cooldown and playing-track picks are repeats too (`repeated`, with `noIndex`), which 9.8's "`rep` with `noIndex`" asks for.
+  - A `noFit` pick counts in `Stats::failed` as well as in `noFit`.
+  - `Pick::repinned` and `Stats::repins` exist but stay unset until commit 5.
+  - Table `islands`: 320 rows in islands of 10, each row listing only its island, its levels 200-236, filters as `syn`'s an island a cluster; its own PCG32 stream.
+- Sessions of commit 3 (MEASURED-HOST, real words). Follow the vibe, except mood-no-anchor's damaged pins: those picks are random, at `:574`, where no re-pin goes (6.4), so commit 5 leaves them as they are.
+  - mood-rolling, `syn`, 65 picks, 50 under a filter: Relaxed, then Neutral, Aggressive and Danceable, then none, then Relaxed. Under a filter: AllCooled 8, NoRow 1, repeats 4, dry 3, loosened 1.
+  - mood-jump, `islands`, 150: Sad at Loose, then Vocals and Party. NoCandidate 7, AllCooled 27 (the toy gave 1 and 4), with D3's draws and key breaks inside the jumps, and samples of 64.
+  - mood-repeats, `syn` with every track on a row, 100: Happy and Party at Strict, which 21 tracks fit. 80 repeats (the toy gave 78), all at cooldown level 2, and the shortest gap is 21.
+  - mood-no-index, no table, 60 tracks, 36: Sad and Vocals (7 fit) by id, then the cooldown's oldest; a filter only the playing track fits; one nothing fits (3 noFit); the tracks renumbered. 20 repeats.
+  - mood-no-anchor, `syn`, 24: no seed and nothing playing; a broken file (5 broken picks); a damaged pin, twice (8 picks of 2 reads each). 14 random picks, all inside.
+  - In all: 34 sessions, 1,656 picks, 1,406 prefetch passes (the "reads ahead" counted above); `sessions.json` 782,293 B, by additions only. The two hashes hold, and so do mood-dry-loosen's counts.
+- Tests at commit 3: `test_autodj_engine` 50 (a jump keeps the classes, both kinds, and with no filter that pick still repeats a neighbour; the scan keeps 64; repeats oldest first; a track with no row before them; the only track repeats, with the index or without; nothing fits; a shared row in the scan; a level alone by id; no allocation in a jump). `test_autodj_ref` 50, the same rules. Removing 4b or the step-7 pick, or walking step 8 newest first, fails the replay at mood-rolling.
 
 ### 9.9 S5: the Auto DJ page
 
