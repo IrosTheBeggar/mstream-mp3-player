@@ -16,7 +16,9 @@
 // tracks that fit, with its count, once until a change; a jump, once a
 // session; a pick up next that plays once; each raised only with nothing
 // above it in that take, Few and Jump then tried again, Once gone (no
-// index and 37 fitting: Random at the first pick, Few at the next). The
+// index and 37 fitting: Random at the first pick, Few at the next); and
+// the Ui's side, what waits (NewsWait: for a toast with Undo, the editor,
+// and a Few or Jump a merged toast outranked, until that toast goes). The
 // widths of these texts in every language are test_ui_library's
 // (test_auto_dj_texts_fit) and test_ui_strings'.
 // Run: pio test -e native -f test_ui_autodj
@@ -1081,6 +1083,196 @@ void test_no_index_and_37_fitting() {
   TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.take());
 }
 
+namespace {
+
+NewsWait::Up up(bool editor, bool undo, bool toast) {
+  NewsWait::Up u;
+  u.editor = editor;
+  u.undo = undo;
+  u.toast = toast || undo;
+  return u;
+}
+
+}  // namespace
+
+// The Ui's side (Ui::autoDjNews(), MOOD-FILTERS.md 4.5): a take waits
+// while a toast with Undo is up (the failure pause doesn't), all of it
+// while the editor is; what waited and the next take make one toast;
+// Auto DJ off drops what waits.
+void test_what_waits_for_a_toast() {
+  NewsWait u;
+  Toast t;
+  // An Undo toast up: the cue waits; due once the Undo toast has gone.
+  TEST_ASSERT_FALSE(u.take(kNewsCued, up(false, true, true), 0, &t));
+  TEST_ASSERT_EQUAL_UINT8(kNewsCued, u.held());
+  TEST_ASSERT_FALSE(u.due(up(false, true, true), true));
+  TEST_ASSERT_TRUE(u.due(up(false, false, true), true));  // (another toast, no Undo: as before, at once)
+  TEST_ASSERT_TRUE(u.take(0, up(false, false, false), 0, &t));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_cued);
+  TEST_ASSERT_EQUAL_UINT8(0, u.held());
+  TEST_ASSERT_FALSE(u.due(up(false, false, false), true));
+  // The failure pause doesn't wait for an Undo toast: it and what waited,
+  // the pause shown, the cue gone (the old bits, as before).
+  TEST_ASSERT_FALSE(u.take(kNewsCued, up(false, true, true), 0, &t));
+  TEST_ASSERT_TRUE(u.take(kNewsPaused, up(false, true, true), 0, &t));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_paused && t.warn);
+  TEST_ASSERT_EQUAL_UINT8(0, u.held());
+  TEST_ASSERT_EQUAL_UINT8(0, u.later());
+  // The editor up: the pause waits too, until it goes.
+  TEST_ASSERT_FALSE(u.take(kNewsPaused, up(true, false, false), 0, &t));
+  TEST_ASSERT_FALSE(u.due(up(true, false, false), true));
+  TEST_ASSERT_TRUE(u.due(up(false, false, false), true));
+  TEST_ASSERT_TRUE(u.take(0, up(false, false, false), 0, &t));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_paused);
+  // Auto DJ off: what waits goes.
+  TEST_ASSERT_FALSE(u.take(kNewsCued | kNewsFew, up(false, true, true), 37, &t));
+  TEST_ASSERT_FALSE(u.due(up(false, false, false), false));
+  TEST_ASSERT_EQUAL_UINT8(0, u.held());
+  TEST_ASSERT_FALSE(u.due(up(false, false, false), true));
+}
+
+// S5's review: a Few or Jump that the toast made of what waited outranks
+// isn't lost (NewsWatch raised it in its own take and marked it said):
+// it waits for that toast to go, then shows, Few before Jump. The old
+// bits and Once outranked go, as before.
+void test_a_mood_toast_the_merge_outranks_waits() {
+  NewsWait u;
+  Toast t;
+  TEST_ASSERT_TRUE(u.take(kNewsPaused | kNewsFew | kNewsJump | kNewsOnce | kNewsCued, up(false, false, false), 37, &t));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_paused);
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew | kNewsJump, u.later());
+  TEST_ASSERT_FALSE(u.due(up(false, false, true), true));  // (the note still up)
+  TEST_ASSERT_FALSE(u.due(up(true, false, false), true));  // (the editor)
+  TEST_ASSERT_TRUE(u.due(up(false, false, false), true));
+  TEST_ASSERT_TRUE(u.take(0, up(false, false, false), 37, &t));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_few && t.warn && t.count == 37);
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, u.later());
+  TEST_ASSERT_FALSE(u.due(up(false, false, true), true));
+  TEST_ASSERT_TRUE(u.take(0, up(false, false, false), 37, &t));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_no_close);
+  TEST_ASSERT_EQUAL_UINT8(0, u.later());
+  TEST_ASSERT_FALSE(u.due(up(false, false, false), true));
+  // A take while one waits for its toast: merged, the most pressing now.
+  TEST_ASSERT_TRUE(u.take(kNewsCued | kNewsJump, up(false, false, false), 37, &t));
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, u.later());
+  TEST_ASSERT_TRUE(u.take(kNewsFew, up(false, false, true), 37, &t));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_few);
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, u.later());
+  TEST_ASSERT_TRUE(u.take(0, up(false, false, false), 37, &t));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_no_close);
+  // A Few moot at its turn (the filter off, or more than 50 fit now):
+  // nothing, and it goes (NewsWatch says it again if it holds again).
+  TEST_ASSERT_TRUE(u.take(kNewsCued | kNewsFew, up(false, false, false), 37, &t));
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, u.later());
+  TEST_ASSERT_TRUE(u.due(up(false, false, false), true));
+  TEST_ASSERT_FALSE(u.take(0, up(false, false, false), 0, &t));
+  TEST_ASSERT_EQUAL_UINT8(0, u.later());
+  TEST_ASSERT_FALSE(u.due(up(false, false, false), true));
+  // Moot already when outranked: not kept.
+  TEST_ASSERT_TRUE(u.take(kNewsCued | kNewsFew, up(false, false, false), 0, &t));
+  TEST_ASSERT_EQUAL_UINT8(0, u.later());
+  // Every byte, with a count and without: the first toast is newsToast()'s,
+  // then each Few (with a count) and Jump not said by it, once, Few
+  // first, and nothing else.
+  for (uint32_t few : {0u, 37u}) {
+    for (unsigned n = 0; n < 256; ++n) {
+      NewsWait w;
+      Toast first, next;
+      const bool any = newsToast(static_cast<uint8_t>(n), &first, few);
+      TEST_ASSERT_EQUAL(any, w.take(static_cast<uint8_t>(n), up(false, false, false), few, &next));
+      if (!any) {
+        TEST_ASSERT_FALSE(w.due(up(false, false, false), true));
+        continue;
+      }
+      TEST_ASSERT_TRUE(next.text == first.text);
+      const bool fewLeft = (n & kNewsFew) && few > 0 && first.text != S::toast_autodj_few;
+      const bool jumpLeft = (n & kNewsJump) && first.text != S::toast_autodj_no_close;
+      if (fewLeft) {
+        TEST_ASSERT_TRUE(w.due(up(false, false, false), true));
+        TEST_ASSERT_TRUE(w.take(0, up(false, false, false), few, &next));
+        TEST_ASSERT_TRUE(next.text == S::toast_autodj_few);
+      }
+      if (jumpLeft) {
+        TEST_ASSERT_TRUE(w.due(up(false, false, false), true));
+        TEST_ASSERT_TRUE(w.take(0, up(false, false, false), few, &next));
+        TEST_ASSERT_TRUE(next.text == S::toast_autodj_no_close);
+      }
+      TEST_ASSERT_FALSE(w.due(up(false, false, false), true));
+    }
+  }
+}
+
+// The finding's path, with NewsWatch: a cue waits under Auto DJ's editor;
+// it closes on a change (the filter's own that waited go, the cue stays);
+// the settle raises Few (said); the next take, merged with the cue, shows
+// the cue, and Few once it goes. Before the fix Few was lost: NewsWatch
+// doesn't raise it again until a change, a switch off, or the count
+// leaving 1 to 50.
+void test_a_few_raised_under_the_editor_is_said() {
+  NewsWatch w;
+  NewsWait u;
+  Toast t;
+  w.counted(true);
+  w.sessionBegan();
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.switchedOn(true));
+  TEST_ASSERT_TRUE(u.take(w.take(), up(false, false, false), 37, &t));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_few);
+  // The editor up; a finished queue's cued pick, then a jump (each its
+  // own take): they wait.
+  autodj::Pass cued = picked(false, false);
+  cued.cued = true;
+  TEST_ASSERT_EQUAL_UINT8(kNewsCued, w.pass(cued, Mode::Rolling, true));
+  TEST_ASSERT_FALSE(u.take(w.take(), up(true, false, false), 37, &t));
+  TEST_ASSERT_EQUAL_UINT8(kNewsJump, w.pass(jumped(), Mode::Rolling, true));
+  TEST_ASSERT_FALSE(u.take(w.take(), up(true, false, false), 37, &t));
+  TEST_ASSERT_EQUAL_UINT8(kNewsCued | kNewsJump, u.held());
+  // Closed on a change, its owner told: the older filter's Jump goes.
+  u.filterChanged();
+  TEST_ASSERT_EQUAL_UINT8(kNewsCued, u.held());
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, w.settled(true, true, false));
+  TEST_ASSERT_TRUE(u.take(w.take(), up(false, false, false), 37, &t));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_cued);
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, u.later());
+  // NewsWatch has it said: the next pick says nothing.
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(picked(false, false), Mode::Rolling, true));
+  TEST_ASSERT_FALSE(u.due(up(false, false, true), true));
+  TEST_ASSERT_TRUE(u.due(up(false, false, false), true));
+  TEST_ASSERT_TRUE(u.take(w.take(), up(false, false, false), 37, &t));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_few && t.count == 37);
+  // The editor opened on a Few still waiting for its toast, closed on a
+  // change: the older filter's goes (the settle says the new one's).
+  TEST_ASSERT_TRUE(u.take(kNewsCued | kNewsFew | kNewsJump, up(false, false, false), 37, &t));
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew | kNewsJump, u.later());
+  TEST_ASSERT_FALSE(u.take(kNewsOnce | kNewsRandom, up(true, false, false), 37, &t));
+  u.filterChanged();
+  TEST_ASSERT_EQUAL_UINT8(0, u.later());
+  TEST_ASSERT_EQUAL_UINT8(kNewsRandom, u.held());
+}
+
+// An Undo tapped: what waited about that queue goes, Few stays (the
+// filter's), shown after the Undo's own toast while Auto DJ is on.
+void test_an_undo_keeps_a_waiting_few() {
+  NewsWait u;
+  Toast t;
+  TEST_ASSERT_FALSE(u.take(kNewsCued | kNewsFew, up(false, true, true), 37, &t));
+  u.undone();
+  TEST_ASSERT_EQUAL_UINT8(0, u.held());
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, u.later());
+  TEST_ASSERT_FALSE(u.due(up(false, false, true), true));  // ("Undone" up)
+  TEST_ASSERT_TRUE(u.due(up(false, false, false), true));
+  TEST_ASSERT_TRUE(u.take(0, up(false, false, false), 37, &t));
+  TEST_ASSERT_TRUE(t.text == S::toast_autodj_few);
+  // A Jump waiting goes with the queue's; with Auto DJ switched off by
+  // the Undo, Few goes too.
+  TEST_ASSERT_TRUE(u.take(kNewsCued | kNewsJump, up(false, false, false), 37, &t));
+  TEST_ASSERT_FALSE(u.take(kNewsFew, up(false, true, true), 37, &t));
+  u.undone();
+  TEST_ASSERT_EQUAL_UINT8(kNewsFew, u.later());
+  TEST_ASSERT_FALSE(u.due(up(false, false, false), false));
+  TEST_ASSERT_EQUAL_UINT8(0, u.later());
+  TEST_ASSERT_EQUAL_UINT8(0, u.held());
+}
+
 void test_the_index_names() {
   for (Index i : {Index::None, Index::Bad, Index::Unreadable, Index::TooBig, Index::NoMemory, Index::Found,
                   Index::Reading, Index::Ready}) {
@@ -1115,6 +1307,10 @@ int main(int, char**) {
   RUN_TEST(test_the_once_toast);
   RUN_TEST(test_a_mood_toast_outranked_waits);
   RUN_TEST(test_no_index_and_37_fitting);
+  RUN_TEST(test_what_waits_for_a_toast);
+  RUN_TEST(test_a_mood_toast_the_merge_outranks_waits);
+  RUN_TEST(test_a_few_raised_under_the_editor_is_said);
+  RUN_TEST(test_an_undo_keeps_a_waiting_few);
   RUN_TEST(test_the_index_names);
   return UNITY_END();
 }

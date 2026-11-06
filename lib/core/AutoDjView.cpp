@@ -255,6 +255,9 @@ uint8_t above(uint8_t bit) {
   }
 }
 
+// Few has a count to say: 1 to 50 fit now (fewCount()).
+bool fewSays(uint32_t few) { return few >= 1 && few <= autodj::kTrackCooldown; }
+
 }  // namespace
 
 uint8_t NewsWatch::add(uint8_t bits) {
@@ -337,7 +340,7 @@ bool newsToast(uint8_t news, Toast* out, uint32_t few) {
     *out = Toast{S::toast_autodj_no_neighbours, false};
   } else if (news & kNewsRandom) {
     *out = Toast{S::toast_autodj_random, false};
-  } else if ((news & kNewsFew) && few >= 1 && few <= autodj::kTrackCooldown) {
+  } else if ((news & kNewsFew) && fewSays(few)) {
     *out = Toast{S::toast_autodj_few, true, few};
   } else if (news & kNewsOnce) {
     *out = Toast{S::toast_autodj_plays_once, false};
@@ -347,6 +350,44 @@ bool newsToast(uint8_t news, Toast* out, uint32_t few) {
     return false;
   }
   return true;
+}
+
+bool NewsWait::take(uint8_t news, const Up& up, uint32_t few, Toast* out) {
+  if (up.editor || (!(news & kNewsPaused) && up.undo)) {
+    held_ = static_cast<uint8_t>(held_ | news);
+    return false;
+  }
+  news = static_cast<uint8_t>(news | held_ | later_);
+  held_ = later_ = 0;
+  Toast t;
+  if (!newsToast(news, &t, few)) return false;  // (a Few moot now, alone: it goes)
+  // A Few (with a count now) or a Jump that this toast outranks: next.
+  uint8_t left = static_cast<uint8_t>(news & kNewsJump);
+  if ((news & kNewsFew) && fewSays(few)) left = static_cast<uint8_t>(left | kNewsFew);
+  if (t.text == S::toast_autodj_few) left = static_cast<uint8_t>(left & ~kNewsFew);
+  if (t.text == S::toast_autodj_no_close) left = static_cast<uint8_t>(left & ~kNewsJump);
+  later_ = left;
+  if (out) *out = t;
+  return true;
+}
+
+bool NewsWait::due(const Up& up, bool on) {
+  if (!on) {
+    held_ = later_ = 0;
+    return false;
+  }
+  if (up.editor) return false;
+  return (held_ && !up.undo) || (later_ && !up.toast);
+}
+
+void NewsWait::filterChanged() {
+  held_ = static_cast<uint8_t>(held_ & ~(kNewsFew | kNewsJump | kNewsOnce));
+  later_ = static_cast<uint8_t>(later_ & ~(kNewsFew | kNewsJump));
+}
+
+void NewsWait::undone() {
+  later_ = static_cast<uint8_t>((held_ | later_) & kNewsFew);
+  held_ = 0;
 }
 
 }  // namespace autodjview

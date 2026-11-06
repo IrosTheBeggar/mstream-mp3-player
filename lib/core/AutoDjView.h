@@ -292,4 +292,41 @@ private:
   uint32_t adds_ = 0;
 };
 
+// The Ui's side of those toasts (Ui::autoDjNews(), MOOD-FILTERS.md 4.5):
+// what waits. A take's news waits while a toast with Undo is up (its Undo
+// stays offered for its 4 s; the failure pause doesn't wait), and while
+// the mood filters' editor is up (all of it, the failure pause too). Once
+// due, the toast is the one for all that waited and the new take merged:
+// a Few or Jump it outranks waits for that toast to go, then shows (it
+// was raised in its own take, and NewsWatch doesn't raise it again).
+// The other bits it outranks go, as before the mood filter.
+class NewsWait {
+public:
+  // What is up on the screen now.
+  struct Up {
+    bool editor = false;  // the mood filters' editor (either owner)
+    bool undo = false;    // a toast with Undo
+    bool toast = false;   // any toast
+  };
+  // A take's news (app/AutoDj::takeNews()), or 0 at the loop's pass once
+  // due(): true with `out` the toast to show now (`few`: fewCount() now).
+  bool take(uint8_t news, const Up& up, uint32_t few, Toast* out);
+  // The loop's pass: true when what waits shows now (take(0, ...)). Auto
+  // DJ off (`on` false): what waits goes.
+  bool due(const Up& up, bool on);
+  // Auto DJ's editor closed on a change, its owner told: the filter's own
+  // that waited (Few, Jump, Once) were an older filter's; the change says
+  // the new one's (NewsWatch::settled()).
+  void filterChanged();
+  // An Undo tapped: what waited about that queue goes. Few stays, the
+  // filter's and not the queue's: after the Undo's own toast, while on.
+  void undone();
+  uint8_t held() const { return held_; }
+  uint8_t later() const { return later_; }
+
+private:
+  uint8_t held_ = 0;   // waiting for the Undo toast or the editor to go
+  uint8_t later_ = 0;  // a Few or Jump the toast shown outranked: waiting for it to go
+};
+
 }  // namespace autodjview

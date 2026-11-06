@@ -4,7 +4,7 @@ Mood filters narrow the Albums list and Auto DJ's picks by mood, using the scale
 
 ## 1. Status
 
-**Status (2026-11-06):** S0, S1 and S2 are built, from main af72b50: S0 on its own branch (`claude/status-line-under-modal`), S1 and S2 stacked on `claude/mood-filters-implementation-0aec6e`; not merged. S1 and S2 are host-tested (S0 has no host test). S2 ran on the user's Core2 against the spare synthetic card in 9.6's Runs A to E, which also checked S1's heap rule, and S0 was checked on the same unit (9.4). S3 is built on `claude/mood-filters-s3`, stacked on S2, host-tested and building, and its device pass (9.7's table) ran on the same unit and card. S4 is built, all seven of its commits and the review's fixes, on `claude/mood-filters-s4`, stacked on S2, host-tested only: no device check has run on it (9.8). S5 is built, its three commits, on `claude/mood-filters-s5`: S3's tip with S4 merged in. It is host-tested and building, and no device check has run on it (9.9). S6 onward are not started. Each stage's result follows its plan (9.4, 9.5, 9.6, 9.7, 9.8, 9.9), and the figures from those runs are MEASURED 2026-11-06. A read-only study found it possible, and this document is the build plan.
+**Status (2026-11-06):** S0, S1 and S2 are built, from main af72b50: S0 on its own branch (`claude/status-line-under-modal`), S1 and S2 stacked on `claude/mood-filters-implementation-0aec6e`; not merged. S1 and S2 are host-tested (S0 has no host test). S2 ran on the user's Core2 against the spare synthetic card in 9.6's Runs A to E, which also checked S1's heap rule, and S0 was checked on the same unit (9.4). S3 is built on `claude/mood-filters-s3`, stacked on S2, host-tested and building, and its device pass (9.7's table) ran on the same unit and card. S4 is built, all seven of its commits and the review's fixes, on `claude/mood-filters-s4`, stacked on S2, host-tested only: no device check has run on it (9.8). S5 is built, its three commits and the review's fix, on `claude/mood-filters-s5`: S3's tip with S4 merged in. It is host-tested and building, and no device check has run on it (9.9). S6 onward are not started. Each stage's result follows its plan (9.4, 9.5, 9.6, 9.7, 9.8, 9.9), and the figures from those runs are MEASURED 2026-11-06. A read-only study found it possible, and this document is the build plan.
 
 **Picked by the user, on the design canvas:**
 - The editor: the one-screen grid of 7.1.
@@ -233,6 +233,7 @@ A filtered repeat is not a neighbour repeat. Today, with every neighbour cooled,
 - So a card with no index and 37 tracks that fit says Random first, because `NewsWatch` marks it said at once (`:151-153`), and Few at the next append.
 - `Toast` gains a count, because `src/ui/Ui.cpp:429-431` passes a bare id.
 - While the editor is up, `Ui::autoDjNews` holds all news, Paused included. That is a change from `src/ui/Ui.cpp:420`. `src/ui/Ui.cpp:1398` gains the same condition.
+- The Ui's holds (an Undo toast, the editor) merge takes into one toast. A Few or Jump that this toast outranks was raised in its own take, so `NewsWatch` won't try it again: it waits for that toast to go, then shows, Few first (`autodjview::NewsWait`, S5's review, 9.9). The old bits and Once outranked there go, as before. An Undo tapped drops what waited, but Few.
 - A settle at the fence says nothing, because its fit count is old.
 - Two-line behaviour follows the code (3.2).
 
@@ -1264,7 +1265,7 @@ Needs S3's editor and S4. One PR. Merged, then held out of a release until S7 (9
   - **The fence.** A settle there says nothing but clears the flags too, so Few comes at the first pick after the fence, with the new count.
   - **The count.** main.cpp passes `fewCount()` of the view at that moment (`Ui::autoDjNews(news, few)`), and the Ui's flush uses the snapshot's. The snapshot alone would not do: it is a pass old when main.cpp hands the news over, and after a `Dq` it holds the old count. `newsToast` skips Few with no count: the filter went, or stopped being few, while the toast waited.
   - **The hold.** `Ui::autoDjNews` and the flush (`Ui.cpp:1398` at a1566fe) hold everything while `filters_.up()`, for either owner. Not in the plan: when Auto DJ's editor closes on a change with its owner told, it drops the held Few, Jump and Once. They were an older filter's, and the settle says the new one's.
-  - **An edge left.** The Ui's own holds (an Undo toast, the editor) merge takes. A Few held there can lose to an old bit that comes later, as the old bits already do among themselves. The page's amber line still says it.
+  - **An edge left** (fixed by the review, below). The Ui's own holds (an Undo toast, the editor) merge takes. A Few held there could lose to an old bit that came later, as the old bits already do among themselves.
   - **Docs:** `docs/AUTODJ.md` (the status, 0, 3.14, 9.1-9.3, 9.6, 9's 65 messages, 11.3) and `docs/ARCHITECTURE.md`'s toasts and `UiHost` calls.
 
 Host (MEASURED-HOST):
@@ -1274,6 +1275,15 @@ Host (MEASURED-HOST):
 - `python3.12 tools/gen_ui_strings.py --check`: clean.
 - The whole `pio test -e native`: 2,144 cases in 102 suites, 2,136 passed. The 5 failures are this Mac's known ones on clean main (`test_host_clock` 2, `test_hop_feed` 2, `test_queue` 1).
 - `pio run -e core2 -e core2-dio`: both build with no new warnings. core2's flash is 4,349,231 B: +596 B over commit 2's 4,348,635 B, and +9,556 B over S5's base at a6d4001 (4,339,675 B). core2-dio's is 4,349,263 B. RAM 58,480 B, unchanged.
+
+**The review's fix** (one commit after 3, MEASURED-HOST). The review found one minor, the edge above, and it is fixed:
+- **The finding's path.** A Paused or Cued held under Auto DJ's editor; the editor closes on a change; the settle raises Few and sets `fewSaid_`; the next take, merged with the held bit, showed that toast and dropped Few. Few was then not said until a change, a switch off, or the count leaving 1 to 50. The new hold under the editor can last any time, so the window was wide.
+- **The fix.** `autodjview::NewsWait` holds the Ui's side, host-tested: `pendingNews_`, its hold rule, its flush, the drop at a changed close and at Undo all moved into it. A Few (with a count) or a Jump that the merged toast outranks waits in `later()` until no toast is up, then shows; a take that comes meanwhile is merged with it, the most pressing first. A Few moot by its turn goes. Auto DJ's editor closed on a change drops a waiting Few or Jump too (an older filter's), and Auto DJ off drops all.
+- **An Undo tapped** (not in the finding): it still drops what waited about that queue, but no longer Few, which is the filter's. Few shows after the "Undone" toast while Auto DJ is on; an Undo that switches Auto DJ off drops it.
+- `test_ui_autodj` has 30 cases, 4 new: what waits for a toast (the old rule as before), a mood toast the merge outranks waits (every byte, with a count and without: the first toast is `newsToast()`'s, then each Few and Jump it outranked, once, Few first), the finding's path with `NewsWatch` (Few lost before), and an Undo keeping a waiting Few.
+- Each of these mutations fails a test: nothing left for later; the later bits shown over a toast still up; a changed close keeping them; an Undo dropping Few.
+- With `test_ui_library` (69) and `test_ui_strings` (20): 119 of 119. The whole `pio test -e native`: 2,148 cases in 102 suites, 2,140 passed, the 5 failures this Mac's known ones. `python3.12 tools/gen_ui_strings.py --check`: clean (no string changed).
+- `pio run -e core2 -e core2-dio`: both build with no new warnings. core2's flash is 4,349,555 B, +324 B over commit 3's 4,349,231 B; core2-dio's 4,349,587 B. RAM 58,480 B, unchanged (`NewsWait` is 2 B, where `pendingNews_` was 1).
 
 Not run: the whole device list above, and S4's (9.8).
 
@@ -1506,7 +1516,7 @@ What would change the plan:
 - A one-word ru tag in place of the two-line wrap: the picked design has the wrap, and the firmware takes the ARB's words.
 - Keeping `uiMt<cell>`, `uiMp<n>`: `uit` with `uk1` at the goldens' cells and a µs line for every pass answer the same questions with no new command.
 - Telling the owner from every `closeModal(false)`: only `suspend()` can have the editor up, and a reload there runs under `suspended_`.
-- Carrying an unshown Few in `pendingNews_`: `src/ui/Ui.cpp:1398` would draw it the next pass, over the toast just shown. It waits for the next append instead.
+- Carrying an unshown Few in `pendingNews_`: `src/ui/Ui.cpp:1398` would draw it the next pass, over the toast just shown. It waits for the next append instead. (One the Ui's merge outranks is carried since S5's review, but in `NewsWait`'s own `later()`, which waits for that toast to go: 4.5, 9.9.)
 - A new "{n} of {m} tracks fit · picks are random" string for the no-index status: the held form says it with no new text in nine languages.
 - A frame for a toast over the editor's title row: the toast goes at opening, one line of code.
 - A version check or a probe for the route: a flag is mStream's own rule (mStream `src/api/sync.js:18`).

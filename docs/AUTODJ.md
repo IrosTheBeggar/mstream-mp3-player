@@ -1326,7 +1326,9 @@ empty Queue's Auto DJ button; a Clear's (the console's `qx`, `qu`).
   outline. At 1x it reads as text touching the outline: left for the
   user to judge.
 - **While a toast with Undo is up**, these wait until it goes (the failure
-  pause doesn't wait). An Undo tap, or Auto DJ switched off, drops them.
+  pause doesn't wait). An Undo tap drops them (but "Only {n} tracks fit",
+  the filter's: after the Undo's own toast), and Auto DJ switched off
+  drops them all.
 - "No Auto DJ index" is said once per switch-on or boot, not once a
   session: every Play is a session.
 - **Under a mood filter** (3.14) a jump, a repeat or a re-pin says none of
@@ -1360,6 +1362,10 @@ empty Queue's Auto DJ button; a Clear's (the console's `qx`, `qu`).
   Auto DJ's toasts wait until it closes, the failure pause too. Auto DJ's
   editor closed on a change drops the filter's own that waited: the
   change says its own, from its count.
+- What waited and the next news make one toast (`autodjview::NewsWait`).
+  "Only {n} tracks fit" or "No close match" outranked there was already
+  raised, so it isn't lost: it waits for that toast to go, then shows,
+  "Only {n} tracks fit" first.
 - Only a pick that was appended speaks; a refused one is tried again
   quietly.
 
@@ -1488,7 +1494,7 @@ files.
 | `test_autodj_trigger` | Every condition, the first that fails, the finished queue, the holds (a mood filter no track fits among them), `owed` only while joining, the failure pause |
 | `test_autodj_driver` | Sessions, steering, the cue, the marks across a read-back, refused and removed picks, the holds, the failure pause, the index arriving late, the seed before the join, the button's lookups, the refill wait, the dry run, the `D` parser; a quick skip's reason (before the join too); the Undo of "Auto DJ from here" and the button from a playing, paused, stopped, cued and empty queue, Auto DJ on and off before the tap; a slot whose CRC fails on the read ahead and again at the pick, named by that pick's pass once; a mood filter: the picks and the button inside it (the button with none drawing as before), the hold when no track fits (nothing owed), `Dq`'s parse, a filter changed keeping the session and the pick up next, `Dn`'s tallies under it |
 | `test_autodj_open` | What a failed open comes to: the tries, their waits, a remount's new count; over the real reader, a read that fails is always the card's fault and a bad file never is |
-| `test_ui_autodj` | The row's state, the Output line and its fallback, the dim rows, the strictness steps, the status lines, the empty-state button, the toasts' rules; under a mood filter the sheet's detail, Smart filters' value, the status lines and their amber, no second button when nothing fits, and the filter's three toasts (when each is said and said again, the order, one outranked waiting or going, no index with 37 fitting) |
+| `test_ui_autodj` | The row's state, the Output line and its fallback, the dim rows, the strictness steps, the status lines, the empty-state button, the toasts' rules; under a mood filter the sheet's detail, Smart filters' value, the status lines and their amber, no second button when nothing fits, and the filter's three toasts (when each is said and said again, the order, one outranked waiting or going, no index with 37 fitting); what waits on the Ui's side (`NewsWait`: an Undo toast, the editor, one a merged toast outranked) |
 | `test_card_autodj` | The MPDJ v2 slots, header and selection |
 | `test_queue` | The quiet append (the listener's undo kept, its rank in the snapshot, at the cap), the play epoch, the snapshot writes under an hour of appends |
 | `test_playback` | The pick's gapless word, refused behind the fence, Repeat All, the holds, the cue, every Play and Clear bumping the epoch, natural ends; the Undo of a Play, Shuffle all's Play and a Clear from every play state (playing, paused, paused by the timer, cued by Auto DJ, stopped, finished, waiting for the headphones), never starting what was silent |

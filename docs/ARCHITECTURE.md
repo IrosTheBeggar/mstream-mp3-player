@@ -3732,13 +3732,16 @@ Queue, Dance and Output (with its Pair and About pages).
     will repeat" (amber, its count main.cpp's `fewCount()` of the view at
     that moment), "Plays once, then the filters apply" and "No close
     match: any track that fits". A pick the queue refused says nothing.
-    **They wait while a toast with Undo is up** (`Ui::pendingNews_`: a
-    pick lands about half a second after a one-track Play starts, and
-    would take its Undo off the screen); the failure pause doesn't wait.
-    **All of them wait while the mood filters' editor is up**, the
-    failure pause too, and Auto DJ's editor closed on a change drops the
-    filter's own that waited (the change says its own). A tap on Undo, or
-    Auto DJ switched off, drops what waits. When a pick takes
+    **They wait while a toast with Undo is up** (`Ui::djNews_`, an
+    `autodjview::NewsWait`, host-tested: a pick lands about half a second
+    after a one-track Play starts, and would take its Undo off the
+    screen); the failure pause doesn't wait. **All of them wait while the
+    mood filters' editor is up**, the failure pause too, and Auto DJ's
+    editor closed on a change drops the filter's own that waited (the
+    change says its own). What waited and the next take make one toast;
+    a Few or Jump it outranks waits for that toast to go, then shows. A
+    tap on Undo drops what waits but Few; Auto DJ switched off drops it
+    all. When a pick takes
     the listener's undo (`appendQuiet()`, above), main.cpp calls
     `Ui::queueUndoDropped()` and the Undo toast goes (`[ui] the Undo toast
     went: Auto DJ's pick took the undo`).
