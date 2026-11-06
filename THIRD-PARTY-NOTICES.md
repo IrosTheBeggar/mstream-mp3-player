@@ -296,9 +296,12 @@ It contains:
   Espressif Systems (Shanghai) PTE LTD"; sd_diskio_crc.c "Copyright (c)
   2014 Neil Thiessen"); two files are modified: `sd_diskio.cpp` (it says
   so at its top, and each change is marked: the card's busy waited out
-  after a write) and `library.properties` (its `version`, 3.3.12+mstream.1,
-  and its `paragraph`); the other files are unchanged (the SHA-256 sums of
-  every original and the changes are in lib/SD/README.md).
+  after a write, the data blocks' CRC16 from the project's lib/core, and
+  the console's write bench) and `library.properties`
+  (its `version`, 3.3.12+mstream.1, and its `paragraph`); `sd_bench.h` is
+  the project's own file, added (GPL-3.0-or-later); the other files are
+  unchanged (the SHA-256 sums of every original and the changes are in
+  lib/SD/README.md).
 - Source: https://github.com/espressif/arduino-esp32/tree/3.3.12
 - Also in the merged image: boot_app0.bin (at 0xE000), from this package.
 

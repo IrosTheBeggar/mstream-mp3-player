@@ -23,6 +23,13 @@
 //   (its one byte before the busy read first).
 // - ff_sd_status() asks CMD13 again once after an R1 with an error bit,
 //   before it says STA_NOINIT (which makes FatFs mount the volume again).
+// - The console's write bench (gx, gxs): its timers and counts, ACMD23's
+//   switch, the clock's uncapped setting, the CID and CSD read (declared
+//   in sd_bench.h, the project's own file).
+// - The data blocks' CRC16 two bytes a step (lib/core SdCrc16.h, the same
+//   result), not CRC16()'s byte a step: 19 % of a 32 KB write before
+//   (docs/SWAP-MODE.md section 7.2). CRC16() stays for the bench's A/B
+//   (gxc0), and CRC7() for the commands.
 
 // Disable the automatic pin remapping of the API calls in this file
 #define ARDUINO_CORE_BUILD
@@ -30,8 +37,11 @@
 #include "Arduino.h"
 #include "sd_diskio.h"
 #include "esp_system.h"
+#include "esp_timer.h"  // mstream-mp3-player: the write bench's timers
 #include "esp32-hal-periman.h"
 #include "SdBusy.h"  // mstream-mp3-player: the busy's rules (lib/core)
+#include "sd_bench.h"  // mstream-mp3-player: the write bench's interface
+#include "SdCrc16.h"   // mstream-mp3-player: the data blocks' CRC16 (lib/core)
 
 extern "C" {
 #include "ff.h"
@@ -85,6 +95,24 @@ typedef struct {
 } ardu_sdcard_t;
 
 static ardu_sdcard_t *s_cards[FF_VOLUMES] = {NULL};
+
+// mstream-mp3-player: the write bench (sd_bench.h). Written under the SPI
+// bus's lock, read by the bench between its writes.
+static sd_bench_stats_t s_bench = {};
+static bool s_benchOn = false;
+static bool s_preErase = true;
+static inline uint64_t benchNow() {
+  return s_benchOn ? (uint64_t)esp_timer_get_time() : 0;
+}
+// CMD10: SPI mode's SEND_CID (the enum's SEND_CID is SD mode's CMD2).
+static constexpr char kSendCidSpi = 10;
+
+// mstream-mp3-player: the data blocks' CRC16 (SdCrc16.h), or the stock
+// CRC16() for the bench's A/B (sdcard_set_crc16()): the same result.
+static unsigned short crcFast(const char *data, int length) {
+  return sdcrc::crc16((const uint8_t *)data, (size_t)length);
+}
+static unsigned short (*s_crc16)(const char *, int) = crcFast;
 
 #if ARDUHAL_LOG_LEVEL >= ARDUHAL_LOG_LEVEL_ERROR
 const char *fferr2str[] = {
@@ -202,6 +230,7 @@ char sdCommand(uint8_t pdrv, char cmd, unsigned int arg, unsigned int *resp) {
       continue;
     } else if (token & 0x08) {
       log_w("crc error");
+      s_bench.crcErrors++;  // mstream-mp3-player: the write bench's count
       sdDeselectCard(pdrv);
       delay(100);
       sdSelectCard(pdrv);
@@ -242,20 +271,35 @@ bool sdReadBytes(uint8_t pdrv, char *buffer, int length) {
 
   card->spi->transferBytes(NULL, (uint8_t *)buffer, length);
   crc = card->spi->transfer16(0xFFFF);
-  return (!card->supports_crc || crc == CRC16(buffer, length));
+  // mstream-mp3-player: a failed CRC counted for the write bench; the
+  // CRC16 two bytes a step (s_crc16).
+  const bool ok = !card->supports_crc || crc == s_crc16(buffer, length);
+  if (!ok) {
+    s_bench.crcErrors++;
+  }
+  return ok;
 }
 
 char sdWriteBytes(uint8_t pdrv, const char *buffer, char token) {
   ardu_sdcard_t *card = s_cards[pdrv];
-  unsigned short crc = (card->supports_crc) ? CRC16(buffer, 512) : 0xFFFF;
+  const uint64_t t0 = benchNow();  // mstream-mp3-player: the write bench's split
+  unsigned short crc = (card->supports_crc) ? s_crc16(buffer, 512) : 0xFFFF;  // mstream-mp3-player: s_crc16
+  const uint64_t t1 = benchNow();
   if (!sdWait(pdrv, 500)) {
     return 0;
   }
+  const uint64_t t2 = benchNow();
 
   card->spi->write(token);
   card->spi->writeBytes((uint8_t *)buffer, 512);
   card->spi->write16(crc);
-  return (card->spi->transfer(0xFF) & 0x1F);
+  const char response = card->spi->transfer(0xFF) & 0x1F;
+  if (s_benchOn) {
+    s_bench.crcUs += t1 - t0;
+    s_bench.blockBusyUs += t2 - t1;
+    s_bench.wireUs += benchNow() - t2;
+  }
+  return response;
 }
 
 /*
@@ -365,10 +409,15 @@ bool sdWriteSectors(uint8_t pdrv, const char *buffer, unsigned long long sector,
   ardu_sdcard_t *card = s_cards[pdrv];
 
   for (int f = 0; f < 3;) {
-    if (card->type != CARD_MMC) {
+    const uint64_t t0 = benchNow();  // mstream-mp3-player: the write bench's split
+    // mstream-mp3-player: s_preErase, the write bench's switch (on but for it).
+    if (card->type != CARD_MMC && s_preErase) {
       if (sdTransaction(pdrv, SET_WR_BLK_ERASE_COUNT, currentCount, NULL)) {
         return false;
       }
+    }
+    if (s_benchOn) {
+      s_bench.preEraseUs += benchNow() - t0;
     }
 
     if (!sdSelectCard(pdrv)) {
@@ -379,12 +428,14 @@ bool sdWriteSectors(uint8_t pdrv, const char *buffer, unsigned long long sector,
       do {
         token = sdWriteBytes(pdrv, currentBuffer, 0xFC);
         if (token != 0x05) {
+          s_bench.lastRefusal = (uint8_t)token;  // mstream-mp3-player: the write bench's
           f++;
           break;
         }
         currentBuffer += 512;
         f = 0;
       } while (--currentCount);
+      const uint64_t t2 = benchNow();
 
       if (!sdWait(pdrv, 500)) {
         break;
@@ -401,13 +452,25 @@ bool sdWriteSectors(uint8_t pdrv, const char *buffer, unsigned long long sector,
         }
         sdWait(pdrv, 500);
         sdDeselectCard(pdrv);
+        const uint64_t t3 = benchNow();
 
         unsigned int resp;
         if (sdTransaction(pdrv, SEND_STATUS, 0, &resp) || resp) {
           return false;
         }
+        if (s_benchOn) {
+          const uint32_t stop = (uint32_t)(t3 - t2);
+          s_bench.stopBusyUs += stop;
+          if (stop > s_bench.maxStopBusyUs) {
+            s_bench.maxStopBusyUs = stop;
+          }
+          s_bench.statusUs += benchNow() - t3;
+          s_bench.multiWrites++;
+          s_bench.blocks += (uint32_t)count;
+        }
         return true;
       } else {
+        s_bench.retries++;  // mstream-mp3-player: the write bench's count
         if (sdCommand(pdrv, STOP_TRANSMISSION, 0, NULL)) {
           break;
         }
@@ -929,4 +992,75 @@ sdcard_type_t sdcard_type(uint8_t pdrv) {
     return CARD_NONE;
   }
   return card->type;
+}
+
+/*
+ * mstream-mp3-player: the console's write bench (sd_bench.h)
+ * */
+
+void sdcard_bench(bool on) {
+  s_bench = {};
+  s_benchOn = on;
+}
+
+sd_bench_stats_t sdcard_bench_stats(void) {
+  return s_bench;
+}
+
+void sdcard_set_pre_erase(bool on) {
+  s_preErase = on;
+}
+
+void sdcard_set_crc16(bool fast) {
+  s_crc16 = fast ? crcFast : CRC16;
+}
+
+bool sdcard_crc16_fast(void) {
+  return s_crc16 == crcFast;
+}
+
+int sdcard_frequency(uint8_t pdrv) {
+  if (pdrv >= FF_VOLUMES || s_cards[pdrv] == NULL) {
+    return 0;
+  }
+  return s_cards[pdrv]->frequency;
+}
+
+void sdcard_set_frequency(uint8_t pdrv, int hz) {
+  if (pdrv >= FF_VOLUMES || s_cards[pdrv] == NULL || hz <= 0) {
+    return;
+  }
+  s_cards[pdrv]->frequency = hz;
+}
+
+// A 16-byte register (CID, CSD): its command, then a data block, as
+// sdGetSectorsCount() reads the CSD.
+static bool sdReadRegister(uint8_t pdrv, char cmd, uint8_t *out) {
+  if (pdrv >= FF_VOLUMES || s_cards[pdrv] == NULL || (s_cards[pdrv]->status & STA_NOINIT)) {
+    return false;
+  }
+  AcquireSPI lock(s_cards[pdrv]);
+  for (int f = 0; f < 3; f++) {
+    if (!sdSelectCard(pdrv)) {
+      return false;
+    }
+    if (sdCommand(pdrv, cmd, 0, NULL)) {
+      break;
+    }
+    const bool success = sdReadBytes(pdrv, (char *)out, 16);
+    sdDeselectCard(pdrv);
+    if (success) {
+      return true;
+    }
+  }
+  sdDeselectCard(pdrv);
+  return false;
+}
+
+bool sdcard_read_cid(uint8_t pdrv, uint8_t *out) {
+  return sdReadRegister(pdrv, kSendCidSpi, out);
+}
+
+bool sdcard_read_csd(uint8_t pdrv, uint8_t *out) {
+  return sdReadRegister(pdrv, SEND_CSD, out);
 }
