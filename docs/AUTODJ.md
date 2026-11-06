@@ -1670,10 +1670,26 @@ no redesign.
 Heap figures are compared only within one scripted sequence. The
 control's own are not the 2026-11-02 figures above (327,668 B, not
 335,860 B, after a stopped update; 294,900 B, not 155,636 B, with the
-FLAC): a largest free block depends on the steps before it (7.4). Not
-A/B'd, since it needs a fresh commit on each firmware: the first walk
-after a new commit, then `gb`, read 180,212 B with the block. On the
-card without tails (docs/MOOD-FILTERS.md 9.6, Run B) the same path read
+FLAC): a largest free block depends on the steps before it (7.4). In
+the script above `library.idx`'s save ended before the join.
+
+The save after the rejoin, A/B'd (MEASURED 2026-11-06): two firmwares
+built from S2's tip (`3461c41`), a control whose builder never sets the
+word and the mood firmware, each after a boot that rebuilt the library
+with or without words, then a reset (a load boot), `z`, `D`, `gb` with
+nothing playing and no `gw` first (not deferred), `D`, `Dc`, `D`.
+PSRAM's largest free block, control / moods: 655,348 / 622,580 B joined
+at the load boot, 327,668 / 294,900 B joined after the update with the
+save not yet done, 204,788 / 180,212 B after the save and `Dc`. The
+save landed after the rejoin: in the control it ended after the `D`
+that follows `gb`; with the block, between the join and that `D`. So the
+180,212 B is the save's layout, not the block, whose share on this path
+is -24,576 B; 7.4's rebuilt heap records 180,212 B for this layout on
+2026-10-14, before any mood work. The control is under 245,764 B too,
+so docs/MOOD-FILTERS.md 9.5's rule forces no redesign; a FLAC still
+fits (155,636 B), and so do an Opus's 65,536 and 62,464 B blocks. The
+layout is the update's own, worth its own look. On the card without
+tails (docs/MOOD-FILTERS.md 9.6, Run B) an update after `gw` read
 221,172 B at the join while its walk still ran, 335,860 B after it.
 
 Host: in `test_autodj_join`'s model heap with the real block, the boot's
