@@ -1014,7 +1014,39 @@ Host (MEASURED-HOST):
 - `python tools/gen_ui_strings.py --check` clean; `test_gen_ui_strings` 29 pass (Python 3.12: the Mac's 3.9 can't run the generator).
 - `pio run -e core2 -e core2-dio`: both build with no new warnings. core2's flash 4,333,743 B, +15,292 B over S2's 4,318,451 B (68.9 %; the app 70 % of its slot); RAM 58,480 B and IRAM 5,161 B left, unchanged.
 
-Device: not run. The spare card holds gen 5 with scores (9.6, Run C), which the table above needs; `python tools/synthtransfer.py --check <card> --mood-filter 127` re-checks it, read-only. Until S0 merges, a Library status line ending under the editor wipes its grid (9.4).
+The card: the spare holds gen 5 with scores (9.6, Run C), which the table above needs; `python tools/synthtransfer.py --check <card> --mood-filter 127` re-checks it, read-only. Until S0 merges, a Library status line ending under the editor wipes its grid (9.4).
+
+**Device (2026-11-06).** MEASURED on the Core2 v1.3 and the spare card (gen 5: 19,413 tracks, 17,954 with a word, 1,707 albums), silent mode, Auto DJ on. The build: this branch at the review's fix with S0's commit picked on top, not committed together (core2's flash 4,333,763 B). Every screenshot was compared with its frame pixel by pixel, quantised to 565. No bug found; nothing fixed.
+
+| What | Result |
+|---|---|
+| Pass time idle | 11 filters, 0 to 854 albums (`uiMa` 1, 20, 2, 14, 214, 256, 19E, CF, 1C0, A, 3): 15,300-16,775 µs, against 8-35 ms (MODELLED). An inactive word (0, 200, 400): 9-29 µs. The list's first frame after each: 43.5-54.3 ms, as a tap onto Albums (44.2 ms) |
+| With an MP3 | `qp13` (`01 - Bench 320.mp3`), then 9 filtered passes: 21,645-40,039 µs, against 17-70 ms. Ring 1,416-1,439 ms, 0 underruns, load 37.6-37.8 %. The reloaded list's first frame 75.5-114.3 ms; a segment switch in the same run 79.0-91.1 ms |
+| Tap and close | Idle: editor taps 34.8 ms at most as events (each holds its pass), none logged slow. Clear 48.6 ms (the whole grid). Opening from the row 83.0 ms, logged as a slow event; the row is pressed at Down first. The cross with no change: a 25.8 ms frame. The cross after a change: the list's frame, 51.8 ms. The row's cross: 12.3 ms, then the list in 44.3 ms. During the MP3: taps 50.1-71.0 ms (passes 17.8-32.1 ms), each logged slow; the close after a change 94.8 ms. No `[ui] slow frame`; a fling over a filtered list ran at 30.3 fps, its worst frame 22.9 ms |
+| Third column | `uk1`: `uit260,86` read 263,74 and hit Sad (0x003); `uit276,174` read 287,169 and hit the level (Standard to Loose, 0x403); `uit263,218` read 267,215 and hit Danceable (0x503). `uk0`. A real finger: not run |
+| Widths, empty line | 241 albums: a rail, the disc at 232. 17 (`1A`): a scrollbar, 284. 3 (`256`): neither, 292. 0 (`19E`): "No albums match these filters" as `A-empty-line`, pixel for pixel; the row stays |
+| Dot | `uis160,200,160,80,60` (offset 966 px): the dot, and `ui` names it. `uit160,54`: offset 0, the dot gone. Under `14` at 1,008 px, Artists shows 705 rows unfiltered and no dot; back on Albums, 1,008 px and the dot |
+| Rail, jump grid | `214` (140 albums): the grid greys #, J, U, X, Z. J does nothing and the grid stays. K goes to row 66 (its first album at the top, the rail "K", the dot). The grid opens in 61.0 ms, and in 63.0 ms with no filter (1,707 rows) |
+| Languages | ru, ja, pl: the editor with `19E`, the row with `1E` (60 albums, a rail). The grids are the frames' pixel for pixel but the count; ru's tag wraps Для / вечеринки as drawn; the summaries cut where the frames cut |
+| Fence | `14` on, then `g0`: the walk (29.2 s), then the fence for 33.6 s. "Updating the library…" with no row, as `A-updating`; `uiM` says no albums held, and `uiMa` is refused. At its end the pass ran again (16,407 µs) and the row came back, 241 of 1,707. The hitch: a 66.9 ms loop pass (a 46.7 ms frame, 19.5 ms of status), then 49.8 ms |
+| Through dark | `uiMe`, `Ps0`, `Ps1`: the editor stays up, redrawn whole in 88 ms at the wake |
+| A toast at opening | `+ Queue` on an album's sheet ("Added 3 tracks", Undo, View), then `uiMe` 0.6 s later: the toast went (`ui`: toast none). The screen equals the editor with no toast, 0 px different over y 36-239. The cross at 287,52, where the toast's buttons were, closed the editor. The queue: "undo: none" |
+| Heap | `D` with no filter: PSRAM free 630,196 B, the largest block 606,196 B. After `uiMa14`: 623,280 B (-6,916 B: the 6,828 B block and 88 B), the largest unchanged. After `g0` with `14` on, joined: largest 294,900 B. 9.6's update stopped with moods also read 294,900 B, in another sequence: not an A/B. Above 9.5's 245,764 B |
+| Colours | Read from the shots, equal to the frames' in 565: the accent, DIM, FAINT, BTN, the amber at 0 (f8c038). The redraw's feel, by eye: not run |
+
+The frames against the screen:
+- The crosses are `kCross`, 12 x 12, where the frames draw 10 x 10 (the frames' README says so).
+- The frames anti-alias, the panel doesn't. The row's disc, the level cell's dots, the corners of the pills and chips (1 px each) and the Albums dot have hard edges here, at the same sizes and colours.
+- The dot covers y 51-56, its centre at 53.5, where the frame's covers 51-57, centre 54. That is 7.2's `fillRoundRect(203, 15, 6, 6, 3)` as written.
+- The row's divider starts at x 8, as every album row's does (the list's style); the frames draw it from x 0.
+- Counts follow each language's grouping, ru "1 707" and pl "1707"; the frames write "1,741" in all three.
+- The frames' tab bar is an English capture. In ru and ja no label shows under the active icon (the tab bar's `labelFit()`), and pl's reads "Biblioteka". Not S3's.
+- pl: "Taneczne" and the Folders segment's "Foldery" sit 1 px right of the frames'. The segment control is not S3's.
+- Behind the fence the band reads "Updating library…", the frame "Reading the card…": the update's later phase.
+- The card's own data: album names, the rail's "#" (the loose tracks sort first), 1,707 albums, the volume at 0 % (silent mode).
+- Not a difference: "Sad · Aggressive · Acoustic" (`4F`) is Small here, where `A-empty-line` has it in Body. On this card it fits 5 albums, so the list has a scrollbar and its room is 212; the frame's empty list has 220.
+
+Not run: a card without mood data (one card here, scored); a real finger on the third column; the redraw's feel by eye; the toast at opening through the row's tap (`uiMe` takes the same `openFilters()`); a hidden album, the card's status band over a filtered list, and no memory. The bench queue was replaced (`qp13`, then 3 tracks added).
 
 ### 9.8 S4: the engine
 
