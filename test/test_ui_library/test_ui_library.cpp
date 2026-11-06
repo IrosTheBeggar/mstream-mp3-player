@@ -4007,7 +4007,8 @@ void test_auto_dj_texts_fit() {
     for (dv::Index ix : {dv::Index::None, dv::Index::Bad, dv::Index::Unreadable, dv::Index::TooBig,
                          dv::Index::NoMemory, dv::Index::Found, dv::Index::Reading, dv::Index::Ready}) {
       for (autodj::Hold hold :
-           {autodj::Hold::None, autodj::Hold::RepeatOne, autodj::Hold::SleepTimer, autodj::Hold::Failures}) {
+           {autodj::Hold::None, autodj::Hold::RepeatOne, autodj::Hold::SleepTimer, autodj::Hold::Failures,
+            autodj::Hold::NoFit}) {
         for (autodj::Mode mode : {autodj::Mode::Rolling, autodj::Mode::Locked}) {
           dv::State s;
           s.on = on != 0;

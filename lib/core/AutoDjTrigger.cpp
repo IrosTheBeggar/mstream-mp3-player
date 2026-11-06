@@ -18,6 +18,7 @@ const char* waitName(Wait w) {
     case Wait::RepeatOne: return "Repeat One";
     case Wait::SleepTimer: return "the sleep timer's end of queue";
     case Wait::Failures: return "picks failed to play";
+    case Wait::NoFit: return "no track fits the filters";
   }
   return "?";
 }
@@ -28,6 +29,7 @@ TriggerOut decide(const TriggerIn& in) {
   o.hold = in.failurePaused  ? Hold::Failures
            : in.repeatOne    ? Hold::RepeatOne
            : in.sleepEndOfQueue ? Hold::SleepTimer
+           : in.noFit        ? Hold::NoFit
                                 : Hold::None;
   const bool session = in.play == PlayState::Playing || in.play == PlayState::Waiting;
   const bool finished = !session && in.finished;
@@ -49,12 +51,14 @@ TriggerOut decide(const TriggerIn& in) {
     o.wait = Wait::SleepTimer;
   } else if (in.failurePaused) {
     o.wait = Wait::Failures;
+  } else if (in.noFit) {
+    o.wait = Wait::NoFit;
   } else {
     o.wait = Wait::Due;
   }
   o.pick = o.wait == Wait::Due;
   o.cue = o.pick && finished;
-  // Due but for the engine (1-3 and 6-8 hold): no fence until it is made.
+  // Due but for the engine (1-3 and 6-9 hold): no fence until it is made.
   const bool last = in.queueSize > 0 && in.upNext == 0 && (session || finished);
   o.owed = last && in.joining && o.hold == Hold::None;
   return o;

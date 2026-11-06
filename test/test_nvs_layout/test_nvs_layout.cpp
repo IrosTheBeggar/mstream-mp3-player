@@ -3,12 +3,14 @@
 
 // Host unit tests for nvslayout: the NVS schema number's boot step, the
 // resume point's versioned blob, the repeat mode's key, the UI's language
-// (schema 3) and Auto DJ's settings (schema 4). Run: pio test -e native
+// (schema 3), Auto DJ's settings (schema 4) and its mood filter (schema 5).
+// Run: pio test -e native
 #include <unity.h>
 
 #include <cstdint>
 #include <cstring>
 
+#include "MoodFilter.h"
 #include "NvsLayout.h"
 #include "UiStrings.h"
 
@@ -35,21 +37,29 @@ void test_schema_steps() {
   s = nvslayout::schemaStep(true, 2, 1);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(s.action));
   TEST_ASSERT_EQUAL_UINT16(2, s.from);
-  TEST_ASSERT_EQUAL_UINT16(4, nvslayout::kCurrent);
-  s = nvslayout::schemaStep(true, 1);  // a schema-1 unit (v0.5.0 to v0.6.0): migrated to 4
+  TEST_ASSERT_EQUAL_UINT16(5, nvslayout::kCurrent);
+  s = nvslayout::schemaStep(true, 1);  // a schema-1 unit (v0.5.0 to v0.6.0): migrated to 5
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Migrate), static_cast<int>(s.action));
   TEST_ASSERT_EQUAL_UINT16(1, s.from);
-  s = nvslayout::schemaStep(true, 2);  // a schema-2 unit (0.7.0 to 0.9.0): migrated to 4
+  s = nvslayout::schemaStep(true, 2);  // a schema-2 unit (0.7.0 to 0.9.0): migrated to 5
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Migrate), static_cast<int>(s.action));
   TEST_ASSERT_EQUAL_UINT16(2, s.from);
-  s = nvslayout::schemaStep(true, 3);  // a schema-3 unit (0.10.0): migrated to 4
+  s = nvslayout::schemaStep(true, 3);  // a schema-3 unit (0.10.0): migrated to 5
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Migrate), static_cast<int>(s.action));
   TEST_ASSERT_EQUAL_UINT16(3, s.from);
+  s = nvslayout::schemaStep(true, 4);  // a schema-4 unit (0.11.0 to 0.12.0): migrated to 5
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Migrate), static_cast<int>(s.action));
+  TEST_ASSERT_EQUAL_UINT16(4, s.from);
+  s = nvslayout::schemaStep(true, 5);  // PR #27's builds, or this one's: as it is
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(A::None), static_cast<int>(s.action));
   s = nvslayout::schemaStep(true, 3, 2);  // 0.9.0 on a schema-3 NVS: left as it is
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(s.action));
-  s = nvslayout::schemaStep(true, 4, 3);  // 0.10.0 on this firmware's NVS: left as it is
+  s = nvslayout::schemaStep(true, 4, 3);  // 0.10.0 on a schema-4 NVS: left as it is
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(s.action));
   TEST_ASSERT_EQUAL_UINT16(4, s.from);
+  s = nvslayout::schemaStep(true, 5, 4);  // 0.12.0 on this firmware's NVS: left as it is
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(s.action));
+  TEST_ASSERT_EQUAL_UINT16(5, s.from);
   TEST_ASSERT_EQUAL_STRING("meta", nvslayout::kMetaNamespace);
   TEST_ASSERT_EQUAL_STRING("schema", nvslayout::kSchemaKey);  // (NVS keys: 15 characters at most)
 }
@@ -257,9 +267,10 @@ void test_resume_blob_unknown_kind_keeps_the_position() {
 // older version still read): no schema bump for that. A new key is a
 // layout change: schema 2 is schema 1's keys and "queue"/"repeat", schema
 // 3 schema 2's and "ui"/"lang", schema 4 schema 3's and the four of
-// "autodj".
-void test_the_schema_is_four() {
-  TEST_ASSERT_EQUAL_UINT16(4, nvslayout::kCurrent);
+// "autodj", schema 5 schema 4's and "autodj"/"moods" (PR #27's card
+// transfer takes 5 too, for its own namespaces: docs/MOOD-FILTERS.md 10).
+void test_the_schema_is_five() {
+  TEST_ASSERT_EQUAL_UINT16(5, nvslayout::kCurrent);
   TEST_ASSERT_EQUAL_UINT8(2, nvslayout::kResumeVersion);
   TEST_ASSERT_EQUAL_UINT32(64, nvslayout::kResumeMaxBytes);
 }
@@ -312,6 +323,7 @@ void test_language_picker_and_its_migration() {
   TEST_ASSERT_FALSE(nvslayout::migrateWritesLang(2, true));  // a downgrade left one: kept
   TEST_ASSERT_FALSE(nvslayout::migrateWritesLang(3, false));
   TEST_ASSERT_FALSE(nvslayout::migrateWritesLang(4, false));  // (the step to 4 writes nothing)
+  TEST_ASSERT_FALSE(nvslayout::migrateWritesLang(5, false));  // (nor the step to 5)
 }
 
 // Auto DJ's settings as saved (schema 4): absent, each key's default (off,
@@ -401,16 +413,63 @@ void test_auto_dj_from_what_is_saved() {
   AutoDjSaved odd;
   odd.floorPct = 62;  // (nothing sets it: written as the default)
   odd.mode = 7;
+  odd.moods = 0x800;
   TEST_ASSERT_EQUAL_UINT8(55, nvslayout::autoDjTo(odd).floor);
   TEST_ASSERT_EQUAL_UINT8(0, nvslayout::autoDjTo(odd).mode);
+  TEST_ASSERT_EQUAL_HEX16(0, nvslayout::autoDjTo(odd).moods);
   TEST_ASSERT_EQUAL_STRING("autodj", nvslayout::kAutoDjNamespace);
   TEST_ASSERT_EQUAL_STRING("on", nvslayout::kAutoDjOnKey);
   TEST_ASSERT_EQUAL_STRING("mode", nvslayout::kAutoDjModeKey);
   TEST_ASSERT_EQUAL_STRING("floor", nvslayout::kAutoDjFloorKey);
   TEST_ASSERT_EQUAL_STRING("match", nvslayout::kAutoDjMatchKey);
-  const char* names[] = {nvslayout::kAutoDjNamespace, nvslayout::kAutoDjOnKey, nvslayout::kAutoDjModeKey,
-                         nvslayout::kAutoDjFloorKey, nvslayout::kAutoDjMatchKey};
+  const char* names[] = {nvslayout::kAutoDjNamespace, nvslayout::kAutoDjOnKey,    nvslayout::kAutoDjModeKey,
+                         nvslayout::kAutoDjFloorKey,   nvslayout::kAutoDjMatchKey, nvslayout::kAutoDjMoodsKey};
   for (const char* n : names) TEST_ASSERT_TRUE(std::strlen(n) <= 15);
+}
+
+// Auto DJ's mood filter as saved (schema 5; docs/MOOD-FILTERS.md 4.6, 5.4):
+// "moods", a u16. Absent, or a q moodfilter::valid() refuses (a bit above
+// 10, voice 3, level 3: a later firmware's, or junk), no filter; any valid q
+// is itself, a level alone included (it filters nothing, but is the
+// listener's level). What autoDjTo() writes reads back the same: each of
+// the 1,152 valid q itself, any other value none; every key is written.
+void test_auto_dj_mood_filter_from_what_is_saved() {
+  using nvslayout::AutoDjSaved;
+  using nvslayout::AutoDjStored;
+  TEST_ASSERT_EQUAL_STRING("moods", nvslayout::kAutoDjMoodsKey);
+  TEST_ASSERT_EQUAL_HEX16(0, nvslayout::autoDjFrom(AutoDjStored()).moods);
+  AutoDjStored st;
+  st.moods = 0x127;  // (absent: whatever was read)
+  TEST_ASSERT_EQUAL_HEX16(0, nvslayout::autoDjFrom(st).moods);
+  st.haveMoods = true;
+  TEST_ASSERT_EQUAL_HEX16(0x127, nvslayout::autoDjFrom(st).moods);
+  const uint16_t invalid[] = {0x800, 0x8127, 0xFFFF, 0x030, 0x0B0, 0x600, 0x7FF, 0x1000};
+  for (uint16_t q : invalid) {
+    st.moods = q;
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(0, nvslayout::autoDjFrom(st).moods, "an invalid q");
+  }
+  st.moods = 0x200;  // Strict alone
+  TEST_ASSERT_EQUAL_HEX16(0x200, nvslayout::autoDjFrom(st).moods);
+  // The other keys don't move it, nor it them.
+  st.haveOn = st.haveFloor = true;
+  st.on = 1;
+  st.floor = 70;
+  const AutoDjSaved a = nvslayout::autoDjFrom(st);
+  TEST_ASSERT_TRUE(a.on);
+  TEST_ASSERT_EQUAL_UINT8(70, a.floorPct);
+  TEST_ASSERT_EQUAL_HEX16(0x200, a.moods);
+  int valid = 0;
+  for (uint32_t q = 0; q < 0x10000; ++q) {
+    AutoDjSaved w;
+    w.moods = static_cast<uint16_t>(q);
+    const AutoDjStored out = nvslayout::autoDjTo(w);
+    TEST_ASSERT_TRUE(out.haveOn && out.haveMode && out.haveFloor && out.haveMatch && out.haveMoods);
+    const bool ok = moodfilter::valid(w.moods);
+    valid += ok;
+    TEST_ASSERT_EQUAL_HEX16(ok ? q : 0, out.moods);
+    TEST_ASSERT_EQUAL_HEX16(ok ? q : 0, nvslayout::autoDjFrom(out).moods);
+  }
+  TEST_ASSERT_EQUAL_INT(4 * 4 * 3 * 8 * 3, valid);  // valence, energy, voice, tags, level
 }
 
 // The migration matrix: every unit this firmware can boot on, and what
@@ -418,14 +477,17 @@ void test_auto_dj_from_what_is_saved() {
 // under schema 1 (a blob's kinds are its own version's business, no
 // bump), and the queue modes moved the schema to 2 for "queue"/"repeat";
 // a unit may have run either build before this one, or 0.6.0, or 0.9.0
-// (schema 2), or 0.10.0 (schema 3), or none; schema 3 added "ui"/"lang",
-// schema 4 "autodj". The schema's step, the repeat mode, the resume point,
+// (schema 2), or 0.10.0 (schema 3), or 0.11.0 to 0.12.0 (schema 4), or PR
+// #27's card transfer builds (schema 5, without "moods"), or none; schema 3
+// added "ui"/"lang", schema 4 "autodj", schema 5 "autodj"/"moods". The
+// schema's step, the repeat mode, the resume point,
 // the UI's language and Auto DJ's settings, as the boot reads them
 // (NvsSchema::check(), QueueStore::loadRepeat() and loadResume(),
 // app/UiLang, app/AutoDjStore): the resume point survives whole on every
 // row, the mode where a unit had one, every unit but a fresh one is in
 // English with no language picker unless it chose a language, and Auto DJ
-// is off with its defaults unless this firmware saved it.
+// is off with its defaults unless a firmware with it saved it, with no mood
+// filter unless this firmware saved one.
 void test_migration_matrix() {
   using A = SchemaStep::Action;
   using Kind = ResumeAnchor::Kind;
@@ -457,6 +519,15 @@ void test_migration_matrix() {
   stayOnSeedRead.mode = 1;
   stayOnSeedRead.floorPct = 70;
   stayOnSeedRead.matchKey = true;
+  // ... and a mood filter: Sad, Relaxed, Vocals, Danceable at Standard.
+  nvslayout::AutoDjStored moody = stayOnSeed;
+  moody.haveMoods = true;
+  moody.moods = 0x127;
+  nvslayout::AutoDjSaved moodyRead = stayOnSeedRead;
+  moodyRead.moods = 0x127;
+  nvslayout::AutoDjStored junkMoods = stayOnSeed;  // (a later firmware's q: no filter here)
+  junkMoods.haveMoods = true;
+  junkMoods.moods = 0x927;
   const nvslayout::AutoDjStored none;
   const nvslayout::AutoDjSaved off;
   const Unit units[] = {
@@ -481,13 +552,23 @@ void test_migration_matrix() {
        false, none, off},
       {"0.10.0, its picker left without a choice (the tips not seen yet)", true, 3, false, 0, Kind::None, nullptr,
        false, A::Migrate, 0, Lang::En, true, none, off},
-      {"this firmware (schema 4, Auto DJ never touched)", true, 4, true, 1, Kind::Opus, "de", true, A::None, 1,
+      {"0.11.0 (schema 4, Auto DJ never touched)", true, 4, true, 1, Kind::Opus, "de", true, A::Migrate, 1,
        Lang::De, false, none, off},
-      {"this firmware (schema 4, Auto DJ on in Stay on seed)", true, 4, true, 0, Kind::Mp3, "en", true, A::None, 0,
+      {"0.12.0 (schema 4, Auto DJ on in Stay on seed)", true, 4, true, 0, Kind::Mp3, "en", true, A::Migrate, 0,
        Lang::En, false, stayOnSeed, stayOnSeedRead},
-      {"this firmware, back from a downgrade to 0.10.0 (schema 4 kept, Auto DJ on)", true, 4, true, 2, Kind::Flac,
-       "pl", true, A::None, 2, Lang::Pl, false, stayOnSeed, stayOnSeedRead},
-      {"this firmware, its picker left without a choice (the tips not seen yet)", true, 4, false, 0, Kind::None,
+      {"0.12.0, back from a downgrade to 0.10.0 (schema 4 kept, Auto DJ on)", true, 4, true, 2, Kind::Flac, "pl",
+       true, A::Migrate, 2, Lang::Pl, false, stayOnSeed, stayOnSeedRead},
+      {"0.12.0, its picker left without a choice (the tips not seen yet)", true, 4, false, 0, Kind::None, nullptr,
+       false, A::Migrate, 0, Lang::En, true, none, off},
+      {"PR #27's builds (schema 5, no mood filter key, Auto DJ on)", true, 5, true, 1, Kind::Mp3, "de", true, A::None,
+       1, Lang::De, false, stayOnSeed, stayOnSeedRead},
+      {"this firmware (schema 5, a mood filter)", true, 5, true, 0, Kind::Opus, "en", true, A::None, 0, Lang::En,
+       false, moody, moodyRead},
+      {"this firmware, back from a downgrade to 0.12.0 (schema 5 kept, its filter too)", true, 5, true, 2, Kind::Flac,
+       "pl", true, A::None, 2, Lang::Pl, false, moody, moodyRead},
+      {"this firmware after a later one's (schema 5, a q it can't read)", true, 5, true, 0, Kind::None, "en", true,
+       A::None, 0, Lang::En, false, junkMoods, stayOnSeedRead},
+      {"this firmware, its picker left without a choice (the tips not seen yet)", true, 5, false, 0, Kind::None,
        nullptr, false, A::None, 0, Lang::En, true, none, off},
   };
   for (const Unit& u : units) {
@@ -501,14 +582,15 @@ void test_migration_matrix() {
     if (u.want == A::Migrate && nvslayout::migrateWritesLang(s.from, lang != nullptr)) lang = "en";
     TEST_ASSERT_TRUE_MESSAGE(nvslayout::langFrom(lang != nullptr, lang) == u.wantLang, u.ran);
     TEST_ASSERT_EQUAL_MESSAGE(u.wantPicker, nvslayout::langPickerDue(lang != nullptr, u.coachSeen), u.ran);
-    // Auto DJ (app/AutoDjStore): migrate(3, 4) writes nothing; absent is
-    // off, with the defaults.
+    // Auto DJ (app/AutoDjStore): migrate(3, 4) and (4, 5) write nothing;
+    // absent is off, with the defaults, and no mood filter.
     const nvslayout::AutoDjSaved dj = nvslayout::autoDjFrom(u.dj);
     TEST_ASSERT_EQUAL_MESSAGE(u.wantDj.on, dj.on, u.ran);
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(u.wantDj.mode, dj.mode, u.ran);
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(u.wantDj.floorPct, dj.floorPct, u.ran);
     TEST_ASSERT_EQUAL_MESSAGE(u.wantDj.matchTempo, dj.matchTempo, u.ran);
     TEST_ASSERT_EQUAL_MESSAGE(u.wantDj.matchKey, dj.matchKey, u.ran);
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(u.wantDj.moods, dj.moods, u.ran);
     QueueResume saved = u.kind == Kind::None ? sample() : anchored();
     saved.anchor.kind = u.kind;
     if (u.kind == Kind::Flac || u.kind == Kind::Opus) {  // the FLAC model: no byte fields
@@ -528,6 +610,9 @@ void test_migration_matrix() {
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(nvslayout::schemaStep(true, 3, 2).action));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(nvslayout::schemaStep(true, 4, 2).action));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(nvslayout::schemaStep(true, 4, 3).action));
+  // To 0.12.0 (schema 4) from this firmware: the same, "moods" never read
+  // (its picks unfiltered), and back here the filter is as it was.
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(nvslayout::schemaStep(true, 5, 4).action));
   // The downgrades from schema 2 (perhaps an Opus anchor),
   // each modelled by the rule that build has: to the queue modes build
   // (schema 2: nothing to do; its reader knew the kinds up to FLAC, so an
@@ -560,11 +645,12 @@ int main(int, char**) {
   RUN_TEST(test_resume_blob_unknown_is_ignored);
   RUN_TEST(test_resume_blob_opus_anchor);
   RUN_TEST(test_resume_blob_unknown_kind_keeps_the_position);
-  RUN_TEST(test_the_schema_is_four);
+  RUN_TEST(test_the_schema_is_five);
   RUN_TEST(test_repeat_from_what_is_saved);
   RUN_TEST(test_language_from_what_is_saved);
   RUN_TEST(test_language_picker_and_its_migration);
   RUN_TEST(test_auto_dj_from_what_is_saved);
+  RUN_TEST(test_auto_dj_mood_filter_from_what_is_saved);
   RUN_TEST(test_migration_matrix);
   return UNITY_END();
 }

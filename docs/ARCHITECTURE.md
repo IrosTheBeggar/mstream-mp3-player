@@ -1683,7 +1683,14 @@ written once the taps rest (`app/AutoDjStore` through `app/NvsLater`,
 [AUTODJ.md](AUTODJ.md)). Its `migrate(3, 4)`
 step does nothing: an absent key, or a value this firmware doesn't take,
 reads as its default (off, Follow the vibe, 55 %, both off). 0.10.0
-leaves a schema-4 NVS as it is and never reads the namespace.
+leaves a schema-4 NVS as it is and never reads the namespace. Schema 5 is
+schema 4's keys and `autodj`/`moods`, Auto DJ's mood filter (a u16, its 11
+bits: [MOOD-FILTERS.md](MOOD-FILTERS.md) 4.6, 5.4), written with the other
+four. Its `migrate(4, 5)` step does nothing (no key, or a value that isn't
+a filter: none), and 0.12.0 leaves a schema-5 NVS as it is, never reading
+the key (its picks unfiltered). PR #27's card transfer takes schema 5 for
+its own namespaces: shipped in one release they share it (MOOD-FILTERS.md
+10).
 The rules:
 
 - **Never reuse a key name** (or a namespace) for anything else, even after
@@ -1724,14 +1731,15 @@ The rules:
   position and resume point and the Bluetooth stack's keys are written as
   before.
 
-The keys of schema 4, by namespace: `meta` (schema); `input` (cal,
+The keys of schema 5, by namespace: `meta` (schema); `input` (cal,
 cal_ask, haptics, railtick); `player` (bt_name, bt_forgot, bt_fresh);
 ESP32-A2DP's `connected_bda` (last_bda: the remembered headphones); `power` (cpu_mhz,
 bt_tx, boot_cpu, idle_after, off_idle); `screen` (off_after, bright); `ui`
 (coach, and schema 3's lang); `queue` (gen, pos, resume, and schema 2's
-repeat); `autodj` (schema 4's on, mode, floor, match). Schema 3's are the
-same without `autodj`, schema 2's without `ui`/`lang` too, schema 1's
-without `queue`/`repeat` too. The Bluetooth stack keeps its bonds in
+repeat); `autodj` (schema 4's on, mode, floor, match, and schema 5's
+moods). Schema 4's are the same without `moods`, schema 3's without
+`autodj`, schema 2's without `ui`/`lang` too, schema 1's without
+`queue`/`repeat` too. The Bluetooth stack keeps its bonds in
 its own namespace, which the firmware never touches.
 
 ### Moving an existing unit to the new layout

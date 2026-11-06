@@ -41,7 +41,9 @@
 //     at random (logged why); a fault of the card's, tried again a few times
 //     first (autodj::OpenTries).
 //   every loop pass, after the card's guard and before the card's step
-//     (main.cpp's loop()): step(): a remount seen first (sectordisk's
+//     (main.cpp's loop()): step(): the mood filter's count of the tracks
+//     inside it first, when q changed or the library came back
+//     (stepMood(): docs/MOOD-FILTERS.md 6.5); then a remount (sectordisk's
 //     counter: the root read again into its own Root; the same index: the
 //     file reopened, the maps and the session kept; another: closed,
 //     opened, joined again, a new session); then a try at the file that is
@@ -136,6 +138,11 @@ public:
   bool setMode(autodj::Mode m);
   bool setFloor(uint8_t pct);
   bool setMatch(bool tempo, bool key);
+  // The mood filter (the console's Dq; MOOD-FILTERS.md 4.4): saved, and the
+  // tracks inside it counted at once (stepMood(): a filter nothing fits
+  // holds from this pass); the session kept. Behind the update's fence the
+  // count waits for its end. False: invalid, or unchanged.
+  bool setMoods(uint16_t q);
   // "Auto DJ from here" on `track`; the empty states' button. False /
   // not Played: nothing played.
   bool fromHere(uint32_t track);
@@ -188,6 +195,19 @@ private:
   };
 
   autodj::Index index();  // (not const: its slot reader reads the file)
+  // Auto DJ's mood filter (Settings::moods) over the library's words
+  // (MOOD-FILTERS.md 6.1): off behind the update step's fence (no index)
+  // and on a card with no mood data, where picks are unfiltered (D4).
+  autodj::MoodView moodView();
+  // The tracks inside it, counted again (fit_, then the engine's runs
+  // remade: Engine::mapsChanged(), while a filter is or was on) only when
+  // q changed or lib_.index() came back (null to not: the first pass, each
+  // fence's end), 6.5's key: the index is the same object across a fence,
+  // its stamp hashes names and folders only, and a score-only rebuild
+  // keeps the count, so none of those could say the words changed. Behind
+  // the fence the counts keep their values.
+  void stepMood();
+  void moodLine(char* buf, size_t size);  // the D line's and Dq's: the filter, its count
   autodj::Env driverEnv(const Env& env) const;
   bool joined() const { return file_ == File::Open && join_.status() == autodj::Join::Status::Ready; }
   // The file the root's entry names, opened and checked, from its first try.
@@ -241,6 +261,15 @@ private:
   PlaybackController& player_;
   autodj::Driver dj_;
   autodj::Join join_;
+  autodj::Maps maps_;      // index()'s: the join's, with the mood filter
+  // stepMood()'s count (MOOD-FILTERS.md 6.5).
+  uint32_t fit_ = 0;          // library tracks inside the filter (Index::fit; all of them with none on)
+  uint32_t fitOf_ = 0;        // ... of all
+  uint32_t fitUs_ = 0;        // the count's time
+  uint16_t fitQ_ = 0;         // the q it counted
+  bool fitCounted_ = false;   // ... for a library at all
+  bool fitOn_ = false;        // the filter was on (words, and a group set) then
+  bool indexSeen_ = false;    // lib_.index() was there at the last stepMood()
   cardcontract::mpdj::Table table_;
   Reader reader_{table_};
   cardfat::FatFile* handle_ = nullptr;   // the open file (FatFs::openRead's, PSRAM)

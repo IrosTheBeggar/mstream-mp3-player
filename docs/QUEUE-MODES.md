@@ -2149,11 +2149,13 @@ test_playback, test_autodj_driver and test_queue.
 | Repeat One | no (a hold) | Waiting |
 | The sleep timer at End of queue | no (a hold) | Waiting |
 | 3 of its picks in a row failed to play | no (a hold, until a track plays, or Auto DJ is switched off and on) | Paused |
+| A mood filter no track on the card fits (docs/AUTODJ.md 3.14, docs/MOOD-FILTERS.md 6.5) | no (a hold, until the filter changes or a library update brings a track that fits) | Waiting |
 | The last entry, Playing or Waiting for the headphones | one, appended | On |
 | A finished queue (16.5) | one, cued | On |
 
 The "..." row shows the holds whatever the queue does: Waiting under
-Repeat One on any entry, Paused after the failures. A due pick also
+Repeat One on any entry or a filter nothing fits, Paused after the
+failures. A due pick also
 waits while the decoder fills the ring after a start or a skip (until it
 holds 500 ms, the track's source ends, or 1.5 s have passed): a pick
 timed across that refill measured the decoder (108 ms on 2026-10-13). It

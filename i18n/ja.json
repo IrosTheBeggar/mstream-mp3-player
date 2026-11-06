@@ -1,7 +1,7 @@
 {
   "@@locale": "ja",
   "@@autonym": "日本語",
-  "@@note": "Machine translation, not yet reviewed by a native speaker. Made from the mobile app's (mstream_music, lib/l10n/app_ja.arb, master at bdb174e) and the terminal player's (mstream-terminal-player, locales/ja.yml, main at b89ad0a) Japanese where they had the text or the phrase, both GPL-3.0 by this repository's owner; the rest translated by a Fable agent (Claude), in their words and register, then reviewed message by message by a second Fable agent. Fullwidth punctuation written as ASCII, as the device draws it. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_ja.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
+  "@@note": "Machine translation, not yet reviewed by a native speaker. Made from the mobile app's (mstream_music, lib/l10n/app_ja.arb, master at bdb174e) and the terminal player's (mstream-terminal-player, locales/ja.yml, main at b89ad0a) Japanese where they had the text or the phrase, both GPL-3.0 by this repository's owner; the rest translated by a Fable agent (Claude), in their words and register, then reviewed message by message by a second Fable agent. Fullwidth punctuation written as ASCII, as the device draws it. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_ja.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker.",
   "boot.touch_hint": "タッチがおかしい? 画面を長押し",
   "coach.header_tip": "ヒント {0}/{1}",
   "coach.header_hint": "タップで次へ",
@@ -398,6 +398,10 @@
   "autodj.status_waits_sleep": "待機中: スリープタイマーはキュー末",
   "@autodj.status_waits_sleep": {
     "note": "スリープタイマーはキュー末 (the timer's setting, as sleep.title_end_queue names it): 'スリープタイマーはキュー末まで' is 296 px in 288, 'スリープタイマーがキュー末で停止' 312."
+  },
+  "autodj.status_waits_fit": "待機中: フィルターに合う曲なし",
+  "@autodj.status_waits_fit": {
+    "note": "The mobile app's autoDjSeedNoMatch ('フィルターに合う曲がありません'), ending in なし as other status lines here do: '待機中: フィルターに合う曲がありません' is 296 px in Small, the line 288."
   },
   "autodj.status_paused": "一時停止: 曲を再生できませんでした",
   "settings.screen_off": "画面オフまで",

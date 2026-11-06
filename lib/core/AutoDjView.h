@@ -72,8 +72,9 @@ struct State {
 
 // ---- the "..." row ----
 enum class RowState : uint8_t { Off, On, Waiting, Paused };
-// Off; on and held by Repeat One or the sleep timer's End of queue:
-// Waiting; on and paused by failures: Paused; else On.
+// Off; on and held by Repeat One, the sleep timer's End of queue or a
+// mood filter no track fits (MOOD-FILTERS.md 6.5): Waiting; on and paused
+// by failures: Paused; else On.
 RowState rowState(const State& s);
 uistr::S rowText(RowState r);  // now_playing.autodj_*
 
@@ -111,7 +112,8 @@ char* strictnessText(uint8_t pct, char* buf, size_t size);
 // The hint under Anchor (the mode's).
 uistr::S anchorHint(autodj::Mode m);
 // The status row's two lines: held (on, Waiting or Paused), why over the
-// index's first line; else the index's (Ready: "19,000 of 19,410 tracks
+// index's first line (a filter nothing fits: "Waiting: no track fits the
+// filters"); else the index's (Ready: "19,000 of 19,410 tracks
 // have neighbours" over "BPM 92% · key 88%"; Found: "Auto DJ index: 19,410
 // tracks" over "read when Auto DJ is switched on"; Reading: one line;
 // None, Bad, Unreadable, TooBig, NoMemory: why over "picks are random").
@@ -154,8 +156,11 @@ bool newsToast(uint8_t news, Toast* out);
 // usable index, once a switch on or a boot (said at the switch on when it
 // has none), not once a session: every Play is a session, and a card with
 // no index would say it at every album's last track. Only picks that
-// were appended speak (one the queue refused is tried again). And Auto
-// DJ's appends, counted (State::adds: no Queue badge flash).
+// were appended speak (one the queue refused is tried again). A mood
+// filter's jumps, repeats and re-pins say neither, and its picks by id
+// with the index joined (Pick::byIdJoined) aren't for want of one
+// (MOOD-FILTERS.md 4.5: their own toasts are S5's). And Auto DJ's appends,
+// counted (State::adds: no Queue badge flash).
 class NewsWatch {
 public:
   // A session began (every one: the switch on, a Play, the button, "Auto
