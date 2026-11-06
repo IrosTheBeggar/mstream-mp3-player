@@ -46,6 +46,9 @@ uint8_t classOf(uint8_t bits) {
   return static_cast<uint8_t>(coolOf(bits) * kRanks + musicRank(tempoOf(bits), keyOf(bits)));
 }
 
+// No anchors (the Auto DJ button's scan: no exclusions).
+constexpr uint16_t kNoAnchors[1] = {kNoRow};
+
 // Sorts n (at most a few dozen) rows into out, then kNoRow.
 template <typename Get>
 void sortedRows(uint8_t n, Get get, uint16_t* out) {
@@ -711,22 +714,20 @@ uint32_t Engine::oneOf(uint32_t n, Hit&& hit) {
   return got;
 }
 
-// A random pick inside the mood (MOOD-FILTERS.md 6.2, 5-8): the scan, else a
-// fresh track with no row, else the oldest repeat, else by id. keys_ and
-// cand_ hold the scan: nothing allocated.
-Pick Engine::moodPick(const Settings& s, const PickIn& in, const Scope& sc, Pick out) {
-  out.random = true;
-  const Maps& m = *in.maps;
+// The scan (MOOD-FILTERS.md 6.3): in track order, each track inside the mood
+// whose row is neither in `anc` (sorted, ending in kNoRow) nor `playingRow`;
+// the first kMoodSample kept in keys_, then the n-th in place of one at
+// below(n) < kMoodSample. Their rows into cand_ (bits 0), each once and only
+// if its own track passes: a pick of it plays that one (trackToRow is many
+// to one). Their count; nothing allocated.
+uint32_t Engine::scan(const Maps& m, const uint16_t* anc, uint16_t playingRow) {
   const MoodView& mood = m.mood;
-  // 6. The scan (6.3): in track order, each track inside the mood whose row
-  // is neither an anchor nor the playing track's; the first kMoodSample
-  // kept, then the n-th in place of one at below(n) < kMoodSample.
   uint32_t seen = 0;
   for (uint32_t t = 0; t < m.tracks; ++t) {
     const uint16_t r = m.trackToRow[t];
-    if (r >= m.rows || r == sc.playingRow) continue;
+    if (r >= m.rows || r == playingRow) continue;
     bool anchor = false;
-    for (const uint16_t* a = sc.anc; *a <= r && !anchor; ++a) anchor = *a == r;
+    for (const uint16_t* a = anc; *a <= r && !anchor; ++a) anchor = *a == r;
     if (anchor || !mood.passes(t)) continue;
     if (seen < kMoodSample) {
       keys_[seen++] = t;
@@ -735,23 +736,36 @@ Pick Engine::moodPick(const Settings& s, const PickIn& in, const Scope& sc, Pick
       if (j < kMoodSample) keys_[j] = t;
     }
   }
-  // A row once, and only if its own track passes: a pick of it plays that
-  // one (trackToRow is many to one).
   const uint32_t kept = seen < kMoodSample ? seen : kMoodSample;
   uint32_t n = 0;
-  Counts& counts = *counts_;
-  counts = Counts();
   for (uint32_t i = 0; i < kept; ++i) {
     const uint16_t r = m.trackToRow[keys_[i]];
     const uint16_t first = m.rowToTrack[r];
     if (first == kNoTrack || !mood.passes(first)) continue;
     bool dup = false;
     for (uint32_t c = 0; c < n && !dup; ++c) dup = cand_[c].row == r;
-    if (dup) continue;
+    if (!dup) cand_[n++] = Cand{r, 0, 0};
+  }
+  return n;
+}
+
+// A random pick inside the mood (MOOD-FILTERS.md 6.2, 5-8): the scan, else a
+// fresh track with no row, else the oldest repeat, else by id. keys_ and
+// cand_ hold the scan: nothing allocated.
+Pick Engine::moodPick(const Settings& s, const PickIn& in, const Scope& sc, Pick out) {
+  out.random = true;
+  const Maps& m = *in.maps;
+  const MoodView& mood = m.mood;
+  // 6. The scan, past the anchors and the playing track's row; each row's
+  // cooldown level and statuses.
+  const uint32_t n = scan(m, sc.anc, sc.playingRow);
+  Counts& counts = *counts_;
+  counts = Counts();
+  for (uint32_t i = 0; i < n; ++i) {
+    const uint16_t r = cand_[i].row;
     const uint32_t w = m.filters[r];
-    const uint8_t b = sc.bits(ses_.cool.has(r) ? 2 : sc.artistCooled(w) ? 1 : 0, w);
-    counts.add(b);
-    cand_[n++] = Cand{r, 0, b};
+    cand_[i].bits = sc.bits(ses_.cool.has(r) ? 2 : sc.artistCooled(w) ? 1 : 0, w);
+    counts.add(cand_[i].bits);
   }
   out.candidates = out.gated = static_cast<uint16_t>(n);
   if (counts.fresh()) {
@@ -944,6 +958,19 @@ Pick Engine::surprise(const Settings&, const PickIn& in) {
   out.random = true;
   if (!in.maps || in.maps->rows == 0) return out;
   const Maps& m = *in.maps;
+  if (m.mood.on()) {
+    // Inside the mood (MOOD-FILTERS.md 6.3): the scan with no exclusions,
+    // then one of its rows. (No scratch after a failed begin(): none.)
+    if (!keys_) return out;
+    const uint32_t n = scan(m, kNoAnchors, kNoRow);
+    out.candidates = out.gated = static_cast<uint16_t>(n);
+    if (n == 0) return out;
+    const uint16_t r = cand_[ses_.rng.below(n)].row;
+    out.ok = true;
+    out.row = r;
+    out.track = m.rowToTrack[r];
+    return out;
+  }
   for (uint8_t d = 0; d < kSurpriseDraws; ++d) {
     const uint16_t r = static_cast<uint16_t>(ses_.rng.below(m.rows));
     if (m.rowToTrack[r] == kNoTrack) continue;

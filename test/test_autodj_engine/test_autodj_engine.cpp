@@ -27,7 +27,8 @@
 // changed filter or words filled again, a shared row tested by its first
 // track; its own ladder, 6.2: a jump keeping the classes, the scan's 64,
 // repeats oldest first, a track with no row before them, the only track
-// that fits, nothing that fits); the cache keeping the ring and the pin; damaged (a
+// that fits, nothing that fits; the button inside it, 6.3); the cache
+// keeping the ring and the pin; damaged (a
 // damaged pin giving way; the rows a pick's reads damaged, named once),
 // failed and broken slots, in hand-made readers and in the hardening
 // files; picks by track id; the empty states' button;
@@ -1919,6 +1920,63 @@ void test_surprise() {
   TEST_ASSERT_FALSE(e->surprise(settings(), PickIn()).ok);
 }
 
+// Under Happy the button's row is inside the mood, from the scan with no
+// exclusions (MOOD-FILTERS.md 6.3): the session's rows and the playing one's
+// too. Row 2 is tested by its first track, sad, though track 9 shares it and
+// is happy; track 8, with no row, never comes. Nothing inside: no track. A
+// level alone, or no words: the draws of no filter, from the same stream.
+void test_the_button_inside_the_filter() {
+  Table t(star(8), {}, {0, 1, 2, 3, 4, 5, 6, 7, kNoRow, 2});
+  const std::vector<uint16_t> words = {kHappy, kSad, kSad, kHappy, kSad, kHappy, kHappy, kSad, kHappy, kHappy};
+  t.maps.m.mood = MoodView(words.data(), 10, kHappyQ);
+  auto e = engine();
+  e->newSession(6, 0, &t.maps.m);
+  std::set<uint16_t> rows;
+  for (int i = 0; i < 60; ++i) {
+    const Pick p = e->surprise(settings(), t.in(0));
+    TEST_ASSERT_TRUE(p.ok && p.random);
+    TEST_ASSERT_EQUAL(4, p.candidates);
+    TEST_ASSERT_EQUAL(p.row, t.maps.t2r[p.track]);
+    rows.insert(p.row);
+  }
+  TEST_ASSERT_TRUE(rows == std::set<uint16_t>({0, 3, 5, 6}));
+  TEST_ASSERT_EQUAL(1, e->anchors());  // the session untouched
+  TEST_ASSERT_EQUAL(1, e->cooledRows());
+  TEST_ASSERT_EQUAL(0, e->stats().picks);
+  moodfilter::Filter none;
+  none.valence = moodfilter::Scale::First;
+  none.energy = moodfilter::Scale::Second;
+  none.voice = moodfilter::Voice::Instrumental;
+  t.maps.m.mood = MoodView(words.data(), 10, none.pack());
+  Pick p = e->surprise(settings(), t.in(0));
+  TEST_ASSERT_FALSE(p.ok);
+  TEST_ASSERT_EQUAL(0, p.candidates);
+  TEST_ASSERT_EQUAL_UINT32(kNoTrackId, p.track);
+  // Off: today's draws (kSurpriseDraws at most), the stream where it was.
+  const uint16_t loose = qOf(moodfilter::Scale::Any, moodfilter::Level::Loose);
+  std::vector<std::vector<uint16_t>> got;
+  for (const MoodView& mood : {MoodView(), MoodView(words.data(), 10, loose), MoodView(nullptr, 0, kHappyQ)}) {
+    t.maps.m.mood = mood;
+    auto f = engine();
+    f->newSession(6);
+    std::vector<uint16_t> r;
+    for (int i = 0; i < 20; ++i) r.push_back(f->surprise(settings(), t.in(0)).row);
+    r.push_back(f->pick(settings(), t.in(0)).row);
+    got.push_back(r);
+  }
+  TEST_ASSERT_TRUE(got[1] == got[0] && got[2] == got[0]);
+  // No scratch (a failed begin()): none inside the mood, today's without one.
+  gFail = true;
+  Engine bare;
+  TEST_ASSERT_FALSE(bare.begin(countAlloc, countFree));
+  gFail = false;
+  bare.newSession(6);
+  t.maps.m.mood = MoodView(words.data(), 10, kHappyQ);
+  TEST_ASSERT_FALSE(bare.surprise(settings(), t.in(0)).ok);
+  t.maps.m.mood = MoodView();
+  TEST_ASSERT_TRUE(bare.surprise(settings(), t.in(0)).ok);
+}
+
 void test_the_same_seed_gives_the_same_session() {
   std::vector<uint32_t> f;
   for (int r = 0; r < 40; ++r) f.push_back(filterWord(static_cast<uint16_t>(900 + 13 * r), (r * 7) % 25, 0, r % 6));
@@ -2087,6 +2145,7 @@ int main(int, char**) {
   RUN_TEST(test_damaged_and_broken_in_real_files);
   RUN_TEST(test_no_index_by_track_id);
   RUN_TEST(test_surprise);
+  RUN_TEST(test_the_button_inside_the_filter);
   RUN_TEST(test_the_same_seed_gives_the_same_session);
   RUN_TEST(test_no_allocation_in_pick);
   RUN_TEST(test_no_allocation_in_a_jump);

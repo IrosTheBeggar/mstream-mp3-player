@@ -94,7 +94,9 @@ counters. The rule (docs/AUTODJ-INDEX.md 11 is the index's side):
   None: a repeat, the oldest row of the track cooldown inside the mood
   that isn't playing (cooldown level 2, ranked by its statuses as known).
   None, or no index: by id, a fresh track inside the mood, else the oldest
-  of the cooldown by id, else the playing track; none fits: no pick.
+  of the cooldown by id, else the playing track; none fits: no pick. The
+  empty states' button the same: the scan with no exclusions, then one of
+  its rows (none: no track).
 """
 import argparse
 import json
@@ -755,15 +757,13 @@ class Engine:
         st.key_breaks[s.mode] += out.key_break
         return self._count(s, out)
 
-    def _mood_pick(self, s, pin, playing_row, exclude, out):
-        """A random pick inside the mood (MOOD-FILTERS.md 6.2, 5-8): the scan,
-        else a fresh track with no row, else the oldest repeat, else by id."""
-        out.random = True
-        maps = pin.maps
+    def _scan(self, maps, exclude):
+        """The scan (MOOD-FILTERS.md 6.3): every track inside the mood whose
+        row isn't in `exclude`, in track order; the first 64 kept, then the
+        n-th replaces one at below(n) < 64. Their rows, each once and only if
+        its own track passes: a pick of it plays that one (trackToRow is many
+        to one)."""
         mood = maps.mood
-        # 6. The scan (6.3): every track inside the mood whose row isn't an
-        # anchor or the playing track's, in track order; the first 64 kept,
-        # then the n-th replaces one at below(n) < 64.
         kept, seen = [], 0
         for t in range(maps.tracks):
             r = maps.track_to_row[t]
@@ -776,14 +776,22 @@ class Engine:
                 j = self.rng.below(seen)
                 if j < MOOD_SAMPLE:
                     kept[j] = t
-        # A row once, and only if its own track passes: a pick of it plays
-        # that one (trackToRow is many to one).
         rows = []
         for t in kept:
             r = maps.track_to_row[t]
             first = maps.row_to_track[r]
             if first != NO_ROW and mood.passes(first) and r not in rows:
                 rows.append(r)
+        return rows
+
+    def _mood_pick(self, s, pin, playing_row, exclude, out):
+        """A random pick inside the mood (MOOD-FILTERS.md 6.2, 5-8): the scan,
+        else a fresh track with no row, else the oldest repeat, else by id."""
+        out.random = True
+        maps = pin.maps
+        mood = maps.mood
+        # 6. The scan, past the anchors and the playing track's row.
+        rows = self._scan(maps, exclude)
         out.candidates = out.gated = len(rows)
         if any(r not in self.cool for r in rows):
             j = self._choose(s, maps, rows, playing_row, out)
@@ -891,11 +899,20 @@ class Engine:
 
     def surprise(self, s, pin):
         """The empty states' Auto DJ button: a random row that maps to a track
-        (up to 64 draws). Changes nothing but the stream."""
+        (up to 64 draws); under a mood filter, the scan with no exclusions,
+        then one of its rows (MOOD-FILTERS.md 6.3). Changes nothing but the
+        stream."""
         out = Pick()
         out.random = True
         maps = pin.maps
         if maps is None:
+            return out
+        if maps.mood.on():
+            rows = self._scan(maps, ())
+            out.candidates = out.gated = len(rows)
+            if rows:
+                r = rows[self.rng.below(len(rows))]
+                out.ok, out.row, out.track = True, r, maps.row_to_track[r]
             return out
         for _ in range(SURPRISE_DRAWS):
             r = self.rng.below(maps.rows)
@@ -1755,6 +1772,36 @@ def scenes():
             sc.start(p.track, True)
             sc.set_faults(damaged=[sc.e.pin])
             sc.reopen()
+    out.append(sc)
+
+    # 32. The empty states' button under a mood filter (MOOD-FILTERS.md 6.3):
+    # the scan with no exclusions, then one of its rows; a session from it.
+    # A filter that only tracks with no row fit: no track for the button, a
+    # pick by id (jump 3); one nothing fits: none, and no pick. Follow the
+    # vibe only: Stay on seed re-pins at a jump (6.4).
+    m = maps_for(syn, unmapped=600)
+    words = mood_words(g, m.tracks)
+    sc = Scene("mood-surprise", syn, "syn", m, seed=44, words=words,
+               note="the empty states' Auto DJ button under Vocals at Loose, then Relaxed and Vocals: a row inside "
+                    "the mood from the scan of every track (its 64 kept), then a session seeded by it; a filter "
+                    "only tracks with no row fit, then one nothing fits: no track for the button")
+    for n in range(4):
+        if n % 2 == 0:
+            sc.filter(moodfilter.pack(voice="vocals", level="loose") if n == 0 else
+                      moodfilter.pack(energy="relaxed", voice="vocals"))
+        p = sc.surprise(both)
+        sc.new(4400 + n, p.track)
+        sc.run(Settings(ROLLING, 55 + 5 * n, n % 2 == 0, n % 3 != 0), 5, user=150)
+    valid = [q for q in range(1, 1 << 11) if moodfilter.q_valid(q) and moodfilter.active(q)]
+    with_row = {q: [t for t in range(m.tracks) if m.track_to_row[t] != NO_ROW and moodfilter.matches(words[t], q)]
+                for q in valid}
+    no_row = next(q for q in valid if not with_row[q] and
+                  any(m.track_to_row[t] == NO_ROW and moodfilter.matches(words[t], q) for t in range(m.tracks)))
+    none = next(q for q in valid if not any(moodfilter.matches(w, q) for w in words))
+    for q in (no_row, none):
+        sc.filter(q)
+        sc.surprise(both)
+        sc.run(Settings(ROLLING, 60), 2)
     out.append(sc)
     return tables, out
 

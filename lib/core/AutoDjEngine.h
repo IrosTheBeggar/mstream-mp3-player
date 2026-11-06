@@ -392,8 +392,10 @@ public:
   // ---- picks ----
   Pick pick(const Settings& s, const PickIn& in);
   // The empty states' Auto DJ button: a random row that maps to a track
-  // (up to kSurpriseDraws draws); the session is untouched but for its
-  // stream. Not ok without an index.
+  // (up to kSurpriseDraws draws); under a mood filter (the maps'), the scan
+  // with no exclusions, then one of its rows, uniform (MOOD-FILTERS.md 6.3:
+  // candidates its count; none, not ok). The session is untouched but for
+  // its stream. Not ok without an index.
   Pick surprise(const Settings& s, const PickIn& in);
 
   // The console's Dn: this engine takes `from`'s session, slot cache and
@@ -489,6 +491,7 @@ private:
   void merge(const int8_t* usable, uint8_t nu, const Scope& sc, Visit&& visit) const;
   uint32_t closest(const int8_t* usable, uint8_t nu, const Scope& sc, bool freshOnly, Counts* counts);
   Pick randomPick(const Settings& s, const PickIn& in, const Scope& sc, Pick out);
+  uint32_t scan(const Maps& m, const uint16_t* anc, uint16_t playingRow);
   Pick moodPick(const Settings& s, const PickIn& in, const Scope& sc, Pick out);
   template <typename Hit>
   uint32_t oneOf(uint32_t n, Hit&& hit);

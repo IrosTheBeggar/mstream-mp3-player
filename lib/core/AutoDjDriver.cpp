@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <utility>
 
 #include "NvsLayout.h"
 
@@ -417,16 +418,41 @@ bool Driver::playFrom(PlaybackController& player, uint32_t track, Began why, con
 Pick Driver::surprise(const Index& ix) {
   PickIn in;
   in.maps = ix.maps;
+  in.mood = ix.mood;
   return engine_.surprise(s_, in);
 }
 
 uint32_t Driver::surpriseTrack(uint32_t libraryTracks, bool (*hasRow)(uint32_t track, void* ctx), void* ctx,
-                               uint8_t* tries) {
+                               uint8_t* tries, const MoodView& mood) {
+  // (Multiply-shift: no modulo bias worth the name below 65,535 tracks.)
+  auto below = [this](uint32_t n) { return static_cast<uint32_t>((static_cast<uint64_t>(random32()) * n) >> 32); };
   uint8_t n = 0;
   uint32_t found = kNoTrackId;
+  if (mood.on()) {
+    // Inside the mood (MOOD-FILTERS.md 6.3): one pass over the words, a
+    // reservoir of kSurpriseTries tracks that fit (the first ones, then the
+    // i-th in place of one at below(i) < kSurpriseTries), in a random
+    // order; the first the index has a row for. As many lookups at most.
+    uint32_t keep[kSurpriseTries];
+    uint32_t seen = 0;
+    for (uint32_t t = 0; t < libraryTracks; ++t) {
+      if (!mood.passes(t)) continue;
+      if (seen < kSurpriseTries) {
+        keep[seen++] = t;
+      } else {
+        const uint32_t j = below(++seen);
+        if (j < kSurpriseTries) keep[j] = t;
+      }
+    }
+    const uint32_t kept = seen < kSurpriseTries ? seen : kSurpriseTries;
+    for (uint32_t i = kept; i > 1; --i) std::swap(keep[i - 1], keep[below(i)]);
+    for (; hasRow && n < kept && found == kNoTrackId; ++n)
+      if (hasRow(keep[n], ctx)) found = keep[n];
+    if (tries) *tries = n;
+    return found;
+  }
   for (; libraryTracks && hasRow && n < kSurpriseTries && found == kNoTrackId; ++n) {
-    // (Multiply-shift: no modulo bias worth the name below 65,535 tracks.)
-    const uint32_t t = static_cast<uint32_t>((static_cast<uint64_t>(random32()) * libraryTracks) >> 32);
+    const uint32_t t = below(libraryTracks);
     if (hasRow(t, ctx)) found = t;
   }
   if (tries) *tries = n;

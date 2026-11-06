@@ -264,14 +264,17 @@ public:
   // the Play was refused (fenced, no memory). *switchedOn: it was off.
   bool playFrom(PlaybackController& player, uint32_t track, Began why, const Maps* maps, bool* switchedOn);
   // The empty states' button's track: a random row that maps to a track
-  // (not ok without an index).
+  // (not ok without an index); inside the mood filter, the maps' (Engine::surprise()).
   Pick surprise(const Index& ix);
   // ... before the index is joined: up to kSurpriseTries library tracks
   // (below `libraryTracks`) drawn, the first that `hasRow` says has a row
   // (the firmware: its path hash in the index's DJPH); kNoTrackId: none.
-  // `*tries` (or nullptr): how many were looked up.
+  // `*tries` (or nullptr): how many were looked up. With `mood` on
+  // (MOOD-FILTERS.md 6.3): one pass over its words, kSurpriseTries tracks
+  // inside it kept, uniform, then looked up in a random order (none
+  // inside: no lookup); off, the draws above, as before there was one.
   uint32_t surpriseTrack(uint32_t libraryTracks, bool (*hasRow)(uint32_t track, void* ctx), void* ctx,
-                         uint8_t* tries = nullptr);
+                         uint8_t* tries = nullptr, const MoodView& mood = MoodView());
 
   // ---- the library update's fence ----
   // enterFence(), before the queue goes: the marks' and the entries'

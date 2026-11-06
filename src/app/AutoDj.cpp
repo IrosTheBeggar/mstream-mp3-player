@@ -898,7 +898,8 @@ bool AutoDj::lookupFailed() {
 // The empty states' button (D4): a random track with neighbours, played,
 // Auto DJ on. Joined, a row of the maps (Driver::surprise()); not (Auto DJ
 // off: the join follows the switch), library tracks drawn and looked up by
-// their path's hash in DJPH, so playback never waits for a join.
+// their path's hash in DJPH, so playback never waits for a join. Either way
+// inside the mood filter, when one is on (MOOD-FILTERS.md 6.3).
 autodjview::Started AutoDj::start() {
   if (!usable()) {
     // (Gone since the button was drawn: a remount without it, a check
@@ -918,7 +919,7 @@ autodjview::Started AutoDj::start() {
     const uint32_t tracks = idx && idx->ready() ? idx->trackCount() : 0;
     const int64_t t0 = esp_timer_get_time();
     uint8_t tries = 0;
-    track = dj_.surpriseTrack(tracks, hasRowOf, this, &tries);
+    track = dj_.surpriseTrack(tracks, hasRowOf, this, &tries, moodView());
     Serial.printf("[dj] the Auto DJ button: %u library tracks looked up in the index by their path (%.1f ms): %s\n",
                   (unsigned)tries, (esp_timer_get_time() - t0) / 1000.0,
                   track != autodj::kNoTrackId ? "one has neighbours" : "none had neighbours");

@@ -16,7 +16,8 @@ before repeating (the device's case, dry and loosened at once, every
 listed row cooled), dry and random picks, the read budget, damaged,
 failed and broken slots, the stream, a mood filter's candidates and its
 own ladder: jumps that keep the classes, the scan's 64, repeats oldest
-first, the only track that fits, nothing that fits); and the fixture up to
+first, the only track that fits, nothing that fits; the button inside it);
+and the fixture up to
 date, its first 26 sessions and their seven tables frozen by hash, every
 pick under a filter inside it.
 """
@@ -923,6 +924,38 @@ class EngineRules(unittest.TestCase):
             self.assertEqual(maps.track_to_row[p.track], p.row)
         self.assertFalse(e.surprise(A.Settings(), A.PickIn(None, None)).ok)
 
+    def test_the_button_inside_the_filter(self):
+        # Under Happy the button's row is inside the mood, from the scan with
+        # no exclusions (MOOD-FILTERS.md 6.3): the session's rows and the
+        # playing one's too. Row 2 is tested by its first track, sad, though
+        # track 9 shares it and is happy; track 8, with no row, never comes.
+        # Nothing inside: no track. A level alone: the draws of no filter.
+        lists = star(8)
+        maps = table(lists, tracks=[0, 1, 2, 3, 4, 5, 6, 7, A.NO_ROW, 2])
+        words = [HAPPY, SAD, SAD, HAPPY, SAD, HAPPY, HAPPY, SAD, HAPPY, HAPPY]
+        maps.mood = A.MoodView(words, M.pack("happy"))
+        src = A.SlotSource(lists)
+        e = A.Engine()
+        e.new_session(6, 0, maps)
+        rows = set()
+        for _ in range(60):
+            p = e.surprise(A.Settings(), self.pin(maps, src, 0))
+            self.assertTrue(p.ok and p.random)
+            self.assertEqual((p.candidates, maps.track_to_row[p.track]), (4, p.row))
+            rows.add(p.row)
+        self.assertEqual(rows, {0, 3, 5, 6})
+        self.assertEqual((e.ring, e.cool, e.stats.picks), ([0], [0], 0))   # the session untouched
+        maps.mood = A.MoodView(words, M.pack("happy", "aggressive", "instrumental"))
+        p = e.surprise(A.Settings(), self.pin(maps, src, 0))
+        self.assertEqual((p.ok, p.candidates, p.track), (False, 0, A.NO_TRACK))
+        got = []
+        for mood in (A.MoodView(), A.MoodView(words, M.pack(level="loose")), A.MoodView(None, M.pack("happy"))):
+            maps.mood = mood
+            e = A.Engine()
+            e.new_session(6)
+            got.append([e.surprise(A.Settings(), self.pin(maps, src, 0)).row for _ in range(20)] + [e.rng.below(1000)])
+        self.assertEqual(got[1:], got[:1] * 2)
+
     def test_the_same_seed_gives_the_same_session(self):
         tables, sc = A.scenes()
         again = {s.name: s.json() for s in A.scenes()[1]}
@@ -958,7 +991,7 @@ class Fixture(unittest.TestCase):
 
     def test_the_fixture_covers_the_rules(self):
         doc = json.loads((FIX / "autodj" / "sessions.json").read_text(encoding="utf-8"))
-        self.assertEqual(len(doc["sessions"]), 34)
+        self.assertEqual(len(doc["sessions"]), 35)
         self.assertEqual(digest(doc["sessions"][:FROZEN_SESSIONS]), FROZEN_SESSIONS_SHA)
         self.assertEqual(digest({n: doc["tables"][n] for n in FROZEN_TABLES}), FROZEN_TABLES_SHA)
         picks = [e["expect"] for s in doc["sessions"] for e in s["events"] if e["op"] == "pick"]
@@ -983,8 +1016,9 @@ class Fixture(unittest.TestCase):
         doc = json.loads((FIX / "autodj" / "sessions.json").read_text(encoding="utf-8"))
         by = {s["name"]: s for s in doc["sessions"]}
         # Every pick under an active filter, with words, passes its word, or
-        # is none because nothing fits.
-        inside = {}
+        # is none because nothing fits; the button's track too, with its row,
+        # or none because no row's track fits.
+        inside, buttons = {}, {}
         for s in doc["sessions"]:
             words, q = s.get("moods"), 0
             for e in s["events"]:
@@ -999,6 +1033,16 @@ class Fixture(unittest.TestCase):
                     inside.setdefault(s["name"], []).append(x)
                 elif e["op"] == "pick":
                     self.assertFalse(any(e["expect"].get(f) for f in ("jump", "repin", "rep", "noFit")), s["name"])
+                elif e["op"] == "surprise" and words is not None and M.active(q):
+                    x = e["expect"]
+                    if x.get("ok"):
+                        self.assertTrue(M.matches(words[x["track"]], q), s["name"])
+                        self.assertEqual(s["trackToRow"][x["track"]], x["row"], s["name"])
+                    else:
+                        self.assertFalse(any(M.matches(words[t], q) for t in s["rowToTrack"] if t != 65535), s["name"])
+                    buttons.setdefault(s["name"], []).append(x)
+                elif e["op"] == "surprise":
+                    self.assertNotIn("cand", e["expect"], s["name"])          # today's draws
         # Dry and loosened inside the mood (6.1), the runs made again for a
         # second filter; no pick random or a repeat of a cooled row, which
         # the mood's own ladder takes (6.2).
@@ -1061,6 +1105,16 @@ class Fixture(unittest.TestCase):
         self.assertEqual((len(na), count("mood-no-anchor", "random"), count("mood-no-anchor", "broken")), (24, 14, 5))
         self.assertEqual(sum(1 for p in na if p.get("random") and p.get("reads") == 2), 8)
         self.assertFalse(any(p.get("jump") or p.get("rep") for p in na))
+        # The button inside the mood (6.3): the scan's 64 kept, or all of it;
+        # each a session's seed. Only tracks with no row inside: no track,
+        # and the pick by id (jump 3); nothing inside: none, and no pick.
+        su = by["mood-surprise"]
+        self.assertEqual([x.get("ok", 0) for x in buttons["mood-surprise"]], [1, 1, 1, 1, 0, 0])
+        self.assertEqual([x.get("cand", 0) for x in buttons["mood-surprise"]], [64, 64, 24, 24, 0, 0])
+        seeds = [e["track"] for e in su["events"] if e["op"] == "new"]
+        self.assertEqual(seeds, [x["track"] for x in buttons["mood-surprise"][:4]])
+        self.assertEqual((len(inside["mood-surprise"]), count("mood-surprise", "jump", 3),
+                          count("mood-surprise", "noFit")), (24, 1, 2))
 
 
 if __name__ == "__main__":

@@ -26,7 +26,9 @@
 // - a due pick waiting while the decoder refills the ring from empty; a
 //   quick skip's row (none for a file the index doesn't have);
 // - a slot whose CRC fails again at a pick: the pass names its row, once;
-// - a mood filter given as the firmware gives it: the picks inside it.
+// - a mood filter given as the firmware gives it: the picks inside it; the
+//   empty states' button inside it, joined and before a join, and with no
+//   filter as before there was one.
 // An AutoDJ index written with mpdj::write for a made-up library, joined
 // (AutoDjJoin), its slots read through mpdj::Table::slot(), and a real
 // PlaybackController over a small backend.
@@ -1625,6 +1627,104 @@ void test_the_button_looks_tracks_up_by_their_path() {
   TEST_ASSERT_TRUE(r.inRing(r.card.rowOf(t)));
 }
 
+// The empty states' button inside the mood filter (MOOD-FILTERS.md 6.3):
+// joined, a row inside it (Engine::surprise()); before a join, one pass over
+// the words, kSurpriseTries tracks inside it kept and looked up in a random
+// order. Only the loose file (no row) inside: no track, after its one
+// lookup; nothing inside: none, and no lookup. Every fourth row's track is
+// sad, the rest happy, the loose file happy and instrumental.
+void test_the_button_inside_the_filter() {
+  Rig r;
+  auto wordOf = [](double happy, double sad, double instrumental) {
+    const double scores[moodfilter::kHeads] = {0.5, happy, sad, 0.5, 0.5, 0.5, 0.5, instrumental};
+    uint8_t tail[8];
+    moodfilter::tailOf(scores, tail);
+    return moodfilter::wordOfTail(tail);
+  };
+  const uint32_t n = r.card.index.trackCount();
+  std::vector<uint16_t> words(n, wordOf(0.8, 0.1, 0.1));
+  for (int i = 3; i < kRows; i += 4) words[r.card.trackOf(i)] = wordOf(0.1, 0.8, 0.1);
+  words[r.card.loose()] = wordOf(0.8, 0.1, 0.9);
+  moodfilter::Filter f;
+  f.valence = moodfilter::Scale::First;
+  r.mood = autodj::MoodView(words.data(), n, f.pack());
+  RowsByPath by{&r.card.index, &r.card.table};
+  Driver free;  // (no Random hook: its own xorshift, so the draws move)
+  std::set<uint32_t> joined, drawn;
+  for (int i = 0; i < 30; ++i) {
+    const autodj::Pick s = r.dj.surprise(r.index());
+    TEST_ASSERT_TRUE(s.ok && r.mood.passes(s.track));
+    TEST_ASSERT_TRUE(s.row != autodj::kNoRow && s.row % 4 != 3);
+    joined.insert(s.track);
+    by.lookups = 0;
+    uint8_t tries = 0;
+    const uint32_t t = free.surpriseTrack(n, rowByPath, &by, &tries, r.mood);
+    TEST_ASSERT_TRUE(t != autodj::kNoTrackId && t != r.card.loose() && r.mood.passes(t));
+    TEST_ASSERT_EQUAL_INT(tries, by.lookups);
+    TEST_ASSERT_TRUE(tries >= 1 && tries <= autodj::kSurpriseTries);
+    drawn.insert(t);
+  }
+  TEST_ASSERT_TRUE(joined.size() > 6 && drawn.size() > 6);
+  // Only the loose file inside: one lookup, no track; none inside: no lookup.
+  f.valence = moodfilter::Scale::Any;
+  f.voice = moodfilter::Voice::Instrumental;
+  r.mood = autodj::MoodView(words.data(), n, f.pack());
+  by.lookups = 0;
+  uint8_t tries = 0;
+  TEST_ASSERT_EQUAL_UINT32(autodj::kNoTrackId, free.surpriseTrack(n, rowByPath, &by, &tries, r.mood));
+  TEST_ASSERT_EQUAL_INT(1, by.lookups);
+  TEST_ASSERT_EQUAL_UINT8(1, tries);
+  autodj::Pick s = r.dj.surprise(r.index());
+  TEST_ASSERT_FALSE(s.ok);
+  TEST_ASSERT_EQUAL_UINT16(0, s.candidates);
+  f.energy = moodfilter::Scale::Second;
+  r.mood = autodj::MoodView(words.data(), n, f.pack());
+  TEST_ASSERT_EQUAL_UINT32(autodj::kNoTrackId, free.surpriseTrack(n, rowByPath, &by, &tries, r.mood));
+  TEST_ASSERT_EQUAL_INT(1, by.lookups);
+  TEST_ASSERT_EQUAL_UINT8(0, tries);
+  TEST_ASSERT_FALSE(r.dj.surprise(r.index()).ok);
+  // Without an index the joined button has no track, filter or not.
+  r.indexed = false;
+  TEST_ASSERT_FALSE(r.dj.surprise(r.index()).ok);
+}
+
+// The button with no filter draws as today (MOOD-FILTERS.md 6.3, 6.6): a
+// level alone, or a filter with no words, gives the same tracks, the same
+// lookups and the same draws as no filter, joined or not.
+void test_the_button_with_no_filter_draws_as_today() {
+  Rig r;
+  RowsByPath by{&r.card.index, &r.card.table};
+  const uint32_t n = r.card.index.trackCount();
+  std::vector<uint16_t> words(n, 0);
+  moodfilter::Filter level;
+  level.level = moodfilter::Level::Strict;
+  moodfilter::Filter happy;
+  happy.valence = moodfilter::Scale::First;
+  const autodj::MoodView offs[] = {autodj::MoodView(), autodj::MoodView(words.data(), n, level.pack()),
+                                   autodj::MoodView(nullptr, 0, happy.pack())};
+  const uint32_t was = s_random;  // (the later tests' sessions keep their seeds)
+  std::vector<uint32_t> got[3];
+  for (int v = 0; v < 3; ++v) {
+    TEST_ASSERT_FALSE(offs[v].on());
+    r.mood = offs[v];
+    s_random = 0x9E3779B9u;
+    r.dj.setSeed(77);
+    r.dj.newSession(Began::Console, autodj::kNoTrackId, nullptr);
+    for (int i = 0; i < 12; ++i) {
+      by.lookups = 0;
+      uint8_t tries = 0;
+      got[v].push_back(v == 0 ? r.dj.surpriseTrack(n, rowByPath, &by, &tries)
+                              : r.dj.surpriseTrack(n, rowByPath, &by, &tries, r.mood));
+      got[v].push_back(tries);
+      got[v].push_back(static_cast<uint32_t>(by.lookups));
+      got[v].push_back(r.dj.surprise(r.index()).row);
+    }
+    got[v].push_back(s_random);
+  }
+  s_random = was;
+  TEST_ASSERT_TRUE(got[1] == got[0] && got[2] == got[0]);
+}
+
 // The join ready again (a fence, a remount: the glue calls
 // Engine::mapsChanged()): each cached slot's run is made again, one a loop
 // pass while nothing else is due, without a read; none while a list moves.
@@ -1739,6 +1839,8 @@ int main(int, char**) {
   RUN_TEST(test_a_quick_skip_before_the_join_says_the_index_isnt_joined);
   RUN_TEST(test_a_seed_before_the_join_is_the_pin);
   RUN_TEST(test_the_button_looks_tracks_up_by_their_path);
+  RUN_TEST(test_the_button_inside_the_filter);
+  RUN_TEST(test_the_button_with_no_filter_draws_as_today);
   RUN_TEST(test_runs_are_made_again_for_new_maps);
   RUN_TEST(test_a_mood_filter_keeps_the_picks_inside_it);
   return UNITY_END();
