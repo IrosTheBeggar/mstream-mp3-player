@@ -1057,6 +1057,37 @@ void test_a_filter_keeps_the_candidates_inside_the_mood() {
   TEST_ASSERT_TRUE(MoodView(words.data(), 10, 0).passes(10));
 }
 
+// The view keeps the filter made ready (moodfilter::Test) rather than
+// asking matches() a track, which made it again each time: a jump's pick
+// took 29.5 ms on the Core2, 11.7 ms after (MOOD-FILTERS.md 9.8). The same
+// answers as matches(): every q of 11 bits, valid or not, and a few wider,
+// each over a fifth of the 65,536 words from its own offset (q % 5), so
+// each word meets a fifth of the filters.
+void test_a_mood_view_is_the_predicate() {
+  std::vector<uint16_t> words(65536);
+  for (uint32_t w = 0; w < words.size(); ++w) words[w] = static_cast<uint16_t>(w);
+  const uint32_t wide[] = {0x800, 0x1001, 0x8000, 0xFFFF};
+  uint32_t on = 0, checked = 0;
+  for (uint32_t q = 0; q < 0x800 + 4; ++q) {
+    const uint16_t bits = static_cast<uint16_t>(q < 0x800 ? q : wide[q - 0x800]);
+    const moodfilter::Filter f = moodfilter::Filter::unpack(bits);
+    const MoodView v(words.data(), static_cast<uint32_t>(words.size()), bits);
+    TEST_ASSERT_EQUAL(f.active(), v.on());
+    on += v.on();
+    for (uint32_t t = q % 5; t < words.size(); t += 5, ++checked) {
+      if (v.passes(t) != (!f.active() || moodfilter::matches(words[t], f))) {
+        char what[64];
+        snprintf(what, sizeof(what), "q 0x%04X, word 0x%04X", (unsigned)bits, (unsigned)t);
+        TEST_FAIL_MESSAGE(what);
+      }
+    }
+    TEST_ASSERT_EQUAL(!v.on(), v.passes(static_cast<uint32_t>(words.size())));  // past the words
+    TEST_ASSERT_TRUE(MoodView(nullptr, 0, bits).passes(7));                   // no words: off
+  }
+  TEST_ASSERT_EQUAL(1152 - 3, on);  // the valid q, less the three levels alone
+  TEST_ASSERT_EQUAL(2052u * 13107u + 411u, checked);  // (q % 5 == 0 reaches word 65535 too)
+}
+
 // A level alone, an invalid q (voice 3) or no words: off, the same picks as
 // no filter from the same stream, and the same print (the runs stay).
 void test_a_level_alone_is_no_filter() {
@@ -2332,6 +2363,7 @@ int main(int, char**) {
   RUN_TEST(test_dry_and_loosened);
   RUN_TEST(test_runs_follow_the_maps);
   RUN_TEST(test_a_filter_keeps_the_candidates_inside_the_mood);
+  RUN_TEST(test_a_mood_view_is_the_predicate);
   RUN_TEST(test_a_level_alone_is_no_filter);
   RUN_TEST(test_a_filter_changed_remakes_the_runs);
   RUN_TEST(test_a_shared_row_is_tested_by_its_first_track);

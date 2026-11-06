@@ -43,10 +43,10 @@ to the placement's first day. Fixed and checked on the device that day
 
 **Mood filters (2026-11-06):** a mood filter keeps every pick inside it
 (3.14; docs/MOOD-FILTERS.md's stage S4), set on Output > Auto DJ's Smart
-filters row (9.2; stage S5) or with `Dq`. Host-tested only: no device
-check has run on either yet (MOOD-FILTERS.md 9.8 and 9.9 list them). With
-no filter, every pick, the Auto DJ button's draws and the toasts are as
-before.
+filters row (9.2; stage S5) or with `Dq`. The engine's part was checked
+on the Core2 on 2026-11-06 (MOOD-FILTERS.md 9.8); the page is host-tested
+only, its device check next (9.9 lists it). With no filter, every pick,
+the Auto DJ button's draws and the toasts are as before.
 
 The other documents:
 
@@ -474,8 +474,8 @@ Before 2026-10-16 a row damaged at a pick had no line: only `D`'s
 ### 3.14 The mood filter
 
 docs/MOOD-FILTERS.md has the design (4.4, 6), its figures and its
-sessions. What the engine does with a filter (READ; host-tested, no
-device check yet):
+sessions. What the engine does with a filter (READ; host-tested, and
+checked on the Core2 2026-11-06, MOOD-FILTERS.md 9.8):
 
 - **The filter:** 11 bits, `q` (MOOD-FILTERS.md 5.4), set by the Smart
   filters row's editor (9.2) or `Dq` and saved (section 8), over the library's mood words (`library.idx` v7, a
@@ -505,8 +505,8 @@ device check yet):
 - **No track fits:** the trigger's ninth condition (4.1), a hold. Auto DJ
   adds nothing, reads Waiting, and the status says "Waiting: no track
   fits the filters". The glue counts the tracks inside the filter
-  (`AutoDj::stepMood()`, one pass over the words, 2-5 ms at 19,400 tracks,
-  MODELLED) when `q` changes and when the library comes back (the first
+  (`AutoDj::stepMood()`, one pass over the words, 4.8-5.6 ms at 19,413
+  tracks, MEASURED) when `q` changes and when the library comes back (the first
   pass, each fence's end); not by the library's stamp, track count or
   pointer, which a score-only rebuild leaves as they were. Behind the
   fence the filter is off and the count kept.
@@ -1744,10 +1744,26 @@ no redesign.
 Heap figures are compared only within one scripted sequence. The
 control's own are not the 2026-11-02 figures above (327,668 B, not
 335,860 B, after a stopped update; 294,900 B, not 155,636 B, with the
-FLAC): a largest free block depends on the steps before it (7.4). Not
-A/B'd, since it needs a fresh commit on each firmware: the first walk
-after a new commit, then `gb`, read 180,212 B with the block. On the
-card without tails (docs/MOOD-FILTERS.md 9.6, Run B) the same path read
+FLAC): a largest free block depends on the steps before it (7.4). In
+the script above `library.idx`'s save ended before the join.
+
+The save after the rejoin, A/B'd (MEASURED 2026-11-06): two firmwares
+built from S2's tip (`3461c41`), a control whose builder never sets the
+word and the mood firmware, each after a boot that rebuilt the library
+with or without words, then a reset (a load boot), `z`, `D`, `gb` with
+nothing playing and no `gw` first (not deferred), `D`, `Dc`, `D`.
+PSRAM's largest free block, control / moods: 655,348 / 622,580 B joined
+at the load boot, 327,668 / 294,900 B joined after the update with the
+save not yet done, 204,788 / 180,212 B after the save and `Dc`. The
+save landed after the rejoin: in the control it ended after the `D`
+that follows `gb`; with the block, between the join and that `D`. So the
+180,212 B is the save's layout, not the block, whose share on this path
+is -24,576 B; 7.4's rebuilt heap records 180,212 B for this layout on
+2026-10-14, before any mood work. The control is under 245,764 B too,
+so docs/MOOD-FILTERS.md 9.5's rule forces no redesign; a FLAC still
+fits (155,636 B), and so do an Opus's 65,536 and 62,464 B blocks. The
+layout is the update's own, worth its own look. On the card without
+tails (docs/MOOD-FILTERS.md 9.6, Run B) an update after `gw` read
 221,172 B at the join while its walk still ran, 335,860 B after it.
 
 Host: in `test_autodj_join`'s model heap with the real block, the boot's
