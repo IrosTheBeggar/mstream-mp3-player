@@ -147,6 +147,9 @@ void Spike::index(const char* arg) {
     case C::Synthetic:
       if (buildSynthetic(p.n)) report();
       return;
+    case C::Moods:  // gm, gm<hex>: the app's index (a synthetic one has no mood words)
+      library_.moodReport(p.n);
+      return;
     case C::Bad:
       Serial.printf("[index] %s\n", tagtext::kHelp);
       return;

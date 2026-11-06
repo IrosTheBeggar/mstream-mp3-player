@@ -32,10 +32,12 @@
 //        it, and says so), either file read again if the card was mounted
 //        again under it; its [console] line after the last (the phases:
 //        tagcheck::Gs; the reads and the lines here, its GsIo)
-//   gt   one file: its tags read now (TagScan), its records in D and in T,
-//        the record the builder would take (LibraryBuilder::choose(), 2.9)
-//        and the names the index has for it (not while a compaction is
-//        still under way after idle()'s wait: it replaces D)
+//   gt   one file: its tags read now (TagScan), its records in D and in T
+//        (T's mood tail as its bytes stand, valid or not, and what a reader
+//        makes of it: docs/MOOD-FILTERS.md 5.3), the record the builder
+//        would take (LibraryBuilder::choose(), 2.9) and the names and the
+//        mood word the index has for it (not while a compaction is still
+//        under way after idle()'s wait: it replaces D)
 //   gr, gr!, gw, gb, gv: the card worker's jobs (Rescan tags, walk, build,
 //        verify), handed in by whoever runs it (setJobs(): app/CardTasks);
 //        without them they say there is none, and change nothing; gb! the
@@ -120,7 +122,8 @@ public:
   // A parsed g command that is the tags' (Status, Dump, Rescan, RescanAll,
   // Walk, Build, Verify, Wave).
   void command(const tagtext::Parsed& p);
-  // g's line: where the names came from, and the scan's state.
+  // g's lines: where the names came from, the mood words (their block, the
+  // tracks with one), and the scan's state.
   void summary();
   // Every loop pass: a piece of gs's reads, while one is under way.
   void loop(uint32_t nowMs);
