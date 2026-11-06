@@ -826,14 +826,14 @@ void Ui::endPageTouch() {
 }
 
 void Ui::openSheet(OverlayOwner* owner, const char* title, const char* const* rows, int n,
-                   const char* const* details, int primary, int danger) {
+                   const char* const* details, int primary, int danger, const uint16_t* inks) {
   endPageTouch();
   closeModal(true);
   sheetOwner_ = owner;
   for (SheetFollow& f : sheetFollow_) f = SheetFollow::None;
   sheetStays_ = 0;
   sheetOpenedMs_ = millis();
-  sheet_.open(title, rows, n, accent(), details, primary, danger);
+  sheet_.open(title, rows, n, accent(), details, primary, danger, inks);
   applyCover();
   // A 4-row sheet would reach the header row: a toast up stays on top.
   if (toast_.up() && sheet_.top() < toast_.bottom()) toast_.draw();
@@ -847,19 +847,42 @@ void Ui::sheetStays(int row) {
   if (sheet_.up() && row >= 0 && row < Sheet::kMaxRows) sheetStays_ |= static_cast<uint8_t>(1u << row);
 }
 
+uint16_t Ui::autoDjDetail(char* buf, size_t size) const {
+  if (!buf || size == 0) return col::DIM;
+  char whole[96];
+  const autodjview::Ink ink = autodjview::sheetDetail(state_.autoDj, whole, sizeof(whole));
+  if (ink != autodjview::Ink::Accent) {
+    snprintf(buf, size, "%s", whole);
+    return ink == autodjview::Ink::Amber ? col::AMBER : col::DIM;
+  }
+  // What is set, cut with "…" where the label leaves off (frame dj-menu),
+  // so it stays beside it (Sheet::renderRow() puts a detail too wide there
+  // under the label, whole). English's "On · Relaxed · Instrumental" is
+  // 178 px of 213: whole (test_ui_library).
+  Fonts& f = Fonts::instance();
+  const int room = sheet::detailRoom(f.width(Font::Body, tr(S::now_playing_autodj)));
+  textfit::fit(f.fit(Font::Small), whole, std::strlen(whole), buf, size, room);
+  return accent();
+}
+
 void Ui::followSheet(int pressed) {
   if (!sheet_.up()) return;
   bool pressedDrawn = false;
   for (int i = 0; i < Sheet::kMaxRows; ++i) {
     const char* text = nullptr;
+    char dj[96];
+    uint16_t ink = col::DIM;
     switch (sheetFollow_[i]) {
       case SheetFollow::Sleep: text = state_.sleepRow; break;
       case SheetFollow::Shuffle: text = tr(state_.shuffle ? S::now_playing_on : S::now_playing_off); break;
       case SheetFollow::Repeat: text = tr(uitext::repeatMode(state_.repeat)); break;
-      case SheetFollow::AutoDj: text = tr(autodjview::rowText(autodjview::rowState(state_.autoDj))); break;
+      case SheetFollow::AutoDj:
+        ink = autoDjDetail(dj, sizeof(dj));
+        text = dj;
+        break;
       default: continue;
     }
-    if (sheet_.setDetail(i, text) && i == pressed) pressedDrawn = true;
+    if (sheet_.setDetail(i, text, ink) && i == pressed) pressedDrawn = true;
   }
   if (pressed >= 0 && !pressedDrawn) sheet_.drawRow(pressed);
 }
@@ -2293,7 +2316,9 @@ void Ui::languageCommand(const char* a) {
 // pass's time, the carve) and the editor; uiMa<hex> sets it (bare hex, as
 // gm<hex>: an invalid q refused), uiMa0 clears it, its pass logged with its
 // time as every pass is; uiMe opens the editor over the page shown, its
-// taps then the scripted finger's (docs/MOOD-FILTERS.md 9.3). Behind the
+// taps then the scripted finger's (docs/MOOD-FILTERS.md 9.3): the Albums
+// list's, or over Output > Auto DJ, Auto DJ's (as Smart filters' tap: on
+// a card with no mood data, its note instead). Behind the
 // library update's fence the index is the build's: uiMa and uiMe say so
 // and do nothing.
 void Ui::filtersCommand(const char* a) {
@@ -2302,6 +2327,12 @@ void Ui::filtersCommand(const char* a) {
     return;
   }
   if (a[0] == 'e' && !a[1]) {
+    if (page_ == &outputPage_ && outputPage_.onAutoDj()) {
+      // Over Output > Auto DJ: its editor, as Smart filters' tap opens it
+      // (or its note: no mood data).
+      outputPage_.editMoods();
+      return;
+    }
     libraryPage_.refreshFilter();  // (its albums, if the fence or a rebuild dropped them)
     openFilters(&libraryPage_);
     return;

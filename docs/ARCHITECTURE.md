@@ -3069,8 +3069,11 @@ Queue, Dance and Output (with its Pair and About pages).
   opens goes, its Undo with it; one arriving while it is up covers its
   title row, and a Down there goes nowhere. A touch within 300 ms of its
   opening goes nowhere, as on a sheet. The Albums list opens it in the
-  Library's violet, counting albums; Auto DJ's page will in blue, counting
-  tracks (S5).
+  Library's violet, counting albums; Output > Auto DJ's Smart filters row
+  (`OutputPage`, a `FilterOwner` too) in blue, counting tracks, each tap
+  applied and saved through `UiHost::autoDjSetMoods()`, whose count the
+  editor shows; its close on a change settles it
+  (`UiHost::autoDjMoodSettled()`) and draws the page's rows again.
 - **Lists** (`ui/ListView`, with `ListLayout`, host-tested): virtualised rows
   (a source gives a count and a row renderer; standard pieces for 1- and
   2-line rows, the number column, a disc, a 40x40 thumbnail slot, a
@@ -3735,6 +3738,9 @@ Queue, Dance and Output (with its Pair and About pages).
   - **UiHost's Auto DJ calls** (main.cpp's `MainUiHost`, into
     `app/AutoDj`): `autoDjSetOn()`, `autoDjSetMode()`, `autoDjSetFloor()`,
     `autoDjSetMatch()` (applied, saved, logged; true when changed);
+    `autoDjSetMoods(q)` (the same, returning the tracks that fit, counted
+    at once: the editor's count) and `autoDjMoodSettled()` (the editor
+    closed on a change: a queued pick outside it plays once, said);
     `autoDjStart()` (the button: `autodjview::Started` Played, NoTrack,
     NoIndex or Refused, Refused behind the fence or with no memory);
     `autoDjFromHere(track)` (false behind the fence or with no memory);

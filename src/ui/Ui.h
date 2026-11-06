@@ -265,15 +265,23 @@ public:
   // minutes idle").
   void note(const char* text, uint32_t ms);
   // `primary`: the row that is the main choice (-1 none); `danger`: the
-  // row in red (-1 none). A touch that starts within Sheet::kSettleMs of
-  // its opening goes nowhere.
+  // row in red (-1 none); `inks`: each detail's colour (nullptr: all dim).
+  // A touch that starts within Sheet::kSettleMs of its opening goes
+  // nowhere.
   void openSheet(OverlayOwner* owner, const char* title, const char* const* rows, int n,
-                 const char* const* details = nullptr, int primary = -1, int danger = -1);
+                 const char* const* details = nullptr, int primary = -1, int danger = -1,
+                 const uint16_t* inks = nullptr);
   // What a row of the sheet just opened shows as its detail, and follows
   // while it is up: the sleep timer's state ("23 min", "Fading", "Off"),
   // shuffle ("On", "Off"), repeat ("Off", "All", "One") or Auto DJ ("On",
-  // "Off", "Waiting", "Paused"), from the snapshot each pass (a change
-  // from the console shows too).
+  // "Off", "Waiting", "Paused"; autoDjDetail()), from the snapshot each
+  // pass (a change from the console shows too).
+  // The playback menu's Auto DJ detail (autodjview::sheetDetail(), frames
+  // dj-menu, dj-menu-wait): with a mood filter on, "On · Relaxed ·
+  // Instrumental" in the accent, cut with "…" to the room beside the row's
+  // label (the sheet never cuts a detail itself); waiting for a track that
+  // fits it, "Waiting" in amber; else the state, dim. Returns the ink.
+  uint16_t autoDjDetail(char* buf, size_t size) const;
   enum class SheetFollow : uint8_t { None, Sleep, Shuffle, Repeat, AutoDj };
   void sheetFollows(int row, SheetFollow what);
   // A tap on row `row` of the sheet just opened doesn't close it: the

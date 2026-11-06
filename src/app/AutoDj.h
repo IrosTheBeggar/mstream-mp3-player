@@ -141,8 +141,17 @@ public:
   // The mood filter (the console's Dq; MOOD-FILTERS.md 4.4): saved, and the
   // tracks inside it counted at once (stepMood(): a filter nothing fits
   // holds from this pass); the session kept. Behind the update's fence the
-  // count waits for its end. False: invalid, or unchanged.
+  // count waits for its end. False: invalid, or unchanged. Output > Auto
+  // DJ's editor calls it at each tap, then moodSettled() at its close.
   bool setMoods(uint16_t q);
+  // stepMood()'s last count: the library's tracks inside the filter (all
+  // of them with none on, or with no mood data); behind the fence, the
+  // count from before it.
+  uint32_t moodFit() const { return fit_; }
+  // The filter's change is settled (the editor closed on it, or a Dq): a
+  // pick queued before it and outside it plays once (D5), said here.
+  // Behind the fence, nothing: the count is old (MOOD-FILTERS.md 4.5).
+  void moodSettled();
   // "Auto DJ from here" on `track`; the empty states' button. False /
   // not Played: nothing played.
   bool fromHere(uint32_t track);

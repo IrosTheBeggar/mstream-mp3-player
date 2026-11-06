@@ -938,12 +938,17 @@ bool AutoDj::setMoods(uint16_t q) {
   char what[256];
   moodLine(what, sizeof(what));
   saveSettings(what);
+  return true;
+}
+
+void AutoDj::moodSettled() {
+  const LibraryIndex* index = lib_.index();
+  if (!index || !index->ready() || !fitCounted_) return;  // (the fence: its count is old)
   // A pick queued before the change plays once (D5).
   const uint32_t pending = dj_.pendingTrack();
   if (pending != autodj::kNoTrackId && !moodView().passes(pending)) {
     Serial.printf("[dj] the pick up next is outside the filter: it plays once: %s\n", pathOf(pending));
   }
-  return true;
 }
 
 bool AutoDj::fromHere(uint32_t track) {
@@ -1114,7 +1119,11 @@ void AutoDj::command(const char* arg, const Env& env) {
       return;
     }
     case K::Moods:
-      if (!setMoods(static_cast<uint16_t>(c.n))) Serial.printf("[dj] mood filter 0x%03X already\n", (unsigned)c.n);
+      if (!setMoods(static_cast<uint16_t>(c.n))) {
+        Serial.printf("[dj] mood filter 0x%03X already\n", (unsigned)c.n);
+      } else {
+        moodSettled();  // (at once: no editor to close)
+      }
       return;
     case K::Seed:
       dj_.setSeed(c.n);

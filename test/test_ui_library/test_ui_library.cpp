@@ -1191,6 +1191,7 @@ void test_empty_state_texts_fit() {
   TEST_ASSERT_TRUE(body.width(tr(S::empty_autodj)) + kEmptyIconW[1] + 8 <= kEmptySecondW - 12);  // (Auto DJ's place)
   TEST_ASSERT_TRUE(kEmptyPrimaryX + kEmptyPrimaryW < kEmptySecondX && kEmptySecondX + kEmptySecondW <= 320 - 6);
   fits(small, tr(S::empty_pick_in_library), kEmptyLineW);
+  fits(small, tr(S::empty_no_track_fits), kEmptyLineW);  // (in its place while Auto DJ's mood filter fits no track)
 }
 
 // No card, and each kind of card that didn't mount (cardMessage(): exFAT,
@@ -3975,6 +3976,77 @@ void test_sheet_details_fit() {
   TEST_ASSERT_EQUAL_STRING(drawn(small, name, room).c_str(), cut);
 }
 
+// The playback sheet's Auto DJ row with a mood filter on (MOOD-FILTERS.md
+// 4.4, frame dj-menu): autodjview::sheetDetail()'s "On · Relaxed ·
+// Instrumental", cut with "…" to the room beside the label (Ui::
+// autoDjDetail(), as Now Playing cuts a name), stays beside it in every
+// language and for every filter, the state's word first, whole. A detail
+// that fits whole is left as it is.
+void test_the_auto_dj_sheet_detail_is_cut_beside() {
+  namespace dv = autodjview;
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  const textfit::Font f = viewOf(small);
+  std::string report;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    const int labelW = body.width(tr(S::now_playing_autodj));
+    const int room = sheet::detailRoom(labelW);
+    TEST_ASSERT_TRUE(room >= 210);  // (en 213, ru 210: far over sheet::kMinDetailRoom)
+    char on[32];
+    uistr::trf(on, sizeof(on), S::output_autodj_sub_on, "");  // "On · ": what each detail starts with
+    size_t cutCount = 0, filters = 0;
+    int widest = 0;
+    for (uint16_t q = 1; q < 0x800; ++q) {
+      if (!moodfilter::valid(q) || !moodfilter::Filter::unpack(q).active()) continue;
+      ++filters;
+      dv::State s;
+      s.on = true;
+      s.moods = q;
+      s.moodData = s.moodOn = true;
+      s.fit = s.fitOf = 19412;
+      char whole[96], shown[96];
+      TEST_ASSERT_TRUE(dv::sheetDetail(s, whole, sizeof(whole)) == dv::Ink::Accent);
+      TEST_ASSERT_EQUAL_INT(0, std::strncmp(whole, on, std::strlen(on)));
+      textfit::fit(f, whole, std::strlen(whole), shown, sizeof(shown), room);
+      widest = std::max(widest, small.width(whole));
+      fits(small, shown, room);
+      TEST_ASSERT_FALSE(sheet::detailOnTwoLines(labelW, small.width(shown)));
+      if (std::strcmp(shown, whole) != 0) {
+        ++cutCount;
+        TEST_ASSERT_TRUE(std::strstr(shown, "\xE2\x80\xA6") != nullptr);
+        // More than the state's word: some of the first mood too (the room
+        // is 210 px or more in every language).
+        TEST_ASSERT_TRUE(std::strlen(shown) > std::strlen(on) + 3);
+      }
+    }
+    TEST_ASSERT_EQUAL_INT(1149, static_cast<int>(filters));  // the 1,152 valid words but a level alone's three
+    char m[160];
+    snprintf(m, sizeof(m), "%s: %zu of %zu cut in %d px (the widest %d); ", uistr::tag(l), cutCount, filters, room,
+             widest);
+    report += m;
+  }
+  uistr::setLang(uistr::Lang::En);
+  // English: frame dj-menu's two words fit whole beside "Auto DJ".
+  {
+    dv::State s;
+    s.on = true;
+    moodfilter::Filter both;
+    both.energy = moodfilter::Scale::First;  // Relaxed
+    both.voice = moodfilter::Voice::Instrumental;
+    s.moods = both.pack();
+    s.moodData = s.moodOn = true;
+    char whole[96];
+    dv::sheetDetail(s, whole, sizeof(whole));
+    TEST_ASSERT_EQUAL_STRING("On \xC2\xB7 Relaxed \xC2\xB7 Instrumental", whole);
+    char m[96];
+    snprintf(m, sizeof(m), "en \"%s\": %d px in %d", whole, small.width(whole),
+             sheet::detailRoom(body.width(tr(S::now_playing_autodj))));
+    report += m;
+  }
+  TEST_MESSAGE(report.c_str());
+}
+
 // Auto DJ on the screen (the engine design's 5; lib/core/AutoDjView), in
 // every language: Output's row (its title and line, every state and
 // Anchor), Output > Auto DJ's rows (the switches' titles and lines beside
@@ -4969,6 +5041,7 @@ int main(int, char**) {
   RUN_TEST(test_header_pills_fit);
   RUN_TEST(test_header_subs_fit);
   RUN_TEST(test_sheet_details_fit);
+  RUN_TEST(test_the_auto_dj_sheet_detail_is_cut_beside);
   RUN_TEST(test_auto_dj_texts_fit);
   RUN_TEST(test_folder_header_counts_fit);
   RUN_TEST(test_library_header_lines);
