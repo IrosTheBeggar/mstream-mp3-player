@@ -4021,6 +4021,23 @@ void test_auto_dj_texts_fit() {
           states.push_back(s);
           s.rows = s.mapped = s.tracks = 1;  // (the "one" forms)
           states.push_back(s);
+          // The mood filter (MOOD-FILTERS.md 4.4): mood data with none on
+          // (the coverage's mood), then one on that many fit (the count),
+          // 50, 21 and 1 (few: each plural form), and none.
+          s.rows = s.mapped = s.tracks = 99999;
+          s.moodData = true;
+          s.moodPct = 100;
+          s.fitOf = 99999;
+          s.fit = 99999;
+          states.push_back(s);
+          s.moodOn = true;
+          for (uint32_t fit : {99999u, 51u, 50u, 22u, 21u, 1u, 0u}) {
+            s.fit = fit;
+            states.push_back(s);
+          }
+          s.fitOf = 1;  // (the "one" forms of the count)
+          s.fit = 0;
+          states.push_back(s);
         }
       }
     }
@@ -4100,8 +4117,40 @@ void test_auto_dj_texts_fit() {
       }
     }
     for (S t : {S::autodj_anchor_rolling_sub, S::autodj_anchor_locked_sub, S::autodj_strictness_sub,
-                S::autodj_needs_index}) {
+                S::autodj_needs_index, S::autodj_smart_sub}) {
       fits(small, tr(t), kAutoDjLineW);
+    }
+    // Smart filters, the fourth row (MOOD-FILTERS.md 4.4): its value
+    // beside its title, or under it in its hint's place, as Anchor's.
+    // Dim (no mood data), the hint stays: no index isn't why. What is set
+    // (filterValue()'s summary) is cut to the line, so not measured here.
+    {
+      const char* title = tr(S::mood_smart_filters);
+      fits(body, title, kAutoDjLineW);
+      const char* hint = tr(S::autodj_smart_sub);
+      for (S id : {S::mood_any, S::mood_no_data}) {
+        const char* v = tr(id);
+        const int vw = small.width(v);
+        const char* second = autoDjSecondLine(body.width(title), vw, v, hint);
+        fits(small, second, kAutoDjLineW);
+        if (autoDjValueBeside(body.width(title), vw)) {
+          fits(small, v, autoDjValueRoom(body.width(title)));
+          TEST_ASSERT_EQUAL_STRING(hint, second);
+          continue;
+        }
+        TEST_ASSERT_EQUAL_STRING(v, second);
+        TEST_ASSERT_TRUE_MESSAGE(l != uistr::Lang::En, v);  // English: beside its title
+        char m[160];
+        snprintf(m, sizeof(m), "%s \"%s\" under \"%s\" (%d px in %d); ", uistr::tag(l), v, title, vw,
+                 autoDjValueRoom(body.width(title)));
+        report += m;
+      }
+      // Each word a summary can start with, whole on the line (a summary
+      // is cut after a word, never inside its first).
+      for (S w : {S::mood_happy, S::mood_neutral, S::mood_sad, S::mood_relaxed, S::mood_aggressive,
+                  S::mood_instrumental, S::mood_vocals, S::mood_acoustic, S::mood_party, S::mood_danceable}) {
+        fits(small, tr(w), kAutoDjLineW);
+      }
     }
     // The sheets' 4th rows (Body, 16 px in from each side).
     fits(body, tr(S::library_autodj_here), sheet::kTwoLineW);

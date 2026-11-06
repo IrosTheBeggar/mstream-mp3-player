@@ -17,13 +17,19 @@
 //   - Now Playing's "..." sheet: a 4th row, "Auto DJ", its state the
 //     detail (rowState(): On, Off, Waiting, Paused); a tap switches it,
 //     the sheet staying up (as Shuffle).
+//     With a mood filter on, its detail says what is set, in the accent;
+//     waiting for want of a track that fits, amber (sheetDetail()).
 //   - Output > Auto DJ (a row with its line, rootLine(), and a page): the
 //     switch, Anchor (a tap swaps), Match strictness (a tap takes the next
-//     step: nextFloor()), BPM continuity, Harmonic mixing, and a status
-//     row (statusLines()); the four in between dim with "needs an Auto DJ
-//     index" while the card has none it can use (rowLive()).
+//     step: nextFloor()), Smart filters (the mood filter's editor:
+//     filterValue()), BPM continuity, Harmonic mixing, and a status row
+//     (statusLines(), statusAmber()); Anchor, Match strictness and the two
+//     switches dim with "needs an Auto DJ index" while the card has none it
+//     can use, Smart filters with "No mood data" while it has no mood
+//     scores (rowLive(); docs/MOOD-FILTERS.md 4.4).
 //   - The empty states (Now Playing, the Queue): [Open Library] [Auto DJ]
-//     in Shuffle all's place while the card has a usable index (D4);
+//     in Shuffle all's place while the card has a usable index (D4), and
+//     not while Auto DJ's mood filter fits no track (emptyNoFit());
 //     "Auto DJ from here" in the Library's long-press sheet on a track the
 //     index knows.
 //   - The Queue: the DJ mark on what Auto DJ added; no badge flash for its
@@ -65,6 +71,15 @@ struct State {
   uint32_t rows = 0;                       // Found: the index's tracks
   uint32_t mapped = 0, tracks = 0;         // Ready: the library's tracks with neighbours, of all
   uint8_t bpmPct = 0, keyPct = 0;          // Ready: ... of those, with a BPM, with a key
+  // The mood filter (docs/MOOD-FILTERS.md 4.4, 6.5): app/AutoDj::stepMood()'s
+  // count, kept as it was behind the library update's fence (the row's last
+  // value, the status row's last lines).
+  uint16_t moods = 0;       // the filter set (Settings::moods: MoodFilter.h's q; 0 none), saved with or without data
+  bool moodData = false;    // the library's tracks have mood words (LibraryIndex::hasMoods())
+  bool moodOn = false;      // ... and a group of `moods` is set: the picks stay inside it (MoodView::on())
+  uint32_t fit = 0;         // moodOn: the library's tracks inside the filter (else all of them)
+  uint32_t fitOf = 0;       // ... of all
+  uint8_t moodPct = 0;      // moodData: the library's tracks with a mood word, %
   // Auto DJ's appends since the boot (Ui: the Queue badge doesn't flash
   // for them).
   uint32_t adds = 0;
@@ -77,6 +92,14 @@ enum class RowState : uint8_t { Off, On, Waiting, Paused };
 // by failures: Paused; else On.
 RowState rowState(const State& s);
 uistr::S rowText(RowState r);  // now_playing.autodj_*
+// The ink of the "..." sheet's Auto DJ detail (dim, as every other row's).
+enum class Ink : uint8_t { Dim, Accent, Amber };
+// The "..." sheet's Auto DJ detail (MOOD-FILTERS.md 4.4): on with a mood
+// filter on, the state and what is set, "On · Relaxed · Instrumental"
+// (output.autodj_sub_on with filtergrid::summary(): whole words, as many
+// as `size` holds), in the accent; waiting for want of a track that fits,
+// "Waiting" in amber; else rowText(), dim. Returns the ink.
+Ink sheetDetail(const State& s, char* buf, size_t size);
 
 // ---- Output's row: "On · Follow the vibe", "Waiting · Stay on seed", "Off" ----
 uistr::S modeText(autodj::Mode m);  // autodj.anchor_rolling / _locked
@@ -90,10 +113,18 @@ uistr::S modeText(autodj::Mode m);  // autodj.anchor_rolling / _locked
 char* rootLine(const State& s, char* buf, size_t size, bool withMode = true);
 
 // ---- the page ----
-enum PageRow : uint8_t { OnRow, AnchorRow, StrictRow, BpmRow, KeyRow, StatusRow, kPageRows };
-// Live (else drawn dim, "needs an Auto DJ index", a tap a note): the
-// switch and the status always; the rest with a usable index.
+enum PageRow : uint8_t { OnRow, AnchorRow, StrictRow, FilterRow, BpmRow, KeyRow, StatusRow, kPageRows };
+// Live (else drawn dim, a tap a note): the switch and the status always;
+// Smart filters exactly while the card has mood data, whatever the index
+// (with none, the picks are random inside the filter; with no mood data,
+// "No mood data", and its picks are unfiltered: D4); the rest with a usable
+// index ("needs an Auto DJ index").
 bool rowLive(PageRow r, const State& s);
+// Smart filters' value: "No mood data" (mood.no_data) without mood data;
+// "Any" (mood.any) with no group set (a level alone filters nothing); else
+// what is set, "Relaxed · Instrumental" (filtergrid::summary(): whole
+// words, as many as `size` holds; the page cuts it to its room).
+char* filterValue(const State& s, char* buf, size_t size);
 // The strictness's next step: 55, 60, 65, 70, 75, then 55 again (a
 // value off the steps: the next step above it, else 55).
 uint8_t nextFloor(uint8_t pct);
@@ -111,16 +142,35 @@ uint8_t shownFloor(uint8_t pct, uint32_t selFloor);
 char* strictnessText(uint8_t pct, char* buf, size_t size);
 // The hint under Anchor (the mode's).
 uistr::S anchorHint(autodj::Mode m);
-// The status row's two lines: held (on, Waiting or Paused), why over the
-// index's first line (a filter nothing fits: "Waiting: no track fits the
-// filters"); else the index's (Ready: "19,000 of 19,410 tracks
-// have neighbours" over "BPM 92% · key 88%"; Found: "Auto DJ index: 19,410
-// tracks" over "read when Auto DJ is switched on"; Reading: one line;
-// None, Bad, Unreadable, TooBig, NoMemory: why over "picks are random").
+// The status row's two lines (MOOD-FILTERS.md 4.4):
+//   - held (on, Waiting or Paused), why over the index's first line; a
+//     filter nothing fits: "Waiting: no track fits the filters", over the
+//     coverage once the index is read;
+//   - with a mood filter on and the index read, or none Auto DJ can use
+//     (None, Bad, Unreadable, TooBig, NoMemory: its picks random inside the
+//     filter): how many tracks fit, "1,204 of 19,412 tracks fit", or 1 to 50
+//     (autodj::kTrackCooldown: they repeat) "Only 37 tracks fit"; over the
+//     coverage ("BPM 95% · key 97% · mood 92%", or "They will repeat · BPM
+//     95% · key 97%") once read, else over the index's first line (the held
+//     form: no coverage without a join);
+//   - else the index's (Ready: "19,000 of 19,410 tracks have neighbours"
+//     over "BPM 92% · key 88%", with " · mood 92%" when the card has mood
+//     data; Found: "Auto DJ index: 19,410 tracks" over "read when Auto DJ is
+//     switched on"; Reading: one line; None, Bad, Unreadable, TooBig,
+//     NoMemory: why over "picks are random").
 void statusLines(const State& s, char* line1, size_t size1, char* line2, size_t size2);
+// The first line in amber: the failure pause, a filter nothing fits
+// (waiting, or 0 tracks fit while off), or 1 to 50 that fit; else it is
+// soft (OutputPage). The second line is always dim.
+bool statusAmber(const State& s);
 
 // ---- the empty states' second button (D4) ----
-// Auto DJ in Shuffle all's place: a usable index and a library.
+// Auto DJ's mood filter fits no track on the card (MOOD-FILTERS.md 4.4):
+// the empty states say so ("No track on this card fits these filters",
+// empty.no_track_fits) and show no second button, [Open Library] alone.
+bool emptyNoFit(const State& s);
+// Auto DJ in Shuffle all's place: a usable index and a library, and a
+// track inside the mood filter (none: !emptyNoFit()).
 bool emptyButton(const State& s, uint32_t libraryTracks);
 // What the button did (app/AutoDj::start()).
 enum class Started : uint8_t {

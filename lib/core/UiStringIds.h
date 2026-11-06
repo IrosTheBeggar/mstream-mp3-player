@@ -74,6 +74,10 @@ enum class S : uint16_t {
   toast_autodj_started,  // Auto DJ: {0}
   toast_autodj_no_start,  // Found no track with Auto DJ neighbours: try again
   toast_autodj_needs_index,  // Needs an Auto DJ index: a transfer to the card adds one
+  toast_autodj_few,  // Only {0} tracks fit: they will repeat
+  toast_autodj_no_close,  // No close match: any track that fits
+  toast_autodj_plays_once,  // Plays once, then the filters apply
+  toast_autodj_no_mood,  // No mood data: sync this card from mStream
   hud_bluetooth,  // Bluetooth: {0}
   hud_bluetooth_connecting,  // Bluetooth: connecting...
   hud_speaker_paused,  // Speaker, paused: B plays
@@ -221,6 +225,9 @@ enum class S : uint16_t {
   mood_albums_of,  // {0} of {1} albums
   mood_tracks_of,  // {0} of {1} tracks
   mood_no_albums,  // No albums match these filters
+  mood_smart_filters,  // Smart filters
+  mood_any,  // Any
+  mood_no_data,  // No mood data
   card_another,  // Another card: restarting
   card_back,  // Card back: restarting
   queue_cap_full,  // No played track can make way: the queue holds {0} tracks
@@ -270,6 +277,7 @@ enum class S : uint16_t {
   empty_nothing_playing_title,  // Nothing playing
   empty_queue_title,  // Your queue is empty
   empty_pick_in_library,  // Pick an album, folder or track in the Library.
+  empty_no_track_fits,  // No track on this card fits these filters
   empty_open_library,  // Open Library
   empty_shuffle_all,  // Shuffle all
   empty_autodj,  // Auto DJ
@@ -317,6 +325,7 @@ enum class S : uint16_t {
   autodj_strictness,  // Match strictness
   autodj_strictness_value,  // {0}% or closer
   autodj_strictness_sub,  // how similar each pick must sound
+  autodj_smart_sub,  // keeps every pick inside these moods
   autodj_bpm,  // BPM continuity
   autodj_bpm_sub,  // within 8 BPM, or half/double tempo
   autodj_harmonic,  // Harmonic mixing
@@ -324,6 +333,10 @@ enum class S : uint16_t {
   autodj_needs_index,  // needs an Auto DJ index
   autodj_status_ready,  // {0} of {1} tracks have neighbours
   autodj_status_coverage,  // BPM {0}% · key {1}%
+  autodj_status_fits,  // {0} of {1} tracks fit
+  autodj_status_coverage_mood,  // BPM {0}% · key {1}% · mood {2}%
+  autodj_status_few,  // Only {0} tracks fit
+  autodj_status_few_sub,  // They will repeat · BPM {0}% · key {1}%
   autodj_status_found,  // Auto DJ index: {0} tracks
   autodj_status_found_sub,  // read when Auto DJ is switched on
   autodj_status_reading,  // Reading the Auto DJ index…
@@ -635,7 +648,7 @@ enum class S : uint16_t {
   format_hz,  // {0} Hz
   format_list_sep,  // , 
 };
-inline constexpr unsigned kStrings = 626;
+inline constexpr unsigned kStrings = 639;
 
 // The languages, English first: the mobile app's ten (one without a
 // catalogue yet draws English), and the pseudo-locale where UISTR_PSEUDO

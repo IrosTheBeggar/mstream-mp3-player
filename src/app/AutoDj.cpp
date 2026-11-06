@@ -357,6 +357,8 @@ void AutoDj::stepMood() {
   fitQ_ = q;
   fitCounted_ = true;
   fitOn_ = v.on();
+  fitData_ = index->hasMoods();
+  fitWords_ = index->moodTracks();
   // The words may be new where the old ones were (a fence's end): the runs
   // remade. Not with no filter, then or now: those picks are as before.
   if (fitOn_ || wasOn) dj_.engine().mapsChanged();
@@ -1042,6 +1044,14 @@ void AutoDj::view(autodjview::State* v) const {
   v->usable = usable();
   v->hold = s.on ? dj_.lastTrigger().hold : autodj::Hold::None;
   v->adds = newsWatch_.adds();
+  // The mood filter as stepMood() last counted it (the last values behind
+  // a fence; none before the first library: no mood data).
+  v->moods = s.moods;
+  v->moodData = fitCounted_ && fitData_;
+  v->moodOn = v->moodData && fitOn_;
+  v->fit = fit_;
+  v->fitOf = fitOf_;
+  v->moodPct = v->moodData ? static_cast<uint8_t>(pct(fitWords_, fitOf_)) : 0;
   const LibraryIndex* index = lib_.index();
   if (file_ == File::Absent && why_ == cc::Why::Io) {
     // A read failed (the file the root names isn't on the card, the card

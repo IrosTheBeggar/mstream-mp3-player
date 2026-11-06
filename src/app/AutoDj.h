@@ -269,6 +269,8 @@ private:
   uint16_t fitQ_ = 0;         // the q it counted
   bool fitCounted_ = false;   // ... for a library at all
   bool fitOn_ = false;        // the filter was on (words, and a group set) then
+  bool fitData_ = false;      // the library had mood words then (view(): the row's state behind a fence too)
+  uint32_t fitWords_ = 0;     // ... its tracks with a word (view()'s moodPct)
   bool indexSeen_ = false;    // lib_.index() was there at the last stepMood()
   cardcontract::mpdj::Table table_;
   Reader reader_{table_};

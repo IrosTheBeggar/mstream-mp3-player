@@ -1,7 +1,7 @@
 {
   "@@locale": "ru",
   "@@autonym": "Русский",
-  "@@note": "Russian, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_ru.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/ru.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept: formal вы), and translated by a Fable agent (Claude) otherwise, then reviewed message by message by a second Fable agent. A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_ru.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker.",
+  "@@note": "Russian, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_ru.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/ru.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept: formal вы), and translated by a Fable agent (Claude) otherwise, then reviewed message by message by a second Fable agent. A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_ru.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_ru.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
   "boot.touch_hint": "Касания мимо? Держите палец на экране.",
   "coach.header_tip": "Совет {0} из {1}",
   "coach.header_hint": "тап: дальше",
@@ -81,6 +81,20 @@
   "toast.autodj_started": "Авто-DJ: {0}",
   "toast.autodj_no_start": "Не найден трек с похожими треками: попробуйте ещё раз",
   "toast.autodj_needs_index": "Нужен индекс Авто-DJ: его создаёт перенос на карту",
+  "toast.autodj_few": {
+    "one": "Подходит только {0} трек: будут повторы",
+    "few": "Подходят только {0} трека: будут повторы",
+    "many": "Подходят только {0} треков: будут повторы"
+  },
+  "@toast.autodj_few": {
+    "note": "'будут повторы' (there will be repeats) in every form: 'он будет повторяться' would read wrong at 21, 31 and 41."
+  },
+  "toast.autodj_no_close": "Нет близких треков: любой подходящий под фильтры",
+  "toast.autodj_plays_once": "Сыграет один раз: затем действуют фильтры",
+  "@toast.autodj_plays_once": {
+    "note": "With a ': ' to split at: one line is 385 px in Body, the toast's line 284."
+  },
+  "toast.autodj_no_mood": "Нет данных о настроении: синхронизируйте карту с mStream",
   "hud.bluetooth": "Bluetooth: {0}",
   "hud.bluetooth_connecting": "Bluetooth: подключение…",
   "hud.speaker_paused": "Динамик, пауза: нажмите B",
@@ -321,6 +335,9 @@
     "many": "{0} из {1} треков"
   },
   "mood.no_albums": "Нет альбомов под эти фильтры",
+  "mood.smart_filters": "Умные фильтры",
+  "mood.any": "Не важно",
+  "mood.no_data": "Нет данных о настроении",
   "card.another": "Другая карта: перезапуск",
   "card.back": "Карта вернулась: перезапуск",
   "queue_cap.full": {
@@ -420,6 +437,7 @@
   "empty.nothing_playing_title": "Ничего не играет",
   "empty.queue_title": "Очередь пуста",
   "empty.pick_in_library": "Выберите альбом, папку или трек.",
+  "empty.no_track_fits": "На этой карте нет треков под эти фильтры",
   "empty.open_library": "Библиотека",
   "empty.shuffle_all": "Наугад",
   "@empty.shuffle_all": {
@@ -470,6 +488,7 @@
   "autodj.strictness": "Порог похожести",
   "autodj.strictness_value": "{0}% и ближе",
   "autodj.strictness_sub": "насколько похожим должен быть трек",
+  "autodj.smart_sub": "выбор не выходит за эти настроения",
   "autodj.bpm": "Непрерывность по BPM",
   "autodj.bpm_sub": "±8 BPM или половинный/двойной",
   "@autodj.bpm_sub": {
@@ -488,6 +507,27 @@
     "other": "Похожие есть у {0} из {1} треков"
   },
   "autodj.status_coverage": "BPM {0}% · тональность {1}%",
+  "autodj.status_fits": {
+    "one": "Под фильтры: {0} из {1} трека",
+    "few": "Под фильтры: {0} из {1} треков",
+    "many": "Под фильтры: {0} из {1} треков"
+  },
+  "@autodj.status_fits": {
+    "note": "With no verb, which would agree with {0}, not the form's count {1}; 'под фильтры' as autodj.status_waits_fit."
+  },
+  "autodj.status_coverage_mood": "BPM {0}% · тон. {1}% · настроение {2}%",
+  "@autodj.status_coverage_mood": {
+    "note": "'тон.' for тональность here: 'BPM {0}% · тональность {1}% · настроение {2}%' is 342 px in Small at 100 %, the line 288 (and 'настр.' with тональность 305). настроение: the mobile app's word for the mood (autoDjNoMoodData)."
+  },
+  "autodj.status_few": {
+    "one": "Подходит только {0} трек",
+    "few": "Подходят только {0} трека",
+    "many": "Подходят только {0} треков"
+  },
+  "autodj.status_few_sub": "Повторы · BPM {0}% · тональность {1}%",
+  "@autodj.status_few_sub": {
+    "note": "'Будут повторы' with the shares is 326 px in Small, the line 288: 'Повторы' (281 px)."
+  },
   "autodj.status_found": {
     "one": "Индекс Авто-DJ: {0} трек",
     "few": "Индекс Авто-DJ: {0} трека",

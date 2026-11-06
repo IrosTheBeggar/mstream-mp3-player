@@ -462,7 +462,8 @@ mStream's apps say the same thing; each file's `@@note` says what it took:
   branch master at commit bdb174e0ea3a6333f820b593888d5a662c9ae976
   (2026-09-21); the mood filters' words (its `mood*` keys and `clear`:
   the `mood.*` texts; its `autoDjSeedNoMatch` and `moodFilters`:
-  `autodj.status_waits_fit`) at commit
+  `autodj.status_waits_fit`; its `autoDjMoodTitle`, `autoDjAny` and
+  `autoDjNoMoodData`: Auto DJ's Smart filters row) at commit
   d17c3fa561da2b7ba3f575d132c3682177b83009 (2026-11-01), which bdb174e
   predates. Licence: GPL-3.0 (its LICENSE). Its translations are machine
   translations (its README says so). Source:

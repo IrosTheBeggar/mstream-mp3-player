@@ -1,7 +1,7 @@
 {
   "@@locale": "pt",
   "@@autonym": "Português",
-  "@@note": "Brazilian Portuguese (pt-BR, você), made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_pt.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/pt.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept; the terminal's MP3-player tab is European Portuguese, so its words were reworded to Brazilian: fones de ouvido, tela, arquivo, parear, reiniciando), and translated by a Fable agent (Claude) otherwise, then reviewed message by message by a second Fable agent (a Brazilian Portuguese review: wording, agreement, terms, widths). A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, with the Auto DJ engine's UI) were made the same way: the mobile app's Auto DJ words (Auto DJ, Âncora, Seguir o clima, Manter a semente, Limite de semelhança, Continuidade de BPM, Mixagem harmônica, 'a partir daqui') and a Fable agent's translation for the rest, fitted with the same checker; not yet reviewed by a native speaker. The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_pt.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker.",
+  "@@note": "Brazilian Portuguese (pt-BR, você), made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_pt.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/pt.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept; the terminal's MP3-player tab is European Portuguese, so its words were reworded to Brazilian: fones de ouvido, tela, arquivo, parear, reiniciando), and translated by a Fable agent (Claude) otherwise, then reviewed message by message by a second Fable agent (a Brazilian Portuguese review: wording, agreement, terms, widths). A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, with the Auto DJ engine's UI) were made the same way: the mobile app's Auto DJ words (Auto DJ, Âncora, Seguir o clima, Manter a semente, Limite de semelhança, Continuidade de BPM, Mixagem harmônica, 'a partir daqui') and a Fable agent's translation for the rest, fitted with the same checker; not yet reviewed by a native speaker. The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_pt.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_pt.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
   "boot.touch_hint": "O toque falha? Segure um dedo na tela.",
   "coach.header_tip": "Dica {0} de {1}",
   "coach.header_hint": "toque para seguir",
@@ -74,6 +74,19 @@
   "toast.autodj_started": "Auto DJ: {0}",
   "toast.autodj_no_start": "Nenhuma faixa com vizinhos no Auto DJ: tente de novo",
   "toast.autodj_needs_index": "Precisa de um índice do Auto DJ: a transferência ao cartão cria um",
+  "toast.autodj_few": {
+    "one": "Só {0} faixa atende os filtros: ela vai se repetir",
+    "other": "Só {0} faixas atendem os filtros: elas vão se repetir"
+  },
+  "toast.autodj_no_close": "Nada parecido: qualquer faixa que atenda os filtros",
+  "toast.autodj_plays_once": "Toca uma vez: depois valem os filtros",
+  "@toast.autodj_plays_once": {
+    "note": "With a ': ' to split at: 'Toca uma vez, depois valem os filtros' is 301 px in Body, the toast's line 284."
+  },
+  "toast.autodj_no_mood": "Sem dados de clima: sincronize este cartão pelo mStream",
+  "@toast.autodj_no_mood": {
+    "note": "clima and sincronize: the mobile app's words (autoDjNoMoodData, mainSync)."
+  },
   "hud.bluetooth": "Bluetooth: {0}",
   "hud.bluetooth_connecting": "Bluetooth: conectando...",
   "hud.speaker_paused": "Alto-falante, pausado: B toca",
@@ -287,6 +300,9 @@
   "@mood.no_albums": {
     "note": "'atende a esses filtros' (298 px): the mobile app's 'corresponde aos filtros' is 312 px in the line's 300."
   },
+  "mood.smart_filters": "Filtros inteligentes",
+  "mood.any": "Qualquer",
+  "mood.no_data": "Sem dados de clima",
   "card.another": "Outro cartão: reiniciando",
   "card.back": "Cartão de volta: reiniciando",
   "queue_cap.full": {
@@ -375,6 +391,10 @@
   "empty.nothing_playing_title": "Nada tocando",
   "empty.queue_title": "Sua fila está vazia",
   "empty.pick_in_library": "Escolha álbum, pasta ou faixa na Biblioteca.",
+  "empty.no_track_fits": "Nenhuma faixa do cartão atende aos filtros",
+  "@empty.no_track_fits": {
+    "note": "'Nenhuma faixa deste cartão atende a esses filtros' is 329 px in Small, the line 304."
+  },
   "empty.open_library": "Biblioteca",
   "@empty.open_library": {
     "note": "'Biblioteca' alone: 'Abrir Biblioteca' is 138 px in the 120 px button."
@@ -437,6 +457,7 @@
     "note": "The mobile app's words: they don't fit beside 'Limite de semelhança', so the value takes the row's second line, in the hint's place, as in German and Italian."
   },
   "autodj.strictness_sub": "quão parecida cada escolha deve soar",
+  "autodj.smart_sub": "cada escolha fica nesses climas",
   "autodj.bpm": "Continuidade de BPM",
   "autodj.bpm_sub": "± 8 BPM, ou metade ou dobro",
   "autodj.harmonic": "Mixagem harmônica",
@@ -450,6 +471,16 @@
     "note": "'com vizinhos' with no verb: a verb would agree with {0}, which doesn't pick the form ({1} does)."
   },
   "autodj.status_coverage": "BPM {0}% · tom {1}%",
+  "autodj.status_fits": {
+    "one": "{0} de {1} faixa atende os filtros",
+    "other": "{0} de {1} faixas atendem os filtros"
+  },
+  "autodj.status_coverage_mood": "BPM {0}% · tom {1}% · clima {2}%",
+  "autodj.status_few": {
+    "one": "Só {0} faixa atende os filtros",
+    "other": "Só {0} faixas atendem os filtros"
+  },
+  "autodj.status_few_sub": "Elas vão se repetir · BPM {0}% · tom {1}%",
   "autodj.status_found": {
     "one": "Índice do Auto DJ: {0} faixa",
     "other": "Índice do Auto DJ: {0} faixas"

@@ -2,15 +2,18 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 // Host tests for Auto DJ on the screen (lib/core/AutoDjView: the engine
-// design's 5 and 2.14, its milestone M5): the "..." row's state, the
-// Output row's line, the page's live and dim rows, Match strictness's
-// steps and the value an index's own floor makes of it, the status row's
-// two lines in each state of the index and each hold, the empty states'
-// button, and which toast Auto DJ's news makes (and when: picks by id once
-// a switch on, only picks appended; none of it for a mood filter's jumps,
-// repeats and re-pins, nor "no index" for its picks by id while joined). The widths of these texts
-// in every language are test_ui_library's (test_auto_dj_texts_fit) and
-// test_ui_strings'.
+// design's 5 and 2.14, its milestone M5): the "..." row's state and its
+// detail under a mood filter, the Output row's line, the page's live and
+// dim rows (Smart filters by the card's mood data, the rest by the index),
+// Smart filters' value, Match strictness's steps and the value an index's
+// own floor makes of it, the status row's two lines in each state of the
+// index and each hold, with a mood filter on and off, and which are amber,
+// the empty states' button (and none when the filter fits no track), and
+// which toast Auto DJ's news makes (and when: picks by id once a switch
+// on, only picks appended; none of it for a mood filter's jumps, repeats
+// and re-pins, nor "no index" for its picks by id while joined). The
+// widths of these texts in every language are test_ui_library's
+// (test_auto_dj_texts_fit) and test_ui_strings'.
 // Run: pio test -e native -f test_ui_autodj
 #include <unity.h>
 
@@ -19,6 +22,7 @@
 
 #include "AutoDjTiers.h"
 #include "AutoDjView.h"
+#include "MoodFilter.h"
 #include "UiStrings.h"
 
 using namespace autodjview;
@@ -40,6 +44,44 @@ std::string line(const State& s, int k) {
 std::string root(const State& s, bool withMode = true) {
   char b[96];
   return rootLine(s, b, sizeof(b), withMode);
+}
+
+// Relaxed and Instrumental (MoodFilter.h's q).
+uint16_t relaxedInstrumental() {
+  moodfilter::Filter f;
+  f.energy = moodfilter::Scale::First;
+  f.voice = moodfilter::Voice::Instrumental;
+  return f.pack();
+}
+
+// A library of 19,412 tracks, 92 % with mood words, the index read, and a
+// filter on that `fit` of them fit.
+State filtered(uint32_t fit) {
+  State s;
+  s.usable = true;
+  s.index = Index::Ready;
+  s.mapped = 19000;
+  s.tracks = 19412;
+  s.bpmPct = 95;
+  s.keyPct = 97;
+  s.moods = relaxedInstrumental();
+  s.moodData = s.moodOn = true;
+  s.fit = fit;
+  s.fitOf = 19412;
+  s.moodPct = 92;
+  return s;
+}
+
+std::string detail(const State& s, Ink* ink = nullptr, size_t size = 96) {
+  char b[96];
+  const Ink k = sheetDetail(s, b, size);
+  if (ink) *ink = k;
+  return b;
+}
+
+std::string value(const State& s) {
+  char b[200];
+  return filterValue(s, b, sizeof(b));
 }
 
 }  // namespace
@@ -110,21 +152,65 @@ void test_the_output_row_line() {
 }
 
 // Without a usable index the four settings are dim; the switch and the
-// status stay live (the design's 5.1).
+// status stay live (the design's 5.1). Smart filters, the fourth row, is
+// live exactly while the card has mood data, whatever the index
+// (MOOD-FILTERS.md 4.4: with none, its picks are random inside the filter;
+// without mood data it is dim, a filter set before kept, D4).
 void test_the_rows_without_an_index_are_dim() {
+  TEST_ASSERT_EQUAL_INT(7, kPageRows);
+  TEST_ASSERT_EQUAL_INT(3, FilterRow);  // (the fourth row, after Match strictness)
   State s;
   for (int r = 0; r < kPageRows; ++r) {
     const bool live = rowLive(static_cast<PageRow>(r), s);
     TEST_ASSERT_EQUAL_MESSAGE(r == OnRow || r == StatusRow, live, std::to_string(r).c_str());
   }
-  s.usable = true;
+  s.usable = true;  // (no mood data: Smart filters alone dim)
+  for (int r = 0; r < kPageRows; ++r) {
+    TEST_ASSERT_EQUAL_MESSAGE(r != FilterRow, rowLive(static_cast<PageRow>(r), s), std::to_string(r).c_str());
+  }
+  s.moodData = true;
   for (int r = 0; r < kPageRows; ++r) TEST_ASSERT_TRUE(rowLive(static_cast<PageRow>(r), s));
   s.usable = false;
-  s.on = true;  // (on at random: still dim)
+  s.on = true;  // (on at random: still dim, but for Smart filters)
   TEST_ASSERT_FALSE(rowLive(AnchorRow, s));
   TEST_ASSERT_FALSE(rowLive(StrictRow, s));
   TEST_ASSERT_FALSE(rowLive(BpmRow, s));
   TEST_ASSERT_FALSE(rowLive(KeyRow, s));
+  TEST_ASSERT_TRUE(rowLive(FilterRow, s));
+  // A filter set with no mood data stays dim (its picks unfiltered).
+  s.moodData = false;
+  s.moods = relaxedInstrumental();
+  TEST_ASSERT_FALSE(rowLive(FilterRow, s));
+}
+
+// Smart filters' value: no mood data, then nothing set (a level alone
+// filters nothing), then what is set, in the summary's order.
+void test_the_filter_value() {
+  State s;
+  TEST_ASSERT_EQUAL_STRING("No mood data", value(s).c_str());
+  s.moods = relaxedInstrumental();  // (kept, unused: D4)
+  TEST_ASSERT_EQUAL_STRING("No mood data", value(s).c_str());
+  s.moodData = true;
+  TEST_ASSERT_EQUAL_STRING("Relaxed \xC2\xB7 Instrumental", value(s).c_str());
+  s.moods = 0;
+  TEST_ASSERT_EQUAL_STRING("Any", value(s).c_str());
+  moodfilter::Filter level;
+  level.level = moodfilter::Level::Strict;
+  s.moods = level.pack();
+  TEST_ASSERT_EQUAL_STRING("Any", value(s).c_str());
+  moodfilter::Filter f;
+  f.valence = moodfilter::Scale::Second;
+  f.tags = moodfilter::kParty | moodfilter::kAcoustic;
+  f.level = moodfilter::Level::Loose;
+  s.moods = f.pack();
+  TEST_ASSERT_EQUAL_STRING("Sad \xC2\xB7 Acoustic \xC2\xB7 Party \xC2\xB7 Loose", value(s).c_str());
+  s.moods = 0x800;  // (an invalid q reads as none)
+  TEST_ASSERT_EQUAL_STRING("Any", value(s).c_str());
+  // A buffer too small: whole words, never past it.
+  s.moods = f.pack();
+  char b[12];
+  TEST_ASSERT_EQUAL_STRING("Sad", filterValue(s, b, sizeof(b)));
+  TEST_ASSERT_NULL(filterValue(s, nullptr, 8));
 }
 
 // The device's steps (the design's 2.6): 55-75 by 5, then round; every
@@ -281,9 +367,13 @@ void test_the_status_row_says_why_it_waits() {
   TEST_ASSERT_EQUAL_STRING("300 of 310 tracks have neighbours", line(s, 1).c_str());
   s.hold = Hold::SleepTimer;
   TEST_ASSERT_EQUAL_STRING("Waiting: sleep timer set to End of queue", line(s, 0).c_str());
-  s.hold = Hold::NoFit;  // (MOOD-FILTERS.md 4.4, 6.5)
+  s.hold = Hold::NoFit;  // (MOOD-FILTERS.md 4.4, 6.5: over the coverage, the index read)
   TEST_ASSERT_EQUAL_STRING("Waiting: no track fits the filters", line(s, 0).c_str());
-  TEST_ASSERT_EQUAL_STRING("300 of 310 tracks have neighbours", line(s, 1).c_str());
+  TEST_ASSERT_EQUAL_STRING("BPM 0% \xC2\xB7 key 0%", line(s, 1).c_str());
+  s.index = Index::Reading;  // (not read: over the index's first line)
+  TEST_ASSERT_EQUAL_STRING("Waiting: no track fits the filters", line(s, 0).c_str());
+  TEST_ASSERT_EQUAL_STRING("Reading the Auto DJ index\xE2\x80\xA6", line(s, 1).c_str());
+  s.index = Index::Ready;
   s.hold = Hold::Failures;
   s.index = Index::None;
   TEST_ASSERT_EQUAL_STRING("Paused: tracks failed to play", line(s, 0).c_str());
@@ -299,7 +389,9 @@ void test_the_status_row_says_why_it_waits() {
 }
 
 // D4: Auto DJ in Shuffle all's place only with a usable index and a
-// library (on or off).
+// library (on or off), and a track inside its mood filter: with none
+// (MOOD-FILTERS.md 4.4), the empty states say so and show no second
+// button.
 void test_the_empty_states_button() {
   State s;
   TEST_ASSERT_FALSE(emptyButton(s, 100));
@@ -310,6 +402,232 @@ void test_the_empty_states_button() {
   TEST_ASSERT_TRUE(emptyButton(s, 100));
   s.index = Index::Found;  // (whatever the join: usable says)
   TEST_ASSERT_TRUE(emptyButton(s, 1));
+  TEST_ASSERT_FALSE(emptyNoFit(s));
+  // A filter nothing fits: no button, on or off, whatever the index.
+  s = filtered(0);
+  TEST_ASSERT_TRUE(emptyNoFit(s));
+  TEST_ASSERT_FALSE(emptyButton(s, 100));
+  s.on = true;
+  s.hold = Hold::NoFit;
+  TEST_ASSERT_TRUE(emptyNoFit(s));
+  TEST_ASSERT_FALSE(emptyButton(s, 100));
+  s.usable = false;
+  s.index = Index::None;
+  TEST_ASSERT_TRUE(emptyNoFit(s));
+  // One track fits: the button.
+  s = filtered(1);
+  TEST_ASSERT_FALSE(emptyNoFit(s));
+  TEST_ASSERT_TRUE(emptyButton(s, 100));
+  // A filter set with no mood data (its picks unfiltered, D4), or none
+  // set: the count says nothing.
+  s = filtered(0);
+  s.moodOn = false;
+  TEST_ASSERT_FALSE(emptyNoFit(s));
+  TEST_ASSERT_TRUE(emptyButton(s, 100));
+}
+
+// The status row with mood data and no filter on: the coverage gains the
+// tracks with mood words; with no mood data, as before byte for byte.
+void test_the_status_row_with_mood_data() {
+  State s = filtered(19412);
+  s.moodOn = false;
+  s.moods = 0;
+  TEST_ASSERT_EQUAL_STRING("19,000 of 19,412 tracks have neighbours", line(s, 0).c_str());
+  TEST_ASSERT_EQUAL_STRING("BPM 95% \xC2\xB7 key 97% \xC2\xB7 mood 92%", line(s, 1).c_str());
+  s.moodPct = 200;  // (never over 100)
+  TEST_ASSERT_EQUAL_STRING("BPM 95% \xC2\xB7 key 97% \xC2\xB7 mood 100%", line(s, 1).c_str());
+  TEST_ASSERT_FALSE(statusAmber(s));
+  // A filter set on a card with no mood data (D4): as with none.
+  s.moodData = false;
+  s.moods = relaxedInstrumental();
+  TEST_ASSERT_EQUAL_STRING("19,000 of 19,412 tracks have neighbours", line(s, 0).c_str());
+  TEST_ASSERT_EQUAL_STRING("BPM 95% \xC2\xB7 key 97%", line(s, 1).c_str());
+  TEST_ASSERT_FALSE(statusAmber(s));
+  // Mood data and no index: as before (no coverage without a join).
+  s = filtered(19412);
+  s.moodOn = false;
+  s.index = Index::None;
+  TEST_ASSERT_EQUAL_STRING("No Auto DJ index on this card", line(s, 0).c_str());
+  TEST_ASSERT_EQUAL_STRING("picks are random", line(s, 1).c_str());
+}
+
+// A filter on, the index read (MOOD-FILTERS.md 4.4): over 50 tracks fit,
+// the count over the coverage; 1 to 50 (the cooldown: they repeat), amber
+// "Only 37 tracks fit" over the repeat and BPM and key; none, waiting,
+// amber, over the coverage (and while off, the count at 0, amber). Other
+// holds as before: why over the index's first line. Found and Reading say
+// what the index does.
+void test_the_status_row_under_a_filter() {
+  State s = filtered(1204);
+  TEST_ASSERT_EQUAL_STRING("1,204 of 19,412 tracks fit", line(s, 0).c_str());
+  TEST_ASSERT_EQUAL_STRING("BPM 95% \xC2\xB7 key 97% \xC2\xB7 mood 92%", line(s, 1).c_str());
+  TEST_ASSERT_FALSE(statusAmber(s));
+  s.on = true;
+  TEST_ASSERT_EQUAL_STRING("1,204 of 19,412 tracks fit", line(s, 0).c_str());
+  TEST_ASSERT_FALSE(statusAmber(s));
+  s.fit = 51;
+  TEST_ASSERT_EQUAL_STRING("51 of 19,412 tracks fit", line(s, 0).c_str());
+  TEST_ASSERT_FALSE(statusAmber(s));
+  s.fit = autodj::kTrackCooldown;
+  TEST_ASSERT_EQUAL_STRING("Only 50 tracks fit", line(s, 0).c_str());
+  TEST_ASSERT_EQUAL_STRING("They will repeat \xC2\xB7 BPM 95% \xC2\xB7 key 97%", line(s, 1).c_str());
+  TEST_ASSERT_TRUE(statusAmber(s));
+  s.fit = 37;
+  TEST_ASSERT_EQUAL_STRING("Only 37 tracks fit", line(s, 0).c_str());
+  TEST_ASSERT_TRUE(statusAmber(s));
+  s.fit = 1;
+  TEST_ASSERT_EQUAL_STRING("Only 1 track fits", line(s, 0).c_str());
+  TEST_ASSERT_TRUE(statusAmber(s));
+  // None: Waiting (the hold), its root line too.
+  s.fit = 0;
+  s.hold = Hold::NoFit;
+  TEST_ASSERT_EQUAL_STRING("Waiting: no track fits the filters", line(s, 0).c_str());
+  TEST_ASSERT_EQUAL_STRING("BPM 95% \xC2\xB7 key 97% \xC2\xB7 mood 92%", line(s, 1).c_str());
+  TEST_ASSERT_TRUE(statusAmber(s));
+  TEST_ASSERT_EQUAL_STRING("Waiting \xC2\xB7 Follow the vibe", root(s).c_str());
+  // Off: no hold, the count at 0.
+  s.on = false;
+  TEST_ASSERT_EQUAL_STRING("0 of 19,412 tracks fit", line(s, 0).c_str());
+  TEST_ASSERT_EQUAL_STRING("BPM 95% \xC2\xB7 key 97% \xC2\xB7 mood 92%", line(s, 1).c_str());
+  TEST_ASSERT_TRUE(statusAmber(s));
+  // The other holds: why over the index's first line, as before; amber
+  // only for the failure pause.
+  s = filtered(37);
+  s.on = true;
+  s.hold = Hold::RepeatOne;
+  TEST_ASSERT_EQUAL_STRING("Waiting: Repeat One is on", line(s, 0).c_str());
+  TEST_ASSERT_EQUAL_STRING("19,000 of 19,412 tracks have neighbours", line(s, 1).c_str());
+  TEST_ASSERT_FALSE(statusAmber(s));
+  s.hold = Hold::SleepTimer;
+  TEST_ASSERT_FALSE(statusAmber(s));
+  s.hold = Hold::Failures;
+  TEST_ASSERT_EQUAL_STRING("Paused: tracks failed to play", line(s, 0).c_str());
+  TEST_ASSERT_TRUE(statusAmber(s));
+  // Found and Reading: as with no filter, never amber.
+  s.hold = Hold::None;
+  s.index = Index::Reading;
+  TEST_ASSERT_EQUAL_STRING("Reading the Auto DJ index\xE2\x80\xA6", line(s, 0).c_str());
+  TEST_ASSERT_EQUAL_STRING("", line(s, 1).c_str());
+  TEST_ASSERT_FALSE(statusAmber(s));
+  s.on = false;
+  s.index = Index::Found;
+  s.rows = 19410;
+  TEST_ASSERT_EQUAL_STRING("Auto DJ index: 19,410 tracks", line(s, 0).c_str());
+  TEST_ASSERT_EQUAL_STRING("read when Auto DJ is switched on", line(s, 1).c_str());
+  TEST_ASSERT_FALSE(statusAmber(s));
+  // Small buffers: cut, never past them.
+  s = filtered(1204);
+  char a[8], b[8];
+  statusLines(s, a, sizeof(a), b, sizeof(b));
+  TEST_ASSERT_TRUE(std::strlen(a) < sizeof(a) && std::strlen(b) < sizeof(b));
+}
+
+// A filter on with no index Auto DJ can use (None, Bad, Unreadable,
+// TooBig, NoMemory: its picks random inside the filter): the count, few or
+// waiting line over the index's first line, the held form. No coverage
+// (the shares come from a join), no new text.
+void test_the_status_row_under_a_filter_with_no_index() {
+  for (Index ix : {Index::None, Index::Bad, Index::Unreadable, Index::TooBig, Index::NoMemory}) {
+    State s = filtered(1204);
+    s.usable = false;
+    s.index = ix;
+    s.mapped = s.tracks = 0;
+    s.bpmPct = s.keyPct = 0;
+    State plain;
+    plain.index = ix;
+    const std::string first = line(plain, 0);
+    TEST_ASSERT_EQUAL_STRING("1,204 of 19,412 tracks fit", line(s, 0).c_str());
+    TEST_ASSERT_EQUAL_STRING(first.c_str(), line(s, 1).c_str());
+    TEST_ASSERT_FALSE(statusAmber(s));
+    s.fit = 37;
+    TEST_ASSERT_EQUAL_STRING("Only 37 tracks fit", line(s, 0).c_str());
+    TEST_ASSERT_EQUAL_STRING(first.c_str(), line(s, 1).c_str());
+    TEST_ASSERT_TRUE(statusAmber(s));
+    s.fit = 0;
+    TEST_ASSERT_EQUAL_STRING("0 of 19,412 tracks fit", line(s, 0).c_str());
+    TEST_ASSERT_EQUAL_STRING(first.c_str(), line(s, 1).c_str());
+    TEST_ASSERT_TRUE(statusAmber(s));
+    s.on = true;
+    s.hold = Hold::NoFit;
+    TEST_ASSERT_EQUAL_STRING("Waiting: no track fits the filters", line(s, 0).c_str());
+    TEST_ASSERT_EQUAL_STRING(first.c_str(), line(s, 1).c_str());
+    TEST_ASSERT_TRUE(statusAmber(s));
+    TEST_ASSERT_EQUAL_STRING("Waiting", root(s).c_str());  // (no usable index: the state alone)
+  }
+  TEST_ASSERT_EQUAL_STRING("No Auto DJ index on this card", line(State{}, 0).c_str());
+}
+
+// The status row's first line in amber: the failure pause, as before; a
+// filter nothing fits; 1 to 50 fitting. Never with no filter on.
+void test_the_status_amber() {
+  State s;
+  TEST_ASSERT_FALSE(statusAmber(s));
+  s.on = true;
+  s.hold = Hold::Failures;
+  TEST_ASSERT_TRUE(statusAmber(s));
+  s.hold = Hold::RepeatOne;
+  TEST_ASSERT_FALSE(statusAmber(s));
+  s.hold = Hold::NoFit;
+  TEST_ASSERT_TRUE(statusAmber(s));
+  s.on = false;  // (off: no hold shows)
+  TEST_ASSERT_FALSE(statusAmber(s));
+  for (Index ix : {Index::None, Index::Ready}) {
+    s = filtered(10);
+    s.index = ix;
+    s.moodOn = false;  // (a filter set with no mood data, or none: the count says nothing)
+    TEST_ASSERT_FALSE(statusAmber(s));
+    s.moodOn = true;
+    TEST_ASSERT_TRUE(statusAmber(s));
+  }
+}
+
+// The "..." sheet's Auto DJ detail: on with a filter on, what is set after
+// the state, in the accent; waiting for want of a track that fits, amber;
+// else the state alone, dim, as every other row's.
+void test_the_sheet_detail() {
+  Ink ink = Ink::Accent;
+  State s;
+  TEST_ASSERT_EQUAL_STRING("Off", detail(s, &ink).c_str());
+  TEST_ASSERT_TRUE(ink == Ink::Dim);
+  s.on = true;
+  TEST_ASSERT_EQUAL_STRING("On", detail(s, &ink).c_str());
+  TEST_ASSERT_TRUE(ink == Ink::Dim);
+  s = filtered(1204);
+  TEST_ASSERT_EQUAL_STRING("Off", detail(s, &ink).c_str());  // (off: the filter does nothing)
+  TEST_ASSERT_TRUE(ink == Ink::Dim);
+  s.on = true;
+  TEST_ASSERT_EQUAL_STRING("On \xC2\xB7 Relaxed \xC2\xB7 Instrumental", detail(s, &ink).c_str());
+  TEST_ASSERT_TRUE(ink == Ink::Accent);
+  s.fit = 37;  // (few: still on)
+  TEST_ASSERT_EQUAL_STRING("On \xC2\xB7 Relaxed \xC2\xB7 Instrumental", detail(s, &ink).c_str());
+  TEST_ASSERT_TRUE(ink == Ink::Accent);
+  s.fit = 0;
+  s.hold = Hold::NoFit;
+  TEST_ASSERT_EQUAL_STRING("Waiting", detail(s, &ink).c_str());
+  TEST_ASSERT_TRUE(ink == Ink::Amber);
+  s.hold = Hold::RepeatOne;
+  TEST_ASSERT_EQUAL_STRING("Waiting", detail(s, &ink).c_str());
+  TEST_ASSERT_TRUE(ink == Ink::Dim);
+  s.hold = Hold::Failures;
+  TEST_ASSERT_EQUAL_STRING("Paused", detail(s, &ink).c_str());
+  TEST_ASSERT_TRUE(ink == Ink::Dim);
+  // A filter set with no mood data (D4): its picks unfiltered, "On", dim.
+  s = filtered(1204);
+  s.on = true;
+  s.moodData = s.moodOn = false;
+  TEST_ASSERT_EQUAL_STRING("On", detail(s, &ink).c_str());
+  TEST_ASSERT_TRUE(ink == Ink::Dim);
+  // A short buffer: whole words after "On · ", the state alone when none
+  // fits; never past it.
+  s.moodData = s.moodOn = true;
+  TEST_ASSERT_EQUAL_STRING("On \xC2\xB7 Relaxed", detail(s, &ink, 20).c_str());
+  TEST_ASSERT_TRUE(ink == Ink::Accent);
+  TEST_ASSERT_EQUAL_STRING("On", detail(s, &ink, 8).c_str());
+  TEST_ASSERT_TRUE(ink == Ink::Accent);
+  char tiny[3];
+  sheetDetail(s, tiny, sizeof(tiny));
+  TEST_ASSERT_TRUE(std::strlen(tiny) < sizeof(tiny));
+  TEST_ASSERT_TRUE(sheetDetail(s, nullptr, 8) == Ink::Dim);
 }
 
 // One toast a pass, the most pressing; none for no news.
@@ -480,6 +798,7 @@ int main(int, char**) {
   RUN_TEST(test_the_row_state);
   RUN_TEST(test_the_output_row_line);
   RUN_TEST(test_the_rows_without_an_index_are_dim);
+  RUN_TEST(test_the_filter_value);
   RUN_TEST(test_strictness_steps);
   RUN_TEST(test_a_strictness_tap_steps_from_what_is_shown);
   RUN_TEST(test_the_strictness_shown_is_the_one_that_acts);
@@ -487,6 +806,11 @@ int main(int, char**) {
   RUN_TEST(test_the_status_row);
   RUN_TEST(test_the_status_row_says_why_it_waits);
   RUN_TEST(test_the_empty_states_button);
+  RUN_TEST(test_the_status_row_with_mood_data);
+  RUN_TEST(test_the_status_row_under_a_filter);
+  RUN_TEST(test_the_status_row_under_a_filter_with_no_index);
+  RUN_TEST(test_the_status_amber);
+  RUN_TEST(test_the_sheet_detail);
   RUN_TEST(test_the_news_toasts);
   RUN_TEST(test_the_news_from_the_passes);
   RUN_TEST(test_the_news_under_a_mood_filter);
