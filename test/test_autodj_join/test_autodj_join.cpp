@@ -47,8 +47,8 @@
 //   join is given back, as with Auto DJ off; and a library update of the
 //   real 19,412-track library, with Auto DJ off and on (the rebuild's own
 //   fragmentation, the join after it taking only what no smaller block
-//   holds), then the same built from T with a stand-in for the mood words'
-//   block (MOOD-FILTERS.md 9.5's pass rule).
+//   holds), then the same built from T with the mood words' block
+//   (MOOD-FILTERS.md 9.5's pass rule).
 // Run: pio test -e native -f test_autodj_join
 #include <unity.h>
 
@@ -2639,7 +2639,8 @@ struct UpdateRun {
   size_t joined = 0;           // ... joined again
   size_t givenBack = 0;        // ... and given back
   size_t topKept = 0;          // the kept bytes the join put at the top
-  size_t lowest = SIZE_MAX;    // the lowest free while a join placed its blocks
+  size_t bootLowest = SIZE_MAX;  // the lowest free while the boot's join placed its blocks
+  size_t lowest = SIZE_MAX;      // ... while the joins after the update did
 };
 
 // A table whose rows are `idx`'s tracks, scrambled, `rows` of them (one
@@ -2665,38 +2666,20 @@ Bytes tableOf(const LibraryIndex& idx, uint32_t rows) {
 }
 
 void* g_durations = nullptr;
-void* g_mood = nullptr;  // the mood words' block (MOOD-FILTERS.md 5.4): 2 B a track
 
-// A run with the mood words (MOOD-FILTERS.md 9.5 C1): the build from T as
-// well as D (D's rows then Software rows), and the words' block, a stand-in
-// of its size, taken after the load and at each build's first record.
+// A run from T as well as D (D's rows then Software rows: MOOD-FILTERS.md
+// 9.5 C1, 9.6 C6), its records with their mood tails or not: with them,
+// library.idx and each build hold the words' block (2 B a track), the
+// load's last block and, in a build, taken at the first track with a word.
 struct MoodRun {
   cc::Source* transfer = nullptr;
-  bool standIn = false;
-};
-
-// The folders' facts, the words' block taken at the first ask: enterFolders()
-// asks just before the build's first record (lib/core/LibraryBuilder.cpp).
-class MoodFacts : public synthcard::Facts {
-public:
-  MoodFacts(const synthcard::Card& c, size_t tracks) : Facts(c, false), tracks_(tracks) {}
-  bool facts(const char* rel, size_t len, LibraryIndex::FolderFacts* out) override {
-    if (!g_mood) {
-      g_mood = ModelHeap::alloc(tracks_ * 2);
-      TEST_ASSERT_NOT_NULL(g_mood);
-    }
-    return Facts::facts(rel, len, out);
-  }
-
-private:
-  size_t tracks_;
+  bool moods = false;  // T's records carry mood tails: the index has words
 };
 
 UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& records, const synthcard::Card& card,
                          int steps, const MoodRun& mood = MoodRun()) {
   UpdateRun u;
   ModelHeap::reset(4089u * 1024u);
-  g_mood = nullptr;
   auto take = [](std::initializer_list<size_t> sizes, std::vector<void*>* into) {
     for (size_t s : sizes) {
       void* p = ModelHeap::alloc(s);
@@ -2726,10 +2709,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     in.cardId = 1;
     TEST_ASSERT_TRUE(index.load(src, in) == LibraryIndex::Load::Loaded);
   }
-  if (mood.standIn) {
-    g_mood = ModelHeap::alloc(index.trackCount() * 2);  // (the load's last block)
-    TEST_ASSERT_NOT_NULL(g_mood);
-  }
+  TEST_ASSERT_EQUAL(mood.moods, index.hasMoods());
   std::vector<void*> queue, thumbs;
   take({5120}, &queue);
   g_durations = ModelHeap::alloc(index.trackCount() * 2);
@@ -2747,16 +2727,16 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(table.open(src)));
   Join join(ModelHeap::alloc, ModelHeap::release);
   if (dj == Dj::Placed) join.setPlacement(modelPlacement());
-  auto joinNow = [&]() {
+  auto joinNow = [&](size_t* lowest) {
     if (dj == Dj::Off) return;
     ModelHeap::mark();
     TEST_ASSERT_EQUAL_INT(static_cast<int>(Status::Working), static_cast<int>(join.begin(table, &index)));
-    u.lowest = std::min(u.lowest, ModelHeap::low);
+    *lowest = std::min(*lowest, ModelHeap::low);
     u.topKept = join.stats().topKept;
     runJoin(join, &index);
     TEST_ASSERT_EQUAL_INT(static_cast<int>(Status::Ready), static_cast<int>(join.status()));
   };
-  joinNow();
+  joinNow(&u.bootLowest);
   u.bootJoined = ModelHeap::largest();
   u.bootTopKept = u.topKept;
   for (int step = 0; step < steps; ++step) {
@@ -2766,23 +2746,26 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     queue.clear();
     thumbs.clear();
     join.release();
-    ModelHeap::release(g_mood);  // (the words go with the index)
-    g_mood = nullptr;
-    index.clear();
+    index.clear();  // (the words go with it)
     u.fence = ModelHeap::freeBlocks(64 * 1024);
     // The build, from D's records (or T's, D's rows Software rows).
     LibraryBuilder b(ModelHeap::alloc, ModelHeap::release);
     synthcard::Facts facts(card, false);
-    MoodFacts moodFacts(card, card.files.size());
     synthcard::SameRows rows(mood.transfer ? LibraryBuilder::Status::Software : LibraryBuilder::Status::Scanned, false,
                              true);
     LibraryBuilder::Config c;
     c.transfer = mood.transfer;
     c.device = &records;
     c.rows = &rows;
-    c.facts = mood.standIn ? static_cast<LibraryBuilder::FolderFactsSource*>(&moodFacts) : &facts;
-    TEST_ASSERT_TRUE(b.build(index, c).built);
-    TEST_ASSERT_TRUE(!mood.standIn || g_mood);
+    c.facts = &facts;
+    const LibraryBuilder::Result r = b.build(index, c);
+    TEST_ASSERT_TRUE(r.built);
+    if (mood.transfer) {
+      TEST_ASSERT_TRUE(r.transferUsed);  // T's records, not a restart from D
+      TEST_ASSERT_EQUAL_UINT32(card.files.size(), r.fromTransfer);
+    }
+    TEST_ASSERT_EQUAL(mood.moods, index.hasMoods());
+    TEST_ASSERT_EQUAL(mood.moods, r.withMoods > 0);
     // leaveFence(): the queue read back, the durations, Thumbs' pools; then
     // the join (the next pass).
     take({5120}, &queue);
@@ -2790,15 +2773,13 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     g_durations = ModelHeap::alloc(index.trackCount() * 2);
     take({204800, 256, 256, 110592, 24, 24}, &thumbs);
     u.largest = ModelHeap::largest();
-    joinNow();
+    joinNow(&u.lowest);
     u.joined = ModelHeap::largest();
     join.release();
     u.givenBack = ModelHeap::largest();
-    joinNow();
+    joinNow(&u.lowest);
   }
   join.release();
-  ModelHeap::release(g_mood);
-  g_mood = nullptr;
   index.clear();
   return u;
 }
@@ -2825,8 +2806,13 @@ void test_a_library_update_in_a_model_heap() {
     c.device = &device;
     c.rows = &rows;
     c.facts = &facts;
-    TEST_ASSERT_TRUE(b.build(idx, c).built);
+    const LibraryBuilder::Result r = b.build(idx, c);
+    TEST_ASSERT_TRUE(r.built);
     TEST_ASSERT_EQUAL_UINT32(tracks, idx.trackCount());
+    if (transfer) {
+      TEST_ASSERT_TRUE(r.transferUsed);  // T's records, not a restart from D
+      TEST_ASSERT_EQUAL_UINT32(tracks, r.fromTransfer);
+    }
     MemorySink sink;
     LibraryIndex::Inputs in;
     in.cardId = 1;
@@ -2838,11 +2824,11 @@ void test_a_library_update_in_a_model_heap() {
   const UpdateRun on = libraryUpdates(Dj::Placed, saved, records, card, 2);
   const UpdateRun heaps = libraryUpdates(Dj::WhereThe, saved, records, card, 2);
   printf("[join] a library update, 19,412 tracks, the model heap: the largest free block at the boot %u B; after the "
-         "update %u B with Auto DJ off (main's own rebuild). Auto DJ on: joined at the boot %u B; after the update "
-         "%u B, joined %u B (%u B of it at the top), given back %u B; free at least %u B while placing. Its blocks "
-         "where the heap puts them: joined %u B, given back %u B\n",
-         (unsigned)off.bootLargest, (unsigned)off.largest, (unsigned)on.bootJoined, (unsigned)on.largest,
-         (unsigned)on.joined, (unsigned)on.topKept, (unsigned)on.givenBack, (unsigned)on.lowest,
+         "update %u B with Auto DJ off (main's own rebuild). Auto DJ on: joined at the boot %u B, free at least %u B "
+         "while placing; after the update %u B, joined %u B (%u B of it at the top), given back %u B; free at least "
+         "%u B while placing. Its blocks where the heap puts them: joined %u B, given back %u B\n",
+         (unsigned)off.bootLargest, (unsigned)off.largest, (unsigned)on.bootJoined, (unsigned)on.bootLowest,
+         (unsigned)on.largest, (unsigned)on.joined, (unsigned)on.topKept, (unsigned)on.givenBack, (unsigned)on.lowest,
          (unsigned)heaps.joined, (unsigned)heaps.givenBack);
   // The rebuild itself fragments PSRAM, Auto DJ or not.
   TEST_ASSERT_TRUE(off.largest + 100000 < off.bootLargest);
@@ -2858,57 +2844,85 @@ void test_a_library_update_in_a_model_heap() {
   TEST_ASSERT_TRUE(on.joined + on.topKept + 24 * 1024 >= off.largest);
   TEST_ASSERT_EQUAL_size_t(off.largest, on.givenBack);
   TEST_ASSERT_TRUE(on.lowest >= kMargin);
+  TEST_ASSERT_TRUE(on.bootLowest >= kMargin);
+  // Its blocks where the heap puts them: 9.5's pass rule holds as well (the
+  // margin kept; after the update, and given back, off's block).
+  TEST_ASSERT_TRUE(heaps.lowest >= kMargin);
+  TEST_ASSERT_TRUE(heaps.bootLowest >= kMargin);
+  TEST_ASSERT_EQUAL_size_t(off.largest, heaps.largest);
+  TEST_ASSERT_EQUAL_size_t(off.largest, heaps.givenBack);
   // At the boot (one free block): everything at the top, as before.
   TEST_ASSERT_EQUAL_size_t(155284, on.bootTopKept);
   TEST_ASSERT_TRUE(on.bootJoined + on.bootTopKept + 24 * 1024 >= on.bootLargest);
 
-  // The same with the mood words (MOOD-FILTERS.md 9.5 C1, against the run
-  // above as the control): built from T, D's rows Software rows; the words'
-  // block a stand-in, 2 B a track, taken after the load and at each build's
-  // first record, given back before the index at the fence.
+  // The same with the mood words (MOOD-FILTERS.md 9.5, 9.6 C6, against the
+  // run above as the control): built from T, its records with their mood
+  // tails (synthcard::kMoodPct of the tracks), D's rows Software rows; the
+  // words' block the index's own, loaded at the boot (the file's last
+  // block) and taken again by each build at its first track with a word.
   synthcard::Write tw;
+  tw.moods = true;
   const std::vector<uint8_t> t = synthcard::tagsFile(card, tw);
+  const std::vector<uint8_t> plain = synthcard::tagsFile(card, synthcard::Write());  // (no tails: no block)
   synthcard::Write sw;
   sw.source = cc::mptg::kSourceDevice;
   sw.fullRecords = false;
   const std::vector<uint8_t> ds = synthcard::tagsFile(card, sw);
   cc::MemSource transfer(t.data(), static_cast<uint32_t>(t.size()));
+  cc::MemSource plainT(plain.data(), static_cast<uint32_t>(plain.size()));
   cc::MemSource rowsOnly(ds.data(), static_cast<uint32_t>(ds.size()));
   const std::vector<uint8_t> savedT = savedFrom(&transfer, rowsOnly);
+  const std::vector<uint8_t> savedPlain = savedFrom(&plainT, rowsOnly);
+  TEST_ASSERT_EQUAL_size_t(savedPlain.size() + tracks * 2, savedT.size());
+  MoodRun mood;
+  mood.transfer = &transfer;
+  mood.moods = true;
   MoodRun fromT;
-  fromT.transfer = &transfer;
-  MoodRun mood = fromT;
-  mood.standIn = true;
+  fromT.transfer = &plainT;
   const UpdateRun moodOff = libraryUpdates(Dj::Off, savedT, rowsOnly, card, 2, mood);
   const UpdateRun moodOn = libraryUpdates(Dj::Placed, savedT, rowsOnly, card, 2, mood);
   const UpdateRun moodHeaps = libraryUpdates(Dj::WhereThe, savedT, rowsOnly, card, 2, mood);
-  const UpdateRun tOn = libraryUpdates(Dj::Placed, savedT, rowsOnly, card, 2, fromT);  // (T, no block)
+  const UpdateRun tOn = libraryUpdates(Dj::Placed, savedPlain, rowsOnly, card, 2, fromT);  // (T, no block)
   printf("[join] the same with the mood words (a block of %u B), from T: the largest free block at the boot %u B; after "
-         "the update %u B with Auto DJ off. Auto DJ on: joined at the boot %u B (%u B of it at the top); after the "
-         "update %u B, joined %u B (%u B of it at the top), given back %u B; free at least %u B while placing. Its "
-         "blocks where the heap puts them: joined %u B, given back %u B. Joined against the control's %u B: %+ld B "
-         "(from T without the block: joined %u B, %+ld B)\n",
+         "the update %u B with Auto DJ off. Auto DJ on: joined at the boot %u B (%u B of it at the top), free at "
+         "least %u B while placing; after the update %u B, joined %u B (%u B of it at the top), given back %u B; free "
+         "at least %u B while placing. Its blocks where the heap puts them: joined %u B, given back %u B. Joined "
+         "against the control's %u B: %+ld B (from T without the block: joined %u B, %+ld B)\n",
          (unsigned)(tracks * 2), (unsigned)moodOff.bootLargest, (unsigned)moodOff.largest, (unsigned)moodOn.bootJoined,
-         (unsigned)moodOn.bootTopKept, (unsigned)moodOn.largest, (unsigned)moodOn.joined, (unsigned)moodOn.topKept,
-         (unsigned)moodOn.givenBack, (unsigned)moodOn.lowest, (unsigned)moodHeaps.joined,
+         (unsigned)moodOn.bootTopKept, (unsigned)moodOn.bootLowest, (unsigned)moodOn.largest, (unsigned)moodOn.joined,
+         (unsigned)moodOn.topKept, (unsigned)moodOn.givenBack, (unsigned)moodOn.lowest, (unsigned)moodHeaps.joined,
          (unsigned)moodHeaps.givenBack, (unsigned)on.joined, (long)moodOn.joined - (long)on.joined,
          (unsigned)tOn.joined, (long)tOn.joined - (long)on.joined);
-  // The pass rule (Ready: joinNow(), each join): the margin kept (the block
-  // takes the hole the folders' states had, so after the update they go to
-  // the top under spacers); the fence's frees, the build and the Live step
-  // leave the heap as Auto DJ off has it; given back, off's block; at the
-  // boot, everything at the top.
+  // The pass rule (Ready: joinNow(), each join): the margin kept, at the
+  // boot and after the update; the fence's frees, the build and the Live
+  // step leave the heap as Auto DJ off has it; given back, off's block; at
+  // the boot, everything at the top.
   TEST_ASSERT_TRUE(moodOn.lowest >= kMargin);
+  TEST_ASSERT_TRUE(moodOn.bootLowest >= kMargin);
   TEST_ASSERT_TRUE(moodOn.fence == moodOff.fence);
+  TEST_ASSERT_TRUE(moodHeaps.fence == moodOff.fence);
   TEST_ASSERT_EQUAL_size_t(moodOff.largest, moodOn.largest);
   TEST_ASSERT_EQUAL_size_t(moodOff.largest, moodOn.givenBack);
   TEST_ASSERT_EQUAL_size_t(155284, moodOn.bootTopKept);
+  // The same rule where the heap puts the join's blocks (no top to keep).
+  TEST_ASSERT_TRUE(moodHeaps.lowest >= kMargin);
+  TEST_ASSERT_TRUE(moodHeaps.bootLowest >= kMargin);
+  TEST_ASSERT_EQUAL_size_t(moodOff.largest, moodHeaps.largest);
+  TEST_ASSERT_EQUAL_size_t(moodOff.largest, moodHeaps.givenBack);
   // No redesign forced (9.5): joined falls by no more than 120 KB, and not
   // under 245,764 B where the control is above it (the device's 335,860 B
   // less FLAC's 155,636 B, docs/AUTODJ.md 14.3, plus 65,540 B for Opus's
   // page buffer, docs/OPUS.md 1).
   TEST_ASSERT_TRUE(moodOn.joined + 122880 >= on.joined);
   TEST_ASSERT_TRUE(moodOn.joined >= 245764 || on.joined < 245764);
+  // This shape, pinned: joined again as the control is, none of it at the
+  // top (S1's stand-in, the block taken before the build's first record,
+  // measured the same, its lowest after the update 84,104 B). The words
+  // kept across clear() (rejected, 9.5), tried on this shape with the
+  // stand-in, pass the rule above but not this: joined 278,516 B (-81,920
+  // B), 77,640 B of it at the top.
+  TEST_ASSERT_EQUAL_size_t(on.joined, moodOn.joined);
+  TEST_ASSERT_EQUAL_size_t(0, moodOn.topKept);
 }
 
 int main(int, char**) {

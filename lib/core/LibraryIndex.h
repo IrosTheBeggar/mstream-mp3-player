@@ -84,7 +84,13 @@
 // plus the A-Z rail's buckets for the two long lists ('#', A..Z), by the
 // sort keys' first letters.
 //
-// save() writes the finished index as one file (library.idx v6: its blocks
+// A track can carry a mood word too (TagView::moods, docs/MOOD-FILTERS.md
+// 5.4: 16 bits read from its T record's mood tail; 0 is no row). The words
+// are one more block, a u16 per track id, made at the first track with a
+// word (the ones before it get 0) and trimmed with the others: an index in
+// which no track has a word has no block at all.
+//
+// save() writes the finished index as one file (library.idx v7: its blocks
 // as they are, a header with what it was built from, a checksum) and load()
 // reads it back into blocks of exactly that size, with no sorting and no
 // build peak: the firmware's cache on the card. findTrack() turns a path
@@ -142,8 +148,8 @@ public:
   // load(): Stale means a good file built from other hard inputs (the card
   // or the transfer changed: a rebuild follows); Outdated one saved by an
   // earlier version of the index or other rules (versions 1-5 among them:
-  // a record's meaning changed), so a rebuild follows; Corrupt a short,
-  // damaged or foreign one (a newer version too).
+  // a record's meaning changed; 6: no mood words), so a rebuild follows;
+  // Corrupt a short, damaged or foreign one (a newer version too).
   enum class Load : uint8_t { Loaded, Stale, Corrupt, NoMemory, Outdated };
 
   // Track::flags.
@@ -227,6 +233,7 @@ public:
   // replacement while one is copied into the other, the sort's temporaries.
   struct Memory {
     size_t strings = 0, tracks = 0, artists = 0, albums = 0, folders = 0, views = 0;
+    size_t moods = 0;  // the mood words' block (0: none)
     size_t total = 0;
     size_t buildPeak = 0;
   };
@@ -291,6 +298,7 @@ public:
     uint32_t durationMs = 0;
     uint8_t compilation = 0;  // 0 not said, 1 yes, 2 said no
     bool jpeg = false;        // an embedded JPEG picture is located
+    uint16_t moods = 0;       // the mood word (docs/MOOD-FILTERS.md 5.4); 0: no row
   };
 
   // A folder's files that aren't audio, as the walk saw them (D's DFLD;
@@ -420,6 +428,15 @@ public:
   }
   static constexpr uint32_t rootFolder() { return 0; }
 
+  // ---- moods (docs/MOOD-FILTERS.md 5.4) ----
+  // A word per track id when a track has one: hasMoods(). Without, there
+  // are no words (moodWords() is nullptr) and every track's reads 0, no row.
+  bool hasMoods() const { return moods_ != nullptr; }
+  uint16_t moodWord(uint32_t id) const { return moods_ ? moods_[id] : 0; }
+  const uint16_t* moodWords() const { return moods_; }  // trackCount() of them
+  // The tracks whose word isn't 0.
+  uint32_t moodTracks() const { return moodTrackN_; }
+
   // A file name's format by its extension (any case): .mp3, .flac, .opus;
   // Unknown for anything else (not a track).
   static Format formatOf(const char* name, size_t len);
@@ -449,7 +466,8 @@ public:
   const Inputs& inputs() const { return inputs_; }
   // FNV-1a 64 of what a track id means (the strings, the folders' names
   // and parents, the tracks' names and folders): equal stamps, equal ids.
-  // For a queue saved by ids (3.2.5's fast path, later).
+  // For a queue saved by ids (3.2.5's fast path, later). The mood words
+  // aren't in it: a word doesn't change what a track id means.
   uint64_t buildStamp() const { return buildStamp_; }
   // Clears every track's source (kSourceMask): two builds of the same files,
   // one from the transfer's records and one from the device's, are then
@@ -463,6 +481,10 @@ public:
   // builds are then the same bytes whatever the lengths (the test compares
   // the lengths apart).
   void forgetLengths();
+  // Drops the mood words, their block given back: only the transfer's
+  // records carry them, so with forgetSources() a build from those and one
+  // from the device's are then the same bytes too.
+  void forgetMoods();
   // The scan has read track `id` since this index was built (N10): it is
   // no longer kTrackPending, so the scan's sources that read the index
   // (the playing track, the queue, the Library tab's page) don't ask for it
@@ -544,6 +566,8 @@ private:
                  uint32_t* name, const char** lastSlash);
   uint32_t artistFor(uint32_t nameOffset);
   uint32_t albumFor(uint32_t folder, uint32_t artist, bool loose);
+  // The word of the track just added. False: out of memory.
+  bool noteMood(uint16_t word);
   // The votes: a new track's album and artist runs (closing the ones it
   // leaves), and closing them.
   bool enterRuns(uint32_t album, uint32_t artist);
@@ -579,6 +603,10 @@ private:
   Block<Artist> artistsB_;
   Block<Album> albumsB_;
   Block<Folder> foldersB_;
+  // The mood words, a u16 per track: no block until a track has one
+  // (noteMood()).
+  Block<uint16_t> moodsB_;
+  uint32_t moodTrackN_ = 0;  // the words that aren't 0
   Table folderTable_, artistTable_;
   // Held while building: each folder's album (kNone: none yet) and marks,
   // each artist's folder name (the table's key: its shown name may become
@@ -625,5 +653,6 @@ private:
   const Artist* artists_ = nullptr;
   const Album* albums_ = nullptr;
   const Folder* folders_ = nullptr;
+  const uint16_t* moods_ = nullptr;  // nullptr: no mood words
   uint32_t trackN_ = 0, artistN_ = 0, albumN_ = 0, folderN_ = 0;
 };

@@ -394,7 +394,7 @@ void test_the_boots_decision() {
     in.device = d;
     return libraryboot::decide(in);
   };
-  // v6, the inputs the card's, the marker: built now, the marker removed.
+  // Today's version, the inputs the card's, the marker: built now, the marker removed.
   for (int r = 0; r < 4; ++r) {
     const libraryboot::Decision d = at(Saved::Matches, true, r & 1, r & 2);
     TEST_ASSERT_TRUE(d.action == Action::Build);

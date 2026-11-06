@@ -15,6 +15,7 @@
 #include "CardTags.h"
 #include "CardWalk.h"
 #include "LibraryBuilder.h"
+#include "MoodFilter.h"
 #include "QueueView.h"
 #include "TagCheck.h"
 #include "TagScan.h"
@@ -93,6 +94,14 @@ struct TagConsole::Found {
   mptg::Record rec;
   LibraryBuilder::Row row;
   tagstore::DeviceInfo device;  // D's header (device files only)
+  // T's record's mood tail (2.6.4; docs/MOOD-FILTERS.md 5.3): RECS's
+  // stride and the minor, the 8 bytes as they stand (read: a stride of 80
+  // or more), and whether a reader takes them (File::moodTail()).
+  uint32_t stride = 0;
+  uint16_t minor = 0;
+  bool tailRead = false;
+  bool tailTaken = false;
+  uint8_t tail[mptg::kMoodTailBytes] = {};
 };
 
 // What a command reads with, in PSRAM. Everything big is here, not on the
@@ -110,6 +119,7 @@ struct TagConsole::Work {
   Found d, t;  // D's and T's
   char path[TrackCatalog::kMaxPath];  // gt's file
   char title[260];
+  char mood[200];  // gt's mood tail and word lines
   uint8_t buf[4096];
   uint8_t scratch[8192];
   // gs: the file its check reads (D, then T) across passes, and the check.
@@ -457,6 +467,9 @@ void TagConsole::summary() {
     char t[192];
     tagtext::sourcesText(tagtext::countSources(*index), t, sizeof(t));
     Serial.printf("[tags] names: %s\n", t);
+    // The mood words (docs/MOOD-FILTERS.md 5.4): gm has the rest.
+    tagtext::moodsText(tagtext::countMoods(*index), t, sizeof(t));
+    Serial.printf("[tags] moods: %s\n", t);
   }
   scanLine();
 }
@@ -488,6 +501,17 @@ void TagConsole::find(const char* path, const char* rel, bool device, Work& w, F
   w.run.clear();
   if (out->rec.strings) w.file.run(out->rec.strings, &w.run);
   if (device && w.rows.begin(src, w.buf, sizeof(w.buf))) out->row = w.rows.row(i);
+  if (device) return;
+  // T's tail, here while the file is open: the bytes whatever they hold
+  // (gt shows a tail a reader refuses too), then the reader's verdict.
+  const cc::Section& recs = w.file.container().section(mptg::kSecRecs);
+  out->stride = recs.stride;
+  out->minor = w.file.info().frame.minor;
+  if (recs.stride >= mptg::kRecsMoodStride) {
+    out->tailRead = src.read(recs.offset + i * recs.stride + mptg::kRecsStride, out->tail, mptg::kMoodTailBytes);
+    uint8_t taken[mptg::kMoodTailBytes];
+    out->tailTaken = out->tailRead && w.file.moodTail(i, taken);
+  }
 }
 
 bool TagConsole::transferFile(Work& w, char* path, size_t size, uint64_t* commitId, uint32_t* generation) {
@@ -835,6 +859,17 @@ void TagConsole::dump(const char* arg) {
       tagtext::fatTimeText(tf.rec.fatTime, t, sizeof(t));
       Serial.printf("[tags] T: %s: its record at %s B, %s\n", tpath, queueview::grouped(tf.rec.size, n, sizeof(n)), t);
       tagtext::dumpRecord(tf.rec, &w->run, printLine, nullptr);
+      // Its mood tail, valid or not, and the word a build takes from it
+      // (5.3, 5.4; only with T's record: 2.9).
+      char* tail = w->mood;
+      const bool has = tf.stride >= mptg::kRecsMoodStride;
+      if (has && !tf.tailRead) {
+        snprintf(tail, sizeof(w->mood), "NOT READ (a read of the card failed)");
+      } else {
+        tagtext::tailText(has ? tf.tail : nullptr, tf.tailTaken, tail, sizeof(w->mood));
+      }
+      Serial.printf("[tags]   mood tail (records of %lu bytes, minor %u): %s\n", static_cast<unsigned long>(tf.stride),
+                    static_cast<unsigned>(tf.minor), tail);
     }
   }
   // The builder's pick (2.9), from D's row as the listing (the walk's sight
@@ -891,6 +926,15 @@ void TagConsole::dump(const char* arg) {
                   (tr.flags & LibraryIndex::kTrackPending) ? ", the scan's to read" : "", title, artist,
                   album[0] ? album : "(loose tracks)", static_cast<unsigned>(library_.catalog().year(id)), line,
                   static_cast<unsigned>(tr.disc), static_cast<unsigned>(tr.number), t);
+    // Its mood word (5.4), and the one a build now would take, when T's
+    // record is the pick and its word differs (scores changed since).
+    char* word = w->mood;
+    tagtext::wordText(index->moodWord(id), word, sizeof(w->mood));
+    const uint16_t nextWord =
+        c.pick == LibraryBuilder::Pick::Transfer && tf.tailTaken ? moodfilter::wordOfTail(tf.tail) : 0;
+    Serial.printf("[tags]   its mood word: %s%s", word, index->hasMoods() ? "" : " (the index has no mood words)");
+    if (nextWord != index->moodWord(id)) Serial.printf("; a build now takes 0x%04X", static_cast<unsigned>(nextWord));
+    Serial.println();
   }
   psramDelete(w);
 }

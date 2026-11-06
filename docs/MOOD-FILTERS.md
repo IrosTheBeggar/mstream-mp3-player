@@ -4,7 +4,7 @@ Mood filters narrow the Albums list and Auto DJ's picks by mood, using the scale
 
 ## 1. Status
 
-**Status (2026-11-04):** planned. Nothing is built, flashed or merged. A read-only study found it possible, and this document is the build plan.
+**Status (2026-11-06):** S0, S1 and S2 are built, from main af72b50: S0 on its own branch (`claude/status-line-under-modal`), S1 and S2 stacked on `claude/mood-filters-implementation-0aec6e`; not merged. S1 and S2 are host-tested (S0 has no host test). S2 ran on the user's Core2 against the spare synthetic card in 9.6's Runs A to E, which also checked S1's heap rule, and S0 was checked on the same unit (9.4). S3 onward are not started. Each stage's result follows its plan (9.4, 9.5, 9.6), and the figures from those runs are MEASURED 2026-11-06. A read-only study found it possible, and this document is the build plan.
 
 **Picked by the user, on the design canvas:**
 - The editor: the one-screen grid of 7.1.
@@ -696,6 +696,10 @@ terminal #56, #68 ----> S7 (stacked)
 
 **Release.** `.github/release-notes.md` is the template `tools/package_release.py:510-514` fills, and no stage may leave it behind. S2 owes a line on the first boot's one rebuild, as 0.11.0's notes did for 0.10.0's (`.github/release-notes.md:165-173`). S3 and S5 owe their rows and strings. The release that carries any of it gets its `docs/RELEASE-<v>-CHECKS.md`.
 
+**Owed to the 0.13.0 release commit** (2026-11-06). Not written into `.github/release-notes.md`: feature branches here never edit it, only "Release x.y.z: the release notes" commits do.
+- S2: every unit rebuilds the library once at its first start on the new firmware (`library.idx` v7): about 11 s at 19,400 tracks from D, about 14-16 s from a transfer's records; the queue kept. Going back to 0.12.0 rebuilds once the other way (it reads v7 as corrupt).
+- S0: a status line (Checking the card..., Reading tags...) that ends while a sheet or dialog is up no longer wipes it.
+
 ### 9.3 Console, one list
 
 | Command | Stage | Does |
@@ -718,6 +722,8 @@ terminal #56, #68 ----> S7 (stacked)
 - **Device:** `uih` a row during `g0` as the status line ends. After the fix `statusBand_` stays true with an empty text under the modal, so `repaintUnder()` (`src/ui/Ui.h:356`) draws the page once in the short band, until the next `updateStatus` pass. Expect that one frame.
 - **PR:** its own. Can land now.
 - **Effort:** 0.1 (guess).
+
+**Result (2026-11-06).** Built as the step says: `Ui::updateStatus` checks for a modal before it changes the band (`src/ui/Ui.cpp`). Reproduced first on v0.12.0 (MEASURED): the Library's "Checking the card..." line, ending under a row's long-press sheet, wiped the sheet, leaving a blank list and a stray "Queue" fragment. After the fix the same steps leave the sheet whole. `pio run -e core2` passes (9.6). Its release line is owed (9.2).
 
 ### 9.5 S1: the contract
 
@@ -781,6 +787,13 @@ git diff --name-status main -- test/fixtures/card
 The last shows A for new files, M only for `hardening/index.json` and `README.md`. `mptg-minor-1.bin` and `vectors.json` are absent.
 
 **PR:** one, C0-C2. **Effort:** 0.75-1 (guess). **Device:** none.
+
+**Result (2026-11-06).** C1 and C2 built; C0 is this document.
+- C1: `test_autodj_join`'s model-heap mood run, on the stand-in until C6 flipped it to the real block (9.6).
+- C2: `tools/moodfilter.py`; `mptg()`'s `"scores"` (stride 80, minor 1); `moods.json` (40 rows), `golden/tags-moods.bin`, `libraries/tags-moods.json`, the hardening files `mptg-moods-longer`, `mptg-tail-invalid`, `mptg-stride-76`; METADATA's spec text. `card_fixtures.py --check`: 266 files up to date, 260 before (MEASURED-HOST).
+- `tools/test_mood_vectors.py`: mStream's predicate (`src/api/mood-filter.js`) ported and checked against node at mStream d7086996, run in SQLite. Its 20 tests pass, and `firmware.yml` runs it.
+- The heap model with the real block (MEASURED-HOST): the boot's largest free block from 753,652 B to 720,884 B (-32,768 B); after the update, joined, 360,436 B in both, pinned in the test. Lowest free 170,052 B at the boot's join, 411,788 B after the update.
+- The rule on the device (9.6, Runs D and E): `joined` 32,768 B under the control at every step of the A/B, under 122,880 B, and over 245,764 B at each. The path not A/B'd read 180,212 B (Run B's without the words, 221,172 B), with no control above the line. No redesign; the ladder is not needed.
 
 ### 9.6 S2: the data path
 
@@ -883,6 +896,46 @@ The model prints D-only numbers equal to today's, and the T+D moods run is insid
 | G | Flip a T byte | "T left out", moods 0, library whole |
 
 **PR:** one, C3-C9, merged after runs A-E. **Effort:** 2.75-4.5 (guess; C8 is 0.75-1.25). **Stops at:** a shippable tree, console only.
+
+**Result (2026-11-06).** C3 to C8 built; C9 is the docs. As built, with the drift from the plan above:
+- C3: 1,476 B of code, no IRAM, no allocation. An inactive filter (none, or a level alone) passes every track, scored or not, as the server and `tools/moodfilter.py` do. `Tally` gained `unfiltered`, and `majority()` holds when it is set, so under an inactive filter every album matches.
+- C4: `mptg::write` also refuses a minor that disagrees with the tails: minor 0 with tails, nonzero without.
+- C5: `kVersion` 7, `kCountWords` 24; `h[22]` the words (0 or the track count), `h[23]` the tracks with a word; the words last before the sum. A v6 file reads as Outdated: one rebuild.
+- C6: the builder sets the word only from the chosen T record (source `kFromTransfer`, a valid tail); `Result.withMoods`. `test/support/SynthCard.h` writes tails for 92 %.
+- C7: `gm<hex>` takes bare hex, as 9.3's `Dq<hex>`, and prints the first 8 tracks and the first 8 albums that fit beside the counts and each pass's µs. `g` adds "moods N" to its PSRAM line and "(N with moods)" to the builder's line. `gt</path>` prints T's raw tail (valid or not), what was taken, and the index's word. The counting is in `lib/core/TagText`, host-tested.
+- C8: `--mood-filter` reads Q as the device does, bare hex (`127`), a `0x` prefix allowed. `--mood-coverage` defaults to 92 (0: T records at stride 72), `--mood-null` to 1. Names are converted to NFC on macOS (METADATA 2.8.5): this Mac lists 335 of the card's names as NFD. Files are still opened by their listed names.
+- The device runs restamped the card's Auto DJ index with `--mpdj` (19,410 rows, from gen 3), so Auto DJ is as `docs/AUTODJ.md` measured it.
+- C9: `.github/release-notes.md` is not edited. Feature branches never edit it; the owed lines are in 9.2.
+
+Host (MEASURED-HOST):
+- `pio test -e native`: 2,077 cases, only the 5 known macOS failures (2,044 before the work).
+- Tools tests pass: `test_synthtransfer` 62 (1 skipped), `test_mood_vectors` 20, `test_mpwf` 33, `test_playlog` 30, `test_autodj_ref` 41, `test_mpdj` 22, `test_gen_ui_strings` 29. `test_synthcard`'s `test_out_dir_refusals` fails as on clean main.
+- `pio run -e core2`: flash from 4,311,563 B to 4,318,451 B (+6,888 B; 68.6 %, the app 70 % of its slot). RAM 58,480 B and IRAM 5,161 B left, both unchanged.
+- 20k tracks built from T with words: `library.idx` 1,821,680 B (91.1 B a track; MODELLED 90.6), 1,781,680 B (89.1 B) without tails. Build peak 2,031,879 B against 1,991,879 B. The words add exactly 40,000 B to both.
+
+Device (MEASURED), the spare card: 19,413 tracks, 3 of them added by hand (not 19,412), 705 artists, 1,707 albums, 2,478 folders, D with 19,413 records. The Core2 v1.3 (ESP32-D0WDQ6-V3 rev 3.1, 16 MB flash, 4 MB PSRAM usable).
+
+| Run | Result |
+|---|---|
+| A | T gen 3, zero records. The first boot rebuilt once ("library.idx outdated ... an older version's"), 11,193 ms from D, peak 1,888,702 B; the next boot loaded it in 1,504 ms. `g`, `gm`, `gm127`: "no mood data". Largest free block 819,188 B with Auto DJ off, 655,348 B joined: unchanged |
+| B | Gen 4, `--moods --mood-coverage 0 --replace`: T with 19,413 records of 72 bytes. The first boot built from T in 15,777 ms; `library.idx` 1,709,650 B (88.1 B a track); a load boot 819,188 / 655,348 B as before. A `gb` straight after the commit deferred to the next boot ("the track table 1213 KB fits neither the old one's block (606 KB) nor the largest free one (799 KB)"): until the walk at a commit merges, the update reserves for T's and D's records together (`lib/core/LibraryUpdate.cpp` `trackSlots()`, unchanged by this work). After `gw` the update ran: built in 20.5 s, peak 1,888,702 B, and once the walk ended 335,860 B joined, the documented figure |
+| C | Gen 5, `--moods --replace`: 17,954 of 19,413 tracks with a server row (92.5 %), 1,399 of 143,632 heads NULL; T 5,177,713 B, 80-byte records, minor 1. On this Mac's card reader the tool's mood step took 34.1 s on a dry run, and the whole write 18.2 s on the next run. The first boot built from T in 14,438 ms, "19413 from the transfer's (17954 with moods)", peak 1,927,528 B. `library.idx` 1,748,476 B (90.1 B a track): Run B's 1,709,650 B plus the 38,826 B block. `gm` equals `--check`: 17,954 of 19,413 (92.5 %), block 38,826 B. `gm<hex>` equals `--check --mood-filter`, tracks and albums, every one (below); `gm800` refused. `gt` on `2_Naquos/Heavy Mountain/08`: tail `03 42 50 11 4F 0E 4D 00`, taken 0xB333, the index's word the same |
+| D | An A/B with E: one script on a control firmware whose builder never sets the word (16 B smaller) and on the mood firmware. The largest free block is 32,768 B less with the block at every step, from 786,420 B against 819,188 B at the boot with Auto DJ off to 262,132 B against 294,900 B joined after the FLAC's update (`docs/AUTODJ.md` 14.3). No update underran or printed `[heap] FAILED`. Update builds, control / moods: 20.6 / 22.1 s stopped, 42.2 / 45.0 s with the MP3, 28.7 / 30.2 s with the FLAC. Lowest free in the stopped update's join: 180,876 / 175,032 B. Not A/B'd: the first walk after a new commit, then `gb`: 180,212 B with moods |
+| E | After the FLAC, an Opus (2 s) opened its 128,023 B of buffers and played: 101 packets, 0 skipped, on both firmwares |
+| F, G | Not run (`--seed 2`; a flipped T byte). The card now holds gen 5 with scores; its bench queue was replaced by Auto DJ picks during Run E |
+
+Run C's `gm<hex>`, idle:
+
+| q | Filter | Tracks (pass) | Albums of 1,707 (pass) |
+|---|---|---|---|
+| 127 | Sad, Relaxed, Vocals, Danceable | 405 (5,046 µs) | 25 (14,069 µs) |
+| 40A | Neutral, Neutral, Loose | 1,624 (5,621 µs) | 115 (14,329 µs) |
+| 215 | Happy, Relaxed, Instrumental, Strict | 787 (5,487 µs) | 39 (14,195 µs) |
+| 1 | Happy | 9,122 (11,981 µs) | 854 (30,990 µs) |
+
+So the albums pass idle is 14-31 ms (MODELLED 8-35 ms), and the tracks pass, the fit count, 5-12 ms (MODELLED 2-5 ms).
+
+**Verdict against 9.5:** the block costs exactly one 32 KB class at every step, inside the modelled -106,496 / -40,960 / +49,152 B, and every joined figure of the A/B stays over 245,764 B (the path not A/B'd read 180,212 B; Run B's, without the words, 221,172 B). No redesign. Heap figures are compared only within one scripted sequence: the control's own after a stopped update read 327,668 B, not `docs/AUTODJ.md`'s 335,860 B.
 
 ### 9.7 S3: Albums and the editor
 
@@ -1142,32 +1195,32 @@ Trial merges ran with `git merge-tree` on local refs at a1566fe. On 2026-11-05 #
 
 ## 11. Budget
 
-Device figures are on the synthetic card, 19,412 tracks. Re-measure every line marked with a run.
+Device figures are on the synthetic card, 19,412 tracks. Re-measure every line marked with a run. The MEASURED 2026-11-06 figures are 9.6's runs, on that card at 19,413 tracks; a largest-block figure is compared only with its control in the same script (`docs/AUTODJ.md` 14.3).
 
 | Resource | Today | Addition | Label | Re-measure |
 |---|---|---|---|---|
-| Word block | 0 | 38,824 B carves 38,912+4 at 19,412; 40,000 B carves 40,960+4 at 20k. 0 with no moods | MODELLED | S2 C: `g` |
+| Word block | 0 | 38,824 B carves 38,912+4 at 19,412; 40,000 B carves 40,960+4 at 20k. 0 with no moods. MEASURED: 38,826 B at 19,413, 17,954 with a word (Run C); no block on a T with zero records (Run A); 40,000 B at 20k (MEASURED-HOST) | MODELLED; MEASURED | S2 C: `g` |
 | Filtered ids | 0 | 6,964 B carves 7,040+4 at 1,741 albums, while a filter is on | MODELLED | S3: `D`, `uiM` |
 | PSRAM free, MP3, Auto DJ on / off | 646,252 / 801,912 B (`docs/AUTODJ.md:909`, older than the waveform bar) | about -41 KB | MEASURED / MODELLED | S2 B, C |
-| Largest, boot, off | 819,188 B (`docs/AUTODJ.md:961`) | -32,768 or -49,152 reported (class floors) | MODELLED | S2 A, C |
-| Largest, joined at boot | 655,348 B (`docs/AUTODJ.md:1506`) | Same | MODELLED | `D1` |
-| Largest, after update, joined | 335,860 B (`:1507`) | -106,496 / -40,960 / +49,152 (min, median, max) | MODELLED | S1 test, S2 D |
-| Largest, MP3 after `gb` | 221,172 B (`:1508`) | Same | MODELLED | S2 D |
-| Largest, FLAC after `gb` | 155,636 B (`:1509`) | Same. First Opus keeps blocks of 65,536 and 62,464 B (`docs/OPUS.md:133`). May hold one afterwards | MODELLED | S2 E |
-| Lowest free in a join | 77,284 B, margin 64 KB (`:1512`) | Port's lowest 69,192 B | MODELLED | `Dc` |
+| Largest, boot, off | 819,188 B (`docs/AUTODJ.md:961`) | -32,768 or -49,152 reported (class floors). MEASURED: -32,768 B, 786,420 against the control's 819,188 B (Runs D, E) | MODELLED; MEASURED | S2 A, C |
+| Largest, joined at boot | 655,348 B (`docs/AUTODJ.md:1506`) | Same. MEASURED: -32,768 B, 622,580 against 655,348 B | MODELLED; MEASURED | `D1` |
+| Largest, after update, joined | 335,860 B (`:1507`) | -106,496 / -40,960 / +49,152 (min, median, max). MEASURED: -32,768 B stopped, 294,900 against the control's 327,668 B in the same script; the C++ model 0, 360,436 B in both (MEASURED-HOST) | MODELLED; MEASURED | S1 test, S2 D |
+| Largest, MP3 after `gb` | 221,172 B (`:1508`) | Same. MEASURED: -32,768 B, 294,900 against 327,668 B | MODELLED; MEASURED | S2 D |
+| Largest, FLAC after `gb` | 155,636 B (`:1509`) | Same. First Opus keeps blocks of 65,536 and 62,464 B (`docs/OPUS.md:133`). May hold one afterwards. MEASURED: -32,768 B, 262,132 against 294,900 B; the Opus then opened its 128,023 B of buffers and played, 0 skipped, on both (Run E) | MODELLED; MEASURED | S2 E |
+| Lowest free in a join | 77,284 B, margin 64 KB (`:1512`) | Port's lowest 69,192 B. MEASURED: 175,032 B in the stopped update's join, the control 180,876 B; the C++ model 170,052 B at the boot's join, 411,788 B after the update (MEASURED-HOST) | MODELLED; MEASURED | `Dc` |
 | Join blocks | 155,284 B, 3 kept (`docs/AUTODJ.md:896`) | None | READ | `test_autodj_join` |
-| Update step | 2.30 MB free, peak 1.89 MB (`docs/METADATA.md:4739`); check at `lib/core/LibraryUpdate.cpp:197` | Margin about -50.5 KB, not binding | MODELLED | `gb` |
-| T on the card | About 6.9 MB (`docs/METADATA.md:2790`) | +160,000 B at 20k | MODELLED | `--check` |
-| `library.idx` | | +40,000 B at 20k | MODELLED | `gm` |
+| Update step | 2.30 MB free, peak 1.89 MB (`docs/METADATA.md:4739`); check at `lib/core/LibraryUpdate.cpp:197` | Margin about -50.5 KB, not binding. MEASURED: build peak 1,927,528 B with the words (Run C), 1,888,702 B without (Runs A, B), 38,826 B more; every update of Runs D and E ran. Run B's `gb` before the walk merged its commit deferred: until then `trackSlots()` reserves for T's and D's records together, unchanged by this work | MODELLED; MEASURED | `gb` |
+| T on the card | About 6.9 MB (`docs/METADATA.md:2790`) | +160,000 B at 20k. MEASURED: 5,177,713 B at 19,413 records of 80 bytes (Run C) | MODELLED; MEASURED | `--check` |
+| `library.idx` | | +40,000 B at 20k. MEASURED: +38,826 B at 19,413, 1,748,476 against 1,709,650 B (Runs C, B); +40,000 B at 20k, 1,821,680 against 1,781,680 B (MEASURED-HOST) | MODELLED; MEASURED | `gm` |
 | JSON over the wire | | 2.0-3.4 MB at 20k | MODELLED | S8 |
 | Track ceiling | 23k-27k, ESTIMATED (`docs/METADATA.md:4830`) | about 22.9k-26.1k | ESTIMATED less MODELLED | |
-| Album pass | | 8-35 ms idle, 17-70 ms with an MP3. Worst tap to frame about 180 ms | MODELLED | `uiMa<hex>` |
-| Fit count | | 2-5 ms per change | MODELLED | `D` |
+| Album pass | | 8-35 ms idle, 17-70 ms with an MP3. Worst tap to frame about 180 ms. MEASURED idle, `gm<hex>`: 14-31 ms (Run C) | MODELLED; MEASURED | `uiMa<hex>` |
+| Fit count | | 2-5 ms per change. MEASURED idle, `gm<hex>`'s tracks pass: 5-12 ms (Run C) | MODELLED; MEASURED | `D` |
 | Pick | p90 0.38-1.70 ms (`docs/AUTODJ.md:858`, ESTIMATED) | At or under inside a run; a jump adds 2.4-8.5 ms | ESTIMATED / MODELLED | `Dn200` |
-| Boot load | 1.1-1.5 s at 20k, ESTIMATED | +0.02-0.03 s | MODELLED | |
-| Build | 11.3 s at boot (`docs/METADATA.md:4531`) | +0.09-0.13 s | MEASURED / MODELLED | S2 C |
-| Flash | About 4.36 MB, 69 %, at v0.11.0 (`.github/release-notes.md:162-164`, `docs/RELEASE-0.11.0-CHECKS.md:92`); guard warns at 80 % (`tools/flash_guard.py:49`). Size at a1566fe not determined | 10-20 KB code, about 5 KB strings | GUESS | `pio run` |
-| IRAM | 5,176 B left (`docs/ARCHITECTURE.md:4019`) | 0 | READ | `iram_diet` |
+| Boot load | 1.1-1.5 s at 20k, ESTIMATED; 1,514 ms at 19,413 tracks without the words (MEASURED 2026-11-06) | +0.02-0.03 s; 1,537 ms with them, +23 ms (MEASURED 2026-11-06, the A/B's load boots) | MODELLED; MEASURED | |
+| Build | 11.3 s at boot (`docs/METADATA.md:4531`) | +0.09-0.13 s. MEASURED: from D 11,193 ms (Run A); from T 14,438 ms with the words, 15,777 ms without (Runs C, B); updates, control / moods, 20.6 / 22.1 s stopped, 42.2 / 45.0 s with the MP3, 28.7 / 30.2 s with the FLAC (Runs D, E) | MEASURED / MODELLED; MEASURED | S2 C |
+| Flash | About 4.36 MB, 69 %, at v0.11.0 (`.github/release-notes.md:162-164`, `docs/RELEASE-0.11.0-CHECKS.md:92`); guard warns at 80 % (`tools/flash_guard.py:49`). Size at a1566fe not determined; 4,311,563 B at main af72b50 (MEASURED-HOST) | 10-20 KB code, about 5 KB strings. MEASURED-HOST: +6,888 B for S0-S2, 4,318,451 B (68.6 %, the app 70 % of its slot) | GUESS; MEASURED-HOST | `pio run` |
+| IRAM | 5,176 B left (`docs/ARCHITECTURE.md:4019`) | 0. MEASURED-HOST: 0 for S0-S2, 5,161 B left before and after; RAM 58,480 B left, unchanged | READ; MEASURED-HOST | `iram_diet` |
 | NVS | `kCurrent` 4 (`lib/core/NvsLayout.h:52`) | One u16 | READ | `test_nvs_layout` |
 | Engine | 19,016 B | A few fields; `pickOnce` adds no recursion | READ | `D` |
 
@@ -1183,16 +1236,16 @@ A slow pass is a UI hitch, not an audio risk. The loop runs under the decoder an
 | Does the stored list cluster by mood (real ρ) | Once a card has moods, a host script over T and MPDJ using `tools/mpdj.py`. Not built |
 | Album share, albums resting on few songs, folder against `album_id` | Same script |
 | How many tracks on a card are a peer's | `gm` coverage against the card's track count at S8 |
-| Real pass, pick and jump time | `uiMa<hex>`, `Dn200` |
-| Heap with the block | S1's C++ test, then S2 D. The port's folders and string bytes are estimated |
+| Real pass, pick and jump time | `uiMa<hex>`, `Dn200`. **The pass idle, answered (2026-11-06, `gm<hex>`, 9.6 Run C):** albums 14-31 ms, tracks 5-12 ms. Pick, jump and a pass with an MP3 still open |
+| Heap with the block | S1's C++ test, then S2 D. The port's folders and string bytes are estimated. **Answered (2026-11-06, 9.5, 9.6 Runs D and E):** one 32 KB class, -32,768 B, at every step on the device, and at the model's boot; the model's joined figure after the update unchanged, 360,436 B. No redesign |
 | A second hole >= 62,464 B after FLAC and `gb` | S2 E |
 | Opus plus Auto DJ at 20k | One device run. No figure exists |
 | Hitch at the end of a fence | `uiMa<hex>`, `g0`, `ui` |
 | node:sqlite and bun:sqlite at the bars | `test/db/mood-bars.test.mjs` |
 | Whether scores stay in 0..1 | Not checked by the server (mStream `src/db/mood-sync.js:42`). The writer clamps |
-| `--moods`' run time on a real card | S2's first run (C8) |
-| Whether the user's unit already stored schema 5 | `[nvs] schema` at boot. Harmless either way: the step is empty |
-| Flash size at a1566fe | `pio run -e core2` |
+| `--moods`' run time on a real card | S2's first run (C8). **Answered (2026-11-06, 9.6 Run C):** on this Mac's card reader the mood step took 34.1 s on a dry run, the whole write 18.2 s on the next run |
+| Whether the user's unit already stored schema 5 | `[nvs] schema` at boot. Harmless either way: the step is empty. **Answered (2026-11-06):** yes, "[nvs] schema 5, newer than this firmware's 4": #27's builds wrote it |
+| Flash size at a1566fe | `pio run -e core2`. **Answered (2026-11-06), at main af72b50, a later commit:** 4,311,563 B; 4,318,451 B with S0-S2 (MEASURED-HOST) |
 | Final widths of the new translations | `test_ui_library` once written |
 | The gapless caveat under D5's alternative | Not traced |
 | Whether scores count as derived data under the heads' licence | Not ours to settle. D9 keeps them off a card for someone else |
@@ -1222,7 +1275,7 @@ Standard is shown. For Strict use `>=.7` and `<.3`, for Loose `>=.3` and `<.7`.
 
 What would change the plan:
 
-- **S1's heap rule fails, or S2 E skips a track.** The ladder in 9.5: `finish()` placement, then D8 Standard only, then reading the block from the card.
+- **S1's heap rule fails, or S2 E skips a track.** The ladder in 9.5: `finish()` placement, then D8 Standard only, then reading the block from the card. **Cleared on the device (2026-11-06):** one 32 KB class at every step of the A/B, joined over 245,764 B at each, and the Opus played with 0 skipped (9.6, Runs D and E).
 - **D1 overruled.** S6 is replaced, and the writer needs a separate all-paths read.
 - **D2 drifts too far on real data, or is overruled.** Drop S4's commit 5 and its sessions, or change `pickOnce`'s second round and 2 sessions.
 - **D3 overruled.** Removes the hold and S5's zero states, and adds a fallback.

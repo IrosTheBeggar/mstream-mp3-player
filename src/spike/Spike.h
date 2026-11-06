@@ -34,7 +34,8 @@ class TagConsole;
 // library of n tracks in an index of the spike's own, which the scroll lab
 // and the thumbnail probe then use instead, until g0; the player never sees
 // it. The tags' commands (gs, gt, gr, gw, gb, gv: tagtext, docs/METADATA.md
-// 3.3.6) go to app/TagConsole, made in PSRAM at its first use.
+// 3.3.6) go to app/TagConsole, made in PSRAM at its first use; the mood
+// words' (gm, gm<hex>: docs/MOOD-FILTERS.md 9.3) to Library::moodReport().
 //
 // The screens get the glass from the input layer (ui/Input: corrected,
 // as events) through onGlass(), like every other screen. The input lab is

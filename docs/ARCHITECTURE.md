@@ -38,6 +38,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  AutoDjEngine  AutoDjTiers  AutoDjJoin  AutoDjDriver          |
               |  AutoDjTrigger  AutoDjCommand  AutoDjView (Auto DJ)           |
               |  WaveShape  WaveBar  WaveState (the waveform)                 |
+              |  MoodFilter (the mood tail, the word, the filter's rules)     |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -524,7 +525,7 @@ hundred bytes in PSRAM (app/TagConsole's `Work`).
   under 1,536 B after an SD driver line during a boot is a finding, not a
   failure, METADATA.md 6.3.1).
 - **A boot that builds the index** (the build-at-boot marker, a missing
-  or v5 `library.idx`) sorts its views on this stack too: with
+  or v6 `library.idx`) sorts its views on this stack too: with
   `std::sort` on the records' byte order about 6.2 KB used (ESTIMATED from
   the card worker's 5.36 KB MEASURED build, 2026-10-09), near the 1,536 B
   line; with `lib/core/IdSort` about 4.4 KB (METADATA.md 3.9).
@@ -1593,8 +1594,10 @@ the table at 0x8000, so every unit keeps the layout it was installed with.
   bootloader reads as ota_0: the slot the image just wrote, even on a unit
   that had moved to ota_1 by OTA (`upload` writes it too). An OTA update
   writes the slot that isn't running and switches otadata. 6 MB each: the
-  app is ~2.2 MB, and WiFi, HTTP and TLS are still to come (and the IRAM
-  work they need, [Build notes](#build-notes)).
+  app is 4,318,451 B on 2026-11-06 (68.6 % of its slot by the build's
+  count, the app 70 % by flash_guard's; the mood filters' S0-S2 6,888 B
+  of it), and WiFi, HTTP and TLS are still to come (and the IRAM work
+  they need, [Build notes](#build-notes)).
 - **LittleFS shrank** from ~11.9 MB to 3.8 MB: it only holds test audio when
   no SD card is in (`tools/make_test_audio.py` reads its size from the table).
 - **Old bytes where NVS and LittleFS now sit** (a unit moved from the old
@@ -1887,8 +1890,10 @@ a beta); the README has how to cut one.
 
 Everything the player knows about the music is one `LibraryIndex` in PSRAM,
 the single store: a string arena, fixed-size records and sorted views
-(~80-90 B a track since `library.idx` v6, nothing in internal RAM). The queue, the player and later
-the browsing UI hold its **track ids**, never strings.
+(~80-90 B a track since `library.idx` v6, 2 B more with v7's mood words
+on a card whose transfer gives them; nothing in internal RAM). The queue,
+the player and later the browsing UI hold its **track ids**, never
+strings.
 
 - **Track ids** (`TrackCatalog`): `0 .. n-1` are the index's tracks, and
   `0x80000000 + k` the built-in tracks (the test tones and the click tracks,
@@ -2026,18 +2031,35 @@ the browsing UI hold its **track ids**, never strings.
     runs over every track the extension list accepted, and
     test_library_index has each shape in the three formats, mixed in one
     folder.
-- **`library.idx` v6** (docs/METADATA.md 3.4.3, built in its N2): 32-byte
-  tracks (a title of their own when a tag's isn't inside the file name, the
-  record's artist, a 16-bit number, the length, where the names came
-  from), 28-byte albums (the elected artist line, year, discs, `kLoose`),
-  each artist's and album's sort key with the views (the Library's rail,
-  row letters and jump grid key on it, as the A-Z order does),
-  the strings in 64 KB chunks, and a header with what the index was built
-  from (the transfer's identity, D's checksum, and today's walk signature).
-  A cache of versions 1-5 is `Outdated` and rebuilt once. The firmware
-  builds it from the tag records (`LibraryBuilder`: the transfer's and the
-  device's, merged per file, Stage A's names; METADATA.md 3.4, 3.8), or
-  from the walk on a card with none.
+- **`library.idx` v7** (docs/METADATA.md 3.4.3, built in its N2; the mood
+  words docs/MOOD-FILTERS.md 5.4): 32-byte tracks (a title of their own
+  when a tag's isn't inside the file name, the record's artist, a 16-bit
+  number, the length, where the names came from), 28-byte albums (the
+  elected artist line, year, discs, `kLoose`), each artist's and album's
+  sort key with the views (the Library's rail, row letters and jump grid
+  key on it, as the A-Z order does), the strings in 64 KB chunks, the mood
+  words (a u16 per track id, last before the sum; no block at all when no
+  track has one), and a header with what the index was built from (the
+  transfer's identity, D's checksum, and today's walk signature) and the
+  words' two counts (0 or the track count, and the tracks with a word: 24
+  count words, 22 in v6). A cache of versions 1-6 is `Outdated` and
+  rebuilt once: the first start of a v7 firmware rebuilt the 19,413-track
+  test card from D in 11,193 ms (MEASURED 2026-11-06), the queue kept;
+  0.12.0 reads v7 as Corrupt and rebuilds too. The firmware builds it from
+  the tag records (`LibraryBuilder`: the transfer's and the device's,
+  merged per file, Stage A's names; METADATA.md 3.4, 3.8), or from the
+  walk on a card with none. A track's word comes only from the record the
+  build takes when that is T's (`kFromTransfer`) with a mood tail a reader
+  accepts (METADATA.md 2.6.4, MPTG minor 1); a D record's is never taken,
+  and `Result::withMoods` counts the words taken. The build stamp leaves
+  the words out: a word doesn't change what a track id means. On that card
+  with 17,954 words the block is 38,826 B and the index 1,748,476 B (90.1
+  B a track), the same card's T records without tails 1,709,650 B plus the
+  block (MEASURED 2026-11-06). The words' rules are `lib/core/MoodFilter`
+  (MOOD-FILTERS.md 4.1, 5.3, 5.4: a tail's check and its word, a filter's
+  11 bits, the song and album rules), host-tested in test_mood_filter over
+  `test/fixtures/card/moods.json`, the same rules as
+  `tools/moodfilter.py`; no IRAM, no allocation.
 - **The card worker's jobs** (`app/CardTasks` on the loop, `app/CardWorker`
   the task, lib/core `CardJobs`; METADATA.md 3.2.3, 3.3, 3.8): 2 s after
   the UI's first frame the **validation walk** lists `/music` a folder a
@@ -2118,13 +2140,25 @@ the browsing UI hold its **track ids**, never strings.
   that index's build only, set by the scan (above). The console's `gs`,
   `gt</music/...>`, `gr`, `gw`, `gb` and `gv` (`app/TagConsole`,
   `lib/core/TagText`) report the scan and the card worker, dump one file's
-  tags and records, and ask the worker for a Rescan, a walk, a build or a
-  check of the transfer's files (`gb!` the update step deferred to the
-  next boot, `gs0` the worker's figures from now: the device batch's L4
-  and L3); `gc` and `gl` are the sector cache's switches and L0's bench;
-  `gw?` is the waveform index's state, `gw=<99 digits>` and `gw#<480 hex>`
-  a test shape with no card, `gw-` drops it (`app/Waves`; `gw` alone is the
-  walk).
+  tags and records (T's mood tail as its bytes stand, valid or not, what a
+  reader takes, and the index's word), and ask the worker for a Rescan, a
+  walk, a build or a check of the transfer's files (`gb!` the update step
+  deferred to the next boot, `gs0` the worker's figures from now: the
+  device batch's L4 and L3); `gc` and `gl` are the sector cache's switches
+  and L0's bench; `gw?` is the waveform index's state, `gw=<99 digits>`
+  and `gw#<480 hex>` a test shape with no card, `gw-` drops it
+  (`app/Waves`; `gw` alone is the walk). `gm` is the index's mood words
+  (the tracks with one, the coverage, the block's bytes; `g` prints the
+  block on its PSRAM line and the tracks built with a word on the
+  builder's), and `gm<hex>` the tracks and the albums a filter's 11 bits
+  let through (bare hex, 1-4 digits; a value that isn't a filter is
+  refused), each pass's time and the first 8 of each, counted as
+  `tools/synthtransfer.py --check --mood-filter` counts them off the card
+  (`Library::moodReport()`; the counts are `lib/core/TagText`'s,
+  host-tested). Behind the update step's fence it says so and counts
+  nothing. On the 19,413-track card with 17,954 words, idle, the tracks
+  pass took 5-12 ms and the albums pass, over 1,707 albums, 14-31 ms
+  (MEASURED 2026-11-06; MOOD-FILTERS.md 9.6).
   `gs` checks `tags.bin` and the transfer's tags file a piece a loop pass
   (`lib/core/TagCheck`, about 10 ms a pass, none while a list moves on a
   lit screen), once the card worker's step under way is taken in, with no
@@ -3100,7 +3134,11 @@ Queue, Dance and Output (with its Pair and About pages).
   something to say, 34 + 45 ms MEASURED):
   the LCD's scroll area is defined again with a bottom fixed area
   (VSCRDEF's BFA), so a bar under the list (198-239) stays put while the
-  list scrolls; the rail's pushes stop at the band's end. An **empty list**
+  list scrolls; the rail's pushes stop at the band's end. Under a modal,
+  the jump grid or the coach cards, the band is left as it is, even when
+  the status line ends, and changes once they go (`Ui::updateStatus()`;
+  before, a line that ended under a sheet wiped it: MOOD-FILTERS.md
+  9.4). An **empty list**
   shows its source's empty state (a disc and icon, a title, a line or two,
   up to two buttons, drawn in strips through the scroll mapping): the
   Queue's "Your queue is empty" (Open Library, Shuffle all), the Library's
@@ -4028,9 +4066,10 @@ their own (the player stopped first, so nothing follows them).
   changed the objects: its docstring says what to do) and warns about any
   name that no longer matches; a build logs `iram_diet: 51 of 51 libc
   objects moved to flash`. About 5 KB of IRAM is left (5,176 B from the
-  seek bar on; the MP3 pin below takes none). Adding WiFi will need
-  more: likely pioarduino's `custom_sdkconfig` to rebuild the framework
-  without the workaround.
+  seek bar on; 5,161 B on 2026-11-06, with the mood filters' data path
+  or without; neither it nor the MP3 pin below takes any). Adding WiFi
+  will need more: likely pioarduino's `custom_sdkconfig` to rebuild the
+  framework without the workaround.
 - **The MP3 synth loop is pinned at the front of flash.** The same
   `tools/iram_diet.py` puts libmad's synthesis (`dct32`, `synth_full`,
   `mad_synth_frame_onens`), AudioGeneratorMP3's per-sample `GetOneSample`

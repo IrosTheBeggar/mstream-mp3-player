@@ -8,6 +8,8 @@
 #include <cstring>
 #include <new>
 
+#include "MoodFilter.h"
+
 namespace cc = cardcontract;
 namespace mptg = cardcontract::mptg;
 
@@ -154,7 +156,7 @@ LibraryBuilder::Result LibraryBuilder::build(LibraryIndex& index, const Config& 
 LibraryBuilder::Outcome LibraryBuilder::attempt(LibraryIndex& index, const Config& c, Work& w, bool useT, bool useD,
                                                 bool lists, Result* r) {
   r->built = r->transferUsed = r->deviceUsed = false;
-  r->fromTransfer = r->fromDevice = r->fromPath = r->pending = r->dropped = r->ignored = 0;
+  r->fromTransfer = r->fromDevice = r->fromPath = r->pending = r->dropped = r->ignored = r->withMoods = 0;
   r->deviceCrc = 0;
   if (useT) {
     r->transferWhy = w.t.begin(*c.transfer, 0, w.tScratch, kScratch, &w.tRun);
@@ -274,8 +276,16 @@ LibraryBuilder::Outcome LibraryBuilder::attempt(LibraryIndex& index, const Confi
         if (ch.pending) ++r->pending;
       }
     } else {
-      a = index.addRecord(w.abs, viewOf(wk.record(), wk.run(), source));
-      if (a == LibraryIndex::Add::Added) ++(source == LibraryIndex::kFromTransfer ? r->fromTransfer : r->fromDevice);
+      LibraryIndex::TagView v = viewOf(wk.record(), wk.run(), source);
+      // The mood word (docs/MOOD-FILTERS.md 5.4) is the chosen record's
+      // too: T's tail, when it has a valid one. D's never counts.
+      const uint8_t* tail = source == LibraryIndex::kFromTransfer ? wk.moodTail() : nullptr;
+      if (tail) v.moods = moodfilter::wordOfTail(tail);
+      a = index.addRecord(w.abs, v);
+      if (a == LibraryIndex::Add::Added) {
+        ++(source == LibraryIndex::kFromTransfer ? r->fromTransfer : r->fromDevice);
+        if (v.moods) ++r->withMoods;
+      }
     }
     return a != LibraryIndex::Add::NoMemory;
   };

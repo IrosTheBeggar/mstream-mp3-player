@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 IrosTheBeggar
 
-// Host tests for LibraryIndex (the compact library store, library.idx v6)
+// Host tests for LibraryIndex (the compact library store, library.idx v7)
 // and the synthetic library generator: the path index as it always was, and
 // tag records named by Stage A's rules (docs/METADATA.md 5.4).
 // Run: pio test -e native
@@ -50,6 +50,7 @@ struct Heap {
   static void* alloc(size_t n) {
     if (live + n > limit) return nullptr;
     void* p = std::malloc(n ? n : 1);
+    std::memset(p, 0xA5, n);  // not zeroed: a word the index reads, it wrote
     blocks().push_back({p, n});
     sizes().push_back(n);
     live += n;
@@ -632,7 +633,10 @@ void expectSameIndex(const LibraryIndex& a, const LibraryIndex& b) {
     TEST_ASSERT_EQUAL_UINT8(a.track(t).disc, b.track(t).disc);
     TEST_ASSERT_EQUAL_UINT32(a.allTracks()[t], b.allTracks()[t]);
     TEST_ASSERT_EQUAL_UINT32(t, b.findTrack(pa));
+    TEST_ASSERT_EQUAL_HEX16(a.moodWord(t), b.moodWord(t));
   }
+  TEST_ASSERT_EQUAL(a.hasMoods(), b.hasMoods());
+  TEST_ASSERT_EQUAL_UINT32(a.moodTracks(), b.moodTracks());
   for (uint32_t i = 0; i < a.artistCount(); ++i) {
     TEST_ASSERT_EQUAL_UINT32(a.artistsAZ()[i], b.artistsAZ()[i]);
     TEST_ASSERT_EQUAL_STRING(a.artistName(i), b.artistName(i));
@@ -1094,7 +1098,7 @@ void test_opus_names_are_read_like_the_others() {
 // by feature/opus before the merge (version 3: the same records, .opus
 // tracks and the old names) or by dev before it (version 4: the names, no
 // .opus tracks) is Outdated, so the Library builds the index again and
-// saves version 5.
+// saves today's. So are 5 and 6 (6: tag records, no mood words).
 void test_an_older_cache_version_is_rebuilt() {
   LibraryIndex idx(Heap::alloc, Heap::release);
   TEST_ASSERT_TRUE(idx.begin("/music"));
@@ -1106,7 +1110,7 @@ void test_an_older_cache_version_is_rebuilt() {
   std::vector<uint8_t> bytes(file.data(), file.data() + file.size());
   uint32_t version;
   std::memcpy(&version, bytes.data() + 4, 4);  // the header's second word
-  TEST_ASSERT_EQUAL_UINT32(6, version);
+  TEST_ASSERT_EQUAL_UINT32(7, version);
   LibraryIndex back(Heap::alloc, Heap::release);
   {
     MemorySource in(bytes.data(), bytes.size());
@@ -1117,7 +1121,7 @@ void test_an_older_cache_version_is_rebuilt() {
     TEST_ASSERT_EQUAL_UINT8(1, back.track(first).disc);
     TEST_ASSERT_EQUAL_UINT8(1, back.track(first).number);
   }
-  for (const uint32_t old : {1u, 2u, 3u, 4u, 5u}) {
+  for (const uint32_t old : {1u, 2u, 3u, 4u, 5u, 6u}) {
     std::memcpy(bytes.data() + 4, &old, 4);
     MemorySource in(bytes.data(), bytes.size());
     TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Outdated), static_cast<int>(back.load(in, 9)));
@@ -1156,6 +1160,10 @@ struct View {
   }
   View& ms(uint32_t d) {
     v.durationMs = d;
+    return *this;
+  }
+  View& moods(uint16_t w) {
+    v.moods = w;
     return *this;
   }
   View& set(const char** p, size_t* n, const char* s) {
@@ -1657,7 +1665,7 @@ void test_peek_and_clear_pending() {
   TEST_ASSERT_TRUE(got.sameSoft(in));
   TEST_ASSERT_EQUAL_UINT64(0, got.walkSignature);
   // Only the header is read: a file cut right after it still peeks.
-  std::vector<uint8_t> head(bytes.begin(), bytes.begin() + 22 * 4 + 2 * 4 * (LibraryIndex::kBuckets + 1));
+  std::vector<uint8_t> head(bytes.begin(), bytes.begin() + 24 * 4 + 2 * 4 * (LibraryIndex::kBuckets + 1));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), peek(head, &got));
   head.pop_back();
   TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Corrupt), peek(head, &got));
@@ -1671,7 +1679,7 @@ void test_peek_and_clear_pending() {
   foreign[0] ^= 1;
   TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Corrupt), peek(foreign, &got));
   std::vector<uint8_t> newer = bytes;
-  newer[4] = 7;
+  newer[4] = 8;
   TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Corrupt), peek(newer, &got));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Corrupt), peek(std::vector<uint8_t>(), &got));
 
@@ -1914,6 +1922,411 @@ void test_tagged_synthetic_library() {
   TEST_ASSERT_TRUE(near(discs, synth::kDiscPct));
 }
 
+// ---- mood words (library.idx v7; docs/MOOD-FILTERS.md 5.4) ----
+
+namespace {
+
+constexpr uint16_t kWord = 0xB313;  // 5.7's worked example
+
+// One album of tracks by records, track i (id i) with words[i]; kFile
+// adds that track by its path alone (no record, so no word).
+constexpr uint32_t kFile = 0x10000;
+void buildMoods(LibraryIndex& idx, const std::vector<uint32_t>& words, uint32_t expect = 0) {
+  TEST_ASSERT_TRUE(idx.begin("/music", expect));
+  char path[96];
+  for (size_t i = 0; i < words.size(); ++i) {
+    std::snprintf(path, sizeof(path), "/music/Glass Orchard/Night Shift/%04u - Song.mp3", static_cast<unsigned>(i + 1));
+    const LibraryIndex::Add r = words[i] == kFile
+                                    ? idx.addFile(path)
+                                    : idx.addRecord(path, View().title("Song").moods(static_cast<uint16_t>(words[i])).v);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Add::Added), static_cast<int>(r));
+  }
+  TEST_ASSERT_TRUE(idx.finish());
+}
+
+void expectWords(const LibraryIndex& idx, const std::vector<uint32_t>& words) {
+  TEST_ASSERT_EQUAL_UINT32(words.size(), idx.trackCount());
+  uint32_t set = 0;
+  for (uint32_t t = 0; t < idx.trackCount(); ++t) {
+    const uint16_t want = words[t] == kFile ? 0 : static_cast<uint16_t>(words[t]);
+    TEST_ASSERT_EQUAL_HEX16(want, idx.moodWord(t));
+    if (idx.moodWords()) TEST_ASSERT_EQUAL_HEX16(want, idx.moodWords()[t]);
+    set += want != 0;
+  }
+  TEST_ASSERT_EQUAL_UINT32(set, idx.moodTracks());
+}
+
+std::vector<uint8_t> saved(const LibraryIndex& idx, uint64_t signature) {
+  MemorySink file;
+  TEST_ASSERT_TRUE(idx.save(file, signature));
+  return std::vector<uint8_t>(file.data(), file.data() + file.size());
+}
+
+uint32_t headerWord(const std::vector<uint8_t>& f, int i) {
+  uint32_t w;
+  std::memcpy(&w, f.data() + 4 * i, 4);
+  return w;
+}
+
+void setHeaderWord(std::vector<uint8_t>& f, int i, uint32_t w) { std::memcpy(f.data() + 4 * i, &w, 4); }
+
+// The FNV-1a 32 of everything before the file's last word.
+uint32_t sumOf(const std::vector<uint8_t>& f) {
+  uint32_t h = 2166136261u;
+  for (size_t i = 0; i + 4 < f.size(); ++i) {
+    h ^= f[i];
+    h *= 16777619u;
+  }
+  return h;
+}
+
+// The sum again, after a test changed the file: then only the rule it
+// breaks can turn it down.
+void resum(std::vector<uint8_t>& f) {
+  const uint32_t sum = sumOf(f);
+  std::memcpy(f.data() + f.size() - 4, &sum, 4);
+}
+
+}  // namespace
+
+// No track with a word (records with none, a file without a record): no
+// block, 0 B, every word 0, and a saved file whose counts are 0.
+void test_moods_no_word_no_block() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  const std::vector<uint32_t> words = {0, kFile, 0, 0};
+  buildMoods(idx, words);
+  TEST_ASSERT_FALSE(idx.hasMoods());
+  TEST_ASSERT_NULL(idx.moodWords());
+  expectWords(idx, words);
+  TEST_ASSERT_EQUAL_size_t(0, idx.memory().moods);
+  TEST_ASSERT_EQUAL_size_t(Heap::live, idx.memory().total);
+  const std::vector<uint8_t> f = saved(idx, 3);
+  TEST_ASSERT_EQUAL_UINT32(0, headerWord(f, 22));
+  TEST_ASSERT_EQUAL_UINT32(0, headerWord(f, 23));
+  LibraryIndex back(Heap::alloc, Heap::release);
+  MemorySource in(f.data(), f.size());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), static_cast<int>(back.load(in, 3)));
+  expectSameIndex(idx, back);
+  TEST_ASSERT_FALSE(back.hasMoods());
+  TEST_ASSERT_EQUAL_size_t(0, back.memory().moods);
+}
+
+// The first word mid-build: the tracks before it read 0 (no row), as do
+// files added after it; the block, made at the track table's size, grows
+// with it (the table doubled before and after the first word) and is
+// trimmed to a word a track.
+void test_moods_first_word_mid_build() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  std::vector<uint32_t> words;
+  for (uint32_t i = 0; i < 20; ++i) words.push_back(i % 4 == 1 ? kFile : 0);  // the table: 16, then 32
+  words.push_back(kWord);
+  for (uint32_t i = 21; i < 75; ++i) words.push_back(i % 5 == 0 ? kFile : i % 3 == 0 ? 0 : 0x8000u | i);
+  buildMoods(idx, words, 1);  // a table of 16 to start
+  TEST_ASSERT_TRUE(idx.hasMoods());
+  expectWords(idx, words);
+  TEST_ASSERT_EQUAL_HEX16(0, idx.moodWord(19));
+  TEST_ASSERT_EQUAL_HEX16(kWord, idx.moodWord(20));
+  TEST_ASSERT_EQUAL_size_t(75 * sizeof(uint16_t), idx.memory().moods);
+  TEST_ASSERT_EQUAL_size_t(Heap::live, idx.memory().total);
+  TEST_ASSERT_EQUAL_size_t(Heap::peak, idx.memory().buildPeak);
+}
+
+// Every track with a word from the first: the block doubles with the
+// track table (16 to 2,048 here), each word where its track is, and a
+// shrinking heap trims it in place to the same bytes.
+void test_moods_grow_by_doubling() {
+  std::vector<uint32_t> words;
+  for (uint32_t i = 0; i < 1500; ++i) words.push_back(0x8000u | (i * 7919u & 0x7FFF));
+  std::vector<uint8_t> copied, shrunk;
+  {
+    LibraryIndex idx(Heap::alloc, Heap::release);
+    buildMoods(idx, words, 1);
+    expectWords(idx, words);
+    TEST_ASSERT_EQUAL_UINT32(1500, idx.moodTracks());
+    TEST_ASSERT_EQUAL_size_t(1500 * sizeof(uint16_t), idx.memory().moods);
+    TEST_ASSERT_EQUAL_size_t(Heap::live, idx.memory().total);
+    copied = saved(idx, 1);
+  }
+  Heap::reset();
+  {
+    LibraryIndex idx(Heap::alloc, Heap::release, shrinkInPlace);
+    buildMoods(idx, words, 1);
+    expectWords(idx, words);
+    TEST_ASSERT_EQUAL_size_t(1500 * sizeof(uint16_t), idx.memory().moods);
+    TEST_ASSERT_EQUAL_size_t(Heap::live, idx.memory().total);
+    shrunk = saved(idx, 1);
+  }
+  TEST_ASSERT_EQUAL_size_t(copied.size(), shrunk.size());
+  TEST_ASSERT_EQUAL_MEMORY(copied.data(), shrunk.data(), copied.size());
+}
+
+// Saved and loaded: the words, their count and their bytes come back, in a
+// block of exactly their size (no peak beyond the blocks), and the loaded
+// index saves again byte for byte.
+void test_moods_round_trip() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  const std::vector<uint32_t> words = {0, kWord, kFile, 0x8000, 0xC0FF, 0, 0x8001};
+  buildMoods(idx, words);
+  LibraryIndex::Inputs in;
+  in.cardId = 0x0A0B0C0D01020304ull;
+  in.generation = 2;
+  in.tagsCrc = 0x600DF00Du;
+  in.transfer = true;
+  MemorySink file;
+  TEST_ASSERT_TRUE(idx.save(file, in));
+  const size_t before = Heap::live;
+  LibraryIndex back(Heap::alloc, Heap::release);
+  MemorySource src(file.data(), file.size(), 5);  // reads split into pieces, a word cut in two
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), static_cast<int>(back.load(src, in)));
+  expectSameIndex(idx, back);
+  TEST_ASSERT_TRUE(back.hasMoods());
+  expectWords(back, words);
+  TEST_ASSERT_EQUAL_UINT32(4, back.moodTracks());
+  TEST_ASSERT_EQUAL_size_t(words.size() * sizeof(uint16_t), back.memory().moods);
+  TEST_ASSERT_EQUAL_size_t(Heap::live - before, back.memory().total);
+  TEST_ASSERT_EQUAL_size_t(back.memory().total, back.memory().buildPeak);
+  TEST_ASSERT_EQUAL_UINT64(idx.buildStamp(), back.buildStamp());
+  MemorySink again;
+  TEST_ASSERT_TRUE(back.save(again, in));
+  TEST_ASSERT_EQUAL_size_t(file.size(), again.size());
+  TEST_ASSERT_EQUAL_MEMORY(file.data(), again.data(), file.size());
+}
+
+// The file's layout, pinned: h[22] the words (the track count, or 0), h[23]
+// the tracks whose word isn't 0, the rails' buckets from h[24]; the words
+// last, little-endian, a u16 a track id, just before the sum. Without words
+// the file is the same but those two header words and the words
+// themselves, so the build stamp (h[15], h[16]) holds no word either.
+void test_moods_file_layout() {
+  const std::vector<uint32_t> words = {kWord, 0, kFile, 0x8000, 0x4321};
+  const std::vector<uint32_t> none = {0, 0, kFile, 0, 0};
+  LibraryIndex with(Heap::alloc, Heap::release), without(Heap::alloc, Heap::release);
+  buildMoods(with, words);
+  buildMoods(without, none);
+  const uint32_t nT = with.trackCount();
+  const std::vector<uint8_t> a = saved(with, 9), b = saved(without, 9);
+  TEST_ASSERT_EQUAL_UINT32(7, headerWord(a, 1));
+  TEST_ASSERT_EQUAL_UINT32(nT, headerWord(a, 18));
+  TEST_ASSERT_EQUAL_UINT32(nT, headerWord(a, 22));
+  TEST_ASSERT_EQUAL_UINT32(3, headerWord(a, 23));
+  TEST_ASSERT_EQUAL_UINT32(0, headerWord(b, 22));
+  TEST_ASSERT_EQUAL_UINT32(0, headerWord(b, 23));
+  for (int k = 0; k <= LibraryIndex::kBuckets; ++k) {
+    TEST_ASSERT_EQUAL_UINT32(with.bucketStart(LibraryIndex::View::Artists, k), headerWord(a, 24 + k));
+    TEST_ASSERT_EQUAL_UINT32(with.bucketStart(LibraryIndex::View::Albums, k),
+                             headerWord(a, 24 + LibraryIndex::kBuckets + 1 + k));
+  }
+  TEST_ASSERT_EQUAL_size_t(b.size() + 2 * nT, a.size());
+  const size_t at = a.size() - 4 - 2 * nT;
+  for (uint32_t t = 0; t < nT; ++t) {
+    const uint16_t want = words[t] == kFile ? 0 : static_cast<uint16_t>(words[t]);
+    TEST_ASSERT_EQUAL_HEX8(want & 0xFF, a[at + 2 * t]);
+    TEST_ASSERT_EQUAL_HEX8(want >> 8, a[at + 2 * t + 1]);
+  }
+  uint32_t sum;
+  std::memcpy(&sum, a.data() + a.size() - 4, 4);
+  TEST_ASSERT_EQUAL_HEX32(sumOf(a), sum);
+  // All else as without: the header but h[22] and h[23], the blocks.
+  for (size_t i = 0; i + 4 < b.size(); ++i) {
+    if (i >= 22 * 4 && i < 24 * 4) continue;
+    TEST_ASSERT_EQUAL_HEX8_MESSAGE(b[i], a[i], "a byte outside the words moved");
+  }
+  TEST_ASSERT_EQUAL_UINT64(without.buildStamp(), with.buildStamp());
+  TEST_ASSERT_EQUAL_UINT32(headerWord(b, 15), headerWord(a, 15));
+  TEST_ASSERT_EQUAL_UINT32(headerWord(b, 16), headerWord(a, 16));
+}
+
+// A header whose words can't be (re-summed, so the sum isn't what turns
+// them down): not a word per track, more words set than there are, or a
+// block of no word at all. Each is Corrupt and leaves nothing held.
+void test_moods_corrupt_counts() {
+  LibraryIndex idx(Heap::alloc, Heap::release), plain(Heap::alloc, Heap::release);
+  const std::vector<uint32_t> words = {kWord, 0, 0x8000, kFile};
+  buildMoods(idx, words);
+  buildMoods(plain, {0, 0, 0, kFile});
+  const uint32_t nT = idx.trackCount();
+  const std::vector<uint8_t> good = saved(idx, 4), none = saved(plain, 4);
+  std::vector<uint8_t> noTracks;
+  {
+    LibraryIndex empty(Heap::alloc, Heap::release);
+    TEST_ASSERT_TRUE(empty.begin("/music"));
+    TEST_ASSERT_TRUE(empty.finish());
+    noTracks = saved(empty, 4);
+  }
+  LibraryIndex back(Heap::alloc, Heap::release);
+  const size_t emptyHeap = Heap::live;
+  auto load = [&](const std::vector<uint8_t>& f) {
+    MemorySource in(f.data(), f.size());
+    const int r = static_cast<int>(back.load(in, 4));
+    if (r != static_cast<int>(LibraryIndex::Load::Loaded)) {
+      TEST_ASSERT_FALSE(back.ready());
+      TEST_ASSERT_FALSE(back.hasMoods());
+      TEST_ASSERT_EQUAL_size_t(emptyHeap, Heap::live);
+    }
+    return r;
+  };
+  const int corrupt = static_cast<int>(LibraryIndex::Load::Corrupt);
+  // Re-summed and unchanged, both load.
+  std::vector<uint8_t> f = good;
+  resum(f);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), load(f));
+  f = none;
+  resum(f);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), load(f));
+  // One word short, its count saying so.
+  f = good;
+  f.erase(f.end() - 6, f.end() - 4);
+  setHeaderWord(f, 22, nT - 1);
+  resum(f);
+  TEST_ASSERT_EQUAL_INT(corrupt, load(f));
+  // One word over.
+  f = good;
+  f.insert(f.end() - 4, {0x00, 0x80});
+  setHeaderWord(f, 22, nT + 1);
+  resum(f);
+  TEST_ASSERT_EQUAL_INT(corrupt, load(f));
+  // More tracks with a word than words.
+  f = good;
+  setHeaderWord(f, 23, nT + 1);
+  resum(f);
+  TEST_ASSERT_EQUAL_INT(corrupt, load(f));
+  f = none;
+  setHeaderWord(f, 23, 1);
+  resum(f);
+  TEST_ASSERT_EQUAL_INT(corrupt, load(f));
+  // A block with no track's word set: no writer makes one.
+  f = good;
+  setHeaderWord(f, 23, 0);
+  resum(f);
+  TEST_ASSERT_EQUAL_INT(corrupt, load(f));
+  f = none;
+  f.insert(f.end() - 4, 2 * nT, uint8_t{0});
+  setHeaderWord(f, 22, nT);
+  resum(f);
+  TEST_ASSERT_EQUAL_INT(corrupt, load(f));
+  // Words in an index of no tracks.
+  f = noTracks;
+  f.insert(f.end() - 4, {0x13, 0xB3});
+  setHeaderWord(f, 22, 1);
+  setHeaderWord(f, 23, 1);
+  resum(f);
+  TEST_ASSERT_EQUAL_INT(corrupt, load(f));
+  // Cut inside the words, and a word flipped: the read and the sum.
+  f = good;
+  f.resize(f.size() - 5);
+  TEST_ASSERT_EQUAL_INT(corrupt, load(f));
+  f = good;
+  f[f.size() - 6] ^= 0x01;
+  TEST_ASSERT_EQUAL_INT(corrupt, load(f));
+  // A file that says version 6 (whose header is two words shorter, with no
+  // words after the views): Outdated, from its second word.
+  f = none;
+  setHeaderWord(f, 1, 6);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Outdated), load(f));
+  // And the good file still loads after all that.
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), load(good));
+  expectSameIndex(idx, back);
+}
+
+// The block can't be carved: at the build's first word (the add says
+// NoMemory, finish() fails, nothing held) and at a load (NoMemory, nothing
+// held). The same build and load with the room succeed.
+void test_moods_no_memory() {
+  const std::vector<uint32_t> words = {0, 0, kWord, 0x8000};
+  std::vector<uint8_t> f;
+  {
+    LibraryIndex idx(Heap::alloc, Heap::release);
+    TEST_ASSERT_TRUE(idx.begin("/music", 1000));  // a table of 1,000: the block would be 2,000 B
+    TEST_ASSERT_EQUAL_INT(0, static_cast<int>(idx.addRecord("/music/A/B/01 - a.mp3", View().title("a").v)));
+    TEST_ASSERT_EQUAL_INT(0, static_cast<int>(idx.addRecord("/music/A/B/02 - b.mp3", View().title("b").v)));
+    Heap::limit = Heap::live + 1024;  // room for the strings, not for the block
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Add::NoMemory),
+                          static_cast<int>(idx.addRecord("/music/A/B/03 - c.mp3", View().title("c").moods(kWord).v)));
+    TEST_ASSERT_FALSE(idx.finish());
+    TEST_ASSERT_TRUE(idx.failed());
+    TEST_ASSERT_EQUAL_UINT32(0, idx.trackCount());
+    TEST_ASSERT_FALSE(idx.hasMoods());
+    TEST_ASSERT_EQUAL_size_t(0, Heap::live);
+    Heap::limit = SIZE_MAX;
+    buildMoods(idx, words);
+    expectWords(idx, words);
+    f = saved(idx, 6);
+  }
+  TEST_ASSERT_EQUAL_size_t(0, Heap::live);
+  LibraryIndex back(Heap::alloc, Heap::release);
+  MemorySource in(f.data(), f.size());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), static_cast<int>(back.load(in, 6)));
+  const LibraryIndex::Memory m = back.memory();
+  back.clear();
+  TEST_ASSERT_EQUAL_size_t(0, Heap::live);
+  Heap::limit = m.total - m.moods + 1;  // every block but the words'
+  MemorySource again(f.data(), f.size());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::NoMemory), static_cast<int>(back.load(again, 6)));
+  TEST_ASSERT_FALSE(back.ready());
+  TEST_ASSERT_EQUAL_size_t(0, Heap::live);
+  Heap::limit = m.total;
+  MemorySource third(f.data(), f.size());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), static_cast<int>(back.load(third, 6)));
+  expectWords(back, words);
+}
+
+// forgetMoods(): the block given back and the index the bytes of one built
+// without words (the conformance test's T against D); the build stamp the
+// same throughout.
+void test_moods_forget() {
+  LibraryIndex idx(Heap::alloc, Heap::release), plain(Heap::alloc, Heap::release);
+  buildMoods(idx, {kWord, 0x8000, kFile, 0x8421});
+  buildMoods(plain, {0, 0, kFile, 0});
+  const uint64_t stamp = idx.buildStamp();
+  TEST_ASSERT_EQUAL_UINT64(plain.buildStamp(), stamp);
+  TEST_ASSERT_TRUE(idx.hasMoods());
+  idx.forgetMoods();
+  TEST_ASSERT_FALSE(idx.hasMoods());
+  TEST_ASSERT_NULL(idx.moodWords());
+  TEST_ASSERT_EQUAL_UINT32(0, idx.moodTracks());
+  TEST_ASSERT_EQUAL_HEX16(0, idx.moodWord(0));
+  TEST_ASSERT_EQUAL_size_t(0, idx.memory().moods);
+  TEST_ASSERT_EQUAL_size_t(plain.memory().total, idx.memory().total);
+  TEST_ASSERT_EQUAL_size_t(Heap::live, idx.memory().total + plain.memory().total);
+  TEST_ASSERT_EQUAL_UINT64(stamp, idx.buildStamp());
+  const std::vector<uint8_t> a = saved(idx, 2), b = saved(plain, 2);
+  TEST_ASSERT_EQUAL_size_t(b.size(), a.size());
+  TEST_ASSERT_EQUAL_MEMORY(b.data(), a.data(), b.size());
+  idx.forgetMoods();  // twice: nothing
+  TEST_ASSERT_EQUAL_size_t(plain.memory().total, idx.memory().total);
+}
+
+// clear() always gives the block back, a kept track block or not; the next
+// build has words only if it gives some, and a load only if its file does.
+void test_moods_not_kept_across_clear() {
+  {
+    LibraryIndex idx(Heap::alloc, Heap::release, shrinkInPlace);
+    idx.keepTrackBlock(true);
+    buildMoods(idx, {kWord, 0, 0x8000}, 3);
+    TEST_ASSERT_TRUE(idx.memory().moods > 0);
+    const std::vector<uint8_t> f = saved(idx, 8);
+    idx.clear();
+    TEST_ASSERT_FALSE(idx.hasMoods());
+    TEST_ASSERT_EQUAL_UINT32(0, idx.moodTracks());
+    TEST_ASSERT_EQUAL_size_t(0, idx.memory().moods);
+    TEST_ASSERT_EQUAL_size_t(idx.memory().tracks, Heap::live);  // the kept track block alone
+    buildMoods(idx, {0, kFile, 0}, 3);
+    TEST_ASSERT_FALSE(idx.hasMoods());
+    TEST_ASSERT_EQUAL_size_t(Heap::live, idx.memory().total);
+    // A load of words, then a build without: none left.
+    MemorySource in(f.data(), f.size());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), static_cast<int>(idx.load(in, 8)));
+    TEST_ASSERT_TRUE(idx.hasMoods());
+    TEST_ASSERT_EQUAL_UINT32(2, idx.moodTracks());
+    buildMoods(idx, {0, 0, 0}, 3);
+    TEST_ASSERT_FALSE(idx.hasMoods());
+    TEST_ASSERT_EQUAL_UINT32(0, idx.moodTracks());
+    TEST_ASSERT_EQUAL_size_t(Heap::live, idx.memory().total);
+  }
+  TEST_ASSERT_EQUAL_size_t(0, Heap::live);
+  TEST_ASSERT_EQUAL_size_t(Heap::allocs, Heap::frees);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_counts_and_skips);
@@ -1957,5 +2370,14 @@ int main(int, char**) {
   RUN_TEST(test_trims_in_place);
   RUN_TEST(test_a_kept_track_block);
   RUN_TEST(test_tagged_synthetic_library);
+  RUN_TEST(test_moods_no_word_no_block);
+  RUN_TEST(test_moods_first_word_mid_build);
+  RUN_TEST(test_moods_grow_by_doubling);
+  RUN_TEST(test_moods_round_trip);
+  RUN_TEST(test_moods_file_layout);
+  RUN_TEST(test_moods_corrupt_counts);
+  RUN_TEST(test_moods_no_memory);
+  RUN_TEST(test_moods_forget);
+  RUN_TEST(test_moods_not_kept_across_clear);
   return UNITY_END();
 }
