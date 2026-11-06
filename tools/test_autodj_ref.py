@@ -14,8 +14,10 @@ and whether it steered, the pin (a seed before the join's maps too), the
 key anchor, both cooldowns, loosen
 before repeating (the device's case, dry and loosened at once, every
 listed row cooled), dry and random picks, the read budget, damaged,
-failed and broken slots, the stream); and the fixture up to date.
+failed and broken slots, the stream); and the fixture up to date, its
+first 26 sessions and their seven tables frozen by hash.
 """
+import hashlib
 import json
 import sys
 import unittest
@@ -726,6 +728,22 @@ class EngineRules(unittest.TestCase):
             self.assertEqual(s.json(), again[s.name])
 
 
+def digest(x):
+    """sha256 of x as compact JSON with sorted keys: a fixture part's bytes
+    whatever the file's layout."""
+    return hashlib.sha256(json.dumps(x, separators=(",", ":"), sort_keys=True).encode("utf-8")).hexdigest()
+
+
+# The first 26 sessions and the seven tables they replay on, as at a1566fe
+# (MOOD-FILTERS.md 6.6, 9.8): sessions after them are additions, and no
+# rule added since may move one of their picks, reads or counters.
+FROZEN_SESSIONS = 26
+FROZEN_SESSIONS_SHA = "2764423233200b3e10f10804b03b987e5b14f5fd4d22b5e088fb3a290e66bf21"
+FROZEN_TABLES = ("syn", "ties", "autodj-mid", "autodj-mid-default", "autodj-00000029", "autodj-small-default",
+                 "starve")
+FROZEN_TABLES_SHA = "6f876196d0be133cf4bc669a8a5f6cbf70497fc7cf30b4e340af71e8d9a74e8b"
+
+
 class Fixture(unittest.TestCase):
     def test_the_fixture_is_up_to_date(self):
         for name, data in A.generate().items():
@@ -733,6 +751,9 @@ class Fixture(unittest.TestCase):
 
     def test_the_fixture_covers_the_rules(self):
         doc = json.loads((FIX / "autodj" / "sessions.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(doc["sessions"]), 26)
+        self.assertEqual(digest(doc["sessions"][:FROZEN_SESSIONS]), FROZEN_SESSIONS_SHA)
+        self.assertEqual(digest({n: doc["tables"][n] for n in FROZEN_TABLES}), FROZEN_TABLES_SHA)
         picks = [e["expect"] for s in doc["sessions"] for e in s["events"] if e["op"] == "pick"]
         self.assertGreaterEqual(len(picks), 300)
         for flag in ("dry", "loose", "random", "noIndex", "impT", "impK", "tb", "kb", "broken"):

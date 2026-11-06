@@ -912,13 +912,23 @@ def pick_json(p):
     return {k: v for k, v in d.items() if v}
 
 
+# Counters added since the fixture's first 26 sessions, (JSON key, Stats
+# field): written only when not 0, so those sessions' stats keep their bytes
+# (MOOD-FILTERS.md 9.8; test_autodj_ref.py holds them by hash). None yet.
+LATER_STATS = ()
+
+
 def stats_json(st):
-    return {"picks": st.picks, "failed": st.failed, "readsAtPick": st.reads_at_pick,
-            "prefetchReads": st.prefetch_reads, "leftOut": st.left_out, "damaged": st.damaged,
-            "ioSkips": st.io_skips, "broken": st.broken, "dry": st.dry, "loosened": st.loosened, "random": st.random,
-            "noIndex": st.no_index, "imputedTempo": st.imputed_tempo, "imputedKey": st.imputed_key,
-            "classes": st.classes, "modePicks": st.mode_picks, "tempoBreaks": st.tempo_breaks,
-            "keyBreaks": st.key_breaks, "quickSkips": st.quick_skips}
+    d = {"picks": st.picks, "failed": st.failed, "readsAtPick": st.reads_at_pick,
+         "prefetchReads": st.prefetch_reads, "leftOut": st.left_out, "damaged": st.damaged,
+         "ioSkips": st.io_skips, "broken": st.broken, "dry": st.dry, "loosened": st.loosened, "random": st.random,
+         "noIndex": st.no_index, "imputedTempo": st.imputed_tempo, "imputedKey": st.imputed_key,
+         "classes": st.classes, "modePicks": st.mode_picks, "tempoBreaks": st.tempo_breaks,
+         "keyBreaks": st.key_breaks, "quickSkips": st.quick_skips}
+    for key, field in LATER_STATS:
+        if getattr(st, field):
+            d[key] = getattr(st, field)
+    return d
 
 
 class Scene:
