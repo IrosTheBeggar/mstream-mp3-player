@@ -10,6 +10,8 @@ Mood filters narrow the Albums list and Auto DJ's picks by mood, using the scale
 - The editor: the one-screen grid of 7.1.
 - The way in on Albums: the quiet first row and the dot of 7.2.
 
+The canvas's frames are in [`docs/img/mood-filters/`](img/mood-filters/README.md), each named as this plan names it (`grid-two`, `dj-toast-few` and so on).
+
 **Assumed:** everything else. Section 3 lists each default with its alternative, and the user can overrule any of them. Where the plan differs from a drawn frame, 3.2 says so.
 
 Line numbers are at these commits:
