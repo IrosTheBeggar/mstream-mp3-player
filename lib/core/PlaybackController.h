@@ -218,7 +218,7 @@ public:
   };
 
   // Whether the card the tracks are on is known to be out (main.cpp's: the SD
-  // wrapper's CachedDrive::cardOut()): a failure to start then says nothing of
+  // wrapper's CachedDrive::mountCardOut(), no card or another): a failure to start then says nothing of
   // the track (the card hold, in the class comment). Read at a failure, and
   // each pass while the hold waits.
   class Card {

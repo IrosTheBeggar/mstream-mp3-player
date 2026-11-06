@@ -119,8 +119,9 @@ struct Guard {
   uint32_t writeRetries = 0, writeFails = 0, refused = 0;
 };
 Guard guard();
-// FatFs's last mount found no card answering, and none has found one since (CachedDrive::cardOut()):
-// the player's card hold (PlaybackController::Card). Any task; false without the wrapper.
+// The mount's card isn't in the slot: FatFs's last mount found no card answering and none has found
+// one since, or another card answered (CachedDrive::mountCardOut()): the player's card hold
+// (PlaybackController::Card). Any task; false without the wrapper.
 bool cardOut();
 // The mount's card identity (`last`: the last remount's), for the log:
 // "62333952 sectors, sector 0 CRC 1a2b3c4d, boot sector 8192 CRC ...".

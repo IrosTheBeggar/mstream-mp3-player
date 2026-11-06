@@ -224,7 +224,7 @@ Guard guard() {
   return g;
 }
 
-bool cardOut() { return s_installed && s_drive.cardOut(); }
+bool cardOut() { return s_installed && s_drive.mountCardOut(); }
 
 size_t identityText(char* buf, size_t size, bool last) {
   if (!buf || size == 0) return 0;

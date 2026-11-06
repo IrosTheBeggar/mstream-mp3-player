@@ -1731,9 +1731,10 @@ void test_drive_says_when_the_card_came_back() {
   TEST_ASSERT_EQUAL_UINT32(1, d.cardBacks());
 }
 
-// The card out, for the player's card hold: from a mount that found nothing answering to one that
-// finds a card, whichever card (another's verdict is the guard's), armed or not. A read that fails,
-// the look finding the card silent, says nothing of it yet: only FatFs's mounts do.
+// The card out: from a mount that found nothing answering to one that finds a card, whichever card,
+// armed or not. A read that fails, the look finding the card silent, says nothing of it yet: only
+// FatFs's mounts do. For the player's card hold, the mount's card out (mountCardOut()): that, or
+// another card answering, until the guard's restart, the mount's own card back or not.
 void test_drive_says_the_card_is_out_from_a_failed_mount_to_the_next() {
   RamDevice dev;
   formatLike(dev, 8192, 0xA);
@@ -1746,14 +1747,17 @@ void test_drive_says_the_card_is_out_from_a_failed_mount_to_the_next() {
   d.setLink(&link);
   g_nowUs = 1000000;
   TEST_ASSERT_FALSE(d.cardOut());
+  TEST_ASSERT_FALSE(d.mountCardOut());
   // Nothing remembered yet (no guard armed): the same.
   d.init();
   d.mountFailed();
   TEST_ASSERT_TRUE(d.cardOut());
+  TEST_ASSERT_TRUE(d.mountCardOut());
   d.init();  // a mount begun: no answer yet
   TEST_ASSERT_TRUE(d.cardOut());
   TEST_ASSERT_TRUE(d.remounted(kCardSectors));
   TEST_ASSERT_FALSE(d.cardOut());
+  TEST_ASSERT_FALSE(d.mountCardOut());
   TEST_ASSERT_TRUE(d.remember(kCardSectors));
   link.answersNow = false;
   link.initWorks = false;
@@ -1770,7 +1774,8 @@ void test_drive_says_the_card_is_out_from_a_failed_mount_to_the_next() {
   d.init();
   TEST_ASSERT_TRUE(d.remounted(kCardSectors));
   TEST_ASSERT_FALSE(d.cardOut());
-  // Another card answering: in, and foreign.
+  TEST_ASSERT_FALSE(d.mountCardOut());
+  // Another card answering: in, and foreign; the mount's card out all the same, for the hold.
   d.init();
   d.mountFailed();
   formatLike(dev, 8192, 0xB);
@@ -1778,6 +1783,16 @@ void test_drive_says_the_card_is_out_from_a_failed_mount_to_the_next() {
   TEST_ASSERT_FALSE(d.remounted(kCardSectors));
   TEST_ASSERT_TRUE(d.foreign());
   TEST_ASSERT_FALSE(d.cardOut());
+  TEST_ASSERT_TRUE(d.mountCardOut());
+  // The mount's own card back before the restart: foreign still, so still out for the hold.
+  d.init();
+  d.mountFailed();
+  TEST_ASSERT_TRUE(d.mountCardOut());
+  formatLike(dev, 8192, 0xA);
+  d.init();
+  TEST_ASSERT_FALSE(d.remounted(kCardSectors));
+  TEST_ASSERT_FALSE(d.cardOut());
+  TEST_ASSERT_TRUE(d.mountCardOut());
 }
 
 // With a clock: asked once more each kStopUs after the last, so a card that mends is read again. More

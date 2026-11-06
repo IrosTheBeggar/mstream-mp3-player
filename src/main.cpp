@@ -443,9 +443,10 @@ struct SleepGate : PlaybackController::NextGate {
 };
 static SleepGate sleepGate;
 
-// The player's card (PlaybackController::Card): the SD wrapper says the card is out, FatFs's last
-// mount having found nothing answering (CachedDrive::cardOut(); never without the wrapper). A
-// track that fails to start then holds where it is, and is tried again (docs/METADATA.md 3.8).
+// The player's card (PlaybackController::Card): the SD wrapper says the mount's card is out, FatFs's
+// last mount having found nothing answering, or another card having answered (CachedDrive::
+// mountCardOut(); never without the wrapper). A track that fails to start then holds where it is,
+// and is tried again (docs/METADATA.md 3.8); with another card, until the guard's restart.
 struct CardWatch : PlaybackController::Card {
   bool out() const override { return sectordisk::cardOut(); }
 };
