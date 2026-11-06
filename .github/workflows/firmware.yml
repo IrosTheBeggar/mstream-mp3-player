@@ -109,13 +109,16 @@ jobs:
       # them byte for byte (docs/METADATA.md 2.17); tools/mpdj.py, the AutoDJ
       # index's reference (docs/AUTODJ-INDEX.md), tools/mpwf.py, the waveform
       # index's (docs/WAVEFORM-INDEX.md), and tools/playlog.py, the play log's
-      # (METADATA 2.20), pass their own tests.
+      # (METADATA 2.20), pass their own tests; moods.json's predicates match
+      # mStream's own SQL, run by SQLite (tools/test_mood_vectors.py,
+      # docs/MOOD-FILTERS.md 9.5).
       - name: Card fixtures
         run: |
           python tools/card_fixtures.py --check
           python -m unittest discover -s tools -p "test_mpdj.py"
           python -m unittest discover -s tools -p "test_mpwf.py"
           python -m unittest discover -s tools -p "test_playlog.py"
+          python -m unittest discover -s tools -p "test_mood_vectors.py"
 
       # Auto DJ's pick rule has a Python reference (tools/autodj_ref.py) that
       # writes the C++ engine's session fixtures (test/fixtures/autodj): they

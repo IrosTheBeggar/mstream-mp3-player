@@ -47,7 +47,8 @@
 //   join is given back, as with Auto DJ off; and a library update of the
 //   real 19,412-track library, with Auto DJ off and on (the rebuild's own
 //   fragmentation, the join after it taking only what no smaller block
-//   holds).
+//   holds), then the same built from T with a stand-in for the mood words'
+//   block (MOOD-FILTERS.md 9.5's pass rule).
 // Run: pio test -e native -f test_autodj_join
 #include <unity.h>
 
@@ -2664,11 +2665,38 @@ Bytes tableOf(const LibraryIndex& idx, uint32_t rows) {
 }
 
 void* g_durations = nullptr;
+void* g_mood = nullptr;  // the mood words' block (MOOD-FILTERS.md 5.4): 2 B a track
+
+// A run with the mood words (MOOD-FILTERS.md 9.5 C1): the build from T as
+// well as D (D's rows then Software rows), and the words' block, a stand-in
+// of its size, taken after the load and at each build's first record.
+struct MoodRun {
+  cc::Source* transfer = nullptr;
+  bool standIn = false;
+};
+
+// The folders' facts, the words' block taken at the first ask: enterFolders()
+// asks just before the build's first record (lib/core/LibraryBuilder.cpp).
+class MoodFacts : public synthcard::Facts {
+public:
+  MoodFacts(const synthcard::Card& c, size_t tracks) : Facts(c, false), tracks_(tracks) {}
+  bool facts(const char* rel, size_t len, LibraryIndex::FolderFacts* out) override {
+    if (!g_mood) {
+      g_mood = ModelHeap::alloc(tracks_ * 2);
+      TEST_ASSERT_NOT_NULL(g_mood);
+    }
+    return Facts::facts(rel, len, out);
+  }
+
+private:
+  size_t tracks_;
+};
 
 UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& records, const synthcard::Card& card,
-                         int steps) {
+                         int steps, const MoodRun& mood = MoodRun()) {
   UpdateRun u;
   ModelHeap::reset(4089u * 1024u);
+  g_mood = nullptr;
   auto take = [](std::initializer_list<size_t> sizes, std::vector<void*>* into) {
     for (size_t s : sizes) {
       void* p = ModelHeap::alloc(s);
@@ -2697,6 +2725,10 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     LibraryIndex::Inputs in;
     in.cardId = 1;
     TEST_ASSERT_TRUE(index.load(src, in) == LibraryIndex::Load::Loaded);
+  }
+  if (mood.standIn) {
+    g_mood = ModelHeap::alloc(index.trackCount() * 2);  // (the load's last block)
+    TEST_ASSERT_NOT_NULL(g_mood);
   }
   std::vector<void*> queue, thumbs;
   take({5120}, &queue);
@@ -2734,17 +2766,23 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     queue.clear();
     thumbs.clear();
     join.release();
+    ModelHeap::release(g_mood);  // (the words go with the index)
+    g_mood = nullptr;
     index.clear();
     u.fence = ModelHeap::freeBlocks(64 * 1024);
-    // The build, from D's records.
+    // The build, from D's records (or T's, D's rows Software rows).
     LibraryBuilder b(ModelHeap::alloc, ModelHeap::release);
     synthcard::Facts facts(card, false);
-    synthcard::SameRows rows(LibraryBuilder::Status::Scanned, false, true);
+    MoodFacts moodFacts(card, card.files.size());
+    synthcard::SameRows rows(mood.transfer ? LibraryBuilder::Status::Software : LibraryBuilder::Status::Scanned, false,
+                             true);
     LibraryBuilder::Config c;
+    c.transfer = mood.transfer;
     c.device = &records;
     c.rows = &rows;
-    c.facts = &facts;
+    c.facts = mood.standIn ? static_cast<LibraryBuilder::FolderFactsSource*>(&moodFacts) : &facts;
     TEST_ASSERT_TRUE(b.build(index, c).built);
+    TEST_ASSERT_TRUE(!mood.standIn || g_mood);
     // leaveFence(): the queue read back, the durations, Thumbs' pools; then
     // the join (the next pass).
     take({5120}, &queue);
@@ -2759,6 +2797,8 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     joinNow();
   }
   join.release();
+  ModelHeap::release(g_mood);
+  g_mood = nullptr;
   index.clear();
   return u;
 }
@@ -2774,14 +2814,15 @@ void test_a_library_update_in_a_model_heap() {
   const std::vector<uint8_t> d = synthcard::tagsFile(card, dw);
   cc::MemSource records(d.data(), static_cast<uint32_t>(d.size()));
   // library.idx as the last boot saved it.
-  std::vector<uint8_t> saved;
-  {
+  auto savedFrom = [&](cc::Source* transfer, cc::Source& device) {
     LibraryIndex idx;
     LibraryBuilder b;
     synthcard::Facts facts(card, false);
-    synthcard::SameRows rows(LibraryBuilder::Status::Scanned, false, true);
+    synthcard::SameRows rows(transfer ? LibraryBuilder::Status::Software : LibraryBuilder::Status::Scanned, false,
+                             true);
     LibraryBuilder::Config c;
-    c.device = &records;
+    c.transfer = transfer;
+    c.device = &device;
     c.rows = &rows;
     c.facts = &facts;
     TEST_ASSERT_TRUE(b.build(idx, c).built);
@@ -2790,8 +2831,9 @@ void test_a_library_update_in_a_model_heap() {
     LibraryIndex::Inputs in;
     in.cardId = 1;
     TEST_ASSERT_TRUE(idx.save(sink, in));
-    saved.assign(sink.data(), sink.data() + sink.size());
-  }
+    return std::vector<uint8_t>(sink.data(), sink.data() + sink.size());
+  };
+  const std::vector<uint8_t> saved = savedFrom(nullptr, records);
   const UpdateRun off = libraryUpdates(Dj::Off, saved, records, card, 2);
   const UpdateRun on = libraryUpdates(Dj::Placed, saved, records, card, 2);
   const UpdateRun heaps = libraryUpdates(Dj::WhereThe, saved, records, card, 2);
@@ -2819,6 +2861,54 @@ void test_a_library_update_in_a_model_heap() {
   // At the boot (one free block): everything at the top, as before.
   TEST_ASSERT_EQUAL_size_t(155284, on.bootTopKept);
   TEST_ASSERT_TRUE(on.bootJoined + on.bootTopKept + 24 * 1024 >= on.bootLargest);
+
+  // The same with the mood words (MOOD-FILTERS.md 9.5 C1, against the run
+  // above as the control): built from T, D's rows Software rows; the words'
+  // block a stand-in, 2 B a track, taken after the load and at each build's
+  // first record, given back before the index at the fence.
+  synthcard::Write tw;
+  const std::vector<uint8_t> t = synthcard::tagsFile(card, tw);
+  synthcard::Write sw;
+  sw.source = cc::mptg::kSourceDevice;
+  sw.fullRecords = false;
+  const std::vector<uint8_t> ds = synthcard::tagsFile(card, sw);
+  cc::MemSource transfer(t.data(), static_cast<uint32_t>(t.size()));
+  cc::MemSource rowsOnly(ds.data(), static_cast<uint32_t>(ds.size()));
+  const std::vector<uint8_t> savedT = savedFrom(&transfer, rowsOnly);
+  MoodRun fromT;
+  fromT.transfer = &transfer;
+  MoodRun mood = fromT;
+  mood.standIn = true;
+  const UpdateRun moodOff = libraryUpdates(Dj::Off, savedT, rowsOnly, card, 2, mood);
+  const UpdateRun moodOn = libraryUpdates(Dj::Placed, savedT, rowsOnly, card, 2, mood);
+  const UpdateRun moodHeaps = libraryUpdates(Dj::WhereThe, savedT, rowsOnly, card, 2, mood);
+  const UpdateRun tOn = libraryUpdates(Dj::Placed, savedT, rowsOnly, card, 2, fromT);  // (T, no block)
+  printf("[join] the same with the mood words (a block of %u B), from T: the largest free block at the boot %u B; after "
+         "the update %u B with Auto DJ off. Auto DJ on: joined at the boot %u B (%u B of it at the top); after the "
+         "update %u B, joined %u B (%u B of it at the top), given back %u B; free at least %u B while placing. Its "
+         "blocks where the heap puts them: joined %u B, given back %u B. Joined against the control's %u B: %+ld B "
+         "(from T without the block: joined %u B, %+ld B)\n",
+         (unsigned)(tracks * 2), (unsigned)moodOff.bootLargest, (unsigned)moodOff.largest, (unsigned)moodOn.bootJoined,
+         (unsigned)moodOn.bootTopKept, (unsigned)moodOn.largest, (unsigned)moodOn.joined, (unsigned)moodOn.topKept,
+         (unsigned)moodOn.givenBack, (unsigned)moodOn.lowest, (unsigned)moodHeaps.joined,
+         (unsigned)moodHeaps.givenBack, (unsigned)on.joined, (long)moodOn.joined - (long)on.joined,
+         (unsigned)tOn.joined, (long)tOn.joined - (long)on.joined);
+  // The pass rule (Ready: joinNow(), each join): the margin kept (the block
+  // takes the hole the folders' states had, so after the update they go to
+  // the top under spacers); the fence's frees, the build and the Live step
+  // leave the heap as Auto DJ off has it; given back, off's block; at the
+  // boot, everything at the top.
+  TEST_ASSERT_TRUE(moodOn.lowest >= kMargin);
+  TEST_ASSERT_TRUE(moodOn.fence == moodOff.fence);
+  TEST_ASSERT_EQUAL_size_t(moodOff.largest, moodOn.largest);
+  TEST_ASSERT_EQUAL_size_t(moodOff.largest, moodOn.givenBack);
+  TEST_ASSERT_EQUAL_size_t(155284, moodOn.bootTopKept);
+  // No redesign forced (9.5): joined falls by no more than 120 KB, and not
+  // under 245,764 B where the control is above it (the device's 335,860 B
+  // less FLAC's 155,636 B, docs/AUTODJ.md 14.3, plus 65,540 B for Opus's
+  // page buffer, docs/OPUS.md 1).
+  TEST_ASSERT_TRUE(moodOn.joined + 122880 >= on.joined);
+  TEST_ASSERT_TRUE(moodOn.joined >= 245764 || on.joined < 245764);
 }
 
 int main(int, char**) {
