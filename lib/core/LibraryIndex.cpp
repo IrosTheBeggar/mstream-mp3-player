@@ -13,10 +13,10 @@
 #include "TextFold.h"
 #include "TrackName.h"
 
-static_assert(sizeof(LibraryIndex::Track) == 32, "library.idx v6: a track is 32 bytes");
-static_assert(sizeof(LibraryIndex::Artist) == 20, "library.idx v6: an artist is 20 bytes");
-static_assert(sizeof(LibraryIndex::Album) == 28, "library.idx v6: an album is 28 bytes");
-static_assert(sizeof(LibraryIndex::Folder) == 36, "library.idx v6: a folder is 36 bytes");
+static_assert(sizeof(LibraryIndex::Track) == 32, "library.idx v7: a track is 32 bytes");
+static_assert(sizeof(LibraryIndex::Artist) == 20, "library.idx v7: an artist is 20 bytes");
+static_assert(sizeof(LibraryIndex::Album) == 28, "library.idx v7: an album is 28 bytes");
+static_assert(sizeof(LibraryIndex::Folder) == 36, "library.idx v7: a folder is 36 bytes");
 
 namespace {
 
@@ -135,7 +135,8 @@ void readNames(Str str, LibraryIndex::Track* tracks, const uint32_t* artistFolde
 
 // ---- the cache file ----
 // Little-endian 32-bit words: the header, then the blocks as they are in
-// memory (the strings, the four record tables, the views), then an FNV-1a
+// memory (the strings, the four record tables, the views, then the mood
+// words: 16 bits each, none when the index has none), then an FNV-1a
 // sum of everything before it. Same compiler, same layout: a record size
 // that changed makes the file Corrupt, and the version is bumped when a
 // record's meaning changes.
@@ -150,14 +151,17 @@ constexpr uint32_t kMagic = 0x494C504Du;  // "MPLI"
 // both at once. 6: tag records (docs/METADATA.md 3.4.3): 32-byte tracks
 // (a title of their own, the record's artist, a 16-bit number, the length,
 // the source), 28-byte albums (the elected artist line, year, discs,
-// flags), the strings in 64 KB chunks, the inputs in the header. A cache of
-// any earlier version is Outdated (load()) and the Library rebuilds it once.
-constexpr uint32_t kVersion = 6;
+// flags), the strings in 64 KB chunks, the inputs in the header. 7: the
+// mood words (docs/MOOD-FILTERS.md 5.4), last before the sum, and their two
+// counts in the header; the records as 6's. A cache of any earlier version
+// is Outdated (load()) and the Library rebuilds it once.
+constexpr uint32_t kVersion = 7;
 // The header: magic, version, record sizes, rules; the inputs (walk
 // signature 2, cardId 2, generation, commitId 2, T's headerCrc, flags, D's
 // headerCrc, the journal's sequence); the build stamp (2); the string bytes
-// and the four counts; then the two rails' buckets.
-constexpr int kCountWords = 22;
+// and the four counts; the mood words (0 or the track count) and the tracks
+// whose word isn't 0; then the two rails' buckets.
+constexpr int kCountWords = 24;
 constexpr int kHeaderWords = kCountWords + 2 * (LibraryIndex::kBuckets + 1);
 constexpr uint32_t kMaxRecords = 1u << 22;  // a damaged header must not ask for gigabytes
 
@@ -522,6 +526,8 @@ void LibraryIndex::clear() {
   drop(artistsB_);
   drop(albumsB_);
   drop(foldersB_);
+  drop(moodsB_);  // never kept: the next build makes its own, or none
+  moodTrackN_ = 0;
   drop(folderAlbum_);
   drop(folderMarks_);
   drop(artistKey_);
@@ -535,6 +541,7 @@ void LibraryIndex::clear() {
   artists_ = nullptr;
   albums_ = nullptr;
   folders_ = nullptr;
+  moods_ = nullptr;
   trackN_ = artistN_ = albumN_ = folderN_ = 0;
   runAlbum_ = runArtist_ = kNone;
   runFirst_ = 0;
@@ -797,7 +804,23 @@ LibraryIndex::Add LibraryIndex::addFile(const char* path, uint8_t options) {
   t.format = format;
   t.flags = (options & kAddPending) ? kTrackPending : 0;
   if (!push(tracksB_, t)) return Add::NoMemory;
+  if (!noteMood(0)) return Add::NoMemory;  // no record, no row: a 0 when there are words
   return Add::Added;
+}
+
+// The words start at the first track that has one, sized as the track
+// table is (they grow with it), the tracks before it 0: an index of no
+// word on any track has no block (docs/MOOD-FILTERS.md 5.4).
+bool LibraryIndex::noteMood(uint16_t word) {
+  if (!moodsB_.data) {
+    if (word == 0) return true;
+    if (!reserve(moodsB_, tracksB_.cap)) return false;
+    moodsB_.size = tracksB_.size - 1;  // the track just added is pushed below
+    std::memset(moodsB_.data, 0, static_cast<size_t>(moodsB_.size) * sizeof(uint16_t));
+  }
+  if (!push(moodsB_, word)) return false;
+  if (word) ++moodTrackN_;
+  return true;
 }
 
 // ---- the votes ----
@@ -1107,6 +1130,7 @@ LibraryIndex::Add LibraryIndex::addRecord(const char* path, const TagView& tv) {
     }
   }
   if (!push(tracksB_, t)) return Add::NoMemory;
+  if (!noteMood(tv.moods)) return Add::NoMemory;
   return Add::Added;
 }
 
@@ -1414,6 +1438,7 @@ void LibraryIndex::setReadPointers() {
   artists_ = artistsB_.data;
   albums_ = albumsB_.data;
   folders_ = foldersB_.data;
+  moods_ = moodsB_.data;
   trackN_ = tracksB_.size;
   artistN_ = artistsB_.size;
   albumN_ = albumsB_.size;
@@ -1445,6 +1470,7 @@ bool LibraryIndex::finish() {
   dropVotes();
   tableDrop(folderTable_);
   tableDrop(artistTable_);
+  if (moodsB_.data && moodsB_.size != tracksB_.size) failed_ = true;  // a word per track, or none
   if (!failed_ && !buildViews()) failed_ = true;
   drop(folderAlbum_);
   drop(folderMarks_);
@@ -1466,6 +1492,7 @@ bool LibraryIndex::finish() {
   trim(artistsB_);
   trim(albumsB_);
   trim(foldersB_);
+  trim(moodsB_);
   trimArena();
   setReadPointers();
   buildStamp_ = computeStamp();
@@ -1479,6 +1506,12 @@ void LibraryIndex::forgetSources() {
 
 void LibraryIndex::forgetLengths() {
   for (uint32_t i = 0; i < tracksB_.size; ++i) tracksB_.data[i].durationS = 0;
+}
+
+void LibraryIndex::forgetMoods() {
+  drop(moodsB_);
+  moods_ = nullptr;
+  moodTrackN_ = 0;
 }
 
 size_t LibraryIndex::folderPath(uint32_t id, char* buf, size_t size) const {
@@ -1577,7 +1610,8 @@ LibraryIndex::Memory LibraryIndex::memory() const {
   m.albums = bytes(albumsB_);
   m.folders = bytes(foldersB_);
   m.views = viewsBytes_;
-  m.total = m.strings + m.tracks + m.artists + m.albums + m.folders + m.views;
+  m.moods = bytes(moodsB_);
+  m.total = m.strings + m.tracks + m.artists + m.albums + m.folders + m.views + m.moods;
   m.buildPeak = buildPeak_;
   return m;
 }
@@ -1635,6 +1669,9 @@ bool LibraryIndex::save(ByteSink& out, const Inputs& in) const {
   h[19] = artistN_;
   h[20] = albumN_;
   h[21] = folderN_;
+  const uint32_t nM = moods_ ? trackN_ : 0;
+  h[22] = nM;
+  h[23] = moodTrackN_;
   std::memcpy(h + kCountWords, artistBuckets_, sizeof(artistBuckets_));
   std::memcpy(h + kCountWords + kBuckets + 1, albumBuckets_, sizeof(albumBuckets_));
   SummingSink s(out);
@@ -1643,7 +1680,8 @@ bool LibraryIndex::save(ByteSink& out, const Inputs& in) const {
   ok = ok && s.write(tracks_, static_cast<size_t>(trackN_) * sizeof(Track)) &&
        s.write(artists_, static_cast<size_t>(artistN_) * sizeof(Artist)) &&
        s.write(albums_, static_cast<size_t>(albumN_) * sizeof(Album)) &&
-       s.write(folders_, static_cast<size_t>(folderN_) * sizeof(Folder)) && s.write(viewsBlock_, viewsBytes_);
+       s.write(folders_, static_cast<size_t>(folderN_) * sizeof(Folder)) && s.write(viewsBlock_, viewsBytes_) &&
+       s.write(moods_, static_cast<size_t>(nM) * sizeof(uint16_t));
   const uint32_t sum = s.sum.h;
   return ok && out.write(&sum, sizeof(sum));
 }
@@ -1717,10 +1755,14 @@ LibraryIndex::Load LibraryIndex::load(ByteSource& in, const Inputs& expect) {
   if (head != Load::Loaded) return head;
   if (!got.sameHard(expect)) return Load::Stale;
   const uint32_t arenaBytes = h[17], nT = h[18], nA = h[19], nB = h[20], nF = h[21];
+  const uint32_t nM = h[22], moodTracks = h[23];
   if (arenaBytes == 0 || arenaBytes > kMaxChunks * kChunkBytes || nT > kMaxRecords || nA > kMaxRecords ||
       nB > kMaxRecords || nF == 0 || nF > kMaxRecords) {
     return Load::Corrupt;
   }
+  // A word per track or none; and words are kept only when one isn't 0 (a
+  // writer of no word on any track writes no block).
+  if ((nM != 0 && nM != nT) || moodTracks > nM || (nM > 0 && moodTracks == 0)) return Load::Corrupt;
   const size_t words = viewWords(nT, nA, nB, nF);
   const size_t viewsBytes = (words ? words : 1) * sizeof(uint32_t);
 
@@ -1750,6 +1792,7 @@ LibraryIndex::Load LibraryIndex::load(ByteSource& in, const Inputs& expect) {
   if (!viewsBlock_) return fail(Load::NoMemory);
   viewsBytes_ = viewsBytes;
   if (!readFully(s, viewsBlock_, viewsBytes)) return fail(Load::Corrupt);
+  if (!block(moodsB_, nM)) return fail(noMemory ? Load::NoMemory : Load::Corrupt);
   const uint32_t want = s.sum.h;
   uint32_t sum = 0;
   if (!readFully(in, &sum, sizeof(sum)) || sum != want || whole_[arenaBytes - 1] != 0) {
@@ -1760,6 +1803,7 @@ LibraryIndex::Load LibraryIndex::load(ByteSource& in, const Inputs& expect) {
   std::memcpy(albumBuckets_, h + kCountWords + kBuckets + 1, sizeof(albumBuckets_));
   placeViews(nT, nA, nB, nF);
   setReadPointers();
+  moodTrackN_ = moodTracks;
   inputs_ = got;
   buildStamp_ = static_cast<uint64_t>(h[16]) << 32 | h[15];
   ready_ = true;
