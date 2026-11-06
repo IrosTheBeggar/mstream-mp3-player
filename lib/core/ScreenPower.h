@@ -15,12 +15,17 @@
 //   Off     backlight off (DCDC3) and the panel's sleep-in; nothing drawn
 //
 // The countdown runs from the last input (a touch that acts, a finger still
-// on the glass or the strip, the PWR key), the same whether playing or not:
+// on the glass or the strip), the same whether playing or not:
 // "Screen off after" 15 s / 30 s (default) / 1 / 2 / 5 min / Never.
 //
-// What wakes it: a touch on the glass or the strip, or a PWR short press
-// (wake()), and the events that need the listener (Why::Event: the
-// headphones lost, "Couldn't reach", a track that failed, USB in or out).
+// The PWR key's short press (powerKey()) turns a lit screen, Bright or Dim,
+// Off at once, and wakes an Off one. With Never it is how the listener turns
+// the screen off. What keeps it lit (`keepLit`, below) wins: it stays on, and
+// the press only counts as input.
+//
+// What wakes it: a touch on the glass or the strip, or a PWR short press on
+// an Off screen (wake()), and the events that need the listener (Why::Event:
+// the headphones lost, "Couldn't reach", a track that failed, USB in or out).
 // A touch on a screen that isn't Bright only brightens it: the input layer
 // swallows it through its lift (WakeLatch, below). That is a hearing-safety
 // rule, from Dim as from Off: a pocket press of B can't start music.
@@ -32,12 +37,12 @@
 // Unattended (the pocket rule): after any wake from Off (a touch, the key,
 // an event, or keepLit) nobody may be looking: the device may be in a
 // pocket, where contacts come in clusters. Until a touch on the glass lands
-// (attend(); the listener is looking at it), the PWR key while lit, or the
-// console, unattended() is true, and a B click that would start playing on
-// the speaker is refused (ButtonPolicy::Transport::startRefused(): the
-// inert buzz). Everything else acts: a pause, the volume, a B hold (a move
-// to the speaker pauses first), a play on the headphones. Going Off ends it
-// (the next wake decides again).
+// (attend(); the listener is looking at it), the PWR key on a screen kept
+// lit, or the console, unattended() is true, and a B click that would start
+// playing on the speaker is refused (ButtonPolicy::Transport::startRefused():
+// the inert buzz). Everything else acts: a pause, the volume, a B hold (a
+// move to the speaker pauses first), a play on the headphones. Going Off ends
+// it (the next wake decides again).
 //
 // The touch that ends it (glassLanded()) is remembered for the rest of
 // that touch (landedUnattended()): the sleep timer's fade toast doesn't
@@ -51,9 +56,11 @@
 // after it is swallowed like a wake, as from Off, so a pocket's contact
 // can't tap the dialog's "Use speaker". It keeps the event's countdown.
 //
-// It stays Bright while `keepLit` (step()): a screen of its own owns the
-// display (the touch calibration, a spike tool), a play waits for the
-// headphones, a pairing is under way. Coming on while Off, that wakes it.
+// It stays Bright while `keepLit` (step()): the start-up screen shows, a
+// screen of its own owns the display (the touch calibration, a spike tool),
+// a play waits for the headphones, a pairing is under way, a computer drives
+// the dancer or has the board identify itself. Coming on while Off, that
+// wakes it.
 //
 // Held lit (`holdLit`, step()): a toast with a countdown is up, which the
 // listener may be reading (the idle power-off's "Turning off in 30 s"
@@ -68,7 +75,8 @@
 // held from there). For the idle warning any input ends the warning too.
 // Held, a touch acts (touchActs()) unless an event or keepLit lit the
 // screen from Off and no touch has answered that yet (above: the hold
-// leaves that as it is): the hold itself never swallows one.
+// leaves that as it is): the hold itself never swallows one. What turns a
+// screen off still does (the PWR key, the sleep timer's pause, the console).
 //
 // The settings are indices into the tables below (saved as such in NVS).
 // Portable: fed with timestamps, no clock of its own; wraparound-safe.
@@ -119,12 +127,12 @@ public:
 
   // ---- input ----
   // Input that acts (a touch while Bright, the scripted finger, the PWR key
-  // while Bright) or a finger that moves or has only just landed
+  // on a screen kept lit) or a finger that moves or has only just landed
   // (FingerActivity): the countdown starts again and the pocket guard
   // ends. It never lights a screen that isn't Bright: only wake() does.
   void activity(uint32_t nowMs);
   // A deliberate input: a touch on the glass that lands and acts, the PWR
-  // key while lit. Ends unattended().
+  // key on a screen kept lit. Ends unattended().
   void attend() { unattended_ = false; }
   // A touch landing on the glass: attend(), and whether this touch is the
   // one that ended unattended() (landedUnattended(), until the next landing).
@@ -136,18 +144,25 @@ public:
   // woke nothing, but nobody had looked yet): it may be a pocket's second
   // contact. The fade toast's buttons don't act on it.
   bool landedUnattended() const { return landedUnattended_; }
-  // A touch or the PWR key on a screen where a touch doesn't act (the input
-  // layer swallows that touch; touchActs()), or an event that needs the
-  // listener (Why::Event, at any level: the countdown starts again), or the
-  // console (Ps1). True if it wasn't Bright: a wake. From Off by Touch or
-  // PowerKey (with a timeout set): the pocket guard; any other wake ends
-  // one. From Off by Touch, PowerKey or Event: unattended(); by Event also
-  // !touchActs() until a Touch or PowerKey wake answers it. The console
-  // ends both.
+  // A touch on a screen where a touch doesn't act (the input layer swallows
+  // it; touchActs()), the PWR key where powerKey() says so, or an event that
+  // needs the listener (Why::Event, at any level: the countdown starts
+  // again), or the console (Ps1). True if it wasn't Bright: a wake. From Off
+  // by Touch or PowerKey (with a timeout set): the pocket guard; any other
+  // wake ends one. From Off by Touch, PowerKey or Event: unattended(); by
+  // Event also !touchActs() until a Touch or PowerKey wake answers it. The
+  // console ends both.
   bool wake(uint32_t nowMs, Why why);
-  // Off now (the console's Ps0, the sleep timer's end). A touch's or the
-  // key's wake from it has the pocket guard.
+  // Off now (the PWR key, the console's Ps0, the sleep timer's end). A
+  // touch's or the key's wake from it has the pocket guard.
   void turnOff(Why why);
+  // The PWR key's short press, by what the listener sees (`panelAsleep`: the
+  // panel hasn't left its sleep-in yet, so a screen that is on still looks
+  // off). Looks off: a wake (true if it was one: wake()). Lit, Bright or Dim:
+  // Off now. Lit and `keepLit` (what keeps it lit, as step() is told): it
+  // stays, and the press is input: it answers an event's wake or keepLit's
+  // from Off (touchActs()), else activity() and attend().
+  bool powerKey(uint32_t nowMs, bool keepLit, bool panelAsleep = false);
 
   // Every loop pass: the countdown, `keepLit` and `holdLit` (above; what
   // holds it is the caller's: ScreenControl::Hold). True
@@ -212,11 +227,11 @@ private:
 //
 // A wake is a finger that LANDS while a touch doesn't act (none on the
 // panel for kQuietMs before). A finger already on when the screen dimmed
-// (one resting still: FingerActivity stopped counting it) is taken by the
-// latch too, so it does nothing more in the dim, but it isn't a wake
-// (`took`: the input layer ends its touch with a Cancel): else a resting
-// finger would wake the screen as soon as it dimmed, and it could never
-// go off.
+// (one resting still: FingerActivity stopped counting it) or when the PWR
+// key turned it off is taken by the latch too, so it does nothing more, but
+// it isn't a wake (`took`: the input layer ends its touch with a Cancel):
+// else a resting finger would wake the screen as soon as it dimmed, and it
+// could never go off.
 //
 // The scripted finger (the console's uit/uis/uip) isn't a finger here, so
 // it bypasses the latch.

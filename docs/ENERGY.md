@@ -205,9 +205,11 @@ panel shares SPI with the SD card.
   - It dims to **30** for the last 10 s (at 7 s for the 15 s choice).
   - While the player is idle, the idle power-off (item 4) takes over later.
 - **Stays lit while:**
+  - the start-up screen shows;
   - the calibration or spike screens own the display;
   - a play waits for the headphones (PlayGate Waiting, at most its 20 s backstop);
-  - a pairing is under way.
+  - a pairing is under way;
+  - a computer's visualizer session or `@identify` banner is up.
 - **Held lit** (added after batch 3, `holdLit`): while a toast with a
   countdown is up (the idle power-off's warning, item 4; the sleep
   timer's fade while it counts down to the pause, section 3: not a
@@ -216,8 +218,11 @@ panel shares SPI with the SD card.
   screen woken during it is held from the wake, except that a touch's or
   PWR's wake from Off keeps its pocket guard until input follows. For the
   idle warning that wake is input anyway, which ends the warning.
+- **The PWR key** (added later, at the user's request): a short press
+  turns a lit screen, bright or dim, off at once, a held one too, unless
+  something keeps it lit (the list above, where it only counts as input).
 - **What wakes it:** a touch on the glass or the strip, and a PWR short
-  press (M5.BtnPWR is already polled). Events that need the listener also
+  press on an off screen (M5.BtnPWR is already polled). Events that need the listener also
   wake it:
   - the headphones-lost dialog;
   - "Couldn't reach";
@@ -238,8 +243,8 @@ panel shares SPI with the SD card.
 - **Pocket rule** (as built, from the review). The guard alone let the
   second pocket contact on B, 300 ms after the swallowed one, play out
   loud. After any wake from Off (a touch, PWR, an event, keepLit) and
-  until a touch lands on the glass (or PWR while lit, or the console), a
-  B click that would start the **speaker** is refused: the inert buzz,
+  until a touch lands on the glass (or PWR on a screen kept lit, or the
+  console), a B click that would start the **speaker** is refused: the inert buzz,
   and the note "Tap the screen first, then B plays". Pausing, A and C,
   the volume, the B hold and a play on the headphones still act, so a
   blind pause from a pocket still works. An event's wake from Off (the
@@ -270,7 +275,7 @@ panel shares SPI with the SD card.
 
 **UX impact.** It behaves like a phone: music plays on with the screen
 dark, and the first touch only wakes it. Glancing at the time needs a tap
-or a PWR press.
+or a PWR press, and another PWR press turns it off again.
 
 | | |
 |---|---|
@@ -985,12 +990,15 @@ on-device checks below are still to do.** As built:
   (from 7 s with 15 s), Off after the chosen time without input: 15 s /
   **30 s** / 1 / 2 / 5 min / Never. Brightness Low 60 / **Medium 100** /
   High 160 / Max 255. Input is a touch that acts, a finger resting on the
-  glass or the strip, or the PWR key while bright. `wake(why)`: Touch and
+  glass or the strip, or the PWR key on a screen kept lit (else
+  `powerKey()` turns a lit screen off). `wake(why)`: Touch and
   PowerKey (from Off: the pocket guard, off again 10 s later with no dim
   step unless input follows; not with Never), Event (the whole countdown,
-  and it ends a guard), Console. Kept Bright (and woken) while a screen of
-  its own owns the display, a play waits for the headphones, or a pairing
-  is under way (`link.phase == Pairing` or `btSession.pairingUnderWay()`).
+  and it ends a guard), Console. Kept Bright (and woken) while the start-up
+  screen shows, a screen of its own owns the display, a play waits for the
+  headphones, a pairing is under way (`link.phase == Pairing` or
+  `btSession.pairingUnderWay()`), or a computer's visualizer session or
+  `@identify` banner is up.
   Fixed in review: it read `btSession.pairing()`, which stays set after a
   pairing fails (the Failed card says so), so a failed pairing kept the
   screen Bright for good, and the latch never armed. Since batch 3 a lit
@@ -1003,7 +1011,7 @@ on-device checks below are still to do.** As built:
   glass touch ends with a Cancel) without a wake.
 - The pocket rule (fixed in review, item 2 above): `ScreenPower::
   unattended()` and `touchActs()`, `attend()` on a glass touch's landing
-  (`Input::glassLanded()`) or PWR while lit; main's
+  (`Input::glassLanded()`) or PWR on a screen kept lit; main's
   `ButtonTransport::startRefused()`.
 - `WakeLatch` (lib/core), owned by `ui/Input`: a real finger landing on
   the panel while a touch doesn't act arms it; every event is dropped

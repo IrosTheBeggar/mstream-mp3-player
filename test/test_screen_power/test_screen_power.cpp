@@ -4,7 +4,7 @@
 // Host tests for the screen policy (ScreenPower, docs/ENERGY.md item 2): the
 // dim and off timings for each choice, what keeps it lit, what holds a
 // lit one lit (a countdown toast, the Pair screen's search), the wakes,
-// the pocket guard, and the
+// the PWR key, the pocket guard, and the
 // backlight levels. The wake latch's own cases (with
 // the real recognisers) are in test_ui_input.
 // Run: pio test -e native
@@ -484,8 +484,8 @@ void test_names() {
 // The touch that attends a screen woken from off is remembered for that
 // touch (landedUnattended()): a pocket's second contact lands on a lit
 // fade toast, and must not act on +10 min or Turn off. The next touch was
-// made on an attended screen. PWR while lit attends too, but no touch
-// landed then.
+// made on an attended screen. PWR on a screen kept lit attends too, but no
+// touch landed then.
 void test_the_touch_that_attends_is_remembered() {
   for (W why : {W::Touch, W::PowerKey, W::Event}) {
     ScreenPower s;
@@ -507,13 +507,199 @@ void test_the_touch_that_attends_is_remembered() {
   s.begin(0);
   s.glassLanded();
   TEST_ASSERT_FALSE(s.landedUnattended());
-  // Attended by the key while lit: the next touch lands attended.
+  // Attended by the key while kept lit: the next touch lands attended.
   s.step(30000, false);
   s.wake(40000, W::PowerKey);
   s.step(40000, false);
-  s.attend();
+  TEST_ASSERT_TRUE(s.unattended());
+  s.powerKey(41000, /*keepLit=*/true);
+  TEST_ASSERT_FALSE(s.unattended());
   s.glassLanded();
   TEST_ASSERT_FALSE(s.landedUnattended());
+}
+
+// The PWR key's short press: a lit screen goes off at once, from Bright (no
+// dim step) and from Dim, and stays off with nothing else happening; the
+// next press wakes it, as a key's wake from Off always was (the pocket
+// guard, the pocket rule), and the one after turns it off again.
+void test_power_key_turns_a_lit_screen_off() {
+  ScreenPower s;
+  s.begin(0);
+  s.step(0, false);
+  TEST_ASSERT_FALSE(s.powerKey(1000, false));  // (not a wake)
+  TEST_ASSERT_TRUE(s.off());
+  TEST_ASSERT_EQUAL_UINT8(0, s.backlight());
+  TEST_ASSERT_FALSE(s.touchActs());  // (the next touch only wakes it, in this very pass too)
+  TEST_ASSERT_TRUE(s.step(1000, false));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(L::Bright), static_cast<int>(s.previous()));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(W::PowerKey), static_cast<int>(s.why()));
+  TEST_ASSERT_EQUAL_INT(0, run(s, 1050, 600000));
+  TEST_ASSERT_TRUE(s.off());
+
+  TEST_ASSERT_TRUE(s.powerKey(700000, false));  // a wake
+  TEST_ASSERT_TRUE(s.bright());
+  TEST_ASSERT_TRUE(s.touchActs());
+  TEST_ASSERT_TRUE(s.pocketGuard());
+  TEST_ASSERT_TRUE(s.unattended());
+  TEST_ASSERT_TRUE(s.step(700000, false));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(W::PowerKey), static_cast<int>(s.why()));
+
+  // Again, under the pocket guard: off, the guard and the pocket rule gone.
+  TEST_ASSERT_FALSE(s.powerKey(702000, false));
+  TEST_ASSERT_TRUE(s.off());
+  TEST_ASSERT_FALSE(s.pocketGuard());
+  TEST_ASSERT_FALSE(s.unattended());
+  TEST_ASSERT_TRUE(s.step(702000, false));
+  TEST_ASSERT_EQUAL_INT(0, run(s, 702050, 720000));
+
+  // From Dim: off, not bright again (a touch there is what brightens it).
+  ScreenPower d;
+  d.begin(0);
+  d.step(25000, false);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(L::Dim), static_cast<int>(d.level()));
+  TEST_ASSERT_FALSE(d.powerKey(26000, false));
+  TEST_ASSERT_TRUE(d.off());
+  TEST_ASSERT_TRUE(d.step(26000, false));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(L::Dim), static_cast<int>(d.previous()));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(W::PowerKey), static_cast<int>(d.why()));
+  TEST_ASSERT_EQUAL_INT(0, run(d, 26050, 90000));
+  TEST_ASSERT_TRUE(d.off());
+
+  // With Never it is how the screen goes off, and it stays off: the wake
+  // has no guard (the listener wants it on).
+  ScreenPower n;
+  n.begin(0);
+  n.setTimeout(ScreenPower::kNever, 0);
+  n.step(0, false);
+  n.powerKey(5000, false);
+  TEST_ASSERT_TRUE(n.step(5000, false));
+  TEST_ASSERT_TRUE(n.off());
+  TEST_ASSERT_EQUAL_INT(0, run(n, 5050, 3600000));
+  TEST_ASSERT_TRUE(n.off());
+  TEST_ASSERT_TRUE(n.powerKey(3700000, false));
+  TEST_ASSERT_FALSE(n.pocketGuard());
+  TEST_ASSERT_TRUE(n.step(3700000, false));
+  TEST_ASSERT_EQUAL_INT(0, run(n, 3700050, 7300000));
+  TEST_ASSERT_TRUE(n.bright());
+}
+
+// An event's wake from Off, nobody answered yet: the key puts it away, the
+// answer's state with it (the dialog stays up for the next wake). The next
+// wake is a key's or a touch's, not an event's: touches act.
+void test_power_key_on_an_event_wake() {
+  ScreenPower s;
+  s.begin(0);
+  s.step(30000, false);
+  TEST_ASSERT_TRUE(s.wake(40000, W::Event));
+  s.step(40000, false);
+  TEST_ASSERT_FALSE(s.touchActs());
+  TEST_ASSERT_TRUE(s.unattended());
+  TEST_ASSERT_FALSE(s.powerKey(41000, false));
+  TEST_ASSERT_TRUE(s.off());
+  TEST_ASSERT_FALSE(s.unattended());
+  TEST_ASSERT_TRUE(s.step(41000, false));
+  TEST_ASSERT_TRUE(s.powerKey(50000, false));
+  TEST_ASSERT_TRUE(s.touchActs());
+  TEST_ASSERT_TRUE(s.unattended());
+}
+
+// What keeps it lit wins: the screen stays on, with no off and back, which
+// would leave it unattended with touches swallowed. The press is input: it
+// answers keepLit's wake from Off (touches act), else the pocket rule ends.
+void test_power_key_on_a_screen_kept_lit() {
+  ScreenPower s;
+  s.begin(0);
+  s.step(0, true);
+  TEST_ASSERT_FALSE(s.powerKey(1000, true));
+  TEST_ASSERT_TRUE(s.bright());
+  TEST_ASSERT_TRUE(s.touchActs());
+  TEST_ASSERT_FALSE(s.unattended());
+  TEST_ASSERT_FALSE(s.step(1000, true));  // no change to log
+  TEST_ASSERT_EQUAL_INT(0, run(s, 1050, 100000, /*keepLit=*/true));
+  TEST_ASSERT_TRUE(s.bright());
+
+  // keepLit lit it from Off: only answers it (touches act from here), and
+  // the next press attends. No wake: it was Bright.
+  ScreenPower k;
+  k.begin(0);
+  k.step(30000, false);
+  TEST_ASSERT_TRUE(k.off());
+  TEST_ASSERT_TRUE(k.step(31000, true));
+  TEST_ASSERT_FALSE(k.touchActs());
+  TEST_ASSERT_TRUE(k.unattended());
+  TEST_ASSERT_FALSE(k.powerKey(32000, true));
+  TEST_ASSERT_TRUE(k.bright());
+  TEST_ASSERT_TRUE(k.touchActs());
+  TEST_ASSERT_TRUE(k.unattended());
+  TEST_ASSERT_FALSE(k.powerKey(33000, true));
+  TEST_ASSERT_TRUE(k.bright());
+  TEST_ASSERT_FALSE(k.unattended());
+  TEST_ASSERT_FALSE(k.step(33000, true));
+
+  // What keeps it lit ends: the key turns it off again, and the countdown
+  // ran from its end until then.
+  TEST_ASSERT_EQUAL_INT(0, run(k, 33050, 50000, false));
+  TEST_ASSERT_FALSE(k.powerKey(50050, false));
+  TEST_ASSERT_TRUE(k.off());
+
+  // The one off and back: keepLit comes on in the key's own pass (the key
+  // read last pass's). Lit again, as keepLit's own wake from Off: the next
+  // touch only answers it. A window of one pass, and it errs on the safe side.
+  ScreenPower r;
+  r.begin(0);
+  r.step(0, false);
+  r.powerKey(1000, false);
+  TEST_ASSERT_TRUE(r.step(1000, true));
+  TEST_ASSERT_TRUE(r.bright());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(W::KeepLit), static_cast<int>(r.why()));
+  TEST_ASSERT_TRUE(r.unattended());
+  TEST_ASSERT_FALSE(r.touchActs());
+}
+
+// The panel still in its sleep-in as the policy has it on (the sleep-out
+// waits 120 ms after the sleep-in): it looks off, so a press means on. It
+// stays on, and isn't a new wake (it was Bright already).
+void test_power_key_while_the_panel_still_sleeps() {
+  ScreenPower s;
+  s.begin(0);
+  s.step(30000, false);
+  TEST_ASSERT_TRUE(s.wake(40000, W::Touch));
+  s.step(40000, false);
+  TEST_ASSERT_FALSE(s.powerKey(40050, false, /*panelAsleep=*/true));
+  TEST_ASSERT_TRUE(s.bright());
+  TEST_ASSERT_FALSE(s.step(40050, false));
+  // Kept lit as well: on, and no attending a screen that still looks off.
+  TEST_ASSERT_FALSE(s.powerKey(40060, true, true));
+  TEST_ASSERT_TRUE(s.bright());
+  TEST_ASSERT_TRUE(s.unattended());
+  // Awake: the next press turns it off.
+  TEST_ASSERT_FALSE(s.powerKey(40200, false, false));
+  TEST_ASSERT_TRUE(s.off());
+}
+
+// A countdown toast or the Pair screen's search holds a lit screen lit, and
+// the key turns it off anyway: the listener asked. It stays off through the
+// hold (it may be night), and the key's wake from there has the pocket guard,
+// not the hold, until input follows.
+void test_power_key_during_a_hold() {
+  ScreenPower s;
+  s.begin(0);
+  TEST_ASSERT_EQUAL_INT(0, run(s, 0, 40000, false, /*holdLit=*/true));
+  TEST_ASSERT_TRUE(s.bright());
+  TEST_ASSERT_FALSE(s.powerKey(40050, false));
+  TEST_ASSERT_TRUE(s.off());
+  TEST_ASSERT_TRUE(s.step(40050, false, true));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(W::PowerKey), static_cast<int>(s.why()));
+  TEST_ASSERT_EQUAL_INT(0, run(s, 40100, 80000, false, true));
+  TEST_ASSERT_TRUE(s.off());
+  TEST_ASSERT_TRUE(s.powerKey(80050, false));
+  TEST_ASSERT_TRUE(s.step(80050, false, true));
+  TEST_ASSERT_TRUE(s.pocketGuard());
+  TEST_ASSERT_EQUAL_INT(0, run(s, 80100, 90000, false, true));
+  TEST_ASSERT_TRUE(s.bright());
+  TEST_ASSERT_TRUE(s.step(90050, false, true));
+  TEST_ASSERT_TRUE(s.off());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(W::PocketGuard), static_cast<int>(s.why()));
 }
 
 // Held lit (a countdown toast: the idle power-off's warning, the sleep
@@ -709,6 +895,11 @@ int main(int, char**) {
   RUN_TEST(test_wake_latch_timing);
   RUN_TEST(test_finger_activity);
   RUN_TEST(test_the_touch_that_attends_is_remembered);
+  RUN_TEST(test_power_key_turns_a_lit_screen_off);
+  RUN_TEST(test_power_key_on_an_event_wake);
+  RUN_TEST(test_power_key_on_a_screen_kept_lit);
+  RUN_TEST(test_power_key_while_the_panel_still_sleeps);
+  RUN_TEST(test_power_key_during_a_hold);
   RUN_TEST(test_hold_lit_keeps_a_lit_screen_lit);
   RUN_TEST(test_hold_lit_leaves_an_off_screen_off);
   RUN_TEST(test_hold_lit_and_a_wake_during_it);

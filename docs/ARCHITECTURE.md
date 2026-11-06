@@ -2756,8 +2756,8 @@ layer is suspended).
 - **The pocket rule** (`ScreenPower::unattended()`, `ButtonPolicy::
   Transport::startRefused()`). After any wake from Off (a touch, the PWR
   key, an event, or something that keeps it lit) nobody may be looking:
-  until a touch lands on the glass (or the PWR key while lit, or the
-  console), a B click that would start playing on the speaker does
+  until a touch lands on the glass (or the PWR key on a screen kept lit, or
+  the console), a B click that would start playing on the speaker does
   nothing but the inert buzz and a note, "Tap the screen first, then B
   plays". A pause, A and C, the volume, the B hold (a move to the speaker
   pauses first) and a play on the headphones act as ever. Going Off ends
@@ -2800,8 +2800,14 @@ Queue, Dance and Output (with its Pair and About pages).
   1, 2 or 5 min, or Never; the same whether playing or not. Input is a
   touch that acts as it lands or moves (a finger resting still stops
   counting after 15 s, `FingerActivity`, so a pocket's pressure can't keep
-  it lit), or the PWR key. A touch
-  (glass or strip) or a PWR short press on a screen that isn't bright
+  it lit). The PWR key's short press (`ScreenPower::powerKey()`) turns a
+  lit screen, bright or dim, off at once, a held one too (below; with
+  Never it is how the listener turns it off), and wakes an off one. On a
+  screen something keeps lit (below) it stays on: the press only counts
+  as input, deliberate (it answers a wake from Off nobody has answered,
+  else the pocket rule ends), and logs `[screen] the power key: stays on`. A finger on
+  the panel as it goes off is taken, as one resting as it dims. A touch
+  (glass or strip) on a screen that isn't bright
   only wakes it (the input layer swallows the touch: "The screen's wake"
   above). A wake from Off with no input after it goes off again 10 s
   later, without the dim step (the pocket guard; not with Never). What
@@ -2809,10 +2815,13 @@ Queue, Dance and Output (with its Pair and About pages).
   lost (the dialog), "Couldn't reach", a track that failed (their
   `Ui` calls, `UiHost::wakeScreen()`), USB plugged in or out (AXP192 reg
   0x00, read once a second). Headphone keys, track changes and a link
-  coming up don't. It stays lit while the touch calibration or a spike
-  tool has the display, a play waits for the headphones, or a pairing is
-  under way (`BtSession::pairingUnderWay()`: not one whose failure the
-  card still shows). While a toast with a countdown is up (the idle
+  coming up don't. It stays lit while the start-up screen shows (the chip
+  latches a key press, so one made during the boot, maybe the one that
+  powered the board on, can read as a click at the first `M5.update()`),
+  the touch calibration or a spike tool has the display, a play waits for the
+  headphones, a pairing is under way (`BtSession::pairingUnderWay()`:
+  not one whose failure the card still shows), or a computer's visualizer
+  session or `@identify` banner is up. While a toast with a countdown is up (the idle
   power-off's warning, the sleep timer's fade while it counts down to the
   pause: `holdLit`) a lit screen
   (bright or dim) goes bright and stays lit until it ends, then counts
@@ -3986,7 +3995,7 @@ its opposite; only `Pcb` is saved):
 | Command | What it switches | Notes |
 |---|---|---|
 | `Pb<0-255>` | backlight while the screen is bright (M5GFX: AXP192 DCDC3, 2.5-3.275 V) | the screen policy's Bright level until restart, `Pb0` the setting's (Medium, 100; M5GFX's own default was 127, 2.875 V); refused while dim or off; it still dims and goes off (Screen off after: Never holds it) |
-| `Ps` / `Ps0` / `Ps1` | the screen policy: its state / Off now / on | Off is the policy's (backlight off, ILI9342C sleep-in, the UI draws nothing); a touch wakes it and does nothing else (`[screen] wake by touch at x,y (raw)`), and with no input after that it goes off again in 10 s (the pocket guard); off with nothing playing, the Bluetooth search rests after its burst (`setQuiet`) |
+| `Ps` / `Ps0` / `Ps1` / `Psk` | the screen policy: its state / Off now / on / the PWR key's short press, as if pressed | Off is the policy's (backlight off, ILI9342C sleep-in, the UI draws nothing); a touch wakes it and does nothing else (`[screen] wake by touch at x,y (raw)`), and with no input after that it goes off again in 10 s (the pocket guard); off with nothing playing, the Bluetooth search rests after its burst (`setQuiet`) |
 | `Pc<mhz>` | CPU clock now | only 160 ↔ 80 (same 320 MHz PLL); 240 ↔ 160/80 retunes the BBPLL the Bluetooth radio runs from, refused. 80 not while audio runs, and back to 160 by itself when it starts |
 | `Pcb<mhz>` | CPU clock from boot (saved) | 160 or 240 (`Pcb0` the default, 240), set before Bluetooth starts; the Output tab's CPU speed is the same NVS value |
 | `Pt<min>,<max>` | Bluetooth BR/EDR TX power levels 0-7 (−12..+9 dBm) | a test until restart, not saved (the Output tab's Bluetooth power is the setting, default 0,5: −12..+3 dBm; a change there wins); `Pt` alone reports the setting too; from the next page, scan or connection (with a link up the line says "applies from the next connection": the link keeps its level; `Pt` alone reads back the controller's setting, the new range at once, not the link's level) |

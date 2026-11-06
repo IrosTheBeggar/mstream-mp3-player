@@ -32,6 +32,7 @@ class ScreenControl;
 //              AXP192 DCDC3, 0 = off), until restart (Pb0: the setting's)
 //   Ps0 / Ps1  the screen off (the screen policy's Off: backlight off,
 //              ILI9342C sleep-in) / on; a touch wakes it and does nothing else
+//   Psk        the PWR key's short press, as if pressed
 //   Pc<mhz>    the CPU clock now: 160 <-> 80 (same PLL; 80 not while audio runs)
 //   Pcb<mhz>   the CPU clock from boot, saved: 160 or 240 (Pcb0: the default,
 //              240); the Output tab's CPU speed, the same NVS value

@@ -55,17 +55,19 @@ bool ScreenControl::readExternalPower() {
 uint8_t ScreenControl::backlight() const { return asleep_ ? 0 : M5.Display.getBrightness(); }
 
 void ScreenControl::beginPass(uint32_t nowMs) {
-  // The PWR key (AXP192's PEK, read by M5.update()): a short press wakes a
-  // screen that isn't bright (or answers an event's wake), else it is
-  // input like a touch, and deliberate: the pocket rule ends.
-  if (M5.BtnPWR.wasClicked()) {
+  // The PWR key (AXP192's PEK, read by M5.update()): a short press turns a
+  // lit screen off and wakes an off one (ScreenPower::powerKey(); the off
+  // is logged by step()). On a screen kept lit it is input like a touch,
+  // and deliberate: it answers a wake from off, else the pocket rule ends.
+  keyClicked_ = M5.BtnPWR.wasClicked() || consoleKey_;
+  consoleKey_ = false;
+  if (keyClicked_) {
     inputSeen_ = true;
-    if (power_.touchActs() && !asleep_) {
-      power_.activity(nowMs);
-      power_.attend();
-    } else if (power_.wake(nowMs, ScreenPower::Why::PowerKey)) {
+    if (power_.powerKey(nowMs, keptLit_, asleep_)) {
       Serial.println("[screen] wake by the power key");
       woken_ = true;
+    } else if (keptLit_ && !asleep_) {
+      Serial.println("[screen] the power key: stays on (something keeps it lit)");
     }
   }
   // USB plugged in or out: the charging state changed under the listener.
@@ -118,6 +120,7 @@ void ScreenControl::wake(const char* why) {
 
 void ScreenControl::step(uint32_t nowMs, bool keepLit, Hold hold) {
   hold_ = hold;
+  keptLit_ = keepLit;
   if (power_.step(nowMs, keepLit, hold != Hold::None)) logChange(nowMs);
   // The hold's start and end, on a screen it holds (a dim one brightening
   // is logged as a change too); one that changes what holds it starts
