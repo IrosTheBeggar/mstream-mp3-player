@@ -887,10 +887,14 @@ void Ui::openFilters(FilterOwner* owner) {
   endPageTouch();
   closeModal(true);
   // A toast up goes, its Undo with it, as for the Dance tab (showDance()):
-  // its rows are the editor's title row (MOOD-FILTERS.md 3.2, 4.3).
+  // its rows are the editor's title row (MOOD-FILTERS.md 3.2, 4.3). Its
+  // cover goes before the first frame: the editor draws under a toast (not
+  // `over`), so rows 36-71 would keep the toast's pixels while the unseen
+  // Clear, count and cross took the taps there.
   if (toast_.up()) {
     if (toast_.undo()) queue_.dropUndo();
     toast_.hide();
+    applyCover();
   }
   sheetOpenedMs_ = millis();  // (the settle, as a sheet's: 7.4)
   const bool tracks = owner->filterScope() == filtergrid::Scope::Tracks;

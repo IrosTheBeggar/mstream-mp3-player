@@ -993,6 +993,7 @@ pio test -e native
 | Languages | `uiLru`, `uiLja`, `uiLpl`, `uiMe`, `X` |
 | Fence with a filter on, hitch at the end | `uiMa<hex>`, `g0`, `ui` |
 | Through dark | `uiMe`, `Ps0`, `Ps1` |
+| A toast at opening (4.3) | An album held, `+ Queue`, and the Filters row (or `uiMe`) inside the toast's 4 s: the title row drawn, a tap on the toast's old place lands where it is seen |
 | Heap with the array held | `D` before and after `uiMa`; the join's blocks after an update with a filter on |
 | Colours, redraw feel | The user's eye |
 
@@ -1006,6 +1007,7 @@ pio test -e native
 - 5, `lib/core/FilteredAlbums` and `src/ui/FilterSheet`, with the Ui's wiring as listed. The block comes from allocator hooks (PSRAM), room for every album (6.8 KB at 1,707), used again while the album count stays; no memory keeps what was held. 7.6's accessor for the panel is `overlayPanel()`, with `panelOwner()` and `setPanelOwner()`. `uiMa` takes bare hex, as `gm<hex>`.
 - 6, the row in `LibraryPage`, as 4.2's table and 7.2. Drift: the list reads the albums through `FilteredAlbums::shown()`, which also checks they were picked over as many albums as the index has and that it has words (a guard beside 4.6's drops). They are worked out again when the Albums list is about to show (`enter()` at its root, or the segment's tap), not at every `enter()`. A change made while the Albums list didn't show (`uiMa`, or `uiMe` over another page) opens it at its top once, as a close over it does (7.5 names only the close). A finger on the cross lights its disc, not the row. `uil<n>` (`Ui::browse()`) drops the albums too, and a synthetic library drops the filter at `enter()`. `onTopRowTap` takes the list's width from the row as last drawn. `describe()` (the `ui` report) adds the row's filter and the dot.
 - 7, docs: `src/ui/Pages.h`, `docs/ARCHITECTURE.md`, `README.md`, this note. `.github/release-notes.md` is not edited (feature branches never do): S3's lines are in 9.2's owed list.
+- 8, the review's fix: `openFilters()` takes a hidden toast's cover off before the editor's first frame. The editor draws under a toast (not `over`), so with the cover left on, its title row stayed the toast's pixels while the unseen Clear, count and cross took the taps (4.3's toast at opening). `Ui` isn't host-built: checked by the builds (core2's flash 4,333,751 B, +8 B) and by reading; the device table's row says how to see it.
 
 Host (MEASURED-HOST):
 - `pio test -e native`: 2,107 cases, only the 5 known macOS failures (`test_host_clock` 2, `test_hop_feed` 2, `test_queue` 1); 2,077 after S2. `test_ui_filter` 22 cases, and with `test_ui_library`, `test_ui_strings` and `test_ui_nav` 142, all pass.
