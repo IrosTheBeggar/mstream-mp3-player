@@ -97,6 +97,13 @@ counters. The rule (docs/AUTODJ-INDEX.md 11 is the index's side):
   of the cooldown by id, else the playing track; none fits: no pick. The
   empty states' button the same: the scan with no exclusions, then one of
   its rows (none: no track).
+- **Stay on seed's re-pin** (6.4, D2). Before either jump, once a pick and
+  before any draw: the playing track's row, inside the mood (its own
+  track), not the pin and not damaged, becomes the pin, and the anchors run
+  again in the same read budget (none left, or its read failed: the
+  random pick, which is the scan); nothing listed inside the mood there
+  either, the jump, both marked. A moved pin goes at a quick skip of it,
+  and at an Anchor change; a seed's stays.
 """
 import argparse
 import json
@@ -475,6 +482,7 @@ class Engine:
         self.rng = Pcg32(seed)
         self.ring, self.cool, self.arts, self.ids = [], [], [], []
         self.pin = NO_ROW
+        self.pin_moved = False      # the pin moved onto a playing row (MOOD-FILTERS.md 6.4)
         self.key_anchor = 0
         self.seeded = False
         self.seed_awaits = NO_TRACK
@@ -531,6 +539,10 @@ class Engine:
             return False
         self.stats.quick_skips += 1
         row = row_of(maps, track)
+        if self.pin_moved and row != NO_ROW and row == self.pin:
+            # A moved pin quick-skipped goes (6.4): the next Stay on seed pick
+            # takes the playing track's row. A seed's stays.
+            self.pin, self.pin_moved = NO_ROW, False
         if row in self.ring:
             self.ring.remove(row)
             return True
@@ -538,6 +550,7 @@ class Engine:
 
     def mode_changed(self):
         self.pin = NO_ROW
+        self.pin_moved = False
         self.seed_awaits = NO_TRACK
 
     def file_reopened(self):
@@ -616,7 +629,28 @@ class Engine:
 
     # ---- the pick ----
     def pick(self, s, pin):
+        """One pick: a round, and a second when the first moved Stay on seed's
+        pin (MOOD-FILTERS.md 6.4), sharing its reads."""
         out = Pick()
+        again = [False]
+        p = self._pick_once(s, pin, out, again)
+        return self._pick_once(s, pin, out, None) if again[0] else p
+
+    def _repin(self, s, maps, playing_row, out):
+        """Stay on seed under a mood filter, nothing listed inside it or all of
+        it cooled (6.4, D2): the playing track's row, inside the mood (its own
+        track), not the pin and not damaged, is the pin now (moved: a quick
+        skip of it takes it away), and the anchors run again."""
+        if s.mode != LOCKED or playing_row in (NO_ROW, self.pin) or playing_row in self.damaged:
+            return False
+        if not maps.mood.passes(maps.row_to_track[playing_row]):
+            return False
+        self.pin, self.pin_moved, out.repinned = playing_row, True, True
+        return True
+
+    def _pick_once(self, s, pin, out, again):
+        """A round of the pick; `again` (a list, None in the second round) set
+        when it moved the pin, before any draw."""
         maps = pin.maps
         if maps is None or pin.slots is None:
             return self._no_index(s, pin, out)
@@ -677,8 +711,12 @@ class Engine:
                 acc[row] = (max(b, lv), sm + lv)
         cand = sorted((row, b, sm) for row, (b, sm) in acc.items())
         out.candidates = len(cand)
+        out.dry = out.loosened = False
         if not cand:
             if mood.on():
+                if again is not None and self._repin(s, maps, playing_row, out):
+                    again[0] = True
+                    return out
                 out.jump = J_NO_CANDIDATE   # nothing listed inside the mood (6.2, 4a)
             return self._random(s, pin, playing_row, exclude, out)
         gate = floor_level(s.floor, pin.sel_floor)
@@ -694,7 +732,10 @@ class Engine:
                 gated = closest(fresh)
             elif mood.on():
                 # Every listed row inside the mood cooled: the jump, not a
-                # repeat of a neighbour (6.2, 4b).
+                # repeat of a neighbour (6.2, 4b), unless the pin moves.
+                if again is not None and self._repin(s, maps, playing_row, out):
+                    again[0] = True
+                    return out
                 out.jump, out.dry = J_ALL_COOLED, False
                 return self._random(s, pin, playing_row, exclude, out)
         out.gated = len(gated)
@@ -1802,6 +1843,123 @@ def scenes():
         sc.filter(q)
         sc.surprise(both)
         sc.run(Settings(ROLLING, 60), 2)
+    out.append(sc)
+
+    # 33-35. Stay on seed under a mood filter re-pins (MOOD-FILTERS.md 6.4,
+    # D2): nothing listed inside the mood, or all of it cooled, and the pin
+    # moves onto the playing track's row, inside the mood, before any jump;
+    # the second round shares the first's reads, and finding nothing it
+    # jumps. A moved pin goes at a quick skip of it; a seed's stays. A seed
+    # whose row lists nothing (`bare`) makes its session's first pick reach
+    # the re-pin.
+    bare = [r for r in range(syn["rows"]) if not syn["lists"][r]]
+    lock = Settings(LOCKED, 60, True, True)
+    flips = [lock, Settings(LOCKED, 70), Settings(LOCKED, 55, True, False), Settings(LOCKED, 65, False, True)]
+
+    def rows_inside(mood, listed=True):
+        return [r for r in range(m.rows) if m.row_to_track[r] != NO_ROW and mood.passes(m.row_to_track[r]) and
+                bool(syn["lists"][r]) == listed]
+
+    def stranded(seed, row, prefetch=True):
+        """A session from a seed whose row lists nothing, the listener's track
+        on `row` playing: its first pick re-pins onto it, or jumps."""
+        sc.new(seed, m.row_to_track[next(r for r in bare if m.row_to_track[r] != NO_ROW)])
+        sc.start(m.row_to_track[row], False)
+        if prefetch:
+            sc.prefetch(lock)
+        p = sc.pick(lock)
+        sc.left(sc.playing, 150000, True)
+        sc.start(p.track, True)
+        return p
+
+    m = maps_for(syn)
+    sc = Scene("mood-repin", syn, "syn", m, seed=45, words=mood_words(g, m.tracks),
+               note="Stay on seed under Neutral, then Happy and Relaxed: at no candidate inside the mood, or all of "
+                    "it cooled, the pin moves onto the playing track's row, its slot read in the same pick, and a "
+                    "second round finding nothing jumps; a Follow the vibe stretch, then a seed that lists nothing "
+                    "with the listener on a row read ahead: a re-pin with no read")
+    sc.filter(moodfilter.pack("neutral"))
+    sc.new(4500, m.row_to_track[rows_inside(sc.mood)[0]])
+    sc.run(lock, 50, user=60, flips=flips)
+    sc.filter(moodfilter.pack("happy", "relaxed"))
+    sc.mode()
+    sc.run(Settings(ROLLING, 60, True, True), 12, prefetch=3)
+    sc.mode()
+    held = [c[0] for c in sc.e.cache if c is not None and c[0] in sc.e.ring and sc.mood.passes(m.row_to_track[c[0]])]
+    stranded(4501, held[-1])
+    sc.run(lock, 27, user=60, flips=flips)
+    out.append(sc)
+
+    m = maps_for(syn, unmapped=0)
+    sc = Scene("mood-repin-edges", syn, "syn", m, seed=46, words=mood_words(g, m.tracks),
+               note="Stay on seed under Vocals and Party: a seed's pin kept at a quick skip; moved pins quick-skipped "
+                    "(the next pick takes the playing track's row), and an Anchor change; from seeds that list "
+                    "nothing: a playing track outside the mood (no re-pin: a jump), a new pin whose slot fails its "
+                    "CRC twice (the random pick's row the pin), the same row again (damaged: no re-pin), one whose "
+                    "read fails (the pin stays for the read ahead), one past the read budget")
+    sc.filter(moodfilter.pack(voice="vocals", tags=("party",)))
+    inside = rows_inside(sc.mood)
+    sc.new(4600, m.row_to_track[inside[0]])
+    p = sc.pick(lock)
+    sc.left(sc.playing, 4000, False)                        # the seed, quick-skipped: its pin stays
+    sc.start(p.track, True)
+    quick = 0
+    for n in range(46):
+        if g.below(8) == 0:
+            sc.left(sc.playing, 1000 * g.below(300), False)
+            sc.start(sc.user_track(), False)
+        p = sc.pick(flips[n % len(flips)])
+        skip = p.repinned and quick < 4                      # the moved pin, skipped as the pick waits next
+        quick += skip
+        sc.left(sc.playing, 1000 * g.below(30) if skip else 150000, not skip)
+        sc.start(p.track, True)
+    stranded(4601, inside[1])
+    sc.mode()                                                # the moved pin goes, and its mark
+    p = sc.pick(lock)
+    sc.left(sc.playing, 3000, False)                         # the pin taken at that pick stays
+    sc.start(p.track, True)
+    sc.run(lock, 2)
+    outside = [r for r in range(m.rows) if not sc.mood.passes(m.row_to_track[r])]
+    stranded(4602, outside[0])
+    fresh = [r for r in inside if r not in sc.src.count]
+    sc.set_faults(damaged=[fresh[0]])
+    stranded(4603, fresh[0])
+    stranded(4604, fresh[0])
+    sc.set_faults(io=[fresh[1]])
+    stranded(4605, fresh[1])
+    sc.run(lock, 3, prefetch=1)
+    flaky = next(r for r in bare if r not in sc.src.count)
+    sc.set_faults(flaky=[flaky])
+    sc.reopen()
+    sc.new(4606, m.row_to_track[flaky])
+    sc.start(m.row_to_track[fresh[2]], False)
+    p = sc.pick(lock)                                        # two reads of the seed's: none left for the new pin's
+    sc.left(sc.playing, 150000, True)
+    sc.start(p.track, True)
+    sc.run(lock, 3, prefetch=1)
+    out.append(sc)
+
+    m = maps_for(syn, unmapped=0)
+    sc = Scene("mood-index-away", syn, "syn", m, seed=47, words=mood_words(g, m.tracks),
+               note="Stay on seed under Sad at Loose: a pin moved, the index away (picks by id inside the mood, "
+                    "the pin kept) and back (it steers again); a session from a seed that lists nothing, begun "
+                    "while the index is away: its row the pin when the maps come, and the pick after re-pins")
+    sc.filter(moodfilter.pack("sad", level="loose"))
+    stranded(4700, rows_inside(sc.mood)[0])
+    sc.run(lock, 2)
+    sc.index(False)
+    sc.run(lock, 4)
+    sc.index(True)
+    sc.arrived()
+    sc.start(sc.playing, True)
+    sc.run(lock, 4, prefetch=1)
+    sc.index(False)
+    sc.new(4701, m.row_to_track[[r for r in bare if m.row_to_track[r] != NO_ROW][-1]])
+    sc.run(lock, 3)
+    sc.index(True)
+    sc.arrived()
+    sc.start(sc.playing, True)
+    sc.run(lock, 4)
     out.append(sc)
     return tables, out
 

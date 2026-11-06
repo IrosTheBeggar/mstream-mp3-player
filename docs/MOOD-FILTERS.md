@@ -4,7 +4,7 @@ Mood filters narrow the Albums list and Auto DJ's picks by mood, using the scale
 
 ## 1. Status
 
-**Status (2026-11-06):** S0, S1 and S2 are built, from main af72b50: S0 on its own branch (`claude/status-line-under-modal`), S1 and S2 stacked on `claude/mood-filters-implementation-0aec6e`; not merged. S1 and S2 are host-tested (S0 has no host test). S2 ran on the user's Core2 against the spare synthetic card in 9.6's Runs A to E, which also checked S1's heap rule, and S0 was checked on the same unit (9.4). S3 onward are not started. Each stage's result follows its plan (9.4, 9.5, 9.6), and the figures from those runs are MEASURED 2026-11-06. A read-only study found it possible, and this document is the build plan.
+**Status (2026-11-06):** S0, S1 and S2 are built, from main af72b50: S0 on its own branch (`claude/status-line-under-modal`), S1 and S2 stacked on `claude/mood-filters-implementation-0aec6e`; not merged. S1 and S2 are host-tested (S0 has no host test). S2 ran on the user's Core2 against the spare synthetic card in 9.6's Runs A to E, which also checked S1's heap rule, and S0 was checked on the same unit (9.4). S4's commits 1 to 5 of 7 are built on `claude/mood-filters-s4`, stacked on S2, host-tested only (9.8). The other stages from S3 on were not started when S4 began. Each stage's result follows its plan (9.4, 9.5, 9.6), and the figures from those runs are MEASURED 2026-11-06. A read-only study found it possible, and this document is the build plan.
 
 **Picked by the user, on the design canvas:**
 - The editor: the one-screen grid of 7.1.
@@ -699,6 +699,7 @@ terminal #56, #68 ----> S7 (stacked)
 **Owed to the 0.13.0 release commit** (2026-11-06). Not written into `.github/release-notes.md`: feature branches here never edit it, only "Release x.y.z: the release notes" commits do.
 - S2: every unit rebuilds the library once at its first start on the new firmware (`library.idx` v7): about 11 s at 19,400 tracks from D, about 14-16 s from a transfer's records; the queue kept. Going back to 0.12.0 rebuilds once the other way (it reads v7 as corrupt).
 - S0: a status line (Checking the card..., Reading tags...) that ends while a sheet or dialog is up no longer wipes it.
+- S4, commits 1 to 5: no line. No filter can be set before commit 7's `Dq` and settings, and with none every pick and the Auto DJ button's draws are as before (6.6).
 
 ### 9.3 Console, one list
 
@@ -1072,7 +1073,7 @@ pio test -e native -f test_autodj_engine -f test_autodj_trigger -f test_autodj_d
 
 **Effort:** 3-5 (guess). It is two implementations of the whole ladder, engine and `tools/autodj_ref.py`, plus 12 sessions.
 
-**Progress (2026-11-06).** Commits 1 to 4 built, on `claude/mood-filters-s4` (from S2's tip). As built, with the drift from the plan above:
+**Progress (2026-11-06).** Commits 1 to 5 built, on `claude/mood-filters-s4` (from S2's tip). As built, with the drift from the plan above:
 - 1: both hashes hold at this tip, as at a1566fe. "The seven old tables" is hashed as those seven names, so `islands` won't move it. `stats_json` writes `LATER_STATS` only when not 0; the list is empty until a counter comes. The Python check also counts the sessions exactly: 26, then 29.
 - 2: `MoodView` sits beside `Maps` in `lib/core/AutoDjJoin.h`: `words`, `tracks`, `q` as read (invalid is 0), `f`; `on()` needs words and an active filter. `Maps::mood` feeds `buildRun` and the print; `PickIn::mood` is there for `byId`, which doesn't read it yet. Not in the plan: the Driver's `Index` gains `mood` too, which `pickInto` and `DryRun::step` copy into `PickIn` (the button's `surprise` waits for commit 4). `AutoDj::index()` copies the join's maps into `maps_` and sets `.mood` from `Library::index()` (ready, with words); its q is `AutoDj::moods_`, 0 until commit 7's settings carry one.
 - Python: `MoodView`, `Maps.mood`, `PickIn.mood`, `Scene.filter()`, `mood_words()` (`moodfilter.word_of` over uniform 4-place scores, 92 % with a row, 1 % of heads NULL). Sessions gain `moods` (a word a track) and the `filter` event.
@@ -1103,6 +1104,19 @@ pio test -e native -f test_autodj_engine -f test_autodj_trigger -f test_autodj_d
   - mood-surprise, `syn` with 60 % of its rows unmapped, 24 picks, Follow the vibe only. The button under Vocals at Loose (85 tracks with a row fit: the scan keeps 64), then Relaxed and Vocals (24), each starting a session. Then a filter that only one track with no row fits: no track for the button, and the pick by id (jump 3), then that track again as the playing one. Then a filter nothing fits: no track, 2 `noFit`.
   - In all: 35 sessions, 1,680 picks, 1,432 prefetch passes; `sessions.json` 796,684 B, by additions only. The two hashes hold.
 - Tests at commit 4: `test_autodj_engine` 51 (the button inside the filter: its rows, a shared row by its first track, nothing inside, a level alone or no words drawing as no filter, no scratch). `test_autodj_driver` 38 (the button inside the filter, joined and before a join; one lookup when only a file with no row fits, none when nothing does; with no filter it draws as today, tries and draws included). `test_autodj_ref` 51.
+- 5: Stay on seed's re-pin and the quick skip (6.4, D2), in the engine and `tools/autodj_ref.py`.
+  - `Engine::pick()` is now a small function over `pickOnce(s, in, out, &again)`, the old body. A second round comes only after a re-pin. It shares `out`, and so its reads, and with `again` null it can't re-pin again. `repin()` runs at 4a and 4b, before the jump is marked: Stay on seed, a playing row that isn't the pin or damaged, with its own track (`rowToTrack`, as the runs test a row) inside the mood. Round 1 draws nothing before it, so the pick is the one a session pinned there from the start makes.
+  - Round 2 with its reads spent or failed: `nu == 0`, the random pick, which under a filter is the scan. It is marked `repinned` but not as a jump, the code's rule for any pick with no usable anchor (as in mood-no-anchor). The plan's "round 2 finds nothing" is read as 4a or 4b again: there both marks are set.
+  - `Session::pinMoved` (and `Engine::pinMoved()` for tests and the console) is set by the re-pin. A quick skip of that row in `rowLeft`, `modeChanged` and a new session clear it. Not in the plan: a moved pin that turns out damaged gives way as any pin does, and the random pick's row it falls to keeps the mark (no extra branch).
+  - Python's `track_left` drops a moved pin the same way. It has no `row_left`, so the fixture can't quick-skip one while the maps are away. The engine test does, through `rowLeft`.
+  - The 35 earlier sessions replay unchanged: none of their Stay on seed picks reaches 4a or 4b under a filter. `test_autodj_ref.py` now holds the first 35 by hash too (`9142951641b5…`).
+- Sessions of commit 5 (MEASURED-HOST, real words). A seed whose row lists nothing (`syn` has three) brings its session's first pick to the re-pin. The edges use that.
+  - mood-repin, `syn`, 90 picks: Stay on seed under Neutral (77 of 316 tracks fit), then Happy and Relaxed (51) after a Follow the vibe stretch. 19 re-pins (the toy gave 12), 4 of them with a jump. One has no read: a seed that lists nothing, with the listener on a row read ahead. 5 jumps in all.
+  - mood-repin-edges, `syn`, 62 picks under Vocals and Party (the plan's 70: the edges needed fewer). 11 re-pins, and 4 moved pins quick-skipped. Also: a seed's pin kept at a quick skip; an Anchor change after a re-pin; a playing track outside the mood (no re-pin, a jump); a new pin whose CRC fails twice (2 reads, and the random pick's row becomes the pin), then that row again, now damaged (a jump); a new pin whose read fails (Io: the scan, the pin kept and read at the next pick); two reads of a flaky seed's slot, leaving none for the new pin's (`leftOut` 1, the scan).
+  - mood-index-away, `syn`, 18 picks under Sad at Loose: a re-pin, then the index away (7 picks by id inside the mood, the moved pin kept) and back (the pin steers with no read). Then a session from a seed that lists nothing, begun while the index is away: its row is the pin at `arrived`, then 2 re-pins.
+  - In all: 38 sessions, 1,850 picks, 1,551 prefetch passes; `sessions.json` 871,028 B, by additions only. `test_the_mood_coverage` asserts 9.8's coverage, and all of it holds.
+- Tests at commit 5: `test_autodj_engine` 54 (`test_the_repin_stays_in_the_budget`, `test_a_moved_pin_goes_at_a_quick_skip`, `test_a_seed_pin_stays`; the sessions' bound is 38). `test_autodj_ref` 55 (the same three, the coverage, the new sessions' counts, the 35-session hash). Each of these mutations fails the replay: no quick-skip drop, `modeChanged` keeping the mark, no re-pin at 4b, a second round with its own reads, a re-pin onto a row outside the mood. All but the 4b one fail a unit test too.
+- Owed by commits 6 and 7 (from these notes): `docs/AUTODJ.md` 11.2's counts (38 sessions, 1,850 picks, 1,551 prefetch passes), 3.3 on the re-pin and 3.8 on the filtered repeat; the console's `D` lines for `repinned` and `jump`. Device checks (9.8's list) wait for the Core2: nothing in commits 4 and 5 changes a pick with no filter.
 
 ### 9.9 S5: the Auto DJ page
 

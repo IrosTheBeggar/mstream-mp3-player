@@ -242,6 +242,12 @@ bool Engine::trackLeft(uint32_t track, const Maps* maps, uint32_t playedMs, bool
 bool Engine::rowLeft(uint16_t row, uint32_t playedMs, bool naturalEnd) {
   if (naturalEnd || playedMs >= kQuickSkipMs) return false;
   ++stats_.quickSkips;
+  if (ses_.pinMoved && row != kNoRow && row == ses_.pin) {
+    // A moved pin quick-skipped goes (MOOD-FILTERS.md 6.4): the next Stay
+    // on seed pick takes the playing track's row. A seed's stays.
+    ses_.pin = kNoRow;
+    ses_.pinMoved = false;
+  }
   return row != kNoRow && ses_.ring.remove(row);
 }
 
@@ -251,6 +257,7 @@ void Engine::pickRefused(uint16_t row) {
 
 void Engine::modeChanged() {
   ses_.pin = kNoRow;
+  ses_.pinMoved = false;
   ses_.seedAwaits = kNoTrackId;
 }
 
@@ -543,8 +550,32 @@ uint32_t Engine::closest(const int8_t* usable, uint8_t nu, const Scope& sc, bool
   return ng;
 }
 
+// At most two rounds: a second when the first moved Stay on seed's pin
+// (MOOD-FILTERS.md 6.4), sharing its reads; no recursion.
 Pick Engine::pick(const Settings& s, const PickIn& in) {
   Pick out;
+  bool again = false;
+  const Pick p = pickOnce(s, in, out, &again);
+  return again ? pickOnce(s, in, out, nullptr) : p;
+}
+
+// Stay on seed under a mood filter, nothing listed inside it or all of it
+// cooled (MOOD-FILTERS.md 6.4, D2): the playing track's row, inside the mood
+// (its own track), not the pin and not damaged, is the pin now (moved: a
+// quick skip of it takes it away), and the anchors run again.
+bool Engine::repin(const Settings& s, const Maps& m, uint16_t playingRow, Pick& out) {
+  if (s.mode != Mode::Locked || playingRow == kNoRow || playingRow == ses_.pin || damaged_.has(playingRow))
+    return false;
+  if (!m.mood.passes(m.rowToTrack[playingRow])) return false;
+  ses_.pin = playingRow;
+  ses_.pinMoved = true;
+  out.repinned = true;
+  return true;
+}
+
+// A round of the pick; `again` (null in the second round) set when it moved
+// the pin, before any draw (the stream stays for the second).
+Pick Engine::pickOnce(const Settings& s, const PickIn& in, Pick& out, bool* again) {
   if (!in.maps || !in.slots || !slotBytes_ || in.maps->rows == 0) return byId(s, in, out);
   const Maps& m = *in.maps;
   const uint16_t playingRow = rowOf(&m, in.playingTrack);
@@ -636,8 +667,15 @@ Pick Engine::pick(const Settings& s, const PickIn& in) {
     out.candidates = static_cast<uint16_t>(nc);
     out.dry = out.loosened = false;
     if (nc == 0) {
-      // Nothing listed inside the mood: the jump (MOOD-FILTERS.md 6.2, 4a).
-      if (m.mood.on()) out.jump = Jump::NoCandidate;
+      // Nothing listed inside the mood: the jump (MOOD-FILTERS.md 6.2, 4a),
+      // unless the pin moves (6.4).
+      if (m.mood.on()) {
+        if (again && repin(s, m, playingRow, out)) {
+          *again = true;
+          return out;
+        }
+        out.jump = Jump::NoCandidate;
+      }
       return randomPick(s, in, sc, out);
     }
     // Dry: the kDry best sums. Every row of the pool cooled: loosen before
@@ -653,7 +691,11 @@ Pick Engine::pick(const Settings& s, const PickIn& in) {
         ng = fresh;
       } else if (m.mood.on()) {
         // Every listed row inside the mood cooled: the jump, not a repeat
-        // of a neighbour (6.2, 4b).
+        // of a neighbour (6.2, 4b), unless the pin moves.
+        if (again && repin(s, m, playingRow, out)) {
+          *again = true;
+          return out;
+        }
         out.jump = Jump::AllCooled;
         out.dry = false;
         return randomPick(s, in, sc, out);

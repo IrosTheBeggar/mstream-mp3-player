@@ -46,7 +46,9 @@
 //                the playing track at the first pick, as the mobile app and
 //                the terminal). A pin whose slot is damaged gives way to the
 //                random pick it causes, as a seed without a row does. Its
-//                slot is the only one read.
+//                slot is the only one read. Under a mood filter it moves
+//                (MOOD-FILTERS.md 6.4, D2): see below; a moved pin goes at a
+//                quick skip of it, a seed's stays.
 //   the seed     newSession()'s track; without one, the first track to start
 //                (it anchors the ring, but is no pin) or the playing track at
 //                the first pick.
@@ -105,7 +107,10 @@
 // isn't playing (Pick::repeated, cooldown level 2, ranked by its statuses
 // as known). None, or no index: by id, a fresh track inside the mood, else
 // the by-id cooldown's oldest, else the playing track; none: no pick
-// (Pick::noFit).
+// (Pick::noFit). In Stay on seed, before either jump (once a pick, no draw
+// before it): the playing track's row, inside the mood, not the pin and not
+// damaged, becomes the pin (Pick::repinned) and the anchors run again, in
+// the same read budget; nothing found there, the jump, both marked.
 // Random picks (no usable anchor, no candidate, a broken file):
 // kRandomDraws uniform draws over the rows, each kept once unless it maps
 // to no track or is an anchor or the playing track's; then the classes and
@@ -241,7 +246,7 @@ struct Pick {
   uint16_t candidates = 0, gated = 0, inClass = 0;
   // A mood filter's (MOOD-FILTERS.md 6.2):
   Jump jump = Jump::None;
-  bool repinned = false;    // Stay on seed's pin moved onto the playing row (6.4: not made yet)
+  bool repinned = false;    // Stay on seed's pin moved onto the playing row (6.4), before any jump
   bool repeated = false;    // a repeat inside the mood: the oldest cooled row, or by id
   bool noFit = false;       // not ok: no track fits the filter
 };
@@ -338,7 +343,8 @@ public:
   void trackStarted(uint32_t track, const Maps* maps, bool byAutoDj);
   // A track stopped being the current entry after `playedMs`: not a natural
   // end and under kQuickSkipMs, it leaves the ring (a quick skip: counted
-  // in Stats::quickSkips whether or not it had a row). True when it was in
+  // in Stats::quickSkips whether or not it had a row), and a pin moved onto
+  // it goes (MOOD-FILTERS.md 6.4; a seed's stays). True when it was in
   // the ring and left it (it no longer steers); false for a track with no
   // row, or one already out of the ring (it steered nothing).
   bool trackLeft(uint32_t track, const Maps* maps, uint32_t playedMs, bool naturalEnd);
@@ -350,7 +356,8 @@ public:
   // memory): out of the ring, as it never played; no quick skip; it stays
   // in the cooldowns.
   void pickRefused(uint16_t row);
-  // Anchor changed: the pin goes; the next Stay on seed pick takes it.
+  // Anchor changed: the pin goes (moved or not); the next Stay on seed pick
+  // takes it.
   void modeChanged();
   // The index joined after newSession() was given its seed track without
   // maps (Auto DJ switched on by "Auto DJ from here" or the empty states'
@@ -408,6 +415,7 @@ public:
   uint8_t anchors() const { return ses_.ring.size(); }
   uint16_t anchor(uint8_t i) const { return ses_.ring.at(i); }  // oldest first
   uint16_t pin() const { return ses_.pin; }
+  bool pinMoved() const { return ses_.pinMoved; }
   uint8_t keyAnchor() const { return ses_.keyAnchor; }
   bool seeded() const { return ses_.seeded; }
   uint8_t cooledRows() const { return ses_.cool.size(); }
@@ -429,6 +437,7 @@ private:
     Ring<uint16_t, kArtistCooldown> arts;
     Ring<uint32_t, kTrackCooldown> ids;
     uint16_t pin = kNoRow;
+    bool pinMoved = false;  // the pin moved onto a playing row (MOOD-FILTERS.md 6.4): a quick skip takes it away
     uint8_t keyAnchor = 0;
     bool seeded = false;
     uint32_t seedAwaits = kNoTrackId;  // newSession()'s seed track, given no maps: mapsArrived()'s
@@ -478,6 +487,8 @@ private:
   // A pool counted by its candidates' bits (its classes, its statuses).
   struct Counts;
 
+  Pick pickOnce(const Settings& s, const PickIn& in, Pick& out, bool* again);
+  bool repin(const Settings& s, const Maps& m, uint16_t playingRow, Pick& out);
   void seed(uint32_t track, const Maps* maps, bool pin);
   void join(uint16_t row, const Maps& m);
   int find(uint16_t row) const;

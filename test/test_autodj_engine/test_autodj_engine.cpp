@@ -27,8 +27,10 @@
 // changed filter or words filled again, a shared row tested by its first
 // track; its own ladder, 6.2: a jump keeping the classes, the scan's 64,
 // repeats oldest first, a track with no row before them, the only track
-// that fits, nothing that fits; the button inside it, 6.3); the cache
-// keeping the ring and the pin; damaged (a
+// that fits, nothing that fits; the button inside it, 6.3; Stay on seed's
+// re-pin, 6.4: in the read budget, no draw before it, a jump when the new
+// pin finds nothing, a moved pin gone at a quick skip, a seed's kept); the
+// cache keeping the ring and the pin; damaged (a
 // damaged pin giving way; the rows a pick's reads damaged, named once),
 // failed and broken slots, in hand-made readers and in the hardening
 // files; picks by track id; the empty states' button;
@@ -476,7 +478,7 @@ void test_sessions_match_the_reference() {
                 static_cast<unsigned>(sessions), static_cast<unsigned>(picks), static_cast<unsigned>(prefetches));
   TEST_MESSAGE(line);
   TEST_ASSERT_GREATER_OR_EQUAL(300, picks);
-  TEST_ASSERT_GREATER_OR_EQUAL(14, sessions);
+  TEST_ASSERT_GREATER_OR_EQUAL(38, sessions);
 }
 
 // D2: BPM continuity and Harmonic mixing off by default (the design's 4.1
@@ -1384,6 +1386,168 @@ void test_the_only_track_repeats() {
   }
 }
 
+// Row 0, the seed, lists rows 1-2, sad; row 3, happy, lists rows 4-5,
+// happy; row 6, happy, is listed by none (the scan's). Under Happy, Stay on
+// seed from row 0 with the listener on row 3 re-pins onto it (MOOD-FILTERS.md
+// 6.4).
+std::unique_ptr<Table> repinTable(std::vector<uint16_t>* words) {
+  std::vector<Entries> lists = {{{1, 200}, {2, 199}}, {{0, 200}}, {{0, 200}}, {{4, 200}, {5, 199}},
+                                {{3, 200}},           {{3, 200}}, {{0, 200}}, {{0, 200}}};
+  std::unique_ptr<Table> t(new Table(lists));
+  *words = {kSad, kSad, kSad, kHappy, kHappy, kHappy, kHappy, kSad};
+  t->maps.m.mood = MoodView(words->data(), 8, kHappyQ);
+  return t;
+}
+
+// The second round shares the first's reads (kReadsPerPick), and round 1
+// draws nothing before the re-pin; past the budget, the scan, the moved pin
+// read ahead; the second round finding nothing jumps, both marked.
+void test_the_repin_stays_in_the_budget() {
+  const Settings lock = settings(Mode::Locked);
+  std::vector<uint16_t> words;
+  // Row 0's slot, then row 3's: two reads; row 0's read ahead, one; both, none.
+  for (int ahead = 0; ahead <= 2; ++ahead) {
+    auto t = repinTable(&words);
+    const Maps* m = &t->maps.m;
+    auto e = engine();
+    e->newSession(5, 0, m);
+    if (ahead == 2) e->prefetch(t->reader, 3, m, static_cast<uint16_t>(t->k));
+    if (ahead) e->prefetch(t->reader, 0, m, static_cast<uint16_t>(t->k));
+    e->trackStarted(3, m, false);
+    const Pick p = e->pick(lock, t->in(3));
+    TEST_ASSERT_TRUE(p.ok && p.repinned && p.jump == Jump::None && !p.random);
+    TEST_ASSERT_EQUAL(2 - ahead, p.reads);
+    TEST_ASSERT_TRUE(p.row == 4 || p.row == 5);
+    TEST_ASSERT_EQUAL(3, e->pin());
+    TEST_ASSERT_TRUE(e->pinMoved());
+    TEST_ASSERT_EQUAL(1, e->stats().repins);
+    TEST_ASSERT_EQUAL(0, e->stats().jumps);
+  }
+  // No draw before it: the pick a session pinned on row 3 from the start
+  // makes, from the same stream.
+  for (uint32_t seed = 0; seed < 8; ++seed) {
+    auto t = repinTable(&words);
+    const Maps* m = &t->maps.m;
+    auto e = engine();
+    e->newSession(seed, 0, m);
+    e->trackStarted(3, m, false);
+    auto twin = engine();
+    twin->newSession(seed, 3, m);
+    TEST_ASSERT_EQUAL(twin->pick(lock, t->in(3)).row, e->pick(lock, t->in(3)).row);
+  }
+  // Two reads of row 0's (its CRC failed once): none left for the new pin's,
+  // so the scan (random, no jump); the moved pin is the next read ahead.
+  {
+    auto t = repinTable(&words);
+    t->reader.flaky = {0};
+    const Maps* m = &t->maps.m;
+    auto e = engine();
+    e->newSession(5, 0, m);
+    e->trackStarted(3, m, false);
+    const Pick p = e->pick(lock, t->in(3));
+    TEST_ASSERT_TRUE(p.ok && p.repinned && p.random && p.jump == Jump::None);
+    TEST_ASSERT_EQUAL(2, p.reads);
+    TEST_ASSERT_EQUAL(1, e->stats().leftOut);
+    TEST_ASSERT_TRUE(p.row >= 4 && p.row <= 6);
+    uint16_t row = kNoRow;
+    TEST_ASSERT_TRUE(e->prefetchDue(lock, &row));
+    TEST_ASSERT_EQUAL(3, row);
+  }
+  // Nothing inside the mood in the new pin's list either: the jump.
+  {
+    auto t = repinTable(&words);
+    t->lists[3] = {{1, 200}, {2, 199}};
+    const Maps* m = &t->maps.m;
+    auto e = engine();
+    e->newSession(5, 0, m);
+    e->trackStarted(3, m, false);
+    const Pick p = e->pick(lock, t->in(3));
+    TEST_ASSERT_TRUE(p.ok && p.repinned && p.random && p.jump == Jump::NoCandidate);
+    TEST_ASSERT_EQUAL(3, p.candidates);  // rows 4-6
+    TEST_ASSERT_EQUAL(1, e->stats().repins);
+    TEST_ASSERT_EQUAL(1, e->stats().jumps);
+  }
+}
+
+// A moved pin goes at a quick skip of it (by its track, or by the row the
+// loop step remembers while the maps are away) and at an Anchor change, its
+// mark with it; the next Stay on seed pick takes the playing track's row. A
+// natural end, or 30 s played, keeps it; so does a skip whose row is unknown.
+void test_a_moved_pin_goes_at_a_quick_skip() {
+  const Settings lock = settings(Mode::Locked);
+  std::vector<uint16_t> words;
+  auto t = repinTable(&words);
+  const Maps* m = &t->maps.m;
+  enum Leave { Quick, Natural, Played, Anchor, ByRow, Unknown };
+  for (int leave = Quick; leave <= Unknown; ++leave) {
+    auto e = engine();
+    e->newSession(5, 0, m);
+    e->trackStarted(3, m, false);
+    const Pick p = e->pick(lock, t->in(3));
+    TEST_ASSERT_TRUE(p.repinned && e->pinMoved());
+    TEST_ASSERT_EQUAL(3, e->pin());
+    if (leave == Anchor) {
+      e->modeChanged();
+    } else if (leave == ByRow) {
+      e->rowLeft(3, 5000, false);
+    } else {
+      e->trackLeft(3, leave == Unknown ? nullptr : m, leave == Played ? kQuickSkipMs : 5000, leave == Natural);
+    }
+    const bool gone = leave == Quick || leave == Anchor || leave == ByRow;
+    TEST_ASSERT_EQUAL_MESSAGE(gone ? kNoRow : 3, e->pin(), "the pin");
+    TEST_ASSERT_EQUAL_MESSAGE(!gone, e->pinMoved(), "its mark");
+    e->trackStarted(p.track, m, true);
+    e->pick(lock, t->in(p.track));
+    TEST_ASSERT_EQUAL(gone ? p.row : 3, e->pin());
+    TEST_ASSERT_EQUAL(!gone, e->pinMoved());
+  }
+}
+
+// The seed's pin, and one a pick took from the playing track, stay at a
+// quick skip. A pin moves only in Stay on seed (Follow the vibe with row 0
+// its only anchor jumps), only under a filter (none: row 0's own list, as
+// today), and never onto a row outside the mood, the pin itself, or a
+// damaged row.
+void test_a_seed_pin_stays() {
+  const Settings lock = settings(Mode::Locked);
+  std::vector<uint16_t> words;
+  auto t = repinTable(&words);
+  const Maps* m = &t->maps.m;
+  auto e = engine();
+  e->newSession(5, 0, m);
+  TEST_ASSERT_TRUE(e->trackLeft(0, m, 5000, false));  // out of the ring, still the pin
+  TEST_ASSERT_EQUAL(0, e->pin());
+  TEST_ASSERT_FALSE(e->pinMoved());
+  e->modeChanged();
+  e->pick(lock, t->in(6));  // the pin from the playing track
+  TEST_ASSERT_EQUAL(6, e->pin());
+  e->trackLeft(6, m, 5000, false);
+  TEST_ASSERT_EQUAL(6, e->pin());
+  enum Case { Rolling, Off, Outside, OnPin, Damaged };
+  for (int c = Rolling; c <= Damaged; ++c) {
+    auto u = repinTable(&words);
+    const Maps* um = &u->maps.m;
+    if (c == Off) u->maps.m.mood = MoodView(words.data(), 8, 0);
+    auto f = engine();
+    f->newSession(5, 0, um);
+    const uint32_t playing = c == Outside ? 7 : c == OnPin ? 0 : 3;
+    if (c == Damaged) {
+      u->reader.damaged = {3};
+      f->prefetch(u->reader, 3);
+      f->prefetch(u->reader, 3);
+      TEST_ASSERT_TRUE(f->rowDamaged(3));
+    }
+    if (c != OnPin && c != Rolling) f->trackStarted(playing, um, false);
+    const Pick p = f->pick(c == Rolling ? settings() : lock, u->in(playing));
+    TEST_ASSERT_FALSE(p.repinned);
+    TEST_ASSERT_EQUAL(0, f->pin());
+    TEST_ASSERT_FALSE(f->pinMoved());
+    TEST_ASSERT_TRUE(p.jump == (c == Off ? Jump::None : Jump::NoCandidate));
+    TEST_ASSERT_TRUE(c == Off ? p.row == 1 || p.row == 2 : p.row >= 3 && p.row <= 6);
+    TEST_ASSERT_EQUAL(0, f->stats().repins);
+  }
+}
+
 // trackLeft() says whether the track stopped steering: a row in the ring
 // leaves it; a track with no row (the console's '[dj] a quick skip' line,
 // 2026-10-13) or one already out never steered. Each quick skip counts.
@@ -2126,6 +2290,9 @@ int main(int, char**) {
   RUN_TEST(test_repeats_oldest_first);
   RUN_TEST(test_a_track_with_no_row_before_repeats);
   RUN_TEST(test_the_only_track_repeats);
+  RUN_TEST(test_the_repin_stays_in_the_budget);
+  RUN_TEST(test_a_moved_pin_goes_at_a_quick_skip);
+  RUN_TEST(test_a_seed_pin_stays);
   RUN_TEST(test_a_quick_skip_says_whether_it_steered);
   RUN_TEST(test_cooldown_before_music);
   RUN_TEST(test_no_bpm_or_key_anywhere);
