@@ -173,6 +173,7 @@ TriggerIn Driver::triggerIn(const PlaybackController& player, const Index& ix, c
   in.restartSet = env.restartSet;
   in.sleepEndOfQueue = env.sleepEndOfQueue;
   in.failurePaused = failures_.paused();
+  in.noFit = ix.mood.on() && ix.fit == 0;  // (MOOD-FILTERS.md 6.5)
   return fromPlayer(player, in);
 }
 

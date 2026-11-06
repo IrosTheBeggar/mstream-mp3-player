@@ -132,6 +132,10 @@ struct Index {
   uint8_t selFloor = 0;
   bool joining = false;         // the file reopens, or the join runs (the trigger's)
   MoodView mood;                // the mood filter (MOOD-FILTERS.md 6.1), the maps' too: also without them
+  // The library tracks inside it (the glue's count, 6.5), read only while
+  // it is on: 0 then is the trigger's hold (Hold::NoFit), so it comes only
+  // from the words themselves.
+  uint32_t fit = 0;
 };
 
 // The rest of the pass's inputs.
@@ -295,7 +299,8 @@ public:
   uint32_t sessions() const { return sessions_; }
   uint32_t sessionSeed() const { return sessionSeed_; }
   Began sessionBegan() const { return began_; }
-  // Holds begun (Repeat One, the sleep timer, the failure pause), while on.
+  // Holds begun (Repeat One, the sleep timer, the failure pause, a mood
+  // filter nothing fits), while on.
   uint32_t holds() const { return holds_; }
   uint32_t refusals() const { return refusals_; }
   uint32_t undoDrops() const { return undoDrops_; }

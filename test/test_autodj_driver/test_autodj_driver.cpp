@@ -28,7 +28,8 @@
 // - a slot whose CRC fails again at a pick: the pass names its row, once;
 // - a mood filter given as the firmware gives it: the picks inside it; the
 //   empty states' button inside it, joined and before a join, and with no
-//   filter as before there was one.
+//   filter as before there was one; a filter no track fits holds, and owes
+//   nothing.
 // An AutoDJ index written with mpdj::write for a made-up library, joined
 // (AutoDjJoin), its slots read through mpdj::Table::slot(), and a real
 // PlaybackController over a small backend.
@@ -240,10 +241,11 @@ struct Rig {
     env.libraryTracks = card.index.trackCount();
   }
   // As the firmware's AutoDj::index(): the join's maps copied, with the
-  // mood filter, which also goes beside them.
+  // mood filter, which also goes beside them, and the tracks inside it.
   autodj::Index index() {
     autodj::Index i;
     i.mood = mood;
+    i.fit = mood.on() ? moodfilter::count(mood.words, mood.tracks, mood.f, nullptr) : 0;
     if (indexed) {
       maps = *card.join.maps();
       maps.mood = mood;
@@ -1803,6 +1805,63 @@ void test_a_mood_filter_keeps_the_picks_inside_it() {
   TEST_ASSERT_TRUE(r.dj.engine().stats().prefetchReads > 0);
 }
 
+// A mood filter no track fits (MOOD-FILTERS.md 6.5, D3): a hold, as Repeat
+// One's. No pick is asked for, the trigger says why, the hold is counted
+// once, and nothing is owed while the index joins (the update step never
+// waits on it). Once a track fits, the next pass picks it. A filter that
+// isn't on (a level alone, no words) never holds.
+void test_a_filter_nothing_fits_holds_and_owes_nothing() {
+  Rig r;
+  auto wordOf = [](double happy, double sad) {
+    const double scores[moodfilter::kHeads] = {0.5, happy, sad, 0.5, 0.5, 0.5, 0.5, 0.1};
+    uint8_t tail[8];
+    moodfilter::tailOf(scores, tail);
+    return moodfilter::wordOfTail(tail);
+  };
+  const uint32_t n = r.card.index.trackCount();
+  std::vector<uint16_t> words(n, wordOf(0.8, 0.1));
+  moodfilter::Filter sad;
+  sad.valence = moodfilter::Scale::Second;
+  r.mood = autodj::MoodView(words.data(), n, sad.pack());
+  TEST_ASSERT_TRUE(r.dj.setOn(true));
+  r.playOne(r.card.trackOf(5));
+  Pass p = r.playTo(700);
+  TEST_ASSERT_FALSE(p.picked);
+  TEST_ASSERT_TRUE(p.trigger.wait == autodj::Wait::NoFit);
+  TEST_ASSERT_TRUE(p.trigger.hold == autodj::Hold::NoFit);
+  for (int i = 0; i < 3; ++i) TEST_ASSERT_FALSE(r.pass().picked);
+  TEST_ASSERT_EQUAL_UINT32(1, r.dj.holds());
+  r.joining = true;
+  p = r.pass();
+  TEST_ASSERT_TRUE(p.trigger.hold == autodj::Hold::NoFit);
+  TEST_ASSERT_FALSE(p.trigger.owed);
+  TEST_ASSERT_FALSE(r.dj.owed());
+  r.joining = false;
+  TEST_ASSERT_EQUAL_UINT32(0, r.dj.engine().stats().picks + r.dj.engine().stats().failed);
+  TEST_ASSERT_FALSE(r.dj.retryWaits(r.env.nowMs));
+  // One track fits now (its word filled again in place: the glue's
+  // mapsChanged()): picked at once.
+  words[r.card.trackOf(9)] = wordOf(0.1, 0.8);
+  r.dj.engine().mapsChanged();
+  p = r.pass();
+  TEST_ASSERT_TRUE(p.trigger.hold == autodj::Hold::None);
+  TEST_ASSERT_TRUE(p.added);
+  TEST_ASSERT_EQUAL_UINT32(r.card.trackOf(9), p.pick.track);
+  TEST_ASSERT_TRUE(p.pick.jump == autodj::Jump::NoCandidate);  // (row 5 lists 3, 4, 6, 7)
+  TEST_ASSERT_EQUAL_UINT32(1, r.dj.holds());
+  // Not on: a level alone, or no words, with nothing inside counted.
+  moodfilter::Filter level;
+  level.level = moodfilter::Level::Strict;
+  const autodj::MoodView offs[] = {autodj::MoodView(words.data(), n, level.pack()),
+                                   autodj::MoodView(nullptr, 0, sad.pack())};
+  for (const autodj::MoodView& off : offs) {
+    r.mood = off;
+    autodj::Index ix = r.index();
+    ix.fit = 0;
+    TEST_ASSERT_TRUE(r.dj.step(r.player, ix, r.env).trigger.hold == autodj::Hold::None);
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_command_parses_every_form);
@@ -1843,5 +1902,6 @@ int main(int, char**) {
   RUN_TEST(test_the_button_with_no_filter_draws_as_today);
   RUN_TEST(test_runs_are_made_again_for_new_maps);
   RUN_TEST(test_a_mood_filter_keeps_the_picks_inside_it);
+  RUN_TEST(test_a_filter_nothing_fits_holds_and_owes_nothing);
   return UNITY_END();
 }

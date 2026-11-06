@@ -43,9 +43,9 @@ std::string root(const State& s, bool withMode = true) {
 
 }  // namespace
 
-// Off, On, and the holds while on: Repeat One and the sleep timer's End
-// of queue wait, the failure pause pauses; a hold left from before it was
-// switched off says nothing.
+// Off, On, and the holds while on: Repeat One, the sleep timer's End of
+// queue and a mood filter nothing fits wait, the failure pause pauses; a
+// hold left from before it was switched off says nothing.
 void test_the_row_state() {
   State s;
   TEST_ASSERT_TRUE(rowState(s) == RowState::Off);
@@ -54,6 +54,8 @@ void test_the_row_state() {
   s.on = true;
   TEST_ASSERT_TRUE(rowState(s) == RowState::Waiting);
   s.hold = Hold::SleepTimer;
+  TEST_ASSERT_TRUE(rowState(s) == RowState::Waiting);
+  s.hold = Hold::NoFit;
   TEST_ASSERT_TRUE(rowState(s) == RowState::Waiting);
   s.hold = Hold::Failures;
   TEST_ASSERT_TRUE(rowState(s) == RowState::Paused);
@@ -85,6 +87,8 @@ void test_the_output_row_line() {
   s.hold = Hold::RepeatOne;
   TEST_ASSERT_EQUAL_STRING("Waiting \xC2\xB7 Follow the vibe", root(s).c_str());
   TEST_ASSERT_EQUAL_STRING("Waiting", root(s, false).c_str());
+  s.hold = Hold::NoFit;
+  TEST_ASSERT_EQUAL_STRING("Waiting \xC2\xB7 Follow the vibe", root(s).c_str());
   s.hold = Hold::Failures;
   s.mode = Mode::Locked;
   TEST_ASSERT_EQUAL_STRING("Paused \xC2\xB7 Stay on seed", root(s).c_str());
@@ -276,6 +280,9 @@ void test_the_status_row_says_why_it_waits() {
   TEST_ASSERT_EQUAL_STRING("300 of 310 tracks have neighbours", line(s, 1).c_str());
   s.hold = Hold::SleepTimer;
   TEST_ASSERT_EQUAL_STRING("Waiting: sleep timer set to End of queue", line(s, 0).c_str());
+  s.hold = Hold::NoFit;  // (MOOD-FILTERS.md 4.4, 6.5)
+  TEST_ASSERT_EQUAL_STRING("Waiting: no track fits the filters", line(s, 0).c_str());
+  TEST_ASSERT_EQUAL_STRING("300 of 310 tracks have neighbours", line(s, 1).c_str());
   s.hold = Hold::Failures;
   s.index = Index::None;
   TEST_ASSERT_EQUAL_STRING("Paused: tracks failed to play", line(s, 0).c_str());

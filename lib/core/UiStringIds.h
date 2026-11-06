@@ -317,6 +317,7 @@ enum class S : uint16_t {
   autodj_status_random,  // picks are random
   autodj_status_waits_repeat,  // Waiting: Repeat One is on
   autodj_status_waits_sleep,  // Waiting: sleep timer set to End of queue
+  autodj_status_waits_fit,  // Waiting: no track fits the filters
   autodj_status_paused,  // Paused: tracks failed to play
   settings_screen_off,  // Screen off after
   settings_screen_off_sub,  // dims first; a tap wakes it
@@ -616,7 +617,7 @@ enum class S : uint16_t {
   format_hz,  // {0} Hz
   format_list_sep,  // , 
 };
-inline constexpr unsigned kStrings = 607;
+inline constexpr unsigned kStrings = 608;
 
 // The languages, English first: the mobile app's ten (one without a
 // catalogue yet draws English), and the pseudo-locale where UISTR_PSEUDO

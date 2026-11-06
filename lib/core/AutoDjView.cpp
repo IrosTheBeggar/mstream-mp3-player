@@ -26,7 +26,8 @@ RowState rowState(const State& s) {
   switch (s.hold) {
     case autodj::Hold::Failures: return RowState::Paused;
     case autodj::Hold::RepeatOne:
-    case autodj::Hold::SleepTimer: return RowState::Waiting;
+    case autodj::Hold::SleepTimer:
+    case autodj::Hold::NoFit: return RowState::Waiting;
     case autodj::Hold::None: break;
   }
   return RowState::On;
@@ -129,6 +130,7 @@ void statusLines(const State& s, char* line1, size_t size1, char* line2, size_t 
   // Why it adds nothing, over the index's first line.
   const S why = s.hold == autodj::Hold::Failures    ? S::autodj_status_paused
                 : s.hold == autodj::Hold::RepeatOne ? S::autodj_status_waits_repeat
+                : s.hold == autodj::Hold::NoFit     ? S::autodj_status_waits_fit
                                                     : S::autodj_status_waits_sleep;
   uistr::trf(line1, size1, why);
   char spare[8];
