@@ -12,9 +12,11 @@
 
 #include "LibraryText.h"
 #include "QueueView.h"
+#include "TagText.h"
 #include "TextFold.h"
 #include "UiStrings.h"
 #include "UiText.h"
+#include "app/Psram.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
 #include "ui/Icons.h"
@@ -51,6 +53,8 @@ NavModel::PageRef page(PageKind kind, uint32_t id) {
 }
 
 }  // namespace
+
+LibraryPage::LibraryPage(Ui& ui) : Page(ui), albums_(psramAlloc, psramFree) {}
 
 // ---- where things are ----
 
@@ -995,6 +999,100 @@ void LibraryPage::autoDjFromHere(uint32_t track) {
   }
   Serial.printf("[ui] library: Auto DJ from here: %s\n", what);
   ui_.autoDjToast(text, !wasOn);  // (Undo: the queue as it was, and Auto DJ off if this switched it on)
+}
+
+
+// ---- the Albums list's mood filter (docs/MOOD-FILTERS.md 4.2, 4.6) ----
+
+const LibraryIndex* LibraryPage::filterIndex() const {
+  const LibraryIndex* i = const_cast<Ui&>(ui_).browseIndex();
+  return i && i->ready() ? i : nullptr;
+}
+
+bool LibraryPage::setFilterWord(uint16_t q) {
+  const moodfilter::Filter f = moodfilter::Filter::unpack(q);
+  const LibraryIndex* i = filterIndex();
+  if (!i) {
+    // Behind the fence: kept, its albums worked out once the list has an
+    // index again (4.2's "Updating").
+    filter_ = f;
+    albums_.drop();
+    Serial.printf("[ui] filters: albums 0x%03X kept, nothing worked out (no index: the library is updating)\n",
+                  static_cast<unsigned>(f.pack()));
+    return true;
+  }
+  const uint32_t t0 = micros();
+  const FilteredAlbums::Result r = albums_.recompute(*i, f);
+  passUs_ = micros() - t0;
+  ++passes_;
+  char a[16], b[16], c[16];
+  if (r == FilteredAlbums::Result::NoMemory) {
+    // Its albums can't be held: the filter stays as it was (4.2).
+    Serial.printf("[ui] filters: albums 0x%03X: NO MEMORY for %s albums' ids (%s B): the filter stays 0x%03X\n",
+                  static_cast<unsigned>(f.pack()), queueview::grouped(i->albumCount(), a, sizeof(a)),
+                  queueview::grouped(i->albumCount() * 4u, b, sizeof(b)), static_cast<unsigned>(filter_.pack()));
+    ui_.toast(tr(S::toast_no_memory), false);
+    return false;
+  }
+  filter_ = f;
+  // Every pass and its time (MODELLED 8-35 ms idle at 20k albums' tracks;
+  // gm<hex>'s albums pass, 9.6's run C: 14-31 ms).
+  if (r == FilteredAlbums::Result::Unfiltered) {
+    Serial.printf("[ui] filters: albums 0x%03X: no filter, every album (%s), the pass %lu us\n",
+                  static_cast<unsigned>(f.pack()), queueview::grouped(i->albumCount(), a, sizeof(a)),
+                  static_cast<unsigned long>(passUs_));
+  } else {
+    Serial.printf("[ui] filters: albums 0x%03X: %s of %s albums fit, the pass %lu us (%s B held)%s\n",
+                  static_cast<unsigned>(f.pack()), queueview::grouped(albums_.count(), a, sizeof(a)),
+                  queueview::grouped(albums_.total(), b, sizeof(b)), static_cast<unsigned long>(passUs_),
+                  queueview::grouped(static_cast<uint32_t>(albums_.bytes()), c, sizeof(c)),
+                  i->hasMoods() ? "" : " (no mood data on this card: none can fit)");
+  }
+  return true;
+}
+
+void LibraryPage::refreshFilter() {
+  if (!filter_.active() || albums_.held() || !filterIndex()) return;
+  if (!setFilterWord(filter_.pack())) filter_ = moodfilter::Filter();  // (no memory: said)
+}
+
+uint32_t LibraryPage::filterFits() { return albums_.held() ? albums_.count() : filterTotal(); }
+
+uint32_t LibraryPage::filterTotal() {
+  const LibraryIndex* i = filterIndex();
+  return i ? i->albumCount() : 0;
+}
+
+void LibraryPage::onFiltersClosed(bool changed) {
+  if (!changed) return;  // (the band pushed again as it was: Ui::repaintUnder())
+  // The Albums list on screen: read again, from its top, once (reload()
+  // only marks it: a close through a tab tap draws nothing here).
+  ListView& list = ui_.list();
+  if (!root() || segment() != LibrarySegment::Albums || list.source() != this || !ref_) return;
+  list.reload();
+  list.scrollTo(0);
+  ref_->scrollPx = 0;
+}
+
+void LibraryPage::printFilter() const {
+  char t[200], a[16], b[16], c[16];
+  tagtext::filterText(filter_.pack(), t, sizeof(t));
+  Serial.printf("[ui] filters: albums 0x%03X: %s\n", static_cast<unsigned>(filter_.pack()), t);
+  if (albums_.held()) {
+    Serial.printf("[ui] filters: %s of %s albums held (filter 0x%03X), carved %s B; %lu passes, the last %lu us\n",
+                  queueview::grouped(albums_.count(), a, sizeof(a)), queueview::grouped(albums_.total(), b, sizeof(b)),
+                  static_cast<unsigned>(albums_.word()),
+                  queueview::grouped(static_cast<uint32_t>(albums_.bytes()), c, sizeof(c)),
+                  static_cast<unsigned long>(passes_), static_cast<unsigned long>(passUs_));
+  } else {
+    Serial.printf("[ui] filters: no albums held (%s), nothing carved; %lu passes, the last %lu us\n",
+                  !filter_.active() ? "no filter: every album shows"
+                  : !filterIndex()  ? "the library is updating"
+                                    : "dropped when the library updated or changed",
+                  static_cast<unsigned long>(passes_), static_cast<unsigned long>(passUs_));
+  }
+  const LibraryIndex* i = filterIndex();
+  if (i && !i->hasMoods()) Serial.println("[ui] filters: no mood data on this card: a filter lets no album through");
 }
 
 }  // namespace ui

@@ -5,13 +5,16 @@
 #include <cstdint>
 
 #include "BitSet.h"
+#include "FilteredAlbums.h"
 #include "LibraryIndex.h"
 #include "LibraryText.h"
+#include "MoodFilter.h"
 #include "OutputModel.h"
 #include "PlaybackController.h"
 #include "SeekBar.h"
 #include "UiText.h"
 #include "WaveBar.h"
+#include "ui/FilterSheet.h"
 #include "ui/ListView.h"
 #include "ui/UiHost.h"
 #include "ui/Page.h"
@@ -314,9 +317,17 @@ private:
 // (over 30) have the A-Z rail and its jump grid. The row that holds what
 // plays now (the artist, the album, the track, the folders on its path) is
 // tinted, and a page opened from Now Playing opens scrolled to it.
-class LibraryPage : public Page, public ListView::Source {
+//
+// The Albums list's mood filter (docs/MOOD-FILTERS.md 4.2, 4.6) is the
+// page's, in RAM: kept through leave(), enter() and resetLibraryTab(),
+// forgotten by a boot (D6). The mood filters' editor (ui/FilterSheet) and
+// the console's uiMa set it; each change works out the albums that fit
+// (FilteredAlbums, its block in PSRAM) and logs the pass's time. The
+// library update's fence and a rebuild drop those albums (their ids are
+// stale), the filter kept.
+class LibraryPage : public Page, public ListView::Source, public FilterOwner {
 public:
-  explicit LibraryPage(Ui& ui) : Page(ui) {}
+  explicit LibraryPage(Ui& ui);
   const char* name() const override { return "Library"; }
   bool scrolls() const override { return true; }
   void enter(NavModel::PageRef& ref) override;
@@ -356,6 +367,27 @@ public:
   const char* emptyText() override;
   bool emptyState(EmptyState& e) override;
   void onEmptyAction(int i) override;
+
+  // FilterOwner: the Albums list's filter, which the editor and uiMa set.
+  // Behind the fence (no index) it is kept and nothing is worked out; no
+  // memory for its albums: the old one stays and a toast says so (4.2).
+  uint16_t filterWord() override { return filter_.pack(); }
+  bool setFilterWord(uint16_t q) override;
+  uint32_t filterFits() override;
+  uint32_t filterTotal() override;
+  filtergrid::Scope filterScope() override { return filtergrid::Scope::Albums; }
+  // A changed filter: the Albums list, if it shows, reloads at its top
+  // once (7.5).
+  void onFiltersClosed(bool changed) override;
+  // The library update's fence went up, or the index was rebuilt
+  // (Ui::libraryUpdating(), libraryChanged()): the albums' ids are stale.
+  void dropFilteredAlbums() { albums_.drop(); }
+  // A filter on with no albums held (dropped as above): worked out again
+  // over the index there is now; no memory for them, the filter goes
+  // (4.2). Nothing behind the fence.
+  void refreshFilter();
+  // uiM: the filter, what it holds, the last pass, the carve.
+  void printFilter() const;
 
 private:
   // Disc: an album's "Disc 2" divider (5.4), not a control.
@@ -417,6 +449,13 @@ private:
   bool heldDj_ = false;  // its sheet has "Auto DJ from here" (the first row)
   // The Album page's disc dividers (read at enter()).
   librarytext::Discs discs_;
+  // The Albums list's mood filter (4.6), the albums that fit it, the last
+  // pass's time.
+  const LibraryIndex* filterIndex() const;
+  moodfilter::Filter filter_;
+  FilteredAlbums albums_;
+  uint32_t passUs_ = 0;
+  uint32_t passes_ = 0;
 };
 
 // ---- Queue (spec §6.4, mockups 16-18, with the review's grafts and the

@@ -10,17 +10,24 @@
 // every panel point one cell at most, in its row, in order; the title
 // row's hits; the first row's zones at 284, 312 and 320; the dot; the
 // summary's order and the count's forms in English. The real fonts, every
-// language and the lab's panel are test_ui_library's. Run: pio test -e
+// language and the lab's panel are test_ui_library's. And the Albums
+// list's filtered albums (lib/core/FilteredAlbums; 4.1, 4.2): a
+// subsequence of albumsAZ(), by the majority rule, nothing held without a
+// filter or once dropped, an allocator's failure keeping what was held,
+// worked out again for a new filter and a new index. Run: pio test -e
 // native -f test_ui_filter
 #include <unity.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
 #include "FilterGrid.h"
+#include "FilteredAlbums.h"
+#include "LibraryIndex.h"
 #include "MoodFilter.h"
 #include "TextFold.h"
 #include "UiStrings.h"
@@ -498,6 +505,277 @@ void test_count_forms() {
   TEST_ASSERT_EQUAL_STRING("99,999 of 99,999", buf);
 }
 
+// ---- the Albums list's filtered albums (4.1, 4.2; FilteredAlbums) ----
+
+namespace {
+
+// Two words (test_ui_library's): 5.7's worked example, which 0x127 (sad,
+// relaxed, vocals, danceable) lets through, and a happy, relaxed song.
+constexpr uint16_t kFits = 0xB313;
+constexpr uint16_t kMiss = 0x9B00;
+const Filter kSadRelaxed = Filter::unpack(0x127);
+
+// The allocator hooks, counted; `failing` refuses every block.
+int allocs = 0, frees = 0;
+bool failing = false;
+void* countedAlloc(size_t n) {
+  if (failing) return nullptr;
+  ++allocs;
+  return std::malloc(n);
+}
+void countedFree(void* p) {
+  ++frees;
+  std::free(p);
+}
+
+void addTrack(LibraryIndex& idx, const char* path, uint16_t word) {
+  LibraryIndex::TagView v;
+  v.source = LibraryIndex::kFromTransfer;
+  v.title = "Song";
+  v.titleLen = 4;
+  v.moods = word;
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, idx.addRecord(path, v));
+}
+
+// test_ui_library's library of every album shape, with words (its
+// buildMoodLibrary()); under 0x127:
+//   A/One     3 of 4 analysed fit: fits
+//   A/Two     2 of 4: half, no
+//   A/Three   2 of 3 analysed (a 4th without a word): fits
+//   B/Unheard no word at all: 0 of 0, never
+//   B/        an artist's loose track that fits: 1 of 1
+//   C/Four    two discs' folders, 2 of 3: fits
+//   /         the root's loose track, which doesn't: 0 of 1
+void buildMoodLibrary(LibraryIndex& idx) {
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  addTrack(idx, "/music/A/One/01 - a.mp3", kFits);
+  addTrack(idx, "/music/A/One/02 - b.mp3", kFits);
+  addTrack(idx, "/music/A/One/03 - c.mp3", kFits);
+  addTrack(idx, "/music/A/One/04 - d.mp3", kMiss);
+  addTrack(idx, "/music/A/Three/01 - a.mp3", kFits);
+  addTrack(idx, "/music/A/Three/02 - b.mp3", kFits);
+  addTrack(idx, "/music/A/Three/03 - c.mp3", kMiss);
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, idx.addFile("/music/A/Three/04 - d.mp3"));
+  addTrack(idx, "/music/A/Two/01 - a.mp3", kFits);
+  addTrack(idx, "/music/A/Two/02 - b.mp3", kFits);
+  addTrack(idx, "/music/A/Two/03 - c.mp3", kMiss);
+  addTrack(idx, "/music/A/Two/04 - d.mp3", kMiss);
+  addTrack(idx, "/music/B/05 - Loose.mp3", kFits);
+  addTrack(idx, "/music/B/Unheard/01 - a.mp3", 0);
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, idx.addFile("/music/B/Unheard/02 - b.mp3"));
+  addTrack(idx, "/music/C/Four/CD1/01 - a.mp3", kFits);
+  addTrack(idx, "/music/C/Four/CD2/01 - b.mp3", kFits);
+  addTrack(idx, "/music/C/Four/CD2/02 - c.mp3", kMiss);
+  addTrack(idx, "/music/06 - Root.mp3", kMiss);
+  TEST_ASSERT_TRUE(idx.finish());
+}
+
+// Two albums, no words.
+void buildPlainLibrary(LibraryIndex& idx) {
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  idx.addFile("/music/A/One/01 - a.mp3");
+  idx.addFile("/music/A/One/02 - b.mp3");
+  idx.addFile("/music/B/03 - c.mp3");
+  TEST_ASSERT_TRUE(idx.finish());
+}
+
+std::string folderOf(const LibraryIndex& idx, uint32_t album) {
+  char path[256];
+  idx.folderPath(idx.album(album).folder, path, sizeof(path));
+  return path;
+}
+
+// The held albums, by folder, in their order.
+std::string heldFolders(const LibraryIndex& idx, const FilteredAlbums& fa) {
+  std::string out;
+  for (uint32_t i = 0; i < fa.count(); ++i) out += (i ? " " : "") + folderOf(idx, fa[i]);
+  return out;
+}
+
+// What the list would hold: albumsAZ() in its order, each album by 4.1's
+// rule over its tracks, from the words.
+std::string wantedFolders(const LibraryIndex& idx, const Filter& f) {
+  std::string out;
+  const LibraryIndex::Span az = idx.albumsAZ();
+  for (uint32_t k = 0; k < az.count; ++k) {
+    const LibraryIndex::Span t = idx.tracksOfAlbum(az[k]);
+    uint32_t pass = 0, analysed = 0;
+    for (uint32_t j = 0; j < t.count; ++j) {
+      const uint16_t w = idx.moodWord(t[j]);
+      if (!(w & moodfilter::kAnalysed)) continue;
+      ++analysed;
+      pass += moodfilter::matches(w, f);
+    }
+    if (2 * pass > analysed) out += (out.empty() ? "" : " ") + folderOf(idx, az[k]);
+  }
+  return out;
+}
+
+}  // namespace
+
+// Under 0x127, the four albums that fit, in albumsAZ()'s order: each one
+// of its entries, none twice, none out of order.
+void test_filtered_albums_are_a_subsequence() {
+  static LibraryIndex idx;
+  buildMoodLibrary(idx);
+  FilteredAlbums fa(countedAlloc, countedFree);
+  TEST_ASSERT_FALSE(fa.held());
+  TEST_ASSERT_TRUE(fa.recompute(idx, kSadRelaxed) == FilteredAlbums::Result::Filtered);
+  TEST_ASSERT_TRUE(fa.held());
+  TEST_ASSERT_EQUAL_UINT32(4, fa.count());
+  TEST_ASSERT_EQUAL_UINT32(7, fa.total());
+  TEST_ASSERT_EQUAL_HEX16(0x127, fa.word());
+  TEST_ASSERT_EQUAL_size_t(7 * sizeof(uint32_t), fa.bytes());  // a u32 an album, every album's room
+  const LibraryIndex::Span az = idx.albumsAZ();
+  uint32_t k = 0;
+  for (uint32_t i = 0; i < fa.count(); ++i) {
+    while (k < az.count && az[k] != fa[i]) ++k;
+    TEST_ASSERT_TRUE_MESSAGE(k < az.count, "a held album out of albumsAZ()'s order, or not in it");
+    ++k;
+  }
+  const LibraryIndex::Span s = fa.span();
+  TEST_ASSERT_EQUAL_UINT32(4, s.count);
+  for (uint32_t i = 0; i < s.count; ++i) TEST_ASSERT_EQUAL_UINT32(fa[i], s[i]);
+}
+
+// An album fits when more than half its analysed tracks do: A/Two's half
+// doesn't, A/Three's 2 of 3 does (its track with no word not counted),
+// B/Unheard's none of none never. And so for every filter there is.
+void test_filtered_albums_by_majority() {
+  static LibraryIndex idx;
+  buildMoodLibrary(idx);
+  FilteredAlbums fa;
+  fa.recompute(idx, kSadRelaxed);
+  TEST_ASSERT_EQUAL_STRING(wantedFolders(idx, kSadRelaxed).c_str(), heldFolders(idx, fa).c_str());
+  const std::string held = " " + heldFolders(idx, fa) + " ";
+  for (const char* in : {"/music/A/One", "/music/A/Three", "/music/B", "/music/C/Four"}) {
+    TEST_ASSERT_NOT_NULL_MESSAGE(strstr(held.c_str(), (std::string(" ") + in + " ").c_str()), in);
+  }
+  for (const char* out : {"/music/A/Two", "/music/B/Unheard", "/music"}) {
+    TEST_ASSERT_NULL_MESSAGE(strstr(held.c_str(), (std::string(" ") + out + " ").c_str()), out);
+  }
+  // Happy: only the root's loose track (1 of 1).
+  fa.recompute(idx, Filter::unpack(0x001));
+  TEST_ASSERT_EQUAL_STRING("/music", heldFolders(idx, fa).c_str());
+  // Every active q: as the rule says.
+  int active = 0;
+  for (uint16_t q = 0; q < 0x800; ++q) {
+    if (!moodfilter::valid(q) || !Filter::unpack(q).active()) continue;
+    ++active;
+    const Filter f = Filter::unpack(q);
+    TEST_ASSERT_TRUE(fa.recompute(idx, f) == FilteredAlbums::Result::Filtered);
+    char msg[16];
+    snprintf(msg, sizeof(msg), "q 0x%03X", q);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(wantedFolders(idx, f).c_str(), heldFolders(idx, fa).c_str(), msg);
+  }
+  TEST_ASSERT_EQUAL_INT(4 * 4 * 3 * 8 * 3 - 3, active);  // every group's choices, at three levels, less a level alone
+}
+
+// A filter that filters nothing holds nothing (the list shows albumsAZ()
+// itself), a level alone included; one taken off lets its block go, and
+// so does drop() and the end.
+void test_filtered_albums_unfiltered_and_dropped() {
+  static LibraryIndex idx;
+  buildMoodLibrary(idx);
+  allocs = frees = 0;
+  {
+    FilteredAlbums fa(countedAlloc, countedFree);
+    for (uint16_t q : {0x000, 0x200, 0x400}) {
+      TEST_ASSERT_TRUE(fa.recompute(idx, Filter::unpack(q)) == FilteredAlbums::Result::Unfiltered);
+      TEST_ASSERT_FALSE(fa.held());
+      TEST_ASSERT_EQUAL_UINT32(0, fa.count());
+      TEST_ASSERT_EQUAL_size_t(0, fa.bytes());
+    }
+    TEST_ASSERT_EQUAL_INT(0, allocs);  // nothing carved for them
+    fa.recompute(idx, kSadRelaxed);
+    TEST_ASSERT_EQUAL_INT(1, allocs);
+    TEST_ASSERT_TRUE(fa.recompute(idx, Filter::unpack(0x200)) == FilteredAlbums::Result::Unfiltered);
+    TEST_ASSERT_EQUAL_INT(1, frees);
+    TEST_ASSERT_EQUAL_UINT32(0, fa.total());
+    TEST_ASSERT_EQUAL_HEX16(0, fa.word());
+    fa.recompute(idx, kSadRelaxed);
+    fa.drop();
+    TEST_ASSERT_EQUAL_INT(2, frees);
+    TEST_ASSERT_FALSE(fa.held());
+    TEST_ASSERT_EQUAL_UINT32(0, fa.count());
+    TEST_ASSERT_EQUAL_size_t(0, fa.bytes());
+    fa.drop();  // (again: nothing to let go)
+    TEST_ASSERT_EQUAL_INT(2, frees);
+    fa.recompute(idx, kSadRelaxed);
+  }
+  TEST_ASSERT_EQUAL_INT(3, allocs);
+  TEST_ASSERT_EQUAL_INT(3, frees);  // the last one at its end
+  // An index not built: nothing.
+  LibraryIndex none;
+  FilteredAlbums fa;
+  TEST_ASSERT_TRUE(fa.recompute(none, kSadRelaxed) == FilteredAlbums::Result::Unfiltered);
+  TEST_ASSERT_FALSE(fa.held());
+}
+
+// No block for the albums: reported, and what was held stays, the old
+// filter's (its owner keeps that filter: 4.2).
+void test_filtered_albums_allocator_failure() {
+  static LibraryIndex idx, plain;
+  buildMoodLibrary(idx);
+  buildPlainLibrary(plain);
+  allocs = frees = 0;
+  FilteredAlbums fa(countedAlloc, countedFree);
+  failing = true;
+  TEST_ASSERT_TRUE(fa.recompute(idx, kSadRelaxed) == FilteredAlbums::Result::NoMemory);
+  TEST_ASSERT_FALSE(fa.held());
+  TEST_ASSERT_EQUAL_size_t(0, fa.bytes());
+  failing = false;
+  TEST_ASSERT_TRUE(fa.recompute(idx, kSadRelaxed) == FilteredAlbums::Result::Filtered);
+  // Another filter over the same albums needs no block: it can't fail.
+  failing = true;
+  TEST_ASSERT_TRUE(fa.recompute(idx, Filter::unpack(0x001)) == FilteredAlbums::Result::Filtered);
+  TEST_ASSERT_TRUE(fa.recompute(idx, kSadRelaxed) == FilteredAlbums::Result::Filtered);
+  // Another index (2 albums): no block, and the old one's albums stay.
+  TEST_ASSERT_TRUE(fa.recompute(plain, kSadRelaxed) == FilteredAlbums::Result::NoMemory);
+  TEST_ASSERT_TRUE(fa.held());
+  TEST_ASSERT_EQUAL_UINT32(4, fa.count());
+  TEST_ASSERT_EQUAL_UINT32(7, fa.total());
+  TEST_ASSERT_EQUAL_HEX16(0x127, fa.word());
+  TEST_ASSERT_EQUAL_STRING(wantedFolders(idx, kSadRelaxed).c_str(), heldFolders(idx, fa).c_str());
+  TEST_ASSERT_EQUAL_INT(0, frees);
+  failing = false;
+}
+
+// Worked out again: a new filter over the same albums in the same block;
+// a rebuilt index with as many albums too, another count in a new block
+// (the old one let go); an index without words lets nothing through.
+void test_filtered_albums_recompute() {
+  static LibraryIndex idx, plain;
+  buildMoodLibrary(idx);
+  buildPlainLibrary(plain);
+  allocs = frees = 0;
+  FilteredAlbums fa(countedAlloc, countedFree);
+  fa.recompute(idx, kSadRelaxed);
+  TEST_ASSERT_EQUAL_UINT32(4, fa.count());
+  fa.recompute(idx, Filter::unpack(0x001));
+  TEST_ASSERT_EQUAL_UINT32(1, fa.count());
+  TEST_ASSERT_EQUAL_HEX16(0x001, fa.word());
+  TEST_ASSERT_EQUAL_INT(1, allocs);
+  // The same library built again: the same albums, the block kept.
+  static LibraryIndex again;
+  buildMoodLibrary(again);
+  TEST_ASSERT_TRUE(fa.recompute(again, kSadRelaxed) == FilteredAlbums::Result::Filtered);
+  TEST_ASSERT_EQUAL_STRING(wantedFolders(again, kSadRelaxed).c_str(), heldFolders(again, fa).c_str());
+  TEST_ASSERT_EQUAL_INT(1, allocs);
+  // No words: an active filter lets no album through (every track's word
+  // is 0), in a block of the new count.
+  TEST_ASSERT_FALSE(plain.hasMoods());
+  TEST_ASSERT_TRUE(fa.recompute(plain, kSadRelaxed) == FilteredAlbums::Result::Filtered);
+  TEST_ASSERT_TRUE(fa.held());
+  TEST_ASSERT_EQUAL_UINT32(0, fa.count());
+  TEST_ASSERT_EQUAL_UINT32(2, fa.total());
+  TEST_ASSERT_EQUAL_size_t(2 * sizeof(uint32_t), fa.bytes());
+  TEST_ASSERT_EQUAL_INT(2, allocs);
+  TEST_ASSERT_EQUAL_INT(1, frees);
+  TEST_ASSERT_TRUE(fa.recompute(plain, Filter()) == FilteredAlbums::Result::Unfiltered);
+  TEST_ASSERT_EQUAL_INT(2, frees);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_second_tap_lets_go);
@@ -516,5 +794,10 @@ int main(int, char**) {
   RUN_TEST(test_the_dot);
   RUN_TEST(test_summary_order);
   RUN_TEST(test_count_forms);
+  RUN_TEST(test_filtered_albums_are_a_subsequence);
+  RUN_TEST(test_filtered_albums_by_majority);
+  RUN_TEST(test_filtered_albums_unfiltered_and_dropped);
+  RUN_TEST(test_filtered_albums_allocator_failure);
+  RUN_TEST(test_filtered_albums_recompute);
   return UNITY_END();
 }
