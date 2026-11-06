@@ -13,7 +13,8 @@
 // translation must pass (a room's "overflow" marks excepted); the
 // pseudo-locale en-XA (a third longer) is a report, never a failure. Every
 // two-line toast's rows (TextInk, uitext::toastLines()) apart and inside
-// its card, the pseudo-locale's too. The languages' names in themselves in
+// its card, the pseudo-locale's too; a mood filter tag's two lines
+// (FilterGrid) apart in its chip. The languages' names in themselves in
 // their rows. With UI_STRINGS_REPORT set to a path, the overflows of every
 // language but English, the characters missing and the texts cut go there
 // as JSON.
@@ -29,6 +30,7 @@
 #include <vector>
 
 #include "CjkGlyphs16.h"
+#include "FilterGrid.h"
 #include "GlyphStore.h"
 #include "SheetLayout.h"
 #include "TextFit.h"
@@ -1320,6 +1322,51 @@ void test_two_line_toasts_never_touch() {
   TEST_ASSERT_EQUAL_INT_MESSAGE(0, bad, "two-line toasts that touch or don't fit: above");
 }
 
+// The mood filters' editor (FilterGrid, docs/MOOD-FILTERS.md 7.3): a tag
+// on two lines in its chip (Russian's "Для" over "вечеринки"), each drawn
+// glyphs only, centred on y+10 and y+26: the rows they ink inside the
+// chip's 36 and an empty row at least between them, in every language
+// that wraps one. The pseudo-locale's (accented capitals over a bracket)
+// is a report: its rows aren't any language's.
+void test_wrapped_filter_tags_never_touch() {
+  const textink::Vlw& ink = inkFont(catalogue::Font::Small);
+  int wrapped = 0, bad = 0;
+  for (unsigned i = 0; i < uistr::kLangs; ++i) {
+    const Lang l = static_cast<Lang>(i);
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    const filtergrid::Layout g = filtergrid::layout(filtergrid::words(), viewOf(font(catalogue::Font::Body)),
+                                                    viewOf(font(catalogue::Font::Small)));
+    const filtergrid::Words w = filtergrid::words();
+    for (filtergrid::Cell c : {filtergrid::Cell::Acoustic, filtergrid::Cell::Party, filtergrid::Cell::Danceable}) {
+      const int at = g.wrap[filtergrid::index(c)];
+      if (!at) continue;
+      ++wrapped;
+      const std::string word = w.cell[filtergrid::index(c)];
+      const std::string lines[2] = {word.substr(0, at - 1), word.substr(at)};
+      textink::Rows rows[2];
+      int top[2];
+      for (int k = 0; k < 2; ++k) {
+        char buf[200];
+        textfit::fit(viewOf(font(catalogue::Font::Small)), lines[k].c_str(), lines[k].size(), buf, sizeof(buf),
+                     g.w[filtergrid::index(c)]);
+        rows[k] = textink::inkOf(ink, cjk(), buf);
+        top[k] = filtergrid::kWrapLineY[k] - ink.lineHeight() / 2;
+      }
+      const int a0 = top[0] + rows[0].top, a1 = top[0] + rows[0].bottom;
+      const int b0 = top[1] + rows[1].top, b1 = top[1] + rows[1].bottom;
+      const bool fine = !rows[0].empty() && !rows[1].empty() && a0 >= 0 && b1 <= filtergrid::kRowH - 1 && b0 >= a1 + 2;
+      printf("%s: \"%s\" / \"%s\": rows %d-%d and %d-%d of the chip's 0-%d%s\n", uistr::tag(l), lines[0].c_str(),
+             lines[1].c_str(), a0, a1, b0, b1, filtergrid::kRowH - 1,
+             fine ? "" : l == Lang::EnXA ? ": touch (a report)" : ": touch");
+      if (!fine && l != Lang::EnXA) ++bad;
+    }
+  }
+  uistr::setLang(Lang::En);
+  TEST_ASSERT_TRUE_MESSAGE(wrapped >= 1, "Russian's party chip wraps");
+  TEST_ASSERT_EQUAL_INT_MESSAGE(0, bad, "a wrapped tag's lines that touch or leave the chip: above");
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_english_is_the_catalogue);
@@ -1341,5 +1388,6 @@ int main(int, char**) {
   RUN_TEST(test_text_ink_rows_are_where_the_fonts_draw);
   RUN_TEST(test_toast_lines_place_every_pair_of_rows);
   RUN_TEST(test_two_line_toasts_never_touch);
+  RUN_TEST(test_wrapped_filter_tags_never_touch);
   return UNITY_END();
 }
