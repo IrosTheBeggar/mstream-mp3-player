@@ -345,6 +345,28 @@ def autodj_small():
     return img
 
 
+def funnel():
+    # The mood filters (the Albums list's first row, docs/MOOD-FILTERS.md
+    # 7.2: centred at x 26, DIM at rest, the accent on its plate with a
+    # filter on): a funnel, its spout cut on a slant, as the design's frames.
+    return from_art([
+        "##############",
+        "##############",
+        ".############.",
+        "..##########..",
+        "...########...",
+        "....######....",
+        ".....####.....",
+        ".....####.....",
+        ".....####.....",
+        ".....####.....",
+        ".....####.....",
+        ".....###......",
+        ".....##.......",
+        ".....#........",
+    ])
+
+
 # Now Playing's shuffle and repeat indicator (docs/QUEUE-MODES.md section
 # 4.2): small enough to sit under the "..." dots (18 x 4), 1 px strokes.
 # kShuffle (20 x 16, Shuffle all's) is too heavy there.
@@ -444,6 +466,7 @@ ICONS = [
     ("Vibrate", vibrate),
     ("AutoDj", autodj),
     ("AutoDjSmall", autodj_small),
+    ("Funnel", funnel),
     ("ShuffleSmall", lambda: from_art(SHUFFLE_SMALL)),
     ("RepeatSmall", lambda: from_art(REPEAT_SMALL)),
     ("RepeatOneSmall", lambda: from_art(REPEAT_ONE_SMALL)),

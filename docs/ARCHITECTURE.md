@@ -39,6 +39,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  AutoDjTrigger  AutoDjCommand  AutoDjView (Auto DJ)           |
               |  WaveShape  WaveBar  WaveState (the waveform)                 |
               |  MoodFilter (the mood tail, the word, the filter's rules)     |
+              |  FilterGrid  FilteredAlbums (the filters' editor, Albums)     |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -57,7 +58,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  app/PowerSettings (CPU speed, Bluetooth power: NVS, restart) |
               |  ui/Ui: TabBar, ListView (ui/ListScroller), Overlays, pages,  |
               |         Fonts (VLW DejaVu + CJK store), Icons, Gfx, Thumbs,   |
-              |         EmptyState                                            |
+              |         EmptyState, FilterSheet (the mood filters' editor)    |
               |  ui/BootScreen (the mStream logo and the version)             |
               |  app/Version (the version from git, the app description)      |
               |  app/UsbViz (the USB visualizer: a computer drives the dancer)|
@@ -1594,9 +1595,9 @@ the table at 0x8000, so every unit keeps the layout it was installed with.
   bootloader reads as ota_0: the slot the image just wrote, even on a unit
   that had moved to ota_1 by OTA (`upload` writes it too). An OTA update
   writes the slot that isn't running and switches otadata. 6 MB each: the
-  app is 4,318,451 B on 2026-11-06 (68.6 % of its slot by the build's
-  count, the app 70 % by flash_guard's; the mood filters' S0-S2 6,888 B
-  of it), and WiFi, HTTP and TLS are still to come (and the IRAM work
+  app is 4,333,743 B on 2026-11-06 (68.9 % of its slot by the build's
+  count, the app 70 % by flash_guard's; the mood filters' S0-S3 22,180 B
+  of it: S3's editor and first row 15,292 B), and WiFi, HTTP and TLS are still to come (and the IRAM work
   they need, [Build notes](#build-notes)).
 - **LittleFS shrank** from ~11.9 MB to 3.8 MB: it only holds test audio when
   no SD card is in (`tools/make_test_audio.py` reads its size from the table).
@@ -3038,7 +3039,30 @@ Queue, Dance and Output (with its Pair and About pages).
   and a tap on "..." hit its Turn off). All are opaque and drawn
   through the list's scroll mapping, so they land right over a scrolled
   list. After an add (Play next, + Queue) the toast also has **View**: the
-  Queue, scrolled to the first added entry (found by its queue key).
+  Queue, scrolled to the first added entry (found by its queue key). The
+  **mood filters' editor** (`ui/FilterSheet`, docs/MOOD-FILTERS.md 4.3,
+  7.1; the frames `grid-*` in `docs/img/mood-filters/`) is an overlay over
+  the whole content area (y 36-239, its own card in the overlays' panel
+  sprite), not a pushed page: the tab bar stays live, and it closes as a
+  sheet does (`closeModal()`: a tab, the language, the fence, a dialog or
+  a sheet). Its title row is Clear, the count ("312 of 1,741 albums",
+  amber at 0) and a cross; then three trays (Happy | Neutral | Sad,
+  Relaxed | Neutral | Aggressive, Instrumental | Vocals beside the level
+  cell, Strict / Standard / Loose with its dots) and three chips
+  (Acoustic, Party, Danceable). A tray picks one (a second tap lets it
+  go), the chips any, the level cycles and alone filters nothing, Clear
+  empties it and stays open. Choices apply at once: the tap's cell is
+  pushed first, then the owner works out what fits (`FilterOwner::
+  setFilterWord()`, the pass), then the count. The cells, their font (Body,
+  or Small for the whole grid: Polish and Russian), widths, wrap and hit
+  tests (each split skewed right for the lab panel's x) are
+  `lib/core/FilterGrid`'s, host-tested in test_ui_filter and, with the
+  firmware's fonts in every language, test_ui_library. A toast up when it
+  opens goes, its Undo with it; one arriving while it is up covers its
+  title row, and a Down there goes nowhere. A touch within 300 ms of its
+  opening goes nowhere, as on a sheet. The Albums list opens it in the
+  Library's violet, counting albums; Auto DJ's page will in blue, counting
+  tracks (S5).
 - **Lists** (`ui/ListView`, with `ListLayout`, host-tested): virtualised rows
   (a source gives a count and a row renderer; standard pieces for 1- and
   2-line rows, the number column, a disc, a 40x40 thumbnail slot, a
@@ -3504,7 +3528,32 @@ Queue, Dance and Output (with its Pair and About pages).
   round end and chevron in: `uitext::headerPillZoneX()`). The row
   holding what plays (its artist, album, track, the folders on its path) is
   tinted in every list. The rail and the jump grid are on the Artists and
-  Albums lists and on folders of folders, once over 30.
+  Albums lists and on folders of folders, once over 30. **Mood filters**
+  (docs/MOOD-FILTERS.md 4.2, 7.2; frames `in-rest`, `inA-*`, `A-*`): on
+  the card's library with mood words (`LibraryIndex::hasMoods()`; not
+  behind the fence, not `uil<n>`'s), the Albums list's first row is the
+  filters' (`ListView::Source::topBarIsRow()`: an item in the top bar's
+  place that scrolls with the list, so the A-Z rows stay sorted). At rest
+  a funnel, "Filters" and "1,741 albums"; a tap opens the editor
+  (Overlays, above). With a filter on: the funnel in the accent on its
+  plate, what is set ("Relaxed · Instrumental": Body, else Small, then
+  cut) over "312 of 1,741 albums", and a cross on a disc (at 232, 284 or
+  292 as the list is 284, 312 or 320 wide) that clears it, no Undo. The
+  list then holds the albums where most analysed tracks fit (`2*pass >
+  analysed`, `lib/core/FilteredAlbums`: a u32 an album, in PSRAM, carved
+  when a filter goes on); `rowAt`, `rows` and `railRows` read it, so the
+  rail (only over 30), the jump grid, the covers and the tint follow, and
+  none fitting leaves "No albums match these filters" under the row.
+  Scrolled 42 px or more, a dot on the Albums segment says a filter is on
+  (redrawn only while the list rests; a tap on the segment goes to the
+  top). A closed editor with a change reloads the list at its top, once.
+  The filter is the page's, in RAM: kept through the other pages and
+  tabs, forgotten by a boot (D6). The fence and a rebuild drop the albums
+  and keep the filter (`Ui::libraryUpdating()`, `libraryChanged()`):
+  worked out again when Albums next shows (the same pass as `gm<hex>`'s
+  albums, 14-31 ms idle at 1,707 albums: MOOD-FILTERS.md 9.6). A card
+  with no mood data drops it; no memory for the albums keeps the old
+  filter, with `toast.no_memory`.
 - **The Queue** (spec §6.4, mockups 16-18, with the grafts): opened on the
   playing track (tinted, on top; there again with no row open when the
   queue changed while you were away); the header's summary "4 of 16 · 12
@@ -3879,7 +3928,13 @@ Queue, Dance and Output (with its Pair and About pages).
   headphones lost (with the dialog), no card or one that didn't mount
   (exFAT, NTFS, GPT, can't read: on Now Playing), or a play
   waiting for the headphones (Now Playing's panel and spinner); `uiF0`
-  the real state. **`uil<n>`**: the Library browses a synthetic
+  the real state. **`uiM`**: the Albums list's mood filter (what is set,
+  the albums held, the last pass's time, the carve, the editor);
+  `uiMa<hex>` sets it (bare hex, as `gm<hex>`; an invalid one refused),
+  `uiMa0` clears it, each pass logging its µs; `uiMe` opens the editor
+  over the page shown, its taps then the scripted finger's (behind the
+  library update's fence both say so and do nothing; MOOD-FILTERS.md
+  9.3). **`uil<n>`**: the Library browses a synthetic
   library of n tracks (the spike's `g<n>`: 6 artists and 15 albums per 100
   tracks), to see the lists, the rail and the jump grid at the scale of
   thousands (the card has 6 artists); look only (its ids aren't the
@@ -4067,7 +4122,7 @@ their own (the player stopped first, so nothing follows them).
   name that no longer matches; a build logs `iram_diet: 51 of 51 libc
   objects moved to flash`. About 5 KB of IRAM is left (5,176 B from the
   seek bar on; 5,161 B on 2026-11-06, with the mood filters' data path
-  or without; neither it nor the MP3 pin below takes any). Adding WiFi
+  and editor or without; neither they nor the MP3 pin below take any). Adding WiFi
   will need more: likely pioarduino's `custom_sdkconfig` to rebuild the
   framework without the workaround.
 - **The MP3 synth loop is pinned at the front of flash.** The same
