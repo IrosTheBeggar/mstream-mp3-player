@@ -1683,7 +1683,14 @@ written once the taps rest (`app/AutoDjStore` through `app/NvsLater`,
 [AUTODJ.md](AUTODJ.md)). Its `migrate(3, 4)`
 step does nothing: an absent key, or a value this firmware doesn't take,
 reads as its default (off, Follow the vibe, 55 %, both off). 0.10.0
-leaves a schema-4 NVS as it is and never reads the namespace.
+leaves a schema-4 NVS as it is and never reads the namespace. Schema 5 is
+schema 4's keys and `autodj`/`moods`, Auto DJ's mood filter (a u16, its 11
+bits: [MOOD-FILTERS.md](MOOD-FILTERS.md) 4.6, 5.4), written with the other
+four. Its `migrate(4, 5)` step does nothing (no key, or a value that isn't
+a filter: none), and 0.12.0 leaves a schema-5 NVS as it is, never reading
+the key (its picks unfiltered). PR #27's card transfer takes schema 5 for
+its own namespaces: shipped in one release they share it (MOOD-FILTERS.md
+10).
 The rules:
 
 - **Never reuse a key name** (or a namespace) for anything else, even after
@@ -1724,14 +1731,15 @@ The rules:
   position and resume point and the Bluetooth stack's keys are written as
   before.
 
-The keys of schema 4, by namespace: `meta` (schema); `input` (cal,
+The keys of schema 5, by namespace: `meta` (schema); `input` (cal,
 cal_ask, haptics, railtick); `player` (bt_name, bt_forgot, bt_fresh);
 ESP32-A2DP's `connected_bda` (last_bda: the remembered headphones); `power` (cpu_mhz,
 bt_tx, boot_cpu, idle_after, off_idle); `screen` (off_after, bright); `ui`
 (coach, and schema 3's lang); `queue` (gen, pos, resume, and schema 2's
-repeat); `autodj` (schema 4's on, mode, floor, match). Schema 3's are the
-same without `autodj`, schema 2's without `ui`/`lang` too, schema 1's
-without `queue`/`repeat` too. The Bluetooth stack keeps its bonds in
+repeat); `autodj` (schema 4's on, mode, floor, match, and schema 5's
+moods). Schema 4's are the same without `moods`, schema 3's without
+`autodj`, schema 2's without `ui`/`lang` too, schema 1's without
+`queue`/`repeat` too. The Bluetooth stack keeps its bonds in
 its own namespace, which the firmware never touches.
 
 ### Moving an existing unit to the new layout
@@ -3061,8 +3069,11 @@ Queue, Dance and Output (with its Pair and About pages).
   opens goes, its Undo with it; one arriving while it is up covers its
   title row, and a Down there goes nowhere. A touch within 300 ms of its
   opening goes nowhere, as on a sheet. The Albums list opens it in the
-  Library's violet, counting albums; Auto DJ's page will in blue, counting
-  tracks (S5).
+  Library's violet, counting albums; Output > Auto DJ's Smart filters row
+  (`OutputPage`, a `FilterOwner` too) in blue, counting tracks, each tap
+  applied and saved through `UiHost::autoDjSetMoods()`, whose count the
+  editor shows; its close on a change settles it
+  (`UiHost::autoDjMoodSettled()`) and draws the page's rows again.
 - **Lists** (`ui/ListView`, with `ListLayout`, host-tested): virtualised rows
   (a source gives a count and a row renderer; standard pieces for 1- and
   2-line rows, the number column, a disc, a 40x40 thumbnail slot, a
@@ -3716,17 +3727,31 @@ Queue, Dance and Output (with its Pair and About pages).
     (Follow the vibe) or "...: the first pick becomes the seed" (Stay on
     seed); "No Auto DJ index: picks are random", once a switch on or a
     boot (each Play is a session, so once a session would repeat it at
-    every album's end). A pick the queue refused says nothing. **They
-    wait while a toast with Undo is up** (`Ui::pendingNews_`: a pick
-    lands about half a second after a one-track Play starts, and would
-    take its Undo off the screen); the failure pause doesn't wait. A tap
-    on Undo, or Auto DJ switched off, drops what waits. When a pick takes
+    every album's end); under a mood filter, below those
+    (`NewsWatch`, docs/MOOD-FILTERS.md 4.5): "Only 37 tracks fit: they
+    will repeat" (amber, its count main.cpp's `fewCount()` of the view at
+    that moment), "Plays once, then the filters apply" and "No close
+    match: any track that fits". A pick the queue refused says nothing.
+    **They wait while a toast with Undo is up** (`Ui::djNews_`, an
+    `autodjview::NewsWait`, host-tested: a pick lands about half a second
+    after a one-track Play starts, and would take its Undo off the
+    screen); the failure pause doesn't wait. **All of them wait while the
+    mood filters' editor is up**, the failure pause too, and Auto DJ's
+    editor closed on a change drops the filter's own that waited (the
+    change says its own). What waited and the next take make one toast;
+    a Few or Jump it outranks waits for that toast to go, then shows. A
+    tap on Undo drops what waits but Few; Auto DJ switched off drops it
+    all. When a pick takes
     the listener's undo (`appendQuiet()`, above), main.cpp calls
     `Ui::queueUndoDropped()` and the Undo toast goes (`[ui] the Undo toast
     went: Auto DJ's pick took the undo`).
   - **UiHost's Auto DJ calls** (main.cpp's `MainUiHost`, into
     `app/AutoDj`): `autoDjSetOn()`, `autoDjSetMode()`, `autoDjSetFloor()`,
     `autoDjSetMatch()` (applied, saved, logged; true when changed);
+    `autoDjSetMoods(q)` (the same, returning the tracks that fit, counted
+    at once: the editor's count) and `autoDjMoodSettled()` (the editor
+    closed on a change: 1 to 50 fitting, or a queued pick outside it
+    that plays once, said);
     `autoDjStart()` (the button: `autodjview::Started` Played, NoTrack,
     NoIndex or Refused, Refused behind the fence or with no memory);
     `autoDjFromHere(track)` (false behind the fence or with no memory);

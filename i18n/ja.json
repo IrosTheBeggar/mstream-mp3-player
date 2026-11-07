@@ -1,7 +1,7 @@
 {
   "@@locale": "ja",
   "@@autonym": "日本語",
-  "@@note": "Machine translation, not yet reviewed by a native speaker. Made from the mobile app's (mstream_music, lib/l10n/app_ja.arb, master at bdb174e) and the terminal player's (mstream-terminal-player, locales/ja.yml, main at b89ad0a) Japanese where they had the text or the phrase, both GPL-3.0 by this repository's owner; the rest translated by a Fable agent (Claude), in their words and register, then reviewed message by message by a second Fable agent. Fullwidth punctuation written as ASCII, as the device draws it. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_ja.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
+  "@@note": "Machine translation, not yet reviewed by a native speaker. Made from the mobile app's (mstream_music, lib/l10n/app_ja.arb, master at bdb174e) and the terminal player's (mstream-terminal-player, locales/ja.yml, main at b89ad0a) Japanese where they had the text or the phrase, both GPL-3.0 by this repository's owner; the rest translated by a Fable agent (Claude), in their words and register, then reviewed message by message by a second Fable agent. Fullwidth punctuation written as ASCII, as the device draws it. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_ja.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_ja.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
   "boot.touch_hint": "タッチがおかしい? 画面を長押し",
   "coach.header_tip": "ヒント {0}/{1}",
   "coach.header_hint": "タップで次へ",
@@ -76,6 +76,15 @@
   "toast.autodj_started": "Auto DJ: {0}",
   "toast.autodj_no_start": "類似曲のある曲が見つかりません: もう一度お試しください",
   "toast.autodj_needs_index": "Auto DJ インデックスが必要: カードへの転送で作成されます",
+  "toast.autodj_few": {
+    "other": "合う曲は {0} 曲のみ: 繰り返し再生されます"
+  },
+  "toast.autodj_no_close": "近い曲なし: フィルターに合う曲から選曲",
+  "toast.autodj_plays_once": "一度だけ再生: その後はフィルターを適用",
+  "@toast.autodj_plays_once": {
+    "note": "With a ': ' to split at: one line is 298 px in Body, the toast's line 284."
+  },
+  "toast.autodj_no_mood": "ムードデータなし: mStream でカードを同期してください",
   "hud.bluetooth": "Bluetooth: {0}",
   "hud.bluetooth_connecting": "Bluetooth: 接続中...",
   "hud.speaker_paused": "スピーカー、一時停止: B で再生",
@@ -256,6 +265,9 @@
     "other": "{0} / {1} 曲"
   },
   "mood.no_albums": "フィルターに合うアルバムがありません",
+  "mood.smart_filters": "スマートフィルター",
+  "mood.any": "指定なし",
+  "mood.no_data": "ムードデータなし",
   "card.another": "別のカード: 再起動します",
   "card.back": "カードが戻りました: 再起動します",
   "queue_cap.full": {
@@ -327,6 +339,10 @@
   "empty.nothing_playing_title": "再生中の曲がありません",
   "empty.queue_title": "キューが空です",
   "empty.pick_in_library": "ライブラリから曲やアルバムを選択",
+  "empty.no_track_fits": "フィルターに合う曲がありません",
+  "@empty.no_track_fits": {
+    "note": "The mobile app's autoDjSeedNoMatch ('フィルターに合う曲がありません'), the card left out: 'このカードにはフィルターに合う曲がありません' is 352 px, the line 304."
+  },
   "empty.open_library": "ライブラリへ",
   "empty.shuffle_all": "シャッフル",
   "empty.autodj": "Auto DJ",
@@ -374,6 +390,7 @@
   "autodj.strictness": "類似度のしきい値",
   "autodj.strictness_value": "{0}% 以上の類似",
   "autodj.strictness_sub": "どれだけ似た曲を選ぶか",
+  "autodj.smart_sub": "選曲をこのムードの中に保ちます",
   "autodj.bpm": "BPM の連続性",
   "autodj.bpm_sub": "±8 BPM か、半分/倍テンポ",
   "autodj.harmonic": "ハーモニックミキシング",
@@ -383,6 +400,17 @@
     "other": "{0} / {1} 曲に類似曲あり"
   },
   "autodj.status_coverage": "BPM {0}% · キー {1}%",
+  "autodj.status_fits": {
+    "other": "{0} / {1} 曲がフィルターに合う"
+  },
+  "autodj.status_coverage_mood": "BPM {0}% · キー {1}% · ムード {2}%",
+  "autodj.status_few": {
+    "other": "合う曲は {0} 曲のみ"
+  },
+  "autodj.status_few_sub": "繰り返し再生 · BPM {0}% · キー {1}%",
+  "@autodj.status_few_sub": {
+    "note": "'繰り返し再生されます' with the shares is 324 px in Small, the line 288: 繰り返し再生."
+  },
   "autodj.status_found": {
     "other": "Auto DJ インデックス: {0} 曲"
   },
@@ -398,6 +426,10 @@
   "autodj.status_waits_sleep": "待機中: スリープタイマーはキュー末",
   "@autodj.status_waits_sleep": {
     "note": "スリープタイマーはキュー末 (the timer's setting, as sleep.title_end_queue names it): 'スリープタイマーはキュー末まで' is 296 px in 288, 'スリープタイマーがキュー末で停止' 312."
+  },
+  "autodj.status_waits_fit": "待機中: フィルターに合う曲なし",
+  "@autodj.status_waits_fit": {
+    "note": "The mobile app's autoDjSeedNoMatch ('フィルターに合う曲がありません'), ending in なし as other status lines here do: '待機中: フィルターに合う曲がありません' is 296 px in Small, the line 288."
   },
   "autodj.status_paused": "一時停止: 曲を再生できませんでした",
   "settings.screen_off": "画面オフまで",

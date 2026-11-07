@@ -771,15 +771,17 @@ bool NowPlayingPage::emptyState(EmptyState& e) const {
   }
   e.icon = &icons::kNote;
   e.title = tr(S::empty_nothing_playing_title);
-  // (Fits: the longer one didn't. Unread: what plays next replaces the file, and a restart may bring it back.)
-  e.lines = tr(s.queueUnread ? S::library_row_rescan_unread : S::empty_pick_in_library);
+  // (Fits: the longer one didn't. Unread: what plays next replaces the file, and a restart may bring it back.
+  // Auto DJ's mood filter fitting no track: said, with no second button: frame dj-empty.)
+  const bool noFit = autodjview::emptyNoFit(s.autoDj);
+  e.lines = tr(s.queueUnread ? S::library_row_rescan_unread : noFit ? S::empty_no_track_fits : S::empty_pick_in_library);
   e.buttons[0] = tr(S::empty_open_library);
   e.buttonIcons[0] = &icons::kLibrary;
   if (autodjview::emptyButton(s.autoDj, s.libraryTracks)) {
     // A usable Auto DJ index: Auto DJ in Shuffle all's place (D4).
     e.buttons[1] = tr(S::empty_autodj);
     e.buttonIcons[1] = &icons::kAutoDj;
-  } else if (s.libraryTracks > 0) {
+  } else if (s.libraryTracks > 0 && !noFit) {
     e.buttons[1] = tr(S::empty_shuffle_all);
     e.buttonIcons[1] = &icons::kShuffle;
   }
@@ -850,8 +852,9 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   const bool noCard = !s.card && s.libraryTracks == 0;
   if (empty) {
     const bool dj = autodjview::emptyButton(s.autoDj, s.libraryTracks);
+    const bool noFit = autodjview::emptyNoFit(s.autoDj);
     if (!drawn_.valid || !drawn_.empty || drawn_.noCard != noCard || drawn_.cardKind != s.cardKind ||
-        drawn_.autoDjButton != dj) {
+        drawn_.autoDjButton != dj || drawn_.noFit != noFit) {
       EmptyState es;
       emptyState(es);
       drawEmptyState(es, kContentY, kH - kContentY, accent::NowPlaying, emptyPressed_);
@@ -861,6 +864,7 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       drawn_.noCard = noCard;
       drawn_.cardKind = s.cardKind;
       drawn_.autoDjButton = dj;
+      drawn_.noFit = noFit;
     }
     return false;
   }
@@ -1047,12 +1051,16 @@ void NowPlayingPage::openPlaybackMenu() {
   const char* const rows[4] = {tr(S::now_playing_shuffle), tr(S::now_playing_repeat), tr(S::now_playing_sleep_timer),
                                tr(S::now_playing_autodj)};
   const uint8_t repeat = s.repeat < 3 ? s.repeat : 0;
-  const char* dj = tr(autodjview::rowText(autodjview::rowState(s.autoDj)));
+  // Auto DJ's: its state, or with a mood filter on, what is set (the
+  // accent), or waiting for a track that fits it (amber): Ui::autoDjDetail().
+  char dj[96];
+  const uint16_t djInk = ui_.autoDjDetail(dj, sizeof(dj));
   const char* details[4] = {tr(s.shuffle ? S::now_playing_on : S::now_playing_off), tr(repeatMode(repeat)),
                             s.sleepRow, dj};
+  const uint16_t inks[4] = {col::DIM, col::DIM, col::DIM, djInk};
   Serial.printf("[ui] now playing: the playback menu (shuffle %s, repeat %s, sleep timer %s, Auto DJ %s)\n",
                 s.shuffle ? "on" : "off", repeatName(repeat), s.sleepRow, dj);
-  ui_.openSheet(this, tr(S::now_playing_playback_title), rows, 4, details);
+  ui_.openSheet(this, tr(S::now_playing_playback_title), rows, 4, details, -1, -1, inks);
   // Each row's state follows while it is up (a change from the console
   // shows too); Shuffle, Repeat and Auto DJ change in place, the sheet
   // staying.

@@ -23,6 +23,7 @@ autodj::Settings settingsOf(const AutoDjSaved& a) {
   s.floorPct = a.floorPct;
   s.matchTempo = a.matchTempo;
   s.matchKey = a.matchKey;
+  s.moods = a.moods;
   return s;
 }
 
@@ -33,6 +34,7 @@ AutoDjSaved savedOf(const autodj::Settings& s) {
   a.floorPct = s.floorPct;
   a.matchTempo = s.matchTempo;
   a.matchKey = s.matchKey;
+  a.moods = s.moods;
   return a;
 }
 
@@ -50,17 +52,23 @@ autodj::Settings load() {
     st.haveMode = p.isKey(nvslayout::kAutoDjModeKey);
     st.haveFloor = p.isKey(nvslayout::kAutoDjFloorKey);
     st.haveMatch = p.isKey(nvslayout::kAutoDjMatchKey);
+    st.haveMoods = p.isKey(nvslayout::kAutoDjMoodsKey);
     if (st.haveOn) st.on = p.getUChar(nvslayout::kAutoDjOnKey, 0);
     if (st.haveMode) st.mode = p.getUChar(nvslayout::kAutoDjModeKey, 0);
     if (st.haveFloor) st.floor = p.getUChar(nvslayout::kAutoDjFloorKey, 0);
     if (st.haveMatch) st.match = p.getUChar(nvslayout::kAutoDjMatchKey, 0);
+    if (st.haveMoods) st.moods = p.getUShort(nvslayout::kAutoDjMoodsKey, 0);
     p.end();
   }
   const autodj::Settings s = settingsOf(nvslayout::autoDjFrom(st));
-  const bool any = st.haveOn || st.haveMode || st.haveFloor || st.haveMatch;
-  Serial.printf("[dj] settings: Auto DJ %s, %s, strictness %u %%, BPM continuity %s, Harmonic mixing %s (%s)\n",
+  const bool any = st.haveOn || st.haveMode || st.haveFloor || st.haveMatch || st.haveMoods;
+  char moods[24] = "none";
+  if (s.moods) snprintf(moods, sizeof(moods), "0x%03X", (unsigned)s.moods);
+  Serial.printf("[dj] settings: Auto DJ %s, %s, strictness %u %%, BPM continuity %s, Harmonic mixing %s, mood filter "
+                "%s%s (%s)\n",
                 s.on ? "on" : "off", s.mode == autodj::Mode::Locked ? "Stay on seed" : "Follow the vibe",
-                (unsigned)s.floorPct, s.matchTempo ? "on" : "off", s.matchKey ? "on" : "off",
+                (unsigned)s.floorPct, s.matchTempo ? "on" : "off", s.matchKey ? "on" : "off", moods,
+                st.haveMoods && st.moods != s.moods ? " (the saved one is invalid)" : "",
                 any ? "saved" : "none saved: the defaults");
   return s;
 }
@@ -73,6 +81,7 @@ void save(const autodj::Settings& s) {
   nvslater::putU8(nvslayout::kAutoDjNamespace, nvslayout::kAutoDjModeKey, st.mode);
   nvslater::putU8(nvslayout::kAutoDjNamespace, nvslayout::kAutoDjFloorKey, st.floor);
   nvslater::putU8(nvslayout::kAutoDjNamespace, nvslayout::kAutoDjMatchKey, st.match);
+  nvslater::putU16(nvslayout::kAutoDjNamespace, nvslayout::kAutoDjMoodsKey, st.moods);
 }
 
 }  // namespace autodjstore

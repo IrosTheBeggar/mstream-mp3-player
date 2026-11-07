@@ -50,7 +50,10 @@
 //           within kSettleMs of its opening goes nowhere (Ui::route(): a
 //           double tap on what opened it never picks a row). A row can
 //           stay (Ui::sheetStays(): Now Playing's Shuffle and Repeat change
-//           in place, the sheet up, the row's detail the new state).
+//           in place, the sheet up, the row's detail the new state). A
+//           detail may have its own ink (Now Playing's Auto DJ row: the
+//           mood filter in the accent, waiting for a track that fits it in
+//           amber).
 //   VolumeSheet  the active output's volume (spec §6.1, mockup 04): − and +,
 //           a slider to tap or drag (5 % steps), the value; from y 124,
 //           closes 3 s after the last change or on a tap above it. Nothing
@@ -196,9 +199,10 @@ public:
   static constexpr uint32_t kSettleMs = 300;
   // `details`: nullptr, or a dim text per row (nullptr or "" for none).
   // `primary`: the row drawn as the main choice (-1 none); `danger`: the
-  // row in red (-1 none).
+  // row in red (-1 none). `inks`: nullptr, or each detail's colour (DIM
+  // for a plain one).
   void open(const char* title, const char* const* rows, int n, uint16_t accent, const char* const* details = nullptr,
-            int primary = -1, int danger = -1);
+            int primary = -1, int danger = -1, const uint16_t* inks = nullptr);
   void close() { up_ = false; }
   bool up() const { return up_; }
   int top() const { return y0_; }
@@ -206,10 +210,11 @@ public:
   // A glass event: the row index on a Tap on a row, -2 on a Tap outside
   // or on ✕ (close), -1 otherwise. Presses highlight what's under the finger.
   int onEvent(const InputEvent& e);
-  // Row `i`'s dim detail is now `text` (the playback menu's rows follow
-  // the timer, shuffle and repeat): drawn again only if it changed. True:
-  // it was drawn.
-  bool setDetail(int i, const char* text);
+  // Row `i`'s detail is now `text`, in `ink` (the playback menu's rows
+  // follow the timer, shuffle, repeat and Auto DJ): drawn again only if
+  // either changed. True: it was drawn.
+  bool setDetail(int i, const char* text, uint16_t ink);
+  bool setDetail(int i, const char* text);  // (dim)
   // Row `i` drawn again as it is (a staying row's highlight gone after its
   // tap: onEvent() clears it on a Tap without drawing).
   void drawRow(int i);
@@ -227,6 +232,7 @@ private:
   char title_[96] = "";
   char rows_[kMaxRows][64] = {};
   char details_[kMaxRows][96] = {};
+  uint16_t inks_[kMaxRows] = {};  // each detail's colour
   int n_ = 0;
   int y0_ = 240;
   int pressed_ = -1;

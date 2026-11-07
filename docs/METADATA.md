@@ -5338,9 +5338,21 @@ counts):
     the FLAC. The lowest free during the join of the update with nothing
     playing: 175,032 B against 180,876 B. After the FLAC an Opus opened
     its 128,023 B of buffers and played, 101 packets, 0 skipped, on both.
-    Not compared (it needs a fresh commit for each firmware): the first
-    walk after a new commit, then `gb`: 180,212 B with the words; without,
-    run B read 221,172 B at the join while its walk still ran, 335,860 B
+    In those runs `library.idx`'s save ended before the join.
+  - **The save after the rejoin,** a second A/B (MEASURED 2026-11-06,
+    both firmwares from S2's tip, `3461c41`; MOOD-FILTERS.md 9.6): each
+    after a boot that rebuilt the library, a reset, `z`, `D`, then `gb`
+    with nothing playing and no `gw` (not deferred), `D`, `Dc`, `D`. The
+    largest free block joined after the update, before the save: 294,900
+    against 327,668 B; after `library.idx`'s save and `Dc`: 180,212
+    against 204,788 B. The save landed after Auto DJ's rejoin (in the
+    control after the `D` that follows `gb`; with the words between the
+    join and that `D`), so the drop is the save's layout, not the words,
+    whose share there is −24,576 B: docs/AUTODJ.md 7.4 records 180,212 B
+    for it on 2026-10-14, before any mood work. The control is under
+    245,764 B too, so no redesign; a FLAC's 155,636 B still fits, and an
+    Opus's 65,536 and 62,464 B blocks. Run B, without the words and after
+    `gw`, read 221,172 B at the join while its walk still ran, 335,860 B
     after.
 - **Nothing is read whole** into PSRAM by the walk, the scan or the
   compaction: their temporaries are fixed buffers (above), whatever the

@@ -1191,6 +1191,7 @@ void test_empty_state_texts_fit() {
   TEST_ASSERT_TRUE(body.width(tr(S::empty_autodj)) + kEmptyIconW[1] + 8 <= kEmptySecondW - 12);  // (Auto DJ's place)
   TEST_ASSERT_TRUE(kEmptyPrimaryX + kEmptyPrimaryW < kEmptySecondX && kEmptySecondX + kEmptySecondW <= 320 - 6);
   fits(small, tr(S::empty_pick_in_library), kEmptyLineW);
+  fits(small, tr(S::empty_no_track_fits), kEmptyLineW);  // (in its place while Auto DJ's mood filter fits no track)
 }
 
 // No card, and each kind of card that didn't mount (cardMessage(): exFAT,
@@ -3975,6 +3976,77 @@ void test_sheet_details_fit() {
   TEST_ASSERT_EQUAL_STRING(drawn(small, name, room).c_str(), cut);
 }
 
+// The playback sheet's Auto DJ row with a mood filter on (MOOD-FILTERS.md
+// 4.4, frame dj-menu): autodjview::sheetDetail()'s "On · Relaxed ·
+// Instrumental", cut with "…" to the room beside the label (Ui::
+// autoDjDetail(), as Now Playing cuts a name), stays beside it in every
+// language and for every filter, the state's word first, whole. A detail
+// that fits whole is left as it is.
+void test_the_auto_dj_sheet_detail_is_cut_beside() {
+  namespace dv = autodjview;
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  const textfit::Font f = viewOf(small);
+  std::string report;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    const int labelW = body.width(tr(S::now_playing_autodj));
+    const int room = sheet::detailRoom(labelW);
+    TEST_ASSERT_TRUE(room >= 210);  // (en 213, ru 210: far over sheet::kMinDetailRoom)
+    char on[32];
+    uistr::trf(on, sizeof(on), S::output_autodj_sub_on, "");  // "On · ": what each detail starts with
+    size_t cutCount = 0, filters = 0;
+    int widest = 0;
+    for (uint16_t q = 1; q < 0x800; ++q) {
+      if (!moodfilter::valid(q) || !moodfilter::Filter::unpack(q).active()) continue;
+      ++filters;
+      dv::State s;
+      s.on = true;
+      s.moods = q;
+      s.moodData = s.moodOn = true;
+      s.fit = s.fitOf = 19412;
+      char whole[96], shown[96];
+      TEST_ASSERT_TRUE(dv::sheetDetail(s, whole, sizeof(whole)) == dv::Ink::Accent);
+      TEST_ASSERT_EQUAL_INT(0, std::strncmp(whole, on, std::strlen(on)));
+      textfit::fit(f, whole, std::strlen(whole), shown, sizeof(shown), room);
+      widest = std::max(widest, small.width(whole));
+      fits(small, shown, room);
+      TEST_ASSERT_FALSE(sheet::detailOnTwoLines(labelW, small.width(shown)));
+      if (std::strcmp(shown, whole) != 0) {
+        ++cutCount;
+        TEST_ASSERT_TRUE(std::strstr(shown, "\xE2\x80\xA6") != nullptr);
+        // More than the state's word: some of the first mood too (the room
+        // is 210 px or more in every language).
+        TEST_ASSERT_TRUE(std::strlen(shown) > std::strlen(on) + 3);
+      }
+    }
+    TEST_ASSERT_EQUAL_INT(1149, static_cast<int>(filters));  // the 1,152 valid words but a level alone's three
+    char m[160];
+    snprintf(m, sizeof(m), "%s: %zu of %zu cut in %d px (the widest %d); ", uistr::tag(l), cutCount, filters, room,
+             widest);
+    report += m;
+  }
+  uistr::setLang(uistr::Lang::En);
+  // English: frame dj-menu's two words fit whole beside "Auto DJ".
+  {
+    dv::State s;
+    s.on = true;
+    moodfilter::Filter both;
+    both.energy = moodfilter::Scale::First;  // Relaxed
+    both.voice = moodfilter::Voice::Instrumental;
+    s.moods = both.pack();
+    s.moodData = s.moodOn = true;
+    char whole[96];
+    dv::sheetDetail(s, whole, sizeof(whole));
+    TEST_ASSERT_EQUAL_STRING("On \xC2\xB7 Relaxed \xC2\xB7 Instrumental", whole);
+    char m[96];
+    snprintf(m, sizeof(m), "en \"%s\": %d px in %d", whole, small.width(whole),
+             sheet::detailRoom(body.width(tr(S::now_playing_autodj))));
+    report += m;
+  }
+  TEST_MESSAGE(report.c_str());
+}
+
 // Auto DJ on the screen (the engine design's 5; lib/core/AutoDjView), in
 // every language: Output's row (its title and line, every state and
 // Anchor), Output > Auto DJ's rows (the switches' titles and lines beside
@@ -4007,7 +4079,8 @@ void test_auto_dj_texts_fit() {
     for (dv::Index ix : {dv::Index::None, dv::Index::Bad, dv::Index::Unreadable, dv::Index::TooBig,
                          dv::Index::NoMemory, dv::Index::Found, dv::Index::Reading, dv::Index::Ready}) {
       for (autodj::Hold hold :
-           {autodj::Hold::None, autodj::Hold::RepeatOne, autodj::Hold::SleepTimer, autodj::Hold::Failures}) {
+           {autodj::Hold::None, autodj::Hold::RepeatOne, autodj::Hold::SleepTimer, autodj::Hold::Failures,
+            autodj::Hold::NoFit}) {
         for (autodj::Mode mode : {autodj::Mode::Rolling, autodj::Mode::Locked}) {
           dv::State s;
           s.on = on != 0;
@@ -4019,6 +4092,23 @@ void test_auto_dj_texts_fit() {
           s.bpmPct = s.keyPct = 100;
           states.push_back(s);
           s.rows = s.mapped = s.tracks = 1;  // (the "one" forms)
+          states.push_back(s);
+          // The mood filter (MOOD-FILTERS.md 4.4): mood data with none on
+          // (the coverage's mood), then one on that many fit (the count),
+          // 50, 21 and 1 (few: each plural form), and none.
+          s.rows = s.mapped = s.tracks = 99999;
+          s.moodData = true;
+          s.moodPct = 100;
+          s.fitOf = 99999;
+          s.fit = 99999;
+          states.push_back(s);
+          s.moodOn = true;
+          for (uint32_t fit : {99999u, 51u, 50u, 22u, 21u, 1u, 0u}) {
+            s.fit = fit;
+            states.push_back(s);
+          }
+          s.fitOf = 1;  // (the "one" forms of the count)
+          s.fit = 0;
           states.push_back(s);
         }
       }
@@ -4099,8 +4189,40 @@ void test_auto_dj_texts_fit() {
       }
     }
     for (S t : {S::autodj_anchor_rolling_sub, S::autodj_anchor_locked_sub, S::autodj_strictness_sub,
-                S::autodj_needs_index}) {
+                S::autodj_needs_index, S::autodj_smart_sub}) {
       fits(small, tr(t), kAutoDjLineW);
+    }
+    // Smart filters, the fourth row (MOOD-FILTERS.md 4.4): its value
+    // beside its title, or under it in its hint's place, as Anchor's.
+    // Dim (no mood data), the hint stays: no index isn't why. What is set
+    // (filterValue()'s summary) is cut to the line, so not measured here.
+    {
+      const char* title = tr(S::mood_smart_filters);
+      fits(body, title, kAutoDjLineW);
+      const char* hint = tr(S::autodj_smart_sub);
+      for (S id : {S::mood_any, S::mood_no_data}) {
+        const char* v = tr(id);
+        const int vw = small.width(v);
+        const char* second = autoDjSecondLine(body.width(title), vw, v, hint);
+        fits(small, second, kAutoDjLineW);
+        if (autoDjValueBeside(body.width(title), vw)) {
+          fits(small, v, autoDjValueRoom(body.width(title)));
+          TEST_ASSERT_EQUAL_STRING(hint, second);
+          continue;
+        }
+        TEST_ASSERT_EQUAL_STRING(v, second);
+        TEST_ASSERT_TRUE_MESSAGE(l != uistr::Lang::En, v);  // English: beside its title
+        char m[160];
+        snprintf(m, sizeof(m), "%s \"%s\" under \"%s\" (%d px in %d); ", uistr::tag(l), v, title, vw,
+                 autoDjValueRoom(body.width(title)));
+        report += m;
+      }
+      // Each word a summary can start with, whole on the line (a summary
+      // is cut after a word, never inside its first).
+      for (S w : {S::mood_happy, S::mood_neutral, S::mood_sad, S::mood_relaxed, S::mood_aggressive,
+                  S::mood_instrumental, S::mood_vocals, S::mood_acoustic, S::mood_party, S::mood_danceable}) {
+        fits(small, tr(w), kAutoDjLineW);
+      }
     }
     // The sheets' 4th rows (Body, 16 px in from each side).
     fits(body, tr(S::library_autodj_here), sheet::kTwoLineW);
@@ -4919,6 +5041,7 @@ int main(int, char**) {
   RUN_TEST(test_header_pills_fit);
   RUN_TEST(test_header_subs_fit);
   RUN_TEST(test_sheet_details_fit);
+  RUN_TEST(test_the_auto_dj_sheet_detail_is_cut_beside);
   RUN_TEST(test_auto_dj_texts_fit);
   RUN_TEST(test_folder_header_counts_fit);
   RUN_TEST(test_library_header_lines);

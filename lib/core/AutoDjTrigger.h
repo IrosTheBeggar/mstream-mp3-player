@@ -29,11 +29,14 @@
 //      cued).
 //   8. Not paused by FailurePause (kFailedPicks of its picks in a row
 //      failed to play: a hold).
-// The holds (6-8) are what the "..." row shows: Waiting (Repeat One, the
-// sleep timer) or Paused (failures).
+//   9. Not under a mood filter that no library track fits (docs/MOOD-
+//      FILTERS.md 6.5, D3: a hold; the picks never leave the filter, so
+//      none could be made).
+// The holds (6-9) are what the "..." row shows: Waiting (Repeat One, the
+// sleep timer, a filter nothing fits) or Paused (failures).
 //
 // The update step's fence (LibraryUpdate::In::autoDjOwed): a pick is owed
-// when it is due by 1-3 and 6-8 but the engine joins or reopens; no fence
+// when it is due by 1-3 and 6-9 but the engine joins or reopens; no fence
 // goes up then (the pick lands first). A hold never owes one, so a held
 // Auto DJ never blocks an update.
 //
@@ -55,6 +58,7 @@ enum class Wait : uint8_t {
   RepeatOne,   // 6
   SleepTimer,  // 7
   Failures,    // 8
+  NoFit,       // 9: the mood filter on, and no track fits it
 };
 const char* waitName(Wait w);
 
@@ -64,6 +68,7 @@ enum class Hold : uint8_t {
   RepeatOne,   // "Waiting"
   SleepTimer,  // "Waiting"
   Failures,    // "Paused"
+  NoFit,       // "Waiting": no track fits the mood filter
 };
 
 struct TriggerIn {
@@ -81,6 +86,7 @@ struct TriggerIn {
   bool restartSet = false;       // a restart is set (a CPU speed's)
   bool sleepEndOfQueue = false;  // SleepTimer::choice() is EndOfQueue
   bool failurePaused = false;    // FailurePause::paused()
+  bool noFit = false;            // the mood filter on, no library track inside it (MOOD-FILTERS.md 6.5)
 };
 
 struct TriggerOut {

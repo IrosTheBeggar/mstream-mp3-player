@@ -1,7 +1,7 @@
 {
   "@@locale": "pl",
   "@@autonym": "Polski",
-  "@@note": "Machine-made (a Fable agent), not yet reviewed by a native speaker. Where the mStream mobile app (mstream_music, lib/l10n/app_pl.arb) or the terminal player (mstream-terminal-player, locales/pl.yml; master bdb174e of 2026-09-21 and main b89ad0a of 2026-10-10) had the same text or phrase, their Polish wording and terms were taken (both GPL-3.0, by this repository's owner); the rest was translated by the agent, and a second agent reviewed every message against the English and the apps' words. Register: informal (ty), as both apps. 'zakładka' names a tab (karta is the microSD card), 'Wyjście' the Output tab, 'Informacje' the About page. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, with the Auto DJ engine's UI) were made the same way: the mobile app's Auto DJ words (Auto DJ, Kotwica, Podążaj za klimatem, Próg podobieństwa, '{0}% lub bliżej', Ciągłość BPM, Miksowanie harmoniczne, 'od tego miejsca'; its 'Trzymaj się utworu startowego' is too wide for the Output row's line, so the Anchor's value says 'Przy utworze startowym') and a Fable agent's translation for the rest, fitted with the same checker; not yet reviewed by a native speaker. The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_pl.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
+  "@@note": "Machine-made (a Fable agent), not yet reviewed by a native speaker. Where the mStream mobile app (mstream_music, lib/l10n/app_pl.arb) or the terminal player (mstream-terminal-player, locales/pl.yml; master bdb174e of 2026-09-21 and main b89ad0a of 2026-10-10) had the same text or phrase, their Polish wording and terms were taken (both GPL-3.0, by this repository's owner); the rest was translated by the agent, and a second agent reviewed every message against the English and the apps' words. Register: informal (ty), as both apps. 'zakładka' names a tab (karta is the microSD card), 'Wyjście' the Output tab, 'Informacje' the About page. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, with the Auto DJ engine's UI) were made the same way: the mobile app's Auto DJ words (Auto DJ, Kotwica, Podążaj za klimatem, Próg podobieństwa, '{0}% lub bliżej', Ciągłość BPM, Miksowanie harmoniczne, 'od tego miejsca'; its 'Trzymaj się utworu startowego' is too wide for the Output row's line, so the Anchor's value says 'Przy utworze startowym') and a Fable agent's translation for the rest, fitted with the same checker; not yet reviewed by a native speaker. The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_pl.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_pl.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
   "boot.touch_hint": "Dotyk nie działa? Trzymaj palec na ekranie.",
   "coach.header_tip": "Porada {0} z {1}",
   "coach.header_hint": "dotknij, by przejść",
@@ -81,6 +81,14 @@
   "toast.autodj_started": "Auto DJ: {0}",
   "toast.autodj_no_start": "Brak utworów z sąsiadami w Auto DJ: spróbuj ponownie",
   "toast.autodj_needs_index": "Potrzebny indeks Auto DJ: doda go transfer na kartę",
+  "toast.autodj_few": {
+    "one": "Pasuje tylko {0} utwór: będzie się powtarzał",
+    "few": "Pasują tylko {0} utwory: będą się powtarzać",
+    "many": "Pasuje tylko {0} utworów: będą się powtarzać"
+  },
+  "toast.autodj_no_close": "Brak bliskiego utworu: dowolny pasujący do filtrów",
+  "toast.autodj_plays_once": "Zagra raz, potem działają filtry",
+  "toast.autodj_no_mood": "Brak danych nastroju: zsynchronizuj kartę z mStream",
   "hud.bluetooth": "Bluetooth: {0}",
   "hud.bluetooth_connecting": "Bluetooth: łączenie…",
   "hud.speaker_paused": "Głośnik, pauza: B odtwarza",
@@ -321,6 +329,9 @@
     "many": "{0} z {1} utworów"
   },
   "mood.no_albums": "Żaden album nie pasuje do filtrów",
+  "mood.smart_filters": "Inteligentne filtry",
+  "mood.any": "Bez znaczenia",
+  "mood.no_data": "Brak danych nastroju",
   "card.another": "Inna karta: ponowne uruchamianie",
   "card.back": "Karta wróciła: ponowne uruchamianie",
   "queue_cap.full": {
@@ -426,6 +437,10 @@
   "empty.nothing_playing_title": "Nic nie gra",
   "empty.queue_title": "Kolejka jest pusta",
   "empty.pick_in_library": "Wybierz album, folder lub utwór w Bibliotece.",
+  "empty.no_track_fits": "Żaden utwór na karcie nie pasuje do filtrów",
+  "@empty.no_track_fits": {
+    "note": "'Żaden utwór na tej karcie nie pasuje do filtrów' is 304 px in Small, the line's whole room: 'na karcie'."
+  },
   "empty.open_library": "Do Biblioteki",
   "empty.shuffle_all": "Losowo",
   "empty.autodj": "Auto DJ",
@@ -482,6 +497,7 @@
   "autodj.strictness": "Próg podobieństwa",
   "autodj.strictness_value": "{0}% lub bliżej",
   "autodj.strictness_sub": "jak podobnie musi brzmieć każdy wybór",
+  "autodj.smart_sub": "każdy wybór trzyma się tych nastrojów",
   "autodj.bpm": "Ciągłość BPM",
   "autodj.bpm_sub": "± 8 BPM, pół lub podwójne tempo",
   "autodj.harmonic": "Miksowanie harmoniczne",
@@ -496,6 +512,24 @@
     "note": "'{0} z {1} utworów ma sąsiadów': the verb agrees with the 'X z Y' phrase, as Polish software writes it ('3 z 10 plików ma…'), not with {0}."
   },
   "autodj.status_coverage": "BPM {0}% · tonacja {1}%",
+  "autodj.status_fits": {
+    "one": "{0} z {1} utworu pasuje do filtrów",
+    "few": "{0} z {1} utworów pasuje do filtrów",
+    "many": "{0} z {1} utworów pasuje do filtrów"
+  },
+  "@autodj.status_fits": {
+    "note": "'pasuje' agrees with the 'X z Y' phrase, as autodj.status_ready's 'ma'."
+  },
+  "autodj.status_coverage_mood": "BPM {0}% · tonacja {1}% · nastrój {2}%",
+  "autodj.status_few": {
+    "one": "Pasuje tylko {0} utwór",
+    "few": "Pasują tylko {0} utwory",
+    "many": "Pasuje tylko {0} utworów"
+  },
+  "autodj.status_few_sub": "Będą powtórki · BPM {0}% · tonacja {1}%",
+  "@autodj.status_few_sub": {
+    "note": "'Będą się powtarzać' with the shares is 307 px in Small, the line 288: 'Będą powtórki' (274 px)."
+  },
   "autodj.status_found": {
     "one": "Indeks Auto DJ: {0} utwór",
     "few": "Indeks Auto DJ: {0} utwory",
@@ -511,6 +545,10 @@
   "autodj.status_random": "wybór losowy",
   "autodj.status_waits_repeat": "Czeka: powtarza się jeden utwór",
   "autodj.status_waits_sleep": "Czeka: wyłącznik czasowy kończy kolejkę",
+  "autodj.status_waits_fit": "Czeka: żaden utwór nie pasuje do filtrów",
+  "@autodj.status_waits_fit": {
+    "note": "The mobile app's autoDjSeedNoMatch ('Żaden utwór nie pasuje do filtrów')."
+  },
   "autodj.status_paused": "Pauza: kilka utworów nie zagrało",
   "settings.screen_off": "Wygaszanie ekranu",
   "settings.screen_off_sub": "ściemnia; dotyk budzi",
