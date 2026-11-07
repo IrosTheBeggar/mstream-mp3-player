@@ -3941,6 +3941,16 @@
     },
     "bytes": 96
   },
+  "autodj.status_waits_fit": "Waiting: no track fits the filters",
+  "@autodj.status_waits_fit": {
+    "context": "The status row's first line while Auto DJ is on but adds nothing: a mood filter is set for it and no track on this card fits the filter (docs/MOOD-FILTERS.md 4.4). Filters: the mood filters' word in the mobile app (its moodFilters, 'Filters').",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "bytes": 96
+  },
   "autodj.status_paused": "Paused: tracks failed to play",
   "@autodj.status_paused": {
     "context": "The status row's first line after three of Auto DJ's picks failed to play: it adds nothing until a track plays, or it is switched off and on.",

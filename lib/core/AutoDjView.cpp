@@ -26,7 +26,8 @@ RowState rowState(const State& s) {
   switch (s.hold) {
     case autodj::Hold::Failures: return RowState::Paused;
     case autodj::Hold::RepeatOne:
-    case autodj::Hold::SleepTimer: return RowState::Waiting;
+    case autodj::Hold::SleepTimer:
+    case autodj::Hold::NoFit: return RowState::Waiting;
     case autodj::Hold::None: break;
   }
   return RowState::On;
@@ -129,6 +130,7 @@ void statusLines(const State& s, char* line1, size_t size1, char* line2, size_t 
   // Why it adds nothing, over the index's first line.
   const S why = s.hold == autodj::Hold::Failures    ? S::autodj_status_paused
                 : s.hold == autodj::Hold::RepeatOne ? S::autodj_status_waits_repeat
+                : s.hold == autodj::Hold::NoFit     ? S::autodj_status_waits_fit
                                                     : S::autodj_status_waits_sleep;
   uistr::trf(line1, size1, why);
   char spare[8];
@@ -148,10 +150,16 @@ uint8_t NewsWatch::pass(const autodj::Pass& p, autodj::Mode mode, bool on) {
   if (p.cued) news |= kNewsCued;
   if (p.paused && on) news |= kNewsPaused;
   if (p.picked && p.pick.ok && p.added) {  // (a cued pick is appended too)
-    if (p.pick.noIndex) {
+    const autodj::Pick& k = p.pick;
+    if (k.jump != autodj::Jump::None || k.repeated || k.repinned) {
+      // A mood filter's jump, repeat or re-pin (MOOD-FILTERS.md 6.2, 6.4)
+      // says none of these: a jump's anchors had lists, a repeat is for
+      // want of tracks that fit, the pin stays or moves onto the playing
+      // track. Their own toasts are S5's (4.5).
+    } else if (k.noIndex && !k.byIdJoined) {
       if (!randomSaid_) news |= kNewsRandom;
       randomSaid_ = true;
-    } else if (p.pick.random && picks_ == 0) {
+    } else if (k.random && picks_ == 0) {
       news |= mode == autodj::Mode::Locked ? kNewsSeedMoved : kNewsNoNeighbours;
     }
     ++picks_;

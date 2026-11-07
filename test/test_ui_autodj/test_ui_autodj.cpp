@@ -7,7 +7,8 @@
 // steps and the value an index's own floor makes of it, the status row's
 // two lines in each state of the index and each hold, the empty states'
 // button, and which toast Auto DJ's news makes (and when: picks by id once
-// a switch on, only picks appended). The widths of these texts
+// a switch on, only picks appended; none of it for a mood filter's jumps,
+// repeats and re-pins, nor "no index" for its picks by id while joined). The widths of these texts
 // in every language are test_ui_library's (test_auto_dj_texts_fit) and
 // test_ui_strings'.
 // Run: pio test -e native -f test_ui_autodj
@@ -43,9 +44,9 @@ std::string root(const State& s, bool withMode = true) {
 
 }  // namespace
 
-// Off, On, and the holds while on: Repeat One and the sleep timer's End
-// of queue wait, the failure pause pauses; a hold left from before it was
-// switched off says nothing.
+// Off, On, and the holds while on: Repeat One, the sleep timer's End of
+// queue and a mood filter nothing fits wait, the failure pause pauses; a
+// hold left from before it was switched off says nothing.
 void test_the_row_state() {
   State s;
   TEST_ASSERT_TRUE(rowState(s) == RowState::Off);
@@ -54,6 +55,8 @@ void test_the_row_state() {
   s.on = true;
   TEST_ASSERT_TRUE(rowState(s) == RowState::Waiting);
   s.hold = Hold::SleepTimer;
+  TEST_ASSERT_TRUE(rowState(s) == RowState::Waiting);
+  s.hold = Hold::NoFit;
   TEST_ASSERT_TRUE(rowState(s) == RowState::Waiting);
   s.hold = Hold::Failures;
   TEST_ASSERT_TRUE(rowState(s) == RowState::Paused);
@@ -85,6 +88,8 @@ void test_the_output_row_line() {
   s.hold = Hold::RepeatOne;
   TEST_ASSERT_EQUAL_STRING("Waiting \xC2\xB7 Follow the vibe", root(s).c_str());
   TEST_ASSERT_EQUAL_STRING("Waiting", root(s, false).c_str());
+  s.hold = Hold::NoFit;
+  TEST_ASSERT_EQUAL_STRING("Waiting \xC2\xB7 Follow the vibe", root(s).c_str());
   s.hold = Hold::Failures;
   s.mode = Mode::Locked;
   TEST_ASSERT_EQUAL_STRING("Paused \xC2\xB7 Stay on seed", root(s).c_str());
@@ -276,6 +281,9 @@ void test_the_status_row_says_why_it_waits() {
   TEST_ASSERT_EQUAL_STRING("300 of 310 tracks have neighbours", line(s, 1).c_str());
   s.hold = Hold::SleepTimer;
   TEST_ASSERT_EQUAL_STRING("Waiting: sleep timer set to End of queue", line(s, 0).c_str());
+  s.hold = Hold::NoFit;  // (MOOD-FILTERS.md 4.4, 6.5)
+  TEST_ASSERT_EQUAL_STRING("Waiting: no track fits the filters", line(s, 0).c_str());
+  TEST_ASSERT_EQUAL_STRING("300 of 310 tracks have neighbours", line(s, 1).c_str());
   s.hold = Hold::Failures;
   s.index = Index::None;
   TEST_ASSERT_EQUAL_STRING("Paused: tracks failed to play", line(s, 0).c_str());
@@ -429,6 +437,37 @@ void test_the_news_from_the_passes() {
   TEST_ASSERT_EQUAL_UINT32(17, w.adds());
 }
 
+// A mood filter's picks (MOOD-FILTERS.md 4.5, 6.2, 6.4): a jump (its scan's
+// row, or a track with no row by id), a repeat (a row's, or the only track
+// that fits, by id) and a re-pin say none of the old news, a session's
+// first pick or not: the anchors had lists, and the pin stays or moves onto
+// the playing track. A pick by id with the index joined isn't for want of
+// one: not "no index", but a session's first pick with no anchor's list, as
+// any random one. By id with no index still says so, once.
+void test_the_news_under_a_mood_filter() {
+  NewsWatch w;
+  for (Mode m : {Mode::Rolling, Mode::Locked}) {
+    for (int kind = 0; kind < 5; ++kind) {
+      w.sessionBegan();
+      autodj::Pass p = picked(true, kind == 1 || kind == 4);
+      p.pick.byIdJoined = p.pick.noIndex;
+      if (kind <= 1) p.pick.jump = kind ? autodj::Jump::NoRow : autodj::Jump::NoCandidate;
+      p.pick.repeated = kind == 2 || kind == 4;
+      p.pick.repinned = kind == 3;
+      TEST_ASSERT_EQUAL_UINT8(0, w.pass(p, m, true));
+    }
+  }
+  w.sessionBegan();
+  autodj::Pass joined = picked(true, true);
+  joined.pick.byIdJoined = true;
+  TEST_ASSERT_EQUAL_UINT8(kNewsNoNeighbours, w.pass(joined, Mode::Rolling, true));
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(joined, Mode::Rolling, true));
+  w.sessionBegan();
+  TEST_ASSERT_EQUAL_UINT8(kNewsSeedMoved, w.pass(joined, Mode::Locked, true));
+  TEST_ASSERT_EQUAL_UINT8(kNewsRandom, w.pass(picked(true, true), Mode::Locked, true));
+  TEST_ASSERT_EQUAL_UINT8(0, w.pass(picked(true, true), Mode::Locked, true));
+}
+
 void test_the_index_names() {
   for (Index i : {Index::None, Index::Bad, Index::Unreadable, Index::TooBig, Index::NoMemory, Index::Found,
                   Index::Reading, Index::Ready}) {
@@ -450,6 +489,7 @@ int main(int, char**) {
   RUN_TEST(test_the_empty_states_button);
   RUN_TEST(test_the_news_toasts);
   RUN_TEST(test_the_news_from_the_passes);
+  RUN_TEST(test_the_news_under_a_mood_filter);
   RUN_TEST(test_the_index_names);
   return UNITY_END();
 }

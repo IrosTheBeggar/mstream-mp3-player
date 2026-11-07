@@ -1,7 +1,7 @@
 {
   "@@locale": "zh",
   "@@autonym": "中文",
-  "@@note": "Simplified Chinese, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_zh.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/zh.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words and register are kept: informal 你, 曲目 for a track counted with 首, 曲库 for the Library, 队列, 艺术家, 专辑, 群星, and a space between Latin letters or digits and hanzi; their fullwidth punctuation is written as the ASCII signs, 、 and 。, which is what the device can draw), and translated by a Fable agent (Claude) otherwise. A machine translation, reviewed by a second Fable agent, not yet by a native speaker: a review as a pull request on this file is welcome. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review).",
+  "@@note": "Simplified Chinese, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_zh.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/zh.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words and register are kept: informal 你, 曲目 for a track counted with 首, 曲库 for the Library, 队列, 艺术家, 专辑, 群星, and a space between Latin letters or digits and hanzi; their fullwidth punctuation is written as the ASCII signs, 、 and 。, which is what the device can draw), and translated by a Fable agent (Claude) otherwise. A machine translation, reviewed by a second Fable agent, not yet by a native speaker: a review as a pull request on this file is welcome. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The mood filters' first text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker.",
   "boot.touch_hint": "触摸不灵? 长按屏幕。",
   "coach.header_tip": "提示 {0} / {1}",
   "coach.header_hint": "点一下继续",
@@ -419,6 +419,10 @@
   "autodj.status_random": "选曲随机",
   "autodj.status_waits_repeat": "等待中: 单曲循环已开启",
   "autodj.status_waits_sleep": "等待中: 睡眠定时器设为播完队列",
+  "autodj.status_waits_fit": "等待中: 没有符合筛选条件的曲目",
+  "@autodj.status_waits_fit": {
+    "note": "The mobile app's autoDjSeedNoMatch ('没有符合筛选条件的歌曲'), with 曲目 for 歌曲 as everywhere here."
+  },
   "autodj.status_paused": "已暂停: 曲目无法播放",
   "settings.screen_off": "自动熄屏",
   "@settings.screen_off": {

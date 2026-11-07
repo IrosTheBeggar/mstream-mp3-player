@@ -1,7 +1,7 @@
 {
   "@@locale": "pl",
   "@@autonym": "Polski",
-  "@@note": "Machine-made (a Fable agent), not yet reviewed by a native speaker. Where the mStream mobile app (mstream_music, lib/l10n/app_pl.arb) or the terminal player (mstream-terminal-player, locales/pl.yml; master bdb174e of 2026-09-21 and main b89ad0a of 2026-10-10) had the same text or phrase, their Polish wording and terms were taken (both GPL-3.0, by this repository's owner); the rest was translated by the agent, and a second agent reviewed every message against the English and the apps' words. Register: informal (ty), as both apps. 'zakładka' names a tab (karta is the microSD card), 'Wyjście' the Output tab, 'Informacje' the About page. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, with the Auto DJ engine's UI) were made the same way: the mobile app's Auto DJ words (Auto DJ, Kotwica, Podążaj za klimatem, Próg podobieństwa, '{0}% lub bliżej', Ciągłość BPM, Miksowanie harmoniczne, 'od tego miejsca'; its 'Trzymaj się utworu startowego' is too wide for the Output row's line, so the Anchor's value says 'Przy utworze startowym') and a Fable agent's translation for the rest, fitted with the same checker; not yet reviewed by a native speaker.",
+  "@@note": "Machine-made (a Fable agent), not yet reviewed by a native speaker. Where the mStream mobile app (mstream_music, lib/l10n/app_pl.arb) or the terminal player (mstream-terminal-player, locales/pl.yml; master bdb174e of 2026-09-21 and main b89ad0a of 2026-10-10) had the same text or phrase, their Polish wording and terms were taken (both GPL-3.0, by this repository's owner); the rest was translated by the agent, and a second agent reviewed every message against the English and the apps' words. Register: informal (ty), as both apps. 'zakładka' names a tab (karta is the microSD card), 'Wyjście' the Output tab, 'Informacje' the About page. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, with the Auto DJ engine's UI) were made the same way: the mobile app's Auto DJ words (Auto DJ, Kotwica, Podążaj za klimatem, Próg podobieństwa, '{0}% lub bliżej', Ciągłość BPM, Miksowanie harmoniczne, 'od tego miejsca'; its 'Trzymaj się utworu startowego' is too wide for the Output row's line, so the Anchor's value says 'Przy utworze startowym') and a Fable agent's translation for the rest, fitted with the same checker; not yet reviewed by a native speaker. The mood filters' first text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker.",
   "boot.touch_hint": "Dotyk nie działa? Trzymaj palec na ekranie.",
   "coach.header_tip": "Porada {0} z {1}",
   "coach.header_hint": "dotknij, by przejść",
@@ -485,6 +485,10 @@
   "autodj.status_random": "wybór losowy",
   "autodj.status_waits_repeat": "Czeka: powtarza się jeden utwór",
   "autodj.status_waits_sleep": "Czeka: wyłącznik czasowy kończy kolejkę",
+  "autodj.status_waits_fit": "Czeka: żaden utwór nie pasuje do filtrów",
+  "@autodj.status_waits_fit": {
+    "note": "The mobile app's autoDjSeedNoMatch ('Żaden utwór nie pasuje do filtrów')."
+  },
   "autodj.status_paused": "Pauza: kilka utworów nie zagrało",
   "settings.screen_off": "Wygaszanie ekranu",
   "settings.screen_off_sub": "ściemnia; dotyk budzi",

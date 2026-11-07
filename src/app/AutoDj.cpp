@@ -14,6 +14,7 @@
 #include "CardContract.h"
 #include "NvsLayout.h"
 #include "Percentiles.h"
+#include "TagText.h"  // filterText()
 #include "app/AutoDjStore.h"
 #include "app/Psram.h"
 #include "storage/SectorDisk.h"
@@ -88,6 +89,18 @@ const char* slotName(autodj::SlotResult r) {
 
 unsigned pct(uint32_t part, uint32_t whole) {
   return whole ? static_cast<unsigned>((part * 100ull + whole / 2) / whole) : 0;
+}
+
+// A pick's jump out of the anchors' lists under a mood filter (the pick
+// line's tag; MOOD-FILTERS.md 6.2): none with no filter.
+const char* jumpTag(autodj::Jump j) {
+  switch (j) {
+    case autodj::Jump::None: return "";
+    case autodj::Jump::NoCandidate: return " [jump: nothing listed fits the filter]";
+    case autodj::Jump::AllCooled: return " [jump: all listed that fits played lately]";
+    case autodj::Jump::NoRow: return " [jump: a track with no row, by id]";
+  }
+  return "";
 }
 
 constexpr uint32_t kJoinRetryMs = 10000;  // a join whose read failed: again after (the card's, not the file's)
@@ -305,8 +318,14 @@ bool AutoDj::hasRow(uint32_t track) {
 // ---------------------------------------------------------------------------
 autodj::Index AutoDj::index() {
   autodj::Index ix;
+  ix.mood = moodView();
+  ix.fit = fit_;  // (stepMood()'s, this pass's: read only while the filter is on)
   if (joined()) {
-    ix.maps = join_.maps();
+    // The join's maps with the mood filter: a copy (MOOD-FILTERS.md 6.1),
+    // the join's own as it made them.
+    maps_ = *join_.maps();
+    maps_.mood = ix.mood;
+    ix.maps = &maps_;
     ix.slots = &reader_;
     ix.k = static_cast<uint16_t>(table_.k());
     ix.selHead = static_cast<uint16_t>(table_.selHead());
@@ -314,6 +333,59 @@ autodj::Index AutoDj::index() {
   }
   ix.joining = file_ == File::Open && !joined() && block_ == Block::None;
   return ix;
+}
+
+autodj::MoodView AutoDj::moodView() {
+  const LibraryIndex* index = lib_.index();
+  if (!index || !index->ready() || !index->hasMoods()) return autodj::MoodView();
+  return autodj::MoodView(index->moodWords(), index->trackCount(), dj_.settings().moods);
+}
+
+void AutoDj::stepMood() {
+  const LibraryIndex* index = lib_.index();
+  const bool have = index && index->ready();
+  const bool back = have && !indexSeen_;
+  indexSeen_ = have;
+  const uint16_t q = dj_.settings().moods;
+  if (!have || (!back && fitCounted_ && fitQ_ == q)) return;
+  const int64_t t0 = esp_timer_get_time();
+  const autodj::MoodView v = moodView();
+  const bool wasOn = fitOn_;
+  fitOf_ = index->trackCount();
+  fit_ = v.on() ? moodfilter::count(v.words, v.tracks, v.f, nullptr) : fitOf_;
+  fitUs_ = static_cast<uint32_t>(esp_timer_get_time() - t0);
+  fitQ_ = q;
+  fitCounted_ = true;
+  fitOn_ = v.on();
+  // The words may be new where the old ones were (a fence's end): the runs
+  // remade. Not with no filter, then or now: those picks are as before.
+  if (fitOn_ || wasOn) dj_.engine().mapsChanged();
+}
+
+void AutoDj::moodLine(char* buf, size_t size) {
+  const uint16_t q = dj_.settings().moods;
+  if (q == 0) {
+    snprintf(buf, size, "mood filter: none");
+    return;
+  }
+  char f[128];
+  tagtext::filterText(q, f, sizeof(f));
+  const LibraryIndex* index = lib_.index();
+  const int n = snprintf(buf, size, "mood filter 0x%03X: %s", (unsigned)q, f);
+  if (n < 0 || static_cast<size_t>(n) >= size) return;
+  char* rest = buf + n;
+  const size_t room = size - static_cast<size_t>(n);
+  if (!index || !index->ready() || !fitCounted_) {
+    snprintf(rest, room, "; the library is updating, or none: the count waits for it");
+  } else if (!index->hasMoods()) {
+    snprintf(rest, room, "; no mood data on this card: the picks are unfiltered (D4)");
+  } else if (fitOn_) {
+    snprintf(rest, room, "; %lu of %lu tracks fit (counted in %.1f ms)%s", (unsigned long)fit_,
+             (unsigned long)fitOf_, fitUs_ / 1000.0,
+             fit_ == 0                      ? ": none, so Auto DJ waits (a hold)"
+             : fit_ <= autodj::kTrackCooldown ? ": they will repeat"
+                                             : "");
+  }
 }
 
 autodj::Env AutoDj::driverEnv(const Env& env) const {
@@ -334,6 +406,7 @@ autodj::Env AutoDj::driverEnv(const Env& env) const {
 }
 
 void AutoDj::step(const Env& env) {
+  stepMood();
   remount(env);
   // (A join under way: its own next read fails on the FIL, and its end comes here.)
   if (file_ == File::Open && handle_ && join_.status() != autodj::Join::Status::Working && !env.listMoving &&
@@ -740,14 +813,16 @@ void AutoDj::logPickLine(const Pass& p, const char* how) {
   const autodj::Pick& k = p.pick;
   if (!k.ok) {
     Serial.printf("[dj] %s: no track (%s): again in %lu s\n", how,
-                  joined() ? "nothing to draw from" : "no index and no library track",
+                  k.noFit    ? "no track fits the mood filter"
+                  : joined() ? "nothing to draw from"
+                             : "no index and no library track",
                   (unsigned long)(autodj::kRetryMs / 1000));
     return;
   }
   char row[24] = "no row";
   if (k.row != autodj::kNoRow) snprintf(row, sizeof(row), "row %u", (unsigned)k.row);
   Serial.printf("[dj] %s: %s (%s, level %u, class %u: cooldown %u, rank %u; %u candidates, %u gated, %u in its class; "
-                "%u reads; %.2f ms, reads %.2f ms)%s%s%s%s%s%s%s%s%s%s%s\n",
+                "%u reads; %.2f ms, reads %.2f ms)%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n",
                 how, pathOf(k.track), row, (unsigned)k.level,
                 (unsigned)(k.cooldownLevel * autodj::kRanks + k.musicRank),
                 (unsigned)k.cooldownLevel, (unsigned)k.musicRank, (unsigned)k.candidates, (unsigned)k.gated,
@@ -755,9 +830,14 @@ void AutoDj::logPickLine(const Pass& p, const char* how) {
                 k.dry ? " [dry: the 50 closest]" : "",
                 k.loosened ? " [loosened: the gate's rows all played lately: the 50 closest not]" : "",
                 k.random && !k.noIndex ? " [random]" : "",
-                k.noIndex ? " [by track id: no index]" : "", k.imputedTempo ? " [tempo drawn]" : "",
+                !k.noIndex ? "" : k.byIdJoined ? " [by track id]" : " [by track id: no index]",
+                k.imputedTempo ? " [tempo drawn]" : "",
                 k.imputedKey ? " [key drawn]" : "", k.tempoBreak ? " [tempo break]" : "",
-                k.keyBreak ? " [key break]" : "", p.cued ? " [cued: the queue had finished; Play starts it]" : "",
+                k.keyBreak ? " [key break]" : "",
+                // (A mood filter's, MOOD-FILTERS.md 6.2-6.4: none without one.)
+                k.repinned ? " [re-pinned: the playing track is the pin now]" : "", jumpTag(k.jump),
+                k.repeated ? " [a repeat: nothing fresh fits the filter]" : "",
+                p.cued ? " [cued: the queue had finished; Play starts it]" : "",
                 p.refused ? " [REFUSED by the queue: full of tracks not played yet, or no memory; again in 5 s]" : "",
                 p.undoDropped ? " [the listener's undo went with it]" : "");
 }
@@ -850,6 +930,20 @@ bool AutoDj::setMatch(bool tempo, bool key) {
   return true;
 }
 
+bool AutoDj::setMoods(uint16_t q) {
+  if (!dj_.setMoods(q)) return false;
+  stepMood();  // (at once, 6.5: the hold from this pass, not the next)
+  char what[256];
+  moodLine(what, sizeof(what));
+  saveSettings(what);
+  // A pick queued before the change plays once (D5).
+  const uint32_t pending = dj_.pendingTrack();
+  if (pending != autodj::kNoTrackId && !moodView().passes(pending)) {
+    Serial.printf("[dj] the pick up next is outside the filter: it plays once: %s\n", pathOf(pending));
+  }
+  return true;
+}
+
 bool AutoDj::fromHere(uint32_t track) {
   bool switched = false;
   if (!dj_.playFrom(player_, track, Began::FromHere, index().maps, &switched)) {
@@ -887,7 +981,8 @@ bool AutoDj::lookupFailed() {
 // The empty states' button (D4): a random track with neighbours, played,
 // Auto DJ on. Joined, a row of the maps (Driver::surprise()); not (Auto DJ
 // off: the join follows the switch), library tracks drawn and looked up by
-// their path's hash in DJPH, so playback never waits for a join.
+// their path's hash in DJPH, so playback never waits for a join. Either way
+// inside the mood filter, when one is on (MOOD-FILTERS.md 6.3).
 autodjview::Started AutoDj::start() {
   if (!usable()) {
     // (Gone since the button was drawn: a remount without it, a check
@@ -907,7 +1002,7 @@ autodjview::Started AutoDj::start() {
     const uint32_t tracks = idx && idx->ready() ? idx->trackCount() : 0;
     const int64_t t0 = esp_timer_get_time();
     uint8_t tries = 0;
-    track = dj_.surpriseTrack(tracks, hasRowOf, this, &tries);
+    track = dj_.surpriseTrack(tracks, hasRowOf, this, &tries, moodView());
     Serial.printf("[dj] the Auto DJ button: %u library tracks looked up in the index by their path (%.1f ms): %s\n",
                   (unsigned)tries, (esp_timer_get_time() - t0) / 1000.0,
                   track != autodj::kNoTrackId ? "one has neighbours" : "none had neighbours");
@@ -1008,6 +1103,9 @@ void AutoDj::command(const char* arg, const Env& env) {
       if (!setMatch(tempo, key)) Serial.println("[dj] matching: as it was");
       return;
     }
+    case K::Moods:
+      if (!setMoods(static_cast<uint16_t>(c.n))) Serial.printf("[dj] mood filter 0x%03X already\n", (unsigned)c.n);
+      return;
     case K::Seed:
       dj_.setSeed(c.n);
       Serial.printf("[dj] the next session's seed: %08lx (Dr starts one now)\n", (unsigned long)c.n);
@@ -1042,10 +1140,12 @@ void AutoDj::command(const char* arg, const Env& env) {
         return;
       }
       job_ = Job::DryRun;
-      Serial.printf("[dj] Dn: %lu dry-run picks on a copy of the session (%s, %u %%, BPM %s, key %s; %s), one a loop "
+      char mood[32] = "";  // (only while a filter is on: with none, the line as before)
+      if (moodView().on()) snprintf(mood, sizeof(mood), ", mood filter 0x%03X", (unsigned)dj_.settings().moods);
+      Serial.printf("[dj] Dn: %lu dry-run picks on a copy of the session (%s, %u %%, BPM %s, key %s%s; %s), one a loop "
                     "pass; the live session untouched\n",
                     (unsigned long)c.n, modeName(dj_.settings().mode), (unsigned)dj_.settings().floorPct,
-                    dj_.settings().matchTempo ? "on" : "off", dj_.settings().matchKey ? "on" : "off",
+                    dj_.settings().matchTempo ? "on" : "off", dj_.settings().matchKey ? "on" : "off", mood,
                     joined() ? "the index" : "no index: by track id");
       return;
     }
@@ -1210,6 +1310,13 @@ void AutoDj::dryRunSummary(bool stopped) {
   for (uint32_t c = 0; c < autodj::kClasses; ++c)
     if (r.classes[c]) Serial.printf(" %lu: %lu", (unsigned long)c, (unsigned long)r.classes[c]);
   Serial.println();
+  // A mood filter's (MOOD-FILTERS.md 6.2-6.4): with none, no line.
+  if (moodView().on() || r.jumps || r.repins || r.moodRepeats || r.noFit) {
+    Serial.printf("[dj] Dn: inside the mood filter 0x%03X: %lu jumps, %lu re-pins, %lu repeats, %lu gave none (no "
+                  "track fits)\n",
+                  (unsigned)dj_.settings().moods, (unsigned long)r.jumps, (unsigned long)r.repins,
+                  (unsigned long)r.moodRepeats, (unsigned long)r.noFit);
+  }
   dry_->end();
   job_ = Job::None;
 }
@@ -1244,6 +1351,15 @@ void AutoDj::status(const Env& env) {
                 s.on ? "ON" : "off", modeName(s.mode), (unsigned)s.floorPct, s.matchTempo ? "on" : "off",
                 s.matchKey ? "on" : "off", autodj::waitName(t.wait), t.owed ? " (owed: the update step waits)" : "",
                 dj_.retryWaits(env.nowMs) ? "; a refused pick waits to be tried again" : "");
+  // The mood filter (MOOD-FILTERS.md 6.2-6.5): its count, and its picks since the boot.
+  {
+    char mood[256];
+    moodLine(mood, sizeof(mood));
+    const autodj::Stats& st = dj_.engine().stats();
+    Serial.printf("[dj] %s; jumps %lu, re-pins %lu, repeats inside it %lu, none fit %lu\n", mood,
+                  (unsigned long)st.jumps, (unsigned long)st.repins, (unsigned long)st.moodRepeats,
+                  (unsigned long)st.noFit);
+  }
   // The index.
   switch (file_) {
     case File::None: Serial.printf("[dj] index: none (%s): picks at random\n", whyText_); break;
@@ -1296,9 +1412,11 @@ void AutoDj::status(const Env& env) {
                 autodj::beganName(dj_.sessionBegan()), (unsigned long)dj_.sessionSeed(),
                 dj_.seedSet() ? " (the next one's is set)" : "");
   for (uint8_t i = 0; i < e.anchors(); ++i) Serial.printf(" %u", (unsigned)e.anchor(i));
-  Serial.printf("; the pin %s; key anchor %u; cooled %u rows, %u artists, %u by id; damaged %u; DJ marks %d; the "
+  Serial.printf("; the pin %s%s; key anchor %u; cooled %u rows, %u artists, %u by id; damaged %u; DJ marks %d; the "
                 "queue's epoch %lu\n",
-                e.pin() == autodj::kNoRow ? "none" : String(e.pin()).c_str(), (unsigned)e.keyAnchor(),
+                e.pin() == autodj::kNoRow ? "none" : String(e.pin()).c_str(),
+                e.pinMoved() ? " (moved onto the playing row by the mood filter: a quick skip of it drops it)" : "",
+                (unsigned)e.keyAnchor(),
                 (unsigned)e.cooledRows(), (unsigned)e.cooledArtists(), (unsigned)e.cooledIds(),
                 (unsigned)e.damagedRows(), dj_.marks().count(), (unsigned long)player_.queue().playEpoch());
   // The counters.
