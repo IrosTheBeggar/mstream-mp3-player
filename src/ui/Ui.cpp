@@ -1567,6 +1567,9 @@ void Ui::updateStatus(uint32_t nowMs) {
   if (library) librarytext::statusText(state_.libraryStatus, text, sizeof(text));
   // The band changes only while the list stands still (a fling isn't cut).
   if (list_.attached() && list_.animating()) return;
+  // Under a modal the band stays as it is, even when the line ends: changing
+  // it there would wipe the modal (it is drawn again when they go).
+  if (modalUp() || jumpGrid_.up() || coach_.up()) return;
   if (!text[0]) {
     if (statusBand_) {
       statusBand_ = false;
@@ -1576,7 +1579,6 @@ void Ui::updateStatus(uint32_t nowMs) {
     }
     return;
   }
-  if (modalUp() || jumpGrid_.up() || coach_.up()) return;  // drawn again when they go
   if (!statusBand_) {
     statusBand_ = true;
     statusHash_ = 0;
