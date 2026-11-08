@@ -7,177 +7,116 @@ ELF {{ELF}} for this build; ELF {{DIO_ELF}} for the `-dio-full.bin`).
 Source for this binary: {{SOURCE_URL}}, and with its libraries in
 `{{SOURCE_TAR}}` below.
 
-## What's new in 0.12.0
+## What's new in 0.13.0
 
-- **The power button turns the screen off.** A short press of the
-  button on the Core2's side turns a lit screen off at once, bright or
-  dim, and the music plays on; another short press lights it again, as
-  before. With **Screen off after: Never**, that is now how you turn the
-  screen off. While something keeps the screen lit (the start-up
-  screen, the touch calibration, a pairing, a play waiting for the
-  headphones, or a computer showing something on it), the press leaves
-  it on. A screen held lit goes off all the same: under the idle
-  power-off's warning, the sleep timer's fade, or the Pair screen's
-  search, which the press stops. A long hold still turns the Core2 off.
-- **The A-Z rail follows your finger.** On a long list, a finger
-  sliding down the letter rail moves its thumb and letter at every
-  frame, and the list catches up just behind: 60 ms after its last
-  draw, or at once when the finger rests. In 0.11.0 the thumb moved
-  only as often as the whole list could be drawn, 15 times a second on
-  the Artists list of a card of about 19,500 tracks, where it now moves
-  19 to 30 times; and the player's work on the card (checking it for
-  new music, reading tags) went on under the finger, on the bus the
-  screen shares. That work now waits until the list has been still for
-  half a second. Measured with nothing playing.
-- **A card that comes out while music plays no longer runs the queue
-  out.** In 0.11.0 every track after it failed to open, about 2 s each,
-  with a note for each, until the whole queue had failed, and the
-  player kept that as its place: a 25 s pull ended a 12-track album.
-  Now the screen lights with "Still no card: is it all the way in?" and
-  the player holds at the next track, still playing but silent: it
-  tries it again 2 s later, then after 4, 8 and 16 s, then every 30 s,
-  and once the card is back the music starts again by itself, from
-  where that track would have started. Still out after 2 minutes, it
-  pauses there, and Play tries again. The track that was playing when
-  the card came out still stops there, the rest of it lost. Each try
-  with the card out can hold the screen for a second or two, and the
-  idle power-off waits up to 2 minutes longer. Another card put in
-  meanwhile makes the player restart for it, as before, with no track
-  skipped. And a count of the free space asked from a computer over USB
-  now notices that the card was out: in 0.11.0 the player could then
-  write over files a computer had copied to it meanwhile.
-- **A card that misses a read for a moment no longer cuts the track.**
-  In 0.11.0 a single read the card didn't answer ended the track that
-  played, with no word, and restarted the player if it was working on
-  the card in the background. Now the player asks the card there and
-  then and, finding it back, reads again: the track plays on, and the
-  covers, Auto DJ and the work in the background carry on the same way.
-  A part of the card that keeps failing still ends the track.
-- **A card read that fails no longer costs you the queue.** In 0.11.0
-  a start that couldn't read the saved queue, or had no memory free to
-  read it, put the whole library in its place; one that couldn't read
-  the library's files cut the queue to the tracks it could still see
-  (on a test card, to nothing, for good); and a save the card refused
-  could leave the saved queue empty or gone. Now a queue it can't read
-  is left as it is on the card: the player reads it again a few times
-  over about 1.4 s, then starts with an empty queue, and Now Playing and
-  the Queue tab say "Card read failed at startup: restart to try
-  again". A restart that reads it brings it back, at its track and
-  second; until then, anything you play or add replaces it, about 2 s
-  later. A queued track the library leaves out (from a folder it
-  couldn't read) stays in the queue under its file name, with no
-  artist, album or cover, and plays, unless the card says it is gone. A
-  save counts only once its file is whole on the card; one that fails
-  is tried again 10 s later, then twice as long each time up to 5
-  minutes, and at once when the card is back. And when a card put back
-  makes the player restart ("Card back: restarting", when it was
-  working on the card in the background), it now waits up to 30 s for
-  the queue's save to work: 0.11.0 restarted 1.2 s on, and the queue's
-  last changes could be lost.
-- **A card with a bad spot no longer restarts the player at every
-  start.** A part of the card that never answers, read at every start,
-  could restart the player over and over (every 8 to 35 s on a test
-  card). Now such a read fails and the player carries on, keeping what
-  is on the card (below). Should the card make it restart twice in a
-  row all the same, the next start skips its work on the card and says
-  "Card read failed at startup: restart to try again" for a few
-  seconds; turning the Core2 off and on clears that, as do 30 minutes
-  of running. A card that keeps going silent (a dozen times) is left
-  alone until a restart: the player reads no covers, Auto DJ index or
-  waveforms from it and does no work on it in the background, and the
-  music plays on. Also fixed: a card slow to answer at the start passing
-  for another card, and one write the card refused stopping every track
-  from opening (if it keeps refusing, the player now stops writing to it
-  until a restart, and plays on).
-- **A card read that fails at a start no longer costs the library.** In
-  0.11.0 it could pass for a file that was gone: the player forgot the
-  tags it had read and read every file's again (about 3 to 6 minutes at
-  20,000 tracks), and on a card the transfer filled it dropped the
-  transfer's tags too, then did it all again at the next start. Now it
-  reads again a few times over about 1.4 s, then keeps what is on the
-  card: it plays from the library it saved (failing that, from the
-  folders by their names, for that session), saves nothing over it, and
-  leaves finding new music and reading tags to a start that can read
-  the card. Rescan, on the Output tab, says why: "Card read failed at
-  startup: restart to try again", the one new message, a machine
-  translation in the nine other languages like the rest.
-- **A stopped track shows its length.** A track nothing has played yet
-  since the start (no place saved in it) showed a dotted line and
-  "--:--" on Now Playing; it now shows 0:00 and the track's length, and
-  a tap on the line picks where Play will start, kept as a paused
-  track's place is. The length can read a second more until the track
-  plays. A track the library doesn't list keeps the dots.
-- **Taps answer sooner.** A press on a menu's row, the sleep timer's or
-  the volume panel's buttons or a letter of the A-Z grid draws that
-  control alone, in 2 to 10 ms where 0.11.0 took 36 to 58 ms, and a
-  dialog's buttons do the same; Now Playing's buttons draw their own
-  patch (3 ms for the volume, 12 before). A track change no longer draws
-  the whole Library or Queue list again (50 to 110 ms), only the rows
-  whose mark changes; going from a scrolled list to Now Playing takes
-  53 ms (76 before); a setting's tap draws its row alone (12 ms, 49
-  before); and the lines the player writes to its USB serial port no
-  longer hold it up 10 to 30 ms at a tap. A setting a tap changes is
-  saved once the taps rest (1.5 s after the last, 6 s at most), and
-  before the player restarts or turns itself off, rather than under the
-  finger.
-- **Now Playing's line can be the track's waveform.** On a card where
-  the transfer software wrote the tracks' waveforms (from mStream's
-  waveform data, as `/.mstream/waves-<gen>.bin`), the progress line is
-  the playing track's shape: 99 mirrored bars, what has played in
-  colour, a thin playhead. A tap or a drag on it seeks as on the line.
-  A track without one, or a card without the file, keeps the plain line
-  in the same place. **The transfer software isn't available yet,** so
-  no card has one today. From 0.12.0 the player says on the card that it
-  reads them (`read.mpwf=1` in `/.player/device.txt`, checked at each
-  start): that is how the transfer software will know to write them, so
-  once it is out, start the player once with the card in before the
-  first transfer. The times under the line sit 5 px lower, with or
-  without bars. The file's format, for any transfer software, is
-  `docs/WAVEFORM-INDEX.md` in the source.
-- **Auto DJ with an index rides out card faults and library updates**
-  (an index too needs the transfer software). A card read that failed
-  as Auto DJ opened its index, or read the transfer's files, left its
-  picks random for the whole session; it now tries again 2, 10 and 30 s
-  later, keeping its session, before it says "Can't read the Auto DJ
-  index". After a library update, Auto DJ could say "Not enough memory
-  for the Auto DJ index", with memory to spare, and pick at random until
-  a restart: fixed.
-- **The serial console says more about a stutter,** for bug reports:
-  the stats line counts the breaks in the sound beside its underruns
-  and gives a stall of any length whole, and the Bluetooth line the
-  link's signal (`rssi=`) and power mode (`mode=`). `@status`, which a
-  computer asks over USB, also says which transfer's card is in (`cid=`,
-  `-` on a card filled by hand).
-- Tested on a Core2 v1.3 as each change went in (2026-10-30 to 11-05):
-  the card's faults on a spare 32 GB card of 19,412 tracks with made-up
-  names, through test builds that leave chosen card commands unanswered
-  or failing (about 210 starts for the restarts alone), and by hand,
-  pulling the card and putting it or another one back, during a
-  Bluetooth play too; the saved queue compared by CRC after the faults,
-  and once after a Windows disk check (`chkdsk /f`); the screen's
-  timings on a card of about 19,500 tracks; the waveforms with test
-  shapes, and once with a file from a test build of the transfer
-  software; the power button by script and by hand; and, on this
-  release's code, the update from the published 0.11.0 and back again:
-  the library, the queue, the second a stopped track was paused at and
-  the settings kept both ways, nothing rebuilt.
-- **The firmware is a little bigger:** about 4.40 MB, up from 4.36 MB
-  in 0.11.0, for the waveforms and the card's checks (70 % of the space
-  it has on the flash, 69 % before). The steps below are the same.
-- **The update from 0.11.0** keeps the settings, the paired headphones,
-  the queue and the library as they are: nothing is rebuilt. From
-  0.10.0 it is the same, Auto DJ starting off, its settings at their
-  defaults. A card that 0.9.0 or 0.8.0 used last gets 0.10.0's one
-  rebuild of the library from the tags read before (about 10 s for
-  20,000 tracks; no file is read again, and the queue is kept), and a
-  unit updated from 0.9.0 or older stays in English, every setting
-  kept, until a language is picked in Output > Language. A card that
-  0.7.0 used last gets 0.8.0's first start instead (0.8.0's notes say
-  what it does).
-- **Going back to 0.11.0 later** keeps them too: 0.12.0 saves the
-  settings, the queue and the library as 0.11.0 does. 0.11.0 writes its
-  own `device.txt`, which doesn't ask for waveforms: start 0.12.0 once
-  with the card in before a transfer.
+- **The Albums list can filter by mood.** On a card with mood scores
+  (mStream's analysis of each track, which only the transfer software
+  writes to the card; it isn't out yet: below), the list starts with a
+  row that reads "Filters" over the count of albums. A tap opens one
+  screen of moods: Happy, Neutral or Sad; Relaxed, Neutral or
+  Aggressive; Instrumental or Vocals; any or all of Acoustic, Party and
+  Danceable (a track must have each one picked); and how sure each must
+  be, Strict, Standard or Loose. Each tap applies at once, with the
+  count of albums that fit ("585 of 1,747 albums" for Happy, on a 1 TB
+  card of 19,533 tracks); a second tap lets a mood go, Clear lets them
+  all go and sets Standard again, and the cross closes the screen. The
+  list then shows only the albums where more than half of the tracks
+  with scores fit (mStream's rule, counted over the tracks on this
+  card). The row says what is set and how many albums are left, and its
+  cross clears the filter; scrolled past it, a dot beside Albums at the
+  top says a filter is on, and a tap on Albums there goes back to the
+  top. With none left, the list says "No albums match these filters".
+  On a test card of 1,707 albums, a tap on a mood answered within 35 ms
+  with nothing playing, and in 50 to 71 ms while an MP3 played.
+- **Auto DJ can keep to a mood.** Output > Auto DJ has a fourth row,
+  Smart filters ("Any" with none set), which opens the same screen in
+  Output's blue, counting tracks ("3,085 of 19,413 tracks" for Relaxed
+  and Instrumental on a test card). The filter is saved, and every
+  track Auto DJ adds then fits it: neighbours first, as before, then any
+  other track that fits ("No close match: any track that fits"), then
+  repeats, the one played longest ago first. In Stay on seed, when no
+  track near the seed fits, or all that do have played lately, the
+  playing track becomes the one Auto DJ stays near, if it fits and the
+  index lists it, until it is skipped quickly or Anchor changes. The
+  Auto DJ button of an empty queue keeps to the filter too, and Now
+  Playing's "..." menu shows what is set on its Auto DJ row. Without an
+  Auto DJ index the picks are random, inside the filter; with no
+  filter, Auto DJ picks exactly as in 0.12.0. On the 1 TB card, under
+  three filters (157 to 8,117 tracks fitting), Follow the vibe found a
+  close match for all 200 picks of each test run. Picking any track
+  that fits, when no close match does, took 13 to 42 ms on a test card
+  with music playing (about 12 ms paused): a short hitch on the screen
+  at most, and no break in the sound.
+- **Auto DJ says how many tracks fit.** The status row on its page reads
+  "3,085 of 19,413 tracks fit", and under it the share of tracks with
+  scores beside BPM and key ("BPM 95% · key 97% · mood 92%"). At 50 or
+  fewer (Auto DJ waits 50 tracks before it plays one again), it says
+  "Only 28 tracks fit" in amber over "They will repeat · BPM 95% · key
+  97%", and a note says "Only 28 tracks fit: they will repeat". With
+  none, Auto DJ adds nothing and says "Waiting: no track fits the
+  filters", and the empty Queue and Now Playing say "No track on this
+  card fits these filters", with only the Open Library button under it.
+  The track Auto DJ has already queued, if a new filter leaves it out,
+  plays once: "Plays once, then the filters apply".
+- **The transfer software isn't available yet,** so no card has mood
+  scores today. Until it is out, the Albums list has no Filters row, as
+  before, and the Smart filters row is dim and reads "No mood data"; a
+  tap on it says "No mood data: sync this card from mStream", and Auto
+  DJ picks from every track (a filter set before is kept for a card
+  with scores). Once it is out, a sync from an mStream server that
+  analyses moods (v6.33.1 or later) writes each track's scores into the
+  card's tag file, `/.mstream/tags-<gen>.bin`, with nothing to set on
+  the player, and the filters appear at the next start with that card.
+  On a card it makes for someone else it writes no scores, as it writes
+  no Auto DJ index there, so the filters don't appear on it, though the
+  Smart filters row still says to sync. Older players read a card with
+  scores as before, leaving the scores aside (0.12.0 did, in the test
+  below). The scores' format, for any transfer software, is
+  `docs/METADATA.md` 2.6.4 in the source.
+- **The mood words read as in mStream's mobile app,** in all ten
+  languages: Filters, the moods, Strict, Standard, Loose, Clear, Smart
+  filters, Any and No mood data. In the nine other languages, the
+  filters' 14 new messages are machine translations, like the rest of
+  the menus.
+- **The Library's status line no longer wipes a menu.** In 0.12.0, when
+  the line ("Checking the card…", or "Reading tags" and its count)
+  ended while a long-press menu, a dialog or the A-Z grid was open, it
+  wiped it and left a blank list. Now it stays whole.
+- Tested on a Core2 v1.3 as each change went in (2026-11-06 to 11-08):
+  the filters on a spare 32 GB card of 19,413 tracks with made-up names
+  and made-up mood scores, their counts of tracks and albums matched
+  against a computer's; the screens compared pixel by pixel with their
+  designs, Auto DJ's page seen in all ten languages and the filters'
+  screen in four; Auto DJ's picks in scripted runs of 200 under four
+  filters on each card (with none, the same picks as before), and with
+  MP3, FLAC and Opus tracks playing in a silent test mode, with no break
+  in the sound; the free memory, compared with a build that leaves the
+  scores aside; the status line's fix, first seen failing on 0.12.0;
+  the first real sync, on a 1 TB card of 19,533 tracks with a test
+  build of the transfer software and mStream v6.33.1, which gave 19,249
+  of them scores: the Core2, the transfer software and the computer's
+  check agreed on every mood count and on every filter's tracks and
+  albums; and, on this release's code with that card, the update from
+  0.12.0 and back again: one library build each way, and the queue, the
+  settings and Auto DJ's filter kept. Not seen on the Core2: what every
+  card shows today, the Albums list without its row and the dim Smart
+  filters row (the test cards had scores).
+- **The firmware is a little bigger:** about 4.45 MB, up from 4.40 MB
+  in 0.12.0, for the mood filters (71 % of the space it has on the
+  flash, 70 % before). The steps below are the same.
+- **The update from 0.12.0** rebuilds the library once, at the first
+  start (its file changed for the mood scores): about 11 s at 19,400
+  tracks on a card filled by hand, from the tags read before (no file is
+  read again), and 17.3 s on the 1 TB card, which a test build of the
+  transfer software filled. It keeps the settings, the paired headphones
+  and the queue. From 0.11.0 it is the same; from older versions, read
+  0.12.0's notes too.
+- **Going back to 0.12.0 later** rebuilds the library once too: 0.12.0
+  takes the new library file for a damaged one and makes its own (15 s
+  on the 1 TB card), and coming back to 0.13.0 rebuilds it again. 0.12.0
+  leaves the card's mood scores aside and never reads Auto DJ's filter,
+  so its picks are unfiltered; the settings, the paired headphones and
+  the queue are kept, and the filter is there again back on 0.13.0.
 
 ## Hardware
 
@@ -295,15 +234,29 @@ if unsure, install both. On Linux, add yourself to the `dialout` group.
   but for the lines that quote the screen. In three of Auto DJ's
   messages on two lines in Japanese and Chinese, shown only with an Auto
   DJ index, the first line touches the message's outline.
-- **Auto DJ's matching and the waveforms need files only the transfer
-  software will write,** and that isn't available yet: until it is,
-  Auto DJ adds random tracks from the library, and Now Playing shows the
-  plain line. With an index, tracks it doesn't cover are never picked
-  and don't steer it. Its session (what steers it, what it avoids) and
-  the DJ marks aren't kept across a restart; its switch and its
-  settings are. Over a long session, Stay on seed repeats: a seed has at
-  most 169 neighbours in the index, and once they have played, it
-  starts again among them.
+- **Auto DJ's matching, the waveforms and the mood filters need files
+  only the transfer software will write,** and that isn't available
+  yet: until it is, Auto DJ adds random tracks from the library, Now
+  Playing shows the plain line, the Albums list has no Filters row, and
+  Auto DJ's Smart filters row is dim. With an index, tracks it doesn't
+  cover are never picked and don't steer it. Its session (what steers
+  it, what it avoids) and the DJ marks aren't kept across a restart; its
+  switch and its settings are. Over a long session, Stay on seed
+  repeats: a seed has at most 169 neighbours in the index, and once they
+  have played, it starts again among them.
+- **The mood filters go by the scores on the card.** A track without
+  any (one mStream hasn't analysed, one from another mStream server, or
+  one copied to the card or changed on it by hand since the card's last
+  sync) never fits a filter, and an album with no scored track leaves
+  the Albums list under any filter (12 of 1,747 on the 1 TB test card).
+  An album is its folder, and it fits when more than half of its scored
+  tracks on this card fit. mStream's apps count all of the album's songs
+  on the server, so an album that is only partly on the card can fit
+  here and not there, or the other way round. The scores are a copy:
+  mStream's later changes to them reach the card with a later sync, not
+  always the next one. Only the Albums list and Auto DJ filter: Artists
+  and Folders always show everything. The Albums filter is forgotten at
+  a restart; Auto DJ's is kept.
 - The card taken out while the player runs and put back (music copied
   to it on a computer meanwhile) has its tag files, the Auto DJ index
   and the waveforms read again, but its folders aren't walked again
