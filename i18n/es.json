@@ -1,7 +1,7 @@
 {
   "@@locale": "es",
   "@@autonym": "Español",
-  "@@note": "Spanish, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_es.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/es.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept: informal tú), and translated by a Fable agent (Claude) otherwise. A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. Reviewed message by message by a second Fable agent against en.json's contexts and rooms (meaning, agreement, the apps' words, typography, the fit checker); still no native speaker's review. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, with the Auto DJ engine's UI) were made the same way: the mobile app's Auto DJ words (Auto DJ, Ancla, Seguir el ambiente, Mantener la semilla, Umbral de similitud, Continuidad de BPM, Mezcla armónica, 'desde aquí') and a Fable agent's translation for the rest, fitted with the same checker; not yet reviewed by a native speaker.",
+  "@@note": "Spanish, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_es.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/es.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept: informal tú), and translated by a Fable agent (Claude) otherwise. A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. Reviewed message by message by a second Fable agent against en.json's contexts and rooms (meaning, agreement, the apps' words, typography, the fit checker); still no native speaker's review. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, with the Auto DJ engine's UI) were made the same way: the mobile app's Auto DJ words (Auto DJ, Ancla, Seguir el ambiente, Mantener la semilla, Umbral de similitud, Continuidad de BPM, Mezcla armónica, 'desde aquí') and a Fable agent's translation for the rest, fitted with the same checker; not yet reviewed by a native speaker. The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_es.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
   "boot.touch_hint": "¿Falla el táctil? Mantén un dedo en la pantalla.",
   "coach.header_tip": "Consejo {0} de {1}",
   "coach.header_hint": "toca para seguir",
@@ -278,6 +278,30 @@
   "library.updates_at_boot": "Biblioteca: se actualiza al reiniciar",
   "library.updating_list": "Actualizando la biblioteca…",
   "library.updating_wait": "Actualizando la biblioteca: un momento",
+  "mood.filters": "Filtros",
+  "mood.happy": "Alegre",
+  "mood.neutral": "Neutral",
+  "mood.sad": "Triste",
+  "mood.relaxed": "Relajado",
+  "mood.aggressive": "Agresivo",
+  "mood.instrumental": "Instrumental",
+  "mood.vocals": "Vocal",
+  "mood.acoustic": "Acústico",
+  "mood.party": "Fiesta",
+  "mood.danceable": "Bailable",
+  "mood.strict": "Estricto",
+  "mood.standard": "Estándar",
+  "mood.loose": "Flexible",
+  "mood.clear": "Borrar",
+  "mood.albums_of": {
+    "one": "{0} de {1} álbum",
+    "other": "{0} de {1} álbumes"
+  },
+  "mood.tracks_of": {
+    "one": "{0} de {1} pista",
+    "other": "{0} de {1} pistas"
+  },
+  "mood.no_albums": "Ningún álbum coincide con tus filtros",
   "card.another": "Otra tarjeta: reiniciando",
   "card.back": "Tarjeta reinsertada: reiniciando",
   "queue_cap.full": {

@@ -495,6 +495,31 @@ inline constexpr int kDiscTextW = 320 - kDiscTextX - 8;
 // same card back with a card job under way.
 inline constexpr int kStatusW = 304;
 
+// ---- the mood filters (docs/MOOD-FILTERS.md 7; filtergrid, ui/FilterSheet) ----
+// The editor's words, each in its cell of the grid: Body, else Small for
+// the whole grid when a row's words don't fit it (Polish and Russian). A
+// cell's width follows its row's words (filtergrid::layout(): equal, else
+// proportional, else scaled), so test_ui_library measures each language's
+// real cells; the catalogue's rooms (8.1) are what one word may take while
+// its row's others keep a third or so.
+inline constexpr int kFilterScaleWordW = 116;  // Happy | Neutral | Sad; Relaxed | Neutral | Aggressive
+inline constexpr int kFilterVoiceWordW = 140;  // Instrumental | Vocals
+inline constexpr int kFilterTagWordW = 136;    // Acoustic, Party, Danceable
+inline constexpr int kFilterLevelWordW = 93;   // the level cell's word (Small)
+// The title row: Clear (Small) in its pill (the word and 24 px), the count
+// (Small: mood.albums_of, else queue.summary_position) centred in what the
+// pill leaves before the cross, 4 px clear of each: English's 178 px
+// (filtergrid::Layout::countW; another language's Clear leaves it more or
+// less, test_ui_library).
+inline constexpr int kFilterClearW = 84;
+inline constexpr int kFilterCountW = 178;
+// The Albums list's first row (7.2) beside the A-Z rail (its right 284):
+// at rest mood.filters (Body) in the row less 80; with a filter on, the
+// count (Small) to 72 px before the cross's centre (filtergrid::textRoom()).
+// A list without the rail gives both more.
+inline constexpr int kFilterRowTitleW = 204;
+inline constexpr int kFilterRowCountW = 160;
+
 // ---- the Output tab (ui/OutputPage) ----
 // The Bluetooth card's status line (Small, x 52 to the radio).
 inline constexpr int kBtStatusW = 222;

@@ -1,7 +1,7 @@
 {
   "@@locale": "pt",
   "@@autonym": "Português",
-  "@@note": "Brazilian Portuguese (pt-BR, você), made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_pt.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/pt.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept; the terminal's MP3-player tab is European Portuguese, so its words were reworded to Brazilian: fones de ouvido, tela, arquivo, parear, reiniciando), and translated by a Fable agent (Claude) otherwise, then reviewed message by message by a second Fable agent (a Brazilian Portuguese review: wording, agreement, terms, widths). A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, with the Auto DJ engine's UI) were made the same way: the mobile app's Auto DJ words (Auto DJ, Âncora, Seguir o clima, Manter a semente, Limite de semelhança, Continuidade de BPM, Mixagem harmônica, 'a partir daqui') and a Fable agent's translation for the rest, fitted with the same checker; not yet reviewed by a native speaker.",
+  "@@note": "Brazilian Portuguese (pt-BR, você), made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_pt.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/pt.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept; the terminal's MP3-player tab is European Portuguese, so its words were reworded to Brazilian: fones de ouvido, tela, arquivo, parear, reiniciando), and translated by a Fable agent (Claude) otherwise, then reviewed message by message by a second Fable agent (a Brazilian Portuguese review: wording, agreement, terms, widths). A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, with the Auto DJ engine's UI) were made the same way: the mobile app's Auto DJ words (Auto DJ, Âncora, Seguir o clima, Manter a semente, Limite de semelhança, Continuidade de BPM, Mixagem harmônica, 'a partir daqui') and a Fable agent's translation for the rest, fitted with the same checker; not yet reviewed by a native speaker. The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_pt.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
   "boot.touch_hint": "O toque falha? Segure um dedo na tela.",
   "coach.header_tip": "Dica {0} de {1}",
   "coach.header_hint": "toque para seguir",
@@ -260,6 +260,33 @@
   "library.updates_at_boot": "A biblioteca atualiza ao reiniciar",
   "library.updating_list": "Atualizando a biblioteca…",
   "library.updating_wait": "Atualizando a biblioteca: um momento",
+  "mood.filters": "Filtros",
+  "mood.happy": "Alegre",
+  "mood.neutral": "Neutro",
+  "mood.sad": "Triste",
+  "mood.relaxed": "Relaxado",
+  "mood.aggressive": "Agressivo",
+  "mood.instrumental": "Instrumental",
+  "mood.vocals": "Vocal",
+  "mood.acoustic": "Acústico",
+  "mood.party": "Festa",
+  "mood.danceable": "Dançante",
+  "mood.strict": "Estrito",
+  "mood.standard": "Padrão",
+  "mood.loose": "Flexível",
+  "mood.clear": "Limpar",
+  "mood.albums_of": {
+    "one": "{0} de {1} álbum",
+    "other": "{0} de {1} álbuns"
+  },
+  "mood.tracks_of": {
+    "one": "{0} de {1} faixa",
+    "other": "{0} de {1} faixas"
+  },
+  "mood.no_albums": "Nenhum álbum atende a esses filtros",
+  "@mood.no_albums": {
+    "note": "'atende a esses filtros' (298 px): the mobile app's 'corresponde aos filtros' is 312 px in the line's 300."
+  },
   "card.another": "Outro cartão: reiniciando",
   "card.back": "Cartão de volta: reiniciando",
   "queue_cap.full": {

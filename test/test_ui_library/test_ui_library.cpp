@@ -5,7 +5,9 @@
 // and its second level (JumpIndex, textfold::secondKey), a list's step a
 // frame (ListLayout::stepToward), and every text the tab bar can show
 // measured with the real fonts (the VLW DejaVu data the firmware draws
-// with) against the room TabBarModel gives it.
+// with) against the room TabBarModel gives it. The mood filters' editor
+// and first row (FilterGrid) in every language: the design's goldens, the
+// cells' fit, the lab panel's hits.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -24,6 +26,7 @@
 #include "CardTags.h"
 #include "CjkGlyphs16.h"
 #include "DeviceInfo.h"
+#include "FilterGrid.h"
 #include "GlyphStore.h"
 #include "HostStatus.h"
 #include "IdlePolicy.h"
@@ -4568,6 +4571,312 @@ void test_library_row_texts() {
   TEST_ASSERT_TRUE(strlen(tiny) < sizeof(tiny));
 }
 
+// ---- the mood filters' editor and first row (docs/MOOD-FILTERS.md 7; FilterGrid) ----
+
+namespace {
+
+using filtergrid::Cell;
+
+// The grid in the UI's language, with the firmware's fonts.
+filtergrid::Layout filterGrid() {
+  static const Vlw body(kVlwSans16), small(kVlwSans13);
+  return filtergrid::layout(filtergrid::words(), viewOf(body), viewOf(small));
+}
+
+// Every cell of a row, left to right (the voice row's level cell last).
+constexpr Cell kFilterRows[4][3] = {
+    {Cell::Happy, Cell::NeutralV, Cell::Sad},
+    {Cell::Relaxed, Cell::NeutralE, Cell::Aggressive},
+    {Cell::Instrumental, Cell::Vocals, Cell::Level},
+    {Cell::Acoustic, Cell::Party, Cell::Danceable},
+};
+
+std::string cellsOf(const filtergrid::Layout& l, int row) {
+  std::string out;
+  for (Cell c : kFilterRows[row]) {
+    if (c == Cell::Level) {
+      char b[24];
+      snprintf(b, sizeof(b), ", level %d/%d", l.x[filtergrid::index(c)], l.w[filtergrid::index(c)]);
+      out += b;
+      continue;
+    }
+    char b[24];
+    snprintf(b, sizeof(b), "(%d,%d)", l.x[filtergrid::index(c)], l.w[filtergrid::index(c)]);
+    out += b;
+  }
+  return out;
+}
+
+}  // namespace
+
+// 7.3's goldens: the cells the design's frames drew, here with the
+// firmware's fonts (the frames were drawn with the same: their widths
+// agree to the pixel). Russian's tags are as the frame draws them: the
+// chips give their 13 px of overflow up evenly (103, 80, 109); scaled they
+// would be (102, 82, 108).
+void test_filter_grid_goldens() {
+  struct Golden {
+    uistr::Lang lang;
+    int row;
+    const char* cells;
+  };
+  const Golden goldens[] = {
+      {uistr::Lang::En, 0, "(10,100)(110,100)(210,100)"},
+      {uistr::Lang::En, 2, "(10,136)(146,86), level 240/72"},
+      {uistr::Lang::En, 3, "(8,97)(111,98)(215,97)"},
+      {uistr::Lang::Ru, 0, "(10,86)(96,120)(216,94)"},
+      {uistr::Lang::Ru, 1, "(10,91)(101,106)(207,103)"},
+      {uistr::Lang::Ru, 2, "(10,144)(154,80), level 242/70"},
+      {uistr::Lang::Ru, 3, "(8,103)(117,80)(203,109)"},
+      {uistr::Lang::Pl, 2, "(10,110)(120,85), level 213/99"},
+      {uistr::Lang::Ja, 3, "(8,140)(154,92)(252,60)"},
+  };
+  for (const Golden& g : goldens) {
+    uistr::setLang(g.lang);
+    const filtergrid::Layout l = filterGrid();
+    char msg[48];
+    snprintf(msg, sizeof(msg), "%s row %d", uistr::tag(g.lang), g.row + 1);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(g.cells, cellsOf(l, g.row).c_str(), msg);
+  }
+  // Russian's party chip on two lines: "Для" over "вечеринки".
+  uistr::setLang(uistr::Lang::Ru);
+  const filtergrid::Layout ru = filterGrid();
+  const char* party = filtergrid::words().cell[filtergrid::index(Cell::Party)];
+  const int at = ru.wrap[filtergrid::index(Cell::Party)];
+  TEST_ASSERT_EQUAL_STRING("Для вечеринки", party);
+  TEST_ASSERT_EQUAL_STRING("вечеринки", party + at);
+  TEST_ASSERT_EQUAL_INT(' ', party[at - 1]);
+  TEST_ASSERT_TRUE(ru.share[2] == filtergrid::Layout::Share::Scaled);
+  TEST_ASSERT_TRUE(ru.share[3] == filtergrid::Layout::Share::Proportional);
+  uistr::setLang(uistr::Lang::En);
+}
+
+// Every language's grid: its font (Small only for Polish and Russian, as
+// measured for the design), each row's cells side by side across their
+// tray or the chips' 304 px, every word (each line of a wrapped one) and
+// the level's three in their cells with 3 px a side at least, Clear in its
+// pill, every glyph the fonts'.
+void test_filter_grid_fits_every_language() {
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  for (uistr::Lang lang : kAllLangs) {
+    if (!uistr::hasCatalogue(lang)) continue;
+    uistr::setLang(lang);
+    const filtergrid::Layout l = filterGrid();
+    const filtergrid::Words w = filtergrid::words();
+    const Vlw& f = l.small ? small : body;
+    char msg[160];
+    snprintf(msg, sizeof(msg), "%s: the grid in %s", uistr::tag(lang), l.small ? "Small" : "Body");
+    TEST_ASSERT_EQUAL_MESSAGE(lang == uistr::Lang::Pl || lang == uistr::Lang::Ru, l.small, msg);
+    for (int row = 0; row < 4; ++row) {
+      const int shared = row == 2 ? 2 : 3;
+      int x = row < 3 ? 10 : 8;
+      for (int k = 0; k < shared; ++k) {
+        const Cell c = kFilterRows[row][k];
+        const int i = filtergrid::index(c);
+        snprintf(msg, sizeof(msg), "%s row %d: %s", uistr::tag(lang), row + 1, cellsOf(l, row).c_str());
+        TEST_ASSERT_EQUAL_INT_MESSAGE(x, l.x[i], msg);
+        x += l.w[i] + (row < 3 ? 0 : filtergrid::kChipGap);
+        const std::string word = w.cell[i];
+        if (l.wrap[i]) {
+          TEST_ASSERT_TRUE_MESSAGE(l.small && row == 3, msg);
+          fits(f, word.substr(0, l.wrap[i] - 1).c_str(), l.w[i] - 6);
+          fits(f, word.substr(l.wrap[i]).c_str(), l.w[i] - 6);
+        } else {
+          fits(f, word.c_str(), l.w[i] - 6);
+        }
+      }
+      const int end = row < 2 ? 8 + 304 - 2 : row == 2 ? 8 + l.trayW[2] - 2 : 8 + 304 + filtergrid::kChipGap;
+      snprintf(msg, sizeof(msg), "%s row %d: %s", uistr::tag(lang), row + 1, cellsOf(l, row).c_str());
+      TEST_ASSERT_EQUAL_INT_MESSAGE(end, x, msg);
+    }
+    // The level cell after the voice tray, to the row's end; its words.
+    const int lx = l.x[filtergrid::index(Cell::Level)], lw = l.w[filtergrid::index(Cell::Level)];
+    TEST_ASSERT_EQUAL_INT(8 + l.trayW[2] + filtergrid::kLevelGap, lx);
+    TEST_ASSERT_EQUAL_INT(312, lx + lw);
+    for (const char* level : w.level) fits(small, level, lw - filtergrid::kLevelPad);
+    // Clear in its pill, which ends clear of the count and the cross.
+    const int pill = l.w[filtergrid::index(Cell::Clear)];
+    fits(small, w.cell[filtergrid::index(Cell::Clear)], pill - filtergrid::kClearPad);
+    TEST_ASSERT_TRUE(l.countW > 0);
+  }
+  uistr::setLang(uistr::Lang::En);
+}
+
+// With no correction (the default), a panel that reads x too far right
+// like the lab's (TouchCalibration::labFitX()) must still hit each cell of
+// the grid when the finger is on its centre, and so must a true one: every
+// language's grid, with 16 px to spare at least either side of the reading
+// (the design measured 20 at the least: Japanese's Danceable on a true
+// panel). The title row's Clear and cross too.
+void test_filter_grid_survives_the_lab_panel() {
+  const TouchCalibration::Axis lab = TouchCalibration::labFitX();
+  struct Reading {
+    int x;
+    bool edge;
+  };
+  auto labRead = [&](int x) {
+    const long r = std::lround(lab.unmap(static_cast<float>(x)));
+    return r >= 319 ? Reading{319, true} : Reading{static_cast<int>(r), false};
+  };
+  auto trueRead = [](int x) { return Reading{x, x >= 319}; };
+  int least = 1000;
+  for (uistr::Lang lang : kAllLangs) {
+    if (!uistr::hasCatalogue(lang)) continue;
+    uistr::setLang(lang);
+    const filtergrid::Layout l = filterGrid();
+    for (int panel = 0; panel < 2; ++panel) {
+      auto read = [&](int x) { return panel ? trueRead(x) : labRead(x); };
+      for (int row = 0; row < 4; ++row) {
+        for (int k = 0; k < 3; ++k) {
+          const Cell c = kFilterRows[row][k];
+          const filtergrid::Box b = filtergrid::box(l, c);
+          const Reading r = read(b.x + b.w / 2);
+          char msg[128];
+          snprintf(msg, sizeof(msg), "%s %s: cell %d's centre %d reads %d%s", uistr::tag(lang),
+                   panel ? "true" : "lab", filtergrid::index(c), b.x + b.w / 2, r.x, r.edge ? " (edge)" : "");
+          TEST_ASSERT_TRUE_MESSAGE(filtergrid::hit(l, r.x, b.y + b.h / 2, r.edge) == c, msg);
+          // Its room either side: to the split before it, and the one after.
+          const int left = k ? r.x - filtergrid::split(l, row, k - 1) : 1000;
+          const int right = k < 2 && !r.edge ? filtergrid::split(l, row, k) - 1 - r.x : 1000;
+          const int margin = std::min(left, right);
+          TEST_ASSERT_TRUE_MESSAGE(margin >= 16, msg);
+          least = std::min(least, margin);
+        }
+      }
+      // Clear's centre, and the cross's.
+      const filtergrid::Box clear = filtergrid::box(l, Cell::Clear), cross = filtergrid::box(l, Cell::Cross);
+      Reading r = read(clear.x + clear.w / 2);
+      TEST_ASSERT_TRUE(filtergrid::hit(l, r.x, 52, r.edge) == Cell::Clear);
+      TEST_ASSERT_TRUE(clear.x + clear.w + filtergrid::skew(clear.x + clear.w) - 1 - r.x >= 16);
+      r = read(cross.x + cross.w / 2);
+      TEST_ASSERT_TRUE(filtergrid::hit(l, r.x, 52, r.edge) == Cell::Cross);
+    }
+  }
+  printf("the filter grid: the least margin at a cell's centre is %d px\n", least);
+  TEST_ASSERT_EQUAL_INT(20, least);
+  uistr::setLang(uistr::Lang::En);
+}
+
+// The editor's title row in every language: the count between Clear and
+// the cross, its long form where it fits (English's always, at 9,999
+// albums and 99,999 tracks), else the short one, which always does, as
+// does the count with nothing set; Clear's hit area short of the cross's.
+void test_filter_title_row_fits() {
+  const Vlw small(kVlwSans13);
+  for (uistr::Lang lang : kAllLangs) {
+    if (!uistr::hasCatalogue(lang)) continue;
+    uistr::setLang(lang);
+    const filtergrid::Layout l = filterGrid();
+    const int pillEnd = filtergrid::kClearX + l.w[filtergrid::index(Cell::Clear)];
+    TEST_ASSERT_TRUE(pillEnd + filtergrid::skew(pillEnd) <= filtergrid::kCrossHitX);
+    // The count's room, centred: 4 px clear of the pill and of x 256.
+    TEST_ASSERT_EQUAL_INT(pillEnd + 4, l.countX - l.countW / 2);
+    TEST_ASSERT_EQUAL_INT(filtergrid::kCountRight - 4, l.countX + (l.countW + 1) / 2);
+    for (filtergrid::Scope scope : {filtergrid::Scope::Albums, filtergrid::Scope::Tracks}) {
+      const uint32_t n = scope == filtergrid::Scope::Albums ? 9999 : 99999;
+      char buf[filtergrid::kCountBytes];
+      const size_t len = filtergrid::countText(viewOf(small), l.countW, scope, true, n, n, buf, sizeof(buf));
+      TEST_ASSERT_TRUE(len < sizeof(buf) - 1);
+      fits(small, buf, l.countW);
+      if (lang == uistr::Lang::En) {
+        TEST_ASSERT_NOT_NULL(strstr(buf, scope == filtergrid::Scope::Albums ? "albums" : "tracks"));
+      }
+      filtergrid::countText(viewOf(small), l.countW, scope, false, n, n, buf, sizeof(buf));
+      fits(small, buf, l.countW);
+    }
+  }
+  uistr::setLang(uistr::Lang::En);
+  TEST_ASSERT_EQUAL_INT(uitext::kFilterCountW, filterGrid().countW);
+}
+
+// The Albums list's first row in every language, beside the rail, the
+// scroll bar and neither: at rest "Filters" (Body) and the count with
+// nothing set (Small) in the row less 80; with a filter on the count, its
+// long form or else its short one, in the room before the cross (the
+// summary above it is cut there: Body, else Small). The longest summary
+// in every language within its buffer, whole.
+void test_filter_row_fits() {
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  for (uistr::Lang lang : kAllLangs) {
+    if (!uistr::hasCatalogue(lang)) continue;
+    uistr::setLang(lang);
+    for (int right : {filtergrid::kRightRail, filtergrid::kRightBar, filtergrid::kRightNone}) {
+      fits(body, tr(S::mood_filters), filtergrid::textRoom(right, false));
+      char buf[filtergrid::kCountBytes];
+      filtergrid::countText(viewOf(small), filtergrid::textRoom(right, false), filtergrid::Scope::Albums, false, 9999,
+                            9999, buf, sizeof(buf));
+      fits(small, buf, filtergrid::textRoom(right, false));
+      filtergrid::countText(viewOf(small), filtergrid::textRoom(right, true), filtergrid::Scope::Albums, true, 9999,
+                            9999, buf, sizeof(buf));
+      fits(small, buf, filtergrid::textRoom(right, true));
+      if (lang == uistr::Lang::En) TEST_ASSERT_NOT_NULL(strstr(buf, "albums"));
+    }
+    // The summary with each group's longest word (in bytes) and a level.
+    moodfilter::Filter widest;
+    size_t most = 0;
+    for (int v = 1; v < 4; ++v) {
+      for (int e = 1; e < 4; ++e) {
+        for (int voice = 1; voice < 3; ++voice) {
+          for (int level = 1; level < 3; ++level) {
+            moodfilter::Filter f;
+            f.valence = static_cast<moodfilter::Scale>(v);
+            f.energy = static_cast<moodfilter::Scale>(e);
+            f.voice = static_cast<moodfilter::Voice>(voice);
+            f.tags = 7;
+            f.level = static_cast<moodfilter::Level>(level);
+            char t[512];
+            const size_t n = filtergrid::summary(f, t, sizeof(t));
+            if (n > most) {
+              most = n;
+              widest = f;
+            }
+          }
+        }
+      }
+    }
+    char t[filtergrid::kSummaryBytes];
+    char msg[64];
+    snprintf(msg, sizeof(msg), "%s: the longest summary, %u B", uistr::tag(lang), static_cast<unsigned>(most));
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(most, filtergrid::summary(widest, t, sizeof(t)), msg);
+    TEST_ASSERT_TRUE_MESSAGE(most + 1 <= filtergrid::kSummaryBytes, msg);
+    TEST_ASSERT_TRUE_MESSAGE(small.hasAll(t), msg);
+  }
+  uistr::setLang(uistr::Lang::En);
+}
+
+// The dot on the Albums segment (fillRoundRect(203, 15, 6, 6, 3)) clears
+// the segment's word, drawn centred on x 160 in Bold (Small when Bold
+// doesn't fit), in every language: Russian's "Альбомы" ends a pixel
+// before it.
+void test_filter_dot_clears_the_label() {
+  const Vlw bold(kVlwSansBold16), small(kVlwSans13);
+  for (uistr::Lang lang : kAllLangs) {
+    if (!uistr::hasCatalogue(lang)) continue;
+    uistr::setLang(lang);
+    const char* label = tr(S::library_segment_albums);
+    const int room = 100 - uitext::kSegmentPad;
+    const int w = bold.width(label) <= room ? bold.width(label) : small.width(label);
+    const int end = 160 - (w >> 1) + w;  // its right, centred as M5GFX centres
+    char msg[96];
+    snprintf(msg, sizeof(msg), "%s: \"%s\" ends at %d, the dot at %d", uistr::tag(lang), label, end, filtergrid::kDotX);
+    TEST_ASSERT_TRUE_MESSAGE(end < filtergrid::kDotX, msg);
+  }
+  uistr::setLang(uistr::Lang::En);
+  // Inside the segment (x 110-209), under the header's bottom line.
+  TEST_ASSERT_TRUE(filtergrid::kDotX + filtergrid::kDotD <= 110 + 100);
+}
+
+// The Albums list's line when no album fits (Body, centred).
+void test_filter_empty_line_fits() {
+  const Vlw body(kVlwSans16);
+  for (uistr::Lang lang : kAllLangs) {
+    if (!uistr::hasCatalogue(lang)) continue;
+    uistr::setLang(lang);
+    fits(body, tr(S::mood_no_albums), uitext::kListLineW);
+  }
+  uistr::setLang(uistr::Lang::En);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_jump_letters_match_the_index_buckets);
@@ -4631,5 +4940,12 @@ int main(int, char**) {
   RUN_TEST(test_console_mood_letters);
   RUN_TEST(test_console_mood_fits);
   RUN_TEST(test_console_mood_texts);
+  RUN_TEST(test_filter_grid_goldens);
+  RUN_TEST(test_filter_grid_fits_every_language);
+  RUN_TEST(test_filter_grid_survives_the_lab_panel);
+  RUN_TEST(test_filter_title_row_fits);
+  RUN_TEST(test_filter_row_fits);
+  RUN_TEST(test_filter_dot_clears_the_label);
+  RUN_TEST(test_filter_empty_line_fits);
   return UNITY_END();
 }

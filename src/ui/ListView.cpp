@@ -301,6 +301,17 @@ void ListView::renderItem(M5Canvas& c, uint32_t item) {
   const ListLayout::Item it = layout_.item(item);
   switch (it.kind) {
     case ListLayout::Kind::TopBar:
+      if (topRow(it)) {
+        // The source's row in the bar's place (MOOD-FILTERS.md 7.6): a
+        // row's press and divider, no checkbox, never expanded.
+        const bool pressed = pressedItem_ == static_cast<int32_t>(item);
+        const uint16_t bg = pressed ? col::ROW_SEL : col::BG;
+        c.fillSprite(bg);
+        Row r{c, 0, 0, layoutWidth(), bg, pressed, false, false, pressed ? pressedX_ : -1};
+        src_->drawTopRow(r);
+        c.drawFastHLine(8, kRowH - 1, layoutWidth() - 8, col::ROW_DIV);
+        return;
+      }
       renderBar(c, -1, false);
       return;
     case ListLayout::Kind::InlineBar:
@@ -345,7 +356,7 @@ void ListView::render(int32_t off) {
   keepFirst_ = static_cast<uint32_t>(top / kPitch);
   keepLast_ = std::min<uint32_t>(n ? n - 1 : 0, static_cast<uint32_t>((top + height_ - 1) / kPitch));
   vs_->scrollTo(off, *this);
-  if (n == 0) drawEmpty();
+  if (n == 0 || emptyUnderTopRow()) drawEmpty();
 }
 
 // A move's new lines, before its commit: every item they come from, drawn now.
@@ -445,16 +456,22 @@ void ListView::pushItemInPlace(uint32_t item) {
 }
 
 void ListView::drawEmpty() {
+  // Under a top row (the Albums list's filters, nothing fits: MOOD-FILTERS.md
+  // 7.6), the line alone: the strip from the row's foot (y 114), the text
+  // at y 150. Its buttons couldn't be pressed there (onEvent()).
+  const bool under = emptyUnderTopRow();
   EmptyState e;
-  if (src_ && src_->emptyState(e)) {
+  if (!under && src_ && src_->emptyState(e)) {
     drawEmptyState(e, kTop, height_, src_->accent(), emptyPressed_);
     return;
   }
+  const int top = under ? kTop + kPitch : kTop + 40;  // the strip's
+  const int lineY = under ? 36 : 24;                   // in the strip: y 150, else 136
   M5Canvas& s = gfx::strip();
   s.fillSprite(col::BG);
-  Fonts::instance().draw(s, Font::Body, src_ ? src_->emptyText() : "", kW / 2, 24, uitext::kListLineW, col::DIM,
+  Fonts::instance().draw(s, Font::Body, src_ ? src_->emptyText() : "", kW / 2, lineY, uitext::kListLineW, col::DIM,
                          col::BG, Fonts::Align::Centre);
-  gfx::push(s, 0, kTop + 40, kW, gfx::kStripH);
+  gfx::push(s, 0, top, kW, gfx::kStripH);
 }
 
 // ---- the rail / scrollbar ----
@@ -636,6 +653,13 @@ void ListView::tapItem(int32_t item, const InputEvent& e) {
   const ListLayout::Item it = layout_.item(static_cast<uint32_t>(item));
   switch (it.kind) {
     case ListLayout::Kind::TopBar:
+      if (topRow(it)) {
+        // The source's row (7.6): its own zones (the cross, the editor).
+        input_->tapTick();
+        src_->onTopRowTap(e.x, e.atRightEdge());
+        break;
+      }
+      [[fallthrough]];
     case ListLayout::Kind::InlineBar: {
       const char* labels[3] = {"", "", ""};
       const int n = src_->actions(it.row, labels);
@@ -736,8 +760,8 @@ void ListView::onEvent(const InputEvent& e) {
     if (downItem_ >= 0 && !wasMoving && drawnOffset_ == offset()) {
       const ListLayout::Item it = layout_.item(static_cast<uint32_t>(downItem_));
       if (it.kind == ListLayout::Kind::Row && !src_->pressable(static_cast<uint32_t>(it.row))) return;
-      int button = -1;
-      if (it.kind != ListLayout::Kind::Row) {
+      int button = -1;  // a row, or the source's top row: pressed whole
+      if (it.kind != ListLayout::Kind::Row && !topRow(it)) {
         const char* labels[3] = {"", "", ""};
         button = e.atRightEdge() ? src_->actions(it.row, labels) - 1 : buttonAt(e.x, src_->actions(it.row, labels));
       }

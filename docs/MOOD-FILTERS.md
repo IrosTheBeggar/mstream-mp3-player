@@ -4,7 +4,7 @@ Mood filters narrow the Albums list and Auto DJ's picks by mood, using the scale
 
 ## 1. Status
 
-**Status (2026-11-06):** S0, S1 and S2 are built, from main af72b50: S0 on its own branch (`claude/status-line-under-modal`), S1 and S2 stacked on `claude/mood-filters-implementation-0aec6e`; not merged. S1 and S2 are host-tested (S0 has no host test). S2 ran on the user's Core2 against the spare synthetic card in 9.6's Runs A to E, which also checked S1's heap rule, and S0 was checked on the same unit (9.4). S3 onward are not started. Each stage's result follows its plan (9.4, 9.5, 9.6), and the figures from those runs are MEASURED 2026-11-06. A read-only study found it possible, and this document is the build plan.
+**Status (2026-11-06):** S0, S1 and S2 are built, from main af72b50: S0 on its own branch (`claude/status-line-under-modal`), S1 and S2 stacked on `claude/mood-filters-implementation-0aec6e`; not merged. S1 and S2 are host-tested (S0 has no host test). S2 ran on the user's Core2 against the spare synthetic card in 9.6's Runs A to E, which also checked S1's heap rule, and S0 was checked on the same unit (9.4). S3 is built on `claude/mood-filters-s3`, stacked on S2, host-tested and building; its device pass (9.7's table) has not run. S4 onward are not started. Each stage's result follows its plan (9.4, 9.5, 9.6, 9.7), and the figures from those runs are MEASURED 2026-11-06. A read-only study found it possible, and this document is the build plan.
 
 **Picked by the user, on the design canvas:**
 - The editor: the one-screen grid of 7.1.
@@ -699,6 +699,8 @@ terminal #56, #68 ----> S7 (stacked)
 **Owed to the 0.13.0 release commit** (2026-11-06). Not written into `.github/release-notes.md`: feature branches here never edit it, only "Release x.y.z: the release notes" commits do.
 - S2: every unit rebuilds the library once at its first start on the new firmware (`library.idx` v7): about 11 s at 19,400 tracks from D, about 14-16 s from a transfer's records; the queue kept. Going back to 0.12.0 rebuilds once the other way (it reads v7 as corrupt).
 - S0: a status line (Checking the card..., Reading tags...) that ends while a sheet or dialog is up no longer wipes it.
+- S3: on a card with mood scores, the Albums list starts with a Filters row; a tap opens one screen of moods (Happy / Neutral / Sad, Relaxed / Neutral / Aggressive, Instrumental / Vocals, Acoustic, Party, Danceable, and how strict), each tap applied at once with the count of albums that fit, and the list then shows only the albums where most analysed tracks fit. The row says what is set and how many remain, its cross clears it, a dot on Albums says a filter is on once the row is scrolled away, and a restart forgets it. No card carries scores until a writer build does (S7), so the notes say what it needs, not that today's cards have it. Console `uiM`, `uiMa<hex>`, `uiMe`.
+- S3's strings: the 15 mood words are the phone app's (ARB at d17c3fa5, `THIRD-PARTY-NOTICES.md`) in all ten languages; `mood.albums_of`, `mood.tracks_of` and `mood.no_albums` are machine-translated in nine, and their native review is owed (each file's `@@note` says which).
 
 ### 9.3 Console, one list
 
@@ -991,10 +993,60 @@ pio test -e native
 | Languages | `uiLru`, `uiLja`, `uiLpl`, `uiMe`, `X` |
 | Fence with a filter on, hitch at the end | `uiMa<hex>`, `g0`, `ui` |
 | Through dark | `uiMe`, `Ps0`, `Ps1` |
+| A toast at opening (4.3) | An album held, `+ Queue`, and the Filters row (or `uiMe`) inside the toast's 4 s: the title row drawn, a tap on the toast's old place lands where it is seen |
 | Heap with the array held | `D` before and after `uiMa`; the join's blocks after an update with a filter on |
 | Colours, redraw feel | The user's eye |
 
 **Effort:** 3.5-5 (guess; device pass 0.5-1).
+
+**Result (2026-11-06).** Commits 1 to 7 built on `claude/mood-filters-s3`, stacked on S2; the device pass below has not run, so nothing here has been seen on a screen. As built, with the drift from the plan above:
+- 1, `lib/core/FilterGrid`: 7.3's rules, 7.4's hits, the first row's and the dot's numbers. Two rules come from the frames where 7.3's text is silent or differs: a chip row still too wide in Small gives its overflow up evenly instead of scaling (Russian's tags 103/80/109, as 7.3's golden; scaled would be 102/82/108), and an even share rounds a half down (the es and fr voice trays, 140 and 138). Every golden of 7.3 holds with the firmware's fonts; the least margin at a cell's centre is 20 px in every language, lab panel and true (MEASURED-HOST). 18 `mood.*` ids, the 15 of 8.1 from the ARB in all ten languages.
+- 2, translations: S3's three ids in nine languages, machine-made, the native review owed (9.2). fr's and pt's empty line take a shorter verb than the app's (323 and 312 px against the line's 300; the widest left is pt's 298). ru's count at 9,999 of 9,999 is 165 px in the row's 160 and shows the short form, as 7.2 planned.
+- 3, `kFunnel` (14 x 14, ASCII art in `tools/ui_icons.py`), pixel for pixel the frames'. This Mac has no Pillow: `src/ui/IconData.cpp` was made by a stand-in for it (exact for art icons) and the funnel's lines spliced in, so "`python tools/ui_icons.py` leaves `IconData.cpp` unchanged" is not checked.
+- 4, `ListView`: the hook as 7.6 (`topBarIsRow()`, `drawTopRow()`, `onTopRowTap(x, rightEdge)`), the row pressed whole with no hold, the empty line under it (the strip at y 114, the text at y 150). `ListView` isn't host-built: checked by the builds and by reading.
+- 5, `lib/core/FilteredAlbums` and `src/ui/FilterSheet`, with the Ui's wiring as listed. The block comes from allocator hooks (PSRAM), room for every album (6.8 KB at 1,707), used again while the album count stays; no memory keeps what was held. 7.6's accessor for the panel is `overlayPanel()`, with `panelOwner()` and `setPanelOwner()`. `uiMa` takes bare hex, as `gm<hex>`.
+- 6, the row in `LibraryPage`, as 4.2's table and 7.2. Drift: the list reads the albums through `FilteredAlbums::shown()`, which also checks they were picked over as many albums as the index has and that it has words (a guard beside 4.6's drops). They are worked out again when the Albums list is about to show (`enter()` at its root, or the segment's tap), not at every `enter()`. A change made while the Albums list didn't show (`uiMa`, or `uiMe` over another page) opens it at its top once, as a close over it does (7.5 names only the close). A finger on the cross lights its disc, not the row. `uil<n>` (`Ui::browse()`) drops the albums too, and a synthetic library drops the filter at `enter()`. `onTopRowTap` takes the list's width from the row as last drawn. `describe()` (the `ui` report) adds the row's filter and the dot.
+- 7, docs: `src/ui/Pages.h`, `docs/ARCHITECTURE.md`, `README.md`, this note. `.github/release-notes.md` is not edited (feature branches never do): S3's lines are in 9.2's owed list.
+- 8, the review's fix: `openFilters()` takes a hidden toast's cover off before the editor's first frame. The editor draws under a toast (not `over`), so with the cover left on, its title row stayed the toast's pixels while the unseen Clear, count and cross took the taps (4.3's toast at opening). `Ui` isn't host-built: checked by the builds (core2's flash 4,333,751 B, +8 B) and by reading; the device table's row says how to see it.
+
+Host (MEASURED-HOST):
+- `pio test -e native`: 2,107 cases, only the 5 known macOS failures (`test_host_clock` 2, `test_hop_feed` 2, `test_queue` 1); 2,077 after S2. `test_ui_filter` 22 cases, and with `test_ui_library`, `test_ui_strings` and `test_ui_nav` 142, all pass.
+- `python tools/gen_ui_strings.py --check` clean; `test_gen_ui_strings` 29 pass (Python 3.12: the Mac's 3.9 can't run the generator).
+- `pio run -e core2 -e core2-dio`: both build with no new warnings. core2's flash 4,333,743 B, +15,292 B over S2's 4,318,451 B (68.9 %; the app 70 % of its slot); RAM 58,480 B and IRAM 5,161 B left, unchanged.
+
+The card: the spare holds gen 5 with scores (9.6, Run C), which the table above needs; `python tools/synthtransfer.py --check <card> --mood-filter 127` re-checks it, read-only. Until S0 merges, a Library status line ending under the editor wipes its grid (9.4).
+
+**Device (2026-11-06).** MEASURED on the Core2 v1.3 and the spare card (gen 5: 19,413 tracks, 17,954 with a word, 1,707 albums), silent mode, Auto DJ on. The build: this branch at the review's fix with S0's commit picked on top, not committed together (core2's flash 4,333,763 B). Every screenshot was compared with its frame pixel by pixel, quantised to 565. No bug found; nothing fixed.
+
+| What | Result |
+|---|---|
+| Pass time idle | 11 filters, 0 to 854 albums (`uiMa` 1, 20, 2, 14, 214, 256, 19E, CF, 1C0, A, 3): 15,300-16,775 µs, against 8-35 ms (MODELLED). An inactive word (0, 200, 400): 9-29 µs. The list's first frame after each: 43.5-54.3 ms, as a tap onto Albums (44.2 ms) |
+| With an MP3 | `qp13` (`01 - Bench 320.mp3`), then 9 filtered passes: 21,645-40,039 µs, against 17-70 ms. Ring 1,416-1,439 ms, 0 underruns, load 37.6-37.8 %. The reloaded list's first frame 75.5-114.3 ms; a segment switch in the same run 79.0-91.1 ms |
+| Tap and close | Idle: editor taps 34.8 ms at most as events (each holds its pass), none logged slow. Clear 48.6 ms (the whole grid). Opening from the row 83.0 ms, logged as a slow event; the row is pressed at Down first. The cross with no change: a 25.8 ms frame. The cross after a change: the list's frame, 51.8 ms. The row's cross: 12.3 ms, then the list in 44.3 ms. During the MP3: taps 50.1-71.0 ms (passes 17.8-32.1 ms), each logged slow; the close after a change 94.8 ms. No `[ui] slow frame`; a fling over a filtered list ran at 30.3 fps, its worst frame 22.9 ms |
+| Third column | `uk1`: `uit260,86` read 263,74 and hit Sad (0x003); `uit276,174` read 287,169 and hit the level (Standard to Loose, 0x403); `uit263,218` read 267,215 and hit Danceable (0x503). `uk0`. A real finger: not run |
+| Widths, empty line | 241 albums: a rail, the disc at 232. 17 (`1A`): a scrollbar, 284. 3 (`256`): neither, 292. 0 (`19E`): "No albums match these filters" as `A-empty-line`, pixel for pixel; the row stays |
+| Dot | `uis160,200,160,80,60` (offset 966 px): the dot, and `ui` names it. `uit160,54`: offset 0, the dot gone. Under `14` at 1,008 px, Artists shows 705 rows unfiltered and no dot; back on Albums, 1,008 px and the dot |
+| Rail, jump grid | `214` (140 albums): the grid greys #, J, U, X, Z. J does nothing and the grid stays. K goes to row 66 (its first album at the top, the rail "K", the dot). The grid opens in 61.0 ms, and in 63.0 ms with no filter (1,707 rows) |
+| Languages | ru, ja, pl: the editor with `19E`, the row with `1E` (60 albums, a rail). The grids are the frames' pixel for pixel but the count; ru's tag wraps Для / вечеринки as drawn; the summaries cut where the frames cut |
+| Fence | `14` on, then `g0`: the walk (29.2 s), then the fence for 33.6 s. "Updating the library…" with no row, as `A-updating`; `uiM` says no albums held, and `uiMa` is refused. At its end the pass ran again (16,407 µs) and the row came back, 241 of 1,707. The hitch: a 66.9 ms loop pass (a 46.7 ms frame, 19.5 ms of status), then 49.8 ms |
+| Through dark | `uiMe`, `Ps0`, `Ps1`: the editor stays up, redrawn whole in 88 ms at the wake |
+| A toast at opening | `+ Queue` on an album's sheet ("Added 3 tracks", Undo, View), then `uiMe` 0.6 s later: the toast went (`ui`: toast none). The screen equals the editor with no toast, 0 px different over y 36-239. The cross at 287,52, where the toast's buttons were, closed the editor. The queue: "undo: none" |
+| Heap | `D` with no filter: PSRAM free 630,196 B, the largest block 606,196 B. After `uiMa14`: 623,280 B (-6,916 B: the 6,828 B block and 88 B), the largest unchanged. After `g0` with `14` on, joined: largest 294,900 B. 9.6's update stopped with moods also read 294,900 B, in another sequence: not an A/B. Above 9.5's 245,764 B |
+| Colours | Read from the shots, equal to the frames' in 565: the accent, DIM, FAINT, BTN, the amber at 0 (f8c038). The redraw's feel, by eye: not run |
+
+The frames against the screen:
+- The crosses are `kCross`, 12 x 12, where the frames draw 10 x 10 (the frames' README says so).
+- The frames anti-alias, the panel doesn't. The row's disc, the level cell's dots, the corners of the pills and chips (1 px each) and the Albums dot have hard edges here, at the same sizes and colours.
+- The dot covers y 51-56, its centre at 53.5, where the frame's covers 51-57, centre 54. That is 7.2's `fillRoundRect(203, 15, 6, 6, 3)` as written.
+- The row's divider starts at x 8, as every album row's does (the list's style); the frames draw it from x 0.
+- Counts follow each language's grouping, ru "1 707" and pl "1707"; the frames write "1,741" in all three.
+- The frames' tab bar is an English capture. In ru and ja no label shows under the active icon (the tab bar's `labelFit()`), and pl's reads "Biblioteka". Not S3's.
+- pl: "Taneczne" and the Folders segment's "Foldery" sit 1 px right of the frames'. The segment control is not S3's.
+- Behind the fence the band reads "Updating library…", the frame "Reading the card…": the update's later phase.
+- The card's own data: album names, the rail's "#" (the loose tracks sort first), 1,707 albums, the volume at 0 % (silent mode).
+- Not a difference: "Sad · Aggressive · Acoustic" (`4F`) is Small here, where `A-empty-line` has it in Body. On this card it fits 5 albums, so the list has a scrollbar and its room is 212; the frame's empty list has 220.
+
+Not run: a card without mood data (one card here, scored); a real finger on the third column; the redraw's feel by eye; the toast at opening through the row's tap (`uiMe` takes the same `openFilters()`); a hidden album, the card's status band over a filtered list, and no memory. The bench queue was replaced (`qp13`, then 3 tracks added).
 
 ### 9.8 S4: the engine
 

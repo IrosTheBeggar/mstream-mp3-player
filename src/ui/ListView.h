@@ -35,7 +35,8 @@
 //     + Queue) opens under the row; tapping the row again, or another row,
 //     closes it (ListLayout keeps what's on screen steady);
 //   - a top bar: the same buttons as the list's first item (a container's
-//     own Play / Play next / + Queue);
+//     own Play / Play next / + Queue), or a row of the source's own in its
+//     place (topBarIsRow(): the Albums list's mood filters);
 //   - long press: the source's (a sheet, or selection mode), on rows it
 //     holds(); a long press on anything else ends as a tap when it lifts;
 //   - selection mode: a checkbox on every row, taps toggle;
@@ -69,7 +70,8 @@
 // above it, so the bar stays put while the list scrolls).
 //
 // An empty list shows its source's empty state (ui/EmptyState: "Your
-// queue is empty" with its buttons), or a line of text.
+// queue is empty" with its buttons), or a line of text (under a top row,
+// always the line, below the row).
 //
 // Each page's scroll position and expanded row are kept in its nav entry
 // (NavModel::PageRef): attach() restores them, detach() saves them.
@@ -115,6 +117,21 @@ public:
     virtual uint16_t accent() = 0;
     // A top bar (item 0) with actions(-1, ...).
     virtual bool topBar() { return false; }
+    // The top bar is a row instead (docs/MOOD-FILTERS.md 7.6: the Albums
+    // list's filters): drawTopRow() paints it and a tap on it goes to
+    // onTopRowTap(); actions(-1) is never asked. It scrolls with the list
+    // and presses like a row (no buttons, no hold, no checkbox), and with
+    // no data rows under it, emptyText() shows below it (the line only).
+    virtual bool topBarIsRow() { return false; }
+    // As drawRow(): the row's own look over `bg`, the divider drawn after
+    // (r.row is 0 and means nothing; r.pressX is the finger).
+    virtual void drawTopRow(Row& r) { (void)r; }
+    // A tap on it at x (`rightEdge`: a reading clamped at the screen's
+    // edge), after the tap tick. Where on it says what it does.
+    virtual void onTopRowTap(int x, bool rightEdge) {
+      (void)x;
+      (void)rightEdge;
+    }
     // The buttons of the top bar (row -1) or of row's inline bar: up to 3
     // labels, the first is the primary. Returns how many.
     virtual int actions(int32_t row, const char* labels[3]) {
@@ -327,6 +344,10 @@ private:
   int layoutWidth() const { return edge_ == Edge::Rail ? 284 : edge_ == Edge::Bar ? 312 : 320; }
   int pushWidth() const { return railUp_ || railWanted_ ? layoutWidth() : 320; }
   int railX() const { return layoutWidth(); }
+  // `it` is the source's top row (topBarIsRow()), not a bar of buttons.
+  bool topRow(const ListLayout::Item& it) const { return it.kind == ListLayout::Kind::TopBar && src_->topBarIsRow(); }
+  // No data rows under a top row: the empty line goes below it.
+  bool emptyUnderTopRow() const { return src_ && layout_.rows() == 0 && layout_.topBar() && src_->topBarIsRow(); }
   void setEdge();
   void dropSlots();
   Slot* slotFor(uint32_t item);
