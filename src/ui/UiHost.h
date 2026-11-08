@@ -267,6 +267,15 @@ public:
   virtual bool autoDjSetMode(autodj::Mode m) = 0;
   virtual bool autoDjSetFloor(uint8_t pct) = 0;
   virtual bool autoDjSetMatch(bool tempo, bool key) = 0;
+  // The mood filter (Output > Auto DJ's editor, each tap: MOOD-FILTERS.md
+  // 4.3): applied and saved, and the tracks inside it counted at once.
+  // Returns that count (all the library's tracks with no group set), so the
+  // editor's count needn't wait for the next snapshot.
+  virtual uint32_t autoDjSetMoods(uint16_t q) = 0;
+  // The editor closed on a changed filter (as a Dq is at once): the change
+  // is settled, and what it means for the queue may be said (4.5: a queued
+  // pick outside it plays once). Behind the fence it says nothing.
+  virtual void autoDjMoodSettled() = 0;
   // The empty states' Auto DJ button (D4, the listener's tap): a random
   // track the index knows plays as a new queue, Auto DJ on (refused
   // behind the library update's fence).

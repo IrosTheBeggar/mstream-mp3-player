@@ -16,6 +16,7 @@
 #include "WaveBar.h"
 #include "ui/FilterSheet.h"
 #include "ui/ListView.h"
+#include "ui/Theme.h"
 #include "ui/UiHost.h"
 #include "ui/Page.h"
 
@@ -139,8 +140,10 @@ struct Header {
 // fps deadlines while a finger scrubs.
 // Nothing queued: "Nothing playing" with Open Library and Shuffle all, or
 // Auto DJ in Shuffle all's place while the card has a usable Auto DJ index
-// (the user's D4: a random track it knows plays, Auto DJ on); with no card
-// and no music, "No microSD card" and Try again.
+// (the user's D4: a random track it knows plays, Auto DJ on), or Open
+// Library alone under "No track on this card fits these filters" while
+// Auto DJ's mood filter fits none (MOOD-FILTERS.md 4.4, frame dj-empty);
+// with no card and no music, "No microSD card" and Try again.
 class NowPlayingPage : public Page {
 public:
   explicit NowPlayingPage(Ui& ui) : Page(ui) {}
@@ -267,6 +270,7 @@ private:
     bool noCard = false;
     cardformat::Kind cardKind = cardformat::Kind::Unreadable;  // the no-card message drawn
     bool autoDjButton = false;  // ... with Auto DJ in Shuffle all's place
+    bool noFit = false;         // ... saying Auto DJ's mood filter fits no track (no second button)
     bool waiting = false;     // the waiting panel is what's drawn
     uint32_t waitSig = 0;     // waitSig()
     uint32_t sleep = 0;       // the sleep timer's text on the progress line (a hash)
@@ -534,7 +538,9 @@ private:
 //            confirmation; every edit has Undo)
 // Empty (mockup 18): "Your queue is empty" [Open Library] [Shuffle all],
 // or [Auto DJ] in Shuffle all's place while the card has a usable Auto DJ
-// index (D4); with no card and nothing queued, the no-card state.
+// index (D4), or [Open Library] alone under "No track on this card fits
+// these filters" while Auto DJ's mood filter fits none (MOOD-FILTERS.md
+// 4.4); with no card and nothing queued, the no-card state.
 class QueuePage : public Page, public ListView::Source {
 public:
   // The band in selection mode: three rows over the bar.
@@ -609,6 +615,7 @@ private:
   int32_t showPos_ = -1;
   bool showAdded_ = false;  // what the Library added is highlighted (this visit)
   bool emptyDj_ = false;    // the empty state has Auto DJ's button (not Shuffle all)
+  bool emptyNoFit_ = false; // ... says Auto DJ's mood filter fits no track (no second button)
   uint8_t jump_ = 0;
   BitSet selection_;
   bool selecting_ = false;
@@ -699,19 +706,27 @@ private:
 // starts), Anchor (Follow the vibe / Stay on seed, its value right on the
 // title's line, its hint under it; a tap swaps), Match strictness ("55% or
 // closer", the steps 55-75 by 5: a tap the next), BPM continuity and
-// Harmonic mixing (switches), and a status row that is no control (the
-// index's coverage, or why there is none, or why Auto DJ waits). Without a
-// usable index the four settings are dim, "needs an Auto DJ index" under
-// each (a value that can't sit beside its title, Match strictness's in
-// some languages, there instead), a tap a note; the switch and the status
-// stay live. Each change saved at once (NVS, app/AutoDjStore) and applied
-// from the next pick.
+// Smart filters (the mood filter: "Any", or what is set; a tap opens the
+// mood filters' editor, in the Output tab's blue, counting tracks:
+// docs/MOOD-FILTERS.md 4.4), BPM continuity and Harmonic mixing
+// (switches), and a status row that is no control (the index's coverage,
+// or how many tracks fit the filter, or why there is none, or why Auto DJ
+// waits; its first line amber when nothing or 50 or fewer fit, or paused).
+// Without a usable index Anchor, Match strictness and the two switches are
+// dim, "needs an Auto DJ index" under each (a value that can't sit beside
+// its title, Match strictness's in some languages, there instead), a tap a
+// note; the switch and the status stay live. Smart filters is dim exactly
+// while the card has no mood data ("No mood data", a tap a note to sync
+// the card from mStream; a saved filter kept, its picks unfiltered: D4).
+// Behind the library update's fence the rows keep their last values, and
+// Smart filters' tap says to wait. Each change saved at once (NVS,
+// app/AutoDjStore) and applied from the next pick; the editor's each tap.
 // Device info: what the boot screen used to list (the board, the power
 // chip, the IMU, the chip, flash, PSRAM, the last reset, the battery, the
 // library, internal RAM), with the CPU's clock, the uptime, the firmware
 // and its build: DeviceInfo's rows, a label over each value, refreshed
 // every 3 s while the page is open, as About.
-class OutputPage : public Page, public ListView::Source {
+class OutputPage : public Page, public ListView::Source, public FilterOwner {
 public:
   explicit OutputPage(Ui& ui) : Page(ui) {}
   const char* name() const override { return "Output"; }
@@ -733,6 +748,25 @@ public:
   // until its 2 minutes, the screen off, a device picked or the page
   // closed (leave() stops it). Ui::pairSearching().
   bool pairSearching() const { return kind_ == PageKind::Pair && search_.searching(); }
+  // Output > Auto DJ is the page shown (the console's uiMe: its editor).
+  bool onAutoDj() const { return kind_ == PageKind::AutoDj; }
+  // Smart filters' tap (and uiMe over this page): the mood filters'
+  // editor for Auto DJ's filter (Ui::openFilters()), or why not: no mood
+  // data on the card (a note to sync it from mStream), the library update's
+  // fence (wait). False: not opened.
+  bool editMoods();
+
+  // FilterOwner: Auto DJ's mood filter (MOOD-FILTERS.md 4.3's "From Auto
+  // DJ"), applied and saved at each tap (UiHost::autoDjSetMoods(), which
+  // counts the tracks inside it at once); the count is that count, of the
+  // library's tracks. Its close, with a change, settles it
+  // (UiHost::autoDjMoodSettled()) and draws the page's rows again.
+  uint16_t filterWord() override { return editWord_; }
+  bool setFilterWord(uint16_t q) override;
+  uint32_t filterFits() override { return editFit_; }
+  uint32_t filterTotal() override;
+  filtergrid::Scope filterScope() override { return filtergrid::Scope::Tracks; }
+  void onFiltersClosed(bool changed) override;
 
   // ListView::Source
   uint32_t rows() override;
@@ -818,7 +852,10 @@ private:
   // rows, its value rows, and a tap on one.
   void drawAutoDj(ListView::Row& r);
   void drawAutoDjSwitch(ListView::Row& r, const char* title, const char* sub, bool on, bool live);
-  void drawAutoDjValue(ListView::Row& r, const char* title, const char* value, const char* hint, bool live);
+  // `hintInk`: the hint's (beside: the value on the first line), DIM: a
+  // dim row's hint says why it is dim; Smart filters' doesn't (FAINT then).
+  void drawAutoDjValue(ListView::Row& r, const char* title, const char* value, const char* hint, bool live,
+                       uint16_t hintInk = col::DIM);
   void onAutoDjTap(uint32_t row);
   // What Auto DJ's rows show (the root's row, the page's): drawn again when it changes.
   static uint32_t autoDjSig(const autodjview::State& d);
@@ -845,6 +882,11 @@ private:
   uint32_t drawnScreen_ = 0xFFFFFFFFu;  // the screen, idle and power settings drawn (screenSig())
   uint32_t drawnLibrary_ = 0xFFFFFFFFu;  // the Library row drawn (librarySig())
   uint32_t drawnAutoDj_ = 0xFFFFFFFFu;   // Auto DJ's rows drawn (autoDjSig())
+  // The mood filters' editor over Auto DJ's page: the filter its last tap
+  // set and the tracks that fit it, as counted then (the snapshot catches
+  // up at the next pass).
+  uint16_t editWord_ = 0;
+  uint32_t editFit_ = 0;
   uint32_t nextSpinMs_ = 0;
   uint8_t spin_ = 0;  // the spinner's step (8 a turn)
   // Pair: the scan's list as last copied, and the device picked.

@@ -849,6 +849,61 @@
     },
     "bytes": 128
   },
+  "toast.autodj_few": {
+    "one": "Only {0} track fits: it will repeat",
+    "other": "Only {0} tracks fit: they will repeat"
+  },
+  "@toast.autodj_few": {
+    "context": "Note (amber) when Auto DJ's mood filter (Output > Auto DJ, Smart filters) fits only 1 to 50 of the card's tracks: fewer than the 50 it waits before playing a track again, so its picks repeat. Said when the filter changes (the editor closing), when Auto DJ is switched on, or at its first pick after a boot or a Play that switched it on; not again until the filter changes, or more than 50 fit and then 50 or fewer again.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "placeholders": {
+      "0": {
+        "means": "the tracks that fit (1 to 50)",
+        "type": "digits",
+        "worst": 50
+      }
+    },
+    "count": "0",
+    "bytes": 128
+  },
+  "toast.autodj_no_close": "No close match: any track that fits",
+  "@toast.autodj_no_close": {
+    "context": "Toast when Auto DJ, with a mood filter on, found no track close to the last ones inside the filter (their neighbours are outside it, or were played lately), so it added another track that fits the filter. Once a session (a Play, switching Auto DJ on), and again after the filter changes.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "bytes": 128
+  },
+  "toast.autodj_plays_once": "Plays once, then the filters apply",
+  "@toast.autodj_plays_once": {
+    "context": "Toast when Auto DJ's mood filter changes while the track Auto DJ added next (queued, not yet playing) doesn't fit the new one: that track stays and plays once; the tracks Auto DJ adds after it fit. One Body line in English: a language whose words don't fit one line needs a ': ' to split them at (the part before it in Small over the rest).",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "bytes": 128
+  },
+  "toast.autodj_no_mood": "No mood data: sync this card from mStream",
+  "@toast.autodj_no_mood": {
+    "context": "Note (amber) on a tap on Output > Auto DJ's Smart filters row when it is dim: the card has no mood scores, which a sync from the mStream server writes to it with the music (from its analysis). A filter set before is kept; Auto DJ's picks are unfiltered until the card has scores. mood.no_data's words before the ': '.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "bytes": 128
+  },
   "hud.bluetooth": "Bluetooth: {0}",
   "@hud.bluetooth": {
     "context": "The HUD over the tab bar after a B hold moved the output to the headphones: their name, or hud.connecting.",
@@ -2754,6 +2809,33 @@
       "const": "uitext::kListLineW"
     }
   },
+  "mood.smart_filters": "Smart filters",
+  "@mood.smart_filters": {
+    "context": "Output > Auto DJ, the page's fourth row (docs/MOOD-FILTERS.md 4.4): its title. A tap opens the mood filters' editor (the Albums list's, in Output's blue, counting tracks: mood.tracks_of), and every track Auto DJ adds then fits what is set. Its value (mood.any, mood.no_data, or what is set: the mood.* words joined by \" · \") is beside it when it fits whole there, else on the line under it. The mobile app's words (autoDjMoodTitle).",
+    "room": {
+      "font": "Body",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    }
+  },
+  "mood.any": "Any",
+  "@mood.any": {
+    "context": "Smart filters' value (Output > Auto DJ) with no mood filter set, or only its level (which filters nothing): Auto DJ may pick any track. Beside 'Smart filters' when it fits whole there, else on the row's second line. The mobile app's word (autoDjAny).",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    }
+  },
+  "mood.no_data": "No mood data",
+  "@mood.no_data": {
+    "context": "Smart filters' value (Output > Auto DJ) on a card with no mood scores: the row is drawn dim, a filter set before is kept but Auto DJ's picks are unfiltered, and a tap says toast.autodj_no_mood. Beside 'Smart filters' when it fits whole there, else on the row's second line. The mobile app's words (autoDjNoMoodData).",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    }
+  },
   "card.another": "Another card: restarting",
   "@card.another": {
     "context": "Toast before the player restarts because another microSD card was put in.",
@@ -3444,6 +3526,16 @@
     },
     "line_bytes": 128
   },
+  "empty.no_track_fits": "No track on this card fits these filters",
+  "@empty.no_track_fits": {
+    "context": "The empty states' line under the title (Now Playing, Queue), in empty.pick_in_library's place, when Auto DJ's mood filter (Output > Auto DJ, Smart filters) fits no track on the card: Auto DJ's button goes (there is nothing it could play), and Shuffle all doesn't take its place: Open Library alone.",
+    "room": {
+      "font": "Small",
+      "px": 304,
+      "const": "uitext::kEmptyLineW"
+    },
+    "line_bytes": 128
+  },
   "empty.open_library": "Open Library",
   "@empty.open_library": {
     "context": "The empty states' primary button: go to the Library tab.",
@@ -3767,7 +3859,7 @@
   },
   "output.autodj_sub_on": "On · {0}",
   "@output.autodj_sub_on": {
-    "context": "The Auto DJ row's line when on: the Anchor in use. Drawn only when the whole line fits (242 px); else the state alone (now_playing.autodj_on), so the Anchor keeps the mobile app's words. Also the state alone without a usable index.",
+    "context": "The Auto DJ row's line when on: the Anchor in use. Drawn only when the whole line fits (242 px); else the state alone (now_playing.autodj_on), so the Anchor keeps the mobile app's words. Also the state alone without a usable index. Also the detail of Now Playing's \"...\" sheet's Auto DJ row while Auto DJ is on with a mood filter (docs/MOOD-FILTERS.md 4.4): {0} is then what is set, the mood.* words joined by \" · \" (\"On · Relaxed · Instrumental\").",
     "room": {
       "font": "Small",
       "px": 242,
@@ -3933,6 +4025,15 @@
       "const": "uitext::kAutoDjLineW"
     }
   },
+  "autodj.smart_sub": "keeps every pick inside these moods",
+  "@autodj.smart_sub": {
+    "context": "Smart filters' line under it (Output > Auto DJ, the fourth row) when its value fits beside the title: with a mood filter set, every track Auto DJ adds fits it.",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    }
+  },
   "autodj.bpm": "BPM continuity",
   "@autodj.bpm": {
     "context": "The Auto DJ page, row 4 (a switch): prefer picks near the playing track's tempo. The mobile app's words.",
@@ -4034,6 +4135,103 @@
       }
     },
     "translate": "maybe",
+    "bytes": 96
+  },
+  "autodj.status_fits": {
+    "one": "{0} of {1} track fits",
+    "other": "{0} of {1} tracks fit"
+  },
+  "@autodj.status_fits": {
+    "context": "The Auto DJ page's last row (not a control), its first line with a mood filter on (Smart filters) when more than 50 of the library's tracks fit it: how many fit, of all. Under it autodj.status_coverage_mood once the index is read; with no index Auto DJ can use, the index's first line (autodj.status_none and the others), its picks random inside the filter. With Auto DJ off and no track fitting, '0 of 19,412 tracks fit' (amber).",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "placeholders": {
+      "0": {
+        "means": "the tracks that fit",
+        "type": "grouped",
+        "worst": 99999
+      },
+      "1": {
+        "means": "the library's tracks",
+        "type": "grouped",
+        "worst": 99999
+      }
+    },
+    "count": "1",
+    "bytes": 96
+  },
+  "autodj.status_coverage_mood": "BPM {0}% · key {1}% · mood {2}%",
+  "@autodj.status_coverage_mood": {
+    "context": "The status row's second line once the index is read, on a card with mood scores (a mood filter on or not): as autodj.status_coverage, then the share of the library's tracks with mood scores (from the mStream server's analysis).",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "placeholders": {
+      "0": {
+        "means": "a percentage",
+        "type": "digits",
+        "worst": 100
+      },
+      "1": {
+        "means": "a percentage",
+        "type": "digits",
+        "worst": 100
+      },
+      "2": {
+        "means": "a percentage",
+        "type": "digits",
+        "worst": 100
+      }
+    },
+    "translate": "maybe",
+    "bytes": 96
+  },
+  "autodj.status_few": {
+    "one": "Only {0} track fits",
+    "other": "Only {0} tracks fit"
+  },
+  "@autodj.status_few": {
+    "context": "The status row's first line, amber, with a mood filter on that only 1 to 50 of the library's tracks fit: fewer than the 50 Auto DJ waits before playing a track again, so its picks repeat. Under it autodj.status_few_sub once the index is read; with no index Auto DJ can use, the index's first line.",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "placeholders": {
+      "0": {
+        "means": "the tracks that fit (1 to 50)",
+        "type": "digits",
+        "worst": 50
+      }
+    },
+    "count": "0",
+    "bytes": 96
+  },
+  "autodj.status_few_sub": "They will repeat · BPM {0}% · key {1}%",
+  "@autodj.status_few_sub": {
+    "context": "The status row's second line under autodj.status_few once the index is read: the tracks that fit will repeat; then the shares of autodj.status_coverage.",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "placeholders": {
+      "0": {
+        "means": "a percentage",
+        "type": "digits",
+        "worst": 100
+      },
+      "1": {
+        "means": "a percentage",
+        "type": "digits",
+        "worst": 100
+      }
+    },
     "bytes": 96
   },
   "autodj.status_found": {
@@ -4150,6 +4348,16 @@
   "autodj.status_waits_sleep": "Waiting: sleep timer set to End of queue",
   "@autodj.status_waits_sleep": {
     "context": "The status row's first line while the sleep timer is set to End of queue (the sleep sheet's word for that setting, sleep.end_queue): Auto DJ adds nothing, so the queue's end is where the timer stops.",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "bytes": 96
+  },
+  "autodj.status_waits_fit": "Waiting: no track fits the filters",
+  "@autodj.status_waits_fit": {
+    "context": "The status row's first line while Auto DJ is on but adds nothing: a mood filter is set for it and no track on this card fits the filter (docs/MOOD-FILTERS.md 4.4). Filters: the mood filters' word in the mobile app (its moodFilters, 'Filters').",
     "room": {
       "font": "Small",
       "px": 288,

@@ -1,7 +1,7 @@
 {
   "@@locale": "it",
   "@@autonym": "Italiano",
-  "@@note": "Italiano: traduzione automatica, non ancora rivista da un madrelingua. Fatta dalle traduzioni dell'app mobile (mstream_music, lib/l10n/app_it.arb, master bdb174e, GPL-3.0) e del lettore da terminale (mstream-terminal-player, locales/it.yml, main b89ad0a, GPL-3.0-only), dello stesso autore, dove avevano il testo o le parole (termini, registro 'tu', tipografia); il resto lo ha tradotto un agente Fable (Claude), e un secondo agente lo ha riletto. Machine translation: made from the mobile app's and the terminal player's translations where they had the text, and translated by a Fable agent otherwise, then reviewed by a second Fable agent; not yet reviewed by a native speaker. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, the engine's UI: toast.autodj_*, now_playing.autodj*, library.autodj_here, empty.autodj, output.autodj*, autodj.*) were made the same way: the mobile app's words for Auto DJ, Ancora, Segui l’atmosfera, brano di partenza, Soglia di somiglianza, Continuità dei BPM and Mixaggio armonico (its autoDj* keys), translated by a Fable agent otherwise, fitted to en.json's rooms (the notes say where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_it.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
+  "@@note": "Italiano: traduzione automatica, non ancora rivista da un madrelingua. Fatta dalle traduzioni dell'app mobile (mstream_music, lib/l10n/app_it.arb, master bdb174e, GPL-3.0) e del lettore da terminale (mstream-terminal-player, locales/it.yml, main b89ad0a, GPL-3.0-only), dello stesso autore, dove avevano il testo o le parole (termini, registro 'tu', tipografia); il resto lo ha tradotto un agente Fable (Claude), e un secondo agente lo ha riletto. Machine translation: made from the mobile app's and the terminal player's translations where they had the text, and translated by a Fable agent otherwise, then reviewed by a second Fable agent; not yet reviewed by a native speaker. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, the engine's UI: toast.autodj_*, now_playing.autodj*, library.autodj_here, empty.autodj, output.autodj*, autodj.*) were made the same way: the mobile app's words for Auto DJ, Ancora, Segui l’atmosfera, brano di partenza, Soglia di somiglianza, Continuità dei BPM and Mixaggio armonico (its autoDj* keys), translated by a Fable agent otherwise, fitted to en.json's rooms (the notes say where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_it.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_it.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
   "boot.touch_hint": "Tocco impreciso? Tieni un dito sullo schermo.",
   "coach.header_tip": "Consiglio {0} di {1}",
   "coach.header_hint": "tocca e vai avanti",
@@ -77,6 +77,13 @@
   "@toast.autodj_needs_index": {
     "note": "'un trasferimento sulla scheda lo aggiunge' is 336 px in Body, the toast's second line 284: 'lo aggiunge il trasferimento' (the transfer is to the card: library_row.src_transfer)."
   },
+  "toast.autodj_few": {
+    "one": "Solo {0} brano corrisponde: si ripeterà",
+    "other": "Solo {0} brani corrispondono: si ripeteranno"
+  },
+  "toast.autodj_no_close": "Nessuna scelta vicina: un brano qualsiasi tra i filtri",
+  "toast.autodj_plays_once": "Suona una volta, poi valgono i filtri",
+  "toast.autodj_no_mood": "Nessun dato d'atmosfera: sincronizza la scheda da mStream",
   "hud.bluetooth": "Bluetooth: {0}",
   "hud.bluetooth_connecting": "Bluetooth: connessione...",
   "hud.speaker_paused": "Altoparlante in pausa: B riproduce",
@@ -281,6 +288,9 @@
     "other": "{0} di {1} brani"
   },
   "mood.no_albums": "Nessun album corrisponde ai filtri",
+  "mood.smart_filters": "Filtri intelligenti",
+  "mood.any": "Qualsiasi",
+  "mood.no_data": "Nessun dato d'atmosfera",
   "card.another": "Altra scheda SD: riavvio",
   "card.back": "Scheda SD reinserita: riavvio",
   "queue_cap.full": {
@@ -363,6 +373,10 @@
   "empty.nothing_playing_title": "Niente in riproduzione",
   "empty.queue_title": "La tua coda è vuota",
   "empty.pick_in_library": "Scegli album, cartella o brano nella Libreria.",
+  "empty.no_track_fits": "Nessun brano della scheda corrisponde ai filtri",
+  "@empty.no_track_fits": {
+    "note": "'Nessun brano di questa scheda corrisponde ai filtri' is 330 px in Small, the line 304."
+  },
   "empty.open_library": "Apri Libreria",
   "empty.shuffle_all": "Casuale",
   "empty.autodj": "Auto DJ",
@@ -416,6 +430,7 @@
     "note": "The mobile app's words ('{0}% o più simile', 108 px in Small at 75; its '{pct} %' with a space is '{0}%' here, as library_row.tagged writes it) don't fit beside 'Soglia di somiglianza' (166 px in Body, 106 px left), so the value takes the row's second line, in the hint's place."
   },
   "autodj.strictness_sub": "quanto deve somigliare ogni scelta",
+  "autodj.smart_sub": "ogni scelta resta in queste atmosfere",
   "autodj.bpm": "Continuità dei BPM",
   "autodj.bpm_sub": "entro 8 BPM, o metà o doppio",
   "autodj.harmonic": "Mixaggio armonico",
@@ -426,6 +441,19 @@
     "other": "{0} su {1} brani hanno vicini"
   },
   "autodj.status_coverage": "BPM {0}% · tonalità {1}%",
+  "autodj.status_fits": {
+    "one": "{0} su {1} brano corrisponde",
+    "other": "{0} su {1} brani corrispondono"
+  },
+  "autodj.status_coverage_mood": "BPM {0}%, tonalità {1}%, atmosfera {2}%",
+  "@autodj.status_coverage_mood": {
+    "note": "Commas here, not autodj.status_coverage's ' · ': 'BPM {0}% · tonalità {1}% · atmosfera {2}%' is 289 px in Small at 100 %, the line 288. atmosfera: the mobile app's word for the mood (autoDjNoMoodData)."
+  },
+  "autodj.status_few": {
+    "one": "Solo {0} brano corrisponde",
+    "other": "Solo {0} brani corrispondono"
+  },
+  "autodj.status_few_sub": "Si ripeteranno · BPM {0}% · tonalità {1}%",
   "autodj.status_found": {
     "one": "Indice Auto DJ: {0} brano",
     "other": "Indice Auto DJ: {0} brani"
@@ -440,6 +468,10 @@
   "autodj.status_random": "la selezione resta casuale",
   "autodj.status_waits_repeat": "In attesa: Ripeti un brano è attivo",
   "autodj.status_waits_sleep": "In attesa: timer di spegnimento a fine coda",
+  "autodj.status_waits_fit": "In attesa: nessun brano corrisponde ai filtri",
+  "@autodj.status_waits_fit": {
+    "note": "The mobile app's autoDjSeedNoMatch ('Nessun brano corrisponde ai filtri')."
+  },
   "autodj.status_paused": "In pausa: brani non riproducibili",
   "settings.screen_off": "Spegni schermo dopo",
   "settings.screen_off_sub": "si attenua; tocca e torna",

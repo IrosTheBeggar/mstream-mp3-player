@@ -265,15 +265,23 @@ public:
   // minutes idle").
   void note(const char* text, uint32_t ms);
   // `primary`: the row that is the main choice (-1 none); `danger`: the
-  // row in red (-1 none). A touch that starts within Sheet::kSettleMs of
-  // its opening goes nowhere.
+  // row in red (-1 none); `inks`: each detail's colour (nullptr: all dim).
+  // A touch that starts within Sheet::kSettleMs of its opening goes
+  // nowhere.
   void openSheet(OverlayOwner* owner, const char* title, const char* const* rows, int n,
-                 const char* const* details = nullptr, int primary = -1, int danger = -1);
+                 const char* const* details = nullptr, int primary = -1, int danger = -1,
+                 const uint16_t* inks = nullptr);
   // What a row of the sheet just opened shows as its detail, and follows
   // while it is up: the sleep timer's state ("23 min", "Fading", "Off"),
   // shuffle ("On", "Off"), repeat ("Off", "All", "One") or Auto DJ ("On",
-  // "Off", "Waiting", "Paused"), from the snapshot each pass (a change
-  // from the console shows too).
+  // "Off", "Waiting", "Paused"; autoDjDetail()), from the snapshot each
+  // pass (a change from the console shows too).
+  // The playback menu's Auto DJ detail (autodjview::sheetDetail(), frames
+  // dj-menu, dj-menu-wait): with a mood filter on, "On · Relaxed ·
+  // Instrumental" in the accent, cut with "…" to the room beside the row's
+  // label (the sheet never cuts a detail itself); waiting for a track that
+  // fits it, "Waiting" in amber; else the state, dim. Returns the ink.
+  uint16_t autoDjDetail(char* buf, size_t size) const;
   enum class SheetFollow : uint8_t { None, Sleep, Shuffle, Repeat, AutoDj };
   void sheetFollows(int row, SheetFollow what);
   // A tap on row `row` of the sheet just opened doesn't close it: the
@@ -319,9 +327,16 @@ public:
   void autoDjToast(const char* text, bool switchedOn);
   // What Auto DJ's loop step had to say (autodjview::News bits, main.cpp
   // after its step): one toast (autodjview::newsToast(): a note for the
-  // failure pause). While a toast with Undo is up, it waits until that
-  // goes (the failure pause doesn't), and an Undo tapped drops it.
-  void autoDjNews(uint8_t news);
+  // failure pause and for few tracks fitting its mood filter, `few` of
+  // them now: autodjview::fewCount()). While a toast with Undo is up, it
+  // waits until that goes (the failure pause doesn't), and an Undo tapped
+  // drops it (but Few). While the mood filters' editor is up, all of it
+  // waits until the editor goes, the failure pause too (MOOD-FILTERS.md
+  // 4.5); Auto DJ's editor closed on a change drops the filter's own news
+  // that waited (the change says its own, from its count). A Few or Jump
+  // that the toast made of what waited outranks shows once it goes
+  // (autodjview::NewsWait).
+  void autoDjNews(uint8_t news, uint32_t few);
   // The Queue's entries that are Auto DJ's (its DJ marks): never marked as
   // a Library add, nor scrolled to (queueview::AddedMark).
   queueview::QuietKeys djKeys() const;
@@ -357,6 +372,9 @@ private:
   void endPageTouch();
   // The toast's "View": the Queue, at that entry.
   void viewInQueue(uint32_t key);
+  // What is up for Auto DJ's news to wait on (djNews_): the editor, a
+  // toast with Undo, any toast.
+  autodjview::NewsWait::Up djUp() const;
   // Closes a sheet or dialog (telling its owner, if `notify`); true if one was up.
   bool closeModal(bool notify);
   // A modal went: what it covered drawn again (the coach cards if they're
@@ -513,7 +531,7 @@ private:
   uint32_t lastContent_ = 0;
   uint32_t lastUpNext_ = 0;
   uint32_t lastDjAdds_ = 0;  // Auto DJ's appends the last pass saw (no badge flash for them)
-  uint8_t pendingNews_ = 0;  // Auto DJ's news held while an Undo toast is up (autoDjNews())
+  autodjview::NewsWait djNews_;  // Auto DJ's news waiting: for an Undo toast, the editor, one that outranked it
   bool undoSwitchesDjOff_ = false;  // the toast's Undo also switches Auto DJ off (autoDjToast())
   uint32_t badgeUntilMs_ = 0;
   uint32_t nowMs_ = 0;

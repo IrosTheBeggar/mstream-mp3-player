@@ -3,6 +3,7 @@
 
 #include "NvsLayout.h"
 
+#include "MoodFilter.h"
 #include "UiStrings.h"
 
 namespace nvslayout {
@@ -76,16 +77,18 @@ AutoDjSaved autoDjFrom(const AutoDjStored& s) {
     a.matchTempo = (s.match & kAutoDjMatchTempo) != 0;
     a.matchKey = (s.match & kAutoDjMatchKeys) != 0;
   }
+  a.moods = s.haveMoods && moodfilter::valid(s.moods) ? s.moods : 0;
   return a;
 }
 
 AutoDjStored autoDjTo(const AutoDjSaved& a) {
   AutoDjStored s;
-  s.haveOn = s.haveMode = s.haveFloor = s.haveMatch = true;
+  s.haveOn = s.haveMode = s.haveFloor = s.haveMatch = s.haveMoods = true;
   s.on = a.on ? 1 : 0;
   s.mode = a.mode < kAutoDjModes ? a.mode : 0;
   s.floor = autoDjFloorValid(a.floorPct) ? a.floorPct : kAutoDjFloorMin;
   s.match = static_cast<uint8_t>((a.matchTempo ? kAutoDjMatchTempo : 0) | (a.matchKey ? kAutoDjMatchKeys : 0));
+  s.moods = moodfilter::valid(a.moods) ? a.moods : 0;
   return s;
 }
 

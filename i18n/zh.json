@@ -1,7 +1,7 @@
 {
   "@@locale": "zh",
   "@@autonym": "中文",
-  "@@note": "Simplified Chinese, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_zh.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/zh.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words and register are kept: informal 你, 曲目 for a track counted with 首, 曲库 for the Library, 队列, 艺术家, 专辑, 群星, and a space between Latin letters or digits and hanzi; their fullwidth punctuation is written as the ASCII signs, 、 and 。, which is what the device can draw), and translated by a Fable agent (Claude) otherwise. A machine translation, reviewed by a second Fable agent, not yet by a native speaker: a review as a pull request on this file is welcome. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_zh.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
+  "@@note": "Simplified Chinese, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_zh.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/zh.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words and register are kept: informal 你, 曲目 for a track counted with 首, 曲库 for the Library, 队列, 艺术家, 专辑, 群星, and a space between Latin letters or digits and hanzi; their fullwidth punctuation is written as the ASCII signs, 、 and 。, which is what the device can draw), and translated by a Fable agent (Claude) otherwise. A machine translation, reviewed by a second Fable agent, not yet by a native speaker: a review as a pull request on this file is welcome. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_zh.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_zh.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
   "boot.touch_hint": "触摸不灵? 长按屏幕。",
   "coach.header_tip": "提示 {0} / {1}",
   "coach.header_hint": "点一下继续",
@@ -82,6 +82,12 @@
   "toast.autodj_started": "Auto DJ: {0}",
   "toast.autodj_no_start": "没找到有相似曲目的曲目: 请再试一次",
   "toast.autodj_needs_index": "需要 Auto DJ 索引: 传输到存储卡时会生成",
+  "toast.autodj_few": {
+    "other": "只有 {0} 首符合筛选条件: 将会重复"
+  },
+  "toast.autodj_no_close": "没有相近的曲目: 改选任一符合条件的曲目",
+  "toast.autodj_plays_once": "只播放这一次, 之后按筛选条件选曲",
+  "toast.autodj_no_mood": "无氛围数据: 请从 mStream 同步这张存储卡",
   "hud.bluetooth": "蓝牙: {0}",
   "@hud.bluetooth": {
     "note": "'蓝牙' is the universal Chinese name for Bluetooth (phones, headphones); neither app has the word."
@@ -283,6 +289,9 @@
     "other": "{0} / {1} 首"
   },
   "mood.no_albums": "没有符合筛选条件的专辑",
+  "mood.smart_filters": "智能筛选",
+  "mood.any": "不限",
+  "mood.no_data": "无氛围数据",
   "card.another": "换了存储卡: 正在重启",
   "card.back": "存储卡已放回: 正在重启",
   "queue_cap.full": {
@@ -363,6 +372,7 @@
   "empty.nothing_playing_title": "没有播放内容",
   "empty.queue_title": "你的队列为空",
   "empty.pick_in_library": "在曲库中选专辑、文件夹或曲目。",
+  "empty.no_track_fits": "这张存储卡上没有符合筛选条件的曲目",
   "empty.open_library": "打开曲库",
   "empty.shuffle_all": "随机播放",
   "@empty.shuffle_all": {
@@ -419,6 +429,7 @@
   "autodj.strictness": "相似度门槛",
   "autodj.strictness_value": "{0}% 或更相似",
   "autodj.strictness_sub": "选曲至少要有多相似",
+  "autodj.smart_sub": "每首选曲都在这些氛围之内",
   "autodj.bpm": "BPM 连贯性",
   "autodj.bpm_sub": "相差 8 BPM 以内, 或半速/倍速",
   "autodj.harmonic": "和声混音",
@@ -428,6 +439,14 @@
     "other": "{0} / {1} 首有相似曲目"
   },
   "autodj.status_coverage": "BPM {0}% · 调性 {1}%",
+  "autodj.status_fits": {
+    "other": "{0} / {1} 首符合筛选条件"
+  },
+  "autodj.status_coverage_mood": "BPM {0}% · 调性 {1}% · 氛围 {2}%",
+  "autodj.status_few": {
+    "other": "只有 {0} 首符合筛选条件"
+  },
+  "autodj.status_few_sub": "将会重复 · BPM {0}% · 调性 {1}%",
   "autodj.status_found": {
     "other": "Auto DJ 索引: {0} 首曲目"
   },
@@ -441,6 +460,10 @@
   "autodj.status_random": "选曲随机",
   "autodj.status_waits_repeat": "等待中: 单曲循环已开启",
   "autodj.status_waits_sleep": "等待中: 睡眠定时器设为播完队列",
+  "autodj.status_waits_fit": "等待中: 没有符合筛选条件的曲目",
+  "@autodj.status_waits_fit": {
+    "note": "The mobile app's autoDjSeedNoMatch ('没有符合筛选条件的歌曲'), with 曲目 for 歌曲 as everywhere here."
+  },
   "autodj.status_paused": "已暂停: 曲目无法播放",
   "settings.screen_off": "自动熄屏",
   "@settings.screen_off": {

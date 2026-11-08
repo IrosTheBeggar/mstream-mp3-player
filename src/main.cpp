@@ -991,6 +991,14 @@ struct MainUiHost : ui::UiHost {
   bool autoDjSetMode(autodj::Mode m) override { return autoDj && autoDj->setMode(m); }
   bool autoDjSetFloor(uint8_t pct) override { return autoDj && autoDj->setFloor(pct); }
   bool autoDjSetMatch(bool tempo, bool key) override { return autoDj && autoDj->setMatch(tempo, key); }
+  uint32_t autoDjSetMoods(uint16_t q) override {
+    if (!autoDj) return 0;
+    autoDj->setMoods(q);  // (false: as it was; its count stands)
+    return autoDj->moodFit();
+  }
+  void autoDjMoodSettled() override {
+    if (autoDj) autoDj->moodSettled();
+  }
   autodjview::Started autoDjStart() override {
     if (!autoDj) return autodjview::Started::NoIndex;  // (no PSRAM for it at boot)
     if (frozen.on) return autodjview::Started::Refused;
@@ -3179,9 +3187,15 @@ static void stepAutoDj(uint32_t now) {
   // Its pick took the listener's undo: an Undo toast still up goes.
   if (autoDj->takeUndoDropped() && userInterface) userInterface->queueUndoDropped();
   // What it has to say on the screen (a cued pick, the failure pause, a
-  // seed with no neighbours, picks at random): a toast.
+  // seed with no neighbours, picks at random; a mood filter's few tracks,
+  // a pick that plays once, no close match): a toast, with the count of
+  // the tracks that fit as it is now.
   const uint8_t news = autoDj->takeNews();
-  if (news && userInterface) userInterface->autoDjNews(news);
+  if (news && userInterface) {
+    autodjview::State v;
+    autoDj->view(&v);
+    userInterface->autoDjNews(news, autodjview::fewCount(v));
+  }
 }
 
 // ---- the card worker (docs/METADATA.md 3.3.4, 3.4.2) ----
