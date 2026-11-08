@@ -307,7 +307,7 @@
   },
   "toast.card_found": "Card found: starting again",
   "@toast.card_found": {
-    "context": "Toast after 'Try again' found a microSD card: the player restarts to use it.",
+    "context": "Toast when the player restarts to use a microSD card: 'Try again' found one, or it failed a read at startup and only a restart asks again.",
     "room": {
       "font": "Body",
       "px": 284,
@@ -2538,6 +2538,222 @@
     },
     "bytes": 128
   },
+  "mood.filters": "Filters",
+  "@mood.filters": {
+    "context": "The Albums list's first row on a card with mood data (docs/MOOD-FILTERS.md 7.2), with no filter on: after a funnel, over the album count, a chevron at its right; a tap opens the mood filters' editor. 204 px beside the A-Z rail (the row less 80), more without it. The mobile app's word (moodFilters).",
+    "room": {
+      "font": "Body",
+      "px": 204,
+      "const": "uitext::kFilterRowTitleW"
+    }
+  },
+  "mood.happy": "Happy",
+  "@mood.happy": {
+    "context": "The mood filters' editor (docs/MOOD-FILTERS.md 7.1), opened from the Albums list's first row: a grid of four rows, every choice one tap away; also the first row's summary of what is set (\"Relaxed · Instrumental\"). Its first row, how the music feels: Happy | Neutral | Sad in one tray, pick one (a second tap lets it go). Body, else Small for the whole grid when a row's words don't fit it (Polish, Russian). A cell's width follows its row's words (equal, else proportional, else scaled to the row: filtergrid::layout()); test_ui_library measures every language's real cells. The mobile app's word (moodHappy).",
+    "room": {
+      "font": "Body",
+      "else": "Small",
+      "px": 116,
+      "const": "uitext::kFilterScaleWordW"
+    }
+  },
+  "mood.neutral": "Neutral",
+  "@mood.neutral": {
+    "context": "The mood filters' editor (docs/MOOD-FILTERS.md 7.1), opened from the Albums list's first row: a grid of four rows, every choice one tap away; also the first row's summary of what is set (\"Relaxed · Instrumental\"). The middle of its first two rows (Happy | Neutral | Sad; Relaxed | Neutral | Aggressive): neither, in both. Body, else Small for the whole grid when a row's words don't fit it (Polish, Russian). A cell's width follows its row's words (equal, else proportional, else scaled to the row: filtergrid::layout()); test_ui_library measures every language's real cells. The mobile app's word (moodNeutral).",
+    "room": {
+      "font": "Body",
+      "else": "Small",
+      "px": 116,
+      "const": "uitext::kFilterScaleWordW"
+    }
+  },
+  "mood.sad": "Sad",
+  "@mood.sad": {
+    "context": "The mood filters' editor (docs/MOOD-FILTERS.md 7.1), opened from the Albums list's first row: a grid of four rows, every choice one tap away; also the first row's summary of what is set (\"Relaxed · Instrumental\"). Its first row, how the music feels: Happy | Neutral | Sad in one tray, pick one (a second tap lets it go). Body, else Small for the whole grid when a row's words don't fit it (Polish, Russian). A cell's width follows its row's words (equal, else proportional, else scaled to the row: filtergrid::layout()); test_ui_library measures every language's real cells. The mobile app's word (moodSad).",
+    "room": {
+      "font": "Body",
+      "else": "Small",
+      "px": 116,
+      "const": "uitext::kFilterScaleWordW"
+    }
+  },
+  "mood.relaxed": "Relaxed",
+  "@mood.relaxed": {
+    "context": "The mood filters' editor (docs/MOOD-FILTERS.md 7.1), opened from the Albums list's first row: a grid of four rows, every choice one tap away; also the first row's summary of what is set (\"Relaxed · Instrumental\"). Its second row, how calm: Relaxed | Neutral | Aggressive in one tray, pick one (a second tap lets it go). Body, else Small for the whole grid when a row's words don't fit it (Polish, Russian). A cell's width follows its row's words (equal, else proportional, else scaled to the row: filtergrid::layout()); test_ui_library measures every language's real cells. The mobile app's word (moodRelaxed).",
+    "room": {
+      "font": "Body",
+      "else": "Small",
+      "px": 116,
+      "const": "uitext::kFilterScaleWordW"
+    }
+  },
+  "mood.aggressive": "Aggressive",
+  "@mood.aggressive": {
+    "context": "The mood filters' editor (docs/MOOD-FILTERS.md 7.1), opened from the Albums list's first row: a grid of four rows, every choice one tap away; also the first row's summary of what is set (\"Relaxed · Instrumental\"). Its second row, how calm: Relaxed | Neutral | Aggressive in one tray, pick one (a second tap lets it go). Body, else Small for the whole grid when a row's words don't fit it (Polish, Russian). A cell's width follows its row's words (equal, else proportional, else scaled to the row: filtergrid::layout()); test_ui_library measures every language's real cells. The mobile app's word (moodAggressive).",
+    "room": {
+      "font": "Body",
+      "else": "Small",
+      "px": 116,
+      "const": "uitext::kFilterScaleWordW"
+    }
+  },
+  "mood.instrumental": "Instrumental",
+  "@mood.instrumental": {
+    "context": "The mood filters' editor (docs/MOOD-FILTERS.md 7.1), opened from the Albums list's first row: a grid of four rows, every choice one tap away; also the first row's summary of what is set (\"Relaxed · Instrumental\"). Its third row: Instrumental | Vocals in one tray, pick one (a second tap lets it go), then the level cell. Body, else Small for the whole grid when a row's words don't fit it (Polish, Russian). A cell's width follows its row's words (equal, else proportional, else scaled to the row: filtergrid::layout()); test_ui_library measures every language's real cells. The mobile app's word (moodInstrumental).",
+    "room": {
+      "font": "Body",
+      "else": "Small",
+      "px": 140,
+      "const": "uitext::kFilterVoiceWordW"
+    }
+  },
+  "mood.vocals": "Vocals",
+  "@mood.vocals": {
+    "context": "The mood filters' editor (docs/MOOD-FILTERS.md 7.1), opened from the Albums list's first row: a grid of four rows, every choice one tap away; also the first row's summary of what is set (\"Relaxed · Instrumental\"). Its third row: Instrumental | Vocals in one tray, pick one (a second tap lets it go), then the level cell. Body, else Small for the whole grid when a row's words don't fit it (Polish, Russian). A cell's width follows its row's words (equal, else proportional, else scaled to the row: filtergrid::layout()); test_ui_library measures every language's real cells. The mobile app's word (moodVocals).",
+    "room": {
+      "font": "Body",
+      "else": "Small",
+      "px": 140,
+      "const": "uitext::kFilterVoiceWordW"
+    }
+  },
+  "mood.acoustic": "Acoustic",
+  "@mood.acoustic": {
+    "context": "The mood filters' editor (docs/MOOD-FILTERS.md 7.1), opened from the Albums list's first row: a grid of four rows, every choice one tap away; also the first row's summary of what is set (\"Relaxed · Instrumental\"). Its fourth row: Acoustic, Party, Danceable, three round chips, pick any (all must hold). In Small, a word over 80 px with a space goes on two lines in its chip, broken there (Russian's 'Для / вечеринки'). Body, else Small for the whole grid when a row's words don't fit it (Polish, Russian). A cell's width follows its row's words (equal, else proportional, else scaled to the row: filtergrid::layout()); test_ui_library measures every language's real cells. The mobile app's word (moodAcoustic).",
+    "room": {
+      "font": "Body",
+      "else": "Small",
+      "px": 136,
+      "const": "uitext::kFilterTagWordW"
+    }
+  },
+  "mood.party": "Party",
+  "@mood.party": {
+    "context": "The mood filters' editor (docs/MOOD-FILTERS.md 7.1), opened from the Albums list's first row: a grid of four rows, every choice one tap away; also the first row's summary of what is set (\"Relaxed · Instrumental\"). Its fourth row: Acoustic, Party, Danceable, three round chips, pick any (all must hold). In Small, a word over 80 px with a space goes on two lines in its chip, broken there (Russian's 'Для / вечеринки'). Body, else Small for the whole grid when a row's words don't fit it (Polish, Russian). A cell's width follows its row's words (equal, else proportional, else scaled to the row: filtergrid::layout()); test_ui_library measures every language's real cells. The mobile app's word (moodParty).",
+    "room": {
+      "font": "Body",
+      "else": "Small",
+      "px": 136,
+      "const": "uitext::kFilterTagWordW"
+    }
+  },
+  "mood.danceable": "Danceable",
+  "@mood.danceable": {
+    "context": "The mood filters' editor (docs/MOOD-FILTERS.md 7.1), opened from the Albums list's first row: a grid of four rows, every choice one tap away; also the first row's summary of what is set (\"Relaxed · Instrumental\"). Its fourth row: Acoustic, Party, Danceable, three round chips, pick any (all must hold). In Small, a word over 80 px with a space goes on two lines in its chip, broken there (Russian's 'Для / вечеринки'). Body, else Small for the whole grid when a row's words don't fit it (Polish, Russian). A cell's width follows its row's words (equal, else proportional, else scaled to the row: filtergrid::layout()); test_ui_library measures every language's real cells. The mobile app's word (moodDanceable).",
+    "room": {
+      "font": "Body",
+      "else": "Small",
+      "px": 136,
+      "const": "uitext::kFilterTagWordW"
+    }
+  },
+  "mood.strict": "Strict",
+  "@mood.strict": {
+    "context": "The mood filters' editor (docs/MOOD-FILTERS.md 7.1), opened from the Albums list's first row: a grid of four rows, every choice one tap away; also the first row's summary of what is set (\"Relaxed · Instrumental\"). The level cell, at the right of its third row: how sure a mood must be. A tap cycles Strict, Standard (the default), Loose; three dots under the word say which. The summary ends with it when it isn't Standard. The mobile app's word (moodStrict).",
+    "room": {
+      "font": "Small",
+      "px": 93,
+      "const": "uitext::kFilterLevelWordW"
+    }
+  },
+  "mood.standard": "Standard",
+  "@mood.standard": {
+    "context": "The mood filters' editor (docs/MOOD-FILTERS.md 7.1), opened from the Albums list's first row: a grid of four rows, every choice one tap away; also the first row's summary of what is set (\"Relaxed · Instrumental\"). The level cell, at the right of its third row: how sure a mood must be. A tap cycles Strict, Standard (the default), Loose; three dots under the word say which. The summary ends with it when it isn't Standard. The mobile app's word (moodStandard).",
+    "room": {
+      "font": "Small",
+      "px": 93,
+      "const": "uitext::kFilterLevelWordW"
+    }
+  },
+  "mood.loose": "Loose",
+  "@mood.loose": {
+    "context": "The mood filters' editor (docs/MOOD-FILTERS.md 7.1), opened from the Albums list's first row: a grid of four rows, every choice one tap away; also the first row's summary of what is set (\"Relaxed · Instrumental\"). The level cell, at the right of its third row: how sure a mood must be. A tap cycles Strict, Standard (the default), Loose; three dots under the word say which. The summary ends with it when it isn't Standard. The mobile app's word (moodLoose).",
+    "room": {
+      "font": "Small",
+      "px": 93,
+      "const": "uitext::kFilterLevelWordW"
+    }
+  },
+  "mood.clear": "Clear",
+  "@mood.clear": {
+    "context": "The mood filters' editor's top-left pill: every choice goes, and the level back to Standard; the editor stays open. Its pill is the word and 24 px; the count is centred in what it leaves before the cross. The mobile app's word (clear).",
+    "room": {
+      "font": "Small",
+      "px": 84,
+      "const": "uitext::kFilterClearW"
+    }
+  },
+  "mood.albums_of": {
+    "one": "{0} of {1} album",
+    "other": "{0} of {1} albums"
+  },
+  "@mood.albums_of": {
+    "context": "How many albums fit the mood filters, of the list's: the Albums list's first row, under what is set (beside the cross: 160 px with the A-Z rail, more without it), and the mood filters' editor's count, between Clear and the cross (178 px beside English's Clear: another language's leaves it more or less). Where it doesn't fit, queue.summary_position (\"312 of 1,741\") is drawn instead.",
+    "room": [
+      {
+        "font": "Small",
+        "px": 160,
+        "optional": true,
+        "const": "uitext::kFilterRowCountW"
+      },
+      {
+        "font": "Small",
+        "px": 178,
+        "optional": true,
+        "const": "uitext::kFilterCountW"
+      }
+    ],
+    "placeholders": {
+      "0": {
+        "means": "the albums that fit",
+        "type": "grouped",
+        "worst": 9999
+      },
+      "1": {
+        "means": "the albums in the list",
+        "type": "grouped",
+        "worst": 9999
+      }
+    },
+    "count": "1",
+    "bytes": 64
+  },
+  "mood.tracks_of": {
+    "one": "{0} of {1} track",
+    "other": "{0} of {1} tracks"
+  },
+  "@mood.tracks_of": {
+    "context": "The mood filters' editor's count when it is opened from Output > Auto DJ (Smart filters): how many tracks fit, of the card's, between Clear and the cross (178 px beside English's Clear: another language's leaves it more or less). Where it doesn't fit, queue.summary_position (\"1,204 of 19,412\") is drawn instead.",
+    "room": {
+      "font": "Small",
+      "px": 178,
+      "optional": true,
+      "const": "uitext::kFilterCountW"
+    },
+    "placeholders": {
+      "0": {
+        "means": "the tracks that fit",
+        "type": "grouped",
+        "worst": 99999
+      },
+      "1": {
+        "means": "the tracks on the card",
+        "type": "grouped",
+        "worst": 99999
+      }
+    },
+    "count": "1",
+    "bytes": 64
+  },
+  "mood.no_albums": "No albums match these filters",
+  "@mood.no_albums": {
+    "context": "The Albums list's line under its first row when no album fits the mood filters (centred); the row above it still opens the editor and clears the filter.",
+    "room": {
+      "font": "Body",
+      "px": 300,
+      "const": "uitext::kListLineW"
+    }
+  },
   "card.another": "Another card: restarting",
   "@card.another": {
     "context": "Toast before the player restarts because another microSD card was put in.",
@@ -3305,7 +3521,7 @@
   },
   "card.none_still": "Still no card: is it all the way in?",
   "@card.none_still": {
-    "context": "Note after Try again still finds no card at all (cardformat Unreadable): 'what: what to do'.",
+    "context": "Note after Try again still finds no card at all (cardformat Unreadable): 'what: what to do'. Also the note when a track can't start because the card stopped answering while the player was on (pulled, or loose): the player holds at that track and tries it again.",
     "room": {
       "font": "Body",
       "px": 284,
@@ -3883,7 +4099,7 @@
   },
   "autodj.status_unreadable": "Can't read the Auto DJ index",
   "@autodj.status_unreadable": {
-    "context": "The status row's first line when a read of the index failed (the file the card's root names isn't on it, the card failed every try at opening it, no memory to read the root after the card was mounted again): tried again when the card is mounted again, or at the next boot. As card.unknown_title says it of a card.",
+    "context": "The status row's first line when a read of the index failed (the file the card's root names isn't on it, the card failed every try at opening it or every read of the root, no memory to read the root): tried again when the card is mounted again, or at the next boot. As card.unknown_title says it of a card.",
     "room": {
       "font": "Small",
       "px": 288,
@@ -4889,6 +5105,17 @@
   "library_row.rescan_no_card": "Tags are read on a card only",
   "@library_row.rescan_no_card": {
     "context": "Note when Rescan is tapped with the music on the internal flash.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "bytes": 128
+  },
+  "library_row.rescan_unread": "Card read failed at startup: restart to try again",
+  "@library_row.rescan_unread": {
+    "context": "Note when Rescan is tapped after a startup at which the microSD card failed the reads of its transfer data: no card job runs until a restart reads them again.",
     "room": {
       "font": "Body",
       "px": 284,

@@ -119,6 +119,11 @@ bool Waves::take(const cardroot::Root& root) {
 void Waves::begin() {
   if (sectordisk::installed()) remountsSeen_ = sectordisk::guard().remounts;
   const cardroot::Root* root = library_.records() ? library_.root() : nullptr;
+  if (root && root->readFailed()) {
+    state_.begin(false);
+    rootFailed();
+    return;
+  }
   const bool named = root && take(*root);
   state_.begin(named);
   if (named) {
@@ -159,29 +164,74 @@ void Waves::loop(uint32_t nowMs) {
 // file is open, so there is nothing to reopen: the root read again says which
 // file it is now, and whatever was known of the last one goes. A job under way
 // isn't touched: its answer comes in and is dropped (WaveState::generation()).
-void Waves::remount(bool cardHeld) {
-  if (!sectordisk::installed() || cardHeld) return;
-  const uint32_t n = sectordisk::guard().remounts;
-  if (n == remountsSeen_) return;
-  remountsSeen_ = n;
-  ++remounts_;
+// Soon after a read of the root the card failed, a remount is that read's echo
+// (autodj::OpenTries). And the same again for that read, when its wait is over.
+void Waves::remount(bool cardHeld, bool retryHeld) {
+  if (cardHeld || silenced_) return;
+  const uint32_t nowMs = static_cast<uint32_t>(millis());
+  bool moved = false;
+  if (sectordisk::installed()) {
+    const sectordisk::Guard g = sectordisk::guard();
+    moved = g.remounts != remountsSeen_;
+    if (moved) {
+      remountsSeen_ = g.remounts;
+      ++remounts_;
+    }
+    if (moved && g.tooSilent) {
+      // Read after read that left the card silent, whoever's, each a cut, and a track's
+      // read here can be one (CachedDrive::tooSilent()). Nothing here is worth another.
+      silenced_ = true;
+      rootAgain_ = false;
+      whyNone_ = "the card keeps going silent";
+      state_.remounted(false);
+      Serial.println("[wave] the card keeps going silent: plain lines until the next boot");
+      return;
+    }
+  }
+  const bool news = moved && rootTries_.remounted(nowMs);
+  const bool due = !moved && rootAgain_ && !retryHeld && rootTries_.due(nowMs);
+  if (!news && !due) return;
   cardroot::Root* root = library_.records() && library_.fatfs() ? psramNew<cardroot::Root>() : nullptr;
   auto* scratch = root ? static_cast<uint8_t*>(psramAlloc(kRootScratch)) : nullptr;
-  bool named = false;
+  bool named = false, failed = false;
   if (scratch) {
     cardroot::read(*library_.fatfs(), scratch, kRootScratch, root);
-    named = take(*root);
+    failed = root->readFailed();
+    named = !failed && take(*root);
   } else {
-    whyNone_ = library_.records() ? "no PSRAM to read the root after a remount" : "no card records";
+    whyNone_ = library_.records() ? "no PSRAM to read the root" : "no card records";
   }
   psramFree(scratch);
   psramDelete(root);
+  if (failed) {
+    library_.fatfs()->echoNow();
+    if (news) state_.remounted(false);  // (whatever was known of the last one goes, as below)
+    rootFailed();
+    return;
+  }
+  rootAgain_ = false;
+  rootTries_.reset();
   state_.remounted(named);
+  const char* how = news ? "the card was mounted again" : "the root tried again";
   if (named) {
-    Serial.printf("[wave] the card was mounted again: index %s: named by the root (generation %lu)\n", path_,
+    Serial.printf("[wave] %s: index %s: named by the root (generation %lu)\n", how, path_,
                   (unsigned long)entry_.generation);
   } else {
-    Serial.printf("[wave] the card was mounted again: no index now (%s)\n", whyNone_);
+    Serial.printf("[wave] %s: no index now (%s)\n", how, whyNone_);
+  }
+}
+
+// None on a timer when the boot failed it and the card jobs run, as Auto DJ's.
+void Waves::rootFailed() {
+  rootAgain_ = rootTries_.failed(autodj::OpenTry::Card, static_cast<uint32_t>(millis())) && !library_.jobsOnUnreadRoot();
+  if (rootAgain_) {
+    whyNone_ = "the card failed reading its root: tried again soon";
+    Serial.printf("[wave] the card's root: a read failed: again in %lu s, %u of %u\n",
+                  (unsigned long)(rootTries_.lastWaitMs() / 1000), (unsigned)rootTries_.used(),
+                  (unsigned)autodj::OpenTries::kAgain);
+  } else {
+    whyNone_ = "the card failed every read of its root";
+    Serial.println("[wave] the card's root: every read failed: plain lines until a remount or the next boot");
   }
 }
 

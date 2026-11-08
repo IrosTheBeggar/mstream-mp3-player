@@ -750,11 +750,11 @@ bool QueuePage::emptyState(EmptyState& e) {
     return true;
   }
   e.icon = &icons::kQueue;
+  const AppState& s = ui_.state();
   e.title = tr(S::empty_queue_title);
-  e.lines = tr(S::empty_pick_in_library);
+  e.lines = tr(s.queueUnread ? S::library_row_rescan_unread : S::empty_pick_in_library);
   e.buttons[0] = tr(S::empty_open_library);
   e.buttonIcons[0] = &icons::kLibrary;
-  const AppState& s = ui_.state();
   if (autodjview::emptyButton(s.autoDj, s.libraryTracks)) {
     // A usable Auto DJ index: Auto DJ in Shuffle all's place (D4).
     e.buttons[1] = tr(S::empty_autodj);

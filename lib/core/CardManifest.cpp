@@ -22,7 +22,9 @@ Why nextString(Stream& strs, const Section& sec, uint32_t off, char* out, size_t
   if (off == 0) return Why::Ok;
   if (off >= sec.bytes) return Why::String;
   if (sec.offset + off < strs.position()) return Why::StringOrder;
-  if (!strs.skipTo(sec.offset + off) || !strs.readString(out, cap, len)) return Why::String;
+  if (!strs.skipTo(sec.offset + off) || !strs.readString(out, cap, len)) {
+    return strs.readFailed() ? Why::Io : Why::String;
+  }
   return Why::Ok;
 }
 
@@ -111,7 +113,7 @@ Why Manifest::open(Source& src, uint8_t* scratch, uint32_t scratchBytes) {
   ls.begin(&src, libr.offset, libr.offset + libr.bytes, scratch + part, part);
   ss.begin(&src, strs.offset, strs.offset + strs.bytes, scratch + 2 * part, part);
   uint8_t b;
-  if (strs.bytes == 0 || !ss.readByte(&b) || b != 0) return Why::String;
+  if (strs.bytes == 0 || !ss.readByte(&b) || b != 0) return ss.readFailed() ? Why::Io : Why::String;
   if ((w = nextString(ss, strs, producer, producer_, sizeof(producer_), nullptr)) != Why::Ok) return w;
   if ((w = nextString(ss, strs, revision, serverRevision_, sizeof(serverRevision_), nullptr)) != Why::Ok) return w;
 
@@ -315,7 +317,7 @@ Why Plan::open(Source& src, uint8_t* scratch, uint32_t scratchBytes) {
   ps.begin(&src, pend.offset, pend.offset + pend.bytes, scratch, part);
   ss.begin(&src, strs.offset, strs.offset + strs.bytes, scratch + part, part);
   uint8_t b;
-  if (strs.bytes == 0 || !ss.readByte(&b) || b != 0) return Why::String;
+  if (strs.bytes == 0 || !ss.readByte(&b) || b != 0) return ss.readFailed() ? Why::Io : Why::String;
   char prev[kMaxRelPath + 2], path[kMaxRelPath + 2];
   size_t prevLen = 0;
   int prevRank = -1;

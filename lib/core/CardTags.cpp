@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+#include "MoodFilter.h"  // tailValid: which tails a reader takes and a writer writes (2.6.4)
+
 namespace cardcontract {
 namespace mptg {
 
@@ -210,6 +212,7 @@ Why Walker::begin(Source& src, uint32_t uses, uint8_t* scratch, uint32_t scratch
   nextRecord_ = 0;
   curRecord_ = kNoParent;
   haveLook_ = false;
+  lookHasTail_ = hasTail_ = false;
   depth_ = 0;
   pathLen_ = folderLen_ = nameAt_ = 0;
   path_[0] = 0;
@@ -270,11 +273,8 @@ Why Walker::begin(Source& src, uint32_t uses, uint8_t* scratch, uint32_t scratch
 
   // STRS is read as two runs: the producer and the folder names, then from
   // the first record's name on, the records' names and runs (2.4.4).
-  uint8_t row[kRecsStride];
   if (info_.recordCount > 0) {
-    if (!recs_.read(row, kRecsStride) || !recs_.skipTo(recs_.position() + recs.stride - kRecsStride))
-      return why_ = Why::Io;
-    decodeRecord(row, &look_);
+    if (!readLook()) return why_ = Why::Io;
     if (look_.name == 0) return why_ = Why::Name;
     if (look_.name >= strs.bytes) return why_ = Why::String;
     strsSplit_ = look_.name;
@@ -306,17 +306,28 @@ Why Walker::begin(Source& src, uint32_t uses, uint8_t* scratch, uint32_t scratch
   return why_;
 }
 
+// The next RECS row into the lookahead: its 72 bytes, and its mood tail when
+// the stride has one and moodfilter::tailValid takes it (a tail refused is
+// no tail, never a fault: 2.6.4); the rest of a longer row passed (2.4.5).
+bool Walker::readLook() {
+  const Section& recs = c_.section(kSecRecs);
+  uint8_t row[kRecsMoodStride];
+  const uint32_t take = recs.stride >= kRecsMoodStride ? kRecsMoodStride : kRecsStride;
+  if (!recs_.read(row, take) || !recs_.skipTo(recs_.position() + recs.stride - take)) return false;
+  decodeRecord(row, &look_);
+  lookHasTail_ = take == kRecsMoodStride && moodfilter::tailValid(row + kRecsStride);
+  if (lookHasTail_) std::memcpy(lookTail_, row + kRecsStride, kMoodTailBytes);
+  return true;
+}
+
 bool Walker::loadRecord() {
   haveLook_ = false;
   if (nextRecord_ >= info_.recordCount) return true;
-  const Section& recs = c_.section(kSecRecs);
   const Section& strs = c_.section(kSecStrs);
-  uint8_t row[kRecsStride];
-  if (!recs_.read(row, kRecsStride) || !recs_.skipTo(recs_.position() + recs.stride - kRecsStride)) {
+  if (!readLook()) {
     fail(Why::Io);
     return false;
   }
-  decodeRecord(row, &look_);
   if (look_.folder >= info_.folderCount) return fail(Why::RecsFolder), false;
   if (look_.folder < rec_.folder) return fail(Why::RecsOrder), false;
   if (look_.name == 0) return fail(Why::Name), false;
@@ -401,6 +412,8 @@ Walker::Step Walker::enterFolder() {
 Walker::Step Walker::emitRecord() {
   const Section& strs = c_.section(kSecStrs);
   rec_ = look_;
+  hasTail_ = lookHasTail_;
+  if (hasTail_) std::memcpy(tail_, lookTail_, kMoodTailBytes);
   const size_t at = folderLen_ ? folderLen_ + 1 : 0;
   if (at + lookNameLen_ > kMaxRelPath) return fail(Why::PathLength);
   if (folderLen_) path_[folderLen_] = '/';
@@ -541,6 +554,17 @@ bool File::record(uint32_t i, Record* out) const {
   uint8_t row[kRecsStride];
   if (!c_.source()->read(s.offset + i * s.stride, row, kRecsStride)) return false;
   decodeRecord(row, out);
+  return true;
+}
+
+bool File::moodTail(uint32_t i, uint8_t out[kMoodTailBytes]) const {
+  std::memset(out, 0, kMoodTailBytes);
+  const Section& s = c_.section(kSecRecs);
+  if (i >= s.count || s.stride < kRecsMoodStride) return false;
+  uint8_t t[kMoodTailBytes];
+  if (!c_.source()->read(s.offset + i * s.stride + kRecsStride, t, kMoodTailBytes) || !moodfilter::tailValid(t))
+    return false;
+  std::memcpy(out, t, kMoodTailBytes);
   return true;
 }
 
@@ -777,13 +801,22 @@ bool write(Sink& out, const Meta& meta, const RecordIn* recs, size_t n, const Fo
   };
   std::vector<R> order;
   order.reserve(n);
+  bool moods = false;
   for (size_t i = 0; i < n; ++i) {
     const std::string p = recs[i].path;
     order.push_back(R{i, findex[parentOf(p)], lastName(p)});
     for (uint32_t f = 0; f < kRunFields; ++f)
       if (recs[i].fields[f] && !fieldConforms(f, recs[i].fields[f])) return bad("a field breaks 2.3.6");
     if (recs[i].ledger && meta.source == kSourceDevice) return bad("a ledger row in a source 1 file");
+    if (recs[i].moods && !moodfilter::tailValid(recs[i].moods)) return bad("a mood tail a reader refuses (2.6.4)");
+    moods = moods || recs[i].moods != nullptr;
   }
+  // Rows of 80 bytes when a record has a mood tail, else 72: a card with no
+  // moods stays byte for byte (2.6.4). The minor follows: 1 (or a later
+  // one) with tails, else 0 (2.4.5).
+  if (moods && meta.minor == 0) return bad("mood tails with minor 0 (2.4.5)");
+  if (!moods && meta.minor != 0) return bad("a nonzero minor with no mood tails (2.4.5)");
+  const uint32_t stride = moods ? kRecsMoodStride : kRecsStride;
   std::sort(order.begin(), order.end(), [](const R& a, const R& b) {
     if (a.folder != b.folder) return a.folder < b.folder;
     return compareNames(a.name.data(), a.name.size(), b.name.data(), b.name.size()) < 0;
@@ -804,7 +837,7 @@ bool write(Sink& out, const Meta& meta, const RecordIn* recs, size_t n, const Fo
     f.firstRecord = firstRecord[i];
     encodeFolder(f, fold.data() + i * kFoldStride);
   }
-  std::vector<uint8_t> recsBytes(order.size() * kRecsStride);
+  std::vector<uint8_t> recsBytes(order.size() * stride);
   std::vector<std::pair<uint64_t, uint32_t>> hidx;
   std::set<std::string> albums, artists;
   uint8_t run[kRunMax];
@@ -816,7 +849,8 @@ bool write(Sink& out, const Meta& meta, const RecordIn* recs, size_t n, const Fo
     const size_t runLen = encodeRun(in.fields, run, sizeof(run));
     r.strings = runLen ? static_cast<uint32_t>(strs.bytes.size()) : 0;
     strs.bytes.insert(strs.bytes.end(), run, run + runLen);
-    encodeRecord(r, recsBytes.data() + k * kRecsStride);
+    encodeRecord(r, recsBytes.data() + k * stride);
+    if (in.moods) std::memcpy(recsBytes.data() + k * stride + kRecsStride, in.moods, kMoodTailBytes);  // else no row
     hidx.emplace_back(pathHash(in.path), static_cast<uint32_t>(k));
     if (in.fields[kAlbum] && in.fields[kAlbum][0]) albums.insert(in.fields[kAlbum]);
     splitInto(in.fields[kArtist], &artists);
@@ -867,7 +901,7 @@ bool write(Sink& out, const Meta& meta, const RecordIn* recs, size_t n, const Fo
     ++ns;
   };
   section(kFold, kSectionRequired, static_cast<uint32_t>(fpaths.size()), kFoldStride, fold);
-  section(kRecs, kSectionRequired, static_cast<uint32_t>(order.size()), kRecsStride, recsBytes);
+  section(kRecs, kSectionRequired, static_cast<uint32_t>(order.size()), stride, recsBytes);
   section(kStrs, kSectionRequired, 0, 0, strs.bytes);
   if (!order.empty()) section(kHidx, 0, static_cast<uint32_t>(order.size()), kHidxStride, hidxBytes);
   if (ledger) {
@@ -887,7 +921,7 @@ bool write(Sink& out, const Meta& meta, const RecordIn* recs, size_t n, const Fo
 
   FileMeta fm;
   fm.magic = kMagicMptg;
-  fm.minor = meta.minor;
+  fm.minor = meta.minor;  // checked above against the tails (2.4.5)
   fm.generation = meta.generation;
   fm.cardId = meta.cardId;
   ContainerWriter cw;

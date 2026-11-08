@@ -36,6 +36,11 @@ rows in every language (9.2). Left for the user to judge: three Japanese
 and Chinese toasts whose first line touches the card's outline (9.6).
 Section 14 lists what the next release must run.
 
+On 2026-11-02 a library update's rejoin was found failing for want of a
+block with 816 KB of PSRAM free, a misreading of the heap that goes back
+to the placement's first day. Fixed and checked on the device that day
+(7.4, 14.3).
+
 The other documents:
 
 - **docs/AUTODJ-INDEX.md:** the file (MPDJ v2), for any transfer software.
@@ -425,18 +430,20 @@ said on the screen (9.6).
 | What | Effect |
 |---|---|
 | A slot's CRC fails (S1) | Read once more, in this pick if the budget allows, else at its next read. Failing twice in a row it is **damaged**: into a ring of the last 8 damaged rows, never read again until the file is reopened. That anchor is left out; none left: a random pick |
-| The read fails (`Why::Io`: the card pulled, a FIL a remount invalidated) | Skipped for this pick; never in the damaged ring |
+| The read fails (`Why::Io`: the card pulled, a FIL a remount invalidated, a sector the card keeps failing) | Skipped for this pick. The same row twice in a row, no read of it that worked between: into the damaged ring too (`SlotResult::IoTwice`), until the file is reopened: each read costs the loop the driver's retries, up to 1.5 s under the volume's lock, and a read ahead would come back every 2 s. (A pin not yet read gives way by the ring's rule, a pull's too; a remount's reopen clears the ring, not that) |
 | S2-S4 fail under a good CRC (**broken**: the writer's bug) | The file is treated as absent: every later pick is random, until a remount or the next boot. Logged once |
 
 The console says each step for a damaged slot:
 
 - a read ahead: "read ahead, row R: its CRC failed (read again later)",
   then "read ahead, row R: DAMAGED (its CRC failed twice: skipped from
+  now)"; or "read ahead, row R: the read failed (the card?)", then "read
+  ahead, row R: DAMAGED (the read failed twice (the card?): skipped from
   now)";
 - a pick, when its read fails a second time in a row (both of its own
-  two reads, or its one after a read ahead's failure): "read at the pick,
-  row R: DAMAGED (...)" after the pick's line (`Pick::damagedRow`). Once
-  a row, since a damaged row isn't read again.
+  two reads, or its one after a read ahead's failure), the CRC or the read:
+  "read at the pick, row R: DAMAGED (...)" after the pick's line
+  (`Pick::damagedRow`). Once a row, since a damaged row isn't read again.
 
 Before 2026-10-16 a row damaged at a pick had no line: only `D`'s
 "damaged" counter rose (the device check of 2026-10-16, 14.2).
@@ -512,7 +519,7 @@ track. docs/QUEUE-MODES.md section 16 has the modes.
 |---|---|
 | The decoder's refill | After a start or a skip, the decoder fills its ring from empty, flat out, above the loop. A due pick waits until the new track has 500 ms buffered, its source has ended (a track shorter than 500 ms), or 1.5 s have passed; nothing is read ahead meanwhile. A gapless join is no start: nothing waits. Counted: "waited for a refill". (A pick timed across the refill measured the decoder: 108 ms on 2026-10-13) |
 | A pick that gave no track, or one the queue refused | Tried again after 5 s |
-| A read ahead that failed | The next after 2 s (a pick still reads what it needs) |
+| A read ahead that failed, or a pick's read | The next read ahead 2 s after its end (a pick still reads what it needs); the same row's second goes in the damaged ring (3.13) |
 | The index joining | No pick: it waits for the join (condition 1, 5), and the library update waits for it (4.6) |
 
 ### 4.6 The library update's fence
@@ -550,7 +557,7 @@ anchor, the random stream. It is never saved.
 | A new queue while on: every Play (the Library's, Play all, Shuffle all), a Clear, and the undo of either, wherever asked | New (`QueueModel::playEpoch()`: no caller says so) | The new current track (an empty queue: none) |
 | "Auto DJ from here", the Auto DJ button (`Dh`, `De`) | New; Auto DJ on if it was off | That track |
 | `Dr` | New | None |
-| A remount that finds another index (or one now, or none now) while on; `Dc` | New | None |
+| A remount that finds another index (or one now, or none now) while on; `Dc` too, but after a read of the root the card failed, only when that read finds one of these (and not after the boot's: 6.5) | New | None |
 | Play next, + Queue, a jump in the Queue, Remove, a move, Clear up next, their undo | Kept | Played tracks join the ring as they start |
 | Skip, previous, seek | Kept | A quick skip leaves the ring (3.2) |
 | Anchor, strictness, BPM continuity, Harmonic mixing | Kept | From the next pick; Anchor drops the pin |
@@ -624,8 +631,10 @@ into one filter word a row.
   it never reads a freed index.
 - **Placement:** PSRAM's largest free block is what a library update's
   new track table needs (6.3), so the join takes as little of it as it
-  can (`Join::setPlacement()`, for ESP-IDF's TLSF heap, which serves a
-  block from the low end of the closest-fitting free block):
+  can (`Join::setPlacement()`, for ESP-IDF's TLSF heap, which rounds a
+  request up to its size class, by up to a thirty-second of it, and carves
+  a block of that size from the low end of the closest-fitting free block:
+  7.4's rules):
   - each block (the filters, the two maps, then the runs, the folders'
     states and the buffer) goes where the heap puts it, unless that is
     the largest free block: then it is given back at once and goes to
@@ -634,19 +643,39 @@ into one filter word a row.
     ones first; once the spacers are given back, the kept ones go to the
     room left above them. What comes later is carved below them, so
     giving the join back leaves one block, as if it had never joined;
+  - **a spacer's size:** what stays above it is at least the blocks' bytes,
+    a thirty-second more and 1 KB (each block's rounding, its header and
+    poisoning), wherever in its size class the free block is, which the
+    heap's answer doesn't say. It is asked just under a class's boundary,
+    so that it takes that boundary and no more. What stays can be over by
+    a class of the spacer's and one of the block's, a sixteenth of it in
+    all; a second spacer closes that in unless a smaller free block is the
+    closer fit for it, when it is given back at once;
   - **the margin:** the spacers never leave less than 64 KB free
     (`kJoinMarginBytes` in `src/app/AutoDj.cpp`, a KB more for the heap's
     headers), counting the free outside the largest block and the room
-    kept for the blocks still to come; when that falls short, the rest is
-    left above the blocks, which then sit that much under the block's
-    top. 64 KB covers another task's block in those few milliseconds (a
-    track's start: the MP3 probe's 4 KB, a seek's 8 KB; the Opus packet
-    buffer's 60 KB; the card worker's buffers) but not the first Opus
-    track's 125 KB of buffers (once a boot) starting in the same
-    milliseconds: that track would fail to open and be skipped. 128 KB
-    would cover it, but in `test_autodj_join`'s model it put the filters
-    39 KB under the block's top after a library update (the runs had
-    taken the holes): left at 64 KB, a visible trade-off;
+    kept for the blocks still to come, each block's rounding and the
+    spacer's own among them; when that falls short, the rest is left above
+    the blocks, which then sit that much under the block's top. (Until
+    2026-11-02 the rounding wasn't counted. On the heap's rules, where the
+    margin bites, PSRAM's free could fall to about 60 KB with a free block
+    of up to 420 KB and about 48 KB with one of up to 830 KB. No join has
+    measured that: the lowest of any is 77,284 B, 14.3.) 64 KB is there
+    for another task's block in those few milliseconds (a track's start:
+    the MP3 probe's 4 KB, a seek's 8 KB; the Opus packet buffer's 60 KB;
+    the card worker's buffers), but it counts free bytes, not one block:
+    that 60 KB needs one free block of 62,464 B, which a heap of holes
+    doesn't promise. It doesn't cover the first Opus track's 125 KB of
+    buffers (once a boot) starting in the same milliseconds: that track
+    would fail to open and be skipped. 128 KB would cover it, but in
+    `test_autodj_join`'s model as it was until 2026-11-02 it put the
+    filters 39 KB under the block's top after a library update (the runs
+    had taken the holes; not measured again since): left at 64 KB, a
+    visible trade-off;
+  - **another task's block** can still take the room above the spacers in
+    those milliseconds. The placement falls short then, not the join: the
+    spacers go and the rest go where the heap puts them, and 'joined' says
+    "the room at the top fell short". Until 2026-11-02 that was NO PSRAM;
   - before 2026-10-14 every block went to the top under spacers over the
     whole block: PSRAM's free fell to about 10 KB at every join, and
     after a library update the rejoin took about 170 KB of the rebuilt
@@ -654,14 +683,14 @@ into one filter word a row.
     PSRAM's free at least 177,388 B meanwhile; the lowest of any join,
     86,868 B, was a `D1` on a heap that a library update with Auto DJ
     off had rebuilt (7.4);
-  - the 'joined' line says where they went ("296526 B at the top of the
-    largest free one, 0 of 3 kept and 1 transient blocks in smaller
+  - the 'joined' line says where they went ("300622 B at the top of the
+    largest free one, 0 of 3 kept and 0 transient blocks in smaller
     ones" at a boot, "77640 B at the top of the largest free one, 2 of 3
     kept and 7 transient blocks in smaller ones" after a library update,
     or "all in smaller free blocks"), how long `begin()` took (it asks
-    for the largest free block 6-10 times, a walk of the heap each:
-    10.7-25.9 ms on 2026-10-15), and "PSRAM free at least N B
-    meanwhile".
+    for the largest free block a few times, a walk of the heap each:
+    10.7-25.9 ms on 2026-10-15, 10.7-35.0 ms on 2026-11-02), and "PSRAM
+    free at least N B meanwhile".
 
 ### 6.3 The give-back to a library update
 
@@ -688,9 +717,9 @@ the next boot.
 
 ### 6.5 Remounts
 
-On every FatFs remount (the card's guard counts them) the glue reads the
-root again into its own copy (never the library's) and compares the index
-entry:
+On every FatFs remount (the card's guard counts them), but for one taken for the
+echo of a try the card failed (within 30 s of it: 6.6), the glue reads the root
+again into its own copy (never the library's) and compares the index entry:
 
 - **The same index:** the file reopened; the maps and the session kept; the
   damaged ring cleared. A join under way starts again. A reopen the card fails
@@ -700,6 +729,13 @@ entry:
   DJ is on, joined again and a new session (`Dc` starts one on or off).
 - No PSRAM for the root: the index closed until the next remount, its
   entry kept.
+- **The root unread** (the card failed a read of it: `cardroot::Root::readFailed()`,
+  at a remount or at the boot): no index is taken to have gone. The file closed and
+  the maps gone, the entry and the session kept, and the root read again by 6.6's
+  tries (none for a boot whose card jobs run: 6.6); then as above, but for the boot's,
+  which has no root to compare and keeps its session whatever it finds. Before
+  2026-11-02 this read as no index now, with a new session, and `Dc` couldn't bring
+  it back.
 - **The card isn't walked again:** a remount reopens the records and the
   index, but only a boot walks the card. Music files added to a card
   swapped while the player runs wait for the next boot (12).
@@ -719,27 +755,75 @@ opened in 2.8 ms", a new session ("another index on the card"), joined
 | An index of a major this build doesn't read | Picks by id | No Auto DJ index on this card |
 | The file failed its checks (frame, header, the root's entry; a section in the join) | Absent until a remount or the next boot: picks by id | The Auto DJ index failed its checks |
 | A broken slot (3.13) | Random picks over the index's rows until a remount or the next boot | The Auto DJ index failed its checks |
-| The file the root names isn't on the card (FatFs's FR_NO_FILE or FR_NO_PATH), no PSRAM for the root after a remount | Absent until a remount or the next boot: picks by id | Can't read the Auto DJ index |
-| Opening it, the card failed: a read, the volume's lock, or no PSRAM for its FIL | Picks by id; tried again after 2 s, then 10 s, then 30 s, the session kept; the last failing too, as the row above | Reading the Auto DJ index…, then Can't read the Auto DJ index |
+| The file the root names isn't on the card (FatFs's FR_NO_FILE or FR_NO_PATH), no PSRAM for the root | Absent until a remount or the next boot: picks by id | Can't read the Auto DJ index |
+| Opening it, or reading the root, the card failed: a read, a pulled card's status and init, the volume's lock, or no PSRAM for its FIL | Picks by id; tried again after 2 s, then 10 s, then 30 s, the session kept; the last failing too, as the row above | Reading the Auto DJ index…, then Can't read the Auto DJ index |
+| The boot's reads of the root failed, and its card jobs run (METADATA.md 3.2.2) | Picks by id; no tries: until a remount, `Dc` or the next boot | Can't read the Auto DJ index |
 | A library over 65,534 tracks | Not joined | Too many tracks for the Auto DJ index |
-| No PSRAM for the join | Picks by id until the next library build, or until Auto DJ is switched off and on | Not enough memory for the Auto DJ index |
-| A read failed during the join | Picks by id; joined again 10 s later | Reading the Auto DJ index… |
+| No free block holds one of the join's blocks, its spacers given back | Picks by id until the next library build, or until Auto DJ is switched off and on, which tries again | Not enough memory for the Auto DJ index |
+| A read failed during the join | Picks by id; joined again 10 s later, on a new handle or at the remount a failed status brings; the third in a row, until the next library build, a remount, `Dc` or switching on (the empty states offer Shuffle all meanwhile, and no "Auto DJ from here") | Reading the Auto DJ index…, then Can't read the Auto DJ index |
+| A read failed in the look-ups behind the Auto DJ button or "Auto DJ from here", twice in a row (Auto DJ off) | As the row above: Shuffle all in its place, no more of these reads, and no toast at the tap that found it | Can't read the Auto DJ index |
+| The card kept going silent, at any reader's read or write (METADATA.md 3.8's too silent), with an index open or a try due | Absent at the next remount: picks by id until the next boot (`Dc` asks, until the remount after it). A card with no index says what it said | Can't read the Auto DJ index |
+| No library: an update step failed, and `library.idx` with it | Not joined until there is one. (Behind a fence, as a join: one is coming) | "Auto DJ index: {rows} tracks" |
 | The file older than the library | Rows whose files are gone map to no track; new files have no row | "{mapped} of {tracks} tracks have neighbours" |
 
 The status's second line is "picks are random" under each reason but
-"Reading" and the last.
+"Reading" and the last two.
 
-A fault of the card says nothing of the file. A read that gets no answer marks
-the card failed, so FatFs mounts the volume again at its next call once the card
-answers, and that remount reopens the file. A read that fails any other way (a
-select timeout, an R1 error, no data token, a CRC mismatch) sets nothing, so
-until 2026-11-02 one such glitch in the boot's open left picks by id for the
-session. The tries (`lib/core/AutoDjOpen.h`,
+Switched off and on, the join is tried again at once, on the heap as it is
+then: that helps once something has freed memory, and not before. Until
+2026-11-02 this row also came up with plenty free (7.4's rejoin), and then it
+went by where the largest free block had got to in its size class. `D0` and
+`D1` a second after the failure failed the same way, twice, the block still
+at 417,780 B; about 15 s later, the block at 303,092 B, they joined (MEASURED
+2026-11-02, `e7623e0`).
+
+A fault of the card says nothing of the file. A command that gets no answer sets
+the SD driver's mark, and the wrapper looks at once, in that read's own disk call
+(METADATA.md 3.8): the card back at its init, the same card, the read is asked once
+more there (a one-off reads, and FatFs never hears of it), and all FatFs hears when
+that fails too is that read's error, with nothing open lost. A read that fails any other way (a select
+timeout, an R1 error, no data token, a CRC mismatch) sets nothing. Until 2026-11-02 one
+such glitch in the boot's open left picks by id for the session. FatFs keeps a failed
+read's error on its `FIL`, whoever read (a slot, a join, the lookup behind "Auto DJ from
+here"), so the next pass goes on with a new one, the maps and the session kept
+(`refreshFile()`). A `FIL` only a status failed, as on a plain pull, holds no error: it waits
+for the remount's reopen, the maps kept; a read that failed on it makes the call of FatFs's that
+brings that remount at the next pass (`echoNow()`), since an idle player makes none, and a card put
+back would leave the button and "Auto DJ from here" dead until a track played. A pull inside a read does hold one, and the new `FIL`'s
+open then goes by the tries, the maps gone. A read that keeps leaving the card silent stops being asked
+after 4, whoever asks (METADATA.md 3.8's read stop): the blocks below and the join's
+are lifted by a remount, and each such read makes one. A card put back asks all of those again. The tries (`lib/core/AutoDjOpen.h`,
 test_autodj_open) are on the loop task, as the open is: a card that doesn't
-answer costs about a second of the driver's retries each (ESTIMATED), so there
-are few, the first soon, since most faults are a glitch. None starts before the
-UI's first frame, while a list moves, while the card is held or behind the
-update's fence. A remount or `Dc` counts from the first try again.
+answer costs about a second of the driver's retries each, a read of the root
+about 2.5 s, its four calls of FatFs (ESTIMATED), so there are few, the first soon,
+since most faults are a glitch. None starts before the UI's first frame, while a
+list moves, while the card is held or behind the update's fence. `Dc`, or a read
+of the root or an open that works, counts from the first try again, and so does a
+remount when the last try was no fault of the card's.
+
+A card that is out, or silent past its init, keeps the mark, and the next call of
+FatFs, whoever's, once a card answers, is a remount: that read's echo. Taken for news of the card it would start the tries
+over and read at once, get no answer, and so on at every pass, seconds of the loop
+each, the waveform bar's reads of the root answering Auto DJ's and the other way
+about. So within 30 s of a try the card failed a remount does nothing and the wait
+stands; later than that it asks once, the count where it was. A card put back
+within those 30 s of the last try waits for the next remount or boot. A reader of
+the root makes that call itself, right after a read it failed
+(`cardfat::FatFs::echoNow()`): left to the next caller, on a player whose calls come
+far apart, the echo would come later than that, as news, a read and a new mark each
+time, and the open of a track that made the call would be cut. On a card that is out
+it costs one failed init a read: 0.62 s, three times over (MEASURED 2026-11-02). The
+first status of a mounted volume, two rounds of CMD13 and that init, took 1.23 s.
+
+A remount with a card job under way restarts the player (`stepCardGuard()`,
+METADATA.md 3.8), and the job counts from the UI's first frame, when the walk is
+armed. The first try falls there, so a card silent past its init would restart there,
+before its walk began, at most twice a power-on since 2026-11-02 (the breaker, 3.8). So a boot that couldn't read the root and runs
+its card jobs all the same (a library with no transfer in it, or one it had to build
+or walk: METADATA.md 3.2.2) has no tries of the root. A remount or `Dc` still asks, once each. A boot that holds
+its jobs has them, as a session whose boot read the root does: the guard doesn't
+restart with no jobs, and at most once after a good boot, whose next boot is one of
+these.
 
 ---
 
@@ -832,6 +916,8 @@ At 19,410 rows and 19,412 tracks, all in PSRAM:
 | ... since, the folders' states too, 10 B a folder (MEASURED 2026-10-15 at the synthetic card's 2,477 folders: 275,952 + 24,770) | 300,722 | |
 | `Dn`: a copy of the engine, 16 KB of tallies, 4 B a pick (READ) | about 35 KB + 4 B a pick | While a `Dn` runs |
 | `Db`: 4 B a read and one slot buffer (READ) | | While a `Db` runs |
+| Not Auto DJ's: the library's mood words, 2 B a track in `library.idx` v7 (docs/MOOD-FILTERS.md 5.4; MEASURED 2026-11-06 at 19,413 tracks, 17,954 with a word) | 38,826 | From boot, on a card whose T carries mood tails |
+| ... PSRAM's largest free block with them, against a control in the same script (MEASURED 2026-11-06, 14.3) | -32,768 at every step: the boot off and joined, each update joined, `Dc` | |
 
 - Internal RAM: main.cpp's pointer (READ). The pick allocates nothing; its
   frames are about 420 bytes on the loop stack (READ, the engine's note).
@@ -850,10 +936,12 @@ At 19,410 rows and 19,412 tracks, all in PSRAM:
   largest free block. Now they leave at least the 64 KB margin (6.2). In
   `test_autodj_join`'s model heap (ESP-IDF's TLSF: the size classes'
   rounding, the low-end carve, coalescing) the lowest free while placing
-  was 11,316 B with the old spacers at a boot's join and is 165,696 B now;
-  94,728 B at the rejoin after a library update; over 30 heap shapes and
-  margins, at 20,000 and 6,001 tracks, never under the margin (or under
-  what the join itself leaves, when that is less).
+  was 11,316 B with the old spacers at a boot's join and is 168,136 B now,
+  over a boot's join and the rejoins after two library updates; over 30
+  heap shapes and margins and about 270 sizes of heap, at 20,000 and 6,001
+  tracks, and about 700 sizes of free block with the kept blocks in holes,
+  never under the margin (or under what the join itself leaves, when that
+  is less).
   **MEASURED 2026-10-15** (`314c624`, 17 joins): "PSRAM free at least"
   170,416 B at a boot's join and at each `D1` before any library update,
   167,792 B with the MP3, 177,388 B at both rejoins after `gb`, 158,088 B
@@ -870,29 +958,68 @@ At 19,410 rows and 19,412 tracks, all in PSRAM:
   0x3fbd69bc before. A library rebuild itself fragments PSRAM, with Auto
   DJ off too (`main`'s own: in `test_a_library_update_in_a_model_heap`,
   the real `LibraryIndex` and `LibraryBuilder` at 19,412 tracks in main.cpp's
-  order, the largest free block goes from 826,008 B at the boot to
-  510,608 B after one update with Auto DJ off; the fence's frees leave
+  order, the largest free block goes from 753,652 B at the boot to
+  360,436 B after one update with Auto DJ off; the fence's frees leave
   the same free blocks either way). What Auto DJ added was the rejoin's
   placement: all 155 KB and about 20 KB of slack at the top of that
-  block, 340,024 B of it left while joined in the model (on the device
-  180,212 B, the join low in PSRAM where the rebuilt heap's largest block
-  was). Now the maps and every transient block fit the rebuild's holes
-  and only the filters (77,640 B) go to its top: 429,520 B while joined,
-  and 510,608 B once given back, exactly Auto DJ off's (the give-back
-  always restored the off figure, so a library update's memory check
-  sees what it would with Auto DJ off, 6.3). While joined it can't be as
-  large as off when no smaller block holds the 77.6 KB filters.
+  block (on the device 180,212 B left, the join low in PSRAM where the
+  rebuilt heap's largest block was). Now the maps and every transient
+  block fit the rebuild's holes and, on the device, only the filters
+  (77,640 B) go to its top (the model's rebuild has a hole for them too).
+  Given back it is exactly Auto DJ off's (the give-back always restored
+  the off figure, so a library update's memory check sees what it would
+  with Auto DJ off, 6.3). While joined it can't be as large as off when
+  no smaller block holds the 77.6 KB filters.
   **MEASURED 2026-10-15** (`314c624`, the 320 kbps MP3 playing): after
   `gb` with Auto DJ on, "77640 B at the top of the largest free one, 2 of
   3 kept and 7 transient blocks in smaller ones" (the model's words), and
   PSRAM's largest free block was 335,860 B while joined. It was
   409,588 B once given back (`D0`), and 409,588 B after `gb` with Auto DJ
-  off: given back equals off exactly, joined is 73,728 B under it (the
-  model: 81,088 B under; 2026-10-14: 180,212 B, about 175 KB under).
-  `main`'s own fragmentation is larger on the device than in the model:
-  the largest block went from 819,188 B at the boot (Auto DJ off) to
-  409,588 B after one update (the model: 826,008 → 510,608 B), about
-  100 KB more.
+  off: given back equals off exactly, joined is 73,728 B under it
+  (2026-10-14: 180,212 B, about 175 KB under). The largest block went
+  from 819,188 B at the boot (Auto DJ off) to 409,588 B after one update
+  (the model: 753,652 → 360,436 B).
+- **The rejoin's NO PSRAM (MEASURED 2026-11-02; fixed that day):** on the
+  spare card, `gb` on a fresh boot, the player stopped: "[heap] FAILED:
+  77640 B", largest block 73,716 B, PSRAM free 245,884 B of the 816,024 B
+  free when the join began, then "the join: NO PSRAM" and picks at random.
+  That was `e7623e0`. The same at `26eec75` and at `24b4cf0`, before the
+  waveform bar, with 570,140 B taken every time.
+  - **The heap's rules** (ESP-IDF 5.5, as the framework's `libheap.a` has
+    `tlsf_malloc()`, `tlsf_fit_size()` and the poisoning's wrappers): a
+    request gets 12 B of poisoning and 4-byte alignment and is rounded up
+    to its size class's next boundary (32 classes a power of two). That
+    rounded size is what is carved, with a 4 B header, not only what the
+    search asks for. `heap_caps_get_largest_free_block()` answers with the
+    largest request that succeeds: the largest free block rounded down to
+    its class, less the 12 B, so it doesn't say where in its class the
+    block is.
+  - **What went wrong:** the spacer took what the blocks needed (81,090 B
+    for the filters) off that answer. Of a block that read 417,780 B it
+    asked 336,690 B and took 344,064 + 4 B, leaving 73,724 B and however
+    far the block was over its class's floor, where the filters' 77,640 B
+    take 77,824 B. So the rejoin failed with the block in the lowest
+    4,100 B of its class's 8,192 B from 344,064 B to 524,288 B, the lowest
+    4,100 B of 16,384 B up to 606,208 B and the lowest 12,292 B of
+    16,384 B above that (below 344,064 B only the lowest 4 B): 56 % of the
+    places from 262 KB to 1 MB.
+  - **Why it passed in October:** neither `spacerFor()` (`314c624`) nor the
+    framework has changed since. The rebuilt heap has: the 409,588 B of
+    2026-10-15 must have been at least 413,700 B, in the upper part of its
+    class, and its "73,728 B under" was this rounding. A few KB held
+    elsewhere move the block across the edge. The model carved what was
+    asked (81,088 B under), so it couldn't see this.
+  - **The fix:** 6.2's spacer, sized from the rules. `test_autodj_join`'s
+    model now keeps them and is pinned to the device's numbers (the
+    570,140 B taken at every failure, the 73,716 B, 225,268 B and 335,860 B
+    answers), and the rejoin is tried wherever the block is in its class, in
+    six classes at three library sizes. A block that falls short anyway no
+    longer costs the join. Results: 14.3.
+  - **Also fixed by it:** `probe()` read the same answer to tell a block
+    taken from the largest free block, so one smaller than the block's
+    distance over its class's floor went unseen and stayed at its low end.
+    At a boot that was the 4 KB buffer, "1 transient blocks in smaller
+    ones" (its address now tells). Transient, so no harm done there.
 
 ---
 
@@ -972,6 +1099,7 @@ going"):
     key {n}%" (the mapped tracks' coverage);
   - Auto DJ off: "Auto DJ index: {n} tracks" over "read when Auto DJ is
     switched on";
+  - on with no library (6.6): "Auto DJ index: {n} tracks", alone;
   - joining, or a try at opening the file due (6.6), on or off: "Reading the
     Auto DJ index…";
   - no index, or none usable: why (6.6) over "picks are random";
@@ -1103,7 +1231,7 @@ output or the volume; scripts drive them in silent test mode (`z`).
 | `Dp` | One pick appended now, whatever the trigger says (cued at a finished queue); its line, then the anchors and the pin. Refused behind the fence |
 | `Dn<k>` | k dry-run picks (1-2,000) on a copy of the session, each treated as played (the next follows it); a read ahead first when one is due, as the loop does. The live session is untouched. A summary: picks, dry, loosened, random, by id, repeats, artists, breaks, drawn statuses, reads, the time's p50 / p90 / max, the classes |
 | `Dj` | The join again from its start (its time and memory). Refused while Auto DJ is off |
-| `Dc` | The file closed and opened again, as a remount that found another index (a new session, and 6.6's tries from the first) |
+| `Dc` | The file closed and opened again, as a remount that found another index (a new session, and 6.6's tries from the first). No root read yet: the root read again, from the first try, the session kept whatever it finds. The last read of it failed: the same, but while Auto DJ is on another index, one now or none now is a new session (6.5). A read on a card silent past its init, with a card job's step under way, restarts the player, as any remount then (6.6) |
 | `Db<n>` | The bench: n slot reads of random rows (1-5,000), the raw read timed apart from its check; p50 / p90 / max, a histogram, the check's mean and max |
 | `Dh` / `Dh<id>` | "Auto DJ from here" on the current entry's track, or on library track `<id>`. Refused behind the fence |
 | `De` | The empty states' Auto DJ button. Refused behind the fence |
@@ -1162,7 +1290,8 @@ output or the volume; scripts drive them in silent test mode (`z`).
 
 - **`tools/autodj_ref.py`** is the pick rule in plain Python (standard
   library; `tools/mpdj.py` reads the golden indexes). Every rule is the
-  engine's, in the same order, drawing from the same PCG32 stream.
+  engine's, in the same order, drawing from the same PCG32 stream (but
+  a row's second failed read in a row, IoTwice, which no session here reaches).
   - `python tools/autodj_ref.py` writes `test/fixtures/autodj/`;
   - `python tools/autodj_ref.py --check` exits 1 when a file there
     differs.
@@ -1189,7 +1318,7 @@ files.
 |---|---|
 | `test_autodj_tiers` | PCG32 against the reference outputs, `below(n)`, the windows, the Camelot codes, the rank tables cell by cell against the waterfall, D3's odds, the gate's levels, the filter word |
 | `test_autodj_engine` | Every fixture session replayed twice (runs made at the read ahead, then at the pick), every pick, read and counter exact; and each rule on its own: the gate, dry, loosening, the ring and the quick skip, the pin, the key anchor, the cooldowns, the read budget, the cache, damaged and broken slots (the rows a pick's reads damaged, named once), picks by id, no allocation in a pick |
-| `test_autodj_join` | The goldens and the hardening files, written files, strides and CRCs, every slice boundary with a fence or a changed index, no memory, the library limit, a FAT model, memory at scale; the folders' hash against `trackPathHash()` (every spelling of the root, paths of 509-513 B, a folder too long, depths 31-35); the placement's order, and in a model of ESP-IDF's TLSF heap: free never under the margin (30 heap shapes and margins), the give-back leaving Auto DJ off's largest block, and a library update (the real `LibraryIndex` and `LibraryBuilder` at 19,412 tracks, main.cpp's order of frees and blocks) with Auto DJ off and on |
+| `test_autodj_join` | The goldens and the hardening files, written files, strides and CRCs, every slice boundary with a fence or a changed index, no memory, the library limit, a FAT model, memory at scale; the folders' hash against `trackPathHash()` (every spelling of the root, paths of 509-513 B, a folder too long, depths 31-35); the placement's order, and in a model of ESP-IDF's TLSF heap, pinned to the device's logged numbers: free never under the margin (30 heap shapes and margins, about 970 sizes of heap or free block), the rejoin wherever the largest free block is in its size class (six classes, three library sizes), the room above the spacers (five lists of blocks, free blocks up to 1.3 MB), another task's block at every moment of `begin()`, the give-back leaving Auto DJ off's largest block, and a library update (the real `LibraryIndex` and `LibraryBuilder` at 19,412 tracks, main.cpp's order of frees and blocks) with Auto DJ off and on |
 | `test_autodj_trigger` | Every condition, the first that fails, the finished queue, the holds, `owed` only while joining, the failure pause |
 | `test_autodj_driver` | Sessions, steering, the cue, the marks across a read-back, refused and removed picks, the holds, the failure pause, the index arriving late, the seed before the join, the button's lookups, the refill wait, the dry run, the `D` parser; a quick skip's reason (before the join too); the Undo of "Auto DJ from here" and the button from a playing, paused, stopped, cued and empty queue, Auto DJ on and off before the tap; a slot whose CRC fails on the read ahead and again at the pick, named by that pick's pass once |
 | `test_autodj_open` | What a failed open comes to: the tries, their waits, a remount's new count; over the real reader, a read that fails is always the card's fault and a bad file never is |
@@ -1248,7 +1377,7 @@ host (with g++), and every refusal.
   tracks give it.
 - **A library rebuild fragments PSRAM, with Auto DJ off too** (`main`'s
   own: in `test_autodj_join`'s model the largest free block goes from
-  826,008 B at the boot to 510,608 B after one update; on the device,
+  753,652 B at the boot to 360,436 B after one update; on the device,
   MEASURED 2026-10-15, from 819,188 B to 409,588 B). A later update
   whose new track table outgrows the kept one needs about 660 KB in one
   block and waits for the next boot either way. Not Auto DJ's (7.4);
@@ -1295,7 +1424,8 @@ On the synthetic test card (11.4), the release-check docs' way, with
 their rules: silent test mode (`z`) after every boot before anything
 plays; no Bluetooth or power commands (`f`, `B`, `c`, `P`); after each `D`
 command, the console's loop-stack line must not say LOW; nowhere a Guru,
-a `task_wdt`, an `[E]` line, `[heap] FAILED` or a LOW stack line.
+a `task_wdt`, an `[E]` line (but for the SD driver's "Card Failed" and "Check
+status failed" at a card pull), `[heap] FAILED` or a LOW stack line.
 
 **The first check ran on 2026-10-13** on the M4 build (`09f91a1`, console
 only, a dev env that read the index; the release build reads it since
@@ -1319,7 +1449,7 @@ in 14.2.
 | 3 | **Pick CPU.** `Dn200` in both modes at 55 / 65 / 75 %, matching off then on, at 240 MHz; at 160 MHz Follow the vibe 55 % off, 75 % off, 55 % on and Stay on seed 55 % off. A live pick with 2026-10-13's seed and queue (`Ds717feda5`, then `qp0`: the same row as then), at both speeds. Live loosening: `Dm1 Df75`, then "Auto DJ from here" (`Dh`) on the track of row 693 (Northern Feather, which plays during the `Dn` runs: its slot has 3 rows above 75 %), 2 minutes of stubs. Not with the live pick's seed: its pin, row 3392, has 57 rows above 75 % and never loosens (2026-10-14: 0 of 140) | p90 at most 2 ms at 240 MHz, 3 ms at 160 MHz, every run (7.2 has 2026-10-14's); reads at a pick 200/0/0; `D`'s picks unchanged by the runs; the live pick at most about 2 ms plus its reads' time (then 6.38 ms, reads 3.25 ms). Stay on seed 75 %: no class 16-23, at least 150 loosened, artists far above 3; the live run's picks carry `[loosened …]` (2026-10-14: 106 of 115), `D`'s loosened rises, no class 16-23. Follow the vibe's repeats, artists, classes and breaks as before (0 loosened) | **Fail.** Follow the vibe p90 4.8-9.0 ms at 240 MHz, 6.3-12.0 ms at 160 MHz. Stay on seed passed (0.6-1.7 ms at 240 MHz; 1.6-1.9 ms at 160 MHz). Reads 200/0/0. Stay on seed at 75 % repeated 3 rows: "repeats 197, artists 3" |
 | 4 | **Albums and skips.** Queue an album, Auto DJ on, skip 5 tracks quickly. Then the quick-skip line's forms (3.2), each `n` in a track's first 30 s: a bench file (no row); a track that started with Auto DJ on and joined; after `Dr` while a track with a row plays (joined); between `D1` and "joined" (Auto DJ off before), a track with a row. (`D0`, a track, `D1`, then `n` after "joined" gives "no longer steers": the playing track steers once the maps arrive) | No pass with more than one read ahead; no pick over 2 reads; the skipped tracks out of the anchors (`D`); quick skips +5; no pick until the album's last track. The four lines: "it has no row in the index: it never steered", "no longer steers", "it wasn't among the anchors: nothing changes", "the index isn't joined yet: it never steered" | **Pass** (run 2): one anchor left, quick skips +5, the pick at the last track read 1 slot. The line said "no longer steers" for a track with no row (since fixed) |
 | 5 | **Soak.** Auto DJ on, the stubs, 2 hours, the queue reaching its 5,000 cap | No reset, no underrun; a word at every start; no row again within 50 picks; the cap pushing out the oldest; PSRAM and internal lows flat once the queue stops growing; the loop stack's low-water mark. **`queue.txt` keeps up:** `q`'s write count rises by at least 8 every 5 minutes (a write at least every ~35 s), most from a snapshot; a write's dip at most about 20 KB; after a pause, written within about 6 s, and a reboot restores at the paused entry. Live picks p90 at most 2 ms | **Pass, except two.** 7,520 picks, no reset, 0 underruns, 7,521 gapless joins with 0 cuts, all class 0, the closest repeat 51 apart, the cap at 79.5 min. **`queue.txt` failed:** no write for the last 59.5 min. PSRAM's low fell 446 → 400 KB with the queue's growth, then flat 54 min (partial). Live picks p90 8.4 ms (as check 3) |
-| 6 | **Fence.** `gb` during a session with the MP3 playing, then `n` right after "joined", three times; `gb` during the boot's join | The freed bytes equal the join's; `D` says the fence; the session and the marks kept; the last entry still gets its pick; the rejoin's time with the MP3 and the screen dark against 2026-10-15's 5.9-6.2 s (7.3); each rejoin's "PSRAM free at least" at least 65,536 B (2026-10-15: 177,388 B) and its blocks mostly in the rebuild's holes ("77640 B at the top of the largest free one, 2 of 3 kept and 7 transient blocks in smaller ones"), "PSRAM's largest free block now" about 80 KB under Auto DJ off's after a rebuild, not 175 KB (2026-10-14: 180,212 B; 2026-10-15: 73,728 B under; the model: 429,520 B against 510,608 B): `D0` and `D` ("the join given back", then the free and the largest block), `gb` with Auto DJ off and `D` again measure off's (also `main`'s own fragmentation: 7.4); the pick after `n` lands after the new track has 500 ms buffered, 0 reads, the usual time; "waited for a refill" +1 a skip. During the boot's join: aborted, one join after, no crash | **Pass,** with two findings since fixed: the rejoin took 7.2 s with the MP3 (4.6 s paused), and the first pick after it took 108.52 ms (the decoder's refill) |
+| 6 | **Fence.** `gb` during a session with the MP3 playing, then `n` right after "joined", three times; `gb` during the boot's join | The freed bytes equal the join's; `D` says the fence; the session and the marks kept; the last entry still gets its pick; the rejoin's time with the MP3 and the screen dark against 2026-10-15's 5.9-6.2 s (7.3); each rejoin "joined", no `[heap] FAILED`, no "the join: NO PSRAM"; its "PSRAM free at least" at least 65,536 B (2026-10-15: 177,388 B) and its blocks mostly in the rebuild's holes ("77640 B at the top of the largest free one, 2 of 3 kept and 7 transient blocks in smaller ones"), "PSRAM's largest free block now" about 80 KB under Auto DJ off's after a rebuild, not 175 KB (2026-10-14: 180,212 B; 2026-10-15: 73,728 B under; 2026-11-02: 81,920 B under): `D0` and `D` ("the join given back", then the free and the largest block), `gb` with Auto DJ off and `D` again measure off's (also `main`'s own fragmentation: 7.4); the pick after `n` lands after the new track has 500 ms buffered, 0 reads, the usual time; "waited for a refill" +1 a skip. During the boot's join: aborted, one join after, no crash | **Pass,** with two findings since fixed: the rejoin took 7.2 s with the MP3 (4.6 s paused), and the first pick after it took 108.52 ms (the decoder's refill) |
 | 7 | **Card.** (a) Pull and reinsert mid-session, paused. (b) The index replaced on a PC (`synthtransfer.py --replace`, a new generation), reinserted while running. (c) A first boot with Auto DJ on of a card with new files the records don't have | (a) "the same index: the file reopened, the maps and the session kept"; picks go on, at most 2 reads; damaged 0. (b) The new generation opened "after a remount", a new session ("another index on the card"), joined again, picks go on. (c) No "the update step waits for the next boot (the track table …)"; if the give-back line comes, the largest block grows to about its "up to N B" (the join's bytes at that block's top; free bytes next to them join it too: 9,576 B more on 2026-10-16); after the build "the join again" and "joined" | **Not run** (the card had to move). In 2026-10-13's first boot, the 155 KB join was resident when a library update deferred to the next boot for its track table's block: the give-back answers that |
 | 8 | **Bad files.** (a) One slot's bytes changed so its CRC fails. (b) One slot rewritten with a bad list under a good CRC. (c) No index: the file renamed; and a card with no transfer data | (a) "its CRC failed (read again later)", then "DAMAGED …" for each row that `D` counts as damaged (the read ahead's line, or "read at the pick, row R: DAMAGED …", 3.13); picks go on; `D` damaged ≥ 1; the file stays in use. (b) "… BROKEN, picks at random …" once; then `[random]` picks; `D`'s index line says BROKEN; a remount clears it. (c) "ABSENT (the file the root names isn't on the card …)", picks `[by track id: no index]`, the page "Can't read the Auto DJ index", the settings dim, the empty states show Shuffle all, `De` plays nothing; with no transfer data, "No Auto DJ index on this card", and the toast once | **Not run.** (a) and (b) need a tool to change a slot (13) |
 | 9 | **A finished queue.** An album ends with Auto DJ off; `D1`. Then the sleep timer's End of queue | A pick cued, paused at 0:00; nothing starts; Play starts it and the next pick follows; the toast. While the timer runs, no pick and `D` names it; after its stop, a pick cued | **Pass** (3 cued picks, none started by itself) |
@@ -1327,7 +1457,10 @@ in 14.2.
 | 11 | **Memory at 20k.** The running lowest PSRAM over 2 minutes of the MP3, Auto DJ off, then on and joined | On is about 155 KB lower than off (the join), read from psram= or `D` (pmin= keeps the join's moment, now at least 64 KB: 7.4); the engine's 19 KB is held either way | **Couldn't tell:** the build joined at boot either way (pmin 547 KB idle and with an MP3, 459 KB with a FLAC, in both). Resident 177,814 B, against the design's 180 KB |
 | 12 | **The Auto DJ button with Auto DJ off.** `D0`, `qx`, `De`; again in Stay on seed | At most 8 lookups (1 expected) in at most about 50 ms; playback at once; "joined" 1.5-2.5 s later; the first pick after it (a `D` before it shows "owed"). Stay on seed: `D`'s pin is the seed's row after the join | New since 2026-10-13 |
 | 13 | **Settings across a reboot.** Change each, reboot | Each comes back "(saved)"; the boot starts its own session | **Pass** |
-| 14a | **A card that fails the open.** Paused, the card pulled, `Dc` (FatFs answers FR_NOT_READY) | "the card failed opening it (FatFs's answer 3 …): again in 2 s, 1 of 3"; `D` says "1 of 3"; the page says Reading the Auto DJ index…; about 42 s later "ABSENT (the card failed every try at it: io)" and Can't read the Auto DJ index. The card back and a play: "(after a remount)", the join |
+| 14a | **A card that fails the open.** Paused, the walk over (with one pending, a pull takes the guard's restart instead: 6.6), the card pulled, `Dc` (FatFs answers FR_NOT_READY). A `Dc` that opens with no driver line means the card is still on the bus: check the slot | "the card failed opening it (FatFs's answer 3 …): again in 2 s, 1 of 3"; `D` says "1 of 3"; the page says Reading the Auto DJ index…; about 44 s later (42 s of waits and three failed inits) "ABSENT (the card failed every try at it: io)" and Can't read the Auto DJ index. The card back, and the first read at least 30 s after ABSENT, a play: "(after a remount)", the join (read sooner: Absent until the next remount or boot, 6.6) | 14.4 |
+| 14b | **A root the card fails** (6.5, METADATA.md 3.2.2). A temporary build that fails every read under `/.mstream`, on a spare card holding a transfer's library, never the music card | Boot: "[lib] the card's root: a read of the card failed: read 4 times, and each failed", "library.idx built from a transfer: load", "[card] the card's root couldn't be read"; `library.idx` unchanged; no walk; `gs` says a restart asks again; `@status` says `cid=?`; the Library row shows its sources, a tap on Rescan its note. `D` says "the card failed reading its root: tried again soon, N of 3" (N rising to 3) and the page says Reading the Auto DJ index…; about 42 s on (46.5 s with reads that get no answer) `D` says "ABSENT (the card failed every read of its root: io)" and the page says Can't read the Auto DJ index; no more root reads while it stays so. The fault off and a reboot: "matches the card", the same library, the index open | 14.4 |
+| 14c | **A root the card fails, the jobs running** (6.6). The same build, each failed read also marking the card failed as a read with no answer does (`sd_diskio.cpp`), on a spare card whose `library.idx` has no transfer in it | Boot: "library.idx built with no transfer: load"; `D` says "ABSENT (the card failed every read of its root: io)" from the start, the page Can't read the Auto DJ index; `gs` says "T: not read"; the walk runs and ends; no restart, and no more root reads | 14.4 |
+| 6b | **The rejoin at once.** `gb` on a fresh boot, stopped, then with the MP3 and with the FLAC playing; `D0`, `D1` right after a rebuild; `Dc` right after a join | "joined" every time (6.2's words), no `[heap] FAILED`, no "the join: NO PSRAM", the page live; "PSRAM free at least" at least 65,536 B; no underrun | **New since 2026-11-02:** 14.3 |
 | 14 | **The user's own card** (no transfer data) | No index: the toast once, the page's status, Shuffle all on the empty states; Auto DJ adds random library tracks | New since 2026-10-13 |
 
 After the checks, the device and the card are put back as the release
@@ -1383,3 +1516,82 @@ zh "正在等待耳机" (it needs the headphones as the output), the UI's Clear
 | 8 | **Pass** (2026-10-16). (a) An album's slots changed so that their CRCs fail, then the album played: "read ahead, row R: its CRC failed (read again later)" for four rows. Two failed again when a pick read them: `D` said damaged 2, but no line named them (the read ahead's "DAMAGED" line covers its own reads only). **Fixed since:** "read at the pick, row R: DAMAGED …" (3.13). The file stayed in use; the first pick was random (every anchor damaged or unread), then normal picks. That random pick's toast said "This track has no Auto DJ neighbours yet: the next track is random", as for any random first pick (9.6). (b) One slot rewritten with a bad list under a good CRC: "BROKEN, picks at random until a remount or the next boot", once; then `[random]` picks; `D`'s index line ends "BROKEN (a bad list under a good CRC): random picks until a remount". (c) The index file renamed: "ABSENT (the file the root names didn't open: io)"; the page's status "Can't read the Auto DJ index" over "picks are random", the settings dim; the empty Queue shows Shuffle all; `De` played nothing; picks `[by track id: no index]`; the toast "No Auto DJ index: picks are random" at the first pick, and again after `D0`, `D1`. No `/.mstream` at all: "index: none (no transfer data on the card)"; the page in all ten languages with "No Auto DJ index on this card" over "picks are random", no text cut. **Finding:** in de, es, it and pt the dim Match strictness row didn't show its value. **Fixed since** (9.2) |
 | 9 | **Seen** (2026-10-15 and 16). `D1` at a finished queue, and the join after a card swap, cued a pick paused at 0:00; nothing started |
 | 10 | **Partial** (2026-10-15 and 16). The two-line toasts (en, de, ru, ja, zh, 16 shots): the lines apart and inside the card in all of them. In three Japanese and Chinese ones a line touches the card's outline (9.6): left for the user to judge, as is en's taller card under the tab bar. Undo (9.4): no Undo started sound, from paused, stopped and playing queues: a Library Play's, the Auto DJ button's, "Auto DJ from here"'s, and a Clear's (the console's). The no-index screens in all ten languages (check 8). Not reached: zh "正在等待耳机" over a title with 青 or 机 |
+
+### 14.3 The rejoin (2026-11-02)
+
+On the user's Core2, the spare card (the synthetic card of 11.4: 19,412
+tracks, 19,410 rows), silent test mode, Auto DJ on. Before: `e7623e0`.
+After: `221f075`. No Guru, `task_wdt` or LOW line, 0 underruns.
+
+| Run | Before | After |
+|---|---|---|
+| A boot's join | "296526 B at the top of the largest free one, 0 of 3 kept and 1 transient blocks in smaller ones", free at least 167,644 B | "300622 B at the top of the largest free one, 0 of 3 kept and 0 transient blocks in smaller ones", free at least 167,624 B, the largest free block 655,348 B as before (5 boots) |
+| `gb` on a fresh boot, stopped | "[heap] FAILED: 77640 B", largest block 73,716 B, free 245,884 B of 816,024 B; "the join: NO PSRAM"; the page "Not enough memory for the Auto DJ index" | "joined" in 1,515 ms, 112 passes: "77640 B at the top of the largest free one, 2 of 3 kept and 7 transient blocks in smaller ones", in 11.4 ms; free at least 176,248 B; the largest free block 335,860 B, 81,920 B under the 417,780 B; no `[heap] FAILED`; the page "19,410 of 19,412 tracks have neighbours", "BPM 95 % · key 97 %" |
+| `gb` with the 320 kbps MP3 playing, twice in a session | Not run | "joined" in 6,124 and 7,456 ms (172 and 195 passes; 2026-10-15: 5.9-6.2 s), the same blocks at the top, free at least 174,136 B, the largest free block 335,860 B and 221,172 B; no `[heap] FAILED` |
+| `gb` with the FLAC playing | Not run | "joined" in 5,838 ms, the same blocks at the top, free at least 149,148 B, the largest free block 155,636 B; no `[heap] FAILED` |
+| `D0`, `D1` right after a rebuild | The same failure, twice, the largest block still 417,780 B | "joined" in 1,524-1,527 ms, the same blocks at the top, free at least 176,248 B, the largest free block 335,860 B |
+| `D0`, `D1` about 15 s after it | "joined", the largest block by then 303,092 B, where only a class's lowest 4 B fail | "joined" (1.5-3.6 s), free at least 178,028 B |
+| `Dc` right after a join | Not run | "joined" (1.5-3.6 s), free at least 77,284 B: the lowest of any join, over the margin |
+
+Host: `test_autodj_join` fails without the fix (the rejoin NO PSRAM at
+19,412 tracks and a largest free block of 303,104 B), and with each part of
+it taken out in turn (the spacer's size, the fall back, the spacer's and the
+blocks' rounding in the margin, the second spacer's test, `probe()`'s).
+
+**The mood block (2026-11-06).** The same Core2 and spare card, now
+19,413 tracks (3 added by hand), T with mood tails for 17,954 of them
+(docs/MOOD-FILTERS.md 9.6, Run C), so `library.idx` v7 holds a 38,826 B
+block of mood words. The Auto DJ index is the one measured above (19,410
+rows, restamped with `--mpdj`). One script, run on a control firmware
+whose builder never sets the word (16 B smaller) and on the mood
+firmware (`af72b50` with the mood filters' S0-S2): a load boot, `z`,
+`D0`, `D`, `D1`, `D`, `gw`, `gb` stopped, `Dc`, `Dh` the 320 kbps bench
+MP3 and `gb`, `Dh` the bench FLAC and `gb`, `Dh` an Opus. PSRAM's
+largest free block, joined unless said (MEASURED):
+
+| Step | Control | Moods | |
+|---|---|---|---|
+| Load boot, Auto DJ off | 819,188 | 786,420 | -32,768 |
+| Load boot, joined | 655,348 | 622,580 | -32,768 |
+| Update stopped | 327,668 | 294,900 | -32,768 |
+| `Dc` | 327,668 | 294,900 | -32,768 |
+| Update during the 320 kbps MP3 | 327,668 | 294,900 | -32,768 |
+| Update during the FLAC | 294,900 | 262,132 | -32,768 |
+
+The mood block costs exactly one 32 KB class, 32,768 B, at each step.
+No update underran or printed `[heap] FAILED`. The updates' builds took
+20.6 / 22.1 s stopped (control / moods), 42.2 / 45.0 s with the MP3 and
+28.7 / 30.2 s with the FLAC. The lowest free in the stopped update's
+join was 180,876 / 175,032 B. After the FLAC the Opus (2 s) opened its
+128,023 B of buffers and played, 101 packets, 0 skipped, on both. The
+script without `D0` and `D1` read 294,900 B on the mood firmware too.
+Against docs/MOOD-FILTERS.md 9.5's rule: inside the modelled -106,496 /
+-40,960 / +49,152 B, every joined figure of the script over 245,764 B,
+no redesign.
+
+Heap figures are compared only within one scripted sequence. The
+control's own are not the 2026-11-02 figures above (327,668 B, not
+335,860 B, after a stopped update; 294,900 B, not 155,636 B, with the
+FLAC): a largest free block depends on the steps before it (7.4). Not
+A/B'd, since it needs a fresh commit on each firmware: the first walk
+after a new commit, then `gb`, read 180,212 B with the block. On the
+card without tails (docs/MOOD-FILTERS.md 9.6, Run B) the same path read
+221,172 B at the join while its walk still ran, 335,860 B after it.
+
+Host: in `test_autodj_join`'s model heap with the real block, the boot's
+largest free block goes from 753,652 B to 720,884 B (-32,768 B); after
+the update, joined, it is 360,436 B in both, pinned in the test.
+
+### 14.4 The card's root (2026-11-02)
+
+On the user's Core2, the 32 GB spare card, never the music card, with the build of
+`e7623e0` for 14a and a temporary build (a fault mode set from the console, not in
+the tree) of `b2f47ca`, with `e7623e0`'s console from the last runs on, for 14b and 14c. An independent read
+of the logs against each row found nothing that holds up a merge. Nothing here
+ran after the look and the breaker (METADATA.md 3.8), which owe their own check.
+
+| # | Result |
+|---|---|
+| 14a | **Pass** for the open, its tries and the remount, three runs; the join that follows, on a boot's fresh heap. The card off the bus: FatFs's answer 3, "1 of 3", ABSENT 43.9 s later, the next read 58.5 s after it: "(after a remount)", joined in 1.85 s. After an update step the join failed instead with `[heap] FAILED` and NO PSRAM, in the first run's update too, before any pull: the rejoin's spacer, nothing of the card's (PR 36). In one run a walk's retry reached the card first: the guard's one restart, the queue kept. A first `Dc` opened with no driver line: the card was still answering (hence the row's note). Not shown: the page's Can't read on a physical pull (a dark screen), a paused player (all three ran stopped), and a status on a card certainly out with the panel lit |
+| 14b | **Pass,** with opens failing and with the directory sector getting no answer. The boot's lines; `library.idx` b48fa114 and `tags.bin` c27ddcb1 unchanged, no card writes; no walk; `cid=?`; the Library row, Rescan's note; Reading, then Can't read, 41.9 s on (46.5 s with no answer); no answers stuck at 52 for the last 45.9 s. The fault off and a reboot: "matches the card", 19,412 tracks, the index open and joined. Not shown: `gs` to its T line after ABSENT under no answer, and the spare's T lists no records, so a transfer's library by identity only |
+| 14c | **Pass,** after `e7623e0`. Its first run failed: `gs` read the root with the jobs running, printed "no transfer data" for a read fault and restarted the player; since then, under these jobs, `gs` and `gt` don't read it ("T: not read"). ABSENT from the start, the walk (about 21 s), compaction and update step ran to their ends, no restart in 153 s, no answers stuck at 16 and 4. A temporary override took a transfer's library for one with no identity for most of it; the real state ran about 20 s. Not shown: the page's Can't read in a session whose jobs run |

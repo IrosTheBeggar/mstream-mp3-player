@@ -25,6 +25,7 @@ uint32_t hashOfPath(const char* path) {
 
 void PlaybackController::startCurrent() {
   if (!hasTrack()) return;
+  if (!cardTry_) endCardHold();  // (any start but the card hold's own try: the listener's, a skip's)
   endedAtEnd_ = false;  // (a start, or one that waits: the queue isn't finished)
   if (held()) {
     // The output can't be heard yet: this entry waits, selected. The
@@ -39,6 +40,7 @@ void PlaybackController::startCurrent() {
 
 void PlaybackController::startNow() {
   if (!hasTrack()) return;
+  if (!cardTry_) endCardHold();  // (a wait's release too: any start but the hold's own try)
   // An unknown id gives "": the backend fails it and update() skips on.
   char path[TrackCatalog::kMaxPath];
   const uint32_t id = queue_.currentTrack();
@@ -52,6 +54,10 @@ void PlaybackController::startNow() {
   start.ms = at;
   start.hintMs = hint;
   if (at > 0) start.anchor = startAnchor_;  // (it goes with the start point)
+  // (Kept for the card hold, which puts it back if this start fails with the card out.)
+  askedDurationMs_ = at > 0 ? startDurationMs_ : 0;
+  askedAnchor_ = start.anchor;
+  askedKey_ = queue_.currentKey();
   clearStartPoint();  // once: a later start of the entry is from its beginning
   playedFromMs_ = at;
   noteLength(hint);  // (a resume point's length, a seek's, a built-in track's)
@@ -318,8 +324,8 @@ void PlaybackController::placeStart(uint32_t ms, uint32_t durationMs, const Resu
     } else if (lengthHint() > 0) {
       // Stopped or cued (the sleep timer's end-of-track pause with Repeat
       // One cues the entry that just played): the length told for this
-      // entry, which the bar shows meanwhile. The catalog's hint (0 for a
-      // library track) would leave the bar inert until a play.
+      // entry, which the bar shows meanwhile (shownTime()): the backend's,
+      // to the ms, where the catalog's is the record's to the second.
       durationMs = lengthHint();
     } else {
       durationMs = catalog_.durationHintMs(queue_.currentTrack());
@@ -358,6 +364,14 @@ bool PlaybackController::startPoint(uint32_t* ms, uint32_t* durationMs, ResumeAn
 
 bool PlaybackController::resumePoint(uint32_t* ms, uint32_t* durationMs, ResumeAnchor* anchor) const {
   if (startPoint(ms, durationMs, anchor)) return true;
+  // The card hold's try under way (its start point taken by the play): where it asked to start,
+  // as while it waits, so the saved point isn't cleared and written again at every try.
+  if (heldForCard() && playedFromMs_ > 0 && askedKey_ == queue_.currentKey()) {
+    *ms = playedFromMs_;
+    *durationMs = askedDurationMs_;
+    if (anchor) *anchor = askedAnchor_;
+    return true;
+  }
   if ((state_ != PlayState::Paused && state_ != PlayState::Waiting) || cued_ || !hasTrack()) return false;
   if (!audio_.positionKnown()) {
     // Paused before the backend took the start up (within ~150 ms of a
@@ -419,10 +433,23 @@ void PlaybackController::shownTime(uint32_t* positionMs, uint32_t* durationMs) c
     *durationMs = length;
     return;
   }
+  if (state_ == PlayState::Stopped || cued_) {
+    // Nothing held (a boot with no resume point; next or the queue's end
+    // while stopped; an entry cued while paused or waiting, or by the card
+    // hold): 0:00, never the backend's figures, the track before's until
+    // its decode task takes the stop up. The length a start point placed
+    // now would take (placeStart()): the one told for the entry, else the
+    // catalog's (a library track's record, to the second; none without
+    // one: the dotted line). None for a failed track.
+    if (!audio_.failed()) {
+      *durationMs = lengthHint() > 0 ? lengthHint() : catalog_.durationHintMs(queue_.currentTrack());
+    }
+    return;
+  }
   if (pendingStart(&ms)) {
     // Never the backend's length here: a skip's is the track before's until
-    // the decode task takes the request up. A library track has no hint: no
-    // length for that moment, and the seek bar is inert.
+    // the decode task takes the request up. The length told: the play's
+    // hint (a library track's record, to the second; none without one).
     *positionMs = ms;
     *durationMs = lengthHint();
     return;
@@ -466,13 +493,99 @@ void PlaybackController::pauseAtBoundary() {
 }
 
 void PlaybackController::update(uint32_t nowMs) {
-  (void)nowMs;  // the backend owns the clock via its own loop(); reserved here
+  // (The backend owns the playing clock via its own loop(); `nowMs` times the card hold.)
   if (fenced_) return;  // the queue is away: a natural end is queueReplaced()'s
   Act act(*this);  // a joined track heard first: its end, if it ended too, is its own
-  checkEnd();
+  letGoOfCardFailure();
+  if (cardWaiting_) {
+    stepCardHold(nowMs);  // (the backend let go: no end or failure of its to read till the try)
+    return;
+  }
+  checkEnd(nowMs);
 }
 
-void PlaybackController::checkEnd() {
+bool PlaybackController::cardSaysNothing() const {
+  if (!card_ || !card_->out()) return false;
+  // A reason of the track's own (its rate refused; the backend's words: an Opus file it refuses,
+  // no RAM for the Opus decoder): the track's, whatever the card. A file that can't be opened has
+  // none, and nor does a decoder that gives up: held, and skipped at the try once the card answers.
+  if (audio_.rateRefusal().hz != 0) return false;
+  char note[4];
+  return audio_.failureNote(note, sizeof(note)) == 0;
+}
+
+void PlaybackController::letGoOfCardFailure() {
+  if (state_ == PlayState::Playing) return;
+  if (cardRun_) {
+    // A pause, a stop or a wait for the headphones since: the hold's over (the listener's, or
+    // PlayGate's, from there). Its try under way then (opened, the hold would have ended), and
+    // not opened since: the entry at the second it asked for, the backend holding nothing.
+    const bool tryCut = !cardWaiting_ && !(audio_.positionKnown() && !audio_.failed());
+    endCardHold();
+    if (!tryCut) return;
+    putBackStart();
+    if (state_ != PlayState::Stopped && !cued_) {
+      audio_.stop();
+      cued_ = true;
+    }
+    return;
+  }
+  // A start the card's being out failed under a pause (the first open after a pull): let go, cued
+  // at its second, so the next play starts it afresh (and holds if the card is still out) rather
+  // than resuming the failed request and counting it against the track once the card is back.
+  if (state_ != PlayState::Stopped && !cued_ && hasTrack() && audio_.failed() && cardSaysNothing()) {
+    putBackStart();
+    audio_.stop();
+    cued_ = true;
+  }
+}
+
+void PlaybackController::putBackStart() {
+  // (Its own entry's only: a start point belongs to its key.)
+  if (playedFromMs_ == 0 || askedKey_ != queue_.currentKey()) return;
+  startMs_ = playedFromMs_;
+  startDurationMs_ = askedDurationMs_;
+  startKey_ = askedKey_;
+  startAnchor_ = askedAnchor_;
+}
+
+void PlaybackController::holdForCard(uint32_t nowMs) {
+  putBackStart();
+  audio_.stop();  // the failed request let go: the backend holds nothing
+  cued_ = true;
+  if (!cardRun_) {
+    cardRun_ = true;
+    cardSinceMs_ = nowMs;
+    cardWaitMs_ = kCardRetryMs;
+    ++cardHolds_.begun;
+  } else if (nowMs - cardSinceMs_ >= kCardWaitMs) {
+    // Still out: paused there, its place and start point kept. Nothing starts by itself from
+    // here; a play asks again.
+    state_ = PlayState::Paused;
+    endCardHold();
+    ++cardHolds_.paused;
+    return;
+  } else {
+    cardWaitMs_ = std::min(cardWaitMs_ * 2, kCardRetryMaxMs);
+  }
+  cardWaiting_ = true;
+  // (A last try at kCardWaitMs, not past it.)
+  cardRetryAtMs_ = nowMs + std::min(cardWaitMs_, kCardWaitMs - (nowMs - cardSinceMs_));
+}
+
+void PlaybackController::stepCardHold(uint32_t nowMs) {
+  // (The card answering someone else's mount meanwhile: at once.)
+  const bool answers = !card_ || !card_->out();
+  if (!answers && static_cast<int32_t>(nowMs - cardRetryAtMs_) < 0) return;
+  cardWaiting_ = false;
+  if (!held()) ++cardHolds_.retries;  // (held: no open, a wait for the headphones instead)
+  // From where it would have started (its start point put back); its open is FatFs's next mount.
+  cardTry_ = true;
+  startCurrent();  // (held for the headphones: it waits, and the wait takes over)
+  cardTry_ = false;
+}
+
+void PlaybackController::checkEnd(uint32_t nowMs) {
   if (state_ != PlayState::Playing) return;
   // A natural end with nothing heard (the position never left 0:00): a
   // track with no samples to play, which every format can hold (an Opus
@@ -486,6 +599,14 @@ void PlaybackController::checkEnd() {
   // queue of nothing but such entries stops (docs/QUEUE-MODES.md).
   const bool empty = !audio_.failed() && audio_.finished() && audio_.positionKnown() && audio_.positionMs() == 0;
   if (audio_.failed() || empty) {
+    // The card out: nothing of the track's (the card hold, the class comment).
+    if (!empty && cardSaysNothing()) {
+      holdForCard(nowMs);
+      return;
+    }
+    // (A try that failed with the card answering is the track's own, as any failure: over now,
+    // so a stop at the queue's end below puts no start point back.)
+    endCardHold();
     ++failure_.count;
     failure_.track = queue_.currentTrack();
     failure_.key = queue_.currentKey();
@@ -506,6 +627,11 @@ void PlaybackController::checkEnd() {
       return;
     }
     advance(false);  // a failure moves on (a skip), even with Repeat One
+  } else if (cardRun_ && audio_.positionKnown()) {
+    // The hold's try was taken up: the card answered, the entry plays (an end that came with
+    // it already: the next pass's).
+    ++cardHolds_.resumed;
+    endCardHold();
   } else if (audio_.finished()) {
     failuresInARow_ = 0;
     ++naturalEnds_;

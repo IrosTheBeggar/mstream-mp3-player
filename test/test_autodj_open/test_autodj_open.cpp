@@ -8,6 +8,8 @@
 // golden index, that a read that fails at any point of an open is the card's
 // fault and never reads as the file's, and a bad file the other way about. Run:
 // pio test -e native
+//
+// And what a remount comes to after a fault of the card: that fault's echo, or news.
 #include <unity.h>
 
 #include <algorithm>
@@ -126,6 +128,145 @@ void test_an_open_from_outside_counts_from_its_first_try() {
   TEST_ASSERT_EQUAL_UINT32(2000, t.lastWaitMs());
 }
 
+// ---- a remount ----
+
+void test_a_remount_with_no_fault_asks_at_once_from_the_first_try() {
+  OpenTries t;
+  TEST_ASSERT_TRUE(t.remounted(0));
+  // The last try the file's own word: the card answered it.
+  for (OpenTry last : {OpenTry::NotThere, OpenTry::Checks}) {
+    TEST_ASSERT_TRUE(t.failed(OpenTry::Card, 0));
+    TEST_ASSERT_FALSE(t.failed(last, 2000));
+    TEST_ASSERT_EQUAL_UINT8(1, t.used());
+    TEST_ASSERT_TRUE(t.remounted(2000));
+    TEST_ASSERT_EQUAL_UINT8(0, t.used());
+  }
+  // Or one that worked.
+  TEST_ASSERT_TRUE(t.failed(OpenTry::Card, 0));
+  t.reset();
+  TEST_ASSERT_TRUE(t.remounted(1));
+}
+
+void test_a_remount_soon_after_a_fault_is_its_echo_and_the_wait_stands() {
+  TEST_ASSERT_EQUAL_UINT32(30000, OpenTries::kEchoMs);
+  OpenTries t;
+  const uint32_t at = 100000;
+  TEST_ASSERT_TRUE(t.failed(OpenTry::Card, at));
+  TEST_ASSERT_FALSE(t.remounted(at - 5));  // (a pass's now, older than the try's)
+  TEST_ASSERT_FALSE(t.remounted(at));
+  TEST_ASSERT_FALSE(t.remounted(at + OpenTries::kEchoMs - 1));
+  TEST_ASSERT_EQUAL_UINT8(1, t.used());
+  TEST_ASSERT_FALSE(t.due(at + 1999));
+  TEST_ASSERT_TRUE(t.due(at + 2000));
+  // No longer an echo: it asks, the count where it was.
+  TEST_ASSERT_TRUE(t.remounted(at + OpenTries::kEchoMs));
+  TEST_ASSERT_EQUAL_UINT8(1, t.used());
+  // The last try over too, that counts from the last failure: and it is the last.
+  TEST_ASSERT_TRUE(t.failed(OpenTry::Card, at + 1));
+  TEST_ASSERT_TRUE(t.failed(OpenTry::Card, at + 2));
+  const uint32_t last = at + 3;
+  TEST_ASSERT_FALSE(t.failed(OpenTry::Card, last));
+  TEST_ASSERT_FALSE(t.remounted(last + OpenTries::kEchoMs - 1));
+  TEST_ASSERT_TRUE(t.remounted(last + OpenTries::kEchoMs));
+  TEST_ASSERT_FALSE(t.failed(OpenTry::Card, last + OpenTries::kEchoMs));
+  // Across millis()'s wrap.
+  OpenTries w;
+  TEST_ASSERT_TRUE(w.failed(OpenTry::Card, 0xFFFFFF00u));
+  TEST_ASSERT_FALSE(w.remounted(0x100));
+  TEST_ASSERT_TRUE(w.remounted(0xFFFFFF00u + OpenTries::kEchoMs));
+}
+
+void test_a_remount_weeks_after_a_fault_asks() {
+  OpenTries t;
+  const uint32_t at = 5000;
+  TEST_ASSERT_TRUE(t.failed(OpenTry::Card, at));
+  TEST_ASSERT_TRUE(t.remounted(at + 0x7FFFFFFFu));  // (24.8 days: the largest age a signed compare reads right)
+  TEST_ASSERT_TRUE(t.remounted(at + 0x80000000u));  // (1 ms on, and it reads as a long way before the try)
+  TEST_ASSERT_TRUE(t.remounted(at + 0xFFFF0000u));  // (49.7 days, a minute short of the wrap)
+  // At a full turn of the clock the age is small again, and an echo it can't be told from.
+  TEST_ASSERT_FALSE(t.remounted(at + 0xFFFFFFFFu));
+  TEST_ASSERT_EQUAL_UINT8(1, t.used());
+}
+
+// Why it is so, on a model of the two readers of the root (app/AutoDj and app/Waves
+// are device code). A read with no answer leaves the card failed, so FatFs's next
+// call, whoever's, mounts it again and moves the counter both watch. With that taken
+// for news, each read would bring the next at once: hundreds in ten minutes, seconds
+// of the loop each. And a reader makes that call itself after its read, or a call
+// coming later than the window would read as news: the next read, and its mark for
+// the next call, without end, on a player where the calls come far apart.
+struct RootReader {
+  OpenTries tries;
+  uint32_t seen = 0;
+  bool again = false;
+  uint32_t reads = 0;
+};
+
+struct Silent {
+  uint32_t remounts = 0;
+  bool markedFailed = true;  // (the boot's reads left it so)
+  uint32_t readMs = 0;       // (what a read costs: a card that doesn't answer takes seconds)
+  void call() {
+    if (markedFailed) ++remounts;
+    markedFailed = false;
+  }
+  void readFailed() {
+    call();
+    markedFailed = true;
+  }
+  void pass(RootReader& r, uint32_t& nowMs) {
+    const bool moved = remounts != r.seen;
+    r.seen = remounts;
+    const bool news = moved && r.tries.remounted(nowMs);
+    const bool due = !moved && r.again && r.tries.due(nowMs);
+    if (!news && !due) return;
+    readFailed();
+    nowMs += readMs;
+    call();  // (FatFs::echoNow())
+    ++r.reads;
+    r.again = r.tries.failed(OpenTry::Card, nowMs);
+  }
+};
+
+void test_two_readers_of_a_root_that_never_answers_stay_on_their_waits() {
+  // Another caller of FatFs (a decoder's read, a saved queue): each pass, far apart
+  // however late each comes after the last read, or none at all.
+  for (uint32_t everyMs : {0u, 20u, 5000u, 33000u, 45000u, 60000u, 120000u}) {
+    for (uint32_t readMs : {0u, 800u, 1600u, 2800u, 4000u}) {
+      Silent card;
+      card.readMs = readMs;
+      RootReader dj, wave;
+      dj.again = dj.tries.failed(OpenTry::Card, 0);
+      wave.again = wave.tries.failed(OpenTry::Card, 0);
+      const uint32_t kPassMs = 20;
+      uint32_t now = 0, nextCall = everyMs;
+      const auto run = [&](uint32_t end) {
+        for (; now < end; now += kPassMs) {
+          if (everyMs && now >= nextCall) {
+            card.call();
+            nextCall += everyMs;
+          }
+          card.pass(dj, now);
+          card.pass(wave, now);
+        }
+      };
+      run(600000);
+      char msg[80];
+      std::snprintf(msg, sizeof(msg), "a call each %lu ms, a read of %lu ms", (unsigned long)everyMs, (unsigned long)readMs);
+      // The boot's, then 2 s, 12 s and 42 s on: three each, and quiet.
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(3, dj.reads, msg);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(3, wave.reads, msg);
+      TEST_ASSERT_FALSE(dj.again);
+      TEST_ASSERT_FALSE(wave.again);
+      // A remount long after: the card may be back. One read each, and quiet again.
+      ++card.remounts;
+      run(now + 300000);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(4, dj.reads, msg);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(4, wave.reads, msg);
+    }
+  }
+}
+
 // ---- when one falls due ----
 
 void test_a_pass_older_than_the_try_isnt_due() {
@@ -221,6 +362,10 @@ int main(int, char**) {
   RUN_TEST(test_a_fault_of_the_card_is_tried_three_times_more);
   RUN_TEST(test_a_try_again_that_finds_the_file_gone_or_bad_is_off_at_once);
   RUN_TEST(test_an_open_from_outside_counts_from_its_first_try);
+  RUN_TEST(test_a_remount_with_no_fault_asks_at_once_from_the_first_try);
+  RUN_TEST(test_a_remount_soon_after_a_fault_is_its_echo_and_the_wait_stands);
+  RUN_TEST(test_a_remount_weeks_after_a_fault_asks);
+  RUN_TEST(test_two_readers_of_a_root_that_never_answers_stay_on_their_waits);
   RUN_TEST(test_a_pass_older_than_the_try_isnt_due);
   RUN_TEST(test_the_wait_holds_across_millis_wrap);
   RUN_TEST(test_a_failed_read_at_any_point_of_an_open_is_the_cards_fault);

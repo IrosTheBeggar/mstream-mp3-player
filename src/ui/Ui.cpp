@@ -14,6 +14,7 @@
 #include "NvsLayout.h"
 #include "RateConverter.h"
 #include "SleepTimer.h"
+#include "TagText.h"
 #include "TextFit.h"
 #include "TextFold.h"
 #include "UiStrings.h"
@@ -142,6 +143,7 @@ void Ui::start(uint32_t nowMs) {
   lastUpNext_ = state_.upNext;
   lastDjAdds_ = state_.autoDj.adds;
   failuresSeen_ = player_.lastFailure().count;
+  cardHoldsSeen_ = player_.cardHolds().begun;
   started_ = true;
   // A fresh unit: the language first (the touch check and the tips then
   // speak it).
@@ -383,6 +385,7 @@ void Ui::autoDjStart() {
     warn(tr(S::toast_autodj_needs_index));
     return;
   }
+  if (r == autodjview::Started::CardFailed) return;  // (the page says so, and Shuffle all takes the button's place)
   if (r != autodjview::Started::Played) {
     warn(tr(S::toast_autodj_no_start));  // (another tap draws again)
     return;
@@ -604,7 +607,9 @@ void Ui::resetLibraryTab() {
 
 void Ui::libraryChanged() {
   // Every index id changed: the covers made so far are other albums' now,
-  // and the Library's pages start over at the root.
+  // the Albums list's filtered ids too (its filter stays: MOOD-FILTERS.md
+  // 4.2), and the Library's pages start over at the root.
+  libraryPage_.dropFilteredAlbums();
   thumbs_.libraryChanged();
   resetLibraryTab();
   if (started_ && !suspended_ && list_.attached()) list_.reload();  // (the Queue's rows: new keys)
@@ -612,13 +617,16 @@ void Ui::libraryChanged() {
 
 void Ui::libraryUpdating() {
   // The snapshot says so from now (the pages' lines): taken again, so the
-  // pages drawn below see it.
+  // pages drawn below see it. The index goes behind the fence: the Albums
+  // list's filtered ids are dropped first (its filter stays: 4.2).
+  libraryPage_.dropFilteredAlbums();
   host_.snapshot(state_);
   resetLibraryTab();
   if (started_ && !suspended_ && list_.attached()) list_.reload();
 }
 
 void Ui::browse(LibraryIndex* index) {
+  libraryPage_.dropFilteredAlbums();  // (another index's ids)
   browse_ = index && index->ready() ? index : nullptr;
   Serial.printf("[ui] the Library shows %s\n", browse_ ? "a SYNTHETIC library (look only; uil0: the card's)"
                                                        : "the card's library");
@@ -635,7 +643,7 @@ void Ui::applyCover() {
   }
   // The dancer is drawn by DanceMode, outside the pages: keep it off the overlays.
   const int top = toast_.bottom();
-  const int bottom = jumpGrid_.up() || coach_.up() ? top
+  const int bottom = jumpGrid_.up() || coach_.up() || filters_.up() ? top
                      : sheet_.up()       ? sheet_.top()
                      : sleepSheet_.up()  ? SleepSheet::kY
                      : volumeSheet_.up() ? VolumeSheet::kY
@@ -671,6 +679,17 @@ bool Ui::closeModal(bool notify) {
     jumpSource_ = nullptr;
     closed = true;
   }
+  if (filters_.up()) {
+    // Its owner hears whether the filter changed (the Albums list reloads
+    // at its top once: MOOD-FILTERS.md 7.5); not at a suspend() (4.3: the
+    // filter is already applied, and enter() at the resume reads it).
+    FilterOwner* owner = filters_.owner();
+    const bool changed = filters_.changed();
+    filters_.close();
+    closed = true;
+    Serial.printf("[ui] filters: the editor closed%s\n", changed ? ", the filter changed" : "");
+    if (notify && owner) owner->onFiltersClosed(changed);
+  }
   if (closed) applyCover();
   return closed;
 }
@@ -705,6 +724,8 @@ void Ui::uncover(int oldBottom) {
   if (jumpGrid_.up() || coach_.up()) {
     if (jumpGrid_.up()) jumpGrid_.draw();
     if (coach_.up()) coach_.draw();
+  } else if (filters_.up()) {
+    filters_.drawTop();  // (over the page's header row: its title row and row 1's top)
   } else if (page_) {
     page_->repaintHeader();
   }
@@ -713,7 +734,7 @@ void Ui::uncover(int oldBottom) {
   // over it is drawn again too, else it stays up (live) but unseen. Seen on
   // the device: +10 min on the fade toast over the Sleep timer sheet left
   // its pills invisible over the transport, and a tap on "..." hit Turn off.
-  const bool wholePage = !jumpGrid_.up() && !coach_.up() && page_ && !page_->hasHeader();
+  const bool wholePage = !jumpGrid_.up() && !coach_.up() && !filters_.up() && page_ && !page_->hasHeader();
   if (sheet_.up() && (wholePage || sheet_.top() < oldBottom)) sheet_.draw();  // a 4-row sheet would reach the header row
   if (wholePage && sleepSheet_.up()) sleepSheet_.draw();
   if (wholePage && volumeSheet_.up()) volumeSheet_.draw();
@@ -859,6 +880,28 @@ void Ui::openSleepSheet() {
   sleepSheet_.open(state_.sleepPick, state_.sleepRunning, state_.sleepCanExtend, title, accent::NowPlaying);
   applyCover();
   Serial.printf("[ui] sleep timer sheet (%s)\n", state_.sleepRow);
+}
+
+void Ui::openFilters(FilterOwner* owner) {
+  if (!owner || !started_ || suspended_) return;
+  endPageTouch();
+  closeModal(true);
+  // A toast up goes, its Undo with it, as for the Dance tab (showDance()):
+  // its rows are the editor's title row (MOOD-FILTERS.md 3.2, 4.3). Its
+  // cover goes before the first frame: the editor draws under a toast (not
+  // `over`), so rows 36-71 would keep the toast's pixels while the unseen
+  // Clear, count and cross took the taps there.
+  if (toast_.up()) {
+    if (toast_.undo()) queue_.dropUndo();
+    toast_.hide();
+    applyCover();
+  }
+  sheetOpenedMs_ = millis();  // (the settle, as a sheet's: 7.4)
+  const bool tracks = owner->filterScope() == filtergrid::Scope::Tracks;
+  filters_.open(owner, tracks ? accent::Output : accent::Library);
+  applyCover();
+  Serial.printf("[ui] filters: the editor (%s, filter 0x%03X)\n", tracks ? "Auto DJ's tracks" : "the albums",
+                static_cast<unsigned>(filters_.word()));
 }
 
 void Ui::refreshSleepSheet() {
@@ -1171,6 +1214,17 @@ void Ui::noteFailures() {
   }
 }
 
+// The track didn't start because the card is out: the player holds there and tries again
+// (nothing skipped, so no note of noteFailures()'). Its words are the no-card screen's Try
+// again note's, a toast already in every language.
+void Ui::noteCardHolds() {
+  const uint32_t begun = player_.cardHolds().begun;
+  if (begun == cardHoldsSeen_) return;
+  cardHoldsSeen_ = begun;
+  warn(tr(S::card_none_still));
+  host_.wakeScreen("the card is out");
+}
+
 void Ui::updateHud(uint32_t nowMs) {
   const ButtonPolicy::Feedback& f = state_.feedback;
   if (f.seq != hudSeq_) {
@@ -1321,6 +1375,7 @@ void Ui::loop(uint32_t nowMs) {
 
   updateHud(nowMs);
   noteFailures();
+  noteCardHolds();
   if (toast_.expired(nowMs)) {
     if (toast_.undo()) queue_.dropUndo();  // Undo was offered until now
     const int was = toast_.bottom();
@@ -1413,7 +1468,9 @@ void Ui::loop(uint32_t nowMs) {
       dance_.setActive(false);  // (a console tab change while dark)
       danceWasOn_ = true;
     }
-    thumbs_.loop(nowMs);
+    // (A list's rows are rendered again on the wake, as when a modal goes:
+    // the row that asked for this cover still holds the placeholder.)
+    if (thumbs_.loop(nowMs) != Thumbs::kNone) thumbsStale_ = true;
     waves_.loop(nowMs);
     return;
   }
@@ -1551,6 +1608,9 @@ void Ui::updateStatus(uint32_t nowMs) {
   if (library) librarytext::statusText(state_.libraryStatus, text, sizeof(text));
   // The band changes only while the list stands still (a fling isn't cut).
   if (list_.attached() && list_.animating()) return;
+  // Under a modal the band stays as it is, even when the line ends: changing
+  // it there would wipe the modal (it is drawn again when they go).
+  if (modalUp() || jumpGrid_.up() || coach_.up()) return;
   if (!text[0]) {
     if (statusBand_) {
       statusBand_ = false;
@@ -1560,7 +1620,6 @@ void Ui::updateStatus(uint32_t nowMs) {
     }
     return;
   }
-  if (modalUp() || jumpGrid_.up() || coach_.up()) return;  // drawn again when they go
   if (!statusBand_) {
     statusBand_ = true;
     statusHash_ = 0;
@@ -1657,17 +1716,23 @@ void Ui::route(const InputEvent& e) {
       touch_ = TouchOn::Toast;
     } else if (dialog_.up()) {
       touch_ = TouchOn::Dialog;
-    } else if ((sheet_.up() || sleepSheet_.up()) &&
+    } else if ((sheet_.up() || sleepSheet_.up() || filters_.up()) &&
                static_cast<int32_t>(e.ms - sheetOpenedMs_) < static_cast<int32_t>(Sheet::kSettleMs)) {
       // The settle: a touch that starts this soon after a sheet opened is
       // the finger that opened it coming back (a double tap on "..." or on
-      // the album row): the whole touch goes nowhere, no tick.
+      // the album row, or on the Albums list's first row: the editor's
+      // cells are under it): the whole touch goes nowhere, no tick.
       touch_ = TouchOn::None;
       Serial.println("[ui] sheet: a touch right after it opened, ignored");
     } else if (sheet_.up()) {
       touch_ = TouchOn::Sheet;
     } else if (sleepSheet_.up()) {
       touch_ = TouchOn::Sleep;
+    } else if (filters_.up()) {
+      // A toast over its title row: a Down above the list's band goes
+      // nowhere, so an unseen Clear (or count, or row 1's top) can't be hit
+      // (MOOD-FILTERS.md 4.3). The sleep timer's buttons stay first, above.
+      touch_ = toast_.up() && e.y < kListY ? TouchOn::None : TouchOn::Filters;
     } else if (volumeSheet_.up()) {
       touch_ = TouchOn::Volume;
       input_.noHold();  // resting on the slider is no long press
@@ -1747,6 +1812,18 @@ void Ui::route(const InputEvent& e) {
         sleepSheet_.close();
         repaintUnder();
         if (c >= 0) host_.sleepChoose(c);
+      }
+      break;
+    }
+    case TouchOn::Filters: {
+      const filtergrid::Cell c = filters_.onEvent(e);
+      if (c == filtergrid::Cell::Cross) {
+        tick();
+        closeModal(true);  // (its owner told: a changed filter reloads the list)
+        repaintUnder();
+      } else if (c != filtergrid::Cell::None) {
+        tick();  // (before the pass: the finger's answer never waits on it)
+        filters_.tap(c);
       }
       break;
     }
@@ -1913,12 +1990,14 @@ void Ui::setDark(bool on) {
   if (on) {
     if (!suspended_) gfx::setDark(true);
     if (!started_ || suspended_) return;
-    // (No finger is on: a touch keeps the screen lit. The console's Ps0 can.)
+    // (No finger is on, as a rule: a touch keeps the screen lit. The PWR key
+    // and the console's Ps0 can leave one on.)
     endPageTouch();
     touch_ = TouchOn::None;
     holdUnused_ = false;
     // A fling stops where it is (not carried on, or caught up, on the wake).
     if (list_.attached() && list_.animating()) list_.scrollTo(list_.offset());
+    motion_.on = false;  // (not logged: its time would count the whole dark)
     if (page_) page_->screenOff();
     if (dance_.active()) {
       dance_.setActive(false);
@@ -1957,6 +2036,7 @@ void Ui::redrawAll() {
   }
   if (sheet_.up()) sheet_.draw();
   if (sleepSheet_.up()) sleepSheet_.draw();
+  if (filters_.up()) filters_.draw();
   if (volumeSheet_.up()) volumeSheet_.draw();
   if (dialog_.up()) dialog_.draw();
   if (toast_.up()) toast_.draw();
@@ -2144,10 +2224,13 @@ void Ui::printState() const {
                 "mean %.2f ms, max %.2f ms\n",
                 (unsigned long)frames_, fps_, (unsigned long)clock_.period(), ScrollGovernor::name(budget_.level),
                 (unsigned long)h.count, h.meanUs() / 1000.0f, h.maxUs / 1000.0f);
-  Serial.printf("[ui] overlays: toast %s%s%s, HUD %s, sheet %s, sleep timer sheet %s, volume %s, jump grid %s, "
-                "dialog %s, coach %s\n",
+  Serial.printf("[ui] overlays: toast %s%s%s, HUD %s, sheet %s, sleep timer sheet %s, filters %s, volume %s, "
+                "jump grid %s, dialog %s, coach %s\n",
                 toast_.up() ? "\"" : "none", toast_.up() ? toast_.text() : "", toast_.up() ? "\"" : "",
                 hud_.up() ? "up" : "no", sheet_.up() ? "open" : "no", sleepSheet_.up() ? "open" : "no",
+                !filters_.up()                                                  ? "no"
+                : filters_.owner()->filterScope() == filtergrid::Scope::Tracks ? "open (Auto DJ's)"
+                                                                                 : "open (the albums')",
                 volumeSheet_.up() ? (volumeSheetBt_ ? "open (headphones)" : "open (speaker)") : "no",
                 jumpGrid_.up() ? "open" : "no", dialog_.up() ? "open" : "no",
                 coach_.up() ? (coach_.card() == 0 ? "card 1" : "card 2") : "no");
@@ -2208,6 +2291,62 @@ void Ui::languageCommand(const char* a) {
   }
 }
 
+// uiM: the Albums list's mood filter (what is set, what it holds, the last
+// pass's time, the carve) and the editor; uiMa<hex> sets it (bare hex, as
+// gm<hex>: an invalid q refused), uiMa0 clears it, its pass logged with its
+// time as every pass is; uiMe opens the editor over the page shown, its
+// taps then the scripted finger's (docs/MOOD-FILTERS.md 9.3). Behind the
+// library update's fence the index is the build's: uiMa and uiMe say so
+// and do nothing.
+void Ui::filtersCommand(const char* a) {
+  if ((a[0] == 'a' || a[0] == 'e') && state_.libraryFenced) {
+    Serial.printf("[ui] filters: the library is updating: uiM%c does nothing (again once it's done)\n", a[0]);
+    return;
+  }
+  if (a[0] == 'e' && !a[1]) {
+    libraryPage_.refreshFilter();  // (its albums, if the fence or a rebuild dropped them)
+    openFilters(&libraryPage_);
+    return;
+  }
+  if (a[0] == 'a') {
+    // gm<hex>'s rules (tagtext::parse()): 1-4 hex digits, moodfilter::valid().
+    tagtext::Parsed p;
+    if (strlen(a + 1) <= 4) {
+      char arg[8];
+      snprintf(arg, sizeof(arg), "m%s", a + 1);
+      p = tagtext::parse(arg);
+    }
+    if (p.command != tagtext::Command::Moods || p.n == tagtext::kMoodsReport) {
+      Serial.printf("[ui] uiMa%s: not a filter (bare hex, the 11 bits of MOOD-FILTERS.md 5.4: uiMa127; uiMa0 "
+                    "clears it)\n",
+                    a + 1);
+      return;
+    }
+    const uint16_t q = static_cast<uint16_t>(p.n);
+    const bool changed = q != libraryPage_.filterWord();
+    if (!libraryPage_.setFilterWord(q)) return;  // (no memory: said, and the filter as it was)
+    if (filters_.up() && filters_.owner() == &libraryPage_) {
+      filters_.sync();  // the editor shows it (its close reloads the list)
+    } else {
+      libraryPage_.onFiltersClosed(changed);  // as the editor's close: the list from its top
+    }
+    return;
+  }
+  if (a[0]) {
+    Serial.println("[ui] uiM the Albums list's mood filter; uiMa<hex> set it (uiMa127), uiMa0 clear it; uiMe the "
+                   "editor");
+    return;
+  }
+  libraryPage_.printFilter();
+  if (!filters_.up()) {
+    Serial.println("[ui] filters: the editor is closed");
+    return;
+  }
+  Serial.printf("[ui] filters: the editor is open (%s), filter 0x%03X%s\n",
+                filters_.owner() == &libraryPage_ ? "the albums'" : "Auto DJ's",
+                static_cast<unsigned>(filters_.word()), filters_.changed() ? ", changed since it opened" : "");
+}
+
 void Ui::command(const char* a) {
   if (!a || !a[0]) {
     printState();
@@ -2251,12 +2390,16 @@ void Ui::command(const char* a) {
   } else if (a[0] == 'T') {
     thumbs_.redecode();
     list_.refreshAll();  // the rows on screen ask again
+  } else if (a[0] == 'M') {
+    filtersCommand(a + 1);
+    return;
   } else {
     Serial.println("[ui] ui: the navigation state; ui0-ui4 tap a tab (0 Now Playing, 1 Library, 2 Queue, 3 Dance, "
                    "4 Output); uib back; uic the coach cards; uiL<tag> the language (uiL the list, uiL- forget it and "
                    "the tips: the next boot is a fresh unit's); uiP the first boot's language picker; uiT the covers "
                    "decoded again (timings); uil<n> the Library browses a synthetic library of n tracks (uil0: the "
-                   "card's); uit/uih/uis/uid/uip a scripted finger");
+                   "card's); uit/uih/uis/uid/uip a scripted finger; uiM the Albums list's mood filter (uiMa<hex> set "
+                   "it, uiMa0 clear it, uiMe the editor)");
     return;
   }
   printState();

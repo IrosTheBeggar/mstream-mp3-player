@@ -323,7 +323,8 @@ Pass Driver::step(PlaybackController& player, const Index& ix, const Env& env) {
     p.prefetchUs = timed.us;
     if (p.prefetch != SlotResult::Ok) {
       readWait_ = true;
-      readAtMs_ = env.nowMs + kReadAgainMs;
+      // (From the read's end, up to 1.5 s after the pass began: time for the ring to fill.)
+      readAtMs_ = env.nowMs + p.prefetchUs / 1000 + kReadAgainMs;
     }
   } else if (s_.on && maps && !ix.joining && !env.listMoving && engine_.runDue(s_, *maps, ix.k, &row)) {
     // A cached slot whose run the maps outdated (the join ready again):
@@ -347,9 +348,15 @@ void Driver::pickInto(PlaybackController& player, const Index& ix, const Env& en
   in.playingTrack = q.currentTrack();
   in.libraryTracks = env.libraryTracks;
   const uint64_t t0 = now();
+  const uint32_t ioSkips = engine_.stats().ioSkips;
   p->pick = engine_.pick(s_, in);
   p->pickUs = static_cast<uint32_t>(now() - t0);
   p->readUs = timed.us;
+  // A read that failed: the read ahead doesn't ask it again at once, as after its own.
+  if (engine_.stats().ioSkips != ioSkips) {
+    readWait_ = true;
+    readAtMs_ = env.nowMs + p->readUs / 1000 + kReadAgainMs;
+  }
   p->picked = true;
   const QueueModel::Edit before = q.undoable();
   if (p->pick.ok && player.addFromAutoDj(p->pick.track, cue)) {

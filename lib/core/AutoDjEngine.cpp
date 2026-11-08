@@ -255,6 +255,7 @@ void Engine::fileReopened() {
   for (CacheSlot& c : cache_) c = CacheSlot();
   damaged_.clear();
   suspect_ = kNoRow;
+  ioRow_ = kNoRow;
   broken_ = false;
 }
 
@@ -270,6 +271,7 @@ void Engine::copySession(const Engine& from) {
   print_ = from.print_;
   damaged_ = from.damaged_;
   suspect_ = from.suspect_;
+  ioRow_ = from.ioRow_;
   broken_ = from.broken_;
   stats_ = from.stats_;
   for (uint8_t i = 0; i < kSlotCache; ++i) {
@@ -327,6 +329,7 @@ SlotResult Engine::read(SlotReader& slots, uint16_t row) {
   if (r == mpdj::SlotRead::Ok) {
     insert(row, static_cast<uint16_t>(count > mpdj::kMaxK ? mpdj::kMaxK : count));
     if (suspect_ == row) suspect_ = kNoRow;
+    if (ioRow_ == row) ioRow_ = kNoRow;
     return SlotResult::Ok;
   }
   if (r == mpdj::SlotRead::Broken) {
@@ -336,6 +339,15 @@ SlotResult Engine::read(SlotReader& slots, uint16_t row) {
   }
   if (why == cardcontract::Why::Io) {
     ++stats_.ioSkips;
+    // The same row twice in a row: into the ring, until a remount or Dc (3.13): each read
+    // of a sector the card keeps failing costs the loop the driver's retries.
+    if (ioRow_ == row) {
+      ioRow_ = kNoRow;
+      damaged_.add(row);
+      ++stats_.damaged;
+      return SlotResult::IoTwice;
+    }
+    ioRow_ = row;
     return SlotResult::Io;
   }
   if (suspect_ == row) {
@@ -554,7 +566,9 @@ Pick Engine::pick(const Settings& s, const PickIn& in) {
           ++out.reads;
           res = read(*in.slots, r);
           // (At most one a read: within kReadsPerPick.)
-          if (res == SlotResult::Damaged && out.damaged < kReadsPerPick) out.damagedRow[out.damaged++] = r;
+          if ((res == SlotResult::Damaged || res == SlotResult::IoTwice) && out.damaged < kReadsPerPick) {
+            out.damagedRow[out.damaged++] = r;
+          }
           if (res != SlotResult::Suspect) break;
         }
         if (res == SlotResult::Broken) break;

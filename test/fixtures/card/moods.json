@@ -1,0 +1,2375 @@
+{
+ "note": "Mood filters as data (MOOD-FILTERS.md 4.1, 5.3, 5.4; METADATA 2.6.4's mood tail, 3.4.3's mood word), made with tools/moodfilter.py. Hex strings are integers; byte strings are space-separated hex; rows are counted from 0. A row's 'holds' lists, for each level, the predicates that hold for it, in 'predicates' order; one not listed fails. A predicate at a level is the filter of its 'q' with the level's 'code' in bits 9-10. A filter that sets no group (a level alone, or an invalid word, which reads as 0) matches every row, one with no scores too.",
+ "heads": [
+  "danceable",
+  "happy",
+  "sad",
+  "relaxed",
+  "aggressive",
+  "party",
+  "acoustic",
+  "instrumental"
+ ],
+ "values": [
+  {
+   "score": 0,
+   "value": 0,
+   "bucket": 0
+  },
+  {
+   "score": 1,
+   "value": 100,
+   "bucket": 3
+  },
+  {
+   "score": 0.29,
+   "value": 29,
+   "bucket": 0
+  },
+  {
+   "score": 0.57,
+   "value": 57,
+   "bucket": 2
+  },
+  {
+   "score": 0.58,
+   "value": 58,
+   "bucket": 2
+  },
+  {
+   "score": 0.2999,
+   "value": 29,
+   "bucket": 0
+  },
+  {
+   "score": 0.3,
+   "value": 30,
+   "bucket": 1
+  },
+  {
+   "score": 0.4999,
+   "value": 49,
+   "bucket": 1
+  },
+  {
+   "score": 0.5,
+   "value": 50,
+   "bucket": 2
+  },
+  {
+   "score": 0.6999,
+   "value": 69,
+   "bucket": 2
+  },
+  {
+   "score": 0.7,
+   "value": 70,
+   "bucket": 3
+  },
+  {
+   "score": 0.12345,
+   "value": 12,
+   "bucket": 0
+  },
+  {
+   "score": 0.99999,
+   "value": 99,
+   "bucket": 3
+  },
+  {
+   "score": 1.25,
+   "value": 100,
+   "bucket": 3
+  },
+  {
+   "score": -0.5,
+   "value": 0,
+   "bucket": 0
+  },
+  {
+   "score": -0.0001,
+   "value": 0,
+   "bucket": 0
+  },
+  {
+   "score": null,
+   "value": 255,
+   "note": "NULL: no bucket"
+  }
+ ],
+ "levels": [
+  {
+   "level": "strict",
+   "code": 1,
+   "need": 3,
+   "under": 1
+  },
+  {
+   "level": "standard",
+   "code": 0,
+   "need": 2,
+   "under": 2
+  },
+  {
+   "level": "loose",
+   "code": 2,
+   "need": 1,
+   "under": 3
+  }
+ ],
+ "bars": [
+  {
+   "level": "strict",
+   "on": 0.7,
+   "mirror": 0.3
+  },
+  {
+   "level": "standard",
+   "on": 0.5,
+   "mirror": 0.5
+  },
+  {
+   "level": "loose",
+   "on": 0.3,
+   "mirror": 0.7
+  }
+ ],
+ "predicates": [
+  {
+   "name": "valence.happy",
+   "q": "0x001"
+  },
+  {
+   "name": "valence.neutral",
+   "q": "0x002"
+  },
+  {
+   "name": "valence.sad",
+   "q": "0x003"
+  },
+  {
+   "name": "energy.relaxed",
+   "q": "0x004"
+  },
+  {
+   "name": "energy.neutral",
+   "q": "0x008"
+  },
+  {
+   "name": "energy.aggressive",
+   "q": "0x00C"
+  },
+  {
+   "name": "voice.instrumental",
+   "q": "0x010"
+  },
+  {
+   "name": "voice.vocals",
+   "q": "0x020"
+  },
+  {
+   "name": "tags.acoustic",
+   "q": "0x040"
+  },
+  {
+   "name": "tags.party",
+   "q": "0x080"
+  },
+  {
+   "name": "tags.danceable",
+   "q": "0x100"
+  }
+ ],
+ "rows": [
+  {
+   "note": "tags-moods.bin's Artist A/scored.flac: every head scored: 0 and 1 as integers; 0.29, 0.57 and 0.58 are 29, 57 and 58 (a plain floor gives 28, 56, 57)",
+   "scores": [
+    0.81,
+    0.29,
+    0,
+    0.7,
+    0.1234,
+    1,
+    0.57,
+    0.58
+   ],
+   "tail": "01 1D 46 3A 39 64 51 00",
+   "word": "0x83AF",
+   "holds": {
+    "strict": [
+     "valence.neutral",
+     "energy.relaxed",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "standard": [
+     "valence.neutral",
+     "energy.relaxed",
+     "voice.instrumental",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.neutral",
+     "energy.relaxed",
+     "voice.instrumental",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "tags-moods.bin's Artist A/null-head.flac: sad NULL: valence 255, no order bit; the rest as scored.flac",
+   "scores": [
+    0.81,
+    0.29,
+    null,
+    0.7,
+    0.1234,
+    1,
+    0.57,
+    0.58
+   ],
+   "tail": "01 FF 46 3A 39 64 51 00",
+   "word": "0xA3AF",
+   "holds": {
+    "strict": [
+     "energy.relaxed",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "standard": [
+     "energy.relaxed",
+     "voice.instrumental",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "energy.relaxed",
+     "voice.instrumental",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "tags-moods.bin's Artist A/all-null.flac: a row of NULLs: PRESENT, every value 255 (not no row)",
+   "scores": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "tail": "01 FF FF FF FF FF FF 00",
+   "word": "0xE400",
+   "holds": {
+    "strict": [],
+    "standard": [],
+    "loose": []
+   }
+  },
+  {
+   "note": "tags-moods.bin's Artist A/no-row.flac: no server row: 8 zero bytes",
+   "scores": null,
+   "tail": "00 00 00 00 00 00 00 00",
+   "word": "0x0000",
+   "holds": {
+    "strict": [],
+    "standard": [],
+    "loose": []
+   }
+  },
+  {
+   "note": "tags-moods.bin's Artist A/song.flac: MOOD-FILTERS.md 5.7's worked example: 03 3A 46 1D 31 FF 46 00",
+   "scores": [
+    0.7012,
+    0.3104,
+    0.5803,
+    0.7,
+    0.2999,
+    null,
+    0.4999,
+    0.29
+   ],
+   "tail": "03 3A 46 1D 31 FF 46 00",
+   "word": "0xB313",
+   "holds": {
+    "strict": [
+     "energy.relaxed",
+     "voice.vocals",
+     "tags.danceable"
+    ],
+    "standard": [
+     "valence.sad",
+     "energy.relaxed",
+     "voice.vocals",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.neutral",
+     "valence.sad",
+     "energy.relaxed",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "tags-moods.bin's Artist B/Album/01 - Ties.flac: ties: happy = sad, relaxed = aggressive, so no order bit; a 5-place score (12)",
+   "scores": [
+    0.4,
+    0.6,
+    0.6,
+    0.55,
+    0.55,
+    0.3,
+    0.12345,
+    0.7
+   ],
+   "tail": "01 3C 37 46 0C 1E 28 00",
+   "word": "0x92C5",
+   "holds": {
+    "strict": [
+     "voice.instrumental"
+    ],
+    "standard": [
+     "valence.happy",
+     "energy.relaxed",
+     "voice.instrumental"
+    ],
+    "loose": [
+     "valence.happy",
+     "valence.neutral",
+     "energy.relaxed",
+     "energy.neutral",
+     "voice.instrumental",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "tags-moods.bin's Artist B/Album/02 - Order.flac: sad beats happy, aggressive beats relaxed: flags 0x07",
+   "scores": [
+    0.1,
+    0.2,
+    0.9,
+    0.05,
+    0.95,
+    0,
+    0,
+    0.0001
+   ],
+   "tail": "07 5A 5F 00 00 00 0A 00",
+   "word": "0xBF00",
+   "holds": {
+    "strict": [
+     "valence.sad",
+     "energy.aggressive",
+     "voice.vocals"
+    ],
+    "standard": [
+     "valence.sad",
+     "energy.aggressive",
+     "voice.vocals"
+    ],
+    "loose": [
+     "valence.sad",
+     "energy.aggressive",
+     "voice.vocals"
+    ]
+   }
+  },
+  {
+   "note": "tags-moods.bin's Artist B/Album/03 - Nulls.flac: aggressive, acoustic and instrumental NULL: energy 255 and no bit 2; bit 1 kept",
+   "scores": [
+    0.33,
+    0.12,
+    0.66,
+    0.8,
+    null,
+    0.49,
+    null,
+    null
+   ],
+   "tail": "03 42 FF FF FF 31 21 00",
+   "word": "0xF405",
+   "holds": {
+    "strict": [],
+    "standard": [
+     "valence.sad"
+    ],
+    "loose": [
+     "valence.neutral",
+     "valence.sad",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "tags-moods.bin's Artist B/Album/04 - Clamped.flac: scores outside 0-1 clamp to 100 and 0; the order bits from the raw doubles",
+   "scores": [
+    1.25,
+    -0.5,
+    0.2,
+    0.9999,
+    0.0001,
+    1.5,
+    -0.0001,
+    0.3
+   ],
+   "tail": "03 14 63 1E 00 64 64 00",
+   "word": "0x834F",
+   "holds": {
+    "strict": [
+     "valence.neutral",
+     "energy.relaxed",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "standard": [
+     "valence.neutral",
+     "energy.relaxed",
+     "voice.vocals",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.neutral",
+     "energy.relaxed",
+     "voice.instrumental",
+     "voice.vocals",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "tags-moods.bin's Artist B/Album/cover.jpg: an owned cover: no server track, so no row",
+   "scores": null,
+   "tail": "00 00 00 00 00 00 00 00",
+   "word": "0x0000",
+   "holds": {
+    "strict": [],
+    "standard": [],
+    "loose": []
+   }
+  },
+  {
+   "note": "every head at 0.3, Loose's bar: ties, so happy and relaxed",
+   "scores": [
+    0.3,
+    0.3,
+    0.3,
+    0.3,
+    0.3,
+    0.3,
+    0.3,
+    0.3
+   ],
+   "tail": "01 1E 1E 1E 1E 1E 1E 00",
+   "word": "0x8955",
+   "holds": {
+    "strict": [],
+    "standard": [
+     "valence.neutral",
+     "energy.neutral",
+     "voice.vocals"
+    ],
+    "loose": [
+     "valence.happy",
+     "valence.neutral",
+     "energy.relaxed",
+     "energy.neutral",
+     "voice.instrumental",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "every head at 0.2999, a step under Loose's bar",
+   "scores": [
+    0.2999,
+    0.2999,
+    0.2999,
+    0.2999,
+    0.2999,
+    0.2999,
+    0.2999,
+    0.2999
+   ],
+   "tail": "01 1D 1D 1D 1D 1D 1D 00",
+   "word": "0x8000",
+   "holds": {
+    "strict": [
+     "valence.neutral",
+     "energy.neutral",
+     "voice.vocals"
+    ],
+    "standard": [
+     "valence.neutral",
+     "energy.neutral",
+     "voice.vocals"
+    ],
+    "loose": [
+     "valence.neutral",
+     "energy.neutral",
+     "voice.vocals"
+    ]
+   }
+  },
+  {
+   "note": "every head at 0.5, Standard's bar",
+   "scores": [
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5
+   ],
+   "tail": "01 32 32 32 32 32 32 00",
+   "word": "0x92AA",
+   "holds": {
+    "strict": [],
+    "standard": [
+     "valence.happy",
+     "energy.relaxed",
+     "voice.instrumental",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.happy",
+     "valence.neutral",
+     "energy.relaxed",
+     "energy.neutral",
+     "voice.instrumental",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "every head at 0.4999, a step under Standard's bar",
+   "scores": [
+    0.4999,
+    0.4999,
+    0.4999,
+    0.4999,
+    0.4999,
+    0.4999,
+    0.4999,
+    0.4999
+   ],
+   "tail": "01 31 31 31 31 31 31 00",
+   "word": "0x8955",
+   "holds": {
+    "strict": [],
+    "standard": [
+     "valence.neutral",
+     "energy.neutral",
+     "voice.vocals"
+    ],
+    "loose": [
+     "valence.happy",
+     "valence.neutral",
+     "energy.relaxed",
+     "energy.neutral",
+     "voice.instrumental",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "every head at 0.7, Strict's bar",
+   "scores": [
+    0.7,
+    0.7,
+    0.7,
+    0.7,
+    0.7,
+    0.7,
+    0.7,
+    0.7
+   ],
+   "tail": "01 46 46 46 46 46 46 00",
+   "word": "0x9BFF",
+   "holds": {
+    "strict": [
+     "valence.happy",
+     "energy.relaxed",
+     "voice.instrumental",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "standard": [
+     "valence.happy",
+     "energy.relaxed",
+     "voice.instrumental",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.happy",
+     "energy.relaxed",
+     "voice.instrumental",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "every head at 0.6999, a step under Strict's bar",
+   "scores": [
+    0.6999,
+    0.6999,
+    0.6999,
+    0.6999,
+    0.6999,
+    0.6999,
+    0.6999,
+    0.6999
+   ],
+   "tail": "01 45 45 45 45 45 45 00",
+   "word": "0x92AA",
+   "holds": {
+    "strict": [],
+    "standard": [
+     "valence.happy",
+     "energy.relaxed",
+     "voice.instrumental",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.happy",
+     "valence.neutral",
+     "energy.relaxed",
+     "energy.neutral",
+     "voice.instrumental",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "every head at 0",
+   "scores": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ],
+   "tail": "01 00 00 00 00 00 00 00",
+   "word": "0x8000",
+   "holds": {
+    "strict": [
+     "valence.neutral",
+     "energy.neutral",
+     "voice.vocals"
+    ],
+    "standard": [
+     "valence.neutral",
+     "energy.neutral",
+     "voice.vocals"
+    ],
+    "loose": [
+     "valence.neutral",
+     "energy.neutral",
+     "voice.vocals"
+    ]
+   }
+  },
+  {
+   "note": "every head at 1",
+   "scores": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ],
+   "tail": "01 64 64 64 64 64 64 00",
+   "word": "0x9BFF",
+   "holds": {
+    "strict": [
+     "valence.happy",
+     "energy.relaxed",
+     "voice.instrumental",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "standard": [
+     "valence.happy",
+     "energy.relaxed",
+     "voice.instrumental",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.happy",
+     "energy.relaxed",
+     "voice.instrumental",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "happy at Strict's bar, sad a step under",
+   "scores": [
+    0.5,
+    0.7,
+    0.6999,
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5
+   ],
+   "tail": "01 46 32 32 32 32 32 00",
+   "word": "0x9AAA",
+   "holds": {
+    "strict": [
+     "valence.happy"
+    ],
+    "standard": [
+     "valence.happy",
+     "energy.relaxed",
+     "voice.instrumental",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.happy",
+     "energy.relaxed",
+     "energy.neutral",
+     "voice.instrumental",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "sad at Strict's bar, happy a step under",
+   "scores": [
+    0.5,
+    0.6999,
+    0.7,
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5
+   ],
+   "tail": "03 46 32 32 32 32 32 00",
+   "word": "0xBAAA",
+   "holds": {
+    "strict": [
+     "valence.sad"
+    ],
+    "standard": [
+     "valence.sad",
+     "energy.relaxed",
+     "voice.instrumental",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.sad",
+     "energy.relaxed",
+     "energy.neutral",
+     "voice.instrumental",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "aggressive beats relaxed by a step at Standard's bar",
+   "scores": [
+    0.5,
+    0.2,
+    0.1,
+    0.5,
+    0.5001,
+    0.5,
+    0.5,
+    0.5
+   ],
+   "tail": "05 14 32 32 32 32 32 00",
+   "word": "0x86AA",
+   "holds": {
+    "strict": [
+     "valence.neutral"
+    ],
+    "standard": [
+     "valence.neutral",
+     "energy.aggressive",
+     "voice.instrumental",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.neutral",
+     "energy.neutral",
+     "energy.aggressive",
+     "voice.instrumental",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "happy and neutral at once at Loose (on 0.3, mirror 0.7)",
+   "scores": [
+    0.4,
+    0.65,
+    0.2,
+    0.25,
+    0.1,
+    0.2,
+    0.2,
+    0.2
+   ],
+   "tail": "01 41 19 14 14 14 28 00",
+   "word": "0x9001",
+   "holds": {
+    "strict": [
+     "energy.neutral",
+     "voice.vocals"
+    ],
+    "standard": [
+     "valence.happy",
+     "energy.neutral",
+     "voice.vocals"
+    ],
+    "loose": [
+     "valence.happy",
+     "valence.neutral",
+     "energy.neutral",
+     "voice.vocals",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "sad at 0.7 over happy at 0.6: sad at every level, never neutral",
+   "scores": [
+    0.5,
+    0.6,
+    0.7,
+    0.3,
+    0.6,
+    0.5,
+    0.5,
+    0.5
+   ],
+   "tail": "07 46 3C 32 32 32 32 00",
+   "word": "0xBEAA",
+   "holds": {
+    "strict": [
+     "valence.sad"
+    ],
+    "standard": [
+     "valence.sad",
+     "energy.aggressive",
+     "voice.instrumental",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.sad",
+     "energy.neutral",
+     "energy.aggressive",
+     "voice.instrumental",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "neutral at Strict: every head under 0.3",
+   "scores": [
+    0.1,
+    0.25,
+    0.2999,
+    0.0001,
+    0.29,
+    0.1,
+    0.1,
+    0.1
+   ],
+   "tail": "07 1D 1D 0A 0A 0A 0A 00",
+   "word": "0x8000",
+   "holds": {
+    "strict": [
+     "valence.neutral",
+     "energy.neutral",
+     "voice.vocals"
+    ],
+    "standard": [
+     "valence.neutral",
+     "energy.neutral",
+     "voice.vocals"
+    ],
+    "loose": [
+     "valence.neutral",
+     "energy.neutral",
+     "voice.vocals"
+    ]
+   }
+  },
+  {
+   "note": "instrumental at 0.3: vocals at Standard, not at Strict",
+   "scores": [
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.3
+   ],
+   "tail": "01 32 32 1E 32 32 32 00",
+   "word": "0x926A",
+   "holds": {
+    "strict": [],
+    "standard": [
+     "valence.happy",
+     "energy.relaxed",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.happy",
+     "valence.neutral",
+     "energy.relaxed",
+     "energy.neutral",
+     "voice.instrumental",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "instrumental at 0.69: vocals at Loose",
+   "scores": [
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.69
+   ],
+   "tail": "01 32 32 45 32 32 32 00",
+   "word": "0x92AA",
+   "holds": {
+    "strict": [],
+    "standard": [
+     "valence.happy",
+     "energy.relaxed",
+     "voice.instrumental",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.happy",
+     "valence.neutral",
+     "energy.relaxed",
+     "energy.neutral",
+     "voice.instrumental",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "the tags at the three bars: acoustic 0.3, party 0.5, danceable 0.7",
+   "scores": [
+    0.7,
+    0.4,
+    0.4,
+    0.4,
+    0.4,
+    0.5,
+    0.3,
+    0.4
+   ],
+   "tail": "01 28 28 28 1E 32 46 00",
+   "word": "0x895B",
+   "holds": {
+    "strict": [
+     "tags.danceable"
+    ],
+    "standard": [
+     "valence.neutral",
+     "energy.neutral",
+     "voice.vocals",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.happy",
+     "valence.neutral",
+     "energy.relaxed",
+     "energy.neutral",
+     "voice.instrumental",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "the float traps on every head: 0.29, 0.57, 0.58",
+   "scores": [
+    0.58,
+    0.29,
+    0.57,
+    0.57,
+    0.58,
+    0.29,
+    0.58,
+    0.29
+   ],
+   "tail": "07 39 3A 1D 3A 1D 3A 00",
+   "word": "0xB622",
+   "holds": {
+    "strict": [
+     "voice.vocals"
+    ],
+    "standard": [
+     "valence.sad",
+     "energy.aggressive",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.neutral",
+     "valence.sad",
+     "energy.neutral",
+     "energy.aggressive",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "5-place scores beside the bars",
+   "scores": [
+    0.70001,
+    0.29999,
+    0.49999,
+    0.69999,
+    0.30001,
+    0.50001,
+    0.29999,
+    0.49999
+   ],
+   "tail": "03 31 45 31 1D 32 46 00",
+   "word": "0xAA4B",
+   "holds": {
+    "strict": [
+     "tags.danceable"
+    ],
+    "standard": [
+     "valence.neutral",
+     "energy.relaxed",
+     "voice.vocals",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.neutral",
+     "valence.sad",
+     "energy.relaxed",
+     "energy.neutral",
+     "voice.instrumental",
+     "voice.vocals",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "sad, relaxed, vocals and danceable at every level",
+   "scores": [
+    0.9,
+    0.1,
+    0.8,
+    0.75,
+    0.05,
+    0.2,
+    0.3,
+    0.1
+   ],
+   "tail": "03 50 4B 0A 1E 14 5A 00",
+   "word": "0xBB13",
+   "holds": {
+    "strict": [
+     "valence.sad",
+     "energy.relaxed",
+     "voice.vocals",
+     "tags.danceable"
+    ],
+    "standard": [
+     "valence.sad",
+     "energy.relaxed",
+     "voice.vocals",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.sad",
+     "energy.relaxed",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "0x127 at its bars: sad 0.5 over 0.4999, relaxed tied at 0.5, instrumental 0.4999, danceable 0.5",
+   "scores": [
+    0.5,
+    0.4999,
+    0.5,
+    0.5,
+    0.5,
+    0.1,
+    0.1,
+    0.4999
+   ],
+   "tail": "03 32 32 31 0A 0A 32 00",
+   "word": "0xB242",
+   "holds": {
+    "strict": [],
+    "standard": [
+     "valence.sad",
+     "energy.relaxed",
+     "voice.vocals",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.neutral",
+     "valence.sad",
+     "energy.relaxed",
+     "energy.neutral",
+     "voice.instrumental",
+     "voice.vocals",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "sad and relaxed only at Loose",
+   "scores": [
+    0.3,
+    0.2,
+    0.3,
+    0.3,
+    0.2999,
+    0,
+    0,
+    0.6999
+   ],
+   "tail": "03 1E 1E 45 00 00 1E 00",
+   "word": "0xA981",
+   "holds": {
+    "strict": [],
+    "standard": [
+     "valence.neutral",
+     "energy.neutral",
+     "voice.instrumental"
+    ],
+    "loose": [
+     "valence.neutral",
+     "valence.sad",
+     "energy.relaxed",
+     "energy.neutral",
+     "voice.instrumental",
+     "voice.vocals",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "danceable NULL: it fails only its own scale",
+   "scores": [
+    null,
+    0.2,
+    0.55,
+    0.6,
+    0.35,
+    0.65,
+    0.75,
+    0.15
+   ],
+   "tail": "03 37 3C 0F 4B 41 FF 00",
+   "word": "0xB238",
+   "holds": {
+    "strict": [
+     "voice.vocals",
+     "tags.acoustic"
+    ],
+    "standard": [
+     "valence.sad",
+     "energy.relaxed",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party"
+    ],
+    "loose": [
+     "valence.neutral",
+     "valence.sad",
+     "energy.relaxed",
+     "energy.neutral",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party"
+    ]
+   }
+  },
+  {
+   "note": "happy NULL: it fails only its own scale",
+   "scores": [
+    0.6,
+    null,
+    0.55,
+    0.6,
+    0.35,
+    0.65,
+    0.75,
+    0.15
+   ],
+   "tail": "01 FF 3C 0F 4B 41 3C 00",
+   "word": "0xA23A",
+   "holds": {
+    "strict": [
+     "voice.vocals",
+     "tags.acoustic"
+    ],
+    "standard": [
+     "energy.relaxed",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "energy.relaxed",
+     "energy.neutral",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "sad NULL: it fails only its own scale",
+   "scores": [
+    0.6,
+    0.2,
+    null,
+    0.6,
+    0.35,
+    0.65,
+    0.75,
+    0.15
+   ],
+   "tail": "01 FF 3C 0F 4B 41 3C 00",
+   "word": "0xA23A",
+   "holds": {
+    "strict": [
+     "voice.vocals",
+     "tags.acoustic"
+    ],
+    "standard": [
+     "energy.relaxed",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "energy.relaxed",
+     "energy.neutral",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "relaxed NULL: it fails only its own scale",
+   "scores": [
+    0.6,
+    0.2,
+    0.55,
+    null,
+    0.35,
+    0.65,
+    0.75,
+    0.15
+   ],
+   "tail": "03 37 FF 0F 4B 41 3C 00",
+   "word": "0xB43A",
+   "holds": {
+    "strict": [
+     "voice.vocals",
+     "tags.acoustic"
+    ],
+    "standard": [
+     "valence.sad",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.neutral",
+     "valence.sad",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "aggressive NULL: it fails only its own scale",
+   "scores": [
+    0.6,
+    0.2,
+    0.55,
+    0.6,
+    null,
+    0.65,
+    0.75,
+    0.15
+   ],
+   "tail": "03 37 FF 0F 4B 41 3C 00",
+   "word": "0xB43A",
+   "holds": {
+    "strict": [
+     "voice.vocals",
+     "tags.acoustic"
+    ],
+    "standard": [
+     "valence.sad",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.neutral",
+     "valence.sad",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "party NULL: it fails only its own scale",
+   "scores": [
+    0.6,
+    0.2,
+    0.55,
+    0.6,
+    0.35,
+    null,
+    0.75,
+    0.15
+   ],
+   "tail": "03 37 3C 0F 4B FF 3C 00",
+   "word": "0xB232",
+   "holds": {
+    "strict": [
+     "voice.vocals",
+     "tags.acoustic"
+    ],
+    "standard": [
+     "valence.sad",
+     "energy.relaxed",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.neutral",
+     "valence.sad",
+     "energy.relaxed",
+     "energy.neutral",
+     "voice.vocals",
+     "tags.acoustic",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "acoustic NULL: it fails only its own scale",
+   "scores": [
+    0.6,
+    0.2,
+    0.55,
+    0.6,
+    0.35,
+    0.65,
+    null,
+    0.15
+   ],
+   "tail": "03 37 3C 0F FF 41 3C 00",
+   "word": "0xB20A",
+   "holds": {
+    "strict": [
+     "voice.vocals"
+    ],
+    "standard": [
+     "valence.sad",
+     "energy.relaxed",
+     "voice.vocals",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.neutral",
+     "valence.sad",
+     "energy.relaxed",
+     "energy.neutral",
+     "voice.vocals",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  },
+  {
+   "note": "instrumental NULL: it fails only its own scale",
+   "scores": [
+    0.6,
+    0.2,
+    0.55,
+    0.6,
+    0.35,
+    0.65,
+    0.75,
+    null
+   ],
+   "tail": "03 37 3C FF 4B 41 3C 00",
+   "word": "0xF23A",
+   "holds": {
+    "strict": [
+     "tags.acoustic"
+    ],
+    "standard": [
+     "valence.sad",
+     "energy.relaxed",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ],
+    "loose": [
+     "valence.neutral",
+     "valence.sad",
+     "energy.relaxed",
+     "energy.neutral",
+     "tags.acoustic",
+     "tags.party",
+     "tags.danceable"
+    ]
+   }
+  }
+ ],
+ "tails": [
+  {
+   "note": "no row",
+   "tail": "00 00 00 00 00 00 00 00",
+   "valid": false,
+   "word": "0x0000"
+  },
+  {
+   "note": "MOOD-FILTERS.md 5.7's worked example",
+   "tail": "03 3A 46 1D 31 FF 46 00",
+   "valid": true,
+   "word": "0xB313"
+  },
+  {
+   "note": "a row of NULLs",
+   "tail": "01 FF FF FF FF FF FF 00",
+   "valid": true,
+   "word": "0xE400"
+  },
+  {
+   "note": "an order bit beside a 255: ignored, valence NULL",
+   "tail": "03 FF 46 1D 31 FF 46 00",
+   "valid": true,
+   "word": "0xA313"
+  },
+  {
+   "note": "bit 2 beside a 255: ignored, energy NULL",
+   "tail": "05 3A FF 1D 31 FF 46 00",
+   "valid": true,
+   "word": "0x9413"
+  },
+  {
+   "note": "an order bit beside a value under 30: bucket 0 stores 0, no side",
+   "tail": "03 1D 46 1D 31 FF 46 00",
+   "valid": true,
+   "word": "0x8313"
+  },
+  {
+   "note": "every value 100, both order bits",
+   "tail": "07 64 64 64 64 64 64 00",
+   "valid": true,
+   "word": "0xBFFF"
+  },
+  {
+   "note": "every value 0, PRESENT alone: analysed, nothing holds but neutral and vocals",
+   "tail": "01 00 00 00 00 00 00 00",
+   "valid": true,
+   "word": "0x8000"
+  },
+  {
+   "note": "bit 0 clear, an order bit set",
+   "tail": "02 3A 46 1D 31 FF 46 00",
+   "valid": false,
+   "word": "0x0000"
+  },
+  {
+   "note": "bit 0 clear, the values set",
+   "tail": "00 3A 46 1D 31 FF 46 00",
+   "valid": false,
+   "word": "0x0000"
+  },
+  {
+   "note": "reserved flag bit 3 set",
+   "tail": "0B 3A 46 1D 31 FF 46 00",
+   "valid": false,
+   "word": "0x0000"
+  },
+  {
+   "note": "reserved flag bit 4 set",
+   "tail": "13 3A 46 1D 31 FF 46 00",
+   "valid": false,
+   "word": "0x0000"
+  },
+  {
+   "note": "reserved flag bit 5 set",
+   "tail": "23 3A 46 1D 31 FF 46 00",
+   "valid": false,
+   "word": "0x0000"
+  },
+  {
+   "note": "reserved flag bit 6 set",
+   "tail": "43 3A 46 1D 31 FF 46 00",
+   "valid": false,
+   "word": "0x0000"
+  },
+  {
+   "note": "reserved flag bit 7 set",
+   "tail": "83 3A 46 1D 31 FF 46 00",
+   "valid": false,
+   "word": "0x0000"
+  },
+  {
+   "note": "byte 79 not 0",
+   "tail": "03 3A 46 1D 31 FF 46 01",
+   "valid": false,
+   "word": "0x0000"
+  },
+  {
+   "note": "byte 73 at 101: neither 0-100 nor 255",
+   "tail": "03 65 46 1D 31 FF 46 00",
+   "valid": false,
+   "word": "0x0000"
+  },
+  {
+   "note": "byte 74 at 254: neither 0-100 nor 255",
+   "tail": "03 3A FE 1D 31 FF 46 00",
+   "valid": false,
+   "word": "0x0000"
+  },
+  {
+   "note": "byte 75 at 101: neither 0-100 nor 255",
+   "tail": "03 3A 46 65 31 FF 46 00",
+   "valid": false,
+   "word": "0x0000"
+  },
+  {
+   "note": "byte 76 at 254: neither 0-100 nor 255",
+   "tail": "03 3A 46 1D FE FF 46 00",
+   "valid": false,
+   "word": "0x0000"
+  },
+  {
+   "note": "byte 77 at 101: neither 0-100 nor 255",
+   "tail": "03 3A 46 1D 31 65 46 00",
+   "valid": false,
+   "word": "0x0000"
+  },
+  {
+   "note": "byte 78 at 254: neither 0-100 nor 255",
+   "tail": "03 3A 46 1D 31 FF FE 00",
+   "valid": false,
+   "word": "0x0000"
+  },
+  {
+   "note": "mptg-minor-1's 0xAB fill (flag bits 0xA8)",
+   "tail": "AB AB AB AB AB AB AB AB",
+   "valid": false,
+   "word": "0x0000"
+  }
+ ],
+ "filters": [
+  {
+   "note": "MOOD-FILTERS.md 5.7: Sad, Relaxed, Vocals, Danceable at Standard",
+   "q": "0x127",
+   "valid": true,
+   "reads": "0x127",
+   "active": true,
+   "level": "standard",
+   "valence": "sad",
+   "energy": "relaxed",
+   "voice": "vocals",
+   "tags": [
+    "danceable"
+   ],
+   "matches": [
+    4,
+    29,
+    30,
+    37,
+    38
+   ]
+  },
+  {
+   "note": "Happy, Relaxed, Instrumental at Strict",
+   "q": "0x215",
+   "valid": true,
+   "reads": "0x215",
+   "active": true,
+   "level": "strict",
+   "valence": "happy",
+   "energy": "relaxed",
+   "voice": "instrumental",
+   "tags": [],
+   "matches": [
+    14,
+    17
+   ]
+  },
+  {
+   "note": "Neutral and Neutral at Loose",
+   "q": "0x40A",
+   "valid": true,
+   "reads": "0x40A",
+   "active": true,
+   "level": "loose",
+   "valence": "neutral",
+   "energy": "neutral",
+   "voice": null,
+   "tags": [],
+   "matches": [
+    5,
+    10,
+    11,
+    12,
+    13,
+    15,
+    16,
+    20,
+    21,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    30,
+    31,
+    32,
+    37,
+    38,
+    39
+   ]
+  },
+  {
+   "note": "Aggressive and Party at Loose",
+   "q": "0x48C",
+   "valid": true,
+   "reads": "0x48C",
+   "active": true,
+   "level": "loose",
+   "valence": null,
+   "energy": "aggressive",
+   "voice": null,
+   "tags": [
+    "party"
+   ],
+   "matches": [
+    20,
+    22
+   ]
+  },
+  {
+   "note": "every tag at Standard",
+   "q": "0x1C0",
+   "valid": true,
+   "reads": "0x1C0",
+   "active": true,
+   "level": "standard",
+   "valence": null,
+   "energy": null,
+   "voice": null,
+   "tags": [
+    "acoustic",
+    "party",
+    "danceable"
+   ],
+   "matches": [
+    0,
+    1,
+    12,
+    14,
+    15,
+    17,
+    18,
+    19,
+    20,
+    22,
+    24,
+    25,
+    33,
+    34,
+    35,
+    36,
+    39
+   ]
+  },
+  {
+   "note": "Sad and Vocals at Strict",
+   "q": "0x223",
+   "valid": true,
+   "reads": "0x223",
+   "active": true,
+   "level": "strict",
+   "valence": "sad",
+   "energy": null,
+   "voice": "vocals",
+   "tags": [],
+   "matches": [
+    6,
+    29
+   ]
+  },
+  {
+   "note": "no filter: every track, analysed or not",
+   "q": "0x000",
+   "valid": true,
+   "reads": "0x000",
+   "active": false,
+   "level": "standard",
+   "valence": null,
+   "energy": null,
+   "voice": null,
+   "tags": [],
+   "matches": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39
+   ]
+  },
+  {
+   "note": "a level alone filters nothing",
+   "q": "0x200",
+   "valid": true,
+   "reads": "0x200",
+   "active": false,
+   "level": "strict",
+   "valence": null,
+   "energy": null,
+   "voice": null,
+   "tags": [],
+   "matches": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39
+   ]
+  },
+  {
+   "note": "a level alone filters nothing",
+   "q": "0x400",
+   "valid": true,
+   "reads": "0x400",
+   "active": false,
+   "level": "loose",
+   "valence": null,
+   "energy": null,
+   "voice": null,
+   "tags": [],
+   "matches": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39
+   ]
+  },
+  {
+   "note": "bit 11: invalid, reads as 0",
+   "q": "0x800",
+   "valid": false,
+   "reads": "0x000",
+   "active": false,
+   "level": "standard",
+   "valence": null,
+   "energy": null,
+   "voice": null,
+   "tags": [],
+   "matches": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39
+   ]
+  },
+  {
+   "note": "bit 15: invalid, reads as 0",
+   "q": "0x8001",
+   "valid": false,
+   "reads": "0x000",
+   "active": false,
+   "level": "standard",
+   "valence": null,
+   "energy": null,
+   "voice": null,
+   "tags": [],
+   "matches": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39
+   ]
+  },
+  {
+   "note": "voice 3: invalid, reads as 0",
+   "q": "0x030",
+   "valid": false,
+   "reads": "0x000",
+   "active": false,
+   "level": "standard",
+   "valence": null,
+   "energy": null,
+   "voice": null,
+   "tags": [],
+   "matches": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39
+   ]
+  },
+  {
+   "note": "level 3: invalid, reads as 0",
+   "q": "0x600",
+   "valid": false,
+   "reads": "0x000",
+   "active": false,
+   "level": "standard",
+   "valence": null,
+   "energy": null,
+   "voice": null,
+   "tags": [],
+   "matches": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39
+   ]
+  },
+  {
+   "note": "5.7's groups at level 3: invalid, reads as 0, so no filter",
+   "q": "0x627",
+   "valid": false,
+   "reads": "0x000",
+   "active": false,
+   "level": "standard",
+   "valence": null,
+   "energy": null,
+   "voice": null,
+   "tags": [],
+   "matches": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39
+   ]
+  }
+ ],
+ "albums": [
+  {
+   "note": "5 of 9 analysed pass: 10 > 9, it matches",
+   "q": "0x127",
+   "rows": [
+    4,
+    29,
+    30,
+    37,
+    38,
+    0,
+    1,
+    2,
+    5
+   ],
+   "pass": 5,
+   "analysed": 9,
+   "matches": true
+  },
+  {
+   "note": "2 of 4: 4 > 4 fails",
+   "q": "0x127",
+   "rows": [
+    4,
+    29,
+    0,
+    1
+   ],
+   "pass": 2,
+   "analysed": 4,
+   "matches": false
+  },
+  {
+   "note": "only tracks with no row: 0 of 0, never a match",
+   "q": "0x127",
+   "rows": [
+    3,
+    9
+   ],
+   "pass": 0,
+   "analysed": 0,
+   "matches": false
+  },
+  {
+   "note": "5 of 9 and three with no row, which don't count",
+   "q": "0x127",
+   "rows": [
+    4,
+    29,
+    30,
+    37,
+    38,
+    0,
+    1,
+    2,
+    5,
+    3,
+    9
+   ],
+   "pass": 5,
+   "analysed": 9,
+   "matches": true
+  },
+  {
+   "note": "1 pass and a row of NULLs: 1 of 2, the NULL row in the denominator",
+   "q": "0x127",
+   "rows": [
+    4,
+    2
+   ],
+   "pass": 1,
+   "analysed": 2,
+   "matches": false
+  },
+  {
+   "note": "1 pass alone: 1 of 1",
+   "q": "0x127",
+   "rows": [
+    4
+   ],
+   "pass": 1,
+   "analysed": 1,
+   "matches": true
+  },
+  {
+   "note": "1 pass and a track with no row: still 1 of 1",
+   "q": "0x127",
+   "rows": [
+    4,
+    3
+   ],
+   "pass": 1,
+   "analysed": 1,
+   "matches": true
+  },
+  {
+   "note": "no track passes: 0 of 3",
+   "q": "0x127",
+   "rows": [
+    0,
+    1,
+    2
+   ],
+   "pass": 0,
+   "analysed": 3,
+   "matches": false
+  }
+ ]
+}

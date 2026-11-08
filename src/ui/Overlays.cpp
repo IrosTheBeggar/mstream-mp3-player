@@ -56,6 +56,10 @@ bool overlaysBegin() {
   return true;
 }
 
+M5Canvas* overlayPanel() { return panel_; }
+const void* panelOwner() { return panelOwner_; }
+void setPanelOwner(const void* owner) { panelOwner_ = owner; }
+
 // ---- Toast ----
 
 namespace {

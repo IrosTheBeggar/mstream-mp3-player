@@ -14,22 +14,7 @@ namespace {
 void* heapAlloc(size_t n) { return std::malloc(n); }
 void heapFree(void* p) { std::free(p); }
 
-// A file of the card as LibraryIndex's streams.
-class FileIn : public ByteSource {
-public:
-  explicit FileIn(tagstore::File& f) : f_(f) {}
-  size_t read(void* data, size_t n) override {
-    const uint32_t left = f_.size() > at_ ? f_.size() - at_ : 0;
-    const uint32_t k = static_cast<uint32_t>(std::min<size_t>(n, left));
-    if (k == 0 || !f_.read(at_, data, k)) return 0;
-    at_ += k;
-    return k;
-  }
-
-private:
-  tagstore::File& f_;
-  uint32_t at_ = 0;
-};
+using tagstore::FileIn;
 
 class FileOut : public ByteSink {
 public:
@@ -49,23 +34,28 @@ private:
 // header reads and its sum holds (an older version's is taken as it is: it
 // is rebuilt anyway). It is loaded once to know (the boot's index is empty
 // then), and cleared. No memory to load it counts as torn: library.idx is
-// a cache the records rebuild (tags.tmp's check keeps its tmp instead).
+// a cache the records rebuild (tags.tmp's check keeps its tmp instead). A read
+// the card fails is no verdict: the file stays for the next settle().
 class IdxCheck : public tagstore::TmpCheck {
 public:
   explicit IdxCheck(LibraryIndex& idx) : idx_(idx) {}
   Verdict check(tagstore::Fs& fs, const char* tmp) override {
-    tagstore::File* f = fs.open(tmp, tagstore::Fs::Mode::Read);
-    if (!f) return Verdict::Torn;
+    bool failed = false;
+    tagstore::File* f = fs.openRead(tmp, &failed);
+    if (!f) return failed ? Verdict::Unknown : Verdict::Torn;
     FileIn head(*f);
     LibraryIndex::Inputs got;
     const LibraryIndex::Load r = LibraryIndex::peek(head, &got);
+    failed = head.failed();
     bool ok = r == LibraryIndex::Load::Outdated;
     if (r == LibraryIndex::Load::Loaded) {
       FileIn all(*f);
       ok = idx_.load(all, got) == LibraryIndex::Load::Loaded;
+      failed = all.failed();
       idx_.clear();
     }
     fs.close(f);
+    if (failed) return Verdict::Unknown;
     return ok ? Verdict::Whole : Verdict::Torn;
   }
 
@@ -86,10 +76,13 @@ public:
     size_ = f ? f->size() : 0;
   }
   bool failed() const { return failed_; }
+  // failed(), by the card: not past the file's end, nor on its own damaged records.
+  bool cardFailed() const { return cardFailed_; }
   uint32_t size() const override { return size_; }
   bool read(uint32_t offset, void* out, uint32_t n) override {
     if (f_ && f_->read(offset, out, n)) return true;
     failed_ = true;
+    if (f_ && offset <= size_ && n <= size_ - offset && !f_->damaged()) cardFailed_ = true;
     return false;
   }
   bool write(uint32_t, const void*, uint32_t) override { return false; }
@@ -100,6 +93,7 @@ private:
   tagstore::File* f_ = nullptr;
   uint32_t size_ = 0;
   bool failed_ = false;
+  bool cardFailed_ = false;
 };
 
 // The build's three opens of D (the merge, DSTA's rows, DFLD's facts: each
@@ -122,8 +116,20 @@ struct Opened {
     wrows.watch(rows);
     wfacts.watch(facts);
   }
+  // `path` read only, the card's failing it noted.
+  tagstore::File* open(const char* path) {
+    bool failed = false;
+    tagstore::File* f = fs.openRead(path, &failed);
+    openFailed = openFailed || failed;
+    return f;
+  }
   bool transferFailed() const { return wt.failed(); }
   bool deviceFailed() const { return wd.failed() || wrows.failed() || wfacts.failed(); }
+  // The card failed one of their opens or reads.
+  bool cardFailed() const {
+    return openFailed || wt.cardFailed() || wd.cardFailed() || wrows.cardFailed() || wfacts.cardFailed();
+  }
+  bool openFailed = false;
 };
 
 }  // namespace
@@ -269,8 +275,8 @@ void LibraryUpdate::compactFirst(tagstore::TagStore::Compacted* c, bool* ran) {
   *ran = true;
 }
 
-bool LibraryUpdate::buildIndex(bool update, LibraryBuilder::Result* r, bool* walked, bool* noMemory, bool* cardGone,
-                              bool* readErrors) {
+bool LibraryUpdate::buildIndex(bool update, bool noWalk, LibraryBuilder::Result* r, bool* walked, bool* noMemory,
+                               bool* cardGone, bool* readErrors) {
   *r = LibraryBuilder::Result{};
   *walked = *noMemory = *cardGone = *readErrors = false;
   LibraryIndex& index = *c_.index;
@@ -283,11 +289,16 @@ bool LibraryUpdate::buildIndex(bool update, LibraryBuilder::Result* r, bool* wal
   // its fence: update()'s Asked.)
   if (!update && c_.walk && deviceUnlisted()) useD = false;
   Opened o(*c_.fs);
-  if (useT) o.t = c_.fs->open(c_.root->tagsPath, tagstore::Fs::Mode::Read);
+  if (useT) o.t = o.open(c_.root->tagsPath);
   if (useD) {
-    o.d = c_.fs->open(c_.store->devicePath(), tagstore::Fs::Mode::Read);
-    o.rows = c_.fs->open(c_.store->devicePath(), tagstore::Fs::Mode::Read);
-    o.facts = c_.fs->open(c_.store->devicePath(), tagstore::Fs::Mode::Read);
+    o.d = o.open(c_.store->devicePath());
+    o.rows = o.open(c_.store->devicePath());
+    o.facts = o.open(c_.store->devicePath());
+  }
+  if (!update && o.cardFailed()) {
+    *cardGone = *readErrors = true;
+    index.clear();
+    return false;
   }
   // The update step (an index in use until the fence): T or D there a
   // moment ago and not opening now is the card's trouble (pulled, failing),
@@ -299,7 +310,7 @@ bool LibraryUpdate::buildIndex(bool update, LibraryBuilder::Result* r, bool* wal
     return false;
   }
   if (!o.t && !o.d) {
-    if (!c_.walk) return false;
+    if (!c_.walk || noWalk) return false;
     *walked = true;
     const bool ok = c_.walk(index, c_.walkCtx);
     *noMemory = !ok;
@@ -341,15 +352,23 @@ bool LibraryUpdate::buildIndex(bool update, LibraryBuilder::Result* r, bool* wal
   c_.release(bufs);
   // A read that failed is the card's trouble, not a file's checks. In the
   // update step (the old index in use until the fence, and saved on the
-  // card): one of D's, or T's with no whole build from D after it, fails
-  // the step rather than walking a card that may be gone (an empty /music:
-  // "Library updated", nothing in it) or saving a path-named index over
-  // library.idx (a glitch the card came back from).
+  // card): one of D's, one of T's the card failed, or T's with no whole build
+  // from D after it, fails the step rather than walking a card that may be gone
+  // (an empty /music: "Library updated", nothing in it) or saving a path-named
+  // index over library.idx (a glitch the card came back from, or a sector that
+  // stays bad: built from D alone, every file T lists would go over the library
+  // that has their tags). stepBuild() loads that library again.
   const bool tFailed = o.transferFailed(), dFailed = o.deviceFailed();
   *readErrors = tFailed || dFailed;
-  if (update && (dFailed || (tFailed && !(r->built && r->deviceUsed)))) {
+  if (update && (dFailed || o.wt.cardFailed() || (tFailed && !(r->built && r->deviceUsed)))) {
     *cardGone = true;
     *noMemory = r->noMemory;
+    index.clear();
+    return false;
+  }
+  if (!update && o.cardFailed()) {
+    *cardGone = true;
+    *noMemory = false;
     index.clear();
     return false;
   }
@@ -358,7 +377,7 @@ bool LibraryUpdate::buildIndex(bool update, LibraryBuilder::Result* r, bool* wal
   // whose reads failed isn't (the next build tries it again).
   if (useT && o.t && !r->transferUsed && r->transferWhy != cardcontract::Why::Ok && !tFailed) transferBad_ = true;
   if (r->noRecords) {
-    if (!c_.walk) return false;
+    if (!c_.walk || noWalk) return false;
     *walked = true;
     const bool ok = c_.walk(index, c_.walkCtx);
     *noMemory = !ok;
@@ -389,38 +408,69 @@ LibraryUpdate::Booted LibraryUpdate::boot() {
   Booted b;
   tagstore::Fs& fs = *c_.fs;
   LibraryIndex& index = *c_.index;
-  // library.idx: a cut rename settled (2.12.6), the marker, its header.
-  IdxCheck check(index);
-  b.tmpSettled = tagstore::settle(fs, kIndexNames, &check);
-  b.marker = markerSet_ = fs.exists(kMarker);
   const tagstore::Identity none;
   const tagstore::Identity& root = c_.root ? c_.root->identity : none;
   uint64_t t0 = now();
   LibraryIndex::Inputs saved;
   libraryboot::In in;
-  in.saved = libraryboot::Saved::Missing;
-  if (tagstore::File* f = fs.open(kIndexNames.path, tagstore::Fs::Mode::Read)) {
+  // library.idx: a cut rename settled (2.12.6), the marker, its header.
+  auto readHead = [&]() {
+    using S = libraryboot::Saved;
+    IdxCheck check(index);
+    b.tmpSettled = tagstore::settle(fs, kIndexNames, &check);
+    // (IdxCheck keeps a tmp only for a read the card failed: it may be the only copy.)
+    if (b.tmpSettled.what == tagstore::Settle::Unread || b.tmpSettled.what == tagstore::Settle::Kept) return S::Unread;
+    const tagstore::Fs::Entry marker = fs.entry(kMarker);
+    if (marker.cardFailed) return S::Unread;
+    b.marker = markerSet_ = marker.there;
+    t0 = now();
+    bool failed = false;
+    tagstore::File* f = fs.openRead(kIndexNames.path, &failed);
+    if (!f) return failed ? S::Unread : S::Missing;
     FileIn head(*f);
-    in.saved = libraryboot::savedOf(LibraryIndex::peek(head, &saved), saved, root);
+    const LibraryIndex::Load r = LibraryIndex::peek(head, &saved);
     fs.close(f);
+    return head.failed() ? S::Unread : libraryboot::savedOf(r, saved, root);
+  };
+  in.saved = readHead();
+  for (const uint32_t ms : tagstore::kBootWaitsMs) {
+    if (in.saved != libraryboot::Saved::Unread || !c_.wait) break;
+    c_.wait(ms);
+    in.saved = readHead();
   }
   b.peekMs = msSince(t0);
   in.marker = b.marker;
   in.transfer = c_.root && c_.root->present;
   in.device = c_.store && c_.store->device().present;
+  in.rootUnread = c_.root && c_.root->readFailed();
+  in.deviceUnread = c_.store && c_.store->readFailed();
+  in.recordsList = in.device && walkListsCard();
   libraryboot::Decision d = libraryboot::decide(in);
-  auto load = [&]() {
+  // Read again while the card fails it; `*unread`: it failed each.
+  auto load = [&](bool* unread) {
     LibraryIndex::Load r = LibraryIndex::Load::Corrupt;
-    if (tagstore::File* f = fs.open(kIndexNames.path, tagstore::Fs::Mode::Read)) {
-      FileIn all(*f);
-      r = index.load(all, saved);  // its own inputs: the decision compared them
-      fs.close(f);
+    auto once = [&]() {
+      r = LibraryIndex::Load::Corrupt;
+      *unread = false;
+      if (tagstore::File* f = fs.openRead(kIndexNames.path, unread)) {
+        FileIn all(*f);
+        r = index.load(all, saved);  // its own inputs: the decision compared them
+        *unread = all.failed();
+        fs.close(f);
+      }
+    };
+    once();
+    for (const uint32_t ms : tagstore::kBootWaitsMs) {
+      if (!*unread || !c_.wait) break;
+      c_.wait(ms);
+      once();
     }
     return r;
   };
   if (d.action == libraryboot::Action::Load) {
     t0 = now();
-    const LibraryIndex::Load r = load();
+    bool unread = false;
+    const LibraryIndex::Load r = load(&unread);
     b.loadMs = msSince(t0);
     if (r == LibraryIndex::Load::Loaded) {
       b.ok = true;
@@ -431,23 +481,93 @@ LibraryUpdate::Booted LibraryUpdate::boot() {
       b.decision = d;
       return b;
     } else {
-      in.saved = libraryboot::Saved::Corrupt;  // its sum failed: built or walked instead
+      // Its sum failed: built or walked instead. Or a read the card failed: that says
+      // nothing of its sum.
+      in.saved = unread ? libraryboot::Saved::Unread : libraryboot::Saved::Corrupt;
       d = libraryboot::decide(in);
     }
   }
   b.saved = in.saved;
   b.decision = d;
+  // /music, for this session: the last of what a boot that holds its jobs can show.
+  auto walkForSession = [&]() {
+    t0 = now();
+    index.clear();
+    b.walked = c_.walk != nullptr;
+    b.ok = c_.walk && c_.walk(index, c_.walkCtx);
+    b.noMemory = c_.walk && !b.ok;
+    b.built = false;
+    b.buildMs = msSince(t0);
+  };
+  if (!b.ok && d.sessionOnly && d.action == libraryboot::Action::Walk) {
+    walkForSession();
+    return b;
+  }
   if (!b.ok && d.action != libraryboot::Action::Load) {
+    bool cardGone = false;
     if (d.compactFirst) {
       t0 = now();
       compactFirst(&b.compaction, &b.compacted);
       b.compactMs = msSince(t0);
+      // (Its reload's too: D reads as none, only because the card failed the read.)
+      cardGone = b.compacted && (b.compaction.readFailed || c_.store->readFailed());
     }
     t0 = now();
-    bool cardGone = false;
-    b.ok = buildIndex(false, &b.build, &b.walked, &b.noMemory, &cardGone, &b.readErrors);
+    if (!cardGone) {
+      b.ok = buildIndex(false, d.sessionOnly, &b.build, &b.walked, &b.noMemory, &cardGone, &b.readErrors);
+      // Most likely a glitch: asked again once, before it costs the session its jobs and
+      // the new library. (No waits: a card that failed an earlier reader's tries.)
+      if (cardGone && c_.wait) {
+        c_.wait(tagstore::kBootWaitsMs[0]);
+        b.ok = buildIndex(false, d.sessionOnly, &b.build, &b.walked, &b.noMemory, &cardGone, &b.readErrors);
+      }
+    }
     b.built = !b.walked && b.ok;
     b.buildMs = msSince(t0);
+    if (d.sessionOnly) {
+      // The library it stands in for, or the walk: T or D left out by their own checks,
+      // or journals left, and it would list a part of the card.
+      const bool whole = b.ok && !b.readErrors && !c_.store->hasJournals() && b.build.deviceUsed &&
+                         (b.build.transferUsed || !in.transfer);
+      if (!whole) {
+        b.decision.action = libraryboot::Action::Walk;
+        b.decision.compactFirst = false;
+        b.decision.why = "library.idx couldn't be read, and the records didn't give the whole library: /music walked "
+                         "for this session, nothing saved, no card jobs";
+        walkForSession();
+      }
+      return b;  // (nothing saved, the marker kept)
+    }
+    // A read of T or D the card failed: nothing of the build counts, and nothing goes
+    // over what is on the card. A library.idx that says it is one comes back; else
+    // /music is walked for the session: from what could be read, the queue's restore
+    // would cut queue.txt down to a part of the library.
+    if (cardGone) {
+      const bool keep = in.saved == libraryboot::Saved::Matches || in.saved == libraryboot::Saved::Differs;
+      b.readErrors = true;
+      b.decision.compactFirst = b.decision.removeMarker = false;
+      b.decision.holdJobs = true;
+      b.decision.sessionOnly = true;
+      b.decision.action = libraryboot::Action::Load;
+      b.decision.why = "a read of the card's records failed as they were built: no card jobs this session";
+      if (keep) {
+        t0 = now();
+        bool unread = false;
+        const LibraryIndex::Load r = load(&unread);
+        b.loadMs = msSince(t0);
+        b.ok = r == LibraryIndex::Load::Loaded;
+        b.noMemory = r == LibraryIndex::Load::NoMemory;
+        b.keptSaved = true;
+        if (unread) b.saved = libraryboot::Saved::Unread;
+      }
+      if (!b.ok && !b.noMemory) {
+        b.decision.action = libraryboot::Action::Walk;
+        b.decision.why = "a read of the card's records failed as they were built, and no library.idx to load: /music "
+                         "walked for this session, nothing saved, no card jobs";
+        walkForSession();
+      }
+      return b;
+    }
     if (b.ok) {
       // Journals the compaction couldn't fold in (a full card, a walk being
       // written) weren't read, or a read failed (the card?): the inputs
@@ -468,7 +588,8 @@ LibraryUpdate::Booted LibraryUpdate::boot() {
       // every boot would end here with none), and the marker goes; this
       // session's short memory checks don't write it again.
       t0 = now();
-      const LibraryIndex::Load r = load();
+      bool unread = false;
+      const LibraryIndex::Load r = load(&unread);
       b.loadMs = msSince(t0);
       if (r == LibraryIndex::Load::Loaded) {
         b.ok = true;
@@ -556,8 +677,12 @@ LibraryUpdate::Out LibraryUpdate::update(const In& in) {
       step_ = Step{};
       step_.why = why_;
       // The card answers first (it may have been pulled while on): a step
-      // on an absent card leaves the index as it is.
-      if (!cardAnswers()) {
+      // on an absent card leaves the index as it is. So does one whose compaction the
+      // card failed a read of D: the build would read it next, behind the fence, for
+      // nothing. And one whose records read as none only
+      // because the card failed the read (the compaction's reload): built without them
+      // and saved, it would cut the library, and the queue with it, down to T.
+      if (!cardAnswers() || (c_.store && (c_.store->compactionUnread() || c_.store->readFailed()))) {
         step_.cardGone = true;
         phase_ = Phase::Idle;
         o.act = Do::Failed;
@@ -686,7 +811,19 @@ void LibraryUpdate::buildStarted() {
 void LibraryUpdate::stepBuild() {
   const uint64_t t0 = now();
   step_.built =
-      buildIndex(true, &step_.build, &step_.walked, &step_.noMemory, &step_.cardGone, &step_.readErrors);
+      buildIndex(true, false, &step_.build, &step_.walked, &step_.noMemory, &step_.cardGone, &step_.readErrors);
+  // The card failed it: the last library.idx back, as the boot would load it.
+  if (!step_.built && step_.cardGone) {
+    if (tagstore::File* f = c_.fs->open(kIndexNames.path, tagstore::Fs::Mode::Read)) {
+      FileIn head(*f);
+      LibraryIndex::Inputs saved;
+      if (LibraryIndex::peek(head, &saved) == LibraryIndex::Load::Loaded) {
+        FileIn all(*f);
+        step_.reloaded = c_.index->load(all, saved) == LibraryIndex::Load::Loaded;
+      }
+      c_.fs->close(f);
+    }
+  }
   step_.buildMs = msSince(t0);
   // What the save writes (3.4.3): taken now, as the build read them (the
   // scan, which moves the journal on, waits for the save). A read that
@@ -710,8 +847,8 @@ void LibraryUpdate::lived() {
   if (phase_ != Phase::Live) return;
   liveDue_ = false;
   ++steps_;
-  // Nothing to save (the build failed: no library until the next boot,
-  // whose load finds the last library.idx): the step is over.
+  // Nothing to save (the build failed: the last library.idx is back, or, that too
+  // failing, the next boot's load finds it): the step is over.
   if (!step_.built) {
     phase_ = Phase::Idle;
     savedDue_ = true;

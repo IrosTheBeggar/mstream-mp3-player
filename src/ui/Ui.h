@@ -16,6 +16,7 @@
 #include "app/DanceMode.h"
 #include "app/Library.h"
 #include "app/Waves.h"
+#include "ui/FilterSheet.h"
 #include "ui/Input.h"
 #include "ui/ListScroller.h"
 #include "ui/ListView.h"
@@ -50,7 +51,8 @@
 //     area reaches the screen's edge.
 //   - Overlays (ui/Overlays): the toast with Undo at the top of the content,
 //     the volume HUD over the tab bar, a bottom sheet, the volume sheet (per
-//     output), the A-Z jump grid, a dialog, the first-boot coach cards.
+//     output), the A-Z jump grid, a dialog, the first-boot coach cards; and
+//     the mood filters' editor over the whole content area (ui/FilterSheet).
 //   - The language (docs/I18N.md, phase 3): every text is uistr's, in the
 //     language app/UiLang read at boot. Output > Language changes it at
 //     once (chooseLanguage()): everything is drawn again, and what held a
@@ -283,6 +285,12 @@ public:
   void openVolume(int output = -1);
   // The sleep timer's choices (Now Playing's "..." > Sleep timer).
   void openSleepSheet();
+  // The mood filters' editor for `owner` (docs/MOOD-FILTERS.md 4.3, 7.6):
+  // over the content area, in the Library's accent (the Albums list's), or
+  // the Output tab's when the owner counts tracks (Auto DJ's). A toast up
+  // goes, its Undo with it (its title row is under the toast's rows); a
+  // touch that starts within Sheet::kSettleMs goes nowhere, as a sheet's.
+  void openFilters(FilterOwner* owner);
   // `danger`: the primary button is red (Clear queue).
   void openDialog(OverlayOwner* owner, const char* title, const char* body, const char* const* buttons, int n,
                   bool danger = false);
@@ -332,7 +340,7 @@ public:
   void drawHeader(const Header& h);
 
 private:
-  enum class TouchOn : uint8_t { None, Bar, Toast, Sheet, Volume, Jump, Dialog, Coach, Page, Sleep };
+  enum class TouchOn : uint8_t { None, Bar, Toast, Sheet, Volume, Jump, Dialog, Coach, Page, Sleep, Filters };
 
   Page* pageFor(uint8_t kind);
   void showTop();
@@ -366,7 +374,8 @@ private:
   void onDialog(int button) override;
   void trackMotion(uint32_t nowMs);
   bool modalUp() const {
-    return sheet_.up() || dialog_.up() || volumeSheet_.up() || jumpGrid_.up() || coach_.up() || sleepSheet_.up();
+    return sheet_.up() || dialog_.up() || volumeSheet_.up() || jumpGrid_.up() || coach_.up() || sleepSheet_.up() ||
+           filters_.up();
   }
   // The sleep timer's sheet: its state as the snapshot has it.
   void refreshSleepSheet();
@@ -375,7 +384,7 @@ private:
   void followSheet(int pressed = -1);
   SheetFollow sheetFollow_[Sheet::kMaxRows] = {};
   uint8_t sheetStays_ = 0;      // a bit per row
-  uint32_t sheetOpenedMs_ = 0;  // (the settle: Sheet::kSettleMs; the Sleep timer sheet's too)
+  uint32_t sheetOpenedMs_ = 0;  // (the settle: Sheet::kSettleMs; the Sleep timer sheet's and the editor's too)
   // The shuffle mode the last pass saw, and a qu since: when the queue's
   // undo goes (a toggle drops it, qu uses it), an Undo toast up goes too.
   queueview::UndoWatch undoWatch_;
@@ -402,11 +411,17 @@ private:
   void playFailed();
   void updatePlayFailed();
   void noteFailures();
+  // A play held for the card (PlaybackController's card hold): "Still no card: is it all the
+  // way in?", once a hold, not at each try.
+  void noteCardHolds();
   // The A-Z rail's tap (ListView::RailHost): the jump grid, and its taps.
   void onRailTap() override;
   void openJumpLetters();
   void onJumpCell(int cell);
   void resetLibraryTab();
+  // uiM: the Albums filter; uiMa<hex> / uiMa0 sets or clears it; uiMe the
+  // editor (docs/MOOD-FILTERS.md 9.3).
+  void filtersCommand(const char* a);
 
   UiHost& host_;
   Input& input_;
@@ -425,6 +440,7 @@ private:
   Hud hud_;
   Sheet sheet_;
   SleepSheet sleepSheet_;
+  FilterSheet filters_;
   VolumeSheet volumeSheet_;
   JumpGrid jumpGrid_;
   Dialog dialog_;
@@ -459,6 +475,7 @@ private:
   queueview::AddedMark added_;
   queueview::FailedKeys failedKeys_;
   uint32_t failuresSeen_ = 0;
+  uint32_t cardHoldsSeen_ = 0;
 
   NowPlayingPage nowPlaying_;
   LibraryPage libraryPage_;

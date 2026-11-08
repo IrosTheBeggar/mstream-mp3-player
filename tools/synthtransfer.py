@@ -12,7 +12,8 @@ writes, into the card's /.mstream only:
 - tags-<g>.bin: an MPTG tags file (source 2) with **zero records**
   (docs/METADATA.md 2.6): the root needs a tags file that opens and matches
   its COMP entry. With no records the library build is unchanged: every
-  file is read as the device reads it today (2.9);
+  file is read as the device reads it today (2.9). With --moods, one record
+  a track instead, each with its mood scores (below);
 - autodj-<g>.bin: an AutoDJ index (MPDJ v2, docs/AUTODJ-INDEX.md), either
   --synthetic (below) or --mpdj FILE (a file built elsewhere for this tree,
   restamped to this commit);
@@ -39,19 +40,25 @@ files alone.
 
 It is a test card's index, not a transfer's: DJRF's BPM, key and artist
 keys are synthesized here (as if the records carried mStream's analysis),
-while the tags file holds no records. The device never cross-checks them;
-the real transfer software follows METADATA 2.13.2.
+while the tags file holds no records (with --moods, records that carry no
+BPM or key). The device never cross-checks them; the real transfer software
+follows METADATA 2.13.2.
 
 Usage:
 
-    python tools/synthtransfer.py --add-to CARD --synthetic [--seed S] [--waves] [--dry-run]
-    python tools/synthtransfer.py --add-to CARD --mpdj FILE [--waves] [--dry-run]
-    python tools/synthtransfer.py --check CARD
+    python tools/synthtransfer.py --add-to CARD --synthetic [--seed S] [--waves] [--moods] [--dry-run]
+    python tools/synthtransfer.py --add-to CARD --mpdj FILE [--waves] [--moods] [--dry-run]
+    python tools/synthtransfer.py --check CARD [--mood-filter Q]
 
 CARD is a card's root (E:\\) or a folder holding a card tree (synthcard's
 --out folder). Tracks are the files the device's walk lists: .mp3, .flac
 and .opus under /music, no name starting with a dot, at most 8 folder
-levels and 248 bytes below /music (lib/core/CardWalk, LibraryIndex).
+levels and 248 bytes below /music (lib/core/CardWalk, LibraryIndex). A
+path is the card's spelling (METADATA 2.8.5): macOS lists a FAT name
+decomposed (NFD), so there each name is brought back to NFC for every use
+as a card path (T's records, the index's and the waveform index's path
+hashes, the jsonl's lookup, --check), while the file is opened by the name
+as listed; elsewhere names are taken as listed.
 
 --synthetic builds the index here, deterministic from --seed: one row a
 track (a seeded --unindexed percent, default 1, left without a row, as
@@ -95,19 +102,65 @@ that disagrees), or 0, unknown, for a track it doesn't list. Like the index,
 it is written whatever /.player/device.txt says. About 15 s for synthcard.py's
 default tree, standard library only.
 
+--moods gives T one record a track (docs/MOOD-FILTERS.md 9.6, C8), so the
+device makes each track's mood word from its record's tail (METADATA 2.9:
+scores come with rule 1 only, 3.4.3). A record must be the one rule 1
+takes, or its word never reaches the index, so it holds what the card says:
+the file's size, its fatTime (2.3.4: the raw FAT fields of its time, read
+back from the card) and its qfp (2.3.5: two reads of its sampled bytes, so
+every track's file is opened). Its names come from synthcard-files.jsonl
+(CARD's, or --tags FILE) as the API fallback fills them (2.7): FROM_API,
+title, artist, album, genre, composer, year, track and disc numbers and
+totals, the MusicBrainz recording id, durationMs and the track gain, with
+the `known` bits of the fields filled alone; and the picture's anchor,
+which the API hasn't but the jsonl has. The device takes the record whole,
+a field it lacks named from the path, never from a scan (2.9), so a track
+the jsonl doesn't list gets a record with no names (known 0) and is named
+by its path. T's ledger (ORIG, which 2.6.6 requires of a source 2 file
+with records) is card_fixtures.mptg's: one all-zero row a record,
+serverPath "" and server 0, an owned file with no server track; the
+device ignores it. The root's serverInstance and serverUrlKey are 0,
+unknown (2.5.1), so to the software the root's server, and so every row's,
+is unknown by 2.11's test, and it MUST NOT delete or replace these files
+without asking (2.11; part 7, U7). The scores are mStream's eight heads
+(tools/moodfilter.py's MOOD_COLUMNS), made up and deterministic from
+--seed: a genre's centre (the artist's genre in --synthetic's model, the
+same --genres, whatever the index), then the artist's, the album's and the
+track's own offsets, squashed into (0, 1) and rounded to 4 places as the
+server writes them. --mood-coverage P (default 92) is the percent of
+tracks with a server row (the rest get no row: 8 zero bytes); --mood-null
+P (default 1) the percent of a row's heads that are NULL; both go with
+--moods alone (refused without it, --check too). The tail is moodfilter's
+(stride 80, minor 1); --mood-coverage 0 is the control card, the same
+records at stride 72 with no tails, minor 0. About 10 s more for synthcard.py's default tree on a local disk, most of it
+the 19,410 qfps in pure Python (a 5.2 MB T); on a card in a reader the
+19,410 opens and their reads add their own.
+
 --dry-run builds and checks everything in memory and prints what it would
 write; nothing is written. --check reads a card's /.mstream back as the
 boot does (a Python mirror of cardroot::read, then Auto DJ's open and the
 waves job's: the election, the root, T, the MPDJ entry, mpdj.py's check, the
 MPWF entry, mpwf.py's check) and says how many of the card's tracks map to a
 row and how many have a shape; exit 1 when there is no usable index, or the
-root names a waveform index that doesn't read.
+root names a waveform index that doesn't read. When T has records it also
+applies rule 1 to them (the size; the fatTime, with T's skew, 2.3.4; else
+the qfp, read only then) and says how many tracks get a mood word, and the
+block library.idx gives them (the device's `gm`). --mood-filter Q adds the
+tracks and the albums that fit the filter Q, 1-4 hex digits as the device's
+`gm<hex>` and `Dq<hex>` read it, a 0x prefix allowed (127 or 0x127: Sad,
+Relaxed, Vocals, Danceable at Standard; MOOD-FILTERS.md 5.4; a word that
+isn't a filter is refused), to compare with the device's `gm<Q>`. A track
+fits by moodfilter.matches over its word; an album is the device's (its
+folder at depth 2 below /music, deeper folders in it, or an artist's loose
+tracks: lib/core/LibraryIndex.h) and fits when more than half of its
+analysed tracks do (moodfilter.album_matches, 4.1).
 
 The first boot after a new root rebuilds the library (the commit identity
 changed, Library.cpp) before the UI.
 
 Its tests: python -m unittest discover -s tools -p "test_synthtransfer.py"
-(the lists against tools/mpdj.py's rule; the files read back by the
+(the lists against tools/mpdj.py's rule; --moods' records against the
+files and its words against moodfilter; the files read back by the
 firmware's own readers on the host, cardroot::read, mpdj::Table and
 mpwf::Table, built with g++ when there is one; the refusals).
 """
@@ -123,9 +176,11 @@ import shutil
 import struct
 import sys
 import time
+import unicodedata
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import card_fixtures as cf  # noqa: E402  (mptg, msmf_raw, comp_row, build_field: docs/METADATA.md 2.17)
+import moodfilter as mf  # noqa: E402  (the mood tail, word and filter: docs/MOOD-FILTERS.md 5.3, 5.4)
 import mpdj  # noqa: E402  (prepare, write, check, encode_slot: docs/AUTODJ-INDEX.md)
 import mpwf  # noqa: E402  (build, Reader, companion_matches: docs/WAVEFORM-INDEX.md)
 import synthcard  # noqa: E402  (long_path, DriveProbe)
@@ -134,6 +189,10 @@ PRODUCER = "mstream-mp3-player tools/synthtransfer.py 1"
 TRACK_EXTS = ("mp3", "flac", "opus")
 MAX_DEPTH = 8                  # folder levels below /music (CardWalk.h kMaxDepth)
 MAX_REL = 255 - len("/music/")  # a track's path below /music, in bytes (CardContract.h kMaxRelPath)
+# macOS lists a FAT name decomposed (NFD), the card stores it precomposed:
+# the listing is brought back to NFC there (METADATA 2.8.5). Windows and
+# Linux list the stored name unchanged.
+LISTS_NFD = sys.platform == "darwin"
 TAGS_JSONL = "synthcard-files.jsonl"
 MSTREAM = ".mstream"
 FINAL = 1                      # the root's flags: this commit ended a run
@@ -155,6 +214,18 @@ NO_BPM, NO_KEY, HOME_KEY, OCTAVE = 0.05, 0.05, 0.35, 0.06
 # The synthetic waveform index's shapes.
 SERVER_PEAKS = 800                           # what the server's route gives a track (WAVEFORM-INDEX.md 5)
 SILENT, MASTERED = 0.02, 0.15                # shares of the tracks: all zero; a loud master, near 255 throughout
+# The made-up mood scores (--moods): a head's genre centre, uniform in
+# +-MOOD_CENTRE, then the artist's, the album's and the track's offsets
+# (their sd), squashed into (0, 1): squash(+-3) is 0.125 / 0.875.
+MOOD_CENTRE = 3.0
+MOOD_SPREAD = (1.0, 0.5, 0.8)
+# RECS fields --moods fills (METADATA 2.6.4).
+FROM_API, UNREADABLE, HAS_RG_TRACK = 1 << 9, 1 << 6, 1 << 2   # flags
+KNOWN_BITS = {"title": 0, "artist": 1, "album": 2, "genre": 4, "composer": 5, "mb": 7, "year": 8, "track": 9,
+              "disc": 10, "duration": 11, "gain": 14, "picture": 16}  # `known`, one bit a field
+CONTAINERS = {"mp3": 1, "flac": 2, "opus": 3}
+PIC_MIMES = {"jpeg": 1, "progressive": 1, "png": 2}  # synthcard's picture kinds: picMime 1 JPEG, 2 PNG
+FRONT_COVER = 3                                      # picType: synthcard's pictures are all front covers
 
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -185,35 +256,91 @@ def file_exists(path):
     return os.path.isfile(synthcard.long_path(path))
 
 
-def walk_music(card):
-    """(tracks, files): every file under CARD/music as rel paths (names as
-    the directory stores them, '/' between), and the tracks the device's
-    walk lists among them. Both sorted by their UTF-8 bytes."""
+def walk_music(card, hosts=None, nfc=None):
+    """(tracks, files): every file under CARD/music as rel paths ('/'
+    between), and the tracks the device's walk lists among them. Both sorted
+    by their UTF-8 bytes. Each path is the card's spelling, the one T's
+    records, the path hashes and the jsonl's lookup take: each listed name
+    brought back to NFC where the host lists NFD (METADATA 2.8.5; nfc True
+    or False says so, None is LISTS_NFD), else as listed. `hosts`, when
+    given, gets {track: its path as the host listed it} for each track whose
+    listing differs: the name its file is opened by (track_file)."""
     music = os.path.join(card, "music")
     tracks, files = [], []
+    nfc = LISTS_NFD if nfc is None else nfc
 
-    def walk(full, rel, depth, seen):
+    def walk(full, rel, host, depth, seen):
         try:
             entries = list(os.scandir(full))
         except OSError as e:
             raise Refused("can't list %s: %s" % (full, e))
+        names = set()
         for e in entries:
-            r = e.name if not rel else rel + "/" + e.name
+            name = unicodedata.normalize("NFC", e.name) if nfc else e.name
+            if name in names:
+                raise Refused("%s: two of its names are %r on the card (NFC, METADATA 2.8.5)" % (full, name))
+            names.add(name)
+            r = name if not rel else rel + "/" + name
+            h = e.name if not host else host + "/" + e.name
             try:
                 r.encode("utf-8")
             except UnicodeEncodeError:
                 continue  # a name no card stores (a lone surrogate): no path hash
             if e.is_dir(follow_symlinks=False):
-                walk(e.path, r, depth + 1, seen and not e.name.startswith(".") and depth + 1 <= MAX_DEPTH)
+                walk(e.path, r, h, depth + 1, seen and not name.startswith(".") and depth + 1 <= MAX_DEPTH)
                 continue
             files.append(r)
-            ext = e.name.rsplit(".", 1)[-1].lower() if "." in e.name[1:] else ""
-            if (seen and not e.name.startswith(".") and ext in TRACK_EXTS
+            ext = name.rsplit(".", 1)[-1].lower() if "." in name[1:] else ""
+            if (seen and not name.startswith(".") and ext in TRACK_EXTS
                     and len(r.encode("utf-8")) <= MAX_REL):
                 tracks.append(r)
-    walk(synthcard.long_path(music), "", 0, True)
+                if hosts is not None and h != r:
+                    hosts[r] = h
+    walk(synthcard.long_path(music), "", "", 0, True)
     key = lambda r: r.encode("utf-8")  # noqa: E731
     return sorted(tracks, key=key), sorted(files, key=key)
+
+
+def fat_time_of(mtime):
+    """METADATA 2.3.4: a file's modification time as the raw FAT fields the
+    device reads (local wall time, 2 s steps). Windows' FAT driver converts
+    them with the time zone bias in force now, so that bias undoes it;
+    elsewhere the platform's local offset, the stamp's own (the skew rule
+    and the qfp cover any error). 0, unknown, outside FAT's years."""
+    s = int(mtime)
+    if os.name == "nt":
+        t = time.gmtime(s + getattr(time.localtime(), "tm_gmtoff", -time.timezone))
+    else:
+        t = time.localtime(s)
+    if not 1980 <= t.tm_year <= 2107:
+        return 0
+    return cf.fat_time(t.tm_year, t.tm_mon, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec)
+
+
+def track_file(card, rel, hosts=None):
+    """A track's file on this host: the path the host listed for it (hosts:
+    walk_music's), else its card path."""
+    rel = (hosts or {}).get(rel, rel)
+    return synthcard.long_path(os.path.join(card, "music", *rel.split("/")))
+
+
+def file_stat(card, rel, hosts=None):
+    """(size, fatTime) of a track's file: what the device's walk lists."""
+    st = os.stat(track_file(card, rel, hosts))
+    return st.st_size, fat_time_of(st.st_mtime)
+
+
+def file_facts(card, rel, hosts=None):
+    """(size, fatTime, qfp) of a track's file, as the device reads them: the
+    qfp (2.3.5) from its sampled bytes alone, two reads."""
+    with open(track_file(card, rel, hosts), "rb") as fh:
+        st = os.fstat(fh.fileno())
+        n = st.st_size
+        head, tail = fh.read(min(n, 4096)), b""
+        if n > 4096:
+            fh.seek(max(4096, n - 4096))
+            tail = fh.read(n - max(4096, n - 4096))
+    return n, fat_time_of(st.st_mtime), cf.fnv(struct.pack("<Q", n) + head + tail)
 
 
 def record_values(tags):
@@ -569,6 +696,130 @@ def synthetic_waves(tracks, lengths, seed, generation, card_id, unshaped=1.0):
 
 
 # ---------------------------------------------------------------------------
+# T's records with mood tails (--moods: docs/MOOD-FILTERS.md 9.6, C8)
+# ---------------------------------------------------------------------------
+def squash(z):
+    """(-inf, inf) onto (0, 1), 0 to 0.5, by IEEE's basic operations alone
+    (no exp: every platform rounds the same)."""
+    return 0.5 + z / (2.0 * (1.0 + abs(z)))
+
+
+def mood_scores(tracks, seed, genres=16, coverage=92.0, null=1.0):
+    """{rel: the track's server row}: None (no row) for a seeded (100 -
+    coverage) percent, else mStream's eight heads in MOOD_COLUMNS order,
+    each None (NULL) for a seeded `null` percent, rounded to 4 places.
+    Keyed by names, so a track's row is its own whatever else the tree
+    holds: a head is its genre's centre (the artist's genre in
+    synthetic_rows' model) plus the artist's, the album's and the track's
+    own offsets, squashed. A track's draws come in a fixed order, so
+    coverage and null change only what they decide."""
+    gs = [Genre(seed, g) for g in range(genres)]
+    cum = cumulative([g.weight for g in gs])
+    heads = len(mf.MOOD_COLUMNS)
+    sa, sb, se = MOOD_SPREAD
+    centres, artists, albums, out = {}, {}, {}, {}
+    for rel in tracks:
+        parts = rel.split("/")
+        artist = parts[0] if len(parts) > 1 else ""
+        album = "/".join(parts[:-1])
+        if artist not in artists:
+            g = Artist(seed, artist, cum, gs).genre
+            if g not in centres:
+                r = Rng(seed, "mood-genre", g)
+                centres[g] = [MOOD_CENTRE * (2.0 * r.u() - 1.0) for _ in range(heads)]
+            r = Rng(seed, "mood-artist", artist)
+            artists[artist] = [c + sa * r.normal() for c in centres[g]]
+        if album not in albums:
+            r = Rng(seed, "mood-album", album)
+            albums[album] = [a + sb * r.normal() for a in artists[artist]]
+        r = Rng(seed, "mood-track", rel)
+        if r.u() * 100.0 >= coverage:
+            out[rel] = None
+            continue
+        row = []
+        for b in albums[album]:
+            gone = r.u() * 100.0 < null
+            x = round(squash(b + se * r.normal()), 4)
+            row.append(None if gone else x)
+        out[rel] = row
+    return out
+
+
+def api_record(rel, j):
+    """A track's record fields (card_fixtures.mptg's description) from its
+    synthcard-files.jsonl row `j` (None: the jsonl doesn't list it), as the
+    API fallback fills them (METADATA 2.7): FROM_API and the `known` bits of
+    the fields filled alone; plus the picture's anchor, which the API
+    hasn't. The container from the jsonl's kind, else the extension."""
+    ext = rel.rsplit(".", 1)[-1].lower()
+    r = {"path": rel, "flags": FROM_API, "container": CONTAINERS.get((j or {}).get("kind"), CONTAINERS.get(ext, 0))}
+    known, tags = 0, {}
+    t = (j or {}).get("tags") or {}
+
+    def text(field, bit, values):
+        nonlocal known
+        if cf.build_field(values, field in cf.LIST_FIELDS)[0]:
+            tags[field] = values
+            known |= 1 << bit
+    text("title", KNOWN_BITS["title"], [t["title"]] if t.get("title") else [])
+    text("artist", KNOWN_BITS["artist"], t.get("artist") or [])
+    text("album", KNOWN_BITS["album"], [t["album"]] if t.get("album") else [])
+    text("genre", KNOWN_BITS["genre"], t.get("genre") or [])
+    text("composer", KNOWN_BITS["composer"], t.get("composer") or [])
+    text("mbRecordingId", KNOWN_BITS["mb"], [t["mbtrack"]] if t.get("mbtrack") else [])
+    if t.get("year"):
+        r["year"] = int(t["year"])
+        known |= 1 << KNOWN_BITS["year"]
+    if t.get("track"):
+        r["track"], r["trackTotal"] = int(t["track"]), int(t.get("tracktotal") or 0)
+        known |= 1 << KNOWN_BITS["track"]
+    if t.get("disc"):
+        r["disc"], r["discTotal"] = int(t["disc"]), int(t.get("disctotal") or 0)
+        known |= 1 << KNOWN_BITS["disc"]
+    gain = cf.gain(t["rg_track"]) if t.get("rg_track") else None
+    if gain is not None:
+        r["rgTrackGain"] = gain
+        r["flags"] |= HAS_RG_TRACK
+        known |= 1 << KNOWN_BITS["gain"]
+    if (j or {}).get("ms"):
+        r["durationMs"] = int(j["ms"])
+        known |= 1 << KNOWN_BITS["duration"]
+    pic = (j or {}).get("pic")
+    if pic:
+        r["picture"] = {"offset": pic["offset"], "length": pic["length"], "type": FRONT_COVER,
+                        "mime": PIC_MIMES.get(pic.get("mime"), 3), "coding": pic["coding"]}
+        known |= 1 << KNOWN_BITS["picture"]
+    r["known"], r["tags"] = known, tags
+    return r
+
+
+def mood_records(card, tracks, rows, seed, genres=16, coverage=92.0, null=1.0, hosts=None):
+    """(T's records, stats) for --moods: one a track, in `tracks`' order.
+    Each holds its file's size, fatTime and qfp as the device reads them
+    (file_facts, the file opened by its listed name: hosts), its names from
+    `rows` ({rel: its synthcard-files.jsonl row}, api_record) and its scores
+    (mood_scores): with no row at all, no record gets "scores", so T keeps
+    stride 72 and minor 0 (2.6.4)."""
+    t0 = time.time()
+    scores = mood_scores(tracks, seed, genres, coverage, null)
+    tails = any(s is not None for s in scores.values())
+    recs = []
+    for rel in tracks:
+        size, fat, qfp = file_facts(card, rel, hosts)
+        r = api_record(rel, rows.get(rel))
+        r.update(size=size, fatTime=fat, qfp=qfp)
+        if tails:
+            r["scores"] = scores[rel]
+        recs.append(r)
+    scored = [s for s in scores.values() if s is not None]
+    stats = {"records": len(recs), "rows": len(scored), "heads": len(mf.MOOD_COLUMNS) * len(scored),
+             "nullHeads": sum(x is None for s in scored for x in s), "named": sum(rel in rows for rel in tracks),
+             "pictures": sum("picture" in r for r in recs), "unknownTime": sum(r["fatTime"] == 0 for r in recs),
+             "stride": mf.TAIL_STRIDE if tails else 72, "seconds": round(time.time() - t0, 1)}
+    return recs, stats
+
+
+# ---------------------------------------------------------------------------
 # A given index (--mpdj)
 # ---------------------------------------------------------------------------
 def restamp_header(data, generation, card_id, tags_generation):
@@ -619,10 +870,13 @@ def given_index(path, tracks, generation, card_id, allow_missing=False):
 # ---------------------------------------------------------------------------
 # The commit (METADATA 2.5, 2.6, 2.12.1)
 # ---------------------------------------------------------------------------
-def tags_file(generation, card_id):
-    """T: an MPTG of source 2 with no records (FOLD holds /music alone)."""
+def tags_file(generation, card_id, records=None):
+    """T: an MPTG of source 2 with no records (FOLD holds /music alone), or
+    --moods' (mood_records): RECS at stride 80 and minor 1 when they carry
+    scores, else at 72, minor 0 (2.6.4; card_fixtures.mptg writes the tail
+    with moodfilter.tail_of)."""
     return cf.mptg({"source": 2, "generation": generation, "cardId": card_id, "parserVersion": 0,
-                    "readRules": 1, "producer": PRODUCER, "records": []})
+                    "readRules": 1, "producer": PRODUCER, "records": records or []})
 
 
 def root_file(generation, card_id, base, commit_time, tags, autodj, waves=None):
@@ -808,7 +1062,8 @@ def check_commit(read):
     if (tf["generation"], tf["fileBytes"], tf["headerCrc"]) != (t["generation"], t["fileBytes"], t["headerCrc"]):
         out["why"] = "%s: not the one COMP names" % t["name"]
         return out
-    out.update(present=True, why="ok", tags={"name": t["name"], "records": records, "source": source})
+    out.update(present=True, why="ok", tags={"name": t["name"], "records": records, "source": source,
+                                             "stride": secs[b"RECS"][3], "minor": struct.unpack_from("<H", tb, 6)[0]})
     if root["waves"] is not None:
         out["waves"] = check_waves(root["waves"], read)
     if len(root["comps"]) < 2:
@@ -835,10 +1090,101 @@ def check_commit(read):
     return out
 
 
-def check_card(card, tracks=None):
+def tags_records(b):
+    """T's records read back (2.6.3, 2.6.4), in record order: each one's
+    path, size, fatTime, qfp, flags and tail (moodfilter.record_tail: None
+    under stride 80)."""
+    p = cf.parse_container(b)
+    strs = bytes(cf.section(p, "STRS")[4])
+
+    def text(off):
+        return strs[off:strs.index(0, off)].decode("utf-8") if off else ""
+
+    def join(a, n):
+        return a + "/" + n if a else n
+    fold, folders = cf.section(p, "FOLD"), []
+    for i in range(fold[2]):
+        parent, name = struct.unpack_from("<II", fold[4], fold[3] * i)
+        folders.append("" if i == 0 else join(folders[parent], text(name)))
+    recs, out = cf.section(p, "RECS"), []
+    stride = recs[3]
+    for i in range(recs[2]):
+        row = bytes(recs[4][stride * i:stride * (i + 1)])
+        f, n, _, size, fat, _, qfp, _, flags = struct.unpack_from("<IIIIIIQIH", row, 0)
+        out.append({"path": join(folders[f], text(n)), "size": size, "fatTime": fat, "qfp": qfp, "flags": flags,
+                    "tail": mf.record_tail(row, stride)})
+    return out
+
+
+def card_moods(card, tb, tracks, hosts=None):
+    """Rule 1 of METADATA 2.9 over T's records (`tb`) for each track the
+    walk lists, as the device's builder applies it, and the mood word the
+    chosen record gives (3.4.3: scores come with rule 1 only). T's record
+    for a track's path is taken when its size is the file's and its fatTime
+    matches (equal, or equal after T's skew, 2.3.4), else when its qfp (not
+    0) is the file's, read only then. A record UNREADABLE without FROM_API
+    names nothing and carries no scores. `hosts`: walk_music's, the names
+    the files are opened by. {"words": {rel: word}, counts}."""
+    recs = tags_records(tb)
+    by_path = {r["path"]: r for r in recs}
+    seen = {rel: file_stat(card, rel, hosts) for rel in tracks if rel in by_path}
+    d = cf.skew([(by_path[rel]["fatTime"], fat) for rel, (size, fat) in seen.items()
+                 if size == by_path[rel]["size"]])
+    words = {}
+    m = {"records": len(recs), "tails": sum(mf.tail_valid(r["tail"]) for r in recs), "tracks": len(tracks),
+         "skew": d, "byTime": 0, "byQfp": 0, "stale": 0, "noRecord": 0}
+    for rel in tracks:
+        r = by_path.get(rel)
+        words[rel] = 0
+        if r is None:
+            m["noRecord"] += 1
+            continue
+        size, fat = seen[rel]
+        if size == r["size"] and cf.time_matches(r["fatTime"], fat, d):
+            m["byTime"] += 1
+        elif size == r["size"] and r["qfp"] and file_facts(card, rel, hosts)[2] == r["qfp"]:
+            m["byQfp"] += 1
+        else:
+            m["stale"] += 1
+            continue
+        if not (r["flags"] & UNREADABLE and not r["flags"] & FROM_API):
+            words[rel] = mf.word_of_tail(r["tail"])
+    m["withWord"] = sum(1 for x in words.values() if x)
+    m["blockBytes"] = 2 * len(tracks) if m["withWord"] else 0  # library.idx v7's words: one a track, or none
+    m["words"] = words
+    return m
+
+
+def album_of(rel):
+    """The device's album of a track (lib/core/LibraryIndex.h, /music the
+    only root): its folder at depth 2, deeper folders staying in it; else its
+    artist's loose tracks ("Artist/"); else the root's ("")."""
+    parts = rel.split("/")
+    if len(parts) >= 3:
+        return parts[0] + "/" + parts[1]
+    return parts[0] + "/" if len(parts) == 2 else ""
+
+
+def mood_fits(words, q):
+    """What filter q lets through (MOOD-FILTERS.md 4.1, 5.4), over {rel:
+    word}: (the tracks that fit, by moodfilter.matches; the albums that fit
+    as (album, pass, analysed), counting only analysed tracks, by
+    moodfilter.album_matches; every album; the albums with an analysed
+    track). Both lists in the card's byte order."""
+    key = lambda s: s.encode("utf-8")  # noqa: E731
+    tracks = sorted((rel for rel, w in words.items() if mf.matches(w, q)), key=key)
+    albums = {}
+    for rel, w in words.items():
+        albums.setdefault(album_of(rel), []).append(w)
+    fit = [(a, *mf.album_counts(albums[a], q)) for a in sorted(albums, key=key) if mf.album_matches(albums[a], q)]
+    return tracks, fit, len(albums), sum(1 for ws in albums.values() if any(w & mf.ANALYSED for w in ws))
+
+
+def check_card(card, tracks=None, hosts=None):
     """check_commit over CARD/.mstream, how many of the card's tracks map to
     a row, and how many have a shape (each track's lookup, as the device
-    makes it)."""
+    makes it); with records in T, their mood words (card_moods). `tracks`
+    and `hosts` are walk_music's, made here when not given."""
     ms = os.path.join(card, MSTREAM)
 
     def read(name):
@@ -849,8 +1195,13 @@ def check_card(card, tracks=None):
             return fh.read()
     out = check_commit(read)
     dj, wv = out["autoDj"], out["waves"]
-    if (dj.get("present") or wv.get("present")) and tracks is None and os.path.isdir(os.path.join(card, "music")):
-        tracks, _ = walk_music(card)
+    records = out["present"] and out["tags"]["records"] > 0
+    if ((dj.get("present") or wv.get("present") or records) and tracks is None
+            and os.path.isdir(os.path.join(card, "music"))):
+        hosts = {}
+        tracks, _ = walk_music(card, hosts)
+    if records and tracks is not None:
+        out["moods"] = card_moods(card, read(out["tags"]["name"]), tracks, hosts)
     if dj.get("present") and tracks is not None:
         rows = dict(dj["reader"].paths())
         mapped = [rows.get(mpdj.path_hash(rel)) for rel in tracks]
@@ -879,6 +1230,8 @@ def describe_check(c, w):
         c["rootName"], r["generation"], r["cardId"], r["commitId"], r["baseGeneration"],
         "FINAL" if r["flags"] & FINAL else "a checkpoint", r["producer"]))
     w("T %s: source %d, %d records\n" % (c["tags"]["name"], c["tags"]["source"], c["tags"]["records"]))
+    if c.get("moods"):
+        describe_moods(c["tags"], c["moods"], w)
     dj = c["autoDj"]
     if not dj.get("name"):
         w("AutoDJ index: none named\n")
@@ -902,6 +1255,71 @@ def describe_check(c, w):
         if wv.get("tracks"):
             w("tracks on the card: %d, %d with a shape, %d without; %.1f slot reads a lookup\n" % (
                 wv["tracks"], wv["hits"], wv["tracks"] - wv["hits"], wv["reads"] / wv["tracks"]))
+
+
+def describe_moods(t, m, w):
+    """The device's `gm`: tracks with a word and the block, then how rule 1
+    took T's records."""
+    taken = m["byTime"] + m["byQfp"]
+    if t["stride"] < mf.TAIL_STRIDE:
+        w("moods: none: T's records are %d bytes, no tails (minor %d)\n" % (t["stride"], t["minor"]))
+    else:
+        w("moods: %d of %d tracks with a word (%.1f %%), block %d B; T's records %d bytes (minor %d), %d with a "
+          "tail that reads\n" % (m["withWord"], m["tracks"], 100.0 * m["withWord"] / max(1, m["tracks"]),
+                                 m["blockBytes"], t["stride"], t["minor"], m["tails"]))
+    w("rule 1 takes T's record for %d of %d tracks (%d by time%s, %d by qfp); %d stale, %d without one\n" % (
+        taken, m["tracks"], m["byTime"], ", skew %d s" % m["skew"] if m["skew"] else "", m["byQfp"], m["stale"],
+        m["noRecord"]))
+
+
+FILTER_HEX = re.compile(r"^(?:0[xX])?([0-9A-Fa-f]{1,4})$")
+
+
+def filter_word(s):
+    """--mood-filter's Q as the device's gm<hex> and Dq<hex> read it
+    (lib/core/TagText.cpp): 1-4 hex digits of either case, so "127" is
+    0x127, here a 0x prefix allowed too; a word moodfilter.q_valid refuses
+    is refused (MOOD-FILTERS.md 5.4)."""
+    m = FILTER_HEX.match(s.strip())
+    if not m:
+        raise argparse.ArgumentTypeError("%r: not a filter's q (1-4 hex digits, as the device's gm<hex>: 127 or "
+                                         "0x127)" % s)
+    q = int(m.group(1), 16)
+    if not mf.q_valid(q):
+        raise argparse.ArgumentTypeError("0x%X: not a filter (bits 11-15 clear, voice and level not 3: "
+                                         "MOOD-FILTERS.md 5.4)" % q)
+    return q
+
+
+def filter_name(q):
+    """q's groups and level as words (moodfilter.unpack)."""
+    f = mf.unpack(q)
+    lv = mf.LEVELS[f["level"]]
+    groups = ["%s %s" % (g, f[g]) for g in ("valence", "energy", "voice") if f[g]]
+    groups += ["tags " + ", ".join(f["tags"])] if f["tags"] else []
+    return "%s at %s (need %d, under %d)%s" % ("; ".join(groups) or "no group", f["level"].capitalize(), lv["need"],
+                                               lv["under"], "" if mf.active(q) else ": filters nothing")
+
+
+def describe_fits(c, q, w):
+    """--check --mood-filter: the tracks and the albums filter q lets
+    through, to compare with the device's gm<q>."""
+    w("filter 0x%03X: %s\n" % (q, filter_name(q)))
+    m = c.get("moods")
+    if not m or not m["withWord"]:
+        w("no mood data on this card: the device lists no filter (%s)\n" % (
+            "T's records have no word" if m else "T has no records" if c["present"] else "no transfer data"))
+        return
+    if c["root"]["roots"]:
+        w("note: the root lists %d library roots; albums here take /music as the only one\n" % c["root"]["roots"])
+    tracks, albums, n_albums, analysed = mood_fits(m["words"], q)
+    w("tracks that fit: %d of %d (%d analysed)\n" % (len(tracks), m["tracks"], m["withWord"]))
+    w("albums that fit: %d of %d (%d with an analysed track)\n" % (len(albums), n_albums, analysed))
+    for a, passed, of in albums:
+        loose = not a or a.endswith("/")  # an artist's loose tracks, or the root's
+        w("  album %d of %d: %s\n" % (passed, of, (a or "/") + " (loose tracks)" if loose else a))
+    for rel in tracks:
+        w("  track 0x%04X: %s\n" % (m["words"][rel], rel))
 
 
 # ---------------------------------------------------------------------------
@@ -968,7 +1386,8 @@ def write_file(path, data):
 def add_to(card, synthetic=False, mpdj_file=None, tags_path=None, seed=1, generation=None, card_id=None,
            commit_time=None, replace=False, dry_run=False, allow_missing=False, k=mpdj.DEFAULT_K,
            head=mpdj.DEFAULT_HEAD, floor=mpdj.DEFAULT_FLOOR, genres=16, unindexed=1.0, probe=None,
-           out=None, ops=None, replace_foreign=False, waves=False, unshaped=1.0):
+           out=None, ops=None, replace_foreign=False, waves=False, unshaped=1.0, moods=False, mood_coverage=92.0,
+           mood_null=1.0):
     """Writes CARD's /.mstream (or, dry_run, says what it would write).
     Returns a summary dict. `ops`, when given, gets each step in order
     (("write", name), ("remove", name), ("rename", from, to)): the tests'
@@ -1017,7 +1436,8 @@ def add_to(card, synthetic=False, mpdj_file=None, tags_path=None, seed=1, genera
     commit_time = int(time.time()) if commit_time is None else commit_time
 
     t0 = time.time()
-    tracks, files = walk_music(card)
+    hosts = {}  # a track's path as this host lists it, where that isn't the card's (2.8.5)
+    tracks, files = walk_music(card, hosts)
     w("music: %d files, %d tracks (.mp3, .flac, .opus the device lists) in %.1f s\n" % (
         len(files), len(tracks), time.time() - t0))
     if not tracks:
@@ -1054,7 +1474,22 @@ def add_to(card, synthetic=False, mpdj_file=None, tags_path=None, seed=1, genera
         w("waves: %d rows (%d tracks, %d left without a slot), %d with a length from %s, in %.1f s\n" % (
             wave_stats["rows"], wave_stats["tracks"], wave_stats["unshaped"], wave_stats["timed"], TAGS_JSONL,
             wave_stats["seconds"]))
-    tags = tags_file(generation, card_id)
+    records, mood_stats = None, None
+    if moods:
+        rows = dict(jsonl_rows(tp)) if os.path.isfile(tp) else {}
+        records, mood_stats = mood_records(card, tracks, rows, seed, genres, mood_coverage, mood_null, hosts)
+        mo = mood_stats
+        w("moods: %d records (one a track, each file's size, time and sampled bytes read), %d with a server row "
+          "(%.1f %%), %d of their %d heads NULL; %d named from %s (FROM_API), %d with a picture; stride %d; "
+          "in %.1f s\n" % (mo["records"], mo["rows"], 100.0 * mo["rows"] / mo["records"], mo["nullHeads"],
+                           mo["heads"], mo["named"], TAGS_JSONL, mo["pictures"], mo["stride"], mo["seconds"]))
+        if mo["named"] < mo["records"]:
+            w("warning: %d tracks aren't in %s: their records have no names, so the device names them by their "
+              "paths\n" % (mo["records"] - mo["named"], tp))
+        if mo["unknownTime"]:
+            w("warning: %d files' times are outside FAT's (fatTime 0): the device confirms each by its qfp, a read "
+              "at every build\n" % mo["unknownTime"])
+    tags = tags_file(generation, card_id, records)
     root = root_file(generation, card_id, base, commit_time, tags, autodj, wave_file)
 
     # The companions in COMP's order: their writes come first, in this order.
@@ -1088,15 +1523,18 @@ def add_to(card, synthetic=False, mpdj_file=None, tags_path=None, seed=1, genera
     data = dict(companions, **{"manifest.tmp": root})
     hc = lambda b: struct.unpack_from("<I", b, 32)[0]  # noqa: E731
     w("commit: generation %d (base %d), cardId 0x%016X, commitTime %d\n" % (generation, base, card_id, commit_time))
-    w("  %s  %10d bytes  headerCrc 0x%08X  (MPTG source 2, no records)\n" % (tags_name, len(tags), hc(tags)))
+    t = c["tags"]
+    w("  %s  %10d bytes  headerCrc 0x%08X  (MPTG source 2, %s)\n" % (
+        tags_name, len(tags), hc(tags), "%d records of %d bytes, minor %d" % (t["records"], t["stride"], t["minor"])
+        if t["records"] else "no records"))
     w("  %s  %10d bytes  headerCrc 0x%08X  selectionSig %s\n" % (dj_name, len(autodj), hc(autodj),
                                                                 autodj[64:80].hex()))
     if wave_file is not None:
         w("  %s  %10d bytes  headerCrc 0x%08X\n" % (wv_name, len(wave_file), hc(wave_file)))
     w("  manifest.bin  %10d bytes  headerCrc 0x%08X  commitId 0x%016X (written last, through manifest.tmp)\n" % (
         len(root), hc(root), c["root"]["commitId"]))
-    summary = {"generation": generation, "cardId": card_id, "stats": stats, "waves": wave_stats, "steps": steps,
-               "bytes": {n: len(b) for n, b in mem.items()}}
+    summary = {"generation": generation, "cardId": card_id, "stats": stats, "waves": wave_stats, "moods": mood_stats,
+               "steps": steps, "bytes": {n: len(b) for n, b in mem.items()}}
     if dry_run:
         w("dry run: would, in %s:\n" % ms)
         for s in steps:
@@ -1125,10 +1563,14 @@ def add_to(card, synthetic=False, mpdj_file=None, tags_path=None, seed=1, genera
         else:
             os.rename(synthcard.long_path(os.path.join(ms, s[1])), synthcard.long_path(os.path.join(ms, s[2])))
 
-    back = check_card(card, tracks)
+    back = check_card(card, tracks, hosts)
     describe_check(back, w)
     if not reads_back(back):
         raise AssertionError("the card doesn't read back what was written")
+    m = back.get("moods")
+    if m and m["byTime"] + m["byQfp"] < m["records"]:
+        w("warning: rule 1 takes only %d of T's %d records: a file changed after it was read?\n" % (
+            m["byTime"] + m["byQfp"], m["records"]))
     w("done in %.1f s; the first boot rebuilds the library (a new commit). Eject the card before taking it out.\n"
       % (time.time() - t_start))
     return dict(summary, written=True, check=back)
@@ -1144,8 +1586,8 @@ def main(argv=None):
     ap.add_argument("--waves", action="store_true", help="also write a waveform index of made-up shapes")
     ap.add_argument("--tags", metavar="JSONL", help="synthcard-files.jsonl for the record values and the slots' "
                     "lengths (default: CARD's own, when there)")
-    ap.add_argument("--seed", type=int, default=1, help="--synthetic's and --waves' seed (default 1); also the new "
-                    "card's id")
+    ap.add_argument("--seed", type=int, default=1, help="--synthetic's, --waves' and --moods' seed (default 1); also "
+                    "the new card's id")
     ap.add_argument("--generation", type=lambda s: int(s, 0), help="the commit's generation (default: one more "
                     "than any on the card, else 1)")
     ap.add_argument("--card-id", type=lambda s: int(s, 0), help="the card's id (default: the root's, else from "
@@ -1165,12 +1607,28 @@ def main(argv=None):
     ap.add_argument("--floor", type=int, default=mpdj.DEFAULT_FLOOR, help="--synthetic: selFloor (default 140)")
     ap.add_argument("--unshaped", type=float, default=1.0, help="--waves: percent of tracks left without a slot "
                     "(default 1)")
+    ap.add_argument("--moods", action="store_true", help="T: one record a track, read from the card, with made-up "
+                    "mood scores (stride 80, minor 1)")
+    ap.add_argument("--mood-coverage", type=float, metavar="P", help="--moods: percent of tracks with a server row "
+                    "(default 92; 0: the control card, the records at stride 72 with no tails)")
+    ap.add_argument("--mood-null", type=float, metavar="P", help="--moods: percent of a row's heads NULL (default 1)")
+    ap.add_argument("--mood-filter", type=filter_word, metavar="Q", help="--check: the tracks and albums that fit "
+                    "the filter Q, in hex as the device's gmQ reads it (127 or 0x127: Sad, Relaxed, Vocals, "
+                    "Danceable at Standard)")
     a = ap.parse_args(argv)
     try:
+        if a.mood_filter is not None and not a.check:
+            ap.error("--mood-filter goes with --check")
+        if (a.mood_coverage is not None or a.mood_null is not None) and not a.moods:
+            ap.error("--mood-coverage and --mood-null go with --moods")
+        if a.check and a.moods:
+            ap.error("--moods goes with --add-to (--check reads T's records whatever wrote them)")
         if a.check:
             card = card_root(a.check)
             c = check_card(card)
             describe_check(c, sys.stdout.write)
+            if a.mood_filter is not None:
+                describe_fits(c, a.mood_filter, sys.stdout.write)
             waves_read = c["waves"]["present"] or not c["waves"].get("name")
             return 0 if c["present"] and c["autoDj"].get("present") and waves_read else 1
         if not a.add_to:
@@ -1181,9 +1639,14 @@ def main(argv=None):
             ap.error("--genres: 1 to 200")
         if a.replace_foreign and not a.replace:
             ap.error("--replace-foreign goes with --replace")
+        coverage = 92.0 if a.mood_coverage is None else a.mood_coverage
+        null = 1.0 if a.mood_null is None else a.mood_null
+        if not (0 <= coverage <= 100 and 0 <= null <= 100):
+            ap.error("--mood-coverage, --mood-null: 0 to 100")
         add_to(a.add_to, a.synthetic, a.mpdj, a.tags, a.seed, a.generation, a.card_id, a.time, a.replace,
                a.dry_run, a.allow_missing, a.k, a.head, a.floor, a.genres, a.unindexed,
-               replace_foreign=a.replace_foreign, waves=a.waves, unshaped=a.unshaped)
+               replace_foreign=a.replace_foreign, waves=a.waves, unshaped=a.unshaped, moods=a.moods,
+               mood_coverage=coverage, mood_null=null)
     except Refused as e:
         print("refused: %s" % e, file=sys.stderr)
         return 2

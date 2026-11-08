@@ -11,7 +11,9 @@
 // unsynced writes lost, the cut write torn) with the recovery itself cut
 // again, a whole tags.tmp kept when its check has no memory, the
 // compaction's memory fixed whatever the journal holds, N2's builder fed
-// through the adapters, and the compaction at 20k.
+// through the adapters, and the compaction at 20k. A read the card fails, at
+// each point of an open and of a compaction, is never D absent, and takes
+// nothing away; a file cut, changed or damaged never reads as one.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -966,6 +968,60 @@ void test_journal_tails_and_bases() {
 // known only at the first pass's end): left out (3.4.1). The journals alone
 // make the new D, unwalked, so the next walk compares the whole card.
 // ---------------------------------------------------------------------------
+// A read the card fails, at each read of tags.bin in turn: at the open, nothing is known
+// and nothing is written; in a compaction, it stops, and D and the journal stay. Taken
+// for a bad D, or for no D, a compaction would replace it with the journal's records
+// alone. (The check's own failure stays as the next test has it.)
+void test_a_read_fault_says_nothing_of_the_records() {
+  for (const char* prefix : {"/.player/tags.bin"}) {
+    CutFs fs;
+    State m;
+    {
+      ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+      st.open();
+      TEST_ASSERT_TRUE(walk(st, m, commit(1), 0,
+                            {wFile("q/1.mp3", 1, kT), wFile("q/2.mp3", 2, kT), wFolder("q", facts(3, "cover.jpg"))}));
+      TEST_ASSERT_TRUE(st.compact().ok);
+      compacted(m, false);
+      TEST_ASSERT_TRUE(append(st, m, {scanned("q/2.mp3", 2, kT, 5)}));
+    }
+    const std::vector<uint8_t> d = fs.bytes("/.player/tags.bin");
+    fs.faultPrefix = prefix;
+    uint32_t atOpen = 0, inCompaction = 0;
+    for (long k = 0;; ++k) {
+      TEST_ASSERT_TRUE_MESSAGE(k < 100000, "the reads never ran out");
+      fs.faultEvents = 0;
+      fs.faultFrom = k;
+      fs.faultTo = k + 1;
+      ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+      st.open();
+      if (st.readFailed()) {
+        ++atOpen;
+        const ts::TagStore::Compacted r = st.compact();
+        TEST_ASSERT_FALSE(r.ok);
+      } else {
+        const ts::TagStore::Compacted r = st.compact();
+        if (r.ok) {
+          // Past every read that counts (or the reload's, asked again): this one merged,
+          // D's two records in it, whatever a read did.
+          TEST_ASSERT_TRUE(st.device().present);
+          TEST_ASSERT_FALSE(st.readFailed());
+          TEST_ASSERT_EQUAL_UINT32(2, st.device().tags.recordCount);
+          if (fs.faultEvents > k) continue;
+          break;
+        }
+        ++inCompaction;
+        // (Its question of D's entry, at the replace: nothing done on the answer.)
+        TEST_ASSERT_TRUE_MESSAGE(r.readFailed || std::strcmp(r.error, "rename") == 0, r.error);
+      }
+      TEST_ASSERT_TRUE_MESSAGE(fs.bytes("/.player/tags.bin") == d || st.device().present, prefix);
+    }
+    TEST_ASSERT_TRUE(atOpen > 0);
+    TEST_ASSERT_TRUE(inCompaction > 0);
+    fs.faultFrom = -1;
+  }
+}
+
 void test_a_bad_device_is_left_out() {
   CutFs fs;
   State m;
@@ -995,6 +1051,651 @@ void test_a_bad_device_is_left_out() {
   assertView(st, only);
   assertDevice(fs, st, only);
   TEST_ASSERT_FALSE(st.device().header.walked);
+}
+
+// ---------------------------------------------------------------------------
+// A read the card fails: never "no records" (docs/METADATA.md 3.2.2).
+// ---------------------------------------------------------------------------
+// D, a chunk on it and a walk to merge: every kind of file open() reads.
+void recordsOnCard(CutFs& fs, State& m) {
+  ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+  st.open();
+  TEST_ASSERT_TRUE(walk(st, m, commit(1), 0,
+                        {wFile("q/1.mp3", 1, kT), wFile("q/2.mp3", 2, kT), wFolder("q", facts(3, "cover.jpg"))}));
+  TEST_ASSERT_TRUE(st.compact().ok);
+  compacted(m, false);
+  TEST_ASSERT_TRUE(append(st, m, {scanned("q/2.mp3", 2, kT, 5)}));
+  TEST_ASSERT_TRUE(walk(st, m, commit(1), 0, {wFile("q/3.mp3", 3, kT)}));
+}
+
+// The files as they are, to see nothing touched them.
+std::map<std::string, std::vector<uint8_t>> filesOf(const CutFs& fs) {
+  std::map<std::string, std::vector<uint8_t>> out;
+  for (const std::string& n : fs.names()) out[n] = fs.bytes(n);
+  return out;
+}
+
+void arm(CutFs& fs, const char* prefix, long from, long to) {
+  fs.faultPrefix = prefix;
+  fs.faultEvents = 0;
+  fs.faultFrom = from;
+  fs.faultTo = to;
+}
+
+// How many reads and questions of the card an open() makes under `prefix`.
+long opensEvents(CutFs& fs, const char* prefix) {
+  arm(fs, prefix, 1000000, -1);
+  {
+    ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+    st.open();
+  }
+  const long n = fs.faultEvents;
+  fs.faultFrom = -1;
+  return n;
+}
+
+void assertHeldAndUntouched(CutFs& fs, ts::TagStore& st, const ts::TagStore::Opened& o,
+                            const std::map<std::string, std::vector<uint8_t>>& files, const char* msg) {
+  TEST_ASSERT_TRUE_MESSAGE(o.readFailed, msg);
+  TEST_ASSERT_TRUE_MESSAGE(st.readFailed(), msg);
+  TEST_ASSERT_EQUAL_STRING_MESSAGE("io", cc::whyName(o.deviceWhy), msg);
+  // Absent as it says, with no journal: and nothing it would then write goes through.
+  TEST_ASSERT_FALSE_MESSAGE(st.device().present, msg);
+  TEST_ASSERT_FALSE_MESSAGE(st.hasJournals(), msg);
+  const ts::TagStore::Compacted c = st.compact();
+  TEST_ASSERT_FALSE_MESSAGE(c.ok, msg);
+  ts::ChunkBuilder chunk;
+  chunk.begin(chunkBuffer().data(), static_cast<uint32_t>(chunkBuffer().size()));
+  const Scan s = scanned("q/9.mp3", 9, kT, 1);
+  const char* f[cc::kRunFields];
+  for (uint32_t k = 0; k < cc::kRunFields; ++k) f[k] = s.fields[k].c_str();
+  TEST_ASSERT_TRUE_MESSAGE(chunk.add(s.path.data(), s.path.size(), s.status, s.rec, f), msg);
+  TEST_ASSERT_FALSE_MESSAGE(st.append(chunk), msg);
+  std::vector<uint8_t> buf(1024);
+  ts::WalkWriter w;
+  TEST_ASSERT_FALSE_MESSAGE(st.beginWalk(commit(1), buf.data(), 1024, &w), msg);
+  TEST_ASSERT_TRUE_MESSAGE(filesOf(fs) == files, msg);
+  TEST_ASSERT_TRUE_MESSAGE(fs.violations.empty(), msg);
+}
+
+void test_a_read_the_card_fails_at_the_open_is_never_no_records() {
+  CutFs fs;
+  State m;
+  recordsOnCard(fs, m);
+  const auto files = filesOf(fs);
+  const long events = opensEvents(fs, "/.player/");
+  TEST_ASSERT_GREATER_THAN_INT32(8, events);
+  for (long k = 0; k < events; ++k) {
+    char msg[64];
+    std::snprintf(msg, sizeof(msg), "read %ld of %ld", k, events);
+    // That one read failed: D, or a journal that extends it, may be what it hid.
+    arm(fs, "/.player/", k, k + 1);
+    {
+      ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+      const ts::TagStore::Opened o = st.open();
+      fs.faultFrom = -1;
+      assertHeldAndUntouched(fs, st, o, files, msg);
+    }
+    // Every read from there on.
+    arm(fs, "/.player/", k, -1);
+    {
+      ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+      const ts::TagStore::Opened o = st.open();
+      fs.faultFrom = -1;
+      assertHeldAndUntouched(fs, st, o, files, msg);
+    }
+    // Read again, the card answering: all there.
+    ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+    const ts::TagStore::Opened o = st.open();
+    TEST_ASSERT_FALSE_MESSAGE(o.readFailed, msg);
+    TEST_ASSERT_TRUE_MESSAGE(st.device().present, msg);
+    TEST_ASSERT_TRUE_MESSAGE(st.hasWalk(), msg);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, st.chunkCount(), msg);
+  }
+  // The card gone: the same.
+  fs.dead = true;
+  {
+    ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+    TEST_ASSERT_TRUE(st.open().readFailed);
+    fs.dead = false;
+    TEST_ASSERT_TRUE(st.open().readFailed == false);
+    TEST_ASSERT_TRUE(st.device().present);
+    assertView(st, m);
+  }
+}
+
+std::vector<uint32_t> g_waited;
+void noteWait(uint32_t ms) { g_waited.push_back(ms); }
+
+void test_the_boot_opens_again_while_the_card_fails() {
+  CutFs fs;
+  State m;
+  recordsOnCard(fs, m);
+  ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+  uint32_t opens = 0;
+  // Whole: once, no wait.
+  g_waited.clear();
+  TEST_ASSERT_FALSE(st.openAtBoot(noteWait, &opens).readFailed);
+  TEST_ASSERT_EQUAL_UINT32(1, opens);
+  TEST_ASSERT_EQUAL_size_t(0, g_waited.size());
+  // Failing for the first reads, whichever: the waits, then whole.
+  const long events = opensEvents(fs, "/.player/tags.bin");
+  TEST_ASSERT_GREATER_THAN_INT32(0, events);
+  for (uint32_t failing = 1; failing <= 3; ++failing) {
+    g_waited.clear();
+    arm(fs, "/.player/tags.bin", 0, static_cast<long>(failing));
+    const ts::TagStore::Opened o = st.openAtBoot(noteWait, &opens);
+    fs.faultFrom = -1;
+    TEST_ASSERT_FALSE(o.readFailed);
+    TEST_ASSERT_TRUE(st.device().present);
+    TEST_ASSERT_EQUAL_UINT32(failing + 1, opens);
+    TEST_ASSERT_EQUAL_size_t(failing, g_waited.size());
+    for (uint32_t i = 0; i < failing; ++i) TEST_ASSERT_EQUAL_UINT32(ts::kBootWaitsMs[i], g_waited[i]);
+  }
+  // Failing each time: four opens, three waits, no more; and no waits given, one.
+  g_waited.clear();
+  arm(fs, "/.player/tags.bin", 0, -1);
+  TEST_ASSERT_TRUE(st.openAtBoot(noteWait, &opens).readFailed);
+  TEST_ASSERT_EQUAL_UINT32(4, opens);
+  TEST_ASSERT_EQUAL_size_t(3, g_waited.size());
+  g_waited.clear();
+  TEST_ASSERT_TRUE(st.openAtBoot(nullptr, &opens).readFailed);
+  TEST_ASSERT_EQUAL_UINT32(1, opens);
+  fs.faultFrom = -1;
+  // A D that isn't there is its word, the first time.
+  fs.remove("/.player/tags.bin");
+  TEST_ASSERT_FALSE(st.openAtBoot(noteWait, &opens).readFailed);
+  TEST_ASSERT_EQUAL_UINT32(1, opens);
+  TEST_ASSERT_FALSE(st.device().present);
+}
+
+// A fault in the journals alone that lasts through the boot's reads: they go as far as
+// they read, as a torn tail does, and D stays. Held, the jobs would stop at every boot over
+// files the card can give again. A one-off, or no waits given (a card that failed an
+// earlier reader's tries), keeps the rule above: nothing dropped.
+CutFs* g_reArm = nullptr;
+const char* g_reArmPath = nullptr;
+long g_reArmAt = 0;
+void reArmWait(uint32_t) { arm(*g_reArm, g_reArmPath, g_reArmAt, -1); }
+
+void test_a_lasting_fault_in_the_journals_goes_as_far_as_they_read() {
+  for (const char* path : {"/.player/tags.jnl", "/.player/walk.jnl"}) {
+    CutFs fs;
+    State m;
+    recordsOnCard(fs, m);
+    const std::vector<uint8_t> d = fs.bytes("/.player/tags.bin");
+    const long events = opensEvents(fs, path);
+    TEST_ASSERT_GREATER_THAN_INT32(1, events);
+    uint32_t opens = 0;
+    for (long k = 0; k < events; ++k) {
+      char msg[80];
+      std::snprintf(msg, sizeof(msg), "%s, read %ld of %ld", path, k, events);
+      {
+        // Once: the next open has it all.
+        ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+        arm(fs, path, k, k + 1);
+        const ts::TagStore::Opened o = st.openAtBoot(noteWait, &opens);
+        fs.faultFrom = -1;
+        TEST_ASSERT_FALSE_MESSAGE(o.readFailed, msg);
+        TEST_ASSERT_FALSE_MESSAGE(o.journalsUnread, msg);
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(2, opens, msg);
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, st.chunkCount(), msg);
+        TEST_ASSERT_TRUE_MESSAGE(st.hasWalk(), msg);
+      }
+      {
+        // No waits: held, as any read the card fails.
+        ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+        arm(fs, path, k, -1);
+        const ts::TagStore::Opened o = st.openAtBoot(nullptr, &opens);
+        fs.faultFrom = -1;
+        TEST_ASSERT_TRUE_MESSAGE(o.readFailed, msg);
+        TEST_ASSERT_TRUE_MESSAGE(o.journalsUnread, msg);
+        TEST_ASSERT_TRUE_MESSAGE(st.readFailed(), msg);
+      }
+      // That read at each open: four opens, D there, the jobs free to go on.
+      const auto files = filesOf(fs);
+      {
+        ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+        g_reArm = &fs;
+        g_reArmPath = path;
+        g_reArmAt = k;
+        arm(fs, path, k, -1);
+        const ts::TagStore::Opened o = st.openAtBoot(reArmWait, &opens);
+        fs.faultFrom = -1;
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(4, opens, msg);
+        TEST_ASSERT_FALSE_MESSAGE(o.readFailed, msg);
+        TEST_ASSERT_TRUE_MESSAGE(o.journalsUnread, msg);
+        TEST_ASSERT_FALSE_MESSAGE(st.readFailed(), msg);
+        TEST_ASSERT_TRUE_MESSAGE(st.device().present, msg);
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(2, st.device().tags.recordCount, msg);
+        TEST_ASSERT_TRUE_MESSAGE(filesOf(fs) == files, msg);  // (the open itself touches none of them)
+        // As far as they read: this card's journal is one chunk, and walk.jnl's last run its
+        // End block alone, the last three reads.
+        const bool tagsRow = std::strcmp(path, "/.player/tags.jnl") == 0;
+        const bool runKept = tagsRow || k >= events - 3;
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(tagsRow ? 0 : 1, st.chunkCount(), msg);
+        TEST_ASSERT_EQUAL_MESSAGE(runKept, st.hasWalk(), msg);
+        TEST_ASSERT_TRUE_MESSAGE(tagsRow ? o.journalTorn : (o.walkStale == !runKept), msg);
+        // What it took a torn tail for goes at the next chunk, or the compaction.
+        const ts::TagStore::Compacted c = st.compact();
+        TEST_ASSERT_TRUE_MESSAGE(c.ok, c.error ? c.error : msg);
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(runKept ? 3 : 2, st.device().tags.recordCount, msg);
+        TEST_ASSERT_FALSE_MESSAGE(st.readFailed(), msg);
+        TEST_ASSERT_TRUE_MESSAGE(fs.violations.empty(), msg);
+      }
+      // (As it was, for the next read.)
+      for (const auto& f : files) fs.put(f.first, f.second);
+      for (const std::string& n : fs.names())
+        if (!files.count(n)) fs.remove(n.c_str());
+    }
+    TEST_ASSERT_TRUE(fs.bytes("/.player/tags.bin") == d);
+  }
+}
+
+// Two chunks, the fault in the second at every open: the first stands, its record in the
+// view; the next chunk cuts the rest off; or the compaction takes the first.
+void test_the_journals_last_try_keeps_the_chunk_before_the_fault() {
+  const char* jnl = "/.player/tags.jnl";
+  CutFs fs;
+  State m, afterOne;
+  uint32_t chunk1End = 0;
+  {
+    ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+    st.open();
+    TEST_ASSERT_TRUE(walk(st, m, commit(1), 0,
+                          {wFile("q/1.mp3", 1, kT), wFile("q/2.mp3", 2, kT), wFolder("q", facts(3, "cover.jpg"))}));
+    TEST_ASSERT_TRUE(st.compact().ok);
+    compacted(m, false);
+    TEST_ASSERT_TRUE(append(st, m, {scanned("q/1.mp3", 1, kT, 5)}));
+    afterOne = m;
+    chunk1End = st.journalBytes();
+    // Two records: longer than the one the next chunk has, so a tail not cut off shows.
+    TEST_ASSERT_TRUE(append(st, m, {scanned("q/1.mp3", 1, kT, 6), scanned("q/2.mp3", 2, kT, 6)}));
+  }
+  const auto files = filesOf(fs);
+  auto restore = [&] {
+    for (const auto& f : files) fs.put(f.first, f.second);
+    for (const std::string& n : fs.names())
+      if (!files.count(n)) fs.remove(n.c_str());
+  };
+  const long events = opensEvents(fs, jnl);
+  const long inFirst = 4;  // the open, chunk 1's head, its payload, its trailer
+  TEST_ASSERT_GREATER_THAN_INT32(inFirst, events);
+  g_reArm = &fs;
+  g_reArmPath = jnl;
+  for (long k = inFirst; k < events; ++k) {
+    char msg[64];
+    std::snprintf(msg, sizeof(msg), "read %ld of %ld", k, events);
+    g_reArmAt = k;
+    {
+      restore();
+      ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+      arm(fs, jnl, k, -1);
+      uint32_t opens = 0;
+      const ts::TagStore::Opened o = st.openAtBoot(reArmWait, &opens);
+      fs.faultFrom = -1;
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(4, opens, msg);
+      TEST_ASSERT_FALSE_MESSAGE(o.readFailed, msg);
+      TEST_ASSERT_TRUE_MESSAGE(o.journalsUnread, msg);
+      TEST_ASSERT_TRUE_MESSAGE(o.journalTorn, msg);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, st.chunkCount(), msg);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(chunk1End, st.journalBytes(), msg);
+      assertView(st, afterOne);
+      State next = afterOne;
+      TEST_ASSERT_TRUE_MESSAGE(append(st, next, {scanned("q/2.mp3", 2, kT, 7)}), msg);
+      ts::TagStore again(fs, config(), Heap::alloc, Heap::release);
+      const ts::TagStore::Opened o2 = again.open();
+      TEST_ASSERT_FALSE_MESSAGE(o2.journalTorn, msg);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(2, again.chunkCount(), msg);
+      assertView(again, next);
+    }
+    {
+      restore();
+      ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+      arm(fs, jnl, k, -1);
+      st.openAtBoot(reArmWait);
+      fs.faultFrom = -1;
+      const ts::TagStore::Compacted c = st.compact();
+      TEST_ASSERT_TRUE_MESSAGE(c.ok, c.error ? c.error : msg);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, c.chunksMerged, msg);
+      assertView(st, afterOne);
+    }
+  }
+}
+
+// A card that answers on the last try loses nothing: the last open's whole.
+void test_the_last_try_keeps_what_reads_whole() {
+  for (const char* path : {"/.player/tags.jnl", "/.player/walk.jnl"}) {
+    CutFs fs;
+    State m;
+    recordsOnCard(fs, m);
+    ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+    arm(fs, path, 0, 3);
+    uint32_t opens = 0;
+    const ts::TagStore::Opened o = st.openAtBoot(noteWait, &opens);
+    fs.faultFrom = -1;
+    TEST_ASSERT_EQUAL_UINT32(4, opens);
+    TEST_ASSERT_FALSE(o.readFailed);
+    TEST_ASSERT_FALSE(o.journalsUnread);
+    TEST_ASSERT_EQUAL_UINT32(1, st.chunkCount());
+    TEST_ASSERT_TRUE(st.hasWalk());
+    assertView(st, m);
+  }
+}
+
+// That rule needs the journals to have failed the try before. D failing then, a journal
+// only at the last: held. And journalsUnread is that open's alone.
+int g_openTry = 0;
+CutFs* g_openFs = nullptr;
+void armByTry(uint32_t) {
+  ++g_openTry;
+  arm(*g_openFs, g_openTry < 3 ? "/.player/tags.bin" : "/.player/tags.jnl", 0, -1);
+}
+void test_a_journal_failing_only_the_last_open_holds() {
+  CutFs fs;
+  State m;
+  recordsOnCard(fs, m);
+  ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+  g_openTry = 0;
+  g_openFs = &fs;
+  arm(fs, "/.player/tags.bin", 0, -1);
+  uint32_t opens = 0;
+  const ts::TagStore::Opened o = st.openAtBoot(armByTry, &opens);
+  fs.faultFrom = -1;
+  TEST_ASSERT_EQUAL_UINT32(4, opens);
+  TEST_ASSERT_TRUE(o.readFailed);
+  TEST_ASSERT_TRUE(st.readFailed());
+  TEST_ASSERT_FALSE(st.open().journalsUnread);
+  // A first open fails on a journal, the second on D before it reads them.
+  ts::TagStore st2(fs, config(), Heap::alloc, Heap::release);
+  arm(fs, "/.player/tags.jnl", 0, -1);
+  TEST_ASSERT_TRUE(st2.open().journalsUnread);
+  arm(fs, "/.player/tags.bin", 0, -1);
+  const ts::TagStore::Opened o2 = st2.open();
+  fs.faultFrom = -1;
+  TEST_ASSERT_TRUE(o2.readFailed);
+  TEST_ASSERT_FALSE(o2.journalsUnread);
+}
+
+// The other way about, every read answered: a boot that took a file's fault for the
+// card's would hold on to it for ever. D or a journal cut at any length, or with any
+// byte changed, or whose own records are damaged, isn't a read the card failed.
+void test_a_cut_or_damaged_file_is_never_the_cards_fault() {
+  CutFs fs;
+  State m;
+  recordsOnCard(fs, m);
+  for (const char* path : {"/.player/tags.bin", "/.player/tags.jnl", "/.player/walk.jnl"}) {
+    const std::vector<uint8_t> whole = fs.bytes(path);
+    TEST_ASSERT_TRUE_MESSAGE(!whole.empty(), path);
+    for (size_t len = 0; len < whole.size(); ++len) {
+      fs.put(path, std::vector<uint8_t>(whole.begin(), whole.begin() + static_cast<std::ptrdiff_t>(len)));
+      ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+      char msg[80];
+      std::snprintf(msg, sizeof(msg), "%s cut to %lu bytes", path, (unsigned long)len);
+      TEST_ASSERT_FALSE_MESSAGE(st.open().readFailed, msg);
+    }
+    for (size_t at = 0; at < whole.size(); ++at) {
+      std::vector<uint8_t> bad = whole;
+      bad[at] ^= 0xFF;
+      fs.put(path, bad);
+      ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+      char msg[80];
+      std::snprintf(msg, sizeof(msg), "%s byte %lu changed", path, (unsigned long)at);
+      TEST_ASSERT_FALSE_MESSAGE(st.open().readFailed, msg);
+    }
+    fs.put(path, whole);
+    // Its own records damaged (FatFs's FR_INT_ERR).
+    fs.damagedPrefix = path;
+    {
+      ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+      const ts::TagStore::Opened o = st.open();
+      TEST_ASSERT_FALSE_MESSAGE(o.readFailed, path);
+      if (std::string(path) == "/.player/tags.bin") {
+        TEST_ASSERT_EQUAL_STRING("fatRecords", cc::whyName(o.deviceWhy));
+        TEST_ASSERT_FALSE(st.device().present);
+      } else {
+        TEST_ASSERT_TRUE(st.device().present);
+      }
+    }
+    fs.damagedPrefix.clear();
+  }
+}
+
+// tags.tmp alone: the only D, a cut between replace()'s remove and its rename. A read
+// the card fails at any point of its check, or of the questions before it, is no
+// verdict on it, and it stays.
+void test_the_only_d_in_a_tmp_outlives_a_read_the_card_fails() {
+  CutFs fs;
+  State m;
+  {
+    ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+    st.open();
+    TEST_ASSERT_TRUE(walk(st, m, commit(1), 0, {wFile("A/1.mp3", 1000, kT), wFolder("A", facts(1))}));
+    TEST_ASSERT_TRUE(st.compact().ok);
+    compacted(m, false);
+  }
+  const std::vector<uint8_t> d = fs.bytes("/.player/tags.bin");
+  fs.remove("/.player/tags.bin");
+  fs.put("/.player/tags.tmp", d);
+  const auto files = filesOf(fs);
+  // (Counted on a copy: the open with no fault promotes it.)
+  CutFs counted = fs.reboot(Variant::InOrder);
+  const long events = opensEvents(counted, "/.player/");
+  TEST_ASSERT_GREATER_THAN_INT32(4, events);
+  int kept = 0;
+  for (long k = 0; k < events; ++k) {
+    char msg[64];
+    std::snprintf(msg, sizeof(msg), "read %ld of %ld", k, events);
+    CutFs once = fs.reboot(Variant::InOrder);
+    arm(once, "/.player/", k, k + 1);
+    ts::TagStore st(once, config(), Heap::alloc, Heap::release);
+    const ts::TagStore::Opened o = st.open();
+    once.faultFrom = -1;
+    TEST_ASSERT_TRUE_MESSAGE(once.exists("/.player/tags.tmp") || once.bytes("/.player/tags.bin") == d, msg);
+    TEST_ASSERT_TRUE_MESSAGE(once.bytes("/.player/tags.tmp") == d || once.bytes("/.player/tags.bin") == d, msg);
+    TEST_ASSERT_TRUE_MESSAGE(o.readFailed, msg);
+    if (o.settled.what == ts::Settle::Kept) ++kept;
+    // The compaction, which would remove it, refuses; the next open() promotes it.
+    TEST_ASSERT_FALSE_MESSAGE(st.compact().ok, msg);
+    TEST_ASSERT_FALSE_MESSAGE(st.open().readFailed, msg);
+    TEST_ASSERT_TRUE_MESSAGE(st.device().present, msg);
+    TEST_ASSERT_TRUE_MESSAGE(once.bytes("/.player/tags.bin") == d, msg);
+    TEST_ASSERT_FALSE_MESSAGE(once.exists("/.player/tags.tmp"), msg);
+  }
+  TEST_ASSERT_GREATER_THAN_INT(0, kept);
+  // The check itself failing every time: kept, however many times it is asked.
+  arm(fs, "/.player/tags.tmp", 2, -1);
+  {
+    ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+    const ts::TagStore::Opened o = st.open();
+    TEST_ASSERT_TRUE(o.readFailed);
+    TEST_ASSERT_TRUE(o.settled.what == ts::Settle::Kept);
+    TEST_ASSERT_TRUE(st.tmpKept());
+  }
+  fs.faultFrom = -1;
+  TEST_ASSERT_TRUE(filesOf(fs) == files);
+  // Its rename failing (a read in it, or a card that refuses): kept too, not removed
+  // by a compaction that takes the file for a leftover.
+  fs.refuse = true;
+  {
+    ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+    const ts::TagStore::Opened o = st.open();
+    TEST_ASSERT_TRUE(o.settled.what == ts::Settle::Kept);
+    TEST_ASSERT_TRUE(st.tmpKept());
+    TEST_ASSERT_TRUE(o.readFailed);
+    fs.refuse = false;
+    TEST_ASSERT_FALSE(st.compact().ok);
+  }
+  TEST_ASSERT_TRUE(filesOf(fs) == files);
+}
+
+// A leftover on X's own chain, and a twin on it: "no other entry shares this chain" may
+// be only the read that failed. Whatever fails, no chain in use is freed.
+void test_a_read_the_card_fails_frees_no_shared_chain() {
+  CutFs fs;
+  State m;
+  {
+    ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+    st.open();
+    TEST_ASSERT_TRUE(walk(st, m, commit(1), 0, {wFile("A/1.mp3", 1000, kT), wFolder("A", facts(1))}));
+    TEST_ASSERT_TRUE(st.compact().ok);
+  }
+  const std::vector<uint8_t> d = fs.bytes("/.player/tags.bin");
+  for (const char* other : {"/.player/tags.tmp", "/.player/tags.xl1"}) {
+    CutFs shared = fs.reboot(Variant::InOrder);
+    shared.link("/.player/tags.bin", other);
+    CutFs counted = shared.reboot(Variant::InOrder);
+    const long events = opensEvents(counted, "/.player/");
+    TEST_ASSERT_GREATER_THAN_INT32(4, events);
+    for (long k = 0; k < events; ++k) {
+      char msg[80];
+      std::snprintf(msg, sizeof(msg), "%s, read %ld of %ld", other, k, events);
+      CutFs once = shared.reboot(Variant::InOrder);
+      arm(once, "/.player/", k, k + 1);
+      {
+        ts::TagStore st(once, config(), Heap::alloc, Heap::release);
+        TEST_ASSERT_TRUE_MESSAGE(st.open().readFailed, msg);
+      }
+      once.faultFrom = -1;
+      TEST_ASSERT_TRUE_MESSAGE(once.violations.empty(), msg);
+      TEST_ASSERT_TRUE_MESSAGE(once.bytes("/.player/tags.bin") == d, msg);
+      // Read again: as the rule says, once it can be asked.
+      ts::TagStore st(once, config(), Heap::alloc, Heap::release);
+      TEST_ASSERT_FALSE_MESSAGE(st.open().readFailed, msg);
+      TEST_ASSERT_TRUE_MESSAGE(once.violations.empty(), msg);
+      TEST_ASSERT_TRUE_MESSAGE(st.device().present, msg);
+      TEST_ASSERT_TRUE_MESSAGE(st.twins() > 0, msg);
+    }
+  }
+}
+
+// prepareTmp() and replace(), the questions they ask before they remove anything, each
+// failed in its turn: they refuse, and whatever shares a chain keeps it.
+void test_a_write_of_a_tmp_refuses_on_a_question_the_card_fails() {
+  const ts::Names n{"/x/f.idx", "/x/f.tmp", "/x/f"};
+  const std::vector<uint8_t> bytes(32, 7);
+  // How each of the shapes below is set up; each has X, and something beside it.
+  const auto shape = [&](CutFs& fs, int which) {
+    fs.put(n.path, bytes);
+    if (which == 0) fs.put(n.tmp, bytes);                  // a leftover tmp
+    if (which == 1) fs.link(n.path, n.tmp);                // a tmp on X's chain
+    if (which == 2) fs.link(n.path, "/x/f.xl1");           // a twin on X's chain
+    if (which == 3) {                                      // both, and a second twin in the way
+      fs.link(n.path, n.tmp);
+      fs.put("/x/f.xl1", {1, 2, 3});
+    }
+  };
+  for (int which = 0; which < 4; ++which) {
+    for (const bool prepare : {true, false}) {
+      if (!prepare) {
+        // (A new tmp, as a writer leaves it for replace().)
+        CutFs probe;
+        shape(probe, which);
+      }
+      const auto call = [&](CutFs& fs) {
+        if (!prepare && !fs.exists(n.tmp)) fs.put(n.tmp, {9, 9});
+        return prepare ? ts::prepareTmp(fs, n) : ts::replace(fs, n);
+      };
+      CutFs counted;
+      shape(counted, which);
+      arm(counted, "/x/", 1000000, -1);
+      if (!prepare && !counted.exists(n.tmp)) counted.put(n.tmp, {9, 9});
+      (prepare ? ts::prepareTmp(counted, n) : ts::replace(counted, n));
+      const long events = counted.faultEvents;
+      TEST_ASSERT_GREATER_THAN_INT32(0, events);
+      for (long k = 0; k < events; ++k) {
+        char msg[64];
+        std::snprintf(msg, sizeof(msg), "shape %d, %s, question %ld of %ld", which, prepare ? "prepareTmp" : "replace", k,
+                      events);
+        CutFs fs;
+        shape(fs, which);
+        if (!prepare && !fs.exists(n.tmp)) fs.put(n.tmp, {9, 9});
+        const auto before = filesOf(fs);
+        arm(fs, "/x/", k, k + 1);
+        const bool ok = call(fs);
+        fs.faultFrom = -1;
+        TEST_ASSERT_FALSE_MESSAGE(ok, msg);
+        TEST_ASSERT_TRUE_MESSAGE(fs.violations.empty(), msg);
+        TEST_ASSERT_TRUE_MESSAGE(fs.bytes(n.path) == before.at(n.path), msg);
+      }
+    }
+  }
+}
+
+// A compaction whose reads of D the card fails, at each read: D isn't left out, as one
+// whose own checks fail is. It fails, with D and the journals as they were, and the
+// next one merges them. (The last reads are of the new D, or the rename's questions:
+// by then nothing can be lost either, and a store opened anew finds it all.)
+void test_a_read_of_d_the_card_fails_stops_a_compaction() {
+  CutFs fs;
+  State m;
+  recordsOnCard(fs, m);
+  State merged = m;
+  compacted(merged, false);
+  CutFs counted = fs.reboot(Variant::InOrder);
+  long events = 0;
+  {
+    arm(counted, "/.player/tags.bin", 1000000, -1);
+    ts::TagStore st(counted, config(), Heap::alloc, Heap::release);
+    st.open();
+    counted.faultEvents = 0;
+    const ts::TagStore::Compacted c = st.compact();
+    TEST_ASSERT_TRUE_MESSAGE(c.ok, c.error);
+    events = counted.faultEvents;
+  }
+  TEST_ASSERT_GREATER_THAN_INT32(8, events);
+  // After the two passes: the question of replace() and the reload, as an open's reads.
+  const long inPasses = events - 1 - opensEvents(counted, "/.player/tags.bin");
+  int stopped = 0;
+  for (long k = 0; k < events; ++k) {
+    char msg[64];
+    std::snprintf(msg, sizeof(msg), "read %ld of %ld", k, events);
+    for (bool lasting : {false, true}) {
+      CutFs once = fs.reboot(Variant::InOrder);
+      {
+        ts::TagStore one(once, config(), Heap::alloc, Heap::release);
+        TEST_ASSERT_FALSE_MESSAGE(one.open().readFailed, msg);
+        const auto files = filesOf(once);
+        arm(once, "/.player/tags.bin", k, lasting ? -1 : k + 1);
+        const ts::TagStore::Compacted r = one.compact();
+        once.faultFrom = -1;
+        TEST_ASSERT_EQUAL_MESSAGE(k < inPasses, r.readFailed, msg);
+        if (r.readFailed) {
+          ++stopped;
+          TEST_ASSERT_FALSE_MESSAGE(r.ok, msg);
+          TEST_ASSERT_TRUE_MESSAGE(one.compactionUnread(), msg);
+          TEST_ASSERT_TRUE_MESSAGE(filesOf(once) == files, msg);
+          TEST_ASSERT_TRUE_MESSAGE(one.device().present, msg);
+          TEST_ASSERT_TRUE_MESSAGE(one.hasWalk(), msg);
+          TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, one.chunkCount(), msg);
+          const ts::TagStore::Compacted again = one.compact();
+          TEST_ASSERT_TRUE_MESSAGE(again.ok, again.error);
+          TEST_ASSERT_FALSE_MESSAGE(one.compactionUnread(), msg);
+          assertDevice(once, one, merged);
+        }
+      }
+      ts::TagStore next(once, config(), Heap::alloc, Heap::release);
+      TEST_ASSERT_FALSE_MESSAGE(next.open().readFailed, msg);
+      if (next.hasJournals()) TEST_ASSERT_TRUE_MESSAGE(next.compact().ok, msg);
+      assertDevice(once, next, merged);
+      TEST_ASSERT_TRUE_MESSAGE(once.violations.empty(), msg);
+    }
+  }
+  TEST_ASSERT_GREATER_THAN_INT(2 * 8, stopped);
+  // D's own records damaged: its fault, left out as a failed CRC is.
+  CutFs own = fs.reboot(Variant::InOrder);
+  ts::TagStore st(own, config(), Heap::alloc, Heap::release);
+  TEST_ASSERT_FALSE(st.open().readFailed);
+  own.damagedPrefix = "/.player/tags.bin";
+  const ts::TagStore::Compacted r = st.compact();  // (the fake's damage stays on the name: its reload fails)
+  own.damagedPrefix.clear();
+  TEST_ASSERT_FALSE(r.readFailed);
+  TEST_ASSERT_FALSE(st.compactionUnread());
+  TEST_ASSERT_TRUE(r.deviceWhy != cc::Why::Ok);
+  ts::TagStore left(own, config(), Heap::alloc, Heap::release);
+  TEST_ASSERT_FALSE(left.open().readFailed);
+  TEST_ASSERT_TRUE(left.device().present);
+  TEST_ASSERT_FALSE(left.hasJournals());
 }
 
 // ---------------------------------------------------------------------------
@@ -1177,6 +1878,50 @@ void test_cut_rename_rule() {
   }
 }
 
+// collectTwins() says when a question the card failed stopped it (a caller that keeps a
+// count of the twins, as the queue's file does, mustn't take that count for the card's):
+// wherever the question falls, nothing goes that shares a chain, and the count is no more
+// than what is there. With every answer, unread is false.
+void test_collect_twins_says_when_the_card_failed_a_question() {
+  const ts::Names n{"/p/x.idx", "/p/x.tmp", "/p/x"};
+  const auto shape = [&](CutFs& fs) {
+    fs.put("/p/x.idx", {1, 2, 3});
+    fs.link("/p/x.idx", "/p/x.xl1");  // a twin on X's chain: stays
+    fs.put("/p/x.xl2", {4});
+    fs.link("/p/x.xl2", "/p/x.xl3");  // two twins on one chain: both stay
+    fs.put("/p/x.xl4", {5});          // one a disk check parted: goes
+  };
+  {
+    CutFs fs;
+    shape(fs);
+    bool unread = true;
+    TEST_ASSERT_EQUAL_UINT32(3, ts::collectTwins(fs, n, &unread));
+    TEST_ASSERT_FALSE(unread);
+    TEST_ASSERT_FALSE(fs.exists("/p/x.xl4"));
+    TEST_ASSERT_TRUE(fs.violations.empty());
+  }
+  CutFs counted;
+  shape(counted);
+  arm(counted, "/p/", 1000000, -1);
+  ts::collectTwins(counted, n);
+  const long events = counted.faultEvents;
+  TEST_ASSERT_GREATER_THAN_INT32(3, events);
+  for (long k = 0; k < events; ++k) {
+    char msg[48];
+    std::snprintf(msg, sizeof(msg), "question %ld of %ld", k, events);
+    CutFs fs;
+    shape(fs);
+    arm(fs, "/p/", k, k + 1);
+    bool unread = false;
+    const uint32_t left = ts::collectTwins(fs, n, &unread);
+    fs.faultFrom = -1;
+    TEST_ASSERT_TRUE_MESSAGE(unread, msg);
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32_MESSAGE(3, left, msg);
+    TEST_ASSERT_TRUE_MESSAGE(fs.violations.empty(), msg);
+    TEST_ASSERT_TRUE_MESSAGE(fs.exists("/p/x.idx") && fs.exists("/p/x.xl1"), msg);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // A whole tags.tmp alone (a cut between replace()'s remove of tags.bin and
 // its rename: the only D left) and an open() short of memory for its check
@@ -1255,6 +2000,7 @@ void test_a_failed_check_allocation_keeps_a_whole_tmp() {
     TEST_ASSERT_TRUE(Refusing::refused >= 2);
     TEST_ASSERT_TRUE(o.settled.what == ts::Settle::Kept);
     TEST_ASSERT_TRUE(st.tmpKept());
+    TEST_ASSERT_TRUE(o.readFailed);  // (D may be the tmp: nothing is known of the records)
     TEST_ASSERT_FALSE(st.device().present);
     Refusing::set(0, 0);
     const ts::TagStore::Compacted c = st.compact();
@@ -1761,18 +2507,59 @@ void test_20k_compaction() {
   TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(mptg::check(src, mptg::kUseAll, scratch.data(), 8192)));
 }
 
+// The heal is the boot's last try's alone: the guard's open at a later remount, a one-off: held, nothing dropped.
+void test_a_later_open_holds_after_a_boot_that_healed() {
+  const char* path = "/.player/tags.jnl";
+  CutFs fs;
+  State m;
+  recordsOnCard(fs, m);
+  ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+  g_reArm = &fs;
+  g_reArmPath = path;
+  g_reArmAt = 0;
+  arm(fs, path, 0, -1);
+  uint32_t opens = 0;
+  const ts::TagStore::Opened o = st.openAtBoot(reArmWait, &opens);
+  fs.faultFrom = -1;
+  TEST_ASSERT_EQUAL_UINT32(4, opens);
+  TEST_ASSERT_FALSE(o.readFailed);
+  TEST_ASSERT_TRUE(o.journalsUnread);
+  arm(fs, path, 0, 1);
+  const ts::TagStore::Opened again = st.open();
+  fs.faultFrom = -1;
+  TEST_ASSERT_TRUE(again.readFailed);
+  TEST_ASSERT_TRUE(st.readFailed());
+  const ts::TagStore::Opened third = st.open();
+  TEST_ASSERT_FALSE(third.readFailed);
+  TEST_ASSERT_EQUAL_UINT32(1, st.chunkCount());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_rows_header_and_facts);
   RUN_TEST(test_compaction_writes_what_the_writer_writes);
   RUN_TEST(test_merge_precedence);
   RUN_TEST(test_journal_tails_and_bases);
+  RUN_TEST(test_a_read_fault_says_nothing_of_the_records);
   RUN_TEST(test_a_bad_device_is_left_out);
   RUN_TEST(test_rescan_and_new_parser);
   RUN_TEST(test_cut_rename_rule);
+  RUN_TEST(test_collect_twins_says_when_the_card_failed_a_question);
   RUN_TEST(test_a_failed_check_allocation_keeps_a_whole_tmp);
   RUN_TEST(test_power_cut_at_every_step);
   RUN_TEST(test_power_cut_during_recovery);
+  RUN_TEST(test_a_read_the_card_fails_at_the_open_is_never_no_records);
+  RUN_TEST(test_the_boot_opens_again_while_the_card_fails);
+  RUN_TEST(test_a_lasting_fault_in_the_journals_goes_as_far_as_they_read);
+  RUN_TEST(test_the_journals_last_try_keeps_the_chunk_before_the_fault);
+  RUN_TEST(test_the_last_try_keeps_what_reads_whole);
+  RUN_TEST(test_a_journal_failing_only_the_last_open_holds);
+  RUN_TEST(test_a_later_open_holds_after_a_boot_that_healed);
+  RUN_TEST(test_a_cut_or_damaged_file_is_never_the_cards_fault);
+  RUN_TEST(test_the_only_d_in_a_tmp_outlives_a_read_the_card_fails);
+  RUN_TEST(test_a_read_the_card_fails_frees_no_shared_chain);
+  RUN_TEST(test_a_write_of_a_tmp_refuses_on_a_question_the_card_fails);
+  RUN_TEST(test_a_read_of_d_the_card_fails_stops_a_compaction);
   RUN_TEST(test_compaction_memory_is_bounded);
   RUN_TEST(test_builder_adapters);
   RUN_TEST(test_20k_compaction);

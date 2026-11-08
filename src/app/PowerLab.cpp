@@ -62,6 +62,10 @@ void PowerLab::command(const char* a) {
         screen_.printStatus();  // Ps: the screen policy's state
         return;
       }
+      if (arg[0] == 'k') {
+        screen_.consoleKey();  // Psk: the PWR key's short press
+        return;
+      }
       if (!flag(arg, &on)) break;
       screen(on);
       return;
@@ -84,7 +88,7 @@ void PowerLab::command(const char* a) {
 
 void PowerLab::help() const {
   Serial.println("[power] P line (5 s), Pl log every 5 s, Pw csv on the card, Pm<name> mark, Pq/Pq1/Pq0 coulomb "
-                 "counter; knobs: Pb<0-255> backlight while bright (Pb0 the setting's), Ps0/Ps1 screen off/on (Ps its state), Pc<mhz> cpu now (160<->80), "
+                 "counter; knobs: Pb<0-255> backlight while bright (Pb0 the setting's), Ps0/Ps1 screen off/on (Ps its state, Psk the PWR key's press), Pc<mhz> cpu now (160<->80), "
                  "Pcb<160|240|0> cpu from boot (saved; 0 the default), Pt<min>,<max> bt tx levels 0-7 (a test), Pe0/1 5V boost, Pg0/1 "
                  "green led, Pi0/1 imu, Pf touch controller (Pf0/1 Active/Monitor now), Pa0/1 speaker amp, Pd<ms> loop idle delay (0 auto), Pk0/1 dance tracker + "
                  "taps, Pr0/1 bt background search rest now / a burst again, Pz play tone:silence next");

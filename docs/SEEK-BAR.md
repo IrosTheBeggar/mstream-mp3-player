@@ -954,7 +954,8 @@ touch.
 | Waiting, holding a paused track | Waits: let go, cued, the start point; still Waiting. `release()` starts there, and so does Play on speaker | Waits: cued at 0:00 | the start point / 0:00 | the start point / cleared |
 | Waiting, cued | Waits: the start point set; `release()` starts there | Waits: dropped | the same | the same |
 | Stopped, with a start point (a boot's) or a remembered length | Waits: replaced; the next play starts there | Waits: dropped | the same | saved / cleared |
-| Stopped otherwise; cued on a new entry; the length unknown | not reachable (the bar is inert). If called anyway: NoPlace | | | |
+| Stopped otherwise, or cued on a new entry, with a length (told, or its record's: 5.3) | Waits: a start point at the bar's length; the next play starts there | Waits: nothing to drop | the start point / 0:00 | saved / nothing |
+| The length unknown (no record, nothing told) | not reachable (the bar is inert). If called anyway: NoPlace | | | |
 | The backend's track failed | NoPlace | | | |
 | The entry isn't `key` | Moved: nothing at all | | | |
 
@@ -989,6 +990,12 @@ void PlaybackController::shownTime(uint32_t* positionMs, uint32_t* durationMs) c
     *durationMs = length;
     return;
   }
+  if (state_ == PlayState::Stopped || cued_) {  // nothing held: never the backend's figures
+    if (!audio_.failed()) {
+      *durationMs = lengthHint() > 0 ? lengthHint() : catalog_.durationHintMs(queue_.currentTrack());
+    }
+    return;
+  }
   if (pendingStart(&ms)) {  // never the backend's length here
     *positionMs = ms;
     *durationMs = lengthHint();
@@ -1002,9 +1009,23 @@ void PlaybackController::shownTime(uint32_t* positionMs, uint32_t* durationMs) c
 
 - A seek's pending start shows its target and the bar's length, so a seek
   never shows the old second or a dotted line.
+- An entry nothing holds (stopped: after a boot with no resume point,
+  after next or the queue's end while stopped; cued at 0:00, or by next
+  while paused or waiting) shows 0:00 and the length told for it, else
+  the catalog's: a library track's record, to the second
+  (`TrackCatalog::durationHintMs()`, since cc3413b), the length a start
+  point placed then takes (`placeStart()`). So its bar can be sought,
+  and Now Playing's waveform shows, before the first play; the tab bar's
+  hairline is whole, not dotted, and the Dance tab's line stays at 0. A
+  track with no record has none (the dotted line), and neither has a
+  failed one. The
+  backend's figures are never used there: they are the track before's
+  until its decode task takes the stop up. Until 2026-11-05 such an entry
+  showed the backend's figures, 0 and 0 once the stop was taken up, and
+  the dotted line.
 - A skip's pending start shows 0:00 at once, and **no length** unless
-  the entry has a hint (a built-in track's, a resume point's, one told
-  before). Until the decode task takes the request up (`start()`, which
+  the entry has a hint (a library track's record, a built-in track's, a
+  resume point's, one told before). Until the decode task takes the request up (`start()`, which
   clears `knownDurationMs_` and the frozen length), the backend's length
   is still the track before's. The first version of the snapshot kept it
   (`if (hint) s.durationMs = hint;`), and a finger landing on the bar in
@@ -1020,7 +1041,7 @@ outputs read the ring on their own tasks.
 
 | | What happens | Handled by |
 |---|---|---|
-| R1 | A stale position and length while Pending: until the book restarts, the position is the old run's second, and until `start()` the length is the old track's (frozen or known). That includes a produce pass already under way | `pendingStart()` and `lengthHint()` alone in the snapshot (`shownTime()`, 5.3): a skip with no hint shows no length, so the bar is inert, never seekable at the old track's length |
+| R1 | A stale position and length while Pending: until the book restarts, the position is the old run's second, and until `start()` the length is the old track's (frozen or known). That includes a produce pass already under way | `pendingStart()` and `lengthHint()` alone in the snapshot (`shownTime()`, 5.3): a skip with no hint (no record) shows no length, so the bar is inert, never seekable at the old track's length. The same for an entry nothing holds: the backend's figures are never read there |
 | R2 | A length of 0 while `prepare()` reads the card (`C2AB.cpp:742` to `1040`). A header-less file has none for about 1 s more | `lengthHint()` in the snapshot |
 | R3 | A join heard between the page's look at the snapshot and the action. `takeAdvance()` depends on the output's `readPos`, which moves on another task, and the page's snapshot is a pass old anyway | the key check inside `seek()`'s `Act`, after `syncHeard()`, with no nested `Act` (5.1) |
 | R4 | A boundary pending in the book at the request (the next track decoded ahead) | It goes with the request's book restart and is never taken (`GaplessJoin.cpp:18, 52-63`). `startNow()` resets the offer. The next track is offered again with a new token, and decoded ahead again near the new end. A few ms of the next track may be heard in the µs between `syncHeard()` and `play()`, as with Next pressed at that moment |
@@ -1036,7 +1057,8 @@ outputs read the ring on their own tasks.
 | Case | Behaviour |
 |---|---|
 | A failed track (`s.failed`, "Can't play this track") | Inert. While playing it is never seen, because `update()` skips it first. It stays only when stopped after every track failed, or paused on a start that then failed, with a length of 0. `seek()` returns NoPlace too |
-| Unknown length (the dotted line) | Inert. A header-less VBR file gets an estimate after about a second of frames. An entry never held (stopped after a boot with no resume point; cued by next while paused) has no bar until it plays |
+| Unknown length (the dotted line) | Inert. A header-less VBR file gets an estimate after about a second of frames. An entry never held (stopped after a boot with no resume point; cued by next while paused) has its record's length (5.3), so it is seekable and shows its waveform; with no record it has no bar until it plays |
+| An entry never held, with a record | Seekable at the record's length, to the second, before its first play. The total can read a second more until the play's header gives the length to the ms (the record is rounded, the backend's floored): 2:25, then 2:24, as at the first second of any play. A tap on the bar sets a start point and saves it, as on a resume point's bar (a touch that wakes the screen is swallowed, as anywhere). The waveform's length check (WAVEFORM-INDEX.md 11) passes, both lengths coming from the card's records of the file, so a file that isn't its record's shows only at the play, as the plain line |
 | Under 10 s | Inert |
 | Built-in tracks (tones, click tracks) | Seekable. Their length is the catalog's hint; they count from the start ms (`C2AB.cpp:861-875`), exactly, at no SD cost. A click track's grid starts again, and the Dance tab's tracker resets on the new epoch |
 | Waiting (PlayGate) | Seekable (5.2), from y 138 (as when not waiting). During a scrub the readout row covers the waiting buttons' lower halves and the artist row is cleared, and `drawMiddle()` puts them back. The spinner keeps turning in its own zone |
@@ -1524,7 +1546,7 @@ when these steps were first run: section 16's lines). For a track of length L:
 The examples are for a 4:05 CBR MP3 with no waveform (step 17 has the bars).
 
 1. **The look.** `X` (the whole screen): the knob (r 3) at rest. A dotted
-   line (an entry never held) has none.
+   line (no length: a track with no record, never held) has none.
 2. **Taps, paused (deterministic).** Pause (`uit160,204`), then `qs60`
    (`[queue] start point: 60 s into the current entry (paused)`).
    - `uit85,150`: `no seek (back where it plays)`, and no tick.
@@ -1710,7 +1732,8 @@ One commit each on feature/seek-bar, with the host tests in each:
   as the headphones' FF/REW keys; and a drag to the very end meaning
   next.
 - **Seeking an entry whose length isn't known yet** (stopped after a
-  boot with no resume point).
+  boot with no resume point): built for a track with a record (5.3,
+  2026-11-05); a track with no record still waits for its play.
 - **Pushing only the band's line rows during a scrub**, which would save
   about 1.5 ms a frame.
 
@@ -1861,7 +1884,7 @@ were put back.
   7:09 (CBR; exact)`. The 1:54 FLAC paused at 1:12 and reset: `FLAC:
   starting 1:12.000 in`. A paused seek to 0:00, then a reset, leaves an
   entry never held: `0 / 0 ms; the bar: inert`, the dotted line (section
-  7).
+  7; since 2026-11-05 a track with a record shows its length there, 5.3).
 - **11.6-11.8, playing.** Every seek logged `plays from there` and its
   start line:
   - `(CBR; exact)` on *Moon Safari*. Five drags 0.8 s apart gave five

@@ -203,6 +203,24 @@ enum class S : uint16_t {
   library_updates_at_boot,  // Library updates at next boot
   library_updating_list,  // Updating the library…
   library_updating_wait,  // Updating the library: a moment
+  mood_filters,  // Filters
+  mood_happy,  // Happy
+  mood_neutral,  // Neutral
+  mood_sad,  // Sad
+  mood_relaxed,  // Relaxed
+  mood_aggressive,  // Aggressive
+  mood_instrumental,  // Instrumental
+  mood_vocals,  // Vocals
+  mood_acoustic,  // Acoustic
+  mood_party,  // Party
+  mood_danceable,  // Danceable
+  mood_strict,  // Strict
+  mood_standard,  // Standard
+  mood_loose,  // Loose
+  mood_clear,  // Clear
+  mood_albums_of,  // {0} of {1} albums
+  mood_tracks_of,  // {0} of {1} tracks
+  mood_no_albums,  // No albums match these filters
   card_another,  // Another card: restarting
   card_back,  // Card back: restarting
   queue_cap_full,  // No played track can make way: the queue holds {0} tracks
@@ -398,6 +416,7 @@ enum class S : uint16_t {
   library_row_rescan_body,  // The player reads the tags of its own files again (the transfer's st...
   library_row_rescan_started,  // Reading the tags again
   library_row_rescan_no_card,  // Tags are read on a card only
+  library_row_rescan_unread,  // Card read failed at startup: restart to try again
   bt_name_not_paired,  // Bluetooth headphones
   bt_name_default,  // Headphones
   bt_status_not_paired,  // No headphones paired
@@ -615,7 +634,7 @@ enum class S : uint16_t {
   format_hz,  // {0} Hz
   format_list_sep,  // , 
 };
-inline constexpr unsigned kStrings = 606;
+inline constexpr unsigned kStrings = 625;
 
 // The languages, English first: the mobile app's ten (one without a
 // catalogue yet draws English), and the pseudo-locale where UISTR_PSEUDO

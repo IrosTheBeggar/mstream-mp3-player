@@ -38,6 +38,8 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  AutoDjEngine  AutoDjTiers  AutoDjJoin  AutoDjDriver          |
               |  AutoDjTrigger  AutoDjCommand  AutoDjView (Auto DJ)           |
               |  WaveShape  WaveBar  WaveState (the waveform)                 |
+              |  MoodFilter (the mood tail, the word, the filter's rules)     |
+              |  FilterGrid  FilteredAlbums (the filters' editor, Albums)     |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -56,7 +58,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  app/PowerSettings (CPU speed, Bluetooth power: NVS, restart) |
               |  ui/Ui: TabBar, ListView (ui/ListScroller), Overlays, pages,  |
               |         Fonts (VLW DejaVu + CJK store), Icons, Gfx, Thumbs,   |
-              |         EmptyState                                            |
+              |         EmptyState, FilterSheet (the mood filters' editor)    |
               |  ui/BootScreen (the mStream logo and the version)             |
               |  app/Version (the version from git, the app description)      |
               |  app/UsbViz (the USB visualizer: a computer drives the dancer)|
@@ -404,7 +406,7 @@ The rules that keep it deadlock- and glitch-free:
 | decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack); decodes and converts to 44.1 kHz (the converter, measured with `Rb`: 1.4 M cycles per second of audio for 44.1 kHz's passthrough, the old path, 5 cycles a frame cheaper (an MP3 still measures 0.8 points above the build before the converter, its decoder's loop 2 % slower in the new image: RESAMPLER.md section 10b); 5.8-5.9 % of a core at 240 MHz for 48 kHz, 8.8 % at 160: RESAMPLER.md sections 10 and 10b); after a track start, once 500 ms are buffered, it sleeps after each pass so it refills at most 1.5x realtime (`RefillPacer`, on by default: it halved the UI's stall at every start); at a file's end it opens the next track with the ring still full (a gapless join: no refill from empty at natural ends, GAPLESS.md). Its rests are `ulTaskNotifyTake()`, so a request or a new word (`setNext()`) wakes it |
 | speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake; switches the amp and I2S (M5.Speaker end/begin) off 2 s after it last queued audio and on again before the next buffer (`AmpGate`) |
 | M5.Speaker | 1 | 2 | mixes to 44.1 kHz mono (its input is always 44.1 kHz now); runs only while the amp is on |
-| the card worker (`card`, app/CardWorker) | 1 | 1 for a cover or a waveform's read (0 while a list moves or a finger is on its A-Z rail), the library update's build, a slice of the walk, and while the screen is dark a slice of the tag scan, a compaction and the update's save (a slice drops to 0, and ends after its unit, when a list moves or the scan's yields apply; a compaction or a save drops to 0 when the screen lights); 0 for the tag scan, compactions and the save while the screen is lit | one step at a time, only the one the loop hands it (app/CardTasks, ScanScheduler: docs/METADATA.md 3.3.4, 3.3.9, 3.8, 3.9): a cover (ui/Thumbs), a waveform's read (app/Waves), a slice of the validation walk (its folders for 18 ms lit, 250 ms dark), a compaction of `tags.bin`, a file of the tag scan a loop source names or a slice of its rest's files, the update step's build of the index and its save of `library.idx` (lib/core LibraryUpdate); made for the first step, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device as the covers' worker; the card's jobs about 3.0 KB on N11's card, 3,140 B least left over 5,190 steps, MEASURED on df92c01 by `gs`; the deepest, ESTIMATED from the image, a compaction's reopen of D under its folders: about 4.0 KB (3,916 B MEASURED on 6c2a928, 2,228 B left), about 5.0 KB with the SD driver's log line on top, about 1.1 KB left before an interrupt's frame, 512 B more than before the 2026-10-09 review's `Container::open()`; the build MEASURED at 5,360 B on 6c2a928, 784 B left, its views' `std::sort` at libstdc++'s depth limit on the records' byte order, about 3.3-3.6 KB since `lib/core/IdSort` bounds the recursion at lg(n/16) + 1 frames, METADATA.md 3.9); reads the card in 4 KB pieces and writes it in 4 KB pieces that end on the file's 4 KB boundaries; covers level with the loop while nothing moves (at 0 they shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves; the tag scan, compactions and the update's save at 0 while the screen is lit, since the SD driver's reads busy-wait the CPU (the walk's slices, and while the screen is dark the scan's slices, a compaction and the save, at 1: above; at 0 the 2026-10-09 run measured a compaction about 1.75x its modelled card time, none having run at 1 there, and the save 2-4.5x its time on the loop at the boot); always below the decoder (below) |
+| the card worker (`card`, app/CardWorker) | 1 | 1 for a cover or a waveform's read (0 while a list moves or a finger is on its A-Z rail), the library update's build, a slice of the walk, and while the screen is dark a slice of the tag scan, a compaction and the update's save (a slice drops to 0, and ends after its unit, when a list moves or the scan's yields apply; a compaction or a save drops to 0 when the screen lights); 0 for the tag scan, compactions and the save while the screen is lit | one step at a time, only the one the loop hands it (app/CardTasks, ScanScheduler: docs/METADATA.md 3.3.4, 3.3.9, 3.8, 3.9): a cover (ui/Thumbs), a waveform's read (app/Waves), a slice of the validation walk (its folders for 18 ms lit, 250 ms dark), a compaction of `tags.bin`, a file of the tag scan a loop source names or a slice of its rest's files, the update step's build of the index and its save of `library.idx` (lib/core LibraryUpdate); made for the first step, gone after 3 s without one; 7.5 KB internal stack while it lives (6 KB until METADATA.md 3.8's device check, the figures here its; 5.4 KB used at most there, a read failing inside the reopen of D; 2.3 KB used at most on the device as the covers' worker; the card's jobs about 3.0 KB on N11's card, 3,140 B least left over 5,190 steps, MEASURED on df92c01 by `gs`; the deepest, ESTIMATED from the image, a compaction's reopen of D under its folders: about 4.0 KB (3,916 B MEASURED on 6c2a928, 2,228 B left), about 5.0 KB with the SD driver's log line on top, about 1.1 KB left before an interrupt's frame, 512 B more than before the 2026-10-09 review's `Container::open()`; the build MEASURED at 5,360 B on 6c2a928, 784 B left, its views' `std::sort` at libstdc++'s depth limit on the records' byte order, about 3.3-3.6 KB since `lib/core/IdSort` bounds the recursion at lg(n/16) + 1 frames, METADATA.md 3.9); reads the card in 4 KB pieces and writes it in 4 KB pieces that end on the file's 4 KB boundaries; covers level with the loop while nothing moves (at 0 they shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves; the tag scan, compactions and the update's save at 0 while the screen is lit, since the SD driver's reads busy-wait the CPU (the walk's slices, and while the screen is dark the scan's slices, a compaction and the save, at 1: above; at 0 the 2026-10-09 run measured a compaction about 1.75x its modelled card time, none having run at 1 there, and the save 2-4.5x its time on the loop at the boot); always below the decoder (below) |
 | Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and the dancer's frames (10/s idle; dancing 30/s at 240 MHz, 24/s below: `DanceRate`); sleeps 1-5 ms every pass (less while a list frame is due), 20 ms while the screen is off (`Ui::idleMs`; with no UI, main's own 20 ms), at most 2 ms while Auto DJ's join works; Auto DJ's step (below) |
 
 ### The loop's pass
@@ -419,11 +421,14 @@ The rules that keep it deadlock- and glitch-free:
 2. **`stepCardGuard()`:** what the SD wrapper's guard found at FatFs's
    remounts (a card pulled and put back, or another put in: METADATA.md
    3.8). Then `Waves::remount()`: the same counter, for the waveform index
-   (the root read again, the record dropped).
+   (the root read again, the record dropped), and a read of the root the card
+   failed, again when its wait is over (about 2.5 s against a card that doesn't
+   answer, ESTIMATED; never while a list moves or behind the update's fence).
 3. **`stepAutoDj()`:** Auto DJ's step (`app/AutoDj::step()`,
    [AUTODJ.md](AUTODJ.md)): a remount seen first; a try at opening the
-   index when the card failed the last one (its 6.6, about a second against
-   a card that doesn't answer, three at most); a slice of the join
+   index, or at reading the root, when the card failed the last one (its 6.6,
+   about a second, or 2.5 s, against a card that doesn't answer, ESTIMATED, three
+   at most); a slice of the join
    while Auto DJ is on (at most 8 ms of slices and one card read a pass,
    never while a list moves or the card is held); the Driver's pass (a
    new session at a new queue, the tracks that steer, the trigger, and a
@@ -521,7 +526,7 @@ hundred bytes in PSRAM (app/TagConsole's `Work`).
   under 1,536 B after an SD driver line during a boot is a finding, not a
   failure, METADATA.md 6.3.1).
 - **A boot that builds the index** (the build-at-boot marker, a missing
-  or v5 `library.idx`) sorts its views on this stack too: with
+  or v6 `library.idx`) sorts its views on this stack too: with
   `std::sort` on the records' byte order about 6.2 KB used (ESTIMATED from
   the card worker's 5.36 KB MEASURED build, 2026-10-09), near the 1,536 B
   line; with `lib/core/IdSort` about 4.4 KB (METADATA.md 3.9).
@@ -1590,8 +1595,10 @@ the table at 0x8000, so every unit keeps the layout it was installed with.
   bootloader reads as ota_0: the slot the image just wrote, even on a unit
   that had moved to ota_1 by OTA (`upload` writes it too). An OTA update
   writes the slot that isn't running and switches otadata. 6 MB each: the
-  app is ~2.2 MB, and WiFi, HTTP and TLS are still to come (and the IRAM
-  work they need, [Build notes](#build-notes)).
+  app is 4,333,743 B on 2026-11-06 (68.9 % of its slot by the build's
+  count, the app 70 % by flash_guard's; the mood filters' S0-S3 22,180 B
+  of it: S3's editor and first row 15,292 B), and WiFi, HTTP and TLS are still to come (and the IRAM work
+  they need, [Build notes](#build-notes)).
 - **LittleFS shrank** from ~11.9 MB to 3.8 MB: it only holds test audio when
   no SD card is in (`tools/make_test_audio.py` reads its size from the table).
 - **Old bytes where NVS and LittleFS now sit** (a unit moved from the old
@@ -1806,7 +1813,7 @@ a beta); the README has how to cut one.
   changed). With no `v*` tag reachable, `--always` gives only a hash, and
   the build reads `v<NEXT_RELEASE>-dev+abc1234[-dirty]`; `NEXT_RELEASE`, at
   the top of the script, is the only place a version is written by hand.
-  Without git at all: `v0.12.0-dev+nogit`.
+  Without git at all: `v0.13.0-dev+nogit`.
 - **One file recompiles.** The script writes
   `$BUILD_DIR/generated/PlayerVersion.h` (`PLAYER_VERSION`, the commit,
   its date and time in UTC), rewritten only when its text changes, and
@@ -1884,8 +1891,10 @@ a beta); the README has how to cut one.
 
 Everything the player knows about the music is one `LibraryIndex` in PSRAM,
 the single store: a string arena, fixed-size records and sorted views
-(~80-90 B a track since `library.idx` v6, nothing in internal RAM). The queue, the player and later
-the browsing UI hold its **track ids**, never strings.
+(~80-90 B a track since `library.idx` v6, 2 B more with v7's mood words
+on a card whose transfer gives them; nothing in internal RAM). The queue,
+the player and later the browsing UI hold its **track ids**, never
+strings.
 
 - **Track ids** (`TrackCatalog`): `0 .. n-1` are the index's tracks, and
   `0x80000000 + k` the built-in tracks (the test tones and the click tracks,
@@ -1903,7 +1912,12 @@ the browsing UI hold its **track ids**, never strings.
   the records otherwise (`LibraryBuilder` over the transfer's tags file and
   the device's `tags.bin`, the journals compacted first), and walks
   `/music` into a path-named index only on a card with no records at all (a
-  card-reader card, or this firmware's first boot). A build is saved aside
+  card-reader card, or this firmware's first boot). A root the card fails to
+  read at each of four tries (`cardroot::readAtBoot()`: 1.4 s of waits, about 10 s
+  more against a card that has stopped answering, ESTIMATED) isn't taken for no
+  transfer: a library built from a transfer is loaded as it is, and no card jobs run
+  that session; any other boots as on a card with no transfer data.
+  A build is saved aside
   and renamed in (METADATA.md 2.12.6's rule), with what it was built from;
   a build deferred for memory (`/.player/build.req`) runs at the next boot;
   a `library.tmp` a cut left whole is taken. All of it is lib/core
@@ -2018,18 +2032,35 @@ the browsing UI hold its **track ids**, never strings.
     runs over every track the extension list accepted, and
     test_library_index has each shape in the three formats, mixed in one
     folder.
-- **`library.idx` v6** (docs/METADATA.md 3.4.3, built in its N2): 32-byte
-  tracks (a title of their own when a tag's isn't inside the file name, the
-  record's artist, a 16-bit number, the length, where the names came
-  from), 28-byte albums (the elected artist line, year, discs, `kLoose`),
-  each artist's and album's sort key with the views (the Library's rail,
-  row letters and jump grid key on it, as the A-Z order does),
-  the strings in 64 KB chunks, and a header with what the index was built
-  from (the transfer's identity, D's checksum, and today's walk signature).
-  A cache of versions 1-5 is `Outdated` and rebuilt once. The firmware
-  builds it from the tag records (`LibraryBuilder`: the transfer's and the
-  device's, merged per file, Stage A's names; METADATA.md 3.4, 3.8), or
-  from the walk on a card with none.
+- **`library.idx` v7** (docs/METADATA.md 3.4.3, built in its N2; the mood
+  words docs/MOOD-FILTERS.md 5.4): 32-byte tracks (a title of their own
+  when a tag's isn't inside the file name, the record's artist, a 16-bit
+  number, the length, where the names came from), 28-byte albums (the
+  elected artist line, year, discs, `kLoose`), each artist's and album's
+  sort key with the views (the Library's rail, row letters and jump grid
+  key on it, as the A-Z order does), the strings in 64 KB chunks, the mood
+  words (a u16 per track id, last before the sum; no block at all when no
+  track has one), and a header with what the index was built from (the
+  transfer's identity, D's checksum, and today's walk signature) and the
+  words' two counts (0 or the track count, and the tracks with a word: 24
+  count words, 22 in v6). A cache of versions 1-6 is `Outdated` and
+  rebuilt once: the first start of a v7 firmware rebuilt the 19,413-track
+  test card from D in 11,193 ms (MEASURED 2026-11-06), the queue kept;
+  0.12.0 reads v7 as Corrupt and rebuilds too. The firmware builds it from
+  the tag records (`LibraryBuilder`: the transfer's and the device's,
+  merged per file, Stage A's names; METADATA.md 3.4, 3.8), or from the
+  walk on a card with none. A track's word comes only from the record the
+  build takes when that is T's (`kFromTransfer`) with a mood tail a reader
+  accepts (METADATA.md 2.6.4, MPTG minor 1); a D record's is never taken,
+  and `Result::withMoods` counts the words taken. The build stamp leaves
+  the words out: a word doesn't change what a track id means. On that card
+  with 17,954 words the block is 38,826 B and the index 1,748,476 B (90.1
+  B a track), the same card's T records without tails 1,709,650 B plus the
+  block (MEASURED 2026-11-06). The words' rules are `lib/core/MoodFilter`
+  (MOOD-FILTERS.md 4.1, 5.3, 5.4: a tail's check and its word, a filter's
+  11 bits, the song and album rules), host-tested in test_mood_filter over
+  `test/fixtures/card/moods.json`, the same rules as
+  `tools/moodfilter.py`; no IRAM, no allocation.
 - **The card worker's jobs** (`app/CardTasks` on the loop, `app/CardWorker`
   the task, lib/core `CardJobs`; METADATA.md 3.2.3, 3.3, 3.8): 2 s after
   the UI's first frame the **validation walk** lists `/music` a folder a
@@ -2077,7 +2108,8 @@ the browsing UI hold its **track ids**, never strings.
   save is another worker step, the scan and compactions waiting for its
   end. On a card that doesn't answer (pulled while on) it fails before the
   fence, and on one whose reads fail as the build reads it, at its end
-  (nothing walked or saved: the next boot loads the last `library.idx`);
+  (nothing walked or saved: the last `library.idx` loaded again at once, or,
+  a pulled card, at the next boot);
   a power cut at any step leaves a card the next boot reads whole.
   A file the scan reads
   stops being Pending in the index (a card walked into a path-named index
@@ -2109,13 +2141,25 @@ the browsing UI hold its **track ids**, never strings.
   that index's build only, set by the scan (above). The console's `gs`,
   `gt</music/...>`, `gr`, `gw`, `gb` and `gv` (`app/TagConsole`,
   `lib/core/TagText`) report the scan and the card worker, dump one file's
-  tags and records, and ask the worker for a Rescan, a walk, a build or a
-  check of the transfer's files (`gb!` the update step deferred to the
-  next boot, `gs0` the worker's figures from now: the device batch's L4
-  and L3); `gc` and `gl` are the sector cache's switches and L0's bench;
-  `gw?` is the waveform index's state, `gw=<99 digits>` and `gw#<480 hex>`
-  a test shape with no card, `gw-` drops it (`app/Waves`; `gw` alone is the
-  walk).
+  tags and records (T's mood tail as its bytes stand, valid or not, what a
+  reader takes, and the index's word), and ask the worker for a Rescan, a
+  walk, a build or a check of the transfer's files (`gb!` the update step
+  deferred to the next boot, `gs0` the worker's figures from now: the
+  device batch's L4 and L3); `gc` and `gl` are the sector cache's switches
+  and L0's bench; `gw?` is the waveform index's state, `gw=<99 digits>`
+  and `gw#<480 hex>` a test shape with no card, `gw-` drops it
+  (`app/Waves`; `gw` alone is the walk). `gm` is the index's mood words
+  (the tracks with one, the coverage, the block's bytes; `g` prints the
+  block on its PSRAM line and the tracks built with a word on the
+  builder's), and `gm<hex>` the tracks and the albums a filter's 11 bits
+  let through (bare hex, 1-4 digits; a value that isn't a filter is
+  refused), each pass's time and the first 8 of each, counted as
+  `tools/synthtransfer.py --check --mood-filter` counts them off the card
+  (`Library::moodReport()`; the counts are `lib/core/TagText`'s,
+  host-tested). Behind the update step's fence it says so and counts
+  nothing. On the 19,413-track card with 17,954 words, idle, the tracks
+  pass took 5-12 ms and the albums pass, over 1,707 albums, 14-31 ms
+  (MEASURED 2026-11-06; MOOD-FILTERS.md 9.6).
   `gs` checks `tags.bin` and the transfer's tags file a piece a loop pass
   (`lib/core/TagCheck`, about 10 ms a pass, none while a list moves on a
   lit screen), once the card worker's step under way is taken in, with no
@@ -2264,8 +2308,9 @@ the browsing UI hold its **track ids**, never strings.
 - **Persistence** (`app/QueueStore` over `QueueSaver`, `QueueText`): the queue is saved as paths,
   one a line (`queue.txt`, header `mstream-queue 1 <entries> <current>
   <generation>`), so a rebuilt library, whose ids differ, finds its tracks
-  again; paths that are gone are dropped, and if the current one is among them
-  the next one that stayed is current. A shuffled queue is **version 2**
+  again; paths that are gone are dropped (the card's word, not only the library's: one
+  it doesn't list stays by its path, METADATA.md 3.2.2), and if the current one is among
+  them the next one that stayed is current. A shuffled queue is **version 2**
   (`mstream-queue 2 ...`, each line `<rank> <path>`: QUEUE-MODES.md
   section 2.9), written only while shuffled, so the mode and the own order
   come back with the queue; not shuffled, the file is version 1 byte for
@@ -2746,8 +2791,8 @@ layer is suspended).
 - **The pocket rule** (`ScreenPower::unattended()`, `ButtonPolicy::
   Transport::startRefused()`). After any wake from Off (a touch, the PWR
   key, an event, or something that keeps it lit) nobody may be looking:
-  until a touch lands on the glass (or the PWR key while lit, or the
-  console), a B click that would start playing on the speaker does
+  until a touch lands on the glass (or the PWR key on a screen kept lit, or
+  the console), a B click that would start playing on the speaker does
   nothing but the inert buzz and a note, "Tap the screen first, then B
   plays". A pause, A and C, the volume, the B hold (a move to the speaker
   pauses first) and a play on the headphones act as ever. Going Off ends
@@ -2790,8 +2835,14 @@ Queue, Dance and Output (with its Pair and About pages).
   1, 2 or 5 min, or Never; the same whether playing or not. Input is a
   touch that acts as it lands or moves (a finger resting still stops
   counting after 15 s, `FingerActivity`, so a pocket's pressure can't keep
-  it lit), or the PWR key. A touch
-  (glass or strip) or a PWR short press on a screen that isn't bright
+  it lit). The PWR key's short press (`ScreenPower::powerKey()`) turns a
+  lit screen, bright or dim, off at once, a held one too (below; with
+  Never it is how the listener turns it off), and wakes an off one. On a
+  screen something keeps lit (below) it stays on: the press only counts
+  as input, deliberate (it answers a wake from Off nobody has answered,
+  else the pocket rule ends), and logs `[screen] the power key: stays on`. A finger on
+  the panel as it goes off is taken, as one resting as it dims. A touch
+  (glass or strip) on a screen that isn't bright
   only wakes it (the input layer swallows the touch: "The screen's wake"
   above). A wake from Off with no input after it goes off again 10 s
   later, without the dim step (the pocket guard; not with Never). What
@@ -2799,10 +2850,13 @@ Queue, Dance and Output (with its Pair and About pages).
   lost (the dialog), "Couldn't reach", a track that failed (their
   `Ui` calls, `UiHost::wakeScreen()`), USB plugged in or out (AXP192 reg
   0x00, read once a second). Headphone keys, track changes and a link
-  coming up don't. It stays lit while the touch calibration or a spike
-  tool has the display, a play waits for the headphones, or a pairing is
-  under way (`BtSession::pairingUnderWay()`: not one whose failure the
-  card still shows). While a toast with a countdown is up (the idle
+  coming up don't. It stays lit while the start-up screen shows (the chip
+  latches a key press, so one made during the boot, maybe the one that
+  powered the board on, can read as a click at the first `M5.update()`),
+  the touch calibration or a spike tool has the display, a play waits for the
+  headphones, a pairing is under way (`BtSession::pairingUnderWay()`:
+  not one whose failure the card still shows), or a computer's visualizer
+  session or `@identify` banner is up. While a toast with a countdown is up (the idle
   power-off's warning, the sleep timer's fade while it counts down to the
   pause: `holdLit`) a lit screen
   (bright or dim) goes bright and stays lit until it ends, then counts
@@ -2985,7 +3039,30 @@ Queue, Dance and Output (with its Pair and About pages).
   and a tap on "..." hit its Turn off). All are opaque and drawn
   through the list's scroll mapping, so they land right over a scrolled
   list. After an add (Play next, + Queue) the toast also has **View**: the
-  Queue, scrolled to the first added entry (found by its queue key).
+  Queue, scrolled to the first added entry (found by its queue key). The
+  **mood filters' editor** (`ui/FilterSheet`, docs/MOOD-FILTERS.md 4.3,
+  7.1; the frames `grid-*` in `docs/img/mood-filters/`) is an overlay over
+  the whole content area (y 36-239, its own card in the overlays' panel
+  sprite), not a pushed page: the tab bar stays live, and it closes as a
+  sheet does (`closeModal()`: a tab, the language, the fence, a dialog or
+  a sheet). Its title row is Clear, the count ("312 of 1,741 albums",
+  amber at 0) and a cross; then three trays (Happy | Neutral | Sad,
+  Relaxed | Neutral | Aggressive, Instrumental | Vocals beside the level
+  cell, Strict / Standard / Loose with its dots) and three chips
+  (Acoustic, Party, Danceable). A tray picks one (a second tap lets it
+  go), the chips any, the level cycles and alone filters nothing, Clear
+  empties it and stays open. Choices apply at once: the tap's cell is
+  pushed first, then the owner works out what fits (`FilterOwner::
+  setFilterWord()`, the pass), then the count. The cells, their font (Body,
+  or Small for the whole grid: Polish and Russian), widths, wrap and hit
+  tests (each split skewed right for the lab panel's x) are
+  `lib/core/FilterGrid`'s, host-tested in test_ui_filter and, with the
+  firmware's fonts in every language, test_ui_library. A toast up when it
+  opens goes, its Undo with it; one arriving while it is up covers its
+  title row, and a Down there goes nowhere. A touch within 300 ms of its
+  opening goes nowhere, as on a sheet. The Albums list opens it in the
+  Library's violet, counting albums; Auto DJ's page will in blue, counting
+  tracks (S5).
 - **Lists** (`ui/ListView`, with `ListLayout`, host-tested): virtualised rows
   (a source gives a count and a row renderer; standard pieces for 1- and
   2-line rows, the number column, a disc, a 40x40 thumbnail slot, a
@@ -3081,7 +3158,11 @@ Queue, Dance and Output (with its Pair and About pages).
   something to say, 34 + 45 ms MEASURED):
   the LCD's scroll area is defined again with a bottom fixed area
   (VSCRDEF's BFA), so a bar under the list (198-239) stays put while the
-  list scrolls; the rail's pushes stop at the band's end. An **empty list**
+  list scrolls; the rail's pushes stop at the band's end. Under a modal,
+  the jump grid or the coach cards, the band is left as it is, even when
+  the status line ends, and changes once they go (`Ui::updateStatus()`;
+  before, a line that ended under a sheet wiped it: MOOD-FILTERS.md
+  9.4). An **empty list**
   shows its source's empty state (a disc and icon, a title, a line or two,
   up to two buttons, drawn in strips through the scroll mapping): the
   Queue's "Your queue is empty" (Open Library, Shuffle all), the Library's
@@ -3447,7 +3528,32 @@ Queue, Dance and Output (with its Pair and About pages).
   round end and chevron in: `uitext::headerPillZoneX()`). The row
   holding what plays (its artist, album, track, the folders on its path) is
   tinted in every list. The rail and the jump grid are on the Artists and
-  Albums lists and on folders of folders, once over 30.
+  Albums lists and on folders of folders, once over 30. **Mood filters**
+  (docs/MOOD-FILTERS.md 4.2, 7.2; frames `in-rest`, `inA-*`, `A-*`): on
+  the card's library with mood words (`LibraryIndex::hasMoods()`; not
+  behind the fence, not `uil<n>`'s), the Albums list's first row is the
+  filters' (`ListView::Source::topBarIsRow()`: an item in the top bar's
+  place that scrolls with the list, so the A-Z rows stay sorted). At rest
+  a funnel, "Filters" and "1,741 albums"; a tap opens the editor
+  (Overlays, above). With a filter on: the funnel in the accent on its
+  plate, what is set ("Relaxed · Instrumental": Body, else Small, then
+  cut) over "312 of 1,741 albums", and a cross on a disc (at 232, 284 or
+  292 as the list is 284, 312 or 320 wide) that clears it, no Undo. The
+  list then holds the albums where most analysed tracks fit (`2*pass >
+  analysed`, `lib/core/FilteredAlbums`: a u32 an album, in PSRAM, carved
+  when a filter goes on); `rowAt`, `rows` and `railRows` read it, so the
+  rail (only over 30), the jump grid, the covers and the tint follow, and
+  none fitting leaves "No albums match these filters" under the row.
+  Scrolled 42 px or more, a dot on the Albums segment says a filter is on
+  (redrawn only while the list rests; a tap on the segment goes to the
+  top). A closed editor with a change reloads the list at its top, once.
+  The filter is the page's, in RAM: kept through the other pages and
+  tabs, forgotten by a boot (D6). The fence and a rebuild drop the albums
+  and keep the filter (`Ui::libraryUpdating()`, `libraryChanged()`):
+  worked out again when Albums next shows (the same pass as `gm<hex>`'s
+  albums, 14-31 ms idle at 1,707 albums: MOOD-FILTERS.md 9.6). A card
+  with no mood data drops it; no memory for the albums keeps the old
+  filter, with `toast.no_memory`.
 - **The Queue** (spec §6.4, mockups 16-18, with the grafts): opened on the
   playing track (tinted, on top; there again with no row open when the
   queue changed while you were away); the header's summary "4 of 16 · 12
@@ -3684,7 +3790,8 @@ Queue, Dance and Output (with its Pair and About pages).
   player to use it (the backend, the library and the queue were set up on
   the flash); no automatic re-check (an SD init with no card could hold
   the loop). A card without music: "No music found", Try again walks
-  /music again (the `g0` path). A track that can't be played: an amber
+  /music again (the `g0` path; a session with no card jobs restarts instead, the
+  queue saved, since only a boot asks again). A track that can't be played: an amber
   note ("Skipped 07 - x: can't play it", or for a refused sample rate
   "...: 96 kHz isn't supported" / "...: needs the 240 MHz CPU speed", from
   `PlaybackController`'s failure record) and its "!". The headphones lost while playing: paused,
@@ -3747,7 +3854,7 @@ Queue, Dance and Output (with its Pair and About pages).
   the 96 px size costs more than the spike's 1/8, which skips the IDCT.)
   Its card reads are 4 KB each (while it
   holds the SPI bus or the FAT lock, priority inheritance lifts it, ~3 ms);
-  and **no new job starts while a list moves**. **Its RAM:** a 6 KB stack in
+  and **no new job starts while a list moves**. **Its RAM:** a 7.5 KB stack in
   internal RAM (a task that reads the card or the flash can't have its
   stack in PSRAM), only while it lives: it is made for the first job and
   ends after 3 s without one. It drives lgfx_tjpgd itself with its 3.9 KB
@@ -3778,8 +3885,9 @@ Queue, Dance and Output (with its Pair and About pages).
   - **The loop:** at a track change or a repaint, Now Playing walks the track's
     path in PSRAM for its hash (`wantWave()`: a frame of 560 B, the path's
     512 B, not inlined: `update()`'s stays 240 B); `Waves::loop()` takes the
-    answer in (a copy in PSRAM, the object 332 B with the Ui). No card read on
-    the loop but at a remount, the root read again (about 3.7 KB of stack,
+    answer in (a copy in PSRAM, the object 352 B with the Ui). No card read on
+    the loop but at a remount, or when a read of the root the card failed is tried
+    again: the root read again (about 3.7 KB of stack,
     ESTIMATED, `AutoDj::remount()`'s path; a Root and 1,024 B of scratch in
     PSRAM, for the moment).
   - **The bus:** a playing second pushes the text row, 5,120 px, where the band
@@ -3820,7 +3928,13 @@ Queue, Dance and Output (with its Pair and About pages).
   headphones lost (with the dialog), no card or one that didn't mount
   (exFAT, NTFS, GPT, can't read: on Now Playing), or a play
   waiting for the headphones (Now Playing's panel and spinner); `uiF0`
-  the real state. **`uil<n>`**: the Library browses a synthetic
+  the real state. **`uiM`**: the Albums list's mood filter (what is set,
+  the albums held, the last pass's time, the carve, the editor);
+  `uiMa<hex>` sets it (bare hex, as `gm<hex>`; an invalid one refused),
+  `uiMa0` clears it, each pass logging its µs; `uiMe` opens the editor
+  over the page shown, its taps then the scripted finger's (behind the
+  library update's fence both say so and do nothing; MOOD-FILTERS.md
+  9.3). **`uil<n>`**: the Library browses a synthetic
   library of n tracks (the spike's `g<n>`: 6 artists and 15 albums per 100
   tracks), to see the lists, the rail and the jump grid at the scale of
   thousands (the card has 6 artists); look only (its ids aren't the
@@ -3875,7 +3989,7 @@ members, in PSRAM with the Ui); the Queue and Output screens added ~160 B more (
 Bluetooth session and the link's published state, the pairing's name; the
 scan list and the learned track lengths are in PSRAM). The boot log's
 `[ui] internal RAM ... before the UI, ... after` line has the rest. The covers add ~340 KB of PSRAM (the
-LRU and the worker's buffers) and, only while the worker lives, its 6 KB
+LRU and the worker's buffers) and, only while the worker lives, its 7.5 KB
 stack.
 
 ## UI spike (browsing UI groundwork)
@@ -3974,7 +4088,7 @@ its opposite; only `Pcb` is saved):
 | Command | What it switches | Notes |
 |---|---|---|
 | `Pb<0-255>` | backlight while the screen is bright (M5GFX: AXP192 DCDC3, 2.5-3.275 V) | the screen policy's Bright level until restart, `Pb0` the setting's (Medium, 100; M5GFX's own default was 127, 2.875 V); refused while dim or off; it still dims and goes off (Screen off after: Never holds it) |
-| `Ps` / `Ps0` / `Ps1` | the screen policy: its state / Off now / on | Off is the policy's (backlight off, ILI9342C sleep-in, the UI draws nothing); a touch wakes it and does nothing else (`[screen] wake by touch at x,y (raw)`), and with no input after that it goes off again in 10 s (the pocket guard); off with nothing playing, the Bluetooth search rests after its burst (`setQuiet`) |
+| `Ps` / `Ps0` / `Ps1` / `Psk` | the screen policy: its state / Off now / on / the PWR key's short press, as if pressed | Off is the policy's (backlight off, ILI9342C sleep-in, the UI draws nothing); a touch wakes it and does nothing else (`[screen] wake by touch at x,y (raw)`), and with no input after that it goes off again in 10 s (the pocket guard); off with nothing playing, the Bluetooth search rests after its burst (`setQuiet`) |
 | `Pc<mhz>` | CPU clock now | only 160 ↔ 80 (same 320 MHz PLL); 240 ↔ 160/80 retunes the BBPLL the Bluetooth radio runs from, refused. 80 not while audio runs, and back to 160 by itself when it starts |
 | `Pcb<mhz>` | CPU clock from boot (saved) | 160 or 240 (`Pcb0` the default, 240), set before Bluetooth starts; the Output tab's CPU speed is the same NVS value |
 | `Pt<min>,<max>` | Bluetooth BR/EDR TX power levels 0-7 (−12..+9 dBm) | a test until restart, not saved (the Output tab's Bluetooth power is the setting, default 0,5: −12..+3 dBm; a change there wins); `Pt` alone reports the setting too; from the next page, scan or connection (with a link up the line says "applies from the next connection": the link keeps its level; `Pt` alone reads back the controller's setting, the new range at once, not the link's level) |
@@ -4007,12 +4121,14 @@ their own (the player stopped first, so nothing follows them).
   changed the objects: its docstring says what to do) and warns about any
   name that no longer matches; a build logs `iram_diet: 51 of 51 libc
   objects moved to flash`. About 5 KB of IRAM is left (5,176 B from the
-  seek bar on; the MP3 pin below takes none). WiFi fits in it. The
-  ESP-NOW link spike (2026-10-19) measured the WiFi driver and ESP-NOW,
-  without lwIP, at 2,676 B: 5,161 B free before, 2,485 B after. It
-  costs so little because Arduino's prebuilt libraries keep WiFi's
-  optional IRAM code in flash ([SWAP-MODE.md](SWAP-MODE.md) section 5.2;
-  section 6 ranks what to free next).
+  seek bar on; 5,161 B on 2026-11-06, with the mood filters' data path
+  and editor or without; neither they nor the MP3 pin below take any).
+  WiFi fits in it. The ESP-NOW link spike (2026-10-19) measured the
+  WiFi driver and ESP-NOW, without lwIP, at 2,676 B: 5,161 B free
+  before, 2,485 B after. It costs so little because Arduino's prebuilt
+  libraries keep WiFi's optional IRAM code in flash
+  ([SWAP-MODE.md](SWAP-MODE.md) section 5.2; section 6 ranks what to
+  free next).
 - **The MP3 synth loop is pinned at the front of flash.** The same
   `tools/iram_diet.py` puts libmad's synthesis (`dct32`, `synth_full`,
   `mad_synth_frame_onens`), AudioGeneratorMP3's per-sample `GetOneSample`

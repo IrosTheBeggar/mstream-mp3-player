@@ -35,7 +35,10 @@
 //      marked Pending (the scan should read it), unless D says the scan
 //      already failed on it at this size and time.
 // A field the chosen record lacks comes from the path, never from the other
-// producer (LibraryIndex::addRecord()). Before the first walk after a new
+// producer (LibraryIndex::addRecord()). So does a track's mood word
+// (docs/MOOD-FILTERS.md 5.4): from the mood tail of T's record when that
+// record is the one chosen, and none otherwise (D's records have no tail;
+// a T that fails restarts without one). Before the first walk after a new
 // commit (D's walk identity older than the root's: the caller knows), T's
 // paths count as present too (the software listed the card moments ago),
 // its records are taken as they are, and D's rows for T's files that the
@@ -142,6 +145,7 @@ public:
     uint32_t pending = 0;       // of those, the files the scan should read
     uint32_t dropped = 0;       // D's rows for files the new T no longer lists
     uint32_t ignored = 0;       // T's records for files the walk didn't see
+    uint32_t withMoods = 0;     // of fromTransfer, the tracks given a mood word (not 0)
     size_t workBytes = 0;       // the builder's own memory at its most
   };
 

@@ -17,7 +17,9 @@ class Input;
 //
 // Each loop pass, in this order:
 //
-//   beginPass()   the PWR key (a short press wakes, or counts as input),
+//   beginPass()   the PWR key (a short press turns a lit screen off and
+//                 wakes an off one; on a screen kept lit it counts as input:
+//                 ScreenPower::powerKey()),
 //                 USB in or out (read once a second: an event that wakes),
 //                 and Input::setLit(): a touch on a screen that isn't
 //                 fully lit (or lit by an event nobody has answered) is a
@@ -51,12 +53,16 @@ public:
   explicit ScreenControl(Input& input) : input_(input) {}
 
   // setup(), after M5.begin(): the settings, the backlight at the chosen
-  // level, the countdown from now.
+  // level, the countdown from now (with a UI, in effect from its first frame:
+  // the start-up screen keeps it lit).
   void begin(uint32_t nowMs);
   // The UI's switch (Ui::setDark), called around the panel's sleep.
   void onDark(std::function<void(bool dark)> fn) { onDark_ = std::move(fn); }
 
   void beginPass(uint32_t nowMs);
+  // The PWR key's short press this pass (beginPass() read it): what else it
+  // ends (the computer's visualizer).
+  bool powerKeyClicked() const { return keyClicked_; }
   void afterInput(uint32_t nowMs);
   // What holds a lit screen lit (ScreenPower's holdLit: it stays bright
   // until the hold ends, then the countdown from there; an off one stays
@@ -100,8 +106,8 @@ public:
   // The sleep timer paused (ENERGY.md section 3, step 4): off now, as the
   // countdown would (a touch's or the key's wake has the pocket guard).
   void sleepTimerOff();
-  // A touch or the PWR key woke it (dim or off) since the last call: the
-  // sleep timer's fade shows its toast then.
+  // A touch (dim or off) or the PWR key (off) woke it since the last call:
+  // the sleep timer's fade shows its toast then.
   bool takeWoken() {
     const bool w = woken_;
     woken_ = false;
@@ -126,8 +132,11 @@ public:
   // ---- the console (P) ----
   // Ps0: off now (as the countdown would; a wake has the pocket guard).
   void consoleOff();
-  // Ps1: on, as the PWR key does.
+  // Ps1: on, from any level, the whole countdown and no pocket guard: someone
+  // is at the console.
   void consoleOn();
+  // Psk: the PWR key's short press, as if pressed (the next pass takes it).
+  void consoleKey() { consoleKey_ = true; }
   // Pb<n>: the Bright level until restart (not saved; 0: the setting's),
   // applied at once. False: the screen isn't bright now (nothing changed).
   bool overrideBacklight(uint8_t level);
@@ -150,6 +159,13 @@ private:
   int8_t usb_ = -1;              // USB power present (ACIN or VBUS); -1 not read yet
   bool woken_ = false;           // takeWoken()
   bool inputSeen_ = false;      // takeInput()
+  bool keyClicked_ = false;     // powerKeyClicked()
+  bool consoleKey_ = false;     // consoleKey()
+  // What keeps it lit, as the last step() was told (the PWR key reads it).
+  // Lit from the start: loop()'s first M5.update() may read a press made
+  // during the boot, maybe the one that powered the board on (the chip
+  // latches it).
+  bool keptLit_ = true;
   Hold hold_ = Hold::None;      // this pass's hold (for logChange())
   Hold held_ = Hold::None;      // what holds the screen lit now (for the log)
 };

@@ -119,7 +119,7 @@ public:
   size_t fenceBytes() const { return join_.heldBytes(); }
   void beforeFence();
   size_t fence();
-  void live();
+  void live(bool built, bool reloaded);
   // The update step's memory check (LibraryUpdate::setGiveBack()): the
   // join released now, joined again after the step (its bytes; 0: none
   // held).
@@ -142,7 +142,8 @@ public:
   autodjview::Started start();
   // The card has an index this build reads, open and checked (joined or
   // not: it joins while Auto DJ is on), for a library it can join (not
-  // over 65,534 tracks) and not found broken.
+  // over 65,534 tracks), not found broken, and with no run of failed reads
+  // behind it (Block::Reads).
   bool usable() const;
   const autodj::Marks& marks() const { return dj_.marks(); }
   // ---- the UI's (M5) ----
@@ -153,7 +154,7 @@ public:
   // Library track `track` has neighbours in a usable index (the Library's
   // "Auto DJ from here"): the maps' when joined, else its path's hash
   // looked up in DJPH (a binary search: a few small reads).
-  bool hasNeighbours(uint32_t track) { return usable() && hasRow(track); }
+  bool hasNeighbours(uint32_t track);
   // What the loop's passes (and a switch on) had to say since the last
   // call: autodjview::News bits (main.cpp: Ui::autoDjNews(), a toast).
   uint8_t takeNews();
@@ -162,15 +163,16 @@ private:
   enum class File : uint8_t {
     None,     // the root names no index (or there is no root: no transfer data)
     NotRead,  // ... one of a major this build doesn't read (read.mpdj)
-    Absent,   // ... one that failed its checks (why_), isn't there, or the card failed every try at
-    Again,    // ... one a try at opening failed on the card's account: tried again soon (tries_)
+    Absent,   // ... one that failed its checks (why_), isn't there, the card failed every try at, or closed for a card too silent
+    Again,    // ... one a try at opening, or a read of the root, failed on the card's account: tried again soon (tries_)
     Open,     // open and checked: the join's, the picks'
   };
   // What keeps a join from starting: nothing; a failed read's wait
   // (retryAtMs_); the next library build (no memory, a library too big);
-  // the update step it was given back to (giveBack()), until its Live or
-  // its end.
-  enum class Block : uint8_t { None, Retry, Build, Update };
+  // kJoinTries joins in a row a read of the card failed, or the button's look-ups
+  // twice: a library build, a remount, Dc or switching on; the update step it was given back to
+  // (giveBack()), until its Live or its end.
+  enum class Block : uint8_t { None, Retry, Build, Reads, Update };
   enum class Job : uint8_t { None, DryRun, Bench };
 
   class Reader : public autodj::SlotReader {
@@ -181,7 +183,7 @@ private:
       return t_.slot(row, bytes, nullptr, count, why);
     }
 
-  private:
+private:
     const cardcontract::mpdj::Table& t_;
   };
 
@@ -198,8 +200,21 @@ private:
   // What comes of a try that failed: tried again soon, or absent().
   void tryFailed(autodj::OpenTry t, cardcontract::Why why);
   void closeFile();
+  // FatFs keeps a failed read's error on the FIL (f_read's ABORT), whoever read (a slot, a
+  // join, a lookup): no read on it works again, and clearing it could read the wrong
+  // cluster. A new FIL, the maps and the session kept. (A FIL a status failed, or a
+  // remount took, holds no error: the remount's to reopen, the maps kept.)
+  void refreshFile();
   void absent(cardcontract::Why why, const char* what);
   void remount(const Env& env);
+  // The root read again, and what it says of the index against what is held.
+  void readRoot();
+  void rootFailed();
+  void offForSilence();
+  // A look-up in DJPH that came back with no row (not joined): a read the card failed looks
+  // like that, and the sector they all read first fails them all. The second in a row:
+  // Block::Reads, so no more of them, and true.
+  bool lookupFailed();
   void stepOpen(const Env& env);
   void stepJoin(const Env& env);
   void beginJoin(const LibraryIndex* index);
@@ -232,6 +247,8 @@ private:
   File file_ = File::None;
   autodj::OpenTries tries_;
   uint8_t openResult_ = 0;  // FatFs's answer to the try that last failed (0: its open did, then a read didn't)
+  bool rootAgain_ = false;  // the card failed a read of the root: what tries_ brings round is that, not the file's
+  bool rootRead_ = false;   // a root has been read, the boot's or since: what haveEntry_ and entry_ answer to
   cardcontract::Why why_ = cardcontract::Why::Missing;
   const char* whyText_ = "no transfer data on the card";
   cardcontract::msmf::Comp entry_;  // the entry the open file is
@@ -242,6 +259,10 @@ private:
   uint32_t remounts_ = 0;
   // The join.
   Block block_ = Block::None;
+  static constexpr uint8_t kJoinTries = 3;
+  uint8_t joinFails_ = 0;  // joins in a row a read of the card failed
+  uint8_t lookupFails_ = 0;  // the button's look-ups in a row a read of the card failed
+  bool silenceSaid_ = false;
   uint32_t retryAtMs_ = 0;
   int64_t joinT0Us_ = 0;
   float joinMs_ = 0;

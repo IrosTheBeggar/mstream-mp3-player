@@ -548,10 +548,12 @@ private:
   // lock both tasks take, the file it is saved to (empty: not saved), when
   // its save is due (millis(); kOpusCacheSaveDelayMs after the last
   // change, so a run of opens saves once; kOpusCacheRetryMs after a write
-  // that failed, the cache marked dirty again: the queue's saver's wait)
+  // that failed, then at twice the wait, the cache marked dirty again: as the queue's saver)
   // and the save counts.
   static constexpr uint32_t kOpusCacheSaveDelayMs = 3000;
   static constexpr uint32_t kOpusCacheRetryMs = 10000;
+  static constexpr uint32_t kOpusCacheRetryMaxMs = 300000;  // (twice over each time: a try can hold the loop for seconds)
+  uint32_t opusCacheRetryMs_ = kOpusCacheRetryMs;
   OpusOpenCache opusCache_;
   std::mutex opusCacheLock_;
   std::string opusCachePath_;

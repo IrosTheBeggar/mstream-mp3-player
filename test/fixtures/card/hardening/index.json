@@ -278,7 +278,34 @@
   "uses": "all",
   "expect": "present",
   "why": "ok",
-  "check": "a newer minor: 8 more header bytes, RECS rows of 80 bytes, a 13th run field, an unknown section",
+  "check": "a newer minor: 8 more header bytes, RECS rows of 80 bytes whose bytes 72-79 (0xAB, flag bits 3-7 set) are no valid mood tail, so no record has scores (2.6.4), a 13th run field, an unknown section",
+  "same": "tags-0000002a.bin"
+ },
+ {
+  "file": "mptg-moods-longer.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "a newer minor: RECS rows of 88 bytes, the mood tail at 72-79 and 0xAB from 80, read by their 80-byte prefix: tags-moods.bin's records, their scores too",
+  "same": "tags-moods.bin"
+ },
+ {
+  "file": "mptg-tail-invalid.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "RECS rows of 80 bytes, each record's tail broken in its own way (bit 0 clear, a flag bit of 3-7 set, byte 79 not 0, a value of 101 or 254): no record has scores, and every record reads (2.6.4)",
+  "same": "tags-0000002a.bin"
+ },
+ {
+  "file": "mptg-stride-76.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "RECS rows of 76 bytes whose bytes 72-75 begin a valid tail (03 3A 46 1D, valid if read with zeros after it): a stride under 80 has no tail, so no record has scores (2.6.4)",
   "same": "tags-0000002a.bin"
  },
  {

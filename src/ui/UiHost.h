@@ -80,8 +80,15 @@ struct AppState {
   // The Output tab's Library row (3.3.6): where the index's tracks' names
   // come from (librarytext::sourcesOf(), counted at each build or load),
   // and whether the card's records are here (Rescan tags is the card's).
+  // `libraryHeld`: they are, but the card failed a read the jobs would have to trust
+  // (Library::cardJobsHeld()), so none run this session: the sources shown, Rescan
+  // refused.
   uint32_t libTransfer = 0, libDevice = 0, libNone = 0;
   bool libraryRecords = false;
+  bool libraryHeld = false;
+  // The boot couldn't read queue.txt, and nothing has replaced it (QueueStore::fileUnread()):
+  // Now Playing's and the Queue tab's empty states say a restart may bring it back.
+  bool queueUnread = false;
   // The rest.
   uint8_t battery = 0;
   bool charging = false;
@@ -199,8 +206,11 @@ public:
   // doesn't mount (the next snapshot's cardKind says which); with one
   // the firmware restarts to use it.
   virtual bool retryCard() = 0;
-  // "Try again" with no music: walks /music again (the queue follows).
+  // "Try again" with no music: walks /music again (the queue follows). With a
+  // card's records and no card jobs (rescanRestarts()) only a boot asks again: the
+  // queue saved, and a restart.
   virtual void rescanLibrary() = 0;
+  virtual bool rescanRestarts() const = 0;
   // Rescan tags (the Output tab's Library row, after its dialog: 3.3.6):
   // the device's own files' tags read again, the transfer's left as they
   // are; the library updates at the scan's end. False: no card's records

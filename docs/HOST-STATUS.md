@@ -81,7 +81,7 @@ long, `bt=` gives way first, down to 36 bytes; past that the keys after
 | `music` | bytes or `?` | the indexed tracks' bytes. This firmware's index keeps no file sizes (a track's record is 32 bytes: its names, numbers and length), so it is always `?`; it is not read from the card. A later release can sum the sizes the walk records hold at the build and save the sum with `library.idx` |
 | `bat` | 0-100, or `-` | the power chip's battery reading the UI takes every 10 s (the tab bar's); `-` until the first |
 | `state` | `playing`, `paused`, `idle`, `host` | the player: `playing` also while a play waits for the headphones; `idle` stopped; `host` while a computer drives the dancer (the visualizer's host mode) |
-| `cid` | the card's id and its commit's generation, `<cardId>.<generation>`: 16 and 8 hex digits in lower case, leading zeros kept (`5eedc0de0a1b2c3d.0000002a`); or `-`. Since 0.12.0 | the root the boot read (docs/METADATA.md 2.5.2, 2.5.4: `/.mstream/manifest.bin` or `.tmp`, the one the election picked, checked whole; `Library::root()`): its `cardId`, and its `generation`, the number in the commit's file names (`tags-0000002a.bin`). Kept when the root's tags file then fails the boot's checks (the boot log's `[lib] the card:` line names that file, the generation and why: `no transfer data (the root's T tags-0000002a.bin, generation 42: missing)`; the library is the walk's alone): the root still names the card. `-`: no root (no `/.mstream`, or none valid), no PSRAM to read it, the internal flash, or no card mounted now (`card=` isn't `fat32` or `fat16`: a card pulled reads `none`). **Read once, at the boot**, never during `@status`: another card put in while on is a restart (the card's guard, at FatFs's remount, its first read of that card: ARCHITECTURE.md, Storage), and from the moment the guard finds it until that restart (about a second: FatFs has the other card mounted then, and `card=` says its kind) `cid=` is `-` (before that first read nothing on the board knows the card changed); but the same card pulled and put back keeps the boot's root until a restart, even if a computer wrote a new commit to it meanwhile |
+| `cid` | the card's id and its commit's generation, `<cardId>.<generation>`: 16 and 8 hex digits in lower case, leading zeros kept (`5eedc0de0a1b2c3d.0000002a`); `-` or `?`. Since 0.12.0 | the root the boot read (docs/METADATA.md 2.5.2, 2.5.4: `/.mstream/manifest.bin` or `.tmp`, the one the election picked, checked whole; `Library::root()`): its `cardId`, and its `generation`, the number in the commit's file names (`tags-0000002a.bin`). Kept when the root's tags file then fails the boot's checks (the boot log's `[lib] the card:` line names that file, the generation and why: `no transfer data (the root's T tags-0000002a.bin, generation 42: missing)`; the library is the walk's alone), or when the card fails its reads (`its T tags-0000002a.bin, generation 42, unread`; the library stays: docs/METADATA.md 3.2.2): the root still names the card. `-`: no root (no `/.mstream`, or none valid), no PSRAM to read it, the internal flash, or no card mounted now (`card=` isn't `fat32` or `fat16`: a card pulled reads `none`). `?`: the card failed the boot's reads of the root, which says nothing of whether it has one, so a computer shouldn't take it for a card with none (docs/METADATA.md 3.2.2). Until the next boot, even if Auto DJ's later reads of it work. **Read once, at the boot**, never during `@status`: another card put in while on is a restart (the card's guard, at FatFs's remount, its first read of that card: ARCHITECTURE.md, Storage), and from the moment the guard finds it until that restart (about a second: FatFs has the other card mounted then, and `card=` says its kind) `cid=` is `-` (before that first read nothing on the board knows the card changed); but the same card pulled and put back keeps the boot's root until a restart, even if a computer wrote a new commit to it meanwhile |
 | `bt` | the paired headphones' name, percent-encoded, or `-` | their own name once linked, before that the one saved at the pairing (`BtSink::shownName()`, the Output tab's); `-` with nothing paired, or a pairing whose name the board never learnt |
 
 **Percent-encoding** (`bt=`): RFC 3986's unreserved bytes (`A-Z a-z 0-9 -
@@ -106,7 +106,7 @@ board can send them:
 | ` music=` | 7 + 13 | never more than the size (`?` in this firmware) |
 | ` bat=` | 5 + 3 | `100` |
 | ` state=` | 7 + 7 | `playing` |
-| ` cid=` | 5 + 25 | always 25 (`-` is 1) |
+| ` cid=` | 5 + 25 | always 25 (`-` and `?` are 1) |
 | ` clock=` | 7 + 5 | **not in this firmware**: room kept for a later release's key (`ok` or `unset`), which goes in after `cid=` |
 | ` bt=` | 4 | |
 | **before `bt=`'s value** | **215** | |
@@ -181,14 +181,16 @@ value (`free=` is FatFs's count again, which it now follows).
 
 **Stopped part way** for the same reasons: a play that starts during the
 count (`@err 4 count playing`), the library update beginning (`@err 4
-count library`), a read error, the card mounted again, or FatFs's volume
-lock not had in its own 10 s (`@err 4 count card`). That `@err` is the
+count library`), a read error, a card that stopped answering (the status
+each piece asks first: a card that was out goes to FatFs's remount), the
+card mounted again, or FatFs's volume lock not had in its own 10 s (`@err
+4 count card`). That `@err` is the
 count's last line; nothing changed (`free=` is what it was).
 
 **How it counts** (`lib/core/FreeCount`, `storage/CardSpace`):
 
 - The FAT is read in **pieces of 32 KB** (64 sectors: about 13 ms on the
-  Core2's card at 25 MHz, one card command), **one piece per loop pass**,
+  Core2's card at 25 MHz, one card command and its status), **one piece per loop pass**,
   each under **FatFs's own volume lock**: `ff_mutex_take()` of the
   volume's drive, the lock every FatFs call takes (`lock_volume()` in
   FatFs; the decoder's reads, the card worker's, the queue's saves all
@@ -328,7 +330,7 @@ counted. An error changes nothing.
   way to its 36 bytes, `kBtRoom`), `percentEncode()`, the label's
   rule (`validLabel()`), the FSINFO rule (`freeCountValid()`), and when
   the count's progress lines go out (`Progress`).
-- **`lib/core/CardRoot`** (`test_card_jobs`' `test_the_root`): the root
+- **`lib/core/CardRoot`** (`test_card_jobs`' `test_the_root`; a read the card fails: `test_card_root`): the root
   that won the election keeps its card id and generation (`Root::hasRoot`,
   `cardId`, `generation`), also when its tags file then fails: `cid=`.
   The boot log's line (`describe()`) then names that file, the generation

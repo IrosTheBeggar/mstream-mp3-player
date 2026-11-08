@@ -394,7 +394,7 @@ void test_the_boots_decision() {
     in.device = d;
     return libraryboot::decide(in);
   };
-  // v6, the inputs the card's, the marker: built now, the marker removed.
+  // Today's version, the inputs the card's, the marker: built now, the marker removed.
   for (int r = 0; r < 4; ++r) {
     const libraryboot::Decision d = at(Saved::Matches, true, r & 1, r & 2);
     TEST_ASSERT_TRUE(d.action == Action::Build);
@@ -416,6 +416,112 @@ void test_the_boots_decision() {
       }
     }
   }
+  // None of these holds the card jobs.
+  for (Saved s : {Saved::Matches, Saved::Differs, Saved::Outdated, Saved::Corrupt, Saved::Missing}) {
+    for (int r = 0; r < 8; ++r) TEST_ASSERT_FALSE(at(s, r & 4, r & 1, r & 2).holdJobs);
+  }
+  // The card failed the root's reads: nothing is known of its transfer. A library
+  // built from one (against no root, a Differs) is loaded, no build goes over it, a
+  // marker's neither (it stays), and the card jobs hold. Any other has no transfer's
+  // library to lose: the rows above, as a card with no transfer data.
+  const auto unread = [](Saved s, bool marker, bool d) {
+    libraryboot::In in;
+    in.saved = s;
+    in.marker = marker;
+    in.device = d;
+    in.rootUnread = true;
+    return libraryboot::decide(in);
+  };
+  for (bool marker : {false, true}) {
+    for (bool dv : {false, true}) {
+      const libraryboot::Decision d = unread(Saved::Differs, marker, dv);
+      TEST_ASSERT_TRUE(d.action == Action::Load);
+      TEST_ASSERT_TRUE(d.holdJobs);
+      TEST_ASSERT_FALSE(d.removeMarker);
+      TEST_ASSERT_FALSE(d.compactFirst);
+      TEST_ASSERT_TRUE(d.why[0] != 0);
+    }
+  }
+  for (bool dv : {false, true}) {
+    libraryboot::Decision d = unread(Saved::Matches, false, dv);
+    TEST_ASSERT_TRUE(d.action == Action::Load);
+    TEST_ASSERT_FALSE(d.holdJobs);
+    TEST_ASSERT_TRUE(std::strcmp(d.why, "its inputs are the card's") != 0);
+    d = unread(Saved::Matches, true, dv);
+    TEST_ASSERT_TRUE(d.action == Action::Build);
+    TEST_ASSERT_TRUE(d.removeMarker);
+    TEST_ASSERT_FALSE(d.holdJobs);
+  }
+  for (Saved s : {Saved::Outdated, Saved::Corrupt, Saved::Missing}) {
+    for (bool marker : {false, true}) {
+      for (bool dv : {false, true}) {
+        const libraryboot::Decision d = unread(s, marker, dv);
+        TEST_ASSERT_TRUE(d.action == (dv ? Action::Build : Action::Walk));
+        TEST_ASSERT_EQUAL(marker, d.removeMarker);
+        TEST_ASSERT_FALSE(d.holdJobs);
+      }
+    }
+  }
+  // The card failed a read of D or its journals: nothing is known of the records. A
+  // library.idx that says it is one is loaded, whichever identity it has; none to load,
+  // /music walked for the session (a build without D would leave out every file T
+  // doesn't list). The jobs hold either way, and nothing is saved, so a marker stays.
+  for (bool marker : {false, true}) {
+    for (int r = 0; r < 4; ++r) {
+      for (Saved s : {Saved::Matches, Saved::Differs, Saved::Outdated, Saved::Corrupt, Saved::Missing, Saved::Unread}) {
+        libraryboot::In in;
+        in.saved = s;
+        in.marker = marker;
+        in.transfer = r & 1;
+        in.rootUnread = r & 2;
+        in.deviceUnread = true;
+        const libraryboot::Decision d = libraryboot::decide(in);
+        TEST_ASSERT_TRUE(d.holdJobs);
+        const bool load = s == Saved::Matches || s == Saved::Differs;
+        TEST_ASSERT_TRUE(d.action == (load ? Action::Load : Action::Walk));
+        TEST_ASSERT_EQUAL(!load, d.sessionOnly);
+        TEST_ASSERT_FALSE(d.removeMarker);
+        TEST_ASSERT_FALSE(d.compactFirst);
+        TEST_ASSERT_TRUE(d.why[0] != 0);
+      }
+    }
+  }
+  // The card failed a read of library.idx: it may well be whole, and nothing goes over
+  // it. Records that list the card give the library for the session, nothing saved. A
+  // root unread, or no D (T alone leaves out what it doesn't list): /music walked for it.
+  for (bool marker : {false, true}) {
+    for (int r = 0; r < 8; ++r) {
+      libraryboot::In in;
+      in.saved = Saved::Unread;
+      in.marker = marker;
+      in.transfer = r & 1;
+      in.device = in.recordsList = r & 2;
+      in.rootUnread = r & 4;
+      const libraryboot::Decision d = libraryboot::decide(in);
+      const bool build = in.recordsList && !in.rootUnread;
+      TEST_ASSERT_TRUE(d.holdJobs);
+      TEST_ASSERT_TRUE(d.action == (build ? Action::Build : Action::Walk));
+      TEST_ASSERT_TRUE(d.sessionOnly);
+      TEST_ASSERT_EQUAL(build, d.compactFirst);
+      TEST_ASSERT_FALSE(d.removeMarker);
+      TEST_ASSERT_TRUE(d.why[0] != 0);
+    }
+  }
+  // D there, and a build from it wouldn't list the card (never walked, no T): the walk.
+  {
+    libraryboot::In in;
+    in.saved = Saved::Unread;
+    in.device = true;
+    TEST_ASSERT_TRUE(libraryboot::decide(in).action == Action::Walk);
+    TEST_ASSERT_TRUE(libraryboot::decide(in).sessionOnly);
+  }
+  // What the log calls them, where the card's data can't be compared.
+  TEST_ASSERT_EQUAL_STRING("unread (a read of the card failed)", libraryboot::savedName(Saved::Unread));
+  TEST_ASSERT_EQUAL_STRING("built for other card data", libraryboot::savedName(Saved::Differs));
+  TEST_ASSERT_EQUAL_STRING("matches the card", libraryboot::savedName(Saved::Matches));
+  TEST_ASSERT_EQUAL_STRING("built from a transfer", libraryboot::savedName(Saved::Differs, true));
+  TEST_ASSERT_EQUAL_STRING("built with no transfer", libraryboot::savedName(Saved::Matches, true));
+  TEST_ASSERT_EQUAL_STRING("missing", libraryboot::savedName(Saved::Missing, true));
 
   // matches(): the identity, zeros for none; no path signature; T's use not asked.
   ts::Identity root;
@@ -1353,6 +1459,127 @@ void test_a_bad_transfer_is_walked_without() {
 // read whose record never reached tags.jnl is no news for the update
 // step; a rest whose View can't be read says so.
 // ---------------------------------------------------------------------------
+// A read of T the card fails, at each read in turn, on the first walk after a commit
+// and on one at the same commit: the walk stops, nothing of it counts; T stays, and the
+// next walk reads it. (A T that fails a check: the test before.)
+// The walk the firmware retries a minute on is in the same session: T stays, the same Jobs walks it whole.
+void test_a_walk_a_read_of_t_stopped_is_walked_again_in_the_session() {
+  CutFs fs;
+  TestCard card;
+  fill(card);
+  const ts::Identity id = commit(fs, card, 5);
+  const std::string tPath = tagsName(5);
+  for (long k = 0; k < 8; ++k) {
+    CutFs once = fs;
+    once.faultPrefix = tPath;
+    once.faultEvents = 0;
+    once.faultFrom = k;
+    once.faultTo = k + 1;
+    Session s(once, card);
+    s.begin(tPath.c_str(), id);
+    s.jobs.askWalk();
+    for (;;) {
+      const cj::Done& d = s.run(Job::Walk);
+      if (!d.walkEnded) continue;
+      TEST_ASSERT_TRUE(d.walk.state == cardwalk::CardWalk::State::Failed);
+      TEST_ASSERT_TRUE(d.walk.error == cardwalk::CardWalk::Error::TransferRead);
+      break;
+    }
+    TEST_ASSERT_EQUAL_UINT32(1, s.jobs.counts().walksFailed);
+    TEST_ASSERT_FALSE(s.jobs.transferBad());
+    TEST_ASSERT_FALSE(s.jobs.walkWork());
+    s.jobs.askWalk();
+    TEST_ASSERT_TRUE(s.jobs.walkWork());
+    for (;;) {
+      const cj::Done& d = s.run(Job::Walk);
+      if (!d.walkEnded) continue;
+      TEST_ASSERT_TRUE(d.walk.state == cardwalk::CardWalk::State::Done);
+      break;
+    }
+    TEST_ASSERT_TRUE(s.store.hasWalk());
+    TEST_ASSERT_FALSE(s.jobs.transferBad());
+  }
+}
+
+void test_a_read_fault_of_t_is_no_bad_t() {
+  CutFs fs;
+  TestCard card;
+  fill(card);
+  const ts::Identity id = commit(fs, card, 5);
+  const std::string tPath = tagsName(5);
+  fs.faultPrefix = tPath;
+  uint32_t failed = 0;
+  long k = 0;
+  bool whole = false;
+  for (; !whole; ++k) {
+    TEST_ASSERT_TRUE_MESSAGE(k < 100000, "the reads never ran out");
+    fs.faultEvents = 0;
+    fs.faultFrom = k;
+    fs.faultTo = k + 1;
+    Session s(fs, card);
+    s.begin(tPath.c_str(), id);
+    s.jobs.askWalk();
+    bool ended = false;
+    while (!ended) {
+      const cj::Done& d = s.run(Job::Walk);
+      if (!d.walkEnded) continue;
+      ended = true;
+      TEST_ASSERT_FALSE(d.walkRetried);
+      TEST_ASSERT_FALSE(s.jobs.transferBad());
+      if (d.walk.state == cardwalk::CardWalk::State::Done) {
+        whole = true;
+      } else {
+        ++failed;
+        TEST_ASSERT_TRUE(d.walk.error == cardwalk::CardWalk::Error::TransferRead);
+        TEST_ASSERT_FALSE(s.store.hasWalk());  // nothing of it counts
+      }
+    }
+  }
+  TEST_ASSERT_TRUE(failed > 0);
+  // The walk that read it, merged: D at the commit.
+  fs.faultFrom = -1;
+  {
+    Session s(fs, card);
+    s.begin(tPath.c_str(), id);
+    TEST_ASSERT_FALSE(s.jobs.transferBad());
+    s.jobs.askCompact();
+    s.drain();
+    TEST_ASSERT_TRUE(s.store.device().header.walk.present);
+  }
+  // A new file: the walk at the same commit asks T for it by T's index. A read of the
+  // index that fails answers "T has none", with nothing wrong at T's end: the watch on
+  // T's reads is what says so.
+  card.addNoise("Late/Album/01 - n.mp3", 5000, 77);
+  failed = 0;
+  whole = false;
+  for (k = 0; !whole; ++k) {
+    TEST_ASSERT_TRUE_MESSAGE(k < 100000, "the reads never ran out");
+    fs.faultEvents = 0;
+    fs.faultFrom = k;
+    fs.faultTo = k + 1;
+    Session s(fs, card);
+    s.begin(tPath.c_str(), id);
+    s.jobs.askWalk();
+    bool ended = false;
+    while (!ended) {
+      const cj::Done& d = s.run(Job::Walk);
+      if (!d.walkEnded) continue;
+      ended = true;
+      TEST_ASSERT_FALSE(d.walkRetried);
+      TEST_ASSERT_FALSE(s.jobs.transferBad());
+      if (d.walk.state == cardwalk::CardWalk::State::Done) {
+        TEST_ASSERT_TRUE_MESSAGE(fs.faultEvents <= k, "a read of T failed and the walk ended well");
+        whole = true;
+      } else {
+        ++failed;
+        TEST_ASSERT_TRUE(d.walk.error == cardwalk::CardWalk::Error::TransferRead);
+        TEST_ASSERT_FALSE(s.store.hasWalk());
+      }
+    }
+  }
+  TEST_ASSERT_TRUE(failed > 0);
+}
+
 void test_a_card_that_refuses() {
   CutFs fs;
   TestCard card;
@@ -1747,5 +1974,7 @@ int main(int, char**) {
   RUN_TEST(test_the_synthetic_cards_walk);
   RUN_TEST(test_slices_of_the_scan);
   RUN_TEST(test_begun_again_after_a_remount);
+  RUN_TEST(test_a_read_fault_of_t_is_no_bad_t);
+  RUN_TEST(test_a_walk_a_read_of_t_stopped_is_walked_again_in_the_session);
   return UNITY_END();
 }

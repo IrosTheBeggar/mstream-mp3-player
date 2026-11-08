@@ -3,6 +3,7 @@
 
 #include "storage/SectorDisk.h"
 
+#include <Arduino.h>
 #include <esp_timer.h>
 #include <sd_diskio.h>
 
@@ -39,12 +40,27 @@ public:
   }
 };
 
+// The SD driver's word at a fault (CachedDrive::lookAfterFault()). Its init does nothing
+// when nothing marked the card failed (a select that timed out, an R1 error): no CMD0 to a
+// card that may be busy programming.
+class SdLink final : public CachedDrive::Link {
+public:
+  bool answers() override { return !(ff_sd_status(s_pdrv) & STA_NOINIT); }
+  bool init(uint32_t* sectors) override {
+    if (ff_sd_initialize(s_pdrv) & STA_NOINIT) return false;
+    *sectors = sdcard_num_sectors(s_pdrv);
+    return true;
+  }
+};
+
 uint64_t nowUs() { return static_cast<uint64_t>(esp_timer_get_time()); }
 
 SectorCache s_cache;
 SdCard s_card;
+SdLink s_link;
 CachedDrive s_drive(s_cache, s_card, nowUs);
 uint8_t* s_check = nullptr;  // verify's sector (PSRAM)
+FATFS* s_fs = nullptr;       // the volume, for its window (wWrite()); nullptr: not found
 // The free-space count's watch (watchWrites()): read and set under FatFs's
 // volume lock only.
 WriteWatch s_watch = nullptr;
@@ -62,12 +78,17 @@ void* s_watchCtx = nullptr;
 DSTATUS wInit(unsigned char pdrv) {
   s_drive.init();
   const DSTATUS st = ff_sd_initialize(pdrv);
-  if (!(st & STA_NOINIT)) s_drive.remounted(sdcard_num_sectors(pdrv));
-  return s_drive.foreign() ? static_cast<DSTATUS>(st | STA_PROTECT) : st;
+  if (st & STA_NOINIT) {
+    s_drive.mountFailed();
+  } else {
+    s_drive.remounted(sdcard_num_sectors(pdrv));
+  }
+  return s_drive.foreign() || s_drive.writesOff() ? static_cast<DSTATUS>(st | STA_PROTECT) : st;
 }
 DSTATUS wStatus(unsigned char pdrv) {
-  const DSTATUS st = ff_sd_status(pdrv);
-  return s_drive.foreign() ? static_cast<DSTATUS>(st | STA_PROTECT) : st;
+  DSTATUS st = ff_sd_status(pdrv);
+  if (s_drive.remountDue()) st = static_cast<DSTATUS>(st | STA_NOINIT);
+  return s_drive.foreign() || s_drive.writesOff() ? static_cast<DSTATUS>(st | STA_PROTECT) : st;
 }
 
 DRESULT wRead(unsigned char pdrv, unsigned char* buff, uint32_t sector, unsigned count) {
@@ -77,10 +98,14 @@ DRESULT wRead(unsigned char pdrv, unsigned char* buff, uint32_t sector, unsigned
 
 DRESULT wWrite(unsigned char pdrv, const unsigned char* buff, uint32_t sector, unsigned count) {
   (void)pdrv;
-  if (s_drive.foreign()) return RES_WRPRT;  // (FatFs refuses first: STA_PROTECT)
+  if (s_drive.foreign() || s_drive.writesOff()) return RES_WRPRT;  // (FatFs refuses first: STA_PROTECT)
   // (Before the write: one that fails may have changed the sectors too.)
   if (s_watch) s_watch(sector, count, s_watchCtx);
-  return s_drive.write(sector, buff, count) ? RES_OK : RES_ERROR;
+  const bool ok = s_drive.write(sector, buff, count);
+  // (The window's write itself: sync_window() still has it dirty. Not the second FAT's
+  // copy or FSINFO's, which FatFs does without.)
+  if (!ok && s_fs && s_fs->wflag && s_fs->winsect == sector && buff == s_fs->win) s_drive.windowFailed(sector);
+  return ok ? RES_OK : RES_ERROR;
 }
 
 DRESULT wIoctl(unsigned char pdrv, unsigned char cmd, void* buff) {
@@ -102,11 +127,28 @@ bool install(uint8_t pdrv) {
   if (s_cache.capacity() == 0 && !s_cache.begin(SectorCache::kDefaultEntries, psramAlloc, psramFree)) return false;
   if (!s_check) s_check = static_cast<uint8_t*>(psramAlloc(SectorCache::kSectorBytes));
   s_drive.setScratch(s_check);
+  s_drive.setLink(&s_link);
   s_pdrv = pdrv;
   s_drive.init();  // a mount: nothing kept from before
   // The mount's card, before the wrapper goes in (no other task reads the
   // card yet): the one FatFs's remounts are held to.
-  s_drive.remember(sdcard_num_sectors(pdrv));
+  // (A read of the mount's that failed, FSINFO's, which FatFs does without, can leave the
+  // driver's mark, or the card busy with none, or refusing commands: asked 8 times, 500 ms
+  // apart, about 13 s on a card holding DO low, the mark gone first, or none of these reads
+  // reaches the card. Still none: with no identity any remount restarts. No fault: the first ask.)
+  for (int i = 0; i < 8; ++i) {
+    ff_sd_initialize(pdrv);
+    if (s_drive.remember(sdcard_num_sectors(pdrv))) break;
+    delay(500);
+  }
+  // The volume FatFs mounted on this drive, as CardSpace finds it: a directory of the root
+  // names it (no sector read, one status command).
+  char root[4] = {static_cast<char>('0' + pdrv), ':', '/', '\0'};
+  FF_DIR dir;
+  if (f_opendir(&dir, root) == FR_OK) {
+    s_fs = dir.obj.fs;
+    f_closedir(&dir);
+  }
   ff_diskio_register(pdrv, &kImpl);
   s_installed = true;
   return true;
@@ -152,6 +194,7 @@ Stats stats() {
   s.verified = d.verified;
   s.stale = d.stale;
   s.staleLba = d.staleLba;
+  s.stoppedReads = d.stoppedReads;
   return s;
 }
 
@@ -166,12 +209,22 @@ Guard guard() {
   // seen here comes with its verdict.
   g.remounts = s_drive.remounts();
   g.foreign = s_drive.foreign();
+  g.lastKnown = s_drive.lastIdentity().valid;
+  g.writesOff = s_drive.writesOff();
+  g.tooSilent = s_drive.tooSilent();
+  // Healed first: a heal counts after its kept, so the two seen here never have more healed.
+  g.healed = s_drive.healed();
+  g.kept = s_drive.kept();
+  g.cardBacks = s_drive.cardBacks();
   const CachedDrive::Stats d = s_drive.stats();
+  g.faultLba = d.faultLba;
   g.writeRetries = d.writeRetries;
   g.writeFails = d.writeFails;
   g.refused = d.refused;
   return g;
 }
+
+bool cardOut() { return s_installed && s_drive.mountCardOut(); }
 
 size_t identityText(char* buf, size_t size, bool last) {
   if (!buf || size == 0) return 0;

@@ -8,6 +8,45 @@ namespace libraryboot {
 Decision decide(const In& in) {
   Decision d;
   const bool records = in.transfer || in.device;
+  // Nothing is known of the card's transfer, and this library was built from one:
+  // it stays, and nothing goes over it from D alone, neither a build (a marker waits
+  // for the next boot) nor, this session, the card jobs. Any other card in trouble
+  // has no transfer's library to lose, and gets what the rows below give it, as a
+  // card with no transfer data.
+  if (in.rootUnread && in.saved == Saved::Differs) {
+    d.action = Action::Load;
+    d.holdJobs = true;
+    d.why = "the card's root couldn't be read: no card jobs this session";
+    return d;
+  }
+  // D or its journals unread: the jobs would start the records over and replace them.
+  // A library.idx that says it is one is kept, whichever identity it has. With none to
+  // load, /music is walked for the session: a build without D leaves out every file T
+  // doesn't list.
+  if (in.deviceUnread) {
+    d.holdJobs = true;
+    const bool load = in.saved == Saved::Matches || in.saved == Saved::Differs;
+    d.action = load ? Action::Load : Action::Walk;
+    d.sessionOnly = !load;
+    d.why = load ? "the device's records couldn't be read: no card jobs this session"
+                 : "the device's records couldn't be read, and no library.idx to load: /music walked for this "
+                   "session, nothing saved, no card jobs";
+    return d;
+  }
+  // library.idx unread, and it may well be whole: nothing goes over it. Records that
+  // can be read and list the card give the same library, for this session; else /music
+  // is walked for it.
+  if (in.saved == Saved::Unread) {
+    d.holdJobs = true;
+    d.sessionOnly = true;
+    const bool build = in.recordsList && !in.rootUnread;
+    d.action = build ? Action::Build : Action::Walk;
+    d.compactFirst = build;
+    d.why = build ? "library.idx couldn't be read: built for this session, nothing saved, no card jobs"
+                  : "library.idx couldn't be read, nor a build from the records: /music walked for this session, "
+                    "nothing saved, no card jobs";
+    return d;
+  }
   if (in.saved == Saved::Matches) {
     if (in.marker) {
       // A build was deferred (the update step's memory check, 3.4.2): it
@@ -19,7 +58,7 @@ Decision decide(const In& in) {
       return d;
     }
     d.action = Action::Load;
-    d.why = "its inputs are the card's";
+    d.why = in.rootUnread ? "the card's root couldn't be read, and none went into it" : "its inputs are the card's";
     return d;
   }
   d.removeMarker = in.marker;  // whatever is built now is what it asked for
@@ -27,7 +66,7 @@ Decision decide(const In& in) {
     d.action = Action::Build;
     d.compactFirst = true;
     switch (in.saved) {
-      case Saved::Differs: d.why = "another transfer's, or an older firmware's walk"; break;
+      case Saved::Differs: d.why = "another transfer's, an older firmware's walk, or saved when the root couldn't be read"; break;
       case Saved::Outdated: d.why = "an older version's"; break;
       case Saved::Corrupt: d.why = "unreadable"; break;
       default: d.why = "none yet"; break;
@@ -82,13 +121,14 @@ Saved savedOf(LibraryIndex::Load load, const LibraryIndex::Inputs& saved, const 
   }
 }
 
-const char* savedName(Saved s) {
+const char* savedName(Saved s, bool rootUnread) {
   switch (s) {
     case Saved::Missing: return "missing";
     case Saved::Corrupt: return "unreadable";
     case Saved::Outdated: return "outdated";
-    case Saved::Matches: return "matches the card";
-    case Saved::Differs: return "built for other card data";
+    case Saved::Matches: return rootUnread ? "built with no transfer" : "matches the card";
+    case Saved::Differs: return rootUnread ? "built from a transfer" : "built for other card data";
+    case Saved::Unread: return "unread (a read of the card failed)";
   }
   return "?";
 }

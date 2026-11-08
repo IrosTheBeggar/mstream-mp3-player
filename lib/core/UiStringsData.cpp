@@ -11,7 +11,7 @@ namespace detail {
 
 namespace {
 
-// en: 12357 bytes, 606 of 606 messages.
+// en: 12619 bytes, 625 of 625 messages.
 const char kBlob_en[] =
     "Touch trouble? Hold a finger on the screen.\0Tip {0} of {1}\0tap to go on\0Next\0Got it\0The three red dots\0"
     "Under the screen: a click, or a hold, anywhere\0Previous\0Play/pause\0hold:\0volume down\0speaker or\nheadphones\0"
@@ -51,17 +51,20 @@ const char kBlob_en[] =
     "Plays next: {0} track\0Plays next: {0} tracks\0Added: {0}\0Added {0} track\0Added {0} tracks\0"
     "Checking the card\xE2\x80\xA6\0Reading tags {0} / {1}\0Updating library\xE2\x80\xA6\0The last transfer didn't finish\0"
     "Found {0} new track\0Found {0} new tracks\0Library updated\0Library updates at next boot\0Updating the library\xE2\x80\xA6\0"
-    "Updating the library: a moment\0Another card: restarting\0Card back: restarting\0No played track can make way: the queue holds {0} track\0"
-    "No played track can make way: the queue holds {0} tracks\0the queue holds {0} track\0the queue holds {0} tracks\0"
-    "Shuffling {0} of {1}\0Playing {0} of {1}\0Added {0} of {1}\0{0} of {1} play next\0{0} played track made way\0"
-    "{0} played tracks made way\0Added\0Added {0} tracks\0Plays next\0{0} tracks play next\0Edit\0"
-    "{0} selected\0{0} selected\0of {0}\0None\0Nothing up next\0{0} up next\0{0} up next\0Remove {0}\0"
-    "Remove\0Clear\xE2\x80\xA6\0Play now\0Clear the queue\0Clear up next\0Clear queue\0keeps what's playing\0"
-    "stops the music\0Clear the whole queue?\0{0} track goes and the music stops. Undo, on the note that follows, brings it back.\0"
-    "All {0} tracks go and the music stops. Undo, on the note that follows, brings them back.\0Clear\0"
-    "Removed {0} track\0Removed {0} tracks\0Playing next: {0} track\0Playing next: {0} tracks\0Cleared {0} track\0"
-    "Cleared {0} tracks\0That's what plays now\0Nothing after the playing track\0Playing now: {0}\0"
-    "Removed: {0}\0it\0(not in the library)\0Your queue is empty\0Pick an album, folder or track in the Library.\0"
+    "Updating the library: a moment\0Filters\0Happy\0Neutral\0Sad\0Relaxed\0Aggressive\0Instrumental\0"
+    "Vocals\0Acoustic\0Party\0Danceable\0Strict\0Standard\0Loose\0Clear\0{0} of {1} album\0{0} of {1} albums\0"
+    "{0} of {1} track\0{0} of {1} tracks\0No albums match these filters\0Another card: restarting\0"
+    "Card back: restarting\0No played track can make way: the queue holds {0} track\0No played track can make way: the queue holds {0} tracks\0"
+    "the queue holds {0} track\0the queue holds {0} tracks\0Shuffling {0} of {1}\0Playing {0} of {1}\0"
+    "Added {0} of {1}\0{0} of {1} play next\0{0} played track made way\0{0} played tracks made way\0"
+    "Added\0Added {0} tracks\0Plays next\0{0} tracks play next\0Edit\0{0} selected\0{0} selected\0"
+    "of {0}\0None\0Nothing up next\0{0} up next\0{0} up next\0Remove {0}\0Remove\0Clear\xE2\x80\xA6\0"
+    "Play now\0Clear the queue\0Clear up next\0Clear queue\0keeps what's playing\0stops the music\0"
+    "Clear the whole queue?\0{0} track goes and the music stops. Undo, on the note that follows, brings it back.\0"
+    "All {0} tracks go and the music stops. Undo, on the note that follows, brings them back.\0Removed {0} track\0"
+    "Removed {0} tracks\0Playing next: {0} track\0Playing next: {0} tracks\0Cleared {0} track\0Cleared {0} tracks\0"
+    "That's what plays now\0Nothing after the playing track\0Playing now: {0}\0Removed: {0}\0it\0"
+    "(not in the library)\0Your queue is empty\0Pick an album, folder or track in the Library.\0"
     "Open Library\0Shuffle all\0Try again\0No music found\0Put your albums in /music/Artist/Album/\n(MP3, FLAC or Opus), then tap Try again.\0"
     "No microSD card\0Insert a card with your music in /music,\none folder per album: /music/Artist/Album/\0"
     "Still no card: is it all the way in?\0This card is exFAT\0Format it FAT32 (MBR) on a computer, then\nput your music in /music and tap Try again.\0"
@@ -95,13 +98,13 @@ const char kBlob_en[] =
     "{0} read here\0{0} read here\0{0} without tags\0{0} without tags\0{0} transfer\0{0} transfer\0"
     "{0} here\0{0} here\0{0} none\0{0} none\0{0}% tagged\0names from the files\0tags need a card\0"
     "updating\xE2\x80\xA6\0Rescan\0Rescan tags?\0The player reads the tags of its own files again (the transfer's stay as they are). Minutes on a big card.\0"
-    "Reading the tags again\0Tags are read on a card only\0Bluetooth headphones\0No headphones paired\0"
-    "Not connected\0Connecting...\0Connecting...  try {0} of {1}\0Looking for {0}...\0Looking for headphones...\0"
-    "Pairing...\0Pairing...  try {0} of {1}\0Connected\0Connected  {0}\0{0}, {1} ms\0{0} ms delay\0"
-    "Couldn't pair. In pairing mode?\0Couldn't connect. On and nearby?\0Lost: reconnecting...\0Lost: reconnecting...  try {0} of {1}\0"
-    "Lost: looking for {0}...\0Lost: looking for headphones...\0Pair new\0Connect\0Forget\0Tap again\0"
-    "Disconnect\0They'll reconnect\nwhen switched on.\0Back in range?\nTap Connect.\0Forget {0}\0"
-    "Forget these headphones\0Forget {0}?\0Forget the headphones?\0They won't connect again until you pair them on Pair new headphones.\0"
+    "Reading the tags again\0Tags are read on a card only\0Card read failed at startup: restart to try again\0"
+    "Bluetooth headphones\0No headphones paired\0Not connected\0Connecting...\0Connecting...  try {0} of {1}\0"
+    "Looking for {0}...\0Looking for headphones...\0Pairing...\0Pairing...  try {0} of {1}\0Connected\0"
+    "Connected  {0}\0{0}, {1} ms\0{0} ms delay\0Couldn't pair. In pairing mode?\0Couldn't connect. On and nearby?\0"
+    "Lost: reconnecting...\0Lost: reconnecting...  try {0} of {1}\0Lost: looking for {0}...\0Lost: looking for headphones...\0"
+    "Pair new\0Connect\0Forget\0Tap again\0Disconnect\0They'll reconnect\nwhen switched on.\0Back in range?\nTap Connect.\0"
+    "Forget {0}\0Forget these headphones\0Forget {0}?\0Forget the headphones?\0They won't connect again until you pair them on Pair new headphones.\0"
     "Forgot {0}\0Forgot the headphones\0Disconnected: paused on the speaker\0Disconnected\0Here until {0} connects\0"
     "Here until the headphones connect\0Waits for {0}\0Waits for headphones\0Built-in\0Silent test mode\0"
     "Pair headphones\0{0} found\0{0} found\0Searching\0Pairing mode on, then tap them.\0Search again\0"
@@ -154,44 +157,46 @@ const uint16_t kOff_en[kStrings] = {
     2962, 2969, 2980, 400, 3033, 3054, 3075, 3098, 3107, 3130, 3161, 3180,
     3200, 3206, 3215, 3234, 3249, 3265, 3303, 3323, 3336, 3363, 3398, 3419,
     3451, 3464, 3475, 3491, 3536, 3547, 3580, 3601, 3624, 3644, 3676, 3717,
-    3733, 3762, 3786, 3817, 3842, 3864, 3977, 4030, 4051, 4070, 4087, 4108,
-    4161, 4184, 408, 3200, 4216, 4221, 4247, 2373, 4254, 1907, 4259, 4275,
-    4299, 4310, 2856, 4317, 4326, 2856, 4310, 4335, 4351, 4365, 4377, 4398,
-    4414, 4437, 4610, 4616, 4653, 4702, 4739, 4761, 4793, 4810, 4823, 4826,
-    1888, 1815, 4847, 4867, 4914, 4927, 2381, 4939, 4949, 4964, 5045, 5061,
-    5145, 5182, 5201, 5287, 5322, 5201, 5340, 5374, 5393, 5479, 5511, 5532,
-    5618, 420, 5662, 5684, 5693, 5722, 5759, 5779, 5787, 5818, 5822, 5828,
-    2381, 5863, 5873, 5888, 2366, 5902, 5924, 5960, 5967, 5983, 5996, 6034,
-    6074, 6091, 6106, 6139, 6154, 6189, 6205, 6224, 6247, 6313, 6334, 6385,
-    6418, 6447, 6477, 6513, 6542, 6582, 6620, 6637, 6663, 6704, 6734, 6751,
-    6778, 6801, 6806, 6811, 6817, 6823, 6829, 6835, 6846, 6871, 6875, 6882,
-    6887, 6891, 6910, 6778, 6929, 6936, 6943, 6829, 6950, 6960, 6985, 7014,
-    7038, 7046, 7054, 7070, 7096, 7120, 7145, 6871, 7170, 6882, 7177, 7193,
-    7275, 7391, 7399, 7430, 7451, 7466, 7487, 7495, 7523, 7590, 7608, 7623,
-    7648, 7658, 7674, 7684, 7703, 7727, 4310, 7804, 7824, 7824, 7833, 7852,
-    7877, 7916, 7955, 7974, 8018, 8046, 8080, 8106, 8124, 8142, 8154, 8175,
-    8192, 8204, 8211, 8224, 8331, 8354, 8383, 1977, 8404, 8425, 8439, 8453,
-    8483, 8502, 8528, 8539, 8566, 8576, 8591, 8603, 8616, 8648, 8681, 8703,
-    8741, 8766, 5759, 8798, 8807, 8815, 8822, 2143, 8832, 4939, 8843, 8879,
-    1977, 8832, 5759, 8907, 8918, 8942, 8954, 8977, 8815, 9046, 9057, 9079,
-    9115, 1775, 9128, 9152, 9186, 9200, 9221, 9230, 9247, 9263, 9283, 8528,
-    9293, 9325, 9338, 9368, 9380, 9391, 9399, 9409, 9422, 9437, 9460, 9526,
-    9614, 9619, 9639, 9658, 9681, 5822, 9707, 9719, 9727, 9741, 9749, 9760,
-    9781, 9794, 400, 9827, 3098, 9841, 1977, 9856, 9863, 9875, 9890, 9917,
-    9936, 9948, 9983, 10006, 10038, 10068, 10102, 10114, 10143, 10163, 10194, 10205,
-    10211, 10222, 10226, 10231, 10235, 10241, 10247, 9719, 400, 10258, 10267, 10274,
-    10283, 10289, 10297, 10308, 10314, 10323, 10333, 10342, 10348, 10367, 10381, 10390,
-    10401, 10410, 10422, 10439, 10449, 3098, 9827, 10460, 10466, 10471, 7590, 10499,
-    2143, 10511, 1907, 10516, 10648, 10676, 10705, 10740, 10782, 10813, 10847, 10883,
-    10951, 4939, 10956, 10964, 427, 10969, 10976, 11036, 11056, 437, 11062, 11125,
-    11151, 11178, 11230, 11281, 11323, 11365, 11398, 11413, 11421, 11448, 11467, 11490,
-    11514, 11518, 11525, 11535, 11543, 11554, 11561, 11566, 11572, 1815, 11597, 11622,
-    2143, 11652, 11669, 11693, 11748, 11808, 11875, 11911, 11935, 11969, 11989, 12001,
-    12004, 12023, 12053, 12073, 12136, 12195, 4939, 12265, 12270, 12278, 12284, 12298,
-    12312, 12324, 12332, 12339, 12347, 12354,
+    3733, 3762, 3786, 3817, 3825, 3831, 3839, 3843, 3851, 3862, 3875, 3882,
+    3891, 3897, 3907, 3914, 3923, 3929, 3935, 3970, 4005, 4035, 4060, 4082,
+    4195, 4248, 4269, 4288, 4305, 4326, 4379, 4402, 408, 3200, 4434, 4439,
+    4465, 2373, 4472, 1907, 4477, 4493, 4517, 4528, 2856, 4535, 4544, 2856,
+    4528, 4553, 4569, 4583, 4595, 4616, 4632, 4655, 3929, 4828, 4865, 4914,
+    4951, 4973, 5005, 5022, 5035, 5038, 1888, 1815, 5059, 5079, 5126, 5139,
+    2381, 5151, 5161, 5176, 5257, 5273, 5357, 5394, 5413, 5499, 5534, 5413,
+    5552, 5586, 5605, 5691, 5723, 5744, 5830, 420, 5874, 5896, 5905, 5934,
+    5971, 5991, 5999, 6030, 6034, 6040, 2381, 6075, 6085, 6100, 2366, 6114,
+    6136, 6172, 6179, 6195, 6208, 6246, 6286, 6303, 6318, 6351, 6366, 6401,
+    6417, 6436, 6459, 6525, 6546, 6597, 6630, 6659, 6689, 6725, 6754, 6794,
+    6832, 6849, 6875, 6916, 6946, 6963, 6990, 7013, 7018, 7023, 7029, 7035,
+    7041, 7047, 7058, 7083, 7087, 7094, 7099, 7103, 7122, 6990, 7141, 7148,
+    7155, 7041, 7162, 7172, 7197, 7226, 7250, 7258, 7266, 7282, 7308, 7332,
+    7357, 7083, 7382, 7094, 7389, 7405, 7487, 7603, 7611, 7642, 7663, 7678,
+    7699, 7707, 7735, 7802, 7820, 7835, 7860, 7870, 7886, 7896, 7915, 7939,
+    4528, 8016, 8036, 8036, 8045, 8064, 8089, 8128, 8167, 8186, 8230, 8258,
+    8292, 8318, 8336, 8354, 8366, 8387, 8404, 8416, 8423, 8436, 8543, 8566,
+    8595, 8645, 1977, 8666, 8687, 8701, 8715, 8745, 8764, 8790, 8801, 8828,
+    8838, 8853, 8865, 8878, 8910, 8943, 8965, 9003, 9028, 5971, 9060, 9069,
+    9077, 9084, 2143, 9094, 5151, 9105, 9141, 1977, 9094, 5971, 9169, 9180,
+    9204, 9216, 9239, 9077, 9308, 9319, 9341, 9377, 1775, 9390, 9414, 9448,
+    9462, 9483, 9492, 9509, 9525, 9545, 8790, 9555, 9587, 9600, 9630, 9642,
+    9653, 9661, 9671, 9684, 9699, 9722, 9788, 9876, 9881, 9901, 9920, 9943,
+    6034, 9969, 9981, 9989, 10003, 10011, 10022, 10043, 10056, 400, 10089, 3098,
+    10103, 1977, 10118, 10125, 10137, 10152, 10179, 10198, 10210, 10245, 10268, 10300,
+    10330, 10364, 10376, 10405, 10425, 10456, 10467, 10473, 10484, 10488, 10493, 10497,
+    10503, 10509, 9981, 400, 10520, 10529, 10536, 10545, 10551, 10559, 10570, 10576,
+    10585, 10595, 10604, 10610, 10629, 10643, 10652, 10663, 10672, 10684, 10701, 10711,
+    3098, 10089, 10722, 10728, 10733, 7802, 10761, 2143, 10773, 1907, 10778, 10910,
+    10938, 10967, 11002, 11044, 11075, 11109, 11145, 11213, 5151, 11218, 11226, 427,
+    11231, 11238, 11298, 11318, 437, 11324, 11387, 11413, 11440, 11492, 11543, 11585,
+    11627, 11660, 11675, 11683, 11710, 11729, 11752, 11776, 11780, 11787, 11797, 11805,
+    11816, 11823, 11828, 11834, 1815, 11859, 11884, 2143, 11914, 11931, 11955, 12010,
+    12070, 12137, 12173, 12197, 12231, 12251, 12263, 12266, 12285, 12315, 12335, 12398,
+    12457, 5151, 12527, 12532, 12540, 12546, 12560, 12574, 12586, 12594, 12601, 12609,
+    12616,
 };
 
-// de: 13386 bytes, 606 of 606 messages.
+// de: 13668 bytes, 625 of 625 messages.
 const char kBlob_de[] =
     "Touch-Probleme? Finger aufs Display halten.\0Tipp {0} von {1}\0tippen: weiter\0Weiter\0Alles klar\0"
     "Die drei roten Punkte\0Unterm Bildschirm: kurz dr\xC3\xBC" "cken oder halten\0Zur\xC3\xBC" "ck\0"
@@ -238,15 +243,17 @@ const char kBlob_de[] =
     "Hinzugef\xC3\xBCgt: {0}\0Hinzugef\xC3\xBCgt: {0} Titel\0Hinzugef\xC3\xBCgt: {0} Titel\0Karte wird gepr\xC3\xBC" "ft\xE2\x80\xA6\0"
     "Tags gelesen: {0} / {1}\0Bibliothek wird aktualisiert\xE2\x80\xA6\0Die letzte \xC3\x9C" "bertragung ist unvollst\xC3\xA4ndig\0"
     "{0} neuer Titel gefunden\0{0} neue Titel gefunden\0Bibliothek aktualisiert\0Bibliothek: Aktualisierung beim n\xC3\xA4" "chsten Start\0"
-    "Bibliothek wird aktualisiert: einen Moment\0Andere Karte: Neustart\0Karte wieder da: Neustart\0"
-    "Voll ({0} Titel): nichts Gespieltes macht Platz\0Voll ({0} Titel): nichts Gespieltes macht Platz\0"
-    "Platz f\xC3\xBCr {0} Titel\0Platz f\xC3\xBCr {0} Titel\0Mische {0} von {1}\0Spiele {0} von {1}\0"
-    "{0} von {1} hinzugef\xC3\xBCgt\0{0} von {1} als N\xC3\xA4" "chstes\0{0} gespielter Titel verdr\xC3\xA4ngt\0"
-    "{0} gespielte Titel verdr\xC3\xA4ngt\0Hinzugef\xC3\xBCgt\0{0} Titel hinzugef\xC3\xBCgt\0Als N\xC3\xA4" "chstes\0"
-    "{0} Titel als N\xC3\xA4" "chstes\0W\xC3\xA4hlen\0{0} ausgew\xC3\xA4hlt\0{0} ausgew\xC3\xA4hlt\0"
-    "von {0}\0Keine\0Nichts mehr danach\0noch {0}\0noch {0}\0{0} entfernen\0Entfernen\0Leeren\0Warteschlange leeren\0"
-    "Alles danach entfernen\0der laufende Titel bleibt\0stoppt die Musik\0Warteschlange ganz leeren?\0"
-    "{0} Titel wird entfernt, die Musik stoppt. \xE2\x80\x9ER\xC3\xBC" "ckg\xC3\xA4ngig\xE2\x80\x9C in der Meldung danach holt ihn zur\xC3\xBC" "ck.\0"
+    "Bibliothek wird aktualisiert: einen Moment\0Filter\0Fr\xC3\xB6hlich\0Neutral\0Traurig\0Entspannt\0"
+    "Aggressiv\0Instrumental\0Gesang\0Akustisch\0Party\0Tanzbar\0Streng\0Standard\0Locker\0Leeren\0"
+    "{0} von {1} Album\0{0} von {1} Alben\0{0} von {1} Titel\0{0} von {1} Titel\0Keine Alben passen zu diesen Filtern\0"
+    "Andere Karte: Neustart\0Karte wieder da: Neustart\0Voll ({0} Titel): nichts Gespieltes macht Platz\0"
+    "Voll ({0} Titel): nichts Gespieltes macht Platz\0Platz f\xC3\xBCr {0} Titel\0Platz f\xC3\xBCr {0} Titel\0"
+    "Mische {0} von {1}\0Spiele {0} von {1}\0{0} von {1} hinzugef\xC3\xBCgt\0{0} von {1} als N\xC3\xA4" "chstes\0"
+    "{0} gespielter Titel verdr\xC3\xA4ngt\0{0} gespielte Titel verdr\xC3\xA4ngt\0Hinzugef\xC3\xBCgt\0"
+    "{0} Titel hinzugef\xC3\xBCgt\0Als N\xC3\xA4" "chstes\0{0} Titel als N\xC3\xA4" "chstes\0W\xC3\xA4hlen\0"
+    "{0} ausgew\xC3\xA4hlt\0{0} ausgew\xC3\xA4hlt\0von {0}\0Keine\0Nichts mehr danach\0noch {0}\0"
+    "noch {0}\0{0} entfernen\0Entfernen\0Warteschlange leeren\0Alles danach entfernen\0der laufende Titel bleibt\0"
+    "stoppt die Musik\0Warteschlange ganz leeren?\0{0} Titel wird entfernt, die Musik stoppt. \xE2\x80\x9ER\xC3\xBC" "ckg\xC3\xA4ngig\xE2\x80\x9C in der Meldung danach holt ihn zur\xC3\xBC" "ck.\0"
     "Alle {0} Titel werden entfernt, die Musik stoppt. \xE2\x80\x9ER\xC3\xBC" "ckg\xC3\xA4ngig\xE2\x80\x9C in der Meldung danach holt sie zur\xC3\xBC" "ck.\0"
     "{0} Titel entfernt\0{0} Titel entfernt\0Geleert: {0} Titel\0Geleert: {0} Titel\0Das l\xC3\xA4uft gerade\0"
     "Nichts nach dem laufenden Titel\0L\xC3\xA4uft jetzt: {0}\0Entfernt: {0}\0dieser Titel\0(nicht in der Bibliothek)\0"
@@ -288,15 +295,16 @@ const char kBlob_de[] =
     "{0} hier gelesen\0{0} hier gelesen\0{0} ohne Tags\0{0} ohne Tags\0{0} \xC3\xBC" "bertragen\0"
     "{0} \xC3\xBC" "bertragen\0{0} hier\0{0} hier\0{0} ohne\0{0} ohne\0{0}\xC2\xA0% mit Tags\0aus Dateinamen\0"
     "Tags nur mit Karte\0wird aktualisiert\xE2\x80\xA6\0Scan\0Tags neu einlesen?\0Der Player liest die Tags seiner Dateien neu (die \xC3\xBC" "bertragenen bleiben). Gro\xC3\x9F" "e Karte: dauert Minuten.\0"
-    "Tags werden neu gelesen\0Tags nur von einer Karte lesbar\0Bluetooth-Kopfh\xC3\xB6rer\0Keine Kopfh\xC3\xB6rer gekoppelt\0"
-    "Nicht verbunden\0Verbinden\xE2\x80\xA6\0Verbinden\xE2\x80\xA6  Versuch {0} von {1}\0Suche {0}\xE2\x80\xA6\0"
-    "Suche Kopfh\xC3\xB6rer\xE2\x80\xA6\0Koppeln\xE2\x80\xA6\0Koppeln\xE2\x80\xA6  Versuch {0} von {1}\0"
-    "Verbunden\0Verbunden  {0}\0{0}, {1} ms\0{0} ms Verz\xC3\xB6gerung\0Nicht gekoppelt. Pairing aktiv?\0"
-    "Keine Verbindung. An und nah?\0Verloren: neu verbinden\xE2\x80\xA6\0Verloren: neu verbinden\xE2\x80\xA6 {0}/{1}\0"
-    "Verloren: Suche {0}\xE2\x80\xA6\0Verloren: Suche Kopfh\xC3\xB6rer\xE2\x80\xA6\0Koppeln\0Verbinden\0"
-    "Vergessen\0Sicher?\0Abbrechen\0Trennen\0Noch einmal\0Verbinden sich wieder,\nsobald sie an sind.\0"
-    "Wieder in Reichweite?\nTipp auf Verbinden.\0{0} vergessen\0Diese Kopfh\xC3\xB6rer vergessen\0"
-    "{0} vergessen?\0Die Kopfh\xC3\xB6rer vergessen?\0Sie verbinden sich erst wieder, wenn du sie unter \xE2\x80\x9ENeue Kopfh\xC3\xB6rer koppeln\xE2\x80\x9C neu koppelst.\0"
+    "Tags werden neu gelesen\0Tags nur von einer Karte lesbar\0Kartenfehler beim Start: zum Wiederholen neu starten\0"
+    "Bluetooth-Kopfh\xC3\xB6rer\0Keine Kopfh\xC3\xB6rer gekoppelt\0Nicht verbunden\0Verbinden\xE2\x80\xA6\0"
+    "Verbinden\xE2\x80\xA6  Versuch {0} von {1}\0Suche {0}\xE2\x80\xA6\0Suche Kopfh\xC3\xB6rer\xE2\x80\xA6\0"
+    "Koppeln\xE2\x80\xA6\0Koppeln\xE2\x80\xA6  Versuch {0} von {1}\0Verbunden\0Verbunden  {0}\0{0}, {1} ms\0"
+    "{0} ms Verz\xC3\xB6gerung\0Nicht gekoppelt. Pairing aktiv?\0Keine Verbindung. An und nah?\0"
+    "Verloren: neu verbinden\xE2\x80\xA6\0Verloren: neu verbinden\xE2\x80\xA6 {0}/{1}\0Verloren: Suche {0}\xE2\x80\xA6\0"
+    "Verloren: Suche Kopfh\xC3\xB6rer\xE2\x80\xA6\0Koppeln\0Verbinden\0Vergessen\0Sicher?\0Abbrechen\0"
+    "Trennen\0Noch einmal\0Verbinden sich wieder,\nsobald sie an sind.\0Wieder in Reichweite?\nTipp auf Verbinden.\0"
+    "{0} vergessen\0Diese Kopfh\xC3\xB6rer vergessen\0{0} vergessen?\0Die Kopfh\xC3\xB6rer vergessen?\0"
+    "Sie verbinden sich erst wieder, wenn du sie unter \xE2\x80\x9ENeue Kopfh\xC3\xB6rer koppeln\xE2\x80\x9C neu koppelst.\0"
     "Kopfh\xC3\xB6rer vergessen\0Getrennt: pausiert auf dem Lautsprecher\0Getrennt\0Hier, bis {0} verbunden ist\0"
     "Hier, bis die Kopfh\xC3\xB6rer verbunden sind\0Erwartet {0}\0Erwartet die Kopfh\xC3\xB6rer\0"
     "Eingebaut\0Stiller Testmodus\0Kopfh\xC3\xB6rer koppeln\0{0} gefunden\0{0} gefunden\0Suche l\xC3\xA4uft\0"
@@ -350,44 +358,46 @@ const uint16_t kOff_de[kStrings] = {
     3164, 3269, 3280, 418, 3336, 3356, 3376, 3404, 3413, 3435, 3467, 3489,
     3515, 3520, 3527, 3550, 3567, 3590, 3626, 3650, 3666, 3692, 3729, 3749,
     3780, 3792, 3798, 3817, 3867, 3885, 3933, 3956, 3980, 4012, 4055, 4104,
-    4128, 3980, 4176, 4219, 4242, 4268, 4364, 4406, 4425, 4444, 4469, 4495,
-    4558, 4594, 429, 3515, 4632, 4640, 4672, 2607, 4680, 2130, 4686, 4705,
-    4723, 4737, 3176, 4747, 3171, 3176, 4737, 4754, 4775, 4754, 4798, 4824,
-    4841, 4868, 4747, 5079, 3817, 5117, 5155, 5173, 5205, 5223, 5237, 5250,
-    5276, 2016, 2107, 5303, 418, 5349, 2618, 5357, 5374, 5395, 5480, 5500,
-    5583, 5629, 5651, 5738, 5784, 5651, 5805, 5850, 5872, 5956, 6001, 6020,
-    6109, 449, 6154, 6174, 6183, 6210, 6247, 6271, 6278, 6309, 6313, 6319,
-    2618, 6355, 6365, 6379, 2600, 6395, 6425, 6460, 6466, 6486, 6512, 6549,
-    6588, 6610, 6633, 6671, 6688, 6720, 6739, 6769, 6797, 6862, 6890, 6940,
-    6976, 7006, 7042, 7081, 7108, 7141, 7179, 7208, 7241, 7283, 7328, 7348,
-    7373, 7396, 7401, 7406, 7412, 7418, 7424, 7428, 7439, 7463, 7471, 7478,
-    7483, 7488, 7505, 7373, 7531, 7538, 7545, 7424, 7552, 7561, 7586, 7613,
-    7638, 7646, 7654, 7673, 7697, 7723, 7747, 7463, 7771, 7478, 7778, 7796,
-    7891, 8004, 8013, 8048, 8068, 8082, 8104, 8113, 8144, 8210, 8229, 8246,
-    8274, 8286, 8301, 8315, 8338, 8362, 4737, 8459, 8481, 8481, 8489, 8510,
-    8537, 8581, 8625, 8649, 8699, 8733, 8761, 8793, 8811, 8829, 8845, 8860,
-    8879, 8900, 8905, 8924, 9028, 9052, 9084, 2206, 9105, 9132, 9148, 9161,
-    9195, 9208, 9228, 9239, 9271, 9281, 9296, 9308, 9328, 9360, 9390, 9417,
-    9452, 9475, 6247, 9505, 9513, 9523, 9533, 9541, 9551, 9559, 9571, 9614,
-    2206, 9551, 6247, 9656, 9670, 9697, 9712, 9738, 9523, 9656, 9832, 9853,
-    9893, 1968, 9902, 9930, 9970, 9983, 10007, 10017, 10035, 10054, 10080, 9228,
-    10093, 10126, 10140, 10169, 2206, 1968, 10183, 10193, 10205, 10222, 10249, 10329,
-    9505, 10430, 10449, 10467, 10491, 6313, 10513, 10527, 10532, 10543, 10552, 10566,
-    10588, 10602, 418, 10639, 3404, 10653, 2206, 10674, 10684, 10700, 10715, 10744,
-    10763, 10786, 10822, 10845, 10876, 10907, 10941, 10953, 10986, 11011, 11041, 11054,
-    11060, 11071, 11075, 11080, 11084, 11090, 11096, 10527, 418, 11110, 11119, 11128,
-    11137, 11143, 11153, 11169, 11176, 11188, 11198, 11207, 11213, 11232, 11246, 11255,
-    11266, 11275, 11288, 11143, 11305, 3404, 10639, 11084, 11316, 11323, 11352, 11365,
-    161, 76, 2130, 11376, 11537, 11567, 11599, 11633, 11672, 11710, 11742, 11785,
-    11869, 5357, 11879, 11889, 457, 11896, 11903, 11975, 11993, 457, 12005, 12069,
-    12099, 12134, 12192, 12249, 12302, 12355, 12396, 12415, 12427, 12456, 12474, 12511,
-    12539, 12543, 12551, 12560, 12570, 12581, 12589, 12596, 12602, 2016, 12630, 12659,
-    9541, 12695, 12708, 12728, 12791, 12853, 12922, 12953, 12977, 13014, 1968, 13030,
-    13033, 13054, 13082, 13099, 13163, 13223, 5357, 13294, 13299, 13307, 13313, 13327,
-    13341, 13353, 13361, 13368, 13376, 13383,
+    4128, 3980, 4176, 4219, 4226, 4236, 4244, 4252, 4262, 4272, 4285, 4292,
+    4302, 4308, 4316, 4323, 4332, 4339, 4346, 4382, 4418, 4455, 4478, 4504,
+    4600, 4642, 4661, 4680, 4705, 4731, 4794, 4830, 429, 3515, 4868, 4876,
+    4908, 2607, 4916, 2130, 4922, 4941, 4959, 4973, 3176, 4339, 3171, 3176,
+    4973, 4983, 5004, 4983, 5027, 5053, 5070, 5097, 4339, 5308, 3817, 5346,
+    5384, 5402, 5434, 5452, 5466, 5479, 5505, 2016, 2107, 5532, 418, 5578,
+    2618, 5586, 5603, 5624, 5709, 5729, 5812, 5858, 5880, 5967, 6013, 5880,
+    6034, 6079, 6101, 6185, 6230, 6249, 6338, 449, 6383, 6403, 6412, 6439,
+    6476, 6500, 6507, 6538, 6542, 6548, 2618, 6584, 6594, 6608, 2600, 6624,
+    6654, 6689, 6695, 6715, 6741, 6778, 6817, 6839, 6862, 6900, 6917, 6949,
+    6968, 6998, 7026, 7091, 7119, 7169, 7205, 7235, 7271, 7310, 7337, 7370,
+    7408, 7437, 7470, 7512, 7557, 7577, 7602, 7625, 7630, 7635, 7641, 7647,
+    7653, 7657, 7668, 7692, 7700, 7707, 7712, 7717, 7734, 7602, 7760, 7767,
+    7774, 7653, 7781, 7790, 7815, 7842, 7867, 7875, 7883, 7902, 7926, 7952,
+    7976, 7692, 8000, 7707, 8007, 8025, 8120, 8233, 8242, 8277, 8297, 8311,
+    8333, 8342, 8373, 8439, 8458, 8475, 8503, 8515, 8530, 8544, 8567, 8591,
+    4973, 8688, 8710, 8710, 8718, 8739, 8766, 8810, 8854, 8878, 8928, 8962,
+    8990, 9022, 9040, 9058, 9074, 9089, 9108, 9129, 9134, 9153, 9257, 9281,
+    9313, 9366, 2206, 9387, 9414, 9430, 9443, 9477, 9490, 9510, 9521, 9553,
+    9563, 9578, 9590, 9610, 9642, 9672, 9699, 9734, 9757, 6476, 9787, 9795,
+    9805, 9815, 9823, 9833, 9841, 9853, 9896, 2206, 9833, 6476, 9938, 9952,
+    9979, 9994, 10020, 9805, 9938, 10114, 10135, 10175, 1968, 10184, 10212, 10252,
+    10265, 10289, 10299, 10317, 10336, 10362, 9510, 10375, 10408, 10422, 10451, 2206,
+    1968, 10465, 10475, 10487, 10504, 10531, 10611, 9787, 10712, 10731, 10749, 10773,
+    6542, 10795, 10809, 10814, 10825, 10834, 10848, 10870, 10884, 418, 10921, 3404,
+    10935, 2206, 10956, 10966, 10982, 10997, 11026, 11045, 11068, 11104, 11127, 11158,
+    11189, 11223, 11235, 11268, 11293, 11323, 11336, 11342, 11353, 11357, 11362, 11366,
+    11372, 11378, 10809, 418, 11392, 11401, 11410, 11419, 11425, 11435, 11451, 11458,
+    11470, 11480, 11489, 11495, 11514, 11528, 11537, 11548, 11557, 11570, 11425, 11587,
+    3404, 10921, 11366, 11598, 11605, 11634, 11647, 161, 76, 2130, 11658, 11819,
+    11849, 11881, 11915, 11954, 11992, 12024, 12067, 12151, 5586, 12161, 12171, 457,
+    12178, 12185, 12257, 12275, 457, 12287, 12351, 12381, 12416, 12474, 12531, 12584,
+    12637, 12678, 12697, 12709, 12738, 12756, 12793, 12821, 12825, 12833, 12842, 12852,
+    12863, 12871, 12878, 12884, 2016, 12912, 12941, 9823, 12977, 12990, 13010, 13073,
+    13135, 13204, 13235, 13259, 13296, 1968, 13312, 13315, 13336, 13364, 13381, 13445,
+    13505, 5586, 13576, 13581, 13589, 13595, 13609, 13623, 13635, 13643, 13650, 13658,
+    13665,
 };
 
-// es: 13639 bytes, 606 of 606 messages.
+// es: 13936 bytes, 625 of 625 messages.
 const char kBlob_es[] =
     "\xC2\xBF" "Falla el t\xC3\xA1" "ctil? Mant\xC3\xA9n un dedo en la pantalla.\0Consejo {0} de {1}\0"
     "toca para seguir\0Siguiente\0Entendido\0Los tres puntos rojos\0Bajo la pantalla: clic o toque largo en cada uno\0"
@@ -436,7 +446,10 @@ const char kBlob_es[] =
     "A\xC3\xB1" "adida: {0} pista\0\0A\xC3\xB1" "adidas: {0} pistas\0Comprobando la tarjeta\xE2\x80\xA6\0"
     "Leyendo etiquetas {0} / {1}\0Actualizando la biblioteca\xE2\x80\xA6\0La \xC3\xBAltima transferencia no termin\xC3\xB3\0"
     "{0} pista nueva encontrada\0\0{0} pistas nuevas encontradas\0Biblioteca actualizada\0Biblioteca: se actualiza al reiniciar\0"
-    "Actualizando la biblioteca: un momento\0Otra tarjeta: reiniciando\0Tarjeta reinsertada: reiniciando\0"
+    "Actualizando la biblioteca: un momento\0Filtros\0Alegre\0Neutral\0Triste\0Relajado\0Agresivo\0"
+    "Instrumental\0Vocal\0Ac\xC3\xBAstico\0Fiesta\0Bailable\0Estricto\0Est\xC3\xA1ndar\0Flexible\0"
+    "Borrar\0{0} de {1} \xC3\xA1lbum\0\0{0} de {1} \xC3\xA1lbumes\0{0} de {1} pista\0\0{0} de {1} pistas\0"
+    "Ning\xC3\xBAn \xC3\xA1lbum coincide con tus filtros\0Otra tarjeta: reiniciando\0Tarjeta reinsertada: reiniciando\0"
     "Cola llena, nada reproducido: admite {0} pista\0\0Cola llena, nada reproducido: admite {0} pistas\0"
     "la cola admite {0} pista\0\0la cola admite {0} pistas\0{0} de {1} al azar\0Reproduciendo {0} de {1}\0"
     "A\xC3\xB1" "adidas {0} de {1}\0{0} de {1} a continuaci\xC3\xB3n\0{0} reproducida sali\xC3\xB3\0"
@@ -489,15 +502,15 @@ const char kBlob_es[] =
     "\0{0} transferidas\0{0} aqu\xC3\xAD\0\0{0} aqu\xC3\xAD\0{0} ninguna\0\0{0} ninguna\0{0}% etiquetadas\0"
     "nombres de archivo\0etiquetas solo con tarjeta\0actualizando\xE2\x80\xA6\0Releer\0\xC2\xBFReleer las etiquetas?\0"
     "Relee las etiquetas de sus propios archivos (las de la transferencia se quedan). Minutos en una tarjeta grande.\0"
-    "Releyendo las etiquetas\0Etiquetas: solo se leen de una tarjeta\0Auriculares Bluetooth\0Sin auriculares emparejados\0"
-    "Sin conectar\0Conectando...\0Conectando...  intento {0} de {1}\0Buscando {0}...\0Buscando los auriculares...\0"
-    "Emparejando...\0Emparejando...  intento {0} de {1}\0Conectado\0Conectado  {0}\0{0}, {1} ms\0"
-    "{0} ms de retardo\0Fall\xC3\xB3. \xC2\xBF" "En modo emparejamiento?\0Fall\xC3\xB3. \xC2\xBF" "Encendidos y cerca?\0"
-    "Sin se\xC3\xB1" "al: reconectando...\0Reconectando...  intento {0} de {1}\0Sin se\xC3\xB1" "al: buscando {0}\0"
-    "Sin se\xC3\xB1" "al: buscando auriculares...\0Emparejar\0Conectar\0Olvidar\0Confirmar\0Cancelar\0"
-    "Desconectar\0Se reconectan solos\nal encenderlos.\0\xC2\xBFYa est\xC3\xA1n cerca?\nToca Conectar.\0"
-    "Olvidar {0}\0Olvidar estos auriculares\0\xC2\xBFOlvidar {0}?\0\xC2\xBFOlvidar los auriculares?\0"
-    "No se conectar\xC3\xA1n m\xC3\xA1s hasta que los emparejes en Emparejar auriculares nuevos.\0"
+    "Releyendo las etiquetas\0Etiquetas: solo se leen de una tarjeta\0Error de lectura al iniciar: reinicia para reintentar\0"
+    "Auriculares Bluetooth\0Sin auriculares emparejados\0Sin conectar\0Conectando...\0Conectando...  intento {0} de {1}\0"
+    "Buscando {0}...\0Buscando los auriculares...\0Emparejando...\0Emparejando...  intento {0} de {1}\0"
+    "Conectado\0Conectado  {0}\0{0}, {1} ms\0{0} ms de retardo\0Fall\xC3\xB3. \xC2\xBF" "En modo emparejamiento?\0"
+    "Fall\xC3\xB3. \xC2\xBF" "Encendidos y cerca?\0Sin se\xC3\xB1" "al: reconectando...\0Reconectando...  intento {0} de {1}\0"
+    "Sin se\xC3\xB1" "al: buscando {0}\0Sin se\xC3\xB1" "al: buscando auriculares...\0Emparejar\0"
+    "Conectar\0Olvidar\0Confirmar\0Cancelar\0Desconectar\0Se reconectan solos\nal encenderlos.\0"
+    "\xC2\xBFYa est\xC3\xA1n cerca?\nToca Conectar.\0Olvidar {0}\0Olvidar estos auriculares\0\xC2\xBFOlvidar {0}?\0"
+    "\xC2\xBFOlvidar los auriculares?\0No se conectar\xC3\xA1n m\xC3\xA1s hasta que los emparejes en Emparejar auriculares nuevos.\0"
     "Olvidados: {0}\0Auriculares olvidados\0Desconectado: en pausa en el altavoz\0Desconectado\0"
     "Aqu\xC3\xAD hasta que {0} se conecte\0Aqu\xC3\xAD hasta que se conecten los auriculares\0Espera a {0}\0"
     "Espera a los auriculares\0Integrado\0Prueba silenciosa\0Emparejar auriculares\0{0} hallado\0"
@@ -554,44 +567,46 @@ const uint16_t kOff_es[kStrings] = {
     3344, 3352, 3369, 3429, 3436, 3458, 3483, 3509, 3518, 3544, 3588, 3614,
     3634, 3641, 3651, 3676, 3693, 3709, 3745, 3776, 3787, 3818, 3855, 3876,
     3909, 3928, 3933, 3954, 4010, 4024, 4067, 4093, 4121, 4151, 4188, 4246,
-    4269, 4121, 4307, 4346, 4372, 4405, 4501, 4553, 4572, 4597, 4618, 4645,
-    4695, 4726, 465, 3634, 4770, 4777, 4813, 4820, 4825, 2122, 4830, 4844,
-    4885, 2909, 88, 4896, 3242, 88, 2909, 4906, 4921, 4906, 4941, 4963,
-    4982, 5005, 5193, 5200, 3954, 5200, 5239, 5265, 5298, 5323, 5336, 5347,
-    2101, 2021, 5375, 5396, 454, 2577, 2663, 5444, 5455, 5470, 5549, 5569,
-    5660, 5703, 5725, 5813, 5856, 5725, 5877, 5919, 5940, 6024, 6055, 6072,
-    6161, 476, 6205, 6229, 6246, 6273, 6317, 6346, 6357, 6387, 6399, 6409,
-    2663, 6449, 6465, 6482, 2619, 6498, 6525, 6562, 6568, 6587, 6607, 6650,
-    6694, 6714, 6735, 6773, 6792, 6824, 6841, 6870, 6901, 6961, 6988, 7050,
-    7076, 7109, 7148, 7184, 7212, 7251, 7289, 7310, 7341, 7383, 7416, 7437,
-    7463, 7485, 7490, 7495, 7501, 7507, 7513, 7519, 7526, 7550, 7555, 7561,
-    7566, 7574, 7593, 7616, 7638, 7645, 7652, 7513, 7659, 7676, 7703, 7730,
-    7754, 7762, 7770, 7789, 7816, 7841, 7866, 7891, 7896, 7903, 7908, 7927,
-    8010, 8120, 8130, 8164, 8185, 8207, 8225, 8232, 8265, 8336, 8357, 8370,
-    8394, 8403, 8418, 8432, 8455, 8481, 2909, 8576, 8597, 8597, 8604, 8622,
-    8648, 8692, 8738, 8761, 8810, 8846, 8883, 8917, 8938, 8963, 8980, 8999,
-    9026, 9042, 9049, 9073, 9185, 9209, 9248, 2197, 9270, 9298, 9311, 9325,
-    9359, 9375, 9403, 9418, 9453, 9463, 9478, 9490, 9508, 9542, 9572, 9600,
-    9636, 9661, 6317, 9697, 9707, 9716, 9724, 9734, 9743, 5444, 9755, 9791,
-    2197, 9743, 6317, 9825, 9837, 9863, 9878, 9905, 9716, 9985, 10000, 10022,
-    10059, 1979, 10072, 10103, 10147, 10160, 10185, 10195, 10213, 10235, 10261, 9403,
-    10270, 10310, 10326, 10358, 10373, 10385, 10393, 10409, 10430, 10447, 10477, 10554,
-    9697, 10650, 9403, 10673, 10692, 6399, 10713, 10730, 10739, 10753, 10768, 10787,
-    10811, 10827, 454, 10863, 3509, 10877, 2197, 10889, 10901, 10915, 10931, 10968,
-    10987, 11001, 11038, 11062, 11095, 11127, 11162, 11184, 11221, 11247, 11285, 11296,
-    11302, 11324, 11328, 11333, 11337, 11343, 11349, 10730, 454, 11366, 11376, 11396,
-    11405, 11418, 11430, 11443, 11448, 11458, 11474, 11483, 11489, 11515, 11533, 11542,
-    11558, 11567, 11580, 11599, 11611, 3509, 10863, 11622, 11628, 11636, 8336, 11667,
-    11682, 11688, 2122, 11695, 11818, 11844, 11873, 11913, 11957, 11992, 12029, 12072,
-    12145, 5444, 12153, 12163, 483, 12169, 12176, 12237, 12254, 12260, 12268, 12337,
-    12362, 12392, 12445, 12500, 12551, 12602, 12636, 12654, 12663, 12693, 12716, 12748,
-    12776, 12780, 12787, 12794, 12804, 12814, 12824, 12833, 12841, 2021, 12872, 12898,
-    9734, 12939, 12954, 12977, 13026, 13080, 13142, 13175, 13200, 13238, 2348, 13254,
-    13262, 13283, 13316, 13329, 13399, 13467, 5444, 13547, 13552, 13560, 13566, 13580,
-    13594, 13606, 13614, 13621, 13629, 13636,
+    4269, 4121, 4307, 4346, 4354, 4361, 4369, 4376, 4385, 4394, 4407, 4413,
+    4423, 4430, 4439, 4448, 4458, 4467, 4474, 4513, 4549, 4589, 4615, 4648,
+    4744, 4796, 4815, 4840, 4861, 4888, 4938, 4969, 465, 3634, 5013, 5020,
+    5056, 5063, 5068, 2122, 5073, 5087, 5128, 2909, 88, 5139, 3242, 88,
+    2909, 5149, 5164, 5149, 5184, 5206, 5225, 5248, 5436, 5443, 3954, 5443,
+    5482, 5508, 5541, 5566, 5579, 5590, 2101, 2021, 5618, 5639, 454, 2577,
+    2663, 5687, 5698, 5713, 5792, 5812, 5903, 5946, 5968, 6056, 6099, 5968,
+    6120, 6162, 6183, 6267, 6298, 6315, 6404, 476, 6448, 6472, 6489, 6516,
+    6560, 6589, 6600, 6630, 6642, 6652, 2663, 6692, 6708, 6725, 2619, 6741,
+    6768, 6805, 6811, 6830, 6850, 6893, 6937, 6957, 6978, 7016, 7035, 7067,
+    7084, 7113, 7144, 7204, 7231, 7293, 7319, 7352, 7391, 7427, 7455, 7494,
+    7532, 7553, 7584, 7626, 7659, 7680, 7706, 7728, 7733, 7738, 7744, 7750,
+    7756, 7762, 7769, 7793, 7798, 7804, 7809, 7817, 7836, 7859, 7881, 7888,
+    7895, 7756, 7902, 7919, 7946, 7973, 7997, 8005, 8013, 8032, 8059, 8084,
+    8109, 8134, 8139, 8146, 8151, 8170, 8253, 8363, 8373, 8407, 8428, 8450,
+    8468, 8475, 8508, 8579, 8600, 8613, 8637, 8646, 8661, 8675, 8698, 8724,
+    2909, 8819, 8840, 8840, 8847, 8865, 8891, 8935, 8981, 9004, 9053, 9089,
+    9126, 9160, 9181, 9206, 9223, 9242, 9269, 9285, 9292, 9316, 9428, 9452,
+    9491, 9545, 2197, 9567, 9595, 9608, 9622, 9656, 9672, 9700, 9715, 9750,
+    9760, 9775, 9787, 9805, 9839, 9869, 9897, 9933, 9958, 6560, 9994, 10004,
+    10013, 10021, 10031, 10040, 5687, 10052, 10088, 2197, 10040, 6560, 10122, 10134,
+    10160, 10175, 10202, 10013, 10282, 10297, 10319, 10356, 1979, 10369, 10400, 10444,
+    10457, 10482, 10492, 10510, 10532, 10558, 9700, 10567, 10607, 10623, 10655, 10670,
+    10682, 10690, 10706, 10727, 10744, 10774, 10851, 9994, 10947, 9700, 10970, 10989,
+    6642, 11010, 11027, 11036, 11050, 11065, 11084, 11108, 11124, 454, 11160, 3509,
+    11174, 2197, 11186, 11198, 11212, 11228, 11265, 11284, 11298, 11335, 11359, 11392,
+    11424, 11459, 11481, 11518, 11544, 11582, 11593, 11599, 11621, 11625, 11630, 11634,
+    11640, 11646, 11027, 454, 11663, 11673, 11693, 11702, 11715, 11727, 11740, 11745,
+    11755, 11771, 11780, 11786, 11812, 11830, 11839, 11855, 11864, 11877, 11896, 11908,
+    3509, 11160, 11919, 11925, 11933, 8579, 11964, 11979, 11985, 2122, 11992, 12115,
+    12141, 12170, 12210, 12254, 12289, 12326, 12369, 12442, 5687, 12450, 12460, 483,
+    12466, 12473, 12534, 12551, 12557, 12565, 12634, 12659, 12689, 12742, 12797, 12848,
+    12899, 12933, 12951, 12960, 12990, 13013, 13045, 13073, 13077, 13084, 13091, 13101,
+    13111, 13121, 13130, 13138, 2021, 13169, 13195, 10031, 13236, 13251, 13274, 13323,
+    13377, 13439, 13472, 13497, 13535, 2348, 13551, 13559, 13580, 13613, 13626, 13696,
+    13764, 5687, 13844, 13849, 13857, 13863, 13877, 13891, 13903, 13911, 13918, 13926,
+    13933,
 };
 
-// fr: 13777 bytes, 606 of 606 messages.
+// fr: 14077 bytes, 625 of 625 messages.
 const char kBlob_fr[] =
     "Tactile d\xC3\xA9r\xC3\xA9gl\xC3\xA9\xC2\xA0? Gardez un doigt sur l'\xC3\xA9" "cran.\0Astuce {0} sur {1}\0"
     "touchez\xC2\xA0: suite\0Suivant\0Compris\0Les trois points rouges\0Sous l'\xC3\xA9" "cran\xC2\xA0: clic ou appui long, n'importe o\xC3\xB9\0"
@@ -642,16 +657,18 @@ const char kBlob_fr[] =
     "V\xC3\xA9rification de la carte\xE2\x80\xA6\0Lecture des tags {0} / {1}\0Mise \xC3\xA0 jour de la biblioth\xC3\xA8que\xE2\x80\xA6\0"
     "Le dernier transfert n'a pas abouti\0{0} nouveau morceau\0\0{0} nouveaux morceaux\0Biblioth\xC3\xA8que mise \xC3\xA0 jour\0"
     "Biblioth\xC3\xA8que\xC2\xA0: mise \xC3\xA0 jour au red\xC3\xA9marrage\0Mise \xC3\xA0 jour de la biblioth\xC3\xA8que\xC2\xA0: un instant\0"
-    "Autre carte\xC2\xA0: red\xC3\xA9marrage\0Carte r\xC3\xA9ins\xC3\xA9r\xC3\xA9" "e\xC2\xA0: red\xC3\xA9marrage\0"
-    "Aucun morceau lu \xC3\xA0 \xC3\xA9" "carter\xC2\xA0: la file a {0} morceau max\0\0Aucun morceau lu \xC3\xA0 \xC3\xA9" "carter\xC2\xA0: la file a {0} morceaux max\0"
-    "la file a {0} morceau max\0\0la file a {0} morceaux max\0{0} sur {1} en al\xC3\xA9" "atoire\0"
-    "Lecture de {0} sur {1}\0{0} sur {1} ajout\xC3\xA9s\0{0} sur {1} \xC3\xA0 la suite\0{0} morceau lu \xC3\xA9" "cart\xC3\xA9\0"
-    "\0{0} morceaux lus \xC3\xA9" "cart\xC3\xA9s\0{0} morceau ajout\xC3\xA9\0\0{0} morceaux ajout\xC3\xA9s\0"
-    "{0} morceau \xC3\xA0 la suite\0\0{0} morceaux \xC3\xA0 la suite\0G\xC3\xA9rer\0{0} s\xC3\xA9lectionn\xC3\xA9\0"
-    "\0{0} s\xC3\xA9lectionn\xC3\xA9s\0sur {0}\0Aucun\0Rien \xC3\xA0 suivre\0{0} \xC3\xA0 suivre\0"
-    "\0{0} \xC3\xA0 suivre\0Retirer {0}\0Retirer\0Vider\xE2\x80\xA6\0Vider la file\0Vider la suite\0"
-    "Vider toute la file\0garde le morceau actuel\0arr\xC3\xAAte la musique\0Vider toute la file\xC2\xA0?\0"
-    "{0} morceau dispara\xC3\xAEt et la musique s'arr\xC3\xAAte. Annuler, sur le message qui suit, le ram\xC3\xA8ne.\0"
+    "Filtres\0Joyeux\0Neutre\0Triste\0D\xC3\xA9tendu\0Agressif\0Instrumental\0Chant\0Acoustique\0"
+    "F\xC3\xAAte\0Dansant\0Strict\0Standard\0Souple\0Effacer\0{0} sur {1} album\0\0{0} sur {1} albums\0"
+    "{0} sur {1} morceau\0\0{0} sur {1} morceaux\0Aucun album ne r\xC3\xA9pond aux filtres\0Autre carte\xC2\xA0: red\xC3\xA9marrage\0"
+    "Carte r\xC3\xA9ins\xC3\xA9r\xC3\xA9" "e\xC2\xA0: red\xC3\xA9marrage\0Aucun morceau lu \xC3\xA0 \xC3\xA9" "carter\xC2\xA0: la file a {0} morceau max\0"
+    "\0Aucun morceau lu \xC3\xA0 \xC3\xA9" "carter\xC2\xA0: la file a {0} morceaux max\0la file a {0} morceau max\0"
+    "\0la file a {0} morceaux max\0{0} sur {1} en al\xC3\xA9" "atoire\0Lecture de {0} sur {1}\0{0} sur {1} ajout\xC3\xA9s\0"
+    "{0} sur {1} \xC3\xA0 la suite\0{0} morceau lu \xC3\xA9" "cart\xC3\xA9\0\0{0} morceaux lus \xC3\xA9" "cart\xC3\xA9s\0"
+    "{0} morceau ajout\xC3\xA9\0\0{0} morceaux ajout\xC3\xA9s\0{0} morceau \xC3\xA0 la suite\0\0"
+    "{0} morceaux \xC3\xA0 la suite\0G\xC3\xA9rer\0{0} s\xC3\xA9lectionn\xC3\xA9\0\0{0} s\xC3\xA9lectionn\xC3\xA9s\0"
+    "sur {0}\0Aucun\0Rien \xC3\xA0 suivre\0{0} \xC3\xA0 suivre\0\0{0} \xC3\xA0 suivre\0Retirer {0}\0"
+    "Retirer\0Vider\xE2\x80\xA6\0Vider la file\0Vider la suite\0Vider toute la file\0garde le morceau actuel\0"
+    "arr\xC3\xAAte la musique\0Vider toute la file\xC2\xA0?\0{0} morceau dispara\xC3\xAEt et la musique s'arr\xC3\xAAte. Annuler, sur le message qui suit, le ram\xC3\xA8ne.\0"
     "\0Les {0} morceaux disparaissent et la musique s'arr\xC3\xAAte. Annuler, sur le message qui suit, les ram\xC3\xA8ne.\0"
     "Vider\0{0} morceau retir\xC3\xA9\0\0{0} morceaux retir\xC3\xA9s\0C'est d\xC3\xA9j\xC3\xA0 le morceau en cours\0"
     "Rien apr\xC3\xA8s le morceau en cours\0En lecture\xC2\xA0: {0}\0Retir\xC3\xA9\xC2\xA0: {0}\0"
@@ -698,14 +715,14 @@ const char kBlob_fr[] =
     "\0{0} transfert\0{0} ici\0\0{0} ici\0{0} sans\0\0{0} sans\0{0}\xC2\xA0% avec tags\0noms des fichiers\0"
     "tags\xC2\xA0: il faut une carte\0mise \xC3\xA0 jour\xE2\x80\xA6\0Relire\0Relire les tags\xC2\xA0?\0"
     "Le lecteur relit les tags de ses fichiers (ceux du transfert ne changent pas). Des minutes sur une grande carte.\0"
-    "Relecture des tags\0Tags lus sur une carte seulement\0Casque Bluetooth\0Aucun casque appair\xC3\xA9\0"
-    "Non connect\xC3\xA9\0Connexion\xE2\x80\xA6\0Connexion\xE2\x80\xA6  essai {0}/{1}\0Recherche de {0}\xE2\x80\xA6\0"
-    "Recherche du casque\xE2\x80\xA6\0Appairage\xE2\x80\xA6\0Appairage\xE2\x80\xA6  essai {0}/{1}\0"
-    "Connect\xC3\xA9\0Connect\xC3\xA9  {0}\0{0}, {1} ms\0d\xC3\xA9lai {0} ms\0\xC3\x89" "chec. En mode appairage\xC2\xA0?\0"
-    "\xC3\x89" "chec. Allum\xC3\xA9 et \xC3\xA0 port\xC3\xA9" "e\xC2\xA0?\0Perdu\xC2\xA0: reconnexion\xE2\x80\xA6\0"
-    "Perdu\xC2\xA0: reconnexion\xE2\x80\xA6  essai {0}/{1}\0Perdu\xC2\xA0: recherche {0}\xE2\x80\xA6\0"
-    "Perdu\xC2\xA0: recherche du casque\xE2\x80\xA6\0Appairer\0Connecter\0Oublier\0Confirmer\0Couper\0"
-    "Il se reconnectera\nune fois allum\xC3\xA9.\0De retour \xC3\xA0 port\xC3\xA9" "e\xC2\xA0?\nTouchez Connecter.\0"
+    "Relecture des tags\0Tags lus sur une carte seulement\0\xC3\x89" "chec de lecture au d\xC3\xA9marrage\xC2\xA0: red\xC3\xA9marrez pour r\xC3\xA9" "essayer\0"
+    "Casque Bluetooth\0Aucun casque appair\xC3\xA9\0Non connect\xC3\xA9\0Connexion\xE2\x80\xA6\0"
+    "Connexion\xE2\x80\xA6  essai {0}/{1}\0Recherche de {0}\xE2\x80\xA6\0Recherche du casque\xE2\x80\xA6\0"
+    "Appairage\xE2\x80\xA6\0Appairage\xE2\x80\xA6  essai {0}/{1}\0Connect\xC3\xA9\0Connect\xC3\xA9  {0}\0"
+    "{0}, {1} ms\0d\xC3\xA9lai {0} ms\0\xC3\x89" "chec. En mode appairage\xC2\xA0?\0\xC3\x89" "chec. Allum\xC3\xA9 et \xC3\xA0 port\xC3\xA9" "e\xC2\xA0?\0"
+    "Perdu\xC2\xA0: reconnexion\xE2\x80\xA6\0Perdu\xC2\xA0: reconnexion\xE2\x80\xA6  essai {0}/{1}\0"
+    "Perdu\xC2\xA0: recherche {0}\xE2\x80\xA6\0Perdu\xC2\xA0: recherche du casque\xE2\x80\xA6\0Appairer\0"
+    "Connecter\0Oublier\0Confirmer\0Couper\0Il se reconnectera\nune fois allum\xC3\xA9.\0De retour \xC3\xA0 port\xC3\xA9" "e\xC2\xA0?\nTouchez Connecter.\0"
     "D\xC3\xA9" "connecter\0Oublier {0}\0Oublier ce casque\0Oublier {0}\xC2\xA0?\0Oublier le casque\xC2\xA0?\0"
     "Il ne se reconnectera plus tant que vous ne l'aurez pas r\xC3\xA9" "appair\xC3\xA9 via Appairer un casque.\0"
     "{0} oubli\xC3\xA9\0Casque oubli\xC3\xA9\0D\xC3\xA9" "connect\xC3\xA9\xC2\xA0: en pause sur le haut-parleur\0"
@@ -767,44 +784,46 @@ const uint16_t kOff_fr[kStrings] = {
     3340, 3348, 3366, 470, 3414, 3440, 3462, 3488, 3497, 3523, 3561, 3587,
     3609, 3614, 3625, 3650, 3669, 3685, 3712, 3736, 3745, 3779, 3821, 3846,
     3874, 3889, 3894, 3913, 3969, 3984, 4033, 4062, 4089, 4125, 4161, 4204,
-    4231, 4089, 4277, 4324, 4352, 4387, 4505, 4559, 4585, 4608, 4629, 4653,
-    4705, 4748, 477, 3609, 4798, 4805, 4843, 2629, 4851, 2124, 4857, 4872,
-    4901, 4913, 3217, 4921, 3212, 3217, 4913, 4930, 4944, 4959, 4979, 5003,
-    5022, 5045, 5243, 5249, 3913, 5249, 5292, 5325, 5357, 5375, 5390, 5399,
-    2107, 2035, 5428, 5448, 5496, 2568, 2642, 5510, 5521, 5536, 5626, 5647,
-    5739, 5791, 5813, 5900, 5945, 5813, 5966, 6010, 6034, 6121, 6160, 6179,
-    6275, 488, 6328, 6348, 6361, 6386, 6430, 6449, 6460, 6492, 6506, 6516,
-    2642, 6553, 6568, 6586, 2609, 6602, 6625, 6659, 6665, 6683, 6714, 6754,
-    6792, 6813, 6835, 6878, 6897, 6931, 6949, 6983, 7011, 7079, 7110, 7170,
-    7199, 7229, 7265, 7308, 7332, 7371, 7409, 7431, 7483, 7522, 7563, 7585,
-    7610, 7635, 7640, 7645, 7651, 7657, 7663, 7670, 7682, 7705, 7712, 7718,
-    7726, 7730, 7751, 7610, 7774, 7781, 7788, 7663, 7795, 7807, 7829, 7853,
-    7874, 7882, 7890, 7910, 7938, 7962, 7987, 7705, 8013, 8021, 8030, 8052,
-    8146, 8258, 8270, 8301, 8324, 8343, 8365, 8375, 8410, 8485, 8503, 8516,
-    8538, 8547, 8561, 8579, 8602, 8628, 8715, 8725, 8745, 8745, 8752, 8770,
-    8799, 8849, 8909, 8928, 8963, 8987, 9016, 9045, 9062, 9081, 9098, 9116,
-    9142, 9158, 9165, 9184, 9297, 9316, 9349, 2204, 9366, 9388, 9402, 9415,
-    9443, 9463, 9486, 9499, 9527, 9537, 9552, 9564, 9578, 9607, 9640, 9664,
-    9703, 9729, 6430, 9761, 9770, 9780, 9788, 495, 9798, 5510, 9805, 9842,
-    2204, 9885, 6430, 9898, 9910, 9928, 9943, 9964, 9780, 10056, 10068, 10083,
-    10128, 1992, 10141, 10162, 10189, 10200, 10217, 10227, 6430, 10248, 10274, 9486,
-    10293, 10326, 10348, 10389, 10402, 10409, 10418, 10428, 10443, 10459, 10484, 10557,
-    9761, 10650, 10672, 10694, 10718, 6506, 10751, 10762, 10771, 10786, 10795, 10810,
-    10832, 10846, 5496, 10883, 3488, 10897, 2204, 10921, 10930, 10945, 10960, 10993,
-    11014, 11029, 11064, 11087, 11119, 11151, 11187, 11208, 11246, 11265, 11301, 11310,
-    11316, 11336, 11340, 11345, 11349, 11355, 11361, 10762, 5496, 11389, 11399, 11414,
-    11428, 11434, 11443, 11459, 11465, 11483, 11496, 11507, 11513, 11537, 11556, 11565,
-    11581, 11590, 11604, 11623, 11631, 3488, 10883, 11642, 11648, 11654, 8485, 11681,
-    11694, 11701, 2124, 11708, 11853, 11883, 11920, 11968, 12018, 12058, 12098, 12142,
-    12222, 5510, 12234, 12242, 495, 12251, 12260, 12333, 12348, 508, 12360, 12435,
-    12462, 12498, 12558, 12618, 12670, 12730, 12775, 12798, 12808, 12835, 12859, 12892,
-    12921, 12925, 12931, 11648, 12939, 12949, 12957, 12963, 12970, 2035, 12994, 13026,
-    495, 13071, 13088, 13108, 13168, 13235, 13305, 13338, 13370, 9463, 1992, 13413,
-    13416, 13432, 13432, 13451, 13527, 13603, 5510, 13685, 13690, 13698, 13704, 13718,
-    13732, 13744, 13752, 13759, 13767, 13774,
+    4231, 4089, 4277, 4324, 4332, 4339, 4346, 4353, 4362, 4371, 4384, 4390,
+    4401, 4407, 4415, 4422, 4431, 4438, 4446, 4484, 4526, 4561, 4589, 4624,
+    4742, 4796, 4822, 4845, 4866, 4890, 4942, 4985, 477, 3609, 5035, 5042,
+    5080, 2629, 5088, 2124, 5094, 5109, 5138, 5150, 3217, 5158, 3212, 3217,
+    5150, 5167, 5181, 5196, 5216, 5240, 5259, 5282, 5480, 5486, 3913, 5486,
+    5529, 5562, 5594, 5612, 5627, 5636, 2107, 2035, 5665, 5685, 5733, 2568,
+    2642, 5747, 5758, 5773, 5863, 5884, 5976, 6028, 6050, 6137, 6182, 6050,
+    6203, 6247, 6271, 6358, 6397, 6416, 6512, 488, 6565, 6585, 6598, 6623,
+    6667, 6686, 6697, 6729, 6743, 6753, 2642, 6790, 6805, 6823, 2609, 6839,
+    6862, 6896, 6902, 6920, 6951, 6991, 7029, 7050, 7072, 7115, 7134, 7168,
+    7186, 7220, 7248, 7316, 7347, 7407, 7436, 7466, 7502, 7545, 7569, 7608,
+    7646, 7668, 7720, 7759, 7800, 7822, 7847, 7872, 7877, 7882, 7888, 7894,
+    7900, 7907, 7919, 7942, 7949, 7955, 7963, 7967, 7988, 7847, 8011, 8018,
+    8025, 7900, 8032, 8044, 8066, 8090, 8111, 8119, 8127, 8147, 8175, 8199,
+    8224, 7942, 8250, 8258, 8267, 8289, 8383, 8495, 8507, 8538, 8561, 8580,
+    8602, 8612, 8647, 8722, 8740, 8753, 8775, 8784, 8798, 8816, 8839, 8865,
+    8952, 8962, 8982, 8982, 8989, 9007, 9036, 9086, 9146, 9165, 9200, 9224,
+    9253, 9282, 9299, 9318, 9335, 9353, 9379, 9395, 9402, 9421, 9534, 9553,
+    9586, 9649, 2204, 9666, 9688, 9702, 9715, 9743, 9763, 9786, 9799, 9827,
+    9837, 9852, 9864, 9878, 9907, 9940, 9964, 10003, 10029, 6667, 10061, 10070,
+    10080, 10088, 495, 10098, 5747, 10105, 10142, 2204, 10185, 6667, 10198, 10210,
+    10228, 10243, 10264, 10080, 10356, 10368, 10383, 10428, 1992, 10441, 10462, 10489,
+    10500, 10517, 10527, 6667, 10548, 10574, 9786, 10593, 10626, 10648, 10689, 10702,
+    10709, 10718, 10728, 10743, 10759, 10784, 10857, 10061, 10950, 10972, 10994, 11018,
+    6743, 11051, 11062, 11071, 11086, 11095, 11110, 11132, 11146, 5733, 11183, 3488,
+    11197, 2204, 11221, 11230, 11245, 11260, 11293, 11314, 11329, 11364, 11387, 11419,
+    11451, 11487, 11508, 11546, 11565, 11601, 11610, 11616, 11636, 11640, 11645, 11649,
+    11655, 11661, 11062, 5733, 11689, 11699, 11714, 11728, 11734, 11743, 11759, 11765,
+    11783, 11796, 11807, 11813, 11837, 11856, 11865, 11881, 11890, 11904, 11923, 11931,
+    3488, 11183, 11942, 11948, 11954, 8722, 11981, 11994, 12001, 2124, 12008, 12153,
+    12183, 12220, 12268, 12318, 12358, 12398, 12442, 12522, 5747, 12534, 12542, 495,
+    12551, 12560, 12633, 12648, 508, 12660, 12735, 12762, 12798, 12858, 12918, 12970,
+    13030, 13075, 13098, 13108, 13135, 13159, 13192, 13221, 13225, 13231, 11948, 13239,
+    13249, 13257, 13263, 13270, 2035, 13294, 13326, 495, 13371, 13388, 13408, 13468,
+    13535, 13605, 13638, 13670, 9763, 1992, 13713, 13716, 13732, 13732, 13751, 13827,
+    13903, 5747, 13985, 13990, 13998, 14004, 14018, 14032, 14044, 14052, 14059, 14067,
+    14074,
 };
 
-// it: 13250 bytes, 606 of 606 messages.
+// it: 13538 bytes, 625 of 625 messages.
 const char kBlob_it[] =
     "Tocco impreciso? Tieni un dito sullo schermo.\0Consiglio {0} di {1}\0tocca e vai avanti\0Avanti\0"
     "Ho capito\0I tre punti rossi\0Sotto lo schermo: un clic o una pressione lunga\0Indietro\0Play/pausa\0"
@@ -850,8 +869,11 @@ const char kBlob_it[] =
     "Aggiunto: {0}\0Aggiunto: {0} brano\0\0Aggiunti: {0} brani\0Controllo della scheda SD\xE2\x80\xA6\0"
     "Lettura tag {0} / {1}\0Aggiornamento libreria\xE2\x80\xA6\0L\xE2\x80\x99ultimo trasferimento non \xC3\xA8 finito\0"
     "Trovato {0} nuovo brano\0\0Trovati {0} nuovi brani\0Libreria aggiornata\0Libreria: si aggiorna al prossimo avvio\0"
-    "Aggiornamento della libreria\xE2\x80\xA6\0Aggiornamento libreria: un attimo\0Altra scheda SD: riavvio\0"
-    "Scheda SD reinserita: riavvio\0Coda piena, niente da togliere: contiene {0} brano\0\0Coda piena, niente da togliere: contiene {0} brani\0"
+    "Aggiornamento della libreria\xE2\x80\xA6\0Aggiornamento libreria: un attimo\0Filtri\0Allegro\0"
+    "Neutro\0Triste\0Rilassato\0Aggressivo\0Strumentale\0Voce\0Acustico\0Festa\0Ballabile\0Rigoroso\0"
+    "Standard\0Flessibile\0Cancella\0{0} di {1} album\0\0{0} di {1} album\0{0} di {1} brano\0\0{0} di {1} brani\0"
+    "Nessun album corrisponde ai filtri\0Altra scheda SD: riavvio\0Scheda SD reinserita: riavvio\0"
+    "Coda piena, niente da togliere: contiene {0} brano\0\0Coda piena, niente da togliere: contiene {0} brani\0"
     "la coda contiene {0} brano\0\0la coda contiene {0} brani\0{0} di {1} in ordine casuale\0In riproduzione {0} di {1}\0"
     "Aggiunti {0} di {1}\0{0} di {1} a seguire\0tolto {0} brano gi\xC3\xA0 ascoltato\0\0tolti {0} brani gi\xC3\xA0 ascoltati\0"
     "Aggiunto\0\0Aggiunti {0} brani\0A seguire\0\0{0} brani a seguire\0Scegli\0{0} selezionato\0"
@@ -898,14 +920,14 @@ const char kBlob_it[] =
     "\0{0} dal trasferimento\0{0} letto qui\0\0{0} letti qui\0{0} senza tag\0\0{0} senza tag\0{0} trasferito\0"
     "\0{0} trasferiti\0{0} qui\0\0{0} qui\0{0} no tag\0\0{0} no tag\0{0}% con tag\0nomi dai file\0"
     "per i tag serve la scheda SD\0aggiornamento\xE2\x80\xA6\0Rileggi\0Rileggere i tag?\0Il lettore rilegge i tag dei suoi file (quelli del trasferimento restano). Su una scheda grande servono minuti.\0"
-    "Rilettura dei tag in corso\0Tag letti solo da scheda SD\0Cuffie Bluetooth\0Nessuna cuffia abbinata\0"
-    "Non connesse\0Connessione...\0Connessione...  prova {0} di {1}\0Ricerca di {0}...\0Ricerca delle cuffie...\0"
-    "Abbinamento...\0Abbinamento...  prova {0} di {1}\0Connesse\0Connesse  {0}\0{0}, {1} ms\0{0} ms di ritardo\0"
-    "Fallito. In modalit\xC3\xA0 abbinamento?\0Non connesse. Accese e vicine?\0Perse: riconnessione...\0"
-    "Perse: riconnessione, prova {0} di {1}\0Perse: ricerca di {0}...\0Perse: ricerca delle cuffie...\0"
-    "Abbina\0Connetti\0Dimentica\0Sicuro?\0Disconnetti\0Si riconnettono da sole\nquando le accendi.\0"
-    "Di nuovo vicine?\nTocca Connetti.\0Dimentica {0}\0Dimentica queste cuffie\0Dimenticare {0}?\0"
-    "Dimenticare le cuffie?\0Non si connetteranno pi\xC3\xB9 finch\xC3\xA9 non le abbini da Abbina nuove cuffie.\0"
+    "Rilettura dei tag in corso\0Tag letti solo da scheda SD\0Errore di lettura all\xE2\x80\x99" "avvio: riavvia per riprovare\0"
+    "Cuffie Bluetooth\0Nessuna cuffia abbinata\0Non connesse\0Connessione...\0Connessione...  prova {0} di {1}\0"
+    "Ricerca di {0}...\0Ricerca delle cuffie...\0Abbinamento...\0Abbinamento...  prova {0} di {1}\0"
+    "Connesse\0Connesse  {0}\0{0}, {1} ms\0{0} ms di ritardo\0Fallito. In modalit\xC3\xA0 abbinamento?\0"
+    "Non connesse. Accese e vicine?\0Perse: riconnessione...\0Perse: riconnessione, prova {0} di {1}\0"
+    "Perse: ricerca di {0}...\0Perse: ricerca delle cuffie...\0Abbina\0Connetti\0Dimentica\0Sicuro?\0"
+    "Disconnetti\0Si riconnettono da sole\nquando le accendi.\0Di nuovo vicine?\nTocca Connetti.\0"
+    "Dimentica {0}\0Dimentica queste cuffie\0Dimenticare {0}?\0Dimenticare le cuffie?\0Non si connetteranno pi\xC3\xB9 finch\xC3\xA9 non le abbini da Abbina nuove cuffie.\0"
     "Dimenticate {0}\0Cuffie dimenticate\0Disconnesse: in pausa sull\xE2\x80\x99" "altoparlante\0"
     "Disconnesse\0Qui finch\xC3\xA9 {0} non si connette\0Qui finch\xC3\xA9 le cuffie non si connettono\0"
     "Aspetta {0}\0Aspetta le cuffie\0Integrato\0Test silenzioso\0Abbina cuffie\0{0} trovato\0\0{0} trovati\0"
@@ -960,44 +982,46 @@ const uint16_t kOff_it[kStrings] = {
     3248, 3257, 3271, 443, 3326, 3347, 3368, 3393, 3402, 3429, 3460, 3479,
     3500, 3506, 3516, 3541, 3556, 3569, 3603, 3625, 3636, 3663, 3701, 3723,
     3751, 3772, 3778, 3793, 3836, 3850, 3891, 3920, 3942, 3968, 4007, 4056,
-    4076, 4116, 4148, 4182, 4207, 4237, 4340, 4395, 4424, 4451, 4471, 4492,
-    4555, 4584, 452, 3500, 4615, 4622, 4655, 4662, 4668, 2075, 4675, 4692,
-    4721, 4733, 3154, 4741, 3146, 3154, 4733, 4748, 4763, 4787, 4808, 4831,
-    4847, 4871, 4741, 5064, 3793, 5101, 5134, 5158, 3751, 5187, 5200, 5209,
-    2058, 1967, 5230, 5251, 5298, 2527, 2595, 5312, 5320, 5343, 5422, 5438,
-    5529, 5579, 5602, 5688, 5725, 5602, 5747, 5783, 5805, 5893, 5927, 5949,
-    6038, 463, 6085, 6106, 6122, 6149, 6192, 6212, 6232, 6260, 6272, 6285,
-    2595, 6323, 6337, 6354, 2563, 6370, 6394, 6429, 6436, 6456, 6484, 6519,
-    6565, 6587, 6606, 6641, 6661, 6691, 6709, 6738, 6762, 6820, 6847, 6900,
-    6931, 6964, 7002, 7041, 7068, 7106, 7142, 7169, 7206, 7250, 7284, 7304,
-    7330, 7357, 7362, 7367, 7373, 7379, 7385, 7389, 7401, 7427, 7433, 7439,
-    7444, 7452, 7471, 7330, 7492, 7499, 7506, 7385, 7513, 7527, 7555, 7583,
-    7607, 7615, 7623, 7641, 7667, 7691, 7718, 7427, 7744, 7439, 7752, 7769,
-    7856, 7961, 7969, 8004, 8021, 8040, 8060, 8069, 8102, 8173, 8192, 8206,
-    8232, 8240, 8254, 8269, 8290, 8317, 4733, 8403, 8424, 8424, 8431, 8447,
-    8469, 8509, 8550, 8573, 8618, 8647, 8676, 8707, 8724, 8747, 8760, 8774,
-    8803, 8820, 8828, 8845, 8957, 8984, 9012, 2147, 9029, 9053, 9066, 9081,
-    9114, 9132, 9156, 9171, 9204, 9213, 9227, 9239, 9257, 9292, 9323, 9347,
-    9386, 9411, 6192, 9442, 9449, 9458, 9468, 470, 9476, 5312, 9488, 9531,
-    2147, 9476, 6192, 9564, 9578, 9602, 9619, 9642, 9458, 9714, 9730, 9749,
-    9791, 1918, 9803, 9835, 9875, 9887, 9905, 9915, 9931, 9945, 9970, 9156,
-    9987, 10026, 10039, 10076, 10091, 10098, 10111, 10122, 10140, 10154, 10183, 10259,
-    9442, 10352, 10375, 10399, 10419, 6272, 10454, 10469, 10478, 10493, 10501, 10517,
-    10540, 10555, 443, 10595, 3393, 10609, 2147, 10632, 10641, 10658, 10672, 10705,
-    10724, 10735, 10770, 10794, 10826, 10859, 10895, 10912, 10942, 10960, 10990, 11003,
-    11010, 11029, 11033, 11038, 11042, 11048, 11054, 10469, 443, 10724, 11067, 11074,
-    11083, 11089, 11101, 11117, 11123, 11134, 11147, 11156, 11162, 11181, 11195, 11204,
-    11215, 11224, 11236, 11089, 11255, 3393, 10595, 11266, 11272, 11280, 11309, 11322,
-    11337, 11342, 2075, 11348, 11473, 11501, 11533, 11573, 11619, 11652, 11684, 11721,
-    11789, 5312, 11795, 11802, 470, 11808, 11815, 11878, 11897, 11905, 11911, 11979,
-    12005, 12037, 12085, 12135, 12179, 12223, 12257, 12272, 12280, 12308, 12329, 12359,
-    12389, 12393, 12401, 12412, 12420, 12429, 12439, 12448, 12454, 1967, 12476, 12502,
-    470, 12542, 12558, 12577, 12638, 12704, 12773, 12805, 12839, 12869, 12889, 12906,
-    12909, 12926, 12951, 12966, 13028, 13090, 5312, 13158, 13163, 13171, 13177, 13191,
-    13205, 13217, 13225, 13232, 13240, 13247,
+    4076, 4116, 4148, 4182, 4189, 4197, 4204, 4211, 4221, 4232, 4244, 4249,
+    4258, 4264, 4274, 4283, 4292, 4303, 4312, 4347, 4382, 4417, 4442, 4472,
+    4575, 4630, 4659, 4686, 4706, 4727, 4790, 4819, 452, 3500, 4850, 4857,
+    4890, 4897, 4903, 2075, 4910, 4927, 4956, 4968, 3154, 4976, 3146, 3154,
+    4968, 4983, 4998, 5022, 5043, 5066, 5082, 5106, 4976, 5299, 3793, 5336,
+    5369, 5393, 3751, 5422, 5435, 5444, 2058, 1967, 5465, 5486, 5533, 2527,
+    2595, 5547, 5555, 5578, 5657, 5673, 5764, 5814, 5837, 5923, 5960, 5837,
+    5982, 6018, 6040, 6128, 6162, 6184, 6273, 463, 6320, 6341, 6357, 6384,
+    6427, 6447, 6467, 6495, 6507, 6520, 2595, 6558, 6572, 6589, 2563, 6605,
+    6629, 6664, 6671, 6691, 6719, 6754, 6800, 6822, 6841, 6876, 6896, 6926,
+    6944, 6973, 6997, 7055, 7082, 7135, 7166, 7199, 7237, 7276, 7303, 7341,
+    7377, 7404, 7441, 7485, 7519, 7539, 7565, 7592, 7597, 7602, 7608, 7614,
+    7620, 7624, 7636, 7662, 7668, 7674, 7679, 7687, 7706, 7565, 7727, 7734,
+    7741, 7620, 7748, 7762, 7790, 7818, 7842, 7850, 7858, 7876, 7902, 7926,
+    7953, 7662, 7979, 7674, 7987, 8004, 8091, 8196, 8204, 8239, 8256, 8275,
+    8295, 8304, 8337, 8408, 8427, 8441, 8467, 8475, 8489, 8504, 8525, 8552,
+    4968, 8638, 8659, 8659, 8666, 8682, 8704, 8744, 8785, 8808, 8853, 8882,
+    8911, 8942, 8959, 8982, 8995, 9009, 9038, 9055, 9063, 9080, 9192, 9219,
+    9247, 9300, 2147, 9317, 9341, 9354, 9369, 9402, 9420, 9444, 9459, 9492,
+    9501, 9515, 9527, 9545, 9580, 9611, 9635, 9674, 9699, 6427, 9730, 9737,
+    9746, 9756, 470, 9764, 5547, 9776, 9819, 2147, 9764, 6427, 9852, 9866,
+    9890, 9907, 9930, 9746, 10002, 10018, 10037, 10079, 1918, 10091, 10123, 10163,
+    10175, 10193, 10203, 10219, 10233, 10258, 9444, 10275, 10314, 10327, 10364, 10379,
+    10386, 10399, 10410, 10428, 10442, 10471, 10547, 9730, 10640, 10663, 10687, 10707,
+    6507, 10742, 10757, 10766, 10781, 10789, 10805, 10828, 10843, 443, 10883, 3393,
+    10897, 2147, 10920, 10929, 10946, 10960, 10993, 11012, 11023, 11058, 11082, 11114,
+    11147, 11183, 11200, 11230, 11248, 11278, 11291, 11298, 11317, 11321, 11326, 11330,
+    11336, 11342, 10757, 443, 11012, 11355, 11362, 11371, 11377, 11389, 11405, 11411,
+    11422, 11435, 11444, 11450, 11469, 11483, 11492, 11503, 11512, 11524, 11377, 11543,
+    3393, 10883, 11554, 11560, 11568, 11597, 11610, 11625, 11630, 2075, 11636, 11761,
+    11789, 11821, 11861, 11907, 11940, 11972, 12009, 12077, 5547, 12083, 12090, 470,
+    12096, 12103, 12166, 12185, 12193, 12199, 12267, 12293, 12325, 12373, 12423, 12467,
+    12511, 12545, 12560, 12568, 12596, 12617, 12647, 12677, 12681, 12689, 12700, 12708,
+    12717, 12727, 12736, 12742, 1967, 12764, 12790, 470, 12830, 12846, 12865, 12926,
+    12992, 13061, 13093, 13127, 13157, 13177, 13194, 13197, 13214, 13239, 13254, 13316,
+    13378, 5547, 13446, 13451, 13459, 13465, 13479, 13493, 13505, 13513, 13520, 13528,
+    13535,
 };
 
-// ja: 15023 bytes, 606 of 606 messages.
+// ja: 15353 bytes, 625 of 625 messages.
 const char kBlob_ja[] =
     "\xE3\x82\xBF\xE3\x83\x83\xE3\x83\x81\xE3\x81\x8C\xE3\x81\x8A\xE3\x81\x8B\xE3\x81\x97\xE3\x81\x84? \xE7\x94\xBB\xE9\x9D\xA2\xE3\x82\x92\xE9\x95\xB7\xE6\x8A\xBC\xE3\x81\x97\0"
     "\xE3\x83\x92\xE3\x83\xB3\xE3\x83\x88 {0}/{1}\0\xE3\x82\xBF\xE3\x83\x83\xE3\x83\x97\xE3\x81\xA7\xE6\xAC\xA1\xE3\x81\xB8\0"
@@ -1103,6 +1127,13 @@ const char kBlob_ja[] =
     "{0} \xE6\x9B\xB2\xE3\x82\x92\xE6\x96\xB0\xE3\x81\x9F\xE3\x81\xAB\xE6\xA4\x9C\xE5\x87\xBA\0\xE3\x83\xA9\xE3\x82\xA4\xE3\x83\x96\xE3\x83\xA9\xE3\x83\xAA\xE3\x82\x92\xE6\x9B\xB4\xE6\x96\xB0\xE3\x81\x97\xE3\x81\xBE\xE3\x81\x97\xE3\x81\x9F\0"
     "\xE6\xAC\xA1\xE5\x9B\x9E\xE8\xB5\xB7\xE5\x8B\x95\xE6\x99\x82\xE3\x81\xAB\xE3\x83\xA9\xE3\x82\xA4\xE3\x83\x96\xE3\x83\xA9\xE3\x83\xAA\xE3\x82\x92\xE6\x9B\xB4\xE6\x96\xB0\0"
     "\xE3\x83\xA9\xE3\x82\xA4\xE3\x83\x96\xE3\x83\xA9\xE3\x83\xAA\xE3\x82\x92\xE6\x9B\xB4\xE6\x96\xB0\xE4\xB8\xAD: \xE5\xB0\x91\xE3\x81\x97\xE3\x81\x8A\xE5\xBE\x85\xE3\x81\xA1\xE3\x81\x8F\xE3\x81\xA0\xE3\x81\x95\xE3\x81\x84\0"
+    "\xE3\x83\x95\xE3\x82\xA3\xE3\x83\xAB\xE3\x82\xBF\xE3\x83\xBC\0\xE6\x98\x8E\xE3\x82\x8B\xE3\x81\x84\0"
+    "\xE4\xB8\xAD\xE9\x96\x93\0\xE6\x82\xB2\xE3\x81\x97\xE3\x81\x84\0\xE8\x90\xBD\xE3\x81\xA1\xE7\x9D\x80\xE3\x81\x84\xE3\x81\x9F\0"
+    "\xE6\xBF\x80\xE3\x81\x97\xE3\x81\x84\0\xE3\x82\xA4\xE3\x83\xB3\xE3\x82\xB9\xE3\x83\x88\0\xE3\x83\x9C\xE3\x83\xBC\xE3\x82\xAB\xE3\x83\xAB\0"
+    "\xE3\x82\xA2\xE3\x82\xB3\xE3\x83\xBC\xE3\x82\xB9\xE3\x83\x86\xE3\x82\xA3\xE3\x83\x83\xE3\x82\xAF\0"
+    "\xE3\x83\x91\xE3\x83\xBC\xE3\x83\x86\xE3\x82\xA3\xE3\x83\xBC\0\xE8\xB8\x8A\xE3\x82\x8C\xE3\x82\x8B\0"
+    "\xE5\x8E\xB3\xE5\xAF\x86\0\xE6\xA8\x99\xE6\xBA\x96\0\xE7\xB7\xA9\xE3\x82\x81\0\xE3\x82\xAF\xE3\x83\xAA\xE3\x82\xA2\0"
+    "{0} / {1} \xE3\x82\xA2\xE3\x83\xAB\xE3\x83\x90\xE3\x83\xA0\0{0} / {1} \xE6\x9B\xB2\0\xE3\x83\x95\xE3\x82\xA3\xE3\x83\xAB\xE3\x82\xBF\xE3\x83\xBC\xE3\x81\xAB\xE5\x90\x88\xE3\x81\x86\xE3\x82\xA2\xE3\x83\xAB\xE3\x83\x90\xE3\x83\xA0\xE3\x81\x8C\xE3\x81\x82\xE3\x82\x8A\xE3\x81\xBE\xE3\x81\x9B\xE3\x82\x93\0"
     "\xE5\x88\xA5\xE3\x81\xAE\xE3\x82\xAB\xE3\x83\xBC\xE3\x83\x89: \xE5\x86\x8D\xE8\xB5\xB7\xE5\x8B\x95\xE3\x81\x97\xE3\x81\xBE\xE3\x81\x99\0"
     "\xE3\x82\xAB\xE3\x83\xBC\xE3\x83\x89\xE3\x81\x8C\xE6\x88\xBB\xE3\x82\x8A\xE3\x81\xBE\xE3\x81\x97\xE3\x81\x9F: \xE5\x86\x8D\xE8\xB5\xB7\xE5\x8B\x95\xE3\x81\x97\xE3\x81\xBE\xE3\x81\x99\0"
     "\xE5\x86\x8D\xE7\x94\x9F\xE6\xB8\x88\xE3\x81\xBF\xE3\x81\xAE\xE6\x9B\xB2\xE3\x82\x92\xE5\xA4\x96\xE3\x81\x9B\xE3\x81\xBE\xE3\x81\x9B\xE3\x82\x93: \xE3\x82\xAD\xE3\x83\xA5\xE3\x83\xBC\xE3\x81\xAF {0} \xE6\x9B\xB2\xE3\x81\xBE\xE3\x81\xA7\0"
@@ -1118,7 +1149,7 @@ const char kBlob_ja[] =
     "\xE5\x86\x8D\xE7\x94\x9F\xE4\xB8\xAD\xE3\x81\xAE\xE6\x9B\xB2\xE3\x81\xAF\xE6\xAE\x8B\xE3\x81\x97\xE3\x81\xBE\xE3\x81\x99\0"
     "\xE5\x86\x8D\xE7\x94\x9F\xE3\x82\x92\xE6\xAD\xA2\xE3\x82\x81\xE3\x81\xBE\xE3\x81\x99\0\xE3\x82\xAD\xE3\x83\xA5\xE3\x83\xBC\xE3\x82\x92\xE3\x81\x99\xE3\x81\xB9\xE3\x81\xA6\xE3\x82\xAF\xE3\x83\xAA\xE3\x82\xA2?\0"
     "{0} \xE6\x9B\xB2\xE3\x81\x99\xE3\x81\xB9\xE3\x81\xA6\xE3\x82\x92\xE6\xB6\x88\xE3\x81\x97\xE3\x81\xA6\xE5\x86\x8D\xE7\x94\x9F\xE3\x82\x92\xE6\xAD\xA2\xE3\x82\x81\xE3\x81\xBE\xE3\x81\x99\xE3\x80\x82\xE7\xB6\x9A\xE3\x81\x8F\xE9\x80\x9A\xE7\x9F\xA5\xE3\x81\xAE\xE3\x80\x8C\xE6\x88\xBB\xE3\x81\x99\xE3\x80\x8D\xE3\x81\xA7\xE5\x85\x83\xE3\x81\xAB\xE6\x88\xBB\xE3\x81\x9B\xE3\x81\xBE\xE3\x81\x99\xE3\x80\x82\0"
-    "\xE3\x82\xAF\xE3\x83\xAA\xE3\x82\xA2\0{0} \xE6\x9B\xB2\xE3\x82\x92\xE5\x89\x8A\xE9\x99\xA4\xE3\x81\x97\xE3\x81\xBE\xE3\x81\x97\xE3\x81\x9F\0"
+    "{0} \xE6\x9B\xB2\xE3\x82\x92\xE5\x89\x8A\xE9\x99\xA4\xE3\x81\x97\xE3\x81\xBE\xE3\x81\x97\xE3\x81\x9F\0"
     "{0} \xE6\x9B\xB2\xE3\x82\x92\xE3\x82\xAF\xE3\x83\xAA\xE3\x82\xA2\xE3\x81\x97\xE3\x81\xBE\xE3\x81\x97\xE3\x81\x9F\0"
     "\xE3\x81\x9D\xE3\x82\x8C\xE3\x81\xAF\xE4\xBB\x8A\xE5\x86\x8D\xE7\x94\x9F\xE4\xB8\xAD\xE3\x81\xAE\xE6\x9B\xB2\xE3\x81\xA7\xE3\x81\x99\0"
     "\xE5\x86\x8D\xE7\x94\x9F\xE4\xB8\xAD\xE3\x81\xAE\xE6\x9B\xB2\xE3\x81\xAE\xE5\xBE\x8C\xE3\x81\xAB\xE3\x81\xAF\xE4\xBD\x95\xE3\x82\x82\xE3\x81\x82\xE3\x82\x8A\xE3\x81\xBE\xE3\x81\x9B\xE3\x82\x93\0"
@@ -1182,8 +1213,7 @@ const char kBlob_ja[] =
     "\xE5\x86\x8D\xE8\xB5\xB7\xE5\x8B\x95\xE3\x81\xBE\xE3\x81\xA7 {0} MHz\0" "240 MHz\0" "160 MHz\0"
     "Bluetooth \xE9\x80\x81\xE4\xBF\xA1\xE5\x87\xBA\xE5\x8A\x9B\0\xE7\xAF\x80\xE9\x9B\xBB\xE3\x80\x81\xE8\xBF\x91\xE3\x81\x8F\xE3\x81\xA7\xE4\xBD\xBF\xE3\x81\x86\0"
     "\xE8\xB7\x9D\xE9\x9B\xA2\xE3\x81\xAB\xE5\x90\x88\xE3\x82\x8F\xE3\x81\x9B\xE3\x82\x8B\0\xE9\x81\xA0\xE3\x81\x8F\xE3\x81\xBE\xE3\x81\xA7\xE3\x80\x81\xE9\x9B\xBB\xE6\xB1\xA0\xE3\x82\x92\xE4\xBD\xBF\xE3\x81\x86\0"
-    "\xE6\xAC\xA1\xE3\x81\xAE\xE6\x8E\xA5\xE7\xB6\x9A\xE3\x81\x8B\xE3\x82\x89\0\xE6\xA8\x99\xE6\xBA\x96\0"
-    "{0} \xE3\x81\xA7\xE5\x86\x8D\xE8\xB5\xB7\xE5\x8B\x95\xE3\x81\x97\xE3\x81\xBE\xE3\x81\x99\xE3\x81\x8B?\0"
+    "\xE6\xAC\xA1\xE3\x81\xAE\xE6\x8E\xA5\xE7\xB6\x9A\xE3\x81\x8B\xE3\x82\x89\0{0} \xE3\x81\xA7\xE5\x86\x8D\xE8\xB5\xB7\xE5\x8B\x95\xE3\x81\x97\xE3\x81\xBE\xE3\x81\x99\xE3\x81\x8B?\0"
     "\xE9\x80\x9F\xE5\xBA\xA6\xE3\x81\xAF\xE5\x86\x8D\xE8\xB5\xB7\xE5\x8B\x95\xE6\x99\x82\xE3\x81\xAB\xE5\xA4\x89\xE3\x82\x8F\xE3\x82\x8A\xE3\x81\xBE\xE3\x81\x99\xE3\x80\x82\xE9\x9F\xB3\xE6\xA5\xBD\xE3\x81\xAF\xE4\xB8\x80\xE6\x99\x82\xE5\x81\x9C\xE6\xAD\xA2\xE3\x81\x97\xE3\x80\x81\xE5\x90\x8C\xE3\x81\x98\xE4\xBD\x8D\xE7\xBD\xAE\xE3\x81\x8B\xE3\x82\x89\xE5\x86\x8D\xE9\x96\x8B\xE3\x81\x97\xE3\x81\xBE\xE3\x81\x99\xE3\x80\x82\0"
     "\xE5\xB0\x91\xE3\x81\x97\xE7\xAF\x80\xE9\x9B\xBB\xE3\x80\x82\xE5\x86\x8D\xE7\x94\x9F\xE4\xB8\xAD\xE3\x81\xAF\xE4\xB8\x80\xE8\xA6\xA7\xE3\x81\x8C\xE9\x81\x85\xE3\x81\x8F\xE3\x81\xAA\xE3\x82\x8A\xE3\x81\xBE\xE3\x81\x99\xE3\x80\x82\xE9\x9F\xB3\xE6\xA5\xBD\xE3\x81\xAF\xE4\xB8\x80\xE6\x99\x82\xE5\x81\x9C\xE6\xAD\xA2\xE3\x81\x97\xE3\x80\x81\xE5\x90\x8C\xE3\x81\x98\xE4\xBD\x8D\xE7\xBD\xAE\xE3\x81\x8B\xE3\x82\x89\xE5\x86\x8D\xE9\x96\x8B\xE3\x81\x97\xE3\x81\xBE\xE3\x81\x99\xE3\x80\x82\0"
     "\xE5\x86\x8D\xE8\xB5\xB7\xE5\x8B\x95\0\xE3\x83\x9A\xE3\x82\xA2\xE3\x83\xAA\xE3\x83\xB3\xE3\x82\xB0\xE7\xB5\x82\xE4\xBA\x86\xE3\x81\xBE\xE3\x81\xA7\xE3\x81\x8A\xE5\xBE\x85\xE3\x81\xA1\xE3\x81\x8F\xE3\x81\xA0\xE3\x81\x95\xE3\x81\x84\0"
@@ -1209,6 +1239,7 @@ const char kBlob_ja[] =
     "\xE6\x9C\xAC\xE4\xBD\x93\xE3\x81\xAE\xE3\x83\x95\xE3\x82\xA1\xE3\x82\xA4\xE3\x83\xAB\xE3\x81\xAE\xE3\x82\xBF\xE3\x82\xB0\xE3\x82\x92\xE8\xAA\xAD\xE3\x81\xBF\xE7\x9B\xB4\xE3\x81\x97\xE3\x81\xBE\xE3\x81\x99 (\xE8\xBB\xA2\xE9\x80\x81\xE5\x88\x86\xE3\x81\xAF\xE3\x81\x9D\xE3\x81\xAE\xE3\x81\xBE\xE3\x81\xBE)\xE3\x80\x82\xE5\xA4\xA7\xE3\x81\x8D\xE3\x81\xAA\xE3\x82\xAB\xE3\x83\xBC\xE3\x83\x89\xE3\x81\xA7\xE3\x81\xAF\xE6\x95\xB0\xE5\x88\x86\xE3\x81\x8B\xE3\x81\x8B\xE3\x82\x8A\xE3\x81\xBE\xE3\x81\x99\xE3\x80\x82\0"
     "\xE3\x82\xBF\xE3\x82\xB0\xE3\x82\x92\xE8\xAA\xAD\xE3\x81\xBF\xE7\x9B\xB4\xE3\x81\x97\xE3\x81\xA6\xE3\x81\x84\xE3\x81\xBE\xE3\x81\x99\0"
     "\xE3\x82\xBF\xE3\x82\xB0\xE3\x81\xAF\xE3\x82\xAB\xE3\x83\xBC\xE3\x83\x89\xE3\x81\xA7\xE3\x81\xAE\xE3\x81\xBF\xE8\xAA\xAD\xE3\x82\x81\xE3\x81\xBE\xE3\x81\x99\0"
+    "\xE8\xB5\xB7\xE5\x8B\x95\xE6\x99\x82\xE3\x81\xAB\xE3\x82\xAB\xE3\x83\xBC\xE3\x83\x89\xE3\x82\x92\xE8\xAA\xAD\xE3\x82\x81\xE3\x81\xBE\xE3\x81\x9B\xE3\x82\x93\xE3\x81\xA7\xE3\x81\x97\xE3\x81\x9F: \xE5\x86\x8D\xE8\xB5\xB7\xE5\x8B\x95\xE3\x81\x97\xE3\x81\xA6\xE3\x81\x8F\xE3\x81\xA0\xE3\x81\x95\xE3\x81\x84\0"
     "Bluetooth \xE3\x83\x98\xE3\x83\x83\xE3\x83\x89\xE3\x83\x9B\xE3\x83\xB3\0\xE3\x83\x98\xE3\x83\x83\xE3\x83\x89\xE3\x83\x9B\xE3\x83\xB3\xE6\x9C\xAA\xE3\x83\x9A\xE3\x82\xA2\xE3\x83\xAA\xE3\x83\xB3\xE3\x82\xB0\0"
     "\xE6\x9C\xAA\xE6\x8E\xA5\xE7\xB6\x9A\0\xE6\x8E\xA5\xE7\xB6\x9A\xE4\xB8\xAD...\0\xE6\x8E\xA5\xE7\xB6\x9A\xE4\xB8\xAD...  \xE8\xA9\xA6\xE8\xA1\x8C {0}/{1}\0"
     "{0} \xE3\x82\x92\xE6\xA4\x9C\xE7\xB4\xA2\xE4\xB8\xAD...\0\xE3\x83\x98\xE3\x83\x83\xE3\x83\x89\xE3\x83\x9B\xE3\x83\xB3\xE3\x82\x92\xE6\xA4\x9C\xE7\xB4\xA2\xE4\xB8\xAD...\0"
@@ -1327,44 +1358,46 @@ const uint16_t kOff_ja[kStrings] = {
     3734, 3821, 3837, 513, 3863, 3871, 3892, 3919, 3929, 3946, 3969, 3986,
     4000, 4010, 4027, 4043, 4070, 4098, 4151, 4188, 4210, 4245, 4281, 4303,
     4336, 3036, 4348, 4366, 4388, 4400, 4417, 4442, 4477, 4508, 4551, 4577,
-    4614, 4477, 4657, 4714, 4750, 4798, 4863, 4890, 4920, 4941, 4962, 4989,
-    4400, 5019, 529, 4000, 5042, 5049, 5066, 3036, 5072, 2468, 5079, 5107,
-    5122, 5139, 3747, 5146, 5159, 3747, 5139, 5175, 5197, 5175, 5222, 5253,
-    5275, 5307, 5411, 5421, 4366, 5450, 5482, 5516, 5565, 5580, 5592, 5602,
-    2446, 2331, 2446, 5638, 5687, 2968, 3052, 5706, 5716, 5741, 5821, 5845,
-    5943, 5998, 6030, 6137, 6188, 6030, 6219, 6269, 6299, 6405, 6449, 6483,
-    6582, 549, 6645, 6664, 6680, 6704, 6753, 6796, 6803, 3022, 6837, 6844,
-    3052, 6887, 6901, 6918, 3022, 6938, 6969, 7009, 7022, 7041, 7063, 7106,
-    7152, 7177, 7198, 7232, 7249, 7283, 7317, 7342, 7378, 7410, 7434, 7470,
-    7512, 7560, 7606, 7651, 7696, 7744, 7795, 7817, 7856, 7907, 7958, 7977,
-    8008, 8038, 8045, 8052, 8058, 8064, 8070, 8077, 8087, 8118, 8122, 8126,
-    8130, 8137, 8162, 8193, 8223, 8230, 8237, 8070, 8244, 8255, 8286, 8317,
-    8341, 8349, 8357, 8380, 8405, 8427, 8458, 8118, 8477, 8126, 8484, 8514,
-    8620, 8741, 8751, 8800, 8823, 8839, 8865, 8878, 8920, 8962, 8978, 8988,
-    9017, 9030, 9056, 9075, 9091, 9120, 5139, 9220, 9248, 9248, 9255, 9286,
-    9310, 9364, 9389, 9416, 9433, 9453, 9470, 9481, 9492, 9503, 9521, 9543,
-    9574, 9587, 9597, 9629, 9759, 9793, 9833, 2544, 9859, 9893, 9903, 9916,
-    9945, 9965, 9996, 10018, 10056, 10069, 10086, 10099, 10113, 10155, 10194, 10218,
-    10258, 10286, 6753, 10325, 10341, 5139, 10348, 10361, 10377, 5706, 10384, 10437,
-    2544, 10377, 6753, 10488, 10502, 10533, 10560, 10598, 5139, 10701, 10727, 10764,
-    10806, 2263, 10825, 10845, 10876, 10893, 10921, 10928, 10953, 10987, 2670, 9996,
-    11001, 11047, 11057, 11100, 2544, 2263, 11117, 11139, 11161, 11185, 11217, 11324,
-    10325, 11445, 9996, 11474, 11509, 6837, 11537, 11559, 11575, 11591, 11607, 11629,
-    11656, 11674, 513, 11721, 3919, 5716, 2544, 11737, 11759, 11778, 11797, 11833,
-    11852, 11868, 11906, 11935, 11975, 12004, 12041, 12054, 12094, 12125, 12153, 12166,
-    12176, 12192, 12196, 12206, 12210, 12226, 12232, 11559, 513, 12254, 12265, 12278,
-    12300, 12310, 12317, 12339, 12349, 12362, 12381, 12400, 12406, 12440, 12471, 12493,
-    12518, 12527, 12539, 12310, 12558, 3919, 11721, 12210, 8070, 12570, 8962, 12609,
-    2712, 12625, 12635, 12643, 12734, 12762, 12810, 12858, 12909, 12958, 12997, 13045,
-    13149, 5706, 13156, 13163, 556, 13170, 13177, 13263, 13276, 13286, 13296, 13387,
-    13412, 13457, 13517, 13577, 13637, 13697, 13740, 13769, 13776, 13801, 13829, 13872,
-    13904, 13908, 13918, 13928, 13938, 13948, 13961, 13968, 13978, 2331, 14004, 14044,
-    10361, 14084, 14113, 14153, 14229, 14310, 14403, 14432, 14460, 14496, 14509, 89,
-    14528, 14557, 14597, 14619, 14720, 14811, 5706, 14914, 14919, 14927, 14935, 14951,
-    14970, 14989, 14997, 15004, 15012, 15019,
+    4614, 4477, 4657, 4714, 4730, 4740, 4747, 4757, 4773, 4783, 4796, 4809,
+    4834, 4850, 4860, 4867, 4874, 4881, 4891, 4914, 4928, 4983, 5019, 5067,
+    5132, 5159, 5189, 5210, 5231, 5258, 4400, 5288, 529, 4000, 5311, 5318,
+    5335, 3036, 5341, 2468, 5348, 5376, 5391, 5408, 3747, 5415, 5428, 3747,
+    5408, 5444, 5466, 5444, 5491, 5522, 5544, 5576, 4881, 5680, 4366, 5709,
+    5741, 5775, 5824, 5839, 5851, 5861, 2446, 2331, 2446, 5897, 5946, 2968,
+    3052, 5965, 5975, 6000, 6080, 6104, 6202, 6257, 6289, 6396, 6447, 6289,
+    6478, 6528, 6558, 6664, 6708, 6742, 6841, 549, 6904, 6923, 6939, 6963,
+    7012, 7055, 7062, 3022, 7096, 7103, 3052, 7146, 7160, 7177, 3022, 7197,
+    7228, 7268, 7281, 7300, 7322, 7365, 7411, 7436, 7457, 7491, 7508, 7542,
+    7576, 7601, 7637, 7669, 7693, 7729, 7771, 7819, 7865, 7910, 7955, 8003,
+    8054, 8076, 8115, 8166, 8217, 8236, 8267, 8297, 8304, 8311, 8317, 8323,
+    8329, 8336, 8346, 8377, 8381, 8385, 8389, 8396, 8421, 8452, 8482, 8489,
+    8496, 8329, 8503, 8514, 8545, 8576, 8600, 8608, 8616, 8639, 8664, 8686,
+    8717, 8377, 4867, 8385, 8736, 8766, 8872, 8993, 9003, 9052, 9075, 9091,
+    9117, 9130, 9172, 9214, 9230, 9240, 9269, 9282, 9308, 9327, 9343, 9372,
+    5408, 9472, 9500, 9500, 9507, 9538, 9562, 9616, 9641, 9668, 9685, 9705,
+    9722, 9733, 9744, 9755, 9773, 9795, 9826, 9839, 9849, 9881, 10011, 10045,
+    10085, 10163, 2544, 10189, 10223, 10233, 10246, 10275, 10295, 10326, 10348, 10386,
+    10399, 10416, 10429, 10443, 10485, 10524, 10548, 10588, 10616, 7012, 10655, 10671,
+    5408, 10678, 10691, 10707, 5965, 10714, 10767, 2544, 10707, 7012, 10818, 10832,
+    10863, 10890, 10928, 5408, 11031, 11057, 11094, 11136, 2263, 11155, 11175, 11206,
+    11223, 11251, 11258, 11283, 11317, 2670, 10326, 11331, 11377, 11387, 11430, 2544,
+    2263, 11447, 11469, 11491, 11515, 11547, 11654, 10655, 11775, 10326, 11804, 11839,
+    7096, 11867, 11889, 11905, 11921, 11937, 11959, 11986, 12004, 513, 12051, 3919,
+    5975, 2544, 12067, 12089, 12108, 12127, 12163, 12182, 12198, 12236, 12265, 12305,
+    12334, 12371, 12384, 12424, 12455, 12483, 12496, 12506, 12522, 12526, 12536, 12540,
+    12556, 12562, 11889, 513, 12584, 12595, 12608, 12630, 12640, 12647, 12669, 12679,
+    12692, 12711, 12730, 12736, 12770, 12801, 12823, 12848, 12857, 12869, 12640, 12888,
+    3919, 12051, 12540, 8329, 12900, 9214, 12939, 2712, 12955, 12965, 12973, 13064,
+    13092, 13140, 13188, 13239, 13288, 13327, 13375, 13479, 5965, 13486, 13493, 556,
+    13500, 13507, 13593, 13606, 13616, 13626, 13717, 13742, 13787, 13847, 13907, 13967,
+    14027, 14070, 14099, 14106, 14131, 14159, 14202, 14234, 14238, 14248, 14258, 14268,
+    14278, 14291, 14298, 14308, 2331, 14334, 14374, 10691, 14414, 14443, 14483, 14559,
+    14640, 14733, 14762, 14790, 14826, 14839, 89, 14858, 14887, 14927, 14949, 15050,
+    15141, 5965, 15244, 15249, 15257, 15265, 15281, 15300, 15319, 15327, 15334, 15342,
+    15349,
 };
 
-// pl: 14585 bytes, 606 of 606 messages.
+// pl: 14919 bytes, 625 of 625 messages.
 const char kBlob_pl[] =
     "Dotyk nie dzia\xC5\x82" "a? Trzymaj palec na ekranie.\0Porada {0} z {1}\0dotknij, by przej\xC5\x9B\xC4\x87\0"
     "Dalej\0Rozumiem\0Trzy czerwone kropki\0Pod ekranem: klikni\xC4\x99" "cie lub przytrzymanie\0"
@@ -1424,18 +1457,21 @@ const char kBlob_pl[] =
     "Odczyt tag\xC3\xB3w {0} / {1}\0Aktualizacja biblioteki\xE2\x80\xA6\0Ostatni transfer si\xC4\x99 nie zako\xC5\x84" "czy\xC5\x82\0"
     "Znaleziono: {0} nowy utw\xC3\xB3r\0Znaleziono: {0} nowe utwory\0Znaleziono: {0} nowych utwor\xC3\xB3w\0"
     "\0Biblioteka zaktualizowana\0Aktualizacja biblioteki: po restarcie\0Aktualizacja biblioteki: chwileczk\xC4\x99\0"
-    "Inna karta: ponowne uruchamianie\0Karta wr\xC3\xB3" "ci\xC5\x82" "a: ponowne uruchamianie\0"
-    "Nic nie zwolni miejsca: kolejka mie\xC5\x9B" "ci {0} utw\xC3\xB3r\0Nic nie zwolni miejsca: kolejka mie\xC5\x9B" "ci {0} utwory\0"
-    "Nic nie zwolni miejsca: kolejka mie\xC5\x9B" "ci {0} utwor\xC3\xB3w\0\0kolejka mie\xC5\x9B" "ci {0} utw\xC3\xB3r\0"
-    "kolejka mie\xC5\x9B" "ci {0} utwory\0kolejka mie\xC5\x9B" "ci {0} utwor\xC3\xB3w\0\0Odtwarzanie losowe {0} z {1}\0"
-    "Odtwarzanie {0} z {1}\0Dodano {0} z {1}\0Jako nast\xC4\x99pne {0} z {1}\0{0} odtworzony wypad\xC5\x82\0"
-    "{0} odtworzone wypad\xC5\x82y\0{0} odtworzonych wypad\xC5\x82o\0\0Dodano\0Dodano {0} utwory\0"
-    "Dodano {0} utwor\xC3\xB3w\0\0Jako nast\xC4\x99pny\0Jako nast\xC4\x99pne {0} utwory\0Jako nast\xC4\x99pne {0} utwor\xC3\xB3w\0"
-    "\0pusta\0Edytuj\0Wybrano: {0}\0Wybrano: {0}\0Wybrano: {0}\0\0z {0}\0Ca\xC5\x82o\xC5\x9B\xC4\x87\0"
-    "\xC5\xBB" "adne\0Brak nast\xC4\x99pnych\0{0} nast\xC4\x99pny\0{0} nast\xC4\x99pne\0{0} nast\xC4\x99pnych\0"
-    "\0Usu\xC5\x84 {0}\0Usu\xC5\x84\0Wyczy\xC5\x9B\xC4\x87\0Czyszczenie kolejki\0Wyczy\xC5\x9B\xC4\x87 nast\xC4\x99pne\0"
-    "Wyczy\xC5\x9B\xC4\x87 kolejk\xC4\x99\0bie\xC5\xBC\xC4\x85" "cy utw\xC3\xB3r zostaje\0zatrzymuje muzyk\xC4\x99\0"
-    "Wyczy\xC5\x9B" "ci\xC4\x87 ca\xC5\x82\xC4\x85 kolejk\xC4\x99?\0Zniknie {0} utw\xC3\xB3r i muzyka si\xC4\x99 zatrzyma. Cofnij w nast\xC4\x99pnym komunikacie przywr\xC3\xB3" "ci go.\0"
+    "Filtry\0Radosne\0Neutralne\0Smutne\0Spokojne\0Agresywne\0Instrumentalne\0Z wokalem\0Akustyczne\0"
+    "Imprezowe\0Taneczne\0\xC5\x9A" "cis\xC5\x82y\0Standardowy\0Lu\xC5\xBAny\0Wyczy\xC5\x9B\xC4\x87\0"
+    "{0} z {1} albumu\0{0} z {1} album\xC3\xB3w\0{0} z {1} album\xC3\xB3w\0\0{0} z {1} utworu\0{0} z {1} utwor\xC3\xB3w\0"
+    "{0} z {1} utwor\xC3\xB3w\0\0\xC5\xBB" "aden album nie pasuje do filtr\xC3\xB3w\0Inna karta: ponowne uruchamianie\0"
+    "Karta wr\xC3\xB3" "ci\xC5\x82" "a: ponowne uruchamianie\0Nic nie zwolni miejsca: kolejka mie\xC5\x9B" "ci {0} utw\xC3\xB3r\0"
+    "Nic nie zwolni miejsca: kolejka mie\xC5\x9B" "ci {0} utwory\0Nic nie zwolni miejsca: kolejka mie\xC5\x9B" "ci {0} utwor\xC3\xB3w\0"
+    "\0kolejka mie\xC5\x9B" "ci {0} utw\xC3\xB3r\0kolejka mie\xC5\x9B" "ci {0} utwory\0kolejka mie\xC5\x9B" "ci {0} utwor\xC3\xB3w\0"
+    "\0Odtwarzanie losowe {0} z {1}\0Odtwarzanie {0} z {1}\0Dodano {0} z {1}\0Jako nast\xC4\x99pne {0} z {1}\0"
+    "{0} odtworzony wypad\xC5\x82\0{0} odtworzone wypad\xC5\x82y\0{0} odtworzonych wypad\xC5\x82o\0"
+    "\0Dodano\0Dodano {0} utwory\0Dodano {0} utwor\xC3\xB3w\0\0Jako nast\xC4\x99pny\0Jako nast\xC4\x99pne {0} utwory\0"
+    "Jako nast\xC4\x99pne {0} utwor\xC3\xB3w\0\0pusta\0Edytuj\0Wybrano: {0}\0Wybrano: {0}\0Wybrano: {0}\0"
+    "\0z {0}\0Ca\xC5\x82o\xC5\x9B\xC4\x87\0\xC5\xBB" "adne\0Brak nast\xC4\x99pnych\0{0} nast\xC4\x99pny\0"
+    "{0} nast\xC4\x99pne\0{0} nast\xC4\x99pnych\0\0Usu\xC5\x84 {0}\0Usu\xC5\x84\0Czyszczenie kolejki\0"
+    "Wyczy\xC5\x9B\xC4\x87 nast\xC4\x99pne\0Wyczy\xC5\x9B\xC4\x87 kolejk\xC4\x99\0bie\xC5\xBC\xC4\x85" "cy utw\xC3\xB3r zostaje\0"
+    "zatrzymuje muzyk\xC4\x99\0Wyczy\xC5\x9B" "ci\xC4\x87 ca\xC5\x82\xC4\x85 kolejk\xC4\x99?\0Zniknie {0} utw\xC3\xB3r i muzyka si\xC4\x99 zatrzyma. Cofnij w nast\xC4\x99pnym komunikacie przywr\xC3\xB3" "ci go.\0"
     "Znikn\xC4\x85 wszystkie {0} utwory i muzyka si\xC4\x99 zatrzyma. Cofnij w nast\xC4\x99pnym komunikacie przywr\xC3\xB3" "ci je.\0"
     "Zniknie wszystkie {0} utwor\xC3\xB3w i muzyka si\xC4\x99 zatrzyma. Cofnij w nast\xC4\x99pnym komunikacie przywr\xC3\xB3" "ci je.\0"
     "\0Usuni\xC4\x99to {0} utw\xC3\xB3r\0Usuni\xC4\x99to {0} utwory\0Usuni\xC4\x99to {0} utwor\xC3\xB3w\0"
@@ -1486,10 +1522,10 @@ const char kBlob_pl[] =
     "{0} transfer\0\0{0} tutaj\0{0} tutaj\0{0} tutaj\0\0{0} brak\0{0} brak\0{0} brak\0\0{0}% z tagami\0"
     "nazwy z plik\xC3\xB3w\0tagi wymagaj\xC4\x85 karty\0aktualizacja\xE2\x80\xA6\0Skanuj\0Odczyta\xC4\x87 tagi ponownie?\0"
     "Odtwarzacz odczyta tagi swoich plik\xC3\xB3w ponownie (te z transferu zostaj\xC4\x85). Na du\xC5\xBC" "ej karcie: kilka minut.\0"
-    "Ponowny odczyt tag\xC3\xB3w\0Tagi odczytuje si\xC4\x99 tylko z karty\0S\xC5\x82uchawki Bluetooth\0"
-    "Brak sparowanych s\xC5\x82uchawek\0Niepo\xC5\x82\xC4\x85" "czone\0\xC5\x81\xC4\x85" "czenie\xE2\x80\xA6\0"
-    "\xC5\x81\xC4\x85" "czenie\xE2\x80\xA6  pr\xC3\xB3" "ba {0} z {1}\0Szukanie {0}\xE2\x80\xA6\0"
-    "Szukanie s\xC5\x82uchawek\xE2\x80\xA6\0Parowanie\xE2\x80\xA6\0Parowanie\xE2\x80\xA6  pr\xC3\xB3" "ba {0} z {1}\0"
+    "Ponowny odczyt tag\xC3\xB3w\0Tagi odczytuje si\xC4\x99 tylko z karty\0B\xC5\x82\xC4\x85" "d odczytu karty przy starcie: uruchom ponownie\0"
+    "S\xC5\x82uchawki Bluetooth\0Brak sparowanych s\xC5\x82uchawek\0Niepo\xC5\x82\xC4\x85" "czone\0"
+    "\xC5\x81\xC4\x85" "czenie\xE2\x80\xA6\0\xC5\x81\xC4\x85" "czenie\xE2\x80\xA6  pr\xC3\xB3" "ba {0} z {1}\0"
+    "Szukanie {0}\xE2\x80\xA6\0Szukanie s\xC5\x82uchawek\xE2\x80\xA6\0Parowanie\xE2\x80\xA6\0Parowanie\xE2\x80\xA6  pr\xC3\xB3" "ba {0} z {1}\0"
     "Po\xC5\x82\xC4\x85" "czono\0Po\xC5\x82\xC4\x85" "czono  {0}\0{0}, {1} ms\0op\xC3\xB3\xC5\xBAnienie {0} ms\0"
     "Nie sparowano. Tryb parowania?\0Nie po\xC5\x82\xC4\x85" "czono. W\xC5\x82\xC4\x85" "czone i blisko?\0"
     "Zerwano: ponowne \xC5\x82\xC4\x85" "czenie\xE2\x80\xA6\0Zerwano: pr\xC3\xB3" "ba {0} z {1}\0"
@@ -1561,44 +1597,46 @@ const uint16_t kOff_pl[kStrings] = {
     3452, 3459, 3476, 428, 3548, 3584, 3619, 3664, 3673, 3711, 3761, 3793,
     3823, 3829, 3840, 3856, 3872, 3890, 3927, 3946, 3960, 3993, 4037, 4061,
     4092, 4109, 4118, 4138, 4222, 4234, 4294, 4315, 4339, 4366, 4404, 4493,
-    4519, 4339, 4557, 4594, 4627, 4665, 4821, 4905, 4934, 4956, 4973, 4998,
-    5072, 5118, 439, 5188, 5194, 5201, 5241, 5247, 5257, 2156, 5264, 5281,
-    5326, 5336, 184, 5342, 3320, 184, 5336, 5352, 5372, 5392, 5411, 5436,
-    5455, 5484, 5342, 5777, 4138, 5843, 5921, 5944, 5970, 5985, 6000, 6011,
-    2137, 2062, 2137, 6033, 6080, 6094, 2719, 6101, 6119, 6141, 6224, 6243,
-    6331, 6379, 6402, 6492, 6536, 6402, 6558, 6601, 6621, 6713, 6750, 6773,
-    6862, 454, 6920, 6937, 6954, 6981, 7029, 7052, 7061, 7092, 7104, 7115,
-    2719, 7152, 7170, 7183, 2738, 7196, 7221, 7252, 7260, 7282, 7313, 7358,
-    7402, 7422, 7439, 7480, 7497, 7533, 7556, 7581, 7604, 7702, 7727, 7811,
-    7846, 7872, 7907, 7946, 7978, 8014, 8050, 8064, 8098, 8142, 8177, 8195,
-    8218, 8248, 8253, 8258, 8264, 8270, 8276, 8282, 8292, 8319, 8325, 8334,
-    8341, 8347, 8364, 8385, 8414, 8421, 8428, 8276, 8435, 8450, 8473, 8501,
-    8521, 8529, 8537, 8551, 8579, 8605, 8629, 8319, 8325, 8334, 8657, 8673,
-    8763, 8877, 8887, 8916, 8934, 8954, 8976, 8983, 9018, 9130, 9148, 9163,
-    9189, 9198, 9218, 9234, 9252, 9274, 5336, 9381, 9403, 9403, 9410, 9428,
-    9457, 9498, 9570, 9588, 9637, 9700, 9746, 9786, 9817, 9845, 9859, 9875,
-    9896, 9912, 9919, 9944, 10050, 10072, 10106, 2228, 10127, 10155, 10170, 10184,
-    10216, 10232, 10255, 10268, 10299, 10311, 10328, 10340, 10360, 10391, 10429, 10460,
-    10486, 10508, 7029, 10537, 10544, 10553, 10562, 2392, 10573, 10583, 10590, 10627,
-    2228, 10573, 7029, 10663, 10676, 10699, 10715, 10738, 10553, 10825, 10840, 10862,
-    10896, 2017, 10909, 10936, 10971, 10984, 11004, 11014, 11033, 11054, 11091, 10255,
-    11104, 11142, 11158, 11196, 11210, 11221, 11231, 11249, 11267, 11284, 11310, 11384,
-    10537, 11478, 11497, 11525, 11548, 7104, 11572, 11587, 11595, 11611, 11619, 11633,
-    11655, 11669, 428, 11708, 3664, 11722, 2228, 11744, 11754, 11771, 11788, 11818,
-    11837, 11852, 11888, 11910, 11943, 11975, 12012, 12029, 12068, 12091, 12122, 12132,
-    12140, 12157, 12161, 12166, 12170, 12176, 12182, 11587, 428, 12196, 12206, 12217,
-    12226, 12237, 12246, 12261, 12266, 12288, 12299, 12310, 12316, 12335, 12351, 12360,
-    12374, 12383, 12395, 12413, 12425, 3664, 11708, 12436, 12442, 12447, 9130, 12475,
-    2392, 12491, 2156, 12498, 12731, 12757, 12796, 12834, 12880, 12914, 12952, 12997,
-    13079, 6101, 13086, 13094, 463, 13101, 13108, 13182, 13197, 477, 13206, 13270,
-    13293, 13328, 13380, 13431, 13480, 13529, 13563, 13583, 13593, 13622, 13644, 13682,
-    13706, 13710, 13719, 13727, 13737, 13747, 13755, 13760, 13767, 2062, 13788, 13818,
-    2392, 13864, 13881, 13905, 13962, 14024, 14093, 14130, 14162, 10232, 2375, 14202,
-    14205, 14227, 14259, 14287, 14352, 14414, 6101, 14483, 14488, 14496, 14502, 14516,
-    14534, 14552, 14560, 14567, 14575, 14582,
+    4519, 4339, 4557, 4594, 4601, 4609, 4619, 4626, 4635, 4645, 4660, 4670,
+    4681, 4691, 4700, 4709, 4721, 4728, 4738, 4794, 4850, 4886, 4919, 4957,
+    5113, 5197, 5226, 5248, 5265, 5290, 5364, 5410, 439, 5480, 5486, 5493,
+    5533, 5539, 5549, 2156, 5556, 5573, 5618, 5628, 184, 4728, 3320, 184,
+    5628, 5634, 5654, 5674, 5693, 5718, 5737, 5766, 4728, 6059, 4138, 6125,
+    6203, 6226, 6252, 6267, 6282, 6293, 2137, 2062, 2137, 6315, 6362, 6376,
+    2719, 6383, 6401, 6423, 6506, 6525, 6613, 6661, 6684, 6774, 6818, 6684,
+    6840, 6883, 6903, 6995, 7032, 7055, 7144, 454, 7202, 7219, 7236, 7263,
+    7311, 7334, 7343, 7374, 7386, 7397, 2719, 7434, 7452, 7465, 2738, 7478,
+    7503, 7534, 7542, 7564, 7595, 7640, 7684, 7704, 7721, 7762, 7779, 7815,
+    7838, 7863, 7886, 7984, 8009, 8093, 8128, 8154, 8189, 8228, 8260, 8296,
+    8332, 8346, 8380, 8424, 8459, 8477, 8500, 8530, 8535, 8540, 8546, 8552,
+    8558, 8564, 8574, 8601, 8607, 8616, 8623, 8629, 8646, 8667, 8696, 8703,
+    8710, 8558, 8717, 8732, 8755, 8783, 8803, 8811, 8819, 8833, 8861, 8887,
+    8911, 8601, 8607, 8616, 8939, 8955, 9045, 9159, 9169, 9198, 9216, 9236,
+    9258, 9265, 9300, 9412, 9430, 9445, 9471, 9480, 9500, 9516, 9534, 9556,
+    5628, 9663, 9685, 9685, 9692, 9710, 9739, 9780, 9852, 9870, 9919, 9982,
+    10028, 10068, 10099, 10127, 10141, 10157, 10178, 10194, 10201, 10226, 10332, 10354,
+    10388, 10440, 2228, 10461, 10489, 10504, 10518, 10550, 10566, 10589, 10602, 10633,
+    10645, 10662, 10674, 10694, 10725, 10763, 10794, 10820, 10842, 7311, 10871, 10878,
+    10887, 10896, 2392, 10907, 10917, 10924, 10961, 2228, 10907, 7311, 10997, 11010,
+    11033, 11049, 11072, 10887, 11159, 11174, 11196, 11230, 2017, 11243, 11270, 11305,
+    11318, 11338, 11348, 11367, 11388, 11425, 10589, 11438, 11476, 11492, 11530, 11544,
+    11555, 11565, 11583, 11601, 11618, 11644, 11718, 10871, 11812, 11831, 11859, 11882,
+    7386, 11906, 11921, 11929, 11945, 11953, 11967, 11989, 12003, 428, 12042, 3664,
+    12056, 2228, 12078, 12088, 12105, 12122, 12152, 12171, 12186, 12222, 12244, 12277,
+    12309, 12346, 12363, 12402, 12425, 12456, 12466, 12474, 12491, 12495, 12500, 12504,
+    12510, 12516, 11921, 428, 12530, 12540, 12551, 12560, 12571, 12580, 12595, 12600,
+    12622, 12633, 12644, 12650, 12669, 12685, 12694, 12708, 12717, 12729, 12747, 12759,
+    3664, 12042, 12770, 12776, 12781, 9412, 12809, 2392, 12825, 2156, 12832, 13065,
+    13091, 13130, 13168, 13214, 13248, 13286, 13331, 13413, 6383, 13420, 13428, 463,
+    13435, 13442, 13516, 13531, 477, 13540, 13604, 13627, 13662, 13714, 13765, 13814,
+    13863, 13897, 13917, 13927, 13956, 13978, 14016, 14040, 14044, 14053, 14061, 14071,
+    14081, 14089, 14094, 14101, 2062, 14122, 14152, 2392, 14198, 14215, 14239, 14296,
+    14358, 14427, 14464, 14496, 10566, 2375, 14536, 14539, 14561, 14593, 14621, 14686,
+    14748, 6383, 14817, 14822, 14830, 14836, 14850, 14868, 14886, 14894, 14901, 14909,
+    14916,
 };
 
-// pt: 13135 bytes, 606 of 606 messages.
+// pt: 13423 bytes, 625 of 625 messages.
 const char kBlob_pt[] =
     "O toque falha? Segure um dedo na tela.\0Dica {0} de {1}\0toque para seguir\0Avan\xC3\xA7" "ar\0"
     "Entendi\0Os tr\xC3\xAAs pontos vermelhos\0Abaixo da tela: clique ou segure qualquer um\0Anterior\0"
@@ -1646,14 +1684,16 @@ const char kBlob_pt[] =
     "\0A seguir: {0} faixas\0Na fila: {0}\0{0} faixa na fila\0\0{0} faixas na fila\0Verificando o cart\xC3\xA3o\xE2\x80\xA6\0"
     "Lendo tags {0} / {1}\0Atualizando a biblioteca\xE2\x80\xA6\0A \xC3\xBAltima transfer\xC3\xAAncia n\xC3\xA3o terminou\0"
     "{0} faixa nova encontrada\0\0{0} faixas novas encontradas\0Biblioteca atualizada\0A biblioteca atualiza ao reiniciar\0"
-    "Atualizando a biblioteca: um momento\0Outro cart\xC3\xA3o: reiniciando\0Cart\xC3\xA3o de volta: reiniciando\0"
+    "Atualizando a biblioteca: um momento\0Filtros\0Alegre\0Neutro\0Triste\0Relaxado\0Agressivo\0"
+    "Instrumental\0Vocal\0Ac\xC3\xBAstico\0Festa\0Dan\xC3\xA7" "ante\0Estrito\0Padr\xC3\xA3o\0Flex\xC3\xADvel\0"
+    "Limpar\0{0} de {1} \xC3\xA1lbum\0\0{0} de {1} \xC3\xA1lbuns\0{0} de {1} faixa\0\0{0} de {1} faixas\0"
+    "Nenhum \xC3\xA1lbum atende a esses filtros\0Outro cart\xC3\xA3o: reiniciando\0Cart\xC3\xA3o de volta: reiniciando\0"
     "Sem faixas tocadas para tirar: a fila tem {0} faixa\0\0Sem faixas tocadas para tirar: a fila tem {0} faixas\0"
     "a fila tem {0} faixa\0\0a fila tem {0} faixas\0Embaralhando {0} de {1}\0Tocando {0} de {1}\0"
     "{0} de {1} na fila\0{0} de {1} a seguir\0{0} faixa tocada saiu\0\0{0} faixas tocadas sa\xC3\xADram\0"
     "{0} faixa a seguir\0\0{0} faixas a seguir\0Editar\0{0} selecionada\0\0{0} selecionadas\0de {0}\0"
-    "Nada\0Nada a seguir\0{0} a seguir\0\0{0} a seguir\0Remover {0}\0Remover\0Limpar\0Limpar a fila\0"
-    "Limpar as pr\xC3\xB3ximas\0Limpar fila\0mant\xC3\xA9m a atual\0interrompe a m\xC3\xBAsica\0"
-    "Limpar toda a fila?\0{0} faixa sai e a m\xC3\xBAsica para. Desfazer, no aviso que aparece depois, a traz de volta.\0"
+    "Nada\0Nada a seguir\0{0} a seguir\0\0{0} a seguir\0Remover {0}\0Remover\0Limpar a fila\0Limpar as pr\xC3\xB3ximas\0"
+    "Limpar fila\0mant\xC3\xA9m a atual\0interrompe a m\xC3\xBAsica\0Limpar toda a fila?\0{0} faixa sai e a m\xC3\xBAsica para. Desfazer, no aviso que aparece depois, a traz de volta.\0"
     "\0Todas as {0} faixas saem e a m\xC3\xBAsica para. Desfazer, no aviso que aparece depois, as traz de volta.\0"
     "{0} faixa removida\0\0{0} faixas removidas\0Tirada da fila: {0} faixa\0\0Tiradas da fila: {0} faixas\0"
     "Essa \xC3\xA9 a que est\xC3\xA1 tocando\0Nada depois da faixa atual\0Tocando agora: {0}\0Removida: {0}\0"
@@ -1697,12 +1737,12 @@ const char kBlob_pt[] =
     "\0{0} lidas aqui\0{0} sem tags\0\0{0} sem tags\0{0} transf.\0\0{0} transf.\0{0} aqui\0\0{0} aqui\0"
     "{0} s/ tags\0\0{0} s/ tags\0{0}% com tags\0nomes dos arquivos\0tags precisam de cart\xC3\xA3o\0"
     "atualizando\xE2\x80\xA6\0Reler\0Reler as tags?\0O player rel\xC3\xAA as tags dos seus arquivos (as da transfer\xC3\xAAncia ficam). Leva minutos num cart\xC3\xA3o grande.\0"
-    "Relendo as tags\0Tags s\xC3\xB3 s\xC3\xA3o lidas com cart\xC3\xA3o\0Fones Bluetooth\0Sem fones pareados\0"
-    "N\xC3\xA3o conectado\0Conectando...\0Conectando...  tentativa {0}/{1}\0Procurando {0}...\0Procurando os fones...\0"
-    "Pareando...\0Pareando...  tentativa {0}/{1}\0Conectado\0Conectado  {0}\0{0}, {1} ms\0{0} ms de atraso\0"
-    "N\xC3\xA3o pareou. Em pareamento?\0N\xC3\xA3o conectou. Ligados e perto?\0Caiu: reconectando...\0"
-    "Caiu: reconectando... {0}/{1}\0Caiu: procurando {0}...\0Caiu: procurando os fones...\0Parear\0"
-    "Conectar\0Esquecer\0Confirmar\0Cancelar\0Desconectar\0De novo\0Reconectam sozinhos\nquando ligados.\0"
+    "Relendo as tags\0Tags s\xC3\xB3 s\xC3\xA3o lidas com cart\xC3\xA3o\0Falha de leitura ao iniciar: reinicie para tentar de novo\0"
+    "Fones Bluetooth\0Sem fones pareados\0N\xC3\xA3o conectado\0Conectando...\0Conectando...  tentativa {0}/{1}\0"
+    "Procurando {0}...\0Procurando os fones...\0Pareando...\0Pareando...  tentativa {0}/{1}\0Conectado\0"
+    "Conectado  {0}\0{0}, {1} ms\0{0} ms de atraso\0N\xC3\xA3o pareou. Em pareamento?\0N\xC3\xA3o conectou. Ligados e perto?\0"
+    "Caiu: reconectando...\0Caiu: reconectando... {0}/{1}\0Caiu: procurando {0}...\0Caiu: procurando os fones...\0"
+    "Parear\0Conectar\0Esquecer\0Confirmar\0Cancelar\0Desconectar\0De novo\0Reconectam sozinhos\nquando ligados.\0"
     "Voltou ao alcance?\nToque em Conectar.\0Esquecer {0}\0Esquecer estes fones\0Esquecer {0}?\0"
     "Esquecer os fones?\0S\xC3\xB3 conectam de novo depois que voc\xC3\xAA parear em Parear novos fones.\0"
     "{0} esquecido\0Fones esquecidos\0Desconectado: pausado no alto-falante\0Desconectado\0Aqui at\xC3\xA9 {0} conectar\0"
@@ -1761,44 +1801,46 @@ const uint16_t kOff_pt[kStrings] = {
     3216, 3222, 3238, 3298, 3306, 3328, 3352, 3378, 3387, 3409, 3455, 3481,
     3503, 3509, 3519, 3542, 3559, 3576, 3611, 3641, 3651, 3683, 3723, 3742,
     3766, 3779, 3784, 3798, 3840, 3853, 3891, 3916, 3937, 3965, 4004, 4060,
-    4082, 3937, 4117, 4154, 4181, 4211, 4317, 4361, 4385, 4404, 4423, 4443,
-    3853, 4493, 443, 3503, 4533, 4540, 4574, 2557, 4581, 2055, 4586, 4600,
-    4627, 4639, 3109, 4647, 3103, 3109, 4639, 4654, 4668, 4688, 4700, 4716,
-    4737, 4757, 4647, 4946, 3798, 4987, 5042, 5070, 5097, 5116, 5130, 5141,
-    2036, 1948, 5168, 5189, 432, 2496, 2572, 5235, 5250, 5266, 5346, 5366,
-    5454, 5494, 5516, 5597, 5633, 5516, 5654, 5689, 5710, 5794, 5822, 5847,
-    5929, 455, 5978, 5998, 6014, 6043, 6092, 6111, 6122, 6152, 6162, 6168,
-    2572, 6206, 6220, 6237, 2540, 6252, 6275, 6308, 6316, 6331, 6348, 6386,
-    6427, 6449, 6471, 6509, 6529, 6558, 6577, 6599, 6632, 6694, 6715, 6777,
-    6801, 6831, 6868, 6913, 6942, 6981, 7021, 7042, 7073, 7112, 7149, 7169,
-    7194, 7218, 7223, 7228, 7234, 7240, 7246, 7252, 7259, 7283, 7289, 7296,
-    7301, 7309, 7329, 7349, 7373, 7380, 7387, 7246, 7394, 7412, 7440, 7464,
-    7487, 7495, 7503, 7523, 7548, 7570, 7595, 7616, 7622, 7629, 7634, 7651,
-    7725, 7827, 7837, 7866, 7887, 7910, 7930, 7940, 7969, 8039, 8061, 8076,
-    8098, 8107, 8122, 8136, 8157, 8181, 4639, 8269, 8291, 8291, 8298, 8316,
-    8340, 8383, 8429, 8452, 8497, 8527, 8554, 8579, 8598, 8623, 8637, 8656,
-    8681, 8696, 8702, 8717, 8821, 8837, 8869, 2953, 8885, 8904, 8919, 8933,
-    8966, 8984, 9007, 9019, 9050, 9060, 9075, 9087, 9104, 9132, 9164, 9186,
-    9216, 9240, 6092, 9269, 9276, 9285, 9294, 9304, 9313, 9325, 9333, 9369,
-    2953, 9313, 6092, 9407, 9420, 9441, 9455, 9474, 9285, 9542, 9556, 9573,
-    9611, 1900, 9624, 9647, 9677, 9691, 9710, 9720, 9737, 9750, 9782, 9007,
-    9793, 9827, 9844, 9875, 9888, 9904, 9917, 9932, 9954, 9970, 9996, 10068,
-    9269, 10162, 10182, 10202, 10222, 6162, 10243, 10255, 10263, 10279, 10293, 10311,
-    10335, 10351, 432, 10387, 3378, 10401, 2953, 10417, 10426, 10441, 10457, 10496,
-    10515, 10530, 10567, 10590, 10623, 10654, 10687, 10708, 10745, 10770, 10800, 10811,
-    10817, 10833, 10837, 10842, 10846, 10852, 10858, 10255, 432, 10884, 10894, 10907,
-    10916, 10922, 10935, 10953, 10959, 10973, 10987, 10996, 11002, 11028, 11047, 11056,
-    11067, 11076, 11088, 11107, 11120, 3378, 10387, 11131, 11137, 11144, 11174, 11187,
-    11202, 11207, 2055, 11213, 11346, 11370, 11399, 11435, 11475, 11508, 11547, 11586,
-    11656, 5235, 11663, 11673, 462, 11684, 11691, 11762, 11779, 11785, 11792, 11860,
-    11885, 11915, 11965, 12016, 12062, 12107, 12141, 12157, 12168, 12199, 12222, 12252,
-    12280, 12284, 12293, 12301, 12311, 12322, 12333, 12338, 12345, 1948, 12368, 12399,
-    9304, 12439, 12456, 12476, 12534, 12597, 12662, 12697, 12728, 8984, 12767, 12785,
-    12788, 12807, 12831, 12849, 12914, 12975, 5235, 13043, 13048, 13056, 13062, 13076,
-    13090, 13102, 13110, 13117, 13125, 13132,
+    4082, 3937, 4117, 4154, 4162, 4169, 4176, 4183, 4192, 4202, 4215, 4221,
+    4231, 4237, 4247, 4255, 4263, 4273, 4280, 4318, 4354, 4391, 4418, 4448,
+    4554, 4598, 4622, 4641, 4660, 4680, 3853, 4730, 443, 3503, 4770, 4777,
+    4811, 2557, 4818, 2055, 4823, 4837, 4864, 4876, 3109, 4273, 3103, 3109,
+    4876, 4884, 4898, 4918, 4930, 4946, 4967, 4987, 4273, 5176, 3798, 5217,
+    5272, 5300, 5327, 5346, 5360, 5371, 2036, 1948, 5398, 5419, 432, 2496,
+    2572, 5465, 5480, 5496, 5576, 5596, 5684, 5724, 5746, 5827, 5863, 5746,
+    5884, 5919, 5940, 6024, 6052, 6077, 6159, 455, 6208, 6228, 6244, 6273,
+    6322, 6341, 6352, 6382, 6392, 6398, 2572, 6436, 6450, 6467, 2540, 6482,
+    6505, 6538, 6546, 6561, 6578, 6616, 6657, 6679, 6701, 6739, 6759, 6788,
+    6807, 6829, 6862, 6924, 6945, 7007, 7031, 7061, 7098, 7143, 7172, 7211,
+    7251, 7272, 7303, 7342, 7379, 7399, 7424, 7448, 7453, 7458, 7464, 7470,
+    7476, 7482, 7489, 7513, 7519, 7526, 7531, 7539, 7559, 7579, 7603, 7610,
+    7617, 7476, 7624, 7642, 7670, 7694, 7717, 7725, 7733, 7753, 7778, 7800,
+    7825, 7846, 7852, 7859, 7864, 7881, 7955, 8057, 8067, 8096, 8117, 8140,
+    8160, 8170, 8199, 8269, 8291, 8306, 8328, 8337, 8352, 8366, 8387, 8411,
+    4876, 8499, 8521, 8521, 8528, 8546, 8570, 8613, 8659, 8682, 8727, 8757,
+    8784, 8809, 8828, 8853, 8867, 8886, 8911, 8926, 8932, 8947, 9051, 9067,
+    9099, 9157, 2953, 9173, 9192, 9207, 9221, 9254, 9272, 9295, 9307, 9338,
+    9348, 9363, 9375, 9392, 9420, 9452, 9474, 9504, 9528, 6322, 9557, 9564,
+    9573, 9582, 9592, 9601, 9613, 9621, 9657, 2953, 9601, 6322, 9695, 9708,
+    9729, 9743, 9762, 9573, 9830, 9844, 9861, 9899, 1900, 9912, 9935, 9965,
+    9979, 9998, 10008, 10025, 10038, 10070, 9295, 10081, 10115, 10132, 10163, 10176,
+    10192, 10205, 10220, 10242, 10258, 10284, 10356, 9557, 10450, 10470, 10490, 10510,
+    6392, 10531, 10543, 10551, 10567, 10581, 10599, 10623, 10639, 432, 10675, 3378,
+    10689, 2953, 10705, 10714, 10729, 10745, 10784, 10803, 10818, 10855, 10878, 10911,
+    10942, 10975, 10996, 11033, 11058, 11088, 11099, 11105, 11121, 11125, 11130, 11134,
+    11140, 11146, 10543, 432, 11172, 11182, 11195, 11204, 11210, 11223, 11241, 11247,
+    11261, 11275, 11284, 11290, 11316, 11335, 11344, 11355, 11364, 11376, 11395, 11408,
+    3378, 10675, 11419, 11425, 11432, 11462, 11475, 11490, 11495, 2055, 11501, 11634,
+    11658, 11687, 11723, 11763, 11796, 11835, 11874, 11944, 5465, 11951, 11961, 462,
+    11972, 11979, 12050, 12067, 12073, 12080, 12148, 12173, 12203, 12253, 12304, 12350,
+    12395, 12429, 12445, 12456, 12487, 12510, 12540, 12568, 12572, 12581, 12589, 12599,
+    12610, 12621, 12626, 12633, 1948, 12656, 12687, 9592, 12727, 12744, 12764, 12822,
+    12885, 12950, 12985, 13016, 9272, 13055, 13073, 13076, 13095, 13119, 13137, 13202,
+    13263, 5465, 13331, 13336, 13344, 13350, 13364, 13378, 13390, 13398, 13405, 13413,
+    13420,
 };
 
-// ru: 22057 bytes, 606 of 606 messages.
+// ru: 22639 bytes, 625 of 625 messages.
 const char kBlob_ru[] =
     "\xD0\x9A\xD0\xB0\xD1\x81\xD0\xB0\xD0\xBD\xD0\xB8\xD1\x8F \xD0\xBC\xD0\xB8\xD0\xBC\xD0\xBE? \xD0\x94\xD0\xB5\xD1\x80\xD0\xB6\xD0\xB8\xD1\x82\xD0\xB5 \xD0\xBF\xD0\xB0\xD0\xBB\xD0\xB5\xD1\x86 \xD0\xBD\xD0\xB0 \xD1\x8D\xD0\xBA\xD1\x80\xD0\xB0\xD0\xBD\xD0\xB5.\0"
     "\xD0\xA1\xD0\xBE\xD0\xB2\xD0\xB5\xD1\x82 {0} \xD0\xB8\xD0\xB7 {1}\0\xD1\x82\xD0\xB0\xD0\xBF: \xD0\xB4\xD0\xB0\xD0\xBB\xD1\x8C\xD1\x88\xD0\xB5\0"
@@ -1944,6 +1986,19 @@ const char kBlob_ru[] =
     "\0\xD0\x91\xD0\xB8\xD0\xB1\xD0\xBB\xD0\xB8\xD0\xBE\xD1\x82\xD0\xB5\xD0\xBA\xD0\xB0 \xD0\xBE\xD0\xB1\xD0\xBD\xD0\xBE\xD0\xB2\xD0\xBB\xD0\xB5\xD0\xBD\xD0\xB0\0"
     "\xD0\x91\xD0\xB8\xD0\xB1\xD0\xBB\xD0\xB8\xD0\xBE\xD1\x82\xD0\xB5\xD0\xBA\xD0\xB0: \xD0\xBE\xD0\xB1\xD0\xBD\xD0\xBE\xD0\xB2\xD0\xB8\xD1\x82\xD1\x81\xD1\x8F \xD0\xBF\xD1\x80\xD0\xB8 \xD0\xB7\xD0\xB0\xD0\xBF\xD1\x83\xD1\x81\xD0\xBA\xD0\xB5\0"
     "\xD0\x9E\xD0\xB1\xD0\xBD\xD0\xBE\xD0\xB2\xD0\xBB\xD0\xB5\xD0\xBD\xD0\xB8\xD0\xB5 \xD0\xB1\xD0\xB8\xD0\xB1\xD0\xBB\xD0\xB8\xD0\xBE\xD1\x82\xD0\xB5\xD0\xBA\xD0\xB8: \xD0\xBF\xD0\xBE\xD0\xB4\xD0\xBE\xD0\xB6\xD0\xB4\xD0\xB8\xD1\x82\xD0\xB5\0"
+    "\xD0\xA4\xD0\xB8\xD0\xBB\xD1\x8C\xD1\x82\xD1\x80\xD1\x8B\0\xD0\x92\xD0\xB5\xD1\x81\xD1\x91\xD0\xBB\xD1\x8B\xD0\xB5\0"
+    "\xD0\x9D\xD0\xB5\xD0\xB9\xD1\x82\xD1\x80\xD0\xB0\xD0\xBB\xD1\x8C\xD0\xBD\xD1\x8B\xD0\xB5\0\xD0\x93\xD1\x80\xD1\x83\xD1\x81\xD1\x82\xD0\xBD\xD1\x8B\xD0\xB5\0"
+    "\xD0\xA1\xD0\xBF\xD0\xBE\xD0\xBA\xD0\xBE\xD0\xB9\xD0\xBD\xD1\x8B\xD0\xB5\0\xD0\x90\xD0\xB3\xD1\x80\xD0\xB5\xD1\x81\xD1\x81\xD0\xB8\xD0\xB2\xD0\xBD\xD1\x8B\xD0\xB5\0"
+    "\xD0\x98\xD0\xBD\xD1\x81\xD1\x82\xD1\x80\xD1\x83\xD0\xBC\xD0\xB5\xD0\xBD\xD1\x82\xD0\xB0\xD0\xBB\xD1\x8C\xD0\xBD\xD1\x8B\xD0\xB5\0"
+    "\xD0\xA1 \xD0\xB2\xD0\xBE\xD0\xBA\xD0\xB0\xD0\xBB\xD0\xBE\xD0\xBC\0\xD0\x90\xD0\xBA\xD1\x83\xD1\x81\xD1\x82\xD0\xB8\xD1\x87\xD0\xB5\xD1\x81\xD0\xBA\xD0\xB8\xD0\xB5\0"
+    "\xD0\x94\xD0\xBB\xD1\x8F \xD0\xB2\xD0\xB5\xD1\x87\xD0\xB5\xD1\x80\xD0\xB8\xD0\xBD\xD0\xBA\xD0\xB8\0"
+    "\xD0\xA2\xD0\xB0\xD0\xBD\xD1\x86\xD0\xB5\xD0\xB2\xD0\xB0\xD0\xBB\xD1\x8C\xD0\xBD\xD1\x8B\xD0\xB5\0"
+    "\xD0\xA1\xD1\x82\xD1\x80\xD0\xBE\xD0\xB3\xD0\xBE\0\xD0\x9E\xD0\xB1\xD1\x8B\xD1\x87\xD0\xBD\xD0\xBE\0"
+    "\xD0\x9C\xD1\x8F\xD0\xB3\xD0\xBA\xD0\xBE\0\xD0\x9E\xD1\x87\xD0\xB8\xD1\x81\xD1\x82\xD0\xB8\xD1\x82\xD1\x8C\0"
+    "{0} \xD0\xB8\xD0\xB7 {1} \xD0\xB0\xD0\xBB\xD1\x8C\xD0\xB1\xD0\xBE\xD0\xBC\xD0\xB0\0{0} \xD0\xB8\xD0\xB7 {1} \xD0\xB0\xD0\xBB\xD1\x8C\xD0\xB1\xD0\xBE\xD0\xBC\xD0\xBE\xD0\xB2\0"
+    "{0} \xD0\xB8\xD0\xB7 {1} \xD0\xB0\xD0\xBB\xD1\x8C\xD0\xB1\xD0\xBE\xD0\xBC\xD0\xBE\xD0\xB2\0"
+    "\0{0} \xD0\xB8\xD0\xB7 {1} \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA\xD0\xB0\0{0} \xD0\xB8\xD0\xB7 {1} \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA\xD0\xBE\xD0\xB2\0"
+    "{0} \xD0\xB8\xD0\xB7 {1} \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA\xD0\xBE\xD0\xB2\0\0\xD0\x9D\xD0\xB5\xD1\x82 \xD0\xB0\xD0\xBB\xD1\x8C\xD0\xB1\xD0\xBE\xD0\xBC\xD0\xBE\xD0\xB2 \xD0\xBF\xD0\xBE\xD0\xB4 \xD1\x8D\xD1\x82\xD0\xB8 \xD1\x84\xD0\xB8\xD0\xBB\xD1\x8C\xD1\x82\xD1\x80\xD1\x8B\0"
     "\xD0\x94\xD1\x80\xD1\x83\xD0\xB3\xD0\xB0\xD1\x8F \xD0\xBA\xD0\xB0\xD1\x80\xD1\x82\xD0\xB0: \xD0\xBF\xD0\xB5\xD1\x80\xD0\xB5\xD0\xB7\xD0\xB0\xD0\xBF\xD1\x83\xD1\x81\xD0\xBA\0"
     "\xD0\x9A\xD0\xB0\xD1\x80\xD1\x82\xD0\xB0 \xD0\xB2\xD0\xB5\xD1\x80\xD0\xBD\xD1\x83\xD0\xBB\xD0\xB0\xD1\x81\xD1\x8C: \xD0\xBF\xD0\xB5\xD1\x80\xD0\xB5\xD0\xB7\xD0\xB0\xD0\xBF\xD1\x83\xD1\x81\xD0\xBA\0"
     "\xD0\x9E\xD1\x87\xD0\xB5\xD1\x80\xD0\xB5\xD0\xB4\xD1\x8C \xD0\xBF\xD0\xBE\xD0\xBB\xD0\xBD\xD0\xB0: \xD0\xBC\xD0\xB0\xD0\xBA\xD1\x81\xD0\xB8\xD0\xBC\xD1\x83\xD0\xBC {0} \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA\0"
@@ -1975,8 +2030,7 @@ const char kBlob_ru[] =
     "\xD0\xA3\xD0\xB4\xD0\xB0\xD0\xBB\xD0\xB8\xD1\x82\xD1\x81\xD1\x8F {0} \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA, \xD0\xB8 \xD0\xBC\xD1\x83\xD0\xB7\xD1\x8B\xD0\xBA\xD0\xB0 \xD0\xBE\xD1\x81\xD1\x82\xD0\xB0\xD0\xBD\xD0\xBE\xD0\xB2\xD0\xB8\xD1\x82\xD1\x81\xD1\x8F. \xC2\xAB\xD0\x9E\xD1\x82\xD0\xBC\xD0\xB5\xD0\xBD\xD0\xB0\xC2\xBB \xD0\xB2 \xD1\x83\xD0\xB2\xD0\xB5\xD0\xB4\xD0\xBE\xD0\xBC\xD0\xBB\xD0\xB5\xD0\xBD\xD0\xB8\xD0\xB8 \xD0\xB2\xD0\xB5\xD1\x80\xD0\xBD\xD1\x91\xD1\x82 \xD0\xB5\xD0\xB3\xD0\xBE.\0"
     "\xD0\xA3\xD0\xB4\xD0\xB0\xD0\xBB\xD1\x8F\xD1\x82\xD1\x81\xD1\x8F \xD0\xB2\xD1\x81\xD0\xB5 {0} \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA\xD0\xB0, \xD0\xB8 \xD0\xBC\xD1\x83\xD0\xB7\xD1\x8B\xD0\xBA\xD0\xB0 \xD0\xBE\xD1\x81\xD1\x82\xD0\xB0\xD0\xBD\xD0\xBE\xD0\xB2\xD0\xB8\xD1\x82\xD1\x81\xD1\x8F. \xC2\xAB\xD0\x9E\xD1\x82\xD0\xBC\xD0\xB5\xD0\xBD\xD0\xB0\xC2\xBB \xD0\xB2 \xD1\x83\xD0\xB2\xD0\xB5\xD0\xB4\xD0\xBE\xD0\xBC\xD0\xBB\xD0\xB5\xD0\xBD\xD0\xB8\xD0\xB8 \xD0\xB2\xD0\xB5\xD1\x80\xD0\xBD\xD1\x91\xD1\x82 \xD0\xB8\xD1\x85.\0"
     "\xD0\xA3\xD0\xB4\xD0\xB0\xD0\xBB\xD1\x8F\xD1\x82\xD1\x81\xD1\x8F \xD0\xB2\xD1\x81\xD0\xB5 {0} \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA\xD0\xBE\xD0\xB2, \xD0\xB8 \xD0\xBC\xD1\x83\xD0\xB7\xD1\x8B\xD0\xBA\xD0\xB0 \xD0\xBE\xD1\x81\xD1\x82\xD0\xB0\xD0\xBD\xD0\xBE\xD0\xB2\xD0\xB8\xD1\x82\xD1\x81\xD1\x8F. \xC2\xAB\xD0\x9E\xD1\x82\xD0\xBC\xD0\xB5\xD0\xBD\xD0\xB0\xC2\xBB \xD0\xB2 \xD1\x83\xD0\xB2\xD0\xB5\xD0\xB4\xD0\xBE\xD0\xBC\xD0\xBB\xD0\xB5\xD0\xBD\xD0\xB8\xD0\xB8 \xD0\xB2\xD0\xB5\xD1\x80\xD0\xBD\xD1\x91\xD1\x82 \xD0\xB8\xD1\x85.\0"
-    "\0\xD0\x9E\xD1\x87\xD0\xB8\xD1\x81\xD1\x82\xD0\xB8\xD1\x82\xD1\x8C\0\xD0\xA3\xD0\xB1\xD1\x80\xD0\xB0\xD0\xBD {0} \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA\0"
-    "\xD0\xA3\xD0\xB1\xD1\x80\xD0\xB0\xD0\xBD\xD0\xBE {0} \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA\xD0\xB0\0"
+    "\0\xD0\xA3\xD0\xB1\xD1\x80\xD0\xB0\xD0\xBD {0} \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA\0\xD0\xA3\xD0\xB1\xD1\x80\xD0\xB0\xD0\xBD\xD0\xBE {0} \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA\xD0\xB0\0"
     "\xD0\xA3\xD0\xB1\xD1\x80\xD0\xB0\xD0\xBD\xD0\xBE {0} \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA\xD0\xBE\xD0\xB2\0"
     "\0\xD0\xA3\xD0\xB4\xD0\xB0\xD0\xBB\xD1\x91\xD0\xBD {0} \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA\0\xD0\xA3\xD0\xB4\xD0\xB0\xD0\xBB\xD0\xB5\xD0\xBD\xD0\xBE {0} \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA\xD0\xB0\0"
     "\xD0\xA3\xD0\xB4\xD0\xB0\xD0\xBB\xD0\xB5\xD0\xBD\xD0\xBE {0} \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA\xD0\xBE\xD0\xB2\0"
@@ -2106,6 +2160,7 @@ const char kBlob_ru[] =
     "\xD0\x9F\xD0\xBB\xD0\xB5\xD0\xB5\xD1\x80 \xD0\xB7\xD0\xB0\xD0\xBD\xD0\xBE\xD0\xB2\xD0\xBE \xD0\xBF\xD1\x80\xD0\xBE\xD1\x87\xD0\xB8\xD1\x82\xD0\xB0\xD0\xB5\xD1\x82 \xD1\x82\xD0\xB5\xD0\xB3\xD0\xB8 \xD1\x81\xD0\xB2\xD0\xBE\xD0\xB8\xD1\x85 \xD1\x84\xD0\xB0\xD0\xB9\xD0\xBB\xD0\xBE\xD0\xB2 (\xD1\x82\xD0\xB5\xD0\xB3\xD0\xB8 \xD0\xBF\xD0\xB5\xD1\x80\xD0\xB5\xD0\xBD\xD0\xBE\xD1\x81\xD0\xB0 \xD0\xBD\xD0\xB5 \xD1\x82\xD1\x80\xD0\xBE\xD0\xBD\xD0\xB5\xD1\x82). \xD0\x9D\xD0\xB0 \xD0\xB1\xD0\xBE\xD0\xBB\xD1\x8C\xD1\x88\xD0\xBE\xD0\xB9 \xD0\xBA\xD0\xB0\xD1\x80\xD1\x82\xD0\xB5 \xD1\x8D\xD1\x82\xD0\xBE \xD0\xBC\xD0\xB8\xD0\xBD\xD1\x83\xD1\x82\xD1\x8B.\0"
     "\xD0\xA2\xD0\xB5\xD0\xB3\xD0\xB8 \xD1\x87\xD0\xB8\xD1\x82\xD0\xB0\xD1\x8E\xD1\x82\xD1\x81\xD1\x8F \xD0\xB7\xD0\xB0\xD0\xBD\xD0\xBE\xD0\xB2\xD0\xBE\0"
     "\xD0\xA2\xD0\xB5\xD0\xB3\xD0\xB8 \xD1\x87\xD0\xB8\xD1\x82\xD0\xB0\xD1\x8E\xD1\x82\xD1\x81\xD1\x8F \xD1\x82\xD0\xBE\xD0\xBB\xD1\x8C\xD0\xBA\xD0\xBE \xD1\x81 \xD0\xBA\xD0\xB0\xD1\x80\xD1\x82\xD1\x8B\0"
+    "\xD0\x9E\xD1\x88\xD0\xB8\xD0\xB1\xD0\xBA\xD0\xB0 \xD1\x87\xD1\x82\xD0\xB5\xD0\xBD\xD0\xB8\xD1\x8F \xD0\xBF\xD1\x80\xD0\xB8 \xD0\xB7\xD0\xB0\xD0\xBF\xD1\x83\xD1\x81\xD0\xBA\xD0\xB5: \xD0\xBF\xD0\xB5\xD1\x80\xD0\xB5\xD0\xB7\xD0\xB0\xD0\xBF\xD1\x83\xD1\x81\xD1\x82\xD0\xB8\xD1\x82\xD0\xB5 \xD0\xBF\xD0\xBB\xD0\xB5\xD0\xB5\xD1\x80\0"
     "Bluetooth-\xD0\xBD\xD0\xB0\xD1\x83\xD1\x88\xD0\xBD\xD0\xB8\xD0\xBA\xD0\xB8\0\xD0\x9D\xD0\xB0\xD1\x83\xD1\x88\xD0\xBD\xD0\xB8\xD0\xBA\xD0\xB8 \xD0\xBD\xD0\xB5 \xD1\x81\xD0\xBE\xD0\xBF\xD1\x80\xD1\x8F\xD0\xB6\xD0\xB5\xD0\xBD\xD1\x8B\0"
     "\xD0\x9D\xD0\xB5 \xD0\xBF\xD0\xBE\xD0\xB4\xD0\xBA\xD0\xBB\xD1\x8E\xD1\x87\xD0\xB5\xD0\xBD\xD1\x8B\0"
     "\xD0\x9F\xD0\xBE\xD0\xB4\xD0\xBA\xD0\xBB\xD1\x8E\xD1\x87\xD0\xB5\xD0\xBD\xD0\xB8\xD0\xB5\xE2\x80\xA6\0"
@@ -2249,44 +2304,46 @@ const uint16_t kOff_ru[kStrings] = {
     4960, 4971, 4989, 641, 5101, 5147, 5205, 5263, 5272, 5318, 5394, 5440,
     5492, 5503, 5516, 5551, 5586, 5622, 5668, 5709, 5731, 5774, 5853, 5879,
     5920, 5938, 5945, 5963, 6051, 6075, 6181, 6212, 6246, 6291, 6347, 6469,
-    6509, 6246, 6572, 6634, 6680, 6732, 6910, 7007, 7041, 7067, 7099, 7125,
-    7232, 7333, 662, 5492, 7418, 7429, 7490, 3869, 7499, 3072, 7510, 7543,
-    7577, 7594, 4782, 7607, 4769, 4782, 7594, 7621, 7653, 7621, 7698, 7739,
-    7775, 7815, 8237, 8254, 5963, 8337, 8426, 8464, 8512, 8543, 8561, 8579,
-    3046, 2908, 3046, 8612, 641, 8671, 3885, 8684, 8703, 8736, 8846, 8872,
-    8985, 9047, 9078, 9196, 9261, 9078, 9291, 9355, 9392, 9510, 9575, 9608,
-    9733, 688, 9815, 9848, 9876, 9908, 9983, 10026, 10049, 10092, 10102, 10118,
-    3885, 10170, 10185, 10209, 3851, 10227, 10263, 10320, 10331, 10371, 10422, 10489,
-    10555, 10585, 10604, 10669, 10705, 10756, 10800, 10848, 10884, 11094, 11134, 11300,
-    11355, 11398, 11448, 11508, 11555, 11622, 11683, 11713, 11772, 11841, 11898, 11932,
-    11968, 12009, 12015, 12021, 12030, 12039, 3851, 12048, 12063, 12102, 12115, 12130,
-    12145, 12155, 12184, 12221, 12263, 12273, 12283, 3851, 12293, 12312, 12354, 12393,
-    12432, 12443, 12454, 12481, 12523, 12564, 12605, 12102, 12644, 12655, 12668, 12699,
-    12863, 13036, 13057, 13108, 13141, 13165, 13193, 13210, 13262, 13447, 13483, 13515,
-    13562, 13585, 13613, 13637, 13673, 13710, 13888, 13903, 13939, 13939, 13948, 13979,
-    14013, 14084, 14172, 14205, 14284, 14385, 14452, 14510, 14556, 14590, 14611, 14640,
-    14680, 14704, 14717, 14748, 14923, 14962, 15015, 3178, 15042, 15083, 15109, 15135,
-    15190, 15208, 15241, 15265, 15318, 15339, 15355, 15369, 15395, 15443, 15494, 15538,
-    15584, 15620, 9983, 15671, 15686, 15705, 15718, 699, 15732, 8684, 15751, 15816,
-    3178, 15732, 9983, 15878, 15895, 15932, 15950, 15981, 15705, 16138, 16156, 16186,
-    16239, 2840, 16258, 16311, 16377, 16390, 16416, 16437, 16476, 16516, 16547, 15241,
-    16558, 16620, 16644, 16706, 16728, 16745, 16760, 16787, 16818, 16841, 16885, 17024,
-    15671, 17186, 17217, 17250, 17283, 10102, 17311, 17331, 17346, 17372, 17391, 17417,
-    17446, 17465, 641, 17517, 5263, 17531, 3178, 17564, 17583, 17607, 17633, 17680,
-    17702, 17734, 17777, 17805, 17846, 17888, 17934, 17960, 18013, 18054, 18104, 18119,
-    18130, 18152, 18156, 18163, 18167, 18189, 18195, 17331, 641, 18225, 18246, 18270,
-    18287, 18300, 18321, 18339, 18352, 18386, 18412, 18435, 18441, 18496, 18541, 18575,
-    18599, 18608, 18632, 18300, 18661, 5263, 17517, 18673, 18682, 18689, 18724, 18745,
-    18769, 18780, 3072, 18791, 19164, 19213, 19272, 19330, 19392, 19454, 19508, 19581,
-    19697, 8684, 19716, 19735, 19748, 19765, 19772, 19891, 19919, 729, 19938, 20040,
-    20083, 20134, 20220, 20304, 20386, 20468, 20526, 20567, 20585, 20619, 20644, 20710,
-    20745, 20749, 20763, 20778, 20794, 20817, 20830, 20839, 20852, 2908, 20887, 20928,
-    699, 20993, 21018, 21060, 21152, 21249, 21359, 21419, 21466, 15208, 3400, 21521,
-    21526, 21551, 21589, 21617, 21721, 21823, 8684, 21938, 21943, 21954, 21961, 21979,
-    21997, 22014, 22025, 22034, 22045, 22054,
+    6509, 6246, 6572, 6634, 6649, 6664, 6687, 6704, 6723, 6746, 6779, 6797,
+    6822, 6848, 6873, 6886, 6899, 6910, 6927, 7016, 7093, 7146, 7192, 7244,
+    7422, 7519, 7553, 7579, 7611, 7637, 7744, 7845, 662, 5492, 7930, 7941,
+    8002, 3869, 8011, 3072, 8022, 8055, 8089, 8106, 4782, 8119, 4769, 4782,
+    8106, 8133, 8165, 8133, 8210, 8251, 8287, 8327, 6910, 8749, 5963, 8832,
+    8921, 8959, 9007, 9038, 9056, 9074, 3046, 2908, 3046, 9107, 641, 9166,
+    3885, 9179, 9198, 9231, 9341, 9367, 9480, 9542, 9573, 9691, 9756, 9573,
+    9786, 9850, 9887, 10005, 10070, 10103, 10228, 688, 10310, 10343, 10371, 10403,
+    10478, 10521, 10544, 10587, 10597, 10613, 3885, 10665, 10680, 10704, 3851, 10722,
+    10758, 10815, 10826, 10866, 10917, 10984, 11050, 11080, 11099, 11164, 11200, 11251,
+    11295, 11343, 11379, 11589, 11629, 11795, 11850, 11893, 11943, 12003, 12050, 12117,
+    12178, 12208, 12267, 12336, 12393, 12427, 12463, 12504, 12510, 12516, 12525, 12534,
+    3851, 12543, 12558, 12597, 12610, 12625, 12640, 12650, 12679, 12716, 12758, 12768,
+    12778, 3851, 12788, 12807, 12849, 12888, 12927, 12938, 12949, 12976, 13018, 13059,
+    13100, 12597, 13139, 13150, 13163, 13194, 13358, 13531, 13552, 13603, 13636, 13660,
+    13688, 13705, 13757, 13942, 13978, 14010, 14057, 14080, 14108, 14132, 14168, 14205,
+    14383, 14398, 14434, 14434, 14443, 14474, 14508, 14579, 14667, 14700, 14779, 14880,
+    14947, 15005, 15051, 15085, 15106, 15135, 15175, 15199, 15212, 15243, 15418, 15457,
+    15510, 15597, 3178, 15624, 15665, 15691, 15717, 15772, 15790, 15823, 15847, 15900,
+    15921, 15937, 15951, 15977, 16025, 16076, 16120, 16166, 16202, 10478, 16253, 16268,
+    16287, 16300, 699, 16314, 9179, 16333, 16398, 3178, 16314, 10478, 16460, 16477,
+    16514, 16532, 16563, 16287, 16720, 16738, 16768, 16821, 2840, 16840, 16893, 16959,
+    16972, 16998, 17019, 17058, 17098, 17129, 15823, 17140, 17202, 17226, 17288, 17310,
+    17327, 17342, 17369, 17400, 17423, 17467, 17606, 16253, 17768, 17799, 17832, 17865,
+    10597, 17893, 17913, 17928, 17954, 17973, 17999, 18028, 18047, 641, 18099, 5263,
+    18113, 3178, 18146, 18165, 18189, 18215, 18262, 18284, 18316, 18359, 18387, 18428,
+    18470, 18516, 18542, 18595, 18636, 18686, 18701, 18712, 18734, 18738, 18745, 18749,
+    18771, 18777, 17913, 641, 18807, 18828, 18852, 18869, 18882, 18903, 18921, 18934,
+    18968, 18994, 19017, 19023, 19078, 19123, 19157, 19181, 19190, 19214, 18882, 19243,
+    5263, 18099, 19255, 19264, 19271, 19306, 19327, 19351, 19362, 3072, 19373, 19746,
+    19795, 19854, 19912, 19974, 20036, 20090, 20163, 20279, 9179, 20298, 20317, 20330,
+    20347, 20354, 20473, 20501, 729, 20520, 20622, 20665, 20716, 20802, 20886, 20968,
+    21050, 21108, 21149, 21167, 21201, 21226, 21292, 21327, 21331, 21345, 21360, 21376,
+    21399, 21412, 21421, 21434, 2908, 21469, 21510, 699, 21575, 21600, 21642, 21734,
+    21831, 21941, 22001, 22048, 15790, 3400, 22103, 22108, 22133, 22171, 22199, 22303,
+    22405, 9179, 22520, 22525, 22536, 22543, 22561, 22579, 22596, 22607, 22616, 22627,
+    22636,
 };
 
-// zh: 11779 bytes, 606 of 606 messages.
+// zh: 12012 bytes, 625 of 625 messages.
 const char kBlob_zh[] =
     "\xE8\xA7\xA6\xE6\x91\xB8\xE4\xB8\x8D\xE7\x81\xB5? \xE9\x95\xBF\xE6\x8C\x89\xE5\xB1\x8F\xE5\xB9\x95\xE3\x80\x82\0"
     "\xE6\x8F\x90\xE7\xA4\xBA {0} / {1}\0\xE7\x82\xB9\xE4\xB8\x80\xE4\xB8\x8B\xE7\xBB\xA7\xE7\xBB\xAD\0"
@@ -2379,6 +2436,11 @@ const char kBlob_zh[] =
     "\xE4\xB8\x8A\xE6\xAC\xA1\xE4\xBC\xA0\xE8\xBE\x93\xE6\x9C\xAA\xE5\xAE\x8C\xE6\x88\x90\0\xE5\x8F\x91\xE7\x8E\xB0 {0} \xE9\xA6\x96\xE6\x96\xB0\xE6\x9B\xB2\xE7\x9B\xAE\0"
     "\xE6\x9B\xB2\xE5\xBA\x93\xE5\xB7\xB2\xE6\x9B\xB4\xE6\x96\xB0\0\xE6\x9B\xB2\xE5\xBA\x93\xE5\xB0\x86\xE5\x9C\xA8\xE4\xB8\x8B\xE6\xAC\xA1\xE5\x90\xAF\xE5\x8A\xA8\xE6\x97\xB6\xE6\x9B\xB4\xE6\x96\xB0\0"
     "\xE6\xAD\xA3\xE5\x9C\xA8\xE6\x9B\xB4\xE6\x96\xB0\xE6\x9B\xB2\xE5\xBA\x93: \xE8\xAF\xB7\xE7\xA8\x8D\xE5\x80\x99\0"
+    "\xE7\xAD\x9B\xE9\x80\x89\0\xE6\xAC\xA2\xE5\xBF\xAB\0\xE4\xB8\xAD\xE6\x80\xA7\0\xE6\x82\xB2\xE4\xBC\xA4\0"
+    "\xE6\x94\xBE\xE6\x9D\xBE\0\xE6\xBF\x80\xE7\x83\x88\0\xE7\xBA\xAF\xE9\x9F\xB3\xE4\xB9\x90\0\xE4\xBA\xBA\xE5\xA3\xB0\0"
+    "\xE5\x8E\x9F\xE5\xA3\xB0\0\xE6\xB4\xBE\xE5\xAF\xB9\0\xE9\x80\x82\xE5\x90\x88\xE8\xB7\xB3\xE8\x88\x9E\0"
+    "\xE4\xB8\xA5\xE6\xA0\xBC\0\xE6\xA0\x87\xE5\x87\x86\0\xE5\xAE\xBD\xE6\x9D\xBE\0\xE6\xB8\x85\xE9\x99\xA4\0"
+    "{0} / {1} \xE5\xBC\xA0\xE4\xB8\x93\xE8\xBE\x91\0{0} / {1} \xE9\xA6\x96\0\xE6\xB2\xA1\xE6\x9C\x89\xE7\xAC\xA6\xE5\x90\x88\xE7\xAD\x9B\xE9\x80\x89\xE6\x9D\xA1\xE4\xBB\xB6\xE7\x9A\x84\xE4\xB8\x93\xE8\xBE\x91\0"
     "\xE6\x8D\xA2\xE4\xBA\x86\xE5\xAD\x98\xE5\x82\xA8\xE5\x8D\xA1: \xE6\xAD\xA3\xE5\x9C\xA8\xE9\x87\x8D\xE5\x90\xAF\0"
     "\xE5\xAD\x98\xE5\x82\xA8\xE5\x8D\xA1\xE5\xB7\xB2\xE6\x94\xBE\xE5\x9B\x9E: \xE6\xAD\xA3\xE5\x9C\xA8\xE9\x87\x8D\xE5\x90\xAF\0"
     "\xE6\xB2\xA1\xE6\x9C\x89\xE5\x8F\xAF\xE7\xA7\xBB\xE5\x87\xBA\xE7\x9A\x84\xE5\xB7\xB2\xE6\x92\xAD\xE6\x9B\xB2\xE7\x9B\xAE: \xE9\x98\x9F\xE5\x88\x97\xE6\x9C\x80\xE5\xA4\x9A {0} \xE9\xA6\x96\xE6\x9B\xB2\xE7\x9B\xAE\0"
@@ -2471,6 +2533,7 @@ const char kBlob_zh[] =
     "\xE6\x92\xAD\xE6\x94\xBE\xE5\x99\xA8\xE4\xBC\x9A\xE9\x87\x8D\xE6\x96\xB0\xE6\x89\xAB\xE6\x8F\x8F\xE6\x9C\xAC\xE6\x9C\xBA\xE8\xAF\xBB\xE5\x8F\x96\xE7\x9A\x84\xE6\x96\x87\xE4\xBB\xB6\xE7\x9A\x84\xE6\xA0\x87\xE7\xAD\xBE (\xE4\xBC\xA0\xE8\xBE\x93\xE6\x9D\xA5\xE7\x9A\x84\xE4\xBF\x9D\xE6\x8C\x81\xE4\xB8\x8D\xE5\x8F\x98)\xE3\x80\x82\xE5\xA4\xA7\xE5\xAE\xB9\xE9\x87\x8F\xE5\x8D\xA1\xE9\x9C\x80\xE8\xA6\x81\xE5\x87\xA0\xE5\x88\x86\xE9\x92\x9F\xE3\x80\x82\0"
     "\xE6\xAD\xA3\xE5\x9C\xA8\xE9\x87\x8D\xE6\x96\xB0\xE8\xAF\xBB\xE5\x8F\x96\xE6\xA0\x87\xE7\xAD\xBE\0"
     "\xE5\x8F\xAA\xE8\x83\xBD\xE4\xBB\x8E\xE5\xAD\x98\xE5\x82\xA8\xE5\x8D\xA1\xE8\xAF\xBB\xE5\x8F\x96\xE6\xA0\x87\xE7\xAD\xBE\0"
+    "\xE5\x90\xAF\xE5\x8A\xA8\xE6\x97\xB6\xE8\xAF\xBB\xE5\x8F\x96\xE5\xAD\x98\xE5\x82\xA8\xE5\x8D\xA1\xE5\xA4\xB1\xE8\xB4\xA5: \xE8\xAF\xB7\xE9\x87\x8D\xE5\x90\xAF\xE5\x90\x8E\xE5\x86\x8D\xE8\xAF\x95\0"
     "\xE8\x93\x9D\xE7\x89\x99\xE8\x80\xB3\xE6\x9C\xBA\0\xE6\x9C\xAA\xE9\x85\x8D\xE5\xAF\xB9\xE8\x80\xB3\xE6\x9C\xBA\0"
     "\xE6\x9C\xAA\xE8\xBF\x9E\xE6\x8E\xA5\0\xE6\xAD\xA3\xE5\x9C\xA8\xE8\xBF\x9E\xE6\x8E\xA5\xE2\x80\xA6\0"
     "\xE6\xAD\xA3\xE5\x9C\xA8\xE8\xBF\x9E\xE6\x8E\xA5\xE2\x80\xA6  \xE7\xAC\xAC {0} / {1} \xE6\xAC\xA1\0"
@@ -2575,45 +2638,47 @@ const uint16_t kOff_zh[kStrings] = {
     2916, 3006, 3019, 419, 3050, 3058, 3072, 3089, 3099, 3116, 3136, 3150,
     3165, 3169, 3184, 3208, 3223, 3230, 3280, 3305, 3324, 3353, 3380, 3402,
     3426, 2382, 3444, 3465, 3496, 3511, 3535, 3560, 3589, 3611, 3633, 3657,
-    3673, 3589, 3707, 3737, 3767, 3800, 3859, 3886, 3913, 3934, 3958, 3988,
-    3511, 4018, 426, 3165, 4048, 4055, 4073, 4081, 4088, 1919, 4098, 4117,
-    4132, 4143, 2926, 4150, 4160, 2926, 4143, 4173, 4186, 4205, 4224, 4246,
-    4259, 4279, 4374, 4381, 3465, 4405, 4429, 4460, 3426, 4500, 4515, 4525,
-    1906, 1827, 4543, 4562, 4608, 2326, 2396, 4621, 4628, 4644, 4733, 4752,
-    4844, 4884, 4909, 5004, 5043, 4909, 5067, 5105, 5131, 5233, 5266, 5294,
-    5391, 440, 5433, 5455, 5468, 5495, 5526, 5542, 5555, 2368, 5588, 5595,
-    2396, 5629, 5643, 5660, 2368, 5677, 5702, 5736, 5743, 5756, 5778, 5809,
-    5843, 5859, 5877, 5905, 5919, 5957, 5970, 5986, 6008, 6037, 6061, 6091,
-    6116, 6147, 6184, 6214, 6242, 6284, 6325, 6338, 6371, 6416, 6446, 6459,
-    6486, 6504, 6511, 6518, 6527, 6536, 6545, 6552, 6559, 6575, 6579, 6583,
-    6587, 6594, 6610, 6635, 6659, 6669, 6679, 6545, 6689, 6700, 6730, 6754,
-    6775, 6783, 6791, 6804, 6825, 6847, 6871, 6575, 6893, 6583, 6900, 6916,
-    6982, 7077, 7084, 7103, 7127, 7143, 7160, 7173, 7200, 7230, 7243, 7253,
-    7282, 7289, 7313, 7326, 7339, 7353, 4143, 7447, 7463, 7463, 7470, 7486,
-    7510, 7549, 7571, 7592, 7612, 7632, 7649, 7660, 7671, 7685, 7700, 7722,
-    7750, 7763, 7773, 7793, 7908, 7933, 7964, 1992, 7977, 7993, 8003, 8019,
-    8054, 8074, 8096, 8112, 8147, 8157, 8172, 8184, 8198, 8239, 8280, 8307,
-    8353, 8381, 5526, 5526, 8414, 8421, 8428, 2151, 8441, 4621, 8448, 8483,
-    1992, 8441, 5526, 8522, 8533, 8552, 8564, 8578, 8421, 8647, 8661, 8677,
-    8716, 1777, 8726, 8752, 8780, 8791, 8804, 8811, 8830, 8843, 8858, 8096,
-    8871, 8916, 8929, 8959, 1992, 8973, 8980, 8993, 9006, 9022, 9042, 9109,
-    9198, 9205, 8096, 9229, 9246, 5588, 9262, 9275, 9282, 9297, 9304, 9314,
-    9334, 9346, 419, 9382, 3089, 4628, 1992, 9396, 9406, 9416, 9431, 9457,
-    9476, 9489, 9527, 9549, 9583, 9617, 9654, 9667, 9710, 9729, 9754, 9767,
-    9777, 9790, 9794, 9801, 9805, 9812, 9818, 9275, 419, 9831, 9842, 9855,
-    9862, 9869, 9876, 9886, 9893, 9900, 9913, 9920, 9926, 9942, 9958, 9968,
-    9981, 9988, 10000, 9869, 10019, 3089, 10030, 9805, 10046, 10050, 7230, 10085,
-    2151, 10098, 1919, 10105, 10175, 10194, 10224, 10264, 10307, 10335, 10362, 10395,
-    10467, 4621, 10474, 10481, 447, 10488, 10495, 10554, 10567, 461, 10577, 10632,
-    10651, 10681, 10722, 10763, 10804, 10845, 10876, 10890, 10903, 10925, 10944, 10969,
-    10988, 10992, 11002, 11012, 11022, 11032, 11039, 11043, 11053, 1827, 11073, 11095,
-    2151, 11132, 11146, 11162, 11204, 11251, 11301, 11339, 11355, 8074, 11394, 11410,
-    11417, 11434, 11453, 11466, 11538, 11601, 4621, 11667, 11672, 11683, 11691, 11707,
-    11726, 11745, 11753, 11760, 11768, 11775,
+    3673, 3589, 3707, 3737, 3744, 3751, 3758, 3765, 3772, 3779, 3789, 3796,
+    3803, 3810, 3823, 3830, 3837, 3844, 3851, 3871, 3885, 3919, 3949, 3982,
+    4041, 4068, 4095, 4116, 4140, 4170, 3511, 4200, 426, 3165, 4230, 4237,
+    4255, 4263, 4270, 1919, 4280, 4299, 4314, 4325, 2926, 4332, 4342, 2926,
+    4325, 4355, 4368, 4387, 4406, 4428, 4441, 4461, 4556, 4563, 3465, 4587,
+    4611, 4642, 3426, 4682, 4697, 4707, 1906, 1827, 4725, 4744, 4790, 2326,
+    2396, 4803, 4810, 4826, 4915, 4934, 5026, 5066, 5091, 5186, 5225, 5091,
+    5249, 5287, 5313, 5415, 5448, 5476, 5573, 440, 5615, 5637, 5650, 5677,
+    5708, 5724, 5737, 2368, 5770, 5777, 2396, 5811, 5825, 5842, 2368, 5859,
+    5884, 5918, 5925, 5938, 5960, 5991, 6025, 6041, 6059, 6087, 6101, 6139,
+    6152, 6168, 6190, 6219, 6243, 6273, 6298, 6329, 6366, 6396, 6424, 6466,
+    6507, 6520, 6553, 6598, 6628, 6641, 6668, 6686, 6693, 6700, 6709, 6718,
+    6727, 6734, 6741, 6757, 6761, 6765, 6769, 6776, 6792, 6817, 6841, 6851,
+    6861, 6727, 6871, 6882, 6912, 6936, 6957, 6965, 6973, 6986, 7007, 7029,
+    7053, 6757, 7075, 6765, 7082, 7098, 7164, 7259, 7266, 7285, 7309, 7325,
+    7342, 7355, 7382, 7412, 7425, 7435, 7464, 7471, 7495, 7508, 7521, 7535,
+    4325, 7629, 7645, 7645, 7652, 7668, 7692, 7731, 7753, 7774, 7794, 7814,
+    7831, 7842, 7853, 7867, 7882, 7904, 7932, 7945, 7955, 7975, 8090, 8115,
+    8146, 8197, 1992, 8210, 8226, 8236, 8252, 8287, 8307, 8329, 8345, 8380,
+    8390, 8405, 8417, 8431, 8472, 8513, 8540, 8586, 8614, 5708, 5708, 8647,
+    8654, 8661, 2151, 8674, 4803, 8681, 8716, 1992, 8674, 5708, 8755, 8766,
+    8785, 8797, 8811, 8654, 8880, 8894, 8910, 8949, 1777, 8959, 8985, 9013,
+    9024, 9037, 9044, 9063, 9076, 9091, 8329, 9104, 9149, 9162, 9192, 1992,
+    9206, 9213, 9226, 9239, 9255, 9275, 9342, 9431, 9438, 8329, 9462, 9479,
+    5770, 9495, 9508, 9515, 9530, 9537, 9547, 9567, 9579, 419, 9615, 3089,
+    4810, 1992, 9629, 9639, 9649, 9664, 9690, 9709, 9722, 9760, 9782, 9816,
+    9850, 9887, 9900, 9943, 9962, 9987, 10000, 10010, 10023, 10027, 10034, 10038,
+    10045, 10051, 9508, 419, 10064, 10075, 10088, 10095, 10102, 10109, 10119, 10126,
+    10133, 10146, 10153, 10159, 10175, 10191, 10201, 10214, 10221, 10233, 10102, 10252,
+    3089, 10263, 10038, 10279, 10283, 7412, 10318, 2151, 10331, 1919, 10338, 10408,
+    10427, 10457, 10497, 10540, 10568, 10595, 10628, 10700, 4803, 10707, 10714, 447,
+    10721, 10728, 10787, 10800, 461, 10810, 10865, 10884, 10914, 10955, 10996, 11037,
+    11078, 11109, 11123, 11136, 11158, 11177, 11202, 11221, 11225, 11235, 11245, 11255,
+    11265, 11272, 11276, 11286, 1827, 11306, 11328, 2151, 11365, 11379, 11395, 11437,
+    11484, 11534, 11572, 11588, 8307, 11627, 11643, 11650, 11667, 11686, 11699, 11771,
+    11834, 4803, 11900, 11905, 11916, 11924, 11940, 11959, 11978, 11986, 11993, 12001,
+    12008,
 };
 
 #ifdef UISTR_PSEUDO
-// en-XA: 29334 bytes, 606 of 606 messages.
+// en-XA: 29988 bytes, 625 of 625 messages.
 const char kBlob_en_XA[] =
     "[\xC5\xA2\xC3\xB6\xC3\xBC\xC3\xA7\xC4\xA5 \xC5\xA3\xC5\x95\xC3\xB6\xC3\xBC" "b\xC4\xBA\xC3\xA9? \xC4\xA4\xC3\xB6\xC4\xBA\xC4\x8F \xC3\xA1 f\xC3\xAD\xC3\xB1\xC4\x9D\xC3\xA9\xC5\x95 \xC3\xB6\xC3\xB1 \xC5\xA3\xC4\xA5\xC3\xA9 \xC5\xA1\xC3\xA7\xC5\x95\xC3\xA9\xC3\xA9\xC3\xB1. \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1\xC3\xBCm \xC4\x8F\xC3\xB6\xC4\xBA\xC3\xB6]\0"
     "[\xC5\xA2\xC3\xADp {0} \xC3\xB6" "f {1} \xC4\xBA\xC3\xB6\xC5\x95]\0[\xC5\xA3\xC3\xA1p \xC5\xA3\xC3\xB6 \xC4\x9D\xC3\xB6 \xC3\xB6\xC3\xB1 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m]\0"
@@ -2768,6 +2833,18 @@ const char kBlob_en_XA[] =
     "[\xC4\xB9\xC3\xAD" "b\xC5\x95\xC3\xA1\xC5\x95\xC3\xBD \xC3\xBCp\xC4\x8F\xC3\xA1\xC5\xA3\xC3\xA9\xC5\xA1 \xC3\xA1\xC5\xA3 \xC3\xB1\xC3\xA9x\xC5\xA3 b\xC3\xB6\xC3\xB6\xC5\xA3 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1\xC3\xBC]\0"
     "[\xC3\x9Cp\xC4\x8F\xC3\xA1\xC5\xA3\xC3\xAD\xC3\xB1\xC4\x9D \xC5\xA3\xC4\xA5\xC3\xA9 \xC4\xBA\xC3\xAD" "b\xC5\x95\xC3\xA1\xC5\x95\xC3\xBD\xE2\x80\xA6 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp]\0"
     "[\xC3\x9Cp\xC4\x8F\xC3\xA1\xC5\xA3\xC3\xAD\xC3\xB1\xC4\x9D \xC5\xA3\xC4\xA5\xC3\xA9 \xC4\xBA\xC3\xAD" "b\xC5\x95\xC3\xA1\xC5\x95\xC3\xBD: \xC3\xA1 m\xC3\xB6m\xC3\xA9\xC3\xB1\xC5\xA3 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1\xC3\xBCm]\0"
+    "[F\xC3\xAD\xC4\xBA\xC5\xA3\xC3\xA9\xC5\x95\xC5\xA1 \xC4\xBA\xC3\xB6\xC5\x95]\0[\xC4\xA4\xC3\xA1pp\xC3\xBD \xC4\xBA\xC3\xB6]\0"
+    "[\xC3\x91\xC3\xA9\xC3\xBC\xC5\xA3\xC5\x95\xC3\xA1\xC4\xBA \xC4\xBA\xC3\xB6\xC5\x95]\0[\xC5\xA0\xC3\xA1\xC4\x8F \xC4\xBA\xC3\xB6]\0"
+    "[\xC5\x94\xC3\xA9\xC4\xBA\xC3\xA1x\xC3\xA9\xC4\x8F \xC4\xBA\xC3\xB6\xC5\x95]\0[\xC3\x85\xC4\x9D\xC4\x9D\xC5\x95\xC3\xA9\xC5\xA1\xC5\xA1\xC3\xADv\xC3\xA9 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9]\0"
+    "[\xC3\x8D\xC3\xB1\xC5\xA1\xC5\xA3\xC5\x95\xC3\xBCm\xC3\xA9\xC3\xB1\xC5\xA3\xC3\xA1\xC4\xBA \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m]\0"
+    "[V\xC3\xB6\xC3\xA7\xC3\xA1\xC4\xBA\xC5\xA1 \xC4\xBA\xC3\xB6\xC5\x95]\0[\xC3\x85\xC3\xA7\xC3\xB6\xC3\xBC\xC5\xA1\xC5\xA3\xC3\xAD\xC3\xA7 \xC4\xBA\xC3\xB6\xC5\x95]\0"
+    "[P\xC3\xA1\xC5\x95\xC5\xA3\xC3\xBD \xC4\xBA\xC3\xB6]\0[\xC4\x8E\xC3\xA1\xC3\xB1\xC3\xA7\xC3\xA9\xC3\xA1" "b\xC4\xBA\xC3\xA9 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9]\0"
+    "[\xC5\xA0\xC5\xA3\xC5\x95\xC3\xAD\xC3\xA7\xC5\xA3 \xC4\xBA\xC3\xB6\xC5\x95]\0[\xC5\xA0\xC5\xA3\xC3\xA1\xC3\xB1\xC4\x8F\xC3\xA1\xC5\x95\xC4\x8F \xC4\xBA\xC3\xB6\xC5\x95]\0"
+    "[\xC4\xB9\xC3\xB6\xC3\xB6\xC5\xA1\xC3\xA9 \xC4\xBA\xC3\xB6]\0[\xC3\x87\xC4\xBA\xC3\xA9\xC3\xA1\xC5\x95 \xC4\xBA\xC3\xB6]\0"
+    "[{0} \xC3\xB6" "f {1} \xC3\xA1\xC4\xBA" "b\xC3\xBCm \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9]\0[{0} \xC3\xB6" "f {1} \xC3\xA1\xC4\xBA" "b\xC3\xBCm\xC5\xA1 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9]\0"
+    "[{0} \xC3\xB6" "f {1} \xC5\xA3\xC5\x95\xC3\xA1\xC3\xA7\xC4\xB7 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9]\0"
+    "[{0} \xC3\xB6" "f {1} \xC5\xA3\xC5\x95\xC3\xA1\xC3\xA7\xC4\xB7\xC5\xA1 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9]\0"
+    "[\xC3\x91\xC3\xB6 \xC3\xA1\xC4\xBA" "b\xC3\xBCm\xC5\xA1 m\xC3\xA1\xC5\xA3\xC3\xA7\xC4\xA5 \xC5\xA3\xC4\xA5\xC3\xA9\xC5\xA1\xC3\xA9 f\xC3\xAD\xC4\xBA\xC5\xA3\xC3\xA9\xC5\x95\xC5\xA1 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1\xC3\xBCm]\0"
     "[\xC3\x85\xC3\xB1\xC3\xB6\xC5\xA3\xC4\xA5\xC3\xA9\xC5\x95 \xC3\xA7\xC3\xA1\xC5\x95\xC4\x8F: \xC5\x95\xC3\xA9\xC5\xA1\xC5\xA3\xC3\xA1\xC5\x95\xC5\xA3\xC3\xAD\xC3\xB1\xC4\x9D \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1]\0"
     "[\xC3\x87\xC3\xA1\xC5\x95\xC4\x8F b\xC3\xA1\xC3\xA7\xC4\xB7: \xC5\x95\xC3\xA9\xC5\xA1\xC5\xA3\xC3\xA1\xC5\x95\xC5\xA3\xC3\xAD\xC3\xB1\xC4\x9D \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp]\0"
     "[\xC3\x91\xC3\xB6 p\xC4\xBA\xC3\xA1\xC3\xBD\xC3\xA9\xC4\x8F \xC5\xA3\xC5\x95\xC3\xA1\xC3\xA7\xC4\xB7 \xC3\xA7\xC3\xA1\xC3\xB1 m\xC3\xA1\xC4\xB7\xC3\xA9 \xC5\xB5\xC3\xA1\xC3\xBD: \xC5\xA3\xC4\xA5\xC3\xA9 q\xC3\xBC\xC3\xA9\xC3\xBC\xC3\xA9 \xC4\xA5\xC3\xB6\xC4\xBA\xC4\x8F\xC5\xA1 {0} \xC5\xA3\xC5\x95\xC3\xA1\xC3\xA7\xC4\xB7 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1\xC3\xBCm \xC4\x8F\xC3\xB6\xC4\xBA\xC3\xB6\xC5\x95 \xC5\xA1]\0"
@@ -2797,7 +2874,7 @@ const char kBlob_en_XA[] =
     "[\xC3\x87\xC4\xBA\xC3\xA9\xC3\xA1\xC5\x95 \xC5\xA3\xC4\xA5\xC3\xA9 \xC5\xB5\xC4\xA5\xC3\xB6\xC4\xBA\xC3\xA9 q\xC3\xBC\xC3\xA9\xC3\xBC\xC3\xA9? \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp]\0"
     "[{0} \xC5\xA3\xC5\x95\xC3\xA1\xC3\xA7\xC4\xB7 \xC4\x9D\xC3\xB6\xC3\xA9\xC5\xA1 \xC3\xA1\xC3\xB1\xC4\x8F \xC5\xA3\xC4\xA5\xC3\xA9 m\xC3\xBC\xC5\xA1\xC3\xAD\xC3\xA7 \xC5\xA1\xC5\xA3\xC3\xB6p\xC5\xA1. \xC3\x9C\xC3\xB1\xC4\x8F\xC3\xB6, \xC3\xB6\xC3\xB1 \xC5\xA3\xC4\xA5\xC3\xA9 \xC3\xB1\xC3\xB6\xC5\xA3\xC3\xA9 \xC5\xA3\xC4\xA5\xC3\xA1\xC5\xA3 f\xC3\xB6\xC4\xBA\xC4\xBA\xC3\xB6\xC5\xB5\xC5\xA1, b\xC5\x95\xC3\xAD\xC3\xB1\xC4\x9D\xC5\xA1 \xC3\xAD\xC5\xA3 b\xC3\xA1\xC3\xA7\xC4\xB7. \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1\xC3\xBCm \xC4\x8F\xC3\xB6\xC4\xBA\xC3\xB6\xC5\x95 \xC5\xA1\xC3\xAD\xC5\xA3 \xC3\xA1m\xC3\xA9\xC5\xA3 \xC3\xA7]\0"
     "[\xC3\x85\xC4\xBA\xC4\xBA {0} \xC5\xA3\xC5\x95\xC3\xA1\xC3\xA7\xC4\xB7\xC5\xA1 \xC4\x9D\xC3\xB6 \xC3\xA1\xC3\xB1\xC4\x8F \xC5\xA3\xC4\xA5\xC3\xA9 m\xC3\xBC\xC5\xA1\xC3\xAD\xC3\xA7 \xC5\xA1\xC5\xA3\xC3\xB6p\xC5\xA1. \xC3\x9C\xC3\xB1\xC4\x8F\xC3\xB6, \xC3\xB6\xC3\xB1 \xC5\xA3\xC4\xA5\xC3\xA9 \xC3\xB1\xC3\xB6\xC5\xA3\xC3\xA9 \xC5\xA3\xC4\xA5\xC3\xA1\xC5\xA3 f\xC3\xB6\xC4\xBA\xC4\xBA\xC3\xB6\xC5\xB5\xC5\xA1, b\xC5\x95\xC3\xAD\xC3\xB1\xC4\x9D\xC5\xA1 \xC5\xA3\xC4\xA5\xC3\xA9m b\xC3\xA1\xC3\xA7\xC4\xB7. \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1\xC3\xBCm \xC4\x8F\xC3\xB6\xC4\xBA\xC3\xB6\xC5\x95 \xC5\xA1\xC3\xAD\xC5\xA3 \xC3\xA1m\xC3\xA9\xC5\xA3 \xC3\xA7\xC3\xB6\xC3\xB1]\0"
-    "[\xC3\x87\xC4\xBA\xC3\xA9\xC3\xA1\xC5\x95 \xC4\xBA\xC3\xB6]\0[\xC5\x94\xC3\xA9m\xC3\xB6v\xC3\xA9\xC4\x8F {0} \xC5\xA3\xC5\x95\xC3\xA1\xC3\xA7\xC4\xB7 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m]\0"
+    "[\xC5\x94\xC3\xA9m\xC3\xB6v\xC3\xA9\xC4\x8F {0} \xC5\xA3\xC5\x95\xC3\xA1\xC3\xA7\xC4\xB7 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m]\0"
     "[\xC5\x94\xC3\xA9m\xC3\xB6v\xC3\xA9\xC4\x8F {0} \xC5\xA3\xC5\x95\xC3\xA1\xC3\xA7\xC4\xB7\xC5\xA1 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m]\0"
     "[P\xC4\xBA\xC3\xA1\xC3\xBD\xC3\xAD\xC3\xB1\xC4\x9D \xC3\xB1\xC3\xA9x\xC5\xA3: {0} \xC5\xA3\xC5\x95\xC3\xA1\xC3\xA7\xC4\xB7 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xAD]\0"
     "[P\xC4\xBA\xC3\xA1\xC3\xBD\xC3\xAD\xC3\xB1\xC4\x9D \xC3\xB1\xC3\xA9x\xC5\xA3: {0} \xC5\xA3\xC5\x95\xC3\xA1\xC3\xA7\xC4\xB7\xC5\xA1 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp]\0"
@@ -2932,6 +3009,7 @@ const char kBlob_en_XA[] =
     "[\xC5\xA2\xC4\xA5\xC3\xA9 p\xC4\xBA\xC3\xA1\xC3\xBD\xC3\xA9\xC5\x95 \xC5\x95\xC3\xA9\xC3\xA1\xC4\x8F\xC5\xA1 \xC5\xA3\xC4\xA5\xC3\xA9 \xC5\xA3\xC3\xA1\xC4\x9D\xC5\xA1 \xC3\xB6" "f \xC3\xAD\xC5\xA3\xC5\xA1 \xC3\xB6\xC5\xB5\xC3\xB1 f\xC3\xAD\xC4\xBA\xC3\xA9\xC5\xA1 \xC3\xA1\xC4\x9D\xC3\xA1\xC3\xAD\xC3\xB1 (\xC5\xA3\xC4\xA5\xC3\xA9 \xC5\xA3\xC5\x95\xC3\xA1\xC3\xB1\xC5\xA1" "f\xC3\xA9\xC5\x95'\xC5\xA1 \xC5\xA1\xC5\xA3\xC3\xA1\xC3\xBD \xC3\xA1\xC5\xA1 \xC5\xA3\xC4\xA5\xC3\xA9\xC3\xBD \xC3\xA1\xC5\x95\xC3\xA9). M\xC3\xAD\xC3\xB1\xC3\xBC\xC5\xA3\xC3\xA9\xC5\xA1 \xC3\xB6\xC3\xB1 \xC3\xA1 b\xC3\xAD\xC4\x9D \xC3\xA7\xC3\xA1\xC5\x95\xC4\x8F. \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1\xC3\xBCm \xC4\x8F\xC3\xB6\xC4\xBA\xC3\xB6\xC5\x95 \xC5\xA1\xC3\xAD\xC5\xA3 \xC3\xA1m\xC3\xA9\xC5\xA3 \xC3\xA7\xC3\xB6\xC3\xB1\xC5\xA1\xC3\xA9\xC3\xA7\xC5\xA3\xC3\xA9\xC5\xA3\xC3\xBC\xC5\x95]\0"
     "[\xC5\x94\xC3\xA9\xC3\xA1\xC4\x8F\xC3\xAD\xC3\xB1\xC4\x9D \xC5\xA3\xC4\xA5\xC3\xA9 \xC5\xA3\xC3\xA1\xC4\x9D\xC5\xA1 \xC3\xA1\xC4\x9D\xC3\xA1\xC3\xAD\xC3\xB1 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp]\0"
     "[\xC5\xA2\xC3\xA1\xC4\x9D\xC5\xA1 \xC3\xA1\xC5\x95\xC3\xA9 \xC5\x95\xC3\xA9\xC3\xA1\xC4\x8F \xC3\xB6\xC3\xB1 \xC3\xA1 \xC3\xA7\xC3\xA1\xC5\x95\xC4\x8F \xC3\xB6\xC3\xB1\xC4\xBA\xC3\xBD \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1\xC3\xBC]\0"
+    "[\xC3\x87\xC3\xA1\xC5\x95\xC4\x8F \xC5\x95\xC3\xA9\xC3\xA1\xC4\x8F f\xC3\xA1\xC3\xAD\xC4\xBA\xC3\xA9\xC4\x8F \xC3\xA1\xC5\xA3 \xC5\xA1\xC5\xA3\xC3\xA1\xC5\x95\xC5\xA3\xC3\xBCp: \xC5\x95\xC3\xA9\xC5\xA1\xC5\xA3\xC3\xA1\xC5\x95\xC5\xA3 \xC5\xA3\xC3\xB6 \xC5\xA3\xC5\x95\xC3\xBD \xC3\xA1\xC4\x9D\xC3\xA1\xC3\xAD\xC3\xB1 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1\xC3\xBCm \xC4\x8F\xC3\xB6\xC4\xBA\xC3\xB6\xC5\x95]\0"
     "[B\xC4\xBA\xC3\xBC\xC3\xA9\xC5\xA3\xC3\xB6\xC3\xB6\xC5\xA3\xC4\xA5 \xC4\xA5\xC3\xA9\xC3\xA1\xC4\x8Fp\xC4\xA5\xC3\xB6\xC3\xB1\xC3\xA9\xC5\xA1 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xAD]\0"
     "[\xC3\x91\xC3\xB6 \xC4\xA5\xC3\xA9\xC3\xA1\xC4\x8Fp\xC4\xA5\xC3\xB6\xC3\xB1\xC3\xA9\xC5\xA1 p\xC3\xA1\xC3\xAD\xC5\x95\xC3\xA9\xC4\x8F \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xAD]\0"
     "[\xC3\x91\xC3\xB6\xC5\xA3 \xC3\xA7\xC3\xB6\xC3\xB1\xC3\xB1\xC3\xA9\xC3\xA7\xC5\xA3\xC3\xA9\xC4\x8F \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m]\0"
@@ -3092,41 +3170,43 @@ const uint16_t kOff_en_XA[kStrings] = {
     7112, 7133, 7164, 982, 7276, 7326, 7372, 7426, 7440, 7492, 7563, 7605,
     7653, 7669, 7689, 7736, 7774, 7815, 7901, 7951, 7987, 8052, 8135, 8177,
     8250, 8280, 8311, 8346, 8446, 8471, 8549, 8600, 8646, 8691, 8768, 8858,
-    8898, 8967, 9023, 9096, 9160, 9215, 9475, 9597, 9638, 9676, 9710, 9750,
-    9870, 9928, 1005, 7653, 10002, 10018, 10082, 5675, 10097, 4560, 10113, 10152,
-    10202, 10226, 6862, 10246, 10269, 6862, 10226, 10293, 10333, 10368, 10400, 10451,
-    10490, 10546, 10938, 10956, 11038, 11147, 11233, 11287, 11365, 11403, 11432, 11442,
-    4514, 4329, 11492, 11540, 11650, 11684, 5703, 11715, 11744, 11781, 11961, 12001,
-    12194, 12281, 12328, 12523, 12596, 12328, 12639, 12711, 12759, 12955, 13029, 13081,
-    13278, 1040, 13383, 13437, 13462, 13525, 13613, 13663, 13686, 13758, 13770, 13787,
-    5703, 13868, 13887, 13920, 5653, 13950, 14004, 14092, 14114, 14152, 14187, 14277,
-    14373, 14416, 14450, 14528, 14565, 14640, 14679, 14726, 14782, 14923, 14959, 15073,
-    15153, 15222, 15295, 15382, 15452, 15546, 15635, 15676, 15739, 15834, 15906, 15946,
-    16010, 16065, 16078, 16091, 16106, 16121, 16136, 16153, 16184, 16246, 16260, 16280,
-    16296, 16308, 16355, 16010, 16402, 16420, 16438, 16136, 16456, 16483, 16546, 16617,
-    16671, 16690, 16709, 16749, 16812, 16874, 16934, 16246, 16995, 16280, 17016, 17053,
-    17245, 17517, 17541, 17615, 17660, 17692, 17736, 17758, 17820, 17970, 18015, 18054,
-    18116, 18145, 18181, 18209, 18257, 18316, 10226, 18495, 18545, 18545, 18571, 18619,
-    18680, 18775, 18861, 18909, 19007, 19073, 19153, 19215, 19255, 19295, 19322, 19371,
-    19413, 19443, 19465, 19500, 19752, 19810, 19881, 4694, 19934, 19986, 20024, 20060,
-    20122, 20162, 20224, 20252, 20304, 20334, 20369, 20389, 20419, 20493, 20571, 20625,
-    20704, 20758, 13613, 20833, 20857, 20881, 20902, 5088, 20930, 11715, 20962, 21051,
-    4694, 20930, 13613, 21122, 21147, 21208, 21234, 21290, 20881, 21453, 21478, 21533,
-    21621, 4230, 21658, 21714, 21797, 21829, 21881, 21905, 21947, 21987, 22033, 20224,
-    22063, 22136, 22172, 22242, 22269, 22300, 22323, 22352, 22387, 22420, 22475, 22621,
-    22829, 22844, 22886, 22932, 22986, 13770, 23051, 23083, 23106, 23139, 23163, 23194,
-    23238, 23273, 982, 23345, 7426, 23366, 4694, 23403, 23424, 23456, 23491, 23556,
-    23588, 23618, 23680, 23723, 23795, 23865, 23945, 23976, 24041, 24091, 24166, 24196,
-    24213, 24242, 24255, 24270, 24283, 24300, 24316, 23083, 982, 24347, 24370, 24390,
-    24414, 24431, 24455, 24485, 24503, 24527, 24555, 24580, 24597, 24647, 24685, 24711,
-    24740, 24765, 24786, 24819, 24848, 7426, 23345, 24866, 24883, 24899, 17970, 24951,
-    5088, 24984, 4560, 24999, 25303, 25371, 25440, 25508, 25593, 25664, 25745, 25830,
-    25988, 11715, 26003, 26027, 1061, 26043, 26058, 26203, 26255, 1092, 26272, 26419,
-    26481, 26546, 26661, 26773, 26865, 26956, 27032, 27070, 27093, 27160, 27209, 27264,
-    27327, 27338, 27360, 27390, 27412, 27443, 27465, 27480, 27498, 4329, 27565, 27627,
-    5088, 27696, 27737, 27800, 27930, 28067, 28226, 28304, 28366, 28446, 28493, 28525,
-    28535, 28578, 28653, 28703, 28850, 28984, 11715, 29149, 29159, 29176, 29188, 29214,
-    29240, 29261, 29278, 29292, 29310, 29326,
+    8898, 8967, 9023, 9096, 9119, 9135, 9159, 9173, 9196, 9227, 9263, 9284,
+    9310, 9327, 9356, 9378, 9404, 9422, 9440, 9506, 9576, 9648, 9712, 9767,
+    10027, 10149, 10190, 10228, 10262, 10302, 10422, 10480, 1005, 7653, 10554, 10570,
+    10634, 5675, 10649, 4560, 10665, 10704, 10754, 10778, 6862, 10798, 10821, 6862,
+    10778, 10845, 10885, 10920, 10952, 11003, 11042, 11098, 9422, 11490, 11572, 11681,
+    11767, 11821, 11899, 11937, 11966, 11976, 4514, 4329, 12026, 12074, 12184, 12218,
+    5703, 12249, 12278, 12315, 12495, 12535, 12728, 12815, 12862, 13057, 13130, 12862,
+    13173, 13245, 13293, 13489, 13563, 13615, 13812, 1040, 13917, 13971, 13996, 14059,
+    14147, 14197, 14220, 14292, 14304, 14321, 5703, 14402, 14421, 14454, 5653, 14484,
+    14538, 14626, 14648, 14686, 14721, 14811, 14907, 14950, 14984, 15062, 15099, 15174,
+    15213, 15260, 15316, 15457, 15493, 15607, 15687, 15756, 15829, 15916, 15986, 16080,
+    16169, 16210, 16273, 16368, 16440, 16480, 16544, 16599, 16612, 16625, 16640, 16655,
+    16670, 16687, 16718, 16780, 16794, 16814, 16830, 16842, 16889, 16544, 16936, 16954,
+    16972, 16670, 16990, 17017, 17080, 17151, 17205, 17224, 17243, 17283, 17346, 17408,
+    17468, 16780, 17529, 16814, 17550, 17587, 17779, 18051, 18075, 18149, 18194, 18226,
+    18270, 18292, 18354, 18504, 18549, 18588, 18650, 18679, 18715, 18743, 18791, 18850,
+    10778, 19029, 19079, 19079, 19105, 19153, 19214, 19309, 19395, 19443, 19541, 19607,
+    19687, 19749, 19789, 19829, 19856, 19905, 19947, 19977, 19999, 20034, 20286, 20344,
+    20415, 20535, 4694, 20588, 20640, 20678, 20714, 20776, 20816, 20878, 20906, 20958,
+    20988, 21023, 21043, 21073, 21147, 21225, 21279, 21358, 21412, 14147, 21487, 21511,
+    21535, 21556, 5088, 21584, 12249, 21616, 21705, 4694, 21584, 14147, 21776, 21801,
+    21862, 21888, 21944, 21535, 22107, 22132, 22187, 22275, 4230, 22312, 22368, 22451,
+    22483, 22535, 22559, 22601, 22641, 22687, 20878, 22717, 22790, 22826, 22896, 22923,
+    22954, 22977, 23006, 23041, 23074, 23129, 23275, 23483, 23498, 23540, 23586, 23640,
+    14304, 23705, 23737, 23760, 23793, 23817, 23848, 23892, 23927, 982, 23999, 7426,
+    24020, 4694, 24057, 24078, 24110, 24145, 24210, 24242, 24272, 24334, 24377, 24449,
+    24519, 24599, 24630, 24695, 24745, 24820, 24850, 24867, 24896, 24909, 24924, 24937,
+    24954, 24970, 23737, 982, 25001, 25024, 25044, 25068, 25085, 25109, 25139, 25157,
+    25181, 25209, 25234, 25251, 25301, 25339, 25365, 25394, 25419, 25440, 25473, 25502,
+    7426, 23999, 25520, 25537, 25553, 18504, 25605, 5088, 25638, 4560, 25653, 25957,
+    26025, 26094, 26162, 26247, 26318, 26399, 26484, 26642, 12249, 26657, 26681, 1061,
+    26697, 26712, 26857, 26909, 1092, 26926, 27073, 27135, 27200, 27315, 27427, 27519,
+    27610, 27686, 27724, 27747, 27814, 27863, 27918, 27981, 27992, 28014, 28044, 28066,
+    28097, 28119, 28134, 28152, 4329, 28219, 28281, 5088, 28350, 28391, 28454, 28584,
+    28721, 28880, 28958, 29020, 29100, 29147, 29179, 29189, 29232, 29307, 29357, 29504,
+    29638, 12249, 29803, 29813, 29830, 29842, 29868, 29894, 29915, 29932, 29946, 29964,
+    29980,
 };
 
 #endif
@@ -3152,10 +3232,10 @@ const Table kTables[kLangs] = {
 
 const uint8_t kPluralBits[(kStrings + 7) / 8] = {
     0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x43, 0xF7, 0x00, 0x80, 0x42, 0x60, 0x38, 0x82, 0x00, 0xA0, 0x03, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0xA0, 0x1F,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x43, 0xF7, 0x00, 0x80, 0x42, 0x00, 0x00, 0x8C, 0xE1, 0x08, 0x02, 0x80, 0x0E,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00,
+    0x80, 0x7E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
 }  // namespace detail

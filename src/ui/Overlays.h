@@ -78,6 +78,14 @@ namespace ui {
 // The sprite sheets and dialogs are drawn in (320 x 204, PSRAM: the
 // content area, room for a 4-row sheet; the others use its top 168 rows).
 bool overlaysBegin();
+// That sprite, for an overlay drawn in a file of its own (ui/FilterSheet,
+// the mood filters' editor: docs/MOOD-FILTERS.md 7.6); nullptr before
+// overlaysBegin(). panelOwner(): whose picture it holds (its last whole
+// render: a press look draws one control again over it, after rendering
+// it all if another's is there), which setPanelOwner() claims.
+M5Canvas* overlayPanel();
+const void* panelOwner();
+void setPanelOwner(const void* owner);
 
 class Toast {
 public:

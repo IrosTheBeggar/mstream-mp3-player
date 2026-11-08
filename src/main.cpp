@@ -14,6 +14,7 @@
 
 #include <Arduino.h>
 #include <M5Unified.h>
+#include <esp_attr.h>
 #include <esp_chip_info.h>
 #include <esp_heap_caps.h>
 #include <esp_random.h>
@@ -25,6 +26,7 @@
 #include <vector>
 
 #include "ButtonPolicy.h"
+#include "CardBreaker.h"
 #include "ChipRevision.h"
 #include "DeviceInfo.h"
 #include "HeadsetKeys.h"
@@ -39,6 +41,7 @@
 #include "QueueModel.h"
 #include "QueueView.h"
 #include "RateConverter.h"
+#include "RestartWait.h"
 #include "RingCutStress.h"
 #include "SleepTimer.h"
 #include "ToneTrack.h"
@@ -126,16 +129,17 @@ static Frozen frozen;
 // (Shuffles draw from esp_random(): fresh hardware entropy for each one.)
 static QueueModel queue(psramAlloc, psramFree, esp_random);
 static PlaybackController player(audio, queue, library.catalog());
-static QueueStore queueStore(storage, queue, player, library.catalog());
+static QueueStore queueStore(storage, queue, player, library.catalog(), library.unlisted());
 static DanceMode danceMode(audio, player);
 static Screenshot shot;
 static Haptics haptics;
 // The one input layer: the glass (corrected) and the button strip, as events.
 static Input input(haptics);
 // The screen policy (docs/ENERGY.md item 2; ScreenPower): lit, dim for the
-// last 10 s, then off after the chosen time without input; a touch or the
-// PWR key on a screen that isn't lit only wakes it (swallowed by the input
-// layer), and so do the events that need the listener.
+// last 10 s, then off after the chosen time without input, or at once by
+// the PWR key; a touch on a screen that isn't lit only wakes it (swallowed
+// by the input layer), and so do the PWR key on an off one and the events
+// that need the listener.
 static ScreenControl screen(input);
 // What the touch buttons do, the same on every screen.
 static ButtonPolicy buttonPolicy;
@@ -440,6 +444,15 @@ struct SleepGate : PlaybackController::NextGate {
 };
 static SleepGate sleepGate;
 
+// The player's card (PlaybackController::Card): the SD wrapper says the mount's card is out, FatFs's
+// last mount having found nothing answering, or another card having answered (CachedDrive::
+// mountCardOut(); never without the wrapper). A track that fails to start then holds where it is,
+// and is tried again (docs/METADATA.md 3.8); with another card, until the guard's restart.
+struct CardWatch : PlaybackController::Card {
+  bool out() const override { return sectordisk::cardOut(); }
+};
+static CardWatch cardWatch;
+
 // What the touch buttons drive (ButtonPolicy decides which button does what).
 struct ButtonTransport : ButtonPolicy::Transport {
   void prev() override { prevTrack(); }
@@ -713,6 +726,8 @@ struct MainUiHost : ui::UiHost {
     s.libDevice = sources.device;
     s.libNone = sources.none;
     s.libraryRecords = cardTasks && cardTasks->active();
+    s.libraryHeld = library.cardJobsHeld();
+    s.queueUnread = queueStore.fileUnread();
     // The battery is an I2C read of the power chip: every 10 s is plenty.
     const uint32_t now = millis();
     if (batteryAtMs == 0 || now - batteryAtMs >= 10000) {
@@ -893,6 +908,8 @@ struct MainUiHost : ui::UiHost {
     return true;
   }
   void rescanLibrary() override;
+  // (Only a boot asks for a card's root, or its jobs' memory, again.)
+  bool rescanRestarts() const override { return library.records() && !(cardTasks && cardTasks->active()); }
   bool rescanTags() override {
     if (!cardTasks || !cardTasks->active() || frozen.on) return false;
     Serial.println("[ui] Rescan tags: the player's own files read again (the transfer's stay as they are)");
@@ -999,16 +1016,32 @@ static bool rebuildLibrary() {
 // g0 and the UI's "Try again" with no music: on the card, the validation
 // walk now and the update step after it (the card worker's: the Library's
 // status line follows them); on the flash, /music walked and built at once.
+// A card's records with no card jobs (their boot held them, or no PSRAM for
+// them): nothing walks, and the queue, the lengths and the UI's ids stay.
 static bool walkAndRebuild() {
   if (cardTasks && cardTasks->active()) {
     cardTasks->askWalkAndUpdate();
     Serial.println("[index] the card is walked now, and the library updated after it (gs follows them)");
     return false;
   }
+  if (library.records()) {
+    if (library.cardJobsHeld()) {
+      Serial.printf("[index] %s: no walk, a restart asks again\n", library.heldWhy());
+    } else {
+      Serial.println("[index] no PSRAM for the card jobs: no walk this session");
+    }
+    return false;
+  }
   return rebuildLibrary();
 }
 
 void MainUiHost::rescanLibrary() {
+  if (rescanRestarts()) {
+    Serial.println("[ui] try again: no card jobs this session: restarting");
+    queueStore.flushNow();  // (it says how that went)
+    restartAtMs = millis() + 1200;  // the toast shows first
+    return;
+  }
   Serial.println("[ui] try again: walking /music");
   walkAndRebuild();
 }
@@ -1904,10 +1937,11 @@ static void hostFacts(hoststatus::Facts& f) {
   // guard's flag, an atomic read: no card I/O. cardHeld isn't the test:
   // it also holds the same card for a restart, whose cid= is right.)
   const cardroot::Root* root = library.root();
-  if ((f.card == Card::Fat32 || f.card == Card::Fat16) && root && root->hasRoot && !sectordisk::guard().foreign) {
-    f.cidKnown = true;
+  if ((f.card == Card::Fat32 || f.card == Card::Fat16) && root && !sectordisk::guard().foreign) {
+    f.cidKnown = root->hasRoot;
     f.cardId = root->cardId;
     f.generation = root->generation;
+    f.cidUnknown = !root->hasRoot && root->readFailed();  // (it may have one: '?', not '-')
   }
 }
 
@@ -2037,7 +2071,8 @@ static SerialConsole console({
                                            : "where it's told (already corrected)");
         return;
       }
-      // ui (u + "i"): the UI's navigation state; ui0-ui4 a tab, uib back.
+      // ui (u + "i"): the UI's navigation state; ui0-ui4 a tab, uib back;
+      // uiM... the mood filters (Ui::filtersCommand()).
       if (a[0] == 'i') {
         if (a[1] == 'l') {
           browseCommand(a + 2);
@@ -2138,15 +2173,19 @@ static bool touchedThisPass = false;
 // ends it, and does nothing else: the rest of that touch, or of that
 // button's hold, is dropped. A tap on the dancer still switches it.
 static bool vizSwallowTouch = false;  // until the next touch lands
-static int vizSwallowButton = -1;     // until this button's HoldEnd
+static int vizSwallowButton = -1;     // until this button's HoldEnd, or its next press
 
 // True: the event is taken (it ended host mode, or belongs to what did).
 static bool vizInput(const InputEvent& e) {
   using T = InputEvent::Type;
   if (e.isButton()) {
     if (vizSwallowButton == e.button) {
-      if (e.type == T::HoldEnd) vizSwallowButton = -1;
-      return true;
+      if (e.type == T::Repeat) return true;
+      const bool ended = e.type == T::HoldEnd;
+      vizSwallowButton = -1;
+      if (ended) return true;
+      // A Click or a Hold: a new press. That hold's HoldEnd never came (the
+      // PWR key turned the screen off under it: the wake latch drops it).
     }
     if (!usbViz.active()) return false;
     Serial.printf("[button] %c %s: ends the computer's visualizer\n", static_cast<char>('A' + e.button),
@@ -2173,9 +2212,9 @@ static void handleInput(uint32_t now) {
   // The screen: the PWR key, USB, and whether a touch now would only wake
   // it (dim or off: the input layer swallows that touch through its lift).
   screen.beginPass(now);
-  // (The PWR key only wakes the screen or counts as input there: ending
-  // the visualizer is all it does here.)
-  if (usbViz.active() && M5.BtnPWR.wasClicked()) {
+  // (The visualizer keeps the screen lit, so the PWR key only counts as
+  // input there: ending the visualizer is all it does.)
+  if (usbViz.active() && screen.powerKeyClicked()) {
     Serial.println("[button] PWR click: ends the computer's visualizer");
     usbViz.userEnded(HostLink::Why::Button);
   }
@@ -2864,6 +2903,59 @@ static void stepCpuRestart(uint32_t now) {
 // The card jobs and the queue's saves held until the restart (restartAtMs):
 // another card is in the slot, or the card came back with a job under way.
 static bool cardHeld = false;
+// The guard's restart for the same card back under a job, waiting for the queue's flush (lib/core
+// RestartWait): the flush tried again on the saver's backoff, the restart once one works, or 30 s on.
+static RestartWait restartWait;
+// The card's breaker (lib/core CardBreaker): RTC slow memory, which outlives
+// esp_restart(), not a power-on.
+RTC_NOINIT_ATTR static cardbreaker::Word cardBreakerWord;
+static bool heldByBreaker = false;
+
+// Every pass while the guard's restart waits for the queue's flush (restartWait: the same card
+// back with a job under way, its first flush failed): a flush again on the saver's backoff, the
+// toast again if the restart comes after it has gone, the restart once a flush works or 30 s on.
+// No flush can work while the card refuses every write (writes off, another card put in since)
+// or while the queue is text in PSRAM behind an update step's fence: the restart then, as ever.
+static bool flushCanWork(const sectordisk::Guard& g) { return !g.writesOff && !g.foreign && !queueStore.carrying(); }
+static void stepRestartWait(const sectordisk::Guard& g) {
+  const bool canFlush = flushCanWork(g);
+  switch (restartWait.step(millis(), canFlush)) {
+    case RestartWait::Do::Nothing:
+      return;
+    case RestartWait::Do::Flush: {
+      const bool ok = queueStore.flushNow();  // (it says how that went)
+      const uint32_t now = millis();
+      restartWait.tried(now, ok, queueStore.retryWaitMs());
+      const unsigned long secs = (now - restartWait.sinceMs()) / 1000;
+      if (ok) {
+        Serial.printf("[card] the queue saved %lu s after the card came back (flush %lu): restarting\n", secs,
+                      (unsigned long)restartWait.tries());
+      } else if (!restartWait.decided()) {
+        Serial.printf("[card] the queue not saved yet (flush %lu): the restart waits; the next flush in %lu s\n",
+                      (unsigned long)restartWait.tries(), (unsigned long)(restartWait.nextTryInMs(now) / 1000));
+      }
+      return;
+    }
+    case RestartWait::Do::Announce:
+      if (userInterface) userInterface->note(uistr::tr(uistr::S::card_back), RestartWait::kToastMs);
+      return;
+    case RestartWait::Do::Restart:
+      if (restartWait.flushed()) {
+        // An edit or a move since the flush that worked: once more, nothing written when there's
+        // none. Not if busy(): the saver notes changes in its loop() and flushNow() only, and
+        // cardHeld holds its loop.
+        queueStore.flushNow();
+      } else {
+        Serial.printf("[card] restarting with the queue unsaved after %lu flushes in %lu s%s: queue.txt keeps the "
+                      "last one saved\n",
+                      (unsigned long)restartWait.tries(), (unsigned long)((millis() - restartWait.sinceMs()) / 1000),
+                      restartWait.cantFlush() ? " (no flush can work: the card refuses writes, or the queue is in PSRAM)"
+                                              : "");
+      }
+      restartAtMs = millis();  // (restartNow(), at the loop's check)
+      return;
+  }
+}
 
 // Every loop pass, before the queue's save and the card jobs: what the SD
 // wrapper's guard found at FatFs's remounts (the card pulled and put back,
@@ -2878,9 +2970,14 @@ static bool cardHeld = false;
 // cardjobs::Jobs::begin() asks for this; the session's scan and update
 // state kept: CardTasks::begin()), unless a job was under way (a step on
 // the worker, a walk, a compaction, the update step): then the queue saved
-// and a restart. Either restart waits for the worker's step under way
-// (cardHeld hands no other) and holds the SPI bus (restartNow()). And the
-// card's refused writes, as they come.
+// and a restart, which waits for a flush that works, at most 30 s
+// (stepRestartWait(): the card can be silent again). Either restart waits for
+// the worker's step under way (cardHeld hands no other) and holds the SPI bus
+// (restartNow()). And the
+// card's refused writes, as they come. A command with no answer that the
+// card came back from at once isn't a remount at all (the look, METADATA.md
+// 3.8): its line only. What still restarts is counted (the breaker, 3.8):
+// two in a row and the next boot holds the card jobs.
 static void stepCardGuard() {
   if (!sectordisk::installed()) return;
   const sectordisk::Guard g = sectordisk::guard();
@@ -2892,15 +2989,78 @@ static void stepCardGuard() {
   }
   retriesSeen = g.writeRetries;  // (gc's reset brings them down: followed)
   failsSeen = g.writeFails;
+  // A command with no answer, the card back at its init, the same card: a read asked once
+  // more, and that read's error only when that fails too; nothing else (CachedDrive::
+  // lookAfterFault(), afterRead()). One line in 5 s at most.
+  static uint32_t keptSeen = 0, keptSaidMs = 0;
+  if (g.kept != keptSeen && (keptSeen == 0 || millis() - keptSaidMs >= 5000)) {
+    keptSeen = g.kept;
+    keptSaidMs = millis();
+    Serial.printf("[card] a command got no answer, and the card was back at once, the same card: %lu since the "
+                  "boot, %lu of them reads that worked when asked once more; the last read or write that failed "
+                  "at sector %lu\n",
+                  (unsigned long)g.kept, (unsigned long)g.healed, (unsigned long)g.faultLba);
+  }
+  static bool writesOffSaid = false;
+  if (g.writesOff && !writesOffSaid) {
+    writesOffSaid = true;
+    Serial.println("[card] writes kept failing (FatFs's FAT or a directory refused twice, or the card silent at 4 "
+                   "writes): no more this session (the queue's saves and the card jobs fail, playing goes on); a "
+                   "restart asks again");
+  }
+  static bool tooSilentSaid = false;
+  if (g.tooSilent && !tooSilentSaid) {
+    tooSilentSaid = true;
+    Serial.println("[card] the card kept going silent: no covers from now on and, at the next remount, no card jobs, "
+                   "Auto DJ index or waveform reads (playing goes on); a restart asks again");
+  }
+  // The card back: the queue's next save doesn't sit out the wait its failures built up.
+  static uint32_t cardBacksSeen = 0;
+  if (g.cardBacks != cardBacksSeen) {
+    cardBacksSeen = g.cardBacks;
+    queueStore.cardBack();
+  }
+  static bool calmed = false;
+  // (Not while a restart the guard counted waits: it's counted, whenever it comes.)
+  if (!calmed && !cardHeld && millis() >= cardbreaker::kCalmMs) {
+    calmed = true;
+    cardbreaker::clear(cardBreakerWord);
+  }
+  if (restartWait.active()) stepRestartWait(g);
   if (cardHeld) return;
   char id[112];
   if (g.foreign) {
+    // An identity that couldn't be read says nothing of another card, and the next boot may
+    // find the same. It counts; a boot already holding the jobs stays up, its writes refused.
+    const bool unread = !g.known || !g.lastKnown;
+    if (unread && heldByBreaker) {
+      static bool said = false;
+      if (!said) {
+        Serial.println("[card] the card's identity couldn't be read at a remount: every write to it refused; no "
+                       "restart (this boot holds the card jobs)");
+      }
+      said = true;
+      return;
+    }
+    if (unread) {
+      cardbreaker::noteRestart(cardBreakerWord);
+    } else {
+      cardbreaker::clear(cardBreakerWord);
+    }
     cardHeld = true;
-    sectordisk::identityText(id, sizeof(id), true);
-    Serial.printf("[card] ANOTHER CARD in the slot (FatFs mounted it again: %s): every write to it refused; the card "
-                  "jobs and the queue's saves stop; restarting to use it\n",
-                  id);
-    if (userInterface) userInterface->note(uistr::tr(uistr::S::card_another), 3000);
+    // (The one that couldn't be read: the mount's, or then the last remount's.)
+    sectordisk::identityText(id, sizeof(id), g.known);
+    if (unread) {
+      Serial.printf("[card] the card's identity couldn't be read at %s (%s): every write to it refused; the card jobs "
+                    "and the queue's saves stop; restarting\n",
+                    g.known ? "a remount" : "the mount", id);
+    } else {
+      Serial.printf("[card] ANOTHER CARD in the slot (FatFs mounted it again: %s): every write to it refused; the card "
+                    "jobs and the queue's saves stop; restarting to use it\n",
+                    id);
+    }
+    // (No word for an unread card: for a player with one card, "back" is the nearer.)
+    if (userInterface) userInterface->note(uistr::tr(unread ? uistr::S::card_back : uistr::S::card_another), 3000);
     restartAtMs = millis() + 1200;  // the toast first
     return;
   }
@@ -2916,18 +3076,36 @@ static void stepCardGuard() {
   if (cardTasks->worker().busy() || cardTasks->libraryWrite() || cardTasks->updating() || phase == Phase::Checking ||
       phase == Phase::Updating) {
     cardHeld = true;
-    Serial.println("[card] the card answered again (the same card) with a card job under way: the queue saved, "
-                   "restarting");
-    queueStore.flushNow();
-    if (userInterface) userInterface->note(uistr::tr(uistr::S::card_back), 3000);
-    restartAtMs = millis() + 1200;
+    Serial.println("[card] the card answered again (the same card) with a card job under way: restarting");
+    const bool flushed = queueStore.flushNow();  // (it says how that went)
+    cardbreaker::noteRestart(cardBreakerWord);
+    if (userInterface) userInterface->note(uistr::tr(uistr::S::card_back), RestartWait::kToastMs);
+    // Flushed: the restart 1.2 s on, as ever. Not: it waits for a flush that works (stepRestartWait()).
+    restartWait.begin(millis(), flushed, queueStore.retryWaitMs());
+    if (!flushed && flushCanWork(g)) {
+      Serial.printf("[card] the queue not saved: the restart waits for a flush that works, the next in %lu s, "
+                    "at most %lu s\n",
+                    (unsigned long)(restartWait.nextTryInMs(millis()) / 1000),
+                    (unsigned long)(RestartWait::kMaxMs / 1000));
+    }
     return;
   }
   const tagstore::TagStore::Opened o = library.store()->open();
+  // (This open may be a remount itself: FatFs's first read-mode call once writes are off, its
+  // write-mode calls having counted and mounted nothing. No job holds anything of it yet.)
+  remountsSeen = sectordisk::guard().remounts;
+  // A read the card failed at this open says nothing of the records: the jobs, started
+  // on what it left, would replace them. Off until the next boot, which asks again (no
+  // asking here: a card silent past its init makes the next call a remount, and the next
+  // pass would ask again).
+  if (o.readFailed) library.holdCardJobs("the card failed a read of the records when it answered again");
+  // Read after read that left it silent, each a cut, and the jobs begin again at each: the
+  // stop can't end that when the files move on (CachedDrive::tooSilent()).
+  if (g.tooSilent) library.holdCardJobs("the card kept going silent: no card jobs this session");
   const bool begun = cardTasks->begin();
   Serial.printf("[card] the card answered again (the same card): its records opened again (D %s, %lu journal "
                 "chunks), the card jobs %s%s\n",
-                library.store()->device().present ? "present" : "none", (unsigned long)o.chunks,
+                o.readFailed ? "unread" : library.store()->device().present ? "present" : "none", (unsigned long)o.chunks,
                 begun ? "begun again" : "COULDN'T begin again",
                 library.store()->tmpKept() ? "; tags.tmp KEPT: alone and unchecked (no PSRAM for its check)" : "");
 }
@@ -3101,7 +3279,7 @@ static void leaveFence() {
   if (queueStore.remapFinish(s.built)) sleepEntry.rekey(queue.currentKey());
   // Auto DJ: its DJ marks and its place in the queue under the new keys;
   // the join again on the new index (its next steps).
-  if (autoDj) autoDj->live();
+  if (autoDj) autoDj->live(s.built, s.reloaded);
   const LibraryIndex* index = library.index();
   durations.reset(index && index->ready() ? index->trackCount() : 0);
   if (userInterface) {
@@ -3110,10 +3288,10 @@ static void leaveFence() {
   }
   Serial.printf("[lib] the update step: %s in %.0f ms on the card worker (the loop live; the fence up %lu ms); PSRAM "
                 "free %u B before, %u B after, lowest %s\n",
-                s.built ? (s.walked ? "walked /music" : "built") : s.cardGone ? "FAILED (the card's records didn't "
-                                                                                 "open, or a read failed: the card "
-                                                                                 "pulled?)"
-                                                              : "FAILED (out of PSRAM)",
+                s.built      ? (s.walked ? "walked /music" : "built")
+                : s.reloaded ? "FAILED (a read of the card's records failed: the last library.idx loaded again)"
+                : s.cardGone ? "FAILED (the card's records didn't open, or a read failed: the card pulled?)"
+                             : "FAILED (out of PSRAM)",
                 s.buildMs, (unsigned long)s.fenceMs, (unsigned)fencePsramBefore,
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), lowest);
   if (s.built && !s.walked) {
@@ -3125,7 +3303,9 @@ static void leaveFence() {
                   r.restarted ? "; restarted without a file that failed its checks" : "",
                   library.transferBad() ? "; T left out" : "", (unsigned)(index ? index->memory().buildPeak : 0));
   }
-  if (s.journalsLeft) Serial.println("[lib] the journals couldn't be compacted first: built from tags.bin alone");
+  if (s.built && s.journalsLeft) {
+    Serial.println("[lib] the journals couldn't be compacted first: built from tags.bin alone");
+  }
 }
 
 // Every loop pass, after the UI's (its covers taken in, its list's motion
@@ -3398,10 +3578,31 @@ void setup() {
   // ~13 KB for its two copies).
   const uint32_t freeBeforeLibrary = diag::heap().internalFree;
   library.begin();
+  // (Before the breaker's hold, which says nothing of this boot's reads: the queue's file still
+  // gets the boot's waits under it.)
+  const bool bootReadsFailed = library.bootReadsFailed();
+  {
+    uint32_t restarts = 0;
+    heldByBreaker = cardbreaker::atBoot(cardBreakerWord, esp_reset_reason() == ESP_RST_SW, &restarts);
+    if (heldByBreaker) {
+      library.holdCardJobs("the guard restarted twice in a row for this card: no card jobs this session");
+      Serial.printf("[card] the guard restarted %lu times in a row: no card jobs this boot (covers, Auto DJ, the "
+                    "waveform and the queue go on)\n",
+                    (unsigned long)restarts);
+    }
+  }
   // The repeat mode saved (Off unless changed), before the queue and the
   // first play; shuffle comes back with the queue's file.
   player.setRepeat(queueStore.loadRepeat());
-  if (!queueStore.restore()) {
+  void (*bootWait)(uint32_t) = [](uint32_t ms) { delay(ms); };
+  const QueueStore::Restore queueRead =
+      queueStore.restore(library.listsCard(), bootReadsFailed ? nullptr : bootWait);
+  if (queueRead == QueueStore::Restore::None && library.cardJobsHeld()) {
+    // The card is in trouble at this boot, and the file's read may have come to nothing for
+    // another reason (no PSRAM for it): a default queue would be saved over a queue.txt that
+    // may only be unread. Empty until a boot reads it.
+    Serial.println("[queue] no queue read at a boot that holds the card jobs: queue.txt left as it is");
+  } else if (queueRead == QueueStore::Restore::None) {
     queueEverything(false);
     // Past the queue's cap, the library's first 5,000 (QueueModel::assign()).
     const LibraryIndex* lib = library.index();
@@ -3496,6 +3697,7 @@ void setup() {
                       : "paired on Output > Pair new headphones only (never picked by the Core2 itself)");
   }
   player.setHold(&outputHold);  // a play waits while the headphones aren't connected (PlayGate)
+  player.setCard(&cardWatch);   // a play that fails with the card out holds there (the card hold)
   // Gapless playback (docs/GAPLESS.md): the player names what follows, the
   // backend joins it; never past the sleep timer's end.
   player.setNextGate(&sleepGate);
@@ -3548,10 +3750,12 @@ void setup() {
                  "uk1/uk2/uk0 the scripted finger on a skewed panel (uk2 with jitter) or not, "
                  "uiF<c/s/p/r/l/n/f/t/g/u/w> show a faked Bluetooth, no-card, exFAT/NTFS/GPT/can't-read card or waiting state "
                  "(uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
-                 "library of n tracks in the Library tab, uil0 the card's); "
+                 "library of n tracks in the Library tab, uil0 the card's, uiM the Albums list's mood filter (uiMa<hex> "
+                 "set it, uiMa0 clear it, uiMe the editor)); "
                  "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress, wm0/wm1 redraw/hw scroll, wp refill pacing), "
                  "g library index (g0 SD card, g<n> synthetic) and its tags (gs the scan's status, gt</music/...> a "
-                 "file's tags, gr rescan tags, gc the sector cache, gl the card's bench; g? all), e font probe (e1-e5), j thumbnail probe (j<n>, jw, ja); "
+                 "file's tags, gr rescan tags, gc the sector cache, gl the card's bench, gm the mood words, gm<hex> a filter's "
+                 "tracks and albums; g? all), e font probe (e1-e5), j thumbnail probe (j<n>, jw, ja); "
                  "P power measurement (P a line, Pl log, P? the knobs; Ps the screen, Ps0/Ps1 off/on); "
                  "T sleep timer (T status, T<min>, Ts<sec> for tests, Tt/Ta/Tq end of track/album/queue, T+ +10 min, "
                  "T0 off); I idle power-off (I status, I<min>/Is<sec> a test length, I0 the setting's); "
@@ -3593,7 +3797,7 @@ void loop() {
   btSession.update(audio.bluetooth().link(), now);
   stepPlayGate(now);
   // The fade's toast: a touch (swallowed as a wake, or on a lit screen) or
-  // the PWR key while it fades; only its buttons act on the timer.
+  // the PWR key's wake while it fades; only its buttons act on the timer.
   const bool woken = screen.takeWoken();
   if (sleepTimer.fading() && (woken || touchedThisPass) && userInterface) userInterface->sleepFading();
   stepSleep(now);
@@ -3607,7 +3811,9 @@ void loop() {
   powerLab.loop(now);
   stepCardGuard();
   // The waveform index: a remount seen before the card's step hands a read.
-  if (userInterface) userInterface->waves().remount(cardHeld);
+  if (userInterface) {
+    userInterface->waves().remount(cardHeld, !userInterface->started() || userInterface->listMoving() || frozen.on);
+  }
   stepAutoDj(now);
   if (!cardHeld) queueStore.loop(now);
   // What a track's length is, once the backend knows it (read from the
@@ -3659,6 +3865,34 @@ void loop() {
     lastEntry = queue.currentKey();
     lastFile = file;
   }
+  // The card hold (PlaybackController's, docs/METADATA.md 3.8): a play that failed with the
+  // card out holds at its entry, tried again, instead of the queue running out.
+  {
+    static PlaybackController::CardHolds seen;
+    const PlaybackController::CardHolds& h = player.cardHolds();
+    if (h.begun != seen.begun) {
+      Serial.printf("[queue] the card is out: %d of %lu holds there, not skipped; tried again in %lu s, then twice as "
+                    "long, up to %lu s, for %lu s, then paused\n",
+                    queue.current() + 1, (unsigned long)queue.size(),
+                    (unsigned long)(PlaybackController::kCardRetryMs / 1000),
+                    (unsigned long)(PlaybackController::kCardRetryMaxMs / 1000),
+                    (unsigned long)(PlaybackController::kCardWaitMs / 1000));
+    }
+    if (h.retries != seen.retries) {
+      Serial.printf("[queue] the card hold: %d of %lu tried again (%lu since the boot)\n", queue.current() + 1,
+                    (unsigned long)queue.size(), (unsigned long)h.retries);
+    }
+    if (h.resumed != seen.resumed) {
+      Serial.printf("[queue] the card answered: %d of %lu plays on\n", queue.current() + 1,
+                    (unsigned long)queue.size());
+    }
+    if (h.paused != seen.paused) {
+      Serial.printf("[queue] the card still out after %lu s: paused at %d of %lu; Play tries again\n",
+                    (unsigned long)(PlaybackController::kCardWaitMs / 1000), queue.current() + 1,
+                    (unsigned long)queue.size());
+    }
+    seen = h;
+  }
   // Repeat One's loops: the same entry again (no new key, so no line above;
   // the dancer keeps its tempo: the same song).
   static uint32_t lastRepeats = 0;
@@ -3707,6 +3941,8 @@ void loop() {
       char note[96];  // (settings.idle_off_note_*, settings.cpu_boot_note: i18n/en.json's "bytes")
       if (idlePower.takeBootNote(note, sizeof(note)) || powerSettings.takeBootNote(note, sizeof(note))) {
         userInterface->note(note, 6000);
+      } else if (heldByBreaker) {
+        userInterface->note(uistr::tr(uistr::S::library_row_rescan_unread), 6000);
       }
     }
     userInterface->loop(now);
@@ -3718,10 +3954,11 @@ void loop() {
   // FAT a pass (docs/HOST-STATUS.md).
   hostQuery.loop(now);
   shot.poll();
-  // The screen, last: the countdown, and what keeps it lit (a screen of its
-  // own, a play waiting for the headphones, a pairing, a computer driving
-  // the dancer). Going off, the UI goes dark first; waking, it draws
-  // everything before the panel's sleep-out. A toast with a countdown (the
+  // The screen, last: the countdown, and what keeps it lit (the start-up
+  // screen, a screen of its own, a play waiting for the headphones, a
+  // pairing, a computer driving the dancer). Going off, the UI goes dark
+  // first; waking, it draws everything before the panel's sleep-out. A toast
+  // with a countdown (the
   // idle power-off's warning, the sleep timer's fade while it counts down
   // to the pause) holds a lit screen lit until it ends, and leaves an off
   // one off (it may be night). A track's fade held after a skip (until the
@@ -3733,9 +3970,10 @@ void loop() {
   {
     const BtLink link = audio.bluetooth().link();
     // (A pairing under way, not one whose failure the card still shows.)
-    const bool keepLit = screenTaken() || player.state() == PlayState::Waiting ||
-                         link.phase == BtLink::Phase::Pairing || btSession.pairingUnderWay() || usbViz.active() ||
-                         identifyPending[0] || (userInterface && userInterface->identifying());
+    const bool keepLit = (userInterface && !userInterface->started()) || screenTaken() ||
+                         player.state() == PlayState::Waiting || link.phase == BtLink::Phase::Pairing ||
+                         btSession.pairingUnderWay() || usbViz.active() || identifyPending[0] ||
+                         (userInterface && userInterface->identifying());
     using Hold = ScreenControl::Hold;
     const Hold hold = idlePower.policy().phase() == IdlePolicy::Phase::Warning || sleepTimer.fadeCountingDown()
                           ? Hold::Toast

@@ -24,13 +24,16 @@
 #include <utility>
 #include <vector>
 
+#include "../support/CutFs.h"
 #include "ByteStream.h"
 #include "LibraryIndex.h"
 #include "PlaybackController.h"
+#include "QueueFile.h"
 #include "QueueModel.h"
 #include "QueueRemap.h"
 #include "QueueSaver.h"
 #include "QueueText.h"
+#include "RestartWait.h"
 #include "Shuffle.h"
 #include "TrackCatalog.h"
 #include "hal/IAudioBackend.h"
@@ -1845,7 +1848,7 @@ void test_flush_now_writes_an_edit_at_once() {
 
 // The card fails: flushNow() says so and the last file stays; the saver
 // isn't busy with a failed write (no reason to stay on for it), and tries
-// again 10 s later.
+// again 10 s later (then at twice the wait: the next test).
 void test_flush_now_that_fails_keeps_the_last_file() {
   LibraryIndex idx;
   build(idx, {std::begin(kFiles), std::end(kFiles)});
@@ -1871,15 +1874,157 @@ void test_flush_now_that_fails_keeps_the_last_file() {
   TEST_ASSERT_FALSE(saver.flushNow(2120));
   st.failOpen = false;
   saver.loop(5000);
-  TEST_ASSERT_EQUAL_STRING("last good", st.file.c_str());  // the retry waits its 10 s
-  for (uint32_t t = 12200; t < 12400; t += 20) saver.loop(t);
+  saver.loop(22200);
+  TEST_ASSERT_EQUAL_STRING("last good", st.file.c_str());  // the retry waits: the third failure's 40 s (the first flush tried twice)
+  for (uint32_t t = 42200; t < 42400; t += 20) saver.loop(t);
   TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 3).c_str(), st.file.c_str());
   TEST_ASSERT_EQUAL_UINT32(3, st.posGeneration);
   // An edit after a failure makes it busy again.
   const uint32_t more[] = {2};
   q.append(more, 1);
-  saver.loop(12500);
+  saver.loop(42500);
   TEST_ASSERT_TRUE(saver.busy());
+}
+
+// A write that keeps failing waits longer each time (each try can hold the loop for seconds), up to
+// 5 minutes; one that works starts it over.
+void test_a_failed_write_waits_longer_each_time() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  st.file = "last good";
+  QueueSaver saver(st, q, c);
+  saver.loaded(2, false, 0);
+  const uint32_t one[] = {1};
+  q.append(one, 1);
+  st.failOpen = true;
+  uint32_t t = 10;
+  saver.loop(t);
+  const auto tries = [&](uint32_t wait) {
+    const uint32_t before = saver.failures();
+    const uint32_t from = t;
+    while (saver.failures() == before && t < from + 400000) {
+      t += 100;
+      saver.loop(t);
+    }
+    TEST_ASSERT_EQUAL_UINT32(before + 1, saver.failures());
+    if (wait) TEST_ASSERT_EQUAL_UINT32(wait, t - from);
+  };
+  tries(0);  // (the first, 2 s after the edit)
+  for (const uint32_t wait : {10000u, 20000u, 40000u, 80000u, 160000u, 300000u, 300000u}) tries(wait);
+  TEST_ASSERT_EQUAL_STRING("last good", st.file.c_str());
+  st.failOpen = false;
+  while (saver.contentDirty()) {
+    t += 100;
+    saver.loop(t);
+  }
+  TEST_ASSERT_TRUE(st.file != "last good");
+  // Working, and failing again: from 10 s.
+  q.append(one, 1);
+  st.failOpen = true;
+  tries(0);
+  tries(10000);
+  TEST_ASSERT_EQUAL_UINT32(20000, saver.lastWaitMs());
+  // At the commit too, where every real write of a short queue goes.
+  st.failOpen = false;
+  st.failCommit = true;
+  tries(20000);
+  tries(40000);
+  TEST_ASSERT_EQUAL_UINT32(80000, saver.lastWaitMs());
+  // The card back: at once, and from 10 s. Once for a run of failures: that try failed, so
+  // whatever the next remount says, the waits go on.
+  saver.cardBack(t);
+  tries(100);
+  tries(10000);
+  saver.cardBack(t);
+  tries(20000);
+  // A flush that works leaves no wait: the next edit goes at its 2 s.
+  st.failCommit = false;
+  TEST_ASSERT_TRUE(saver.flushNow(t));
+  q.append(one, 1);
+  saver.loop(t);
+  const uint32_t edited = t;
+  while (saver.contentDirty() && t < edited + 400000) {
+    t += 100;
+    saver.loop(t);
+  }
+  TEST_ASSERT_FALSE(saver.contentDirty());
+  TEST_ASSERT_TRUE(t - edited <= QueueSaver::kContentDelayMs + 100);
+  // A write that works ends the run: the next one's card back counts again. With no failure, none.
+  saver.cardBack(t);
+  q.append(one, 1);
+  st.failOpen = true;
+  tries(0);
+  tries(10000);
+  saver.cardBack(t);
+  tries(100);
+}
+
+// The card guard's restart (lib/core RestartWait, main.cpp's stepRestartWait()) tries its flush
+// again on this saver's own backoff: the wait lastWaitMs() names after each flush that failed,
+// 10 s then 20 s, never past the 30 s bound. The card back first (cardBack()) has started the
+// waits over, so the failures while it was out don't push the restart's first try away.
+void test_the_guards_restart_flushes_on_the_savers_backoff() {
+  using Do = RestartWait::Do;
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  st.file = "last good";
+  QueueSaver saver(st, q, c);
+  saver.loaded(2, false, 0);
+  const uint32_t one[] = {1};
+  q.append(one, 1);  // an edit the card hasn't got
+  st.failOpen = true;
+  uint32_t t = 10;
+  for (int i = 0; i < 4; ++i, t += 1000) TEST_ASSERT_FALSE(saver.flushNow(t));  // the card out
+  TEST_ASSERT_EQUAL_UINT32(80000, saver.lastWaitMs());
+  saver.cardBack(t);                              // it came back under a job:
+  TEST_ASSERT_FALSE(saver.flushNow(t));           // the guard's flush, the card silent again
+  RestartWait w;
+  w.begin(t, false, saver.lastWaitMs());
+  TEST_ASSERT_EQUAL_UINT32(10000, w.nextTryInMs(t));
+  const uint32_t t0 = t;
+  std::vector<uint32_t> flushes;
+  uint32_t restartAt = 0;
+  for (; t < t0 + 40000 && !restartAt; t += 10) {
+    switch (w.step(t, true)) {
+      case Do::Flush: {
+        flushes.push_back(t - t0);
+        if (flushes.size() == 2) st.failOpen = false;  // the card answers at last
+        const bool ok = saver.flushNow(t);
+        w.tried(t, ok, saver.lastWaitMs());
+        break;
+      }
+      case Do::Restart:
+        restartAt = t - t0;
+        break;
+      default:
+        break;
+    }
+  }
+  TEST_ASSERT_EQUAL_UINT32(2, flushes.size());
+  TEST_ASSERT_EQUAL_UINT32(10000, flushes[0]);
+  TEST_ASSERT_EQUAL_UINT32(30000, flushes[1]);  // 10 s, then the saver's 20 s
+  TEST_ASSERT_EQUAL_UINT32(30000 + RestartWait::kShowMs, restartAt);
+  TEST_ASSERT_TRUE(w.flushed());
+  TEST_ASSERT_FALSE(saver.contentDirty());
+  TEST_ASSERT_TRUE(st.file != "last good");  // the edit on the card before the restart
+  // An edit in the 1.2 s after that flush: busy() can't say so, the saver's loop() held
+  // (cardHeld), so the restart flushes once more whatever it says.
+  const std::string saved = st.file;
+  q.append(one, 1);
+  TEST_ASSERT_FALSE(saver.busy());
+  TEST_ASSERT_TRUE(saver.flushNow(t));
+  TEST_ASSERT_TRUE(st.file != saved);
+  const uint32_t writes = saver.writes();
+  const int opens = st.opens;
+  TEST_ASSERT_TRUE(saver.flushNow(t));  // (and with nothing new: nothing written)
+  TEST_ASSERT_EQUAL_UINT32(writes, saver.writes());
+  TEST_ASSERT_EQUAL_INT(opens, st.opens);
 }
 
 // A write dropped for a library rebuild (remap), and the queue then kept
@@ -3380,9 +3525,77 @@ void test_text_read_is_sized_by_its_header() {
   const char* huge = "mstream-queue 1 2000000000 0 1\n/music/Root Track.flac\n";
   MemorySource h(huge, std::strlen(huge));
   Meter::ceiling = 1 << 20;
-  TEST_ASSERT_FALSE(queuetext::read(h, c, back, nullptr, nullptr, Meter::alloc, Meter::release).ok);
+  const queuetext::Restored hr = queuetext::read(h, c, back, nullptr, nullptr, Meter::alloc, Meter::release);
+  TEST_ASSERT_FALSE(hr.ok);
+  TEST_ASSERT_FALSE(hr.noMemory);  // (the file's own fault: the line count)
   TEST_ASSERT_EQUAL_UINT32(8, back.size());
   TEST_ASSERT_EQUAL_size_t(8 * 12 * 2, Meter::live);
+}
+
+// No memory for the read's blocks, or for the queue's own, is no word on the file: not ok
+// and noMemory, whichever block it was, the queue as it was. (Taken for a file that isn't
+// whole, the boot's default queue went over it: docs/METADATA.md 3.2.2.) The same file with
+// the memory back reads whole; one that isn't whole says so, noMemory false.
+void test_text_read_without_memory_is_no_word_on_the_file() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  const uint32_t ids[] = {0, 1, 2, 3, 4, 5, 2};
+  q.assign(ids, 7, 4);
+  for (const bool shuffled : {false, true}) {
+    q.setShuffled(shuffled);
+    const std::string text = textOf(q, c, 9);
+    // The blocks in turn: the ids (7 lines, 28 B), the ranks (shuffled: 28 B more), the
+    // queue's (12 B an entry), each refused by a ceiling just short of it.
+    std::vector<size_t> ceilings = {27, 28 + 7 * 12 - 1};
+    if (shuffled) ceilings = {27, 28 + 27, 56 + 7 * 12 - 1};
+    for (const size_t ceiling : ceilings) {
+      char msg[48];
+      std::snprintf(msg, sizeof(msg), "shuffled %d, ceiling %u", shuffled, static_cast<unsigned>(ceiling));
+      Meter::reset();
+      QueueModel back(Meter::alloc, Meter::release);
+      const uint32_t old[] = {5, 5};
+      Meter::ceiling = SIZE_MAX;
+      TEST_ASSERT_TRUE(back.assign(old, 2, 1));
+      Meter::ceiling = ceiling + 2 * 12;  // (the queue's own 2 entries are live)
+      MemorySource in(text.data(), text.size(), 5);
+      const queuetext::Restored r = queuetext::read(in, c, back, nullptr, nullptr, Meter::alloc, Meter::release);
+      TEST_ASSERT_FALSE_MESSAGE(r.ok, msg);
+      TEST_ASSERT_TRUE_MESSAGE(r.noMemory, msg);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(2, back.size(), msg);  // left alone
+      TEST_ASSERT_EQUAL_INT_MESSAGE(1, back.current(), msg);
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(2 * 12, Meter::live, msg);  // what it took, given back
+      // The memory back: whole.
+      Meter::ceiling = SIZE_MAX;
+      MemorySource again(text.data(), text.size(), 5);
+      const queuetext::Restored w = queuetext::read(again, c, back, nullptr, nullptr, Meter::alloc, Meter::release);
+      TEST_ASSERT_TRUE_MESSAGE(w.ok, msg);
+      TEST_ASSERT_FALSE_MESSAGE(w.noMemory, msg);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(7, back.size(), msg);
+      TEST_ASSERT_EQUAL_INT_MESSAGE(q.current(), back.current(), msg);
+      TEST_ASSERT_EQUAL_MESSAGE(shuffled, back.shuffled(), msg);
+      expectTracks(back, tracks(q));
+    }
+  }
+  // Not whole (a line short), the memory there: its own fault, not noMemory.
+  Meter::reset();
+  QueueModel back(Meter::alloc, Meter::release);
+  std::string cut = textOf(q, c, 9);
+  cut.resize(cut.size() - 1);
+  cut.resize(cut.rfind('\n') + 1);
+  MemorySource in(cut.data(), cut.size());
+  const queuetext::Restored r = queuetext::read(in, c, back, nullptr, nullptr, Meter::alloc, Meter::release);
+  TEST_ASSERT_FALSE(r.ok);
+  TEST_ASSERT_FALSE(r.noMemory);
+  // A header that claims more than memory holds (the window's 5,000 lines, 20 KB): no word
+  // either, as for a whole file.
+  const char* huge = "mstream-queue 1 2000000000 0 1\n/music/Root Track.flac\n";
+  MemorySource h(huge, std::strlen(huge));
+  Meter::ceiling = 5000 * 4 - 1;
+  const queuetext::Restored hr = queuetext::read(h, c, back, nullptr, nullptr, Meter::alloc, Meter::release);
+  TEST_ASSERT_FALSE(hr.ok);
+  TEST_ASSERT_TRUE(hr.noMemory);
 }
 
 // ---- the remap through queue.txt (QueueRemap: docs/METADATA.md 3.4.2, N3) ----
@@ -5172,6 +5385,528 @@ void test_a_snapshot_write_and_no_memory_for_one() {
   Meter::reset();
 }
 
+
+// ---- lines the library doesn't list: the queue keeps them by their paths (docs/METADATA.md 3.2.2) ----
+
+namespace {
+
+// The firmware's RemapCard: the tracks by their paths forgotten as the read back begins.
+struct ByPathCard : MemCard {
+  ByPathCard(QueueSaver& s, MemStore& m, PlaybackController& p, queuefile::Lookup& l, std::function<bool()> r)
+      : MemCard(s, m, p, std::move(r)), lookup(l) {}
+  queuefile::Lookup& lookup;
+  int asks = 0;
+  queuetext::UnknownLines* unknownLines(bool library) override {
+    ++asks;
+    lookup.begin();
+    return library ? &lookup : nullptr;
+  }
+};
+
+// queuetext::read() through a Lookup, as queuefile::readAtBoot() does it.
+queuetext::Restored readAsking(const std::string& text, const TrackCatalog& c, QueueModel& q, queuefile::Lookup& lookup) {
+  lookup.begin();
+  std::unique_ptr<MemorySource> in;
+  return queuefile::readSettled(
+      [&]() -> ByteSource* {
+        in.reset(new MemorySource(text.data(), text.size(), 61));
+        return in.get();
+      },
+      []() {},
+      [&](ByteSource& s) { return queuetext::read(s, c, q, nullptr, nullptr, nullptr, nullptr, &lookup); }, &lookup);
+}
+
+}  // namespace
+
+void test_unlisted_tracks_answer_by_their_paths() {
+  const long live0 = Heap::live;
+  TrackCatalog::Unlisted table(Heap::alloc, Heap::release);
+  TrackCatalog c(nullptr);
+  c.setUnlisted(&table);
+  const uint32_t a = table.add("/music/Artist/Album/06 - A Title.mp3");
+  const uint32_t b = table.add("/music/Plain Name.flac");
+  const uint32_t d = table.add("/music/Artist/Album/06 - A Title.mp3");  // (a line twice: two ids)
+  TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kUnlisted, a);
+  TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kUnlisted + 1, b);
+  TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kUnlisted + 2, d);
+  TEST_ASSERT_FALSE(TrackCatalog::isBuiltin(a));
+  TEST_ASSERT_TRUE(c.valid(a));
+  TEST_ASSERT_EQUAL_STRING("/music/Plain Name.flac", pathOf(c, b).c_str());
+  char title[32];
+  TEST_ASSERT_EQUAL_UINT32(7, c.title(a, title, sizeof(title)));
+  TEST_ASSERT_EQUAL_STRING("A Title", title);
+  c.title(b, title, sizeof(title));
+  TEST_ASSERT_EQUAL_STRING("Plain Name", title);
+  // No names but that, and nothing of the index's: this has none.
+  TEST_ASSERT_EQUAL_STRING("", c.artist(a));
+  TEST_ASSERT_EQUAL_STRING("", c.album(a));
+  TEST_ASSERT_EQUAL_STRING("", c.albumArtist(a));
+  TEST_ASSERT_EQUAL_UINT32(0, c.year(a));
+  TEST_ASSERT_EQUAL_UINT32(0, c.durationHintMs(a));
+  // find() is the library's: a path is asked for as its line is read.
+  TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kNone, c.find("/music/Plain Name.flac"));
+  // Past what it holds, and past the first blocks' room: every path whole.
+  TEST_ASSERT_FALSE(c.valid(TrackCatalog::kUnlisted + 3));
+  TEST_ASSERT_EQUAL_STRING("", pathOf(c, TrackCatalog::kUnlisted + 3).c_str());
+  std::vector<std::string> many;
+  for (uint32_t i = 0; i < 300; ++i) many.push_back(synthPath(i));
+  std::vector<uint32_t> ids;
+  for (const std::string& p : many) ids.push_back(table.add(p.c_str()));
+  for (uint32_t i = 0; i < 300; ++i) TEST_ASSERT_EQUAL_STRING(many[i].c_str(), pathOf(c, ids[i]).c_str());
+  TEST_ASSERT_EQUAL_UINT32(303, table.count());
+  // Never one block for them all: about what they hold, and no doubling's slack.
+  size_t held = table.count() * sizeof(char*);
+  for (uint32_t i = 0; i < table.count(); ++i) held += std::strlen(table.path(TrackCatalog::kUnlisted + i)) + 1;
+  TEST_ASSERT_GREATER_OR_EQUAL(held, table.memoryBytes());
+  TEST_ASSERT_LESS_THAN(40 * 1024, table.memoryBytes());
+  // A path longer than a block takes one of its own. (No line is: the read's own limit.)
+  const std::string huge = "/music/" + std::string(100000, 'x');
+  const uint32_t hugeId = table.add(huge.c_str());
+  TEST_ASSERT_EQUAL_STRING(huge.c_str(), table.path(hugeId));
+  TEST_ASSERT_EQUAL_STRING(many[299].c_str(), table.path(ids[299]));
+  TEST_ASSERT_GREATER_THAN(0, table.memoryBytes());
+  // No memory for the next: kNone, and what it holds as it was.
+  Heap::failing = true;
+  std::vector<std::string> more;
+  uint32_t refused = 0;
+  for (uint32_t i = 300; i < 2000 && !refused; ++i) {
+    more.push_back(synthPath(i));
+    if (table.add(more.back().c_str()) == TrackCatalog::kNone) ++refused;
+  }
+  Heap::failing = false;
+  TEST_ASSERT_EQUAL_UINT32(1, refused);
+  for (uint32_t i = 0; i < 300; ++i) TEST_ASSERT_EQUAL_STRING(many[i].c_str(), pathOf(c, ids[i]).c_str());
+  // Forgotten, and the memory back.
+  table.clear();
+  TEST_ASSERT_EQUAL_INT(live0, Heap::live);
+  TEST_ASSERT_EQUAL_UINT32(0, table.count());
+  TEST_ASSERT_EQUAL_size_t(0, table.memoryBytes());
+  TEST_ASSERT_FALSE(c.valid(a));
+  TEST_ASSERT_EQUAL_STRING("", pathOf(c, a).c_str());
+  TEST_ASSERT_EQUAL_UINT32(0, c.title(a, title, sizeof(title)));
+}
+
+void test_a_line_the_catalog_doesnt_know_is_asked_about() {
+  LibraryIndex idx;
+  build(idx, {kFiles[0], kFiles[1], kFiles[2]});
+  TrackCatalog::Unlisted table;
+  TrackCatalog c(&idx);
+  c.setUnlisted(&table);
+  QueueModel q;
+  cutfs::CutFs fs;
+  fs.put("/music/On The Card.mp3", {1});
+  fs.put("/music/Also There.mp3", {1});
+  queuefile::Lookup lookup(fs, table);
+  std::string text = "mstream-queue 1 6 3 7\n";
+  text += std::string(kFiles[0]) + "\n/music/On The Card.mp3\n/music/Gone.mp3\n/music/Also There.mp3\n\n" + kFiles[1] + "\n";
+  const queuetext::Restored r = readAsking(text, c, q, lookup);
+  TEST_ASSERT_TRUE(r.ok);
+  // The library's aren't asked about, nor an empty line.
+  TEST_ASSERT_EQUAL_UINT32(2, lookup.kept());
+  TEST_ASSERT_EQUAL_UINT32(1, lookup.gone());
+  TEST_ASSERT_EQUAL_UINT32(0, lookup.unasked());
+  TEST_ASSERT_EQUAL_UINT32(6, r.lines);
+  TEST_ASSERT_EQUAL_UINT32(4, r.entries);
+  TEST_ASSERT_EQUAL_UINT32(2, r.dropped);
+  TEST_ASSERT_EQUAL_UINT32(0, r.held);
+  const std::vector<std::string> want = {kFiles[0], "/music/On The Card.mp3", "/music/Also There.mp3", kFiles[1]};
+  TEST_ASSERT_TRUE(paths(q, c) == want);
+  // Line 3 is the one kept by its path: current, and kept.
+  TEST_ASSERT_EQUAL_INT(2, q.current());
+  TEST_ASSERT_TRUE(r.currentKept);
+  // A line too long for the catalog is never asked about, nor one that isn't of /music.
+  q.clear();
+  std::string longLine = "mstream-queue 1 2 0 8\n/music/" + std::string(400, 'x') + ".mp3\ntone:no such tone\n";
+  const queuetext::Restored r2 = readAsking(longLine, c, q, lookup);
+  TEST_ASSERT_TRUE(r2.ok);
+  TEST_ASSERT_EQUAL_UINT32(0, lookup.kept() + lookup.gone() + lookup.unasked());
+  TEST_ASSERT_EQUAL_UINT32(2, r2.dropped);
+  // With no room: dropped from the queue, and the read says so, the card not asked.
+  TrackCatalog::Unlisted none(Heap::alloc, Heap::release);
+  queuefile::Lookup full(fs, none);
+  TrackCatalog c2(&idx);
+  c2.setUnlisted(&none);
+  Heap::failing = true;
+  std::string one = "mstream-queue 1 2 0 9\n/music/On The Card.mp3\n" + std::string(kFiles[0]) + "\n";
+  const queuetext::Restored r3 = readAsking(one, c2, q, full);
+  Heap::failing = false;
+  TEST_ASSERT_TRUE(r3.ok);
+  TEST_ASSERT_EQUAL_UINT32(1, r3.held);
+  TEST_ASSERT_EQUAL_UINT32(1, r3.dropped);
+  TEST_ASSERT_EQUAL_UINT32(1, r3.entries);
+}
+
+namespace {
+
+// A library of `n` made-up tracks but the odd ones among the first `gap`, a queue of the
+// first `gap` of all of them saved, and the boot's read: the queue is the file's, its
+// lines the odd ones by their paths.
+struct ByPathRig {
+  LibraryIndex idx;
+  TrackCatalog::Unlisted table;
+  TrackCatalog c{&idx};
+  QueueModel q;
+  QuietBackend audio;
+  PlaybackController player{audio, q, c};
+  MemStore st;
+  QueueSaver saver{st, q, c};
+  cutfs::CutFs fs;  // the card: the files the lines name
+  queuefile::Lookup lookup{fs, table};
+  std::vector<std::string> lines;
+  explicit ByPathRig(uint32_t gap) {
+    c.setUnlisted(&table);
+    std::set<std::string> left;
+    for (uint32_t i = 0; i < gap; ++i) {
+      lines.push_back(synthPath(i));
+      fs.put(lines.back().c_str(), {1});
+      if (i % 2) left.insert(lines.back());
+    }
+    TEST_ASSERT_TRUE(buildSynth(idx, 100, left));
+    st.file = "mstream-queue 1 " + std::to_string(gap) + " 0 3\n";
+    for (const std::string& l : lines) st.file += l + "\n";
+    const queuetext::Restored r = readAsking(st.file, c, q, lookup);
+    TEST_ASSERT_TRUE(r.ok);
+    TEST_ASSERT_EQUAL_UINT32(gap, r.entries);
+    TEST_ASSERT_EQUAL_UINT32(0, r.dropped);
+    saver.loaded(3, false, 0);  // QueueStore::restore()'s
+    player.queueReplaced(r.currentKept);
+    TEST_ASSERT_TRUE(saver.fileIsQueue());
+  }
+};
+
+}  // namespace
+
+// The first of what the rule PR 35 took out broke: position and resume. The file is the
+// queue, so each is saved as it is for any queue, on a track the library doesn't list too.
+void test_by_path_lines_keep_the_position_and_the_resume_point() {
+  ByPathRig r(10);
+  const std::string file = r.st.file;
+  r.player.play(5);  // a line by its path
+  TEST_ASSERT_EQUAL_STRING(r.lines[5].c_str(), r.audio.lastPath.c_str());
+  for (uint32_t t = 0; t < 3000; t += 100) r.saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(5, r.st.pos);
+  TEST_ASSERT_EQUAL_UINT32(3, r.st.posGeneration);
+  QueueSaver::Transport t;
+  t.have = true;
+  t.positionMs = 65000;
+  t.durationMs = 180000;
+  r.saver.noteTransport(t);
+  r.saver.loop(3000);
+  TEST_ASSERT_TRUE(r.st.resume.valid);
+  TEST_ASSERT_EQUAL_INT(5, r.st.resume.entry);
+  TEST_ASSERT_EQUAL_UINT32(3, r.st.resume.generation);
+  TEST_ASSERT_EQUAL_UINT32(QueueSaver::pathHash(r.lines[5].c_str()), r.st.resume.pathHash);
+  TEST_ASSERT_TRUE(QueueSaver::resumeApplies(r.st.resume, 3, 5, true, r.lines[5].c_str()));
+  // Nothing written: the file was the queue all along.
+  TEST_ASSERT_EQUAL_STRING(file.c_str(), r.st.file.c_str());
+  TEST_ASSERT_EQUAL_INT(0, r.st.commits);
+}
+
+// The second: an edit, or an Auto DJ pick, wrote the queue over the kept file. Here the
+// lines are entries like any: they go out with it, and come back at the next read.
+void test_an_edit_and_an_auto_dj_pick_keep_the_by_path_lines() {
+  ByPathRig r(10);
+  uint32_t id = r.c.find(synthPath(20).c_str());
+  TEST_ASSERT_TRUE(r.player.addToQueue(&id, 1));
+  settle(r.saver, 0);
+  std::string want = "mstream-queue 1 11 0 4\n";
+  for (const std::string& l : r.lines) want += l + "\n";
+  want += synthPath(20) + "\n";
+  TEST_ASSERT_EQUAL_STRING(want.c_str(), r.st.file.c_str());
+  TEST_ASSERT_EQUAL_INT(0, r.q.current());
+  // Auto DJ's add: the same.
+  id = r.c.find(synthPath(30).c_str());
+  r.player.play(10);
+  TEST_ASSERT_TRUE(r.player.addFromAutoDj(id, false));
+  settle(r.saver, 0);
+  TEST_ASSERT_NOT_NULL(std::strstr(r.st.file.c_str(), r.lines[9].c_str()));
+  TEST_ASSERT_NOT_NULL(std::strstr(r.st.file.c_str(), synthPath(30).c_str()));
+  TEST_ASSERT_EQUAL_UINT32(12, r.q.size());
+  // An undo brings back a queue with them in it: the ids are still theirs.
+  uint32_t one = r.c.find(synthPath(40).c_str());
+  TEST_ASSERT_TRUE(r.player.playNow(&one, 1, 0));
+  TEST_ASSERT_EQUAL_UINT32(1, r.q.size());
+  TEST_ASSERT_TRUE(r.q.undo());
+  TEST_ASSERT_EQUAL_STRING(r.lines[9].c_str(), pathOf(r.c, r.q.trackAt(9)).c_str());
+}
+
+// The third: the update step read the file from its own line, and currentMoved() started
+// another track. Here the line that plays is the file's, whichever kind it is, and the
+// build that lists it gives it a library id with nothing heard.
+void test_the_update_step_goes_on_with_what_plays_by_its_path() {
+  for (const uint32_t at : {2u, 5u}) {  // listed, and by its path
+    ByPathRig r(10);
+    r.player.play(at);
+    for (uint32_t t = 0; t < 3000; t += 100) r.saver.loop(t);
+    TEST_ASSERT_EQUAL_STRING(r.lines[at].c_str(), r.audio.lastPath.c_str());
+    const int plays = r.audio.plays;
+    ByPathCard card(r.saver, r.st, r.player, r.lookup, [&] { return buildSynth(r.idx, 100); });
+    const queueremap::Result res = queueremap::run(r.q, r.saver, r.player, r.c, card, 5000);
+    TEST_ASSERT_EQUAL_INT(1, card.asks);
+    TEST_ASSERT_TRUE(res.read.ok);
+    TEST_ASSERT_FALSE(res.noLibrary);
+    TEST_ASSERT_TRUE(res.read.currentKept);
+    TEST_ASSERT_EQUAL_INT(plays, r.audio.plays);  // nothing started again
+    TEST_ASSERT_TRUE(paths(r.q, r.c) == r.lines);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(at), r.q.current());
+    TEST_ASSERT_TRUE(r.saver.fileIsQueue());
+    TEST_ASSERT_FALSE(r.saver.contentDirty());
+    // The library lists them all now: none by its path.
+    TEST_ASSERT_EQUAL_UINT32(0, r.table.count());
+    TEST_ASSERT_EQUAL_UINT32(0, r.lookup.kept() + r.lookup.gone() + r.lookup.unasked());
+    TEST_ASSERT_LESS_THAN_UINT32(TrackCatalog::kUnlisted, r.q.currentTrack());
+    TEST_ASSERT_EQUAL_INT(0, r.st.commits);
+  }
+}
+
+// An update step that still leaves them out: read back by their paths again, ids new, and
+// the file as it was. A line that has really gone since: out of the queue and the file.
+void test_the_update_step_asks_again_and_drops_what_is_gone() {
+  ByPathRig r(10);
+  r.player.play(5);
+  for (uint32_t t = 0; t < 3000; t += 100) r.saver.loop(t);
+  const std::string file = r.st.file;
+  ByPathCard same(r.saver, r.st, r.player, r.lookup, [&] { return true; });
+  queueremap::Result res = queueremap::run(r.q, r.saver, r.player, r.c, same, 5000);
+  TEST_ASSERT_TRUE(res.read.ok && res.read.currentKept);
+  TEST_ASSERT_EQUAL_UINT32(5, r.lookup.kept());
+  TEST_ASSERT_EQUAL_UINT32(5, r.table.count());
+  TEST_ASSERT_TRUE(paths(r.q, r.c) == r.lines);
+  TEST_ASSERT_FALSE(r.saver.contentDirty());
+  TEST_ASSERT_EQUAL_STRING(file.c_str(), r.st.file.c_str());
+  // Line 7 gone (the card says so): dropped, and written again; line 5 goes on.
+  TEST_ASSERT_TRUE(r.fs.remove(r.lines[7].c_str()));
+  ByPathCard gone(r.saver, r.st, r.player, r.lookup, [&] { return true; });
+  res = queueremap::run(r.q, r.saver, r.player, r.c, gone, 6000);
+  TEST_ASSERT_TRUE(res.read.ok && res.read.currentKept);
+  TEST_ASSERT_EQUAL_UINT32(1, res.read.dropped);
+  TEST_ASSERT_EQUAL_UINT32(9, r.q.size());
+  TEST_ASSERT_TRUE(r.saver.contentDirty());
+  TEST_ASSERT_TRUE(r.saver.fileIsQueue());
+  settle(r.saver, 6000);
+  TEST_ASSERT_NULL(std::strstr(r.st.file.c_str(), r.lines[7].c_str()));
+  TEST_ASSERT_NOT_NULL(std::strstr(r.st.file.c_str(), r.lines[9].c_str()));
+  // What plays is gone: the next one that stayed, as for any track.
+  TEST_ASSERT_TRUE(r.fs.remove(r.lines[5].c_str()));
+  ByPathCard current(r.saver, r.st, r.player, r.lookup, [&] { return true; });
+  res = queueremap::run(r.q, r.saver, r.player, r.c, current, 9000);
+  TEST_ASSERT_FALSE(res.read.currentKept);
+  TEST_ASSERT_EQUAL_STRING(r.lines[6].c_str(), r.audio.lastPath.c_str());
+}
+
+// A rebuild that leaves no library at all: no questions, and the file keeps its lines as ever.
+void test_a_rebuild_with_no_library_asks_nothing() {
+  ByPathRig r(10);
+  r.player.play(5);
+  for (uint32_t t = 0; t < 3000; t += 100) r.saver.loop(t);
+  const std::string file = r.st.file;
+  ByPathCard card(r.saver, r.st, r.player, r.lookup, [&] {
+    r.idx.clear();
+    return false;
+  });
+  const queueremap::Result res = queueremap::run(r.q, r.saver, r.player, r.c, card, 5000);
+  TEST_ASSERT_TRUE(res.noLibrary);
+  TEST_ASSERT_EQUAL_INT(1, card.asks);
+  TEST_ASSERT_EQUAL_UINT32(0, r.lookup.kept() + r.lookup.gone() + r.lookup.unasked());
+  TEST_ASSERT_EQUAL_UINT32(0, r.table.count());  // (forgotten all the same: nothing holds their ids)
+  TEST_ASSERT_FALSE(r.saver.fileIsQueue());
+  TEST_ASSERT_EQUAL_INT(5, r.saver.fileLine());
+  settle(r.saver, 5000);
+  TEST_ASSERT_EQUAL_STRING(file.c_str(), r.st.file.c_str());
+}
+
+// No room for them at the read back: the file keeps them, from the line that played.
+void test_no_room_for_by_path_lines_keeps_the_file() {
+  ByPathRig r(10);
+  r.player.play(4);
+  for (uint32_t t = 0; t < 3000; t += 100) r.saver.loop(t);
+  const std::string file = r.st.file;
+  TrackCatalog::Unlisted none(Heap::alloc, Heap::release);
+  queuefile::Lookup full(r.fs, none);
+  r.c.setUnlisted(&none);
+  ByPathCard card(r.saver, r.st, r.player, full, [&] {
+    Heap::failing = true;
+    return true;
+  });
+  const queueremap::Result res = queueremap::run(r.q, r.saver, r.player, r.c, card, 5000);
+  Heap::failing = false;
+  TEST_ASSERT_TRUE(res.read.ok);
+  TEST_ASSERT_EQUAL_UINT32(5, res.read.held);
+  TEST_ASSERT_EQUAL_UINT32(5, r.q.size());
+  TEST_ASSERT_FALSE(r.saver.fileIsQueue());
+  TEST_ASSERT_EQUAL_INT(4, r.saver.fileLine());
+  TEST_ASSERT_FALSE(r.saver.contentDirty());
+  settle(r.saver, 5000);
+  TEST_ASSERT_EQUAL_STRING(file.c_str(), r.st.file.c_str());
+}
+
+// A read back the card fails, once: read again, the queue and what plays as they were. For
+// good: the queue goes, and the file is kept from its line, as ever. The questions begin
+// again with each read.
+void test_a_read_back_that_fails_is_read_again() {
+  struct Failed : MemorySource {
+    using MemorySource::MemorySource;
+    bool failed() const override { return true; }
+  };
+  struct Flaky : ByPathCard {
+    using ByPathCard::ByPathCard;
+    int fails = 0, opens = 0;
+    std::unique_ptr<Failed> bad;
+    ByteSource* openFile() override {
+      ++opens;
+      if (fails-- > 0) {
+        bad.reset(new Failed(st.file.data(), st.file.size()));
+        return bad.get();
+      }
+      return MemCard::openFile();
+    }
+  };
+  ByPathRig r(10);
+  r.player.play(5);
+  for (uint32_t t = 0; t < 3000; t += 100) r.saver.loop(t);
+  const std::string file = r.st.file;
+  const int plays = r.audio.plays;
+  Flaky once(r.saver, r.st, r.player, r.lookup, [&] { return true; });
+  once.fails = 1;
+  queueremap::Result res = queueremap::run(r.q, r.saver, r.player, r.c, once, 5000);
+  TEST_ASSERT_EQUAL_INT(2, once.opens);
+  TEST_ASSERT_EQUAL_INT(2, once.asks);
+  TEST_ASSERT_TRUE(res.read.ok);
+  TEST_ASSERT_TRUE(res.read.currentKept);
+  TEST_ASSERT_EQUAL_INT(plays, r.audio.plays);
+  TEST_ASSERT_TRUE(paths(r.q, r.c) == r.lines);
+  TEST_ASSERT_EQUAL_UINT32(5, r.table.count());
+  TEST_ASSERT_TRUE(r.saver.fileIsQueue());
+  // Twice: cleared, and the file as it was, from the line that played.
+  Flaky twice(r.saver, r.st, r.player, r.lookup, [&] { return true; });
+  twice.fails = 2;
+  res = queueremap::run(r.q, r.saver, r.player, r.c, twice, 6000);
+  TEST_ASSERT_EQUAL_INT(2, twice.opens);
+  TEST_ASSERT_FALSE(res.read.ok);
+  TEST_ASSERT_EQUAL_UINT32(0, r.q.size());
+  TEST_ASSERT_FALSE(r.saver.fileIsQueue());
+  TEST_ASSERT_EQUAL_INT(5, r.saver.fileLine());
+  settle(r.saver, 6000);
+  TEST_ASSERT_EQUAL_STRING(file.c_str(), r.st.file.c_str());
+}
+
+// A source that says it failed is no whole file, however it reads: above all when the
+// failed read was in the last line, whose first part counts as that line. The queue is
+// left alone. The same file cut there with no failure is one line less, as ever.
+void test_a_source_that_failed_is_no_whole_file() {
+  LibraryIndex idx;
+  build(idx, {kFiles[0], kFiles[1]});
+  TrackCatalog c(&idx);
+  struct Failed : MemorySource {
+    using MemorySource::MemorySource;
+    bool failed() const override { return true; }
+  };
+  QueueModel q;
+  const uint32_t one = 0;
+  TEST_ASSERT_TRUE(q.assign(&one, 1, 0));
+  const uint32_t version = q.contentVersion();
+  const std::string whole = std::string("mstream-queue 1 2 0 7\n") + kFiles[0] + "\n" + kFiles[1] + "\n";
+  const std::string cut = whole.substr(0, whole.size() - 10);
+  Failed f1(cut.data(), cut.size());
+  TEST_ASSERT_FALSE(queuetext::read(f1, c, q).ok);
+  TEST_ASSERT_EQUAL_UINT32(version, q.contentVersion());
+  TEST_ASSERT_EQUAL_UINT32(1, q.size());
+  // Failed after the whole text: it can't know what it missed.
+  Failed f2(whole.data(), whole.size());
+  TEST_ASSERT_FALSE(queuetext::read(f2, c, q).ok);
+  // No failure: the cut line matches nothing.
+  MemorySource s(cut.data(), cut.size());
+  const queuetext::Restored r = queuetext::read(s, c, q);
+  TEST_ASSERT_TRUE(r.ok);
+  TEST_ASSERT_EQUAL_UINT32(1, r.entries);
+  TEST_ASSERT_EQUAL_UINT32(1, r.dropped);
+}
+
+// No memory for one line's path: none for those after it either, though it comes back,
+// so the read after settle() still finds each line's id by its place.
+void test_no_room_for_a_line_keeps_the_order_for_the_read_again() {
+  TrackCatalog::Unlisted table(Heap::alloc, Heap::release);
+  cutfs::CutFs fs;
+  queuefile::Lookup lookup(fs, table);
+  lookup.begin();
+  std::vector<std::string> lines;
+  for (uint32_t i = 0; i < 66; ++i) {
+    lines.push_back("/music/line " + std::to_string(i) + ".mp3");
+    if (i != 3) fs.put(lines.back(), {1});
+  }
+  // (64: the offsets' first block, the next needs another.)
+  for (uint32_t i = 0; i < 64; ++i) {
+    TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kUnlisted + i, lookup.track(lines[i].c_str()));
+  }
+  Heap::failing = true;
+  TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kNone, lookup.track(lines[64].c_str()));
+  Heap::failing = false;
+  TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kNone, lookup.track(lines[65].c_str()));
+  TEST_ASSERT_EQUAL_UINT32(2, lookup.held());
+  TEST_ASSERT_EQUAL_UINT32(64, table.count());
+  // Line 3 is gone: the read again leaves it out, each other line its own.
+  TEST_ASSERT_TRUE(lookup.settle());
+  TEST_ASSERT_EQUAL_UINT32(1, lookup.gone());
+  TEST_ASSERT_EQUAL_UINT32(63, lookup.kept());
+  for (uint32_t i = 0; i < 66; ++i) {
+    const uint32_t id = lookup.track(lines[i].c_str());
+    if (i == 3 || i >= 64) {
+      TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kNone, id);
+    } else {
+      TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kUnlisted + i, id);
+      TEST_ASSERT_EQUAL_STRING(lines[i].c_str(), table.path(id));
+    }
+  }
+  TEST_ASSERT_EQUAL_UINT32(2, lookup.held());
+}
+
+// The read again, for a line the card says is gone, doesn't come whole: the first read
+// stands, the queue as it was. That line names nothing: it doesn't play, and an edit's
+// write leaves it out.
+void test_a_read_again_that_fails_keeps_the_first() {
+  LibraryIndex idx;
+  build(idx, {kFiles[0]});
+  TrackCatalog::Unlisted table;
+  TrackCatalog c(&idx);
+  c.setUnlisted(&table);
+  cutfs::CutFs fs;
+  fs.put("/music/There.mp3", {1});
+  queuefile::Lookup lookup(fs, table);
+  const std::string text = std::string("mstream-queue 1 3 0 7\n") + kFiles[0] + "\n/music/There.mp3\n/music/Gone.mp3\n";
+  const std::string cut = text.substr(0, text.size() - 30);
+  {
+    // A read that isn't whole: nothing asked of the card, whatever its lines.
+    QueueModel q;
+    const std::string shortOfLines = std::string("mstream-queue 1 5 0 7\n") + kFiles[0] + "\n/music/There.mp3\n";
+    TEST_ASSERT_FALSE(readAsking(shortOfLines, c, q, lookup).ok);
+    TEST_ASSERT_EQUAL_UINT32(0, lookup.kept() + lookup.gone() + lookup.unasked());
+  }
+  for (const bool opens : {false, true}) {
+    QueueModel q;
+    lookup.begin();
+    int opened = 0;
+    std::unique_ptr<MemorySource> in;
+    const queuetext::Restored r = queuefile::readSettled(
+        [&]() -> ByteSource* {
+          if (++opened == 2 && !opens) return nullptr;
+          const std::string& t = opened == 1 ? text : cut;
+          in.reset(new MemorySource(t.data(), t.size(), 61));
+          return in.get();
+        },
+        []() {},
+        [&](ByteSource& s) { return queuetext::read(s, c, q, nullptr, nullptr, nullptr, nullptr, &lookup); }, &lookup);
+    TEST_ASSERT_EQUAL_INT(2, opened);
+    TEST_ASSERT_TRUE(r.ok);
+    TEST_ASSERT_EQUAL_UINT32(3, r.entries);
+    TEST_ASSERT_EQUAL_UINT32(0, r.dropped);
+    TEST_ASSERT_EQUAL_UINT32(3, q.size());
+    TEST_ASSERT_EQUAL_STRING("/music/There.mp3", pathOf(c, q.trackAt(1)).c_str());
+    TEST_ASSERT_EQUAL_STRING("", pathOf(c, q.trackAt(2)).c_str());
+    char title[16];
+    TEST_ASSERT_EQUAL_UINT32(0, c.title(q.trackAt(2), title, sizeof(title)));
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_empty_queue);
@@ -5225,6 +5960,8 @@ int main(int, char**) {
   RUN_TEST(test_flush_now_after_an_edit_during_the_write);
   RUN_TEST(test_flush_now_writes_an_edit_at_once);
   RUN_TEST(test_flush_now_that_fails_keeps_the_last_file);
+  RUN_TEST(test_a_failed_write_waits_longer_each_time);
+  RUN_TEST(test_the_guards_restart_flushes_on_the_savers_backoff);
   RUN_TEST(test_saver_abort_and_kept_file);
   RUN_TEST(test_resume_point_saved_at_a_pause_and_cleared_when_it_plays);
   RUN_TEST(test_resume_point_waits_for_the_file_and_follows_its_entry);
@@ -5257,6 +5994,7 @@ int main(int, char**) {
   RUN_TEST(test_a_push_out_is_saved_at_the_next_generation);
   RUN_TEST(test_random_push_outs_match_a_simple_model);
   RUN_TEST(test_text_read_is_sized_by_its_header);
+  RUN_TEST(test_text_read_without_memory_is_no_word_on_the_file);
   RUN_TEST(test_remap_of_a_full_queue_within_its_budget);
   RUN_TEST(test_remap_keeps_a_shuffled_queue_and_its_ranks);
   RUN_TEST(test_remap_when_the_current_track_is_gone);
@@ -5278,5 +6016,17 @@ int main(int, char**) {
   RUN_TEST(test_a_quiet_append_to_an_empty_queue);
   RUN_TEST(test_the_play_epoch);
   RUN_TEST(test_random_quiet_appends_match_a_model);
+  RUN_TEST(test_unlisted_tracks_answer_by_their_paths);
+  RUN_TEST(test_a_line_the_catalog_doesnt_know_is_asked_about);
+  RUN_TEST(test_by_path_lines_keep_the_position_and_the_resume_point);
+  RUN_TEST(test_an_edit_and_an_auto_dj_pick_keep_the_by_path_lines);
+  RUN_TEST(test_the_update_step_goes_on_with_what_plays_by_its_path);
+  RUN_TEST(test_the_update_step_asks_again_and_drops_what_is_gone);
+  RUN_TEST(test_a_rebuild_with_no_library_asks_nothing);
+  RUN_TEST(test_no_room_for_by_path_lines_keeps_the_file);
+  RUN_TEST(test_a_read_back_that_fails_is_read_again);
+  RUN_TEST(test_a_source_that_failed_is_no_whole_file);
+  RUN_TEST(test_no_room_for_a_line_keeps_the_order_for_the_read_again);
+  RUN_TEST(test_a_read_again_that_fails_keeps_the_first);
   return UNITY_END();
 }

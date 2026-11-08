@@ -642,6 +642,83 @@ void test_resting_finger_lets_the_screen_go_off() {
   TEST_ASSERT_EQUAL_INT(static_cast<int>(atTake), static_cast<int>(p.events.size()));
 }
 
+// The PWR key turns the screen off with a finger on the panel (a touch never
+// did: a finger that acts keeps it lit). The latch takes that finger in the
+// same pass, as it does one resting as the screen dims: its touch ends with a
+// Cancel, its lift makes nothing, and it isn't a wake.
+void test_power_key_under_a_finger() {
+  // On the glass.
+  {
+    ScreenPower sp;
+    sp.begin(0);
+    Pipeline p;
+    p.screen = &sp;
+    p.bright = true;
+    uint32_t t = 1000;
+    for (; t < 1300; t += 10) p.pass(t, true, 100, 120, true);
+    TEST_ASSERT_EQUAL_INT(1, p.count(InputEvent::Type::Down));
+    TEST_ASSERT_EQUAL_INT(0, p.count(InputEvent::Type::Tap));
+    // ScreenControl::beginPass(), before the input layer's update.
+    TEST_ASSERT_FALSE(sp.powerKey(t, false));
+    p.bright = sp.touchActs();
+    for (; t < 1500; t += 10) p.pass(t, true, 100, 120, true);
+    TEST_ASSERT_TRUE(sp.off());
+    TEST_ASSERT_EQUAL_INT(1, p.taken);
+    TEST_ASSERT_EQUAL_INT(0, p.wakes);
+    TEST_ASSERT_EQUAL_INT(1, p.count(InputEvent::Type::Cancel));
+    const size_t atTake = p.events.size();
+    for (; t < 2000; t += 10) p.pass(t, false, 0, 0, false);  // lifted, past the latch
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(atTake), static_cast<int>(p.events.size()));
+    TEST_ASSERT_EQUAL_INT(0, p.count(InputEvent::Type::Tap));
+    TEST_ASSERT_TRUE(sp.off());
+    // The next touch is a wake, as ever, and nothing else.
+    p.press(t, 100, 120, 60);
+    TEST_ASSERT_EQUAL_INT(1, p.wakes);
+    TEST_ASSERT_TRUE(sp.bright());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(atTake), static_cast<int>(p.events.size()));
+  }
+  // On the strip, B not yet held: its click would come at the lift.
+  {
+    ScreenPower sp;
+    sp.begin(0);
+    Pipeline p;
+    p.screen = &sp;
+    p.bright = true;
+    uint32_t t = 1000;
+    for (; t < 1100; t += 10) p.pass(t, true, kBx, kStripY, true);
+    sp.powerKey(t, false);
+    p.bright = sp.touchActs();
+    for (; t < 1200; t += 10) p.pass(t, true, kBx, kStripY, true);
+    for (; t < 1700; t += 10) p.pass(t, false, 0, 0, false);
+    TEST_ASSERT_TRUE(sp.off());
+    TEST_ASSERT_EQUAL_INT(0, p.wakes);
+    TEST_ASSERT_EQUAL_INT(0, p.count(InputEvent::Type::Click));
+  }
+  // C held, the volume repeating: the repeats stop with the light.
+  {
+    ScreenPower sp;
+    sp.begin(0);
+    Pipeline p;
+    p.screen = &sp;
+    p.bright = true;
+    uint32_t t = 1000;
+    for (; t < 2000; t += 10) p.pass(t, true, kCx, kStripY, true);
+    TEST_ASSERT_EQUAL_INT(1, p.count(InputEvent::Type::Hold));
+    const int repeats = p.count(InputEvent::Type::Repeat);
+    TEST_ASSERT_TRUE(repeats > 0);
+    sp.powerKey(t, false);
+    p.bright = sp.touchActs();
+    for (; t < 3000; t += 10) p.pass(t, true, kCx, kStripY, true);
+    for (; t < 3500; t += 10) p.pass(t, false, 0, 0, false);
+    TEST_ASSERT_TRUE(sp.off());
+    TEST_ASSERT_EQUAL_INT(repeats, p.count(InputEvent::Type::Repeat));
+    // Its HoldEnd is dropped with the rest: nothing may wait for one
+    // (main.cpp's vizInput() takes the next press as new).
+    TEST_ASSERT_EQUAL_INT(0, p.count(InputEvent::Type::HoldEnd));
+    TEST_ASSERT_EQUAL_INT(0, p.wakes);
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_gesture_tap_and_hold);
@@ -663,5 +740,6 @@ int main(int, char**) {
   RUN_TEST(test_pocket_rule_second_b_click);
   RUN_TEST(test_event_wake_first_touch_only_answers);
   RUN_TEST(test_resting_finger_lets_the_screen_go_off);
+  RUN_TEST(test_power_key_under_a_finger);
   return UNITY_END();
 }

@@ -4,12 +4,14 @@
 // Host tests for LibraryBuilder (docs/METADATA.md 2.9, 3.4): the rules per
 // file (2.18's builder vectors), the merge of T and D read from the shared
 // fixtures and from the tagged synthetic library, the restarts, the inputs
-// of library.idx v6, Stage A's votes (5.4), the library roots, the transfer
-// thumbnails, and the 20k memory, build peak and T-against-D equality.
+// of library.idx v7, Stage A's votes (5.4), the library roots, the transfer
+// thumbnails, the mood words (docs/MOOD-FILTERS.md 5.4, 9.6 C6), and the
+// 20k memory, build peak and T-against-D equality.
 // Run: pio test -e native
 #include <unity.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +25,7 @@
 #include "LibraryBuilder.h"
 #include "LibraryIndex.h"
 #include "LibrarySynth.h"
+#include "MoodFilter.h"
 
 namespace cc = cardcontract;
 namespace mptg = cardcontract::mptg;
@@ -108,6 +111,7 @@ struct Rec {
   const char* title = nullptr;
   uint16_t flags = 0;
   uint32_t known = mptg::kKnownRules1;
+  const uint8_t* moods = nullptr;  // a mood tail (2.6.4): rows of 80 bytes, minor 1
 };
 std::vector<uint8_t> writeTags(uint8_t source, const std::vector<Rec>& rs, uint16_t parserVersion = 1) {
   std::vector<mptg::RecordIn> in(rs.size());
@@ -119,11 +123,14 @@ std::vector<uint8_t> writeTags(uint8_t source, const std::vector<Rec>& rs, uint1
     in[i].rec.known = rs[i].title ? rs[i].known : 0;
     in[i].rec.container = 1;
     in[i].fields[cc::kTitle] = rs[i].title;
+    in[i].moods = rs[i].moods;
   }
   mptg::Meta meta;
   meta.source = source;
   meta.generation = 7;
   meta.parserVersion = parserVersion;
+  for (const Rec& r : rs)
+    if (r.moods) meta.minor = 1;
   synthcard::VecSink out;
   const char* error = nullptr;
   TEST_ASSERT_TRUE_MESSAGE(mptg::write(out, meta, in.data(), in.size(), nullptr, 0, nullptr, 0, nullptr, &error),
@@ -614,6 +621,239 @@ void test_facts_and_thumbnails() {
   }
 }
 
+// ---- the mood words (docs/MOOD-FILTERS.md 5.4, 9.6 C6) ----
+
+// The word follows the chosen record (2.9's one record, whole): T's tail
+// when T's record is chosen; no word when D's record is (a tail in D, which
+// the device never writes, ignored), when the path names the file, when T's
+// record has no row, and when T fails at its end and the build restarts
+// from D alone (no block at all).
+void test_the_mood_word_follows_the_record() {
+  const double scores[moodfilter::kHeads] = {0.7012, 0.3104, 0.5803, 0.7, 0.2999, std::nan(""), 0.4999, 0.29};
+  uint8_t tail[mptg::kMoodTailBytes];
+  moodfilter::tailOf(scores, tail);
+  const uint16_t word = moodfilter::wordOfTail(tail);
+  TEST_ASSERT_EQUAL_HEX16(0xB313, word);  // 5.7's worked example
+  const uint32_t k = mptg::kKnownRules1;
+  const std::vector<uint8_t> t = writeTags(mptg::kSourceTransfer,
+                                           {{"A/api.mp3", 1003, kT, "Api", mptg::kUnreadable | mptg::kFromApi, k, tail},
+                                            {"A/fresh.mp3", 1000, kT, "Fresh", 0, k, tail},
+                                            {"A/no-row.mp3", 1004, kT, "No row"},
+                                            {"A/stale.mp3", 1001, kT, "Stale", 0, k, tail},
+                                            {"A/unreadable.mp3", 1002, kT, "Unreadable", mptg::kUnreadable, k, tail}});
+  const std::vector<uint8_t> d = writeTags(mptg::kSourceDevice,
+                                           {{"A/api.mp3", 1003, kT, "d", 0, k, tail},
+                                            {"A/fresh.mp3", 1000, kT, "d", 0, k, tail},
+                                            {"A/hand.mp3", 1005, kT, "Hand", 0, k, tail},  // hand-copied: D alone
+                                            {"A/no-row.mp3", 1004, kT, "d", 0, k, tail},
+                                            {"A/stale.mp3", 2001, kT, "d", 0, k, tail},  // retagged since T
+                                            {"A/unreadable.mp3", 1002, kT, "d", 0, k, tail}});
+  auto wordOf = [](const LibraryIndex& idx, const char* rel) { return idx.moodWord(findPath(idx, rel)); };
+  B builder(Heap::alloc, Heap::release);
+  {
+    cc::MemSource ts(t.data(), static_cast<uint32_t>(t.size())), ds(d.data(), static_cast<uint32_t>(d.size()));
+    LibraryIndex idx(Heap::alloc, Heap::release, Heap::shrink);
+    B::Config c;
+    c.transfer = &ts;
+    c.device = &ds;  // every D record Scanned
+    B::Result r = builder.build(idx, c);
+    TEST_ASSERT_TRUE(r.built && r.transferUsed && !r.restarted);
+    TEST_ASSERT_EQUAL_UINT32(6, idx.trackCount());
+    TEST_ASSERT_EQUAL_UINT32(3, r.fromTransfer);  // api, fresh, no-row
+    TEST_ASSERT_EQUAL_UINT32(3, r.fromDevice);    // hand, stale, unreadable
+    TEST_ASSERT_EQUAL_UINT32(2, r.withMoods);
+    TEST_ASSERT_TRUE(idx.hasMoods());
+    TEST_ASSERT_EQUAL_UINT32(2, idx.moodTracks());
+    TEST_ASSERT_EQUAL_HEX16(word, wordOf(idx, "A/fresh.mp3"));
+    TEST_ASSERT_EQUAL_HEX16(word, wordOf(idx, "A/api.mp3"));  // UNREADABLE with FROM_API names it: chosen
+    TEST_ASSERT_EQUAL_HEX16(0, wordOf(idx, "A/no-row.mp3"));
+    TEST_ASSERT_EQUAL_HEX16(0, wordOf(idx, "A/stale.mp3"));
+    TEST_ASSERT_EQUAL_HEX16(0, wordOf(idx, "A/unreadable.mp3"));
+    TEST_ASSERT_EQUAL_HEX16(0, wordOf(idx, "A/hand.mp3"));
+    TEST_ASSERT_EQUAL_UINT32(LibraryIndex::kFromDevice, source(idx, findPath(idx, "A/stale.mp3")));
+
+    // D's records of a parser the builder no longer takes: the files T's
+    // records don't name are named from their paths, with no word.
+    c.minParser = 2;
+    r = builder.build(idx, c);
+    TEST_ASSERT_EQUAL_UINT32(3, r.fromTransfer);
+    TEST_ASSERT_EQUAL_UINT32(3, r.fromPath);
+    TEST_ASSERT_EQUAL_UINT32(2, r.withMoods);
+    TEST_ASSERT_EQUAL_HEX16(0, wordOf(idx, "A/stale.mp3"));
+    TEST_ASSERT_EQUAL_HEX16(0, wordOf(idx, "A/unreadable.mp3"));
+    TEST_ASSERT_EQUAL_HEX16(0, wordOf(idx, "A/hand.mp3"));
+
+    // D alone: its tails give nothing, and there is no block.
+    c.transfer = nullptr;
+    c.minParser = B::kMinDeviceParser;
+    r = builder.build(idx, c);
+    TEST_ASSERT_EQUAL_UINT32(6, r.fromDevice);
+    TEST_ASSERT_EQUAL_UINT32(0, r.withMoods);
+    TEST_ASSERT_FALSE(idx.hasMoods());
+    TEST_ASSERT_EQUAL_size_t(0, idx.memory().moods);
+    TEST_ASSERT_EQUAL_size_t(idx.memory().total, Heap::live);
+  }
+  {
+    // T goes bad at its end (inside STRS, only its CRC tells): its first
+    // attempt took the block at its first word; the restart from D has none.
+    std::vector<uint8_t> bad = t;
+    const std::string text(bad.begin(), bad.end());
+    const size_t at = text.find("Fresh");
+    TEST_ASSERT_TRUE(at != std::string::npos);
+    bad[at] = 'Q';
+    cc::MemSource ts(bad.data(), static_cast<uint32_t>(bad.size())), ds(d.data(), static_cast<uint32_t>(d.size()));
+    LibraryIndex idx(Heap::alloc, Heap::release, Heap::shrink);
+    B::Config c;
+    c.transfer = &ts;
+    c.device = &ds;
+    const B::Result r = builder.build(idx, c);
+    TEST_ASSERT_TRUE(r.built && r.restarted && !r.transferUsed);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(cc::Why::SectionCrc), static_cast<int>(r.transferWhy));
+    TEST_ASSERT_EQUAL_UINT32(6, r.fromDevice);
+    TEST_ASSERT_EQUAL_UINT32(0, r.withMoods);
+    TEST_ASSERT_FALSE(idx.hasMoods());
+    TEST_ASSERT_EQUAL_UINT32(0, idx.moodTracks());
+    TEST_ASSERT_EQUAL_size_t(0, idx.memory().moods);
+    TEST_ASSERT_EQUAL_size_t(idx.memory().total, Heap::live);
+  }
+}
+
+// The shared fixtures' tails through the builder (2.6.4): tags-moods.bin's
+// tracks get the words of their records' scores (libraries/tags-moods.json),
+// read the same from its 88-byte rows; a tail a reader refuses, rows of 76
+// bytes, and minor-1's 0xAB rows give none, and every record still names
+// its file, as tags-0000002a.bin's do.
+void test_mood_words_from_the_fixtures() {
+  B builder(Heap::alloc, Heap::release);
+  auto build = [&](const char* file, LibraryIndex& idx) {
+    const std::string t = bytesOf(file);
+    TEST_ASSERT_FALSE_MESSAGE(t.empty(), file);
+    cc::MemSource ts(t.data(), static_cast<uint32_t>(t.size()));
+    B::Config c;
+    c.transfer = &ts;  // T alone: its listing
+    const B::Result r = builder.build(idx, c);
+    TEST_ASSERT_TRUE_MESSAGE(r.built && r.transferUsed, file);
+    return r;
+  };
+  minijson::Value lib;
+  TEST_ASSERT_TRUE(cardfixtures::json("libraries/tags-moods.json", &lib));
+  const minijson::Value& recs = lib["records"];
+  TEST_ASSERT_TRUE(recs.size() > 0);
+  for (const char* file : {"golden/tags-moods.bin", "hardening/mptg-moods-longer.bin"}) {
+    LibraryIndex idx(Heap::alloc, Heap::release, Heap::shrink);
+    const B::Result r = build(file, idx);
+    uint32_t tracks = 0, words = 0;
+    for (size_t i = 0; i < recs.size(); ++i) {
+      const minijson::Value& rec = recs[i];
+      const uint32_t id = findPath(idx, rec["path"].text.c_str());
+      if (rec["container"].num() == mptg::kContainerNotAudio) {
+        TEST_ASSERT_EQUAL_UINT32(LibraryIndex::kNone, id);
+        continue;
+      }
+      TEST_ASSERT_NOT_EQUAL_MESSAGE(LibraryIndex::kNone, id, rec["path"].text.c_str());
+      ++tracks;
+      double scores[moodfilter::kHeads];
+      const minijson::Value& sc = rec["scores"];
+      for (int h = 0; h < moodfilter::kHeads; ++h) scores[h] = sc[h].isNull() ? std::nan("") : sc[h].num();
+      uint8_t tail[mptg::kMoodTailBytes];
+      moodfilter::tailOf(sc.isNull() ? nullptr : scores, tail);
+      const uint16_t want = moodfilter::wordOfTail(tail);
+      TEST_ASSERT_EQUAL_HEX16_MESSAGE(want, idx.moodWord(id), rec["path"].text.c_str());
+      words += want != 0;
+    }
+    TEST_ASSERT_EQUAL_UINT32(tracks, idx.trackCount());
+    TEST_ASSERT_EQUAL_UINT32(tracks, r.fromTransfer);
+    TEST_ASSERT_EQUAL_UINT32(8, words);  // all but no-row.flac
+    TEST_ASSERT_EQUAL_UINT32(words, r.withMoods);
+    TEST_ASSERT_EQUAL_UINT32(words, idx.moodTracks());
+    TEST_ASSERT_EQUAL_HEX16(0xB313, idx.moodWord(findPath(idx, "Artist A/song.flac")));  // 5.7
+    TEST_ASSERT_EQUAL_size_t(idx.trackCount() * sizeof(uint16_t), idx.memory().moods);
+  }
+  LibraryIndex base(Heap::alloc, Heap::release, Heap::shrink);
+  const B::Result rb = build("golden/tags-0000002a.bin", base);
+  TEST_ASSERT_FALSE(base.hasMoods());
+  for (const char* file : {"hardening/mptg-tail-invalid.bin", "hardening/mptg-stride-76.bin",
+                           "hardening/mptg-minor-1.bin"}) {
+    LibraryIndex idx(Heap::alloc, Heap::release, Heap::shrink);
+    const B::Result r = build(file, idx);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(base.trackCount(), idx.trackCount(), file);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(rb.fromTransfer, r.fromTransfer, file);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, r.withMoods, file);
+    TEST_ASSERT_FALSE_MESSAGE(idx.hasMoods(), file);
+    TEST_ASSERT_EQUAL_size_t(0, idx.memory().moods);
+  }
+}
+
+// On the synthetic card: every file's word is its T record's tail's when
+// that record is chosen, 0 otherwise. T here is a commit behind for a
+// share of the files (their sizes changed since: D's records win), and
+// doesn't list others (copied by hand: D alone); D's records carry tails
+// too, which give nothing.
+void test_mood_words_on_the_synthetic_card() {
+  const synth::Spec spec = synth::userShape(600);
+  const synthcard::Card card = synthcard::make(spec);
+  // The made-up rows: about 92 % of the files, some heads NULL.
+  uint32_t rows = 0, nullHeads = 0;
+  for (const synthcard::File& f : card.files) {
+    if (!synthcard::hasMoods(f)) {
+      for (uint8_t b : f.moods) TEST_ASSERT_EQUAL_UINT8(0, b);
+      continue;
+    }
+    ++rows;
+    TEST_ASSERT_TRUE(moodfilter::tailValid(f.moods));
+    for (int i = 1; i < 7; ++i) nullHeads += f.moods[i] == moodfilter::kNull;
+  }
+  printf("[builder] synthetic moods: %u of %u files with a row, %u NULL heads\n", static_cast<unsigned>(rows),
+         static_cast<unsigned>(card.files.size()), static_cast<unsigned>(nullHeads));
+  TEST_ASSERT_TRUE(rows > card.files.size() * 88 / 100 && rows < card.files.size() * 96 / 100);
+  TEST_ASSERT_TRUE(nullHeads > 0);
+
+  synthcard::Card older;
+  older.spec = card.spec;
+  std::vector<int> fate(card.files.size());  // 0 T's record chosen, 1 stale, 2 no T record
+  for (size_t i = 0; i < card.files.size(); ++i) {
+    fate[i] = i % 11 == 5 ? 2 : i % 7 == 3 ? 1 : 0;
+    if (fate[i] == 2) continue;
+    older.files.push_back(card.files[i]);
+    if (fate[i] == 1) older.files.back().size += 1;
+  }
+  synthcard::Write tw;
+  tw.moods = true;
+  synthcard::Write dw;
+  dw.source = mptg::kSourceDevice;
+  dw.moods = true;
+  const std::vector<uint8_t> t = synthcard::tagsFile(older, tw);
+  const std::vector<uint8_t> d = synthcard::tagsFile(card, dw);
+  TEST_ASSERT_FALSE(t.empty() || d.empty());
+  TEST_ASSERT_EQUAL_UINT16(1, cc::get16(t.data() + 6));  // minor 1 (2.4.5)
+  cc::MemSource ts(t.data(), static_cast<uint32_t>(t.size())), ds(d.data(), static_cast<uint32_t>(d.size()));
+  synthcard::SameRows scanned(B::Status::Scanned);
+  B builder(Heap::alloc, Heap::release);
+  LibraryIndex idx(Heap::alloc, Heap::release, Heap::shrink);
+  B::Config c;
+  c.transfer = &ts;
+  c.device = &ds;
+  c.rows = &scanned;
+  const B::Result r = builder.build(idx, c);
+  TEST_ASSERT_TRUE(r.built && r.transferUsed);
+  TEST_ASSERT_EQUAL_UINT32(card.files.size(), idx.trackCount());
+  uint32_t chosen = 0, words = 0;
+  for (size_t i = 0; i < card.files.size(); ++i) {
+    const synthcard::File& f = card.files[i];
+    const uint32_t id = findPath(idx, f.rel.c_str());
+    TEST_ASSERT_NOT_EQUAL(LibraryIndex::kNone, id);
+    const uint16_t want = fate[i] == 0 ? moodfilter::wordOfTail(f.moods) : 0;
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(want, idx.moodWord(id), f.rel.c_str());
+    chosen += fate[i] == 0;
+    words += want != 0;
+  }
+  TEST_ASSERT_EQUAL_UINT32(chosen, r.fromTransfer);
+  TEST_ASSERT_EQUAL_UINT32(card.files.size() - chosen, r.fromDevice);
+  TEST_ASSERT_EQUAL_UINT32(words, r.withMoods);
+  TEST_ASSERT_EQUAL_UINT32(words, idx.moodTracks());
+  TEST_ASSERT_TRUE(words > 0);
+}
+
 // ---- the 20k measurements ----
 
 namespace {
@@ -633,11 +873,13 @@ struct Extra {
   bool counts = true;    // D's statuses say how much of D is its own (DSTA's header, N4)
   int32_t deviceMs = 0;  // ms added to D's lengths (the device trims an MP3's encoder delay)
   bool keepLengths = true;
+  bool moods = true;     // T's records carry their mood tails (synthcard::kMoodPct of them)
 };
 
 Built buildFrom(const synthcard::Card& card, bool fromTransfer, bool keepSources = false, const Extra& x = Extra()) {
   Built out;
   synthcard::Write tw;
+  tw.moods = x.moods;
   synthcard::Write dw;
   dw.source = mptg::kSourceDevice;
   dw.fullRecords = !fromTransfer;  // T's files: D's Software rows; else D's own records
@@ -663,29 +905,35 @@ Built buildFrom(const synthcard::Card& card, bool fromTransfer, bool keepSources
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count());
     out.peak = Heap::peak;
     out.memory = idx.memory();
+    TEST_ASSERT_EQUAL_size_t(Heap::live, out.memory.total);
     out.tracks = idx.trackCount();
     out.albums = idx.albumCount();
     out.artists = idx.artistCount();
     for (uint32_t i = 0; i < idx.trackCount(); ++i) out.lengths.push_back(idx.track(i).durationS);
-    if (!keepSources) idx.forgetSources();
+    if (!keepSources) {
+      idx.forgetSources();
+      idx.forgetMoods();  // only T's records give words
+    }
     if (!x.keepLengths) idx.forgetLengths();
     MemorySink file;
     LibraryIndex::Inputs in;
     in.cardId = 1;
     idx.save(file, in);
     out.bytes.assign(file.data(), file.data() + file.size());
-    TEST_ASSERT_EQUAL_size_t(Heap::live, out.memory.total);
+    TEST_ASSERT_EQUAL_size_t(Heap::live, idx.memory().total);  // (the words' block given back)
   }
   TEST_ASSERT_EQUAL_size_t(0, Heap::live);
   return out;
 }
 }  // namespace
 
-// The budget (3.4.3, 3.5): library.idx v6 at 20k about 1.75-1.85 MB, 88-92
+// The budget (3.4.3, 3.5): library.idx v7 at 20k about 1.75-1.85 MB, 88-92
 // B a track; the build peak, pre-sized, about 2.0 MB (the index's blocks,
 // its votes and sorts, and the builder's walkers). Measured on the synthetic
 // library in the user's shape, with tags at the measured rates and names at
-// the measured lengths: 88.6 B a track, a peak of 1.98 MB.
+// the measured lengths, and T's mood words on 92 % of the tracks
+// (docs/MOOD-FILTERS.md 11, MODELLED 90.6 B and about 2.02 MB): 91.1 B a
+// track, a peak of 2.03 MB; without the words 2.0 B and 40,000 B less.
 constexpr size_t kIndexBytesPerTrack = 92;
 constexpr size_t kBuildPeak20k = 2050u * 1000u;
 
@@ -725,15 +973,35 @@ void test_20k_memory_and_peak() {
   TEST_ASSERT_EQUAL_UINT32(spec.albums, t.albums);    // keyed by folder: one each
   TEST_ASSERT_EQUAL_UINT32(spec.artists, t.artists);
   printf("[builder] 20000 tracks from T: %ld ms; index %u bytes (%.1f B/track): strings %u, tracks %u, artists %u, "
-         "albums %u, folders %u, views %u; build peak %u (index %u, the builder's own %u)\n",
+         "albums %u, folders %u, views %u, moods %u (%u tracks with a word); build peak %u (index %u, the "
+         "builder's own %u)\n",
          t.ms, static_cast<unsigned>(t.memory.total), t.memory.total / 20000.0,
          static_cast<unsigned>(t.memory.strings), static_cast<unsigned>(t.memory.tracks),
          static_cast<unsigned>(t.memory.artists), static_cast<unsigned>(t.memory.albums),
-         static_cast<unsigned>(t.memory.folders), static_cast<unsigned>(t.memory.views), static_cast<unsigned>(t.peak),
-         static_cast<unsigned>(t.memory.buildPeak), static_cast<unsigned>(t.result.workBytes));
+         static_cast<unsigned>(t.memory.folders), static_cast<unsigned>(t.memory.views),
+         static_cast<unsigned>(t.memory.moods), static_cast<unsigned>(t.result.withMoods),
+         static_cast<unsigned>(t.peak), static_cast<unsigned>(t.memory.buildPeak),
+         static_cast<unsigned>(t.result.workBytes));
   TEST_ASSERT_TRUE_MESSAGE(t.memory.total <= kIndexBytesPerTrack * 20000, "the index over 92 B a track");
   TEST_ASSERT_TRUE_MESSAGE(t.peak <= kBuildPeak20k, "the build peak over its budget");
   TEST_ASSERT_TRUE(t.memory.buildPeak <= t.peak);
+  // The mood words (docs/MOOD-FILTERS.md 11): 2 B a track, one block, when
+  // a track has one; T without tails (today's cards) has no block, and is
+  // otherwise the same index.
+  TEST_ASSERT_EQUAL_size_t(20000 * sizeof(uint16_t), t.memory.moods);
+  TEST_ASSERT_TRUE(t.result.withMoods > 20000 * 88 / 100 && t.result.withMoods < 20000 * 96 / 100);
+  Extra plain;
+  plain.moods = false;
+  const Built p = buildFrom(card, true, false, plain);
+  TEST_ASSERT_EQUAL_UINT32(0, p.result.withMoods);
+  TEST_ASSERT_EQUAL_size_t(0, p.memory.moods);
+  TEST_ASSERT_EQUAL_size_t(p.memory.total + t.memory.moods, t.memory.total);
+  TEST_ASSERT_TRUE(p.bytes == t.bytes);
+  printf("[builder] the same T without mood tails: index %u bytes (%.1f B/track), build peak %u: the words %+ld B "
+         "of index, %+ld B of peak\n",
+         static_cast<unsigned>(p.memory.total), p.memory.total / 20000.0, static_cast<unsigned>(p.peak),
+         static_cast<long>(t.memory.total) - static_cast<long>(p.memory.total),
+         static_cast<long>(t.peak) - static_cast<long>(p.peak));
 
   // The boot after a transfer (3.2.2: the transfer's identity differs): no
   // walk since the commit, so T lists, and D still has a Software row for
@@ -789,11 +1057,14 @@ void test_transfer_and_device_build_the_same_index() {
   TEST_ASSERT_EQUAL_UINT32(card.files.size(), d.result.fromDevice);
   TEST_ASSERT_EQUAL_size_t(t.bytes.size(), d.bytes.size());
   TEST_ASSERT_TRUE(t.bytes == d.bytes);
-  // With the sources kept, they differ (each track says where its names are from).
+  // With the sources kept, they differ (each track says where its names are
+  // from), and T's tracks keep their mood words: 2 B a track more.
   const Built ts = buildFrom(card, true, true);
   const Built ds = buildFrom(card, false, true);
   TEST_ASSERT_FALSE(ts.bytes == ds.bytes);
-  TEST_ASSERT_EQUAL_size_t(ts.bytes.size(), ds.bytes.size());
+  TEST_ASSERT_TRUE(ts.result.withMoods > 0);
+  TEST_ASSERT_EQUAL_UINT32(0, ds.result.withMoods);
+  TEST_ASSERT_EQUAL_size_t(ts.bytes.size(), ds.bytes.size() + card.files.size() * sizeof(uint16_t));
   // The device's lengths 50 ms shorter.
   Extra trimmed;
   trimmed.deviceMs = -50;
@@ -825,6 +1096,9 @@ int main(int, char**) {
   RUN_TEST(test_older_device_parser);
   RUN_TEST(test_untagged_names_come_from_the_folders);
   RUN_TEST(test_facts_and_thumbnails);
+  RUN_TEST(test_the_mood_word_follows_the_record);
+  RUN_TEST(test_mood_words_from_the_fixtures);
+  RUN_TEST(test_mood_words_on_the_synthetic_card);
   RUN_TEST(test_20k_memory_and_peak);
   RUN_TEST(test_track_slots);
   RUN_TEST(test_transfer_and_device_build_the_same_index);

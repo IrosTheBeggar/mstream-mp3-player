@@ -32,7 +32,8 @@ counters. The rule (docs/AUTODJ-INDEX.md 11 is the index's side):
   whose CRC fails is read once more (by the same pick if its budget allows,
   else by the next read of it); failing twice in a row it goes into a ring
   of the last 8 damaged rows and is never read again until the file is
-  reopened. A failed read (Why::Io) is only skipped. A slot that passes its
+  reopened. A failed read (Why::Io) is only skipped (the engine puts a row in the
+  ring at its second in a row: IoTwice, which no session here reaches). A slot that passes its
   CRC over a bad list (Broken) makes the file absent: every later pick is a
   random one until the file is reopened.
 - **The candidates.** The union of the usable anchors' used entries, minus

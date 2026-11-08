@@ -347,7 +347,7 @@ private:
   uint16_t pendingRow_ = kNoRow;          // ... and its row (the maps may be away when it goes)
   bool retry_ = false;
   uint32_t retryAtMs_ = 0;
-  bool readWait_ = false;  // a read ahead failed: none until readAtMs_
+  bool readWait_ = false;  // a read ahead or a pick's failed: no read ahead until readAtMs_
   uint32_t readAtMs_ = 0;
   // The fence's notes (positions).
   uint32_t fenceSize_ = 0;

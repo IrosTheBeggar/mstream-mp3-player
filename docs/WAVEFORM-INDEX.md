@@ -473,7 +473,10 @@ does (7.4). docs/SEEK-BAR.md has the bar's look.
   frozen at the Down, under a finger): lengthMs 0 does, otherwise `|lengthMs
   - player's ms| ≤ max(2000, player's ms / 50)`. A track too short to seek, or
   of no known length, or that failed never shows one. Anything else is the
-  plain line, in the same place.
+  plain line, in the same place. A stopped track the player doesn't hold
+  takes its record's length (docs/SEEK-BAR.md 5.3), so its shape shows before
+  the first play; the check then compares the record with itself, and a file
+  that isn't the record's shows as the plain line from the play on.
 - **The reduction to 99 columns** (`lib/core/WaveShape`): each column is the
   RMS of its bars, then a stretch from the 10th percentile column to the
   loudest. At face value loud masters are a brick.
@@ -481,7 +484,15 @@ does (7.4). docs/SEEK-BAR.md has the bar's look.
   of the file, a file that isn't on the card included, is one log line and
   plain lines until a remount or the next boot, and a shape read before goes
   too. A read's I/O error, one in the file's open too, is retried once after
-  2 s, then no shape until the track changes.
+  2 s, then no shape until the track changes. A read of the root the card fails
+  (a remount's, or the boot's) says nothing of the file: plain lines, the root read
+  again after 2 s, 10 s and 30 s (not while a list moves or behind the update's
+  fence), then none until a remount or the next boot. A boot that failed it with its
+  card jobs running has no such reads, as Auto DJ's. A remount within 30 s of such a
+  read is taken for its echo (`docs/AUTODJ.md` 6.6). On a card silent after a sector of the file
+  each read of it makes a remount, which cuts whatever plays, and the count above starts over
+  at each track: the wrapper stops asking after 4 reads of it (the read stop, `docs/METADATA.md` 3.8), and
+  when a whole region is so, a new sector a track, 12 such faults leave plain lines until the next boot (too silent).
 - **The console:** `gw?` prints the state (the file, the wanted hash, the
   record, the counters: reads, hits, misses, damaged, the probes a read, the
   job's ms); `gw=` and 99 digits, or `gw#` and 480 hex digits (240 bars,

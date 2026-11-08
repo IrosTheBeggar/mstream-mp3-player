@@ -40,10 +40,10 @@ namespace autodjview {
 enum class Index : uint8_t {
   None,      // no index on the card (or one of a major this build doesn't read)
   Bad,       // it failed its checks, or a slot's list broke a rule under a good CRC
-  Unreadable,  // a read failed (the file the root names isn't on the card, the card failed every try at it, no memory to read the root after a remount)
+  Unreadable,  // a read failed (the file the root names isn't on the card, the card failed every try at it or every read of the root, joins or look-ups in a row, or kept going silent; no memory to read the root)
   TooBig,    // a library over autodj::kMaxTracks tracks: it can't be joined
   NoMemory,  // the join found no memory: until the next library build (or off and on)
-  Found,     // open and checked, Auto DJ off: joined when it is switched on
+  Found,     // open and checked, Auto DJ off: joined when it is switched on (or on, with no library to join)
   Reading,   // Auto DJ on: the join runs (or waits a moment: a retry, the update step); on or off: a try at opening the file is due
   Ready,     // joined: the coverage known
 };
@@ -56,8 +56,9 @@ struct State {
   uint8_t floorPct = autodj::kFloorMin;    // the setting: 55-75 by 5
   uint8_t floorShown = autodj::kFloorMin;  // ... as it acts (shownFloor(): an index's own floor above it)
   bool matchTempo = false, matchKey = false;
-  // AutoDj::usable(): an index open and checked for a library it can join
-  // (the empty states' button, "Auto DJ from here", the page's live rows).
+  // AutoDj::usable(): an index open and checked for a library it can join, with no
+  // run of failed reads behind it (the empty states' button, "Auto DJ from here", the
+  // page's live rows).
   bool usable = false;
   Index index = Index::None;
   autodj::Hold hold = autodj::Hold::None;  // while on (the trigger's last pass)
@@ -124,6 +125,7 @@ enum class Started : uint8_t {
   Played,   // a track the index knows plays, Auto DJ on
   NoTrack,  // no track with neighbours in the draws: nothing played (another tap draws again)
   NoIndex,  // no usable index any more (gone since the button was drawn): nothing played
+  CardFailed,  // this tap's look-ups were the second run in a row the card failed: nothing played, the button goes
   Refused,  // the Play was refused (the library updating, no memory)
 };
 

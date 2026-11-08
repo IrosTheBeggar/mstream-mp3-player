@@ -80,6 +80,7 @@ const char* slotName(autodj::SlotResult r) {
     case R::Suspect: return "its CRC failed (read again later)";
     case R::Damaged: return "DAMAGED (its CRC failed twice: skipped from now)";
     case R::Io: return "the read failed (the card?)";
+    case R::IoTwice: return "DAMAGED (the read failed twice (the card?): skipped from now)";
     case R::Broken: return "BROKEN (a good CRC over a bad list: the index is absent until a remount)";
   }
   return "?";
@@ -107,18 +108,20 @@ size_t psramFreeBytes() { return heap_caps_get_free_size(MALLOC_CAP_SPIRAM); }
 
 // What the join's placement leaves free at least while its spacers hold the
 // bottom of PSRAM's largest free block (AutoDjJoin.h), the few milliseconds
-// of begin() (the 'joined' line's "in X ms"): another task's block
+// of begin() (the 'joined' line's "in X ms"), so that another task's block
 // meanwhile still fits (a track's start: the MP3 probe's 4 KB, a seek's
 // 8 KB, the Opus packet buffer's 60 KB; the card worker's 4-16 KB buffers).
-// The spacers over the whole block took the free to 10 KB at every join
-// (MEASURED 2026-10-14). The maps taken after the spacers count (155 KB at
-// 19,410 tracks), and so does the free outside the largest block; when
+// It counts free bytes, not one block: that 60 KB needs a free block of
+// 62,464 B. The spacers over the whole block took the free to 10 KB at every
+// join (MEASURED 2026-10-14). The maps taken after the spacers count (155 KB
+// at 19,410 tracks), and so does the free outside the largest block; when
 // they fall short, the rest of the margin is left above the blocks, which
 // then sit that much under the block's top: so not more (128 KB put the
-// filters 39 KB under it after a library update in test_autodj_join's
-// model, where the runs had taken the holes). Not covered: the first Opus
-// track's 125 KB of buffers (OpusGenerator, once a boot) starting in that
-// window (the track would fail and be skipped: docs/AUTODJ.md 6.2).
+// filters 39 KB under it after a library update in test_autodj_join's model
+// as it was until 2026-11-02, where the runs had taken the holes). Not
+// covered: the first Opus track's 125 KB of buffers (OpusGenerator, once a
+// boot) starting in that window (the track would fail and be skipped:
+// docs/AUTODJ.md 6.2).
 constexpr size_t kJoinMarginBytes = 64 * 1024;
 
 }  // namespace
@@ -147,11 +150,15 @@ void AutoDj::begin() {
     file_ = File::None;
     whyText_ = "no card records (the flash, or no PSRAM)";
     Serial.printf("[dj] index: none (%s): picks at random\n", whyText_);
+  } else if (root->readFailed()) {
+    rootFailed();
   } else if (!root->autoDj.present) {
+    rootRead_ = true;
     file_ = File::None;
     whyText_ = root->present ? "the card's root names none" : "no transfer data on the card";
     Serial.printf("[dj] index: none (%s): picks at random\n", whyText_);
   } else {
+    rootRead_ = true;
     open(root->autoDj, "the boot");
   }
   if (dj_.settings().on) logSession(Began::Boot, autodj::kNoTrackId);
@@ -227,6 +234,7 @@ void AutoDj::openFile(const char* when) {
     return;
   }
   file_ = File::Open;
+  tries_.reset();
   why_ = cc::Why::Ok;
   whyText_ = "";
   block_ = Block::None;
@@ -244,6 +252,19 @@ void AutoDj::openFile(const char* when) {
                 dj_.settings().on ? "the join next" : "joined when Auto DJ is switched on");
 }
 
+void AutoDj::refreshFile() {
+  if (!lib_.fatfs()) return;
+  lib_.fatfs()->close(handle_);
+  handle_ = nullptr;
+  cc::Why why = cc::Why::Ok;
+  const autodj::OpenTry t = tryFile(&why);
+  if (t != autodj::OpenTry::Open) {
+    join_.release();
+    tries_.reset();
+    tryFailed(t, why);
+  }
+}
+
 void AutoDj::closeFile() {
   stopDryRun("the index closing");
   join_.release();  // (no join reads a closed file)
@@ -253,7 +274,7 @@ void AutoDj::closeFile() {
 }
 
 bool AutoDj::usable() const {
-  if (file_ != File::Open || dj_.engine().broken()) return false;
+  if (file_ != File::Open || dj_.engine().broken() || block_ == Block::Reads) return false;
   const LibraryIndex* index = lib_.index();
   return !index || !index->ready() || index->trackCount() <= autodj::kMaxTracks;
 }
@@ -262,7 +283,7 @@ void AutoDj::releaseJoin(const char* why) {
   stopDryRun(why);
   const size_t freed = join_.release();
   joinLogged_ = false;
-  if (block_ == Block::Retry) block_ = Block::None;
+  if (block_ == Block::Retry || block_ == Block::Reads) block_ = Block::None;
   if (freed) Serial.printf("[dj] the join given back (%s): %u B of PSRAM\n", why, (unsigned)freed);
 }
 
@@ -314,6 +335,18 @@ autodj::Env AutoDj::driverEnv(const Env& env) const {
 
 void AutoDj::step(const Env& env) {
   remount(env);
+  // (A join under way: its own next read fails on the FIL, and its end comes here.)
+  if (file_ == File::Open && handle_ && join_.status() != autodj::Join::Status::Working && !env.listMoving &&
+      !env.cardHeld && !player_.fenced()) {
+    if (handle_->errorKept()) {
+      refreshFile();
+    } else if (handle_->takeReadFailed()) {
+      // Only a status failed: the card was put back, say, on a player that has called FatFs
+      // for nothing since. remount() reopens this file with the maps kept, once a call of
+      // FatFs's has made the remount, and an idle player makes none.
+      lib_.fatfs()->echoNow();
+    }
+  }
   stepOpen(env);
   stepJoin(env);
   const Pass p = dj_.step(player_, index(), driverEnv(env));
@@ -333,42 +366,120 @@ bool AutoDj::takeUndoDropped() {
 // Root (never Library::root(): the update step holds it, TagStore its
 // identity); the same index: the file reopened, the maps and the session
 // kept; another (or one now, or none now): closed, opened, joined again, a
-// new session.
+// new session. Soon after a try the card failed it is that try's echo, and the
+// try's wait stands (autodj::OpenTries).
 void AutoDj::remount(const Env& env) {
   if (!sectordisk::installed() || env.cardHeld) return;  // (cardHeld: another card, or a job: a restart comes)
-  const uint32_t n = sectordisk::guard().remounts;
-  if (n == remountsSeen_) return;
-  remountsSeen_ = n;
+  const sectordisk::Guard g = sectordisk::guard();
+  if (g.remounts == remountsSeen_) return;
+  remountsSeen_ = g.remounts;
   ++remounts_;
+  if (!lib_.records() || !lib_.fatfs()) return;
+  if (g.tooSilent) {
+    if (file_ == File::Open || file_ == File::Again) offForSilence();
+    return;
+  }
+  if (tries_.remounted(env.nowMs)) readRoot();
+}
+
+// Read after read that left the card silent, whoever's, each a cut (CachedDrive::tooSilent()):
+// none of Auto DJ's from here: a whole band of its slots would cut every track. Dc asks again,
+// until the next remount.
+void AutoDj::offForSilence() {
+  closeFile();
+  rootAgain_ = false;
+  tries_.reset();
+  file_ = File::Absent;
+  why_ = cc::Why::Io;
+  whyText_ = "the card keeps going silent";
+  if (silenceSaid_) return;
+  silenceSaid_ = true;
+  Serial.println("[dj] the card keeps going silent: no index this session: picks at random until the next boot");
+}
+
+// A read of the root the card failed says nothing of the index: what is named
+// stays named and the session stays, the file closed (its FIL may be gone with a
+// mount, and the maps go with it), and the root read again when tries_ says. After
+// the last, as a remount with no PSRAM to read it: Absent, the entry kept. So too,
+// at once, when the boot failed it and the card jobs run: no read on a timer then,
+// only at a remount or Dc (Library::jobsOnUnreadRoot()).
+void AutoDj::rootFailed() {
+  closeFile();
+  why_ = cc::Why::Io;
+  rootAgain_ = tries_.failed(autodj::OpenTry::Card, static_cast<uint32_t>(millis())) && !lib_.jobsOnUnreadRoot();
+  if (rootAgain_) {
+    file_ = File::Again;
+    whyText_ = "the card failed reading its root: tried again soon";
+    Serial.printf("[dj] the card's root: a read failed: again in %lu s, %u of %u (picks at random meanwhile)\n",
+                  (unsigned long)(tries_.lastWaitMs() / 1000), (unsigned)tries_.used(),
+                  (unsigned)autodj::OpenTries::kAgain);
+    return;
+  }
+  file_ = File::Absent;
+  whyText_ = "the card failed every read of its root";
+  Serial.println("[dj] the card's root: every read failed: picks at random until a remount or the next boot");
+}
+
+void AutoDj::readRoot() {
   if (!lib_.records() || !lib_.fatfs()) return;
   if (!root_) root_ = psramNew<cardroot::Root>();
   auto* scratch = static_cast<uint8_t*>(psramAlloc(1024));
   if (!root_ || !scratch) {
     psramFree(scratch);
-    Serial.println("[dj] the card was mounted again: no PSRAM to read its root: the index is closed until the next "
-                   "remount");
+    Serial.println("[dj] no PSRAM to read the card's root: the index is closed until the next remount");
     closeFile();
     // Absent with its entry kept: the next remount with the same index
     // opens it again (the session kept); one with another index is new.
-    file_ = haveEntry_ ? File::Absent : File::None;
+    // (No root read yet to say there is none: Absent too.)
+    rootAgain_ = false;
+    tries_.reset();
+    file_ = haveEntry_ || !rootRead_ ? File::Absent : File::None;
     why_ = cc::Why::Io;
-    whyText_ = "no PSRAM to read the root after a remount";
+    whyText_ = "no PSRAM to read the root";
     return;
   }
   cardroot::read(*lib_.fatfs(), scratch, 1024, root_);
   psramFree(scratch);
+  if (root_->readFailed()) {
+    lib_.fatfs()->echoNow();
+    rootFailed();
+    return;
+  }
+  rootAgain_ = false;
+  tries_.reset();  // (the card answered: a try at the file counts from its first)
   const cardroot::Root::AutoDj& e = root_->autoDj;
+  // The boot's couldn't be read, so no root has named anything to compare this
+  // with: the boot's open at last, its session kept.
+  if (!rootRead_) {
+    rootRead_ = true;
+    if (e.present) {
+      open(e, "tried again");
+    } else {
+      file_ = File::None;
+      whyText_ = root_->present ? "the card's root names none" : "no transfer data on the card";
+      Serial.printf("[dj] index: none (%s): picks at random\n", whyText_);
+    }
+    return;
+  }
   // The same index: the same entry (generation, size, header CRC, the
   // selection), or none still.
   const bool same = e.present == haveEntry_ &&
                     (!e.present || (e.entry.generation == entry_.generation && e.entry.fileBytes == entry_.fileBytes &&
                                     e.entry.headerCrc == entry_.headerCrc &&
                                     std::memcmp(e.entry.key, entry_.key, sizeof(entry_.key)) == 0));
+  if (same && !e.present) {
+    // None still. (What a read of the root that failed left said nothing.)
+    if (file_ != File::Again && file_ != File::Absent) return;
+    file_ = File::None;
+    whyText_ = root_->present ? "the card's root names none" : "no transfer data on the card";
+    Serial.printf("[dj] index: none (%s): picks at random\n", whyText_);
+    return;
+  }
   if (same && (file_ == File::Absent || file_ == File::Again)) {
     open(e, "after a remount");  // (a check a read failed may pass now; the session kept)
     return;
   }
-  if (same && file_ != File::Open) return;  // (none still, or one this build doesn't read)
+  if (same && file_ != File::Open) return;  // (one this build doesn't read)
   if (same) {
     // The FIL again (the table's frame read again: one small read).
     const bool wasReady = joined();
@@ -389,7 +500,7 @@ void AutoDj::remount(const Env& env) {
       // (A retry the old FIL's failed read set waits no more: the join at
       // the next pass. A library too big, or no memory, still waits for
       // the next build.)
-      if (block_ == Block::Retry) block_ = Block::None;
+      if (block_ == Block::Retry || block_ == Block::Reads) block_ = Block::None;
       joinLogged_ = false;
     }
     Serial.printf("[dj] the card was mounted again (the same index): the file reopened, %s\n",
@@ -421,7 +532,12 @@ void AutoDj::remount(const Env& env) {
 // counted what is left, and a FIL is 4.1 KB of it).
 void AutoDj::stepOpen(const Env& env) {
   if (file_ != File::Again || !env.uiStarted || env.listMoving || env.cardHeld || player_.fenced()) return;
-  if (tries_.due(env.nowMs)) openFile("tried again");
+  if (!tries_.due(env.nowMs)) return;
+  if (rootAgain_) {
+    readRoot();
+  } else {
+    openFile("tried again");
+  }
 }
 
 // The join while Auto DJ is on: begun once the UI's first frame is up;
@@ -442,7 +558,7 @@ void AutoDj::stepJoin(const Env& env) {
   const S s = join_.status();
   if (s == S::Idle || s == S::Aborted) {
     if (!index || !index->ready() || !env.uiStarted || env.cardHeld) return;
-    if (block_ == Block::Build) return;
+    if (block_ == Block::Build || block_ == Block::Reads) return;
     if (block_ == Block::Retry && static_cast<int32_t>(env.nowMs - retryAtMs_) < 0) return;
     block_ = Block::None;
     beginJoin(index);
@@ -477,6 +593,7 @@ void AutoDj::joinStatus() {
     case S::Ready: {
       if (joinLogged_) return;
       joinLogged_ = true;
+      joinFails_ = 0;
       // The cached slots' runs were made from the maps before (a fence, a
       // remount): made again, a loop pass each (Engine::runDue()).
       dj_.engine().mapsChanged();
@@ -491,8 +608,9 @@ void AutoDj::joinStatus() {
                  "blocks in smaller ones", (unsigned)st.topBytes, (unsigned)st.keptElsewhere,
                  (unsigned long)st.runsElsewhere);
       } else {
-        snprintf(where, sizeof(where), "%u B where the heap put them (no spacer), %u of 3 kept and %lu transient "
-                 "blocks in smaller free ones", (unsigned)st.topBytes, (unsigned)st.keptElsewhere,
+        snprintf(where, sizeof(where), "%u B where the heap put them (%s), %u of 3 kept and %lu transient "
+                 "blocks in smaller free ones", (unsigned)st.topBytes,
+                 st.topShort ? "the room at the top fell short" : "no spacer", (unsigned)st.keptElsewhere,
                  (unsigned long)st.runsElsewhere);
       }
       Serial.printf("[dj] joined: %lu of %lu tracks have neighbours (%lu rows of %lu; BPM %u %%, key %u %% of them) in "
@@ -517,6 +635,16 @@ void AutoDj::joinStatus() {
     }
     case S::ReadError:
       join_.release();
+      if (++joinFails_ >= kJoinTries) {
+        // (Each costs the loop the driver's retries, for good on a sector that never
+        // answers. The next build, a remount or Dc tries again.)
+        block_ = Block::Reads;
+        joinFails_ = 0;
+        Serial.printf("[dj] the join: a read of the card failed, %u times: picks at random until the library is built "
+                      "again, a remount or Dc\n",
+                      (unsigned)kJoinTries);
+        return;
+      }
       block_ = Block::Retry;
       retryAtMs_ = static_cast<uint32_t>(millis()) + kJoinRetryMs;
       Serial.printf("[dj] the join: a read of the card failed: again in %lu s (picks at random meanwhile)\n",
@@ -552,7 +680,7 @@ size_t AutoDj::fence() {
   stopDryRun("the library update");
   const size_t freed = join_.release();
   joinLogged_ = false;
-  if (block_ == Block::Build) block_ = Block::None;  // (a new build: try again)
+  if (block_ == Block::Build || block_ == Block::Reads) block_ = Block::None;  // (a new build: try again)
   return freed;
 }
 
@@ -564,11 +692,18 @@ size_t AutoDj::giveBack() {
   return held;
 }
 
-void AutoDj::live() {
+void AutoDj::live(bool built, bool reloaded) {
   if (block_ == Block::Update) block_ = Block::None;
   dj_.remapped(player_.queue());
-  Serial.printf("[dj] the library was rebuilt: %d DJ marks carried, the session kept; %s\n", dj_.marks().count(),
-                dj_.settings().on ? "the join again" : "the index joins when Auto DJ is switched on");
+  Serial.printf("[dj] %s: %d DJ marks carried, the session kept; %s\n",
+                built      ? "the library was rebuilt"
+                : reloaded ? "the update step failed, the last library back"
+                           : "the update step failed, no library",
+                dj_.marks().count(),
+                file_ != File::Open   ? "no index open to join"
+                : !built && !reloaded ? "no join until there is a library"
+                : dj_.settings().on   ? "the join again"
+                                      : "the index joins when Auto DJ is switched on");
 }
 
 // ---------------------------------------------------------------------------
@@ -592,12 +727,12 @@ void AutoDj::logPick(const Pass& p, const char* how) {
   const autodj::Pick& k = p.pick;
   logPickLine(p, how);
   // A slot whose CRC failed again at this pick's read (read twice here, or
-  // suspect since a read ahead): in the damaged ring from now, as the read
-  // ahead's "DAMAGED" line says for its own. Once a row: a damaged row
-  // isn't read again until the file is reopened.
+  // suspect since a read ahead), or whose read failed again: in the damaged
+  // ring from now, as the read ahead's "DAMAGED" line says for its own. Once a
+  // row: a damaged row isn't read again until the file is reopened.
   for (uint8_t i = 0; i < k.damaged; ++i) {
-    Serial.printf("[dj] read at the pick, row %u: %s\n", (unsigned)k.damagedRow[i],
-                  slotName(autodj::SlotResult::Damaged));
+    Serial.printf("[dj] read at the pick, row %u: DAMAGED (its CRC or its read failed twice: skipped from now)\n",
+                  (unsigned)k.damagedRow[i]);
   }
 }
 
@@ -681,14 +816,14 @@ bool AutoDj::setOn(bool on) {
                                      : "Auto DJ on: it adds a track when the queue's last one starts (a finished "
                                        "queue: one cued, paused)");
   if (on) logSession(Began::On, autodj::kNoTrackId);
+  // Switched on again: a join that failed for memory (or a library too
+  // big) is tried again, as the listener may have freed some since (a
+  // library too big fails again at once).
+  if (on && (block_ == Block::Build || block_ == Block::Reads)) block_ = Block::None;
   // No index it can use: its picks are random (the UI says so now, and
   // not again until the next switch on).
   if (on) news_ |= newsWatch_.switchedOn(usable());
   if (!on) releaseJoin("Auto DJ off");
-  // Switched on again: a join that failed for memory (or a library too
-  // big) is tried again, as the listener may have freed some since (a
-  // library too big fails again at once).
-  if (on && block_ == Block::Build) block_ = Block::None;
   return true;
 }
 
@@ -729,6 +864,26 @@ bool AutoDj::fromHere(uint32_t track) {
   return true;
 }
 
+bool AutoDj::hasNeighbours(uint32_t track) {
+  if (!usable()) return false;
+  const bool has = hasRow(track);
+  if (!joined()) lookupFailed();
+  return has;
+}
+
+bool AutoDj::lookupFailed() {
+  if (!handle_ || !handle_->errorKept()) {
+    lookupFails_ = 0;
+    return false;
+  }
+  if (++lookupFails_ < 2) return false;
+  lookupFails_ = 0;
+  block_ = Block::Reads;
+  Serial.println("[dj] a track looked up in the index: a read of the card failed, and again: no more until the library "
+                 "is built again, a remount, Dc or Auto DJ switched on");
+  return true;
+}
+
 // The empty states' button (D4): a random track with neighbours, played,
 // Auto DJ on. Joined, a row of the maps (Driver::surprise()); not (Auto DJ
 // off: the join follows the switch), library tracks drawn and looked up by
@@ -738,7 +893,9 @@ autodjview::Started AutoDj::start() {
     // (Gone since the button was drawn: a remount without it, a check
     // failed. The empty states draw Shuffle all again at the next pass.)
     Serial.printf("[dj] the Auto DJ button: no usable index (%s): nothing played\n",
-                  whyText_ && whyText_[0] ? whyText_ : "found broken, or a library too big");
+                  block_ == Block::Reads    ? "a read of the card failed, and again"
+                  : whyText_ && whyText_[0] ? whyText_
+                                            : "found broken, or a library too big");
     return autodjview::Started::NoIndex;
   }
   uint32_t track = autodj::kNoTrackId;
@@ -757,8 +914,9 @@ autodjview::Started AutoDj::start() {
   }
   if (track == autodj::kNoTrackId) {
     Serial.println("[dj] the Auto DJ button: no track with neighbours in the draws: nothing played");
-    return autodjview::Started::NoTrack;
+    return !joined() && lookupFailed() ? autodjview::Started::CardFailed : autodjview::Started::NoTrack;
   }
+  lookupFails_ = 0;
   bool switched = false;
   if (!dj_.playFrom(player_, track, Began::Surprise, index().maps, &switched)) {
     Serial.println("[dj] the Auto DJ button: the Play was refused (the library updating, or no memory)");
@@ -792,8 +950,9 @@ void AutoDj::view(autodjview::State* v) const {
   const LibraryIndex* index = lib_.index();
   if (file_ == File::Absent && why_ == cc::Why::Io) {
     // A read failed (the file the root names isn't on the card, the card
-    // failed every try at it, no PSRAM to read the root after a remount): not
-    // the index's checks; a remount or the next boot tries again.
+    // failed every try at it or every read of the root, no PSRAM to read the
+    // root): not the index's checks; a remount or the next boot tries again. (A
+    // card too silent, offForSilence(): the next boot, or Dc until the next remount.)
     v->index = Index::Unreadable;
   } else if (file_ == File::Absent || (file_ == File::Open && dj_.engine().broken())) {
     v->index = Index::Bad;
@@ -810,9 +969,13 @@ void AutoDj::view(autodjview::State* v) const {
     v->tracks = m.tracks;
     v->bpmPct = static_cast<uint8_t>(pct(m.withBpm, m.mapped));
     v->keyPct = static_cast<uint8_t>(pct(m.withKey, m.mapped));
+  } else if (block_ == Block::Reads) {
+    v->index = Index::Unreadable;
   } else if (block_ == Block::Build) {
     v->index = Index::NoMemory;
-  } else if (!s.on) {
+  } else if (!s.on || (!player_.fenced() && (!index || !index->ready()))) {
+    // (On with no library, an update step having failed with library.idx too: no join until
+    // there is one, so nothing is being read. Behind a fence one is coming: Reading.)
     v->index = Index::Found;
     v->rows = table_.rowCount();
   } else {
@@ -903,6 +1066,12 @@ void AutoDj::command(const char* arg, const Env& env) {
       return;
     case K::Reopen: {
       const cardroot::Root* root = root_ ? root_ : lib_.root();  // (a remount's, else the boot's)
+      if (lib_.records() && root && (!rootRead_ || root->readFailed())) {
+        Serial.println("[dj] Dc: the last read of the card's root failed: read again, from the first try");
+        tries_.reset();
+        readRoot();
+        return;
+      }
       if (!root || !root->autoDj.present) {
         Serial.println("[dj] Dc: the card's root names no index");
         return;
@@ -1080,11 +1249,12 @@ void AutoDj::status(const Env& env) {
     case File::None: Serial.printf("[dj] index: none (%s): picks at random\n", whyText_); break;
     case File::NotRead: Serial.printf("[dj] index %s: not read (%s)\n", filePath_, whyText_); break;
     case File::Absent:
-      Serial.printf("[dj] index %s: ABSENT (%s: %s): picks at random\n", filePath_, whyText_, cc::whyName(why_));
+      Serial.printf("[dj] index %s: ABSENT (%s: %s): picks at random\n", filePath_[0] ? filePath_ : "(unknown)",
+                    whyText_, cc::whyName(why_));
       break;
     case File::Again:
-      Serial.printf("[dj] index %s: %s, %u of %u: picks at random\n", filePath_, whyText_, (unsigned)tries_.used(),
-                    (unsigned)autodj::OpenTries::kAgain);
+      Serial.printf("[dj] index %s: %s, %u of %u: picks at random\n", filePath_[0] ? filePath_ : "(unknown)", whyText_,
+                    (unsigned)tries_.used(), (unsigned)autodj::OpenTries::kAgain);
       break;
     case File::Open: {
       const uint8_t* sig = table_.selectionSig();
@@ -1107,7 +1277,7 @@ void AutoDj::status(const Env& env) {
                   (unsigned long)m.mapped, (unsigned long)m.tracks, (unsigned long)(m.tracks - m.mapped),
                   pct(m.withBpm, m.mapped), pct(m.withKey, m.mapped), joinMs_, (unsigned long)js.slices,
                   (unsigned)js.peakBytes, (unsigned)js.largestBlock, (unsigned long)joins_, (unsigned long)remounts_);
-  } else if (file_ == File::Open && !s.on && join_.status() == autodj::Join::Status::Idle) {
+  } else if (file_ == File::Open && !s.on && join_.status() == autodj::Join::Status::Idle && block_ != Block::Reads) {
     Serial.println("[dj] join: none (Auto DJ off: the index joins when it is switched on); 0 B held");
   } else if (file_ == File::Open) {
     Serial.printf("[dj] join: %s, %s (%lu slices in %lu loop passes, %lu reads, %lu tracks hashed, %lu paths read)%s\n",
@@ -1115,6 +1285,7 @@ void AutoDj::status(const Env& env) {
                   (unsigned long)joinPasses_, (unsigned long)js.reads, (unsigned long)js.hashed,
                   (unsigned long)js.paths,
                   block_ == Block::Build    ? "; waits for the next library build"
+                  : block_ == Block::Reads  ? "; reads failed: waits for a library build, a remount or Dc"
                   : block_ == Block::Retry  ? "; tried again soon"
                   : block_ == Block::Update ? "; given back to the library update (again after its Live)"
                                             : "");

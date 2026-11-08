@@ -45,12 +45,18 @@ uint32_t FatFile::size() const { return static_cast<uint32_t>(f_size(&fil)); }
 bool FatFile::read(uint32_t offset, void* out, uint32_t n) {
   const uint32_t sz = size();
   if (offset > sz || n > sz - offset) return false;
-  if (static_cast<uint32_t>(f_tell(&fil)) != offset && f_lseek(&fil, offset) != FR_OK) return false;
+  if (static_cast<uint32_t>(f_tell(&fil)) != offset && f_lseek(&fil, offset) != FR_OK) {
+    readFailed_ = true;
+    return false;
+  }
   auto* p = static_cast<uint8_t*>(out);
   while (n) {
     const UINT want = n < kPiece ? n : kPiece;
     UINT got = 0;
-    if (f_read(&fil, p, want, &got) != FR_OK || got != want) return false;
+    if (f_read(&fil, p, want, &got) != FR_OK || got != want) {
+      readFailed_ = true;
+      return false;
+    }
     p += got;
     n -= got;
     if (n) taskYIELD();
@@ -134,6 +140,38 @@ FRESULT FatFs::openRead(const char* path, tagstore::File** out) {
   ++openNow_;
   *out = f;
   return FR_OK;
+}
+
+tagstore::File* FatFs::openRead(const char* path, bool* cardFailed) {
+  tagstore::File* f = nullptr;
+  const FRESULT r = openRead(path, &f);
+  // (FR_INT_ERR: FatFs read the card and found its records inconsistent: File::damaged().)
+  *cardFailed = r != FR_OK && r != FR_NO_FILE && r != FR_NO_PATH && r != FR_INT_ERR;
+  return f;
+}
+
+tagstore::Fs::Entry FatFs::entry(const char* path) {
+  Entry e;
+  tagstore::File* f = openRead(path, &e.cardFailed);
+  if (f) {
+    e.there = true;
+    e.firstCluster = static_cast<FatFile*>(f)->firstCluster();
+    close(f);
+  }
+  return e;
+}
+
+tagstore::Fs::Seen FatFs::look(const char* path) {
+  char p[300];
+  if (!fatPath(path, p, sizeof(p))) return Seen::Unknown;
+  FILINFO* fi = psramNew<FILINFO>();
+  if (!fi) return Seen::Unknown;
+  const FRESULT r = f_stat(p, fi);
+  const bool folder = r == FR_OK && (fi->fattrib & AM_DIR) != 0;
+  psramDelete(fi);
+  if (r == FR_OK) return folder ? Seen::Gone : Seen::There;
+  // (A name FatFs can't write can't be on the card either.)
+  return r == FR_NO_FILE || r == FR_NO_PATH || r == FR_INVALID_NAME ? Seen::Gone : Seen::Unknown;
 }
 
 bool FatFs::close(tagstore::File* file) {

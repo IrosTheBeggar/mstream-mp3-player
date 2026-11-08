@@ -92,6 +92,18 @@ void ScreenPower::turnOff(Why why) {
   set(Level::Off, why);
 }
 
+bool ScreenPower::powerKey(uint32_t nowMs, bool keepLit, bool panelAsleep) {
+  if (level_ == Level::Off || panelAsleep) return wake(nowMs, Why::PowerKey);
+  if (!keepLit) {
+    turnOff(Why::PowerKey);
+    return false;
+  }
+  if (!touchActs()) return wake(nowMs, Why::PowerKey);
+  activity(nowMs);
+  attend();
+  return false;
+}
+
 bool ScreenPower::step(uint32_t nowMs, bool keepLit, bool holdLit) {
   if (keepLit) {
     sinceMs_ = nowMs;

@@ -104,7 +104,7 @@ void indexLines(const State& s, char* l1, size_t n1, char* l2, size_t n2) {
       return;
     case Index::Found:
       uistr::trnf(l1, n1, S::autodj_status_found, s.rows, uistr::grouped(s.rows));
-      uistr::trf(l2, n2, S::autodj_status_found_sub);
+      if (!s.on) uistr::trf(l2, n2, S::autodj_status_found_sub);  // (on: no library yet to join)
       return;
     case Index::Reading: uistr::trf(l1, n1, S::autodj_status_reading); return;
     case Index::Bad: uistr::trf(l1, n1, S::autodj_status_bad); break;

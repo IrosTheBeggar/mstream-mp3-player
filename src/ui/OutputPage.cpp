@@ -184,14 +184,16 @@ void OutputPage::home() { ui_.list().scrollTo(0); }
 // stops, as after its 2 minutes; the row offers "Search again" on the wake.
 // A pairing under way keeps the screen lit, so it isn't one, and the
 // search itself holds a lit screen lit (pairSearching(): main.cpp's
-// ScreenControl::Hold): what turns a held screen off still does (the
-// sleep timer's pause, the console's Ps0). Before, it dimmed and went off
-// as ever: the dim screen swallowed the listener's taps as wakes, and the
-// screen going off stopped the search (2026-10-04: three tries to pair).
+// ScreenControl::Hold): what turns a held screen off still does (the PWR
+// key, the sleep timer's pause, the console's Ps0). Before, it dimmed and
+// went off as ever: the dim screen swallowed the listener's taps as wakes,
+// and the screen going off stopped the search (2026-10-04: three tries to
+// pair).
 void OutputPage::screenOff() {
   if (kind_ != PageKind::Pair || !search_.searching()) return;
   if (ui_.state().btLink.phase == BtLink::Phase::Pairing) return;
   search_.stop();
+  searchEnded_ = true;  // (the wake pushes the row as it was: "Searching", its spinner stopped)
   ui_.host().btPairScanPause();  // (the page stays: nothing else is tried until it closes)
   Serial.println("[ui] output: pair screen: the search stopped (the screen went off; tap Search again)");
 }
@@ -337,7 +339,7 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   } else if (kind_ == PageKind::Pair) {
     if (searchEnded_) {
       searchEnded_ = false;
-      list.refreshRow(0);  // "Search again" (tick() stopped it)
+      list.refreshRow(0);  // "Search again" (tick() or screenOff() stopped it)
     }
     if (static_cast<int32_t>(nowMs - nextScanMs_) >= 0) {
       nextScanMs_ = nowMs + kScanPollMs;
@@ -575,7 +577,7 @@ void OutputPage::drawLibraryRow(ListView::Row& r) {
   librarytext::libraryRowTitle(s.libraryTracks, title, sizeof(title));
   if (f.width(Font::Body, title) > pillX - 8 - x) librarytext::libraryRowTitle(s.libraryTracks, title, sizeof(title), 1);
   const bool can = s.libraryRecords && !s.libraryFenced;
-  if (!s.libraryRecords) {
+  if (!s.libraryRecords && !s.libraryHeld) {
     trf(sub, sizeof(sub), S::library_row_no_card);
   } else if (s.libraryFenced) {
     trf(sub, sizeof(sub), S::library_row_updating);
@@ -597,7 +599,8 @@ void OutputPage::drawLibraryRow(ListView::Row& r) {
 uint32_t OutputPage::librarySig(const AppState& s) {
   uint32_t h = 2166136261u;
   for (uint32_t v : {s.libraryTracks, s.libTransfer, s.libDevice, s.libNone,
-                     static_cast<uint32_t>(s.libraryRecords) | static_cast<uint32_t>(s.libraryFenced) << 1}) {
+                     static_cast<uint32_t>(s.libraryRecords) | static_cast<uint32_t>(s.libraryFenced) << 1 |
+                         static_cast<uint32_t>(s.libraryHeld) << 2}) {
     h = (h ^ v) * 16777619u;
   }
   return h;
@@ -607,6 +610,10 @@ uint32_t OutputPage::librarySig(const AppState& s) {
 // a big card).
 void OutputPage::onRescan() {
   const AppState& s = ui_.state();
+  if (s.libraryHeld) {
+    ui_.warn(tr(S::library_row_rescan_unread));
+    return;
+  }
   if (!s.libraryRecords) {
     ui_.warn(tr(S::library_row_rescan_no_card));
     return;
