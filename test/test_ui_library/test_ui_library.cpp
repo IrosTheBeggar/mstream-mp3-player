@@ -2451,6 +2451,10 @@ struct View {
     v.source = LibraryIndex::kFromTransfer;
     return *this;
   }
+  View& moods(uint16_t w) {
+    v.moods = w;
+    return *this;
+  }
   View& set(const char** p, size_t* n, const char* s) {
     *p = s;
     *n = strlen(s);
@@ -3393,6 +3397,263 @@ void test_console_sources() {
   LibraryIndex none;
   tagtext::sourcesText(tagtext::countSources(none), t, sizeof(t));
   TEST_ASSERT_EQUAL_STRING("0 tracks", t);
+}
+
+// gm and gm<hex> (docs/MOOD-FILTERS.md 9.3, 9.6 C7): m is the mood words'
+// letter; what follows it is a filter's q in 1-4 hex digits, and one that
+// isn't a filter (bits 11-15, voice 3, level 3: 5.4) is refused as g<n> past
+// 50,000 is.
+void test_console_mood_letters() {
+  using C = tagtext::Command;
+  TEST_ASSERT_EQUAL(C::Moods, tagtext::parse("m").command);
+  TEST_ASSERT_EQUAL_UINT32(tagtext::kMoodsReport, tagtext::parse("m").n);
+  TEST_ASSERT_EQUAL(C::Moods, tagtext::parse(" m ").command);
+  const tagtext::Parsed q = tagtext::parse("m127");  // Sad, Relaxed, Vocals, Danceable at Standard
+  TEST_ASSERT_EQUAL(C::Moods, q.command);
+  TEST_ASSERT_EQUAL_HEX32(0x127, q.n);
+  const moodfilter::Filter f = moodfilter::Filter::unpack(static_cast<uint16_t>(q.n));
+  TEST_ASSERT_EQUAL(moodfilter::Scale::Second, f.valence);
+  TEST_ASSERT_EQUAL(moodfilter::Scale::First, f.energy);
+  TEST_ASSERT_EQUAL(moodfilter::Voice::Vocals, f.voice);
+  TEST_ASSERT_EQUAL_UINT8(moodfilter::kDanceable, f.tags);
+  TEST_ASSERT_EQUAL(moodfilter::Level::Standard, f.level);
+  TEST_ASSERT_EQUAL_HEX32(0x1C0, tagtext::parse("m1c0").n);  // either case
+  TEST_ASSERT_EQUAL_HEX32(0x1C0, tagtext::parse("m1C0").n);
+  TEST_ASSERT_EQUAL_HEX32(0x127, tagtext::parse("m0127").n);  // four digits
+  // q 0 and a level alone are filters too, ones that filter nothing.
+  TEST_ASSERT_EQUAL(C::Moods, tagtext::parse("m0").command);
+  TEST_ASSERT_EQUAL_HEX32(0, tagtext::parse("m0").n);
+  TEST_ASSERT_EQUAL_HEX32(0x400, tagtext::parse("m400").n);
+  TEST_ASSERT_EQUAL_HEX32(0x5CF, tagtext::parse("m5cf").n);  // every group but the voice, at Loose
+  // Not filters, not hex, too long.
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("m800").command);    // bit 11
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("mffff").command);   // bits 11-15
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("m30").command);     // voice 3
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("m600").command);    // level 3
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("m12g").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("m0x127").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("m00127").command);  // five digits
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("m 127").command);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gm the mood words") != nullptr);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gm<hex>") != nullptr);
+}
+
+namespace {
+// Two words, each from mood scores in MOOD_COLUMNS order (tools/moodfilter.py
+// word_of()): 5.7's worked example, which filter 0x127 lets through, and a
+// happy, relaxed song it doesn't.
+constexpr uint16_t kFits = 0xB313;  // [.7012, .3104, .5803, .7, .2999, null, .4999, .29]
+constexpr uint16_t kMiss = 0x9B00;  // [.2, .8, .1, .7, .1, .1, .1, .1]
+
+// A library of every album shape the Albums list has, with words:
+//   A/One     3 of 4 analysed fit: fits
+//   A/Two     2 of 4: half, no
+//   A/Three   2 of 3 analysed (a 4th without a word): fits
+//   B/Unheard no word at all: 0 of 0, never
+//   B/        an artist's loose track that fits: 1 of 1
+//   C/Four    two discs' folders, 2 of 3: fits
+//   /         the root's loose track, which doesn't: 0 of 1
+// tools/synthtransfer.py's mood_fits() over the same paths: 10 of 19 tracks,
+// 4 of 7 albums (6 with an analysed track) under 0x127.
+void buildMoodLibrary(LibraryIndex& idx) {
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  auto add = [&](const char* path, uint16_t w) {
+    TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, idx.addRecord(path, View().title("Song").moods(w).transfer().v));
+  };
+  add("/music/A/One/01 - a.mp3", kFits);
+  add("/music/A/One/02 - b.mp3", kFits);
+  add("/music/A/One/03 - c.mp3", kFits);
+  add("/music/A/One/04 - d.mp3", kMiss);
+  add("/music/A/Three/01 - a.mp3", kFits);
+  add("/music/A/Three/02 - b.mp3", kFits);
+  add("/music/A/Three/03 - c.mp3", kMiss);
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, idx.addFile("/music/A/Three/04 - d.mp3"));
+  add("/music/A/Two/01 - a.mp3", kFits);
+  add("/music/A/Two/02 - b.mp3", kFits);
+  add("/music/A/Two/03 - c.mp3", kMiss);
+  add("/music/A/Two/04 - d.mp3", kMiss);
+  add("/music/B/05 - Loose.mp3", kFits);
+  add("/music/B/Unheard/01 - a.mp3", 0);
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, idx.addFile("/music/B/Unheard/02 - b.mp3"));
+  add("/music/C/Four/CD1/01 - a.mp3", kFits);
+  add("/music/C/Four/CD2/01 - b.mp3", kFits);
+  add("/music/C/Four/CD2/02 - c.mp3", kMiss);
+  add("/music/06 - Root.mp3", kMiss);
+  TEST_ASSERT_TRUE(idx.finish());
+}
+
+uint32_t albumAt(const LibraryIndex& idx, const char* folder) {
+  char path[256];
+  for (uint32_t a = 0; a < idx.albumCount(); ++a) {
+    idx.folderPath(idx.album(a).folder, path, sizeof(path));
+    if (strcmp(path, folder) == 0) return a;
+  }
+  TEST_FAIL_MESSAGE(folder);
+  return 0;
+}
+}  // namespace
+
+// gm<hex>'s passes over a hand-built index: the tracks by moodfilter::count()
+// over the words, the albums of albumsAZ() each by tally() over its
+// tracksOfAlbum() and majority(), as --check --mood-filter counts them.
+void test_console_mood_fits() {
+  static LibraryIndex idx;
+  buildMoodLibrary(idx);
+  TEST_ASSERT_TRUE(idx.hasMoods());
+  TEST_ASSERT_EQUAL_UINT32(19, idx.trackCount());
+  TEST_ASSERT_EQUAL_UINT32(7, idx.albumCount());
+  // gm's figures.
+  const tagtext::Moods m = tagtext::countMoods(idx);
+  TEST_ASSERT_EQUAL_UINT32(19, m.tracks);
+  TEST_ASSERT_EQUAL_UINT32(16, m.withWord);
+  TEST_ASSERT_EQUAL_size_t(19 * sizeof(uint16_t), m.blockBytes);
+  char t[200];
+  tagtext::moodsText(m, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("16 of 19 tracks with a word (84.2 %), block 38 B", t);
+  // 0x127.
+  const moodfilter::Filter f = moodfilter::Filter::unpack(0x127);
+  const tagtext::TrackFits tracks = tagtext::fittingTracks(idx, f);
+  TEST_ASSERT_EQUAL_UINT32(19, tracks.tracks);
+  TEST_ASSERT_EQUAL_UINT32(10, tracks.fit);
+  TEST_ASSERT_EQUAL_UINT32(16, tracks.analysed);
+  const tagtext::AlbumFits albums = tagtext::fittingAlbums(idx, f);
+  TEST_ASSERT_EQUAL_UINT32(7, albums.albums);
+  TEST_ASSERT_EQUAL_UINT32(4, albums.fit);
+  TEST_ASSERT_EQUAL_UINT32(6, albums.analysed);
+  struct Want {
+    const char* folder;
+    uint32_t pass, analysed;
+    bool fits;
+  };
+  const Want want[] = {{"/music/A/One", 3, 4, true},  {"/music/A/Two", 2, 4, false},
+                       {"/music/A/Three", 2, 3, true}, {"/music/B/Unheard", 0, 0, false},
+                       {"/music/B", 1, 1, true},       {"/music/C/Four", 2, 3, true},
+                       {"/music", 0, 1, false}};
+  for (const Want& w : want) {
+    moodfilter::Tally tally;
+    const uint32_t a = albumAt(idx, w.folder);
+    TEST_ASSERT_EQUAL_MESSAGE(w.fits, tagtext::albumFits(idx, a, f, &tally), w.folder);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(w.pass, tally.pass, w.folder);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(w.analysed, tally.analysed, w.folder);
+    TEST_ASSERT_EQUAL_MESSAGE(w.fits, tagtext::albumFits(idx, a, f), w.folder);  // (no tally asked)
+  }
+  TEST_ASSERT_TRUE((idx.album(albumAt(idx, "/music/B")).flags & LibraryIndex::kLoose) != 0);
+  // A filter that filters nothing lets every track and album through, words
+  // of 0 and an album with no analysed track included (4.1).
+  for (uint16_t q : {0x000, 0x200, 0x400}) {
+    const moodfilter::Filter none = moodfilter::Filter::unpack(q);
+    TEST_ASSERT_EQUAL_UINT32(19, tagtext::fittingTracks(idx, none).fit);
+    TEST_ASSERT_EQUAL_UINT32(7, tagtext::fittingAlbums(idx, none).fit);
+  }
+  // An index with no words: every track's is 0, so only such a filter does.
+  LibraryIndex plain;
+  TEST_ASSERT_TRUE(plain.begin("/music"));
+  plain.addFile("/music/A/One/01 - a.mp3");
+  plain.addFile("/music/A/One/02 - b.mp3");
+  plain.addFile("/music/B/03 - c.mp3");
+  TEST_ASSERT_TRUE(plain.finish());
+  TEST_ASSERT_FALSE(plain.hasMoods());
+  tagtext::moodsText(tagtext::countMoods(plain), t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("no mood data: none of 3 tracks has a word, block 0 B", t);
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::fittingTracks(plain, f).fit);
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::fittingTracks(plain, f).analysed);
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::fittingAlbums(plain, f).fit);
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::fittingAlbums(plain, f).analysed);
+  TEST_ASSERT_EQUAL_UINT32(3, tagtext::fittingTracks(plain, moodfilter::Filter()).fit);
+  TEST_ASSERT_EQUAL_UINT32(2, tagtext::fittingAlbums(plain, moodfilter::Filter()).fit);
+  // Nothing built: nothing counted.
+  LibraryIndex empty;
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::countMoods(empty).tracks);
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::fittingTracks(empty, moodfilter::Filter()).tracks);
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::fittingAlbums(empty, moodfilter::Filter()).albums);
+}
+
+// gm<hex>'s filter line, as --check's filter_name() says it (its output
+// for these q, tools/synthtransfer.py); gt's tail and word lines.
+void test_console_mood_texts() {
+  char t[200];
+  const struct {
+    uint16_t q;
+    const char* text;
+  } names[] = {
+      {0x127, "valence sad; energy relaxed; voice vocals; tags danceable at Standard (need 2, under 2)"},
+      {0x000, "no group at Standard (need 2, under 2): filters nothing"},
+      {0x200, "no group at Strict (need 3, under 1): filters nothing"},
+      {0x400, "no group at Loose (need 1, under 3): filters nothing"},
+      {0x1C0, "tags acoustic, party, danceable at Standard (need 2, under 2)"},
+      {0x015, "valence happy; energy relaxed; voice instrumental at Standard (need 2, under 2)"},
+      {0x02A, "valence neutral; energy neutral; voice vocals at Standard (need 2, under 2)"},
+      {0x03F, "no group at Standard (need 2, under 2): filters nothing"},  // voice 3: no filter
+  };
+  for (const auto& n : names) {
+    tagtext::filterText(n.q, t, sizeof(t));
+    TEST_ASSERT_EQUAL_STRING(n.text, t);
+  }
+  tagtext::filterText(0x39F, t, sizeof(t));  // Sad, Aggressive, Instrumental, Party, Danceable at Strict
+  TEST_ASSERT_EQUAL_STRING(
+      "valence sad; energy aggressive; voice instrumental; tags party, danceable at Strict (need 3, under 1)", t);
+  // The words.
+  tagtext::wordText(kFits, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("0xB313: valence sad 2, energy relaxed 3, instrumental 0, acoustic 1, party 0, danceable 3",
+                           t);
+  tagtext::wordText(kMiss, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING(
+      "0x9B00: valence happy 3, energy relaxed 3, instrumental 0, acoustic 0, party 0, danceable 0", t);
+  tagtext::wordText(0xE400, t, sizeof(t));  // every head NULL
+  TEST_ASSERT_EQUAL_STRING(
+      "0xE400: valence NULL, energy NULL, instrumental NULL, acoustic 0, party 0, danceable 0", t);
+  tagtext::wordText(0, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("0x0000: no row", t);
+  // The tails: 5.7's, taken; no server row; one a reader refuses (the
+  // fixtures' mptg-minor-1, flag bits 0xA8); none.
+  const uint8_t tail[8] = {0x03, 0x3A, 0x46, 0x1D, 0x31, 0xFF, 0x46, 0x00};
+  TEST_ASSERT_TRUE(moodfilter::tailValid(tail));
+  tagtext::tailText(tail, true, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("03 3A 46 1D 31 FF 46 00, taken: 0xB313: valence sad 2, energy relaxed 3, instrumental 0, "
+                           "acoustic 1, party 0, danceable 3",
+                           t);
+  const uint8_t zeros[8] = {};
+  tagtext::tailText(zeros, false, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("00 00 00 00 00 00 00 00: no server row (word 0)", t);
+  uint8_t bad[8];
+  memset(bad, 0xAB, sizeof(bad));
+  TEST_ASSERT_FALSE(moodfilter::tailValid(bad));
+  tagtext::tailText(bad, false, t, sizeof(t));
+  TEST_ASSERT_TRUE(strncmp(t, "AB AB AB AB AB AB AB AB: REFUSED", 32) == 0);
+  // 5.7's tail without its PRESENT bit (byte 72 is 0, the rest isn't): a
+  // refused tail, not no server row (2.6.4's Valid).
+  const uint8_t unflagged[8] = {0x00, 0x3A, 0x46, 0x1D, 0x31, 0xFF, 0x46, 0x00};
+  TEST_ASSERT_FALSE(moodfilter::tailValid(unflagged));
+  tagtext::tailText(unflagged, false, t, sizeof(t));
+  TEST_ASSERT_TRUE_MESSAGE(strncmp(t, "00 3A 46 1D 31 FF 46 00: REFUSED", 32) == 0, t);
+  TEST_ASSERT_NULL(strstr(t, "no server row"));
+  // 5.7's tail with bit 2 for bit 1 (aggressive beat relaxed, happy beat
+  // sad): the energy side reads aggressive.
+  const uint8_t loud[8] = {0x05, 0x3A, 0x46, 0x1D, 0x31, 0xFF, 0x46, 0x00};
+  TEST_ASSERT_TRUE(moodfilter::tailValid(loud));
+  TEST_ASSERT_EQUAL_HEX16(0x9713, moodfilter::wordOfTail(loud));
+  tagtext::tailText(loud, true, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("05 3A 46 1D 31 FF 46 00, taken: 0x9713: valence happy 2, energy aggressive 3, "
+                           "instrumental 0, acoustic 1, party 0, danceable 3",
+                           t);
+  tagtext::wordText(0x8600, t, sizeof(t));  // energy aggressive 2, the rest bucket 0 (no side at 0)
+  TEST_ASSERT_EQUAL_STRING("0x8600: valence 0, energy aggressive 2, instrumental 0, acoustic 0, party 0, danceable 0",
+                           t);
+  tagtext::tailText(nullptr, false, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("none (a stride under 80 carries none)", t);
+  // Small buffers: cut, never past them.
+  char small[12];
+  TEST_ASSERT_EQUAL_size_t(11, tagtext::tailText(tail, true, small, sizeof(small)));
+  TEST_ASSERT_EQUAL_STRING("03 3A 46 1D", small);
+  TEST_ASSERT_EQUAL_size_t(11, tagtext::wordText(kFits, small, sizeof(small)));
+  TEST_ASSERT_EQUAL_size_t(11, tagtext::filterText(0x127, small, sizeof(small)));
+  tagtext::Moods m;
+  m.tracks = 19412;
+  m.withWord = 17859;
+  m.blockBytes = 38824;
+  TEST_ASSERT_EQUAL_size_t(11, tagtext::moodsText(m, small, sizeof(small)));
+  tagtext::moodsText(m, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("17,859 of 19,412 tracks with a word (92.0 %), block 38,824 B", t);
 }
 
 // The Dance tab's bottom line while a computer drives the dancer (the USB
@@ -4367,5 +4628,8 @@ int main(int, char**) {
   RUN_TEST(test_console_wave_letters);
   RUN_TEST(test_console_tag_dump);
   RUN_TEST(test_console_sources);
+  RUN_TEST(test_console_mood_letters);
+  RUN_TEST(test_console_mood_fits);
+  RUN_TEST(test_console_mood_texts);
   return UNITY_END();
 }

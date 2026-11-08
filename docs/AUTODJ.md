@@ -916,6 +916,8 @@ At 19,410 rows and 19,412 tracks, all in PSRAM:
 | ... since, the folders' states too, 10 B a folder (MEASURED 2026-10-15 at the synthetic card's 2,477 folders: 275,952 + 24,770) | 300,722 | |
 | `Dn`: a copy of the engine, 16 KB of tallies, 4 B a pick (READ) | about 35 KB + 4 B a pick | While a `Dn` runs |
 | `Db`: 4 B a read and one slot buffer (READ) | | While a `Db` runs |
+| Not Auto DJ's: the library's mood words, 2 B a track in `library.idx` v7 (docs/MOOD-FILTERS.md 5.4; MEASURED 2026-11-06 at 19,413 tracks, 17,954 with a word) | 38,826 | From boot, on a card whose T carries mood tails |
+| ... PSRAM's largest free block with them, against a control in the same script (MEASURED 2026-11-06, 14.3) | -32,768 at every step: the boot off and joined, each update joined, `Dc` | |
 
 - Internal RAM: main.cpp's pointer (READ). The pick allocates nothing; its
   frames are about 420 bytes on the loop stack (READ, the engine's note).
@@ -1535,6 +1537,50 @@ Host: `test_autodj_join` fails without the fix (the rejoin NO PSRAM at
 19,412 tracks and a largest free block of 303,104 B), and with each part of
 it taken out in turn (the spacer's size, the fall back, the spacer's and the
 blocks' rounding in the margin, the second spacer's test, `probe()`'s).
+
+**The mood block (2026-11-06).** The same Core2 and spare card, now
+19,413 tracks (3 added by hand), T with mood tails for 17,954 of them
+(docs/MOOD-FILTERS.md 9.6, Run C), so `library.idx` v7 holds a 38,826 B
+block of mood words. The Auto DJ index is the one measured above (19,410
+rows, restamped with `--mpdj`). One script, run on a control firmware
+whose builder never sets the word (16 B smaller) and on the mood
+firmware (`af72b50` with the mood filters' S0-S2): a load boot, `z`,
+`D0`, `D`, `D1`, `D`, `gw`, `gb` stopped, `Dc`, `Dh` the 320 kbps bench
+MP3 and `gb`, `Dh` the bench FLAC and `gb`, `Dh` an Opus. PSRAM's
+largest free block, joined unless said (MEASURED):
+
+| Step | Control | Moods | |
+|---|---|---|---|
+| Load boot, Auto DJ off | 819,188 | 786,420 | -32,768 |
+| Load boot, joined | 655,348 | 622,580 | -32,768 |
+| Update stopped | 327,668 | 294,900 | -32,768 |
+| `Dc` | 327,668 | 294,900 | -32,768 |
+| Update during the 320 kbps MP3 | 327,668 | 294,900 | -32,768 |
+| Update during the FLAC | 294,900 | 262,132 | -32,768 |
+
+The mood block costs exactly one 32 KB class, 32,768 B, at each step.
+No update underran or printed `[heap] FAILED`. The updates' builds took
+20.6 / 22.1 s stopped (control / moods), 42.2 / 45.0 s with the MP3 and
+28.7 / 30.2 s with the FLAC. The lowest free in the stopped update's
+join was 180,876 / 175,032 B. After the FLAC the Opus (2 s) opened its
+128,023 B of buffers and played, 101 packets, 0 skipped, on both. The
+script without `D0` and `D1` read 294,900 B on the mood firmware too.
+Against docs/MOOD-FILTERS.md 9.5's rule: inside the modelled -106,496 /
+-40,960 / +49,152 B, every joined figure of the script over 245,764 B,
+no redesign.
+
+Heap figures are compared only within one scripted sequence. The
+control's own are not the 2026-11-02 figures above (327,668 B, not
+335,860 B, after a stopped update; 294,900 B, not 155,636 B, with the
+FLAC): a largest free block depends on the steps before it (7.4). Not
+A/B'd, since it needs a fresh commit on each firmware: the first walk
+after a new commit, then `gb`, read 180,212 B with the block. On the
+card without tails (docs/MOOD-FILTERS.md 9.6, Run B) the same path read
+221,172 B at the join while its walk still ran, 335,860 B after it.
+
+Host: in `test_autodj_join`'s model heap with the real block, the boot's
+largest free block goes from 753,652 B to 720,884 B (-32,768 B); after
+the update, joined, it is 360,436 B in both, pinned in the test.
 
 ### 14.4 The card's root (2026-11-02)
 

@@ -10,6 +10,9 @@
 #include <cstring>
 
 #include "LibraryText.h"
+#include "MoodFilter.h"
+#include "QueueView.h"
+#include "TagText.h"
 #include "app/AutoDjContract.h"
 #include "app/Psram.h"
 #include "app/Version.h"
@@ -364,10 +367,11 @@ bool Library::beginCard() {
   }
   if (b.built) {
     const LibraryBuilder::Result& r = b.build;
-    Serial.printf("[lib] built from the records in %.0f ms: %lu tracks, %lu from the transfer's, %lu from the "
-                  "device's, %lu by their paths (%lu for the scan)%s%s; peak %u B of PSRAM\n",
+    Serial.printf("[lib] built from the records in %.0f ms: %lu tracks, %lu from the transfer's (%lu with moods), "
+                  "%lu from the device's, %lu by their paths (%lu for the scan)%s%s; peak %u B of PSRAM\n",
                   b.buildMs, (unsigned long)index_->trackCount(), (unsigned long)r.fromTransfer,
-                  (unsigned long)r.fromDevice, (unsigned long)r.fromPath, (unsigned long)r.pending,
+                  (unsigned long)r.withMoods, (unsigned long)r.fromDevice, (unsigned long)r.fromPath,
+                  (unsigned long)r.pending,
                   r.restarted ? "; restarted without a file that failed its checks" : "",
                   update_->transferBad() ? "; T left out" : "", (unsigned)index_->memory().buildPeak);
   }
@@ -545,10 +549,12 @@ void Library::report() const {
                   stats_.saveMs, stats_.deviceTxtMs, stats_.deviceTxtWritten ? " (rewritten)" : "");
     if (stats_.built) {
       const LibraryBuilder::Result& r = stats_.build;
-      Serial.printf("[index] the builder: %lu from the transfer's records, %lu from the device's, %lu by their paths "
-                    "(%lu for the scan), %lu dropped, %lu ignored; T %s, D %s%s; its own memory %u B\n",
-                    (unsigned long)r.fromTransfer, (unsigned long)r.fromDevice, (unsigned long)r.fromPath,
-                    (unsigned long)r.pending, (unsigned long)r.dropped, (unsigned long)r.ignored,
+      Serial.printf("[index] the builder: %lu from the transfer's records (%lu with moods), %lu from the device's, "
+                    "%lu by their paths (%lu for the scan), %lu dropped, %lu ignored; T %s, D %s%s; its own memory "
+                    "%u B\n",
+                    (unsigned long)r.fromTransfer, (unsigned long)r.withMoods, (unsigned long)r.fromDevice,
+                    (unsigned long)r.fromPath, (unsigned long)r.pending, (unsigned long)r.dropped,
+                    (unsigned long)r.ignored,
                     r.transferUsed ? "used" : cardcontract::whyName(r.transferWhy),
                     r.deviceUsed ? "used" : cardcontract::whyName(r.deviceWhy),
                     r.restarted ? " (restarted)" : "", (unsigned)r.workBytes);
@@ -582,10 +588,10 @@ void Library::report() const {
                   stats_.walk.ms, stats_.cacheNote, stats_.buildWalkMs, stats_.addMs, stats_.finishMs, stats_.saveMs);
   }
   Serial.printf("[index] PSRAM: %u B held (%.1f B/track): strings %u, tracks %u, artists %u, albums %u, folders %u, "
-                "views %u; build peak %u B; PSRAM free fell %ld B\n",
+                "views %u, moods %u; build peak %u B; PSRAM free fell %ld B\n",
                 (unsigned)m.total, t ? static_cast<float>(m.total) / t : 0.0f, (unsigned)m.strings,
                 (unsigned)m.tracks, (unsigned)m.artists, (unsigned)m.albums, (unsigned)m.folders, (unsigned)m.views,
-                (unsigned)m.buildPeak, (long)stats_.psramUsed);
+                (unsigned)m.moods, (unsigned)m.buildPeak, (long)stats_.psramUsed);
   Serial.printf("[index] internal RAM: free %lu B before, %+ld B after, lowest %lu B during; the index object is in "
                 "PSRAM (%u B)\n",
                 (unsigned long)stats_.internalFreeBefore, (long)stats_.internalDelta,
@@ -602,4 +608,72 @@ void Library::report() const {
     if (n) Serial.printf(" %c%lu", b == 0 ? '#' : 'A' + b - 1, (unsigned long)n);
   }
   Serial.println();
+}
+
+// ---- gm: the mood words (docs/MOOD-FILTERS.md 5.4, 9.3) ----
+
+void Library::moodReport(uint32_t q) {
+  // Behind the fence the index is the build's (3.4.2): nothing read.
+  if (update_ && update_->fenced()) {
+    Serial.println("[moods] the library is updating: nothing counted (gm again once it's done)");
+    return;
+  }
+  const LibraryIndex* idx = index();
+  if (!idx || !idx->ready()) {
+    Serial.println("[moods] no library (no card, or the build failed): no mood data");
+    return;
+  }
+  char t[200];
+  tagtext::moodsText(tagtext::countMoods(*idx), t, sizeof(t));
+  Serial.printf("[moods] %s\n", t);
+  if (q == tagtext::kMoodsReport || !idx->hasMoods()) return;  // (no block: "no mood data", said)
+  const uint16_t bits = static_cast<uint16_t>(q);
+  tagtext::filterText(bits, t, sizeof(t));
+  Serial.printf("[moods] filter 0x%03X: %s\n", static_cast<unsigned>(bits), t);
+  // The two passes, each timed: the tracks over the words, the albums over
+  // albumsAZ() (MODELLED 8-35 ms at 20k, 9.6's run C).
+  const moodfilter::Filter f = moodfilter::Filter::unpack(bits);
+  int64_t t0 = esp_timer_get_time();
+  const tagtext::TrackFits tracks = tagtext::fittingTracks(*idx, f);
+  const int64_t trackUs = esp_timer_get_time() - t0;
+  t0 = esp_timer_get_time();
+  const tagtext::AlbumFits albums = tagtext::fittingAlbums(*idx, f);
+  const int64_t albumUs = esp_timer_get_time() - t0;
+  char a[16], b[16], c[16];
+  Serial.printf("[moods] tracks that fit: %s of %s (%s analysed), the pass %lu us\n",
+                queueview::grouped(tracks.fit, a, sizeof(a)), queueview::grouped(tracks.tracks, b, sizeof(b)),
+                queueview::grouped(tracks.analysed, c, sizeof(c)), static_cast<unsigned long>(trackUs));
+  Serial.printf("[moods] albums that fit: %s of %s (%s with an analysed track), the pass %lu us\n",
+                queueview::grouped(albums.fit, a, sizeof(a)), queueview::grouped(albums.albums, b, sizeof(b)),
+                queueview::grouped(albums.analysed, c, sizeof(c)), static_cast<unsigned long>(albumUs));
+  // The first few of each, in the index's order (A-Z, and by id): --check
+  // lists them all, in the card's byte order.
+  constexpr uint32_t kShown = 8;
+  char path[TrackCatalog::kMaxPath];
+  uint32_t shown = 0;
+  const LibraryIndex::Span az = idx->albumsAZ();
+  for (uint32_t i = 0; i < az.count && shown < kShown; ++i) {
+    moodfilter::Tally tally;
+    if (!tagtext::albumFits(*idx, az[i], f, &tally)) continue;
+    const LibraryIndex::Album& al = idx->album(az[i]);
+    idx->folderPath(al.folder, path, sizeof(path));
+    Serial.printf("[moods]   album %lu of %lu: %s%s\n", static_cast<unsigned long>(tally.pass),
+                  static_cast<unsigned long>(tally.analysed), path,
+                  (al.flags & LibraryIndex::kLoose) ? " (loose tracks)" : "");
+    ++shown;
+  }
+  if (albums.fit > shown) {
+    Serial.printf("[moods]   ... and %s more albums\n", queueview::grouped(albums.fit - shown, a, sizeof(a)));
+  }
+  shown = 0;
+  for (uint32_t id = 0; id < tracks.tracks && shown < kShown; ++id) {
+    const uint16_t w = idx->moodWord(id);
+    if (!moodfilter::matches(w, f)) continue;
+    idx->trackPath(id, path, sizeof(path));
+    Serial.printf("[moods]   track 0x%04X: %s\n", static_cast<unsigned>(w), path);
+    ++shown;
+  }
+  if (tracks.fit > shown) {
+    Serial.printf("[moods]   ... and %s more tracks\n", queueview::grouped(tracks.fit - shown, a, sizeof(a)));
+  }
 }

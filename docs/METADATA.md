@@ -22,8 +22,9 @@ contract kit, is in `lib/core/CardContract*`, `CardContainer`, `CardTags`,
 `test/fixtures/card/` (made by `tools/card_fixtures.py`, a second
 implementation, and frozen). N2, `library.idx` v6 and the builder, is in
 `lib/core/LibraryIndex`, `LibraryBuilder` and `NameKey`, host-tested
-(3.4.4 says what it decided); the firmware builds v6 from the records
-since N10. N3, the queue's remap through `queue.txt`,
+(3.4.4 says what it decided); the firmware builds it from the records
+since N10 (v7, with the mood words, since the mood filters' S2: 3.4.3).
+N3, the queue's remap through `queue.txt`,
 is in `lib/core/QueueRemap` (with `QueueModel::release()`, the exact
 trim and `queuetext::read()`'s pre-sized blocks), built into
 `QueueStore::remap()` and not flashed. The queue's cap of 5,000 tracks
@@ -752,9 +753,9 @@ generation) and noted it in `/.player`.
     shorter record than it knows, it treats the missing tail as zeros.
     A field may instead be whole or absent, and says so: MPTG's mood
     tail (2.6.4) is read only from RECS rows of 80 bytes or more, never
-    from a shorter row filled out with zeros. Knowing a longer record never raises the
-    smallest stride a reader accepts: that stays the v1 stride (MPTG
-    RECS: 72), so every file of an older minor still reads.
+    from a shorter row filled out with zeros. Knowing a longer record
+    never raises the smallest stride a reader accepts: that stays the v1
+    stride (MPTG RECS: 72), so every file of an older minor still reads.
   - So **every field added in a minor version MUST use all-zero bytes to
     mean "absent or unknown"**.
   - **Every minor addition MUST be re-derivable from the card and the
@@ -3285,16 +3286,16 @@ labels; device times are to be measured in milestones L0-L5 (part 6).
 
 | `library.idx` | Records on the card | At boot | Then, in the background |
 |---|---|---|---|
-| v6, hard inputs match, and the build-at-boot marker `/.player/build.req` present (a build was deferred: 3.4.2) | any | Compact the journals if any. **Build from the records** behind the boot screen, on a fresh heap, as in the next row; the marker goes after the save. Out of PSRAM even here: **load it** as the next row does (stale, but a library), the marker goes, and that session's short memory checks don't write it again (as built: 3.9). | The validation walk (3.2.3). |
-| v6, hard inputs match, no marker | any | **Load it:** 1.8 MB, 1.1-1.5 s at 20k (ESTIMATED). No walk. | The validation walk (3.2.3). If the soft inputs differ (the scan went on after the last build), resume the scan; rebuild at its end. |
-| v6, the transfer's identity differs (a transfer happened, or `/.mstream` is gone or damaged) | T valid, or D only | Compact the journals if any (0-3 s). **Build from T (if valid) and D** behind the boot screen, a new T's listing standing in for the walk (2.9): about 7-9 s at 20k (ESTIMATED from UI-SPIKE's measured rates: 3.5-5 s of reads, 2.2-2.6 s of adds, about 1.3 s to finish), then the save. Without T, D's rows for files T covered turn Pending. | The walk confirms; files it finds changed go Pending; the scan reads the Pending files. |
-| v6, built from a transfer (its identity isn't zeros), the root **unread**, whatever the marker | any | **Load it.** Nothing is built over it: taken for no transfer, the read would build from D alone, every file T lists under its path, and the scan would set out on them all. A marker stays. | None: no walk, no scan and no update step this session (`Decision::holdJobs`, `CardTasks::begin()`). The next boot asks again: a fault that lasts holds every boot, until a disk check or a PC mends or removes the file. Covers, Auto DJ and the waveform bar go on, the last two reading the root again (`docs/AUTODJ.md` 6.6, `docs/WAVEFORM-INDEX.md` 11). |
-| v6, whatever its identity | D or its journals **unread** | **Load it.** Nothing is built, whatever the marker: the marker stays. | None, as the row above: `Decision::holdJobs`. Taken for no D, the walk and the scan would start the records over, and their compaction replace them. |
-| v1-v5, missing or corrupt | D or its journals **unread** | **`/music` walked for this session**, by its paths, nothing saved: a build without D leaves out every file T doesn't list. | None. |
+| v7, hard inputs match, and the build-at-boot marker `/.player/build.req` present (a build was deferred: 3.4.2) | any | Compact the journals if any. **Build from the records** behind the boot screen, on a fresh heap, as in the next row; the marker goes after the save. Out of PSRAM even here: **load it** as the next row does (stale, but a library), the marker goes, and that session's short memory checks don't write it again (as built: 3.9). | The validation walk (3.2.3). |
+| v7, hard inputs match, no marker | any | **Load it:** 1.8 MB, 1.1-1.5 s at 20k (ESTIMATED; 1,504 ms at 19,413 tracks with no mood words, MEASURED 2026-11-06, 3.5). No walk. | The validation walk (3.2.3). If the soft inputs differ (the scan went on after the last build), resume the scan; rebuild at its end. |
+| v7, the transfer's identity differs (a transfer happened, or `/.mstream` is gone or damaged) | T valid, or D only | Compact the journals if any (0-3 s). **Build from T (if valid) and D** behind the boot screen, a new T's listing standing in for the walk (2.9): about 7-9 s at 20k (ESTIMATED from UI-SPIKE's measured rates: 3.5-5 s of reads, 2.2-2.6 s of adds, about 1.3 s to finish), then the save. Without T, D's rows for files T covered turn Pending. | The walk confirms; files it finds changed go Pending; the scan reads the Pending files. |
+| v7, built from a transfer (its identity isn't zeros), the root **unread**, whatever the marker | any | **Load it.** Nothing is built over it: taken for no transfer, the read would build from D alone, every file T lists under its path, and the scan would set out on them all. A marker stays. | None: no walk, no scan and no update step this session (`Decision::holdJobs`, `CardTasks::begin()`). The next boot asks again: a fault that lasts holds every boot, until a disk check or a PC mends or removes the file. Covers, Auto DJ and the waveform bar go on, the last two reading the root again (`docs/AUTODJ.md` 6.6, `docs/WAVEFORM-INDEX.md` 11). |
+| v7, whatever its identity | D or its journals **unread** | **Load it.** Nothing is built, whatever the marker: the marker stays. | None, as the row above: `Decision::holdJobs`. Taken for no D, the walk and the scan would start the records over, and their compaction replace them. |
+| v1-v6, missing or corrupt | D or its journals **unread** | **`/music` walked for this session**, by its paths, nothing saved: a build without D leaves out every file T doesn't list. | None. |
 | **Unread** | D there and read, listing the card (T in use, or walked), and the root read | The journals compacted if any, then **built from the records for this session alone**: nothing saved, `library.idx` as it is, a marker kept. It stands only as the whole library: T or D left out, or journals left, and `/music` is walked instead. | None. |
 | **Unread** | Anything else (no D, D not listing the card, the root unread) | **`/music` walked for this session**, nothing saved. | None. |
-| an older rules version, v1-v5 (today's is v5), missing or corrupt | some | Build from the records. No walk. (A read the card fails in that build: `/music` walked for the session, below.) | The walk. |
-| v1-v5, missing or corrupt | none: a card-reader card, or this firmware's first boot on a 0.7 card | **Walk now**, with a progress line, into a path-named index and a D of all-Pending entries: about 9-11 s of walk at 20k with the sector cache (89-148 s without), plus about 3.5-4 s to build; about 70 ms on today's card. | The scan (3.3). |
+| an older rules version, v1-v6 (0.12.0's is v6), missing or corrupt | some | Build from the records. No walk. (A read the card fails in that build: `/music` walked for the session, below.) | The walk. |
+| v1-v6, missing or corrupt | none: a card-reader card, or this firmware's first boot on a 0.7 card | **Walk now**, with a progress line, into a path-named index and a D of all-Pending entries: about 9-11 s of walk at 20k with the sector cache (89-148 s without), plus about 3.5-4 s to build; about 70 ms on today's card. | The scan (3.3). |
 | any | NoMemory | As today: no library; the built-in tracks still play. | none |
 
 Any other library takes these rows with the root unread, as a card with no
@@ -4219,9 +4220,11 @@ is about 3.3-3.6 KB (ESTIMATED), and the compaction is the deepest again
 - **The console:** `g` (today's report plus the scan state), `gs` (the
   scan's status), `gr` (rescan tags), `gr!` (rescan everything, transfer
   files included, as a diagnostic), `gt</music/...>` (one file's records
-  from both sources and the winner), `gw` (walk now), `gb` (build now),
-  `gv` (Verify: qfp of every software-owned file against T). `g0` stays
-  "walk and rebuild".
+  from both sources and the winner; T's mood tail and the index's mood
+  word too), `gw` (walk now), `gb` (build now), `gv` (Verify: qfp of
+  every software-owned file against T), `gm` (the mood words: the block
+  and the tracks with one) and `gm<hex>` (the tracks and albums a mood
+  filter lets through: 3.4.3, 3.7). `g0` stays "walk and rebuild".
 - **Texts:** the placeholders in `lib/core/UiText.h` and the empty state
   ("Put folders in /music/Artist/Album/") are reworded: tags are read now.
 
@@ -4966,7 +4969,7 @@ the UI's "Try again"; the boot (3.2.2). Today's `rebuildLibrary()` in
 `queue.txt` instead of its in-PSRAM text copy (a doubling `MemorySink`),
 which fails at about 15k entries (metascan section 6.2).
 
-#### 3.4.3 `library.idx` v6
+#### 3.4.3 `library.idx` v7
 
 | Record | Size | Fields |
 |---|---|---|
@@ -4975,10 +4978,16 @@ which fails at about 15k entries (metascan section 6.2).
 | **Artist** | 20 B, unchanged | `name` is the display name |
 | **Folder** | 36 B, unchanged | |
 
-- **The header:** magic MPLI, `kVersion` 6 (5 today), the record sizes,
-  `rulesVersion`, the inputs (hard: the transfer's identity and whether
-  T was present; soft: D's headerCrc and journal sequence), a
-  `buildStamp`, the counts, the A-Z buckets, the FNV trailer as today.
+- **The header:** magic MPLI, `kVersion` 7 (6 from N2's records to
+  0.12.0; 5 before them), the record sizes, `rulesVersion`, the inputs
+  (hard: the transfer's identity and whether T was present; soft: D's
+  headerCrc and journal sequence), a `buildStamp`, the counts, the A-Z
+  buckets, the FNV trailer as before. `kCountWords` is 24: h[17]
+  the string bytes, h[18]-h[21] the four counts, h[22] the mood words (0,
+  or the track count) and h[23] the tracks whose word isn't 0, then the
+  buckets. The blocks follow in memory's order, the strings, the four
+  record tables, the views and last the mood words, then the sum. v7's
+  records are v6's.
 - **The loose-tracks album** keeps the name "" and gets `kLoose`:
   `SleepTimer`'s end-of-album rule and the "(loose tracks)" rows test
   that "" today, and switch to the flag. Every place that names an album
@@ -5020,18 +5029,27 @@ which fails at about 15k entries (metascan section 6.2).
 - **`load()`:** Loaded (compare the inputs: a hard mismatch, or the
   build-at-boot marker (3.4.2), rebuilds from the records at boot; a soft
   one keeps the index and rebuilds at the
-  scan's end); Outdated (versions 1-5, or an older `rulesVersion`: build
-  from the records, else walk); Corrupt (an older firmware sees v6 this
-  way: it rebuilds its own v5 from a walk and ignores `/.mstream` and
-  D; this firmware then treats that v5 as Outdated: one rebuild each
-  way, nothing lost); NoMemory as today.
+  scan's end); Outdated (versions 1-6, or an older `rulesVersion`: build
+  from the records, else walk; a v6 file, which has no mood words, costs
+  one rebuild); Corrupt (a short, damaged or foreign file, a newer
+  version among them: 0.12.0 and the
+  other v6 firmware see v7 this way and build their own v6 from the
+  records, else by a walk; a v5 firmware sees v6 and v7 so too and
+  rebuilds its own v5 from a walk, ignoring `/.mstream` and D; this
+  firmware reads either as Outdated: one rebuild each way, nothing lost;
+  the mood words' rules below); NoMemory as before.
 - **The views** keep each artist's and each album's sort key (the string
   the A-Z lists sort it by: its elected sort tag, else its name), so a
   loaded index can give the rail, a row's letter and the jump grid the key
   the order and the buckets use (`artistSortKey()`, `albumSortKey()`).
-- **The mood word** (v7, MOOD-FILTERS.md 5.4; its stage S2 builds it): a
-  u16 per track id, made of the tail (2.6.4) when T's record is the one
-  chosen (2.9), else 0.
+- **The mood word** (v7; MOOD-FILTERS.md 5.4, built in its stage S2): a
+  u16 per track id (`moodWord()`), made of the mood tail (2.6.4) of T's
+  record when that record is the one chosen (2.9) and its tail valid,
+  else 0. The builder takes it from the chosen record only: a track named
+  by D's record or by its path has none, and so has every track of a
+  build that restarted from D after T failed its checks (D's records
+  never give one, whatever their stride; `LibraryBuilder::Result`'s
+  `withMoods` counts the tracks given one).
 
   | Bits | Field |
   |---|---|
@@ -5048,14 +5066,21 @@ which fails at about 15k entries (metascan section 6.2).
   up. A scale's field is `side << 2 | bucket`, the side being its order
   bit (1: sad, aggressive); bucket 0 stores 0, and 4 means NULL. The other
   four store their bucket: a NULL tag stores 0, which never holds, and a
-  NULL instrumental sets bit 14. Word 0 is no row; with no word on any
-  track there is no block (0 bytes). The words go last, before the sum;
-  the header grows to `kCountWords` 24, word 22 the mood words (0 or the
-  track count) and word 23 the tracks with a word. `computeStamp` is
-  unchanged: a word doesn't change what a track id means. Version 6 is
-  Outdated to that firmware (one rebuild); 7 is Corrupt to older firmware,
-  which rebuilds its own, so a unit that alternates firmware rebuilds at
-  every boot (no data risk). 2 B a track: 40 KB at 20k.
+  NULL instrumental sets bit 14 (`moodfilter::wordOfTail()`). Word 0 is
+  no row, or no valid tail. The block starts at the first track with a
+  word, sized as the track table, the tracks before it 0, and `finish()`
+  trims it with the others; with no word on any track there is no block
+  (0 bytes, h[22] 0), and `clear()` always drops it. The words go last,
+  before the sum (the header above). `computeStamp` is unchanged: a word
+  doesn't change what a track id means. 2 B a track: 38,826 B at 19,413
+  tracks (MEASURED 2026-11-06), 40,000 B at 20k (MEASURED-HOST; 3.5).
+  `load()` finds the file Corrupt when h[22] is neither 0 nor the track
+  count, when h[23] is over h[22], or when h[22] isn't 0 and h[23] is (a
+  writer of no word on any track writes no block); a short block is
+  Corrupt and one it can't allocate NoMemory, as for the other blocks. A
+  v6 file is Outdated to this firmware (one rebuild); v7 is Corrupt to
+  older firmware, which rebuilds its own, so a unit that alternates
+  firmware rebuilds at every boot (no data risk).
 - **The filter** (`q`, 11 bits; MOOD-FILTERS.md 5.4) reads the words:
   bits 0-1 valence (0 none, 1 Happy, 2 Neutral, 3 Sad), 2-3 energy (0
   none, 1 Relaxed, 2 Neutral, 3 Aggressive), 4-5 voice (0 none, 1
@@ -5073,15 +5098,24 @@ which fails at about 15k entries (metascan section 6.2).
   passes no filter that sets a group. That is mStream's predicate
   (`src/api/mood-filter.js`) at its three bars, on / mirror .7/.3, .5/.5
   and .3/.7, exactly: `moods.json` (2.17, item 9) checks every predicate
-  on every row against its SQL. An album (a folder) matches when
-  `2 × pass > analysed` over its tracks on this card, so one with no
-  analysed track never does.
+  on every row against its SQL. Under a filter that sets a group, an
+  album (a folder) matches when `2 × pass > analysed` over its tracks on
+  this card, so one with no analysed track never does; under one that
+  sets none, every album matches, as every track does
+  (`moodfilter::Tally::unfiltered`).
 - **Size at 20k (ESTIMATED):** tracks 640 KB, albums (about 1.8k) 50 KB,
   artists 14 KB, folders (about 2.6k) 94 KB, views about 200 KB (the sort
   keys about 10 KB of it), strings
   about 0.8 MB (today's names about 0.68 MB plus about 0.12 MB of tag
   strings): **about 1.75-1.85 MB, 88-92 B per track** (75-79 B today,
-  MEASURED).
+  MEASURED). The mood words add 2 B a track. MEASURED-HOST (2026-11-06,
+  20k synthetic tracks built from T's records): 1,821,680 B, 91.1 B a
+  track, with tails (MODELLED 90.6), against 1,781,680 B, 89.1 B,
+  without; the build peak 2,031,879 B against 1,991,879 B: the words add
+  exactly 40,000 B to each. MEASURED on the device (2026-11-06, 19,413
+  tracks, 17,954 with a word): 1,748,476 B, 90.1 B a track, against
+  1,709,650 B, 88.1 B, from the same card's T records without tails: the
+  38,826 B block (3.5).
 
 #### 3.4.4 As built (N2)
 
@@ -5161,14 +5195,14 @@ counts):
 | Item | MB | Basis |
 |---|---|---|
 | Free with the UI up, today (77-track card) | **2.77-2.90** | MEASURED (dev.log `psram=`) |
-| `library.idx` v6 | −1.75 to −1.85 | 3.4.3 |
+| `library.idx` v7 | −1.75 to −1.85; −0.04 more with mood words | 3.4.3. The mood words: 2 B a track, one block, only when a track has one: 40,000 B at 20k (MEASURED-HOST), 38,826 B at 19,413 tracks (MEASURED 2026-11-06) |
 | The queue, full (the cap: 5,000 entries), with its undo snapshot | −0.12 | 12 B per entry, twice (`QueueModel`). With no saved queue the boot queues the library's first 5,000 (`queueEverything`), so a full queue is the *default* on a big new card; `assign()` takes no snapshot (0.06 MB), and the first edit after it adds one. A whole-library queue of 20k was −0.48 (−0.96 untrimmed) before the cap |
 | AutoDJ: u16 maps, filters, 7 cached slots | −0.16 to −0.17 | MPDJ v2's engine, AUTODJ-INDEX.md 11.6 (the v1 draft's estimate was −0.17 to −0.33). As built (docs/AUTODJ.md): the join's maps and filters 160 KB at 20k, only while Auto DJ is on (155,284 B MEASURED at 19,410 tracks, 2026-10-13); the engine's one block, 19,016 B (its 7 slots in it), the glue's few KB and its `FIL`'s 4.1 KB from the boot, on or off |
 | The sector cache | −0.13 | 3.2.4: 256 sectors, 135,168 B (3.2.7: 0.06 MB more than the 128 first planned) |
 | The queue's tracks by their paths | 0 unless the library leaves queued files out | 3.2.2: their paths in 8 KB blocks, about as much as those tracks' names would cost in the index that lacks them |
 | `DurationBook` | −0.04, or 0 once lengths come from the index | `lib/core/QueueView.h` |
 | The card worker's job, only while one runs (one at a time) | −0.08 to −0.12 | the largest job: the compaction since 2026-10-09 (115 KB: its 4 KB section buffers, 1 KB run buffers, D's 8 KB; 66 KB before, 3.3.7), then the walk (about 110 KB: the 64 KB scratch, KnownD's 16 KB, DFLD's 8 KB buffer, the 2 KB Δ histogram, the journal's write buffer). The scan: its 4 KB buffer, the record, the `FIL`, a 100-record chunk, the resume set (about 60 KB), and its View (about 74 KB at 32 chunks, 53 KB before). The doubtful files go to `walk.jnl`, not RAM (3.2.3) |
-| **Headroom** | **about 0.34 to 0.66** | positive in the worst case since the queue's cap (it was about −0.16 to 0.29 with a whole-library queue); the sector cache's 256 sectors took 0.06 MB of it (3.2.7); 0.20 to 0.65 with the v1 draft's AutoDJ estimate |
+| **Headroom** | **about 0.34 to 0.66** | positive in the worst case since the queue's cap (it was about −0.16 to 0.29 with a whole-library queue); the sector cache's 256 sectors took 0.06 MB of it (3.2.7); 0.20 to 0.65 with the v1 draft's AutoDJ estimate; 0.04 less on a card with mood words |
 
 **What that forces:**
 
@@ -5264,6 +5298,50 @@ counts):
   rebuild, taken again when the new table fits, so only a load asks for
   the arena whole: a boot's, on a fresh heap, and a failed step's, in the
   hole the boot's arena left: 3.9.)
+- **The mood words** (3.4.3) are one block more, 2 B a track, and none on
+  a card without them. MEASURED 2026-11-06 on a Core2 v1.3 and the
+  synthetic card (19,413 tracks, Auto DJ's index at 19,410 rows;
+  MOOD-FILTERS.md 9.6's runs A-E):
+  - **Before any tail** (T with no records, the v6 `library.idx` found
+    Outdated): one rebuild from D at the first boot, 11,193 ms, peak
+    1,888,702 B; the next boot loaded it in 1,504 ms. PSRAM's largest
+    free block 819,188 B with Auto DJ off and 655,348 B joined, as before.
+  - **T's records, no tails** (72-byte rows): built from T at the boot in
+    15,777 ms, the index 1,709,650 B. A `gb` straight after that commit
+    deferred to the next boot ("the track table 1213 KB fits neither the
+    old one's block (606 KB) nor the largest free one (799 KB)"): until
+    the walk at a commit merges, the update reserves for T's records and
+    D's together (`LibraryUpdate::trackSlots()`, not changed by the mood
+    words). After `gw` the update built in 20.5 s, peak 1,888,702 B, and
+    the largest block joined after the walk was 335,860 B, as
+    docs/AUTODJ.md measured.
+  - **With tails** (17,954 of 19,413 tracks with a server row, 92.5 %; T
+    5,177,713 B, 80-byte rows, minor 1): built from T at the boot in
+    14,438 ms, peak 1,927,528 B; the index 1,748,476 B, its block
+    38,826 B. `gm` and `--check` agree on the coverage, and `gm<hex>` and
+    `--check --mood-filter` on every track and album (3.7; `gm127`: 405
+    tracks, 25 of 1,707 albums). Over four filters the tracks' pass took
+    5,046-11,981 µs and the albums' 14,069-30,990 µs, idle (MODELLED 2-5
+    ms and 8-35 ms).
+  - **Against a control firmware** whose builder sets no word (16 B
+    smaller), on the card with tails, one script on each (MOOD-FILTERS.md
+    9.6, runs D and E): the block costs exactly one 32 KB class of the
+    largest free block at every step, −32,768 B: 786,420 B against
+    819,188 B at a load boot with Auto DJ off, 622,580 against 655,348
+    joined, 294,900 against 327,668 for an update with nothing playing,
+    after `Dc` and for an update during the 320 kbps MP3, 262,132
+    against 294,900 for one during the FLAC; inside the modelled
+    −106,496 / −40,960 / +49,152 B, and every joined figure of the script
+    over S1's 245,764 B (MOOD-FILTERS.md 9.5). No update logged an underrun or a
+    `[heap] FAILED`; the builds took 22.1 s against 20.6 s with nothing
+    playing, 45.0 against 42.2 s with the MP3, 30.2 against 28.7 s with
+    the FLAC. The lowest free during the join of the update with nothing
+    playing: 175,032 B against 180,876 B. After the FLAC an Opus opened
+    its 128,023 B of buffers and played, 101 packets, 0 skipped, on both.
+    Not compared (it needs a fresh commit for each firmware): the first
+    walk after a new commit, then `gb`: 180,212 B with the words; without,
+    run B read 221,172 B at the join while its walk still ran, 335,860 B
+    after.
 - **Nothing is read whole** into PSRAM by the walk, the scan or the
   compaction: their temporaries are fixed buffers (above), whatever the
   card holds.
@@ -5286,8 +5364,9 @@ answered):
 
 The ceiling was about 25k tracks with a full queue (metascan section
 6.2). Since the cap the queue no longer grows with the library; the
-index, AutoDJ's maps and `DurationBook` do (about 100 B a track): about
-23k-27k tracks by the table above (ESTIMATED), before the levers.
+index, AutoDJ's maps and `DurationBook` do (about 100 B a track, 2 B
+more with mood words): about 23k-27k tracks by the table above
+(ESTIMATED, before the mood words), before the levers.
 
 **Flash, IRAM, internal RAM** (metascan section 6.1): TagScan about 11.4
 KB of code and 4.0 KB of rodata (MEASURED with the ESP32 toolchain), 0
@@ -5297,7 +5376,11 @@ wrapper 1-2 KB. The app is 2.3 MB in a 6.3 MB slot: flash is no
 constraint. IRAM is untouched, and the `cache_guard` build check still
 applies to any layout shift. (MEASURED at N10, 3.8: the glue and every
 part it links added 76.2 KB of code and 16.7 KB of rodata, 472 B of
-internal DRAM and no IRAM; the app is 2.48 MB, 41% of its slot.)
+internal DRAM and no IRAM; the app is 2.48 MB, 41% of its slot.) The
+mood filters' S0-S2 (MEASURED-HOST 2026-11-06, the core2 build against
+main af72b50): flash 4,311,563 B to 4,318,451 B, +6,888 B (68.6 %, the
+app 70 % of its slot), `MoodFilter` 1,476 B of code with no IRAM and no
+allocation; RAM 58,480 B and IRAM 5,161 B left, both unchanged.
 
 **Card time** at 20k (ESTIMATED): reading T's FOLD, RECS and STRS, about
 3.9 MB, takes 2.3-3.3 s, only during a build; AutoDJ's join reads DJRF,
@@ -5431,6 +5514,26 @@ decided where 3.6 and 5.4 left room:
   `TagConsole::Jobs` hooks (and a `state` hook for the scan's line) that
   N10 and N12 fill through `Spike::tags()`; until then each says there is
   no worker and changes nothing. `g?` (anything else) lists them.
+  **The mood words** (since the mood filters' S2, MOOD-FILTERS.md 9.6
+  C7; the counting and the lines in `TagText`, host-tested): `g`'s PSRAM
+  line adds `moods N` (the words' block, 3.4.3), its builder line `(N
+  with moods)` beside the transfer's records, and a `[tags] moods:` line
+  gives `gm`'s figures. `gt` adds a line on T's record's tail as its bytes
+  stand, valid or not, with RECS's stride and the minor and what a reader
+  makes of it (`[tags]   mood tail (records of 80 bytes, minor 1):
+  03 42 50 11 4F 0E 4D 00, taken: 0xB333: ...`; 8 zero bytes "no server
+  row", a tail 2.6.4 refuses "REFUSED", a stride under 80 "none"), and one
+  on the index's word for the track (`[tags]   its mood word: ...`, with
+  the word a build now would take when T's record is the pick and its
+  word differs). `gm` prints the block and the coverage (`17,954 of
+  19,413 tracks with a word (92.5 %), block 38,826 B`; with no block `no
+  mood data: ...`). `gm<hex>` takes a filter's `q` (3.4.3) in 1-4 bare
+  hex digits of either case and refuses one that isn't a filter (`gm800`);
+  it prints the filter's groups and level, the tracks and the albums that
+  fit (an album is one of the Albums list's, `albumsAZ()`), each pass's
+  microseconds, and the first 8 of each, as `tools/synthtransfer.py
+  --check --mood-filter` counts them off the card. Behind the update
+  step's fence it says so and counts nothing (`Library::moodReport()`).
 - **Proven on the host:** the rows and headers of a tagged library and of
   a path-only one (`test_library_rows_from_tags`, `_from_paths`), the
   dividers (`test_disc_dividers`), the catalog and its overlay

@@ -27,9 +27,9 @@ namespace libraryboot {
 enum class Saved : uint8_t {
   Missing,   // no file (and no whole library.tmp to take its place)
   Corrupt,   // unreadable, foreign, or a newer firmware's (peek() or load())
-  Outdated,  // versions 1-5, or an older rulesVersion
-  Matches,   // v6, built against the card's transfer identity (matches())
-  Differs,   // v6, another identity: a transfer happened, or /.mstream went or was damaged
+  Outdated,  // an older version (1-6), or an older rulesVersion
+  Matches,   // today's version (7), built against the card's transfer identity (matches())
+  Differs,   // today's version, another identity: a transfer happened, or /.mstream went or was damaged
   Unread,    // the card failed a read of it (or of library.tmp, alone): nothing is known of it
 };
 

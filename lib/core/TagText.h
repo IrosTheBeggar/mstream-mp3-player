@@ -9,21 +9,31 @@
 #include "CardTags.h"
 #include "LibraryBuilder.h"
 #include "LibraryIndex.h"
+#include "MoodFilter.h"
 
 // The console's tag commands (docs/METADATA.md 3.3.6; milestone N9): what
 // `g` takes, and the lines it prints about a tag record and the library's
 // sources. Portable, host-tested (test_ui_library); the firmware's side is
-// app/TagConsole, which reads the card.
+// app/TagConsole, which reads the card, and app/Library (gm).
 //
-//   g             the library's report, and where its names came from
+//   g             the library's report, where its names came from, and its
+//                 mood words
 //   g0            walk /music and build again (as before)
 //   g<n>          a synthetic library of n tracks for the labs (as before)
 //   gs            the scan's status: the device's records, the transfer's,
 //                 the index's sources; gs0 starts the card worker's figures
 //                 again (the waits, the steps, its stack, internal RAM: L3's
 //                 per-condition figures)
-//   gt</music/..> one file: its tags read now, its records in D and T,
+//   gt</music/..> one file: its tags read now, its records in D and T (T's
+//                 mood tail as its bytes stand, valid or not, and its word),
 //                 which one the builder takes (2.9), and the index's names
+//                 and mood word
+//   gm            the index's mood words (docs/MOOD-FILTERS.md 5.4, 9.3):
+//                 the block, the tracks with a word, the coverage
+//   gm<hex>       the tracks and the albums filter q lets through (5.4's 11
+//                 bits, 1-4 hex digits: gm127 is Sad, Relaxed, Vocals,
+//                 Danceable at Standard), and each pass's time; a q that
+//                 isn't a filter (bits 11-15, voice 3, level 3) is refused
 //   gr            Rescan tags: the device's own records read again
 //   gr!           ... the transfer's files' too (a diagnostic)
 //   gw, gb, gv    walk now, build now, verify T's files (the card worker's
@@ -58,13 +68,16 @@ enum class Command : uint8_t {
   Cache,      // gc, gc0, gc1, gc2: `n` the switch (kCacheReport, 0, 1, 2)
   Bench,      // gl, glw: `n` 1 with the walks
   Wave,       // gw?, gw-, gw=<...>, gw#<...>: `path` from the letter after the w
+  Moods,      // gm; gm<hex>: `n` the filter's q (moodfilter::valid())
   Bad,        // anything else (g<n> out of 1-50,000 included)
 };
 // Cache's `n` for gc alone: the counts, nothing switched.
 constexpr uint32_t kCacheReport = 9;
+// Moods' `n` for gm alone: the words' figures, no filter (above any q).
+constexpr uint32_t kMoodsReport = 0x10000;
 struct Parsed {
   Command command = Command::Bad;
-  uint32_t n = 0;            // Synthetic's; Cache's, Bench's, Status's and Build's
+  uint32_t n = 0;            // Synthetic's; Cache's, Bench's, Status's, Build's and Moods'
   const char* path = "";     // Dump's: the rest of the argument, from its first non-space; Wave's: as above
 };
 // `arg`: what followed the 'g', trimmed (nullptr: "").
@@ -113,5 +126,57 @@ Sources countSources(const LibraryIndex& index);
 // transfer's records, 400 from the device's, 10 by their paths (10 for
 // the scan)".
 size_t sourcesText(const Sources& s, char* buf, size_t size);
+
+// ---- moods (gm, and g's and gt's lines: docs/MOOD-FILTERS.md 5.3, 5.4, 9.3) ----
+// The words as tools/synthtransfer.py --check reads them off the card, so
+// the two can be set side by side (its lines, the numbers grouped).
+
+// The index's mood words: their block, the tracks with one.
+struct Moods {
+  uint32_t tracks = 0;
+  uint32_t withWord = 0;  // moodTracks()
+  size_t blockBytes = 0;  // memory().moods: 0 when no track has a word
+};
+Moods countMoods(const LibraryIndex& index);
+// "17,859 of 19,412 tracks with a word (92.0 %), block 38,824 B"; with no
+// block "no mood data: none of 19,412 tracks has a word, block 0 B".
+size_t moodsText(const Moods& m, char* buf, size_t size);
+// Filter q's groups and level, as --check's filter_name(): "valence sad;
+// energy relaxed; voice vocals; tags danceable at Standard (need 2, under
+// 2)"; a level alone "no group at Strict (need 3, under 1): filters
+// nothing". An invalid q reads as 0 (Filter::unpack()).
+size_t filterText(uint16_t q, char* buf, size_t size);
+
+// gm<hex>'s two passes, as --check --mood-filter counts them (4.1). A track
+// fits by moodfilter::count() over the words. An album is one of
+// albumsAZ(), as the Albums list shows them (its folder, deeper folders in
+// it, or an artist's or the root's loose tracks), and fits by
+// moodfilter::tally() over its tracksOfAlbum() and majority(). Without
+// words every track's is 0: only an inactive filter lets anything through.
+struct TrackFits {
+  uint32_t tracks = 0, fit = 0;
+  uint32_t analysed = 0;  // the tracks with kAnalysed
+};
+TrackFits fittingTracks(const LibraryIndex& index, const moodfilter::Filter& f);
+// One album: its tally into `t` (may be null), and whether it fits.
+bool albumFits(const LibraryIndex& index, uint32_t album, const moodfilter::Filter& f,
+               moodfilter::Tally* t = nullptr);
+struct AlbumFits {
+  uint32_t albums = 0, fit = 0;
+  uint32_t analysed = 0;  // the albums with an analysed track
+};
+AlbumFits fittingAlbums(const LibraryIndex& index, const moodfilter::Filter& f);
+
+// A record's mood tail (bytes 72-79, 5.3) as its bytes stand, and what a
+// reader made of it (`taken`: File::moodTail()'s verdict): "03 3A 46 1D 31
+// FF 46 00, taken: 0xB313: ..." (wordText()); 8 zero bytes "...: no server
+// row (word 0)"; anything else "...: REFUSED ...". nullptr `tail`: the
+// record has none (its RECS stride under 80): "none (...)".
+size_t tailText(const uint8_t* tail, bool taken, char* buf, size_t size);
+// A word in its fields, each a bucket (0 under 30, 1 for 30-49, 2 for
+// 50-69, 3 for 70 and up) and a scale's side: "0xB313: valence sad 2,
+// energy relaxed 3, instrumental 0, acoustic 1, party 0, danceable 3";
+// "0x0000: no row".
+size_t wordText(uint16_t word, char* buf, size_t size);
 
 }  // namespace tagtext

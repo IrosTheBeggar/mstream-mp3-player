@@ -65,6 +65,13 @@ public:
   TrackCatalog::Unlisted& unlisted() { return unlisted_; }
   // The [index] report (console g).
   void report() const;
+  // The [moods] lines (console gm, tagtext): `q` tagtext::kMoodsReport, the
+  // index's mood words (their block, the tracks with one); else a filter's
+  // q (moodfilter::valid()), the tracks and the albums it lets through and
+  // each pass's time, as tools/synthtransfer.py --check --mood-filter
+  // counts them (docs/MOOD-FILTERS.md 9.6, C7). Behind the update step's
+  // fence it says so and counts nothing.
+  void moodReport(uint32_t q);
 
   // ---- the card's records (the SD card only; nullptr on the flash) ----
   // The metadata is up: a mounted card, its FatFs drive known, the store

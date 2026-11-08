@@ -794,10 +794,11 @@ optional argument and Enter:
 |---|---|
 | `u` (`u0`-`u3`, `us`, `uh<ms>`, `ut<ms>`) | input lab: button and glass-touch logging, tab target practice, button practice, haptic ticks, percentile summary |
 | `w` (`w0`-`w3`, `wv` `wf` `wh` `wc` `wd` `wk` `wg` `wm` `wp` `ws`) | scroll lab: a flick-scrolled library list, interactive or a 60 s stress while audio plays (hardware scroll and 30 fps by default) |
-| `g` (`g0`, `g<n>`) | library index: report (and where its names came from: tags or paths), `g0` walk the card and update the library (the queue follows by path; on a card the walk and the update run in the background), or a synthetic library of n tracks for the labs (the player keeps the real one) |
-| `gs` (`gs0`), `gt</music/...>`, `gr` (`gr!`, `gw`, `gb`, `gb!`, `gv`) | the tags ([docs/METADATA.md](docs/METADATA.md) 3.3.6): `gs` the scan's status (the card worker: what it waited for, each job's steps, its stack; the device's records in `/.player/tags.bin` by status, its journals, the transfer's root and tags file, an unfinished transfer; the sector cache), the two tags files checked a piece a loop pass (the player stays live; their lines follow, about 32 s later with the screen lit and 60 s dark on a 19,412-track card, 52-75 s while tracks play; after a compaction under way, which `gs` waits for and says so), `gs0` starts its waits, steps, stack and RAM figures again; `gt` one file: its tags read now, its records in both files, which one a build takes, and the names the library has for it; `gr` Rescan tags (`gr!` the transfer's files too, a diagnostic), `gw` walk the card now, `gb` build the library now (`gb!` defer it to the next boot, as a short memory would), `gv` check the transfer's files' fingerprints; `g?` lists them |
+| `g` (`g0`, `g<n>`) | library index: report (and where its names came from: tags or paths; its mood words' bytes, the tracks built with one), `g0` walk the card and update the library (the queue follows by path; on a card the walk and the update run in the background), or a synthetic library of n tracks for the labs (the player keeps the real one) |
+| `gs` (`gs0`), `gt</music/...>`, `gr` (`gr!`, `gw`, `gb`, `gb!`, `gv`) | the tags ([docs/METADATA.md](docs/METADATA.md) 3.3.6): `gs` the scan's status (the card worker: what it waited for, each job's steps, its stack; the device's records in `/.player/tags.bin` by status, its journals, the transfer's root and tags file, an unfinished transfer; the sector cache), the two tags files checked a piece a loop pass (the player stays live; their lines follow, about 32 s later with the screen lit and 60 s dark on a 19,412-track card, 52-75 s while tracks play; after a compaction under way, which `gs` waits for and says so), `gs0` starts its waits, steps, stack and RAM figures again; `gt` one file: its tags read now, its records in both files (the transfer's with its mood tail as the bytes stand, valid or not, and what a reader takes), which one a build takes, and the names and the mood word the library has for it; `gr` Rescan tags (`gr!` the transfer's files too, a diagnostic), `gw` walk the card now, `gb` build the library now (`gb!` defer it to the next boot, as a short memory would), `gv` check the transfer's files' fingerprints; `g?` lists them |
 | `gc` (`gc0`, `gc1`, `gc2`), `gl` (`glw`) | the card ([docs/METADATA.md](docs/METADATA.md) 6.3.1): `gc` the PSRAM sector cache's counts (hits, misses, the card's reads and their time), `gc0` off and `gc1` on (until restart, for A/B measurements), `gc2` on with every hit checked against the card (each prints the counts so far, then starts them again); `gl` the card's bench (its time per sector, the opens of a file under `/music`'s 1st, 353rd and 703rd entries with and without the cache), `glw` also the walks of `/music` (minutes on a big card; stop the music first) |
 | `gw?` (`gw=<99 digits>`, `gw#<480 hex>`, `gw-`) | the waveform index ([docs/WAVEFORM-INDEX.md](docs/WAVEFORM-INDEX.md)): `gw?` its state: the file, the track wanted, the record, the reads (hits, misses, damaged, the probes a read, the job's time); `gw=` a test shape with no card, a digit 0-9 for each of Now Playing's 99 columns, on whatever plays until `gw-`; `gw#` the same from 240 bars in hex, through the reduction. `gw` alone is the walk, above |
+| `gm` (`gm<hex>`) | the mood words, a track's from the transfer's mood scores ([docs/MOOD-FILTERS.md](docs/MOOD-FILTERS.md) 5.4, 9.3): `gm` how many of the library's tracks have one, and the block's bytes (or "no mood data"); `gm<hex>` the tracks and the albums the filter `<hex>` lets through (bare hex, 1-4 digits: `gm127` Sad, Relaxed, Vocals, Danceable at Standard), each pass's time in us and the first 8 of each, to set beside `tools/synthtransfer.py --check --mood-filter`; a value that isn't a filter (`gm800`) is refused, and while the library updates it says so and counts nothing |
 | `e` (`e1`-`e5`) | font probe: list rows in FreeSans (folded) and the UI's VLW font, timed (efont only in a build with `-DUI_SPIKE_EFONT=1`) |
 | `j` (`j<n>`, `jw<n>`, `ja`) | thumbnail probe: cover.jpg to 40x40 / 80x80, decoder RAM, PSRAM and .565 caches |
 
@@ -965,8 +966,12 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       fault tried again
   SheetLayout         Where a sheet sits (3 rows, or 4 from y 40)
   LibraryIndex, LibraryBuilder, LibraryBoot
-                      The library index (library.idx v6), its build from
+                      The library index (library.idx v7), its build from
                       the tag records, the boot's decision
+  MoodFilter          mStream's mood filter over the card's data
+                      (docs/MOOD-FILTERS.md 4.1, 5.3, 5.4): a T record's
+                      mood tail, a track's word in library.idx, a
+                      filter's 11 bits, the song and album rules
   CardWalk, TagStore, TagStoreWalk, TagScan, TagRules, CardRoot, CardJobs
                       The card's check, the device's tag records and their
                       journals, the tag reader, the transfer's root, the
@@ -1010,9 +1015,10 @@ src/                  Core2 firmware
                       ListScroller (hardware scroll); LcdLock (times how long
                       the LCD holds the SPI bus)
   app/                Library (the index at boot: load, build from the
-                      tag records, or walk), CardWorker + CardTasks (the
-                      card worker: covers, the walk, the tag scan, the
-                      update step), TagConsole (the g commands), QueueStore
+                      tag records, or walk; the console's gm),
+                      CardWorker + CardTasks (the card worker: covers, the
+                      walk, the tag scan, the update step), TagConsole
+                      (the other g commands), QueueStore
                       (the queue on the card, its position in NVS), Psram,
                       SerialConsole, Diagnostics, DanceMode, Screenshot, Haptics,
                       PowerProbe + PowerLab (power measurement and its knobs),
@@ -1074,8 +1080,17 @@ tools/                make_test_audio.py; version.py (build pre-script: the
                       rule in plain Python, the engine's reference; it
                       writes test/fixtures/autodj, --check; tests: python
                       -m unittest discover -s tools -p "test_autodj_ref.py");
+                      moodfilter.py + test_mood_vectors.py (the mood
+                      filters' tail, word and rules in plain Python,
+                      docs/MOOD-FILTERS.md 5.3, 5.4; the tests hold
+                      test/fixtures/card/moods.json to mStream's own
+                      predicate, run in SQLite: python -m unittest
+                      discover -s tools -p "test_mood_vectors.py");
                       synthtransfer.py + test_synthtransfer.py (a test
-                      card's /.mstream: a tags file with no records, an
+                      card's /.mstream: a tags file with no records (with
+                      --moods one a track, read from the card, with
+                      made-up mood scores; --check --mood-filter Q counts
+                      what filter Q lets through, as gm<hex>), an
                       AutoDJ index, synthetic or given, with --waves a
                       waveform index of made-up shapes, and the root
                       written last, so a synthcard.py tree or any FAT32
