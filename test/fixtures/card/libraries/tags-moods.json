@@ -1,0 +1,390 @@
+{
+ "format": "MPTG",
+ "file": "tags-moods.bin",
+ "generation": 44,
+ "cardId": "0x5EEDC0DE0A1B2C3D",
+ "minor": 1,
+ "source": 2,
+ "parserVersion": 1,
+ "readRules": 1,
+ "producer": "mstream-terminal 0.13.0",
+ "note": "A transfer's tags file with mood scores (2.6.4): RECS rows of 80 bytes, minor 1. A record's 'scores' are mStream's eight in moods.json's 'heads' order, null where a head has none, or null for no server row; each writer derives the tail from them.",
+ "records": [
+  {
+   "path": "Artist A/scored.flac",
+   "size": 3000,
+   "fatTime": "0x5D6290A5",
+   "durationMs": 210000,
+   "qfp": "0x6530578D3039C8F4",
+   "known": 131071,
+   "container": 2,
+   "scores": [
+    0.81,
+    0.29,
+    0,
+    0.7,
+    0.1234,
+    1,
+    0.57,
+    0.58
+   ],
+   "tags": {
+    "title": [
+     "scored"
+    ],
+    "artist": [
+     "Artist A"
+    ]
+   },
+   "note": "every head scored: 0 and 1 as integers; 0.29, 0.57 and 0.58 are 29, 57 and 58 (a plain floor gives 28, 56, 57)",
+   "ledger": {
+    "serverPath": "music/Artist A/scored.flac",
+    "mstreamId": 300,
+    "albumId": 20,
+    "artistId": 6,
+    "audioHash": "b462e0f011071bba988eb97d30313dee",
+    "fileHash": "1fb3cbe51a8e944f6b1c74a126597509",
+    "serverModified": 1792500000000,
+    "serverSize": 3000,
+    "createdAt": 1792500000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "Artist A/null-head.flac",
+   "size": 3041,
+   "fatTime": "0x5D6290A7",
+   "durationMs": 211000,
+   "qfp": "0xCB7057CE726D3644",
+   "known": 131071,
+   "container": 2,
+   "scores": [
+    0.81,
+    0.29,
+    null,
+    0.7,
+    0.1234,
+    1,
+    0.57,
+    0.58
+   ],
+   "tags": {
+    "title": [
+     "null-head"
+    ],
+    "artist": [
+     "Artist A"
+    ]
+   },
+   "note": "sad NULL: valence 255, no order bit; the rest as scored.flac",
+   "ledger": {
+    "serverPath": "music/Artist A/null-head.flac",
+    "mstreamId": 301,
+    "albumId": 20,
+    "artistId": 6,
+    "audioHash": "8ea29c102e10b79b7b07a29142737b60",
+    "fileHash": "b6e15f6c91f6438d09eff6fe7e6785f3",
+    "serverModified": 1792500000001,
+    "serverSize": 3041,
+    "createdAt": 1792500000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "Artist A/all-null.flac",
+   "size": 3082,
+   "fatTime": "0x5D6290A9",
+   "durationMs": 212000,
+   "qfp": "0x2737EE189431A663",
+   "known": 131071,
+   "container": 2,
+   "scores": [
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   "tags": {
+    "title": [
+     "all-null"
+    ],
+    "artist": [
+     "Artist A"
+    ]
+   },
+   "note": "a row of NULLs: PRESENT, every value 255 (not no row)",
+   "ledger": {
+    "serverPath": "music/Artist A/all-null.flac",
+    "mstreamId": 302,
+    "albumId": 20,
+    "artistId": 6,
+    "audioHash": "0c0857670eda3bc3315cec2a715bc915",
+    "fileHash": "93697f66a2083ebd75229a57ea24d030",
+    "serverModified": 1792500000002,
+    "serverSize": 3082,
+    "createdAt": 1792500000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "Artist A/no-row.flac",
+   "size": 3123,
+   "fatTime": "0x5D6290AB",
+   "durationMs": 213000,
+   "qfp": "0x227E992B696364C0",
+   "known": 131071,
+   "container": 2,
+   "scores": null,
+   "tags": {
+    "title": [
+     "no-row"
+    ],
+    "artist": [
+     "Artist A"
+    ]
+   },
+   "note": "no server row: 8 zero bytes",
+   "ledger": {
+    "serverPath": "music/Artist A/no-row.flac",
+    "mstreamId": 303,
+    "albumId": 20,
+    "artistId": 6,
+    "audioHash": "671a76aa591362512dba3926376056a2",
+    "fileHash": "d9f4364977de4c2935b13cd258bc296c",
+    "serverModified": 1792500000003,
+    "serverSize": 3123,
+    "createdAt": 1792500000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "Artist A/song.flac",
+   "size": 3164,
+   "fatTime": "0x5D6290AD",
+   "durationMs": 214000,
+   "qfp": "0x7AFB9AB35DC73165",
+   "known": 131071,
+   "container": 2,
+   "scores": [
+    0.7012,
+    0.3104,
+    0.5803,
+    0.7,
+    0.2999,
+    null,
+    0.4999,
+    0.29
+   ],
+   "tags": {
+    "title": [
+     "song"
+    ],
+    "artist": [
+     "Artist A"
+    ]
+   },
+   "note": "MOOD-FILTERS.md 5.7's worked example: 03 3A 46 1D 31 FF 46 00",
+   "ledger": {
+    "serverPath": "music/Artist A/song.flac",
+    "mstreamId": 304,
+    "albumId": 20,
+    "artistId": 6,
+    "audioHash": "1349db44ff8a9a73ad24f9e3778e162d",
+    "fileHash": "b832c5a8c8c33747328fef92423f9526",
+    "serverModified": 1792500000004,
+    "serverSize": 3164,
+    "createdAt": 1792500000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "Artist B/Album/01 - Ties.flac",
+   "size": 3205,
+   "fatTime": "0x5D6290AF",
+   "durationMs": 215000,
+   "qfp": "0x255822F883B4FE84",
+   "known": 131071,
+   "container": 2,
+   "scores": [
+    0.4,
+    0.6,
+    0.6,
+    0.55,
+    0.55,
+    0.3,
+    0.12345,
+    0.7
+   ],
+   "tags": {
+    "title": [
+     "01 - Ties"
+    ],
+    "artist": [
+     "Artist B"
+    ]
+   },
+   "note": "ties: happy = sad, relaxed = aggressive, so no order bit; a 5-place score (12)",
+   "ledger": {
+    "serverPath": "music/Artist B/Album/01 - Ties.flac",
+    "mstreamId": 305,
+    "albumId": 20,
+    "artistId": 6,
+    "audioHash": "9a279cd73204121dda7d41dce1178322",
+    "fileHash": "5d32ef4980d17fdcb8dfbfa1c95a2aa3",
+    "serverModified": 1792500000005,
+    "serverSize": 3205,
+    "createdAt": 1792500000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "Artist B/Album/02 - Order.flac",
+   "size": 3246,
+   "fatTime": "0x5D6290B1",
+   "durationMs": 216000,
+   "qfp": "0xBC03D4C02B50324C",
+   "known": 131071,
+   "container": 2,
+   "scores": [
+    0.1,
+    0.2,
+    0.9,
+    0.05,
+    0.95,
+    0,
+    0,
+    0.0001
+   ],
+   "tags": {
+    "title": [
+     "02 - Order"
+    ],
+    "artist": [
+     "Artist B"
+    ]
+   },
+   "note": "sad beats happy, aggressive beats relaxed: flags 0x07",
+   "ledger": {
+    "serverPath": "music/Artist B/Album/02 - Order.flac",
+    "mstreamId": 306,
+    "albumId": 20,
+    "artistId": 6,
+    "audioHash": "48e002d3ca0bb3cd9ae7cc1428951a62",
+    "fileHash": "7a61f87a169f74386f925934efd89bed",
+    "serverModified": 1792500000006,
+    "serverSize": 3246,
+    "createdAt": 1792500000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "Artist B/Album/03 - Nulls.flac",
+   "size": 3287,
+   "fatTime": "0x5D6290B3",
+   "durationMs": 217000,
+   "qfp": "0x462F9648DC50989F",
+   "known": 131071,
+   "container": 2,
+   "scores": [
+    0.33,
+    0.12,
+    0.66,
+    0.8,
+    null,
+    0.49,
+    null,
+    null
+   ],
+   "tags": {
+    "title": [
+     "03 - Nulls"
+    ],
+    "artist": [
+     "Artist B"
+    ]
+   },
+   "note": "aggressive, acoustic and instrumental NULL: energy 255 and no bit 2; bit 1 kept",
+   "ledger": {
+    "serverPath": "music/Artist B/Album/03 - Nulls.flac",
+    "mstreamId": 307,
+    "albumId": 20,
+    "artistId": 6,
+    "audioHash": "dbd55e40e1d42a72ae5bbe7e5ca45864",
+    "fileHash": "06161071f7063e835315126620b263b3",
+    "serverModified": 1792500000007,
+    "serverSize": 3287,
+    "createdAt": 1792500000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "Artist B/Album/04 - Clamped.flac",
+   "size": 3328,
+   "fatTime": "0x5D6290B5",
+   "durationMs": 218000,
+   "qfp": "0x9DCD71F4BCCCEBC8",
+   "known": 131071,
+   "container": 2,
+   "scores": [
+    1.25,
+    -0.5,
+    0.2,
+    0.9999,
+    0.0001,
+    1.5,
+    -0.0001,
+    0.3
+   ],
+   "tags": {
+    "title": [
+     "04 - Clamped"
+    ],
+    "artist": [
+     "Artist B"
+    ]
+   },
+   "note": "scores outside 0-1 clamp to 100 and 0; the order bits from the raw doubles",
+   "ledger": {
+    "serverPath": "music/Artist B/Album/04 - Clamped.flac",
+    "mstreamId": 308,
+    "albumId": 20,
+    "artistId": 6,
+    "audioHash": "b7821fabe003f2eb9d2102699d975777",
+    "fileHash": "d5b36887316dabef8793559f10034f54",
+    "serverModified": 1792500000008,
+    "serverSize": 3328,
+    "createdAt": 1792500000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "Artist B/Album/cover.jpg",
+   "size": 3369,
+   "fatTime": "0x5D6290B7",
+   "durationMs": 0,
+   "qfp": "0x35297E5F61556AB9",
+   "known": 0,
+   "container": 255,
+   "scores": null,
+   "tags": {},
+   "note": "an owned cover: no server track, so no row",
+   "ledger": {
+    "serverPath": "",
+    "originFlags": 0
+   }
+  }
+ ]
+}

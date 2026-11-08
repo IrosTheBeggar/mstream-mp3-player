@@ -558,7 +558,7 @@ header, a section directory, then the sections, each 8-byte aligned.
 |---|---|---|---|
 | 0 | 4 | magic | fourcc: `MSMF`, `MPTG`, `MPDJ`, `MPWF` or `MSPD` |
 | 4 | 2 | major | incompatible format version (1; MPDJ: 2) |
-| 6 | 2 | minor | compatible additions (0) |
+| 6 | 2 | minor | compatible additions (0; MPTG 1 with mood tails, 2.6.4) |
 | 8 | 4 | headerBytes | the whole header (common + type-specific), a multiple of 8; the directory starts here |
 | 12 | 4 | sectionCount | directory entries, ≤ 64 |
 | 16 | 4 | fileBytes | the file's exact length |
@@ -750,6 +750,11 @@ generation) and noted it in `/.player`.
     the header (a larger headerBytes).
   - A reader reads the prefix it knows and skips the rest; reading a
     shorter record than it knows, it treats the missing tail as zeros.
+    A field may instead be whole or absent, and says so: MPTG's mood
+    tail (2.6.4) is read only from RECS rows of 80 bytes or more, never
+    from a shorter row filled out with zeros. Knowing a longer record never raises the
+    smallest stride a reader accepts: that stays the v1 stride (MPTG
+    RECS: 72), so every file of an older minor still reads.
   - So **every field added in a minor version MUST use all-zero bytes to
     mean "absent or unknown"**.
   - **Every minor addition MUST be re-derivable from the card and the
@@ -764,7 +769,10 @@ generation) and noted it in `/.player`.
   absent, and so needs a new major. A minor has only the header's spare
   bytes (WAVEFORM-INDEX.md 8.2, 9).
 - **New flag bits** are ignored by older readers. Writers set only bits
-  they define.
+  they define. The exception is a field that reserves its bits for good:
+  MPTG's moodFlags bits 3-7 and its byte 79 (2.6.4) never get a meaning
+  in major 1, and a reader that finds one set refuses that record's tail
+  (the record has no scores; the record and the file are fine).
 - **New enum values:** where 0 has a meaning of its own, "read it as 0"
   would be wrong, so each field says what an unknown value means:
 
@@ -788,7 +796,10 @@ generation) and noted it in `/.player`.
 - **Writers** write the newest minor they know, in the newest major both
   sides read (the device lists its majors in `/.player/device.txt`,
   2.15). MPDJ has one: v2, written only when the device lists it. So has
-  MPWF: v1, likewise.
+  MPWF: v1, likewise. MPTG's minor follows its data instead: minor 1,
+  with RECS rows of 80 bytes, when a record has a mood tail (2.6.4), else
+  minor 0 with rows of 72, so a card with no moods stays byte for byte
+  what an older writer made. No reader consults the minor.
 
 ### 2.5 `manifest.bin` (MSMF): the commit point
 
@@ -1090,7 +1101,7 @@ One format for both producers:
 | Type | Flags | Stride | Content |
 |---|---|---|---|
 | `FOLD` | REQUIRED | 16 | the folder table |
-| `RECS` | REQUIRED | 72 | one record per file |
+| `RECS` | REQUIRED | 72 | one record per file; 80 (minor 1) when a record has a mood tail (2.6.4) |
 | `STRS` | REQUIRED | blob | names and tag strings |
 | `HIDX` | | 12 | the path-hash index; present exactly when recordCount > 0 |
 | `ORIG` | | 80 | the ledger, one row per record (the device ignores it); present exactly when the source is 2 or 3 and recordCount > 0 |
@@ -1112,7 +1123,7 @@ ancestors (a parent the listener made stays in the table, without
 OWNED), and no other folder. A folder's path is `/music` followed by `/`
 and each folder's name from the root down.
 
-#### 2.6.4 `RECS`: records (72 bytes)
+#### 2.6.4 `RECS`: records (72 bytes; 80 with the mood tail)
 
 | Off | Size | Field | Meaning (absent value) |
 |---|---|---|---|
@@ -1207,6 +1218,56 @@ it tells the builder that field was never looked for.
 0 and qfp filled. They exist so the software can own a file it wrote,
 such as a `cover.jpg` (part 7, U9). The device takes nothing from them
 but their ownership (2.14.3).
+
+**The mood tail (minor 1).** With a RECS stride of 80 or more, bytes
+72-79 of every record hold that track's mood scores: mStream's eight mood
+heads, from its `POST /api/v1/db/mood-scores` (the mood filters,
+docs/MOOD-FILTERS.md 5.1-5.3). A stride under 80 means no record has
+one. 72 stays the smallest stride a reader accepts (2.4.3, 2.4.5): raising
+it would make every card written before the tail absent. Only sources 2
+and 3 write a tail; the device's own `/.player/tags.bin` stays at 72.
+
+| Off | Size | Field | Meaning |
+|---|---|---|---|
+| 72 | 1 | moodFlags | bit 0 PRESENT; bit 1 sad beat happy; bit 2 aggressive beat relaxed; bits 3-7 are 0 |
+| 73 | 1 | valence | the larger of happy and sad, 0-100; 255 if either is NULL |
+| 74 | 1 | energy | the larger of relaxed and aggressive, the same |
+| 75 | 1 | instrumental | 0-100; 255 NULL |
+| 76 | 1 | acoustic | 0-100; 255 NULL |
+| 77 | 1 | party | 0-100; 255 NULL |
+| 78 | 1 | danceable | 0-100; 255 NULL |
+| 79 | 1 | reserved | 0 |
+
+- **A value** is `min(100, max(0, floor(score × 100 + 1e-9)))`, computed
+  in f64 from the score mStream stores, so a score outside 0-1 clamps. A
+  plain floor is wrong at 0.29, 0.57 and 0.58 (0.29 × 100 is
+  28.999999999999996); the slack form is exact on the server's grid of 4
+  places (it stores `Math.round(mean × 1e4) / 1e4`), so a correctly
+  rounded JSON parse can't move a byte.
+- **The order bits** come from the raw doubles: bit 1 when sad > happy,
+  bit 2 when aggressive > relaxed, so a tie is happy's or relaxed's. A
+  writer writes 0 when either head is NULL; a reader ignores an order bit
+  whose value byte is 255.
+- **No server row** (a track the server hasn't analysed, an owned file
+  with no server track, a peer's track): 8 zero bytes. A row whose heads
+  are all NULL is `01 FF FF FF FF FF FF 00`: analysed, unlike no row, so
+  it still counts in an album's denominator.
+- **Valid.** A reader takes a tail only if bit 0 is set, bits 3-7 are 0,
+  byte 79 is 0, and each of bytes 73-78 is 0-100 or 255. Otherwise that
+  record has no scores, and the record and the file are fine: no check
+  of 2.4.3 looks at the tail. So `mptg-minor-1`'s 0xAB bytes (flag bits
+  0xA8) read as no scores.
+- **Reserved:** bits 3-7 and byte 79 never get a meaning in major 1
+  (2.4.5). A later field goes from byte 80.
+- **Writing:** rows of 80 bytes and minor 1 when a record has a tail, else
+  rows of 72 and minor 0 (2.4.5), so a card with no moods stays byte for
+  byte. The reader goes by the stride alone, never by the minor.
+
+MOOD-FILTERS.md 5.7 works one track through: the scores `[0.7012, 0.3104,
+0.5803, 0.7, 0.2999, null, 0.4999, 0.29]`, in mStream's `MOOD_COLUMNS`
+order (danceable, happy, sad, relaxed, aggressive, party, acoustic,
+instrumental), are the tail `03 3A 46 1D 31 FF 46 00`. The device makes a
+track's mood word of the tail (3.4.3).
 
 #### 2.6.5 The string run
 
@@ -1576,6 +1637,11 @@ other producer's record. A file with no record indexes exactly as today.
 - **Rescan tags** on the device rewrites D's records only; rule 1 still
   prefers a matching T record (part 7, U8: decided so).
 - Covers have their own order (2.14.3).
+- **Mood scores** come with rule 1 only: a track's mood word (3.4.3) is
+  made of T's record's tail (2.6.4) when T's record is the one chosen.
+  D's records carry none, so a file named by rule 2 or 3 has no scores,
+  as does a T record UNREADABLE without FROM_API, whose names come from
+  rule 2.
 - What the builder makes of the chosen fields (the votes, the display
   join, the orders) is part 5.
 
@@ -2399,15 +2465,17 @@ max_channels=2
 | A card filled from several servers (SRVS, ORIG's `server`) | The device: no change, it reads neither. The software: each row is paired and guarded with its own server (2.5.5, 2.11) |
 | The play log (2.20) and ACKS (2.5.6) | Firmware before the log: writes none, and skips ACKS. The software: reads the log whatever `device.txt` says; skips and counts a slot of a newer major or an unknown kind; writes ACKS only with a run's commits |
 | The waveform index (2.21) | Firmware before it: ignores the COMP entry and never opens the file. A bad entry or file costs only itself. Software that doesn't know MPWF: drops the entry at its next commit, and the file stays until a newer run's clean-up (WAVEFORM-INDEX.md 9) |
+| The mood tail (2.6.4) | Firmware before it: reads each record's 72 bytes and skips the rest. A bad tail costs only that record's scores; rows under 80 bytes have none. Software that doesn't know it: drops the tails when it rewrites T (2.4.5), and the next newer run derives them again |
 
 ### 2.17 Conformance (no device needed)
 
 Both implementations test against shared fixtures, kept in the player
 repo in `test/fixtures/card/` (built in N1, under CC0 as proposed so
 mstream-terminal and mStream can copy them; part 7, U18) and mirrored
-into mstream-terminal. They are `vectors.json`, `libraries/*.json` (the
-descriptions), `golden/` (what a writer makes of each) and `hardening/`
-(with `index.json`), made by `tools/card_fixtures.py`, an implementation
+into mstream-terminal. They are `vectors.json`, `moods.json`,
+`libraries/*.json` (the descriptions), `golden/` (what a writer makes of
+each) and `hardening/` (with `index.json`), made by
+`tools/card_fixtures.py`, an implementation
 of this part apart from the player's C++, and frozen: its `--check` fails
 on any difference. The folder's README says how to read them.
 
@@ -2487,6 +2555,20 @@ on any difference. The folder's README says how to read them.
    whatever their MPWF entry holds, but for the two whose name breaks a
    string rule (`vectors.json`'s `mpwf.rootRow` says what a reader takes
    from each).
+9. **The mood filters** (2.6.4's tail, 3.4.3's word), made with
+   `tools/moodfilter.py`. `golden/tags-moods.bin` is what a writer MUST
+   make of `libraries/tags-moods.json`, whose records carry mStream's
+   scores (`scores`, in `MOOD_COLUMNS` order, or null for no row): full,
+   no row, NULL heads, all NULL, ties, the float traps and MOOD-FILTERS.md
+   5.7's track. `moods.json` holds the value rule, the tails a reader
+   takes or refuses, about 40 rows with their tails, words and the
+   predicates that hold at each level, filters and albums. The hardening
+   files `mptg-moods-longer` (rows of 88 bytes), `mptg-tail-invalid` (a
+   bad tail of each kind) and `mptg-stride-76` (no tail) all read, with
+   the same records as their golden; a reader that predates the tail reads
+   them by its 72-byte prefix. `tools/test_mood_vectors.py` runs mStream's
+   own predicate text (`src/api/mood-filter.js`, its commit named) in
+   SQLite over every row and filter, and the word must agree with it.
 
 ### 2.18 Conformance vectors
 
@@ -2711,6 +2793,27 @@ goldens in `plays/` and `tags-0000002a.bin`):
   the root reads; 32-byte rows read by their prefix.
 - `history=1` lists major 1; `history=`, no key, or no file: none.
 
+**Mood scores** (2.6.4, 3.4.3; `moods.json`, over the golden
+`tags-moods.bin`):
+
+- A value: 0.29 is 29, 0.57 is 57, 0.58 is 58 (a plain floor gives 28, 56
+  and 57); 0.6999 is 69 and 0.7 is 70; 1.25 is 100 and −0.5 is 0; NULL is
+  255.
+- MOOD-FILTERS.md 5.7's track: the tail `03 3A 46 1D 31 FF 46 00`, the word
+  0xB313; the filter 0x127 (Sad, Relaxed, Vocals and Danceable at
+  Standard) holds.
+- No row: 8 zero bytes, the word 0. A row of NULLs: `01 FF FF FF FF FF FF
+  00`, the word 0xE400.
+- `03 FF 46 1D 31 FF 46 00`, an order bit beside a 255, is a valid tail
+  whose valence is NULL: the word 0xA313. 0xAB × 8 (`mptg-minor-1`'s) is
+  no tail, nor is a tail with bit 0 clear, a bit of 3-7 set, byte 79 not
+  0, or a value of 101-254.
+- The filter words 0x800, 0x30 and 0x600 are invalid and read as 0: no
+  filter. 0x200, a level alone, filters nothing.
+- An album of 5 passing tracks of 9 analysed matches (10 > 9); 2 of 4
+  doesn't; 0 of 0 doesn't. A track with no row isn't counted; a row of
+  NULLs is.
+
 **HASH_SAMPLED** (2.6.6): 26,214,399 bytes with hash-v 2 is a full MD5
 (a download can be VERIFIED); 26,214,400 bytes with hash-v 2 is sampled;
 30 MB with hash-v 1 is a full MD5.
@@ -2790,7 +2893,7 @@ made by `tools/cardnames.py`: runs on a card, each with its layout,
 | File | Size |
 |---|---|
 | `manifest.bin` | under 4 KB (SRVS: 40 bytes for each server besides the root's) |
-| `tags-<g>.bin` | about 6.9 MB: RECS 1.44 MB, STRS about 2.4 MB (names about 31 B and runs about 87 B per track), HIDX 0.24 MB, ORIG 1.6 MB, OSTR about 1.2 MB. The device reads FOLD, RECS and STRS: about 3.9 MB, 2.3-3.3 s at 1.2-1.7 MB/s, during a build only |
+| `tags-<g>.bin` | about 6.9 MB: RECS 1.44 MB, STRS about 2.4 MB (names about 31 B and runs about 87 B per track), HIDX 0.24 MB, ORIG 1.6 MB, OSTR about 1.2 MB. The device reads FOLD, RECS and STRS: about 3.9 MB, 2.3-3.3 s at 1.2-1.7 MB/s, during a build only. With mood tails (2.6.4) RECS is 1.6 MB, 0.16 MB more to read |
 | `autodj-<g>.bin`, MPDJ v2 at k = 169 | about 10.6 MB (DJSL 10.24 MB; DJRF, DJPH and STRS 0.36 MB, the join's); one 512-byte slot read per pick (AUTODJ-INDEX.md 10.2) |
 | `waves-<g>.bin`, MPWF v1 | 5.12 MB when every track has a slot (256 bytes a track); 4 or 5 slot reads a lookup, one lookup per track change (WAVEFORM-INDEX.md 6, 10) |
 | `/.mstream/thumbs` | about 39 MB for 1,800 albums |
@@ -4926,6 +5029,53 @@ which fails at about 15k entries (metascan section 6.2).
   the A-Z lists sort it by: its elected sort tag, else its name), so a
   loaded index can give the rail, a row's letter and the jump grid the key
   the order and the buckets use (`artistSortKey()`, `albumSortKey()`).
+- **The mood word** (v7, MOOD-FILTERS.md 5.4; its stage S2 builds it): a
+  u16 per track id, made of the tail (2.6.4) when T's record is the one
+  chosen (2.9), else 0.
+
+  | Bits | Field |
+  |---|---|
+  | 15 | analysed: the record has a valid tail |
+  | 14 | voice NULL |
+  | 13-11 | valence |
+  | 10-8 | energy |
+  | 7-6 | instrumental |
+  | 5-4 | acoustic |
+  | 3-2 | party |
+  | 1-0 | danceable |
+
+  A value's bucket is 0 under 30, 1 for 30-49, 2 for 50-69, 3 for 70 and
+  up. A scale's field is `side << 2 | bucket`, the side being its order
+  bit (1: sad, aggressive); bucket 0 stores 0, and 4 means NULL. The other
+  four store their bucket: a NULL tag stores 0, which never holds, and a
+  NULL instrumental sets bit 14. Word 0 is no row; with no word on any
+  track there is no block (0 bytes). The words go last, before the sum;
+  the header grows to `kCountWords` 24, word 22 the mood words (0 or the
+  track count) and word 23 the tracks with a word. `computeStamp` is
+  unchanged: a word doesn't change what a track id means. Version 6 is
+  Outdated to that firmware (one rebuild); 7 is Corrupt to older firmware,
+  which rebuilds its own, so a unit that alternates firmware rebuilds at
+  every boot (no data risk). 2 B a track: 40 KB at 20k.
+- **The filter** (`q`, 11 bits; MOOD-FILTERS.md 5.4) reads the words:
+  bits 0-1 valence (0 none, 1 Happy, 2 Neutral, 3 Sad), 2-3 energy (0
+  none, 1 Relaxed, 2 Neutral, 3 Aggressive), 4-5 voice (0 none, 1
+  Instrumental, 2 Vocals), 6-8 tags (1 Acoustic, 2 Party, 4 Danceable,
+  every one set must hold), 9-10 level (0 Standard, 1 Strict, 2 Loose).
+  Any of bits 11-15, voice 3 or level 3 makes the whole filter invalid,
+  and it reads as 0: no filter, Standard. A level alone filters nothing.
+  A level reads the buckets as need / under: Strict 3/1, Standard 2/2,
+  Loose 1/3. Happy (Relaxed) holds when its field's side is 0 and its
+  bucket at least need; Sad (Aggressive) when the side is 1 and the
+  bucket at least need; Neutral when the bucket is under `under`;
+  Instrumental and a tag when the bucket is at least need; Vocals when
+  bit 14 is clear and instrumental's bucket is under `under`. A NULL
+  field fails its own scale only, and the groups are ANDed, so word 0
+  passes no filter that sets a group. That is mStream's predicate
+  (`src/api/mood-filter.js`) at its three bars, on / mirror .7/.3, .5/.5
+  and .3/.7, exactly: `moods.json` (2.17, item 9) checks every predicate
+  on every row against its SQL. An album (a folder) matches when
+  `2 × pass > analysed` over its tracks on this card, so one with no
+  analysed track never does.
 - **Size at 20k (ESTIMATED):** tracks 640 KB, albums (about 1.8k) 50 KB,
   artists 14 KB, folders (about 2.6k) 94 KB, views about 200 KB (the sort
   keys about 10 KB of it), strings
