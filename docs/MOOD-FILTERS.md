@@ -4,7 +4,9 @@ Mood filters narrow the Albums list and Auto DJ's picks by mood, using the scale
 
 ## 1. Status
 
-**Status (2026-11-06):** S0, S1 and S2 are built, from main af72b50: S0 on its own branch (`claude/status-line-under-modal`), S1 and S2 stacked on `claude/mood-filters-implementation-0aec6e`; not merged. S1 and S2 are host-tested (S0 has no host test). S2 ran on the user's Core2 against the spare synthetic card in 9.6's Runs A to E, which also checked S1's heap rule, and S0 was checked on the same unit (9.4). S3 is built on `claude/mood-filters-s3`, stacked on S2, host-tested and building, and its device pass (9.7's table) ran on the same unit and card. S4 is built, all seven of its commits and the review's fixes, on `claude/mood-filters-s4`, stacked on S2, host-tested, and checked on the same Core2 (9.8's Device part), which found the scan's cost and fixed it (af248a0). S5 is built, its three commits and the review's fix, on `claude/mood-filters-s5`: S3's tip with S4 merged in, S4's device pass and af248a0 included. It is host-tested and building, and its device pass (9.9's Device part) ran on the same unit and card at e87de85, before af248a0 was merged in; the merged build was spot-checked after (the boot, the jump time, the row and the Few toast). S6 onward are not started. Each stage's result follows its plan (9.4, 9.5, 9.6, 9.7, 9.8, 9.9), and the figures from those runs are MEASURED 2026-11-06. A read-only study found it possible, and this document is the build plan.
+**Status (2026-11-08):** S0, S1 and S2 are built, from main af72b50: S0 on its own branch (`claude/status-line-under-modal`), S1 and S2 stacked on `claude/mood-filters-implementation-0aec6e`. S1 and S2 are host-tested (S0 has no host test). S2 ran on the user's Core2 against the spare synthetic card in 9.6's Runs A to E, which also checked S1's heap rule, and S0 was checked on the same unit (9.4). S3 is built on `claude/mood-filters-s3`, stacked on S2, host-tested and building, and its device pass (9.7's table) ran on the same unit and card. S4 is built, all seven of its commits and the review's fixes, on `claude/mood-filters-s4`, stacked on S2, host-tested, and checked on the same Core2 (9.8's Device part), which found the scan's cost and fixed it (af248a0). S5 is built, its three commits and the review's fix, on `claude/mood-filters-s5`: S3's tip with S4 merged in, S4's device pass and af248a0 included. It is host-tested and building, and its device pass (9.9's Device part) ran on the same unit and card at e87de85, before af248a0 was merged in; the merged build was spot-checked after (the boot, the jump time, the row and the Few toast). S6 is mStream's #1122, merged on 2026-11-07 and released in v6.33.1 with #1072 (9.10). S7 is built on the terminal's `claude/card-moods`, PR #69 stacked on #68, host-tested, not merged (9.11). S8 ran on 2026-11-08 (9.12): the user's server on the release they had just put out (v6.33.1, by their word), a release build of S7, the user's 1 TB test card and the Core2 on S5's merged build. The scores reached the card and the device, and the sync, the checker and the Core2 agreed on every mood count and on every filter's tracks and albums. Each stage's result follows its plan (9.4 to 9.12), and the figures from those runs are MEASURED on the dates they give. A read-only study found it possible, and this document is the build plan.
+
+**Merged (2026-11-08):** S0 (#47, db0332a), S1 (#48, 39d3d36), S2 (#49, cf8379e) and S3 (#50, 6c0bce9), into main. S4 and S5 go in with #52, whose branch has S4's merged into S5's (S3 and S4 conflict on their own); #51 is left to close with it.
 
 **Picked by the user, on the design canvas:**
 - The editor: the one-screen grid of 7.1.
@@ -1408,6 +1410,14 @@ Branch `feat/mood-scores` from master. Not stacked on #1072. No version bump. Co
 
 **Device:** none. **Effort:** 0.5-1 (guess).
 
+**Result (2026-11-06, merged 2026-11-07).** Built as planned on `feat/mood-scores`, mStream PR #1122: the three commits (954e0f5, 1d16bf7, 7ab61d3) and two reviews' fixes. 55ef8d6: a POST with no JSON body was a 500 with an error-level stack; now a 400, as `flow.js` gives. 5f7bd56 (2026-11-07): `moodFiltersReady()` answers false with no database open. MEASURED-HOST 2026-11-06, at 55ef8d6 (5f7bd56 adds one unit test after):
+- `mood-scores`: 15 cases.
+- `mood-bars`: 7,290,729 checks of `moodPredicate` through the real driver, 0 wrong on node (SQLite 3.54.1) and on Bun 1.4.3 (SQLite 3.51.0); a plain floor gets 27 wrong on both. This closes the runtime unknown (12).
+- The whole `npm test`: 4,439 tests, 0 failing, 10 skipped (no EffNet cache, no sidecar binary, OS-only cases).
+- `docs:api:validate` valid. `lint` clean on every file the branch touches; the repo-wide run fails the same way on master here (eslint 10.6.0 installed against `^10.8.1`).
+
+Merged into master on 2026-11-07 (05d7015f), then #1072 (1dd065b0); both are in v6.33.1, released the evening of 2026-11-07 (tag on f7f2f79f). Left: `metadata/batch` still answers 500 to a POST with no body (it came before this), and `resolveFlowTracks` keeps its own copy of the resolver loop.
+
 ### 9.11 S7: the terminal writer
 
 `git switch -c claude/card-moods claude/card-waveforms` in the existing worktree. One PR onto #68. No part can go to terminal main: `src/device/card` and `src/api/transfer.rs` aren't there. The real-card run owed on #68 (as of 2026-11-02) goes first, or failures are confounded.
@@ -1447,6 +1457,14 @@ Commits:
 
 **Device:** none here; S8. **Effort:** 2-2.75, plus 0.5-1.5 landing the stack (guess).
 
+**Result (2026-11-07).** Built on the terminal's `claude/card-moods`, PR #69 onto #68: the five commits (fc1389d, 6f5d2cd, d3dd4ff, 8bee265, 19afb68) and the review's fix (982f13c). The fix: a file fetched again kept no tail when that run got no new scores; now it keeps its row's old one, tested by a cut at every write of the run. MEASURED-HOST:
+- `cargo test`: 2,029 passed, 0 failed.
+- `cargo test --features desktop`: 2,145 passed, plus 4 in the second binary.
+- Both `wasm32` checks clean.
+- The tail against the player's Python reference on 40,000 random rows and tails, and on the full 4- and 5-place grids through serde_json. The 22 old goldens byte for byte the same.
+
+The lockfile needs rustc 1.95 or later: built with `cargo +1.98.1`. The cache lacked one crate, unicode-normalization 0.1.26, fetched with the user's OK. Not merged: #56 and #68 land first. #68's own real-card run wasn't run apart: S8 ran the whole stack (9.12).
+
 ### 9.12 S8: the real sync
 
 With the user's go-ahead, nothing playing on the music card. Needs S6 and S7, and at least S2 and S3 on the player.
@@ -1458,6 +1476,65 @@ With the user's go-ahead, nothing playing on the music card. Needs S6 and S7, an
 - With S4 and S5 in: real jump share, re-pins, repeats through `Dn200`.
 
 Results go into this document and `docs/AUTODJ.md`. **Effort:** 0.5-1 (guess).
+
+**Result (2026-11-08).** MEASURED that day, on the user's own server, card and Core2, with the user's go-ahead.
+
+- **What ran.**
+  - The server: https://music.rum.st, on the release the user had just put out, v6.33.1 (S6 and #1072). That is the user's word: its `/api/` answered 401 without a sign-in, so the version wasn't read here. Its mood route answered.
+  - The writer: a release build of the terminal's `claude/card-moods` (S7, on #68 and #56), `mstream-player device card /Volumes/1TB sync --yes`, from this Mac.
+  - The card: the user's 1 TB test card (cardId 0x9E54EA3240A83BB1), last synced 2026-11-05 at generation 94, with T's 19,408 records at 72 bytes and no tails. Its status said "holds library" and "for me": one library, from the server whose key it carries, and no peer's. `/.mstream` and `/.player` were copied off first.
+  - The player: the Core2 on 9.9's merged build, `bea362c` with S0's commit picked on top (so its version string says `-dirty`).
+- **The first sync.**
+  - 1:32 by `time` (the app says "1 min"). 36 new files listed, 0.4 GB: 35 copied, 1 skipped. The server listed `San_Pacho_TOBEHONEST_-_Horny.opus` at 0 bytes and served 3,194,768.
+  - It said "mood scores for 19,249 of the card's 19,443 tracks from the server".
+  - Generation 94 to 96 (base 95), commitId 0xCEB05E0858368AC0. T: 19,443 records of 80 bytes at minor 1, 6,965,530 B.
+  - The player's `synthtransfer.py --check` agreed: 19,249 tails that read, and 19,249 of 19,533 tracks with a word (98.5 %), the block 39,066 B.
+- **The 284 tracks without a word.**
+  - 194 of T's 19,443, for which the server returned no scores.
+  - 90 on the card that T has no record for, the same 90 as before the sync: most likely files the server's listing doesn't hold, not traced. They aren't `._` files: the device's walk and the checker both skip dot names.
+  - The device splits the tracks outside T as 82 with its own records and 9 named by their paths, and takes 19,442 from T where the checker's rule 1 takes 19,443. Which T record it didn't use wasn't traced.
+- **The device's builds.**
+  - The first boot on generation 96 wasn't logged: the device was on with the card before the console was attached, and built `library.idx` then. The logged boot loaded it in 1,834 ms.
+  - That boot's walk found the 35 new files (the first walk after the commit, 57.6 s), the compaction took 32.0 s, and the update step rebuilt the library on the card worker, the loop live, in 29,473 ms (the fence up 29,509 ms), with the split above and PSRAM's peak 1,940,027 B; `library.idx` saved in 2,104 ms.
+  - The build at boot, against 11.3 s: `gb!` and a reset. "built from the records in 17284 ms: 19533 tracks, 19442 from the transfer's (19249 with moods), 82 from the device's, 9 by their paths", the same peak, browsable 19,282 ms after the mount.
+  - So 6.0 s over the 11.3 s of a build from D at 20k, and 2.8 s over the synthetic card's build from its T: 19,413 tracks, 17,954 with a word, 14,438 ms (9.6 Run C).
+- **The second sync, no change.** "nothing new", 5 s. Generation 96 and commitId 0xCEB05E0858368AC0 unchanged, no mood call (5.2's step 3), so no build on the device.
+- **A card for someone else:** not run, since it clears the scores on the card. `a_card_for_someone_else_asks_nothing_and_loses_what_it_had` covers it on host (9.11).
+- **Coverage against 12's query:** the query needs the server's `mstream.db`, so not run. The sync's own count stands in for the card's share: the server scored 19,249 of the 19,443 paths the writer asked about, all 19,249 reached the card (19,249 tails that read), and `gm` reads 19,249. The server-wide share is still unknown.
+- **Album share** (`gm<hex>` on the Core2, idle; `--check --mood-filter` gave the same counts):
+
+  | Filter | Tracks that fit | Albums of 1,747 | Tracks pass | Albums pass |
+  |---|---|---|---|---|
+  | 0x001: Happy, Standard | 7,508 | 585 | 5,578 µs | 16,193 µs |
+  | 0x40A: Neutral, Neutral, Loose | 8,117 | 729 | 5,746 µs | 16,483 µs |
+  | 0x127: Sad, Relaxed, Vocals, Danceable, Standard | 157 | 1 | 5,057 µs | 15,820 µs |
+  | 0x215: Happy, Relaxed, Instrumental, Strict | 20 | 0 | 5,013 µs | 15,538 µs |
+
+  - 1,735 of the 1,747 albums have an analysed track. The other 12 leave the list under any filter (13's partial analysis).
+  - The synthetic card's passes, idle: albums 14-31 ms, tracks 5-12 ms (9.6 Run C).
+- **On the screen** (`X`):
+  - Albums's first row at rest: "Filters" over "1,747 albums".
+  - With Happy set (`uiMa1`): "Happy" over "585 of 1,747 albums" with its cross, the list then starting with the albums `gm1` lists first.
+  - The editor (`uiMe`): Happy lit, "585 of 1,747 albums", Standard.
+  - Output > Auto DJ's Smart filters: "Any". The saved filter was 0x200, Strict with no group, and a level alone is no filter.
+- **Auto DJ under a filter** (S4 and S5 in), `docs/AUTODJ.md` 14.5. The join: 19,267 of 19,533 tracks with neighbours, 1,442 ms, the boot's walk just started. `Dn200` from `Ds717feda5`, idle (the first no-filter run, under the boot's walk, left out):
+  - Follow the vibe never left the lists under Happy, 0x40A or 0x127: 0 jumps in 200 picks each, p90 0.35-1.08 ms. With no filter: 1.34 ms.
+  - Stay on seed: 17 re-pins and 2 jumps under 0x127, 1 re-pin under Happy, none under 0x40A.
+  - 0x215, 20 tracks: 190 jumps and 180 repeats in either mode, and 193 re-pins in Stay on seed, p50 15.7-16.3 ms. The synthetic 0x3E7, 8 tracks: 16.1-16.5 ms (9.8).
+  - The count at `Dq`: 4.7-5.9 ms. `Dq215` raised the amber note "Only 20 tracks fit: they will repeat".
+  - Auto DJ's saved settings were put back after (off, Follow the vibe, 55 %, 0x200). `D` read 0 picks, so none reached the live queue.
+- **Found, none of it in the mood code.**
+  - macOS asked for Removable Volumes access for the app that started the writer (here the Claude desktop app, whose Terminal panel ran it). `diskutil info` waited on that prompt until the user allowed it.
+  - The card's server has to be in the app's config: until the user added https://music.rum.st, the sync said "not asked: no server to ask". The card's key 0x9C95FD421795A5B0 is FNV-1a 64 of that URL.
+  - macOS `._` files on the card after the sync: 5 at `/.mstream`'s top level, one beside each file there (the commit's four and `state.json`), each stamped the same minute as its file, and 39 under `/music` modified that day (35 files were copied; the names weren't matched). macOS writes these beside files written to a FAT card from the Mac: `synthtransfer.py` left the same on the spare card, so they don't come from the writer's code, which doesn't remove them either. The player and the checker skip dot names. They were left on the card.
+  - The server's library lists 39 hidden files (a name or a folder starting with a dot; the three shown are `._` files). The sync left them out and said so ("the server can't serve them").
+  - The 0-byte listing above.
+- **Not run.**
+  - A card for someone else.
+  - 12's query.
+  - Anything playing under a filter on this card: a play would go to the user's server at the next sync.
+  - A score-only commit: the second sync had the same files, so it kept the scores without asking (5.2's step 3). One needs a sync that asks again after a score changes on the server.
+  - The JSON's size on the wire: the writer logs no byte count.
 
 **Total:** about 15-24 agent-days, a guess. The study had 8-18.
 
@@ -1472,9 +1549,9 @@ Trial merges ran with `git merge-tree` on local refs at a1566fe. On 2026-11-05 #
 | **#38** `claude/card-guard-no-answer` | Merged 2026-11-05 (96ba08b). `lib/core/AutoDjEngine.cpp` `read` (a new `SlotResult::IoTwice`), `pickInto`, `lib/core/AutoDjView.{h,cpp}` (`Started::CardFailed`), `src/app/AutoDj.cpp`, `test_autodj_engine`, `test_ui_autodj`, `docs/AUTODJ.md`, METADATA 3.2 and later | Already under S4 and S5: `pickOnce` is a rename, so no re-indent. It didn't touch `sessions.json`, so the freeze hash holds |
 | **#39 to #42** | Merged 2026-11-05: a second card-guard try, the card hold (`lib/core/PlaybackController.h`, `src/app/Library.h`, `lib/core/LibraryUpdate.*`), the queue file's memory and writes (`lib/core/TagStore.cpp`), a stopped track's bars on Now Playing. #40 gave `Ui` `noteCardHolds()` | None for the design. Re-read `lib/core/LibraryUpdate.cpp`'s room check before S2's budget line, and Now Playing before S5's empty-state edit |
 | **#25** `claude/esp32-swap-mode-research-51c26d` 6220213 | Mergeable with main today. A write bench and swap-mode research. Overlaps S2's console: `lib/core/TagText.{h,cpp}` and `src/app/TagConsole.{h,cpp}` (it adds `gx`, S2 adds `gm`), then `src/main.cpp`, `test/test_ui_library/test_ui_library.cpp`, one line of `docs/METADATA.md` and `docs/ARCHITECTURE.md` | Nothing here waits for it. The second to land adds its letter beside the other's |
-| **terminal #56, #68** `claude/card-transfer`, `claude/card-waveforms` | Against main: 170 behind, 107 and 108 ahead (local refs). #68 vs main: 8 conflict files. Local `main` is far behind `origin/main`, so never base on it | S7 stacks on #68. Cost: it can't merge first; a rebase of #68 replays through `run.rs`, `sync.rs`, `plan.rs`, `contract/mptg.rs`, locales. `mood_scores` joins the existing `types.rs` conflict hunk and adds none. Real scores come only from a local build until it lands |
+| **terminal #56, #68** `claude/card-transfer`, `claude/card-waveforms` | Against main: 170 behind, 107 and 108 ahead (local refs). #68 vs main: 8 conflict files. Local `main` is far behind `origin/main`, so never base on it | S7 stacks on #68. Cost: it can't merge first; a rebase of #68 replays through `run.rs`, `sync.rs`, `plan.rs`, `contract/mptg.rs`, locales. `mood_scores` joins the existing `types.rs` conflict hunk and adds none. Real scores come only from a local build until it lands. **Since:** S7 is PR #69 on #68 (9.11), and S8 used a local build of it (9.12) |
 | **terminal `claude/card-picks`** 3b69618 | 31 commits, unpushed per the last note. Vs #68: 7 conflict files (page/card.rs, UX contract, fatsim.rs, lines.rs, sync.rs, worker/tests.rs, device/mod.rs). Doesn't touch `contract/mptg.rs`, `engine/run.rs`, `plan.rs`, `autodj.rs`, `waves.rs` | Keep moods in `sync/moods.rs`. Moods will add to the sync, UX contract and device/mod.rs conflicts. No semantic clash seen, and no trial merge with moods exists. The second to land resolves |
-| **mStream #1072** `claude/card-transfer-server` | Base predates moods: no `mood-sync.js`, no V80. Against master it conflicts once, in `src/api/server-info.js`'s imports (keep all). S6's planned hunks add no conflict (MEASURED-HOST, trial merge) | S6 goes from master. Don't tie moods to `instanceId` or `federationProxy`. A real sync needs master plus S6, plus #1072 if the writer wants those. Which build the user's server runs: not determined |
+| **mStream #1072** `claude/card-transfer-server` | Base predates moods: no `mood-sync.js`, no V80. Against master it conflicts once, in `src/api/server-info.js`'s imports (keep all). S6's planned hunks add no conflict (MEASURED-HOST, trial merge) | S6 goes from master. Don't tie moods to `instanceId` or `federationProxy`. A real sync needs master plus S6, plus #1072 if the writer wants those. Which build the user's server runs: not determined. **Since:** merged 2026-11-07 (1dd065b0) after S6 (05d7015f), both in v6.33.1, the release the user put on their server (9.12; the sync's mood answer shows S6's route there) |
 
 ## 11. Budget
 
@@ -1482,7 +1559,7 @@ Device figures are on the synthetic card, 19,412 tracks. Re-measure every line m
 
 | Resource | Today | Addition | Label | Re-measure |
 |---|---|---|---|---|
-| Word block | 0 | 38,824 B carves 38,912+4 at 19,412; 40,000 B carves 40,960+4 at 20k. 0 with no moods. MEASURED: 38,826 B at 19,413, 17,954 with a word (Run C); no block on a T with zero records (Run A); 40,000 B at 20k (MEASURED-HOST) | MODELLED; MEASURED | S2 C: `g` |
+| Word block | 0 | 38,824 B carves 38,912+4 at 19,412; 40,000 B carves 40,960+4 at 20k. 0 with no moods. MEASURED: 38,826 B at 19,413, 17,954 with a word (Run C); no block on a T with zero records (Run A); 40,000 B at 20k (MEASURED-HOST); the real card (S8, 9.12): 39,066 B at 19,533 tracks, 19,249 with a word | MODELLED; MEASURED | S2 C: `g` |
 | Filtered ids | 0 | 6,964 B carves 7,040+4 at 1,741 albums, while a filter is on | MODELLED | S3: `D`, `uiM` |
 | PSRAM free, MP3, Auto DJ on / off | 646,252 / 801,912 B (`docs/AUTODJ.md:909`, older than the waveform bar) | about -41 KB | MEASURED / MODELLED | S2 B, C |
 | Largest, boot, off | 819,188 B (`docs/AUTODJ.md:961`) | -32,768 or -49,152 reported (class floors). MEASURED: -32,768 B, 786,420 against the control's 819,188 B (Runs D, E) | MODELLED; MEASURED | S2 A, C |
@@ -1492,16 +1569,16 @@ Device figures are on the synthetic card, 19,412 tracks. Re-measure every line m
 | Largest, FLAC after `gb` | 155,636 B (`:1509`) | Same. First Opus keeps blocks of 65,536 and 62,464 B (`docs/OPUS.md:133`). May hold one afterwards. MEASURED: -32,768 B, 262,132 against 294,900 B; the Opus then opened its 128,023 B of buffers and played, 0 skipped, on both (Run E) | MODELLED; MEASURED | S2 E |
 | Lowest free in a join | 77,284 B, margin 64 KB (`:1512`) | Port's lowest 69,192 B. MEASURED: 175,032 B in the stopped update's join, the control 180,876 B; the C++ model 170,052 B at the boot's join, 411,788 B after the update (MEASURED-HOST) | MODELLED; MEASURED | `Dc` |
 | Join blocks | 155,284 B, 3 kept (`docs/AUTODJ.md:896`) | None | READ | `test_autodj_join` |
-| Update step | 2.30 MB free, peak 1.89 MB (`docs/METADATA.md:4739`); check at `lib/core/LibraryUpdate.cpp:197` | Margin about -50.5 KB, not binding. MEASURED: build peak 1,927,528 B with the words (Run C), 1,888,702 B without (Runs A, B), 38,826 B more; every update of Runs D and E ran. Run B's `gb` before the walk merged its commit deferred: until then `trackSlots()` reserves for T's and D's records together, unchanged by this work | MODELLED; MEASURED | `gb` |
-| T on the card | About 6.9 MB (`docs/METADATA.md:2790`) | +160,000 B at 20k. MEASURED: 5,177,713 B at 19,413 records of 80 bytes (Run C) | MODELLED; MEASURED | `--check` |
+| Update step | 2.30 MB free, peak 1.89 MB (`docs/METADATA.md:4739`); check at `lib/core/LibraryUpdate.cpp:197` | Margin about -50.5 KB, not binding. MEASURED: build peak 1,927,528 B with the words (Run C), 1,888,702 B without (Runs A, B), 38,826 B more; every update of Runs D and E ran. Run B's `gb` before the walk merged its commit deferred: until then `trackSlots()` reserves for T's and D's records together, unchanged by this work. S8's update step and its build at the boot: peak 1,940,027 B at 19,533 tracks | MODELLED; MEASURED | `gb` |
+| T on the card | About 6.9 MB (`docs/METADATA.md:2790`) | +160,000 B at 20k. MEASURED: 5,177,713 B at 19,413 records of 80 bytes (Run C); the real card's 6,965,530 B at 19,443 (S8) | MODELLED; MEASURED | `--check` |
 | `library.idx` | | +40,000 B at 20k. MEASURED: +38,826 B at 19,413, 1,748,476 against 1,709,650 B (Runs C, B); +40,000 B at 20k, 1,821,680 against 1,781,680 B (MEASURED-HOST) | MODELLED; MEASURED | `gm` |
-| JSON over the wire | | 2.0-3.4 MB at 20k | MODELLED | S8 |
+| JSON over the wire | | 2.0-3.4 MB at 20k. Not measured at S8: the writer logs no byte count | MODELLED | S8 |
 | Track ceiling | 23k-27k, ESTIMATED (`docs/METADATA.md:4830`) | about 22.9k-26.1k | ESTIMATED less MODELLED | |
-| Album pass | | 8-35 ms idle, 17-70 ms with an MP3. Worst tap to frame about 180 ms. MEASURED idle, `gm<hex>`: 14-31 ms (Run C) | MODELLED; MEASURED | `uiMa<hex>` |
-| Fit count | | 2-5 ms per change. MEASURED idle, `gm<hex>`'s tracks pass: 5-12 ms (Run C); `Dq`'s count 4.8-5.6 ms, once 10.0 ms just after a rejoin (9.8) | MODELLED; MEASURED | `D` |
-| Pick | p90 0.38-1.70 ms (`docs/AUTODJ.md:858`, ESTIMATED) | At or under inside a run; a jump adds 2.4-8.5 ms. MEASURED (9.8): inside a run p90 0.33-0.82 ms idle (no filter 1.32 ms); a jump 11.7 ms idle, 21.6-21.9 ms with the MP3 (29.5 ms idle before af248a0) | ESTIMATED / MODELLED; MEASURED | `Dn200` |
-| Boot load | 1.1-1.5 s at 20k, ESTIMATED; 1,514 ms at 19,413 tracks without the words (MEASURED 2026-11-06) | +0.02-0.03 s; 1,537 ms with them, +23 ms (MEASURED 2026-11-06, the A/B's load boots) | MODELLED; MEASURED | |
-| Build | 11.3 s at boot (`docs/METADATA.md:4531`) | +0.09-0.13 s. MEASURED: from D 11,193 ms (Run A); from T 14,438 ms with the words, 15,777 ms without (Runs C, B); updates, control / moods, 20.6 / 22.1 s stopped, 42.2 / 45.0 s with the MP3, 28.7 / 30.2 s with the FLAC (Runs D, E) | MEASURED / MODELLED; MEASURED | S2 C |
+| Album pass | | 8-35 ms idle, 17-70 ms with an MP3. Worst tap to frame about 180 ms. MEASURED idle, `gm<hex>`: 14-31 ms (Run C); the real library, 1,747 albums: 15,538-16,483 µs (S8) | MODELLED; MEASURED | `uiMa<hex>` |
+| Fit count | | 2-5 ms per change. MEASURED idle, `gm<hex>`'s tracks pass: 5-12 ms (Run C); `Dq`'s count 4.8-5.6 ms, once 10.0 ms just after a rejoin (9.8); the real library, 19,533 tracks: `Dq`'s 4.7-5.9 ms, `gm<hex>`'s 5,013-5,746 µs (S8) | MODELLED; MEASURED | `D` |
+| Pick | p90 0.38-1.70 ms (`docs/AUTODJ.md:858`, ESTIMATED) | At or under inside a run; a jump adds 2.4-8.5 ms. MEASURED (9.8): inside a run p90 0.33-0.82 ms idle (no filter 1.32 ms); a jump 11.7 ms idle, 21.6-21.9 ms with the MP3 (29.5 ms idle before af248a0); the real library (S8, `docs/AUTODJ.md` 14.5): under Happy, 0x40A and 0x127, p90 0.35-1.08 ms idle in Follow the vibe (no filter 1.34 ms) and 0.31-0.34 ms in Stay on seed (no filter 0.42 ms), the 0.31 being 0x127's run with 2 jumps and 17 re-pins; 0x215's picks, nearly all jumps, p50 15.7-16.3 ms | ESTIMATED / MODELLED; MEASURED | `Dn200` |
+| Boot load | 1.1-1.5 s at 20k, ESTIMATED; 1,514 ms at 19,413 tracks without the words (MEASURED 2026-11-06) | +0.02-0.03 s; 1,537 ms with them, +23 ms (MEASURED 2026-11-06, the A/B's load boots); the real card, 19,533 tracks with the words: 1,834 ms (S8; one boot with no control, so not the words' cost; over the 1.1-1.5 s estimate) | MODELLED; MEASURED | |
+| Build | 11.3 s at boot (`docs/METADATA.md:4531`) | +0.09-0.13 s. MEASURED: from D 11,193 ms (Run A); from T 14,438 ms with the words, 15,777 ms without (Runs C, B); updates, control / moods, 20.6 / 22.1 s stopped, 42.2 / 45.0 s with the MP3, 28.7 / 30.2 s with the FLAC (Runs D, E); the real card from its records at the boot (`gb!` and a reset), 19,533 tracks (19,442 from T, 82 from D, 9 by their paths), 19,249 with moods: 17,284 ms; its update step 29,473 ms on the card worker (S8) | MEASURED / MODELLED; MEASURED | S2 C |
 | Flash | About 4.36 MB, 69 %, at v0.11.0 (`.github/release-notes.md:162-164`, `docs/RELEASE-0.11.0-CHECKS.md:92`); guard warns at 80 % (`tools/flash_guard.py:49`). Size at a1566fe not determined; 4,311,563 B at main af72b50 (MEASURED-HOST) | 10-20 KB code, about 5 KB strings. MEASURED-HOST: +6,888 B for S0-S2, 4,318,451 B (68.6 %, the app 70 % of its slot) | GUESS; MEASURED-HOST | `pio run` |
 | IRAM | 5,176 B left (`docs/ARCHITECTURE.md:4019`) | 0. MEASURED-HOST: 0 for S0-S2, 5,161 B left before and after; RAM 58,480 B left, unchanged | READ; MEASURED-HOST | `iram_diet` |
 | NVS | `kCurrent` 4 (`lib/core/NvsLayout.h:52`) | One u16 | READ | `test_nvs_layout` |
@@ -1513,18 +1590,18 @@ A slow pass is a UI hitch, not an audio risk. The loop runs under the decoder an
 
 | Unknown | Cheapest answer |
 |---|---|
-| Real share of moods and coverage | The query below, on the user's own `mstream.db`, opened read-only |
-| Whether head files are on the release | `GET /api/` on the user's server shows `moodFilters`; the query's `analysed`. Not determinable here |
-| Which build the user's server runs | The user looks at its version |
-| Does the stored list cluster by mood (real ρ) | Once a card has moods, a host script over T and MPDJ using `tools/mpdj.py`. Not built |
-| Album share, albums resting on few songs, folder against `album_id` | Same script |
-| How many tracks on a card are a peer's | `gm` coverage against the card's track count at S8 |
-| Real pass, pick and jump time | `uiMa<hex>`, `Dn200`. **The pass idle, answered (2026-11-06, `gm<hex>`, 9.6 Run C):** albums 14-31 ms, tracks 5-12 ms. **The rest, answered (2026-11-06):** the albums pass with an MP3 21,645-40,039 µs (9.7); a pick inside a run p90 0.33-0.82 ms idle, a jump 11.7 ms idle and 21.6-21.9 ms with the MP3 (9.8) |
+| Real share of moods and coverage | The query below, on the user's own `mstream.db`, opened read-only. **Partly answered from the card (2026-11-08, 9.12):** coverage, 19,249 of its 19,533 tracks scored (98.5 %), and four filters' shares, among them Happy at Standard (7,508). The other per-mood shares need the query, not run |
+| Whether head files are on the release | `GET /api/` on the user's server shows `moodFilters`; the query's `analysed`. Not determinable here. **Answered (2026-11-08, 9.12):** yes: the user's server scored 19,249 of the card's 19,443 tracks |
+| Which build the user's server runs | The user looks at its version. **Answered (2026-11-08), by the user's word:** v6.33.1, the release they said they had put out with the new APIs, the only one with S6 and #1072. `/api/` answered 401 without a sign-in, so the version string wasn't read; the mood route answering shows S6 |
+| Does the stored list cluster by mood (real ρ) | Once a card has moods, a host script over T and MPDJ using `tools/mpdj.py`. Not built. A hint (2026-11-08, `docs/AUTODJ.md` 14.5): Follow the vibe stayed inside Happy, 0x40A and 0x127 for 200 picks each with no jump |
+| Album share, albums resting on few songs, folder against `album_id` | Same script. **Album share answered for four filters (2026-11-08, 9.12).** The rest not run |
+| How many tracks on a card are a peer's | `gm` coverage against the card's track count at S8. **Answered for the user's card (2026-11-08, 9.12):** none: its status says it holds one library, from the user's own server. 90 of its 19,533 tracks have no T record, and 194 of T's 19,443 have no scores |
+| Real pass, pick and jump time | `uiMa<hex>`, `Dn200`. **The pass idle, answered (2026-11-06, `gm<hex>`, 9.6 Run C):** albums 14-31 ms, tracks 5-12 ms. **The rest, answered (2026-11-06):** the albums pass with an MP3 21,645-40,039 µs (9.7); a pick inside a run p90 0.33-0.82 ms idle, a jump 11.7 ms idle and 21.6-21.9 ms with the MP3 (9.8). **On the real library (2026-11-08, 9.12):** albums 15.5-16.5 ms and tracks 5.0-5.7 ms idle; the picks in `docs/AUTODJ.md` 14.5 |
 | Heap with the block | S1's C++ test, then S2 D. The port's folders and string bytes are estimated. **Answered (2026-11-06, 9.5, 9.6 Runs D and E):** one 32 KB class, -32,768 B, at every step on the device, and at the model's boot; the model's joined figure after the update unchanged, 360,436 B. No redesign |
 | A second hole >= 62,464 B after FLAC and `gb` | S2 E |
 | Opus plus Auto DJ at 20k | One device run. No figure exists |
 | Hitch at the end of a fence | `uiMa<hex>`, `g0`, `ui` |
-| node:sqlite and bun:sqlite at the bars | `test/db/mood-bars.test.mjs` |
+| node:sqlite and bun:sqlite at the bars | `test/db/mood-bars.test.mjs`. **Answered (2026-11-06, 9.10):** 0 wrong on both, on this Mac (arm64) |
 | Whether scores stay in 0..1 | Not checked by the server (mStream `src/db/mood-sync.js:42`). The writer clamps |
 | `--moods`' run time on a real card | S2's first run (C8). **Answered (2026-11-06, 9.6 Run C):** on this Mac's card reader the mood step took 34.1 s on a dry run, the whole write 18.2 s on the next run |
 | Whether the user's unit already stored schema 5 | `[nvs] schema` at boot. Harmless either way: the step is empty. **Answered (2026-11-06):** yes, "[nvs] schema 5, newer than this firmware's 4": #27's builds wrote it |
@@ -1572,13 +1649,14 @@ What would change the plan:
   - `analyzeMoods` off clears every row in one commit.
   - No data or audio risk.
   - If real runs commit at every sync, add a hold-back, for example under 1 % of rows changed and under 7 days.
+  - **At S8 (2026-11-08):** a second sync with no change made no commit (generation 96 and commitId 0xCEB05E0858368AC0 unchanged) and no mood call (5.2's step 3). So a score-only commit could not arise there and wasn't seen. Whether any score changed on the server in between is not known.
 - **Two terminals of different versions alternating.** The old one drops tails, the new one refills. Flip-flop commits.
-- **Partial analysis.** Albums with nothing analysed vanish silently under any filter. If that surprises in S8, frame A-partial returns.
-- **A card with many peer tracks.** They match nothing in v1. If S8's coverage shows that matters, the peer read comes back: the client already goes through the proxy (terminal `src/api/transfer.rs:95, 109`), and the route is already on the allowlist.
-- **`mood-bars` not 0 on Bun or on an ARM runner.** The literal parse differs at a bar. Fix the server to bind the bar, not the card rule. Unlikely (GUESS).
-- **Head files not on the release.** The table stays empty, S3 and S5 never show on a real card, and the stages still pass on host.
+- **Partial analysis.** Albums with nothing analysed vanish silently under any filter. If that surprises in S8, frame A-partial returns. **At S8 (2026-11-08):** 12 of the card's 1,747 albums have no analysed track, and 194 of the card's 19,443 tracks from the server (T's records) got no scores from it (9.12).
+- **A card with many peer tracks.** They match nothing in v1. If S8's coverage shows that matters, the peer read comes back: the client already goes through the proxy (terminal `src/api/transfer.rs:95, 109`), and the route is already on the allowlist. **At S8:** none on the user's card (9.12).
+- **`mood-bars` not 0 on Bun or on an ARM runner.** The literal parse differs at a bar. Fix the server to bind the bar, not the card rule. Unlikely (GUESS). **Cleared on this Mac (2026-11-06, arm64):** 0 on node and on Bun (9.10).
+- **Head files not on the release.** The table stays empty, S3 and S5 never show on a real card, and the stages still pass on host. **Cleared (2026-11-08):** the user's server has them (9.12).
 - **Raw scores leave the server.** 4-place scores reach any authenticated caller and key holder for visible paths. 3-place `moodMatch` already leaves on `recent/added`, raw vectors on embeddings. Heads are CC-BY-NC-SA (mStream `src/db/discovery-features-lib.js:104-108, 132`).
-- **The first boot after flashing** costs every user one rebuild: 11.3 s at 20k (MEASURED).
+- **The first boot after flashing** costs every user one rebuild: 11.3 s at 20k from D (MEASURED); 17.3 s from the records on the user's 1 TB card at 19,533 tracks (S8, 9.12).
 - **Translations** are machine-made, and native review is owed on 126 new texts.
 - **#56, #68 or #27 landing or rebasing first.** Redo the lineage step of 9.11. Nothing else moves.
 

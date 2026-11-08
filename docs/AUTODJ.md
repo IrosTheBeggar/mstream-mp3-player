@@ -41,12 +41,14 @@ block with 816 KB of PSRAM free, a misreading of the heap that goes back
 to the placement's first day. Fixed and checked on the device that day
 (7.4, 14.3).
 
-**Mood filters (2026-11-06):** a mood filter keeps every pick inside it
+**Mood filters (2026-11-06 and 08):** a mood filter keeps every pick inside it
 (3.14; docs/MOOD-FILTERS.md's stage S4), set on Output > Auto DJ's Smart
 filters row (9.2; stage S5) or with `Dq`. Both were checked on the Core2
 on 2026-11-06: the engine (MOOD-FILTERS.md 9.8) and the page (9.9). With
 no filter, every pick, the Auto DJ button's draws and the toasts are as
-before.
+before. On 2026-11-08 its dry runs (`Dn200`) ran under four filters on
+a real library, the user's 1 TB card with its scores synced; no live
+pick (section 14.5 below).
 
 The other documents:
 
@@ -475,7 +477,9 @@ Before 2026-10-16 a row damaged at a pick had no line: only `D`'s
 
 docs/MOOD-FILTERS.md has the design (4.4, 6), its figures and its
 sessions. What the engine does with a filter (READ; host-tested, and
-checked on the Core2 2026-11-06, MOOD-FILTERS.md 9.8):
+checked on the Core2 2026-11-06, MOOD-FILTERS.md 9.8; the lists, jumps,
+repeats and re-pins also in dry runs on a real library 2026-11-08,
+section 14.5 here):
 
 - **The filter:** 11 bits, `q` (MOOD-FILTERS.md 5.4), set by the Smart
   filters row's editor (9.2) or `Dq` and saved (section 8), over the library's mood words (`library.idx` v7, a
@@ -506,7 +510,7 @@ checked on the Core2 2026-11-06, MOOD-FILTERS.md 9.8):
   adds nothing, reads Waiting, and the status says "Waiting: no track
   fits the filters". The glue counts the tracks inside the filter
   (`AutoDj::stepMood()`, one pass over the words, 4.8-5.6 ms at 19,413
-  tracks, MEASURED) when `q` changes and when the library comes back (the first
+  tracks, 4.7-5.9 ms at 19,533 on the real library (14.5), MEASURED) when `q` changes and when the library comes back (the first
   pass, each fence's end); not by the library's stamp, track count or
   pointer, which a score-only rebuild leaves as they were. Behind the
   fence the filter is off and the count kept.
@@ -1783,3 +1787,63 @@ ran after the look and the breaker (METADATA.md 3.8), which owe their own check.
 | 14a | **Pass** for the open, its tries and the remount, three runs; the join that follows, on a boot's fresh heap. The card off the bus: FatFs's answer 3, "1 of 3", ABSENT 43.9 s later, the next read 58.5 s after it: "(after a remount)", joined in 1.85 s. After an update step the join failed instead with `[heap] FAILED` and NO PSRAM, in the first run's update too, before any pull: the rejoin's spacer, nothing of the card's (PR 36). In one run a walk's retry reached the card first: the guard's one restart, the queue kept. A first `Dc` opened with no driver line: the card was still answering (hence the row's note). Not shown: the page's Can't read on a physical pull (a dark screen), a paused player (all three ran stopped), and a status on a card certainly out with the panel lit |
 | 14b | **Pass,** with opens failing and with the directory sector getting no answer. The boot's lines; `library.idx` b48fa114 and `tags.bin` c27ddcb1 unchanged, no card writes; no walk; `cid=?`; the Library row, Rescan's note; Reading, then Can't read, 41.9 s on (46.5 s with no answer); no answers stuck at 52 for the last 45.9 s. The fault off and a reboot: "matches the card", 19,412 tracks, the index open and joined. Not shown: `gs` to its T line after ABSENT under no answer, and the spare's T lists no records, so a transfer's library by identity only |
 | 14c | **Pass,** after `e7623e0`. Its first run failed: `gs` read the root with the jobs running, printed "no transfer data" for a read fault and restarted the player; since then, under these jobs, `gs` and `gt` don't read it ("T: not read"). ABSENT from the start, the walk (about 21 s), compaction and update step ran to their ends, no restart in 153 s, no answers stuck at 16 and 4. A temporary override took a transfer's library for one with no identity for most of it; the real state ran about 20 s. Not shown: the page's Can't read in a session whose jobs run |
+
+### 14.5 Mood filters on a real library (2026-11-08)
+
+On the user's Core2, on docs/MOOD-FILTERS.md 9.9's merged build
+(`bea362c` with S0's commit picked on top), with the user's 1 TB card
+after its first sync with mood scores and a second that changed nothing
+(generation 96, docs/MOOD-FILTERS.md 9.12): 19,533 tracks, 19,249 with a
+mood word, an index of 19,237 rows. The device had walked the card, run
+its update step and, by `gb!`, rebuilt at a boot before these runs.
+Nothing playing, the queue stopped at 31 of 36, so no `z`. No Guru,
+`task_wdt`, `[E]`, `[heap] FAILED` or LOW line; the loop stack's lowest
+3,532 B. All figures MEASURED.
+
+- **The join** (`D1`): 19,267 of 19,533 tracks have neighbours (266
+  without a row; BPM 89 %, key 97 %), in 1,442 ms, 327 slices in 113 loop
+  passes, 87 reads, 301,252 B at the peak, with the boot's validation walk
+  just started. PSRAM's largest free block 524,276 B after it.
+- **`Dn200`**, idle, each after `Dq<hex>`, `Dm0` or `Dm1`, `Ds717feda5`
+  and `Dr`. The fit is `Dq`'s count; with no filter, the library's 19,533
+  tracks. p50 / p90 / max in µs:
+
+| Filter | Fit | Anchor | Repeats, artists | Jumps, re-pins, repeats inside | Loosened, random | p50 / p90 / max |
+|---|---|---|---|---|---|---|
+| None | 19,533 | Follow | 5, 139 | | 0, 0 | 1,265 / 1,336 / 1,829 |
+| None | 19,533 | Stay | 69, 83 | | 0, 0 | 400 / 418 / 2,470 |
+| 0x001: Happy | 7,508 | Follow | 8, 96 | 0, 0, 0 | 0, 0 | 890 / 968 / 1,410 |
+| 0x001 | 7,508 | Stay | 105, 52 | 0, 1, 0 | 1, 0 | 306 / 315 / 2,286 |
+| 0x40A: Neutral, Neutral, Loose | 8,117 | Follow | 0, 142 | 0, 0, 0 | 0, 0 | 1,008 / 1,080 / 1,758 |
+| 0x40A | 8,117 | Stay | 106, 66 | 0, 0, 0 | 0, 0 | 330 / 342 / 1,756 |
+| 0x127: Sad, Relaxed, Vocals, Danceable | 157 | Follow | 81, 82 | 0, 0, 0 | 0, 0 | 325 / 346 / 1,321 |
+| 0x127 | 157 | Stay | 89, 73 | 2, 17, 0 | 3, 2 | 258 / 305 / 13,292 |
+| 0x215: Happy, Relaxed, Instrumental, Strict | 20 | Follow | 180, 11 | 190, 0, 180 | 1, 190 | 16,329 / 16,776 / 17,296 |
+| 0x215 | 20 | Stay | 180, 11 | 190, 193, 180 | 0, 190 | 15,702 / 16,022 / 16,428 |
+
+- The first run, no filter in Follow the vibe, ran under the boot's
+  validation walk (21.4 s): 2,325 / 3,406 / 7,072 µs. The table has its
+  rerun after the walk; a third run gave 1,264 / 1,334 / 1,895 µs. All
+  three gave the same counts, as did Happy's rerun in Follow the vibe
+  (892 / 967 / 1,519 µs).
+- Reads at a pick: 199/1/0 in every Follow the vibe run, and in Stay on
+  seed with no filter or 0x40A. In Stay on seed: 198/2/0 under 0x001 (its
+  1 re-pin), 183/17/0 under 0x127 (most of its 17 re-pins read the new
+  pin's slot), 6/194/0 under 0x215 (193 re-pins in 200 picks; 1 dry).
+- Under Happy, 0x40A and 0x127, Follow the vibe never jumped: at every
+  pick a listed row inside the filter was there, and not all of them
+  cooled. The synthetic card's 0x127, 405 tracks, never jumped either
+  (docs/MOOD-FILTERS.md 9.8). Stay on seed re-pinned 17 times under 0x127
+  here, 35 times there.
+- 0x215's 20 tracks: 190 jumps and 180 repeats in 200 picks, classes
+  0: 12, 8: 8, 16: 180 in both modes, p50 15.7-16.3 ms. The synthetic
+  0x3E7's 8 tracks: 16.1-16.5 ms idle on `af248a0` (docs/MOOD-FILTERS.md
+  9.8).
+- `Dq`'s counts: 5.9 ms (Happy), 5.7 ms (0x40A), 4.9 ms (0x127), 4.7 ms
+  (0x215). `Dq215` logged 9.6's amber note, "Only 20 tracks fit: they
+  will repeat".
+- After the runs, `Dq200`, `Dm0` and `D0` put back the saved settings the
+  boot had read: Auto DJ off, Follow the vibe, 55 %, filter 0x200. `D`
+  then read 0 picks since the boot, so no pick reached the queue.
+- Not run: anything playing (a play would go to the user's server at the
+  next sync), the Auto DJ button and a live pick.
