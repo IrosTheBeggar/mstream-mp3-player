@@ -1457,6 +1457,15 @@
     ],
     "bytes": 96
   },
+  "glance.hint": "Power button for controls",
+  "@glance.hint": {
+    "context": "The glance (Output > Touch when off: Track): a touch on the dark screen shows the playing track for 10 s, on Now Playing's layout with no buttons, so a touch changes nothing. This one line, dim and centred, is where Now Playing's buttons are: the power button (the side key) opens the whole screen with its controls. A short noun phrase, not a sentence.",
+    "room": {
+      "font": "Small",
+      "px": 296,
+      "const": "uitext::kGlanceHintW"
+    }
+  },
   "sleep.title_left": "Sleep timer: {0} left",
   "@sleep.title_left": {
     "context": "The Sleep timer sheet's title while a timer counts down, and the toast after +10 min.",
@@ -4384,7 +4393,7 @@
       "const": "uitext::kSettingValueSubW"
     }
   },
-  "settings.screen_off_sub": "dims first; a tap wakes it",
+  "settings.screen_off_sub": "dims first, then off",
   "@settings.screen_off_sub": {
     "context": "Screen off after's line.",
     "room": {
@@ -4504,6 +4513,69 @@
   "settings.brightness_max": "Max",
   "@settings.brightness_max": {
     "context": "Brightness's value (a screen brightness level).",
+    "room": {
+      "font": "Body",
+      "else": "Small",
+      "px": 74
+    }
+  },
+  "settings.screen_touch": "Touch when off",
+  "@settings.screen_touch": {
+    "context": "Output row: what a touch on the glass or the strip does while the screen is off (the power button always turns it on).",
+    "room": {
+      "font": "Body",
+      "px": 174,
+      "const": "uitext::kSettingValueSubW"
+    }
+  },
+  "settings.screen_touch_nothing_sub": "the power button wakes it",
+  "@settings.screen_touch_nothing_sub": {
+    "context": "Touch when off's line when set to Nothing: a touch on the dark screen does nothing; only the power button (the side key) turns the screen on.",
+    "room": {
+      "font": "Small",
+      "px": 174,
+      "const": "uitext::kSettingValueSubW"
+    }
+  },
+  "settings.screen_touch_wake_sub": "a tap wakes it",
+  "@settings.screen_touch_wake_sub": {
+    "context": "Touch when off's line when set to Wake: a touch turns the screen on (and does nothing else).",
+    "room": {
+      "font": "Small",
+      "px": 174,
+      "const": "uitext::kSettingValueSubW"
+    }
+  },
+  "settings.screen_touch_glance_sub": "a tap shows the track",
+  "@settings.screen_touch_glance_sub": {
+    "context": "Touch when off's line when set to Track: a touch shows the playing track for 10 s on a screen with no buttons.",
+    "room": {
+      "font": "Small",
+      "px": 174,
+      "const": "uitext::kSettingValueSubW"
+    }
+  },
+  "settings.screen_touch_nothing": "Nothing",
+  "@settings.screen_touch_nothing": {
+    "context": "Touch when off's value (a tap takes the next): a touch on the dark screen does nothing.",
+    "room": {
+      "font": "Body",
+      "else": "Small",
+      "px": 74
+    }
+  },
+  "settings.screen_touch_wake": "Wake",
+  "@settings.screen_touch_wake": {
+    "context": "Touch when off's value (a tap takes the next): a touch turns the screen on.",
+    "room": {
+      "font": "Body",
+      "else": "Small",
+      "px": 74
+    }
+  },
+  "settings.screen_touch_glance": "Track",
+  "@settings.screen_touch_glance": {
+    "context": "Touch when off's value (a tap takes the next): a touch shows the playing track (title, artist, cover) for 10 s, with no buttons.",
     "room": {
       "font": "Body",
       "else": "Small",
@@ -4821,11 +4893,18 @@
   },
   "settings.idle_warning": "Turning off in {0} s",
   "@settings.idle_warning": {
-    "context": "The countdown toast in the idle power-off's last 30 s, beside [Keep on]; any input keeps it on.",
-    "room": {
-      "font": "Body",
-      "px": 186
-    },
+    "context": "The countdown toast in the idle power-off's last 30 s, beside [Keep on]; any input keeps it on. Also on the glance (Output > Touch when off: Track), in place of its power-button line, alone in Small.",
+    "room": [
+      {
+        "font": "Body",
+        "px": 186
+      },
+      {
+        "font": "Small",
+        "px": 296,
+        "const": "uitext::kGlanceHintW"
+      }
+    ],
     "placeholders": {
       "0": {
         "means": "the seconds left",

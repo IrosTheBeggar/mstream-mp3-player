@@ -125,6 +125,7 @@ enum class S : uint16_t {
   now_playing_autodj_off,  // Off
   now_playing_autodj_waiting,  // Waiting
   now_playing_autodj_paused,  // Paused
+  glance_hint,  // Power button for controls
   sleep_title_left,  // Sleep timer: {0} left
   sleep_title_end_track,  // Sleep timer: end of track
   sleep_title_end_album,  // Sleep timer: end of album
@@ -351,7 +352,7 @@ enum class S : uint16_t {
   autodj_status_waits_fit,  // Waiting: no track fits the filters
   autodj_status_paused,  // Paused: tracks failed to play
   settings_screen_off,  // Screen off after
-  settings_screen_off_sub,  // dims first; a tap wakes it
+  settings_screen_off_sub,  // dims first, then off
   settings_screen_never_sub,  // stays on: more battery
   settings_screen_off_15s,  // 15 s
   settings_screen_off_30s,  // 30 s
@@ -365,6 +366,13 @@ enum class S : uint16_t {
   settings_brightness_medium,  // Medium
   settings_brightness_high,  // High
   settings_brightness_max,  // Max
+  settings_screen_touch,  // Touch when off
+  settings_screen_touch_nothing_sub,  // the power button wakes it
+  settings_screen_touch_wake_sub,  // a tap wakes it
+  settings_screen_touch_glance_sub,  // a tap shows the track
+  settings_screen_touch_nothing,  // Nothing
+  settings_screen_touch_wake,  // Wake
+  settings_screen_touch_glance,  // Track
   settings_idle_off,  // Turn off when idle
   settings_idle_off_sub,  // paused, on battery
   settings_idle_never_sub,  // stays on: more battery
@@ -648,7 +656,7 @@ enum class S : uint16_t {
   format_hz,  // {0} Hz
   format_list_sep,  // , 
 };
-inline constexpr unsigned kStrings = 639;
+inline constexpr unsigned kStrings = 647;
 
 // The languages, English first: the mobile app's ten (one without a
 // catalogue yet draws English), and the pseudo-locale where UISTR_PSEUDO

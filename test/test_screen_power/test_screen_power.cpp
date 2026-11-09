@@ -4,8 +4,8 @@
 // Host tests for the screen policy (ScreenPower, docs/ENERGY.md item 2): the
 // dim and off timings for each choice, what keeps it lit, what holds a
 // lit one lit (a countdown toast, the Pair screen's search), the wakes,
-// the PWR key, the pocket guard, and the
-// backlight levels. The wake latch's own cases (with
+// the PWR key, the pocket guard, "Touch when off" (touch(): nothing, a
+// wake, or the glance), and the backlight levels. The wake latch's own cases (with
 // the real recognisers) are in test_ui_input.
 // Run: pio test -e native
 #include <unity.h>
@@ -477,6 +477,8 @@ void test_names() {
   TEST_ASSERT_EQUAL_STRING("bright", ScreenPower::name(L::Bright));
   TEST_ASSERT_EQUAL_STRING("dim", ScreenPower::name(L::Dim));
   TEST_ASSERT_EQUAL_STRING("off", ScreenPower::name(L::Off));
+  TEST_ASSERT_EQUAL_STRING("glance", ScreenPower::name(L::Glance));
+  TEST_ASSERT_TRUE(std::strlen(ScreenPower::name(W::Glance)) > 0);
   TEST_ASSERT_TRUE(std::strlen(ScreenPower::name(W::PocketGuard)) > 0);
   TEST_ASSERT_TRUE(std::strlen(ScreenPower::name(W::HoldLit)) > 0);
 }
@@ -878,6 +880,282 @@ void test_hold_lit_through_the_pair_search() {
   TEST_ASSERT_TRUE(t.off());
 }
 
+// ---- "Touch when off" (touch(): the swallowed touch, by the choice) ----
+
+using T = ScreenPower::Touched;
+
+// Off by the countdown at 30 s (the default), with `choice`.
+ScreenPower offWith(int choice) {
+  ScreenPower s;
+  s.begin(0);
+  s.setOffTouch(choice);
+  s.step(30000, false);
+  TEST_ASSERT_TRUE(s.off());
+  return s;
+}
+
+void test_off_touch_choices_and_labels() {
+  TEST_ASSERT_EQUAL_INT(3, ScreenPower::kOffTouches);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenPower::OffTouch::Nothing), ScreenPower::kDefaultOffTouch);
+  TEST_ASSERT_EQUAL_STRING("Nothing", ScreenPower::offTouchLabel(0));
+  TEST_ASSERT_EQUAL_STRING("Wake", ScreenPower::offTouchLabel(1));
+  TEST_ASSERT_EQUAL_STRING("Track", ScreenPower::offTouchLabel(2));
+  // Out of range (a damaged NVS value): the default, Nothing.
+  TEST_ASSERT_EQUAL_INT(0, ScreenPower::clampOffTouch(3));
+  TEST_ASSERT_EQUAL_INT(0, ScreenPower::clampOffTouch(-1));
+  TEST_ASSERT_EQUAL_STRING("Nothing", ScreenPower::offTouchLabel(9));
+  ScreenPower s;
+  s.begin(0);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenPower::OffTouch::Nothing), static_cast<int>(s.offTouch()));
+  s.setOffTouch(2);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenPower::OffTouch::Glance), static_cast<int>(s.offTouch()));
+  s.setOffTouch(7);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenPower::OffTouch::Nothing), static_cast<int>(s.offTouch()));
+  // The choice changes nothing now (the row is tapped on a lit screen).
+  TEST_ASSERT_TRUE(s.bright());
+  TEST_ASSERT_FALSE(s.step(100, false));
+}
+
+// The default: a touch on an Off screen does nothing at all (no wake, no
+// countdown, no pocket guard, nobody looking), as often as it lands. The
+// PWR key still wakes it; Dim isn't off (a touch brightens it); an event's
+// wake is still answered by a touch.
+void test_a_touch_on_an_off_screen_does_nothing_by_default() {
+  ScreenPower s = offWith(ScreenPower::kDefaultOffTouch);
+  for (uint32_t t = 40000; t < 45000; t += 500) {
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(T::Ignored), static_cast<int>(s.touch(t)));
+    TEST_ASSERT_FALSE(s.step(t, false));
+  }
+  TEST_ASSERT_TRUE(s.off());
+  TEST_ASSERT_FALSE(s.pocketGuard());
+  TEST_ASSERT_FALSE(s.unattended());
+  TEST_ASSERT_EQUAL_UINT8(0, s.backlight());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(W::Timeout), static_cast<int>(s.why()));  // (still the countdown's)
+  // The PWR key: the wake, with the pocket guard and the pocket rule.
+  TEST_ASSERT_TRUE(s.powerKey(50000, false));
+  TEST_ASSERT_TRUE(s.step(50000, false));
+  TEST_ASSERT_TRUE(s.bright());
+  TEST_ASSERT_TRUE(s.pocketGuard());
+  TEST_ASSERT_TRUE(s.unattended());
+  // Dim: a touch brightens it (swallowed), with no guard and nobody unattended.
+  ScreenPower d;
+  d.begin(0);
+  d.step(21000, false);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(L::Dim), static_cast<int>(d.level()));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(T::Woke), static_cast<int>(d.touch(22000)));
+  TEST_ASSERT_TRUE(d.step(22000, false));
+  TEST_ASSERT_TRUE(d.bright());
+  TEST_ASSERT_FALSE(d.pocketGuard());
+  TEST_ASSERT_FALSE(d.unattended());
+  TEST_ASSERT_EQUAL_UINT32(20000, d.msUntilNext(22000));  // the whole countdown again
+  // An event's wake from Off: the first touch only answers it.
+  ScreenPower e = offWith(ScreenPower::kDefaultOffTouch);
+  e.wake(40000, W::Event);
+  e.step(40000, false);
+  TEST_ASSERT_FALSE(e.touchActs());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(T::Answered), static_cast<int>(e.touch(41000)));
+  TEST_ASSERT_FALSE(e.step(41000, false));
+  TEST_ASSERT_TRUE(e.touchActs());
+  TEST_ASSERT_TRUE(e.unattended());  // (the next landing on the glass attends)
+}
+
+// Wake: a touch on an Off screen wakes it, as every touch did before the
+// setting (the pocket guard, the pocket rule; no guard with Never).
+void test_the_wake_choice_is_the_old_touch() {
+  ScreenPower s = offWith(static_cast<int>(ScreenPower::OffTouch::Wake));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(T::Woke), static_cast<int>(s.touch(40000)));
+  TEST_ASSERT_TRUE(s.step(40000, false));
+  TEST_ASSERT_TRUE(s.bright());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(W::Touch), static_cast<int>(s.why()));
+  TEST_ASSERT_TRUE(s.pocketGuard());
+  TEST_ASSERT_TRUE(s.unattended());
+  TEST_ASSERT_TRUE(s.touchActs());  // (the latch, Input's, still holds this touch through its lift)
+  s.step(50000, false);
+  TEST_ASSERT_TRUE(s.off());
+  ScreenPower n;
+  n.begin(0);
+  n.setOffTouch(1);
+  n.setTimeout(ScreenPower::kNever, 0);
+  n.turnOff(W::Console);
+  n.step(1000, false);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(T::Woke), static_cast<int>(n.touch(2000)));
+  TEST_ASSERT_FALSE(n.pocketGuard());
+  TEST_ASSERT_EQUAL_INT(1, run(n, 2000, 600000));  // the wake itself only
+  TEST_ASSERT_TRUE(n.bright());
+}
+
+// Track: a touch on an Off screen shows the glance: lit at the Bright
+// level, a touch never acts on it, nobody has looked yet, and Off again 10 s
+// after its last touch. Activity can't keep it (nothing on it acts), nor can
+// a hold (the toast isn't on it), nor Never.
+void test_the_glance() {
+  ScreenPower s = offWith(static_cast<int>(ScreenPower::OffTouch::Glance));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(T::Glance), static_cast<int>(s.touch(40000)));
+  TEST_ASSERT_TRUE(s.step(40000, false));
+  TEST_ASSERT_TRUE(s.glance());
+  TEST_ASSERT_FALSE(s.off());
+  TEST_ASSERT_FALSE(s.bright());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(L::Off), static_cast<int>(s.previous()));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(W::Touch), static_cast<int>(s.why()));
+  TEST_ASSERT_EQUAL_UINT8(100, s.backlight());  // the Bright level
+  TEST_ASSERT_FALSE(s.touchActs());
+  TEST_ASSERT_TRUE(s.unattended());
+  TEST_ASSERT_FALSE(s.pocketGuard());
+  TEST_ASSERT_EQUAL_UINT32(10000, s.msUntilNext(40000));
+  TEST_ASSERT_EQUAL_INT(0, run(s, 40050, 44950));
+  // Another touch: 10 s more, no change of level.
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(T::GlanceAgain), static_cast<int>(s.touch(45000)));
+  TEST_ASSERT_FALSE(s.step(45000, false));
+  TEST_ASSERT_EQUAL_UINT32(10000, s.msUntilNext(45000));
+  s.activity(50000);  // (no effect on the glance)
+  TEST_ASSERT_EQUAL_INT(0, run(s, 45050, 54950, false, true));  // held? no: nothing on it to read
+  TEST_ASSERT_TRUE(s.glance());  // (and no dim step)
+  TEST_ASSERT_TRUE(s.step(55000, false, true));
+  TEST_ASSERT_TRUE(s.off());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(L::Glance), static_cast<int>(s.previous()));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(W::Glance), static_cast<int>(s.why()));
+  TEST_ASSERT_FALSE(s.unattended());  // Off: the next wake decides again
+  // The next touch: the glance again.
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(T::Glance), static_cast<int>(s.touch(60000)));
+  TEST_ASSERT_TRUE(s.step(60000, false));
+  TEST_ASSERT_TRUE(s.glance());
+  // With Never: still 10 s. The console's Pb shows on it too.
+  ScreenPower n;
+  n.begin(0);
+  n.setOffTouch(2);
+  n.setTimeout(ScreenPower::kNever, 0);
+  n.overrideBacklight(200);
+  n.turnOff(W::Console);
+  n.step(1000, false);
+  n.touch(2000);
+  TEST_ASSERT_TRUE(n.step(2000, false));
+  TEST_ASSERT_EQUAL_UINT8(200, n.backlight());
+  TEST_ASSERT_EQUAL_INT(0, run(n, 2050, 11950));
+  TEST_ASSERT_TRUE(n.step(12000, false));
+  TEST_ASSERT_TRUE(n.off());
+  // Wraparound-safe.
+  const uint32_t t0 = 0xFFFFF000u;
+  ScreenPower w;
+  w.begin(t0 - 30000);
+  w.setOffTouch(2);
+  w.step(t0, false);
+  TEST_ASSERT_TRUE(w.off());
+  w.touch(t0 + 100);
+  w.step(t0 + 100, false);
+  TEST_ASSERT_EQUAL_INT(0, run(w, t0 + 150, t0 + 10050));
+  TEST_ASSERT_TRUE(w.glance());
+  TEST_ASSERT_TRUE(w.step(t0 + 10100, false));
+  TEST_ASSERT_TRUE(w.off());
+}
+
+// The PWR key on the glance opens the whole screen, as from Off: a wake,
+// with the pocket guard (none with Never) and the pocket rule. A keepLit
+// pass or the panel's sleep-out don't change that.
+void test_power_key_on_the_glance_opens_the_screen() {
+  for (int c = 0; c < 3; ++c) {  // (keepLit, then the panel still asleep, then neither)
+    ScreenPower s = offWith(2);
+    s.touch(40000);
+    s.step(40000, false);
+    TEST_ASSERT_TRUE(s.glance());
+    TEST_ASSERT_TRUE(s.powerKey(42000, c == 0, c == 1));
+    TEST_ASSERT_TRUE(s.step(42000, false));
+    TEST_ASSERT_TRUE(s.bright());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(L::Glance), static_cast<int>(s.previous()));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(W::PowerKey), static_cast<int>(s.why()));
+    TEST_ASSERT_TRUE(s.pocketGuard());
+    TEST_ASSERT_TRUE(s.unattended());
+    TEST_ASSERT_TRUE(s.touchActs());
+    TEST_ASSERT_EQUAL_INT(0, run(s, 42050, 51950));
+    TEST_ASSERT_TRUE(s.step(52000, false));  // no input: off again
+    TEST_ASSERT_TRUE(s.off());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(W::PocketGuard), static_cast<int>(s.why()));
+  }
+  // Input after it ends the guard: the countdown, as ever.
+  ScreenPower s = offWith(2);
+  s.touch(40000);
+  s.step(40000, false);
+  s.powerKey(42000, false);
+  s.step(42000, false);
+  s.activity(45000);
+  TEST_ASSERT_FALSE(s.pocketGuard());
+  TEST_ASSERT_EQUAL_UINT32(20000, s.msUntilNext(45000));
+  // With Never: no guard.
+  ScreenPower n;
+  n.begin(0);
+  n.setOffTouch(2);
+  n.setTimeout(ScreenPower::kNever, 0);
+  n.turnOff(W::Console);
+  n.step(1000, false);
+  n.touch(2000);
+  n.step(2000, false);
+  TEST_ASSERT_TRUE(n.powerKey(3000, false));
+  TEST_ASSERT_FALSE(n.pocketGuard());
+  TEST_ASSERT_EQUAL_INT(1, run(n, 3000, 600000));
+  TEST_ASSERT_TRUE(n.bright());
+}
+
+// What else ends the glance: an event (the whole screen and its countdown,
+// the first touch only answers it), what keeps the screen lit (the same),
+// the console (someone is there), and what turns a screen off.
+void test_what_ends_the_glance() {
+  ScreenPower e = offWith(2);
+  e.touch(40000);
+  e.step(40000, false);
+  TEST_ASSERT_TRUE(e.wake(41000, W::Event));
+  TEST_ASSERT_TRUE(e.step(41000, false));
+  TEST_ASSERT_TRUE(e.bright());
+  TEST_ASSERT_FALSE(e.pocketGuard());
+  TEST_ASSERT_FALSE(e.touchActs());
+  TEST_ASSERT_TRUE(e.unattended());
+  TEST_ASSERT_EQUAL_UINT32(20000, e.msUntilNext(41000));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(T::Answered), static_cast<int>(e.touch(42000)));
+  TEST_ASSERT_TRUE(e.touchActs());
+  // keepLit: as an event's wake.
+  ScreenPower k = offWith(2);
+  k.touch(40000);
+  k.step(40000, false);
+  TEST_ASSERT_TRUE(k.step(41000, true));
+  TEST_ASSERT_TRUE(k.bright());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(W::KeepLit), static_cast<int>(k.why()));
+  TEST_ASSERT_FALSE(k.touchActs());
+  TEST_ASSERT_TRUE(k.unattended());
+  // The console (Ps1, the scripted finger): lit and attended.
+  ScreenPower c = offWith(2);
+  c.touch(40000);
+  c.step(40000, false);
+  TEST_ASSERT_TRUE(c.wake(41000, W::Console));
+  c.step(41000, false);
+  TEST_ASSERT_TRUE(c.bright());
+  TEST_ASSERT_FALSE(c.unattended());
+  TEST_ASSERT_TRUE(c.touchActs());
+  // The choice changed during it (the console's Pst): the next touch
+  // follows the new one.
+  ScreenPower n = offWith(2);
+  n.touch(40000);
+  n.step(40000, false);
+  n.setOffTouch(0);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(T::Ignored), static_cast<int>(n.touch(45000)));
+  TEST_ASSERT_TRUE(n.step(50000, false));  // (its 10 s from the first touch)
+  TEST_ASSERT_TRUE(n.off());
+  ScreenPower w = offWith(2);
+  w.touch(40000);
+  w.step(40000, false);
+  w.setOffTouch(1);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(T::Woke), static_cast<int>(w.touch(41000)));
+  TEST_ASSERT_TRUE(w.step(41000, false));
+  TEST_ASSERT_TRUE(w.bright());
+  TEST_ASSERT_TRUE(w.pocketGuard());
+  TEST_ASSERT_TRUE(w.unattended());
+  // The sleep timer's pause, the console's Ps0: off now.
+  ScreenPower t = offWith(2);
+  t.touch(40000);
+  t.step(40000, false);
+  t.turnOff(W::SleepTimer);
+  TEST_ASSERT_TRUE(t.step(41000, false));
+  TEST_ASSERT_TRUE(t.off());
+  TEST_ASSERT_FALSE(t.unattended());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_tables_and_defaults);
@@ -904,5 +1182,11 @@ int main(int, char**) {
   RUN_TEST(test_hold_lit_leaves_an_off_screen_off);
   RUN_TEST(test_hold_lit_and_a_wake_during_it);
   RUN_TEST(test_hold_lit_through_the_pair_search);
+  RUN_TEST(test_off_touch_choices_and_labels);
+  RUN_TEST(test_a_touch_on_an_off_screen_does_nothing_by_default);
+  RUN_TEST(test_the_wake_choice_is_the_old_touch);
+  RUN_TEST(test_the_glance);
+  RUN_TEST(test_power_key_on_the_glance_opens_the_screen);
+  RUN_TEST(test_what_ends_the_glance);
   return UNITY_END();
 }

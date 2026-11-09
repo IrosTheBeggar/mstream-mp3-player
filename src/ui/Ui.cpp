@@ -96,6 +96,7 @@ Ui::Ui(UiHost& host, Input& input, PlaybackController& player, QueueModel& queue
       queuePage_(*this),
       dancePage_(*this),
       outputPage_(*this),
+      glance_(*this, NowPlayingPage::Mode::Glance),
       thumbs_(library),
       waves_(library) {
   // The list's safety net (UI spike): fewer frames, or whole rows, while
@@ -486,6 +487,13 @@ void Ui::showTop() {
   // The first frame at once, whatever the cadence: navigation should feel instant.
   if (page_->update(nowMs_, true, false)) clock_.drawn(nowMs_);
   if (!hud_.up()) tabBar_.update(tabState(nowMs_));
+  // Under the glance (a console tab change or browse, a library update's
+  // reset, in the dark: none wakes the screen), that first frame went past
+  // the gfx gate (a list pushes to the panel itself), and setListBand() may
+  // have filled the band and written the scroll registers: the glance whole
+  // again, at once, through the mapping as it is now. (resume() draws it
+  // itself: suspend() ended glancing_.)
+  if (glancing_) drawGlance(true);
 }
 
 void Ui::push(const NavModel::PageRef& p) {
@@ -627,6 +635,13 @@ void Ui::libraryChanged() {
   thumbs_.libraryChanged();
   resetLibraryTab();
   if (started_ && !suspended_ && list_.attached()) list_.reload();  // (the Queue's rows: new keys)
+  // Under the glance: its cover's album id is another's now. And with the
+  // Library tab on top, resetLibraryTab()'s showTop() drew the list's first
+  // frame at once, past the gfx gate (ListView pushes to the panel itself),
+  // and its band may have been set again (the scroll registers written):
+  // the glance whole again, through the mapping as it is now. (The list
+  // shows for that one band render, tens of ms.)
+  if (glancing_) drawGlance(true);
 }
 
 void Ui::libraryUpdating() {
@@ -637,6 +652,9 @@ void Ui::libraryUpdating() {
   host_.snapshot(state_);
   resetLibraryTab();
   if (started_ && !suspended_ && list_.attached()) list_.reload();
+  // (Under the glance, as libraryChanged(): the fence's placeholder cover,
+  // and the list frame showTop() drew over it.)
+  if (glancing_) drawGlance(true);
 }
 
 void Ui::browse(LibraryIndex* index) {
@@ -1394,7 +1412,8 @@ void Ui::loop(uint32_t nowMs) {
       c.thumbsMaxUs = std::max(c.thumbsMaxUs, thumbsUs);
       if (us > kSlowPassUs) {
         Serial.printf("[ui] slow pass %lu us on %s: %s %lu us, snapshot %lu, tab bar %lu, status %lu, covers %lu\n",
-                      (unsigned long)us, ui.page_ ? ui.page_->name() : "no page", frame ? "a frame" : "the page (no frame)",
+                      (unsigned long)us, ui.glancing_ ? "the glance" : ui.page_ ? ui.page_->name() : "no page",
+                      frame ? "a frame" : "the page (no frame)",
                       (unsigned long)pageUs, (unsigned long)snapshotUs, (unsigned long)tabUs, (unsigned long)statusUs,
                       (unsigned long)thumbsUs);
       }
@@ -1508,15 +1527,25 @@ void Ui::loop(uint32_t nowMs) {
   if (dark_ || identifying_) {
     // The screen is off, or identify()'s banner covers it: nothing drawn
     // (the page, the tab bar, frames); what the cover worker made comes
-    // in, and no new job starts.
+    // in, and no new job starts. The glance over the dark UI: its own
+    // redraws only (what changed: the second, the track, a cover, the
+    // status), counted as the page's.
     if (dance_.active()) {
       dance_.setActive(false);  // (a console tab change while dark)
       danceWasOn_ = true;
     }
     // (A list's rows are rendered again on the wake, as when a modal goes:
     // the row that asked for this cover still holds the placeholder.)
-    if (thumbs_.loop(nowMs) != Thumbs::kNone) thumbsStale_ = true;
-    waves_.loop(nowMs);
+    const uint32_t arrived = thumbs_.loop(nowMs);
+    if (arrived != Thumbs::kNone) thumbsStale_ = true;
+    waves_.loop(nowMs);  // (first: a waveform read this pass is drawn this pass)
+    if (glancing_) {
+      const uint32_t t = micros();
+      // Whole when the scroll's mapping changed under it (a writer the gate
+      // doesn't stop: setListBand(), ensureScroller()); else what changed.
+      drawGlance(scrollSig() != glanceScroll_, arrived);
+      pageUs = micros() - t;
+    }
     return;
   }
   if (!hud_.up()) {
@@ -1678,16 +1707,21 @@ void Ui::updateStatus(uint32_t nowMs) {
   if (h == statusHash_ || (statusHash_ != 0 && nowMs - statusAtMs_ < 500)) return;
   statusHash_ = h;
   statusAtMs_ = nowMs;
+  drawStatusLine(text);
+}
+
+void Ui::drawStatusLine(const char* text) {
   M5Canvas& c = gfx::strip();
   Fonts& f = Fonts::instance();
   c.fillRect(0, 0, kW, kStatusH, col::HEAD);
   c.drawFastHLine(0, 0, kW, col::DIV);
-  f.draw(c, Font::Small, text, 8, kStatusH / 2 + 1, uitext::kStatusW, col::DIM, col::HEAD);
+  if (text[0]) f.draw(c, Font::Small, text, 8, kStatusH / 2 + 1, uitext::kStatusW, col::DIM, col::HEAD);
   gfx::push(c, 0, kH - kStatusH, kW, kStatusH);
 }
 
 uint32_t Ui::idleMs(uint32_t nowMs) const {
-  if (dark_ && started_ && !suspended_) return 20;  // nothing to draw: touches read every 20 ms
+  // Nothing to draw (or the glance's seconds): touches read every 20 ms.
+  if (dark_ && started_ && !suspended_) return 20;
   if (!started_ || suspended_ || !page_ || !page_->animating()) return 5;
   return std::max<uint32_t>(1, std::min<uint32_t>(5, clock_.msUntilDue(nowMs)));
 }
@@ -1697,6 +1731,14 @@ uint32_t Ui::idleMs(uint32_t nowMs) const {
 void Ui::onEvent(const InputEvent& e) {
   using T = InputEvent::Type;
   if (!started_ || suspended_ || !e.isGlass()) return;
+  // The glance: nothing on it acts. Only the console's scripted finger gets
+  // here (the input layer swallows every real touch on the glance through
+  // its lift), and its own wake (Why::Console) opens the whole screen at
+  // this pass's end: the touch goes nowhere, and touch_ stays None, so its
+  // Tap or Release after the wake does nothing either. (On an off screen
+  // the scripted finger acts on the dark UI; on the glance it only opens
+  // it. Its strip presses aren't the UI's: ButtonPolicy has them.)
+  if (glancing_) return;
   // The event's cost (a tab's tap opens its page here: its header and
   // more), the longest kept for the console's ui, a slow one logged.
   struct Timed {
@@ -2002,6 +2044,7 @@ void Ui::suspend() {
   if (suspended_) return;
   suspended_ = true;
   identifying_ = false;  // (the screen that takes over draws its own)
+  glancing_ = false;     // (likewise; still wanted: resume() draws it again)
   // The screen that takes the display draws as ever (it keeps it lit).
   gfx::setDark(false);
   danceWasOn_ = false;  // its page is left below
@@ -2025,6 +2068,14 @@ void Ui::resume() {
   gfx::fill(0, 0, kW, kH, col::BG, true);
   tabBar_.invalidate();
   showTop();
+  // The glance still up (a console spike command ran under it, and took no
+  // screen of its own: a screen it took is lit, so the glance would have
+  // gone): drawn whole again over whatever the tool and showTop()'s list
+  // frame left, not left frozen for the rest of its 10 s.
+  if (glanceWanted_ && dark_) {
+    glancing_ = true;
+    drawGlance(true);
+  }
 }
 
 // ---- the screen off (ScreenPower) ----
@@ -2053,6 +2104,11 @@ void Ui::setDark(bool on) {
     return;
   }
   gfx::setDark(false);
+  // (ScreenControl ends the glance first, setGlance(false): this makes sure.
+  // From the glance, setDark(true) is nothing: the UI is dark already, so
+  // the way to off ends the glance itself, before the sleep-in.)
+  glancing_ = false;
+  glanceWanted_ = false;
   if (!started_ || suspended_) return;
   redrawAll();
 }
@@ -2079,7 +2135,24 @@ void Ui::redrawAll() {
     coach_.draw();
   } else if (page_) {
     page_->repaint();
+    // After a glance the panel's memory holds the glance, not this page's
+    // last frame: a list page's band can't wait for the next frame, nor for
+    // the modal over it to go (its glance pixels would show around a dialog,
+    // above a short sheet, and for a frame on every wake). Its band whole
+    // now, as showTop()'s first frame (the A-Z rail with it), before what
+    // is over it; and the Library's status line, which updateStatus() leaves
+    // alone under a modal (drawn again there once it may: statusHash_ 0).
+    // The filters' editor covers the content: nothing of it shows.
+    if (gramStale_ && list_.attached() && !filters_.up()) {
+      if (list_.update(nowMs_, true, false)) clock_.drawn(nowMs_);
+      if (statusBand_) {
+        char text[64] = "";
+        if (page_ == &libraryPage_ && !browse_) librarytext::statusText(state_.libraryStatus, text, sizeof(text));
+        drawStatusLine(text);
+      }
+    }
   }
+  gramStale_ = false;
   if (sheet_.up()) sheet_.draw();
   if (sleepSheet_.up()) sleepSheet_.draw();
   if (filters_.up()) filters_.draw();
@@ -2087,6 +2160,72 @@ void Ui::redrawAll() {
   if (dialog_.up()) dialog_.draw();
   if (toast_.up()) toast_.draw();
   Serial.printf("[ui] awake: drawn again in %lu ms\n", (unsigned long)(millis() - t0));
+}
+
+// ---- the glance ("Touch when off": Track) ----
+
+bool Ui::setGlance(bool on) {
+  if (!on) {
+    glanceWanted_ = false;
+    if (!glancing_) return false;
+    glancing_ = false;
+    glance_.leave();
+    Serial.printf("[ui] glance: over after %lu ms\n", (unsigned long)(nowMs_ - glanceSinceMs_));
+    return false;
+  }
+  if (!started_ || suspended_ || !dark_) {
+    // (Lit with nothing drawn, the panel would show its stale memory for 10
+    // s: ScreenControl keeps the backlight off instead.)
+    Serial.printf("[ui] glance: not drawn (%s)\n", !started_    ? "the UI isn't up"
+                                                   : suspended_ ? "another screen has the display"
+                                                                : "the UI isn't dark");
+    return false;
+  }
+  const uint32_t t0 = millis();
+  // A touch the dark UI still had (the console's scripted finger: it acts
+  // in the dark) ends, as when the screen went dark: nothing reaches it now.
+  endPageTouch();
+  touch_ = TouchOn::None;
+  holdUnused_ = false;
+  glancing_ = true;
+  glanceWanted_ = true;
+  gramStale_ = true;
+  glanceSinceMs_ = nowMs_;
+  // The panel keeps its scroll registers through sleep-in; sent again
+  // anyway (as redrawAll()).
+  if (vscroll_.active()) vscroll_.resend();
+  drawGlance(true);
+  Serial.printf("[ui] glance: drawn in %lu ms (the track; nothing on it acts)\n", (unsigned long)(millis() - t0));
+  return true;
+}
+
+void Ui::drawGlance(bool all, uint32_t arrived) {
+  // The glance draws all of y 0-239, the toast's rows (36-71) with the
+  // rest: a toast up in the dark stays unseen (redrawAll() brings it on the
+  // wake), so its cover goes for these draws (the page draws without
+  // `over`). The gate is lifted for them alone, as identify()'s banner:
+  // everything else the dark UI draws meanwhile still goes nowhere.
+  gfx::setCover(0, 0);
+  gfx::setDark(false);
+  tabBar_.updateGlance(tabState(nowMs_), all);
+  if (all) {
+    glance_.enter(glanceRef_);  // all of it (its 98 x 98 cover sprite made the first time)
+    glanceScroll_ = scrollSig();
+  } else {
+    glance_.update(nowMs_, false, false);
+    if (arrived != Thumbs::kNone) glance_.thumbReady(arrived);
+  }
+  gfx::setDark(dark_);
+  applyCover();
+}
+
+uint32_t Ui::scrollSig() const {
+  // (The UI's lists are the only scroller while it draws: a spike tool's
+  // suspends it.)
+  if (!vscroll_.active()) return 0;
+  const VScrollMap& m = vscroll_.map();
+  return 1u | static_cast<uint32_t>(ListScroller::activeVsp()) << 1 | static_cast<uint32_t>(m.top()) << 9 |
+         static_cast<uint32_t>(m.height()) << 17;
 }
 
 // ---- a computer's @identify ----
@@ -2235,10 +2374,11 @@ void Ui::drawHeader(const Header& h) {
 
 void Ui::printState() const {
   Serial.printf("[ui] %s; tab %s, page %s (depth %d)%s\n",
-                !started_    ? "not started"
-                : suspended_ ? "SUSPENDED (another screen has the display)"
-                : dark_      ? "up, DARK (the screen is off: nothing drawn)"
-                             : "up",
+                !started_             ? "not started"
+                : suspended_          ? "SUSPENDED (another screen has the display)"
+                : dark_ && glancing_  ? "up, GLANCE (the track over the dark UI: nothing on it acts)"
+                : dark_               ? "up, DARK (the screen is off: nothing drawn)"
+                                      : "up",
                 NavModel::name(nav_.tab()), pageKindName(nav_.top().kind), nav_.depth(),
                 vscroll_.active() ? ", hardware scroll on" : "");
   for (int t = 0; t < NavModel::kTabs; ++t) {
@@ -2258,6 +2398,11 @@ void Ui::printState() const {
     char desc[256];  // (Now Playing's with its seek bar: up to ~180)
     page_->describe(desc, sizeof(desc));
     Serial.printf("[ui] page: %s\n", desc);
+  }
+  if (glancing_) {
+    char desc[320];  // (the glance's line too)
+    glance_.describe(desc, sizeof(desc));
+    Serial.printf("[ui] glance: %s\n", desc);
   }
   if (list_.attached()) {
     Serial.printf("[ui] list: %lu rows, %lu items, offset %ld px, open row %ld, %s, %lu frames, %lu rows rendered ahead\n",

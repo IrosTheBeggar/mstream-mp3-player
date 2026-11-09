@@ -66,6 +66,14 @@ void PowerLab::command(const char* a) {
         screen_.consoleKey();  // Psk: the PWR key's short press
         return;
       }
+      if (arg[0] == 'f' && !arg[1]) {
+        screen_.consoleFinger();  // Psf: a real finger's landing, as the latch would report it
+        return;
+      }
+      if (arg[0] == 't' && arg[1] >= '0' && arg[1] < '0' + ScreenPower::kOffTouches && !arg[2]) {
+        screen_.setOffTouch(arg[1] - '0');  // Pst<0-2>: "Touch when off", saved, as the Output row
+        return;
+      }
       if (!flag(arg, &on)) break;
       screen(on);
       return;
@@ -88,7 +96,7 @@ void PowerLab::command(const char* a) {
 
 void PowerLab::help() const {
   Serial.println("[power] P line (5 s), Pl log every 5 s, Pw csv on the card, Pm<name> mark, Pq/Pq1/Pq0 coulomb "
-                 "counter; knobs: Pb<0-255> backlight while bright (Pb0 the setting's), Ps0/Ps1 screen off/on (Ps its state, Psk the PWR key's press), Pc<mhz> cpu now (160<->80), "
+                 "counter; knobs: Pb<0-255> backlight while bright (Pb0 the setting's), Ps0/Ps1 screen off/on (Ps its state, Psk the PWR key's press, Psf a finger's landing, Pst0/1/2 touch when off: nothing/wake/track, saved), Pc<mhz> cpu now (160<->80), "
                  "Pcb<160|240|0> cpu from boot (saved; 0 the default), Pt<min>,<max> bt tx levels 0-7 (a test), Pe0/1 5V boost, Pg0/1 "
                  "green led, Pi0/1 imu, Pf touch controller (Pf0/1 Active/Monitor now), Pa0/1 speaker amp, Pd<ms> loop idle delay (0 auto), Pk0/1 dance tracker + "
                  "taps, Pr0/1 bt background search rest now / a burst again, Pz play tone:silence next");
@@ -146,7 +154,7 @@ void PowerLab::backlight(const char* a) {
   // (it still dims and goes off; "Screen off after: Never" on the Output
   // tab holds it for a long measurement).
   if (!screen_.overrideBacklight(static_cast<uint8_t>(v))) {
-    Serial.printf("[power] backlight: the screen is %s (Ps1, or a touch, first)\n", screen_.levelName());
+    Serial.printf("[power] backlight: the screen is %s (Ps1, or the PWR key, first)\n", screen_.levelName());
     return;
   }
   const uint8_t after = screen_.backlight();
@@ -156,9 +164,16 @@ void PowerLab::backlight(const char* a) {
 }
 
 // The screen policy's own Off and wake (app/ScreenControl): the UI draws
-// nothing while it's off, and a touch wakes it and does nothing else (with
-// no input after that, it goes off again 10 s later: the pocket guard).
+// nothing while it's off. A touch then does what "Touch when off" says
+// (nothing by default; a wake that does nothing else; the glance), and the
+// PWR key wakes it (with no input after that, it goes off again 10 s
+// later: the pocket guard). Ps1 on the glance: the whole screen.
 void PowerLab::screen(bool on) {
+  if (on && screen_.glancing()) {
+    Serial.println("[power] screen: the glance -> the whole screen");
+    screen_.consoleOn();
+    return;
+  }
   if (on == !screen_.off()) {
     Serial.printf("[power] screen already %s (%s)\n", on ? "on" : "off", screen_.levelName());
     if (on) screen_.consoleOn();  // (dim: bright again)

@@ -29,7 +29,9 @@ bool langWritten = false;  // migrate()'s step to 3 wrote "ui"/"lang" "en"
 // step from 3 to 4 is nothing: schema 4 only adds the "autodj" namespace,
 // whose absent keys read as Auto DJ's defaults (app/AutoDjStore). The step
 // from 4 to 5 is nothing too: schema 5 only adds "autodj"/"moods", and no
-// key is no mood filter.
+// key is no mood filter. So is the step from 5 to 6: schema 6 only adds
+// "screen"/"touch_off", and no key is Nothing ("Touch when off": the
+// update's new default, a touch on the off screen does nothing).
 // False: a step failed; the number then stays where it was, so the next
 // boot tries again.
 bool migrate(uint16_t from, uint16_t to) {

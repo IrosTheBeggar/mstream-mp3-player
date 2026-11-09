@@ -137,9 +137,10 @@ static Haptics haptics;
 static Input input(haptics);
 // The screen policy (docs/ENERGY.md item 2; ScreenPower): lit, dim for the
 // last 10 s, then off after the chosen time without input, or at once by
-// the PWR key; a touch on a screen that isn't lit only wakes it (swallowed
-// by the input layer), and so do the PWR key on an off one and the events
-// that need the listener.
+// the PWR key. The PWR key on an off one wakes it, and so do the events
+// that need the listener; a touch there does what "Touch when off" says
+// (nothing by default, a wake, or the glance), and a touch on a dim one
+// only brightens it (each swallowed by the input layer).
 static ScreenControl screen(input);
 // What the touch buttons do, the same on every screen.
 static ButtonPolicy buttonPolicy;
@@ -744,6 +745,7 @@ struct MainUiHost : ui::UiHost {
     s.feedback = buttonPolicy.feedback();
     s.screenTimeout = static_cast<uint8_t>(screen.timeoutChoice());
     s.brightness = static_cast<uint8_t>(screen.brightnessChoice());
+    s.screenTouch = static_cast<uint8_t>(screen.offTouchChoice());
     s.sleepRunning = sleepTimer.running();
     s.sleepFading = sleepTimer.fading();
     s.sleepPick = static_cast<int8_t>(sleepPick());
@@ -983,6 +985,7 @@ struct MainUiHost : ui::UiHost {
     Serial.println("[power] idle: Keep on");
   }
   void setBrightness(int choice) override { screen.setBrightness(choice); }
+  void setScreenTouch(int choice) override { screen.setOffTouch(choice); }
   void wakeScreen(const char* why) override { screen.wake(why); }
   // Auto DJ (app/AutoDj). Its own [dj] lines say what each did. The Plays
   // (the button, "Auto DJ from here") are the listener's taps; behind the
@@ -1324,12 +1327,16 @@ static void openCalibration(CalibrationScreen::Start how, int targets = Calibrat
     Serial.println("[input] the calibration draws with the UI's sprites: not without the UI (no PSRAM)");
     return;
   }
-  if (screen.off() || screen.panelAsleep()) {
+  // (The glance too: the UI is dark under it; the wake opens the whole
+  // screen, then the calibration.)
+  if (screen.off() || screen.panelAsleep() || screen.glancing()) {
+    const bool onGlance = screen.glancing();  // (before the wake ends it)
     calibrationPending = true;
     pendingHow = how;
     pendingTargets = targets;
     screen.wake("the touch calibration");
-    Serial.println("[cal] the screen is off: it opens once the screen is awake");
+    Serial.println(onGlance ? "[cal] on the glance: it opens with the whole screen"
+                            : "[cal] the screen is off: it opens once the screen is awake");
     return;
   }
   calibrationPending = false;
@@ -2217,8 +2224,9 @@ static bool vizInput(const InputEvent& e) {
 }
 
 static void handleInput(uint32_t now) {
-  // The screen: the PWR key, USB, and whether a touch now would only wake
-  // it (dim or off: the input layer swallows that touch through its lift).
+  // The screen: the PWR key, USB, and whether a touch now acts (not on a
+  // dim or off screen, nor the glance: the input layer swallows that touch
+  // through its lift, and "Touch when off" says what it does).
   screen.beginPass(now);
   // (The visualizer keeps the screen lit, so the PWR key only counts as
   // input there: ending the visualizer is all it does.)
@@ -2228,7 +2236,7 @@ static void handleInput(uint32_t now) {
   }
   input.setSuspended(spike.ownsInput());
   input.update(now);
-  screen.afterInput(now);  // the wake it saw (logged), or input: the countdown again
+  screen.afterInput(now);  // the swallowed touch it saw (logged), or input: the countdown again
   touchedThisPass = false;
   for (InputEvent e; input.poll(e);) {
     if (e.type == InputEvent::Type::Down || e.isButton()) touchedThisPass = true;
@@ -2777,8 +2785,9 @@ static void stepIdle(uint32_t now, bool input) {
   if (o.warn) {
     Serial.printf("[power] idle: turning off in %lu s (%s); any input keeps it on\n",
                   (unsigned long)p.warnSeconds(now),
-                  screen.off() ? "the screen is off and stays off: it may be night"
-                               : "the warning is up, and the screen stays lit until it ends");
+                  screen.off()        ? "the screen is off and stays off: it may be night"
+                  : screen.glancing() ? "on the glance (it goes off in its 10 s; the PWR key keeps it on)"
+                                      : "the warning is up, and the screen stays lit until it ends");
   }
   if (o.warnEnd) {
     Serial.printf("[power] idle: kept on (%s)\n", p.blocker() != IdlePolicy::Blocker::None
@@ -3724,6 +3733,7 @@ void setup() {
   screen.onDark([](bool dark) {
     if (userInterface) userInterface->setDark(dark);
   });
+  screen.onGlance([](bool on) { return userInterface && userInterface->setGlance(on); });
   spike.onScreenReleased(uiResume);  // the UI draws again
   spike.onRebuild(walkAndRebuild);
   {
@@ -3803,13 +3813,15 @@ void loop() {
   // and the listener may still be wearing them: the back-off runs its 15
   // minutes (a range drop is what it is for).
   // (And while a computer drives the dancer: the player is paused for it.)
-  audio.bluetooth().setQuiet((screen.off() && player.state() != PlayState::Playing &&
+  // (The glance: as off. Nothing on it acts, and it may be a pocket's.)
+  audio.bluetooth().setQuiet(((screen.off() || screen.glancing()) && player.state() != PlayState::Playing &&
                               player.state() != PlayState::Waiting && !btLost) ||
                              usbViz.active());
   btSession.update(audio.bluetooth().link(), now);
   stepPlayGate(now);
-  // The fade's toast: a touch (swallowed as a wake, or on a lit screen) or
-  // the PWR key's wake while it fades; only its buttons act on the timer.
+  // The fade's toast: a touch (swallowed as a wake, or on a lit screen; not
+  // one "Touch when off" ignores, nor the glance's) or the PWR key's wake
+  // while it fades; only its buttons act on the timer.
   const bool woken = screen.takeWoken();
   if (sleepTimer.fading() && (woken || touchedThisPass) && userInterface) userInterface->sleepFading();
   stepSleep(now);
@@ -3994,7 +4006,7 @@ void loop() {
     screen.step(millis(), keepLit, hold);
   }
   // A calibration asked for in the dark: now that the panel is awake.
-  if (calibrationPending && !screen.off() && !screen.panelAsleep()) {
+  if (calibrationPending && !screen.off() && !screen.panelAsleep() && !screen.glancing()) {
     openCalibration(pendingHow, pendingTargets);
   }
   // A computer's @identify in the dark, likewise (dropped if another screen
@@ -4015,8 +4027,9 @@ void loop() {
     lastStats = now;
   }
   // Yield every pass (the decoder runs above the loop on this core), less
-  // while a list frame is due soon, 20 ms while the screen is off (the UI
-  // says so: nothing to draw, touches only wake; ENERGY.md item 9).
+  // while a list frame is due soon, 20 ms while the UI is dark (the screen
+  // off or the glance; the UI says so: nothing to draw but the glance's
+  // second, and a touch acts on nothing; ENERGY.md item 9).
   // (A power measurement's Pd stretches the wait while nothing animates.)
   const uint32_t uiIdleMs = userInterface ? userInterface->idleMs(millis()) : screen.off() ? 20 : 5;
   uint32_t loopDelayMs = powerLab.loopDelayMs(uiIdleMs, danceMode.active());

@@ -54,6 +54,8 @@ SchemaStep schemaStep(bool have, uint16_t stored, uint16_t current) {
 
 uint8_t repeatFrom(bool have, uint8_t stored) { return have && stored < kRepeatModes ? stored : 0; }
 
+uint8_t offTouchFrom(bool have, uint8_t stored) { return have && stored < kOffTouches ? stored : 0; }
+
 uistr::Lang langFrom(bool have, const char* stored) {
   uistr::Lang l = uistr::Lang::En;
   if (!have || !stored || !uistr::langOf(stored, &l)) return uistr::Lang::En;

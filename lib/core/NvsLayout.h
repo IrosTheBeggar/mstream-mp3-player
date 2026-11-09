@@ -38,7 +38,13 @@
 // never reads the key: its picks are unfiltered). PR #27's card transfer
 // also takes schema 5 (its "plays" and "clock" namespaces): released
 // together they share it, one paragraph and no bump, and a unit that ran
-// either reads the other's keys as absent. A unit that ran the Opus work
+// either reads the other's keys as absent. Schema 6 is schema 5's keys and
+// "screen"/"touch_off", "Touch when off" (a u8, ScreenPower::OffTouch's
+// index: docs/ENERGY.md item 2); its migrate(5, 6) step does nothing (an
+// absent key reads as Nothing, the default the update brings: a touch on
+// the off screen no longer wakes it, the PWR key does), and older firmware
+// leaves a schema-6 NVS as it is (it never reads the key: a touch wakes
+// the screen, as it always did there). A unit that ran the Opus work
 // before it joined the queue modes (schema 1 with a kind-3 resume blob, no
 // repeat key) takes the same steps and keeps its resume point: a blob's
 // kinds are its own version's business (test_nvs_layout's migration matrix
@@ -56,7 +62,7 @@ namespace nvslayout {
 
 inline constexpr const char* kMetaNamespace = "meta";
 inline constexpr const char* kSchemaKey = "schema";
-inline constexpr uint16_t kCurrent = 5;
+inline constexpr uint16_t kCurrent = 6;
 
 // What the boot does about the stored number.
 struct SchemaStep {
@@ -104,6 +110,17 @@ inline constexpr uint8_t kRepeatModes = 3;
 // The mode to use: `stored` if the key is there (`have`) and known; absent
 // or another value: 0 (Off, the saved default).
 uint8_t repeatFrom(bool have, uint8_t stored);
+
+// ---- "Touch when off" ("screen"/"touch_off", schema 6) ----
+// A u8: 0 Nothing, 1 Wake, 2 Track (ScreenPower::OffTouch's values),
+// written once the taps rest (app/NvsLater). The namespace's other keys,
+// "off_after" and "bright", predate schema 1.
+inline constexpr const char* kScreenNamespace = "screen";
+inline constexpr const char* kOffTouchKey = "touch_off";
+inline constexpr uint8_t kOffTouches = 3;
+// The choice to use: `stored` if the key is there (`have`) and known;
+// absent or another value: 0 (Nothing, the default).
+uint8_t offTouchFrom(bool have, uint8_t stored);
 
 // ---- the UI's language ("ui"/"lang", schema 3) ----
 // A string: the language's BCP-47 tag ("de", "pt": uistr::tag()), written
