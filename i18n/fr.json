@@ -1,7 +1,7 @@
 {
   "@@locale": "fr",
   "@@autonym": "Français",
-  "@@note": "Machine translation, not yet reviewed by a native French speaker. Made from the mobile app's French (mstream_music, lib/l10n/app_fr.arb, master at bdb174e, GPL-3.0) and the terminal player's (mstream-terminal-player, locales/fr.yml, main at b89ad0a, GPL-3.0) wherever they had the text or its words (vous, « morceau » for a track, « file » for the queue, « casque », « carte SD », « calibrage tactile », « Minuterie de veille », « Aléatoire »), and translated by a Fable agent (Claude) for the rest, then reviewed by a second Fable agent (meaning, terms, grammar, typography), fitted to the rooms with the width checker. Paths (/music/Artist/Album/) and format names stay as they are. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, the engine's UI: toast.autodj_*, now_playing.autodj*, library.autodj_here, empty.autodj, output.autodj*, autodj.*) were made the same way: the mobile app's words for Auto DJ, Ancre, Suivre l'ambiance, titre de départ, Seuil de similarité, Continuité du BPM and Mixage harmonique (its autoDj* keys), translated by a Fable agent otherwise, fitted to en.json's rooms (the notes say where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_fr.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_fr.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
+  "@@note": "Machine translation, not yet reviewed by a native French speaker. Made from the mobile app's French (mstream_music, lib/l10n/app_fr.arb, master at bdb174e, GPL-3.0) and the terminal player's (mstream-terminal-player, locales/fr.yml, main at b89ad0a, GPL-3.0) wherever they had the text or its words (vous, « morceau » for a track, « file » for the queue, « casque », « carte SD », « calibrage tactile », « Minuterie de veille », « Aléatoire »), and translated by a Fable agent (Claude) for the rest, then reviewed by a second Fable agent (meaning, terms, grammar, typography), fitted to the rooms with the width checker. Paths (/music/Artist/Album/) and format names stay as they are. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, the engine's UI: toast.autodj_*, now_playing.autodj*, library.autodj_here, empty.autodj, output.autodj*, autodj.*) were made the same way: the mobile app's words for Auto DJ, Ancre, Suivre l'ambiance, titre de départ, Seuil de similarité, Continuité du BPM and Mixage harmonique (its autoDj* keys), translated by a Fable agent otherwise, fitted to en.json's rooms (the notes say where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_fr.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_fr.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The screen's touch setting (November 2026, Output > Touch when off and the glance it can show: settings.screen_touch, its three values and their lines, glance.hint; settings.screen_off_sub rewritten, since a touch no longer wakes the screen unless the setting says so) was translated by a Fable agent (Claude), in this file's words for the screen's other settings, fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
   "boot.touch_hint": "Tactile déréglé ? Gardez un doigt sur l'écran.",
   "coach.header_tip": "Astuce {0} sur {1}",
   "coach.header_hint": "touchez : suite",
@@ -146,6 +146,7 @@
   "now_playing.autodj_off": "Désactivé",
   "now_playing.autodj_waiting": "En attente",
   "now_playing.autodj_paused": "En pause",
+  "glance.hint": "Bouton marche/arrêt pour les commandes",
   "sleep.title_left": "Minuterie : encore {0}",
   "@sleep.title_left": {
     "note": "« Minuterie de veille : … » dépasse les 226 px du titre de la feuille (245 px avec « encore 999+ min ») : « Minuterie : … » dans ces titres ; le nom complet reste sur la ligne du menu et dans ses toasts."
@@ -492,7 +493,7 @@
   },
   "autodj.status_paused": "En pause : morceaux impossibles à lire",
   "settings.screen_off": "Écran éteint après",
-  "settings.screen_off_sub": "baisse, un appui rallume",
+  "settings.screen_off_sub": "baisse, puis s'éteint",
   "settings.screen_never_sub": "allumé : consomme plus",
   "settings.screen_off_15s": "15 s",
   "settings.screen_off_30s": "30 s",
@@ -506,6 +507,22 @@
   "settings.brightness_medium": "Moyen",
   "settings.brightness_high": "Élevé",
   "settings.brightness_max": "Max",
+  "settings.screen_touch": "Toucher écran éteint",
+  "@settings.screen_touch": {
+    "note": "« Toucher l'écran éteint » fait 176 px dans les 174 du titre, comme « Écran éteint après »."
+  },
+  "settings.screen_touch_nothing_sub": "rallumé par marche/arrêt",
+  "@settings.screen_touch_nothing_sub": {
+    "note": "« le bouton marche/arrêt rallume » fait 203 px en Small dans 174."
+  },
+  "settings.screen_touch_wake_sub": "un appui rallume",
+  "settings.screen_touch_glance_sub": "un appui affiche le titre",
+  "@settings.screen_touch_glance_sub": {
+    "note": "« un appui affiche le morceau » fait 182 px en Small dans 174."
+  },
+  "settings.screen_touch_nothing": "Rien",
+  "settings.screen_touch_wake": "Allumer",
+  "settings.screen_touch_glance": "Morceau",
   "settings.idle_off": "Éteindre si inactif",
   "settings.idle_off_sub": "en pause, sur batterie",
   "settings.idle_never_sub": "allumé : consomme plus",
