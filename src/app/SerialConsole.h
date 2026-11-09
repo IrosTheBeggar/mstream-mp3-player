@@ -62,6 +62,8 @@
 //        join again, Dc the file reopened, Db<n> slot reads timed, Dh/Dh<id>
 //        and De "Auto DJ from here" and the Auto DJ button, Dx stop Dn/Db
 //        (Dn and Db run one step a loop pass: the loop never freezes)
+//   E... the ESP-NOW spike, only in a build with MSTREAM_ESPNOW_SPIKE=1 ([env:core2-espnow];
+//        spike/EspNowSpike.h has the list): E status, Ei up, Et<n> frames to the peer
 // '@' lines are a computer's, not commands (docs/USB-VISUALIZER.md: the USB
 // visualizer's protocol; HostLine): every byte from an '@' to the end of
 // its line goes to hostLine, never to the keys above, and is never echoed.
@@ -153,6 +155,10 @@ public:
     // text from the '@', writable) or not one (Bad, Long, Restart: `line`
     // nullptr).
     std::function<void(char* line, HostLine::Byte kind)> hostLine;
+#if MSTREAM_ESPNOW_SPIKE
+    // The ESP-NOW spike (E): the argument as typed (may be "").
+    std::function<void(const char*)> espNow;
+#endif
   };
 
   // The receive buffer setup() gives Serial before it starts (the
@@ -179,6 +185,9 @@ private:
     None, PlayIndex, Bench, HeadphonesName, Headroom, TempoPrior, DanceOffset, Freeze,
     InputLab, ScrollLab, LibraryIndex, FontProbe, ThumbProbe, Queue, Touch, Power, Sleep, Idle, BluetoothTest,
     Rate, Gapless, Opus, AutoDj,
+#if MSTREAM_ESPNOW_SPIKE
+    EspNow,
+#endif
   };
 
   Actions actions_;

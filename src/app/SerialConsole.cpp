@@ -217,6 +217,12 @@ char SerialConsole::key(char c) {
         Serial.printf("> auto dj \"%s\"\n", arg_.c_str());
         if (actions_.autoDj) actions_.autoDj(arg_.c_str());
         break;
+#if MSTREAM_ESPNOW_SPIKE
+      case Pending::EspNow:
+        Serial.printf("> esp-now \"%s\"\n", arg_.c_str());
+        if (actions_.espNow) actions_.espNow(arg_.c_str());
+        break;
+#endif
       case Pending::None:
         break;
     }
@@ -261,6 +267,9 @@ char SerialConsole::key(char c) {
     case 'G': pending_ = Pending::Gapless; arg_ = ""; break;
     case 'O': pending_ = Pending::Opus; arg_ = ""; break;
     case 'D': pending_ = Pending::AutoDj; arg_ = ""; break;
+#if MSTREAM_ESPNOW_SPIKE
+    case 'E': pending_ = Pending::EspNow; arg_ = ""; break;
+#endif
     default: return 0;  // newlines etc.
   }
   if (pending_ != Pending::None) {

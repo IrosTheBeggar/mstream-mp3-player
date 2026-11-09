@@ -69,6 +69,7 @@
 #include "app/UsbViz.h"
 #include "app/Version.h"
 #include "audio/Core2AudioBackend.h"
+#include "spike/EspNowSpike.h"
 #include "spike/Spike.h"
 #include "storage/CardSpace.h"
 #include "storage/LocalStorage.h"
@@ -2063,6 +2064,16 @@ static SerialConsole console({
       if (autoDj->takeUndoDropped() && userInterface) userInterface->queueUndoDropped();
     },
     [](char* line, HostLine::Byte kind) { usbViz.onLine(line, kind); },
+#if MSTREAM_ESPNOW_SPIKE
+    [](const char* a) {
+      if (a[0] == 'b' && !a[1]) {  // Eb: swap mode's boot next, the orderly way
+        Serial.println("[espnow] restarting into a boot without Bluetooth, the card or the UI");
+        espnowspike::requestSwapBoot();
+        restartNow();
+      }
+      espnowspike::command(a);
+    },
+#endif
 });
 
 // Touch buttons: the same on every screen (ButtonPolicy). Each click and
@@ -3331,6 +3342,9 @@ void setup() {
   powerSettings.begin();  // what the boot clock is, the Bluetooth power, and whether it restarted for the speed
   board::applyBootPower();  // the IMU suspended: nothing reads it
   diag::logHeap("boot");
+#if MSTREAM_ESPNOW_SPIKE
+  if (espnowspike::takeSwapBoot()) espnowspike::swapBoot();  // the console's Eb (never returns)
+#endif
 
   bootScreen.begin(version::player());
 
