@@ -407,7 +407,7 @@ The rules that keep it deadlock- and glitch-free:
 | speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake; switches the amp and I2S (M5.Speaker end/begin) off 2 s after it last queued audio and on again before the next buffer (`AmpGate`) |
 | M5.Speaker | 1 | 2 | mixes to 44.1 kHz mono (its input is always 44.1 kHz now); runs only while the amp is on |
 | the card worker (`card`, app/CardWorker) | 1 | 1 for a cover or a waveform's read (0 while a list moves or a finger is on its A-Z rail), the library update's build, a slice of the walk, and while the screen is dark a slice of the tag scan, a compaction and the update's save (a slice drops to 0, and ends after its unit, when a list moves or the scan's yields apply; a compaction or a save drops to 0 when the screen lights); 0 for the tag scan, compactions and the save while the screen is lit | one step at a time, only the one the loop hands it (app/CardTasks, ScanScheduler: docs/METADATA.md 3.3.4, 3.3.9, 3.8, 3.9): a cover (ui/Thumbs), a waveform's read (app/Waves), a slice of the validation walk (its folders for 18 ms lit, 250 ms dark), a compaction of `tags.bin`, a file of the tag scan a loop source names or a slice of its rest's files, the update step's build of the index and its save of `library.idx` (lib/core LibraryUpdate); made for the first step, gone after 3 s without one; 7.5 KB internal stack while it lives (6 KB until METADATA.md 3.8's device check, the figures here its; 5.4 KB used at most there, a read failing inside the reopen of D; 2.3 KB used at most on the device as the covers' worker; the card's jobs about 3.0 KB on N11's card, 3,140 B least left over 5,190 steps, MEASURED on df92c01 by `gs`; the deepest, ESTIMATED from the image, a compaction's reopen of D under its folders: about 4.0 KB (3,916 B MEASURED on 6c2a928, 2,228 B left), about 5.0 KB with the SD driver's log line on top, about 1.1 KB left before an interrupt's frame, 512 B more than before the 2026-10-09 review's `Container::open()`; the build MEASURED at 5,360 B on 6c2a928, 784 B left, its views' `std::sort` at libstdc++'s depth limit on the records' byte order, about 3.3-3.6 KB since `lib/core/IdSort` bounds the recursion at lg(n/16) + 1 frames, METADATA.md 3.9); reads the card in 4 KB pieces and writes it in 4 KB pieces that end on the file's 4 KB boundaries; covers level with the loop while nothing moves (at 0 they shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves; the tag scan, compactions and the update's save at 0 while the screen is lit, since the SD driver's reads busy-wait the CPU (the walk's slices, and while the screen is dark the scan's slices, a compaction and the save, at 1: above; at 0 the 2026-10-09 run measured a compaction about 1.75x its modelled card time, none having run at 1 there, and the save 2-4.5x its time on the loop at the boot); always below the decoder (below) |
-| Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and the dancer's frames (10/s idle; dancing 30/s at 240 MHz, 24/s below: `DanceRate`); sleeps 1-5 ms every pass (less while a list frame is due), 20 ms while the screen is off (`Ui::idleMs`; with no UI, main's own 20 ms), at most 2 ms while Auto DJ's join works; Auto DJ's step (below) |
+| Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and the dancer's frames (10/s idle; dancing 30/s at 240 MHz, 24/s below: `DanceRate`); sleeps 1-5 ms every pass (less while a list frame is due), 20 ms while the UI is dark (the screen off, or the glance: `Ui::idleMs`; with no UI, main's own 20 ms), at most 2 ms while Auto DJ's join works; Auto DJ's step (below) |
 
 ### The loop's pass
 
@@ -676,7 +676,8 @@ forever, cost +35.5 mA for as long as they were away):
   while nobody is around (the screen off and nothing playing or waiting,
   and not lost: a drop while listening pauses the player itself, and the
   listener may still wear them, so that gets the whole back-off;
-  `BtSink::setQuiet()`, fed with the screen policy's Off), no pages and
+  `BtSink::setQuiet()`, fed with the screen policy's Off, the glance
+  counted as off: nothing on it acts, and it may be a pocket's), no pages and
   no scans: connectable only, so headphones
   that are switched on or taken out of their case come back by themselves.
   A listener's ask starts a burst again.
@@ -1096,7 +1097,10 @@ End of album or End of queue before its last track can't say what is
 left, so +10 min is dim and does nothing there.
 
 During the fade any touch, strip press or PWR wake (swallowed as usual)
-shows the toast "Sleep timer: fading" with +10 min and Turn off, the only
+shows the toast "Sleep timer: fading" with +10 min and Turn off (in the
+dark only a wake does: the PWR key, or a touch with Touch when off on
+Wake; a touch Nothing ignores, and the glance's, aren't input, and the
+glance shows the fade as its moon's "fading"), the only
 controls that act on it; they come before an open sheet's (the toast is
 drawn over it) and take a tap to y 77. A screen lit when the fade starts
 stays lit while it counts down to the pause (the screen's `holdLit`,
@@ -1132,7 +1136,9 @@ from its fence (the queue's flush: its memory is the build's) to its
 save's end on the card worker, METADATA.md 3.9); no screen of its own
 (calibration, a spike tool). Anything that
 blocks restarts the countdown when it goes, and so does any input: a touch
-or strip press (a waking one too), PWR, a headphone key that acted (not a
+or strip press (a waking one too; not one Touch when off ignores on an
+off screen, nor the glance's, or a pocket would keep the device on), PWR,
+a headphone key that acted (not a
 Play ignored after the sleep timer's pause, a Pause while paused, a cue
 after the timer's pause: `HeadsetKeys::isInput()`), a console byte. So it
 counts from the pause, the sleep timer's too.
@@ -1143,7 +1149,10 @@ out:
 1. **The warning**, the last 30 s: the toast "Turning off in 30 s" (counting
    down) with **Keep on** (`Toast::showIdle`). Any input ends it, the
    button included; so does anything that blocks. It is drawn on a lit
-   screen only: it doesn't light a dark one (it may be night). A screen
+   screen only: it doesn't light a dark one (it may be night). On the
+   glance (UI, "The glance") its countdown takes the glance's own line,
+   in amber, without Keep on; the glance isn't held for it and its
+   touches aren't input, so the PWR key is what keeps the player on. A screen
    lit when it appears stays lit, brightened, until it ends (the screen's
    `holdLit`, below), so it can't go dark partway through the countdown
    (checked on the device from bright and from dim; an off screen stays
@@ -1690,7 +1699,17 @@ four. Its `migrate(4, 5)` step does nothing (no key, or a value that isn't
 a filter: none), and 0.12.0 leaves a schema-5 NVS as it is, never reading
 the key (its picks unfiltered). PR #27's card transfer takes schema 5 for
 its own namespaces: shipped in one release they share it (MOOD-FILTERS.md
-10).
+10). Schema 6 is schema 5's keys and `screen`/`touch_off`, **Touch when
+off** (a u8, `ScreenPower::OffTouch`'s index: 0 Nothing, 1 Wake, 2
+Track; [ENERGY.md](ENERGY.md) item 2), queued and written once the taps
+rest. Its `migrate(5, 6)` step does nothing: no key (every unit before
+it), or a value this firmware doesn't know, reads as Nothing, the
+default the update brings (`nvslayout::offTouchFrom()`), so an updated
+unit's touch no longer wakes its off screen: the user's choice, the PWR
+key does. 0.13.0 leaves a schema-6 NVS as it is and never reads the key:
+back on it, a touch wakes the screen again. The Bluetooth EQ, not merged
+yet, takes schema 6 too: whichever lands second takes 7, or, shipped in
+one release, they share 6 (as schema 5 was shared).
 The rules:
 
 - **Never reuse a key name** (or a namespace) for anything else, even after
@@ -1717,7 +1736,8 @@ The rules:
 - Keys are at most 15 characters (NVS's limit).
 - **What a tap changes is written once the taps rest** (0.12.0:
   `app/NvsLater`; when, `lib/core/SaveLater`, host-tested in
-  test_save_later). The screen's off-after and brightness, the idle
+  test_save_later). The screen's off-after, brightness and Touch when
+  off, the idle
   power-off, the Bluetooth power, the repeat mode and Auto DJ's keys are
   queued (the value applies at once) and written 1.5 s after the last
   change, 6 s after the first at most, each namespace opened once, with
@@ -1731,13 +1751,15 @@ The rules:
   position and resume point and the Bluetooth stack's keys are written as
   before.
 
-The keys of schema 5, by namespace: `meta` (schema); `input` (cal,
+The keys of schema 6, by namespace: `meta` (schema); `input` (cal,
 cal_ask, haptics, railtick); `player` (bt_name, bt_forgot, bt_fresh);
 ESP32-A2DP's `connected_bda` (last_bda: the remembered headphones); `power` (cpu_mhz,
-bt_tx, boot_cpu, idle_after, off_idle); `screen` (off_after, bright); `ui`
+bt_tx, boot_cpu, idle_after, off_idle); `screen` (off_after, bright, and
+schema 6's touch_off); `ui`
 (coach, and schema 3's lang); `queue` (gen, pos, resume, and schema 2's
 repeat); `autodj` (schema 4's on, mode, floor, match, and schema 5's
-moods). Schema 4's are the same without `moods`, schema 3's without
+moods). Schema 5's are the same without `touch_off`, schema 4's without
+`moods` too, schema 3's without
 `autodj`, schema 2's without `ui`/`lang` too, schema 1's without
 `queue`/`repeat` too. The Bluetooth stack keeps its bonds in
 its own namespace, which the firmware never touches.
@@ -2576,8 +2598,9 @@ layer is suspended).
     once the screen lights: the FT6336U likely takes its baseline at power
     up (still to check on the device).
   - The console: `a` (`a5`-`a9`), `ac`, `ab` (`ab0` forgets `cal_ask`).
-    With the screen off, these wake it and the screen opens once the panel
-    is awake: nothing may be drawn into a sleeping panel (below).
+    With the screen off (or the glance), these wake it and the screen
+    opens once the panel is awake, the whole UI drawn: nothing may be
+    drawn into a sleeping panel (below).
 
   The crosses (`TouchCheck::kCross`: 9, distinct x and y each; no cross's
   sample window reaches the Cancel pill, and none is drawn in the A
@@ -2781,8 +2804,12 @@ layer is suspended).
 
 - **The screen's wake** (`WakeLatch`, host-tested in test_ui_input with the
   recognisers and in test_screen_power; [ENERGY.md](ENERGY.md) item 2). A
-  finger that lands while a touch doesn't act (dim, off, or lit by an
-  event nobody has answered yet) only wakes it: every event is dropped
+  finger that lands while a touch doesn't act (dim, off, the glance, or
+  lit by an event nobody has answered yet) does only what the screen
+  policy makes of it (`ScreenPower::touch()`: it brightens a dim screen;
+  on an off one it does what **Touch when off** says, nothing by
+  default, a wake, or the glance; on the glance it shows it 10 s more; it
+  answers an event's wake): every event is dropped
   (the path the input lab's suspension takes; the recognisers keep
   following the finger) until no finger has been on the panel for 400 ms
   (`kQuietMs`, StripButtons' swipe bounce window: the panel loses a finger
@@ -2791,14 +2818,21 @@ layer is suspended).
   clicks on its lift, a tap and a fling are made there), and so is any
   other finger meanwhile: no tap, click, hold, volume repeat, swipe or
   tick. It is a hearing-safety rule: a press of B in a pocket, with the
-  speaker as the output, can't start music. Each wake logs `[screen] wake
-  by touch at x,y (raw)` (and the button, on the strip). A finger already
+  speaker as the output, can't start music. Each one logs where it landed
+  and what it did (and the button, on the strip): `[screen] wake by touch
+  at x,y (raw)`, `[screen] no wake by touch at x,y (raw): touch when off:
+  Nothing (swallowed until it lifts)`, `[screen] the glance by touch at
+  x,y (raw): off again in 10 s (swallowed until it lifts)`. A finger already
   resting on the panel as the screen dims is taken too (its glass touch
   ends with a Cancel), but isn't a wake. The scripted finger isn't a
-  finger for it: it acts in the dark (and lights the screen).
+  finger for it: it acts in the dark (and lights the screen; from the
+  glance its glass touches only open the whole screen, as `Ui::onEvent`
+  drops them there, while its strip presses, `uip`, reach `ButtonPolicy`
+  as from Off).
 - **The pocket rule** (`ScreenPower::unattended()`, `ButtonPolicy::
-  Transport::startRefused()`). After any wake from Off (a touch, the PWR
-  key, an event, or something that keeps it lit) nobody may be looking:
+  Transport::startRefused()`). After any wake from Off or the glance (a
+  touch, the PWR key, an event, or something that keeps it lit) nobody
+  may be looking (the glance itself is unattended: nothing on it acts):
   until a touch lands on the glass (or the PWR key on a screen kept lit, or
   the console), a B click that would start playing on the speaker does
   nothing but the inert buzz and a note, "Tap the screen first, then B
@@ -2845,14 +2879,22 @@ Queue, Dance and Output (with its Pair and About pages).
   counting after 15 s, `FingerActivity`, so a pocket's pressure can't keep
   it lit). The PWR key's short press (`ScreenPower::powerKey()`) turns a
   lit screen, bright or dim, off at once, a held one too (below; with
-  Never it is how the listener turns it off), and wakes an off one. On a
+  Never it is how the listener turns it off), and wakes an off one (from
+  the glance it opens the whole screen). On a
   screen something keeps lit (below) it stays on: the press only counts
   as input, deliberate (it answers a wake from Off nobody has answered,
   else the pocket rule ends), and logs `[screen] the power key: stays on`. A finger on
   the panel as it goes off is taken, as one resting as it dims. A touch
-  (glass or strip) on a screen that isn't bright
-  only wakes it (the input layer swallows the touch: "The screen's wake"
-  above). A wake from Off with no input after it goes off again 10 s
+  (glass or strip) on a dim screen only brightens it; on an off one it
+  does what **Touch when off** says (`ScreenPower::OffTouch`, the Output
+  tab's row, added later at the user's request): **Nothing**, the
+  default (no wake and no input: only the PWR key and the events below
+  light the screen), **Wake** (it wakes it and does nothing else, as
+  every touch did before) or **Track** (the glance, below: the playing
+  track for 10 s with nothing to tap; a touch on it, 10 s more). The
+  input layer swallows each ("The screen's wake" above). A wake from Off
+  by the PWR key or a touch, or from the glance by the PWR key, with no
+  input after it goes off again 10 s
   later, without the dim step (the pocket guard; not with Never). What
   needs the listener wakes it with the whole countdown: the headphones
   lost (the dialog), "Couldn't reach", a track that failed (their
@@ -2880,7 +2922,8 @@ Queue, Dance and Output (with its Pair and About pages).
   Pair screen's search stopped: the countdown again (dims in 19 s)`. One woken
   during it is held from the wake, except that a touch's or PWR's wake
   from Off keeps its pocket guard until input follows (for the idle
-  warning that wake is input, which ends the warning). `ScreenControl` alone switches the backlight, and the
+  warning that wake is input, which ends the warning); the glance is
+  never held, dimmed or kept by Never: 10 s from its last touch, then Off. `ScreenControl` alone switches the backlight, and the
   panel's sleep-in and sleep-out (under `LcdLock`, at least 120 ms apart;
   5 ms after a sleep-out before anything is drawn). Going
   off, the UI goes **dark** first (`Ui::setDark`): every `gfx` fill and
@@ -2893,10 +2936,21 @@ Queue, Dance and Output (with its Pair and About pages).
   its 5 ms, with the backlight still off, then the backlight. Nothing is
   drawn into the sleeping panel: on the device, pixels written in
   sleep-in landed garbled in its memory (rows shifted, colours
-  byte-swapped) and stayed so until drawn again. Each change logs
+  byte-swapped) and stayed so until drawn again. The glance
+  (`ScreenPower::Level::Glance`) is lit with the UI still dark under it,
+  and `ScreenControl::apply()` decides by what the panel and the UI show
+  now, never by the level before (one pass can change it twice): from
+  Off, the sleep-out, then `onGlance(true)` (`Ui::setGlance()` draws it
+  whole), then the backlight; to the whole screen (the PWR key, an
+  event, keepLit, the console), the backlight off, `onGlance(false)`,
+  `onDark(false)` (the UI drawn again), the backlight; to Off,
+  `onGlance(false)`, then the sleep-in. A glance the UI didn't draw
+  (refused, or no UI: no PSRAM) keeps the backlight off: the panel's
+  memory is stale. Each change logs
   `[screen] <from> -> <to> (<why>)`. The Bluetooth search rests at once
-  after its burst while the screen is off and nothing plays or waits,
-  unless the headphones dropped while listening (`BtSink::setQuiet()`). NVS namespace `screen`: `off_after`, `bright`.
+  after its burst while the screen is off (or the glance) and nothing
+  plays or waits,
+  unless the headphones dropped while listening (`BtSink::setQuiet()`). NVS namespace `screen`: `off_after`, `bright`, `touch_off` (schema 6).
 - **Frames.** Only what changed is redrawn (each page keeps what it drew and
   compares the one `AppState` snapshot the host fills per pass). Animation
   (a moving list) is drawn on a **30 fps cap kept on deadlines**
@@ -3503,6 +3557,60 @@ Queue, Dance and Output (with its Pair and About pages).
     none has the plain line, in the same place, and nothing else moves. An
     inert bar never has bars. The bars appear when they arrive, with no
     animation, and a repaint draws them from `app/Waves`' record.
+- **The glance** (Output > Touch when off: Track, [ENERGY.md](ENERGY.md)
+  item 2; `Ui::setGlance()`): Now Playing, read-only, over the dark UI for
+  10 s after a touch on the off screen. It is `NowPlayingPage` in Glance
+  mode, a second instance the `Ui` owns beside the real page: never
+  `page_`, never given an event. Each branch that differs tests a const
+  `readOnly_` that is false for the real page, which draws and acts as it
+  did (Pages.h: anything that can be pressed checks `readOnly_`). What
+  the glance draws differently:
+  - the transport's strip (y 176-231) is one Small line centred on (160,
+    204) in 296 px (`uitext::kGlanceHintW`): "Power button for controls"
+    (`glance.hint`) in DIM, or in the idle power-off's last 30 s its
+    countdown in amber (`IdlePolicy::warnText()`, the toast's text, which
+    has a second room for it); no zones, no play disc, no spinner. It is
+    drawn whole, and again only when the countdown changes;
+  - the plain line has no rest knob (there is nothing to grab; the bars
+    have none at rest anyway);
+  - a play waiting for the headphones shows the artist and album rows,
+    not its buttons;
+  - nothing playing, or no card: the empty state in y 36-175 without its
+    buttons, the hint's line under it, then the background to y 239.
+
+  The top row, y 0-35, must not look like a tab bar: on the background
+  (no surface, no divider), only the Output cell's content at the tab
+  bar's pixels (the output's icon in its colour, the volume, the battery
+  with its low blink and charging colour), drawn by
+  `TabBar::updateGlance()` with the cell's own code, redrawn only when
+  one of those changes (never for the EQ bars), and leaving the real tab
+  bar invalid, so its next update draws it whole. `setGlance(true)`
+  (`ScreenControl::apply()`, after the sleep-out and before the
+  backlight) refuses, and says so, unless the UI is up, not suspended and
+  dark, and returns whether it drew (`[ui] glance: drawn in N ms`);
+  `setGlance(false)` draws nothing (the sleep-in, or the whole screen's
+  redraw, follows). Every glance draw goes through `drawGlance()`, which
+  lifts the dark gate and the toast's cover for its own draws only and
+  puts both back, as `Ui::identify()`'s banner does ("Host status"); it
+  draws through the list band's mapping. `Ui::loop`'s dark branch takes
+  in covers and waveforms and redraws what changed (Now Playing's own
+  diff: a new title, the cover, the waveform, the time once a second; no
+  frames), counted as the page's time (a slow pass names "the glance"). A
+  change of the hardware scroll's state, and `libraryChanged()` /
+  `libraryUpdating()` (whose `showTop()` can paint the Library's band and
+  reset the scroll registers in the dark, past the gate), draw it whole
+  again. `Ui::onEvent` returns at once while glancing: only the console's
+  scripted finger gets there (the latch swallows every real touch), and
+  its own wake opens the whole screen. `coversAllowed()` is true on the
+  glance, so its cover and waveform load (`CardTasks` runs its lit slices
+  for those 10 s). The PWR key gives `setDark(false)`'s `redrawAll()`,
+  the UI where it was: after a glance a list page's band and the Library's
+  status line are painted whole at once, under a modal too, so no glance
+  pixels show. `suspend()` ends it; `resume()` in the dark draws it whole
+  again if the policy still wants it. Its second cover sprite (98 x 98,
+  RGB565: 19,208 B of PSRAM) is made at its first `enter()` and kept
+  (never, if the choice is never Track). `ui` says `up, GLANCE (...)` and
+  what the glance shows.
 - **The Library** (spec §6.2, mockups 07-15, with the grafts): the root's
   header is the segmented control **Artists | Albums | Folders** (the root
   PageRef's id is the segment; each keeps its own scroll; the Library opens
@@ -3627,7 +3735,11 @@ Queue, Dance and Output (with its Pair and About pages).
   below), **Haptics** on/off (the
   input layer's saved setting), **Screen off after** and **Brightness**
   (the screen policy's; the value in a pill, a tap takes the next choice,
-  saved), **Turn off when idle** (the idle power-off's, the same way: 10 /
+  saved), **Touch when off** (the same way: Nothing, "the power button
+  wakes it" / Wake, "a tap wakes it" / Track, "a tap shows the track";
+  its icon the dark screen with a fingertip on its corner, a ring around
+  it when a touch there does something; from the next touch on an off
+  screen), **Turn off when idle** (the idle power-off's, the same way: 10 /
   20 / 60 min / Never, a power symbol), **CPU speed** (240 / 160 MHz, a
   chip, "Smoothest lists, dancing" / "Slower lists, saves a little"; a
   restart, asked first) and **Bluetooth power** (Low / Normal /
@@ -4108,12 +4220,14 @@ by itself, so the firmware doesn't set it (docs/ENERGY.md section 5, Audit
 2: measured).
 
 **The knobs** (each says what it was and what it is now, and is undone by
-its opposite; only `Pcb` is saved):
+its opposite; only `Pcb` and `Pst` are saved):
 
 | Command | What it switches | Notes |
 |---|---|---|
-| `Pb<0-255>` | backlight while the screen is bright (M5GFX: AXP192 DCDC3, 2.5-3.275 V) | the screen policy's Bright level until restart, `Pb0` the setting's (Medium, 100; M5GFX's own default was 127, 2.875 V); refused while dim or off; it still dims and goes off (Screen off after: Never holds it) |
-| `Ps` / `Ps0` / `Ps1` / `Psk` | the screen policy: its state / Off now / on / the PWR key's short press, as if pressed | Off is the policy's (backlight off, ILI9342C sleep-in, the UI draws nothing); a touch wakes it and does nothing else (`[screen] wake by touch at x,y (raw)`), and with no input after that it goes off again in 10 s (the pocket guard); off with nothing playing, the Bluetooth search rests after its burst (`setQuiet`) |
+| `Pb<0-255>` | backlight while the screen is bright (M5GFX: AXP192 DCDC3, 2.5-3.275 V) | the screen policy's Bright level until restart, `Pb0` the setting's (Medium, 100; M5GFX's own default was 127, 2.875 V); refused while dim, off or on the glance (one set before shows on it); it still dims and goes off (Screen off after: Never holds it) |
+| `Ps` / `Ps0` / `Ps1` / `Psk` | the screen policy: its state / Off now / on / the PWR key's short press, as if pressed | Off is the policy's (backlight off, ILI9342C sleep-in, the UI draws nothing); a touch then does what Touch when off says (by default nothing, `[screen] no wake by touch at x,y (raw): touch when off: Nothing ...`; Wake: it wakes it and does nothing else, `[screen] wake by touch at x,y (raw)`; Track: the glance), and after a wake by a touch or the PWR key, with no input after it, it goes off again in 10 s (the pocket guard); `Ps1` on the glance opens the whole screen; `Ps` names the choice (`touch when off: Nothing`) and the glance; off (or the glance) with nothing playing, the Bluetooth search rests after its burst (`setQuiet`) |
+| `Psf` | a real finger landing at 160,120, as the wake latch reports it | on a screen where a touch doesn't act (off, dim, the glance, an event's wake), what Touch when off and the level make of it, logged as a real one's (`[screen] the glance by touch at 160,120 (raw): off again in 10 s ...`); on a lit screen it says a touch acts there (`uit` taps it). The scripted finger (`uit`, `uis`, `uip`) bypasses the latch, so it can't show the choice: from Off or the glance it opens the whole screen (its strip presses still act, as from Off) |
+| `Pst0` / `Pst1` / `Pst2` | Touch when off: Nothing / Wake / Track (saved) | as the Output row: `[screen] touch when off: Nothing -> Track (saved once the taps rest)`; from the next touch on an off screen (during a glance, from the next touch on it) |
 | `Pc<mhz>` | CPU clock now | only 160 ↔ 80 (same 320 MHz PLL); 240 ↔ 160/80 retunes the BBPLL the Bluetooth radio runs from, refused. 80 not while audio runs, and back to 160 by itself when it starts |
 | `Pcb<mhz>` | CPU clock from boot (saved) | 160 or 240 (`Pcb0` the default, 240), set before Bluetooth starts; the Output tab's CPU speed is the same NVS value |
 | `Pt<min>,<max>` | Bluetooth BR/EDR TX power levels 0-7 (−12..+9 dBm) | a test until restart, not saved (the Output tab's Bluetooth power is the setting, default 0,5: −12..+3 dBm; a change there wins); `Pt` alone reports the setting too; from the next page, scan or connection (with a link up the line says "applies from the next connection": the link keeps its level; `Pt` alone reads back the controller's setting, the new range at once, not the link's level) |

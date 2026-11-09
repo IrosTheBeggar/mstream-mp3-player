@@ -63,6 +63,10 @@
 //     a "!" on its Queue row; the headphones lost while playing are a
 //     dialog that follows their reconnecting; the pages have their empty
 //     and no-card states (ui/EmptyState).
+//   - The glance ("Touch when off": Track; setGlance()): over the dark UI
+//     for its 10 s, Now Playing in its Glance mode (no controls) under the
+//     Output tab's status, nothing on it acting; the power button opens the
+//     whole screen as it was.
 //   - Album covers (ui/Thumbs): thumbnails made by the card worker below
 //     the loop (app/CardWorker, handed by app/CardTasks), never started
 //     while a list moves; a page redraws the row (or the cover) that shows
@@ -122,7 +126,8 @@ public:
   void resume();
   bool suspended() const { return suspended_; }
   // How long the loop may sleep (1-5 ms): less while a frame is due soon;
-  // 20 ms while the screen is off.
+  // 20 ms while the UI is dark (the screen off, or the glance: nothing on it
+  // moves faster than its seconds, and its touches act on nothing).
   uint32_t idleMs(uint32_t nowMs) const;
   // The screen went off (ScreenPower): nothing is drawn (gfx drops every
   // push), but the logic goes on: the snapshot, dialogs, toasts, their
@@ -132,6 +137,22 @@ public:
   // bar, the page, what is over it), the list's hardware scroll sent again.
   void setDark(bool on);
   bool dark() const { return dark_; }
+  // The glance ("Touch when off": Track; ScreenPower's Level::Glance): the
+  // screen lit for 10 s with the playing track and nothing to tap. The UI
+  // stays dark under it (its logic, toasts and dialogs go on, drawn
+  // nowhere); only the glance reaches the panel: the status row
+  // (TabBar::updateGlance()) and glance_, Now Playing in its Glance mode,
+  // drawn with the gfx gate lifted around those draws alone (as identify()'s
+  // banner). ScreenControl::apply() calls setGlance(true) once the panel is
+  // awake, before the backlight: it is drawn whole, and loop() then redraws
+  // what changed (the second, the track, the cover, the battery). True:
+  // drawn. Refused, and logged (false: the backlight stays off), unless the
+  // UI is up, not suspended, and dark. setGlance(false) draws nothing: the
+  // sleep-in follows, or setDark(false) draws the whole UI again (which
+  // then paints a list page's band whole at once: the panel's memory holds
+  // the glance, not the page).
+  bool setGlance(bool on);
+  bool glancing() const { return glancing_; }
   // The Pair screen's search runs (its 2 minutes at most; OutputPage):
   // main.cpp holds a lit screen lit for it (ScreenControl::Hold), so the
   // listener's taps on the list act instead of only waking a dim screen,
@@ -161,8 +182,11 @@ public:
     return started_ && !suspended_ && !dark_ && !identifying_ && !modalUp() && page_ &&
            (page_->animating() || (railHold_ && list_.attached() && list_.railTouch()));
   }
-  // A cover may be made now: the UI is up and lit.
-  bool coversAllowed() const { return started_ && !suspended_ && !dark_ && !identifying_; }
+  // A cover may be made now: the UI is up and lit, the whole UI or the
+  // glance (which shows the cover and the waveform: app/CardTasks gates
+  // both lanes on this, and its scan takes its lit slices for the glance's
+  // 10 s at most, its draws sharing the SPI bus with the card).
+  bool coversAllowed() const { return started_ && !suspended_ && (!dark_ || glancing_) && !identifying_; }
   // The Library tab's open album, artist or folder: its tracks (the scan's
   // "shown" source, 3.3.3); none when another page is up.
   LibraryIndex::Span shownTracks() const;
@@ -409,6 +433,8 @@ private:
   void sleepTitle(char* buf, size_t size) const;
   // The Library's status line: the band shortened under it while it shows.
   void updateStatus(uint32_t nowMs);
+  // The line itself, `text` in it (empty: the line's background alone).
+  void drawStatusLine(const char* text);
   static constexpr int kStatusH = 20;
   bool statusBand_ = false;   // the list's band ends above the line
   uint32_t statusHash_ = 0;   // the text drawn (0: none, or to be drawn again)
@@ -500,6 +526,7 @@ private:
   QueuePage queuePage_;
   DancePage dancePage_;
   OutputPage outputPage_;
+  NowPlayingPage glance_;  // the glance's (Mode::Glance): never page_, never given an event
   Page* page_ = nullptr;
 
   AppState state_;
@@ -515,6 +542,28 @@ private:
   char identifyLabel_[hoststatus::kMaxLabel + 1] = "";
   void drawIdentify();
   void endIdentify();
+  // The glance (setGlance()): drawn now; wanted by the screen (set when it
+  // is drawn, cleared by setGlance(false) and setDark(false): a suspend()
+  // clears glancing_ alone, and resume() draws the glance again while it is
+  // wanted and the UI dark); drawn since the last redrawAll() (the panel's
+  // memory holds it, not the page: the next redrawAll() paints a list
+  // page's band whole at once); the hardware scroll's mapping it was drawn
+  // through (scrollSig(): a change in the dark, by a writer the gfx gate
+  // doesn't stop, draws it whole again); since when (for the log).
+  bool glancing_ = false;
+  bool glanceWanted_ = false;
+  bool gramStale_ = false;
+  uint32_t glanceScroll_ = 0;
+  uint32_t glanceSinceMs_ = 0;
+  NavModel::PageRef glanceRef_;  // (glance_.enter()'s: it names nothing)
+  // Every glance draw: the gate and the toast's cover lifted around the
+  // status row and glance_ (all of it, or what changed and a cover that
+  // `arrived`), then both put back. Through the list band's mapping, as
+  // identify()'s banner (the scroll stays as the page left it).
+  void drawGlance(bool all, uint32_t arrived = Thumbs::kNone);
+  // What maps the panel's rows now (ListScroller: on or off, its band's
+  // top and height, the start address sent).
+  uint32_t scrollSig() const;
   bool danceWasOn_ = false;   // the dancer was up when it went dark
   // The screen woke: draw everything again.
   void redrawAll();

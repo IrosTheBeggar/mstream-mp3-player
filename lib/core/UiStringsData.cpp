@@ -11,7 +11,7 @@ namespace detail {
 
 namespace {
 
-// en: 13108 bytes, 639 of 639 messages.
+// en: 13225 bytes, 647 of 647 messages.
 const char kBlob_en[] =
     "Touch trouble? Hold a finger on the screen.\0Tip {0} of {1}\0tap to go on\0Next\0Got it\0The three red dots\0"
     "Under the screen: a click, or a hold, anywhere\0Previous\0Play/pause\0hold:\0volume down\0speaker or\nheadphones\0"
@@ -38,10 +38,10 @@ const char kBlob_en[] =
     "try {0} of {1}\0looking for them\0connecting\0Play on speaker\0Cancel\0no change\0Release to cancel\0"
     "Go to artist\0Go to album\0Go to folder\0A built-in track isn't in the Library\0The Library isn't ready yet\0"
     "Browsing a synthetic library (uil0: the card's)\0Playback\0Shuffle\0Repeat\0Sleep timer\0Off\0"
-    "On\0All\0One\0Auto DJ\0Waiting\0Paused\0Sleep timer: {0} left\0Sleep timer: end of track\0Sleep timer: end of album\0"
-    "Sleep timer: end of queue\0Sleep timer: fading\0Sleep timer: off\090 min\0End of track\0End of album\0"
-    "End of queue\0+10 min\0Turn off\0Fades out, pauses, then the screen goes off.\0Fading\0track\0"
-    "album\0queue\0fading\0Sleep timer: {0} min\0Sleep timer off\0volume\0The headphones' own buttons change it too\0"
+    "On\0All\0One\0Auto DJ\0Waiting\0Paused\0Power button for controls\0Sleep timer: {0} left\0Sleep timer: end of track\0"
+    "Sleep timer: end of album\0Sleep timer: end of queue\0Sleep timer: fading\0Sleep timer: off\0"
+    "90 min\0End of track\0End of album\0End of queue\0+10 min\0Turn off\0Fades out, pauses, then the screen goes off.\0"
+    "Fading\0track\0album\0queue\0fading\0Sleep timer: {0} min\0Sleep timer off\0volume\0The headphones' own buttons change it too\0"
     "Hold A or C to change it on any screen\0Jump to\0{0}, {1}: {2}\0Artists\0Albums\0Folders\0Play\0"
     "Play next\0+ Queue\0Auto DJ from here\0Play all {0}\0Play all {0}\0{0}, {1} track\0{0}, {1} tracks\0"
     "Artist\0Album\0Folder\0All tracks\0{0} track, album by album\0{0} tracks, album by album\0{0} track\0"
@@ -88,9 +88,10 @@ const char kBlob_en[] =
     "No Auto DJ index on this card\0The Auto DJ index failed its checks\0Can't read the Auto DJ index\0"
     "Not enough memory for the Auto DJ index\0Too many tracks for the Auto DJ index\0picks are random\0"
     "Waiting: Repeat One is on\0Waiting: sleep timer set to End of queue\0Waiting: no track fits the filters\0"
-    "Paused: tracks failed to play\0Screen off after\0dims first; a tap wakes it\0stays on: more battery\0"
+    "Paused: tracks failed to play\0Screen off after\0dims first, then off\0stays on: more battery\0"
     "15 s\0" "30 s\0" "1 min\0" "2 min\0" "5 min\0Never\0Brightness\0higher uses more battery\0Low\0"
-    "Medium\0High\0Max\0Turn off when idle\0paused, on battery\0" "10 min\0" "20 min\0" "60 min\0"
+    "Medium\0High\0Max\0Touch when off\0the power button wakes it\0a tap wakes it\0a tap shows the track\0"
+    "Nothing\0Wake\0Track\0Turn off when idle\0paused, on battery\0" "10 min\0" "20 min\0" "60 min\0"
     "CPU speed\0Smoothest lists, dancing\0Slower lists, saves a little\0{0} MHz until a restart\0"
     "240 MHz\0" "160 MHz\0Bluetooth power\0Saves battery; stay close\0Adjusts to the distance\0More range, more battery\0"
     "From the next connection\0Normal\0Restart at {0}?\0The speed changes at a restart. The music pauses and picks up at the same second.\0"
@@ -156,54 +157,54 @@ const uint16_t kOff_en[kStrings] = {
     1937, 1962, 1970, 2002, 2018, 2033, 2053, 2075, 2094, 2105, 2124, 2144,
     1962, 2164, 2175, 2195, 2222, 2241, 2271, 2286, 2303, 2314, 2330, 2337,
     2347, 2365, 2378, 2390, 2403, 2441, 2469, 2517, 2526, 2534, 2541, 2553,
-    2557, 2553, 2560, 2564, 2568, 2557, 2553, 2576, 2584, 2591, 2613, 2639,
-    2665, 2691, 2711, 2728, 2735, 2748, 2761, 2774, 2782, 2791, 2691, 2735,
-    2748, 2761, 2836, 2553, 2843, 2849, 2855, 2861, 2868, 2889, 1962, 2164,
-    2905, 2912, 2954, 2993, 3001, 3015, 3023, 3030, 3038, 3043, 3053, 3061,
-    3079, 3105, 3136, 3143, 3149, 3156, 3167, 400, 3220, 3241, 3262, 3285,
-    3294, 3317, 3348, 3367, 3387, 3393, 3402, 3421, 3436, 3452, 3490, 3510,
-    3523, 3550, 3585, 3606, 3638, 3651, 3662, 3678, 3723, 3734, 3767, 3788,
-    3811, 3831, 3863, 3904, 3920, 3949, 3973, 4004, 4012, 4018, 4026, 4030,
-    4038, 4049, 4062, 4069, 4078, 4084, 4094, 4101, 4110, 4116, 4122, 4157,
-    4192, 4222, 4236, 4240, 4253, 4278, 4300, 4413, 4466, 4487, 4506, 4523,
-    4544, 4597, 4620, 408, 3387, 4652, 4657, 4683, 2560, 4690, 2094, 4695,
-    4711, 4735, 4746, 3043, 4753, 4762, 3043, 4746, 4771, 4787, 4801, 4813,
-    4834, 4850, 4873, 4116, 5046, 5083, 5132, 5169, 5191, 5223, 5240, 5253,
-    5256, 2075, 2002, 5277, 5297, 5344, 5385, 5398, 2568, 5410, 5420, 5435,
-    5516, 5532, 5616, 5653, 5672, 5758, 5793, 5672, 5811, 5845, 5864, 5950,
-    5982, 6003, 6089, 420, 6133, 6155, 6164, 6193, 6230, 6250, 6258, 6289,
-    6293, 6299, 2568, 6334, 6344, 6359, 2553, 6373, 6395, 6431, 6438, 6454,
-    6467, 6505, 6545, 6562, 6577, 6610, 6646, 6661, 6696, 6712, 6731, 6754,
-    6820, 6841, 6885, 6919, 6959, 7000, 7051, 7084, 7113, 7143, 7179, 7208,
-    7248, 7286, 7303, 7329, 7370, 7405, 7435, 7452, 7479, 7502, 7507, 7512,
-    7518, 7524, 7530, 7536, 7547, 7572, 7576, 7583, 7588, 7592, 7611, 7479,
-    7630, 7637, 7644, 7530, 7651, 7661, 7686, 7715, 7739, 7747, 7755, 7771,
-    7797, 7821, 7846, 7572, 7871, 7583, 7878, 7894, 7976, 8092, 8100, 8131,
-    8152, 8167, 8188, 8196, 8224, 8291, 8309, 8324, 8349, 8359, 8375, 8385,
-    8404, 8428, 4746, 8505, 8525, 8525, 8534, 8553, 8578, 8617, 8656, 8675,
-    8719, 8747, 8781, 8807, 8825, 8843, 8855, 8876, 8893, 8905, 8912, 8925,
-    9032, 9055, 9084, 9134, 2164, 9155, 9176, 9190, 9204, 9234, 9253, 9279,
-    9290, 9317, 9327, 9342, 9354, 9367, 9399, 9432, 9454, 9492, 9517, 6230,
-    9549, 9558, 9566, 9573, 2330, 9583, 5410, 9594, 9630, 2164, 9583, 6230,
-    9658, 9669, 9693, 9705, 9728, 9566, 9797, 9808, 9830, 9866, 1962, 9879,
-    9903, 9937, 9951, 9972, 9981, 9998, 10014, 10034, 9279, 10044, 10076, 10089,
-    10119, 10131, 10142, 10150, 10160, 10173, 10188, 10211, 10277, 10365, 10370, 10390,
-    10409, 10432, 6293, 10458, 10470, 10478, 10492, 10500, 10511, 10532, 10545, 400,
-    10578, 3285, 10592, 2164, 10607, 10614, 10626, 10641, 10668, 10687, 10699, 10734,
-    10757, 10789, 10819, 10853, 10865, 10894, 10914, 10945, 10956, 10962, 10973, 10977,
-    10982, 10986, 10992, 10998, 10470, 400, 11009, 11018, 11025, 11034, 11040, 11048,
-    11059, 11065, 11074, 11084, 11093, 11099, 11118, 11132, 11141, 11152, 11161, 11173,
-    11190, 11200, 3285, 10578, 11211, 11217, 11222, 8291, 11250, 2330, 11262, 2094,
-    11267, 11399, 11427, 11456, 11491, 11533, 11564, 11598, 11634, 11702, 5410, 11707,
-    11715, 427, 11720, 11727, 11787, 11807, 437, 11813, 11876, 11902, 11929, 11981,
-    12032, 12074, 12116, 12149, 12164, 12172, 12199, 12218, 12241, 12265, 12269, 12276,
-    12286, 12294, 12305, 12312, 12317, 12323, 2002, 12348, 12373, 2330, 12403, 12420,
-    12444, 12499, 12559, 12626, 12662, 12686, 12720, 12740, 12752, 12755, 12774, 12804,
-    12824, 12887, 12946, 5410, 13016, 13021, 13029, 13035, 13049, 13063, 13075, 13083,
-    13090, 13098, 13105,
+    2557, 2553, 2560, 2564, 2568, 2557, 2553, 2576, 2584, 2591, 2617, 2639,
+    2665, 2691, 2717, 2737, 2754, 2761, 2774, 2787, 2800, 2808, 2817, 2717,
+    2761, 2774, 2787, 2862, 2553, 2869, 2875, 2881, 2887, 2894, 2915, 1962,
+    2164, 2931, 2938, 2980, 3019, 3027, 3041, 3049, 3056, 3064, 3069, 3079,
+    3087, 3105, 3131, 3162, 3169, 3175, 3182, 3193, 400, 3246, 3267, 3288,
+    3311, 3320, 3343, 3374, 3393, 3413, 3419, 3428, 3447, 3462, 3478, 3516,
+    3536, 3549, 3576, 3611, 3632, 3664, 3677, 3688, 3704, 3749, 3760, 3793,
+    3814, 3837, 3857, 3889, 3930, 3946, 3975, 3999, 4030, 4038, 4044, 4052,
+    4056, 4064, 4075, 4088, 4095, 4104, 4110, 4120, 4127, 4136, 4142, 4148,
+    4183, 4218, 4248, 4262, 4266, 4279, 4304, 4326, 4439, 4492, 4513, 4532,
+    4549, 4570, 4623, 4646, 408, 3413, 4678, 4683, 4709, 2560, 4716, 2094,
+    4721, 4737, 4761, 4772, 3069, 4779, 4788, 3069, 4772, 4797, 4813, 4827,
+    4839, 4860, 4876, 4899, 4142, 5072, 5109, 5158, 5195, 5217, 5249, 5266,
+    5279, 5282, 2075, 2002, 5303, 5323, 5370, 5411, 5424, 2568, 5436, 5446,
+    5461, 5542, 5558, 5642, 5679, 5698, 5784, 5819, 5698, 5837, 5871, 5890,
+    5976, 6008, 6029, 6115, 420, 6159, 6181, 6190, 6219, 6256, 6276, 6284,
+    6315, 6319, 6325, 2568, 6360, 6370, 6385, 2553, 6399, 6421, 6457, 6464,
+    6480, 6493, 6531, 6571, 6588, 6603, 6636, 6672, 6687, 6722, 6738, 6757,
+    6780, 6846, 6867, 6911, 6945, 6985, 7026, 7077, 7110, 7139, 7169, 7205,
+    7234, 7274, 7312, 7329, 7355, 7396, 7431, 7461, 7478, 7499, 7522, 7527,
+    7532, 7538, 7544, 7550, 7556, 7567, 7592, 7596, 7603, 7608, 7612, 7627,
+    7653, 7668, 7690, 7698, 7703, 7709, 7728, 7499, 7747, 7754, 7761, 7550,
+    7768, 7778, 7803, 7832, 7856, 7864, 7872, 7888, 7914, 7938, 7963, 7592,
+    7988, 7603, 7995, 8011, 8093, 8209, 8217, 8248, 8269, 8284, 8305, 8313,
+    8341, 8408, 8426, 8441, 8466, 8476, 8492, 8502, 8521, 8545, 4772, 8622,
+    8642, 8642, 8651, 8670, 8695, 8734, 8773, 8792, 8836, 8864, 8898, 8924,
+    8942, 8960, 8972, 8993, 9010, 9022, 9029, 9042, 9149, 9172, 9201, 9251,
+    2164, 9272, 9293, 9307, 9321, 9351, 9370, 9396, 9407, 9434, 9444, 9459,
+    9471, 9484, 9516, 9549, 9571, 9609, 9634, 6256, 9666, 9675, 9683, 9690,
+    2330, 9700, 5436, 9711, 9747, 2164, 9700, 6256, 9775, 9786, 9810, 9822,
+    9845, 9683, 9914, 9925, 9947, 9983, 1962, 9996, 10020, 10054, 10068, 10089,
+    10098, 10115, 10131, 10151, 9396, 10161, 10193, 10206, 10236, 10248, 10259, 10267,
+    10277, 10290, 10305, 10328, 10394, 10482, 10487, 10507, 10526, 10549, 6319, 10575,
+    10587, 10595, 10609, 10617, 10628, 10649, 10662, 400, 10695, 3311, 10709, 2164,
+    10724, 10731, 10743, 10758, 10785, 10804, 10816, 10851, 10874, 10906, 10936, 10970,
+    10982, 11011, 11031, 11062, 11073, 11079, 11090, 11094, 11099, 11103, 11109, 11115,
+    10587, 400, 11126, 11135, 11142, 11151, 11157, 11165, 11176, 11182, 11191, 11201,
+    11210, 11216, 11235, 11249, 11258, 11269, 11278, 11290, 11307, 11317, 3311, 10695,
+    11328, 11334, 11339, 8408, 11367, 2330, 11379, 2094, 11384, 11516, 11544, 11573,
+    11608, 11650, 11681, 11715, 11751, 11819, 5436, 11824, 11832, 427, 11837, 11844,
+    11904, 11924, 437, 11930, 11993, 12019, 12046, 12098, 12149, 12191, 12233, 12266,
+    12281, 12289, 12316, 12335, 12358, 12382, 12386, 12393, 12403, 12411, 12422, 12429,
+    12434, 12440, 2002, 12465, 12490, 2330, 12520, 12537, 12561, 12616, 12676, 12743,
+    12779, 12803, 12837, 12857, 12869, 12872, 12891, 12921, 12941, 13004, 13063, 5436,
+    13133, 13138, 13146, 13152, 13166, 13180, 13192, 13200, 13207, 13215, 13222,
 };
 
-// de: 14250 bytes, 639 of 639 messages.
+// de: 14372 bytes, 647 of 647 messages.
 const char kBlob_de[] =
     "Touch-Probleme? Finger aufs Display halten.\0Tipp {0} von {1}\0tippen: weiter\0Weiter\0Alles klar\0"
     "Die drei roten Punkte\0Unterm Bildschirm: kurz dr\xC3\xBC" "cken oder halten\0Zur\xC3\xBC" "ck\0"
@@ -235,21 +236,22 @@ const char kBlob_de[] =
     "werden gesucht\0werden verbunden\0Stopp\0bleibt\0Loslassen zum Abbrechen\0Zum K\xC3\xBCnstler\0"
     "Zum Album\0Zum Ordner\0Eingebauter Titel: nicht in der Bibliothek\0Die Bibliothek ist noch nicht bereit\0"
     "Synthetische Bibliothek: uil0 = die Karte\0Wiedergabe\0Zufallswiedergabe\0Wiederholen\0Sleep-Timer\0"
-    "Aus\0An\0Alle\0Titel\0Auto DJ\0Wartet\0Pausiert\0Sleep-Timer: noch {0}\0Sleep-Timer: Ende des Titels\0"
-    "Sleep-Timer: Ende des Albums\0Sleep-Timer: Warteschlangenende\0Sleep-Timer: blendet aus\0Sleep-Timer: aus\0"
-    "90 min\0Titelende\0Albumende\0Letzter Titel\0+10 min\0Blendet aus, pausiert, dann Bildschirm aus.\0"
-    "Timer: blendet aus\0Ende des Titels\0Ende des Albums\0Ende der Warteschlange\0Blendet aus\0"
-    "Album\0blendet aus\0Sleep-Timer: {0} min\0Sleep-Timer aus\0Lautst\xC3\xA4rke\0Auch die Tasten der Kopfh\xC3\xB6rer \xC3\xA4ndern sie\0"
-    "Auf jedem Bildschirm: A oder C halten\0Springe zu\0{0}, {1}: {2}\0K\xC3\xBCnstler\0Alben\0Ordner\0"
-    "Play\0Danach\0Einreihen\0Auto DJ ab hier\0{0} Titel spielen\0{0} spielen\0{0}, {1} Titel\0{0}, {1} Titel\0"
-    "Alle Titel\0{0} Titel, Album f\xC3\xBCr Album\0{0} Titel, Album f\xC3\xBCr Album\0{0} Titel\0"
-    "{0} Titel\0{0} Album\0{0} Alben\0{0} K\xC3\xBCnstler\0{0} K\xC3\xBCnstler\0{0}, {1}\0{0} Ordner\0"
-    "{0} Ordner\0{0} Audiodatei\0{0} Audiodateien\0{0} Datei\0{0} Dateien\0{0} sonstige\0{0} sonstige\0"
-    "leer\0CD {0}\0(kein K\xC3\xBCnstlerordner)\0(einzelne Titel)\0Verschiedene K\xC3\xBCnstler\0"
-    "Keine Musik: Ordner in /music legen\0Keine Audiodateien hier\0Hier ist nichts\0Suche erneut in /music\xE2\x80\xA6\0"
-    "Synthetische Bibliothek: nur ansehen\0Wartet auf {0}: {1}\0Wartet auf die Kopfh\xC3\xB6rer: {0}\0"
-    "L\xC3\xA4uft: {0}\0alles\0Als N\xC3\xA4" "chstes: {0}\0Als N\xC3\xA4" "chstes: {0} Titel\0Als N\xC3\xA4" "chstes: {0} Titel\0"
-    "Hinzugef\xC3\xBCgt: {0}\0Hinzugef\xC3\xBCgt: {0} Titel\0Hinzugef\xC3\xBCgt: {0} Titel\0Karte wird gepr\xC3\xBC" "ft\xE2\x80\xA6\0"
+    "Aus\0An\0Alle\0Titel\0Auto DJ\0Wartet\0Pausiert\0Ein-/Aus-Taste f\xC3\xBCr die Bedienung\0Sleep-Timer: noch {0}\0"
+    "Sleep-Timer: Ende des Titels\0Sleep-Timer: Ende des Albums\0Sleep-Timer: Warteschlangenende\0"
+    "Sleep-Timer: blendet aus\0Sleep-Timer: aus\090 min\0Titelende\0Albumende\0Letzter Titel\0+10 min\0"
+    "Blendet aus, pausiert, dann Bildschirm aus.\0Timer: blendet aus\0Ende des Titels\0Ende des Albums\0"
+    "Ende der Warteschlange\0Blendet aus\0Album\0blendet aus\0Sleep-Timer: {0} min\0Sleep-Timer aus\0"
+    "Lautst\xC3\xA4rke\0Auch die Tasten der Kopfh\xC3\xB6rer \xC3\xA4ndern sie\0Auf jedem Bildschirm: A oder C halten\0"
+    "Springe zu\0{0}, {1}: {2}\0K\xC3\xBCnstler\0Alben\0Ordner\0Play\0Danach\0Einreihen\0Auto DJ ab hier\0"
+    "{0} Titel spielen\0{0} spielen\0{0}, {1} Titel\0{0}, {1} Titel\0Alle Titel\0{0} Titel, Album f\xC3\xBCr Album\0"
+    "{0} Titel, Album f\xC3\xBCr Album\0{0} Titel\0{0} Titel\0{0} Album\0{0} Alben\0{0} K\xC3\xBCnstler\0"
+    "{0} K\xC3\xBCnstler\0{0}, {1}\0{0} Ordner\0{0} Ordner\0{0} Audiodatei\0{0} Audiodateien\0{0} Datei\0"
+    "{0} Dateien\0{0} sonstige\0{0} sonstige\0leer\0CD {0}\0(kein K\xC3\xBCnstlerordner)\0(einzelne Titel)\0"
+    "Verschiedene K\xC3\xBCnstler\0Keine Musik: Ordner in /music legen\0Keine Audiodateien hier\0"
+    "Hier ist nichts\0Suche erneut in /music\xE2\x80\xA6\0Synthetische Bibliothek: nur ansehen\0"
+    "Wartet auf {0}: {1}\0Wartet auf die Kopfh\xC3\xB6rer: {0}\0L\xC3\xA4uft: {0}\0alles\0Als N\xC3\xA4" "chstes: {0}\0"
+    "Als N\xC3\xA4" "chstes: {0} Titel\0Als N\xC3\xA4" "chstes: {0} Titel\0Hinzugef\xC3\xBCgt: {0}\0"
+    "Hinzugef\xC3\xBCgt: {0} Titel\0Hinzugef\xC3\xBCgt: {0} Titel\0Karte wird gepr\xC3\xBC" "ft\xE2\x80\xA6\0"
     "Tags gelesen: {0} / {1}\0Bibliothek wird aktualisiert\xE2\x80\xA6\0Die letzte \xC3\x9C" "bertragung ist unvollst\xC3\xA4ndig\0"
     "{0} neuer Titel gefunden\0{0} neue Titel gefunden\0Bibliothek aktualisiert\0Bibliothek: Aktualisierung beim n\xC3\xA4" "chsten Start\0"
     "Bibliothek wird aktualisiert: einen Moment\0Filter\0Fr\xC3\xB6hlich\0Neutral\0Traurig\0Entspannt\0"
@@ -290,10 +292,11 @@ const char kBlob_de[] =
     "Kein Auto-DJ-Index auf dieser Karte\0Auto-DJ-Index: Pr\xC3\xBC" "fung fehlgeschlagen\0Auto-DJ-Index nicht lesbar\0"
     "Auto-DJ-Index: zu wenig Speicher\0Zu viele Titel f\xC3\xBCr den Auto-DJ-Index\0die Auswahl bleibt zuf\xC3\xA4llig\0"
     "Wartet: Titelwiederholung ist an\0Wartet: Sleep-Timer bis zum letzten Titel\0Wartet: kein Titel passt zu den Filtern\0"
-    "Pausiert: Titel lie\xC3\x9F" "en sich nicht abspielen\0Bildschirm aus nach\0dimmt erst; Tippen weckt\0"
+    "Pausiert: Titel lie\xC3\x9F" "en sich nicht abspielen\0Bildschirm aus nach\0dimmt erst, dann aus\0"
     "bleibt an: kostet Akku\0" "15 s\0" "30 s\0" "1 min\0" "2 min\0" "5 min\0Nie\0Helligkeit\0heller kostet mehr Akku\0"
-    "Niedrig\0Mittel\0Hoch\0Max.\0Auto-Abschaltung\0bei Pause, im Akkubetrieb\0" "10 min\0" "20 min\0"
-    "60 min\0CPU-Takt\0Fl\xC3\xBCssige Listen, Tanzen\0Tr\xC3\xA4ge Listen, spart etwas\0{0} MHz bis zum Neustart\0"
+    "Niedrig\0Mittel\0Hoch\0Max.\0Tippen, wenn aus\0die Ein-/Aus-Taste weckt\0Tippen weckt\0Tippen zeigt den Titel\0"
+    "Nichts\0Wecken\0Auto-Abschaltung\0bei Pause, im Akkubetrieb\0" "10 min\0" "20 min\0" "60 min\0"
+    "CPU-Takt\0Fl\xC3\xBCssige Listen, Tanzen\0Tr\xC3\xA4ge Listen, spart etwas\0{0} MHz bis zum Neustart\0"
     "240 MHz\0" "160 MHz\0Bluetooth-Leistung\0Spart Akku; nah bleiben\0Passt sich der Distanz an\0"
     "Weiter weg, kostet Akku\0Ab n\xC3\xA4" "chster Verbindung\0Normal\0Neustart mit {0}?\0Der Takt \xC3\xA4ndert sich beim Neustart. Die Musik pausiert und l\xC3\xA4uft an derselben Stelle weiter.\0"
     "Spart etwas Akku; Listen scrollen bei Musik langsamer. Die Musik pausiert und l\xC3\xA4uft an derselben Stelle weiter.\0"
@@ -364,54 +367,54 @@ const uint16_t kOff_de[kStrings] = {
     2163, 2196, 2209, 2244, 2268, 2290, 2312, 2335, 2358, 2370, 2392, 2414,
     2196, 2434, 2445, 2460, 2482, 2500, 2529, 2549, 2564, 2196, 2581, 2587,
     2594, 2618, 2632, 2642, 2653, 2696, 2733, 2775, 2786, 2804, 2816, 2828,
-    2832, 2828, 2835, 2840, 2846, 2832, 2828, 2854, 2861, 2870, 2892, 2921,
-    2950, 2982, 3007, 3024, 3031, 3041, 3051, 3065, 2828, 3073, 3117, 3136,
-    3152, 3168, 3191, 2828, 2840, 3203, 429, 3209, 3221, 3242, 2196, 2434,
-    3258, 3270, 3313, 3351, 3362, 3376, 3386, 3392, 3399, 3404, 3411, 3421,
-    3437, 3467, 3376, 3203, 3392, 3497, 3508, 418, 3564, 3584, 3604, 3632,
-    3641, 3663, 3695, 3717, 3743, 3748, 3755, 3778, 3795, 3818, 3854, 3878,
-    3894, 3920, 3957, 3977, 4008, 4020, 4026, 4045, 4095, 4113, 4161, 4184,
-    4208, 4240, 4283, 4332, 4356, 4208, 4404, 4447, 4454, 4464, 4472, 4480,
-    4490, 4500, 4513, 4520, 4530, 4536, 4544, 4551, 4560, 4567, 4574, 4610,
-    4646, 4683, 4703, 4712, 4733, 4756, 4782, 4878, 4920, 4939, 4958, 4983,
-    5009, 5072, 5108, 429, 3743, 5146, 5154, 5186, 2835, 5194, 2358, 5200,
-    5219, 5237, 5251, 3404, 4567, 3399, 3404, 5251, 5261, 5282, 5261, 5305,
-    5331, 5348, 5375, 4567, 5586, 4045, 5624, 5662, 5680, 5712, 5730, 5744,
-    5757, 5783, 2244, 2335, 5810, 5856, 418, 5902, 2846, 5910, 5927, 5948,
-    6033, 6053, 6136, 6182, 6204, 6291, 6337, 6204, 6358, 6403, 6425, 6509,
-    6554, 6573, 6662, 449, 6707, 6727, 6736, 6763, 6800, 6824, 6831, 6862,
-    6866, 6872, 2846, 6908, 6918, 6932, 2828, 6948, 6978, 7013, 7019, 7039,
-    7065, 7102, 7141, 7163, 7186, 7224, 7264, 7281, 7313, 7332, 7362, 7390,
-    7455, 7483, 7533, 7574, 7615, 7661, 7711, 7747, 7777, 7813, 7852, 7879,
-    7912, 7950, 7979, 8012, 8054, 8094, 8139, 8159, 8184, 8207, 8212, 8217,
-    8223, 8229, 8235, 8239, 8250, 8274, 8282, 8289, 8294, 8299, 8316, 8184,
-    8342, 8349, 8356, 8235, 8363, 8372, 8397, 8424, 8449, 8457, 8465, 8484,
-    8508, 8534, 8558, 8274, 8582, 8289, 8589, 8607, 8702, 8815, 8824, 8859,
-    8879, 8893, 8915, 8924, 8955, 9021, 9040, 9057, 9085, 9097, 9112, 9126,
-    9149, 9173, 5251, 9270, 9292, 9292, 9300, 9321, 9348, 9392, 9436, 9460,
-    9510, 9544, 9572, 9604, 9622, 9640, 9656, 9671, 9690, 9711, 9716, 9735,
-    9839, 9863, 9895, 9948, 2434, 9969, 9996, 10012, 10025, 10059, 10072, 10092,
-    10103, 10135, 10145, 10160, 10172, 10192, 10224, 10254, 10281, 10316, 10339, 6800,
-    10369, 10377, 10387, 10397, 10405, 10415, 10423, 10435, 10478, 2434, 10415, 6800,
-    10520, 10534, 10561, 10576, 10602, 10387, 10520, 10696, 10717, 10757, 2196, 10766,
-    10794, 10834, 10847, 10871, 10881, 10899, 10918, 10944, 10092, 10957, 10990, 11004,
-    11033, 2434, 2196, 11047, 11057, 11069, 11086, 11113, 11193, 10369, 11294, 11313,
-    11331, 11355, 6866, 11377, 11391, 11396, 11407, 11416, 11430, 11452, 11466, 418,
-    11503, 3632, 11517, 2434, 11538, 11548, 11564, 11579, 11608, 11627, 11650, 11686,
-    11709, 11740, 11771, 11805, 11817, 11850, 11875, 11905, 11918, 11924, 11935, 11939,
-    11944, 11948, 11954, 11960, 11391, 418, 11974, 11983, 11992, 12001, 12007, 12017,
-    12033, 12040, 12052, 12062, 12071, 12077, 12096, 12110, 12119, 12130, 12139, 12152,
-    12007, 12169, 3632, 11503, 11948, 12180, 12187, 12216, 12229, 161, 76, 2358,
-    12240, 12401, 12431, 12463, 12497, 12536, 12574, 12606, 12649, 12733, 5910, 12743,
-    12753, 457, 12760, 12767, 12839, 12857, 457, 12869, 12933, 12963, 12998, 13056,
-    13113, 13166, 13219, 13260, 13279, 13291, 13320, 13338, 13375, 13403, 13407, 13415,
-    13424, 13434, 13445, 13453, 13460, 13466, 2244, 13494, 13523, 10405, 13559, 13572,
-    13592, 13655, 13717, 13786, 13817, 13841, 13878, 2196, 13894, 13897, 13918, 13946,
-    13963, 14027, 14087, 5910, 14158, 14163, 14171, 14177, 14191, 14205, 14217, 14225,
-    14232, 14240, 14247,
+    2832, 2828, 2835, 2840, 2846, 2832, 2828, 2854, 2861, 2870, 2904, 2926,
+    2955, 2984, 3016, 3041, 3058, 3065, 3075, 3085, 3099, 2828, 3107, 3151,
+    3170, 3186, 3202, 3225, 2828, 2840, 3237, 429, 3243, 3255, 3276, 2196,
+    2434, 3292, 3304, 3347, 3385, 3396, 3410, 3420, 3426, 3433, 3438, 3445,
+    3455, 3471, 3501, 3410, 3237, 3426, 3531, 3542, 418, 3598, 3618, 3638,
+    3666, 3675, 3697, 3729, 3751, 3777, 3782, 3789, 3812, 3829, 3852, 3888,
+    3912, 3928, 3954, 3991, 4011, 4042, 4054, 4060, 4079, 4129, 4147, 4195,
+    4218, 4242, 4274, 4317, 4366, 4390, 4242, 4438, 4481, 4488, 4498, 4506,
+    4514, 4524, 4534, 4547, 4554, 4564, 4570, 4578, 4585, 4594, 4601, 4608,
+    4644, 4680, 4717, 4737, 4746, 4767, 4790, 4816, 4912, 4954, 4973, 4992,
+    5017, 5043, 5106, 5142, 429, 3777, 5180, 5188, 5220, 2835, 5228, 2358,
+    5234, 5253, 5271, 5285, 3438, 4601, 3433, 3438, 5285, 5295, 5316, 5295,
+    5339, 5365, 5382, 5409, 4601, 5620, 4079, 5658, 5696, 5714, 5746, 5764,
+    5778, 5791, 5817, 2244, 2335, 5844, 5890, 418, 5936, 2846, 5944, 5961,
+    5982, 6067, 6087, 6170, 6216, 6238, 6325, 6371, 6238, 6392, 6437, 6459,
+    6543, 6588, 6607, 6696, 449, 6741, 6761, 6770, 6797, 6834, 6858, 6865,
+    6896, 6900, 6906, 2846, 6942, 6952, 6966, 2828, 6982, 7012, 7047, 7053,
+    7073, 7099, 7136, 7175, 7197, 7220, 7258, 7298, 7315, 7347, 7366, 7396,
+    7424, 7489, 7517, 7567, 7608, 7649, 7695, 7745, 7781, 7811, 7847, 7886,
+    7913, 7946, 7984, 8013, 8046, 8088, 8128, 8173, 8193, 8214, 8237, 8242,
+    8247, 8253, 8259, 8265, 8269, 8280, 8304, 8312, 8319, 8324, 8329, 8346,
+    8371, 8384, 8407, 8414, 2840, 8421, 8438, 8214, 8464, 8471, 8478, 8265,
+    8485, 8494, 8519, 8546, 8571, 8579, 8587, 8606, 8630, 8656, 8680, 8304,
+    8704, 8319, 8711, 8729, 8824, 8937, 8946, 8981, 9001, 9015, 9037, 9046,
+    9077, 9143, 9162, 9179, 9207, 9219, 9234, 9248, 9271, 9295, 5285, 9392,
+    9414, 9414, 9422, 9443, 9470, 9514, 9558, 9582, 9632, 9666, 9694, 9726,
+    9744, 9762, 9778, 9793, 9812, 9833, 9838, 9857, 9961, 9985, 10017, 10070,
+    2434, 10091, 10118, 10134, 10147, 10181, 10194, 10214, 10225, 10257, 10267, 10282,
+    10294, 10314, 10346, 10376, 10403, 10438, 10461, 6834, 10491, 10499, 10509, 10519,
+    10527, 10537, 10545, 10557, 10600, 2434, 10537, 6834, 10642, 10656, 10683, 10698,
+    10724, 10509, 10642, 10818, 10839, 10879, 2196, 10888, 10916, 10956, 10969, 10993,
+    11003, 11021, 11040, 11066, 10214, 11079, 11112, 11126, 11155, 2434, 2196, 11169,
+    11179, 11191, 11208, 11235, 11315, 10491, 11416, 11435, 11453, 11477, 6900, 11499,
+    11513, 11518, 11529, 11538, 11552, 11574, 11588, 418, 11625, 3666, 11639, 2434,
+    11660, 11670, 11686, 11701, 11730, 11749, 11772, 11808, 11831, 11862, 11893, 11927,
+    11939, 11972, 11997, 12027, 12040, 12046, 12057, 12061, 12066, 12070, 12076, 12082,
+    11513, 418, 12096, 12105, 12114, 12123, 12129, 12139, 12155, 12162, 12174, 12184,
+    12193, 12199, 12218, 12232, 12241, 12252, 12261, 12274, 12129, 12291, 3666, 11625,
+    12070, 12302, 12309, 12338, 12351, 161, 76, 2358, 12362, 12523, 12553, 12585,
+    12619, 12658, 12696, 12728, 12771, 12855, 5944, 12865, 12875, 457, 12882, 12889,
+    12961, 12979, 457, 12991, 13055, 13085, 13120, 13178, 13235, 13288, 13341, 13382,
+    13401, 13413, 13442, 13460, 13497, 13525, 13529, 13537, 13546, 13556, 13567, 13575,
+    13582, 13588, 2244, 13616, 13645, 10527, 13681, 13694, 13714, 13777, 13839, 13908,
+    13939, 13963, 14000, 2196, 14016, 14019, 14040, 14068, 14085, 14149, 14209, 5944,
+    14280, 14285, 14293, 14299, 14313, 14327, 14339, 14347, 14354, 14362, 14369,
 };
 
-// es: 14620 bytes, 639 of 639 messages.
+// es: 14766 bytes, 647 of 647 messages.
 const char kBlob_es[] =
     "\xC2\xBF" "Falla el t\xC3\xA1" "ctil? Mant\xC3\xA9n un dedo en la pantalla.\0Consejo {0} de {1}\0"
     "toca para seguir\0Siguiente\0Entendido\0Los tres puntos rojos\0Bajo la pantalla: clic o toque largo en cada uno\0"
@@ -443,20 +446,20 @@ const char kBlob_es[] =
     "Ir al artista\0Ir al \xC3\xA1lbum\0Ir a la carpeta\0Pista integrada: no est\xC3\xA1 en la Biblioteca\0"
     "La Biblioteca a\xC3\xBAn no est\xC3\xA1 lista\0Biblioteca sint\xC3\xA9tica: uil0 es la de la tarjeta\0"
     "Reproducci\xC3\xB3n\0Aleatorio\0Repetir\0Temporizador de apagado\0Desactivado\0Activado\0Toda la cola\0"
-    "Una pista\0Auto DJ\0Esperando\0En pausa\0Temporizador: pausa en {0}\0Temporizador: fin de la pista\0"
-    "Temporizador: fin del \xC3\xA1lbum\0Temporizador: fin de la cola\0Temporizador: atenuando\0"
-    "Temporizador: desactivado\090 min\0Fin de pista\0Fin de \xC3\xA1lbum\0Fin de cola\0+10 min\0"
-    "Quitar\0Baja el volumen, pausa y apaga la pantalla.\0Atenuando\xE2\x80\xA6\0Fin de la pista\0"
-    "Fin del \xC3\xA1lbum\0Fin de la cola\0Atenuando\0pista\0\xC3\xA1lbum\0cola\0atenuando\0Temporizador: {0} min\0"
-    "Temporizador desactivado\0volumen\0Sus propios botones tambi\xC3\xA9n lo cambian\0Mant\xC3\xA9n pulsado A o C en cualquier pantalla\0"
-    "Ir a\0{0}, {1}: {2}\0Artistas\0\xC3\x81lbumes\0Carpetas\0Play\0+ Cola\0Auto DJ desde aqu\xC3\xAD\0"
-    "Todo ({0})\0\0Todo ({0})\0{0}, {1} pista\0\0{0}, {1} pistas\0Artista\0\xC3\x81lbum\0Carpeta\0"
-    "Todas las pistas\0{0} pista, \xC3\xA1lbum por \xC3\xA1lbum\0\0{0} pistas, \xC3\xA1lbum por \xC3\xA1lbum\0"
-    "Inicio\0{0} pista\0\0{0} pistas\0{0} \xC3\xA1lbum\0\0{0} \xC3\xA1lbumes\0{0} artista\0\0{0} artistas\0"
-    "{0}, {1}\0{0} carpeta\0\0{0} carpetas\0{0} archivo de audio\0\0{0} archivos de audio\0{0} archivo\0"
-    "\0{0} archivos\0{0} otro\0\0{0} otros\0vac\xC3\xAD" "a\0Disco {0}\0(sin carpeta de artista)\0"
-    "(pistas sueltas)\0Varios artistas\0Sin m\xC3\xBAsica: pon carpetas en /music\0No hay archivos de audio aqu\xC3\xAD\0"
-    "Nada aqu\xC3\xAD\0Buscando en /music otra vez...\0Biblioteca sint\xC3\xA9tica: solo explorar\0"
+    "Una pista\0Auto DJ\0Esperando\0En pausa\0Controles con el bot\xC3\xB3n de encendido\0Temporizador: pausa en {0}\0"
+    "Temporizador: fin de la pista\0Temporizador: fin del \xC3\xA1lbum\0Temporizador: fin de la cola\0"
+    "Temporizador: atenuando\0Temporizador: desactivado\090 min\0Fin de pista\0Fin de \xC3\xA1lbum\0"
+    "Fin de cola\0+10 min\0Quitar\0Baja el volumen, pausa y apaga la pantalla.\0Atenuando\xE2\x80\xA6\0"
+    "Fin de la pista\0Fin del \xC3\xA1lbum\0Fin de la cola\0Atenuando\0pista\0\xC3\xA1lbum\0cola\0"
+    "atenuando\0Temporizador: {0} min\0Temporizador desactivado\0volumen\0Sus propios botones tambi\xC3\xA9n lo cambian\0"
+    "Mant\xC3\xA9n pulsado A o C en cualquier pantalla\0Ir a\0{0}, {1}: {2}\0Artistas\0\xC3\x81lbumes\0"
+    "Carpetas\0Play\0+ Cola\0Auto DJ desde aqu\xC3\xAD\0Todo ({0})\0\0Todo ({0})\0{0}, {1} pista\0"
+    "\0{0}, {1} pistas\0Artista\0\xC3\x81lbum\0Carpeta\0Todas las pistas\0{0} pista, \xC3\xA1lbum por \xC3\xA1lbum\0"
+    "\0{0} pistas, \xC3\xA1lbum por \xC3\xA1lbum\0Inicio\0{0} pista\0\0{0} pistas\0{0} \xC3\xA1lbum\0"
+    "\0{0} \xC3\xA1lbumes\0{0} artista\0\0{0} artistas\0{0}, {1}\0{0} carpeta\0\0{0} carpetas\0{0} archivo de audio\0"
+    "\0{0} archivos de audio\0{0} archivo\0\0{0} archivos\0{0} otro\0\0{0} otros\0vac\xC3\xAD" "a\0"
+    "Disco {0}\0(sin carpeta de artista)\0(pistas sueltas)\0Varios artistas\0Sin m\xC3\xBAsica: pon carpetas en /music\0"
+    "No hay archivos de audio aqu\xC3\xAD\0Nada aqu\xC3\xAD\0Buscando en /music otra vez...\0Biblioteca sint\xC3\xA9tica: solo explorar\0"
     "Esperando a {0}: {1}\0Esperando a los auriculares: {0}\0Reproduciendo: {0}\0todo\0A continuaci\xC3\xB3n: {0}\0"
     "A continuaci\xC3\xB3n: {0} pista\0\0A continuaci\xC3\xB3n: {0} pistas\0A\xC3\xB1" "adida: {0}\0"
     "A\xC3\xB1" "adida: {0} pista\0\0A\xC3\xB1" "adidas: {0} pistas\0Comprobando la tarjeta\xE2\x80\xA6\0"
@@ -502,13 +505,14 @@ const char kBlob_es[] =
     "El \xC3\xADndice de Auto DJ no es v\xC3\xA1lido\0\xC3\x8Dndice de Auto DJ ilegible\0Sin memoria para el \xC3\xADndice de Auto DJ\0"
     "\xC3\x8Dndice de Auto DJ: demasiadas pistas\0selecci\xC3\xB3n aleatoria\0Esperando: se repite una pista\0"
     "Esperando: temporizador al fin de la cola\0Esperando: ninguna pista cumple los filtros\0En pausa: fallaron varias pistas\0"
-    "Apagar pantalla tras\0se aten\xC3\xBA" "a; toca y vuelve\0encendida: m\xC3\xA1s gasto\0" "15 s\0"
+    "Apagar pantalla tras\0se aten\xC3\xBA" "a, luego se apaga\0encendida: m\xC3\xA1s gasto\0" "15 s\0"
     "30 s\0" "1 min\0" "2 min\0" "5 min\0Nunca\0Brillo\0m\xC3\xA1s brillo, m\xC3\xA1s gasto\0Bajo\0"
-    "Medio\0Alto\0M\xC3\xA1ximo\0Apagar si inactivo\0en pausa, con bater\xC3\xAD" "a\0encendido: m\xC3\xA1s gasto\0"
-    "10 min\0" "20 min\0" "60 min\0Velocidad de CPU\0listas m\xC3\xA1s fluidas, baile\0listas lentas, ahorra algo\0"
-    "{0} MHz hasta reiniciar\0" "240 MHz\0" "160 MHz\0Potencia Bluetooth\0ahorra bater\xC3\xAD" "a; ac\xC3\xA9rcate\0"
-    "se ajusta a la distancia\0m\xC3\xA1s alcance, m\xC3\xA1s gasto\0en la pr\xC3\xB3xima conexi\xC3\xB3n\0"
-    "Baja\0Normal\0Alta\0\xC2\xBFReiniciar a {0}?\0La velocidad cambia al reiniciar. La m\xC3\xBAsica se pausa y sigue en el mismo segundo.\0"
+    "Medio\0Alto\0M\xC3\xA1ximo\0Si la tocas apagada\0con el bot\xC3\xB3n de encendido\0un toque la enciende\0"
+    "un toque muestra la pista\0Activar\0Pista\0Apagar si inactivo\0en pausa, con bater\xC3\xAD" "a\0"
+    "encendido: m\xC3\xA1s gasto\0" "10 min\0" "20 min\0" "60 min\0Velocidad de CPU\0listas m\xC3\xA1s fluidas, baile\0"
+    "listas lentas, ahorra algo\0{0} MHz hasta reiniciar\0" "240 MHz\0" "160 MHz\0Potencia Bluetooth\0"
+    "ahorra bater\xC3\xAD" "a; ac\xC3\xA9rcate\0se ajusta a la distancia\0m\xC3\xA1s alcance, m\xC3\xA1s gasto\0"
+    "en la pr\xC3\xB3xima conexi\xC3\xB3n\0Baja\0Normal\0Alta\0\xC2\xBFReiniciar a {0}?\0La velocidad cambia al reiniciar. La m\xC3\xBAsica se pausa y sigue en el mismo segundo.\0"
     "Ahorra algo de bater\xC3\xAD" "a; con m\xC3\xBAsica, las listas van a media velocidad. Se pausa y sigue en el mismo segundo.\0"
     "Reiniciar\0Emparejando: espera a que termine\0Reiniciando a {0}\xE2\x80\xA6\0Velocidad de CPU: {0}\0"
     "Se apaga en {0} s\0Seguir\0Apagado tras {0} s sin actividad\0Apagado tras {0} min sin actividad\0"
@@ -580,54 +584,54 @@ const uint16_t kOff_es[kStrings] = {
     2216, 2247, 2255, 2289, 2311, 2331, 2346, 2369, 2390, 2401, 2422, 2443,
     2247, 2465, 2477, 2496, 2523, 2542, 2573, 2592, 2605, 2616, 2629, 2636,
     2642, 2663, 2677, 2690, 2706, 2749, 2783, 2831, 2845, 2855, 2863, 2887,
-    2899, 2887, 2908, 2921, 2931, 2899, 2887, 2939, 2949, 2958, 2985, 3015,
-    3044, 3073, 3097, 3123, 3130, 3143, 3157, 3169, 3177, 3184, 3228, 3241,
-    3257, 3272, 3287, 2887, 3297, 3303, 3310, 3315, 3325, 3347, 2247, 2465,
-    3372, 3380, 3420, 3464, 3469, 3483, 3492, 3501, 3510, 88, 3515, 3522,
-    3542, 3565, 3597, 3605, 3612, 3620, 3637, 3697, 3704, 3726, 3751, 3777,
-    3786, 3812, 3856, 3882, 3902, 3909, 3919, 3944, 3961, 3977, 4013, 4044,
-    4055, 4086, 4123, 4144, 4177, 4196, 4201, 4222, 4278, 4292, 4335, 4361,
-    4389, 4419, 4456, 4514, 4537, 4389, 4575, 4614, 4622, 4629, 4637, 4644,
-    4653, 4662, 4675, 4681, 4691, 4698, 4707, 4716, 4726, 4735, 4742, 4781,
-    4817, 4857, 4878, 4889, 4909, 4935, 4968, 5064, 5116, 5135, 5160, 5181,
-    5208, 5258, 5289, 465, 3902, 5333, 5340, 5376, 5383, 5388, 2390, 5393,
-    5407, 5448, 3177, 88, 5459, 3510, 88, 3177, 5469, 5484, 5469, 5504,
-    5526, 5545, 5568, 5756, 5763, 4222, 5763, 5802, 5828, 5861, 5886, 5899,
-    5910, 2369, 2289, 5938, 5959, 6007, 454, 2845, 2931, 6054, 6065, 6080,
-    6159, 6179, 6270, 6313, 6335, 6423, 6466, 6335, 6487, 6529, 6550, 6634,
-    6665, 6682, 6771, 476, 6815, 6839, 6856, 6883, 6927, 6956, 6967, 6997,
-    7009, 7019, 2931, 7059, 7075, 7092, 2887, 7108, 7135, 7172, 7178, 7197,
-    7217, 7260, 7304, 7324, 7345, 7383, 7424, 7443, 7475, 7492, 7521, 7552,
-    7612, 7639, 7714, 7756, 7827, 7871, 7933, 7959, 7992, 8031, 8067, 8095,
-    8134, 8172, 8193, 8224, 8266, 8310, 8343, 8364, 8390, 8412, 8417, 8422,
-    8428, 8434, 8440, 8446, 8453, 8477, 8482, 8488, 8493, 8501, 8520, 8543,
-    8565, 8572, 8579, 8440, 8586, 8603, 8630, 8657, 8681, 8689, 8697, 8716,
-    8743, 8768, 8793, 8818, 8823, 8830, 8835, 8854, 8937, 9047, 9057, 9091,
-    9112, 9134, 9152, 9159, 9192, 9263, 9284, 9297, 9321, 9330, 9345, 9359,
-    9382, 9408, 3177, 9503, 9524, 9524, 9531, 9549, 9575, 9619, 9665, 9688,
-    9737, 9773, 9810, 9844, 9865, 9890, 9907, 9926, 9953, 9969, 9976, 10000,
-    10112, 10136, 10175, 10229, 2465, 10251, 10279, 10292, 10306, 10340, 10356, 10384,
-    10399, 10434, 10444, 10459, 10471, 10489, 10523, 10553, 10581, 10617, 10642, 6927,
-    10678, 10688, 10697, 10705, 10715, 10724, 6054, 10736, 10772, 2465, 10724, 6927,
-    10806, 10818, 10844, 10859, 10886, 10697, 10966, 10981, 11003, 11040, 2247, 11053,
-    11084, 11128, 11141, 11166, 11176, 11194, 11216, 11242, 10384, 11251, 11291, 11307,
-    11339, 11354, 11366, 11374, 11390, 11411, 11428, 11458, 11535, 10678, 11631, 10384,
-    11654, 11673, 7009, 11694, 11711, 11720, 11734, 11749, 11768, 11792, 11808, 454,
-    11844, 3777, 11858, 2465, 11870, 11882, 11896, 11912, 11949, 11968, 11982, 12019,
-    12043, 12076, 12108, 12143, 12165, 12202, 12228, 12266, 12277, 12283, 12305, 12309,
-    12314, 12318, 12324, 12330, 11711, 454, 12347, 12357, 12377, 12386, 12399, 12411,
-    12424, 12429, 12439, 12455, 12464, 12470, 12496, 12514, 12523, 12539, 12548, 12561,
-    12580, 12592, 3777, 11844, 12603, 12609, 12617, 9263, 12648, 12663, 12669, 2390,
-    12676, 12799, 12825, 12854, 12894, 12938, 12973, 13010, 13053, 13126, 6054, 13134,
-    13144, 483, 13150, 13157, 13218, 13235, 13241, 13249, 13318, 13343, 13373, 13426,
-    13481, 13532, 13583, 13617, 13635, 13644, 13674, 13697, 13729, 13757, 13761, 13768,
-    13775, 13785, 13795, 13805, 13814, 13822, 2289, 13853, 13879, 10715, 13920, 13935,
-    13958, 14007, 14061, 14123, 14156, 14181, 14219, 2616, 14235, 14243, 14264, 14297,
-    14310, 14380, 14448, 6054, 14528, 14533, 14541, 14547, 14561, 14575, 14587, 14595,
-    14602, 14610, 14617,
+    2899, 2887, 2908, 2921, 2931, 2899, 2887, 2939, 2949, 2958, 2995, 3022,
+    3052, 3081, 3110, 3134, 3160, 3167, 3180, 3194, 3206, 3214, 3221, 3265,
+    3278, 3294, 3309, 3324, 2887, 3334, 3340, 3347, 3352, 3362, 3384, 2247,
+    2465, 3409, 3417, 3457, 3501, 3506, 3520, 3529, 3538, 3547, 88, 3552,
+    3559, 3579, 3602, 3634, 3642, 3649, 3657, 3674, 3734, 3741, 3763, 3788,
+    3814, 3823, 3849, 3893, 3919, 3939, 3946, 3956, 3981, 3998, 4014, 4050,
+    4081, 4092, 4123, 4160, 4181, 4214, 4233, 4238, 4259, 4315, 4329, 4372,
+    4398, 4426, 4456, 4493, 4551, 4574, 4426, 4612, 4651, 4659, 4666, 4674,
+    4681, 4690, 4699, 4712, 4718, 4728, 4735, 4744, 4753, 4763, 4772, 4779,
+    4818, 4854, 4894, 4915, 4926, 4946, 4972, 5005, 5101, 5153, 5172, 5197,
+    5218, 5245, 5295, 5326, 465, 3939, 5370, 5377, 5413, 5420, 5425, 2390,
+    5430, 5444, 5485, 3214, 88, 5496, 3547, 88, 3214, 5506, 5521, 5506,
+    5541, 5563, 5582, 5605, 5793, 5800, 4259, 5800, 5839, 5865, 5898, 5923,
+    5936, 5947, 2369, 2289, 5975, 5996, 6044, 454, 2845, 2931, 6091, 6102,
+    6117, 6196, 6216, 6307, 6350, 6372, 6460, 6503, 6372, 6524, 6566, 6587,
+    6671, 6702, 6719, 6808, 476, 6852, 6876, 6893, 6920, 6964, 6993, 7004,
+    7034, 7046, 7056, 2931, 7096, 7112, 7129, 2887, 7145, 7172, 7209, 7215,
+    7234, 7254, 7297, 7341, 7361, 7382, 7420, 7461, 7480, 7512, 7529, 7558,
+    7589, 7649, 7676, 7751, 7793, 7864, 7908, 7970, 7996, 8029, 8068, 8104,
+    8132, 8171, 8209, 8230, 8261, 8303, 8347, 8380, 8401, 8428, 8450, 8455,
+    8460, 8466, 8472, 8478, 8484, 8491, 8515, 8520, 8526, 8531, 8539, 8559,
+    8586, 8607, 5425, 8633, 8641, 8647, 8666, 8689, 8711, 8718, 8725, 8478,
+    8732, 8749, 8776, 8803, 8827, 8835, 8843, 8862, 8889, 8914, 8939, 8964,
+    8969, 8976, 8981, 9000, 9083, 9193, 9203, 9237, 9258, 9280, 9298, 9305,
+    9338, 9409, 9430, 9443, 9467, 9476, 9491, 9505, 9528, 9554, 3214, 9649,
+    9670, 9670, 9677, 9695, 9721, 9765, 9811, 9834, 9883, 9919, 9956, 9990,
+    10011, 10036, 10053, 10072, 10099, 10115, 10122, 10146, 10258, 10282, 10321, 10375,
+    2465, 10397, 10425, 10438, 10452, 10486, 10502, 10530, 10545, 10580, 10590, 10605,
+    10617, 10635, 10669, 10699, 10727, 10763, 10788, 6964, 10824, 10834, 10843, 10851,
+    10861, 10870, 6091, 10882, 10918, 2465, 10870, 6964, 10952, 10964, 10990, 11005,
+    11032, 10843, 11112, 11127, 11149, 11186, 2247, 11199, 11230, 11274, 11287, 11312,
+    11322, 11340, 11362, 11388, 10530, 11397, 11437, 11453, 11485, 11500, 11512, 11520,
+    11536, 11557, 11574, 11604, 11681, 10824, 11777, 10530, 11800, 11819, 7046, 11840,
+    11857, 11866, 11880, 11895, 11914, 11938, 11954, 454, 11990, 3814, 12004, 2465,
+    12016, 12028, 12042, 12058, 12095, 12114, 12128, 12165, 12189, 12222, 12254, 12289,
+    12311, 12348, 12374, 12412, 12423, 12429, 12451, 12455, 12460, 12464, 12470, 12476,
+    11857, 454, 12493, 12503, 12523, 12532, 12545, 12557, 12570, 12575, 12585, 12601,
+    12610, 12616, 12642, 12660, 12669, 12685, 12694, 12707, 12726, 12738, 3814, 11990,
+    12749, 12755, 12763, 9409, 12794, 12809, 12815, 2390, 12822, 12945, 12971, 13000,
+    13040, 13084, 13119, 13156, 13199, 13272, 6091, 13280, 13290, 483, 13296, 13303,
+    13364, 13381, 13387, 13395, 13464, 13489, 13519, 13572, 13627, 13678, 13729, 13763,
+    13781, 13790, 13820, 13843, 13875, 13903, 13907, 13914, 13921, 13931, 13941, 13951,
+    13960, 13968, 2289, 13999, 14025, 10861, 14066, 14081, 14104, 14153, 14207, 14269,
+    14302, 14327, 14365, 2616, 14381, 14389, 14410, 14443, 14456, 14526, 14594, 6091,
+    14674, 14679, 14687, 14693, 14707, 14721, 14733, 14741, 14748, 14756, 14763,
 };
 
-// fr: 14767 bytes, 639 of 639 messages.
+// fr: 14919 bytes, 647 of 647 messages.
 const char kBlob_fr[] =
     "Tactile d\xC3\xA9r\xC3\xA9gl\xC3\xA9\xC2\xA0? Gardez un doigt sur l'\xC3\xA9" "cran.\0Astuce {0} sur {1}\0"
     "touchez\xC2\xA0: suite\0Suivant\0Compris\0Les trois points rouges\0Sous l'\xC3\xA9" "cran\xC2\xA0: clic ou appui long, n'importe o\xC3\xB9\0"
@@ -660,39 +664,40 @@ const char kBlob_fr[] =
     "Aller au dossier\0Morceau int\xC3\xA9gr\xC3\xA9\xC2\xA0: absent de la Biblioth\xC3\xA8que\0"
     "Biblioth\xC3\xA8que pas encore pr\xC3\xAAte\0Biblioth\xC3\xA8que de test\xC2\xA0: uil0 = celle de la carte\0"
     "Al\xC3\xA9" "atoire\0R\xC3\xA9p\xC3\xA9ter\0Minuterie de veille\0D\xC3\xA9sactiv\xC3\xA9\0Activ\xC3\xA9\0"
-    "Tout\0Un seul\0Auto DJ\0En attente\0En pause\0Minuterie\xC2\xA0: encore {0}\0Minuterie\xC2\xA0: fin du morceau\0"
-    "Minuterie\xC2\xA0: fin de l'album\0Minuterie\xC2\xA0: fin de la file\0Minuterie\xC2\xA0: fondu\0"
-    "Minuterie\xC2\xA0: d\xC3\xA9sactiv\xC3\xA9" "e\090 min\0Ce morceau\0Cet album\0La file\0+10 min\0"
-    "Arr\xC3\xAAter\0Fondu, pause, puis l'\xC3\xA9" "cran s'\xC3\xA9teint.\0Fin du morceau\0Fin de l'album\0"
-    "Fin de la file\0Fondu\0D\xC3\xA9sactiv\xC3\xA9" "e\0morceau\0album\0file\0fondu\0Minuterie de veille\xC2\xA0: {0} min\0"
-    "Minuterie de veille d\xC3\xA9sactiv\xC3\xA9" "e\0volume\0Les boutons du casque le changent aussi\0"
-    "Maintenez A ou C pour le r\xC3\xA9gler n'importe o\xC3\xB9\0Aller \xC3\xA0\0{0}, {1}\xC2\xA0: {2}\0"
-    "Artistes\0Albums\0Dossiers\0Lire\0\xC3\x80 la suite\0+ File\0Auto DJ \xC3\xA0 partir d'ici\0"
-    "Tout lire ({0})\0\0Lire les {0}\0{0}, {1} morceau\0\0{0}, {1} morceaux\0Artiste\0Album\0Dossier\0"
-    "Tous les morceaux\0{0} morceau, par album\0\0{0} morceaux, par album\0{0} morceau\0\0{0} morceaux\0"
-    "{0} album\0\0{0} albums\0{0} artiste\0\0{0} artistes\0{0}, {1}\0{0} dossier\0\0{0} dossiers\0"
-    "{0} fichier audio\0\0{0} fichiers audio\0{0} fichier\0\0{0} fichiers\0{0} autre\0\0{0} autres\0"
-    "vide\0Disque {0}\0(sans dossier d'artiste)\0(morceaux isol\xC3\xA9s)\0Artistes divers\0Aucune musique dans /music\0"
-    "Aucun fichier audio ici\0Rien ici\0Nouvelle recherche dans /music\xE2\x80\xA6\0Biblioth\xC3\xA8que de test\xC2\xA0: navigation seule\0"
-    "En attente de {0}\xC2\xA0: {1}\0En attente du casque\xC2\xA0: {0}\0Lecture\xC2\xA0: {0}\0tout\0"
-    "\xC3\x80 la suite\xC2\xA0: {0}\0\xC3\x80 la suite\xC2\xA0: {0} morceau\0\0\xC3\x80 la suite\xC2\xA0: {0} morceaux\0"
-    "Ajout\xC3\xA9\xC2\xA0: {0}\0Ajout\xC3\xA9\xC2\xA0: {0} morceau\0\0Ajout\xC3\xA9s\xC2\xA0: {0} morceaux\0"
-    "V\xC3\xA9rification de la carte\xE2\x80\xA6\0Lecture des tags {0} / {1}\0Mise \xC3\xA0 jour de la biblioth\xC3\xA8que\xE2\x80\xA6\0"
-    "Le dernier transfert n'a pas abouti\0{0} nouveau morceau\0\0{0} nouveaux morceaux\0Biblioth\xC3\xA8que mise \xC3\xA0 jour\0"
-    "Biblioth\xC3\xA8que\xC2\xA0: mise \xC3\xA0 jour au red\xC3\xA9marrage\0Mise \xC3\xA0 jour de la biblioth\xC3\xA8que\xC2\xA0: un instant\0"
-    "Filtres\0Joyeux\0Neutre\0Triste\0D\xC3\xA9tendu\0Agressif\0Instrumental\0Chant\0Acoustique\0"
-    "F\xC3\xAAte\0Dansant\0Strict\0Standard\0Souple\0Effacer\0{0} sur {1} album\0\0{0} sur {1} albums\0"
-    "{0} sur {1} morceau\0\0{0} sur {1} morceaux\0Aucun album ne r\xC3\xA9pond aux filtres\0Filtres intelligents\0"
-    "Indiff\xC3\xA9rent\0Pas de donn\xC3\xA9" "es d'ambiance\0Autre carte\xC2\xA0: red\xC3\xA9marrage\0"
-    "Carte r\xC3\xA9ins\xC3\xA9r\xC3\xA9" "e\xC2\xA0: red\xC3\xA9marrage\0Aucun morceau lu \xC3\xA0 \xC3\xA9" "carter\xC2\xA0: la file a {0} morceau max\0"
-    "\0Aucun morceau lu \xC3\xA0 \xC3\xA9" "carter\xC2\xA0: la file a {0} morceaux max\0la file a {0} morceau max\0"
-    "\0la file a {0} morceaux max\0{0} sur {1} en al\xC3\xA9" "atoire\0Lecture de {0} sur {1}\0{0} sur {1} ajout\xC3\xA9s\0"
-    "{0} sur {1} \xC3\xA0 la suite\0{0} morceau lu \xC3\xA9" "cart\xC3\xA9\0\0{0} morceaux lus \xC3\xA9" "cart\xC3\xA9s\0"
-    "{0} morceau ajout\xC3\xA9\0\0{0} morceaux ajout\xC3\xA9s\0{0} morceau \xC3\xA0 la suite\0\0"
-    "{0} morceaux \xC3\xA0 la suite\0G\xC3\xA9rer\0{0} s\xC3\xA9lectionn\xC3\xA9\0\0{0} s\xC3\xA9lectionn\xC3\xA9s\0"
-    "sur {0}\0Aucun\0Rien \xC3\xA0 suivre\0{0} \xC3\xA0 suivre\0\0{0} \xC3\xA0 suivre\0Retirer {0}\0"
-    "Retirer\0Vider\xE2\x80\xA6\0Vider la file\0Vider la suite\0Vider toute la file\0garde le morceau actuel\0"
-    "arr\xC3\xAAte la musique\0Vider toute la file\xC2\xA0?\0{0} morceau dispara\xC3\xAEt et la musique s'arr\xC3\xAAte. Annuler, sur le message qui suit, le ram\xC3\xA8ne.\0"
+    "Tout\0Un seul\0Auto DJ\0En attente\0En pause\0Bouton marche/arr\xC3\xAAt pour les commandes\0"
+    "Minuterie\xC2\xA0: encore {0}\0Minuterie\xC2\xA0: fin du morceau\0Minuterie\xC2\xA0: fin de l'album\0"
+    "Minuterie\xC2\xA0: fin de la file\0Minuterie\xC2\xA0: fondu\0Minuterie\xC2\xA0: d\xC3\xA9sactiv\xC3\xA9" "e\0"
+    "90 min\0Ce morceau\0Cet album\0La file\0+10 min\0Arr\xC3\xAAter\0Fondu, pause, puis l'\xC3\xA9" "cran s'\xC3\xA9teint.\0"
+    "Fin du morceau\0Fin de l'album\0Fin de la file\0Fondu\0D\xC3\xA9sactiv\xC3\xA9" "e\0morceau\0"
+    "album\0file\0fondu\0Minuterie de veille\xC2\xA0: {0} min\0Minuterie de veille d\xC3\xA9sactiv\xC3\xA9" "e\0"
+    "volume\0Les boutons du casque le changent aussi\0Maintenez A ou C pour le r\xC3\xA9gler n'importe o\xC3\xB9\0"
+    "Aller \xC3\xA0\0{0}, {1}\xC2\xA0: {2}\0Artistes\0Albums\0Dossiers\0Lire\0\xC3\x80 la suite\0"
+    "+ File\0Auto DJ \xC3\xA0 partir d'ici\0Tout lire ({0})\0\0Lire les {0}\0{0}, {1} morceau\0\0"
+    "{0}, {1} morceaux\0Artiste\0Album\0Dossier\0Tous les morceaux\0{0} morceau, par album\0\0{0} morceaux, par album\0"
+    "{0} morceau\0\0{0} morceaux\0{0} album\0\0{0} albums\0{0} artiste\0\0{0} artistes\0{0}, {1}\0"
+    "{0} dossier\0\0{0} dossiers\0{0} fichier audio\0\0{0} fichiers audio\0{0} fichier\0\0{0} fichiers\0"
+    "{0} autre\0\0{0} autres\0vide\0Disque {0}\0(sans dossier d'artiste)\0(morceaux isol\xC3\xA9s)\0"
+    "Artistes divers\0Aucune musique dans /music\0Aucun fichier audio ici\0Rien ici\0Nouvelle recherche dans /music\xE2\x80\xA6\0"
+    "Biblioth\xC3\xA8que de test\xC2\xA0: navigation seule\0En attente de {0}\xC2\xA0: {1}\0En attente du casque\xC2\xA0: {0}\0"
+    "Lecture\xC2\xA0: {0}\0tout\0\xC3\x80 la suite\xC2\xA0: {0}\0\xC3\x80 la suite\xC2\xA0: {0} morceau\0"
+    "\0\xC3\x80 la suite\xC2\xA0: {0} morceaux\0Ajout\xC3\xA9\xC2\xA0: {0}\0Ajout\xC3\xA9\xC2\xA0: {0} morceau\0"
+    "\0Ajout\xC3\xA9s\xC2\xA0: {0} morceaux\0V\xC3\xA9rification de la carte\xE2\x80\xA6\0Lecture des tags {0} / {1}\0"
+    "Mise \xC3\xA0 jour de la biblioth\xC3\xA8que\xE2\x80\xA6\0Le dernier transfert n'a pas abouti\0"
+    "{0} nouveau morceau\0\0{0} nouveaux morceaux\0Biblioth\xC3\xA8que mise \xC3\xA0 jour\0Biblioth\xC3\xA8que\xC2\xA0: mise \xC3\xA0 jour au red\xC3\xA9marrage\0"
+    "Mise \xC3\xA0 jour de la biblioth\xC3\xA8que\xC2\xA0: un instant\0Filtres\0Joyeux\0Neutre\0"
+    "Triste\0D\xC3\xA9tendu\0Agressif\0Instrumental\0Chant\0Acoustique\0F\xC3\xAAte\0Dansant\0Strict\0"
+    "Standard\0Souple\0Effacer\0{0} sur {1} album\0\0{0} sur {1} albums\0{0} sur {1} morceau\0\0"
+    "{0} sur {1} morceaux\0Aucun album ne r\xC3\xA9pond aux filtres\0Filtres intelligents\0Indiff\xC3\xA9rent\0"
+    "Pas de donn\xC3\xA9" "es d'ambiance\0Autre carte\xC2\xA0: red\xC3\xA9marrage\0Carte r\xC3\xA9ins\xC3\xA9r\xC3\xA9" "e\xC2\xA0: red\xC3\xA9marrage\0"
+    "Aucun morceau lu \xC3\xA0 \xC3\xA9" "carter\xC2\xA0: la file a {0} morceau max\0\0Aucun morceau lu \xC3\xA0 \xC3\xA9" "carter\xC2\xA0: la file a {0} morceaux max\0"
+    "la file a {0} morceau max\0\0la file a {0} morceaux max\0{0} sur {1} en al\xC3\xA9" "atoire\0"
+    "Lecture de {0} sur {1}\0{0} sur {1} ajout\xC3\xA9s\0{0} sur {1} \xC3\xA0 la suite\0{0} morceau lu \xC3\xA9" "cart\xC3\xA9\0"
+    "\0{0} morceaux lus \xC3\xA9" "cart\xC3\xA9s\0{0} morceau ajout\xC3\xA9\0\0{0} morceaux ajout\xC3\xA9s\0"
+    "{0} morceau \xC3\xA0 la suite\0\0{0} morceaux \xC3\xA0 la suite\0G\xC3\xA9rer\0{0} s\xC3\xA9lectionn\xC3\xA9\0"
+    "\0{0} s\xC3\xA9lectionn\xC3\xA9s\0sur {0}\0Aucun\0Rien \xC3\xA0 suivre\0{0} \xC3\xA0 suivre\0"
+    "\0{0} \xC3\xA0 suivre\0Retirer {0}\0Retirer\0Vider\xE2\x80\xA6\0Vider la file\0Vider la suite\0"
+    "Vider toute la file\0garde le morceau actuel\0arr\xC3\xAAte la musique\0Vider toute la file\xC2\xA0?\0"
+    "{0} morceau dispara\xC3\xAEt et la musique s'arr\xC3\xAAte. Annuler, sur le message qui suit, le ram\xC3\xA8ne.\0"
     "\0Les {0} morceaux disparaissent et la musique s'arr\xC3\xAAte. Annuler, sur le message qui suit, les ram\xC3\xA8ne.\0"
     "Vider\0{0} morceau retir\xC3\xA9\0\0{0} morceaux retir\xC3\xA9s\0C'est d\xC3\xA9j\xC3\xA0 le morceau en cours\0"
     "Rien apr\xC3\xA8s le morceau en cours\0En lecture\xC2\xA0: {0}\0Retir\xC3\xA9\xC2\xA0: {0}\0"
@@ -724,13 +729,14 @@ const char kBlob_fr[] =
     "s\xC3\xA9lection al\xC3\xA9" "atoire\0En attente\xC2\xA0: R\xC3\xA9p\xC3\xA9ter \xC2\xAB\xC2\xA0Un seul\xC2\xA0\xC2\xBB est activ\xC3\xA9\0"
     "En attente\xC2\xA0: minuterie en fin de file\0En attente\xC2\xA0: aucun morceau pour ces filtres\0"
     "En pause\xC2\xA0: morceaux impossibles \xC3\xA0 lire\0\xC3\x89" "cran \xC3\xA9teint apr\xC3\xA8s\0"
-    "baisse, un appui rallume\0allum\xC3\xA9\xC2\xA0: consomme plus\0" "15 s\0" "30 s\0" "1 min\0"
+    "baisse, puis s'\xC3\xA9teint\0allum\xC3\xA9\xC2\xA0: consomme plus\0" "15 s\0" "30 s\0" "1 min\0"
     "2 min\0" "5 min\0Jamais\0Luminosit\xC3\xA9\0forte\xC2\xA0: consomme plus\0Faible\0Moyen\0\xC3\x89lev\xC3\xA9\0"
-    "Max\0\xC3\x89teindre si inactif\0en pause, sur batterie\0" "10 min\0" "20 min\0" "60 min\0Vitesse CPU\0"
-    "Listes fluides, danse\0Listes lentes, \xC3\xA9" "conome\0{0} MHz en attendant\0" "240 MHz\0"
-    "160 MHz\0Puissance Bluetooth\0\xC3\x89" "conomise\xC2\xA0; restez proche\0S'adapte \xC3\xA0 la distance\0"
-    "Plus loin, consomme plus\0\xC3\x80 la prochaine connexion\0Normale\0\xC3\x89lev\xC3\xA9" "e\0"
-    "Red\xC3\xA9marrer \xC3\xA0 {0}\xC2\xA0?\0La vitesse change au red\xC3\xA9marrage. La musique se met en pause et reprend \xC3\xA0 la m\xC3\xAAme seconde.\0"
+    "Max\0Toucher \xC3\xA9" "cran \xC3\xA9teint\0rallum\xC3\xA9 par marche/arr\xC3\xAAt\0un appui rallume\0"
+    "un appui affiche le titre\0Rien\0Allumer\0Morceau\0\xC3\x89teindre si inactif\0en pause, sur batterie\0"
+    "10 min\0" "20 min\0" "60 min\0Vitesse CPU\0Listes fluides, danse\0Listes lentes, \xC3\xA9" "conome\0"
+    "{0} MHz en attendant\0" "240 MHz\0" "160 MHz\0Puissance Bluetooth\0\xC3\x89" "conomise\xC2\xA0; restez proche\0"
+    "S'adapte \xC3\xA0 la distance\0Plus loin, consomme plus\0\xC3\x80 la prochaine connexion\0Normale\0"
+    "\xC3\x89lev\xC3\xA9" "e\0Red\xC3\xA9marrer \xC3\xA0 {0}\xC2\xA0?\0La vitesse change au red\xC3\xA9marrage. La musique se met en pause et reprend \xC3\xA0 la m\xC3\xAAme seconde.\0"
     "\xC3\x89" "conomise un peu de batterie\xC2\xA0; listes plus lentes pendant la lecture. La musique reprend \xC3\xA0 la m\xC3\xAAme seconde.\0"
     "Red\xC3\xA9marrer\0Attendez la fin de l'appairage\0Red\xC3\xA9marrage \xC3\xA0 {0}\xE2\x80\xA6\0"
     "Vitesse CPU\xC2\xA0: {0}\0Extinction dans {0} s\0Continuer\0\xC3\x89teint apr\xC3\xA8s {0} s d'inactivit\xC3\xA9\0"
@@ -806,54 +812,54 @@ const uint16_t kOff_fr[kStrings] = {
     2236, 2271, 2284, 2314, 2329, 2345, 2367, 2386, 2403, 2415, 2437, 2459,
     2271, 2483, 2490, 2510, 2533, 2554, 2578, 2596, 2616, 2271, 2626, 2631,
     2641, 2664, 2683, 2700, 2717, 2765, 2797, 462, 2847, 2858, 2868, 2888,
-    2900, 2888, 2908, 2913, 2921, 2900, 2888, 2929, 2940, 2949, 2973, 3001,
-    3029, 3057, 3076, 3102, 3109, 3120, 3130, 3138, 3146, 3155, 3057, 3194,
-    3209, 3224, 3239, 3245, 3258, 3266, 3272, 3277, 3283, 3314, 2271, 2483,
-    3347, 3354, 3394, 3441, 3450, 3466, 3475, 3482, 3491, 3496, 3508, 3515,
-    3539, 3569, 3605, 3613, 3619, 3627, 3645, 470, 3693, 3719, 3741, 3767,
-    3776, 3802, 3840, 3866, 3888, 3893, 3904, 3929, 3948, 3964, 3991, 4015,
-    4024, 4058, 4100, 4125, 4153, 4168, 4173, 4192, 4248, 4263, 4312, 4341,
-    4368, 4404, 4440, 4483, 4510, 4368, 4556, 4603, 4611, 4618, 4625, 4632,
-    4641, 4650, 4663, 4669, 4680, 4686, 4694, 4701, 4710, 4717, 4725, 4763,
-    4805, 4840, 4861, 4874, 4901, 4929, 4964, 5082, 5136, 5162, 5185, 5206,
-    5230, 5282, 5325, 477, 3888, 5375, 5382, 5420, 2908, 5428, 2403, 5434,
-    5449, 5478, 5490, 3496, 5498, 3491, 3496, 5490, 5507, 5521, 5536, 5556,
-    5580, 5599, 5622, 5820, 5826, 4192, 5826, 5869, 5902, 5934, 5952, 5967,
-    5976, 2386, 2314, 6005, 6025, 6073, 6116, 2847, 2921, 6130, 6141, 6156,
-    6246, 6267, 6359, 6411, 6433, 6520, 6565, 6433, 6586, 6630, 6654, 6741,
-    6780, 6799, 6895, 488, 6948, 6968, 6981, 7006, 7050, 7069, 7080, 7112,
-    7126, 7136, 2921, 7173, 7188, 7206, 2888, 7222, 7245, 7279, 7285, 7303,
-    7334, 7374, 7412, 7433, 7455, 7498, 7536, 7555, 7589, 7607, 7641, 7669,
-    7737, 7768, 7831, 7875, 7942, 7992, 8052, 8081, 8111, 8147, 8190, 8214,
-    8253, 8291, 8313, 8365, 8404, 8449, 8490, 8512, 8537, 8562, 8567, 8572,
-    8578, 8584, 8590, 8597, 8609, 8632, 8639, 8645, 8653, 8657, 8678, 8537,
-    8701, 8708, 8715, 8590, 8722, 8734, 8756, 8780, 8801, 8809, 8817, 8837,
-    8865, 8889, 8914, 8632, 8940, 8948, 8957, 8979, 9073, 9185, 9197, 9228,
-    9251, 9270, 9292, 9302, 9337, 9412, 9430, 9443, 9465, 9474, 9488, 9506,
-    9529, 9555, 9642, 9652, 9672, 9672, 9679, 9697, 9726, 9776, 9836, 9855,
-    9890, 9914, 9943, 9972, 9989, 10008, 10025, 10043, 10069, 10085, 10092, 10111,
-    10224, 10243, 10276, 10339, 2483, 10356, 10378, 10392, 10405, 10433, 10453, 10476,
-    10489, 10517, 10527, 10542, 10554, 10568, 10597, 10630, 10654, 10693, 10719, 7050,
-    10751, 10760, 10770, 10778, 495, 10788, 6130, 10795, 10832, 2483, 10875, 7050,
-    10888, 10900, 10918, 10933, 10954, 10770, 11046, 11058, 11073, 11118, 2271, 11131,
-    11152, 11179, 11190, 11207, 11217, 7050, 11238, 11264, 10476, 11283, 11316, 11338,
-    11379, 11392, 11399, 11408, 11418, 11433, 11449, 11474, 11547, 10751, 11640, 11662,
-    11684, 11708, 7126, 11741, 11752, 11761, 11776, 11785, 11800, 11822, 11836, 6116,
-    11873, 3767, 11887, 2483, 11911, 11920, 11935, 11950, 11983, 12004, 12019, 12054,
-    12077, 12109, 12141, 12177, 12198, 12236, 12255, 12291, 12300, 12306, 12326, 12330,
-    12335, 12339, 12345, 12351, 11752, 6116, 12379, 12389, 12404, 12418, 12424, 12433,
-    12449, 12455, 12473, 12486, 12497, 12503, 12527, 12546, 12555, 12571, 12580, 12594,
-    12613, 12621, 3767, 11873, 12632, 12638, 12644, 9412, 12671, 12684, 12691, 2403,
-    12698, 12843, 12873, 12910, 12958, 13008, 13048, 13088, 13132, 13212, 6130, 13224,
-    13232, 495, 13241, 13250, 13323, 13338, 508, 13350, 13425, 13452, 13488, 13548,
-    13608, 13660, 13720, 13765, 13788, 13798, 13825, 13849, 13882, 13911, 13915, 13921,
-    12638, 13929, 13939, 13947, 13953, 13960, 2314, 13984, 14016, 495, 14061, 14078,
-    14098, 14158, 14225, 14295, 14328, 14360, 10453, 2271, 14403, 14406, 14422, 14422,
-    14441, 14517, 14593, 6130, 14675, 14680, 14688, 14694, 14708, 14722, 14734, 14742,
-    14749, 14757, 14764,
+    2900, 2888, 2908, 2913, 2921, 2900, 2888, 2929, 2940, 2949, 2989, 3013,
+    3041, 3069, 3097, 3116, 3142, 3149, 3160, 3170, 3178, 3186, 3195, 3097,
+    3234, 3249, 3264, 3279, 3285, 3298, 3306, 3312, 3317, 3323, 3354, 2271,
+    2483, 3387, 3394, 3434, 3481, 3490, 3506, 3515, 3522, 3531, 3536, 3548,
+    3555, 3579, 3609, 3645, 3653, 3659, 3667, 3685, 470, 3733, 3759, 3781,
+    3807, 3816, 3842, 3880, 3906, 3928, 3933, 3944, 3969, 3988, 4004, 4031,
+    4055, 4064, 4098, 4140, 4165, 4193, 4208, 4213, 4232, 4288, 4303, 4352,
+    4381, 4408, 4444, 4480, 4523, 4550, 4408, 4596, 4643, 4651, 4658, 4665,
+    4672, 4681, 4690, 4703, 4709, 4720, 4726, 4734, 4741, 4750, 4757, 4765,
+    4803, 4845, 4880, 4901, 4914, 4941, 4969, 5004, 5122, 5176, 5202, 5225,
+    5246, 5270, 5322, 5365, 477, 3928, 5415, 5422, 5460, 2908, 5468, 2403,
+    5474, 5489, 5518, 5530, 3536, 5538, 3531, 3536, 5530, 5547, 5561, 5576,
+    5596, 5620, 5639, 5662, 5860, 5866, 4232, 5866, 5909, 5942, 5974, 5992,
+    6007, 6016, 2386, 2314, 6045, 6065, 6113, 6156, 2847, 2921, 6170, 6181,
+    6196, 6286, 6307, 6399, 6451, 6473, 6560, 6605, 6473, 6626, 6670, 6694,
+    6781, 6820, 6839, 6935, 488, 6988, 7008, 7021, 7046, 7090, 7109, 7120,
+    7152, 7166, 7176, 2921, 7213, 7228, 7246, 2888, 7262, 7285, 7319, 7325,
+    7343, 7374, 7414, 7452, 7473, 7495, 7538, 7576, 7595, 7629, 7647, 7681,
+    7709, 7777, 7808, 7871, 7915, 7982, 8032, 8092, 8121, 8151, 8187, 8230,
+    8254, 8293, 8331, 8353, 8405, 8444, 8489, 8530, 8552, 8575, 8600, 8605,
+    8610, 8616, 8622, 8628, 8635, 8647, 8670, 8677, 8683, 8691, 8695, 8718,
+    8745, 8762, 8788, 8793, 8801, 8809, 8830, 8575, 8853, 8860, 8867, 8628,
+    8874, 8886, 8908, 8932, 8953, 8961, 8969, 8989, 9017, 9041, 9066, 8670,
+    9092, 9100, 9109, 9131, 9225, 9337, 9349, 9380, 9403, 9422, 9444, 9454,
+    9489, 9564, 9582, 9595, 9617, 9626, 9640, 9658, 9681, 9707, 9794, 9804,
+    9824, 9824, 9831, 9849, 9878, 9928, 9988, 10007, 10042, 10066, 10095, 10124,
+    10141, 10160, 10177, 10195, 10221, 10237, 10244, 10263, 10376, 10395, 10428, 10491,
+    2483, 10508, 10530, 10544, 10557, 10585, 10605, 10628, 10641, 10669, 10679, 10694,
+    10706, 10720, 10749, 10782, 10806, 10845, 10871, 7090, 10903, 10912, 10922, 10930,
+    495, 10940, 6170, 10947, 10984, 2483, 11027, 7090, 11040, 11052, 11070, 11085,
+    11106, 10922, 11198, 11210, 11225, 11270, 2271, 11283, 11304, 11331, 11342, 11359,
+    11369, 7090, 11390, 11416, 10628, 11435, 11468, 11490, 11531, 11544, 11551, 11560,
+    11570, 11585, 11601, 11626, 11699, 10903, 11792, 11814, 11836, 11860, 7166, 11893,
+    11904, 11913, 11928, 11937, 11952, 11974, 11988, 6156, 12025, 3807, 12039, 2483,
+    12063, 12072, 12087, 12102, 12135, 12156, 12171, 12206, 12229, 12261, 12293, 12329,
+    12350, 12388, 12407, 12443, 12452, 12458, 12478, 12482, 12487, 12491, 12497, 12503,
+    11904, 6156, 12531, 12541, 12556, 12570, 12576, 12585, 12601, 12607, 12625, 12638,
+    12649, 12655, 12679, 12698, 12707, 12723, 12732, 12746, 12765, 12773, 3807, 12025,
+    12784, 12790, 12796, 9564, 12823, 12836, 12843, 2403, 12850, 12995, 13025, 13062,
+    13110, 13160, 13200, 13240, 13284, 13364, 6170, 13376, 13384, 495, 13393, 13402,
+    13475, 13490, 508, 13502, 13577, 13604, 13640, 13700, 13760, 13812, 13872, 13917,
+    13940, 13950, 13977, 14001, 14034, 14063, 14067, 14073, 12790, 14081, 14091, 14099,
+    14105, 14112, 2314, 14136, 14168, 495, 14213, 14230, 14250, 14310, 14377, 14447,
+    14480, 14512, 10605, 2271, 14555, 14558, 14574, 14574, 14593, 14669, 14745, 6170,
+    14827, 14832, 14840, 14846, 14860, 14874, 14886, 14894, 14901, 14909, 14916,
 };
 
-// it: 14166 bytes, 639 of 639 messages.
+// it: 14305 bytes, 647 of 647 messages.
 const char kBlob_it[] =
     "Tocco impreciso? Tieni un dito sullo schermo.\0Consiglio {0} di {1}\0tocca e vai avanti\0Avanti\0"
     "Ho capito\0I tre punti rossi\0Sotto lo schermo: un clic o una pressione lunga\0Indietro\0Play/pausa\0"
@@ -885,34 +891,35 @@ const char kBlob_it[] =
     "Vai all\xE2\x80\x99" "album\0Vai alla cartella\0Brano integrato: non \xC3\xA8 nella Libreria\0"
     "La Libreria non \xC3\xA8 ancora pronta\0Libreria sintetica: solo esplorazione (uil0 = scheda SD)\0"
     "Riproduzione\0Casuale\0Ripeti\0Timer di spegnimento\0Disattivo\0Attivo\0Tutto\0Un brano\0Auto DJ\0"
-    "In attesa\0In pausa\0Timer di spegnimento: {0}\0Timer di spegnimento: fine brano\0Timer di spegnimento: fine album\0"
-    "Timer di spegnimento: fine coda\0Timer di spegnimento: sfuma\0Timer di spegnimento: disattivo\0"
-    "90 min\0Fine brano\0Fine album\0Fine coda\0+10 min\0Spegni\0Sfuma, va in pausa, poi spegne lo schermo.\0"
-    "Timer: sfuma\xE2\x80\xA6\0Sfuma\0brano\0album\0coda\0sfuma\0Timer di spegnimento: {0} min\0"
-    "Timer di spegnimento disattivato\0\xE2\x80\x93 volume\0Lo cambiano anche i tasti delle cuffie\0"
-    "Tieni premuto A o C per cambiarlo ovunque\0Vai a\0{0}, {1}: {2}\0Artisti\0Album\0Cartelle\0"
-    "Ascolta\0A seguire\0+ Coda\0Auto DJ da qui\0{0} brano\0\0Tutti e {0}\0{0}, {1} brano\0\0{0}, {1} brani\0"
-    "Artista\0Cartella\0Tutti i brani\0{0} brano, album per album\0\0{0} brani, album per album\0"
-    "{0} brano\0\0{0} brani\0{0} album\0\0{0} album\0{0} artista\0\0{0} artisti\0{0}, {1}\0{0} cartella\0"
-    "\0{0} cartelle\0{0} file audio\0\0{0} file audio\0{0} file\0\0{0} file\0{0} altro\0\0{0} altri\0"
-    "vuota\0Disco {0}\0(senza cartella artista)\0(brani sparsi)\0Artisti vari\0Nessuna musica: mettila in /music\0"
-    "Nessun file audio qui\0Niente qui\0Nuova ricerca in /music...\0Libreria sintetica: solo esplorazione\0"
-    "In attesa di {0}: {1}\0In attesa delle cuffie: {0}\0In riproduzione: {0}\0tutto\0A seguire: {0}\0"
-    "A seguire: {0} brano\0\0A seguire: {0} brani\0Aggiunto: {0}\0Aggiunto: {0} brano\0\0Aggiunti: {0} brani\0"
-    "Controllo della scheda SD\xE2\x80\xA6\0Lettura tag {0} / {1}\0Aggiornamento libreria\xE2\x80\xA6\0"
-    "L\xE2\x80\x99ultimo trasferimento non \xC3\xA8 finito\0Trovato {0} nuovo brano\0\0Trovati {0} nuovi brani\0"
-    "Libreria aggiornata\0Libreria: si aggiorna al prossimo avvio\0Aggiornamento della libreria\xE2\x80\xA6\0"
-    "Aggiornamento libreria: un attimo\0Filtri\0Allegro\0Neutro\0Triste\0Rilassato\0Aggressivo\0"
-    "Strumentale\0Voce\0Acustico\0Festa\0Ballabile\0Rigoroso\0Standard\0Flessibile\0Cancella\0{0} di {1} album\0"
-    "\0{0} di {1} album\0{0} di {1} brano\0\0{0} di {1} brani\0Nessun album corrisponde ai filtri\0"
-    "Filtri intelligenti\0Qualsiasi\0Nessun dato d'atmosfera\0Altra scheda SD: riavvio\0Scheda SD reinserita: riavvio\0"
-    "Coda piena, niente da togliere: contiene {0} brano\0\0Coda piena, niente da togliere: contiene {0} brani\0"
-    "la coda contiene {0} brano\0\0la coda contiene {0} brani\0{0} di {1} in ordine casuale\0In riproduzione {0} di {1}\0"
-    "Aggiunti {0} di {1}\0{0} di {1} a seguire\0tolto {0} brano gi\xC3\xA0 ascoltato\0\0tolti {0} brani gi\xC3\xA0 ascoltati\0"
-    "Aggiunto\0\0Aggiunti {0} brani\0A seguire\0\0{0} brani a seguire\0Scegli\0{0} selezionato\0"
-    "\0{0} selezionati\0di {0}\0Tutti\0Niente\0Niente a seguire\0{0} a seguire\0\0{0} a seguire\0"
-    "Rimuovi {0}\0Rimuovi\0Svuota\0Svuota la coda\0Togli i brani a seguire\0Svuota tutta la coda\0"
-    "resta il brano attuale\0ferma la musica\0Svuotare tutta la coda?\0{0} brano viene tolto e la musica si ferma. Annulla, sulla notifica che segue, lo riporta.\0"
+    "In attesa\0In pausa\0Tasto di accensione per i comandi\0Timer di spegnimento: {0}\0Timer di spegnimento: fine brano\0"
+    "Timer di spegnimento: fine album\0Timer di spegnimento: fine coda\0Timer di spegnimento: sfuma\0"
+    "Timer di spegnimento: disattivo\090 min\0Fine brano\0Fine album\0Fine coda\0+10 min\0Spegni\0"
+    "Sfuma, va in pausa, poi spegne lo schermo.\0Timer: sfuma\xE2\x80\xA6\0Sfuma\0brano\0album\0"
+    "coda\0sfuma\0Timer di spegnimento: {0} min\0Timer di spegnimento disattivato\0\xE2\x80\x93 volume\0"
+    "Lo cambiano anche i tasti delle cuffie\0Tieni premuto A o C per cambiarlo ovunque\0Vai a\0{0}, {1}: {2}\0"
+    "Artisti\0Album\0Cartelle\0Ascolta\0A seguire\0+ Coda\0Auto DJ da qui\0{0} brano\0\0Tutti e {0}\0"
+    "{0}, {1} brano\0\0{0}, {1} brani\0Artista\0Cartella\0Tutti i brani\0{0} brano, album per album\0"
+    "\0{0} brani, album per album\0{0} brano\0\0{0} brani\0{0} album\0\0{0} album\0{0} artista\0"
+    "\0{0} artisti\0{0}, {1}\0{0} cartella\0\0{0} cartelle\0{0} file audio\0\0{0} file audio\0{0} file\0"
+    "\0{0} file\0{0} altro\0\0{0} altri\0vuota\0Disco {0}\0(senza cartella artista)\0(brani sparsi)\0"
+    "Artisti vari\0Nessuna musica: mettila in /music\0Nessun file audio qui\0Niente qui\0Nuova ricerca in /music...\0"
+    "Libreria sintetica: solo esplorazione\0In attesa di {0}: {1}\0In attesa delle cuffie: {0}\0"
+    "In riproduzione: {0}\0tutto\0A seguire: {0}\0A seguire: {0} brano\0\0A seguire: {0} brani\0"
+    "Aggiunto: {0}\0Aggiunto: {0} brano\0\0Aggiunti: {0} brani\0Controllo della scheda SD\xE2\x80\xA6\0"
+    "Lettura tag {0} / {1}\0Aggiornamento libreria\xE2\x80\xA6\0L\xE2\x80\x99ultimo trasferimento non \xC3\xA8 finito\0"
+    "Trovato {0} nuovo brano\0\0Trovati {0} nuovi brani\0Libreria aggiornata\0Libreria: si aggiorna al prossimo avvio\0"
+    "Aggiornamento della libreria\xE2\x80\xA6\0Aggiornamento libreria: un attimo\0Filtri\0Allegro\0"
+    "Neutro\0Triste\0Rilassato\0Aggressivo\0Strumentale\0Voce\0Acustico\0Festa\0Ballabile\0Rigoroso\0"
+    "Standard\0Flessibile\0Cancella\0{0} di {1} album\0\0{0} di {1} album\0{0} di {1} brano\0\0{0} di {1} brani\0"
+    "Nessun album corrisponde ai filtri\0Filtri intelligenti\0Qualsiasi\0Nessun dato d'atmosfera\0"
+    "Altra scheda SD: riavvio\0Scheda SD reinserita: riavvio\0Coda piena, niente da togliere: contiene {0} brano\0"
+    "\0Coda piena, niente da togliere: contiene {0} brani\0la coda contiene {0} brano\0\0la coda contiene {0} brani\0"
+    "{0} di {1} in ordine casuale\0In riproduzione {0} di {1}\0Aggiunti {0} di {1}\0{0} di {1} a seguire\0"
+    "tolto {0} brano gi\xC3\xA0 ascoltato\0\0tolti {0} brani gi\xC3\xA0 ascoltati\0Aggiunto\0\0Aggiunti {0} brani\0"
+    "A seguire\0\0{0} brani a seguire\0Scegli\0{0} selezionato\0\0{0} selezionati\0di {0}\0Tutti\0"
+    "Niente\0Niente a seguire\0{0} a seguire\0\0{0} a seguire\0Rimuovi {0}\0Rimuovi\0Svuota\0Svuota la coda\0"
+    "Togli i brani a seguire\0Svuota tutta la coda\0resta il brano attuale\0ferma la musica\0Svuotare tutta la coda?\0"
+    "{0} brano viene tolto e la musica si ferma. Annulla, sulla notifica che segue, lo riporta.\0"
     "\0Tutti i {0} brani vengono tolti e la musica si ferma. Annulla, sulla notifica che segue, li riporta.\0"
     "Rimosso {0} brano\0\0Rimossi {0} brani\0Tolto {0} brano\0\0Tolti {0} brani\0\xC3\x88 gi\xC3\xA0 in riproduzione\0"
     "Niente dopo il brano attuale\0Rimosso: {0}\0il brano\0(non nella Libreria)\0La tua coda \xC3\xA8 vuota\0"
@@ -939,10 +946,11 @@ const char kBlob_it[] =
     "Indice Auto DJ: controlli non superati\0Indice Auto DJ illeggibile\0Indice Auto DJ: memoria insufficiente\0"
     "Troppi brani per l\xE2\x80\x99indice Auto DJ\0la selezione resta casuale\0In attesa: Ripeti un brano \xC3\xA8 attivo\0"
     "In attesa: timer di spegnimento a fine coda\0In attesa: nessun brano corrisponde ai filtri\0"
-    "In pausa: brani non riproducibili\0Spegni schermo dopo\0si attenua; tocca e torna\0resta acceso: pi\xC3\xB9 consumo\0"
+    "In pausa: brani non riproducibili\0Spegni schermo dopo\0si attenua, poi si spegne\0resta acceso: pi\xC3\xB9 consumo\0"
     "15 s\0" "30 s\0" "1 min\0" "2 min\0" "5 min\0Mai\0Luminosit\xC3\xA0\0pi\xC3\xB9 alta consuma di pi\xC3\xB9\0"
-    "Bassa\0Media\0Alta\0Massima\0Spegni se inattivo\0in pausa, a batteria\0" "10 min\0" "20 min\0"
-    "60 min\0Velocit\xC3\xA0 CPU\0Liste fluidissime, si balla\0Liste pi\xC3\xB9 lente, risparmia\0"
+    "Bassa\0Media\0Alta\0Massima\0Tocco da spento\0solo il tasto di accensione\0un tocco lo riattiva\0"
+    "un tocco mostra il brano\0Riattiva\0Brano\0Spegni se inattivo\0in pausa, a batteria\0" "10 min\0"
+    "20 min\0" "60 min\0Velocit\xC3\xA0 CPU\0Liste fluidissime, si balla\0Liste pi\xC3\xB9 lente, risparmia\0"
     "{0} MHz fino al riavvio\0" "240 MHz\0" "160 MHz\0Potenza Bluetooth\0Meno consumo; stai vicino\0"
     "Si adatta alla distanza\0Pi\xC3\xB9 portata, pi\xC3\xB9 consumo\0Alla prossima connessione\0"
     "Normale\0Riavviare a {0}?\0La velocit\xC3\xA0 cambia al riavvio. La musica va in pausa e riprende dallo stesso secondo.\0"
@@ -1011,54 +1019,54 @@ const uint16_t kOff_it[kStrings] = {
     2121, 2156, 2169, 2205, 2228, 2248, 2272, 2296, 2313, 2324, 2345, 2363,
     2156, 2385, 2392, 2410, 2432, 2452, 2478, 2495, 2512, 2156, 2533, 2538,
     2548, 2571, 2589, 2605, 2623, 2662, 2695, 2752, 2765, 2773, 2780, 2801,
-    2811, 2801, 2818, 2824, 2833, 2811, 2801, 2841, 2851, 2860, 2886, 2919,
-    2952, 2984, 3012, 3044, 3051, 3062, 3073, 3083, 3091, 3098, 3141, 3051,
-    3062, 3073, 3157, 2801, 3163, 3169, 3175, 3180, 3186, 3216, 2156, 2385,
-    3249, 3260, 3299, 3341, 3347, 3361, 3369, 3375, 3384, 3392, 3402, 3409,
-    3424, 3447, 3478, 3369, 3486, 3495, 3509, 443, 3564, 3585, 3606, 3631,
-    3640, 3667, 3698, 3717, 3738, 3744, 3754, 3779, 3794, 3807, 3841, 3863,
-    3874, 3901, 3939, 3961, 3989, 4010, 4016, 4031, 4074, 4088, 4129, 4158,
-    4180, 4206, 4245, 4294, 4314, 4354, 4386, 4420, 4427, 4435, 4442, 4449,
-    4459, 4470, 4482, 4487, 4496, 4502, 4512, 4521, 4530, 4541, 4550, 4585,
-    4620, 4655, 4675, 4685, 4709, 4734, 4764, 4867, 4922, 4951, 4978, 4998,
-    5019, 5082, 5111, 452, 3738, 5142, 5149, 5182, 5189, 5195, 2313, 5202,
-    5219, 5248, 5260, 3392, 5268, 3384, 3392, 5260, 5275, 5290, 5314, 5335,
-    5358, 5374, 5398, 5268, 5591, 4031, 5628, 5661, 5685, 3989, 5714, 5727,
-    5736, 2296, 2205, 5757, 5778, 5825, 5873, 2765, 2833, 5887, 5895, 5918,
-    5997, 6013, 6104, 6154, 6177, 6263, 6300, 6177, 6322, 6358, 6380, 6468,
-    6502, 6524, 6613, 463, 6660, 6681, 6697, 6724, 6767, 6787, 6807, 6835,
-    6847, 6860, 2833, 6898, 6912, 6929, 2801, 6945, 6969, 7004, 7011, 7031,
-    7059, 7094, 7140, 7162, 7181, 7216, 7254, 7274, 7304, 7322, 7351, 7375,
-    7433, 7460, 7521, 7562, 7619, 7664, 7717, 7748, 7781, 7819, 7858, 7885,
-    7923, 7959, 7986, 8023, 8067, 8113, 8147, 8167, 8193, 8220, 8225, 8230,
-    8236, 8242, 8248, 8252, 8264, 8290, 8296, 8302, 8307, 8315, 8334, 8193,
-    8355, 8362, 8369, 8248, 8376, 8390, 8418, 8446, 8470, 8478, 8486, 8504,
-    8530, 8554, 8581, 8290, 8607, 8302, 8615, 8632, 8719, 8824, 8832, 8867,
-    8884, 8903, 8923, 8932, 8965, 9036, 9055, 9069, 9095, 9103, 9117, 9132,
-    9153, 9180, 5260, 9266, 9287, 9287, 9294, 9310, 9332, 9372, 9413, 9436,
-    9481, 9510, 9539, 9570, 9587, 9610, 9623, 9637, 9666, 9683, 9691, 9708,
-    9820, 9847, 9875, 9928, 2385, 9945, 9969, 9982, 9997, 10030, 10048, 10072,
-    10087, 10120, 10129, 10143, 10155, 10173, 10208, 10239, 10263, 10302, 10327, 6767,
-    10358, 10365, 10374, 10384, 470, 10392, 5887, 10404, 10447, 2385, 10392, 6767,
-    10480, 10494, 10518, 10535, 10558, 10374, 10630, 10646, 10665, 10707, 2156, 10719,
-    10751, 10791, 10803, 10821, 10831, 10847, 10861, 10886, 10072, 10903, 10942, 10955,
-    10992, 11007, 11014, 11027, 11038, 11056, 11070, 11099, 11175, 10358, 11268, 11291,
-    11315, 11335, 6847, 11370, 11385, 11394, 11409, 11417, 11433, 11456, 11471, 443,
-    11511, 3631, 11525, 2385, 11548, 11557, 11574, 11588, 11621, 11640, 11651, 11686,
-    11710, 11742, 11775, 11811, 11828, 11858, 11876, 11906, 11919, 11926, 11945, 11949,
-    11954, 11958, 11964, 11970, 11385, 443, 11640, 11983, 11990, 11999, 12005, 12017,
-    12033, 12039, 12050, 12063, 12072, 12078, 12097, 12111, 12120, 12131, 12140, 12152,
-    12005, 12171, 3631, 11511, 12182, 12188, 12196, 12225, 12238, 12253, 12258, 2313,
-    12264, 12389, 12417, 12449, 12489, 12535, 12568, 12600, 12637, 12705, 5887, 12711,
-    12718, 470, 12724, 12731, 12794, 12813, 12821, 12827, 12895, 12921, 12953, 13001,
-    13051, 13095, 13139, 13173, 13188, 13196, 13224, 13245, 13275, 13305, 13309, 13317,
-    13328, 13336, 13345, 13355, 13364, 13370, 2205, 13392, 13418, 470, 13458, 13474,
-    13493, 13554, 13620, 13689, 13721, 13755, 13785, 13805, 13822, 13825, 13842, 13867,
-    13882, 13944, 14006, 5887, 14074, 14079, 14087, 14093, 14107, 14121, 14133, 14141,
-    14148, 14156, 14163,
+    2811, 2801, 2818, 2824, 2833, 2811, 2801, 2841, 2851, 2860, 2894, 2920,
+    2953, 2986, 3018, 3046, 3078, 3085, 3096, 3107, 3117, 3125, 3132, 3175,
+    3085, 3096, 3107, 3191, 2801, 3197, 3203, 3209, 3214, 3220, 3250, 2156,
+    2385, 3283, 3294, 3333, 3375, 3381, 3395, 3403, 3409, 3418, 3426, 3436,
+    3443, 3458, 3481, 3512, 3403, 3520, 3529, 3543, 443, 3598, 3619, 3640,
+    3665, 3674, 3701, 3732, 3751, 3772, 3778, 3788, 3813, 3828, 3841, 3875,
+    3897, 3908, 3935, 3973, 3995, 4023, 4044, 4050, 4065, 4108, 4122, 4163,
+    4192, 4214, 4240, 4279, 4328, 4348, 4388, 4420, 4454, 4461, 4469, 4476,
+    4483, 4493, 4504, 4516, 4521, 4530, 4536, 4546, 4555, 4564, 4575, 4584,
+    4619, 4654, 4689, 4709, 4719, 4743, 4768, 4798, 4901, 4956, 4985, 5012,
+    5032, 5053, 5116, 5145, 452, 3772, 5176, 5183, 5216, 5223, 5229, 2313,
+    5236, 5253, 5282, 5294, 3426, 5302, 3418, 3426, 5294, 5309, 5324, 5348,
+    5369, 5392, 5408, 5432, 5302, 5625, 4065, 5662, 5695, 5719, 4023, 5748,
+    5761, 5770, 2296, 2205, 5791, 5812, 5859, 5907, 2765, 2833, 5921, 5929,
+    5952, 6031, 6047, 6138, 6188, 6211, 6297, 6334, 6211, 6356, 6392, 6414,
+    6502, 6536, 6558, 6647, 463, 6694, 6715, 6731, 6758, 6801, 6821, 6841,
+    6869, 6881, 6894, 2833, 6932, 6946, 6963, 2801, 6979, 7003, 7038, 7045,
+    7065, 7093, 7128, 7174, 7196, 7215, 7250, 7288, 7308, 7338, 7356, 7385,
+    7409, 7467, 7494, 7555, 7596, 7653, 7698, 7751, 7782, 7815, 7853, 7892,
+    7919, 7957, 7993, 8020, 8057, 8101, 8147, 8181, 8201, 8227, 8254, 8259,
+    8264, 8270, 8276, 8282, 8286, 8298, 8324, 8330, 8336, 8341, 8349, 8365,
+    8393, 8414, 5229, 8439, 8448, 8454, 8473, 8227, 8494, 8501, 8508, 8282,
+    8515, 8529, 8557, 8585, 8609, 8617, 8625, 8643, 8669, 8693, 8720, 8324,
+    8746, 8336, 8754, 8771, 8858, 8963, 8971, 9006, 9023, 9042, 9062, 9071,
+    9104, 9175, 9194, 9208, 9234, 9242, 9256, 9271, 9292, 9319, 5294, 9405,
+    9426, 9426, 9433, 9449, 9471, 9511, 9552, 9575, 9620, 9649, 9678, 9709,
+    9726, 9749, 9762, 9776, 9805, 9822, 9830, 9847, 9959, 9986, 10014, 10067,
+    2385, 10084, 10108, 10121, 10136, 10169, 10187, 10211, 10226, 10259, 10268, 10282,
+    10294, 10312, 10347, 10378, 10402, 10441, 10466, 6801, 10497, 10504, 10513, 10523,
+    470, 10531, 5921, 10543, 10586, 2385, 10531, 6801, 10619, 10633, 10657, 10674,
+    10697, 10513, 10769, 10785, 10804, 10846, 2156, 10858, 10890, 10930, 10942, 10960,
+    10970, 10986, 11000, 11025, 10211, 11042, 11081, 11094, 11131, 11146, 11153, 11166,
+    11177, 11195, 11209, 11238, 11314, 10497, 11407, 11430, 11454, 11474, 6881, 11509,
+    11524, 11533, 11548, 11556, 11572, 11595, 11610, 443, 11650, 3665, 11664, 2385,
+    11687, 11696, 11713, 11727, 11760, 11779, 11790, 11825, 11849, 11881, 11914, 11950,
+    11967, 11997, 12015, 12045, 12058, 12065, 12084, 12088, 12093, 12097, 12103, 12109,
+    11524, 443, 11779, 12122, 12129, 12138, 12144, 12156, 12172, 12178, 12189, 12202,
+    12211, 12217, 12236, 12250, 12259, 12270, 12279, 12291, 12144, 12310, 3665, 11650,
+    12321, 12327, 12335, 12364, 12377, 12392, 12397, 2313, 12403, 12528, 12556, 12588,
+    12628, 12674, 12707, 12739, 12776, 12844, 5921, 12850, 12857, 470, 12863, 12870,
+    12933, 12952, 12960, 12966, 13034, 13060, 13092, 13140, 13190, 13234, 13278, 13312,
+    13327, 13335, 13363, 13384, 13414, 13444, 13448, 13456, 13467, 13475, 13484, 13494,
+    13503, 13509, 2205, 13531, 13557, 470, 13597, 13613, 13632, 13693, 13759, 13828,
+    13860, 13894, 13924, 13944, 13961, 13964, 13981, 14006, 14021, 14083, 14145, 5921,
+    14213, 14218, 14226, 14232, 14246, 14260, 14272, 14280, 14287, 14295, 14302,
 };
 
-// ja: 15959 bytes, 639 of 639 messages.
+// ja: 16098 bytes, 647 of 647 messages.
 const char kBlob_ja[] =
     "\xE3\x82\xBF\xE3\x83\x83\xE3\x83\x81\xE3\x81\x8C\xE3\x81\x8A\xE3\x81\x8B\xE3\x81\x97\xE3\x81\x84? \xE7\x94\xBB\xE9\x9D\xA2\xE3\x82\x92\xE9\x95\xB7\xE6\x8A\xBC\xE3\x81\x97\0"
     "\xE3\x83\x92\xE3\x83\xB3\xE3\x83\x88 {0}/{1}\0\xE3\x82\xBF\xE3\x83\x83\xE3\x83\x97\xE3\x81\xA7\xE6\xAC\xA1\xE3\x81\xB8\0"
@@ -1130,6 +1138,7 @@ const char kBlob_ja[] =
     "\xE3\x82\xB9\xE3\x83\xAA\xE3\x83\xBC\xE3\x83\x97\xE3\x82\xBF\xE3\x82\xA4\xE3\x83\x9E\xE3\x83\xBC\0"
     "\xE3\x82\xAA\xE3\x83\x95\0\xE3\x82\xAA\xE3\x83\xB3\0\xE3\x81\x99\xE3\x81\xB9\xE3\x81\xA6\0" "1 \xE6\x9B\xB2\0"
     "Auto DJ\0\xE5\xBE\x85\xE6\xA9\x9F\xE4\xB8\xAD\0\xE4\xB8\x80\xE6\x99\x82\xE5\x81\x9C\xE6\xAD\xA2\0"
+    "\xE6\x93\x8D\xE4\xBD\x9C\xE3\x81\xAF\xE9\x9B\xBB\xE6\xBA\x90\xE3\x83\x9C\xE3\x82\xBF\xE3\x83\xB3\xE3\x81\xA7\0"
     "\xE3\x82\xB9\xE3\x83\xAA\xE3\x83\xBC\xE3\x83\x97\xE3\x82\xBF\xE3\x82\xA4\xE3\x83\x9E\xE3\x83\xBC: {0} \xE5\xBE\x8C\0"
     "\xE3\x82\xB9\xE3\x83\xAA\xE3\x83\xBC\xE3\x83\x97\xE3\x82\xBF\xE3\x82\xA4\xE3\x83\x9E\xE3\x83\xBC: \xE6\x9B\xB2\xE3\x81\xAE\xE6\x9C\x80\xE5\xBE\x8C\0"
     "\xE3\x82\xB9\xE3\x83\xAA\xE3\x83\xBC\xE3\x83\x97\xE3\x82\xBF\xE3\x82\xA4\xE3\x83\x9E\xE3\x83\xBC: \xE3\x82\xA2\xE3\x83\xAB\xE3\x83\x90\xE3\x83\xA0\xE6\x9C\xAB\0"
@@ -1251,11 +1260,14 @@ const char kBlob_ja[] =
     "\xE5\xBE\x85\xE6\xA9\x9F\xE4\xB8\xAD: \xE3\x82\xB9\xE3\x83\xAA\xE3\x83\xBC\xE3\x83\x97\xE3\x82\xBF\xE3\x82\xA4\xE3\x83\x9E\xE3\x83\xBC\xE3\x81\xAF\xE3\x82\xAD\xE3\x83\xA5\xE3\x83\xBC\xE6\x9C\xAB\0"
     "\xE5\xBE\x85\xE6\xA9\x9F\xE4\xB8\xAD: \xE3\x83\x95\xE3\x82\xA3\xE3\x83\xAB\xE3\x82\xBF\xE3\x83\xBC\xE3\x81\xAB\xE5\x90\x88\xE3\x81\x86\xE6\x9B\xB2\xE3\x81\xAA\xE3\x81\x97\0"
     "\xE4\xB8\x80\xE6\x99\x82\xE5\x81\x9C\xE6\xAD\xA2: \xE6\x9B\xB2\xE3\x82\x92\xE5\x86\x8D\xE7\x94\x9F\xE3\x81\xA7\xE3\x81\x8D\xE3\x81\xBE\xE3\x81\x9B\xE3\x82\x93\xE3\x81\xA7\xE3\x81\x97\xE3\x81\x9F\0"
-    "\xE7\x94\xBB\xE9\x9D\xA2\xE3\x82\xAA\xE3\x83\x95\xE3\x81\xBE\xE3\x81\xA7\0\xE6\x9A\x97\xE8\xBB\xA2\xE5\xBE\x8C\xE3\x80\x81\xE3\x82\xBF\xE3\x83\x83\xE3\x83\x97\xE3\x81\xA7\xE5\xBE\xA9\xE5\xB8\xB0\0"
+    "\xE7\x94\xBB\xE9\x9D\xA2\xE3\x82\xAA\xE3\x83\x95\xE3\x81\xBE\xE3\x81\xA7\0\xE6\x9A\x97\xE3\x81\x8F\xE3\x81\xAA\xE3\x81\xA3\xE3\x81\xA6\xE3\x81\x8B\xE3\x82\x89\xE3\x82\xAA\xE3\x83\x95\0"
     "\xE5\xB8\xB8\xE6\x99\x82\xE7\x82\xB9\xE7\x81\xAF: \xE9\x9B\xBB\xE6\xB1\xA0\xE3\x82\x92\xE4\xBD\xBF\xE3\x81\x86\0"
     "15 \xE7\xA7\x92\0" "30 \xE7\xA7\x92\0" "1 \xE5\x88\x86\0" "2 \xE5\x88\x86\0" "5 \xE5\x88\x86\0"
     "\xE3\x81\xAA\xE3\x81\x97\0\xE6\x98\x8E\xE3\x82\x8B\xE3\x81\x95\0\xE6\x98\x8E\xE3\x82\x8B\xE3\x81\x84\xE3\x81\xBB\xE3\x81\xA9\xE9\x9B\xBB\xE6\xB1\xA0\xE3\x82\x92\xE4\xBD\xBF\xE3\x81\x86\0"
-    "\xE4\xBD\x8E\0\xE4\xB8\xAD\0\xE9\xAB\x98\0\xE6\x9C\x80\xE5\xA4\xA7\0\xE5\xBE\x85\xE6\xA9\x9F\xE6\x99\x82\xE3\x81\xAB\xE9\x9B\xBB\xE6\xBA\x90\xE3\x82\xAA\xE3\x83\x95\0"
+    "\xE4\xBD\x8E\0\xE4\xB8\xAD\0\xE9\xAB\x98\0\xE6\x9C\x80\xE5\xA4\xA7\0\xE7\x94\xBB\xE9\x9D\xA2\xE3\x82\xAA\xE3\x83\x95\xE6\x99\x82\xE3\x81\xAE\xE3\x82\xBF\xE3\x83\x83\xE3\x83\x81\0"
+    "\xE9\x9B\xBB\xE6\xBA\x90\xE3\x83\x9C\xE3\x82\xBF\xE3\x83\xB3\xE3\x81\xA7\xE5\xBE\xA9\xE5\xB8\xB0\0"
+    "\xE3\x82\xBF\xE3\x83\x83\xE3\x83\x97\xE3\x81\xA7\xE5\xBE\xA9\xE5\xB8\xB0\0\xE3\x82\xBF\xE3\x83\x83\xE3\x83\x97\xE3\x81\xA7\xE6\x9B\xB2\xE3\x82\x92\xE8\xA1\xA8\xE7\xA4\xBA\0"
+    "\xE5\xBE\xA9\xE5\xB8\xB0\0\xE6\x9B\xB2\xE6\x83\x85\xE5\xA0\xB1\0\xE5\xBE\x85\xE6\xA9\x9F\xE6\x99\x82\xE3\x81\xAB\xE9\x9B\xBB\xE6\xBA\x90\xE3\x82\xAA\xE3\x83\x95\0"
     "\xE9\x9B\xBB\xE6\xB1\xA0\xE9\xA7\x86\xE5\x8B\x95\xE3\x81\xA7\xE4\xB8\x80\xE6\x99\x82\xE5\x81\x9C\xE6\xAD\xA2\xE4\xB8\xAD\0"
     "\xE5\xB8\xB8\xE6\x99\x82\xE3\x82\xAA\xE3\x83\xB3: \xE9\x9B\xBB\xE6\xB1\xA0\xE3\x82\x92\xE4\xBD\xBF\xE3\x81\x86\0"
     "10 \xE5\x88\x86\0" "20 \xE5\x88\x86\0" "60 \xE5\x88\x86\0CPU \xE9\x80\x9F\xE5\xBA\xA6\0\xE4\xB8\x80\xE8\xA6\xA7\xE3\x82\x82\xE3\x83\x80\xE3\x83\xB3\xE3\x82\xB9\xE3\x82\x82\xE6\xBB\x91\xE3\x82\x89\xE3\x81\x8B\0"
@@ -1401,54 +1413,54 @@ const uint16_t kOff_ja[kStrings] = {
     2466, 2510, 2526, 2578, 2612, 2640, 2659, 2693, 2715, 2725, 2750, 2769,
     2510, 2791, 2807, 2823, 2851, 2871, 2902, 2917, 2927, 2937, 2959, 2966,
     2979, 3004, 3032, 3054, 3076, 3122, 3156, 3208, 3215, 3231, 3244, 3269,
-    3276, 3269, 3283, 3293, 3299, 3276, 3269, 3307, 3317, 3330, 3364, 3403,
-    3445, 3484, 3526, 3559, 3566, 3579, 3595, 3608, 3269, 3616, 3671, 3566,
-    3687, 3709, 3671, 3269, 3728, 3732, 529, 3671, 3745, 3782, 2510, 2791,
-    3831, 3838, 3890, 3939, 3949, 3962, 3732, 3981, 3208, 3994, 4007, 4019,
-    4040, 4054, 3962, 3732, 3981, 4068, 4084, 513, 4110, 4118, 4139, 4166,
-    4176, 4193, 4216, 4233, 4247, 4257, 4274, 4290, 4317, 4345, 4398, 4435,
-    4457, 4492, 4528, 4550, 4583, 3283, 4595, 4613, 4635, 4647, 4664, 4689,
-    4724, 4755, 4798, 4824, 4861, 4724, 4904, 4961, 4977, 4987, 4994, 5004,
-    5020, 5030, 5043, 5056, 5081, 5097, 5107, 5114, 5121, 5128, 5138, 5161,
-    5175, 5230, 5258, 5271, 5296, 5332, 5380, 5445, 5472, 5502, 5523, 5544,
-    5571, 4647, 5601, 529, 4247, 5624, 5631, 5648, 3283, 5654, 2715, 5661,
-    5689, 5704, 5721, 3994, 5728, 5741, 3994, 5721, 5757, 5779, 5757, 5804,
-    5835, 5857, 5889, 5128, 5993, 4613, 6022, 6054, 6088, 6137, 6152, 6164,
-    6174, 2693, 2578, 2693, 6210, 6259, 6305, 3215, 3299, 6324, 6334, 6359,
-    6439, 6463, 6561, 6616, 6648, 6755, 6806, 6648, 6837, 6887, 6917, 7023,
-    7067, 7101, 7200, 549, 7263, 7282, 7298, 7322, 7371, 7414, 7421, 3269,
-    7455, 7462, 3299, 7505, 7519, 7536, 3269, 7556, 7587, 7627, 7640, 7659,
-    7681, 7724, 7770, 7795, 7816, 7850, 7896, 7913, 7947, 7981, 8006, 8042,
-    8074, 8098, 8139, 8181, 8208, 8254, 8290, 8332, 8380, 8426, 8471, 8516,
-    8564, 8615, 8637, 8676, 8727, 8772, 8823, 8842, 8873, 8903, 8910, 8917,
-    8923, 8929, 8935, 8942, 8952, 8983, 8987, 8991, 8995, 9002, 9027, 9058,
-    9088, 9095, 9102, 8935, 9109, 9120, 9151, 9182, 9206, 9214, 9222, 9245,
-    9270, 9292, 9323, 8983, 5114, 8991, 9342, 9372, 9478, 9599, 9609, 9658,
-    9681, 9697, 9723, 9736, 9778, 9820, 9836, 9846, 9875, 9888, 9914, 9933,
-    9949, 9978, 5721, 10078, 10106, 10106, 10113, 10144, 10168, 10222, 10247, 10274,
-    10291, 10311, 10328, 10339, 10350, 10361, 10379, 10401, 10432, 10445, 10455, 10487,
-    10617, 10651, 10691, 10769, 2791, 10795, 10829, 10839, 10852, 10881, 10901, 10932,
-    10954, 10992, 11005, 11022, 11035, 11049, 11091, 11130, 11154, 11194, 11222, 7371,
-    11261, 11277, 5721, 11284, 11297, 11313, 6324, 11320, 11373, 2791, 11313, 7371,
-    11424, 11438, 11469, 11496, 11534, 5721, 11637, 11663, 11700, 11742, 2510, 11761,
-    11781, 11812, 11829, 11857, 11864, 11889, 11923, 2917, 10932, 11937, 11983, 11993,
-    12036, 2791, 2510, 12053, 12075, 12097, 12121, 12153, 12260, 11261, 12381, 10932,
-    12410, 12445, 7455, 12473, 12495, 12511, 12527, 12543, 12565, 12592, 12610, 513,
-    12657, 4166, 6334, 2791, 12673, 12695, 12714, 12733, 12769, 12788, 12804, 12842,
-    12871, 12911, 12940, 12977, 12990, 13030, 13061, 13089, 13102, 13112, 13128, 13132,
-    13142, 13146, 13162, 13168, 12495, 513, 13190, 13201, 13214, 13236, 13246, 13253,
-    13275, 13285, 13298, 13317, 13336, 13342, 13376, 13407, 13429, 13454, 13463, 13475,
-    13246, 13494, 4166, 12657, 13146, 8935, 13506, 9820, 13545, 2959, 13561, 13571,
-    13579, 13670, 13698, 13746, 13794, 13845, 13894, 13933, 13981, 14085, 6324, 14092,
-    14099, 556, 14106, 14113, 14199, 14212, 14222, 14232, 14323, 14348, 14393, 14453,
-    14513, 14573, 14633, 14676, 14705, 14712, 14737, 14765, 14808, 14840, 14844, 14854,
-    14864, 14874, 14884, 14897, 14904, 14914, 2578, 14940, 14980, 11297, 15020, 15049,
-    15089, 15165, 15246, 15339, 15368, 15396, 15432, 15445, 89, 15464, 15493, 15533,
-    15555, 15656, 15747, 6324, 15850, 15855, 15863, 15871, 15887, 15906, 15925, 15933,
-    15940, 15948, 15955,
+    3276, 3269, 3283, 3293, 3299, 3276, 3269, 3307, 3317, 3330, 3358, 3392,
+    3431, 3473, 3512, 3554, 3587, 3594, 3607, 3623, 3636, 3269, 3644, 3699,
+    3594, 3715, 3737, 3699, 3269, 3756, 3760, 529, 3699, 3773, 3810, 2510,
+    2791, 3859, 3866, 3918, 3967, 3977, 3990, 3760, 4009, 3208, 4022, 4035,
+    4047, 4068, 4082, 3990, 3760, 4009, 4096, 4112, 513, 4138, 4146, 4167,
+    4194, 4204, 4221, 4244, 4261, 4275, 4285, 4302, 4318, 4345, 4373, 4426,
+    4463, 4485, 4520, 4556, 4578, 4611, 3283, 4623, 4641, 4663, 4675, 4692,
+    4717, 4752, 4783, 4826, 4852, 4889, 4752, 4932, 4989, 5005, 5015, 5022,
+    5032, 5048, 5058, 5071, 5084, 5109, 5125, 5135, 5142, 5149, 5156, 5166,
+    5189, 5203, 5258, 5286, 5299, 5324, 5360, 5408, 5473, 5500, 5530, 5551,
+    5572, 5599, 4675, 5629, 529, 4275, 5652, 5659, 5676, 3283, 5682, 2715,
+    5689, 5717, 5732, 5749, 4022, 5756, 5769, 4022, 5749, 5785, 5807, 5785,
+    5832, 5863, 5885, 5917, 5156, 6021, 4641, 6050, 6082, 6116, 6165, 6180,
+    6192, 6202, 2693, 2578, 2693, 6238, 6287, 6333, 3215, 3299, 6352, 6362,
+    6387, 6467, 6491, 6589, 6644, 6676, 6783, 6834, 6676, 6865, 6915, 6945,
+    7051, 7095, 7129, 7228, 549, 7291, 7310, 7326, 7350, 7399, 7442, 7449,
+    3269, 7483, 7490, 3299, 7533, 7547, 7564, 3269, 7584, 7615, 7655, 7668,
+    7687, 7709, 7752, 7798, 7823, 7844, 7878, 7924, 7941, 7975, 8009, 8034,
+    8070, 8102, 8126, 8167, 8209, 8236, 8282, 8318, 8360, 8408, 8454, 8499,
+    8544, 8592, 8643, 8665, 8704, 8755, 8800, 8851, 8870, 8898, 8928, 8935,
+    8942, 8948, 8954, 8960, 8967, 8977, 9008, 9012, 9016, 9020, 9027, 9055,
+    9080, 9099, 8960, 9124, 9131, 9141, 9166, 9197, 9227, 9234, 9241, 8960,
+    9248, 9259, 9290, 9321, 9345, 9353, 9361, 9384, 9409, 9431, 9462, 9008,
+    5142, 9016, 9481, 9511, 9617, 9738, 9748, 9797, 9820, 9836, 9862, 9875,
+    9917, 9959, 9975, 9985, 10014, 10027, 10053, 10072, 10088, 10117, 5749, 10217,
+    10245, 10245, 10252, 10283, 10307, 10361, 10386, 10413, 10430, 10450, 10467, 10478,
+    10489, 10500, 10518, 10540, 10571, 10584, 10594, 10626, 10756, 10790, 10830, 10908,
+    2791, 10934, 10968, 10978, 10991, 11020, 11040, 11071, 11093, 11131, 11144, 11161,
+    11174, 11188, 11230, 11269, 11293, 11333, 11361, 7399, 11400, 11416, 5749, 11423,
+    11436, 11452, 6352, 11459, 11512, 2791, 11452, 7399, 11563, 11577, 11608, 11635,
+    11673, 5749, 11776, 11802, 11839, 11881, 2510, 11900, 11920, 11951, 11968, 11996,
+    12003, 12028, 12062, 2917, 11071, 12076, 12122, 12132, 12175, 2791, 2510, 12192,
+    12214, 12236, 12260, 12292, 12399, 11400, 12520, 11071, 12549, 12584, 7483, 12612,
+    12634, 12650, 12666, 12682, 12704, 12731, 12749, 513, 12796, 4194, 6362, 2791,
+    12812, 12834, 12853, 12872, 12908, 12927, 12943, 12981, 13010, 13050, 13079, 13116,
+    13129, 13169, 13200, 13228, 13241, 13251, 13267, 13271, 13281, 13285, 13301, 13307,
+    12634, 513, 13329, 13340, 13353, 13375, 13385, 13392, 13414, 13424, 13437, 13456,
+    13475, 13481, 13515, 13546, 13568, 13593, 13602, 13614, 13385, 13633, 4194, 12796,
+    13285, 8960, 13645, 9959, 13684, 2959, 13700, 13710, 13718, 13809, 13837, 13885,
+    13933, 13984, 14033, 14072, 14120, 14224, 6352, 14231, 14238, 556, 14245, 14252,
+    14338, 14351, 14361, 14371, 14462, 14487, 14532, 14592, 14652, 14712, 14772, 14815,
+    14844, 14851, 14876, 14904, 14947, 14979, 14983, 14993, 15003, 15013, 15023, 15036,
+    15043, 15053, 2578, 15079, 15119, 11436, 15159, 15188, 15228, 15304, 15385, 15478,
+    15507, 15535, 15571, 15584, 89, 15603, 15632, 15672, 15694, 15795, 15886, 6352,
+    15989, 15994, 16002, 16010, 16026, 16045, 16064, 16072, 16079, 16087, 16094,
 };
 
-// pl: 15673 bytes, 639 of 639 messages.
+// pl: 15808 bytes, 647 of 647 messages.
 const char kBlob_pl[] =
     "Dotyk nie dzia\xC5\x82" "a? Trzymaj palec na ekranie.\0Porada {0} z {1}\0dotknij, by przej\xC5\x9B\xC4\x87\0"
     "Dalej\0Rozumiem\0Trzy czerwone kropki\0Pod ekranem: klikni\xC4\x99" "cie lub przytrzymanie\0"
@@ -1488,10 +1500,11 @@ const char kBlob_pl[] =
     "Syntetyczna biblioteka: uil0 przywraca kart\xC4\x99\0Odtwarzanie\0Odtwarzanie losowe\0Powtarzanie\0"
     "Wy\xC5\x82\xC4\x85" "cznik czasowy\0Wy\xC5\x82\xC4\x85" "czone\0W\xC5\x82\xC4\x85" "czone\0"
     "Wszystko\0Jeden utw\xC3\xB3r\0Auto DJ\0W\xC5\x82\xC4\x85" "czony\0Wy\xC5\x82\xC4\x85" "czony\0"
-    "Czeka\0Pauza\0Wy\xC5\x82\xC4\x85" "cznik czasowy: {0}\0Wy\xC5\x82\xC4\x85" "cznik czasowy: po utworze\0"
-    "Wy\xC5\x82\xC4\x85" "cznik czasowy: po albumie\0Wy\xC5\x82\xC4\x85" "cznik czasowy: po kolejce\0"
-    "Wy\xC5\x82\xC4\x85" "cznik czasowy: wyciszanie\0Wy\xC5\x82\xC4\x85" "cznik czasowy: wy\xC5\x82\xC4\x85" "czony\0"
-    "90 min\0Po utworze\0Po albumie\0Po kolejce\0+10 min\0Wy\xC5\x82\xC4\x85" "cz\0Wycisza, pauzuje, potem ga\xC5\x9Bnie ekran.\0"
+    "Czeka\0Pauza\0Sterowanie pod przyciskiem zasilania\0Wy\xC5\x82\xC4\x85" "cznik czasowy: {0}\0"
+    "Wy\xC5\x82\xC4\x85" "cznik czasowy: po utworze\0Wy\xC5\x82\xC4\x85" "cznik czasowy: po albumie\0"
+    "Wy\xC5\x82\xC4\x85" "cznik czasowy: po kolejce\0Wy\xC5\x82\xC4\x85" "cznik czasowy: wyciszanie\0"
+    "Wy\xC5\x82\xC4\x85" "cznik czasowy: wy\xC5\x82\xC4\x85" "czony\090 min\0Po utworze\0Po albumie\0"
+    "Po kolejce\0+10 min\0Wy\xC5\x82\xC4\x85" "cz\0Wycisza, pauzuje, potem ga\xC5\x9Bnie ekran.\0"
     "Wyciszanie\xE2\x80\xA6\0Wyciszanie\0po utworze\0po albumie\0po kolejce\0wyciszanie\0Wy\xC5\x82\xC4\x85" "cznik czasowy: {0} min\0"
     "Wy\xC5\x82\xC4\x85" "cznik czasowy wy\xC5\x82\xC4\x85" "czony\0g\xC5\x82o\xC5\x9Bno\xC5\x9B\xC4\x87\0"
     "Zmieniaj\xC4\x85 j\xC4\x85 te\xC5\xBC przyciski na s\xC5\x82uchawkach\0Przytrzymaj A lub C na dowolnym ekranie\0"
@@ -1560,9 +1573,10 @@ const char kBlob_pl[] =
     "Indeks Auto DJ jest nieczytelny\0Za ma\xC5\x82o pami\xC4\x99" "ci na indeks Auto DJ\0Za du\xC5\xBCo utwor\xC3\xB3w na indeks Auto DJ\0"
     "wyb\xC3\xB3r losowy\0Czeka: powtarza si\xC4\x99 jeden utw\xC3\xB3r\0Czeka: wy\xC5\x82\xC4\x85" "cznik czasowy ko\xC5\x84" "czy kolejk\xC4\x99\0"
     "Czeka: \xC5\xBC" "aden utw\xC3\xB3r nie pasuje do filtr\xC3\xB3w\0Pauza: kilka utwor\xC3\xB3w nie zagra\xC5\x82o\0"
-    "Wygaszanie ekranu\0\xC5\x9B" "ciemnia; dotyk budzi\0nie ga\xC5\x9Bnie: zu\xC5\xBCywa bateri\xC4\x99\0"
+    "Wygaszanie ekranu\0\xC5\x9B" "ciemnia, potem ga\xC5\x9Bnie\0nie ga\xC5\x9Bnie: zu\xC5\xBCywa bateri\xC4\x99\0"
     "15 s\0" "30 s\0" "1 min\0" "2 min\0" "5 min\0Nigdy\0Jasno\xC5\x9B\xC4\x87\0wy\xC5\xBCsza: wi\xC4\x99ksze zu\xC5\xBCycie\0"
-    "Niska\0\xC5\x9Arednia\0Wysoka\0Maks.\0Autowy\xC5\x82\xC4\x85" "czanie\0w pauzie, na baterii\0"
+    "Niska\0\xC5\x9Arednia\0Wysoka\0Maks.\0Dotyk po wygaszeniu\0przycisk zasilania budzi\0dotyk budzi\0"
+    "dotyk pokazuje utw\xC3\xB3r\0Nic\0Budzi\0Utw\xC3\xB3r\0Autowy\xC5\x82\xC4\x85" "czanie\0w pauzie, na baterii\0"
     "dzia\xC5\x82" "a stale: zu\xC5\xBCywa pr\xC4\x85" "d\0" "10 min\0" "20 min\0" "60 min\0Taktowanie CPU\0"
     "P\xC5\x82ynne listy i taniec\0Listy wolniej, mniej pr\xC4\x85" "du\0{0} MHz do restartu\0" "240 MHz\0"
     "160 MHz\0Moc Bluetooth\0Mniej pr\xC4\x85" "du; b\xC4\x85" "d\xC5\xBA blisko\0Zale\xC5\xBCnie od odleg\xC5\x82o\xC5\x9B" "ci\0"
@@ -1651,54 +1665,54 @@ const uint16_t kOff_pl[kStrings] = {
     2278, 2307, 2317, 2352, 2364, 2383, 2398, 2427, 2446, 2456, 2473, 2495,
     2307, 2518, 2529, 2550, 2578, 2594, 2617, 2634, 2654, 2665, 2682, 2689,
     2699, 2720, 2742, 2761, 2781, 2822, 2855, 2901, 2913, 2932, 2944, 2964,
-    2976, 2964, 2987, 2996, 3009, 3017, 3028, 3040, 3046, 3052, 3077, 3109,
-    3141, 3173, 3205, 3238, 3245, 3256, 3267, 3278, 3286, 3295, 3334, 3245,
-    3256, 3267, 3348, 3028, 3359, 3370, 3381, 3392, 3403, 3432, 2307, 2518,
-    3464, 3477, 3523, 3563, 3572, 3586, 3595, 3602, 3610, 184, 3619, 3629,
-    3653, 3681, 3726, 3736, 3742, 3749, 3766, 428, 3838, 3874, 3909, 3954,
-    3963, 4001, 4051, 4083, 4113, 4119, 4130, 4146, 4162, 4180, 4217, 4236,
-    4250, 4283, 4327, 4351, 4382, 4399, 4408, 4428, 4512, 4524, 4584, 4605,
-    4629, 4656, 4694, 4783, 4809, 4629, 4847, 4884, 4891, 4899, 4909, 4916,
-    4925, 4935, 4950, 4960, 4971, 4981, 4990, 4999, 5011, 5018, 5028, 5084,
-    5140, 5176, 5196, 5210, 5231, 5264, 5302, 5458, 5542, 5571, 5593, 5610,
-    5635, 5709, 5755, 439, 5825, 5831, 5838, 5878, 5884, 5894, 2446, 5901,
-    5918, 5963, 5973, 184, 5018, 3610, 184, 5973, 5979, 5999, 6019, 6038,
-    6063, 6082, 6111, 5018, 6404, 4428, 6470, 6548, 6571, 6597, 6612, 6627,
-    6638, 2427, 2352, 2427, 6660, 6707, 6754, 6768, 3009, 6775, 6793, 6815,
-    6898, 6917, 7005, 7053, 7076, 7166, 7210, 7076, 7232, 7275, 7295, 7387,
-    7424, 7447, 7536, 454, 7594, 7611, 7628, 7655, 7703, 7726, 7735, 7766,
-    7778, 7789, 3009, 7826, 7844, 7857, 3028, 7870, 7895, 7926, 7934, 7956,
-    7987, 8032, 8076, 8096, 8113, 8154, 8196, 8213, 8249, 8272, 8297, 8320,
-    8418, 8443, 8556, 8598, 8674, 8719, 8803, 8838, 8864, 8899, 8938, 8970,
-    9006, 9042, 9056, 9090, 9134, 9178, 9213, 9231, 9254, 9284, 9289, 9294,
-    9300, 9306, 9312, 9318, 9328, 9355, 9361, 9370, 9377, 9383, 9400, 9421,
-    9450, 9457, 9464, 9312, 9471, 9486, 9509, 9537, 9557, 9565, 9573, 9587,
-    9615, 9641, 9665, 9355, 9361, 9370, 9693, 9709, 9799, 9913, 9923, 9952,
-    9970, 9990, 10012, 10019, 10054, 10166, 10184, 10199, 10225, 10234, 10254, 10270,
-    10288, 10310, 5973, 10417, 10439, 10439, 10446, 10464, 10493, 10534, 10606, 10624,
-    10673, 10736, 10782, 10822, 10853, 10881, 10895, 10911, 10932, 10948, 10955, 10980,
-    11086, 11108, 11142, 11194, 2518, 11215, 11243, 11258, 11272, 11304, 11320, 11343,
-    11356, 11387, 11399, 11416, 11428, 11448, 11479, 11517, 11548, 11574, 11596, 7703,
-    11625, 11632, 11641, 11650, 2682, 11661, 11671, 11678, 11715, 2518, 11661, 7703,
-    11751, 11764, 11787, 11803, 11826, 11641, 11913, 11928, 11950, 11984, 2307, 11997,
-    12024, 12059, 12072, 12092, 12102, 12121, 12142, 12179, 11343, 12192, 12230, 12246,
-    12284, 12298, 12309, 12319, 12337, 12355, 12372, 12398, 12472, 11625, 12566, 12585,
-    12613, 12636, 7778, 12660, 12675, 12683, 12699, 12707, 12721, 12743, 12757, 428,
-    12796, 3954, 12810, 2518, 12832, 12842, 12859, 12876, 12906, 12925, 12940, 12976,
-    12998, 13031, 13063, 13100, 13117, 13156, 13179, 13210, 13220, 13228, 13245, 13249,
-    13254, 13258, 13264, 13270, 12675, 428, 13284, 13294, 13305, 13314, 13325, 13334,
-    13349, 13354, 13376, 13387, 13398, 13404, 13423, 13439, 13448, 13462, 13471, 13483,
-    13501, 13513, 3954, 12796, 13524, 13530, 13535, 10166, 13563, 2682, 13579, 2446,
-    13586, 13819, 13845, 13884, 13922, 13968, 14002, 14040, 14085, 14167, 6775, 14174,
-    14182, 463, 14189, 14196, 14270, 14285, 477, 14294, 14358, 14381, 14416, 14468,
-    14519, 14568, 14617, 14651, 14671, 14681, 14710, 14732, 14770, 14794, 14798, 14807,
-    14815, 14825, 14835, 14843, 14848, 14855, 2352, 14876, 14906, 2682, 14952, 14969,
-    14993, 15050, 15112, 15181, 15218, 15250, 11320, 2665, 15290, 15293, 15315, 15347,
-    15375, 15440, 15502, 6775, 15571, 15576, 15584, 15590, 15604, 15622, 15640, 15648,
-    15655, 15663, 15670,
+    2976, 2964, 2987, 2996, 3009, 3017, 3028, 3040, 3046, 3052, 3089, 3114,
+    3146, 3178, 3210, 3242, 3275, 3282, 3293, 3304, 3315, 3323, 3332, 3371,
+    3282, 3293, 3304, 3385, 3028, 3396, 3407, 3418, 3429, 3440, 3469, 2307,
+    2518, 3501, 3514, 3560, 3600, 3609, 3623, 3632, 3639, 3647, 184, 3656,
+    3666, 3690, 3718, 3763, 3773, 3779, 3786, 3803, 428, 3875, 3911, 3946,
+    3991, 4000, 4038, 4088, 4120, 4150, 4156, 4167, 4183, 4199, 4217, 4254,
+    4273, 4287, 4320, 4364, 4388, 4419, 4436, 4445, 4465, 4549, 4561, 4621,
+    4642, 4666, 4693, 4731, 4820, 4846, 4666, 4884, 4921, 4928, 4936, 4946,
+    4953, 4962, 4972, 4987, 4997, 5008, 5018, 5027, 5036, 5048, 5055, 5065,
+    5121, 5177, 5213, 5233, 5247, 5268, 5301, 5339, 5495, 5579, 5608, 5630,
+    5647, 5672, 5746, 5792, 439, 5862, 5868, 5875, 5915, 5921, 5931, 2446,
+    5938, 5955, 6000, 6010, 184, 5055, 3647, 184, 6010, 6016, 6036, 6056,
+    6075, 6100, 6119, 6148, 5055, 6441, 4465, 6507, 6585, 6608, 6634, 6649,
+    6664, 6675, 2427, 2352, 2427, 6697, 6744, 6791, 6805, 3009, 6812, 6830,
+    6852, 6935, 6954, 7042, 7090, 7113, 7203, 7247, 7113, 7269, 7312, 7332,
+    7424, 7461, 7484, 7573, 454, 7631, 7648, 7665, 7692, 7740, 7763, 7772,
+    7803, 7815, 7826, 3009, 7863, 7881, 7894, 3028, 7907, 7932, 7963, 7971,
+    7993, 8024, 8069, 8113, 8133, 8150, 8191, 8233, 8250, 8286, 8309, 8334,
+    8357, 8455, 8480, 8593, 8635, 8711, 8756, 8840, 8875, 8901, 8936, 8975,
+    9007, 9043, 9079, 9093, 9127, 9171, 9215, 9250, 9268, 9293, 9323, 9328,
+    9333, 9339, 9345, 9351, 9357, 9367, 9394, 9400, 9409, 9416, 9422, 9442,
+    9467, 9479, 9501, 9505, 9511, 9518, 9535, 9556, 9585, 9592, 9599, 9351,
+    9606, 9621, 9644, 9672, 9692, 9700, 9708, 9722, 9750, 9776, 9800, 9394,
+    9400, 9409, 9828, 9844, 9934, 10048, 10058, 10087, 10105, 10125, 10147, 10154,
+    10189, 10301, 10319, 10334, 10360, 10369, 10389, 10405, 10423, 10445, 6010, 10552,
+    10574, 10574, 10581, 10599, 10628, 10669, 10741, 10759, 10808, 10871, 10917, 10957,
+    10988, 11016, 11030, 11046, 11067, 11083, 11090, 11115, 11221, 11243, 11277, 11329,
+    2518, 11350, 11378, 11393, 11407, 11439, 11455, 11478, 11491, 11522, 11534, 11551,
+    11563, 11583, 11614, 11652, 11683, 11709, 11731, 7740, 11760, 11767, 11776, 11785,
+    2682, 11796, 11806, 11813, 11850, 2518, 11796, 7740, 11886, 11899, 11922, 11938,
+    11961, 11776, 12048, 12063, 12085, 12119, 2307, 12132, 12159, 12194, 12207, 12227,
+    12237, 12256, 12277, 12314, 11478, 12327, 12365, 12381, 12419, 12433, 12444, 12454,
+    12472, 12490, 12507, 12533, 12607, 11760, 12701, 12720, 12748, 12771, 7815, 12795,
+    12810, 12818, 12834, 12842, 12856, 12878, 12892, 428, 12931, 3991, 12945, 2518,
+    12967, 12977, 12994, 13011, 13041, 13060, 13075, 13111, 13133, 13166, 13198, 13235,
+    13252, 13291, 13314, 13345, 13355, 13363, 13380, 13384, 13389, 13393, 13399, 13405,
+    12810, 428, 13419, 13429, 13440, 13449, 13460, 13469, 13484, 13489, 13511, 13522,
+    13533, 13539, 13558, 13574, 13583, 13597, 13606, 13618, 13636, 13648, 3991, 12931,
+    13659, 13665, 13670, 10301, 13698, 2682, 13714, 2446, 13721, 13954, 13980, 14019,
+    14057, 14103, 14137, 14175, 14220, 14302, 6812, 14309, 14317, 463, 14324, 14331,
+    14405, 14420, 477, 14429, 14493, 14516, 14551, 14603, 14654, 14703, 14752, 14786,
+    14806, 14816, 14845, 14867, 14905, 14929, 14933, 14942, 14950, 14960, 14970, 14978,
+    14983, 14990, 2352, 15011, 15041, 2682, 15087, 15104, 15128, 15185, 15247, 15316,
+    15353, 15385, 11455, 2665, 15425, 15428, 15450, 15482, 15510, 15575, 15637, 6812,
+    15706, 15711, 15719, 15725, 15739, 15757, 15775, 15783, 15790, 15798, 15805,
 };
 
-// pt: 14067 bytes, 639 of 639 messages.
+// pt: 14202 bytes, 647 of 647 messages.
 const char kBlob_pt[] =
     "O toque falha? Segure um dedo na tela.\0Dica {0} de {1}\0toque para seguir\0Avan\xC3\xA7" "ar\0"
     "Entendi\0Os tr\xC3\xAAs pontos vermelhos\0Abaixo da tela: clique ou segure qualquer um\0Anterior\0"
@@ -1731,19 +1745,20 @@ const char kBlob_pt[] =
     "Ir para o artista\0Ir para o \xC3\xA1lbum\0Ir para a pasta\0Faixa interna: n\xC3\xA3o est\xC3\xA1 na Biblioteca\0"
     "A Biblioteca ainda n\xC3\xA3o est\xC3\xA1 pronta\0Biblioteca sint\xC3\xA9tica (uil0: a do cart\xC3\xA3o)\0"
     "Reprodu\xC3\xA7\xC3\xA3o\0Aleat\xC3\xB3rio\0Repetir\0Temporizador para dormir\0Desligado\0Ligado\0"
-    "Tudo\0Uma faixa\0Auto DJ\0Esperando\0Pausado\0Temporizador: fim em {0}\0Temporizador: fim da faixa\0"
-    "Temporizador: fim do \xC3\xA1lbum\0Temporizador: fim da fila\0Temporizador: abaixando o som\0"
-    "Temporizador: desligado\090 min\0Fim da faixa\0Fim do \xC3\xA1lbum\0Fim da fila\0+10 min\0Desligar\0"
-    "Abaixa o som, pausa e depois apaga a tela.\0Abaixando o som\0faixa\0\xC3\xA1lbum\0fila\0abaixando\0"
-    "Temporizador: {0} min\0Temporizador desligado\0Fones de ouvido\0volume\0Os bot\xC3\xB5" "es dos fones tamb\xC3\xA9m funcionam\0"
-    "Segure A ou C para mudar em qualquer tela\0Ir para\0{0}, {1}: {2}\0Artistas\0\xC3\x81lbuns\0"
-    "Pastas\0Tocar\0A seguir\0+ Fila\0Auto DJ a partir daqui\0Tocar {0}\0\0Tocar {0}\0{0}, {1} faixa\0"
-    "\0{0}, {1} faixas\0Artista\0\xC3\x81lbum\0Pasta\0Todas as faixas\0{0} faixa, \xC3\xA1lbum por \xC3\xA1lbum\0"
-    "\0{0} faixas, \xC3\xA1lbum por \xC3\xA1lbum\0In\xC3\xAD" "cio\0{0} faixa\0\0{0} faixas\0{0} \xC3\xA1lbum\0"
-    "\0{0} \xC3\xA1lbuns\0{0} artista\0\0{0} artistas\0{0}, {1}\0{0} pasta\0\0{0} pastas\0{0} arquivo de \xC3\xA1udio\0"
-    "\0{0} arquivos de \xC3\xA1udio\0{0} arquivo\0\0{0} arquivos\0{0} outro\0\0{0} outros\0vazia\0"
-    "Disco {0}\0(sem pasta de artista)\0(faixas avulsas)\0V\xC3\xA1rios artistas\0Sem m\xC3\xBAsica: pastas v\xC3\xA3o em /music\0"
-    "Nenhum arquivo de \xC3\xA1udio aqui\0Nada aqui\0Procurando em /music de novo...\0Biblioteca sint\xC3\xA9tica: s\xC3\xB3 para navegar\0"
+    "Tudo\0Uma faixa\0Auto DJ\0Esperando\0Pausado\0Bot\xC3\xA3o liga/desliga para os controles\0"
+    "Temporizador: fim em {0}\0Temporizador: fim da faixa\0Temporizador: fim do \xC3\xA1lbum\0Temporizador: fim da fila\0"
+    "Temporizador: abaixando o som\0Temporizador: desligado\090 min\0Fim da faixa\0Fim do \xC3\xA1lbum\0"
+    "Fim da fila\0+10 min\0Desligar\0Abaixa o som, pausa e depois apaga a tela.\0Abaixando o som\0"
+    "faixa\0\xC3\xA1lbum\0fila\0abaixando\0Temporizador: {0} min\0Temporizador desligado\0Fones de ouvido\0"
+    "volume\0Os bot\xC3\xB5" "es dos fones tamb\xC3\xA9m funcionam\0Segure A ou C para mudar em qualquer tela\0"
+    "Ir para\0{0}, {1}: {2}\0Artistas\0\xC3\x81lbuns\0Pastas\0Tocar\0A seguir\0+ Fila\0Auto DJ a partir daqui\0"
+    "Tocar {0}\0\0Tocar {0}\0{0}, {1} faixa\0\0{0}, {1} faixas\0Artista\0\xC3\x81lbum\0Pasta\0Todas as faixas\0"
+    "{0} faixa, \xC3\xA1lbum por \xC3\xA1lbum\0\0{0} faixas, \xC3\xA1lbum por \xC3\xA1lbum\0In\xC3\xAD" "cio\0"
+    "{0} faixa\0\0{0} faixas\0{0} \xC3\xA1lbum\0\0{0} \xC3\xA1lbuns\0{0} artista\0\0{0} artistas\0"
+    "{0}, {1}\0{0} pasta\0\0{0} pastas\0{0} arquivo de \xC3\xA1udio\0\0{0} arquivos de \xC3\xA1udio\0"
+    "{0} arquivo\0\0{0} arquivos\0{0} outro\0\0{0} outros\0vazia\0Disco {0}\0(sem pasta de artista)\0"
+    "(faixas avulsas)\0V\xC3\xA1rios artistas\0Sem m\xC3\xBAsica: pastas v\xC3\xA3o em /music\0Nenhum arquivo de \xC3\xA1udio aqui\0"
+    "Nada aqui\0Procurando em /music de novo...\0Biblioteca sint\xC3\xA9tica: s\xC3\xB3 para navegar\0"
     "Esperando {0}: {1}\0Esperando os fones: {0}\0Tocando: {0}\0tudo\0A seguir: {0}\0A seguir: {0} faixa\0"
     "\0A seguir: {0} faixas\0Na fila: {0}\0{0} faixa na fila\0\0{0} faixas na fila\0Verificando o cart\xC3\xA3o\xE2\x80\xA6\0"
     "Lendo tags {0} / {1}\0Atualizando a biblioteca\xE2\x80\xA6\0A \xC3\xBAltima transfer\xC3\xAAncia n\xC3\xA3o terminou\0"
@@ -1787,10 +1802,11 @@ const char kBlob_pt[] =
     "Sem mem\xC3\xB3ria para o \xC3\xADndice do Auto DJ\0Faixas demais para o \xC3\xADndice do Auto DJ\0"
     "sele\xC3\xA7\xC3\xA3o aleat\xC3\xB3ria\0Esperando: repetindo uma faixa\0Esperando: temporizador no fim da fila\0"
     "Esperando: nenhuma faixa atende os filtros\0Pausado: v\xC3\xA1rias faixas n\xC3\xA3o tocaram\0"
-    "Desligar tela ap\xC3\xB3s\0escurece; o toque acorda\0fica ligada: gasta mais\0" "15 s\0" "30 s\0"
+    "Desligar tela ap\xC3\xB3s\0escurece, depois desliga\0fica ligada: gasta mais\0" "15 s\0" "30 s\0"
     "1 min\0" "2 min\0" "5 min\0Nunca\0Brilho\0mais brilho, gasta mais\0Baixo\0M\xC3\xA9" "dio\0"
-    "Alto\0M\xC3\xA1ximo\0Desligar se inativo\0pausado, na bateria\0fica ligado: gasta mais\0" "10 min\0"
-    "20 min\0" "60 min\0Velocidade da CPU\0Listas mais fluidas, dan\xC3\xA7" "a\0Mais lento, gasta menos\0"
+    "Alto\0M\xC3\xA1ximo\0Toque se desligada\0s\xC3\xB3 o bot\xC3\xA3o liga/desliga\0o toque acorda\0"
+    "o toque mostra a faixa\0Acordar\0Faixa\0Desligar se inativo\0pausado, na bateria\0fica ligado: gasta mais\0"
+    "10 min\0" "20 min\0" "60 min\0Velocidade da CPU\0Listas mais fluidas, dan\xC3\xA7" "a\0Mais lento, gasta menos\0"
     "{0} MHz at\xC3\xA9 reiniciar\0" "240 MHz\0" "160 MHz\0Pot\xC3\xAAncia Bluetooth\0Gasta menos; fique perto\0"
     "Conforme a dist\xC3\xA2ncia\0Mais alcance, gasta mais\0Na pr\xC3\xB3xima conex\xC3\xA3o\0Baixa\0"
     "Normal\0Alta\0Reiniciar a {0}?\0A velocidade muda ao reiniciar. A m\xC3\xBAsica pausa e volta no mesmo segundo.\0"
@@ -1863,54 +1879,54 @@ const uint16_t kOff_pt[kStrings] = {
     2126, 2156, 2169, 2204, 2217, 2238, 2261, 2292, 2311, 2322, 2342, 2361,
     2156, 2383, 2389, 2408, 2429, 2446, 2468, 2489, 2509, 2520, 2536, 2542,
     2548, 2568, 2586, 2603, 2619, 2659, 2696, 2739, 2752, 2763, 2771, 2796,
-    2806, 2796, 2813, 2818, 2828, 2806, 2796, 2836, 2846, 2854, 2879, 2906,
-    2934, 2960, 2990, 3014, 3021, 3034, 3048, 3060, 3068, 3077, 3120, 3021,
-    3034, 3048, 3120, 2796, 3136, 3142, 3149, 3154, 3164, 3186, 2156, 3209,
-    3225, 3232, 3271, 3313, 3321, 3335, 3344, 3352, 3359, 3365, 3374, 3381,
-    3404, 3425, 3457, 3465, 3472, 3478, 3494, 3554, 3562, 3584, 3608, 3634,
-    3643, 3665, 3711, 3737, 3759, 3765, 3775, 3798, 3815, 3832, 3867, 3897,
-    3907, 3939, 3979, 3998, 4022, 4035, 4040, 4054, 4096, 4109, 4147, 4172,
-    4193, 4221, 4260, 4316, 4338, 4193, 4373, 4410, 4418, 4425, 4432, 4439,
-    4448, 4458, 4471, 4477, 4487, 4493, 4503, 4511, 4519, 4529, 4536, 4574,
-    4610, 4647, 4668, 4677, 4696, 4723, 4753, 4859, 4903, 4927, 4946, 4965,
-    4985, 4109, 5035, 443, 3759, 5075, 5082, 5116, 2813, 5123, 2311, 5128,
-    5142, 5169, 5181, 3365, 4529, 3359, 3365, 5181, 5189, 5203, 5223, 5235,
-    5251, 5272, 5292, 4529, 5481, 4054, 5522, 5577, 5605, 5632, 5651, 5665,
-    5676, 2292, 2204, 5703, 5724, 5770, 432, 2752, 2828, 5814, 5829, 5845,
-    5925, 5945, 6033, 6073, 6095, 6176, 6212, 6095, 6233, 6268, 6289, 6373,
-    6401, 6426, 6508, 455, 6557, 6577, 6593, 6622, 6671, 6690, 6701, 6731,
-    6741, 6747, 2828, 6785, 6799, 6816, 2796, 6831, 6854, 6887, 6895, 6910,
-    6927, 6965, 7006, 7028, 7050, 7088, 7120, 7140, 7169, 7188, 7210, 7243,
-    7305, 7326, 7399, 7434, 7501, 7546, 7608, 7632, 7662, 7699, 7744, 7773,
-    7812, 7852, 7873, 7904, 7943, 7986, 8023, 8043, 8068, 8092, 8097, 8102,
-    8108, 8114, 8120, 8126, 8133, 8157, 8163, 8170, 8175, 8183, 8203, 8223,
-    8247, 8254, 8261, 8120, 8268, 8286, 8314, 8338, 8361, 8369, 8377, 8397,
-    8422, 8444, 8469, 8490, 8496, 8503, 8508, 8525, 8599, 8701, 8711, 8740,
-    8761, 8784, 8804, 8814, 8843, 8913, 8935, 8950, 8972, 8981, 8996, 9010,
-    9031, 9055, 5181, 9143, 9165, 9165, 9172, 9190, 9214, 9257, 9303, 9326,
-    9371, 9401, 9428, 9453, 9472, 9497, 9511, 9530, 9555, 9570, 9576, 9591,
-    9695, 9711, 9743, 9801, 3209, 9817, 9836, 9851, 9865, 9898, 9916, 9939,
-    9951, 9982, 9992, 10007, 10019, 10036, 10064, 10096, 10118, 10148, 10172, 6671,
-    10201, 10208, 10217, 10226, 10236, 10245, 10257, 10265, 10301, 3209, 10245, 6671,
-    10339, 10352, 10373, 10387, 10406, 10217, 10474, 10488, 10505, 10543, 2156, 10556,
-    10579, 10609, 10623, 10642, 10652, 10669, 10682, 10714, 9939, 10725, 10759, 10776,
-    10807, 10820, 10836, 10849, 10864, 10886, 10902, 10928, 11000, 10201, 11094, 11114,
-    11134, 11154, 6741, 11175, 11187, 11195, 11211, 11225, 11243, 11267, 11283, 432,
-    11319, 3634, 11333, 3209, 11349, 11358, 11373, 11389, 11428, 11447, 11462, 11499,
-    11522, 11555, 11586, 11619, 11640, 11677, 11702, 11732, 11743, 11749, 11765, 11769,
-    11774, 11778, 11784, 11790, 11187, 432, 11816, 11826, 11839, 11848, 11854, 11867,
-    11885, 11891, 11905, 11919, 11928, 11934, 11960, 11979, 11988, 11999, 12008, 12020,
-    12039, 12052, 3634, 11319, 12063, 12069, 12076, 12106, 12119, 12134, 12139, 2311,
-    12145, 12278, 12302, 12331, 12367, 12407, 12440, 12479, 12518, 12588, 5814, 12595,
-    12605, 462, 12616, 12623, 12694, 12711, 12717, 12724, 12792, 12817, 12847, 12897,
-    12948, 12994, 13039, 13073, 13089, 13100, 13131, 13154, 13184, 13212, 13216, 13225,
-    13233, 13243, 13254, 13265, 13270, 13277, 2204, 13300, 13331, 10236, 13371, 13388,
-    13408, 13466, 13529, 13594, 13629, 13660, 9916, 13699, 13717, 13720, 13739, 13763,
-    13781, 13846, 13907, 5814, 13975, 13980, 13988, 13994, 14008, 14022, 14034, 14042,
-    14049, 14057, 14064,
+    2806, 2796, 2813, 2818, 2828, 2806, 2796, 2836, 2846, 2854, 2892, 2917,
+    2944, 2972, 2998, 3028, 3052, 3059, 3072, 3086, 3098, 3106, 3115, 3158,
+    3059, 3072, 3086, 3158, 2796, 3174, 3180, 3187, 3192, 3202, 3224, 2156,
+    3247, 3263, 3270, 3309, 3351, 3359, 3373, 3382, 3390, 3397, 3403, 3412,
+    3419, 3442, 3463, 3495, 3503, 3510, 3516, 3532, 3592, 3600, 3622, 3646,
+    3672, 3681, 3703, 3749, 3775, 3797, 3803, 3813, 3836, 3853, 3870, 3905,
+    3935, 3945, 3977, 4017, 4036, 4060, 4073, 4078, 4092, 4134, 4147, 4185,
+    4210, 4231, 4259, 4298, 4354, 4376, 4231, 4411, 4448, 4456, 4463, 4470,
+    4477, 4486, 4496, 4509, 4515, 4525, 4531, 4541, 4549, 4557, 4567, 4574,
+    4612, 4648, 4685, 4706, 4715, 4734, 4761, 4791, 4897, 4941, 4965, 4984,
+    5003, 5023, 4147, 5073, 443, 3797, 5113, 5120, 5154, 2813, 5161, 2311,
+    5166, 5180, 5207, 5219, 3403, 4567, 3397, 3403, 5219, 5227, 5241, 5261,
+    5273, 5289, 5310, 5330, 4567, 5519, 4092, 5560, 5615, 5643, 5670, 5689,
+    5703, 5714, 2292, 2204, 5741, 5762, 5808, 432, 2752, 2828, 5852, 5867,
+    5883, 5963, 5983, 6071, 6111, 6133, 6214, 6250, 6133, 6271, 6306, 6327,
+    6411, 6439, 6464, 6546, 455, 6595, 6615, 6631, 6660, 6709, 6728, 6739,
+    6769, 6779, 6785, 2828, 6823, 6837, 6854, 2796, 6869, 6892, 6925, 6933,
+    6948, 6965, 7003, 7044, 7066, 7088, 7126, 7158, 7178, 7207, 7226, 7248,
+    7281, 7343, 7364, 7437, 7472, 7539, 7584, 7646, 7670, 7700, 7737, 7782,
+    7811, 7850, 7890, 7911, 7942, 7981, 8024, 8061, 8081, 8106, 8130, 8135,
+    8140, 8146, 8152, 8158, 8164, 8171, 8195, 8201, 8208, 8213, 8221, 8240,
+    8266, 8281, 5161, 8304, 8312, 8318, 8338, 8358, 8382, 8389, 8396, 8158,
+    8403, 8421, 8449, 8473, 8496, 8504, 8512, 8532, 8557, 8579, 8604, 8625,
+    8631, 8638, 8643, 8660, 8734, 8836, 8846, 8875, 8896, 8919, 8939, 8949,
+    8978, 9048, 9070, 9085, 9107, 9116, 9131, 9145, 9166, 9190, 5219, 9278,
+    9300, 9300, 9307, 9325, 9349, 9392, 9438, 9461, 9506, 9536, 9563, 9588,
+    9607, 9632, 9646, 9665, 9690, 9705, 9711, 9726, 9830, 9846, 9878, 9936,
+    3247, 9952, 9971, 9986, 10000, 10033, 10051, 10074, 10086, 10117, 10127, 10142,
+    10154, 10171, 10199, 10231, 10253, 10283, 10307, 6709, 10336, 10343, 10352, 10361,
+    10371, 10380, 10392, 10400, 10436, 3247, 10380, 6709, 10474, 10487, 10508, 10522,
+    10541, 10352, 10609, 10623, 10640, 10678, 2156, 10691, 10714, 10744, 10758, 10777,
+    10787, 10804, 10817, 10849, 10074, 10860, 10894, 10911, 10942, 10955, 10971, 10984,
+    10999, 11021, 11037, 11063, 11135, 10336, 11229, 11249, 11269, 11289, 6779, 11310,
+    11322, 11330, 11346, 11360, 11378, 11402, 11418, 432, 11454, 3672, 11468, 3247,
+    11484, 11493, 11508, 11524, 11563, 11582, 11597, 11634, 11657, 11690, 11721, 11754,
+    11775, 11812, 11837, 11867, 11878, 11884, 11900, 11904, 11909, 11913, 11919, 11925,
+    11322, 432, 11951, 11961, 11974, 11983, 11989, 12002, 12020, 12026, 12040, 12054,
+    12063, 12069, 12095, 12114, 12123, 12134, 12143, 12155, 12174, 12187, 3672, 11454,
+    12198, 12204, 12211, 12241, 12254, 12269, 12274, 2311, 12280, 12413, 12437, 12466,
+    12502, 12542, 12575, 12614, 12653, 12723, 5852, 12730, 12740, 462, 12751, 12758,
+    12829, 12846, 12852, 12859, 12927, 12952, 12982, 13032, 13083, 13129, 13174, 13208,
+    13224, 13235, 13266, 13289, 13319, 13347, 13351, 13360, 13368, 13378, 13389, 13400,
+    13405, 13412, 2204, 13435, 13466, 10371, 13506, 13523, 13543, 13601, 13664, 13729,
+    13764, 13795, 10051, 13834, 13852, 13855, 13874, 13898, 13916, 13981, 14042, 5852,
+    14110, 14115, 14123, 14129, 14143, 14157, 14169, 14177, 14184, 14192, 14199,
 };
 
-// ru: 23799 bytes, 639 of 639 messages.
+// ru: 24013 bytes, 647 of 647 messages.
 const char kBlob_ru[] =
     "\xD0\x9A\xD0\xB0\xD1\x81\xD0\xB0\xD0\xBD\xD0\xB8\xD1\x8F \xD0\xBC\xD0\xB8\xD0\xBC\xD0\xBE? \xD0\x94\xD0\xB5\xD1\x80\xD0\xB6\xD0\xB8\xD1\x82\xD0\xB5 \xD0\xBF\xD0\xB0\xD0\xBB\xD0\xB5\xD1\x86 \xD0\xBD\xD0\xB0 \xD1\x8D\xD0\xBA\xD1\x80\xD0\xB0\xD0\xBD\xD0\xB5.\0"
     "\xD0\xA1\xD0\xBE\xD0\xB2\xD0\xB5\xD1\x82 {0} \xD0\xB8\xD0\xB7 {1}\0\xD1\x82\xD0\xB0\xD0\xBF: \xD0\xB4\xD0\xB0\xD0\xBB\xD1\x8C\xD1\x88\xD0\xB5\0"
@@ -1999,6 +2015,7 @@ const char kBlob_ru[] =
     "\xD0\xA2\xD0\xB0\xD0\xB9\xD0\xBC\xD0\xB5\xD1\x80 \xD1\x81\xD0\xBD\xD0\xB0\0\xD0\x92\xD1\x8B\xD0\xBA\xD0\xBB.\0"
     "\xD0\x92\xD0\xBA\xD0\xBB.\0\xD0\x92\xD1\x81\xD0\xB5\0\xD0\x9E\xD0\xB4\xD0\xB8\xD0\xBD\0\xD0\x90\xD0\xB2\xD1\x82\xD0\xBE-DJ\0"
     "\xD0\x9E\xD0\xB6\xD0\xB8\xD0\xB4\xD0\xB0\xD0\xBD\xD0\xB8\xD0\xB5\0\xD0\x9F\xD0\xB0\xD1\x83\xD0\xB7\xD0\xB0\0"
+    "\xD0\xA3\xD0\xBF\xD1\x80\xD0\xB0\xD0\xB2\xD0\xBB\xD0\xB5\xD0\xBD\xD0\xB8\xD0\xB5 \xE2\x80\x94 \xD0\xBA\xD0\xBD\xD0\xBE\xD0\xBF\xD0\xBA\xD0\xBE\xD0\xB9 \xD0\xBF\xD0\xB8\xD1\x82\xD0\xB0\xD0\xBD\xD0\xB8\xD1\x8F\0"
     "\xD0\xA2\xD0\xB0\xD0\xB9\xD0\xBC\xD0\xB5\xD1\x80 \xD1\x81\xD0\xBD\xD0\xB0: \xD0\xBE\xD1\x81\xD1\x82\xD0\xB0\xD0\xBB\xD0\xBE\xD1\x81\xD1\x8C {0}\0"
     "\xD0\xA2\xD0\xB0\xD0\xB9\xD0\xBC\xD0\xB5\xD1\x80 \xD1\x81\xD0\xBD\xD0\xB0: \xD0\xB4\xD0\xBE \xD0\xBA\xD0\xBE\xD0\xBD\xD1\x86\xD0\xB0 \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA\xD0\xB0\0"
     "\xD0\xA2\xD0\xB0\xD0\xB9\xD0\xBC\xD0\xB5\xD1\x80 \xD1\x81\xD0\xBD\xD0\xB0: \xD0\xB4\xD0\xBE \xD0\xBA\xD0\xBE\xD0\xBD\xD1\x86\xD0\xB0 \xD0\xB0\xD0\xBB\xD1\x8C\xD0\xB1\xD0\xBE\xD0\xBC\xD0\xB0\0"
@@ -2187,12 +2204,16 @@ const char kBlob_ru[] =
     "\xD0\x9E\xD0\xB6\xD0\xB8\xD0\xB4\xD0\xB0\xD0\xBD\xD0\xB8\xD0\xB5: \xD0\xBD\xD0\xB5\xD1\x82 \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA\xD0\xBE\xD0\xB2 \xD0\xBF\xD0\xBE\xD0\xB4 \xD1\x84\xD0\xB8\xD0\xBB\xD1\x8C\xD1\x82\xD1\x80\xD1\x8B\0"
     "\xD0\x9F\xD0\xB0\xD1\x83\xD0\xB7\xD0\xB0: \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA\xD0\xB8 \xD0\xBD\xD0\xB5 \xD0\xB2\xD0\xBE\xD1\x81\xD0\xBF\xD1\x80\xD0\xBE\xD0\xB8\xD0\xB7\xD0\xB2\xD0\xB5\xD0\xBB\xD0\xB8\xD1\x81\xD1\x8C\0"
     "\xD0\x9E\xD1\x82\xD0\xBA\xD0\xBB\xD1\x8E\xD1\x87\xD0\xB5\xD0\xBD\xD0\xB8\xD0\xB5 \xD1\x8D\xD0\xBA\xD1\x80\xD0\xB0\xD0\xBD\xD0\xB0\0"
-    "\xD1\x82\xD1\x83\xD1\x81\xD0\xBA\xD0\xBD\xD0\xB5\xD0\xB5\xD1\x82, \xD1\x82\xD0\xB0\xD0\xBF \xD0\xB1\xD1\x83\xD0\xB4\xD0\xB8\xD1\x82\0"
+    "\xD1\x82\xD1\x83\xD1\x81\xD0\xBA\xD0\xBD\xD0\xB5\xD0\xB5\xD1\x82, \xD0\xBF\xD0\xBE\xD1\x82\xD0\xBE\xD0\xBC \xD0\xB3\xD0\xB0\xD1\x81\xD0\xBD\xD0\xB5\xD1\x82\0"
     "\xD0\xBD\xD0\xB5 \xD0\xB3\xD0\xB0\xD1\x81\xD0\xBD\xD0\xB5\xD1\x82: \xD1\x80\xD0\xB0\xD1\x81\xD1\x85\xD0\xBE\xD0\xB4 \xD0\xB2\xD1\x8B\xD1\x88\xD0\xB5\0"
     "15 \xD1\x81\0" "30 \xD1\x81\0" "1 \xD0\xBC\xD0\xB8\xD0\xBD\0" "2 \xD0\xBC\xD0\xB8\xD0\xBD\0"
     "5 \xD0\xBC\xD0\xB8\xD0\xBD\0\xD0\xAF\xD1\x80\xD0\xBA\xD0\xBE\xD1\x81\xD1\x82\xD1\x8C\0\xD0\xB2\xD1\x8B\xD1\x88\xD0\xB5 \xE2\x80\x94 \xD0\xB1\xD0\xBE\xD0\xBB\xD1\x8C\xD1\x88\xD0\xB5 \xD1\x80\xD0\xB0\xD1\x81\xD1\x85\xD0\xBE\xD0\xB4\0"
     "\xD0\x9D\xD0\xB8\xD0\xB7\xD0\xBA\xD0\xB0\xD1\x8F\0\xD0\xA1\xD1\x80\xD0\xB5\xD0\xB4\xD0\xBD\xD1\x8F\xD1\x8F\0"
     "\xD0\x92\xD1\x8B\xD1\x81\xD0\xBE\xD0\xBA\xD0\xB0\xD1\x8F\0\xD0\x9C\xD0\xB0\xD0\xBA\xD1\x81.\0"
+    "\xD0\xA2\xD0\xB0\xD0\xBF \xD0\xBF\xD0\xBE \xD0\xB2\xD1\x8B\xD0\xBA\xD0\xBB. \xD1\x8D\xD0\xBA\xD1\x80\xD0\xB0\xD0\xBD\xD1\x83\0"
+    "\xD0\xB1\xD1\x83\xD0\xB4\xD0\xB8\xD1\x82 \xD0\xBA\xD0\xBD\xD0\xBE\xD0\xBF\xD0\xBA\xD0\xB0 \xD0\xBF\xD0\xB8\xD1\x82\xD0\xB0\xD0\xBD\xD0\xB8\xD1\x8F\0"
+    "\xD1\x82\xD0\xB0\xD0\xBF \xD0\xB1\xD1\x83\xD0\xB4\xD0\xB8\xD1\x82\0\xD1\x82\xD0\xB0\xD0\xBF \xD0\xBF\xD0\xBE\xD0\xBA\xD0\xB0\xD0\xB7\xD1\x8B\xD0\xB2\xD0\xB0\xD0\xB5\xD1\x82 \xD1\x82\xD1\x80\xD0\xB5\xD0\xBA\0"
+    "\xD0\x9D\xD0\xB8\xD1\x87\xD0\xB5\xD0\xB3\xD0\xBE\0\xD0\x91\xD1\x83\xD0\xB4\xD0\xB8\xD1\x82\0"
     "\xD0\x90\xD0\xB2\xD1\x82\xD0\xBE\xD0\xB2\xD1\x8B\xD0\xBA\xD0\xBB\xD1\x8E\xD1\x87\xD0\xB5\xD0\xBD\xD0\xB8\xD0\xB5\0"
     "\xD0\xBD\xD0\xB0 \xD0\xBF\xD0\xB0\xD1\x83\xD0\xB7\xD0\xB5, \xD0\xBE\xD1\x82 \xD0\xB1\xD0\xB0\xD1\x82\xD0\xB0\xD1\x80\xD0\xB5\xD0\xB8\0"
     "\xD0\xBD\xD0\xB5 \xD0\xB2\xD1\x8B\xD0\xBA\xD0\xBB\xD1\x8E\xD1\x87\xD0\xB0\xD0\xB5\xD1\x82\xD1\x81\xD1\x8F: \xD1\x80\xD0\xB0\xD1\x81\xD1\x85\xD0\xBE\xD0\xB4\0"
@@ -2386,54 +2407,54 @@ const uint16_t kOff_ru[kStrings] = {
     3277, 3322, 3337, 3390, 3421, 3457, 3483, 3528, 3554, 3567, 3592, 3629,
     3322, 3660, 3677, 3701, 3738, 3762, 3801, 3829, 3859, 3882, 3902, 3911,
     3927, 3975, 4008, 4041, 4070, 4132, 4178, 4248, 4279, 4300, 4313, 4333,
-    4343, 4333, 4351, 4358, 4367, 4343, 4333, 4379, 4396, 4407, 4449, 4497,
-    4549, 4601, 4641, 4672, 4682, 4691, 662, 4704, 4333, 4708, 4776, 4806,
-    4833, 4864, 4895, 4333, 4914, 4923, 4936, 4951, 4970, 5002, 3322, 3660,
-    5039, 5051, 5115, 5178, 5196, 5210, 5225, 5240, 5251, 5264, 5277, 5291,
-    5316, 5368, 5429, 4691, 5442, 5453, 5471, 641, 5583, 5629, 5687, 5745,
-    5754, 5800, 5876, 5922, 5974, 5985, 5998, 6033, 6068, 6104, 6150, 6191,
-    6213, 6256, 6335, 6361, 6402, 6420, 6427, 6445, 6533, 6557, 6663, 6694,
-    6728, 6773, 6829, 6951, 6991, 6728, 7054, 7116, 7131, 7146, 7169, 7186,
-    7205, 7228, 7261, 7279, 7304, 7330, 7355, 7368, 7381, 7392, 7409, 7498,
-    7575, 7628, 7654, 7670, 7714, 7760, 7812, 7990, 8087, 8121, 8147, 8179,
-    8205, 8312, 8413, 662, 5974, 8498, 8509, 8570, 4351, 8579, 3554, 8590,
-    8623, 8657, 8674, 5264, 8687, 5251, 5264, 8674, 8701, 8733, 8701, 8778,
-    8819, 8855, 8895, 7392, 9317, 6445, 9400, 9489, 9527, 9575, 9606, 9624,
-    9642, 3528, 3390, 3528, 9675, 9734, 641, 9808, 4367, 9821, 9840, 9873,
-    9983, 10009, 10122, 10184, 10215, 10333, 10398, 10215, 10428, 10492, 10529, 10647,
-    10712, 10745, 10870, 688, 10952, 10985, 11013, 11045, 11120, 11163, 11186, 11229,
-    11239, 11255, 4367, 11307, 11322, 11346, 4333, 11364, 11400, 11457, 11468, 11508,
-    11559, 11626, 11692, 11722, 11741, 11806, 11870, 11906, 11957, 12001, 12049, 12085,
-    12295, 12335, 12481, 12535, 12671, 12729, 12895, 12950, 12993, 13043, 13103, 13150,
-    13217, 13278, 13308, 13367, 13436, 13496, 13553, 13587, 13623, 13664, 13670, 13676,
-    13685, 13694, 4333, 13703, 13718, 13757, 13770, 13785, 13800, 13810, 13839, 13876,
-    13918, 13928, 13938, 4333, 13948, 13967, 14009, 14048, 14087, 14098, 14109, 14136,
-    14178, 14219, 14260, 13757, 14299, 14310, 14323, 14354, 14518, 14691, 14712, 14763,
-    14796, 14820, 14848, 14865, 14917, 15102, 15138, 15170, 15217, 15240, 15268, 15292,
-    15328, 15365, 15543, 15558, 15594, 15594, 15603, 15634, 15668, 15739, 15827, 15860,
-    15939, 16040, 16107, 16165, 16211, 16245, 16266, 16295, 16335, 16359, 16372, 16403,
-    16578, 16617, 16670, 16757, 3660, 16784, 16825, 16851, 16877, 16932, 16950, 16983,
-    17007, 17060, 17081, 17097, 17111, 17137, 17185, 17236, 17280, 17326, 17362, 11120,
-    17413, 17428, 17447, 17460, 699, 17474, 9821, 17493, 17558, 3660, 17474, 11120,
-    17620, 17637, 17674, 17692, 17723, 17447, 17880, 17898, 17928, 17981, 3322, 18000,
-    18053, 18119, 18132, 18158, 18179, 18218, 18258, 18289, 16983, 18300, 18362, 18386,
-    18448, 18470, 18487, 18502, 18529, 18560, 18583, 18627, 18766, 17413, 18928, 18959,
-    18992, 19025, 11239, 19053, 19073, 19088, 19114, 19133, 19159, 19188, 19207, 641,
-    19259, 5745, 19273, 3660, 19306, 19325, 19349, 19375, 19422, 19444, 19476, 19519,
-    19547, 19588, 19630, 19676, 19702, 19755, 19796, 19846, 19861, 19872, 19894, 19898,
-    19905, 19909, 19931, 19937, 19073, 641, 19967, 19988, 20012, 20029, 20042, 20063,
-    20081, 20094, 20128, 20154, 20177, 20183, 20238, 20283, 20317, 20341, 20350, 20374,
-    20042, 20403, 5745, 19259, 20415, 20424, 20431, 20466, 20487, 20511, 20522, 3554,
-    20533, 20906, 20955, 21014, 21072, 21134, 21196, 21250, 21323, 21439, 9821, 21458,
-    21477, 21490, 21507, 21514, 21633, 21661, 729, 21680, 21782, 21825, 21876, 21962,
-    22046, 22128, 22210, 22268, 22309, 22327, 22361, 22386, 22452, 22487, 22491, 22505,
-    22520, 22536, 22559, 22572, 22581, 22594, 3390, 22629, 22670, 699, 22735, 22760,
-    22802, 22894, 22991, 23101, 23161, 23208, 16950, 3882, 23263, 23268, 23293, 23331,
-    23359, 23463, 23565, 9821, 23680, 23685, 23696, 23703, 23721, 23739, 23756, 23767,
-    23776, 23787, 23796,
+    4343, 4333, 4351, 4358, 4367, 4343, 4333, 4379, 4396, 4407, 4462, 4504,
+    4552, 4604, 4656, 4696, 4727, 4737, 4746, 662, 4759, 4333, 4763, 4831,
+    4861, 4888, 4919, 4950, 4333, 4969, 4978, 4991, 5006, 5025, 5057, 3322,
+    3660, 5094, 5106, 5170, 5233, 5251, 5265, 5280, 5295, 5306, 5319, 5332,
+    5346, 5371, 5423, 5484, 4746, 5497, 5508, 5526, 641, 5638, 5684, 5742,
+    5800, 5809, 5855, 5931, 5977, 6029, 6040, 6053, 6088, 6123, 6159, 6205,
+    6246, 6268, 6311, 6390, 6416, 6457, 6475, 6482, 6500, 6588, 6612, 6718,
+    6749, 6783, 6828, 6884, 7006, 7046, 6783, 7109, 7171, 7186, 7201, 7224,
+    7241, 7260, 7283, 7316, 7334, 7359, 7385, 7410, 7423, 7436, 7447, 7464,
+    7553, 7630, 7683, 7709, 7725, 7769, 7815, 7867, 8045, 8142, 8176, 8202,
+    8234, 8260, 8367, 8468, 662, 6029, 8553, 8564, 8625, 4351, 8634, 3554,
+    8645, 8678, 8712, 8729, 5319, 8742, 5306, 5319, 8729, 8756, 8788, 8756,
+    8833, 8874, 8910, 8950, 7447, 9372, 6500, 9455, 9544, 9582, 9630, 9661,
+    9679, 9697, 3528, 3390, 3528, 9730, 9789, 641, 9863, 4367, 9876, 9895,
+    9928, 10038, 10064, 10177, 10239, 10270, 10388, 10453, 10270, 10483, 10547, 10584,
+    10702, 10767, 10800, 10925, 688, 11007, 11040, 11068, 11100, 11175, 11218, 11241,
+    11284, 11294, 11310, 4367, 11362, 11377, 11401, 4333, 11419, 11455, 11512, 11523,
+    11563, 11614, 11681, 11747, 11777, 11796, 11861, 11925, 11961, 12012, 12056, 12104,
+    12140, 12350, 12390, 12536, 12590, 12726, 12784, 12950, 13005, 13048, 13098, 13158,
+    13205, 13272, 13333, 13363, 13422, 13491, 13551, 13608, 13642, 13684, 13725, 13731,
+    13737, 13746, 13755, 4333, 13764, 13779, 13818, 13831, 13846, 13861, 13871, 13906,
+    13945, 13963, 14000, 14013, 4737, 14024, 14053, 14090, 14132, 14142, 14152, 4333,
+    14162, 14181, 14223, 14262, 14301, 14312, 14323, 14350, 14392, 14433, 14474, 13818,
+    14513, 14524, 14537, 14568, 14732, 14905, 14926, 14977, 15010, 15034, 15062, 15079,
+    15131, 15316, 15352, 15384, 15431, 15454, 15482, 15506, 15542, 15579, 15757, 15772,
+    15808, 15808, 15817, 15848, 15882, 15953, 16041, 16074, 16153, 16254, 16321, 16379,
+    16425, 16459, 16480, 16509, 16549, 16573, 16586, 16617, 16792, 16831, 16884, 16971,
+    3660, 16998, 17039, 17065, 17091, 17146, 17164, 17197, 17221, 17274, 17295, 17311,
+    17325, 17351, 17399, 17450, 17494, 17540, 17576, 11175, 17627, 17642, 17661, 17674,
+    699, 17688, 9876, 17707, 17772, 3660, 17688, 11175, 17834, 17851, 17888, 17906,
+    17937, 17661, 18094, 18112, 18142, 18195, 3322, 18214, 18267, 18333, 18346, 18372,
+    18393, 18432, 18472, 18503, 17197, 18514, 18576, 18600, 18662, 18684, 18701, 18716,
+    18743, 18774, 18797, 18841, 18980, 17627, 19142, 19173, 19206, 19239, 11294, 19267,
+    19287, 19302, 19328, 19347, 19373, 19402, 19421, 641, 19473, 5800, 19487, 3660,
+    19520, 19539, 19563, 19589, 19636, 19658, 19690, 19733, 19761, 19802, 19844, 19890,
+    19916, 19969, 20010, 20060, 20075, 20086, 20108, 20112, 20119, 20123, 20145, 20151,
+    19287, 641, 20181, 20202, 20226, 20243, 20256, 20277, 20295, 20308, 20342, 20368,
+    20391, 20397, 20452, 20497, 20531, 20555, 20564, 20588, 20256, 20617, 5800, 19473,
+    20629, 20638, 20645, 20680, 20701, 20725, 20736, 3554, 20747, 21120, 21169, 21228,
+    21286, 21348, 21410, 21464, 21537, 21653, 9876, 21672, 21691, 21704, 21721, 21728,
+    21847, 21875, 729, 21894, 21996, 22039, 22090, 22176, 22260, 22342, 22424, 22482,
+    22523, 22541, 22575, 22600, 22666, 22701, 22705, 22719, 22734, 22750, 22773, 22786,
+    22795, 22808, 3390, 22843, 22884, 699, 22949, 22974, 23016, 23108, 23205, 23315,
+    23375, 23422, 17164, 3882, 23477, 23482, 23507, 23545, 23573, 23677, 23779, 9876,
+    23894, 23899, 23910, 23917, 23935, 23953, 23970, 23981, 23990, 24001, 24010,
 };
 
-// zh: 12532 bytes, 639 of 639 messages.
+// zh: 12663 bytes, 647 of 647 messages.
 const char kBlob_zh[] =
     "\xE8\xA7\xA6\xE6\x91\xB8\xE4\xB8\x8D\xE7\x81\xB5? \xE9\x95\xBF\xE6\x8C\x89\xE5\xB1\x8F\xE5\xB9\x95\xE3\x80\x82\0"
     "\xE6\x8F\x90\xE7\xA4\xBA {0} / {1}\0\xE7\x82\xB9\xE4\xB8\x80\xE4\xB8\x8B\xE7\xBB\xA7\xE7\xBB\xAD\0"
@@ -2495,7 +2516,8 @@ const char kBlob_zh[] =
     "\xE6\x92\xAD\xE6\x94\xBE\0\xE9\x9A\x8F\xE6\x9C\xBA\xE6\x92\xAD\xE6\x94\xBE\0\xE5\xBE\xAA\xE7\x8E\xAF\xE6\x92\xAD\xE6\x94\xBE\0"
     "\xE7\x9D\xA1\xE7\x9C\xA0\xE5\xAE\x9A\xE6\x97\xB6\xE5\x99\xA8\0\xE5\x85\xB3\xE9\x97\xAD\0\xE5\xBC\x80\xE5\x90\xAF\0"
     "\xE5\x85\xA8\xE9\x83\xA8\0\xE5\x8D\x95\xE6\x9B\xB2\0Auto DJ\0\xE7\xAD\x89\xE5\xBE\x85\xE4\xB8\xAD\0"
-    "\xE5\xB7\xB2\xE6\x9A\x82\xE5\x81\x9C\0\xE7\x9D\xA1\xE7\x9C\xA0\xE5\xAE\x9A\xE6\x97\xB6\xE5\x99\xA8: \xE5\x89\xA9\xE4\xBD\x99 {0}\0"
+    "\xE5\xB7\xB2\xE6\x9A\x82\xE5\x81\x9C\0\xE6\x8C\x89\xE7\x94\xB5\xE6\xBA\x90\xE9\x94\xAE\xE8\xB0\x83\xE5\x87\xBA\xE6\x8E\xA7\xE5\x88\xB6\xE6\x8C\x89\xE9\x92\xAE\0"
+    "\xE7\x9D\xA1\xE7\x9C\xA0\xE5\xAE\x9A\xE6\x97\xB6\xE5\x99\xA8: \xE5\x89\xA9\xE4\xBD\x99 {0}\0"
     "\xE7\x9D\xA1\xE7\x9C\xA0\xE5\xAE\x9A\xE6\x97\xB6\xE5\x99\xA8: \xE6\x92\xAD\xE5\xAE\x8C\xE6\x9C\xAC\xE6\x9B\xB2\0"
     "\xE7\x9D\xA1\xE7\x9C\xA0\xE5\xAE\x9A\xE6\x97\xB6\xE5\x99\xA8: \xE6\x92\xAD\xE5\xAE\x8C\xE4\xB8\x93\xE8\xBE\x91\0"
     "\xE7\x9D\xA1\xE7\x9C\xA0\xE5\xAE\x9A\xE6\x97\xB6\xE5\x99\xA8: \xE6\x92\xAD\xE5\xAE\x8C\xE9\x98\x9F\xE5\x88\x97\0"
@@ -2599,11 +2621,14 @@ const char kBlob_zh[] =
     "\xE7\xAD\x89\xE5\xBE\x85\xE4\xB8\xAD: \xE7\x9D\xA1\xE7\x9C\xA0\xE5\xAE\x9A\xE6\x97\xB6\xE5\x99\xA8\xE8\xAE\xBE\xE4\xB8\xBA\xE6\x92\xAD\xE5\xAE\x8C\xE9\x98\x9F\xE5\x88\x97\0"
     "\xE7\xAD\x89\xE5\xBE\x85\xE4\xB8\xAD: \xE6\xB2\xA1\xE6\x9C\x89\xE7\xAC\xA6\xE5\x90\x88\xE7\xAD\x9B\xE9\x80\x89\xE6\x9D\xA1\xE4\xBB\xB6\xE7\x9A\x84\xE6\x9B\xB2\xE7\x9B\xAE\0"
     "\xE5\xB7\xB2\xE6\x9A\x82\xE5\x81\x9C: \xE6\x9B\xB2\xE7\x9B\xAE\xE6\x97\xA0\xE6\xB3\x95\xE6\x92\xAD\xE6\x94\xBE\0"
-    "\xE8\x87\xAA\xE5\x8A\xA8\xE7\x86\x84\xE5\xB1\x8F\0\xE5\x85\x88\xE5\x8F\x98\xE6\x9A\x97, \xE7\x82\xB9\xE4\xB8\x80\xE4\xB8\x8B\xE5\x94\xA4\xE9\x86\x92\0"
+    "\xE8\x87\xAA\xE5\x8A\xA8\xE7\x86\x84\xE5\xB1\x8F\0\xE5\x85\x88\xE5\x8F\x98\xE6\x9A\x97, \xE5\x86\x8D\xE7\x86\x84\xE5\xB1\x8F\0"
     "\xE5\xB8\xB8\xE4\xBA\xAE: \xE6\x9B\xB4\xE8\x80\x97\xE7\x94\xB5\0" "15 \xE7\xA7\x92\0" "30 \xE7\xA7\x92\0"
     "1 \xE5\x88\x86\xE9\x92\x9F\0" "2 \xE5\x88\x86\xE9\x92\x9F\0" "5 \xE5\x88\x86\xE9\x92\x9F\0\xE6\xB0\xB8\xE4\xB8\x8D\0"
     "\xE4\xBA\xAE\xE5\xBA\xA6\0\xE8\xB6\x8A\xE4\xBA\xAE\xE8\xB6\x8A\xE8\x80\x97\xE7\x94\xB5\0\xE4\xBD\x8E\0"
-    "\xE4\xB8\xAD\0\xE9\xAB\x98\0\xE6\x9C\x80\xE9\xAB\x98\0\xE9\x97\xB2\xE7\xBD\xAE\xE6\x97\xB6\xE5\x85\xB3\xE6\x9C\xBA\0"
+    "\xE4\xB8\xAD\0\xE9\xAB\x98\0\xE6\x9C\x80\xE9\xAB\x98\0\xE7\x86\x84\xE5\xB1\x8F\xE6\x97\xB6\xE8\xA7\xA6\xE6\x91\xB8\0"
+    "\xE4\xBB\x85\xE7\x94\xB5\xE6\xBA\x90\xE9\x94\xAE\xE5\x8F\xAF\xE5\x94\xA4\xE9\x86\x92\0\xE7\x82\xB9\xE4\xB8\x80\xE4\xB8\x8B\xE5\x94\xA4\xE9\x86\x92\0"
+    "\xE7\x82\xB9\xE4\xB8\x80\xE4\xB8\x8B\xE6\x98\xBE\xE7\xA4\xBA\xE6\x9B\xB2\xE7\x9B\xAE\0\xE6\x97\xA0\xE6\x93\x8D\xE4\xBD\x9C\0"
+    "\xE5\x94\xA4\xE9\x86\x92\0\xE6\x98\xBE\xE7\xA4\xBA\xE6\x9B\xB2\xE7\x9B\xAE\0\xE9\x97\xB2\xE7\xBD\xAE\xE6\x97\xB6\xE5\x85\xB3\xE6\x9C\xBA\0"
     "\xE6\x9A\x82\xE5\x81\x9C\xE4\xB8\x94\xE4\xBD\xBF\xE7\x94\xA8\xE7\x94\xB5\xE6\xB1\xA0\xE6\x97\xB6\0"
     "\xE4\xBF\x9D\xE6\x8C\x81\xE5\xBC\x80\xE6\x9C\xBA: \xE6\x9B\xB4\xE8\x80\x97\xE7\x94\xB5\0" "10 \xE5\x88\x86\xE9\x92\x9F\0"
     "20 \xE5\x88\x86\xE9\x92\x9F\0" "60 \xE5\x88\x86\xE9\x92\x9F\0CPU \xE9\x80\x9F\xE5\xBA\xA6\0"
@@ -2732,55 +2757,55 @@ const uint16_t kOff_zh[kStrings] = {
     1948, 1983, 1993, 2033, 2052, 2068, 2087, 2112, 2125, 2135, 2156, 2177,
     1983, 2198, 2205, 2221, 2240, 2260, 2282, 2306, 2325, 2338, 2357, 2364,
     2371, 2387, 2403, 2416, 2432, 2460, 2479, 2525, 2532, 2545, 2558, 2574,
-    2581, 2574, 2588, 2595, 2602, 2581, 2574, 2610, 2620, 2630, 2658, 2688,
-    2718, 2748, 2775, 2799, 2809, 2822, 2835, 2848, 2574, 2858, 2896, 2809,
-    2822, 2835, 2920, 2574, 2930, 2937, 426, 2944, 2951, 2979, 1983, 2198,
-    3004, 3011, 3045, 3088, 3098, 3112, 2937, 3122, 2525, 3132, 3145, 3154,
-    3178, 3193, 3112, 2937, 3122, 3212, 3225, 419, 3256, 3264, 3278, 3295,
-    3305, 3322, 3342, 3356, 3371, 3375, 3390, 3414, 3429, 3436, 3486, 3511,
-    3530, 3559, 3586, 3608, 3632, 2588, 3650, 3671, 3702, 3717, 3741, 3766,
-    3795, 3817, 3839, 3863, 3879, 3795, 3913, 3943, 3950, 3957, 3964, 3971,
-    3978, 3985, 3995, 4002, 4009, 4016, 4029, 4036, 4043, 4050, 4057, 4077,
-    4091, 4125, 4138, 4145, 4161, 4191, 4224, 4283, 4310, 4337, 4358, 4382,
-    4412, 3717, 4442, 426, 3371, 4472, 4479, 4497, 4505, 4512, 2125, 4522,
-    4541, 4556, 4567, 3132, 4574, 4584, 3132, 4567, 4597, 4610, 4629, 4648,
-    4670, 4683, 4703, 4798, 4805, 3671, 4829, 4853, 4884, 3632, 4924, 4939,
-    4949, 2112, 2033, 4967, 4986, 5032, 5084, 2532, 2602, 5097, 5104, 5120,
-    5209, 5228, 5320, 5360, 5385, 5480, 5519, 5385, 5543, 5581, 5607, 5709,
-    5742, 5770, 5867, 440, 5909, 5931, 5944, 5971, 6002, 6018, 6031, 2574,
-    6064, 6071, 2602, 6105, 6119, 6136, 2574, 6153, 6178, 6212, 6219, 6232,
-    6254, 6285, 6319, 6335, 6353, 6381, 6418, 6432, 6470, 6483, 6499, 6521,
-    6550, 6574, 6606, 6645, 6678, 6718, 6748, 6773, 6804, 6841, 6871, 6899,
-    6941, 6982, 6995, 7028, 7073, 7118, 7148, 7161, 7188, 7206, 7213, 7220,
-    7229, 7238, 7247, 7254, 7261, 7277, 7281, 7285, 7289, 7296, 7312, 7337,
-    7361, 7371, 7381, 7247, 7391, 7402, 7432, 7456, 7477, 7485, 7493, 7506,
-    7527, 7549, 7573, 7277, 7595, 7285, 7602, 7618, 7684, 7779, 7786, 7805,
-    7829, 7845, 7862, 7875, 7902, 7932, 7945, 7955, 7984, 7991, 8015, 8028,
-    8041, 8055, 4567, 8149, 8165, 8165, 8172, 8188, 8212, 8251, 8273, 8294,
-    8314, 8334, 8351, 8362, 8373, 8387, 8402, 8424, 8452, 8465, 8475, 8495,
-    8610, 8635, 8666, 8717, 2198, 8730, 8746, 8756, 8772, 8807, 8827, 8849,
-    8865, 8900, 8910, 8925, 8937, 8951, 8992, 9033, 9060, 9106, 9134, 6002,
-    6002, 9167, 9174, 9181, 2357, 9194, 5097, 9201, 9236, 2198, 9194, 6002,
-    9275, 9286, 9305, 9317, 9331, 9174, 9400, 9414, 9430, 9469, 1983, 9479,
-    9505, 9533, 9544, 9557, 9564, 9583, 9596, 9611, 8849, 9624, 9669, 9682,
-    9712, 2198, 9726, 9733, 9746, 9759, 9775, 9795, 9862, 9951, 9958, 8849,
-    9982, 9999, 6064, 10015, 10028, 10035, 10050, 10057, 10067, 10087, 10099, 419,
-    10135, 3295, 5104, 2198, 10149, 10159, 10169, 10184, 10210, 10229, 10242, 10280,
-    10302, 10336, 10370, 10407, 10420, 10463, 10482, 10507, 10520, 10530, 10543, 10547,
-    10554, 10558, 10565, 10571, 10028, 419, 10584, 10595, 10608, 10615, 10622, 10629,
-    10639, 10646, 10653, 10666, 10673, 10679, 10695, 10711, 10721, 10734, 10741, 10753,
-    10622, 10772, 3295, 10783, 10558, 10799, 10803, 7932, 10838, 2357, 10851, 2125,
-    10858, 10928, 10947, 10977, 11017, 11060, 11088, 11115, 11148, 11220, 5097, 11227,
-    11234, 447, 11241, 11248, 11307, 11320, 461, 11330, 11385, 11404, 11434, 11475,
-    11516, 11557, 11598, 11629, 11643, 11656, 11678, 11697, 11722, 11741, 11745, 11755,
-    11765, 11775, 11785, 11792, 11796, 11806, 2033, 11826, 11848, 2357, 11885, 11899,
-    11915, 11957, 12004, 12054, 12092, 12108, 8827, 12147, 12163, 12170, 12187, 12206,
-    12219, 12291, 12354, 5097, 12420, 12425, 12436, 12444, 12460, 12479, 12498, 12506,
-    12513, 12521, 12528,
+    2581, 2574, 2588, 2595, 2602, 2581, 2574, 2610, 2620, 2630, 2661, 2689,
+    2719, 2749, 2779, 2806, 2830, 2840, 2853, 2866, 2879, 2574, 2889, 2927,
+    2840, 2853, 2866, 2951, 2574, 2961, 2968, 426, 2975, 2982, 3010, 1983,
+    2198, 3035, 3042, 3076, 3119, 3129, 3143, 2968, 3153, 2525, 3163, 3176,
+    3185, 3209, 3224, 3143, 2968, 3153, 3243, 3256, 419, 3287, 3295, 3309,
+    3326, 3336, 3353, 3373, 3387, 3402, 3406, 3421, 3445, 3460, 3467, 3517,
+    3542, 3561, 3590, 3617, 3639, 3663, 2588, 3681, 3702, 3733, 3748, 3772,
+    3797, 3826, 3848, 3870, 3894, 3910, 3826, 3944, 3974, 3981, 3988, 3995,
+    4002, 4009, 4016, 4026, 4033, 4040, 4047, 4060, 4067, 4074, 4081, 4088,
+    4108, 4122, 4156, 4169, 4176, 4192, 4222, 4255, 4314, 4341, 4368, 4389,
+    4413, 4443, 3748, 4473, 426, 3402, 4503, 4510, 4528, 4536, 4543, 2125,
+    4553, 4572, 4587, 4598, 3163, 4605, 4615, 3163, 4598, 4628, 4641, 4660,
+    4679, 4701, 4714, 4734, 4829, 4836, 3702, 4860, 4884, 4915, 3663, 4955,
+    4970, 4980, 2112, 2033, 4998, 5017, 5063, 5115, 2532, 2602, 5128, 5135,
+    5151, 5240, 5259, 5351, 5391, 5416, 5511, 5550, 5416, 5574, 5612, 5638,
+    5740, 5773, 5801, 5898, 440, 5940, 5962, 5975, 6002, 6033, 6049, 6062,
+    2574, 6095, 6102, 2602, 6136, 6150, 6167, 2574, 6184, 6209, 6243, 6250,
+    6263, 6285, 6316, 6350, 6366, 6384, 6412, 6449, 6463, 6501, 6514, 6530,
+    6552, 6581, 6605, 6637, 6676, 6709, 6749, 6779, 6804, 6835, 6872, 6902,
+    6930, 6972, 7013, 7026, 7059, 7104, 7149, 7179, 7192, 7213, 7231, 7238,
+    7245, 7254, 7263, 7272, 7279, 7286, 7302, 7306, 7310, 7314, 7321, 7337,
+    7359, 7375, 7397, 7407, 7414, 7427, 7443, 7468, 7492, 7502, 7512, 7272,
+    7522, 7533, 7563, 7587, 7608, 7616, 7624, 7637, 7658, 7680, 7704, 7302,
+    7726, 7310, 7733, 7749, 7815, 7910, 7917, 7936, 7960, 7976, 7993, 8006,
+    8033, 8063, 8076, 8086, 8115, 8122, 8146, 8159, 8172, 8186, 4598, 8280,
+    8296, 8296, 8303, 8319, 8343, 8382, 8404, 8425, 8445, 8465, 8482, 8493,
+    8504, 8518, 8533, 8555, 8583, 8596, 8606, 8626, 8741, 8766, 8797, 8848,
+    2198, 8861, 8877, 8887, 8903, 8938, 8958, 8980, 8996, 9031, 9041, 9056,
+    9068, 9082, 9123, 9164, 9191, 9237, 9265, 6033, 6033, 9298, 9305, 9312,
+    2357, 9325, 5128, 9332, 9367, 2198, 9325, 6033, 9406, 9417, 9436, 9448,
+    9462, 9305, 9531, 9545, 9561, 9600, 1983, 9610, 9636, 9664, 9675, 9688,
+    9695, 9714, 9727, 9742, 8980, 9755, 9800, 9813, 9843, 2198, 9857, 9864,
+    9877, 9890, 9906, 9926, 9993, 10082, 10089, 8980, 10113, 10130, 6095, 10146,
+    10159, 10166, 10181, 10188, 10198, 10218, 10230, 419, 10266, 3326, 5135, 2198,
+    10280, 10290, 10300, 10315, 10341, 10360, 10373, 10411, 10433, 10467, 10501, 10538,
+    10551, 10594, 10613, 10638, 10651, 10661, 10674, 10678, 10685, 10689, 10696, 10702,
+    10159, 419, 10715, 10726, 10739, 10746, 10753, 10760, 10770, 10777, 10784, 10797,
+    10804, 10810, 10826, 10842, 10852, 10865, 10872, 10884, 10753, 10903, 3326, 10914,
+    10689, 10930, 10934, 8063, 10969, 2357, 10982, 2125, 10989, 11059, 11078, 11108,
+    11148, 11191, 11219, 11246, 11279, 11351, 5128, 11358, 11365, 447, 11372, 11379,
+    11438, 11451, 461, 11461, 11516, 11535, 11565, 11606, 11647, 11688, 11729, 11760,
+    11774, 11787, 11809, 11828, 11853, 11872, 11876, 11886, 11896, 11906, 11916, 11923,
+    11927, 11937, 2033, 11957, 11979, 2357, 12016, 12030, 12046, 12088, 12135, 12185,
+    12223, 12239, 8958, 12278, 12294, 12301, 12318, 12337, 12350, 12422, 12485, 5128,
+    12551, 12556, 12567, 12575, 12591, 12610, 12629, 12637, 12644, 12652, 12659,
 };
 
 #ifdef UISTR_PSEUDO
-// en-XA: 31074 bytes, 639 of 639 messages.
+// en-XA: 31370 bytes, 647 of 647 messages.
 const char kBlob_en_XA[] =
     "[\xC5\xA2\xC3\xB6\xC3\xBC\xC3\xA7\xC4\xA5 \xC5\xA3\xC5\x95\xC3\xB6\xC3\xBC" "b\xC4\xBA\xC3\xA9? \xC4\xA4\xC3\xB6\xC4\xBA\xC4\x8F \xC3\xA1 f\xC3\xAD\xC3\xB1\xC4\x9D\xC3\xA9\xC5\x95 \xC3\xB6\xC3\xB1 \xC5\xA3\xC4\xA5\xC3\xA9 \xC5\xA1\xC3\xA7\xC5\x95\xC3\xA9\xC3\xA9\xC3\xB1. \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1\xC3\xBCm \xC4\x8F\xC3\xB6\xC4\xBA\xC3\xB6]\0"
     "[\xC5\xA2\xC3\xADp {0} \xC3\xB6" "f {1} \xC4\xBA\xC3\xB6\xC5\x95]\0[\xC5\xA3\xC3\xA1p \xC5\xA3\xC3\xB6 \xC4\x9D\xC3\xB6 \xC3\xB6\xC3\xB1 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m]\0"
@@ -2875,6 +2900,7 @@ const char kBlob_en_XA[] =
     "[\xC3\x96" "ff \xC4\xBA\xC3\xB6]\0[\xC3\x96\xC3\xB1 \xC4\xBA]\0[\xC3\x85\xC4\xBA\xC4\xBA \xC4\xBA\xC3\xB6]\0"
     "[\xC3\x96\xC3\xB1\xC3\xA9 \xC4\xBA\xC3\xB6]\0[\xC3\x85\xC3\xBC\xC5\xA3\xC3\xB6 \xC4\x8E\xC4\xB4 \xC4\xBA\xC3\xB6\xC5\x95]\0"
     "[\xC5\xB4\xC3\xA1\xC3\xAD\xC5\xA3\xC3\xAD\xC3\xB1\xC4\x9D \xC4\xBA\xC3\xB6\xC5\x95]\0[P\xC3\xA1\xC3\xBC\xC5\xA1\xC3\xA9\xC4\x8F \xC4\xBA\xC3\xB6\xC5\x95]\0"
+    "[P\xC3\xB6\xC5\xB5\xC3\xA9\xC5\x95 b\xC3\xBC\xC5\xA3\xC5\xA3\xC3\xB6\xC3\xB1 f\xC3\xB6\xC5\x95 \xC3\xA7\xC3\xB6\xC3\xB1\xC5\xA3\xC5\x95\xC3\xB6\xC4\xBA\xC5\xA1 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1]\0"
     "[\xC5\xA0\xC4\xBA\xC3\xA9\xC3\xA9p \xC5\xA3\xC3\xADm\xC3\xA9\xC5\x95: {0} \xC4\xBA\xC3\xA9" "f\xC5\xA3 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xAD]\0"
     "[\xC5\xA0\xC4\xBA\xC3\xA9\xC3\xA9p \xC5\xA3\xC3\xADm\xC3\xA9\xC5\x95: \xC3\xA9\xC3\xB1\xC4\x8F \xC3\xB6" "f \xC5\xA3\xC5\x95\xC3\xA1\xC3\xA7\xC4\xB7 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1]\0"
     "[\xC5\xA0\xC4\xBA\xC3\xA9\xC3\xA9p \xC5\xA3\xC3\xADm\xC3\xA9\xC5\x95: \xC3\xA9\xC3\xB1\xC4\x8F \xC3\xB6" "f \xC3\xA1\xC4\xBA" "b\xC3\xBCm \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1]\0"
@@ -3063,14 +3089,19 @@ const char kBlob_en_XA[] =
     "[\xC5\xB4\xC3\xA1\xC3\xAD\xC5\xA3\xC3\xAD\xC3\xB1\xC4\x9D: \xC3\xB1\xC3\xB6 \xC5\xA3\xC5\x95\xC3\xA1\xC3\xA7\xC4\xB7 f\xC3\xAD\xC5\xA3\xC5\xA1 \xC5\xA3\xC4\xA5\xC3\xA9 f\xC3\xAD\xC4\xBA\xC5\xA3\xC3\xA9\xC5\x95\xC5\xA1 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1\xC3\xBCm]\0"
     "[P\xC3\xA1\xC3\xBC\xC5\xA1\xC3\xA9\xC4\x8F: \xC5\xA3\xC5\x95\xC3\xA1\xC3\xA7\xC4\xB7\xC5\xA1 f\xC3\xA1\xC3\xAD\xC4\xBA\xC3\xA9\xC4\x8F \xC5\xA3\xC3\xB6 p\xC4\xBA\xC3\xA1\xC3\xBD \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1\xC3\xBCm]\0"
     "[\xC5\xA0\xC3\xA7\xC5\x95\xC3\xA9\xC3\xA9\xC3\xB1 \xC3\xB6" "ff \xC3\xA1" "f\xC5\xA3\xC3\xA9\xC5\x95 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m]\0"
-    "[\xC4\x8F\xC3\xADm\xC5\xA1 f\xC3\xAD\xC5\x95\xC5\xA1\xC5\xA3; \xC3\xA1 \xC5\xA3\xC3\xA1p \xC5\xB5\xC3\xA1\xC4\xB7\xC3\xA9\xC5\xA1 \xC3\xAD\xC5\xA3 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1\xC3\xBC]\0"
+    "[\xC4\x8F\xC3\xADm\xC5\xA1 f\xC3\xAD\xC5\x95\xC5\xA1\xC5\xA3, \xC5\xA3\xC4\xA5\xC3\xA9\xC3\xB1 \xC3\xB6" "ff \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xAD]\0"
     "[\xC5\xA1\xC5\xA3\xC3\xA1\xC3\xBD\xC5\xA1 \xC3\xB6\xC3\xB1: m\xC3\xB6\xC5\x95\xC3\xA9 b\xC3\xA1\xC5\xA3\xC5\xA3\xC3\xA9\xC5\x95\xC3\xBD \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp]\0"
     "[15 \xC5\xA1 \xC4\xBA\xC3\xB6]\0[30 \xC5\xA1 \xC4\xBA\xC3\xB6]\0[1 m\xC3\xAD\xC3\xB1 \xC4\xBA\xC3\xB6]\0"
     "[2 m\xC3\xAD\xC3\xB1 \xC4\xBA\xC3\xB6]\0[5 m\xC3\xAD\xC3\xB1 \xC4\xBA\xC3\xB6]\0[\xC3\x91\xC3\xA9v\xC3\xA9\xC5\x95 \xC4\xBA\xC3\xB6]\0"
     "[B\xC5\x95\xC3\xAD\xC4\x9D\xC4\xA5\xC5\xA3\xC3\xB1\xC3\xA9\xC5\xA1\xC5\xA1 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9]\0"
     "[\xC4\xA5\xC3\xAD\xC4\x9D\xC4\xA5\xC3\xA9\xC5\x95 \xC3\xBC\xC5\xA1\xC3\xA9\xC5\xA1 m\xC3\xB6\xC5\x95\xC3\xA9 b\xC3\xA1\xC5\xA3\xC5\xA3\xC3\xA9\xC5\x95\xC3\xBD \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1]\0"
     "[\xC4\xB9\xC3\xB6\xC5\xB5 \xC4\xBA\xC3\xB6]\0[M\xC3\xA9\xC4\x8F\xC3\xAD\xC3\xBCm \xC4\xBA\xC3\xB6\xC5\x95]\0"
-    "[\xC4\xA4\xC3\xAD\xC4\x9D\xC4\xA5 \xC4\xBA\xC3\xB6]\0[M\xC3\xA1x \xC4\xBA\xC3\xB6]\0[\xC5\xA2\xC3\xBC\xC5\x95\xC3\xB1 \xC3\xB6" "ff \xC5\xB5\xC4\xA5\xC3\xA9\xC3\xB1 \xC3\xAD\xC4\x8F\xC4\xBA\xC3\xA9 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xAD]\0"
+    "[\xC4\xA4\xC3\xAD\xC4\x9D\xC4\xA5 \xC4\xBA\xC3\xB6]\0[M\xC3\xA1x \xC4\xBA\xC3\xB6]\0[\xC5\xA2\xC3\xB6\xC3\xBC\xC3\xA7\xC4\xA5 \xC5\xB5\xC4\xA5\xC3\xA9\xC3\xB1 \xC3\xB6" "ff \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m]\0"
+    "[\xC5\xA3\xC4\xA5\xC3\xA9 p\xC3\xB6\xC5\xB5\xC3\xA9\xC5\x95 b\xC3\xBC\xC5\xA3\xC5\xA3\xC3\xB6\xC3\xB1 \xC5\xB5\xC3\xA1\xC4\xB7\xC3\xA9\xC5\xA1 \xC3\xAD\xC5\xA3 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1]\0"
+    "[\xC3\xA1 \xC5\xA3\xC3\xA1p \xC5\xB5\xC3\xA1\xC4\xB7\xC3\xA9\xC5\xA1 \xC3\xAD\xC5\xA3 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m]\0"
+    "[\xC3\xA1 \xC5\xA3\xC3\xA1p \xC5\xA1\xC4\xA5\xC3\xB6\xC5\xB5\xC5\xA1 \xC5\xA3\xC4\xA5\xC3\xA9 \xC5\xA3\xC5\x95\xC3\xA1\xC3\xA7\xC4\xB7 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp]\0"
+    "[\xC3\x91\xC3\xB6\xC5\xA3\xC4\xA5\xC3\xAD\xC3\xB1\xC4\x9D \xC4\xBA\xC3\xB6\xC5\x95]\0[\xC5\xB4\xC3\xA1\xC4\xB7\xC3\xA9 \xC4\xBA\xC3\xB6]\0"
+    "[\xC5\xA2\xC5\x95\xC3\xA1\xC3\xA7\xC4\xB7 \xC4\xBA\xC3\xB6]\0[\xC5\xA2\xC3\xBC\xC5\x95\xC3\xB1 \xC3\xB6" "ff \xC5\xB5\xC4\xA5\xC3\xA9\xC3\xB1 \xC3\xAD\xC4\x8F\xC4\xBA\xC3\xA9 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xAD]\0"
     "[p\xC3\xA1\xC3\xBC\xC5\xA1\xC3\xA9\xC4\x8F, \xC3\xB6\xC3\xB1 b\xC3\xA1\xC5\xA3\xC5\xA3\xC3\xA9\xC5\x95\xC3\xBD \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xAD]\0"
     "[10 m\xC3\xAD\xC3\xB1 \xC4\xBA\xC3\xB6\xC5\x95]\0[20 m\xC3\xAD\xC3\xB1 \xC4\xBA\xC3\xB6\xC5\x95]\0"
     "[60 m\xC3\xAD\xC3\xB1 \xC4\xBA\xC3\xB6\xC5\x95]\0[\xC3\x87P\xC3\x9C \xC5\xA1p\xC3\xA9\xC3\xA9\xC4\x8F \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9]\0"
@@ -3281,51 +3312,51 @@ const uint16_t kOff_en_XA[kStrings] = {
     4600, 4658, 4681, 4757, 4798, 4838, 4888, 4942, 4988, 5007, 5044, 5082,
     4658, 5122, 5153, 5197, 5265, 5305, 5376, 5404, 5445, 5477, 5516, 5538,
     5567, 5612, 5647, 5677, 5711, 5800, 5869, 5983, 6007, 6029, 6050, 6081,
-    6093, 6081, 6103, 6117, 6131, 6093, 6081, 6154, 6178, 6199, 6247, 6308,
-    6367, 6427, 6475, 6513, 6531, 6565, 6597, 6630, 6649, 6672, 6427, 6531,
-    6565, 6597, 6777, 6081, 6798, 6816, 6832, 6849, 6870, 6913, 4658, 5122,
-    6950, 6970, 7072, 7166, 7187, 7208, 7232, 7252, 7275, 7290, 7317, 7338,
-    7380, 7440, 7502, 7524, 7540, 7561, 7592, 982, 7704, 7754, 7800, 7854,
-    7868, 7920, 7991, 8033, 8081, 8097, 8117, 8164, 8202, 8243, 8329, 8379,
-    8415, 8480, 8563, 8605, 8678, 8708, 8739, 8774, 8874, 8899, 8977, 9028,
-    9074, 9119, 9196, 9286, 9326, 9395, 9451, 9524, 9547, 9563, 9587, 9601,
-    9624, 9655, 9691, 9712, 9738, 9755, 9784, 9806, 9832, 9850, 9868, 9934,
-    10004, 10076, 10112, 10126, 10160, 10224, 10279, 10539, 10661, 10702, 10740, 10774,
-    10814, 10934, 10992, 1005, 8081, 11066, 11082, 11146, 6103, 11161, 4988, 11177,
-    11216, 11266, 11290, 7290, 11310, 11333, 7290, 11290, 11357, 11397, 11432, 11464,
-    11515, 11554, 11610, 9850, 12002, 12084, 12193, 12279, 12333, 12411, 12449, 12478,
-    12488, 4942, 4757, 12538, 12586, 12696, 12794, 12828, 6131, 12859, 12888, 12925,
-    13105, 13145, 13338, 13425, 13472, 13667, 13740, 13472, 13783, 13855, 13903, 14099,
-    14173, 14225, 14422, 1040, 14527, 14581, 14606, 14669, 14757, 14807, 14830, 14902,
-    14914, 14931, 6131, 15012, 15031, 15064, 6081, 15094, 15148, 15236, 15258, 15296,
-    15331, 15421, 15517, 15560, 15594, 15672, 15758, 15795, 15870, 15909, 15956, 16012,
-    16153, 16189, 16275, 16331, 16419, 16497, 16611, 16691, 16760, 16833, 16920, 16990,
-    17084, 17173, 17214, 17277, 17372, 17454, 17526, 17566, 17630, 17685, 17698, 17711,
-    17726, 17741, 17756, 17773, 17804, 17866, 17880, 17900, 17916, 17928, 17975, 17630,
-    18022, 18040, 18058, 17756, 18076, 18103, 18166, 18237, 18291, 18310, 18329, 18369,
-    18432, 18494, 18554, 17866, 18615, 17900, 18636, 18673, 18865, 19137, 19161, 19235,
-    19280, 19312, 19356, 19378, 19440, 19590, 19635, 19674, 19736, 19765, 19801, 19829,
-    19877, 19936, 11290, 20115, 20165, 20165, 20191, 20239, 20300, 20395, 20481, 20529,
-    20627, 20693, 20773, 20835, 20875, 20915, 20942, 20991, 21033, 21063, 21085, 21120,
-    21372, 21430, 21501, 21621, 5122, 21674, 21726, 21764, 21800, 21862, 21902, 21964,
-    21992, 22044, 22074, 22109, 22129, 22159, 22233, 22311, 22365, 22444, 22498, 14757,
-    22573, 22597, 22621, 22642, 5516, 22670, 12859, 22702, 22791, 5122, 22670, 14757,
-    22862, 22887, 22948, 22974, 23030, 22621, 23193, 23218, 23273, 23361, 4658, 23398,
-    23454, 23537, 23569, 23621, 23645, 23687, 23727, 23773, 21964, 23803, 23876, 23912,
-    23982, 24009, 24040, 24063, 24092, 24127, 24160, 24215, 24361, 24569, 24584, 24626,
-    24672, 24726, 14914, 24791, 24823, 24846, 24879, 24903, 24934, 24978, 25013, 982,
-    25085, 7854, 25106, 5122, 25143, 25164, 25196, 25231, 25296, 25328, 25358, 25420,
-    25463, 25535, 25605, 25685, 25716, 25781, 25831, 25906, 25936, 25953, 25982, 25995,
-    26010, 26023, 26040, 26056, 24823, 982, 26087, 26110, 26130, 26154, 26171, 26195,
-    26225, 26243, 26267, 26295, 26320, 26337, 26387, 26425, 26451, 26480, 26505, 26526,
-    26559, 26588, 7854, 25085, 26606, 26623, 26639, 19590, 26691, 5516, 26724, 4988,
-    26739, 27043, 27111, 27180, 27248, 27333, 27404, 27485, 27570, 27728, 12859, 27743,
-    27767, 1061, 27783, 27798, 27943, 27995, 1092, 28012, 28159, 28221, 28286, 28401,
-    28513, 28605, 28696, 28772, 28810, 28833, 28900, 28949, 29004, 29067, 29078, 29100,
-    29130, 29152, 29183, 29205, 29220, 29238, 4757, 29305, 29367, 5516, 29436, 29477,
-    29540, 29670, 29807, 29966, 30044, 30106, 30186, 30233, 30265, 30275, 30318, 30393,
-    30443, 30590, 30724, 12859, 30889, 30899, 30916, 30928, 30954, 30980, 31001, 31018,
-    31032, 31050, 31066,
+    6093, 6081, 6103, 6117, 6131, 6093, 6081, 6154, 6178, 6199, 6262, 6310,
+    6371, 6430, 6490, 6538, 6576, 6594, 6628, 6660, 6693, 6712, 6735, 6490,
+    6594, 6628, 6660, 6840, 6081, 6861, 6879, 6895, 6912, 6933, 6976, 4658,
+    5122, 7013, 7033, 7135, 7229, 7250, 7271, 7295, 7315, 7338, 7353, 7380,
+    7401, 7443, 7503, 7565, 7587, 7603, 7624, 7655, 982, 7767, 7817, 7863,
+    7917, 7931, 7983, 8054, 8096, 8144, 8160, 8180, 8227, 8265, 8306, 8392,
+    8442, 8478, 8543, 8626, 8668, 8741, 8771, 8802, 8837, 8937, 8962, 9040,
+    9091, 9137, 9182, 9259, 9349, 9389, 9458, 9514, 9587, 9610, 9626, 9650,
+    9664, 9687, 9718, 9754, 9775, 9801, 9818, 9847, 9869, 9895, 9913, 9931,
+    9997, 10067, 10139, 10175, 10189, 10223, 10287, 10342, 10602, 10724, 10765, 10803,
+    10837, 10877, 10997, 11055, 1005, 8144, 11129, 11145, 11209, 6103, 11224, 4988,
+    11240, 11279, 11329, 11353, 7353, 11373, 11396, 7353, 11353, 11420, 11460, 11495,
+    11527, 11578, 11617, 11673, 9913, 12065, 12147, 12256, 12342, 12396, 12474, 12512,
+    12541, 12551, 4942, 4757, 12601, 12649, 12759, 12857, 12891, 6131, 12922, 12951,
+    12988, 13168, 13208, 13401, 13488, 13535, 13730, 13803, 13535, 13846, 13918, 13966,
+    14162, 14236, 14288, 14485, 1040, 14590, 14644, 14669, 14732, 14820, 14870, 14893,
+    14965, 14977, 14994, 6131, 15075, 15094, 15127, 6081, 15157, 15211, 15299, 15321,
+    15359, 15394, 15484, 15580, 15623, 15657, 15735, 15821, 15858, 15933, 15972, 16019,
+    16075, 16216, 16252, 16338, 16394, 16482, 16560, 16674, 16754, 16823, 16896, 16983,
+    17053, 17147, 17236, 17277, 17340, 17435, 17517, 17589, 17629, 17677, 17732, 17745,
+    17758, 17773, 17788, 17803, 17820, 17851, 17913, 17927, 17947, 17963, 17975, 18012,
+    18075, 18112, 18166, 18190, 18206, 18224, 18271, 17677, 18318, 18336, 18354, 17803,
+    18372, 18399, 18462, 18533, 18587, 18606, 18625, 18665, 18728, 18790, 18850, 17913,
+    18911, 17947, 18932, 18969, 19161, 19433, 19457, 19531, 19576, 19608, 19652, 19674,
+    19736, 19886, 19931, 19970, 20032, 20061, 20097, 20125, 20173, 20232, 11353, 20411,
+    20461, 20461, 20487, 20535, 20596, 20691, 20777, 20825, 20923, 20989, 21069, 21131,
+    21171, 21211, 21238, 21287, 21329, 21359, 21381, 21416, 21668, 21726, 21797, 21917,
+    5122, 21970, 22022, 22060, 22096, 22158, 22198, 22260, 22288, 22340, 22370, 22405,
+    22425, 22455, 22529, 22607, 22661, 22740, 22794, 14820, 22869, 22893, 22917, 22938,
+    5516, 22966, 12922, 22998, 23087, 5122, 22966, 14820, 23158, 23183, 23244, 23270,
+    23326, 22917, 23489, 23514, 23569, 23657, 4658, 23694, 23750, 23833, 23865, 23917,
+    23941, 23983, 24023, 24069, 22260, 24099, 24172, 24208, 24278, 24305, 24336, 24359,
+    24388, 24423, 24456, 24511, 24657, 24865, 24880, 24922, 24968, 25022, 14977, 25087,
+    25119, 25142, 25175, 25199, 25230, 25274, 25309, 982, 25381, 7917, 25402, 5122,
+    25439, 25460, 25492, 25527, 25592, 25624, 25654, 25716, 25759, 25831, 25901, 25981,
+    26012, 26077, 26127, 26202, 26232, 26249, 26278, 26291, 26306, 26319, 26336, 26352,
+    25119, 982, 26383, 26406, 26426, 26450, 26467, 26491, 26521, 26539, 26563, 26591,
+    26616, 26633, 26683, 26721, 26747, 26776, 26801, 26822, 26855, 26884, 7917, 25381,
+    26902, 26919, 26935, 19886, 26987, 5516, 27020, 4988, 27035, 27339, 27407, 27476,
+    27544, 27629, 27700, 27781, 27866, 28024, 12922, 28039, 28063, 1061, 28079, 28094,
+    28239, 28291, 1092, 28308, 28455, 28517, 28582, 28697, 28809, 28901, 28992, 29068,
+    29106, 29129, 29196, 29245, 29300, 29363, 29374, 29396, 29426, 29448, 29479, 29501,
+    29516, 29534, 4757, 29601, 29663, 5516, 29732, 29773, 29836, 29966, 30103, 30262,
+    30340, 30402, 30482, 30529, 30561, 30571, 30614, 30689, 30739, 30886, 31020, 12922,
+    31185, 31195, 31212, 31224, 31250, 31276, 31297, 31314, 31328, 31346, 31362,
 };
 
 #endif
@@ -3351,10 +3382,11 @@ const Table kTables[kLangs] = {
 
 const uint8_t kPluralBits[(kStrings + 7) / 8] = {
     0x00, 0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x30, 0x74, 0x0F, 0x00, 0x28, 0x04, 0x00, 0xC0, 0xC0, 0x70, 0x04, 0x01, 0x40,
-    0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA8, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x10, 0x00, 0xA0, 0x1F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x60, 0xE8, 0x1E, 0x00, 0x50, 0x08, 0x00, 0x80, 0x81, 0xE1, 0x08, 0x02, 0x80,
+    0x0E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x50, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x10, 0x00, 0xA0, 0x1F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00,
 };
 
 }  // namespace detail

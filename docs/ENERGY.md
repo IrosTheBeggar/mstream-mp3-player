@@ -192,11 +192,18 @@ the whole Dance cost (4.5-8.8) if the Dance tab was left up.
 **Status: in the code (step 2), host-tested, measured idle on the device
 (bright 100: 44.0, dim: 35.7, off: 29.2 USB mA); a wake-redraw bug found
 and fixed there (section 4, "Device run"). The finger, streaming and
-pocket checks are still to do.** What follows under "The change" is the plan; the as-built
-notes are under step 2 in section 4.
+pocket checks are still to do. "Touch when off" (added later, at the
+user's request: by default a touch no longer wakes an off screen) is in
+the code and host-tested, and checked on the device by console
+(2026-11-09: section 4, step 2's "Touch when off" by console); a real
+finger, and the glance's events, CJK title and idle countdown, are still
+to do.** What
+follows under "The change" is the plan; the as-built notes are under
+step 2 in section 4.
 
 **The change.** A `ScreenPower` state machine in lib/core (host-tested),
-with the states Bright, Dim and Off, driven from the loop. Only it calls
+with the states Bright, Dim and Off (and the glance, below), driven from
+the loop. Only it calls
 `setBrightness`, `sleep` and `wakeup`, and it does so under `LcdLock`: the
 panel shares SPI with the SD card.
 
@@ -217,39 +224,69 @@ panel shares SPI with the SD card.
   stays lit until it ends; an off one stays off (it may be night). A
   screen woken during it is held from the wake, except that a touch's or
   PWR's wake from Off keeps its pocket guard until input follows. For the
-  idle warning that wake is input anyway, which ends the warning.
+  idle warning that wake is input anyway, which ends the warning. The
+  glance (below) isn't held: its 10 s run as ever (the toast isn't on it).
 - **The PWR key** (added later, at the user's request): a short press
   turns a lit screen, bright or dim, off at once, a held one too, unless
   something keeps it lit (the list above, where it only counts as input).
-- **What wakes it:** a touch on the glass or the strip, and a PWR short
-  press on an off screen (M5.BtnPWR is already polled). Events that need the listener also
-  wake it:
+- **What wakes it:** a PWR short press on an off screen (M5.BtnPWR is
+  already polled), and the events that need the listener:
   - the headphones-lost dialog;
   - "Couldn't reach";
   - a track that failed;
   - USB plugged in or out;
   - the low-battery warning.
 
-  Headphone keys, track changes and a link coming up do not wake it.
-- **The waking touch is swallowed** until it lifts, as `Ps0` did.
-  It makes no tap, click, hold, volume repeat, swipe or haptic. This
-  applies from **Dim** as well as from **Off**, as one rule: a touch on a
-  screen that isn't at full brightness only brightens it. This is a
-  hearing-safety requirement: a pocket press of B with the speaker as the
-  output must not start music. The scripted finger (`uit`/`uis`) bypasses
-  the latch.
-- **Pocket guard.** A wake from Off with no further input goes back to Off
-  after 10 s, without the dim step.
+  Headphone keys, track changes and a link coming up do not wake it. A
+  touch wakes it only if the listener chose so (the next bullet).
+- **A touch on an off screen** ("Touch when off", added later, at the
+  user's request; `ScreenPower::touch()`) does what the setting says, on
+  the glass and on the strip (A, B, C) alike:
+  - **Nothing** (the default): nothing at all. It isn't a wake, and it
+    isn't input either: the idle power-off's countdown (item 4) and its
+    warning go on, and the sleep timer's fade shows no toast (section 3).
+    Only the PWR key and the events above turn the screen on, so a
+    pocket, a bag or a hand in the dark lights nothing and presses
+    nothing.
+  - **Wake**: it wakes the screen and does nothing else, as every touch
+    did before the setting (the pocket guard and the pocket rule below).
+  - **Track**: it shows **the glance** (below) for 10 s: what is playing,
+    with nothing to tap. Not input either. Another touch shows it 10 s
+    more (a finger resting on it doesn't); then it is Off again, without
+    the dim step, whatever Screen off after says (Never too). The PWR key
+    on the glance opens the whole screen, as from Off.
+
+  **Dim isn't off:** a touch on a dim screen brightens it in every choice
+  (the listener was just using it; the request is about the off screen).
+  An event's wake from Off or the glance still leaves the first touch only
+  answering it (below).
+- **The touch on a dim or off screen, or on the glance, is swallowed**
+  until it lifts, as `Ps0`'s was (on an off screen the touch that wakes
+  it, the one Nothing ignores and the one that shows the glance alike). It makes no tap, click, hold, volume repeat, swipe or haptic:
+  what it does to the screen is all it does. This is a hearing-safety
+  requirement: a pocket press of B with the speaker as the output must
+  not start music. The scripted finger (`uit`/`uis`) bypasses the latch:
+  it acts in the dark and lights the screen; from the glance it only
+  opens the whole screen.
+- **Pocket guard.** A wake from Off by a touch or PWR, or from the glance
+  by PWR, with no further input goes back to Off after 10 s, without the
+  dim step.
 - **Pocket rule** (as built, from the review). The guard alone let the
   second pocket contact on B, 300 ms after the swallowed one, play out
-  loud. After any wake from Off (a touch, PWR, an event, keepLit) and
+  loud. After any wake from Off or the glance (a touch, PWR, an event,
+  keepLit) and
   until a touch lands on the glass (or PWR on a screen kept lit, or the
   console), a B click that would start the **speaker** is refused: the inert buzz,
   and the note "Tap the screen first, then B plays". Pausing, A and C,
   the volume, the B hold and a play on the headphones still act, so a
-  blind pause from a pocket still works. An event's wake from Off (the
+  blind pause from a pocket, the screen off, still works: with Wake a
+  touch, then B; with Nothing or Track the PWR key, then B (on a screen
+  still lit the PWR key turns it off, so there B alone pauses: the touch
+  after the PWR key would do nothing). An event's wake from Off (the
   lost dialog) also swallows the first touch, as a wake from Off does, so
-  a pocket contact can't tap "Use speaker".
+  a pocket contact can't tap "Use speaker". Nothing on the glance attends
+  (none of its touches acts), so the PWR key from it opens the whole
+  screen under the pocket rule, as from Off.
 - **While off:**
   - `Ui::loop` keeps its logic (snapshot, dialogs, toasts, timers) but
     draws nothing;
@@ -260,26 +297,68 @@ panel shares SPI with the SD card.
 
   On wake it does one full redraw (`tabBar_.invalidate()` plus the page's
   repaint). Allow 120 ms between SLPIN and SLPOUT.
-- **Logging.** Every swallowed wake touch logs `[screen] wake by touch at
-  x,y (raw)`. The probe run saw one wake with no touch sent. If phantom
+- **The glance** (Track; `ScreenPower::Level::Glance`): lit at the Bright
+  level, with the UI still dark under it and Now Playing drawn over it
+  read-only (`NowPlayingPage` in Glance mode, a second instance that is
+  never given an event):
+  - the top row, y 0-35, isn't a tab bar: on the background, only the
+    Output cell's content where the tab bar has it (the output's icon in
+    its colour, the volume, the battery with its low blink and charging
+    colour);
+  - the cover, the title, the artist and the album, the seek bar (bars or
+    the plain line, with no knob: nothing to grab), the times, "4 of 16 ·
+    Speaker" and the sleep timer's moon, as on Now Playing;
+  - where the transport is, one dim line, "Power button for controls";
+    in the idle power-off's last 30 s, its countdown in amber ("Turning
+    off in 30 s") instead: the warning's toast is in the dark UI;
+  - nothing playing, or no card: the empty state's picture and lines,
+    without its buttons.
+
+  It follows the music (a new track, the cover's thumbnail, the
+  waveform, the time once a second) with no frames, at the dark loop's
+  20 ms. The card worker runs its lit slices meanwhile, so the cover and
+  the waveform can load (10 s at most; the glance's draws share the SPI
+  bus with it). Toasts, sheets, dialogs and the HUD stay in the dark UI
+  under it: an event that needs the listener opens the whole screen with
+  its dialog, as from Off; the sleep timer's fade shows only as the
+  amber moon's "fading". The PWR key opens the whole screen where the UI
+  was (the page on top when it went off, not Now Playing by force: as
+  PWR from Off), drawn whole, a list's band at once.
+- **Logging.** Every swallowed touch logs where it landed and what it
+  did: `[screen] wake by touch at x,y (raw)`, `[screen] no wake by touch
+  at x,y (raw): touch when off: Nothing (swallowed until it lifts)`,
+  `[screen] the glance by touch at x,y (raw): off again in 10 s
+  (swallowed until it lifts)` (and the button, on the strip). The probe run saw one wake with no touch sent. If phantom
   panel events show up, require the wake touch to last ~30 ms.
 
 **Settings** (Output tab, NVS):
 
 - **Screen off after:** 15 s / **30 s** / 1 min / 2 min / 5 min / Never.
+  Its line reads "dims first, then off" (it said "a tap wakes it" before
+  "Touch when off").
 - **Brightness:** Low 60 / **Medium 100** / High 160 / Max 255. Pick the
   default by eye indoors. 100 saves 3.1 mA over today's 127. Max costs
   +26 mA, which is the point of letting the listener choose.
+- **Touch when off** (added later, at the user's request): **Nothing** /
+  Wake / Track (above). New units and updated ones start on Nothing: the
+  user asked for it as the default, so an updated unit's touch stops
+  waking its screen. Back on 0.13.0 a touch wakes it again (that firmware
+  never reads the key).
 - The Dim level is fixed at 30 (the probe's `Pb30`: check it is readable
   enough to show that the screen is about to go off).
 
 **UX impact.** It behaves like a phone: music plays on with the screen
-dark, and the first touch only wakes it. Glancing at the time needs a tap
-or a PWR press, and another PWR press turns it off again.
+dark, and by default only the PWR key lights it again; another press
+turns it off. A touch in the dark does nothing then, so a pocket can
+neither light the screen nor press anything. With Track a touch shows
+the glance instead: the track without the controls (a pocket's touch
+lights it for 10 s, and still presses nothing), and the PWR key from
+there opens them. With Wake the first touch only wakes it, as before the
+setting.
 
 | | |
 |---|---|
-| **Risk** | medium: the SPI lock around sleep and wake; the hardware-scroll band after a wake mid-list (check on the device); dialogs that open while off must still be there on wake. |
+| **Risk** | medium: the SPI lock around sleep and wake; the hardware-scroll band after a wake mid-list (check on the device); dialogs that open while off must still be there on wake; the glance: the dark gate lifted for its own draws only, the scroll registers moved under it by a library event, and the whole screen drawn right after it (check on the device). |
 | **Effort** | M, 2-3 days with the settings rows and host tests |
 
 ### 3. Sleep timer (the requested feature)
@@ -337,7 +416,10 @@ plan: for its last 30 s a toast "Turning off in 30 s" with **Keep on**
 is up, seen on a lit screen, for example with Screen off after: Never; any
 input keeps it on. Since batch 3 a screen lit when it appears stays lit,
 brightened, until it ends, rather than dimming and going dark partway
-through its countdown: item 2's "held lit".) At the next boot a toast says "Turned off after 20
+through its countdown: item 2's "held lit". On item 2's glance the
+countdown takes the glance's own line, in amber. A touch on the dark
+screen or on the glance isn't input for it: only one that wakes the
+screen (Touch when off on Wake) is, as the PWR key is.) At the next boot a toast says "Turned off after 20
 minutes idle". PWR boots
 the device, stopped, where it was, as today, and (since the resume point,
 "The resume point" in section 4) at the second it paused at: play picks
@@ -664,7 +746,8 @@ but with an MP3 playing the dancer doesn't reach its target (~17/24 at
   shown (`Pk0`, -1.5, noise). This is the "dance tracker off-screen"
   item. The tracker itself is already gated to the tab; only the two
   tap copies ran all the time. **Do it**: no UX change.
-- **Loop delay:** 20 ms only while the screen is off (part of item 2).
+- **Loop delay:** 20 ms only while the screen is off (part of item 2;
+  the glance too: its redraws are *estimated* at a few ms a second).
   Measured as noise while lit, so leave the lit UI at ~5 ms.
 - **Green LED:** already off. Keep it off, and don't use it as a
   "playing" light.
@@ -750,7 +833,7 @@ always shows it.
 | Timer running | picks another duration | restarts the timer from now |
 | Timer running | "+10 min" | adds 10 min to what is left |
 | Timer running | "Turn off" | cancels it |
-| During the fade | any touch or strip press | wakes the screen, swallowed as usual, and shows a toast: "Sleep timer: fading" with **+10 min** and **Turn off** |
+| During the fade | any touch or strip press on a lit screen, or a wake (the PWR key; a touch with Touch when off: Wake, swallowed as usual) | shows a toast: "Sleep timer: fading" with **+10 min** and **Turn off**. A touch on an off screen that doesn't wake it (Nothing, the default) shows nothing, nor does the glance's (Track: its moon reads "fading"); neither is input (item 2) |
 
 Only the toast's buttons act on the timer. A tap elsewhere doesn't
 cancel it: a stray touch shouldn't undo a timer the listener set before
@@ -983,7 +1066,8 @@ that it fits.
 ### Step 2: screen policy and the swallowed wake (item 2)
 
 **Status: done in the code, host-tested (test_screen_power, the latch
-cases in test_ui_input, the settings texts in test_ui_library); the
+cases in test_ui_input, the settings texts in test_ui_library; "Touch when
+off"'s key in test_nvs_layout, the glance's top row in test_ui_nav); the
 on-device checks below are still to do.** As built:
 
 - `ScreenPower` (lib/core): Bright, Dim (backlight 30) for the last 10 s
@@ -1025,13 +1109,74 @@ on-device checks below are still to do.** As built:
   window; a pass after a longer gap is a new touch however the passes
   ran. The recognisers keep following. The scripted
   finger isn't a finger for it: it acts in the dark, and wakes the screen
-  (Why::Console) so what it does shows.
+  (Why::Console) so what it does shows (from the glance it only opens the
+  whole screen: `Ui::onEvent` drops its glass events there, and its strip
+  presses reach `ButtonPolicy` as from Off). The latch's `woke` (a finger
+  that landed) goes to `ScreenPower::touch()`, which says what it does
+  (below); the latch itself didn't change for "Touch when off": every
+  touch on Off or the glance is swallowed through its lift and 400 ms.
+- "Touch when off" (added later, at the user's request; item 2):
+  `ScreenPower::OffTouch` (Nothing, Wake, Glance; the labels Nothing,
+  Wake, Track), `setOffTouch()`, and `touch(now)` for each swallowed
+  touch, which returns what it did (`Touched`): Ignored (Off, Nothing),
+  Woke (Off with Wake, or Dim), Answered (lit by an event or keepLit from
+  Off, or the panel not awake yet), Glance (Off, Track), GlanceAgain (on
+  the glance). Only Woke and Answered are input (`takeInput()`) and a
+  wake (`takeWoken()`). The glance is a fourth level, `Level::Glance`
+  (last, so the others keep their values): the Bright backlight (`Pb`'s
+  too), `touchActs()` false, `unattended()` true, no pocket guard;
+  `step()` turns it Off 10 s (`kGlanceMs`) after its last touch
+  (`Why::Glance`), whatever the timeout (Never too), with no dim step, no
+  hold (`holdLit` doesn't reach it) and no help from activity (nothing on
+  it acts). Off or the glance (`dark()`) is what "from Off" means in
+  `wake()`, `powerKey()` and keepLit: the PWR key on the glance is a wake
+  from Off (the pocket guard, the pocket rule), and an event's wake or
+  keepLit's from it is the whole screen, whose first touch only answers
+  it. A choice changed during a glance (the console's `Pst`) takes the
+  next touch, as from Off.
+- The decisions for it, and why:
+  - Dim isn't off: a touch brightens a dim screen in every choice (the
+    listener was just using it).
+  - An event's wake (or keepLit's) from Off or the glance still has its
+    first touch only answer it, as before: a pocket's contact can't tap
+    the dialog.
+  - A touch Nothing ignores and the glance's touches aren't input: they
+    don't restart the idle power-off's countdown or end its warning, and
+    show no sleep-fade toast (whose buttons raise the level). Otherwise
+    a pocket would keep the device on.
+  - The glance is a look, not a lit screen: no countdown toast holds it,
+    it isn't dimmed, Never doesn't keep it, and a finger resting on it
+    doesn't renew it (only a landing does).
+  - The PWR key on the glance opens the whole screen where the UI was
+    (the page on top when it went off, not Now Playing by force), under
+    the pocket guard and the pocket rule: as PWR from Off, one rule.
+  - An event during a glance (the headphones lost, "Couldn't reach", a
+    failed track, USB) or keepLit's start: the whole screen with its
+    dialog, as from Off. The idle warning and the sleep fade arriving
+    during one show on it read-only (the countdown line, the moon) and
+    don't hold it; the PWR key, input, keeps the player on.
+  - The scripted finger still bypasses the latch and opens the whole
+    screen (`Why::Console`), so device scripts that light the screen with
+    `uit` before an `X` screenshot keep working; `Psf` stands in for a
+    real finger.
+  - The card worker runs its lit slices during the glance
+    (`Ui::coversAllowed()` is true there, and `CardTasks`' `in.dark`
+    follows it), so its cover and waveform can load: 10 s at most, and
+    the glance's draws share the SPI bus with the card.
+  - No key is Nothing, for new and updated units alike (the user's
+    default).
 - `app/ScreenControl`: the hardware glue, the only caller of
   `setBrightness`, `sleep` and `wakeup` (the last two under `LcdLock`).
   Each pass: `beginPass()` (the PWR key's short press via `M5.BtnPWR`,
   USB in or out from AXP192 reg 0x00 once a second, `Input::setLit()`),
-  `afterInput()` (the wake, logged `[screen] wake by touch at x,y (raw)`,
-  with the strip button if it was one; else activity), and `step()` last
+  `afterInput()` (a swallowed touch, `swallowed()`: what
+  `ScreenPower::touch()` made of it, logged with where it landed and the
+  strip button if it was one: `[screen] wake by touch at x,y (raw)`,
+  `[screen] no wake by touch at x,y (raw): touch when off: Nothing
+  (swallowed until it lifts)`, `[screen] the glance by touch at x,y
+  (raw): off again in 10 s (swallowed until it lifts)`, `[screen] the
+  glance again by touch ...`, `[screen] event's wake answered by touch
+  ...`; else activity), and `step()` last
   in the loop. Off: the UI goes dark first, then backlight off and
   sleep-in. Wake: sleep-out with the backlight still off, 5 ms, the UI
   draws everything, then the backlight (`[screen] awake in N ms`). Fixed
@@ -1042,7 +1187,29 @@ on-device checks below are still to do.** As built:
   a touch meanwhile is still a swallowed wake. After a sleep-out, 5 ms
   before anything is drawn (the ILI9342C's wait before the next command;
   fixed in review: the next frame could come 1 ms later). Every change logs
-  `[screen] <from> -> <to> (<why>)` with when the next one is due.
+  `[screen] <from> -> <to> (<why>)` with when the next one is due
+  (`[screen] off -> glance (a touch, swallowed); off again in 10 s`,
+  `[screen] glance -> off (the glance's 10 s)`). The glance is the UI's
+  dark mode with the glance drawn over it, and `apply()` decides by what
+  the panel and the UI show now (`asleep_`, `glanceShown_`), never by the
+  level before: one pass can change the level twice (a touch's glance,
+  then an event's wake), and a step that waits for the 120 ms keeps its
+  state.
+  - Off to the glance: the sleep-out, 5 ms, `onGlance(true)` (the UI
+    draws it whole), then the backlight (`[screen] awake in N ms (the
+    glance and sleep-out)`).
+  - The glance to Off: `onGlance(false)` (nothing drawn: the UI is dark
+    under it), then the sleep-in as ever.
+  - The glance to the whole screen (the PWR key, an event, keepLit, the
+    console), the panel awake: the backlight to 0, `onGlance(false)`,
+    `onDark(false)` (the UI drawn again), the backlight (`[screen] the
+    whole screen in N ms (the panel awake)`). A lit screen to the glance
+    in one pass (a PWR off and a fresh landing before the sleep-in) is
+    the same, dark first.
+  - `onGlance(true)` returns whether the glance was drawn: one nobody
+    drew (the UI refused, or no UI: no PSRAM) keeps the backlight off
+    (`[screen] the glance: not drawn (no UI to draw it): the backlight
+    stays off`), since the panel's memory is stale.
 - The event wakes: `Ui::headphonesLost()` (the dialog), `Ui::playFailed()`
   ("Couldn't reach"), `Ui::noteFailures()` (a track that failed), and USB
   in or out, through `UiHost::wakeScreen()`. There is no low-battery
@@ -1058,18 +1225,41 @@ on-device checks below are still to do.** As built:
   its scan and shows "Search again". On the wake: the list's scroll
   registers are sent again (`ListScroller::resend()`, the panel should
   keep them through sleep-in), the tab bar, the page (a list's band at
-  its next frame), then the jump grid or coach cards, a sheet, the volume
+  its next frame; after a glance at once and whole, with the Library's
+  status line, a modal up or not, so no glance pixels show around a
+  dialog), then the
+  jump grid or coach cards, a sheet, the volume
   sheet, a dialog and the toast; a HUD from the dark is dropped.
   A screen of its own (calibration, spike tools) is never gated: the UI
   lets go of the gate when it is suspended.
-- The quiet hook: `setQuiet(screen off and nothing playing or waiting)`.
-- The console: `Ps` the state, `Ps0` the policy's Off (a touch's wake has
-  the pocket guard), `Ps1` on; `Pb<n>` is the Bright level until restart
-  (`Pb0` the setting's), refused while dim or off.
-- Settings: the Output tab's rows "Screen off after" and "Brightness"
-  (after Haptics), each a value pill; a tap takes the next choice (a
-  sheet only has room for 3 rows). NVS namespace `screen`, keys
-  `off_after` and `bright` (the choices' indices).
+- The glance's drawing (`Ui::setGlance()`, `NowPlayingPage` in Glance
+  mode, `TabBar::updateGlance()`: ARCHITECTURE.md, "The glance"): the
+  dark mode stays on under it, and the UI lifts the gate only around the
+  glance's own draws, as `@identify`'s banner does. Its second cover
+  sprite (98 x 98, RGB565: 19,208 B of PSRAM) is made at the first
+  glance and kept.
+- The quiet hook: `setQuiet(screen off and nothing playing or waiting)`;
+  the glance counts as off (nothing on it acts, and it may be a pocket's).
+- The console: `Ps` the state (with the choice: `touch when off: Track`,
+  and on the glance `(the glance: nothing on it acts; the PWR key opens
+  the screen)`), `Ps0` the policy's Off (a touch's or PWR's wake has the
+  pocket guard), `Ps1` on (on the glance: the whole screen); `Psf` a real
+  finger's landing at 160,120, as the latch reports it (the scripted
+  finger bypasses the latch, so it can't show "Touch when off"); `Pst0` /
+  `Pst1` / `Pst2` the choice, saved, as the Output row; `Pb<n>` is the
+  Bright level until restart (`Pb0` the setting's), refused while dim,
+  off or on the glance (one set before shows on it).
+- Settings: the Output tab's rows "Screen off after", "Brightness" and
+  "Touch when off" (after Haptics), each a value pill; a tap takes the
+  next choice (a sheet only has room for 3 rows). "Touch when off" has a
+  line for each choice ("the power button wakes it", "a tap wakes it", "a
+  tap shows the track") and its own icon: the dark screen with a
+  fingertip on its corner, a ring around it when a touch there does
+  something. NVS namespace `screen`, keys `off_after`, `bright` and
+  `touch_off` (the choices' indices; `touch_off` is schema 6's, a u8, no
+  key Nothing: ARCHITECTURE.md, "NVS: the rules"). A change logs
+  `[screen] touch when off: Nothing -> Track (saved once the taps rest)`,
+  and the boot line ends `touch when off: Nothing`.
 
 **Code:**
 
@@ -1078,24 +1268,55 @@ on-device checks below are still to do.** As built:
 - A wake-swallow latch in `ui/Input`, reusing the `suspended_` drop path.
 - A dark mode in `Ui::loop`: no drawing, dance inactive, no thumbnail
   jobs, `idleMs` 20.
-- Output-tab rows for "Screen off after" and "Brightness", saved in NVS.
+- Output-tab rows for "Screen off after", "Brightness" and "Touch when
+  off", saved in NVS.
+- "Touch when off": `ScreenPower::touch()` and `Level::Glance`;
+  `ScreenControl::swallowed()` and the glance in `apply()`; the glance's
+  drawing in `ui/` (Now Playing in a mode, no new page).
 
 **Host tests** (test_screen_power: timings, exceptions, wakes, the pocket
-guard; test_ui_input: the latch):
+guard, "Touch when off"; test_ui_input: the latch):
 
 - the latch with ButtonGesture and TouchRecognizer sequences;
 - a B click, a B hold, a C hold and a swipe up from the strip in the
   dark each produce no event;
 - the lift is swallowed too;
 - a second finger;
-- the scripted finger bypasses the latch.
+- the scripted finger bypasses the latch;
+- "Touch when off" in test_screen_power: the choices, their labels and
+  the clamp (`test_off_touch_choices_and_labels`); Nothing, with the PWR
+  key, Dim and an event's wake beside it
+  (`test_a_touch_on_an_off_screen_does_nothing_by_default`); Wake
+  (`test_the_wake_choice_is_the_old_touch`); the glance's 10 s, again,
+  with Never, wraparound (`test_the_glance`); the PWR key on it
+  (`test_power_key_on_the_glance_opens_the_screen`); an event, keepLit,
+  the console, a choice changed during it and the sleep timer's off
+  (`test_what_ends_the_glance`);
+- the latch's pipeline under each choice in test_ui_input: on Nothing a B
+  click, a B hold, a C hold, a swipe from the strip and a tap make no
+  event and leave the screen off, then the PWR key and the pocket rule
+  (`test_the_default_ignores_a_touch_on_an_off_screen`); the PWR key under
+  a finger Nothing ignored (`test_the_power_key_under_an_ignored_finger`);
+  on Track nothing on the glance acts, a landing renews it and a resting
+  finger doesn't, the PWR key under a finger on it
+  (`test_the_glance_has_nothing_to_tap`); the older cases that test a
+  touch's wake run on Wake;
+- the key in test_nvs_layout (`test_touch_when_off_from_what_is_saved`,
+  schema 6 in the steps and the migration matrix); the row's texts in
+  their rooms in every language in test_ui_library and test_ui_strings,
+  and the glance's line and the idle countdown (30, 10 and 1 s) in 296 px
+  of Small in every language (test_ui_library's `test_output_texts_fit`);
+- the glance's top row in test_ui_nav: only the Output cell's state
+  redraws it, never the EQ's steps
+  (`test_the_glance_row_redraws_only_its_output_cell`).
 
 **On the device:**
 
 - `Pl` Bright vs Dim vs Off while streaming and idle. Expect -12 and -15
   USB mA, plus 1-2 from not drawing (estimate).
 - Wake latency under 150 ms.
-- Speaker as output, paused, screen off: tap B, hold B, hold C, swipe up,
+- Speaker as output, paused, screen off, Touch when off on Wake (`Pst1`):
+  tap B, hold B, hold C, swipe up,
   tap a row. The log shows only `[screen] wake`, and no audio starts.
 - The same, then B again within 10 s: the inert buzz, "Tap the screen
   first, then B plays", no audio; a tap on the glass, then B plays.
@@ -1109,7 +1330,68 @@ guard; test_ui_input: the latch):
 - A failed pairing (headphones not in pairing mode), then leave it: the
   screen dims and goes off as usual.
 - A wake mid-list leaves no corrupted band.
-- Count false wakes over an hour in a pocket.
+- Count false wakes over an hour in a pocket (on Nothing, every contact
+  logs `[screen] no wake by touch`, at least 400 ms apart: the count
+  without the screen ever lighting).
+- "Touch when off" by console (`Psf` stands in for a finger):
+  - `Pst0`, `Ps0`, `Psf`: `[screen] no wake by touch at 160,120 (raw):
+    touch when off: Nothing (swallowed until it lifts)`, the screen stays
+    off; `Psk` wakes it (`[screen] wake by the power key`).
+  - `Pst2`, `Ps0`, `Psf`: `[screen] the glance by touch ...`, `[screen]
+    off -> glance (a touch, swallowed); off again in 10 s`, `[screen]
+    awake in N ms (the glance and sleep-out)`, `[ui] glance: drawn in N
+    ms`; 10 s later `[screen] glance -> off (the glance's 10 s)`. `Psf`
+    on the glance: `the glance again`. `Ps` and `ui` say it is the glance.
+  - An `X` screenshot of the glance: the top row with no tabs (the
+    output, the volume and the battery at the right); Now Playing
+    without its transport, "Power button for controls" centred on y 204;
+    no knob on a plain-line track, bars without one on a waveform track;
+    nothing queued and no card without buttons; a CJK title, and Japanese
+    (`uiLja` before the glance: a `ui` command lights the whole screen).
+    The idle countdown on it by eye (`X` is console input and ends the
+    warning).
+  - While glancing: a track change (`n`, or the headphones' keys), the
+    volume keys: the glance follows (title, cover, waveform, time; the
+    volume). The charging colour: USB plugged in first, then the glance.
+    `ui` cost lines after a minute: a few ms a second, a slow pass names
+    the glance.
+  - `Psk` on the glance: the whole screen where it was (a Library list
+    scrolled mid-way drawn right, a dialog left in the dark with nothing
+    of the glance around it), off again 10 s later without input, and B
+    on the speaker refused until a touch on the glass. The headphones
+    lost during a glance: the whole screen with its dialog. USB in or out
+    during a glance (read once a second, an event): the whole screen,
+    `[screen] glance -> bright (an event for the listener: USB plugged
+    in)`, and the next touch only answers it.
+  - The Output row: the three values and their lines (screenshots, in
+    English and another language); the choice kept over a reboot.
+  - **Run on 2026-11-09** (ELF 6a5b0372; an NVS already at schema 6, no
+    `touch_off` key: Nothing at boot, `[screen] off after 15 s (dims 10 s
+    before), brightness Medium (100), touch when off: Nothing`). Nothing:
+    `no wake by touch`, the screen stayed off (`Ps`: backlight 0, panel
+    asleep), `Psk` lit it in 60 ms. Wake: `wake by touch`, as before; a
+    dim screen on Nothing brightened (`dim -> bright (a touch,
+    swallowed)`). Track: the glance drawn in 53-55 ms (`awake in 59-61 ms
+    (the glance and sleep-out)`), `glance -> off (the glance's 10 s)`
+    after 10011 ms; `Psf` 8 s in gave 10 s more (over after 17581 ms).
+    The `X` of a stopped track: the status row with no tabs, the cover,
+    title, artist and album, the bars with no knob, "Stopped, 11 of 12"
+    amber, "Power button for controls". `Psk` on it: `glance -> bright
+    (the power key)`, `the whole screen in 45-57 ms (the panel awake)`,
+    Now Playing whole with its transport, then the pocket guard's off
+    10 s later. Over the Library tab (hardware scroll on, start address
+    198) the same, and the `X` after it showed the list whole, nothing of
+    the glance left. The Output row: "Track" with "a tap shows the
+    track", a tap took Nothing ("the power button wakes it"), `[nvs] saved
+    screen/touch_off (1 key, 3 ms)`. The loop task's stack stayed at its
+    boot low, 3,788 B free of 8 KB. Not run: the rest of the list above
+    (CJK, events and USB during a glance, the idle countdown, a reboot
+    with a choice saved) and the checks by hand below.
+- "Touch when off" by hand (the scripted finger bypasses the latch): on
+  Nothing a tap, a B click, a C hold and a swipe on the off screen do
+  nothing (no light, no audio, no volume step); on Track the same on the
+  glance, a tap renews it and a finger resting on it doesn't; on Wake the
+  checks above.
 
 ### Step 3: amp, IMU, EXTEN, taps (items 5 and 9)
 
@@ -1284,7 +1566,8 @@ measured for them in section 1.
   109.8 at 127 minus 3.1, minus the knobs); the headphones-lost dialog and
   "Couldn't reach" waking a dark screen, and its first tap only answering it.
 - By hand (the scripted finger bypasses the wake latch by design, so it
-  can't test it): from the dark on the speaker, tap B, hold B, hold C,
+  can't test it; since "Touch when off", item 2, these are Wake's, and
+  step 2 lists the other choices' checks): from the dark on the speaker, tap B, hold B, hold C,
   swipe up, tap a row: only `[screen] wake by touch`, no audio; B again
   within 10 s: the inert buzz and "Tap the screen first, then B plays"; the
   pocket guard (a touch or PWR wake from off, nothing more: off again 10 s
@@ -1294,7 +1577,8 @@ measured for them in section 1.
 - By ear: no pop at the amp's off and on at 10% and 100%; a resume after
   more than 2 s paused isn't clipped; on battery with USB unplugged, the
   speaker is audible with EXTEN off.
-- USB in or out waking the screen; false wakes over an hour in a pocket.
+- USB in or out waking the screen (from off, and from the glance); false
+  wakes over an hour in a pocket.
 
 ### Step 4: sleep timer (section 3)
 
@@ -1423,7 +1707,11 @@ a finger or an ear is still to do.** As built:
     in Body, Turn off to the screen's edge): shown when the fade starts
     and again on any touch, strip press or PWR wake during it (a wake is
     swallowed as usual: `ScreenControl::takeWoken()`, the pass's Down or
-    button event); it stays up until the fade ends. (Since batch 3 a screen
+    button event); it stays up until the fade ends. Since "Touch when off"
+    (item 2) a touch's wake from Off is only Wake's: a touch Nothing
+    ignores, and the glance's, set neither (they aren't input), so in the
+    dark only the PWR key, or a touch on Wake, brings the toast back; the
+    glance shows the fade as its amber moon, "fading". (Since batch 3 a screen
     lit when the fade starts stays lit through it, brightened, and one
     woken during it too, except that a wake from Off keeps its pocket
     guard until input follows: `ScreenPower`'s `holdLit`. The pause's
@@ -1441,10 +1729,12 @@ a finger or an ear is still to do.** As built:
     right edge (fabric pressure makes those), nor on the touch that
     attended a screen woken from off (`ScreenPower::glassLanded()` /
     `landedUnattended()`): in a pocket the first contact wakes the screen
-    (swallowed) and the next lands on the lit toast. That touch attends
+    (swallowed; with Touch when off on Wake, or after the PWR key) and the
+    next lands on the lit toast. That touch attends
     the screen (B plays on the speaker again) but the toast shows no press
     and does nothing; the listener's next tap acts. So after a wake from
-    off it is two taps: one to wake, one on the glass, then the button.
+    off it is the wake (a tap on Wake, or the PWR key), one tap on the
+    glass, then the button.
   - Choices toast what they did ("Sleep timer: 30 min", "Sleep timer: end
     of album", "Sleep timer off", "Sleep timer: 33 min left" after +10).
 - +10 min never leaves less time than before (`SleepTimer::canExtend()`):
@@ -1532,12 +1822,15 @@ checked on the device (below).
 - After the timer's pause, the headphones' play key (and a bud taken out
   and put back in): `[bt] headphones: play (ignored: paused, paused by the
   sleep timer)`, nothing plays; B plays.
-- During the fade, with the screen off: a tap only wakes it, and the
+- During the fade, with the screen off and Touch when off on Wake: a tap
+  only wakes it, and the
   toast is up; the next tap on +10 min does nothing (`[screen] a touch on
   the glass: attended`, `[ui] sleep toast: the first touch after a wake
   from off ...`); the one after brings the music back over ~2 s, Turn off
   too; a tap elsewhere changes nothing. With the device in a pocket
-  during a fade, the level never comes back up.
+  during a fade, the level never comes back up. On Nothing a tap does
+  nothing (the screen stays dark, no toast) and the PWR key wakes it with
+  the toast; on Track the glance shows "fading" by the moon, no toast.
 - With the "..." sheet open when the fade starts, a tap on the toast's
   +10 min acts (it doesn't only close the sheet); the sheet's Sleep
   timer row counts down while it is open, reads "Fading", then "Off".
@@ -1579,7 +1872,9 @@ power-off on battery is still to do.** As built:
   counts from the pause, the sleep timer's included (section 3, step 6):
   nothing special is needed for it.
 - **Input**: `ScreenControl::takeInput()` (a touch on the glass or the
-  strip, a waking one too, and PWR), the pass's touch or button events, a
+  strip, a waking one too, and PWR; not a touch "Touch when off" ignores
+  on an off screen, nor the glance's: item 2, a pocket's contacts would
+  keep the device on), the pass's touch or button events, a
   headphone key that acted (Play, Pause on Bluetooth, Next, Prev, the
   volume keys; **not** a key that did nothing: a Play ignored after the
   sleep timer's pause, a Pause while already paused, a Next or Prev
@@ -1603,7 +1898,14 @@ power-off on battery is still to do.** As built:
   A touch landing on it keeps it on (Keep on logs `[power] idle: Keep
   on`), and the rest of that touch is the toast's; a touch elsewhere keeps
   it on too and acts as usual. It doesn't light a dark screen (the spec's
-  "it may be night"), and a wake is input anyway (it ends the warning).
+  "it may be night"), and a wake is input anyway (it ends the warning):
+  the PWR key's, or a touch's on Wake. On Nothing a touch on the dark
+  screen ends nothing. On the glance (Track) the countdown takes its
+  line, in amber, where the transport is ("Turning off in 30 s", without
+  Keep on: nothing on the glance acts), but the glance isn't held for it
+  and its touches aren't input: the PWR key keeps the player on (and
+  opens the whole screen). `stepIdle()`'s line says so:
+  `on the glance (it goes off in its 10 s; the PWR key keeps it on)`.
   A lit screen stays lit while it is up (since batch 3: `holdLit`, item
   2; before, it could dim and go dark partway through, seen by hand).
   **So it is mostly seen with Screen off after set to Never**: the
@@ -2337,8 +2639,9 @@ on-device checks below are still to do.
   - an Off screen stays off (the night rule), and the sleep timer's
     screen off at its pause still turns a held screen off;
   - a screen woken during it is held from the wake: an event's wake at
-    once; a touch's or PWR's wake from Off keeps the pocket guard (off 10
-    s later) until input follows, then is held. For the idle warning that
+    once; a touch's (Touch when off on Wake) or PWR's wake from Off keeps
+    the pocket guard (off 10 s later) until input follows, then is held
+    (the glance isn't held at all: item 2). For the idle warning that
     wake is input itself: `ScreenControl::takeInput()` ends the warning in
     the same pass (stepIdle runs before the screen's step), so the screen
     follows the guard and then the normal timeout. The swallowed wake
@@ -2366,13 +2669,15 @@ on-device checks below are still to do.
   bright): it stays bright to the power-off (on USB: "USB power at the
   last moment", then the countdown again: dims 20 s later). From Dim (a
   tap, then `Is55`: the warning ~25 s in, the screen dim from 20 s):
-  bright again at once, and Keep on acts on the first tap. The screen off when it appears: stays off (a tap then wakes
-  it, swallowed, and keeps the device on: the pocket guard's 10 s, then
-  dark).
+  bright again at once, and Keep on acts on the first tap. The screen off when it appears: stays off (with Touch
+  when off on Wake a tap then wakes it, swallowed, and keeps the device
+  on: the pocket guard's 10 s, then dark; on Nothing a tap does nothing
+  and keeps nothing on, and the PWR key does what Wake's tap did; on
+  Track the glance shows the countdown and goes dark in its 10 s).
 - The sleep fade on a lit screen (`Ts40` with Screen off after 30 s: the
   fade starts 10 s in): lit through the fade, off at the pause. Woken by
-  a tap during the fade (from off): off again 10 s later unless tapped
-  again; a second tap holds it to the end.
+  a tap during the fade (from off, on Wake; or by the PWR key): off again
+  10 s later unless tapped again; a second tap holds it to the end.
 
 ### Review fixes (the resume point and the held screen)
 
@@ -2569,8 +2874,8 @@ input and ends the warning):
   USB it stays on at the last moment; `Iu1` doesn't change that read):
   the second after the boot. (The same saved point as the pause's, which
   the hard reset above applied.)
-- A finger on Keep on; a tap from Off during the sleep fade (the pocket
-  guard; the scripted finger bypasses the wake latch).
+- A finger on Keep on; a tap from Off during the sleep fade (on Wake:
+  the pocket guard; the scripted finger bypasses the wake latch).
 - Over the headphones: a restart while streaming; a 48 kHz file refused.
 - A file changed on the card since its point was saved; a VBR MP3 without
   a TOC; a FLAC with an ID3 tag in front.
@@ -2713,6 +3018,22 @@ The device checks for step 3:
 - a scripted finger (`uit`) still works.
 
 If INT doesn't assert in Monitor mode on this panel, drop step 3.
+
+**"Touch when off" (item 2, added later) changes nothing in this
+triage's findings.** Step 3's checks above were written for the behaviour
+that is now Wake (`Pst1`): on Nothing, the default, a touch or a strip
+press on an off screen logs `[screen] no wake by touch ...` and the screen
+stays off (step 3 was taken out anyway: "Audit 2: measured"). Its
+default, Nothing, ignores a touch on an off screen in software
+(`ScreenPower::touch()`): the chip keeps scanning while Off (in Monitor by
+itself 30 s after the last touch, "Audit 2: measured"), the input layer
+reads it as ever, and nothing in the controller, M5GFX's driver or the
+latch stands in the way of ignoring what it reports. Nor is there a
+saving to take for Nothing: Monitor against Active measured under 1 USB
+mA, and Hibernate stays rejected, since Wake and Track need the touch
+read while Off, leaving it resets the LCD, and the latch must still see a
+finger left on the off screen, so it does nothing when the PWR key
+lights it.
 
 ### P2: QIO flash
 

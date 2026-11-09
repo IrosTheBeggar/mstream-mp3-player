@@ -97,9 +97,10 @@ struct AppState {
   bool ringMatters = false;      // playing, and the ring has filled once (a low ring is a risk)
   ButtonPolicy::Feedback feedback;  // the touch buttons' last hold (the HUD)
   // The screen's settings (ScreenPower's choices: "Screen off after",
-  // "Brightness"), for the Output tab's rows.
+  // "Brightness", "Touch when off"), for the Output tab's rows.
   uint8_t screenTimeout = 1;
   uint8_t brightness = 1;
+  uint8_t screenTouch = 0;  // ScreenPower::OffTouch: Nothing, Wake, Track
   // The sleep timer (SleepTimer; ENERGY.md section 3): running (counting,
   // armed for an end, or fading), fading, the sheet's outlined choice
   // (SleepSheet's 0-7, -1 none), the "..." row's state ("Off", "23 min",
@@ -225,9 +226,11 @@ public:
   virtual void deviceInfo(deviceinfo::Facts& f) = 0;
 
   // ---- the screen (ScreenPower; saved) ----
-  // "Screen off after" and "Brightness": ScreenPower's choice indices.
+  // "Screen off after", "Brightness" and "Touch when off": ScreenPower's
+  // choice indices.
   virtual void setScreenTimeout(int choice) = 0;
   virtual void setBrightness(int choice) = 0;
+  virtual void setScreenTouch(int choice) = 0;
   // Something needs the listener (the headphones lost, "Couldn't reach", a
   // track that failed): the screen lights if it was dim or off, and the
   // countdown starts again. `why` is logged.

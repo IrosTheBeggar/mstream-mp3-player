@@ -195,7 +195,8 @@ Where the facts come from:
   of it until it lifts.
 - When a toast goes away, all of Now Playing is repainted, because the
   page has no header (`Ui.cpp:465-470`). Toasts sit at y 36-71.
-- The touch that wakes the screen (from Dim or Off) is swallowed through
+- A touch on a dim or off screen, or on the glance (whatever "Touch
+  when off" makes of it, ENERGY.md item 2), is swallowed through
   its lift (WakeLatch). A finger resting on the glass as the screen dims
   is taken with a Cancel.
 
@@ -591,6 +592,9 @@ nothing else moves between a track with a shape and one without.
 | **Pressed** | a Down on the bar, before it is a tap or a scrub | 6 px DIV, rows 7-12 (y 144-149, radius 3) | the accent, even paused (it is the active control), to the live position | r 4 TXT with an r 2 accent dot, at the live x | none | yes |
 | **Scrubbing** | a sideways drag, on the bar | 6 px DIV, rows 7-12, to the reach; past it, FAINT dots (3 x 2 px every 6 px, rows 9-10) to x 307 | the accent, to the knob | r 4 TXT with an r 2 accent dot, at the target's x (at the marker while staying) | 2 x 9 px DIM, rows 6-14, at the live x; hidden while staying | blank (BG) |
 | **Off** | slid off (2.6) | 6 px DIV, rows 7-12 | DIM, to the live position | r 4 DIM, at the live x | none | blank |
+
+The glance (section 7) draws the bar at rest with no knob on the plain
+line, as the bars have none: it can't be touched there.
 
 The fill and every x go through `SeekBar::xOf()`, as they always did:
 `min(pos, len) · 296 / len`. At rest pos is the whole second (4.5), under a
@@ -1058,7 +1062,7 @@ outputs read the ring on their own tasks.
 |---|---|
 | A failed track (`s.failed`, "Can't play this track") | Inert. While playing it is never seen, because `update()` skips it first. It stays only when stopped after every track failed, or paused on a start that then failed, with a length of 0. `seek()` returns NoPlace too |
 | Unknown length (the dotted line) | Inert. A header-less VBR file gets an estimate after about a second of frames. An entry never held (stopped after a boot with no resume point; cued by next while paused) has its record's length (5.3), so it is seekable and shows its waveform; with no record it has no bar until it plays |
-| An entry never held, with a record | Seekable at the record's length, to the second, before its first play. The total can read a second more until the play's header gives the length to the ms (the record is rounded, the backend's floored): 2:25, then 2:24, as at the first second of any play. A tap on the bar sets a start point and saves it, as on a resume point's bar (a touch that wakes the screen is swallowed, as anywhere). The waveform's length check (WAVEFORM-INDEX.md 11) passes, both lengths coming from the card's records of the file, so a file that isn't its record's shows only at the play, as the plain line |
+| An entry never held, with a record | Seekable at the record's length, to the second, before its first play. The total can read a second more until the play's header gives the length to the ms (the record is rounded, the backend's floored): 2:25, then 2:24, as at the first second of any play. A tap on the bar sets a start point and saves it, as on a resume point's bar (a touch on a dim or dark screen is swallowed, as anywhere). The waveform's length check (WAVEFORM-INDEX.md 11) passes, both lengths coming from the card's records of the file, so a file that isn't its record's shows only at the play, as the plain line |
 | Under 10 s | Inert |
 | Built-in tracks (tones, click tracks) | Seekable. Their length is the catalog's hint; they count from the start ms (`C2AB.cpp:861-875`), exactly, at no SD cost. A click track's grid starts again, and the Dance tab's tracker resets on the new epoch |
 | Waiting (PlayGate) | Seekable (5.2), from y 138 (as when not waiting). During a scrub the readout row covers the waiting buttons' lower halves and the artist row is cleared, and `drawMiddle()` puts them back. The spinner keeps turning in its own zone |
@@ -1069,7 +1073,8 @@ outputs read the ring on their own tasks.
 | LAME VBR, by its TOC | It lands within 0.74 s (p95; 0.47 s on the device's 20 points), showing the time asked. Later seeks back into what played go by the run's index and keep that start's timeline, error and all (`the run's index; the time asked`); in a run from the top they are exact |
 | Opus | It lands on the sample asked (the reader's plan by the pages' granule positions, a 200 ms preroll decoded and dropped), showing the time asked; the file opens again from the open cache with one read and a plan costs ~10-17 reads / ~50-80 KB of header reads on a 128k file, so a seek's first audio is expected ~165-215 ms after the lift (OPUS.md section 10; M3 measured 287-453 with a full second open and the plan's wasted reads). A pause's anchor is its sample, resumed with a 600 ms preroll |
 | A paused seek and the resume anchor | The exact paused-sample anchor goes. The next play (and a boot) starts by the second: exact for CBR, FLAC, Opus, built-in tracks, and inside the paused run's index (which the stop keeps) when that run was exact; by the TOC for a LAME VBR file after a reboot |
-| The screen dim or off | The first touch only wakes it, swallowed through its lift, so a scrub can't begin from Dim or Off. A moving finger keeps the screen lit. One held still for 15 s stops counting; if the screen dims under it, the touch ends with a Cancel: no seek |
+| The screen dim or off | On a dim screen the first touch only brightens it; on an off one it does what "Touch when off" says (nothing by default, a wake, or the glance: ENERGY.md item 2). Either way it is swallowed through its lift, so a scrub can't begin from Dim or Off. A moving finger keeps the screen lit. One held still for 15 s stops counting; if the screen dims under it, the touch ends with a Cancel: no seek |
+| The glance ("Touch when off: Track") | Now Playing drawn read-only over the dark screen for 10 s: the bar at rest (bars, the plain line or the dots) with no knob, since nothing on it can be grabbed. No touch reaches it (each is swallowed through its lift and only shows the glance 10 s more), so it never seeks. The power button opens the whole screen, where the bar is as ever |
 | A toast going away mid-scrub | The page repaints. The scrub's look is part of what `update()` draws, so the readout and the bar's strip come back as they were (4.2) |
 | A sheet or dialog opening mid-scrub | Cancel (`endPageTouch()`): no seek. When the modal closes, the repaint shows the rest look |
 | A second finger | Only the first touch point counts |
@@ -1634,7 +1639,9 @@ The examples are for a 4:05 CBR MP3 with no waveform (step 17 has the bars).
     says "track", and it pauses at the end (`[sleep]` lines). A seek into
     the last 10 s starts the fade.
 13. **The screen** (by hand: the scripted finger acts in the dark). Let
-    the screen dim, then touch the bar: the touch only wakes it.
+    the screen dim, then touch the bar: the touch only brightens it. On
+    the glance (`Pst2`, the screen off, a touch), touch and drag the bar:
+    nothing seeks, and it has no knob.
 14. **By hand (the user):**
     - a tap and a drag on the right half, and at both ends;
     - a grab from the knob (no jump), and a grab elsewhere (the knob

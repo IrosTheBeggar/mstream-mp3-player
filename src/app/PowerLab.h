@@ -18,8 +18,10 @@ class ScreenControl;
 // The console's P commands (with Enter): measuring what the Core2 draws
 // (PowerProbe) and A/B knobs that switch one consumer at a time, for
 // finding what each one costs. Every knob says what it was and what it is
-// now, is undone by its opposite, and nothing of it is saved except the
-// boot clock (Pcb, the Output tab's CPU speed: app/PowerSettings). All off
+// now, is undone by its opposite (Pst: another choice), and nothing of it
+// is saved except the boot clock (Pcb, the Output tab's CPU speed:
+// app/PowerSettings) and "Touch when off" (Pst, the Output tab's row:
+// app/ScreenControl). All off
 // by default: until a P command, this costs a few comparisons per loop
 // pass.
 //
@@ -31,8 +33,14 @@ class ScreenControl;
 //   Pb<0-255>  the backlight while the screen is bright (M5GFX brightness:
 //              AXP192 DCDC3, 0 = off), until restart (Pb0: the setting's)
 //   Ps0 / Ps1  the screen off (the screen policy's Off: backlight off,
-//              ILI9342C sleep-in) / on; a touch wakes it and does nothing else
+//              ILI9342C sleep-in) / on; a touch then does what "Touch when
+//              off" says (by default nothing: the PWR key wakes it)
 //   Psk        the PWR key's short press, as if pressed
+//   Psf        a real finger landing at 160,120 on a screen where a touch
+//              doesn't act, as the wake latch reports it (the scripted
+//              finger bypasses the latch): nothing, a wake, the glance
+//   Pst<0-2>   "Touch when off": Nothing / Wake / Track (saved, as the
+//              Output row)
 //   Pc<mhz>    the CPU clock now: 160 <-> 80 (same PLL; 80 not while audio runs)
 //   Pcb<mhz>   the CPU clock from boot, saved: 160 or 240 (Pcb0: the default,
 //              240); the Output tab's CPU speed, the same NVS value

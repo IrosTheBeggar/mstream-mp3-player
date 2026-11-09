@@ -213,7 +213,7 @@ void test_percentiles() {
   TEST_ASSERT_EQUAL_UINT32(0, none.n);
 }
 
-// ---- WakeLatch: the touch that wakes the screen does nothing else ----
+// ---- WakeLatch: a touch where a touch doesn't act does nothing else ----
 
 namespace {
 
@@ -236,6 +236,7 @@ struct Pipeline {
   int taken = 0;
   std::vector<InputEvent> events;
   ScreenPower* screen = nullptr;
+  ScreenPower::Touched lastTouched = ScreenPower::Touched::Ignored;  // the last swallowed touch's
 
   Pipeline() {
     for (int b = 0; b < 3; ++b) buttons[b].setConfig(ButtonPolicy::gestureFor(b));
@@ -285,12 +286,13 @@ struct Pipeline {
       events.push_back(out[i]);
     }
     const bool acting = still.update(ms, pressed && !w.hold, x, y);
-    // With the screen policy: the wake, or a finger that acts as input
+    // With the screen policy: the swallowed touch ("Touch when off" says
+    // what it does: ScreenPower::touch()), or a finger that acts as input
     // (landing or moving); a touch landing on the glass attends; then its
     // countdown.
     if (screen) {
       if (w.woke) {
-        screen->wake(ms, ScreenPower::Why::Touch);
+        lastTouched = screen->touch(ms);
       } else if (acting) {
         screen->activity(ms);
       }
@@ -493,13 +495,16 @@ void test_latch_scripted_finger_bypasses() {
   TEST_ASSERT_EQUAL_INT(1, p.count(InputEvent::Type::Click));
 }
 
-// With ScreenPower deciding "lit": off after 30 s; a B click in the dark
-// only wakes it (the pocket guard); the next click acts and ends the
-// guard (it reaches ButtonPolicy; the pocket rule is below); a C hold on
-// the dim screen only brightens it (no volume steps).
+// With ScreenPower deciding "lit" and "Touch when off" on Wake (every touch
+// before the setting; the default's case is test_the_default_ignores_a_touch_on_an_off_screen):
+// off after 30 s; a B click in the dark only wakes it (the pocket guard);
+// the next click acts and ends the guard (it reaches ButtonPolicy; the
+// pocket rule is below); a C hold on the dim screen only brightens it (no
+// volume steps: Dim isn't off, in any choice).
 void test_latch_with_the_screen_policy() {
   ScreenPower sp;
   sp.begin(0);
+  sp.setOffTouch(static_cast<int>(ScreenPower::OffTouch::Wake));
   Pipeline p;
   p.screen = &sp;
   p.bright = true;
@@ -526,13 +531,15 @@ void test_latch_with_the_screen_policy() {
   TEST_ASSERT_FALSE(sp.pocketGuard());  // (from Dim: no guard)
 }
 
-// The pocket rule: the speaker the output, paused, the screen off. A
-// pocket's contact on B wakes it (swallowed); the next contacts on B reach
-// ButtonPolicy but don't start the speaker. The headphones play (not out
-// loud). A tap on the glass (someone looking) ends it: then B plays.
+// The pocket rule: the speaker the output, paused, the screen off, "Touch
+// when off" on Wake. A pocket's contact on B wakes it (swallowed); the
+// next contacts on B reach ButtonPolicy but don't start the speaker. The
+// headphones play (not out loud). A tap on the glass (someone looking)
+// ends it: then B plays.
 void test_pocket_rule_second_b_click() {
   ScreenPower sp;
   sp.begin(0);
+  sp.setOffTouch(static_cast<int>(ScreenPower::OffTouch::Wake));
   sp.turnOff(ScreenPower::Why::Console);
   sp.step(0, false);
   Pipeline p;
@@ -613,7 +620,9 @@ void test_event_wake_first_touch_only_answers() {
 // A finger resting still on the glass (a pocket's pressure) stops counting
 // as input after FingerActivity::kStillCapMs: the screen dims and goes off
 // under it. The latch takes that finger as it dims (its touch cancelled,
-// nothing more from it), without a wake; lifting and landing again is one.
+// nothing more from it), without a wake; lifting and landing again is a
+// touch on the off screen ("Touch when off": by default nothing; with
+// Wake, a wake).
 void test_resting_finger_lets_the_screen_go_off() {
   ScreenPower sp;
   sp.begin(0);
@@ -635,8 +644,13 @@ void test_resting_finger_lets_the_screen_go_off() {
   TEST_ASSERT_EQUAL(InputEvent::Type::Cancel, p.events[atTake - 1].type);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(atTake), static_cast<int>(p.events.size()));  // nothing after it
   for (; t <= 121000; t += 50) p.pass(t, false, 0, 0, false);
-  p.press(t + 1000, 100, 120, 60);
+  t = p.press(t + 1000, 100, 120, 60);
   TEST_ASSERT_EQUAL_INT(1, p.wakes);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenPower::Touched::Ignored), static_cast<int>(p.lastTouched));
+  TEST_ASSERT_TRUE(sp.off());
+  sp.setOffTouch(static_cast<int>(ScreenPower::OffTouch::Wake));
+  p.press(t + 1000, 100, 120, 60);
+  TEST_ASSERT_EQUAL_INT(2, p.wakes);
   TEST_ASSERT_TRUE(sp.bright());
   TEST_ASSERT_TRUE(sp.pocketGuard());
   TEST_ASSERT_EQUAL_INT(static_cast<int>(atTake), static_cast<int>(p.events.size()));
@@ -671,9 +685,14 @@ void test_power_key_under_a_finger() {
     TEST_ASSERT_EQUAL_INT(static_cast<int>(atTake), static_cast<int>(p.events.size()));
     TEST_ASSERT_EQUAL_INT(0, p.count(InputEvent::Type::Tap));
     TEST_ASSERT_TRUE(sp.off());
-    // The next touch is a wake, as ever, and nothing else.
-    p.press(t, 100, 120, 60);
+    // The next touch is what "Touch when off" says, and nothing else: by
+    // default nothing at all; with Wake, a wake.
+    t = p.press(t, 100, 120, 60);
     TEST_ASSERT_EQUAL_INT(1, p.wakes);
+    TEST_ASSERT_TRUE(sp.off());
+    sp.setOffTouch(static_cast<int>(ScreenPower::OffTouch::Wake));
+    p.press(t + 500, 100, 120, 60);
+    TEST_ASSERT_EQUAL_INT(2, p.wakes);
     TEST_ASSERT_TRUE(sp.bright());
     TEST_ASSERT_EQUAL_INT(static_cast<int>(atTake), static_cast<int>(p.events.size()));
   }
@@ -719,6 +738,133 @@ void test_power_key_under_a_finger() {
   }
 }
 
+// "Touch when off" on its default, Nothing: on an off screen a B click, a
+// B hold, a C hold (the volume), a swipe up from the strip and a tap on the
+// glass make no event and change nothing (each landing swallowed and
+// ignored: the screen stays off, nobody unattended). The PWR key wakes it;
+// past the latch, B then reaches ButtonPolicy, and the pocket rule holds
+// (no start on the speaker until the glass is touched).
+void test_the_default_ignores_a_touch_on_an_off_screen() {
+  ScreenPower sp;
+  sp.begin(0);
+  Pipeline p;
+  p.screen = &sp;
+  p.bright = true;
+  for (uint32_t t = 0; t <= 31000; t += 50) p.pass(t, false, 0, 0, false);
+  TEST_ASSERT_TRUE(sp.off());
+  uint32_t t = p.press(40000, kBx, kStripY, 80);       // B click
+  t = p.press(t + 500, kBx, kStripY, 700);             // B hold (the output)
+  t = p.press(t + 500, kCx, kStripY, 1500);            // C hold (the volume, repeating)
+  t = p.swipe(t + 500, kBx, 265, kBx, 100, 120);       // a swipe up from the strip
+  t = p.press(t + 500, 160, 150, 60);                  // a tap on the glass
+  TEST_ASSERT_EQUAL_INT(5, p.wakes);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenPower::Touched::Ignored), static_cast<int>(p.lastTouched));
+  TEST_ASSERT_EQUAL_INT(0, static_cast<int>(p.events.size()));
+  TEST_ASSERT_TRUE(sp.off());
+  TEST_ASSERT_FALSE(sp.pocketGuard());
+  TEST_ASSERT_FALSE(sp.unattended());
+  // The PWR key (ScreenControl::beginPass(), before the input layer).
+  TEST_ASSERT_TRUE(sp.powerKey(t + 500, false));
+  p.bright = sp.touchActs();
+  TEST_ASSERT_TRUE(sp.bright());
+  TEST_ASSERT_TRUE(sp.unattended());
+  PocketTransport tr;
+  tr.screen = &sp;
+  const size_t from = p.events.size();
+  t = p.press(t + 1000, kBx, kStripY, 80);
+  handleButtons(p, from, tr);
+  TEST_ASSERT_EQUAL_INT(1, p.count(InputEvent::Type::Click));
+  TEST_ASSERT_EQUAL_INT(0, tr.starts);  // (unattended: B won't start the speaker)
+  TEST_ASSERT_FALSE(sp.pocketGuard());  // (but it was input)
+}
+
+// A finger lands on the off screen (ignored, held) and the PWR key wakes it
+// while the finger stays: its lift makes nothing (no Tap, no Click), it
+// isn't input (the pocket guard stands), and the next touch acts.
+void test_the_power_key_under_an_ignored_finger() {
+  for (int strip = 0; strip < 2; ++strip) {
+    ScreenPower sp;
+    sp.begin(0);
+    sp.turnOff(ScreenPower::Why::Console);
+    sp.step(0, false);
+    Pipeline p;
+    p.screen = &sp;
+    const int x = strip ? kBx : 160, y = strip ? kStripY : 150;
+    uint32_t t = 1000;
+    for (; t < 1200; t += 10) p.pass(t, true, x, y, true);
+    TEST_ASSERT_EQUAL_INT(1, p.wakes);
+    TEST_ASSERT_TRUE(sp.off());
+    TEST_ASSERT_TRUE(sp.powerKey(t, false));
+    p.bright = sp.touchActs();
+    for (; t < 1300; t += 10) p.pass(t, true, x, y, true);
+    for (; t < 1800; t += 10) p.pass(t, false, 0, 0, false);  // lifted, past the latch
+    TEST_ASSERT_EQUAL_INT(0, static_cast<int>(p.events.size()));
+    TEST_ASSERT_TRUE(sp.bright());
+    TEST_ASSERT_TRUE(sp.pocketGuard());
+    p.press(t, 160, 150, 60);
+    TEST_ASSERT_EQUAL_INT(1, p.count(InputEvent::Type::Tap));
+    TEST_ASSERT_FALSE(sp.pocketGuard());
+    TEST_ASSERT_FALSE(sp.unattended());
+  }
+}
+
+// "Touch when off" on Track: a pocket's B on the off screen shows the
+// glance, and nothing on it acts: B clicks, a C hold, a tap and a swipe on
+// the glance make no event (ButtonPolicy sees none: no start, no volume),
+// each landing shows it 10 s more. A finger resting on it doesn't: the
+// glance goes off 10 s after the last landing under it, and the resting
+// finger is no wake after. The PWR key opens the whole screen from the
+// glance, with a finger on: its lift makes nothing.
+void test_the_glance_has_nothing_to_tap() {
+  ScreenPower sp;
+  sp.begin(0);
+  sp.setOffTouch(static_cast<int>(ScreenPower::OffTouch::Glance));
+  sp.turnOff(ScreenPower::Why::Console);
+  sp.step(0, false);
+  Pipeline p;
+  p.screen = &sp;
+  PocketTransport tr;
+  tr.screen = &sp;
+  uint32_t t = p.press(1000, kBx, kStripY, 80);
+  TEST_ASSERT_TRUE(sp.glance());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenPower::Touched::Glance), static_cast<int>(p.lastTouched));
+  t = p.press(t + WakeLatch::kQuietMs, kBx, kStripY, 80);  // past the latch: still nothing
+  t = p.press(t + 500, kBx, kStripY, 80);
+  t = p.press(t + 500, kCx, kStripY, 1500);
+  t = p.press(t + 500, 160, 150, 60);
+  t = p.swipe(t + 500, 160, 200, 160, 60, 120);
+  handleButtons(p, 0, tr);
+  TEST_ASSERT_EQUAL_INT(0, static_cast<int>(p.events.size()));
+  TEST_ASSERT_EQUAL_INT(0, tr.starts);
+  TEST_ASSERT_EQUAL_INT(6, p.wakes);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(ScreenPower::Touched::GlanceAgain), static_cast<int>(p.lastTouched));
+  TEST_ASSERT_TRUE(sp.glance());
+  // A finger resting on it from here (it lands within the latch's 400 ms
+  // of the swipe's lift: the same touch to it): no more 10 s. Off 10 s
+  // after the swipe's landing, under the finger; no wake after.
+  const uint32_t swipeAt = t - 70 - 120;
+  for (; t < swipeAt + ScreenPower::kGlanceMs - 10; t += 10) p.pass(t, true, 100, 120, true);
+  TEST_ASSERT_TRUE(sp.glance());
+  for (; t < swipeAt + ScreenPower::kGlanceMs + 2000; t += 10) p.pass(t, true, 100, 120, true);
+  TEST_ASSERT_TRUE(sp.off());
+  TEST_ASSERT_EQUAL_INT(6, p.wakes);
+  TEST_ASSERT_EQUAL_INT(0, static_cast<int>(p.events.size()));
+  for (; t < swipeAt + ScreenPower::kGlanceMs + 2500; t += 10) p.pass(t, false, 0, 0, false);
+  // The glance again; the PWR key under a finger on it: the whole screen,
+  // and the finger's lift makes nothing.
+  for (uint32_t e = t + 200; t < e; t += 10) p.pass(t, true, 160, 150, true);
+  TEST_ASSERT_TRUE(sp.glance());
+  TEST_ASSERT_TRUE(sp.powerKey(t, false));
+  p.bright = sp.touchActs();
+  TEST_ASSERT_TRUE(sp.bright());
+  TEST_ASSERT_TRUE(sp.unattended());
+  for (uint32_t e = t + 100; t < e; t += 10) p.pass(t, true, 160, 150, true);
+  for (uint32_t e = t + 500; t < e; t += 10) p.pass(t, false, 0, 0, false);
+  TEST_ASSERT_EQUAL_INT(0, static_cast<int>(p.events.size()));
+  p.press(t, 160, 150, 60);
+  TEST_ASSERT_EQUAL_INT(1, p.count(InputEvent::Type::Tap));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_gesture_tap_and_hold);
@@ -741,5 +887,8 @@ int main(int, char**) {
   RUN_TEST(test_event_wake_first_touch_only_answers);
   RUN_TEST(test_resting_finger_lets_the_screen_go_off);
   RUN_TEST(test_power_key_under_a_finger);
+  RUN_TEST(test_the_default_ignores_a_touch_on_an_off_screen);
+  RUN_TEST(test_the_power_key_under_an_ignored_finger);
+  RUN_TEST(test_the_glance_has_nothing_to_tap);
   return UNITY_END();
 }

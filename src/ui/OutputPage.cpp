@@ -321,6 +321,7 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       drawnScreen_ = sc;
       if (changed & 0x0000F0u) list.refreshRow(ScreenOff);
       if (changed & 0x00000Fu) list.refreshRow(Brightness);
+      if (changed & 0x0C0000u) list.refreshRow(ScreenTouch);
       if (changed & 0x000F00u) list.refreshRow(IdleOff);
       if (changed & 0x038000u) list.refreshRow(CpuSpeed);
       if (changed & 0x007000u) list.refreshRow(BtPower);
@@ -525,6 +526,7 @@ void OutputPage::drawRow(ListView::Row& r) {
     }
     case ScreenOff: drawScreenSetting(r, false); break;
     case Brightness: drawScreenSetting(r, true); break;
+    case ScreenTouch: drawTouchSetting(r); break;
     case IdleOff: drawIdleSetting(r); break;
     case CpuSpeed: drawPowerSetting(r, false); break;
     case BtPower: drawPowerSetting(r, true); break;
@@ -678,6 +680,31 @@ void OutputPage::drawScreenSetting(ListView::Row& r, bool brightness) {
   valuePill(r, pillX, kSettingPillW, value, col::TXT, r.pressed ? col::BTN_HI : col::BTN);
 }
 
+// "Touch when off" (ScreenPower::OffTouch, saved: ENERGY.md item 2): as the
+// screen's rows, a line for each choice, with its icon drawn here: the dark
+// screen and a fingertip on its corner, with a ring around it when a touch
+// there does something (Wake, Track).
+void OutputPage::drawTouchSetting(ListView::Row& r) {
+  using namespace uitext;
+  using O = ScreenPower::OffTouch;
+  const AppState& s = ui_.state();
+  const O choice = static_cast<O>(ScreenPower::clampOffTouch(s.screenTouch));
+  const int cx = r.x + 22;
+  r.c.drawRoundRect(cx - 10, 12, 18, 13, 2, col::SOFT);
+  r.c.fillRect(cx - 8, 14, 14, 9, col::FAINT);
+  if (choice != O::Nothing) r.c.drawCircle(cx + 5, 26, 7, col::SOFT);
+  r.c.fillCircle(cx + 5, 26, 4, choice == O::Nothing ? col::DIM : col::SOFT);
+  const int x = r.x + 44;
+  const int pillX = r.right - 8 - kSettingPillW;
+  const char* title = tr(S::settings_screen_touch);
+  const char* sub = tr(choice == O::Wake     ? S::settings_screen_touch_wake_sub
+                       : choice == O::Glance ? S::settings_screen_touch_glance_sub
+                                             : S::settings_screen_touch_nothing_sub);
+  ListView::lines(r, x, pillX - 8, title, strlen(title), sub, strlen(sub), col::TXT);
+  valuePill(r, pillX, kSettingPillW, ScreenPower::offTouchLabel(s.screenTouch), col::TXT,
+            r.pressed ? col::BTN_HI : col::BTN);
+}
+
 // "Turn off when idle" (IdlePolicy's choices, saved: ENERGY.md item 4): as
 // the screen's rows, with a power symbol drawn here (a ring open at the
 // top, and its bar).
@@ -739,6 +766,7 @@ uint32_t OutputPage::screenSig(const AppState& s) {
   uint32_t h = static_cast<uint32_t>((s.idleOff & 0x0F) << 8 | (s.screenTimeout & 0x0F) << 4 | (s.brightness & 0x0F));
   h |= static_cast<uint32_t>(s.btPower & 0x03) << 12 | (s.btPowerPending ? 1u : 0u) << 14;
   h |= (s.cpuMhz == 240 ? 1u : 0u) << 15 | (s.cpuRunMhz == 240 ? 1u : 0u) << 16 | (s.cpuRunMhz != s.cpuMhz ? 1u : 0u) << 17;
+  h |= static_cast<uint32_t>(s.screenTouch & 0x03) << 18;
   return h;
 }
 
@@ -1324,6 +1352,11 @@ ListView::Tap OutputPage::onTapAt(uint32_t row, int x, bool rightEdge) {
     case Brightness:
       // The next level, at once (Max, then Low again).
       ui_.host().setBrightness((s.brightness + 1) % ScreenPower::kBrightnesses);
+      break;
+    case ScreenTouch:
+      // The next choice (after Track, Nothing again), from the next touch
+      // on an off screen.
+      ui_.host().setScreenTouch((s.screenTouch + 1) % ScreenPower::kOffTouches);
       break;
     case IdleOff:
       // The next choice (after Never, 10 min again); the countdown restarts.

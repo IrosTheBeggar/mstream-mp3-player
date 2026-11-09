@@ -232,6 +232,11 @@ inline constexpr int kNowPlayingMidW = 190;
 // line and it don't fit together) has a little more: centred, it still
 // ends 4 px short of a 16-hour mix's "999:59" either side (test_ui_library).
 inline constexpr int kNowPlayingWarnW = 200;
+// The glance ("Touch when off": Track; Now Playing with no buttons, over the
+// dark UI): one line in Small where the buttons are, centred on y 204, over
+// the seek bar's span (x 12-308): "Power button for controls", or the idle
+// power-off's countdown in amber ("Turning off in 30 s").
+inline constexpr int kGlanceHintW = 296;
 // The seek bar's readout (docs/SEEK-BAR.md section 4.2), in the row above
 // the line while a finger scrubs, on the side away from the knob: the
 // finger's second ("2:31", Title) and, kSeekReadoutGap px after it, the

@@ -144,9 +144,37 @@ struct Header {
 // Library alone under "No track on this card fits these filters" while
 // Auto DJ's mood filter fits none (MOOD-FILTERS.md 4.4, frame dj-empty);
 // with no card and no music, "No microSD card" and Try again.
+//
+// Glance mode (Mode::Glance): the glance ("Touch when off": Track, added
+// later at the user's request; Ui::setGlance()) is a second instance of
+// this page, Ui's glance_, drawn over the dark UI for its 10 s with the
+// Output tab's status above it (TabBar::updateGlance()). It is never the
+// page on top and never gets an event (the input layer swallows every
+// touch on the glance; Ui::onEvent() drops the console's scripted one):
+// the same layout, the same texts, the same redraws, minus what can be
+// pressed, so it shows exactly what the page would and nothing on it looks
+// like a control:
+//   - the transport's strip (y 176-231): one line, Small, dim, centred on
+//     y 204 (uitext::kGlanceHintW): "Power button for controls"; while the
+//     idle power-off counts down its last 30 s, that countdown instead, in
+//     amber (its toast is drawn nowhere in the dark, and a touch on the
+//     glance isn't input: only the power button keeps the player on). No
+//     zones, no play disc, no spinner, no shuffle or repeat glyphs;
+//   - the plain line: no rest knob (it can't be moved; the waveform has
+//     none at rest anyway);
+//   - a play that waits for the headphones: the artist and album rows,
+//     not [Play on speaker] and [Cancel] (the title strip says it waits);
+//   - nothing queued, no card: the empty states without their buttons, in
+//     y 36-175, the line under them.
+// The real page (Mode::Full, Ui's nowPlaying_) is unchanged by it: every
+// branch tests readOnly_, false there. Anything that can be pressed checks
+// readOnly_ (a control added to this page without it shows on the glance).
+// The glance's own cover sprite (98 x 98, 19,208 B of PSRAM) is made at
+// its first enter(), so never on a unit whose setting is never Track.
 class NowPlayingPage : public Page {
 public:
-  explicit NowPlayingPage(Ui& ui) : Page(ui) {}
+  enum class Mode : uint8_t { Full, Glance };
+  explicit NowPlayingPage(Ui& ui, Mode mode = Mode::Full) : Page(ui), readOnly_(mode == Mode::Glance) {}
   const char* name() const override { return "Now Playing"; }
   bool hasHeader() const override { return false; }
   void enter(NavModel::PageRef& ref) override;
@@ -286,6 +314,9 @@ private:
     // The indicator as drawn (repeat 0xFF: none yet).
     bool shuffle = false;
     uint8_t repeat = 0xFF;
+    // The glance: the idle power-off's second in the transport's place (0:
+    // the power button's line).
+    uint8_t idleWarnS = 0;
   } drawn_;
   SeekBar bar_;
   Zone pressed_ = None;
@@ -297,6 +328,7 @@ private:
   uint32_t navTrack_ = 0xFFFFFFFFu;  // the navigation menu's track (its TrackCatalog id)
   char navFolder_[96] = "";          // its Go to folder detail, cut from the left
   char navNames_[2][96] = {};        // Go to artist's and Go to album's names, cut to their rooms
+  const bool readOnly_;              // Mode::Glance: the glance's (nothing on it can be pressed)
 };
 
 // ---- Library (spec §6.2, mockups 07-15, with the review's grafts) ----
@@ -686,8 +718,9 @@ private:
 //   + Pair new headphones  >  the Pair screen
 //   Auto DJ >  (its page: "On · Follow the vibe", "Off" under it)
 //   Haptics (on / off), Screen off after (15 s ... Never), Brightness
-//   (Low ... Max), Turn off when idle (10 min ... Never), Touch
-//   calibration >, Language > (the one in use, in its own name), About >
+//   (Low ... Max), Touch when off (Nothing / Wake / Track), Turn off when
+//   idle (10 min ... Never), Touch calibration >, Language > (the one in
+//   use, in its own name), About >
 // Pair (mockup 21): "Searching", the audio devices found (their kind and a
 // signal of 4 bars); a tap pairs (after a confirmation when it replaces
 // the remembered headphones), and the card shows how it goes.
@@ -789,6 +822,7 @@ private:
     Haptics,
     ScreenOff,
     Brightness,
+    ScreenTouch,
     IdleOff,
     CpuSpeed,
     BtPower,
@@ -825,6 +859,8 @@ private:
   // "Screen off after" and "Brightness": the title, its line, and the
   // value in a pill at the right; a tap takes the next choice.
   void drawScreenSetting(ListView::Row& r, bool brightness);
+  // "Touch when off" (ScreenPower::OffTouch, saved), the same way.
+  void drawTouchSetting(ListView::Row& r);
   // "Turn off when idle" (IdlePolicy's choices, saved), the same way.
   void drawIdleSetting(ListView::Row& r);
   // "CPU speed" and "Bluetooth power" (PowerChoices', saved), the same way.

@@ -1753,6 +1753,7 @@ void test_output_texts_fit() {
   for (int c = 0; c < ScreenPower::kBrightnesses; ++c) {
     fits(body, ScreenPower::brightnessLabel(c), kSettingPillW - kSettingPillPad);
   }
+  for (int c = 0; c < ScreenPower::kOffTouches; ++c) fits(body, ScreenPower::offTouchLabel(c), kSettingPillW - kSettingPillPad);
   for (uistr::Lang l : kAllLangs) {
     if (!uistr::hasCatalogue(l)) continue;
     uistr::setLang(l);
@@ -1762,6 +1763,9 @@ void test_output_texts_fit() {
     for (int c = 0; c < ScreenPower::kBrightnesses; ++c) {
       fitsIn(body, small, ScreenPower::brightnessLabel(c), kSettingPillW - kSettingPillPad);
     }
+    for (int c = 0; c < ScreenPower::kOffTouches; ++c) {
+      fitsIn(body, small, ScreenPower::offTouchLabel(c), kSettingPillW - kSettingPillPad);
+    }
     fitsIn(body, small, tr(S::library_row_rescan), kRescanPillW - kSettingPillPad);
   }
   uistr::setLang(uistr::Lang::En);
@@ -1770,6 +1774,26 @@ void test_output_texts_fit() {
   fits(small, tr(S::settings_screen_off_sub), kSettingValueSubW);
   fits(small, tr(S::settings_screen_never_sub), kSettingValueSubW);
   fits(small, tr(S::settings_brightness_sub), kSettingValueSubW);
+  fits(body, tr(S::settings_screen_touch), kSettingValueSubW);
+  fits(small, tr(S::settings_screen_touch_nothing_sub), kSettingValueSubW);
+  fits(small, tr(S::settings_screen_touch_wake_sub), kSettingValueSubW);
+  fits(small, tr(S::settings_screen_touch_glance_sub), kSettingValueSubW);
+  // The glance's one line where Now Playing's buttons are (Small, centred
+  // on y 204 over the seek bar's span): the power button's, or the idle
+  // power-off's countdown at its widest second; in every language, with the
+  // glyph store's glyphs for Japanese and Chinese.
+  TEST_ASSERT_EQUAL_INT(296, kGlanceHintW);
+  TEST_ASSERT_TRUE(320 / 2 - kGlanceHintW / 2 >= 12 && 320 / 2 + kGlanceHintW / 2 <= 320 - 12);  // x 12-308
+  for (uistr::Lang l : kAllLangs) {
+    uistr::setLang(l);
+    fits(small, tr(S::glance_hint), kGlanceHintW);
+    for (uint32_t sec : {30u, 10u, 1u}) {
+      char warn[128];
+      IdlePolicy::warnText(sec, warn, sizeof(warn));
+      fits(small, warn, kGlanceHintW);
+    }
+  }
+  uistr::setLang(uistr::Lang::En);
   TEST_ASSERT_TRUE(kSettingValueSubW > 100);
   // About: a long value falls back to Small, which fits.
   char v[80];

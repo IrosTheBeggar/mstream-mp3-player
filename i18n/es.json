@@ -1,7 +1,7 @@
 {
   "@@locale": "es",
   "@@autonym": "Español",
-  "@@note": "Spanish, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_es.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/es.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept: informal tú), and translated by a Fable agent (Claude) otherwise. A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. Reviewed message by message by a second Fable agent against en.json's contexts and rooms (meaning, agreement, the apps' words, typography, the fit checker); still no native speaker's review. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, with the Auto DJ engine's UI) were made the same way: the mobile app's Auto DJ words (Auto DJ, Ancla, Seguir el ambiente, Mantener la semilla, Umbral de similitud, Continuidad de BPM, Mezcla armónica, 'desde aquí') and a Fable agent's translation for the rest, fitted with the same checker; not yet reviewed by a native speaker. The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_es.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_es.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
+  "@@note": "Spanish, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_es.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/es.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept: informal tú), and translated by a Fable agent (Claude) otherwise. A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. Reviewed message by message by a second Fable agent against en.json's contexts and rooms (meaning, agreement, the apps' words, typography, the fit checker); still no native speaker's review. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, with the Auto DJ engine's UI) were made the same way: the mobile app's Auto DJ words (Auto DJ, Ancla, Seguir el ambiente, Mantener la semilla, Umbral de similitud, Continuidad de BPM, Mezcla armónica, 'desde aquí') and a Fable agent's translation for the rest, fitted with the same checker; not yet reviewed by a native speaker. The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_es.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_es.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The screen's touch setting (November 2026, Output > Touch when off and the glance it can show: settings.screen_touch, its three values and their lines, glance.hint; settings.screen_off_sub rewritten, since a touch no longer wakes the screen unless the setting says so) was translated by a Fable agent (Claude), in this file's words for the screen's other settings, fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
   "boot.touch_hint": "¿Falla el táctil? Mantén un dedo en la pantalla.",
   "coach.header_tip": "Consejo {0} de {1}",
   "coach.header_hint": "toca para seguir",
@@ -149,6 +149,7 @@
   "now_playing.autodj_off": "Desactivado",
   "now_playing.autodj_waiting": "Esperando",
   "now_playing.autodj_paused": "En pausa",
+  "glance.hint": "Controles con el botón de encendido",
   "sleep.title_left": "Temporizador: pausa en {0}",
   "@sleep.title_left": {
     "note": "The row's 'Temporizador de apagado' (the mobile app's) is 277 px with its state in the sheet title's 226 (Small): the titles and toasts say 'Temporizador'. 'quedan {0}' is ungrammatical when {0} is '1 min' or '1 s' (queda): 'pausa en {0}' (pauses in) takes any fill."
@@ -513,7 +514,7 @@
   },
   "autodj.status_paused": "En pausa: fallaron varias pistas",
   "settings.screen_off": "Apagar pantalla tras",
-  "settings.screen_off_sub": "se atenúa; toca y vuelve",
+  "settings.screen_off_sub": "se atenúa, luego se apaga",
   "settings.screen_never_sub": "encendida: más gasto",
   "settings.screen_off_15s": "15 s",
   "settings.screen_off_30s": "30 s",
@@ -530,6 +531,22 @@
   "settings.brightness_medium": "Medio",
   "settings.brightness_high": "Alto",
   "settings.brightness_max": "Máximo",
+  "settings.screen_touch": "Si la tocas apagada",
+  "@settings.screen_touch": {
+    "note": "'Toque si está apagada' is 181 px in 174: 'if you touch it (the screen) while off', tú as elsewhere."
+  },
+  "settings.screen_touch_nothing_sub": "con el botón de encendido",
+  "@settings.screen_touch_nothing_sub": {
+    "note": "'solo el botón de encendido' is 175 px in 174: 'with the power button' (it turns the screen on)."
+  },
+  "settings.screen_touch_wake_sub": "un toque la enciende",
+  "settings.screen_touch_glance_sub": "un toque muestra la pista",
+  "settings.screen_touch_nothing": "Nada",
+  "settings.screen_touch_wake": "Activar",
+  "@settings.screen_touch_wake": {
+    "note": "As Android's Spanish wakes a screen ('tocar para activar'), and short: 'Encender' (76 px in Body) would drop to Small (60 px) in the 74 px pill, the row's only value in Small."
+  },
+  "settings.screen_touch_glance": "Pista",
   "settings.idle_off": "Apagar si inactivo",
   "settings.idle_off_sub": "en pausa, con batería",
   "settings.idle_never_sub": "encendido: más gasto",
