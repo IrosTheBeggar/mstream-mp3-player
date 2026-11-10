@@ -1235,6 +1235,9 @@ void test_the_tracker() {
   }
   TEST_ASSERT_EQUAL_UINT32(pl::Tracker::kPending, t.pending());
   TEST_ASSERT_EQUAL_UINT32(3, t.counts().overflow);
+  // The ring's size, and what it costs (the Tracker is in PSRAM).
+  TEST_ASSERT_EQUAL_UINT32(32, pl::Tracker::kPending);
+  TEST_ASSERT_TRUE(sizeof(pl::Played) <= 320);
 }
 
 // A pause's time is no allowance for the position's next step: a seek while
@@ -1310,6 +1313,45 @@ void test_a_seek_after_a_pause_is_not_played() {
   t.ended(End::Stopped);
   TEST_ASSERT_EQUAL_UINT32(4000 + 10 + 3000, t.oldest().playedMs);
   TEST_ASSERT_EQUAL_UINT16(1, t.oldest().pauses);
+}
+
+// Tracks of 7 s or less, one after the other, never open the gate (a
+// start's 2 s, a track's last 5): their plays wait in the ring, 32 of them
+// (8, before, was an album of interludes); the one past it is lost,
+// counted. The gate opens once they stop.
+void test_short_tracks_wait_for_the_gate() {
+  using W = pl::WriteGate::Wait;
+  Env env;
+  pl::Tracker t(env);
+  pl::WriteGate g;
+  pl::WriteGate::In in;
+  in.nowMs = 10000;
+  in.playing = true;
+  in.ringMs = 1400;
+  in.ringCapacityMs = 1490;
+  TEST_ASSERT_TRUE(g.update(in) == W::None);
+  uint32_t opened = 0;
+  for (uint32_t track = 0; track < pl::Tracker::kPending + 1; ++track) {
+    t.began(1, track + 1, 0);
+    ++in.trackSeq;  // its start (a join's too)
+    for (uint32_t ms = 20; ms <= 7000; ms += 20) {
+      env.now += 20;
+      in.nowMs += 20;
+      in.trackLeftMs = std::max<uint32_t>(1, 7000 - ms);
+      t.tick(PlayState::Playing, ms, true, 7000);
+      if (g.update(in) == W::None) ++opened;
+    }
+    t.ended(End::Completed);
+  }
+  TEST_ASSERT_EQUAL_UINT32(0, opened);
+  TEST_ASSERT_EQUAL_UINT32(pl::Tracker::kPending, t.pending());
+  TEST_ASSERT_EQUAL_UINT32(1, t.counts().overflow);
+  TEST_ASSERT_EQUAL_UINT64(0x1001, t.oldest().file.pathHash);  // (the newest is the one lost)
+  // Paused after the last of them: open.
+  in.playing = false;
+  in.trackLeftMs = 0;
+  in.nowMs += 20;
+  TEST_ASSERT_TRUE(g.update(in) == W::None);
 }
 
 // ---------------------------------------------------------------------------
@@ -1945,6 +1987,7 @@ int main(int, char**) {
   RUN_TEST(test_what_a_rotation_counts);
   RUN_TEST(test_the_tracker);
   RUN_TEST(test_a_seek_after_a_pause_is_not_played);
+  RUN_TEST(test_short_tracks_wait_for_the_gate);
   RUN_TEST(test_the_write_gate);
   RUN_TEST(test_the_write_gate_waits_for_a_moving_list);
   RUN_TEST(test_what_the_card_is_asked);

@@ -332,8 +332,12 @@ public:
   // 2.20.5: plays of under a second of audio are left out.
   static constexpr uint32_t kMinPlayedMs = 1000;
   // Plays waiting for their slots (the loop writes one a pass when the
-  // gate lets it): more than this, the newest is lost (counted).
-  static constexpr uint32_t kPending = 8;
+  // gate lets it): more than this, the newest is lost (counted). The gate
+  // is shut for a start's first 2 s and a track's last 5, so a track of
+  // 7 s or less never opens it, and a run of them waits whole: 32 of them
+  // (8, before, was an album of interludes). A Played is about 300 bytes,
+  // the ring 10 KB of the Tracker's PSRAM.
+  static constexpr uint32_t kPending = 32;
   // The position moves at most this much more than the board's clock
   // between two looks for it to count as played (a seek's jump doesn't).
   static constexpr uint32_t kSlackMs = 500;

@@ -23,7 +23,7 @@ class AutoDj;
 //     seek, a low ring, an underrun's wake, a moving list) and the card
 //     is one to ask (METADATA.md 3.8): not held for the guard's restart,
 //     not out of the slot (the card hold's: none answering, or another
-//     card), not refusing every write. Then the plays wait, eight at
+//     card), not refusing every write. Then the plays wait, 32 at
 //     most, for the remount or the end's flush(). A slot is the
 //     file's size and FAT time (f_stat, at the write), the board's clock for its start
 //     (boardclock::at(): a clock set during the play still dates it; 0

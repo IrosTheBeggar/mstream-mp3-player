@@ -7129,7 +7129,10 @@ What the code decided where 2.20 left room:
   the clock is unset: B13's `@time` or the RTC), **clock** the clock's
   source then, **uptimeMs** the monotonic start mod 2^32.
 - **When it is written.** On the loop task, never on the audio's: a play
-  waits (at most 8; past them the newest is lost and counted) until
+  waits (at most 32, 10 KB of the Tracker's PSRAM; past them the newest
+  is lost and counted. It was 8: a track of 7 s or less never opens the
+  gate below, a start's 2 s and its last 5, so a run of interludes waits
+  whole, and the ninth was lost) until
   `WriteGate` lets the loop touch the card: not within 2 s of a start or
   a join (the backend's `trackSeq()`), not while a start isn't taken up,
   not from 5 s before the heard track's end or while the decoder reads
@@ -7170,7 +7173,7 @@ What the code decided where 2.20 left room:
   loop asks nothing of a card that isn't one to ask: held for the guard's
   restart (`cardHeld`); out of the slot, none answering or another in it
   (`sectordisk::cardOut()`, what the player's card hold goes by); or
-  refusing every write until a restart (writes off). The plays wait, 8 at
+  refusing every write until a restart (writes off). The plays wait, 32 at
   most, and the boot's scan too, until the guard's remount
   (`remounted()`) or the end's `flush()`. Each ask of a card that is out
   is a mount tried, a second or two of the SD driver's tries with the loop
