@@ -69,7 +69,7 @@ bool IdlePower::takeBootNote(char* buf, size_t size) {
 }
 
 void IdlePower::powerOff() {
-  nvslater::flushNow();  // a setting changed moments ago, still queued
+  nvslater::flushNow();  // a setting changed moments ago (main.cpp's endInOrder() saved them before the plays)
   Serial.flush();
   // The panel shares SPI with the card: its sleep command under the lock
   // (nothing else runs after this).

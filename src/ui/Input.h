@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "ButtonGesture.h"
+#include "HoldButton.h"
 #include "InputEvent.h"
 #include "ScreenPower.h"
 #include "StripButtons.h"
@@ -99,6 +100,12 @@ public:
   // The touch in progress has nothing to hold (the A-Z rail): no LongPress
   // for it (TouchRecognizer::noHold()).
   void noHold() { glass_.noHold(); }
+  // What the last update() read of the panel: a finger on it (its first
+  // touch point, or the scripted finger), where (corrected, as the
+  // events'), and whether it is the scripted one. For what has to see the
+  // finger itself, each pass, and not only hear of no lift (the dialog's
+  // hold: HoldButton::update()).
+  const HoldButton::Finger& finger() const { return finger_; }
 
   // ---- settings (saved) ----
   bool hapticsOn() const { return hapticsOn_; }
@@ -153,7 +160,10 @@ public:
   // recogniser measures its speed as a finger's). Points at y >= 240 are on
   // the button strip and go through StripButtons like a finger's (a press
   // there is a click or a hold; a swipe up from there scrolls). A real
-  // touch cancels it.
+  // touch cancels it. Its samples and its touch's events say whose they
+  // are (TouchRecognizer::Sample::scripted, InputEvent::scripted): it does
+  // all a finger does but what only a hand may, the format's hold
+  // (HoldButton: a computer on USB never erases a card).
   void simulate(int x0, int y0, int x1, int y1, uint32_t dwellMs, uint32_t moveMs, uint32_t restMs);
   bool simulating() const { return sim_.on; }
   // The last touch was the scripted finger's (for the log).
@@ -209,6 +219,7 @@ private:
     uint32_t dwell = 0, move = 0, rest = 0;
   } sim_;
   bool scripted_ = false;
+  HoldButton::Finger finger_;  // the last update()'s sample
   uint8_t simSkew_ = 0;
   uint8_t simTouches_ = 0;            // the jitter's step
   int8_t jitterX_ = 0, jitterY_ = 0;  // this scripted touch's

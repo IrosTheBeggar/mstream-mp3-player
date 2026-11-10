@@ -347,6 +347,32 @@ built without exFAT and without GPT (`lib/core/CardFormat`). The tree:
   or `/.player`, and it skips every name under `/music` that starts with
   a dot (`src/storage/LocalStorage.cpp`, `walk()`).
 
+**A card the player formats** (firmware 0.14.0; docs/HOST-STATUS.md,
+"@format"). The listener can have the player format a card: one that
+isn't FAT32 or can't be read, from the player's own no-card screen, or
+any card when the software asks with `@format`, which only brings up the
+player's question; the listener confirms it there, twice (a tap, then a
+2 s hold). The software
+never formats a card through the player otherwise. The card it leaves
+(`lib/core/CardMkfs`, host-tested on ChaN's FatFs as the Core2 builds
+it), which the software MAY rely on:
+
+- Sector 0 is an MBR with one primary partition, type 0x0C (FAT32,
+  LBA), from sector 8192 (4 MiB) to the card's last sector; the sectors
+  between, and the card's last 64, are zero (nothing of a GPT is left).
+- The partition is FAT32: 512-byte sectors, 2 FATs, 32 KB clusters on a
+  card of 2.16 GB or more (on a smaller one the largest cluster that
+  leaves FAT32 its 65,526), the data area from a 4 MiB boundary; the
+  boot sector's backup at 6, FSINFO at 1 and 7, its free count valid.
+- `/music`, empty, and `/.player/device.txt`, the firmware's (2.15), so
+  the software reads what the player takes (Opus, `read.mpdj=2`,
+  `history=1`) before the card's first boot in a player; nothing else:
+  no `/.mstream`, so the software's set-up makes the card's first commit
+  (and its `cardId`).
+- A new volume serial and disk signature: a card the software knew is
+  another card after it (its `/.mstream`, and the `cardId` in it, are
+  gone).
+
 ### 2.3 Conventions shared by every file
 
 #### 2.3.1 Bytes
@@ -2399,7 +2425,7 @@ would change.
 
 ```
 contract=1
-firmware=0.11.0
+firmware=0.12.0
 read.msmf=1
 read.mptg=1
 read.mpdj=2
@@ -2409,6 +2435,7 @@ codecs=mp3,flac,opus
 extensions=mp3,flac,opus
 max_rate=48000
 max_channels=2
+history=1
 ```
 
 - `read.*` lists the majors the firmware reads, separated by commas; a
@@ -2422,8 +2449,10 @@ max_channels=2
   walk lists as audio (any case). The device recognises audio by
   extension, not by content, so both matter.
 - `history` lists the majors of the play log (2.20) the firmware writes:
-  `history=1` from the firmware that keeps it (not built yet); missing
-  or empty, it keeps none. It tells the software that this player logs
+  `history=1` from 0.14.0, the firmware that keeps it (3.10), the key
+  last; missing or empty, it keeps none (0.13.0 and older write no key;
+  the example above is the fixtures' `golden/device.txt`, whose
+  `firmware` value is a sample). It tells the software that this player logs
   plays, so its clock is worth setting; the software reads the log files
   whatever the key says (an older firmware's log stays on the card), each
   slot by its own major (2.20.7).
@@ -2936,7 +2965,9 @@ says the firmware keeps one (2.15).
 - A file is a sequence of 80-byte slots from offset 0, with no header.
   A trailing part shorter than a slot (a cut append) is ignored, and the
   device cuts it off before its next append, so it always appends at a
-  slot boundary. A slot, once written, is never rewritten.
+  slot boundary. A slot, once written, is never changed (the device MAY
+  write a slot's same bytes over it, where it is, to finish an append
+  whose sync the card failed: 2.20.5).
 - **The cap:** a file holds at most 6,553 slots (524,240 bytes), the two
   together at most 1,048,480 bytes: the room the software keeps for the
   log when it fills a card. A device MAY use a smaller cap.
@@ -2952,7 +2983,14 @@ says the firmware keeps one (2.15).
 
   A cut between steps 1 and 2 leaves `plays.jnl` alone, one between 2
   and 3 `plays.1.jnl` alone: the next append goes on either way (that
-  rotation's drop note is lost: 2.20.5).
+  rotation's drop note is lost: 2.20.5). A step the card fails with the
+  device still running loses nothing of that: the slot is tried again
+  (2.20.5) and the rotation with it, and step 1's count, once
+  `plays.1.jnl` is gone, goes before whichever slot lands next. A
+  `plays.1.jnl` the device can't read whole for step 1 (a sector gone
+  bad) is left as it is while a later try may read it; a device MAY then
+  go on with what it could read, the note counting that much, so the
+  log isn't held back for good.
 - **A cut inside step 2's rename** leaves both names on one cluster
   chain (2.12.1, "Cut renames"), and deleting either would free clusters
   the other still uses: 2.12.6's case, with `plays.jnl` as its tmp. So:
@@ -3045,10 +3083,16 @@ says the firmware keeps one (2.15).
   slot that uses it (it MAY reserve several at once; the unused ones are
   skipped, and a reader takes no gap for a loss). **At boot:** the next
   seq is max(NVS's seq, the highest seq of a valid play slot of this
-  deviceId and epoch in the mounted card's log) + 1. Every valid slot
-  counts: twins, and both slots of a conflict, which a reader drops
-  (2.20.6, item 3), since that seq was used. A seq that would pass
-  2^32 − 1 takes a new epoch.
+  deviceId and epoch in the mounted card's log) + 1. Every valid slot of
+  the log's files (2.20.2's names) counts: both of a byte-equal pair,
+  which a reader takes once, and both slots of a conflict, which a reader
+  drops (2.20.6, item 3), since that seq was used. The twin names
+  (`plays.xl1` to `plays.xl9`) needn't be read: a twin holds the slots of
+  a `plays.1.jnl`, whose chain it still shares (read under that name), or
+  which it was until a rotation renamed it and moved `plays.jnl`, with
+  every later slot, to `plays.1.jnl`. So no twin holds a seq or a bootSeq
+  above those the log's files hold, or held before a trim. A seq that
+  would pass 2^32 − 1 takes a new epoch.
 - **bootSeq** counts the device's boots in one epoch, from 1; NVS keeps
   the count, stored at boot before any slot uses it. **At boot:** this
   boot's bootSeq is max(NVS's boot count, the highest bootSeq of a valid
@@ -3079,6 +3123,16 @@ says the firmware keeps one (2.15).
   the gapless window. The open play is ended (stopped) and written at
   every orderly power-off or restart: the idle power-off, the CPU
   speed's restart and the card guard's.
+- **A slot the card fails** (a write, a sync, a rename, a question of
+  the log's files; the card pulled) MAY be tried again, and is then the
+  same slot: the seq taken for it and the bytes first encoded, whatever
+  the clock says by then, so no play is two slots that differ and no seq
+  is used twice (2.20.4). A try whose write had landed, only its sync or
+  its close failing, is the log's last slot: the device writes those
+  bytes over themselves and syncs, and the play is one slot. (Were both
+  to land they are byte-equal: one play to a reader, 2.20.6 item 3.) The
+  device writes no later play before it, so the log's order is the
+  plays'; a play it gives up on is lost, its seq never on the card.
 - **The fields:** startedAt is the wall time the play began, the clock
   at the slot's write less the uptime since it began, so a clock set
   during the play still dates it; 0 (clock 0) while the clock is unset.
@@ -6003,7 +6057,10 @@ src/. What the code decided where 3.2-3.4 left room:
   line names that wait; the restart forgets both. A card silent past 30 s still loses the edits,
   30 s later. The guard's other restarts (another card; an identity it couldn't read) don't wait:
   writes are refused there. Rescan's restart (`rescanLibrary()`) flushes once the same way and
-  isn't changed.
+  isn't changed. While the restart waits it counts as a restart under way though its time isn't
+  set yet (`powerchoice::restartAsked()`'s `guardWaits`, `test_power_choices`): the format's
+  question isn't shown and its answer isn't taken (`@err 4 format busy`, docs/HOST-STATUS.md),
+  which would otherwise race it, the listener told "formatting" and the boot formatting nothing.
 - **What such a card does** (MEASURED on a host rig, not in the tree: the real
   `sd_diskio.cpp`, `SectorDisk.cpp`, `Library`, `CardTasks`, `AutoDj`, `Waves` and FatFs
   over a byte-level model of a card; a sector with no answer unless it says
@@ -6702,8 +6759,9 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
      scan and new walks hold; a walk under way goes on to its end; the
      journals are compacted (the worker's Compact step; one that fails
      leaves the build to `tags.bin` alone, as N10's); with the worker
-     free, the safe point holds (a CPU speed's restart asked counts as
-     none: its pause would make one, and the restart would cut the build),
+     free, the safe point holds (a restart asked counts as none, whichever:
+     the format's, a CPU speed's, the loop's, `powerchoice::restartAsked()`:
+     its pause would make one, and the restart would wait for the build),
      the worker's task is there (`Out::wantWorker`: `CardWorker::ensure()`
      makes it, since it ends 3 s after its last step, and keeps it to the
      build's hand-off; no internal RAM for its 7.5 KB stack and the step
@@ -7047,6 +7105,309 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   check's cases went with the job, 2026-10-13), `test_playback`
   (`playStartsEntry()`), `test_tag_store` (the compaction's memory at the
   firmware's buffers, under 120 KB).
+
+### 3.10 As built (B14): the play log
+
+2.20's writer, for 0.14.0: `lib/core/PlayLog` (portable, host-tested in
+`test_play_log`) and its glue, `app/PlayHistory`; `device.txt` says
+`history=1` (2.15). Built for `core2` with every guard, **not flashed**.
+What the code decided where 2.20 left room:
+
+- **A play** is `PlaybackController`'s (`setPlays()`, its class comment):
+  it begins at each start of the current entry from 0:00 or a start
+  point (a pick, a skip, a restart, a resume point's start, Repeat One's
+  loop, a wait's release) and at each gapless join heard; a seek, a pause
+  and a wait on the same entry go on with it. Its end says the outcome:
+  a natural end or a join Completed; the listener's move to another
+  entry or back to 0:00 (next, prev, a pick, a cue, a Play, a Remove or
+  an Undo of the current entry, a seek to 0:00) Skipped; anything else
+  (stop, Clear, a failure, a library update that took the track away,
+  a power-off or restart) Stopped. A start that fails with the card out
+  (the card hold, 3.8) is one of those: its play ends Stopped when the
+  backend lets go, one a seek went on with too, with what it had played,
+  and each of the hold's tries begins a play that ends the same way, so
+  none is open while nothing is held (one left open would go on at a seek
+  on the entry the hold left paused, dated from the try). Plays of under
+  1 s of audio aren't
+  logged (2.20.5's MAY), nor the built-in tracks, nor files on the flash.
+- **playedMs** is the backend's position's steps while playing, each
+  counted when it moved no more than the board's clock did (plus 500 ms),
+  so a seek's jump, a step back and a start not taken up yet
+  (`positionKnown()` false) count nothing; the clock's time while it
+  isn't playing is no part of that allowance, so a seek while paused, or
+  right after, as long as the pause was, counts nothing either (it did:
+  the review's FP5); a Completed play adds what its
+  last look didn't see of its length (at most 2 s). **durationMs** is the
+  backend's length, else the catalog's hint. **pauseCount** counts the
+  passes that found it Paused after Playing. **source**: Auto DJ's mark
+  on the entry 3, else the queue shuffled 2, else 1. **generation** is
+  the root's the boot read (`Library::root()`; 0 none). **pathHash** is
+  the library's path's (`cardcontract::pathHash()`); **size** and
+  **fatTime** are `f_stat`'s at the write. **startedAt** is
+  `boardclock::at()` of the play's monotonic start at the write (0 while
+  the clock is unset: B13's `@time` or the RTC), **clock** the clock's
+  source then, **uptimeMs** the monotonic start mod 2^32.
+- **When it is written.** On the loop task, never on the audio's: a play
+  waits (at most 32, 10 KB of the Tracker's PSRAM; past them the newest
+  is lost and counted. It was 8: a track of 7 s or less never opens the
+  gate below, a start's 2 s and its last 5, so a run of interludes waits
+  whole, and the ninth was lost) until
+  `WriteGate` lets the loop touch the card: not within 2 s of a start or
+  a join (the backend's `trackSeq()`), not while a start isn't taken up,
+  not from 5 s before the heard track's end or while the decoder reads
+  the next one ahead (the gapless window), not with the PCM ring under
+  half while playing, not within 5 s of an underrun (ESTIMATED; the
+  device check measures it), not while a list moves or a finger is on its
+  A-Z rail (`Ui::listMoving()`, as for the card worker: the loop draws its
+  frames). Then one slot a pass: the seq to NVS
+  (`plays`/`seq`, nvslayout's schema 6), the append and its `f_sync`.
+- **The boot** (`setup()`, after Auto DJ): NVS's ids (a new epoch from
+  `esp_random()` when there is none), the deviceId from
+  `esp_efuse_mac_get_default()`, the cut-rename rule (2.20.2), the root's
+  ACKS (`msmf::readAcks()`: found by type in the directory, checked on its
+  own; `cardroot::Root::acks`, at most 16 entries kept, this board's
+  first: `Library::openRecords()` reads the root with the board's id, so
+  other boards' rows sorting before it never crowd out the ones its log
+  trims by; the boot's `[plays]` line gives the rows, this board's, and
+  any left out). Then the boot's scan, a piece a pass behind the same
+  gate (4 reads of 2,560 bytes, five whole sectors each): every valid
+  slot of `plays.jnl`,
+  `plays.1.jnl` and `plays.2-9.jnl`, for the boot rules (2.20.4) and the
+  trim (2.20.2; only with ACKS). A new epoch with no ACKS reads nothing.
+  The boot count goes to NVS at the scan's end, before any slot.
+- **A remount** of the same card (the card guard's, 3.8; whatever
+  follows it, a restart's flush included): the cut-rename rule again
+  (`Journal::remounted()`), and while no slot has been asked for this
+  boot, the boot's scan again from its start. A file the scan held open
+  across the remount reads nothing more (FatFs's mount changed), and a
+  scan that ran while the card was out found no file; the scan again
+  comes to the same boot count (NVS's at the mount, not one more) or a
+  higher one, and the same trim. After a slot, only the rule. **A rename
+  the card refuses** at the rule (not all nine twin names taken) holds
+  `plays.jnl` back only until one takes: each try of a slot asks it
+  again first (the play it can't place waits its three tries, then is
+  lost, said so: `the card refused the rename`); a remount settles
+  again, so a log blocked before a disk check goes on with the same card
+  back, and a play that waited is tried at once.
+- **The card's guard** (3.8; with 0.12.0's and 0.13.0's merged in). The
+  loop asks nothing of a card that isn't one to ask: held for the guard's
+  restart (`cardHeld`); out of the slot, none answering or another in it
+  (`sectordisk::cardOut()`, what the player's card hold goes by); or
+  refusing every write until a restart (writes off). The plays wait, 32 at
+  most, and the boot's scan too, until the guard's remount
+  (`remounted()`) or the end's `flush()`. Each ask of a card that is out
+  is a mount tried, a second or two of the SD driver's tries with the loop
+  held (the hold keeps its own tries on the decoder's task, 7 in its 2
+  minutes), a scan there asked ten opens in one pass, and a slot's
+  `f_stat` came to "the file isn't there", the play lost for a card that
+  was back a moment later. The play log being the first to ask a card
+  just pulled (nothing else read it since) no longer loses that play
+  either: the next bullet.
+- **A play the card fails is tried again** (`playlog::Outbox`; the
+  review's FP1: any card error popped the waiting play for good, though
+  2.20.3 names "the card pulled" as an outcome to log). The played
+  file's `f_stat` says whose word its "no" is (`CardFat`'s `statFile()`:
+  `FR_NO_FILE`, `FR_NO_PATH`: `the file isn't there`, no slot, as
+  before; anything else, the card failed the read), and the journal's
+  append says `Failed` for every card fault (a question of the log's
+  files, a write, a sync, a rename). On either the play stays first in
+  line: `[plays] seq 12 not written yet (the card refused it; 31.0 ms):
+  tried again in 5 s or when the card mounts again, the same slot (try 1
+  of 3); the plays behind it wait`. It is tried 5 s later
+  (`Outbox::kRetryMs`) or at the guard's remount, three tries in all
+  (`kTries`), then lost, and said so (`NOT written: the card failed it 3
+  times ... the play is lost`). **The same slot each time**
+  (`Journal::again()`): the seq NVS took at the first try and the bytes
+  encoded then, so a play is never two slots that differ, whatever the
+  clock did between the tries, and no second seq is drawn. A first try
+  whose write landed, only its sync or its close failing, is found as
+  the log's last slot (the drop note written with it, the slot before)
+  and written over itself there, with the sync it was owed: one slot. A
+  read the card fails on the way there says nothing, and nothing is
+  written at that try. **Nothing behind it is written meanwhile**: the
+  log's order stays the plays', and a card that is failing isn't asked
+  again for each play in the ring. NVS refusing the seq, a blocked log
+  (no twin name free) and no log lose the play at once, as before:
+  another try changes nothing there.
+- **A rotation tried again** ends as one the card never failed (the
+  host test compares the cards byte for byte). Its step 1's count is
+  owed a drop note from the moment `plays.1.jnl` is gone
+  (`Journal::owedDrops()`), and goes before whichever slot lands next,
+  the same play's at its next try or, that play lost, the next one's
+  (before, a failed step 2 or 3 lost the play and the note). A rename
+  the card fails at step 2 may have left both names on one chain: the
+  cut-rename rule runs again before the next slot, as at a mount. **A
+  `plays.1.jnl` that can't be read** for step 1's count (the review's
+  FP3: one bad sector there wedged the log for good once `plays.jnl` was
+  full, every later play paying the 524 KB read and lost): a read that
+  fails leaves everything as it was, since the next try may read it;
+  at the third rotation in a row that fails there
+  (`Journal::kUnreadTries`, with the three tries the third try of one
+  play) the file goes all the same, the note counting what was read
+  before the fault: `[plays] the rotation couldn't read plays.1.jnl
+  whole in 3 tries ...: it goes all the same, so the log goes on`.
+- **A question the card fails answers nothing** (3.2.2's rule for the
+  boot's files and 2.12.6's for the cut-rename rule, `tagstore::Fs::entry()`).
+  The journal asked `exists()` and `firstCluster()`, which on FatFs say
+  "no" and 0 for a read that failed as for a file that isn't there. On
+  such an answer the cut-rename rule could remove a twin whose chain
+  `plays.1.jnl` still used, the trim or a rotation remove `plays.1.jnl`
+  under a twin, and an append whose open failed take `plays.jnl` for
+  missing and make a new one over it (`FA_CREATE_ALWAYS`: every play not
+  yet sent gone); each needs the fault at that very call, the first three
+  a cut rename's twins on the card as well. Now every such question is
+  `entry()`'s, and the first the card fails ends what was being done with
+  nothing removed, renamed or made: the rule is left unsettled
+  (`Journal::unanswered()`: no slot until a `settle()` is answered, each
+  try of a slot asking again first, the play it can't place kept for
+  its next try),
+  a file the trim can't place stays for the next boot, a rotation fails
+  with the log as it was (and is tried again with its slot), and no new
+  `plays.jnl` is made unless the card says there is none.
+- **Power-offs and restarts.** `PlayHistory::flush()` ends the open play
+  (stopped), finishes the scan and writes every play waiting, gate or
+  not: before the idle power-off's `powerOff()` (after its last look at
+  USB power), before the CPU speed's restart, and in `restartNow()` (the
+  card guard's restarts, "Try again", the format's, the console's `Bf` and
+  forget), after the card worker's step. The settings the taps queued
+  (`app/NvsLater`) are written first (`lib/core/OrderlyEnd`): this is the
+  card, which can take long when it has gone bad, and that costs
+  the plays alone. **And not the end** (`Outbox::flush()`; the review's
+  FP6: no deadline, so a restart could hang on a dying card for the
+  scan and every play's timeouts): each play waiting is tried once, in
+  order, one in its 5 s wait too, and the flush is over at the first the
+  card fails (the plays behind it wouldn't fare better, and each ask of
+  a card that is going is the SD driver's second or two) and at 3 s
+  (`PlayHistory::kFlushBudgetMs`, looked at between a scan's pieces and
+  between plays: a healthy card's worst case, all 32 waiting at 15-20 ms
+  each with a rotation's 524 KB read among them, is under 2 s,
+  ESTIMATED). What is left is said: `[plays] before the restart: 2 of 5
+  plays written in 512 ms; 3 NOT written: the card failed one, the rest
+  weren't asked` (or `the flush's time ran out (a slow card)`, `the
+  boot's scan wasn't done in the flush's time`). The haptic motor is
+  stopped before the settings and the flush, not after
+  (`endInOrder()`): a pattern under way doesn't run through them. Not to
+  another card in the slot, nor to one whose
+  writes are off (FatFs refuses every write: those plays are lost, and
+  said so), nor with none in it: a card that was out is asked once (put
+  back, that mount is a remount, the rule and the scan again), and out
+  still, left alone (`NOT written (no card answers)`). `restartNow()` is
+  also Rescan's restart and the guard's once its wait for the queue's
+  flush is over (3.8). A hard power-off (PWR held, a flat battery) loses the open
+  play and the ones waiting (2.20.5).
+- **Costs (MEASURED on the host FatFs model**, `test_play_log`, a 32 GB
+  FAT32 card with 16 KB clusters and the sector cache): 80 bytes of log a
+  play; an append 2.14 card writes on average (one sector each: the
+  data's and the directory entry's, a FAT sector when a cluster is
+  added), at most 6, and 0.16 reads past the cache; the cap's worst case
+  on the card 1,048,480 bytes (both files full), which the boot's scan
+  reads whole (13,106 slots, about 660 card reads, 103 passes); a
+  rotation reads `plays.1.jnl` once for its count (524,240 bytes, about
+  230 card reads, on the loop in one go), once every 6,553 plays. NVS: one u32 write a play, one at each boot. The
+  device's write time is ESTIMATED at 15-20 ms (below).
+- **Tests.** `test_play_log`: the slot and the drop note byte for byte;
+  log.json's events (boots, plays, a host's `@time`, a sync's ACKS, an NVS
+  erase) through the Journal give `plays/golden/` byte for byte and the
+  reference's ops one for one; the vectors' boot rules, in scan pieces of
+  1, 3 and 1,000 slots; a new epoch; NVS refusing the seq, the seq's last
+  value; a cut append's tail written over; ACKS on the golden root and the
+  four hardening files, and this board's rows kept first among 21 (other
+  boards' before them: trimmed with them, kept without); the trim's ten
+  cases; a rename the card refuses, tried again, and a blocked log going
+  on after a disk check and a remount; a power cut at each of 28
+  steps of appends and three rotations, three ways (CutFs): no chain freed
+  that another name uses, every valid slot one the journal wrote, no seq
+  twice, the log going on, the twins collected after a disk check; all
+  nine twin names taken (blocked); an open the card fails, the question
+  after it too, never a new log over one that is there; each question of
+  the rule, the scan's opens, the trim and a rotation failed in its turn
+  with twins on the card (`FlakyFs`: FatFs's answers), no chain freed that
+  another name uses, the rule left unanswered holding the slots until it
+  is answered (7 mutations of those, 6 caught; the seventh is a rotation
+  that goes on past its first question, which the rename's refusal of an
+  existing `plays.1.jnl` stops all the same); the drop note and what a rotation
+  counts (a note read or not, no ACKS, saturating); the Tracker (a seek
+  as long as the pause before it, paused or as it plays on: not played;
+  a plain pause's audio either side counted); the
+  WriteGate (a run of 33 tracks of 7 s: never open, 32 waiting, one
+  lost); **a slot tried again** (`FaultFs`, a card that fails chosen
+  calls over CutFs): the write refused, the write landed and its sync
+  and close refused (unsynced: after the retry a power cut keeps it), its
+  answer lost, the look for it failing, the open and its question, a
+  remount between the tries: one slot each time, the first try's seq and
+  bytes; the directory's write refused on FatFs itself (the slot once on
+  the card after a mount); a rotation with each step failed in its turn
+  (the question, the delete, the rename refused and cut between its two
+  directory writes, the new file's open, its write, its sync) ending
+  byte for byte as the one nothing failed, the note kept past a play
+  given up on; a `plays.1.jnl` unreadable once (every slot counted) and
+  for good (the third try goes on, counting what it read), its open
+  refused; **the Outbox**: the `f_stat` failing once, the write refused
+  once (a clock set between the tries doesn't date it again), the sync
+  failing after the write, three failures of each kind (lost, the next
+  play's seq the next), the queue's order kept, what is dropped at once
+  (the file gone, NVS, blocked, no log), a remount ending the wait and
+  the scan again before the boot's first slot, the flush (all 32 with a
+  rotation, the first card failure, a play in its wait, the deadline on
+  the plays and on the scan); 28 mutations of these, 28 caught; the
+  card's commands; on the FatFs model, a cut append's tail
+  written over (37 bytes across a sector's end, 79, 1) and a remount
+  during the boot's scan (a file held open across it, the card out for
+  the whole scan, a scan again with the same count, none after a slot);
+  `history` in the vectors' `device.txt` texts. `test_playback`: the
+  controller's word for every action, at joins, Repeat One, failures, the
+  sleep timer's end of track, waits,
+  edits, the fence, the card hold (its let-go, its tries, a seek into it,
+  its end paused, a pause under it) and the firmware's `endPlay()`. `test_nvs_layout`
+  (schema 6, `plays` and `clock`; the unit that ran this work's builds
+  under schema 5), `test_card_contract` (`history=1`).
+- **The device check** (V2, on the spare card, never the music card):
+  1. Boot with the spare card: `[plays] the play log: epoch ... (new:
+     NVS had none)`, then `[plays] ready: boot 1 of this epoch, the next
+     seq 1`; `/.player/device.txt` ends `history=1`.
+  2. Set the clock (`@time`, HOST-STATUS.md), then play three tracks
+     through with gapless joins, skip a fourth after about 20 s, pause a
+     fifth once and stop it: one `[plays] seq N: ...` line each, about 2 s
+     into the next track, with its write time (expected 15-20 ms); the
+     `[stats]` lines' `underruns=` unchanged throughout, on the speaker
+     and on Bluetooth, and no click at the joins.
+  3. The card in a computer: `python tools/playlog.py read
+     .player/plays.jnl` lists seqs 1-5 with those outcomes, playedMs near
+     what played, one pause on the fifth, startedAt the wall time; a
+     sixth play made before `@time` (after a boot with the RTC unset)
+     has startedAt 0 and clock 0.
+  4. The orderly paths: on battery, pause mid-track and let the idle
+     power-off run (`Is30`; on USB it stays on and writes nothing):
+     `[plays] before the power-off: 1 play written`, and the play is in
+     the log, stopped. The same through the CPU speed's restart, and
+     through `Bf` (`restartNow()`; its next boot is a fresh unit for
+     Bluetooth, the pairing kept). Tap a setting within a second before
+     one of them (the Bluetooth power, then Restart on the CPU speed's
+     dialog; or Pause, `Is1`): `[nvs] saved power/bt_tx` comes before the
+     `[plays] before the ...` line, and the setting is there after the boot.
+  5. Cuts: hold PWR mid-track (a hard off): the next boot's log has every
+     play before it and not the open one, no damaged slot. Pull the card
+     while a slot is due (right after a skip), put it back: the card
+     guard's line, then the slot that waited and the next ones written
+     (no `NOT written: the file isn't there` for the pull; or the
+     restart's `NOT written` line for another card). If the slot was
+     asked before the guard knew the card was out: `[plays] ... not
+     written yet (...): tried again in 5 s or when the card mounts again,
+     the same slot (try 1 of 3)`, then at the remount its `seq N: ...
+     (written in ... ms, at its try 2)`, once in the log on a computer
+     (`tools/playlog.py read`: no seq twice, none missing but a play
+     said lost). Pull it during a
+     track, pause when the next one holds (`[queue] the card is out`),
+     put it back a minute later and press Play: no `[plays]` line while
+     it was out, the loop's passes as short as before the pull (`ui`),
+     and the cut track's slot about 2 s into the track that plays. After a boot, before any play
+     ends, pull the card and put it back: `[plays] the card mounted again
+     before this boot's first slot: the boot's scan begins again`, then
+     the `ready` line again with `begun again after a remount` and the same
+     boot number.
+  6. NVS erased (the terminal's install with `--erase`): a new epoch at
+     the next boot; the old slots stay; new plays' seqs from 1 under the
+     new epoch.
 
 ---
 

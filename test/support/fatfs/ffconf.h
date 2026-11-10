@@ -3,10 +3,11 @@
 /  builds FatFs (ESP-IDF 5.5.5 in pioarduino 55.03.312-1: its ffconf.h and
 /  the esp32 sdkconfig.h's CONFIG_FATFS_* values, noted at each change), for
 /  the host-only FatFs model (test/support/FatModel.h; docs/METADATA.md
-/  3.2.7). Left as ChaN ships them, where ESP-IDF differs in ways that read
-/  no sector more or less:
-/  - FF_MULTI_PARTITION 0 (ESP-IDF: 1, with its VolToPart[]: the SD card's
-/    volume is found the same way, partition 0 of drive 0);
+/  3.2.7). FF_MULTI_PARTITION is ESP-IDF's 1, with its VolToPart[] (in
+/  FatFsBuild.c: logical drive n on physical drive n, its volume found as
+/  with 0), so f_mkfs can format an existing partition, as the format in
+/  the player does (lib/core CardMkfs). Left as ChaN ships them, where
+/  ESP-IDF differs in ways that read no sector more or less:
 /  - FF_MIN_SS/FF_MAX_SS 512/512 (ESP-IDF: 512/4096 for its wear-levelled
 /    flash, so the size is asked of the disk: an SD card says 512);
 /  - FF_FS_REENTRANT 0 (ESP-IDF: 1; the model has one thread, and the lock
@@ -201,7 +202,7 @@
 */
 
 
-#define FF_MULTI_PARTITION	0
+#define FF_MULTI_PARTITION	1	/* ESP-IDF: 1 (VolToPart[]: FatFsBuild.c) */
 /* This option switches support for multiple volumes on the physical drive.
 /  By default (0), each logical drive number is bound to the same physical drive
 /  number and only an FAT volume found on the physical drive will be mounted.

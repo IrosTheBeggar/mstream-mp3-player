@@ -752,8 +752,9 @@ private:
 // while the card has no mood data ("No mood data", a tap a note to sync
 // the card from mStream; a saved filter kept, its picks unfiltered: D4).
 // Behind the library update's fence the rows keep their last values, and
-// Smart filters' tap says to wait. Each change saved at once (NVS,
-// app/AutoDjStore) and applied from the next pick; the editor's each tap.
+// Smart filters' tap says to wait. Each change saved once the taps rest
+// (NVS, app/AutoDjStore) and applied from the next pick; the editor's each
+// tap.
 // Device info: what the boot screen used to list (the board, the power
 // chip, the IMU, the chip, flash, PSRAM, the last reset, the battery, the
 // library, internal RAM), with the CPU's clock, the uptime, the firmware

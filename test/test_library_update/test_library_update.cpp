@@ -51,6 +51,7 @@
 #include "LibraryBuilder.h"
 #include "LibraryIndex.h"
 #include "LibraryUpdate.h"
+#include "PowerChoices.h"
 #include "QueueText.h"
 #include "ScanScheduler.h"
 #include "TagStore.h"
@@ -2218,6 +2219,57 @@ void test_a_track_end_near_the_safe_point() {
 }
 
 // ---------------------------------------------------------------------------
+// A restart asked (the format's, a CPU speed's, the loop's: main.cpp's
+// restartPending(), its `waiting`): its pause makes "nothing plays", and that
+// is still no safe point. The restart's wait passes with no fence, and the
+// restart is due at its end at the latest. Not counted (as the format's
+// restart wasn't), the fence goes up in that pause and the restart waits for
+// the whole build (powerchoice::cpuRestartDue()'s libraryWrite). Each kind of
+// restart, on a card of its own.
+// ---------------------------------------------------------------------------
+void test_a_restart_asked_is_no_safe_point() {
+  namespace pc = powerchoice;
+  const bool asked[3] = {pc::restartAsked(true, 0, 0), pc::restartAsked(false, 160, 0),
+                         pc::restartAsked(false, 0, 1234)};
+  for (const bool restart : asked) {
+    CutFs fs;
+    TestCard card;
+    handFilled(fs, card);
+    Device d(fs, card);
+    d.boot();
+    d.upd->ask("the scan's end");
+    Env e;
+    e.waiting = restart;
+    // The compaction first (it doesn't wait for the safe point, and the
+    // restart waits for it): then nothing left but the safe point.
+    d.runUntil([&] { return !d.store->hasJournals() && d.running == Job::None; }, e);
+    const uint32_t at = d.now;
+    while (!pc::cpuRestartDue(d.now, at, /*linked=*/true, /*ampOn=*/false, d.lastOut.libraryWrite)) {
+      d.pass(e);
+      TEST_ASSERT_TRUE(d.lastOut.wait == LibraryUpdate::Wait::SafePoint);
+      TEST_ASSERT_FALSE(d.lastOut.libraryWrite);
+    }
+    TEST_ASSERT_FALSE(d.did(Do::Fence));
+    TEST_ASSERT_TRUE(d.now - at >= pc::kRestartWaitMs);
+    TEST_ASSERT_TRUE(d.now - at <= pc::kRestartWaitMs + 20);
+  }
+  // Not counted: the fence in the pause, the headphones and the amp done
+  // with, and the restart not due until the save's end.
+  CutFs fs;
+  TestCard card;
+  handFilled(fs, card);
+  Device d(fs, card);
+  d.boot();
+  d.upd->ask("the scan's end");
+  d.runUntil([&] { return d.did(Do::Fence); });
+  const uint32_t at = d.now;
+  TEST_ASSERT_TRUE(d.lastOut.libraryWrite);
+  TEST_ASSERT_FALSE(pc::cpuRestartDue(d.now, at, false, false, d.lastOut.libraryWrite));
+  d.runUntil([&] { return d.did(Do::Saved); });
+  TEST_ASSERT_TRUE(pc::cpuRestartDue(d.now, at, false, false, d.lastOut.libraryWrite));
+}
+
+// ---------------------------------------------------------------------------
 // The safe point follows the measured pause (3.4.2; the 2026-10-09 device
 // run, B2: the fence up 17.8-18.6 s with audio at 20k, over the 16 s that
 // should grow it). The pure rule: the pause and kSafeMarginMs, at least
@@ -3550,6 +3602,7 @@ int main(int, char**) {
   RUN_TEST(test_library_tmp_after_a_cut);
   RUN_TEST(test_a_deferral_then_a_boot_that_builds);
   RUN_TEST(test_a_track_end_near_the_safe_point);
+  RUN_TEST(test_a_restart_asked_is_no_safe_point);
   RUN_TEST(test_the_safe_point_follows_the_pause);
   RUN_TEST(test_a_compaction_asked_during_a_build);
   RUN_TEST(test_a_bad_transfer_found_at_the_end_of_a_build);

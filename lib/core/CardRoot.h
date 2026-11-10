@@ -104,6 +104,13 @@ struct Root {
     char path[48] = "";  // "/.mstream/waves-0000002a.bin"
     cardcontract::msmf::Comp entry;
   } waves;
+  // The root's ACKS (2.5.6), read whenever the root is (hasRoot), T or
+  // not: the plays of the device's log the software has, which the play
+  // log trims by (lib/core PlayLog); read()'s `acksOwn`'s rows kept first.
+  // Not present: none, or a section that failed its own checks (the root
+  // stays valid); `acksWhy` says which.
+  cardcontract::msmf::Acks acks;
+  cardcontract::Why acksWhy = cardcontract::Why::Missing;
 
 private:
   const char* rootPtrs_[kMaxRoots] = {};
@@ -111,12 +118,15 @@ private:
 
 // Reads the root and the plan through `fs`, `scratch` (at least 512 bytes)
 // for the readers' streams. `out` is a few KB: a heap or PSRAM object.
-void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out);
+// `acksOwn`: the device's id (its play log's), whose ACKS rows are kept
+// first (msmf::readAcks()); nullptr: the first ones.
+void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out, const uint8_t* acksOwn = nullptr);
 
 // read(), and again while the card fails it (readFailed()), with `wait` between (the
-// boot's: tagstore::kBootWaitsMs). How many reads it took.
+// boot's: tagstore::kBootWaitsMs). How many reads it took. `acksOwn`: read()'s, each time.
 using tagstore::kBootWaitsMs;
-uint32_t readAtBoot(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out, void (*wait)(uint32_t ms));
+uint32_t readAtBoot(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out, void (*wait)(uint32_t ms),
+                    const uint8_t* acksOwn = nullptr);
 
 // One line for the boot's log ("T tags-0000002a.bin, generation 42 (commit
 // 1122334455667788), 3 library roots", "no transfer data (none on the

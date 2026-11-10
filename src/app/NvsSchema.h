@@ -10,7 +10,7 @@
 // the queue, Auto DJ's) are never touched here unless a migration step
 // says so: schema 3's writes "ui"/"lang" (English) on a unit that has none;
 // schema 4's (the "autodj" namespace), 5's ("autodj"/"moods") and 6's
-// ("screen"/"touch_off") write nothing.
+// ("screen"/"touch_off", the "plays" and "clock" namespaces) write nothing.
 namespace nvsschema {
 
 // setup(), right after NVS is up (ensureNvs()) and before the first other

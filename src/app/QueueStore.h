@@ -41,7 +41,8 @@
 // - Shuffle: with the queue, in the file (queue.txt version 2 while
 //   shuffled: docs/QUEUE-MODES.md section 2.9), so the mode and the ranks
 //   it needs are one write. Repeat: NVS ("queue"/"repeat", a u8; schema
-//   2), written at once on a change, read at boot before the queue.
+//   2), queued on a change and written once the taps rest (app/NvsLater),
+//   read at boot before the queue.
 // When and what to write is QueueSaver's (lib/core, host-tested); this is
 // its card and NVS. After a boot the queue is where it was, stopped (at
 // the second it paused at, if it did): nothing starts by itself.
@@ -71,7 +72,7 @@ public:
   // The repeat mode saved (Off when none is, or an unknown value), logged.
   // At boot, before restore() and the first play.
   PlaybackController::Repeat loadRepeat();
-  // A change of mode (the menu, the console): written at once.
+  // A change of mode (the menu, the console): queued (app/NvsLater).
   void saveRepeat(PlaybackController::Repeat r);
   // Saves what changed; call every loop pass (nothing while the queue is
   // carried across a build: remapBegin()).

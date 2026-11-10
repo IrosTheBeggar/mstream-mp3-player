@@ -1119,8 +1119,10 @@ At 19,410 rows and 19,412 tracks, all in PSRAM:
   one's; a `q` that isn't a filter), reads as its default. `migrate(3, 4)`
   and `migrate(4, 5)` do nothing; an older firmware never reads the
   namespace, and 0.12.0 never reads `moods` (its picks are unfiltered).
-  PR #27's card transfer takes schema 5 too: shipped together, they share
-  it (MOOD-FILTERS.md 10). (`lib/core/NvsLayout`, `src/app/AutoDjStore`.)
+  PR #27's card transfer would have shared schema 5 had the two shipped
+  together (MOOD-FILTERS.md 10); 0.13.0 came first, so its `plays` and
+  `clock` namespaces are schema 6's (ARCHITECTURE.md, "NVS: the rules").
+  (`lib/core/NvsLayout`, `src/app/AutoDjStore`.)
 - **Not settings:** 5 anchors, the 50-track and 3-artist cooldowns, the
   30 s quick skip, 8 / 10 BPM, 2 reads a pick, the 50 of a dry or loosened
   pool, 64 random draws, 16 tries by id, 3 failures for the pause.

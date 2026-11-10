@@ -103,11 +103,14 @@ private:
 // whose guard adds STA_PROTECT to the status once it found another card.
 // `noInit`: disk_status() says STA_NOINIT until FatFs
 // initialises the drive again (the SD driver's answer once a card stopped
-// answering: pulled, or another put in).
+// answering: pulled, or another put in). `front` (set: `cache` and
+// `wrapper` are ignored) takes every read and write in front of the disk:
+// the format in the player's writer (cardmkfs::Writer, test_card_mkfs).
 struct Drive {
   RamDisk* disk = nullptr;
   SectorCache* cache = nullptr;
   CachedDrive* wrapper = nullptr;
+  SectorCache::Device* front = nullptr;
   bool noInit = false;
   // disk_read() calls numbered by asked.reads, from failFrom up to failTo, answer
   // RES_ERROR with the status as it was: a read that got its command answered and
@@ -390,9 +393,10 @@ extern "C" DRESULT disk_read(BYTE pdrv, BYTE* buff, LBA_t sector, UINT count) {
   if (asked >= d.failFrom && asked < d.failTo) return RES_ERROR;
   if (d.failSector >= sector && d.failSector < sector + count) return RES_ERROR;
   const uint32_t lba = static_cast<uint32_t>(sector);
-  const bool ok = d.wrapper ? d.wrapper->read(lba, buff, count)
-                  : d.cache ? d.cache->read(*d.disk, lba, buff, count)
-                            : d.disk->read(lba, buff, count);
+  const bool ok = d.front     ? d.front->read(lba, buff, count)
+                  : d.wrapper ? d.wrapper->read(lba, buff, count)
+                  : d.cache   ? d.cache->read(*d.disk, lba, buff, count)
+                              : d.disk->read(lba, buff, count);
   return ok ? RES_OK : RES_ERROR;
 }
 
@@ -403,11 +407,13 @@ extern "C" DRESULT disk_write(BYTE pdrv, const BYTE* buff, LBA_t sector, UINT co
   ++d.asked.writes;
   if (st & STA_PROTECT) return RES_WRPRT;  // (FatFs refuses first; counted, so a test sees it never asks)
   const uint32_t lba = static_cast<uint32_t>(sector);
-  const bool ok = d.wrapper ? d.wrapper->write(lba, buff, count)
-                  : d.cache ? d.cache->write(*d.disk, lba, buff, count)
-                            : d.disk->write(lba, buff, count);
-  // The firmware's wWrite(): the window's own write.
-  if (!ok && d.wrapper && d.fs && d.fs->wflag && d.fs->winsect == sector && buff == d.fs->win) d.wrapper->windowFailed(lba);
+  const bool ok = d.front     ? d.front->write(lba, buff, count)
+                  : d.wrapper ? d.wrapper->write(lba, buff, count)
+                  : d.cache   ? d.cache->write(*d.disk, lba, buff, count)
+                              : d.disk->write(lba, buff, count);
+  // The firmware's wWrite(): the window's own write (the format's writer in front: no wrapper under it).
+  if (!ok && !d.front && d.wrapper && d.fs && d.fs->wflag && d.fs->winsect == sector && buff == d.fs->win)
+    d.wrapper->windowFailed(lba);
   return ok ? RES_OK : RES_ERROR;
 }
 

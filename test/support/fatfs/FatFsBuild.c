@@ -8,3 +8,10 @@
 #include "FatFsHost.h"
 #include "ff.c"
 #include "ffunicode.c"
+
+// FF_MULTI_PARTITION 1, as ESP-IDF builds it: its diskio.c's table, logical
+// drive n on physical drive n with its partition found (0: the volume at
+// LBA 0, else the first FAT partition of an MBR). The format in the player
+// sets its drive's to 1 for f_mkfs, which then formats the MBR's first
+// partition (lib/core CardMkfs; test_card_mkfs).
+PARTITION VolToPart[FF_VOLUMES] = {{0, 0}, {1, 0}};

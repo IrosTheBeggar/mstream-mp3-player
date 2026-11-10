@@ -83,7 +83,7 @@ struct TriggerIn {
   bool repeatOne = false;               // PlaybackController::repeat() is One
   // The rest of the firmware.
   bool cardHeld = false;         // the card's guard holds it
-  bool restartSet = false;       // a restart is set (a CPU speed's)
+  bool restartSet = false;       // a restart is asked (powerchoice::restartAsked())
   bool sleepEndOfQueue = false;  // SleepTimer::choice() is EndOfQueue
   bool failurePaused = false;    // FailurePause::paused()
   bool noFit = false;            // the mood filter on, no library track inside it (MOOD-FILTERS.md 6.5)

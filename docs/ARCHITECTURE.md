@@ -41,6 +41,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  WaveShape  WaveBar  WaveState (the waveform)                 |
               |  MoodFilter (the mood tail, the word, the filter's rules)     |
               |  FilterGrid  FilteredAlbums (the filters' editor, Albums)     |
+              |  PlayLog (the play log: slot, files, tracker, outbox, gate)   |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -66,6 +67,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  app/UsbViz (the USB visualizer: a computer drives the dancer)|
               |  app/AutoDj + app/AutoDjStore (Auto DJ: its index, NVS)       |
               |  app/Waves (the waveform index: Now Playing's shapes)         |
+              |  app/PlayHistory (the play log on the card: plays.jnl, NVS)   |
               |  main.cpp: input events, Bluetooth events, UiHost             |  ESP8266Audio
               +---------------------------------------------------------------+
 ```
@@ -422,7 +424,8 @@ The rules that keep it deadlock- and glitch-free:
    speed's restart, `audio.loop()`, the power lab.
 2. **`stepCardGuard()`:** what the SD wrapper's guard found at FatFs's
    remounts (a card pulled and put back, or another put in: METADATA.md
-   3.8). Then `Waves::remount()`: the same counter, for the waveform index
+   3.8); the same card: the play log's `remounted()` first. Then
+   `Waves::remount()`: the same counter, for the waveform index
    (the root read again, the record dropped), and a read of the root the card
    failed, again when its wait is over (about 2.5 s against a card that doesn't
    answer, ESTIMATED; never while a list moves or behind the update's fence).
@@ -447,7 +450,14 @@ The rules that keep it deadlock- and glitch-free:
    index, and before the card's step, so a pick due this pass lands
    before the update step can raise its fence in the same pass.
 4. **`queueStore.loop()`** (not while the card is held): `queue.txt`, the
-   position and the resume point (Library and queue, below).
+   position and the resume point (Library and queue, below). Then
+   **`stepPlays()`**: the play log's look at the backend's position for
+   the play under way (`app/PlayHistory`, Storage below), and, when the
+   pass's audio and list let it (lib/core `PlayLog`'s `WriteGate`) and the
+   card isn't held, out of the slot or refusing writes (METADATA.md 3.10),
+   a piece of the boot's scan of the log or one play's slot (`Outbox`: a
+   play the card failed waits first in line for its next try, 5 s on or at
+   the card's remount, and nothing is written behind it meanwhile).
 5. A track's learned length, a restart that is due, the `[queue] now at`
    and Repeat One lines, the spike tools, the calibration, the dancer.
 6. **`userInterface->loop()`:** the snapshot (`MainUiHost::snapshot()`,
@@ -455,8 +465,8 @@ The rules that keep it deadlock- and glitch-free:
 7. **`stepCard()`** (not while the card is held): the card worker's loop
    side (`CardTasks::loop()`). Its `UpdateEnv` is what the library update
    step needs from the rest of the firmware (METADATA.md 3.4.2):
-   - the safe point's inputs (playing, waiting, what is left of the heard
-     track, the seeks);
+   - the safe point's inputs (playing, waiting or a restart asked, what is
+     left of the heard track, the seeks);
    - `alsoFreed`, what the step frees besides the index: the queue's
      entries and undo snapshot, a `queue.txt` snapshot write under way
      (`QueueStore::savingBytes()`), Thumbs' pools, and Auto DJ's join
@@ -1173,7 +1183,13 @@ out:
    from CONNECTED until DISCONNECTED: the library's `connected()` goes
    false as soon as the disconnect starts, the stack's DISCONNECTING,
    0.15-1.5 s before the link is gone): the power status read once more (USB plugged in meanwhile:
-   it stays on), haptics stopped, `Serial.flush()`, `M5.Power.powerOff()`
+   it stays on), haptics stopped, the settings the taps queued saved
+   (`app/NvsLater`), then
+   the play log's open play ended (stopped) and every play waiting written
+   (`PlayHistory::flush()`; settings first, `lib/core/OrderlyEnd`: a card
+   gone bad costs the plays alone, and 3 s at most, the flush ending at
+   the first play the card fails and at its deadline),
+   `Serial.flush()`, `M5.Power.powerOff()`
    (the AXP192's power-off bit; M5Unified then deep-sleeps with no wake
    source in case it didn't take). Input or a blocker during step 3's wait
    cancels it: the note is cleared, the headphones stay let go (a play
@@ -1215,7 +1231,10 @@ host-tested in test_power_choices; `app/PowerSettings` keeps them in NVS
   (NVS "boot_cpu"), lets go of the headphones the idle power-off's way and
   asks the speaker's pump to switch the amp off (`requestAmp(Off)`, as
   `Pa0`: the AXP192 isn't reset by `esp_restart()`, so a live amp would pop
-  as its clock pins are reconfigured); `stepCpuRestart()` then calls
+  as its clock pins are reconfigured); `stepCpuRestart()` then saves the
+  settings the taps queued (`app/NvsLater`), flushes the play log (the
+  paused play ended, stopped, and written: `PlayHistory::flush()`; in that
+  order, `lib/core/OrderlyEnd`) and calls
   `esp_restart()` (under the LCD lock) once the headphones are unlinked
   (`BtSink::linkUp()` false: the disconnect done, as the idle power-off
   waits) and the amp is off, at most 3 s later
@@ -1367,16 +1386,27 @@ reset and without a session, about the board ([HOST-STATUS.md](HOST-STATUS.md)):
 `@status` (one line at once, from what the firmware holds: the version,
 the card's kind, size and free space, the library's tracks, the battery,
 the player's state, the card's id and commit from the root the boot read,
-the paired headphones), `@count` (the card's free
-clusters counted once, on request: Storage, "The free space") and
+whether the clock is set, the paired headphones), `@count` (the card's free
+clusters counted once, on request: Storage, "The free space"),
 `@identify <label>` (a full-screen "This one" banner for 5 s and a buzz,
-to tell two boards apart). `HostLink` routes them (in a session or not,
+to tell two boards apart), `@time [<unix-ms>]` (the board's clock, or
+set it) and `@format` (the question that formats the card, on the
+board's screen: the listener answers it there; Storage, "Formatting in
+the player"). `HostLink` routes them (in a session or not,
 declined or not, and none keeps a session alive or a decline going);
 `app/HostQuery` answers, with `lib/core/HostStatus` (the line, the FSINFO
 rule, the label's rule), `lib/core/FreeCount` and `storage/CardSpace` (the
-count), and `Ui::identify()` (the banner: drawn over everything, then the
+count), `Ui::identify()` (the banner: drawn over everything, then the
 UI's own drawing gated as while the screen is dark, everything drawn again
-when it goes). Older firmware answers `@err 7 status`.
+when it goes), and `app/BoardClock` over `lib/core/WallClock` and `lib/core/RtcSync`
+(the clock: the RTC, a BM8563, read at the boot with its voltage-low
+flag, believed when the time it keeps is one this player set (NVS
+`clock`/`set`: a factory's or another firmware's time isn't), and made
+exact at its next tick, caught from the loop with the phase
+the last `@time` measured; a `@time` sets the clock at once and writes the
+RTC on its next second; the time is that plus the board's monotonic ms,
+and `boardclock::now()` is how the firmware reads it). Older firmware answers
+`@err 7 status`, and before 0.14.0 `@err 7 time` and `@err 7 format`.
 
 ## Storage
 
@@ -1393,9 +1423,51 @@ is one read; OPUS.md section 10) and `thumbs/` (the album covers'
 thumbnails, below); on the card also `tags.bin` and its journals
 `tags.jnl` and `walk.jnl` (the device's tag records: docs/METADATA.md
 3.3.2), `device.txt` (what this firmware reads, for the transfer software:
-METADATA.md 2.15) and, for one boot, `build.req` (a library build deferred
-to the next boot). The transfer software's `/.mstream` (its root, its tags
-file, its AutoDJ index, its thumbnails) is read, never written.
+METADATA.md 2.15), `plays.jnl` and `plays.1.jnl` (the play log, below)
+and, for one boot, `build.req` (a library build deferred to the next
+boot). The transfer software's `/.mstream` (its root, its tags file, its
+AutoDJ index, its thumbnails) is read, never written, but for the root's
+ACKS section, which the play log trims by.
+
+**The play log** (`/.player/plays.jnl`, METADATA.md 2.20; lib/core
+`PlayLog`, host-tested in test_play_log against tools/playlog.py's
+goldens; `app/PlayHistory`): one 80-byte slot for each play of a card
+file under `/music`, which the transfer software reads in a card reader
+and reports to the listener's mStream. `PlaybackController` says when a
+play begins (a start from 0:00 or a start point, a gapless join heard)
+and how it ends (completed, skipped, stopped: `setPlays()`); the
+`Tracker` counts the audio played from the backend's position each pass
+(pauses and a seek's jump left out) and the pauses. At its end the play
+waits; the loop writes it when `WriteGate` lets it (not from 5 s before
+the heard track's end to 2 s after the next one's start, not during a
+seek or a start's refill, not with the ring under half, not within 5 s of
+an underrun, not while a list moves or a finger is on its A-Z rail, the
+write being on the loop that draws the list's frames): the file's size and
+FAT time (`f_stat`), its start from the
+board's clock (`boardclock::at()`; 0 while unset), the seq in NVS
+("plays"/"seq") first, then one append and its `f_sync`, rotating into
+`plays.1.jnl` at 6,553 slots with a drop note when plays no software read
+go. A play the card fails (its `f_stat`, its append) isn't lost at once:
+it stays first in line (`Outbox`) and is tried again 5 s later or at the
+card's remount, three tries in all, the journal's same slot each time
+(`Journal::again()`: its seq, its bytes; one whose write had landed is
+found at the log's end and written over itself there, then synced),
+nothing behind it written
+meanwhile; 32 plays can wait (a run of tracks of 7 s or less never opens
+the gate). At boot: NVS's epoch ("plays"/"epoch": a new random one when NVS has
+none), the cut-rename rule (`plays.xl1` to `plays.xl9`), then a scan of
+the log's files a few reads a pass (the boot rules for the seq and the
+boot count; the trim of the files the root's ACKS acknowledges whole:
+the root is read with the board's id, its ACKS rows kept first). The same
+card mounted again (`stepCardGuard()`): the cut-rename rule again, and
+before the boot's first slot the scan again from its start.
+Before every orderly power-off and restart, after the settings the taps
+queued (`lib/core/OrderlyEnd`, main.cpp's `endInOrder()`), the open play
+ends, stopped, and is written (`PlayHistory::flush()`: the idle power-off,
+the CPU speed's restart, `restartNow()`): each play waiting once, in
+order, until the card fails one or 3 s are up
+(`PlayHistory::kFlushBudgetMs`), so the end never waits on a card gone
+bad. Log lines: `[plays] ...`, one per slot with the time its write took.
 
 **FatFs itself, for the card's records** (`storage/CardFat`, METADATA.md
 3.8): the validation walk lists `/music` with `f_readdir`, whose `FILINFO`
@@ -1449,7 +1521,10 @@ Playing, the Library and the Queue then names it, one message per kind
 
 The last covers a blank or unformatted card, Linux's, and a FAT card that
 failed to mount for another reason (a flaky contact, say), so it never says
-"format it": that card may hold music a second Try again finds. GPT's text
+"format it": that card may hold music a second Try again finds. Each but
+"No microSD card" has a second button, Format..., the player's own format
+(below), whose question for this last kind first sends the card to a
+computer's disk check. GPT's text
 uses macOS Disk Utility's words ("Master Boot Record" is its Scheme), since
 a card a Mac erased whole is the usual GPT one. Try again reads the sectors
 again when the card still doesn't mount, so its note follows what is in.
@@ -1467,6 +1542,52 @@ and can't-read states without such a card (`uiFn`: no card).
 true makes the SD driver's `sdcard_mount()` run `f_mkfs(FM_ANY)` on any card
 FatFs finds no FAT volume on (`FR_NO_FILESYSTEM`), which is every exFAT,
 NTFS, GPT and blank card: someone's music wiped at boot without a word.
+A card is formatted only when the listener confirms it, twice (a tap,
+then a 2 s hold):
+
+**Formatting in the player** (0.14.0; [HOST-STATUS.md, "@format"](HOST-STATUS.md#format)).
+The no-card pages' Format... (a card that is in but isn't FAT32, or
+can't be read), or a computer's `@format`, which can do no more than
+bring up the same question: `Ui::askFormat()`'s two dialogs, "Format this
+card?" (the whole card erased, even what the player can't read; a card
+the player reads names its music, and a transfer that didn't finish on
+it; a damaged card's "Check it on a computer first") and "Erase the
+whole card?", whose red "Hold to erase" sits where the first one's
+Cancel was and answers only to a finger kept on it 2 s (the Dialog's
+hold mode, `lib/core/DialogTouch` and `HoldButton`: it fills meanwhile,
+and a hint under the body says how from the start; a tap, a hold let go
+or slid off, does nothing but turn the hint amber), with a settle for a
+double tap (`lib/core/FormatAsk`, from the answering tap's own time).
+The 2 s are the time the loop saw the finger there, pass by pass
+(`Input::finger()`), not the clock's: no lift answers it, however late
+it is read, and a loop that loses sight of the finger for over 0.5 s
+ends the hold (a stall is no hold). And the finger is a hand's: the
+console's scripted finger, on the same USB port as `@format`, taps the
+first question and Cancel, and its hold answers nothing.
+Cancel is the default: a tab, another dialog or screen, a minute with
+no answer (each step's, over a hold under way too: `formatask::pass()`,
+the loop's order). Format restarts the player
+the CPU speed's orderly way (paused, the queue, the settings and the play log saved,
+the headphones let go), with the card's identity (the guard's: its
+size, the CRCs of sector 0 and of its first partition's first sector) in
+RTC slow memory, which a restart keeps and a power cut doesn't; the next
+boot formats that card before anything mounts it (`storage/CardFormatter`,
+the boot screen's bar), and only that card, and only when that boot is
+the restart that asked (a boot from a crash, a watchdog, a brown-out or
+the reset button, which RTC memory can outlive too, drops the request:
+`cardmkfs::take()`). The layout is
+`lib/core/CardMkfs`'s (host-tested on ChaN's FatFs as the Core2 builds
+it, `test_card_mkfs`): sector 0 an MBR with one partition of type 0x0C
+from sector 8192 (4 MiB) to the card's end, the gap before it and the
+card's last 64 sectors zeroed (nothing of a GPT left), then FatFs's own
+`f_mkfs()` in that partition (FatFs's `VolToPart[]` set to it for the
+call: ESP-IDF builds FatFs with `FF_MULTI_PARTITION`): FAT32, 2 FATs,
+32 KB clusters from 2.16 GB up, the data area on a 4 MiB boundary, a
+valid FSINFO count; its boot sector held back and written last, so a
+format cut short leaves no FAT volume ("Can't read this card": format it
+again); read back, then `/music`, `/.player` and `device.txt`. Then the
+boot mounts it, a new card (`cid=-`). docs/METADATA.md 2.2 has the card
+it leaves, for the transfer software.
 
 **The card's size, not its free space.** About's "microSD card, <n> GB"
 is `SD.cardSize()`: the sector count from the card's CSD that the SD driver
@@ -1694,24 +1815,57 @@ written once the taps rest (`app/AutoDjStore` through `app/NvsLater`,
 [AUTODJ.md](AUTODJ.md)). Its `migrate(3, 4)`
 step does nothing: an absent key, or a value this firmware doesn't take,
 reads as its default (off, Follow the vibe, 55 %, both off). 0.10.0
-leaves a schema-4 NVS as it is and never reads the namespace. Schema 5 is
-schema 4's keys and `autodj`/`moods`, Auto DJ's mood filter (a u16, its 11
-bits: [MOOD-FILTERS.md](MOOD-FILTERS.md) 4.6, 5.4), written with the other
-four. Its `migrate(4, 5)` step does nothing (no key, or a value that isn't
-a filter: none), and 0.12.0 leaves a schema-5 NVS as it is, never reading
-the key (its picks unfiltered). PR #27's card transfer takes schema 5 for
-its own namespaces: shipped in one release they share it (MOOD-FILTERS.md
-10). Schema 6 is schema 5's keys and `screen`/`touch_off`, **Touch when
-off** (a u8, `ScreenPower::OffTouch`'s index: 0 Nothing, 1 Wake, 2
-Track; [ENERGY.md](ENERGY.md) item 2), queued and written once the taps
-rest. Its `migrate(5, 6)` step does nothing: no key (every unit before
-it), or a value this firmware doesn't know, reads as Nothing, the
-default the update brings (`nvslayout::offTouchFrom()`), so an updated
-unit's touch no longer wakes its off screen: the user's choice, the PWR
-key does. 0.13.0 leaves a schema-6 NVS as it is and never reads the key:
-back on it, a touch wakes the screen again. The Bluetooth EQ, not merged
-yet, takes schema 6 too: whichever lands second takes 7, or, shipped in
-one release, they share 6 (as schema 5 was shared).
+leaves a schema-4 NVS as it is and never reads the namespace. Schema 5
+(from 0.13.0) is schema 4's keys and `autodj`/`moods`, Auto DJ's mood
+filter (a u16, its 11 bits: [MOOD-FILTERS.md](MOOD-FILTERS.md) 4.6, 5.4),
+written with the other four. Its `migrate(4, 5)` step does nothing (no
+key, or a value that isn't a filter: none), and 0.12.0 leaves a schema-5
+NVS as it is, never reading the key (its picks unfiltered). Schema 6 is
+schema 5's keys and what 0.14.0 adds, three things released together, so
+they share the number: one paragraph, no bump between them. First,
+`screen`/`touch_off`, **Touch when off** (a u8, `ScreenPower::OffTouch`'s
+index: 0 Nothing, 1 Wake, 2 Track; [ENERGY.md](ENERGY.md) item 2), queued
+and written once the taps rest: no key (every unit before it), or a value
+this firmware doesn't know, reads as Nothing, the default the update
+brings (`nvslayout::offTouchFrom()`), so an updated unit's touch no
+longer wakes its off screen: the user's choice, the PWR key does. Second,
+the `plays` namespace, the play log's ids ([METADATA.md](METADATA.md)
+2.20.4; `app/PlayHistory`): `epoch` (a u64, a random value other than 0,
+drawn whenever there is none), `seq` (a u32, the last seq a slot used,
+written before the slot) and `boots` (a u32, the boot count of that
+epoch, written at each boot). A new epoch writes `seq` and `boots` first
+and `epoch` last; an NVS erase drops the three, and the next boot's new
+epoch keeps the plays' ids new to mStream. Third, the `clock` namespace:
+`phase`, an i32, how many ms after the true seconds the RTC's own begin,
+measured by the last `@time`'s write and added at every boot's catch of
+the RTC's tick ([HOST-STATUS.md](HOST-STATUS.md), "@time";
+`app/BoardClock`). It is removed just before a `@time` writes the RTC and
+written once the chip's tick is caught; absent (no `@time` yet, a restart
+between the two, an NVS erase), the boots add none. And `set`, a u8: 1
+once a `@time`'s write of the RTC was read back as the time written, so
+the time the chip keeps is one this player set (written once, never
+removed). Without it the boot takes the RTC's time for the factory's or
+another firmware's (M5's own keep local time, hours off read as UTC; its
+voltage-low flag clear and its date fine all the same) and leaves the
+clock unset until a `@time`: `nvslayout::clockOursFrom()`,
+`wallclock::Boot::Foreign`. A kept `phase` stands for it (a phase is
+written only after such a write), which is what a unit that ran PR
+#27's builds has. The `migrate(5, 6)`
+step does nothing for any of them: no `touch_off` is Nothing, no epoch
+has the first boot draw one, no phase adds none, no `set` (and no phase)
+is a clock unset until the tab's `@time`, once. 0.13.0 leaves a schema-6
+NVS as it is and never reads the key or the two namespaces: back on it, a
+touch wakes the screen again, no log is kept and the RTC is read to the
+second. The card transfer's development builds (PR #27, before it was
+merged with schema 6) wrote `plays` and `clock` under the number 5, which
+0.13.0 then released without them: a unit that ran one holds a schema-5
+NVS with those keys and no `moods`. It takes the step from 5 to 6 as a
+0.13.0 unit does, and every key reads as it was written (its epoch, seq,
+boot count and phase kept, the phase standing for `set`, which those
+builds didn't write; no mood filter: `test_nvs_layout`'s matrix has
+it). The Bluetooth EQ, not merged yet, takes schema 6 too: whichever
+lands second takes 7, or, shipped in one release, they share 6 (as
+`touch_off`, `plays` and `clock` do).
 The rules:
 
 - **Never reuse a key name** (or a namespace) for anything else, even after
@@ -1747,6 +1901,8 @@ The rules:
   last value. A write held the loop a few ms in the middle of the tap that
   made it (longer when NVS's page fills and a sector is erased), and the
   other core's tasks that run from flash stand still while it lasts.
+  Before a restart or a power-off what is queued is written at once, ahead
+  of the play log's card writes (`lib/core/OrderlyEnd`).
   Before a restart or a power-off (`PowerSettings::restart()`,
   `IdlePower::powerOff()`) what is queued is written first. The language,
   the tips' flag, the CPU speed (its restart follows), the queue's
@@ -1760,8 +1916,11 @@ bt_tx, boot_cpu, idle_after, off_idle); `screen` (off_after, bright, and
 schema 6's touch_off); `ui`
 (coach, and schema 3's lang); `queue` (gen, pos, resume, and schema 2's
 repeat); `autodj` (schema 4's on, mode, floor, match, and schema 5's
-moods). Schema 5's are the same without `touch_off`, schema 4's without
-`moods` too, schema 3's without
+moods); `plays` (schema 6's epoch, seq, boots); `clock` (schema 6's
+phase, an i32, and set, a u8). Schema 5's are the same without `touch_off`, `plays` and
+`clock` (a unit that ran PR #27's builds has the last two all the same,
+but for `clock`/`set`),
+schema 4's without `moods` too, schema 3's without
 `autodj`, schema 2's without `ui`/`lang` too, schema 1's without
 `queue`/`repeat` too. The Bluetooth stack keeps its bonds in
 its own namespace, which the firmware never touches.
@@ -2126,7 +2285,8 @@ strings.
   with the worker free and a safe point (nothing plays, or the heard track
   has the pause's length left and 5 s: the last step's measured fence, or
   1 ms a track before one, at least 20 s and at most 30 s; and no seek in
-  2 s), the worker's task there (made first: the build must start
+  2 s; none while a restart is asked, whose pause would make one), the
+  worker's task there (made first: the build must start
   at once), and memory for it (else `/.player/build.req`, and the next
   boot builds), the loop puts up a **fence**: the queue flushed and its
   memory lent to the build (the player fenced: pause and resume still
@@ -3114,7 +3274,13 @@ Queue, Dance and Output (with its Pair and About pages).
   row can stay up and show its new state, Now Playing's Shuffle, Repeat
   and Auto DJ) and a **dialog** (modal, the tab bar
   still works; optionally an icon, a live status line and a red primary
-  button) freeze the page under them; one that opens while a finger is
+  button, on the right or, the format's second question, the left; that
+  question's in the hold mode, answered only by a hand's finger the loop
+  saw on it for 2 s, `lib/core/HoldButton`, the buttons' hit areas
+  `lib/core/DialogLayout`;
+  which touch answers a dialog, `lib/core/DialogTouch`, host-tested, the
+  Dialog drawing what it says changed, that control alone)
+  freeze the page under them; one that opens while a finger is
   on the page (the headphones' drop dialog) ends that touch for the page (a
   Cancel), so its lift can't act or draw under it. When a toast goes, the
   header row it covered is drawn again (`Ui::uncover()`); a page with no
@@ -3185,7 +3351,8 @@ Queue, Dance and Output (with its Pair and About pages).
   and the next band starts when this one is done. While a finger is on the
   rail the card worker is held as for a moving list (`Ui::listMoving()`):
   no cover and no slice of the walk or the scan reads the card under the
-  scrub (on the user's 19,478-track card, 2026-10-30, the boot's walk and
+  scrub, and the play log's `WriteGate` holds its slot on the loop too (on
+  the user's 19,478-track card, 2026-10-30, the boot's walk and
   the covers ran under every scrub, and the only moments a scrub counted
   as "moving" were the passes between a position and its frame). MEASURED
   on the 19,533-track card with the scripted finger
@@ -3245,7 +3412,9 @@ Queue, Dance and Output (with its Pair and About pages).
   or its header's pill (58 ms), a dialog's button (44 ms); each is drawn
   again over the panel sprite as last rendered (rendered whole first when
   another overlay drew in it since) and pushed by itself
-  (`gfx::pushRect()`). And **the band keeps its scroll mode under Now
+  (`gfx::pushRect()`). The hold mode's button goes the same way: its fill
+  as it grows and its emptying, and a press cut short the hint's row too,
+  so the panel always holds what the screen shows. And **the band keeps its scroll mode under Now
   Playing and the Dance tab** (`Ui::ensureScroller()`): their drawing goes
   through the same mapping as an overlay's (the dancer's box too,
   `DanceView::pushRect()`), so a switch from a list page neither clears
@@ -3872,8 +4041,8 @@ Queue, Dance and Output (with its Pair and About pages).
     and the status stay live. A value that can't sit beside its title
     (Match strictness's in de, es, it and pt) takes that line instead,
     dim or live (`uitext::autoDjSecondLine()`), so every language shows
-    it. Each change is saved at once (NVS `autodj`, schema 4) and applies
-    from the next pick. Switched on here with nothing queued and a usable
+    it. Each change is saved once the taps rest (NVS `autodj`, schema 4,
+    `app/NvsLater`) and applies from the next pick. Switched on here with nothing queued and a usable
     index: the toast "Auto DJ on: it follows the next track you play",
     and nothing starts.
   - **The empty states' button** (Now Playing's and the Queue's):
@@ -4154,7 +4323,9 @@ Queue, Dance and Output (with its Pair and About pages).
   card's again (`g0` or a new `g<n>` re-points it). The screenshot (`X`) reads the list band back through the scroll
   offset, as before. For tests without a hand on the device there is a
   **scripted finger** (`Input::simulate`, replacing the panel until it
-  lifts; a real touch cancels it): `uit<x>,<y>` a tap, `uih<x>,<y>` a long
+  lifts; a real touch cancels it; it does all a finger does but hold the
+  format's "Hold to erase" to its end, which only a hand does:
+  HOST-STATUS.md, "@format"): `uit<x>,<y>` a tap, `uih<x>,<y>` a long
   press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` a swipe that lifts at once (a fling
   when fast), `uid...` the same resting 150 ms before the lift (a drag),
   `uip<x>,<ms>` a press on the button strip (y 260) for ms. A y from 240

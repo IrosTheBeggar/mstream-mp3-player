@@ -97,7 +97,7 @@ public:
     uint32_t trackSeq = 0;       // ... trackSeq()
     uint32_t positionMs = 0;     // ... positionMs()
     bool cardHeld = false;       // the card's guard holds the card (a restart comes)
-    bool restartSet = false;     // a restart is set (restartAtMs, a CPU speed's)
+    bool restartSet = false;     // a restart is asked (powerchoice::restartAsked())
     bool sleepEndOfQueue = false;  // the sleep timer's End of queue runs
     bool listMoving = false;     // Ui::listMoving()
     bool uiStarted = true;       // the UI's first frame is up (or there is no UI)
