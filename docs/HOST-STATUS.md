@@ -1068,6 +1068,20 @@ counted. An error changes nothing.
   124,883 B; `.dram0.data` and `.bss` 59,048 B (+712 B). core2-dio:
   4,518,688, the same sections. Every guard passes in both, and
   `tools/package_release.py` takes the two. NOT MEASURED on the device.
+  **The review's fixes** (2026-11-10, at 8b89b34: the hold counted by the
+  loop's own looks and held by hand, the format's request taken at its
+  restart only and its bar from before the first write, the play log's
+  slots tried again, its ring of 32 and its flush's deadline, the clock's
+  set mark), against the image above: core2 `firmware.bin` 4,523,920
+  (+5,296 B, flash `.text` and `.rodata`: the retry and its log lines
+  most of it; the format's four, 1,184 B of that), the app 72 % of its
+  slot; `.iram0.text` unchanged at 124,883 B; `.dram0.data` and `.bss`
+  59,064 B (+16 B); RTC memory unchanged. core2-dio: 4,523,968, the same
+  sections. Every guard passes in both. In PSRAM the play log's ring is
+  9.7 KB where it was 2.4 (32 plays of 304 B). On the loop: one look at
+  the last touch sample a pass (no card, no bus); a retry is one more
+  try of a slot, 5 s on; an NVS write once, at the first `@time` a
+  board takes. NOT MEASURED on the device.
 
 ## Device test plan
 

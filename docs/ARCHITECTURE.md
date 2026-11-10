@@ -1451,7 +1451,8 @@ go. A play the card fails (its `f_stat`, its append) isn't lost at once:
 it stays first in line (`Outbox`) and is tried again 5 s later or at the
 card's remount, three tries in all, the journal's same slot each time
 (`Journal::again()`: its seq, its bytes; one whose write had landed is
-found at the log's end and only synced), nothing behind it written
+found at the log's end and written over itself there, then synced),
+nothing behind it written
 meanwhile; 32 plays can wait (a run of tracks of 7 s or less never opens
 the gate). At boot: NVS's epoch ("plays"/"epoch": a new random one when NVS has
 none), the cut-rename rule (`plays.xl1` to `plays.xl9`), then a scan of
