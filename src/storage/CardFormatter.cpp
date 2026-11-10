@@ -16,6 +16,7 @@
 #include "app/AutoDjContract.h"
 #include "app/Psram.h"
 #include "app/Version.h"
+#include "app/WavesContract.h"
 #include "ff.h"
 #include "diskio.h"       // disk_initialize()
 #include "diskio_impl.h"  // ff_diskio_register(), ff_diskio_impl_t
@@ -257,6 +258,7 @@ Outcome runIfAsked(uint8_t cs, SPIClass& spi, uint32_t hz, Progress progress, vo
   if (v[0] == 'v') ++v;
   cardcontract::devicetxt::Info info = cardcontract::devicetxt::current(v);
   info.readMpdj = autoDjReadMpdj();
+  info.readMpwf = wavesReadMpwf();
   char text[400];
   const size_t n = cardcontract::devicetxt::format(info, text, sizeof(text));
   Work work;
