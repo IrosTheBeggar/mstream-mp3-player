@@ -24,7 +24,11 @@
 //     a power-on fails its magic or CRC.
 //   - runIfAsked(), at the boot before LocalStorage::begin(): the request
 //     taken and cleared first (a crash or a cut mid-format doesn't format
-//     again at the next boot), the card initialised through the SD driver
+//     again at the next boot), and dropped unless this boot is the restart
+//     that asked (esp_reset_reason() is ESP_RST_SW; cardmkfs::take()): RTC
+//     memory can hold through a crash, a watchdog, a brown-out and the
+//     reset button, and none of those is the boot the listener confirmed.
+//     Then the card initialised through the SD driver
 //     (sdcard_init(), disk_initialize()), its identity read and held to the
 //     request's (another card, or none: nothing is written), then
 //     cardmkfs::run() with the SD driver's disk functions put behind its

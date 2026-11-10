@@ -6,6 +6,7 @@
 #include <Arduino.h>
 #include <esp_attr.h>
 #include <esp_random.h>
+#include <esp_system.h>
 #include <sd_diskio.h>
 
 #include <cstdio>
@@ -185,6 +186,22 @@ void onWrite(uint64_t written, uint64_t total, void* ctx) {
 
 const char* originText(uint8_t o) { return cardmkfs::originName(static_cast<cardmkfs::Origin>(o)); }
 
+// What reset this boot came from, for the log (English: a log line).
+const char* resetText(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON: return "a power-on, or the reset button";
+    case ESP_RST_EXT: return "an external reset";
+    case ESP_RST_SW: return "a restart";
+    case ESP_RST_PANIC: return "a crash";
+    case ESP_RST_INT_WDT: return "the interrupt watchdog";
+    case ESP_RST_TASK_WDT: return "the task watchdog";
+    case ESP_RST_WDT: return "a watchdog";
+    case ESP_RST_DEEPSLEEP: return "a wake from deep sleep";
+    case ESP_RST_BROWNOUT: return "a brown-out";
+    default: return "another reset";
+  }
+}
+
 }  // namespace
 
 void ask(const CachedDrive::Identity& id, cardmkfs::Origin origin) { storeRequest(cardmkfs::request(id, origin)); }
@@ -192,8 +209,19 @@ void ask(const CachedDrive::Identity& id, cardmkfs::Origin origin) { storeReques
 Outcome runIfAsked(uint8_t cs, SPIClass& spi, uint32_t hz, Progress progress, void* ctx) {
   Outcome out;
   const cardmkfs::Request r = loadRequest();
-  if (!cardmkfs::valid(r)) return out;
+  // Only the restart that asked formats (cardmkfs::take()): RTC memory can
+  // hold through a crash, a watchdog, a brown-out and the reset button too,
+  // and a request found after one of those is not the boot the listener
+  // confirmed (the restart never came, or came and went).
+  const esp_reset_reason_t reset = esp_reset_reason();
+  const cardmkfs::Take take = cardmkfs::take(r, reset == ESP_RST_SW);
+  if (take == cardmkfs::Take::None) return out;
   storeRequest(cardmkfs::Request{});  // once: a cut or a crash doesn't format again
+  if (take == cardmkfs::Take::Dropped) {
+    Serial.printf("[format] request dropped: this boot is not the restart it asked for (%s: reset reason %d)\n",
+                  resetText(reset), static_cast<int>(reset));
+    return out;
+  }
   out.ran = true;
   out.origin = static_cast<cardmkfs::Origin>(r.origin);
   const uint32_t t0 = millis();

@@ -54,7 +54,8 @@
 //     with its partition set to 1, so it formats the MBR's first one).
 //   - Request: the confirmed card's identity (CachedDrive's: its size, the
 //     CRCs of sector 0 and of its first partition's first sector), carried
-//     across the restart; the boot formats only that card.
+//     across the restart; the boot formats only that card, and only when
+//     it is that restart (take()).
 namespace cardmkfs {
 
 constexpr uint32_t kSectorBytes = 512;
@@ -247,6 +248,15 @@ constexpr uint8_t kRequestVersion = 1;
 // For the card whose identity is `id` (an unreadable one: its size alone).
 Request request(const CachedDrive::Identity& id, Origin origin);
 bool valid(const Request& r);
+// What a boot makes of the request it found (the device clears it first,
+// whichever): Format only when the boot is the restart that asked
+// (`afterRestart`: the reset was the firmware's own restart, the device's
+// esp_restart(), as lib/core CardBreaker's). Memory a restart keeps can
+// outlive a crash, a watchdog, a brown-out and the reset button too, and
+// none of those is the restart the listener confirmed: Dropped, nothing
+// formatted. None: no valid request.
+enum class Take : uint8_t { None, Dropped, Format };
+Take take(const Request& r, bool afterRestart);
 // The card in the slot now (`now`, read at the boot) is the one confirmed:
 // the same size and, when its sectors were read then, the same CRCs; one
 // unreadable then must still be.

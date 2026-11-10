@@ -579,7 +579,14 @@ takes a hand on the player, 2 s.
   pretend card states (`uiF...`), whose card isn't the one in the slot.
 - **The format, at the boot** (`storage/CardFormatter`, over
   `lib/core/CardMkfs`), before anything mounts the card: the request
-  taken and cleared first (a crash or a cut doesn't format again), the
+  taken and cleared first (a crash or a cut doesn't format again), and
+  dropped unless this boot is the restart that asked
+  (`esp_reset_reason()` is `ESP_RST_SW`; `cardmkfs::take()`): RTC memory
+  can hold through a crash, a watchdog, a brown-out and the reset button
+  as well as a restart, and none of those is the boot the listener
+  confirmed (`[format] request dropped: this boot is not the restart it
+  asked for (a crash: reset reason 4)`, nothing formatted, the boot as
+  ever). Then the
   card initialised, its identity read and held to the request's (another
   card, or none answering: nothing written, `@err 4 format card`); then
   1. the partition's first 8 sectors zeroed, the MBR (one primary
@@ -784,7 +791,8 @@ counted. An error changes nothing.
   counted, the boot sector and its backup held back to the last), the
   read-back (`check()`), the files after (`finish()` over the platform's
   `Files`), the whole (`run()`), and the request across the restart
-  (`Request`: the identity, its magic and CRC; `sameCard()`). Tested on
+  (`Request`: the identity, its magic and CRC; `sameCard()`; `take()`:
+  only at the restart that asked). Tested on
   ChaN's FatFs as the Core2 builds it (`test/support/FatModel.h`, now
   with ESP-IDF's `FF_MULTI_PARTITION` and `VolToPart[]`): cluster sizes
   from 512 B at 41.9 MB to 32 KB at FatFs's last sector, each layout
@@ -792,7 +800,8 @@ counted. An error changes nothing.
   GPT and old FAT32 cards formatted and mounted (FSINFO's count against a
   count of the FAT; `/music`, `device.txt`; nothing of the old schemes
   left; the guard's identity changed), a format cut at 14 points never
-  mounting as FAT, each step's refusal, the request's every bit.
+  mounting as FAT, each step's refusal, the request's every bit, and the
+  request at a boot that isn't its restart (dropped).
 - **`lib/core/CachedDrive`**: `identityOf()`, the guard's identity rule
   over any card (the format holds the card to it across the restart).
 - **`lib/core/HostLink`**: `@status`, `@count` and `@format` are events
@@ -852,7 +861,9 @@ counted. An error changes nothing.
   `app/BoardClock`; `@format` through main.cpp's hook (`@format ok`).
   `app/UsbViz` hands it the events.
 - **`src/storage/CardFormatter`**: the request in RTC slow memory
-  (`ask()`, a word at a time), and the boot's format (`runIfAsked()`):
+  (`ask()`, a word at a time), and the boot's format (`runIfAsked()`:
+  the request cleared, then taken only when `esp_reset_reason()` is the
+  restart's):
   the SD driver's disk functions behind the `Writer` for its time
   (`ff_diskio_register()`), `f_mkfs()` with `VolToPart[]`'s partition 1,
   its 64 KB work area in PSRAM, the files through FatFs (its `FATFS` and

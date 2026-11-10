@@ -12,7 +12,7 @@
 // the FAT, /music and device.txt, and nothing left of the old card's
 // schemes; a format cut at any write never leaving a card FatFs takes for
 // a FAT volume; the refusals of each step; the progress; the request
-// carried across the restart.
+// carried across the restart, and taken only at that restart.
 // Run: pio test -e native -f test_card_mkfs
 #include <unity.h>
 
@@ -798,6 +798,44 @@ void test_request() {
   TEST_ASSERT_FALSE(cardmkfs::valid(cardmkfs::request(id, cardmkfs::Origin::None)));
 }
 
+// What a boot makes of the request: only the restart that asked formats.
+// The memory that carries it across a restart can hold through a crash, a
+// watchdog, a brown-out and the reset button as well.
+void test_request_only_at_its_restart() {
+  using cardmkfs::Take;
+  CachedDrive::Identity id;
+  id.valid = true;
+  id.sectors = 124735488;
+  id.bootLba = 32768;
+  id.sector0Crc = 0x11223344;
+  id.bootCrc = 0x55667788;
+  for (cardmkfs::Origin o : {cardmkfs::Origin::Screen, cardmkfs::Origin::Computer}) {
+    const cardmkfs::Request r = cardmkfs::request(id, o);
+    TEST_ASSERT_TRUE(cardmkfs::take(r, true) == Take::Format);
+    TEST_ASSERT_TRUE(cardmkfs::take(r, false) == Take::Dropped);
+  }
+  // A card unreadable when confirmed: the same.
+  CachedDrive::Identity bad;
+  bad.sectors = 62333952;
+  const cardmkfs::Request u = cardmkfs::request(bad, cardmkfs::Origin::Screen);
+  TEST_ASSERT_TRUE(cardmkfs::take(u, true) == Take::Format);
+  TEST_ASSERT_TRUE(cardmkfs::take(u, false) == Take::Dropped);
+  // Nothing valid there (cleared, a power-on's anything, a bit flipped):
+  // None, whatever the boot was.
+  cardmkfs::Request zeros;
+  std::memset(&zeros, 0, sizeof(zeros));
+  cardmkfs::Request garbage;
+  std::memset(&garbage, 0xA5, sizeof(garbage));
+  cardmkfs::Request flipped = cardmkfs::request(id, cardmkfs::Origin::Computer);
+  flipped.sectors ^= 1;
+  for (bool afterRestart : {false, true}) {
+    TEST_ASSERT_TRUE(cardmkfs::take(cardmkfs::Request{}, afterRestart) == Take::None);
+    TEST_ASSERT_TRUE(cardmkfs::take(zeros, afterRestart) == Take::None);
+    TEST_ASSERT_TRUE(cardmkfs::take(garbage, afterRestart) == Take::None);
+    TEST_ASSERT_TRUE(cardmkfs::take(flipped, afterRestart) == Take::None);
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_cluster_sizes);
@@ -809,5 +847,6 @@ int main(int, char**) {
   RUN_TEST(test_refusals);
   RUN_TEST(test_writer_holds);
   RUN_TEST(test_request);
+  RUN_TEST(test_request_only_at_its_restart);
   return UNITY_END();
 }

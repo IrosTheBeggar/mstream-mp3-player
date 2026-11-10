@@ -1557,7 +1557,10 @@ the headphones let go), with the card's identity (the guard's: its
 size, the CRCs of sector 0 and of its first partition's first sector) in
 RTC slow memory, which a restart keeps and a power cut doesn't; the next
 boot formats that card before anything mounts it (`storage/CardFormatter`,
-the boot screen's bar), and only that card. The layout is
+the boot screen's bar), and only that card, and only when that boot is
+the restart that asked (a boot from a crash, a watchdog, a brown-out or
+the reset button, which RTC memory can outlive too, drops the request:
+`cardmkfs::take()`). The layout is
 `lib/core/CardMkfs`'s (host-tested on ChaN's FatFs as the Core2 builds
 it, `test_card_mkfs`): sector 0 an MBR with one partition of type 0x0C
 from sector 8192 (4 MiB) to the card's end, the gap before it and the

@@ -330,6 +330,11 @@ bool valid(const Request& r) {
          r.crc == crc32(reinterpret_cast<const uint8_t*>(&r), offsetof(Request, crc));
 }
 
+Take take(const Request& r, bool afterRestart) {
+  if (!valid(r)) return Take::None;
+  return afterRestart ? Take::Format : Take::Dropped;
+}
+
 bool sameCard(const Request& r, const CachedDrive::Identity& now) {
   if (!valid(r) || now.sectors != r.sectors) return false;
   if (!r.identified) return !now.valid;
