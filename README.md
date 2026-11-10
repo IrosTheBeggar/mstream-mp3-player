@@ -1004,7 +1004,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       card's free clusters counted a piece of the FAT at a
                       time, exact with FatFs writing between the pieces
   WallClock, RtcSync  The board's clock: the RTC's boot reading (its
-                      voltage-low flag, the range 2026-2099), a computer's
+                      voltage-low flag, the range 2026-2099, whether this
+                      player set the time it keeps), a computer's
                       @time, the UTC calendar both ways; the RTC's next
                       tick caught (the boot's ms), a @time's write on its
                       second and the phase it measures

@@ -1400,7 +1400,9 @@ count), `Ui::identify()` (the banner: drawn over everything, then the
 UI's own drawing gated as while the screen is dark, everything drawn again
 when it goes), and `app/BoardClock` over `lib/core/WallClock` and `lib/core/RtcSync`
 (the clock: the RTC, a BM8563, read at the boot with its voltage-low
-flag and made exact at its next tick, caught from the loop with the phase
+flag, believed when the time it keeps is one this player set (NVS
+`clock`/`set`: a factory's or another firmware's time isn't), and made
+exact at its next tick, caught from the loop with the phase
 the last `@time` measured; a `@time` sets the clock at once and writes the
 RTC on its next second; the time is that plus the board's monotonic ms,
 and `boardclock::now()` is how the firmware reads it). Older firmware answers
@@ -1838,9 +1840,19 @@ measured by the last `@time`'s write and added at every boot's catch of
 the RTC's tick ([HOST-STATUS.md](HOST-STATUS.md), "@time";
 `app/BoardClock`). It is removed just before a `@time` writes the RTC and
 written once the chip's tick is caught; absent (no `@time` yet, a restart
-between the two, an NVS erase), the boots add none. The `migrate(5, 6)`
+between the two, an NVS erase), the boots add none. And `set`, a u8: 1
+once a `@time`'s write of the RTC was read back as the time written, so
+the time the chip keeps is one this player set (written once, never
+removed). Without it the boot takes the RTC's time for the factory's or
+another firmware's (M5's own keep local time, hours off read as UTC; its
+voltage-low flag clear and its date fine all the same) and leaves the
+clock unset until a `@time`: `nvslayout::clockOursFrom()`,
+`wallclock::Boot::Foreign`. A kept `phase` stands for it (a phase is
+written only after such a write), which is what a unit that ran PR
+#27's builds has. The `migrate(5, 6)`
 step does nothing for any of them: no `touch_off` is Nothing, no epoch
-has the first boot draw one, no phase adds none. 0.13.0 leaves a schema-6
+has the first boot draw one, no phase adds none, no `set` (and no phase)
+is a clock unset until the tab's `@time`, once. 0.13.0 leaves a schema-6
 NVS as it is and never reads the key or the two namespaces: back on it, a
 touch wakes the screen again, no log is kept and the RTC is read to the
 second. The card transfer's development builds (PR #27, before it was
@@ -1848,7 +1860,8 @@ merged with schema 6) wrote `plays` and `clock` under the number 5, which
 0.13.0 then released without them: a unit that ran one holds a schema-5
 NVS with those keys and no `moods`. It takes the step from 5 to 6 as a
 0.13.0 unit does, and every key reads as it was written (its epoch, seq,
-boot count and phase kept, no mood filter: `test_nvs_layout`'s matrix has
+boot count and phase kept, the phase standing for `set`, which those
+builds didn't write; no mood filter: `test_nvs_layout`'s matrix has
 it). The Bluetooth EQ, not merged yet, takes schema 6 too: whichever
 lands second takes 7, or, shipped in one release, they share 6 (as
 `touch_off`, `plays` and `clock` do).
@@ -1903,8 +1916,9 @@ schema 6's touch_off); `ui`
 (coach, and schema 3's lang); `queue` (gen, pos, resume, and schema 2's
 repeat); `autodj` (schema 4's on, mode, floor, match, and schema 5's
 moods); `plays` (schema 6's epoch, seq, boots); `clock` (schema 6's
-phase, an i32). Schema 5's are the same without `touch_off`, `plays` and
-`clock` (a unit that ran PR #27's builds has the last two all the same),
+phase, an i32, and set, a u8). Schema 5's are the same without `touch_off`, `plays` and
+`clock` (a unit that ran PR #27's builds has the last two all the same,
+but for `clock`/`set`),
 schema 4's without `moods` too, schema 3's without
 `autodj`, schema 2's without `ui`/`lang` too, schema 1's without
 `queue`/`repeat` too. The Bluetooth stack keeps its bonds in

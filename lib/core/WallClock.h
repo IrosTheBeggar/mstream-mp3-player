@@ -85,11 +85,14 @@ enum class Source : uint8_t {
   Host = 2,   // a computer's @time, this boot
 };
 
-// The boot's reading of the RTC (M5Unified's M5.Rtc).
+// The boot's reading of the RTC (M5Unified's M5.Rtc), and whose time it
+// is: the chip can't say, NVS does (app/BoardClock: "clock"/"set", written
+// once a @time's write was read back as that time; nvslayout::clockOursFrom()).
 struct Reading {
   bool chip = false;     // the RTC answered at M5.begin() (M5.Rtc.isEnabled())
   bool read = false;     // its time registers were read and are a date (M5.Rtc.getDateTime())
   bool voltLow = false;  // its voltage-low flag (VL, bit 7 of VL_seconds: M5.Rtc.getVoltLow())
+  bool ours = false;     // this player set the time the chip keeps (a @time's write, taken)
   Civil civil;           // what it says (when `read`)
 };
 
@@ -107,8 +110,14 @@ enum class Boot : uint8_t {
   Range,       // a year outside kMinYear..kMaxYear (whatever the rest):
                // never set (a fresh chip counts from 2000), set wrong,
                // or a @time cut short (its 19yy: rtcWrites())
+  Foreign,     // a real time in the range that this player never set
+               // (`ours` false): the factory's, or another firmware's
+               // (M5's own keep local time: hours off, read as UTC). Its
+               // flag is clear and its date fine, so only who set it
+               // tells; a play dated by it would be hours out with a
+               // clock byte that says the RTC was valid
 };
-const char* bootName(Boot b);  // "ok", "no RTC", "unreadable", "voltage low", "out of range"
+const char* bootName(Boot b);  // "ok", "no RTC", "voltage low", "unreadable", "out of range", "not this player's"
 
 // The boot's rules on a reading (Clock::boot()'s): Ok and its time (Unix
 // ms, a whole second) in *unixMs, or why not.
@@ -117,14 +126,17 @@ Boot judge(const Reading& r, uint64_t* unixMs);
 // polls, RtcSync), decoded as M5Unified 0.2.23 decodes them
 // (PCF8563_Class::getDateTime(): its masks, BCD and range checks, 19yy for
 // the century bit; the flag is getVoltLow()'s bit): a chip that answered.
+// Whose time it is isn't in the registers: `ours` is left false, the
+// caller's to say (RtcSync's reads are of a time the boot believed or a
+// @time just wrote: this player's).
 Reading fromRegisters(const uint8_t (&regs)[7]);
 
 class Clock {
 public:
   // The boot's reading, taken at `monoMs`: the clock is the RTC's (the
   // second it says, taken as its start: up to a second behind until
-  // refine()) when the chip answered, its flag is clear and its date is a
-  // date believed; else unset.
+  // refine()) when the chip answered, its flag is clear, its date is a
+  // date believed and this player set it; else unset.
   Boot boot(const Reading& r, uint64_t monoMs);
   // A computer's @time at `monoMs`: true and the clock set when the time
   // is believed; else false and nothing changes.

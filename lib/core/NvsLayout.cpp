@@ -103,6 +103,10 @@ PlaysIds playsFrom(const PlaysStored& s) {
   return p;
 }
 
+bool clockOursFrom(bool haveSet, uint8_t set, bool havePhase) {
+  return (haveSet && set == kClockSet) || havePhase;
+}
+
 size_t encodeResume(const QueueResume& r, uint8_t out[kResumeBytes]) {
   for (size_t i = 0; i < kResumeBytes; ++i) out[i] = 0;
   const ResumeAnchor& a = r.anchor;

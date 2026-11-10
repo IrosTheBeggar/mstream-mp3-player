@@ -35,11 +35,12 @@ uint64_t ms(const Civil& c) {
   return v;
 }
 
-// An RTC that answered, flag clear, saying `c`.
+// An RTC that answered, flag clear, saying `c`, a time this player set.
 Reading rtc(const Civil& c) {
   Reading r;
   r.chip = true;
   r.read = true;
+  r.ours = true;
   r.civil = c;
   return r;
 }
@@ -190,6 +191,70 @@ void test_boot() {
   TEST_ASSERT_EQUAL_STRING("voltage low", bootName(Boot::VoltLow));
 }
 
+// A time in the range that this player never set (NVS has no "set" and no
+// phase: app/BoardClock): the factory's, or another firmware's, often
+// local time. Its flag is clear and its date a date, so only who set it
+// tells: unset, Foreign. (It was believed: plays dated hours out, their
+// clock byte saying the RTC was valid.) Every reason that says more of the
+// chip comes first.
+void test_a_time_this_player_never_set() {
+  Clock k;
+  Reading r = rtc(civil(2026, 10, 18, 16, 3, 22));  // (two hours ahead of UTC: a local time)
+  r.ours = false;
+  TEST_ASSERT_TRUE(k.boot(r, 2500) == Boot::Foreign);
+  TEST_ASSERT_FALSE(k.ok());
+  TEST_ASSERT_TRUE(k.source() == Source::Unset);
+  TEST_ASSERT_EQUAL_UINT64(0, k.at(2500));
+  uint64_t v = 77;
+  TEST_ASSERT_TRUE(judge(r, &v) == Boot::Foreign);
+  TEST_ASSERT_EQUAL_UINT64(77, v);  // (no time given)
+  // The edges of the range, as any time in it.
+  r.civil = civil(2026, 1, 1);
+  TEST_ASSERT_TRUE(k.boot(r, 0) == Boot::Foreign);
+  r.civil = civil(2099, 12, 31, 23, 59, 59);
+  TEST_ASSERT_TRUE(k.boot(r, 0) == Boot::Foreign);
+  // What says more of the chip first: none, its flag, no date, a date out
+  // of the range (a chip never set counts from 2000).
+  Reading x;
+  TEST_ASSERT_TRUE(k.boot(x, 0) == Boot::NoChip);
+  x = r;
+  x.voltLow = true;
+  TEST_ASSERT_TRUE(k.boot(x, 0) == Boot::VoltLow);
+  x = r;
+  x.read = false;
+  TEST_ASSERT_TRUE(k.boot(x, 0) == Boot::Unreadable);
+  x = r;
+  x.civil = civil(2026, 2, 30);
+  TEST_ASSERT_TRUE(k.boot(x, 0) == Boot::Unreadable);
+  x = r;
+  x.civil = civil(2000, 1, 1, 0, 0, 12);
+  TEST_ASSERT_TRUE(k.boot(x, 0) == Boot::Range);
+  x.civil = civil(1926, 10, 18, 14, 3, 22);
+  TEST_ASSERT_TRUE(k.boot(x, 0) == Boot::Range);
+  // ... and this player's time out of the range is no better for it.
+  x.ours = true;
+  TEST_ASSERT_TRUE(k.boot(x, 0) == Boot::Range);
+  // Nothing refines a clock the boot didn't believe; a computer's @time
+  // sets it, and the next boot's reading, this player's now, is believed.
+  r.civil = civil(2026, 10, 18, 16, 3, 22);
+  TEST_ASSERT_TRUE(k.boot(r, 0) == Boot::Foreign);
+  TEST_ASSERT_FALSE(k.refine(1792332203005ull, 900));
+  TEST_ASSERT_FALSE(k.ok());
+  TEST_ASSERT_TRUE(k.set(1792332202123ull, 3000));
+  TEST_ASSERT_TRUE(k.source() == Source::Host);
+  Clock n;
+  Reading set = rtc(civil(2026, 10, 18, 14, 3, 25));
+  TEST_ASSERT_TRUE(n.boot(set, 400) == Boot::Ok);
+  TEST_ASSERT_TRUE(n.source() == Source::Rtc);
+  TEST_ASSERT_EQUAL_UINT64(1792332205000ull, n.at(400));
+  // The names, in the reasons' order.
+  TEST_ASSERT_EQUAL_STRING("ok", bootName(Boot::Ok));
+  TEST_ASSERT_EQUAL_STRING("no RTC", bootName(Boot::NoChip));
+  TEST_ASSERT_EQUAL_STRING("unreadable", bootName(Boot::Unreadable));
+  TEST_ASSERT_EQUAL_STRING("out of range", bootName(Boot::Range));
+  TEST_ASSERT_EQUAL_STRING("not this player's", bootName(Boot::Foreign));
+}
+
 // A @time: set when believed (its ms kept), from then the time runs on the
 // board's monotonic ms; a time not believed changes nothing.
 void test_set() {
@@ -267,11 +332,13 @@ Chip chipAt(const Civil& c, bool voltLow) {
   return k;
 }
 
+// (On a unit a @time set before: the time the chip keeps is its own.)
 Reading readChip(const Chip& k) {
   const auto bcdOk = [](uint8_t v) { return (v & 0x0F) <= 9 && (v >> 4) <= 9; };
   const auto dec = [](uint8_t v) { return (v >> 4) * 10 + (v & 0x0F); };
   Reading r;
   r.chip = true;
+  r.ours = true;
   r.voltLow = (k.r[0] & 0x80) != 0;
   const uint8_t sec = k.r[0] & 0x7f, min = k.r[1] & 0x7f, hour = k.r[2] & 0x3f, day = k.r[3] & 0x3f;
   const uint8_t mo = k.r[5] & 0x1f, yy = k.r[6];
@@ -404,8 +471,10 @@ void test_from_registers() {
     for (int cut = 0; cut <= 15; ++cut) {
       const Chip k = cutShort(b.chip, w, kRtcWrites, cut);
       const Reading want = readChip(k);
-      const Reading got = fromRegisters(k.r);
+      Reading got = fromRegisters(k.r);
       TEST_ASSERT_TRUE(got.chip);
+      TEST_ASSERT_FALSE(got.ours);  // (whose time it is isn't in the registers: the caller's)
+      got.ours = true;
       TEST_ASSERT_EQUAL(want.voltLow, got.voltLow);
       TEST_ASSERT_EQUAL(want.read, got.read);
       if (want.read) {
@@ -426,7 +495,10 @@ void test_from_registers() {
   k.r[4] = 0;
   TEST_ASSERT_TRUE(fromRegisters(k.r).read);
   uint64_t v = 0;
-  TEST_ASSERT_TRUE(judge(fromRegisters(k.r), &v) == Boot::Ok);
+  Reading ours = fromRegisters(k.r);
+  TEST_ASSERT_TRUE(judge(ours, &v) == Boot::Foreign);  // as read: nobody's yet
+  ours.ours = true;
+  TEST_ASSERT_TRUE(judge(ours, &v) == Boot::Ok);
   TEST_ASSERT_EQUAL_UINT64(1792332202000ull, v);
   k.r[0] |= 0x80;  // the flag
   TEST_ASSERT_TRUE(judge(fromRegisters(k.r), &v) == Boot::VoltLow);
@@ -440,6 +512,7 @@ int main(int, char**) {
   RUN_TEST(test_not_a_time);
   RUN_TEST(test_believable);
   RUN_TEST(test_boot);
+  RUN_TEST(test_a_time_this_player_never_set);
   RUN_TEST(test_set);
   RUN_TEST(test_at_any_moment);
   RUN_TEST(test_refine);

@@ -17,7 +17,10 @@ Sample sample(bool answered, const uint8_t (&regs)[7]) {
   Sample s;
   s.answered = answered;
   if (!answered) return s;
-  const wallclock::Reading r = wallclock::fromRegisters(regs);
+  wallclock::Reading r = wallclock::fromRegisters(regs);
+  // (This player's time: the catch runs only on a reading the boot
+  // believed, and a read-back is of what a @time just wrote.)
+  r.ours = true;
   s.voltLow = r.voltLow;
   uint64_t ms = 0;
   s.believed = wallclock::judge(r, &ms) == wallclock::Boot::Ok;

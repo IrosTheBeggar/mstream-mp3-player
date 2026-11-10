@@ -107,7 +107,7 @@ long, `bt=` gives way first, down to 36 bytes; past that the keys after
 | `bat` | 0-100, or `-` | the power chip's battery reading the UI takes every 10 s (the tab bar's); `-` until the first |
 | `state` | `playing`, `paused`, `idle`, `host` | the player: `playing` also while a play waits for the headphones; `idle` stopped; `host` while a computer drives the dancer (the visualizer's host mode) |
 | `cid` | the card's id and its commit's generation, `<cardId>.<generation>`: 16 and 8 hex digits in lower case, leading zeros kept (`5eedc0de0a1b2c3d.0000002a`); `-` or `?`. Since 0.12.0 | the root the boot read (docs/METADATA.md 2.5.2, 2.5.4: `/.mstream/manifest.bin` or `.tmp`, the one the election picked, checked whole; `Library::root()`): its `cardId`, and its `generation`, the number in the commit's file names (`tags-0000002a.bin`). Kept when the root's tags file then fails the boot's checks (the boot log's `[lib] the card:` line names that file, the generation and why: `no transfer data (the root's T tags-0000002a.bin, generation 42: missing)`; the library is the walk's alone), or when the card fails its reads (`its T tags-0000002a.bin, generation 42, unread`; the library stays: docs/METADATA.md 3.2.2): the root still names the card. `-`: no root (no `/.mstream`, or none valid), no PSRAM to read it, the internal flash, or no card mounted now (`card=` isn't `fat32` or `fat16`: a card pulled reads `none`). `?`: the card failed the boot's reads of the root, which says nothing of whether it has one, so a computer shouldn't take it for a card with none (docs/METADATA.md 3.2.2). Until the next boot, even if Auto DJ's later reads of it work. **Read once, at the boot**, never during `@status`: another card put in while on is a restart (the card's guard, at FatFs's remount, its first read of that card: ARCHITECTURE.md, Storage), and from the moment the guard finds it until that restart (about a second: FatFs has the other card mounted then, and `card=` says its kind) `cid=` is `-` (before that first read nothing on the board knows the card changed); but the same card pulled and put back keeps the boot's root until a restart, even if a computer wrote a new commit to it meanwhile |
-| `clock` | `ok` or `unset`. Since 0.14.0 | the board's clock ([@time](#time); `boardclock::ok()`): `ok` while it has a time it believes, the RTC's read at the boot or a computer's `@time` since; `unset` when the boot's reading wasn't believed (the RTC's voltage-low flag set, a date outside 2026-2099, no RTC) and no `@time` came since. A reader takes any other value as `unset` |
+| `clock` | `ok` or `unset`. Since 0.14.0 | the board's clock ([@time](#time); `boardclock::ok()`): `ok` while it has a time it believes, the RTC's read at the boot or a computer's `@time` since; `unset` when the boot's reading wasn't believed (the RTC's voltage-low flag set, a date outside 2026-2099, no RTC, or a time this player never set: no `@time` ever wrote this RTC from this firmware) and no `@time` came since. A reader takes any other value as `unset` |
 | `bt` | the paired headphones' name, percent-encoded, or `-` | their own name once linked, before that the one saved at the pairing (`BtSink::shownName()`, the Output tab's); `-` with nothing paired, or a pairing whose name the board never learnt |
 
 **Percent-encoding** (`bt=`): RFC 3986's unreserved bytes (`A-Z a-z 0-9 -
@@ -305,7 +305,7 @@ up: the new label, 5 s from then.
 
 ```
 → @time
-← @time unset                         (the RTC lost its time, or was never set)
+← @time unset                         (the RTC lost its time, or this player never set it)
 → @time 1792332202123
 ← @time ok                            (2026-10-18 14:03:22.123 UTC)
 → @time
@@ -349,7 +349,9 @@ and the clock is `unset` or more than 2 s off. Always UTC: the board keeps no ti
   (the flag clear, that second or one after) and the chip's next tick
   caught, as the boot's catch below: `[clock] the RTC set to 2026-10-18
   14:03:23 UTC on its second (written 4 ms after it); its seconds begin
-  +5 ms from the true ones (within 6 ms): kept for the boots`. Refused at
+  +5 ms from the true ones (within 6 ms): kept for the boots`. With that
+  read-back the RTC's time is this player's from then on (NVS
+  `clock`/`set`, written once: "At the boot" below). Refused at
   once, nothing changed, only when no RTC answered at the boot or a read
   of its time fails now: `@err 4 time rtc`, and `[clock] @time: ...;
   nothing changed`. A write that doesn't go through, or a read-back that
@@ -377,14 +379,37 @@ and the clock is `unset` or more than 2 s off. Always UTC: the board keeps no ti
 - **At the boot** (an early `[clock]` line): the RTC's time is believed
   only when the chip answered, its **voltage-low flag** is clear (VL, bit
   7 of its seconds register: set at the chip's first power-up and whenever
-  its supply failed since, cleared only by setting the time), and its date
-  is a real one in the range above: `[clock] 2026-10-18 14:03:22 UTC, from
+  its supply failed since, cleared only by setting the time), its date
+  is a real one in the range above, **and the time is one this player
+  set**: `[clock] 2026-10-18 14:03:22 UTC, from
   the RTC (to the second; to a few ms at its next tick)`. Otherwise
   `clock=unset`, and the line says why: `the RTC lost its time (its
   voltage-low flag: ...)`, `the RTC says 2000-01-01 00:00:12 UTC, outside
   2026-2099 (never set, set wrong, or a @time cut short)` (a chip never
   set counts from 2000; the year is read first, so a 19yy is this too),
-  `the RTC's reading isn't a date`, `no RTC answered`.
+  `the RTC's reading isn't a date`, `no RTC answered`, and, the chip
+  fine in every way, `the RTC says 2026-10-18 16:03:22 UTC, a time this
+  player never set (another firmware's or the factory's); a computer's
+  @time sets it`.
+- **Whose time it is.** A Core2 comes with a time in its RTC, and other
+  firmware sets one (M5's own keep local time): the flag is clear, the
+  date a real one in the range, and read as UTC it is hours out. Plays
+  dated by it would be wrong by that with nothing to say so (their clock
+  byte 1, "the RTC's, valid at boot"), and the tab, which sets the clock
+  when the board says `unset` or is more than 2 s off, might not be there
+  before them. So the board believes its RTC only once it has set it
+  itself: NVS's `clock`/`set`, a u8, written when a `@time`'s write is
+  read back as the time written (its tick caught or not), once, and never
+  removed (a chip that then loses its time says so by its flag). No
+  `set`: the boot's reading is `unset`, `@status` says `clock=unset` and
+  a bare `@time` answers `@time unset`, so the tab's first look sets it,
+  and every boot after believes it. A kept phase counts as `set` (it is
+  written only after such a write: a board that ran this work's builds
+  before `set` existed has one). An NVS erase forgets it: the next boot
+  is `unset` until the tab sets the clock again. The rule is
+  `lib/core/WallClock`'s (`Reading::ours`, `Boot::Foreign`, last of the
+  reasons: each of the others says more of the chip) and `nvslayout`'s
+  (`clockOursFrom()`).
 - **The catch**: the chip's fraction of a second can't be read, so the
   boot's clock takes the second it read as that second's start (up to a
   second behind) until the chip's next tick. From the loop's first pass
@@ -415,7 +440,7 @@ and the clock is `unset` or more than 2 s off. Always UTC: the board keeps no ti
   `@time`'s catch measures how far after the true seconds the chip's
   begin (the clock the `@time` set, at the chip's tick, less its new
   second): the phase, kept in NVS (`clock`/`phase`, an i32 of ms; schema
-  5, ARCHITECTURE.md's NVS rules) and added at every boot's catch. It is
+  6, ARCHITECTURE.md's NVS rules) and added at every boot's catch. It is
   removed just before the write and kept once caught, so it is always the
   phase of the time in the chip: a restart in between (a second or two)
   leaves none, and the boots add 0 until the next `@time` (exact to the
@@ -710,6 +735,14 @@ counted. An error changes nothing.
 → @time 1792332202123
 ← @time ok
 
+(a board this firmware never set the clock of: new, or back from another firmware)
+→ @status
+← @status fw=v0.14.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 state=idle cid=5eedc0de0a1b2c3d.0000002a clock=unset bt=-
+→ @time
+← @time unset                         (its RTC says a time, the factory's or another firmware's: not believed)
+→ @time 1792332202123
+← @time ok                            (the RTC is this player's from here: clock=ok at every boot after)
+
 (a board whose card is exFAT, as it came: the tab offers to format it)
 → @status
 ← @status fw=v0.14.0 elf=63ee7a2b card=exfat size=63864569856 free=? tracks=- music=? bat=87 state=idle cid=- clock=ok bt=-
@@ -756,7 +789,8 @@ counted. An error changes nothing.
   and why, never "none on the card".
 - **`lib/core/WallClock`** (portable, `test_wall_clock`): the clock
   (`Clock`): the boot's rule (`boot()`: the chip, its voltage-low flag, a
-  real date, the range), a `@time` (`set()`), the time at any moment of
+  real date, the range, and whether this player set that time:
+  `Boot::Foreign`), a `@time` (`set()`), the time at any moment of
   the boot (`at()`) and where it came from (`source()`); the range
   (`believable()`), the UTC calendar both ways (`toCivil()`,
   `fromCivil()`: every day from 1970 to 2100 round-trips), the RTC's
@@ -871,8 +905,9 @@ counted. An error changes nothing.
   its 64 KB work area in PSRAM, the files through FatFs (its `FATFS` and
   `FIL` in PSRAM), the lines and the log.
 - **`src/app/BoardClock`**: the RTC read at the boot (`begin()`, after
-  `M5.begin()`, which found the chip) with the kept phase (NVS
-  `clock`/`phase`); a `@time` (`set()`: a read of the chip, then the
+  `M5.begin()`, which found the chip) with the kept phase and whose time
+  the chip keeps (NVS `clock`/`phase` and `set`; `set` written when a
+  write's read-back is taken); a `@time` (`set()`: a read of the chip, then the
   clock and the system time at once, the write planned); `loop()`, every
   pass, `RtcSync`'s steps (the registers read in one run, the phase
   dropped and kept, `rtcWrites()`' three through M5Unified's driver) and
@@ -1092,8 +1127,13 @@ each line whole with its `\n`. Close every other owner of the port first.
     `int(time.time() * 1000)`; note it beside each answer.
     - **The boot's line.** After a restart, the log's `[clock]` line:
       `... UTC, from the RTC (to the second; to a few ms at its next
-      tick)` or `unset: ...` and why (a board fresh from the factory may
-      hold a time of M5's, or count from 2000); with a time, within about
+      tick)` or `unset: ...` and why (a board no `@time` of this firmware
+      ever set, fresh from the factory or back from another firmware,
+      says `unset: the RTC says <t> UTC, a time this player never set
+      (another firmware's or the factory's)` whatever its RTC holds, or
+      `outside 2026-2099` for a chip counting from 2000; the owner's
+      board, which ran this work's builds and kept a phase, says `from
+      the RTC`); with a time, within about
       a second of the loop's start `[clock] ... UTC at the RTC's tick,
       within <n> ms (...); the boot's second was <s> s behind`, `<n>`
       under 15. `@status`'s `clock=` agrees (`ok` or `unset`), and so does
@@ -1142,6 +1182,16 @@ each line whole with its `\n`. Close every other owner of the port first.
     - **Flat** (only if it happens anyway: don't drain a battery for it).
       A boot after the battery ran flat: `unset: the RTC lost its time
       (its voltage-low flag ...)`, `clock=unset`, until a `@time`.
+    - **Never set here.** After an NVS erase (the terminal's install
+      with `--erase`: the RTC keeps its time through it), or on a board
+      that never had a `@time` from this firmware: the boot's `[clock]
+      unset: the RTC says <t> UTC, a time this player never set (another
+      firmware's or the factory's); a computer's @time sets it` (`<t>`
+      the right time, after an erase), `@status` says `clock=unset`,
+      `@time` gives `@time unset`. A play made now has no start (`[plays]
+      seq N: ...; the clock unset`). `@time <the computer's ms>`: `@time
+      ok`, the write's `[clock] the RTC set to ...` line. Restart: `from
+      the RTC`, `clock=ok`, and again after every restart.
     - **Old firmware.** On a board older than 0.14.0 (v0.13.0, say):
       `@time <ms>` gives `@err 7 time`.
 11. **@format** (0.14.0). **On the spare card only, never the music

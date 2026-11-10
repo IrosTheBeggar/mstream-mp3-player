@@ -276,9 +276,10 @@ void test_resume_blob_unknown_kind_keeps_the_position() {
 // layout change: schema 2 is schema 1's keys and "queue"/"repeat", schema
 // 3 schema 2's and "ui"/"lang", schema 4 schema 3's and the four of
 // "autodj", schema 5 schema 4's and "autodj"/"moods", schema 6 schema 5's
-// and "screen"/"touch_off", the three of "plays" and "clock"'s phase (PR
-// #27's card transfer; its builds before it took schema 6 wrote the last
-// two under 5: nvslayout's comment, and the matrix below).
+// and "screen"/"touch_off", the three of "plays" and "clock"'s phase and
+// set mark (PR #27's card transfer; its builds before it took schema 6
+// wrote "plays" and the phase under 5: nvslayout's comment, and the matrix
+// below).
 void test_the_schema_is_six() {
   TEST_ASSERT_EQUAL_UINT16(6, nvslayout::kCurrent);
   TEST_ASSERT_EQUAL_UINT8(2, nvslayout::kResumeVersion);
@@ -551,6 +552,26 @@ void test_the_clocks_phase_names() {
   for (const char* n : others) TEST_ASSERT_TRUE(std::strcmp(nvslayout::kClockNamespace, n) != 0);
 }
 
+// "clock"/"set" (schema 6, with the phase): whether the time in the RTC is
+// one this player set. Its name; and the rule the boot reads it by: the
+// mark there and 1, or a phase kept (written only after a @time's write
+// was taken; PR #27's builds kept one and no mark). Neither: the chip's
+// time is the factory's or another firmware's, and isn't believed.
+void test_the_clocks_set_mark() {
+  TEST_ASSERT_EQUAL_STRING("set", nvslayout::kClockSetKey);
+  TEST_ASSERT_TRUE(std::strlen(nvslayout::kClockSetKey) <= 15);
+  TEST_ASSERT_TRUE(std::strcmp(nvslayout::kClockSetKey, nvslayout::kClockPhaseKey) != 0);
+  TEST_ASSERT_EQUAL_UINT8(1, nvslayout::kClockSet);
+  TEST_ASSERT_FALSE(nvslayout::clockOursFrom(false, 0, false));  // a new unit, 0.13.0's, an NVS erase
+  TEST_ASSERT_FALSE(nvslayout::clockOursFrom(false, 1, false));  // (no key: its value is nothing)
+  TEST_ASSERT_TRUE(nvslayout::clockOursFrom(true, 1, false));    // set here, no phase (its tick not caught)
+  TEST_ASSERT_TRUE(nvslayout::clockOursFrom(true, 1, true));     // set here, its phase kept
+  TEST_ASSERT_TRUE(nvslayout::clockOursFrom(false, 0, true));    // PR #27's builds: the phase alone
+  TEST_ASSERT_FALSE(nvslayout::clockOursFrom(true, 0, false));   // a value this firmware doesn't write
+  TEST_ASSERT_FALSE(nvslayout::clockOursFrom(true, 2, false));   // ... a later one's
+  TEST_ASSERT_TRUE(nvslayout::clockOursFrom(true, 2, true));
+}
+
 // The migration matrix: every unit this firmware can boot on, and what
 // the boot keeps of each. The Opus work added the resume blob's kind 3
 // under schema 1 (a blob's kinds are its own version's business, no
@@ -574,7 +595,10 @@ void test_the_clocks_phase_names() {
 // nothing unless this firmware saved another choice, and the play log
 // keeps its epoch and the clock its phase where this firmware or one of PR
 // #27's builds left them (every other unit draws an epoch at its first
-// boot here, and has no phase until a @time).
+// boot here, and has no phase until a @time); the RTC's time is this
+// player's where this firmware marked it or such a build kept a phase, and
+// nobody's on every other unit (0.13.0's and older, a new one), whose
+// clock is unset until a @time.
 void test_migration_matrix() {
   using A = SchemaStep::Action;
   using Kind = ResumeAnchor::Kind;
@@ -605,6 +629,11 @@ void test_migration_matrix() {
     // "clock"/"phase" (the same two): the last @time's, none without one.
     bool havePhase = false;
     int32_t phase = 0;
+    // "clock"/"set" (schema 6: this firmware's alone), and whether the
+    // boot takes the RTC's time for this player's (app/BoardClock).
+    bool haveSet = false;
+    uint8_t set = 0;
+    bool wantOurs = false;
   };
   // This firmware's Auto DJ: on, Stay on seed, 70 %, Harmonic mixing.
   nvslayout::AutoDjStored stayOnSeed;
@@ -667,7 +696,7 @@ void test_migration_matrix() {
        false, A::Migrate, 0, Lang::En, true, none, off},
       {"PR #27's builds (schema 5, a play log and a @time's phase, no mood filter key, Auto DJ on)", true, 5, true, 1,
        Kind::Mp3, "de", true, A::Migrate, 1, Lang::De, false, stayOnSeed, stayOnSeedRead, false, 0, 0, logged,
-       0x1122334455667788ull, true, -412},
+       0x1122334455667788ull, true, -412, false, 0, true},
       {"PR #27's builds, no @time yet (schema 5, a play log)", true, 5, false, 0, Kind::Opus, "en", true, A::Migrate,
        0, Lang::En, false, none, off, false, 0, 0, logged, 0x1122334455667788ull},
       {"0.13.0 (schema 5, a mood filter)", true, 5, true, 0, Kind::Opus, "en", true, A::Migrate, 0, Lang::En,
@@ -680,10 +709,15 @@ void test_migration_matrix() {
        false, A::Migrate, 0, Lang::En, true, none, off},
       {"this firmware (schema 6, Touch when off: Track, a play log, a @time's phase)", true, 6, true, 0, Kind::Opus,
        "en", true, A::None, 0, Lang::En, false, moody, moodyRead, true, 2, 2, logged, 0x1122334455667788ull, true,
-       37},
-      {"this firmware, back from a downgrade to 0.13.0 (schema 6 kept, Wake and its play log too)", true, 6, true, 2,
-       Kind::Flac, "pl", true, A::None, 2, Lang::Pl, false, moody, moodyRead, true, 1, 1, logged,
-       0x1122334455667788ull},
+       37, true, 1, true},
+      {"this firmware, back from a downgrade to 0.13.0 (schema 6 kept, Wake, its play log and the RTC it set too)",
+       true, 6, true, 2, Kind::Flac, "pl", true, A::None, 2, Lang::Pl, false, moody, moodyRead, true, 1, 1, logged,
+       0x1122334455667788ull, false, 0, true, 1, true},
+      {"this firmware, no @time yet (schema 6, a play log; the RTC's time the factory's)", true, 6, true, 0,
+       Kind::Mp3, "en", true, A::None, 0, Lang::En, false, none, off, false, 0, 0, logged, 0x1122334455667788ull},
+      {"this firmware after a later one's (schema 6, a set mark it doesn't know)", true, 6, false, 0, Kind::None, "en",
+       true, A::None, 0, Lang::En, false, none, off, false, 0, 0, logged, 0x1122334455667788ull, false, 0, true, 2,
+       false},
       {"this firmware after a later one's (schema 6, a touch_off it can't read)", true, 6, true, 0, Kind::None, "en",
        true, A::None, 0, Lang::En, false, junkMoods, stayOnSeedRead, true, 7, 0},
       {"this firmware, Touch when off never changed, no play yet (schema 6, no key)", true, 6, false, 0, Kind::None,
@@ -719,6 +753,9 @@ void test_migration_matrix() {
     // The RTC's phase (app/BoardClock): no step writes one; absent, none.
     TEST_ASSERT_EQUAL_INT32_MESSAGE(u.havePhase ? u.phase : rtcsync::kNoPhase,
                                     rtcsync::phaseFrom(u.havePhase, u.phase), u.ran);
+    // Whose time the RTC keeps: no step writes the mark; this player's
+    // where this firmware set it, or one of PR #27's builds kept a phase.
+    TEST_ASSERT_EQUAL_MESSAGE(u.wantOurs, nvslayout::clockOursFrom(u.haveSet, u.set, u.havePhase), u.ran);
     QueueResume saved = u.kind == Kind::None ? sample() : anchored();
     saved.anchor.kind = u.kind;
     if (u.kind == Kind::Flac || u.kind == Kind::Opus) {  // the FLAC model: no byte fields
@@ -788,6 +825,7 @@ int main(int, char**) {
   RUN_TEST(test_auto_dj_mood_filter_from_what_is_saved);
   RUN_TEST(test_the_play_logs_ids_from_what_is_saved);
   RUN_TEST(test_the_clocks_phase_names);
+  RUN_TEST(test_the_clocks_set_mark);
   RUN_TEST(test_migration_matrix);
   return UNITY_END();
 }

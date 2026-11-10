@@ -8,7 +8,9 @@
 
 // The board's wall clock (lib/core WallClock and RtcSync; docs/HOST-STATUS.md,
 // "@time"): the Core2's RTC (a BM8563, M5Unified's M5.Rtc, which M5.begin()
-// found) read at the boot with its voltage-low flag, made exact at its next
+// found) read at the boot with its voltage-low flag, believed when the time
+// it keeps is one this player set (NVS "clock"/"set", written once a @time's
+// write is read back; or a kept phase), made exact at its next
 // tick (the loop's catch), and set by a computer's @time. How the rest of
 // the firmware reads "now": now() (Unix ms, 0 while unset) and source() (the
 // play log's clock byte, docs/METADATA.md 2.20). The RTC is touched only by
@@ -17,8 +19,9 @@
 // task (a spinlock around them).
 namespace boardclock {
 
-// setup(), after M5.begin(): the RTC read, the kept phase (NVS
-// "clock"/"phase"), and the boot log's [clock] line.
+// setup(), after M5.begin(): the RTC read, the kept phase and whose time
+// the chip keeps (NVS "clock"/"phase" and "set"), and the boot log's
+// [clock] line.
 void begin();
 // Every loop pass: the RTC's catch after the boot (a read of its time every
 // 10 ms or more, about a second; three at most), a @time's write on its

@@ -96,6 +96,7 @@ const char* bootName(Boot b) {
     case Boot::Unreadable: return "unreadable";
     case Boot::VoltLow: return "voltage low";
     case Boot::Range: return "out of range";
+    case Boot::Foreign: return "not this player's";
   }
   return "?";
 }
@@ -110,6 +111,10 @@ Boot judge(const Reading& r, uint64_t* unixMs) {
   if (r.civil.year < kMinYear || r.civil.year > kMaxYear) return Boot::Range;
   if (!fromCivil(r.civil, &ms)) return Boot::Unreadable;
   if (!believable(ms)) return Boot::Range;  // (never, the year in it)
+  // A time as good as any, but whose? One this player never set (a factory
+  // time, another firmware's local time) is last: every reason above says
+  // more of the chip.
+  if (!r.ours) return Boot::Foreign;
   *unixMs = ms;
   return Boot::Ok;
 }

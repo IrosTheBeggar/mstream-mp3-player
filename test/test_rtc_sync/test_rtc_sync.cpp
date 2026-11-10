@@ -16,6 +16,7 @@
 #include <cstring>
 #include <vector>
 
+#include "NvsLayout.h"
 #include "RtcSync.h"
 #include "WallClock.h"
 
@@ -87,10 +88,12 @@ struct Pace {
   }
 };
 
-// The board: the clock, the sync and NVS's phase, run as BoardClock does.
+// The board: the clock, the sync and NVS's "clock" (the phase, and whether
+// this player set the RTC), run as BoardClock does.
 struct Board {
   Chip* chip = nullptr;
   int32_t nvs = kNoPhase;  // "clock"/"phase" (kNoPhase: absent)
+  bool nvsSet = true;      // "clock"/"set": a @time's write was taken here before (false: absent)
   int64_t bootReal = 0;
   uint64_t monoBase = 0;
   Clock clock;
@@ -116,14 +119,19 @@ struct Board {
     events.clear();
     uint8_t r[7];
     chip->registers(t, r);
-    clock.boot(wallclock::fromRegisters(r), mono(t));
+    wallclock::Reading reading = wallclock::fromRegisters(r);
+    reading.ours = nvslayout::clockOursFrom(nvsSet, nvslayout::kClockSet, nvs != kNoPhase);
+    clock.boot(reading, mono(t));
     sync.boot(clock, nvs);
   }
   void drain() {
     Event e;
     while (sync.takeEvent(&e)) {
       events.push_back(e);
+      // (BoardClock's report(): the phase kept, and the RTC this player's
+      // from a write taken, its tick caught or not.)
       if (e.kind == Event::Kind::Taken) nvs = e.phaseMs;
+      if (e.kind == Event::Kind::Taken || e.kind == Event::Kind::Untimed) nvsSet = true;
     }
   }
   // One loop pass at real `t`. `stopAfterForget`: a restart right after
@@ -753,6 +761,102 @@ void test_the_last_second() {
   TEST_ASSERT_FALSE(a.sync.busy());
 }
 
+// Whose time the RTC keeps (WallClock's Boot::Foreign, app/BoardClock): a
+// unit no @time ever set doesn't believe a chip that says a fine time (the
+// factory's, another firmware's local time): unset, no catch, nothing
+// read. A @time's write taken makes the chip's time this player's, its
+// tick caught or not, and the next boot believes it; a write given up on
+// doesn't.
+void test_whose_time_it_is() {
+  Pace pace;
+  // A factory chip, two hours ahead (a local time), its flag clear.
+  Chip chip = chipAt(true, 0, -7200000);
+  Board a;
+  a.chip = &chip;
+  a.nvsSet = false;
+  a.boot(kT0, 300);
+  TEST_ASSERT_FALSE(a.clock.ok());
+  TEST_ASSERT_FALSE(a.sync.busy());
+  a.pass(kT0 + 2000);
+  TEST_ASSERT_EQUAL_INT(0, a.reads);
+  TEST_ASSERT_EQUAL_UINT64(0, a.clock.at(a.mono(kT0 + 2000)));
+  // ... at every boot until a computer sets it.
+  Board again;
+  again.chip = &chip;
+  again.nvsSet = false;
+  again.boot(kT0 + 3000, 300);
+  TEST_ASSERT_FALSE(again.clock.ok());
+  // The computer's @time: the clock at once, the RTC on its second, its
+  // tick caught: taken, and marked this player's.
+  TEST_ASSERT_TRUE(a.set(kT0 + 5100, kT0 + 5100));
+  TEST_ASSERT_TRUE(a.clock.source() == wallclock::Source::Host);
+  a.run(kT0 + 5100, pace);
+  TEST_ASSERT_NOT_NULL(a.last(Event::Kind::Taken));
+  TEST_ASSERT_TRUE(a.nvsSet);
+  // The next boot believes the chip, to within its catch.
+  Board b;
+  b.chip = &chip;
+  b.nvs = a.nvs;
+  b.nvsSet = a.nvsSet;
+  b.boot(kT0 + 20300, 300);
+  TEST_ASSERT_TRUE(b.clock.source() == wallclock::Source::Rtc);
+  const int64_t end = b.run(kT0 + 22000, pace);
+  TEST_ASSERT_NOT_NULL(b.last(Event::Kind::Caught));
+  TEST_ASSERT_TRUE(abs64(b.error(end)) <= 30);
+  // The mark alone (the phase gone: a restart between a later @time's drop
+  // of it and its write), and the phase alone (a unit that ran this work's
+  // builds before the mark was kept): believed.
+  Board c;
+  c.chip = &chip;
+  c.nvs = kNoPhase;
+  c.nvsSet = true;
+  c.boot(kT0 + 40300, 300);
+  TEST_ASSERT_TRUE(c.clock.ok());
+  Board d;
+  d.chip = &chip;
+  d.nvs = a.nvs;
+  d.nvsSet = false;
+  d.boot(kT0 + 50300, 300);
+  TEST_ASSERT_TRUE(d.clock.ok());
+  // A write taken whose tick wasn't caught (the chip stopped after the
+  // read-back): no phase, this player's all the same.
+  Chip stopped = chipAt(true, 0, -7200000);
+  Board e;
+  e.chip = &stopped;
+  e.nvsSet = false;
+  e.boot(kT0, 300);
+  TEST_ASSERT_FALSE(e.clock.ok());
+  TEST_ASSERT_TRUE(e.set(kT0 + 6100, kT0 + 6100));
+  e.pass(kT0 + 6100);
+  e.pass(kT0 + 7003);  // the write and its read-back
+  stopped.counting = false;
+  e.run(kT0 + 7015, pace);
+  TEST_ASSERT_NOT_NULL(e.last(Event::Kind::Untimed));
+  TEST_ASSERT_EQUAL_INT32(kNoPhase, e.nvs);
+  TEST_ASSERT_TRUE(e.nvsSet);
+  // A chip that never took the write (three tries, given up): not this
+  // player's, and the next boot doesn't believe what it still says.
+  Chip deaf = chipAt(true, 0, -7200000);
+  deaf.takes = false;
+  Board f;
+  f.chip = &deaf;
+  f.nvsSet = false;
+  f.boot(kT0, 300);
+  TEST_ASSERT_TRUE(f.set(kT0 + 6100, kT0 + 6100));
+  f.run(kT0 + 6100, pace);
+  const Event* r = f.last(Event::Kind::Refused);
+  TEST_ASSERT_NOT_NULL(r);
+  TEST_ASSERT_FALSE(r->again);
+  TEST_ASSERT_FALSE(f.nvsSet);
+  TEST_ASSERT_TRUE(f.clock.source() == wallclock::Source::Host);  // (this boot's clock: the computer's)
+  Board g;
+  g.chip = &deaf;
+  g.nvs = f.nvs;
+  g.nvsSet = f.nvsSet;
+  g.boot(kT0 + 20300, 300);
+  TEST_ASSERT_FALSE(g.clock.ok());
+}
+
 // Nothing to do: an unset clock at the boot (no catch), and no reads
 // while idle.
 void test_idle() {
@@ -787,6 +891,7 @@ int main(int, char**) {
   RUN_TEST(test_written_but_untimed);
   RUN_TEST(test_the_latest_time_wins);
   RUN_TEST(test_the_last_second);
+  RUN_TEST(test_whose_time_it_is);
   RUN_TEST(test_idle);
   return UNITY_END();
 }

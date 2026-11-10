@@ -41,11 +41,13 @@
 // ScreenPower::OffTouch's index: docs/ENERGY.md item 2); the "plays"
 // namespace, the play log's ids (docs/METADATA.md 2.20.4: "epoch" a u64,
 // "seq" and "boots" u32s); and the "clock" namespace, the RTC's phase
-// ("phase", an i32: docs/HOST-STATUS.md, "@time"). Its migrate(5, 6) step
+// ("phase", an i32) and whether this player set the RTC ("set", a u8:
+// docs/HOST-STATUS.md, "@time"). Its migrate(5, 6) step
 // does nothing (an absent "touch_off" reads as Nothing, the default the
 // update brings: a touch on the off screen no longer wakes it, the PWR key
 // does; no epoch: the first boot draws one; no phase: none added until a
-// @time), and older firmware leaves a schema-6 NVS as it is (it never
+// @time; no "set" and no phase: the RTC's time isn't this player's, the
+// clock unset until a @time), and older firmware leaves a schema-6 NVS as it is (it never
 // reads the key or the namespaces: a touch wakes the screen, as it always
 // did there, it keeps no log and reads the RTC to the second). The card
 // transfer's development builds (PR #27, before it was merged with schema
@@ -53,7 +55,8 @@
 // released without them: a unit that ran one holds a schema-5 NVS with
 // those keys and no "moods". It takes the step from 5 to 6 as a 0.13.0
 // unit does, and every key reads as it was written: its epoch, seq and
-// boot count and its phase are kept, its mood filter is none. A unit that
+// boot count and its phase are kept (the phase standing for "set", which
+// those builds didn't write), its mood filter is none. A unit that
 // ran the Opus work before it joined the queue modes (schema 1 with a
 // kind-3 resume blob, no repeat key) takes the same steps and keeps its
 // resume point: a blob's kinds are its own version's business
@@ -242,6 +245,21 @@ PlaysIds playsFrom(const PlaysStored& stored);
 // sent, a restart between the two, an NVS erase): none, 0 added.
 inline constexpr const char* kClockNamespace = "clock";
 inline constexpr const char* kClockPhaseKey = "phase";
+// "set" (schema 6 too: released with the phase, no bump): a u8, 1 once a
+// @time's write of the RTC was read back as the time written (RtcSync's
+// Taken and Untimed), so the time the chip keeps is one this player set.
+// Written once and never removed (the RTC losing its time shows in its own
+// voltage-low flag). Absent: no @time ever set this RTC from this NVS (a
+// new unit, one that ran firmware before 0.14.0, an NVS erase), and what
+// the chip says is the factory's or another firmware's time (M5's keep
+// local time: hours off, read as UTC), which the boot doesn't believe
+// (wallclock::Boot::Foreign): the clock is unset until a computer's @time.
+inline constexpr const char* kClockSetKey = "set";
+inline constexpr uint8_t kClockSet = 1;
+// Whether the RTC's time is this player's: "set" there and 1, or a phase
+// kept (`havePhase`: written only after such a write; the units that ran
+// PR #27's development builds hold one and no "set").
+bool clockOursFrom(bool haveSet, uint8_t set, bool havePhase);
 
 // Writes r (valid or not: the caller removes the key for an invalid one)
 // as version kResumeVersion; returns kResumeBytes.

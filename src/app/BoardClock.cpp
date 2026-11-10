@@ -67,17 +67,45 @@ bool writeRtc(uint64_t second) {
   return true;
 }
 
-// NVS's "clock"/"phase" (nvslayout, schema 6).
-int32_t keptPhase() {
+// NVS's "clock" (nvslayout, schema 6): the phase kept, and whether the
+// time in the RTC is one this player set ("set", or a kept phase).
+struct Kept {
+  int32_t phase = rtcsync::kNoPhase;
+  bool ours = false;
+};
+Kept kept() {
+  Kept k;
   Preferences p;
   // (Read-write, though it only reads, as AutoDjStore's load(): a read-only
   // open of a namespace not made yet fails with an [E] line at every boot
   // until the first @time; read-write makes the namespace, no key.)
-  if (!p.begin(nvslayout::kClockNamespace, false)) return rtcsync::kNoPhase;
+  if (!p.begin(nvslayout::kClockNamespace, false)) return k;
   const bool have = p.isKey(nvslayout::kClockPhaseKey);
   const int32_t v = have ? p.getInt(nvslayout::kClockPhaseKey, 0) : 0;
+  const bool haveSet = p.isKey(nvslayout::kClockSetKey);
+  const uint8_t set = haveSet ? p.getUChar(nvslayout::kClockSetKey, 0) : 0;
   p.end();
-  return rtcsync::phaseFrom(have, v);
+  k.phase = rtcsync::phaseFrom(have, v);
+  k.ours = nvslayout::clockOursFrom(haveSet, set, have);
+  return k;
+}
+
+// The RTC took a @time's write (its read-back was that time): the time it
+// keeps is this player's from here on, and the boots believe it. Written
+// once (the same value isn't written again at every @time).
+bool keepSet() {
+  Preferences p;
+  if (!p.begin(nvslayout::kClockNamespace, false)) return false;
+  const bool have = p.isKey(nvslayout::kClockSetKey) && p.getUChar(nvslayout::kClockSetKey, 0) == nvslayout::kClockSet;
+  const bool ok = have || p.putUChar(nvslayout::kClockSetKey, nvslayout::kClockSet) == sizeof(uint8_t);
+  p.end();
+  return ok;
+}
+
+void noteSet() {
+  if (keepSet()) return;
+  Serial.printf("[clock] @time: the mark that this player set the RTC couldn't be kept (NVS): the next boot takes "
+                "its time for another's, unset, until a @time\n");
 }
 
 bool keepPhase(int32_t ms) {
@@ -140,6 +168,7 @@ void report(const Event& e) {
       return;
     case Event::Kind::Taken: {
       textOf(e.second, t);
+      noteSet();
       const bool kept = keepPhase(e.phaseMs);
       Serial.printf("[clock] the RTC set to %s UTC on its second (written %lu ms after it); its seconds begin %+ld ms "
                     "from the true ones (within %lu ms): %s\n",
@@ -150,6 +179,7 @@ void report(const Event& e) {
     }
     case Event::Kind::Untimed:
       textOf(e.second, t);
+      noteSet();
       Serial.printf("[clock] the RTC set to %s UTC on its second (written %lu ms after it); its next tick not caught "
                     "(%s): no phase kept, the boots add none\n",
                     t, static_cast<unsigned long>(e.lateMs), why(e.why));
@@ -210,10 +240,15 @@ void begin() {
     r.read = readRtc(&r.civil);
   }
   const uint64_t mono = monoMs();
-  const int32_t phase = r.chip ? keptPhase() : rtcsync::kNoPhase;
+  // Whose time the chip keeps: this player's only when NVS says a @time's
+  // write was taken here (or a phase was kept after one). A time it never
+  // set, the factory's or another firmware's (often local time, hours off
+  // as UTC), is in the range too, and isn't believed.
+  const Kept k = r.chip ? kept() : Kept();
+  r.ours = k.ours;
   portENTER_CRITICAL(&lock_);
   const wallclock::Boot b = clock_.boot(r, mono);
-  sync_.boot(clock_, phase);  // (its catch from the loop's first pass)
+  sync_.boot(clock_, k.phase);  // (its catch from the loop's first pass)
   portEXIT_CRITICAL(&lock_);
   char when[24] = "";
   if (r.read) wallclock::text(r.civil, when, sizeof(when));
@@ -235,6 +270,11 @@ void begin() {
     case wallclock::Boot::Range:
       Serial.printf("[clock] unset: the RTC says %s UTC, outside 2026-2099 (never set, set wrong, or a @time cut "
                     "short); a computer's @time sets it\n",
+                    when);
+      return;
+    case wallclock::Boot::Foreign:
+      Serial.printf("[clock] unset: the RTC says %s UTC, a time this player never set (another firmware's or the "
+                    "factory's); a computer's @time sets it\n",
                     when);
       return;
   }
