@@ -950,6 +950,15 @@ counted. An error changes nothing.
   DJ), core2, against the image above: `firmware.bin` 4,414,304 (+32 B),
   the app 70 % of its slot; IRAM and internal DRAM unchanged (`.iram0.text`
   124,883 B; 58,336 B of `.dram0.data` and `.bss`). Every guard passes.
+  **With main merged again** (2026-11-10, at 20a96d1: main's 136 commits
+  from the waveform bar to the lists' frames, 0.12.0 and 0.13.0 among
+  them; this work's NVS keys in schema 6; the play log held to the card
+  guard's states, its questions of the card `entry()`'s), against the
+  image above: core2 `firmware.bin` 4,518,624 (+104,320 B, nearly all of
+  it main's), the app 72 % of its slot; `.iram0.text` unchanged at
+  124,883 B; `.dram0.data` and `.bss` 59,048 B (+712 B). core2-dio:
+  4,518,688, the same sections. Every guard passes in both, and
+  `tools/package_release.py` takes the two. NOT MEASURED on the device.
 
 ## Device test plan
 
