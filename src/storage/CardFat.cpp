@@ -188,7 +188,10 @@ bool FatFs::close(tagstore::File* file) {
   auto* f = static_cast<FatFile*>(file);
   const bool ok = f_close(&f->fil) == FR_OK;  // a written file is synced first
   psramDelete(f);
-  if (openNow_) --openNow_;
+  // (Never under 0: a close with none counted open.)
+  uint32_t n = openNow_.load(std::memory_order_relaxed);
+  while (n && !openNow_.compare_exchange_weak(n, n - 1, std::memory_order_relaxed)) {
+  }
   return ok;
 }
 

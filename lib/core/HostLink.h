@@ -44,9 +44,13 @@
 //   @format                               Format (since 0.14.0): only brings
 //       up the question on the board's screen (the listener confirms a
 //       format there, twice, or not).
-// They change nothing here: not a session's timeout, nor its counters, nor
-// a decline's quiet (a player that asks for @status every second can start
-// the dancer again once its own user asks).
+// They change nothing of a session here: not its timeout, nor its count
+// of valid lines, nor a decline's quiet (a player that asks for @status
+// every second can start the dancer again once its own user asks). One
+// that is refused (a label missing or too long, a time that isn't one,
+// the firmware's own refusal through refuse()) is counted as any refused
+// line is (HostStats' errors, and bad for a syntax error) and takes its
+// turn in the @err rate limit.
 //
 // Any valid line keeps the session alive; poll() ends it after kTimeoutMs
 // without one (@bye timeout) or when USB power goes (Unplugged: no reply,

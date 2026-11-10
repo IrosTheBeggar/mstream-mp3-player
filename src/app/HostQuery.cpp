@@ -120,6 +120,6 @@ const char* HostQuery::format() {
   }
   Serial.printf("@format ok\n");
   Serial.printf("[host] format: a computer asked; the question is on the screen (nothing formats without the "
-                "listener's two taps there)\n");
+                "listener's two answers there: a tap, then a 2 s hold by hand)\n");
   return nullptr;
 }

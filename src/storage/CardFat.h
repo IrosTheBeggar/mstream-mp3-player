@@ -2,6 +2,7 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 #pragma once
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
@@ -33,8 +34,16 @@
 // call (FF_FS_REENTRANT): the decoder's reads of the playing file interleave
 // with these, and reads are cut in 4 KB pieces so it never waits long.
 //
-// One task at a time per object: the card worker's jobs, or the loop
-// between their steps (the boot, the update step).
+// Tasks. One FatFs object (the class below: Library's) is asked by more
+// than one task at once: the card worker's jobs, and the loop whatever the
+// worker is doing (the play log's slots, Auto DJ's and the waveform
+// index's opens, the boot and the update step). That is safe by what it
+// keeps: nothing of a call outlives the call but FatFs's own state, under
+// the volume's lock; each call's path is on its stack, its FIL or FILINFO
+// a PSRAM object of its own, and the class's only members are the two
+// counters, atomic. A FatFile is one task's from its open to its close,
+// and FatCard (one DIR, one FILINFO and one file kept between calls) is
+// one task's at a time: the card worker's.
 namespace cardfat {
 
 // The SD card's FatFs drive, once it mounted (LocalStorage::begin());
@@ -116,12 +125,13 @@ public:
   // (autodj::OpenTries). This is that call, now. (A card that is out costs one failed init.)
   void echoNow() { exists("/.player"); }
   // Files opened and closed since boot, and open now (the console's gs).
-  uint32_t opened() const { return opened_; }
-  uint32_t openNow() const { return openNow_; }
+  // Counted from whichever task opens and closes (atomic).
+  uint32_t opened() const { return opened_.load(std::memory_order_relaxed); }
+  uint32_t openNow() const { return openNow_.load(std::memory_order_relaxed); }
 
 private:
-  uint32_t opened_ = 0;
-  uint32_t openNow_ = 0;
+  std::atomic<uint32_t> opened_{0};
+  std::atomic<uint32_t> openNow_{0};
 };
 
 // /music, listed and read for the walk and the scan.

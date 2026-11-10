@@ -32,9 +32,12 @@
 //                      5 s and one buzz (ui/Ui::identify(), main.cpp's hook):
 //                      "@identify ok".
 //   @time [<unix-ms>]  the board's clock (app/BoardClock): alone, "@time
-//                      <unix-ms>" or "@time unset"; with a time, the RTC
-//                      and the clock set to it: "@time ok". Refused when
-//                      the RTC doesn't take it ("rtc").
+//                      <unix-ms>" or "@time unset"; with a time, the clock
+//                      set to it at once and the RTC on its next second:
+//                      "@time ok". Refused ("rtc") only when no RTC
+//                      answers, at the boot or at a read of it now; an RTC
+//                      that answers and then doesn't take the write is
+//                      written again and logged, the clock still set.
 //   @format            the question "Format this card?" on the board's
 //                      screen (ui/Ui::askFormat(), main.cpp's hook): "@format
 //                      ok" when it is up. The computer never formats: the
