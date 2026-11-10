@@ -132,9 +132,11 @@ void PlayHistory::begin(AutoDj* autoDj) {
                 "scan next\n",
                 static_cast<unsigned long long>(journal_->epoch()),
                 journal_->newEpoch() ? " (new: NVS had none)" : "",
-                acks.present                                  ? "read"
+                acks.present                                   ? "read"
+                : library_.root()->readFailed()                ? "unread (the card failed a read of the root)"
                 : library_.root()->acksWhy == cc::Why::Missing ? "none"
-                                                              : cc::whyName(library_.root()->acksWhy),
+                : library_.root()->acksWhy == cc::Why::Io      ? "unread (the card failed a read of it)"
+                                                               : cc::whyName(library_.root()->acksWhy),
                 static_cast<unsigned long>(acks.rows), static_cast<unsigned long>(acks.own), left);
 }
 
