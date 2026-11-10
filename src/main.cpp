@@ -79,6 +79,9 @@
 #include "storage/SectorDisk.h"
 #include "ui/BootScreen.h"
 #include "ui/CalibrationScreen.h"
+#include "ui/Fonts.h"
+#include "ui/Gfx.h"
+#include "ui/HotMem.h"
 #include "ui/Input.h"
 #include "ui/Ui.h"
 #include "ui/UiHost.h"
@@ -3578,6 +3581,12 @@ void setup() {
   powerSettings.begin();  // what the boot clock is, the Bluetooth power, and whether it restarted for the speed
   board::applyBootPower();  // the IMU suspended: nothing reads it
   diag::logHeap("boot");
+  // The UI's list memory and its fonts' glyph tables, first: while PSRAM's
+  // lower 2 MB are free (ui/HotMem: above 0x3FA00000 a row sprite shares
+  // core 1's cache with the code that draws it, and that is where the
+  // library's index, on a big card, leaves room).
+  ui::hotmem::reserve(ui::ListView::hotBytes() + ui::gfx::hotBytes());
+  ui::Fonts::instance().load();
 
   bootScreen.begin(version::player());
 
@@ -3933,7 +3942,7 @@ void loop() {
   // The dancer (the Dance tab) draws its own frames (10/s idle, 24-30
   // dancing: DanceRate) into its box.
   danceMode.loop(now, silent);
-  // The UI: the tab bar, overlays, the page (list frames on 30 fps deadlines).
+  // The UI: the tab bar, overlays, the page (a moving list's frames on the panel's scan).
   if (rescueFinger && !calibrationUp() && now - rescueDownMs >= kRescueHoldMs) {
     rescueFinger = false;
     touchCheckOffered = true;  // (the calibration is what it would offer)

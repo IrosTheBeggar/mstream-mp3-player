@@ -150,6 +150,27 @@ void test_scroll_release_velocity_and_edges() {
 
 // ---- ScrollGovernor ----
 
+// A frame asks where the fling will be when it shows, a few ms ahead; the
+// next loop pass's "now" is then behind the scroll's clock and must change
+// nothing (it used to be taken as 49 days gone: the fling jumped to its end).
+void test_scroll_ignores_a_time_behind_its_clock() {
+  KineticScroll s;
+  s.setExtent(100 * 42.0f, 168);
+  s.press(1000, 200);
+  s.release(1010, 1500.0f);
+  TEST_ASSERT_TRUE(s.update(1040));  // the frame's show time
+  const float at = s.offset();
+  const float v = s.velocity();
+  TEST_ASSERT_FALSE(s.update(1030));  // the next pass's now
+  TEST_ASSERT_FALSE(s.update(1040));
+  TEST_ASSERT_EQUAL_FLOAT(at, s.offset());
+  TEST_ASSERT_EQUAL_FLOAT(v, s.velocity());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(KineticScroll::Phase::Flinging), static_cast<int>(s.phase()));
+  TEST_ASSERT_TRUE(s.update(1054));  // the next frame's
+  TEST_ASSERT_TRUE(s.offset() > at);
+  TEST_ASSERT_TRUE(s.offset() - at < 1500.0f * 0.014f + 1.0f);  // 14 ms of it, no more
+}
+
 void test_governor_levels_follow_the_ring() {
   ScrollGovernor g;
   ScrollGovernor::Budget b = g.update(0, 1450, 0, true);
@@ -873,6 +894,7 @@ int main(int, char**) {
   RUN_TEST(test_scroll_slow_release_snaps_to_nearest_row);
   RUN_TEST(test_scroll_fling_decays_and_lands_on_a_row);
   RUN_TEST(test_scroll_release_velocity_and_edges);
+  RUN_TEST(test_scroll_ignores_a_time_behind_its_clock);
   RUN_TEST(test_governor_levels_follow_the_ring);
   RUN_TEST(test_governor_underrun_and_idle);
   RUN_TEST(test_percentiles);

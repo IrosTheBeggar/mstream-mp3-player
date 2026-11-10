@@ -7,7 +7,10 @@
 
 #include <algorithm>
 
+#include <new>
+
 #include "app/Psram.h"
+#include "ui/HotMem.h"
 #include "ui/ListScroller.h"
 #include "ui/Theme.h"
 
@@ -42,14 +45,27 @@ void forRuns(int y, int h, bool over, Fn fn) {
 
 }  // namespace
 
+size_t hotBytes() { return ((sizeof(M5Canvas) + 31) & ~31u) + static_cast<size_t>(kW) * kStripH * 2; }
+
 bool begin() {
   if (strip_) return true;
-  strip_ = psramNew<M5Canvas>();
+  // The sprite and its pixels from the block reserved at boot (the fast
+  // half of the PSRAM: ui/HotMem), else its own.
+  void* mem = hotmem::take(sizeof(M5Canvas));
+  strip_ = mem ? new (mem) M5Canvas() : psramNew<M5Canvas>();
   if (!strip_) return false;
+  if (void* px = hotmem::take(static_cast<size_t>(kW) * kStripH * 2)) {
+    strip_->setBuffer(px, kW, kStripH, 16);
+    return true;
+  }
   strip_->setPsram(true);  // before createSprite(): otherwise internal RAM
   strip_->setColorDepth(16);
   if (!strip_->createSprite(kW, kStripH)) {
-    psramDelete(strip_);
+    if (mem) {
+      strip_->~M5Canvas();
+    } else {
+      psramDelete(strip_);
+    }
     strip_ = nullptr;
     return false;
   }

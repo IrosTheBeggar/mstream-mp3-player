@@ -19,9 +19,10 @@
 //              capped at maxFlingPxPerS, and a
 //   Fling      after it when that speed is at least flickPxPerS
 //
-// The fling cap (2,000 px/s) keeps a flicked list on the hardware scroll's
-// cheap path: above ~2,500 px/s every frame at 25-30 fps moves more than
-// the 84-line step, and each becomes a full redraw (docs/UI-SPIKE.md).
+// The fling cap (2,000 px/s) kept a flicked list on the hardware scroll's
+// cheap path at the 25-30 frames a second the lists had then: above ~2,500
+// px/s every frame moved more than the 84-line step, and each became a full
+// redraw (docs/UI-SPIKE.md). (At a frame a refresh it is 28 lines a frame.)
 //
 // A touch that lands on the button strip (raw y >= stripY: the buttons,
 // which StripButtons makes from the same points) is the buttons': it makes

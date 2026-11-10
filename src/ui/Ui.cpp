@@ -24,6 +24,7 @@
 #include "app/UiLang.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
+#include "ui/HotMem.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
 
@@ -102,14 +103,26 @@ Ui::Ui(UiHost& host, Input& input, PlaybackController& player, QueueModel& queue
   // The list's safety net (UI spike): fewer frames, or whole rows, while
   // the decoder's buffer runs low.
   ScrollGovernor::Config g;
-  g.normalFrameMs = 33;  // 30 fps
+  g.normalFrameMs = kPageFrameMs;  // (a list's own period: listFrameMs())
   g.reducedFrameMs = 66;
   governor_.setConfig(g);
+}
+
+// The frame clock's period while a list page is up and the governor has
+// nothing to say. On the panel's scan every refresh may have a frame (71.5
+// a second on the Core2): the clock only keeps two out of one refresh.
+// Without it, 60 a second on the clock's deadlines (30 until 0.14.0: at
+// 2,000 px/s a frame then pushed 67 lines and brought on a row and a half,
+// 20-45 ms with an MP3 playing; half of that a frame fits).
+uint32_t Ui::listFrameMs() const {
+  if (forcedFrameMs_) return forcedFrameMs_;
+  return scan_.ok() && list_.scanSync() ? kScanFrameMs : kListFrameMs;
 }
 
 bool Ui::begin() {
   Fonts& f = Fonts::instance();
   if (!f.load()) Serial.println("[ui] VLW fonts failed to load: the built-in bitmap fonts instead");
+  list_.setScan(&scan_);
   if (!gfx::begin() || !overlaysBegin() || !list_.begin(vscroll_, input_)) {
     Serial.println("[ui] no PSRAM for the UI's sprites");
     return false;
@@ -156,6 +169,9 @@ void Ui::start(uint32_t nowMs) {
   tabBar_.invalidate();
   tabBar_.update(tabState(nowMs));
   showTop();
+  // The panel's scan (awake since the boot screen): timed once, ~60 ms.
+  scan_.calibrate();
+  scan_.print();
   if (pickerDue_) {
     Serial.println("[ui] up: the first boot's language picker (then the touch check and the tips; console ui: the "
                    "navigation state)");
@@ -1375,9 +1391,8 @@ tabbar::LabelFit Ui::tabLabelFit(int tab) const {
   return tabFits_[tab];
 }
 
-// A row renders in ~5 ms unhurried: renderAhead() only this far before a frame.
-static constexpr uint32_t kAheadMinMs = 15;
-// A frame longer than this missed the 30 fps cadence (counted per motion).
+// A frame longer than this is a hitch anyone sees (two refreshes and a
+// half; counted per motion: it was the 30 fps cadence missed, until 0.14.0).
 static constexpr uint32_t kSlowFrameUs = 35000;
 
 // A pass or an event longer than this is logged with its parts.
@@ -1556,18 +1571,38 @@ void Ui::loop(uint32_t nowMs) {
 
   // The page: redraws what changed, and animation frames on the cadence.
   budget_ = governor_.update(nowMs, state_.ringMs, state_.underruns, state_.ringMatters);
-  clock_.setPeriod(budget_.frameMs);
+  // (A list's frames have their own period; another page's animation, Now
+  // Playing's scrub, keeps the governor's 30 a second.)
+  clock_.setPeriod(budget_.level == ScrollGovernor::Level::Normal && list_.attached() ? listFrameMs() : budget_.frameMs);
   const bool due = budget_.draw && clock_.due(nowMs);
   const bool modal = modalUp();
   const uint32_t t0 = micros();
   frame = page_ && !modal && page_->update(nowMs, due, budget_.wholeRows);
   pageUs = micros() - t0;
-  if (frame) {
+  // A row of a scrub's band (the band is drawn a row a pass): no frame of
+  // the clock's, unless the thumb was drawn with it.
+  const ListView::FrameCost* cost = frame && list_.attached() ? &list_.lastFrame() : nullptr;
+  const bool piece = cost && cost->kind == ListView::FrameCost::Kind::Piece;
+  if (piece) {
+    const uint32_t us = micros() - t0;
+    if (cost->rail) clock_.drawn(nowMs);
+    if (motion_.on) {
+      if (cost->rail) ++motion_.thumbs;
+      if (us > motion_.heldMaxUs) motion_.heldMaxUs = us;
+    }
+  } else if (frame) {
     clock_.drawn(nowMs);
     ++frames_;
     ++framesInWindow_;
     if (motion_.on) {
-      const uint32_t us = micros() - t0;
+      uint32_t us = micros() - t0;
+      if (us > motion_.heldMaxUs) motion_.heldMaxUs = us;
+      if (cost && cost->waitUs < us) us -= cost->waitUs;  // (its work, not its wait for the panel's scan)
+      // A band drawn a row a pass: its time from its first row to its last.
+      if (cost && cost->kind == ListView::FrameCost::Kind::Band && cost->bandUs) {
+        us = cost->bandUs;
+        if (cost->rail) ++motion_.thumbs;
+      }
       if (list_.attached() && list_.lastFrame().kind == ListView::FrameCost::Kind::Rail) {
         // A scrub's frame of the rail alone (ScrubPacer): counted apart.
         ++motion_.railFrames;
@@ -1578,8 +1613,24 @@ void Ui::loop(uint32_t nowMs) {
         motion_.sumUs += us;
         if (us > motion_.maxUs) motion_.maxUs = us;
         if (us > kSlowFrameUs) ++motion_.slow;
+        // A fling's cadence: the time between its frames while every
+        // refresh moves it (over ~150 px/s: 2 px a frame).
+        const uint32_t at = micros();
+        const KineticScroll& k = list_.scroll();
+        if (list_.attached() && k.phase() == KineticScroll::Phase::Flinging && std::fabs(k.velocity()) > 150.0f) {
+          if (motion_.lastFrameUs) {
+            const uint32_t gap = at - motion_.lastFrameUs;
+            const uint32_t period = scan_.ok() && list_.scanSync() ? scan_.sync().panel().frameUs : clock_.period() * 1000;
+            ++motion_.gaps;
+            if (gap > motion_.gapMaxUs) motion_.gapMaxUs = gap;
+            if (gap > period + period / 2) ++motion_.gapsLate;
+          }
+          motion_.lastFrameUs = at;
+        } else {
+          motion_.lastFrameUs = 0;
+        }
       }
-      if (us > 50000 && list_.attached()) {
+      if (us > 50000 && list_.attached() && !(cost && cost->bandUs)) {  // (not a band drawn a row a pass)
         const ListView::FrameCost& fc = list_.lastFrame();
         Serial.printf("[ui] slow frame %lu us: offset %ld to %ld, %lu items rendered in %lu us\n", (unsigned long)us,
                       (long)fc.from, (long)fc.to, (unsigned long)fc.renders, (unsigned long)fc.renderUs);
@@ -1589,9 +1640,11 @@ void Ui::loop(uint32_t nowMs) {
   trackMotion(nowMs);
   // Between frames: the row the list moves toward, rendered ahead while
   // the next frame is far enough off (ListView::renderAhead).
-  if (page_ && !modal && list_.attached() && budget_.draw && page_->animating() &&
-      clock_.msUntilDue(millis()) >= kAheadMinMs) {
-    list_.renderAhead();
+  if (page_ && !modal && list_.attached() && budget_.draw && page_->animating()) {
+    list_.renderAhead(clock_.msUntilDue(millis()));
+  } else if (page_ && !modal && list_.attached() && !frame && thumbs_.idle()) {
+    // At rest: the rows just outside the band, for the next swipe's first frame.
+    list_.renderNeighbours();
   }
   // Covers: one that arrived is drawn where it shows (a modal's page draws
   // it all when the modal goes). New ones are the card worker's, never
@@ -1599,6 +1652,7 @@ void Ui::loop(uint32_t nowMs) {
   const uint32_t t1 = micros();
   const uint32_t arrived = thumbs_.loop(nowMs);
   if (arrived != Thumbs::kNone) {
+    if (list_.attached()) list_.forgetHidden();  // (a row rendered ahead holds the placeholder)
     if (page_ && !modalUp()) {
       page_->thumbReady(arrived);
     } else {
@@ -1635,6 +1689,7 @@ void Ui::trackMotion(uint32_t nowMs) {
   const bool moving = page_ && !modalUp() && (page_->animating() || rail);
   if (moving && !motion_.on) {
     motion_ = Motion{};
+    list_.takeScanStats();  // (counted from here)
     motion_.on = true;
     motion_.list = list_.attached();
     motion_.startMs = nowMs;
@@ -1652,13 +1707,21 @@ void Ui::trackMotion(uint32_t nowMs) {
   if (motion_.ringMin != UINT32_MAX) snprintf(ring, sizeof(ring), "%lu ms", (unsigned long)motion_.ringMin);
   const float meanMs = motion_.frames ? motion_.sumUs / 1000.0f / motion_.frames : 0.0f;
   if (motion_.rail) {
-    Serial.printf("[ui] rail scrub: %lu ms, %lu band frames (%.1f a second; draw mean %.1f max %.1f ms, %lu over 35), "
-                  "%lu rail frames (mean %.1f max %.1f ms), ring min %s, underruns +%lu, governor %s\n",
+    // The thumb: its own frames (uir0's pacing), and the ones drawn with a
+    // row of a band.
+    const uint32_t thumbs = motion_.railFrames + motion_.thumbs;
+    char alone[56] = "";
+    if (motion_.railFrames) {
+      snprintf(alone, sizeof(alone), "; alone mean %.1f max %.1f ms", motion_.railSumUs / 1000.0f / motion_.railFrames,
+               motion_.railMaxUs / 1000.0f);
+    }
+    Serial.printf("[ui] rail scrub: %lu ms, %lu band frames (%.1f a second; a band mean %.1f max %.1f ms), the loop "
+                  "held %.1f ms at most; the thumb drawn %lu times (%.1f a second%s), ring min %s, underruns +%lu, "
+                  "governor %s\n",
                   (unsigned long)ms, (unsigned long)motion_.frames, ms ? motion_.frames * 1000.0f / ms : 0.0f, meanMs,
-                  motion_.maxUs / 1000.0f, (unsigned long)motion_.slow, (unsigned long)motion_.railFrames,
-                  motion_.railFrames ? motion_.railSumUs / 1000.0f / motion_.railFrames : 0.0f,
-                  motion_.railMaxUs / 1000.0f, ring, (unsigned long)(state_.underruns - motion_.underruns),
-                  ScrollGovernor::name(budget_.level));
+                  motion_.maxUs / 1000.0f, motion_.heldMaxUs / 1000.0f, (unsigned long)thumbs,
+                  ms ? thumbs * 1000.0f / ms : 0.0f, alone, ring,
+                  (unsigned long)(state_.underruns - motion_.underruns), ScrollGovernor::name(budget_.level));
     return;
   }
   Serial.printf("[ui] %s: %lu ms, %lu frames (%.1f fps), draw mean %.1f max %.1f ms (%lu over 35), ring min %s, underruns +%lu, "
@@ -1666,6 +1729,19 @@ void Ui::trackMotion(uint32_t nowMs) {
                 motion_.list ? "scroll" : "scrub", (unsigned long)ms, (unsigned long)motion_.frames,
                 ms ? motion_.frames * 1000.0f / ms : 0.0f, meanMs, motion_.maxUs / 1000.0f, (unsigned long)motion_.slow, ring,
                 (unsigned long)(state_.underruns - motion_.underruns), ScrollGovernor::name(budget_.level));
+  if (!motion_.list) return;
+  // Its moves against the panel's scan, and a fling's cadence.
+  const ListView::ScanStats st = list_.takeScanStats();
+  if (st.frames + st.late + st.unsynced == 0) return;
+  char gaps[72] = "";
+  if (motion_.gaps) {
+    snprintf(gaps, sizeof(gaps), "; the fling's frames %.1f ms apart at most, %lu of %lu late", motion_.gapMaxUs / 1000.0f,
+             (unsigned long)motion_.gapsLate, (unsigned long)motion_.gaps);
+  }
+  Serial.printf("[ui] scroll moves: %lu in their window on the panel's scan (%lu of them with a strip row early), %lu "
+                "late, %lu without the scan; the address %d-%d lines past the band (in the band for %lu)%s\n",
+                (unsigned long)st.frames, (unsigned long)st.early, (unsigned long)st.late, (unsigned long)st.unsynced,
+                st.phaseMax >= 0 ? st.phaseMin : 0, st.phaseMax >= 0 ? st.phaseMax : 0, (unsigned long)st.inBand, gaps);
 }
 
 LibraryIndex::Span Ui::shownTracks() const {
@@ -1723,6 +1799,7 @@ uint32_t Ui::idleMs(uint32_t nowMs) const {
   // Nothing to draw (or the glance's seconds): touches read every 20 ms.
   if (dark_ && started_ && !suspended_) return 20;
   if (!started_ || suspended_ || !page_ || !page_->animating()) return 5;
+  if (list_.bandUnderWay() && !modalUp()) return 1;  // a scrub's band: its next row at once
   return std::max<uint32_t>(1, std::min<uint32_t>(5, clock_.msUntilDue(nowMs)));
 }
 
@@ -2546,6 +2623,131 @@ void Ui::filtersCommand(const char* a) {
                 static_cast<unsigned>(filters_.word()), filters_.changed() ? ", changed since it opened" : "");
 }
 
+// uiBv: the sprites' fast text path (Fonts::drawFast()) against M5GFX's
+// drawString(): lines drawn both ways into two sprites whose memory is then
+// compared, byte for byte. The library's names (every `step`-th artist,
+// album and track title; 0: every artist and album, every 8th track), each
+// in a variant picked by its number (font, alignment, place, room,
+// colours), and a few made-up lines in every font and alignment.
+void Ui::verifyText(int step) {
+  M5Canvas a, b;
+  constexpr int kTw = 320, kTh = 40;
+  a.setPsram(true);
+  b.setPsram(true);
+  a.setColorDepth(16);
+  b.setColorDepth(16);
+  if (!a.createSprite(kTw, kTh) || !b.createSprite(kTw, kTh)) {
+    Serial.println("[ui] text check: no memory for two sprites");
+    return;
+  }
+  const bool was = Fonts::fast();
+  Fonts::setFast(true);
+  Fonts& f = Fonts::instance();
+  constexpr uint16_t kCanvas = 0x780F;
+  a.fillSprite(kCanvas);
+  b.fillSprite(kCanvas);
+  struct Pair {
+    uint16_t fg, bg;
+  };
+  static const Pair kPairs[] = {{col::TXT, col::BG},        {col::DIM, col::ROW_SEL},       {col::DARK, accent::Library},
+                                {accent::Queue, col::CARD}, {col::FAINT, col::SELECTED},    {col::TXT, kCanvas}};
+  static const Font kFonts[] = {Font::Body, Font::Small, Font::Bold, Font::Title};
+  static const Fonts::Align kAligns[] = {Fonts::Align::Left, Fonts::Align::Centre, Fonts::Align::Right};
+  // x, y, maxW: in a row; cut short; at the edges and past them.
+  struct Place {
+    int16_t x, y, maxW;
+  };
+  static const Place kPlaces[] = {{50, 13, 234},  {50, 31, 234}, {160, 20, 120}, {8, 20, 60},   {300, 20, 1000},
+                                  {-9, 20, 400},  {160, 2, 300}, {160, 38, 300}, {318, 20, 90}, {1, 20, 319}};
+  uint32_t lines = 0, bad = 0, fastUs = 0, slowUs = 0, notFast = 0;
+  auto one = [&](const char* text, size_t len, unsigned variant, bool all) {
+    const int nf = all ? 4 : 1, na = all ? 3 : 1;
+    for (int fi = 0; fi < nf; ++fi) {
+      for (int ai = 0; ai < na; ++ai) {
+        const Font font = all ? kFonts[fi] : kFonts[variant % 4];
+        const Fonts::Align align = all ? kAligns[ai] : kAligns[(variant / 4) % 3];
+        const Place& pl = kPlaces[(variant / 12 + fi + ai) % (sizeof(kPlaces) / sizeof(kPlaces[0]))];
+        const Pair& pr = kPairs[(variant / 5 + fi) % (sizeof(kPairs) / sizeof(kPairs[0]))];
+        // A clip rectangle now and then, as nothing in the UI sets one today.
+        const bool clip = variant % 7 == 3;
+        if (clip) {
+          a.setClipRect(40, 6, 200, 26);
+          b.setClipRect(40, 6, 200, 26);
+        }
+        uint32_t t = micros();
+        const int wa = f.draw(static_cast<lgfx::LovyanGFX&>(a), font, text, len, pl.x, pl.y, pl.maxW, pr.fg, pr.bg, align);
+        slowUs += micros() - t;
+        const uint32_t before = Fonts::fastLines();
+        t = micros();
+        const int wb = f.draw(b, font, text, len, pl.x, pl.y, pl.maxW, pr.fg, pr.bg, align);
+        fastUs += micros() - t;
+        if (Fonts::fastLines() == before) ++notFast;
+        if (clip) {
+          a.clearClipRect();
+          b.clearClipRect();
+        }
+        ++lines;
+        const auto* pa = static_cast<const uint16_t*>(a.getBuffer());
+        const auto* pb = static_cast<const uint16_t*>(b.getBuffer());
+        if (wa == wb && memcmp(pa, pb, kTw * kTh * 2) == 0) continue;
+        ++bad;
+        int at = 0;
+        while (at < kTw * kTh && pa[at] == pb[at]) ++at;
+        if (bad <= 12) {
+          Serial.printf("[ui] text check: DIFFERENT: \"%.*s\" font %d align %d at %d,%d room %d%s: widths %d / %d, first "
+                        "pixel %d,%d: %04X / %04X\n",
+                        static_cast<int>(len), text, static_cast<int>(font), static_cast<int>(align), pl.x, pl.y,
+                        pl.maxW, clip ? " clipped" : "", wa, wb, at % kTw, at / kTw, at < kTw * kTh ? pa[at] : 0,
+                        at < kTw * kTh ? pb[at] : 0);
+        }
+        memcpy(b.getBuffer(), a.getBuffer(), kTw * kTh * 2);  // level again
+      }
+    }
+  };
+  static const char* const kMade[] = {
+      "jam jar",          "The quick brown fox jumps over the lazy dog",
+      "!\"#$%&'()*+,-./0123456789:;<=>?@",                 "ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`",
+      "abcdefghijklmnopqrstuvwxyz{|}~",                    "  two  spaces  ",
+      "\xC3\x89milie Simon, V\xC3\xA9g\xC3\xA9tal",        "T\xE2\x80\x90Pain \xE2\x80\x99 \xE2\x80\xA6",
+      "\xC3\x85\xC3\x84\xC3\x96\xC3\x9C\xC3\x91\xC3\x87 \xC3\xA5\xC3\xA4\xC3\xB6\xC3\xBC\xC3\xB1\xC3\xA7",
+      "\xD0\x9C\xD1\x83\xD0\xB7\xD1\x8B\xD0\xBA\xD0\xB0",                                  // Cyrillic
+      "\xCE\x91\xCE\xB8\xCE\xAE\xCE\xBD\xCE\xB1",                                           // Greek
+      "f",                "W",              " ",              "06",          "3 albums \xC2\xB7 41 tracks",
+      "jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj",
+      "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E mixed",                                          // the store's (never fast)
+  };
+  unsigned v = 0;
+  for (const char* m : kMade) {
+    for (unsigned k = 0; k < 10; ++k) one(m, strlen(m), v++ * 12 + k * 12, true);
+  }
+  const uint32_t made = lines;
+  if (const LibraryIndex* i = browseIndex(); i && i->ready()) {
+    const uint32_t st = step > 0 ? static_cast<uint32_t>(step) : 1;
+    for (uint32_t k = 0; k < i->artistCount(); k += st) {
+      const char* n = i->artistName(k);
+      one(n, strlen(n), v++, false);
+      if ((k & 63) == 0) delay(1);
+    }
+    for (uint32_t k = 0; k < i->albumCount(); k += st) {
+      const char* n = i->albumName(k);
+      one(n, strlen(n), v++, false);
+      if ((k & 63) == 0) delay(1);
+    }
+    for (uint32_t k = 0; k < i->trackCount(); k += step > 0 ? st : 8) {
+      uint8_t len = 0;
+      const char* n = i->trackTitle(k, &len);
+      one(n, len, v++, false);
+      if ((k & 63) == 0) delay(1);
+    }
+  }
+  Fonts::setFast(was);
+  Serial.printf("[ui] text check: %lu lines drawn both ways (%lu made up, the rest the library's names), %lu "
+                "DIFFERENT; %lu not the fast path's (a glyph from the store); M5GFX %lu us a line, the fast path %lu "
+                "us\n",
+                (unsigned long)lines, (unsigned long)made, (unsigned long)bad, (unsigned long)notFast,
+                lines ? (unsigned long)(slowUs / lines) : 0UL, lines ? (unsigned long)(fastUs / lines) : 0UL);
+}
+
 void Ui::command(const char* a) {
   if (!a || !a[0]) {
     printState();
@@ -2569,6 +2771,42 @@ void Ui::command(const char* a) {
                   railHold_ ? "paced (the rail follows the finger on every frame, the band at ScrubPacer's cadence; "
                               "the card worker is held while a finger is on the rail)"
                             : "every position a band draw at once, the card worker not held (as before 0.12.0)");
+    return;
+  } else if (a[0] == 'B') {
+    // uiB: the list's bench (what a frame is made of); uiBv[step]: the
+    // sprites' fast text against M5GFX's, pixel for pixel; uiBf0 / uiBf1:
+    // that fast path off / on (uiB's rows and uiBv's times then compare).
+    if (a[1] == 'f') {
+      if (a[2] == '0' || a[2] == '1') Fonts::setFast(a[2] == '1');
+      Serial.printf("[ui] sprites' text: %s\n", Fonts::fast() ? "straight into their memory (the fast path)"
+                                                               : "by M5GFX (uiBf0: until uiBf1 or a restart)");
+      list_.refreshAll();
+    } else if (a[1] == 'v') {
+      verifyText(atoi(a + 2));
+    } else if (list_.attached()) {
+      list_.bench();
+    } else {
+      Serial.println("[ui] bench: no list page up (ui1, ui2 or ui4 first)");
+    }
+    return;
+  } else if (a[0] == 'v') {
+    // uiv: the panel's scan; uiv0 / uiv1: a moving list's frames ignore /
+    // follow it (to compare by eye); uiv!: timed again.
+    if (a[1] == '0' || a[1] == '1') list_.setScanSync(a[1] == '1');
+    if (a[1] == '!') scan_.calibrate();
+    scan_.print();
+    hotmem::print();
+    Serial.printf("[ui] list frames: %s; a pushed line %lu us, a row %lu us (as the last ones took)\n",
+                  !scan_.ok()          ? "on the frame clock (the scan can't be read)"
+                  : list_.scanSync()   ? "on the panel's scan"
+                                       : "on the frame clock (uiv0)",
+                  (unsigned long)list_.lineUs(), (unsigned long)list_.rowUs());
+    return;
+  } else if (a[0] == 'f') {
+    // uif<ms>: the frame clock's period for a moving list (uif: as it is by itself).
+    forcedFrameMs_ = static_cast<uint32_t>(atoi(a + 1));
+    Serial.printf("[ui] frame clock: %lu ms a frame while a list moves%s\n", (unsigned long)listFrameMs(),
+                  forcedFrameMs_ ? " (uif: as it is by itself)" : "");
     return;
   } else if (a[0] == 'b') {
     back();
@@ -2598,7 +2836,9 @@ void Ui::command(const char* a) {
                    "the tips: the next boot is a fresh unit's); uiP the first boot's language picker; uiT the covers "
                    "decoded again (timings); uil<n> the Library browses a synthetic library of n tracks (uil0: the "
                    "card's); uit/uih/uis/uid/uip a scripted finger; uiM the Albums list's mood filter (uiMa<hex> set "
-                   "it, uiMa0 clear it, uiMe the editor)");
+                   "it, uiMa0 clear it, uiMe the editor); uiv the panel's scan and the list's frames (uiv0 / uiv1 "
+                   "ignore / follow it, uiv! time it again), uif<ms> the frame clock's period; uiB the list's bench, "
+                   "uiBv the sprites' text checked against M5GFX's, uiBf0 / uiBf1 their fast text off / on");
     return;
   }
   printState();

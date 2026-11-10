@@ -87,8 +87,23 @@ public:
            uint16_t bg, Align align = Align::Left) const;
   int draw(lgfx::LovyanGFX& g, Font f, const char* text, int x, int y, int maxW, uint16_t fg, uint16_t bg,
            Align align = Align::Left) const;
+  // The same into a sprite: the same pixels, and a Latin line with a
+  // background into a 16-bit sprite written straight into its memory
+  // (drawFast() in Fonts.cpp: M5GFX's glyphs cost some 100 us each
+  // through the sprite's panel, half a list row's time).
+  int draw(M5Canvas& c, Font f, const char* text, size_t len, int x, int y, int maxW, uint16_t fg, uint16_t bg,
+           Align align = Align::Left) const;
+  int draw(M5Canvas& c, Font f, const char* text, int x, int y, int maxW, uint16_t fg, uint16_t bg,
+           Align align = Align::Left) const;
+  // The sprites' fast path off / on (console uiBf0 / uiBf1: M5GFX draws
+  // every line again, to compare times or pixels); on at boot.
+  static void setFast(bool on);
+  static bool fast();
 
   static Fonts& instance();
+
+  // Lines the sprites' fast path has drawn since boot (uiBv counts with it).
+  static uint32_t fastLines();
 
 private:
   struct Slot {
@@ -106,6 +121,13 @@ private:
   // (what drawString() calls), the store's by ours (bold in Bold and
   // Title). Only with the fonts loaded.
   static int drawMixed(lgfx::LovyanGFX& g, Font f, const char* s, int x, int y, Align align);
+  // draw()'s work: `sprite` is `g` when it is one (the fast path's target).
+  int drawOn(lgfx::LovyanGFX& g, M5Canvas* sprite, Font f, const char* text, size_t len, int x, int y, int maxW,
+             uint16_t fg, uint16_t bg, Align align) const;
+  // A fitted line of the font's own glyphs with a background, into a
+  // 16-bit sprite's memory, as M5GFX's drawString() paints it. False (and
+  // nothing drawn): not such a line or such a sprite.
+  bool drawFast(M5Canvas& c, Font f, const char* s, int x, int y, Align align, int* drawn) const;
 
   Slot* slots_ = nullptr;  // PSRAM, 4
   bool loaded_ = false;

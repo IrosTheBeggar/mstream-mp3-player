@@ -20,6 +20,7 @@
 #include "ui/Input.h"
 #include "ui/ListScroller.h"
 #include "ui/ListView.h"
+#include "ui/PanelScan.h"
 #include "ui/Overlays.h"
 #include "ui/Page.h"
 #include "ui/Pages.h"
@@ -38,7 +39,8 @@
 //     ~48 KB left while playing). The loop already runs on core 1 below the
 //     decoder (priority 1 vs 2), so the audio always goes first, and it
 //     sleeps a little every pass. Frames are what needs care: the UI draws
-//     an animation frame only on its 30 fps deadlines (FrameClock), and
+//     an animation frame only when its frame clock says (FrameClock; a
+//     moving list's on the panel's scan, ui/PanelScan), and
 //     otherwise only what changed, in small pieces each under its own bus
 //     hold (ui/Gfx).
 //
@@ -227,6 +229,12 @@ public:
   void browse(LibraryIndex* index);
 
   // ---- console ----
+  // uiBv: the sprites' fast text (Fonts::drawFast()) against M5GFX's, the
+  // library's names drawn both ways and the sprites' memory compared.
+  void verifyText(int step);
+  // The frame clock's period while a list page is up (Ui.cpp): short of a
+  // refresh when its frames go by the panel's scan, else 60 a second.
+  uint32_t listFrameMs() const;
   void printState() const;     // ui
   // ui<n>: tab n; uib back; uic the coach cards; uiL<tag> the language
   // (uiL the list, uiL- forget it and the tips); uiP the first boot's picker.
@@ -476,6 +484,9 @@ private:
 
   NavModel nav_;
   ListScroller vscroll_;
+  // The panel's scan, measured when the UI starts: a moving list's frames
+  // go by it (ui/PanelScan, lib/core ScanSync).
+  PanelScan scan_;
   ListView list_;
   TabBar tabBar_;
   mutable tabbar::LabelFit tabFits_[tabbar::kTabs] = {};
@@ -530,7 +541,15 @@ private:
   Page* page_ = nullptr;
 
   AppState state_;
-  FrameClock clock_{33};
+  // A page's animation frames on the clock's deadlines: 30 a second (Now
+  // Playing's scrub); a list's, 60 a second, or on the panel's scan short
+  // of a refresh (the scan times the frames, the clock only keeps two out
+  // of one refresh); uif<ms>: a list's, forced.
+  static constexpr uint32_t kPageFrameMs = 33;
+  static constexpr uint32_t kListFrameMs = 16;
+  static constexpr uint32_t kScanFrameMs = 10;
+  uint32_t forcedFrameMs_ = 0;
+  FrameClock clock_{kPageFrameMs};
   ScrollGovernor governor_;
   ScrollGovernor::Budget budget_;
   bool started_ = false;
@@ -625,6 +644,14 @@ private:
     uint32_t railFrames = 0;  // a scrub's frames of the rail alone
     uint64_t railSumUs = 0;
     uint32_t railMaxUs = 0;
+    uint32_t thumbs = 0;      // ... and the thumb drawn with a row of a band
+    uint32_t heldMaxUs = 0;   // the longest the page held the loop in one pass
+    // A fling's frames: the time from one to the next (the longest, and
+    // how many came later than a frame and a half).
+    uint32_t lastFrameUs = 0;
+    uint32_t gapMaxUs = 0;
+    uint32_t gapsLate = 0;
+    uint32_t gaps = 0;
     uint32_t ringMin = 0;
     uint32_t underruns = 0;
   } motion_;
