@@ -541,6 +541,7 @@ void PlaybackController::letGoOfCardFailure() {
     endCardHold();
     if (!tryCut) return;
     putBackStart();
+    endPlayAs(Plays::End::Stopped);  // (the try's play: let go unopened, nothing of it heard)
     if (state_ != PlayState::Stopped && !cued_) {
       audio_.stop();
       cued_ = true;
@@ -552,6 +553,7 @@ void PlaybackController::letGoOfCardFailure() {
   // than resuming the failed request and counting it against the track once the card is back.
   if (state_ != PlayState::Stopped && !cued_ && hasTrack() && audio_.failed() && cardSaysNothing()) {
     putBackStart();
+    endPlayAs(Plays::End::Stopped);  // (the play that start began: let go)
     audio_.stop();
     cued_ = true;
   }
@@ -568,6 +570,9 @@ void PlaybackController::putBackStart() {
 
 void PlaybackController::holdForCard(uint32_t nowMs) {
   putBackStart();
+  // The play this start began, or a seek's went on with, ends here: the backend lets go, and
+  // each try begins one of its own (its failure ends that one the same way).
+  endPlayAs(Plays::End::Stopped);
   audio_.stop();  // the failed request let go: the backend holds nothing
   cued_ = true;
   if (!cardRun_) {

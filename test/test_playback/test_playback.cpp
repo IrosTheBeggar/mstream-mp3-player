@@ -4556,6 +4556,139 @@ void test_a_wait_for_the_headphones_takes_over_a_card_hold() {
   TEST_ASSERT_EQUAL_INT(plays + 1, s.audio.playCount);
 }
 
+// ---- the play log's word through a card hold (docs/METADATA.md 2.20.5, 3.8) ----
+
+// A start that fails with the card out began a play: it ends (Stopped) when the hold lets the
+// backend go, and each try begins one that ends the same way, so none is open while nothing is
+// held. The try that opens is the play that is heard.
+void test_the_play_logs_word_through_a_card_hold() {
+  Rig r(8);
+  TestCard card(r.audio);
+  PlayWords w;
+  r.player.setCard(&card);
+  r.player.setPlays(&w);
+  r.player.setRepeat(Repeat::Off);
+  r.audio.duration = 200000;
+  r.player.play(2);
+  TEST_ASSERT_EQUAL_STRING("+2@0", w.take().c_str());
+  card.pull();
+  r.audio.finish();
+  r.player.update(0);  // c's end, as its read failed: d starts
+  TEST_ASSERT_EQUAL_STRING("completed +3@0", w.take().c_str());
+  r.player.update(20);  // d's open failed, the card out: held, the backend let go
+  TEST_ASSERT_TRUE(r.player.heldForCard());
+  TEST_ASSERT_EQUAL_STRING("stopped", w.take().c_str());
+  TEST_ASSERT_FALSE(r.player.playOpen());
+  // A try, 2 s on: a play begun, and ended when it fails too.
+  for (uint32_t t = 40; t <= 2020; t += 20) r.player.update(t);
+  TEST_ASSERT_EQUAL_UINT32(1, r.player.cardHolds().retries);
+  TEST_ASSERT_EQUAL_STRING("+3@0", w.take().c_str());
+  r.player.update(2040);
+  TEST_ASSERT_EQUAL_STRING("stopped", w.take().c_str());
+  TEST_ASSERT_FALSE(r.player.playOpen());
+  // The card back: the try that opens is the play, to its end.
+  card.putBack();
+  r.player.update(2060);
+  TEST_ASSERT_EQUAL_STRING("+3@0", w.take().c_str());
+  r.player.update(2080);
+  TEST_ASSERT_FALSE(r.player.heldForCard());
+  TEST_ASSERT_TRUE(r.player.playOpen());
+  r.audio.finish();
+  r.player.update(2100);
+  TEST_ASSERT_EQUAL_STRING("completed +4@0", w.take().c_str());
+}
+
+// A seek's start that fails with the card out went on with a play that had been heard: that
+// play ends there, Stopped, and the try at the seek's second is a new one.
+void test_a_seek_into_a_card_hold_ends_the_play_it_went_on_with() {
+  Rig r(3);
+  TestCard card(r.audio);
+  PlayWords w;
+  r.player.setCard(&card);
+  r.player.setPlays(&w);
+  r.audio.duration = 200000;
+  r.player.play(1);
+  r.player.update(0);
+  TEST_ASSERT_EQUAL_STRING("+1@0", w.take().c_str());
+  card.pull();
+  TEST_ASSERT_TRUE(r.player.seek(r.queue.currentKey(), 60000, 200000) == PlaybackController::Seek::Started);
+  TEST_ASSERT_EQUAL_STRING("", w.take().c_str());  // (the same play, from the new second)
+  r.player.update(20);  // its open failed, the card out
+  TEST_ASSERT_TRUE(r.player.heldForCard());
+  TEST_ASSERT_EQUAL_STRING("stopped", w.take().c_str());
+  card.putBack();
+  r.player.update(40);  // the card answers: the try, from the seek's second
+  TEST_ASSERT_EQUAL_UINT32(60000, r.audio.lastStartMs);
+  TEST_ASSERT_EQUAL_STRING("+1@60000", w.take().c_str());
+}
+
+// Still out at the hold's bound: paused there, and no play left open behind it. So a seek on
+// that entry and a Play, however long after, are a play of their own from the seek's second,
+// begun at that Play (a play a try had left open would have gone on, dated from the try).
+void test_a_card_hold_that_ends_paused_leaves_no_play_open() {
+  Rig r(8);
+  TestCard card(r.audio);
+  PlayWords w;
+  r.player.setCard(&card);
+  r.player.setPlays(&w);
+  r.audio.duration = 200000;
+  card.pull();
+  r.player.play(3);
+  for (uint32_t t = 0; t <= PlaybackController::kCardWaitMs + 5000; t += 20) r.player.update(t);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_EQUAL_UINT32(1, r.player.cardHolds().paused);
+  TEST_ASSERT_FALSE(r.player.playOpen());
+  w.take();
+  card.putBack();
+  TEST_ASSERT_TRUE(r.player.seek(r.queue.currentKey(), 60000, 200000) == PlaybackController::Seek::Waits);
+  TEST_ASSERT_EQUAL_STRING("", w.take().c_str());
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_UINT32(60000, r.audio.lastStartMs);
+  TEST_ASSERT_EQUAL_STRING("+3@60000", w.take().c_str());
+}
+
+// A pause while a try opens, or under the first open after a pull: the start is let go (the
+// entry cued at its second), and its play with it.
+void test_a_pause_that_lets_a_card_failure_go_ends_its_play() {
+  {
+    Rig r(3);
+    r.audio.asyncStarts = true;
+    TestCard card(r.audio);
+    PlayWords w;
+    r.player.setCard(&card);
+    r.player.setPlays(&w);
+    card.isOut = true;
+    r.player.play(1);
+    r.audio.failedFlag = true;  // its open failed: the card is out
+    r.player.update(0);
+    TEST_ASSERT_TRUE(r.player.heldForCard());
+    r.player.update(2000);  // the try: opening
+    TEST_ASSERT_EQUAL_STRING("+1@0 stopped +1@0", w.take().c_str());
+    r.player.togglePlayPause();  // paused while it opens
+    r.player.update(2100);  // let go: cued
+    TEST_ASSERT_EQUAL_STRING("stopped", w.take().c_str());
+    TEST_ASSERT_FALSE(r.player.playOpen());
+    TEST_ASSERT_TRUE(r.player.playStartsEntry());
+  }
+  {
+    // The first open after a pull, paused before it failed.
+    Rig r(3);
+    r.audio.asyncStarts = true;
+    TestCard card(r.audio);
+    PlayWords w;
+    r.player.setCard(&card);
+    r.player.setPlays(&w);
+    card.isOut = true;
+    r.player.play(1);
+    r.player.togglePlayPause();
+    r.audio.failedFlag = true;  // its open failed under the pause
+    r.player.update(0);
+    TEST_ASSERT_EQUAL_STRING("+1@0 stopped", w.take().c_str());
+    TEST_ASSERT_FALSE(r.player.playOpen());
+    TEST_ASSERT_TRUE(r.player.playStartsEntry());
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_pull_no_longer_runs_the_queue_out);
@@ -4690,5 +4823,9 @@ int main(int, char**) {
   RUN_TEST(test_the_play_logs_word_for_each_action);
   RUN_TEST(test_the_play_logs_word_at_joins_loops_and_failures);
   RUN_TEST(test_the_play_logs_word_through_waits_edits_and_the_fence);
+  RUN_TEST(test_the_play_logs_word_through_a_card_hold);
+  RUN_TEST(test_a_seek_into_a_card_hold_ends_the_play_it_went_on_with);
+  RUN_TEST(test_a_card_hold_that_ends_paused_leaves_no_play_open);
+  RUN_TEST(test_a_pause_that_lets_a_card_failure_go_ends_its_play);
   return UNITY_END();
 }

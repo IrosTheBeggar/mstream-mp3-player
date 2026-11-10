@@ -7100,7 +7100,13 @@ What the code decided where 2.20 left room:
   entry or back to 0:00 (next, prev, a pick, a cue, a Play, a Remove or
   an Undo of the current entry, a seek to 0:00) Skipped; anything else
   (stop, Clear, a failure, a library update that took the track away,
-  a power-off or restart) Stopped. Plays of under 1 s of audio aren't
+  a power-off or restart) Stopped. A start that fails with the card out
+  (the card hold, 3.8) is one of those: its play ends Stopped when the
+  backend lets go, one a seek went on with too, with what it had played,
+  and each of the hold's tries begins a play that ends the same way, so
+  none is open while nothing is held (one left open would go on at a seek
+  on the entry the hold left paused, dated from the try). Plays of under
+  1 s of audio aren't
   logged (2.20.5's MAY), nor the built-in tracks, nor files on the flash.
 - **playedMs** is the backend's position's steps while playing, each
   counted when it moved no more than the board's clock did (plus 500 ms),
@@ -7198,7 +7204,8 @@ What the code decided where 2.20 left room:
   `history` in the vectors' `device.txt` texts. `test_playback`: the
   controller's word for every action, at joins, Repeat One, failures, the
   sleep timer's end of track, waits,
-  edits, the fence and the firmware's `endPlay()`. `test_nvs_layout`
+  edits, the fence, the card hold (its let-go, its tries, a seek into it,
+  its end paused, a pause under it) and the firmware's `endPlay()`. `test_nvs_layout`
   (schema 6, `plays` and `clock`; the unit that ran this work's builds
   under schema 5), `test_card_contract` (`history=1`).
 - **The device check** (V2, on the spare card, never the music card):

@@ -210,9 +210,12 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // entry or back to 0:00 (next, prev, a pick, a cue, a Play, a Remove or an
 // Undo that moves the current entry) is Skipped; anything else (stop, a
 // Clear, a failure, a library update that took the track away) is
-// Stopped. The firmware ends an open play itself at a power-off or a
-// restart. Only one play is open at a time: an end always comes before
-// the next begin.
+// Stopped. So is a start the card hold lets go (the card out: above): the
+// play that start began, or a seek's went on with, ends when the backend
+// lets go, and each of the hold's tries begins one, so none stays open
+// while nothing is held. The firmware ends an open play itself at a
+// power-off or a restart. Only one play is open at a time: an end always
+// comes before the next begin.
 class PlaybackController {
 public:
   // The play log's watcher (setPlays()). Called inside the actions and
