@@ -9,10 +9,12 @@
 // friction (0.92 per 15 fps frame, whatever the real frame rate), and the
 // list always comes to rest on a row boundary (a short eased snap). The
 // offset is in pixels, 0 = the first row at the top, growing as the list
-// moves up. Flings are capped at maxPxPerS, 2,000 px/s: faster, nearly every
-// frame of the hardware scroll (ui/ListScroller) moves more than its 84-line
-// step and becomes a full redraw (docs/UI-SPIKE.md). Portable: driven by
-// timestamps, no clock of its own.
+// moves up. Flings are capped at maxPxPerS, 2,000 px/s: at the 25-30 frames
+// a second the lists had then, a faster one moved more than the hardware
+// scroll's 84-line step (ui/ListScroller) in nearly every frame, each a
+// full redraw (docs/UI-SPIKE.md). At a frame a refresh (71.5 a second) the
+// cap is 28 lines a frame, and it stays as the lists' feel. Portable:
+// driven by timestamps, no clock of its own.
 class KineticScroll {
 public:
   enum class Phase : uint8_t { Idle, Dragging, Flinging, Snapping };
@@ -48,7 +50,9 @@ public:
   // Jumps (A-Z rail, jump grid), no animation; stops any motion.
   void jumpTo(float px);
 
-  // Advances the fling or the snap to `ms`. True if the offset changed.
+  // Advances the fling or the snap to `ms`. True if the offset changed. A
+  // time at or before the last one given changes nothing (the caller may
+  // ask for the moment a frame shows, then for an earlier "now").
   bool update(uint32_t ms);
 
   float offset() const { return offset_; }

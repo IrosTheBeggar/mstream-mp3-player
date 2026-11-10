@@ -470,6 +470,9 @@ bool LibraryPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
         if (before[r - first] != playing(rowAt(r))) list.refreshRow(r);
       }
     }
+    // (A row the list keeps rendered just outside the band may be the one
+    // whose mark changed: those are rendered again when they come on.)
+    list.forgetHidden();
   }
   const bool frame = ui_.list().update(nowMs, frameDue, wholeRows);
   // The Albums segment's dot comes and goes once the list rests, never a

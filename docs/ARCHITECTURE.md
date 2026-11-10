@@ -22,6 +22,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  LibraryIndex  LibrarySynth  TextFold  TouchGesture           |
               |  LibraryBuilder  LibraryUpdate  CardJobs  ScanScheduler       |
               |  KineticScroll  ScrollGovernor  VScrollMap  RefillPacer       |
+              |  ScanSync  ScrubPacer                                         |
               |  ByteStream  QueueModel  QueueText  TrackCatalog              |
               |  TouchCalibration  TouchCheck  TouchRecognizer  ButtonGesture |
               |  ButtonPolicy  InputEvent                                     |
@@ -56,7 +57,8 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  app/NvsSchema (the NVS layout's number, migrations)          |
               |  app/IdlePower (the idle power-off: setting, note, power off) |
               |  app/PowerSettings (CPU speed, Bluetooth power: NVS, restart) |
-              |  ui/Ui: TabBar, ListView (ui/ListScroller), Overlays, pages,  |
+              |  ui/Ui: TabBar, ListView (ui/ListScroller, ui/PanelScan,      |
+              |         ui/HotMem), Overlays, pages,                          |
               |         Fonts (VLW DejaVu + CJK store), Icons, Gfx, Thumbs,   |
               |         EmptyState, FilterSheet (the mood filters' editor)    |
               |  ui/BootScreen (the mStream logo and the version)             |
@@ -407,7 +409,7 @@ The rules that keep it deadlock- and glitch-free:
 | speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake; switches the amp and I2S (M5.Speaker end/begin) off 2 s after it last queued audio and on again before the next buffer (`AmpGate`) |
 | M5.Speaker | 1 | 2 | mixes to 44.1 kHz mono (its input is always 44.1 kHz now); runs only while the amp is on |
 | the card worker (`card`, app/CardWorker) | 1 | 1 for a cover or a waveform's read (0 while a list moves or a finger is on its A-Z rail), the library update's build, a slice of the walk, and while the screen is dark a slice of the tag scan, a compaction and the update's save (a slice drops to 0, and ends after its unit, when a list moves or the scan's yields apply; a compaction or a save drops to 0 when the screen lights); 0 for the tag scan, compactions and the save while the screen is lit | one step at a time, only the one the loop hands it (app/CardTasks, ScanScheduler: docs/METADATA.md 3.3.4, 3.3.9, 3.8, 3.9): a cover (ui/Thumbs), a waveform's read (app/Waves), a slice of the validation walk (its folders for 18 ms lit, 250 ms dark), a compaction of `tags.bin`, a file of the tag scan a loop source names or a slice of its rest's files, the update step's build of the index and its save of `library.idx` (lib/core LibraryUpdate); made for the first step, gone after 3 s without one; 7.5 KB internal stack while it lives (6 KB until METADATA.md 3.8's device check, the figures here its; 5.4 KB used at most there, a read failing inside the reopen of D; 2.3 KB used at most on the device as the covers' worker; the card's jobs about 3.0 KB on N11's card, 3,140 B least left over 5,190 steps, MEASURED on df92c01 by `gs`; the deepest, ESTIMATED from the image, a compaction's reopen of D under its folders: about 4.0 KB (3,916 B MEASURED on 6c2a928, 2,228 B left), about 5.0 KB with the SD driver's log line on top, about 1.1 KB left before an interrupt's frame, 512 B more than before the 2026-10-09 review's `Container::open()`; the build MEASURED at 5,360 B on 6c2a928, 784 B left, its views' `std::sort` at libstdc++'s depth limit on the records' byte order, about 3.3-3.6 KB since `lib/core/IdSort` bounds the recursion at lg(n/16) + 1 frames, METADATA.md 3.9); reads the card in 4 KB pieces and writes it in 4 KB pieces that end on the file's 4 KB boundaries; covers level with the loop while nothing moves (at 0 they shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves; the tag scan, compactions and the update's save at 0 while the screen is lit, since the SD driver's reads busy-wait the CPU (the walk's slices, and while the screen is dark the scan's slices, a compaction and the save, at 1: above; at 0 the 2026-10-09 run measured a compaction about 1.75x its modelled card time, none having run at 1 there, and the save 2-4.5x its time on the loop at the boot); always below the decoder (below) |
-| Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and the dancer's frames (10/s idle; dancing 30/s at 240 MHz, 24/s below: `DanceRate`); sleeps 1-5 ms every pass (less while a list frame is due), 20 ms while the UI is dark (the screen off, or the glance: `Ui::idleMs`; with no UI, main's own 20 ms), at most 2 ms while Auto DJ's join works; Auto DJ's step (below) |
+| Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and a moving list's frames on the panel's scan, one a refresh (71.5 a second; 60 on the frame clock's deadlines where the scan can't be read), each piece under its own short bus hold; **at priority 3 for a list frame's last wait and its hold** (`HoldBoost` in ui/ListView: a millisecond or two, then 4 ms at a fling's top speed, 12 at most; above the decoder, level with the speaker's pump, so a decoder pass can't fall on the frame's window or cut its hold; rendering stays at 1); on the Dance tab, the beat tracker and the dancer's frames (10/s idle; dancing 30/s at 240 MHz, 24/s below: `DanceRate`); sleeps 1-5 ms every pass (less while a list frame is due), 20 ms while the UI is dark (the screen off, or the glance: `Ui::idleMs`; with no UI, main's own 20 ms), at most 2 ms while Auto DJ's join works; Auto DJ's step (below) |
 
 ### The loop's pass
 
@@ -2953,13 +2955,40 @@ Queue, Dance and Output (with its Pair and About pages).
   unless the headphones dropped while listening (`BtSink::setQuiet()`). NVS namespace `screen`: `off_after`, `bright`, `touch_off` (schema 6).
 - **Frames.** Only what changed is redrawn (each page keeps what it drew and
   compares the one `AppState` snapshot the host fills per pass). Animation
-  (a moving list) is drawn on a **30 fps cap kept on deadlines**
-  (`FrameClock`: each frame due a period after the previous one's deadline,
-  so a late pass doesn't push the rest back; after a stall the cadence starts
-  over, no catch-up burst), with `ScrollGovernor` as the safety net (fewer
-  frames, or whole rows, when the decoder's buffer runs low). Everything is
-  drawn into a PSRAM sprite and pushed in pieces of at most 40 lines, each
-  under its own `LcdLock` (`ui/Gfx`).
+  is drawn on a **frame clock kept on deadlines** (`FrameClock`: each frame
+  due a period after the previous one's deadline, so a late pass doesn't
+  push the rest back; after a stall the cadence starts over, no catch-up
+  burst), with `ScrollGovernor` as the safety net (fewer frames, or whole
+  rows, when the decoder's buffer runs low). **A moving list's frames go by
+  the panel's scan** (0.14.0; `ui/PanelScan`, `lib/core/ScanSync`,
+  host-tested; [UI-SPIKE.md](UI-SPIKE.md), "Frames on the panel's scan"):
+  the Core2 doesn't wire the LCD's TE pin, but the ILI9342C says where its
+  scan is (Get_Scanline, 45h: 16 us a read), and the UI times four
+  refreshes when it starts (`[ui] panel scan: 244 lines a refresh, 13992 us
+  (71.5 Hz), row 0 at line 2: list frames follow it`). A move's bus hold
+  then starts in a window of the scan: just behind it at the first row of
+  the strip it rewrites (the bus is slower than the scan and stays behind),
+  with its address after the scan has left the band and before it is back,
+  so the scan never shows the move half done; every refresh may have its
+  frame (the clock's period is 10 ms there: it only keeps two frames out of
+  one refresh). A list moving by itself is drawn where it will be when the
+  frame shows, sleeps to its window and holds the bus at priority 3 (the
+  task table, above); a finger's frames poll for the window, so the frame
+  has the finger's latest place. A frame the loop comes too late for (a
+  decoder pass fell on its window), and the first one after a refresh that
+  had none, is drawn at once (a tear over the rows the scan had passed, for
+  that refresh; no frame waits out a window it missed). MEASURED on the
+  19,533-track card, a fling at the 2,000 px/s cap: 68-69 frames a second
+  with nothing playing, none more than 15.5 ms after the one before, the
+  address in the band for 4-9 frames of 205 (on the frame clock, `uiv0`:
+  2 in 3); with an MP3 playing 54-55 a second, 26-37 ms at the worst, 1 in
+  3 in the band (30 a second and a frame of 30-46 ms before 0.14.0). A
+  panel that doesn't answer
+  (`[ui] panel scan: not readable ...`) leaves the list on the clock, at 60
+  frames a second (30 until 0.14.0); so do a scrub's frames and full
+  redraws, always. Another page's animation (Now Playing while a finger
+  scrubs its seek bar) stays at 30 a second on the clock. Everything is drawn into a PSRAM sprite and pushed in
+  pieces of at most 40 lines, each under its own `LcdLock` (`ui/Gfx`).
 - **Navigation** (`NavModel`, host-tested): five tabs (Now Playing, Library,
   Queue, Dance, Output), a stack of pages each. A tab tap switches (the tab
   keeps its stack); a tap on the current tab takes it to its root (the Queue:
@@ -3148,47 +3177,56 @@ Queue, Dance and Output (with its Pair and About pages).
   A drag on it scrubs (a haptic tick per new letter); the touch has no hold
   (`TouchRecognizer::noHold()`), so resting on it to read the letter and
   then sliding still scrubs. **A scrub's every position is a jump** (the
-  band drawn whole: 50-78 ms, 80-110 with an MP3 playing, and no touch
-  sampled meanwhile), so the band follows the finger at `ScrubPacer`'s
-  cadence (60 ms after the last band draw ended, or at once when the
-  finger has rested 40 ms) and **the rail alone follows the finger on
-  every frame between** (the thumb and its letter, a few ms, through the
-  scroll mapping). While a finger is on the rail the card worker is held
-  as for a moving list (`Ui::listMoving()`): no cover and no slice of the
-  walk or the scan reads the card under the scrub (on the user's
-  19,478-track card, 2026-10-30, the boot's walk and the covers ran under
-  every scrub, and the only moments a scrub counted as "moving" were the
-  passes between a position and its frame). MEASURED on that card with
-  the scripted finger (`uid300,80,300,230,3000`: the whole rail in 3 s,
-  695 artists, nothing playing): a band frame costs 48 ms (4 rows
-  rendered in 24.5 ms, the push 23 ms; 50-55 ms on the Albums list), so
-  the old way (`uir0`) drew 49 band frames, 15.4 a second, and the thumb
-  moved with them; paced (`uir1`) 21 band frames (6.6 a second) and 60
-  rail frames of 4.0 ms, the thumb at 19 a second. A scrub slow enough
-  to rest between positions (a pixel every 130 ms) draws the band for
-  every position, as before. Flings on the same lists: 30 fps, 2 ms a
-  frame. A tap on it opens the jump
+  band drawn whole: 35-50 ms, 80-100 with an MP3 playing), so under a
+  finger on the rail **the band is drawn a row a loop pass** (0.14.0,
+  `ListView::bandStep()`: the row's render and push, 8-15 ms, then the
+  loop's pass: the finger read, the thumb and its letter drawn where it is
+  now, only the rail's rows the thumb left and takes; then the next row),
+  and the next band starts when this one is done. While a finger is on the
+  rail the card worker is held as for a moving list (`Ui::listMoving()`):
+  no cover and no slice of the walk or the scan reads the card under the
+  scrub (on the user's 19,478-track card, 2026-10-30, the boot's walk and
+  the covers ran under every scrub, and the only moments a scrub counted
+  as "moving" were the passes between a position and its frame). MEASURED
+  on the 19,533-track card with the scripted finger
+  (`uid300,80,300,230,3000`: the whole rail in 3 s, 698 artists): 16 bands
+  a second with the loop held 11.5 ms at most and the thumb drawn 38 times
+  a second; with an MP3 playing 8.5 bands, 34-36 ms and 23 thumbs. (Until
+  0.14.0 a band was drawn in one go, 47 ms and 87 with the MP3, no touch
+  read meanwhile, and the next waited for `ScrubPacer`'s 60 ms: 6.6 bands
+  and 19 thumbs a second, 5.3 and 10 with the MP3. `uir0` still draws it
+  so.) A tap on it opens the jump
   grid (above). A
   press that only touches the list (a tap) doesn't hide it. **A move is
   drawn in steps of at most 84 lines a frame** (the hardware scroll's
   one-hold step, `ListLayout::stepToward()`): only flings were capped, so a
   finger faster than ~2,500 px/s made a frame move more than that, a full
   redraw of 50-78 ms (1 motion in 5 on the device). Now the list trails such
-  a finger by a frame or two (84 lines at 30 fps is 2,520 px/s) and catches
-  up as it slows; flings (2,000 px/s) are never held back, and jumps (a
-  scroll to a row, the rail, a page's first frame) still draw at once. The
-  rail and the scrollbar stay hidden until it has caught up. **The next
-  row is rendered ahead** (`ListView::renderAhead()`): the device showed
-  that the remaining long frames (35-90 ms, in most motions while an MP3
-  played) were not big steps but a single row's render (~5 ms) stretched
-  to 20-39 ms by the audio decoder, which runs above the loop, in the
-  middle of it. So between frames, while a list moves and the next frame
-  is at least 15 ms off, the row just past the edge it moves toward is
-  rendered into the spare slot (5 rows show at most, 6 slots); the frame
-  that brings it on screen only pushes it. Drags and flings then drew in
-  2-5 ms a frame on average, 10-25 ms at most; only very fast drags (over
-  ~3,000 px/s, two new rows in one frame) still have one frame of 35-55
-  ms. `ui` counts the rows rendered ahead. **What changes in place stays
+  a finger by a frame or two (84 lines a frame: 6,000 px/s at a frame a
+  refresh, 2,520 px/s at the 30 frames a second of before 0.14.0) and
+  catches up as it slows; flings (2,000 px/s) are never held back, and
+  jumps (a scroll to a row, the rail, a page's first frame) still draw at
+  once. The rail and the scrollbar stay hidden until it has caught up.
+  **The next row is rendered ahead** (`ListView::renderAhead()`): the
+  device showed that the remaining long frames (35-90 ms, in most motions
+  while an MP3 played) were not big steps but a single row's render
+  stretched to 20-39 ms by the audio decoder, which runs above the loop, in
+  the middle of it. So between frames, while a list moves and a row's time
+  (as the last ones took) is left before the next frame, the row just past
+  the edge it moves toward is rendered into the spare slot (5 rows show at
+  most, 6 slots), and from a fast step the row after it (in the slot of the
+  row leaving at the other edge, when none is spare); the frame that brings
+  it on screen only pushes it. **While the list rests, the row above the
+  band and the row below it** are rendered into its two spare slots
+  (`renderNeighbours()`, only while no cover is asked for or being made):
+  a swipe's first frame, which rendered a row or two itself (30-57 ms with
+  an MP3 playing), only pushes. Rows kept outside the band are forgotten
+  when a cover arrives or the playing track changes (they would hold the
+  placeholder, or the old mark). `ui` counts the rows rendered ahead.
+  **A row's text goes straight into its sprite** and **the sprites lie in
+  the PSRAM's fast half** (below: Text, and "The list's memory"): a row
+  renders in 3.0-3.4 ms (5.6 before 0.14.0), and a fling draws in 1-2 ms a
+  frame, 6-9 ms at most (23-31 ms with an MP3 playing). **What changes in place stays
   in place** (0.12.0, from the device's `ui` loop costs): a track change
   draws again only the rows on screen whose mark changes (the Library:
   usually none; the Queue: the one that played and the one that plays,
@@ -3248,7 +3286,37 @@ Queue, Dance and Output (with its Pair and About pages).
   descent, taking rows from their marks and the gaps around them, never
   from the letter: the rows stay 19, 17, 19 and 27 px high, as with Latin
   alone (a host test checks M5GFX's rule on the arrays). M5GFX keeps 9 B a
-  glyph of tables in PSRAM (26 KB for the four).
+  glyph of tables in PSRAM (26 KB for the four; loaded first thing in
+  `setup()`, so they lie in its fast lower half: "The list's memory",
+  below).
+  - **A line into a sprite is written by the firmware** (0.14.0,
+    `Fonts::drawFast()`): M5GFX paints a VLW glyph with a `writeFillRect()`
+    a run, one for each row of its cell's background and one for each
+    anti-aliased pixel, through the sprite's panel: some 94 us a glyph,
+    2.9 of a list row's 5.6 ms (MEASURED). A line of the font's own glyphs
+    with a background, into a 16-bit sprite, is instead blended straight
+    into the sprite's memory from the glyph's rows in flash, step for step
+    as `drawString()` and `VLWfont::drawChar()` paint it (the width, each
+    cell's fill, each pixel's blend, the clip rectangle), an ASCII glyph
+    found by its place in the font instead of a search of the glyph table:
+    541 us a line against 1,312. Anything else is M5GFX's as before: a
+    line with a glyph from the store (`drawMixed()`), one with no
+    background, the LCD itself, another colour depth. Console `uiBv` draws
+    the library's names both ways and compares the sprites' memory (7,047
+    lines on the 19,533-track card, 0 different); `uiBf0` turns the path
+    off.
+  - **The list's memory** (`ui/HotMem`): PSRAM from 0x3FA00000 up shares
+    core 1's cache with the code that runs there (RESAMPLER.md 10d), and a
+    list row is a 27 KB sprite the loop fills and draws on core 1. The
+    sprites used to be allocated when the UI starts, after the library: on
+    a big card (an index of 1.79 MB) they landed above the line (MEASURED:
+    0x3FAEC2B4 and up). So `setup()` reserves one block first, while the
+    lower 2 MB are free (212 KB: `[ui] list memory: 212032 B reserved at
+    0x3f802320, PSRAM, its lower 2 MB`), and the six row sprites, the rail
+    and the shared strip take their pixels from it: a row renders in 3.4 ms
+    there against 4.0 above the line (1.8 against 3.1 once its lines are
+    cached). The decoders' pinned block is allocated after it and stays in
+    the lower half (0x3F866120 on this unit).
   - **CJK and Hangul** come from a glyph store behind the fonts
     (`GlyphStore`, `CjkGlyphs16`: [I18N.md](I18N.md) phase 2): 10,557
     glyphs at 16 px, 4 bits a pixel, 1.05 MB of flash, read where they lie
@@ -4057,8 +4125,15 @@ Queue, Dance and Output (with its Pair and About pages).
   picker, `uiT` decodes
   the covers again (their timings), `uiV` shows the volume HUD, `uir0` /
   `uir1` has the A-Z rail's scrub as before 0.12.0 (every position a band
-  draw at once, the card worker not held) or paced (`uir` says which: to
-  compare the two by hand), and
+  draw at once, the card worker not held) or a row a pass (`uir` says
+  which: to compare the two by hand), `uiv` says how a moving list's
+  frames go (the panel's scan as timed, the list's reserved memory, what a
+  pushed line and a row cost now; `uiv0` / `uiv1` take the frames off the
+  scan and back, to compare by eye, `uiv!` times the panel again),
+  `uif<ms>` sets the frame clock's period, `uiB` times the list shown (a
+  row sprite's fill, a row's render, the band in place, a move), `uiBv`
+  checks the sprites' fast text against M5GFX's and `uiBf0` / `uiBf1`
+  turns it off and on, and
   **`uiF<c/s/p/r/l/n/f/t/g/u/w>`** shows a faked state for screenshots of what a test
   can't safely cause (display only: the radio and the card are left
   alone): the Bluetooth card connecting, searching, pairing or resting, the
@@ -4088,11 +4163,15 @@ Queue, Dance and Output (with its Pair and About pages).
   ends there and presses nothing, and `uis160,265,160,100,120` is a swipe
   up from the strip that flings the list (`uid...` the same as a drag).
   Every list motion logs `[ui] scroll: <ms>, <frames> (<fps>), draw mean/max
-  (n over 35 ms), ring min, underruns +n, governor` when it settles (a scrub
+  (n over 35 ms), ring min, underruns +n, governor` when it settles, and
+  under it its moves against the panel's scan: `[ui] scroll moves: N in
+  their window on the panel's scan (n of them with a strip row early), N
+  late, N without the scan; the address a-b lines past the band (in the
+  band for n); the fling's frames N ms apart at most, n of m late` (a scrub
   of Now Playing's seek bar the same as `[ui] scrub: ...`; a finger on the
   A-Z rail, from its landing to the band's last catch-up, as `[ui] rail
-  scrub: <ms>, <band frames> (<a second>; draw mean/max, n over 35), <rail
-  frames> (mean/max), ...`), and a
+  scrub: <ms>, <band frames> (<a second>; a band mean/max), the loop held
+  N ms at most; the thumb drawn <n> times (<a second>), ...`), and a
   frame over 50 ms logs `[ui] slow frame` with its move and its renders; every touch logs
   `[touch] down/tap/long press/fling x,y (raw x,y)` (with `scripted` for
   the scripted finger's), every move of the queue's current entry
