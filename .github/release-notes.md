@@ -89,7 +89,7 @@ Source for this binary: {{SOURCE_URL}}, and with its libraries in
   console made that never format (a computer can't stand in for a
   hand); a real format by hand, 7.8 s, the card then checked on a
   computer (one FAT32 partition, no errors); the update from settings
-  written by earlier test builds. Then, with no card answering, the
+  written by earlier test builds. Then, with no card in the slot, the
   update from settings 0.13.0 wrote: every setting kept, the clock unset
   until a computer set it, then kept through a restart. Before they were
   merged: Touch when off's three choices, and the lists, with every

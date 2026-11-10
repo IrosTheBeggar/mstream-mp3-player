@@ -69,14 +69,13 @@ The question: does a board whose settings were written by the released
 0.13.0 take the new firmware cleanly? Run on the same Core2, with the
 user's settings backed up first and put back at the end (section 4).
 
-**The card:** the spare card answered at the start (`@status
-card=fat32`), but from the first boot of 0.13.0 on, no card answered at
-any boot of either firmware (`GO_IDLE_STATE failed`, then `[storage] no
-card mounted; its first sectors: unreadable`; `@status card=none`), up
-to and including the last one, on the user's restored settings. Every
-boot here was an RTS reset, which doesn't power the card off; a card
-the SD driver leaves without an answer can need a power cycle (not
-looked into: the bench's rules leave the power keys alone). So this
+**The card:** no card was in the player during this check. The spare
+had been moved to a computer's reader for section 2's look before the
+check began. The first `@status` still said `card=fat32` (an idle player
+asks nothing of its card, so the running firmware hadn't noticed it was
+gone); from the first restart on the slot was empty at every boot of
+either firmware (`GO_IDLE_STATE failed`, then `[storage] no card
+mounted; its first sectors: unreadable`; `@status card=none`). So this
 check covers the settings and the clock, not the card: nothing was
 played (its step 6 needs a card with tracks), and the play log stayed
 off at each boot (`[plays] no play log: the player's records aren't on a
@@ -99,8 +98,8 @@ file, nor its bytes).
 | A reboot | `[nvs] schema 6`; `[clock] 2026-11-10 21:12:45 UTC, from the RTC (to the second; ...)`, then `at the RTC's tick, within 6 ms (its seconds +8 ms from the true ones, the last @time's); the boot's second was 0.364 s behind`; `@status ... clock=ok`; a bare `@time` 10 ms past the computer's stamp of its send. The settings as before |
 
 No boot logged a Guru, a panic, a backtrace, a `task_wdt` or a LOW
-stack; the only `[E]` lines were the SD driver's, for the card that
-didn't answer, and NVS's not-found lines on the erased partition. Every
+stack; the only `[E]` lines were the SD driver's, for the empty slot,
+and NVS's not-found lines on the erased partition. Every
 boot was a single boot: no restart loop.
 
 One console detail, not a defect of the release: on the erased NVS the
@@ -122,14 +121,14 @@ tab bar); on the user's settings it said `bat=100`.
   from the RTC`, then caught at its tick; `z`; `@status
   fw=v0.13.0-46-g218822a elf=d5915c44 card=none ... clock=ok`.
 - **Not seen:** the play log's line with the user's epoch and its boot
-  count one higher (no card answered: it is read only with a card).
+  count one higher (no card was in: it is read only with a card).
   The settings partition is byte for byte the backup, which holds that
   epoch and count.
 - **The RTC** keeps the time this check's `@time` set (the right time,
   to a few ms); the restored settings keep their own, older phase
   (+12 ms, against the new write's +8 ms).
-- **The card** didn't answer at the end either: the user should take a
-  look (a power cycle, or the card out and in, and a boot), see section 3.
+- **The card** was still in the computer's reader at the end: the slot
+  is empty, see section 3.
 
 ## 5. Not run for this release
 
