@@ -6038,7 +6038,10 @@ src/. What the code decided where 3.2-3.4 left room:
   line names that wait; the restart forgets both. A card silent past 30 s still loses the edits,
   30 s later. The guard's other restarts (another card; an identity it couldn't read) don't wait:
   writes are refused there. Rescan's restart (`rescanLibrary()`) flushes once the same way and
-  isn't changed.
+  isn't changed. While the restart waits it counts as a restart under way though its time isn't
+  set yet (`powerchoice::restartAsked()`'s `guardWaits`, `test_power_choices`): the format's
+  question isn't shown and its answer isn't taken (`@err 4 format busy`, docs/HOST-STATUS.md),
+  which would otherwise race it, the listener told "formatting" and the boot formatting nothing.
 - **What such a card does** (MEASURED on a host rig, not in the tree: the real
   `sd_diskio.cpp`, `SectorDisk.cpp`, `Library`, `CardTasks`, `AutoDj`, `Waves` and FatFs
   over a byte-level model of a card; a sector with no answer unless it says

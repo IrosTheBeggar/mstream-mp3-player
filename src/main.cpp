@@ -2031,7 +2031,8 @@ static const char* identifyBoard(const char* label) {
 }
 
 // A restart asked for and not yet carried out (the format's, the CPU
-// speed's, the loop's restartAtMs: below).
+// speed's, the loop's restartAtMs, the card guard's while it waits for the
+// queue's flush: below, with the guard).
 static bool restartPending();
 
 // @format: the format's question on the board's screen (ui/Ui::askFormat()),
@@ -2981,8 +2982,6 @@ static void stepCpuRestart(uint32_t now) {
 
 // ---- the format in the player (docs/HOST-STATUS.md, "@format") ----
 
-static bool restartPending() { return powerchoice::restartAsked(formatRestart.on, cpuRestartMhz, restartAtMs); }
-
 // The format's question answered Format twice (ui/Ui::askFormat()): the
 // card in the slot formatted at the next boot (storage/CardFormatter),
 // before anything mounts it. The restart is the CPU speed's orderly one:
@@ -3069,6 +3068,11 @@ static bool cardHeld = false;
 // The guard's restart for the same card back under a job, waiting for the queue's flush (lib/core
 // RestartWait): the flush tried again on the saver's backoff, the restart once one works, or 30 s on.
 static RestartWait restartWait;
+// (Declared with the format's question, which a restart under way refuses. The guard's, waiting
+// for the flush, has no restartAtMs yet: for up to 30 s it would otherwise be no restart at all.)
+static bool restartPending() {
+  return powerchoice::restartAsked(formatRestart.on, cpuRestartMhz, restartAtMs, restartWait.active());
+}
 // The card's breaker (lib/core CardBreaker): RTC slow memory, which outlives
 // esp_restart(), not a power-on.
 RTC_NOINIT_ATTR static cardbreaker::Word cardBreakerWord;

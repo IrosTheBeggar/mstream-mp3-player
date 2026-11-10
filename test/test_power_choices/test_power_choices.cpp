@@ -135,12 +135,15 @@ void test_cpu_restart_waits_for_the_headphones_and_the_amp() {
 // A restart asked for, whichever (main.cpp's restartPending(): what holds the
 // library update step and Auto DJ; test_library_update has what the step does
 // with it).
-void test_a_restart_asked_is_any_of_the_three() {
+void test_a_restart_asked_is_any_of_the_four() {
   TEST_ASSERT_FALSE(pc::restartAsked(false, 0, 0));
+  TEST_ASSERT_FALSE(pc::restartAsked(false, 0, 0, false));
   TEST_ASSERT_TRUE(pc::restartAsked(true, 0, 0));     // the format's
   TEST_ASSERT_TRUE(pc::restartAsked(false, 160, 0));  // a CPU speed's
   TEST_ASSERT_TRUE(pc::restartAsked(false, 0, 1));    // the loop's, at its time
-  TEST_ASSERT_TRUE(pc::restartAsked(true, 240, 1));
+  // The card guard's, waiting for the queue's flush: its time isn't set yet.
+  TEST_ASSERT_TRUE(pc::restartAsked(false, 0, 0, true));
+  TEST_ASSERT_TRUE(pc::restartAsked(true, 240, 1, true));
 }
 
 // esp_power_level_t 0-7 is -12..+9 dBm in 3 dB steps. Every range starts at
@@ -248,7 +251,7 @@ int main(int, char**) {
   RUN_TEST(test_cpu_labels_and_lines);
   RUN_TEST(test_cpu_tap);
   RUN_TEST(test_cpu_restart_waits_for_the_headphones_and_the_amp);
-  RUN_TEST(test_a_restart_asked_is_any_of_the_three);
+  RUN_TEST(test_a_restart_asked_is_any_of_the_four);
   RUN_TEST(test_bt_levels);
   RUN_TEST(test_bt_stored_values_and_taps);
   RUN_TEST(test_bt_pending_until_the_next_connection);
