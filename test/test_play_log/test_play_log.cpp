@@ -1558,6 +1558,273 @@ void test_a_remount_and_the_boots_scan() {
   TEST_ASSERT_EQUAL_UINT32(62, s.seq);
 }
 
+// ---------------------------------------------------------------------------
+// A question or an open the card fails (docs/METADATA.md 3.8, 3.10).
+// ---------------------------------------------------------------------------
+namespace {
+
+// A card that fails some of its questions and opens, as the firmware's FatFs
+// says them (storage/CardFat): open() says no file, exists() no,
+// firstCluster() 0, and only entry() and openRead() say it was the card.
+// They are numbered from 0 in `events`; those from failFrom up to failTo
+// fail (failFrom -1: none; failTo -1: for ever).
+struct FlakyFs : CutFs {
+  long failFrom = -1, failTo = -1, events = 0;
+  void failing(long from, long to) {
+    events = 0;
+    failFrom = from;
+    failTo = to;
+  }
+  tagstore::File* open(const char* p, Mode m) override {
+    // (Create is no question: it makes the file, and empties one that is there.)
+    if (!inside_ && m != Mode::Create && fails()) return nullptr;
+    return CutFs::open(p, m);
+  }
+  tagstore::File* openRead(const char* p, bool* cardFailed) override {
+    if (fails()) {
+      *cardFailed = true;
+      return nullptr;
+    }
+    Inside in(*this);
+    return CutFs::openRead(p, cardFailed);
+  }
+  Entry entry(const char* p) override {
+    if (fails()) {
+      Entry e;
+      e.cardFailed = true;
+      return e;
+    }
+    Inside in(*this);
+    return CutFs::entry(p);
+  }
+  bool exists(const char* p) override { return !(!inside_ && fails()) && CutFs::exists(p); }
+  uint32_t firstCluster(const char* p) override { return !inside_ && fails() ? 0 : CutFs::firstCluster(p); }
+
+private:
+  struct Inside {
+    explicit Inside(FlakyFs& f) : f_(f), was_(f.inside_) { f_.inside_ = true; }
+    ~Inside() { f_.inside_ = was_; }
+    FlakyFs& f_;
+    bool was_;
+  };
+  bool fails() {
+    if (failFrom < 0) return false;
+    const long k = events++;
+    return k >= failFrom && (failTo < 0 || k < failTo);
+  }
+  bool inside_ = false;
+};
+
+}  // namespace
+
+// A slot's open the card fails says nothing of plays.jnl. The question that
+// follows (is there one?) decides whether a new one is made, and one the card
+// fails decides nothing: Create would empty a log that is there, every play
+// not yet sent with it. (FatFs's f_stat says "no" for a read that failed
+// too, so exists() can't be asked that.)
+void test_an_open_the_card_fails_never_empties_the_log() {
+  FlakyFs fs;
+  Device d;
+  TEST_ASSERT_TRUE(d.boot(fs));
+  for (int i = 0; i < 3; ++i) {
+    Slot s = play(i, 60000, 1000 * (i + 1));
+    TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
+  }
+  const Bytes three = fs.bytes(kLog);
+  TEST_ASSERT_EQUAL_size_t(3 * pl::kSlot, three.size());
+  // The open and the question after it both fail; the card is back for
+  // whatever comes next.
+  fs.failing(0, 2);
+  Slot s = play(10, 60000, 9000);
+  TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Failed);
+  TEST_ASSERT_EQUAL_STRING("lost 4", d.ops.back().c_str());
+  TEST_ASSERT_TRUE(fs.bytes(kLog) == three);
+  // The open alone fails, the question says the log is there: not written,
+  // not emptied.
+  fs.failing(0, 1);
+  s = play(11, 60000, 10000);
+  TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Failed);
+  TEST_ASSERT_TRUE(fs.bytes(kLog) == three);
+  // The card answers: the log goes on where it was (the seqs the lost plays
+  // took aren't used again).
+  fs.failing(-1, -1);
+  s = play(12, 60000, 11000);
+  TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
+  TEST_ASSERT_EQUAL_UINT32(6, s.seq);
+  TEST_ASSERT_EQUAL_size_t(4 * pl::kSlot, fs.bytes(kLog).size());
+  const Bytes four = fs.bytes(kLog);
+  TEST_ASSERT_TRUE(Bytes(four.begin(), four.begin() + three.size()) == three);
+  // No plays.jnl, and the question fails: none is made (it may be there);
+  // answered, it is.
+  FlakyFs none;
+  Device e;
+  TEST_ASSERT_TRUE(e.boot(none));
+  none.failing(0, 2);
+  s = play(1, 60000, 1000);
+  TEST_ASSERT_TRUE(e.j->append(s) == Journal::Wrote::Failed);
+  TEST_ASSERT_TRUE(none.dir.count(kLog) == 0);
+  none.failing(-1, -1);
+  s = play(2, 60000, 2000);
+  TEST_ASSERT_TRUE(e.j->append(s) == Journal::Wrote::Ok);
+  TEST_ASSERT_EQUAL_size_t(pl::kSlot, none.bytes(kLog).size());
+}
+
+// The questions the cut-rename rule, the trim and the rotation ask (which of
+// the log's files are there, on which chains), each failed in its turn:
+// nothing is removed or renamed on an answer the card didn't give, so no
+// chain is freed while another name uses it. A rule left unanswered holds
+// the slots as a refused rename does, until the card answers.
+void test_a_question_the_card_fails_frees_no_chain() {
+  const uint64_t epoch = 0x1122334455667788ull;
+  auto slotOf = [&](uint32_t seq) {
+    Slot s = play(seq, 60000, 1000 * seq);
+    s.seq = seq;
+    s.epoch = epoch;
+    std::memcpy(s.deviceId, kDevA, 6);
+    s.bootSeq = 1;
+    Bytes b(pl::kSlot);
+    pl::encode(s, b.data());
+    return b;
+  };
+  auto two = [&](uint32_t a, uint32_t b) {
+    Bytes out = slotOf(a);
+    const Bytes more = slotOf(b);
+    out.insert(out.end(), more.begin(), more.end());
+    return out;
+  };
+  const char* const kTwin1 = "/.player/plays.xl1";
+  const char* const kTwin2 = "/.player/plays.xl2";
+  // plays.1.jnl, its every play acknowledged, on one chain with a twin (an
+  // earlier cut rename's); a twin on a chain of its own; plays.jnl, full at a
+  // cap of 2, its plays past ACKS's mark.
+  auto card = [&](FlakyFs& fs) {
+    fs.put(kPrev, two(1, 2));
+    fs.link(kPrev, kTwin1);
+    fs.put(kTwin2, slotOf(9));
+    fs.put(kLog, two(3, 4));
+  };
+  auto device = [&](Device& d) {
+    d.nvs.ids.epoch = epoch;
+    d.nvs.ids.seq = 4;
+    d.nvs.ids.boots = 1;
+    setAcks(d.acks, {ack(kDevA, epoch, 2)});
+  };
+  auto message = [](const FlakyFs& fs, const char* what, long k, long n) {
+    char msg[200];
+    std::snprintf(msg, sizeof(msg), "%s %ld of %ld: %s", what, k, n,
+                  fs.violations.empty() ? "no chain freed" : fs.violations[0].c_str());
+    return std::string(msg);
+  };
+
+  // ---- the boot: the rule, the scan's opens, the trim ----
+  long events = 0;
+  {
+    FlakyFs fs;
+    card(fs);
+    Device d(kDevA, 2);
+    device(d);
+    fs.failing(1000000, -1);  // (counted, none failed)
+    TEST_ASSERT_TRUE(d.boot(fs));
+    events = fs.events;
+    // Every answer given: the twin on its own chain collected, plays.1.jnl
+    // kept though ACKS has all of it (its twin shares its chain).
+    TEST_ASSERT_TRUE(fs.dir.count(kTwin2) == 0);
+    TEST_ASSERT_TRUE(fs.dir.count(kPrev) == 1);
+    TEST_ASSERT_EQUAL_UINT32(1, d.j->booted().twins);
+    TEST_ASSERT_EQUAL_UINT32(0, d.j->booted().trimmed);
+    TEST_ASSERT_FALSE(d.j->unsettled());
+    TEST_ASSERT_TRUE(fs.violations.empty());
+  }
+  TEST_ASSERT_GREATER_THAN_INT32(10, events);
+  int unanswered = 0;
+  for (long k = 0; k < events; ++k) {
+    FlakyFs fs;
+    card(fs);
+    Device d(kDevA, 2);
+    device(d);
+    fs.failing(k, k + 1);
+    d.boot(fs);
+    const std::string msg = message(fs, "the boot's question", k, events);
+    TEST_ASSERT_TRUE_MESSAGE(fs.violations.empty(), msg.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(fs.bytes(kPrev) == two(1, 2), msg.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(fs.bytes(kTwin1) == two(1, 2), msg.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(fs.bytes(kLog) == two(3, 4), msg.c_str());
+    TEST_ASSERT_EQUAL_MESSAGE(d.j->unanswered(), d.j->unsettled(), msg.c_str());
+    unanswered += d.j->unanswered();
+    // The card answering again (the next boot, or a remount): as if nothing
+    // had failed.
+    fs.failing(-1, -1);
+    TEST_ASSERT_TRUE_MESSAGE(d.boot(fs), msg.c_str());
+    TEST_ASSERT_FALSE_MESSAGE(d.j->unsettled(), msg.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(fs.dir.count(kTwin2) == 0, msg.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(fs.dir.count(kPrev) == 1 && fs.dir.count(kTwin1) == 1, msg.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(fs.violations.empty(), msg.c_str());
+  }
+  TEST_ASSERT_GREATER_THAN_INT(0, unanswered);
+
+  // ---- a rule left unanswered: no slot until the card answers ----
+  {
+    FlakyFs fs;
+    card(fs);
+    Device d(kDevA, 9);
+    device(d);
+    fs.failing(0, -1);  // (every question, for now)
+    d.boot(fs);
+    TEST_ASSERT_TRUE(d.j->unanswered());
+    TEST_ASSERT_FALSE(d.j->blocked());
+    Slot s = play(20, 60000, 20000);
+    TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Failed);
+    TEST_ASSERT_EQUAL_STRING("lost 5", d.ops.back().c_str());
+    TEST_ASSERT_TRUE(fs.bytes(kLog) == two(3, 4));
+    TEST_ASSERT_TRUE(fs.dir.count(kTwin2) == 1);
+    fs.failing(-1, -1);
+    s = play(21, 60000, 21000);
+    TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
+    TEST_ASSERT_EQUAL_UINT32(6, s.seq);
+    TEST_ASSERT_FALSE(d.j->unanswered());
+    TEST_ASSERT_TRUE(fs.dir.count(kTwin2) == 0);  // (the rule again, at that append: collected)
+    TEST_ASSERT_TRUE(fs.violations.empty());
+  }
+
+  // ---- the rotation (a cap of 2: the next play rotates) ----
+  long asked = 0;
+  for (long k = -1; k < asked || k < 0; ++k) {
+    FlakyFs fs;
+    card(fs);
+    Device d(kDevA, 2);
+    device(d);
+    TEST_ASSERT_TRUE(d.boot(fs));
+    const std::map<std::string, int> before = fs.dir;
+    fs.failing(k < 0 ? 1000000 : k, k < 0 ? -1 : k + 1);
+    Slot s = play(30, 60000, 30000);
+    const Journal::Wrote w = d.j->append(s);
+    if (k < 0) {
+      // Every answer given: plays.1.jnl to a twin name (its twin shares its
+      // chain: a delete would free it), plays.jnl after it, a new plays.jnl.
+      asked = fs.events;
+      TEST_ASSERT_TRUE(w == Journal::Wrote::Ok);
+      TEST_ASSERT_TRUE(fs.shared(kTwin1, kTwin2));
+      TEST_ASSERT_TRUE(fs.bytes(kPrev) == two(3, 4));
+      TEST_ASSERT_EQUAL_size_t(pl::kSlot, fs.bytes(kLog).size());
+      TEST_ASSERT_TRUE(fs.violations.empty());
+      TEST_ASSERT_GREATER_THAN_INT32(3, asked);
+      continue;
+    }
+    const std::string msg = message(fs, "the rotation's question", k, asked);
+    TEST_ASSERT_TRUE_MESSAGE(fs.violations.empty(), msg.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(w == Journal::Wrote::Failed, msg.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(fs.dir == before, msg.c_str());  // (nothing renamed or removed)
+    TEST_ASSERT_TRUE_MESSAGE(fs.bytes(kLog) == two(3, 4), msg.c_str());
+    // The card answers: the next play rotates as it would have.
+    fs.failing(-1, -1);
+    s = play(31, 60000, 31000);
+    TEST_ASSERT_TRUE_MESSAGE(d.j->append(s) == Journal::Wrote::Ok, msg.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(fs.shared(kTwin1, kTwin2), msg.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(fs.bytes(kPrev) == two(3, 4), msg.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(fs.violations.empty(), msg.c_str());
+  }
+}
+
 // device.txt's history (2.15): the vectors' texts read as the majors they
 // list; no key, an empty one, or no file: none. This firmware writes 1.
 void test_device_txt_says_history() {
@@ -1597,6 +1864,8 @@ int main(int, char**) {
   RUN_TEST(test_a_cut_at_every_step);
   RUN_TEST(test_twins_and_the_blocked_log);
   RUN_TEST(test_a_refused_rename_is_tried_again);
+  RUN_TEST(test_an_open_the_card_fails_never_empties_the_log);
+  RUN_TEST(test_a_question_the_card_fails_frees_no_chain);
   RUN_TEST(test_the_drop_note);
   RUN_TEST(test_what_a_rotation_counts);
   RUN_TEST(test_the_tracker);

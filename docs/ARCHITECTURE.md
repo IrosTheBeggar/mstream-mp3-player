@@ -454,8 +454,8 @@ The rules that keep it deadlock- and glitch-free:
    **`stepPlays()`**: the play log's look at the backend's position for
    the play under way (`app/PlayHistory`, Storage below), and, when the
    pass's audio and list let it (lib/core `PlayLog`'s `WriteGate`) and the
-   card isn't held, a piece of the boot's scan of the log or one play's
-   slot.
+   card isn't held, out of the slot or refusing writes (METADATA.md 3.10),
+   a piece of the boot's scan of the log or one play's slot.
 5. A track's learned length, a restart that is due, the `[queue] now at`
    and Repeat One lines, the spike tools, the calibration, the dancer.
 6. **`userInterface->loop()`:** the snapshot (`MainUiHost::snapshot()`,

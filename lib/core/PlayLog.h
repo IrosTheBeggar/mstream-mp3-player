@@ -25,7 +25,11 @@
 //     the boot's scan, a few slots a call, of every valid slot of the log's
 //     files: the boot rules (the seq and the boot count) and the trim by
 //     the root's ACKS. At a play's end its seq in NVS first, then one
-//     append and its f_sync, rotating under the cap with a drop note;
+//     append and its f_sync, rotating under the cap with a drop note. A
+//     question of the card that it fails (which files are there, on which
+//     chains: Fs::entry()) answers nothing: nothing is removed, renamed
+//     or made on it (settle(), the trim, the rotation, an append's new
+//     plays.jnl);
 //   - Tracker: a play from its start to its end, as PlaybackController
 //     tells them (its Plays) and the backend's position shows it: the time
 //     played (pauses excluded), the pauses, the outcome, the source;
@@ -169,7 +173,10 @@ public:
   // one chain sends plays.jnl to a twin name; a twin no other file of the
   // log shares goes. begin() and remounted() do it. False: no twin name
   // free (blocked: no slot until a disk check frees one), or the card
-  // refused the rename (unsettled: append() tries it again first).
+  // refused the rename (unsettled: append() tries it again first), or it
+  // failed one of the rule's questions (which files are there, on which
+  // chains: tagstore::Fs::entry()), which answers nothing: nothing is
+  // renamed or removed on it, and it is unsettled too (unanswered()).
   bool settle();
   // The same card mounted again (the card guard's remount: pulled and put
   // back, or FatFs's own): settle() again before the next slot; and while
@@ -205,6 +212,8 @@ public:
   bool newEpoch() const { return newEpoch_; }
   bool blocked() const { return blocked_; }
   bool unsettled() const { return unsettled_; }
+  // ... unsettled because the card failed a question, not a rename.
+  bool unanswered() const { return unanswered_; }
   // The boot's: what its scan found and did.
   struct Booted {
     uint32_t files = 0;       // the log's files read
@@ -225,15 +234,19 @@ private:
   void op(Op o, const char* a, const char* b, uint64_t n) {
     if (c_.onOp) c_.onOp(c_.opCtx, o, a, b, n);
   }
-  bool exists(const char* path) { return fs_.exists(path); }
+  // The journal's questions of the card (tagstore::Fs::entry()), the first
+  // it fails noted: from there the answers say nothing, and nothing is
+  // removed, renamed or made on them (PlayLog.cpp).
+  class Asking;
   // Another file of the log (its names, the twins) shares `path`'s first
-  // cluster (a cut rename's two entries on one chain).
-  bool shared(const char* path);
+  // cluster (a cut rename's two entries on one chain). No answer once a
+  // question failed (a.failed()).
+  bool shared(Asking& a, const char* path);
   // `path` renamed to the first free twin name (a rename frees nothing);
   // false and blocked when all nine are taken, false (Refused) when the
-  // card refuses the rename.
-  bool toTwin(const char* path);
-  void collectTwins();
+  // card refuses the rename, false when it failed a question.
+  bool toTwin(Asking& a, const char* path);
+  void collectTwins(Asking& a);
   // The boot's scan from its start (the cut-rename rule done first).
   void startScan();
   // The scan's end: the boot rules, the trim.
@@ -267,7 +280,8 @@ private:
   uint32_t seq_ = 0;
   bool newEpoch_ = false;
   bool blocked_ = false;
-  bool unsettled_ = false;  // plays.jnl on plays.1.jnl's chain: the card refused its rename
+  bool unsettled_ = false;  // plays.jnl on plays.1.jnl's chain: the card refused its rename; or unanswered_
+  bool unanswered_ = false;  // settle(): the card failed a question, nothing done on it
   bool appended_ = false;   // append() asked for this boot (its bootSeq may be on the card)
   uint32_t bootsAtMount_ = 0;  // NVS's boot count at begin() (the boot rule's, again at a rescan)
   // The scan.

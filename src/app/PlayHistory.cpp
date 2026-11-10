@@ -81,6 +81,17 @@ const char* outcomeName(uint8_t o) {
   return o == playlog::kCompleted ? "completed" : o == playlog::kSkipped ? "skipped" : "stopped";
 }
 
+// The card isn't one to ask now (docs/METADATA.md 3.8): the mount's card is
+// out of the slot, none answering or another in it (sectordisk::cardOut(),
+// what the player's card hold goes by), or it refuses every write until a
+// restart (the guard's writes off). Each ask of a card that is out is a
+// mount tried, a second or two of the SD driver's tries with the loop held,
+// and a slot's would come to "the file isn't there", its play lost for a
+// card that is back a moment later.
+bool cardAway() {
+  return sectordisk::installed() && (sectordisk::cardOut() || sectordisk::guard().writesOff);
+}
+
 }  // namespace
 
 void PlayHistory::begin(AutoDj* autoDj) {
@@ -150,8 +161,10 @@ void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, boo
   tracker_->tick(look.state, look.positionMs, look.positionKnown, look.positionKnown ? look.durationMs : 0);
   const playlog::WriteGate::Wait w = gate_.update(gate);  // (every pass: it follows the starts)
   if (cardHeld || w != playlog::WriteGate::Wait::None) return;
+  // (Nothing is asked of a card that is away: the scan and the plays wait
+  // for the remount, remounted(), or the end's flush().)
   if (!journal_->ready()) {
-    if (journal_->off()) return;
+    if (journal_->off() || cardAway()) return;
     ++scanPasses_;
     if (!journal_->scan(kScanSlotsPerPass)) return;
   }
@@ -167,12 +180,14 @@ void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, boo
                   b.cardSeq ? "" : " (none of this epoch's)", static_cast<unsigned long>(b.trimmed),
                   b.trimmed == 1 ? "" : "s",
                   b.twins ? "; a cut rename's twins on the card: a disk check frees them" : "",
-                  journal_->unsettled() ? "; plays.jnl shares plays.1.jnl's chain and the card refused its rename: "
-                                          "tried again at each play"
-                                        : "");
+                  journal_->unanswered()  ? "; the card failed a question of the log's files (which are there, on "
+                                            "which chains): asked again at each play"
+                  : journal_->unsettled() ? "; plays.jnl shares plays.1.jnl's chain and the card refused its rename: "
+                                            "tried again at each play"
+                                          : "");
     return;
   }
-  if (tracker_->pending()) writeOne();
+  if (tracker_->pending() && !cardAway()) writeOne();
 }
 
 void PlayHistory::writeOne() {
@@ -182,7 +197,10 @@ void PlayHistory::writeOne() {
   const int64_t t0 = esp_timer_get_time();
   if (!library_.fatfs()->stat(p.file.path, &size, &fatTime)) {
     ++lost_;
-    Serial.printf("[plays] a play of %s NOT written: the file isn't there\n", base(p.file.path));
+    // (For the line: f_stat's "no" is a read the card failed, too.)
+    const bool gone = library_.fatfs()->look(p.file.path) == tagstore::Fs::Seen::Gone;
+    Serial.printf("[plays] a play of %s NOT written: %s\n", base(p.file.path),
+                  gone ? "the file isn't there" : "the card failed a read on the way to it");
     tracker_->pop();
     return;
   }
@@ -217,6 +235,7 @@ void PlayHistory::writeOne() {
                 w == Journal::Wrote::Nvs       ? "NVS didn't take the seq"
                 : w == Journal::Wrote::Blocked ? "blocked: no twin name free, a disk check frees one"
                 : w == Journal::Wrote::Off     ? "no log"
+                : journal_->unanswered()       ? "the card failed a question of the log's files"
                 : journal_->unsettled()        ? "the card refused the rename that parts plays.jnl from plays.1.jnl"
                                                : "the card refused it",
                 ms);
@@ -226,13 +245,29 @@ void PlayHistory::flush(const char* why) {
   if (!active_) return;
   player_.endPlay();  // (the open play, stopped)
   const uint32_t waiting = tracker_->pending();
-  if (sectordisk::installed() && sectordisk::guard().foreign) {
-    if (waiting)
-      Serial.printf("[plays] before the %s: %lu play%s NOT written (another card is in the slot)\n", why,
-                    static_cast<unsigned long>(waiting), waiting == 1 ? "" : "s");
+  if (!waiting) return;
+  // A card that takes no write, FatFs refusing them all (another card in the
+  // slot, writes off), or none in the slot: nothing written. The mount's
+  // card out as far as the last mount knew is asked once first (FatFs's
+  // next mount: put back, it answers, and the rule and the scan are a
+  // remount's); out still, it isn't asked again, a play at a time.
+  const char* cant = nullptr;
+  if (sectordisk::installed()) {
+    if (sectordisk::cardOut() && !sectordisk::guard().foreign) {
+      library_.fatfs()->echoNow();
+      if (!sectordisk::cardOut()) remounted();
+    }
+    const sectordisk::Guard g = sectordisk::guard();
+    cant = g.foreign               ? "another card is in the slot"
+           : sectordisk::cardOut() ? "no card answers"
+           : g.writesOff           ? "the card takes no more writes this session"
+                                   : nullptr;
+  }
+  if (cant) {
+    Serial.printf("[plays] before the %s: %lu play%s NOT written (%s)\n", why, static_cast<unsigned long>(waiting),
+                  waiting == 1 ? "" : "s", cant);
     return;
   }
-  if (!waiting) return;
   const int64_t t0 = esp_timer_get_time();
   while (!journal_->ready() && !journal_->off()) journal_->scan(kScanSlotsPerPass);
   while (tracker_->pending()) writeOne();

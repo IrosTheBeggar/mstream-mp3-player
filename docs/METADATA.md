@@ -7163,6 +7163,40 @@ What the code decided where 2.20 left room:
   the play it can't place is lost, said so (`the card refused to
   rename`); a remount settles again, so a log blocked before a disk check
   goes on with the same card back.
+- **The card's guard** (3.8; with 0.12.0's and 0.13.0's merged in). The
+  loop asks nothing of a card that isn't one to ask: held for the guard's
+  restart (`cardHeld`); out of the slot, none answering or another in it
+  (`sectordisk::cardOut()`, what the player's card hold goes by); or
+  refusing every write until a restart (writes off). The plays wait, 8 at
+  most, and the boot's scan too, until the guard's remount
+  (`remounted()`) or the end's `flush()`. Each ask of a card that is out
+  is a mount tried, a second or two of the SD driver's tries with the loop
+  held (the hold keeps its own tries on the decoder's task, 7 in its 2
+  minutes), a scan there asked ten opens in one pass, and a slot's
+  `f_stat` came to "the file isn't there", the play lost for a card that
+  was back a moment later. A play whose `f_stat` fails with the card in
+  is still lost, and its line says which it was (`the file isn't there`,
+  or `the card failed a read on the way to it`); so is one whose append
+  the card refuses (a slot written again could be credited twice). What
+  isn't covered: the play log being the first to ask a card just pulled
+  (nothing else read it since), which loses that one play as before.
+- **A question the card fails answers nothing** (3.2.2's rule for the
+  boot's files and 2.12.6's for the cut-rename rule, `tagstore::Fs::entry()`).
+  The journal asked `exists()` and `firstCluster()`, which on FatFs say
+  "no" and 0 for a read that failed as for a file that isn't there. On
+  such an answer the cut-rename rule could remove a twin whose chain
+  `plays.1.jnl` still used, the trim or a rotation remove `plays.1.jnl`
+  under a twin, and an append whose open failed take `plays.jnl` for
+  missing and make a new one over it (`FA_CREATE_ALWAYS`: every play not
+  yet sent gone); each needs the fault at that very call, the first three
+  a cut rename's twins on the card as well. Now every such question is
+  `entry()`'s, and the first the card fails ends what was being done with
+  nothing removed, renamed or made: the rule is left unsettled
+  (`Journal::unanswered()`: no slot until a `settle()` is answered, each
+  append asking again first, the play it can't place lost and said so),
+  a file the trim can't place stays for the next boot, a rotation fails
+  with the log as it was, and no new `plays.jnl` is made unless the card
+  says there is none.
 - **Power-offs and restarts.** `PlayHistory::flush()` ends the open play
   (stopped), finishes the scan and writes every play waiting, gate or
   not: before the idle power-off's `powerOff()` (after its last look at
@@ -7171,9 +7205,13 @@ What the code decided where 2.20 left room:
   forget), after the card worker's step. The settings the taps queued
   (`app/NvsLater`) are written first (`lib/core/OrderlyEnd`): this is the
   card, which can take long or hang when it has gone bad, and that costs
-  the plays alone. Not to another card in the slot (the
-  guard's foreign card refuses every write: those plays are lost, and
-  said so). A hard power-off (PWR held, a flat battery) loses the open
+  the plays alone. Not to another card in the slot, nor to one whose
+  writes are off (FatFs refuses every write: those plays are lost, and
+  said so), nor with none in it: a card that was out is asked once (put
+  back, that mount is a remount, the rule and the scan again), and out
+  still, left alone (`NOT written (no card answers)`). `restartNow()` is
+  also Rescan's restart and the guard's once its wait for the queue's
+  flush is over (3.8). A hard power-off (PWR held, a flat battery) loses the open
   play and the ones waiting (2.20.5).
 - **Costs (MEASURED on the host FatFs model**, `test_play_log`, a 32 GB
   FAT32 card with 16 KB clusters and the sector cache): 80 bytes of log a
@@ -7198,7 +7236,14 @@ What the code decided where 2.20 left room:
   steps of appends and three rotations, three ways (CutFs): no chain freed
   that another name uses, every valid slot one the journal wrote, no seq
   twice, the log going on, the twins collected after a disk check; all
-  nine twin names taken (blocked); the drop note and what a rotation
+  nine twin names taken (blocked); an open the card fails, the question
+  after it too, never a new log over one that is there; each question of
+  the rule, the scan's opens, the trim and a rotation failed in its turn
+  with twins on the card (`FlakyFs`: FatFs's answers), no chain freed that
+  another name uses, the rule left unanswered holding the slots until it
+  is answered (7 mutations of those, 6 caught; the seventh is a rotation
+  that goes on past its first question, which the rename's refusal of an
+  existing `plays.1.jnl` stops all the same); the drop note and what a rotation
   counts (a note read or not, no ACKS, saturating); the Tracker; the
   WriteGate; the card's commands; on the FatFs model, a cut append's tail
   written over (37 bytes across a sector's end, 79, 1) and a remount
@@ -7238,8 +7283,13 @@ What the code decided where 2.20 left room:
   5. Cuts: hold PWR mid-track (a hard off): the next boot's log has every
      play before it and not the open one, no damaged slot. Pull the card
      while a slot is due (right after a skip), put it back: the card
-     guard's line, then the next slots written (or the restart's
-     `NOT written` line for another card). After a boot, before any play
+     guard's line, then the slot that waited and the next ones written
+     (no `NOT written: the file isn't there` for the pull; or the
+     restart's `NOT written` line for another card). Pull it during a
+     track, pause when the next one holds (`[queue] the card is out`),
+     put it back a minute later and press Play: no `[plays]` line while
+     it was out, the loop's passes as short as before the pull (`ui`),
+     and the cut track's slot about 2 s into the track that plays. After a boot, before any play
      ends, pull the card and put it back: `[plays] the card mounted again
      before this boot's first slot: the boot's scan begins again`, then
      the `ready` line again with `begun again after a remount` and the same

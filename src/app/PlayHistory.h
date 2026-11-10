@@ -20,7 +20,11 @@ class AutoDj;
 //   - The Journal writes on the loop task, never on the audio's tasks: a
 //     piece of the boot's scan, or one play's slot a pass, when the
 //     WriteGate lets it (out of the gapless window, a start's refill, a
-//     seek, a low ring, an underrun's wake, a moving list). A slot is the
+//     seek, a low ring, an underrun's wake, a moving list) and the card
+//     is one to ask (METADATA.md 3.8): not held for the guard's restart,
+//     not out of the slot (the card hold's: none answering, or another
+//     card), not refusing every write. Then the plays wait, eight at
+//     most, for the remount or the end's flush(). A slot is the
 //     file's size and FAT time (f_stat, at the write), the board's clock for its start
 //     (boardclock::at(): a clock set during the play still dates it; 0
 //     while unset) and the clock's source, the seq in NVS first ("plays",
@@ -49,7 +53,8 @@ public:
   // Every loop pass, after the player's update() (a join is taken first):
   // the backend's position for the open play; then, when the gate lets it
   // (`gate`: this pass's audio and list) and the card isn't held (`cardHeld`:
-  // the card guard's restart comes), a piece of the boot's scan or one slot.
+  // the card guard's restart comes), out of the slot or refusing writes
+  // (the guard's own word), a piece of the boot's scan or one slot.
   struct Look {
     PlayState state = PlayState::Stopped;
     uint32_t positionMs = 0;
@@ -61,7 +66,9 @@ public:
   // Before an orderly power-off or restart (`why`: its log's words): the
   // open play ended (Stopped), the boot's scan finished, every play
   // waiting written now, whatever the gate says. Not to another card in
-  // the slot (FatFs refuses every write to it: those plays are lost).
+  // the slot, nor one that takes no more writes (FatFs refuses them all:
+  // those plays are lost), nor with none in it: a card that was out is
+  // asked once (put back, it is a remount: remounted()), then left alone.
   void flush(const char* why);
   // The same card back (the card guard's remount): the cut-rename rule
   // again before the next append, and before this boot's first slot the

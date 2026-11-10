@@ -92,6 +92,26 @@ namespace {
 constexpr size_t kNameCap = 32;
 }  // namespace
 
+// The journal's questions of the card (which of the log's files are there,
+// and on which chains), the first it fails noted: from there the answers
+// say nothing ("no such file", "no file shares this chain" may be only the
+// read that failed), and nothing is removed, renamed or made on them
+// (tagstore's rule for its own files: TagStore.h, the cut-rename rule).
+class Journal::Asking {
+public:
+  explicit Asking(tagstore::Fs& fs) : fs_(fs) {}
+  tagstore::Fs::Entry of(const char* path) {
+    const tagstore::Fs::Entry e = failed_ ? tagstore::Fs::Entry() : fs_.entry(path);
+    failed_ = failed_ || e.cardFailed;
+    return e;
+  }
+  bool failed() const { return failed_; }
+
+private:
+  tagstore::Fs& fs_;
+  bool failed_ = false;
+};
+
 bool Journal::newEpochNow() {
   uint64_t e = 0;
   for (int tries = 0; tries < 8 && e == 0; ++tries) e = c_.random(c_.randomCtx);
@@ -150,23 +170,26 @@ void Journal::remounted() {
   startScan();
 }
 
-bool Journal::shared(const char* path) {
-  const uint32_t c = fs_.firstCluster(path);
+bool Journal::shared(Asking& a, const char* path) {
+  const uint32_t c = a.of(path).firstCluster;
   if (c == 0) return false;
   char other[kNameCap];
   for (int i = 0; i < kNames; ++i)
-    if (logName(i, other, sizeof(other)) && std::strcmp(other, path) != 0 && fs_.firstCluster(other) == c) return true;
+    if (logName(i, other, sizeof(other)) && std::strcmp(other, path) != 0 && a.of(other).firstCluster == c) return true;
   for (int i = 1; i <= tagstore::kMaxTwins; ++i)
     if (tagstore::twinName(kTwinNames, i, other, sizeof(other)) && std::strcmp(other, path) != 0 &&
-        fs_.firstCluster(other) == c)
+        a.of(other).firstCluster == c)
       return true;
   return false;
 }
 
-bool Journal::toTwin(const char* path) {
+bool Journal::toTwin(Asking& a, const char* path) {
   char t[kNameCap];
   for (int i = 1; i <= tagstore::kMaxTwins; ++i) {
-    if (!tagstore::twinName(kTwinNames, i, t, sizeof(t)) || exists(t)) continue;
+    if (!tagstore::twinName(kTwinNames, i, t, sizeof(t))) continue;
+    const bool taken = a.of(t).there;
+    if (a.failed()) return false;  // (whether the name is free isn't known)
+    if (taken) continue;
     if (!fs_.rename(path, t)) {
       op(Op::Refused, path, t, 0);
       return false;
@@ -179,12 +202,18 @@ bool Journal::toTwin(const char* path) {
   return false;
 }
 
-void Journal::collectTwins() {
+void Journal::collectTwins(Asking& a) {
   booted_.twins = 0;
   char t[kNameCap];
   for (int i = 1; i <= tagstore::kMaxTwins; ++i) {
-    if (!tagstore::twinName(kTwinNames, i, t, sizeof(t)) || !exists(t)) continue;
-    if (!shared(t) && fs_.remove(t)) {
+    if (!tagstore::twinName(kTwinNames, i, t, sizeof(t))) continue;
+    const bool there = a.of(t).there;
+    const bool sharesChain = there && shared(a, t);
+    // (A question the card failed: the rest uncounted, none removed; the
+    // next settle() asks again.)
+    if (a.failed()) return;
+    if (!there) continue;
+    if (!sharesChain && fs_.remove(t)) {
       op(Op::Delete, t, "twin", 0);
     } else {
       ++booted_.twins;
@@ -193,15 +222,20 @@ void Journal::collectTwins() {
 }
 
 bool Journal::settle() {
-  blocked_ = unsettled_ = false;
-  if (exists(kLogPath) && exists(kPrevPath)) {
-    const uint32_t c = fs_.firstCluster(kLogPath);
-    // A rename the card refuses leaves the two on one chain: no slot goes
-    // to plays.jnl until one takes (append() tries again first). All nine
-    // twin names taken: blocked until a disk check frees one.
-    if (c != 0 && c == fs_.firstCluster(kPrevPath) && !toTwin(kLogPath)) unsettled_ = !blocked_;
-  }
-  collectTwins();
+  blocked_ = unsettled_ = unanswered_ = false;
+  Asking a(fs_);
+  const tagstore::Fs::Entry log = a.of(kLogPath), prev = a.of(kPrevPath);
+  // A rename the card refuses leaves the two on one chain: no slot goes
+  // to plays.jnl until one takes (append() tries again first). All nine
+  // twin names taken: blocked until a disk check frees one.
+  if (!a.failed() && log.there && prev.there && log.firstCluster != 0 && log.firstCluster == prev.firstCluster &&
+      !toTwin(a, kLogPath))
+    unsettled_ = !blocked_;
+  if (!a.failed()) collectTwins(a);
+  // A question the card failed: nothing was done on its answer, and which
+  // names share a chain isn't known. As for a rename it refused: no slot
+  // until a settle() is answered (append() asks again first).
+  if (a.failed()) unsettled_ = unanswered_ = true;
   return !blocked_ && !unsettled_;
 }
 
@@ -297,7 +331,11 @@ bool Journal::finishScan() {
     if (!(trimmable_ >> i & 1u)) continue;
     char name[kNameCap];
     logName(i, name, sizeof(name));
-    if (shared(name) || !fs_.remove(name)) continue;
+    // (A question the card fails says nothing of who shares its chain: the
+    // file stays, for the next boot's trim.)
+    Asking a(fs_);
+    const bool sharesChain = shared(a, name);
+    if (a.failed() || sharesChain || !fs_.remove(name)) continue;
     ++booted_.trimmed;
     op(Op::Delete, name, "acknowledged", 0);
   }
@@ -335,15 +373,22 @@ bool Journal::unread(uint32_t* lost) {
 
 Journal::Wrote Journal::rotate(const uint8_t slot[kSlot], const Slot& play) {
   uint32_t lost = 0;
-  if (exists(kPrevPath)) {
+  // (A question the card fails, here or below: nothing removed or renamed
+  // on it. The play is lost, the log as it was.)
+  Asking a(fs_);
+  const bool prevThere = a.of(kPrevPath).there;
+  if (a.failed()) return Wrote::Failed;
+  if (prevThere) {
     // Step 1: what plays.1.jnl holds that no software read, then it goes
     // (or, a twin on its chain, to a twin name: a delete would free the
     // twin's clusters).
     if (!unread(&lost)) return Wrote::Failed;
-    if (!shared(kPrevPath)) {
+    const bool sharesChain = shared(a, kPrevPath);
+    if (a.failed()) return Wrote::Failed;
+    if (!sharesChain) {
       if (!fs_.remove(kPrevPath)) return Wrote::Failed;
       op(Op::Delete, kPrevPath, "rotation", 0);
-    } else if (!toTwin(kPrevPath)) {
+    } else if (!toTwin(a, kPrevPath)) {
       return blocked_ ? Wrote::Blocked : Wrote::Failed;
     }
   }
@@ -416,11 +461,18 @@ Journal::Wrote Journal::append(Slot& play) {
       ok = fs_.close(f) && ok;
       w = ok ? Wrote::Ok : Wrote::Failed;
     }
-  } else if (!exists(kLogPath)) {
-    tagstore::File* n = fs_.open(kLogPath, tagstore::Fs::Mode::Create);
-    bool ok = n && n->write(0, raw, kSlot) && n->sync();
-    if (n) ok = fs_.close(n) && ok;
-    w = ok ? Wrote::Ok : Wrote::Failed;
+  } else {
+    // No plays.jnl opened: a new one only when the card says there is none.
+    // A question it fails says nothing (the open may have been that same
+    // fault), and Create would empty a log that is there, every play not
+    // yet sent with it.
+    const tagstore::Fs::Entry e = fs_.entry(kLogPath);
+    if (!e.cardFailed && !e.there) {
+      tagstore::File* n = fs_.open(kLogPath, tagstore::Fs::Mode::Create);
+      bool ok = n && n->write(0, raw, kSlot) && n->sync();
+      if (n) ok = fs_.close(n) && ok;
+      w = ok ? Wrote::Ok : Wrote::Failed;
+    }
   }
   op(w == Wrote::Ok ? Op::Play : Op::Lost, nullptr, nullptr, seq);
   return w;

@@ -3489,7 +3489,10 @@ static void leaveFence() {
 // play log's look at the backend, then a piece of its boot's scan or one
 // play's slot when this pass's audio lets it (lib/core PlayLog's
 // WriteGate: never in the gapless window or a start's refill) and no list
-// moves (the write holds the loop that draws its frames).
+// moves (the write holds the loop that draws its frames). Never while the
+// card is held for the guard's restart, nor (PlayHistory's own look at the
+// guard) while it is out of the slot or refuses every write: the plays
+// wait for the remount, or the end's flush.
 static void stepPlays(uint32_t now) {
   PlayHistory::Look look;
   look.state = player.state();
