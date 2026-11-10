@@ -1237,6 +1237,81 @@ void test_the_tracker() {
   TEST_ASSERT_EQUAL_UINT32(3, t.counts().overflow);
 }
 
+// A pause's time is no allowance for the position's next step: a seek while
+// paused, or taken up as it plays on, as long as the pause was, isn't time
+// played (it was: the clock had moved that far since the last look that
+// counted). A plain pause still counts the audio either side of it.
+void test_a_seek_after_a_pause_is_not_played() {
+  Env env;
+  pl::Tracker t(env);
+  uint32_t pos = 0;
+  auto run = [&](uint32_t ms) {
+    for (uint32_t k = 0; k < ms / 20; ++k) {
+      env.now += 20;
+      pos += 20;
+      t.tick(PlayState::Playing, pos, true, 600000);
+    }
+  };
+  auto paused = [&](uint32_t ms) {
+    for (uint32_t k = 0; k < ms / 600; ++k) {
+      env.now += 600;
+      t.tick(PlayState::Paused, pos, true, 600000);
+    }
+  };
+  // 10 s played, a minute paused, 50 s forward while paused, 5 s played:
+  // 15 s, less the look that saw the jump (as any seek's).
+  t.began(1, 5, 0);
+  run(10000);
+  env.now += 20;
+  t.tick(PlayState::Paused, pos, true, 600000);
+  paused(60000);
+  pos += 50000;
+  paused(1200);
+  run(5000);
+  t.ended(End::Stopped);
+  TEST_ASSERT_EQUAL_UINT32(10000 + 5000 - 20, t.oldest().playedMs);
+  TEST_ASSERT_EQUAL_UINT16(1, t.oldest().pauses);
+  t.pop();
+  // The seek asked while paused and seen only as it plays on: the same.
+  t.began(1, 5, 0);
+  pos = 0;
+  run(10000);
+  env.now += 20;
+  t.tick(PlayState::Paused, pos, true, 600000);
+  paused(60000);
+  pos += 50000;
+  run(5000);
+  t.ended(End::Stopped);
+  TEST_ASSERT_EQUAL_UINT32(10000 + 5000 - 20, t.oldest().playedMs);
+  t.pop();
+  // A seek back while paused: nothing for it, and on from there.
+  t.began(1, 5, 100000);
+  pos = 100000;
+  run(2000);
+  env.now += 20;
+  t.tick(PlayState::Paused, pos, true, 600000);
+  paused(30000);
+  pos = 30000;
+  paused(600);
+  run(1000);
+  t.ended(End::Stopped);
+  TEST_ASSERT_EQUAL_UINT32(2000 + 1000 - 20, t.oldest().playedMs);
+  t.pop();
+  // A plain pause and resume: the audio either side, and what played on
+  // between the last look and the pause (a pass's worth).
+  t.began(1, 5, 0);
+  pos = 0;
+  run(4000);
+  pos += 10;
+  env.now += 20;
+  t.tick(PlayState::Paused, pos, true, 600000);
+  paused(30000);
+  run(3000);
+  t.ended(End::Stopped);
+  TEST_ASSERT_EQUAL_UINT32(4000 + 10 + 3000, t.oldest().playedMs);
+  TEST_ASSERT_EQUAL_UINT16(1, t.oldest().pauses);
+}
+
 // ---------------------------------------------------------------------------
 // The WriteGate.
 // ---------------------------------------------------------------------------
@@ -1869,6 +1944,7 @@ int main(int, char**) {
   RUN_TEST(test_the_drop_note);
   RUN_TEST(test_what_a_rotation_counts);
   RUN_TEST(test_the_tracker);
+  RUN_TEST(test_a_seek_after_a_pause_is_not_played);
   RUN_TEST(test_the_write_gate);
   RUN_TEST(test_the_write_gate_waits_for_a_moving_list);
   RUN_TEST(test_what_the_card_is_asked);

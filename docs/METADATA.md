@@ -7114,7 +7114,10 @@ What the code decided where 2.20 left room:
 - **playedMs** is the backend's position's steps while playing, each
   counted when it moved no more than the board's clock did (plus 500 ms),
   so a seek's jump, a step back and a start not taken up yet
-  (`positionKnown()` false) count nothing; a Completed play adds what its
+  (`positionKnown()` false) count nothing; the clock's time while it
+  isn't playing is no part of that allowance, so a seek while paused, or
+  right after, as long as the pause was, counts nothing either (it did:
+  the review's FP5); a Completed play adds what its
   last look didn't see of its length (at most 2 s). **durationMs** is the
   backend's length, else the catalog's hint. **pauseCount** counts the
   passes that found it Paused after Playing. **source**: Auto DJ's mark

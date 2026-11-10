@@ -536,6 +536,12 @@ void Tracker::tick(PlayState state, uint32_t positionMs, bool positionKnown, uin
       lastPos_ = positionMs;
       lastMono_ = now;
       if (durationMs) cur_.durationMs = durationMs;
+    } else {
+      // Not playing (paused, waiting): the clock that moves now is no
+      // allowance for the position's next step. A seek while paused, or
+      // one right after, as long as the pause was, isn't time played; what
+      // played up to the pause still is (the step from the last look).
+      lastMono_ = now;
     }
   }
   wasPlaying_ = playing;
