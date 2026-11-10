@@ -36,6 +36,7 @@ InputEvent TouchRecognizer::make(InputEvent::Type t, uint32_t ms, const Sample& 
   e.rawY = s.rawY;
   e.edges = s.edges;
   e.fromStrip = strip_;
+  e.scripted = scripted_;
   return e;
 }
 
@@ -110,6 +111,13 @@ int TouchRecognizer::update(uint32_t ms, const Sample& s, InputEvent* out) {
     }
   }
 
+  // Whose touch it is: the scripted finger's from its first sample that
+  // is, to its end (a hand that takes it over doesn't make it a hand's).
+  if (state_ == State::Idle) {
+    scripted_ = s.scripted;
+  } else if (s.scripted) {
+    scripted_ = true;
+  }
   switch (state_) {
     case State::Ignored:
       return 0;

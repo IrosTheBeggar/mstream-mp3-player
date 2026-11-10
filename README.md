@@ -993,10 +993,11 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       sector to the last, the read-back, the request kept
                       across the restart
   HoldButton, FormatAsk
-                      The format's second step, a 2 s hold (a press kept on
-                      the button, its fill, a lift or a slide that empties
-                      it); the question's clock (each step's minute, the
-                      second's settle), its answers and a loop pass's order
+                      The format's second step, a 2 s hold (a press the loop
+                      sees on the button all the while, by hand; its fill; a
+                      lift, a slide or a stalled loop that empties it); the
+                      question's clock (each step's minute, the second's
+                      settle), its answers and a loop pass's order
   HostStatus, FreeCount
                       A computer's questions (docs/HOST-STATUS.md): the
                       @status line, the FSINFO rule, @identify's label; the

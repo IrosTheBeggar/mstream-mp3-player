@@ -8,6 +8,7 @@ void HoldButton::arm(const dialog::Area& area) {
   armed_ = true;
   holding_ = false;
   lastMs_ = 0;
+  gapMs_ = 0;
 }
 
 void HoldButton::disarm() {
@@ -32,6 +33,24 @@ uint32_t since(uint32_t ms, uint32_t from) {
 }
 }  // namespace
 
+HoldButton::News HoldButton::end(News n) {
+  holding_ = false;
+  lastMs_ = since(seenMs_, downMs_);
+  return n;
+}
+
+bool HoldButton::stalled(uint32_t ms) {
+  const uint32_t gap = since(ms, seenMs_);
+  if (gap <= kGapMs) return false;
+  gapMs_ = gap;
+  end(News::Stalled);
+  return true;
+}
+
+void HoldButton::seen(uint32_t ms) {
+  if (since(ms, seenMs_)) seenMs_ = ms;
+}
+
 HoldButton::News HoldButton::onEvent(const InputEvent& e) {
   using T = InputEvent::Type;
   if (!armed_) return News::None;
@@ -39,28 +58,27 @@ HoldButton::News HoldButton::onEvent(const InputEvent& e) {
     case T::Down:
       // A new touch starts from nothing (a lift between, however short).
       holding_ = !e.fromStrip && on(e.x, e.y, 0);
-      downMs_ = e.ms;
+      scripted_ = e.scripted;
+      downMs_ = seenMs_ = e.ms;
       return holding_ ? News::Began : News::None;
     case T::DragStart:
     case T::DragMove:
       if (!holding_) return News::None;
-      if (on(e.x, e.y, kSlackPx)) return News::None;
-      holding_ = false;
-      lastMs_ = since(e.ms, downMs_);
-      return News::Slid;
+      if (e.scripted) scripted_ = true;
+      if (!on(e.x, e.y, kSlackPx)) return end(News::Slid);
+      // On it still: a look at the finger, as update()'s, and held to the
+      // same gap (a move is no way round it).
+      if (stalled(e.ms)) return News::Stalled;
+      seen(e.ms);
+      return News::None;
     case T::Tap:
     case T::Release:
-    case T::DragEnd: {
+    case T::DragEnd:
       if (!holding_) return News::None;
-      holding_ = false;
-      lastMs_ = since(e.ms, downMs_);
-      // (A Tap's point is where it landed; a DragEnd's where it was last,
-      // which its DragMove already judged.)
-      if (e.type == T::DragEnd && !on(e.x, e.y, kSlackPx)) return News::Slid;
-      // Lifted at or after the end that update() hadn't seen yet: the
-      // finger was on it that long.
-      return lastMs_ >= kHoldMs ? News::Confirmed : News::Short;
-    }
+      // A lift never presses it, however late it is seen: the hold was as
+      // long as the finger was seen on it. (A Tap's point is where it
+      // landed; a DragEnd's where it was last, which its DragMove judged.)
+      return end(e.type == T::DragEnd && !on(e.x, e.y, kSlackPx) ? News::Slid : News::Short);
     case T::Cancel:
       return drop();
     default:
@@ -68,11 +86,20 @@ HoldButton::News HoldButton::onEvent(const InputEvent& e) {
   }
 }
 
-HoldButton::News HoldButton::update(uint32_t ms) {
-  if (!holding_ || since(ms, downMs_) < kHoldMs) return News::None;
-  holding_ = false;
-  lastMs_ = since(ms, downMs_);
-  return News::Confirmed;
+HoldButton::News HoldButton::update(uint32_t ms, const Finger& finger) {
+  if (!holding_) return News::None;
+  // The gap first, whatever this pass sees: once it is too long, the time
+  // since the last look counts for nothing.
+  if (stalled(ms)) return News::Stalled;
+  // No finger this pass: nothing counted, nothing pressed (its lift's
+  // event ends the hold, before this or after).
+  if (!finger.down) return News::None;
+  if (finger.scripted) scripted_ = true;
+  // Off the button (its move's event says so too, before this or after).
+  if (!on(finger.x, finger.y, kSlackPx)) return end(News::Slid);
+  seen(ms);
+  if (since(seenMs_, downMs_) < kHoldMs) return News::None;
+  return end(scripted_ ? News::Scripted : News::Confirmed);
 }
 
 HoldButton::News HoldButton::drop() {
@@ -82,13 +109,13 @@ HoldButton::News HoldButton::drop() {
   return News::Dropped;
 }
 
-uint32_t HoldButton::heldMs(uint32_t ms) const {
-  return holding_ ? since(ms, downMs_) : 0;
+uint32_t HoldButton::heldMs() const {
+  return holding_ ? since(seenMs_, downMs_) : 0;
 }
 
-int HoldButton::fill(uint32_t ms, int width) const {
+int HoldButton::fill(int width) const {
   if (width <= 0) return 0;
-  const uint32_t held = heldMs(ms);
+  const uint32_t held = heldMs();
   if (held >= kHoldMs) return width;
   return static_cast<int>(static_cast<uint64_t>(held) * static_cast<uint32_t>(width) / kHoldMs);
 }
@@ -101,6 +128,8 @@ const char* HoldButton::name(News n) {
     case News::Short: return "short";
     case News::Slid: return "slid off";
     case News::Dropped: return "dropped";
+    case News::Stalled: return "stalled";
+    case News::Scripted: return "scripted";
   }
   return "?";
 }

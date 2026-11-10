@@ -1543,6 +1543,12 @@ hold mode, `lib/core/DialogTouch` and `HoldButton`: it fills meanwhile,
 and a hint under the body says how from the start; a tap, a hold let go
 or slid off, does nothing but turn the hint amber), with a settle for a
 double tap (`lib/core/FormatAsk`, from the answering tap's own time).
+The 2 s are the time the loop saw the finger there, pass by pass
+(`Input::finger()`), not the clock's: no lift answers it, however late
+it is read, and a loop that loses sight of the finger for over 0.5 s
+ends the hold (a stall is no hold). And the finger is a hand's: the
+console's scripted finger, on the same USB port as `@format`, taps the
+first question and Cancel, and its hold answers nothing.
 Cancel is the default: a tab, another dialog or screen, a minute with
 no answer (each step's, over a hold under way too: `formatask::pass()`,
 the loop's order). Format restarts the player
@@ -3239,8 +3245,9 @@ Queue, Dance and Output (with its Pair and About pages).
   and Auto DJ) and a **dialog** (modal, the tab bar
   still works; optionally an icon, a live status line and a red primary
   button, on the right or, the format's second question, the left; that
-  question's in the hold mode, answered only by a finger kept on it 2 s,
-  `lib/core/HoldButton`, the buttons' hit areas `lib/core/DialogLayout`;
+  question's in the hold mode, answered only by a hand's finger the loop
+  saw on it for 2 s, `lib/core/HoldButton`, the buttons' hit areas
+  `lib/core/DialogLayout`;
   which touch answers a dialog, `lib/core/DialogTouch`, host-tested, the
   Dialog drawing what it says changed, that control alone)
   freeze the page under them; one that opens while a finger is
@@ -4286,7 +4293,9 @@ Queue, Dance and Output (with its Pair and About pages).
   card's again (`g0` or a new `g<n>` re-points it). The screenshot (`X`) reads the list band back through the scroll
   offset, as before. For tests without a hand on the device there is a
   **scripted finger** (`Input::simulate`, replacing the panel until it
-  lifts; a real touch cancels it): `uit<x>,<y>` a tap, `uih<x>,<y>` a long
+  lifts; a real touch cancels it; it does all a finger does but hold the
+  format's "Hold to erase" to its end, which only a hand does:
+  HOST-STATUS.md, "@format"): `uit<x>,<y>` a tap, `uih<x>,<y>` a long
   press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` a swipe that lifts at once (a fling
   when fast), `uid...` the same resting 150 ms before the lift (a drag),
   `uip<x>,<ms>` a press on the button strip (y 260) for ms. A y from 240

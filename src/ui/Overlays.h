@@ -407,16 +407,19 @@ public:
   int holdButton() const { return touch_.primary(); }
   bool holding() const { return touch_.holding(); }
   uint32_t holdLastMs() const { return touch_.hold().lastHeldMs(); }  // (the log's)
+  uint32_t holdGapMs() const { return touch_.hold().lastGapMs(); }    // (the log's: Stalled)
   // What the last onEvent() did to the hold (HoldButton::News): Began (the
   // caller turns the recogniser's hold off for the touch: Input::noHold()),
-  // Short or Slid (the hint amber), Confirmed (a lift at kHoldMs or after:
-  // the hold button's answer), Dropped (a Cancel).
+  // Short, Slid or Stalled (the hint amber), Dropped (a Cancel). Never
+  // Confirmed: no event answers the hold button, only tick().
   HoldButton::News holdNews() const { return news_; }
-  // Every loop pass while it is up: the fill drawn as it grows (its button
-  // only, about 25 times a second), and Confirmed once the finger has been
+  // Every loop pass while it is up, with what the pass read of the panel
+  // (Input::finger()): the fill drawn as it grows (its button only, about
+  // 25 times a second), and Confirmed once a hand's finger has been seen
   // on it kHoldMs (the caller closes the dialog with the hold button's
-  // answer, as a tap's).
-  HoldButton::News tick(uint32_t nowMs);
+  // answer, as a tap's). Stalled, Slid, Scripted: the hold ended in this
+  // pass with nothing done, the button drawn empty and the hint amber.
+  HoldButton::News tick(uint32_t nowMs, const HoldButton::Finger& finger);
   // The touch left the dialog's hands (the screen went dark, a banner took
   // it): the fill empties, nothing happens. Dropped if a hold was under way.
   HoldButton::News dropHold();

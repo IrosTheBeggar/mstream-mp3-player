@@ -399,6 +399,11 @@ public:
   // on it, a hold let go or slid off, does nothing but turn the hint
   // amber, and a touch in that dialog's first 0.6 s (from the tap that
   // opened it) goes nowhere (formatask: the double tap's second touch).
+  // The 2 s are the time the loop saw the finger on it, pass by pass
+  // (HoldButton): no lift answers it, however late it is read; a loop
+  // that loses sight of the finger for over half a second ends the hold;
+  // and only a hand holds it (the console's scripted finger, uit/uid,
+  // taps the first question and Cancel, and its hold presses nothing).
   // Which touch answers what: DialogTouch, formatask (the step's answer,
   // a loop pass's order). No tap, double tap or run of taps
   // answers both. Cancel is the default: anything but a hold kept to its

@@ -1368,10 +1368,16 @@ void Ui::holdNews(HoldButton::News n) {
     case HoldButton::News::Dropped:
       Serial.println("[ui] format: Format's hold dropped (the touch was cancelled): nothing formatted");
       break;
-    case HoldButton::News::Confirmed:  // (lifted at its end, before the loop's pass saw it)
-      Serial.printf("[ui] format: Format held %lu ms\n", static_cast<unsigned long>(dialog_.holdLastMs()));
+    case HoldButton::News::Stalled:
+      // The loop lost sight of the finger for longer than the hold allows
+      // (HoldButton::kGapMs): what it did meanwhile isn't known, so the
+      // time doesn't count. Held again, it starts from nothing.
+      input_.missBuzz();
+      Serial.printf("[ui] format: Format's hold dropped: the loop stalled %lu ms (the finger seen on it %lu ms before "
+                    "that): nothing formatted (the hint amber)\n",
+                    static_cast<unsigned long>(dialog_.holdGapMs()), static_cast<unsigned long>(dialog_.holdLastMs()));
       break;
-    default:
+    default:  // (never Confirmed: no event presses it, only the loop's pass)
       break;
   }
 }
@@ -1585,9 +1591,16 @@ void Ui::loop(uint32_t nowMs) {
   // steps; over a hold under way too); then the dialog's hold (the second
   // question's), live only while the touch that began it is the dialog's
   // (not one the dark, a banner or a screen took), its fill drawn as it
-  // grows; kept to its end, the hold button's answer.
+  // grows; seen to its end, the hold button's answer. This is the one way
+  // to that answer (no event gives it, a lift least of all), and it takes
+  // this pass's own look at the panel (Input::finger(), `nowMs` its time):
+  // a hand's finger on the button now, 2 s after it landed, and never more
+  // than HoldButton::kGapMs between two looks that saw it there. A pass
+  // that comes later than that (the loop stalled: a card write, the
+  // display's bus) ends the hold instead, and the console's scripted
+  // finger, held to the end, presses nothing.
   const bool dialogsTouch = touch_ == TouchOn::Dialog && !identifying_ && !dark_;
-  switch (formatask::pass(formatAsking(), formatQuestion_, dialog_, nowMs, dialogsTouch)) {
+  switch (formatask::pass(formatAsking(), formatQuestion_, dialog_, nowMs, dialogsTouch, input_.finger())) {
     case formatask::Pass::Expired:
       if (dialog_.holding()) Serial.println("[ui] format: the minute ran out while Format was held");
       formatGone_ = "no answer in a minute";
@@ -1596,6 +1609,17 @@ void Ui::loop(uint32_t nowMs) {
       break;
     case formatask::Pass::Dropped:
       Serial.println("[ui] format: Format's hold dropped (its touch was taken): nothing formatted");
+      break;
+    case formatask::Pass::Stalled:
+      holdNews(HoldButton::News::Stalled);
+      break;
+    case formatask::Pass::Slid:
+      holdNews(HoldButton::News::Slid);
+      break;
+    case formatask::Pass::Scripted:
+      // (docs/HOST-STATUS.md, "@format": a computer brings up the question
+      // and can tap it; the hold that erases is a hand's.)
+      Serial.println("[format] a scripted finger never erases a card: hold it by hand");
       break;
     case formatask::Pass::Confirmed:
       touch_ = TouchOn::None;  // (the rest of that touch, its lift, goes nowhere)
@@ -2105,7 +2129,9 @@ void Ui::route(const InputEvent& e) {
       const int b = dialog_.onEvent(e);
       const HoldButton::News n = dialog_.holdNews();
       if (n != HoldButton::News::None) holdNews(n);
-      if (b >= 0) answerDialog(b, n == HoldButton::News::Confirmed, e.ms);
+      // (A tap's answer: never the hold button's, which no event gives,
+      // only the loop's pass that sees the hold to its end.)
+      if (b >= 0) answerDialog(b, false, e.ms);
       break;
     }
     case TouchOn::Sheet: {

@@ -34,7 +34,9 @@ only**. Its second
 step is a 2 s hold on the board, and a computer may ask it over a card
 the player reads too: the user's picks (October 2026) on the card
 transfer's set in the mStream repository (`docs/designs/card-transfer`,
-card 06 section 5: alternate B).
+card 06 section 5: alternate B). The hold is a hand's, seen on the button
+by the loop for its 2 s: nothing a computer sends answers it, the
+console's scripted finger included ("@format", "Only a hand").
 
 ## The link
 
@@ -53,7 +55,10 @@ card 06 section 5: alternate B).
   ended it on the Core2): they drive nothing on the board's screen but the
   identify banner and the format's question, and change nothing but the
   clock (`@time`): a card is formatted only by the listener's two answers
-  on the board, a tap and a 2 s hold (`@format`). They don't
+  on the board, a tap and a 2 s hold (`@format`), and the hold only by a
+  hand: the firmware's console is on this same port, and its scripted
+  finger (`uit`, `uid`: a test tool) can tap the question but never holds
+  it to its end. They don't
   keep a session alive, and they don't count as the computer talking for a
   decline's quiet, so a player that asks for `@status` every second can
   still start the dancer once its own user asks.
@@ -464,6 +469,22 @@ The software asks only when its listener asked it to (never during a
 sync: the card is in the computer's reader then, and the board answers
 `card` with an empty slot).
 
+**Only a hand.** The port that carries `@format` carries the firmware's
+console too, and its scripted finger (`uit<x>,<y>`, `uid...`:
+ARCHITECTURE.md, "UI"), which stands in for a hand in tests: anything
+that can send `@format` can send those. So the hold that erases takes no
+part of it. Every sample of the scripted finger says whose it is, and so
+does every event of a touch it had a part in
+(`TouchRecognizer::Sample::scripted`, `InputEvent::scripted`); a hold on
+"Hold to erase" that was the scripted finger's at its landing, at any
+pass or at any move ends where it would have answered with nothing done
+(`HoldButton`'s `Scripted`): the button empties, the hint turns amber,
+and the log says `[format] a scripted finger never erases a card: hold it
+by hand`. The scripted finger still taps the first question's Format...
+and either Cancel (a scripted decline works), and its holds cut short
+are a finger's. Nothing a computer sends over USB erases a card: that
+takes a hand on the player, 2 s.
+
 - **The answer**, at once: `@format ok`, the question is on the screen
   (the screen wakes for it); or `@err 4 format <why>`, and nothing is
   asked: `ui` the start-up screen; `screen` another screen has the
@@ -503,6 +524,23 @@ sync: the card is in the computer's reader then, and the board answers
     nothing happens but the inert buzz and the hint turning amber. Each
     press starts from nothing: no tap, double tap or run of taps adds up
     to an answer, and a lift the panel reads for a moment ends the hold.
+    **The 2 s are the time the loop saw the finger on the button**, a
+    pass at a time (each pass reads the panel: `Input::finger()`), never
+    the clock's time since it landed. Only a pass that itself sees a
+    finger on the button, 2 s after the pass that saw it land, answers;
+    no lift does, however late it is read. And two passes more than
+    0.5 s apart (`HoldButton::kGapMs`) end the hold: nothing says what
+    the finger did between them (lifted and landed again, it is one touch
+    to the recogniser), so it empties, with the inert buzz, the hint
+    amber and the log's `[ui] format: Format's hold dropped: the loop
+    stalled <n> ms (the finger seen on it <n> ms before that)`; held
+    again, it starts from nothing. (Before: the hold was the clock's time
+    from the landing to the pass that saw the lift, so a tap of 150 ms
+    whose lift the loop read 2 s late, stalled on a card write or the
+    display's bus, was the answer.) The fill is that same time. A pass
+    is 5-40 ms, a card write on the loop a few hundred at its worst
+    (ESTIMATED), so a hand's hold goes through; one that doesn't is held
+    again.
     A touch that lands in the dialog's first 0.6 s goes nowhere
     (`formatask::kSettleMs`, from the tap that answered the first
     question, its own time: a double tap's second touch, which would
@@ -768,26 +806,45 @@ counted. An error changes nothing.
 - **`lib/core/HoldButton`**, **`lib/core/DialogTouch`**,
   **`lib/core/FormatAsk`** and **`lib/core/DialogLayout`** (portable,
   `test_hold_button`): the Dialog's hold mode (a press that lands on the
-  button, its fill, the end at `kHoldMs`, a lift or a slide past
-  `kSlackPx` that empties it, a dropped touch), which touch answers a
-  dialog (`DialogTouch`, `ui/Overlays`' Dialog's own: a press, its
-  highlight, a Tap its answer; in the hold mode no tap on the hold
-  button, the hint's alert), the dialog's buttons and their hit areas
+  button, its fill, the end at `kHoldMs` of the time it was seen there,
+  by `update()` alone, in a pass that sees a hand's finger on it; a lift
+  or a slide past `kSlackPx` that empties it, a dropped touch, two looks
+  more than `kGapMs` apart, the scripted finger at its end), which touch
+  answers a dialog (`DialogTouch`, `ui/Overlays`' Dialog's own: a press,
+  its highlight, a Tap its answer; in the hold mode no event answers the
+  hold button, the hint's alert), the dialog's buttons and their hit areas
   (`dialog::buttonAt()`), and the question (`formatask::Question`: each
   step's minute, the second's settle, a step's answers and the second's
   clock from the answering tap's time; `formatask::pass()`, `Ui::loop()`'s
-  order: the minute, then the hold dropped or ticked). Tested on the bits
-  and then as the Ui routes the glass (the real `DialogTouch` and
-  `formatask`; `Ui::onEvent()`'s slow tap and `Ui::route()`'s settle
-  modelled, each place in `ui/Ui.cpp` naming the model), a finger on
-  the real `TouchRecognizer` every 10 ms pass: a hold formats at 2 s to
-  the pass; a lift at 1.98 s, a quick tap, a slide onto Cancel or up to
-  the body don't (the hint); jitter inside the recogniser's slop and
+  order: the minute, then the hold dropped or looked at). Tested on the
+  bits (a lift read at 2 s, after it and a day late; the gap's edge to
+  the millisecond; `millis()`' wrap) and then as the Ui routes the glass
+  (the real `DialogTouch` and `formatask`; `Ui::onEvent()`'s slow tap and
+  `Ui::route()`'s settle modelled, each place in `ui/Ui.cpp` naming the
+  model), a finger on the real `TouchRecognizer` every loop pass, each
+  case with the loop's pass after the pass's events (the firmware's
+  order) and before them, the same either way: a hold formats at 2 s to
+  the pass (every 10 ms; every 30 ms at 2.01 s; every 400 ms at 2 s); a
+  lift at 1.98 s, one seen at 2 s, a quick tap, a slide onto Cancel or up
+  to the body don't (the hint); jitter inside the recogniser's slop and
   25 px drags on the button do; a panel that reads the finger lifted
   for a pass every 0.4-1.9 s never formats in 20 s; the dark taking the
   touch drops it; 300 runs of random taps over both dialogs for two
   minutes each (quick and up to 1.98 s down) never format; the minute,
-  each step's own, wins over a hold begun a second before it.
+  each step's own, wins over a hold begun a second before it. **The
+  loop stalled**: a 150 ms tap whose lift is read 2.5 s late, a finger
+  there after the stall (kept on, or lifted and landed again, in place
+  or elsewhere on the button), a hold seen to 1.9 s and then not for
+  0.55 s: none formats, and the finger kept on after it does nothing; a
+  pass 0.5 s after the last goes on. 400 runs of taps (up to 1.98 s,
+  0.52 s apart or more) under a loop that stalls 0.6-3 s at random, two
+  minutes each: none formats; 200 holds of 2.6 s under a loop that is
+  only slow (10-500 ms a pass): each does. **The scripted finger**: its
+  tap answers the first question; its 2.28 s and 10 s on the red button,
+  a hand's touch it takes over, one it began, one pass of it in a hand's
+  hold: none formats; its 1.88 s is let go short; its tap on Cancel
+  declines. `test_touch_input`: the recogniser's events say whose touch
+  it was, to its lift.
 - **`src/app/HostQuery`**: answers the five. `@status` from main.cpp's
   facts hook, `storage/CardSpace`'s free count and `app/BoardClock`'s
   `ok()`; `@count` started, stepped every loop pass and ended, with its
@@ -836,7 +893,11 @@ counted. An error changes nothing.
   alone and pushed by itself like every press (`Dialog::drawButton()`,
   `gfx::pushRect()`), every 40 ms at most; a press cut short draws the
   hold button and the hint's row alone, never the card; `Dialog::tick()`
-  every loop pass; `Input::noHold()` for the touch that began it, so it stays
+  every loop pass, with what the pass read of the panel
+  (`ui/Input::finger()`: a finger down, where, the scripted one or not;
+  the loop's `now` is the time `Input::update()` read it at), the one
+  place the hold button's answer comes from; `Input::noHold()` for the
+  touch that began it, so it stays
   a press and says its moves; the hold dropped when the touch is no
   longer the dialog's); its settle and the minute (`formatask`); Cancel
   for anything else); the no-card pages' Format...
@@ -1075,7 +1136,8 @@ each line whole with its `\n`. Close every other owner of the port first.
     reader at hand to look at the spare after each format. The second
     question's red button, "Hold to erase", answers only to a hold:
     "hold the red button" below is a finger kept on it until it has
-    filled (2 s), then lifted.
+    filled (2 s), then lifted. A hand's finger: the console's scripted
+    one fills it and formats nothing (below).
     - **Declined.** With any card in: `@format` gives `@format ok` and the
       question on the board. Tap Cancel: `@format no` and the log's
       `[format] the question went (Cancel): nothing formatted`. Again, and
@@ -1101,7 +1163,16 @@ each line whole with its `\n`. Close every other owner of the port first.
       - Hold it about a second and let go: it fills about half way and
         empties (`let go after ~1000 ms`). From the console, a scripted
         finger resting on it 1.88 s, `uid91,194,91,194,1700`: it fills
-        nearly whole and empties (`let go after ~1880 ms`).
+        nearly whole and empties (`let go after ~1880 ms`). (It answers
+        nothing for two reasons now: short of the 2 s, and not a hand.)
+      - **The scripted finger, to the end.** `uid91,194,91,194,2100`,
+        2.28 s on it: it fills whole, and at 2 s empties, the hint amber,
+        the log's `[format] a scripted finger never erases a card: hold
+        it by hand`; no `@format 0`, no restart, the question still up.
+        Again with `uid91,194,91,194,9000`: the same, once. Then
+        `uit233,197` (a scripted tap on Cancel): `@format no`. Nothing on
+        the card changed. (Before this, that `uid` formatted the card
+        with no hand on the player.)
       - Hold it a second, slide onto Cancel and lift there: it empties as
         the finger leaves it (`slid off`), and that lift is no Cancel:
         the question stays.
@@ -1119,9 +1190,10 @@ each line whole with its `\n`. Close every other owner of the port first.
       Nothing on the card changed.
     - **exFAT.** Format the spare exFAT on the computer (or use it as it
       came). The board: "This card is exFAT" with Try again and
-      Format...; Format..., then hold the red button: it fills, the
-      double tick at its end (`[ui] format: Format held 2000 ms`, or a
-      few ms more: the loop pass that saw it), the note
+      Format...; Format..., then hold the red button, by hand: it fills,
+      the double tick at its end while the finger is still on it (`[ui]
+      format: Format held 2000 ms`, or a few ms more: the loop pass that
+      saw it), the note
       "Restarting to format the card", `@format 0`, the restart, the boot
       screen's "Formatting the card" and its bar, `@format 10` ...
       `@format 100`, `@format done size=<bytes> free=<bytes>
@@ -1150,6 +1222,10 @@ each line whole with its `\n`. Close every other owner of the port first.
       Format..., hold the red button: whole again.
     - **Playing.** A track playing on the speaker (and once on the
       headphones): `@format`, Format..., hold the red button: paused
-      first, no pop, the headphones let go, then the restart.
+      first, no pop, the headphones let go, then the restart. The hold
+      goes through at its first try, as with nothing playing (a pass of
+      the loop over 0.5 s would end it: `[ui] format: Format's hold
+      dropped: the loop stalled <n> ms`, the button empty, the hint
+      amber; note it and its `<n>` if it ever shows, and hold again).
     - **Old firmware.** On a board older than 0.14.0 (v0.13.0, say):
       `@format` gives `@err 7 format`.

@@ -20,30 +20,40 @@ void DialogTouch::close() {
   hold_.disarm();
 }
 
+void DialogTouch::fellShort(Result& r) {
+  // Nothing happens: empty again, and the hint says how, amber (its row
+  // only when it wasn't already).
+  r.drawButton = primary_;
+  r.drawHint = !hintAlert_;
+  hintAlert_ = true;
+}
+
+HoldButton::News DialogTouch::tick(uint32_t ms, const HoldButton::Finger& finger) {
+  using News = HoldButton::News;
+  const News n = hold_.update(ms, finger);
+  if (n == News::Stalled || n == News::Slid || n == News::Scripted) hintAlert_ = true;
+  return n;
+}
+
 DialogTouch::Result DialogTouch::onEvent(const InputEvent& e) {
   using T = InputEvent::Type;
   using News = HoldButton::News;
   Result r;
   if (hold_.armed()) {
     // The hold button's touch is the hold's: no press highlight (its fill
-    // is one), and no tap answers it, only a hold kept to its end.
+    // is one), and no event answers it: only a hold seen to its end does
+    // (tick()), never a lift, whenever it comes.
     r.news = hold_.onEvent(e);
     switch (r.news) {
       case News::Began:
         return r;  // (the fill: the dialog's tick() draws it as it grows)
       case News::Short:
       case News::Slid:
-        // Nothing happens: empty again, and the hint says how, amber (its
-        // row only when it wasn't already).
-        r.drawButton = primary_;
-        r.drawHint = !hintAlert_;
-        hintAlert_ = true;
+      case News::Stalled:
+        fellShort(r);
         return r;
       case News::Dropped:
         r.drawButton = primary_;
-        return r;
-      case News::Confirmed:
-        r.answer = primary_;  // (lifted at its end, before tick() saw it)
         return r;
       default:
         break;

@@ -1143,7 +1143,7 @@ int Dialog::onEvent(const InputEvent& e) {
     fillDrawn_ = 0;  // (tick() draws it as it grows, from the first pass)
     fillDrawnMs_ = e.ms - kFillFrameMs;
   } else if (r.news == HoldButton::News::Short || r.news == HoldButton::News::Slid ||
-             r.news == HoldButton::News::Dropped) {
+             r.news == HoldButton::News::Stalled || r.news == HoldButton::News::Dropped) {
     fillDrawn_ = 0;  // empty again
   }
   if (r.drawHint) drawHint();
@@ -1151,11 +1151,23 @@ int Dialog::onEvent(const InputEvent& e) {
   return r.answer;
 }
 
-HoldButton::News Dialog::tick(uint32_t nowMs) {
-  if (!up_ || !touch_.holdMode()) return HoldButton::News::None;
-  if (touch_.tick(nowMs) == HoldButton::News::Confirmed) return HoldButton::News::Confirmed;
-  if (!touch_.holding()) return HoldButton::News::None;
-  const int px = touch_.hold().fill(nowMs, dialog::buttonW(touch_.n()));
+HoldButton::News Dialog::tick(uint32_t nowMs, const HoldButton::Finger& finger) {
+  using News = HoldButton::News;
+  if (!up_ || !touch_.holdMode()) return News::None;
+  const bool amber = touch_.hintAlert();
+  const News n = touch_.tick(nowMs, finger);
+  if (n == News::Confirmed) return n;
+  if (n == News::Stalled || n == News::Slid || n == News::Scripted) {
+    // The hold ended in this pass with nothing done: empty again, and the
+    // hint amber (its row only when it wasn't).
+    drawHoldButton(0);
+    if (!amber) drawHint();
+    return n;
+  }
+  if (!touch_.holding()) return News::None;
+  // (The fill is the time the finger was seen on it, the time tick()
+  // answers by: HoldButton::heldMs().)
+  const int px = touch_.hold().fill(dialog::buttonW(touch_.n()));
   if (px != fillDrawn_ && static_cast<int32_t>(nowMs - fillDrawnMs_) >= static_cast<int32_t>(kFillFrameMs)) {
     fillDrawnMs_ = nowMs;
     drawHoldButton(px);

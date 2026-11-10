@@ -9,8 +9,9 @@
 // The format's question's clock (ui/Ui::askFormat(); docs/HOST-STATUS.md,
 // "@format"): its two steps, each a dialog with Cancel. Ask, "Format this
 // card?", answered by a tap on Format...; Sure, "Erase the whole card?",
-// answered only by holding its red "Hold to erase" HoldButton::kHoldMs
-// (the Dialog's hold mode: DialogTouch). Cancel is the default: a step up
+// answered only by a hand holding its red "Hold to erase"
+// HoldButton::kHoldMs, seen on it all the while (the Dialog's hold mode:
+// DialogTouch, HoldButton). Cancel is the default: a step up
 // kAskMs with no answer ends it (expired()), whatever is under way then, a
 // hold too: the minute wins (pass()). A touch that lands in Sure's first
 // kSettleMs goes nowhere (lands()): the finger that answered Ask, coming
@@ -65,24 +66,36 @@ private:
   uint32_t openedMs_ = 0;
 };
 
-// One loop pass of the question (ui/Ui::loop(), after the pass's touch
-// events), in this order: the minute first (`asking`: the question's
-// dialog is up), Cancel over a hold under way too; then the dialog's hold
-// (its hold mode): dropped when the touch that began it is no longer the
-// dialog's (`touchIsDialogs` false: the dark, a banner, a Cancel took it),
-// else on towards its end (`dialog.tick()`: the fill drawn as it grows),
-// and kept to it, the hold button's answer. `D`: ui/Overlays' Dialog, or
-// DialogTouch (the tests): holdMode(), holding(), dropHold(), tick(ms).
-enum class Pass : uint8_t { None, Expired, Dropped, Confirmed };
+// One loop pass of the question (ui/Ui::loop(); after the pass's touch
+// events there, and the same before them: HoldButton), in this order: the
+// minute first (`asking`: the question's dialog is up), Cancel over a hold
+// under way too; then the dialog's hold (its hold mode): dropped when the
+// touch that began it is no longer the dialog's (`touchIsDialogs` false:
+// the dark, a banner, a Cancel took it), else on towards its end
+// (`dialog.tick()`, with what the pass read of the panel, `finger`: the
+// fill drawn as it grows), and seen to it by hand, Confirmed: the hold
+// button's answer, the only way to it. A hold that ends in the pass with
+// nothing done: Stalled (the loop lost sight of the finger for more than
+// HoldButton::kGapMs), Slid, or Scripted (the console's finger, at its
+// end). `D`: ui/Overlays' Dialog, or DialogTouch (the tests): holdMode(),
+// holding(), dropHold(), tick(ms, finger).
+enum class Pass : uint8_t { None, Expired, Dropped, Stalled, Slid, Scripted, Confirmed };
 template <class D>
-Pass pass(bool asking, const Question& q, D& dialog, uint32_t ms, bool touchIsDialogs) {
+Pass pass(bool asking, const Question& q, D& dialog, uint32_t ms, bool touchIsDialogs,
+          const HoldButton::Finger& finger) {
   if (asking && q.expired(ms)) return Pass::Expired;
   if (!dialog.holdMode()) return Pass::None;
   if (dialog.holding() && !touchIsDialogs) {
     dialog.dropHold();
     return Pass::Dropped;
   }
-  return dialog.tick(ms) == HoldButton::News::Confirmed ? Pass::Confirmed : Pass::None;
+  switch (dialog.tick(ms, finger)) {
+    case HoldButton::News::Confirmed: return Pass::Confirmed;
+    case HoldButton::News::Stalled: return Pass::Stalled;
+    case HoldButton::News::Slid: return Pass::Slid;
+    case HoldButton::News::Scripted: return Pass::Scripted;
+    default: return Pass::None;
+  }
 }
 
 }  // namespace formatask
