@@ -1029,7 +1029,9 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   PlayLog             The play log (/.player/plays.jnl, docs/METADATA.md
                       2.20): its slot, the device's files (the boot rules,
                       the rotation, the trim by the root's ACKS), a play
-                      from its start to its end, when the loop may write
+                      from its start to its end, the plays waiting (a slot
+                      the card fails tried again, the same one; the orderly
+                      end's flush), when the loop may write
   SheetLayout         Where a sheet sits (3 rows, or 4 from y 40)
   DialogLayout        Where a dialog and its buttons sit, and their hit areas
   DialogTouch         Which touch answers a dialog (a press, a tap, the hold

@@ -27,9 +27,18 @@
 //   twin names taken: blocked; a rename the card refuses, tried again; a
 //   remount settling again;
 // - the Tracker (the time played, pauses excluded, a seek's jump not
-//   counted, the tail of a completed play, short plays, the queue) and the
-//   WriteGate (the gapless window, a start's settle, the ring, underruns, a
-//   moving list);
+//   counted, one as long as a pause before it neither, the tail of a
+//   completed play, short plays, the queue) and the WriteGate (the gapless
+//   window, a start's settle, the ring, underruns, a moving list; a run of
+//   7 s tracks, which it never opens for: the ring of 32);
+// - a slot the card fails, tried again (Journal::again()): the same seq and
+//   bytes, once on the card whether the first try's write landed or not
+//   (on FatFs too: the directory's write refused); a rotation a step of
+//   which fails ending as one nothing failed, its drop note kept; a
+//   plays.1.jnl that can't be read, once and for good; the Outbox: a play
+//   the card fails first in line for three tries, nothing behind it
+//   before it, after a remount, and the orderly end's flush (the first
+//   card failure, the deadline);
 // - what an append, a rotation and the boot's scan ask of the card, on the
 //   host FatFs model (ChaN's FatFs as the Core2 builds it, the sector
 //   cache in front: test_card_io's card): bytes per play and the cap's
@@ -159,6 +168,9 @@ void onOp(void* ctx, Journal::Op o, const char* a, const char* b, uint64_t n) {
     case Journal::Op::Twin: std::snprintf(t, sizeof(t), "twin %s %s", base(a).c_str(), base(b).c_str()); break;
     case Journal::Op::Blocked: std::snprintf(t, sizeof(t), "blocked %s", base(a).c_str()); break;
     case Journal::Op::Refused: std::snprintf(t, sizeof(t), "refused %s %s", base(a).c_str(), base(b).c_str()); break;
+    case Journal::Op::Unread:
+      std::snprintf(t, sizeof(t), "unread %s %llu", base(a).c_str(), static_cast<unsigned long long>(n));
+      break;
   }
   v->push_back(t);
 }
@@ -1942,6 +1954,1087 @@ void test_a_question_the_card_fails_frees_no_chain() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// A slot the card fails, tried again (docs/METADATA.md 3.10): the journal's
+// again(), the rotation's count kept for its note, a plays.1.jnl it can't
+// read, and the Outbox (the play kept first in line, three tries, the
+// orderly end's flush).
+// ---------------------------------------------------------------------------
+namespace {
+
+// So many calls pass, then so many fail (-1: every one from there).
+struct Knob {
+  long skip = 0, fail = 0;
+  bool hit() {
+    if (skip > 0) {
+      --skip;
+      return false;
+    }
+    if (fail == 0) return false;
+    if (fail > 0) --fail;
+    return true;
+  }
+};
+
+// A card that fails chosen calls, over CutFs (the journal's files through
+// it): a write, a sync, a close, an open to write, a rename, a remove, a
+// question; a read of a file's bad stretch. A write that fails lands or not
+// (`lands`); a sync that fails leaves its file unsynced, and a close that
+// fails (a written file's: the knob counts those) doesn't sync it either
+// (the card refused both).
+struct FaultFs : tagstore::Fs {
+  CutFs& cut;
+  Knob noWrite, noSync, noClose, noCreate, noUpdate, noRename, halfRename, noRemove, noEntry;
+  bool lands = false;
+  std::string badPath;  // reads of it that touch [badFrom, badTo) fail, by `bad`
+  uint32_t badFrom = 0, badTo = 0;
+  Knob bad;
+  uint32_t writes = 0;  // writes that reached the card
+  explicit FaultFs(CutFs& c) : cut(c) {}
+
+  struct F : tagstore::File {
+    FaultFs& fs;
+    tagstore::File* in;
+    std::string path;
+    bool wrote = false;
+    F(FaultFs& f, tagstore::File* i, const char* p) : fs(f), in(i), path(p) {}
+    uint32_t size() const override { return in->size(); }
+    bool damaged() const override { return in->damaged(); }
+    bool read(uint32_t off, void* out, uint32_t n) override {
+      if (path == fs.badPath && off < fs.badTo && off + n > fs.badFrom && fs.bad.hit()) return false;
+      return in->read(off, out, n);
+    }
+    bool write(uint32_t off, const void* d, uint32_t n) override {
+      if (fs.noWrite.hit()) {
+        if (fs.lands && in->write(off, d, n)) {
+          ++fs.writes;
+          wrote = true;
+        }
+        return false;
+      }
+      if (!in->write(off, d, n)) return false;
+      ++fs.writes;
+      wrote = true;
+      return true;
+    }
+    bool sync() override { return !fs.noSync.hit() && in->sync(); }
+    bool truncate(uint32_t s) override { return in->truncate(s); }
+  };
+  tagstore::File* wrap(tagstore::File* in, const char* p) { return in ? new F(*this, in, p) : nullptr; }
+  tagstore::File* open(const char* p, Mode m) override {
+    if (m == Mode::Create && noCreate.hit()) return nullptr;
+    if (m == Mode::Update && noUpdate.hit()) return nullptr;
+    return wrap(cut.open(p, m), p);
+  }
+  tagstore::File* openRead(const char* p, bool* cardFailed) override { return wrap(cut.openRead(p, cardFailed), p); }
+  Entry entry(const char* p) override {
+    if (noEntry.hit()) {
+      Entry e;
+      e.cardFailed = true;
+      return e;
+    }
+    return cut.entry(p);
+  }
+  bool close(tagstore::File* file) override {
+    F* f = static_cast<F*>(file);
+    const bool refused = f->wrote && noClose.hit();
+    const bool was = cut.refuse;
+    if (refused) cut.refuse = true;  // (its own sync of a written file refused too)
+    const bool ok = cut.close(f->in);
+    cut.refuse = was;
+    delete f;
+    return ok && !refused;
+  }
+  bool exists(const char* p) override { return cut.exists(p); }
+  bool remove(const char* p) override { return !noRemove.hit() && cut.remove(p); }
+  bool rename(const char* from, const char* to) override {
+    if (noRename.hit()) return false;
+    if (halfRename.hit()) {  // the new entry written, the old one not removed
+      cut.link(from, to);
+      return false;
+    }
+    return cut.rename(from, to);
+  }
+  uint32_t firstCluster(const char* p) override { return cut.firstCluster(p); }
+};
+
+std::vector<Slot> slotsOf(const Bytes& b) {
+  std::vector<Slot> v;
+  for (size_t at = 0; at + pl::kSlot <= b.size(); at += pl::kSlot) {
+    Slot s;
+    TEST_ASSERT_TRUE(pl::decode(b.data() + at, pl::kSlot, &s) == pl::Verdict::Ok);
+    v.push_back(s);
+  }
+  return v;
+}
+
+// A card with plays.1.jnl (seqs 1-4) and plays.jnl (5-8) under a cap of 4,
+// no ACKS: the next append rotates, and its note says 4.
+struct Rotating {
+  CutFs card;
+  FaultFs fs{card};
+  Device d{kDevA, 4};
+  uint32_t up = 0;
+  Rotating() {
+    TEST_ASSERT_TRUE(d.boot(fs));
+    for (int i = 0; i < 8; ++i) TEST_ASSERT_TRUE(add() == Journal::Wrote::Ok);
+    d.ops.clear();
+  }
+  Journal::Wrote add() {
+    up += 1000;
+    Slot s = play(up / 1000, 60000, up);
+    return d.j->append(s);
+  }
+};
+
+}  // namespace
+
+// The journal's again(): the slot the card failed, the same seq and bytes,
+// once on the card however the first try ended.
+void test_a_failed_slot_is_tried_again() {
+  // The card refuses the write (full, or gone for a moment): nothing on it;
+  // tried again, the slot is there, its seq the one NVS took at first.
+  {
+    CutFs card;
+    FaultFs fs(card);
+    Device d;
+    TEST_ASSERT_TRUE(d.boot(fs));
+    TEST_ASSERT_TRUE(d.j->again() == Journal::Wrote::Off);  // nothing to try again
+    Slot a = play(1, 60000, 1000);
+    TEST_ASSERT_TRUE(d.j->append(a) == Journal::Wrote::Ok);
+    TEST_ASSERT_FALSE(d.j->owes());
+    TEST_ASSERT_TRUE(d.j->again() == Journal::Wrote::Off);  // (it was written)
+    card.refuse = true;
+    Slot b = play(2, 60000, 2000);
+    TEST_ASSERT_TRUE(d.j->append(b) == Journal::Wrote::Failed);
+    TEST_ASSERT_TRUE(d.j->owes());
+    TEST_ASSERT_EQUAL_UINT32(2, b.seq);
+    TEST_ASSERT_EQUAL_STRING("lost 2", d.ops.back().c_str());
+    TEST_ASSERT_TRUE(d.j->again() == Journal::Wrote::Failed);  // refused still
+    TEST_ASSERT_TRUE(d.j->owes());
+    TEST_ASSERT_EQUAL_size_t(pl::kSlot, card.bytes(kLog).size());
+    card.refuse = false;
+    TEST_ASSERT_TRUE(d.j->again() == Journal::Wrote::Ok);
+    TEST_ASSERT_EQUAL_STRING("play 2", d.ops.back().c_str());
+    TEST_ASSERT_FALSE(d.j->owes());
+    TEST_ASSERT_TRUE(d.j->again() == Journal::Wrote::Off);
+    TEST_ASSERT_EQUAL_UINT32(2, d.nvs.seqWrites);  // (one seq a play: none for the tries)
+    uint8_t want[pl::kSlot];
+    pl::encode(b, want);
+    const Bytes log = card.bytes(kLog);
+    TEST_ASSERT_EQUAL_size_t(2 * pl::kSlot, log.size());
+    TEST_ASSERT_EQUAL_MEMORY(want, log.data() + pl::kSlot, pl::kSlot);
+    // A slot not tried again is left behind by the next: its seq isn't
+    // used again, and again() is the new one's alone.
+    card.refuse = true;
+    Slot c = play(3, 60000, 3000);
+    TEST_ASSERT_TRUE(d.j->append(c) == Journal::Wrote::Failed);
+    card.refuse = false;
+    Slot e = play(4, 60000, 4000);
+    TEST_ASSERT_TRUE(d.j->append(e) == Journal::Wrote::Ok);
+    TEST_ASSERT_EQUAL_UINT32(4, e.seq);
+    TEST_ASSERT_TRUE(d.j->again() == Journal::Wrote::Off);
+    TEST_ASSERT_EQUAL_size_t(3 * pl::kSlot, card.bytes(kLog).size());
+    TEST_ASSERT_TRUE(card.violations.empty());
+  }
+  // The write landed and only its sync and its close failed (the card took
+  // the data and refused the rest): the slot is the log's last, unsynced.
+  // Tried again it goes over itself, where it is, and is synced: one slot,
+  // and a power cut after it keeps it. With one slot before it, and none.
+  for (int before = 0; before <= 1; ++before) {
+    CutFs card;
+    FaultFs fs(card);
+    Device d;
+    TEST_ASSERT_TRUE(d.boot(fs));
+    if (before) {
+      Slot a = play(1, 60000, 1000);
+      TEST_ASSERT_TRUE(d.j->append(a) == Journal::Wrote::Ok);
+    }
+    fs.noSync.fail = 1;
+    fs.noClose.fail = 1;
+    Slot b = play(2, 60000, 2000);
+    TEST_ASSERT_TRUE(d.j->append(b) == Journal::Wrote::Failed);
+    const size_t whole = (before + 1) * pl::kSlot;
+    TEST_ASSERT_EQUAL_size_t(whole, card.bytes(kLog).size());  // (landed)
+    TEST_ASSERT_EQUAL_size_t(before * pl::kSlot, card.reboot(cutfs::Variant::LoseUnsynced).bytes(kLog).size());
+    const uint32_t wrote = fs.writes;
+    TEST_ASSERT_TRUE(d.j->again() == Journal::Wrote::Ok);
+    TEST_ASSERT_EQUAL_UINT32(wrote + 1, fs.writes);  // (over itself: its sync's)
+    const Bytes log = card.bytes(kLog);
+    TEST_ASSERT_EQUAL_size_t(whole, log.size());  // one slot, not two
+    uint8_t want[pl::kSlot];
+    pl::encode(b, want);
+    TEST_ASSERT_EQUAL_MEMORY(want, log.data() + before * pl::kSlot, pl::kSlot);
+    TEST_ASSERT_TRUE(card.reboot(cutfs::Variant::LoseUnsynced).bytes(kLog) == log);
+    Slot c = play(3, 60000, 3000);
+    TEST_ASSERT_TRUE(d.j->append(c) == Journal::Wrote::Ok);
+    TEST_ASSERT_EQUAL_size_t(whole + pl::kSlot, card.bytes(kLog).size());
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(before) + 2, c.seq);
+  }
+  // The write itself said no and landed all the same (its answer lost): the
+  // same, one slot.
+  {
+    CutFs card;
+    FaultFs fs(card);
+    Device d;
+    TEST_ASSERT_TRUE(d.boot(fs));
+    fs.lands = true;
+    fs.noWrite.fail = 1;
+    Slot b = play(2, 60000, 2000);
+    TEST_ASSERT_TRUE(d.j->append(b) == Journal::Wrote::Failed);
+    TEST_ASSERT_EQUAL_size_t(pl::kSlot, card.bytes(kLog).size());
+    TEST_ASSERT_TRUE(d.j->again() == Journal::Wrote::Ok);
+    TEST_ASSERT_EQUAL_size_t(pl::kSlot, card.bytes(kLog).size());
+  }
+  // A read the card fails on the way (was it written?) answers nothing:
+  // not written at that try, nor a second slot at the next.
+  {
+    CutFs card;
+    FaultFs fs(card);
+    Device d;
+    TEST_ASSERT_TRUE(d.boot(fs));
+    fs.lands = true;
+    fs.noWrite.fail = 1;
+    Slot b = play(2, 60000, 2000);
+    TEST_ASSERT_TRUE(d.j->append(b) == Journal::Wrote::Failed);
+    fs.badPath = kLog;
+    fs.badTo = 0xFFFFFFFFu;
+    fs.bad.fail = 1;
+    const uint32_t wrote = fs.writes;
+    TEST_ASSERT_TRUE(d.j->again() == Journal::Wrote::Failed);
+    TEST_ASSERT_EQUAL_UINT32(wrote, fs.writes);
+    TEST_ASSERT_TRUE(d.j->again() == Journal::Wrote::Ok);
+    TEST_ASSERT_EQUAL_size_t(pl::kSlot, card.bytes(kLog).size());
+  }
+  // The open and the question after it (2.20's rule, above): tried again,
+  // the log goes on with that slot.
+  {
+    FlakyFs fs;
+    Device d;
+    TEST_ASSERT_TRUE(d.boot(fs));
+    Slot a = play(1, 60000, 1000);
+    TEST_ASSERT_TRUE(d.j->append(a) == Journal::Wrote::Ok);
+    fs.failing(0, 2);
+    Slot b = play(2, 60000, 2000);
+    TEST_ASSERT_TRUE(d.j->append(b) == Journal::Wrote::Failed);
+    fs.failing(-1, -1);
+    TEST_ASSERT_TRUE(d.j->again() == Journal::Wrote::Ok);
+    const std::vector<Slot> s = slotsOf(fs.bytes(kLog));
+    TEST_ASSERT_EQUAL_size_t(2, s.size());
+    TEST_ASSERT_EQUAL_UINT32(2, s[1].seq);
+  }
+  // The same card mounted again between the tries: the rule again, and the
+  // slot.
+  {
+    CutFs card;
+    FaultFs fs(card);
+    Device d;
+    TEST_ASSERT_TRUE(d.boot(fs));
+    card.dead = true;  // pulled
+    Slot b = play(2, 60000, 2000);
+    TEST_ASSERT_TRUE(d.j->append(b) == Journal::Wrote::Failed);
+    card.dead = false;  // put back
+    d.j->remounted();
+    TEST_ASSERT_TRUE(d.j->ready());  // (a slot was asked for: no scan again)
+    TEST_ASSERT_TRUE(d.j->owes());
+    TEST_ASSERT_TRUE(d.j->again() == Journal::Wrote::Ok);
+    TEST_ASSERT_EQUAL_size_t(pl::kSlot, card.bytes(kLog).size());
+  }
+}
+
+// On FatFs itself: the slot's data sector written, the directory's write
+// refused (f_sync fails with the entry's new size still in FatFs's window).
+// Tried again, the slot is found where it landed and its sync done: after a
+// mount the card holds each slot once.
+void test_a_failed_sync_on_the_fatfs_card() {
+  std::unique_ptr<Card> card(new Card());
+  TEST_ASSERT_TRUE(card->ok);
+  fatmodel::ModelFs fs;
+  Device d;
+  TEST_ASSERT_TRUE(d.boot(fs));
+  uint32_t up = 0;
+  for (int i = 0; i < 3; ++i) {
+    Slot s = play(i, 60000, up += 1000);
+    TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
+  }
+  // Where plays.jnl's directory entry is.
+  auto* f = static_cast<fatmodel::ModelFile*>(fs.open(kLog, tagstore::Fs::Mode::Read));
+  TEST_ASSERT_NOT_NULL(f);
+  const uint32_t dirSector = static_cast<uint32_t>(f->fil.dir_sect);
+  fs.close(f);
+  fatmodel::Drive& drv = fatmodel::drive(0);
+  drv.noAnswerWriteLba = dirSector;
+  drv.errorWriteLba = true;  // (refused, the card still there)
+  Slot s = play(10, 60000, up += 1000);
+  TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Failed);
+  TEST_ASSERT_TRUE(d.j->again() == Journal::Wrote::Failed);  // refused still
+  drv.noAnswerWriteLba = UINT32_MAX;
+  drv.errorWriteLba = false;
+  TEST_ASSERT_TRUE(d.j->again() == Journal::Wrote::Ok);
+  TEST_ASSERT_EQUAL_UINT32(4, s.seq);
+  Slot t = play(11, 60000, up += 1000);
+  TEST_ASSERT_TRUE(d.j->append(t) == Journal::Wrote::Ok);
+  TEST_ASSERT_EQUAL_UINT32(5, t.seq);
+  // As the card holds it (mounted again: nothing of FatFs's memory).
+  drv.noInit = true;
+  TEST_ASSERT_TRUE(fs.exists(kLog));
+  tagstore::File* r = fs.open(kLog, tagstore::Fs::Mode::Read);
+  TEST_ASSERT_NOT_NULL(r);
+  TEST_ASSERT_EQUAL_UINT32(5 * pl::kSlot, r->size());
+  Bytes log(r->size());
+  TEST_ASSERT_TRUE(r->read(0, log.data(), r->size()));
+  fs.close(r);
+  const std::vector<Slot> all = slotsOf(log);
+  TEST_ASSERT_EQUAL_size_t(5, all.size());
+  for (uint32_t i = 0; i < 5; ++i) TEST_ASSERT_EQUAL_UINT32(i + 1, all[i].seq);
+  uint8_t want[pl::kSlot];
+  pl::encode(s, want);
+  TEST_ASSERT_EQUAL_MEMORY(want, log.data() + 3 * pl::kSlot, pl::kSlot);
+}
+
+// A rotation a step of which the card fails: tried again, the card ends as
+// one the card never failed (byte for byte), its drop note not lost with
+// the step.
+void test_a_rotation_tried_again() {
+  // The card nothing failed.
+  Rotating clean;
+  TEST_ASSERT_TRUE(clean.add() == Journal::Wrote::Ok);
+  const Bytes wantLog = clean.card.bytes(kLog), wantPrev = clean.card.bytes(kPrev);
+  TEST_ASSERT_EQUAL_size_t(2 * pl::kSlot, wantLog.size());
+  TEST_ASSERT_EQUAL_UINT32(4, clean.d.j->lastDropped());
+  const std::vector<std::string> wantOps = {"delete plays.1.jnl rotation", "rename plays.jnl plays.1.jnl", "note 4",
+                                            "play 9"};
+  TEST_ASSERT_TRUE(clean.d.ops == wantOps);
+  auto same = [&](Rotating& r) {
+    TEST_ASSERT_TRUE(r.card.bytes(kLog) == wantLog);
+    TEST_ASSERT_TRUE(r.card.bytes(kPrev) == wantPrev);
+    TEST_ASSERT_EQUAL_UINT32(4, r.d.j->lastDropped());
+    TEST_ASSERT_EQUAL_UINT32(0, r.d.j->owedDrops());
+    TEST_ASSERT_TRUE(r.card.violations.empty());
+    TEST_ASSERT_TRUE(r.card.reboot(cutfs::Variant::LoseUnsynced).bytes(kLog) == wantLog);
+    // ... and the log goes on.
+    TEST_ASSERT_TRUE(r.add() == Journal::Wrote::Ok);
+    TEST_ASSERT_EQUAL_size_t(3 * pl::kSlot, r.card.bytes(kLog).size());
+  };
+  // Step 1's question, its delete: nothing done; again from its start (the
+  // count once, not twice).
+  {
+    Rotating r;
+    r.fs.noEntry.fail = 1;
+    TEST_ASSERT_TRUE(r.add() == Journal::Wrote::Failed);
+    TEST_ASSERT_EQUAL_size_t(4 * pl::kSlot, r.card.bytes(kPrev).size());
+    TEST_ASSERT_TRUE(r.d.j->again() == Journal::Wrote::Ok);
+    same(r);
+  }
+  {
+    Rotating r;
+    r.fs.noRemove.fail = 1;
+    TEST_ASSERT_TRUE(r.add() == Journal::Wrote::Failed);
+    TEST_ASSERT_EQUAL_UINT32(0, r.d.j->owedDrops());
+    TEST_ASSERT_TRUE(r.d.j->again() == Journal::Wrote::Ok);
+    same(r);
+  }
+  // Step 2's rename refused, plays.1.jnl gone already: its count is owed,
+  // and the note goes with the slot when it lands.
+  {
+    Rotating r;
+    r.fs.noRename.fail = 1;
+    TEST_ASSERT_TRUE(r.add() == Journal::Wrote::Failed);
+    TEST_ASSERT_EQUAL_UINT32(4, r.d.j->owedDrops());
+    TEST_ASSERT_TRUE(r.card.dir.count(kPrev) == 0);
+    TEST_ASSERT_EQUAL_size_t(4 * pl::kSlot, r.card.bytes(kLog).size());
+    TEST_ASSERT_TRUE(r.d.j->again() == Journal::Wrote::Ok);
+    const std::vector<std::string> ops = {"delete plays.1.jnl rotation", "lost 9", "rename plays.jnl plays.1.jnl",
+                                          "note 4", "play 9"};
+    TEST_ASSERT_TRUE(r.d.ops == ops);
+    same(r);
+  }
+  // ... cut between its two directory writes (both names on one chain): the
+  // cut-rename rule before the slot, as at a mount; plays.jnl's slots stay
+  // (under plays.1.jnl and a twin), none is counted dropped for it, no
+  // chain freed.
+  {
+    Rotating r;
+    r.fs.halfRename.fail = 1;
+    TEST_ASSERT_TRUE(r.add() == Journal::Wrote::Failed);
+    TEST_ASSERT_TRUE(r.card.shared(kLog, kPrev));
+    TEST_ASSERT_TRUE(r.d.j->again() == Journal::Wrote::Ok);
+    TEST_ASSERT_TRUE(r.card.bytes(kLog) == wantLog);
+    TEST_ASSERT_TRUE(r.card.bytes(kPrev) == wantPrev);
+    TEST_ASSERT_TRUE(r.card.shared(kPrev, "/.player/plays.xl1"));
+    TEST_ASSERT_TRUE(r.card.violations.empty());
+    TEST_ASSERT_EQUAL_UINT32(4, r.d.j->lastDropped());
+  }
+  // Step 3: the new plays.jnl's open refused; made and its write refused;
+  // written and its sync and close refused (the note and the slot there,
+  // unsynced: over themselves, no second note, no second slot).
+  {
+    Rotating r;
+    r.fs.noCreate.fail = 1;
+    TEST_ASSERT_TRUE(r.add() == Journal::Wrote::Failed);
+    TEST_ASSERT_TRUE(r.card.dir.count(kLog) == 0);
+    TEST_ASSERT_EQUAL_UINT32(4, r.d.j->owedDrops());
+    TEST_ASSERT_TRUE(r.d.j->again() == Journal::Wrote::Ok);
+    same(r);
+  }
+  {
+    Rotating r;
+    r.fs.noWrite.fail = 1;
+    TEST_ASSERT_TRUE(r.add() == Journal::Wrote::Failed);
+    TEST_ASSERT_EQUAL_size_t(0, r.card.bytes(kLog).size());
+    TEST_ASSERT_TRUE(r.d.j->again() == Journal::Wrote::Ok);
+    same(r);
+  }
+  {
+    Rotating r;
+    r.fs.noSync.fail = 1;
+    r.fs.noClose.fail = 1;
+    TEST_ASSERT_TRUE(r.add() == Journal::Wrote::Failed);
+    TEST_ASSERT_TRUE(r.card.bytes(kLog) == wantLog);  // (landed)
+    TEST_ASSERT_EQUAL_size_t(0, r.card.reboot(cutfs::Variant::LoseUnsynced).bytes(kLog).size());
+    TEST_ASSERT_EQUAL_UINT32(4, r.d.j->owedDrops());
+    TEST_ASSERT_TRUE(r.d.j->again() == Journal::Wrote::Ok);
+    same(r);
+  }
+  // Given up on (the caller's three tries): the count stays owed, and the
+  // next play's slot carries the note, with that play's dates.
+  {
+    Rotating r;
+    r.fs.noRename.fail = 3;
+    TEST_ASSERT_TRUE(r.add() == Journal::Wrote::Failed);
+    TEST_ASSERT_TRUE(r.d.j->again() == Journal::Wrote::Failed);
+    TEST_ASSERT_TRUE(r.d.j->again() == Journal::Wrote::Failed);
+    TEST_ASSERT_EQUAL_UINT32(4, r.d.j->owedDrops());
+    TEST_ASSERT_TRUE(r.add() == Journal::Wrote::Ok);  // seq 10
+    const std::vector<Slot> s = slotsOf(r.card.bytes(kLog));
+    TEST_ASSERT_EQUAL_size_t(2, s.size());
+    TEST_ASSERT_EQUAL_UINT8(pl::kKindDrop, s[0].kind);
+    TEST_ASSERT_EQUAL_UINT32(4, s[0].playedMs);
+    TEST_ASSERT_EQUAL_UINT32(10, s[1].seq);
+    TEST_ASSERT_EQUAL_UINT32(s[1].uptimeMs, s[0].uptimeMs);
+    TEST_ASSERT_EQUAL_UINT64(s[1].startedAt, s[0].startedAt);
+    TEST_ASSERT_EQUAL_UINT32(0, r.d.j->owedDrops());
+  }
+}
+
+// plays.1.jnl with a stretch the card can't read (FP3: the log wedged for
+// good once plays.jnl was full, each play paying the read and lost). A read
+// that fails once: nothing goes on it, and tried again the rotation counts
+// every slot. One that fails every time: at the third rotation in a row the
+// file goes all the same, its note counting what could be read, and the
+// log goes on.
+void test_a_plays1_that_cant_be_read() {
+  // (The device's buffer here: 3 slots a read, so plays.1.jnl's 4 are two
+  // reads, the second its last slot.)
+  auto bad = [](Rotating& r, long times) {
+    r.fs.badPath = kPrev;
+    r.fs.badFrom = 3 * pl::kSlot;
+    r.fs.badTo = 4 * pl::kSlot;
+    r.fs.bad.fail = times;
+  };
+  {
+    Rotating r;
+    bad(r, 1);
+    TEST_ASSERT_TRUE(r.add() == Journal::Wrote::Failed);
+    TEST_ASSERT_EQUAL_size_t(4 * pl::kSlot, r.card.bytes(kPrev).size());  // nothing removed
+    TEST_ASSERT_EQUAL_size_t(4 * pl::kSlot, r.card.bytes(kLog).size());
+    TEST_ASSERT_TRUE(r.d.j->again() == Journal::Wrote::Ok);
+    TEST_ASSERT_EQUAL_UINT32(4, r.d.j->lastDropped());  // (none dropped unseen)
+    const std::vector<std::string> ops = {"lost 9", "delete plays.1.jnl rotation", "rename plays.jnl plays.1.jnl",
+                                          "note 4", "play 9"};
+    TEST_ASSERT_TRUE(r.d.ops == ops);
+  }
+  {
+    Rotating r;
+    bad(r, -1);
+    TEST_ASSERT_TRUE(r.add() == Journal::Wrote::Failed);
+    TEST_ASSERT_TRUE(r.d.j->again() == Journal::Wrote::Failed);
+    TEST_ASSERT_EQUAL_size_t(4 * pl::kSlot, r.card.bytes(kPrev).size());
+    TEST_ASSERT_TRUE(r.d.j->again() == Journal::Wrote::Ok);  // the third: on with what it read
+    const std::vector<std::string> ops = {"lost 9",   "lost 9", "unread plays.1.jnl 3", "delete plays.1.jnl rotation",
+                                          "rename plays.jnl plays.1.jnl", "note 3", "play 9"};
+    TEST_ASSERT_TRUE(r.d.ops == ops);
+    TEST_ASSERT_EQUAL_UINT32(3, r.d.j->lastDropped());
+    std::vector<Slot> s = slotsOf(r.card.bytes(kLog));
+    TEST_ASSERT_EQUAL_size_t(2, s.size());
+    TEST_ASSERT_EQUAL_UINT32(9, s[1].seq);
+    TEST_ASSERT_TRUE(r.card.violations.empty());
+    // The log goes on: its next rotation (a plays.1.jnl that reads) is as
+    // ever, at its first try.
+    for (int i = 0; i < 2; ++i) TEST_ASSERT_TRUE(r.add() == Journal::Wrote::Ok);
+    r.fs.badPath.clear();
+    r.d.ops.clear();
+    TEST_ASSERT_TRUE(r.add() == Journal::Wrote::Ok);  // seq 12: rotates
+    TEST_ASSERT_EQUAL_UINT32(4, r.d.j->lastDropped());
+    TEST_ASSERT_EQUAL_STRING("delete plays.1.jnl rotation", r.d.ops.front().c_str());
+  }
+  // Three in a row, not three in all: one that reads between starts the
+  // count again. (Three plays' rotations here, as a caller that gave each
+  // up after two tries.)
+  {
+    Rotating r;
+    bad(r, 2);
+    TEST_ASSERT_TRUE(r.add() == Journal::Wrote::Failed);
+    TEST_ASSERT_TRUE(r.d.j->again() == Journal::Wrote::Failed);
+    TEST_ASSERT_TRUE(r.d.j->again() == Journal::Wrote::Ok);  // it read
+    TEST_ASSERT_EQUAL_UINT32(4, r.d.j->lastDropped());
+    for (const std::string& o : r.d.ops) TEST_ASSERT_TRUE(o.compare(0, 6, "unread") != 0);
+  }
+  // ... a read that works starts it again whatever the rotation then comes
+  // to: two that failed, one that read (its delete refused), one that
+  // failed: that one is the first of its row, and nothing goes on it.
+  {
+    Rotating r;
+    bad(r, 2);
+    TEST_ASSERT_TRUE(r.add() == Journal::Wrote::Failed);
+    TEST_ASSERT_TRUE(r.d.j->again() == Journal::Wrote::Failed);
+    r.fs.noRemove.fail = 1;
+    TEST_ASSERT_TRUE(r.d.j->again() == Journal::Wrote::Failed);  // (read whole; the delete refused)
+    bad(r, 1);
+    TEST_ASSERT_TRUE(r.d.j->again() == Journal::Wrote::Failed);
+    TEST_ASSERT_EQUAL_size_t(4 * pl::kSlot, r.card.bytes(kPrev).size());
+    TEST_ASSERT_TRUE(r.d.j->again() == Journal::Wrote::Ok);
+    TEST_ASSERT_EQUAL_UINT32(4, r.d.j->lastDropped());
+    for (const std::string& o : r.d.ops) TEST_ASSERT_TRUE(o.compare(0, 6, "unread") != 0);
+  }
+  // Its open refused each time (the same fault, before any slot is read):
+  // the third goes on, counting none.
+  {
+    struct OpenFails : FaultFs {
+      using FaultFs::FaultFs;
+      long fails = -1;
+      tagstore::File* open(const char* p, Mode m) override {
+        if (m == Mode::Read && std::string(p) == kPrev && fails != 0) {
+          if (fails > 0) --fails;
+          return nullptr;
+        }
+        return FaultFs::open(p, m);
+      }
+    };
+    CutFs card;
+    OpenFails fs(card);
+    Device d(kDevA, 4);
+    TEST_ASSERT_TRUE(d.boot(fs));
+    uint32_t up = 0;
+    for (int i = 0; i < 8; ++i) {
+      Slot s = play(i, 60000, up += 1000);
+      TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
+    }
+    d.ops.clear();
+    Slot s = play(9, 60000, up += 1000);
+    TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Failed);
+    TEST_ASSERT_TRUE(d.j->again() == Journal::Wrote::Failed);
+    TEST_ASSERT_TRUE(d.j->again() == Journal::Wrote::Ok);
+    TEST_ASSERT_EQUAL_UINT32(0, d.j->lastDropped());
+    TEST_ASSERT_EQUAL_size_t(pl::kSlot, card.bytes(kLog).size());  // (no note: nothing seen)
+    TEST_ASSERT_EQUAL_STRING("unread plays.1.jnl 0", d.ops[2].c_str());
+  }
+}
+
+namespace {
+
+// The Outbox's side of the firmware: the played file's f_stat (its answers
+// scripted), the board's clocks, each try's word.
+struct OutEnv : pl::Outbox::Env {
+  uint64_t now = 100000;
+  uint64_t perStat = 0;  // ms a stat takes (a slow card)
+  uint64_t perLook = 0;  // ms between two looks at the clock
+  uint64_t wall = 1792100000000ull;  // the wall clock at mono 0 (0: unset)
+  std::vector<File> stats;  // the next answers (then There)
+  uint32_t statCalls = 0;
+  std::vector<std::string> lines;
+  File stat(const char* path, uint32_t* size, uint32_t* fatTime) override {
+    (void)path;
+    now += perStat;
+    const File f = statCalls < stats.size() ? stats[statCalls] : File::There;
+    ++statCalls;
+    if (f == File::There) {
+      *size = 1000;
+      *fatTime = 0x5D4773D5;
+    }
+    return f;
+  }
+  uint64_t startedAt(uint64_t startMono, uint8_t* clock) override {
+    *clock = wall ? pl::kClockRtc : 77;  // (unset: the Outbox says so, whatever this says)
+    return wall ? wall + startMono : 0;
+  }
+  uint64_t monoMs() override {
+    now += perLook;
+    return now;
+  }
+  void tried(const pl::Outbox::Tried& t, const pl::Played& p) override {
+    using Did = pl::Outbox::Did;
+    static const char* const kWhy[] = {"", " gone", " off", " nvs", " blocked", " stat", " append"};
+    std::string line = t.did == Did::Written ? "written" : t.did == Did::Kept ? "kept" : t.gaveUp ? "lost" : "dropped";
+    line += kWhy[static_cast<int>(t.why)];
+    line += " " + std::to_string(t.tries) + ": t" + std::to_string(p.file.pathHash - 0x1000);
+    if (t.hasSlot) line += " seq " + std::to_string(t.slot.seq);
+    lines.push_back(line);
+  }
+};
+
+// A device with plays waiting: the journal over a card that fails on
+// order, the Tracker, the Outbox.
+struct Box {
+  CutFs card;
+  FaultFs fs{card};
+  Device d;
+  Env tenv;
+  pl::Tracker tracker{tenv};
+  OutEnv env;
+  std::unique_ptr<pl::Outbox> out;
+  explicit Box(uint32_t cap = pl::kFileSlots) : d(kDevA, cap) {
+    TEST_ASSERT_TRUE(d.boot(fs));
+    out.reset(new pl::Outbox(tracker, *d.j, env));
+  }
+  // A play of track `track`, 2 s of it: waiting for its slot.
+  void played(uint32_t track) {
+    tracker.began(1, track, 0);
+    for (uint32_t k = 1; k <= 100; ++k) {
+      tenv.now += 20;
+      tracker.tick(PlayState::Playing, k * 20, true, 180000);
+    }
+    tracker.ended(End::Completed);
+  }
+  std::vector<Slot> slots() { return slotsOf(card.bytes(kLog)); }
+};
+
+using Did = pl::Outbox::Did;
+using Why = pl::Outbox::Why;
+using OutFile = pl::Outbox::Env::File;
+
+}  // namespace
+
+// A play the card fails stays first in line and is tried again, the same
+// slot, three tries in all; nothing behind it goes before it.
+void test_the_outbox_tries_again() {
+  // The played file's f_stat fails once (a read on the way to it): kept,
+  // no seq taken; 5 s later, written. The play behind it after it.
+  {
+    Box b;
+    b.played(5);
+    b.played(6);
+    TEST_ASSERT_TRUE(b.out->due());
+    b.env.stats = {OutFile::Failed};
+    pl::Outbox::Tried t = b.out->writeOne();
+    TEST_ASSERT_TRUE(t.did == Did::Kept && t.why == Why::Stat);
+    TEST_ASSERT_EQUAL_UINT8(1, t.tries);
+    TEST_ASSERT_FALSE(t.hasSlot);
+    TEST_ASSERT_EQUAL_UINT32(2, b.tracker.pending());
+    TEST_ASSERT_EQUAL_UINT32(0, b.d.nvs.seqWrites);
+    TEST_ASSERT_TRUE(b.card.dir.count(kLog) == 0);
+    TEST_ASSERT_FALSE(b.out->due());
+    b.env.now += pl::Outbox::kRetryMs - 1;
+    TEST_ASSERT_FALSE(b.out->due());
+    b.env.now += 1;
+    TEST_ASSERT_TRUE(b.out->due());
+    t = b.out->writeOne();
+    TEST_ASSERT_TRUE(t.did == Did::Written);
+    TEST_ASSERT_EQUAL_UINT8(2, t.tries);
+    TEST_ASSERT_EQUAL_UINT32(1, t.slot.seq);
+    TEST_ASSERT_TRUE(b.out->due());
+    t = b.out->writeOne();
+    TEST_ASSERT_TRUE(t.did == Did::Written);
+    TEST_ASSERT_EQUAL_UINT8(1, t.tries);
+    const std::vector<Slot> s = b.slots();
+    TEST_ASSERT_EQUAL_size_t(2, s.size());
+    TEST_ASSERT_EQUAL_UINT64(0x1005, s[0].pathHash);
+    TEST_ASSERT_EQUAL_UINT32(1, s[0].seq);
+    TEST_ASSERT_EQUAL_UINT64(0x1006, s[1].pathHash);
+    TEST_ASSERT_EQUAL_UINT32(2, s[1].seq);
+    TEST_ASSERT_EQUAL_UINT32(1000, s[0].size);
+    TEST_ASSERT_EQUAL_UINT8(pl::kClockRtc, s[0].clock);
+    TEST_ASSERT_EQUAL_UINT32(2000, s[0].playedMs);
+    const std::vector<std::string> lines = {"kept stat 1: t5", "written 2: t5 seq 1", "written 1: t6 seq 2"};
+    TEST_ASSERT_TRUE(b.env.lines == lines);
+    TEST_ASSERT_EQUAL_UINT32(2, b.out->counts().written);
+    TEST_ASSERT_EQUAL_UINT32(1, b.out->counts().retries);
+    TEST_ASSERT_EQUAL_UINT32(0, b.out->counts().dropped);
+    TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Nothing);
+    // The clock unset at the write: no start, and the slot's clock byte
+    // says so whatever the clock's source reads.
+    b.env.wall = 0;
+    b.played(7);
+    TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Written);
+    TEST_ASSERT_EQUAL_UINT64(0, b.slots()[2].startedAt);
+    TEST_ASSERT_EQUAL_UINT8(pl::kClockUnset, b.slots()[2].clock);
+  }
+  // The card refuses the slot's write once: kept, its seq taken; tried
+  // again, one slot, that seq, and the bytes of the first try (a clock set
+  // between the two doesn't date it again).
+  {
+    Box b;
+    b.played(5);
+    b.played(6);
+    b.card.refuse = true;
+    pl::Outbox::Tried t = b.out->writeOne();
+    TEST_ASSERT_TRUE(t.did == Did::Kept && t.why == Why::Append);
+    TEST_ASSERT_TRUE(t.hasSlot);
+    TEST_ASSERT_EQUAL_UINT32(1, t.slot.seq);
+    const Slot first = t.slot;
+    TEST_ASSERT_EQUAL_UINT32(1, b.d.nvs.seqWrites);
+    TEST_ASSERT_EQUAL_UINT32(2, b.tracker.pending());
+    b.card.refuse = false;
+    b.env.wall += 3600000;  // a @time between the tries
+    b.env.now += pl::Outbox::kRetryMs;
+    t = b.out->writeOne();
+    TEST_ASSERT_TRUE(t.did == Did::Written);
+    TEST_ASSERT_EQUAL_UINT8(2, t.tries);
+    TEST_ASSERT_EQUAL_UINT32(1, t.slot.seq);
+    TEST_ASSERT_EQUAL_UINT32(1, b.d.nvs.seqWrites);  // (no second seq)
+    TEST_ASSERT_EQUAL_UINT32(1, b.env.statCalls);    // (nor a second look at the file)
+    uint8_t want[pl::kSlot];
+    pl::encode(first, want);
+    TEST_ASSERT_EQUAL_size_t(pl::kSlot, b.card.bytes(kLog).size());
+    TEST_ASSERT_EQUAL_MEMORY(want, b.card.bytes(kLog).data(), pl::kSlot);
+    TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Written);
+    TEST_ASSERT_EQUAL_UINT32(2, b.slots()[1].seq);
+    TEST_ASSERT_EQUAL_UINT64(first.startedAt + 3600000 + 2000, b.slots()[1].startedAt);  // (the next play's: the clock now)
+  }
+  // The write landed and its sync failed: the try after it finds the slot,
+  // one on the card.
+  {
+    Box b;
+    b.played(5);
+    b.fs.noSync.fail = 1;
+    b.fs.noClose.fail = 1;
+    TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Kept);
+    TEST_ASSERT_EQUAL_size_t(pl::kSlot, b.card.bytes(kLog).size());
+    b.env.now += pl::Outbox::kRetryMs;
+    TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Written);
+    TEST_ASSERT_EQUAL_size_t(pl::kSlot, b.card.bytes(kLog).size());
+    TEST_ASSERT_EQUAL_size_t(pl::kSlot, b.card.reboot(cutfs::Variant::LoseUnsynced).bytes(kLog).size());
+  }
+  // Three failures: dropped, counted lost; the play behind it gets the next
+  // seq (the lost one's is never on the card, and never used again).
+  {
+    Box b;
+    b.played(5);
+    b.played(6);
+    b.card.refuse = true;
+    TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Kept);
+    b.env.now += pl::Outbox::kRetryMs;
+    pl::Outbox::Tried t = b.out->writeOne();
+    TEST_ASSERT_TRUE(t.did == Did::Kept);
+    TEST_ASSERT_EQUAL_UINT8(2, t.tries);
+    TEST_ASSERT_EQUAL_UINT8(2, b.out->tries());
+    TEST_ASSERT_FALSE(b.out->due());
+    b.env.now += pl::Outbox::kRetryMs;
+    t = b.out->writeOne();
+    TEST_ASSERT_TRUE(t.did == Did::Dropped && t.gaveUp && t.why == Why::Append);
+    TEST_ASSERT_EQUAL_UINT8(3, t.tries);
+    TEST_ASSERT_EQUAL_UINT32(1, b.tracker.pending());
+    TEST_ASSERT_EQUAL_UINT32(1, b.out->counts().lost);
+    TEST_ASSERT_EQUAL_UINT32(1, b.out->counts().dropped);
+    TEST_ASSERT_EQUAL_UINT8(0, b.out->tries());
+    TEST_ASSERT_TRUE(b.out->due());  // (the next play's turn, at once)
+    b.card.refuse = false;
+    t = b.out->writeOne();
+    TEST_ASSERT_TRUE(t.did == Did::Written);
+    TEST_ASSERT_EQUAL_UINT32(2, t.slot.seq);
+    const std::vector<Slot> s = b.slots();
+    TEST_ASSERT_EQUAL_size_t(1, s.size());
+    TEST_ASSERT_EQUAL_UINT64(0x1006, s[0].pathHash);
+    const std::vector<std::string> lines = {"kept append 1: t5 seq 1", "kept append 2: t5 seq 1",
+                                            "lost append 3: t5 seq 1", "written 1: t6 seq 2"};
+    TEST_ASSERT_TRUE(b.env.lines == lines);
+  }
+  // ... the f_stat's three: lost with no seq taken (the next play's is 1).
+  // A try of each kind counts.
+  {
+    Box b;
+    b.played(5);
+    b.played(6);
+    b.env.stats = {OutFile::Failed, OutFile::Failed, OutFile::Failed};
+    TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Kept);
+    b.env.now += pl::Outbox::kRetryMs;
+    TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Kept);
+    b.env.now += pl::Outbox::kRetryMs;
+    const pl::Outbox::Tried t = b.out->writeOne();
+    TEST_ASSERT_TRUE(t.did == Did::Dropped && t.gaveUp && t.why == Why::Stat && !t.hasSlot);
+    TEST_ASSERT_EQUAL_UINT32(0, b.d.nvs.seqWrites);
+    TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Written);
+    TEST_ASSERT_EQUAL_UINT32(1, b.slots()[0].seq);
+    Box c;
+    c.played(5);
+    c.env.stats = {OutFile::Failed};
+    TEST_ASSERT_TRUE(c.out->writeOne().did == Did::Kept);  // the f_stat
+    c.card.refuse = true;
+    c.env.now += pl::Outbox::kRetryMs;
+    TEST_ASSERT_TRUE(c.out->writeOne().did == Did::Kept);  // the append
+    c.env.now += pl::Outbox::kRetryMs;
+    const pl::Outbox::Tried u = c.out->writeOne();  // the same slot again
+    TEST_ASSERT_TRUE(u.did == Did::Dropped && u.gaveUp && u.why == Why::Append);
+    TEST_ASSERT_EQUAL_UINT32(1, c.d.nvs.seqWrites);
+  }
+  // Nothing behind a play that waits goes before it: whoever asks in its
+  // 5 s (the flush does) tries the head, and the card's order is the
+  // plays'.
+  {
+    Box b;
+    for (uint32_t t = 1; t <= 4; ++t) b.played(t);
+    b.card.refuse = true;
+    TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Kept);
+    TEST_ASSERT_EQUAL_UINT64(0x1001, b.tracker.oldest().file.pathHash);
+    TEST_ASSERT_FALSE(b.out->due());
+    b.card.refuse = false;
+    while (b.tracker.pending()) {
+      TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Written);
+    }
+    const std::vector<Slot> s = b.slots();
+    TEST_ASSERT_EQUAL_size_t(4, s.size());
+    for (uint32_t i = 0; i < 4; ++i) {
+      TEST_ASSERT_EQUAL_UINT64(0x1001 + i, s[i].pathHash);
+      TEST_ASSERT_EQUAL_UINT32(i + 1, s[i].seq);
+    }
+  }
+  // What another try wouldn't change is dropped at once, as before: the
+  // file not on the card any more, NVS refusing the seq, a blocked log, no
+  // log.
+  {
+    Box b;
+    b.played(5);
+    b.played(6);
+    b.played(7);
+    b.env.stats = {OutFile::Gone};
+    pl::Outbox::Tried t = b.out->writeOne();
+    TEST_ASSERT_TRUE(t.did == Did::Dropped && t.why == Why::Gone && !t.gaveUp);
+    TEST_ASSERT_EQUAL_UINT32(2, b.tracker.pending());
+    TEST_ASSERT_TRUE(b.out->due());
+    b.d.nvs.failSeq = true;
+    t = b.out->writeOne();
+    TEST_ASSERT_TRUE(t.did == Did::Dropped && t.why == Why::Nvs && !t.hasSlot);
+    b.d.nvs.failSeq = false;
+    TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Written);
+    TEST_ASSERT_EQUAL_UINT32(0, b.out->counts().lost);
+    TEST_ASSERT_EQUAL_UINT32(2, b.out->counts().dropped);
+    // No log this boot (NVS unreadable at the boot).
+    CutFs card;
+    Device d;
+    d.nvs.failLoad = true;
+    TEST_ASSERT_FALSE(d.boot(card));
+    Env tenv;
+    pl::Tracker tracker(tenv);
+    OutEnv env;
+    pl::Outbox out(tracker, *d.j, env);
+    tracker.began(1, 5, 0);
+    for (uint32_t k = 1; k <= 100; ++k) {
+      tenv.now += 20;
+      tracker.tick(PlayState::Playing, k * 20, true, 180000);
+    }
+    tracker.ended(End::Completed);
+    t = out.writeOne();
+    TEST_ASSERT_TRUE(t.did == Did::Dropped && t.why == Why::Off);
+    // All nine twin names taken: blocked.
+    Box blocked(4);
+    for (int i = 0; i < 4; ++i) {
+      blocked.played(1);
+      TEST_ASSERT_TRUE(blocked.out->writeOne().did == Did::Written);
+    }
+    blocked.card.link(kLog, kPrev);
+    for (int i = 1; i <= 9; ++i) blocked.card.put("/.player/plays.xl" + std::to_string(i), Bytes(pl::kSlot, 0x11));
+    blocked.d.j->remounted();
+    blocked.played(2);
+    t = blocked.out->writeOne();
+    TEST_ASSERT_TRUE(t.did == Did::Dropped && t.why == Why::Blocked && !t.gaveUp);
+  }
+}
+
+// The card mounted again while a play waits: tried at once, not in its 5 s.
+// Before this boot's first slot the boot's scan runs again first (what it
+// read may be partial), and the slot's seq and boot count are the scan's.
+void test_the_outbox_after_a_remount() {
+  // A slot whose seq was taken: the same one, after the mount.
+  {
+    Box b;
+    b.played(5);
+    b.card.dead = true;  // pulled
+    TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Kept);
+    TEST_ASSERT_FALSE(b.out->due());
+    b.card.dead = false;  // put back: the guard's remount
+    b.d.j->remounted();
+    b.out->remounted();
+    TEST_ASSERT_TRUE(b.d.j->ready());
+    TEST_ASSERT_TRUE(b.out->due());
+    const pl::Outbox::Tried t = b.out->writeOne();
+    TEST_ASSERT_TRUE(t.did == Did::Written);
+    TEST_ASSERT_EQUAL_UINT32(1, t.slot.seq);
+    TEST_ASSERT_EQUAL_UINT32(1, b.d.nvs.seqWrites);
+    TEST_ASSERT_EQUAL_size_t(pl::kSlot, b.card.bytes(kLog).size());
+    // A remount with nothing waiting changes nothing for the next play.
+    b.out->remounted();
+    b.played(6);
+    b.card.refuse = true;
+    TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Kept);
+    TEST_ASSERT_FALSE(b.out->due());  // (that remount was before its try)
+  }
+  // The f_stat failed with the card out, before the boot's first slot, NVS
+  // behind the card (an older NVS put back: the scan's seqs count): the
+  // scan again, then the slot, its seq after the card's.
+  {
+    Box b;
+    for (uint32_t t = 1; t <= 7; ++t) {
+      b.played(t);
+      TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Written);
+    }
+    b.d.nvs.ids.seq = 0;
+    TEST_ASSERT_TRUE(b.d.boot(b.fs));  // the next boot
+    b.out.reset(new pl::Outbox(b.tracker, *b.d.j, b.env));
+    TEST_ASSERT_EQUAL_UINT32(7, b.d.j->lastSeq());
+    TEST_ASSERT_EQUAL_UINT32(2, b.d.j->bootSeq());
+    b.played(8);
+    b.env.stats.assign(b.env.statCalls, OutFile::There);
+    b.env.stats.push_back(OutFile::Failed);
+    b.card.dead = true;
+    TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Kept);
+    b.card.dead = false;
+    b.d.j->remounted();
+    b.out->remounted();
+    TEST_ASSERT_FALSE(b.d.j->ready());  // the scan again
+    TEST_ASSERT_EQUAL_UINT32(1, b.d.j->booted().restarts);
+    for (int guard = 0; guard < 1000 && !b.d.j->scan(5); ++guard) {
+    }
+    TEST_ASSERT_TRUE(b.d.j->ready());
+    TEST_ASSERT_TRUE(b.out->due());
+    const pl::Outbox::Tried t = b.out->writeOne();
+    TEST_ASSERT_TRUE(t.did == Did::Written);
+    TEST_ASSERT_EQUAL_UINT32(8, t.slot.seq);
+    TEST_ASSERT_EQUAL_UINT32(2, t.slot.bootSeq);
+    TEST_ASSERT_EQUAL_size_t(8, b.slots().size());
+  }
+}
+
+// The orderly end's flush: each play once, in order; over at the first the
+// card fails (the rest not asked) and at its deadline.
+void test_the_outbox_flush() {
+  using Stop = pl::Outbox::Flushed::Stop;
+  // A healthy card: all of them.
+  {
+    Box b;
+    for (uint32_t t = 1; t <= 5; ++t) b.played(t);
+    const pl::Outbox::Flushed f = b.out->flush(3000, 128);
+    TEST_ASSERT_EQUAL_UINT32(5, f.waiting);
+    TEST_ASSERT_EQUAL_UINT32(5, f.written);
+    TEST_ASSERT_EQUAL_UINT32(0, f.left);
+    TEST_ASSERT_TRUE(f.stop == Stop::Done);
+    TEST_ASSERT_EQUAL_size_t(5, b.slots().size());
+    const pl::Outbox::Flushed none = b.out->flush(3000, 128);
+    TEST_ASSERT_EQUAL_UINT32(0, none.waiting);
+    TEST_ASSERT_TRUE(none.stop == Stop::Done);
+  }
+  // The ring full (32), a rotation among them: all written.
+  {
+    Box b(20);
+    for (uint32_t t = 1; t <= pl::Tracker::kPending; ++t) b.played(t);
+    TEST_ASSERT_EQUAL_UINT32(pl::Tracker::kPending, b.tracker.pending());
+    const pl::Outbox::Flushed f = b.out->flush(3000, 128);
+    TEST_ASSERT_EQUAL_UINT32(pl::Tracker::kPending, f.written);
+    TEST_ASSERT_TRUE(f.stop == Stop::Done);
+    TEST_ASSERT_EQUAL_size_t(20, slotsOf(b.card.bytes(kPrev)).size());
+    TEST_ASSERT_EQUAL_size_t(12, b.slots().size());
+  }
+  // The card fails the third: two written, the third kept (tried once), the
+  // two behind it not asked.
+  {
+    Box b;
+    for (uint32_t t = 1; t <= 5; ++t) b.played(t);
+    b.env.stats = {OutFile::There, OutFile::There, OutFile::Failed};
+    const pl::Outbox::Flushed f = b.out->flush(3000, 128);
+    TEST_ASSERT_EQUAL_UINT32(2, f.written);
+    TEST_ASSERT_EQUAL_UINT32(0, f.dropped);
+    TEST_ASSERT_EQUAL_UINT32(3, f.left);
+    TEST_ASSERT_TRUE(f.stop == Stop::Card);
+    TEST_ASSERT_EQUAL_UINT32(3, b.env.statCalls);
+    TEST_ASSERT_EQUAL_size_t(2, b.slots().size());
+  }
+  // A play in its 5 s wait gets its try all the same; its third failure
+  // loses it, and ends the flush too.
+  {
+    Box b;
+    for (uint32_t t = 1; t <= 3; ++t) b.played(t);
+    b.card.refuse = true;
+    TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Kept);
+    TEST_ASSERT_FALSE(b.out->due());
+    b.card.refuse = false;
+    pl::Outbox::Flushed f = b.out->flush(3000, 128);
+    TEST_ASSERT_EQUAL_UINT32(3, f.written);
+    TEST_ASSERT_TRUE(f.stop == Stop::Done);
+    for (uint32_t t = 4; t <= 6; ++t) b.played(t);
+    b.card.refuse = true;
+    TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Kept);
+    b.env.now += pl::Outbox::kRetryMs;
+    TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Kept);
+    f = b.out->flush(3000, 128);
+    TEST_ASSERT_EQUAL_UINT32(0, f.written);
+    TEST_ASSERT_EQUAL_UINT32(1, f.dropped);
+    TEST_ASSERT_EQUAL_UINT32(2, f.left);
+    TEST_ASSERT_TRUE(f.stop == Stop::Card);
+    TEST_ASSERT_EQUAL_UINT32(1, b.out->counts().lost);
+  }
+  // What is dropped for good on the way doesn't end it.
+  {
+    Box b;
+    for (uint32_t t = 1; t <= 3; ++t) b.played(t);
+    b.env.stats = {OutFile::There, OutFile::Gone};
+    const pl::Outbox::Flushed f = b.out->flush(3000, 128);
+    TEST_ASSERT_EQUAL_UINT32(2, f.written);
+    TEST_ASSERT_EQUAL_UINT32(1, f.dropped);
+    TEST_ASSERT_EQUAL_UINT32(0, f.left);
+    TEST_ASSERT_TRUE(f.stop == Stop::Done);
+  }
+  // A card that answers, a second a play: the deadline, three written.
+  {
+    Box b;
+    for (uint32_t t = 1; t <= 5; ++t) b.played(t);
+    b.env.perStat = 1000;
+    const uint64_t t0 = b.env.now;
+    const pl::Outbox::Flushed f = b.out->flush(3000, 128);
+    TEST_ASSERT_EQUAL_UINT32(3, f.written);
+    TEST_ASSERT_EQUAL_UINT32(2, f.left);
+    TEST_ASSERT_TRUE(f.stop == Stop::Time);
+    TEST_ASSERT_EQUAL_UINT64(3000, b.env.now - t0);
+  }
+  // The boot's scan not done (a restart right after the boot): what is left
+  // of it first, then the plays; out of time in it, nothing is written and
+  // no play is dropped for a log that isn't ready.
+  {
+    Box b(40);
+    for (uint32_t t = 1; t <= 60; ++t) {
+      b.played(t % 7 + 1);
+      TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Written);
+    }
+    b.d.j.reset(new Journal(b.fs, b.d.nvs, b.d.config()));
+    TEST_ASSERT_TRUE(b.d.j->begin(b.d.id, b.d.acks));
+    b.out.reset(new pl::Outbox(b.tracker, *b.d.j, b.env));
+    TEST_ASSERT_FALSE(b.d.j->ready());
+    b.played(1);
+    b.played(2);
+    pl::Outbox::Flushed f = b.out->flush(3000, 8);
+    TEST_ASSERT_TRUE(b.d.j->ready());
+    TEST_ASSERT_EQUAL_UINT32(2, f.written);
+    TEST_ASSERT_TRUE(f.stop == Stop::Done);
+    TEST_ASSERT_EQUAL_UINT32(62, b.d.j->lastSeq());
+    b.d.j.reset(new Journal(b.fs, b.d.nvs, b.d.config()));
+    TEST_ASSERT_TRUE(b.d.j->begin(b.d.id, b.d.acks));
+    b.out.reset(new pl::Outbox(b.tracker, *b.d.j, b.env));
+    b.played(3);
+    b.env.perLook = 1000;  // a second a piece
+    f = b.out->flush(3000, 8);
+    TEST_ASSERT_FALSE(b.d.j->ready());
+    TEST_ASSERT_EQUAL_UINT32(0, f.written);
+    TEST_ASSERT_EQUAL_UINT32(0, f.dropped);
+    TEST_ASSERT_EQUAL_UINT32(1, f.left);
+    TEST_ASSERT_TRUE(f.stop == Stop::Time);
+    TEST_ASSERT_EQUAL_UINT32(1, b.tracker.pending());
+    // With nothing waiting the scan isn't the flush's to finish.
+    b.tracker.pop();
+    b.env.perLook = 0;
+    f = b.out->flush(3000, 8);
+    TEST_ASSERT_FALSE(b.d.j->ready());
+    TEST_ASSERT_TRUE(f.stop == Stop::Done);
+  }
+}
+
 // device.txt's history (2.15): the vectors' texts read as the majors they
 // list; no key, an empty one, or no file: none. This firmware writes 1.
 void test_device_txt_says_history() {
@@ -1983,6 +3076,13 @@ int main(int, char**) {
   RUN_TEST(test_a_refused_rename_is_tried_again);
   RUN_TEST(test_an_open_the_card_fails_never_empties_the_log);
   RUN_TEST(test_a_question_the_card_fails_frees_no_chain);
+  RUN_TEST(test_a_failed_slot_is_tried_again);
+  RUN_TEST(test_a_failed_sync_on_the_fatfs_card);
+  RUN_TEST(test_a_rotation_tried_again);
+  RUN_TEST(test_a_plays1_that_cant_be_read);
+  RUN_TEST(test_the_outbox_tries_again);
+  RUN_TEST(test_the_outbox_after_a_remount);
+  RUN_TEST(test_the_outbox_flush);
   RUN_TEST(test_the_drop_note);
   RUN_TEST(test_what_a_rotation_counts);
   RUN_TEST(test_the_tracker);

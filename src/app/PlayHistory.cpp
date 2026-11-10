@@ -21,6 +21,7 @@ namespace {
 
 namespace cc = cardcontract;
 using playlog::Journal;
+using playlog::Outbox;
 
 // NVS's part (nvslayout's "plays", schema 6): each write one key, at once.
 class PrefsNvs final : public Journal::Nvs {
@@ -86,8 +87,7 @@ const char* outcomeName(uint8_t o) {
 // what the player's card hold goes by), or it refuses every write until a
 // restart (the guard's writes off). Each ask of a card that is out is a
 // mount tried, a second or two of the SD driver's tries with the loop held,
-// and a slot's would come to "the file isn't there", its play lost for a
-// card that is back a moment later.
+// and a slot's would only fail again.
 bool cardAway() {
   return sectordisk::installed() && (sectordisk::cardOut() || sectordisk::guard().writesOff);
 }
@@ -109,7 +109,8 @@ void PlayHistory::begin(AutoDj* autoDj) {
   c.onOp = onOp;
   c.opCtx = this;
   journal_ = buf_ ? psramNew<Journal>(*library_.fatfs(), prefsNvs, c) : nullptr;
-  if (!tracker_ || !journal_) {
+  outbox_ = tracker_ && journal_ ? psramNew<Outbox>(*tracker_, *journal_, static_cast<Outbox::Env&>(*this)) : nullptr;
+  if (!tracker_ || !journal_ || !outbox_) {
     Serial.println("[plays] no play log: no PSRAM for it");
     return;
   }
@@ -158,6 +159,25 @@ bool PlayHistory::file(uint32_t key, uint32_t track, playlog::PlayFile* out) {
   return true;
 }
 
+// The played file as the card has it now: one f_stat, and whose word its
+// "no" is (the card read and no such file: the play has no slot; the card
+// failing the read: the play waits for another try).
+Outbox::Env::File PlayHistory::stat(const char* path, uint32_t* size, uint32_t* fatTime) {
+  using Seen = tagstore::Fs::Seen;
+  switch (library_.fatfs()->statFile(path, size, fatTime)) {
+    case Seen::There: return File::There;
+    case Seen::Gone: return File::Gone;
+    case Seen::Unknown: break;
+  }
+  return File::Failed;
+}
+
+uint64_t PlayHistory::startedAt(uint64_t startMono, uint8_t* clock) {
+  const uint64_t at = boardclock::at(startMono);
+  *clock = at ? static_cast<uint8_t>(boardclock::source()) : playlog::kClockUnset;
+  return at;
+}
+
 void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, bool cardHeld) {
   if (!active_) return;
   tracker_->tick(look.state, look.positionMs, look.positionKnown, look.positionKnown ? look.durationMs : 0);
@@ -189,58 +209,68 @@ void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, boo
                                           : "");
     return;
   }
-  if (tracker_->pending() && !cardAway()) writeOne();
+  // One slot a pass. A play the card failed waits its 5 s (or the remount)
+  // at the head, and nothing behind it goes before it.
+  if (tracker_->pending() && !cardAway() && outbox_->due()) {
+    tryT0_ = esp_timer_get_time();
+    outbox_->writeOne();
+  }
 }
 
-void PlayHistory::writeOne() {
-  const playlog::Played& p = tracker_->oldest();
-  playlog::Slot s;
-  uint32_t size = 0, fatTime = 0;
-  const int64_t t0 = esp_timer_get_time();
-  if (!library_.fatfs()->stat(p.file.path, &size, &fatTime)) {
-    ++lost_;
-    // (For the line: f_stat's "no" is a read the card failed, too.)
-    const bool gone = library_.fatfs()->look(p.file.path) == tagstore::Fs::Seen::Gone;
-    Serial.printf("[plays] a play of %s NOT written: %s\n", base(p.file.path),
-                  gone ? "the file isn't there" : "the card failed a read on the way to it");
-    tracker_->pop();
-    return;
-  }
-  s.outcome = p.outcome;
-  s.source = p.file.source;
-  s.pauseCount = p.pauses;
-  // Its start: the clock now, less the time since it began (a clock set
-  // during the play still dates it); 0 while unset.
-  s.startedAt = boardclock::at(p.startMono);
-  s.clock = s.startedAt ? static_cast<uint8_t>(boardclock::source()) : playlog::kClockUnset;
-  s.uptimeMs = static_cast<uint32_t>(p.startMono);
-  s.playedMs = p.playedMs;
-  s.durationMs = p.durationMs;
-  s.pathHash = p.file.pathHash;
-  s.size = size;
-  s.fatTime = fatTime;
-  s.generation = p.file.generation;
-  const Journal::Wrote w = journal_->append(s);
-  const float ms = static_cast<float>(esp_timer_get_time() - t0) / 1000.0f;
-  tracker_->pop();
-  if (w == Journal::Wrote::Ok) {
-    ++written_;
-    Serial.printf("[plays] seq %lu: %s, %lu:%02lu played, %u pause%s%s (written in %.1f ms)\n",
+// What a try came to (the Outbox's word, the play still first in line).
+void PlayHistory::tried(const Outbox::Tried& t, const playlog::Played& p) {
+  using Did = Outbox::Did;
+  using Why = Outbox::Why;
+  const float ms = static_cast<float>(esp_timer_get_time() - tryT0_) / 1000.0f;
+  const playlog::Slot& s = t.slot;
+  char nth[24] = "";
+  if (t.tries > 1) snprintf(nth, sizeof(nth), ", at its try %u", static_cast<unsigned>(t.tries));
+  if (t.did == Did::Written) {
+    Serial.printf("[plays] seq %lu: %s, %lu:%02lu played, %u pause%s%s (written in %.1f ms%s)\n",
                   static_cast<unsigned long>(s.seq), outcomeName(s.outcome),
                   static_cast<unsigned long>(s.playedMs / 60000), static_cast<unsigned long>(s.playedMs / 1000 % 60),
                   static_cast<unsigned>(s.pauseCount), s.pauseCount == 1 ? "" : "s",
-                  s.clock == playlog::kClockUnset ? "; the clock unset" : "", ms);
+                  s.clock == playlog::kClockUnset ? "; the clock unset" : "", ms, nth);
+    tryT0_ = esp_timer_get_time();  // (a flush's next try: its own time)
     return;
   }
-  ++lost_;
-  Serial.printf("[plays] seq %lu NOT written (%s; %.1f ms)\n", static_cast<unsigned long>(s.seq),
-                w == Journal::Wrote::Nvs       ? "NVS didn't take the seq"
-                : w == Journal::Wrote::Blocked ? "blocked: no twin name free, a disk check frees one"
-                : w == Journal::Wrote::Off     ? "no log"
-                : journal_->unanswered()       ? "the card failed a question of the log's files"
-                : journal_->unsettled()        ? "the card refused the rename that parts plays.jnl from plays.1.jnl"
-                                               : "the card refused it",
-                ms);
+  // The card's failures: which question it was.
+  const char* card = t.why == Why::Stat          ? "the card failed a read on the way to its file"
+                     : journal_->unanswered()    ? "the card failed a question of the log's files"
+                     : journal_->unsettled()     ? "the card refused the rename that parts plays.jnl from plays.1.jnl"
+                                                 : "the card refused it";
+  // (A seq was taken for it, or it is named by its file.)
+  char what[96];
+  if (t.hasSlot) {
+    snprintf(what, sizeof(what), "seq %lu", static_cast<unsigned long>(s.seq));
+  } else {
+    snprintf(what, sizeof(what), "a play of %.64s", base(p.file.path));
+  }
+  if (t.did == Did::Kept) {
+    Serial.printf("[plays] %s not written yet (%s; %.1f ms): tried again in %lu s or when the card mounts again%s "
+                  "(try %u of %u); the plays behind it wait\n",
+                  what, card, ms, static_cast<unsigned long>(Outbox::kRetryMs / 1000),
+                  t.hasSlot ? ", the same slot" : "", static_cast<unsigned>(t.tries),
+                  static_cast<unsigned>(Outbox::kTries));
+    tryT0_ = esp_timer_get_time();
+    return;
+  }
+  if (t.gaveUp) {
+    Serial.printf("[plays] %s NOT written: the card failed it %u times (the last: %s; %.1f ms): the play is lost\n",
+                  what, static_cast<unsigned>(t.tries), card, ms);
+    tryT0_ = esp_timer_get_time();
+    return;
+  }
+  if (t.why == Why::Gone) {
+    Serial.printf("[plays] %s NOT written: the file isn't there\n", what);
+  } else {
+    Serial.printf("[plays] %s NOT written (%s; %.1f ms)\n", what,
+                  t.why == Why::Nvs       ? "NVS didn't take the seq"
+                  : t.why == Why::Blocked ? "blocked: no twin name free, a disk check frees one"
+                                          : "no log",
+                  ms);
+  }
+  tryT0_ = esp_timer_get_time();  // (a flush's next try: its own time)
 }
 
 void PlayHistory::flush(const char* why) {
@@ -270,17 +300,32 @@ void PlayHistory::flush(const char* why) {
                   waiting == 1 ? "" : "s", cant);
     return;
   }
+  // Each play once, in order, to the first the card fails or the deadline:
+  // the end doesn't wait on a card gone bad.
   const int64_t t0 = esp_timer_get_time();
-  while (!journal_->ready() && !journal_->off()) journal_->scan(kScanSlotsPerPass);
-  while (tracker_->pending()) writeOne();
-  Serial.printf("[plays] before the %s: %lu play%s written in %.0f ms\n", why, static_cast<unsigned long>(waiting),
-                waiting == 1 ? "" : "s", static_cast<float>(esp_timer_get_time() - t0) / 1000.0f);
+  tryT0_ = t0;
+  const Outbox::Flushed f = outbox_->flush(kFlushBudgetMs, kScanSlotsPerPass);
+  const float ms = static_cast<float>(esp_timer_get_time() - t0) / 1000.0f;
+  char left[160] = "";
+  if (f.left) {
+    snprintf(left, sizeof(left), "; %lu NOT written: %s", static_cast<unsigned long>(f.left),
+             f.stop == Outbox::Flushed::Stop::Card
+                 ? "the card failed one, the rest weren't asked"
+                 : !journal_->ready() ? "the boot's scan wasn't done in the flush's time"
+                                      : "the flush's time ran out (a slow card)");
+  }
+  char dropped[48] = "";
+  if (f.dropped) snprintf(dropped, sizeof(dropped), ", %lu dropped", static_cast<unsigned long>(f.dropped));
+  Serial.printf("[plays] before the %s: %lu of %lu play%s written%s in %.0f ms%s\n", why,
+                static_cast<unsigned long>(f.written), static_cast<unsigned long>(f.waiting), f.waiting == 1 ? "" : "s",
+                dropped, ms, left);
 }
 
 void PlayHistory::remounted() {
   if (!active_) return;
   const bool wasReady = journal_->ready();
   journal_->remounted();
+  outbox_->remounted();  // (a play the card failed: tried again now, not in its 5 s)
   if (journal_->ready() || journal_->off()) return;
   booted_ = false;  // (its line again at the scan's end)
   Serial.printf("[plays] the card mounted again %s: the boot's scan begins again (what it read may be partial)\n",
@@ -319,8 +364,14 @@ void PlayHistory::onOp(void* ctx, playlog::Journal::Op op, const char* a, const 
                     "until a rename takes (tried again at each play)\n",
                     base(a), base(b));
       break;
+    case Journal::Op::Unread:
+      Serial.printf("[plays] the rotation couldn't read %s whole in %u tries (a sector the card fails each time): "
+                    "it goes all the same, so the log goes on; its drop note counts the %llu play%s it could see\n",
+                    base(a), static_cast<unsigned>(Journal::kUnreadTries), static_cast<unsigned long long>(n),
+                    n == 1 ? "" : "s");
+      break;
     case Journal::Op::Play:
     case Journal::Op::Lost:
-      break;  // (writeOne()'s line)
+      break;  // (the try's line: tried())
   }
 }

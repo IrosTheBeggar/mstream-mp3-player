@@ -41,7 +41,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  WaveShape  WaveBar  WaveState (the waveform)                 |
               |  MoodFilter (the mood tail, the word, the filter's rules)     |
               |  FilterGrid  FilteredAlbums (the filters' editor, Albums)     |
-              |  PlayLog (the play log: its slot, files, tracker, gate)       |
+              |  PlayLog (the play log: slot, files, tracker, outbox, gate)   |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -455,7 +455,9 @@ The rules that keep it deadlock- and glitch-free:
    the play under way (`app/PlayHistory`, Storage below), and, when the
    pass's audio and list let it (lib/core `PlayLog`'s `WriteGate`) and the
    card isn't held, out of the slot or refusing writes (METADATA.md 3.10),
-   a piece of the boot's scan of the log or one play's slot.
+   a piece of the boot's scan of the log or one play's slot (`Outbox`: a
+   play the card failed waits first in line for its next try, 5 s on or at
+   the card's remount, and nothing is written behind it meanwhile).
 5. A track's learned length, a restart that is due, the `[queue] now at`
    and Repeat One lines, the spike tools, the calibration, the dancer.
 6. **`userInterface->loop()`:** the snapshot (`MainUiHost::snapshot()`,
@@ -1181,10 +1183,12 @@ out:
    from CONNECTED until DISCONNECTED: the library's `connected()` goes
    false as soon as the disconnect starts, the stack's DISCONNECTING,
    0.15-1.5 s before the link is gone): the power status read once more (USB plugged in meanwhile:
-   it stays on), the settings the taps queued saved (`app/NvsLater`), then
+   it stays on), haptics stopped, the settings the taps queued saved
+   (`app/NvsLater`), then
    the play log's open play ended (stopped) and every play waiting written
    (`PlayHistory::flush()`; settings first, `lib/core/OrderlyEnd`: a card
-   gone bad costs the plays alone), haptics stopped,
+   gone bad costs the plays alone, and 3 s at most, the flush ending at
+   the first play the card fails and at its deadline),
    `Serial.flush()`, `M5.Power.powerOff()`
    (the AXP192's power-off bit; M5Unified then deep-sleeps with no wake
    source in case it didn't take). Input or a blocker during step 3's wait
@@ -1441,7 +1445,13 @@ FAT time (`f_stat`), its start from the
 board's clock (`boardclock::at()`; 0 while unset), the seq in NVS
 ("plays"/"seq") first, then one append and its `f_sync`, rotating into
 `plays.1.jnl` at 6,553 slots with a drop note when plays no software read
-go. At boot: NVS's epoch ("plays"/"epoch": a new random one when NVS has
+go. A play the card fails (its `f_stat`, its append) isn't lost at once:
+it stays first in line (`Outbox`) and is tried again 5 s later or at the
+card's remount, three tries in all, the journal's same slot each time
+(`Journal::again()`: its seq, its bytes; one whose write had landed is
+found at the log's end and only synced), nothing behind it written
+meanwhile; 32 plays can wait (a run of tracks of 7 s or less never opens
+the gate). At boot: NVS's epoch ("plays"/"epoch": a new random one when NVS has
 none), the cut-rename rule (`plays.xl1` to `plays.xl9`), then a scan of
 the log's files a few reads a pass (the boot rules for the seq and the
 boot count; the trim of the files the root's ACKS acknowledges whole:
@@ -1451,8 +1461,10 @@ before the boot's first slot the scan again from its start.
 Before every orderly power-off and restart, after the settings the taps
 queued (`lib/core/OrderlyEnd`, main.cpp's `endInOrder()`), the open play
 ends, stopped, and is written (`PlayHistory::flush()`: the idle power-off,
-the CPU speed's restart, `restartNow()`). Log lines: `[plays] ...`, one per
-slot with the time its write took.
+the CPU speed's restart, `restartNow()`): each play waiting once, in
+order, until the card fails one or 3 s are up
+(`PlayHistory::kFlushBudgetMs`), so the end never waits on a card gone
+bad. Log lines: `[plays] ...`, one per slot with the time its write took.
 
 **FatFs itself, for the card's records** (`storage/CardFat`, METADATA.md
 3.8): the validation walk lists `/music` with `f_readdir`, whose `FILINFO`

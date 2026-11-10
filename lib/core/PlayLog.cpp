@@ -132,6 +132,9 @@ bool Journal::begin(const uint8_t deviceId[6], const cc::msmf::Acks& acks) {
   booted_ = Booted();
   blocked_ = newEpoch_ = false;
   lastDropped_ = 0;
+  retry_ = false;
+  owed_ = 0;
+  unreadFails_ = 0;
   std::memcpy(dev_, deviceId, 6);
   acks_ = acks;
   static const uint8_t kNoDevice[6] = {};
@@ -344,6 +347,7 @@ bool Journal::finishScan() {
 }
 
 bool Journal::unread(uint32_t* lost) {
+  *lost = 0;
   tagstore::File* f = fs_.open(kPrevPath, tagstore::Fs::Mode::Read);
   if (!f) return false;
   const uint32_t slots = std::min(f->size(), kFileBytes) / kSlot;
@@ -371,10 +375,43 @@ bool Journal::unread(uint32_t* lost) {
   return ok;
 }
 
-Journal::Wrote Journal::rotate(const uint8_t slot[kSlot], const Slot& play) {
-  uint32_t lost = 0;
+uint32_t Journal::record(uint8_t out[2 * kSlot], bool note) const {
+  uint32_t n = 0;
+  if (note) {
+    // The drop note: the play's own dates (2.20.3), the count owed.
+    Slot play, drop;
+    decode(last_, kSlot, &play);
+    drop.kind = kKindDrop;
+    drop.clock = play.clock;
+    drop.epoch = play.epoch;
+    std::memcpy(drop.deviceId, play.deviceId, 6);
+    drop.startedAt = play.startedAt;
+    drop.bootSeq = play.bootSeq;
+    drop.uptimeMs = play.uptimeMs;
+    drop.playedMs = owed_;
+    encode(drop, out);
+    n = kSlot;
+  }
+  std::memcpy(out + n, last_, kSlot);
+  return n + kSlot;
+}
+
+Journal::Wrote Journal::write(tagstore::File* f, uint32_t at, const uint8_t* rec, uint32_t n, bool note) {
+  bool ok = f && f->write(at, rec, n) && f->sync();
+  if (f) ok = fs_.close(f) && ok;
+  if (!ok) return Wrote::Failed;
+  if (note) {
+    lastDropped_ = owed_;
+    op(Op::Note, nullptr, nullptr, owed_);
+    owed_ = 0;
+  }
+  return Wrote::Ok;
+}
+
+Journal::Wrote Journal::rotate() {
   // (A question the card fails, here or below: nothing removed or renamed
-  // on it. The play is lost, the log as it was.)
+  // on it. The slot isn't written and the log is as it was; again() starts
+  // the rotation over.)
   Asking a(fs_);
   const bool prevThere = a.of(kPrevPath).there;
   if (a.failed()) return Wrote::Failed;
@@ -382,7 +419,18 @@ Journal::Wrote Journal::rotate(const uint8_t slot[kSlot], const Slot& play) {
     // Step 1: what plays.1.jnl holds that no software read, then it goes
     // (or, a twin on its chain, to a twin name: a delete would free the
     // twin's clusters).
-    if (!unread(&lost)) return Wrote::Failed;
+    uint32_t lost = 0;
+    if (unread(&lost)) {
+      unreadFails_ = 0;
+    } else {
+      // A read the card fails now may work at the next try: nothing goes
+      // on it. One that fails every time (a sector gone bad) would hold
+      // every later play back, each paying this read: at the
+      // kUnreadTries-th rotation in a row it goes on with what it read.
+      if (unreadFails_ < kUnreadTries) ++unreadFails_;
+      if (unreadFails_ < kUnreadTries) return Wrote::Failed;
+      op(Op::Unread, kPrevPath, nullptr, lost);
+    }
     const bool sharesChain = shared(a, kPrevPath);
     if (a.failed()) return Wrote::Failed;
     if (!sharesChain) {
@@ -391,41 +439,90 @@ Journal::Wrote Journal::rotate(const uint8_t slot[kSlot], const Slot& play) {
     } else if (!toTwin(a, kPrevPath)) {
       return blocked_ ? Wrote::Blocked : Wrote::Failed;
     }
+    // Its slots are out of the log's names: their count is owed a drop
+    // note from here, whatever the next steps come to (a step the card
+    // fails is tried again, and the note goes with the slot that lands).
+    unreadFails_ = 0;
+    owed_ = lost > 0xFFFFFFFFu - owed_ ? 0xFFFFFFFFu : owed_ + lost;
   }
-  // Step 2.
-  if (!fs_.rename(kLogPath, kPrevPath)) return Wrote::Failed;
+  // Step 2. A rename the card fails may have left both names on one chain
+  // (its two directory writes): the cut-rename rule again before the next
+  // slot, as at a mount.
+  if (!fs_.rename(kLogPath, kPrevPath)) {
+    unsettled_ = true;
+    return Wrote::Failed;
+  }
   op(Op::Rename, kLogPath, kPrevPath, 0);
   // Step 3: the drop note (the play's own dates: 2.20.3), then the play,
   // one write.
-  uint8_t out[2 * kSlot];
-  uint32_t n = 0;
+  uint8_t rec[2 * kSlot];
+  const bool note = owed_ != 0;
+  const uint32_t n = record(rec, note);
   lastDropped_ = 0;
-  if (lost) {
-    Slot note;
-    note.kind = kKindDrop;
-    note.clock = play.clock;
-    note.epoch = play.epoch;
-    std::memcpy(note.deviceId, play.deviceId, 6);
-    note.startedAt = play.startedAt;
-    note.bootSeq = play.bootSeq;
-    note.uptimeMs = play.uptimeMs;
-    note.playedMs = lost;
-    encode(note, out);
-    n = kSlot;
-    lastDropped_ = lost;
-    op(Op::Note, nullptr, nullptr, lost);
+  return write(fs_.open(kLogPath, tagstore::Fs::Mode::Create), 0, rec, n, note);
+}
+
+Journal::Wrote Journal::place(bool again) {
+  if (unsettled_) settle();  // (the rename the card refused, a question it failed: again)
+  if (blocked_ || unsettled_) return blocked_ ? Wrote::Blocked : Wrote::Failed;
+  uint8_t rec[2 * kSlot];
+  tagstore::File* f = fs_.open(kLogPath, tagstore::Fs::Mode::Update);
+  if (!f) {
+    // No plays.jnl opened: a new one only when the card says there is none.
+    // A question it fails says nothing (the open may have been that same
+    // fault), and Create would empty a log that is there, every play not
+    // yet sent with it.
+    const tagstore::Fs::Entry e = fs_.entry(kLogPath);
+    if (e.cardFailed || e.there) return Wrote::Failed;
+    const bool note = owed_ != 0;
+    const uint32_t n = record(rec, note);
+    return write(fs_.open(kLogPath, tagstore::Fs::Mode::Create), 0, rec, n, note);
   }
-  std::memcpy(out + n, slot, kSlot);
-  n += kSlot;
-  tagstore::File* f = fs_.open(kLogPath, tagstore::Fs::Mode::Create);
-  bool ok = f && f->write(0, out, n) && f->sync();
-  if (f) ok = fs_.close(f) && ok;
-  return ok ? Wrote::Ok : Wrote::Failed;
+  const uint32_t slots = f->size() / kSlot;
+  if (again && slots > 0) {
+    // The slot's first try may have landed, only its sync or its close
+    // failing: the log's last slot is then these very bytes (and a drop
+    // note written with it, the slot before). They go over themselves,
+    // where they are, and are synced: one slot, with the sync it was owed.
+    uint8_t tail[2 * kSlot];
+    const uint32_t k = slots > 1 ? 2 : 1;
+    if (!f->read((slots - k) * kSlot, tail, k * kSlot)) {
+      fs_.close(f);  // (a read the card fails says nothing of what landed)
+      return Wrote::Failed;
+    }
+    if (std::memcmp(tail + (k - 1) * kSlot, last_, kSlot) == 0) {
+      bool note = false;
+      if (owed_ != 0 && k == 2) {
+        record(rec, true);
+        note = std::memcmp(tail, rec, kSlot) == 0;
+      }
+      const uint32_t n = record(rec, note);
+      return write(f, slots * kSlot - n, rec, n, note);
+    }
+  }
+  if (slots + 1 > c_.capSlots) {
+    fs_.close(f);
+    return rotate();
+  }
+  // At the slot boundary: a cut append's part slot (under 80 bytes) is
+  // written over, so appends stay on slot boundaries. A drop note a failed
+  // rotation still owes goes before the slot when both fit under the cap.
+  const bool note = owed_ != 0 && slots + 2 <= c_.capSlots;
+  const uint32_t n = record(rec, note);
+  return write(f, slots * kSlot, rec, n, note);
+}
+
+Journal::Wrote Journal::put(bool again) {
+  const Wrote w = place(again);
+  retry_ = w == Wrote::Failed;
+  op(w == Wrote::Ok ? Op::Play : Op::Lost, nullptr, nullptr, cc::get32(last_ + 8));
+  return w;
 }
 
 Journal::Wrote Journal::append(Slot& play) {
   if (state_ != State::Ready) return Wrote::Off;
   appended_ = true;
+  retry_ = false;  // (a slot not tried again by now never is)
   if (seq_ == 0xFFFFFFFFu) {
     // 2.20.4: a seq past 2^32 - 1 takes a new epoch, whose first boot this is.
     if (!newEpochNow() || !nvs_.storeBoots(1)) return Wrote::Nvs;
@@ -441,41 +538,14 @@ Journal::Wrote Journal::append(Slot& play) {
   play.epoch = ids_.epoch;
   std::memcpy(play.deviceId, dev_, 6);
   play.bootSeq = bootSeq_;
-  if (unsettled_) settle();  // (the rename the card refused: again)
-  if (blocked_ || unsettled_) {
-    op(Op::Lost, nullptr, nullptr, seq);
-    return blocked_ ? Wrote::Blocked : Wrote::Failed;
-  }
-  uint8_t raw[kSlot];
-  encode(play, raw);
-  Wrote w = Wrote::Failed;
-  if (tagstore::File* f = fs_.open(kLogPath, tagstore::Fs::Mode::Update)) {
-    const uint32_t slots = f->size() / kSlot;
-    if (slots + 1 > c_.capSlots) {
-      fs_.close(f);
-      w = rotate(raw, play);
-    } else {
-      // At the slot boundary: a cut append's part slot (under 80 bytes) is
-      // written over, so appends stay on slot boundaries.
-      bool ok = f->write(slots * kSlot, raw, kSlot) && f->sync();
-      ok = fs_.close(f) && ok;
-      w = ok ? Wrote::Ok : Wrote::Failed;
-    }
-  } else {
-    // No plays.jnl opened: a new one only when the card says there is none.
-    // A question it fails says nothing (the open may have been that same
-    // fault), and Create would empty a log that is there, every play not
-    // yet sent with it.
-    const tagstore::Fs::Entry e = fs_.entry(kLogPath);
-    if (!e.cardFailed && !e.there) {
-      tagstore::File* n = fs_.open(kLogPath, tagstore::Fs::Mode::Create);
-      bool ok = n && n->write(0, raw, kSlot) && n->sync();
-      if (n) ok = fs_.close(n) && ok;
-      w = ok ? Wrote::Ok : Wrote::Failed;
-    }
-  }
-  op(w == Wrote::Ok ? Op::Play : Op::Lost, nullptr, nullptr, seq);
-  return w;
+  // The slot as the card gets it, at this try and at any after it.
+  encode(play, last_);
+  return put(false);
+}
+
+Journal::Wrote Journal::again() {
+  if (state_ != State::Ready || !retry_) return Wrote::Off;
+  return put(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -551,6 +621,144 @@ void Tracker::pop() {
   if (count_ == 0) return;
   head_ = (head_ + 1) % kPending;
   --count_;
+}
+
+// ---------------------------------------------------------------------------
+// The plays waiting, to the card.
+// ---------------------------------------------------------------------------
+bool Outbox::due() {
+  return tries_ == 0 || remounted_ || env_.monoMs() - triedAt_ >= kRetryMs;
+}
+
+Outbox::Tried Outbox::done(Tried t, const Played& p) {
+  // Written, or dropped for good: the next play's turn.
+  if (t.did == Did::Written) {
+    ++counts_.written;
+  } else {
+    ++counts_.dropped;
+    if (t.gaveUp) ++counts_.lost;
+  }
+  env_.tried(t, p);
+  tracker_.pop();
+  tries_ = 0;
+  taken_ = false;
+  remounted_ = false;
+  return t;
+}
+
+Outbox::Tried Outbox::failed(Tried t, const Played& p) {
+  ++tries_;
+  triedAt_ = env_.monoMs();
+  remounted_ = false;
+  t.tries = tries_;
+  if (tries_ >= kTries) {
+    t.did = Did::Dropped;
+    t.gaveUp = true;
+    return done(t, p);
+  }
+  // At the head still: nothing behind it goes to the card before it.
+  t.did = Did::Kept;
+  env_.tried(t, p);
+  return t;
+}
+
+Outbox::Tried Outbox::writeOne() {
+  Tried t;
+  if (!tracker_.pending()) return t;
+  const Played& p = tracker_.oldest();
+  if (tries_) ++counts_.retries;
+  t.tries = static_cast<uint8_t>(tries_ + 1);
+  Journal::Wrote w = Journal::Wrote::Off;
+  if (!taken_) {
+    // No seq taken for it yet: its file as the card has it now.
+    uint32_t size = 0, fatTime = 0;
+    switch (env_.stat(p.file.path, &size, &fatTime)) {
+      case Env::File::Gone:
+        t.did = Did::Dropped;
+        t.why = Why::Gone;
+        return done(t, p);
+      case Env::File::Failed:
+        t.why = Why::Stat;
+        return failed(t, p);
+      case Env::File::There:
+        break;
+    }
+    Slot s;
+    s.outcome = p.outcome;
+    s.source = p.file.source;
+    s.pauseCount = p.pauses;
+    // Its start: the clock now, less the time since it began (a clock set
+    // during the play still dates it); 0 while unset.
+    s.startedAt = env_.startedAt(p.startMono, &s.clock);
+    if (s.startedAt == 0) s.clock = kClockUnset;
+    s.uptimeMs = static_cast<uint32_t>(p.startMono);
+    s.playedMs = p.playedMs;
+    s.durationMs = p.durationMs;
+    s.pathHash = p.file.pathHash;
+    s.size = size;
+    s.fatTime = fatTime;
+    s.generation = p.file.generation;
+    w = journal_.append(s);
+    slot_ = s;
+    // (Failed: the journal keeps the slot as it encoded it, for again().)
+    taken_ = w == Journal::Wrote::Failed;
+    t.hasSlot = w != Journal::Wrote::Off && w != Journal::Wrote::Nvs;
+  } else {
+    w = journal_.again();
+    t.hasSlot = true;
+  }
+  t.slot = slot_;
+  switch (w) {
+    case Journal::Wrote::Ok:
+      t.did = Did::Written;
+      return done(t, p);
+    case Journal::Wrote::Failed:
+      t.why = Why::Append;
+      return failed(t, p);
+    case Journal::Wrote::Nvs:
+      t.why = Why::Nvs;
+      break;
+    case Journal::Wrote::Blocked:
+      t.why = Why::Blocked;
+      break;
+    case Journal::Wrote::Off:
+      t.why = Why::Off;
+      break;
+  }
+  t.did = Did::Dropped;
+  return done(t, p);
+}
+
+Outbox::Flushed Outbox::flush(uint32_t budgetMs, uint32_t scanSlots) {
+  Flushed f;
+  f.waiting = tracker_.pending();
+  const uint64_t until = env_.monoMs() + budgetMs;
+  // The boot's scan first (no slot before it: the seq and the boot count
+  // are its): what is left of it, while there is time.
+  while (tracker_.pending() && !journal_.ready() && !journal_.off()) {
+    if (env_.monoMs() >= until) {
+      f.stop = Flushed::Stop::Time;
+      break;
+    }
+    journal_.scan(scanSlots);
+  }
+  while (f.stop == Flushed::Stop::Done && tracker_.pending()) {
+    if (env_.monoMs() >= until) {
+      f.stop = Flushed::Stop::Time;
+      break;
+    }
+    const Tried t = writeOne();
+    if (t.did == Did::Written) {
+      ++f.written;
+      continue;
+    }
+    if (t.did == Did::Dropped) ++f.dropped;
+    // The card failed it (kept, or dropped at its last try): the plays
+    // behind it aren't asked.
+    if (t.did == Did::Kept || t.gaveUp) f.stop = Flushed::Stop::Card;
+  }
+  f.left = tracker_.pending();
+  return f;
 }
 
 // ---------------------------------------------------------------------------

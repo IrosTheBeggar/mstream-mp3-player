@@ -101,8 +101,14 @@ public:
   bool remove(const char* path) override;
   bool rename(const char* from, const char* to) override;
   uint32_t firstCluster(const char* path) override;
-  // A file's size and FAT time (f_stat); false: missing.
+  // A file's size and FAT time (f_stat); false: missing, or the card
+  // failed the read (statFile() says which).
   bool stat(const char* path, uint32_t* size, uint32_t* fatTime);
+  // The same f_stat with whose word a "no" is, as look(): There, and its
+  // size and FAT time; Gone, the card was read and no file is there (a
+  // folder at that path too); Unknown, the card failed the read, or its
+  // records of the way there are damaged: nothing is known of the file.
+  Seen statFile(const char* path, uint32_t* size, uint32_t* fatTime);
   // A folder, created if missing (f_mkdir); true if it is there.
   bool ensureDir(const char* path);
   // A read on a card silent past its init (CachedDrive::lookAfterFault()) leaves it marked

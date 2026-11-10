@@ -269,9 +269,14 @@ static uint32_t restartAtMs = 0;
 static constexpr uint32_t kRestartWaitMs = 5000;
 // The end of every orderly restart and power-off (lib/core OrderlyEnd's
 // order): the settings the taps queued, the play log (`why`: its log's
-// words; the open play, stopped; not to another card), then `end`.
+// words; the open play, stopped; not to another card; to the first play
+// the card fails or its deadline, PlayHistory::kFlushBudgetMs: no end
+// waits on a card gone bad), then `end`. The motor is stopped before
+// them, not after: a pattern under way doesn't buzz through the saves
+// (esp_restart() doesn't cut its supply, so it is off before `end` too).
 template <class End>
 static void endInOrder(const char* why, End end) {
+  haptics.stop();
   orderlyend::finish([] { nvslater::flushNow(); }, [why] { playHistory.flush(why); }, end);
 }
 static void restartNow() {
@@ -2881,8 +2886,7 @@ static void stepIdle(uint32_t now, bool input) {
       return;
     }
     Serial.printf("[power] off now (%s)\n", bt.linkUp() ? "the headphones still linked after 3 s" : "headphones let go");
-    endInOrder("power-off", [] {  // (the open play, paused: stopped)
-      haptics.stop();
+    endInOrder("power-off", [] {  // (the motor stopped; the open play, paused: stopped)
       idlePower.powerOff();  // (doesn't return)
     });
   }
@@ -2974,8 +2978,7 @@ static void stepCpuRestart(uint32_t now) {
   Serial.printf("[power] restarting now at %u MHz (%s%s)\n", (unsigned)cpuRestartMhz,
                 linked ? "the headphones still linked after 3 s" : "headphones let go",
                 amp ? "; the speaker's amp still on after 3 s" : "");
-  endInOrder("restart", [] {  // (the open play, paused first: stopped)
-    haptics.stop();
+  endInOrder("restart", [] {  // (the motor stopped; the open play, paused first: stopped)
     powerSettings.restart();  // (doesn't return)
   });
 }

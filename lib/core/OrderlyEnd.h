@@ -10,8 +10,10 @@
 // wait cut short: a tap moments ago is still owed): NVS, quick, with no
 // card in it. Then the play log (PlayHistory::flush(): its scan finished,
 // every play waiting written and synced), which is the card, and can take
-// a while or never come back when the card has gone bad: it costs the
-// plays alone, never a setting. Then the end, which doesn't return.
+// a while when the card has gone bad: it costs the plays alone, never a
+// setting, and not the end either (the flush stops at the first play the
+// card fails and at its deadline: lib/core PlayLog's Outbox::flush()).
+// Then the end, which doesn't return.
 // Portable, host-tested (test_save_later).
 namespace orderlyend {
 

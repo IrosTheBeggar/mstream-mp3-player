@@ -29,10 +29,16 @@
 //     question of the card that it fails (which files are there, on which
 //     chains: Fs::entry()) answers nothing: nothing is removed, renamed
 //     or made on it (settle(), the trim, the rotation, an append's new
-//     plays.jnl);
+//     plays.jnl). A slot the card failed is the same slot when it is tried
+//     again (again(): its seq, its bytes), never a second one;
 //   - Tracker: a play from its start to its end, as PlaybackController
 //     tells them (its Plays) and the backend's position shows it: the time
 //     played (pauses excluded), the pauses, the outcome, the source;
+//   - Outbox: the plays waiting, one at a time to the journal: the played
+//     file's size and time asked of the card, the slot's append; a play
+//     the card failed kept at the head and tried again (three tries in
+//     all), nothing behind it written meanwhile; the orderly end's flush,
+//     each play once, to the first card failure or its deadline;
 //   - WriteGate: when the loop may write a slot (or read the boot's scan):
 //     never in the gapless window (the decoder reading the next track
 //     ahead, until the join has settled), a start's refill, a seek, or a
@@ -129,11 +135,14 @@ public:
   };
   // What the journal did (the firmware's log lines; the tests compare
   // them with tools/playlog.py's ops): a new epoch (n), a play written (n:
-  // its seq) or lost, a rename (a to b), a delete (a, why b: "rotation",
-  // "acknowledged", "twin"), a drop note (n: dropped), a file renamed to a
-  // twin (a to b), no twin name free (a), a rename to a twin the card
-  // refused (a to b; the reference's card refuses none).
-  enum class Op : uint8_t { Epoch, Play, Lost, Rename, Delete, Note, Twin, Blocked, Refused };
+  // its seq) or not written at this try (Lost: again() may still write
+  // it), a rename (a to b), a delete (a, why b: "rotation",
+  // "acknowledged", "twin"), a drop note written (n: dropped), a file
+  // renamed to a twin (a to b), no twin name free (a), a rename to a twin
+  // the card refused (a to b; the reference's card refuses none), a
+  // rotation that went on past a plays.1.jnl it couldn't read whole (a;
+  // n: what it counted of it; the reference's card fails no read).
+  enum class Op : uint8_t { Epoch, Play, Lost, Rename, Delete, Note, Twin, Blocked, Refused, Unread };
   using OnOp = void (*)(void* ctx, Op op, const char* a, const char* b, uint64_t n);
   struct Config {
     // A file's cap in slots: the contract's, or smaller (a test's 4).
@@ -189,10 +198,10 @@ public:
 
   enum class Wrote : uint8_t {
     Ok,       // appended and synced
-    Off,      // no log this boot (or the scan not done)
+    Off,      // no log this boot (or the scan not done); again(): nothing to try again
     Nvs,      // NVS didn't take the seq: not written (2.20.4)
     Blocked,  // no twin name free: lost until a disk check
-    Failed,   // the card refused it (a write, a rename, a full card, the card gone): lost
+    Failed,   // the card failed it (a question, a write, a rename, a full card, the card gone): again() tries it
   };
   // One play's slot at plays.jnl's end (`play`'s own fields as the caller
   // has them: outcome, source, clock, pauseCount, startedAt, uptimeMs,
@@ -205,6 +214,23 @@ public:
   // twin when one shares its chain; plays.jnl renamed plays.1.jnl; a new
   // plays.jnl with the drop note first when the count isn't 0.
   Wrote append(Slot& play);
+  // The last append() again, after the card failed it (Failed): the same
+  // slot, byte for byte as append() made it (its seq; its startedAt as the
+  // clock dated it then), so one play is never two slots that differ. Its
+  // first try may have landed with only its sync or its close failing:
+  // when the log's last slot holds those very bytes they are written over
+  // themselves, where they are, and synced; else the slot goes at the
+  // log's end as an append's does (the rule, the rotation and the drop
+  // note as append()'s). Only the last append()'s slot can be tried again:
+  // Off when it didn't end Failed.
+  Wrote again();
+  // The last append() ended Failed: again() has its slot to try.
+  bool owes() const { return retry_; }
+  // A rotation that can't read plays.1.jnl for its count leaves the log as
+  // it was (a read the card fails now may work at the next try); at the
+  // kUnreadTries-th in a row it goes on with what it could read, so one
+  // sector gone bad in plays.1.jnl doesn't hold every later play back.
+  static constexpr uint8_t kUnreadTries = 3;
 
   uint64_t epoch() const { return ids_.epoch; }
   uint32_t bootSeq() const { return bootSeq_; }
@@ -226,8 +252,13 @@ public:
     uint32_t restarts = 0;    // scans begun again (remounted())
   };
   const Booted& booted() const { return booted_; }
-  // The last rotation's drop note's count (0: none written).
+  // The last rotation's drop note's count (0: it had none to write), the
+  // note written with a later slot for a rotation the card failed too.
   uint32_t lastDropped() const { return lastDropped_; }
+  // What a rotation counted and no drop note has said yet (its step 1 done,
+  // the card failing a later step): the next slot written carries the
+  // note. Held in memory, as the count always was (2.20.5).
+  uint32_t owedDrops() const { return owed_; }
 
 private:
   enum class State : uint8_t { Off, Scanning, Ready };
@@ -264,9 +295,18 @@ private:
   };
   // What a rotation's step 1 counts in plays.1.jnl (2.20.2): its valid
   // play slots ACKS doesn't acknowledge, and the `dropped` of each drop
-  // note no acknowledged play follows. Saturating. False: unreadable.
+  // note no acknowledged play follows. Saturating. False: unreadable (an
+  // open or a read the card failed: *lost is what it counted before that).
   bool unread(uint32_t* lost);
-  Wrote rotate(const uint8_t slot[kSlot], const Slot& play);
+  // The slot in last_ to the card (append()'s and again()'s), and its op.
+  Wrote put(bool again);
+  Wrote place(bool again);
+  Wrote rotate();
+  // [the drop note owed, when `note`][last_] into `out`: its bytes.
+  uint32_t record(uint8_t out[2 * kSlot], bool note) const;
+  // `n` bytes of a record at `at` in `f` (nullptr: its open failed),
+  // synced and closed; a note written is owed no more.
+  Wrote write(tagstore::File* f, uint32_t at, const uint8_t* rec, uint32_t n, bool note);
   bool newEpochNow();
 
   tagstore::Fs& fs_;
@@ -291,6 +331,10 @@ private:
   uint32_t trimmable_ = 0;  // bit i: log file i may go
   Booted booted_;
   uint32_t lastDropped_ = 0;
+  uint8_t last_[kSlot] = {};  // the last append()'s slot, as encoded
+  bool retry_ = false;        // ... ended Failed: again() tries it
+  uint32_t owed_ = 0;         // a rotation's count no drop note has said yet
+  uint8_t unreadFails_ = 0;   // rotations in a row that couldn't read plays.1.jnl whole
 };
 
 // ---------------------------------------------------------------------------
@@ -336,7 +380,8 @@ public:
   // is shut for a start's first 2 s and a track's last 5, so a track of
   // 7 s or less never opens it, and a run of them waits whole: 32 of them
   // (8, before, was an album of interludes). A Played is about 300 bytes,
-  // the ring 10 KB of the Tracker's PSRAM.
+  // the ring 10 KB of the Tracker's PSRAM; all 32 at an orderly end are
+  // well inside its flush's deadline (app/PlayHistory).
   static constexpr uint32_t kPending = 32;
   // The position moves at most this much more than the board's clock
   // between two looks for it to count as played (a seek's jump doesn't).
@@ -378,6 +423,128 @@ private:
   bool wasPlaying_ = false;
   Played ring_[kPending];
   uint32_t head_ = 0, count_ = 0;
+  Counts counts_;
+};
+
+// ---------------------------------------------------------------------------
+// The plays waiting, to the card (2.20.5; docs/METADATA.md 3.10).
+// ---------------------------------------------------------------------------
+// The Tracker's ring, oldest first, one play a call: the played file's size
+// and FAT time asked of the card, the slot built (its start by the board's
+// clock now), the journal's append. What the card fails isn't lost at once:
+// the play stays at the head and is tried again, the journal's same slot
+// (Journal::again(): its seq and its bytes, so a try that had landed isn't
+// a second slot), after kRetryMs or when the card mounts again, kTries
+// times in all; then it is dropped, counted. Nothing behind it is written
+// meanwhile (the log's order is the plays'). A file that isn't on the card
+// any more, NVS refusing the seq, a blocked log and no log drop the play at
+// once, as they always did: another try changes nothing there.
+class Outbox {
+public:
+  enum class Did : uint8_t {
+    Nothing,  // none waiting
+    Written,  // its slot appended and synced
+    Dropped,  // no slot for it, for good
+    Kept,     // the card failed it: at the head still, tried again when due()
+  };
+  enum class Why : uint8_t {
+    None,
+    Gone,     // the played file isn't on the card: dropped
+    Off,      // no log this boot (the journal's Off): dropped
+    Nvs,      // NVS didn't take the seq: dropped
+    Blocked,  // no twin name free: dropped
+    Stat,     // the card failed the question of the played file: kept (dropped at the last try)
+    Append,   // the card failed the slot (the journal's Failed): kept (dropped at the last try)
+  };
+  struct Tried {
+    Did did = Did::Nothing;
+    Why why = Why::None;
+    uint8_t tries = 0;    // of this play so far, this one counted (the card's failures and the last try)
+    bool gaveUp = false;  // Dropped at its kTries-th card failure
+    bool hasSlot = false; // `slot` is the play's (a seq was taken for it)
+    Slot slot;
+  };
+  class Env {
+  public:
+    enum class File : uint8_t {
+      There,   // *size and *fatTime are its
+      Gone,    // the card says it isn't there
+      Failed,  // the card failed the question: nothing is known of it
+    };
+    // The played file as the card has it now (f_stat, at the slot's write:
+    // 2.20.5).
+    virtual File stat(const char* path, uint32_t* size, uint32_t* fatTime) = 0;
+    // The wall time of a play that began at `startMono` (Unix ms; 0 while
+    // the clock is unset), and where the clock's time came from (the
+    // slot's clock byte) in *clock.
+    virtual uint64_t startedAt(uint64_t startMono, uint8_t* clock) = 0;
+    // The board's monotonic ms (the wait before another try, the flush's
+    // deadline).
+    virtual uint64_t monoMs() = 0;
+    // What a try came to, the play still at the head (the firmware's log
+    // line).
+    virtual void tried(const Tried& t, const Played& p) = 0;
+
+  protected:
+    ~Env() = default;
+  };
+  static constexpr uint8_t kTries = 3;
+  static constexpr uint32_t kRetryMs = 5000;
+
+  Outbox(Tracker& tracker, Journal& journal, Env& env) : tracker_(tracker), journal_(journal), env_(env) {}
+
+  // The oldest play waiting, tried (the journal ready: its scan done).
+  Tried writeOne();
+  // No play is held back by a try the card failed, or its wait is over
+  // (kRetryMs since that try; the card mounted again since: remounted()).
+  bool due();
+  // The card mounted again (after the journal's own remounted()): a play
+  // held back is tried at once.
+  void remounted() { remounted_ = true; }
+  // The head play's tries so far (0: none failed).
+  uint8_t tries() const { return tries_; }
+
+  struct Flushed {
+    enum class Stop : uint8_t {
+      Done,  // every play waiting was tried
+      Card,  // the card failed one: the rest not asked (each ask of a card that is going is seconds)
+      Time,  // the deadline: a card too slow, or the boot's scan not done in it
+    };
+    uint32_t waiting = 0;  // when it began
+    uint32_t written = 0;
+    uint32_t dropped = 0;  // for good, each with its line
+    uint32_t left = 0;     // NOT written: waiting still
+    Stop stop = Stop::Done;
+  };
+  // The orderly end's (a restart, a power-off): the boot's scan finished
+  // first, `scanSlots` a piece; then each play waiting tried once, in
+  // order, whatever due() says. It ends at the first the card fails and at
+  // `budgetMs`, so no restart waits on a card that has gone bad longer
+  // than that and the call it was in.
+  Flushed flush(uint32_t budgetMs, uint32_t scanSlots);
+
+  struct Counts {
+    uint32_t written = 0;
+    uint32_t dropped = 0;  // for good, the lost ones among them
+    uint32_t lost = 0;     // ... at their kTries-th card failure
+    uint32_t retries = 0;  // tries after a first that the card failed
+  };
+  const Counts& counts() const { return counts_; }
+
+private:
+  Tried failed(Tried t, const Played& p);
+  Tried done(Tried t, const Played& p);
+
+  Tracker& tracker_;
+  Journal& journal_;
+  Env& env_;
+  // The head play's: its card failures so far, when the last was, whether
+  // a seq was taken for it (the journal has its slot: again()), the slot.
+  uint8_t tries_ = 0;
+  uint64_t triedAt_ = 0;
+  bool remounted_ = false;
+  bool taken_ = false;
+  Slot slot_;
   Counts counts_;
 };
 
