@@ -3194,18 +3194,60 @@ says the firmware keeps one (2.15).
    unknown, and the play isn't sent (item 8).
 8. **Not sent, counted:** a play with no row (the listener's own file),
    one whose file isn't the row's (its size or time differ), one with no
-   start (played before the clock was ever set). The software shows how
-   many, and the drop notes' sum: plays lost before it read them.
+   start (played before the clock was ever set), one mStream's schema
+   refuses (a serverPath over 2,048 characters; a start, a played time
+   or a length above 2^53 − 1: one such play fails the whole call it
+   rides in), and every play of a card made for someone else (item 11).
+   The software shows how many, and the drop notes' sum: plays lost
+   before it read them.
 9. **Where it goes:** only to the server that 2.11's test says is the
    row's own; a peer's play goes to its parent, with the peer's id and a
    track snapshot (mStream's federated plays). A play for a server the
-   software doesn't reach now waits in its store.
+   software doesn't reach now waits in its store. A play that waits
+   there stays until its server has answered it, whatever the posted
+   mark says by then (the device's rotation dropped its slot, or
+   another computer's run settled it): it goes when its server is next
+   read, which answers a play it already has as a duplicate. Only a run
+   that reads another server drops a waiting play the mark has passed.
 10. **The posted mark** of each (deviceId, epoch) rises to the highest
     seq up to which every play on the card is settled (the server
-    answered it: accepted, a duplicate, or rejected) or isn't sent. A
-    play still waiting holds it back; a seq the card doesn't hold (lost,
-    or reserved and never used) doesn't. The next commit's ACKS follow
-    the marks (2.5.6).
+    answered it: accepted, a duplicate, or rejected, but for the two
+    rejections of item 12) or isn't sent (item 8). A play still waiting
+    holds it back; a seq the card doesn't hold (lost, or reserved and
+    never used) doesn't. The next commit's ACKS follow the marks
+    (2.5.6). A look that sends the plays without a sync writes nothing
+    to the card: what it settled stays in the software's store until a
+    sync stores the marks.
+11. **A card made for someone else** (the software's setting, in
+    `state.json`: 2.12.7) sends none of its plays, then or later. Each
+    new play is counted and settled as it is, with a ledger or without:
+    it is never mapped, the mark passes it, and the next commit's ACKS
+    let the device trim it. The plays the log holds when the setting
+    changes, either way, are such a card's too, since nothing tells when
+    a play was made. A card just marked has them settled at its next
+    sync. One made the listener's own again has them settled in the
+    write that changes the setting (the marks, in `state.json`), and
+    keeps the setting when the software can't read the log. The plays
+    the software had mapped before the card was marked wait in its
+    store, hold the mark at the first of them, and go once the card is
+    the listener's own again.
+12. **A rejection that may pass** doesn't settle its play, which waits
+    in the store and holds its mark:
+    - `unknown-track`, mStream's answer for a file its scan hasn't
+      reached as for one it no longer has. It settles the play only
+      when the run read the server's whole listing (the manifest of
+      part 4), no page of it saying a scan was running and its revision
+      the same on every page, and that listing covers the play's library
+      and lacks its path: the file is gone from the server. With no
+      listing read (a 304), one that holds the path, or one of other
+      libraries, the play waits. While a listing read during a scan
+      lacks its path, the play isn't sent at all;
+    - `bad-time`, when the software's own clock finds the start no more
+      than 5 minutes ahead: the server's clock is the one that is off.
+      A start further ahead (the player's clock was wrong) settles;
+    - either for 30 days from the play's start at most, by the
+      software's clock: past that the server's answer settles the play,
+      whatever its reason.
 
 **The post** (proposed, the software's; mStream's
 `POST /api/v1/stats/plays` takes up to 200 plays a call):
@@ -3218,14 +3260,29 @@ says the firmware keeps one (2.15).
 | playedMs, pauseCount | `playedMs`, `pauseCount` |
 | durationMs, when not 0 | `durationMs` |
 | outcome | `outcome`: `completed`, `skipped`, `stopped` |
-| source | `source`: `manual`, `shuffle`, `autodj`; not said: `other` |
+| source | `source`: `manual`, `shuffle`, `autodj`; not said: `device`, or `other` to an mStream older than that source |
 | the card | `client`: `name` `mstream-core2`, `version` the firmware in `device.txt`, `instanceId` the cardId as 16 lowercase hex digits |
 | a peer's row | posted to its parent, with `peerId` and `track` (title, artist and album from T's record; durationMs) |
 
 mStream decides what counts as a play (30 s, or half the track), and
 takes a startedAt at most 5 minutes ahead of its clock and within its
-retention (24 months by default): an older play comes back rejected,
-which settles it.
+retention (24 months by default): an older play comes back rejected
+(`bad-time`), and so does one ahead of its clock; a play whose path it
+has no track for comes back rejected too (`unknown-track`). Item 12
+says which of those settle a play.
+
+**A call mStream refuses whole** (a 400: its validator refuses every
+play of a call for one play's field). The plays the software knows it
+refuses are never sent (item 8). For the rest:
+- a call with a `device` source that an mStream older than that source
+  refuses goes again with `other` in its place, and so do the calls
+  after it;
+- a call refused still goes again one play at a time. A play refused
+  alone is the one at fault, and settles as a play not sent does, once
+  the server has taken another call of the same post. With no call
+  taken the fault may be the request's (the `client` block, a schema
+  the software doesn't know): nothing settles on it, and each play
+  waits, 30 days from its start at most, as item 12's do.
 
 #### 2.20.7 Versions
 
