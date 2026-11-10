@@ -8,6 +8,7 @@
 #include "CardAutoDj.h"
 #include "CardContainer.h"
 #include "LibraryIndex.h"
+#include "MoodFilter.h"
 
 // Auto DJ's join (docs/AUTODJ-INDEX.md 11.2; the engine design's 3.3): the
 // card's AutoDJ index, an open mpdj::Table, turned into this library's
@@ -77,30 +78,32 @@
 // where one sorted array of (hash, track) would pass the 256 KB block limit
 // above about 21,000 tracks.
 //
-// Where the blocks go (setPlacement(): the firmware's, for PSRAM's TLSF,
-// which serves a block from the low end of the closest-fitting free block,
-// the request rounded up a thirty-second first): PSRAM's largest free
-// block is what a library update's new track table needs, so the join
-// takes as little of it as it can. Each block, the kept ones first, goes
-// where the heap puts it when that isn't the largest free block (a smaller
-// one fits it: after a library update, the maps and the runs fit the holes
-// the rebuild left, 2026-10-14). The rest go to that block's top, out of
-// the way: spacers (spacerFor()) hold its bottom while the transient ones
-// are taken, and once they are given back the kept ones go to the room
-// left for them above, the closest fit they have. The runs' hole at the
-// end then joins the free part below the maps, and what is carved later
-// comes from that part's low end: the maps stay next to the rest of the
-// block, and giving them back (release(): a library update's memory check,
-// LibraryUpdate::setGiveBack()) makes one block of it again, as if Auto DJ
-// had never joined. The spacers never leave less than the placement's
-// margin free (the device's 2026-10-14 check: spacers over the whole block
-// took PSRAM's free to 10 KB for a moment at every join, and another task
-// allocating then would have failed): the kept ones taken after the
-// spacers are part of it (155 KB at 19,410 tracks, over the margin), and
-// when they aren't enough the spacers leave the rest of the margin above
-// the blocks. Without the hooks (the host, a heap too full for a spacer):
-// the kept ones first, the transient ones above them, whose hole joins the
-// free tail when they go.
+// Where the blocks go (setPlacement(): the firmware's, for PSRAM's TLSF, which
+// rounds a request up to its size class, by up to a thirty-second of it, and
+// carves that size from the low end of the closest-fitting free block):
+// PSRAM's largest free block is what a library update's new track table needs,
+// so the join takes as little of it as it can. Each block, the kept ones
+// first, goes where the heap puts it when that isn't the largest free block (a
+// smaller one fits it: after a library update, the maps and the runs fit the
+// holes the rebuild left, 2026-10-14). The rest go to that block's top, out of
+// the way: spacers (spacerFor()) hold its bottom while the transient ones are
+// taken, and once they are given back the kept ones go to the room left for
+// them above, the closest fit they have. The runs' hole at the end then joins
+// the free part below the maps, and what is carved later comes from that
+// part's low end: the maps stay next to the rest of the block, and giving them
+// back (release(): a library update's memory check,
+// LibraryUpdate::setGiveBack()) makes one block of it again, as if Auto DJ had
+// never joined. The spacers never leave less than the placement's margin free
+// (the device's 2026-10-14 check: spacers over the whole block took PSRAM's
+// free to 10 KB for a moment at every join, and another task allocating then
+// would have failed): the kept ones taken after the spacers are part of it
+// (155 KB at 19,410 tracks, over the margin), and when they aren't enough the
+// spacers leave the rest of the margin above the blocks. Another task's block
+// can still take that room in those milliseconds: the placement falls short
+// then (Stats::topShort), not the join: the spacers go and the rest go where
+// the heap puts them. Without the hooks (the host, a heap too full for a
+// spacer): the kept ones first, the transient ones above them, whose hole
+// joins the free tail when they go.
 //
 // Aborts: every step() is given the library's index as the loop sees it
 // now (Library::index(): nullptr behind the update step's fence). One that
@@ -137,6 +140,36 @@ inline uint16_t filterArtist(uint32_t f) { return static_cast<uint16_t>(f >> 16)
 // The word of a DJRF record's values (4.4), present clear.
 uint32_t filterWord(uint16_t bpm10, uint8_t camelot, uint8_t flags, uint32_t artistKey);
 
+// Auto DJ's mood filter over the library's words (docs/MOOD-FILTERS.md
+// 6.1): on() with words and an active filter, and then a row is a
+// candidate only when its track passes (the engine's runs hold no other).
+// Off (no mood data, no filter, a level alone): every track passes, and
+// the engine is as without one. The firmware's AutoDj sets it on its copy
+// of the maps; the join never does.
+struct MoodView {
+  const uint16_t* words = nullptr;  // LibraryIndex::moodWords(): a word per track id (null: no mood data)
+  uint32_t tracks = 0;              // ... how many
+  uint16_t q = 0;                   // the filter's 11 bits (5.4), as read: an invalid q is 0
+  moodfilter::Filter f;             // ... unpacked
+  // ... made ready once: passes() runs once a track in the scan and the
+  // passes by id (6.3), where matches() made it again each time. On the
+  // Core2 at 19,413 tracks a jump's pick took 29.5 ms that way, 11.7 ms
+  // this way, idle (MEASURED 2026-11-06, MOOD-FILTERS.md 9.8).
+  moodfilter::Test test;
+  bool active = false;  // f.active()
+  MoodView() = default;
+  MoodView(const uint16_t* w, uint32_t n, uint16_t bits)
+      : words(w),
+        tracks(n),
+        q(moodfilter::valid(bits) ? bits : 0),
+        f(moodfilter::Filter::unpack(bits)),
+        test(moodfilter::Test::of(f)),
+        active(f.active()) {}
+  bool on() const { return words && active; }
+  // A track with no word (beyond `tracks`) passes no active filter.
+  bool passes(uint32_t track) const { return !on() || (track < tracks && test.holds(words[track])); }
+};
+
 // The join's product. The coverage counts are in tracks, so the Auto DJ
 // page's "{mapped} of {tracks} tracks have neighbours" and "BPM {n}% · key
 // {n}%" (withBpm and withKey over mapped) share one denominator.
@@ -150,6 +183,7 @@ struct Maps {
   uint16_t* trackToRow = nullptr;  // kNoRow: no row (nullptr when tracks is 0)
   uint16_t* rowToTrack = nullptr;  // kNoTrack: no track (and filterPresent() false)
   uint32_t* filters = nullptr;     // filterWord()s, present set
+  MoodView mood;                   // off in the join's own; AutoDj::index() sets its copy's
 };
 
 // Sorts n (key, id) pairs, held in two parallel arrays, by key then id: a
@@ -167,14 +201,18 @@ void sortPairs(uint32_t* keys, uint16_t* ids, uint32_t n);
 // track's row up with it (mpdj::Table::rowOf()) while nothing is joined.
 bool trackPathHash(const LibraryIndex& index, uint32_t track, char* path, size_t size, uint64_t* hash);
 
-// The spacer that puts `bytes` at the top of a free block of `largest`
-// bytes under a TLSF heap (ESP-IDF's: a request is served from the low end
-// of a free block whose size class, rounded up a thirty-second, holds it):
-// what is left above the spacer is `bytes`, a thirty-second more and 1 KB
-// (a block's rounding as it is searched for, the headers), or a
-// thirty-second of `largest` when that is more (the spacer's own rounding:
-// its request rounded up must still be within the block). 0: no room for
-// one (the blocks go where the heap puts them).
+// The spacer that puts `bytes` at the top of the free block that `largest`
+// tells of, under a TLSF heap (ESP-IDF's: a request is rounded up to its size
+// class's next boundary, by up to a thirty-second of it, and a block of that
+// size is carved from the low end of a free block that holds it; `largest` is
+// heap_caps_get_largest_free_block()'s answer, the largest request that
+// succeeds, that block rounded down to its class): what stays above the spacer
+// is at least `bytes`, a thirty-second more and 1 KB (each block's rounding, its
+// header and poisoning), wherever in its class the free block is; a request
+// just under a class's boundary, so that it takes no more than that boundary.
+// 0: no room for one (the blocks go where the heap puts them). What stays can
+// be over that by a class of the spacer's and one of the free block's, a
+// sixteenth of it in all: takeSpacers() closes it in when it can.
 size_t spacerFor(size_t largest, size_t bytes);
 
 // The placement's spacers (Join::Placement), over a heap's hooks: spacers
@@ -182,12 +220,11 @@ size_t spacerFor(size_t largest, size_t bytes);
 // (kMax in all): asked again while one comes from another block (TLSF
 // serves a request from the closest size class that holds it), and once
 // more on what is left of the largest while it is still the largest and
-// leaves room for one (a small library's block: its own thirty-second);
-// such a closer fit that lands in another block (a hole the blocks
-// themselves may want) is given back at once, and that's it. None is ever
-// so big that less than `keepFree` bytes stay free (`freeBytes`; nullptr:
-// not asked; a KB more for the headers): a smaller one leaves the
-// difference above the blocks. True:
+// leaves room for one (spacerFor()'s sixteenth); such a closer fit that lands
+// in another block (a hole the blocks themselves may want) is given back at
+// once, and that's it. None is ever so big that, rounded up, it leaves less
+// than `keepFree` bytes free (`freeBytes`; nullptr: not asked; a KB more for
+// the headers): a smaller one leaves the difference above the blocks. True:
 // the largest block's top is what is left; false: none could be placed
 // there. Those taken are held until giveSpacers() frees them.
 struct Spacers {
@@ -219,7 +256,7 @@ public:
     Absent,     // the file failed a check (why()): absent until the next remount or boot
     ReadError,  // a read failed (why() Io): the card's, not the file's; join again once it answers
     Aborted,    // the library index changed or went (or wasn't ready at begin()): everything freed
-    NoMemory,   // an allocation failed: everything freed (random picks; retried after the next build)
+    NoMemory,   // no free block held one, spacers gone: everything freed (random picks; retried after the next build)
     TooBig,     // a library of more than kMaxTracks tracks: the index isn't used
   };
   enum class Phase : uint8_t { None, Hash, Sort, Strings, Filters, Paths, Done, Folders };
@@ -254,6 +291,7 @@ public:
     size_t largestBlock = 0;  // the largest single allocation
     // The placement (setPlacement()), at begin():
     bool placed = false;          // blocks taken at the largest free block's top, under spacers
+    bool topShort = false;        // that top fell short of a block: not placed, the rest where the heap put them
     uint8_t keptElsewhere = 0;    // the kept blocks (of 3) in a smaller free block
     uint32_t runsElsewhere = 0;   // the transient blocks (runs, folders' states, buffer) in a smaller free block
     size_t topBytes = 0;          // the bytes taken at the largest free block's top
@@ -359,11 +397,11 @@ private:
   // it unless that is the largest free block, the rest at its top.
   bool takePlaced(uint32_t n, uint32_t rows);
   // A block where the heap puts it, unless it came from the largest free
-  // block (`largest` before it): given back then, and nullptr (also when
-  // the allocation failed: *failed). A block at least `*minTop` bytes isn't
-  // tried (a smaller one needed the largest, so it would); one that needs
-  // it lowers *minTop.
-  void* probe(size_t bytes, size_t largest, size_t* minTop, bool* failed);
+  // block (`largest` before it, or at `*low`, where the last one from it
+  // was): given back then, and nullptr (also when the allocation failed:
+  // *failed). A block at least `*minTop` bytes isn't tried (a smaller one
+  // needed the largest, so it would); one that needs it lowers *minTop.
+  void* probe(size_t bytes, size_t largest, size_t* minTop, void** low, bool* failed);
   void noteFree();  // Stats::lowestFree
 
   AllocFn alloc_;

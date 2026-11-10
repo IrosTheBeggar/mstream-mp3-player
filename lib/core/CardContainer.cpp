@@ -59,10 +59,14 @@ const char* whyName(Why w) {
     case Why::DjSlotUnused: return "djSlotUnused";
     case Why::DjSlotIndex: return "djSlotIndex";
     case Why::DjSlotOrder: return "djSlotOrder";
+    case Why::WvLayout: return "wvLayout";
+    case Why::WvSlotCrc: return "wvSlotCrc";
+    case Why::WvSlotOrder: return "wvSlotOrder";
     case Why::PendOrder: return "pendOrder";
     case Why::PendPath: return "pendPath";
     case Why::PendOp: return "pendOp";
     case Why::AcksOrder: return "acksOrder";
+    case Why::FatRecords: return "fatRecords";
   }
   return "?";
 }
@@ -77,7 +81,7 @@ Why Container::open(Source& src, const FormatSpec& spec, uint8_t* typeHeader) {
   const uint32_t size = src.size();
   // One small buffer for the common header, the header's CRC and each
   // directory entry: this runs under the card's reads on the loop task's
-  // 8 KB and the card worker's 6 KB (the boot's compaction, gs, gt; with
+  // 8 KB and the card worker's 7.5 KB (the boot's compaction, gs, gt; with
   // the SD driver's log line on top), so its frame stays small (2026-10-09:
   // 672 B with a 256 B buffer and a table of the types seen).
   uint8_t buf[64];
@@ -186,6 +190,7 @@ void Stream::begin(Source* src, uint32_t start, uint32_t end, uint8_t* buf, uint
   bufFill_ = 0;
   crc_ = 0;
   failed_ = !src || !buf || bufLen == 0;
+  readFailed_ = false;
 }
 
 bool Stream::fill() {
@@ -206,6 +211,7 @@ bool Stream::fill() {
   const uint32_t n = left < room ? left : room;
   if (n == 0 || !src_->read(bufAt_, buf_, n)) {
     failed_ = true;
+    readFailed_ = n != 0;
     bufFill_ = 0;
     return false;
   }
@@ -428,6 +434,7 @@ bool unknownMajor(const uint8_t* head, size_t n) {
   const uint32_t magic = get32(head);
   const uint16_t major = get16(head + 4);
   if (magic == kMagicMpdj) return major != kMajorMpdj && major != 1;
+  if (magic == kMagicMpwf) return major != kMajorMpwf;
   if (magic != kMagicMsmf && magic != kMagicMptg && magic != kMagicMspd) return false;
   return major != kMajor;
 }

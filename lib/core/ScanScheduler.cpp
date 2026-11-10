@@ -95,11 +95,11 @@ void ScanScheduler::decide(const In& in, Out& o) const {
   // A list holds work only while it can be seen moving (listHolds()).
   const bool moving = listHolds(in.listMoving, in.dark);
   if (in.running != Job::None) {
-    // One step at a time: it finishes first. A cover under way drops below
-    // the loop while a list moves (Thumbs' rule). A slice of the walk or the
-    // scan is cut after its unit, at 0 meanwhile, once a list moves or a
-    // wait applies (the battery floor too, for the scan): it holds them
-    // within a unit and a pass, as one-unit steps did.
+    // One step at a time: it finishes first. A cover or a waveform's read
+    // under way drops below the loop while a list moves (Thumbs' rule). A
+    // slice of the walk or the scan is cut after its unit, at 0 meanwhile,
+    // once a list moves or a wait applies (the battery floor too, for the
+    // scan): it holds them within a unit and a pass, as one-unit steps did.
     o.wait = Wait::Step;
     const bool sliced = in.running == Job::Walk || in.running == Job::Scan;
     o.cut = sliced && (moving || yieldOf(in) != Wait::None || (in.running == Job::Scan && batteryLow_));
@@ -113,9 +113,14 @@ void ScanScheduler::decide(const In& in, Out& o) const {
   }
   const Source src = sourceOf(in);
   const bool background = in.walk || in.compact || src != Source::None;
-  if (!in.cover && !in.save && !background) return;  // nothing to do
+  if (!in.wave && !in.cover && !in.save && !background) return;  // nothing to do
   if (moving) {
     o.wait = Wait::List;
+    return;
+  }
+  if (in.wave) {
+    o.job = Job::Wave;
+    o.priority = priorityOf(Job::Wave, false);
     return;
   }
   if (in.cover) {
@@ -164,6 +169,7 @@ uint8_t ScanScheduler::priorityOf(Job job, bool listMoving, bool dark) {
   switch (job) {
     case Job::Build: return kHighPriority;
     case Job::Cover:
+    case Job::Wave:
     case Job::Walk: return listMoving ? kLowPriority : kHighPriority;
     case Job::Scan:
     case Job::Compact:
@@ -237,6 +243,7 @@ const char* ScanScheduler::jobName(Job j) {
   switch (j) {
     case Job::None: return "none";
     case Job::Cover: return "cover";
+    case Job::Wave: return "wave";
     case Job::Build: return "build";
     case Job::Save: return "save";
     case Job::Walk: return "walk";

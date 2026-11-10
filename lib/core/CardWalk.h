@@ -359,6 +359,7 @@ public:
     Known,     // D couldn't be read
     Sink,      // the sink refused (the card is full, a write failed)
     Transfer,  // T failed a check as it streamed: walk again without it
+    TransferRead,  // a read of T the card failed: nothing said of T
   };
 
   struct Result {

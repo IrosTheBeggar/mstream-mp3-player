@@ -4,9 +4,11 @@
 #pragma once
 // The tagged synthetic library (lib/core/LibrarySynth's tagged()) as a card:
 // its files, written as tags files (the transfer's T, source 2, or the
-// device's D, source 1, with full records or with status rows only), and
-// its folders' other files for the builder. Host only: std containers.
+// device's D, source 1, with full records or with status rows only, and
+// with mood tails or none), and its folders' other files for the builder.
+// Host only: std containers.
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <map>
@@ -17,6 +19,7 @@
 #include "CardTags.h"
 #include "LibraryBuilder.h"
 #include "LibrarySynth.h"
+#include "MoodFilter.h"
 
 namespace synthcard {
 
@@ -44,7 +47,42 @@ struct File {
   bool picture = false, jpeg = false, noTags = false;
   uint32_t album_ = 0;
   bool albumCover = false;
+  uint8_t moods[mptg::kMoodTailBytes] = {};  // its mood tail (moodTail()): 8 zero bytes, no server row
 };
+
+// A file's mood tail (docs/MOOD-FILTERS.md 5.3), made up from its path
+// alone: a server row for kMoodPct of the files (else 8 zero bytes), each
+// head NULL in kMoodNullPct of the rows, every score near its folder's own
+// (an album leans one way) and kept to 4 places, as mStream stores them
+// (tools/synthtransfer.py's --moods defaults).
+constexpr uint32_t kMoodPct = 92;
+constexpr uint32_t kMoodNullPct = 1;
+inline void moodTail(const std::string& rel, uint8_t out[mptg::kMoodTailBytes]) {
+  auto draw = [](uint64_t* x) {  // splitmix64
+    uint64_t z = (*x += 0x9E3779B97F4A7C15ull);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+    return z ^ (z >> 31);
+  };
+  auto unit = [&](uint64_t* x) { return static_cast<double>(draw(x) >> 11) / 9007199254740992.0; };
+  uint64_t track = cc::fnv1a64(rel.data(), rel.size());
+  if (draw(&track) % 100 >= kMoodPct) {
+    moodfilter::tailOf(nullptr, out);
+    return;
+  }
+  const size_t slash = rel.rfind('/');
+  uint64_t folder = cc::fnv1a64(rel.data(), slash == std::string::npos ? 0 : slash);
+  double scores[moodfilter::kHeads];
+  for (int h = 0; h < moodfilter::kHeads; ++h) {
+    const double centre = 0.1 + 0.8 * unit(&folder);
+    const double x = std::min(1.0, std::max(0.0, centre + 0.4 * (unit(&track) - 0.5)));
+    const bool null = draw(&track) % 100 < kMoodNullPct;
+    scores[h] = null ? std::nan("") : std::round(x * 10000.0) / 10000.0;
+  }
+  moodfilter::tailOf(scores, out);
+}
+// A tail with a server row behind it (PRESENT): one T writes.
+inline bool hasMoods(const File& f) { return (f.moods[0] & 1) != 0; }
 
 struct Card {
   synth::Spec spec;
@@ -86,6 +124,7 @@ inline Card make(const synth::Spec& spec) {
     f.noTags = t.noTags;
     f.album_ = t.albumIndex;
     f.albumCover = t.albumCover;
+    moodTail(f.rel, f.moods);
     c.files.push_back(std::move(f));
   }
   char buf[320];
@@ -109,6 +148,10 @@ struct Write {
   uint32_t generation = 42;
   uint64_t cardId = 0x5EEDC0DE0A1B2C3Dull;
   uint16_t parserVersion = 1;
+  // Full records: each file's mood tail when it has a server row (stride
+  // 80, minor 1; 8 zero bytes for the rest). The software's T only, but
+  // written for any source (the builder takes D's none).
+  bool moods = false;
 };
 
 inline mptg::RecordIn recordOf(const File& f, bool full, int32_t shift, int32_t lengthMs = 0) {
@@ -153,7 +196,14 @@ inline mptg::RecordIn recordOf(const File& f, bool full, int32_t shift, int32_t 
 inline std::vector<uint8_t> tagsFile(const Card& c, const Write& w) {
   std::vector<mptg::RecordIn> recs;
   recs.reserve(c.files.size() + c.albumFolders.size());
-  for (const File& f : c.files) recs.push_back(recordOf(f, w.fullRecords, w.shift, w.lengthMs));
+  bool tails = false;
+  for (const File& f : c.files) {
+    recs.push_back(recordOf(f, w.fullRecords, w.shift, w.lengthMs));
+    if (w.moods && w.fullRecords && hasMoods(f)) {
+      recs.back().moods = f.moods;
+      tails = true;
+    }
+  }
   std::vector<std::string> covers;
   if (w.ownedCovers) {
     covers.reserve(c.albumFolders.size());
@@ -180,6 +230,7 @@ inline std::vector<uint8_t> tagsFile(const Card& c, const Write& w) {
   meta.cardId = w.cardId;
   meta.source = w.source;
   meta.parserVersion = w.parserVersion;
+  meta.minor = tails ? 1 : 0;  // 2.4.5: minor 1 with mood tails
   meta.producer = w.source == mptg::kSourceDevice ? "mstream-player 0.8.0" : "mstream-terminal 0.13.0";
   VecSink out;
   const char* error = nullptr;

@@ -18,6 +18,12 @@
 //     so a slow draw never has the next one due before the loop has
 //     sampled the finger again.
 //
+// Since 0.14.0 ui/ListView draws a scrub's band a row a loop pass (the
+// loop reads the finger and draws the thumb between two rows), so a band
+// no longer holds the loop, and it sets cadenceMs to 0: the next band is
+// due as soon as the last is done. The cadence is what a caller that draws
+// the band in one go still needs.
+//
 // Portable (the caller's millis()), host-tested in test_scrub_pacer.
 class ScrubPacer {
 public:

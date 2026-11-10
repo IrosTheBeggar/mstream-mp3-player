@@ -21,7 +21,24 @@ struct AudioShared {
   // A track is producing and past its pre-roll, so an empty ring now means an
   // audible gap: the outputs count it as an underrun.
   std::atomic<bool> expectingAudio{false};
+  // Every read that came up short, and every break: a run of short reads,
+  // one after another until the ring had what was wanted again, counts
+  // once. The Bluetooth callback asks 128 frames at a time (the speaker
+  // pump 1,024), so `underruns` says how long the audio was missing, not
+  // how often: a 300 ms gap on Bluetooth is ~100 of them, a dip of one
+  // callback 1; `breaks` says how often.
   std::atomic<uint32_t> underruns{0};
+  std::atomic<uint32_t> breaks{0};
+  // An output's read, from its own task (`wasShort` is that task's):
+  // `shortRead` when it asked for audio the ring didn't have while audio
+  // was expected. Counts, never blocks or logs (the Bluetooth callback).
+  void noteRead(bool shortRead, bool* wasShort) {
+    if (shortRead) {
+      underruns.fetch_add(1, std::memory_order_relaxed);
+      if (!*wasShort) breaks.fetch_add(1, std::memory_order_relaxed);
+    }
+    *wasShort = shortRead;
+  }
   // The sleep timer's fade (ENERGY.md section 3): after each output's own
   // gain, one level for both (an output switch during a fade carries it).
   // Target set by the loop task; moved by the output that is the consumer.

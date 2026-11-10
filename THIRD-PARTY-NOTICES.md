@@ -460,8 +460,13 @@ mStream's apps say the same thing; each file's `@@note` says what it took:
 
 - **The mStream mobile app** (mstream_music), `lib/l10n/app_<lang>.arb`,
   branch master at commit bdb174e0ea3a6333f820b593888d5a662c9ae976
-  (2026-09-21). Licence: GPL-3.0 (its LICENSE). Its translations are
-  machine translations (its README says so). Source:
+  (2026-09-21); the mood filters' words (its `mood*` keys and `clear`:
+  the `mood.*` texts; its `autoDjSeedNoMatch` and `moodFilters`:
+  `autodj.status_waits_fit`; its `autoDjMoodTitle`, `autoDjAny` and
+  `autoDjNoMoodData`: Auto DJ's Smart filters row) at commit
+  d17c3fa561da2b7ba3f575d132c3682177b83009 (2026-11-01), which bdb174e
+  predates. Licence: GPL-3.0 (its LICENSE). Its translations are machine
+  translations (its README says so). Source:
   https://github.com/IrosTheBeggar/mstream_music
 - **The mStream terminal player** (mstream-terminal-player, mstream-player
   0.12.1), `locales/<lang>.yml`, chiefly its MP3-player tab's words for

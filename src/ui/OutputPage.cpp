@@ -184,14 +184,16 @@ void OutputPage::home() { ui_.list().scrollTo(0); }
 // stops, as after its 2 minutes; the row offers "Search again" on the wake.
 // A pairing under way keeps the screen lit, so it isn't one, and the
 // search itself holds a lit screen lit (pairSearching(): main.cpp's
-// ScreenControl::Hold): what turns a held screen off still does (the
-// sleep timer's pause, the console's Ps0). Before, it dimmed and went off
-// as ever: the dim screen swallowed the listener's taps as wakes, and the
-// screen going off stopped the search (2026-10-04: three tries to pair).
+// ScreenControl::Hold): what turns a held screen off still does (the PWR
+// key, the sleep timer's pause, the console's Ps0). Before, it dimmed and
+// went off as ever: the dim screen swallowed the listener's taps as wakes,
+// and the screen going off stopped the search (2026-10-04: three tries to
+// pair).
 void OutputPage::screenOff() {
   if (kind_ != PageKind::Pair || !search_.searching()) return;
   if (ui_.state().btLink.phase == BtLink::Phase::Pairing) return;
   search_.stop();
+  searchEnded_ = true;  // (the wake pushes the row as it was: "Searching", its spinner stopped)
   ui_.host().btPairScanPause();  // (the page stays: nothing else is tried until it closes)
   Serial.println("[ui] output: pair screen: the search stopped (the screen went off; tap Search again)");
 }
@@ -319,6 +321,7 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       drawnScreen_ = sc;
       if (changed & 0x0000F0u) list.refreshRow(ScreenOff);
       if (changed & 0x00000Fu) list.refreshRow(Brightness);
+      if (changed & 0x0C0000u) list.refreshRow(ScreenTouch);
       if (changed & 0x000F00u) list.refreshRow(IdleOff);
       if (changed & 0x038000u) list.refreshRow(CpuSpeed);
       if (changed & 0x007000u) list.refreshRow(BtPower);
@@ -337,7 +340,7 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   } else if (kind_ == PageKind::Pair) {
     if (searchEnded_) {
       searchEnded_ = false;
-      list.refreshRow(0);  // "Search again" (tick() stopped it)
+      list.refreshRow(0);  // "Search again" (tick() or screenOff() stopped it)
     }
     if (static_cast<int32_t>(nowMs - nextScanMs_) >= 0) {
       nextScanMs_ = nowMs + kScanPollMs;
@@ -418,10 +421,19 @@ void OutputPage::describe(char* buf, size_t size) const {
   const AppState& s = ui_.state();
   if (kind_ == PageKind::AutoDj) {
     const autodjview::State& d = s.autoDj;
-    snprintf(buf, size, "Output (AutoDj): Auto DJ %s, %s, %u %% (shown %u %%), BPM %s, key %s; the index %s%s",
+    char moods[64];
+    if (!d.moodData) {
+      snprintf(moods, sizeof(moods), "no mood data (Smart filters dim, 0x%03X kept)", static_cast<unsigned>(d.moods));
+    } else if (!d.moodOn) {
+      snprintf(moods, sizeof(moods), "no mood filter (0x%03X)", static_cast<unsigned>(d.moods));
+    } else {
+      snprintf(moods, sizeof(moods), "mood filter 0x%03X, %lu of %lu tracks fit", static_cast<unsigned>(d.moods),
+               static_cast<unsigned long>(d.fit), static_cast<unsigned long>(d.fitOf));
+    }
+    snprintf(buf, size, "Output (AutoDj): Auto DJ %s, %s, %u %% (shown %u %%), BPM %s, key %s, %s; the index %s%s",
              tr(autodjview::rowText(autodjview::rowState(d))),
              d.mode == autodj::Mode::Locked ? "Stay on seed" : "Follow the vibe", static_cast<unsigned>(d.floorPct),
-             static_cast<unsigned>(d.floorShown), d.matchTempo ? "on" : "off", d.matchKey ? "on" : "off",
+             static_cast<unsigned>(d.floorShown), d.matchTempo ? "on" : "off", d.matchKey ? "on" : "off", moods,
              autodjview::indexName(d.index), d.usable ? " (usable)" : " (not usable: the settings dim)");
     return;
   }
@@ -514,6 +526,7 @@ void OutputPage::drawRow(ListView::Row& r) {
     }
     case ScreenOff: drawScreenSetting(r, false); break;
     case Brightness: drawScreenSetting(r, true); break;
+    case ScreenTouch: drawTouchSetting(r); break;
     case IdleOff: drawIdleSetting(r); break;
     case CpuSpeed: drawPowerSetting(r, false); break;
     case BtPower: drawPowerSetting(r, true); break;
@@ -575,7 +588,7 @@ void OutputPage::drawLibraryRow(ListView::Row& r) {
   librarytext::libraryRowTitle(s.libraryTracks, title, sizeof(title));
   if (f.width(Font::Body, title) > pillX - 8 - x) librarytext::libraryRowTitle(s.libraryTracks, title, sizeof(title), 1);
   const bool can = s.libraryRecords && !s.libraryFenced;
-  if (!s.libraryRecords) {
+  if (!s.libraryRecords && !s.libraryHeld) {
     trf(sub, sizeof(sub), S::library_row_no_card);
   } else if (s.libraryFenced) {
     trf(sub, sizeof(sub), S::library_row_updating);
@@ -597,7 +610,8 @@ void OutputPage::drawLibraryRow(ListView::Row& r) {
 uint32_t OutputPage::librarySig(const AppState& s) {
   uint32_t h = 2166136261u;
   for (uint32_t v : {s.libraryTracks, s.libTransfer, s.libDevice, s.libNone,
-                     static_cast<uint32_t>(s.libraryRecords) | static_cast<uint32_t>(s.libraryFenced) << 1}) {
+                     static_cast<uint32_t>(s.libraryRecords) | static_cast<uint32_t>(s.libraryFenced) << 1 |
+                         static_cast<uint32_t>(s.libraryHeld) << 2}) {
     h = (h ^ v) * 16777619u;
   }
   return h;
@@ -607,6 +621,10 @@ uint32_t OutputPage::librarySig(const AppState& s) {
 // a big card).
 void OutputPage::onRescan() {
   const AppState& s = ui_.state();
+  if (s.libraryHeld) {
+    ui_.warn(tr(S::library_row_rescan_unread));
+    return;
+  }
   if (!s.libraryRecords) {
     ui_.warn(tr(S::library_row_rescan_no_card));
     return;
@@ -660,6 +678,31 @@ void OutputPage::drawScreenSetting(ListView::Row& r, bool brightness) {
   const char* value =
       brightness ? ScreenPower::brightnessLabel(s.brightness) : ScreenPower::timeoutLabel(s.screenTimeout);
   valuePill(r, pillX, kSettingPillW, value, col::TXT, r.pressed ? col::BTN_HI : col::BTN);
+}
+
+// "Touch when off" (ScreenPower::OffTouch, saved: ENERGY.md item 2): as the
+// screen's rows, a line for each choice, with its icon drawn here: the dark
+// screen and a fingertip on its corner, with a ring around it when a touch
+// there does something (Wake, Track).
+void OutputPage::drawTouchSetting(ListView::Row& r) {
+  using namespace uitext;
+  using O = ScreenPower::OffTouch;
+  const AppState& s = ui_.state();
+  const O choice = static_cast<O>(ScreenPower::clampOffTouch(s.screenTouch));
+  const int cx = r.x + 22;
+  r.c.drawRoundRect(cx - 10, 12, 18, 13, 2, col::SOFT);
+  r.c.fillRect(cx - 8, 14, 14, 9, col::FAINT);
+  if (choice != O::Nothing) r.c.drawCircle(cx + 5, 26, 7, col::SOFT);
+  r.c.fillCircle(cx + 5, 26, 4, choice == O::Nothing ? col::DIM : col::SOFT);
+  const int x = r.x + 44;
+  const int pillX = r.right - 8 - kSettingPillW;
+  const char* title = tr(S::settings_screen_touch);
+  const char* sub = tr(choice == O::Wake     ? S::settings_screen_touch_wake_sub
+                       : choice == O::Glance ? S::settings_screen_touch_glance_sub
+                                             : S::settings_screen_touch_nothing_sub);
+  ListView::lines(r, x, pillX - 8, title, strlen(title), sub, strlen(sub), col::TXT);
+  valuePill(r, pillX, kSettingPillW, ScreenPower::offTouchLabel(s.screenTouch), col::TXT,
+            r.pressed ? col::BTN_HI : col::BTN);
 }
 
 // "Turn off when idle" (IdlePolicy's choices, saved: ENERGY.md item 4): as
@@ -723,6 +766,7 @@ uint32_t OutputPage::screenSig(const AppState& s) {
   uint32_t h = static_cast<uint32_t>((s.idleOff & 0x0F) << 8 | (s.screenTimeout & 0x0F) << 4 | (s.brightness & 0x0F));
   h |= static_cast<uint32_t>(s.btPower & 0x03) << 12 | (s.btPowerPending ? 1u : 0u) << 14;
   h |= (s.cpuMhz == 240 ? 1u : 0u) << 15 | (s.cpuRunMhz == 240 ? 1u : 0u) << 16 | (s.cpuRunMhz != s.cpuMhz ? 1u : 0u) << 17;
+  h |= static_cast<uint32_t>(s.screenTouch & 0x03) << 18;
   return h;
 }
 
@@ -1035,7 +1079,11 @@ uint32_t OutputPage::autoDjSig(const autodjview::State& d) {
                          static_cast<uint32_t>(d.mode) << 4 | static_cast<uint32_t>(d.hold) << 6 |
                          static_cast<uint32_t>(d.index) << 9 | static_cast<uint32_t>(d.floorPct) << 16 |
                          static_cast<uint32_t>(d.floorShown) << 24;
-  for (uint32_t v : {flags, d.rows, d.mapped, d.tracks, static_cast<uint32_t>(d.bpmPct) << 8 | d.keyPct}) {
+  // The mood filter: Smart filters' value and dimness, the status row's count.
+  const uint32_t moods = static_cast<uint32_t>(d.moods) | static_cast<uint32_t>(d.moodData) << 16 |
+                         static_cast<uint32_t>(d.moodOn) << 17 | static_cast<uint32_t>(d.moodPct) << 24;
+  for (uint32_t v : {flags, d.rows, d.mapped, d.tracks, static_cast<uint32_t>(d.bpmPct) << 8 | d.keyPct, moods, d.fit,
+                     d.fitOf}) {
     h = (h ^ v) * 16777619u;
   }
   // (The language: everything is drawn again when it changes.)
@@ -1062,23 +1110,35 @@ void OutputPage::drawAutoDj(ListView::Row& r) {
       drawAutoDjValue(r, tr(S::autodj_strictness), value, live ? tr(S::autodj_strictness_sub) : needs, live);
       break;
     }
+    case dv::FilterRow: {
+      // "Any", or what is set (beside the title when it fits whole, else on
+      // the second line in the hint's place, cut to it: frames dj-two,
+      // dj-many); dim with no mood data, "No mood data" over the hint, all
+      // of it FAINT (frame dj-nodata: the hint isn't why).
+      char value[filtergrid::kSummaryBytes];
+      dv::filterValue(d, value, sizeof(value));
+      drawAutoDjValue(r, tr(S::mood_smart_filters), value, tr(S::autodj_smart_sub), live, live ? col::DIM : col::FAINT);
+      break;
+    }
     case dv::BpmRow: drawAutoDjSwitch(r, tr(S::autodj_bpm), live ? tr(S::autodj_bpm_sub) : needs, d.matchTempo, live); break;
     case dv::KeyRow:
       drawAutoDjSwitch(r, tr(S::autodj_harmonic), live ? tr(S::autodj_harmonic_sub) : needs, d.matchKey, live);
       break;
     case dv::StatusRow: {
-      // Two lines of Small, no control: why it waits (amber when paused)
-      // over the index, or the index's two.
+      // Two lines of Small, no control: why it waits over the index, or how
+      // many tracks fit the mood filter over the coverage, or the index's
+      // two; the first amber when paused, when nothing fits or 50 or fewer
+      // (statusAmber(): frames dj-waiting, dj-few).
       Fonts& f = Fonts::instance();
       char a[96], b[96];
       dv::statusLines(d, a, sizeof(a), b, sizeof(b));
       const int x = r.x + kAutoDjX;
-      const bool paused = dv::rowState(d) == dv::RowState::Paused;
+      const uint16_t ink = dv::statusAmber(d) ? col::AMBER : col::SOFT;
       if (!b[0]) {
-        f.draw(r.c, Font::Small, a, x, 21, kAutoDjLineW, col::SOFT, r.bg);
+        f.draw(r.c, Font::Small, a, x, 21, kAutoDjLineW, ink, r.bg);
         break;
       }
-      f.draw(r.c, Font::Small, a, x, 12, kAutoDjLineW, paused ? col::AMBER : col::SOFT, r.bg);
+      f.draw(r.c, Font::Small, a, x, 12, kAutoDjLineW, ink, r.bg);
       f.draw(r.c, Font::Small, b, x, 30, kAutoDjLineW, col::DIM, r.bg);
       break;
     }
@@ -1103,9 +1163,9 @@ void OutputPage::drawAutoDjSwitch(ListView::Row& r, const char* title, const cha
 // place (the value is the setting). Dim without the index the same, the
 // hint being why ("needs an Auto DJ index"): a value under its title
 // takes that line too (uitext::autoDjSecondLine(); UiText.h's Output >
-// Auto DJ note says why).
+// Auto DJ note says why). The hint in `hintInk`.
 void OutputPage::drawAutoDjValue(ListView::Row& r, const char* title, const char* value, const char* hint,
-                                 bool live) {
+                                 bool live, uint16_t hintInk) {
   using namespace uitext;
   Fonts& f = Fonts::instance();
   const int x = r.x + kAutoDjX;
@@ -1116,18 +1176,24 @@ void OutputPage::drawAutoDjValue(ListView::Row& r, const char* title, const char
   const bool beside = autoDjValueBeside(tw, vw);
   f.draw(r.c, Font::Body, title, x, 13, beside ? kAutoDjLineW - vw - kAutoDjValueGap : kAutoDjLineW, ink, r.bg);
   if (beside) f.draw(r.c, Font::Small, value, x + kAutoDjLineW, 13, vw, valueInk, r.bg, Fonts::Align::Right);
-  f.draw(r.c, Font::Small, autoDjSecondLine(tw, vw, value, hint), x, 31, kAutoDjLineW, beside ? col::DIM : valueInk,
+  f.draw(r.c, Font::Small, autoDjSecondLine(tw, vw, value, hint), x, 31, kAutoDjLineW, beside ? hintInk : valueInk,
          r.bg);
 }
 
 // A tap on a row of Output > Auto DJ: saved and applied at once (app/AutoDj,
 // NVS); the rows follow from the next snapshot. A dim row: why, as a note.
+// Smart filters: the editor, or its own note (editMoods()), before the
+// index's: it needs mood data, not the index (MOOD-FILTERS.md 4.4).
 void OutputPage::onAutoDjTap(uint32_t row) {
   namespace dv = autodjview;
   if (row >= dv::kPageRows || row == dv::StatusRow) return;
   const AppState& s = ui_.state();
   const dv::State& d = s.autoDj;
   const auto r = static_cast<dv::PageRow>(row);
+  if (r == dv::FilterRow) {
+    editMoods();
+    return;
+  }
   if (!dv::rowLive(r, d)) {
     ui_.warn(tr(S::toast_autodj_needs_index));
     return;
@@ -1163,6 +1229,51 @@ void OutputPage::onAutoDjTap(uint32_t row) {
       break;
     default: break;
   }
+}
+
+// Smart filters (MOOD-FILTERS.md 4.4): behind the library update's fence
+// the row keeps its last value and the count would be old, so wait; no
+// mood data on the card, the dim row's note (amber: sync it from mStream;
+// a saved filter stays, its picks unfiltered: D4); else the editor, from
+// what the snapshot holds (the filter and its count).
+bool OutputPage::editMoods() {
+  const AppState& s = ui_.state();
+  const autodjview::State& d = s.autoDj;
+  if (s.libraryFenced) {
+    ui_.toast(tr(S::library_updating_wait), false);
+    return false;
+  }
+  if (!autodjview::rowLive(autodjview::FilterRow, d)) {
+    Serial.println("[ui] output: Smart filters: no mood data on this card");
+    ui_.warn(tr(S::toast_autodj_no_mood));
+    return false;
+  }
+  editWord_ = d.moods;
+  editFit_ = d.fit;
+  ui_.openFilters(this);
+  return true;
+}
+
+bool OutputPage::setFilterWord(uint16_t q) {
+  // Applied and saved at once ([dj]'s line says so, with its count); the
+  // editor's count is that count. Never refused: nothing is carved.
+  editFit_ = ui_.host().autoDjSetMoods(q);
+  editWord_ = q;
+  return true;
+}
+
+uint32_t OutputPage::filterTotal() { return ui_.state().autoDj.fitOf; }
+
+void OutputPage::onFiltersClosed(bool changed) {
+  if (!changed) return;  // (the band pushed again as it was: Ui::repaintUnder())
+  ui_.host().autoDjMoodSettled();
+  // The page's rows from the snapshot, rendered again (Smart filters' value,
+  // the status row's count), once: drawnAutoDj_ says they are, so update()
+  // draws them again only if the snapshot moves on (the last tap's count
+  // lands in the next one).
+  if (kind_ != PageKind::AutoDj || ui_.list().source() != this) return;
+  ui_.list().refreshAll();
+  drawnAutoDj_ = autoDjSig(ui_.state().autoDj);
 }
 
 // ---- taps ----
@@ -1241,6 +1352,11 @@ ListView::Tap OutputPage::onTapAt(uint32_t row, int x, bool rightEdge) {
     case Brightness:
       // The next level, at once (Max, then Low again).
       ui_.host().setBrightness((s.brightness + 1) % ScreenPower::kBrightnesses);
+      break;
+    case ScreenTouch:
+      // The next choice (after Track, Nothing again), from the next touch
+      // on an off screen.
+      ui_.host().setScreenTouch((s.screenTouch + 1) % ScreenPower::kOffTouches);
       break;
     case IdleOff:
       // The next choice (after Never, 10 min again); the countdown restarts.

@@ -2,14 +2,16 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 // Host unit tests for the card contract's binary files (lib/core/
-// CardContainer, CardTags, CardManifest, CardAutoDj; docs/METADATA.md 2.4-
-// 2.6, 2.12.5, 2.17; docs/AUTODJ-INDEX.md): the C++ writers make the shared
-// golden files (test/fixtures/card/golden, made by tools/card_fixtures.py
-// and tools/mpdj.py, a second implementation) byte for byte from the
-// library descriptions; the readers read them back field for field; every
-// hardening file (each check of 2.4.3 and AUTODJ-INDEX.md 8 broken under
-// valid CRCs) reads as absent for the reason it breaks, and the newer minor
-// as present; truncation at every byte, every flipped bit and a
+// CardContainer, CardTags, CardManifest, CardAutoDj, CardWaves; docs/
+// METADATA.md 2.4-2.6, 2.12.5, 2.17; docs/AUTODJ-INDEX.md; docs/WAVEFORM-
+// INDEX.md): the C++ writers make the shared golden files (test/fixtures/
+// card/golden, made by tools/card_fixtures.py, tools/mpdj.py and tools/
+// mpwf.py, a second implementation) byte for byte from the library
+// descriptions; the readers read them back field for field (tags-moods.bin's
+// mood tails, 2.6.4, against moods.json's rows too); every hardening
+// file (each check of 2.4.3, AUTODJ-INDEX.md 8 and WAVEFORM-INDEX.md 8 broken
+// under valid CRCs) reads as absent for the reason it breaks, and the newer
+// minor as present; truncation at every byte, every flipped bit and a
 // resealed-CRC fuzz pass make every file absent (or, for padding and
 // sections a reader doesn't use, leave it present) with no crash and no
 // endless loop; a large synthetic library round-trips through the walker's
@@ -34,6 +36,8 @@
 #include "CardContract.h"
 #include "CardManifest.h"
 #include "CardTags.h"
+#include "CardWaves.h"
+#include "MoodFilter.h"
 #include "NameKey.h"
 #include "ThumbCache.h"
 
@@ -42,6 +46,7 @@ namespace mptg = cardcontract::mptg;
 namespace msmf = cardcontract::msmf;
 namespace mspd = cardcontract::mspd;
 namespace mpdj = cardcontract::mpdj;
+namespace mpwf = cardcontract::mpwf;
 using minijson::Value;
 using Bytes = std::vector<uint8_t>;
 
@@ -74,12 +79,22 @@ Bytes hexBytes(const std::string& s) {
   return out;
 }
 
+// moods.json's byte strings: space-separated hex.
+Bytes spacedBytes(std::string s) {
+  s.erase(std::remove(s.begin(), s.end(), ' '), s.end());
+  return hexBytes(s);
+}
+
 const char* const kFieldNames[cc::kRunFields] = {"title",     "artist",          "album",     "albumArtist",
                                                  "genre",     "composer",        "titleSort", "artistSort",
                                                  "albumSort", "albumArtistSort", "mbAlbumId", "mbRecordingId"};
 
+// A record's mood tail (2.6.4).
+using Tail = std::array<uint8_t, mptg::kMoodTailBytes>;
+
 // A library description's records as the writer's input (2.3.6 applied to
-// the raw values here, TRUNCATED added: the fixture README's rule).
+// the raw values here, TRUNCATED added: the fixture README's rule; the mood
+// tail derived from mStream's "scores", as each writer derives it).
 struct TagsInput {
   mptg::Meta meta;
   std::vector<std::string> paths, serverPaths, folderPaths;
@@ -87,6 +102,8 @@ struct TagsInput {
   std::vector<mptg::RecordIn> recs;
   std::vector<mptg::LedgerIn> ledgers;
   std::vector<bool> hasLedger;
+  std::vector<Tail> tails;
+  std::vector<bool> hasTail;
   std::vector<mptg::FolderIn> folders;
 
   explicit TagsInput(const Value& d) {
@@ -104,6 +121,8 @@ struct TagsInput {
     recs.resize(n);
     ledgers.resize(n);
     hasLedger.resize(n);
+    tails.resize(n);
+    hasTail.resize(n);
     for (size_t i = 0; i < n; ++i) {
       const Value& r = rs[i];
       paths[i] = r["path"].str();
@@ -160,6 +179,16 @@ struct TagsInput {
         row.convertedTo = static_cast<uint8_t>(l["convertedTo"].u64());
         row.convertKbps = static_cast<uint16_t>(l["convertKbps"].u64());
       }
+      // The scores in MOOD_COLUMNS order, a NULL head as NaN; a null row
+      // (or none) is no row, so no tail.
+      const Value& scores = r["scores"];
+      if (!scores.isNull()) {
+        TEST_ASSERT_EQUAL_size_t(moodfilter::kHeads, scores.size());
+        double s[moodfilter::kHeads];
+        for (int k = 0; k < moodfilter::kHeads; ++k) s[k] = scores[k].isNull() ? std::nan("") : scores[k].num();
+        moodfilter::tailOf(s, tails[i].data());
+        hasTail[i] = true;
+      }
     }
     for (size_t i = 0; i < n; ++i) {
       recs[i].path = paths[i].c_str();
@@ -168,6 +197,7 @@ struct TagsInput {
         ledgers[i].serverPath = serverPaths[i].c_str();
         recs[i].ledger = &ledgers[i];
       }
+      if (hasTail[i]) recs[i].moods = tails[i].data();
     }
     const Value& fs = d["folders"];
     folderPaths.resize(fs.size());
@@ -195,6 +225,11 @@ struct Event {
   std::array<std::string, cc::kRunFields> fields;
   mptg::LedgerRow ledger;
   std::string serverPath;
+  // The record's mood tail as the walker takes it (2.6.4), and its word
+  // (3.4.3): none, zeros and word 0.
+  bool hasTail = false;
+  Tail tail{};
+  uint16_t word = 0;
 };
 
 cc::Why walk(const Bytes& file, uint32_t uses, std::vector<Event>* out, uint32_t scratchBytes = 7 * 1024) {
@@ -220,6 +255,11 @@ cc::Why walk(const Bytes& file, uint32_t uses, std::vector<Event>* out, uint32_t
       if (w.hasLedger()) {
         e.ledger = w.ledger();
         e.serverPath = w.serverPath();
+      }
+      if (const uint8_t* t = w.moodTail()) {
+        e.hasTail = true;
+        std::memcpy(e.tail.data(), t, mptg::kMoodTailBytes);
+        e.word = moodfilter::wordOfTail(t);
       }
     }
     if (out) out->push_back(e);
@@ -252,6 +292,9 @@ void assertSameWalk(const std::vector<Event>& a, const std::vector<Event>& b) {
       TEST_ASSERT_TRUE_MESSAGE(sameRecord(a[i].r, b[i].r), a[i].path.c_str());
       for (int f = 0; f < cc::kRunFields; ++f) TEST_ASSERT_EQUAL_STRING(a[i].fields[f].c_str(), b[i].fields[f].c_str());
       TEST_ASSERT_EQUAL_STRING(a[i].serverPath.c_str(), b[i].serverPath.c_str());
+      TEST_ASSERT_EQUAL_MESSAGE(a[i].hasTail, b[i].hasTail, a[i].path.c_str());
+      TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(a[i].tail.data(), b[i].tail.data(), mptg::kMoodTailBytes, a[i].path.c_str());
+      TEST_ASSERT_EQUAL_HEX16_MESSAGE(a[i].word, b[i].word, a[i].path.c_str());
     }
   }
 }
@@ -275,6 +318,12 @@ cc::Why readAs(const std::string& format, const Bytes& file, bool deviceUses = f
     return w != cc::Why::Ok ? w : t.check(deviceUses ? mpdj::Table::kUseDevice : mpdj::Table::kUseAll, scratch,
                                           sizeof(scratch));
   }
+  if (format == "MPWF") {
+    // The device opens the frame, and checks each slot as it reads it.
+    mpwf::Table t;
+    const cc::Why w = t.open(src);
+    return w != cc::Why::Ok || deviceUses ? w : t.check(scratch, sizeof(scratch));
+  }
   return cc::Why::Magic;
 }
 
@@ -291,7 +340,7 @@ constexpr uint32_t kSrvs = cc::fourcc("SRVS");
 // padding, which readers ignore), MSMF's SRVS (skipped as any optional
 // section the player doesn't know, its CRC unchecked: 2.5.5), and the
 // sections a device-uses reader skips (MPTG's HIDX, ORIG and OSTR; MPDJ's
-// DJSL, whose slots the device checks as it reads them).
+// DJSL and MPWF's WVSL, whose slots the device checks as it reads them).
 std::vector<bool> unchecked(const Bytes& b, bool deviceUses) {
   std::vector<bool> skip(b.size(), false);
   const uint32_t hb = cc::get32(&b[8]), n = cc::get32(&b[12]);
@@ -300,8 +349,8 @@ std::vector<bool> unchecked(const Bytes& b, bool deviceUses) {
     const uint8_t* e = &b[hb + 32 * i];
     const uint32_t type = cc::get32(e), off = cc::get32(e + 8), len = cc::get32(e + 12);
     for (uint32_t k = end; k < off; ++k) skip[k] = true;
-    if (type == kSrvs ||
-        (deviceUses && (type == mptg::kHidx || type == mptg::kOrig || type == mptg::kOstr || type == mpdj::kDjsl)))
+    if (type == kSrvs || (deviceUses && (type == mptg::kHidx || type == mptg::kOrig || type == mptg::kOstr ||
+                                         type == mpdj::kDjsl || type == mpwf::kWvsl)))
       for (uint32_t k = off; k < off + len; ++k) skip[k] = true;
     end = off + len;
   }
@@ -322,9 +371,20 @@ private:
 
 // An MPDJ file's slot CRCs made right again (when its rowCount, slotBytes
 // and DJSL's place make sense), so a mutation inside DJSL meets the slot's
-// list checks (S2-S4), not its CRC (S1). Before reseal(): DJSL's own CRC
-// covers the slots.
+// list checks (S2-S4), not its CRC (S1); an MPWF file's (when WVSL's count and
+// place make sense), so one meets the sort rule (W2), not W1. Before
+// reseal(): the section's own CRC covers the slots.
 void resealSlots(Bytes& b) {
+  if (b.size() >= mpwf::kSlotsOffset && std::memcmp(b.data(), "MPWF", 4) == 0) {
+    const uint8_t* e = &b[mpwf::kHeaderBytes];
+    const uint64_t off = cc::get32(e + 8), rows = cc::get32(e + 16);
+    if (cc::get32(e) != mpwf::kWvsl || off + rows * mpwf::kSlotBytes > b.size()) return;
+    for (uint32_t r = 0; r < rows; ++r) {
+      uint8_t* slot = &b[off + static_cast<uint64_t>(r) * mpwf::kSlotBytes];
+      cc::put32(slot + mpwf::kCrcAt, mpwf::slotCrc(slot, r));
+    }
+    return;
+  }
   if (b.size() < mpdj::kMinHeaderBytes || std::memcmp(b.data(), "MPDJ", 4) != 0) return;
   const uint32_t hb = cc::get32(&b[8]), n = cc::get32(&b[12]);
   const uint32_t rows = cc::get32(&b[40]), sb = cc::get16(&b[50]);
@@ -575,16 +635,41 @@ void assertSameAutoDj(const Bytes& want, const Bytes& got, const char* what) {
   }
 }
 
+// Two MPWF files read the same (the hardening's `same`): every slot's hash,
+// length and bars, found by its hash.
+void assertSameWaves(const Bytes& want, const Bytes& got, const char* what) {
+  cc::MemSource ws(want.data(), static_cast<uint32_t>(want.size())), gs(got.data(), static_cast<uint32_t>(got.size()));
+  mpwf::Table w, g;
+  TEST_ASSERT_EQUAL_STRING_MESSAGE("ok", cc::whyName(w.open(ws)), what);
+  TEST_ASSERT_EQUAL_STRING_MESSAGE("ok", cc::whyName(g.open(gs)), what);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(w.rows(), g.rows(), what);
+  mpwf::Slot s;
+  for (uint32_t r = 0; r < w.rows(); ++r) {
+    const uint8_t* slot = want.data() + mpwf::kSlotsOffset + r * mpwf::kSlotBytes;
+    TEST_ASSERT_EQUAL_INT_MESSAGE(static_cast<int>(mpwf::Lookup::Hit), static_cast<int>(g.find(cc::get64(slot), &s)), what);
+    TEST_ASSERT_EQUAL_MEMORY_MESSAGE(slot, s.bytes, mpwf::kCrcAt, what);
+  }
+}
+
+mpwf::Lookup lookupNamed(const std::string& read) {
+  if (read == "hit") return mpwf::Lookup::Hit;
+  if (read == "miss") return mpwf::Lookup::Miss;
+  if (read == "damaged") return mpwf::Lookup::Damaged;
+  TEST_ASSERT_EQUAL_STRING("broken", read.c_str());
+  return mpwf::Lookup::Broken;
+}
+
 const char* const kAutoDjLibraries[] = {"autodj-00000029", "autodj-small-top", "autodj-small-default", "autodj-tiny",
                                         "autodj-pair",     "autodj-mid",       "autodj-mid-default"};
 
-// The goldens the byte loops run over (not autodj-mid's two: too big for
-// a check per flipped bit).
+// The goldens the byte loops run over (not autodj-mid's two or waves-skew: too
+// big for a check per flipped bit).
 const char* const kGoldenBinaries[] = {"tags-0000002a.bin",    "tags-device.bin",          "tags-00000001.bin",
                                        "tags-00000007.bin",    "manifest.bin",             "manifest-min.bin",
                                        "manifest-servers.bin", "pending.bin",              "autodj-00000029.bin",
                                        "autodj-small-top.bin", "autodj-small-default.bin", "autodj-tiny.bin",
-                                       "autodj-pair.bin"};
+                                       "autodj-pair.bin",      "manifest-waves.bin",       "waves-one.bin",
+                                       "waves-0000002a.bin",   "tags-moods.bin"};
 
 }  // namespace
 
@@ -595,7 +680,7 @@ void tearDown() {}
 // The goldens: the C++ writers make them byte for byte.
 // ---------------------------------------------------------------------------
 void test_golden_tags_files() {
-  for (const char* name : {"tags-0000002a", "tags-device", "tags-00000001"}) {
+  for (const char* name : {"tags-0000002a", "tags-device", "tags-00000001", "tags-moods"}) {
     const Value d = library(name);
     TagsInput in(d);
     VecSink out;
@@ -609,14 +694,16 @@ void test_golden_tags_files() {
 }
 
 void test_golden_tags_writer_is_order_free() {
-  const Value d = library("tags-0000002a");
-  TagsInput in(d);
-  std::mt19937 rng(7);
-  std::shuffle(in.recs.begin(), in.recs.end(), rng);
-  std::shuffle(in.folders.begin(), in.folders.end(), rng);
-  VecSink out;
-  TEST_ASSERT_TRUE(in.write(&out, d["producer"].str(), nullptr));
-  TEST_ASSERT_TRUE(out.b == golden("tags-0000002a.bin"));
+  for (const char* name : {"tags-0000002a", "tags-moods"}) {
+    const Value d = library(name);
+    TagsInput in(d);
+    std::mt19937 rng(7);
+    std::shuffle(in.recs.begin(), in.recs.end(), rng);
+    std::shuffle(in.folders.begin(), in.folders.end(), rng);
+    VecSink out;
+    TEST_ASSERT_TRUE_MESSAGE(in.write(&out, d["producer"].str(), nullptr), name);
+    TEST_ASSERT_TRUE_MESSAGE(out.b == golden(d["file"].str()), name);
+  }
 }
 
 void test_golden_autodj_files() {
@@ -657,6 +744,13 @@ msmf::CompIn compFrom(const Bytes& file) {
     c.generation = info.frame.generation;
     c.fileBytes = info.frame.fileBytes;
     c.headerCrc = info.frame.headerCrc;
+  } else if (formatOf(file) == "MPWF") {
+    mpwf::Table t;
+    TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(t.open(src)));
+    c.kind = cc::kMagicMpwf;
+    c.generation = t.frame().generation;
+    c.fileBytes = t.frame().fileBytes;
+    c.headerCrc = t.frame().headerCrc;
   } else {
     mpdj::Table t;
     TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(t.open(src)));
@@ -702,7 +796,7 @@ Bytes manifestFrom(const Value& d) {
 }
 
 void test_golden_manifests() {
-  for (const char* name : {"manifest", "manifest-min"}) {
+  for (const char* name : {"manifest", "manifest-min", "manifest-waves"}) {
     const Value d = library(name);
     const Bytes got = manifestFrom(d);
     const Bytes want = golden(d["file"].str());
@@ -989,6 +1083,141 @@ void test_tags_device_and_empty() {
   TEST_ASSERT_EQUAL_UINT32(mptg::File::kNotFound, f.find("x.mp3", 5));
 }
 
+// The mood tail (2.6.4, MOOD-FILTERS.md 5.3): every record of tags-moods.bin
+// through the walker (as the device uses it and as the software does) and
+// through File, against its description's scores and moods.json's row of it
+// (moods.json's first rows are its records, named by path); the 72 bytes
+// before the tail as any record's.
+void test_mood_tails_read_back() {
+  const Value d = library("tags-moods");
+  TagsInput in(d);
+  std::map<std::string, size_t> byPath;
+  for (size_t i = 0; i < in.paths.size(); ++i) byPath[in.paths[i]] = i;
+  Value moods;
+  TEST_ASSERT_TRUE(cardfixtures::json("moods.json", &moods));
+  const std::string prefix = "tags-moods.bin's ";
+  std::map<std::string, const Value*> rowOf;
+  const Value& rows = moods["rows"];
+  for (size_t i = 0; i < rows.size(); ++i) {
+    const std::string& note = rows[i]["note"].str();
+    if (note.compare(0, prefix.size(), prefix) != 0) continue;
+    const size_t end = note.find(": ", prefix.size());
+    TEST_ASSERT_TRUE_MESSAGE(end != std::string::npos, note.c_str());
+    rowOf[note.substr(prefix.size(), end - prefix.size())] = &rows[i];
+  }
+  TEST_ASSERT_EQUAL_size_t(in.paths.size(), rowOf.size());
+
+  const Bytes file = golden("tags-moods.bin");
+  cc::MemSource src(file.data(), static_cast<uint32_t>(file.size()));
+  mptg::File f;
+  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(f.open(src)));
+  TEST_ASSERT_EQUAL_UINT16(1, f.info().frame.minor);
+  const cc::Section& recs = f.container().section(mptg::kSecRecs);
+  TEST_ASSERT_EQUAL_UINT32(mptg::kRecsMoodStride, recs.stride);
+  for (uint32_t uses : {0u, mptg::kUseAll}) {
+    std::vector<Event> ev;
+    TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(walk(file, uses, &ev)));
+    size_t records = 0, tails = 0;
+    for (const Event& e : ev) {
+      if (e.folder) continue;
+      ++records;
+      const char* p = e.path.c_str();
+      const auto row = rowOf.find(e.path);
+      const auto at = byPath.find(e.path);
+      TEST_ASSERT_TRUE_MESSAGE(row != rowOf.end() && at != byPath.end(), p);
+      const size_t i = at->second;
+      TEST_ASSERT_TRUE_MESSAGE(sameRecord(in.recs[i].rec, e.r), p);
+      // moods.json's row: its tail (8 zero bytes for no row, which is no
+      // tail) and its word.
+      const Bytes want = spacedBytes((*row->second)["tail"].str());
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(mptg::kMoodTailBytes, want.size(), p);
+      const bool valid = moodfilter::tailValid(want.data());
+      TEST_ASSERT_EQUAL_MESSAGE(valid, e.hasTail, p);
+      TEST_ASSERT_EQUAL_MESSAGE(in.hasTail[i], e.hasTail, p);
+      if (e.hasTail) {
+        TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(want.data(), e.tail.data(), mptg::kMoodTailBytes, p);
+        TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(in.tails[i].data(), e.tail.data(), mptg::kMoodTailBytes, p);
+      }
+      TEST_ASSERT_EQUAL_HEX16_MESSAGE((*row->second)["word"].u64(), e.word, p);
+      // File: the same tail at random, through HIDX; the row's own bytes.
+      const uint32_t r = f.find(e.path.data(), e.path.size());
+      TEST_ASSERT_TRUE_MESSAGE(r != mptg::File::kNotFound, p);
+      uint8_t t[mptg::kMoodTailBytes];
+      TEST_ASSERT_EQUAL_MESSAGE(e.hasTail, f.moodTail(r, t), p);
+      TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(e.tail.data(), t, mptg::kMoodTailBytes, p);
+      TEST_ASSERT_EQUAL_HEX8_ARRAY_MESSAGE(want.data(), &file[recs.offset + r * recs.stride + mptg::kRecsStride],
+                                           mptg::kMoodTailBytes, p);
+      tails += e.hasTail;
+    }
+    TEST_ASSERT_EQUAL_size_t(in.paths.size(), records);
+    TEST_ASSERT_EQUAL_size_t(8, tails);  // all but no-row.flac and cover.jpg: no server row
+  }
+  // MOOD-FILTERS.md 5.7's track, by name.
+  const uint32_t song = f.find("Artist A/song.flac", 18);
+  uint8_t t[mptg::kMoodTailBytes];
+  TEST_ASSERT_TRUE(f.moodTail(song, t));
+  const uint8_t worked[mptg::kMoodTailBytes] = {0x03, 0x3A, 0x46, 0x1D, 0x31, 0xFF, 0x46, 0x00};
+  TEST_ASSERT_EQUAL_HEX8_ARRAY(worked, t, mptg::kMoodTailBytes);
+  TEST_ASSERT_EQUAL_HEX16(0xB313, moodfilter::wordOfTail(t));
+  // Past the last record: none.
+  TEST_ASSERT_FALSE(f.moodTail(f.info().recordCount, t));
+  const uint8_t zeros[mptg::kMoodTailBytes] = {};
+  TEST_ASSERT_EQUAL_HEX8_ARRAY(zeros, t, mptg::kMoodTailBytes);
+  // A file of rows of 72 has none, at random either.
+  const Bytes plain = golden("tags-0000002a.bin");
+  cc::MemSource ps(plain.data(), static_cast<uint32_t>(plain.size()));
+  mptg::File pf;
+  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(pf.open(ps)));
+  TEST_ASSERT_EQUAL_UINT32(mptg::kRecsStride, pf.container().section(mptg::kSecRecs).stride);
+  for (uint32_t r = 0; r < pf.info().recordCount; ++r) TEST_ASSERT_FALSE(pf.moodTail(r, t));
+}
+
+// The mood hardening files (2.17, item 9), and mptg-minor-1: each reads with
+// its golden's records; mptg-moods-longer's rows of 88 bytes keep
+// tags-moods.bin's tails, read by their 80-byte prefix; a tail a reader
+// refuses, and a stride under 80, are no tail, the record whole.
+void test_mood_tails_in_the_hardening_files() {
+  struct Case {
+    const char* file;
+    const char* same;
+    uint32_t stride;
+    size_t tails;
+  };
+  const Case cases[] = {{"mptg-moods-longer.bin", "tags-moods.bin", 88, 8},
+                        {"mptg-tail-invalid.bin", "tags-0000002a.bin", 80, 0},
+                        {"mptg-stride-76.bin", "tags-0000002a.bin", 76, 0},
+                        {"mptg-minor-1.bin", "tags-0000002a.bin", 80, 0}};
+  for (const Case& c : cases) {
+    const std::string s = cardfixtures::bytes(std::string("hardening/") + c.file);
+    const Bytes b(s.begin(), s.end());
+    TEST_ASSERT_TRUE_MESSAGE(!b.empty(), c.file);
+    for (uint32_t uses : {0u, mptg::kUseAll}) {
+      std::vector<Event> got, want;
+      TEST_ASSERT_EQUAL_STRING_MESSAGE("ok", cc::whyName(walk(b, uses, &got)), c.file);
+      TEST_ASSERT_EQUAL_STRING_MESSAGE("ok", cc::whyName(walk(golden(c.same), uses, &want)), c.file);
+      assertSameWalk(want, got);
+      size_t tails = 0;
+      for (const Event& e : got) tails += e.hasTail;
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(c.tails, tails, c.file);
+    }
+    cc::MemSource src(b.data(), static_cast<uint32_t>(b.size()));
+    mptg::File f;
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("ok", cc::whyName(f.open(src)), c.file);
+    const cc::Section& recs = f.container().section(mptg::kSecRecs);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(c.stride, recs.stride, c.file);
+    size_t tails = 0, there = 0;
+    for (uint32_t r = 0; r < f.info().recordCount; ++r) {
+      uint8_t t[mptg::kMoodTailBytes];
+      tails += f.moodTail(r, t);
+      // Bytes after 72 are there in every row (no zeros), taken or not.
+      there += std::any_of(&b[recs.offset + r * recs.stride + mptg::kRecsStride],
+                           &b[recs.offset + r * recs.stride + mptg::kRecsStride] + 4, [](uint8_t x) { return x; });
+    }
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(c.tails, tails, c.file);
+    if (c.tails == 0) TEST_ASSERT_EQUAL_size_t_MESSAGE(f.info().recordCount, there, c.file);
+  }
+}
+
 void test_manifest_read_back() {
   const Bytes man = golden("manifest.bin");
   cc::MemSource src(man.data(), static_cast<uint32_t>(man.size()));
@@ -1049,6 +1278,26 @@ void test_manifest_read_back() {
   TEST_ASSERT_EQUAL_INT(static_cast<int>(cc::Pick::Tmp), static_cast<int>(e.pick));
   TEST_ASSERT_FALSE(e.sameCommit);
   TEST_ASSERT_TRUE(cc::elect(m.candidate(), m.candidate()).sameCommit);
+  // The goldens with no MPWF row have no waves entry; the one with a row names
+  // all three, the waveform index carried from the commit before.
+  TEST_ASSERT_FALSE(m.hasWaves());
+  TEST_ASSERT_FALSE(m2.hasWaves());
+  const Bytes mw = golden("manifest-waves.bin"), waves = golden("waves-0000002a.bin");
+  cc::MemSource ws(mw.data(), static_cast<uint32_t>(mw.size()));
+  msmf::Manifest m3;
+  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(m3.open(ws, scratch, sizeof(scratch))));
+  TEST_ASSERT_EQUAL_UINT32(43, m3.frame().generation);
+  TEST_ASSERT_EQUAL_STRING("tags-0000002a.bin", m3.tagsName());
+  TEST_ASSERT_EQUAL_STRING("autodj-00000029.bin", m3.autoDjName());
+  TEST_ASSERT_TRUE(m3.hasWaves());
+  TEST_ASSERT_EQUAL_STRING("waves-0000002a.bin", m3.wavesName());
+  TEST_ASSERT_EQUAL_UINT32(42, m3.waves().generation);
+  TEST_ASSERT_TRUE(msmf::companionMatches(m3.tags(), ti.frame, ti.source, nullptr));
+  TEST_ASSERT_TRUE(msmf::companionMatches(m3.autoDj(), t.frame(), 0, t.selectionSig()));
+  cc::MemSource vw(waves.data(), static_cast<uint32_t>(waves.size()));
+  mpwf::Table wt;
+  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(wt.open(vw)));
+  TEST_ASSERT_TRUE(msmf::companionMatches(m3.waves(), wt.frame(), 0, nullptr));
 }
 
 void test_autodj_read_back() {
@@ -1289,13 +1538,26 @@ void test_hardening_files() {
     TEST_ASSERT_EQUAL_STRING_MESSAGE(e["why"].c_str(), cc::whyName(why), what.c_str());
     if (e.has("same") && e["format"].str() == "MPDJ") {
       assertSameAutoDj(golden(e["same"].str()), b, what.c_str());
+    } else if (e.has("same") && e["format"].str() == "MPWF") {
+      assertSameWaves(golden(e["same"].str()), b, what.c_str());
     } else if (e.has("same")) {
       std::vector<Event> a, g;
       TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(walk(b, mptg::kUseAll, &a)));
       TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(walk(golden(e["same"].str()), mptg::kUseAll, &g)));
       assertSameWalk(g, a);
     }
-    if (e.has("slot")) {
+    if (e.has("slot") && e["format"].str() == "MPWF") {
+      // One lookup as the device makes it: the frame good, the slots read
+      // as the search asks for them.
+      cc::MemSource src(b.data(), static_cast<uint32_t>(b.size()));
+      mpwf::Table t;
+      TEST_ASSERT_EQUAL_STRING_MESSAGE("ok", cc::whyName(t.open(src)), what.c_str());
+      mpwf::Slot slot;
+      const mpwf::Lookup got = t.find(e["slot"]["hash"].u64(), &slot);
+      TEST_ASSERT_EQUAL_INT_MESSAGE(static_cast<int>(lookupNamed(e["slot"]["read"].str())), static_cast<int>(got),
+                                    what.c_str());
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(e["slot"]["reads"].u64(), t.reads(), what.c_str());
+    } else if (e.has("slot")) {
       // One slot as the device reads it, the join's sections good:
       // damaged (its CRC) or broken (its list, under a good CRC).
       cc::MemSource src(b.data(), static_cast<uint32_t>(b.size()));
@@ -1330,6 +1592,15 @@ void test_hardening_files() {
       TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(m.open(src, scratch, sizeof(scratch))));
       TEST_ASSERT_EQUAL_STRING("tags-0000002a.bin", m.tagsName());
       TEST_ASSERT_EQUAL_STRING("autodj-00000029.bin", m.autoDjName());
+    }
+    // The roots whose MPWF row is bad: T's name read, the root still valid
+    // (test_card_waves reads each row's verdict from the vectors).
+    if (file.compare(0, 11, "msmf-waves-") == 0 && e["why"].str() == "ok") {
+      cc::MemSource src(b.data(), static_cast<uint32_t>(b.size()));
+      uint8_t scratch[128];
+      msmf::Manifest m;
+      TEST_ASSERT_EQUAL_STRING_MESSAGE("ok", cc::whyName(m.open(src, scratch, sizeof(scratch))), what.c_str());
+      TEST_ASSERT_EQUAL_STRING_MESSAGE("tags-0000002a.bin", m.tagsName(), what.c_str());
     }
     // The software's guard reads a newer major on the magic and major alone
     // (MPDJ's major 1, the retired draft, is an older one it replaces).
@@ -1366,7 +1637,7 @@ void test_every_flipped_bit() {
     const Bytes g = golden(name);
     const std::string format = formatOf(g);
     for (bool device : {false, true}) {
-      if (device && format != "MPTG" && format != "MPDJ") continue;
+      if (device && format != "MPTG" && format != "MPDJ" && format != "MPWF") continue;
       const std::vector<bool> skip = unchecked(g, device);
       Bytes b = g;
       for (size_t i = 0; i < b.size(); ++i)
@@ -1387,12 +1658,12 @@ void test_every_flipped_bit() {
 }
 
 void test_fuzz_with_resealed_crcs() {
-  // Random edits of a golden file, its CRCs made right again (an MPDJ
-  // file's slot CRCs too), so the structural checks (not the CRCs) meet
+  // Random edits of a golden file, its CRCs made right again (an MPDJ or
+  // MPWF file's slot CRCs too), so the structural checks (not the CRCs) meet
   // them: whatever comes out, no crash, no endless loop, and a file that
   // still reads is walkable and its random access stays in bounds.
   std::mt19937 rng(20261007);
-  int stillOk = 0, absent = 0, slotLists = 0;
+  int stillOk = 0, absent = 0, slotLists = 0, slotOrders = 0;
   for (const char* name : kGoldenBinaries) {
     const Bytes g = golden(name);
     const std::string format = formatOf(g);
@@ -1417,6 +1688,7 @@ void test_fuzz_with_resealed_crcs() {
       if (w != cc::Why::Ok) {
         ++absent;
         slotLists += w == cc::Why::DjSlotUnused || w == cc::Why::DjSlotIndex || w == cc::Why::DjSlotOrder;
+        slotOrders += w == cc::Why::WvSlotOrder;
         continue;
       }
       ++stillOk;
@@ -1447,13 +1719,26 @@ void test_fuzz_with_resealed_crcs() {
           for (uint32_t j = 0; j < c; ++j) TEST_ASSERT_TRUE(entries[j].row < t.rowCount());
         }
         for (const auto& ph : djphOf(b)) TEST_ASSERT_EQUAL_UINT32(ph.second, t.rowOf(ph.first));
+      } else if (format == "MPWF") {
+        // Every row finds itself.
+        cc::MemSource src(b.data(), static_cast<uint32_t>(b.size()));
+        mpwf::Table t;
+        TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(t.open(src)));
+        mpwf::Slot s;
+        for (uint32_t r = 0; r < t.rows(); ++r) {
+          const uint8_t* slot = b.data() + mpwf::kSlotsOffset + r * mpwf::kSlotBytes;
+          TEST_ASSERT_EQUAL_INT(static_cast<int>(mpwf::Lookup::Hit), static_cast<int>(t.find(cc::get64(slot), &s)));
+          TEST_ASSERT_EQUAL_MEMORY(slot, s.bytes, mpwf::kSlotBytes);
+        }
       }
     }
   }
   TEST_ASSERT_TRUE(absent > 0);
   TEST_ASSERT_TRUE(stillOk > 0);  // edits inside tag text are harmless
-  // The slots' CRCs made right, edits in DJSL reach the lists' own checks.
+  // The slots' CRCs made right, edits in DJSL reach the lists' own checks,
+  // and edits in WVSL the sort rule.
   TEST_ASSERT_TRUE(slotLists > 0);
+  TEST_ASSERT_TRUE(slotOrders > 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -1463,7 +1748,8 @@ void test_walker_with_small_buffers_and_a_big_library() {
   // About 3,000 records in a tree up to 7 deep, names of every length a
   // path allows and multi-byte UTF-8, written in random order, walked
   // through the smallest scratch: the same as through a large one, in
-  // canonical order, every HIDX lookup back to its record.
+  // canonical order, every HIDX lookup back to its record. Then again with
+  // mood tails (2.6.4), rows of 80: each record's tail its own.
   std::mt19937 rng(42);
   const char* syllables[] = {"a", "B", "c d", "\xC3\xA9", "x-", "Zz", "0", "\xE6\x97\xA5", " ", "..q", "_"};
   auto name = [&](size_t maxLen) {
@@ -1507,31 +1793,68 @@ void test_walker_with_small_buffers_and_a_big_library() {
   const char* error = nullptr;
   TEST_ASSERT_TRUE_MESSAGE(mptg::write(out, meta, recs.data(), recs.size(), nullptr, 0, nullptr, 0, nullptr, &error),
                            error ? error : "");
-  std::vector<Event> small, large;
-  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(walk(out.b, mptg::kUseAll, &small, mptg::Walker::kMinScratch)));
-  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(walk(out.b, mptg::kUseAll, &large, 64 * 1024)));
-  assertSameWalk(large, small);
-  size_t records = 0;
-  const Event* prev = nullptr;
-  for (const Event& e : small) {
-    if (e.folder) continue;
-    ++records;
-    if (prev) TEST_ASSERT_TRUE(cc::compareFilePaths(prev->path.c_str(), e.path.c_str()) < 0);
-    prev = &e;
-    const size_t i = unique.at(e.path);
-    TEST_ASSERT_EQUAL_UINT32(i, e.r.size);
-    TEST_ASSERT_EQUAL_STRING(titles[i].c_str(), e.fields[cc::kTitle].c_str());
+  // Then the same library as a transfer's with mood tails on most records
+  // (rows of 80; the rest no row), some heads NULL.
+  std::vector<Tail> tails(paths.size());
+  std::vector<bool> hasTail(paths.size());
+  for (size_t i = 0; i < paths.size(); ++i) {
+    if (i % 13 == 0) continue;
+    double s[moodfilter::kHeads];
+    for (double& v : s) v = rng() % 17 == 0 ? std::nan("") : static_cast<double>(rng() % 10001) / 10000.0;
+    moodfilter::tailOf(s, tails[i].data());
+    hasTail[i] = true;
   }
-  TEST_ASSERT_EQUAL_size_t(paths.size(), records);
-  cc::MemSource src(out.b.data(), static_cast<uint32_t>(out.b.size()));
-  mptg::File f;
-  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(f.open(src)));
-  for (size_t i = 0; i < paths.size(); i += 7) {
-    const uint32_t r = f.find(paths[i].data(), paths[i].size());
-    TEST_ASSERT_TRUE(r != mptg::File::kNotFound);
-    mptg::Record rec;
-    TEST_ASSERT_TRUE(f.record(r, &rec));
-    TEST_ASSERT_EQUAL_UINT32(i, rec.size);
+  std::vector<mptg::RecordIn> moodRecs = recs;
+  for (size_t i = 0; i < paths.size(); ++i)
+    if (hasTail[i]) moodRecs[i].moods = tails[i].data();
+  mptg::Meta moodMeta = meta;
+  moodMeta.source = mptg::kSourceTransfer;
+  moodMeta.minor = 1;
+  VecSink moodOut;
+  TEST_ASSERT_TRUE_MESSAGE(mptg::write(moodOut, moodMeta, moodRecs.data(), moodRecs.size(), nullptr, 0, nullptr, 0,
+                                       nullptr, &error),
+                           error ? error : "");
+
+  for (const Bytes* file : {&out.b, &moodOut.b}) {
+    const bool moods = file == &moodOut.b;
+    std::vector<Event> small, large;
+    TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(walk(*file, mptg::kUseAll, &small, mptg::Walker::kMinScratch)));
+    TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(walk(*file, mptg::kUseAll, &large, 64 * 1024)));
+    assertSameWalk(large, small);
+    size_t records = 0, withTails = 0;
+    const Event* prev = nullptr;
+    for (const Event& e : small) {
+      if (e.folder) continue;
+      ++records;
+      if (prev) TEST_ASSERT_TRUE(cc::compareFilePaths(prev->path.c_str(), e.path.c_str()) < 0);
+      prev = &e;
+      const size_t i = unique.at(e.path);
+      TEST_ASSERT_EQUAL_UINT32(i, e.r.size);
+      TEST_ASSERT_EQUAL_STRING(titles[i].c_str(), e.fields[cc::kTitle].c_str());
+      TEST_ASSERT_EQUAL(moods && hasTail[i], e.hasTail);
+      if (e.hasTail) {
+        TEST_ASSERT_EQUAL_HEX8_ARRAY(tails[i].data(), e.tail.data(), mptg::kMoodTailBytes);
+        TEST_ASSERT_EQUAL_HEX16(moodfilter::wordOfTail(tails[i].data()), e.word);
+      }
+      withTails += e.hasTail;
+    }
+    TEST_ASSERT_EQUAL_size_t(paths.size(), records);
+    TEST_ASSERT_EQUAL_size_t(moods ? paths.size() - (paths.size() + 12) / 13 : 0, withTails);
+    cc::MemSource src(file->data(), static_cast<uint32_t>(file->size()));
+    mptg::File f;
+    TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(f.open(src)));
+    TEST_ASSERT_EQUAL_UINT32(moods ? mptg::kRecsMoodStride : mptg::kRecsStride,
+                             f.container().section(mptg::kSecRecs).stride);
+    for (size_t i = 0; i < paths.size(); i += 7) {
+      const uint32_t r = f.find(paths[i].data(), paths[i].size());
+      TEST_ASSERT_TRUE(r != mptg::File::kNotFound);
+      mptg::Record rec;
+      TEST_ASSERT_TRUE(f.record(r, &rec));
+      TEST_ASSERT_EQUAL_UINT32(i, rec.size);
+      uint8_t t[mptg::kMoodTailBytes];
+      TEST_ASSERT_EQUAL(moods && hasTail[i], f.moodTail(r, t));
+      if (moods && hasTail[i]) TEST_ASSERT_EQUAL_HEX8_ARRAY(tails[i].data(), t, mptg::kMoodTailBytes);
+    }
   }
 }
 
@@ -1570,6 +1893,64 @@ void test_walker_cuts_a_long_server_path_at_a_code_point() {
   TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(f.serverPath(row.serverPath, whole, sizeof(whole), &len)));
   TEST_ASSERT_EQUAL_STRING(server.c_str(), whole);
   TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(mptg::check(src, mptg::kUseAll, scratch.data(), 1024)));
+}
+
+void test_writer_writes_a_tail_only_with_moods() {
+  // 2.6.4's Writing: rows of 80 when a record has a tail, a record without
+  // one 8 zero bytes; else rows of 72, byte for byte as before. The minor
+  // follows (2.4.5): 1 with tails, else 0.
+  const uint8_t worked[mptg::kMoodTailBytes] = {0x03, 0x3A, 0x46, 0x1D, 0x31, 0xFF, 0x46, 0x00};
+  mptg::RecordIn a, b;
+  a.path = "Artist A/song.flac";
+  a.rec.size = 7;
+  b.path = "Artist A/cover.jpg";
+  b.rec.size = 8;
+  mptg::Meta meta;
+  meta.source = mptg::kSourceTransfer;
+  VecSink plain;
+  std::vector<mptg::RecordIn> recs = {a, b};
+  TEST_ASSERT_TRUE(mptg::write(plain, meta, recs.data(), recs.size(), nullptr, 0, nullptr, 0, nullptr, nullptr));
+  recs[0].moods = worked;
+  meta.minor = 1;
+  VecSink moods;
+  TEST_ASSERT_TRUE(mptg::write(moods, meta, recs.data(), recs.size(), nullptr, 0, nullptr, 0, nullptr, nullptr));
+  for (const VecSink* o : {&plain, &moods}) {
+    const bool tails = o == &moods;
+    cc::MemSource src(o->b.data(), static_cast<uint32_t>(o->b.size()));
+    mptg::File f;
+    TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(f.open(src)));
+    TEST_ASSERT_EQUAL_UINT16(tails ? 1 : 0, f.info().frame.minor);
+    const cc::Section& s = f.container().section(mptg::kSecRecs);
+    TEST_ASSERT_EQUAL_UINT32(tails ? mptg::kRecsMoodStride : mptg::kRecsStride, s.stride);
+    TEST_ASSERT_EQUAL_UINT32(2 * s.stride, s.bytes);
+    const uint32_t song = f.find(a.path, std::strlen(a.path)), cover = f.find(b.path, std::strlen(b.path));
+    uint8_t t[mptg::kMoodTailBytes];
+    TEST_ASSERT_EQUAL(tails, f.moodTail(song, t));
+    if (tails) TEST_ASSERT_EQUAL_HEX8_ARRAY(worked, t, mptg::kMoodTailBytes);
+    TEST_ASSERT_FALSE(f.moodTail(cover, t));
+    if (tails) {
+      const uint8_t zeros[mptg::kMoodTailBytes] = {};
+      TEST_ASSERT_EQUAL_HEX8_ARRAY(zeros, &o->b[s.offset + cover * s.stride + mptg::kRecsStride], mptg::kMoodTailBytes);
+    }
+    // The 72 bytes before: the same records either way.
+    mptg::Record r;
+    TEST_ASSERT_TRUE(f.record(song, &r));
+    TEST_ASSERT_EQUAL_UINT32(7, r.size);
+    TEST_ASSERT_TRUE(f.record(cover, &r));
+    TEST_ASSERT_EQUAL_UINT32(8, r.size);
+  }
+  std::vector<Event> x, y;
+  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(walk(plain.b, mptg::kUseAll, &x)));
+  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(walk(moods.b, mptg::kUseAll, &y)));
+  TEST_ASSERT_EQUAL_size_t(x.size(), y.size());
+  for (size_t i = 0; i < x.size(); ++i) {
+    TEST_ASSERT_EQUAL_STRING(x[i].path.c_str(), y[i].path.c_str());
+    if (x[i].folder) continue;
+    TEST_ASSERT_TRUE(sameRecord(x[i].r, y[i].r));
+    TEST_ASSERT_FALSE(x[i].hasTail);
+    TEST_ASSERT_EQUAL(x[i].path == a.path, y[i].hasTail);
+    TEST_ASSERT_EQUAL_HEX16(x[i].path == a.path ? 0xB313 : 0, y[i].word);
+  }
 }
 
 void test_writer_refuses_what_breaks_the_rules() {
@@ -1611,6 +1992,44 @@ void test_writer_refuses_what_breaks_the_rules() {
   thumbOnly.path = "Elsewhere";
   thumbOnly.flags = mptg::kFolderThumb;
   refuses({a}, {thumbOnly}, "a folder neither OWNED nor an ancestor");
+  // A mood tail a reader would refuse (2.6.4): no row is no tail, not 8
+  // zero bytes.
+  mptg::RecordIn c;
+  c.path = "C/z.flac";
+  const uint8_t zeros[8] = {}, fill[8] = {0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB, 0xAB},
+                reserved[8] = {0x09, 50, 50, 50, 50, 50, 50, 0}, byte79[8] = {0x01, 50, 50, 50, 50, 50, 50, 1},
+                value101[8] = {0x01, 50, 50, 101, 50, 50, 50, 0};
+  meta.minor = 1;  // refused for the tail alone
+  for (const uint8_t* t : {zeros, fill, reserved, byte79, value101}) {
+    c.moods = t;
+    refuses({a, c}, {}, "a mood tail a reader refuses");
+  }
+  // The minor follows the tails (2.4.5, 2.6.4's Writing): tails with minor
+  // 0, or a nonzero minor with none, is refused; a later minor with tails
+  // is taken, and so are tails in a source 1 file (only a ledger isn't).
+  const uint8_t worked[8] = {0x03, 0x3A, 0x46, 0x1D, 0x31, 0xFF, 0x46, 0x00};
+  c.moods = worked;
+  meta.minor = 0;
+  refuses({a, c}, {}, "mood tails with minor 0");
+  for (uint16_t minor : {1, 2, 0xFFFF}) {
+    meta.minor = minor;
+    refuses({a}, {}, "a nonzero minor with no mood tails");
+    refuses({}, {}, "a nonzero minor with no records");
+  }
+  for (uint8_t source : {mptg::kSourceDevice, mptg::kSourceTransfer, mptg::kSourceSyncAgent}) {
+    for (uint16_t minor : {1, 2}) {
+      meta.source = source;
+      meta.minor = minor;
+      std::vector<mptg::RecordIn> recs = {a, c};
+      VecSink out;
+      const char* error = nullptr;
+      const bool ok = mptg::write(out, meta, recs.data(), recs.size(), nullptr, 0, nullptr, 0, nullptr, &error);
+      TEST_ASSERT_TRUE_MESSAGE(ok, error ? error : "tails with minor 1 or later");
+      TEST_ASSERT_EQUAL_UINT16(minor, cc::get16(out.b.data() + 6));
+    }
+  }
+  meta.source = mptg::kSourceTransfer;
+  meta.minor = 0;
   meta.source = 0;
   refuses({a}, {}, "source 0");
   meta.source = mptg::kSourceDevice;
@@ -1624,6 +2043,18 @@ void test_writer_refuses_what_breaks_the_rules() {
   msmf::ManifestIn mi;
   mi.comps = &dj;
   mi.compCount = 1;
+  TEST_ASSERT_FALSE(msmf::write(out, mi, nullptr, nullptr, nullptr));
+  msmf::CompIn tagsThenWaves[4];
+  tagsThenWaves[0].kind = cc::kMagicMptg;
+  tagsThenWaves[1].kind = cc::kMagicMpwf;
+  tagsThenWaves[2].kind = cc::kMagicMpdj;
+  tagsThenWaves[3].kind = cc::kMagicMpwf;
+  mi.comps = tagsThenWaves;
+  mi.compCount = 2;
+  TEST_ASSERT_TRUE(msmf::write(out, mi, nullptr, nullptr, nullptr));
+  mi.compCount = 3;  // the MPDJ after the MPWF
+  TEST_ASSERT_FALSE(msmf::write(out, mi, nullptr, nullptr, nullptr));
+  mi.compCount = 4;
   TEST_ASSERT_FALSE(msmf::write(out, mi, nullptr, nullptr, nullptr));
   mspd::OpIn op;
   op.op = 4;
@@ -1821,15 +2252,18 @@ int main(int, char**) {
   RUN_TEST(test_tags_read_back);
   RUN_TEST(test_tags_enums_read_as_the_table_says);
   RUN_TEST(test_tags_device_and_empty);
+  RUN_TEST(test_mood_tails_read_back);
   RUN_TEST(test_manifest_read_back);
   RUN_TEST(test_autodj_read_back);
   RUN_TEST(test_plan_read_back);
   RUN_TEST(test_hardening_files);
+  RUN_TEST(test_mood_tails_in_the_hardening_files);
   RUN_TEST(test_truncation_at_every_byte);
   RUN_TEST(test_every_flipped_bit);
   RUN_TEST(test_fuzz_with_resealed_crcs);
   RUN_TEST(test_walker_with_small_buffers_and_a_big_library);
   RUN_TEST(test_walker_cuts_a_long_server_path_at_a_code_point);
+  RUN_TEST(test_writer_writes_a_tail_only_with_moods);
   RUN_TEST(test_writer_refuses_what_breaks_the_rules);
   RUN_TEST(test_container_frame);
   return UNITY_END();

@@ -17,6 +17,9 @@
 //   Df55..Df75   Match strictness, by 5 (saved)
 //   Dt0 / Dt1    BPM continuity off / on (saved)
 //   Dk0 / Dk1    Harmonic mixing off / on (saved)
+//   Dq<hex>      the mood filter, its q (docs/MOOD-FILTERS.md 5.4: up to 4
+//                hex digits; saved); one moodfilter::valid() refuses (q800,
+//                q30, q600) is refused. Dq0 clears it. The session stays
 //   Ds<hex>      the next session's seed (1-8 hex digits; reproducible)
 //   Dr           a new session now
 //   Dp           a pick appended now, whatever the trigger says (cued at a
@@ -25,7 +28,8 @@
 //                a loop pass; a summary at the end (the live session untouched)
 //   Dj           the join again (its time and memory)
 //   Dc           the file closed and opened again, as a remount that found
-//                another index does (a new session)
+//                another index does (a new session); after a read of the root
+//                the card failed, that read again (docs/AUTODJ.md 6.5)
 //   Db<n>        the bench: n slot reads of random rows (1 to 5,000), one a
 //                loop pass; their times, and the checks'
 //   Dh / Dh<id>  "Auto DJ from here" on the current entry's track, or on
@@ -47,6 +51,7 @@ struct Command {
     Floor,     // n: the percent
     Tempo,     // n: 0 off, 1 on
     Key,       // n: 0 off, 1 on
+    Moods,     // n: the mood filter's q (valid; 0: none)
     Seed,      // n: the seed
     Renew,
     Pick,

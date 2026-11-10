@@ -94,6 +94,7 @@ void QueuePage::enter(NavModel::PageRef& ref) {
   position_ = s.positionVersion;
   drawnCurrent_ = s.current;
   emptyDj_ = autodjview::emptyButton(s.autoDj, s.libraryTracks);
+  emptyNoFit_ = autodjview::emptyNoFit(s.autoDj);
   selecting_ = false;
   touchOn_ = TouchOn::None;
   headerPressed_ = 0;
@@ -280,10 +281,13 @@ bool QueuePage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
     }
   }
   // Empty: Auto DJ's button comes or goes with a usable index (a card
-  // mounted again): the empty state drawn again.
+  // mounted again), and with its mood filter fitting no track (said, and
+  // no second button): the empty state drawn again.
   const bool dj = autodjview::emptyButton(s.autoDj, s.libraryTracks);
-  if (dj != emptyDj_) {
+  const bool noFit = autodjview::emptyNoFit(s.autoDj);
+  if (dj != emptyDj_ || noFit != emptyNoFit_) {
     emptyDj_ = dj;
+    emptyNoFit_ = noFit;
     if (s.queueSize == 0) list.reload();
   }
   refreshSummary();
@@ -750,16 +754,19 @@ bool QueuePage::emptyState(EmptyState& e) {
     return true;
   }
   e.icon = &icons::kQueue;
+  const AppState& s = ui_.state();
   e.title = tr(S::empty_queue_title);
-  e.lines = tr(S::empty_pick_in_library);
+  // (Auto DJ's mood filter fitting no track: said, after the unread line,
+  // with no second button: frame dj-empty.)
+  const bool noFit = autodjview::emptyNoFit(s.autoDj);
+  e.lines = tr(s.queueUnread ? S::library_row_rescan_unread : noFit ? S::empty_no_track_fits : S::empty_pick_in_library);
   e.buttons[0] = tr(S::empty_open_library);
   e.buttonIcons[0] = &icons::kLibrary;
-  const AppState& s = ui_.state();
   if (autodjview::emptyButton(s.autoDj, s.libraryTracks)) {
     // A usable Auto DJ index: Auto DJ in Shuffle all's place (D4).
     e.buttons[1] = tr(S::empty_autodj);
     e.buttonIcons[1] = &icons::kAutoDj;
-  } else if (s.libraryTracks > 0) {
+  } else if (s.libraryTracks > 0 && !noFit) {
     e.buttons[1] = tr(S::empty_shuffle_all);
     e.buttonIcons[1] = &icons::kShuffle;
   }

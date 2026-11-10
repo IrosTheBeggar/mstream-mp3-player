@@ -843,6 +843,79 @@ void test_tabbar_output_state() {
   TEST_ASSERT_EQUAL_UINT8(1u << 4, tabbar::dirty(a, b));
 }
 
+// The glance's top row (TabBar::updateGlance()): the Output cell's drawing
+// alone, as an inactive tab has it, drawn again only when that cell would
+// be; never for the Now Playing cell's EQ steps (4 a second while playing),
+// nor for the tab, the label, the badge, the moon or the hairline.
+void test_the_glance_row_redraws_only_its_output_cell() {
+  using O = tabbar::Output;
+  TEST_ASSERT_EQUAL_UINT8(1u << 4, tabbar::kOutputCell);
+  tabbar::State a;
+  a.active = 4;  // the Output tab on top under the glance: its cell drawn inactive
+  a.label = tabbar::LabelFit::Spill;
+  a.play = tabbar::Play::Playing;
+  a.volume = 60;
+  a.battery = 80;
+  const tabbar::State g = tabbar::glanceOf(a);
+  TEST_ASSERT_EQUAL_UINT8(0, g.active);  // no plate, no label, no underline in drawCell(4)
+  TEST_ASSERT_EQUAL(tabbar::LabelFit::Plate, g.label);
+  TEST_ASSERT_EQUAL_UINT8(60, g.volume);  // the rest as it was
+  TEST_ASSERT_EQUAL_UINT8(80, g.battery);
+  TEST_ASSERT_EQUAL(tabbar::Play::Playing, g.play);
+  TEST_ASSERT_FALSE(tabbar::glanceDirty(a, a));
+  // What isn't in the Output cell: nothing to draw.
+  tabbar::State b = a;
+  b.eqStep = 9;
+  TEST_ASSERT_TRUE(tabbar::dirty(a, b) != 0);  // (the bar's Now Playing cell would)
+  TEST_ASSERT_FALSE(tabbar::glanceDirty(a, b));
+  b = a;
+  b.play = tabbar::Play::Paused;
+  TEST_ASSERT_FALSE(tabbar::glanceDirty(a, b));
+  b = a;
+  b.progressPx = 17;
+  b.progressKnown = true;
+  TEST_ASSERT_FALSE(tabbar::glanceDirty(a, b));
+  b = a;
+  b.upNext = 12;
+  b.badgeFlash = true;
+  TEST_ASSERT_FALSE(tabbar::glanceDirty(a, b));
+  b = a;
+  b.sleep = tabbar::Sleep::Fading;
+  TEST_ASSERT_FALSE(tabbar::glanceDirty(a, b));
+  // Another tab, another label (a console tab change, a language): the
+  // bar's cells would, the glance's row doesn't (dirty() is never asked
+  // about an `active` of 4 against 1: both are 0 by then).
+  b = a;
+  b.active = 1;
+  TEST_ASSERT_TRUE((tabbar::dirty(a, b) & tabbar::kOutputCell) != 0);
+  TEST_ASSERT_FALSE(tabbar::glanceDirty(a, b));
+  b.label = tabbar::LabelFit::None;
+  TEST_ASSERT_FALSE(tabbar::glanceDirty(a, b));
+  // What is in it: every output, the volume, the battery, charging, the
+  // low blink.
+  for (O o : {O::Speaker, O::BtConnected, O::BtConnecting, O::BtLost, O::BtIdle}) {
+    b = a;
+    b.output = o;
+    TEST_ASSERT_EQUAL(o != a.output, tabbar::glanceDirty(a, b));
+  }
+  b = a;
+  b.volume = 65;
+  TEST_ASSERT_TRUE(tabbar::glanceDirty(a, b));
+  b = a;
+  b.battery = 79;
+  TEST_ASSERT_TRUE(tabbar::glanceDirty(a, b));
+  b = a;
+  b.charging = true;
+  TEST_ASSERT_TRUE(tabbar::glanceDirty(a, b));
+  b = a;
+  b.battery = 9;
+  a.battery = 9;
+  b.lowBlink = true;
+  TEST_ASSERT_TRUE(tabbar::glanceDirty(a, b));
+  // Drawn as glanceOf() has it, compared with a fresh state: the same.
+  TEST_ASSERT_FALSE(tabbar::glanceDirty(tabbar::glanceOf(a), a));
+}
+
 void test_tabbar_eq_badge_progress() {
   uint8_t h[4], h2[4];
   tabbar::eqBars(7, true, h);
@@ -1040,6 +1113,7 @@ int main(int, char**) {
   RUN_TEST(test_tabbar_hit_areas_reach_the_right_edge);
   RUN_TEST(test_tabbar_redraws_only_what_changed);
   RUN_TEST(test_tabbar_output_state);
+  RUN_TEST(test_the_glance_row_redraws_only_its_output_cell);
   RUN_TEST(test_tabbar_eq_badge_progress);
   RUN_TEST(test_progress_estimate_from_the_file);
   RUN_TEST(test_progress_mp3_header_length);

@@ -126,11 +126,16 @@ private:
 
 // What the glue knows of the index this pass.
 struct Index {
-  const Maps* maps = nullptr;   // the join's (Ready); null: picks by track id
+  const Maps* maps = nullptr;   // the join's (Ready), with the mood filter; null: picks by track id
   SlotReader* slots = nullptr;  // null with no index
   uint16_t k = 0, selHead = 0;
   uint8_t selFloor = 0;
   bool joining = false;         // the file reopens, or the join runs (the trigger's)
+  MoodView mood;                // the mood filter (MOOD-FILTERS.md 6.1), the maps' too: also without them
+  // The library tracks inside it (the glue's count, 6.5), read only while
+  // it is on: 0 then is the trigger's hold (Hold::NoFit), so it comes only
+  // from the words themselves.
+  uint32_t fit = 0;
 };
 
 // The rest of the pass's inputs.
@@ -246,6 +251,16 @@ public:
   // 55-75 by 5 (nvslayout::autoDjFloorValid()); false: unchanged.
   bool setFloor(uint8_t pct);
   bool setMatch(bool tempo, bool key);
+  // The mood filter (Settings::moods, MOOD-FILTERS.md 5.4); false: invalid
+  // (moodfilter::valid()) or unchanged. The session stays, its rings and
+  // its pin with it: the next pick is inside the new filter (the engine
+  // remakes its runs for a q it hasn't seen), and a pick queued before it
+  // plays once (D5: pendingTrack()). The glue's MoodView, and its count of
+  // the tracks inside (Index::fit), follow it.
+  bool setMoods(uint16_t q);
+  // Auto DJ's pick appended and not started yet (kNoTrackId: none): what a
+  // filter changed now lets play once (D5).
+  uint32_t pendingTrack() const { return pending_ != QueueModel::kNone ? pendingTrack_ : kNoTrackId; }
   // The next session's seed (the console's Ds; reproducible sessions).
   void setSeed(uint32_t seed);
   bool seedSet() const { return seedSet_; }
@@ -263,14 +278,17 @@ public:
   // the Play was refused (fenced, no memory). *switchedOn: it was off.
   bool playFrom(PlaybackController& player, uint32_t track, Began why, const Maps* maps, bool* switchedOn);
   // The empty states' button's track: a random row that maps to a track
-  // (not ok without an index).
+  // (not ok without an index); inside the mood filter, the maps' (Engine::surprise()).
   Pick surprise(const Index& ix);
   // ... before the index is joined: up to kSurpriseTries library tracks
   // (below `libraryTracks`) drawn, the first that `hasRow` says has a row
   // (the firmware: its path hash in the index's DJPH); kNoTrackId: none.
-  // `*tries` (or nullptr): how many were looked up.
+  // `*tries` (or nullptr): how many were looked up. With `mood` on
+  // (MOOD-FILTERS.md 6.3): one pass over its words, kSurpriseTries tracks
+  // inside it kept, uniform, then looked up in a random order (none
+  // inside: no lookup); off, the draws above, as before there was one.
   uint32_t surpriseTrack(uint32_t libraryTracks, bool (*hasRow)(uint32_t track, void* ctx), void* ctx,
-                         uint8_t* tries = nullptr);
+                         uint8_t* tries = nullptr, const MoodView& mood = MoodView());
 
   // ---- the library update's fence ----
   // enterFence(), before the queue goes: the marks' and the entries'
@@ -291,7 +309,8 @@ public:
   uint32_t sessions() const { return sessions_; }
   uint32_t sessionSeed() const { return sessionSeed_; }
   Began sessionBegan() const { return began_; }
-  // Holds begun (Repeat One, the sleep timer, the failure pause), while on.
+  // Holds begun (Repeat One, the sleep timer, the failure pause, a mood
+  // filter nothing fits), while on.
   uint32_t holds() const { return holds_; }
   uint32_t refusals() const { return refusals_; }
   uint32_t undoDrops() const { return undoDrops_; }
@@ -347,7 +366,7 @@ private:
   uint16_t pendingRow_ = kNoRow;          // ... and its row (the maps may be away when it goes)
   bool retry_ = false;
   uint32_t retryAtMs_ = 0;
-  bool readWait_ = false;  // a read ahead failed: none until readAtMs_
+  bool readWait_ = false;  // a read ahead or a pick's failed: no read ahead until readAtMs_
   uint32_t readAtMs_ = 0;
   // The fence's notes (positions).
   uint32_t fenceSize_ = 0;
@@ -372,7 +391,9 @@ private:
 // untouched), one loop pass each (a slot read ahead when one is due, as
 // the loop's, else a pick), each treated as played (the next pick follows
 // it). Its tallies: the classes, the breaks, the repeats (a row this run
-// picked before), the artists, the reads and the times.
+// picked before), the artists, the reads and the times; under a mood
+// filter, the engine's jumps, re-pins, repeats inside it and picks that
+// found none fits (MOOD-FILTERS.md 6.2).
 class DryRun {
 public:
   static constexpr uint32_t kMaxPicks = 2000;
@@ -388,6 +409,7 @@ public:
     uint32_t readsAtPick[kReadsPerPick + 1] = {};
     uint32_t prefetchReads = 0;
     uint32_t leftOut = 0;
+    uint32_t jumps = 0, repins = 0, moodRepeats = 0, noFit = 0;  // Stats' (0 with no filter)
   };
   DryRun() = default;
   ~DryRun() { end(); }

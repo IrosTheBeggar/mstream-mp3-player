@@ -22,7 +22,7 @@ namespace {
 namespace cc = cardcontract;
 using playlog::Journal;
 
-// NVS's part (nvslayout's "plays", schema 5): each write one key, at once.
+// NVS's part (nvslayout's "plays", schema 6): each write one key, at once.
 class PrefsNvs final : public Journal::Nvs {
 public:
   bool load(Journal::Ids* out) override {

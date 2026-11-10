@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "ByteStream.h"
 #include "CardContainer.h"
 #include "CardContract.h"
 #include "CardTags.h"
@@ -107,6 +108,12 @@
 // new D (whose journals are then stale), so the merged view is the same; and
 // no cut leads to a cluster chain being freed while another entry uses it.
 //
+// A read the card fails is none of those: it says nothing of the records, so it must
+// not read as a card with none (readFailed()). Taken so, the walk and the scan would
+// start D over and their compaction replace the real one, with every file T doesn't
+// cover to read again; and with library.idx failing too, a boot builds without D and
+// the queue's restore drops every track that leaves out (docs/METADATA.md 3.2.2).
+//
 // One job at a time (the card worker, 3.3.4): nothing appends, walks or
 // compacts while another of these runs, and nothing writes D or the journals
 // while a build or a View streams them.
@@ -130,6 +137,37 @@ public:
   // whatever the card held: every writer here fills them).
   virtual bool sync() = 0;                  // f_sync: the data and the directory entry on the card
   virtual bool truncate(uint32_t size) = 0;  // f_truncate at `size` (at most the file's size)
+  // The read that last failed here failed on the file system's own records of the
+  // file (a start cluster or a FAT chain off the volume: FatFs's FR_INT_ERR). The
+  // card answered and no read again changes that: the file's fault, not the card's.
+  virtual bool damaged() const { return false; }
+};
+
+// A file as a Source, its reads the card failed noted (failed()). A read past the
+// file's end isn't one, nor one on a file whose own records are damaged (damaged()):
+// each says something of the file, and no read again changes it. Its size is the one
+// at the watch(): FatFs keeps it in the FIL, so a pulled card's reads are tried, and
+// fail.
+class ReadWatch : public cardcontract::Source {
+public:
+  ReadWatch() = default;
+  explicit ReadWatch(File* f) { watch(f); }
+  void watch(File* f) {
+    f_ = f;
+    size_ = f ? f->size() : 0;
+  }
+  bool failed() const { return failed_; }
+  uint32_t size() const override { return size_; }
+  bool read(uint32_t offset, void* out, uint32_t n) override {
+    if (f_ && f_->read(offset, out, n)) return true;
+    if (f_ && offset <= size_ && n <= size_ - offset && !f_->damaged()) failed_ = true;
+    return false;
+  }
+
+private:
+  File* f_ = nullptr;
+  uint32_t size_ = 0;
+  bool failed_ = false;
 };
 
 // How a write reaches the card (the 2026-10-09 device run, METADATA.md
@@ -166,6 +204,37 @@ public:
   virtual ~Fs() = default;
   // nullptr: missing (Read, Update), or it couldn't be opened.
   virtual File* open(const char* path, Mode mode) = 0;
+  // open(path, Mode::Read), with whose word a nullptr is. `cardFailed` false: the
+  // file isn't there, or the file system's records of the way to it are damaged
+  // (as File::damaged()). True: the card failed (a read, the volume's lock, no
+  // memory for the file), and nothing is known of the file. For a reader that takes
+  // the two differently (cardroot::read()).
+  virtual File* openRead(const char* path, bool* cardFailed) {
+    *cardFailed = false;
+    return open(path, Mode::Read);
+  }
+  // A file's directory entry: whether it is there and its firstCluster(). `cardFailed`,
+  // as openRead(): nothing is known of the file, and the other two say nothing. For
+  // whoever acts on "it isn't there" or "nothing else shares its chain" (settle()).
+  struct Entry {
+    bool there = false;
+    uint32_t firstCluster = 0;
+    bool cardFailed = false;
+  };
+  virtual Entry entry(const char* path) {
+    Entry e;
+    e.there = exists(path);
+    e.firstCluster = e.there ? firstCluster(path) : 0;
+    return e;
+  }
+  // Whether `path` is a file on the card, for whoever drops what isn't (queuefile::Lookup).
+  // Gone: the card was read, and it isn't there. Unknown: the card failed (as openRead()),
+  // or the file system's records of the way to it are damaged: it may be there all the same.
+  enum class Seen : uint8_t { There, Gone, Unknown };
+  virtual Seen look(const char* path) {
+    const Entry e = entry(path);
+    return e.cardFailed ? Seen::Unknown : e.there ? Seen::There : Seen::Gone;
+  }
   // f_close: a written file is synced first. The File is gone either way.
   virtual bool close(File* f) = 0;
   virtual bool exists(const char* path) = 0;
@@ -178,6 +247,31 @@ public:
   // give the same non-zero value share a chain. 0: missing, or empty (no
   // cluster).
   virtual uint32_t firstCluster(const char* path) = 0;
+};
+
+// A file of the card as a ByteSource (LibraryIndex's streams, the queue's text).
+class FileIn : public ByteSource {
+public:
+  explicit FileIn(File& f) : f_(f) {}
+  size_t read(void* data, size_t n) override {
+    const uint32_t left = f_.size() > at_ ? f_.size() - at_ : 0;
+    const uint32_t k = static_cast<uint32_t>(n < left ? n : left);
+    if (k == 0) return 0;
+    if (!f_.read(at_, data, k)) {
+      failed_ = !f_.damaged();
+      return 0;
+    }
+    at_ += k;
+    return k;
+  }
+  // The stream ended on a read the card failed, not at the file's end or on a file
+  // whose own records are damaged: what the reader made of it says nothing of the file.
+  bool failed() const override { return failed_; }
+
+private:
+  File& f_;
+  uint32_t at_ = 0;
+  bool failed_ = false;
 };
 
 // ---------------------------------------------------------------------------
@@ -201,6 +295,12 @@ public:
 // 2.12.6 names two twins, .xl1 and .xl2; repeated cuts without a disk check
 // take the next free name up to .xl9, after which the file can't be replaced
 // (replace() and prepareTmp() fail) until a disk check frees them.
+//
+// A question of the card that it fails (Fs::entry()'s cardFailed) answers nothing:
+// "no X", or "no entry shares this chain", may be only the read that failed, and what
+// these do on it would free a chain in use, or remove the only copy. So they stop
+// there: settle() says Settle::Unread with nothing changed, and prepareTmp() and
+// replace() fail. A check the card fails is no verdict either (Verdict::Unknown).
 // ---------------------------------------------------------------------------
 struct Names {
   const char* path = nullptr;  // "/.player/tags.bin"
@@ -214,9 +314,9 @@ bool twinName(const Names& n, int i, char* out, size_t cap);
 class TmpCheck {
 public:
   enum class Verdict : uint8_t {
-    Torn,     // not a whole file of its kind (or it couldn't be opened)
+    Torn,     // not a whole file of its kind (or it isn't there to open)
     Whole,    // a whole file of its kind (its checksums hold)
-    Unknown,  // the check couldn't run (no memory for it): no verdict
+    Unknown,  // the check couldn't run (no memory for it, or the card failed a read): no verdict
   };
   virtual ~TmpCheck() = default;
   virtual Verdict check(Fs& fs, const char* tmp) = 0;
@@ -227,8 +327,9 @@ enum class Settle : uint8_t {
   Removed,      // a leftover tmp, removed
   Promoted,     // X was missing and the tmp whole: renamed X
   Quarantined,  // the tmp shared a chain: renamed to a twin
-  Failed,       // a remove or rename failed (or no twin name was free)
-  Kept,         // X was missing and the check couldn't run: the tmp left for the next settle()
+  Failed,       // a remove failed, or a rename to a twin (or no twin name was free)
+  Kept,         // X was missing, and the check couldn't run or the rename failed: the tmp left for the next settle()
+  Unread,       // the card failed a question (Fs::entry()): nothing more was done, twins not counted
 };
 struct Settled {
   Settle what = Settle::Clean;
@@ -237,7 +338,15 @@ struct Settled {
 Settled settle(Fs& fs, const Names& n, TmpCheck* check);
 bool prepareTmp(Fs& fs, const Names& n);
 bool replace(Fs& fs, const Names& n);
-uint32_t collectTwins(Fs& fs, const Names& n);  // the twins left
+// The twins left. `unread` (optional): a question the card failed stopped it, so some may be
+// left uncounted.
+uint32_t collectTwins(Fs& fs, const Names& n, bool* unread = nullptr);
+
+// The boot's waits between reads of a file the card failed, whichever it is
+// (cardroot::readAtBoot(), TagStore::openAtBoot(), LibraryUpdate::boot()): most faults
+// are a glitch, and at the boot nothing else is held up. These are short, against what
+// the boot decides from the answer.
+constexpr uint32_t kBootWaitsMs[] = {100, 300, 1000};
 
 // ---------------------------------------------------------------------------
 // D's device sections (3.3.2; the layout is the device's own).
@@ -647,6 +756,11 @@ public:
     bool journalStale = false; // tags.jnl extends another D: dropped
     bool walk = false;         // walk.jnl has a complete run that extends D
     bool walkStale = false;    // walk.jnl for another D, or cut short: dropped
+    bool readFailed = false;   // readFailed(): deviceWhy Io, and the rest says nothing of the card
+    // The card failed a read of tags.jnl or walk.jnl. With readFailed: that is what held it.
+    // Without (openAtBoot()'s last try): what they hold past that read is the scan's and
+    // the walk's to read again.
+    bool journalsUnread = false;
   };
 
   struct Compacted {
@@ -665,6 +779,9 @@ public:
     // written), HIDX's sort, and the whole (with the rest: the opens, DHDR,
     // the header, the sync, the rename).
     uint32_t pass1Ms = 0, pass2Ms = 0, sortMs = 0, totalMs = 0;
+    // The card failed a read of D: it stays as it is, and the journals with it (ok
+    // false). D's own fault (a CRC, damaged records) leaves it out instead (deviceWhy).
+    bool readFailed = false;
   };
 
   TagStore(Fs& fs, const Config& config, AllocFn alloc = nullptr, FreeFn release = nullptr);
@@ -675,6 +792,20 @@ public:
   // Boot (3.2.2, before anything writes the card): the cut-rename rule for
   // tags.tmp, the twins, hidx.tmp, D's frame, the journals.
   Opened open();
+  // open(), and again while the card fails it (readFailed()), kBootWaitsMs between
+  // (`wait` nullptr: once). `opens`, when given: how many it took. A fault in the journals
+  // alone that lasts through them isn't held to: the journals go as far as they read, as
+  // a torn tail does, and the scan and the walk read the rest again (Opened::journalsUnread),
+  // where a hold would stop the jobs at every boot over files the card can give again.
+  Opened openAtBoot(void (*wait)(uint32_t ms), uint32_t* opens = nullptr);
+  // The card failed a read of D, of its journals or of the way to them (a read, the
+  // volume's lock, no memory for a file), or D may be a tags.tmp that couldn't be taken
+  // (tmpKept()): nothing is known of the records, which isn't to say there are none.
+  // device() says absent and the journals none, as they would with none on the card,
+  // but a compaction, a chunk or a walk now would build over what is there, so each
+  // refuses until an open() reads them. (A file whose own records are damaged isn't
+  // this: the card answered, and the file is absent.)
+  bool readFailed() const { return readFailed_; }
 
   // ---- what's there ----
   const DeviceInfo& device() const { return dev_; }
@@ -696,10 +827,14 @@ public:
   // Library row say so).
   uint32_t twins() const { return twins_; }
   // open() found tags.tmp alone (a cut between replace()'s remove and its
-  // rename, or in a first D's write) and had no memory to check it: it is
-  // left as it is, D is absent this session, and compact() refuses (its
+  // rename, or in a first D's write) and couldn't check it (no memory, or the
+  // card failed a read) or rename it: it is left as it is, D is absent this
+  // session, and it reads as readFailed(), so compact() refuses (its
   // prepareTmp() would remove the tmp) until an open() checks it.
   bool tmpKept() const { return tmpKept_; }
+  // The last compact() stopped on a read of D the card failed (Compacted::readFailed):
+  // a build would read the same D (the update step ends before its fence).
+  bool compactionUnread() const { return compactUnread_; }
   const Config& config() const { return cfg_; }
   Fs& fs() { return fs_; }
   // The paths.
@@ -766,6 +901,7 @@ private:
     uint16_t rules;
     uint32_t epoch;
   };
+  void forgetJournals();
   void scanJournal(Opened* o);
   void scanWalk(Opened* o);
   bool loadDevice();
@@ -783,6 +919,10 @@ private:
   DeviceInfo dev_;
   uint32_t twins_ = 0;
   bool tmpKept_ = false;  // open(): tags.tmp alone, unchecked (Settle::Kept)
+  bool readFailed_ = false;  // open(): readFailed()
+  bool compactUnread_ = false;  // compact(): compactionUnread()
+  bool journalsUnread_ = false;  // open(): Opened::journalsUnread
+  bool healJournals_ = false;    // openAtBoot()'s last try: journals taken as far as they read
   // tags.jnl
   Chunk* chunks_ = nullptr;  // maxChunks of them
   uint32_t chunkN_ = 0;

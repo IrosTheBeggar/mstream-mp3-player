@@ -46,6 +46,9 @@ uint8_t classOf(uint8_t bits) {
   return static_cast<uint8_t>(coolOf(bits) * kRanks + musicRank(tempoOf(bits), keyOf(bits)));
 }
 
+// No anchors (the Auto DJ button's scan: no exclusions).
+constexpr uint16_t kNoAnchors[1] = {kNoRow};
+
 // Sorts n (at most a few dozen) rows into out, then kNoRow.
 template <typename Get>
 void sortedRows(uint8_t n, Get get, uint16_t* out) {
@@ -239,6 +242,12 @@ bool Engine::trackLeft(uint32_t track, const Maps* maps, uint32_t playedMs, bool
 bool Engine::rowLeft(uint16_t row, uint32_t playedMs, bool naturalEnd) {
   if (naturalEnd || playedMs >= kQuickSkipMs) return false;
   ++stats_.quickSkips;
+  if (ses_.pinMoved && row != kNoRow && row == ses_.pin) {
+    // A moved pin quick-skipped goes (MOOD-FILTERS.md 6.4): the next Stay
+    // on seed pick takes the playing track's row. A seed's stays.
+    ses_.pin = kNoRow;
+    ses_.pinMoved = false;
+  }
   return row != kNoRow && ses_.ring.remove(row);
 }
 
@@ -248,6 +257,7 @@ void Engine::pickRefused(uint16_t row) {
 
 void Engine::modeChanged() {
   ses_.pin = kNoRow;
+  ses_.pinMoved = false;
   ses_.seedAwaits = kNoTrackId;
 }
 
@@ -255,6 +265,7 @@ void Engine::fileReopened() {
   for (CacheSlot& c : cache_) c = CacheSlot();
   damaged_.clear();
   suspect_ = kNoRow;
+  ioRow_ = kNoRow;
   broken_ = false;
 }
 
@@ -270,6 +281,7 @@ void Engine::copySession(const Engine& from) {
   print_ = from.print_;
   damaged_ = from.damaged_;
   suspect_ = from.suspect_;
+  ioRow_ = from.ioRow_;
   broken_ = from.broken_;
   stats_ = from.stats_;
   for (uint8_t i = 0; i < kSlotCache; ++i) {
@@ -327,6 +339,7 @@ SlotResult Engine::read(SlotReader& slots, uint16_t row) {
   if (r == mpdj::SlotRead::Ok) {
     insert(row, static_cast<uint16_t>(count > mpdj::kMaxK ? mpdj::kMaxK : count));
     if (suspect_ == row) suspect_ = kNoRow;
+    if (ioRow_ == row) ioRow_ = kNoRow;
     return SlotResult::Ok;
   }
   if (r == mpdj::SlotRead::Broken) {
@@ -336,6 +349,15 @@ SlotResult Engine::read(SlotReader& slots, uint16_t row) {
   }
   if (why == cardcontract::Why::Io) {
     ++stats_.ioSkips;
+    // The same row twice in a row: into the ring, until a remount or Dc (3.13): each read
+    // of a sector the card keeps failing costs the loop the driver's retries.
+    if (ioRow_ == row) {
+      ioRow_ = kNoRow;
+      damaged_.add(row);
+      ++stats_.damaged;
+      return SlotResult::IoTwice;
+    }
+    ioRow_ = row;
     return SlotResult::Io;
   }
   if (suspect_ == row) {
@@ -355,6 +377,10 @@ Engine::MapsPrint Engine::printOf(const Maps& m) {
   p.rows = m.rows;
   p.tracks = m.tracks;
   p.mapped = m.mapped;
+  if (m.mood.on()) {
+    p.moods = m.mood.words;
+    p.q = m.mood.q;
+  }
   return p;
 }
 
@@ -363,8 +389,10 @@ bool Engine::runFresh(int i, const Maps& m, uint32_t k) const {
 }
 
 // Slot i's run for these maps and k: its first min(count, k) entries (the
-// levels from byte 2k), those whose row maps to a track, sorted by row
-// (then by place: a row listed twice keeps both, as the union does).
+// levels from byte 2k), those whose row maps to a track that passes the
+// mood filter (MOOD-FILTERS.md 6.1: the row's first track, which a pick of
+// it plays), sorted by row (then by place: a row listed twice keeps both,
+// as the union does).
 void Engine::buildRun(int i, const Maps& m, uint32_t k) {
   const MapsPrint p = printOf(m);
   if (!(print_ == p)) {
@@ -374,9 +402,11 @@ void Engine::buildRun(int i, const Maps& m, uint32_t k) {
   const uint8_t* b = slotBytes_ + i * kSlotSpan;
   const uint32_t n = cache_[i].count < k ? cache_[i].count : k;
   uint32_t nk = 0;
+  const bool mood = m.mood.on();
   for (uint32_t j = 0; j < n; ++j) {
     const uint16_t row = cardcontract::get16(b + 2 * j);
     if (row >= m.rows || m.rowToTrack[row] == kNoTrack) continue;
+    if (mood && !m.mood.passes(m.rowToTrack[row])) continue;
     keys_[nk++] = static_cast<uint32_t>(row) << 8 | j;
   }
   idsort::sort(keys_, keys_ + nk, std::less<uint32_t>());
@@ -520,8 +550,32 @@ uint32_t Engine::closest(const int8_t* usable, uint8_t nu, const Scope& sc, bool
   return ng;
 }
 
+// At most two rounds: a second when the first moved Stay on seed's pin
+// (MOOD-FILTERS.md 6.4), sharing its reads; no recursion.
 Pick Engine::pick(const Settings& s, const PickIn& in) {
   Pick out;
+  bool again = false;
+  const Pick p = pickOnce(s, in, out, &again);
+  return again ? pickOnce(s, in, out, nullptr) : p;
+}
+
+// Stay on seed under a mood filter, nothing listed inside it or all of it
+// cooled (MOOD-FILTERS.md 6.4, D2): the playing track's row, inside the mood
+// (its own track), not the pin and not damaged, is the pin now (moved: a
+// quick skip of it takes it away), and the anchors run again.
+bool Engine::repin(const Settings& s, const Maps& m, uint16_t playingRow, Pick& out) {
+  if (s.mode != Mode::Locked || playingRow == kNoRow || playingRow == ses_.pin || damaged_.has(playingRow))
+    return false;
+  if (!m.mood.passes(m.rowToTrack[playingRow])) return false;
+  ses_.pin = playingRow;
+  ses_.pinMoved = true;
+  out.repinned = true;
+  return true;
+}
+
+// A round of the pick; `again` (null in the second round) set when it moved
+// the pin, before any draw (the stream stays for the second).
+Pick Engine::pickOnce(const Settings& s, const PickIn& in, Pick& out, bool* again) {
   if (!in.maps || !in.slots || !slotBytes_ || in.maps->rows == 0) return byId(s, in, out);
   const Maps& m = *in.maps;
   const uint16_t playingRow = rowOf(&m, in.playingTrack);
@@ -554,7 +608,9 @@ Pick Engine::pick(const Settings& s, const PickIn& in) {
           ++out.reads;
           res = read(*in.slots, r);
           // (At most one a read: within kReadsPerPick.)
-          if (res == SlotResult::Damaged && out.damaged < kReadsPerPick) out.damagedRow[out.damaged++] = r;
+          if ((res == SlotResult::Damaged || res == SlotResult::IoTwice) && out.damaged < kReadsPerPick) {
+            out.damagedRow[out.damaged++] = r;
+          }
           if (res != SlotResult::Suspect) break;
         }
         if (res == SlotResult::Broken) break;
@@ -610,7 +666,18 @@ Pick Engine::pick(const Settings& s, const PickIn& in) {
     }
     out.candidates = static_cast<uint16_t>(nc);
     out.dry = out.loosened = false;
-    if (nc == 0) return randomPick(s, in, sc, out);
+    if (nc == 0) {
+      // Nothing listed inside the mood: the jump (MOOD-FILTERS.md 6.2, 4a),
+      // unless the pin moves (6.4).
+      if (m.mood.on()) {
+        if (again && repin(s, m, playingRow, out)) {
+          *again = true;
+          return out;
+        }
+        out.jump = Jump::NoCandidate;
+      }
+      return randomPick(s, in, sc, out);
+    }
     // Dry: the kDry best sums. Every row of the pool cooled: loosen before
     // repeating, the kDry best sums outside the track cooldown, if any.
     if (ng == 0) {
@@ -622,6 +689,16 @@ Pick Engine::pick(const Settings& s, const PickIn& in) {
       if (fresh) {
         out.loosened = true;
         ng = fresh;
+      } else if (m.mood.on()) {
+        // Every listed row inside the mood cooled: the jump, not a repeat
+        // of a neighbour (6.2, 4b), unless the pin moves.
+        if (again && repin(s, m, playingRow, out)) {
+          *again = true;
+          return out;
+        }
+        out.jump = Jump::AllCooled;
+        out.dry = false;
+        return randomPick(s, in, sc, out);
       }
     }
     out.gated = static_cast<uint16_t>(ng);
@@ -642,6 +719,7 @@ Pick Engine::pick(const Settings& s, const PickIn& in) {
 }
 
 Pick Engine::randomPick(const Settings& s, const PickIn& in, const Scope& sc, Pick out) {
+  if (in.maps->mood.on()) return moodPick(s, in, sc, out);
   out.random = true;
   const Maps& m = *in.maps;
   uint32_t n = 0;
@@ -664,6 +742,110 @@ Pick Engine::randomPick(const Settings& s, const PickIn& in, const Scope& sc, Pi
   const uint32_t j = choose(sc, m, n, counts, out);
   out.level = 0;
   return finish(s, m, cand_[j].row, out);
+}
+
+// One of the tracks below n that hit() admits, uniform, in one pass: the i-th
+// admitted replaces the choice when below(i) is 0. kNoTrackId: none.
+template <typename Hit>
+uint32_t Engine::oneOf(uint32_t n, Hit&& hit) {
+  uint32_t got = kNoTrackId, seen = 0;
+  for (uint32_t t = 0; t < n; ++t) {
+    if (!hit(t)) continue;
+    if (++seen == 1 || ses_.rng.below(seen) == 0) got = t;
+  }
+  return got;
+}
+
+// The scan (MOOD-FILTERS.md 6.3): in track order, each track inside the mood
+// whose row is neither in `anc` (sorted, ending in kNoRow) nor `playingRow`;
+// the first kMoodSample kept in keys_, then the n-th in place of one at
+// below(n) < kMoodSample. Their rows into cand_ (bits 0), each once and only
+// if its own track passes: a pick of it plays that one (trackToRow is many
+// to one). Their count; nothing allocated.
+uint32_t Engine::scan(const Maps& m, const uint16_t* anc, uint16_t playingRow) {
+  const MoodView& mood = m.mood;
+  uint32_t seen = 0;
+  for (uint32_t t = 0; t < m.tracks; ++t) {
+    const uint16_t r = m.trackToRow[t];
+    if (r >= m.rows || r == playingRow) continue;
+    bool anchor = false;
+    for (const uint16_t* a = anc; *a <= r && !anchor; ++a) anchor = *a == r;
+    if (anchor || !mood.passes(t)) continue;
+    if (seen < kMoodSample) {
+      keys_[seen++] = t;
+    } else {
+      const uint32_t j = ses_.rng.below(++seen);
+      if (j < kMoodSample) keys_[j] = t;
+    }
+  }
+  const uint32_t kept = seen < kMoodSample ? seen : kMoodSample;
+  uint32_t n = 0;
+  for (uint32_t i = 0; i < kept; ++i) {
+    const uint16_t r = m.trackToRow[keys_[i]];
+    const uint16_t first = m.rowToTrack[r];
+    if (first == kNoTrack || !mood.passes(first)) continue;
+    bool dup = false;
+    for (uint32_t c = 0; c < n && !dup; ++c) dup = cand_[c].row == r;
+    if (!dup) cand_[n++] = Cand{r, 0, 0};
+  }
+  return n;
+}
+
+// A random pick inside the mood (MOOD-FILTERS.md 6.2, 5-8): the scan, else a
+// fresh track with no row, else the oldest repeat, else by id. keys_ and
+// cand_ hold the scan: nothing allocated.
+Pick Engine::moodPick(const Settings& s, const PickIn& in, const Scope& sc, Pick out) {
+  out.random = true;
+  const Maps& m = *in.maps;
+  const MoodView& mood = m.mood;
+  // 6. The scan, past the anchors and the playing track's row; each row's
+  // cooldown level and statuses.
+  const uint32_t n = scan(m, sc.anc, sc.playingRow);
+  Counts& counts = *counts_;
+  counts = Counts();
+  for (uint32_t i = 0; i < n; ++i) {
+    const uint16_t r = cand_[i].row;
+    const uint32_t w = m.filters[r];
+    cand_[i].bits = sc.bits(ses_.cool.has(r) ? 2 : sc.artistCooled(w) ? 1 : 0, w);
+    counts.add(cand_[i].bits);
+  }
+  out.candidates = out.gated = static_cast<uint16_t>(n);
+  if (counts.fresh()) {
+    const uint32_t j = choose(sc, m, n, counts, out);
+    out.level = 0;
+    return finish(s, m, cand_[j].row, out);
+  }
+  // 7. No fresh row: a fresh track inside the mood with no row, by id.
+  const uint32_t t = oneOf(m.tracks, [&](uint32_t x) {
+    return m.trackToRow[x] >= m.rows && x != in.playingTrack && mood.passes(x) && !ses_.ids.has(x);
+  });
+  if (t != kNoTrackId) {
+    out.jump = Jump::NoRow;
+    out.noIndex = out.byIdJoined = true;
+    out.ok = true;
+    out.track = t;
+    out.row = kNoRow;
+    ses_.ids.add(t);
+    return counted(s, out);
+  }
+  // 8. Repeats, the oldest first: the track cooldown's first row inside the
+  // mood that isn't playing; unranked (its statuses as known).
+  for (uint8_t i = 0; i < ses_.cool.size(); ++i) {
+    const uint16_t r = ses_.cool.at(i);
+    if (r >= m.rows || r == sc.playingRow) continue;
+    const uint16_t first = m.rowToTrack[r];
+    if (first == kNoTrack || !mood.passes(first)) continue;
+    const uint8_t b = sc.bits(2, m.filters[r]);
+    out.repeated = true;
+    out.cooldownLevel = 2;
+    out.musicRank = musicRank(tempoOf(b), keyOf(b));
+    out.tempoBreak = tempoOf(b) == Tempo::Wide || tempoOf(b) == Tempo::Wrong;
+    out.keyBreak = keyOf(b) == Key::Wrong;
+    out.level = 0;
+    return finish(s, m, r, out);
+  }
+  // 9. By id (the playing track, if nothing else fits).
+  return byId(s, in, out);
 }
 
 // The pool's classes and the draw; `counts` the pool's (classes before D3).
@@ -739,6 +921,8 @@ Pick Engine::finish(const Settings& s, const Maps& m, uint16_t row, Pick out) {
 }
 
 Pick Engine::byId(const Settings& s, const PickIn& in, Pick out) {
+  const MoodView& mood = in.maps ? in.maps->mood : in.mood;
+  if (mood.on()) return moodById(s, in, mood, out);
   out.random = true;
   out.noIndex = true;
   const uint32_t n = in.libraryTracks;
@@ -753,6 +937,38 @@ Pick Engine::byId(const Settings& s, const PickIn& in, Pick out) {
     ++stats_.failed;
     return out;
   }
+  return takeById(s, in, t, out);
+}
+
+// A pick by id inside the mood (MOOD-FILTERS.md 6.2, 9): a fresh track (not
+// the playing one, outside the by-id cooldown), else that cooldown's oldest,
+// else the playing track; none fits: no pick.
+Pick Engine::moodById(const Settings& s, const PickIn& in, const MoodView& mood, Pick out) {
+  out.random = true;
+  out.noIndex = true;
+  out.byIdJoined = in.maps != nullptr;  // (moodPick's 9: not for want of an index)
+  const uint32_t n = in.libraryTracks;
+  const uint32_t playing = in.playingTrack;
+  uint32_t t = oneOf(n, [&](uint32_t x) { return x != playing && mood.passes(x) && !ses_.ids.has(x); });
+  if (t == kNoTrackId) {
+    for (uint8_t i = 0; i < ses_.ids.size() && t == kNoTrackId; ++i) {
+      const uint32_t x = ses_.ids.at(i);
+      if (x != playing && x < n && mood.passes(x)) t = x;
+    }
+    if (t == kNoTrackId && playing < n && mood.passes(playing)) t = playing;
+    out.repeated = t != kNoTrackId;
+  }
+  if (t == kNoTrackId) {
+    out.noFit = true;
+    ++stats_.failed;
+    ++stats_.noFit;
+    return out;
+  }
+  return takeById(s, in, t, out);
+}
+
+// Track t by id: the by-id cooldown; its row, if the maps know one, as a pick's.
+Pick Engine::takeById(const Settings& s, const PickIn& in, uint32_t t, Pick out) {
   out.ok = true;
   out.track = t;
   out.row = kNoRow;
@@ -774,6 +990,9 @@ Pick Engine::counted(const Settings& s, const Pick& out) {
   stats_.loosened += out.loosened;
   stats_.random += out.random;
   stats_.noIndex += out.noIndex;
+  stats_.jumps += out.jump != Jump::None;
+  stats_.repins += out.repinned;
+  stats_.moodRepeats += out.repeated;
   return out;
 }
 
@@ -782,6 +1001,19 @@ Pick Engine::surprise(const Settings&, const PickIn& in) {
   out.random = true;
   if (!in.maps || in.maps->rows == 0) return out;
   const Maps& m = *in.maps;
+  if (m.mood.on()) {
+    // Inside the mood (MOOD-FILTERS.md 6.3): the scan with no exclusions,
+    // then one of its rows. (No scratch after a failed begin(): none.)
+    if (!keys_) return out;
+    const uint32_t n = scan(m, kNoAnchors, kNoRow);
+    out.candidates = out.gated = static_cast<uint16_t>(n);
+    if (n == 0) return out;
+    const uint16_t r = cand_[ses_.rng.below(n)].row;
+    out.ok = true;
+    out.row = r;
+    out.track = m.rowToTrack[r];
+    return out;
+  }
   for (uint8_t d = 0; d < kSurpriseDraws; ++d) {
     const uint16_t r = static_cast<uint16_t>(ses_.rng.below(m.rows));
     if (m.rowToTrack[r] == kNoTrack) continue;

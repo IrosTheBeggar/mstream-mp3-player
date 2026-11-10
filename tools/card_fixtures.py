@@ -4,12 +4,13 @@
 """The card contract's shared fixtures (docs/METADATA.md 2.17, 2.18).
 
 Writes test/fixtures/card/: the conformance vectors (vectors.json), the
+mood filters' vectors (moods.json, made with tools/moodfilter.py), the
 library descriptions (libraries/*.json), their golden files (golden/*), and
 the hardening files (hardening/*.bin, listed in hardening/index.json), each
 broken in one way under valid CRCs. The player's host tests
 (test/test_card_contract, test/test_card_files, test/test_card_autodj,
-test/test_name_key) read them, as the transfer software's tests in
-mstream-terminal will.
+test/test_card_waves, test/test_name_key) read them, as the transfer
+software's tests in mstream-terminal will.
 
 This is a second implementation of the contract, written from the spec and
 kept apart from lib/core/CardContract*: the goldens come from here, so the
@@ -39,7 +40,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cardnames  # noqa: E402  (the card path rules: METADATA 2.8.3-2.8.6)
+import moodfilter  # noqa: E402  (the mood tail and word: METADATA 2.6.4, 3.4.3)
 import mpdj  # noqa: E402  (every MPDJ fixture: AUTODJ-INDEX.md 13)
+import mpwf  # noqa: E402  (every MPWF fixture: WAVEFORM-INDEX.md 13)
 import playlog  # noqa: E402  (the play log's fixtures: METADATA 2.20)
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -418,10 +421,22 @@ def last_name(p):
     return p.rsplit("/", 1)[-1]
 
 
-def mptg(desc, order="canonical", rec_stride=72, extra_header=b"", extra_run_field=None, extra_sections=()):
+def mptg(desc, order="canonical", rec_stride=None, extra_header=b"", extra_run_field=None, extra_sections=()):
     """A tags file from a library description (and the knobs the hardening
-    files need)."""
+    files need).
+
+    The mood tail (2.6.4) is written only for a description whose records
+    carry "scores": the stride is then 80 unless given, a record whose
+    scores are null (no server row) gets 8 zero bytes, and the minor is 1
+    unless given. Without scores the stride is 72 unless given. Bytes past
+    the tail (or past 72, with no scores) are 0xAB, a newer minor's."""
     recs = desc.get("records", [])
+    moods = any("scores" in r for r in recs)
+    # A writer writes a tail only when a record has scores (2.6.4).
+    assert not moods or any(r.get("scores") is not None for r in recs), desc.get("file")
+    if rec_stride is None:
+        rec_stride = moodfilter.TAIL_STRIDE if moods else 72
+    assert rec_stride >= (moodfilter.TAIL_STRIDE if moods else 72), rec_stride
     folders = {"": 0}
     for r in recs:
         a = parent_of(r["path"])
@@ -486,7 +501,8 @@ def mptg(desc, order="canonical", rec_stride=72, extra_header=b"", extra_run_fie
                           pic.get("offset", 0), pic.get("length", 0), pic.get("type", 0), pic.get("mime", 0),
                           pic.get("coding", 0), 0)
         assert len(row) == 72
-        rows += row + bytes([0xAB]) * (rec_stride - 72)
+        tail = moodfilter.tail_of(r.get("scores")) if moods else b""
+        rows += row + tail + bytes([0xAB]) * (rec_stride - 72 - len(tail))
         hidx.append((path_hash(r["path"]), k))
     hidx.sort()
     sections = [("FOLD", REQUIRED, len(fpaths), 16, bytes(fold)),
@@ -511,16 +527,21 @@ def mptg(desc, order="canonical", rec_stride=72, extra_header=b"", extra_run_fie
     sections += list(extra_sections)
     th = struct.pack("<BBHHHIIIIII", desc["source"], 0, desc.get("parserVersion", 0), desc.get("readRules", 1), 0,
                      len(recs), len(fpaths), len(albums), len(artists), producer, 0) + extra_header
-    return build_container("MPTG", desc["generation"], u64(desc.get("cardId", 0)), th, sections,
-                           minor=desc.get("minor", 0))
+    minor = desc.get("minor", 1 if moods else 0)
+    assert not moods or minor >= 1, desc.get("file")
+    return build_container("MPTG", desc["generation"], u64(desc.get("cardId", 0)), th, sections, minor=minor)
 
 
 # ---------------------------------------------------------------------------
 # MSMF (2.5), MSPD (2.12.5), MPTH (2.14.1), device.txt (2.15); MPDJ is
-# tools/mpdj.py's (docs/AUTODJ-INDEX.md)
+# tools/mpdj.py's (docs/AUTODJ-INDEX.md), MPWF tools/mpwf.py's
+# (docs/WAVEFORM-INDEX.md)
 # ---------------------------------------------------------------------------
+COMPANION_STEMS = {"MPTG": "tags", "MPDJ": "autodj", "MPWF": "waves"}
+
+
 def companion_name(kind, gen):
-    return ("tags-%08x.bin" if kind == "MPTG" else "autodj-%08x.bin") % gen
+    return "%s-%08x.bin" % (COMPANION_STEMS[kind], gen)
 
 
 PEER = 1  # SRVS flags bit 0 (2.5.5)
@@ -681,8 +702,8 @@ def mpth(desc):
 
 
 def device_txt(desc):
-    keys = ["contract", "firmware", "read.msmf", "read.mptg", "read.mpdj", "read.mpth", "codecs", "extensions",
-            "max_rate", "max_channels", "history"]
+    keys = ["contract", "firmware", "read.msmf", "read.mptg", "read.mpdj", "read.mpwf", "read.mpth", "codecs",
+            "extensions", "max_rate", "max_channels", "history"]
     return "".join("%s=%s\n" % (k, desc[k]) for k in keys if k in desc).encode("ascii")
 
 
@@ -695,7 +716,7 @@ MAX_SEQ = (1 << 53) - 1
 RESERVED = {"state.json": "reserved: the private state", "state.new": "reserved: its next write",
             "resume.json": "reserved: the partials kept", "resume.new": "reserved: its next write",
             "run.lock": "reserved: a run is writing the card"}
-COMPANION_NAME = re.compile(r"^(tags|autodj)-[0-9a-f]{8}\.bin$")  # 2.4.3's COMP names
+COMPANION_NAME = re.compile(r"^(tags|autodj|waves)-[0-9a-f]{8}\.bin$")  # 2.4.3's COMP names
 PART_NAME = re.compile(r"^[0-9a-f]{8}\.part$")
 
 
@@ -715,7 +736,7 @@ def private_name(rel: str):
     name = parts[-1]
     if name.endswith(".tmp"):
         return False, "*.tmp: step 4 deletes it"
-    if len(parts) == 1 and (fnmatch.fnmatchcase(name, "tags-*.bin") or fnmatch.fnmatchcase(name, "autodj-*.bin")):
+    if len(parts) == 1 and any(fnmatch.fnmatchcase(name, "%s-*.bin" % s) for s in COMPANION_STEMS.values()):
         return False, "a companion's name"
     if len(parts) == 1 and (name.startswith("manifest.") or name.startswith("pending.")):
         return False, "a contract file's name"
@@ -977,6 +998,58 @@ def tags_empty():
             "folders": [{"path": "Owned Empty", "flags": FOLDER_OWNED}], "records": []}
 
 
+# MOOD-FILTERS.md 5.7's worked example, music/Artist A/song.flac on the server.
+WORKED_SCORES = [0.7012, 0.3104, 0.5803, 0.7, 0.2999, None, 0.4999, 0.29]
+WORKED_TAIL, WORKED_WORD, WORKED_FILTER = "03 3A 46 1D 31 FF 46 00", 0xB313, 0x127
+
+
+def tags_moods():
+    """A transfer's tags file with mood scores (2.6.4's tail, MPTG minor 1):
+    MOOD-FILTERS.md 5.1's example tracks, 5.7's worked example, and the
+    cases a writer could get wrong."""
+    t = fat_time(2026, 11, 2, 18, 5, 10)
+    rec = []
+
+    def add(path, scores, **kw):
+        r = {"path": path, "size": 3000 + 41 * len(rec), "fatTime": "0x%08X" % (t + 2 * len(rec)),
+             "durationMs": 210000 + 1000 * len(rec), "qfp": "0x%016X" % fnv(b"moods " + path.encode("utf-8")),
+             "known": KNOWN_RULES1, "container": 2, "scores": scores,
+             "tags": {"title": [last_name(path).rsplit(".", 1)[0]], "artist": [path.split("/")[0]]}}
+        r.update(kw)
+        r.setdefault("ledger", {"serverPath": "music/" + path, "mstreamId": 300 + len(rec), "albumId": 20,
+                                "artistId": 6, "audioHash": h16("ma" + path), "fileHash": h16("mf" + path),
+                                "serverModified": 1792500000000 + len(rec), "serverSize": r["size"],
+                                "createdAt": 1792500000, "hashV": 2, "originFlags": 2})
+        rec.append(r)
+
+    add("Artist A/scored.flac", [0.81, 0.29, 0, 0.7, 0.1234, 1, 0.57, 0.58],
+        note="every head scored: 0 and 1 as integers; 0.29, 0.57 and 0.58 are 29, 57 and 58 (a plain floor "
+             "gives 28, 56, 57)")
+    add("Artist A/null-head.flac", [0.81, 0.29, None, 0.7, 0.1234, 1, 0.57, 0.58],
+        note="sad NULL: valence 255, no order bit; the rest as scored.flac")
+    add("Artist A/all-null.flac", [None] * 8, note="a row of NULLs: PRESENT, every value 255 (not no row)")
+    add("Artist A/no-row.flac", None, note="no server row: 8 zero bytes")
+    add("Artist A/song.flac", WORKED_SCORES, note="MOOD-FILTERS.md 5.7's worked example: " + WORKED_TAIL)
+    add("Artist B/Album/01 - Ties.flac", [0.4, 0.6, 0.6, 0.55, 0.55, 0.3, 0.12345, 0.7],
+        note="ties: happy = sad, relaxed = aggressive, so no order bit; a 5-place score (12)")
+    add("Artist B/Album/02 - Order.flac", [0.1, 0.2, 0.9, 0.05, 0.95, 0, 0, 0.0001],
+        note="sad beats happy, aggressive beats relaxed: flags 0x07")
+    add("Artist B/Album/03 - Nulls.flac", [0.33, 0.12, 0.66, 0.8, None, 0.49, None, None],
+        note="aggressive, acoustic and instrumental NULL: energy 255 and no bit 2; bit 1 kept")
+    add("Artist B/Album/04 - Clamped.flac", [1.25, -0.5, 0.2, 0.9999, 0.0001, 1.5, -0.0001, 0.3],
+        note="scores outside 0-1 clamp to 100 and 0; the order bits from the raw doubles")
+    add("Artist B/Album/cover.jpg", None, note="an owned cover: no server track, so no row", container=255,
+        known=0, durationMs=0, tags={}, ledger={"serverPath": "", "originFlags": 0})
+    return {
+        "format": "MPTG", "file": "tags-moods.bin", "generation": 44, "cardId": CARD_ID, "minor": 1,
+        "source": 2, "parserVersion": 1, "readRules": 1, "producer": "mstream-terminal 0.13.0",
+        "note": "A transfer's tags file with mood scores (2.6.4): RECS rows of 80 bytes, minor 1. A record's "
+                "'scores' are mStream's eight in moods.json's 'heads' order, null where a head has none, or null "
+                "for no server row; each writer derives the tail from them.",
+        "records": rec,
+    }
+
+
 HOME_URL = "http://music.example:3000"  # ED901EA3EE763AC7, as 2.18's serverUrlKey vector
 SECOND_URL = "https://second.example/mstream"
 SECOND_INSTANCE = "8899aabb-ccdd-4eff-8011-223344556677"
@@ -1087,6 +1160,20 @@ def manifest_acks():
                      {"deviceId": DEVICE_A, "epoch": EPOCH_1, "seq": 7}]}
 
 
+def manifest_waves():
+    return {"format": "MSMF", "file": "manifest-waves.bin", "generation": 43, "cardId": CARD_ID,
+            "commitTime": 1792100000, "flags": 1, "commitId": "0x0000002BFACEC0DE",
+            "serverInstance": "00112233-4455-6677-8899-aabbccddeeff", "producer": "mstream-terminal 0.13.0",
+            "serverRevision": "\"r-412-99-1790000000999-300\"", "baseGeneration": 42,
+            "serverUrl": "HTTP://Music.Example:3000/",
+            "note": "A root that names all three companions (WAVEFORM-INDEX.md 7.2): its MPWF row after the MPTG and "
+                    "MPDJ rows, its name after theirs in STRS, its key zeros. Its companions are manifest.bin's and a "
+                    "waveform index carried from generation 42.",
+            "companions": [{"file": "tags-0000002a.bin"}, {"file": "autodj-00000029.bin"},
+                           {"file": "waves-0000002a.bin"}],
+            "roots": ["Lib B", "Lib A"]}
+
+
 def manifest_min():
     return {"format": "MSMF", "file": "manifest-min.bin", "generation": 1, "cardId": CARD_ID, "commitTime": 1791300000,
             "flags": 0, "commitId": "0x0000000000000001", "producer": "mstream-terminal 0.13.0",
@@ -1119,12 +1206,12 @@ def thumb_main():
 
 def device_main():
     return {"format": "device.txt", "file": "device.txt", "contract": "1", "firmware": "0.12.0", "read.msmf": "1",
-            "read.mptg": "1", "read.mpdj": "2", "read.mpth": "1", "codecs": "mp3,flac,opus",
+            "read.mptg": "1", "read.mpdj": "2", "read.mpwf": "1", "read.mpth": "1", "codecs": "mp3,flac,opus",
             "extensions": "mp3,flac,opus", "max_rate": "48000", "max_channels": "2", "history": "1"}
 
 
 LIBRARIES = [tags_transfer, tags_device, tags_empty, manifest_min, manifest_main, pending_main, thumb_main,
-             device_main, tags_servers, manifest_servers, manifest_acks]
+             device_main, tags_servers, manifest_servers, manifest_acks, manifest_waves, tags_moods]
 
 
 def build(desc, golden: dict):
@@ -1600,7 +1687,8 @@ def private_vectors():
         ("state.json", True), ("state.new", True), ("resume.json", True), ("resume.new", True), ("run.lock", True),
         ("resume/0000002a.part", True), ("notes.txt", True), ("cache/index.bin", True), ("cache/old.tmp", False),
         ("State.json", False), ("state.tmp", False), ("tags-0000002a.bin", False), ("tags-backup.bin", False),
-        ("autodj-old.bin", False), ("manifest.json", False), ("pending.txt", False), ("stage/keep.bin", False),
+        ("autodj-old.bin", False), ("waves-0000002a.bin", False), ("waves-old.bin", False), ("manifest.json", False),
+        ("pending.txt", False), ("stage/keep.bin", False),
         ("thumbs/state.json", False), ("resume/notes.txt", False), ("resume/0000002A.part", False),
         ("resume/old/0000002a.part", False), ("stage", False), ("thumbs", False), ("resume", False)]
     settle = [
@@ -1654,14 +1742,15 @@ def private_vectors():
                "thumbs/B/B1F7E69F.tmp": 21656, "state.json": 200, "resume.json": 900,
                "resume/0000002a.part": 10485760, "resume/0000002b.part": 52428801, "resume/0000002c.part": 100,
                "resume/0000002d.part": 4096, "resume/old/0000002e.part": 10, "run.lock": 120, "notes.txt": 5,
-               "cache/index.bin": 64}
-    root = ["tags-0000002a.bin", "autodj-00000029.bin"]
+               "cache/index.bin": 64, "waves-0000002a.bin": 2048, "waves-00000029.bin": 1792}
+    root = ["tags-0000002a.bin", "autodj-00000029.bin", "waves-0000002a.bin"]
     every = ["manifest.tmp", "resume/0000002a.part", "resume/0000002b.part", "resume/0000002c.part",
              "resume/0000002d.part", "resume/old/0000002e.part", "stage/00000003.tmp", "tags-00000029.bin",
-             "thumbs/B/B1F7E69F.tmp"]
+             "thumbs/B/B1F7E69F.tmp", "waves-00000029.bin"]
     clean = [
         (listing, root, resume, [n for n in every if n not in ("resume/0000002a.part", "resume/0000002c.part")],
-         "autodj-00000029.bin is named, tags-00000029.bin isn't; step 1 left manifest.tmp; 0000002a and 0000002c "
+         "autodj-00000029.bin and waves-0000002a.bin are named, tags-00000029.bin and waves-00000029.bin aren't; "
+         "step 1 left manifest.tmp; 0000002a and 0000002c "
          "are listed and no longer than their size, 0000002b is longer, 0000002d isn't listed, resume/old/ is a "
          "folder; the private files stay"),
         (listing, root, None, every, "no resume.json: every partial goes"),
@@ -2078,10 +2167,17 @@ def vectors(golden: dict):
     _, snaps, ops = plays_files(golden)
     v["plays"] = plays_vectors(golden, snaps, ops)
     v["deviceTxt"] = {"text": device_txt(device_main()).decode("ascii"),
-                      "noFile": {"read.msmf": "1", "read.mptg": "1", "read.mpdj": "", "read.mpth": "1",
-                                 "codecs": "mp3,flac", "extensions": "mp3,flac", "max_rate": "48000",
+                      "noFile": {"read.msmf": "1", "read.mptg": "1", "read.mpdj": "", "read.mpwf": "",
+                                 "read.mpth": "1", "codecs": "mp3,flac", "extensions": "mp3,flac", "max_rate": "48000",
                                  "max_channels": "2"}}
     v["mpdj"] = mpdj.fixture_vectors(golden)
+    v["mpwf"] = mpwf.fixture_vectors(golden)
+    v["mpwf"]["rootRow"] = {
+        "note": "WAVEFORM-INDEX.md 7.2: what a reader takes from a root's COMP. waves: the MPWF row's name, null for "
+                "none; matches: the row against the golden file of that name. Each hardening file's root reads.",
+        "golden": {"file": "manifest-waves.bin", "waves": "waves-0000002a.bin", "matches": True},
+        "hardening": [{"file": name + ".bin", "waves": waves, "matches": matches, "note": note}
+                      for name, (waves, matches, note) in WAVES_ROOTS.items()]}
     return v
 
 
@@ -2190,6 +2286,44 @@ def root_acks(b: bytes):
     return None
 
 
+# What a reader takes from each root that reads with a waves row out of the
+# common (WAVEFORM-INDEX.md 7.2): (the row's name or None, whether it matches
+# the golden file of that name, what the file shows).
+WAVES_ROOTS = {
+    "msmf-waves-no-mpdj": ("waves-0000002a.bin", True, "no MPDJ row: the root's second row"),
+    "msmf-waves-between": ("waves-0000002a.bin", True, "between MPTG and MPDJ: readers don't check its place"),
+    "msmf-waves-first": ("waves-0000002a.bin", True, "before MPTG: readers don't check its place"),
+    "msmf-waves-name-upper": (None, None, "waves-0000002A.bin: uppercase hex"),
+    "msmf-waves-name-generation": (None, None, "the name's digits aren't the row's generation"),
+    "msmf-waves-name-stem": (None, None, "wave-0000002a.bin: another stem"),
+    "msmf-waves-name-empty": (None, None, "the name's offset 0: the empty string"),
+    "msmf-waves-two": (None, None, "two MPWF rows: neither counts"),
+    "msmf-waves-key": ("waves-0000002a.bin", False, "the key isn't zeros: the row reads, the file doesn't match"),
+    "msmf-waves-file-bytes": ("waves-0000002a.bin", False, "fileBytes one more: the file doesn't match"),
+    "msmf-waves-header-crc": ("waves-0000002a.bin", False, "headerCrc wrong: the file doesn't match"),
+}
+
+
+def root_waves(b: bytes):
+    """The MPWF row a reader takes from a root (WAVEFORM-INDEX.md 7.2):
+    (name, generation, fileBytes, headerCrc, key), or None when the root has
+    none, has two, or its name isn't the rule's: then the root reads with no
+    waves entry. Its place in COMP isn't checked."""
+    p = parse_container(b)
+    comp, strs = section(p, "COMP"), bytes(section(p, "STRS")[4])
+    rows = []
+    for i in range(comp[2]):
+        kind, gen, fb, hc, name, _, key = struct.unpack_from("<4sIIIII16s", comp[4], comp[3] * i)
+        if kind == b"MPWF":
+            rows.append((strs[name:strs.index(0, name)].decode("utf-8"), gen, fb, hc, key))
+    return rows[0] if len(rows) == 1 and rows[0][0] == mpwf.file_name(rows[0][1]) else None
+
+
+def waves_matches(row, golden: dict):
+    """A root's MPWF row against the golden file of its name."""
+    return mpwf.companion_matches(golden[row[0]], *row[1:])
+
+
 def check_plays(pv, golden: dict, want):
     """The plays group recomputed (2.20, 2.5.6)."""
     snaps, _ = run_plays(plays_script(golden))
@@ -2267,6 +2401,60 @@ def check_plays(pv, golden: dict, want):
         want(history_majors(e["text"]) == e["history"], "history %r" % e["text"])
 
 
+def check_waves(w, golden: dict, want):
+    """The mpwf group recomputed (docs/WAVEFORM-INDEX.md 13.3), and the fixture
+    card's waveform index against its tags file."""
+    for e in w["names"]:
+        want(mpwf.file_name(e["generation"]) == e["name"], "mpwf name " + e["name"])
+    for e in w["sizes"]:
+        want(mpwf.size(e["rows"]) == e["fileBytes"], "mpwf size %d" % e["rows"])
+    for g in w["barRanges"]:
+        for e in g["cases"]:
+            want(mpwf.bar_range(e["i"], g["m"]) == (e["start"], e["end"]), "mpwf range %r" % e)
+    for e in w["bars"]:
+        peaks = list(bytes.fromhex(e["peaks"])) if "peaks" in e else [0] * e["m"]
+        bars = list(bytes.fromhex(e["bars"])) if "bars" in e else [0] * mpwf.BAR_COUNT
+        for i, b in e.get("peaksAt", {}).items():
+            peaks[int(i)] = b
+        for i, b in e.get("barsAt", {}).items():
+            bars[int(i)] = b
+        want(len(peaks) == e["m"] and list(mpwf.bars_from_peaks(peaks)) == bars, "mpwf bars " + e["note"])
+    for sc in (w["slot"], w["slotCrc"]):
+        raw = mpwf.Reader(golden[sc["file"]]).slot_raw(sc["row"])
+        want(mpwf.slot_crc(raw, sc["row"]) == hexint(sc["crc"]) and mpwf.crc32(raw[:-4]) == hexint(sc["unseeded"]),
+             "mpwf slotCrc " + sc["file"])
+    want(mpwf.Reader(golden[w["slot"]["file"]]).slot_raw(0).hex() == w["slot"]["bytes"], "mpwf slot bytes")
+    for e in w["sectionCrc"]:
+        r = mpwf.Reader(golden[e["file"]])
+        want(r.rows == e["rows"] and r.section.crc == hexint(e["crc"]), "mpwf section crc " + e["file"])
+    for e in w["pick"]:
+        want(mpwf.probe_row(u64(e["h"]), e["lo"], e["hi"], u64(e["loH"]), u64(e["hiH"]), e["probes"]) == e["row"],
+             "mpwf pick " + e["note"])
+    for name, cases in w["search"]["files"].items():
+        r = mpwf.Reader(golden[name])
+        for e in cases:
+            got = r.find(u64(e["hash"]))
+            want(got.read == e["read"] and got.probes == e["probes"] and got.row == e.get("row"),
+                 "mpwf search %s %s" % (name, e["hash"]))
+    for e in w["deviceTxt"]["cases"]:
+        want(mpwf.writes_waves(mpwf.device_text(e)) == e["writes"], "mpwf deviceTxt %r" % e)
+    for e in w["commit"]["cases"]:
+        got = mpwf.commit_outcome(mpwf.device_text(e), golden.get(e["old"]), mpwf.commit_rows(e, golden))
+        want(got == e["outcome"], "mpwf commit " + e["note"])
+    # Every slot of the fixture card's index is a track of its tags file, its
+    # lengthMs that record's durationMs (0 where the record has none).
+    records = {x["pathHash"]: x for x in ledger_rows(golden["tags-0000002a.bin"])}
+    r = mpwf.Reader(golden[mpwf.G1_FILE])
+    for i in range(r.rows):
+        slot = r.slot(i)[2]
+        want(slot.path_hash in records and records[slot.path_hash]["durationMs"] == slot.length_ms,
+             "mpwf slot %d against the tags file" % i)
+    rr = w["rootRow"]
+    row = root_waves(golden[rr["golden"]["file"]])
+    want(row is not None and row[0] == rr["golden"]["waves"] and waves_matches(row, golden) == rr["golden"]["matches"],
+         "mpwf root row")
+
+
 def check_vectors(v, golden: dict):
     """Recomputes every vector; raises on a mismatch."""
     bad = []
@@ -2322,6 +2510,7 @@ def check_vectors(v, golden: dict):
     raw = mpdj.Reader(golden[sc["file"]]).slot_raw(sc["row"])
     want(mpdj.slot_crc(raw, sc["row"]) == hexint(sc["crc"]) and mpdj.crc32(raw[:-4]) == hexint(sc["unseeded"]),
          "mpdj slotCrc")
+    check_waves(v["mpwf"], golden, want)
     sib = v["canonicalOrder"]["siblings"]
     want(sorted(sib, key=lambda s: s.encode("utf-8")) == sib, "siblings")
     files = v["canonicalOrder"]["files"]
@@ -2400,6 +2589,257 @@ def check_vectors(v, golden: dict):
     check_plays(v["plays"], golden, want)
     if bad:
         raise SystemExit("vectors that don't match: " + ", ".join(bad))
+
+
+# ---------------------------------------------------------------------------
+# Mood filters (moods.json: MOOD-FILTERS.md 4.1, 5.3, 5.4; tools/moodfilter.py)
+# ---------------------------------------------------------------------------
+def spaced(b: bytes) -> str:
+    """Bytes as the fixtures write them: space-separated hex."""
+    return b.hex(" ").upper()
+
+
+def broken_tail(i, v):
+    """5.7's worked tail with byte 72 + i set to v."""
+    t = bytearray.fromhex(WORKED_TAIL)
+    t[i] = v
+    return spaced(bytes(t))
+
+
+# Tails a reader must refuse, one kind each: the record then has no scores
+# (2.6.4). Each is 5.7's worked tail broken in one way, but the last.
+BAD_TAILS = [("bit 0 clear, an order bit set", broken_tail(0, 0x02)),
+             ("bit 0 clear, the values set", broken_tail(0, 0x00))]
+BAD_TAILS += [("reserved flag bit %d set" % k, broken_tail(0, 0x03 | 1 << k)) for k in range(3, 8)]
+BAD_TAILS += [("byte 79 not 0", broken_tail(7, 1))]
+BAD_TAILS += [("byte %d at %d: neither 0-100 nor 255" % (72 + i, v), broken_tail(i, v))
+              for i, v in zip(range(1, 7), (101, 254) * 3)]
+BAD_TAILS += [("mptg-minor-1's 0xAB fill (flag bits 0xA8)", spaced(bytes([0xAB]) * 8))]
+
+# Tails a reader takes: two no writer makes (an order bit beside a 255),
+# and three edges a writer can.
+ODD_TAILS = [("an order bit beside a 255: ignored, valence NULL", "03 FF 46 1D 31 FF 46 00"),
+             ("bit 2 beside a 255: ignored, energy NULL", "05 3A FF 1D 31 FF 46 00"),
+             ("an order bit beside a value under 30: bucket 0 stores 0, no side", "03 1D 46 1D 31 FF 46 00"),
+             ("every value 100, both order bits", "07 64 64 64 64 64 64 00"),
+             ("every value 0, PRESENT alone: analysed, nothing holds but neutral and vocals",
+              "01 00 00 00 00 00 00 00")]
+
+# The rows: tags-moods.bin's records first, then the bars' edges. The
+# NULL rows each take one head from MOOD_BASE, which passes 5.7's filter.
+MOOD_BASE = [0.6, 0.2, 0.55, 0.6, 0.35, 0.65, 0.75, 0.15]
+
+
+def mood_rows():
+    """moods.json's rows, as (note, scores)."""
+    rows = [("tags-moods.bin's %s: %s" % (r["path"], r["note"]), r["scores"]) for r in tags_moods()["records"]]
+    rows += [("every head at %s%s" % (x, what), [x] * 8) for x, what in [
+        (0.3, ", Loose's bar: ties, so happy and relaxed"), (0.2999, ", a step under Loose's bar"),
+        (0.5, ", Standard's bar"), (0.4999, ", a step under Standard's bar"), (0.7, ", Strict's bar"),
+        (0.6999, ", a step under Strict's bar"), (0, ""), (1, "")]]
+    rows += [
+        ("happy at Strict's bar, sad a step under", [0.5, 0.7, 0.6999, 0.5, 0.5, 0.5, 0.5, 0.5]),
+        ("sad at Strict's bar, happy a step under", [0.5, 0.6999, 0.7, 0.5, 0.5, 0.5, 0.5, 0.5]),
+        ("aggressive beats relaxed by a step at Standard's bar", [0.5, 0.2, 0.1, 0.5, 0.5001, 0.5, 0.5, 0.5]),
+        ("happy and neutral at once at Loose (on 0.3, mirror 0.7)", [0.4, 0.65, 0.2, 0.25, 0.1, 0.2, 0.2, 0.2]),
+        ("sad at 0.7 over happy at 0.6: sad at every level, never neutral", [0.5, 0.6, 0.7, 0.3, 0.6, 0.5, 0.5, 0.5]),
+        ("neutral at Strict: every head under 0.3", [0.1, 0.25, 0.2999, 0.0001, 0.29, 0.1, 0.1, 0.1]),
+        ("instrumental at 0.3: vocals at Standard, not at Strict", [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.3]),
+        ("instrumental at 0.69: vocals at Loose", [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.69]),
+        ("the tags at the three bars: acoustic 0.3, party 0.5, danceable 0.7",
+         [0.7, 0.4, 0.4, 0.4, 0.4, 0.5, 0.3, 0.4]),
+        ("the float traps on every head: 0.29, 0.57, 0.58", [0.58, 0.29, 0.57, 0.57, 0.58, 0.29, 0.58, 0.29]),
+        ("5-place scores beside the bars", [0.70001, 0.29999, 0.49999, 0.69999, 0.30001, 0.50001, 0.29999, 0.49999]),
+        ("sad, relaxed, vocals and danceable at every level", [0.9, 0.1, 0.8, 0.75, 0.05, 0.2, 0.3, 0.1]),
+        ("0x127 at its bars: sad 0.5 over 0.4999, relaxed tied at 0.5, instrumental 0.4999, danceable 0.5",
+         [0.5, 0.4999, 0.5, 0.5, 0.5, 0.1, 0.1, 0.4999]),
+        ("sad and relaxed only at Loose", [0.3, 0.2, 0.3, 0.3, 0.2999, 0, 0, 0.6999]),
+    ]
+    for i, head in enumerate(moodfilter.MOOD_COLUMNS):
+        rows.append(("%s NULL: it fails only its own scale" % head, [None if j == i else x
+                                                                    for j, x in enumerate(MOOD_BASE)]))
+    return rows
+
+
+# Filters beside the 33 one-group ones of `holds`: 5.7's, groups ANDed at
+# each level, a level alone, and words that read as 0.
+MOOD_FILTERS = [
+    (WORKED_FILTER, "MOOD-FILTERS.md 5.7: Sad, Relaxed, Vocals, Danceable at Standard"),
+    (moodfilter.pack("happy", "relaxed", "instrumental", level="strict"), "Happy, Relaxed, Instrumental at Strict"),
+    (moodfilter.pack("neutral", "neutral", level="loose"), "Neutral and Neutral at Loose"),
+    (moodfilter.pack(energy="aggressive", tags=["party"], level="loose"), "Aggressive and Party at Loose"),
+    (moodfilter.pack(tags=["acoustic", "party", "danceable"]), "every tag at Standard"),
+    (moodfilter.pack("sad", voice="vocals", level="strict"), "Sad and Vocals at Strict"),
+    (0, "no filter: every track, analysed or not"),
+    (moodfilter.pack(level="strict"), "a level alone filters nothing"),
+    (moodfilter.pack(level="loose"), "a level alone filters nothing"),
+    (0x800, "bit 11: invalid, reads as 0"),
+    (0x8001, "bit 15: invalid, reads as 0"),
+    (0x30, "voice 3: invalid, reads as 0"),
+    (0x600, "level 3: invalid, reads as 0"),
+    (0x627, "5.7's groups at level 3: invalid, reads as 0, so no filter"),
+]
+
+
+# The spec's own literals, which nothing here computes: check_moods holds
+# the code to them. The 11 predicates' bits and each level's code, need and
+# under (MOOD-FILTERS.md 5.4), and its bars (4.1).
+SPEC_PREDICATES = ["0x001", "0x002", "0x003", "0x004", "0x008", "0x00C", "0x010", "0x020", "0x040", "0x080",
+                   "0x100"]
+SPEC_LEVELS = [("strict", 1, 3, 1, 0.7, 0.3), ("standard", 0, 2, 2, 0.5, 0.5), ("loose", 2, 1, 3, 0.3, 0.7)]
+# Hand-made tails, one word field each, and the words 5.4's bit table gives
+# them: analysed 15, voice NULL 14, valence 13-11, energy 10-8 (side << 2 |
+# bucket, 4 NULL), instrumental 7-6, acoustic 5-4, party 3-2, danceable 1-0.
+SPEC_WORDS = [
+    ("01 00 00 00 00 00 00 00", 0x8000, "analysed alone: bit 15"),
+    ("01 00 00 FF 00 00 00 00", 0xC000, "instrumental NULL: bit 14, its bucket 0"),
+    ("03 46 00 00 00 00 00 00", 0xB800, "valence 70, sad's side: 7 in bits 13-11"),
+    ("01 FF 00 00 00 00 00 00", 0xA000, "valence NULL: 4 in bits 13-11"),
+    ("05 00 1E 00 00 00 00 00", 0x8500, "energy 30, aggressive's side: 5 in bits 10-8"),
+    ("01 00 32 00 00 00 00 00", 0x8200, "energy 50, relaxed's side: 2 in bits 10-8"),
+    ("01 00 FF 00 00 00 00 00", 0x8400, "energy NULL: 4 in bits 10-8"),
+    ("01 00 00 46 00 00 00 00", 0x80C0, "instrumental 70: 3 in bits 7-6"),
+    ("01 00 00 00 32 00 00 00", 0x8020, "acoustic 50: 2 in bits 5-4"),
+    ("01 00 00 00 00 1E 00 00", 0x8004, "party 30: 1 in bits 3-2"),
+    ("01 00 00 00 00 00 64 00", 0x8003, "danceable 100: 3 in bits 1-0"),
+    ("01 00 00 00 00 00 1D 00", 0x8000, "danceable 29: bucket 0"),
+    ("01 00 00 00 00 00 31 00", 0x8001, "danceable 49: bucket 1"),
+    ("01 00 00 00 00 00 45 00", 0x8002, "danceable 69: bucket 2"),
+    ("01 00 00 00 00 FF 00 00", 0x8000, "party NULL: 0, which never holds"),
+]
+
+
+def mood_albums(rows):
+    """Albums made of rows (5.7's majority): (note, q, row indexes)."""
+    q = WORKED_FILTER
+    words = [moodfilter.word_of(s) for _, s in rows]
+    yes = [i for i, w in enumerate(words) if w and moodfilter.matches(w, q)]
+    no = [i for i, w in enumerate(words) if w and not moodfilter.matches(w, q)]
+    none = [i for i, w in enumerate(words) if not w]
+    all_null = [i for i, (_, s) in enumerate(rows) if s is not None and all(x is None for x in s)]
+    return [
+        ("5 of 9 analysed pass: 10 > 9, it matches", q, yes[:5] + no[:4]),
+        ("2 of 4: 4 > 4 fails", q, yes[:2] + no[:2]),
+        ("only tracks with no row: 0 of 0, never a match", q, none[:2]),
+        ("5 of 9 and three with no row, which don't count", q, yes[:5] + no[:4] + none[:3]),
+        ("1 pass and a row of NULLs: 1 of 2, the NULL row in the denominator", q, yes[:1] + all_null[:1]),
+        ("1 pass alone: 1 of 1", q, yes[:1]),
+        ("1 pass and a track with no row: still 1 of 1", q, yes[:1] + none[:1]),
+        ("no track passes: 0 of 3", q, no[:3]),
+    ]
+
+
+def moods(golden: dict):
+    m = {}
+    m["note"] = ("Mood filters as data (MOOD-FILTERS.md 4.1, 5.3, 5.4; METADATA 2.6.4's mood tail, 3.4.3's mood "
+                 "word), made with tools/moodfilter.py. Hex strings are integers; byte strings are space-separated "
+                 "hex; rows are counted from 0. A row's 'holds' lists, for each level, the predicates that hold for "
+                 "it, in 'predicates' order; one not listed fails. A predicate at a level is the filter of its 'q' "
+                 "with the level's 'code' in bits 9-10. A filter that sets no group (a level alone, or an invalid "
+                 "word, which reads as 0) matches every row, one with no scores too.")
+    m["heads"] = list(moodfilter.MOOD_COLUMNS)
+    m["values"] = [{"score": x, "value": moodfilter.value(x), "bucket": moodfilter.bucket(moodfilter.value(x))}
+                   for x in [0, 1, 0.29, 0.57, 0.58, 0.2999, 0.3, 0.4999, 0.5, 0.6999, 0.7, 0.12345, 0.99999, 1.25,
+                             -0.5, -0.0001]]
+    m["values"].append({"score": None, "value": moodfilter.NULL, "note": "NULL: no bucket"})
+    m["levels"] = [{"level": lv, "code": moodfilter.LEVELS[lv]["code"], "need": moodfilter.LEVELS[lv]["need"],
+                    "under": moodfilter.LEVELS[lv]["under"]} for lv in ("strict", "standard", "loose")]
+    m["bars"] = [{"level": lv, "on": moodfilter.LEVELS[lv]["on"], "mirror": moodfilter.LEVELS[lv]["mirror"]}
+                 for lv in ("strict", "standard", "loose")]
+    m["predicates"] = [{"name": n, "q": "0x%03X" % q} for n, q in moodfilter.PREDICATES]
+    rows = mood_rows()
+    m["rows"] = []
+    for note, scores in rows:
+        tail = moodfilter.tail_of(scores)
+        word = moodfilter.word_of_tail(tail)
+        m["rows"].append({"note": note, "scores": scores, "tail": spaced(tail), "word": "0x%04X" % word,
+                          "holds": moodfilter.holds(word)})
+    m["tails"] = [{"note": "no row", "tail": spaced(moodfilter.NO_ROW)}]
+    m["tails"] += [{"note": n, "tail": spaced(moodfilter.tail_of(s))} for n, s in [
+        ("MOOD-FILTERS.md 5.7's worked example", WORKED_SCORES), ("a row of NULLs", [None] * 8)]]
+    m["tails"] += [{"note": n, "tail": t} for n, t in ODD_TAILS + BAD_TAILS]
+    for e in m["tails"]:
+        t = bytes.fromhex(e["tail"])
+        e["valid"] = moodfilter.tail_valid(t)
+        e["word"] = "0x%04X" % moodfilter.word_of_tail(t)
+    words = [moodfilter.word_of(s) for _, s in rows]
+    m["filters"] = []
+    for q, note in MOOD_FILTERS:
+        f = moodfilter.unpack(q)
+        m["filters"].append({"note": note, "q": "0x%03X" % q, "valid": moodfilter.q_valid(q),
+                             "reads": "0x%03X" % moodfilter.read_q(q), "active": moodfilter.active(q),
+                             "level": f["level"], "valence": f["valence"], "energy": f["energy"],
+                             "voice": f["voice"], "tags": f["tags"],
+                             "matches": [i for i, w in enumerate(words) if moodfilter.matches(w, q)]})
+    m["albums"] = []
+    for note, q, members in mood_albums(rows):
+        passed, analysed = moodfilter.album_counts([words[i] for i in members], q)
+        m["albums"].append({"note": note, "q": "0x%03X" % q, "rows": members, "pass": passed, "analysed": analysed,
+                            "matches": moodfilter.album_matches([words[i] for i in members], q)})
+    return m
+
+
+def check_moods(m, golden: dict):
+    """moods.json against the spec's own numbers, the word against 4.1's
+    rules on the raw scores, and tags-moods.bin's tails against its
+    description."""
+    bad = []
+
+    def want(cond, what):
+        if not cond:
+            bad.append(what)
+
+    mf = moodfilter
+    # 5.7, step by step, and the traps a plain floor falls into (5.3).
+    want(spaced(mf.tail_of(WORKED_SCORES)) == WORKED_TAIL, "5.7 tail")
+    want(mf.word_of(WORKED_SCORES) == WORKED_WORD, "5.7 word")
+    want(mf.pack("sad", "relaxed", "vocals", ["danceable"]) == WORKED_FILTER, "5.7 filter")
+    want(mf.matches(WORKED_WORD, WORKED_FILTER) and mf.matches_scores(WORKED_SCORES, WORKED_FILTER), "5.7 holds")
+    for x, plain in ((0.29, 28), (0.57, 56), (0.58, 57)):
+        want(int(x * 100) == plain and mf.value(x) == plain + 1, "float trap %s" % x)
+    want(not mf.tail_valid(bytes([0xAB]) * 8), "mptg-minor-1's tail is no tail")
+    # The spec's literals (SPEC_*): the predicates' bits, the levels' codes,
+    # readings and bars, two packed words, and each word field's place.
+    want([p["q"] for p in m["predicates"]] == SPEC_PREDICATES, "predicate bits")
+    want([(lv["level"], lv["code"], lv["need"], lv["under"], b["on"], b["mirror"])
+          for lv, b in zip(m["levels"], m["bars"])] == SPEC_LEVELS, "levels")
+    want(mf.pack("happy", "relaxed", "instrumental", level="strict") == 0x215, "pack at Strict")
+    want(mf.pack("neutral", "neutral", level="loose") == 0x40A, "pack at Loose")
+    for tail, word, note in SPEC_WORDS:
+        want(mf.word_of_tail(bytes.fromhex(tail)) == word, "word field: " + note)
+    # Every row: its word's 33 checks are 4.1's on its raw scores, as are
+    # every filter's.
+    for r in m["rows"]:
+        word = int(r["word"], 16)
+        want(spaced(mf.tail_of(r["scores"])) == r["tail"] and mf.word_of_tail(bytes.fromhex(r["tail"])) == word,
+             "row word " + r["note"])
+        raw = {lv: [n for n, _ in mf.PREDICATES if mf.matches_scores(r["scores"], mf.predicate_q(n, lv))]
+               for lv in r["holds"]}
+        want(raw == r["holds"] == mf.holds(word), "row holds " + r["note"])
+    for f in m["filters"]:
+        q = int(f["q"], 16)
+        raw = [i for i, r in enumerate(m["rows"]) if mf.matches_scores(r["scores"], q)]
+        want(raw == f["matches"], "filter " + f["q"])
+        want(mf.pack(f["valence"], f["energy"], f["voice"], f["tags"], f["level"]) == int(f["reads"], 16),
+             "filter pack " + f["q"])
+    for t in m["tails"]:
+        want(t["valid"] == (t["word"] != "0x0000"), "tail " + t["note"])
+    want(all(not t["valid"] for t in m["tails"] if (t["note"], t["tail"]) in BAD_TAILS), "bad tails")
+    # The albums: the counts their notes give.
+    counts = [(5, 9, True), (2, 4, False), (0, 0, False), (5, 9, True), (1, 2, False), (1, 1, True), (1, 1, True),
+              (0, 3, False)]
+    want([(a["pass"], a["analysed"], a["matches"]) for a in m["albums"]] == counts, "albums")
+    # tags-moods.bin: each record's bytes 72-79 its description's tail.
+    p = parse_container(golden["tags-moods.bin"])
+    s = section(p, "RECS")
+    by_path = {r["path"]: r for r in tags_moods()["records"]}
+    paths = [e["path"] for e in ledger_rows(golden["tags-moods.bin"])]
+    want(p["minor"] == 1 and s[3] == 80 and len(paths) == s[2] == len(by_path), "tags-moods.bin shape")
+    for k, path in enumerate(paths):
+        want(mf.record_tail(s[4][s[3] * k:s[3] * (k + 1)], s[3]) == mf.tail_of(by_path[path]["scores"]),
+             "tags-moods.bin " + path)
+    if bad:
+        raise SystemExit("moods.json doesn't match: " + ", ".join(bad))
 
 
 # ---------------------------------------------------------------------------
@@ -2679,9 +3119,36 @@ def hardening(golden: dict):
     good("mptg-path-longest", "MPTG", "a record whose path makes '/music/' + path exactly 255 bytes",
          one_path("L" * 120 + "/" + "M" * 123 + ".mp3"))
     good("mptg-minor-1", "MPTG",
-         "a newer minor: 8 more header bytes, RECS rows of 80 bytes, a 13th run field, an unknown section",
+         "a newer minor: 8 more header bytes, RECS rows of 80 bytes whose bytes 72-79 (0xAB, flag bits 3-7 set) "
+         "are no valid mood tail, so no record has scores (2.6.4), a 13th run field, an unknown section",
          mptg(dict(desc, minor=1), rec_stride=80, extra_header=b"newminor", extra_run_field="a newer field",
               extra_sections=[("XTRA", 0, 0, 0, b"new")]), same="tags-0000002a.bin")
+
+    # The mood tail (2.6.4): a reader that doesn't know it reads each record
+    # by its 72-byte prefix, as for any newer minor; one that does takes a
+    # tail only from a stride of 80 or more, and only a valid one, and
+    # never counts a bad tail against the record or the file.
+    good("mptg-moods-longer", "MPTG", "a newer minor: RECS rows of 88 bytes, the mood tail at 72-79 and 0xAB from "
+         "80, read by their 80-byte prefix: tags-moods.bin's records, their scores too",
+         mptg(dict(tags_moods(), minor=2), rec_stride=88), same="tags-moods.bin")
+
+    def tails_on(stride, tails):
+        def fn(p):
+            s = recs(p)
+            s[4] = bytearray(b"".join(bytes(s[4][72 * i:72 * i + 72]) + tails[i] for i in range(s[2])))
+            s[3] = stride
+            p["minor"] = 1
+        return fn
+
+    bad_tails = [bytes.fromhex(t) for _, t in BAD_TAILS]
+    assert len(bad_tails) == len(desc["records"])
+    good("mptg-tail-invalid", "MPTG", "RECS rows of 80 bytes, each record's tail broken in its own way (bit 0 clear, "
+         "a flag bit of 3-7 set, byte 79 not 0, a value of 101 or 254): no record has scores, and every record "
+         "reads (2.6.4)", edit(tails_on(80, bad_tails)), same="tags-0000002a.bin")
+    head = bytes.fromhex(WORKED_TAIL)[:4]
+    good("mptg-stride-76", "MPTG", "RECS rows of 76 bytes whose bytes 72-75 begin a valid tail (%s, valid if read "
+         "with zeros after it): a stride under 80 has no tail, so no record has scores (2.6.4)" % spaced(head),
+         edit(tails_on(76, [head] * len(desc["records"]))), same="tags-0000002a.bin")
 
     # The rest of 2.4.3's frame and directory, one file each (the tags file
     # otherwise whole, its CRCs right).
@@ -2880,6 +3347,52 @@ def hardening(golden: dict):
     good("msmf-acks-minor-1", "MSMF", "ACKS: rows of 32 bytes, a newer minor's, read by their 24-byte prefix", longer)
     full = root_acks(golden["manifest-acks.bin"])
     assert full and [root_acks(b) for b in (bytes(damaged), order, short, longer)] == [None, None, None, full]
+
+    # MSMF's MPWF row (WAVEFORM-INDEX.md 7.2): a bad one costs only itself. The
+    # root reads, with or without a waves entry; its name is read in its place
+    # (2.4.4), as for any kind, so only a string rule can cost the root.
+    wd = manifest_waves()
+    wave_comps = [comp_row(c["file"], golden[c["file"]]) for c in wd["companions"]]
+    w_row = wave_comps[2]
+    roots = sorted(wd["roots"], key=lambda r: r.encode("utf-8"))
+
+    def named(row, name, **fields):
+        kind, gen, fb, hc, _, key = row
+        return (kind, fields.get("gen", gen), fields.get("fb", fb), fields.get("hc", hc), name,
+                fields.get("key", key))
+
+    waves_cases = {
+        "msmf-waves-no-mpdj": [t_row, w_row],
+        "msmf-waves-between": [t_row, w_row, d_row],
+        "msmf-waves-first": [w_row, t_row, d_row],
+        "msmf-waves-name-upper": [t_row, d_row, named(w_row, "waves-0000002A.bin")],
+        "msmf-waves-name-generation": [t_row, d_row, named(w_row, "waves-0000002b.bin")],
+        "msmf-waves-name-stem": [t_row, d_row, named(w_row, "wave-0000002a.bin")],
+        "msmf-waves-name-empty": [t_row, d_row, named(w_row, "")],
+        "msmf-waves-two": [t_row, d_row, w_row, named(w_row, "waves-00000029.bin", gen=41)],
+        "msmf-waves-key": [t_row, d_row, named(w_row, w_row[4], key=bytes([0xA5]) * 16)],
+        "msmf-waves-file-bytes": [t_row, d_row, named(w_row, w_row[4], fb=w_row[2] + 1)],
+        "msmf-waves-header-crc": [t_row, d_row, named(w_row, w_row[4], hc=w_row[3] ^ 1)],
+    }
+    assert list(waves_cases) == list(WAVES_ROOTS)
+    for name, rows_ in waves_cases.items():
+        data = msmf_raw(wd, rows_, roots)
+        waves, matches, note = WAVES_ROOTS[name]
+        row = root_waves(data)
+        assert (row[0] if row else None) == waves and (waves_matches(row, golden) if row else None) == matches, name
+        good(name, "MSMF", "COMP's MPWF row: " + note, data)
+
+    def waves_name_offset(fn):
+        p = parse_container(msmf_raw(wd, wave_comps, roots))
+        comp = section(p, "COMP")
+        struct.pack_into("<I", comp[4], 2 * comp[3] + 16, fn(p, comp))
+        return rebuild(p)
+
+    bad("msmf-waves-name-range", "MSMF", "string", "COMP: the MPWF row's name offset at STRS's end: a string rule, "
+        "which costs the root for any kind", waves_name_offset(lambda p, c: len(section(p, "STRS")[4])))
+    bad("msmf-waves-name-order", "MSMF", "stringOrder", "COMP: the MPWF row's name offset back at the MPTG row's: a "
+        "string rule, which costs the root for any kind",
+        waves_name_offset(lambda p, c: struct.unpack_from("<I", c[4], 16)[0]))
     # MSPD.
     pd = pending_main()
     bad("mspd-order", "MSPD", "pendOrder", "PEND: a write before a delete",
@@ -2899,6 +3412,8 @@ def hardening(golden: dict):
          mspd_raw(pd, [(2, "A/x.mp3", 0), (9, "Z/z.mp3", 0), (1, "A B/y.mp3", 77)]))
     # MPDJ (docs/AUTODJ-INDEX.md 13.6): tools/mpdj.py's, each already read back.
     out += mpdj.fixture_hardening(golden)
+    # MPWF (docs/WAVEFORM-INDEX.md 13.5): tools/mpwf.py's, each already read back.
+    out += mpwf.fixture_hardening(golden)
     return out
 
 
@@ -2946,20 +3461,53 @@ elsewhere. Made-up names only, synthetic embeddings.
   4), at least one for every check of 2.4.3, so a reader that skips a
   check fails on its file. `index.json` lists each with the reader's uses
   (`all`: every section; `device`: MPTG's FOLD, RECS and STRS, MPDJ's
-  DJRF, DJPH and STRS, MSMF's COMP, LIBR and STRS: the device never reads
-  ORIG, OSTR or SRVS), whether it must read as absent or present, the
-  check it breaks, and the player's reason code. A `present` file with
+  DJRF, DJPH and STRS, MSMF's COMP, LIBR and STRS, MPWF's frame: the device
+  never reads ORIG, OSTR or SRVS, and a slot of DJSL or WVSL only when it
+  needs one), whether it must read as absent or present, the check it
+  breaks, and the player's reason code. A `present` file with
   `same` reads as the same records as that golden file (MPDJ: every row's
   filter record and used slot entries, every DJPH hash's row, the five
-  strings). An MPDJ file's `slot` says how one slot reads when the device
-  reads it alone (`damaged`: its CRC fails; `broken`: a good CRC over a
-  bad list).
+  strings; MPWF: every slot's hash, length and bars). An MPDJ file's `slot`
+  says how one slot reads when the device reads it alone (`damaged`: its
+  CRC fails; `broken`: a good CRC over a bad list). An MPWF file's `slot` is
+  one lookup as the device makes it: the hash, what it reads (`hit`, `miss`,
+  `damaged`, `broken`) and how many slots it reads.
+- `moods.json`, `golden/tags-moods.bin` and the hardening files
+  `mptg-moods-longer`, `mptg-tail-invalid` and `mptg-stride-76`: mood
+  filters (docs/MOOD-FILTERS.md 5.3, 5.4; METADATA 2.6.4's mood tail and
+  3.4.3's mood word), made with `tools/moodfilter.py`, which
+  card_fixtures.py imports. A tags description's record `scores` are
+  mStream's eight mood scores in `moods.json`'s `heads` order (null where a
+  head has none), or null for no server row: each writer derives the
+  record's tail from them (RECS rows of 80 bytes, minor 1). An MPTG file's
+  `same` covers its records' scores too. In `moods.json`: `values` (a
+  score's value byte and bucket), `levels` (each level's code in a filter,
+  its `need` and `under`), `bars` (its `on` and `mirror`), `predicates` (the
+  eleven of MOOD-FILTERS.md 4.1, each a one-group filter's bits at
+  Standard), `rows` (scores, the tail a writer makes of them, the word a
+  builder makes of the tail, and `holds`: for each level, `strict`,
+  `standard` and `loose`, the predicates that hold, in `predicates` order;
+  any other fails), `tails` (whether a reader takes each, and its word),
+  `filters` (a filter's bits, what they read as, and the rows it
+  `matches`, by index from 0) and `albums` (rows as one album's tracks
+  under a filter: `pass` of `analysed`, and whether 2 × pass > analysed).
+  `tools/test_mood_vectors.py` checks every `holds` and `matches` against
+  mStream's own predicate, run by SQLite.
 
 The AutoDJ index (MPDJ v2) is specified apart, in docs/AUTODJ-INDEX.md;
 its fixtures (section 13 there) come from `tools/mpdj.py`, which
 card_fixtures.py imports. `libraries/autodj-mid.f32` holds the vectors
 that `autodj-mid.json` and `autodj-mid-default.json` name (raw
 little-endian f32, 16 a row, in the descriptions' row order).
+
+The waveform index (MPWF v1) is specified apart, in
+docs/WAVEFORM-INDEX.md; its fixtures (section 13 there) come from
+`tools/mpwf.py`, which card_fixtures.py imports. A description's tracks
+hold the server's peak bars as given, and a writer computes the bars.
+`golden/manifest-waves.bin` is a root that names all three companions. The
+`msmf-waves-*` hardening files are roots that read whatever their MPWF row
+holds (`vectors.json`'s `mpwf.rootRow` says what a reader takes from each),
+but for the two whose name breaks a string rule, as any kind's would.
 
 The play log (docs/METADATA.md 2.20) has its fixtures in `plays/`, made
 with `tools/playlog.py`, its reference reader and writer, which
@@ -2982,8 +3530,9 @@ and checks it on its own.
 The player's tests: `test/test_card_contract` (the vectors),
 `test/test_card_files` (the goldens, round trips, the hardening files,
 truncation at every byte and every flipped bit), `test/test_card_autodj`
-(the AutoDJ index's own rules) and `test/test_name_key` (the keys the
-AutoDJ descriptions give). The play log's fixtures are for the
+(the AutoDJ index's own rules), `test/test_card_waves` (the waveform
+index's own rules) and `test/test_name_key` (the keys the AutoDJ
+descriptions give). The play log's fixtures are for the
 firmware's log and the transfer software's reader, neither built yet;
 `tools/test_playlog.py` reads them today.
 """
@@ -2993,13 +3542,16 @@ def generate():
     files = {}
     descs = [f() for f in LIBRARIES]
     dj_descs = mpdj.fixture_libraries()
-    # The AutoDJ goldens first (each read back and checked against the rule
-    # by tools/mpdj.py), then the other companions: a root reads their
-    # generation, length, header CRC and key from them.
+    wf_descs = mpwf.fixture_libraries()
+    # The AutoDJ and waveform goldens first (each read back and checked
+    # against its rule by tools/mpdj.py and tools/mpwf.py), then the other
+    # companions: a root reads their generation, length, header CRC and key
+    # from them.
     golden = dict(mpdj.fixture_goldens())
+    golden.update(mpwf.fixture_goldens())
     for d in sorted(descs, key=lambda d: d["format"] == "MSMF"):
         golden[d["file"]] = build(d, golden)
-    for d in descs + dj_descs:
+    for d in descs + dj_descs + wf_descs:
         files["libraries/" + d["file"].rsplit(".", 1)[0] + ".json"] = (
             json.dumps(d, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
     for name, data in mpdj.fixture_sidecars().items():
@@ -3010,6 +3562,9 @@ def generate():
     v = vectors(golden)
     check_vectors(v, golden)
     files["vectors.json"] = (json.dumps(v, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
+    m = moods(golden)
+    check_moods(m, golden)
+    files["moods.json"] = (json.dumps(m, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
     index = []
     for entry in hardening(golden):
         name, fmt, uses, expect, why, check, data = entry[:7]

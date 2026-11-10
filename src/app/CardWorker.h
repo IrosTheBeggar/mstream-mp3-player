@@ -12,17 +12,17 @@
 
 // The one card worker (docs/METADATA.md 3.3.4, 3.3.9; milestones N10, N12):
 // a task on core 1, below the audio decoder (2), that takes one step at a
-// time of whatever the loop hands it: a cover (ui/Thumbs), a slice of the
-// validation walk (its folders for about 18 ms lit, 250 ms dark:
-// CardTasks::kLitSliceUs, kDarkWalkSliceUs), a compaction, a file of
-// the scan or a slice of its rest (18 ms lit, 60 ms dark; app/CardTasks,
-// lib/core CardJobs), the update step's build and its save (lib/core
-// LibraryUpdate). Thumbs' worker, generalised: it runs only the step it is
-// handed, so no two jobs overlap, and the loop (ScanScheduler) decides
+// time of whatever the loop hands it: a cover (ui/Thumbs), a waveform's read
+// (app/Waves), a slice of the validation walk (its folders for about 18 ms
+// lit, 250 ms dark: CardTasks::kLitSliceUs, kDarkWalkSliceUs), a compaction, a
+// file of the scan or a slice of its rest (18 ms lit, 60 ms dark;
+// app/CardTasks, lib/core CardJobs), the update step's build and its save
+// (lib/core LibraryUpdate). Thumbs' worker, generalised: it runs only the step
+// it is handed, so no two jobs overlap, and the loop (ScanScheduler) decides
 // what starts and at what priority:
-//   - 1 (the loop's) for a cover on screen, the update step's build, a
-//     slice of the walk, and while the screen is dark a slice of the scan,
-//     a compaction and the update step's save;
+//   - 1 (the loop's) for a cover on screen, a waveform's read, the update
+//     step's build, a slice of the walk, and while the screen is dark a slice
+//     of the scan, a compaction and the update step's save;
 //   - 0 (the idle task's) for the rest (the scan, a compaction and the
 //     save while the screen is lit): the SD driver's reads busy-wait the
 //     CPU, so at the loop's priority a step time-slices with the loop for
@@ -31,11 +31,11 @@
 //     device run's saves took 4.5-9.9 s on the worker at 0 against 2.2 s on
 //     the loop at the boot).
 // Its priority follows the step under way (a list that starts moving drops
-// a cover to 0; a list or a wait drops a slice to 0, and ends it after its
-// unit: ScanScheduler's Out::cut; the screen lit drops a compaction or the
-// save to 0).
+// a cover or a read to 0; a list or a wait drops a slice to 0, and ends it
+// after its unit: ScanScheduler's Out::cut; the screen lit drops a compaction
+// or the save to 0).
 //
-// Its 6 KB stack is in internal RAM (a task that reads the card or the
+// Its 7.5 KB stack is in internal RAM (a task that reads the card or the
 // flash can't have its stack in PSRAM), only while there is work: the task
 // is made for the first step (or just before one that must start at once:
 // ensure(), the library update's build) and ends itself kIdleExitMs after
@@ -45,7 +45,9 @@
 // buffer, the frames (the deepest: a compaction's reopen of D, about 3.9
 // KB MEASURED; the build's, its views' sort, measured at 5.36 KB on the
 // 2026-10-09 run with std::sort and about 3.3-3.6 KB since idsort:
-// METADATA.md 3.9). The 'gs' line prints its
+// METADATA.md 3.9; with a read that fails under that reopen, the driver's
+// log lines and the look's init on top: 5.4 KB MEASURED, hence 7.5 KB and
+// not the 6 of before: METADATA.md 3.8). The 'gs' line prints its
 // stack's high-water mark, the least left over every life of the task
 // since the boot or `gs0` (a task's own mark starts again when it is
 // made), and the internal RAM's lowest while a step ran (L3 and L4 measure
@@ -56,7 +58,7 @@ class CardWorker {
 public:
   using Job = ScanScheduler::Job;
   using StepFn = void (*)(void* ctx);
-  static constexpr uint32_t kStackBytes = 6144;
+  static constexpr uint32_t kStackBytes = 7680;
   static constexpr uint32_t kIdleExitMs = 3000;
 
   // A step of `job` at FreeRTOS `priority` (ScanScheduler's 0 or 1): `fn(ctx)`

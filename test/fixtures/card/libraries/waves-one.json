@@ -1,0 +1,16 @@
+{
+ "format": "MPWF",
+ "file": "waves-one.bin",
+ "generation": 1,
+ "cardId": "0x5EEDC0DE0A1B2C3D",
+ "note": "The smallest file, 512 bytes (WAVEFORM-INDEX.md 13.4): one row, every bar 0x40 (M = 1).",
+ "tracks": [
+  {
+   "path": "Artist/Album/01 - Title.mp3",
+   "lengthMs": 180000,
+   "peaks": [
+    64
+   ]
+  }
+ ]
+}

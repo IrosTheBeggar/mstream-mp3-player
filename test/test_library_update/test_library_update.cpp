@@ -19,8 +19,10 @@
 // index joins holds the fence, a held Auto DJ never does, its join
 // released at the fence runs again after the Live step on the new ids, and
 // the memory check has the join given back when the new track table's
-// block is short (setGiveBack()). What
-// a track that ends inside the fence does is test_gapless_player's.
+// block is short (setGiveBack()). A read the card fails at each point of a boot
+// (library.idx's, D's, T's and D's as a build reads them): nothing goes over what is
+// on the card, the jobs hold, and the library is whole, or /music walked for the
+// session. What a track that ends inside the fence does is test_gapless_player's.
 // Run: pio test -e native -f test_library_update
 #include <unity.h>
 
@@ -50,6 +52,7 @@
 #include "LibraryIndex.h"
 #include "LibraryUpdate.h"
 #include "PowerChoices.h"
+#include "QueueText.h"
 #include "ScanScheduler.h"
 #include "TagStore.h"
 #include "TrackCatalog.h"
@@ -271,6 +274,7 @@ public:
     bool write(uint32_t offset, const void* data, uint32_t n) override { return f_->write(offset, data, n); }
     bool sync() override { return f_->sync(); }
     bool truncate(uint32_t size) override { return f_->truncate(size); }
+    bool damaged() const override { return f_->damaged(); }
     ts::File* f_;
     std::string path_;
   };
@@ -278,6 +282,11 @@ public:
     ts::File* f = in_.open(path, mode);
     return f ? new F(f, path) : nullptr;
   }
+  ts::File* openRead(const char* path, bool* cardFailed) override {
+    ts::File* f = in_.openRead(path, cardFailed);
+    return f ? new F(f, path) : nullptr;
+  }
+  Entry entry(const char* path) override { return in_.entry(path); }
   bool close(ts::File* file) override {
     F* f = static_cast<F*>(file);
     const bool ok = in_.close(f->f_);
@@ -406,9 +415,12 @@ struct Device {
     if (!cut.dead && !cut.exists("/music")) cut.put("/music", {});
   }
 
+  // What the firmware passes (Library::openRecords()): the boot's waits, or none.
+  void (*wait)(uint32_t ms) = nullptr;
+
   void boot() {
     store.reset(new ts::TagStore(fs, storeConfig()));
-    store->open();
+    store->openAtBoot(wait);
     root.reset(new cardroot::Root());
     std::vector<uint8_t> scratch(1024);
     cardroot::read(fs, scratch.data(), static_cast<uint32_t>(scratch.size()), root.get());
@@ -421,6 +433,7 @@ struct Device {
     c.release = testFree;
     c.walk = walkTree;
     c.walkCtx = &card;
+    c.wait = wait;
     upd.reset(new LibraryUpdate(c));
     booted = upd->boot();
     catalog.setIndex(&index);
@@ -679,6 +692,1213 @@ void test_the_safe_point_and_the_memory_check() {
 // ---------------------------------------------------------------------------
 // The boot (3.2.2): every row of the table, with the card's real files.
 // ---------------------------------------------------------------------------
+// A boot the card fails the root's reads at: nothing is known of the transfer,
+// which isn't to say there is none. Taken for none, this would build from D alone
+// over a good library.idx, every file T lists under its path.
+void test_a_root_the_card_fails_to_read_at_the_boot_keeps_the_library() {
+  using libraryboot::Action;
+  using libraryboot::Saved;
+  CutFs fs;
+  TestCard card;
+  fill(card);
+  commit(fs, card, 2);
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.booted.build.transferUsed);
+  }
+  const std::vector<uint8_t> idx = fs.bytes(LibraryUpdate::kIndexNames.path);
+  const uint32_t writes = static_cast<uint32_t>(fs.bytesWritten);
+  fs.faultPrefix = "/.mstream/";
+  fs.faultFrom = 0;
+  fs.faultTo = -1;
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.root->readFailed());
+    TEST_ASSERT_TRUE(d.booted.ok);
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Differs);
+    TEST_ASSERT_TRUE(d.booted.decision.action == Action::Load);
+    TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+    TEST_ASSERT_FALSE(d.booted.built);
+    TEST_ASSERT_FALSE(d.booted.walked);
+    // The tags T gave it, and not a byte written.
+    TEST_ASSERT_EQUAL_UINT32(kAudio, d.index.trackCount());
+    TEST_ASSERT_EQUAL_STRING("From T", titleOf(d.index, kFlac).c_str());
+    TEST_ASSERT_EQUAL_UINT32(writes, static_cast<uint32_t>(fs.bytesWritten));
+    TEST_ASSERT_TRUE(idx == fs.bytes(LibraryUpdate::kIndexNames.path));
+  }
+  // No PSRAM to load it: no library this session, and the jobs held all the same.
+  {
+    Device d(fs, card);
+    g_ceiling = g_live + 64;
+    d.boot();
+    g_ceiling = SIZE_MAX;
+    TEST_ASSERT_TRUE(d.booted.noMemory);
+    TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+    TEST_ASSERT_TRUE(idx == fs.bytes(LibraryUpdate::kIndexNames.path));
+  }
+  // T's reads alone: the same, the root naming the card.
+  fs.faultPrefix = "/.mstream/tags";
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.root->hasRoot);
+    TEST_ASSERT_TRUE(d.root->readFailed());
+    TEST_ASSERT_TRUE(d.booted.decision.action == Action::Load);
+    TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+    TEST_ASSERT_EQUAL_STRING("From T", titleOf(d.index, kFlac).c_str());
+    TEST_ASSERT_EQUAL_UINT32(writes, static_cast<uint32_t>(fs.bytesWritten));
+  }
+  fs.faultPrefix = "/.mstream/";
+  // A deferred build waits for a boot that can read it.
+  fs.put(LibraryUpdate::kMarker, {});
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.booted.marker);
+    TEST_ASSERT_TRUE(d.booted.decision.action == Action::Load);
+    TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+    TEST_ASSERT_FALSE(d.booted.markerRemoved);
+    TEST_ASSERT_TRUE(fs.exists(LibraryUpdate::kMarker));
+  }
+  fs.remove(LibraryUpdate::kMarker);
+  // The card answering again, the next boot finds what it left.
+  fs.faultFrom = -1;
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.root->present);
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Matches);
+    TEST_ASSERT_TRUE(d.booted.decision.action == Action::Load);
+    TEST_ASSERT_TRUE(idx == fs.bytes(LibraryUpdate::kIndexNames.path));
+  }
+  // No library.idx: no transfer's library to lose. Built from what can be read,
+  // saved with no transfer in it, the card jobs running; so loaded next, as a card
+  // with no transfer data, as long as the root stays unread.
+  fs.faultFrom = 0;
+  fs.remove(LibraryUpdate::kIndexNames.path);
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.root->readFailed());
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Missing);
+    TEST_ASSERT_TRUE(d.booted.decision.action != Action::Load);
+    TEST_ASSERT_FALSE(d.booted.decision.holdJobs);
+    TEST_ASSERT_TRUE(d.booted.ok);
+    TEST_ASSERT_FALSE(d.booted.build.transferUsed);
+  }
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Matches);
+    TEST_ASSERT_TRUE(d.booted.decision.action == Action::Load);
+    TEST_ASSERT_FALSE(d.booted.decision.holdJobs);
+  }
+  // Its deferred build runs, too: it can lose nothing. (From what can be read.)
+  fs.put(LibraryUpdate::kMarker, {});
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.booted.decision.action != Action::Load);
+    TEST_ASSERT_FALSE(d.booted.decision.holdJobs);
+    TEST_ASSERT_FALSE(d.booted.build.transferUsed);
+    TEST_ASSERT_TRUE(d.booted.markerRemoved);
+  }
+  // A boot that can read the root builds from it.
+  fs.faultFrom = -1;
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Differs);
+    TEST_ASSERT_TRUE(d.booted.decision.action == Action::Build);
+    TEST_ASSERT_TRUE(d.booted.build.transferUsed);
+    TEST_ASSERT_EQUAL_STRING("From T", titleOf(d.index, kFlac).c_str());
+  }
+}
+
+// ---------------------------------------------------------------------------
+// A read the card fails of library.idx or of the records: the boot keeps what is on the
+// card, and the library it gives is whole, or /music walked for the session (a part from
+// the records would cut queue.txt down to itself when the queue is restored: METADATA.md
+// 3.2.2, measured on the firmware's own QueueStore).
+// ---------------------------------------------------------------------------
+namespace {
+
+std::map<std::string, std::vector<uint8_t>> filesOf(const CutFs& fs) {
+  std::map<std::string, std::vector<uint8_t>> out;
+  for (const std::string& n : fs.names()) out[n] = fs.bytes(n);
+  return out;
+}
+
+void arm(CutFs& fs, const char* prefix, long from, long to) {
+  fs.faultPrefix = prefix;
+  fs.faultEvents = 0;
+  fs.faultFrom = from;
+  fs.faultTo = to;
+}
+
+std::vector<uint32_t> g_waits;
+void noteWait(uint32_t ms) { g_waits.push_back(ms); }
+
+// A card filled three ways: T and files it doesn't list, read here (a transfer, then a
+// PC); every file read here; every file T's. The worst for a build without D is the
+// first, and without T the second.
+enum class Filled { Mixed, Hand, Transfer };
+constexpr uint32_t kMixedExtra = 2;
+
+uint32_t filledCard(CutFs& fs, TestCard& card, Filled how) {
+  if (how == Filled::Hand) {
+    handFilled(fs, card);
+  } else {
+    transferCard(fs, card);
+  }
+  if (how == Filled::Mixed) {
+    card.addBytes("Later/01 - g.mp3", corpus("v22.mp3"));
+    card.addBytes("Later/02 - h.mp3", corpus("v1_only.mp3"));
+  }
+  // A session to the end (the walk, the scan, the update step, its save), so the boots
+  // here load, with nothing to do.
+  {
+    Device d(fs, card);
+    d.boot();
+    d.jobs.askWalk();
+    d.drain();
+    if (d.store->hasJournals()) d.update("the scan's end");
+    d.drain();
+  }
+  {
+    Device d(fs, card);
+    d.boot();
+    d.jobs.askWalk();
+    d.drain();
+    if (d.store->hasJournals() || d.booted.softStale) d.update("the scan's end");
+  }
+  const uint32_t tracks = kAudio + (how == Filled::Mixed ? kMixedExtra : 0);
+  Device d(fs, card);
+  d.boot();
+  TEST_ASSERT_TRUE(d.booted.ok);
+  TEST_ASSERT_TRUE(d.booted.decision.action == libraryboot::Action::Load);
+  TEST_ASSERT_FALSE(d.booted.decision.holdJobs);
+  TEST_ASSERT_FALSE(d.booted.softStale);
+  TEST_ASSERT_EQUAL_UINT32(tracks, d.index.trackCount());
+  TEST_ASSERT_TRUE(d.store->device().present);
+  TEST_ASSERT_FALSE(d.store->hasJournals());
+  return tracks;
+}
+
+// What a boot's reads under `prefix` number, on a copy (one with nothing wrong writes
+// nothing, or only what a card can take twice).
+long bootEvents(const CutFs& fs, TestCard& card, const char* prefix) {
+  CutFs counted = fs.reboot(cutfs::Variant::InOrder);
+  arm(counted, prefix, 1000000, -1);
+  Device d(counted, card);
+  d.boot();
+  return counted.faultEvents;
+}
+
+// ... and those of the store's open() alone, the boot's first.
+long openEvents(const CutFs& fs, const char* prefix) {
+  CutFs counted = fs.reboot(cutfs::Variant::InOrder);
+  arm(counted, prefix, 1000000, -1);
+  ts::TagStore st(counted, storeConfig());
+  st.open();
+  return counted.faultEvents;
+}
+
+// The whole library, as its records give it; or /music walked for the session, every
+// track by its path (this rig's walk lists every file: the firmware's can't be told
+// whole, and QueueStore::restore() keeps what it leaves out); never a part of the records.
+void assertWhole(const Device& d, uint32_t tracks, const char* msg) {
+  TEST_ASSERT_TRUE_MESSAGE(d.booted.ok, msg);
+  TEST_ASSERT_TRUE_MESSAGE(d.index.ready(), msg);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(tracks, d.index.trackCount(), msg);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(d.booted.sessionWalked() ? tracks : 0, pendingIn(d.index), msg);
+  // (What the log says of it, whichever way it came to walk.)
+  if (d.booted.sessionWalked()) {
+    TEST_ASSERT_FALSE_MESSAGE(d.booted.built, msg);
+    TEST_ASSERT_TRUE_MESSAGE(d.booted.decision.action == libraryboot::Action::Walk, msg);
+  }
+}
+
+// The queue's file against a boot's library, as QueueStore::restore() reads it: no track
+// of it is dropped.
+void assertQueueKept(const Device& d, uint32_t tracks, const char* msg) {
+  if (!d.index.ready()) return;
+  std::string text = "mstream-queue 1 ";
+  text += std::to_string(tracks) + " 0 1\n";
+  for (uint32_t t = 0; t < tracks; ++t) {
+    char path[300];
+    d.index.trackPath(t, path, sizeof(path));
+    text += path;
+    text += '\n';
+  }
+  MemorySource src(text.data(), text.size());
+  QueueModel q(testAlloc, testFree);
+  TrackCatalog catalog;
+  catalog.setIndex(const_cast<LibraryIndex*>(&d.index));
+  const queuetext::Restored r = queuetext::read(src, catalog, q, nullptr, nullptr, testAlloc, testFree);
+  TEST_ASSERT_TRUE_MESSAGE(r.ok, msg);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, r.dropped, msg);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(tracks, r.entries, msg);
+}
+
+}  // namespace
+
+// library.idx's reads, each in its turn (the settling's questions, the marker's entry is
+// another prefix's, the header's, the load's): nothing goes over it, the records give
+// the same library for the session, and the jobs hold.
+void test_a_read_of_library_idx_the_card_fails_builds_nothing_over_it() {
+  using libraryboot::Action;
+  using libraryboot::Saved;
+  for (Filled how : {Filled::Mixed, Filled::Hand, Filled::Transfer}) {
+    CutFs fs;
+    TestCard card;
+    const uint32_t tracks = filledCard(fs, card, how);
+    const auto files = filesOf(fs);
+    const long events = bootEvents(fs, card, "/.player/library");
+    TEST_ASSERT_GREATER_THAN_INT32(3, events);
+    for (long k = 0; k < events; ++k) {
+      char msg[64];
+      snprintf(msg, sizeof(msg), "read %ld of %ld", k, events);
+      for (bool lasting : {false, true}) {
+        arm(fs, "/.player/library", k, lasting ? -1 : k + 1);
+        const uint64_t writes = fs.bytesWritten;
+        {
+          Device d(fs, card);
+          d.boot();
+          fs.faultFrom = -1;
+          TEST_ASSERT_TRUE_MESSAGE(d.booted.saved == Saved::Unread, msg);
+          TEST_ASSERT_TRUE_MESSAGE(d.booted.decision.holdJobs, msg);
+          TEST_ASSERT_TRUE_MESSAGE(d.booted.decision.action == Action::Build, msg);
+          TEST_ASSERT_TRUE_MESSAGE(d.booted.decision.sessionOnly, msg);
+          assertWhole(d, tracks, msg);
+          assertQueueKept(d, tracks, msg);
+          TEST_ASSERT_FALSE_MESSAGE(d.booted.walked, msg);
+          TEST_ASSERT_EQUAL_UINT64_MESSAGE(writes, fs.bytesWritten, msg);
+          TEST_ASSERT_TRUE_MESSAGE(filesOf(fs) == files, msg);
+        }
+        // The next boot, the card answering, finds it all.
+        Device next(fs, card);
+        next.boot();
+        TEST_ASSERT_TRUE_MESSAGE(next.booted.decision.action == Action::Load, msg);
+        TEST_ASSERT_FALSE_MESSAGE(next.booted.decision.holdJobs, msg);
+        TEST_ASSERT_FALSE_MESSAGE(next.booted.softStale, msg);
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(tracks, next.index.trackCount(), msg);
+      }
+    }
+    // The marker's entry, whether it is there or not: "no marker" may be only the read
+    // that failed, and a deferred build goes unseen. The same.
+    for (bool marked : {false, true}) {
+      CutFs at = fs.reboot(cutfs::Variant::InOrder);
+      if (marked) at.put(LibraryUpdate::kMarker, {});
+      const auto before = filesOf(at);
+      arm(at, LibraryUpdate::kMarker, 0, 1);
+      Device d(at, card);
+      d.boot();
+      at.faultFrom = -1;
+      TEST_ASSERT_TRUE(d.booted.saved == Saved::Unread);
+      TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+      TEST_ASSERT_TRUE(d.booted.decision.sessionOnly);
+      TEST_ASSERT_TRUE(filesOf(at) == before);
+    }
+    TEST_ASSERT_TRUE(fs.violations.empty());
+  }
+}
+
+// Most faults are a glitch: read again by the boot's waits, each read and open in its
+// turn, it loads, with nothing held. Each failing: the four reads, then the hold.
+void test_the_boot_reads_library_idx_again_while_the_card_fails() {
+  using libraryboot::Action;
+  using libraryboot::Saved;
+  CutFs fs;
+  TestCard card;
+  const uint32_t tracks = filledCard(fs, card, Filled::Transfer);
+  const auto files = filesOf(fs);
+  const long events = bootEvents(fs, card, "/.player/library");
+  for (long k = 0; k < events; ++k) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "read %ld of %ld", k, events);
+    g_waits.clear();
+    arm(fs, "/.player/library", k, k + 1);
+    Device d(fs, card);
+    d.wait = noteWait;
+    d.boot();
+    fs.faultFrom = -1;
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(1, g_waits.size(), msg);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(ts::kBootWaitsMs[0], g_waits[0], msg);
+    TEST_ASSERT_TRUE_MESSAGE(d.booted.saved == Saved::Matches, msg);
+    TEST_ASSERT_TRUE_MESSAGE(d.booted.decision.action == Action::Load, msg);
+    TEST_ASSERT_FALSE_MESSAGE(d.booted.decision.holdJobs, msg);
+    TEST_ASSERT_TRUE_MESSAGE(d.booted.ok, msg);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(tracks, d.index.trackCount(), msg);
+  }
+  // Each failing: header and load both give up after their four reads at most.
+  g_waits.clear();
+  arm(fs, "/.player/library", 0, -1);
+  {
+    Device d(fs, card);
+    d.wait = noteWait;
+    d.boot();
+    fs.faultFrom = -1;
+    TEST_ASSERT_EQUAL_size_t(3, g_waits.size());
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Unread);
+    TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+    TEST_ASSERT_TRUE(d.booted.ok);
+  }
+  TEST_ASSERT_TRUE(filesOf(fs) == files);
+  // No library.idx, or a whole one: its word, the first time, no wait.
+  g_waits.clear();
+  {
+    Device d(fs, card);
+    d.wait = noteWait;
+    d.boot();
+    TEST_ASSERT_EQUAL_size_t(0, g_waits.size());
+    TEST_ASSERT_TRUE(d.booted.decision.action == Action::Load);
+  }
+  CutFs noIdx = fs.reboot(cutfs::Variant::InOrder);
+  noIdx.remove(LibraryUpdate::kIndexNames.path);
+  {
+    Device d(noIdx, card);
+    d.wait = noteWait;
+    d.boot();
+    TEST_ASSERT_EQUAL_size_t(0, g_waits.size());
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Missing);
+  }
+}
+
+// library.idx unread with nothing whole to build from: /music walked for the session, by
+// its paths, nothing written. The next boot asks again.
+void test_library_idx_unread_and_nothing_whole_to_build_from_is_walked_for_the_session() {
+  using libraryboot::Action;
+  using libraryboot::Saved;
+  // The root unread too.
+  {
+    CutFs fs;
+    TestCard card;
+    filledCard(fs, card, Filled::Transfer);
+    const auto files = filesOf(fs);
+    g_failRead = [](const std::string& path) { return path == LibraryUpdate::kIndexNames.path; };
+    arm(fs, "/.mstream/", 0, -1);
+    Device d(fs, card);
+    d.boot();
+    g_failRead = nullptr;
+    fs.faultFrom = -1;
+    TEST_ASSERT_TRUE(d.root->readFailed());
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Unread);
+    TEST_ASSERT_TRUE(d.booted.decision.action == Action::Walk);
+    TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+    TEST_ASSERT_TRUE(d.booted.sessionWalked());
+    assertWhole(d, kAudio, "the root unread too");
+    TEST_ASSERT_TRUE(filesOf(fs) == files);
+  }
+  // No D: T alone leaves out what it doesn't list.
+  {
+    CutFs fs;
+    TestCard card;
+    fill(card);
+    commit(fs, card, 1);
+    { Device first(fs, card); first.boot(); }
+    TEST_ASSERT_FALSE(fs.exists("/.player/tags.bin"));
+    const auto files = filesOf(fs);
+    arm(fs, LibraryUpdate::kIndexNames.path, 0, -1);
+    Device d(fs, card);
+    d.boot();
+    fs.faultFrom = -1;
+    TEST_ASSERT_TRUE(d.booted.decision.action == Action::Walk);
+    TEST_ASSERT_TRUE(d.booted.sessionWalked());
+    assertWhole(d, kAudio, "no D");
+    TEST_ASSERT_TRUE(filesOf(fs) == files);
+  }
+  // D that doesn't list the card (no T, the scan's files alone: its first walk failed).
+  {
+    CutFs fs;
+    TestCard card;
+    fill(card);
+    {
+      Device first(fs, card);
+      first.boot();
+      TEST_ASSERT_TRUE(first.booted.walked);
+    }
+    {
+      ts::TagStore st(fs, storeConfig());
+      st.open();
+      uint8_t buf[2048];
+      ts::ChunkBuilder chunk;
+      chunk.begin(buf, sizeof(buf));
+      mptg::Record rec;
+      rec.size = 7;
+      const char* f[cc::kRunFields] = {};
+      for (auto& x : f) x = "";
+      TEST_ASSERT_TRUE(chunk.add("Artist/Album/01 - a.flac", 24, ts::Status::Scanned, rec, f));
+      TEST_ASSERT_TRUE(st.append(chunk));
+      TEST_ASSERT_TRUE(st.compact().ok);
+      TEST_ASSERT_TRUE(st.device().present);
+      TEST_ASSERT_FALSE(st.device().header.walked);
+    }
+    const auto files = filesOf(fs);
+    arm(fs, LibraryUpdate::kIndexNames.path, 0, -1);
+    Device d(fs, card);
+    d.boot();
+    fs.faultFrom = -1;
+    TEST_ASSERT_TRUE(d.booted.decision.action == Action::Walk);
+    TEST_ASSERT_TRUE(d.booted.sessionWalked());
+    assertWhole(d, kAudio, "D not listing the card");
+    TEST_ASSERT_TRUE(filesOf(fs) == files);
+  }
+}
+
+// A marker stays through a session's build, and a journal is folded first: its records
+// are in D then, and the build is the whole library.
+void test_a_session_build_keeps_the_marker_and_folds_the_journals() {
+  using libraryboot::Saved;
+  CutFs fs;
+  TestCard card;
+  const uint32_t tracks = filledCard(fs, card, Filled::Mixed);
+  // A chunk the next boot finds in tags.jnl.
+  {
+    ts::TagStore st(fs, storeConfig());
+    st.open();
+    uint8_t buf[2048];
+    ts::ChunkBuilder chunk;
+    chunk.begin(buf, sizeof(buf));
+    uint32_t size = 0, time = 0;
+    TEST_ASSERT_TRUE(card.stat("Later/02 - h.mp3", 16, &size, &time));
+    mptg::Record rec;
+    rec.size = size;
+    rec.fatTime = time;
+    rec.known = mptg::kKnownRules1;
+    rec.container = mptg::kContainerMp3;
+    const char* f[cc::kRunFields] = {};
+    for (auto& x : f) x = "";
+    f[cc::kTitle] = "From the journal";
+    TEST_ASSERT_TRUE(chunk.add("Later/02 - h.mp3", 16, ts::Status::Scanned, rec, f));
+    TEST_ASSERT_TRUE(st.append(chunk));
+  }
+  fs.put(LibraryUpdate::kMarker, {});
+  const std::vector<uint8_t> idx = fs.bytes(LibraryUpdate::kIndexNames.path);
+  arm(fs, LibraryUpdate::kIndexNames.path, 0, -1);
+  {
+    Device d(fs, card);
+    d.boot();
+    fs.faultFrom = -1;
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Unread);
+    TEST_ASSERT_TRUE(d.booted.ok);
+    TEST_ASSERT_TRUE(d.booted.compacted);
+    TEST_ASSERT_TRUE(d.booted.compaction.ok);
+    TEST_ASSERT_EQUAL_UINT32(tracks, d.index.trackCount());
+    TEST_ASSERT_EQUAL_STRING("From the journal", titleOf(d.index, "/music/Later/02 - h.mp3").c_str());
+    TEST_ASSERT_FALSE(d.booted.markerRemoved);
+    TEST_ASSERT_TRUE(fs.exists(LibraryUpdate::kMarker));
+    TEST_ASSERT_TRUE(idx == fs.bytes(LibraryUpdate::kIndexNames.path));
+  }
+  // A read of D failing as the session's build reads it: not the whole library, so the
+  // walk, nothing saved.
+  CutFs later = fs.reboot(cutfs::Variant::InOrder);
+  long reads = 0;
+  arm(later, LibraryUpdate::kIndexNames.path, 0, -1);
+  g_failRead = [&](const std::string& path) { return path == "/.player/tags.bin" && ++reads == 20; };
+  {
+    Device d(later, card);
+    d.boot();
+    later.faultFrom = -1;
+    TEST_ASSERT_GREATER_OR_EQUAL_INT32(20, reads);
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Unread);
+    TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+    TEST_ASSERT_TRUE(d.booted.sessionWalked());
+    assertWhole(d, tracks, "a read in the session's build");
+    TEST_ASSERT_TRUE(idx == later.bytes(LibraryUpdate::kIndexNames.path));
+  }
+  g_failRead = nullptr;
+  // A journal that can't be folded in (a card that takes no writes): tags.bin alone
+  // would leave out what it holds, so the walk.
+  CutFs refusing = fs.reboot(cutfs::Variant::InOrder);
+  {
+    ts::TagStore st(refusing, storeConfig());
+    st.open();
+    uint8_t buf[2048];
+    ts::ChunkBuilder chunk;
+    chunk.begin(buf, sizeof(buf));
+    uint32_t size = 0, time = 0;
+    TEST_ASSERT_TRUE(card.stat("Later/01 - g.mp3", 16, &size, &time));
+    mptg::Record rec;
+    rec.size = size;
+    rec.fatTime = time;
+    rec.known = mptg::kKnownRules1;
+    rec.container = mptg::kContainerMp3;
+    const char* f[cc::kRunFields] = {};
+    for (auto& x : f) x = "";
+    TEST_ASSERT_TRUE(chunk.add("Later/01 - g.mp3", 16, ts::Status::Scanned, rec, f));
+    TEST_ASSERT_TRUE(st.append(chunk));
+  }
+  refusing.refuse = true;
+  arm(refusing, LibraryUpdate::kIndexNames.path, 0, -1);
+  {
+    Device d(refusing, card);
+    d.boot();
+    refusing.faultFrom = -1;
+    refusing.refuse = false;
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Unread);
+    TEST_ASSERT_TRUE(d.booted.decision.sessionOnly);
+    TEST_ASSERT_TRUE(d.booted.compacted);
+    TEST_ASSERT_FALSE(d.booted.compaction.ok);
+    TEST_ASSERT_FALSE(d.booted.compaction.readFailed);
+    TEST_ASSERT_TRUE(d.booted.sessionWalked());
+    assertWhole(d, tracks, "a journal left");
+  }
+  // D's own bytes failing a check mid-build, under T: T alone would be a part of the card.
+  // With no T, nothing usable. The walk both ways, once, with nothing saved.
+  for (const bool withT : {true, false}) {
+    CutFs bad;
+    TestCard same;
+    filledCard(bad, same, withT ? Filled::Mixed : Filled::Hand);
+    std::vector<uint8_t> dBytes = bad.bytes("/.player/tags.bin");
+    cc::MemSource src(dBytes.data(), static_cast<uint32_t>(dBytes.size()));
+    cc::Container c;
+    mptg::Info info;
+    TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(mptg::openFile(c, src, &info)));
+    dBytes[c.section(mptg::kSecRecs).offset + 13] ^= 0x10;
+    bad.put("/.player/tags.bin", dBytes);
+    const std::vector<uint8_t> kept = bad.bytes(LibraryUpdate::kIndexNames.path);
+    const int walks = g_walks;
+    arm(bad, LibraryUpdate::kIndexNames.path, 0, -1);
+    Device d(bad, same);
+    d.boot();
+    bad.faultFrom = -1;
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Unread);
+    TEST_ASSERT_TRUE(d.booted.decision.sessionOnly);
+    TEST_ASSERT_FALSE(d.booted.build.deviceUsed);
+    TEST_ASSERT_TRUE(d.booted.sessionWalked());
+    TEST_ASSERT_EQUAL_INT(walks + 1, g_walks);
+    TEST_ASSERT_TRUE(kept == bad.bytes(LibraryUpdate::kIndexNames.path));
+  }
+  // T's own checks failing at its end, D whole: D alone isn't the library either, so the
+  // walk, by no fault of the card's.
+  {
+    CutFs bad;
+    TestCard same;
+    const uint32_t tracksThere = filledCard(bad, same, Filled::Mixed);
+    spoilStrings(bad, 1);
+    arm(bad, LibraryUpdate::kIndexNames.path, 0, -1);
+    Device d(bad, same);
+    d.boot();
+    bad.faultFrom = -1;
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Unread);
+    TEST_ASSERT_FALSE(d.booted.build.transferUsed);
+    TEST_ASSERT_TRUE(d.booted.build.deviceUsed);
+    TEST_ASSERT_FALSE(d.booted.readErrors);
+    TEST_ASSERT_TRUE(d.booted.sessionWalked());
+    assertWhole(d, tracksThere, "T's checks");
+  }
+  // D's folder facts found damaged at the last read of them, its rows whole: a read that
+  // failed, the file's fault: a build that stands on any other boot, but not the library
+  // this one stands in for. The walk.
+  {
+    CutFs bad;
+    TestCard same;
+    const uint32_t tracksThere = filledCard(bad, same, Filled::Mixed);
+    arm(bad, LibraryUpdate::kIndexNames.path, 0, -1);
+    long total = 0;
+    {
+      CutFs dry = bad.reboot(cutfs::Variant::InOrder);
+      arm(dry, LibraryUpdate::kIndexNames.path, 0, -1);
+      g_failRead = [&](const std::string& path) {
+        total += path == "/.player/tags.bin";
+        return false;
+      };
+      Device d(dry, same);
+      d.boot();
+      g_failRead = nullptr;
+      TEST_ASSERT_TRUE(d.booted.built);
+    }
+    long seen = 0;
+    g_failRead = [&](const std::string& path) {
+      if (path == "/.player/tags.bin" && ++seen == total) bad.damagedPrefix = path;
+      return false;
+    };
+    Device d(bad, same);
+    d.boot();
+    g_failRead = nullptr;
+    bad.faultFrom = -1;
+    bad.damagedPrefix.clear();
+    TEST_ASSERT_TRUE(d.booted.readErrors);
+    TEST_ASSERT_TRUE(d.booted.build.deviceUsed);
+    TEST_ASSERT_TRUE(d.booted.sessionWalked());
+    assertWhole(d, tracksThere, "D's facts");
+  }
+  // T's own records found damaged at its last read in the session's build, D whole: the
+  // build from D alone that it restarts as is another library than the one it stands
+  // in for, so the walk. (No fault of the card's: T's next boot says what it says.)
+  const std::string t = tagsName(1);
+  long tTotal = 0;
+  {
+    CutFs dry = fs.reboot(cutfs::Variant::InOrder);
+    arm(dry, LibraryUpdate::kIndexNames.path, 0, -1);
+    g_failRead = [&](const std::string& path) {
+      tTotal += path == t;
+      return false;
+    };
+    Device d(dry, card);
+    d.boot();
+    g_failRead = nullptr;
+    TEST_ASSERT_TRUE(d.booted.ok);
+    TEST_ASSERT_TRUE(d.booted.build.transferUsed);
+  }
+  CutFs split = fs.reboot(cutfs::Variant::InOrder);
+  long tSeen = 0;
+  g_failRead = [&](const std::string& path) {
+    if (path == t && ++tSeen == tTotal) split.damagedPrefix = t;
+    return false;
+  };
+  arm(split, LibraryUpdate::kIndexNames.path, 0, -1);
+  {
+    Device d(split, card);
+    d.boot();
+    g_failRead = nullptr;
+    split.faultFrom = -1;
+    split.damagedPrefix.clear();
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Unread);
+    TEST_ASSERT_TRUE(d.booted.decision.sessionOnly);
+    TEST_ASSERT_TRUE(d.booted.readErrors);
+    TEST_ASSERT_TRUE(d.booted.sessionWalked());
+    assertWhole(d, tracks, "T damaged");
+  }
+}
+
+// A file's own fault, every read answered: a boot that held on to it would hold for ever.
+void test_a_damaged_or_cut_library_idx_is_its_own_fault() {
+  using libraryboot::Action;
+  using libraryboot::Saved;
+  for (int kind = 0; kind < 3; ++kind) {
+    CutFs fs;
+    TestCard card;
+    const uint32_t tracks = filledCard(fs, card, Filled::Transfer);
+    std::vector<uint8_t> bytes = fs.bytes(LibraryUpdate::kIndexNames.path);
+    if (kind == 0) fs.damagedPrefix = LibraryUpdate::kIndexNames.path;
+    if (kind == 1) fs.put(LibraryUpdate::kIndexNames.path, std::vector<uint8_t>(bytes.begin(), bytes.begin() + 16));
+    if (kind == 2) {
+      bytes[bytes.size() / 2] ^= 0xFF;
+      fs.put(LibraryUpdate::kIndexNames.path, bytes);
+    }
+    Device d(fs, card);
+    d.boot();
+    fs.damagedPrefix.clear();
+    TEST_ASSERT_TRUE(d.booted.saved == Saved::Corrupt);
+    TEST_ASSERT_TRUE(d.booted.decision.action == Action::Build);
+    TEST_ASSERT_FALSE(d.booted.decision.holdJobs);
+    TEST_ASSERT_FALSE(d.booted.decision.sessionOnly);
+    TEST_ASSERT_TRUE(d.booted.ok);
+    TEST_ASSERT_EQUAL_UINT32(tracks, d.index.trackCount());
+  }
+}
+
+// library.tmp alone, a cut between the remove and the rename: its check's read the card
+// fails is no verdict. It stays, the boot holds, and the next one takes it.
+void test_library_tmp_outlives_a_read_the_card_fails() {
+  using libraryboot::Action;
+  using libraryboot::Saved;
+  CutFs fs;
+  TestCard card;
+  const uint32_t tracks = filledCard(fs, card, Filled::Transfer);
+  const std::vector<uint8_t> idx = fs.bytes(LibraryUpdate::kIndexNames.path);
+  fs.remove(LibraryUpdate::kIndexNames.path);
+  fs.put(LibraryUpdate::kIndexNames.tmp, idx);
+  const long events = bootEvents(fs, card, "/.player/library");
+  TEST_ASSERT_GREATER_THAN_INT32(3, events);
+  for (long k = 0; k < events; ++k) {
+    char msg[64];
+    snprintf(msg, sizeof(msg), "read %ld of %ld", k, events);
+    CutFs once = fs.reboot(cutfs::Variant::InOrder);
+    arm(once, "/.player/library", k, k + 1);
+    {
+      Device d(once, card);
+      d.boot();
+      once.faultFrom = -1;
+      TEST_ASSERT_TRUE_MESSAGE(d.booted.saved == Saved::Unread, msg);
+      TEST_ASSERT_TRUE_MESSAGE(d.booted.decision.holdJobs, msg);
+      TEST_ASSERT_TRUE_MESSAGE(once.bytes(LibraryUpdate::kIndexNames.tmp) == idx ||
+                                   once.bytes(LibraryUpdate::kIndexNames.path) == idx,
+                               msg);
+    }
+    Device next(once, card);
+    next.boot();
+    TEST_ASSERT_TRUE_MESSAGE(next.booted.decision.action == Action::Load, msg);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(tracks, next.index.trackCount(), msg);
+    TEST_ASSERT_TRUE_MESSAGE(once.bytes(LibraryUpdate::kIndexNames.path) == idx, msg);
+    TEST_ASSERT_FALSE_MESSAGE(once.exists(LibraryUpdate::kIndexNames.tmp), msg);
+  }
+}
+
+// D's and its journals' reads, each in its turn: nothing goes over them, whichever
+// library.idx the boot finds. One that says it is a library is loaded, whole; none to
+// load, /music walked for the session. No byte written, the jobs held, and the next boot
+// finds it all.
+void test_a_read_of_the_records_the_card_fails_keeps_them_and_the_library() {
+  using libraryboot::Action;
+  using libraryboot::Saved;
+  for (Filled how : {Filled::Mixed, Filled::Hand, Filled::Transfer}) {
+    CutFs fs;
+    TestCard card;
+    const uint32_t tracks = filledCard(fs, card, how);
+    const std::vector<uint8_t> idx = fs.bytes(LibraryUpdate::kIndexNames.path);
+    enum Row { Same, Other, Marker, Gone, Spoilt, Older };
+    for (Row row : {Same, Other, Marker, Gone, Spoilt, Older}) {
+      CutFs at = fs.reboot(cutfs::Variant::InOrder);
+      if (row == Other) {
+        if (how == Filled::Hand) continue;  // (no root, no other identity)
+        commit(at, card, 2);
+      }
+      if (row == Marker) at.put(LibraryUpdate::kMarker, {});
+      if (row == Gone) at.remove(LibraryUpdate::kIndexNames.path);
+      if (row == Spoilt) {
+        std::vector<uint8_t> bad = idx;
+        bad[bad.size() / 2] ^= 0xFF;
+        at.put(LibraryUpdate::kIndexNames.path, bad);
+      }
+      if (row == Older) {
+        std::vector<uint8_t> old = idx;
+        old[4] = 5;  // (the version, little-endian)
+        at.put(LibraryUpdate::kIndexNames.path, old);
+      }
+      const bool loads = row == Same || row == Other || row == Marker;
+      const auto files = filesOf(at);
+      const long events = openEvents(at, "/.player/tags");
+      TEST_ASSERT_GREATER_THAN_INT32(4, events);
+      for (long k = 0; k < events; ++k) {
+        char msg[80];
+        snprintf(msg, sizeof(msg), "filled %d, row %d, read %ld of %ld", static_cast<int>(how), row, k, events);
+        for (bool lasting : {false, true}) {
+          arm(at, "/.player/tags", k, lasting ? -1 : k + 1);
+          const int walks = g_walks;
+          {
+            Device d(at, card);
+            d.boot();
+            at.faultFrom = -1;
+            TEST_ASSERT_TRUE_MESSAGE(d.store->readFailed(), msg);
+            TEST_ASSERT_TRUE_MESSAGE(d.booted.decision.holdJobs, msg);
+            TEST_ASSERT_TRUE_MESSAGE(d.booted.decision.action == (loads ? Action::Load : Action::Walk), msg);
+            TEST_ASSERT_EQUAL_INT_MESSAGE(loads ? walks : walks + 1, g_walks, msg);
+            TEST_ASSERT_EQUAL_INT_MESSAGE(!loads, d.booted.sessionWalked(), msg);
+            assertWhole(d, tracks, msg);
+            assertQueueKept(d, tracks, msg);
+            TEST_ASSERT_FALSE_MESSAGE(d.booted.markerRemoved, msg);
+            TEST_ASSERT_TRUE_MESSAGE(filesOf(at) == files, msg);
+          }
+        }
+      }
+      // The card answering: as a boot with nothing wrong.
+      Device next(at, card);
+      next.boot();
+      TEST_ASSERT_FALSE(next.booted.decision.holdJobs);
+      TEST_ASSERT_TRUE(next.booted.ok);
+      TEST_ASSERT_TRUE(next.store->device().present);
+      TEST_ASSERT_TRUE(at.violations.empty());
+    }
+  }
+}
+
+// T's and D's reads as a boot's build reads them (a new transfer, a deferred build): a
+// library.idx that says it is one comes back, nothing saved, the marker kept, the jobs
+// held. T or D damaged is the file's fault, the build stands.
+void test_a_read_the_card_fails_in_a_boots_build_goes_over_nothing() {
+  using libraryboot::Action;
+  using libraryboot::Saved;
+  for (const char* prefix : {"/.mstream/tags-00000002", "/.player/tags.bin"}) {
+    CutFs fs;
+    TestCard card;
+    const uint32_t tracks = filledCard(fs, card, Filled::Mixed);
+    commit(fs, card, 2);
+    const auto files = filesOf(fs);
+    // The reads of a clean build, past what the boot's root and open read.
+    CutFs counted = fs.reboot(cutfs::Variant::InOrder);
+    arm(counted, prefix, 1000000, -1);
+    long head = 0;
+    {
+      // (The store's and the root's reads come first; then the build's, counted here.)
+      ts::TagStore st(counted, storeConfig());
+      st.open();
+      std::unique_ptr<cardroot::Root> r(new cardroot::Root());
+      std::vector<uint8_t> scratch(1024);
+      cardroot::read(counted, scratch.data(), 1024, r.get());
+      head = counted.faultEvents;
+    }
+    counted.faultEvents = 0;
+    {
+      Device d(counted, card);
+      d.boot();
+      TEST_ASSERT_TRUE(d.booted.ok);
+      TEST_ASSERT_TRUE(d.booted.built);
+    }
+    const long all = counted.faultEvents;
+    TEST_ASSERT_GREATER_THAN_INT32(head, all);
+    int kept = 0;
+    for (long k = head; k < all; ++k) {
+      char msg[96];
+      snprintf(msg, sizeof(msg), "%s, read %ld of %ld", prefix, k, all);
+      CutFs once = fs.reboot(cutfs::Variant::InOrder);
+      arm(once, prefix, k, k + 1);
+      Device d(once, card);
+      d.boot();
+      once.faultFrom = -1;
+      if (!d.booted.keptSaved) continue;  // (the last reads are the reload's, of a saved build)
+      ++kept;
+      TEST_ASSERT_TRUE_MESSAGE(d.booted.ok, msg);
+      TEST_ASSERT_TRUE_MESSAGE(d.booted.readErrors, msg);
+      TEST_ASSERT_TRUE_MESSAGE(d.booted.decision.holdJobs, msg);
+      TEST_ASSERT_TRUE_MESSAGE(d.booted.decision.action == Action::Load, msg);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(tracks, d.index.trackCount(), msg);
+      assertQueueKept(d, tracks, msg);
+      TEST_ASSERT_TRUE_MESSAGE(filesOf(once) == files, msg);
+    }
+    TEST_ASSERT_GREATER_THAN_INT(0, kept);
+    TEST_ASSERT_TRUE(fs.violations.empty());
+  }
+  // A deferred build, each of D's opens and reads as it reads them: the same, and the
+  // marker stays for a boot that can read them.
+  {
+    CutFs fs;
+    TestCard card;
+    const uint32_t tracks = filledCard(fs, card, Filled::Mixed);
+    fs.put(LibraryUpdate::kMarker, {});
+    const auto files = filesOf(fs);
+    const long head = openEvents(fs, "/.player/tags.bin");
+    for (long k = head; k < head + 12; ++k) {
+      char msg[48];
+      snprintf(msg, sizeof(msg), "D's read %ld", k);
+      arm(fs, "/.player/tags.bin", k, k + 1);
+      Device d(fs, card);
+      d.boot();
+      fs.faultFrom = -1;
+      TEST_ASSERT_TRUE_MESSAGE(d.booted.marker, msg);
+      TEST_ASSERT_TRUE_MESSAGE(d.booted.keptSaved, msg);
+      TEST_ASSERT_TRUE_MESSAGE(d.booted.decision.holdJobs, msg);
+      TEST_ASSERT_FALSE_MESSAGE(d.booted.markerRemoved, msg);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(tracks, d.index.trackCount(), msg);
+      TEST_ASSERT_TRUE_MESSAGE(filesOf(fs) == files, msg);
+    }
+    // With a journal, the compaction's read of D failing: no build, the same.
+    {
+      ts::TagStore st(fs, storeConfig());
+      st.open();
+      uint8_t buf[2048];
+      ts::ChunkBuilder chunk;
+      chunk.begin(buf, sizeof(buf));
+      uint32_t size = 0, time = 0;
+      TEST_ASSERT_TRUE(card.stat("Later/02 - h.mp3", 16, &size, &time));
+      mptg::Record rec;
+      rec.size = size;
+      rec.fatTime = time;
+      const char* f[cc::kRunFields] = {};
+      for (auto& x : f) x = "";
+      TEST_ASSERT_TRUE(chunk.add("Later/02 - h.mp3", 16, ts::Status::Scanned, rec, f));
+      TEST_ASSERT_TRUE(st.append(chunk));
+    }
+    const auto journalled = filesOf(fs);
+    // (One read: D whole for a build after it, from tags.bin alone, which would leave
+    // the journal out, and save that over library.idx.)
+    const long opens = openEvents(fs, "/.player/tags.bin");
+    arm(fs, "/.player/tags.bin", opens + 1, opens + 2);
+    Device d(fs, card);
+    d.boot();
+    fs.faultFrom = -1;
+    TEST_ASSERT_TRUE(d.booted.compacted);
+    TEST_ASSERT_TRUE(d.booted.compaction.readFailed);
+    TEST_ASSERT_TRUE(d.booted.keptSaved);
+    TEST_ASSERT_FALSE(d.booted.built);
+    TEST_ASSERT_TRUE(filesOf(fs) == journalled);
+  }
+  // Nothing to keep (library.idx missing, of an older version, damaged): a part of a
+  // library is no better. /music walked for the session, nothing saved, the jobs held, and
+  // the next boot builds.
+  for (const char* prefix : {"/.mstream/tags-00000001", "/.player/tags.bin"}) {
+    for (int row = 0; row < 3; ++row) {
+      CutFs at;
+      TestCard card;
+      const uint32_t tracks = filledCard(at, card, Filled::Mixed);
+      std::vector<uint8_t> idx = at.bytes(LibraryUpdate::kIndexNames.path);
+      if (row == 0) at.remove(LibraryUpdate::kIndexNames.path);
+      if (row == 1) {
+        idx[4] = 5;  // (the version, little-endian)
+        at.put(LibraryUpdate::kIndexNames.path, idx);
+      }
+      if (row == 2) {
+        idx[idx.size() / 2] ^= 0xFF;
+        at.put(LibraryUpdate::kIndexNames.path, idx);
+      }
+      const auto files = filesOf(at);
+      // (The store's and the root's reads come first.)
+      CutFs counted = at.reboot(cutfs::Variant::InOrder);
+      arm(counted, prefix, 1000000, -1);
+      long head = 0;
+      {
+        ts::TagStore st(counted, storeConfig());
+        st.open();
+        std::unique_ptr<cardroot::Root> r(new cardroot::Root());
+        std::vector<uint8_t> scratch(1024);
+        cardroot::read(counted, scratch.data(), 1024, r.get());
+        head = counted.faultEvents;
+      }
+      for (long k = head; k < head + 8; ++k) {
+        char msg[96];
+        snprintf(msg, sizeof(msg), "%s, row %d, read %ld", prefix, row, k);
+        const int walks = g_walks;
+        arm(at, prefix, k, k + 1);
+        {
+          Device d(at, card);
+          d.boot();
+          at.faultFrom = -1;
+          TEST_ASSERT_TRUE_MESSAGE(d.booted.decision.action == Action::Walk, msg);
+          TEST_ASSERT_TRUE_MESSAGE(d.booted.decision.holdJobs, msg);
+          TEST_ASSERT_TRUE_MESSAGE(d.booted.readErrors, msg);
+          TEST_ASSERT_TRUE_MESSAGE(d.booted.sessionWalked(), msg);
+          TEST_ASSERT_EQUAL_INT_MESSAGE(walks + 1, g_walks, msg);
+          assertWhole(d, tracks, msg);
+          TEST_ASSERT_TRUE_MESSAGE(filesOf(at) == files, msg);
+        }
+      }
+      Device next(at, card);
+      next.boot();
+      TEST_ASSERT_TRUE(next.booted.ok);
+      TEST_ASSERT_FALSE(next.booted.decision.holdJobs);
+      TEST_ASSERT_EQUAL_UINT32(tracks, next.index.trackCount());
+    }
+  }
+  // No T, D's opens for the build all failing: not "no records", which walks and saves.
+  {
+    CutFs at;
+    TestCard card;
+    const uint32_t tracks = filledCard(at, card, Filled::Hand);
+    at.remove(LibraryUpdate::kIndexNames.path);
+    arm(at, "/.player/tags.bin", openEvents(at, "/.player/tags.bin"), -1);
+    Device d(at, card);
+    d.boot();
+    at.faultFrom = -1;
+    TEST_ASSERT_TRUE(d.booted.sessionWalked());
+    TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+    TEST_ASSERT_FALSE(at.exists(LibraryUpdate::kIndexNames.path));
+    assertWhole(d, tracks, "D's opens");
+  }
+  // The compaction's reload failing (it replaced D, then a read of the new one): D reads
+  // as none, only because the card failed the read. A build then is T alone.
+  for (bool withIdx : {true, false}) {
+    CutFs at;
+    TestCard card;
+    const uint32_t tracks = filledCard(at, card, Filled::Mixed);
+    {
+      ts::TagStore st(at, storeConfig());
+      st.open();
+      uint8_t buf[2048];
+      ts::ChunkBuilder chunk;
+      chunk.begin(buf, sizeof(buf));
+      uint32_t size = 0, time = 0;
+      TEST_ASSERT_TRUE(card.stat("Later/02 - h.mp3", 16, &size, &time));
+      mptg::Record rec;
+      rec.size = size;
+      rec.fatTime = time;
+      const char* f[cc::kRunFields] = {};
+      for (auto& x : f) x = "";
+      TEST_ASSERT_TRUE(chunk.add("Later/02 - h.mp3", 16, ts::Status::Scanned, rec, f));
+      TEST_ASSERT_TRUE(st.append(chunk));
+    }
+    if (withIdx) {
+      at.put(LibraryUpdate::kMarker, {});
+    } else {
+      at.remove(LibraryUpdate::kIndexNames.path);
+    }
+    const std::vector<uint8_t> idx = at.bytes(LibraryUpdate::kIndexNames.path);
+    // The last read of tags.bin a clean boot's compaction makes, and on.
+    CutFs counted = at.reboot(cutfs::Variant::InOrder);
+    long reloadAt = 0;
+    {
+      const long opens = openEvents(at, "/.player/tags.bin");
+      arm(counted, "/.player/tags.bin", 1000000, -1);
+      ts::TagStore st(counted, storeConfig());
+      st.open();
+      TEST_ASSERT_TRUE(st.compact().ok);
+      reloadAt = counted.faultEvents - 1;
+      (void)opens;
+    }
+    arm(at, "/.player/tags.bin", reloadAt, -1);
+    {
+      Device d(at, card);
+      d.boot();
+      at.faultFrom = -1;
+      TEST_ASSERT_TRUE(d.booted.compacted);
+      TEST_ASSERT_FALSE(d.booted.compaction.readFailed);
+      TEST_ASSERT_TRUE(d.store->readFailed());
+      TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+      TEST_ASSERT_FALSE(d.booted.markerRemoved);
+      TEST_ASSERT_TRUE(idx == at.bytes(LibraryUpdate::kIndexNames.path));
+      assertWhole(d, tracks, "the reload");
+      TEST_ASSERT_EQUAL_INT(!withIdx, d.booted.sessionWalked());
+    }
+  }
+  // D's own records damaged, found as a new transfer's build reads it (its open read
+  // whole): its fault. Built without it, saved, nothing held, for ever or otherwise.
+  {
+    CutFs at;
+    TestCard card;
+    filledCard(at, card, Filled::Mixed);
+    commit(at, card, 2);
+    {
+      CutFs dry = at.reboot(cutfs::Variant::InOrder);
+      Device d(dry, card);
+      d.boot();
+      TEST_ASSERT_TRUE(d.booted.build.deviceUsed);
+    }
+    const long atOpen = openEvents(at, "/.player/tags.bin") - 1;  // (less its openRead)
+    long seen = 0;
+    g_failRead = [&](const std::string& path) {
+      if (path == "/.player/tags.bin" && ++seen == atOpen + 1) at.damagedPrefix = path;
+      return false;
+    };
+    Device d(at, card);
+    d.boot();
+    g_failRead = nullptr;
+    at.damagedPrefix.clear();
+    TEST_ASSERT_TRUE(d.booted.readErrors);
+    TEST_ASSERT_FALSE(d.booted.keptSaved);
+    TEST_ASSERT_FALSE(d.booted.decision.holdJobs);
+    TEST_ASSERT_TRUE(d.booted.ok);
+    TEST_ASSERT_FALSE(d.booted.build.deviceUsed);
+    TEST_ASSERT_FALSE(d.booted.sessionWalked());
+  }
+  // T's own records damaged: its fault. Built without it, saved, nothing held.
+  CutFs fs;
+  TestCard card;
+  filledCard(fs, card, Filled::Transfer);
+  commit(fs, card, 2);
+  fs.damagedPrefix = tagsName(2);
+  Device d(fs, card);
+  d.boot();
+  fs.damagedPrefix.clear();
+  TEST_ASSERT_FALSE(d.root->readFailed());
+  TEST_ASSERT_FALSE(d.booted.keptSaved);
+  TEST_ASSERT_FALSE(d.booted.decision.holdJobs);
+  TEST_ASSERT_TRUE(d.booted.ok);
+}
+
+// No walk for the session to make, or no memory for it: no library, nothing written.
+void test_a_session_walk_that_cant_run_is_no_library() {
+  using libraryboot::Action;
+  CutFs fs;
+  TestCard card;
+  filledCard(fs, card, Filled::Transfer);
+  const auto files = filesOf(fs);
+  arm(fs, "/.player/", 0, -1);
+  {
+    Device d(fs, card);
+    g_ceiling = g_live + 64;
+    d.boot();
+    g_ceiling = SIZE_MAX;
+    TEST_ASSERT_TRUE(d.booted.decision.action == Action::Walk);
+    TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+    TEST_ASSERT_TRUE(d.booted.noMemory);
+    TEST_ASSERT_FALSE(d.booted.ok);
+    TEST_ASSERT_FALSE(d.index.ready());
+  }
+  fs.faultFrom = -1;
+  TEST_ASSERT_TRUE(filesOf(fs) == files);
+}
+
+// The update step, after a compaction the card failed a read of D in: the build would
+// read the same D, behind the fence, for nothing. It ends before its fence, the library
+// as it was.
+void test_a_read_of_d_the_card_fails_in_the_compaction_ends_the_step_before_its_fence() {
+  CutFs fs;
+  TestCard card;
+  const uint32_t tracks = filledCard(fs, card, Filled::Hand);
+  {
+    ts::TagStore st(fs, storeConfig());
+    st.open();
+    uint8_t buf[2048];
+    ts::ChunkBuilder chunk;
+    chunk.begin(buf, sizeof(buf));
+    uint32_t size = 0, time = 0;
+    TEST_ASSERT_TRUE(card.stat("Loose/03 - f.mp3", 16, &size, &time));
+    mptg::Record rec;
+    rec.size = size;
+    rec.fatTime = time;
+    const char* f[cc::kRunFields] = {};
+    for (auto& x : f) x = "";
+    f[cc::kTitle] = "From the journal";
+    TEST_ASSERT_TRUE(chunk.add("Loose/03 - f.mp3", 16, ts::Status::Scanned, rec, f));
+    TEST_ASSERT_TRUE(st.append(chunk));
+  }
+  const std::vector<uint8_t> d0 = fs.bytes("/.player/tags.bin");
+  const std::vector<uint8_t> idx = fs.bytes(LibraryUpdate::kIndexNames.path);
+  Device d(fs, card);
+  d.boot();
+  TEST_ASSERT_TRUE(d.booted.ok);
+  TEST_ASSERT_TRUE(d.store->hasJournals());
+  arm(fs, "/.player/tags.bin", 2, -1);
+  d.update("the scan's end");
+  fs.faultFrom = -1;
+  TEST_ASSERT_TRUE(d.did(Do::Failed));
+  TEST_ASSERT_FALSE(d.did(Do::Fence));
+  TEST_ASSERT_TRUE(d.index.ready());
+  TEST_ASSERT_EQUAL_UINT32(tracks, d.index.trackCount());
+  TEST_ASSERT_TRUE(d0 == fs.bytes("/.player/tags.bin"));
+  TEST_ASSERT_TRUE(idx == fs.bytes(LibraryUpdate::kIndexNames.path));
+  TEST_ASSERT_TRUE(d.store->hasJournals());
+  // The compaction whole and the read of the new D failing (its reload): the records
+  // read as none in memory, not on the card. A step on that would build from T alone.
+  CutFs reload = fs.reboot(cutfs::Variant::InOrder);
+  arm(reload, "/.player/tags.bin", 1000000, -1);
+  long lastReads = 0;
+  {
+    ts::TagStore st(reload, storeConfig());
+    st.open();
+    reload.faultEvents = 0;
+    TEST_ASSERT_TRUE(st.compact().ok);
+    lastReads = reload.faultEvents;
+  }
+  CutFs at = fs.reboot(cutfs::Variant::InOrder);
+  Device m(at, card);
+  m.boot();
+  TEST_ASSERT_TRUE(m.booted.ok);
+  arm(at, "/.player/tags.bin", lastReads - 1, -1);  // (the reload's last read, and on)
+  const ts::TagStore::Compacted c = m.store->compact();
+  TEST_ASSERT_FALSE(c.ok);
+  TEST_ASSERT_FALSE(c.readFailed);
+  TEST_ASSERT_TRUE(m.store->readFailed());
+  m.update("the scan's end");
+  at.faultFrom = -1;
+  TEST_ASSERT_TRUE(m.did(Do::Failed));
+  TEST_ASSERT_FALSE(m.did(Do::Fence));
+  TEST_ASSERT_TRUE(idx == at.bytes(LibraryUpdate::kIndexNames.path));
+  TEST_ASSERT_EQUAL_UINT32(tracks, m.index.trackCount());
+}
+
+// The boot's readers read in order, whatever failed: the card, with its whole /.player
+// or everything failing, keeps it all, and shows the whole library, or /music walked.
+void test_every_read_failing_leaves_a_whole_library() {
+  for (Filled how : {Filled::Mixed, Filled::Hand, Filled::Transfer}) {
+    for (const char* prefix : {"/.player/", "/.mstream/", "/"}) {
+      CutFs fs;
+      TestCard card;
+      const uint32_t tracks = filledCard(fs, card, how);
+      const auto files = filesOf(fs);
+      const long events = bootEvents(fs, card, prefix);
+      for (long k = 0; k < events; ++k) {
+        char msg[80];
+        snprintf(msg, sizeof(msg), "filled %d, %s, read %ld of %ld", static_cast<int>(how), prefix, k, events);
+        for (bool lasting : {false, true}) {
+          arm(fs, prefix, k, lasting ? -1 : k + 1);
+          Device d(fs, card);
+          d.boot();
+          fs.faultFrom = -1;
+          // (A plan's own read is the status line's, and leaves the root whole.)
+          assertWhole(d, tracks, msg);
+          assertQueueKept(d, tracks, msg);
+          TEST_ASSERT_TRUE_MESSAGE(filesOf(fs) == files, msg);
+          TEST_ASSERT_TRUE_MESSAGE(fs.violations.empty(), msg);
+        }
+      }
+    }
+  }
+}
+
 void test_every_row_of_the_boot() {
   using libraryboot::Action;
   using libraryboot::Saved;
@@ -694,6 +1914,7 @@ void test_every_row_of_the_boot() {
     TEST_ASSERT_TRUE(d.booted.saved == Saved::Missing);
     TEST_ASSERT_TRUE(d.booted.decision.action == Action::Walk);
     TEST_ASSERT_TRUE(d.booted.walked);
+    TEST_ASSERT_FALSE(d.booted.sessionWalked());  // (saved, and the queue's restore believes it)
     TEST_ASSERT_EQUAL_UINT32(kAudio, d.index.trackCount());
     TEST_ASSERT_EQUAL_UINT32(kAudio, pendingIn(d.index));
     TEST_ASSERT_TRUE(fs.exists(LibraryUpdate::kIndexNames.path));
@@ -1119,6 +2340,7 @@ void test_the_safe_point_follows_the_pause() {
   d.update("gb");
   g_ceiling = SIZE_MAX;
   TEST_ASSERT_FALSE(d.upd->last().built);
+  TEST_ASSERT_FALSE(d.upd->last().reloaded);  // (not the card's: nothing reloaded, and nothing for CardTasks to count)
   TEST_ASSERT_EQUAL_UINT32(measured, d.upd->lastPauseMs());
 }
 
@@ -1448,11 +2670,12 @@ void test_the_steps_order_and_a_card_that_doesnt_answer() {
 // after its opens worked (the card answered at the ask and on the worker):
 // the card's trouble, not "no records". Nothing is walked (an absent /music
 // would give an empty library and "Library updated"; a glitch the card came
-// back from, a path-named one saved over library.idx) or saved, T isn't
-// marked bad, and the next boot loads the last library.idx. A read of T
-// failing while D reads whole: the build from D alone stands, saved as one
-// that left records out: the next boot finds it soft-stale, and its update
-// step reads T again.
+// back from, a path-named one saved over library.idx) or saved, and T isn't
+// marked bad. A read that failed with the card answering: the last library.idx
+// loaded again, at once. A card pulled: no library until the next boot, which
+// loads it, or Try again. A read of T the card failed fails the step as D's does;
+// only T's own damage, or a read past its end, leaves the build from D alone
+// (below), saved as one that left records out.
 // ---------------------------------------------------------------------------
 void test_a_card_that_fails_mid_build() {
   for (int withT = 0; withT < 2; ++withT) {
@@ -1497,7 +2720,7 @@ void test_a_card_that_fails_mid_build() {
         TEST_ASSERT_FALSE_MESSAGE(s.saved, msg);
         TEST_ASSERT_TRUE_MESSAGE(std::find(d.steps.begin(), d.steps.end(), Job::Save) == d.steps.end(), msg);
         TEST_ASSERT_FALSE_MESSAGE(d.upd->transferBad(), msg);
-        TEST_ASSERT_FALSE_MESSAGE(d.index.ready(), msg);  // no library until the next boot
+        TEST_ASSERT_TRUE_MESSAGE(s.reloaded == (how == 1) && d.index.ready() == (how == 1), msg);  // the last library.idx back
         TEST_ASSERT_TRUE_MESSAGE(d.upd->phase() == Phase::Idle, msg);
       }
       // library.idx as it was: the next boot loads it.
@@ -1510,9 +2733,10 @@ void test_a_card_that_fails_mid_build() {
       TEST_ASSERT_TRUE_MESSAGE(fs.violations.empty(), msg);
     }
   }
-  // One read of T fails, D reads whole: built from D alone, T not marked
-  // bad, saved as records left out; the next boot loads it soft-stale and
-  // its update step reads T again.
+  // One read of T fails, D reads whole: the step fails as for D's. Built from D alone
+  // it would save every file T lists under its path over the library.idx that has
+  // their tags. T not marked bad; the next boot loads what was there, and its update
+  // step reads T again.
   CutFs fs;
   TestCard card;
   transferCard(fs, card);
@@ -1527,22 +2751,19 @@ void test_a_card_that_fails_mid_build() {
     d.update("gb");
     g_failRead = nullptr;
     const LibraryUpdate::Step& s = d.upd->last();
-    TEST_ASSERT_TRUE(s.built);
+    TEST_ASSERT_FALSE(s.built);
     TEST_ASSERT_TRUE(s.readErrors);
-    TEST_ASSERT_FALSE(s.cardGone);
-    TEST_ASSERT_FALSE(s.build.transferUsed);
-    TEST_ASSERT_TRUE(s.build.transferWhy == cc::Why::Io);
-    TEST_ASSERT_TRUE(s.build.deviceUsed);
+    TEST_ASSERT_TRUE(s.cardGone);
     TEST_ASSERT_FALSE(d.upd->transferBad());
-    TEST_ASSERT_TRUE(s.saved);
-    TEST_ASSERT_EQUAL_UINT32(libraryboot::kJournalsLeftOut, s.inputs.journalSeq);
-    TEST_ASSERT_EQUAL_UINT32(kAudio, d.index.trackCount());
+    TEST_ASSERT_FALSE(s.saved);
+    TEST_ASSERT_TRUE(s.reloaded);  // the last library back, at once
+    TEST_ASSERT_EQUAL_STRING("From T", titleOf(d.index, kFlac).c_str());
   }
   {
     Device d(fs, card);
     d.boot();
     TEST_ASSERT_TRUE(d.booted.decision.action == libraryboot::Action::Load);
-    TEST_ASSERT_TRUE(d.booted.softStale);
+    TEST_ASSERT_EQUAL_STRING("From T", titleOf(d.index, kFlac).c_str());
     d.update("the scan's end");
     TEST_ASSERT_TRUE(d.upd->last().build.transferUsed);
     TEST_ASSERT_FALSE(d.upd->last().readErrors);
@@ -1556,9 +2777,195 @@ void test_a_card_that_fails_mid_build() {
   TEST_ASSERT_TRUE(fs.violations.empty());
 }
 
+// The root read, and a read of a new T the card fails as the boot builds: the library
+// that has its names stays (the unread root's row), and no card jobs this session. A
+// card with no records to lose, or a T that fails a check, goes as ever.
+void test_a_read_of_t_the_card_fails_at_the_boot_keeps_the_library() {
+  CutFs fs;
+  TestCard card;
+  transferCard(fs, card);
+  std::string before;
+  {
+    Device d(fs, card);
+    d.boot();
+    before = titleOf(d.index, kFlac);
+  }
+  const std::vector<uint8_t> idx = fs.bytes(LibraryUpdate::kIndexNames.path);
+  commit(fs, card, 2);  // another transfer: the saved index differs
+  const uint32_t writes = static_cast<uint32_t>(fs.bytesWritten);
+  // Every read of T from the n-th on: the root reads its head, and each of the build's two tries fails,
+  // one wait between them, as the firmware boots (Library::openRecords()).
+  bool tested = false;
+  int firstOfTheBuild = 0;
+  for (int n = 1; n < 400 && !tested; ++n) {
+    int tReads = 0;
+    g_failRead = [&](const std::string& path) { return path == tagsName(2) && ++tReads >= n; };
+    g_waits.clear();
+    Device d(fs, card);
+    d.wait = noteWait;
+    d.boot();
+    g_failRead = nullptr;
+    if (!d.root->present || d.root->readFailed()) continue;  // (the root's own reads of T)
+    TEST_ASSERT_TRUE(tReads >= n);
+    tested = true;
+    firstOfTheBuild = n;
+    TEST_ASSERT_TRUE(d.booted.ok);
+    TEST_ASSERT_TRUE(d.booted.decision.action == libraryboot::Action::Load);
+    TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+    TEST_ASSERT_EQUAL_STRING(before.c_str(), titleOf(d.index, kFlac).c_str());
+    TEST_ASSERT_TRUE(idx == fs.bytes(LibraryUpdate::kIndexNames.path));
+    TEST_ASSERT_EQUAL_size_t(1, g_waits.size());
+    TEST_ASSERT_EQUAL_UINT32(ts::kBootWaitsMs[0], g_waits[0]);
+  }
+  TEST_ASSERT_TRUE(tested);
+  // One read that fails, a one-off: asked again, the new T's build, the jobs on.
+  {
+    int tReads = 0;
+    g_failRead = [&](const std::string& path) { return path == tagsName(2) && ++tReads == firstOfTheBuild; };
+    g_waits.clear();
+    Device d(fs, card);
+    d.wait = noteWait;
+    d.boot();
+    g_failRead = nullptr;
+    TEST_ASSERT_EQUAL_size_t(1, g_waits.size());
+    TEST_ASSERT_TRUE(d.booted.build.transferUsed);
+    TEST_ASSERT_FALSE(d.booted.decision.holdJobs);
+    TEST_ASSERT_FALSE(d.booted.readErrors);
+  }
+}
+
+// The same fault in D from the build's first read: one wait, asked again, the jobs held; the build
+// from T's listing saved or not as 3.2.2 says, nothing of D's touched.
+void test_a_lasting_fault_of_d_at_the_boot_with_the_waits() {
+  CutFs fs;
+  TestCard card;
+  const uint32_t tracks = filledCard(fs, card, Filled::Mixed);
+  commit(fs, card, 2);
+  const auto files = filesOf(fs);
+  const char* prefix = "/.player/tags.bin";
+  CutFs counted = fs.reboot(cutfs::Variant::InOrder);
+  arm(counted, prefix, 1000000, -1);
+  long head = 0;
+  {
+    ts::TagStore st(counted, storeConfig());
+    st.open();
+    head = counted.faultEvents;
+  }
+  // From the build's first read on, every try.
+  CutFs lasting = fs.reboot(cutfs::Variant::InOrder);
+  arm(lasting, prefix, head, -1);
+  g_waits.clear();
+  Device d(lasting, card);
+  d.wait = noteWait;
+  d.boot();
+  lasting.faultFrom = -1;
+  TEST_ASSERT_TRUE(d.booted.decision.holdJobs);
+  TEST_ASSERT_TRUE(d.booted.keptSaved);
+  TEST_ASSERT_TRUE(d.booted.ok);
+  TEST_ASSERT_EQUAL_UINT32(tracks, d.index.trackCount());
+  TEST_ASSERT_EQUAL_size_t(1, g_waits.size());
+  TEST_ASSERT_TRUE(filesOf(lasting) == files);
+}
+
+// T's own records damaged (FatFs's FR_INT_ERR: the card answered), D whole: the row 3.4.2 keeps: the build
+// from D alone stands, saved as one that left records out.
+void test_t_s_own_damage_with_d_whole_stands() {
+  CutFs fs;
+  TestCard card;
+  transferCard(fs, card);
+  Device d(fs, card);
+  d.boot();
+  g_onRead = [&] {
+    if (d.upd->phase() == Phase::Building) fs.damagedPrefix = tagsName(1);
+  };
+  d.update("gb");
+  g_onRead = nullptr;
+  fs.damagedPrefix.clear();
+  const LibraryUpdate::Step& s = d.upd->last();
+  TEST_ASSERT_TRUE(s.readErrors);
+  TEST_ASSERT_FALSE(s.cardGone);
+  TEST_ASSERT_TRUE(s.built);
+  TEST_ASSERT_FALSE(s.reloaded);
+  TEST_ASSERT_FALSE(s.build.transferUsed);
+  TEST_ASSERT_TRUE(s.build.deviceUsed);
+  TEST_ASSERT_TRUE(s.saved);
+  TEST_ASSERT_EQUAL_UINT32(libraryboot::kJournalsLeftOut, s.inputs.journalSeq);
+  TEST_ASSERT_FALSE(d.upd->transferBad());
+}
+
+// T's own records damaged and no D to build from: the step fails, the library back, nothing walked.
+void test_t_s_own_damage_with_no_d_fails_the_step() {
+  CutFs fs;
+  TestCard card;
+  fill(card);
+  commit(fs, card, 1);
+  Device d(fs, card);
+  d.boot();
+  TEST_ASSERT_TRUE(d.booted.build.transferUsed);
+  TEST_ASSERT_FALSE(d.store->device().present);
+  const std::vector<uint8_t> idx = fs.bytes(LibraryUpdate::kIndexNames.path);
+  const int walks = g_walks;
+  g_onRead = [&] {
+    if (d.upd->phase() == Phase::Building) fs.damagedPrefix = tagsName(1);
+  };
+  d.update("gb");
+  g_onRead = nullptr;
+  fs.damagedPrefix.clear();
+  const LibraryUpdate::Step& s = d.upd->last();
+  TEST_ASSERT_TRUE(s.readErrors);
+  TEST_ASSERT_TRUE(s.cardGone);
+  TEST_ASSERT_FALSE(s.built);
+  TEST_ASSERT_FALSE(s.walked);
+  TEST_ASSERT_EQUAL_INT(walks, g_walks);
+  TEST_ASSERT_TRUE(s.reloaded);
+  TEST_ASSERT_TRUE(idx == fs.bytes(LibraryUpdate::kIndexNames.path));
+}
+
+// The reload's own reads failing: no library until the next boot, which loads it, and it says so;
+// library.idx as it was. Step::reloaded means an index that loaded.
+void test_a_reload_that_fails_says_so() {
+  bool past = false;
+  for (int n = 1; n < 2000 && !past; ++n) {
+    char msg[48];
+    std::snprintf(msg, sizeof(msg), "read %d of library.idx", n);
+    CutFs fs;
+    TestCard card;
+    transferCard(fs, card);
+    const std::vector<uint8_t> idx = fs.bytes(LibraryUpdate::kIndexNames.path);
+    Device d(fs, card);
+    d.boot();
+    int tReads = 0, idxReads = 0;
+    g_failRead = [&](const std::string& path) {
+      if (d.upd->phase() != Phase::Building) return false;
+      if (path == tagsName(1)) return ++tReads == 3;
+      if (path == LibraryUpdate::kIndexNames.path) return ++idxReads == n;
+      return false;
+    };
+    d.update("gb");
+    g_failRead = nullptr;
+    const LibraryUpdate::Step& s = d.upd->last();
+    TEST_ASSERT_TRUE_MESSAGE(s.cardGone, msg);
+    TEST_ASSERT_FALSE_MESSAGE(s.built, msg);
+    if (idxReads < n) {
+      past = true;
+      TEST_ASSERT_TRUE_MESSAGE(s.reloaded, msg);
+      TEST_ASSERT_TRUE_MESSAGE(d.index.ready(), msg);
+      break;
+    }
+    TEST_ASSERT_FALSE_MESSAGE(s.reloaded, msg);
+    TEST_ASSERT_FALSE_MESSAGE(d.index.ready(), msg);
+    TEST_ASSERT_TRUE_MESSAGE(idx == fs.bytes(LibraryUpdate::kIndexNames.path), msg);
+    Device again(fs, card);
+    again.boot();
+    TEST_ASSERT_TRUE_MESSAGE(again.booted.ok, msg);
+    TEST_ASSERT_TRUE_MESSAGE(again.booted.decision.action == libraryboot::Action::Load, msg);
+  }
+  TEST_ASSERT_TRUE(past);
+}
+
 // ---------------------------------------------------------------------------
 // The worker's task before the fence: it ends 3 s after its last step (a
-// long wait for the safe point), and the build needs it made again (a 6 KB
+// long wait for the safe point), and the build needs it made again (a 7.5 KB
 // stack in internal RAM). The step asks for it (Out::wantWorker) and puts
 // its fence up only once it is there: with no internal RAM for it, the step
 // waits, the index as it was and nothing held but the scan; once it can be
@@ -2124,10 +3531,74 @@ void test_the_memory_check_has_auto_djs_join_given_back() {
   TEST_ASSERT_TRUE(fs.violations.empty());
 }
 
+// T won't open on the worker (the card failed the open; a read of /.mstream's directory, say) with library.idx
+// elsewhere: cardGone with no read error. The same rule as a read that fails: the library back, nothing saved.
+void test_t_that_wont_open_on_the_worker_gets_the_library_back() {
+  CutFs fs;
+  TestCard card;
+  transferCard(fs, card);
+  Device d(fs, card);
+  d.boot();
+  const std::string before = titleOf(d.index, kFlac);
+  const std::vector<uint8_t> idx = fs.bytes(LibraryUpdate::kIndexNames.path);
+  // (Armed once the step is past its ask, whose root and T's checks would end it before its fence.)
+  d.upd->ask("gb");
+  d.runUntil([&] { return d.upd->phase() == Phase::Build || d.upd->phase() == Phase::Building; });
+  arm(fs, tagsName(1).c_str(), 0, -1);
+  d.runUntil([&] { return d.did(Do::Saved); });
+  fs.faultFrom = -1;
+  const LibraryUpdate::Step& s = d.upd->last();
+  TEST_ASSERT_TRUE(s.cardGone);
+  TEST_ASSERT_FALSE(s.built);
+  TEST_ASSERT_FALSE(s.saved);
+  TEST_ASSERT_TRUE(s.reloaded);
+  TEST_ASSERT_TRUE(d.index.ready());
+  TEST_ASSERT_EQUAL_STRING(before.c_str(), titleOf(d.index, kFlac).c_str());
+  TEST_ASSERT_FALSE(d.upd->transferBad());
+  TEST_ASSERT_TRUE(idx == fs.bytes(LibraryUpdate::kIndexNames.path));
+}
+
+// The reload closes what it opened (a FIL of PSRAM a time on the device), loaded or not.
+void test_the_reload_closes_library_idx() {
+  for (int fail = 0; fail < 2; ++fail) {
+    CutFs fs;
+    TestCard card;
+    transferCard(fs, card);
+    Device d(fs, card);
+    d.boot();
+    const int openBefore = fs.openNow;
+    int tReads = 0, idxReads = 0;
+    g_failRead = [&](const std::string& path) {
+      if (d.upd->phase() != Phase::Building) return false;
+      if (path == tagsName(1)) return ++tReads == 3;
+      if (fail && path == LibraryUpdate::kIndexNames.path) return ++idxReads == 1;
+      return false;
+    };
+    d.update("gb");
+    g_failRead = nullptr;
+    TEST_ASSERT_TRUE(d.upd->last().cardGone);
+    TEST_ASSERT_EQUAL(fail == 0, d.upd->last().reloaded);
+    d.drain();  // (the jobs' own files)
+    TEST_ASSERT_EQUAL_INT(openBefore, fs.openNow);
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_safe_point_and_the_memory_check);
   RUN_TEST(test_every_row_of_the_boot);
+  RUN_TEST(test_a_root_the_card_fails_to_read_at_the_boot_keeps_the_library);
+  RUN_TEST(test_a_read_of_library_idx_the_card_fails_builds_nothing_over_it);
+  RUN_TEST(test_the_boot_reads_library_idx_again_while_the_card_fails);
+  RUN_TEST(test_library_idx_unread_and_nothing_whole_to_build_from_is_walked_for_the_session);
+  RUN_TEST(test_a_session_build_keeps_the_marker_and_folds_the_journals);
+  RUN_TEST(test_a_damaged_or_cut_library_idx_is_its_own_fault);
+  RUN_TEST(test_library_tmp_outlives_a_read_the_card_fails);
+  RUN_TEST(test_a_read_of_the_records_the_card_fails_keeps_them_and_the_library);
+  RUN_TEST(test_a_read_the_card_fails_in_a_boots_build_goes_over_nothing);
+  RUN_TEST(test_a_session_walk_that_cant_run_is_no_library);
+  RUN_TEST(test_a_read_of_d_the_card_fails_in_the_compaction_ends_the_step_before_its_fence);
+  RUN_TEST(test_every_read_failing_leaves_a_whole_library);
   RUN_TEST(test_library_tmp_after_a_cut);
   RUN_TEST(test_a_deferral_then_a_boot_that_builds);
   RUN_TEST(test_a_track_end_near_the_safe_point);
@@ -2139,6 +3610,13 @@ int main(int, char**) {
   RUN_TEST(test_the_fence);
   RUN_TEST(test_the_steps_order_and_a_card_that_doesnt_answer);
   RUN_TEST(test_a_card_that_fails_mid_build);
+  RUN_TEST(test_a_read_of_t_the_card_fails_at_the_boot_keeps_the_library);
+  RUN_TEST(test_a_lasting_fault_of_d_at_the_boot_with_the_waits);
+  RUN_TEST(test_t_s_own_damage_with_d_whole_stands);
+  RUN_TEST(test_t_s_own_damage_with_no_d_fails_the_step);
+  RUN_TEST(test_a_reload_that_fails_says_so);
+  RUN_TEST(test_t_that_wont_open_on_the_worker_gets_the_library_back);
+  RUN_TEST(test_the_reload_closes_library_idx);
   RUN_TEST(test_the_worker_s_task_before_the_fence);
   RUN_TEST(test_the_marker_s_build_out_of_psram);
   RUN_TEST(test_a_failed_first_walk_keeps_the_library);

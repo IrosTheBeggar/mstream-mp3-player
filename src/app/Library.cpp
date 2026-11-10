@@ -11,9 +11,13 @@
 #include <cstring>
 
 #include "LibraryText.h"
+#include "MoodFilter.h"
+#include "QueueView.h"
+#include "TagText.h"
 #include "app/AutoDjContract.h"
 #include "app/Psram.h"
 #include "app/Version.h"
+#include "app/WavesContract.h"
 #include "storage/FileStream.h"
 
 namespace {
@@ -93,7 +97,9 @@ char s_producer[48] = "";
 
 }  // namespace
 
-Library::Library(LocalStorage& storage) : storage_(storage) {}
+Library::Library(LocalStorage& storage) : storage_(storage), unlisted_(psramAlloc, psramFree) {
+  catalog_.setUnlisted(&unlisted_);
+}
 
 bool Library::ensureIndex() {
   if (!index_) {
@@ -258,9 +264,14 @@ bool Library::openRecords() {
   // (The board's id, the play log's deviceId: its ACKS rows kept first.)
   uint8_t mac[6] = {};
   esp_efuse_mac_get_default(mac);
-  cardroot::read(*fat_, scratch, 1024, root_, mac);
+  void (*wait)(uint32_t) = [](uint32_t ms) { delay(ms); };
+  const uint32_t reads = cardroot::readAtBoot(*fat_, scratch, 1024, root_, wait, mac);
   psramFree(scratch);
   stats_.rootMs = msSince(t0);
+  if (reads > 1) {
+    Serial.printf("[lib] the card's root: a read of the card failed: read %lu times, %s\n", (unsigned long)reads,
+                  root_->readFailed() ? "and each failed" : "and the last was whole");
+  }
   snprintf(s_producer, sizeof(s_producer), "mstream-player %s", version::player());
   tagstore::TagStore::Config c;
   c.dir = "/.player";
@@ -271,8 +282,20 @@ bool Library::openRecords() {
   t0 = esp_timer_get_time();
   store_ = psramNew<tagstore::TagStore>(*fat_, c, psramAlloc, psramFree);
   if (!store_) return false;
-  stats_.opened = store_->open();
+  // The boot's waits are for a glitch: a card still failing after them won't be back
+  // for the next reader, which reads once.
+  if (root_->readFailed()) wait = nullptr;
+  uint32_t opens = 1;
+  stats_.opened = store_->openAtBoot(wait, &opens);
   stats_.openMs = msSince(t0);
+  if (opens > 1) {
+    Serial.printf("[lib] the device's records: a read of the card failed: read %lu times, %s\n", (unsigned long)opens,
+                  store_->readFailed()        ? "and each failed"
+                  : stats_.opened.journalsUnread ? "and tags.bin read, the journals each failed: taken as far as they "
+                                                   "read, the scan and the walk read the rest again"
+                                                 : "and the last was whole");
+  }
+  if (store_->readFailed()) wait = nullptr;
   LibraryUpdate::Config u;
   u.fs = fat_;
   u.store = store_;
@@ -284,6 +307,7 @@ bool Library::openRecords() {
   u.walk = walkMusic;
   u.walkCtx = this;
   u.nowUs = nowUs;
+  u.wait = wait;
   update_ = psramNew<LibraryUpdate>(u);
   if (!update_) {
     psramDelete(store_);
@@ -337,6 +361,8 @@ bool Library::beginCard() {
   stats_.build = b.build;
   stats_.built = b.built;
   softStale_ = b.softStale;
+  if (b.decision.holdJobs) holdCardJobs(b.decision.why);
+  listsCard_ = !b.sessionWalked();
   if (b.compacted) {
     const tagstore::TagStore::Compacted& c = b.compaction;
     Serial.printf("[lib] the journals compacted into tags.bin in %.0f ms: %s (%lu records, %lu chunks merged%s)\n",
@@ -345,15 +371,20 @@ bool Library::beginCard() {
   }
   if (b.built) {
     const LibraryBuilder::Result& r = b.build;
-    Serial.printf("[lib] built from the records in %.0f ms: %lu tracks, %lu from the transfer's, %lu from the "
-                  "device's, %lu by their paths (%lu for the scan)%s%s; peak %u B of PSRAM\n",
+    Serial.printf("[lib] built from the records in %.0f ms: %lu tracks, %lu from the transfer's (%lu with moods), "
+                  "%lu from the device's, %lu by their paths (%lu for the scan)%s%s; peak %u B of PSRAM\n",
                   b.buildMs, (unsigned long)index_->trackCount(), (unsigned long)r.fromTransfer,
-                  (unsigned long)r.fromDevice, (unsigned long)r.fromPath, (unsigned long)r.pending,
+                  (unsigned long)r.withMoods, (unsigned long)r.fromDevice, (unsigned long)r.fromPath,
+                  (unsigned long)r.pending,
                   r.restarted ? "; restarted without a file that failed its checks" : "",
                   update_->transferBad() ? "; T left out" : "", (unsigned)index_->memory().buildPeak);
   }
   if (b.journalsLeft) Serial.println("[lib] the journals couldn't be compacted first: built from tags.bin alone");
-  if (b.readErrors) {
+  if (b.decision.holdJobs && b.readErrors) {
+    Serial.printf("[lib] a read of the card's records FAILED as they were built (the card?): nothing saved, the marker "
+                  "kept%s\n",
+                  b.keptSaved && b.ok ? ", library.idx loaded instead" : "");
+  } else if (b.readErrors) {
     Serial.println("[lib] a read of the card's records FAILED as they were built (the card?): what was built is "
                    "saved as one that left records out (the next boot rebuilds it at its scan's end)");
   }
@@ -365,10 +396,17 @@ bool Library::beginCard() {
   if (b.saveFailed) Serial.println("[lib] couldn't save library.idx (the next boot builds again)");
   if (b.noMemory && b.decision.action == libraryboot::Action::Load) {
     Serial.println("[lib] no PSRAM to load library.idx: no library (the built-in tracks still play)");
+  } else if (!b.ok && b.decision.sessionOnly) {
+    Serial.printf("[lib] no library this session (%s; the built-in tracks still play): a restart asks again\n",
+                  b.noMemory ? "out of PSRAM" : "no walk");
   } else if (!b.ok) {
     Serial.printf("[lib] the build from the records FAILED (%s)\n", b.noMemory ? "out of PSRAM" : "unreadable");
   }
-  writeDeviceTxt();
+  if (b.sessionWalked()) {
+    Serial.println("[lib] that walk is for this session, nothing of it saved: a restart asks again");
+  }
+  // (A boot that holds its jobs writes nothing it can leave for the next.)
+  if (!cardJobsHeld_) writeDeviceTxt();
   stats_.psramUsed = static_cast<int32_t>(psBefore) - static_cast<int32_t>(psramFreeNow());
   stats_.internalDelta = static_cast<int32_t>(internalFree()) - static_cast<int32_t>(stats_.internalFreeBefore);
   if (stats_.internalMinDuring == 0) stats_.internalMinDuring = internalFree();
@@ -377,17 +415,19 @@ bool Library::beginCard() {
   cardroot::describe(*root_, rootLine, sizeof(rootLine));
   const tagstore::DeviceInfo& di = store_->device();
   Serial.printf("[lib] the card: %s; D %s (%lu records, %lu journal chunks%s), read in %.0f ms + %.0f ms%s%s\n",
-                rootLine, di.present ? "present" : "none", (unsigned long)(di.present ? di.tags.recordCount : 0),
+                rootLine, store_->readFailed() ? "unread (a read of the card failed)" : di.present ? "present" : "none",
+                (unsigned long)(di.present ? di.tags.recordCount : 0),
                 (unsigned long)store_->chunkCount(), store_->hasWalk() ? ", a walk to merge" : "", stats_.rootMs,
                 stats_.openMs, store_->twins() || b.tmpSettled.twins ? "; TWINS: the card wants a disk check on a PC" : "",
-                store_->tmpKept() ? "; tags.tmp KEPT: alone and unchecked (no PSRAM for its check), no compaction "
-                                    "until the next boot checks it"
+                store_->tmpKept() ? "; tags.tmp KEPT: alone and unchecked or not renamed, no compaction until the next "
+                                    "boot takes it"
                                   : "");
-  Serial.printf("[lib] library.idx %s%s%s: %s (%s)%s in %.0f ms (header %.0f ms)\n", libraryboot::savedName(b.saved),
+  Serial.printf("[lib] library.idx %s%s%s: %s (%s)%s in %.0f ms (header %.0f ms)\n",
+                libraryboot::savedName(b.saved, root_->readFailed()),
                 b.tmpSettled.what == tagstore::Settle::Promoted ? " (library.tmp taken: a cut fell mid-save)" : "",
                 b.marker ? ", the build-at-boot marker set" : "", libraryboot::actionName(b.decision.action),
                 b.decision.why,
-                softStale_ ? "; the scan went on since its build: rebuilt at the scan's end" : "",
+                softStale_ && !cardJobsHeld_ ? "; the scan went on since its build: rebuilt at the scan's end" : "",
                 b.decision.action == libraryboot::Action::Load ? b.loadMs : b.buildMs + b.compactMs, b.peekMs);
   if (b.ok) {
     Serial.printf("[lib] %lu tracks, %lu artists, %lu albums; %u B of PSRAM; browsable %.0f ms after the mount; "
@@ -406,6 +446,7 @@ void Library::writeDeviceTxt() {
   char want[400];
   cardcontract::devicetxt::Info info = cardcontract::devicetxt::current(v);
   info.readMpdj = autoDjReadMpdj();  // (the contract's: major 2)
+  info.readMpwf = wavesReadMpwf();   // (the contract's: major 1)
   const size_t n = cardcontract::devicetxt::format(info, want, sizeof(want));
   if (n == 0) return;
   TxtCheck check;
@@ -506,15 +547,18 @@ void Library::report() const {
   if (stats_.card) {
     Serial.printf("[index] the card's boot: library.idx %s, %s (%s); root %.1f ms, D %.1f ms, header %.1f ms, load "
                   "%.1f ms, compaction %.1f ms, build %.1f ms, save %.1f ms, device.txt %.1f ms%s\n",
-                  libraryboot::savedName(stats_.saved), libraryboot::actionName(stats_.action), stats_.why,
+                  libraryboot::savedName(stats_.saved, root_ && root_->readFailed()),
+                  libraryboot::actionName(stats_.action), stats_.why,
                   stats_.rootMs, stats_.openMs, stats_.peekMs, stats_.loadMs, stats_.compactMs, stats_.buildMs,
                   stats_.saveMs, stats_.deviceTxtMs, stats_.deviceTxtWritten ? " (rewritten)" : "");
     if (stats_.built) {
       const LibraryBuilder::Result& r = stats_.build;
-      Serial.printf("[index] the builder: %lu from the transfer's records, %lu from the device's, %lu by their paths "
-                    "(%lu for the scan), %lu dropped, %lu ignored; T %s, D %s%s; its own memory %u B\n",
-                    (unsigned long)r.fromTransfer, (unsigned long)r.fromDevice, (unsigned long)r.fromPath,
-                    (unsigned long)r.pending, (unsigned long)r.dropped, (unsigned long)r.ignored,
+      Serial.printf("[index] the builder: %lu from the transfer's records (%lu with moods), %lu from the device's, "
+                    "%lu by their paths (%lu for the scan), %lu dropped, %lu ignored; T %s, D %s%s; its own memory "
+                    "%u B\n",
+                    (unsigned long)r.fromTransfer, (unsigned long)r.withMoods, (unsigned long)r.fromDevice,
+                    (unsigned long)r.fromPath, (unsigned long)r.pending, (unsigned long)r.dropped,
+                    (unsigned long)r.ignored,
                     r.transferUsed ? "used" : cardcontract::whyName(r.transferWhy),
                     r.deviceUsed ? "used" : cardcontract::whyName(r.deviceWhy),
                     r.restarted ? " (restarted)" : "", (unsigned)r.workBytes);
@@ -548,10 +592,10 @@ void Library::report() const {
                   stats_.walk.ms, stats_.cacheNote, stats_.buildWalkMs, stats_.addMs, stats_.finishMs, stats_.saveMs);
   }
   Serial.printf("[index] PSRAM: %u B held (%.1f B/track): strings %u, tracks %u, artists %u, albums %u, folders %u, "
-                "views %u; build peak %u B; PSRAM free fell %ld B\n",
+                "views %u, moods %u; build peak %u B; PSRAM free fell %ld B\n",
                 (unsigned)m.total, t ? static_cast<float>(m.total) / t : 0.0f, (unsigned)m.strings,
                 (unsigned)m.tracks, (unsigned)m.artists, (unsigned)m.albums, (unsigned)m.folders, (unsigned)m.views,
-                (unsigned)m.buildPeak, (long)stats_.psramUsed);
+                (unsigned)m.moods, (unsigned)m.buildPeak, (long)stats_.psramUsed);
   Serial.printf("[index] internal RAM: free %lu B before, %+ld B after, lowest %lu B during; the index object is in "
                 "PSRAM (%u B)\n",
                 (unsigned long)stats_.internalFreeBefore, (long)stats_.internalDelta,
@@ -568,4 +612,72 @@ void Library::report() const {
     if (n) Serial.printf(" %c%lu", b == 0 ? '#' : 'A' + b - 1, (unsigned long)n);
   }
   Serial.println();
+}
+
+// ---- gm: the mood words (docs/MOOD-FILTERS.md 5.4, 9.3) ----
+
+void Library::moodReport(uint32_t q) {
+  // Behind the fence the index is the build's (3.4.2): nothing read.
+  if (update_ && update_->fenced()) {
+    Serial.println("[moods] the library is updating: nothing counted (gm again once it's done)");
+    return;
+  }
+  const LibraryIndex* idx = index();
+  if (!idx || !idx->ready()) {
+    Serial.println("[moods] no library (no card, or the build failed): no mood data");
+    return;
+  }
+  char t[200];
+  tagtext::moodsText(tagtext::countMoods(*idx), t, sizeof(t));
+  Serial.printf("[moods] %s\n", t);
+  if (q == tagtext::kMoodsReport || !idx->hasMoods()) return;  // (no block: "no mood data", said)
+  const uint16_t bits = static_cast<uint16_t>(q);
+  tagtext::filterText(bits, t, sizeof(t));
+  Serial.printf("[moods] filter 0x%03X: %s\n", static_cast<unsigned>(bits), t);
+  // The two passes, each timed: the tracks over the words, the albums over
+  // albumsAZ() (MODELLED 8-35 ms at 20k, 9.6's run C).
+  const moodfilter::Filter f = moodfilter::Filter::unpack(bits);
+  int64_t t0 = esp_timer_get_time();
+  const tagtext::TrackFits tracks = tagtext::fittingTracks(*idx, f);
+  const int64_t trackUs = esp_timer_get_time() - t0;
+  t0 = esp_timer_get_time();
+  const tagtext::AlbumFits albums = tagtext::fittingAlbums(*idx, f);
+  const int64_t albumUs = esp_timer_get_time() - t0;
+  char a[16], b[16], c[16];
+  Serial.printf("[moods] tracks that fit: %s of %s (%s analysed), the pass %lu us\n",
+                queueview::grouped(tracks.fit, a, sizeof(a)), queueview::grouped(tracks.tracks, b, sizeof(b)),
+                queueview::grouped(tracks.analysed, c, sizeof(c)), static_cast<unsigned long>(trackUs));
+  Serial.printf("[moods] albums that fit: %s of %s (%s with an analysed track), the pass %lu us\n",
+                queueview::grouped(albums.fit, a, sizeof(a)), queueview::grouped(albums.albums, b, sizeof(b)),
+                queueview::grouped(albums.analysed, c, sizeof(c)), static_cast<unsigned long>(albumUs));
+  // The first few of each, in the index's order (A-Z, and by id): --check
+  // lists them all, in the card's byte order.
+  constexpr uint32_t kShown = 8;
+  char path[TrackCatalog::kMaxPath];
+  uint32_t shown = 0;
+  const LibraryIndex::Span az = idx->albumsAZ();
+  for (uint32_t i = 0; i < az.count && shown < kShown; ++i) {
+    moodfilter::Tally tally;
+    if (!tagtext::albumFits(*idx, az[i], f, &tally)) continue;
+    const LibraryIndex::Album& al = idx->album(az[i]);
+    idx->folderPath(al.folder, path, sizeof(path));
+    Serial.printf("[moods]   album %lu of %lu: %s%s\n", static_cast<unsigned long>(tally.pass),
+                  static_cast<unsigned long>(tally.analysed), path,
+                  (al.flags & LibraryIndex::kLoose) ? " (loose tracks)" : "");
+    ++shown;
+  }
+  if (albums.fit > shown) {
+    Serial.printf("[moods]   ... and %s more albums\n", queueview::grouped(albums.fit - shown, a, sizeof(a)));
+  }
+  shown = 0;
+  for (uint32_t id = 0; id < tracks.tracks && shown < kShown; ++id) {
+    const uint16_t w = idx->moodWord(id);
+    if (!moodfilter::matches(w, f)) continue;
+    idx->trackPath(id, path, sizeof(path));
+    Serial.printf("[moods]   track 0x%04X: %s\n", static_cast<unsigned>(w), path);
+    ++shown;
+  }
+  if (tracks.fit > shown) {
+    Serial.printf("[moods]   ... and %s more tracks\n", queueview::grouped(tracks.fit - shown, a, sizeof(a)));
+  }
 }

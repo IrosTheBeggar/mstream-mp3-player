@@ -46,7 +46,7 @@ class CardWorker;
 // The rows that stay on screen when a list stops are asked last, so they
 // come first.
 //
-// Its RAM: the worker's 6 KB stack in internal RAM (CardWorker); TJpgDec's
+// Its RAM: the worker's 7.5 KB stack in internal RAM (CardWorker); TJpgDec's
 // 3.9 KB work pool in PSRAM, not in internal RAM as M5GFX's drawJpg()
 // allocates it: the step drives lgfx_tjpgd itself, and reads the card with
 // POSIX calls (no stdio buffer); everything else in PSRAM: the input
@@ -82,6 +82,10 @@ public:
   // A row asked for a cover and none is being made (ScanScheduler's
   // In::cover).
   bool wantsCover(uint32_t nowMs) const;
+  // Nothing asked for and nothing being made: what a row rendered now
+  // asks for is the next cover made (the list renders its neighbours'
+  // rows only then, so their covers don't go before the ones on screen).
+  bool idle() const;
   // The newest request as the worker's step, at `priority`. False: nothing
   // asked, or the worker couldn't take it (asked again when a row draws).
   bool startCover(CardWorker& worker, uint8_t priority, uint32_t nowMs);

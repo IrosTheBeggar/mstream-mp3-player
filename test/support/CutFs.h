@@ -51,6 +51,24 @@ public:
   long steps = 0;
   bool dead = false;
   bool refuse = false;  // a full card: no step succeeds, nothing is cut
+  // A card that fails reads with nothing else wrong (a CRC, no data token). The
+  // reads and opens to read of files under `faultPrefix` are numbered from 0 in
+  // faultEvents; those from faultFrom up to faultTo (-1: for ever) fail. faultFrom
+  // -1: none. (entry()s too: each one a question of the card.)
+  std::string faultPrefix;
+  long faultFrom = -1, faultTo = -1, faultEvents = 0;
+  bool inOpenRead_ = false;
+  bool faulty(const std::string& path) {
+    if (faultFrom < 0 || path.compare(0, faultPrefix.size(), faultPrefix) != 0) return false;
+    const long k = faultEvents++;
+    return k >= faultFrom && (faultTo < 0 || k < faultTo);
+  }
+  // Files under this have damaged records in the file system: every read fails, and
+  // File::damaged() says so (FatFs's FR_INT_ERR). The card answers: no fault.
+  std::string damagedPrefix;
+  bool isDamaged(const std::string& path) const {
+    return !damagedPrefix.empty() && path.compare(0, damagedPrefix.size(), damagedPrefix) == 0;
+  }
   std::vector<std::string> violations;
   // What went through it.
   uint64_t bytesRead = 0, bytesWritten = 0;
@@ -69,8 +87,9 @@ public:
       auto it = fs_->chains.find(chain_);
       return it == fs_->chains.end() ? 0 : static_cast<uint32_t>(it->second.data.size());
     }
+    bool damaged() const override { return fs_->isDamaged(name_); }
     bool read(uint32_t offset, void* out, uint32_t n) override {
-      if (fs_->dead) return false;
+      if (fs_->dead || fs_->faulty(name_) || fs_->isDamaged(name_)) return false;
       auto it = fs_->chains.find(chain_);
       if (it == fs_->chains.end()) return false;
       const auto& d = it->second.data;
@@ -144,7 +163,25 @@ public:
       return track(new F(this, p, c, true));
     }
     if (it == dir.end()) return nullptr;
+    // (The firmware's open() says no file for any failure, a read the card failed too.)
+    if (mode == Mode::Read && !inOpenRead_ && faulty(p)) return nullptr;
     return track(new F(this, p, it->second, mode == Mode::Update));
+  }
+  tagstore::File* openRead(const char* path, bool* cardFailed) override {
+    *cardFailed = dead || faulty(path);
+    if (*cardFailed) return nullptr;
+    inOpenRead_ = true;
+    tagstore::File* f = open(path, Mode::Read);
+    inOpenRead_ = false;
+    return f;
+  }
+  Entry entry(const char* path) override {
+    Entry e;
+    e.cardFailed = dead || faulty(path);
+    if (e.cardFailed) return e;
+    e.there = exists(path);
+    e.firstCluster = e.there ? firstCluster(path) : 0;
+    return e;
   }
   bool close(tagstore::File* file) override {
     F* f = static_cast<F*>(file);

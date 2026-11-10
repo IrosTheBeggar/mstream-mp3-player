@@ -157,7 +157,7 @@ size_t format(const Facts& f, char* out, size_t size) {
   l.put(stateName(f.state));
   // The keys after state=, each whole or left out: while they would leave
   // bt= under kBtRoom, the last of them gives way, then the one before
-  // (docs/HOST-STATUS.md, "The budget"). cid=<16 hex>.<8 hex>, or '-';
+  // (docs/HOST-STATUS.md, "The budget"). cid=<16 hex>.<8 hex>, '-' or '?';
   // clock=ok or unset.
   char cid[sizeof(" cid=") + 16 + 1 + 8] = " cid=";
   size_t cidLen = sizeof(" cid=") - 1;
@@ -167,7 +167,7 @@ size_t format(const Facts& f, char* out, size_t size) {
     hex(f.generation, 8, cid + cidLen + 17);
     cidLen += 16 + 1 + 8;
   } else {
-    cid[cidLen++] = '-';
+    cid[cidLen++] = f.cidUnknown ? '?' : '-';
   }
   const char* const clock = f.clockOk ? " clock=ok" : " clock=unset";
   const char* const give[] = {cid, clock};

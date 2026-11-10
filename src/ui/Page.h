@@ -78,7 +78,7 @@ public:
   virtual bool hasHeader() const { return true; }
   // Every loop pass while the page is up and nothing modal covers it:
   // redraw what changed. `frameDue`: an animation frame may be drawn now
-  // (30 fps on deadlines); `wholeRows`: lists move in whole rows (the audio
+  // (the Ui's frame clock); `wholeRows`: lists move in whole rows (the audio
   // is short of time). True if a frame was drawn.
   virtual bool update(uint32_t nowMs, bool frameDue, bool wholeRows) {
     (void)nowMs;

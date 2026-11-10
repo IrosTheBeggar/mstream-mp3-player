@@ -12,7 +12,7 @@
 // the AutoDJ index's primitives (docs/AUTODJ-INDEX.md 13.3: the level, the
 // geometry, the strided ranks, the slot CRC, the selection signature). The
 // binary formats are test_card_files' (MPDJ's own unit tests:
-// test_card_autodj).
+// test_card_autodj; MPWF's, with its vectors: test_card_waves).
 // Run: pio test -e native
 #include <unity.h>
 
@@ -860,6 +860,13 @@ void test_root_election() {
   TEST_ASSERT_TRUE(cc::unknownMajor(mpdj, 6));
   const uint8_t tags2[6] = {'M', 'P', 'T', 'G', 2, 0};
   TEST_ASSERT_TRUE(cc::unknownMajor(tags2, 6));  // the others' majors are 1
+  // MPWF's: 1 is this contract's, and there's no older one (WAVEFORM-INDEX.md 9).
+  uint8_t mpwf[6] = {'M', 'P', 'W', 'F', 1, 0};
+  TEST_ASSERT_FALSE(cc::unknownMajor(mpwf, 6));
+  mpwf[4] = 0;
+  TEST_ASSERT_TRUE(cc::unknownMajor(mpwf, 6));
+  mpwf[4] = 2;
+  TEST_ASSERT_TRUE(cc::unknownMajor(mpwf, 6));
 }
 
 void test_device_txt() {
@@ -871,7 +878,8 @@ void test_device_txt() {
   TEST_ASSERT_EQUAL_size_t(want.size(), n);
   TEST_ASSERT_EQUAL_STRING(want.c_str(), buf);
   // Read back. This firmware reads the AutoDJ index's major 2, and only it
-  // (docs/AUTODJ-INDEX.md 7.4: the engine ships with its UI, M5).
+  // (docs/AUTODJ-INDEX.md 7.4: the engine ships with its UI, M5), and the
+  // waveform index's major 1 (docs/WAVEFORM-INDEX.md 7.4).
   dt::Info i;
   TEST_ASSERT_TRUE(dt::parse(buf, n, &i));
   TEST_ASSERT_EQUAL_STRING("0.12.0", i.firmware);
@@ -884,14 +892,19 @@ void test_device_txt() {
   TEST_ASSERT_TRUE(dt::readsMajor(i.readMpdj, 2));
   TEST_ASSERT_FALSE(dt::readsMajor(i.readMpdj, 1));
   TEST_ASSERT_TRUE(std::strstr(buf, "\nread.mpdj=2\n") != nullptr);
+  TEST_ASSERT_EQUAL_UINT32(1, i.readMpwf);  // (bit 0: major 1)
+  TEST_ASSERT_TRUE(dt::readsMajor(i.readMpwf, 1));
+  TEST_ASSERT_FALSE(dt::readsMajor(i.readMpwf, 2));
+  // Its key on the line after read.mpdj's, before read.mpth's.
+  TEST_ASSERT_TRUE(std::strstr(buf, "\nread.mpdj=2\nread.mpwf=1\nread.mpth=1\n") != nullptr);
   TEST_ASSERT_TRUE(dt::listHas(i.codecs, "opus"));
   TEST_ASSERT_TRUE(dt::listHas(i.extensions, "FLAC"));
   TEST_ASSERT_EQUAL_UINT32(48000, i.maxRate);
-  // No file: majors 1 (MPDJ none), mp3 and flac; each key as the vectors
-  // say, through the text format() makes of the defaults.
+  // No file: majors 1 (MPDJ and MPWF none), mp3 and flac; each key as the
+  // vectors say, through the text format() makes of the defaults.
   const dt::Info none = dt::defaults();
   const Value& noFile = gVectors["deviceTxt"]["noFile"];
-  TEST_ASSERT_EQUAL_size_t(8, noFile.size());
+  TEST_ASSERT_EQUAL_size_t(9, noFile.size());
   char dflt[512];
   TEST_ASSERT_TRUE(dt::format(none, dflt, sizeof(dflt)) > 0);
   for (const auto& kv : noFile.members) {
@@ -899,6 +912,7 @@ void test_device_txt() {
     TEST_ASSERT_TRUE_MESSAGE(std::strstr(dflt, line.c_str()) != nullptr, kv.first.c_str());
   }
   TEST_ASSERT_EQUAL_UINT32(0, none.readMpdj);
+  TEST_ASSERT_EQUAL_UINT32(0, none.readMpwf);
   TEST_ASSERT_EQUAL_UINT32(0, none.history);  // no log: no key
   TEST_ASSERT_TRUE(std::strstr(dflt, "history") == nullptr);
   TEST_ASSERT_EQUAL_STRING(noFile["codecs"].c_str(), none.codecs);
@@ -918,6 +932,16 @@ void test_device_txt() {
   TEST_ASSERT_TRUE(dt::readsMajor(i.readMsmf, 1));
   TEST_ASSERT_EQUAL_STRING("mp3", i.codecs);
   TEST_ASSERT_EQUAL_STRING("mp3,flac", i.extensions);
+  // A key given twice reads as its last; a text with no contract line is no
+  // device.txt, whatever else it holds.
+  const char* twice = "contract=1\nread.mpdj=1\nread.mpdj=2\n";
+  TEST_ASSERT_TRUE(dt::parse(twice, std::strlen(twice), &i));
+  TEST_ASSERT_EQUAL_UINT32(2, i.readMpdj);
+  const char* noContract = "read.mpdj=2\nread.mpwf=1\ncodecs=mp3\n";
+  TEST_ASSERT_FALSE(dt::parse(noContract, std::strlen(noContract), &i));
+  TEST_ASSERT_EQUAL_UINT32(0, i.readMpdj);
+  TEST_ASSERT_EQUAL_UINT32(0, i.readMpwf);
+  TEST_ASSERT_EQUAL_STRING("mp3,flac", i.codecs);
   TEST_ASSERT_FALSE(dt::listHas("mp3,flac", "mp"));
   TEST_ASSERT_FALSE(dt::listHas("", "mp3"));
   TEST_ASSERT_EQUAL_size_t(0, dt::format(dt::current("0.11.0"), buf, 40));  // doesn't fit
@@ -932,6 +956,22 @@ void test_device_txt() {
     if (e.has("readMpdj")) t += "read.mpdj=" + e["readMpdj"].str() + "\n";
     if (!e["noFile"].boolean()) TEST_ASSERT_TRUE(dt::parse(t.data(), t.size(), &got));
     TEST_ASSERT_EQUAL_MESSAGE(e["writesV2"].boolean(), dt::readsMajor(got.readMpdj, 2), t.c_str());
+  }
+  // Whether a writer writes MPWF: only when read.mpwf lists 1; no file, or
+  // no read.mpwf key (firmware before it), reads as none. A case's `text` is
+  // the file's whole text, and one with no contract line reads as no file.
+  const Value& waveCases = gVectors["mpwf"]["deviceTxt"]["cases"];
+  TEST_ASSERT_TRUE(waveCases.size() >= 16);
+  for (size_t c = 0; c < waveCases.size(); ++c) {
+    const Value& e = waveCases[c];
+    dt::Info got = dt::defaults();
+    std::string t = e.has("text") ? e["text"].str() : "contract=1\n";
+    if (e.has("readMpwf")) t += "read.mpwf=" + e["readMpwf"].str() + "\n";
+    if (!e["noFile"].boolean()) {
+      const bool contract = t.compare(0, 9, "contract=") == 0 || t.find("\ncontract=") != std::string::npos;
+      TEST_ASSERT_EQUAL_MESSAGE(contract, dt::parse(t.data(), t.size(), &got), t.c_str());
+    }
+    TEST_ASSERT_EQUAL_MESSAGE(e["writes"].boolean(), dt::readsMajor(got.readMpwf, 1), t.c_str());
   }
 }
 

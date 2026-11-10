@@ -5,13 +5,18 @@
 #include <cstdint>
 
 #include "BitSet.h"
+#include "FilteredAlbums.h"
 #include "LibraryIndex.h"
 #include "LibraryText.h"
+#include "MoodFilter.h"
 #include "OutputModel.h"
 #include "PlaybackController.h"
 #include "SeekBar.h"
 #include "UiText.h"
+#include "WaveBar.h"
+#include "ui/FilterSheet.h"
 #include "ui/ListView.h"
+#include "ui/Theme.h"
 #include "ui/UiHost.h"
 #include "ui/Page.h"
 
@@ -65,15 +70,21 @@ struct Header {
 //            lines, else Bold 16 on up to 3
 //   90-112   the artist (Body, soft), x 120-310   } plain rows of 23 px:
 //   113-135  the album (Body, dim), x 120-310     } no "›", no taps of their own
-//   136-145  background
-//   113-145  the seek bar's readout while a finger scrubs, the full width
-//            (over the album row and the cover's lowest rows)
+//   136      background
+//   110-136  the seek bar's readout while a finger scrubs, the full width
+//            (over the album row, the artist row's last 3 and the cover's
+//            lowest rows)
+//   137-157  the seek bar's strip: the track's waveform (99 bars of 2 px,
+//            mirrored about y 147, x 12-307, and the playhead) when the card
+//            has one for it (app/Waves), else the plain line about the same
+//            row, in the same place
 //   138-167  the seek bar's touch, the full width, waiting or not
-//   146-167  the progress line, elapsed / "4 of 16 · SPYDRONE" / length
-//            (where it plays, when it fits: mockup 01's output line; the
+//   158-173  elapsed / "4 of 16 · SPYDRONE" / length (Small, centred on y
+//            165; where it plays, when it fits: mockup 01's output line; the
 //            headphones not connected, "SPYDRONE (not connected)" even
 //            when the rest doesn't fit, so a play that waits for them
 //            is no surprise)
+//   174-175  background
 //   168-239  [volume] [prev] [play/pause] [next] [...]   64 x 72 zones,
 //            drawn as one 56-row strip at y 176-231 (the play disc r 25;
 //            under the dots the shuffle and repeat indicator)
@@ -95,18 +106,20 @@ struct Header {
 // picks a row.
 //
 // The progress line is a seek bar (docs/SEEK-BAR.md; lib/core/SeekBar): a
-// knob at where it plays. A tap goes to the second under the finger (not a
-// tap on the knob); a sideways drag scrubs (from the knob without a jump,
-// from anywhere else the knob comes to the finger): the line thickens, a
-// marker shows where it plays, the readout ("2:31 +1:21") takes the row
-// above on the side away from the knob, and the music plays on until the
-// lift, which seeks once (PlaybackController::seek()). Lifting with the
-// knob back on the marker (it snaps there with a tick), or slid off the
-// bar (above y 106, onto the artist row, or onto the strip: "Release to
-// cancel"), seeks nothing, and so does a touch a sheet or a dialog takes.
-// Seeks are whole seconds, from 0:00 to the length less 6 s (the edge
-// readings reach both). Inert (no knob) while the length isn't known, the
-// track failed, or it is under 10 s.
+// knob, or on a waveform a playhead, at where it plays. A tap goes to the
+// second under the finger (not a tap on the knob); a sideways drag scrubs
+// (from the knob without a jump, from anywhere else the knob comes to the
+// finger): the line thickens, or the waveform dims with a knob on it, a marker
+// shows where it plays, the readout ("2:31 +1:21") takes the row above on
+// the side away from the knob, and the music plays on until the lift, which
+// seeks once (PlaybackController::seek()). Lifting with the knob back on the
+// marker (it snaps there with a tick), or slid off the bar (above y 103, onto
+// the artist row, or onto the strip: "Release to cancel"), seeks nothing, and
+// so does a touch a sheet or a dialog takes. Seeks are whole seconds, from
+// 0:00 to the length less 6 s (the edge readings reach both). Inert (no knob,
+// never a waveform) while the length isn't known, the track failed, or it is
+// under 10 s. A track or a card with no waveform, or one whose length doesn't
+// agree with the player's, works the same with the plain line.
 //
 // While play waits for the headphones (PlayState::Waiting, PlayGate): the
 // play button is a spinner (a tap, or B, cancels the wait: paused), the
@@ -120,16 +133,48 @@ struct Header {
 // last minute) after "4 of 16 · SPYDRONE", or in its place when both don't
 // fit. Only what changed is redrawn: the cover when the album changes or
 // its thumbnail arrives, the text when the track does (the title strip also
-// when the wait's status does), the times once a second, the transport on
-// a change (the play state, the volume, the output, shuffle, repeat), and
-// the seek bar's frames on the 30 fps deadlines while a finger scrubs.
+// when the wait's status does), the text row once a second, and with it the
+// part of the seek bar's strip a moved playhead needs (all of it on a look, a
+// shape, a track or a play state), the transport on a change (the play state,
+// the volume, the output, shuffle, repeat), and the seek bar's frames on the 30
+// fps deadlines while a finger scrubs.
 // Nothing queued: "Nothing playing" with Open Library and Shuffle all, or
 // Auto DJ in Shuffle all's place while the card has a usable Auto DJ index
-// (the user's D4: a random track it knows plays, Auto DJ on); with no card
-// and no music, "No microSD card" and Try again.
+// (the user's D4: a random track it knows plays, Auto DJ on), or Open
+// Library alone under "No track on this card fits these filters" while
+// Auto DJ's mood filter fits none (MOOD-FILTERS.md 4.4, frame dj-empty);
+// with no card and no music, "No microSD card" and Try again.
+//
+// Glance mode (Mode::Glance): the glance ("Touch when off": Track, added
+// later at the user's request; Ui::setGlance()) is a second instance of
+// this page, Ui's glance_, drawn over the dark UI for its 10 s with the
+// Output tab's status above it (TabBar::updateGlance()). It is never the
+// page on top and never gets an event (the input layer swallows every
+// touch on the glance; Ui::onEvent() drops the console's scripted one):
+// the same layout, the same texts, the same redraws, minus what can be
+// pressed, so it shows exactly what the page would and nothing on it looks
+// like a control:
+//   - the transport's strip (y 176-231): one line, Small, dim, centred on
+//     y 204 (uitext::kGlanceHintW): "Power button for controls"; while the
+//     idle power-off counts down its last 30 s, that countdown instead, in
+//     amber (its toast is drawn nowhere in the dark, and a touch on the
+//     glance isn't input: only the power button keeps the player on). No
+//     zones, no play disc, no spinner, no shuffle or repeat glyphs;
+//   - the plain line: no rest knob (it can't be moved; the waveform has
+//     none at rest anyway);
+//   - a play that waits for the headphones: the artist and album rows,
+//     not [Play on speaker] and [Cancel] (the title strip says it waits);
+//   - nothing queued, no card: the empty states without their buttons, in
+//     y 36-175, the line under them.
+// The real page (Mode::Full, Ui's nowPlaying_) is unchanged by it: every
+// branch tests readOnly_, false there. Anything that can be pressed checks
+// readOnly_ (a control added to this page without it shows on the glance).
+// The glance's own cover sprite (98 x 98, 19,208 B of PSRAM) is made at
+// its first enter(), so never on a unit whose setting is never Track.
 class NowPlayingPage : public Page {
 public:
-  explicit NowPlayingPage(Ui& ui) : Page(ui) {}
+  enum class Mode : uint8_t { Full, Glance };
+  explicit NowPlayingPage(Ui& ui, Mode mode = Mode::Full) : Page(ui), readOnly_(mode == Mode::Glance) {}
   const char* name() const override { return "Now Playing"; }
   bool hasHeader() const override { return false; }
   void enter(NavModel::PageRef& ref) override;
@@ -152,8 +197,6 @@ private:
   // bar, not "Seek", which PlaybackController has. Nav: the navigation
   // area, the cover and the text.)
   enum Zone : int8_t { None = -1, Nav, WaitSpeaker, WaitCancel, Bar, Volume, Prev, PlayPause, Next, More };
-  // How the seek bar is drawn (docs/SEEK-BAR.md section 4.1).
-  enum class BarLook : uint8_t { Inert, Rest, Pressed, Scrubbing, Off };
   // The navigation menu's rows, in order.
   enum class Go : uint8_t { Artist, Album, Folders };
   // Which menu the sheet up is (onSheet()).
@@ -180,20 +223,31 @@ private:
   // The navigation area in its look (the press look on or off): the gaps,
   // the title strip and the rows; the cover as it is.
   void drawNav();
-  // The progress band, in the seek bar's look (the knob drawn last: the
-  // text's background would cut it), and its text row (not while a finger
-  // scrubs: the readout above says it all).
-  void drawProgress();
-  void drawProgressText(M5Canvas& c, bool paused);
+  // The track for the waveform index (app/Waves): on a track change, and a
+  // repaint.
+  void wantWave();
+  // What a pass draws of the seek bar (docs/SEEK-BAR.md section 4.5): the strip,
+  // all of it or a part, and what `text` says of its text row (blank while a
+  // finger scrubs: the readout above says it all). As one push when it can be.
+  void drawSeekBar(const wave::Strip& now, int rx, int rw, wave::TextDraw text);
+  // The strip into `c`, in its look (section 4.1): all of it or the part a moved
+  // playhead needs (x rx..rx + rw - 1), the waveform or the plain line (drawLine():
+  // `rx` as drawBar()'s), the knob drawn last. The text row into `c`, the Small
+  // line's first row, the strip's last, on its row `top`.
+  void drawBar(M5Canvas& c, const wave::Strip& now, int rx, int rw);
+  void drawLine(M5Canvas& c, const wave::Strip& now, int rx);
+  void drawProgressText(M5Canvas& c, int top);
   // The seek bar: seekable now (a track that hasn't failed, 10 s or more,
   // and one the backend can start part of the way in: every format today,
-  // an Opus track since docs/OPUS.md section 9); its look; the readout row
-  // above the line (over the album row and the cover's lowest rows; while
-  // a play waits, the artist row cleared too, the first time); the end of
-  // a scrub (the rows, the cover's rows from its sprite; the band
-  // follows); a touch's seek, its tick and its log line.
+  // an Opus track since docs/OPUS.md section 9); what its strip shows now
+  // (its look, the bars or the line, the playhead); the readout row above
+  // the strip (over the album row, the artist row's last rows and the cover's
+  // lowest rows; while a play waits, the artist row cleared too, the first
+  // time); the end of a scrub (the rows, the cover's rows from its sprite;
+  // the strip and the text row follow); a touch's seek, its tick and its log
+  // line.
   bool seekable() const;
-  BarLook barLook() const;
+  wave::Strip stripNow() const;
   void drawReadout();
   void endScrub();
   void seekTo(const SeekBar::Out& o, uint32_t nowMs);
@@ -230,6 +284,7 @@ private:
     uint32_t track = 0xFFFFFFFFu;
     uint32_t names = 0;  // TrackCatalog::namesVersion()
     PlayState play = PlayState::Stopped;
+    bool failed = false;
     uint32_t second = 0xFFFFFFFFu;
     uint32_t durationS = 0;
     int32_t current = -2;
@@ -243,21 +298,25 @@ private:
     bool noCard = false;
     cardformat::Kind cardKind = cardformat::Kind::Unreadable;  // the no-card message drawn
     bool autoDjButton = false;  // ... with Auto DJ in Shuffle all's place
+    bool noFit = false;         // ... saying Auto DJ's mood filter fits no track (no second button)
     bool waiting = false;     // the waiting panel is what's drawn
     uint32_t waitSig = 0;     // waitSig()
     uint32_t sleep = 0;       // the sleep timer's text on the progress line (a hash)
-    // The seek bar: its look (BarLook; 0xFF none), the knob's and the
-    // marker's screen x (-1: none), what the readout shows (its fields, not
-    // a hash: a readout that moved must never pass for the one drawn), and
-    // whether the readout row is up (the scrub's look).
-    uint8_t bar = 0xFF;
-    int16_t knobX = -1;
-    int16_t markerX = -1;
+    // The seek bar: what its strip shows (its look, the bars or the line, the
+    // wave's version, the playhead's and the marker's x), the text row, what
+    // the readout shows (its fields, not a hash: a readout that moved must
+    // never pass for the one drawn), and whether the readout row is up (the
+    // scrub's look).
+    wave::Strip strip;
+    wave::TextRow textRow = wave::TextRow::Unknown;
     SeekBar::Readout readout;
     bool scrubUp = false;
     // The indicator as drawn (repeat 0xFF: none yet).
     bool shuffle = false;
     uint8_t repeat = 0xFF;
+    // The glance: the idle power-off's second in the transport's place (0:
+    // the power button's line).
+    uint8_t idleWarnS = 0;
   } drawn_;
   SeekBar bar_;
   Zone pressed_ = None;
@@ -269,6 +328,7 @@ private:
   uint32_t navTrack_ = 0xFFFFFFFFu;  // the navigation menu's track (its TrackCatalog id)
   char navFolder_[96] = "";          // its Go to folder detail, cut from the left
   char navNames_[2][96] = {};        // Go to artist's and Go to album's names, cut to their rooms
+  const bool readOnly_;              // Mode::Glance: the glance's (nothing on it can be pressed)
 };
 
 // ---- Library (spec §6.2, mockups 07-15, with the review's grafts) ----
@@ -293,9 +353,40 @@ private:
 // (over 30) have the A-Z rail and its jump grid. The row that holds what
 // plays now (the artist, the album, the track, the folders on its path) is
 // tinted, and a page opened from Now Playing opens scrolled to it.
-class LibraryPage : public Page, public ListView::Source {
+//
+// Mood filters (docs/MOOD-FILTERS.md 4.2, 7.2; the frames in-rest, inA-on,
+// inA-scrolled, A-empty-line, A-few): on the card's library with mood
+// words, the Albums list's first row is the filters' (ListView's top row,
+// scrolling with the list):
+//   at rest   [funnel]  Filters                                   >
+//                       1,741 albums
+//   on        [funnel]  Relaxed · Instrumental                   (✕)
+//                       312 of 1,741 albums
+// The funnel DIM at rest, in the accent on a 40 x 40 plate when on; what
+// is set in the accent (Body, else Small, then cut); the cross's disc at
+// 232, 284 or 292 as the list is 284 (the rail), 312 (the scroll bar) or
+// 320 wide (filtergrid::crossX()). A tap opens the editor
+// (ui/FilterSheet), the cross clears the filter (no Undo) and the list
+// reloads at its top. The list then holds only the albums that fit
+// (FilteredAlbums: rowAt(), rows(), railRows(), so the rail, the jump
+// grid, the covers and the tint follow), "No albums match these filters"
+// under the row when none does. Scrolled past the row (42 px), a dot on
+// the Albums segment; a tap there goes back to the top. No row on a card
+// without mood data, behind the fence or on a synthetic library.
+//
+// The filter is the page's, in RAM: kept through leave(), enter() and
+// resetLibraryTab(), forgotten by a boot (D6). The editor and the
+// console's uiMa set it; each change works out the albums that fit (their
+// block in PSRAM) and logs the pass's time, and a change closed over the
+// Albums list reloads it at its top once (7.5; elsewhere, when it next
+// shows). The library update's fence and a rebuild drop those albums
+// (their ids are stale), the filter kept: worked out again when Albums
+// shows. A card with no mood data, or a synthetic library, drops it at
+// enter(); no memory for its albums: the filter reverts, and a toast says
+// so (none, when the old one's albums can't be held either).
+class LibraryPage : public Page, public ListView::Source, public FilterOwner {
 public:
-  explicit LibraryPage(Ui& ui) : Page(ui) {}
+  explicit LibraryPage(Ui& ui);
   const char* name() const override { return "Library"; }
   bool scrolls() const override { return true; }
   void enter(NavModel::PageRef& ref) override;
@@ -320,6 +411,10 @@ public:
   void drawRow(ListView::Row& r) override;
   uint16_t accent() override;
   bool topBar() override;
+  // The Albums list's top bar is its first row, the mood filters'.
+  bool topBarIsRow() override;
+  void drawTopRow(ListView::Row& r) override;
+  void onTopRowTap(int x, bool rightEdge) override;
   int actions(int32_t row, const char* labels[3]) override;
   void onAction(int32_t row, int action) override;
   ListView::Tap onTap(uint32_t row) override;
@@ -335,6 +430,27 @@ public:
   const char* emptyText() override;
   bool emptyState(EmptyState& e) override;
   void onEmptyAction(int i) override;
+
+  // FilterOwner: the Albums list's filter, which the editor and uiMa set.
+  // Behind the fence (no index) it is kept and nothing is worked out; no
+  // memory for its albums: the old one stays and a toast says so (4.2).
+  uint16_t filterWord() override { return filter_.pack(); }
+  bool setFilterWord(uint16_t q) override;
+  uint32_t filterFits() override;
+  uint32_t filterTotal() override;
+  filtergrid::Scope filterScope() override { return filtergrid::Scope::Albums; }
+  // A changed filter: the Albums list, if it shows, reloads at its top
+  // once (7.5).
+  void onFiltersClosed(bool changed) override;
+  // The library update's fence went up, or the index was rebuilt
+  // (Ui::libraryUpdating(), libraryChanged()): the albums' ids are stale.
+  void dropFilteredAlbums() { albums_.drop(); }
+  // A filter on with no albums held (dropped as above): worked out again
+  // over the index there is now; no memory for them, the filter goes
+  // (4.2). Nothing behind the fence.
+  void refreshFilter();
+  // uiM: the filter, what it holds, the last pass, the carve.
+  void printFilter() const;
 
 private:
   // Disc: an album's "Disc 2" divider (5.4), not a control.
@@ -396,6 +512,35 @@ private:
   bool heldDj_ = false;  // its sheet has "Auto DJ from here" (the first row)
   // The Album page's disc dividers (read at enter()).
   librarytext::Discs discs_;
+  // The Albums list's mood filter (4.6), the albums that fit it, the last
+  // pass's time.
+  const LibraryIndex* filterIndex() const;
+  // The Albums root with its first row: the card's library (not a
+  // synthetic one), with mood data (4.2).
+  bool moodRow() const;
+  // The Albums list's albums: the filter's when held over this index
+  // (FilteredAlbums::shown()), else albumsAZ().
+  LibraryIndex::Span albumsShown(const LibraryIndex& i) const;
+  // On the way in (enter()): a card with no mood data, or a synthetic
+  // library, drops the filter (4.2's "No data", "Update ends"); the Albums
+  // list then works out its albums again (albumsShowing()).
+  void enterFilter(NavModel::PageRef& ref);
+  // The Albums list about to show (enter(), switchSegment()): its albums
+  // worked out again if the fence or a rebuild dropped them, and its top
+  // once after a filter change it didn't show (7.5).
+  void albumsShowing(NavModel::PageRef& ref);
+  // A changed filter on the Albums list shown: read again, from its top.
+  void reloadAlbums();
+  // The dot on the Albums segment is due (7.2): a filter on, the list
+  // scrolled past its first row.
+  bool dotDue();
+  moodfilter::Filter filter_;
+  FilteredAlbums albums_;
+  uint32_t passUs_ = 0;
+  uint32_t passes_ = 0;
+  bool drawnDot_ = false;   // the dot as drawSegments() last drew it
+  bool albumsTop_ = false;  // the filter changed while the Albums list didn't show
+  int topRight_ = 320;      // the first row's right edge as last drawn (284, 312, 320)
 };
 
 // ---- Queue (spec §6.4, mockups 16-18, with the review's grafts and the
@@ -425,7 +570,9 @@ private:
 //            confirmation; every edit has Undo)
 // Empty (mockup 18): "Your queue is empty" [Open Library] [Shuffle all],
 // or [Auto DJ] in Shuffle all's place while the card has a usable Auto DJ
-// index (D4); with no card and nothing queued, the no-card state.
+// index (D4), or [Open Library] alone under "No track on this card fits
+// these filters" while Auto DJ's mood filter fits none (MOOD-FILTERS.md
+// 4.4); with no card and nothing queued, the no-card state.
 class QueuePage : public Page, public ListView::Source {
 public:
   // The band in selection mode: three rows over the bar.
@@ -500,6 +647,7 @@ private:
   int32_t showPos_ = -1;
   bool showAdded_ = false;  // what the Library added is highlighted (this visit)
   bool emptyDj_ = false;    // the empty state has Auto DJ's button (not Shuffle all)
+  bool emptyNoFit_ = false; // ... says Auto DJ's mood filter fits no track (no second button)
   uint8_t jump_ = 0;
   BitSet selection_;
   bool selecting_ = false;
@@ -570,8 +718,9 @@ private:
 //   + Pair new headphones  >  the Pair screen
 //   Auto DJ >  (its page: "On · Follow the vibe", "Off" under it)
 //   Haptics (on / off), Screen off after (15 s ... Never), Brightness
-//   (Low ... Max), Turn off when idle (10 min ... Never), Touch
-//   calibration >, Language > (the one in use, in its own name), About >
+//   (Low ... Max), Touch when off (Nothing / Wake / Track), Turn off when
+//   idle (10 min ... Never), Touch calibration >, Language > (the one in
+//   use, in its own name), About >
 // Pair (mockup 21): "Searching", the audio devices found (their kind and a
 // signal of 4 bars); a tap pairs (after a confirmation when it replaces
 // the remembered headphones), and the card shows how it goes.
@@ -590,19 +739,28 @@ private:
 // starts), Anchor (Follow the vibe / Stay on seed, its value right on the
 // title's line, its hint under it; a tap swaps), Match strictness ("55% or
 // closer", the steps 55-75 by 5: a tap the next), BPM continuity and
-// Harmonic mixing (switches), and a status row that is no control (the
-// index's coverage, or why there is none, or why Auto DJ waits). Without a
-// usable index the four settings are dim, "needs an Auto DJ index" under
-// each (a value that can't sit beside its title, Match strictness's in
-// some languages, there instead), a tap a note; the switch and the status
-// stay live. Each change saved once the taps rest (NVS, app/AutoDjStore)
-// and applied from the next pick.
+// Smart filters (the mood filter: "Any", or what is set; a tap opens the
+// mood filters' editor, in the Output tab's blue, counting tracks:
+// docs/MOOD-FILTERS.md 4.4), BPM continuity and Harmonic mixing
+// (switches), and a status row that is no control (the index's coverage,
+// or how many tracks fit the filter, or why there is none, or why Auto DJ
+// waits; its first line amber when nothing or 50 or fewer fit, or paused).
+// Without a usable index Anchor, Match strictness and the two switches are
+// dim, "needs an Auto DJ index" under each (a value that can't sit beside
+// its title, Match strictness's in some languages, there instead), a tap a
+// note; the switch and the status stay live. Smart filters is dim exactly
+// while the card has no mood data ("No mood data", a tap a note to sync
+// the card from mStream; a saved filter kept, its picks unfiltered: D4).
+// Behind the library update's fence the rows keep their last values, and
+// Smart filters' tap says to wait. Each change saved once the taps rest
+// (NVS, app/AutoDjStore) and applied from the next pick; the editor's each
+// tap.
 // Device info: what the boot screen used to list (the board, the power
 // chip, the IMU, the chip, flash, PSRAM, the last reset, the battery, the
 // library, internal RAM), with the CPU's clock, the uptime, the firmware
 // and its build: DeviceInfo's rows, a label over each value, refreshed
 // every 3 s while the page is open, as About.
-class OutputPage : public Page, public ListView::Source {
+class OutputPage : public Page, public ListView::Source, public FilterOwner {
 public:
   explicit OutputPage(Ui& ui) : Page(ui) {}
   const char* name() const override { return "Output"; }
@@ -624,6 +782,25 @@ public:
   // until its 2 minutes, the screen off, a device picked or the page
   // closed (leave() stops it). Ui::pairSearching().
   bool pairSearching() const { return kind_ == PageKind::Pair && search_.searching(); }
+  // Output > Auto DJ is the page shown (the console's uiMe: its editor).
+  bool onAutoDj() const { return kind_ == PageKind::AutoDj; }
+  // Smart filters' tap (and uiMe over this page): the mood filters'
+  // editor for Auto DJ's filter (Ui::openFilters()), or why not: no mood
+  // data on the card (a note to sync it from mStream), the library update's
+  // fence (wait). False: not opened.
+  bool editMoods();
+
+  // FilterOwner: Auto DJ's mood filter (MOOD-FILTERS.md 4.3's "From Auto
+  // DJ"), applied and saved at each tap (UiHost::autoDjSetMoods(), which
+  // counts the tracks inside it at once); the count is that count, of the
+  // library's tracks. Its close, with a change, settles it
+  // (UiHost::autoDjMoodSettled()) and draws the page's rows again.
+  uint16_t filterWord() override { return editWord_; }
+  bool setFilterWord(uint16_t q) override;
+  uint32_t filterFits() override { return editFit_; }
+  uint32_t filterTotal() override;
+  filtergrid::Scope filterScope() override { return filtergrid::Scope::Tracks; }
+  void onFiltersClosed(bool changed) override;
 
   // ListView::Source
   uint32_t rows() override;
@@ -646,6 +823,7 @@ private:
     Haptics,
     ScreenOff,
     Brightness,
+    ScreenTouch,
     IdleOff,
     CpuSpeed,
     BtPower,
@@ -682,6 +860,8 @@ private:
   // "Screen off after" and "Brightness": the title, its line, and the
   // value in a pill at the right; a tap takes the next choice.
   void drawScreenSetting(ListView::Row& r, bool brightness);
+  // "Touch when off" (ScreenPower::OffTouch, saved), the same way.
+  void drawTouchSetting(ListView::Row& r);
   // "Turn off when idle" (IdlePolicy's choices, saved), the same way.
   void drawIdleSetting(ListView::Row& r);
   // "CPU speed" and "Bluetooth power" (PowerChoices', saved), the same way.
@@ -709,7 +889,10 @@ private:
   // rows, its value rows, and a tap on one.
   void drawAutoDj(ListView::Row& r);
   void drawAutoDjSwitch(ListView::Row& r, const char* title, const char* sub, bool on, bool live);
-  void drawAutoDjValue(ListView::Row& r, const char* title, const char* value, const char* hint, bool live);
+  // `hintInk`: the hint's (beside: the value on the first line), DIM: a
+  // dim row's hint says why it is dim; Smart filters' doesn't (FAINT then).
+  void drawAutoDjValue(ListView::Row& r, const char* title, const char* value, const char* hint, bool live,
+                       uint16_t hintInk = col::DIM);
   void onAutoDjTap(uint32_t row);
   // What Auto DJ's rows show (the root's row, the page's): drawn again when it changes.
   static uint32_t autoDjSig(const autodjview::State& d);
@@ -736,12 +919,17 @@ private:
   uint32_t drawnScreen_ = 0xFFFFFFFFu;  // the screen, idle and power settings drawn (screenSig())
   uint32_t drawnLibrary_ = 0xFFFFFFFFu;  // the Library row drawn (librarySig())
   uint32_t drawnAutoDj_ = 0xFFFFFFFFu;   // Auto DJ's rows drawn (autoDjSig())
+  // The mood filters' editor over Auto DJ's page: the filter its last tap
+  // set and the tracks that fit it, as counted then (the snapshot catches
+  // up at the next pass).
+  uint16_t editWord_ = 0;
+  uint32_t editFit_ = 0;
   uint32_t nextSpinMs_ = 0;
   uint8_t spin_ = 0;  // the spinner's step (8 a turn)
   // Pair: the scan's list as last copied, and the device picked.
   BtScanList scan_;
   PairSearch search_;  // its scan stops by itself after 2 min
-  bool searchEnded_ = false;  // ... just now (tick()): the status row to redraw
+  bool searchEnded_ = false;  // ... just now (tick(), screenOff()): the status row to redraw
   uint32_t scanVersion_ = 0;
   uint32_t nextScanMs_ = 0;
   int picked_ = -1;

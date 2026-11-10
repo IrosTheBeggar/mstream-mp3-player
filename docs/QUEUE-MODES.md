@@ -423,6 +423,7 @@ is Off.**
 | `pauseAtBoundary()` (:394) | end | the next cued; at the last: stop | the next cued (the first after the last) | this entry cued at 0:00 |
 | `next()`: `advance(false)` (:120) | skip | the next; at the last: stop | wrap | wrap |
 | `checkEnd()`: failed, `advance(false)` (:412) | skip | as next() | wrap | wrap: a failure moves on |
+| `checkEnd()`: failed with the card out, `holdForCard()` (METADATA.md 3.8's card hold) | hold | stays, tried again | stays | stays |
 | `prev()` (:165) | skip | at the first: the first again | to the last | to the last |
 | `cue()` (:215) | skip | stays at the ends | wrap | wrap |
 
@@ -537,7 +538,9 @@ is learned once. main logs each loop from `repeats()` instead (section 6).
 ## 4. Now Playing: the code
 
 The layout, the hit areas, the menus' texts and the haptics are
-ARCHITECTURE.md's; this is how NPP and Ui get there.
+ARCHITECTURE.md's; this is how NPP and Ui get there. The seek bar's rows here
+are those since the waveform (2026-11-02; [SEEK-BAR.md](SEEK-BAR.md)'s note):
+one band, y 146-167, with the readout row y 113-145 over it, until then.
 
 ### 4.1 The constants (NPP:39-65)
 
@@ -547,40 +550,48 @@ constexpr int kTextX = 120, kColumnX = 112;               // unchanged
 constexpr int kTitleY = 38, kTitleH = 52;                 // unchanged
 constexpr int kArtistY = 90, kArtistH = 23;
 constexpr int kAlbumY = 113, kAlbumH = 23;
-constexpr int kProgressY = 146, kProgressH = 22;
 constexpr int kTransportY = 168, kTransportH = 72;        // the touch
 constexpr int kTransportDrawY = 176, kTransportDrawH = 56;  // the strip
 constexpr int kZoneW = 64;
-constexpr int kSeekReachPx = 8;                           // whether or not a play waits
-constexpr int kReadoutY = 113, kReadoutH = 33;
+constexpr int kBarTouchY = 138;                           // whether or not a play waits
+// lib/core/WaveBar.h:
+constexpr int kStripY = 137, kStripH = 21;                // the bar's strip
+constexpr int kTextRowY = 158, kTextRowH = 16;            // its text row
+constexpr int kReadoutH = 27, kReadoutY = 110;
 ```
 
 static_asserts, beside the existing two on the line and the readout's
 width: `kArtistY == kTitleY + kTitleH`; `kAlbumY == kArtistY + kArtistH`;
 `kAlbumY + kAlbumH == kCoverY + kCoverPx` (the album row ends on the
-cover's last row); `kReadoutY == kAlbumY`; `kReadoutY + kReadoutH ==
-kProgressY`; `kProgressY + kProgressH == kTransportY`; `kTransportY +
+cover's last row); `kStripY == kNavBottom` (the strip starts under the
+navigation area's lit rows); `kReadoutY + kReadoutH == kStripY`; `kTextRowY
+== kStripY + kStripH`; `kTextRowY + kTextRowH <= kTransportDrawY` (the text
+row ends above what the transport draws) and `kTextRowY + kTextRowH >
+kTransportY` (its last rows are in the transport's touch, drawing only);
+`kStripAndTextH <= gfx::kBand` (the strip and the text row in one push are one
+bus hold); `kBarTouchY == kNavBottom + 1`; `kTransportY +
 kTransportH == kH`; `kTransportDrawH == gfx::kStripH`;
 `kTransportDrawY - kTransportY == kTransportY + kTransportH -
 (kTransportDrawY + kTransportDrawH)` (8 px each side);
 `SeekBar::kBackAboveY == kReadoutY + 1`; `SeekBar::kOffAboveY ==
-kReadoutY - 7`. The last two are today's relations (138 = 137 + 1, 130 =
+kReadoutY - 7`. The last two are the 2026-10 relations (138 = 137 + 1, 130 =
 137 - 7) and replace NPP:61's.
 
-`lib/core/SeekBar.h:60`: `kOffAboveY = 106, kBackAboveY = 114`
+`lib/core/SeekBar.h:60`: `kOffAboveY = 103, kBackAboveY = 111`
 (`kOffBelowY`, `kBackBelowY` stay 240 and 232). Off stays 42 px above
-the line's top, as today (172 - 130 = 148 - 106). Its comment: "Past the
-album band" becomes "onto the artist row or above".
+the line's top, as ever (172 - 130 = 148 - 106 = 145 - 103). Its comment: "Past
+the album band" becomes "onto the artist row or above".
 
 ### 4.2 Drawing
 
 - **`repaint()`** fills what no piece covers. Today's fills stay (rows
   36-37; row 38 left of x 112; beside the frame, x 0-10 and 109-111, rows
-  39-136); the one under the cover becomes x 0-111, y 137-145; and three
-  are new: x 112-319, y 136-145 (the old album band's lower rows), and the
-  transport's margins, y 168-175 and 232-239. Without them a chevron and
-  old album pixels stay on screen. The nav-area fills (36-37, 38, beside
-  the frame, and x 112-319 row 136) use `navBg()` (below), the rest BG.
+  39-136); and three are new: x 112-319, y 136 (the old album band's last
+  row), the rows between the text row and the transport as drawn, y 174-175,
+  and those under it, y 232-239. Without them a chevron and old album pixels
+  stay on screen. (y 137 is the bar's strip's, drawn whole on a repaint.) The
+  nav-area fills (36-37, 38, beside the frame, and x 112-319 row 136) use
+  `navBg()` (below), the rest BG.
 - **`drawArtistAlbum()`**: one strip push of 208 x 46 at (112, 90): filled
   `navBg()`; the artist (Body, SOFT) at local y 11, x 8, 190 px wide; the
   album (Body, DIM, "(loose tracks)" when "") at local y 34. No chevrons,
@@ -650,24 +661,24 @@ album band" becomes "onto the artist row or above".
 
 ### 4.3 The readout over the cover
 
-The readout row (y 113-145) now covers the album row and the cover's
-lowest 24 rows (113-136, its frame's last included).
+The readout row (y 110-136) now covers the album row, the artist row's last 3
+rows and the cover's lowest 27 rows (110-136, its frame's last included).
 
 - **Entering it** (`drawReadout()`, `!drawn_.scrubUp`): NPP:389's clear of
-  "the album band's top rows" is empty now (`kReadoutY == kAlbumY`) and
-  goes. While a play waits, x 112-319, y 90-112 is cleared instead: the
-  buttons' upper halves (94-112) would stick out above the readout.
-- **`endScrub()`**: fill x 0-319, y 113-145 with BG; push the cover's rows
+  "the album band's top rows" goes: the row covers the album row whole. While
+  a play waits, x 112-319, y 90-112 is cleared instead: the buttons' upper
+  halves (94-109) would stick out above the readout.
+- **`endScrub()`**: fill x 0-319, y 110-136 with BG; push the cover's rows
   back from the sprite, which the readout never touched
-  (`gfx::pushRows(*cover_, 11, 39, 98, 74, 98)`: y 113-136; no re-render,
+  (`gfx::pushRows(*cover_, 11, 39, 98, 71, 98)`: y 110-136; no re-render,
   no thumbnail lookup; with no sprite, `drawCover()`'s CARD fill for
-  those rows); then `drawMiddle()`.
+  those rows); then `drawMiddle()`, which gives the artist row's rows back.
 - **The cover is never pushed over a scrub.** `update()` draws the
   readout (NPP:621) before `drawCover()` (NPP:632), and `thumbReady()`
   (NPP:130) can push a thumbnail that arrives mid-scrub. So
   `drawCover()` renders into `cover_` as always, but while
-  `drawn_.scrubUp` pushes only its rows above the readout (y 39-112;
-  sprite rows 0-73), and `endScrub()` pushes the rest.
+  `drawn_.scrubUp` pushes only its rows above the readout (y 39-109;
+  sprite rows 0-70), and `endScrub()` pushes the rest.
 
 ### 4.4 Touch
 
@@ -677,7 +688,7 @@ lowest 24 rows (113-136, its frame's last included).
 - **`zoneAt()`** (replacing NPP:682-703), in this order:
   1. `y >= kTransportY`: `More` on a clamped right-edge reading, else
      `Volume + clamp(x / 64, 0, 4)`.
-  2. `y >= kProgressY - kSeekReachPx` (138): `Bar`. The waiting exception
+  2. `y >= kBarTouchY` (138): `Bar`. The waiting exception
      (NPP:692) goes: the waiting buttons end at y 137.
   3. `x < kColumnX`: `Nav` (the cover's column, waiting or not).
   4. Waiting: `y < kArtistY`: `None`; else `WaitCancel` on a clamped
@@ -1112,8 +1123,9 @@ the Sleep timer row's, the toasts in 284, "Playback" in 226);
 177 is "…/Daft Punk/Discovery"; a path that fits stays whole; a last
 folder too wide alone); the waiting title's one line (Bold 16, 190).
 
-**test_seek_bar**: 129/130 become 105/106 and 137/138 become 113/114
-(:287-301, :344-356), the line's row `kY` 150; the comments.
+**test_seek_bar**: 129/130 become 102/103 and 137/138 become 110/111
+(`test_off_and_back`, `test_off_and_back_at_their_rows`), the line's row `kY`
+147 (105/106, 113/114 and 150 until the waveform, 2026-11-02); the comments.
 
 **test_ui_queue**: the shuffle test leaves (moved to test_queue). After
 the review (review fixes 2), `UndoWatch`:
@@ -1136,7 +1148,8 @@ toast).
   bullet names `queueview::shuffle()`: shuffle on now); the overlays
   bullet's sheets ("the 4-row one from y 40" goes; every sheet's 300 ms
   settle comes in).
-- **SEEK-BAR.md**: section 1 (the band y 146-167, the album row above);
+- **SEEK-BAR.md** (these rows until the waveform, its note of 2026-11-02):
+  section 1 (the band y 146-167, the album row above);
   2.6 (off above 106, back from 114); 2.8 (`kOffAboveY`, `kBackAboveY`;
   the reach from y 138 with no waiting exception; `kReadoutY` 113);
   section 3's diagram (the navigation area above, the waiting buttons
@@ -1191,7 +1204,8 @@ lifted replaces it. So send each tap after the line the one before
 logs, and wait 400 ms after a sheet opens before tapping it (the 300 ms
 settle swallows anything sooner: step 7 tests exactly that). The
 places: the cover x 12-107, y 40-135; the title y 38-89, the rows y 101
-and 124 (x 120-310); the line y 150; the transport y 204 (volume x 32,
+and 124 (x 120-310); the bar y 138-167 (the steps' y 150 is on it, the line
+y 147); the transport y 204 (volume x 32,
 prev 96, play 160, next 224, "..." 288); a 3-row sheet from y 80, its
 ✕ at (290, 98) and its rows centred at y 136, 176 and 216; a tap above
 it (y 60) closes it. `ui` prints the overlays (`sheet open`, `sleep
@@ -1199,8 +1213,9 @@ timer sheet open`, `volume open (speaker)`, the toast's text) and Now
 Playing's line (it ends `; shuffle on, repeat one`).
 
 1. **The look.** `qS0`, `qR0`, then `X` (the whole screen) while
-   playing: the rows without "›", the background y 136-145, the band at
-   y 146-167, the transport drawn at y 176-231 with background above and
+   playing: the rows without "›", the background y 136, the bar's strip at
+   y 137-157 and its text row at y 158-173, the transport drawn at y 176-231
+   with background above and
    below, the play disc (r 25) clear of the bezel, no indicator. `qS1`,
    `X`: the shuffle glyph under the dots, at (288, 218). `qR1`, `X`: both
    glyphs, 4 px apart. `qS0`, `qR2`, `X`: the loop and its bold "1"
@@ -1327,7 +1342,7 @@ Playing's line (it ends `; shuffle on, repeat one`).
     real wait): `uit180,112` plays on the speaker, `uit290,112` cancels.
 14. **The seek bar moved.** Paused, `qs60`: `uit90,150` seeks (`seek 1:00
     -> ...`); `uid100,150,250,100,400`: `no seek (slid off the bar)` (off
-    above 106); `uid100,150,250,120,400`: a seek (y 120 is still on). By
+    above 103); `uid100,150,250,120,400`: a seek (y 120 is still on). By
     hand: a slow scrub shows the readout over the album row and the
     cover's bottom, and the cover comes back whole at the lift (once with
     a thumbnail arriving mid-scrub: a new album's first scrub).
@@ -2135,11 +2150,13 @@ test_playback, test_autodj_driver and test_queue.
 | Repeat One | no (a hold) | Waiting |
 | The sleep timer at End of queue | no (a hold) | Waiting |
 | 3 of its picks in a row failed to play | no (a hold, until a track plays, or Auto DJ is switched off and on) | Paused |
+| A mood filter no track on the card fits (docs/AUTODJ.md 3.14, docs/MOOD-FILTERS.md 6.5) | no (a hold, until the filter changes or a library update brings a track that fits) | Waiting |
 | The last entry, Playing or Waiting for the headphones | one, appended | On |
 | A finished queue (16.5) | one, cued | On |
 
 The "..." row shows the holds whatever the queue does: Waiting under
-Repeat One on any entry, Paused after the failures. A due pick also
+Repeat One on any entry or a filter nothing fits, Paused after the
+failures. A due pick also
 waits while the decoder fills the ring after a start or a skip (until it
 holds 500 ms, the track's source ends, or 1.5 s have passed): a pick
 timed across that refill measured the decoder (108 ms on 2026-10-13). It

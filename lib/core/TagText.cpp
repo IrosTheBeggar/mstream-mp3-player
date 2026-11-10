@@ -19,11 +19,20 @@ const char* const kHelp =
     "(1-50000), gs the scan's status (gs0 its figures from now), gt</music/...> one file's tags (read now, D, T, the "
     "winner), gr Rescan tags (gr! the transfer's files too), gw walk now, gb build now (gb! deferred to the next "
     "boot), gv verify the transfer's files; gc the sector cache (gc0 off, gc1 on, gc2 on and every hit checked), gl "
-    "the card's bench (glw with the walks)";
+    "the card's bench (glw with the walks); gw? the waveform index's state (gw=<99 digits 0-9> a shape with no card, "
+    "gw#<480 hex> 240 bars through the reduction, gw- drops it); gm the mood words (gm<hex> the tracks and albums "
+    "filter <hex> lets through, gm127 Sad, Relaxed, Vocals, Danceable)";
 
 namespace {
 
 bool isSpace(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
+
+int hexOf(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
 
 size_t clampLen(int n, size_t size) {
   if (size == 0 || n < 0) return 0;
@@ -136,6 +145,27 @@ Parsed parse(const char* arg) {
     }
     return p;
   }
+  if (arg[0] == 'm') {
+    // gm alone, or a filter's q in 1-4 hex digits of either case; one that
+    // isn't a filter (docs/MOOD-FILTERS.md 5.4) is Bad, as g<n> past 50,000.
+    if (n == 1) {
+      p.command = Command::Moods;
+      p.n = kMoodsReport;
+      return p;
+    }
+    if (n > 5) return p;
+    uint32_t q = 0;
+    for (size_t i = 1; i < n; ++i) {
+      const int h = hexOf(arg[i]);
+      if (h < 0) return p;
+      q = q << 4 | static_cast<uint32_t>(h);
+    }
+    if (moodfilter::valid(static_cast<uint16_t>(q))) {
+      p.command = Command::Moods;
+      p.n = q;
+    }
+    return p;
+  }
   if (n == 1) {
     switch (arg[0]) {
       case 's': p.command = Command::Status; break;
@@ -149,6 +179,16 @@ Parsed parse(const char* arg) {
         break;
       case 'l': p.command = Command::Bench; break;
       default: break;
+    }
+    return p;
+  }
+  if (arg[0] == 'w') {
+    // (gw alone is the walk, above.) What gw= and gw# hold is digitsIn()'s and
+    // hexIn()'s to judge.
+    const bool alone = arg[1] == '?' || arg[1] == '-';
+    if ((alone && n == 2) || arg[1] == '=' || arg[1] == '#') {
+      p.command = Command::Wave;
+      p.path = arg + 1;
     }
     return p;
   }
@@ -170,6 +210,24 @@ Parsed parse(const char* arg) {
     p.n = 1;
   }
   return p;
+}
+
+bool digitsIn(const char* text, uint8_t* out, size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    if (text[i] < '0' || text[i] > '9') return false;  // (the NUL of one too short too)
+    out[i] = static_cast<uint8_t>(text[i] - '0');
+  }
+  return text[count] == 0;
+}
+
+bool hexIn(const char* text, uint8_t* out, size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    const int hi = hexOf(text[2 * i]);
+    const int lo = hi < 0 ? -1 : hexOf(text[2 * i + 1]);  // (no read past the NUL of one too short)
+    if (lo < 0) return false;
+    out[i] = static_cast<uint8_t>(hi << 4 | lo);
+  }
+  return text[2 * count] == 0;
 }
 
 const char* statusName(LibraryBuilder::Status s) {
@@ -361,6 +419,172 @@ size_t sourcesText(const Sources& s, char* buf, size_t size) {
     at += clampLen(snprintf(buf + at, size - at, " (%s for the scan)", queueview::grouped(s.pending, n, sizeof(n))),
                    size - at);
   }
+  return at;
+}
+
+// ---- moods ----
+
+Moods countMoods(const LibraryIndex& index) {
+  Moods m;
+  if (!index.ready()) return m;
+  m.tracks = index.trackCount();
+  m.withWord = index.moodTracks();
+  m.blockBytes = index.memory().moods;
+  return m;
+}
+
+size_t moodsText(const Moods& m, char* buf, size_t size) {
+  if (!buf || size == 0) return 0;
+  char a[16], b[16], c[16];
+  queueview::grouped(m.tracks, b, sizeof(b));
+  if (m.blockBytes == 0) {
+    return clampLen(snprintf(buf, size, "no mood data: none of %s track%s has a word, block 0 B", b,
+                             m.tracks == 1 ? "" : "s"),
+                    size);
+  }
+  return clampLen(snprintf(buf, size, "%s of %s tracks with a word (%.1f %%), block %s B",
+                           queueview::grouped(m.withWord, a, sizeof(a)), b,
+                           100.0 * m.withWord / (m.tracks ? m.tracks : 1),
+                           queueview::grouped(static_cast<uint32_t>(m.blockBytes), c, sizeof(c))),
+                  size);
+}
+
+size_t filterText(uint16_t q, char* buf, size_t size) {
+  if (!buf || size == 0) return 0;
+  using moodfilter::Scale;
+  const moodfilter::Filter f = moodfilter::Filter::unpack(q);
+  static const char* const kValence[4] = {"", "happy", "neutral", "sad"};
+  static const char* const kEnergy[4] = {"", "relaxed", "neutral", "aggressive"};
+  static const char* const kVoice[3] = {"", "instrumental", "vocals"};
+  static const char* const kTags[3] = {"acoustic", "party", "danceable"};
+  // name, need, under: moodfilter::Level's order (5.4).
+  static const char* const kLevels[3] = {"Standard", "Strict", "Loose"};
+  static const uint8_t kNeed[3] = {2, 3, 1}, kUnder[3] = {2, 1, 3};
+  buf[0] = 0;
+  size_t at = 0;
+  const char* sep = "";
+  auto add = [&](const char* fmt, const char* a, const char* b) {
+    if (at + 1 >= size) return;
+    at += clampLen(snprintf(buf + at, size - at, fmt, a, b), size - at);
+  };
+  if (f.valence != Scale::Any) {
+    add("%svalence %s", sep, kValence[static_cast<int>(f.valence)]);
+    sep = "; ";
+  }
+  if (f.energy != Scale::Any) {
+    add("%senergy %s", sep, kEnergy[static_cast<int>(f.energy)]);
+    sep = "; ";
+  }
+  if (f.voice != moodfilter::Voice::Any) {
+    add("%svoice %s", sep, kVoice[static_cast<int>(f.voice)]);
+    sep = "; ";
+  }
+  if (f.tags) {
+    add("%s%s", sep, "tags ");
+    const char* comma = "";
+    for (int t = 0; t < 3; ++t) {
+      if (!(f.tags & (1u << t))) continue;
+      add("%s%s", comma, kTags[t]);
+      comma = ", ";
+    }
+  }
+  if (!at) add("%s%s", "no group", "");
+  const int l = static_cast<int>(f.level);
+  if (at + 1 < size) {
+    at += clampLen(snprintf(buf + at, size - at, " at %s (need %u, under %u)%s", kLevels[l],
+                            static_cast<unsigned>(kNeed[l]), static_cast<unsigned>(kUnder[l]),
+                            f.active() ? "" : ": filters nothing"),
+                   size - at);
+  }
+  return at;
+}
+
+TrackFits fittingTracks(const LibraryIndex& index, const moodfilter::Filter& f) {
+  TrackFits out;
+  if (!index.ready()) return out;
+  out.tracks = index.trackCount();
+  if (const uint16_t* words = index.moodWords()) {
+    out.fit = moodfilter::count(words, out.tracks, f, &out.analysed);
+  } else {
+    out.fit = f.active() ? 0 : out.tracks;  // every word 0
+  }
+  return out;
+}
+
+bool albumFits(const LibraryIndex& index, uint32_t album, const moodfilter::Filter& f, moodfilter::Tally* t) {
+  moodfilter::Tally got;
+  if (const uint16_t* words = index.moodWords()) {
+    const LibraryIndex::Span s = index.tracksOfAlbum(album);
+    got = moodfilter::tally(words, s.ids, s.count, f);
+  } else {
+    got.unfiltered = !f.active();  // every word 0: no analysed song
+  }
+  if (t) *t = got;
+  return moodfilter::majority(got);
+}
+
+AlbumFits fittingAlbums(const LibraryIndex& index, const moodfilter::Filter& f) {
+  AlbumFits out;
+  if (!index.ready()) return out;
+  const LibraryIndex::Span az = index.albumsAZ();
+  out.albums = az.count;
+  for (uint32_t i = 0; i < az.count; ++i) {
+    moodfilter::Tally t;
+    out.fit += albumFits(index, az[i], f, &t);
+    out.analysed += t.analysed > 0;
+  }
+  return out;
+}
+
+size_t tailText(const uint8_t* tail, bool taken, char* buf, size_t size) {
+  if (!buf || size == 0) return 0;
+  if (!tail) return clampLen(snprintf(buf, size, "none (a stride under 80 carries none)"), size);
+  size_t at = 0;
+  bool zeros = true;
+  for (uint32_t i = 0; i < 8; ++i) {
+    at += clampLen(snprintf(buf + at, size - at, "%s%02X", i ? " " : "", static_cast<unsigned>(tail[i])), size - at);
+    zeros = zeros && tail[i] == 0;
+  }
+  if (at + 1 >= size) return at;
+  if (taken) {
+    at += clampLen(snprintf(buf + at, size - at, ", taken: "), size - at);
+    return at + (at + 1 < size ? wordText(moodfilter::wordOfTail(tail), buf + at, size - at) : 0);
+  }
+  return at + clampLen(snprintf(buf + at, size - at, "%s",
+                                zeros ? ": no server row (word 0)"
+                                      : ": REFUSED (no PRESENT bit, flag bits 3-7 or byte 79 set, or a value over "
+                                        "100 not 255): no word, the record is fine"),
+                       size - at);
+}
+
+size_t wordText(uint16_t word, char* buf, size_t size) {
+  if (!buf || size == 0) return 0;
+  size_t at = clampLen(snprintf(buf, size, "0x%04X", static_cast<unsigned>(word)), size);
+  if (word == 0) return at + clampLen(snprintf(buf + at, size - at, ": no row"), size - at);
+  if (!(word & moodfilter::kAnalysed)) return at + clampLen(snprintf(buf + at, size - at, ": not analysed"), size - at);
+  const char* sep = ": ";
+  // A field: its name, the side a scale's bucket leans to (none at bucket
+  // 0), the bucket; or NULL.
+  auto field = [&](const char* name, const char* side, bool null, uint32_t bucket) {
+    if (at + 1 >= size) return;
+    if (null) {
+      at += clampLen(snprintf(buf + at, size - at, "%s%s NULL", sep, name), size - at);
+    } else {
+      const bool leans = bucket && side[0];
+      at += clampLen(snprintf(buf + at, size - at, "%s%s%s%s %u", sep, name, leans ? " " : "", leans ? side : "",
+                              static_cast<unsigned>(bucket)),
+                     size - at);
+    }
+    sep = ", ";
+  };
+  // A scale's field is side<<2 | bucket, 4 NULL (5.4).
+  const uint32_t valence = word >> 11 & 7, energy = word >> 8 & 7;
+  field("valence", valence & 4 ? "sad" : "happy", valence == 4, valence & 3);
+  field("energy", energy & 4 ? "aggressive" : "relaxed", energy == 4, energy & 3);
+  field("instrumental", "", (word & moodfilter::kVoiceNull) != 0, word >> 6 & 3);
+  field("acoustic", "", false, word >> 4 & 3);
+  field("party", "", false, word >> 2 & 3);
+  field("danceable", "", false, word & 3);
   return at;
 }
 

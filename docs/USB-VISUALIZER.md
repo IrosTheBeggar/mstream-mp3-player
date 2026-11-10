@@ -535,7 +535,7 @@ never changes state.
 | 9 | noepoch | `@h` or `@c` in a session before any `@e` | sends `@e` for the current epoch |
 
 The board's questions (since 0.9.0: `@status`, `@count`, `@identify`;
-since 0.12.0 `@time` and `@format`; [HOST-STATUS.md](HOST-STATUS.md))
+since 0.14.0 `@time` and `@format`; [HOST-STATUS.md](HOST-STATUS.md))
 share these codes and the rate limit: `@err 4 count <why>`, `@err 4
 identify <why>`, `@err 4 time rtc` and `@err 4 format <why>` (busy),
 `@err 1 identify` (no label), `@err 5 identify` (a label over 16 bytes),
@@ -954,9 +954,11 @@ line's room (`kW - 16` = 304 px), measured by `test_ui_library`.
     (`Down`, or a strip swipe's `DragStart`) outside `DanceView::inBox()`,
     or any button event, calls `usbViz.userEnded()` with a haptic tick and
     is swallowed with the rest of its gesture (the touch until the next one
-    lands, a held button until its `HoldEnd`); a tap inside the box still
-    reaches the page. The PWR key's short press counts as a button (it only
-    wakes the screen or counts as input otherwise).
+    lands, a held button until its `HoldEnd`, or its next press if the wake
+    latch dropped that); a tap inside the box still
+    reaches the page. The PWR key's short press counts as a button (the
+    session keeps the screen lit, so the key doesn't turn it off here;
+    otherwise it turns a lit screen off and wakes an off one).
   - `handleBluetooth()`: the headphones' play key ends the session first,
     then acts as a headphone play: it resumes nothing host mode paused
     (`pausedNotByListener()`).

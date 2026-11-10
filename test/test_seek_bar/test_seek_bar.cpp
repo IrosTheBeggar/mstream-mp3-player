@@ -26,7 +26,7 @@ namespace {
 using T = InputEvent::Type;
 using End = SeekBar::End;
 constexpr uint32_t kL = 245000;  // 4:05: the reach is 3:59
-constexpr int kY = 150;          // the line's row
+constexpr int kY = 147;          // the line's row
 
 InputEvent ev(T type, int x, int y = kY, uint32_t ms = 0, int dx = 0, int dy = 0, uint8_t edges = 0) {
   InputEvent e;
@@ -105,7 +105,7 @@ void test_seekable() {
   TEST_ASSERT_FALSE(b.down(ev(T::Down, 160), 7, 0, 0));  // the dotted line
 }
 
-// xOf() is drawProgress()'s fill: min(pos, len) x 296 / len.
+// xOf() is drawBar()'s fill: min(pos, len) x 296 / len.
 void test_x_of_is_the_drawing() {
   TEST_ASSERT_EQUAL_INT(0, SeekBar::xOf(0, kL));
   TEST_ASSERT_EQUAL_INT(296, SeekBar::xOf(kL, kL));
@@ -303,21 +303,21 @@ void test_the_detent_snaps_and_ticks() {
   TEST_ASSERT_FALSE(o2.tick);
 }
 
-// Off the bar: above y 106 (onto the artist row) or onto the strip (y 240);
-// back from y 114, or above 232. A tick each way; a lift while off seeks
+// Off the bar: above y 103 (onto the artist row) or onto the strip (y 240);
+// back from y 111, or above 232. A tick each way; a lift while off seeks
 // nothing; while off the knob is back where it plays.
 void test_off_and_back() {
   SeekBar b = pressed(200, 60000);
   b.onEvent(ev(T::DragStart, 214, kY, 0, 14, 0), 60000);
-  SeekBar::Out o = b.onEvent(ev(T::DragMove, 214, 105), 60000);
+  SeekBar::Out o = b.onEvent(ev(T::DragMove, 214, 102), 60000);
   TEST_ASSERT_TRUE(o.tick);
   TEST_ASSERT_EQUAL(SeekBar::Phase::Off, b.phase());
   TEST_ASSERT_EQUAL_INT(b.markerX(), b.knobX());
-  o = b.onEvent(ev(T::DragMove, 230, 111), 60000);
+  o = b.onEvent(ev(T::DragMove, 230, 108), 60000);
   TEST_ASSERT_FALSE(o.tick);
   TEST_ASSERT_EQUAL(SeekBar::Phase::Off, b.phase());
   TEST_ASSERT_EQUAL_INT(b.markerX(), b.knobX());
-  o = b.onEvent(ev(T::DragMove, 230, 114), 60000);
+  o = b.onEvent(ev(T::DragMove, 230, 111), 60000);
   TEST_ASSERT_TRUE(o.tick);
   TEST_ASSERT_EQUAL(SeekBar::Phase::Scrubbing, b.phase());
   TEST_ASSERT_EQUAL_UINT32(SeekBar::msAt(230, 0, kL), b.targetMs());  // back by the grab's mapping
@@ -360,19 +360,22 @@ void test_the_readout_changes_side_with_hysteresis() {
 
 // ---- every threshold, on both sides ----
 
-// y: off above 106 (106 still on), back from 114 (113 still off); off on
+// y: off above 103 (103 still on), back from 111 (110 still off); off on
 // the strip from 240 (239 still on), back above 232 (232 still off).
 void test_off_and_back_at_their_rows() {
   SeekBar b = pressed(200, 60000);
   b.onEvent(ev(T::DragStart, 214, kY, 0, 14, 0), 60000);
-  SeekBar::Out o = b.onEvent(ev(T::DragMove, 214, 106), 60000);
-  TEST_ASSERT_FALSE(o.tick);
-  TEST_ASSERT_EQUAL(SeekBar::Phase::Scrubbing, b.phase());
-  TEST_ASSERT_TRUE(b.onEvent(ev(T::DragMove, 214, 105), 60000).tick);
+  // Anywhere on the bar's touch rows, y 138-167, and from there to these: on.
+  for (int y = 167; y >= 103; --y) {
+    const SeekBar::Out on = b.onEvent(ev(T::DragMove, 214, y), 60000);
+    TEST_ASSERT_FALSE(on.tick);
+    TEST_ASSERT_EQUAL(SeekBar::Phase::Scrubbing, b.phase());
+  }
+  TEST_ASSERT_TRUE(b.onEvent(ev(T::DragMove, 214, 102), 60000).tick);
   TEST_ASSERT_EQUAL(SeekBar::Phase::Off, b.phase());
-  TEST_ASSERT_FALSE(b.onEvent(ev(T::DragMove, 214, 113), 60000).tick);
+  TEST_ASSERT_FALSE(b.onEvent(ev(T::DragMove, 214, 110), 60000).tick);
   TEST_ASSERT_EQUAL(SeekBar::Phase::Off, b.phase());
-  TEST_ASSERT_TRUE(b.onEvent(ev(T::DragMove, 214, 114), 60000).tick);
+  TEST_ASSERT_TRUE(b.onEvent(ev(T::DragMove, 214, 111), 60000).tick);
   TEST_ASSERT_EQUAL(SeekBar::Phase::Scrubbing, b.phase());
   TEST_ASSERT_FALSE(b.onEvent(ev(T::DragMove, 214, 239), 60000).tick);
   TEST_ASSERT_EQUAL(SeekBar::Phase::Scrubbing, b.phase());
@@ -600,7 +603,7 @@ namespace {
 // 5.64 line px a second, a px 177 ms.
 constexpr uint32_t kShort = 52480;
 
-// The console's scripted drag, uid<x0>,150,<x1>,150,<moveMs>, as
+// The console's scripted drag, uid<x0>,147,<x1>,147,<moveMs>, as
 // Input::simulate() moves it (30 ms down, the move, 150 ms still, the
 // lift) and the UI loop samples it (every `frameMs`), through a real
 // recogniser, on a track playing from `live0` at the Down: the end, where

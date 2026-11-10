@@ -23,7 +23,9 @@
 // A shorter wait without a new epoch is congestion or a flash write stalling
 // the task: the audio simply goes on (a fade from 0 would click). So does a
 // new epoch with a wait under kRestartGapUs (normal is ~10-30 ms): no audio
-// was missed.
+// was missed. For the gap statistics (statGapUs()) every wait that no flush
+// preceded is a stall, however long; the wait after a flush is the stream's
+// stop, however short.
 //
 // Data callback only (one task); nothing here is shared.
 class StreamRestart {
@@ -37,9 +39,12 @@ public:
   // next callback with frames restarts.
   bool callback(int64_t nowUs, int32_t count, uint32_t epoch);
 
-  // The wait before the last callback with frames, for the gap statistics; 0
-  // for the first one and for waits of kGapResetUs or more (silence, not a
-  // late callback).
+  // The wait before the last callback with frames, for the gap statistics
+  // (BtSink::Stats::maxGapMs): how late the stack came back for audio while
+  // the stream ran, whatever the wait, so a stall of a second or more shows
+  // as what it is. 0 for the first callback and for the one after a flush:
+  // the stream was stopped in between (a suspend, a link's end), and that
+  // wait is its stop, not a late callback, however short.
   uint32_t statGapUs() const { return statGapUs_; }
 
 private:

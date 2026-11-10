@@ -24,6 +24,17 @@ cover's lowest rows while a finger scrubs. Sections 0-4, 7 and 11 have the
 new rows. Sections 9, 10 and 12-16 are the bar as it was built and checked
 on 2026-10-02, with the old ones (the band y 170-191, off above 130).
 
+**The waveform (2026-11-02, claude/waveform-progress-bar-ebd5c7).** The line is the
+track's waveform when the transfer wrote one to the card
+([WAVEFORM-INDEX.md](WAVEFORM-INDEX.md)), and the plain line, in the same
+place, when it didn't. The band gave way to two draws: the bar's strip, y
+137-157 (the bars y 138-156, mirrored about the centre row y 147, the line y
+145-148 about the same row), and under it the text row, y 158-173, 5 px lower
+(Small centred on y 165). The readout row is y 110-136; off above y 103 and
+back from 111. The bar's touch didn't move: y 138-167. Sections 0-4, 7, 8 and 11
+have these rows; 4.1 the looks; 4.5 which pass draws what. Where a finger swipes
+from or slides onto "the strip", it is still the button strip, y 240 down.
+
 **The stay detent fixed (2026-10-07, feature/opus).** On the device, a
 drag from the knob of a 0:52 Opus track sought "0:42 -> 0:42": the second
 already playing, started again for nothing (a ~250 ms gap and a
@@ -77,7 +88,7 @@ Where the facts come from:
 - **Three ways out without a seek:**
   - lift with the knob back on the marker that shows where it plays, or
     on the second it plays (it snaps there with a tick);
-  - slide off the bar (above y 106, or onto the strip), then lift;
+  - slide off the bar (above y 103, or onto the strip), then lift;
   - a sheet or a dialog takes the touch.
 - **The ends:**
   - the far right is the track's length less 6 s (the tail rule turns a
@@ -112,34 +123,40 @@ Where the facts come from:
 
 ## 1. What the tree has
 
-**The band** (`NPP:35`; the layout comment is `src/ui/Pages.h:42-71`).
+**The bar's rows** (`NPP:35`; the layout comment is `src/ui/Pages.h:42-71`).
 
-- The progress band is y 146-167 (y 170-191 until 2026-10-06).
-  - Above it, y 136-145 is background, and above that the album row, y
-    113-135, x 112 to the edge: part of the navigation area, whose tap
-    opens Now Playing's navigation menu.
-  - Below it is the transport, y 168-239: five 64 x 72 zones (drawn as
-    one 56-row strip, y 176-231).
-- `drawProgress()` (`NPP:175-255`) draws, in band rows (0 is screen y
-  146):
-  - a 4 px rounded DIV line at rows 2-5, x 12-307 (`x0 = 12, w = 296`);
+- The bar's strip is y 137-157, the text row under it y 158-173 (one band,
+  y 146-167, until 2026-11-02; y 170-191 until 2026-10-06).
+  - Above the strip, y 136 is background beside the cover's frame, and
+    above that the album row, y 113-135, x 112 to the edge: part of the
+    navigation area, whose tap opens Now Playing's navigation menu.
+  - Below the text row, y 174-175 is background, then the transport as
+    drawn, one 56-row strip, y 176-231. Its touch is y 168-239, five 64 x
+    72 zones: the text row's last 6 rows are in it, drawing only.
+- `drawBar()` (`NPP:175-255`) draws, in the strip's rows (0 is screen y
+  137), with no shape:
+  - a 4 px rounded DIV line at rows 8-11 (y 145-148), x 12-307 (`x0 = 12,
+    w = 296`);
   - the fill to `min(pos, len) * 296 / len`, in the accent while playing,
     else DIM;
-  - a dotted line instead when the length is 0 (`NPP:187`);
-  - the elapsed time and the length in Font::Small, centred on row 14;
+  - a dotted line instead when the length is 0 (`NPP:187`).
+  With a shape it draws the bars and the playhead instead (4.1).
+- `drawProgressText()`, a draw of its own:
+  - the elapsed time and the length in Font::Small, centred on y 165;
   - between them "Paused, 4 of 16 · SPYDRONE" and the sleep timer's moon.
 - Small's text fills its whole line height with the background
-  (`src/ui/Fonts.h`), so anything drawn in rows ~7-21 before the text is
-  cut.
-- `update()` redraws the band when any of these changes (`NPP:468-471`):
-  the second, the length, the state, the entry, the queue's size, the
-  output or the sleep text.
+  (`src/ui/Fonts.h`), 17 rows from y 157. Its first row is the strip's, so
+  it isn't pushed: the row is y 158-173.
+- `update()` redraws the text row when any of these changes (`NPP:468-471`):
+  the second, the length, the state, a failure, the entry, the queue's
+  size, the output or the sleep text. The strip has triggers of its own
+  (4.5).
 
 **Touches** (`NPP:498-647`).
 
-- `zoneAt()` returns None for the band.
+- `zoneAt()` returned None for the band, before the bar.
 - While play waits, every touch at x >= 112 and y >= 90 that isn't on the
-  waiting buttons is None, the band included (`NPP:505-510`). So a new
+  waiting buttons was None, the band included (`NPP:505-510`). So a new
   zone must be tested before that branch.
 - A Down highlights a zone. A Tap, DragStart, Release or Cancel clears it,
   and only a Tap acts (`NPP:581-594`).
@@ -178,7 +195,8 @@ Where the facts come from:
   of it until it lifts.
 - When a toast goes away, all of Now Playing is repainted, because the
   page has no header (`Ui.cpp:465-470`). Toasts sit at y 36-71.
-- The touch that wakes the screen (from Dim or Off) is swallowed through
+- A touch on a dim or off screen, or on the glance (whatever "Touch
+  when off" makes of it, ENERGY.md item 2), is swallowed through
   its lift (WakeLatch). A finger resting on the glass as the screen dims
   is taken with a Cancel.
 
@@ -276,7 +294,7 @@ once.
 - A tap that seeks ticks once the player has taken it, like any tap that
   acts.
 
-A tap may seek although the band is thin, because:
+A tap may seek although the line is thin, because:
 
 - a stray tap on Next or Prev, just below, already can't be undone, and
   it is worse (it loses the track, not only the place);
@@ -338,7 +356,7 @@ landed decides how the knob follows.
 ### 2.4 x to time
 
 - The line runs from `kLineX` (12) to `kLineX + kLineW − 1` (307):
-  `drawProgress()`'s geometry.
+  `drawBar()`'s geometry.
 - `msAt(x, edges, L)` gives:
   - **0** for a reading clamped at the left edge (`kEdgeLeft`), or
     x <= 12;
@@ -454,10 +472,10 @@ While scrubbing, the finger's y decides:
 
 | Where the finger is | Then |
 |---|---|
-| y 114-231 | Scrubbing: x maps as in 2.3. A thumb coming from below may dip into the transport; it presses nothing there, because the touch is the bar's. |
-| y < 106 (onto the artist row, the title or the cover) | **Off.** The knob goes back to where it plays, the readout says "Release to cancel" in amber, and a tick. |
+| y 111-231 | Scrubbing: x maps as in 2.3. A thumb coming from below may dip into the transport; it presses nothing there, because the touch is the bar's. |
+| y < 103 (onto the artist row, the title or the cover) | **Off.** The knob goes back to where it plays, the readout says "Release to cancel" in amber, and a tick. |
 | y >= 240 (onto the button strip: a glass touch keeps reporting there) | Off, the same way. |
-| Back in y 114-231 | Scrubbing again, with a tick. The knob comes back by the grab's mapping. The 8 px from 106 to 114 (and from 232 to 240) stop it flapping. |
+| Back in y 111-231 | Scrubbing again, with a tick. The knob comes back by the grab's mapping. The 8 px from 103 to 111 (and from 232 to 240) stop it flapping. |
 | A lift while off | No seek, no tick. |
 
 ### 2.7 Every end of a touch on the bar
@@ -478,17 +496,20 @@ While scrubbing, the finger's y decides:
 
 | Name | Value | Where | What |
 |---|---|---|---|
-| `kLineX`, `kLineW` | 12, 296 | SeekBar | the line, x 12-307 (`drawProgress()`'s; a `static_assert` ties them) |
-| `kSeekReachPx` | 8 | NowPlayingPage | how far above the band the zone starts: y 138, whether or not a play waits |
+| `kLineX`, `kLineW` | 12, 296 | SeekBar | the line, x 12-307 (`drawBar()`'s; a `static_assert` ties them), and the bars' columns (`wave::columnX()`: the last ends on x 307) |
+| `kBarTouchY` | 138 | NowPlayingPage | where the zone starts, under the navigation area (`kNavBottom + 1`), whether or not a play waits; it ends where the transport's touch starts, y 168 |
 | `kMinLengthMs` | 10,000 ms | SeekBar | shorter tracks: inert |
 | `trackseek::kSeekGuardMs` | 6,000 ms | TrackSeek.h | `kTailMs` + 1 s. The reach is the length less this, floored to a second |
 | `kGrabPx` | 16 px | SeekBar | a Down this near the knob grabs it (no jump) |
 | `kStayPx` | 4 px | SeekBar | the detent around where it plays |
-| `kOffAboveY` / `kBackAboveY` | 106 / 114 | SeekBar | off above the first; back from the second down (`static_assert`s in the page tie them to the readout row: 113 - 7 and 113 + 1) |
+| `kOffAboveY` / `kBackAboveY` | 103 / 111 | SeekBar | off above the first; back from the second down (`static_assert`s tie them to the readout row: 110 - 7 and 110 + 1) |
 | `kOffBelowY` / `kBackBelowY` | 240 / 232 | SeekBar | off on the strip; back above the second |
 | `kReadoutLeftX` / `kReadoutRightX` / `kReadoutStartX` | 184 / 136 / 160 | SeekBar | the knob right of 184: the readout goes left; left of 136: right; in between, it stays where it was (at the scrub's start: left from 160) |
 | `uitext::kSeekReadoutW`, `kSeekReadoutGap` | 160, 8 | UiText.h | the readout group's width at most (a mix's "999:59 no change" is 159 px), and the gap between its two texts |
-| `kReadoutY`, `kReadoutH` | 113, 33 | NowPlayingPage | the readout row: y 113-145, the full width (over the album row and the cover's lowest rows) |
+| `kReadoutY`, `kReadoutH` | 110, 27 | WaveBar | the readout row: y 110-136, the full width (over the album row, the artist row's last rows and the cover's lowest rows) |
+| `kStripY`, `kStripH`, `kCentreY` | 137, 21, 147 | WaveBar | the bar's strip, y 137-157, and its centre row |
+| `kTextRowY`, `kTextRowH`, `kTextCentreY` | 158, 16, 165 | WaveBar | the text row, y 158-173, and where its Small line is centred |
+| `kStripAndTextH` | 37 | WaveBar | the strip and the text row in one push, y 137-173 (4.5): under the 40 rows of a bus hold (`static_assert`) |
 | the slop, the hold | 12 px, none | TouchRecognizer, `noHold()` | the slop as everywhere; no LongPress on the bar |
 
 ## 3. The hit area
@@ -503,17 +524,19 @@ y 138-167  THE BAR (x 0-319)                  Down: the pressed look; Tap: a see
 y 168-239  transport (64 x 72 zones)          never the bar's
 ```
 
-- **Why 8 px above the band.**
-  - The line is drawn at the band's top (screen y 148-151), so a finger
-    aimed at it lands on both sides of y 146. Without the extra rows, a
-    seek aimed a few px high would open the navigation menu.
+- **Why from y 138.**
+  - The zone starts with the strip's second row, the tallest bar's first,
+    and under the navigation area: the first row of the bars and the 9 rows
+    down to the line's centre (y 147) are the bar's. A finger aimed at the
+    line lands on both sides of it.
   - The boundary at y 138 sits about halfway between the album's text
-    (centred at y 124) and the line (y 150). A tap aimed at either is
+    (centred at y 124) and the line (y 147). A tap aimed at either is
     about as unlikely to land on the other.
   - Touch y reads true on this panel; only x was skewed.
-- **Nothing below the band.** A sloppy tap on prev, play or next must
-  never seek. The line is 17 px above the transport's touch (y 168)
-  anyway, 25 above its drawn strip (y 176).
+- **Nothing below the text row's touch.** A sloppy tap on prev, play or next
+  must never seek. The line is 21 px above the transport's touch (y 168)
+  anyway, 29 above its drawn strip (y 176). The text row's last 6 rows, y
+  168-173, are in the transport's touch, drawing only.
 - **While play waits** the zone starts at y 138 too: Play on speaker and
   Cancel are drawn y 94-129 and take y 90-137, so nothing is taken from
   them. `zoneAt()` tests the bar right after the transport, before the
@@ -528,31 +551,77 @@ y 168-239  transport (64 x 72 zones)          never the bar's
 
 ## 4. What is drawn
 
-### 4.1 The band (y 146-167)
+### 4.1 The bar's strip (y 137-157) and the text row (y 158-173)
 
-Rows are the band's (row 0 is screen y 146). Everything stays inside the
-band. The knob is drawn last, after the text, whose background fill would
-cut it.
+The numbers and the inks are `lib/core/WaveBar.h`'s (test_wave_bar); the
+page maps each ink to its colour and draws. Rows are the strip's (row 0 is
+screen y 137). Everything stays inside the strip, and the knob is drawn
+last. Its centre row, c, is row 10, y 147.
+
+**A track with a shape** shows bars when the shape's length agrees with the
+player's (the bar's frozen one under a finger: WAVEFORM-INDEX.md 11):
+
+- 99 bars of 2 px with a gap of 1 px, x = 12 + 3i: the last ends on x 307,
+  the line's end. A bar is the centre row and h rows either side, h 0-9
+  (`wave::reduce()`): silence is a row of dots 2 x 1 px. Mirrored, because
+  it reads as a waveform and it is what mStream's web player and the
+  terminal player draw; 2 + 1 px, because 1 px columns are noise and 1 + 1 too
+  thin (measured on 49 real tracks).
+- A playhead of 2 px, x - 1 and x, the strip's whole height.
+- A bar is played when its first px is left of the playhead's x, as the
+  fill was.
+
+| Look | Played | Unplayed | Playhead | Knob | Marker | Text row |
+|---|---|---|---|---|---|---|
+| **Rest**, playing | the accent | BTN_HI | TXT | none | none | yes |
+| **Rest**, not playing | DIM | BTN_HI | SOFT | none | none | yes |
+| **Pressed** | the accent, even paused | FAINT | TXT | r 4 TXT with an r 2 accent dot, at the live x | none | yes |
+| **Scrubbing** | the accent, to the knob | FAINT to the reach, BTN past it | TXT, at the target's x (at the marker while staying) | r 4 TXT with an r 2 accent dot, on it | 2 px DIM, the strip's whole height, at the live x; hidden while staying | blank (BG) |
+| **Off** | DIM, to the live x | BTN | DIM, at the live x | r 4 DIM, on it | none | blank |
+| **Inert** | never bars: the plain line | | | | | yes |
+
+**Any other track** has the plain line, in the same place: no data for it, the
+file absent, not loaded yet, a length that disagrees. Its rows about c are the
+ones it had before the bars, thin c - 2 to c + 1, thick c - 3 to c + 2, and
+nothing else moves between a track with a shape and one without.
 
 | Look | When | The line | Fill | Knob | Marker | Text row |
 |---|---|---|---|---|---|---|
-| **Inert** | not seekable (2.4): the dotted line, a failed track, under 10 s, nothing queued | as today | as today | none | none | as today |
-| **Rest** | seekable, no finger on it | as today: 4 px DIV, rows 2-5 | as today: the accent while playing, else DIM | r 3 at (12 + fill, row 4), in the fill's colour | none | as today |
-| **Pressed** | a Down on the bar, before it is a tap or a scrub | 6 px DIV, rows 1-6 (radius 3) | the accent, even paused (it is the active control), to the live position | r 4 TXT with an r 2 accent dot, at the live x | none | as today |
-| **Scrubbing** | a sideways drag, on the bar | 6 px DIV, rows 1-6, to the reach; past it, FAINT dots (3 x 2 px every 6 px, rows 3-4) to x 307 | the accent, to the knob | r 4 TXT with an r 2 accent dot, at the target's x (at the marker while staying) | 2 x 9 px DIM, rows 0-8, at the live x; hidden while staying | blank (BG) |
-| **Off** | slid off (2.6) | 6 px DIV, rows 1-6 | DIM, to the live position | r 4 DIM, at the live x | none | blank |
+| **Inert** | not seekable (2.4): the dotted line (3 x 2 px every 6 px, rows 9-10), a failed track, under 10 s, nothing queued | 4 px DIV, rows 8-11 (y 145-148) | the accent while playing, else DIM | none | none | yes |
+| **Rest** | seekable, no finger on it | 4 px DIV, rows 8-11 | the accent while playing, else DIM | r 3 at (12 + fill, row 10), in the fill's colour | none | yes |
+| **Pressed** | a Down on the bar, before it is a tap or a scrub | 6 px DIV, rows 7-12 (y 144-149, radius 3) | the accent, even paused (it is the active control), to the live position | r 4 TXT with an r 2 accent dot, at the live x | none | yes |
+| **Scrubbing** | a sideways drag, on the bar | 6 px DIV, rows 7-12, to the reach; past it, FAINT dots (3 x 2 px every 6 px, rows 9-10) to x 307 | the accent, to the knob | r 4 TXT with an r 2 accent dot, at the target's x (at the marker while staying) | 2 x 9 px DIM, rows 6-14, at the live x; hidden while staying | blank (BG) |
+| **Off** | slid off (2.6) | 6 px DIV, rows 7-12 | DIM, to the live position | r 4 DIM, at the live x | none | blank |
 
-The fill and every x go through `SeekBar::xOf()`, which is today's
-arithmetic: `min(pos, len) · 296 / len`.
+The glance (section 7) draws the bar at rest with no knob on the plain
+line, as the bars have none: it can't be touched there.
 
-### 4.2 The readout row (y 113-145, x 0-319)
+The fill and every x go through `SeekBar::xOf()`, as they always did:
+`min(pos, len) · 296 / len`. At rest pos is the whole second (4.5), under a
+finger the live ms.
+
+**The text row** is a Small line centred on y 165: its 17 rows start on y 157,
+the strip's last, and it is pushed as y 158-173. Latin, Greek and Cyrillic have
+no ink on that first row (but for 8 rare letters with a high accent: ĺ Ů Ǖ Ǘ Ǚ Ǜ
+Ѯ Ѽ, in none of the ten languages' texts, so only a headphones' name can lose
+that row of an accent). The glyph store's em box takes a Small line's rows 0-15
+(`GlyphStore::baselineIn()`), and 8,902 of its 10,557 glyphs reach row 0: so a
+line with a glyph from the store is centred on y 166, the times and the moon
+with it. It then shows its rows 0-15, the ones it showed on the band's y
+152-167. So Japanese and Chinese, and a CJK name, sit a row lower.
+
+The shape comes from a record kept in `app/Waves`, so a repaint (a modal closed,
+a dark wake) redraws it with no card read. No animation: the bars appear when
+they arrive.
+
+### 4.2 The readout row (y 110-136, x 0-319)
 
 It is up only while Scrubbing or Off.
 
-- It is the 33 rows above the band, the full width: over the album row
-  (y 113-135) and the cover's lowest 24 rows (y 113-136, its frame's last
-  included), which come back at the lift. Legibility needs its
-  background, so it isn't drawn over the artwork.
+- It is the 27 rows above the bar's strip, the full width: over the album
+  row (y 113-135), the artist row's last 3 rows and the cover's lowest 27
+  rows (y 110-136, its frame's last included), which come back at the lift.
+  Legibility needs its background, so it isn't drawn over the artwork.
 - A finger on the bar covers a 60-80 px patch around the contact, and a
   fingertip coming from below reaches 25-40 px above it. A bubble over
   the knob would be under the finger, so the readout goes to the side
@@ -564,11 +633,11 @@ It is up only while Scrubbing or Off.
 | Staying | The live second ("1:10") in Title, TXT; then "no change" in Small, DIM (`uitext::kSeekStay`) | as above |
 | Off | "Release to cancel" in Font::Bold, AMBER (`uitext::kSeekCancel`) | centred |
 
-- Title is centred on the row's row 16 (screen y 129) and Small on row 19
-  (y 132), so that their baselines roughly agree. Check it on the
-  device's screenshot.
+- Title is centred on the row's row 13 (screen y 123) and Small on row 16
+  (y 126), so that their baselines agree (row 21, y 131). Bold is centred on
+  row 13. Check it on the device's screenshot.
 - The change is in whole seconds: `target/1000 − live/1000`.
-- The times are m:ss, as the band's: a mix of 100 min or more reads
+- The times are m:ss, as the text row's: a mix of 100 min or more reads
   "100:00" (84 px in Title, as any three-digit minute: the figures are
   tabular).
 - The readout group is at most 160 px wide (`uitext::kSeekReadoutW`):
@@ -585,22 +654,23 @@ It is up only while Scrubbing or Off.
 **Entering** the scrub look:
 
 - while a play waits, clears the artist row (x 112-319, y 90-112): the
-  waiting buttons' upper halves (y 94-112) would stick out above the
+  waiting buttons' upper halves (y 94-109) would stick out above the
   readout;
-- draws the readout row.
+- draws the readout row;
+- clears the text row, once, with the first frame.
 
 **Leaving** it (any end):
 
 - fills the readout row with BG;
-- pushes the cover's rows y 113-136 back from its sprite (no re-render,
+- pushes the cover's rows y 110-136 back from its sprite (no re-render,
   no thumbnail lookup; with no sprite, the placeholder's CARD);
 - draws the middle again (`drawMiddle()`: the artist and album rows, or
-  the waiting buttons);
-- draws the band in its rest look.
+  the waiting buttons), which gives the artist row its last rows back;
+- draws the bar's strip in its rest look, and the text row.
 
 **The cover is never pushed over the readout.** `drawCover()` renders
 into its sprite as always, but while the readout is up it pushes only the
-rows above it (y 39-112), so a thumbnail that arrives mid-scrub can't cut
+rows above it (y 39-109), so a thumbnail that arrives mid-scrub can't cut
 it; the lift pushes the rest.
 
 **Whenever `drawMiddle()` draws while the scrub look is up**, the
@@ -655,8 +725,33 @@ The tab bar's hairline and the Dance tab's line read the same snapshot
 - `onEvent()` only changes the model (SeekBar) and plays the touch's
   ticks. `update()` draws.
   - It compares, with what it drew last (the `Drawn` struct, like
-    everything else on the page): the bar's look, the knob's x, the
-    marker's x, and the readout's text and side.
+    everything else on the page): what the strip shows (`wave::Strip`: the
+    look, the bars or the line, the play state, the track, the wave's
+    version, the playhead's x, the marker's x), the text row and what it says,
+    and the readout's text and side. `Drawn{}` redraws all of it.
+- **The strip and the text row are separate draws, on separate triggers**
+  (`wave::regionToDraw()`, `wave::textDraw()`; test_wave_bar):
+  - A playing second draws the text row: 320 x 16 = 5,120 px.
+  - At rest the playhead stands on the whole second (`wave::restPlayheadX()`,
+    and the plain line's fill with it, as the band's): it moves in the pass
+    the time does, once a second at most, not at each px of a short track (30
+    a second at 10 s, each a bus hold of its own). Under a finger the knob
+    and the marker keep the live x.
+  - A moved playhead draws a part of the strip, from min(old, new) - 4 to
+    max(old, new) + 4 in x, its whole height: 210 px for a px, 315 px for the
+    6 px a second of a 52 s track moves, 819 px for the 30 of a 10 s track. A
+    px is 0.8 s of a 4 min song, and past 5 min some seconds move none.
+  - The whole strip, 320 x 21 = 6,720 px: a look, a new shape, the bars
+    coming or going, a track, a play state, a repaint, a scrub frame.
+  - Entering a scrub look clears the text row once, leaving draws it, and a
+    second that changes during a scrub draws nothing there.
+- **A whole strip with the text row due is one push** (`wave::pushedAsOne()`;
+  the page's `drawSeekBar()`): y 137-173, 320 x 37 = 11,840 px, the px of the
+  two draws in one bus hold. That is a play state, a track, a lift, a repaint
+  and a scrub's first frame, which blanks the row in the same push. The text row
+  goes into the sprite first: its Small line's first row is the strip's last
+  (4.1), which the strip's fill takes back. A part of the strip and the text row
+  stay two pushes: as one, the push would take the rest of the strip's width.
 - **Scrub frames** are drawn only when `frameDue`.
   - They are: the look entering Scrubbing or Off, and any move of the
     knob, the marker or the readout.
@@ -668,19 +763,42 @@ The tab bar's hairline and the Dance tab's line read the same snapshot
   - While an MP3 decodes, the loop runs at 16-25 fps: in practice, a
     frame each pass.
 - **Drawn at once:** the Pressed look on a Down, and the end of a scrub
-  (the middle and the band put back), as the other zones' presses are.
+  (the middle, the strip and the text row put back), as the other zones'
+  presses are.
 - **Costs, as estimated.** A push is ~0.43 µs per pixel, and a row of
   anti-aliased text takes ~8 ms while an MP3 decodes (UI-SPIKE.md).
+  - A playing second: the text row, 5,120 px, ~2.2 ms on the bus (the band
+    was 7,040 px, ~3.0 ms), plus its text; and, in a hold of its own, what it
+    moved of the playhead, 210-315 px from 52 s up, ~0.1 ms.
+  - A play state, a track, a lift or a repaint: the strip and the text row in one
+    push, 11,840 px, ~5.1 ms on the bus in one hold, plus fills and its text. The
+    band was 7,040 px, ~3.0 ms: the 4,800 px more are the layout's, 37 rows where
+    the band was 22, and three playing seconds win them back.
   - A scrub frame where only the knob or the marker moved: the whole
-    band, 320 x 22 = 7,040 px, ~3.0 ms on the bus, plus fills and circles
-    (no text). About 3.5 ms in all.
+    strip, 6,720 px, ~2.9 ms on the bus, plus fills, up to 99 bars and
+    circles (no text). About 3.5 ms in all.
   - When the readout's text changes (the second under the finger; while
-    playing, also the change, once a second): the row, 320 x 33 = 10,560
-    px, ~4.5 ms, plus a Title string and a Small one, ~4-8 ms.
-  - The worst frame is ~16 ms of drawing, against a 40-60 ms pass.
-  - Every push is 33 rows or fewer, under the 40-line bus hold, so the SD
+    playing, also the change, once a second): the row, 320 x 27 = 8,640
+    px, ~3.7 ms, plus a Title string and a Small one, ~4-8 ms.
+  - The first frame also clears the text row, in the strip's push: 5,120 px
+    more, ~2.2 ms.
+  - The worst frame, the first, is ~17 ms of drawing, the others ~15 ms,
+    against a 40-60 ms pass.
+  - Every push is 37 rows or fewer, under the 40-line bus hold, so the SD
     card never waits long.
-- **Costs, as measured** (section 16, 25 scrubs). The `[ui] scrub:`
+- **Costs on the strip, as measured** (2026-11-02, scripted drags of 2 s across
+  the Core2's screen, in silent mode):
+  - Nothing decoding (paused), with bars: a mean of 10.2-10.3 ms a frame, at most
+    10.7 ms.
+  - An MP3 playing, its ring steady, with bars: 58 frames, 28.9 fps, a mean of
+    19.5 ms, at most 34.9 ms, the ring never below 1417 ms. The same with the
+    plain line: 57 frames, 28.3 fps, a mean of 19.0 ms, at most 34.9 ms, 1416 ms.
+    So the bars cost about 0.5 ms a frame. No underrun, the governor normal, none
+    over 35 ms.
+  - A lit FLAC playing, with bars and with the plain line: 6.2 bus holds a second
+    each, over 21 s, the tab bar's animation among them.
+- **Costs, as measured** (section 16, 25 scrubs, on the band and its 33
+  row readout, before the strip). The `[ui] scrub:`
   line's draw times are wall time: the decode task, above the loop on
   the same core, counts in them whenever it runs during a frame.
   - Nothing decoding (paused): a mean of 9.3-9.6 ms a frame, at most
@@ -840,7 +958,8 @@ touch.
 | Waiting, holding a paused track | Waits: let go, cued, the start point; still Waiting. `release()` starts there, and so does Play on speaker | Waits: cued at 0:00 | the start point / 0:00 | the start point / cleared |
 | Waiting, cued | Waits: the start point set; `release()` starts there | Waits: dropped | the same | the same |
 | Stopped, with a start point (a boot's) or a remembered length | Waits: replaced; the next play starts there | Waits: dropped | the same | saved / cleared |
-| Stopped otherwise; cued on a new entry; the length unknown | not reachable (the bar is inert). If called anyway: NoPlace | | | |
+| Stopped otherwise, or cued on a new entry, with a length (told, or its record's: 5.3) | Waits: a start point at the bar's length; the next play starts there | Waits: nothing to drop | the start point / 0:00 | saved / nothing |
+| The length unknown (no record, nothing told) | not reachable (the bar is inert). If called anyway: NoPlace | | | |
 | The backend's track failed | NoPlace | | | |
 | The entry isn't `key` | Moved: nothing at all | | | |
 
@@ -875,6 +994,12 @@ void PlaybackController::shownTime(uint32_t* positionMs, uint32_t* durationMs) c
     *durationMs = length;
     return;
   }
+  if (state_ == PlayState::Stopped || cued_) {  // nothing held: never the backend's figures
+    if (!audio_.failed()) {
+      *durationMs = lengthHint() > 0 ? lengthHint() : catalog_.durationHintMs(queue_.currentTrack());
+    }
+    return;
+  }
   if (pendingStart(&ms)) {  // never the backend's length here
     *positionMs = ms;
     *durationMs = lengthHint();
@@ -888,9 +1013,23 @@ void PlaybackController::shownTime(uint32_t* positionMs, uint32_t* durationMs) c
 
 - A seek's pending start shows its target and the bar's length, so a seek
   never shows the old second or a dotted line.
+- An entry nothing holds (stopped: after a boot with no resume point,
+  after next or the queue's end while stopped; cued at 0:00, or by next
+  while paused or waiting) shows 0:00 and the length told for it, else
+  the catalog's: a library track's record, to the second
+  (`TrackCatalog::durationHintMs()`, since cc3413b), the length a start
+  point placed then takes (`placeStart()`). So its bar can be sought,
+  and Now Playing's waveform shows, before the first play; the tab bar's
+  hairline is whole, not dotted, and the Dance tab's line stays at 0. A
+  track with no record has none (the dotted line), and neither has a
+  failed one. The
+  backend's figures are never used there: they are the track before's
+  until its decode task takes the stop up. Until 2026-11-05 such an entry
+  showed the backend's figures, 0 and 0 once the stop was taken up, and
+  the dotted line.
 - A skip's pending start shows 0:00 at once, and **no length** unless
-  the entry has a hint (a built-in track's, a resume point's, one told
-  before). Until the decode task takes the request up (`start()`, which
+  the entry has a hint (a library track's record, a built-in track's, a
+  resume point's, one told before). Until the decode task takes the request up (`start()`, which
   clears `knownDurationMs_` and the frozen length), the backend's length
   is still the track before's. The first version of the snapshot kept it
   (`if (hint) s.durationMs = hint;`), and a finger landing on the bar in
@@ -906,7 +1045,7 @@ outputs read the ring on their own tasks.
 
 | | What happens | Handled by |
 |---|---|---|
-| R1 | A stale position and length while Pending: until the book restarts, the position is the old run's second, and until `start()` the length is the old track's (frozen or known). That includes a produce pass already under way | `pendingStart()` and `lengthHint()` alone in the snapshot (`shownTime()`, 5.3): a skip with no hint shows no length, so the bar is inert, never seekable at the old track's length |
+| R1 | A stale position and length while Pending: until the book restarts, the position is the old run's second, and until `start()` the length is the old track's (frozen or known). That includes a produce pass already under way | `pendingStart()` and `lengthHint()` alone in the snapshot (`shownTime()`, 5.3): a skip with no hint (no record) shows no length, so the bar is inert, never seekable at the old track's length. The same for an entry nothing holds: the backend's figures are never read there |
 | R2 | A length of 0 while `prepare()` reads the card (`C2AB.cpp:742` to `1040`). A header-less file has none for about 1 s more | `lengthHint()` in the snapshot |
 | R3 | A join heard between the page's look at the snapshot and the action. `takeAdvance()` depends on the output's `readPos`, which moves on another task, and the page's snapshot is a pass old anyway | the key check inside `seek()`'s `Act`, after `syncHeard()`, with no nested `Act` (5.1) |
 | R4 | A boundary pending in the book at the request (the next track decoded ahead) | It goes with the request's book restart and is never taken (`GaplessJoin.cpp:18, 52-63`). `startNow()` resets the offer. The next track is offered again with a new token, and decoded ahead again near the new end. A few ms of the next track may be heard in the µs between `syncHeard()` and `play()`, as with Next pressed at that moment |
@@ -922,7 +1061,8 @@ outputs read the ring on their own tasks.
 | Case | Behaviour |
 |---|---|
 | A failed track (`s.failed`, "Can't play this track") | Inert. While playing it is never seen, because `update()` skips it first. It stays only when stopped after every track failed, or paused on a start that then failed, with a length of 0. `seek()` returns NoPlace too |
-| Unknown length (the dotted line) | Inert. A header-less VBR file gets an estimate after about a second of frames. An entry never held (stopped after a boot with no resume point; cued by next while paused) has no bar until it plays |
+| Unknown length (the dotted line) | Inert. A header-less VBR file gets an estimate after about a second of frames. An entry never held (stopped after a boot with no resume point; cued by next while paused) has its record's length (5.3), so it is seekable and shows its waveform; with no record it has no bar until it plays |
+| An entry never held, with a record | Seekable at the record's length, to the second, before its first play. The total can read a second more until the play's header gives the length to the ms (the record is rounded, the backend's floored): 2:25, then 2:24, as at the first second of any play. A tap on the bar sets a start point and saves it, as on a resume point's bar (a touch on a dim or dark screen is swallowed, as anywhere). The waveform's length check (WAVEFORM-INDEX.md 11) passes, both lengths coming from the card's records of the file, so a file that isn't its record's shows only at the play, as the plain line |
 | Under 10 s | Inert |
 | Built-in tracks (tones, click tracks) | Seekable. Their length is the catalog's hint; they count from the start ms (`C2AB.cpp:861-875`), exactly, at no SD cost. A click track's grid starts again, and the Dance tab's tracker resets on the new epoch |
 | Waiting (PlayGate) | Seekable (5.2), from y 138 (as when not waiting). During a scrub the readout row covers the waiting buttons' lower halves and the artist row is cleared, and `drawMiddle()` puts them back. The spinner keeps turning in its own zone |
@@ -933,8 +1073,9 @@ outputs read the ring on their own tasks.
 | LAME VBR, by its TOC | It lands within 0.74 s (p95; 0.47 s on the device's 20 points), showing the time asked. Later seeks back into what played go by the run's index and keep that start's timeline, error and all (`the run's index; the time asked`); in a run from the top they are exact |
 | Opus | It lands on the sample asked (the reader's plan by the pages' granule positions, a 200 ms preroll decoded and dropped), showing the time asked; the file opens again from the open cache with one read and a plan costs ~10-17 reads / ~50-80 KB of header reads on a 128k file, so a seek's first audio is expected ~165-215 ms after the lift (OPUS.md section 10; M3 measured 287-453 with a full second open and the plan's wasted reads). A pause's anchor is its sample, resumed with a 600 ms preroll |
 | A paused seek and the resume anchor | The exact paused-sample anchor goes. The next play (and a boot) starts by the second: exact for CBR, FLAC, Opus, built-in tracks, and inside the paused run's index (which the stop keeps) when that run was exact; by the TOC for a LAME VBR file after a reboot |
-| The screen dim or off | The first touch only wakes it, swallowed through its lift, so a scrub can't begin from Dim or Off. A moving finger keeps the screen lit. One held still for 15 s stops counting; if the screen dims under it, the touch ends with a Cancel: no seek |
-| A toast going away mid-scrub | The page repaints. The scrub's look is part of what `update()` draws, so the readout and the band come back as they were (4.2) |
+| The screen dim or off | On a dim screen the first touch only brightens it; on an off one it does what "Touch when off" says (nothing by default, a wake, or the glance: ENERGY.md item 2). Either way it is swallowed through its lift, so a scrub can't begin from Dim or Off. A moving finger keeps the screen lit. One held still for 15 s stops counting; if the screen dims under it, the touch ends with a Cancel: no seek |
+| The glance ("Touch when off: Track") | Now Playing drawn read-only over the dark screen for 10 s: the bar at rest (bars, the plain line or the dots) with no knob, since nothing on it can be grabbed. No touch reaches it (each is swallowed through its lift and only shows the glance 10 s more), so it never seeks. The power button opens the whole screen, where the bar is as ever |
+| A toast going away mid-scrub | The page repaints. The scrub's look is part of what `update()` draws, so the readout and the bar's strip come back as they were (4.2) |
 | A sheet or dialog opening mid-scrub | Cancel (`endPageTouch()`): no seek. When the modal closes, the repaint shows the rest look |
 | A second finger | Only the first touch point counts |
 | The headphones drop mid-scrub | The pause comes from main.cpp. The lost dialog's opening cancels the touch; without a dialog, the lift seeks in the Paused state (it waits) |
@@ -987,11 +1128,15 @@ player logs nothing new; the backend's own start lines follow, as for
   snapshot the page last drew with (so a `ui` read in a seek's own loop
   pass still shows the second before it: 11.6), one of:
   - `; the bar: inert`
-  - `; the bar: rest, the knob at x 159`
+  - `; the bar: rest, the knob at x 159` (`the playhead` on a waveform; the
+    live x, where a touch finds it: what is drawn stands on the whole second,
+    4.5)
   - `; the bar: pressed`
   - `; the bar: scrubbing to 2:31 (drag from the knob; readout left; 1:10 plays)`
   - `; the bar: staying`
   - `; the bar: off`
+
+  and `, bars` after it while the strip shows a waveform.
 
 ## 9. Files and functions
 
@@ -1396,17 +1541,17 @@ Env:MSYSTEM -ErrorAction SilentlyContinue; pio run -e core2`.
   the volume down, then forgets the headphones (`f`), which then have to
   be paired again on the Output tab.
 
-**The scripted finger** works in screen pixels; the line is at y ~150
-(it was ~174 when these steps were first run: section 16's lines).
-For a track of length L:
+**The scripted finger** works in screen pixels; the steps' y 150 is on the
+bar (y 138-167), 3 px under the line's centre since 2026-11-02 (it was ~174
+when these steps were first run: section 16's lines). For a track of length L:
 
 - the second at x is `floor((x − 12) · L / 296 / 1000)`;
 - the knob for a position p is at `12 + p · 296 / L`.
 
-The examples are for a 4:05 CBR MP3.
+The examples are for a 4:05 CBR MP3 with no waveform (step 17 has the bars).
 
 1. **The look.** `X` (the whole screen): the knob (r 3) at rest. A dotted
-   line (an entry never held) has none.
+   line (no length: a track with no record, never held) has none.
 2. **Taps, paused (deterministic).** Pause (`uit160,204`), then `qs60`
    (`[queue] start point: 60 s into the current entry (paused)`).
    - `uit85,150`: `no seek (back where it plays)`, and no tick.
@@ -1494,7 +1639,9 @@ The examples are for a 4:05 CBR MP3.
     says "track", and it pauses at the end (`[sleep]` lines). A seek into
     the last 10 s starts the fade.
 13. **The screen** (by hand: the scripted finger acts in the dark). Let
-    the screen dim, then touch the bar: the touch only wakes it.
+    the screen dim, then touch the bar: the touch only brightens it. On
+    the glance (`Pst2`, the screen off, a touch), touch and drag the bar:
+    nothing seeks, and it has no knob.
 14. **By hand (the user):**
     - a tap and a drag on the right half, and at both ends;
     - a grab from the knob (no jump), and a grab elsewhere (the knob
@@ -1525,6 +1672,28 @@ The examples are for a 4:05 CBR MP3.
     - paused (`uit160,204`), the first two again: `no seek (back where it
       plays)`, and no `[queue] resume point saved` line (the paused
       sample's anchor stays).
+17. **The waveform** (any card: the console's test shape, with none in the
+    index). `gw=` and 99 digits, a height a column, then `gw?`: `it shows the
+    test shape`.
+    - `X`: the bars y 138-156 about y 147, x 12-307, the playhead y 137-157,
+      the text centred on y 165, y 174-175 background, the transport as ever.
+      `ui`: `; the bar: rest, the playhead at x k, bars`.
+    - Pause: the played bars DIM, the playhead SOFT, the rest as they were.
+      A finger held (`uih160,147`, `X` inside its 800 ms): FAINT, the knob on
+      the live x.
+    - `uid100,147,250,147,2000`: 4.1's Scrubbing: the marker, FAINT to the
+      reach and BTN past it, the text row blank, the readout y 110-136. At
+      the lift the album row, the cover's lowest rows and the artist's last
+      rows are whole. `[ui] scrub:` for the frames' cost: compare it with 4.5's.
+    - `uid100,147,250,100,400`: Off: DIM, BTN, `no seek (slid off the bar)`.
+    - A short track playing (52 s moves 6 px a second): the playhead and the
+      time move together, once a second, and no more.
+    - `gw-`: the plain line, in the same place, nothing else moved.
+    - With a card that has an index: `gw?`, a track change, `gw?`: the
+      reads and the job's time (WAVEFORM-INDEX.md 11's "about 20 ms" is
+      ESTIMATED until then).
+    - By hand: the line thin at rest and the bars at arm's length; Japanese,
+      where the text row sits a row lower (4.1).
 
 ## 12. Build order
 
@@ -1570,7 +1739,8 @@ One commit each on feature/seek-bar, with the host tests in each:
   as the headphones' FF/REW keys; and a drag to the very end meaning
   next.
 - **Seeking an entry whose length isn't known yet** (stopped after a
-  boot with no resume point).
+  boot with no resume point): built for a track with a record (5.3,
+  2026-11-05); a track with no record still waits for its play.
 - **Pushing only the band's line rows during a scrub**, which would save
   about 1.5 ms a frame.
 
@@ -1721,7 +1891,7 @@ were put back.
   7:09 (CBR; exact)`. The 1:54 FLAC paused at 1:12 and reset: `FLAC:
   starting 1:12.000 in`. A paused seek to 0:00, then a reset, leaves an
   entry never held: `0 / 0 ms; the bar: inert`, the dotted line (section
-  7).
+  7; since 2026-11-05 a track with a record shows its length there, 5.3).
 - **11.6-11.8, playing.** Every seek logged `plays from there` and its
   start line:
   - `(CBR; exact)` on *Moon Safari*. Five drags 0.8 s apart gave five

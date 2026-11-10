@@ -1,0 +1,1700 @@
+# Mood filters
+
+Mood filters narrow the Albums list and Auto DJ's picks by mood, using the scales and tags of mStream's other clients. The player works them out from the card. It needs no network while playing, and a filter change reads nothing from the card.
+
+## 1. Status
+
+**Status (2026-11-08):** S0, S1 and S2 are built, from main af72b50: S0 on its own branch (`claude/status-line-under-modal`), S1 and S2 stacked on `claude/mood-filters-implementation-0aec6e`. S1 and S2 are host-tested (S0 has no host test). S2 ran on the user's Core2 against the spare synthetic card in 9.6's Runs A to E, which also checked S1's heap rule, and S0 was checked on the same unit (9.4). S3 is built on `claude/mood-filters-s3`, stacked on S2, host-tested and building, and its device pass (9.7's table) ran on the same unit and card. S4 is built, all seven of its commits and the review's fixes, on `claude/mood-filters-s4`, stacked on S2, host-tested, and checked on the same Core2 (9.8's Device part), which found the scan's cost and fixed it (af248a0). S5 is built, its three commits and the review's fix, on `claude/mood-filters-s5`: S3's tip with S4 merged in, S4's device pass and af248a0 included. It is host-tested and building, and its device pass (9.9's Device part) ran on the same unit and card at e87de85, before af248a0 was merged in; the merged build was spot-checked after (the boot, the jump time, the row and the Few toast). S6 is mStream's #1122, merged on 2026-11-07 and released in v6.33.1 with #1072 (9.10). S7 is built on the terminal's `claude/card-moods`, PR #69 stacked on #68, host-tested, not merged (9.11). S8 ran on 2026-11-08 (9.12): the user's server on the release they had just put out (v6.33.1, by their word), a release build of S7, the user's 1 TB test card and the Core2 on S5's merged build. The scores reached the card and the device, and the sync, the checker and the Core2 agreed on every mood count and on every filter's tracks and albums. Each stage's result follows its plan (9.4 to 9.12), and the figures from those runs are MEASURED on the dates they give. A read-only study found it possible, and this document is the build plan.
+
+**Merged (2026-11-08):** S0 (#47, db0332a), S1 (#48, 39d3d36), S2 (#49, cf8379e) and S3 (#50, 6c0bce9), into main. S4 and S5 go in with #52, whose branch has S4's merged into S5's (S3 and S4 conflict on their own); #51 is left to close with it.
+
+**Picked by the user, on the design canvas:**
+- The editor: the one-screen grid of 7.1.
+- The way in on Albums: the quiet first row and the dot of 7.2.
+
+The canvas's frames are in [`docs/img/mood-filters/`](img/mood-filters/README.md), each named as this plan names it (`grid-two`, `dj-toast-few` and so on).
+
+**Assumed:** everything else. Section 3 lists each default with its alternative, and the user can overrule any of them. Where the plan differs from a drawn frame, 3.2 says so.
+
+Line numbers are at these commits:
+- firmware a1566fe
+- mStream master 97a97ca7 (v6.32.3)
+- terminal player `claude/card-waveforms` 64437c2
+- phone app d17c3fa5
+
+Paths with no repository named are the firmware's.
+
+Main has moved since: PRs #37 to #42 merged on 2026-11-05 (main 305b893). They change nothing in this plan, but 26 of the files it cites changed, so read a cited line with `git show a1566fe:<path>` and find it again by name.
+
+Labels:
+- **READ:** from the code or docs.
+- **MEASURED:** on the device, quoted from the docs.
+- **MEASURED-HOST:** a planning script run on a PC.
+- **ESTIMATED:** the docs' own word.
+- **MODELLED:** arithmetic or a port, not run on the device.
+- **SYNTHETIC:** simulated on a made-up library.
+- **GUESS:** judgement.
+
+## 2. What the user gets
+
+**On Albums.**
+- With mood data on the card, the list gains a first row: a funnel, "Filters", the album count. It scrolls with the list.
+- A tap opens the editor. Choices apply at once, and the cross closes it.
+- The list then shows only albums where most analysed tracks fit.
+- The first row says what is set and how many albums remain. A cross on it clears the filter.
+- Scrolled past the first row, a dot on the Albums segment says a filter is on. A tap on the segment goes to the top.
+- A boot forgets the filter.
+- On a card with no mood data nothing changes: no row.
+
+**On Auto DJ.**
+- Output > Auto DJ gains "Smart filters" as its fourth row. It opens the same editor, in blue, counting tracks.
+- Every pick then stays inside the mood down the whole ladder: neighbours first, then any track that fits, then repeats, oldest first.
+- If no track fits, Auto DJ adds nothing, reads Waiting and says why.
+- The filter is saved.
+- With no filter set, the stream of picks is byte for byte today's.
+
+**The same as the server** (READ, mStream `src/api/mood-filter.js:18-19, 78, 149-182`):
+- the song predicate at the three bars, ties and NULLs included;
+- a level alone filters nothing;
+- the album rule `2*pass > analysed`;
+- unanalysed songs match nothing;
+- Auto DJ never relaxes the mood (mStream `src/api/random.js:857`).
+
+**Where it differs:**
+
+| Topic | Server | Player | Source |
+|---|---|---|---|
+| Album | `album_id`, shown grouped by name, year, art | The folder | `lib/core/LibraryIndex.h:28`; mStream `src/api/db.js:571` |
+| Album's denominator | Songs the caller can see, every copy | Files on this card | mStream `src/api/mood-filter.js:30-34` |
+| Hand-copied or edited files | Scored | No T record, no moods, until the next transfer | terminal `src/device/card/waves.rs:16-17` |
+| A peer's tracks on the card | Scored on the peer | No scores in v1: they match nothing, so an album of them goes under any filter (3.2) | terminal `src/device/card/sync.rs:1456-1457` is the same rule for neighbours |
+| Freshness | Live | The last sync that read the scores (5.6) | mStream `src/api/sync.js:40` |
+| Auto DJ's pool | Any song above a cosine floor | The row's stored neighbours, then a jump (6.2) | about 8-18 % of the server's pool in Follow the vibe, 5-10 % in Stay on seed (SYNTHETIC, rough) |
+| Filtered views | Albums, Artists, Discover | Albums and Auto DJ (D11) | |
+| Play all on a filtered list | Offered by other clients | Not in v1 (D7) | |
+
+A listener's own seed is not tested, as on the server (mStream `src/api/random.js:638-711`). It plays and steers. Picks after it obey.
+
+## 3. Decisions
+
+### 3.1 The design and the study's questions
+
+| Id | Decision | Status | Alternative |
+|---|---|---|---|
+| P1 | Editor: the one-screen grid | **user's pick** | Overview rows; flat checklist |
+| P2 | Way in: quiet first row, dot when scrolled past | **user's pick** | Fixed bottom bar; status band |
+| D1 | A dedicated route, `POST /api/v1/db/mood-scores` | assumed | A field on `metadata/batch`: no allowlist line, but a separate all-paths read, about 1.5 KB a track, about 30 MB a refresh at 20k (MODELLED) |
+| D2 | Stay on seed under a narrow filter re-pins | assumed | Seed hop; plain jumps. Plain jumps drop S4's commit 5 and its sessions |
+| D3 | Nothing in the mood: no pick, a new Waiting hold with a reason. Amends "never stops" at `docs/AUTODJ.md:309` | assumed | Fall back to no filter |
+| D4 | A saved Auto DJ filter on a card with no mood data: picks unfiltered, the row dims and says so | assumed | Hold instead |
+| D5 | A queued pick outside a new filter plays once | assumed | Remove it. Meets the gapless caveat at `lib/core/PlaybackController.h:131-133`, not traced |
+| D6 | The Albums filter is not saved across a boot. Auto DJ's is | assumed | Save it in `ui/albummoods`, u16 |
+| D7 | No Play all on a filtered list in v1 | assumed | Add it: transient ids, at most 81,924 B (MODELLED) |
+| D8 | Three levels, 2 B a track | assumed | Standard only, 1 B, about 20 KB less |
+| D9 | The same licence gate as Auto DJ: off on a card "for someone else" | assumed | Scores on every card |
+| D10 | Firmware first, against a synthetic card. The writer stacks on terminal #56/#68. mStream independent | assumed | Wait for the stack to land |
+| D11 | No Artists view in v1 | assumed | Add later, cheap (GUESS) |
+| D12 | Line-form empty state on Albums | assumed | Full empty state (frame A-empty-full) |
+| D13 | First row hidden on Albums with no mood data | assumed | Dim with a note (frame A-nodata-dim) |
+| D14 | No long-press accelerator in v1 | assumed | Long press on the segment |
+
+### 3.2 Smaller defaults made by this plan
+
+All assumed.
+
+| Area | Default | Alternative |
+|---|---|---|
+| Frames | Toasts follow the code, not frames dj-toast-few, -jump, -once. They draw two lines there. `src/ui/Overlays.cpp:101` splits only at ": " and only when too wide, so all three are one Body line in English (269, 275, 260 of 284, MEASURED-HOST), and a split drops the colon | A forced split: a `Toast` flag, and "Plays once" needs a colon |
+| Frames | The canvas's 10x10 cross becomes `kCross`, 12x12 (`tools/ui_icons.py:168`) | Draw a 10x10 |
+| Frames | Frame A-partial is left out of v1 | "mood data 92%" at rest |
+| Frames | Cross at x 284 at the scrollbar's width, as the canvas's rule gives. The brief names only 232 and 292 | Keep 292, which reads over the scrollbar |
+| Frames | The status row with a filter on and no usable index has no frame. 4.4 defines it in words | Draw one first |
+| Editor | Level cycles Strict > Standard > Loose > Strict. Clear stays open and resets the level. The row's cross has no Undo | |
+| Editor | A toast still up when the editor opens goes, as `src/ui/Ui.cpp:566-570` does for the Dance tab, its Undo with it | Keep it, and draw a frame for it over the title row |
+| Dot | Shown only while Albums is the segment on show. A held filter says nothing from Artists or Folders | Also while those show: one branch at `src/ui/LibraryPage.cpp:344-345` |
+| Count | The long count falls back to `queue.summary_position` when it doesn't fit (ru, pl at 5 digits) | New wording |
+| Engine | Re-pin only onto the playing row. A jump keeps the classes. A fresh track with no row goes before repeats. An only-fitting track repeats itself | |
+| Engine | No toast for a re-pin, or when the queue runs out under Waiting | A note |
+| Toasts | The three new toasts rank below every old one, so the old order stands. A new one waits when something above it is said in that pass (4.5) | Few above the old toasts, with a carry |
+| Auto DJ row | Behind the fence it shows its last values, and a tap says `library.updating_wait` | Dim |
+| Auto DJ row | The dim row's note says to sync from mStream, also on a card for someone else, where a sync adds nothing. This plan gives the player no way to tell that card apart | A second wording, and a way to tell |
+| Release | S5 merges but stays out of a release until a writer build carries scores (9.2) | Ship the dim row first |
+| Data | Scores outside 0-1 clamp. `h[22]`, `h[23]` in the header. The block is taken lazily at the first record. Moods live in `moods.json`, not `vectors.json`. A T record UNREADABLE without FROM_API loses its word | |
+| Data | A reader ignores an order bit whose value byte is 255 | Make that tail invalid |
+| Writer | Asks the own server only. A peer's rows stay at 8 zero bytes | Peers too: `PeerSide.moods`, `moods_from`, a version rule, about 0.25-0.5 day (GUESS) |
+| Writer | No "mood scores to add" offer and no `moodsNone` state. The sync asks anyway, and the device's dim row says to sync | Both, as `waves_none` (terminal `src/device/card/state.rs:95-100`) |
+| Writer | A null row clears. Whole or nothing per read. `NoHooks` keeps scores. No progress phase, English notes, no commit hold-back | |
+| Writer | The gate is `features.moodScores` alone (5.2) | Also `moodFilters` |
+| Route | Lives in `db.js`. All-null with `analyzeMoods` off. `model` is an object. No per-path cap. A jukebox session is allowed. No `license` field. `heads` grows without a bump | |
+| Route | Stays on the federation allowlist, so a later peer read needs no server release. Tested by key over HTTP, not over real iroh, until a client asks peers | No allowlist line until then |
+| NVS | Shares schema 5 with #27 if both ship together, else 6. (0.13.0 shipped it alone, as 5: #27's namespaces are schema 6's) | |
+| Console | `gm`, `uiM...`, `Dq<hex>` (9.3) | |
+
+## 4. The behaviour, precisely
+
+### 4.1 The filter's rules
+
+Four groups. A group left out does not filter, and groups are ANDed.
+
+| Group | Values | Tap |
+|---|---|---|
+| Valence | Happy, Neutral, Sad | Pick one. A second tap lets it go |
+| Energy | Relaxed, Neutral, Aggressive | Pick one. A second tap lets it go |
+| Voice | Instrumental, Vocals | Pick one. A second tap lets it go |
+| Tags | Acoustic, Party, Danceable | Pick any. All must hold |
+
+**Level.** Always one of Strict, Standard (the default), Loose. Alone it filters nothing.
+
+**Clear** empties everything and returns the level to Standard.
+
+Bars, on / mirror: Strict .7/.3, Standard .5/.5, Loose .3/.7 (phone app `lib/objects/mood_filter.dart:51`).
+
+| Predicate | Holds when |
+|---|---|
+| Happy, Relaxed | the head >= on, and >= the other head (a tie goes to these) |
+| Sad, Aggressive | the head >= on, and > the other head |
+| Neutral | both heads < mirror |
+| Instrumental, a tag | the head >= on |
+| Vocals | instrumental < mirror |
+
+A NULL head fails only its own scale. A song with no row matches nothing. An album matches when `2*pass > analysed`, counting only analysed songs on this card. An album with no analysed song never matches.
+
+### 4.2 The Albums list
+
+| State | Trigger | Drawn | A tap |
+|---|---|---|---|
+| No data | `hasMoods()` false, or synthetic browse | Today's list, no row. A filter still held is dropped at `enter()` | As today |
+| At rest | Moods, no active filter | First row: funnel DIM, "Filters", "1,741 albums", chevron | Row opens the editor |
+| Filter on, at top | Active filter, offset under 42 | Funnel in the accent on a 40x40 plate, summary in the accent, "312 of 1,741 albums", cross on a disc | Cross clears, list reloads. The rest opens the editor |
+| Scrolled past | Active, offset >= 42 | Dot on the Albums segment | Segment goes to the top (`src/ui/LibraryPage.cpp:351`) |
+| Widths | Filtered rows | 284 over 30 rows with a rail (`src/ui/ListView.h:91`), 312 with a scrollbar, 320 with neither | Cross x follows |
+| Nothing fits | Active, 0 albums | First row and "No albums match these filters", Body DIM centred, y 150 | Row as above |
+| Updating | `index()` null, behind the fence | "Updating the library…", no row. Filter kept, array dropped | None |
+| Update ends | `libraryChanged()` | Array recomputed in `enter()`. No moods now: the filter goes | |
+| Status band | The card worker speaks | Band 148 px. The row is a list item, nothing else changes | |
+| No memory | Array can't be carved | Filter reverts, `toast.no_memory` | |
+| Hidden album | Go to album, a playing album filtered out | Opens it; no tint on the list. Back returns to the filtered list | |
+| Other segments | Artists, Folders | Unfiltered, no dot. The filter stays for Albums | |
+
+### 4.3 The editor
+
+| State | Trigger | Drawn | A tap |
+|---|---|---|---|
+| Nothing set | Open, no filter | Count "1,741 albums" SOFT, Clear FAINT, level cell dim | |
+| Set | A value picked | Accent fill, DARK text, same font. Count "312 of 1,741 albums". Clear TXT, level cell live | Second tap on a picked tray segment lets it go. A chip toggles |
+| Press | Finger down | That tray or chip alone: BTN_HI, or SOFT if picked | Acts on Tap |
+| Level alone | Level moved, nothing set | Level cell dim, label kept. Clear TXT. Count as nothing set | Cycles. Filters nothing |
+| Zero | Count 0 | Count amber. Stays open | Everything still works |
+| From Auto DJ | `OutputPage` owner | Blue accent, "1,204 of 19,412 tracks" | Applied and saved at each tap |
+| Wide language | pl, ru | Small for the whole grid. One ru tag on two Small lines | |
+| A toast at opening | A toast is up as it opens | It goes, its Undo with it | |
+| A toast while up | A toast arrives while it is up | Toast over y 36-71, as over any sheet | A Down above y 72 goes nowhere, so an unseen Clear can't be hit. The sleep timer's buttons stay first (`src/ui/Ui.cpp:1654`) |
+| Closed from outside | Tab tap, language, fence, a dialog or a sheet opening | Closes through `closeModal(true)`, owner told (`src/ui/Ui.cpp:535, 589, 981, 1020, 1089`) | |
+| Suspended | `suspend()`: `closeModal(false)` (`src/ui/Ui.cpp:1886`) | Closes, owner not told, no reload under `suspended_`. The word is already applied. `enter()` at resume reads it | |
+| Cross | Tap at x >= 250 in the title row | Closes. There is no Cancel | List reloads once if the filter changed |
+
+`closeModal(false)` has five other callers (`src/ui/Ui.cpp:1106, 1332, 1341, 1766, 1775`). Each runs only with a dialog, the volume sheet or the jump grid up, and each of those opens through `closeModal(true)`, so the editor is gone by then.
+
+### 4.4 The Auto DJ page
+
+Rows: On, Anchor, Strictness, **Smart filters**, BPM, Key, Status.
+
+| State | Trigger | Drawn | A tap |
+|---|---|---|---|
+| No filter | Moods, `q` inactive | "Smart filters", value "Any", hint "keeps every pick inside these moods" | Opens the editor |
+| Filter on | Active | Value is the summary, beside the title if it fits, else on line 2, cut at 288 | Opens the editor |
+| No mood data | No block | Dim, value "No mood data". Saved filter kept, picks unfiltered | Amber note, `toast.autodj_no_mood`. This branch comes before the `toast_autodj_needs_index` check at `src/ui/OutputPage.cpp:1136-1139` |
+| Moods, no index | Word block, no usable MPDJ | This row live, the others dim. Picks random inside the filter | Opens the editor |
+| Behind the fence | `index()` null | Last value, last status | `library.updating_wait` |
+| Status: filter off, no data | | As today, byte for byte | |
+| Status: filter off, data | | Line 2 adds mood: "BPM 95% · key 97% · mood 92%" | |
+| Status: fit > 50 | Index Ready | "1,204 of 19,412 tracks fit" / coverage | |
+| Status: 1-50 | `kTrackCooldown` (`lib/core/AutoDjEngine.h:142`), index Ready | Amber "Only 37 tracks fit" / "They will repeat · BPM 95% · key 97%" | |
+| Status: 0 | `Hold::NoFit`, index Ready | Amber "Waiting: no track fits the filters" / coverage. Root "Waiting · Follow the vibe" | |
+| Status: filter on, no usable index | Index None, Bad, Unreadable, TooBig or NoMemory | The fit, few or waiting line over the index's first line, the held form of `lib/core/AutoDjView.cpp:129-135`. No coverage: `Maps::withBpm`, `withKey` exist only after a join (`lib/core/AutoDjJoin.h:150-151`). No new string. No frame on the canvas | |
+| Status: Found, Reading | Index on the card, not joined | As today | |
+| Other holds | Repeat One, sleep timer, failures | Why over the index's first line, as today | |
+| "..." sheet | Filter on | Detail "On · Relaxed · Instrumental" in the accent. Amber "Waiting" on NoFit. DIM otherwise | As today |
+| Empty states | `moodOn && fit == 0` | "No track on this card fits these filters", [Open Library], no second button | |
+
+A filtered repeat is not a neighbour repeat. Today, with every neighbour cooled, the draw repeats a neighbour (`lib/core/AutoDjEngine.cpp:497, 620-626`). Under a filter the pick jumps first, then repeats the oldest track in the mood, listed or not (6.2).
+
+### 4.5 Toasts
+
+| Toast | Kind | Fires | De-duplication |
+|---|---|---|---|
+| Only {n} tracks fit: they will repeat | warn | While on and 1 <= fit <= 50: the editor closing or `Dq` with a changed filter; `setOn(true)`; the first appended pick after a boot or a `playFrom` switch-on | `fewSaid_`, set only when raised. A changed filter clears it first. Also cleared when few goes false and at switch off, never at `sessionBegan` |
+| No close match: any track that fits | toast | An appended pick with `jump != None`, in `NewsWatch::pass`'s first branch, which since S4's review says none of the old news for a jump, a repeat or a re-pin (9.8) | `jumpSaid_`, set only when raised, reset at `sessionBegan` and at a settled change |
+| Plays once, then the filters apply | toast | A settled change where `pendingTrack()` fails the new filter | Once a settle |
+| No mood data: sync this card from mStream | warn | A tap on the dim row | None |
+| Not enough memory for that | toast | The Albums array can't be carved | None |
+
+- News bits: `kNewsFew=32`, `kNewsJump=64`, `kNewsOnce=128` (`lib/core/AutoDjView.h:132`). The byte is then full.
+- Priority: Paused, Cued, SeedMoved, NoNeighbours, Random, Few, Once, Jump. The old five keep their order, so with no filter `newsToast` answers as today.
+- `newsToast` returns one toast a pass and drops the other bits (`lib/core/AutoDjView.cpp:162-178`). So Few, Once and Jump are raised only in a pass with no bit above them. An unraised Few or Jump stays unsaid and tries again at the next appended pick. An unraised Once goes: its moment has passed.
+- So a card with no index and 37 tracks that fit says Random first, because `NewsWatch` marks it said at once (`:151-153`), and Few at the next append.
+- `Toast` gains a count, because `src/ui/Ui.cpp:429-431` passes a bare id.
+- While the editor is up, `Ui::autoDjNews` holds all news, Paused included. That is a change from `src/ui/Ui.cpp:420`. `src/ui/Ui.cpp:1398` gains the same condition.
+- The Ui's holds (an Undo toast, the editor) merge takes into one toast. A Few or Jump that this toast outranks was raised in its own take, so `NewsWatch` won't try it again: it waits for that toast to go, then shows, Few first (`autodjview::NewsWait`, S5's review, 9.9). The old bits and Once outranked there go, as before. An Undo tapped drops what waited, but Few.
+- A settle at the fence says nothing, because its fit count is old.
+- Two-line behaviour follows the code (3.2).
+
+### 4.6 Persistence
+
+| What | Where | Life |
+|---|---|---|
+| Albums filter | `LibraryPage::filter_`, RAM | Survives `leave()`, `enter()`, `resetLibraryTab()`. Not a boot (D6) |
+| Filtered ids | One block of u32s, RAM | Only while a filter is on. Dropped at `libraryUpdating()` and `libraryChanged()`. `buildStamp` can't guard it: it holds no moods (`lib/core/LibraryIndex.h:451-453`) |
+| Auto DJ filter | NVS `autodj/moods`, u16, via `nvslater::putU16` | Saved. Absent or invalid reads as no filter |
+| Word | `library.idx` v7 | Rebuilt from T |
+| Scores | T's tail on the card | Until a writer changes them |
+
+## 5. The data
+
+### 5.1 The route
+
+`POST /api/v1/db/mood-scores`, behind the wall, read-only.
+
+Request: `{ "filepaths": [string, 1..2000] }`, Joi strict. A bare array, unknown key, empty list, 2001 paths or a non-string gives 400. A body over `maxRequestSize` (1 MB, mStream `src/state/config.js:898`; parser at `src/server.js:425`, mapped at `src/util/web-error.js:76, 106`) gives 413 before the route runs. The writer halves on that.
+
+```json
+{ "model": {"id":"effnet-discogs","version":"1"}, "moodVersion":"1",
+  "heads":["danceable","happy","sad","relaxed","aggressive","party","acoustic","instrumental"],
+  "tracks":{
+    "music/Artist A/scored.flac":[0.81,0.29,0,0.7,0.1234,1,0.57,0.58],
+    "music/Artist A/null-head.flac":[0.81,0.29,null,0.7,0.1234,1,0.57,0.58],
+    "music/Artist A/all-null.flac":[null,null,null,null,null,null,null,null],
+    "music/Artist A/no-row.flac":null,
+    "hidden/Artist B/x.flac":null }}
+```
+
+| Case | `tracks[path]` | Rule |
+|---|---|---|
+| Visible, scores | Array in `heads` order | The stored double, unrounded. 0 and 1 print as integers |
+| Visible, NULL head | `null` at that index | Never 0. Fails only its own scale, stays in an album's denominator |
+| Visible, all NULL | Array of nulls | Must differ from no row, for the same denominator reason |
+| Visible, no row | `null` | |
+| Not visible, unknown library, `..`, deleted, never existed | `null` | Must be identical to no row. Status stays 200: `getVPathInfo` throws 404s (mStream `src/util/vpath.js:31, 36`), and the batch catches them per path (`src/api/db.js:522`). The route keeps that catch |
+| `analyzeMoods` off, or empty table | Every path `null` | Follows `moodFiltersReady()` (mStream `src/api/mood-filter.js:117-120`). `moodVersion` null when off |
+
+- Every path asked for gets a key, spelled as sent. Build with `Object.fromEntries`, so a path named `__proto__` still gets one.
+- Clients index by name in `heads`. `MOOD_COLUMNS` is mStream `src/db/mood-sync.js:29`. A reply lacking any of the eight names reads as an error.
+- `moodVersion` is the active pin, not the row's: `activeMoodVersion(scanOptions)` (mStream `src/db/discovery-features-lib.js:331-334`).
+- `model` is `{id, version}`, from `EMBEDDING_MODELS[scanOptions.discoveryModel]` (mStream `src/db/discovery-features-lib.js:91`), `id` being the table's key. Not `modelBlock` (`src/api/discovery.js:183`), which reads the loaded discovery index. `moodFiltersReady()` can be true with none loaded.
+- The route adds no rounding and no `|| null`. A `||` would turn a 0 score into NULL. The server writes `Math.round(mean*1e4)/1e4` (mStream `src/db/discovery-features-lib.js:472`).
+- Flag: `features.moodScores: 1` on `/api/` and ping, a version fact present whether or not scores exist.
+- Allowlist: one line in `ALLOWED_EXACT` (mStream `src/api/federation-auth.js:57`). The same table is the proxy's outbound screen (mStream `src/api/federation-browse.js:287`).
+- Size: 101-171 B a track for paths of 40-110 characters. That is 2.0-3.4 MB at 20k, 202-342 KB a 2000-path call (MODELLED).
+
+### 5.2 Who asks, and when
+
+**The gate is a flag, never a version or a probe.** The writer asks its own server when `features.moodScores` is present. A 403 or 404 still reads as no moods and never fails a sync.
+
+The writer does not read `moodFilters`. The field is not on the stack's `LayeredFeatures` (terminal `src/api/types.rs:166-190`), and terminal main already has one at `:180`. Adding it would make a duplicate. The route already follows `moodFiltersReady()`. The cost: a server with the flag and no rows is asked at each sync, about 1.0-2.4 MB at 20k (MODELLED).
+
+**The fetch rule**, at the final commit, in `impl Hooks for SyncHooks`:
+
+1. Card for someone else: `Moods::Clear`. No fetch, kept bytes go. Not gated on `settings.auto_dj`.
+2. `no_moods` or stop set: `Keep`.
+3. Some record scored, `same_files`, not `refresh`: `Keep`. `refresh` is terminal `src/device/card/sync.rs:1001`. With no record scored it asks, so the first sync after an upgrade needs no whole read.
+4. Otherwise fetch from the own server, origin 0: records with `l.server == server` and a non-empty `server_path`, no hash filter. No flag: `Keep`.
+
+| Reply | Result |
+|---|---|
+| `Ok(None)` or `Err` | Rows keep their bytes, plus a note |
+| A row | `encode`, by head name |
+| `null` | `[0;8]`: clears |
+| Key missing, or a row whose length differs from `heads` | Keep |
+| `model`, `moodVersion` or `heads` moving between chunks | `ApiError::Decode`, all rows kept |
+
+The overlay runs inside `if last`, before `unchanged()` (terminal `src/device/card/engine/run.rs:1281`). So equal scores make no commit.
+
+### 5.3 MPTG minor 1 and the tail
+
+With a RECS stride of 80 or more, bytes 72-79 of a record hold the mood scores. A stride under 80 means no record has one. **72 stays the smallest stride a reader accepts.** Raising `kRecsStride` (`lib/core/CardTags.h:43`) would make every existing card fail `lib/core/CardContainer.cpp:157`. The terminal has the same check at `src/device/card/contract/container.rs:184`. Only sources 2 and 3 write a tail. D stays at 72. The reader does not consult the minor.
+
+| Off | Field | Meaning |
+|---|---|---|
+| 72 | moodFlags | bit 0 PRESENT; bit 1 sad beat happy; bit 2 aggressive beat relaxed; bits 3-7 are 0 |
+| 73 | valence | the larger of happy and sad, 0-100; 255 if either is NULL |
+| 74 | energy | the larger of relaxed and aggressive, the same |
+| 75 | instrumental | 0-100; 255 NULL |
+| 76 | acoustic | 0-100; 255 NULL |
+| 77 | party | 0-100; 255 NULL |
+| 78 | danceable | 0-100; 255 NULL |
+| 79 | reserved | 0 |
+
+- **A value** is `min(100, max(0, floor(score*100 + 1e-9)))` in f64. Plain floor is wrong at 0.29, 0.57, 0.58. The slack form had 0 wrong of 10,001 scores, 0 within ±4 ULP, 0 of 100,001 on a 5-decimal grid (MEASURED-HOST, CPython f64, SQLite 3.37.2). So serde_json's default parse (terminal `Cargo.toml:68`) cannot move a byte.
+- **Order bits** come from the raw doubles: bit 1 when sad > happy, bit 2 when aggressive > relaxed. A tie is happy, relaxed. A writer writes 0 when either head is NULL. A reader ignores an order bit whose value byte is 255.
+- **No server row:** 8 zero bytes.
+- **Validity.** A reader takes a tail only if bit 0 is set, bits 3-7 are 0, byte 79 is 0, and each of bytes 73-78 is 0-100 or 255. Otherwise that record has no scores, and the record and the file are fine. So `mptg-minor-1`'s 0xAB tail (`tools/card_fixtures.py:490`, flag bits 0xA8) reads as its base (MEASURED-HOST).
+- **Reserved:** bits 3-7 and byte 79 never get a meaning in major 1. A later field goes from byte 80.
+- **Writing:** stride 80 and minor 1 when a record has a tail, else stride 72 and minor 0. A card with no moods stays byte for byte.
+
+METADATA needs three amendments: `docs/METADATA.md:752` (the missing tail, and the 72 minimum), `:766` (the reserved bits are an exception to "new flag bits are ignored"), `:788` (the minor follows the data).
+
+### 5.4 The word
+
+`library.idx` v7 holds a u16 per track id, built from the tail when T's record is the one chosen.
+
+| Bits | Field |
+|---|---|
+| 15 | analysed |
+| 14 | voice NULL |
+| 13-11 | valence |
+| 10-8 | energy |
+| 7-6 | instrumental |
+| 5-4 | acoustic |
+| 3-2 | party |
+| 1-0 | danceable |
+
+- Buckets: 0 under 30, 1 for 30-49, 2 for 50-69, 3 for 70 and up.
+- A scale field is `side<<2 | bucket`. 4 means NULL. Bucket 0 stores 0.
+- A NULL tag stores 0, which never holds.
+- Word 0: no row. No word on any track: no block, 0 B.
+- Reading a level, `need/under`: Strict 3/1, Standard 2/2, Loose 1/3.
+- Exact at the three bars: 677,490 checks against mood-filter.js's SQL text run by SQLite 3.37.2, 0 wrong (MEASURED-HOST).
+
+Header: `kVersion` 7, `kCountWords` 24 (`lib/core/LibraryIndex.cpp:155, 160`). `h[22]` is mood words (0 or the track count), `h[23]` tracks with a word. The words go last, before the sum. `computeStamp` is unchanged: a word doesn't change what a track id means.
+
+**The filter's 11 bits (`q`):**
+- 0-1 valence: 0 none, 1 Happy, 2 Neutral, 3 Sad
+- 2-3 energy: 0 none, 1 Relaxed, 2 Neutral, 3 Aggressive
+- 4-5 voice: 0 none, 1 Instrumental, 2 Vocals, 3 invalid
+- 6-8 tags: 1 Acoustic, 2 Party, 4 Danceable
+- 9-10 level: 0 Standard, 1 Strict, 2 Loose, 3 invalid
+
+Any bit 11-15, voice 3 or level 3 makes the whole word invalid, and it reads as 0. An absent key is 0: no filter, Standard.
+
+### 5.5 Compatibility
+
+| Combination | Result |
+|---|---|
+| Released firmware, stride 80 | Reads 72, skips the rest (`lib/core/CardTags.cpp:275, 315, 542`) |
+| New firmware, stride 72 | No moods, reads as no data |
+| Older terminal rewriting T | Drops the tails, legal (`docs/METADATA.md:755-759`). The next new run derives them |
+| Other readers, stride 80 | Accepted by prefix (terminal `src/device/card/contract/container.rs:184`) |
+| New writer, old server | No flag, no call |
+| `library.idx` v6 on new firmware | `Load::Outdated`, one rebuild (`lib/core/LibraryIndex.cpp:1682`) |
+| `library.idx` v7 on old firmware | Corrupt, rebuilds its own |
+| A unit alternating old and new firmware | A rebuild at every boot: old reads v7 as Corrupt and saves v6, new reads v6 as Outdated and saves v7. 11.3 s at 20k (MEASURED). No data risk |
+| NVS, either way | Absent key reads as no filter. Old firmware never reads it |
+| A sync that changes only scores | One commit, one device rebuild at the next boot: 11.3 s at 20k (MEASURED, `docs/METADATA.md:4531`) |
+
+### 5.6 Freshness
+
+Scores are a snapshot. `manifestRevision` ignores moods (mStream `src/api/sync.js:40`). A mood-only change is caught at the next whole read: 7 days or the 10th run (terminal `src/device/card/sync.rs:115`).
+
+On a card with a peer read, `refresh` holds every run, so the own server is asked every run. The backfill takes `discoveryPerRun`, 50 a pass (mStream `src/state/config.js:224`), so a backlog or a head bump means several commits, not one.
+
+A cut run's checkpoint carries rows as held, so two head versions can sit in one T. There is no per-row marker.
+
+### 5.7 A worked example
+
+Made-up track `music/Artist A/song.flac`. In `MOOD_COLUMNS` order: `[0.7012, 0.3104, 0.5803, 0.7, 0.2999, null, 0.4999, 0.29]`.
+
+| Step | Result |
+|---|---|
+| Flags | present 1; sad .5803 > happy .3104 sets bit 1; aggressive .2999 is not > relaxed .7. `0x03` |
+| Valence | larger of happy and sad, .5803: 58, `0x3A` |
+| Energy | larger of relaxed and aggressive, .7: 70, `0x46` |
+| Instrumental | .29: `floor(28.999999999999996 + 1e-9)` = 29, `0x1D` (plain floor gives 28) |
+| Acoustic | .4999: 49, `0x31` |
+| Party | NULL: `0xFF` |
+| Danceable | .7012: 70, `0x46` |
+| Tail 72-79 | `03 3A 46 1D 31 FF 46 00` |
+| Word | analysed 1, voice NULL 0, valence 6 (side 1, bucket 2), energy 3, instrumental 0, acoustic 1, party 0, danceable 3: `0xB313` |
+
+Filter `0x127`: Sad, Relaxed, Vocals, Danceable at Standard (need 2, under 2).
+
+| Clause | Word | SQL |
+|---|---|---|
+| Sad | bucket 2 >= 2, side 1 | `sad >= 0.5 AND sad > happy` |
+| Relaxed | bucket 3 >= 2, side 0 | `relaxed >= 0.5 AND relaxed >= aggressive` |
+| Vocals | bucket 0 < 2 | `instrumental < 0.5` |
+| Danceable | bucket 3 >= 2 | `danceable >= 0.5` |
+
+Word true, SQL 1. Seven such rows times 33 checks: 231, 0 wrong (MEASURED-HOST).
+
+An album with 5 passing of 9 analysed matches, since 10 > 9. 2 of 4 does not. 0 of 0 does not.
+
+## 6. The engine
+
+### 6.1 Predicate placement
+
+`buildRun` (`lib/core/AutoDjEngine.cpp:379`) skips a row whose first track fails. A run then holds only in-mood rows, so `merge`, census, gate, `closest` and `choose` need no change.
+
+```cpp
+struct MoodView { const uint16_t* words; uint32_t tracks; uint16_t q; moodfilter::Filter f;
+                  bool on() const; bool passes(uint32_t track) const; };
+```
+
+- `Maps::mood` goes after `lib/core/AutoDjJoin.h:154`.
+- `PickIn::mood` too (`lib/core/AutoDjEngine.h:179`), because `byId` runs with `maps` null (`lib/core/AutoDjEngine.cpp:525`).
+- `Join` is untouched. `AutoDj::index()` (`src/app/AutoDj.cpp:292`) copies its maps into a member and sets `.mood`.
+- `MapsPrint` (`lib/core/AutoDjEngine.h:410`) gains `moods` and `q`, set only when `on()`, else null/0. So with no filter the print is today's.
+- A changed `q` makes runs stale through `runFresh` (`lib/core/AutoDjEngine.cpp:361`).
+- `mapsChanged()` covers an index refilled at the same address.
+
+### 6.2 Fallback order, filter on
+
+Sites are in `lib/core/AutoDjEngine.cpp`.
+
+| Order | What | Site |
+|---|---|---|
+| 1 | Gate | `:594`, unchanged |
+| 2 | Dry 50 | `:616-619`, unchanged |
+| 3 | Loosen 50 | `:620-626`, unchanged |
+| 4a | No in-mood candidate: re-pin, else `jump = NoCandidate`, `randomPick` | `:613` |
+| 4b | All cooled, `closest(true)` found 0: as 4a with `AllCooled` | `:621-625` |
+| 5 | `randomPick`'s first line diverts to `moodPick`. Also reached at `:574` | `:644` |
+| 6 | The scan. A fresh row in the sample: `choose()`, `finish()` | new |
+| 7 | No fresh row: a fresh track with no row, by id, `jump = NoRow` | new |
+| 8 | Repeats, oldest first in `ses_.cool`: first row not playing, with a track, passing. `repeated = true`, level 2 | new |
+| 9 | `byId`'s first line diverts to `moodById`: fresh, else oldest in `ses_.ids`, else the playing track, else `ok=false, noFit=true` | `:741` |
+| 10 | The Waiting hold, before any pick | 6.5 |
+
+`:663`'s fall-through to `byId` cannot be reached with a filter on, since `:644` diverts first. `Pick` gains `jump`, `repinned`, `repeated`, `noFit`. `Stats` gains `jumps`, `repins`, `moodRepeats`, `noFit`.
+
+Step 4b changes the repeat rule under a filter. With no filter, `closest(true)` finding nothing leaves `cand_` and the counts as the cooled pool, and `choose()` repeats a neighbour (`:497`, `:620-626`). `docs/AUTODJ.md` 3.8 says so once this is built.
+
+### 6.3 The scan
+
+One pass in track order over `words` and `trackToRow`, skipping the playing row and the anchors.
+
+- The first 64 hits go into `keys_`. After that, `j = rng.below(seen)` replaces one if `j < 64`.
+- No count pass and no cached state.
+- For each kept track: `r = trackToRow[t]`, kept only if `rowToTrack[r]` passes and `r` is not already kept. `trackToRow` is many-to-one, and `finish` plays `rowToTrack[row]` (`lib/core/AutoDjEngine.cpp:727`), so testing the track alone could leak.
+- Then `sc.bits()` and `choose()`, so a jump keeps the artist cooldown and the BPM and key tiers.
+
+Cost: about 2,434 sequential lines plus at most about 192 random reads, 2.4-8.5 ms (MODELLED). No allocation. MEASURED on the Core2 (9.8's Device part): a jump's whole pick 11.7 ms idle and about 22 ms with an MP3 playing, once the view keeps its filter made ready (29.5 ms idle before, af248a0).
+
+**The Auto DJ button.** Both paths branch on `mood.on()`. With no filter they are today's code, untouched: `Engine::surprise`'s 64 draws (`lib/core/AutoDjEngine.cpp:785-792`) and `Driver::surpriseTrack`'s 8 tries, each a path hash and a DJPH lookup (`lib/core/AutoDjDriver.cpp:419`, `src/app/AutoDj.cpp:285-286`). `test/test_autodj_driver/test_autodj_driver.cpp:1543-1550` keeps pinning those.
+
+With a filter on:
+- `Engine::surprise` uses the scan with no exclusions, then `cand_[below(n)]`.
+- `surpriseTrack` does one pass over the words, 2-5 ms (MODELLED), with a reservoir of `kSurpriseTries` passing tracks, then `hasRow` on each: at most 8 lookups, so playback still never waits for a join.
+
+### 6.4 The re-pin rule
+
+At 4a or 4b, in `Mode::Locked`, once a pick, if `playingRow` exists, is not the pin, is not damaged and passes: `ses_.pin = playingRow`, `ses_.pinMoved = true`, `out.repinned = true`, and the anchors run again.
+
+- **No re-indent:** the body of `Engine::pick` (`:523-642`) becomes `pickOnce(s, in, out, &again)`, and a small `pick()` calls it at most twice. No recursion. Round 1 draws no random number before re-pinning.
+- **Budget:** round 2 shares `out.reads`. If the budget is spent or the read fails, `nu == 0` at `:569`, then the scan. The moved pin stays for the next read ahead.
+- **Round 2 finds nothing:** a jump, with both `repinned` and `jump` set.
+- **Quick skip:** in `rowLeft` (`:239`), after the counter, `if (ses_.pinMoved && row != kNoRow && row == ses_.pin) { ses_.pin = kNoRow; ses_.pinMoved = false; }`. A seed's pin stays, as today. `modeChanged` clears `pinMoved`.
+
+Numbers (SYNTHETIC, 19,410 rows). Jump % at f = 5 %, ρ .7, in-mood seed:
+
+| Strategy | Jump % |
+|---|---|
+| Plain ladder | 70 |
+| Re-pin | 0 |
+| Seed hop | 7 |
+
+Re-pin's honest cost: cosine to the seed falls from .69 to .47 at f = 5 %. Stay on seed drifts toward Follow the vibe.
+
+### 6.5 The hold and the fit count
+
+- `Wait::NoFit` goes last in `lib/core/AutoDjTrigger.h:46-58`, `Hold::NoFit` in `:62-67`, `TriggerIn::noFit`.
+- `lib/core/AutoDjTrigger.cpp` gets the name "no track fits the filters", last in the hold chain, the wait after Failures.
+- `owed` needs nothing.
+- `rowState` returns Waiting (`lib/core/AutoDjView.cpp:26`).
+- `noFit` is `mood.on() && fit == 0`, so a hold comes only from real data.
+
+`AutoDj::stepMood()` runs first in `step()` (`src/app/AutoDj.cpp:322`) and synchronously in `setMoods`. It recounts, 1,217 lines, 2-5 ms (MODELLED), then calls `mapsChanged()`, in two cases:
+- `q` changed;
+- `lib_.index()` went from null to non-null: the first pass, and the end of each fence.
+
+`buildStamp()`, `trackCount()` and the pointer's value cannot be the key. `Library::index()` returns the same object before and after a fence (`src/app/Library.h:61`, `lib/core/LibraryUpdate.h:361`), the stamp hashes names and folders only (`lib/core/LibraryIndex.cpp:1423-1438`), and a score-only commit leaves the count alone. Those keys would keep the old card's `fit_` and `Hold::NoFit`.
+
+Behind the fence the view goes off but `moodData_`, `fit_` and `moodPct_` keep their values. Otherwise the row would read "No mood data" for 15-18 s.
+
+### 6.6 No-filter parity
+
+Three layers:
+
+1. Every new branch is guarded by `mood.on()`, `pinMoved` or a default-false field, the Auto DJ button's two paths included (6.3). No `below()` is added off those paths. The print normalises to today's.
+2. The 26 sessions replay, plus a hash lock (S4).
+3. MEASURED-HOST: a prototype over `tools/autodj_ref.py` with the filter off gave 26 of 26 sessions identical, new counters zero, no-data equal to control over 30 picks. Its predicate was a toy, so re-check with real words.
+
+## 7. The UI
+
+### 7.1 The editor's geometry
+
+Opaque panel, y 36-239, card CARD with top r 12, tab bar stays. It paints its own card, since `sheetCard`'s handle (`src/ui/Overlays.cpp:37-41`) would hit the title row.
+
+| Element | Geometry |
+|---|---|
+| Clear pill | x 12, y 40, w word+24, h 24, r 12, BTN. Small. TXT if anything is set or the level isn't Standard, else FAINT |
+| Cross pill | x 262, y 40, 50x24, r 12, BTN; icon at 287, 52 |
+| Count | Small, centred between Clear and x 256, y 52, room `256 - (12+pw) - 8`. SOFT, amber at 0 |
+| Rows | 36 tall, pitch 44, y 68, 112, 156, 200, x 8-311 |
+| Row 1, 2 tray | w 304, r 10, BTN. Inner width 300 from x 10 |
+| Row 3 tray | Voice, w `304 - 6 - lw`. Inner width w-4 from x 10 |
+| Level cell | w `lw = max(widest Small level word + 14, 70)`, x `8 + trayW + 6`, r 10, FAINT outline. Label Small y+12. Three 5 px dots at y+27, dx -10, 0, 10. Accent when live, DIM when dim, FAINT for the others |
+| Row 4 chips | Total 304 from x 8, gap 6, r 18, BTN |
+| Picked segment | `(ix, y+2, iw, 32)`, r 8, accent, DARK text. Pressed SOFT. Unpicked pressed BTN_HI |
+| Separators | 1 px DIV, y+10 to y+25, only between two unpicked neighbours |
+| Picked chip | Accent, DARK. Pressed SOFT. Unpicked pressed BTN_HI |
+
+### 7.2 The first row's geometry
+
+An album row's metrics: 42 tall, scrolls with the list, divider ROW_DIV at y+41. `right` is 284, 312 or 320.
+
+| State | Geometry |
+|---|---|
+| At rest | Funnel at 26, y+21, DIM. "Filters" Body x 54, y+13, room `right-80`. Count Small x 54, y+31, DIM. Chevron FAINT at `right-14` |
+| On | Plate x 6, y+1, 40x40, r 4, BTN_HI; funnel in the accent. Disc r 14, BTN, at `cx` = 232, 284, 292; cross TXT. Summary x 54, y+13, in the accent: Body, else Small, then cut, room `cx - 72` = 160, 212, 220. Count Small DIM, same room |
+| Pressed | ROW_SEL |
+| Dot | `fillRoundRect(203, 15, 6, 6, 3, accent::Library)` in strip coordinates, so y 54 on screen. `fillCircle` draws 7 px wide, the frame's r 3 at x 205.5 is 6. Gap to the label: ru 1.5 px, es 4.5, others 9 and up (MEASURED-HOST) |
+
+Summary order: valence, energy, voice, tags, then the level if not Standard, joined by " · ". Worst case ru 186 B, so the buffer is 200 B.
+
+The row's long count falls back to the short form when over its room: ru albums at 9,999 of 9,999 is 165 in 160. Counts use `uistr::grouped`.
+
+### 7.3 Layout rules
+
+The canvas's rules, in integer arithmetic, in `lib/core/FilterGrid`.
+
+- **Grid font:** Body when every row fits (`sum(word + 12) + gaps <= total`), else Small for the whole grid. Only pl and ru take Small (MEASURED-HOST).
+- **Widths per row:** equal while each word + 12 fits. Otherwise proportional: `need = word + 12`, each cell `need + spare/n`. If Small still overflows, cells scale to the row (`voice` in pl, ru).
+- **The ru tag:** a tag over 80 px Small with a space wraps at the space. Its need is its wider line + 12. Glyphs only (fg == bg, as `src/ui/Overlays.cpp:220-223`), at y+10 and y+26.
+- **Goldens to pin:**
+
+| Language | Row | Cells (x, w) |
+|---|---|---|
+| en | valence | (10,100)(110,100)(210,100) |
+| en | voice + level | (10,136)(146,86), level 240/72 |
+| en | tags | (8,97)(111,98)(215,97) |
+| ru | valence | (10,86)(96,120)(216,94) |
+| ru | energy | (10,91)(101,106)(207,103) |
+| ru | voice + level | (10,144)(154,80), level 242/70 |
+| ru | tags | (8,103)(117,80)(203,109), wrap Для / вечеринки |
+| pl | voice + level | (10,110)(120,85), level 213/99 |
+| ja | tags | (8,140)(154,92)(252,60) |
+
+### 7.4 Hit tests
+
+y reads true (`lib/core/TouchCalibration.h:30`). x reads right.
+
+- **Bands:** title under y 66; rows at 66, 110, 154, 198 to the edge.
+- **x splits:** cell boundary + `skew(x)`, where skew is 0 under x 150, 6 under x 190, else 13. A gap between chips splits at its middle. The last cell takes clamped readings (`lib/core/InputEvent.h:56`).
+- **Audit:** every cell centre in every language hits its own cell on the lab panel and on a true panel, smallest margin 20 px (MEASURED-HOST). Plain boundaries also pass, but on the lab panel 26 px of a middle cell hits the third. The host test requires at least 16.
+- **Title row:** Clear up to its pill's right edge + skew. Cross from x 250, as `kSheetCrossHitX` (`src/ui/Overlays.cpp:370`). The count is dead.
+- **First row:** cross zone raw 224, 276, 284 to the edge, stopping at the rail's 280 (`src/ui/ListView.cpp:710`). On the lab panel the last 14-18 px of summary text hits the cross. That is accepted: the hit is on the row's own text, not on an album. The rest opens the editor.
+- **Settle:** a Down within `Sheet::kSettleMs` of opening goes nowhere. Today that test names two sheets only (`src/ui/Ui.cpp:1660-1661`). `openFilters()` sets `sheetOpenedMs_`, and the test gains `filters_.up()`.
+
+### 7.5 Redraw rules
+
+- Down: the tray or chip alone.
+- Tap, in order: new state, push the tray or chip, run the pass, push the count. The finger's answer never waits on the pass.
+- Level cell and Clear pill are pushed only when "something set" flips. Clear redraws the whole grid (about 55 ms, by the sleep sheet's figure, MEASURED).
+- Close with no change: the band pushed, no re-render. Under a modal the list draws no frames (`src/ui/Ui.cpp:1430-1432`).
+- Close with a change: `reload(); scrollTo(0)`, `ref_->scrollPx = 0`, once. `setEdge()` then re-derives the width (`src/ui/ListView.cpp:85-94, 167-176`). `reload()` only marks the list, so a close through a tab tap wastes no draw.
+- Dot: redrawn only when `!list.animating()`.
+- `Ui::updateStatus` must not touch the band under a modal (S0).
+
+### 7.6 Where the code goes
+
+- **The editor is an Overlay,** not a pushed page. The panel sprite is exactly its size (`lib/core/SheetLayout.h:31`). `closeModal(true)` already fires from tab taps, language and the fence (`src/ui/Ui.cpp:535, 589`). `listMoving()` stays false under a modal (`src/ui/Ui.h:158`). A pushed page would need a new `PageKind`, two tab stacks and a whole re-attach on each close.
+- **`lib/core/FilterGrid.{h,cpp}`:** pure and host-tested. Cell rects, font choice, wrap, hit test, tap semantics, summary, count text, first-row and dot rules. Takes `textfit::Font` views as `src/ui/LibraryPage.cpp:400` does.
+- **`src/ui/FilterSheet.{h,cpp}`:** the drawing. A separate file stays out of #27's way in `src/ui/Overlays.cpp`. `panel_` (`:26-29`) gets a small accessor. `FilterOwner`: `filterWord()`, `setFilterWord()` returning bool, `filterFits()`, `filterTotal()`, `filterScope()`, `onFiltersClosed(changed)`, told only when `notify` (4.3).
+- **The first row** reuses the `ListLayout` top-bar item with a new `Source` hook: `topBarIsRow()`, `drawTopRow(Row&)`, `onTopRowTap(x, rightEdge)`. A data row would break "the first `railRows()` rows are sorted" (`src/ui/ListView.h:178`). `renderBar` always paints the first button primary (`src/ui/ListView.cpp:288`), and `actions(-1)` answers Folders' Play all (`src/ui/LibraryPage.cpp:736`), so neither is called for it.
+- **The empty line needs `ListView`.** `render` calls `drawEmpty` only at 0 items (`src/ui/ListView.cpp:348`), and the row is an item. With rows 0 under a top row, draw the line: strip at y 114, text at y 150.
+- **`lib/core/FilteredAlbums.{h,cpp}`:** a subsequence of `albumsAZ()`, `albumCount` u32s, allocator hooks as `lib/core/BitSet.h:12-17`. `LibraryPage` owns it, and `rowAt`, `rows`, `railRows` read it (`src/ui/LibraryPage.cpp:96-98, 533, 560`). The rail, jump grid, covers and `playingRow` follow from `rowAt` (`:584-593`).
+
+## 8. Strings
+
+Rule: words from the phone app's ARB where it has them (`i18n/README.md:160-163`). A text a translation leaves out is English on the device, so a commit with English alone stays green (`i18n/README.md:43-44`). Each stage adds its own ids. Room is the font and px; for a word in a real cell, `test_ui_library` checks each language's real room.
+
+### 8.1 From the ARB: no new translation owed
+
+Source: phone app `lib/l10n/app_en.arb`.
+
+| Id | English | Room | ARB key:line | Stage |
+|---|---|---|---|---|
+| mood.filters | Filters | Body 204 | moodFilters:887 | S3 |
+| mood.happy / neutral / sad | Happy / Neutral / Sad | Body else Small 116 | :907, :911, :915 | S3 |
+| mood.relaxed / aggressive | Relaxed / Aggressive | Body else Small 116 | :919, :923 | S3 |
+| mood.instrumental / vocals | Instrumental / Vocals | Body else Small 140 | :927, :931 | S3 |
+| mood.acoustic / party / danceable | Acoustic / Party / Danceable | Body else Small 136 | :935, :939, :943 | S3 |
+| mood.strict / standard / loose | Strict / Standard / Loose | Small 93 | :947, :951, :955 | S3 |
+| mood.clear | Clear | Small 84 | clear:1090, not `queue.clear_confirm_button` | S3 |
+| mood.smart_filters | Smart filters | Body 288 | autoDjMoodTitle:728 | S5 |
+| mood.any | Any | Small 288 | autoDjAny:5864 | S5 |
+| mood.no_data | No mood data | Small 288 | autoDjNoMoodData:5906 | S5 |
+
+No missing glyphs and no fullwidth forms in these words (MEASURED-HOST).
+
+`THIRD-PARTY-NOTICES.md:461-463` names ARB commit bdb174e, which holds none of the keys sampled from this table (READ, `git show`). These were read at d17c3fa5, so S3's commit 2 changes that commit in the notice.
+
+### 8.2 New: translation owed
+
+Nine languages each, 126 texts, machine-translated, native review owed.
+
+| Id | English | Room, buffer | Stage |
+|---|---|---|---|
+| mood.albums_of (plural) | {0} of {1} album(s) | Small 160 and 178, optional, 64 B | S3 |
+| mood.tracks_of (plural) | {0} of {1} track(s) | Small 178, optional, 64 B | S3 |
+| mood.no_albums | No albums match these filters | Body 300 (`kListLineW`), en 240 | S3 |
+| autodj.status_waits_fit | Waiting: no track fits the filters | Small 288, 96 B | S4 |
+| autodj.smart_sub | keeps every pick inside these moods | Small 288, en 242 | S5 |
+| autodj.status_fits (plural) | {0} of {1} tracks fit | Small 288, 96 B | S5 |
+| autodj.status_coverage_mood | BPM {0}% · key {1}% · mood {2}% | Small 288, en 233, 96 B | S5 |
+| autodj.status_few (plural) | Only {0} tracks fit | Small 288, 96 B | S5 |
+| autodj.status_few_sub | They will repeat · BPM {0}% · key {1}% | Small 288, en 245, 96 B | S5 |
+| toast.autodj_few (plural) | Only {0} tracks fit: they will repeat | toast, en one line (269 of 284) | S5 |
+| toast.autodj_no_close | No close match: any track that fits | toast, en one line (275) | S5 |
+| toast.autodj_plays_once | Plays once, then the filters apply | toast, en one line (260) | S5 |
+| toast.autodj_no_mood | No mood data: sync this card from mStream | toast, en two lines at ": ", `two_line_px` 284, 128 B | S5 |
+| empty.no_track_fits | No track on this card fits these filters | Small 304 (`kEmptyLineW`), en 242 | S5 |
+
+`toast.autodj_plays_once` has no ": ". A language that doesn't fit one Body line needs one, or `test_ui_strings` fails it.
+
+Reused, no new text: `library.albums_n` (`i18n/en.json:2003`), `library.tracks_n` (`:1976`), `queue.summary_position` (`:2835`), `toast.no_memory` (`:274`), `library.updating_wait` (`:2530`), `output.autodj_sub_on` (`:3552`), `now_playing.autodj_waiting`.
+
+## 9. The stages
+
+### 9.1 Rules, and the dependency diagram
+
+- Host tests stay green at every commit: `pio test -e native` on the firmware, from PowerShell without MSYSTEM.
+- Build only one terminal worktree at a time, with `CARGO_INCREMENTAL=0`, and never share `CARGO_TARGET_DIR` across worktrees.
+- A stage stops only at a PR boundary.
+- Device checks run on a spare card until S8.
+
+**Fixtures flow one way.**
+- mStream's predicate text is copied, with its commit named, into `tools/test_mood_vectors.py`.
+- `tools/card_fixtures.py` on the player's repo is the only generator of card fixtures.
+- The terminal copies its output and never edits it.
+- mStream takes no file from either. Its own test ports the byte rule.
+
+```
+S0 (free-standing)
+
+S1 --> S2 --> S3 ---------+
+ |      |                 +--> S5 ---------+
+ |      +---> S4 ---------+                |
+ |                                         v
+ +--(spec, fixtures)--> S7 ------------>  S8
+S6 --(route contract)-> S7                 ^
+S6 ----------------------------------------+
+terminal #56, #68 ----> S7 (stacked)
+```
+
+### 9.2 Where it can stop
+
+| Stop after | The user sees | Useful as |
+|---|---|---|
+| S0 | A bug fix | Alone |
+| S1 | Nothing | The contract the others copy |
+| S2 | One `library.idx` rebuild at the first boot. Console only | Readers ready for scored cards |
+| S3 | The first row, only on a card with moods. No real card has them until S7 | Album filters, end to end with S6 and S7 |
+| S4 | Nothing: console `Dq` only | Engine proved on a synthetic card |
+| S5 | A dim row on every card without moods, whose note says to sync from mStream | Merge, but **hold it out of a release until a writer build carries scores** (assumed) |
+| S6 | Nothing: a route with no client | Independent |
+| S7 | Scored cards. Older firmware ignores the tail | With S3, the whole album feature |
+
+**The shortest useful path is S1, S2, S3, S6, S7, S8.** It gives album filtering without the engine, and gives the real mood shares before S4's synthetic numbers are trusted. Nothing forces S4 to wait for it.
+
+**Release.** `.github/release-notes.md` is the template `tools/package_release.py:510-514` fills, and no stage may leave it behind. S2 owes a line on the first boot's one rebuild, as 0.11.0's notes did for 0.10.0's (`.github/release-notes.md:165-173`). S3 and S5 owe their rows and strings. The release that carries any of it gets its `docs/RELEASE-<v>-CHECKS.md`.
+
+**Owed to the 0.13.0 release commit** (2026-11-06). Not written into `.github/release-notes.md`: feature branches here never edit it, only "Release x.y.z: the release notes" commits do.
+- S2: every unit rebuilds the library once at its first start on the new firmware (`library.idx` v7): about 11 s at 19,400 tracks from D, about 14-16 s from a transfer's records; the queue kept. Going back to 0.12.0 rebuilds once the other way (it reads v7 as corrupt).
+- S0: a status line (Checking the card..., Reading tags...) that ends while a sheet or dialog is up no longer wipes it.
+- S3: on a card with mood scores, the Albums list starts with a Filters row; a tap opens one screen of moods (Happy / Neutral / Sad, Relaxed / Neutral / Aggressive, Instrumental / Vocals, Acoustic, Party, Danceable, and how strict), each tap applied at once with the count of albums that fit, and the list then shows only the albums where most analysed tracks fit. The row says what is set and how many remain, its cross clears it, a dot on Albums says a filter is on once the row is scrolled away, and a restart forgets it. No card carries scores until a writer build does (S7), so the notes say what it needs, not that today's cards have it. Console `uiM`, `uiMa<hex>`, `uiMe`.
+- S3's strings: the 15 mood words are the phone app's (ARB at d17c3fa5, `THIRD-PARTY-NOTICES.md`) in all ten languages; `mood.albums_of`, `mood.tracks_of` and `mood.no_albums` are machine-translated in nine, and their native review is owed (each file's `@@note` says which).
+- S4: no line of its own for listeners. A filter can be set only from the console (`Dq`) until S5's page, and with none every pick and the Auto DJ button's draws are as before (6.6). Its NVS goes to schema 5 (`autodj`/`moods`): nothing to do on the update, and going back to 0.12.0 loses nothing (it never reads the key: its picks are unfiltered, and the filter is there again on coming back). If #27 ships in the same release, the two share schema 5 and one line (10). (It didn't: 0.13.0 has schema 5 to itself, and #27's `plays` and `clock` joined schema 6, 0.14.0's: ARCHITECTURE.md, "NVS: the rules".)
+- S4's string, `autodj.status_waits_fit`, is machine-made in nine languages and owes a native review, with S3's and S5's (8.2).
+- S5's strings: `mood.smart_filters`, `mood.any` and `mood.no_data` are the phone app's (ARB at d17c3fa5) in all ten languages; the ten of 8.2 (`autodj.smart_sub`, `autodj.status_fits`, `autodj.status_coverage_mood`, `autodj.status_few`, `autodj.status_few_sub`, `toast.autodj_few`, `toast.autodj_no_close`, `toast.autodj_plays_once`, `toast.autodj_no_mood`, `empty.no_track_fits`) are machine-made in nine and owe a native review (each file's `@@note` says which). For the room, de and fr write `autodj.status_coverage_mood` with no space before %, it with commas, ru with `тон.`; es, fr, ja, pt and ru split `toast.autodj_plays_once` at ": " (8.2's rule); ja's `empty.no_track_fits` is the app's `autoDjSeedNoMatch`, the card left out.
+- S5: Output > Auto DJ gains a fourth row, Smart filters. It opens the Albums list's one-screen editor, in blue and counting tracks ("1,204 of 19,412 tracks"), each tap applied at once, and the filter is saved. Every pick then stays inside the mood: its neighbours first, then any track that fits, then repeats, oldest first. The status row says how many tracks fit; at 50 or fewer, in amber, that they will repeat; with none, Auto DJ adds nothing and reads Waiting, and the empty Queue and Now Playing say no track on the card fits. The "..." menu's Auto DJ row says what is set. Three toasts: "Only 37 tracks fit: they will repeat", "Plays once, then the filters apply" (the track already up next), "No close match: any track that fits". On a card without mood scores (every card until a writer build carries them, S7) the row is dim, "No mood data", and a tap says to sync the card from mStream. Hence 9.2's table: merge S5, but hold it out of a release until then, and write this line only into the release that also carries S7's scores. With no filter, Auto DJ's picks, button and toasts are as before. Console `Dq` sets the same filter.
+
+### 9.3 Console, one list
+
+| Command | Stage | Does |
+|---|---|---|
+| `gm` | S2 | Block bytes, tracks with a word, coverage |
+| `gm<hex>` | S2 | Tracks and albums that fit, µs for each pass. Behind the fence: says so, does nothing |
+| `g`, `gt<path>` | S2 | `moods` figure; T's tail, valid or not, and the word |
+| `uiM` | S3 | State, last pass time, carve |
+| `uiMa<hex>`, `uiMa0` | S3 | Set or clear the Albums filter. Every pass logs its µs. Behind the fence: says so, does nothing |
+| `uiMe` | S3 | Open the editor. Taps go through the scripted finger, `uit<x>,<y>`, at the goldens' cells (7.3) |
+| `Dq<hex>`, `Dq0` | S4 | Set and save, or clear, Auto DJ's filter. Refuses `q800`, `q30`, `q600`. Behind the fence: saved, and the count waits for its end. Bare `q` stays Bad (`test/test_autodj_driver/test_autodj_driver.cpp:332`) |
+
+`uiF` is taken (`src/main.cpp:2067-2068`). Letters t, h, s, d, p after `ui` are the scripted finger's, and `uiM...` starts with M. The dancers' top-level `M` is a different letter space.
+
+### 9.4 S0: the status line under a modal
+
+- **Step:** in `Ui::updateStatus`, move the modal check above the band change (`src/ui/Ui.cpp:1553-1563`). Today `setListBand` runs first, so a status line ending under a modal wipes it. READ, not run. The editor makes it much easier to hit.
+- **Tests:** none on host (`src/ui`).
+- **Done when:** `pio run -e core2` passes.
+- **Device:** `uih` a row during `g0` as the status line ends. After the fix `statusBand_` stays true with an empty text under the modal, so `repaintUnder()` (`src/ui/Ui.h:356`) draws the page once in the short band, until the next `updateStatus` pass. Expect that one frame.
+- **PR:** its own. Can land now.
+- **Effort:** 0.1 (guess).
+
+**Result (2026-11-06).** Built as the step says: `Ui::updateStatus` checks for a modal before it changes the band (`src/ui/Ui.cpp`). Reproduced first on v0.12.0 (MEASURED): the Library's "Checking the card..." line, ending under a row's long-press sheet, wiped the sheet, leaving a blank list and a stray "Queue" fragment. After the fix the same steps leave the sheet whole. `pio run -e core2` passes (9.6). Its release line is owed (9.2).
+
+### 9.5 S1: the contract
+
+**Commits:**
+
+- **C0:** this document.
+- **C1, heap model stand-in** (test only, numbers in the body).
+  - `test_a_library_update_in_a_model_heap` builds from D alone (`test/test_autodj_join/test_autodj_join.cpp:2743-2747`), which never allocates the block. The other model-heap tests use literal heaps and need no change.
+  - `libraryUpdates()` (`:2668`) takes one `cc::Source& records` and has no T today. It gains `MoodRun{transfer, standIn}`. The T source already exists elsewhere: `synthcard::tagsFile(card, tw)` over `cc::MemSource`, with D at `fullRecords=false` and rows `SameRows(Software, false, true)`, as `test/test_library_builder/test_library_builder.cpp:640-655`.
+  - After the load (`:2699`): stand-in `g_mood = ModelHeap::alloc(trackCount*2)`. Released before `index.clear()` (`:2737`).
+  - `MoodFacts : synthcard::Facts` takes the stand-in at its first `facts()`, because `enterFolders` calls it just before the first record (`lib/core/LibraryBuilder.cpp:267`).
+  - Today's D-only run and asserts (`:2806-2821`) stay as the control.
+- **C2, spec and fixtures.**
+  - `docs/METADATA.md` text of 5.3 and 5.4, amending 2.4.5, 2.6.2, 2.6.4, 2.9, 2.17-2.19.
+  - New `tools/moodfilter.py` (stdlib): tail, word, predicate. One Python source, imported by `card_fixtures`, `autodj_ref`, `synthtransfer`, `test_mood_vectors`.
+  - `tools/card_fixtures.py`: `mptg()` takes `"scores"` per record, 8 numbers or null in `MOOD_COLUMNS` order, or null for no row.
+  - **The generator's rule:** a tail is written only for a description whose records carry a `scores` key. Its stride then defaults to 80, and a null record gets 8 zero bytes. A description with no `scores` key and an explicit `rec_stride` keeps the 0xAB fill from byte 72 (`tools/card_fixtures.py:490`), so `mptg-minor-1` (`:2802-2805`) stays byte-identical, and so does the terminal's copy of it. With both, the real tail comes first and 0xAB from byte 80.
+  - New golden `tags-moods.bin` and `libraries/tags-moods.json`: full, no row, NULL heads, all NULL, ties, float-trap values.
+  - New hardening: `mptg-moods-longer` (stride 88, real tail plus 0xAB, same as `tags-moods.bin`); `mptg-tail-invalid` (stride 80 over `tags-0000002a`, each bad kind on a row); `mptg-stride-76` (no tail).
+  - Reword `mptg-minor-1`'s `check` text only.
+  - New `test/fixtures/card/moods.json`, about 40 rows, **made by `generate()`** (`files["moods.json"]`, as `vectors.json`, built with `tools/moodfilter.py`). `--check` fails on any file in the folder it did not make (`tools/card_fixtures.py:3220-3228`), so a hand-written file breaks CI's first commit. Keys: `heads`, `values`, `levels`, `rows[{note, scores, tail, word, holds}]`, `tails`, `filters`, `albums`, `bars`. `tails` holds an order bit beside a 255. Separate from `vectors.json` to stay out of #27's way.
+  - The folder's `README.md` is the `README` string (`tools/card_fixtures.py:3077`): one bullet on the new files.
+  - New `tools/test_mood_vectors.py`: stdlib SQLite with the predicate text spliced as mStream `src/api/mood-filter.js:149-169`, asserting every `holds`. Added to `.github/workflows/firmware.yml`, "Card fixtures".
+
+**The heap model's pass rule** (with stand-in, T+D, Off / Placed / WhereThe):
+- `Status` Ready
+- `on.lowest >= kMargin`
+- `on.fence == off.fence`
+- `on.largest == off.largest`
+- `on.givenBack == off.largest`
+- `bootTopKept == 155284`
+
+**A redesign is forced when:**
+1. Ready or the margin fails, or `givenBack != off.largest`.
+2. `joined` falls by more than 122,880 B.
+3. `joined` drops below 245,764 B while the control is above it: 180,224 B (335,860 less FLAC's 155,636, `docs/AUTODJ.md:1507, 1509`) plus 65,540 B for Opus's block (`docs/OPUS.md:133`).
+
+**The ladder if so:**
+- (a) allocate at `finish()` with a build-time temp;
+- (b) D8 down to Standard, 1 B, off the maps' 38,912 class;
+- (c) read the block from `library.idx` at first use, which loses "no card read".
+
+| Placement (MODELLED, a Python port of ModelHeap and Join, 30 shapes) | `joined` against control, min / median / max | Verdict |
+|---|---|---|
+| Lazy, at the first record | -106,496 / -40,960 / +49,152 | Plan on this |
+| At `finish()`, with a temp | -114,688 / -40,960 / +49,152 | First fallback |
+| Inside the views block | -110,592 / -40,960 / +8,192 | Rejected |
+| Kept across `clear()` | -262,144 / -106,496 / 0 | Rejected |
+
+No join failed, and lowest free stayed at or above 69,192 B. `joined` under 245,764 B: 3 of 30, against 1 of 30 for the control. The C++ test decides, not the port.
+
+**Green at each commit:** the C++ golden loops use explicit lists (`test/test_card_files/test_card_files.cpp:627, 643`), so a new golden binds nothing until S2's C4. `test_hardening_files` walks the index, and the old reader reads every new file by its 72-byte prefix. That is the old-reader direction, proved by C2's own run.
+
+**Done when:**
+```
+python tools/card_fixtures.py --check
+python -m unittest discover -s tools -p "test_mood_vectors.py"
+pio test -e native
+git diff --name-status main -- test/fixtures/card
+```
+The last shows A for new files, M only for `hardening/index.json` and `README.md`. `mptg-minor-1.bin` and `vectors.json` are absent.
+
+**PR:** one, C0-C2. **Effort:** 0.75-1 (guess). **Device:** none.
+
+**Result (2026-11-06).** C1 and C2 built; C0 is this document.
+- C1: `test_autodj_join`'s model-heap mood run, on the stand-in until C6 flipped it to the real block (9.6).
+- C2: `tools/moodfilter.py`; `mptg()`'s `"scores"` (stride 80, minor 1); `moods.json` (40 rows), `golden/tags-moods.bin`, `libraries/tags-moods.json`, the hardening files `mptg-moods-longer`, `mptg-tail-invalid`, `mptg-stride-76`; METADATA's spec text. `card_fixtures.py --check`: 266 files up to date, 260 before (MEASURED-HOST).
+- `tools/test_mood_vectors.py`: mStream's predicate (`src/api/mood-filter.js`) ported and checked against node at mStream d7086996, run in SQLite. Its 20 tests pass, and `firmware.yml` runs it.
+- The heap model with the real block (MEASURED-HOST): the boot's largest free block from 753,652 B to 720,884 B (-32,768 B); after the update, joined, 360,436 B in both, pinned in the test. Lowest free 170,052 B at the boot's join, 411,788 B after the update.
+- The rule on the device (9.6, Runs D and E): `joined` 32,768 B under the control at every step of the A/B, under 122,880 B, and over 245,764 B at each. An update whose `library.idx` save lands after the rejoin read 180,212 B, the control 204,788 B (9.6, A/B'd after the verdict): the save's layout, not the block, whose share there is -24,576 B, with no control above the line. No redesign; the ladder is not needed.
+
+### 9.6 S2: the data path
+
+Stacked on S1. No UI.
+
+**C3, `lib/core/MoodFilter.{h,cpp}`.** No IRAM attribute, no index dependency.
+
+```cpp
+namespace moodfilter {
+constexpr uint16_t kAnalysed = 0x8000, kVoiceNull = 0x4000;
+enum class Scale : uint8_t { Any, First, Neutral, Second };   // happy|relaxed, sad|aggressive
+enum class Voice : uint8_t { Any, Instrumental, Vocals };
+enum Tag : uint8_t { kAcoustic = 1, kParty = 2, kDanceable = 4 };
+enum class Level : uint8_t { Standard, Strict, Loose };
+struct Filter { Scale valence, energy; Voice voice; uint8_t tags; Level level;
+  bool active() const; uint16_t pack() const; static Filter unpack(uint16_t q); };
+bool valid(uint16_t q);
+bool tailValid(const uint8_t t[8]);
+uint16_t wordOfTail(const uint8_t t[8]);
+void tailOf(const double* scores, uint8_t out[8]);
+bool matches(uint16_t word, const Filter& f);
+struct Tally { uint32_t pass = 0, analysed = 0; };
+Tally tally(const uint16_t* words, const uint32_t* ids, uint32_t n, const Filter& f);
+inline bool majority(const Tally& t) { return uint64_t(t.pass) * 2 > t.analysed; }
+uint32_t count(const uint16_t* words, uint32_t n, const Filter& f, uint32_t* analysed);
+}
+```
+
+Tests: new `test_mood_filter`, every `moods.json` group, pack and unpack, every tail byte value without a crash.
+
+**C4, `lib/core/CardTags.{h,cpp}`.**
+- `kRecsStride` stays 72. Add `kRecsMoodStride = 80`.
+- `Record` untouched, so D stays 72 (`lib/core/TagStore.cpp:49`).
+- `Walker` gains `moodTail()`, read at `:273-277`, `:314-318`, copied at `:403`.
+- `File::moodTail(i, out)` beside `:538-545`.
+- `mptg::write`: `RecordIn::moods`, stride 80 when any is set (`:807, 819, 870`), refuses a tail failing `tailValid`, minor from `Meta`.
+- Tests in `test_card_files`: `tags-moods` in `:643` and `kGoldenBinaries` `:627`; `TagsInput` reads scores; `Event` gains the word; new `test_mood_tails_read_back`; small buffers `:1570`; the hardening entries.
+
+**C5, `lib/core/LibraryIndex.{h,cpp}` v7.**
+- `Block<uint16_t> moodsB_`.
+- `TagView.moods`. `noteMood(word)`: no block and word 0 means nothing; otherwise `reserve(moodsB_, tracksB_.cap)`, zero earlier tracks, push. Called after `push(tracksB_)` at `:1109`. `addFile` pushes 0 only if a block exists (`:799`).
+- `finish()` checks the size, trims, sets `moods_` in `setReadPointers` (`:1412`).
+- `clear()` always drops it. `Memory.moods` counts in the total.
+- `save()`: words last before the sum. `load()`: Corrupt if `nM` is not 0 or nT, if `moodTracks > nM`, or if `nM > 0` with 0 tracks.
+- Accessors: `hasMoods()`, `moodWord(id)`, `moodWords()`, `moodTracks()`, `forgetMoods()`.
+
+Same commit, the literals that flip in `test/test_library_index/test_library_index.cpp`:
+- `:1109` 6 becomes 7
+- `:1120` adds 6u
+- `:1660` `22*4` becomes `24*4`
+- `:1674` `newer[4]=7` becomes 8, or the newer-version check reads Loaded
+
+New tests: zero block without a word, first word mid-build, doubling, round trip, re-save identical, pinned layout, Corrupt cases, NoMemory, `forgetMoods`, stamp unchanged, not kept across `clear`.
+
+**C6, builder and model flip.**
+- `lib/core/LibraryBuilder.cpp:276-279`: build the view, then if `source == kFromTransfer` and a tail exists, `v.moods = wordOfTail(tail)`. `viewOf` stays 3-arg. `Result.withMoods`.
+- `test/support/SynthCard.h`: `Write::moods`, `File::moods[8]`, deterministic from the path, about 92 % present.
+- Flip S1's stand-in to `tw.moods = true`, delete the stand-in, compare with its numbers.
+- `test_library_builder`: `:670` gains `forgetMoods`. The word follows the chosen record: fresh T, stale T, hand-copied, UNREADABLE T, T bad at end restarts from D with no block, D with a tail ignored. 20k run, MODELLED 90.6 B a track, peak about 2.02 MB.
+
+**C7, console.**
+- `lib/core/TagText.{h,cpp}`: `Command::Moods`, `gm`, `gm<hex>`. `m` is free (`lib/core/TagText.cpp:114-190`).
+- `src/spike/Spike.cpp:140-155` routes to `Library::moodReport`.
+- `g` figure, `gt` tail in `src/app/TagConsole.cpp`.
+- Tests: `tagtext::parse("m")`, `"m127"` in `test_ui_library`. `gm127` is sad, relaxed, vocals, danceable at Standard.
+
+**C8, `tools/synthtransfer.py --moods`.** Larger than the study said. T has zero records today (`tools/synthtransfer.py:11-14, 622-625`), and `walk_music` (`:188-200`) lists names only. With `--moods`, `tags_file()` must write:
+- one record per track, with real `size`, `fatTime` and `qfp`. A made-up qfp makes T stale, and the word never reaches the index;
+- names from `synthcard-files.jsonl` with FROM_API and the matching `known` bits, plus the picture anchor. Otherwise rule "one record, whole" (`docs/METADATA.md:1553-1557`) names tracks by path;
+- scores from `Rng`, keyed by genre, artist, album and path, 4 places.
+
+So `--moods` reads the sampled bytes of every file, 19,412 of them, at each `--replace`. Its run time on a real card is not determined. The first run measures it.
+
+Flags: `--mood-coverage P` (default 92; 0 is the control card, T records at stride 72), `--mood-null P`. `--check --mood-filter 0x127` prints tracks and albums to compare with `gm127`. `tools/test_synthtransfer.py:329-331` stays for the default. Its C++ probe reads words.
+
+**C9, docs with device results.** `docs/METADATA.md` 3.4.3, 3.5, the "v6" rows at `:3182-3186` last; `README.md`; `docs/ARCHITECTURE.md`; `docs/AUTODJ.md` budget; `.github/release-notes.md` (9.2).
+
+**Control, must pass unchanged:** `test_card_contract`, `test_card_walk`, `test_card_jobs`, `test_card_io`, `test_tag_store`, `test_tag_scan`, `test_library_update`.
+
+**Done when:**
+```
+python tools/card_fixtures.py --check
+python -m unittest discover -s tools -p "test_mood_vectors.py"
+python -m unittest discover -s tools -p "test_synthtransfer.py"
+pio test -e native
+pio run -e core2
+```
+The model prints D-only numbers equal to today's, and the T+D moods run is inside S1's rule.
+
+**Device**, spare card:
+
+| Run | Do | Must show |
+|---|---|---|
+| A | Flash, today's zero-record T | One rebuild; `g` moods 0; `D1` 655,348 B and `D0` 819,188 B unchanged |
+| B | `--moods --mood-coverage 0 --replace` | Baseline: `g`, `D1`, `gb`, `Dc` lows. Required: T records move the baseline |
+| C | `--moods --replace` | Boot rebuild against 11.3 s; moods 38,824 B at 19,412; `gm` equals `--check`; `gm127` equals `--check --mood-filter 0x127`, plus pass µs against 8-35 ms; `gt` |
+| D | `D0`, `D1`; `gb` stopped, with a 320 kbps MP3, with a FLAC; `Dc` | "joined", no `[heap] FAILED`; largest against 335,860 / 221,172 / 155,636 B; `Dc` lowest over 64 KB (today 77,284 B) |
+| E | After D's FLAC, play an Opus | Not skipped. Is a second hole >= 62,464 B there? |
+| F | `--replace --moods --seed 2` | One rebuild; counts follow the host |
+| G | Flip a T byte | "T left out", moods 0, library whole |
+
+**PR:** one, C3-C9, merged after runs A-E. **Effort:** 2.75-4.5 (guess; C8 is 0.75-1.25). **Stops at:** a shippable tree, console only.
+
+**Result (2026-11-06).** C3 to C8 built; C9 is the docs. As built, with the drift from the plan above:
+- C3: 1,476 B of code, no IRAM, no allocation. An inactive filter (none, or a level alone) passes every track, scored or not, as the server and `tools/moodfilter.py` do. `Tally` gained `unfiltered`, and `majority()` holds when it is set, so under an inactive filter every album matches.
+- C4: `mptg::write` also refuses a minor that disagrees with the tails: minor 0 with tails, nonzero without.
+- C5: `kVersion` 7, `kCountWords` 24; `h[22]` the words (0 or the track count), `h[23]` the tracks with a word; the words last before the sum. A v6 file reads as Outdated: one rebuild.
+- C6: the builder sets the word only from the chosen T record (source `kFromTransfer`, a valid tail); `Result.withMoods`. `test/support/SynthCard.h` writes tails for 92 %.
+- C7: `gm<hex>` takes bare hex, as 9.3's `Dq<hex>`, and prints the first 8 tracks and the first 8 albums that fit beside the counts and each pass's µs. `g` adds "moods N" to its PSRAM line and "(N with moods)" to the builder's line. `gt</path>` prints T's raw tail (valid or not), what was taken, and the index's word. The counting is in `lib/core/TagText`, host-tested.
+- C8: `--mood-filter` reads Q as the device does, bare hex (`127`), a `0x` prefix allowed. `--mood-coverage` defaults to 92 (0: T records at stride 72), `--mood-null` to 1. Names are converted to NFC on macOS (METADATA 2.8.5): this Mac lists 335 of the card's names as NFD. Files are still opened by their listed names.
+- The device runs restamped the card's Auto DJ index with `--mpdj` (19,410 rows, from gen 3), so Auto DJ is as `docs/AUTODJ.md` measured it.
+- C9: `.github/release-notes.md` is not edited. Feature branches never edit it; the owed lines are in 9.2.
+
+Host (MEASURED-HOST):
+- `pio test -e native`: 2,077 cases, only the 5 known macOS failures (2,044 before the work).
+- Tools tests pass: `test_synthtransfer` 62 (1 skipped), `test_mood_vectors` 20, `test_mpwf` 33, `test_playlog` 30, `test_autodj_ref` 41, `test_mpdj` 22, `test_gen_ui_strings` 29. `test_synthcard`'s `test_out_dir_refusals` fails as on clean main.
+- `pio run -e core2`: flash from 4,311,563 B to 4,318,451 B (+6,888 B; 68.6 %, the app 70 % of its slot). RAM 58,480 B and IRAM 5,161 B left, both unchanged.
+- 20k tracks built from T with words: `library.idx` 1,821,680 B (91.1 B a track; MODELLED 90.6), 1,781,680 B (89.1 B) without tails. Build peak 2,031,879 B against 1,991,879 B. The words add exactly 40,000 B to both.
+
+Device (MEASURED), the spare card: 19,413 tracks, 3 of them added by hand (not 19,412), 705 artists, 1,707 albums, 2,478 folders, D with 19,413 records. The Core2 v1.3 (ESP32-D0WDQ6-V3 rev 3.1, 16 MB flash, 4 MB PSRAM usable).
+
+| Run | Result |
+|---|---|
+| A | T gen 3, zero records. The first boot rebuilt once ("library.idx outdated ... an older version's"), 11,193 ms from D, peak 1,888,702 B; the next boot loaded it in 1,504 ms. `g`, `gm`, `gm127`: "no mood data". Largest free block 819,188 B with Auto DJ off, 655,348 B joined: unchanged |
+| B | Gen 4, `--moods --mood-coverage 0 --replace`: T with 19,413 records of 72 bytes. The first boot built from T in 15,777 ms; `library.idx` 1,709,650 B (88.1 B a track); a load boot 819,188 / 655,348 B as before. A `gb` straight after the commit deferred to the next boot ("the track table 1213 KB fits neither the old one's block (606 KB) nor the largest free one (799 KB)"): until the walk at a commit merges, the update reserves for T's and D's records together (`lib/core/LibraryUpdate.cpp` `trackSlots()`, unchanged by this work). After `gw` the update ran: built in 20.5 s, peak 1,888,702 B, and once the walk ended 335,860 B joined, the documented figure |
+| C | Gen 5, `--moods --replace`: 17,954 of 19,413 tracks with a server row (92.5 %), 1,399 of 143,632 heads NULL; T 5,177,713 B, 80-byte records, minor 1. On this Mac's card reader the tool's mood step took 34.1 s on a dry run, and the whole write 18.2 s on the next run. The first boot built from T in 14,438 ms, "19413 from the transfer's (17954 with moods)", peak 1,927,528 B. `library.idx` 1,748,476 B (90.1 B a track): Run B's 1,709,650 B plus the 38,826 B block. `gm` equals `--check`: 17,954 of 19,413 (92.5 %), block 38,826 B. `gm<hex>` equals `--check --mood-filter`, tracks and albums, every one (below); `gm800` refused. `gt` on `2_Naquos/Heavy Mountain/08`: tail `03 42 50 11 4F 0E 4D 00`, taken 0xB333, the index's word the same |
+| D | An A/B with E: one script on a control firmware whose builder never sets the word (16 B smaller) and on the mood firmware. The largest free block is 32,768 B less with the block at every step, from 786,420 B against 819,188 B at the boot with Auto DJ off to 262,132 B against 294,900 B joined after the FLAC's update (`docs/AUTODJ.md` 14.3). No update underran or printed `[heap] FAILED`. Update builds, control / moods: 20.6 / 22.1 s stopped, 42.2 / 45.0 s with the MP3, 28.7 / 30.2 s with the FLAC. Lowest free in the stopped update's join: 180,876 / 175,032 B. Here the save of `library.idx` ended before the join; an update whose save lands after the rejoin reads 180,212 B with moods, 204,788 B on the control (A/B'd below) |
+| E | After the FLAC, an Opus (2 s) opened its 128,023 B of buffers and played: 101 packets, 0 skipped, on both firmwares |
+| F, G | Not run (`--seed 2`; a flipped T byte). The card now holds gen 5 with scores; its bench queue was replaced by Auto DJ picks during Run E |
+
+Run C's `gm<hex>`, idle:
+
+| q | Filter | Tracks (pass) | Albums of 1,707 (pass) |
+|---|---|---|---|
+| 127 | Sad, Relaxed, Vocals, Danceable | 405 (5,046 µs) | 25 (14,069 µs) |
+| 40A | Neutral, Neutral, Loose | 1,624 (5,621 µs) | 115 (14,329 µs) |
+| 215 | Happy, Relaxed, Instrumental, Strict | 787 (5,487 µs) | 39 (14,195 µs) |
+| 1 | Happy | 9,122 (11,981 µs) | 854 (30,990 µs) |
+
+So the albums pass idle is 14-31 ms (MODELLED 8-35 ms), and the tracks pass, the fit count, 5-12 ms (MODELLED 2-5 ms).
+
+**Verdict against 9.5:** the block costs exactly one 32 KB class at every step, inside the modelled -106,496 / -40,960 / +49,152 B, and every joined figure of the A/B stays over 245,764 B (an update whose save lands after the rejoin reads 180,212 B, and its control 204,788 B, under the line too: below). No redesign. Heap figures are compared only within one scripted sequence: the control's own after a stopped update read 327,668 B, not `docs/AUTODJ.md`'s 335,860 B.
+
+**The save after the rejoin, A/B'd (MEASURED 2026-11-06).** The same card (gen 5, 17,954 of 19,413 tracks with words). One script on two firmwares built from S2's tip (`3461c41`), a control whose builder never sets the word and the mood firmware, each after a boot that rebuilt the library with or without words: a reset (a load boot), `z`, `D`, `gb` with nothing playing and no `gw` first (the update was not deferred), `D`, `Dc`, `D`. PSRAM's largest free block:
+
+| Step | Control | Moods |
+|---|---|---|
+| Load boot, joined | 655,348 | 622,580 |
+| After the update, joined (the save not yet done) | 327,668 | 294,900 |
+| After `library.idx`'s save and `Dc` | 204,788 | 180,212 |
+
+So the drop to about 180 KB is not the block: it comes from `library.idx`'s save landing after Auto DJ's rejoin. In the control the save ended after the `D` that follows `gb`; with the words, between the join and that `D`. In Runs D and E the save ended before the join, and both stayed at 327,668 / 294,900 B. The block's share on this path is -24,576 B. `docs/AUTODJ.md` 7.4 already records 180,212 B for this layout on 2026-10-14, before any mood work. Against 9.5: rule 3 needs the control above 245,764 B, and here the control is under it too (204,788 B), so no redesign is forced. Run B's 221,172 B, without the words, came from another sequence: `gw` first, read at the join while its walk still ran. The save after the rejoin is the update's own layout, worth its own look: a FLAC still fits (155,636 B), and so do an Opus's 65,536 and 62,464 B blocks.
+
+### 9.7 S3: Albums and the editor
+
+Stacked on S2. One PR. Commits:
+
+1. **`lib/core/FilterGrid`, catalogue.**
+   - The rules of 7.3, 7.4 and 7.2.
+   - `Cell {Happy, NeutralV, Sad, Relaxed, NeutralE, Aggressive, Instrumental, Vocals, Level, Acoustic, Party, Danceable, Clear, Cross}`.
+   - `layout`, `hit`, `tap`, `summary`, `countText`, `crossX`, `crossHitX`, `textRoom`, `topHit`, `dotShown`.
+   - `i18n/en.json` entries of 8 for S3, room constants in `lib/core/UiText.h`, ARB words copied to nine files, generated files regenerated (`lib/core/UiStringIds.h`, `lib/core/UiStringsData.cpp`, `test/test_ui_strings/catalogue.h`).
+2. **Translations** of S3's three new ids; `@@note`; `THIRD-PARTY-NOTICES.md:461-463`, the new commit (8.1).
+3. **Icon:** `kFunnel`, 14x14, in `tools/ui_icons.py`; `src/ui/IconData.cpp`; `src/ui/Icons.h`.
+4. **`ListView`:** the `Source` hook, `renderItem` TopBar (`src/ui/ListView.cpp:303`), Down with button -1 (`:739`), `tapItem` (`:638`), `drawEmpty` (`:447`). No caller, no behaviour change.
+5. **`FilteredAlbums` and `src/ui/FilterSheet`,** with:
+   - `TouchOn::Filters` (`src/ui/Ui.h:335`), `modalUp` (`:368`);
+   - `openFilters()` after `openSleepSheet`, which sets `sheetOpenedMs_` and hides a toast that is up;
+   - `closeModal` (a new branch, the owner told only when `notify`), `applyCover`, `uncover` (`filters_.drawTop()` instead of `repaintHeader`), `redrawAll`;
+   - `route`: the settle at `src/ui/Ui.cpp:1660` gains `filters_.up()`, and a Down above y 72 with a toast up goes to `TouchOn::None`;
+   - `printState`, `command`, help text (`src/main.cpp:3583`).
+
+   Console reaches it. No row yet.
+6. **The row:** `LibraryPage` members `filter_`, `albums_`, `drawnDot_`; `topBar()` true when `real() && index() && hasMoods()`; `rowAt`, `rows`, `railRows`, `enter`, `switchSegment`, `update`, `drawSegments`, `emptyText`, `describe`; `drawTopRow`, `onTopRowTap`; `Ui::libraryUpdating()` and `libraryChanged()` drop the array first.
+7. **Docs:** `src/ui/Pages.h`, `docs/ARCHITECTURE.md`, README's console table, `.github/release-notes.md` (9.2).
+
+D7 removes the study's `container()`, `actions()`, `onAction` and `playAll_` work.
+
+**Host tests:**
+- New `test_ui_filter`: second tap lets go; tags any number; level alone inactive; Clear resets the level; equal, proportional, scaled and wrap branches; every panel point maps to at most one cell; title-row hits; first-row zones at 284, 312, 320; dot rule; summary order; `FilteredAlbums` subsequence, majority, drop, allocator failure, recompute.
+- `test_ui_library`: `test_filter_grid_fits_every_language`, `test_filter_grid_survives_the_lab_panel` (margin >= 16), `test_filter_title_row_fits`, `test_filter_row_fits`, `test_filter_dot_clears_the_label`, `test_filter_empty_line_fits`, and the goldens of 7.3.
+- `test_ui_strings`: runs over rooms, buffers, glyphs. Add an ink check that the ru tag's lines don't touch.
+
+**Done when:**
+```
+pio test -e native -f test_ui_filter -f test_ui_library -f test_ui_strings -f test_ui_nav
+python tools/gen_ui_strings.py --check
+python -m unittest discover -s tools -p "test_gen_ui_strings.py"
+pio run -e core2 -e core2-dio
+pio test -e native
+```
+`python tools/ui_icons.py` leaves `src/ui/IconData.cpp` unchanged.
+
+**Device**, `--moods` card:
+
+| What | Commands |
+|---|---|
+| Pass time idle against 8-35 ms (MODELLED) | `uiMa<hex>` a few times; each pass logs its µs |
+| With an MP3 against 17-70 ms, ring low | `qa`, `uiMa<hex>`, `s` |
+| Tap and close latency | `ui`, `[ui] slow event`, `[ui] slow frame` |
+| Third-column accuracy | `uk1`, `uiMe`, `uit260,86`, `uit276,174`, `uit263,218` (en, the goldens of 7.3), `uk0`, then a real finger |
+| Widths and the empty line | `uiMa` with broad and narrow words, `ui`, `X` |
+| Dot | `uis160,200,160,80,60`, `X`, `uit160,54` |
+| Rail and jump grid under a narrow filter | `uiMa<hex>`, a tap on a letter that remains, and one that doesn't |
+| Languages | `uiLru`, `uiLja`, `uiLpl`, `uiMe`, `X` |
+| Fence with a filter on, hitch at the end | `uiMa<hex>`, `g0`, `ui` |
+| Through dark | `uiMe`, `Ps0`, `Ps1` |
+| A toast at opening (4.3) | An album held, `+ Queue`, and the Filters row (or `uiMe`) inside the toast's 4 s: the title row drawn, a tap on the toast's old place lands where it is seen |
+| Heap with the array held | `D` before and after `uiMa`; the join's blocks after an update with a filter on |
+| Colours, redraw feel | The user's eye |
+
+**Effort:** 3.5-5 (guess; device pass 0.5-1).
+
+**Result (2026-11-06).** Commits 1 to 7 built on `claude/mood-filters-s3`, stacked on S2; written before the device pass below, which ran later the same day. As built, with the drift from the plan above:
+- 1, `lib/core/FilterGrid`: 7.3's rules, 7.4's hits, the first row's and the dot's numbers. Two rules come from the frames where 7.3's text is silent or differs: a chip row still too wide in Small gives its overflow up evenly instead of scaling (Russian's tags 103/80/109, as 7.3's golden; scaled would be 102/82/108), and an even share rounds a half down (the es and fr voice trays, 140 and 138). Every golden of 7.3 holds with the firmware's fonts; the least margin at a cell's centre is 20 px in every language, lab panel and true (MEASURED-HOST). 18 `mood.*` ids, the 15 of 8.1 from the ARB in all ten languages.
+- 2, translations: S3's three ids in nine languages, machine-made, the native review owed (9.2). fr's and pt's empty line take a shorter verb than the app's (323 and 312 px against the line's 300; the widest left is pt's 298). ru's count at 9,999 of 9,999 is 165 px in the row's 160 and shows the short form, as 7.2 planned.
+- 3, `kFunnel` (14 x 14, ASCII art in `tools/ui_icons.py`), pixel for pixel the frames'. This Mac has no Pillow: `src/ui/IconData.cpp` was made by a stand-in for it (exact for art icons) and the funnel's lines spliced in, so "`python tools/ui_icons.py` leaves `IconData.cpp` unchanged" is not checked.
+- 4, `ListView`: the hook as 7.6 (`topBarIsRow()`, `drawTopRow()`, `onTopRowTap(x, rightEdge)`), the row pressed whole with no hold, the empty line under it (the strip at y 114, the text at y 150). `ListView` isn't host-built: checked by the builds and by reading.
+- 5, `lib/core/FilteredAlbums` and `src/ui/FilterSheet`, with the Ui's wiring as listed. The block comes from allocator hooks (PSRAM), room for every album (6.8 KB at 1,707), used again while the album count stays; no memory keeps what was held. 7.6's accessor for the panel is `overlayPanel()`, with `panelOwner()` and `setPanelOwner()`. `uiMa` takes bare hex, as `gm<hex>`.
+- 6, the row in `LibraryPage`, as 4.2's table and 7.2. Drift: the list reads the albums through `FilteredAlbums::shown()`, which also checks they were picked over as many albums as the index has and that it has words (a guard beside 4.6's drops). They are worked out again when the Albums list is about to show (`enter()` at its root, or the segment's tap), not at every `enter()`. A change made while the Albums list didn't show (`uiMa`, or `uiMe` over another page) opens it at its top once, as a close over it does (7.5 names only the close). A finger on the cross lights its disc, not the row. `uil<n>` (`Ui::browse()`) drops the albums too, and a synthetic library drops the filter at `enter()`. `onTopRowTap` takes the list's width from the row as last drawn. `describe()` (the `ui` report) adds the row's filter and the dot.
+- 7, docs: `src/ui/Pages.h`, `docs/ARCHITECTURE.md`, `README.md`, this note. `.github/release-notes.md` is not edited (feature branches never do): S3's lines are in 9.2's owed list.
+- 8, the review's fix: `openFilters()` takes a hidden toast's cover off before the editor's first frame. The editor draws under a toast (not `over`), so with the cover left on, its title row stayed the toast's pixels while the unseen Clear, count and cross took the taps (4.3's toast at opening). `Ui` isn't host-built: checked by the builds (core2's flash 4,333,751 B, +8 B) and by reading; the device table's row says how to see it.
+
+Host (MEASURED-HOST):
+- `pio test -e native`: 2,107 cases, only the 5 known macOS failures (`test_host_clock` 2, `test_hop_feed` 2, `test_queue` 1); 2,077 after S2. `test_ui_filter` 22 cases, and with `test_ui_library`, `test_ui_strings` and `test_ui_nav` 142, all pass.
+- `python tools/gen_ui_strings.py --check` clean; `test_gen_ui_strings` 29 pass (Python 3.12: the Mac's 3.9 can't run the generator).
+- `pio run -e core2 -e core2-dio`: both build with no new warnings. core2's flash 4,333,743 B, +15,292 B over S2's 4,318,451 B (68.9 %; the app 70 % of its slot); RAM 58,480 B and IRAM 5,161 B left, unchanged.
+
+The card: the spare holds gen 5 with scores (9.6, Run C), which the table above needs; `python tools/synthtransfer.py --check <card> --mood-filter 127` re-checks it, read-only. Until S0 merges, a Library status line ending under the editor wipes its grid (9.4).
+
+**Device (2026-11-06).** MEASURED on the Core2 v1.3 and the spare card (gen 5: 19,413 tracks, 17,954 with a word, 1,707 albums), silent mode, Auto DJ on. The build: this branch at the review's fix with S0's commit picked on top, not committed together (core2's flash 4,333,763 B). Every screenshot was compared with its frame pixel by pixel, quantised to 565. No bug found; nothing fixed.
+
+| What | Result |
+|---|---|
+| Pass time idle | 11 filters, 0 to 854 albums (`uiMa` 1, 20, 2, 14, 214, 256, 19E, CF, 1C0, A, 3): 15,300-16,775 µs, against 8-35 ms (MODELLED). An inactive word (0, 200, 400): 9-29 µs. The list's first frame after each: 43.5-54.3 ms, as a tap onto Albums (44.2 ms) |
+| With an MP3 | `qp13` (`01 - Bench 320.mp3`), then 9 filtered passes: 21,645-40,039 µs, against 17-70 ms. Ring 1,416-1,439 ms, 0 underruns, load 37.6-37.8 %. The reloaded list's first frame 75.5-114.3 ms; a segment switch in the same run 79.0-91.1 ms |
+| Tap and close | Idle: editor taps 34.8 ms at most as events (each holds its pass), none logged slow. Clear 48.6 ms (the whole grid). Opening from the row 83.0 ms, logged as a slow event; the row is pressed at Down first. The cross with no change: a 25.8 ms frame. The cross after a change: the list's frame, 51.8 ms. The row's cross: 12.3 ms, then the list in 44.3 ms. During the MP3: taps 50.1-71.0 ms (passes 17.8-32.1 ms), each logged slow; the close after a change 94.8 ms. No `[ui] slow frame`; a fling over a filtered list ran at 30.3 fps, its worst frame 22.9 ms |
+| Third column | `uk1`: `uit260,86` read 263,74 and hit Sad (0x003); `uit276,174` read 287,169 and hit the level (Standard to Loose, 0x403); `uit263,218` read 267,215 and hit Danceable (0x503). `uk0`. A real finger: not run |
+| Widths, empty line | 241 albums: a rail, the disc at 232. 17 (`1A`): a scrollbar, 284. 3 (`256`): neither, 292. 0 (`19E`): "No albums match these filters" as `A-empty-line`, pixel for pixel; the row stays |
+| Dot | `uis160,200,160,80,60` (offset 966 px): the dot, and `ui` names it. `uit160,54`: offset 0, the dot gone. Under `14` at 1,008 px, Artists shows 705 rows unfiltered and no dot; back on Albums, 1,008 px and the dot |
+| Rail, jump grid | `214` (140 albums): the grid greys #, J, U, X, Z. J does nothing and the grid stays. K goes to row 66 (its first album at the top, the rail "K", the dot). The grid opens in 61.0 ms, and in 63.0 ms with no filter (1,707 rows) |
+| Languages | ru, ja, pl: the editor with `19E`, the row with `1E` (60 albums, a rail). The grids are the frames' pixel for pixel but the count; ru's tag wraps Для / вечеринки as drawn; the summaries cut where the frames cut |
+| Fence | `14` on, then `g0`: the walk (29.2 s), then the fence for 33.6 s. "Updating the library…" with no row, as `A-updating`; `uiM` says no albums held, and `uiMa` is refused. At its end the pass ran again (16,407 µs) and the row came back, 241 of 1,707. The hitch: a 66.9 ms loop pass (a 46.7 ms frame, 19.5 ms of status), then 49.8 ms |
+| Through dark | `uiMe`, `Ps0`, `Ps1`: the editor stays up, redrawn whole in 88 ms at the wake |
+| A toast at opening | `+ Queue` on an album's sheet ("Added 3 tracks", Undo, View), then `uiMe` 0.6 s later: the toast went (`ui`: toast none). The screen equals the editor with no toast, 0 px different over y 36-239. The cross at 287,52, where the toast's buttons were, closed the editor. The queue: "undo: none" |
+| Heap | `D` with no filter: PSRAM free 630,196 B, the largest block 606,196 B. After `uiMa14`: 623,280 B (-6,916 B: the 6,828 B block and 88 B), the largest unchanged. After `g0` with `14` on, joined: largest 294,900 B. 9.6's update stopped with moods also read 294,900 B, in another sequence: not an A/B. Above 9.5's 245,764 B |
+| Colours | Read from the shots, equal to the frames' in 565: the accent, DIM, FAINT, BTN, the amber at 0 (f8c038). The redraw's feel, by eye: not run |
+
+The frames against the screen:
+- The crosses are `kCross`, 12 x 12, where the frames draw 10 x 10 (the frames' README says so).
+- The frames anti-alias, the panel doesn't. The row's disc, the level cell's dots, the corners of the pills and chips (1 px each) and the Albums dot have hard edges here, at the same sizes and colours.
+- The dot covers y 51-56, its centre at 53.5, where the frame's covers 51-57, centre 54. That is 7.2's `fillRoundRect(203, 15, 6, 6, 3)` as written.
+- The row's divider starts at x 8, as every album row's does (the list's style); the frames draw it from x 0.
+- Counts follow each language's grouping, ru "1 707" and pl "1707"; the frames write "1,741" in all three.
+- The frames' tab bar is an English capture. In ru and ja no label shows under the active icon (the tab bar's `labelFit()`), and pl's reads "Biblioteka". Not S3's.
+- pl: "Taneczne" and the Folders segment's "Foldery" sit 1 px right of the frames'. The segment control is not S3's.
+- Behind the fence the band reads "Updating library…", the frame "Reading the card…": the update's later phase.
+- The card's own data: album names, the rail's "#" (the loose tracks sort first), 1,707 albums, the volume at 0 % (silent mode).
+- Not a difference: "Sad · Aggressive · Acoustic" (`4F`) is Small here, where `A-empty-line` has it in Body. On this card it fits 5 albums, so the list has a scrollbar and its room is 212; the frame's empty list has 220.
+
+Not run: a card without mood data (one card here, scored); a real finger on the third column; the redraw's feel by eye; the toast at opening through the row's tap (`uiMe` takes the same `openFilters()`); a hidden album, the card's status band over a filtered list, and no memory. The bench queue was replaced (`qp13`, then 3 tracks added).
+
+### 9.8 S4: the engine
+
+Needs S2 only. May run beside S3. One PR, console only. Each commit changes reference, engine, tests and fixture together.
+
+1. **Freeze.** `tools/test_autodj_ref.py::test_the_fixture_covers_the_rules` (`:734`) checks `sha256(json.dumps(x, separators=(",",":"), sort_keys=True))`:
+   - first 26 sessions: `2764423233200b3e10f10804b03b987e5b14f5fd4d22b5e088fb3a290e66bf21`
+   - seven old tables: `6f876196d0be133cf4bc669a8a5f6cbf70497fc7cf30b4e340af71e8d9a74e8b`
+
+   (MEASURED-HOST at a1566fe.) No old session holds a new key. `stats_json` (`tools/autodj_ref.py:914`) writes new counters only when nonzero, else all 26 sessions' stats rewrite. Fixture bytes identical.
+2. **`MoodView`, predicate, print, `filter` op.** Sessions mood-dry-loosen, mood-no-data and its control.
+3. **Scan, repeats, by id, `jump`, table `islands`.** mood-rolling, mood-jump, mood-repeats, mood-no-index, mood-no-anchor.
+4. **Surprise**, both paths behind `mood.on()`. mood-surprise. `test_autodj_driver.cpp:1543-1550` passes unchanged.
+5. **Re-pin, quick skip.** mood-repin, mood-repin-edges, mood-index-away. Earlier hashes unchanged. If D2 is overruled to plain jumps, this commit and its sessions go.
+6. **Hold** through trigger, driver, `rowState`; string `autodj.status_waits_fit` in ten languages.
+7. **Settings.**
+   - `Settings::moods`, `Driver::setMoods`, `pendingTrack()`.
+   - `lib/core/NvsLayout.h:145-157`: `kAutoDjMoodsKey = "moods"`, stored and saved fields.
+   - `src/app/AutoDjStore.cpp:41-76`.
+   - Schema 5 here, `migrate` does nothing. `test_nvs_layout` `:38, :262`.
+   - `Dq`, `stepMood` with the key of 6.5, `D` lines, `Dn` summary, pick-line tags.
+   - `docs/AUTODJ.md` `:309`, 3.8 (a filtered repeat), new 3.14, 4.1, 4.2, the table at `:551-564`, 8, 10, 11.2.
+   - `docs/QUEUE-MODES.md` 16.1's table (`:2141-2153`): a row for a filter nothing fits, "no (a hold)", Waiting.
+
+New sessions (counts MEASURED-HOST with a toy predicate `(word & q) == q`; re-check with real words):
+
+| Session | Table | Picks | Reaches |
+|---|---|---|---|
+| mood-dry-loosen | starve | 70 | dry 30, loosened 33 inside the mood |
+| mood-no-data, -control | syn | 30+30 | a filter with no words gives identical picks |
+| mood-rolling | syn | 65 | ladder, filter changed, off, on |
+| mood-jump | islands | 150 | NoCandidate 1, AllCooled 4 |
+| mood-repeats | syn | 100 | repeats 78; shortest gap equals tracks fitting |
+| mood-no-index | none | 36 | by id, oldest first, only the playing track, 3 noFit |
+| mood-no-anchor | syn | 24 | seedless, broken slot, damaged pin |
+| mood-surprise | syn | 24 | the button inside the filter, and nothing fits |
+| mood-repin | syn | 90 | 12 re-pins, 3 jumps |
+| mood-repin-edges | syn | 70 | 8 re-pins, 4 quick-skipped, damaged and failing new pins |
+| mood-index-away | syn | 18 | index away and back |
+
+Total 707 picks, about 250 KB on a 563,529 B file (MEASURED-HOST).
+- Tables below 300 rows limit this: `syn` in 7 of 12 clusters gave 0 jumps in 120 picks, hence `islands`.
+- Keep Locked out of earlier commits' sessions. They would move at commit 5.
+- `io` faults stay first-read-only (`tools/autodj_ref.py:346`), or a second Io hits #38's `IoTwice`, which Python does not model.
+- `test/test_autodj_engine/test_autodj_engine.cpp:452` is at least 14 today and holds throughout. Raise it to 38 at commit 5. The Python check's count moves with each commit.
+
+**Coverage required at commit 5:**
+- inside a filter: `dry`, `loose`, `impT`, `impK`, `tb`, `kb`, classes 1 and 2;
+- `jump` 1, 2, 3; `repin` with `reads` 0 and at least 1; `repin` plus `jump`;
+- `rep` with a row and with `noIndex`; `noFit`;
+- **every ok pick under a filter passes its word.**
+
+**Tests:**
+- `test_autodj_engine`: `test_a_filter_changed_remakes_the_runs`, `test_a_level_alone_is_no_filter`, `test_a_jump_keeps_the_classes`, `test_a_shared_row_is_tested_by_its_first_track`, `test_repeats_oldest_first`, `test_the_only_track_repeats`, `test_the_repin_stays_in_the_budget`, `test_a_moved_pin_goes_at_a_quick_skip`, `test_a_seed_pin_stays`, `test_no_allocation_in_a_jump`.
+- `test_autodj_trigger`: the new condition, order (`:203`), `test_owed_only_while_joining` to 12 bits.
+- `test_autodj_driver`: parse table, nothing fits holds and owes nothing, a filter change keeps the session, the button inside the filter, the button with no filter draws as today, `Dn` tallies.
+- `test_nvs_layout`: the key, invalid values.
+
+**Fixtures that move:** `test/fixtures/autodj/sessions.json`, additions only, and its README. Card goldens don't.
+
+**Done when:**
+```
+python tools/autodj_ref.py --check
+python -m unittest discover -s tools -p "test_autodj_ref.py"
+pio test -e native -f test_autodj_engine -f test_autodj_trigger -f test_autodj_driver -f test_autodj_join -f test_ui_autodj -f test_nvs_layout
+```
+
+**Device**, scripts in silent test mode `z`:
+- **No filter unchanged:** main and the new build on one card, `Ds717feda5`, `Dr`, `Dn200`. `[dj] Dn` lines match except times.
+- **Pick cost:** `Dq<hex>`, `Dn200`, p50/p90/max, jumps, re-pins, repeats, idle and with an MP3, narrow and broad.
+- **Jump time:** `Dp` under a mood the anchors miss.
+- **Hold:** `Dq` with a zero-fit value, `D` says "now: no track fits the filters".
+- **Boot:** a reset with a filter saved, `[dj] settings:`, `[nvs] schema 5`.
+- **Fence:** `gb` with a filter on, and the fit count after a `--moods --seed 2` card with the same files.
+
+**Effort:** 3-5 (guess). It is two implementations of the whole ladder, engine and `tools/autodj_ref.py`, plus 12 sessions.
+
+**Result (2026-11-06).** All seven commits built, on `claude/mood-filters-s4` (from S2's tip), host-tested only. As built, with the drift from the plan above:
+- 1: both hashes hold at this tip, as at a1566fe. "The seven old tables" is hashed as those seven names, so `islands` won't move it. `stats_json` writes `LATER_STATS` only when not 0; the list is empty until a counter comes. The Python check also counts the sessions exactly: 26, then 29.
+- 2: `MoodView` sits beside `Maps` in `lib/core/AutoDjJoin.h`: `words`, `tracks`, `q` as read (invalid is 0), `f`; `on()` needs words and an active filter. `Maps::mood` feeds `buildRun` and the print; `PickIn::mood` is there for `byId`, which doesn't read it yet. Not in the plan: the Driver's `Index` gains `mood` too, which `pickInto` and `DryRun::step` copy into `PickIn` (the button's `surprise` waits for commit 4). `AutoDj::index()` copies the join's maps into `maps_` and sets `.mood` from `Library::index()` (ready, with words); its q is `AutoDj::moods_`, 0 until commit 7's settings carry one.
+- Python: `MoodView`, `Maps.mood`, `PickIn.mood`, `Scene.filter()`, `mood_words()` (`moodfilter.word_of` over uniform 4-place scores, 92 % with a row, 1 % of heads NULL). Sessions gain `moods` (a word a track) and the `filter` event.
+- Sessions, with real words (MEASURED-HOST):
+  - mood-dry-loosen, `starve`, 70 picks, Follow the vibe at 75 % and 100 %: Vocals at Loose, then Danceable at Loose (69 and 63 of 105 tracks). Dry 30 and loosened 34 inside the mood (the toy gave 30 and 33), with impT, impK, tb, kb and class 1. No pick is random or a repeat, so commits 3-5 leave it as it is. A narrower filter (about 27-48 % of the tracks) emptied the fresh pool: repeats, which commit 3 turns into jumps.
+  - mood-no-data and mood-no-data-control, `syn`, 30 + 30: the same picks and counters.
+  - In all: 29 sessions, 1,281 picks, 1,086 reads ahead; `sessions.json` 618,426 B, by additions only.
+- Tests: `test_autodj_engine` 44 cases (a filter keeps the candidates inside it; a level alone, an invalid q and no words are none; a changed filter remakes the runs, and so does `mapsChanged()` after words filled again in place; a shared row is tested by its first track). `test_autodj_driver` 36 (a filter through `Index` keeps the picks inside it). `test_autodj_ref` 45. Dropping the predicate, or leaving q out of the print, fails the replay of mood-dry-loosen.
+- 3: the mood's own ladder (6.2), in the engine and `tools/autodj_ref.py`.
+  - 4a and 4b set `Pick::jump` (`Jump::NoCandidate`, `AllCooled`: the fixture's `jump` 1, 2) and go to `randomPick`, whose first line goes to `moodPick` with a filter on. 4b clears `dry`: the pool it named is gone. `byId`'s first line goes to `moodById`. These read the maps' `MoodView` when there are maps, and `PickIn::mood` only without them, so a caller that sets only `Maps::mood` can't leak.
+  - The scan skips only the anchors and the playing row, as 6.3 says, so its sample keeps cooled rows, as `randomPick`'s draws do. The classes put a cooled row last, and "a fresh row in the sample" is `Counts::fresh()`. Tracks kept in `keys_`, rows in `cand_`: nothing allocated.
+  - Not in the plan: step 7 (`Jump::NoRow`, 3) and `moodById`'s fresh track are each one pass with a reservoir of one (a `below(i)` for each track admitted after the first). `moodById` needs no scratch, so it works after a failed `begin()`. A step-7 pick is by id, so `noIndex` and `random` are set.
+  - A repeat (step 8) is ranked by its statuses as known, with no D3 draw, and so are its `tempoBreak` and `keyBreak`. It keeps the jump's code, so `Stats::jumps` counts the repeats that followed a jump: 82 jumps in mood-repeats, 80 of them repeats. `moodById`'s oldest-in-the-cooldown and playing-track picks are repeats too (`repeated`, with `noIndex`), which 9.8's "`rep` with `noIndex`" asks for.
+  - A `noFit` pick counts in `Stats::failed` as well as in `noFit`.
+  - `Pick::repinned` and `Stats::repins` exist but stay unset until commit 5.
+  - Table `islands`: 320 rows in islands of 10, each row listing only its island, its levels 200-236, filters as `syn`'s an island a cluster; its own PCG32 stream.
+- Sessions of commit 3 (MEASURED-HOST, real words). Follow the vibe, except mood-no-anchor's damaged pins: those picks are random, at `:574`, where no re-pin goes (6.4), so commit 5 leaves them as they are.
+  - mood-rolling, `syn`, 65 picks, 50 under a filter: Relaxed, then Neutral, Aggressive and Danceable, then none, then Relaxed. Under a filter: AllCooled 8, NoRow 1, repeats 4, dry 3, loosened 1.
+  - mood-jump, `islands`, 150: Sad at Loose, then Vocals and Party. NoCandidate 7, AllCooled 27 (the toy gave 1 and 4), with D3's draws and key breaks inside the jumps, and samples of 64.
+  - mood-repeats, `syn` with every track on a row, 100: Happy and Party at Strict, which 21 tracks fit. 80 repeats (the toy gave 78), all at cooldown level 2, and the shortest gap is 21.
+  - mood-no-index, no table, 60 tracks, 36: Sad and Vocals (7 fit) by id, then the cooldown's oldest; a filter only the playing track fits; one nothing fits (3 noFit); the tracks renumbered. 20 repeats.
+  - mood-no-anchor, `syn`, 24: no seed and nothing playing; a broken file (5 broken picks); a damaged pin, twice (8 picks of 2 reads each). 14 random picks, all inside.
+  - In all: 34 sessions, 1,656 picks, 1,406 prefetch passes (the "reads ahead" counted above); `sessions.json` 782,293 B, by additions only. The two hashes hold, and so do mood-dry-loosen's counts.
+- Tests at commit 3: `test_autodj_engine` 50 (a jump keeps the classes, both kinds, and with no filter that pick still repeats a neighbour; the scan keeps 64; repeats oldest first; a track with no row before them; the only track repeats, with the index or without; nothing fits; a shared row in the scan; a level alone by id; no allocation in a jump). `test_autodj_ref` 50, the same rules. Removing 4b or the step-7 pick, or walking step 8 newest first, fails the replay at mood-rolling.
+- 4: the Auto DJ button inside the mood (6.3), in the engine and `tools/autodj_ref.py`.
+  - `Engine::surprise` under `Maps::mood`: the scan with nothing excluded, then `cand_[below(n)]`. The scan is now `Engine::scan()`, which `moodPick` shares with the anchors and the playing row as its exclusions (its draws as before). `Pick::candidates` and `gated` give the scan's count, so the fixture's `surprise` events carry `cand` under a filter only. None: not ok, and no `noFit`, since a track with no row may still fit. No scratch after a failed `begin()`: not ok under a filter, today's draws without one.
+  - `Driver::surprise` passes `Index::mood` as well. `Driver::surpriseTrack` gains a last argument, the `MoodView`, off by default, so the calls at `test_autodj_driver.cpp:1543-1550` and their tries are as they were. On: one pass over the words below `libraryTracks`, a reservoir of `kSurpriseTries` from the Driver's `random32()`, then `hasRow` on each until one has a row. Not in the plan: the reservoir is shuffled first (Fisher-Yates, the same hook). Its first places hold the first tracks in id order, so looking them up in place would favour the lowest ids. `AutoDj::start()` passes `moodView()`, which stays off until commit 7's settings.
+  - mood-surprise, `syn` with 60 % of its rows unmapped, 24 picks, Follow the vibe only. The button under Vocals at Loose (85 tracks with a row fit: the scan keeps 64), then Relaxed and Vocals (24), each starting a session. Then a filter that only one track with no row fits: no track for the button, and the pick by id (jump 3), then that track again as the playing one. Then a filter nothing fits: no track, 2 `noFit`.
+  - In all: 35 sessions, 1,680 picks, 1,432 prefetch passes; `sessions.json` 796,684 B, by additions only. The two hashes hold.
+- Tests at commit 4: `test_autodj_engine` 51 (the button inside the filter: its rows, a shared row by its first track, nothing inside, a level alone or no words drawing as no filter, no scratch). `test_autodj_driver` 38 (the button inside the filter, joined and before a join; one lookup when only a file with no row fits, none when nothing does; with no filter it draws as today, tries and draws included). `test_autodj_ref` 51.
+- 5: Stay on seed's re-pin and the quick skip (6.4, D2), in the engine and `tools/autodj_ref.py`.
+  - `Engine::pick()` is now a small function over `pickOnce(s, in, out, &again)`, the old body. A second round comes only after a re-pin. It shares `out`, and so its reads, and with `again` null it can't re-pin again. `repin()` runs at 4a and 4b, before the jump is marked: Stay on seed, a playing row that isn't the pin or damaged, with its own track (`rowToTrack`, as the runs test a row) inside the mood. Round 1 draws nothing before it, so the pick is the one a session pinned there from the start makes.
+  - Round 2 with its reads spent or failed: `nu == 0`, the random pick, which under a filter is the scan. It is marked `repinned` but not as a jump, the code's rule for any pick with no usable anchor (as in mood-no-anchor). The plan's "round 2 finds nothing" is read as 4a or 4b again: there both marks are set.
+  - `Session::pinMoved` (and `Engine::pinMoved()` for tests and the console) is set by the re-pin. A quick skip of that row in `rowLeft`, `modeChanged` and a new session clear it. Not in the plan: a moved pin that turns out damaged gives way as any pin does, and the random pick's row it falls to keeps the mark (no extra branch).
+  - Python's `track_left` drops a moved pin the same way. It has no `row_left`, so the fixture can't quick-skip one while the maps are away. The engine test does, through `rowLeft`.
+  - The split costs 96 bytes of the loop's stack: `pick()` 128 and `pickOnce()` 384, where `pick()` was 416 (MEASURED-HOST: the ESP32 compiler's `-fstack-usage` at `-Os`). The header and `docs/AUTODJ.md` 7.4 say so.
+  - The 35 earlier sessions replay unchanged: none of their Stay on seed picks reaches 4a or 4b under a filter. `test_autodj_ref.py` now holds the first 35 by hash too (`9142951641b5…`).
+- Sessions of commit 5 (MEASURED-HOST, real words). A seed whose row lists nothing (`syn` has three) brings its session's first pick to the re-pin. The edges use that.
+  - mood-repin, `syn`, 90 picks: Stay on seed under Neutral (77 of 316 tracks fit), then Happy and Relaxed (51) after a Follow the vibe stretch. 19 re-pins (the toy gave 12), 4 of them with a jump. One has no read: a seed that lists nothing, with the listener on a row read ahead. 5 jumps in all.
+  - mood-repin-edges, `syn`, 62 picks under Vocals and Party (the plan's 70: the edges needed fewer). 11 re-pins, and 4 moved pins quick-skipped. Also: a seed's pin kept at a quick skip; an Anchor change after a re-pin; a playing track outside the mood (no re-pin, a jump); a new pin whose CRC fails twice (2 reads, and the random pick's row becomes the pin), then that row again, now damaged (a jump); a new pin whose read fails (Io: the scan, the pin kept and read at the next pick); two reads of a flaky seed's slot, leaving none for the new pin's (`leftOut` 1, the scan).
+  - mood-index-away, `syn`, 18 picks under Sad at Loose: a re-pin, then the index away (7 picks by id inside the mood, the moved pin kept) and back (the pin steers with no read). Then a session from a seed that lists nothing, begun while the index is away: its row is the pin at `arrived`, then 2 re-pins.
+  - In all: 38 sessions, 1,850 picks, 1,551 prefetch passes; `sessions.json` 871,028 B, by additions only. `test_the_mood_coverage` asserts 9.8's coverage, and all of it holds.
+- Tests at commit 5: `test_autodj_engine` 54 (`test_the_repin_stays_in_the_budget`, `test_a_moved_pin_goes_at_a_quick_skip`, `test_a_seed_pin_stays`; the sessions' bound is 38). `test_autodj_ref` 55 (the same three, the coverage, the new sessions' counts, the 35-session hash). Each of these mutations fails the replay: no quick-skip drop, `modeChanged` keeping the mark, no re-pin at 4b, a second round with its own reads, a re-pin onto a row outside the mood. All but the 4b one fail a unit test too.
+- 6 and 7 change no pick, so `tools/autodj_ref.py` and the fixture stay as commit 5 left them (`sessions.json` 871,028 B, both hashes holding): the reference models the engine, not the trigger, the Driver or the settings. 9.8's "each commit changes reference, engine, tests and fixture together" holds for 1-5.
+- 6: the hold (6.5).
+  - `TriggerIn::noFit`, `Wait::NoFit` last, the ninth condition ("no track fits the filters", after the failure pause), and `Hold::NoFit` last in the hold chain. `owed` needs nothing: a hold never owes, so a filter nothing fits never holds up a library update.
+  - Not in the plan: the Driver's `Index` gains `fit`, the glue's count, and `triggerIn()` sets `noFit = ix.mood.on() && ix.fit == 0`. A caller that sets a filter with no count would hold, so the test rig counts too, as the glue does.
+  - `rowState()` gives Waiting. The status row's first line is "Waiting: no track fits the filters", over the index's first line as for the other holds; 4.4's amber and coverage line under it are S5's.
+  - `autodj.status_waits_fit` (Small 288, 96 B) in ten languages, from the mobile app's `autoDjSeedNoMatch` and `moodFilters` at d17c3fa5. Five were shortened to fit: es 314 px, fr 345, ja 296, pt 327 and ru 292 as first written. Not in the plan: THIRD-PARTY-NOTICES.md names d17c3fa5 now, since S4 took words from it before S3 did (8.1 gave that to S3's commit 2).
+- 7: the settings.
+  - `Settings::moods` (the pick never reads it). `Driver::setMoods()`: false for an invalid q or the same one; a change keeps the session. `Driver::load()` drops an invalid one. `Driver::pendingTrack()`: Auto DJ's pick not started yet, for D5.
+  - NVS: `kAutoDjMoodsKey` "moods", `AutoDjStored::haveMoods` and `moods`, `AutoDjSaved::moods`. `autoDjFrom()` and `autoDjTo()` take only a q `moodfilter::valid()` takes, else 0. `kCurrent` 5; `migrate(4, 5)` does nothing. `src/app/AutoDjStore.cpp` reads it with `isKey()` and `getUShort()`, queues all five keys through `nvslater` (`putU16`), and the boot's `[dj] settings:` line ends "mood filter none" or "0x...".
+  - The console: `Dq<hex>` (1-4 hex digits, a valid q only) and `Dq0`. `Dq800`, `Dq30`, `Dq600`, a bare `Dq` and five digits are Bad.
+  - `AutoDj::stepMood()` runs first in `step()` and at once in `setMoods()`, with 6.5's key: q changed, or `lib_.index()` from null (or not ready) to ready. It counts with `moodfilter::count()` (`fit_` of `fitOf_`, timed). Not in the plan: it calls `mapsChanged()` only while a filter is or was on, so with none the engine sees no new call. A changed q needs no call: `MapsPrint` holds it.
+  - The `D` lines: a mood line after the settings: the filter (`tagtext::filterText()`), "N of M tracks fit (counted in T ms)", ending ": none, so Auto DJ waits (a hold)" at 0 or ": they will repeat" at 50 or fewer; or "no mood data on this card: the picks are unfiltered (D4)"; or the count waiting for the library. Then the engine's jumps, re-pins, repeats and none-fits since the boot. The session line names a pin the filter moved.
+  - The pick line's tags: `[re-pinned: …]`, `[jump: …]` in three wordings, `[a repeat: …]`; "no track fits the mood filter" when there is none (`Dp`'s: the loop holds instead).
+  - `Dn`: `DryRun::Result` gains `jumps`, `repins`, `moodRepeats` and `noFit`. Its first line names the filter, and one line more gives those, only while a filter is on. With none, the `Dn` lines are as before, which 9.8's parity check compares.
+  - `Dq` while Auto DJ's pick is queued and outside the new filter: "the pick up next is outside the filter: it plays once" (D5). The toast is S5's.
+  - Docs: `docs/AUTODJ.md` (the status; 0; 1.2; 3.3 the re-pin; 3.7's "never stops" amended; 3.8 a filtered repeat; 3.12; a new 3.14; 4.1's ninth row; 4.2; 4.6; 5's table; 8's row and NVS text; 9's 52 messages; 9.3 the button; 10's `Dq`, `D`, `Dn` and pick line; 11.1-11.3, 11.2 with 38 sessions, 1,850 picks, 1,551 reads ahead); `docs/QUEUE-MODES.md` 16.1; `docs/ARCHITECTURE.md`'s NVS rules (schema 5); README's `D` row; `src/app/SerialConsole.h`.
+- Tests at commits 6 and 7 (MEASURED-HOST):
+  - `test_autodj_trigger` 7: the condition, the order, a finished queue held by it, the holds shown, `owed` over 12 bits (4,096 cases, 12 owed).
+  - `test_ui_autodj` 13: Waiting, the line, Output's line.
+  - `test_autodj_driver` 41:
+    - nothing fits: held once, nothing owed while the index joins, the engine never asked; a track then fitting is picked at once; a filter that isn't on never holds;
+    - the parse table;
+    - a filter change keeps the session, the pin, the rings and the pick up next, and the picks after it are inside;
+    - the boot drops an invalid q;
+    - `Dn`'s tallies: 0 with no filter; jumps and repeats under one; `failed` = `noFit` with nothing fitting.
+  - `test_nvs_layout` 14: schema 5; the key; every u16 (the 1,152 valid q read back as themselves, the rest as none); the matrix's schema-4 units and #27's schema-5 ones.
+  - `test_ui_library` and `test_ui_strings` with the new hold and string.
+  - The done set: 155 of 155. The whole `pio test -e native`: 2,098 cases in 101 suites, 2,090 passed; the 5 failures are this Mac's known ones on clean main (test_host_clock 2, test_hop_feed 2, test_queue 1). `test_autodj_ref` 55, `test_mood_vectors` 20, `test_gen_ui_strings` 29, `test_glyph_store` 25 (5 skipped).
+  - `pio run -e core2`: flash 4,324,147 B (+2,920 B over commit 5's 4,321,227 B), IRAM 5,161 B left.
+- Left for S5: the page's row and the view's mood fields (4.4), the three toasts and their news bits (4.5), and the hold's amber line with the coverage under it.
+- Device checks (9.8's list): the Device part below. With no filter, nothing in commits 1-7 changes a pick or the button's draws.
+- **The review's fixes** (one commit after 7, MEASURED-HOST):
+  - The old toasts under a filter set by `Dq` (it is saved, so they would have kept coming): a jump, a repeat or a re-pin made `NewsWatch` say "No Auto DJ index: picks are random", or at a session's first pick "This track has no Auto DJ neighbours yet: the first pick becomes the seed". Now `NewsWatch::pass` says none of the three for those, and "no index" only for a pick by id made for want of an index. `Pick::byIdJoined` (a padding byte: `Pick` stays 40 B) marks a mood filter's picks by id with the maps (6.2's 7 and 9); the engine test asserts it at every pick of the 39 sessions, so the fixture needs no new field. The pick line says `[by track id]` for those, not `[by track id: no index]`. With no filter the flag is never set: the toasts and the line are as before. S5's Jump toast goes in that first branch (4.5).
+  - Sharing rows, the leak guard of 6.3, was never in a session: `make_maps` gave each row one track. It gains `shared` (per mille: more tracks on rows other tracks hold, the row's track any of them, as the join's smallest path hash), and a 39th session, mood-shared-rows (`syn`, 73 copies on 62 rows, a copy's word its row's track's half the time), 110 picks under Happy and Party, a narrow Strict filter (12 tracks) and Relaxed and Vocals: jumps 4, 19 and 2, repeats 17, re-pins 10; the listener's copy outside the mood on a row whose track is inside (a re-pin) and the reverse (a jump); three damaged pins with the listener's copy inside the mood playing (the scan past both rows, 49 candidates each). `sessions.json` 915,293 B, by additions only; the first 38 held by a third hash (`795ea5234ed1…`).
+  - Mutations, on the engine and driver suites: the review's four survivors now fail. The scan's dedupe removed and the playing row kept in the scan each fail the replay (mood-shared-rows) and a unit test: `test_a_shared_row_is_tested_by_its_first_track`, now with two hits of one row, and `test_the_scan_skips_the_playing_row`, Stay on seed with a damaged pin. The words pointer left out of `MapsPrint` fails `test_a_filter_changed_remakes_the_runs` (other words at another address, the same q). `surpriseTrack`'s reservoir bound off by one fails `test_the_buttons_reservoir_keeps_each_track_alike` (9 tracks inside, each kept 8 times in 9). These fail too: the re-pin or step 8 not testing the row's track, and `byIdJoined` unset at step 9.
+
+**Device (2026-11-06).** The user's Core2 against the spare synthetic card: generation 5, mood words on 17,954 of 19,413 tracks, an Auto DJ index of 19,410 rows. Silent test mode `z` before anything played. Builds: S2's tip 3461c41 (flash 4,318,431 B), S4's d264ae2 (4,324,219 B) and, with the fix below, af248a0 (4,324,747 B, +528 B); IRAM 5,161 B left in all three. The unit's NVS was at schema 5 already (#27): S2 said "[nvs] schema 5, newer than this firmware's 4 (a downgrade): left as it is", S4 "[nvs] schema 5", and its first settings line "mood filter none". All figures MEASURED.
+
+- **No filter unchanged.** S2, then S4, each after the boot's join, the queue's current track the 320 kbps bench MP3 (no row, so each run's first pick is random): `z`, `Ds717feda5`, `Dr`, `Dn200`, Follow the vibe at 55 %; then the same in Stay on seed. `diff` of the `[dj] Dn` lines with the times masked: empty in both modes, and again on af248a0. S4 prints no "inside the mood filter" line. The lines:
+  - Follow the vibe: "200 picks (0 gave no track): 0 dry, 0 loosened, 1 random (0 by id); repeats 2, artists 141; tempo breaks 0, key breaks 0; drawn: tempo 0, key 0", reads at a pick 200/0/0, read ahead 199, anchors left out 0, classes "0: 200".
+  - Stay on seed: the same with repeats 64, artists 79, read ahead 1.
+  - Times straight after a boot aren't comparable: the card worker's validation walk (20-25 s) ran under both. Follow the vibe p50 / p90 / max: S2 1,238 / 1,298 / 1,351 µs and S4 2,369 / 3,404 / 3,533 µs, both during the walk; S4 after it 1,251 / 1,316 / 1,381 and 1,252 / 1,312 / 1,383 µs; af248a0 1,268 / 1,337 / 1,401 µs. Stay on seed: S2 1,466 / 1,498 / 1,648, S4 1,466 / 1,514 / 1,683 µs.
+- **Pick cost.** `Dq<hex>`, `Dm0` or `Dm1`, `Ds717feda5`, `Dr`, `Dn200`, from the bench MP3 as the current track: paused (idle), then playing (silent). Fits from `gm<hex>`. p50 / p90 / max in µs:
+
+  | Filter | Fit | Anchor | Jumps, re-pins, repeats | Idle, d264ae2 | Idle, af248a0 | MP3, d264ae2 | MP3, af248a0 |
+  |---|---|---|---|---|---|---|---|
+  | None | 19,413 | Follow | | 1,251 / 1,316 / 1,381 | 1,268 / 1,337 / 1,401 | 1,346 / 2,152 / 13,689 | 1,357 / 2,178 / 9,976 |
+  | 0x127: Sad, Relaxed, Vocals, Danceable | 405 | Follow | 0, 0, 0 | 309 / 328 / 30,608 | 314 / 334 / 12,089 | 338 / 710 / 62,239 | 340 / 755 / 21,898 |
+  | 0x127 | 405 | Stay | 2, 35, 0 | 256 / 2,319 / 33,135 | 259 / 2,135 / 14,560 | 295 / 5,024 / 66,068 | 300 / 4,491 / 26,599 |
+  | 0x001: Happy | 9,122 | Follow | 0, 0, 0 | 746 / 817 / 33,564 | 748 / 821 / 16,349 | 801 / 1,232 / 53,894 | 808 / 1,323 / 40,046 |
+  | 0x001 | 9,122 | Stay | 0, 0, 0 | 322 / 332 / 33,554 | 327 / 336 / 16,343 | 365 / 791 / 53,025 | 369 / 849 / 22,388 |
+  | 0x3E7: Sad, Relaxed, Vocals, all three tags, Strict | 8 | Follow | 198, 0, 192 | 34,942 / 35,986 / 36,073 | 16,487 / 17,533 / 17,614 | 59,318 / 68,384 / 72,058 | 26,801 / 39,074 / 41,431 |
+  | 0x3E7 | 8 | Stay | 198, 198, 192 | 34,812 / 35,288 / 35,378 | 16,139 / 16,653 / 16,747 | 59,751 / 68,217 / 75,905 | 26,477 / 34,925 / 41,062 |
+  | 0x3DF: Sad, Aggressive, Instrumental, all three tags, Strict | 0 | Follow | 200 gave none | 57,408 / 57,431 / 57,906 | 21,550 / 21,603 / 21,995 | 99,736 / 107,965 / 113,968 | 37,550 / 45,466 / 45,997 |
+  | 0x3DF | 0 | Stay | 200 gave none | 57,412 / 57,434 / 57,876 | 21,551 / 21,608 / 22,058 | 99,893 / 108,136 / 114,412 | 39,506 / 45,538 / 46,230 |
+
+  - Each run's picks and counters are the same on both builds and idle or playing; only the times move. Runs repeated on d264ae2 (0x001, 0x3E7, 0x3DF in Follow the vibe) gave identical lines.
+  - The max of the 0x127 and 0x001 runs is the first pick: random, with nothing to steer it, so the scan.
+  - Inside a run with no jump, p50 0.26-0.75 ms and p90 0.33-0.82 ms idle: under the no-filter run (the runs hold fewer candidates) and inside the plan's p90 0.38-1.70 ms (ESTIMATED). Stay on seed's re-pins under 0x127 lift p90 to 2.1-2.3 ms idle: a re-pin reads the new pin's slot (35 picks with 1 read).
+  - 0x3E7: 8 fresh picks (its 8 tracks), then 192 jumps to a repeat (step 7's pass, then step 8). 0x3DF: the scan, step 7 and `moodById`'s passes, then none. The loop never asks for a pick then (the hold); only `Dn` and `Dp` do.
+  - With the MP3: underruns 0 and breaks 0 in every run, the ring at 1,439-1,461 ms, `[stats]`'s load 35.5-36.1 %.
+  - Under 0x127, 63 repeats and 44 artists in 200 picks (no filter: 2 and 141).
+- **The fit count** (`stepMood()` at `Dq`): 4.8-5.6 ms, 9,122 tracks fitting the slowest; once 10.0 ms, a `Dq` straight after a fence's rejoin. The plan modelled 2-5 ms.
+- **Jump time** (`Dp`, the pick line's own time):
+  - d264ae2, under 0x3E7: "[jump: nothing listed fits the filter]" 29.5-29.9 ms idle, 0 reads; a jump to a repeat 33.6 ms. Stay on seed, Quiet Anchor's 01 as the seed and its 05 (inside 0x3E7) current: two picks from the pin's list (0.21-0.23 ms), then 4b, "[re-pinned: the playing track is the pin now] [jump: all listed that fits played lately]", 31.2 ms with 1 read (0.83 ms). `D` then names the pin "moved onto the playing row by the mood filter".
+  - af248a0: the same jumps 11.65-11.67 ms idle and 21.6-21.9 ms with the MP3; the re-pin and its jump 11.9 ms (0 reads: the new pin's slot was read ahead); the first pick of a session with nothing to steer it 20.2 ms with the MP3.
+  - A pick from the lists under a filter: 0.20-0.25 ms.
+  - The plan: a jump adds 2.4-8.5 ms (MODELLED). After the fix a jump is about 11.7 ms idle and 22 ms with the MP3: a UI hitch, no underrun.
+- **The hold.** `Dq3DF`: "0 of 19413 tracks fit (counted in 4.9 ms): none, so Auto DJ waits (a hold)". With the bench MP3 playing alone (`qc`), `D` says "now: no track fits the filters", and the loop's picks stayed at 12; `Dp`: "no track (no track fits the mood filter): again in 5 s". With entries up next, "now: tracks up next", the earlier condition. `Dq3DF` with Auto DJ's pick up next said "the pick up next is outside the filter: it plays once" and its path (D5).
+- **The boot.** `Dq127` was saved ("[nvs] saved autodj/on, autodj/mode, autodj/floor, autodj/match, autodj/moods (5 keys, 3 ms)"), then a reset: "[nvs] schema 5", "[dj] settings: Auto DJ on, Stay on seed, strictness 55 %, BPM continuity off, Harmonic mixing off, mood filter 0x127 (saved)", joined in 1,779 ms. `D` right after: "405 of 19413 tracks fit (counted in 5.0 ms)", PSRAM's largest free block 622,580 B, as at a boot with no filter.
+- **The fence.** `gb` with 0x127 on, nothing playing (not deferred, so no `gw`): the fence up 21,519 ms. Behind it `D` says "now: the library update's fence" and "the library is updating, or none: the count waits for it"; `Dp` is refused; `Dq3DF` is saved and its count waits. After the rejoin (4,634 ms): "0 of 19413 tracks fit (counted in 5.1 ms): none, so Auto DJ waits (a hold)", and `Dp` gives none. `Dq127` then counted 405 (10.0 ms) and `Dp` picked inside (0.24 ms). PSRAM's largest free block after the rejoin 180,212 B: 9.6's A/B reads it once `library.idx`'s save lands after the rejoin (the control 204,788 B), the save's layout, not the block's.
+- **Toasts** (the review's fixes). Under 0x3E7, a new session's first pick that was a jump (Heavy Station's 01 as the seed, in either Anchor), later jumps, the re-pin and the repeats: no toast. Two toasts came, each at a session's first pick with nothing to steer it (the bench MP3 has no row, or nothing played yet): "This track has no Auto DJ neighbours yet: the next track is random" (Follow the vibe) and "...: the first pick becomes the seed" (Stay on seed), as with no filter (the no-filter pick after `Dq0` gave the first). No live pick by id with the maps came up (steps 7 and 9), so the "No Auto DJ index" side wasn't seen.
+- **`Dq`'s refusals.** `Dq800`, `Dq30`, `Dq600`, a bare `Dq` and `Dq12345`: "not a D command" and the list. `Dq3df` in lower case is taken.
+- **Found and fixed (af248a0).** `MoodView::passes()` called `moodfilter::matches()`, which builds the filter's masks again a call, and the scan, step 7, `moodById` and the button's pass ask once a track: about 1 µs a track here. `moodfilter::Test` moves to the header and the view keeps one (the numbers above). No pick changes: the fixture's check and the parity above hold. `test_a_mood_view_is_the_predicate` checks the view against `matches()` for every q of 11 bits (and four wider), each over a fifth of the 65,536 words; a view whose `Test` is made from another q fails it and the replay. The done set: 159 of 159 (`test_autodj_engine` 56) and `test_mood_filter` 15; `--check` clean, `test_autodj_ref` 56 OK.
+- **Left.** The scan is still over 6.3's model after the fix: a jump 11.7 ms idle and about 22 ms with the MP3, a pick nothing fits 21.6 ms idle and 37.5-39.5 ms with the MP3 (only `Dn` and `Dp` ask for those). No audio risk was seen (0 underruns), so it is left as a model miss. The rest of a pass is the walk over `trackToRow` and the words in PSRAM, about 0.6 µs a track (GUESS from the figures: `gm`'s pass over the words alone takes 4.9 ms).
+- **Not run.** A `--moods --seed 2` card with the same files behind the fence (a card trip); the Auto DJ button (`De`) under a filter; a FLAC or Opus playing; a live pick by id with the maps, and so the "No Auto DJ index" toast's side of the fix; the page itself (S5).
+
+### 9.9 S5: the Auto DJ page
+
+Needs S3's editor and S4. One PR. Merged, then held out of a release until S7 (9.2).
+
+1. **View.** `lib/core/AutoDjView.*`:
+   - `State` gains `moods`, `moodOn`, `moodData`, `fit`, `moodPct`.
+   - `PageRow` becomes `OnRow, AnchorRow, StrictRow, FilterRow, BpmRow, KeyRow, StatusRow` (`:91`).
+   - `rowLive`: `FilterRow` live exactly when `moodData`, independent of `usable`.
+   - Status lines of 4.4 in `indexLines` (`lib/core/AutoDjView.cpp:101`) and the held form (`:129-135`); `statusAmber(s)`; `sheetDetail`; `emptyNoFit(s)`; `emptyButton` adds `&& !(moodOn && fit == 0)`.
+   - Strings of 8 for S5 in ten languages.
+   - `test/test_ui_autodj/test_ui_autodj.cpp:116` must change: `FilterRow` is dim with `usable` true and no data.
+2. **Page.**
+   - `src/ui/OutputPage.cpp`: `drawAutoDj` (`:1058`), `onAutoDjTap` (`:1141`, with the `FilterRow` branch before the `rowLive` check at `:1136-1139`), `autoDjSig` (`:1036`), amber at `:1081-1086`.
+   - `OutputPage` becomes a `FilterOwner`: `onFiltersClosed` calls `refreshAll()` and sets `drawnAutoDj_`.
+   - `UiHost`, `src/main.cpp:976`: `autoDjSetMoods(q)` returns fit, `autoDjMoodSettled()`.
+   - Empty states at `src/ui/NowPlayingPage.cpp:774-784, 851`, `src/ui/QueuePage.cpp:96, 284, 754-765`, or the `else if` at `:781` / `:762` puts Shuffle all back against frame dj-empty. `Sheet` gains a per-row ink (`src/ui/Overlays.cpp:410, 417`).
+3. **Toasts.** The bits, `Toast` count, `fewSaid_`, `jumpSaid_`, the waiting rule of 4.5, the hold under the editor, `docs/AUTODJ.md` 9, `.github/release-notes.md` (9.2).
+
+**Tests:** `test_ui_autodj` (status lines, the filter-on no-index lines, `statusAmber`, `sheetDetail`, `emptyButton`, news and de-dup, three toasts, and no index with 37 tracks fitting: Random at the first pick, Few at the next); `test_ui_library` near `test_auto_dj_texts_fit`; `test_ui_strings` through the catalogue.
+
+**Done when:** `pio test -e native -f test_ui_autodj -f test_ui_library -f test_ui_strings`, `python tools/gen_ui_strings.py --check`, `pio run -e core2 -e core2-dio`, `pio test -e native`.
+
+**Device:**
+- touch on the fourth row, dim-row note;
+- ten languages' status lines, sheet detail, toast placement;
+- amber states through `Dq`;
+- the status row with no index, which the canvas never drew: the user's eye;
+- the editor from Output through `uiMe`.
+
+**Effort:** 1.5-2.5 (guess, translations and device run included).
+
+**Result (2026-11-06).** All three commits built on `claude/mood-filters-s5`, which is S3's tip with S4 merged in (a6d4001). Host-tested only. No device check has run (the Core2 was busy with another stage), so nothing here has been seen on a screen. S4's device list (9.8) was still open too then: it ran later the same day on S4's branch, and that pass and its scan fix (af248a0) are merged in here since (below). As built, with the drift from the plan above:
+- 1, the view (6318736):
+  - `State` gains `moods`, `moodData`, `moodOn`, `fit` and `moodPct`, and also `fitOf` (not in the plan: the line's "of 19,412"). `AutoDj::view()` fills them from `stepMood()`'s last count, so they keep their values behind the fence.
+  - `FilterRow` is the fourth row, and `rowLive(FilterRow)` is `moodData`.
+  - `filterValue()` gives the row's value. Its hint `autodj.smart_sub` stays when the row is dim.
+  - `statusLines()` gives 4.4's lines, the held form included, and `statusAmber()` its amber.
+  - `sheetDetail()` gives the text and an `Ink`. `emptyNoFit()` picks the empty line, and `emptyButton()` follows it.
+  - The 13 strings of 8 for S5: three from the ARB in ten languages, ten machine-made in nine (9.2).
+  - This Mac has no Pillow, so the widths were measured with a host harness over the firmware's VLW arrays and CJK store, and by `test_ui_strings` and `test_ui_library`.
+- 2, the page (afe2aa6):
+  - The row is drawn by `drawAutoDjValue`, all FAINT when dim, as `dj-nodata`.
+  - A tap opens `Ui::openFilters()` in Output's blue, counting tracks. `OutputPage` is a `FilterOwner`.
+  - `UiHost::autoDjSetMoods(q)` returns the editor's count. `autoDjMoodSettled()` settles a changed close, and D5's log line moved into it; `Dq` calls it at once.
+  - A dim row's tap says `toast.autodj_no_mood`, before the index's note. Behind the fence a tap says `library.updating_wait`. `uiMe` over Output opens Auto DJ's editor.
+  - The "..." sheet has a per-row ink (`Ui::autoDjDetail()`), and the detail is cut beside its label.
+  - The empty states say `empty.no_track_fits` and show [Open Library] alone.
+  - Not in the plan: a `Dq` typed while Auto DJ's editor is up doesn't redraw the open editor. Albums' `uiMa` does (`filters_.sync()`), but Auto DJ's console has no hook into the Ui.
+- 3, the toasts (67dc760), as 4.5, with this drift:
+  - **A take, not a pass.** `NewsWatch` keeps the news until `AutoDj::takeNews()` (`AutoDj::news_` moved into it), so 4.5's "pass" is one take: what the Ui makes one toast of. A mood bit is raised only with no bit above it in the take. A bit that a later call in the same take outranks is taken back, and Few's or Jump's flag reset. Not in the plan: switching on with 1 to 50 fitting while the last track plays appends the session's first pick in the same loop. Its "no neighbours" would have taken Few's place with `fewSaid_` already set, so Few would never be said.
+  - **Few** is tried at every appended pick while unsaid and few. That gives 4.5's "first appended pick after a boot or a `playFrom` switch-on" and the retry in one rule. `counted(few)`, from each `stepMood()`, clears the flag when few goes false.
+  - **Jump** unraised tries again at the next pick that jumps, not at any next pick: its words describe the pick. A repeat after a jump keeps the jump's code, so it counts (4.5's `jump != None`).
+  - **Only while on.** Few and Once are raised at a settle only while Auto DJ is on (4.5 names "while on" for Few only). With it off, "then the filters apply" would apply to nothing. Off, the settle still clears both flags, so the switch on says Few.
+  - **The fence.** A settle there says nothing but clears the flags too, so Few comes at the first pick after the fence, with the new count.
+  - **The count.** main.cpp passes `fewCount()` of the view at that moment (`Ui::autoDjNews(news, few)`), and the Ui's flush uses the snapshot's. The snapshot alone would not do: it is a pass old when main.cpp hands the news over, and after a `Dq` it holds the old count. `newsToast` skips Few with no count: the filter went, or stopped being few, while the toast waited.
+  - **The hold.** `Ui::autoDjNews` and the flush (`Ui.cpp:1398` at a1566fe) hold everything while `filters_.up()`, for either owner. Not in the plan: when Auto DJ's editor closes on a change with its owner told, it drops the held Few, Jump and Once. They were an older filter's, and the settle says the new one's.
+  - **An edge left** (fixed by the review, below). The Ui's own holds (an Undo toast, the editor) merge takes. A Few held there could lose to an old bit that came later, as the old bits already do among themselves.
+  - **Docs:** `docs/AUTODJ.md` (the status, 0, 3.14, 9.1-9.3, 9.6, 9's 65 messages, 11.3) and `docs/ARCHITECTURE.md`'s toasts and `UiHost` calls.
+
+Host (MEASURED-HOST):
+- `test_ui_autodj` has 26 cases, 6 of them commit 3's: the toasts' order and counts (with any of the old five, all 256 bytes answer as before), `fewCount()`, Few, Jump, Once, one outranked waiting, and no index with 37 fitting (Random at the first pick, Few at the next). `test_the_news_under_a_mood_filter` now expects a jump's Jump.
+- With `test_ui_library` (69) and `test_ui_strings` (20): 115 of 115.
+- Each of these mutations fails a test: no take-back; a take-back that keeps the flag; `sessionBegan` keeping `jumpSaid_`; `counted(false)` not clearing; a settle not clearing; Few raised while off.
+- `python3.12 tools/gen_ui_strings.py --check`: clean.
+- The whole `pio test -e native`: 2,144 cases in 102 suites, 2,136 passed. The 5 failures are this Mac's known ones on clean main (`test_host_clock` 2, `test_hop_feed` 2, `test_queue` 1).
+- `pio run -e core2 -e core2-dio`: both build with no new warnings. core2's flash is 4,349,231 B: +596 B over commit 2's 4,348,635 B, and +9,556 B over S5's base at a6d4001 (4,339,675 B). core2-dio's is 4,349,263 B. RAM 58,480 B, unchanged.
+
+**The review's fix** (one commit after 3, MEASURED-HOST). The review found one minor, the edge above, and it is fixed:
+- **The finding's path.** A Paused or Cued held under Auto DJ's editor; the editor closes on a change; the settle raises Few and sets `fewSaid_`; the next take, merged with the held bit, showed that toast and dropped Few. Few was then not said until a change, a switch off, or the count leaving 1 to 50. The new hold under the editor can last any time, so the window was wide.
+- **The fix.** `autodjview::NewsWait` holds the Ui's side, host-tested: `pendingNews_`, its hold rule, its flush, the drop at a changed close and at Undo all moved into it. A Few (with a count) or a Jump that the merged toast outranks waits in `later()` until no toast is up, then shows; a take that comes meanwhile is merged with it, the most pressing first. A Few moot by its turn goes. Auto DJ's editor closed on a change drops a waiting Few or Jump too (an older filter's), and Auto DJ off drops all.
+- **An Undo tapped** (not in the finding): it still drops what waited about that queue, but no longer Few, which is the filter's. Few shows after the "Undone" toast while Auto DJ is on; an Undo that switches Auto DJ off drops it.
+- `test_ui_autodj` has 30 cases, 4 new: what waits for a toast (the old rule as before), a mood toast the merge outranks waits (every byte, with a count and without: the first toast is `newsToast()`'s, then each Few and Jump it outranked, once, Few first), the finding's path with `NewsWatch` (Few lost before), and an Undo keeping a waiting Few.
+- Each of these mutations fails a test: nothing left for later; the later bits shown over a toast still up; a changed close keeping them; an Undo dropping Few.
+- With `test_ui_library` (69) and `test_ui_strings` (20): 119 of 119. The whole `pio test -e native`: 2,148 cases in 102 suites, 2,140 passed, the 5 failures this Mac's known ones. `python3.12 tools/gen_ui_strings.py --check`: clean (no string changed).
+- `pio run -e core2 -e core2-dio`: both build with no new warnings. core2's flash is 4,349,555 B, +324 B over commit 3's 4,349,231 B; core2-dio's 4,349,587 B. RAM 58,480 B, unchanged (`NewsWait` is 2 B, where `pendingNews_` was 1).
+
+Not run: the whole device list above. S4's (9.8) ran on S4's branch, before the merge below, so it never saw the page.
+
+**S4's device pass merged in** (MEASURED-HOST). The merge after the review's fix takes S4's three later commits, up to 7247f9a: the scan's fix (af248a0: `moodfilter::Test` in the header, `MoodView` keeping one, and `test_a_mood_view_is_the_predicate`), 9.8's device part (b1a72fd) and 9.6's A/B of the save after the rejoin (7247f9a). Only section 1's Status conflicted, and it now names both. `docs/AUTODJ.md`'s 0, this Result and 12's time row were brought up to date by hand.
+- The whole `pio test -e native`: 2,149 cases in 102 suites, 2,141 passed (one more than before, af248a0's), the 5 failures this Mac's known ones. `test_autodj_engine` 56 and `test_ui_autodj` 30 pass.
+- `python3.12 tools/gen_ui_strings.py --check`: clean. `python3 tools/autodj_ref.py --check`: the fixtures up to date; `test_autodj_ref` 56 OK.
+- `pio run -e core2 -e core2-dio`: both build with no new warnings. core2's flash is 4,350,055 B, +500 B over the review's fix (4,349,555 B); core2-dio's 4,350,087 B. RAM 58,480 B and IRAM 5,161 B left, unchanged.
+
+**Device (2026-11-06).** MEASURED on the Core2 v1.3 and the spare card (gen 5: 19,413 tracks, 17,954 with a word, an Auto DJ index of 19,410 rows), silent mode `z` before anything played, Auto DJ on in Follow the vibe at 55 %. The build: this branch at the review's fix (e87de85) with S0's commit picked on top, not committed together (core2's flash 4,349,563 B, IRAM 5,161 B left, RAM 58,480 B). It carries S4 up to d264ae2: the scan's fix (af248a0) came in with the merge above, after this pass, so the jumps below are d264ae2's scan, and the merged build's are in its spot-check (the end of this part). The boot: "[nvs] schema 5", "mood filter none (saved)", joined in 1,610 ms. Every screenshot was compared with its frame pixel by pixel, quantised to 565. No bug found in S5; nothing fixed.
+
+| What | Result |
+|---|---|
+| The row | Fourth on the first screen: "Smart filters", "Any" beside it, "keeps every pick inside these moods" under it, as `dj-any` |
+| The editor | A tap on the row: Auto DJ's editor in Output's blue, "19,413 tracks", Clear dim; 84.4 ms, logged as a slow event (Albums' 83.0 ms, 9.7). Relaxed: 8,140 of 19,413 (counted in 6.1 ms); Instrumental: 3,085 (5.7 ms), as `grid-dj`. The cross: the row "Relaxed · Instrumental" beside the title, as `dj-two`, and the status row "3,085 of 19,413 tracks fit" over "BPM 95% · key 97% · mood 92%", as `dj-status`. Closing after a change: a 51.9-55.3 ms pass; with none, 36.3 ms (paused, the held toast drawn with it). `uiMe` over Output opens the same editor |
+| A long value | `Dq56` (Neutral · Relaxed · Instrumental · Acoustic, 289 fit): the value on the second line, as `dj-many`. Longer ones cut with an ellipsis ("Sad · Vocals · Acoustic · Party · Danceable…") |
+| Few | `gm` found 0x3C3 48, 0x3CC 33, 0x3E3 28, 0x3C7 11 and 0x3D3 7 fitting. `Dq3E3`: amber "Only 28 tracks fit" over "They will repeat · BPM 95% · key 97%", as `dj-few` |
+| Waiting | `Dq3DF` (0 fit): amber "Waiting: no track fits the filters" over the coverage, as `dj-waiting`; Output's Auto DJ row "Waiting · Follow the vibe" |
+| No filter | `Dq0`: "19,410 of 19,413 tracks have neighbours" over "BPM 95% · key 97% · mood 92%" |
+| The "..." sheet | With 0x014 and Auto DJ's pick up next: "On · Relaxed · Instrumental" in the accent, whole. With 0x3DF: "Waiting" in amber, as `dj-menu-wait` |
+| Empty states | 0x3DF and `qx`: Now Playing "Nothing playing", "No track on this card fits these filters", [Open Library] alone; the Queue "Your queue is empty", the same line and button. After `Dq0`: [Open Library] and [Auto DJ] again |
+| Few toast | At `Dq3CC`, `Dq3E3` and `Dq3C3` while on: "Only 28 tracks fit: they will repeat" (warn: the amber bar and outline). At the editor's close on a change to 0x3C3: "Only 48 tracks fit: they will repeat". Closing on 3,085: none |
+| Once toast | Auto DJ's pick up next, then `DqC`, `Dq20`, `Dq56` and `Dq3DF`: "[dj] the pick up next is outside the filter: it plays once" and "Plays once, then the filters apply". With `Dq3C3` (48) on the same pick: Few alone (Once outranked, gone) |
+| Jump toast | Under 0x3C3, playing: four picks from the lists (1 to 3 candidates), then "[random] [jump: nothing listed fits the filter]" and "No close match: any track that fits". The later jumps under it said nothing (`jumpSaid_`) |
+| The hold | After `Dq3E3`'s settle (Few said, `jumpSaid_` reset), `uiMe`, then play: a jump, and no toast while the editor was up (`ui`: toast none, filters open). The cross with no change: "No close match: any track that fits" at once, over Output's header |
+| Toast placement | All three one line in English, in the box the frames have (y 38-69, x 4-315), over the page's header or Now Playing's title; Output's blue on Output, Now Playing's accent there, amber for Few |
+| Times | Counts 4.8-6.1 ms (43, from `Dq` and the editor's taps). Picks from the lists 0.24-0.66 ms; a session's first pick 10.05 ms (1 read, 8.96 ms). Jumps, a track playing in silent mode: 32.90-33.98 ms (4) on e87de85, d264ae2's scan (9.8: 29.5-29.9 ms idle there). On the merged build, af248a0's scan: 12.88-18.57 ms (24) with the card's MP3s, 13.03-23.71 ms (6) with the bench's 320k MP3 (9.8: 21.6-21.9 ms), 12.15-12.95 ms (3) idle (9.8: 11.7 ms) |
+| Languages | de, fr, ru, ja, pl, zh, it, es and pt, then en: the row with 0x014, and the status row at 3,085, 48 (with its toast) and 0 fitting. Every status line fits its 288 px. The row's value goes under the title where it doesn't fit beside it (all but en and zh). The Few toast takes two lines, split at ": ", in all but en and zh. Counts follow each language's grouping: "3.085" (de, pt), "3 085" (fr, ru), "3085" (pl, it, es), "3,085" (ja, zh). de and fr write "95 %" in the few line and "95%" with the mood, and it writes the mood line with commas, as their notes say (the room). The sheet's detail is whole in de, fr, ja, zh, it and pt, cut with an ellipsis beside its label in ru, pl and es |
+
+The frames against the screen:
+- `dj-any`, `dj-two`, `dj-many`: the Smart filters row pixel for pixel. Elsewhere on them, none of it S5's: the strictness value "55% or closer" sits 1 px left of the frame's; the switches' knobs have hard edges (the frames anti-alias); the scroll thumb covers y 76-166, the frame's y 74-169; the dividers start at x 8, the frames' at x 0.
+- `grid-dj`: the grid pixel for pixel but the count (the card's 3,085 of 19,413 for Relaxed · Instrumental, the frame's made-up 1,204 of 19,412), the cross (`kCross`, 12 x 12, the frame's 10 x 10) and the hard edges of the pills' corners and the level's dots, as in 9.7.
+- `dj-status`: the two lines pixel for pixel but the count. The list draws a divider under the status row (y 239, x 8-311); the frame has none.
+- `dj-few`: the first line pixel for pixel but the count. The second line sits 1 px right of the frame's: the firmware starts a line's first glyph's ink at its x (`Fonts::draw()`'s lead, as M5GFX measures a line), where the frame lets T's ink hang 1 px left.
+- `dj-waiting`: the status row pixel for pixel. The row's value is the card's filter (0x3DF, on the second line).
+- `dj-menu`: the detail "On · Relaxed · Instrumental" is whole here (x 126-302), where the frame cuts it at "Instru…". The sheet's title sits 1 px lower; the page shows in the 1 px row above the sheet (y 39: the cover's top edge, x 11-108), which the frame draws empty; the cross is 12 x 12.
+- `dj-menu-wait`: "Waiting" in amber pixel for pixel; the title, the row above the sheet and the cross as `dj-menu`.
+- `dj-empty`: the frame's words and single button, in the layout the empty states have today (`drawEmptyState()`): the disc, title and line about 26 px lower, the button centred at y 172-205 with the Library icon, where the frame puts it at y 200-233 without one.
+- `dj-toast-few`, `dj-toast-jump`, `dj-toast-once`: one line in English (the frames' README says so). The box and its colours are the frames'. The frames fill the band around the box (y 36-71) with #101419; here the page shows around it.
+- The tab bars: the frames' are an English capture with a track playing; here the queue's count, the volume at 0 % (silent mode) and, with nothing playing, the note on the Playing tab.
+
+Left, not S5's: `uib` at a tab's root with a sheet up closes the sheet but leaves it on the glass until something draws. `Ui::back()` calls `closeModal()` and returns at depth 1 without `repaintUnder()`, which `showTab()` does (`src/ui/Ui.cpp`, since e6f04e8). Console only: every caller in the UI is at depth 2 or more. The pass closed sheets with their cross instead.
+
+Not run: the dim row ("No mood data", its note, picks unfiltered: one card here, scored); the status row with no usable index (`Dc` reopens the file and `Dj` joins again, Found and Reading, "as today"; nothing makes the index unusable without writing the card); behind the library update's fence (its save writes `library.idx`); Few at a boot's first appended pick or a `playFrom` switch-on; an Undo with a waiting Few; a `Dq` while the editor is up (9.9's drift); the Once and Jump toasts on screen outside English (their lines were logged in each language); a real finger and the redraw's feel by eye; on the merged build, all but its spot-check below. The queue was cleared twice (`qx`; the bench queue went), and the unit was left in English, Auto DJ on in Follow the vibe at 55 %, no filter, nothing playing.
+
+**The merged build, spot-checked** (MEASURED, 2026-11-06). The merge above (bea362c) with S0's commit picked on top the same way (core2's flash 4,350,067 B), on the same unit and card, silent mode `z` before anything played:
+- The boot: "[nvs] schema 5", "mood filter none (saved)", joined in 1,499 ms.
+- `Dq3C3` (48 fit; Few said), then `qp1` (DJ Yagal's three loose tracks) played on and Auto DJ appended 45 picks: 18 from the lists (0.23-0.28 ms) and 27 jumps (11 "nothing listed fits the filter", 16 "all listed that fits played lately"; "No close match: any track that fits" once). By what was playing: an MP3 12.88-18.57 ms (24, median 15.3 ms; the 18.57 ms with 1 read of 3.57 ms), a FLAC 14.87 and 18.02 ms, an Opus 24.44 ms. The same kind of run on e87de85 gave 32.90-33.98 ms.
+- The bench's 320k MP3 (`qp13`) playing, under 0x3E7 (8 fit): `Dp`'s first pick of the session 25.86 ms (random, nothing to steer it), its jumps 13.03-23.71 ms (6) and its jumps to a repeat 22.55-40.84 ms (5). `Ds717feda5`, `Dr`, `Dn200`: p50 / p90 / max 27,410 / 40,632 / 42,400 µs, with 9.8's counts (198 jumps, 192 repeats); 9.8 had 26,801 / 39,074 / 41,431 µs on af248a0. Paused: `Dp`'s jumps 12.15-12.95 ms (3), `Dn200` 16,458 / 17,532 / 17,595 µs (9.8: 16,487 / 17,533 / 17,614). The ring at 1,439 ms, `[stats]`'s load 37.5-37.6 %; 0 underruns and 0 breaks in the whole check.
+- `Dq3E3` on Output > Auto DJ: the Few toast, "Only 28 tracks fit: they will repeat" with the amber bar and outline over the page's header, and the Smart filters row fourth, "Sad · Vocals · Acoustic · Party · Danceable…" on its second line (one screenshot).
+- Then `Dq0` and `qx`. Left on the merged build in English, Auto DJ on in Follow the vibe at 55 %, no filter, nothing playing.
+
+### 9.10 S6: the mStream route
+
+Branch `feat/mood-scores` from master. Not stacked on #1072. No version bump. Commits:
+
+1. `refactor(db): the batch's path resolver, on its own`. `resolveBatchPaths(filepaths, user)` from `src/api/db.js:518-529`, used by `pullMetaDataBatch` (`:503`). Its per-path try/catch (`:522`) moves with it. No behaviour change.
+2. `feat(moods): POST /api/v1/db/mood-scores`.
+   - `pullMoodScoresBatch` below `:563`: all values start null, early return when `!d || !moodFiltersReady()`, chunked at 500, `FROM tracks t LEFT JOIN track_moods tm ON tm.track_id = t.id WHERE (t.library_id, t.filepath) IN (...)`. The left join fixes tracks as the outer loop on `UNIQUE(filepath, library_id)` (`src/db/schema.js:847`).
+   - Route after `:712`, `MOOD_SCORES_MAX_PATHS = 2000`. `model` and `moodVersion` as 5.1.
+   - Allowlist line.
+   - `moodScores: 1` in `src/api/server-info.js`, `moodScores: features.moodScores` in `src/api/playlist.js:43`. The drift lock fails without it (`test/integration/api-server-info.test.mjs:219`).
+   - `docs/openapi.yaml`, with a header comment on no rounding and null for both no-row and not-visible.
+3. `test(moods): the two-place floor agrees with the SQL's bars, on both runtimes`.
+
+**Tests:**
+- New `test/integration/mood-scores.test.mjs`: shape, a key for every path as sent (leading slash, `//`, duplicates, `__proto__`); exact values `[0, 1, 0.29, 0.57, 0.58, 0.7, 0.3, 0.5]` with `===`, raw text holds `0.29`; NULL head, all-NULL, no row; not visible `deepEqual` no row, status 200; Joi 400s; exactly 2000 paths; 413; a JS port of the byte rule matches `/db/recent/added` at .3, .5, .7; flag with an empty table; `analyzeMoods: false`; `model` with no discovery index loaded; key over HTTP.
+- New `test/db/mood-bars.test.mjs` with a node leg and a Bun leg, following `test/db/sqlite-driver-errors.test.mjs`: 10,001 scores, bars 10-90, `moodPredicate` through the real driver against `floor(x*100+1e-9)`, asserts 0 wrong. This closes the runtime unknown on both. Shipped binaries are Bun builds (mStream `src/db/sqlite-driver.js:9-11`).
+- Changed: `test/unit/federation-auth.test.mjs`, `test/integration/api-server-info.test.mjs`, `test/integration/federation-browse.test.mjs` (`:179-189`: a 404 for an unknown peer proves the screen passes, with no iroh).
+
+**Done when:** `npm run lint`, `npm run docs:api:validate`, `node --test` on those files plus `mood-filters`, `playlist-load`, `metadata-album-artist`, `file-explorer-metadata`. `mood-bars` reports 0 on both runtimes, and the PR labelled `full-ci` is green.
+
+**Device:** none. **Effort:** 0.5-1 (guess).
+
+**Result (2026-11-06, merged 2026-11-07).** Built as planned on `feat/mood-scores`, mStream PR #1122: the three commits (954e0f5, 1d16bf7, 7ab61d3) and two reviews' fixes. 55ef8d6: a POST with no JSON body was a 500 with an error-level stack; now a 400, as `flow.js` gives. 5f7bd56 (2026-11-07): `moodFiltersReady()` answers false with no database open. MEASURED-HOST 2026-11-06, at 55ef8d6 (5f7bd56 adds one unit test after):
+- `mood-scores`: 15 cases.
+- `mood-bars`: 7,290,729 checks of `moodPredicate` through the real driver, 0 wrong on node (SQLite 3.54.1) and on Bun 1.4.3 (SQLite 3.51.0); a plain floor gets 27 wrong on both. This closes the runtime unknown (12).
+- The whole `npm test`: 4,439 tests, 0 failing, 10 skipped (no EffNet cache, no sidecar binary, OS-only cases).
+- `docs:api:validate` valid. `lint` clean on every file the branch touches; the repo-wide run fails the same way on master here (eslint 10.6.0 installed against `^10.8.1`).
+
+Merged into master on 2026-11-07 (05d7015f), then #1072 (1dd065b0); both are in v6.33.1, released the evening of 2026-11-07 (tag on f7f2f79f). Left: `metadata/batch` still answers 500 to a POST with no body (it came before this), and `resolveFlowTracks` keeps its own copy of the resolver loop.
+
+### 9.11 S7: the terminal writer
+
+`git switch -c claude/card-moods claude/card-waveforms` in the existing worktree. One PR onto #68. No part can go to terminal main: `src/device/card` and `src/api/transfer.rs` aren't there. The real-card run owed on #68 (as of 2026-11-02) goes first, or failures are confounded.
+
+Commits:
+
+1. **`api: the mood scores call and flag`.**
+   - `mood_scores: Option<u32>` at the end of `LayeredFeatures`.
+   - `mood_scores_async` after `src/api/transfer.rs:1134`, the loop of `metadata_batch_within` (`:1008`), `chunks` (`:819`), 413 halves (`:1020`).
+   - 403 and 404 give `Ok(None)`, with no splitting. Numbers through `real` (`:217`), which takes integers.
+2. **`card kit: MPTG minor 1, fixtures`.**
+   - New `contract/moods.rs`: `Scores`, `encode`, `read_tail`.
+   - `contract/mptg.rs`: `RECS_STRIDE` stays 72 (`:34`), new `RECS_MOODS_STRIDE`. `Record.moods`, `has_moods()`. Decode reads the tail at `b.len() >= 80`, the one site that fills it. `:506`, `:595` pass 80 at stride >= 80. Write refuses a tail failing `read_tail`, moods in source 1, moods under minor 0. New `minor_of`. `to_input` (`:397`).
+   - Fixtures copied in this same commit. `goldens_are_written_byte_for_byte` reads the whole directory and asserts `seen == goldens` (`contract/tests.rs:1185-1222`), so `tags-moods.bin`, `libraries/tags-moods.json` and `tags_input` reading `scores` (`:163-191`) land together, and 22 becomes 23. `README` paragraph updated. Names are the firmware's (S1), not new ones.
+3. **`engine: overlay, read_again`.**
+   - `Moods { Keep, Clear, Overlay(..) }`, `fn moods(&mut self, ..) -> Moods { Keep }`.
+   - `engine/run.rs`: `let mut records` (`:1177`); `hooks.moods(&commit)` after `bound.check` (`:1237`); apply at the end of `if last`; `minor: minor_of(&records)` (`:1296`).
+   - The spreads `..row.rec` and `..old.rec` (`:210`, `:1031`) carry scores once decode fills them. `read_again` (`:546-552`) builds a new record, so it adds `rec.moods = old.moods`, or every reread loses scores.
+4. **`sync: fetch rule, gate, cost`.**
+   - New `sync/moods.rs` with the rule of 5.2. `same_files` moves to a helper.
+   - `TAGS_PER_TRACK` 345 to 353 (`plan.rs:617`), moving `:1038`, `:1089` in the same commit.
+   - `Ask.no_moods`, `--moods`.
+5. **`words: page, CLI, locales, contract`.**
+   - `dev.card.conv_gift` changed: "for someone else: no Auto DJ index or mood scores, plays not sent" (wraps in ru), 10 locales.
+   - English notes in the Details log. CLI help (`src/device/mod.rs:219`).
+   - UX contract clause 51b after `docs/ux-contracts/mp3-player-screen.md:1235`.
+
+**Tests:**
+- `api/transfer.rs`: chunks under the body cap, 403 and 404, odd row, version moving.
+- `contract/tests.rs`: goldens, hardening, truncation and mutation lists, round trip, refusals. New `moods_json_*`, `a_tail_counts_only_when_it_validates`, `the_stride_constant_stays_72`. The `mptg-minor-1` carry test (`:1525`) passes unchanged.
+- `engine/tests.rs`: `equal_scores_make_no_commit`, `a_score_changed_alone_makes_one_commit`, `a_moved_file_keeps_its_scores`, `a_record_read_again_keeps_its_scores`, `a_rename_whose_size_moved_keeps_its_scores`, `a_checkpoint_carries_scores_and_adds_none`, `no_hooks_keep_the_scores`, `clear_goes_back_to_stride_72_and_minor_0`, `every_cut_of_a_run_that_only_adds_moods_is_finished`.
+- New `sync/tests/moods.rs`: `a_server_without_the_flag_is_never_asked`, `a_304_on_a_card_with_none_asks_and_commits`, `a_304_on_a_card_with_scores_asks_nothing`, `one_changed_score_commits_once`, `a_failed_fetch_keeps_old_scores_and_the_run_ends_well`, `a_card_for_someone_else_asks_nothing_and_loses_what_it_had`, `auto_dj_off_still_gets_scores`, `a_null_row_clears_and_a_path_left_out_keeps`, `a_403_or_404_reads_as_none`, `a_peers_rows_stay_unscored`.
+
+**Fixture lineage.** The terminal's copy is a scratch merge (`test/fixtures/card/README.md:10-16`). Until #27 lands, apply S1's tool commit on that merge in a scratch tree, run stdlib Python only, copy the output. `diff -rq` against the player's folder then lists only README.md, golden/device.txt, libraries/device.json, vectors.json, as it does today. If #27 lands first, copy from main, and only README.md differs.
+
+**Done when:** `cargo test`, `cargo test --features desktop`, `cargo check --target wasm32-unknown-unknown` with and without `--features desktop` (`ci.yml:54, 65, 159, 164`).
+
+**Device:** none here; S8. **Effort:** 2-2.75, plus 0.5-1.5 landing the stack (guess).
+
+**Result (2026-11-07).** Built on the terminal's `claude/card-moods`, PR #69 onto #68: the five commits (fc1389d, 6f5d2cd, d3dd4ff, 8bee265, 19afb68) and the review's fix (982f13c). The fix: a file fetched again kept no tail when that run got no new scores; now it keeps its row's old one, tested by a cut at every write of the run. MEASURED-HOST:
+- `cargo test`: 2,029 passed, 0 failed.
+- `cargo test --features desktop`: 2,145 passed, plus 4 in the second binary.
+- Both `wasm32` checks clean.
+- The tail against the player's Python reference on 40,000 random rows and tails, and on the full 4- and 5-place grids through serde_json. The 22 old goldens byte for byte the same.
+
+The lockfile needs rustc 1.95 or later: built with `cargo +1.98.1`. The cache lacked one crate, unicode-normalization 0.1.26, fetched with the user's OK. Not merged: #56 and #68 land first. #68's own real-card run wasn't run apart: S8 ran the whole stack (9.12).
+
+### 9.12 S8: the real sync
+
+With the user's go-ahead, nothing playing on the music card. Needs S6 and S7, and at least S2 and S3 on the player.
+
+- First sync: `cid=` generation rises, the build is timed against 11.3 s.
+- A second sync with no change: `cid=` unchanged, no build.
+- A card for someone else: `gm` reads 0.
+- `gm` coverage against the query of section 12. Album share under a few filters.
+- With S4 and S5 in: real jump share, re-pins, repeats through `Dn200`.
+
+Results go into this document and `docs/AUTODJ.md`. **Effort:** 0.5-1 (guess).
+
+**Result (2026-11-08).** MEASURED that day, on the user's own server, card and Core2, with the user's go-ahead.
+
+- **What ran.**
+  - The server: https://music.rum.st, on the release the user had just put out, v6.33.1 (S6 and #1072). That is the user's word: its `/api/` answered 401 without a sign-in, so the version wasn't read here. Its mood route answered.
+  - The writer: a release build of the terminal's `claude/card-moods` (S7, on #68 and #56), `mstream-player device card /Volumes/1TB sync --yes`, from this Mac.
+  - The card: the user's 1 TB test card (cardId 0x9E54EA3240A83BB1), last synced 2026-11-05 at generation 94, with T's 19,408 records at 72 bytes and no tails. Its status said "holds library" and "for me": one library, from the server whose key it carries, and no peer's. `/.mstream` and `/.player` were copied off first.
+  - The player: the Core2 on 9.9's merged build, `bea362c` with S0's commit picked on top (so its version string says `-dirty`).
+- **The first sync.**
+  - 1:32 by `time` (the app says "1 min"). 36 new files listed, 0.4 GB: 35 copied, 1 skipped. The server listed `San_Pacho_TOBEHONEST_-_Horny.opus` at 0 bytes and served 3,194,768.
+  - It said "mood scores for 19,249 of the card's 19,443 tracks from the server".
+  - Generation 94 to 96 (base 95), commitId 0xCEB05E0858368AC0. T: 19,443 records of 80 bytes at minor 1, 6,965,530 B.
+  - The player's `synthtransfer.py --check` agreed: 19,249 tails that read, and 19,249 of 19,533 tracks with a word (98.5 %), the block 39,066 B.
+- **The 284 tracks without a word.**
+  - 194 of T's 19,443, for which the server returned no scores.
+  - 90 on the card that T has no record for, the same 90 as before the sync: most likely files the server's listing doesn't hold, not traced. They aren't `._` files: the device's walk and the checker both skip dot names.
+  - The device splits the tracks outside T as 82 with its own records and 9 named by their paths, and takes 19,442 from T where the checker's rule 1 takes 19,443. Which T record it didn't use wasn't traced.
+- **The device's builds.**
+  - The first boot on generation 96 wasn't logged: the device was on with the card before the console was attached, and built `library.idx` then. The logged boot loaded it in 1,834 ms.
+  - That boot's walk found the 35 new files (the first walk after the commit, 57.6 s), the compaction took 32.0 s, and the update step rebuilt the library on the card worker, the loop live, in 29,473 ms (the fence up 29,509 ms), with the split above and PSRAM's peak 1,940,027 B; `library.idx` saved in 2,104 ms.
+  - The build at boot, against 11.3 s: `gb!` and a reset. "built from the records in 17284 ms: 19533 tracks, 19442 from the transfer's (19249 with moods), 82 from the device's, 9 by their paths", the same peak, browsable 19,282 ms after the mount.
+  - So 6.0 s over the 11.3 s of a build from D at 20k, and 2.8 s over the synthetic card's build from its T: 19,413 tracks, 17,954 with a word, 14,438 ms (9.6 Run C).
+- **The second sync, no change.** "nothing new", 5 s. Generation 96 and commitId 0xCEB05E0858368AC0 unchanged, no mood call (5.2's step 3), so no build on the device.
+- **A card for someone else:** not run, since it clears the scores on the card. `a_card_for_someone_else_asks_nothing_and_loses_what_it_had` covers it on host (9.11).
+- **Coverage against 12's query:** the query needs the server's `mstream.db`, so not run. The sync's own count stands in for the card's share: the server scored 19,249 of the 19,443 paths the writer asked about, all 19,249 reached the card (19,249 tails that read), and `gm` reads 19,249. The server-wide share is still unknown.
+- **Album share** (`gm<hex>` on the Core2, idle; `--check --mood-filter` gave the same counts):
+
+  | Filter | Tracks that fit | Albums of 1,747 | Tracks pass | Albums pass |
+  |---|---|---|---|---|
+  | 0x001: Happy, Standard | 7,508 | 585 | 5,578 µs | 16,193 µs |
+  | 0x40A: Neutral, Neutral, Loose | 8,117 | 729 | 5,746 µs | 16,483 µs |
+  | 0x127: Sad, Relaxed, Vocals, Danceable, Standard | 157 | 1 | 5,057 µs | 15,820 µs |
+  | 0x215: Happy, Relaxed, Instrumental, Strict | 20 | 0 | 5,013 µs | 15,538 µs |
+
+  - 1,735 of the 1,747 albums have an analysed track. The other 12 leave the list under any filter (13's partial analysis).
+  - The synthetic card's passes, idle: albums 14-31 ms, tracks 5-12 ms (9.6 Run C).
+- **On the screen** (`X`):
+  - Albums's first row at rest: "Filters" over "1,747 albums".
+  - With Happy set (`uiMa1`): "Happy" over "585 of 1,747 albums" with its cross, the list then starting with the albums `gm1` lists first.
+  - The editor (`uiMe`): Happy lit, "585 of 1,747 albums", Standard.
+  - Output > Auto DJ's Smart filters: "Any". The saved filter was 0x200, Strict with no group, and a level alone is no filter.
+- **Auto DJ under a filter** (S4 and S5 in), `docs/AUTODJ.md` 14.5. The join: 19,267 of 19,533 tracks with neighbours, 1,442 ms, the boot's walk just started. `Dn200` from `Ds717feda5`, idle (the first no-filter run, under the boot's walk, left out):
+  - Follow the vibe never left the lists under Happy, 0x40A or 0x127: 0 jumps in 200 picks each, p90 0.35-1.08 ms. With no filter: 1.34 ms.
+  - Stay on seed: 17 re-pins and 2 jumps under 0x127, 1 re-pin under Happy, none under 0x40A.
+  - 0x215, 20 tracks: 190 jumps and 180 repeats in either mode, and 193 re-pins in Stay on seed, p50 15.7-16.3 ms. The synthetic 0x3E7, 8 tracks: 16.1-16.5 ms (9.8).
+  - The count at `Dq`: 4.7-5.9 ms. `Dq215` raised the amber note "Only 20 tracks fit: they will repeat".
+  - Auto DJ's saved settings were put back after (off, Follow the vibe, 55 %, 0x200). `D` read 0 picks, so none reached the live queue.
+- **Found, none of it in the mood code.**
+  - macOS asked for Removable Volumes access for the app that started the writer (here the Claude desktop app, whose Terminal panel ran it). `diskutil info` waited on that prompt until the user allowed it.
+  - The card's server has to be in the app's config: until the user added https://music.rum.st, the sync said "not asked: no server to ask". The card's key 0x9C95FD421795A5B0 is FNV-1a 64 of that URL.
+  - macOS `._` files on the card after the sync: 5 at `/.mstream`'s top level, one beside each file there (the commit's four and `state.json`), each stamped the same minute as its file, and 39 under `/music` modified that day (35 files were copied; the names weren't matched). macOS writes these beside files written to a FAT card from the Mac: `synthtransfer.py` left the same on the spare card, so they don't come from the writer's code, which doesn't remove them either. The player and the checker skip dot names. They were left on the card.
+  - The server's library lists 39 hidden files (a name or a folder starting with a dot; the three shown are `._` files). The sync left them out and said so ("the server can't serve them").
+  - The 0-byte listing above.
+- **Not run.**
+  - A card for someone else.
+  - 12's query.
+  - Anything playing under a filter on this card: a play would go to the user's server at the next sync.
+  - A score-only commit: the second sync had the same files, so it kept the scores without asking (5.2's step 3). One needs a sync that asks again after a score changes on the server.
+  - The JSON's size on the wire: the writer logs no byte count.
+
+**Total:** about 15-24 agent-days, a guess. The study had 8-18.
+
+## 10. Conflicts with open PRs
+
+Trial merges ran with `git merge-tree` on local refs at a1566fe. On 2026-11-05 #37 to #42 merged and #27 still conflicts with main.
+
+| PR | Overlap (READ) | What to do |
+|---|---|---|
+| **#27** `feat/card-transfer-firmware` cc0ccb3 | Conflicts with main today in 19 files. Overlaps: `lib/core/NvsLayout.h` (also sets `kCurrent` 5), `test_nvs_layout`, `i18n/en.json` (`format.*`), generated strings, `src/ui/Overlays.cpp` Dialog only, `src/ui/Ui.cpp` route's Dialog branch, `src/ui/LibraryPage.cpp` empty state, `tools/card_fixtures.py` hunks at `:682-690`, `:1118-1123`, `vectors.json` | Nothing here waits for it. `moods.json` and `FilterSheet` avoid its lines. `mptg()` and `hardening()` don't overlap its hunks. Merge `en.json` by hand, regenerate tables. Same release: share schema 5, one paragraph, no bump. A release between: 6 (so it went: 0.13.0 between, and #27 shares 6 with `touch_off`) |
+| **#37** `claude/elated-newton-9b6dc2` | Merged 2026-11-05 (35662de). It held the same lines as S5's empty states (`src/ui/NowPlayingPage.cpp:774`, `src/ui/QueuePage.cpp:754` at a1566fe) and METADATA 3.2.2 | S5 puts its no-fit line after the queue's unread line. S2's "v6" wording edits last |
+| **#38** `claude/card-guard-no-answer` | Merged 2026-11-05 (96ba08b). `lib/core/AutoDjEngine.cpp` `read` (a new `SlotResult::IoTwice`), `pickInto`, `lib/core/AutoDjView.{h,cpp}` (`Started::CardFailed`), `src/app/AutoDj.cpp`, `test_autodj_engine`, `test_ui_autodj`, `docs/AUTODJ.md`, METADATA 3.2 and later | Already under S4 and S5: `pickOnce` is a rename, so no re-indent. It didn't touch `sessions.json`, so the freeze hash holds |
+| **#39 to #42** | Merged 2026-11-05: a second card-guard try, the card hold (`lib/core/PlaybackController.h`, `src/app/Library.h`, `lib/core/LibraryUpdate.*`), the queue file's memory and writes (`lib/core/TagStore.cpp`), a stopped track's bars on Now Playing. #40 gave `Ui` `noteCardHolds()` | None for the design. Re-read `lib/core/LibraryUpdate.cpp`'s room check before S2's budget line, and Now Playing before S5's empty-state edit |
+| **#25** `claude/esp32-swap-mode-research-51c26d` 6220213 | Mergeable with main today. A write bench and swap-mode research. Overlaps S2's console: `lib/core/TagText.{h,cpp}` and `src/app/TagConsole.{h,cpp}` (it adds `gx`, S2 adds `gm`), then `src/main.cpp`, `test/test_ui_library/test_ui_library.cpp`, one line of `docs/METADATA.md` and `docs/ARCHITECTURE.md` | Nothing here waits for it. The second to land adds its letter beside the other's |
+| **terminal #56, #68** `claude/card-transfer`, `claude/card-waveforms` | Against main: 170 behind, 107 and 108 ahead (local refs). #68 vs main: 8 conflict files. Local `main` is far behind `origin/main`, so never base on it | S7 stacks on #68. Cost: it can't merge first; a rebase of #68 replays through `run.rs`, `sync.rs`, `plan.rs`, `contract/mptg.rs`, locales. `mood_scores` joins the existing `types.rs` conflict hunk and adds none. Real scores come only from a local build until it lands. **Since:** S7 is PR #69 on #68 (9.11), and S8 used a local build of it (9.12) |
+| **terminal `claude/card-picks`** 3b69618 | 31 commits, unpushed per the last note. Vs #68: 7 conflict files (page/card.rs, UX contract, fatsim.rs, lines.rs, sync.rs, worker/tests.rs, device/mod.rs). Doesn't touch `contract/mptg.rs`, `engine/run.rs`, `plan.rs`, `autodj.rs`, `waves.rs` | Keep moods in `sync/moods.rs`. Moods will add to the sync, UX contract and device/mod.rs conflicts. No semantic clash seen, and no trial merge with moods exists. The second to land resolves |
+| **mStream #1072** `claude/card-transfer-server` | Base predates moods: no `mood-sync.js`, no V80. Against master it conflicts once, in `src/api/server-info.js`'s imports (keep all). S6's planned hunks add no conflict (MEASURED-HOST, trial merge) | S6 goes from master. Don't tie moods to `instanceId` or `federationProxy`. A real sync needs master plus S6, plus #1072 if the writer wants those. Which build the user's server runs: not determined. **Since:** merged 2026-11-07 (1dd065b0) after S6 (05d7015f), both in v6.33.1, the release the user put on their server (9.12; the sync's mood answer shows S6's route there) |
+
+## 11. Budget
+
+Device figures are on the synthetic card, 19,412 tracks. Re-measure every line marked with a run. The MEASURED 2026-11-06 figures are 9.6's runs, on that card at 19,413 tracks; a largest-block figure is compared only with its control in the same script (`docs/AUTODJ.md` 14.3).
+
+| Resource | Today | Addition | Label | Re-measure |
+|---|---|---|---|---|
+| Word block | 0 | 38,824 B carves 38,912+4 at 19,412; 40,000 B carves 40,960+4 at 20k. 0 with no moods. MEASURED: 38,826 B at 19,413, 17,954 with a word (Run C); no block on a T with zero records (Run A); 40,000 B at 20k (MEASURED-HOST); the real card (S8, 9.12): 39,066 B at 19,533 tracks, 19,249 with a word | MODELLED; MEASURED | S2 C: `g` |
+| Filtered ids | 0 | 6,964 B carves 7,040+4 at 1,741 albums, while a filter is on | MODELLED | S3: `D`, `uiM` |
+| PSRAM free, MP3, Auto DJ on / off | 646,252 / 801,912 B (`docs/AUTODJ.md:909`, older than the waveform bar) | about -41 KB | MEASURED / MODELLED | S2 B, C |
+| Largest, boot, off | 819,188 B (`docs/AUTODJ.md:961`) | -32,768 or -49,152 reported (class floors). MEASURED: -32,768 B, 786,420 against the control's 819,188 B (Runs D, E) | MODELLED; MEASURED | S2 A, C |
+| Largest, joined at boot | 655,348 B (`docs/AUTODJ.md:1506`) | Same. MEASURED: -32,768 B, 622,580 against 655,348 B | MODELLED; MEASURED | `D1` |
+| Largest, after update, joined | 335,860 B (`:1507`) | -106,496 / -40,960 / +49,152 (min, median, max). MEASURED: -32,768 B stopped, 294,900 against the control's 327,668 B in the same script; the C++ model 0, 360,436 B in both (MEASURED-HOST) | MODELLED; MEASURED | S1 test, S2 D |
+| Largest, MP3 after `gb` | 221,172 B (`:1508`) | Same. MEASURED: -32,768 B, 294,900 against 327,668 B | MODELLED; MEASURED | S2 D |
+| Largest, FLAC after `gb` | 155,636 B (`:1509`) | Same. First Opus keeps blocks of 65,536 and 62,464 B (`docs/OPUS.md:133`). May hold one afterwards. MEASURED: -32,768 B, 262,132 against 294,900 B; the Opus then opened its 128,023 B of buffers and played, 0 skipped, on both (Run E) | MODELLED; MEASURED | S2 E |
+| Lowest free in a join | 77,284 B, margin 64 KB (`:1512`) | Port's lowest 69,192 B. MEASURED: 175,032 B in the stopped update's join, the control 180,876 B; the C++ model 170,052 B at the boot's join, 411,788 B after the update (MEASURED-HOST) | MODELLED; MEASURED | `Dc` |
+| Join blocks | 155,284 B, 3 kept (`docs/AUTODJ.md:896`) | None | READ | `test_autodj_join` |
+| Update step | 2.30 MB free, peak 1.89 MB (`docs/METADATA.md:4739`); check at `lib/core/LibraryUpdate.cpp:197` | Margin about -50.5 KB, not binding. MEASURED: build peak 1,927,528 B with the words (Run C), 1,888,702 B without (Runs A, B), 38,826 B more; every update of Runs D and E ran. Run B's `gb` before the walk merged its commit deferred: until then `trackSlots()` reserves for T's and D's records together, unchanged by this work. S8's update step and its build at the boot: peak 1,940,027 B at 19,533 tracks | MODELLED; MEASURED | `gb` |
+| T on the card | About 6.9 MB (`docs/METADATA.md:2790`) | +160,000 B at 20k. MEASURED: 5,177,713 B at 19,413 records of 80 bytes (Run C); the real card's 6,965,530 B at 19,443 (S8) | MODELLED; MEASURED | `--check` |
+| `library.idx` | | +40,000 B at 20k. MEASURED: +38,826 B at 19,413, 1,748,476 against 1,709,650 B (Runs C, B); +40,000 B at 20k, 1,821,680 against 1,781,680 B (MEASURED-HOST) | MODELLED; MEASURED | `gm` |
+| JSON over the wire | | 2.0-3.4 MB at 20k. Not measured at S8: the writer logs no byte count | MODELLED | S8 |
+| Track ceiling | 23k-27k, ESTIMATED (`docs/METADATA.md:4830`) | about 22.9k-26.1k | ESTIMATED less MODELLED | |
+| Album pass | | 8-35 ms idle, 17-70 ms with an MP3. Worst tap to frame about 180 ms. MEASURED idle, `gm<hex>`: 14-31 ms (Run C); the real library, 1,747 albums: 15,538-16,483 µs (S8) | MODELLED; MEASURED | `uiMa<hex>` |
+| Fit count | | 2-5 ms per change. MEASURED idle, `gm<hex>`'s tracks pass: 5-12 ms (Run C); `Dq`'s count 4.8-5.6 ms, once 10.0 ms just after a rejoin (9.8); the real library, 19,533 tracks: `Dq`'s 4.7-5.9 ms, `gm<hex>`'s 5,013-5,746 µs (S8) | MODELLED; MEASURED | `D` |
+| Pick | p90 0.38-1.70 ms (`docs/AUTODJ.md:858`, ESTIMATED) | At or under inside a run; a jump adds 2.4-8.5 ms. MEASURED (9.8): inside a run p90 0.33-0.82 ms idle (no filter 1.32 ms); a jump 11.7 ms idle, 21.6-21.9 ms with the MP3 (29.5 ms idle before af248a0); the real library (S8, `docs/AUTODJ.md` 14.5): under Happy, 0x40A and 0x127, p90 0.35-1.08 ms idle in Follow the vibe (no filter 1.34 ms) and 0.31-0.34 ms in Stay on seed (no filter 0.42 ms), the 0.31 being 0x127's run with 2 jumps and 17 re-pins; 0x215's picks, nearly all jumps, p50 15.7-16.3 ms | ESTIMATED / MODELLED; MEASURED | `Dn200` |
+| Boot load | 1.1-1.5 s at 20k, ESTIMATED; 1,514 ms at 19,413 tracks without the words (MEASURED 2026-11-06) | +0.02-0.03 s; 1,537 ms with them, +23 ms (MEASURED 2026-11-06, the A/B's load boots); the real card, 19,533 tracks with the words: 1,834 ms (S8; one boot with no control, so not the words' cost; over the 1.1-1.5 s estimate) | MODELLED; MEASURED | |
+| Build | 11.3 s at boot (`docs/METADATA.md:4531`) | +0.09-0.13 s. MEASURED: from D 11,193 ms (Run A); from T 14,438 ms with the words, 15,777 ms without (Runs C, B); updates, control / moods, 20.6 / 22.1 s stopped, 42.2 / 45.0 s with the MP3, 28.7 / 30.2 s with the FLAC (Runs D, E); the real card from its records at the boot (`gb!` and a reset), 19,533 tracks (19,442 from T, 82 from D, 9 by their paths), 19,249 with moods: 17,284 ms; its update step 29,473 ms on the card worker (S8) | MEASURED / MODELLED; MEASURED | S2 C |
+| Flash | About 4.36 MB, 69 %, at v0.11.0 (`.github/release-notes.md:162-164`, `docs/RELEASE-0.11.0-CHECKS.md:92`); guard warns at 80 % (`tools/flash_guard.py:49`). Size at a1566fe not determined; 4,311,563 B at main af72b50 (MEASURED-HOST) | 10-20 KB code, about 5 KB strings. MEASURED-HOST: +6,888 B for S0-S2, 4,318,451 B (68.6 %, the app 70 % of its slot) | GUESS; MEASURED-HOST | `pio run` |
+| IRAM | 5,176 B left (`docs/ARCHITECTURE.md:4019`) | 0. MEASURED-HOST: 0 for S0-S2, 5,161 B left before and after; RAM 58,480 B left, unchanged | READ; MEASURED-HOST | `iram_diet` |
+| NVS | `kCurrent` 4 (`lib/core/NvsLayout.h:52`) | One u16 | READ | `test_nvs_layout` |
+| Engine | 19,016 B | A few fields; `pickOnce` adds no recursion | READ | `D` |
+
+A slow pass is a UI hitch, not an audio risk. The loop runs under the decoder and the sinks draw on a 1.5 s ring (`docs/ARCHITECTURE.md:75-79`).
+
+## 12. Unknowns
+
+| Unknown | Cheapest answer |
+|---|---|
+| Real share of moods and coverage | The query below, on the user's own `mstream.db`, opened read-only. **Partly answered from the card (2026-11-08, 9.12):** coverage, 19,249 of its 19,533 tracks scored (98.5 %), and four filters' shares, among them Happy at Standard (7,508). The other per-mood shares need the query, not run |
+| Whether head files are on the release | `GET /api/` on the user's server shows `moodFilters`; the query's `analysed`. Not determinable here. **Answered (2026-11-08, 9.12):** yes: the user's server scored 19,249 of the card's 19,443 tracks |
+| Which build the user's server runs | The user looks at its version. **Answered (2026-11-08), by the user's word:** v6.33.1, the release they said they had put out with the new APIs, the only one with S6 and #1072. `/api/` answered 401 without a sign-in, so the version string wasn't read; the mood route answering shows S6 |
+| Does the stored list cluster by mood (real ρ) | Once a card has moods, a host script over T and MPDJ using `tools/mpdj.py`. Not built. A hint (2026-11-08, `docs/AUTODJ.md` 14.5): Follow the vibe stayed inside Happy, 0x40A and 0x127 for 200 picks each with no jump |
+| Album share, albums resting on few songs, folder against `album_id` | Same script. **Album share answered for four filters (2026-11-08, 9.12).** The rest not run |
+| How many tracks on a card are a peer's | `gm` coverage against the card's track count at S8. **Answered for the user's card (2026-11-08, 9.12):** none: its status says it holds one library, from the user's own server. 90 of its 19,533 tracks have no T record, and 194 of T's 19,443 have no scores |
+| Real pass, pick and jump time | `uiMa<hex>`, `Dn200`. **The pass idle, answered (2026-11-06, `gm<hex>`, 9.6 Run C):** albums 14-31 ms, tracks 5-12 ms. **The rest, answered (2026-11-06):** the albums pass with an MP3 21,645-40,039 µs (9.7); a pick inside a run p90 0.33-0.82 ms idle, a jump 11.7 ms idle and 21.6-21.9 ms with the MP3 (9.8). **On the real library (2026-11-08, 9.12):** albums 15.5-16.5 ms and tracks 5.0-5.7 ms idle; the picks in `docs/AUTODJ.md` 14.5 |
+| Heap with the block | S1's C++ test, then S2 D. The port's folders and string bytes are estimated. **Answered (2026-11-06, 9.5, 9.6 Runs D and E):** one 32 KB class, -32,768 B, at every step on the device, and at the model's boot; the model's joined figure after the update unchanged, 360,436 B. No redesign |
+| A second hole >= 62,464 B after FLAC and `gb` | S2 E |
+| Opus plus Auto DJ at 20k | One device run. No figure exists |
+| Hitch at the end of a fence | `uiMa<hex>`, `g0`, `ui` |
+| node:sqlite and bun:sqlite at the bars | `test/db/mood-bars.test.mjs`. **Answered (2026-11-06, 9.10):** 0 wrong on both, on this Mac (arm64) |
+| Whether scores stay in 0..1 | Not checked by the server (mStream `src/db/mood-sync.js:42`). The writer clamps |
+| `--moods`' run time on a real card | S2's first run (C8). **Answered (2026-11-06, 9.6 Run C):** on this Mac's card reader the mood step took 34.1 s on a dry run, the whole write 18.2 s on the next run |
+| Whether the user's unit already stored schema 5 | `[nvs] schema` at boot. Harmless either way: the step is empty. **Answered (2026-11-06):** yes, "[nvs] schema 5, newer than this firmware's 4": #27's builds wrote it |
+| Flash size at a1566fe | `pio run -e core2`. **Answered (2026-11-06), at main af72b50, a later commit:** 4,311,563 B; 4,318,451 B with S0-S2 (MEASURED-HOST) |
+| Final widths of the new translations | `test_ui_library` once written |
+| The gapless caveat under D5's alternative | Not traced |
+| Whether scores count as derived data under the heads' licence | Not ours to settle. D9 keeps them off a card for someone else |
+
+Text widths are advance sums, not drawn. Colours are 565 values, panel output not measured.
+
+```sql
+SELECT (SELECT COUNT(*) FROM tracks) AS tracks,
+       COUNT(*) AS analysed,
+       SUM(happy>=.5 AND happy>=sad) AS happy,
+       SUM(sad>=.5 AND sad>happy) AS sad,
+       SUM(happy<.5 AND sad<.5) AS neutral_v,
+       SUM(relaxed>=.5 AND relaxed>=aggressive) AS relaxed,
+       SUM(aggressive>=.5 AND aggressive>relaxed) AS aggressive,
+       SUM(relaxed<.5 AND aggressive<.5) AS neutral_e,
+       SUM(instrumental>=.5) AS instrumental,
+       SUM(instrumental<.5) AS vocals,
+       SUM(acoustic>=.5) AS acoustic,
+       SUM(party>=.5) AS party,
+       SUM(danceable>=.5) AS danceable
+  FROM track_moods;
+```
+
+Standard is shown. For Strict use `>=.7` and `<.3`, for Loose `>=.3` and `<.7`.
+
+## 13. Risks
+
+What would change the plan:
+
+- **S1's heap rule fails, or S2 E skips a track.** The ladder in 9.5: `finish()` placement, then D8 Standard only, then reading the block from the card. **Cleared on the device (2026-11-06):** one 32 KB class at every step of the A/B, joined over 245,764 B at each, and the Opus played with 0 skipped (9.6, Runs D and E).
+- **D1 overruled.** S6 is replaced, and the writer needs a separate all-paths read.
+- **D2 drifts too far on real data, or is overruled.** Drop S4's commit 5 and its sessions, or change `pickOnce`'s second round and 2 sessions.
+- **D3 overruled.** Removes the hold and S5's zero states, and adds a fallback.
+- **The scan takes too long on a device.** The fallback is an in-mood row list, which needs memory the plan avoids.
+- **A pass over about 100 ms with an MP3 (GUESS threshold).** Move the count to a debounced pass on `tick()`.
+- **A translation too wide for a tray even in Small.** New wording. The layout has no further fallback beyond scaling, and `test_ui_library` fails it. Text gives way last.
+- **The tail is one-way.** Changing its meaning needs a new major. The word is private to `library.idx`, so a change there is a `kVersion` bump. So settle S1 before S7 copies it.
+- **A score-only commit.**
+  - `unchanged()` compares records whole (terminal `src/device/card/engine/run.rs:1392`), so one changed byte on one row makes a full commit: T rewritten, about 7 MB (MODELLED), a new root, a device rebuild at the next boot.
+  - It happens once per whole read during a backlog or head bump, and can happen every run with a peer read (terminal `src/device/card/sync.rs:1001`).
+  - `analyzeMoods` off clears every row in one commit.
+  - No data or audio risk.
+  - If real runs commit at every sync, add a hold-back, for example under 1 % of rows changed and under 7 days.
+  - **At S8 (2026-11-08):** a second sync with no change made no commit (generation 96 and commitId 0xCEB05E0858368AC0 unchanged) and no mood call (5.2's step 3). So a score-only commit could not arise there and wasn't seen. Whether any score changed on the server in between is not known.
+- **Two terminals of different versions alternating.** The old one drops tails, the new one refills. Flip-flop commits.
+- **Partial analysis.** Albums with nothing analysed vanish silently under any filter. If that surprises in S8, frame A-partial returns. **At S8 (2026-11-08):** 12 of the card's 1,747 albums have no analysed track, and 194 of the card's 19,443 tracks from the server (T's records) got no scores from it (9.12).
+- **A card with many peer tracks.** They match nothing in v1. If S8's coverage shows that matters, the peer read comes back: the client already goes through the proxy (terminal `src/api/transfer.rs:95, 109`), and the route is already on the allowlist. **At S8:** none on the user's card (9.12).
+- **`mood-bars` not 0 on Bun or on an ARM runner.** The literal parse differs at a bar. Fix the server to bind the bar, not the card rule. Unlikely (GUESS). **Cleared on this Mac (2026-11-06, arm64):** 0 on node and on Bun (9.10).
+- **Head files not on the release.** The table stays empty, S3 and S5 never show on a real card, and the stages still pass on host. **Cleared (2026-11-08):** the user's server has them (9.12).
+- **Raw scores leave the server.** 4-place scores reach any authenticated caller and key holder for visible paths. 3-place `moodMatch` already leaves on `recent/added`, raw vectors on embeddings. Heads are CC-BY-NC-SA (mStream `src/db/discovery-features-lib.js:104-108, 132`).
+- **The first boot after flashing** costs every user one rebuild: 11.3 s at 20k from D (MEASURED); 17.3 s from the records on the user's 1 TB card at 19,533 tracks (S8, 9.12).
+- **Translations** are machine-made, and native review is owed on 126 new texts.
+- **#56, #68 or #27 landing or rebasing first.** Redo the lineage step of 9.11. Nothing else moves.
+
+## 14. Considered and left out
+
+**Other shapes for the data.**
+- `/db/recent/added` with filters, no server change: 11 calls, about 163 MB at 20k (MODELLED), inexact at 3 places.
+- The admin discovery export: admin only, coarse labels, no audio hash.
+- Scores from the embedding: the heads were trained on raw patches, not the pooled vector.
+- DJRF stride 8 to 16: any change rewrites a 10.6 MB file, and no index means no album filter.
+- An own `moods-<gen>.bin`: a COMP row, a `read.*` key, licence strings, and a join or a rewrite with T anyway.
+- A new MPTG section: works, but a second stream position during the build.
+- Byte 71 of RECS: one threshold only, and breaks "new fields only at the end".
+- A 16-bit word on the card: saves 120 KB of a card, loses the other 78 bars for good.
+- Per-head `1 + q div 50`: loses head-against-head order inside a half-hundredth.
+- Per-album data: can't answer combinations without 1,149 stored answers, and does nothing for Auto DJ.
+- A mood term in `plan_key`: re-asks every entry's metadata, about 30 MB once (MODELLED).
+
+**Other shapes for the engine.**
+- A filter bit in the word, or an in-mood row list: memory the predicate in `buildRun` doesn't need.
+- Relaxing to Loose or to no mood when dry: 71-96 % of Stay on seed picks outside the mood at f <= 5 % (SYNTHETIC), and the server never relaxes.
+- A counted scan picking one nth track: loses the artist cooldown and the BPM and key tiers.
+
+**Other shapes for the UI.**
+- Overview rows, flat checklist, fixed bottom bar, status band: drawn on the canvas, not picked.
+- A drawer inside the list: 5 rows of 42 fill the band, so its live results are off screen.
+- Frame A-partial, Play all, Artists, a long-press way in: left out of v1 (3.1, 3.2).
+
+**Narrower v1s, and fixes, not taken.**
+- Dropping re-pin from v1: D2 is the stated default, and the plain ladder jumps 70 % at f = 5 % (SYNTHETIC). It is one commit, S4's 5, which goes if the user overrules.
+- Dropping "No close match" and "Plays once" with their news plumbing: the picked design draws them (dj-toast-jump, -once), and the status row is seen only on its page.
+- Keeping today's draws for the Auto DJ button under a filter: 8 tries fail 66 % at f = 5 % (uniform model). One pass over the words and at most 8 lookups does better, with a filter on only.
+- Draws first and a scan only on failure, for the button: two paths for a tap that a single pass answers in 2-5 ms (MODELLED).
+- A one-word ru tag in place of the two-line wrap: the picked design has the wrap, and the firmware takes the ARB's words.
+- Keeping `uiMt<cell>`, `uiMp<n>`: `uit` with `uk1` at the goldens' cells and a µs line for every pass answer the same questions with no new command.
+- Telling the owner from every `closeModal(false)`: only `suspend()` can have the editor up, and a reload there runs under `suspended_`.
+- Carrying an unshown Few in `pendingNews_`: `src/ui/Ui.cpp:1398` would draw it the next pass, over the toast just shown. It waits for the next append instead. (One the Ui's merge outranks is carried since S5's review, but in `NewsWait`'s own `later()`, which waits for that toast to go: 4.5, 9.9.)
+- A new "{n} of {m} tracks fit · picks are random" string for the no-index status: the held form says it with no new text in nine languages.
+- A frame for a toast over the editor's title row: the toast goes at opening, one line of code.
+- A version check or a probe for the route: a flag is mStream's own rule (mStream `src/api/sync.js:18`).
+- Citing `uiF` by its help text (`src/main.cpp:3587`): the handler at `:2067-2068` is what takes the letter.

@@ -14,7 +14,9 @@
 // /.player/tags.bin is the device's (source 1), with its private sections
 // after the contract's (3.3.2). One record per file: the file's tags as read
 // by part 5's rules, in a 72-byte row (RECS) and a string run (2.6.5) in
-// STRS; the folders in FOLD; a path-hash index (HIDX).
+// STRS; the folders in FOLD; a path-hash index (HIDX). Minor 1 adds the
+// mood tail (2.6.4, docs/MOOD-FILTERS.md 5.3): a record's mStream mood
+// scores in its bytes 72-79, in rows of 80 bytes or more.
 //
 // Reading, for the builder (N2) and the walk (N5): Walker streams a file in
 // its canonical order (2.6.8), a folder and then its records, then the next
@@ -40,7 +42,13 @@ constexpr uint32_t kHidx = fourcc("HIDX");
 constexpr uint32_t kOrig = fourcc("ORIG");
 constexpr uint32_t kOstr = fourcc("OSTR");
 constexpr uint32_t kFoldStride = 16;
+// The smallest RECS stride a reader accepts, whatever the minor: a record's
+// 72 bytes (Record).
 constexpr uint32_t kRecsStride = 72;
+// A stride with the mood tail (2.6.4): a stride under it means no record
+// has one.
+constexpr uint32_t kRecsMoodStride = 80;
+constexpr uint32_t kMoodTailBytes = kRecsMoodStride - kRecsStride;
 constexpr uint32_t kHidxStride = 12;
 constexpr uint32_t kOrigStride = 80;
 // The sections in 2.6.2's order: Container's indexes.
@@ -122,8 +130,10 @@ struct Folder {
   uint32_t firstRecord = 0;
 };
 
-// One RECS row, as stored (2.6.4). The enums are raw: read them through
-// the accessors below, which apply 2.4.5's table to unknown values.
+// One RECS row's 72 bytes, as stored (2.6.4); the mood tail after them is
+// read beside it (Walker::moodTail, File::moodTail). The enums are raw:
+// read them through the accessors below, which apply 2.4.5's table to
+// unknown values.
 struct Record {
   uint32_t folder = 0;
   uint32_t name = 0;     // STRS offset
@@ -253,6 +263,10 @@ public:
   bool hasLedger() const { return ledgerOn_; }
   const LedgerRow& ledger() const { return ledger_; }
   const char* serverPath() const { return serverPath_; }
+  // The record's mood tail (2.6.4), kMoodTailBytes, for moodfilter::
+  // wordOfTail; nullptr when it has none: a stride under 80, or a tail
+  // moodfilter::tailValid refuses (the record and the file are fine).
+  const uint8_t* moodTail() const { return hasTail_ ? tail_ : nullptr; }
 
 private:
   struct Level {
@@ -262,6 +276,7 @@ private:
     uint16_t end;
   };
   Step fail(Why w);
+  bool readLook();
   bool loadRecord();
   Step enterFolder();
   Step emitRecord();
@@ -282,10 +297,14 @@ private:
   uint32_t curRecord_ = kNoParent;
   bool haveLook_ = false;
   Record look_;
+  bool lookHasTail_ = false;
+  uint8_t lookTail_[kMoodTailBytes];
   char lookName_[kMaxRelPath + 1];
   size_t lookNameLen_ = 0;
   Folder folder_;
   Record rec_;
+  bool hasTail_ = false;
+  uint8_t tail_[kMoodTailBytes];
   Level stack_[kMaxDepth + 1];
   uint32_t depth_ = 0;  // levels on the stack
   char path_[kMaxRelPath + 2];
@@ -327,6 +346,10 @@ public:
   const Container& container() const { return c_; }
   bool folder(uint32_t i, Folder* out) const;
   bool record(uint32_t i, Record* out) const;
+  // Record i's mood tail (2.6.4) into `out`. False, `out` zeros: it has
+  // none (a stride under 80, a tail moodfilter::tailValid refuses), or the
+  // read failed.
+  bool moodTail(uint32_t i, uint8_t out[kMoodTailBytes]) const;
   bool ledger(uint32_t i, LedgerRow* out) const;
   Why string(uint32_t off, char* out, size_t cap, size_t* len = nullptr) const;
   Why serverPath(uint32_t off, char* out, size_t cap, size_t* len = nullptr) const;
@@ -360,6 +383,13 @@ struct RecordIn {
   // joined with U+001F, no NUL); nullptr or "" absent.
   const char* fields[kRunFields] = {};
   const LedgerIn* ledger = nullptr;  // sources 2 and 3; nullptr: a zero row
+  // The mood tail (2.6.4), kMoodTailBytes from moodfilter::tailOf, which
+  // must pass moodfilter::tailValid; nullptr: none (8 zero bytes, no server
+  // row, when another record has one). Only sources 2 and 3 write one, and
+  // the device's own tags.bin never carries one (2.6.4), but write() takes
+  // a tail in a source 1 file too, unlike a ledger: the builder's test
+  // makes a D with tails to show the builder ignores them.
+  const uint8_t* moods = nullptr;
 };
 
 // A folder that must be in FOLD with these flags: an OWNED folder (kept even
@@ -398,10 +428,16 @@ struct Written {
 };
 
 // Writes a tags file: the folders every record needs (and `folders`), FOLD
-// in pre-order, RECS in canonical order, STRS in 2.6.8's order, HIDX when
-// there are records, ORIG and OSTR when the source is 2 or 3 and there are
-// records, then `extra`. False with `error` when the input breaks a rule (a
-// path, a duplicate, a field with a NUL...) or the sink fails.
+// in pre-order, RECS in canonical order (rows of 80 bytes when a record has
+// a mood tail, else 72), STRS in 2.6.8's order, HIDX when there are
+// records, ORIG and OSTR when the source is 2 or 3 and there are records,
+// then `extra`. The minor is meta's, and must follow the data (2.4.5): 1
+// or later with mood tails, else 0. Tails are taken in any source, 1's
+// included, though only sources 2 and 3 write one and the device's own
+// tags.bin never carries one (2.6.4, RecordIn::moods); a ledger in a
+// source 1 file is refused. False with `error` when the input breaks a
+// rule (a path, a duplicate, a field with a NUL, a mood tail a reader
+// would refuse, a minor the tails disagree with...) or the sink fails.
 bool write(Sink& out, const Meta& meta, const RecordIn* recs, size_t n, const FolderIn* folders, size_t nf,
            const ExtraSection* extra, size_t ne, Written* written, const char** error);
 

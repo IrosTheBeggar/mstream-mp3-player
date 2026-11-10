@@ -24,7 +24,7 @@ class AutoDj;
 //     file's size and FAT time (f_stat, at the write), the board's clock for its start
 //     (boardclock::at(): a clock set during the play still dates it; 0
 //     while unset) and the clock's source, the seq in NVS first ("plays",
-//     nvslayout's schema 5), then one append and its f_sync.
+//     nvslayout's schema 6), then one append and its f_sync.
 //   - flush() before every orderly power-off and restart (main.cpp's
 //     endInOrder(), after the settings the taps queued: the idle power-off,
 //     the CPU speed's restart, restartNow(): the card guard's, "Try again"'s,

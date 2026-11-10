@@ -67,7 +67,7 @@ bool writeRtc(uint64_t second) {
   return true;
 }
 
-// NVS's "clock"/"phase" (nvslayout, schema 5).
+// NVS's "clock"/"phase" (nvslayout, schema 6).
 int32_t keptPhase() {
   Preferences p;
   // (Read-write, though it only reads, as AutoDjStore's load(): a read-only

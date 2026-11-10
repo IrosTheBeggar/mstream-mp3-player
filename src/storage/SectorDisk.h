@@ -97,6 +97,7 @@ struct Stats {
   uint32_t verified = 0;     // hits compared with the card (verify on)
   uint32_t stale = 0;        // ... that differed: a cache bug (L1 fails)
   uint32_t staleLba = 0;     // the last such sector
+  uint32_t stoppedReads = 0;  // reads not asked of the card: they kept leaving it silent (CachedDrive)
 };
 Stats stats();
 void resetStats();
@@ -107,11 +108,22 @@ struct Guard {
   bool armed = false;    // install() kept the mount's card (the wrapper is in)
   bool known = false;    // ... and could read its identity (else any remount is foreign)
   bool foreign = false;  // a remount found another card: every write refused until a restart
+  bool lastKnown = false;  // ... and the last remount's: a card that couldn't be read says nothing of another card
+  bool writesOff = false;  // the card wouldn't take FatFs's window, twice, or 4 writes left it silent: every write refused until a restart
+  bool tooSilent = false;  // reads kept leaving the card silent (CachedDrive::tooSilent()): until a restart
   uint32_t remounts = 0;  // FatFs mounted the volume again with a card answering
+  uint32_t kept = 0;      // commands with no answer the card came back from at once: no remount
+  uint32_t healed = 0;    // ... of them reads that worked when asked once more: FatFs never heard of them
+  uint32_t cardBacks = 0;  // CachedDrive::cardBacks()
+  uint32_t faultLba = 0;  // the last read or write that failed
   // The write counts (CachedDrive's; gc's reset starts them again).
   uint32_t writeRetries = 0, writeFails = 0, refused = 0;
 };
 Guard guard();
+// The mount's card isn't in the slot: FatFs's last mount found no card answering and none has found
+// one since, or another card answered (CachedDrive::mountCardOut()): the player's card hold
+// (PlaybackController::Card). Any task; false without the wrapper.
+bool cardOut();
 // The mount's card identity (`last`: the last remount's), for the log:
 // "62333952 sectors, sector 0 CRC 1a2b3c4d, boot sector 8192 CRC ...".
 size_t identityText(char* buf, size_t size, bool last = false);

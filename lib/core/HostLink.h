@@ -37,11 +37,11 @@
 //   @count                                Count (... starts one, or refuses).
 //   @identify <label>                     Identify, with the label (1 to 16
 //       bytes: hoststatus::validLabel()); none: @err 1, longer: @err 5.
-//   @time [<unix-ms>]                     Time (since 0.12.0): alone, a
+//   @time [<unix-ms>]                     Time (since 0.14.0): alone, a
 //       question (timeMs 0); with a time, set the board's clock to it: Unix
 //       ms, digits only (not one: @err 1), a time wallclock::believable()
 //       (2026 to 2099, else @err 5).
-//   @format                               Format (since 0.12.0): only brings
+//   @format                               Format (since 0.14.0): only brings
 //       up the question on the board's screen (the listener confirms a
 //       format there, twice, or not).
 // They change nothing here: not a session's timeout, nor its counters, nor

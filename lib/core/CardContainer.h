@@ -15,16 +15,16 @@
 // sections) without reading any section; Stream reads one section, or one
 // part of it, front to back through a caller's buffer, CRC'ing what it
 // passes, so the formats' readers (CardTags.h, CardManifest.h,
-// CardAutoDj.h) check a whole file in one pass with fixed memory, whatever
-// it holds. Writing it: ContainerWriter lays the file out, takes the
-// sections' bytes in order and writes the header last. The root election
-// (2.5.4), which the plan's (2.12.5) shares, and the software's
+// CardAutoDj.h, CardWaves.h) check a whole file in one pass with fixed
+// memory, whatever it holds. Writing it: ContainerWriter lays the file out,
+// takes the sections' bytes in order and writes the header last. The root
+// election (2.5.4), which the plan's (2.12.5) shares, and the software's
 // newer-major guard (2.4.5) are here too.
 //
 // "Absent" (2.4.3): a reader that finds any check failed treats the file
 // as not there, never as an error the listener must clear. Why says which
 // check, for the tests and the console; to the caller every value but Ok
-// means the same.
+// means the same, but Io: a read that failed says nothing of the file.
 namespace cardcontract {
 
 constexpr uint32_t kMagicMsmf = fourcc("MSMF");
@@ -32,8 +32,10 @@ constexpr uint32_t kMagicMptg = fourcc("MPTG");
 constexpr uint32_t kMagicMpdj = fourcc("MPDJ");
 constexpr uint32_t kMagicMspd = fourcc("MSPD");
 constexpr uint32_t kMagicMpth = fourcc("MPTH");
+constexpr uint32_t kMagicMpwf = fourcc("MPWF");
 constexpr uint16_t kMajor = 1;      // MSMF's, MPTG's and MSPD's: the only major their readers read
 constexpr uint16_t kMajorMpdj = 2;  // MPDJ's (docs/AUTODJ-INDEX.md; its major 1 was a draft no reader read)
+constexpr uint16_t kMajorMpwf = 1;  // MPWF's (docs/WAVEFORM-INDEX.md)
 constexpr uint32_t kCommonHeaderBytes = 40;
 constexpr uint32_t kDirEntryBytes = 32;
 constexpr uint32_t kMaxSections = 64;
@@ -92,7 +94,7 @@ enum class Why : uint8_t {
   Short,            // shorter than its header and directory
   Magic,            // not this format
   Major,            // a major this reader doesn't read (a newer one)
-  HeaderBytes,      // headerBytes not a multiple of 8, or below the format's header (MPDJ: 104)
+  HeaderBytes,      // headerBytes not a multiple of 8, or below the format's header (MPDJ: 104; MPWF: 224)
   SectionCount,     // more than 64 sections
   FileBytes,        // fileBytes isn't the file's length on the card
   HeaderCrc,
@@ -102,7 +104,7 @@ enum class Why : uint8_t {
   Shape,            // a known section's count, stride and length disagree, or its stride is below the format's
   SectionCrc,
   Counts,           // the header's counts against the sections'
-  Enum,             // a value that makes the file absent (MPTG source; MPDJ's header values, AUTODJ-INDEX.md 8.2)
+  Enum,             // a value that makes the file absent (MPTG source; MPDJ's and MPWF's header values, their 8.2)
   String,           // a string offset outside its section, or no NUL after it inside
   StringOrder,      // strings not in the order the format writes them (2.4.4)
   Name,             // a name empty, with a '/', "." or ".."
@@ -124,10 +126,14 @@ enum class Why : uint8_t {
   DjSlotUnused,     // a used entry after an unused one, under a good CRC
   DjSlotIndex,      // an entry's row out of range, or the slot's own row
   DjSlotOrder,      // levels rising, or a tie's rows not rising
+  WvLayout,         // WVSL not at byte 256: a longer header, or a section beside it
+  WvSlotCrc,        // a slot's CRC (seeded with its row): one slot damaged
+  WvSlotOrder,      // path hashes not strictly increasing, under a good CRC
   PendOrder,        // PEND not in 2.12.5's order
   PendPath,         // a PEND path empty, absolute or not made of names
   PendOp,           // an op of 0
   AcksOrder,        // ACKS's entries not strictly increasing by (deviceId, epoch): ACKS absent, never the root (2.5.6)
+  FatRecords,       // a read failed on the file system's records of the file (tagstore::File::damaged())
 };
 const char* whyName(Why w);
 
@@ -230,6 +236,8 @@ public:
   uint32_t end() const { return end_; }
   uint32_t crc() const { return crc_; }
   bool failed() const { return failed_; }
+  // failed() because the card failed a read: nothing said of the file.
+  bool readFailed() const { return readFailed_; }
 
 private:
   bool fill();
@@ -242,6 +250,7 @@ private:
   uint32_t bufFill_ = 0;   // valid bytes in buf_
   uint32_t crc_ = 0;
   bool failed_ = false;
+  bool readFailed_ = false;
 };
 
 // A string read at random from a string section (not in a stream's order),
@@ -325,8 +334,8 @@ struct Election {
 Election elect(const RootCandidate& bin, const RootCandidate& tmp);
 
 // The software's guard (2.4.5): the first bytes of a contract-named file in
-// /.mstream carry one of the four magics with a major the software doesn't
-// know (MSMF, MPTG, MSPD: other than 1; MPDJ: other than 2 and 1, the
+// /.mstream carry one of the five magics with a major the software doesn't
+// know (MSMF, MPTG, MSPD, MPWF: other than 1; MPDJ: other than 2 and 1, the
 // retired draft a v2 writer replaces), so the software MUST NOT write to
 // the card. Checked on the magic and the major alone, before any CRC. `n`
 // < 6: false (nothing to say).

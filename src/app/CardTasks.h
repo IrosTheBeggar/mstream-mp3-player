@@ -18,6 +18,7 @@
 namespace ui {
 class Thumbs;
 }
+class Waves;
 
 // The card worker's loop side (docs/METADATA.md 3.2.3, 3.3, 3.4.2;
 // milestones N10, N12): every loop pass it asks ScanScheduler (N7) what the
@@ -28,6 +29,7 @@ class Thumbs;
 // while the screen is dark, cut after its unit when a wait comes
 // (ScanScheduler's Out::cut). The jobs:
 //   - covers (ui/Thumbs), on any storage;
+//   - a waveform's read for Now Playing (app/Waves), in the covers' lane;
 //   - on the SD card, over the records Library opened: the validation
 //     walk, 2 s after the UI's first frame (3.2.3); the compactions; the
 //     tag scan (lib/core CardJobs); the update step's build and its save
@@ -54,7 +56,10 @@ class Thumbs;
 //     walk's changes, a Rescan, or a boot that loaded an index the scan had
 //     gone past (Library::softStale(): the first scan's end after the
 //     boot's walk, even with nothing to scan) ask for it; not when the rest
-//     stopped on a read error (the card pulled: the next boot has it).
+//     stopped on a read error (the card pulled: tried again a minute on, twice
+//     at most; then the next boot has it), nor, for what the scan read again,
+//     after two steps in a row that failed on a read and loaded library.idx
+//     again (scanEnded()).
 //     After an update step, built or failed or deferred, what the journal
 //     had asks for no other: only new records (or a walk's changes, a
 //     Rescan) do.
@@ -96,7 +101,7 @@ public:
   CardTasks(Library& library, CardWorker& worker);
 
   // After Library::begin(): the jobs over the card's records (false: no
-  // records here: covers only). Again after the card's guard reopened the
+  // records here, or the boot held the jobs: covers only). Again after the card's guard reopened the
   // records (the same card back, nothing under way): the session's scan and
   // update state kept (what the scan's end asks, the journal's new records).
   bool begin();
@@ -128,9 +133,10 @@ public:
 
   // Every loop pass. `in`: the environment (nowMs; listMoving, input; the
   // audio's ring, underruns, decode pass, track and seek; Bluetooth;
-  // power); `covers`: a cover job may start (the UI is up and lit); `env`:
-  // the update step's.
-  void loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumbs, bool covers, const UpdateEnv& env);
+  // power); `covers`: a cover or a waveform's read may start (the UI is up
+  // and lit); `env`: the update step's.
+  void loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumbs, Waves* waves, bool covers,
+            const UpdateEnv& env);
 
   // ---- the update step (3.4.2, lib/core LibraryUpdate) ----
   // `deferToBoot` (gb!, L4.4): the memory check made to fail, so the step
@@ -267,6 +273,10 @@ private:
   bool lastCompactFailed_ = false;
   tagcheck::Hold consoleHold_ = tagcheck::Hold::None;  // holdForConsole()
   bool pendingAfterScan_ = false;  // the scan's end rebuilds (a walk's changes, a soft-stale index, a Rescan)
+  uint32_t reloads_ = 0;  // update steps in a row that failed and loaded library.idx again
+  uint32_t restRetries_ = 0;
+  bool restRetryArmed_ = false;
+  uint32_t restRetryAtMs_ = 0;
   bool restFailed_ = false;        // the rest's last end was a read error (no update at the scan's end)
   bool scanOver_ = true;
   // The status line's counts.

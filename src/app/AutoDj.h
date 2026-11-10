@@ -8,6 +8,7 @@
 #include "AutoDjDriver.h"
 #include "AutoDjEngine.h"
 #include "AutoDjJoin.h"
+#include "AutoDjOpen.h"
 #include "AutoDjView.h"
 #include "CardAutoDj.h"
 #include "CardManifest.h"
@@ -37,12 +38,16 @@
 //     opened and checked against it (Table::open(), companionMatches(): 1-2
 //     small reads), on or off: usable() says the card has an index (the
 //     empty states' button, the Output page). Any failure: no index, picks
-//     at random (logged why).
+//     at random (logged why); a fault of the card's, tried again a few times
+//     first (autodj::OpenTries).
 //   every loop pass, after the card's guard and before the card's step
-//     (main.cpp's loop()): step(): a remount seen first (sectordisk's
+//     (main.cpp's loop()): step(): the mood filter's count of the tracks
+//     inside it first, when q changed or the library came back
+//     (stepMood(): docs/MOOD-FILTERS.md 6.5); then a remount (sectordisk's
 //     counter: the root read again into its own Root; the same index: the
 //     file reopened, the maps and the session kept; another: closed,
-//     opened, joined again, a new session); then the join's slices while
+//     opened, joined again, a new session); then a try at the file that is
+//     due; then the join's slices while
 //     Auto DJ is on (after the UI's first frame, never while a list moves
 //     or the card is held: Join::stepPass(), kJoinPassUs and one card read
 //     a pass; main.cpp shortens the loop's idle wait meanwhile:
@@ -116,7 +121,7 @@ public:
   size_t fenceBytes() const { return join_.heldBytes(); }
   void beforeFence();
   size_t fence();
-  void live();
+  void live(bool built, bool reloaded);
   // The update step's memory check (LibraryUpdate::setGiveBack()): the
   // join released now, joined again after the step (its bytes; 0: none
   // held).
@@ -133,13 +138,30 @@ public:
   bool setMode(autodj::Mode m);
   bool setFloor(uint8_t pct);
   bool setMatch(bool tempo, bool key);
+  // The mood filter (the console's Dq; MOOD-FILTERS.md 4.4): saved, and the
+  // tracks inside it counted at once (stepMood(): a filter nothing fits
+  // holds from this pass); the session kept. Behind the update's fence the
+  // count waits for its end. False: invalid, or unchanged. Output > Auto
+  // DJ's editor calls it at each tap, then moodSettled() at its close.
+  bool setMoods(uint16_t q);
+  // stepMood()'s last count: the library's tracks inside the filter (all
+  // of them with none on, or with no mood data); behind the fence, the
+  // count from before it.
+  uint32_t moodFit() const { return fit_; }
+  // The filter's change is settled (the editor closed on it, or a Dq): a
+  // pick queued before it and outside it plays once (D5), logged here; the
+  // UI's toasts (takeNews(), MOOD-FILTERS.md 4.5): 1 to 50 fit, else that
+  // pick's once, while on. Behind the fence nothing is said: the count is
+  // old (Few is due at a pick after it).
+  void moodSettled();
   // "Auto DJ from here" on `track`; the empty states' button. False /
   // not Played: nothing played.
   bool fromHere(uint32_t track);
   autodjview::Started start();
   // The card has an index this build reads, open and checked (joined or
   // not: it joins while Auto DJ is on), for a library it can join (not
-  // over 65,534 tracks) and not found broken.
+  // over 65,534 tracks), not found broken, and with no run of failed reads
+  // behind it (Block::Reads).
   bool usable() const;
   const autodj::Marks& marks() const { return dj_.marks(); }
   // ---- the UI's (M5) ----
@@ -150,7 +172,7 @@ public:
   // Library track `track` has neighbours in a usable index (the Library's
   // "Auto DJ from here"): the maps' when joined, else its path's hash
   // looked up in DJPH (a binary search: a few small reads).
-  bool hasNeighbours(uint32_t track) { return usable() && hasRow(track); }
+  bool hasNeighbours(uint32_t track);
   // What the loop's passes (and a switch on) had to say since the last
   // call: autodjview::News bits (main.cpp: Ui::autoDjNews(), a toast).
   uint8_t takeNews();
@@ -159,14 +181,16 @@ private:
   enum class File : uint8_t {
     None,     // the root names no index (or there is no root: no transfer data)
     NotRead,  // ... one of a major this build doesn't read (read.mpdj)
-    Absent,   // ... one that failed its checks (why_)
+    Absent,   // ... one that failed its checks (why_), isn't there, the card failed every try at, or closed for a card too silent
+    Again,    // ... one a try at opening, or a read of the root, failed on the card's account: tried again soon (tries_)
     Open,     // open and checked: the join's, the picks'
   };
   // What keeps a join from starting: nothing; a failed read's wait
   // (retryAtMs_); the next library build (no memory, a library too big);
-  // the update step it was given back to (giveBack()), until its Live or
-  // its end.
-  enum class Block : uint8_t { None, Retry, Build, Update };
+  // kJoinTries joins in a row a read of the card failed, or the button's look-ups
+  // twice: a library build, a remount, Dc or switching on; the update step it was given back to
+  // (giveBack()), until its Live or its end.
+  enum class Block : uint8_t { None, Retry, Build, Reads, Update };
   enum class Job : uint8_t { None, DryRun, Bench };
 
   class Reader : public autodj::SlotReader {
@@ -177,18 +201,52 @@ private:
       return t_.slot(row, bytes, nullptr, count, why);
     }
 
-  private:
+private:
     const cardcontract::mpdj::Table& t_;
   };
 
   autodj::Index index();  // (not const: its slot reader reads the file)
+  // Auto DJ's mood filter (Settings::moods) over the library's words
+  // (MOOD-FILTERS.md 6.1): off behind the update step's fence (no index)
+  // and on a card with no mood data, where picks are unfiltered (D4).
+  autodj::MoodView moodView();
+  // The tracks inside it, counted again (fit_, then the engine's runs
+  // remade: Engine::mapsChanged(), while a filter is or was on) only when
+  // q changed or lib_.index() came back (null to not: the first pass, each
+  // fence's end), 6.5's key: the index is the same object across a fence,
+  // its stamp hashes names and folders only, and a score-only rebuild
+  // keeps the count, so none of those could say the words changed. Behind
+  // the fence the counts keep their values.
+  void stepMood();
+  void moodLine(char* buf, size_t size);  // the D line's and Dq's: the filter, its count
   autodj::Env driverEnv(const Env& env) const;
   bool joined() const { return file_ == File::Open && join_.status() == autodj::Join::Status::Ready; }
-  // The file the root's entry names, opened and checked.
+  // The file the root's entry names, opened and checked, from its first try.
   void open(const cardroot::Root::AutoDj& entry, const char* when);
+  // A try at the file entry_ names; open: all of it set up, or tryFailed().
+  void openFile(const char* when);
+  // One try: on Open the file is in handle_; else nothing is, and `why` says
+  // which check failed (Why::Io when none could say).
+  autodj::OpenTry tryFile(cardcontract::Why* why);
+  // What comes of a try that failed: tried again soon, or absent().
+  void tryFailed(autodj::OpenTry t, cardcontract::Why why);
   void closeFile();
+  // FatFs keeps a failed read's error on the FIL (f_read's ABORT), whoever read (a slot, a
+  // join, a lookup): no read on it works again, and clearing it could read the wrong
+  // cluster. A new FIL, the maps and the session kept. (A FIL a status failed, or a
+  // remount took, holds no error: the remount's to reopen, the maps kept.)
+  void refreshFile();
   void absent(cardcontract::Why why, const char* what);
   void remount(const Env& env);
+  // The root read again, and what it says of the index against what is held.
+  void readRoot();
+  void rootFailed();
+  void offForSilence();
+  // A look-up in DJPH that came back with no row (not joined): a read the card failed looks
+  // like that, and the sector they all read first fails them all. The second in a row:
+  // Block::Reads, so no more of them, and true.
+  bool lookupFailed();
+  void stepOpen(const Env& env);
   void stepJoin(const Env& env);
   void beginJoin(const LibraryIndex* index);
   void joinStatus();
@@ -214,10 +272,25 @@ private:
   PlaybackController& player_;
   autodj::Driver dj_;
   autodj::Join join_;
+  autodj::Maps maps_;      // index()'s: the join's, with the mood filter
+  // stepMood()'s count (MOOD-FILTERS.md 6.5).
+  uint32_t fit_ = 0;          // library tracks inside the filter (Index::fit; all of them with none on)
+  uint32_t fitOf_ = 0;        // ... of all
+  uint32_t fitUs_ = 0;        // the count's time
+  uint16_t fitQ_ = 0;         // the q it counted
+  bool fitCounted_ = false;   // ... for a library at all
+  bool fitOn_ = false;        // the filter was on (words, and a group set) then
+  bool fitData_ = false;      // the library had mood words then (view(): the row's state behind a fence too)
+  uint32_t fitWords_ = 0;     // ... its tracks with a word (view()'s moodPct)
+  bool indexSeen_ = false;    // lib_.index() was there at the last stepMood()
   cardcontract::mpdj::Table table_;
   Reader reader_{table_};
-  cardfat::FatFile* handle_ = nullptr;   // the open file (FatFs::open's, PSRAM)
+  cardfat::FatFile* handle_ = nullptr;   // the open file (FatFs::openRead's, PSRAM)
   File file_ = File::None;
+  autodj::OpenTries tries_;
+  uint8_t openResult_ = 0;  // FatFs's answer to the try that last failed (0: its open did, then a read didn't)
+  bool rootAgain_ = false;  // the card failed a read of the root: what tries_ brings round is that, not the file's
+  bool rootRead_ = false;   // a root has been read, the boot's or since: what haveEntry_ and entry_ answer to
   cardcontract::Why why_ = cardcontract::Why::Missing;
   const char* whyText_ = "no transfer data on the card";
   cardcontract::msmf::Comp entry_;  // the entry the open file is
@@ -228,6 +301,10 @@ private:
   uint32_t remounts_ = 0;
   // The join.
   Block block_ = Block::None;
+  static constexpr uint8_t kJoinTries = 3;
+  uint8_t joinFails_ = 0;  // joins in a row a read of the card failed
+  uint8_t lookupFails_ = 0;  // the button's look-ups in a row a read of the card failed
+  bool silenceSaid_ = false;
   uint32_t retryAtMs_ = 0;
   int64_t joinT0Us_ = 0;
   float joinMs_ = 0;
@@ -248,9 +325,9 @@ private:
   // main.cpp's.
   bool undoDropped_ = false;
   // The UI's: its news since takeNews() (autodjview::News), from the
-  // passes and the switch (NewsWatch: the toasts' rule, host-tested; it
-  // counts Auto DJ's appends too: no Queue badge flash for them).
+  // passes, the switch, the mood filter's count and its settled changes
+  // (NewsWatch: the toasts' rule, host-tested; it counts Auto DJ's appends
+  // too: no Queue badge flash for them).
   autodjview::NewsWatch newsWatch_;
-  uint8_t news_ = 0;
   char path_[TrackCatalog::kMaxPath] = "";
 };

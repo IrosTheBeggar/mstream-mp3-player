@@ -77,14 +77,129 @@ void CachedDrive::init() {
   settle();
   cache_.clear();  // whatever card is there now, none of the last one's sectors
   ++stats_.inits;
+  remountDue_ = false;
+}
+
+CachedDrive::Look CachedDrive::lookAfterFault(uint32_t lba) {
+  stats_.faultLba = lba;
+  if (!link_ || !armed_.load() || remountDue_) return Look::Error;
+  // Foreign until a restart: nothing to look for, and that session stays up only when a boot
+  // holds the card jobs (the breaker's): the count and the stop are all it has.
+  if (foreign_.load()) return link_->answers() ? Look::Error : noteSilence();
+  if (link_->answers()) {  // that read's own fault, as a CRC's: FatFs's error to report
+    silentFault_ = false;
+    return Look::Error;
+  }
+  uint32_t sectors = 0;
+  if (!link_->init(&sectors)) return noteSilence();  // nothing answers: the mark stands: FatFs's remount
+  // The mark gone: no remount comes of it, so a silence noted for it was no cut: it doesn't count.
+  if (silentFault_) {
+    silentFault_ = false;
+    --silences_;
+    if (silentWrite_) --silentWrites_;
+  }
+  lastId_ = readIdentity(sectors);
+  if (mountId_.sameCard(lastId_)) {
+    kept_.fetch_add(1);
+    return Look::Kept;
+  }
+  remountDue_ = true;
+  // Another card: the guard's. Unread: a card that went silent after its init said yes (a
+  // select that timed out leaves no mark, so the init does nothing): the same cut, the same
+  // read again after it.
+  return lastId_.valid ? Look::Error : noteSilence();
+}
+
+CachedDrive::Look CachedDrive::noteSilence() {
+  // (Already: a call of FatFs's that goes on past what it does without, FSINFO, with the
+  // mark standing. Nothing reached the card: one fault, and that read is none of its own.)
+  if (silentFault_) return Look::Error;
+  silentFault_ = true;
+  silentWrite_ = false;
+  if (++silences_ >= kTooSilentAfter) tooSilent_.store(true);
+  return Look::Silent;
+}
+
+void CachedDrive::windowFailed(uint32_t lba) {
+  if (!windowFailing_ || windowLba_ != lba) {
+    windowFailing_ = true;
+    windowLba_ = lba;
+    return;
+  }
+  windowFailing_ = false;
+  remountDue_ = true;
+  if (++windowDrops_ >= 2) writesOff_.store(true);
+}
+
+bool CachedDrive::readStopped(uint32_t lba, uint32_t count) {
+  for (int i = 0; i < failedN_; ++i) {
+    const FailedRead& f = failed_[i];
+    if (f.lba != lba || f.count != count) continue;
+    if (f.fails < kStopAfter) return false;
+    if (clock_ && clock_() - f.atUs >= kStopUs) return false;  // asked once more
+    ++stats_.stoppedReads;
+    return true;
+  }
+  return false;
+}
+
+bool CachedDrive::afterRead(uint32_t lba, uint32_t count, bool ok, bool reached, bool again) {
+  int i = 0;
+  while (i < failedN_ && (failed_[i].lba != lba || failed_[i].count != count)) ++i;
+  if (ok) {
+    // (With a remount owed, FatFs going on in the call that owes it: not yet.)
+    if (reached && !remountDue_) silentFault_ = false;
+    if (i < failedN_) failed_[i] = failed_[--failedN_];
+    if (again) healed_.fetch_add(1);
+    return false;
+  }
+  const Look look = lookAfterFault(lba);
+  // Kept: no count and no stop, as ever; once more, the first time.
+  if (look == Look::Kept) return !again;
+  if (look != Look::Silent) return false;
+  if (i == failedN_) {
+    if (failedN_ < kFailedReads) {
+      ++failedN_;
+    } else {
+      i = 0;  // the longest since a failure goes
+      for (int k = 1; k < failedN_; ++k)
+        if (failed_[k].atUs < failed_[i].atUs) i = k;
+    }
+    failed_[i] = FailedRead();
+    failed_[i].lba = lba;
+    failed_[i].count = count;
+  }
+  ++failed_[i].fails;
+  failed_[i].atUs = clock_ ? clock_() : 0;
+  return false;
+}
+
+void CachedDrive::noteWritten(uint32_t lba, uint32_t count) {
+  if (windowFailing_ && windowLba_ >= lba && windowLba_ - lba < count) windowFailing_ = false;
+  for (int i = 0; i < failedN_;) {
+    if (failed_[i].lba < lba + count && lba < failed_[i].lba + failed_[i].count) {
+      failed_[i] = failed_[--failedN_];
+    } else {
+      ++i;
+    }
+  }
 }
 
 bool CachedDrive::read(uint32_t lba, uint8_t* out, uint32_t count) {
   const bool on = enabled_.load();  // before settle(): see the class comment
   settle();
-  if (!on) return counted_.read(lba, out, count);
-  const bool check = verify_.load() && check_ && count == 1 && cache_.holds(lba);
-  if (!cache_.read(counted_, lba, out, count)) return false;
+  if (readStopped(lba, count)) return false;
+  // (Off: the card alone, and no verify: what the cache held may be stale.)
+  const bool check = on && verify_.load() && check_ && count == 1 && cache_.holds(lba);
+  // A second try only after a look that kept the card (afterRead()). A loop, not a call: the
+  // second read and its look are as deep on the reader's stack as the first's.
+  bool ok;
+  for (bool again = false;; again = true) {
+    const uint32_t asked = stats_.cardReads;
+    ok = on ? cache_.read(counted_, lba, out, count) : counted_.read(lba, out, count);
+    if (!afterRead(lba, count, ok, !on || stats_.cardReads != asked, again)) break;
+  }
+  if (!ok) return false;
   if (check && counted_.read(lba, check_, 1)) {
     ++stats_.verified;
     if (std::memcmp(check_, out, SectorCache::kSectorBytes) != 0) {
@@ -100,19 +215,40 @@ bool CachedDrive::read(uint32_t lba, uint8_t* out, uint32_t count) {
 bool CachedDrive::write(uint32_t lba, const uint8_t* data, uint32_t count) {
   const bool on = enabled_.load();
   settle();
-  if (foreign_.load()) {
-    // Another card (or one that couldn't be told apart): nothing of this
-    // session's goes on it. Nothing reached the card, so nothing the cache
-    // holds is stale.
+  if (foreign_.load() || writesOff_.load()) {
+    // Another card (or one that couldn't be told apart), or one that won't take FatFs's
+    // window (windowFailed()): nothing of this session's goes on it. Nothing reached the
+    // card, so nothing the cache holds is stale.
     ++stats_.refused;
     return false;
   }
-  if (on) return cache_.write(counted_, lba, data, count);
+  if (on) {
+    const bool ok = cache_.write(counted_, lba, data, count);
+    if (ok) {
+      noteWritten(lba, count);
+    } else {
+      writeFailed(lba);
+    }
+    return ok;
+  }
   // Off: the card alone, and what the cache held of these sectors is
   // dropped (it would be stale when the cache comes on again).
   const bool ok = counted_.write(lba, data, count);
   cache_.invalidate(lba, count);
+  if (ok) {
+    noteWritten(lba, count);
+  } else {
+    writeFailed(lba);
+  }
   return ok;
+}
+
+void CachedDrive::writeFailed(uint32_t lba) {
+  // (Kept: FatFs's error, as ever. Card::write() has tried it twice; the window's rules and the
+  // queue's save have their own retry.)
+  if (lookAfterFault(lba) != Look::Silent) return;
+  silentWrite_ = true;
+  if (++silentWrites_ >= kStopAfter) writesOff_.store(true);
 }
 
 void CachedDrive::trim(uint32_t first, uint32_t last) {
@@ -149,7 +285,17 @@ bool CachedDrive::remember(uint32_t sectors) {
 }
 
 bool CachedDrive::remounted(uint32_t sectors) {
+  out_.store(false);  // (a card answers: whichever, the guard's verdict below)
   if (!armed_.load()) return true;
+  // (The note goes when the card answers a read, the mount's first: not here, where a write-mode
+  // call under STA_PROTECT comes and goes with nothing mounted.)
+  if (!silentFault_) {
+    failedN_ = 0;
+    silences_ = 0;
+    silentWrites_ = 0;
+  }
+  if (mountFailed_ && (!clock_ || clock_() - mountFailedUs_ >= kCardOutUs)) cardBacks_.fetch_add(1);
+  mountFailed_ = false;
   if (!foreign_.load()) {  // (foreign until a restart, whatever comes back)
     lastId_ = readIdentity(sectors);
     if (!mountId_.sameCard(lastId_)) foreign_.store(true);
@@ -158,6 +304,13 @@ bool CachedDrive::remounted(uint32_t sectors) {
   // (the loop's poll reads the count first).
   remounts_.fetch_add(1);
   return !foreign_.load();
+}
+
+void CachedDrive::mountFailed() {
+  out_.store(true);
+  if (mountFailed_) return;
+  mountFailed_ = true;
+  mountFailedUs_ = clock_ ? clock_() : 0;
 }
 
 void CachedDrive::setEnabled(bool on) {

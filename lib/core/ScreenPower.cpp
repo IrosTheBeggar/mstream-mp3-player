@@ -15,6 +15,8 @@ constexpr S kTimeoutLabel[ScreenPower::kTimeouts] = {S::settings_screen_off_15s,
 constexpr uint8_t kBrightness[ScreenPower::kBrightnesses] = {60, 100, 160, 255};
 constexpr S kBrightnessLabel[ScreenPower::kBrightnesses] = {S::settings_brightness_low, S::settings_brightness_medium,
                                                             S::settings_brightness_high, S::settings_brightness_max};
+constexpr S kOffTouchLabel[ScreenPower::kOffTouches] = {S::settings_screen_touch_nothing, S::settings_screen_touch_wake,
+                                                        S::settings_screen_touch_glance};
 
 // Wraparound-safe: `now` is at least `ms` after `since`.
 bool reached(uint32_t now, uint32_t since, uint32_t ms) { return now - since >= ms; }
@@ -25,6 +27,7 @@ uint32_t ScreenPower::timeoutMs(int choice) { return kTimeoutMs[clampTimeout(cho
 const char* ScreenPower::timeoutLabel(int choice) { return tr(kTimeoutLabel[clampTimeout(choice)]); }
 uint8_t ScreenPower::brightnessLevel(int choice) { return kBrightness[clampBrightness(choice)]; }
 const char* ScreenPower::brightnessLabel(int choice) { return tr(kBrightnessLabel[clampBrightness(choice)]); }
+const char* ScreenPower::offTouchLabel(int choice) { return tr(kOffTouchLabel[clampOffTouch(choice)]); }
 
 uint32_t ScreenPower::dimAtMs(uint32_t offAfterMs) {
   if (offAfterMs == 0) return 0;
@@ -64,25 +67,58 @@ void ScreenPower::activity(uint32_t nowMs) {
   pocket_ = false;
 }
 
+ScreenPower::Touched ScreenPower::touch(uint32_t nowMs) {
+  switch (level_) {
+    case Level::Off:
+      switch (offTouch_) {
+        case OffTouch::Nothing: return Touched::Ignored;  // (not even the countdown: it isn't input)
+        case OffTouch::Wake: wake(nowMs, Why::Touch); return Touched::Woke;
+        case OffTouch::Glance: break;
+      }
+      // The glance: lit, nothing to tap, Off again 10 s from now. Nobody has
+      // looked yet (the PWR key from here is a wake from Off: the pocket
+      // rule and the pocket guard).
+      sinceMs_ = nowMs;
+      pocket_ = eventLit_ = false;
+      unattended_ = true;
+      set(Level::Glance, Why::Touch);
+      return Touched::Glance;
+    case Level::Glance:
+      // (A choice changed during it, by the console: the new one, as from Off.)
+      if (offTouch_ == OffTouch::Nothing) return Touched::Ignored;
+      if (offTouch_ == OffTouch::Wake) {
+        wake(nowMs, Why::Touch);
+        return Touched::Woke;
+      }
+      sinceMs_ = nowMs;  // the listener looks again: 10 s more (not input)
+      return Touched::GlanceAgain;
+    case Level::Dim: wake(nowMs, Why::Touch); return Touched::Woke;
+    case Level::Bright: break;
+  }
+  wake(nowMs, Why::Touch);  // (lit by an event or keepLit from Off: this touch answers it)
+  return Touched::Answered;
+}
+
 bool ScreenPower::wake(uint32_t nowMs, Why why) {
   const Level was = level_;
+  const bool fromDark = dark();  // Off, or the glance (which nobody has used)
   sinceMs_ = nowMs;
   if (why == Why::Touch || why == Why::PowerKey) {
     // Maybe a pocket: from Off, off again soon unless input follows.
-    if (was == Level::Off) pocket_ = timeoutMs(timeout_) != 0;
+    if (fromDark) pocket_ = timeoutMs(timeout_) != 0;
     eventLit_ = false;  // (lit by an event: this touch answered it)
   } else {
     // An event needs the listener (and the console means someone is
     // there): the whole countdown.
     pocket_ = false;
     if (why == Why::Event) {
-      if (was == Level::Off) eventLit_ = true;  // the next touch only answers it
+      if (fromDark) eventLit_ = true;  // the next touch only answers it
     } else {
       unattended_ = eventLit_ = false;  // the console: someone is there
     }
   }
   // From Off, nobody may be looking (a pocket): the pocket rule.
-  if (was == Level::Off && (why == Why::Touch || why == Why::PowerKey || why == Why::Event)) unattended_ = true;
+  if (fromDark && (why == Why::Touch || why == Why::PowerKey || why == Why::Event)) unattended_ = true;
   set(Level::Bright, why);
   return was != Level::Bright;
 }
@@ -92,14 +128,31 @@ void ScreenPower::turnOff(Why why) {
   set(Level::Off, why);
 }
 
+bool ScreenPower::powerKey(uint32_t nowMs, bool keepLit, bool panelAsleep) {
+  // (The glance: the key opens the whole screen, as from Off.)
+  if (dark() || panelAsleep) return wake(nowMs, Why::PowerKey);
+  if (!keepLit) {
+    turnOff(Why::PowerKey);
+    return false;
+  }
+  if (!touchActs()) return wake(nowMs, Why::PowerKey);
+  activity(nowMs);
+  attend();
+  return false;
+}
+
 bool ScreenPower::step(uint32_t nowMs, bool keepLit, bool holdLit) {
   if (keepLit) {
     sinceMs_ = nowMs;
     pocket_ = false;
-    // Lit from Off by what keeps it lit: as an event's wake (nobody may be
-    // looking; the first touch only answers it).
-    if (level_ == Level::Off) unattended_ = eventLit_ = true;
+    // Lit from Off (or the glance) by what keeps it lit: as an event's wake
+    // (nobody may be looking; the first touch only answers it).
+    if (dark()) unattended_ = eventLit_ = true;
     set(Level::Bright, Why::KeepLit);
+  } else if (level_ == Level::Glance) {
+    // Its 10 s from the last touch, whatever the countdown's choice (Never
+    // too) and whatever holds a lit screen lit (the toast isn't on it).
+    if (reached(nowMs, sinceMs_, kGlanceMs)) set(Level::Off, Why::Glance);
   } else if (level_ != Level::Off) {
     const uint32_t offAfter = timeoutMs(timeout_);
     if (holdLit && !pocket_) {
@@ -131,7 +184,8 @@ uint8_t ScreenPower::backlight() const {
   switch (level_) {
     case Level::Off: return 0;
     case Level::Dim: return kDimBacklight;
-    case Level::Bright: break;
+    case Level::Bright:
+    case Level::Glance: break;
   }
   return override_ ? override_ : brightnessLevel(brightness_);
 }
@@ -139,6 +193,7 @@ uint8_t ScreenPower::backlight() const {
 uint32_t ScreenPower::msUntilNext(uint32_t nowMs) const {
   if (level_ == Level::Off) return 0;
   const uint32_t elapsed = nowMs - sinceMs_;
+  if (level_ == Level::Glance) return elapsed >= kGlanceMs ? 0 : kGlanceMs - elapsed;
   if (pocket_) return elapsed >= kPocketMs ? 0 : kPocketMs - elapsed;
   const uint32_t offAfter = timeoutMs(timeout_);
   if (offAfter == 0) return 0;
@@ -151,6 +206,7 @@ const char* ScreenPower::name(Level l) {
     case Level::Bright: return "bright";
     case Level::Dim: return "dim";
     case Level::Off: return "off";
+    case Level::Glance: return "glance";
   }
   return "?";
 }
@@ -168,6 +224,7 @@ const char* ScreenPower::name(Why w) {
     case Why::HoldLit: return "held lit for a countdown toast";
     case Why::Setting: return "the setting";
     case Why::SleepTimer: return "the sleep timer";
+    case Why::Glance: return "the glance's 10 s";
   }
   return "?";
 }

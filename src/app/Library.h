@@ -30,7 +30,8 @@
 // card-reader card, or this firmware's first boot), walks /music through
 // walkMusic(); a build is saved. /.player/device.txt is rewritten when its
 // content would change (2.15). The validation walk, the scan and the
-// update step follow in the background (app/CardTasks runs LibraryUpdate's
+// update step follow in the background, unless the boot held them
+// (cardJobsHeld()) (app/CardTasks runs LibraryUpdate's
 // step: its build and its save on the card worker, its fence here: index()
 // is nullptr behind it, and the catalog answers from a held copy of the
 // playing track's names). An index loaded while the scan went on since its
@@ -60,8 +61,17 @@ public:
   LibraryIndex* index() { return update_ ? update_->readable() : index_; }
   LocalStorage& storage() { return storage_; }
   const TrackCatalog& catalog() const { return catalog_; }
+  // The tracks the queue holds by their paths, which the catalog answers for (QueueStore's).
+  TrackCatalog::Unlisted& unlisted() { return unlisted_; }
   // The [index] report (console g).
   void report() const;
+  // The [moods] lines (console gm, tagtext): `q` tagtext::kMoodsReport, the
+  // index's mood words (their block, the tracks with one); else a filter's
+  // q (moodfilter::valid()), the tracks and the albums it lets through and
+  // each pass's time, as tools/synthtransfer.py --check --mood-filter
+  // counts them (docs/MOOD-FILTERS.md 9.6, C7). Behind the update step's
+  // fence it says so and counts nothing.
+  void moodReport(uint32_t q);
 
   // ---- the card's records (the SD card only; nullptr on the flash) ----
   // The metadata is up: a mounted card, its FatFs drive known, the store
@@ -79,6 +89,34 @@ public:
   // The index was loaded, but D or its journal changed since its build:
   // the scan's end rebuilds it.
   bool softStale() const { return softStale_; }
+  // The card failed a read the jobs would have to trust (the root under a transfer's
+  // library, D, its journals, library.idx, or T or D as a build read them), at the boot
+  // (libraryboot::Decision::holdJobs) or when the guard opened the records again; or the
+  // guard restarted twice in a row, whatever for (cardbreaker): no card jobs this
+  // session, and nothing they would write goes over what is on the card. A restart asks
+  // again. heldWhy(): the log's words.
+  bool cardJobsHeld() const { return cardJobsHeld_; }
+  const char* heldWhy() const { return heldWhy_; }
+  // A reader at this boot met a read the card failed, and it spent the boot's waits: a
+  // card still failing after them won't be back for the next reader, which reads once.
+  bool bootReadsFailed() const {
+    return cardJobsHeld_ || (root_ && root_->readFailed()) || (store_ && store_->readFailed());
+  }
+  // False: /music walked for this session, at a boot that holds its jobs
+  // (LibraryUpdate::Booted::sessionWalked()). What it doesn't list isn't known to be gone.
+  bool listsCard() const { return listsCard_; }
+  void holdCardJobs(const char* why) {
+    cardJobsHeld_ = true;
+    heldWhy_ = why;
+  }
+  // The boot couldn't read the root, and the card jobs run all the same: a library
+  // with no transfer in it, or one this boot had to build or walk, which then has
+  // none (libraryboot::decide()). The root isn't read again on a timer this session: on
+  // a card silent past its init such a read makes FatFs's next call a remount, main.cpp's
+  // guard restarts at a remount with a job under way, and the next boot would do the same,
+  // before its walk ever began, twice a power-on (cardbreaker). A remount still asks, and
+  // Dc for Auto DJ; the console's gs and gt<path> don't.
+  bool jobsOnUnreadRoot() const { return root_ && root_->readFailed() && !cardJobsHeld_; }
   // The boot and the update step (lib/core LibraryUpdate); nullptr on the
   // flash (and before begin()).
   LibraryUpdate* update() { return update_; }
@@ -148,6 +186,7 @@ private:
   LocalStorage& storage_;
   LibraryIndex* index_ = nullptr;  // PSRAM
   TrackCatalog catalog_;
+  TrackCatalog::Unlisted unlisted_;
   Stats stats_;
   // The card's records (PSRAM).
   cardfat::FatFs* fat_ = nullptr;
@@ -158,4 +197,7 @@ private:
   LibraryUpdate* update_ = nullptr;     // PSRAM
   TrackCatalog::Held* held_ = nullptr;  // PSRAM: Now Playing's names behind the fence
   bool softStale_ = false;
+  bool cardJobsHeld_ = false;
+  const char* heldWhy_ = "";
+  bool listsCard_ = true;
 };

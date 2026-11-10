@@ -74,6 +74,10 @@ enum class S : uint16_t {
   toast_autodj_started,  // Auto DJ: {0}
   toast_autodj_no_start,  // Found no track with Auto DJ neighbours: try again
   toast_autodj_needs_index,  // Needs an Auto DJ index: a transfer to the card adds one
+  toast_autodj_few,  // Only {0} tracks fit: they will repeat
+  toast_autodj_no_close,  // No close match: any track that fits
+  toast_autodj_plays_once,  // Plays once, then the filters apply
+  toast_autodj_no_mood,  // No mood data: sync this card from mStream
   hud_bluetooth,  // Bluetooth: {0}
   hud_bluetooth_connecting,  // Bluetooth: connecting...
   hud_speaker_paused,  // Speaker, paused: B plays
@@ -121,6 +125,7 @@ enum class S : uint16_t {
   now_playing_autodj_off,  // Off
   now_playing_autodj_waiting,  // Waiting
   now_playing_autodj_paused,  // Paused
+  glance_hint,  // Power button for controls
   sleep_title_left,  // Sleep timer: {0} left
   sleep_title_end_track,  // Sleep timer: end of track
   sleep_title_end_album,  // Sleep timer: end of album
@@ -203,6 +208,27 @@ enum class S : uint16_t {
   library_updates_at_boot,  // Library updates at next boot
   library_updating_list,  // Updating the library…
   library_updating_wait,  // Updating the library: a moment
+  mood_filters,  // Filters
+  mood_happy,  // Happy
+  mood_neutral,  // Neutral
+  mood_sad,  // Sad
+  mood_relaxed,  // Relaxed
+  mood_aggressive,  // Aggressive
+  mood_instrumental,  // Instrumental
+  mood_vocals,  // Vocals
+  mood_acoustic,  // Acoustic
+  mood_party,  // Party
+  mood_danceable,  // Danceable
+  mood_strict,  // Strict
+  mood_standard,  // Standard
+  mood_loose,  // Loose
+  mood_clear,  // Clear
+  mood_albums_of,  // {0} of {1} albums
+  mood_tracks_of,  // {0} of {1} tracks
+  mood_no_albums,  // No albums match these filters
+  mood_smart_filters,  // Smart filters
+  mood_any,  // Any
+  mood_no_data,  // No mood data
   card_another,  // Another card: restarting
   card_back,  // Card back: restarting
   queue_cap_full,  // No played track can make way: the queue holds {0} tracks
@@ -252,6 +278,7 @@ enum class S : uint16_t {
   empty_nothing_playing_title,  // Nothing playing
   empty_queue_title,  // Your queue is empty
   empty_pick_in_library,  // Pick an album, folder or track in the Library.
+  empty_no_track_fits,  // No track on this card fits these filters
   empty_open_library,  // Open Library
   empty_shuffle_all,  // Shuffle all
   empty_autodj,  // Auto DJ
@@ -315,6 +342,7 @@ enum class S : uint16_t {
   autodj_strictness,  // Match strictness
   autodj_strictness_value,  // {0}% or closer
   autodj_strictness_sub,  // how similar each pick must sound
+  autodj_smart_sub,  // keeps every pick inside these moods
   autodj_bpm,  // BPM continuity
   autodj_bpm_sub,  // within 8 BPM, or half/double tempo
   autodj_harmonic,  // Harmonic mixing
@@ -322,6 +350,10 @@ enum class S : uint16_t {
   autodj_needs_index,  // needs an Auto DJ index
   autodj_status_ready,  // {0} of {1} tracks have neighbours
   autodj_status_coverage,  // BPM {0}% · key {1}%
+  autodj_status_fits,  // {0} of {1} tracks fit
+  autodj_status_coverage_mood,  // BPM {0}% · key {1}% · mood {2}%
+  autodj_status_few,  // Only {0} tracks fit
+  autodj_status_few_sub,  // They will repeat · BPM {0}% · key {1}%
   autodj_status_found,  // Auto DJ index: {0} tracks
   autodj_status_found_sub,  // read when Auto DJ is switched on
   autodj_status_reading,  // Reading the Auto DJ index…
@@ -333,9 +365,10 @@ enum class S : uint16_t {
   autodj_status_random,  // picks are random
   autodj_status_waits_repeat,  // Waiting: Repeat One is on
   autodj_status_waits_sleep,  // Waiting: sleep timer set to End of queue
+  autodj_status_waits_fit,  // Waiting: no track fits the filters
   autodj_status_paused,  // Paused: tracks failed to play
   settings_screen_off,  // Screen off after
-  settings_screen_off_sub,  // dims first; a tap wakes it
+  settings_screen_off_sub,  // dims first, then off
   settings_screen_never_sub,  // stays on: more battery
   settings_screen_off_15s,  // 15 s
   settings_screen_off_30s,  // 30 s
@@ -349,6 +382,13 @@ enum class S : uint16_t {
   settings_brightness_medium,  // Medium
   settings_brightness_high,  // High
   settings_brightness_max,  // Max
+  settings_screen_touch,  // Touch when off
+  settings_screen_touch_nothing_sub,  // the power button wakes it
+  settings_screen_touch_wake_sub,  // a tap wakes it
+  settings_screen_touch_glance_sub,  // a tap shows the track
+  settings_screen_touch_nothing,  // Nothing
+  settings_screen_touch_wake,  // Wake
+  settings_screen_touch_glance,  // Track
   settings_idle_off,  // Turn off when idle
   settings_idle_off_sub,  // paused, on battery
   settings_idle_never_sub,  // stays on: more battery
@@ -414,6 +454,7 @@ enum class S : uint16_t {
   library_row_rescan_body,  // The player reads the tags of its own files again (the transfer's st...
   library_row_rescan_started,  // Reading the tags again
   library_row_rescan_no_card,  // Tags are read on a card only
+  library_row_rescan_unread,  // Card read failed at startup: restart to try again
   bt_name_not_paired,  // Bluetooth headphones
   bt_name_default,  // Headphones
   bt_status_not_paired,  // No headphones paired
@@ -631,7 +672,7 @@ enum class S : uint16_t {
   format_hz,  // {0} Hz
   format_list_sep,  // , 
 };
-inline constexpr unsigned kStrings = 622;
+inline constexpr unsigned kStrings = 663;
 
 // The languages, English first: the mobile app's ten (one without a
 // catalogue yet draws English), and the pseudo-locale where UISTR_PSEUDO

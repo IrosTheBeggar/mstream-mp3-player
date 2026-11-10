@@ -700,7 +700,9 @@ copy, and refuses when the signatures differ.
   lists 2** (a comma-separated list of majors). Otherwise it writes no
   MPDJ: no reader of v1 exists, so there is nothing older to write
   instead.
-- No device.txt, or no `read.mpdj` key in it, reads as none.
+- No device.txt, or no `read.mpdj` key in it, reads as none. A file with no
+  `contract` line reads as no file, and a key given twice as its last
+  (M 2.15).
 - Released firmware 0.8.0-0.10.0 writes `read.mpdj=1`, yet reads no MPDJ:
   no MPDJ for them. From 0.11.0, which ships the AutoDJ engine, the
   firmware writes `read.mpdj=2` (a development build between them wrote
@@ -815,7 +817,9 @@ rowCount-bit map. A writer never writes one twice.
 
 - **A failure in 8.1-8.3** makes the file absent: AutoDJ uses random with
   filters. The device MAY note the file in `/.player` by (generation,
-  headerCrc), so as not to try it again.
+  headerCrc), so as not to try it again. A read that fails is no such failure:
+  it says nothing of the file, and a reader MAY read again (the device's tries:
+  AUTODJ.md 6.6).
 - **A reader that verifies the whole file** (a writer's own check, a host
   tool, 8.6's "all") treats any slot failure as absent.
 - **A reader that checks slots as it reads them** (the device):

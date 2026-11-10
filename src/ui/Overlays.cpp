@@ -56,6 +56,10 @@ bool overlaysBegin() {
   return true;
 }
 
+M5Canvas* overlayPanel() { return panel_; }
+const void* panelOwner() { return panelOwner_; }
+void setPanelOwner(const void* owner) { panelOwner_ = owner; }
+
 // ---- Toast ----
 
 namespace {
@@ -327,7 +331,7 @@ void Hud::draw() {
 // ---- Sheet ----
 
 void Sheet::open(const char* title, const char* const* rows, int n, uint16_t accent, const char* const* details,
-                 int primary, int danger) {
+                 int primary, int danger, const uint16_t* inks) {
   copy(title_, sizeof(title_), title);
   primary_ = primary;
   danger_ = danger;
@@ -335,6 +339,7 @@ void Sheet::open(const char* title, const char* const* rows, int n, uint16_t acc
   for (int i = 0; i < n_; ++i) {
     copy(rows_[i], sizeof(rows_[i]), rows[i]);
     copy(details_[i], sizeof(details_[i]), details ? details[i] : "");
+    inks_[i] = inks ? inks[i] : col::DIM;
   }
   accent_ = accent;
   pressed_ = -1;
@@ -344,9 +349,12 @@ void Sheet::open(const char* title, const char* const* rows, int n, uint16_t acc
   draw();
 }
 
-bool Sheet::setDetail(int i, const char* text) {
-  if (!up_ || i < 0 || i >= n_ || std::strcmp(details_[i], text ? text : "") == 0) return false;
+bool Sheet::setDetail(int i, const char* text) { return setDetail(i, text, col::DIM); }
+
+bool Sheet::setDetail(int i, const char* text, uint16_t ink) {
+  if (!up_ || i < 0 || i >= n_ || (std::strcmp(details_[i], text ? text : "") == 0 && inks_[i] == ink)) return false;
   copy(details_[i], sizeof(details_[i]), text);
+  inks_[i] = ink;
   if (!panel_) return false;
   drawRow(i);
   return true;
@@ -403,18 +411,19 @@ void Sheet::renderRow(int i) {
   // when it doesn't fit whole there (the label's words in the UI's
   // language: Spanish's "Temporizador de apagado" leaves 60 px), never
   // cut (sheet::detailOnTwoLines(), as measured). A name the page cut to
-  // the room first stays beside it.
+  // the room first stays beside it (and Auto DJ's mood filter: the Ui
+  // cuts it). In its own ink (dim, as most are).
   const int dw = details_[i][0] ? f.width(Font::Small, details_[i]) : -1;
   if (dw >= 0 && sheet::detailOnTwoLines(std::min(f.width(lf, rows_[i]), sheet::kTwoLineW), dw)) {
     f.draw(s, lf, rows_[i], 16, y + sheet::kTwoLineLabelY, sheet::kTwoLineW, ink, bg);
-    f.draw(s, Font::Small, details_[i], 16, y + sheet::kTwoLineDetailY, sheet::kTwoLineW, col::DIM, bg);
+    f.draw(s, Font::Small, details_[i], 16, y + sheet::kTwoLineDetailY, sheet::kTwoLineW, inks_[i], bg);
     return;
   }
   const int w = f.draw(s, lf, rows_[i], 16, y + kRowH / 2, kW - 32, ink, bg);
   if (dw >= 0) {
     // (Whole, should the label draw a pixel wider than measured.)
     const int room = std::max(sheet::detailRoom(w), dw);
-    f.draw(s, Font::Small, details_[i], kW - 16, y + kRowH / 2, room, col::DIM, bg, Fonts::Align::Right);
+    f.draw(s, Font::Small, details_[i], kW - 16, y + kRowH / 2, room, inks_[i], bg, Fonts::Align::Right);
   }
 }
 

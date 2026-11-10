@@ -22,7 +22,9 @@ Why nextString(Stream& strs, const Section& sec, uint32_t off, char* out, size_t
   if (off == 0) return Why::Ok;
   if (off >= sec.bytes) return Why::String;
   if (sec.offset + off < strs.position()) return Why::StringOrder;
-  if (!strs.skipTo(sec.offset + off) || !strs.readString(out, cap, len)) return Why::String;
+  if (!strs.skipTo(sec.offset + off) || !strs.readString(out, cap, len)) {
+    return strs.readFailed() ? Why::Io : Why::String;
+  }
   return Why::Ok;
 }
 
@@ -65,14 +67,17 @@ const SectionSpec kSections[kSecCount] = {
 const FormatSpec kSpec = {kMagicMsmf, kHeaderBytes, kSections, kSecCount};
 
 bool companionName(uint32_t kind, uint32_t generation, char* out, size_t cap) {
-  const char* stem = kind == kMagicMptg ? "tags" : (kind == kMagicMpdj ? "autodj" : nullptr);
+  const char* stem = kind == kMagicMptg   ? "tags"
+                     : kind == kMagicMpdj ? "autodj"
+                     : kind == kMagicMpwf ? "waves"
+                                          : nullptr;
   if (!stem) return false;
   const int n = std::snprintf(out, cap, "%s-%08x.bin", stem, static_cast<unsigned>(generation));
   return n > 0 && static_cast<size_t>(n) < cap;
 }
 
 namespace {
-// ^tags-[0-9a-f]{8}\.bin$ (or autodj-) whose digits are `generation`.
+// ^tags-[0-9a-f]{8}\.bin$ (or autodj-, or waves-) whose digits are `generation`.
 bool nameIs(uint32_t kind, uint32_t generation, const char* name, size_t len) {
   char want[Manifest::kNameBytes];
   if (!companionName(kind, generation, want, sizeof(want))) return false;
@@ -83,7 +88,8 @@ bool nameIs(uint32_t kind, uint32_t generation, const char* name, size_t len) {
 Why Manifest::open(Source& src, uint8_t* scratch, uint32_t scratchBytes) {
   tags_ = Comp();
   autoDj_ = Comp();
-  tagsName_[0] = autoDjName_[0] = producer_[0] = serverRevision_[0] = 0;
+  waves_ = Comp();
+  tagsName_[0] = autoDjName_[0] = wavesName_[0] = producer_[0] = serverRevision_[0] = 0;
   if (!scratch || scratchBytes < 96) return Why::Io;
   uint8_t th[kHeaderBytes - kCommonHeaderBytes];
   Why w = c_.open(src, kSpec, th);
@@ -107,10 +113,11 @@ Why Manifest::open(Source& src, uint8_t* scratch, uint32_t scratchBytes) {
   ls.begin(&src, libr.offset, libr.offset + libr.bytes, scratch + part, part);
   ss.begin(&src, strs.offset, strs.offset + strs.bytes, scratch + 2 * part, part);
   uint8_t b;
-  if (strs.bytes == 0 || !ss.readByte(&b) || b != 0) return Why::String;
+  if (strs.bytes == 0 || !ss.readByte(&b) || b != 0) return ss.readFailed() ? Why::Io : Why::String;
   if ((w = nextString(ss, strs, producer, producer_, sizeof(producer_), nullptr)) != Why::Ok) return w;
   if ((w = nextString(ss, strs, revision, serverRevision_, sizeof(serverRevision_), nullptr)) != Why::Ok) return w;
 
+  uint32_t wavesRows = 0;
   for (uint32_t i = 0; i < comp.count; ++i) {
     uint8_t e[kCompStride];
     if (!cs.read(e, kCompStride) || !cs.skipTo(cs.position() + comp.stride - kCompStride)) return Why::Io;
@@ -134,6 +141,16 @@ Why Manifest::open(Source& src, uint8_t* scratch, uint32_t scratchBytes) {
       if (!nameIs(c.kind, c.generation, name, len)) return Why::Comp;
       autoDj_ = c;
       std::memcpy(autoDjName_, name, len + 1);
+    } else if (c.kind == kMagicMpwf) {
+      // A bad row costs only itself (WAVEFORM-INDEX.md 7.2): of two rows,
+      // neither counts.
+      if (++wavesRows == 1 && nameIs(c.kind, c.generation, name, len)) {
+        waves_ = c;
+        std::memcpy(wavesName_, name, len + 1);
+      } else {
+        waves_ = Comp();
+        wavesName_[0] = 0;
+      }
     }
     // Any other kind: ignored (2.4.5), its name read in its place.
   }
@@ -184,6 +201,10 @@ bool companionMatches(const Comp& entry, const Header& companion, uint8_t mptgSo
     return false;
   if (entry.kind == kMagicMptg) return mptgSource == 2 || mptgSource == 3;
   if (entry.kind == kMagicMpdj) return mpdjSig && std::memcmp(mpdjSig, entry.key, 16) == 0;
+  if (entry.kind == kMagicMpwf) {
+    static const uint8_t kZeros[16] = {};
+    return std::memcmp(entry.key, kZeros, 16) == 0;
+  }
   return false;
 }
 
@@ -192,9 +213,10 @@ bool write(Sink& out, const ManifestIn& in, uint32_t* fileBytes, uint32_t* heade
     if (error) *error = e;
     return false;
   };
-  if (in.compCount < 1 || in.compCount > 2 || in.comps[0].kind != kMagicMptg ||
-      (in.compCount == 2 && in.comps[1].kind != kMagicMpdj))
-    return bad("COMP: one MPTG, then at most one MPDJ");
+  if (in.compCount < 1 || in.compCount > 3 || in.comps[0].kind != kMagicMptg ||
+      (in.compCount == 2 && in.comps[1].kind != kMagicMpdj && in.comps[1].kind != kMagicMpwf) ||
+      (in.compCount == 3 && (in.comps[1].kind != kMagicMpdj || in.comps[2].kind != kMagicMpwf)))
+    return bad("COMP: one MPTG, then at most one MPDJ, then at most one MPWF");
   std::vector<std::string> roots;
   for (uint32_t i = 0; i < in.rootCount; ++i) {
     const std::string r = in.roots[i] ? in.roots[i] : "";
@@ -363,7 +385,7 @@ Why Plan::open(Source& src, uint8_t* scratch, uint32_t scratchBytes) {
   ps.begin(&src, pend.offset, pend.offset + pend.bytes, scratch, part);
   ss.begin(&src, strs.offset, strs.offset + strs.bytes, scratch + part, part);
   uint8_t b;
-  if (strs.bytes == 0 || !ss.readByte(&b) || b != 0) return Why::String;
+  if (strs.bytes == 0 || !ss.readByte(&b) || b != 0) return ss.readFailed() ? Why::Io : Why::String;
   char prev[kMaxRelPath + 2], path[kMaxRelPath + 2];
   size_t prevLen = 0;
   int prevRank = -1;

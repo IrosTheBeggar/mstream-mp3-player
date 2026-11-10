@@ -133,6 +133,10 @@ void test_status_unknowns() {
   TEST_ASSERT_EQUAL_STRING("00abcdef01234567.0000beef", field(line(f), "cid").c_str());
   f.cidKnown = false;
   TEST_ASSERT_EQUAL_STRING("-", field(line(f), "cid").c_str());
+  // '?': the card failed the boot's reads of its root, which isn't to say it has none.
+  f.cidUnknown = true;
+  TEST_ASSERT_EQUAL_STRING("?", field(line(f), "cid").c_str());
+  f.cidUnknown = false;
   // clock=: ok while the board's clock has a time it believes, else unset.
   TEST_ASSERT_EQUAL_STRING("ok", field(line(f), "clock").c_str());
   f.clockOk = false;

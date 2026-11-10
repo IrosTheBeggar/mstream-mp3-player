@@ -5,7 +5,9 @@
 // and its second level (JumpIndex, textfold::secondKey), a list's step a
 // frame (ListLayout::stepToward), and every text the tab bar can show
 // measured with the real fonts (the VLW DejaVu data the firmware draws
-// with) against the room TabBarModel gives it.
+// with) against the room TabBarModel gives it. The mood filters' editor
+// and first row (FilterGrid) in every language: the design's goldens, the
+// cells' fit, the lab panel's hits.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -24,6 +26,7 @@
 #include "CardTags.h"
 #include "CjkGlyphs16.h"
 #include "DeviceInfo.h"
+#include "FilterGrid.h"
 #include "GlyphStore.h"
 #include "HostStatus.h"
 #include "IdlePolicy.h"
@@ -52,6 +55,7 @@
 #include "TrackCatalog.h"
 #include "UiStrings.h"
 #include "UiText.h"
+#include "WaveBar.h"
 #include "../support/TagFixtures.h"
 
 // The fonts' data, as the firmware has it (src/ui/VlwFonts.cpp: arrays only).
@@ -831,6 +835,58 @@ void test_store_glyphs_sit_in_the_rows() {
   }
 }
 
+// The rows around Now Playing's waveform (lib/core/WaveBar.h) hold their lines.
+// The text row: a Small line centred on y 165 is y 157-173, and y 157 is the
+// strip's, so y 158-173 are pushed. Its first row has no ink but for 8 of the VLW
+// font's accented letters (ĺ Ů Ǖ Ǘ Ǚ Ǜ Ѯ Ѽ: none is in the ten languages' texts; a
+// headphones' name loses a row of the accent). The store's em box is the line's
+// rows 0-15, and 8,902 of its glyphs reach row 0. So a line with one of its glyphs
+// is centred on y 166 (NowPlayingPage::drawProgressText()), and rows 0-15 show:
+// what the band's y 152-167 showed. Its last row was never pushed: y 168 then,
+// y 174 now. The 332 glyphs that reach it lose it, 20 of them box drawing, as
+// they did. The readout row: Title's line fills its 27 rows, Small's on row 16
+// has the same baseline, Bold's fits.
+void test_now_playing_rows_around_the_waveform() {
+  const glyphstore::Store& s = cjk();
+  const Vlw small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
+  const int top = wave::kTextCentreY - (small.yAdvance >> 1);
+  TEST_ASSERT_EQUAL_INT(wave::kTextRowY - 1, top);
+  TEST_ASSERT_EQUAL_INT(wave::kTextRowY + wave::kTextRowH - 1, top + small.yAdvance - 1);
+  int vlw = 0;
+  for (const Vlw::Box& b : small.boxes) {
+    if (b.height > 0 && small.maxAscent - b.top == 0) {
+      ++vlw;
+      TEST_ASSERT_TRUE(b.cp == 0x13A || b.cp == 0x16E || (b.cp >= 0x1D5 && b.cp <= 0x1DB) || b.cp == 0x46E || b.cp == 0x47C);
+    }
+  }
+  TEST_ASSERT_EQUAL_INT(8, vlw);
+  const int base = s.baselineIn(small.maxAscent, small.yAdvance);
+  int first = 0, last = 0, box = 0;
+  for (uint32_t cp = 0; cp <= 0xFFFF; ++cp) {
+    const glyphstore::Glyph g = s.find(cp);
+    if (!g) continue;
+    const glyphstore::Metrics m = s.metrics(g);
+    if (m.w == 0) continue;
+    const glyphstore::Placement p = glyphstore::place(m, base, small.yAdvance);
+    if (p.top == 0) ++first;
+    if (p.top + p.rows - 1 == small.yAdvance - 1) {
+      ++last;
+      if (cp >= 0x2500 && cp <= 0x257F) ++box;
+    }
+  }
+  TEST_ASSERT_EQUAL_INT(8902, first);
+  TEST_ASSERT_EQUAL_INT(332, last);
+  TEST_ASSERT_EQUAL_INT(20, box);
+  const int bigTop = wave::kReadoutBigRow - (title.yAdvance >> 1);
+  TEST_ASSERT_EQUAL_INT(0, bigTop);
+  TEST_ASSERT_EQUAL_INT(wave::kReadoutH, bigTop + title.yAdvance);
+  const int smallTop = wave::kReadoutSmallRow - (small.yAdvance >> 1);
+  TEST_ASSERT_TRUE(smallTop >= 0 && smallTop + small.yAdvance <= wave::kReadoutH);
+  TEST_ASSERT_EQUAL_INT(bigTop + title.maxAscent, smallTop + small.maxAscent);
+  const int boldTop = wave::kReadoutBigRow - (bold.yAdvance >> 1);
+  TEST_ASSERT_TRUE(boldTop >= 0 && boldTop + bold.yAdvance <= wave::kReadoutH);
+}
+
 // Now Playing's title lines share rows (TitleLayout): each line's row,
 // centred on lineY() as draw() centres it, is taller than the pitch, so
 // the next line's row starts over its last rows: Bold's two (19 rows 17
@@ -1135,6 +1191,7 @@ void test_empty_state_texts_fit() {
   TEST_ASSERT_TRUE(body.width(tr(S::empty_autodj)) + kEmptyIconW[1] + 8 <= kEmptySecondW - 12);  // (Auto DJ's place)
   TEST_ASSERT_TRUE(kEmptyPrimaryX + kEmptyPrimaryW < kEmptySecondX && kEmptySecondX + kEmptySecondW <= 320 - 6);
   fits(small, tr(S::empty_pick_in_library), kEmptyLineW);
+  fits(small, tr(S::empty_no_track_fits), kEmptyLineW);  // (in its place while Auto DJ's mood filter fits no track)
 }
 
 // No card, and each kind of card that didn't mount (cardMessage(): exFAT,
@@ -1696,6 +1753,7 @@ void test_output_texts_fit() {
   for (int c = 0; c < ScreenPower::kBrightnesses; ++c) {
     fits(body, ScreenPower::brightnessLabel(c), kSettingPillW - kSettingPillPad);
   }
+  for (int c = 0; c < ScreenPower::kOffTouches; ++c) fits(body, ScreenPower::offTouchLabel(c), kSettingPillW - kSettingPillPad);
   for (uistr::Lang l : kAllLangs) {
     if (!uistr::hasCatalogue(l)) continue;
     uistr::setLang(l);
@@ -1705,6 +1763,9 @@ void test_output_texts_fit() {
     for (int c = 0; c < ScreenPower::kBrightnesses; ++c) {
       fitsIn(body, small, ScreenPower::brightnessLabel(c), kSettingPillW - kSettingPillPad);
     }
+    for (int c = 0; c < ScreenPower::kOffTouches; ++c) {
+      fitsIn(body, small, ScreenPower::offTouchLabel(c), kSettingPillW - kSettingPillPad);
+    }
     fitsIn(body, small, tr(S::library_row_rescan), kRescanPillW - kSettingPillPad);
   }
   uistr::setLang(uistr::Lang::En);
@@ -1713,6 +1774,26 @@ void test_output_texts_fit() {
   fits(small, tr(S::settings_screen_off_sub), kSettingValueSubW);
   fits(small, tr(S::settings_screen_never_sub), kSettingValueSubW);
   fits(small, tr(S::settings_brightness_sub), kSettingValueSubW);
+  fits(body, tr(S::settings_screen_touch), kSettingValueSubW);
+  fits(small, tr(S::settings_screen_touch_nothing_sub), kSettingValueSubW);
+  fits(small, tr(S::settings_screen_touch_wake_sub), kSettingValueSubW);
+  fits(small, tr(S::settings_screen_touch_glance_sub), kSettingValueSubW);
+  // The glance's one line where Now Playing's buttons are (Small, centred
+  // on y 204 over the seek bar's span): the power button's, or the idle
+  // power-off's countdown at its widest second; in every language, with the
+  // glyph store's glyphs for Japanese and Chinese.
+  TEST_ASSERT_EQUAL_INT(296, kGlanceHintW);
+  TEST_ASSERT_TRUE(320 / 2 - kGlanceHintW / 2 >= 12 && 320 / 2 + kGlanceHintW / 2 <= 320 - 12);  // x 12-308
+  for (uistr::Lang l : kAllLangs) {
+    uistr::setLang(l);
+    fits(small, tr(S::glance_hint), kGlanceHintW);
+    for (uint32_t sec : {30u, 10u, 1u}) {
+      char warn[128];
+      IdlePolicy::warnText(sec, warn, sizeof(warn));
+      fits(small, warn, kGlanceHintW);
+    }
+  }
+  uistr::setLang(uistr::Lang::En);
   TEST_ASSERT_TRUE(kSettingValueSubW > 100);
   // About: a long value falls back to Small, which fits.
   char v[80];
@@ -2398,6 +2479,10 @@ struct View {
     v.source = LibraryIndex::kFromTransfer;
     return *this;
   }
+  View& moods(uint16_t w) {
+    v.moods = w;
+    return *this;
+  }
   View& set(const char** p, size_t* n, const char* s) {
     *p = s;
     *n = strlen(s);
@@ -3010,6 +3095,7 @@ void test_library_texts_fit() {
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
   fits(title, tr(S::empty_no_music_title), kEmptyTitleW);
   for (int k = 0; k < 2; ++k) fits(small, lineOf(S::empty_no_music_lines, k).c_str(), kEmptyLineW);
+  fits(small, tr(S::library_row_rescan_unread), kEmptyLineW);  // (in its place at a boot that holds the jobs)
   for (int k = 0; k < 2; ++k) fits(small, lineOf(kNoCard.lines, k).c_str(), kEmptyLineW);
   for (const char* l :
        {tr(S::now_playing_unknown_artist), tr(S::library_no_artist_folder), tr(S::library_loose_tracks)}) {
@@ -3167,6 +3253,57 @@ void test_console_tag_commands() {
   TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gt</music/...>") != nullptr);
 }
 
+// The waveform index's letters (app/Waves). gw alone stays the walk, and gw?
+// asks for the state. What follows gw= and gw# is checked whole: anything but
+// exactly the digits a shape takes changes nothing.
+void test_console_wave_letters() {
+  using C = tagtext::Command;
+  TEST_ASSERT_EQUAL(C::Walk, tagtext::parse("w").command);
+  TEST_ASSERT_EQUAL(C::Walk, tagtext::parse(" w ").command);
+  TEST_ASSERT_EQUAL(C::Wave, tagtext::parse("w?").command);
+  TEST_ASSERT_EQUAL_STRING("?", tagtext::parse("w?").path);
+  TEST_ASSERT_EQUAL(C::Wave, tagtext::parse(" w- ").command);
+  TEST_ASSERT_EQUAL(C::Wave, tagtext::parse("w=123").command);
+  TEST_ASSERT_EQUAL_STRING("=123", tagtext::parse("w=123").path);
+  TEST_ASSERT_EQUAL(C::Wave, tagtext::parse("w#ab").command);
+  TEST_ASSERT_EQUAL_STRING("#ab", tagtext::parse("w#ab").path);
+  TEST_ASSERT_EQUAL(C::Wave, tagtext::parse("w=").command);  // (an empty text is the hook's to refuse)
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("w?x").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("w-1").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("wx").command);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gw walk now") != nullptr);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gw?") != nullptr);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gw=<99 digits 0-9>") != nullptr);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gw#<480 hex>") != nullptr);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gw-") != nullptr);
+
+  uint8_t out[6] = {};
+  TEST_ASSERT_TRUE(tagtext::digitsIn("012349", out, 6));
+  const uint8_t digits[6] = {0, 1, 2, 3, 4, 9};
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(digits, out, 6);
+  TEST_ASSERT_FALSE(tagtext::digitsIn("01234", out, 6));    // short
+  TEST_ASSERT_FALSE(tagtext::digitsIn("0123490", out, 6));  // long
+  TEST_ASSERT_FALSE(tagtext::digitsIn("0123a9", out, 6));
+  TEST_ASSERT_FALSE(tagtext::digitsIn("", out, 6));
+  TEST_ASSERT_TRUE(tagtext::hexIn("00ff7FaB", out, 4));
+  const uint8_t bytes[4] = {0x00, 0xFF, 0x7F, 0xAB};
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(bytes, out, 4);
+  TEST_ASSERT_FALSE(tagtext::hexIn("00ff7Fa", out, 4));    // short by a digit
+  TEST_ASSERT_FALSE(tagtext::hexIn("00ff7F", out, 4));     // ... by a byte
+  TEST_ASSERT_FALSE(tagtext::hexIn("00ff7FaB0", out, 4));  // long
+  TEST_ASSERT_FALSE(tagtext::hexIn("00ff7Fag", out, 4));
+  TEST_ASSERT_FALSE(tagtext::hexIn("", out, 4));
+  // The console's two sizes: a whole line of each.
+  std::string line(99, '7');
+  uint8_t heights[99];
+  TEST_ASSERT_TRUE(tagtext::digitsIn(line.c_str(), heights, sizeof(heights)));
+  TEST_ASSERT_EACH_EQUAL_UINT8(7, heights, sizeof(heights));
+  line.assign(480, 'c');
+  uint8_t bars[240];
+  TEST_ASSERT_TRUE(tagtext::hexIn(line.c_str(), bars, sizeof(bars)));
+  TEST_ASSERT_EACH_EQUAL_UINT8(0xCC, bars, sizeof(bars));
+}
+
 // A record as the console prints it: each text field the run has (lists
 // as "a" | "b"), the numbers on one line, the ReplayGain, the picture's
 // anchor, the flags; an UNREADABLE record in one line. And a real file's
@@ -3288,6 +3425,263 @@ void test_console_sources() {
   LibraryIndex none;
   tagtext::sourcesText(tagtext::countSources(none), t, sizeof(t));
   TEST_ASSERT_EQUAL_STRING("0 tracks", t);
+}
+
+// gm and gm<hex> (docs/MOOD-FILTERS.md 9.3, 9.6 C7): m is the mood words'
+// letter; what follows it is a filter's q in 1-4 hex digits, and one that
+// isn't a filter (bits 11-15, voice 3, level 3: 5.4) is refused as g<n> past
+// 50,000 is.
+void test_console_mood_letters() {
+  using C = tagtext::Command;
+  TEST_ASSERT_EQUAL(C::Moods, tagtext::parse("m").command);
+  TEST_ASSERT_EQUAL_UINT32(tagtext::kMoodsReport, tagtext::parse("m").n);
+  TEST_ASSERT_EQUAL(C::Moods, tagtext::parse(" m ").command);
+  const tagtext::Parsed q = tagtext::parse("m127");  // Sad, Relaxed, Vocals, Danceable at Standard
+  TEST_ASSERT_EQUAL(C::Moods, q.command);
+  TEST_ASSERT_EQUAL_HEX32(0x127, q.n);
+  const moodfilter::Filter f = moodfilter::Filter::unpack(static_cast<uint16_t>(q.n));
+  TEST_ASSERT_EQUAL(moodfilter::Scale::Second, f.valence);
+  TEST_ASSERT_EQUAL(moodfilter::Scale::First, f.energy);
+  TEST_ASSERT_EQUAL(moodfilter::Voice::Vocals, f.voice);
+  TEST_ASSERT_EQUAL_UINT8(moodfilter::kDanceable, f.tags);
+  TEST_ASSERT_EQUAL(moodfilter::Level::Standard, f.level);
+  TEST_ASSERT_EQUAL_HEX32(0x1C0, tagtext::parse("m1c0").n);  // either case
+  TEST_ASSERT_EQUAL_HEX32(0x1C0, tagtext::parse("m1C0").n);
+  TEST_ASSERT_EQUAL_HEX32(0x127, tagtext::parse("m0127").n);  // four digits
+  // q 0 and a level alone are filters too, ones that filter nothing.
+  TEST_ASSERT_EQUAL(C::Moods, tagtext::parse("m0").command);
+  TEST_ASSERT_EQUAL_HEX32(0, tagtext::parse("m0").n);
+  TEST_ASSERT_EQUAL_HEX32(0x400, tagtext::parse("m400").n);
+  TEST_ASSERT_EQUAL_HEX32(0x5CF, tagtext::parse("m5cf").n);  // every group but the voice, at Loose
+  // Not filters, not hex, too long.
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("m800").command);    // bit 11
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("mffff").command);   // bits 11-15
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("m30").command);     // voice 3
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("m600").command);    // level 3
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("m12g").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("m0x127").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("m00127").command);  // five digits
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("m 127").command);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gm the mood words") != nullptr);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gm<hex>") != nullptr);
+}
+
+namespace {
+// Two words, each from mood scores in MOOD_COLUMNS order (tools/moodfilter.py
+// word_of()): 5.7's worked example, which filter 0x127 lets through, and a
+// happy, relaxed song it doesn't.
+constexpr uint16_t kFits = 0xB313;  // [.7012, .3104, .5803, .7, .2999, null, .4999, .29]
+constexpr uint16_t kMiss = 0x9B00;  // [.2, .8, .1, .7, .1, .1, .1, .1]
+
+// A library of every album shape the Albums list has, with words:
+//   A/One     3 of 4 analysed fit: fits
+//   A/Two     2 of 4: half, no
+//   A/Three   2 of 3 analysed (a 4th without a word): fits
+//   B/Unheard no word at all: 0 of 0, never
+//   B/        an artist's loose track that fits: 1 of 1
+//   C/Four    two discs' folders, 2 of 3: fits
+//   /         the root's loose track, which doesn't: 0 of 1
+// tools/synthtransfer.py's mood_fits() over the same paths: 10 of 19 tracks,
+// 4 of 7 albums (6 with an analysed track) under 0x127.
+void buildMoodLibrary(LibraryIndex& idx) {
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  auto add = [&](const char* path, uint16_t w) {
+    TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, idx.addRecord(path, View().title("Song").moods(w).transfer().v));
+  };
+  add("/music/A/One/01 - a.mp3", kFits);
+  add("/music/A/One/02 - b.mp3", kFits);
+  add("/music/A/One/03 - c.mp3", kFits);
+  add("/music/A/One/04 - d.mp3", kMiss);
+  add("/music/A/Three/01 - a.mp3", kFits);
+  add("/music/A/Three/02 - b.mp3", kFits);
+  add("/music/A/Three/03 - c.mp3", kMiss);
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, idx.addFile("/music/A/Three/04 - d.mp3"));
+  add("/music/A/Two/01 - a.mp3", kFits);
+  add("/music/A/Two/02 - b.mp3", kFits);
+  add("/music/A/Two/03 - c.mp3", kMiss);
+  add("/music/A/Two/04 - d.mp3", kMiss);
+  add("/music/B/05 - Loose.mp3", kFits);
+  add("/music/B/Unheard/01 - a.mp3", 0);
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, idx.addFile("/music/B/Unheard/02 - b.mp3"));
+  add("/music/C/Four/CD1/01 - a.mp3", kFits);
+  add("/music/C/Four/CD2/01 - b.mp3", kFits);
+  add("/music/C/Four/CD2/02 - c.mp3", kMiss);
+  add("/music/06 - Root.mp3", kMiss);
+  TEST_ASSERT_TRUE(idx.finish());
+}
+
+uint32_t albumAt(const LibraryIndex& idx, const char* folder) {
+  char path[256];
+  for (uint32_t a = 0; a < idx.albumCount(); ++a) {
+    idx.folderPath(idx.album(a).folder, path, sizeof(path));
+    if (strcmp(path, folder) == 0) return a;
+  }
+  TEST_FAIL_MESSAGE(folder);
+  return 0;
+}
+}  // namespace
+
+// gm<hex>'s passes over a hand-built index: the tracks by moodfilter::count()
+// over the words, the albums of albumsAZ() each by tally() over its
+// tracksOfAlbum() and majority(), as --check --mood-filter counts them.
+void test_console_mood_fits() {
+  static LibraryIndex idx;
+  buildMoodLibrary(idx);
+  TEST_ASSERT_TRUE(idx.hasMoods());
+  TEST_ASSERT_EQUAL_UINT32(19, idx.trackCount());
+  TEST_ASSERT_EQUAL_UINT32(7, idx.albumCount());
+  // gm's figures.
+  const tagtext::Moods m = tagtext::countMoods(idx);
+  TEST_ASSERT_EQUAL_UINT32(19, m.tracks);
+  TEST_ASSERT_EQUAL_UINT32(16, m.withWord);
+  TEST_ASSERT_EQUAL_size_t(19 * sizeof(uint16_t), m.blockBytes);
+  char t[200];
+  tagtext::moodsText(m, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("16 of 19 tracks with a word (84.2 %), block 38 B", t);
+  // 0x127.
+  const moodfilter::Filter f = moodfilter::Filter::unpack(0x127);
+  const tagtext::TrackFits tracks = tagtext::fittingTracks(idx, f);
+  TEST_ASSERT_EQUAL_UINT32(19, tracks.tracks);
+  TEST_ASSERT_EQUAL_UINT32(10, tracks.fit);
+  TEST_ASSERT_EQUAL_UINT32(16, tracks.analysed);
+  const tagtext::AlbumFits albums = tagtext::fittingAlbums(idx, f);
+  TEST_ASSERT_EQUAL_UINT32(7, albums.albums);
+  TEST_ASSERT_EQUAL_UINT32(4, albums.fit);
+  TEST_ASSERT_EQUAL_UINT32(6, albums.analysed);
+  struct Want {
+    const char* folder;
+    uint32_t pass, analysed;
+    bool fits;
+  };
+  const Want want[] = {{"/music/A/One", 3, 4, true},  {"/music/A/Two", 2, 4, false},
+                       {"/music/A/Three", 2, 3, true}, {"/music/B/Unheard", 0, 0, false},
+                       {"/music/B", 1, 1, true},       {"/music/C/Four", 2, 3, true},
+                       {"/music", 0, 1, false}};
+  for (const Want& w : want) {
+    moodfilter::Tally tally;
+    const uint32_t a = albumAt(idx, w.folder);
+    TEST_ASSERT_EQUAL_MESSAGE(w.fits, tagtext::albumFits(idx, a, f, &tally), w.folder);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(w.pass, tally.pass, w.folder);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(w.analysed, tally.analysed, w.folder);
+    TEST_ASSERT_EQUAL_MESSAGE(w.fits, tagtext::albumFits(idx, a, f), w.folder);  // (no tally asked)
+  }
+  TEST_ASSERT_TRUE((idx.album(albumAt(idx, "/music/B")).flags & LibraryIndex::kLoose) != 0);
+  // A filter that filters nothing lets every track and album through, words
+  // of 0 and an album with no analysed track included (4.1).
+  for (uint16_t q : {0x000, 0x200, 0x400}) {
+    const moodfilter::Filter none = moodfilter::Filter::unpack(q);
+    TEST_ASSERT_EQUAL_UINT32(19, tagtext::fittingTracks(idx, none).fit);
+    TEST_ASSERT_EQUAL_UINT32(7, tagtext::fittingAlbums(idx, none).fit);
+  }
+  // An index with no words: every track's is 0, so only such a filter does.
+  LibraryIndex plain;
+  TEST_ASSERT_TRUE(plain.begin("/music"));
+  plain.addFile("/music/A/One/01 - a.mp3");
+  plain.addFile("/music/A/One/02 - b.mp3");
+  plain.addFile("/music/B/03 - c.mp3");
+  TEST_ASSERT_TRUE(plain.finish());
+  TEST_ASSERT_FALSE(plain.hasMoods());
+  tagtext::moodsText(tagtext::countMoods(plain), t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("no mood data: none of 3 tracks has a word, block 0 B", t);
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::fittingTracks(plain, f).fit);
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::fittingTracks(plain, f).analysed);
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::fittingAlbums(plain, f).fit);
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::fittingAlbums(plain, f).analysed);
+  TEST_ASSERT_EQUAL_UINT32(3, tagtext::fittingTracks(plain, moodfilter::Filter()).fit);
+  TEST_ASSERT_EQUAL_UINT32(2, tagtext::fittingAlbums(plain, moodfilter::Filter()).fit);
+  // Nothing built: nothing counted.
+  LibraryIndex empty;
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::countMoods(empty).tracks);
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::fittingTracks(empty, moodfilter::Filter()).tracks);
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::fittingAlbums(empty, moodfilter::Filter()).albums);
+}
+
+// gm<hex>'s filter line, as --check's filter_name() says it (its output
+// for these q, tools/synthtransfer.py); gt's tail and word lines.
+void test_console_mood_texts() {
+  char t[200];
+  const struct {
+    uint16_t q;
+    const char* text;
+  } names[] = {
+      {0x127, "valence sad; energy relaxed; voice vocals; tags danceable at Standard (need 2, under 2)"},
+      {0x000, "no group at Standard (need 2, under 2): filters nothing"},
+      {0x200, "no group at Strict (need 3, under 1): filters nothing"},
+      {0x400, "no group at Loose (need 1, under 3): filters nothing"},
+      {0x1C0, "tags acoustic, party, danceable at Standard (need 2, under 2)"},
+      {0x015, "valence happy; energy relaxed; voice instrumental at Standard (need 2, under 2)"},
+      {0x02A, "valence neutral; energy neutral; voice vocals at Standard (need 2, under 2)"},
+      {0x03F, "no group at Standard (need 2, under 2): filters nothing"},  // voice 3: no filter
+  };
+  for (const auto& n : names) {
+    tagtext::filterText(n.q, t, sizeof(t));
+    TEST_ASSERT_EQUAL_STRING(n.text, t);
+  }
+  tagtext::filterText(0x39F, t, sizeof(t));  // Sad, Aggressive, Instrumental, Party, Danceable at Strict
+  TEST_ASSERT_EQUAL_STRING(
+      "valence sad; energy aggressive; voice instrumental; tags party, danceable at Strict (need 3, under 1)", t);
+  // The words.
+  tagtext::wordText(kFits, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("0xB313: valence sad 2, energy relaxed 3, instrumental 0, acoustic 1, party 0, danceable 3",
+                           t);
+  tagtext::wordText(kMiss, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING(
+      "0x9B00: valence happy 3, energy relaxed 3, instrumental 0, acoustic 0, party 0, danceable 0", t);
+  tagtext::wordText(0xE400, t, sizeof(t));  // every head NULL
+  TEST_ASSERT_EQUAL_STRING(
+      "0xE400: valence NULL, energy NULL, instrumental NULL, acoustic 0, party 0, danceable 0", t);
+  tagtext::wordText(0, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("0x0000: no row", t);
+  // The tails: 5.7's, taken; no server row; one a reader refuses (the
+  // fixtures' mptg-minor-1, flag bits 0xA8); none.
+  const uint8_t tail[8] = {0x03, 0x3A, 0x46, 0x1D, 0x31, 0xFF, 0x46, 0x00};
+  TEST_ASSERT_TRUE(moodfilter::tailValid(tail));
+  tagtext::tailText(tail, true, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("03 3A 46 1D 31 FF 46 00, taken: 0xB313: valence sad 2, energy relaxed 3, instrumental 0, "
+                           "acoustic 1, party 0, danceable 3",
+                           t);
+  const uint8_t zeros[8] = {};
+  tagtext::tailText(zeros, false, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("00 00 00 00 00 00 00 00: no server row (word 0)", t);
+  uint8_t bad[8];
+  memset(bad, 0xAB, sizeof(bad));
+  TEST_ASSERT_FALSE(moodfilter::tailValid(bad));
+  tagtext::tailText(bad, false, t, sizeof(t));
+  TEST_ASSERT_TRUE(strncmp(t, "AB AB AB AB AB AB AB AB: REFUSED", 32) == 0);
+  // 5.7's tail without its PRESENT bit (byte 72 is 0, the rest isn't): a
+  // refused tail, not no server row (2.6.4's Valid).
+  const uint8_t unflagged[8] = {0x00, 0x3A, 0x46, 0x1D, 0x31, 0xFF, 0x46, 0x00};
+  TEST_ASSERT_FALSE(moodfilter::tailValid(unflagged));
+  tagtext::tailText(unflagged, false, t, sizeof(t));
+  TEST_ASSERT_TRUE_MESSAGE(strncmp(t, "00 3A 46 1D 31 FF 46 00: REFUSED", 32) == 0, t);
+  TEST_ASSERT_NULL(strstr(t, "no server row"));
+  // 5.7's tail with bit 2 for bit 1 (aggressive beat relaxed, happy beat
+  // sad): the energy side reads aggressive.
+  const uint8_t loud[8] = {0x05, 0x3A, 0x46, 0x1D, 0x31, 0xFF, 0x46, 0x00};
+  TEST_ASSERT_TRUE(moodfilter::tailValid(loud));
+  TEST_ASSERT_EQUAL_HEX16(0x9713, moodfilter::wordOfTail(loud));
+  tagtext::tailText(loud, true, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("05 3A 46 1D 31 FF 46 00, taken: 0x9713: valence happy 2, energy aggressive 3, "
+                           "instrumental 0, acoustic 1, party 0, danceable 3",
+                           t);
+  tagtext::wordText(0x8600, t, sizeof(t));  // energy aggressive 2, the rest bucket 0 (no side at 0)
+  TEST_ASSERT_EQUAL_STRING("0x8600: valence 0, energy aggressive 2, instrumental 0, acoustic 0, party 0, danceable 0",
+                           t);
+  tagtext::tailText(nullptr, false, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("none (a stride under 80 carries none)", t);
+  // Small buffers: cut, never past them.
+  char small[12];
+  TEST_ASSERT_EQUAL_size_t(11, tagtext::tailText(tail, true, small, sizeof(small)));
+  TEST_ASSERT_EQUAL_STRING("03 3A 46 1D", small);
+  TEST_ASSERT_EQUAL_size_t(11, tagtext::wordText(kFits, small, sizeof(small)));
+  TEST_ASSERT_EQUAL_size_t(11, tagtext::filterText(0x127, small, sizeof(small)));
+  tagtext::Moods m;
+  m.tracks = 19412;
+  m.withWord = 17859;
+  m.blockBytes = 38824;
+  TEST_ASSERT_EQUAL_size_t(11, tagtext::moodsText(m, small, sizeof(small)));
+  tagtext::moodsText(m, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("17,859 of 19,412 tracks with a word (92.0 %), block 38,824 B", t);
 }
 
 // The Dance tab's bottom line while a computer drives the dancer (the USB
@@ -3606,6 +4000,77 @@ void test_sheet_details_fit() {
   TEST_ASSERT_EQUAL_STRING(drawn(small, name, room).c_str(), cut);
 }
 
+// The playback sheet's Auto DJ row with a mood filter on (MOOD-FILTERS.md
+// 4.4, frame dj-menu): autodjview::sheetDetail()'s "On · Relaxed ·
+// Instrumental", cut with "…" to the room beside the label (Ui::
+// autoDjDetail(), as Now Playing cuts a name), stays beside it in every
+// language and for every filter, the state's word first, whole. A detail
+// that fits whole is left as it is.
+void test_the_auto_dj_sheet_detail_is_cut_beside() {
+  namespace dv = autodjview;
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  const textfit::Font f = viewOf(small);
+  std::string report;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    const int labelW = body.width(tr(S::now_playing_autodj));
+    const int room = sheet::detailRoom(labelW);
+    TEST_ASSERT_TRUE(room >= 210);  // (en 213, ru 210: far over sheet::kMinDetailRoom)
+    char on[32];
+    uistr::trf(on, sizeof(on), S::output_autodj_sub_on, "");  // "On · ": what each detail starts with
+    size_t cutCount = 0, filters = 0;
+    int widest = 0;
+    for (uint16_t q = 1; q < 0x800; ++q) {
+      if (!moodfilter::valid(q) || !moodfilter::Filter::unpack(q).active()) continue;
+      ++filters;
+      dv::State s;
+      s.on = true;
+      s.moods = q;
+      s.moodData = s.moodOn = true;
+      s.fit = s.fitOf = 19412;
+      char whole[96], shown[96];
+      TEST_ASSERT_TRUE(dv::sheetDetail(s, whole, sizeof(whole)) == dv::Ink::Accent);
+      TEST_ASSERT_EQUAL_INT(0, std::strncmp(whole, on, std::strlen(on)));
+      textfit::fit(f, whole, std::strlen(whole), shown, sizeof(shown), room);
+      widest = std::max(widest, small.width(whole));
+      fits(small, shown, room);
+      TEST_ASSERT_FALSE(sheet::detailOnTwoLines(labelW, small.width(shown)));
+      if (std::strcmp(shown, whole) != 0) {
+        ++cutCount;
+        TEST_ASSERT_TRUE(std::strstr(shown, "\xE2\x80\xA6") != nullptr);
+        // More than the state's word: some of the first mood too (the room
+        // is 210 px or more in every language).
+        TEST_ASSERT_TRUE(std::strlen(shown) > std::strlen(on) + 3);
+      }
+    }
+    TEST_ASSERT_EQUAL_INT(1149, static_cast<int>(filters));  // the 1,152 valid words but a level alone's three
+    char m[160];
+    snprintf(m, sizeof(m), "%s: %zu of %zu cut in %d px (the widest %d); ", uistr::tag(l), cutCount, filters, room,
+             widest);
+    report += m;
+  }
+  uistr::setLang(uistr::Lang::En);
+  // English: frame dj-menu's two words fit whole beside "Auto DJ".
+  {
+    dv::State s;
+    s.on = true;
+    moodfilter::Filter both;
+    both.energy = moodfilter::Scale::First;  // Relaxed
+    both.voice = moodfilter::Voice::Instrumental;
+    s.moods = both.pack();
+    s.moodData = s.moodOn = true;
+    char whole[96];
+    dv::sheetDetail(s, whole, sizeof(whole));
+    TEST_ASSERT_EQUAL_STRING("On \xC2\xB7 Relaxed \xC2\xB7 Instrumental", whole);
+    char m[96];
+    snprintf(m, sizeof(m), "en \"%s\": %d px in %d", whole, small.width(whole),
+             sheet::detailRoom(body.width(tr(S::now_playing_autodj))));
+    report += m;
+  }
+  TEST_MESSAGE(report.c_str());
+}
+
 // Auto DJ on the screen (the engine design's 5; lib/core/AutoDjView), in
 // every language: Output's row (its title and line, every state and
 // Anchor), Output > Auto DJ's rows (the switches' titles and lines beside
@@ -3638,7 +4103,8 @@ void test_auto_dj_texts_fit() {
     for (dv::Index ix : {dv::Index::None, dv::Index::Bad, dv::Index::Unreadable, dv::Index::TooBig,
                          dv::Index::NoMemory, dv::Index::Found, dv::Index::Reading, dv::Index::Ready}) {
       for (autodj::Hold hold :
-           {autodj::Hold::None, autodj::Hold::RepeatOne, autodj::Hold::SleepTimer, autodj::Hold::Failures}) {
+           {autodj::Hold::None, autodj::Hold::RepeatOne, autodj::Hold::SleepTimer, autodj::Hold::Failures,
+            autodj::Hold::NoFit}) {
         for (autodj::Mode mode : {autodj::Mode::Rolling, autodj::Mode::Locked}) {
           dv::State s;
           s.on = on != 0;
@@ -3650,6 +4116,23 @@ void test_auto_dj_texts_fit() {
           s.bpmPct = s.keyPct = 100;
           states.push_back(s);
           s.rows = s.mapped = s.tracks = 1;  // (the "one" forms)
+          states.push_back(s);
+          // The mood filter (MOOD-FILTERS.md 4.4): mood data with none on
+          // (the coverage's mood), then one on that many fit (the count),
+          // 50, 21 and 1 (few: each plural form), and none.
+          s.rows = s.mapped = s.tracks = 99999;
+          s.moodData = true;
+          s.moodPct = 100;
+          s.fitOf = 99999;
+          s.fit = 99999;
+          states.push_back(s);
+          s.moodOn = true;
+          for (uint32_t fit : {99999u, 51u, 50u, 22u, 21u, 1u, 0u}) {
+            s.fit = fit;
+            states.push_back(s);
+          }
+          s.fitOf = 1;  // (the "one" forms of the count)
+          s.fit = 0;
           states.push_back(s);
         }
       }
@@ -3730,8 +4213,40 @@ void test_auto_dj_texts_fit() {
       }
     }
     for (S t : {S::autodj_anchor_rolling_sub, S::autodj_anchor_locked_sub, S::autodj_strictness_sub,
-                S::autodj_needs_index}) {
+                S::autodj_needs_index, S::autodj_smart_sub}) {
       fits(small, tr(t), kAutoDjLineW);
+    }
+    // Smart filters, the fourth row (MOOD-FILTERS.md 4.4): its value
+    // beside its title, or under it in its hint's place, as Anchor's.
+    // Dim (no mood data), the hint stays: no index isn't why. What is set
+    // (filterValue()'s summary) is cut to the line, so not measured here.
+    {
+      const char* title = tr(S::mood_smart_filters);
+      fits(body, title, kAutoDjLineW);
+      const char* hint = tr(S::autodj_smart_sub);
+      for (S id : {S::mood_any, S::mood_no_data}) {
+        const char* v = tr(id);
+        const int vw = small.width(v);
+        const char* second = autoDjSecondLine(body.width(title), vw, v, hint);
+        fits(small, second, kAutoDjLineW);
+        if (autoDjValueBeside(body.width(title), vw)) {
+          fits(small, v, autoDjValueRoom(body.width(title)));
+          TEST_ASSERT_EQUAL_STRING(hint, second);
+          continue;
+        }
+        TEST_ASSERT_EQUAL_STRING(v, second);
+        TEST_ASSERT_TRUE_MESSAGE(l != uistr::Lang::En, v);  // English: beside its title
+        char m[160];
+        snprintf(m, sizeof(m), "%s \"%s\" under \"%s\" (%d px in %d); ", uistr::tag(l), v, title, vw,
+                 autoDjValueRoom(body.width(title)));
+        report += m;
+      }
+      // Each word a summary can start with, whole on the line (a summary
+      // is cut after a word, never inside its first).
+      for (S w : {S::mood_happy, S::mood_neutral, S::mood_sad, S::mood_relaxed, S::mood_aggressive,
+                  S::mood_instrumental, S::mood_vocals, S::mood_acoustic, S::mood_party, S::mood_danceable}) {
+        fits(small, tr(w), kAutoDjLineW);
+      }
     }
     // The sheets' 4th rows (Body, 16 px in from each side).
     fits(body, tr(S::library_autodj_here), sheet::kTwoLineW);
@@ -4202,6 +4717,312 @@ void test_library_row_texts() {
   TEST_ASSERT_TRUE(strlen(tiny) < sizeof(tiny));
 }
 
+// ---- the mood filters' editor and first row (docs/MOOD-FILTERS.md 7; FilterGrid) ----
+
+namespace {
+
+using filtergrid::Cell;
+
+// The grid in the UI's language, with the firmware's fonts.
+filtergrid::Layout filterGrid() {
+  static const Vlw body(kVlwSans16), small(kVlwSans13);
+  return filtergrid::layout(filtergrid::words(), viewOf(body), viewOf(small));
+}
+
+// Every cell of a row, left to right (the voice row's level cell last).
+constexpr Cell kFilterRows[4][3] = {
+    {Cell::Happy, Cell::NeutralV, Cell::Sad},
+    {Cell::Relaxed, Cell::NeutralE, Cell::Aggressive},
+    {Cell::Instrumental, Cell::Vocals, Cell::Level},
+    {Cell::Acoustic, Cell::Party, Cell::Danceable},
+};
+
+std::string cellsOf(const filtergrid::Layout& l, int row) {
+  std::string out;
+  for (Cell c : kFilterRows[row]) {
+    if (c == Cell::Level) {
+      char b[24];
+      snprintf(b, sizeof(b), ", level %d/%d", l.x[filtergrid::index(c)], l.w[filtergrid::index(c)]);
+      out += b;
+      continue;
+    }
+    char b[24];
+    snprintf(b, sizeof(b), "(%d,%d)", l.x[filtergrid::index(c)], l.w[filtergrid::index(c)]);
+    out += b;
+  }
+  return out;
+}
+
+}  // namespace
+
+// 7.3's goldens: the cells the design's frames drew, here with the
+// firmware's fonts (the frames were drawn with the same: their widths
+// agree to the pixel). Russian's tags are as the frame draws them: the
+// chips give their 13 px of overflow up evenly (103, 80, 109); scaled they
+// would be (102, 82, 108).
+void test_filter_grid_goldens() {
+  struct Golden {
+    uistr::Lang lang;
+    int row;
+    const char* cells;
+  };
+  const Golden goldens[] = {
+      {uistr::Lang::En, 0, "(10,100)(110,100)(210,100)"},
+      {uistr::Lang::En, 2, "(10,136)(146,86), level 240/72"},
+      {uistr::Lang::En, 3, "(8,97)(111,98)(215,97)"},
+      {uistr::Lang::Ru, 0, "(10,86)(96,120)(216,94)"},
+      {uistr::Lang::Ru, 1, "(10,91)(101,106)(207,103)"},
+      {uistr::Lang::Ru, 2, "(10,144)(154,80), level 242/70"},
+      {uistr::Lang::Ru, 3, "(8,103)(117,80)(203,109)"},
+      {uistr::Lang::Pl, 2, "(10,110)(120,85), level 213/99"},
+      {uistr::Lang::Ja, 3, "(8,140)(154,92)(252,60)"},
+  };
+  for (const Golden& g : goldens) {
+    uistr::setLang(g.lang);
+    const filtergrid::Layout l = filterGrid();
+    char msg[48];
+    snprintf(msg, sizeof(msg), "%s row %d", uistr::tag(g.lang), g.row + 1);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(g.cells, cellsOf(l, g.row).c_str(), msg);
+  }
+  // Russian's party chip on two lines: "Для" over "вечеринки".
+  uistr::setLang(uistr::Lang::Ru);
+  const filtergrid::Layout ru = filterGrid();
+  const char* party = filtergrid::words().cell[filtergrid::index(Cell::Party)];
+  const int at = ru.wrap[filtergrid::index(Cell::Party)];
+  TEST_ASSERT_EQUAL_STRING("Для вечеринки", party);
+  TEST_ASSERT_EQUAL_STRING("вечеринки", party + at);
+  TEST_ASSERT_EQUAL_INT(' ', party[at - 1]);
+  TEST_ASSERT_TRUE(ru.share[2] == filtergrid::Layout::Share::Scaled);
+  TEST_ASSERT_TRUE(ru.share[3] == filtergrid::Layout::Share::Proportional);
+  uistr::setLang(uistr::Lang::En);
+}
+
+// Every language's grid: its font (Small only for Polish and Russian, as
+// measured for the design), each row's cells side by side across their
+// tray or the chips' 304 px, every word (each line of a wrapped one) and
+// the level's three in their cells with 3 px a side at least, Clear in its
+// pill, every glyph the fonts'.
+void test_filter_grid_fits_every_language() {
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  for (uistr::Lang lang : kAllLangs) {
+    if (!uistr::hasCatalogue(lang)) continue;
+    uistr::setLang(lang);
+    const filtergrid::Layout l = filterGrid();
+    const filtergrid::Words w = filtergrid::words();
+    const Vlw& f = l.small ? small : body;
+    char msg[160];
+    snprintf(msg, sizeof(msg), "%s: the grid in %s", uistr::tag(lang), l.small ? "Small" : "Body");
+    TEST_ASSERT_EQUAL_MESSAGE(lang == uistr::Lang::Pl || lang == uistr::Lang::Ru, l.small, msg);
+    for (int row = 0; row < 4; ++row) {
+      const int shared = row == 2 ? 2 : 3;
+      int x = row < 3 ? 10 : 8;
+      for (int k = 0; k < shared; ++k) {
+        const Cell c = kFilterRows[row][k];
+        const int i = filtergrid::index(c);
+        snprintf(msg, sizeof(msg), "%s row %d: %s", uistr::tag(lang), row + 1, cellsOf(l, row).c_str());
+        TEST_ASSERT_EQUAL_INT_MESSAGE(x, l.x[i], msg);
+        x += l.w[i] + (row < 3 ? 0 : filtergrid::kChipGap);
+        const std::string word = w.cell[i];
+        if (l.wrap[i]) {
+          TEST_ASSERT_TRUE_MESSAGE(l.small && row == 3, msg);
+          fits(f, word.substr(0, l.wrap[i] - 1).c_str(), l.w[i] - 6);
+          fits(f, word.substr(l.wrap[i]).c_str(), l.w[i] - 6);
+        } else {
+          fits(f, word.c_str(), l.w[i] - 6);
+        }
+      }
+      const int end = row < 2 ? 8 + 304 - 2 : row == 2 ? 8 + l.trayW[2] - 2 : 8 + 304 + filtergrid::kChipGap;
+      snprintf(msg, sizeof(msg), "%s row %d: %s", uistr::tag(lang), row + 1, cellsOf(l, row).c_str());
+      TEST_ASSERT_EQUAL_INT_MESSAGE(end, x, msg);
+    }
+    // The level cell after the voice tray, to the row's end; its words.
+    const int lx = l.x[filtergrid::index(Cell::Level)], lw = l.w[filtergrid::index(Cell::Level)];
+    TEST_ASSERT_EQUAL_INT(8 + l.trayW[2] + filtergrid::kLevelGap, lx);
+    TEST_ASSERT_EQUAL_INT(312, lx + lw);
+    for (const char* level : w.level) fits(small, level, lw - filtergrid::kLevelPad);
+    // Clear in its pill, which ends clear of the count and the cross.
+    const int pill = l.w[filtergrid::index(Cell::Clear)];
+    fits(small, w.cell[filtergrid::index(Cell::Clear)], pill - filtergrid::kClearPad);
+    TEST_ASSERT_TRUE(l.countW > 0);
+  }
+  uistr::setLang(uistr::Lang::En);
+}
+
+// With no correction (the default), a panel that reads x too far right
+// like the lab's (TouchCalibration::labFitX()) must still hit each cell of
+// the grid when the finger is on its centre, and so must a true one: every
+// language's grid, with 16 px to spare at least either side of the reading
+// (the design measured 20 at the least: Japanese's Danceable on a true
+// panel). The title row's Clear and cross too.
+void test_filter_grid_survives_the_lab_panel() {
+  const TouchCalibration::Axis lab = TouchCalibration::labFitX();
+  struct Reading {
+    int x;
+    bool edge;
+  };
+  auto labRead = [&](int x) {
+    const long r = std::lround(lab.unmap(static_cast<float>(x)));
+    return r >= 319 ? Reading{319, true} : Reading{static_cast<int>(r), false};
+  };
+  auto trueRead = [](int x) { return Reading{x, x >= 319}; };
+  int least = 1000;
+  for (uistr::Lang lang : kAllLangs) {
+    if (!uistr::hasCatalogue(lang)) continue;
+    uistr::setLang(lang);
+    const filtergrid::Layout l = filterGrid();
+    for (int panel = 0; panel < 2; ++panel) {
+      auto read = [&](int x) { return panel ? trueRead(x) : labRead(x); };
+      for (int row = 0; row < 4; ++row) {
+        for (int k = 0; k < 3; ++k) {
+          const Cell c = kFilterRows[row][k];
+          const filtergrid::Box b = filtergrid::box(l, c);
+          const Reading r = read(b.x + b.w / 2);
+          char msg[128];
+          snprintf(msg, sizeof(msg), "%s %s: cell %d's centre %d reads %d%s", uistr::tag(lang),
+                   panel ? "true" : "lab", filtergrid::index(c), b.x + b.w / 2, r.x, r.edge ? " (edge)" : "");
+          TEST_ASSERT_TRUE_MESSAGE(filtergrid::hit(l, r.x, b.y + b.h / 2, r.edge) == c, msg);
+          // Its room either side: to the split before it, and the one after.
+          const int left = k ? r.x - filtergrid::split(l, row, k - 1) : 1000;
+          const int right = k < 2 && !r.edge ? filtergrid::split(l, row, k) - 1 - r.x : 1000;
+          const int margin = std::min(left, right);
+          TEST_ASSERT_TRUE_MESSAGE(margin >= 16, msg);
+          least = std::min(least, margin);
+        }
+      }
+      // Clear's centre, and the cross's.
+      const filtergrid::Box clear = filtergrid::box(l, Cell::Clear), cross = filtergrid::box(l, Cell::Cross);
+      Reading r = read(clear.x + clear.w / 2);
+      TEST_ASSERT_TRUE(filtergrid::hit(l, r.x, 52, r.edge) == Cell::Clear);
+      TEST_ASSERT_TRUE(clear.x + clear.w + filtergrid::skew(clear.x + clear.w) - 1 - r.x >= 16);
+      r = read(cross.x + cross.w / 2);
+      TEST_ASSERT_TRUE(filtergrid::hit(l, r.x, 52, r.edge) == Cell::Cross);
+    }
+  }
+  printf("the filter grid: the least margin at a cell's centre is %d px\n", least);
+  TEST_ASSERT_EQUAL_INT(20, least);
+  uistr::setLang(uistr::Lang::En);
+}
+
+// The editor's title row in every language: the count between Clear and
+// the cross, its long form where it fits (English's always, at 9,999
+// albums and 99,999 tracks), else the short one, which always does, as
+// does the count with nothing set; Clear's hit area short of the cross's.
+void test_filter_title_row_fits() {
+  const Vlw small(kVlwSans13);
+  for (uistr::Lang lang : kAllLangs) {
+    if (!uistr::hasCatalogue(lang)) continue;
+    uistr::setLang(lang);
+    const filtergrid::Layout l = filterGrid();
+    const int pillEnd = filtergrid::kClearX + l.w[filtergrid::index(Cell::Clear)];
+    TEST_ASSERT_TRUE(pillEnd + filtergrid::skew(pillEnd) <= filtergrid::kCrossHitX);
+    // The count's room, centred: 4 px clear of the pill and of x 256.
+    TEST_ASSERT_EQUAL_INT(pillEnd + 4, l.countX - l.countW / 2);
+    TEST_ASSERT_EQUAL_INT(filtergrid::kCountRight - 4, l.countX + (l.countW + 1) / 2);
+    for (filtergrid::Scope scope : {filtergrid::Scope::Albums, filtergrid::Scope::Tracks}) {
+      const uint32_t n = scope == filtergrid::Scope::Albums ? 9999 : 99999;
+      char buf[filtergrid::kCountBytes];
+      const size_t len = filtergrid::countText(viewOf(small), l.countW, scope, true, n, n, buf, sizeof(buf));
+      TEST_ASSERT_TRUE(len < sizeof(buf) - 1);
+      fits(small, buf, l.countW);
+      if (lang == uistr::Lang::En) {
+        TEST_ASSERT_NOT_NULL(strstr(buf, scope == filtergrid::Scope::Albums ? "albums" : "tracks"));
+      }
+      filtergrid::countText(viewOf(small), l.countW, scope, false, n, n, buf, sizeof(buf));
+      fits(small, buf, l.countW);
+    }
+  }
+  uistr::setLang(uistr::Lang::En);
+  TEST_ASSERT_EQUAL_INT(uitext::kFilterCountW, filterGrid().countW);
+}
+
+// The Albums list's first row in every language, beside the rail, the
+// scroll bar and neither: at rest "Filters" (Body) and the count with
+// nothing set (Small) in the row less 80; with a filter on the count, its
+// long form or else its short one, in the room before the cross (the
+// summary above it is cut there: Body, else Small). The longest summary
+// in every language within its buffer, whole.
+void test_filter_row_fits() {
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  for (uistr::Lang lang : kAllLangs) {
+    if (!uistr::hasCatalogue(lang)) continue;
+    uistr::setLang(lang);
+    for (int right : {filtergrid::kRightRail, filtergrid::kRightBar, filtergrid::kRightNone}) {
+      fits(body, tr(S::mood_filters), filtergrid::textRoom(right, false));
+      char buf[filtergrid::kCountBytes];
+      filtergrid::countText(viewOf(small), filtergrid::textRoom(right, false), filtergrid::Scope::Albums, false, 9999,
+                            9999, buf, sizeof(buf));
+      fits(small, buf, filtergrid::textRoom(right, false));
+      filtergrid::countText(viewOf(small), filtergrid::textRoom(right, true), filtergrid::Scope::Albums, true, 9999,
+                            9999, buf, sizeof(buf));
+      fits(small, buf, filtergrid::textRoom(right, true));
+      if (lang == uistr::Lang::En) TEST_ASSERT_NOT_NULL(strstr(buf, "albums"));
+    }
+    // The summary with each group's longest word (in bytes) and a level.
+    moodfilter::Filter widest;
+    size_t most = 0;
+    for (int v = 1; v < 4; ++v) {
+      for (int e = 1; e < 4; ++e) {
+        for (int voice = 1; voice < 3; ++voice) {
+          for (int level = 1; level < 3; ++level) {
+            moodfilter::Filter f;
+            f.valence = static_cast<moodfilter::Scale>(v);
+            f.energy = static_cast<moodfilter::Scale>(e);
+            f.voice = static_cast<moodfilter::Voice>(voice);
+            f.tags = 7;
+            f.level = static_cast<moodfilter::Level>(level);
+            char t[512];
+            const size_t n = filtergrid::summary(f, t, sizeof(t));
+            if (n > most) {
+              most = n;
+              widest = f;
+            }
+          }
+        }
+      }
+    }
+    char t[filtergrid::kSummaryBytes];
+    char msg[64];
+    snprintf(msg, sizeof(msg), "%s: the longest summary, %u B", uistr::tag(lang), static_cast<unsigned>(most));
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(most, filtergrid::summary(widest, t, sizeof(t)), msg);
+    TEST_ASSERT_TRUE_MESSAGE(most + 1 <= filtergrid::kSummaryBytes, msg);
+    TEST_ASSERT_TRUE_MESSAGE(small.hasAll(t), msg);
+  }
+  uistr::setLang(uistr::Lang::En);
+}
+
+// The dot on the Albums segment (fillRoundRect(203, 15, 6, 6, 3)) clears
+// the segment's word, drawn centred on x 160 in Bold (Small when Bold
+// doesn't fit), in every language: Russian's "Альбомы" ends a pixel
+// before it.
+void test_filter_dot_clears_the_label() {
+  const Vlw bold(kVlwSansBold16), small(kVlwSans13);
+  for (uistr::Lang lang : kAllLangs) {
+    if (!uistr::hasCatalogue(lang)) continue;
+    uistr::setLang(lang);
+    const char* label = tr(S::library_segment_albums);
+    const int room = 100 - uitext::kSegmentPad;
+    const int w = bold.width(label) <= room ? bold.width(label) : small.width(label);
+    const int end = 160 - (w >> 1) + w;  // its right, centred as M5GFX centres
+    char msg[96];
+    snprintf(msg, sizeof(msg), "%s: \"%s\" ends at %d, the dot at %d", uistr::tag(lang), label, end, filtergrid::kDotX);
+    TEST_ASSERT_TRUE_MESSAGE(end < filtergrid::kDotX, msg);
+  }
+  uistr::setLang(uistr::Lang::En);
+  // Inside the segment (x 110-209), under the header's bottom line.
+  TEST_ASSERT_TRUE(filtergrid::kDotX + filtergrid::kDotD <= 110 + 100);
+}
+
+// The Albums list's line when no album fits (Body, centred).
+void test_filter_empty_line_fits() {
+  const Vlw body(kVlwSans16);
+  for (uistr::Lang lang : kAllLangs) {
+    if (!uistr::hasCatalogue(lang)) continue;
+    uistr::setLang(lang);
+    fits(body, tr(S::mood_no_albums), uitext::kListLineW);
+  }
+  uistr::setLang(uistr::Lang::En);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_jump_letters_match_the_index_buckets);
@@ -4220,6 +5041,7 @@ int main(int, char**) {
   RUN_TEST(test_now_playing_title_rows);
   RUN_TEST(test_fonts_keep_their_line_heights);
   RUN_TEST(test_store_glyphs_sit_in_the_rows);
+  RUN_TEST(test_now_playing_rows_around_the_waveform);
   RUN_TEST(test_now_playing_title_lines_share_rows);
   RUN_TEST(test_fonts_cover_greek_cyrillic_and_latin);
   RUN_TEST(test_queue_cap_texts_fit);
@@ -4243,6 +5065,7 @@ int main(int, char**) {
   RUN_TEST(test_header_pills_fit);
   RUN_TEST(test_header_subs_fit);
   RUN_TEST(test_sheet_details_fit);
+  RUN_TEST(test_the_auto_dj_sheet_detail_is_cut_beside);
   RUN_TEST(test_auto_dj_texts_fit);
   RUN_TEST(test_folder_header_counts_fit);
   RUN_TEST(test_library_header_lines);
@@ -4258,7 +5081,18 @@ int main(int, char**) {
   RUN_TEST(test_library_texts_fit);
   RUN_TEST(test_library_row_texts);
   RUN_TEST(test_console_tag_commands);
+  RUN_TEST(test_console_wave_letters);
   RUN_TEST(test_console_tag_dump);
   RUN_TEST(test_console_sources);
+  RUN_TEST(test_console_mood_letters);
+  RUN_TEST(test_console_mood_fits);
+  RUN_TEST(test_console_mood_texts);
+  RUN_TEST(test_filter_grid_goldens);
+  RUN_TEST(test_filter_grid_fits_every_language);
+  RUN_TEST(test_filter_grid_survives_the_lab_panel);
+  RUN_TEST(test_filter_title_row_fits);
+  RUN_TEST(test_filter_row_fits);
+  RUN_TEST(test_filter_dot_clears_the_label);
+  RUN_TEST(test_filter_empty_line_fits);
   return UNITY_END();
 }

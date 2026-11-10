@@ -83,6 +83,33 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // waiting cancels it (Paused); release() plays what waits; cancelWait() ends
 // it paused (PlayGate decides which).
 //
+// The card hold (setCard(); docs/METADATA.md 3.8): a track that fails to
+// start while the card the tracks are on is out (Card::out(): FatFs's last
+// mount found no card answering, none since), with no reason of its own (no
+// refused rate, no words of the backend's), says nothing of the track. It
+// isn't counted (lastFailure(), the Queue's mark), and nothing moves on: the
+// backend lets go, the entry stays current and Playing with the backend
+// holding nothing (cued, as a paused entry's), its start point put back (a
+// resume point's second, a seek's). It is started again kCardRetryMs later,
+// then twice as long each time up to kCardRetryMaxMs, or at once once the
+// card answers someone else's mount: each try's open is FatFs's next mount,
+// so the card put back plays the entry from where it would have started,
+// and the queue goes on. A try that fails with the card answering, or with a
+// reason of its own, is the track's: skipped and counted, as ever. Still out
+// kCardWaitMs after the hold began (a last try at that point): it ends paused,
+// cued at that entry, its start point kept; nothing starts by itself after
+// that, and a play asks again. Any start but the hold's own (a play, a skip,
+// a seek, an edit that moves the current entry), a pause or a stop ends it;
+// a start that fails with the card still out holds again, from the first
+// wait. A pause or a stop while a try opens (its start not taken up) leaves
+// the entry at the second it asked for, the backend holding nothing (paused:
+// cued), so a play starts it afresh rather than resuming a request that
+// failed, which with the card back would count against the track; so does a
+// pause under the first open after a pull, once that fails with the card
+// out. A wait for the headphones (Hold) takes over from it. cardHolds()
+// counts them; a pull used to run the queue out, a failed open (about 2 s)
+// an entry, and the queue's save then kept that as the place.
+//
 // The sleep timer (SleepTimer, docs/ENERGY.md section 3) asks two things:
 //   - "pause after this track" (setPauseAfterTrack()): at the track's
 //     natural end the player moves to the next entry and stays paused there
@@ -164,9 +191,11 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // or the computer's marks, and leaves the queue, its undo and "pause after
 // this track" as they are. Until the backend takes a start up, what Now
 // Playing shows is where it asked to start (pendingStart()), with the
-// length the player was told (lengthHint(); a skip's, none: never the
+// length the player was told (lengthHint(): the play's hint, never the
 // track before's); after, the backend's, with that length while the
-// backend knows none (shownTime()).
+// backend knows none. An entry nothing holds (stopped, cued) shows 0:00
+// and its length as told, else the catalog's: a stopped bar can be sought
+// and Now Playing's waveform shows before the first play (shownTime()).
 //
 // The play log (lib/core PlayLog; docs/METADATA.md 2.20.5) is told when a
 // play begins and ends (setPlays()). A play begins when the backend is
@@ -223,6 +252,18 @@ public:
     ~NextGate() = default;
   };
 
+  // Whether the card the tracks are on is known to be out (main.cpp's: the SD
+  // wrapper's CachedDrive::mountCardOut(), no card or another): a failure to start then says nothing of
+  // the track (the card hold, in the class comment). Read at a failure, and
+  // each pass while the hold waits.
+  class Card {
+  public:
+    virtual bool out() const = 0;
+
+  protected:
+    ~Card() = default;
+  };
+
   PlaybackController(IAudioBackend& audio, QueueModel& queue, const TrackCatalog& catalog)
       : audio_(audio), queue_(queue), catalog_(catalog) {}
 
@@ -236,6 +277,23 @@ public:
   void endPlay() { endPlayAs(Plays::End::Stopped); }
   // nullptr (the default): no sleep timer.
   void setNextGate(const NextGate* gate) { gate_ = gate; }
+  // nullptr (the default): no card hold (every failure is the track's).
+  void setCard(const Card* card) { card_ = card; }
+
+  // ---- the card hold (the class comment) ----
+  static constexpr uint32_t kCardRetryMs = 2000;      // the first try again, after the failure
+  static constexpr uint32_t kCardRetryMaxMs = 30000;  // ... twice as long each time, to this
+  static constexpr uint32_t kCardWaitMs = 120000;     // then paused, this long after the hold began
+  struct CardHolds {
+    uint32_t begun = 0;    // holds begun (a failure with the card out, none under way)
+    uint32_t retries = 0;  // their tries again
+    uint32_t resumed = 0;  // ... that started the entry: the card back
+    uint32_t paused = 0;   // holds that ended paused, the card still out after kCardWaitMs
+  };
+  // Free-running (main's "[queue] the card is out" lines, the UI's toast).
+  const CardHolds& cardHolds() const { return cardHolds_; }
+  // A hold under way: waiting for its next try, or its try's start.
+  bool heldForCard() const { return cardRun_ && state_ == PlayState::Playing; }
   // Gapless playback (the console's G0/G1): off, the backend is told that
   // nothing follows (a track decoded ahead is cut back out if not heard
   // yet) and every track ends as before.
@@ -323,7 +381,8 @@ public:
   bool startPoint(uint32_t* ms, uint32_t* durationMs, ResumeAnchor* anchor = nullptr) const;
   // Where the current entry would pick up after a boot: a start point that
   // waits, or the position of a paused track (Paused, or Waiting to resume
-  // it). False while it plays (a second saved now would be stale at once)
+  // it); held for the card, the second its start asked for, through its
+  // tries too. False while it plays (a second saved now would be stale at once)
   // and when it would start at 0:00 anyway (stopped, cued). `anchor`: the
   // start point's, or the backend's for the paused track
   // (IAudioBackend::resumeAnchor(); kind None: none). Paused before the
@@ -357,13 +416,17 @@ public:
   uint32_t lengthHint() const { return lengthKey_ == queue_.currentKey() ? lengthMs_ : 0; }
   // Where the current entry is and how long it is, as Now Playing shows
   // them (MainUiHost::snapshot(); 0 and 0 with no entry). A start point
-  // that waits: its second and the length it went with. A start the
+  // that waits: its second and the length it went with. An entry nothing
+  // holds (stopped; cued: let go at 0:00, or after next while paused): 0:00
+  // and lengthHint(), else the catalog's hint (a library track's record,
+  // to the second; 0 with no record), as placeStart() would take it; the
+  // backend's figures are the track before's, or none. A start the
   // backend hasn't taken up yet (pendingStart()): where it was asked to
   // start, and lengthHint() alone: the backend's length may still be the
   // track before's (a skip's request before the decode task takes it up),
   // and the seek bar would take it for this entry's. Otherwise the
   // backend's, with lengthHint() while it knows none (a header-less file's
-  // first second, a track let go at 0:00) unless the track failed.
+  // first second). Either way no length for a failed track.
   void shownTime(uint32_t* positionMs, uint32_t* durationMs) const;
 
   // ---- the sleep timer ----
@@ -388,7 +451,8 @@ public:
 
   // Advance state: moves to the next track when the current one ends or can't
   // be played. Stops once every track in the queue has failed in a row, so
-  // an unplayable queue doesn't spin forever.
+  // an unplayable queue doesn't spin forever. A failure with the card out
+  // holds instead (the card hold: the class comment), timed by `nowMs`.
   void update(uint32_t nowMs);
 
   // ---- the queue's edits, with what they do to playback ----
@@ -589,7 +653,21 @@ private:
   void remember(const Offered& o);
   const Offered* offered(uint32_t token) const;
   // update()'s natural end and failure handling.
-  void checkEnd();
+  void checkEnd(uint32_t nowMs);
+  // ---- the card hold ----
+  // The failure just seen isn't the track's: the card is out, and the backend
+  // gave no reason of the track's own.
+  bool cardSaysNothing() const;
+  // Held at the current entry (or, kCardWaitMs on, paused there).
+  void holdForCard(uint32_t nowMs);
+  // Waiting: the try again when it's due, or at once once the card answers.
+  void stepCardHold(uint32_t nowMs);
+  // Not Playing since (a pause, a stop, a wait for the headphones): a hold's over, and a start
+  // its try or the card's being out left unopened is let go, the entry cued at its second.
+  void letGoOfCardFailure();
+  // The start point the failed play asked for, back on its entry.
+  void putBackStart();
+  void endCardHold() { cardRun_ = cardWaiting_ = false; }
   // The current entry plays, or (held) waits.
   void startCurrent();
   void startNow();
@@ -686,7 +764,8 @@ private:
   uint32_t naturalEnds_ = 0;
   uint32_t seeks_ = 0;
   // Paused (or Waiting) on a cued track: the backend holds nothing, so a
-  // resume starts it.
+  // resume starts it. Playing with it: the card hold, the backend holding
+  // nothing until its try again (a pause then leaves the entry cued).
   bool cued_ = false;
   // Tracks that failed since the last one that played through or the last
   // user action.
@@ -717,6 +796,20 @@ private:
   // Where the last play() asked to start (prevAction(): the position until
   // the backend takes that start up).
   uint32_t playedFromMs_ = 0;
+  // ... and the start point it took (putBackStart()): its length, anchor and entry.
+  uint32_t askedDurationMs_ = 0;
+  uint32_t askedKey_ = QueueModel::kNone;
+  ResumeAnchor askedAnchor_;
+
+  // The card hold (the class comment).
+  const Card* card_ = nullptr;
+  bool cardRun_ = false;      // a hold under way, from its first failure
+  bool cardWaiting_ = false;  // ... the backend let go, the next try at cardRetryAtMs_
+  bool cardTry_ = false;      // ... its try's start under way (startCurrent() keeps the hold)
+  uint32_t cardSinceMs_ = 0;  // when it began
+  uint32_t cardWaitMs_ = 0;   // the wait before the next try
+  uint32_t cardRetryAtMs_ = 0;
+  CardHolds cardHolds_;
   // lengthHint(): the length last told for the entry with key lengthKey_
   // (another entry current: none, with no bookkeeping; an entry never
   // changes its track, so the same key coming round again still has it).

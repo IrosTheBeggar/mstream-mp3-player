@@ -12,6 +12,8 @@
 #include <sd_diskio.h>
 #include <sys/stat.h>
 
+#include <cerrno>
+#include <cstdio>
 #include <cstring>
 
 #include "UiStrings.h"
@@ -107,10 +109,23 @@ uint32_t LocalStorage::forEachFile(void (*fn)(const char* path, void* ctx), void
   return walk(w, static_cast<size_t>(len), 0);
 }
 
+LocalStorage::Seen LocalStorage::seen(const char* path) const {
+  char full[64];
+  snprintf(full, sizeof(full), "%s%s", mount_, path);
+  struct stat st;
+  if (::stat(full, &st) == 0) return Seen::Yes;
+  return errno == ENOENT ? Seen::No : Seen::Unknown;
+}
+
 const char* LocalStorage::stateDir() {
   if (available() && !stateDirMade_) {
-    if (!fs_->exists(kStateDir)) fs_->mkdir(kStateDir);
-    stateDirMade_ = true;
+    // A mkdir that failed is asked again: FatFs has moved on from the cluster the card
+    // wouldn't take, and the next boot would start from the same one. A read that failed
+    // isn't: this is on the loop at every save, and the next boot asks.
+    char path[32];
+    snprintf(path, sizeof(path), "%s%s", mount_, kStateDir);
+    struct stat st;
+    stateDirMade_ = ::stat(path, &st) == 0 || errno != ENOENT || fs_->mkdir(kStateDir);
   }
   return kStateDir;
 }

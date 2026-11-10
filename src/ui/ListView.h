@@ -18,12 +18,20 @@
 #include "ui/Input.h"
 #include "ui/ListScroller.h"
 
+namespace ui {
+class PanelScan;
+}
+
 // The list every list screen is (the tab bar spec §6.3): virtualised rows
 // in the band y 72-239, scrolled by the LCD's hardware vertical scroll
 // (ListScroller: the user found it "much smoother"), with inertia
-// (KineticScroll, flings capped at 2,000 px/s) and frames on the UI's
-// 30 fps deadlines. Only the rows on screen exist, as six PSRAM row sprites
-// (320 x 42, 27 KB each); a move pushes only the newly exposed lines.
+// (KineticScroll, flings capped at 2,000 px/s) and a frame every refresh
+// of the panel, timed to its scan (PanelScan, lib/core ScanSync: 71.5 a
+// second on the Core2, each put where the scan doesn't see it half drawn;
+// on the Ui's frame clock, 60 a second, where the scan can't be read). Only
+// the rows on screen exist, as six PSRAM row sprites (320 x 42, 27 KB
+// each, in the block reserved at boot in the PSRAM's fast half:
+// ui/HotMem); a move pushes only the newly exposed lines.
 //
 // A list is a Source: a row count and a row renderer (drawRow() paints row
 // i into a 320 x 42 sprite; the standard pieces below make the 1- and
@@ -35,7 +43,8 @@
 //     + Queue) opens under the row; tapping the row again, or another row,
 //     closes it (ListLayout keeps what's on screen steady);
 //   - a top bar: the same buttons as the list's first item (a container's
-//     own Play / Play next / + Queue);
+//     own Play / Play next / + Queue), or a row of the source's own in its
+//     place (topBarIsRow(): the Albums list's mood filters);
 //   - long press: the source's (a sheet, or selection mode), on rows it
 //     holds(); a long press on anything else ends as a tap when it lifts;
 //   - selection mode: a checkbox on every row, taps toggle;
@@ -48,28 +57,34 @@
 //     once when a finger lands on the rail (x 280 to the edge). A drag on it
 //     scrubs (a tick per new letter; resting on it first is no hold); a tap
 //     opens the jump grid (the RailHost's: the Ui's overlay). Every position
-//     a scrub asks for is a jump, the band drawn whole (50-78 ms on the
-//     device, 80-110 with an MP3 playing: a 695-artist list moves five rows
-//     a pixel of finger), so the band follows at ScrubPacer's cadence (at
-//     once when the finger rests) and the rail alone, the thumb and its
-//     letter, follows the finger on every frame between (a few ms). While
-//     a finger is on the rail (railTouch()) the card worker is held as for
-//     a moving list (Ui::listMoving()): no cover, no slice of the walk or
-//     the scan reads the card under the scrub.
+//     a scrub asks for is a jump, the band drawn whole (35-50 ms on the
+//     device, 80-100 with an MP3 playing: a 695-artist list moves five rows
+//     a pixel of finger). Under the finger it is drawn a row a loop pass
+//     (bandStep(): 8-15 ms a row), and between two rows the loop reads the
+//     finger and draws the thumb and its letter where it is now (the rows
+//     of the rail the thumb left and takes: under a millisecond); the next
+//     band starts when this one is done. (Until 0.14.0 a band was one
+//     47-100 ms stand of the loop and the next waited 60 ms: 5-7 bands and
+//     10-19 thumbs a second.) While a finger is on the rail (railTouch())
+//     the card worker is held as for a moving list (Ui::listMoving()): no
+//     cover, no slice of the walk or the scan reads the card under the
+//     scrub.
 //
 // A move is drawn in steps of at most kMaxStep lines a frame, the hardware
-// scroll's one-hold step: a finger faster than that (over ~2,500 px/s at
-// 30 fps; only flings are capped, at 2,000 px/s) used to make a frame of a
-// full redraw (50-78 ms on the device); now the list trails the finger by a
-// frame or two and catches up when it slows. Jumps (a scroll to a row, the
-// rail, a page's first frame) still draw at once.
+// scroll's one-hold step: a finger faster than that (over ~6,000 px/s at a
+// frame a refresh; only flings are capped, at 2,000 px/s: 28 lines a
+// frame) would make a frame of a full redraw (35-50 ms on the device);
+// instead the list trails the finger by a frame or two and catches up when
+// it slows. Jumps (a scroll to a row, the rail, a page's first frame)
+// still draw at once.
 //
 // The band is y 72-239 (kHeight), or shorter (setHeight(): the Queue's
 // selection mode keeps y 198-239 for its bar; the LCD's scroll band ends
 // above it, so the bar stays put while the list scrolls).
 //
 // An empty list shows its source's empty state (ui/EmptyState: "Your
-// queue is empty" with its buttons), or a line of text.
+// queue is empty" with its buttons), or a line of text (under a top row,
+// always the line, below the row).
 //
 // Each page's scroll position and expanded row are kept in its nav entry
 // (NavModel::PageRef): attach() restores them, detach() saves them.
@@ -115,6 +130,21 @@ public:
     virtual uint16_t accent() = 0;
     // A top bar (item 0) with actions(-1, ...).
     virtual bool topBar() { return false; }
+    // The top bar is a row instead (docs/MOOD-FILTERS.md 7.6: the Albums
+    // list's filters): drawTopRow() paints it and a tap on it goes to
+    // onTopRowTap(); actions(-1) is never asked. It scrolls with the list
+    // and presses like a row (no buttons, no hold, no checkbox), and with
+    // no data rows under it, emptyText() shows below it (the line only).
+    virtual bool topBarIsRow() { return false; }
+    // As drawRow(): the row's own look over `bg`, the divider drawn after
+    // (r.row is 0 and means nothing; r.pressX is the finger).
+    virtual void drawTopRow(Row& r) { (void)r; }
+    // A tap on it at x (`rightEdge`: a reading clamped at the screen's
+    // edge), after the tap tick. Where on it says what it does.
+    virtual void onTopRowTap(int x, bool rightEdge) {
+      (void)x;
+      (void)rightEdge;
+    }
     // The buttons of the top bar (row -1) or of row's inline bar: up to 3
     // labels, the first is the primary. Returns how many.
     virtual int actions(int32_t row, const char* labels[3]) {
@@ -250,9 +280,44 @@ public:
   void redrawEmpty() { if (src_ && layout_.rows() == 0) drawEmpty(); }
 
   // Every loop pass while the page is up. `frameDue`: a frame may be drawn
-  // (the UI's 30 fps cadence); `wholeRows`: the audio is short of time,
-  // move in whole rows (ScrollGovernor). True if a frame was drawn.
+  // (the UI's frame clock); `wholeRows`: the audio is short of time, move
+  // in whole rows (ScrollGovernor). True if a frame was drawn (or a row of
+  // a scrub's band: lastFrame().kind).
   bool update(uint32_t nowMs, bool frameDue, bool wholeRows);
+  // The panel's scan (ui/PanelScan; nullptr: none): a moving list's
+  // frames then go by it (lib/core ScanSync): each move's rows rendered
+  // first, its bus hold started where the scan doesn't see it half done,
+  // a frame every refresh (71.5 a second on the Core2), a fling drawn
+  // where it will be when the frame shows; a frame the loop comes too
+  // late for is drawn at once (a tear, the pace kept). Without it, or
+  // when it can't be read: on the Ui's frame clock, as before. A scrub's
+  // frames (the rail up) and full redraws never wait for it.
+  void setScan(PanelScan* scan);
+  // Console uiv0 / uiv1: the scan ignored / followed (to compare by eye).
+  void setScanSync(bool on) { scanOn_ = on; }
+  bool scanSync() const { return scanOn_; }
+  // What became of the moves since the last take (the Ui's motion report).
+  struct ScanStats {
+    uint32_t frames = 0;    // drawn in their window
+    uint32_t late = 0;      // drawn after it closed (the loop came late: a tear, the pace kept)
+    uint32_t unsynced = 0;  // moves drawn without the scan (the rail up, uiv0, no panel answer)
+    uint32_t early = 0;     // steps too big for their strip to stay behind the scan
+    uint32_t inBand = 0;    // the address went out with the scan inside the band (a tear)
+    // The scan when the address went out, in lines past the band's last
+    // row: up to (lines - height) it is outside the band.
+    int16_t phaseMin = INT16_MAX, phaseMax = -1;
+  };
+  ScanStats takeScanStats() {
+    const ScanStats s = scanStats_;
+    scanStats_ = ScanStats{};
+    return s;
+  }
+  // What a pushed line and a rendered row cost now (us), learnt from the
+  // frames themselves; for 'ui'.
+  uint32_t lineUs() const { return lineUs_; }
+  uint32_t rowUs() const { return rowUs_; }
+  // The memory begin() takes from the block reserved at boot (ui/HotMem).
+  static size_t hotBytes();
   // Moving, or owing a frame: the UI keeps its frame cadence.
   bool animating() const;
   // A finger is on the A-Z rail: scrubbing, or resting on it to read the
@@ -268,9 +333,25 @@ public:
   // brings it on screen only pushes it. On the device a row's render
   // (~5 ms) took 20-39 ms when the audio decoder (above the loop) ran in
   // the middle of it, and that frame then took 35-90 ms; here, that time
-  // falls between frames. The Ui calls it only with a frame's worth of
-  // time left before the next is due. True if it rendered one.
-  bool renderAhead();
+  // falls between frames: only with a row's time (as the last ones took)
+  // left before the next frame, by the Ui's frame clock (`untilDueMs`) or,
+  // on the panel's scan, a refresh after the last hold began. From a fast
+  // step the row after it too (in the slot of the row leaving at the
+  // other edge, when none is spare). True if it rendered one.
+  bool renderAhead(uint32_t untilDueMs);
+  // While the list rests: the row just above the band and the row just
+  // below it rendered into the spare slots, one a call, so the first
+  // frame of the next motion only pushes its row. (A fast swipe's first
+  // frame rendered one or two rows itself: 10-15 ms, and 30-57 ms when
+  // the MP3 decoder ran in the middle, MEASURED: the hitch a swipe began
+  // with.) True if it rendered one. The Ui calls it only while no cover
+  // is asked for or being made: a row asks for its cover as it renders,
+  // and the newest asked for is made first.
+  bool renderNeighbours();
+  // The rows kept that aren't on screen are rendered again when next
+  // needed: a cover arrived, and a row rendered before it holds the
+  // placeholder (only the rows on screen are told of a cover).
+  void forgetHidden();
   // A glass event of a touch that landed in the band.
   void onEvent(const InputEvent& e);
 
@@ -284,14 +365,27 @@ public:
   uint32_t framesDrawn() const { return frames_; }
   // The last frame's items rendered, the time that took, and its move; or
   // a scrub's frame of the rail alone (Kind::Rail: no items, no move).
+  // Or a row of a scrub's band (Kind::Piece: the band is drawn a row a
+  // loop pass under a finger on the rail; its last row's pass is the
+  // Kind::Band frame, with the whole band's rows, and its time from its
+  // first row to its last in bandUs). `rail`: the thumb was drawn too.
   struct FrameCost {
-    enum class Kind : uint8_t { Band, Rail };
+    enum class Kind : uint8_t { Band, Rail, Piece };
     Kind kind = Kind::Band;
+    bool rail = false;
     uint32_t renders = 0, renderUs = 0;
+    uint32_t bandUs = 0;
+    uint32_t waitUs = 0;  // of the pass's time, waiting for the frame's window on the panel's scan
     int32_t from = 0, to = 0;
   };
+  // A scrub's band is being drawn: the loop comes back at once for its
+  // next row (Ui::idleMs()).
+  bool bandUnderWay() const { return src_ && band_.active; }
   const FrameCost& lastFrame() const { return cost_; }
   uint32_t aheadRenders() const { return aheadRenders_; }
+  // Console uiB: what a frame is made of, timed on the list shown (a row
+  // sprite's fill, a row's render, the band in place, a move).
+  void bench();
 
   // ---- the standard row pieces (each returns the x after it) ----
   // A number, right-aligned in a 30 px column ("06"); or the playing
@@ -327,6 +421,10 @@ private:
   int layoutWidth() const { return edge_ == Edge::Rail ? 284 : edge_ == Edge::Bar ? 312 : 320; }
   int pushWidth() const { return railUp_ || railWanted_ ? layoutWidth() : 320; }
   int railX() const { return layoutWidth(); }
+  // `it` is the source's top row (topBarIsRow()), not a bar of buttons.
+  bool topRow(const ListLayout::Item& it) const { return it.kind == ListLayout::Kind::TopBar && src_->topBarIsRow(); }
+  // No data rows under a top row: the empty line goes below it.
+  bool emptyUnderTopRow() const { return src_ && layout_.rows() == 0 && layout_.topBar() && src_->topBarIsRow(); }
   void setEdge();
   void dropSlots();
   Slot* slotFor(uint32_t item);
@@ -334,12 +432,23 @@ private:
   void renderItem(M5Canvas& c, uint32_t item);
   void renderBar(M5Canvas& c, int32_t row, bool inline_);
   int buttonAt(int x, int n) const;
-  void render(int32_t off);
+  int render(int32_t off, ListScroller::Gate* gate = nullptr);
+  int32_t frameOffset(bool rows) const;
+  void drawFrame(int32_t off);
+  bool onScan() const;
+  bool scanFrame(bool rows);
+  void prerender(int32_t off);
+  uint32_t holdFor(int d) const;
+  void noteRowTime(uint32_t us);
+  void noteAddress(int line, int64_t readUs, int64_t sentUs);
   void pushItemInPlace(uint32_t item);
   void setPressed(int32_t item, int button);
   void tapItem(int32_t item, const InputEvent& e);
   void setExpanded(int32_t row);
-  void drawRailSprite(int32_t off);
+  int drawRailSprite(int32_t off);
+  bool bandInRows(int32_t off) const;
+  void startBand(int32_t off);
+  bool bandStep(bool frameDue);
   void hideRail();
   void showRail(int32_t off);
   // The rail alone, for `off` (a scrub's frame between band draws).
@@ -372,6 +481,16 @@ private:
   bool railUp_ = false;      // it is
   bool railDue_ = false;     // prepareFixed() rendered it: pushFixed() pushes it
   int32_t railOffset_ = -1;  // the offset the rail on screen was drawn for (-1: not up)
+  int railY_ = -1;           // the A-Z thumb's top row in the rail on screen (-1: none, or the scrollbar)
+  // A scrub's band drawn a row a pass (bandStep()): what is left of it.
+  struct Band {
+    bool active = false;
+    int32_t from = 0, off = 0;
+    VScrollMap::Span span[VScrollMap::kMaxSpans];
+    int spans = 0, at = 0;
+    int32_t line = 0;  // the next content line
+    uint32_t startUs = 0, renders = 0, renderUs = 0;
+  } band_;
   int railKeyShown_ = -1;    // the scrub's last letter (a tick at each new one)
   ScrubPacer pacer_;         // a scrub: when the band follows the finger
   bool pacing_ = true;       // ... or at every position (uir0)
@@ -385,7 +504,17 @@ private:
   uint32_t frames_ = 0;
   FrameCost cost_;
   int8_t lastDir_ = 0;          // the last frame's move: +1 down the list, -1 up (renderAhead)
+  int32_t lastStep_ = 0;        // ... and its lines
   uint32_t aheadRenders_ = 0;   // renderAhead()'s, for 'ui'
+  bool slotsHot_ = false;       // slots_ / rail_ are the reserved block's (never freed)
+  bool railHot_ = false;
+  PanelScan* scan_ = nullptr;   // the panel's scan (the Ui's), or none
+  bool scanOn_ = true;          // ... followed (uiv0: not)
+  ScanStats scanStats_;
+  uint32_t lineUs_ = 140;       // a pushed line on the bus (320 px at 40 MHz, and its share of the hold)
+  uint32_t rowUs_ = 4000;       // a row's render
+  int64_t lastHoldUs_ = 0;      // when the last hold on the scan began (the next: a refresh later)
+  int64_t lastShowUs_ = 0;      // the refresh its frame was for (its band's first row): one frame a refresh
 };
 
 }  // namespace ui

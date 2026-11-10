@@ -7,10 +7,12 @@
 
 #include "PlaybackController.h"
 #include "QueueModel.h"
+#include "QueueFile.h"
 #include "QueueRemap.h"
 #include "QueueSaver.h"
 #include "QueueText.h"
 #include "TrackCatalog.h"
+#include "storage/CardFat.h"
 #include "storage/FileStream.h"
 #include "storage/LocalStorage.h"
 
@@ -19,7 +21,11 @@
 // - The tracks: /.player/queue.txt on the card, as paths (QueueText), so a
 //   rebuilt library (new ids) finds them again. Rewritten 2 s after the
 //   last edit, a few dozen lines per loop pass (a long queue never holds
-//   the loop), into queue.tmp, which then replaces queue.txt.
+//   the loop), into queue.tmp, which then replaces queue.txt: only once the
+//   storage has all of it (the VFS's close says nothing of what it wrote
+//   then), and a whole queue.tmp that couldn't take queue.txt's place is
+//   kept (queue.txt may be gone by then), for the boot, and put in place
+//   before anything writes over it.
 // - The position: NVS ("queue": generation, position), at most once a
 //   second while it moves, so a track change doesn't rewrite the file. It
 //   only counts for the file with the same generation: a position saved
@@ -40,14 +46,29 @@
 // When and what to write is QueueSaver's (lib/core, host-tested); this is
 // its card and NVS. After a boot the queue is where it was, stopped (at
 // the second it paused at, if it did): nothing starts by itself.
+//
+// A line the library doesn't list stays in the queue by its path, on the card, unless
+// the card says its file is gone (lib/core QueueFile: `unlisted` holds them, the
+// catalog answers for them).
 class QueueStore : private QueueSaver::Store {
 public:
-  QueueStore(LocalStorage& storage, QueueModel& queue, PlaybackController& player, const TrackCatalog& catalog);
+  QueueStore(LocalStorage& storage, QueueModel& queue, PlaybackController& player, const TrackCatalog& catalog,
+             TrackCatalog::Unlisted& unlisted);
 
+  enum class Restore : uint8_t {
+    Read,    // the queue is the file's
+    None,    // none, or not a whole file: the caller sets up a default queue
+    Unread,  // the card failed each read of it: the queue is empty, and nothing goes over the file
+  };
   // At boot, after the library: the saved queue and position, and the
-  // resume point (the player's start point). False: none (or unreadable);
-  // the caller sets up a default queue.
-  bool restore();
+  // resume point (the player's start point). `libraryListsCard` false
+  // (Library::listsCard()): tracks it doesn't list may still be on the card, so the
+  // file keeps them, as with no library at all, for the next boot. `wait`: the boot's
+  // waits between reads the card fails (tagstore::kBootWaitsMs); nullptr: one read.
+  Restore restore(bool libraryListsCard = true, void (*wait)(uint32_t ms) = nullptr);
+  // The boot, or a read back (remapFinish()), couldn't read the file, and the queue is empty
+  // for it. Nothing has replaced it since: the first write of a queue with something in it will.
+  bool fileUnread() const { return unread_; }
   // The repeat mode saved (Off when none is, or an unknown value), logged.
   // At boot, before restore() and the first play.
   PlaybackController::Repeat loadRepeat();
@@ -61,11 +82,19 @@ public:
   // changed since it began), an edit not yet written, the position, the
   // resume point. True: the card has the queue as it is (or there is no
   // storage; or it is carried across a build: queue.txt was flushed then,
-  // and the queue's memory is the build's).
+  // and the queue's memory is the build's; or the queue is empty for a file
+  // nobody could read, fileUnread(): nothing to save, the file as it is).
+  // Carried as text, the card having refused that flush: false: queue.txt
+  // keeps the last one saved.
   bool flushNow();
   // Something on its way to the card (a write under way, an edit or a
   // move waiting its delay; not a failed one waiting its retry).
   bool busy() const { return storage_.available() && saver_.busy(); }
+  // The card came back (CachedDrive::cardBacks()): QueueSaver::cardBack().
+  void cardBack();
+  // The wait the saver's failures built up, after its last (QueueSaver::lastWaitMs()): the
+  // guard's restart tries its flush again on it (lib/core RestartWait).
+  uint32_t retryWaitMs() const { return saver_.lastWaitMs(); }
   // The PSRAM a queue.txt write under way holds for its snapshot (lib/core
   // QueueSaver: at most 40 KB), which remapBegin()'s flush gives back (the
   // library update's memory check counts it in what the fence frees).
@@ -100,6 +129,19 @@ private:
   ByteSink* openTemp() override;
   bool commitTemp() override;
   void discardTemp() override;
+  // queue.tmp, closed, is `bytes` long on the storage (FatFs's word on the card).
+  bool tmpWhole(const char* temp, size_t bytes);
+  // A whole queue.tmp into queue.txt's place: on the card by 2.12.6's rule (queue.txt
+  // removed, or renamed to a twin when it shares a twin's chain), on the flash as ever.
+  bool replaceFile(const char* file, const char* temp);
+  // Before queue.tmp is opened for writing (FA_CREATE_ALWAYS frees what it holds): at the
+  // boot's first save one with no queue.txt takes that name, a held one is settled, else on
+  // the card a leftover is removed, or one on queue.txt's chain renamed to a twin. False:
+  // nothing to be done now, and nothing written.
+  bool readyTemp(const char* file, const char* temp);
+  // The held queue.tmp (tmpHeld_): into queue.txt's place, or to a twin when it shares
+  // queue.txt's chain, or nothing left of it to keep. False: none of that now (nothing done).
+  bool settleTemp(const char* file, const char* temp);
   void savePosition(uint32_t generation, int32_t current) override;
   void saveResume(const QueueResume& r) override;
   // The player's resume point, for the saver.
@@ -109,16 +151,43 @@ private:
   // The card side of the remap (lib/core QueueRemap: queueremap::Card).
   struct RemapCard;
   void logRemap(const queueremap::Result& r);
+  // The queue's files, read: through FatFs on the card, the VFS on the flash.
+  struct QueueFiles;
+  // The card's word on the queue's own files for its writes (2.12.6's rule, a size after a
+  // close), through a FIL and a FILINFO it keeps (PSRAM, from the boot): no question fails for
+  // want of memory later.
+  struct CardQuestions;
+  bool onCard() const { return storage_.onCard() && cardfat::ready(); }
+  // Nobody could read the file: the queue is empty, and the file keeps its line and its
+  // resume point for the next boot (no read of it again this session: such a read on a card
+  // silent past its init is a remount, with a job under way a restart).
+  void markUnread();
+  // What leaves the queue empty of such a file isn't saved over it.
+  void keepUnread();
 
   LocalStorage& storage_;
   QueueModel& queue_;
   PlaybackController& player_;
   const TrackCatalog& catalog_;
   QueueSaver saver_;
+  TrackCatalog::Unlisted& unlisted_;
+  cardfat::FatFs fat_;
+  queuefile::Lookup lookup_;
+  bool unread_ = false;
+  // queue.tmp is whole and the newest queue on the card: a commit's rename failed (queue.txt
+  // may be gone), or the boot read it. Nothing opens it for writing, or removes it, until
+  // it has taken queue.txt's place, or gone to a twin (settleTemp()).
+  bool tmpHeld_ = false;
+  // The card's twins of queue.txt (/.player/queue.xl1-9, 2.12.6): -1 not counted yet (the
+  // session's first write counts them), else how many. While there are any, a commit asks
+  // whose chain queue.txt is on before it removes it.
+  int32_t twins_ = -1;
+  CardQuestions* questions_ = nullptr;  // PSRAM, on the card
   uint32_t failuresSeen_ = 0;
 
   File file_;
   uint8_t* buf_ = nullptr;  // PSRAM
+  bool checkKept_ = true;   // a queue.tmp may be all there is: at the boot's first save
   BufferedFileSink sink_;
   queueremap::Carry* carry_ = nullptr;  // PSRAM: the two-halves remap's state (remapBegin())
   RemapCard* card_ = nullptr;           // PSRAM

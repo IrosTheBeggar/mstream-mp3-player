@@ -11,13 +11,13 @@
 // The transfer's root and its plan (docs/METADATA.md 2.5, 2.12.5).
 //
 // manifest.bin (MSMF) is the commit point: a small file naming the commit's
-// companion files (COMP: the MPTG tags file, at most one MPDJ table) by
-// their generation, length and header CRC, and the library roots (LIBR) of
-// the vpath layout. The device reads it with two small reads at every boot
-// (manifest.bin and manifest.tmp, the election in CardContainer.h), then
-// the named companion's header. Manifest::open() checks a root whole (its
-// sections are a few hundred bytes); companionMatches() says whether a
-// companion file is the one the root names.
+// companion files (COMP: the MPTG tags file, at most one MPDJ table, at most
+// one MPWF waveform index) by their generation, length and header CRC, and
+// the library roots (LIBR) of the vpath layout. The device reads it with two
+// small reads at every boot (manifest.bin and manifest.tmp, the election in
+// CardContainer.h), then the named companion's header. Manifest::open()
+// checks a root whole (its sections are a few hundred bytes);
+// companionMatches() says whether a companion file is the one the root names.
 //
 // pending.bin (MSPD) is an unfinished run's plan: the paths it will delete,
 // the folders it will create, the paths it will write. The device reads
@@ -38,12 +38,12 @@ extern const FormatSpec kSpec;
 constexpr uint32_t kFinal = 1;  // flags: this commit ended a run (clear: a checkpoint)
 
 struct Comp {
-  uint32_t kind = 0;  // kMagicMptg or kMagicMpdj (others are ignored)
+  uint32_t kind = 0;  // kMagicMptg, kMagicMpdj or kMagicMpwf (others are ignored)
   uint32_t generation = 0;
   uint32_t fileBytes = 0;
   uint32_t headerCrc = 0;
   uint32_t name = 0;  // STRS offset
-  uint8_t key[16] = {};  // MPDJ: its selection signature; zeros for MPTG
+  uint8_t key[16] = {};  // MPDJ: its selection signature; zeros for MPTG and MPWF
 };
 
 // A root, checked whole; its fields and companions kept, its library roots
@@ -56,8 +56,13 @@ public:
   // ignored; exactly one MPTG, then at most one MPDJ), their names
   // (^tags-[0-9a-f]{8}\.bin$, ^autodj-[0-9a-f]{8}\.bin$, the digits the
   // entry's generation); LIBR's roots (relative paths, strictly increasing
-  // by bytes); STRS in 2.4.4's order; every section's CRC. `scratch`: at
-  // least 96 bytes, split between the three sections' streams.
+  // by bytes); STRS in 2.4.4's order; every section's CRC. An MPWF row costs
+  // only itself (WAVEFORM-INDEX.md 7.2): anywhere in COMP, kept when it is
+  // the only one and named ^waves-[0-9a-f]{8}\.bin$, the digits its
+  // generation; a wrong name or a second row leaves the root valid with no
+  // waves entry. Its name's offset still follows STRS's rules, as any kind's
+  // does. `scratch`: at least 96 bytes, split between the three sections'
+  // streams.
   Why open(Source& src, uint8_t* scratch, uint32_t scratchBytes);
   const Header& frame() const { return frame_; }
   uint32_t commitTime() const { return commitTime_; }
@@ -68,12 +73,16 @@ public:
   const char* serverRevision() const { return serverRevision_; }
   uint32_t baseGeneration() const { return baseGeneration_; }
   uint64_t serverUrlKey() const { return serverUrlKey_; }
-  // The MPTG companion (always there in a valid root) and the MPDJ one.
+  // The MPTG companion (always there in a valid root), the MPDJ one and the
+  // MPWF one.
   const Comp& tags() const { return tags_; }
   const char* tagsName() const { return tagsName_; }
   bool hasAutoDj() const { return autoDj_.kind != 0; }
   const Comp& autoDj() const { return autoDj_; }
   const char* autoDjName() const { return autoDjName_; }
+  bool hasWaves() const { return waves_.kind != 0; }
+  const Comp& waves() const { return waves_; }
+  const char* wavesName() const { return wavesName_; }
   // The library roots, relative to /music, in LIBR's order (none: /music is
   // the only root). root() reads one from the file open() checked.
   uint32_t rootCount() const { return c_.section(kSecLibr).count; }
@@ -92,18 +101,21 @@ private:
   char serverRevision_[64] = "";
   uint32_t baseGeneration_ = 0;
   uint64_t serverUrlKey_ = 0;
-  Comp tags_, autoDj_;
+  Comp tags_, autoDj_, waves_;
   char tagsName_[kNameBytes] = "";
   char autoDjName_[kNameBytes] = "";
+  char wavesName_[kNameBytes] = "";
 };
 
 // The companion file's name for its kind and generation: "tags-0000002a.bin",
-// "autodj-0000002a.bin"; false for another kind or a short buffer.
+// "autodj-0000002a.bin", "waves-0000002a.bin"; false for another kind or a
+// short buffer.
 bool companionName(uint32_t kind, uint32_t generation, char* out, size_t cap);
 // A companion is the root's (2.5.3) when it validates (the caller's check)
 // and its header's generation, fileBytes and headerCrc are the entry's, and
 // for an MPDJ its selection signature is the entry's key; an MPTG companion
-// must be the software's (source 2 or 3).
+// must be the software's (source 2 or 3); an MPWF entry's key must be zeros
+// (WAVEFORM-INDEX.md 7.2: `mpdjSig` isn't looked at).
 bool companionMatches(const Comp& entry, const Header& companion, uint8_t mptgSource, const uint8_t* mpdjSig);
 
 // Writing a root.
@@ -126,7 +138,7 @@ struct ManifestIn {
   const char* serverRevision = "";
   uint32_t baseGeneration = 0;
   uint64_t serverUrlKey = 0;
-  const CompIn* comps = nullptr;  // the MPTG, then the MPDJ if any
+  const CompIn* comps = nullptr;  // the MPTG, then the MPDJ if any, then the MPWF if any
   uint32_t compCount = 0;
   const char* const* roots = nullptr;  // LIBR roots, any order (sorted by the writer)
   uint32_t rootCount = 0;

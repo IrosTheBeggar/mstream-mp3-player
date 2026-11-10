@@ -28,9 +28,15 @@ bool langWritten = false;  // migrate()'s step to 3 wrote "ui"/"lang" "en"
 // fresh NVS has no "schema" and takes no step: the picker is its). The
 // step from 3 to 4 is nothing: schema 4 only adds the "autodj" namespace,
 // whose absent keys read as Auto DJ's defaults (app/AutoDjStore). The step
-// from 4 to 5 is nothing too: schema 5 only adds the "plays" namespace,
-// the play log's ids, and with no epoch the first boot draws one
-// (app/PlayHistory).
+// from 4 to 5 is nothing too: schema 5 only adds "autodj"/"moods", and no
+// key is no mood filter. So is the step from 5 to 6: schema 6 only adds
+// "screen"/"touch_off", where no key is Nothing ("Touch when off": the
+// update's new default, a touch on the off screen does nothing), the
+// "plays" namespace, the play log's ids, where no epoch has the first boot
+// draw one (app/PlayHistory), and the "clock" namespace, where no phase is
+// none until a @time (app/BoardClock). A unit that ran PR #27's builds
+// before it took schema 6 has "plays" and "clock" under the number 5
+// (nvslayout's comment): the same step, its keys read as they are.
 // False: a step failed; the number then stays where it was, so the next
 // boot tries again.
 bool migrate(uint16_t from, uint16_t to) {

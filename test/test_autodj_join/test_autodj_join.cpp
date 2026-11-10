@@ -35,16 +35,20 @@
 // - the folders' states (each folder's path hashed once): every track's
 //   hash trackPathHash()'s, whatever the root's spelling, the paths'
 //   length and the folders' depth;
-// - the placement in a model of the device's heap (ESP-IDF's TLSF): the
-//   blocks' order at a free block's top and without a placement, the holes
-//   that take them, every allocation failing in turn; free never under the
-//   margin (the device's 2026-10-14 check: 10 KB); the spacers; a first
+// - the placement in a model of the device's heap (ESP-IDF's TLSF, pinned to
+//   the device's logged numbers): the blocks' order at a free block's top and
+//   without a placement, the holes that take them, every allocation failing
+//   in turn; free never under the margin (the device's 2026-10-14 check:
+//   10 KB); the spacers, wherever the largest free block is in its size class
+//   (the device's 2026-11-02 rejoin: NO PSRAM with 815 KB free), another
+//   task's block taking the room above them; a first
 //   boot's walk carving its buffers during the join, then a library
 //   update's track table (LibraryUpdate::roomToBuild()) that fits once the
 //   join is given back, as with Auto DJ off; and a library update of the
 //   real 19,412-track library, with Auto DJ off and on (the rebuild's own
 //   fragmentation, the join after it taking only what no smaller block
-//   holds).
+//   holds), then the same built from T with the mood words' block
+//   (MOOD-FILTERS.md 9.5's pass rule).
 // Run: pio test -e native -f test_autodj_join
 #include <unity.h>
 
@@ -1861,22 +1865,31 @@ void test_the_folders_hash() {
 // ---------------------------------------------------------------------------
 namespace {
 
-// A heap that serves a request as ESP-IDF's TLSF does (components/heap/
-// tlsf, the IDF's heap for PSRAM): 4-byte alignment and a 4-byte header a
-// block; free lists by size class, 32 classes a power of two above 128 B;
-// a request rounded up to its class's next boundary (mapping_search()),
-// then the head of the first non-empty list at or above it, carved from
-// that block's low end (block_trim_free()); a freed block merges with its
-// free neighbours and goes to its list's head; realloc to a smaller size
-// trims in place (block_trim_used()). Real memory (the join writes its
-// maps, LibraryIndex its strings). Its free bytes counted as it goes, their
-// lowest since mark(); the `failAt`-th allocation since reset() fails.
+// A heap that serves a request as the framework's does (ESP-IDF 5.5's
+// components/heap with CONFIG_HEAP_POISONING_LIGHT: tlsf_control_functions.h,
+// and tlsf_malloc(), tlsf_fit_size() and the poisoning's wrappers as libheap.a
+// has them): 12 B of poisoning on every request; 4-byte alignment and a 4-byte
+// header a block; free lists by size class, 32 classes a power of two above
+// 128 B; a request rounded up to its class's next boundary (mapping_search(),
+// which writes the rounded size back: it is what block_prepare_used() carves,
+// not only what the search asks for), then the head of the first non-empty
+// list at or above it, carved from that block's low end (block_trim_free());
+// a freed block merges with its free neighbours and goes to its list's head;
+// realloc to a smaller size trims in place to the request, not rounded
+// (block_trim_used()). largest() answers as heap_caps_get_largest_free_block()
+// does: the largest request that succeeds, the largest free block rounded down
+// to its class (tlsf_fit_size()) less the 12 B, which says nothing of where in
+// its class the block is; rawLargest() is the block itself. freeBytes() answers
+// as heap_caps_get_free_size() does: a block's bytes and header off at each
+// allocation and back at each free, less the 12 B. Real memory (the join writes
+// its maps, LibraryIndex its strings). Its free bytes' lowest since mark(); the
+// `failAt`-th allocation since reset() fails.
 struct ModelHeap {
   struct Block {
     size_t size;  // usable bytes: the block's footprint is kHeader more
     bool used;
   };
-  static constexpr size_t kAlign = 4, kHeader = 4, kMin = 12, kSplit = 16, kSmall = 128;
+  static constexpr size_t kAlign = 4, kHeader = 4, kMin = 12, kSplit = 16, kSmall = 128, kPoison = 12;
   static constexpr int kSlLog2 = 5;
   static inline std::vector<uint8_t> mem;
   static inline std::map<size_t, Block> blocks;  // footprint's offset: the block
@@ -1894,6 +1907,13 @@ struct ModelHeap {
     const int f = fls(size);
     return {f - (kSlLog2 + 1), static_cast<int>((size >> (f - kSlLog2)) ^ (1u << kSlLog2))};
   }
+  // The block a request of n bytes takes: its size rounded up to its class.
+  static size_t carved(size_t n) {
+    const size_t a = std::max(kMin, (n + kPoison + kAlign - 1) & ~(kAlign - 1));
+    if (a < kSmall) return a;
+    const size_t round = static_cast<size_t>(1) << (fls(a) - kSlLog2);
+    return (a + round - 1) & ~(round - 1);
+  }
   static void list(size_t off) { lists[classOf(blocks[off].size)].push_back(off); }
   static void unlist(size_t off) {
     std::vector<size_t>& l = lists[classOf(blocks[off].size)];
@@ -1905,16 +1925,15 @@ struct ModelHeap {
     lists.clear();
     blocks[0] = {bytes - kHeader, false};
     list(0);
-    freeNow = low = bytes - kHeader;
+    freeNow = low = bytes - kHeader - kPoison;
     allocs = 0;
     failAt = -1;
   }
   static void* alloc(size_t n) {
     if (failAt >= 0 && static_cast<long>(allocs++) == failAt) return nullptr;
     if (n == 0) return nullptr;
-    const size_t a = std::max(kMin, (n + kAlign - 1) & ~(kAlign - 1));
-    const size_t want = a < kSmall ? a : a + (static_cast<size_t>(1) << (fls(a) - kSlLog2)) - 1;
-    auto it = lists.lower_bound(classOf(want));
+    const size_t a = carved(n);
+    auto it = lists.lower_bound(classOf(a));
     while (it != lists.end() && it->second.empty()) ++it;
     if (it == lists.end()) return nullptr;
     const size_t off = it->second.back();
@@ -1924,10 +1943,8 @@ struct ModelHeap {
       blocks[off + kHeader + a] = {b.size - a - kHeader, false};
       list(off + kHeader + a);
       b.size = a;
-      freeNow -= a + kHeader;
-    } else {
-      freeNow -= b.size;
     }
+    freeNow -= b.size + kHeader;
     b.used = true;
     low = std::min(low, freeNow);
     return mem.data() + off + kHeader;
@@ -1940,12 +1957,11 @@ struct ModelHeap {
     auto it = blocks.find(offsetOf(p));
     TEST_ASSERT_TRUE_MESSAGE(it != blocks.end() && it->second.used, "not a block of the model's");
     it->second.used = false;
-    freeNow += it->second.size;
+    freeNow += it->second.size + kHeader;
     auto next = std::next(it);
     if (next != blocks.end() && !next->second.used) {
       unlist(next->first);
       it->second.size += kHeader + next->second.size;
-      freeNow += kHeader;
       blocks.erase(next);
     }
     if (it != blocks.begin()) {
@@ -1953,7 +1969,6 @@ struct ModelHeap {
       if (!prev->second.used) {
         unlist(prev->first);
         prev->second.size += kHeader + it->second.size;
-        freeNow += kHeader;
         blocks.erase(it);
         it = prev;
       }
@@ -1963,7 +1978,7 @@ struct ModelHeap {
   static void* shrink(void* p, size_t n) {
     auto it = blocks.find(offsetOf(p));
     TEST_ASSERT_TRUE_MESSAGE(it != blocks.end() && it->second.used, "not a block of the model's");
-    const size_t a = std::max(kMin, (n + kAlign - 1) & ~(kAlign - 1));
+    const size_t a = std::max(kMin, (n + kPoison + kAlign - 1) & ~(kAlign - 1));
     if (a > it->second.size) return nullptr;
     if (it->second.size >= kSplit + a) {
       const size_t tail = it->first + kHeader + a;
@@ -1973,11 +1988,16 @@ struct ModelHeap {
     }
     return p;
   }
-  static size_t largest() {
+  static size_t rawLargest() {
     size_t m = 0;
     for (const auto& b : blocks)
       if (!b.second.used) m = std::max(m, b.second.size);
     return m;
+  }
+  static size_t largest() {
+    const size_t m = rawLargest();
+    if (m < kSmall) return m > kPoison ? m - kPoison : 0;
+    return (m & ~((static_cast<size_t>(1) << (fls(m) - kSlLog2)) - 1)) - kPoison;
   }
   static size_t freeBytes() { return freeNow; }
   static void mark() { low = freeNow; }
@@ -2037,7 +2057,71 @@ Layout layoutOf(const Join& j) {
   return l;
 }
 
+// A heap of free blocks that exactly hold requests of `holes` bytes, each before
+// a used block, then a free block of `top` bytes exactly.
+void holesThenTop(const std::vector<size_t>& holes, size_t top) {
+  size_t taken = 0;
+  for (size_t hole : holes) taken += ModelHeap::carved(hole) + ModelHeap::carved(64) + 2 * ModelHeap::kHeader;
+  ModelHeap::reset(taken + top + ModelHeap::kHeader);
+  std::vector<void*> fill;
+  for (size_t hole : holes) {
+    fill.push_back(ModelHeap::alloc(hole));
+    TEST_ASSERT_NOT_NULL(ModelHeap::alloc(64));
+  }
+  for (void* p : fill) ModelHeap::release(p);
+  TEST_ASSERT_EQUAL_size_t(top, ModelHeap::rawLargest());
+}
+
 }  // namespace
+
+// The model against the device's own numbers, none of them the placement's
+// arithmetic: what a request takes, what is left, what largest() says of it.
+// (A model that carved the request itself, as this one did until 2026-11-02,
+// couldn't see the rejoin's failure.)
+void test_the_model_heap_against_the_device() {
+  // Every rejoin that failed on 2026-11-02 (three builds, the spare card's
+  // 19,410 rows and 19,412 tracks): the largest free block said 417,780 B, the
+  // spacer asked 336,690 B, what was left said 73,716 B and the filters' 77,640 B
+  // were refused, with 570,140 B taken: the two maps, the runs, the folders'
+  // states, the buffer and the runs' table in the holes, and the spacer.
+  const size_t holed[] = {38820, 38824, 24576, 24576, 24576, 24576, 18168, 24770, 4096, 100};
+  size_t inHoles = 0;
+  for (size_t b : holed) inHoles += ModelHeap::carved(b) + ModelHeap::kHeader;
+  TEST_ASSERT_EQUAL_size_t(226072, inHoles);
+  TEST_ASSERT_EQUAL_size_t(344064, ModelHeap::carved(336690));
+  TEST_ASSERT_EQUAL_size_t(570140, inHoles + ModelHeap::carved(336690) + ModelHeap::kHeader);
+  TEST_ASSERT_EQUAL_size_t(77824, ModelHeap::carved(77640));
+  for (size_t over : {size_t(4), size_t(1000), size_t(2048)}) {
+    ModelHeap::reset(417792 + over + ModelHeap::kHeader);
+    TEST_ASSERT_EQUAL_size_t(417780, ModelHeap::largest());
+    const size_t free0 = ModelHeap::freeBytes();
+    TEST_ASSERT_NOT_NULL(ModelHeap::alloc(336690));
+    TEST_ASSERT_EQUAL_size_t(free0 - 344068, ModelHeap::freeBytes());
+    TEST_ASSERT_EQUAL_size_t(73716, ModelHeap::largest());
+    TEST_ASSERT_NULL(ModelHeap::alloc(77640));
+  }
+  // The same session's Dc a little later, which joined: 303,092 B, a spacer of
+  // 222,002 B, PSRAM free at least 129,332 B of 658,516 B, and 225,268 B said
+  // of the free part once the spacer was given back.
+  TEST_ASSERT_EQUAL_size_t(129332, 658516 - inHoles - (ModelHeap::carved(222002) + ModelHeap::kHeader) -
+                                       (ModelHeap::carved(77640) + ModelHeap::kHeader));
+  ModelHeap::reset(303104 + 4 + ModelHeap::kHeader);
+  TEST_ASSERT_EQUAL_size_t(303092, ModelHeap::largest());
+  void* spacer = ModelHeap::alloc(222002);
+  TEST_ASSERT_NOT_NULL(spacer);
+  TEST_ASSERT_NOT_NULL(ModelHeap::alloc(77640));
+  ModelHeap::release(spacer);
+  TEST_ASSERT_EQUAL_size_t(225268, ModelHeap::largest());
+  // 2026-10-15 (docs/AUTODJ.md 7.4), a rejoin that worked: 409,588 B once given
+  // back, 335,860 B while joined.
+  ModelHeap::reset(409600 + 6000 + ModelHeap::kHeader);
+  TEST_ASSERT_EQUAL_size_t(409588, ModelHeap::largest());
+  spacer = ModelHeap::alloc(328498);
+  TEST_ASSERT_NOT_NULL(spacer);
+  TEST_ASSERT_NOT_NULL(ModelHeap::alloc(77640));
+  ModelHeap::release(spacer);
+  TEST_ASSERT_EQUAL_size_t(335860, ModelHeap::largest());
+}
 
 // Without a placement the kept blocks come first, as ever. In a heap of one
 // free block every block goes to its top: the runs, then the maps above
@@ -2069,7 +2153,9 @@ void test_the_placement_s_order() {
   Scale big = scale(20000, 4);
   File bf(big.file);
   const Expect be = reference(*big.idx, bf.table, byPath(*big.idx));
-  const size_t heap = 1u << 20;
+  // (Its free block on a class's floor: largest() tells of every block taken
+  // from it. test_the_rejoin_anywhere_in_a_class() has the rest of the class.)
+  const size_t heap = (1u << 20) + ModelHeap::kHeader;
   for (int lib = 0; lib < 2; ++lib) {
     const LibraryIndex& idx = lib ? *s.idx : *big.idx;
     File& file = lib ? f : bf;
@@ -2104,7 +2190,7 @@ void test_the_placement_s_order() {
     TEST_ASSERT_EQUAL_size_t(1, below.size());
     TEST_ASSERT_EQUAL_size_t(l.filters, below[0].first + ModelHeap::kHeader + below[0].second);
     j.release();
-    TEST_ASSERT_EQUAL_size_t(heap - ModelHeap::kHeader, ModelHeap::largest());
+    TEST_ASSERT_EQUAL_size_t(heap - ModelHeap::kHeader, ModelHeap::rawLargest());
   }
   // Holes that hold the maps and the transient blocks (32 KB, the
   // filters' 24 KB among them): the largest block keeps what it had.
@@ -2131,10 +2217,11 @@ void test_the_placement_s_order() {
     assertMaps(j, e, "holes");
     TEST_ASSERT_EQUAL_size_t(largest, ModelHeap::largest());
   }
-  // Every allocation failing in turn: a block's, NoMemory, nothing held; a
-  // spacer's, the blocks where the heap puts them (a join as any other);
-  // the heap whole again either way.
-  int noMemory = 0, unplaced = 0;
+  // Every allocation failing in turn: a block's, NoMemory, nothing held; but
+  // one under the spacers (they hold the most of the heap) or a spacer's, the
+  // blocks where the heap puts them (a join as any other); the heap whole again
+  // either way.
+  int noMemory = 0, unplaced = 0, topShort = 0;
   for (long k = 0;; ++k) {
     ModelHeap::reset(heap);
     ModelHeap::failAt = k;
@@ -2148,24 +2235,28 @@ void test_the_placement_s_order() {
     } else {
       TEST_ASSERT_EQUAL_INT(static_cast<int>(Status::Working), static_cast<int>(st));
       unplaced += failed && !j.stats().placed ? 1 : 0;
+      topShort += j.stats().topShort ? 1 : 0;
+      TEST_ASSERT_FALSE(j.stats().placed && j.stats().topShort);
       runJoin(j, s.idx.get());
       assertMaps(j, e, "an allocation failing");
       j.release();
     }
-    TEST_ASSERT_EQUAL_size_t(heap - ModelHeap::kHeader, ModelHeap::largest());
+    TEST_ASSERT_EQUAL_size_t(heap - ModelHeap::kHeader, ModelHeap::rawLargest());
     if (!failed) {
       TEST_ASSERT_TRUE(j.stats().placed || st != Status::Working);
       break;
     }
   }
-  TEST_ASSERT_TRUE(noMemory >= 6);  // (the runs' table, the probes, the blocks on top)
+  TEST_ASSERT_TRUE(noMemory >= 3);  // (the runs' table, the probes, the kept blocks once the spacers are gone)
   TEST_ASSERT_TRUE(unplaced >= 1);  // (a spacer's)
+  TEST_ASSERT_TRUE(topShort >= 1);  // (a block's under the spacers)
 }
 
 // The spacers never leave less than the margin free (the device's 2026-10-14
-// check: free fell to 10 KB at every join), whatever the heap's shape: the
-// join's own blocks only take what they hold. The maps taken after the
-// spacers keep most of it at 20,000 tracks whatever the margin.
+// check: free fell to 10 KB at every join), whatever the heap's shape, each
+// block's rounding and the spacer's own counted: the join's own blocks only
+// take what they hold, rounded. The maps taken after the spacers keep most of
+// it at 20,000 tracks whatever the margin.
 void test_free_never_under_the_margin() {
   Scale big = scale(20000, 4);
   Scale small = scale(6001, 4);
@@ -2199,9 +2290,10 @@ void test_free_never_under_the_margin() {
           continue;
         }
         // What the join holds is its own; the spacers keep the margin beside it.
-        const size_t own = j.stats().peakBytes + 64;
+        const size_t peak = j.stats().peakBytes;
+        const size_t own = peak + peak / 32 + 1024;
         const size_t floor = std::min(margin, free0 > own ? free0 - own : 0);
-        TEST_ASSERT_TRUE_MESSAGE(ModelHeap::low + 64 >= floor, what);
+        TEST_ASSERT_TRUE_MESSAGE(ModelHeap::low >= floor, what);
         TEST_ASSERT_EQUAL_size_t_MESSAGE(ModelHeap::low, j.stats().lowestFree, what);
         // The small library's maps (48 KB) under the margin: without it the
         // spacers leave little more than them.
@@ -2210,7 +2302,173 @@ void test_free_never_under_the_margin() {
                (unsigned)ModelHeap::low, j.stats().placed ? "placed" : "where the heap put it");
       }
     }
+    // Every size of heap around where the margin bites: the spacer's own
+    // rounding, a thirty-second of it, can't take it under.
+    for (size_t heap = 340000; heap < 760000; heap += 1537) {
+      ModelHeap::reset(heap);
+      const size_t free0 = ModelHeap::freeBytes();
+      ModelHeap::mark();
+      Join j(ModelHeap::alloc, ModelHeap::release);
+      j.setPlacement(modelPlacement());
+      if (j.begin(f.table, &idx) != Status::Working) continue;
+      const size_t peak = j.stats().peakBytes;
+      const size_t own = peak + peak / 32 + 1024;
+      char what[64];
+      snprintf(what, sizeof(what), "%u tracks, a heap of %u B", (unsigned)idx.trackCount(), (unsigned)heap);
+      TEST_ASSERT_TRUE_MESSAGE(ModelHeap::low >= std::min(kMargin, free0 > own ? free0 - own : 0), what);
+    }
   }
+  // The kept blocks in holes they just fit (the runs' table in one of its own),
+  // so every transient one goes under the spacers with the margin to keep beside
+  // them: their rounding counts.
+  const size_t rows = big.rows;
+  for (size_t top = 240000; top < 420000; top += 257) {
+    holesThenTop({512, rows * 4, rows * 2, rows * 2}, top);
+    Join j(ModelHeap::alloc, ModelHeap::release);
+    j.setPlacement(modelPlacement());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(Status::Working), static_cast<int>(j.begin(bf.table, big.idx.get())));
+    char what[64];
+    snprintf(what, sizeof(what), "the kept blocks in holes, a free block of %u B", (unsigned)top);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(3, j.stats().keptElsewhere, what);
+    TEST_ASSERT_TRUE_MESSAGE(j.stats().placed, what);
+    TEST_ASSERT_TRUE_MESSAGE(j.stats().lowestFree >= kMargin, what);
+  }
+}
+
+// The rejoin after a library update on the device (2026-11-02: gb on a fresh
+// boot, "[heap] FAILED: 77640 B", largest block 73716 B with 815 KB free, picks
+// at random until a reboot): holes that take the two maps and the transient
+// blocks, the filters for the top of the largest free block. largest() only
+// says which size class that block is in, and the spacer takes its request
+// rounded up to its own: the filters' room must hold wherever in its class the
+// block is, in each of its classes.
+void test_the_rejoin_anywhere_in_a_class() {
+  for (uint32_t tracks : {uint32_t(19412), uint32_t(27000), uint32_t(8000)}) {
+    Scale s = scale(tracks, 4);
+    File f(s.file);
+    const Expect e = reference(*s.idx, f.table, byPath(*s.idx));
+    const size_t filters = static_cast<size_t>(s.rows) * 4;
+    const size_t hole = std::max(static_cast<size_t>(s.rows) * 2 + 8192, size_t(30000));
+    for (size_t floor : {size_t(303104), size_t(344064), size_t(409600), size_t(417792), size_t(524288), size_t(655360)}) {
+      const size_t cls = floor >= 524288 ? 16384 : 8192;
+      for (size_t over = 0; over < cls; over += cls / 32) {
+        const size_t top = floor + over;
+        holesThenTop(std::vector<size_t>(12, hole), top);
+        char what[96];
+        snprintf(what, sizeof(what), "%u tracks, the largest free block %u B", (unsigned)tracks, (unsigned)top);
+        Join j(ModelHeap::alloc, ModelHeap::release);
+        j.setPlacement(modelPlacement());
+        TEST_ASSERT_EQUAL_INT_MESSAGE(static_cast<int>(Status::Working), static_cast<int>(j.begin(f.table, s.idx.get())),
+                                      what);
+        const Join::Stats& st = j.stats();
+        TEST_ASSERT_TRUE_MESSAGE(st.placed, what);
+        TEST_ASSERT_FALSE_MESSAGE(st.topShort, what);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(2, st.keptElsewhere, what);
+        TEST_ASSERT_EQUAL_size_t_MESSAGE(filters, st.topBytes, what);
+        TEST_ASSERT_TRUE_MESSAGE(st.lowestFree >= kMargin, what);
+        // At the block's top: the free part below them is the most of it, all
+        // but their room, over by at most a class of the spacer's and one of
+        // the block's (a closer spacer lands in a hole, and is given back).
+        TEST_ASSERT_TRUE_MESSAGE(ModelHeap::rawLargest() + filters <= top, what);
+        TEST_ASSERT_TRUE_MESSAGE(ModelHeap::rawLargest() + filters + filters / 32 + 1024 + top / 16 + 8 >= top, what);
+        if (over == 0) {
+          runJoin(j, s.idx.get());
+          assertMaps(j, e, what);
+        }
+        j.release();
+        TEST_ASSERT_EQUAL_size_t_MESSAGE(top, ModelHeap::rawLargest(), what);
+      }
+    }
+  }
+}
+
+// What the spacers leave, wherever the free block is in its class and whichever
+// blocks go above them: they all fit there, close to the top (a list of blocks
+// is what the transient ones and the kept ones make, each rounded up).
+void test_the_room_above_the_spacers() {
+  const std::vector<std::vector<size_t>> lists = {
+      {77640},
+      {77640, 38820, 38824},
+      {24576, 24576, 24576, 24576, 18168, 24770, 4096, 77640, 38820, 38824},
+      {24576, 11430, 8000, 4096, 24004, 12002, 12002},
+      {1000},
+  };
+  int spaced = 0, unspaced = 0;
+  for (const std::vector<size_t>& list : lists) {
+    size_t bytes = 0;
+    for (size_t b : list) bytes += b;
+    const size_t need = bytes + bytes / 32 + 1024;
+    for (size_t top = bytes + 1024; top < 1300000; top += 3331) {
+      ModelHeap::reset(top + ModelHeap::kHeader);
+      autodj::Spacers sp;
+      char what[96];
+      snprintf(what, sizeof(what), "%u B of blocks, a free block of %u B", (unsigned)bytes, (unsigned)top);
+      if (!autodj::takeSpacers(bytes, 0, ModelHeap::largest, ModelHeap::freeBytes, ModelHeap::alloc, ModelHeap::release,
+                               &sp)) {
+        // None only with no room for one: the block is about what they need.
+        TEST_ASSERT_TRUE_MESSAGE(top < need + 4096 + 256 + top / 32, what);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, sp.n, what);
+        ++unspaced;
+        continue;
+      }
+      ++spaced;
+      const size_t room = ModelHeap::rawLargest();
+      TEST_ASSERT_TRUE_MESSAGE(room >= need, what);
+      const uint8_t* highest = nullptr;
+      for (int i = 0; i < sp.n; ++i) highest = std::max(highest, static_cast<const uint8_t*>(sp.p[i]));
+      for (size_t b : list) {
+        const uint8_t* p = static_cast<const uint8_t*>(ModelHeap::alloc(b));
+        TEST_ASSERT_NOT_NULL_MESSAGE(p, what);
+        TEST_ASSERT_TRUE_MESSAGE(p > highest, what);
+      }
+      // Closed in: a class of the block's and a few KB of spacer not worth it.
+      TEST_ASSERT_TRUE_MESSAGE(room <= need + room / 32 + 4096 + 256, what);
+      TEST_ASSERT_TRUE_MESSAGE(sp.n <= 3, what);
+    }
+  }
+  TEST_ASSERT_TRUE(spaced > 1000);
+  TEST_ASSERT_TRUE(unspaced >= 1);
+}
+
+// Another task's block in the milliseconds of begin() (a track's start: the
+// Opus packet buffer's 60 KB, which here takes the room left above the spacers
+// when it is the closest fit): the placement falls short, not the join.
+namespace {
+
+long g_allocCalls = 0, g_otherAt = -1;
+void* g_other = nullptr;
+void* allocBesideAnother(size_t n) {
+  if (g_allocCalls++ == g_otherAt) g_other = ModelHeap::alloc(60 * 1024);
+  return ModelHeap::alloc(n);
+}
+
+}  // namespace
+
+void test_another_task_s_block_meanwhile() {
+  Scale s = scale(19412, 4);
+  File f(s.file);
+  const Expect e = reference(*s.idx, f.table, byPath(*s.idx));
+  const size_t hole = static_cast<size_t>(s.rows) * 2 + 8192;
+  int shortOf = 0;
+  for (long k = 0;; ++k) {
+    holesThenTop(std::vector<size_t>(12, hole), 417792 + 1000);
+    g_allocCalls = 0;
+    g_otherAt = k;
+    g_other = nullptr;
+    Join j(allocBesideAnother, ModelHeap::release);
+    j.setPlacement(modelPlacement());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(Status::Working), static_cast<int>(j.begin(f.table, s.idx.get())));
+    shortOf += j.stats().topShort ? 1 : 0;
+    TEST_ASSERT_FALSE(j.stats().placed && j.stats().topShort);
+    const bool taken = g_allocCalls > k;
+    runJoin(j, s.idx.get());
+    assertMaps(j, e, "another task's block");
+    j.release();
+    if (g_other) ModelHeap::release(g_other);
+    TEST_ASSERT_EQUAL_size_t(417792 + 1000, ModelHeap::rawLargest());
+    if (!taken) break;
+  }
+  TEST_ASSERT_TRUE(shortOf >= 1);
 }
 
 // The placement under a model of the device's heap (problem 3 of the
@@ -2295,13 +2553,15 @@ void test_the_placement_in_a_model_heap() {
     TEST_ASSERT_TRUE(placed.placed);
     TEST_ASSERT_FALSE(heaps.placed);
     TEST_ASSERT_TRUE(placed.lowest >= kMargin);
-    // Off: the walk's blocks from the largest block's low end.
-    TEST_ASSERT_TRUE(off.givenBack + 4 * sh.walk <= off.largestAtJoin);
-    TEST_ASSERT_TRUE(off.givenBack + 4 * sh.walk + 4 * 16 >= off.largestAtJoin);
+    // Off: the walk's blocks from the largest block's low end (largest()
+    // only tells of its class, a thirty-second of it).
+    const size_t walked = 4 * (ModelHeap::carved(sh.walk) + ModelHeap::kHeader);
+    TEST_ASSERT_TRUE(off.givenBack + walked <= off.largestAtJoin + off.largestAtJoin / 32);
+    TEST_ASSERT_TRUE(off.givenBack + walked + off.givenBack / 32 >= off.largestAtJoin);
     // At the top: the maps take the block's top (less than 24 KB above
     // them), the walk its bottom, and the join given back leaves the very
     // block Auto DJ off leaves.
-    TEST_ASSERT_TRUE(placed.largestJoined <= off.givenBack - placed.joinBytes);
+    TEST_ASSERT_TRUE(placed.largestJoined <= off.givenBack + off.givenBack / 32 - placed.joinBytes);
     TEST_ASSERT_TRUE(placed.largestJoined + placed.joinBytes + 24 * 1024 >= off.givenBack);
     TEST_ASSERT_EQUAL_size_t(off.givenBack, placed.givenBack);
     // Where the heap puts it: the maps and the walk's blocks low in the
@@ -2334,12 +2594,12 @@ void test_the_placement_in_a_model_heap() {
   TEST_ASSERT_TRUE(autodj::takeSpacers(300000, 0, ModelHeap::largest, ModelHeap::freeBytes, ModelHeap::alloc,
                                        ModelHeap::release, &sp));
   TEST_ASSERT_TRUE(sp.n >= 1 && sp.n <= autodj::Spacers::kMax);
-  const size_t top = ModelHeap::largest();
-  TEST_ASSERT_TRUE(top >= 300000 + 300000 / 32);
-  TEST_ASSERT_TRUE(top <= 300000 + 300000 / 32 + 1024 + top / 32 + 4096 + 8);
+  const size_t top = ModelHeap::rawLargest();
+  TEST_ASSERT_TRUE(top >= 300000 + 300000 / 32 + 1024);
+  TEST_ASSERT_TRUE(top <= 300000 + 300000 / 32 + 1024 + top / 32 + 4096 + 256);
   autodj::giveSpacers(&sp, ModelHeap::release);
   TEST_ASSERT_EQUAL_INT(0, sp.n);
-  TEST_ASSERT_EQUAL_size_t(1000000 - ModelHeap::kHeader, ModelHeap::largest());
+  TEST_ASSERT_EQUAL_size_t(1000000 - ModelHeap::kHeader, ModelHeap::rawLargest());
   TEST_ASSERT_FALSE(autodj::takeSpacers(990000, 0, ModelHeap::largest, ModelHeap::freeBytes, ModelHeap::alloc,
                                         ModelHeap::release, &sp));
   TEST_ASSERT_EQUAL_INT(0, sp.n);
@@ -2347,7 +2607,7 @@ void test_the_placement_in_a_model_heap() {
   TEST_ASSERT_TRUE(autodj::takeSpacers(300000, 600000, ModelHeap::largest, ModelHeap::freeBytes, ModelHeap::alloc,
                                        ModelHeap::release, &sp));
   TEST_ASSERT_TRUE(ModelHeap::freeBytes() >= 600000);
-  TEST_ASSERT_TRUE(ModelHeap::largest() >= 600000 - 64);  // (what keepFree leaves, at the block's top)
+  TEST_ASSERT_TRUE(ModelHeap::rawLargest() >= 600000 - 64);  // (what keepFree leaves, at the block's top)
   autodj::giveSpacers(&sp, ModelHeap::release);
   TEST_ASSERT_FALSE(autodj::takeSpacers(300000, 999000, ModelHeap::largest, ModelHeap::freeBytes, ModelHeap::alloc,
                                         ModelHeap::release, &sp));
@@ -2379,7 +2639,8 @@ struct UpdateRun {
   size_t joined = 0;           // ... joined again
   size_t givenBack = 0;        // ... and given back
   size_t topKept = 0;          // the kept bytes the join put at the top
-  size_t lowest = SIZE_MAX;    // the lowest free while a join placed its blocks
+  size_t bootLowest = SIZE_MAX;  // the lowest free while the boot's join placed its blocks
+  size_t lowest = SIZE_MAX;      // ... while the joins after the update did
 };
 
 // A table whose rows are `idx`'s tracks, scrambled, `rows` of them (one
@@ -2406,8 +2667,17 @@ Bytes tableOf(const LibraryIndex& idx, uint32_t rows) {
 
 void* g_durations = nullptr;
 
+// A run from T as well as D (D's rows then Software rows: MOOD-FILTERS.md
+// 9.5 C1, 9.6 C6), its records with their mood tails or not: with them,
+// library.idx and each build hold the words' block (2 B a track), the
+// load's last block and, in a build, taken at the first track with a word.
+struct MoodRun {
+  cc::Source* transfer = nullptr;
+  bool moods = false;  // T's records carry mood tails: the index has words
+};
+
 UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& records, const synthcard::Card& card,
-                         int steps) {
+                         int steps, const MoodRun& mood = MoodRun()) {
   UpdateRun u;
   ModelHeap::reset(4089u * 1024u);
   auto take = [](std::initializer_list<size_t> sizes, std::vector<void*>* into) {
@@ -2439,6 +2709,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     in.cardId = 1;
     TEST_ASSERT_TRUE(index.load(src, in) == LibraryIndex::Load::Loaded);
   }
+  TEST_ASSERT_EQUAL(mood.moods, index.hasMoods());
   std::vector<void*> queue, thumbs;
   take({5120}, &queue);
   g_durations = ModelHeap::alloc(index.trackCount() * 2);
@@ -2456,16 +2727,16 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(table.open(src)));
   Join join(ModelHeap::alloc, ModelHeap::release);
   if (dj == Dj::Placed) join.setPlacement(modelPlacement());
-  auto joinNow = [&]() {
+  auto joinNow = [&](size_t* lowest) {
     if (dj == Dj::Off) return;
     ModelHeap::mark();
     TEST_ASSERT_EQUAL_INT(static_cast<int>(Status::Working), static_cast<int>(join.begin(table, &index)));
-    u.lowest = std::min(u.lowest, ModelHeap::low);
+    *lowest = std::min(*lowest, ModelHeap::low);
     u.topKept = join.stats().topKept;
     runJoin(join, &index);
     TEST_ASSERT_EQUAL_INT(static_cast<int>(Status::Ready), static_cast<int>(join.status()));
   };
-  joinNow();
+  joinNow(&u.bootLowest);
   u.bootJoined = ModelHeap::largest();
   u.bootTopKept = u.topKept;
   for (int step = 0; step < steps; ++step) {
@@ -2475,17 +2746,26 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     queue.clear();
     thumbs.clear();
     join.release();
-    index.clear();
+    index.clear();  // (the words go with it)
     u.fence = ModelHeap::freeBlocks(64 * 1024);
-    // The build, from D's records.
+    // The build, from D's records (or T's, D's rows Software rows).
     LibraryBuilder b(ModelHeap::alloc, ModelHeap::release);
     synthcard::Facts facts(card, false);
-    synthcard::SameRows rows(LibraryBuilder::Status::Scanned, false, true);
+    synthcard::SameRows rows(mood.transfer ? LibraryBuilder::Status::Software : LibraryBuilder::Status::Scanned, false,
+                             true);
     LibraryBuilder::Config c;
+    c.transfer = mood.transfer;
     c.device = &records;
     c.rows = &rows;
     c.facts = &facts;
-    TEST_ASSERT_TRUE(b.build(index, c).built);
+    const LibraryBuilder::Result r = b.build(index, c);
+    TEST_ASSERT_TRUE(r.built);
+    if (mood.transfer) {
+      TEST_ASSERT_TRUE(r.transferUsed);  // T's records, not a restart from D
+      TEST_ASSERT_EQUAL_UINT32(card.files.size(), r.fromTransfer);
+    }
+    TEST_ASSERT_EQUAL(mood.moods, index.hasMoods());
+    TEST_ASSERT_EQUAL(mood.moods, r.withMoods > 0);
     // leaveFence(): the queue read back, the durations, Thumbs' pools; then
     // the join (the next pass).
     take({5120}, &queue);
@@ -2493,11 +2773,11 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     g_durations = ModelHeap::alloc(index.trackCount() * 2);
     take({204800, 256, 256, 110592, 24, 24}, &thumbs);
     u.largest = ModelHeap::largest();
-    joinNow();
+    joinNow(&u.lowest);
     u.joined = ModelHeap::largest();
     join.release();
     u.givenBack = ModelHeap::largest();
-    joinNow();
+    joinNow(&u.lowest);
   }
   join.release();
   index.clear();
@@ -2515,33 +2795,40 @@ void test_a_library_update_in_a_model_heap() {
   const std::vector<uint8_t> d = synthcard::tagsFile(card, dw);
   cc::MemSource records(d.data(), static_cast<uint32_t>(d.size()));
   // library.idx as the last boot saved it.
-  std::vector<uint8_t> saved;
-  {
+  auto savedFrom = [&](cc::Source* transfer, cc::Source& device) {
     LibraryIndex idx;
     LibraryBuilder b;
     synthcard::Facts facts(card, false);
-    synthcard::SameRows rows(LibraryBuilder::Status::Scanned, false, true);
+    synthcard::SameRows rows(transfer ? LibraryBuilder::Status::Software : LibraryBuilder::Status::Scanned, false,
+                             true);
     LibraryBuilder::Config c;
-    c.device = &records;
+    c.transfer = transfer;
+    c.device = &device;
     c.rows = &rows;
     c.facts = &facts;
-    TEST_ASSERT_TRUE(b.build(idx, c).built);
+    const LibraryBuilder::Result r = b.build(idx, c);
+    TEST_ASSERT_TRUE(r.built);
     TEST_ASSERT_EQUAL_UINT32(tracks, idx.trackCount());
+    if (transfer) {
+      TEST_ASSERT_TRUE(r.transferUsed);  // T's records, not a restart from D
+      TEST_ASSERT_EQUAL_UINT32(tracks, r.fromTransfer);
+    }
     MemorySink sink;
     LibraryIndex::Inputs in;
     in.cardId = 1;
     TEST_ASSERT_TRUE(idx.save(sink, in));
-    saved.assign(sink.data(), sink.data() + sink.size());
-  }
+    return std::vector<uint8_t>(sink.data(), sink.data() + sink.size());
+  };
+  const std::vector<uint8_t> saved = savedFrom(nullptr, records);
   const UpdateRun off = libraryUpdates(Dj::Off, saved, records, card, 2);
   const UpdateRun on = libraryUpdates(Dj::Placed, saved, records, card, 2);
   const UpdateRun heaps = libraryUpdates(Dj::WhereThe, saved, records, card, 2);
   printf("[join] a library update, 19,412 tracks, the model heap: the largest free block at the boot %u B; after the "
-         "update %u B with Auto DJ off (main's own rebuild). Auto DJ on: joined at the boot %u B; after the update "
-         "%u B, joined %u B (%u B of it at the top), given back %u B; free at least %u B while placing. Its blocks "
-         "where the heap puts them: joined %u B, given back %u B\n",
-         (unsigned)off.bootLargest, (unsigned)off.largest, (unsigned)on.bootJoined, (unsigned)on.largest,
-         (unsigned)on.joined, (unsigned)on.topKept, (unsigned)on.givenBack, (unsigned)on.lowest,
+         "update %u B with Auto DJ off (main's own rebuild). Auto DJ on: joined at the boot %u B, free at least %u B "
+         "while placing; after the update %u B, joined %u B (%u B of it at the top), given back %u B; free at least "
+         "%u B while placing. Its blocks where the heap puts them: joined %u B, given back %u B\n",
+         (unsigned)off.bootLargest, (unsigned)off.largest, (unsigned)on.bootJoined, (unsigned)on.bootLowest,
+         (unsigned)on.largest, (unsigned)on.joined, (unsigned)on.topKept, (unsigned)on.givenBack, (unsigned)on.lowest,
          (unsigned)heaps.joined, (unsigned)heaps.givenBack);
   // The rebuild itself fragments PSRAM, Auto DJ or not.
   TEST_ASSERT_TRUE(off.largest + 100000 < off.bootLargest);
@@ -2550,15 +2837,92 @@ void test_a_library_update_in_a_model_heap() {
   TEST_ASSERT_TRUE(on.fence == off.fence);
   TEST_ASSERT_TRUE(heaps.fence == off.fence);
   TEST_ASSERT_EQUAL_size_t(off.largest, on.largest);
-  // Joined again: only what no smaller free block holds at the top (the
-  // filters, 77,640 B); given back, off's block.
-  TEST_ASSERT_EQUAL_size_t(static_cast<size_t>(tracks - 2) * 4, on.topKept);
+  // Joined again: only what no smaller free block holds at the top (here none
+  // of it: the model's rebuild leaves a hole for the filters, the device's
+  // didn't: test_the_rejoin_anywhere_in_a_class()); given back, off's block.
+  TEST_ASSERT_TRUE(on.topKept <= static_cast<size_t>(tracks - 2) * 4);
   TEST_ASSERT_TRUE(on.joined + on.topKept + 24 * 1024 >= off.largest);
   TEST_ASSERT_EQUAL_size_t(off.largest, on.givenBack);
   TEST_ASSERT_TRUE(on.lowest >= kMargin);
+  TEST_ASSERT_TRUE(on.bootLowest >= kMargin);
+  // Its blocks where the heap puts them: 9.5's pass rule holds as well (the
+  // margin kept; after the update, and given back, off's block).
+  TEST_ASSERT_TRUE(heaps.lowest >= kMargin);
+  TEST_ASSERT_TRUE(heaps.bootLowest >= kMargin);
+  TEST_ASSERT_EQUAL_size_t(off.largest, heaps.largest);
+  TEST_ASSERT_EQUAL_size_t(off.largest, heaps.givenBack);
   // At the boot (one free block): everything at the top, as before.
   TEST_ASSERT_EQUAL_size_t(155284, on.bootTopKept);
   TEST_ASSERT_TRUE(on.bootJoined + on.bootTopKept + 24 * 1024 >= on.bootLargest);
+
+  // The same with the mood words (MOOD-FILTERS.md 9.5, 9.6 C6, against the
+  // run above as the control): built from T, its records with their mood
+  // tails (synthcard::kMoodPct of the tracks), D's rows Software rows; the
+  // words' block the index's own, loaded at the boot (the file's last
+  // block) and taken again by each build at its first track with a word.
+  synthcard::Write tw;
+  tw.moods = true;
+  const std::vector<uint8_t> t = synthcard::tagsFile(card, tw);
+  const std::vector<uint8_t> plain = synthcard::tagsFile(card, synthcard::Write());  // (no tails: no block)
+  synthcard::Write sw;
+  sw.source = cc::mptg::kSourceDevice;
+  sw.fullRecords = false;
+  const std::vector<uint8_t> ds = synthcard::tagsFile(card, sw);
+  cc::MemSource transfer(t.data(), static_cast<uint32_t>(t.size()));
+  cc::MemSource plainT(plain.data(), static_cast<uint32_t>(plain.size()));
+  cc::MemSource rowsOnly(ds.data(), static_cast<uint32_t>(ds.size()));
+  const std::vector<uint8_t> savedT = savedFrom(&transfer, rowsOnly);
+  const std::vector<uint8_t> savedPlain = savedFrom(&plainT, rowsOnly);
+  TEST_ASSERT_EQUAL_size_t(savedPlain.size() + tracks * 2, savedT.size());
+  MoodRun mood;
+  mood.transfer = &transfer;
+  mood.moods = true;
+  MoodRun fromT;
+  fromT.transfer = &plainT;
+  const UpdateRun moodOff = libraryUpdates(Dj::Off, savedT, rowsOnly, card, 2, mood);
+  const UpdateRun moodOn = libraryUpdates(Dj::Placed, savedT, rowsOnly, card, 2, mood);
+  const UpdateRun moodHeaps = libraryUpdates(Dj::WhereThe, savedT, rowsOnly, card, 2, mood);
+  const UpdateRun tOn = libraryUpdates(Dj::Placed, savedPlain, rowsOnly, card, 2, fromT);  // (T, no block)
+  printf("[join] the same with the mood words (a block of %u B), from T: the largest free block at the boot %u B; after "
+         "the update %u B with Auto DJ off. Auto DJ on: joined at the boot %u B (%u B of it at the top), free at "
+         "least %u B while placing; after the update %u B, joined %u B (%u B of it at the top), given back %u B; free "
+         "at least %u B while placing. Its blocks where the heap puts them: joined %u B, given back %u B. Joined "
+         "against the control's %u B: %+ld B (from T without the block: joined %u B, %+ld B)\n",
+         (unsigned)(tracks * 2), (unsigned)moodOff.bootLargest, (unsigned)moodOff.largest, (unsigned)moodOn.bootJoined,
+         (unsigned)moodOn.bootTopKept, (unsigned)moodOn.bootLowest, (unsigned)moodOn.largest, (unsigned)moodOn.joined,
+         (unsigned)moodOn.topKept, (unsigned)moodOn.givenBack, (unsigned)moodOn.lowest, (unsigned)moodHeaps.joined,
+         (unsigned)moodHeaps.givenBack, (unsigned)on.joined, (long)moodOn.joined - (long)on.joined,
+         (unsigned)tOn.joined, (long)tOn.joined - (long)on.joined);
+  // The pass rule (Ready: joinNow(), each join): the margin kept, at the
+  // boot and after the update; the fence's frees, the build and the Live
+  // step leave the heap as Auto DJ off has it; given back, off's block; at
+  // the boot, everything at the top.
+  TEST_ASSERT_TRUE(moodOn.lowest >= kMargin);
+  TEST_ASSERT_TRUE(moodOn.bootLowest >= kMargin);
+  TEST_ASSERT_TRUE(moodOn.fence == moodOff.fence);
+  TEST_ASSERT_TRUE(moodHeaps.fence == moodOff.fence);
+  TEST_ASSERT_EQUAL_size_t(moodOff.largest, moodOn.largest);
+  TEST_ASSERT_EQUAL_size_t(moodOff.largest, moodOn.givenBack);
+  TEST_ASSERT_EQUAL_size_t(155284, moodOn.bootTopKept);
+  // The same rule where the heap puts the join's blocks (no top to keep).
+  TEST_ASSERT_TRUE(moodHeaps.lowest >= kMargin);
+  TEST_ASSERT_TRUE(moodHeaps.bootLowest >= kMargin);
+  TEST_ASSERT_EQUAL_size_t(moodOff.largest, moodHeaps.largest);
+  TEST_ASSERT_EQUAL_size_t(moodOff.largest, moodHeaps.givenBack);
+  // No redesign forced (9.5): joined falls by no more than 120 KB, and not
+  // under 245,764 B where the control is above it (the device's 335,860 B
+  // less FLAC's 155,636 B, docs/AUTODJ.md 14.3, plus 65,540 B for Opus's
+  // page buffer, docs/OPUS.md 1).
+  TEST_ASSERT_TRUE(moodOn.joined + 122880 >= on.joined);
+  TEST_ASSERT_TRUE(moodOn.joined >= 245764 || on.joined < 245764);
+  // This shape, pinned: joined again as the control is, none of it at the
+  // top (S1's stand-in, the block taken before the build's first record,
+  // measured the same, its lowest after the update 84,104 B). The words
+  // kept across clear() (rejected, 9.5), tried on this shape with the
+  // stand-in, pass the rule above but not this: joined 278,516 B (-81,920
+  // B), 77,640 B of it at the top.
+  TEST_ASSERT_EQUAL_size_t(on.joined, moodOn.joined);
+  TEST_ASSERT_EQUAL_size_t(0, moodOn.topKept);
 }
 
 int main(int, char**) {
@@ -2581,8 +2945,12 @@ int main(int, char**) {
   RUN_TEST(test_memory_at_scale);
   RUN_TEST(test_a_pass_of_slices);
   RUN_TEST(test_the_folders_hash);
+  RUN_TEST(test_the_model_heap_against_the_device);
   RUN_TEST(test_the_placement_s_order);
   RUN_TEST(test_free_never_under_the_margin);
+  RUN_TEST(test_the_rejoin_anywhere_in_a_class);
+  RUN_TEST(test_the_room_above_the_spacers);
+  RUN_TEST(test_another_task_s_block_meanwhile);
   RUN_TEST(test_the_placement_in_a_model_heap);
   RUN_TEST(test_a_library_update_in_a_model_heap);
   return UNITY_END();

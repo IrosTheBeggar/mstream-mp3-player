@@ -12,10 +12,11 @@
 // fingerprint, the FAT time and the uniform-skew rule, part 5's number
 // rule, the text rules (2.3.6) and the string run (2.6.5), names and the
 // canonical order (2.6.8), the album folder (2.14.1) and
-// /.player/device.txt (2.15). The container and the four binary formats
-// are CardContainer.h, CardTags.h (MPTG), CardManifest.h (MSMF, MSPD) and
-// CardAutoDj.h (MPDJ). Portable, no allocation; the vectors of 2.18 are
-// test/fixtures/card/vectors.json, which test_card_contract reads.
+// /.player/device.txt (2.15). The container and the five binary formats
+// are CardContainer.h, CardTags.h (MPTG), CardManifest.h (MSMF, MSPD),
+// CardAutoDj.h (MPDJ) and CardWaves.h (MPWF). Portable, no allocation; the
+// vectors of 2.18 are test/fixtures/card/vectors.json, which
+// test_card_contract reads.
 namespace cardcontract {
 
 // ---------------------------------------------------------------------------
@@ -367,8 +368,11 @@ struct Info {
   // MPDJ none here, the no-file default (released 0.8.0 to 0.10.0 wrote 1,
   // for a draft no reader read, so a writer writes none for them); this
   // firmware, which ships the AutoDJ engine, reads major 2 (current():
-  // docs/AUTODJ-INDEX.md 7.4).
-  uint32_t readMsmf = 1, readMptg = 1, readMpdj = 0, readMpth = 1;
+  // docs/AUTODJ-INDEX.md 7.4). MPWF none here too: firmware that doesn't
+  // name it ignores the file, so a writer saves the card the space; this
+  // firmware, which draws the bars, reads major 1 (current():
+  // docs/WAVEFORM-INDEX.md 7.4).
+  uint32_t readMsmf = 1, readMptg = 1, readMpdj = 0, readMpwf = 0, readMpth = 1;
   char codecs[kValueMax] = "mp3,flac";
   char extensions[kValueMax] = "mp3,flac";
   uint32_t maxRate = 48000;
@@ -379,7 +383,8 @@ struct Info {
   uint32_t history = 0;
 };
 // What a card with no device.txt means (firmware before this design):
-// majors 1 (MPDJ none), mp3 and flac, 48 kHz, 2 channels, no play log.
+// majors 1 (MPDJ and MPWF none), mp3 and flac, 48 kHz, 2 channels, no play
+// log.
 Info defaults();
 // This firmware's file (the example of 2.15, for `firmware`).
 Info current(const char* firmware);
@@ -387,9 +392,10 @@ Info current(const char* firmware);
 // keeps a log); its length, 0 when it doesn't fit.
 size_t format(const Info& info, char* out, size_t cap);
 // Reads `n` bytes of a file (CRLF tolerated) over the defaults: each known
-// key replaces its default, any other line is ignored (a longer value is
-// cut at kValueMax - 1). False when the text has no "contract=" line, so
-// isn't a device.txt at all (`out` is then the defaults).
+// key replaces its default, the last of a key given twice wins, any other
+// line is ignored (a longer value is cut at kValueMax - 1). False when the
+// text has no "contract=" line, so isn't a device.txt at all (`out` is then
+// the defaults).
 bool parse(const char* text, size_t n, Info* out);
 // `name` is one of a comma-separated list's items ("opus" in
 // "mp3,flac,opus"), compared ignoring ASCII case.

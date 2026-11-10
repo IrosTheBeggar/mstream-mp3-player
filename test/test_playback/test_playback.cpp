@@ -30,6 +30,7 @@ public:
   bool finishedFlag = false;
   bool failedFlag = false;
   bool failEverything = false;  // every track played from now on fails
+  std::string failPath;         // ... or this one file alone (one that really can't play)
   RateRefusal refusal;          // why it failed, when its rate was why
   std::string failureText;      // ... or its own few words for the note ("": none)
   std::string unseekable;       // the one path seekable() is false for (an .opus, say)
@@ -75,7 +76,7 @@ public:
     playing = true;
     paused = false;
     finishedFlag = false;
-    failedFlag = failEverything || p.empty();  // "": an id the catalog doesn't know
+    failedFlag = failEverything || p.empty() || p == failPath;  // "": an id the catalog doesn't know
     return true;
   }
   void pause() override { paused = true; }
@@ -136,6 +137,25 @@ struct TestHold : PlaybackController::Hold {
   bool holdPlay() const override { return hold; }
 };
 
+// The card the tracks are on (the Core2's: the SD wrapper's CachedDrive::cardOut()). Pulled,
+// every open fails, as on the device (the backend's failEverything); put back, they work.
+struct TestCard : PlaybackController::Card {
+  explicit TestCard(FakeAudioBackend& audio) : audio_(audio) {}
+  bool isOut = false;
+  bool out() const override { return isOut; }
+  void pull() {
+    isOut = true;
+    audio_.failEverything = true;
+  }
+  void putBack() {
+    isOut = false;
+    audio_.failEverything = false;
+  }
+
+private:
+  FakeAudioBackend& audio_;
+};
+
 struct Rig {
   LibraryIndex index;
   TrackCatalog catalog{&index};
@@ -151,6 +171,35 @@ struct Rig {
     index.finish();
     const uint32_t ids[] = {0, 1, 2, 3, 4, 5, 6, 7};
     queue.assign(ids, tracks, 0);
+  }
+};
+
+// Rig's, its tracks with records of these lengths (0: no record, named by
+// its path), which the catalog gives as its hint to the second.
+struct LengthRig {
+  LibraryIndex index;
+  TrackCatalog catalog{&index};
+  QueueModel queue;
+  FakeAudioBackend audio;
+  PlaybackController player{audio, queue, catalog};
+
+  explicit LengthRig(std::initializer_list<uint32_t> lengths) {
+    const char* files[] = {"/music/a.mp3", "/music/b.mp3", "/music/c.mp3", "/music/d.mp3"};
+    index.begin("/music");
+    uint32_t n = 0;
+    for (uint32_t ms : lengths) {
+      LibraryIndex::TagView tags;
+      tags.durationMs = ms;
+      if (ms) {
+        index.addRecord(files[n], tags);
+      } else {
+        index.addFile(files[n]);
+      }
+      ++n;
+    }
+    index.finish();
+    const uint32_t ids[] = {0, 1, 2, 3};
+    queue.assign(ids, n, 0);
   }
 };
 }  // namespace
@@ -3095,7 +3144,7 @@ void test_the_resume_point_while_a_start_is_pending() {
 void test_the_shown_time_never_lends_the_track_befores_length() {
   Rig r(2);
   uint32_t pos = 1, len = 1;
-  r.player.shownTime(&pos, &len);  // (stopped at entry 0, nothing held)
+  r.player.shownTime(&pos, &len);  // (stopped at entry 0, nothing held, no record)
   TEST_ASSERT_EQUAL_UINT32(0, pos);
   TEST_ASSERT_EQUAL_UINT32(0, len);
   r.audio.asyncStarts = true;
@@ -3160,6 +3209,62 @@ void test_a_seek_to_0_while_a_start_is_pending_keeps_the_bars_length() {
   TEST_ASSERT_EQUAL_UINT32(180000, r.player.lengthHint());
   r.player.shownTime(&pos, &len);
   TEST_ASSERT_EQUAL_UINT32(180000, len);
+}
+
+// An entry nothing holds (stopped; cued at 0:00) shows 0:00 and a length, so
+// its bar can be sought and Now Playing's waveform shows before the first
+// play: the length told for the entry, else the catalog's (the record's, to
+// the second). Never the backend's figures, still the track before's until
+// its decode task takes the stop up. No record, no length (the dotted
+// line); none for a failed track.
+void test_an_entry_nothing_holds_shows_its_records_length() {
+  LengthRig r({181400, 207000, 0});
+  TEST_ASSERT_EQUAL_UINT32(181000, r.catalog.durationHintMs(0));  // (the rig: rounded)
+  TEST_ASSERT_EQUAL_UINT32(0, r.catalog.durationHintMs(2));
+  uint32_t pos = 1, len = 1;
+  r.player.shownTime(&pos, &len);  // stopped after a boot, no resume point
+  TEST_ASSERT_EQUAL_UINT32(0, pos);
+  TEST_ASSERT_EQUAL_UINT32(181000, len);
+  // Its bar sought: a start point at that length, the next play from there.
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Waits, r.player.seek(r.queue.keyAt(0), 60000, len));
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(60000, pos);
+  TEST_ASSERT_EQUAL_UINT32(181000, len);
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_UINT32(60000, r.audio.lastStartMs);
+  TEST_ASSERT_EQUAL_UINT32(181000, r.audio.lastHintMs);
+  // Paused 2 min in, then prev's restart: let go, cued at 0:00, with the
+  // backend's length to the ms (told), not the record's.
+  r.audio.position = 120000;
+  r.audio.duration = 181400;
+  r.player.togglePlayPause();
+  r.player.prev();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(0, pos);
+  TEST_ASSERT_EQUAL_UINT32(181400, len);
+  // Next while paused: cued on entry 1, its record's length, though the
+  // backend still says entry 0's.
+  r.player.cueNext();
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(0, pos);
+  TEST_ASSERT_EQUAL_UINT32(207000, len);
+  // Stopped, next: entry 2 has no record.
+  r.player.stop();
+  r.player.cueNext();
+  TEST_ASSERT_EQUAL_INT(2, r.player.currentIndex());
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(0, pos);
+  TEST_ASSERT_EQUAL_UINT32(0, len);
+  // Back to entry 1 with the backend's track failed: none.
+  r.player.cuePrev();
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(207000, len);
+  r.audio.failedFlag = true;
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(0, len);
 }
 
 // ---- Auto DJ (the engine design's 2.3, 2.3.1, 2.11 and 2.12) ----
@@ -3958,8 +4063,511 @@ void test_the_play_logs_word_through_waits_edits_and_the_fence() {
   TEST_ASSERT_EQUAL_STRING("", w.take().c_str());
 }
 
+// ---- the card hold (docs/METADATA.md 3.8) ----
+
+// The device check's pull (2026-11-04): the playing track's read fails and is its end, then
+// every open fails, about 2 s an entry, until the queue has run out; the queue's save kept that
+// as the place. Now the entry after it holds, nothing counted, and the card put back plays it.
+void test_a_pull_no_longer_runs_the_queue_out() {
+  {
+    // No card seam: as before.
+    Rig r(8);
+    r.player.setRepeat(Repeat::Off);
+    r.player.play(2);
+    r.audio.failEverything = true;
+    r.audio.finish();
+    for (uint32_t t = 0; t <= 25000; t += 2000) r.player.update(t);
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)r.player.state());
+    TEST_ASSERT_EQUAL_INT(7, r.player.currentIndex());
+    TEST_ASSERT_EQUAL_UINT32(5, r.player.lastFailure().count);
+  }
+  Rig r(8);
+  TestCard card(r.audio);
+  r.player.setCard(&card);
+  r.player.setRepeat(Repeat::Off);
+  r.player.play(2);
+  card.pull();
+  r.audio.finish();
+  r.player.update(0);  // c's end, as its read failed: d starts, and its open fails
+  TEST_ASSERT_EQUAL_INT(3, r.player.currentIndex());
+  for (uint32_t t = 20; t <= 25000; t += 20) r.player.update(t);
+  TEST_ASSERT_EQUAL_INT(3, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  TEST_ASSERT_TRUE(r.player.heldForCard());
+  TEST_ASSERT_EQUAL_UINT32(0, r.player.lastFailure().count);  // no "Skipped", no mark on its row
+  TEST_ASSERT_EQUAL_UINT32(1, r.player.cardHolds().begun);
+  TEST_ASSERT_EQUAL_UINT32(3, r.player.cardHolds().retries);  // 2, 6 and 14 s on
+  TEST_ASSERT_EQUAL_INT(5, r.audio.playCount);                // c, d and d's 3 tries
+  TEST_ASSERT_FALSE(r.audio.isPlaying());
+  // Put back: someone's mount finds it (the hold's own try's, on the device): d plays.
+  card.putBack();
+  r.player.update(25020);
+  TEST_ASSERT_EQUAL_INT(6, r.audio.playCount);
+  TEST_ASSERT_EQUAL_STRING("/music/d.mp3", r.audio.lastPath.c_str());
+  r.player.update(25040);
+  TEST_ASSERT_FALSE(r.player.heldForCard());
+  TEST_ASSERT_EQUAL_UINT32(1, r.player.cardHolds().resumed);
+  TEST_ASSERT_TRUE(r.audio.isPlaying());
+  // And the queue goes on from there.
+  r.audio.finish();
+  r.player.update(25060);
+  TEST_ASSERT_EQUAL_INT(4, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_STRING("/music/e.mp3", r.audio.lastPath.c_str());
+  TEST_ASSERT_EQUAL_UINT32(0, r.player.lastFailure().count);
+}
+
+// Tries at 2, 6, 14 and 30 s, then every 30 s, the last at 2 minutes: still out then, paused
+// there, cued. Nothing starts by itself after that, the card back or not; Play starts it.
+void test_a_card_hold_tries_on_a_widening_wait_then_ends_paused() {
+  Rig r(3);
+  TestCard card(r.audio);
+  r.player.setCard(&card);
+  card.pull();
+  r.player.play(1);
+  std::vector<uint32_t> tries;
+  int plays = r.audio.playCount;
+  for (uint32_t t = 0; t <= 130000; t += 10) {
+    r.player.update(t);
+    if (r.audio.playCount != plays) {
+      plays = r.audio.playCount;
+      tries.push_back(t);
+      r.player.update(t);  // its open fails at once (a Core2's takes 1-2 s, the driver's tries)
+    }
+  }
+  const uint32_t want[] = {2000, 6000, 14000, 30000, 60000, 90000, 120000};
+  TEST_ASSERT_EQUAL_UINT32(7, tries.size());
+  for (size_t i = 0; i < tries.size() && i < 7; ++i) TEST_ASSERT_EQUAL_UINT32(want[i], tries[i]);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  TEST_ASSERT_FALSE(r.player.heldForCard());
+  TEST_ASSERT_TRUE(r.player.playStartsEntry());  // cued: Play starts the entry
+  TEST_ASSERT_EQUAL_UINT32(0, r.player.lastFailure().count);
+  const PlaybackController::CardHolds& h = r.player.cardHolds();
+  TEST_ASSERT_EQUAL_UINT32(1, h.begun);
+  TEST_ASSERT_EQUAL_UINT32(7, h.retries);
+  TEST_ASSERT_EQUAL_UINT32(0, h.resumed);
+  TEST_ASSERT_EQUAL_UINT32(1, h.paused);
+  card.putBack();
+  for (uint32_t t = 130000; t <= 200000; t += 100) r.player.update(t);
+  TEST_ASSERT_EQUAL_INT(plays, r.audio.playCount);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  TEST_ASSERT_EQUAL_STRING("/music/b.mp3", r.audio.lastPath.c_str());
+  TEST_ASSERT_EQUAL_INT(plays + 1, r.audio.playCount);
+}
+
+// Each open taking a second to fail, as a Core2's does: the waits run from each failure, and the
+// last try comes at 2 minutes, not a wait past it.
+void test_a_card_holds_last_try_is_at_its_bound() {
+  Rig r(3);
+  r.audio.asyncStarts = true;  // (a start taken up only when it opens: none, while out)
+  TestCard card(r.audio);
+  r.player.setCard(&card);
+  card.isOut = true;
+  r.player.play(1);
+  std::vector<uint32_t> tries;
+  int plays = r.audio.playCount;
+  uint32_t failAt = 1000;
+  for (uint32_t t = 0; t <= 130000 && r.player.state() == PlayState::Playing; t += 10) {
+    if (t == failAt) r.audio.failedFlag = true;  // the open's driver tries over: it failed
+    r.player.update(t);
+    if (r.audio.playCount != plays) {
+      plays = r.audio.playCount;
+      tries.push_back(t);
+      failAt = t + 1000;
+    }
+  }
+  // (The hold began at the first failure, 1 s in: its 2 minutes end at 121 s.)
+  const uint32_t want[] = {3000, 8000, 17000, 34000, 65000, 96000, 121000};
+  TEST_ASSERT_EQUAL_UINT32(7, tries.size());
+  for (size_t i = 0; i < tries.size() && i < 7; ++i) TEST_ASSERT_EQUAL_UINT32(want[i], tries[i]);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_EQUAL_UINT32(0, r.player.cardHolds().resumed);
+  TEST_ASSERT_EQUAL_UINT32(1, r.player.cardHolds().paused);
+}
+
+// A track that really can't play is still skipped and named: a try that fails with the card
+// answering is the track's, and so is a failure with a reason of its own, card or not.
+void test_a_card_hold_hides_no_track_that_cant_play() {
+  {
+    Rig r(3);
+    TestCard card(r.audio);
+    r.player.setCard(&card);
+    card.pull();
+    r.player.play(0);
+    r.player.update(0);
+    TEST_ASSERT_TRUE(r.player.heldForCard());
+    card.putBack();
+    r.audio.failPath = "/music/a.mp3";  // the card back, and this file still fails
+    r.player.update(10);                // the try, at once
+    TEST_ASSERT_EQUAL_INT(2, r.audio.playCount);
+    r.player.update(20);
+    TEST_ASSERT_FALSE(r.player.heldForCard());
+    TEST_ASSERT_EQUAL_UINT32(1, r.player.lastFailure().count);
+    TEST_ASSERT_EQUAL_UINT32(0, r.player.lastFailure().track);
+    TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());  // skipped on
+    TEST_ASSERT_EQUAL_STRING("/music/b.mp3", r.audio.lastPath.c_str());
+  }
+  {
+    // The same at the queue's end, repeat Off: stopped there, finished, its second not kept.
+    Rig r(3);
+    TestCard card(r.audio);
+    r.player.setCard(&card);
+    r.player.setRepeat(Repeat::Off);
+    r.queue.setCurrent(2);
+    r.player.setStartPoint(83000, 240000);
+    card.pull();
+    r.player.togglePlayPause();
+    r.player.update(0);
+    TEST_ASSERT_TRUE(r.player.heldForCard());
+    card.putBack();
+    r.audio.failPath = "/music/c.mp3";
+    r.player.update(10);
+    TEST_ASSERT_EQUAL_UINT32(83000, r.audio.lastStartMs);
+    r.player.update(20);
+    r.player.update(30);
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)r.player.state());
+    TEST_ASSERT_TRUE(r.player.endedAtEnd());
+    TEST_ASSERT_EQUAL_UINT32(1, r.player.lastFailure().count);
+    uint32_t ms = 0, dur = 0;
+    TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+  }
+  {
+    // Its rate refused, the card out.
+    Rig r(3);
+    TestCard card(r.audio);
+    r.player.setCard(&card);
+    r.player.play(0);
+    card.isOut = true;
+    r.audio.refusal.hz = 96000;
+    r.audio.failedFlag = true;
+    r.player.update(0);
+    TEST_ASSERT_FALSE(r.player.heldForCard());
+    TEST_ASSERT_EQUAL_UINT32(1, r.player.lastFailure().count);
+    TEST_ASSERT_EQUAL_UINT32(96000, r.player.lastFailure().rate.hz);
+    TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+    TEST_ASSERT_EQUAL_UINT32(0, r.player.cardHolds().begun);
+  }
+  {
+    // The backend's own words.
+    Rig r(3);
+    TestCard card(r.audio);
+    r.player.setCard(&card);
+    r.player.play(0);
+    card.isOut = true;
+    r.audio.failureText = "surround Opus isn't supported";
+    r.audio.failedFlag = true;
+    r.player.update(0);
+    TEST_ASSERT_FALSE(r.player.heldForCard());
+    TEST_ASSERT_EQUAL_UINT32(1, r.player.lastFailure().count);
+    TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  }
+  {
+    // An end at 0:00 (no audio in it) is the file's, whatever the card.
+    Rig r(3);
+    TestCard card(r.audio);
+    r.player.setCard(&card);
+    r.player.play(0);
+    card.isOut = true;
+    r.audio.finishedFlag = true;
+    r.player.update(0);
+    TEST_ASSERT_FALSE(r.player.heldForCard());
+    TEST_ASSERT_EQUAL_UINT32(1, r.player.lastFailure().count);
+    TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  }
+  {
+    // The card answering: a failure as ever.
+    Rig r(3);
+    TestCard card(r.audio);
+    r.player.setCard(&card);
+    r.player.play(0);
+    r.audio.failedFlag = true;
+    r.player.update(0);
+    TEST_ASSERT_EQUAL_UINT32(1, r.player.lastFailure().count);
+    TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+    TEST_ASSERT_EQUAL_UINT32(0, r.player.cardHolds().begun);
+  }
+}
+
+// A start point (a resume point's, a seek's) is put back at each failure: the tries, and the card
+// put back, start where it would have, with its anchor. QueueSaver reads the same point all
+// along, the tries' own starts included, so the saved one isn't cleared and written again.
+void test_a_card_hold_keeps_the_start_point_and_its_anchor() {
+  Rig r(3);
+  r.audio.anchorsOn = true;
+  TestCard card(r.audio);
+  r.player.setCard(&card);
+  r.queue.setCurrent(1);
+  const ResumeAnchor a = anchorAt(3660300);
+  r.player.setStartPoint(83000, 240000, &a);
+  card.pull();
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_UINT32(83000, r.audio.lastStartMs);
+  r.player.update(0);
+  TEST_ASSERT_TRUE(r.player.heldForCard());
+  uint32_t ms = 0, dur = 0;
+  ResumeAnchor got;
+  TEST_ASSERT_TRUE(r.player.startPoint(&ms, &dur, &got));
+  TEST_ASSERT_EQUAL_UINT32(83000, ms);
+  TEST_ASSERT_EQUAL_UINT32(240000, dur);
+  TEST_ASSERT_TRUE(got == a);
+  uint32_t shown = 0, length = 0;
+  r.player.shownTime(&shown, &length);
+  TEST_ASSERT_EQUAL_UINT32(83000, shown);  // Now Playing shows where it picks up
+  r.player.update(2000);                   // the try
+  TEST_ASSERT_EQUAL_INT(2, r.audio.playCount);
+  TEST_ASSERT_EQUAL_UINT32(83000, r.audio.lastStartMs);
+  TEST_ASSERT_EQUAL_UINT32(240000, r.audio.lastHintMs);
+  TEST_ASSERT_TRUE(r.audio.lastAnchor == a);
+  got = ResumeAnchor{};
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur, &got));  // its start under way
+  TEST_ASSERT_EQUAL_UINT32(83000, ms);
+  TEST_ASSERT_TRUE(got == a);
+  r.player.update(2010);  // still out: held again, the start point back
+  TEST_ASSERT_TRUE(r.player.heldForCard());
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur, &got));
+  TEST_ASSERT_EQUAL_UINT32(83000, ms);
+  card.putBack();
+  r.player.update(2020);  // the card answers: at once
+  TEST_ASSERT_EQUAL_INT(3, r.audio.playCount);
+  TEST_ASSERT_EQUAL_UINT32(83000, r.audio.lastStartMs);
+  TEST_ASSERT_TRUE(r.audio.lastAnchor == a);
+  r.player.update(2030);
+  TEST_ASSERT_FALSE(r.player.heldForCard());
+  TEST_ASSERT_FALSE(r.player.resumePoint(&ms, &dur, &got));  // playing: nothing to save
+  TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+}
+
+// Whatever the listener does ends the hold: a pause leaves the entry cued (Play starts it, and
+// holds again if the card is still out); a skip starts the next entry at once (held there in its
+// turn, from the first wait); a stop stops. No try comes after any of them.
+void test_the_listener_ends_a_card_hold() {
+  {
+    Rig r(3);
+    TestCard card(r.audio);
+    r.player.setCard(&card);
+    card.pull();
+    r.player.play(1);
+    r.player.update(0);
+    TEST_ASSERT_TRUE(r.player.heldForCard());
+    r.player.togglePlayPause();
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+    TEST_ASSERT_FALSE(r.player.heldForCard());
+    const int plays = r.audio.playCount;
+    for (uint32_t t = 0; t <= 20000; t += 100) r.player.update(t);
+    TEST_ASSERT_EQUAL_INT(plays, r.audio.playCount);
+    r.player.togglePlayPause();  // Play: the entry
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+    TEST_ASSERT_EQUAL_STRING("/music/b.mp3", r.audio.lastPath.c_str());
+    TEST_ASSERT_EQUAL_INT(plays + 1, r.audio.playCount);
+    r.player.update(20100);  // still out: a new hold
+    TEST_ASSERT_TRUE(r.player.heldForCard());
+    TEST_ASSERT_EQUAL_UINT32(2, r.player.cardHolds().begun);
+  }
+  {
+    Rig r(3);
+    TestCard card(r.audio);
+    r.player.setCard(&card);
+    card.pull();
+    r.player.play(0);
+    r.player.update(0);
+    r.player.update(1000);
+    r.player.next();
+    TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+    TEST_ASSERT_EQUAL_STRING("/music/b.mp3", r.audio.lastPath.c_str());
+    TEST_ASSERT_EQUAL_INT(2, r.audio.playCount);
+    r.player.update(1010);  // held at b: its first wait from here
+    TEST_ASSERT_TRUE(r.player.heldForCard());
+    TEST_ASSERT_EQUAL_UINT32(2, r.player.cardHolds().begun);
+    r.player.update(3009);
+    TEST_ASSERT_EQUAL_INT(2, r.audio.playCount);
+    r.player.update(3010);
+    TEST_ASSERT_EQUAL_INT(3, r.audio.playCount);
+    TEST_ASSERT_EQUAL_UINT32(0, r.player.lastFailure().count);
+  }
+  {
+    Rig r(3);
+    TestCard card(r.audio);
+    r.player.setCard(&card);
+    card.pull();
+    r.player.play(0);
+    r.player.update(0);
+    r.player.stop();
+    for (uint32_t t = 0; t <= 20000; t += 100) r.player.update(t);
+    TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)r.player.state());
+    TEST_ASSERT_FALSE(r.player.heldForCard());
+  }
+}
+
+// A pause or a stop while a try's open is under way (1-2 s on a Core2, its start not taken up):
+// the entry is left cued at the second it asked for. The failed request isn't resumed by the next
+// Play, where, the card back by then, it would count against the track and skip it; and the
+// resume point the saver reads stays that second (a failed request's position is 0:00).
+void test_a_pause_or_a_stop_during_a_try_keeps_the_place() {
+  for (int how = 0; how < 3; ++how) {  // the B button's pause, the sleep timer's, a stop
+    Rig r(3);
+    r.audio.asyncStarts = true;  // (opens take time: a start taken up, or failed, later)
+    TestCard card(r.audio);
+    r.player.setCard(&card);
+    card.isOut = true;
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(83000, 240000);
+    r.player.togglePlayPause();
+    r.audio.failedFlag = true;  // its open failed: the card is out
+    r.player.update(0);
+    TEST_ASSERT_TRUE(r.player.heldForCard());
+    r.player.update(2000);  // the try: opening
+    TEST_ASSERT_EQUAL_INT(2, r.audio.playCount);
+    if (how == 0) r.player.togglePlayPause();
+    if (how == 1) r.player.pauseByTimer();
+    if (how == 2) r.player.stop();
+    r.player.update(2100);
+    r.audio.failedFlag = true;  // the try's open fails, the card still out
+    r.player.update(3000);
+    TEST_ASSERT_FALSE(r.player.heldForCard());
+    TEST_ASSERT_TRUE(r.player.playStartsEntry());  // cued (or stopped): Play starts the entry afresh
+    uint32_t ms = 0, dur = 0;
+    TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur));
+    TEST_ASSERT_EQUAL_UINT32(83000, ms);
+    for (uint32_t t = 3000; t <= 30000; t += 100) r.player.update(t);
+    TEST_ASSERT_EQUAL_INT(2, r.audio.playCount);  // no try after it
+    card.isOut = false;  // put back, someone else's mount found it
+    r.player.togglePlayPause();  // the B button (the timer's pause: not the headphones')
+    TEST_ASSERT_EQUAL_INT(3, r.audio.playCount);
+    TEST_ASSERT_EQUAL_STRING("/music/b.mp3", r.audio.lastPath.c_str());
+    TEST_ASSERT_EQUAL_UINT32(83000, r.audio.lastStartMs);
+    r.audio.take();
+    r.player.update(30100);
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+    TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+    TEST_ASSERT_EQUAL_UINT32(0, r.player.lastFailure().count);
+  }
+}
+
+// Paused while a try opens, the card back meanwhile, so it would have opened: still let go, and
+// the next Play starts the entry at its second (no start point left over on a request that
+// plays, which the saver would take for a resume point while it plays).
+void test_a_pause_during_a_try_that_would_open_leaves_no_start_point_behind() {
+  Rig r(3);
+  r.audio.asyncStarts = true;
+  TestCard card(r.audio);
+  r.player.setCard(&card);
+  card.isOut = true;
+  r.queue.setCurrent(1);
+  r.player.setStartPoint(83000, 240000);
+  r.player.togglePlayPause();
+  r.audio.failedFlag = true;
+  r.player.update(0);
+  r.player.update(2000);  // the try, opening
+  card.isOut = false;     // and the card answers it
+  r.player.togglePlayPause();
+  r.player.update(2100);
+  r.audio.take();  // (its start taken up, too late)
+  r.player.update(2200);
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(3, r.audio.playCount);
+  TEST_ASSERT_EQUAL_UINT32(83000, r.audio.lastStartMs);
+  uint32_t ms = 0, dur = 0;
+  TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+  r.audio.take();
+  r.player.update(2300);
+  TEST_ASSERT_FALSE(r.player.resumePoint(&ms, &dur));  // playing: nothing to save
+}
+
+// The same for the first open after a pull, before any hold: paused while it opens, it fails
+// with the card out, and Play starts the entry afresh at its second once the card is back.
+void test_a_pause_while_the_first_open_fails_with_the_card_out_keeps_the_place() {
+  Rig r(3);
+  r.audio.asyncStarts = true;
+  TestCard card(r.audio);
+  r.player.setCard(&card);
+  r.queue.setCurrent(1);
+  r.player.setStartPoint(83000, 240000);
+  r.player.togglePlayPause();  // opening
+  r.player.togglePlayPause();  // paused before it opened
+  card.isOut = true;
+  r.audio.failedFlag = true;  // and its open failed: the card was pulled
+  r.player.update(0);
+  TEST_ASSERT_TRUE(r.player.playStartsEntry());
+  uint32_t ms = 0, dur = 0;
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur));
+  TEST_ASSERT_EQUAL_UINT32(83000, ms);
+  card.isOut = false;
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_INT(2, r.audio.playCount);
+  TEST_ASSERT_EQUAL_UINT32(83000, r.audio.lastStartMs);
+  r.audio.take();
+  r.player.update(100);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  TEST_ASSERT_EQUAL_UINT32(0, r.player.lastFailure().count);
+}
+
+// The headphones gone at a try (Bluetooth the output): the play waits for them instead, and that
+// wait is PlayGate's; the card hold tries no more.
+void test_a_wait_for_the_headphones_takes_over_a_card_hold() {
+  Rig r(3);
+  TestHold hold;
+  r.player.setHold(&hold);
+  TestCard card(r.audio);
+  r.player.setCard(&card);
+  card.pull();
+  r.player.play(1);
+  r.player.update(0);
+  TEST_ASSERT_TRUE(r.player.heldForCard());
+  hold.hold = true;
+  r.player.update(2000);  // the try: a wait
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Waiting, (int)r.player.state());
+  TEST_ASSERT_FALSE(r.player.heldForCard());
+  TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+  TEST_ASSERT_EQUAL_UINT32(0, r.player.cardHolds().retries);  // (no open: not a try)
+  for (uint32_t t = 2000; t <= 40000; t += 100) r.player.update(t);
+  TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+  card.putBack();
+  hold.hold = false;
+  r.player.release();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  TEST_ASSERT_EQUAL_STRING("/music/b.mp3", r.audio.lastPath.c_str());
+  // Released in the very pass its try became a wait, the card still out: a hold of its own, from
+  // the first wait, not the old one's.
+  Rig s(3);
+  TestHold sh;
+  s.player.setHold(&sh);
+  TestCard sc(s.audio);
+  s.player.setCard(&sc);
+  sc.pull();
+  s.player.play(1);
+  s.player.update(0);
+  for (uint32_t t = 10; t <= 2000; t += 10) s.player.update(t);  // its tries at 2 and 6 s: the first
+  s.player.update(2000);  // (its open fails at once)
+  sh.hold = true;
+  s.player.update(6000);  // the second: a wait
+  sh.hold = false;
+  s.player.release();     // (no pass between)
+  s.player.update(6010);  // its open failed, the card still out
+  TEST_ASSERT_TRUE(s.player.heldForCard());
+  TEST_ASSERT_EQUAL_UINT32(2, s.player.cardHolds().begun);
+  const int plays = s.audio.playCount;
+  s.player.update(8009);
+  TEST_ASSERT_EQUAL_INT(plays, s.audio.playCount);
+  s.player.update(8010);  // 2 s on: the first wait again
+  TEST_ASSERT_EQUAL_INT(plays + 1, s.audio.playCount);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_a_pull_no_longer_runs_the_queue_out);
+  RUN_TEST(test_a_card_hold_tries_on_a_widening_wait_then_ends_paused);
+  RUN_TEST(test_a_card_holds_last_try_is_at_its_bound);
+  RUN_TEST(test_a_card_hold_hides_no_track_that_cant_play);
+  RUN_TEST(test_a_card_hold_keeps_the_start_point_and_its_anchor);
+  RUN_TEST(test_the_listener_ends_a_card_hold);
+  RUN_TEST(test_a_pause_or_a_stop_during_a_try_keeps_the_place);
+  RUN_TEST(test_a_pause_during_a_try_that_would_open_leaves_no_start_point_behind);
+  RUN_TEST(test_a_pause_while_the_first_open_fails_with_the_card_out_keeps_the_place);
+  RUN_TEST(test_a_wait_for_the_headphones_takes_over_a_card_hold);
   RUN_TEST(test_a_new_queue_selects_first_and_stops);
   RUN_TEST(test_play_starts_selected_track);
   RUN_TEST(test_toggle_play_pause_resume);
@@ -4069,6 +4677,7 @@ int main(int, char**) {
   RUN_TEST(test_the_resume_point_while_a_start_is_pending);
   RUN_TEST(test_the_shown_time_never_lends_the_track_befores_length);
   RUN_TEST(test_a_seek_to_0_while_a_start_is_pending_keeps_the_bars_length);
+  RUN_TEST(test_an_entry_nothing_holds_shows_its_records_length);
   RUN_TEST(test_auto_dj_s_pick_sends_the_word_at_once);
   RUN_TEST(test_auto_dj_s_pick_is_refused_behind_the_fence);
   RUN_TEST(test_repeat_all_never_wraps_with_auto_dj);

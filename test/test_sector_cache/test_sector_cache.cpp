@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <list>
 #include <map>
 #include <random>
@@ -31,6 +32,7 @@
 #include <vector>
 
 #include "CachedDrive.h"
+#include "SdBusy.h"
 #include "SectorCache.h"
 
 void setUp() {}
@@ -44,7 +46,9 @@ using Sector = std::array<uint8_t, kSS>;
 // A sparse device: a sector never written reads as a pattern of its LBA.
 // Faults on demand: the next `failReads` reads fail; the next `failWrites`
 // writes fail writing nothing; the next write fails after writing its
-// first `failWriteAfter` sectors (-1: no fault).
+// first `failWriteAfter` sectors (-1: no fault). And a sector of its own: the
+// next `badReads` reads that take in `badLba` fail (-1: every one), the
+// others read; each sets `*mark` when given (the SD driver's no answer).
 class RamDevice : public SectorCache::Device {
 public:
   bool read(uint32_t lba, uint8_t* out, uint32_t count) override {
@@ -54,6 +58,13 @@ public:
     if (failReads > 0) {
       --failReads;
       std::memset(out, 0xEE, static_cast<size_t>(count) * kSS);  // a failed read may leave junk
+      return false;
+    }
+    if (badReads != 0 && lba <= badLba && badLba - lba < count) {
+      if (badReads > 0) --badReads;
+      ++badTaken;
+      if (mark) *mark = true;
+      std::memset(out, 0xEE, static_cast<size_t>(count) * kSS);
       return false;
     }
     for (uint32_t k = 0; k < count; ++k) at(lba + k, out + static_cast<size_t>(k) * kSS);
@@ -93,6 +104,10 @@ public:
   int failReads = 0;
   int failWrites = 0;
   int failWriteAfter = -1;
+  uint32_t badLba = UINT32_MAX;
+  int badReads = 0;
+  uint32_t badTaken = 0;  // reads of it that failed
+  bool* mark = nullptr;
 };
 
 Sector filled(uint8_t v) {
@@ -829,6 +844,1316 @@ void test_drive_identity() {
 // Another card: every write refused (the card never sees one), reads
 // served (FatFs mounts it; the restart reads it), until a restart: the
 // mount's card put back is still refused. Remounts are counted.
+// A command with no answer, and what the driver says after it.
+namespace {
+struct FakeLink : CachedDrive::Link {
+  bool answersNow = true;  // the status: no mark, and CMD13 answered
+  bool initWorks = true;   // a card answers its init
+  bool marked = false;     // the driver's mark, as a device's no answer sets it (RamDevice::mark)
+  uint32_t asks = 0, inits = 0;
+  std::function<void()> afterInit;  // (what the card does next, once an init has answered)
+  bool answers() override {
+    ++asks;
+    return answersNow && !marked;
+  }
+  bool init(uint32_t* sectors) override {
+    ++inits;
+    if (!initWorks) return false;
+    answersNow = true;
+    marked = false;
+    *sectors = kCardSectors;
+    if (afterInit) afterInit();
+    return true;
+  }
+};
+// A sector with no answer, `reads` times (-1: for good), each setting the link's mark.
+void noAnswer(RamDevice& dev, FakeLink& link, uint32_t lba, int reads) {
+  dev.mark = &link.marked;
+  dev.badLba = lba;
+  dev.badReads = reads;
+}
+}  // namespace
+
+void test_drive_looks_after_a_fault_in_its_call() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  // A read that fails with the card answering (a CRC, no data token): nothing more.
+  dev.failReads = 1;
+  TEST_ASSERT_FALSE(d.read(100, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(1, link.asks);
+  TEST_ASSERT_EQUAL_UINT32(0, link.inits);
+  TEST_ASSERT_EQUAL_UINT32(0, d.kept());
+  TEST_ASSERT_EQUAL_UINT32(100, d.stats().faultLba);
+  // No answer, for good: its init and its identity at once, the read asked once more and that one's
+  // look the same; FatFs told only of that read.
+  noAnswer(dev, link, 101, -1);
+  TEST_ASSERT_FALSE(d.read(101, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(2, dev.badTaken);
+  TEST_ASSERT_EQUAL_UINT32(2, link.inits);
+  TEST_ASSERT_EQUAL_UINT32(2, d.kept());
+  TEST_ASSERT_EQUAL_UINT32(0, d.healed());
+  TEST_ASSERT_EQUAL_UINT32(0, d.remounts());
+  TEST_ASSERT_FALSE(d.foreign());
+  TEST_ASSERT_FALSE(d.remountDue());
+  TEST_ASSERT_FALSE(link.marked);
+  dev.badReads = 0;
+  TEST_ASSERT_TRUE(d.read(101, buf, 1));  // the next one reads
+  // The same for a write refused twice, written no more after its look.
+  link.answersNow = false;
+  dev.failWrites = 2;
+  const Sector w = filled(0x55);
+  uint32_t writes = dev.writes;
+  TEST_ASSERT_FALSE(d.write(102, w.data(), 1));
+  TEST_ASSERT_EQUAL_UINT32(writes + sdbusy::kWriteTries, dev.writes);
+  TEST_ASSERT_EQUAL_UINT32(3, d.kept());
+  // A sector the cache holds stays held through a look.
+  TEST_ASSERT_TRUE(d.read(50, buf, 1));
+  noAnswer(dev, link, 51, -1);
+  TEST_ASSERT_FALSE(d.read(51, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(5, d.kept());
+  dev.badReads = 0;
+  const uint32_t reads = dev.reads;
+  TEST_ASSERT_TRUE(d.read(50, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(reads, dev.reads);
+  // The cache off: a read's and a write's the same.
+  d.setEnabled(false);
+  noAnswer(dev, link, 52, -1);
+  TEST_ASSERT_FALSE(d.read(52, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(7, d.kept());
+  dev.badReads = 0;
+  link.answersNow = false;
+  dev.failWrites = 2;
+  writes = dev.writes;
+  TEST_ASSERT_FALSE(d.write(102, w.data(), 1));
+  TEST_ASSERT_EQUAL_UINT32(writes + sdbusy::kWriteTries, dev.writes);
+  TEST_ASSERT_EQUAL_UINT32(8, d.kept());
+  TEST_ASSERT_EQUAL_UINT32(0, d.healed());
+  d.setEnabled(true);
+  // No look at a read that worked, nor a write.
+  const uint32_t asks = link.asks;
+  TEST_ASSERT_TRUE(d.read(103, buf, 1));
+  TEST_ASSERT_TRUE(d.write(103, w.data(), 1));
+  TEST_ASSERT_EQUAL_UINT32(asks, link.asks);
+}
+
+// Nothing answers its init: nothing kept: the mark stands, for FatFs's remount and the guard. Another
+// card at a look: no verdict there: remountDue(), and the remount gives it. No link, not armed, foreign:
+// no look.
+void test_drive_leaves_the_rest_to_the_remount() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  // Before the mount's identity: not armed, no look.
+  dev.failReads = 1;
+  TEST_ASSERT_FALSE(d.read(99, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(0, link.asks);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  link.answersNow = false;
+  link.initWorks = false;
+  dev.failReads = 1;
+  TEST_ASSERT_FALSE(d.read(200, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(1, link.inits);
+  TEST_ASSERT_EQUAL_UINT32(0, d.kept());
+  TEST_ASSERT_FALSE(d.remountDue());
+  // Back: FatFs's remount.
+  d.init();
+  TEST_ASSERT_TRUE(d.remounted(kCardSectors));
+  TEST_ASSERT_EQUAL_UINT32(1, d.remounts());
+  // Another card, seen at a look.
+  link.answersNow = false;
+  link.initWorks = true;
+  dev.sectors.clear();
+  formatLike(dev, 8192, 0xB);
+  dev.failReads = 1;
+  TEST_ASSERT_FALSE(d.read(300, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(0, d.kept());
+  TEST_ASSERT_TRUE(d.remountDue());
+  TEST_ASSERT_FALSE(d.foreign());
+  const uint32_t inits = link.inits, asks = link.asks;
+  link.answersNow = false;  // (the look's init said yes: no answer again, or answers() ends a second look by itself)
+  dev.failReads = 1;
+  TEST_ASSERT_FALSE(d.read(301, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(asks, link.asks);  // (due: no second look)
+  TEST_ASSERT_EQUAL_UINT32(inits, link.inits);
+  d.init();
+  TEST_ASSERT_FALSE(d.remountDue());
+  TEST_ASSERT_FALSE(d.remounted(kCardSectors));
+  TEST_ASSERT_TRUE(d.foreign());
+  // Foreign: no look.
+  link.answersNow = false;
+  dev.failReads = 1;
+  TEST_ASSERT_FALSE(d.read(302, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(inits, link.inits);
+}
+
+// An identity the look can't read: no card kept: remountDue(), and the remount reads it again.
+void test_drive_a_look_that_cant_read_the_identity() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  link.answersNow = false;
+  dev.failReads = 3;  // the read, and sector 0 twice
+  TEST_ASSERT_FALSE(d.read(100, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(1, link.inits);
+  TEST_ASSERT_EQUAL_UINT32(0, d.kept());
+  TEST_ASSERT_TRUE(d.remountDue());
+  TEST_ASSERT_FALSE(d.foreign());
+  d.init();
+  TEST_ASSERT_FALSE(d.remountDue());
+  TEST_ASSERT_TRUE(d.remounted(kCardSectors));
+  TEST_ASSERT_FALSE(d.foreign());
+}
+
+// A size of 0 is the driver's CMD9 failing: the two sectors tell, whichever end it was. A card
+// whose CMD9 always fails is that card; another card's sectors still differ.
+void test_drive_identity_with_no_size() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  // At a remount.
+  d.init();
+  TEST_ASSERT_TRUE(d.remounted(0));
+  TEST_ASSERT_FALSE(d.foreign());
+  // At a look: FakeLink's size is kCardSectors: the mount's size of 0 this time.
+  TEST_ASSERT_TRUE(d.remember(0));
+  link.answersNow = false;
+  dev.failReads = 1;
+  TEST_ASSERT_TRUE(d.read(100, buf, 1));  // (kept: the second try reads)
+  TEST_ASSERT_EQUAL_UINT32(1, d.kept());
+  TEST_ASSERT_EQUAL_UINT32(1, d.healed());
+  TEST_ASSERT_FALSE(d.remountDue());
+  // Another card with no size: its sectors say so.
+  dev.sectors.clear();
+  formatLike(dev, 8192, 0xB);
+  d.init();
+  TEST_ASSERT_FALSE(d.remounted(0));
+  TEST_ASSERT_TRUE(d.foreign());
+  // Two sizes that are both known and differ are two cards, whatever the sectors say.
+  CachedDrive::Identity a = d.mountIdentity(), b = a;
+  a.sectors = kCardSectors;
+  b.sectors = kCardSectors + 1;
+  TEST_ASSERT_FALSE(a.sameCard(b));
+  b.sectors = 0;
+  TEST_ASSERT_TRUE(a.sameCard(b));
+  TEST_ASSERT_TRUE(b.sameCard(a));
+}
+
+namespace {
+// The remount a silent fault makes, and the mount's first read, which the card answers.
+void mountAgain(CachedDrive& d, uint8_t* buf) {
+  d.init();
+  TEST_ASSERT_TRUE(d.remounted(kCardSectors));
+  TEST_ASSERT_TRUE(d.read(8, buf, 2));
+}
+}  // namespace
+
+// A read that keeps leaving the card silent past its init: kStopAfter times and it isn't asked again,
+// whoever asks and through the remounts its faults make; the look neither. The rest of the card is asked
+// as ever.
+void test_drive_stops_asking_for_a_read_that_keeps_leaving_it_silent() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS * 8];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  link.answersNow = false;
+  link.initWorks = false;
+  const auto fail = [&](uint32_t lba, uint32_t count) {
+    dev.failReads = 1;
+    return d.read(lba, buf, count);
+  };
+  for (uint32_t k = 0; k < CachedDrive::kStopAfter; ++k) {
+    TEST_ASSERT_FALSE(fail(100, 1));
+    TEST_ASSERT_EQUAL_INT(0, dev.failReads);  // (asked of the card)
+    TEST_ASSERT_EQUAL_UINT32(0, d.stats().stoppedReads);
+    mountAgain(d, buf);  // (the count stands)
+  }
+  const uint32_t cardReads = d.stats().cardReads, asks = link.asks;
+  // The fourth was the last: no read reaches the card, no look.
+  TEST_ASSERT_FALSE(d.read(100, buf, 1));
+  TEST_ASSERT_FALSE(d.read(100, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(cardReads, d.stats().cardReads);
+  TEST_ASSERT_EQUAL_UINT32(asks, link.asks);
+  TEST_ASSERT_EQUAL_UINT32(2, d.stats().stoppedReads);
+  // The cache off: the same.
+  d.setEnabled(false);
+  TEST_ASSERT_FALSE(d.read(100, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(cardReads, d.stats().cardReads);
+  d.setEnabled(true);
+  // The same sector in another read isn't that read; the sector beside it is asked.
+  TEST_ASSERT_TRUE(d.read(100, buf, 2));
+  TEST_ASSERT_TRUE(d.read(101, buf, 1));
+  // A failure of another read that then works: its count goes, and it takes kStopAfter again.
+  // (Two sectors: past the cache, whose hit would answer.)
+  TEST_ASSERT_FALSE(fail(200, 2));
+  mountAgain(d, buf);
+  TEST_ASSERT_TRUE(d.read(200, buf, 2));
+  for (uint32_t k = 0; k + 1 < CachedDrive::kStopAfter; ++k) {
+    TEST_ASSERT_FALSE(fail(200, 2));
+    mountAgain(d, buf);
+  }
+  const uint32_t stopped = d.stats().stoppedReads;
+  TEST_ASSERT_FALSE(fail(200, 2));
+  TEST_ASSERT_EQUAL_UINT32(stopped, d.stats().stoppedReads);
+  TEST_ASSERT_EQUAL_INT(0, dev.failReads);
+  mountAgain(d, buf);
+  // The fourth in a row: stopped now. A write of the sector, or one over it: asked again.
+  TEST_ASSERT_FALSE(d.read(200, buf, 2));
+  TEST_ASSERT_EQUAL_UINT32(stopped + 1, d.stats().stoppedReads);
+  const Sector w = filled(0x5A);
+  TEST_ASSERT_TRUE(d.write(200, w.data(), 1));
+  TEST_ASSERT_TRUE(d.read(200, buf, 2));
+  TEST_ASSERT_TRUE(dev.equals(200, buf));
+  for (uint32_t k = 0; k < CachedDrive::kStopAfter; ++k) {
+    TEST_ASSERT_FALSE(fail(300, 2));
+    mountAgain(d, buf);
+  }
+  TEST_ASSERT_FALSE(d.read(300, buf, 2));
+  uint8_t two[kSS * 2] = {};
+  TEST_ASSERT_TRUE(d.write(301, two, 2));  // the second sector of it, and the one after
+  TEST_ASSERT_TRUE(d.read(300, buf, 2));
+  // The next boot's mount: a new CachedDrive: nothing kept (the session's RAM).
+  CachedDrive next(c, dev);
+  next.setScratch(scratch);
+  TEST_ASSERT_TRUE(next.remember(kCardSectors));
+  TEST_ASSERT_TRUE(next.read(100, buf, 1));
+}
+
+// A read that fails with the card answering (a CRC, no data token, an R1 error), or kept by the look, is
+// the moment it costs and its reader's own tries: asked every time, as many as a shared directory's
+// sector takes in a glitch's few milliseconds, and nothing it does touches the count.
+void test_drive_never_stops_a_read_the_card_answered() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS * 2];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  const auto asked = [&](uint32_t lba) {
+    dev.failReads = 1;
+    const bool ok = d.read(lba, buf, 2);
+    const bool reached = dev.failReads == 0;
+    dev.failReads = 0;
+    TEST_ASSERT_FALSE(ok);
+    return reached;
+  };
+  for (uint32_t k = 0; k < 3 * CachedDrive::kStopAfter; ++k) TEST_ASSERT_TRUE(asked(100));
+  // With no answer, and the card back at its init: the same, both tries; and a one-off between, read.
+  for (uint32_t k = 0; k < 3 * CachedDrive::kStopAfter; ++k) {
+    noAnswer(dev, link, 100, 2);  // the read and its second try
+    TEST_ASSERT_FALSE(d.read(100, buf, 2));
+    TEST_ASSERT_EQUAL_INT(0, dev.badReads);
+    noAnswer(dev, link, 100, 1);
+    TEST_ASSERT_TRUE(d.read(100, buf, 2));
+  }
+  TEST_ASSERT_EQUAL_UINT32(3 * 3 * CachedDrive::kStopAfter, d.kept());  // (2 and 1 a round)
+  TEST_ASSERT_EQUAL_UINT32(3 * CachedDrive::kStopAfter, d.healed());
+  TEST_ASSERT_EQUAL_UINT32(0, d.stats().stoppedReads);
+  TEST_ASSERT_FALSE(d.tooSilent());
+  TEST_ASSERT_TRUE(d.read(100, buf, 2));  // and the next one reads
+  // Between silent ones it starts nothing and ends nothing.
+  for (uint32_t k = 0; k + 1 < CachedDrive::kStopAfter; ++k) {
+    link.answersNow = false;
+    link.initWorks = false;
+    TEST_ASSERT_TRUE(asked(200));
+    link.answersNow = true;
+    link.initWorks = true;
+    TEST_ASSERT_TRUE(asked(200));
+  }
+  TEST_ASSERT_TRUE(asked(200));
+  link.answersNow = false;
+  link.initWorks = false;
+  TEST_ASSERT_TRUE(asked(200));
+  TEST_ASSERT_FALSE(asked(200));
+}
+
+// A card put back (a remount with no look since the card last answered a read that found it silent: the
+// first anyone saw of it was a status): the stops are asked again, and the silences count from none. A
+// look that found it silent makes the next remount its own, until the card answers a read.
+void test_drive_a_card_put_back_asks_again() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS * 2];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  link.answersNow = false;
+  link.initWorks = false;
+  const auto asked = [&](uint32_t lba) {
+    dev.failReads = 1;
+    const bool ok = d.read(lba, buf, 2);
+    const bool reached = dev.failReads == 0;
+    dev.failReads = 0;
+    TEST_ASSERT_FALSE(ok);
+    return reached;
+  };
+  const auto remount = [&] {
+    d.init();
+    TEST_ASSERT_TRUE(d.remounted(kCardSectors));
+  };
+  for (uint32_t k = 0; k < CachedDrive::kStopAfter; ++k) {
+    TEST_ASSERT_TRUE(asked(100));
+    mountAgain(d, buf);
+  }
+  TEST_ASSERT_FALSE(asked(100));
+  remount();  // put back
+  TEST_ASSERT_TRUE(d.read(100, buf, 2));
+  // The count from its start.
+  for (uint32_t k = 0; k < CachedDrive::kStopAfter; ++k) {
+    TEST_ASSERT_TRUE(asked(100));
+    mountAgain(d, buf);
+  }
+  TEST_ASSERT_FALSE(asked(100));
+  // A write's look counts as a read's for what a remount is.
+  dev.failWrites = 2;
+  const Sector w = filled(0x5A);
+  TEST_ASSERT_FALSE(d.write(50, w.data(), 1));
+  remount();
+  TEST_ASSERT_FALSE(asked(100));
+  // More than one with no read between (a write-mode call under STA_PROTECT mounts nothing): all its own.
+  remount();
+  remount();
+  TEST_ASSERT_FALSE(asked(100));
+  // A sector the cache holds isn't the card answering.
+  TEST_ASSERT_TRUE(d.read(9, buf, 1));  // (the mount's first: on the card, and now in the cache)
+  dev.failWrites = 2;
+  TEST_ASSERT_FALSE(d.write(51, w.data(), 1));
+  TEST_ASSERT_TRUE(d.read(9, buf, 1));
+  remount();
+  TEST_ASSERT_FALSE(asked(100));
+  // A remount with the card still silent at its init never gets here: the note waits for the one that does.
+}
+
+// A look that keeps the card, or a card that answers, leaves no note: the next remount is a card put back.
+void test_drive_a_kept_look_leaves_no_note() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS * 2];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  const auto silent = [&](uint32_t lba) {
+    link.answersNow = false;
+    link.initWorks = false;
+    dev.failReads = 1;
+    TEST_ASSERT_FALSE(d.read(lba, buf, 2));
+  };
+  const auto stopHundred = [&] {
+    for (uint32_t k = 0; k < CachedDrive::kStopAfter; ++k) {
+      silent(100);
+      mountAgain(d, buf);
+    }
+  };
+  stopHundred();
+  silent(200);  // the note, and then a look that keeps the card (both tries: no read the card answered)
+  link.initWorks = true;
+  noAnswer(dev, link, 201, 2);
+  TEST_ASSERT_FALSE(d.read(201, buf, 2));
+  TEST_ASSERT_EQUAL_UINT32(2, d.kept());
+  TEST_ASSERT_EQUAL_UINT32(0, d.healed());
+  d.init();
+  TEST_ASSERT_TRUE(d.remounted(kCardSectors));
+  TEST_ASSERT_TRUE(d.read(100, buf, 2));
+  stopHundred();
+  silent(200);  // the note, and then a fault with the card answering
+  link.answersNow = true;
+  dev.failReads = 1;
+  TEST_ASSERT_FALSE(d.read(201, buf, 2));
+  d.init();
+  TEST_ASSERT_TRUE(d.remounted(kCardSectors));
+  TEST_ASSERT_TRUE(d.read(100, buf, 2));
+}
+
+// A call of FatFs's that goes on past what it does without (FSINFO's read, the second FAT's write) with the
+// mark standing: nothing reached the card: one silence, and the next read isn't counted on its sector.
+void test_drive_a_read_with_the_mark_standing_counts_for_nothing() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS * 2];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  link.answersNow = false;
+  link.initWorks = false;
+  const auto asked = [&](uint32_t lba) {
+    dev.failReads = 1;
+    const bool ok = d.read(lba, buf, 2);
+    const bool reached = dev.failReads == 0;
+    dev.failReads = 0;
+    TEST_ASSERT_FALSE(ok);
+    return reached;
+  };
+  for (uint32_t k = 0; k < CachedDrive::kStopAfter; ++k) {
+    TEST_ASSERT_TRUE(asked(64));    // FSINFO's: this one counts
+    TEST_ASSERT_TRUE(asked(4191));  // the root's, the mark standing: these don't
+    TEST_ASSERT_TRUE(asked(4191));
+    mountAgain(d, buf);
+  }
+  TEST_ASSERT_FALSE(asked(64));
+  TEST_ASSERT_TRUE(asked(4191));  // (not stopped: the card has answered nothing of it; this one's its first)
+  mountAgain(d, buf);
+  // And the silences are the firings: kStopAfter of FSINFO's and that one so far.
+  for (uint32_t k = CachedDrive::kStopAfter + 1; k + 1 < CachedDrive::kTooSilentAfter; ++k) {
+    TEST_ASSERT_TRUE(asked(5000 + 10 * k));
+    TEST_ASSERT_TRUE(asked(4191));
+    mountAgain(d, buf);
+  }
+  TEST_ASSERT_FALSE(d.tooSilent());
+  TEST_ASSERT_TRUE(asked(6000));
+  TEST_ASSERT_TRUE(d.tooSilent());
+}
+
+// An identity the look can't read: the card went silent after its init said yes (a select that timed out
+// leaves no mark, so the init does nothing). The same cut, and the same read again after it: it counts.
+void test_drive_an_identity_unread_is_a_silence() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS * 2];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  for (uint32_t k = 0; k < CachedDrive::kStopAfter; ++k) {
+    link.answersNow = false;
+    dev.failReads = 3;  // the read, and sector 0 twice
+    TEST_ASSERT_FALSE(d.read(100, buf, 2));
+    TEST_ASSERT_EQUAL_INT(0, dev.failReads);
+    TEST_ASSERT_TRUE(d.remountDue());
+    TEST_ASSERT_EQUAL_UINT32(0, d.kept());
+    mountAgain(d, buf);
+    TEST_ASSERT_FALSE(d.foreign());
+  }
+  dev.failReads = 1;
+  TEST_ASSERT_FALSE(d.read(100, buf, 2));
+  TEST_ASSERT_EQUAL_INT(1, dev.failReads);  // (not asked)
+  dev.failReads = 0;
+  // Another card, read whole, is the guard's and no silence.
+  TEST_ASSERT_FALSE(d.tooSilent());
+}
+
+// Reads that move on: the stop has nothing to hold. kTooSilentAfter silences, whichever reads and writes
+// they were, and tooSilent() until the session ends; a card put back before that starts them over.
+void test_drive_too_silent() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS * 2];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  link.answersNow = false;
+  link.initWorks = false;
+  const auto silence = [&](uint32_t lba) {
+    dev.failReads = 1;
+    TEST_ASSERT_FALSE(d.read(lba, buf, 2));
+    mountAgain(d, buf);
+  };
+  for (uint32_t k = 0; k + 1 < CachedDrive::kTooSilentAfter; ++k) silence(1000 + 10 * k);
+  TEST_ASSERT_FALSE(d.tooSilent());
+  d.init();
+  TEST_ASSERT_TRUE(d.remounted(kCardSectors));  // put back
+  for (uint32_t k = 0; k + 1 < CachedDrive::kTooSilentAfter; ++k) silence(2000 + 10 * k);
+  TEST_ASSERT_FALSE(d.tooSilent());
+  // A failure the card answered, or the look kept (read the second time or not), isn't one.
+  link.answersNow = true;
+  dev.failReads = 1;
+  TEST_ASSERT_FALSE(d.read(3000, buf, 2));
+  link.initWorks = true;
+  noAnswer(dev, link, 3010, 1);
+  TEST_ASSERT_TRUE(d.read(3010, buf, 2));
+  noAnswer(dev, link, 3010, 2);
+  TEST_ASSERT_FALSE(d.read(3010, buf, 2));
+  TEST_ASSERT_FALSE(d.tooSilent());
+  // The last, a write's.
+  link.answersNow = false;
+  link.initWorks = false;
+  dev.failWrites = 2;
+  const Sector w = filled(0x5A);
+  TEST_ASSERT_FALSE(d.write(3020, w.data(), 1));
+  TEST_ASSERT_TRUE(d.tooSilent());
+  mountAgain(d, buf);
+  d.init();
+  TEST_ASSERT_TRUE(d.remounted(kCardSectors));  // put back: it stands
+  TEST_ASSERT_TRUE(d.tooSilent());
+  // The next boot's mount: nothing kept.
+  CachedDrive next(c, dev);
+  TEST_ASSERT_FALSE(next.tooSilent());
+}
+
+// A write that leaves the card silent, kStopAfter times: no reader's bound holds the queue's save, and each
+// is a cut. No more writes until a restart; reads go on. With the card answering, or kept: no such count.
+void test_drive_writes_that_leave_it_silent_stop() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS * 2];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  const Sector w = filled(0x5A);
+  for (uint32_t k = 0; k < 3 * CachedDrive::kStopAfter; ++k) {
+    dev.failWrites = 2;
+    TEST_ASSERT_FALSE(d.write(700, w.data(), 1));  // (answering)
+    link.answersNow = false;
+    dev.failWrites = 2;
+    TEST_ASSERT_FALSE(d.write(700, w.data(), 1));  // (kept)
+  }
+  TEST_ASSERT_FALSE(d.writesOff());
+  link.answersNow = false;
+  link.initWorks = false;
+  for (uint32_t k = 0; k < CachedDrive::kStopAfter; ++k) {
+    TEST_ASSERT_FALSE(d.writesOff());
+    dev.failWrites = 2;
+    TEST_ASSERT_FALSE(d.write(700, w.data(), 1));
+    mountAgain(d, buf);
+  }
+  TEST_ASSERT_TRUE(d.writesOff());
+  const uint32_t writes = dev.writes;
+  TEST_ASSERT_FALSE(d.write(701, w.data(), 1));
+  TEST_ASSERT_EQUAL_UINT32(writes, dev.writes);
+  TEST_ASSERT_TRUE(d.read(701, buf, 2));
+}
+
+// A card put back starts that count over too.
+void test_drive_a_card_put_back_starts_the_silent_writes_over() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS * 2];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  link.answersNow = false;
+  link.initWorks = false;
+  const Sector w = filled(0x5A);
+  const auto silent = [&] {
+    for (uint32_t k = 0; k + 1 < CachedDrive::kStopAfter; ++k) {
+      dev.failWrites = 2;
+      TEST_ASSERT_FALSE(d.write(700, w.data(), 1));
+      mountAgain(d, buf);
+    }
+  };
+  silent();
+  d.init();
+  TEST_ASSERT_TRUE(d.remounted(kCardSectors));  // put back
+  silent();
+  TEST_ASSERT_FALSE(d.writesOff());
+}
+
+// FatFs going on with the mark standing (FSINFO's write after the second FAT's, which it does
+// without), and that look finding the card back: no remount comes of the silence the first look
+// noted and nothing was cut, so it counts for nothing, a write's or a read's.
+void test_drive_a_silence_the_next_look_ends_counts_for_nothing() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS * 2];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  const Sector w = filled(0x5A);
+  const uint32_t rounds = 2 * CachedDrive::kTooSilentAfter;
+  for (uint32_t k = 0; k < rounds; ++k) {
+    link.answersNow = false;
+    link.initWorks = false;
+    dev.failWrites = 2;
+    TEST_ASSERT_FALSE(d.write(700, w.data(), 1));
+    link.initWorks = true;
+    dev.failWrites = 2;
+    TEST_ASSERT_FALSE(d.write(64, w.data(), 1));
+    TEST_ASSERT_FALSE(d.remountDue());
+  }
+  TEST_ASSERT_FALSE(d.writesOff());
+  TEST_ASSERT_FALSE(d.tooSilent());
+  for (uint32_t k = 0; k < rounds; ++k) {
+    link.answersNow = false;
+    link.initWorks = false;
+    dev.failReads = 1;
+    TEST_ASSERT_FALSE(d.read(1000 + 10 * k, buf, 2));
+    link.initWorks = true;
+    dev.failReads = 1;
+    TEST_ASSERT_TRUE(d.read(3000 + 10 * k, buf, 2));  // (kept: and its second try reads)
+  }
+  TEST_ASSERT_FALSE(d.tooSilent());
+  TEST_ASSERT_EQUAL_UINT32(2 * rounds, d.kept());
+  TEST_ASSERT_EQUAL_UINT32(rounds, d.healed());
+  // Silent with nothing to end it: the same reads count, as ever.
+  link.answersNow = false;
+  link.initWorks = false;
+  for (uint32_t k = 0; k < CachedDrive::kTooSilentAfter; ++k) {
+    dev.failReads = 1;
+    TEST_ASSERT_FALSE(d.read(5000 + 10 * k, buf, 2));
+    mountAgain(d, buf);
+  }
+  TEST_ASSERT_TRUE(d.tooSilent());
+}
+
+// What a read's silence takes back is a read's: the write count stays, and it isn't taken back for one.
+void test_drive_a_taken_back_read_silence_leaves_the_write_count() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS * 2];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  const Sector w = filled(0x5A);
+  const auto readSilence = [&](uint32_t lba) {
+    link.answersNow = false;
+    link.initWorks = false;
+    dev.failReads = 1;
+    TEST_ASSERT_FALSE(d.read(lba, buf, 2));
+    link.initWorks = true;
+    dev.failReads = 1;
+    TEST_ASSERT_TRUE(d.read(lba + 100, buf, 2));  // (kept: and its second try reads)
+  };
+  const auto writeSilence = [&] {
+    link.answersNow = false;
+    link.initWorks = false;
+    dev.failWrites = 2;
+    TEST_ASSERT_FALSE(d.write(700, w.data(), 1));
+    mountAgain(d, buf);
+  };
+  readSilence(1000);
+  readSilence(1010);
+  writeSilence();
+  TEST_ASSERT_FALSE(d.writesOff());
+  readSilence(1020);
+  writeSilence();
+  writeSilence();
+  TEST_ASSERT_FALSE(d.writesOff());
+  writeSilence();
+  TEST_ASSERT_TRUE(d.writesOff());
+}
+
+// FatFs's mount goes on past FSINFO's read, which left the card silent past an init that said
+// yes, to a read that works, in the call that owes a remount: that isn't the card answering. The
+// count stands through the remount, and the stop comes.
+void test_drive_a_read_under_a_remount_owed_keeps_the_note() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS * 2];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  for (uint32_t k = 0; k < CachedDrive::kStopAfter; ++k) {
+    link.answersNow = false;
+    link.initWorks = true;
+    dev.failReads = 3;  // the read, and the identity's two tries of sector 0
+    TEST_ASSERT_FALSE(d.read(100, buf, 2));
+    TEST_ASSERT_TRUE(d.remountDue());
+    TEST_ASSERT_TRUE(d.read(200, buf, 2));
+    mountAgain(d, buf);
+  }
+  const uint32_t stopped = d.stats().stoppedReads, reads = d.stats().cardReads;
+  TEST_ASSERT_FALSE(d.read(100, buf, 2));
+  TEST_ASSERT_EQUAL_UINT32(stopped + 1, d.stats().stoppedReads);
+  TEST_ASSERT_EQUAL_UINT32(reads, d.stats().cardReads);
+}
+
+// Foreign until a restart, and up only because the boot holds the card jobs (the breaker's): no
+// look, but a read that leaves it silent still counts, and still stops.
+void test_drive_foreign_still_stops_and_counts() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS * 2];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  dev.failReads = 2;
+  d.init();
+  TEST_ASSERT_FALSE(d.remounted(kCardSectors));
+  TEST_ASSERT_TRUE(d.foreign());
+  const auto remount = [&] {
+    d.init();
+    TEST_ASSERT_FALSE(d.remounted(kCardSectors));
+    TEST_ASSERT_TRUE(d.read(8, buf, 2));
+  };
+  remount();
+  // A read that fails with the card answering counts for nothing there either.
+  for (uint32_t k = 0; k <= CachedDrive::kTooSilentAfter; ++k) {
+    dev.failReads = 1;
+    TEST_ASSERT_FALSE(d.read(100, buf, 2));
+    TEST_ASSERT_EQUAL_INT(0, dev.failReads);
+    TEST_ASSERT_TRUE(d.read(8, buf, 2));
+  }
+  TEST_ASSERT_EQUAL_UINT32(0, d.stats().stoppedReads);
+  TEST_ASSERT_FALSE(d.tooSilent());
+  const uint32_t inits = link.inits;
+  link.answersNow = false;
+  link.initWorks = false;
+  for (uint32_t k = 0; k < CachedDrive::kStopAfter; ++k) {
+    dev.failReads = 1;
+    TEST_ASSERT_FALSE(d.read(100, buf, 2));
+    TEST_ASSERT_EQUAL_INT(0, dev.failReads);
+    remount();
+  }
+  TEST_ASSERT_EQUAL_UINT32(inits, link.inits);
+  const uint32_t stopped = d.stats().stoppedReads;
+  TEST_ASSERT_FALSE(d.read(100, buf, 2));
+  TEST_ASSERT_EQUAL_UINT32(stopped + 1, d.stats().stoppedReads);
+  TEST_ASSERT_FALSE(d.tooSilent());
+  for (uint32_t k = 0; k < CachedDrive::kTooSilentAfter; ++k) {
+    dev.failReads = 1;
+    TEST_ASSERT_FALSE(d.read(1000 + 10 * k, buf, 2));
+    remount();
+  }
+  TEST_ASSERT_TRUE(d.tooSilent());
+}
+
+namespace {
+uint64_t g_nowUs = 0;
+uint64_t testClock() { return g_nowUs; }
+}  // namespace
+
+// Told to the queue's saver: a remount kCardOutUs or more after a mount that found nothing answering,
+// once. Not one with no such mount before it, a save's own or a window's, nor one sooner: each try's
+// failure would set up the next, and a blip has built up its first wait at most.
+void test_drive_says_when_the_card_came_back() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev, testClock);
+  uint8_t scratch[kSS], buf[kSS * 2];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  g_nowUs = 1000000;
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  const auto remount = [&] {
+    d.init();
+    TEST_ASSERT_TRUE(d.remounted(kCardSectors));
+  };
+  remount();
+  TEST_ASSERT_EQUAL_UINT32(0, d.cardBacks());
+  // A window's.
+  d.windowFailed(64);
+  d.windowFailed(64);
+  TEST_ASSERT_TRUE(d.remountDue());
+  remount();
+  TEST_ASSERT_EQUAL_UINT32(0, d.cardBacks());
+  // A silent read's own: a mount that failed, but no longer than a moment before.
+  link.answersNow = false;
+  link.initWorks = false;
+  dev.failReads = 1;
+  TEST_ASSERT_FALSE(d.read(100, buf, 2));
+  d.init();
+  d.mountFailed();
+  g_nowUs += CachedDrive::kCardOutUs - 1;
+  remount();
+  TEST_ASSERT_EQUAL_UINT32(0, d.cardBacks());
+  // Out for long, the note standing or not; a later mount that fails doesn't move its start.
+  d.init();
+  d.mountFailed();
+  g_nowUs += CachedDrive::kCardOutUs / 2;
+  d.init();
+  d.mountFailed();
+  g_nowUs += CachedDrive::kCardOutUs / 2;
+  remount();
+  TEST_ASSERT_EQUAL_UINT32(1, d.cardBacks());
+  remount();
+  TEST_ASSERT_EQUAL_UINT32(1, d.cardBacks());
+}
+
+// The card out: from a mount that found nothing answering to one that finds a card, whichever card,
+// armed or not. A read that fails, the look finding the card silent, says nothing of it yet: only
+// FatFs's mounts do. For the player's card hold, the mount's card out (mountCardOut()): that, or
+// another card answering, until the guard's restart, the mount's own card back or not.
+void test_drive_says_the_card_is_out_from_a_failed_mount_to_the_next() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev, testClock);
+  uint8_t scratch[kSS], buf[kSS * 2];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  g_nowUs = 1000000;
+  TEST_ASSERT_FALSE(d.cardOut());
+  TEST_ASSERT_FALSE(d.mountCardOut());
+  // Nothing remembered yet (no guard armed): the same.
+  d.init();
+  d.mountFailed();
+  TEST_ASSERT_TRUE(d.cardOut());
+  TEST_ASSERT_TRUE(d.mountCardOut());
+  d.init();  // a mount begun: no answer yet
+  TEST_ASSERT_TRUE(d.cardOut());
+  TEST_ASSERT_TRUE(d.remounted(kCardSectors));
+  TEST_ASSERT_FALSE(d.cardOut());
+  TEST_ASSERT_FALSE(d.mountCardOut());
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  link.answersNow = false;
+  link.initWorks = false;
+  dev.failReads = 1;
+  TEST_ASSERT_FALSE(d.read(100, buf, 2));
+  TEST_ASSERT_FALSE(d.cardOut());
+  // FatFs's remount finds nothing, and again: out all along.
+  d.init();
+  d.mountFailed();
+  TEST_ASSERT_TRUE(d.cardOut());
+  d.init();
+  d.mountFailed();
+  TEST_ASSERT_TRUE(d.cardOut());
+  d.init();
+  TEST_ASSERT_TRUE(d.remounted(kCardSectors));
+  TEST_ASSERT_FALSE(d.cardOut());
+  TEST_ASSERT_FALSE(d.mountCardOut());
+  // Another card answering: in, and foreign; the mount's card out all the same, for the hold.
+  d.init();
+  d.mountFailed();
+  formatLike(dev, 8192, 0xB);
+  d.init();
+  TEST_ASSERT_FALSE(d.remounted(kCardSectors));
+  TEST_ASSERT_TRUE(d.foreign());
+  TEST_ASSERT_FALSE(d.cardOut());
+  TEST_ASSERT_TRUE(d.mountCardOut());
+  // The mount's own card back before the restart: foreign still, so still out for the hold.
+  d.init();
+  d.mountFailed();
+  TEST_ASSERT_TRUE(d.mountCardOut());
+  formatLike(dev, 8192, 0xA);
+  d.init();
+  TEST_ASSERT_FALSE(d.remounted(kCardSectors));
+  TEST_ASSERT_FALSE(d.cardOut());
+  TEST_ASSERT_TRUE(d.mountCardOut());
+}
+
+// With a clock: asked once more each kStopUs after the last, so a card that mends is read again. More
+// reads than it keeps: the one longest since a failure goes.
+void test_drive_asks_again_after_a_while() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  g_nowUs = 1000000;
+  CachedDrive d(c, dev, testClock);
+  uint8_t scratch[kSS], buf[kSS * 2];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  link.answersNow = false;
+  link.initWorks = false;
+  // (Two sectors: past the cache, whose hit would answer.)
+  const auto fail = [&](uint32_t lba) {
+    dev.failReads = 1;
+    const bool ok = d.read(lba, buf, 2);
+    const bool asked = dev.failReads == 0;
+    dev.failReads = 0;
+    TEST_ASSERT_FALSE(ok);
+    if (asked && !link.answersNow) mountAgain(d, buf);
+    return asked;
+  };
+  for (uint32_t k = 0; k < CachedDrive::kStopAfter; ++k) TEST_ASSERT_TRUE(fail(100));
+  g_nowUs += CachedDrive::kStopUs - 1;
+  TEST_ASSERT_FALSE(fail(100));
+  g_nowUs += 1;
+  TEST_ASSERT_TRUE(fail(100));  // once
+  TEST_ASSERT_FALSE(fail(100));  // ... and the wait again, from that failure
+  // Its wait over, and failing now with the card answering: asked each time, the wait not started again.
+  g_nowUs += CachedDrive::kStopUs;
+  link.answersNow = true;
+  TEST_ASSERT_TRUE(fail(100));
+  TEST_ASSERT_TRUE(fail(100));
+  link.answersNow = false;
+  TEST_ASSERT_TRUE(d.read(100, buf, 2));  // mended
+  TEST_ASSERT_TRUE(fail(100));  // ... and the count from its start
+  TEST_ASSERT_TRUE(fail(100));
+  // Eviction: 100 has the oldest failure of nine reads, and the ninth takes its place.
+  for (uint32_t lba = 500; lba < 508; ++lba) {
+    g_nowUs += 1000;
+    TEST_ASSERT_TRUE(fail(lba));
+  }
+  TEST_ASSERT_TRUE(fail(100));  // (it had two: it starts over)
+  TEST_ASSERT_TRUE(fail(100));
+  TEST_ASSERT_TRUE(fail(100));
+  TEST_ASSERT_TRUE(fail(100));
+  TEST_ASSERT_FALSE(fail(100));
+}
+
+namespace {
+// A drive on a card silent past its init at every look, for the table's rules below.
+struct Stopper {
+  RamDevice dev;
+  SectorCache c;
+  FakeLink link;
+  uint8_t scratch[kSS], buf[kSS * 8];
+  void arm(CachedDrive& d) {
+    formatLike(dev, 8192, 0xA);
+    d.setScratch(scratch);
+    d.setLink(&link);
+    TEST_ASSERT_TRUE(d.remember(kCardSectors));
+    link.answersNow = false;
+    link.initWorks = false;
+  }
+};
+// Asked of the card? (Armed for one failure, and whether it was taken.)
+bool askedFailing(CachedDrive& d, RamDevice& dev, uint8_t* buf, uint32_t lba, uint32_t count) {
+  dev.failReads = 1;
+  const bool ok = d.read(lba, buf, count);
+  const bool asked = dev.failReads == 0;
+  dev.failReads = 0;
+  TEST_ASSERT_FALSE(ok);
+  return asked;
+}
+// (Asked and silent, and the remount that makes.)
+bool silence(CachedDrive& d, RamDevice& dev, uint8_t* buf, uint32_t lba, uint32_t count) {
+  const bool asked = askedFailing(d, dev, buf, lba, count);
+  if (asked) mountAgain(d, buf);
+  return asked;
+}
+void stop(CachedDrive& d, RamDevice& dev, uint8_t* buf, uint32_t lba, uint32_t count) {
+  for (uint32_t k = 0; k < CachedDrive::kStopAfter; ++k) TEST_ASSERT_TRUE(silence(d, dev, buf, lba, count));
+  TEST_ASSERT_FALSE(askedFailing(d, dev, buf, lba, count));
+}
+}  // namespace
+
+// A write beside a stopped read, either side, or anywhere else, leaves it stopped; a write the card
+// refused says nothing either.
+void test_drive_a_write_elsewhere_leaves_the_stop() {
+  auto* s = new Stopper();
+  TEST_ASSERT_TRUE(s->c.begin(8));
+  CachedDrive d(s->c, s->dev);
+  s->arm(d);
+  const Sector w = filled(0x5A);
+  stop(d, s->dev, s->buf, 300, 2);
+  TEST_ASSERT_TRUE(d.write(299, w.data(), 1));  // just before
+  TEST_ASSERT_FALSE(askedFailing(d, s->dev, s->buf, 300, 2));
+  TEST_ASSERT_TRUE(d.write(302, w.data(), 1));  // just after
+  TEST_ASSERT_FALSE(askedFailing(d, s->dev, s->buf, 300, 2));
+  TEST_ASSERT_TRUE(d.write(1000, w.data(), 1));  // far after
+  TEST_ASSERT_FALSE(askedFailing(d, s->dev, s->buf, 300, 2));
+  TEST_ASSERT_TRUE(d.write(10, w.data(), 1));  // far before
+  TEST_ASSERT_FALSE(askedFailing(d, s->dev, s->buf, 300, 2));
+  s->dev.failWrites = 2;
+  TEST_ASSERT_FALSE(d.write(300, w.data(), 1));
+  TEST_ASSERT_FALSE(askedFailing(d, s->dev, s->buf, 300, 2));
+  delete s;
+}
+
+// The table's holes: a read that works or a write over one takes its own entry, not the last, and one
+// write over two takes both.
+void test_drive_the_stops_are_kept_entry_by_entry() {
+  auto* s = new Stopper();
+  TEST_ASSERT_TRUE(s->c.begin(8));
+  CachedDrive d(s->c, s->dev);
+  s->arm(d);
+  const Sector w = filled(0x5A);
+  // A (one failure), B stopped; A works: B stays stopped.
+  TEST_ASSERT_TRUE(silence(d, s->dev, s->buf, 400, 2));
+  stop(d, s->dev, s->buf, 500, 2);
+  TEST_ASSERT_TRUE(d.read(400, s->buf, 2));
+  TEST_ASSERT_FALSE(askedFailing(d, s->dev, s->buf, 500, 2));
+  // C and D stopped in the slots after B; a write over C leaves D and B.
+  stop(d, s->dev, s->buf, 600, 2);
+  stop(d, s->dev, s->buf, 700, 2);
+  TEST_ASSERT_TRUE(d.write(600, w.data(), 1));
+  TEST_ASSERT_FALSE(askedFailing(d, s->dev, s->buf, 700, 2));
+  TEST_ASSERT_FALSE(askedFailing(d, s->dev, s->buf, 500, 2));
+  TEST_ASSERT_TRUE(silence(d, s->dev, s->buf, 600, 2));
+  // One write over two stopped reads: both asked again.
+  stop(d, s->dev, s->buf, 800, 2);
+  stop(d, s->dev, s->buf, 802, 2);
+  uint8_t four[kSS * 4] = {};
+  TEST_ASSERT_TRUE(d.write(800, four, 4));
+  TEST_ASSERT_TRUE(askedFailing(d, s->dev, s->buf, 800, 2));
+  TEST_ASSERT_TRUE(askedFailing(d, s->dev, s->buf, 802, 2));
+  delete s;
+}
+
+// The same rules with the cache off: the failures count, a write ends the stop, a refused one doesn't.
+void test_drive_the_stop_with_the_cache_off() {
+  auto* s = new Stopper();
+  TEST_ASSERT_TRUE(s->c.begin(8));
+  CachedDrive d(s->c, s->dev);
+  s->arm(d);
+  d.setEnabled(false);
+  const Sector w = filled(0x5A);
+  stop(d, s->dev, s->buf, 100, 1);
+  s->dev.failWrites = 2;
+  TEST_ASSERT_FALSE(d.write(100, w.data(), 1));
+  TEST_ASSERT_FALSE(askedFailing(d, s->dev, s->buf, 100, 1));
+  TEST_ASSERT_TRUE(d.write(100, w.data(), 1));
+  TEST_ASSERT_TRUE(d.read(100, s->buf, 1));
+  delete s;
+}
+
+// A read over the same sector with another count that works isn't that read: it stays stopped.
+void test_drive_a_read_of_another_count_leaves_the_stop() {
+  auto* s = new Stopper();
+  TEST_ASSERT_TRUE(s->c.begin(8));
+  CachedDrive d(s->c, s->dev);
+  s->arm(d);
+  stop(d, s->dev, s->buf, 100, 1);
+  TEST_ASSERT_TRUE(d.read(100, s->buf, 2));
+  TEST_ASSERT_FALSE(askedFailing(d, s->dev, s->buf, 100, 1));
+  delete s;
+}
+
+// Eight reads stay stopped at once; the ninth takes the place of the oldest, wherever it sits.
+void test_drive_eight_reads_and_the_oldest_anywhere() {
+  auto* s = new Stopper();
+  TEST_ASSERT_TRUE(s->c.begin(8));
+  g_nowUs = 1000000;
+  CachedDrive d(s->c, s->dev, testClock);
+  s->arm(d);
+  for (uint32_t i = 0; i < 8; ++i) {
+    for (uint32_t k = 0; k < CachedDrive::kStopAfter; ++k) {
+      g_nowUs += 10;
+      TEST_ASSERT_TRUE(silence(d, s->dev, s->buf, 100 + 10 * i, 2));
+    }
+  }
+  for (uint32_t i = 0; i < 8; ++i) TEST_ASSERT_FALSE(askedFailing(d, s->dev, s->buf, 100 + 10 * i, 2));
+  // Slot 0's a stopped read too, and younger than slot 1's: 100 fails again after a wait, 110 doesn't.
+  g_nowUs += CachedDrive::kStopUs;
+  TEST_ASSERT_TRUE(silence(d, s->dev, s->buf, 100, 2));  // its wait over: once more
+  g_nowUs += 10;
+  TEST_ASSERT_TRUE(silence(d, s->dev, s->buf, 900, 2));  // the ninth: 110 goes, the oldest
+  // 100 is still known, stopped.
+  TEST_ASSERT_FALSE(askedFailing(d, s->dev, s->buf, 100, 2));
+  delete s;
+}
+
+// A failed window, and writes that aren't of that sector between: the count stands.
+void test_drive_a_write_elsewhere_isnt_the_windows() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS];
+  d.setScratch(scratch);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  const Sector w = filled(0x33);
+  uint8_t two[kSS * 2] = {};
+  d.windowFailed(703);
+  TEST_ASSERT_TRUE(d.write(702, w.data(), 1));  // just before
+  TEST_ASSERT_TRUE(d.write(704, w.data(), 1));  // just after
+  TEST_ASSERT_TRUE(d.write(701, two, 2));       // ends just before
+  TEST_ASSERT_TRUE(d.write(10, w.data(), 1));   // far before (a data sector, a FAT's)
+  TEST_ASSERT_TRUE(d.write(5000, w.data(), 1));  // far after
+  TEST_ASSERT_FALSE(d.remountDue());
+  d.windowFailed(703);
+  TEST_ASSERT_TRUE(d.remountDue());
+}
+
+// A look that finds another size: two cards, whatever the sectors say, and the size is the init's, not the mount's.
+void test_drive_a_look_holds_the_init_size_to_the_mount() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS];
+  d.setScratch(scratch);
+  struct SizedLink : CachedDrive::Link {
+    bool answers() override { return false; }
+    bool init(uint32_t* sectors) override {
+      *sectors = kCardSectors + 8;
+      return true;
+    }
+  } link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  dev.failReads = 1;
+  TEST_ASSERT_FALSE(d.read(100, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(0, d.kept());
+  TEST_ASSERT_TRUE(d.remountDue());
+}
+
+// faultLba: the last read's or write's, not the first's.
+void test_drive_the_fault_sector_is_the_last() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS];
+  d.setScratch(scratch);
+  dev.failReads = 1;
+  TEST_ASSERT_FALSE(d.read(100, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(100, d.stats().faultLba);
+  dev.failReads = 1;
+  TEST_ASSERT_FALSE(d.read(101, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(101, d.stats().faultLba);
+  const Sector w = filled(0x33);
+  dev.failWrites = 2;
+  TEST_ASSERT_FALSE(d.write(102, w.data(), 1));
+  TEST_ASSERT_EQUAL_UINT32(102, d.stats().faultLba);
+}
+
+// A remount between a window's first failure and the same sector's next: the rule is no write of it
+// taken, so it counts all the same.
+void test_drive_a_remount_doesnt_forget_a_windows_first_failure() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS];
+  d.setScratch(scratch);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  d.windowFailed(703);
+  d.init();
+  TEST_ASSERT_TRUE(d.remounted(kCardSectors));
+  d.windowFailed(703);
+  TEST_ASSERT_TRUE(d.remountDue());
+}
+
+// gc's reset is the counts' alone: the stop, the silences, the window's count, kept and healed stay.
+void test_drive_gcs_reset_leaves_the_rules() {
+  auto* s = new Stopper();
+  TEST_ASSERT_TRUE(s->c.begin(8));
+  CachedDrive d(s->c, s->dev);
+  s->arm(d);
+  s->link.initWorks = true;
+  s->dev.failReads = 1;
+  TEST_ASSERT_TRUE(d.read(90, s->buf, 1));  // (kept, and read the second time)
+  TEST_ASSERT_EQUAL_UINT32(1, d.kept());
+  TEST_ASSERT_EQUAL_UINT32(1, d.healed());
+  s->link.answersNow = false;
+  s->link.initWorks = false;
+  stop(d, s->dev, s->buf, 300, 2);
+  d.windowFailed(700);
+  d.windowFailed(700);
+  d.resetStats();
+  TEST_ASSERT_FALSE(askedFailing(d, s->dev, s->buf, 300, 2));  // the next disk call takes the reset
+  TEST_ASSERT_EQUAL_UINT32(1, d.kept());
+  TEST_ASSERT_EQUAL_UINT32(1, d.healed());
+  d.windowFailed(701);
+  d.windowFailed(701);
+  TEST_ASSERT_TRUE(d.writesOff());  // the second drop, the reset between
+  delete s;
+}
+
+// FatFs's window that won't write. Once: nothing: FatFs writes it again. The same sector again with no
+// write of it taken: a remount; a write taken between: from the start; another sector: from the start.
+// The second such remount, and no more writes: reads go on, and the next boot asks again.
+void test_drive_a_window_that_wont_write() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS];
+  d.setScratch(scratch);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  const Sector w = filled(0x33);
+  d.windowFailed(700);
+  TEST_ASSERT_FALSE(d.remountDue());
+  TEST_ASSERT_TRUE(d.write(700, w.data(), 1));  // the one-off: taken
+  d.windowFailed(700);
+  TEST_ASSERT_FALSE(d.remountDue());
+  d.windowFailed(701);  // another sector: from the start
+  TEST_ASSERT_FALSE(d.remountDue());
+  d.windowFailed(701);
+  TEST_ASSERT_TRUE(d.remountDue());
+  TEST_ASSERT_FALSE(d.writesOff());
+  d.init();
+  TEST_ASSERT_TRUE(d.remounted(kCardSectors));
+  TEST_ASSERT_FALSE(d.remountDue());
+  TEST_ASSERT_TRUE(d.write(702, w.data(), 1));  // writes go on
+  // A write over it, of several sectors, counts too.
+  d.windowFailed(703);
+  uint8_t two[kSS * 2] = {};
+  TEST_ASSERT_TRUE(d.write(702, two, 2));
+  d.windowFailed(703);
+  TEST_ASSERT_FALSE(d.remountDue());
+  d.windowFailed(703);
+  TEST_ASSERT_TRUE(d.remountDue());
+  TEST_ASSERT_TRUE(d.writesOff());
+  const uint32_t writes = dev.writes;
+  TEST_ASSERT_FALSE(d.write(704, w.data(), 1));
+  TEST_ASSERT_EQUAL_UINT32(writes, dev.writes);
+  TEST_ASSERT_EQUAL_UINT32(1, d.stats().refused);
+  d.init();
+  TEST_ASSERT_TRUE(d.remounted(kCardSectors));
+  TEST_ASSERT_TRUE(d.writesOff());
+  TEST_ASSERT_TRUE(d.read(704, buf, 1));
+  // The next boot's mount: a new CachedDrive: nothing kept.
+  CachedDrive next(c, dev);
+  next.setScratch(scratch);
+  TEST_ASSERT_TRUE(next.remember(kCardSectors));
+  TEST_ASSERT_TRUE(next.write(704, w.data(), 1));
+}
+
 void test_drive_foreign_card() {
   RamDevice dev;
   SectorCache c;
@@ -899,6 +2224,198 @@ void test_drive_identity_without_scratch() {
   TEST_ASSERT_TRUE(d.foreign());
 }
 
+// A command with no answer once, the card back at the look's init, the same card: the read asked once more
+// in that call, and FatFs handed the card's bytes, never the error, whoever read: one sector or a run, the
+// cache on or off. Nothing else moves: no remount, nothing stopped or silent, kept and healed counted, and
+// the cache holds the sector as from any read. For good: two tries and two looks, then FatFs's error, each
+// time it is asked. A second try the card answers and fails: its own look says so, and FatFs's error.
+void test_drive_reads_a_kept_fault_once_more() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS * 4];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  // One sector, through the cache, which holds it after.
+  noAnswer(dev, link, 300, 1);
+  TEST_ASSERT_TRUE(d.read(300, buf, 1));
+  TEST_ASSERT_TRUE(dev.equals(300, buf));
+  TEST_ASSERT_EQUAL_UINT32(1, dev.badTaken);
+  TEST_ASSERT_EQUAL_UINT32(1, link.inits);
+  TEST_ASSERT_EQUAL_UINT32(1, d.kept());
+  TEST_ASSERT_EQUAL_UINT32(1, d.healed());
+  TEST_ASSERT_EQUAL_UINT32(300, d.stats().faultLba);
+  TEST_ASSERT_EQUAL_UINT32(1, c.stats().failedReads);
+  TEST_ASSERT_FALSE(d.remountDue());
+  TEST_ASSERT_EQUAL_UINT32(0, d.remounts());
+  uint32_t reads = dev.reads;
+  TEST_ASSERT_TRUE(d.read(300, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(reads, dev.reads);  // (a hit)
+  // A run past the cache (the decoder's, a compaction's), the fault in its middle: all of it again, the
+  // first try's junk gone.
+  noAnswer(dev, link, 402, 1);
+  TEST_ASSERT_TRUE(d.read(400, buf, 4));
+  for (uint32_t k = 0; k < 4; ++k) TEST_ASSERT_TRUE(dev.equals(400 + k, buf + k * kSS));
+  TEST_ASSERT_EQUAL_UINT32(2, d.healed());
+  // The cache off: the same.
+  d.setEnabled(false);
+  noAnswer(dev, link, 500, 1);
+  TEST_ASSERT_TRUE(d.read(500, buf, 1));
+  TEST_ASSERT_TRUE(dev.equals(500, buf));
+  TEST_ASSERT_EQUAL_UINT32(3, d.healed());
+  d.setEnabled(true);
+  TEST_ASSERT_EQUAL_UINT32(3, d.kept());
+  TEST_ASSERT_EQUAL_UINT32(3, link.inits);
+  // For good: two tries and two looks, then FatFs's error; no third, and the same each time it is asked.
+  noAnswer(dev, link, 600, -1);
+  reads = dev.reads;
+  TEST_ASSERT_FALSE(d.read(600, buf, 2));
+  TEST_ASSERT_EQUAL_UINT32(5, dev.badTaken);
+  TEST_ASSERT_EQUAL_UINT32(5, link.inits);
+  TEST_ASSERT_EQUAL_UINT32(5, d.kept());
+  TEST_ASSERT_EQUAL_UINT32(3, d.healed());
+  TEST_ASSERT_EQUAL_UINT32(reads + 2 + 2 * 2, dev.reads);  // (the two tries, and each look's two sectors)
+  TEST_ASSERT_FALSE(d.read(600, buf, 2));
+  TEST_ASSERT_EQUAL_UINT32(7, dev.badTaken);
+  TEST_ASSERT_EQUAL_UINT32(0, d.stats().stoppedReads);
+  TEST_ASSERT_FALSE(d.tooSilent());
+  TEST_ASSERT_FALSE(d.remountDue());
+  dev.badReads = 0;
+  TEST_ASSERT_TRUE(d.read(600, buf, 2));
+  // The second try fails with the card answering (no data token, a CRC): no mark, and no third.
+  noAnswer(dev, link, 700, 1);
+  link.afterInit = [&] {
+    dev.mark = nullptr;
+    dev.badReads = 1;
+  };
+  const uint32_t asks = link.asks;
+  TEST_ASSERT_FALSE(d.read(700, buf, 1));
+  link.afterInit = nullptr;
+  TEST_ASSERT_EQUAL_UINT32(9, dev.badTaken);
+  TEST_ASSERT_EQUAL_UINT32(asks + 2, link.asks);
+  TEST_ASSERT_EQUAL_UINT32(8, link.inits);  // (600's two reads took 4; the second look here, the status alone)
+  TEST_ASSERT_EQUAL_UINT32(8, d.kept());
+  TEST_ASSERT_EQUAL_UINT32(3, d.healed());
+  TEST_ASSERT_TRUE(d.read(700, buf, 1));
+}
+
+// The second try is a kept look's alone. No link or nothing armed (no look), the card answering (a CRC, no
+// data token: the driver's tries were the tries), silent past its init, an identity the look can't read,
+// another card at the look, a remount owed, a foreign session: each read once, as before.
+void test_drive_reads_again_only_after_a_look_that_kept_the_card() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS * 2];
+  d.setScratch(scratch);
+  FakeLink link;
+  // A read of 100 that fails, for good (`marks`: with no answer): how many tries reached the card.
+  const auto tries = [&](bool marks) {
+    noAnswer(dev, link, 100, -1);
+    if (!marks) dev.mark = nullptr;
+    const uint32_t taken = dev.badTaken;
+    TEST_ASSERT_FALSE(d.read(100, buf, 2));
+    dev.badReads = 0;
+    return dev.badTaken - taken;
+  };
+  TEST_ASSERT_EQUAL_UINT32(1, tries(true));  // no link
+  d.setLink(&link);
+  TEST_ASSERT_EQUAL_UINT32(1, tries(true));  // nothing armed
+  TEST_ASSERT_EQUAL_UINT32(0, link.asks);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  link.marked = false;
+  TEST_ASSERT_EQUAL_UINT32(1, tries(false));  // the card answered
+  TEST_ASSERT_EQUAL_UINT32(0, link.inits);
+  link.initWorks = false;
+  TEST_ASSERT_EQUAL_UINT32(1, tries(true));  // silent
+  mountAgain(d, buf);
+  link.initWorks = true;
+  link.afterInit = [&] { dev.failReads = 2; };  // (sector 0, twice)
+  TEST_ASSERT_EQUAL_UINT32(1, tries(true));  // an identity the look can't read
+  link.afterInit = nullptr;
+  TEST_ASSERT_TRUE(d.remountDue());
+  mountAgain(d, buf);
+  dev.sectors.clear();
+  formatLike(dev, 8192, 0xB);
+  TEST_ASSERT_EQUAL_UINT32(1, tries(true));  // another card
+  TEST_ASSERT_TRUE(d.remountDue());
+  TEST_ASSERT_EQUAL_UINT32(1, tries(true));  // a remount owed
+  d.init();
+  TEST_ASSERT_FALSE(d.remounted(kCardSectors));
+  TEST_ASSERT_TRUE(d.foreign());
+  TEST_ASSERT_EQUAL_UINT32(1, tries(true));  // foreign
+  TEST_ASSERT_EQUAL_UINT32(0, d.kept());
+  TEST_ASSERT_EQUAL_UINT32(0, d.healed());
+}
+
+// A kept look, then a second try that leaves the card silent past its init: one silence for that read, as a
+// first try's would be. The stop after kStopAfter such reads, too silent after kTooSilentAfter, never sooner.
+void test_drive_a_second_try_left_silent_counts_once() {
+  RamDevice dev;
+  formatLike(dev, 8192, 0xA);
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS], buf[kSS * 2];
+  d.setScratch(scratch);
+  FakeLink link;
+  d.setLink(&link);
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  link.afterInit = [&] { link.initWorks = false; };  // the first look's init answers, the second's doesn't
+  const auto keptThenSilent = [&](uint32_t lba) {
+    link.initWorks = true;
+    noAnswer(dev, link, lba, 2);
+    const uint32_t taken = dev.badTaken;
+    TEST_ASSERT_FALSE(d.read(lba, buf, 2));
+    TEST_ASSERT_EQUAL_UINT32(taken + 2, dev.badTaken);
+    TEST_ASSERT_FALSE(d.remountDue());  // (the mark stands: FatFs's remount)
+    mountAgain(d, buf);
+  };
+  for (uint32_t k = 0; k < CachedDrive::kStopAfter; ++k) {
+    TEST_ASSERT_EQUAL_UINT32(0, d.stats().stoppedReads);
+    keptThenSilent(100);
+  }
+  TEST_ASSERT_EQUAL_UINT32(CachedDrive::kStopAfter, d.kept());
+  // Stopped: not asked of the card.
+  noAnswer(dev, link, 100, -1);
+  const uint32_t taken = dev.badTaken;
+  TEST_ASSERT_FALSE(d.read(100, buf, 2));
+  TEST_ASSERT_EQUAL_UINT32(taken, dev.badTaken);
+  TEST_ASSERT_EQUAL_UINT32(1, d.stats().stoppedReads);
+  dev.badReads = 0;
+  // kStopAfter silences so far, one a read.
+  for (uint32_t k = CachedDrive::kStopAfter; k + 1 < CachedDrive::kTooSilentAfter; ++k) keptThenSilent(1000 + 10 * k);
+  TEST_ASSERT_FALSE(d.tooSilent());
+  keptThenSilent(5000);
+  TEST_ASSERT_TRUE(d.tooSilent());
+  TEST_ASSERT_EQUAL_UINT32(0, d.healed());
+}
+
+// A read the second try reads is a read that works: its count in the stop goes, as any's would.
+void test_drive_a_read_the_second_try_reads_ends_its_count() {
+  auto* s = new Stopper();
+  TEST_ASSERT_TRUE(s->c.begin(8));
+  CachedDrive d(s->c, s->dev);
+  s->arm(d);
+  for (uint32_t k = 0; k + 1 < CachedDrive::kStopAfter; ++k) TEST_ASSERT_TRUE(silence(d, s->dev, s->buf, 100, 2));
+  s->link.initWorks = true;
+  noAnswer(s->dev, s->link, 100, 1);
+  TEST_ASSERT_TRUE(d.read(100, s->buf, 2));
+  TEST_ASSERT_EQUAL_UINT32(1, d.healed());
+  s->dev.mark = nullptr;
+  s->link.answersNow = false;
+  s->link.initWorks = false;
+  for (uint32_t k = 0; k < CachedDrive::kStopAfter; ++k) TEST_ASSERT_TRUE(silence(d, s->dev, s->buf, 100, 2));
+  TEST_ASSERT_FALSE(askedFailing(d, s->dev, s->buf, 100, 2));
+  delete s;
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_hit_and_miss);
@@ -918,7 +2435,42 @@ int main(int, char**) {
   RUN_TEST(test_drive_without_memory);
   RUN_TEST(test_drive_write_retried_once);
   RUN_TEST(test_drive_identity);
+  RUN_TEST(test_drive_looks_after_a_fault_in_its_call);
+  RUN_TEST(test_drive_leaves_the_rest_to_the_remount);
+  RUN_TEST(test_drive_a_look_that_cant_read_the_identity);
+  RUN_TEST(test_drive_identity_with_no_size);
+  RUN_TEST(test_drive_stops_asking_for_a_read_that_keeps_leaving_it_silent);
+  RUN_TEST(test_drive_never_stops_a_read_the_card_answered);
+  RUN_TEST(test_drive_a_card_put_back_asks_again);
+  RUN_TEST(test_drive_a_kept_look_leaves_no_note);
+  RUN_TEST(test_drive_a_read_with_the_mark_standing_counts_for_nothing);
+  RUN_TEST(test_drive_an_identity_unread_is_a_silence);
+  RUN_TEST(test_drive_too_silent);
+  RUN_TEST(test_drive_writes_that_leave_it_silent_stop);
+  RUN_TEST(test_drive_a_card_put_back_starts_the_silent_writes_over);
+  RUN_TEST(test_drive_a_silence_the_next_look_ends_counts_for_nothing);
+  RUN_TEST(test_drive_a_read_under_a_remount_owed_keeps_the_note);
+  RUN_TEST(test_drive_foreign_still_stops_and_counts);
+  RUN_TEST(test_drive_a_taken_back_read_silence_leaves_the_write_count);
+  RUN_TEST(test_drive_says_when_the_card_came_back);
+  RUN_TEST(test_drive_says_the_card_is_out_from_a_failed_mount_to_the_next);
+  RUN_TEST(test_drive_asks_again_after_a_while);
+  RUN_TEST(test_drive_a_write_elsewhere_leaves_the_stop);
+  RUN_TEST(test_drive_the_stops_are_kept_entry_by_entry);
+  RUN_TEST(test_drive_the_stop_with_the_cache_off);
+  RUN_TEST(test_drive_a_read_of_another_count_leaves_the_stop);
+  RUN_TEST(test_drive_eight_reads_and_the_oldest_anywhere);
+  RUN_TEST(test_drive_a_write_elsewhere_isnt_the_windows);
+  RUN_TEST(test_drive_a_look_holds_the_init_size_to_the_mount);
+  RUN_TEST(test_drive_the_fault_sector_is_the_last);
+  RUN_TEST(test_drive_a_remount_doesnt_forget_a_windows_first_failure);
+  RUN_TEST(test_drive_gcs_reset_leaves_the_rules);
+  RUN_TEST(test_drive_a_window_that_wont_write);
   RUN_TEST(test_drive_foreign_card);
   RUN_TEST(test_drive_identity_without_scratch);
+  RUN_TEST(test_drive_reads_a_kept_fault_once_more);
+  RUN_TEST(test_drive_reads_again_only_after_a_look_that_kept_the_card);
+  RUN_TEST(test_drive_a_second_try_left_silent_counts_once);
+  RUN_TEST(test_drive_a_read_the_second_try_reads_ends_its_count);
   return UNITY_END();
 }

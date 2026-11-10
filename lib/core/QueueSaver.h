@@ -31,7 +31,9 @@ struct QueueResume {
 //   few dozen lines per loop pass (a long queue never holds the loop), into
 //   a temporary file that then replaces the queue file. An edit while a
 //   write is under way drops that write; it starts again once the edits
-//   settle. A failed write is tried again 10 s later.
+//   settle. A failed write is tried again 10 s later, then at twice the wait, up
+//   to 5 minutes (each try can hold the loop for seconds), until one works or
+//   the card comes back (cardBack()).
 // - Edits that never settle (Auto DJ appending a 1-second track every
 //   second, each also pushing out the oldest entry at the cap: the device's
 //   soak, 2026-10-13, wrote nothing for 59 minutes): once the queue has
@@ -84,11 +86,16 @@ public:
   class Store {
   public:
     // The temporary file, opened (truncated) for writing: a sink for its
-    // bytes, or nullptr (can't).
+    // bytes, or nullptr (can't). Never over one that holds the queue (kept
+    // by commitTemp() below, or the one a boot read): that one is made the
+    // queue file first, or this fails.
     virtual ByteSink* openTemp() = 0;
     // The temporary file is complete: flush and close it, and make it the
-    // queue file. False: failed (the temporary file is removed; the queue
-    // file stays as it was).
+    // queue file. False: failed. Then the queue file stays as it was if the
+    // temporary file isn't whole on the storage (it is removed); if it is,
+    // and couldn't take the queue file's place (which may be gone by then),
+    // it is kept, whole, for a boot to read in place of a queue file that's
+    // gone or can't be read.
     virtual bool commitTemp() = 0;
     // A write dropped: close and remove the temporary file.
     virtual void discardTemp() = 0;
@@ -104,6 +111,7 @@ public:
   static constexpr uint32_t kContentDelayMs = 2000;   // after the last edit
   static constexpr uint32_t kPositionDelayMs = 1000;  // after the last move
   static constexpr uint32_t kRetryMs = 10000;         // after a failed write
+  static constexpr uint32_t kRetryMaxMs = 300000;     // ... the longest, twice over each time
   static constexpr uint32_t kLinesPerPass = 32;       // ~2 KB of paths
   // The longest the file may lag the queue before a write that edits
   // don't drop (above): a full queue's write takes 3-6 s of passes, so the
@@ -149,15 +157,17 @@ public:
   void loaded(uint32_t generation, bool rewrite, uint32_t nowMs);
   // The queue as it is now is less than the file of `generation`: what was
   // left of it when its library tracks couldn't be found (a boot or a
-  // rebuild with no library), or nothing (a queue that couldn't come across
-  // a rebuild). That isn't the listener's edit, so nothing is written: the
-  // file keeps the whole queue, and `fileLine` (its current line, as a boot
+  // rebuild with no library, or no room to keep them by their paths:
+  // lib/core QueueFile), or nothing (a queue that couldn't come across a
+  // rebuild, a file the boot couldn't read). That isn't the listener's
+  // edit, so nothing is written: the file keeps the whole queue, and
+  // `fileLine` (its current line, as a boot
   // picks it: the position saved for it, -1 for its header's) as the place
   // to come back to. Until the queue is the file's again (an edit written,
   // or loaded()), positions and resume points aren't saved (they would pair
   // this queue's positions with the file's lines), and fileIsQueue() is
-  // false: the remap then reads the file from fileLine(), as a boot would,
-  // not from the queue's own current entry.
+  // false: a remap that can read the file reads it from fileLine(), as a boot
+  // would, not from the queue's own current entry.
   void keptFile(uint32_t generation, int32_t fileLine);
   // Whether the file's lines are the queue's positions (or will be once the
   // write waiting is done): false after keptFile().
@@ -196,6 +206,11 @@ public:
   uint32_t snapshotWrites() const { return snapshotWrites_; }  // of writes(), from a snapshot
   uint32_t resumeWrites() const { return resumeWrites_; }
   uint32_t failures() const { return failures_; }
+  // The last failure's wait, until its next try.
+  uint32_t lastWaitMs() const { return lastWaitMs_; }
+  // The card came back: the next write isn't held by what the failures before it built up. Once
+  // for a run of failures, until a write works.
+  void cardBack(uint32_t nowMs);
   uint32_t lastWriteMs() const { return lastWriteMs_; }
 
 private:
@@ -260,6 +275,10 @@ private:
   uint32_t writeGeneration_ = 0;
   uint32_t writeStartMs_ = 0;
   uint32_t nextTryMs_ = 0;
+  uint32_t retryMs_ = kRetryMs;  // the next failed write's wait
+  uint32_t lastWaitMs_ = kRetryMs;
+  bool failedRun_ = false;  // a write has failed since the last that worked
+  bool backTaken_ = false;  // ... and cardBack() has been taken for them
   uint32_t lastWriteMs_ = 0;
   uint32_t writes_ = 0, snapshotWrites_ = 0, failures_ = 0;
 

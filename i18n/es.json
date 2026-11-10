@@ -1,7 +1,7 @@
 {
   "@@locale": "es",
   "@@autonym": "Español",
-  "@@note": "Spanish, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_es.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/es.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept: informal tú), and translated by a Fable agent (Claude) otherwise. A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. Reviewed message by message by a second Fable agent against en.json's contexts and rooms (meaning, agreement, the apps' words, typography, the fit checker); still no native speaker's review. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, with the Auto DJ engine's UI) were made the same way: the mobile app's Auto DJ words (Auto DJ, Ancla, Seguir el ambiente, Mantener la semilla, Umbral de similitud, Continuidad de BPM, Mezcla armónica, 'desde aquí') and a Fable agent's translation for the rest, fitted with the same checker; not yet reviewed by a native speaker.",
+  "@@note": "Spanish, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_es.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/es.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept: informal tú), and translated by a Fable agent (Claude) otherwise. A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. Reviewed message by message by a second Fable agent against en.json's contexts and rooms (meaning, agreement, the apps' words, typography, the fit checker); still no native speaker's review. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, with the Auto DJ engine's UI) were made the same way: the mobile app's Auto DJ words (Auto DJ, Ancla, Seguir el ambiente, Mantener la semilla, Umbral de similitud, Continuidad de BPM, Mezcla armónica, 'desde aquí') and a Fable agent's translation for the rest, fitted with the same checker; not yet reviewed by a native speaker. The mood filters' texts (November 2026, the Albums list's filters: mood.*) take the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_es.arb: its mood* keys, and clear for Clear); mood.albums_of, mood.tracks_of and mood.no_albums were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjSeedNoMatch), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The mood filters' Auto DJ text (November 2026, docs/MOOD-FILTERS.md 8.2: autodj.status_waits_fit) was made the same way: the mobile app's autoDjSeedNoMatch and its word for the filters (moodFilters), from mstream_music master at d17c3fa5, fitted to en.json's room, not yet reviewed by a native speaker. The mood filters' Auto DJ page (November 2026, docs/MOOD-FILTERS.md 8, S5): mood.smart_filters, mood.any and mood.no_data are the mobile app's words from mstream_music at d17c3fa5 (lib/l10n/app_es.arb: autoDjMoodTitle, autoDjAny, autoDjNoMoodData); autodj.smart_sub, autodj.status_fits, autodj.status_coverage_mood, autodj.status_few, autodj.status_few_sub, toast.autodj_few, toast.autodj_no_close, toast.autodj_plays_once, toast.autodj_no_mood and empty.no_track_fits were translated by a Fable agent (Claude), in the app's words where it has them (its autoDjNoMoodData for the mood, autoDjSeedNoMatch, mainSync for a sync), fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker. The screen's touch setting (November 2026, Output > Touch when off and the glance it can show: settings.screen_touch, its three values and their lines, glance.hint; settings.screen_off_sub rewritten, since a touch no longer wakes the screen unless the setting says so) was translated by a Fable agent (Claude), in this file's words for the screen's other settings, fitted to en.json's rooms (a note says where a room made a text shorter), not yet reviewed by a native speaker.",
   "boot.touch_hint": "¿Falla el táctil? Mantén un dedo en la pantalla.",
   "coach.header_tip": "Consejo {0} de {1}",
   "coach.header_hint": "toca para seguir",
@@ -83,6 +83,19 @@
   "toast.autodj_started": "Auto DJ: {0}",
   "toast.autodj_no_start": "Ninguna pista con vecinos de Auto DJ: inténtalo de nuevo",
   "toast.autodj_needs_index": "Necesita un índice de Auto DJ: lo añade la transferencia",
+  "toast.autodj_few": {
+    "one": "Solo {0} pista cumple los filtros: se repetirá",
+    "other": "Solo {0} pistas cumplen los filtros: se repetirán"
+  },
+  "toast.autodj_no_close": "Sin coincidencia cercana: cualquier pista que cumpla los filtros",
+  "toast.autodj_plays_once": "Suena una vez: luego se aplican los filtros",
+  "@toast.autodj_plays_once": {
+    "note": "With a ': ' to split at: 'Suena una vez, luego se aplican los filtros' is 333 px in Body, the toast's line 284."
+  },
+  "toast.autodj_no_mood": "Sin datos de ánimo: sincroniza esta tarjeta desde mStream",
+  "@toast.autodj_no_mood": {
+    "note": "ánimo and sincroniza: the mobile app's words (autoDjNoMoodData, mainSync)."
+  },
   "hud.bluetooth": "Bluetooth: {0}",
   "hud.bluetooth_connecting": "Bluetooth: conectando...",
   "hud.speaker_paused": "Altavoz, en pausa: B reproduce",
@@ -136,6 +149,7 @@
   "now_playing.autodj_off": "Desactivado",
   "now_playing.autodj_waiting": "Esperando",
   "now_playing.autodj_paused": "En pausa",
+  "glance.hint": "Controles con el botón de encendido",
   "sleep.title_left": "Temporizador: pausa en {0}",
   "@sleep.title_left": {
     "note": "The row's 'Temporizador de apagado' (the mobile app's) is 277 px with its state in the sheet title's 226 (Small): the titles and toasts say 'Temporizador'. 'quedan {0}' is ungrammatical when {0} is '1 min' or '1 s' (queda): 'pausa en {0}' (pauses in) takes any fill."
@@ -278,6 +292,33 @@
   "library.updates_at_boot": "Biblioteca: se actualiza al reiniciar",
   "library.updating_list": "Actualizando la biblioteca…",
   "library.updating_wait": "Actualizando la biblioteca: un momento",
+  "mood.filters": "Filtros",
+  "mood.happy": "Alegre",
+  "mood.neutral": "Neutral",
+  "mood.sad": "Triste",
+  "mood.relaxed": "Relajado",
+  "mood.aggressive": "Agresivo",
+  "mood.instrumental": "Instrumental",
+  "mood.vocals": "Vocal",
+  "mood.acoustic": "Acústico",
+  "mood.party": "Fiesta",
+  "mood.danceable": "Bailable",
+  "mood.strict": "Estricto",
+  "mood.standard": "Estándar",
+  "mood.loose": "Flexible",
+  "mood.clear": "Borrar",
+  "mood.albums_of": {
+    "one": "{0} de {1} álbum",
+    "other": "{0} de {1} álbumes"
+  },
+  "mood.tracks_of": {
+    "one": "{0} de {1} pista",
+    "other": "{0} de {1} pistas"
+  },
+  "mood.no_albums": "Ningún álbum coincide con tus filtros",
+  "mood.smart_filters": "Filtros inteligentes",
+  "mood.any": "Cualquiera",
+  "mood.no_data": "Sin datos de ánimo",
   "card.another": "Otra tarjeta: reiniciando",
   "card.back": "Tarjeta reinsertada: reiniciando",
   "queue_cap.full": {
@@ -363,6 +404,10 @@
   "empty.nothing_playing_title": "Nada en reproducción",
   "empty.queue_title": "Tu cola está vacía",
   "empty.pick_in_library": "Elige álbum, carpeta o pista en la Biblioteca.",
+  "empty.no_track_fits": "Ninguna pista de la tarjeta cumple los filtros",
+  "@empty.no_track_fits": {
+    "note": "'Ninguna pista de esta tarjeta cumple estos filtros' is 322 px in Small, the line 304."
+  },
   "empty.open_library": "Biblioteca",
   "@empty.open_library": {
     "note": "'Abrir Biblioteca' is 138 px in the button's 120 (Bold): the tab's name alone, beside its icon."
@@ -438,6 +483,7 @@
     "note": "The mobile app's words ('{pct} % o más parecido', its '%' without the space as format.percent writes it): they don't fit beside 'Umbral de similitud', so the value takes the row's second line, in the hint's place, as in German and Italian."
   },
   "autodj.strictness_sub": "cuánto debe parecerse cada elección",
+  "autodj.smart_sub": "cada elección se queda en estos ánimos",
   "autodj.bpm": "Continuidad de BPM",
   "autodj.bpm_sub": "± 8 BPM, o la mitad o el doble",
   "autodj.harmonic": "Mezcla armónica",
@@ -451,6 +497,16 @@
     "note": "'con vecinos' with no verb: a verb would agree with {0}, which doesn't pick the form ({1} does)."
   },
   "autodj.status_coverage": "BPM {0}% · tonalidad {1}%",
+  "autodj.status_fits": {
+    "one": "{0} de {1} pista cumple los filtros",
+    "other": "{0} de {1} pistas cumplen los filtros"
+  },
+  "autodj.status_coverage_mood": "BPM {0}% · tonalidad {1}% · ánimo {2}%",
+  "autodj.status_few": {
+    "one": "Solo {0} pista cumple los filtros",
+    "other": "Solo {0} pistas cumplen los filtros"
+  },
+  "autodj.status_few_sub": "Se repetirán · BPM {0}% · tonalidad {1}%",
   "autodj.status_found": {
     "one": "Índice de Auto DJ: {0} pista",
     "other": "Índice de Auto DJ: {0} pistas"
@@ -468,9 +524,13 @@
   "autodj.status_random": "selección aleatoria",
   "autodj.status_waits_repeat": "Esperando: se repite una pista",
   "autodj.status_waits_sleep": "Esperando: temporizador al fin de la cola",
+  "autodj.status_waits_fit": "Esperando: ninguna pista cumple los filtros",
+  "@autodj.status_waits_fit": {
+    "note": "The mobile app's autoDjSeedNoMatch ('Ninguna canción coincide con tus filtros'), with pista for canción as everywhere here; 'cumple' for the room: 'Esperando: ninguna pista coincide con los filtros' is 314 px in Small, the line 288."
+  },
   "autodj.status_paused": "En pausa: fallaron varias pistas",
   "settings.screen_off": "Apagar pantalla tras",
-  "settings.screen_off_sub": "se atenúa; toca y vuelve",
+  "settings.screen_off_sub": "se atenúa, luego se apaga",
   "settings.screen_never_sub": "encendida: más gasto",
   "settings.screen_off_15s": "15 s",
   "settings.screen_off_30s": "30 s",
@@ -487,6 +547,22 @@
   "settings.brightness_medium": "Medio",
   "settings.brightness_high": "Alto",
   "settings.brightness_max": "Máximo",
+  "settings.screen_touch": "Si la tocas apagada",
+  "@settings.screen_touch": {
+    "note": "'Toque si está apagada' is 181 px in 174: 'if you touch it (the screen) while off', tú as elsewhere."
+  },
+  "settings.screen_touch_nothing_sub": "con el botón de encendido",
+  "@settings.screen_touch_nothing_sub": {
+    "note": "'solo el botón de encendido' is 175 px in 174: 'with the power button' (it turns the screen on)."
+  },
+  "settings.screen_touch_wake_sub": "un toque la enciende",
+  "settings.screen_touch_glance_sub": "un toque muestra la pista",
+  "settings.screen_touch_nothing": "Nada",
+  "settings.screen_touch_wake": "Activar",
+  "@settings.screen_touch_wake": {
+    "note": "As Android's Spanish wakes a screen ('tocar para activar'), and short: 'Encender' (76 px in Body) would drop to Small (60 px) in the 74 px pill, the row's only value in Small."
+  },
+  "settings.screen_touch_glance": "Pista",
   "settings.idle_off": "Apagar si inactivo",
   "settings.idle_off_sub": "en pausa, con batería",
   "settings.idle_never_sub": "encendido: más gasto",
@@ -579,6 +655,7 @@
   "library_row.rescan_body": "Relee las etiquetas de sus propios archivos (las de la transferencia se quedan). Minutos en una tarjeta grande.",
   "library_row.rescan_started": "Releyendo las etiquetas",
   "library_row.rescan_no_card": "Etiquetas: solo se leen de una tarjeta",
+  "library_row.rescan_unread": "Error de lectura al iniciar: reinicia para reintentar",
   "bt.name_not_paired": "Auriculares Bluetooth",
   "bt.name_default": "Auriculares",
   "bt.status_not_paired": "Sin auriculares emparejados",

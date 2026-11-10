@@ -12,7 +12,7 @@
 // from what it already holds (app/HostQuery, main.cpp's hook); nothing here
 // reads the card or a clock. Host-tested: test_host_status.
 //
-//   @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87
+//   @status fw=v0.14.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87
 //           state=playing cid=5eedc0de0a1b2c3d.0000002a clock=ok bt=Alex%27s%20headphones
 //
 // (one line). The fields in this order, each key=value, one space between;
@@ -68,8 +68,10 @@ struct Facts {
   State state = State::Idle;
   // cid=: the card's id and its commit's generation (docs/METADATA.md
   // 2.5.2), from the root the boot read (cardroot::Root: never a read of
-  // the card here); not known: '-'.
+  // the card here); none: '-'. `cidUnknown`: the card failed the boot's reads of
+  // it, which says nothing of whether it has one: '?'.
   bool cidKnown = false;
+  bool cidUnknown = false;
   uint64_t cardId = 0;
   uint32_t generation = 0;
   // clock=: ok while the board's clock has a time it believes (the RTC's

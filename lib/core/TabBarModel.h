@@ -130,6 +130,27 @@ inline LabelFit labelFit(int tab, int labelW) {
 uint8_t dirty(const State& drawn, const State& now);
 constexpr uint8_t kAll = (1u << kTabs) - 1u;
 
+// The glance ("Touch when off": Track; ui/TabBar::updateGlance()): its top
+// row is the Output cell's drawing alone (the output icon, the volume, the
+// battery) on the background, at the tab bar's pixels, with no tabs, no
+// plate, no label, no rule: nothing there looks like something to tap. It
+// is the Output cell as an inactive tab has it (glanceOf(): `active` 0, a
+// tab that can't be the Output one, so dirty() never shifts by another
+// value, and the label on its plate, so no neighbour's spill), and it is
+// drawn again only when that cell would be (glanceDirty()): the output,
+// the volume, the battery, charging, the low blink. Never for the Now
+// Playing cell's EQ steps, 4 a second while playing: the glance lasts 10 s,
+// and each of those would be a 104 x 36 push for nothing.
+constexpr uint8_t kOutputCell = 1u << (kTabs - 1);
+inline State glanceOf(State s) {
+  s.active = 0;
+  s.label = LabelFit::Plate;
+  return s;
+}
+inline bool glanceDirty(const State& drawn, const State& now) {
+  return (dirty(glanceOf(drawn), glanceOf(now)) & kOutputCell) != 0;
+}
+
 // The four EQ bars' heights (1-kEqMaxH px) at an animation step: a
 // fixed-looking pseudo-random dance, the same for a step every time.
 constexpr int kEqMaxH = 16;

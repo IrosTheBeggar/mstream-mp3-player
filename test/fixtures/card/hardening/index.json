@@ -278,7 +278,34 @@
   "uses": "all",
   "expect": "present",
   "why": "ok",
-  "check": "a newer minor: 8 more header bytes, RECS rows of 80 bytes, a 13th run field, an unknown section",
+  "check": "a newer minor: 8 more header bytes, RECS rows of 80 bytes whose bytes 72-79 (0xAB, flag bits 3-7 set) are no valid mood tail, so no record has scores (2.6.4), a 13th run field, an unknown section",
+  "same": "tags-0000002a.bin"
+ },
+ {
+  "file": "mptg-moods-longer.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "a newer minor: RECS rows of 88 bytes, the mood tail at 72-79 and 0xAB from 80, read by their 80-byte prefix: tags-moods.bin's records, their scores too",
+  "same": "tags-moods.bin"
+ },
+ {
+  "file": "mptg-tail-invalid.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "RECS rows of 80 bytes, each record's tail broken in its own way (bit 0 clear, a flag bit of 3-7 set, byte 79 not 0, a value of 101 or 254): no record has scores, and every record reads (2.6.4)",
+  "same": "tags-0000002a.bin"
+ },
+ {
+  "file": "mptg-stride-76.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "RECS rows of 76 bytes whose bytes 72-75 begin a valid tail (03 3A 46 1D, valid if read with zeros after it): a stride under 80 has no tail, so no record has scores (2.6.4)",
   "same": "tags-0000002a.bin"
  },
  {
@@ -585,6 +612,110 @@
   "expect": "present",
   "why": "ok",
   "check": "ACKS: rows of 32 bytes, a newer minor's, read by their 24-byte prefix"
+ },
+ {
+  "file": "msmf-waves-no-mpdj.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "COMP's MPWF row: no MPDJ row: the root's second row"
+ },
+ {
+  "file": "msmf-waves-between.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "COMP's MPWF row: between MPTG and MPDJ: readers don't check its place"
+ },
+ {
+  "file": "msmf-waves-first.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "COMP's MPWF row: before MPTG: readers don't check its place"
+ },
+ {
+  "file": "msmf-waves-name-upper.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "COMP's MPWF row: waves-0000002A.bin: uppercase hex"
+ },
+ {
+  "file": "msmf-waves-name-generation.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "COMP's MPWF row: the name's digits aren't the row's generation"
+ },
+ {
+  "file": "msmf-waves-name-stem.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "COMP's MPWF row: wave-0000002a.bin: another stem"
+ },
+ {
+  "file": "msmf-waves-name-empty.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "COMP's MPWF row: the name's offset 0: the empty string"
+ },
+ {
+  "file": "msmf-waves-two.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "COMP's MPWF row: two MPWF rows: neither counts"
+ },
+ {
+  "file": "msmf-waves-key.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "COMP's MPWF row: the key isn't zeros: the row reads, the file doesn't match"
+ },
+ {
+  "file": "msmf-waves-file-bytes.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "COMP's MPWF row: fileBytes one more: the file doesn't match"
+ },
+ {
+  "file": "msmf-waves-header-crc.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "COMP's MPWF row: headerCrc wrong: the file doesn't match"
+ },
+ {
+  "file": "msmf-waves-name-range.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "string",
+  "check": "COMP: the MPWF row's name offset at STRS's end: a string rule, which costs the root for any kind"
+ },
+ {
+  "file": "msmf-waves-name-order.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "stringOrder",
+  "check": "COMP: the MPWF row's name offset back at the MPTG row's: a string rule, which costs the root for any kind"
  },
  {
   "file": "mspd-order.bin",
@@ -1094,6 +1225,469 @@
   "slot": {
    "row": 2,
    "read": "damaged"
+  }
+ },
+ {
+  "file": "mpwf-short.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "short",
+  "check": "39 bytes: below the common header's 40"
+ },
+ {
+  "file": "mpwf-short-directory.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "short",
+  "check": "200 bytes: the directory's end, 256, is past the file"
+ },
+ {
+  "file": "mpwf-magic.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "magic",
+  "check": "magic MPWX"
+ },
+ {
+  "file": "mpwf-major-0.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "major",
+  "check": "major 0: not a major"
+ },
+ {
+  "file": "mpwf-major-2.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "major",
+  "check": "major 2: a newer major"
+ },
+ {
+  "file": "mpwf-header-bytes-short.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "headerBytes",
+  "check": "headerBytes 216, below 224"
+ },
+ {
+  "file": "mpwf-header-bytes-odd.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "headerBytes",
+  "check": "headerBytes 228, not a multiple of 8"
+ },
+ {
+  "file": "mpwf-section-count.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "sectionCount",
+  "check": "sectionCount 65, above 64"
+ },
+ {
+  "file": "mpwf-file-bytes.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "fileBytes",
+  "check": "fileBytes 8 more than the file's length"
+ },
+ {
+  "file": "mpwf-header-crc.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "headerCrc",
+  "check": "headerCrc wrong"
+ },
+ {
+  "file": "mpwf-header-bytes-wrap.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "short",
+  "check": "headerBytes 0xFFFFFFF8: headerBytes + 32 x sectionCount is past the file (wrapped to 32 bits it is 24, and the header CRC is right for that)"
+ },
+ {
+  "file": "mpwf-layout-gap.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "layout",
+  "check": "WVSL at 264: 8 bytes past the directory's end, a gap of 8 or more"
+ },
+ {
+  "file": "mpwf-layout-odd-offset.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "layout",
+  "check": "WVSL at 260: not a multiple of 8"
+ },
+ {
+  "file": "mpwf-layout-overlap.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "layout",
+  "check": "WVSL at 248: inside the directory"
+ },
+ {
+  "file": "mpwf-layout-trailing.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "layout",
+  "check": "8 bytes after WVSL: the last section doesn't end at fileBytes"
+ },
+ {
+  "file": "mpwf-wvsl-twice.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "layout",
+  "check": "WVSL twice"
+ },
+ {
+  "file": "mpwf-section-end-wrap.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "layout",
+  "check": "an optional section of 0xFFFFFF00 bytes before WVSL: its end is past the file (wrapped to 32 bits it is the start of WVSL, placed there)"
+ },
+ {
+  "file": "mpwf-unknown-required.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "unknownRequired",
+  "check": "an unknown REQUIRED section, WVZZ, after WVSL"
+ },
+ {
+  "file": "mpwf-unknown-required-flags.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "unknownRequired",
+  "check": "an unknown section, WVZZ, after WVSL, flags 3: bit 0 is REQUIRED, whatever the other bits say"
+ },
+ {
+  "file": "mpwf-stride-short.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "shape",
+  "check": "WVSL's stride 128, below 256 (count doubled, so bytes = count x stride)"
+ },
+ {
+  "file": "mpwf-count-bytes.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "shape",
+  "check": "WVSL's count 8, bytes for 7"
+ },
+ {
+  "file": "mpwf-array-bytes-wrap.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "shape",
+  "check": "WVSL's count 7 + 2^24: count x stride isn't its 1,792 bytes (wrapped to 32 bits it is)"
+ },
+ {
+  "file": "mpwf-missing-wvsl.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "missing",
+  "check": "no WVSL, an optional section in its place"
+ },
+ {
+  "file": "mpwf-slot-bytes.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "enum",
+  "check": "slotBytes 512"
+ },
+ {
+  "file": "mpwf-bar-count.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "enum",
+  "check": "barCount 120"
+ },
+ {
+  "file": "mpwf-slot-stride.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "shape",
+  "check": "WVSL's stride 512: at least 256, but a later minor can't widen a slot"
+ },
+ {
+  "file": "mpwf-rows-zero.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "enum",
+  "check": "WVSL's count 0: no row is no file"
+ },
+ {
+  "file": "mpwf-misaligned.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "wvLayout",
+  "check": "headerBytes 232: WVSL at 264, off a slot boundary"
+ },
+ {
+  "file": "mpwf-header-bigger.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "wvLayout",
+  "check": "headerBytes 480: WVSL at 512, on a slot boundary, but the slots start at 256"
+ },
+ {
+  "file": "mpwf-wvsl-not-first.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "wvLayout",
+  "check": "an optional section before WVSL: WVSL at 312"
+ },
+ {
+  "file": "mpwf-unknown-optional.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "wvLayout",
+  "check": "an optional section after WVSL: the directory's second entry puts WVSL at 288, so a minor can add no section"
+ },
+ {
+  "file": "mpwf-unknown-optional-flags.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "wvLayout",
+  "check": "an optional section after WVSL, flags 2: bit 0 clear, so skipped, whatever the other bits say; the directory's second entry puts WVSL at 288"
+ },
+ {
+  "file": "mpwf-slot-crc.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "wvSlotCrc",
+  "check": "slot 2's CRC wrong",
+  "slot": {
+   "hash": "0x954A7DE3A079A42E",
+   "read": "damaged",
+   "reads": 2
+  }
+ },
+ {
+  "file": "mpwf-slot-wrong-row.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "wvSlotCrc",
+  "check": "slots 1 and 2 swapped, each CRC right for its own row",
+  "slot": {
+   "hash": "0x6137B0E2A6715752",
+   "read": "damaged",
+   "reads": 1
+  }
+ },
+ {
+  "file": "mpwf-flip-hash.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "wvSlotCrc",
+  "check": "slot 3: one bit of pathHash flipped",
+  "slot": {
+   "hash": "0xC48674AC937F2ADA",
+   "read": "damaged",
+   "reads": 3
+  }
+ },
+ {
+  "file": "mpwf-flip-length.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "wvSlotCrc",
+  "check": "slot 3: one bit of lengthMs flipped",
+  "slot": {
+   "hash": "0xC48674AC937F2ADA",
+   "read": "damaged",
+   "reads": 3
+  }
+ },
+ {
+  "file": "mpwf-flip-bar.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "wvSlotCrc",
+  "check": "slot 3: one bit of bar 100 flipped",
+  "slot": {
+   "hash": "0xC48674AC937F2ADA",
+   "read": "damaged",
+   "reads": 3
+  }
+ },
+ {
+  "file": "mpwf-flip-crc.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "wvSlotCrc",
+  "check": "slot 3: one bit of the CRC flipped",
+  "slot": {
+   "hash": "0xC48674AC937F2ADA",
+   "read": "damaged",
+   "reads": 3
+  }
+ },
+ {
+  "file": "mpwf-slots-unsorted.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "wvSlotOrder",
+  "check": "slots 1 and 2 swapped, their CRCs made right: hashes out of order",
+  "slot": {
+   "hash": "0x57017C0CC011BB1B",
+   "read": "broken",
+   "reads": 2
+  }
+ },
+ {
+  "file": "mpwf-slots-equal.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "wvSlotOrder",
+  "check": "slots 2 and 3 hold one hash, their CRCs right",
+  "slot": {
+   "hash": "0x7B41176323757DC0",
+   "read": "broken",
+   "reads": 2
+  }
+ },
+ {
+  "file": "mpwf-section-crc.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "sectionCrc",
+  "check": "WVSL's directory CRC wrong: every slot passes, so a writer's bug"
+ },
+ {
+  "file": "mpwf-truncated.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "fileBytes",
+  "check": "100 bytes cut, inside the last slot"
+ },
+ {
+  "file": "mpwf-truncated-resealed.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "layout",
+  "check": "100 bytes cut, fileBytes and the header CRC made to agree: WVSL runs past the end"
+ },
+ {
+  "file": "mpwf-truncated-row.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "the last slot cut, every field and CRC made to agree: a valid file of 6 rows. The root's entry tells them apart (fileBytes, headerCrc: 7.2); not the same as waves-0000002a.bin",
+  "slot": {
+   "hash": "0xF1B24FC757494F2B",
+   "read": "miss",
+   "reads": 1
+  }
+ },
+ {
+  "file": "mpwf-minor-1.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "minor 1: header bytes 48-223 not zero, a later minor's fields; read the same",
+  "same": "waves-0000002a.bin"
+ },
+ {
+  "file": "mpwf-reserved-set.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "minor 0 with the reserved fields and a padding byte set: not checked (the header CRC made right)",
+  "same": "waves-0000002a.bin"
+ },
+ {
+  "file": "mpwf-wvsl-not-required.bin",
+  "format": "MPWF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "WVSL's REQUIRED bit clear: a reader that knows the type doesn't look",
+  "same": "waves-0000002a.bin"
+ },
+ {
+  "file": "mpwf-uses-device-slot-crc.bin",
+  "format": "MPWF",
+  "uses": "device",
+  "expect": "present",
+  "why": "ok",
+  "check": "mpwf-slot-crc read by the device: the frame is good; the slot fails when read",
+  "slot": {
+   "hash": "0x954A7DE3A079A42E",
+   "read": "damaged",
+   "reads": 2
+  }
+ },
+ {
+  "file": "mpwf-uses-device-unsorted.bin",
+  "format": "MPWF",
+  "uses": "device",
+  "expect": "present",
+  "why": "ok",
+  "check": "mpwf-slots-unsorted read by the device: the frame is good; this lookup meets the sort rule",
+  "slot": {
+   "hash": "0x57017C0CC011BB1B",
+   "read": "broken",
+   "reads": 2
+  }
+ },
+ {
+  "file": "mpwf-uses-device-section-crc.bin",
+  "format": "MPWF",
+  "uses": "device",
+  "expect": "present",
+  "why": "ok",
+  "check": "mpwf-section-crc read by the device, which doesn't check it: a lookup hits",
+  "slot": {
+   "hash": "0xCADB3EFDEF4B2DD9",
+   "read": "hit",
+   "reads": 2
   }
  }
 ]

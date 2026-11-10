@@ -25,11 +25,12 @@ the MP3 Player tab's set in the mStream repository
 (`docs/designs/mp3-tab`, cards 01 section 5 and 05: alternate A).
 `@status cid=` (which card, at which commit) is newer, in the release
 after v0.11.0 (0.12.0): host-tested and built; its device check is step 9
-of the plan. So are `@time` and `@status clock=` (the board's clock, for
-the play log), in 0.12.0 too: host-tested and built; their device check
-is step 10. And `@format` (the card formatted in the player, from its own
-screen or at a computer's ask, over any card), in 0.12.0: host-tested and
-built; its device check is step 11, **on a spare card only**. Its second
+of the plan. Newer still, for 0.14.0: `@time` and `@status clock=` (the
+board's clock, for the play log), host-tested and built; their device
+check is step 10. And `@format` (the card formatted in the player, from
+its own screen or at a computer's ask, over any card), in 0.14.0 too:
+host-tested and built; its device check is step 11, **on a spare card
+only**. Its second
 step is a 2 s hold on the board, and a computer may ask it over a card
 the player reads too: the user's picks (October 2026) on the card
 transfer's set in the mStream repository (`docs/designs/card-transfer`,
@@ -62,21 +63,21 @@ card 06 section 5: alternate B).
   for the version (on its own, not with an Enter in the same write: right
   after a boot the console's Sync drops a key sent with its Enter) and says
   the card needs a firmware update. A board that answers `@status` is new
-  enough for `@count` and `@identify`. `@time` came in 0.12.0: an older
+  enough for `@count` and `@identify`. `@time` came in 0.14.0: an older
   board answers it `@err 7 time` (and its `@status` has no `clock=`), and
   that answer is how a sender tells, never the version; so with
-  `@format`, also 0.12.0's (`@err 7 format`). No answer to
+  `@format`, also 0.14.0's (`@err 7 format`). No answer to
   either within about a second: not this firmware running (another
   firmware, or none booted); only a reset can say more. A key added to
   `@status` later is missing from an older firmware's line, and its
-  absence is how a reader tells, never the version: `cid=` and `clock=`
-  came in 0.12.0.
+  absence is how a reader tells, never the version: `cid=` came in
+  0.12.0, `clock=` in 0.14.0.
 
 ## @status
 
 ```
 → @status
-← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 state=playing cid=5eedc0de0a1b2c3d.0000002a clock=ok bt=Alex%27s%20headphones
+← @status fw=v0.14.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 state=playing cid=5eedc0de0a1b2c3d.0000002a clock=ok bt=Alex%27s%20headphones
 ```
 
 One line, answered in the loop pass that reads the question, **never a
@@ -100,8 +101,8 @@ long, `bt=` gives way first, down to 36 bytes; past that the keys after
 | `music` | bytes or `?` | the indexed tracks' bytes. This firmware's index keeps no file sizes (a track's record is 32 bytes: its names, numbers and length), so it is always `?`; it is not read from the card. A later release can sum the sizes the walk records hold at the build and save the sum with `library.idx` |
 | `bat` | 0-100, or `-` | the power chip's battery reading the UI takes every 10 s (the tab bar's); `-` until the first |
 | `state` | `playing`, `paused`, `idle`, `host` | the player: `playing` also while a play waits for the headphones; `idle` stopped; `host` while a computer drives the dancer (the visualizer's host mode) |
-| `cid` | the card's id and its commit's generation, `<cardId>.<generation>`: 16 and 8 hex digits in lower case, leading zeros kept (`5eedc0de0a1b2c3d.0000002a`); or `-`. Since 0.12.0 | the root the boot read (docs/METADATA.md 2.5.2, 2.5.4: `/.mstream/manifest.bin` or `.tmp`, the one the election picked, checked whole; `Library::root()`): its `cardId`, and its `generation`, the number in the commit's file names (`tags-0000002a.bin`). Kept when the root's tags file then fails the boot's checks (the boot log's `[lib] the card:` line names that file, the generation and why: `no transfer data (the root's T tags-0000002a.bin, generation 42: missing)`; the library is the walk's alone): the root still names the card. `-`: no root (no `/.mstream`, or none valid), no PSRAM to read it, the internal flash, or no card mounted now (`card=` isn't `fat32` or `fat16`: a card pulled reads `none`). **Read once, at the boot**, never during `@status`: another card put in while on is a restart (the card's guard, at FatFs's remount, its first read of that card: ARCHITECTURE.md, Storage), and from the moment the guard finds it until that restart (about a second: FatFs has the other card mounted then, and `card=` says its kind) `cid=` is `-` (before that first read nothing on the board knows the card changed); but the same card pulled and put back keeps the boot's root until a restart, even if a computer wrote a new commit to it meanwhile |
-| `clock` | `ok` or `unset`. Since 0.12.0 | the board's clock ([@time](#time); `boardclock::ok()`): `ok` while it has a time it believes, the RTC's read at the boot or a computer's `@time` since; `unset` when the boot's reading wasn't believed (the RTC's voltage-low flag set, a date outside 2026-2099, no RTC) and no `@time` came since. A reader takes any other value as `unset` |
+| `cid` | the card's id and its commit's generation, `<cardId>.<generation>`: 16 and 8 hex digits in lower case, leading zeros kept (`5eedc0de0a1b2c3d.0000002a`); `-` or `?`. Since 0.12.0 | the root the boot read (docs/METADATA.md 2.5.2, 2.5.4: `/.mstream/manifest.bin` or `.tmp`, the one the election picked, checked whole; `Library::root()`): its `cardId`, and its `generation`, the number in the commit's file names (`tags-0000002a.bin`). Kept when the root's tags file then fails the boot's checks (the boot log's `[lib] the card:` line names that file, the generation and why: `no transfer data (the root's T tags-0000002a.bin, generation 42: missing)`; the library is the walk's alone), or when the card fails its reads (`its T tags-0000002a.bin, generation 42, unread`; the library stays: docs/METADATA.md 3.2.2): the root still names the card. `-`: no root (no `/.mstream`, or none valid), no PSRAM to read it, the internal flash, or no card mounted now (`card=` isn't `fat32` or `fat16`: a card pulled reads `none`). `?`: the card failed the boot's reads of the root, which says nothing of whether it has one, so a computer shouldn't take it for a card with none (docs/METADATA.md 3.2.2). Until the next boot, even if Auto DJ's later reads of it work. **Read once, at the boot**, never during `@status`: another card put in while on is a restart (the card's guard, at FatFs's remount, its first read of that card: ARCHITECTURE.md, Storage), and from the moment the guard finds it until that restart (about a second: FatFs has the other card mounted then, and `card=` says its kind) `cid=` is `-` (before that first read nothing on the board knows the card changed); but the same card pulled and put back keeps the boot's root until a restart, even if a computer wrote a new commit to it meanwhile |
+| `clock` | `ok` or `unset`. Since 0.14.0 | the board's clock ([@time](#time); `boardclock::ok()`): `ok` while it has a time it believes, the RTC's read at the boot or a computer's `@time` since; `unset` when the boot's reading wasn't believed (the RTC's voltage-low flag set, a date outside 2026-2099, no RTC) and no `@time` came since. A reader takes any other value as `unset` |
 | `bt` | the paired headphones' name, percent-encoded, or `-` | their own name once linked, before that the one saved at the pairing (`BtSink::shownName()`, the Output tab's); `-` with nothing paired, or a pairing whose name the board never learnt |
 
 **Percent-encoding** (`bt=`): RFC 3986's unreserved bytes (`A-Z a-z 0-9 -
@@ -126,7 +127,7 @@ board can send them:
 | ` music=` | 7 + 13 | never more than the size (`?` in this firmware) |
 | ` bat=` | 5 + 3 | `100` |
 | ` state=` | 7 + 7 | `playing` |
-| ` cid=` | 5 + 25 | always 25 (`-` is 1) |
+| ` cid=` | 5 + 25 | always 25 (`-` and `?` are 1) |
 | ` clock=` | 7 + 5 | `unset` (`ok` is 2) |
 | ` bt=` | 4 | |
 | **before `bt=`'s value** | **215** | |
@@ -202,14 +203,16 @@ value (`free=` is FatFs's count again, which it now follows).
 
 **Stopped part way** for the same reasons: a play that starts during the
 count (`@err 4 count playing`), the library update beginning (`@err 4
-count library`), a read error, the card mounted again, or FatFs's volume
-lock not had in its own 10 s (`@err 4 count card`). That `@err` is the
+count library`), a read error, a card that stopped answering (the status
+each piece asks first: a card that was out goes to FatFs's remount), the
+card mounted again, or FatFs's volume lock not had in its own 10 s (`@err
+4 count card`). That `@err` is the
 count's last line; nothing changed (`free=` is what it was).
 
 **How it counts** (`lib/core/FreeCount`, `storage/CardSpace`):
 
 - The FAT is read in **pieces of 32 KB** (64 sectors: about 13 ms on the
-  Core2's card at 25 MHz, one card command), **one piece per loop pass**,
+  Core2's card at 25 MHz, one card command and its status), **one piece per loop pass**,
   each under **FatFs's own volume lock**: `ff_mutex_take()` of the
   volume's drive, the lock every FatFs call takes (`lock_volume()` in
   FatFs; the decoder's reads, the card worker's, the queue's saves all
@@ -304,7 +307,7 @@ up: the new label, 5 s from then.
 ← @time 1792332204870                 (2.7 s later)
 ```
 
-The board's clock, since 0.12.0: the Core2's RTC (a BM8563 on its
+The board's clock, since 0.14.0: the Core2's RTC (a BM8563 on its
 internal I2C bus, M5Unified's `M5.Rtc`), read at the boot and made
 exact at its next tick (the catch below), and set by a computer. The
 play log (docs/METADATA.md 2.20) takes its plays' start times from it,
@@ -450,7 +453,7 @@ and the clock is `unset` or more than 2 s off. Always UTC: the board keeps no ti
 ← @format done size=63864569856 free=63843467264 cluster=32768
 ```
 
-The card formatted **in the player**, since 0.12.0. The computer can't
+The card formatted **in the player**, since 0.14.0. The computer can't
 format a card: `@format` only brings up the question on the board's
 screen, the one the board asks itself on a card it can't use (the
 no-card page's Format...), over any card in the slot (one the player
@@ -621,16 +624,16 @@ counted. An error changes nothing.
 | `@time` with a time that isn't digits | `@err 1 time` | (syntax) |
 | `@time` before 2026 or after 2099 | `@err 5 time` | (range) |
 | `@time <unix-ms>` | `@err 4 time rtc` | no RTC answered at the boot, or a read of it fails now (a write that fails later is tried again and logged) |
-| `@time` on v0.9.0-v0.11.0 | `@err 7 time` | (verb: not in this firmware) |
+| `@time` on v0.9.0-v0.13.0 | `@err 7 time` | (verb: not in this firmware) |
 | `@format` | `@err 4 format <why>` | the question not shown: `ui`, `screen`, `viz`, `busy`, `card`; the listener's Format refused: `card`, `size`, `busy`; the boot's format failed (its last line): `card`, `size`, `write`, `mkfs`, `check`, `files` |
-| `@format` on v0.9.0-v0.11.0 | `@err 7 format` | (verb: not in this firmware) |
+| `@format` on v0.9.0-v0.13.0 | `@err 7 format` | (verb: not in this firmware) |
 
 ## A visit, line by line
 
 ```
 (the port opened with DTR and RTS low: no reset, the music plays on)
 → @status
-← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=? tracks=1284 music=? bat=87 state=playing cid=5eedc0de0a1b2c3d.0000002a clock=ok bt=Alex%27s%20headphones
+← @status fw=v0.14.0 elf=63ee7a2b card=fat32 size=63864569856 free=? tracks=1284 music=? bat=87 state=playing cid=5eedc0de0a1b2c3d.0000002a clock=ok bt=Alex%27s%20headphones
                                       (FSINFO's count unknown: the page offers a count;
                                        the card is the one whose root is generation 42)
 → @count
@@ -642,7 +645,7 @@ counted. An error changes nothing.
 ← @count 100
 ← @count done free=38214565888
 → @status
-← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 state=paused cid=5eedc0de0a1b2c3d.0000002a clock=ok bt=Alex%27s%20headphones
+← @status fw=v0.14.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 state=paused cid=5eedc0de0a1b2c3d.0000002a clock=ok bt=Alex%27s%20headphones
 → @identify COM5
 ← @identify ok                        ("This one / COM5" on the board for 5 s, one buzz)
 → @time
@@ -650,11 +653,11 @@ counted. An error changes nothing.
 
 (a board whose card has no /.mstream)
 → @status
-← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=31914983424 free=20401094656 tracks=412 music=? bat=100 state=idle cid=- clock=ok bt=-
+← @status fw=v0.14.0 elf=63ee7a2b card=fat32 size=31914983424 free=20401094656 tracks=412 music=? bat=100 state=idle cid=- clock=ok bt=-
 
 (a board whose RTC lost its time: its battery ran flat)
 → @status
-← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=12 state=idle cid=5eedc0de0a1b2c3d.0000002a clock=unset bt=Alex%27s%20headphones
+← @status fw=v0.14.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=12 state=idle cid=5eedc0de0a1b2c3d.0000002a clock=unset bt=Alex%27s%20headphones
 → @time 1792332202
 ← @err 5 time                         (seconds, not ms: 1970-01-21)
 → @time 1792332202123
@@ -662,7 +665,7 @@ counted. An error changes nothing.
 
 (a board whose card is exFAT, as it came: the tab offers to format it)
 → @status
-← @status fw=v0.12.0 elf=63ee7a2b card=exfat size=63864569856 free=? tracks=- music=? bat=87 state=idle cid=- clock=ok bt=-
+← @status fw=v0.14.0 elf=63ee7a2b card=exfat size=63864569856 free=? tracks=- music=? bat=87 state=idle cid=- clock=ok bt=-
 → @format
 ← @format ok                          ("Format this card?" on the board)
 ← @format no                          (the listener tapped Cancel)
@@ -675,13 +678,13 @@ counted. An error changes nothing.
 ← @format 100
 ← @format done size=63864569856 free=63843467264 cluster=32768
 → @status
-← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=63843467264 tracks=0 music=? bat=87 state=idle cid=- clock=ok bt=-
+← @status fw=v0.14.0 elf=63ee7a2b card=fat32 size=63864569856 free=63843467264 tracks=0 music=? bat=87 state=idle cid=- clock=ok bt=-
 
-(a v0.11.0 board: no cid=, no clock=, no @format)
+(a v0.11.0 board: no cid=, no clock=, no @format; v0.12.0 and v0.13.0 have cid= and nothing more)
 → @status
 ← @status fw=v0.11.0 elf=5d0c9e41 card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 state=paused bt=Alex%27s%20headphones
 → @time 1792332202123
-← @err 7 time                         (older than 0.12.0: no clock to set)
+← @err 7 time                         (older than 0.14.0: no clock to set)
 → @format
 ← @err 7 format
 
@@ -699,7 +702,7 @@ counted. An error changes nothing.
   `percentEncode()`, the label's rule (`validLabel()`), the FSINFO rule
   (`freeCountValid()`), and when the count's progress lines go out
   (`Progress`).
-- **`lib/core/CardRoot`** (`test_card_jobs`' `test_the_root`): the root
+- **`lib/core/CardRoot`** (`test_card_jobs`' `test_the_root`; a read the card fails: `test_card_root`): the root
   that won the election keeps its card id and generation (`Root::hasRoot`,
   `cardId`, `generation`), also when its tags file then fails: `cid=`.
   The boot log's line (`describe()`) then names that file, the generation
@@ -871,7 +874,7 @@ counted. An error changes nothing.
   file failed) add 144 B more (4,358,960), IRAM still 124,883 B. Every
   guard passes. `@status` takes about 50 bytes more of the loop task's
   stack (ESTIMATED: the key's 31-byte buffer and its lengths).
-  **`@time` and `clock=`** (0.12.0), against 8db6c24, core2: IRAM
+  **`@time` and `clock=`** (0.14.0), against 8db6c24, core2: IRAM
   unchanged (`.iram0.text` 124,883 B); internal DRAM +40 B (`.dram0.data`
   +16, `.dram0.bss` +24: the clock's words and its spinlock); flash
   `.text` +3,268 B (the calendar, the RTC's write and read-back, the
@@ -883,7 +886,7 @@ counted. An error changes nothing.
   64 B: `firmware.bin` +256 B (4,363,776), IRAM and internal DRAM
   unchanged; the write is 15 bytes in three transactions where it was 7
   in one.
-  **`@format`** (0.12.0), against 015a3c5, core2: IRAM unchanged
+  **`@format`** (0.14.0), against 015a3c5, core2: IRAM unchanged
   (`.iram0.text` 124,883 B); internal DRAM +120 B (`.dram0.data` +32,
   `.dram0.bss` +88: the format's restart and its outcome); RTC slow memory
   28 B (`.rtc_noinit`: the request); flash `.text` +8,376 B, `.rodata`
@@ -893,7 +896,7 @@ counted. An error changes nothing.
   `format_if_empty`, never used), so it adds nothing. Every guard passes.
   While the boot's format runs: 64 KB of PSRAM for its work area and
   about 8.5 KB for FatFs's `FATFS` and `FIL`; nothing else runs then.
-  **The second step's hold** (0.12.0), core2, against the image that
+  **The second step's hold** (0.14.0), core2, against the image that
   left out a card the player reads (d8e797b, `firmware.bin` 4,395,792):
   that card's question back (its texts in ten languages and the mounted
   card's branch: the tree as it was at 64577ec, 4,398,096) and the hold
@@ -912,7 +915,7 @@ counted. An error changes nothing.
   `firmware.bin` 4,400,896 (+256 B; core2-dio 4,400,960). IRAM
   (`.iram0.text` 124,883 B), internal DRAM and RTC memory unchanged
   (57,928 B of `.dram0.data` and `.bss`, as before). Every guard passes.
-  **The clock's catch and its write on a second** (0.12.0), core2,
+  **The clock's catch and its write on a second** (0.14.0), core2,
   against d8855d7 (both built from the source alone, so with the same
   version string): IRAM unchanged (`.iram0.text` 124,883 B); internal
   DRAM +240 B (`.dram0.data`: `RtcSync`'s state, which starts with the
@@ -926,7 +929,7 @@ counted. An error changes nothing.
   7-byte read each (about 0.25 ms of the bus at 400 kHz: ESTIMATED);
   nothing otherwise. A `@time` adds two NVS writes (the phase removed,
   then kept) and the RTC's write moves to the loop.
-  **The hold button's room** (0.12.0: its label 6 px clear inside the
+  **The hold button's room** (0.14.0: its label 6 px clear inside the
   outline, 115 px; French's and Polish's shorter), core2, against the
   image above (from the source alone, 4,407,536): `.text` +8 B, `.rodata`
   unchanged (the two labels' 8 B taken by alignment); `firmware.bin`
@@ -942,7 +945,7 @@ counted. An error changes nothing.
   Every guard passes. The hold's frame is the same size as before, the
   panel and the strip both in PSRAM; a press on the dialog no longer
   draws the card. NOT MEASURED on the device yet.
-  **The moving list and the restarts** (0.12.0: the play log's slot waits
+  **The moving list and the restarts** (0.14.0: the play log's slot waits
   for a list at rest, every restart asked holds the update step and Auto
   DJ), core2, against the image above: `firmware.bin` 4,414,304 (+32 B),
   the app 70 % of its slot; IRAM and internal DRAM unchanged (`.iram0.text`
@@ -1002,7 +1005,7 @@ each line whole with its `\n`. Close every other owner of the port first.
    computer): `cid=` still that root's, and the boot log's line `no
    transfer data (the root's T tags-<8 hex>.bin, generation <n>:
    missing)`. Every line still ends in `bt=`, whole for a usual name.
-10. **The clock** (0.12.0). The computer's time in ms comes from Python's
+10. **The clock** (0.14.0). The computer's time in ms comes from Python's
     `int(time.time() * 1000)`; note it beside each answer.
     - **The boot's line.** After a restart, the log's `[clock]` line:
       `... UTC, from the RTC (to the second; to a few ms at its next
@@ -1056,9 +1059,9 @@ each line whole with its `\n`. Close every other owner of the port first.
     - **Flat** (only if it happens anyway: don't drain a battery for it).
       A boot after the battery ran flat: `unset: the RTC lost its time
       (its voltage-low flag ...)`, `clock=unset`, until a `@time`.
-    - **Old firmware.** On a v0.11.0 board: `@time <ms>` gives `@err 7
-      time`.
-11. **@format** (0.12.0). **On the spare card only, never the music
+    - **Old firmware.** On a board older than 0.14.0 (v0.13.0, say):
+      `@time <ms>` gives `@err 7 time`.
+11. **@format** (0.14.0). **On the spare card only, never the music
     card**: take the music card out first. Have a computer with a card
     reader at hand to look at the spare after each format. The second
     question's red button, "Hold to erase", answers only to a hold:
@@ -1139,5 +1142,5 @@ each line whole with its `\n`. Close every other owner of the port first.
     - **Playing.** A track playing on the speaker (and once on the
       headphones): `@format`, Format..., hold the red button: paused
       first, no pop, the headphones let go, then the restart.
-    - **Old firmware.** On a v0.11.0 board: `@format` gives `@err 7
-      format`.
+    - **Old firmware.** On a board older than 0.14.0 (v0.13.0, say):
+      `@format` gives `@err 7 format`.

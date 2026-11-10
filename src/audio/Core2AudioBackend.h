@@ -103,7 +103,8 @@ public:
 
   struct Stats {
     uint32_t bufferedMs;       // audio waiting in the ring
-    uint32_t underruns;        // gaps the active output had to fill with silence
+    uint32_t underruns;        // reads the active output had to pad with silence (AudioShared)
+    uint32_t breaks;           // ... in how many runs: how often the audio broke off
     uint32_t btFramesPerSec;   // pulled by the Bluetooth stack, ~44100 while streaming
     float decodeLoad;          // time spent producing / audio produced, current track
     uint32_t decodeStackFree;  // bytes never used by the decode task
@@ -261,8 +262,10 @@ public:
   // audio waiting in the ring now, in ms. The
   // scrolling lists back off when it runs low (ScrollGovernor).
   uint32_t bufferedMsNow() const;
-  // The outputs' underrun count (free-running).
+  // The outputs' underrun count (free-running), and how many breaks those
+  // were (AudioShared::breaks).
   uint32_t underrunsNow() const { return shared_.underruns.load(std::memory_order_relaxed); }
+  uint32_t breaksNow() const { return shared_.breaks.load(std::memory_order_relaxed); }
   // The ring's size in ms (about 1,490).
   uint32_t ringCapacityMs() const;
   // The card worker's inputs (docs/METADATA.md 3.3.9; ScanScheduler::In):
@@ -545,10 +548,12 @@ private:
   // lock both tasks take, the file it is saved to (empty: not saved), when
   // its save is due (millis(); kOpusCacheSaveDelayMs after the last
   // change, so a run of opens saves once; kOpusCacheRetryMs after a write
-  // that failed, the cache marked dirty again: the queue's saver's wait)
+  // that failed, then at twice the wait, the cache marked dirty again: as the queue's saver)
   // and the save counts.
   static constexpr uint32_t kOpusCacheSaveDelayMs = 3000;
   static constexpr uint32_t kOpusCacheRetryMs = 10000;
+  static constexpr uint32_t kOpusCacheRetryMaxMs = 300000;  // (twice over each time: a try can hold the loop for seconds)
+  uint32_t opusCacheRetryMs_ = kOpusCacheRetryMs;
   OpusOpenCache opusCache_;
   std::mutex opusCacheLock_;
   std::string opusCachePath_;
