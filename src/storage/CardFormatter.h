@@ -63,7 +63,9 @@ struct Outcome {
   bool ok() const { return ran && why == cardmkfs::Why::Ok; }
 };
 
-// Each new percent (0-100), as it is reached: the boot screen's bar.
+// Each new percent (0-100), as it is reached: the boot screen's bar. 0
+// comes first, once the card is known to be the one confirmed and of a
+// size FAT32 takes, before anything is written.
 using Progress = void (*)(uint8_t percent, void* ctx);
 
 // The card on `cs` and `spi` (begun), at `hz`, formatted if a request is

@@ -272,6 +272,10 @@ Outcome runIfAsked(uint8_t cs, SPIClass& spi, uint32_t hz, Progress progress, vo
                 static_cast<unsigned long>(l.clusterBytes()), static_cast<unsigned long>(l.clusters),
                 static_cast<unsigned long>(l.fatSectors), static_cast<unsigned long>(l.dataStart),
                 static_cast<unsigned long long>(l.writeSectors));
+  // The checks passed: the screen says so before the first write (the
+  // bar's first percent is seconds away on a card of a terabyte or two,
+  // its MBR gone by then).
+  if (progress) progress(0, ctx);
   cardmkfs::Writer w(s_card, l);
   Lines lines;
   lines.progress = progress;

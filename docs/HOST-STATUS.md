@@ -612,7 +612,9 @@ takes a hand on the player, 2 s.
      new volume serial and disk signature): `cid=-`.
 
   The boot screen shows "Formatting the card" over a bar and "Leave the
-  card in and the player on"; the first screen after it, "Card
+  card in and the player on", from before the first write (the checks
+  passed, the bar empty: its first percent is seconds away on a card of
+  a terabyte or two); the first screen after it, "Card
   formatted: ready for your music", or "Couldn't format the card: try
   again".
 - **The lines**: `@format <percent>` each time the percent reaches
@@ -863,7 +865,7 @@ counted. An error changes nothing.
 - **`src/storage/CardFormatter`**: the request in RTC slow memory
   (`ask()`, a word at a time), and the boot's format (`runIfAsked()`:
   the request cleared, then taken only when `esp_reset_reason()` is the
-  restart's):
+  restart's; the bar's 0 once the card's checks pass):
   the SD driver's disk functions behind the `Writer` for its time
   (`ff_diskio_register()`), `f_mkfs()` with `VolToPart[]`'s partition 1,
   its 64 KB work area in PSRAM, the files through FatFs (its `FATFS` and
