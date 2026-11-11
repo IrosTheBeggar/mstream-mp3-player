@@ -3268,9 +3268,12 @@ says the firmware keeps one (2.15).
     - either for 30 days from the play's start at most, by the
       software's clock: past that the server's answer settles the play,
       whatever its reason.
-    - and a start more than 5 minutes ahead of the software's clock is
-      past that wait at once, whatever the reason: no later answer mends
-      the player's clock.
+    - a start more than 5 minutes ahead of the software's clock gives
+      no day to count those 30 from: such a play waits 30 days from
+      when the software first held it (a time it keeps with the play in
+      its store), so a software whose own clock runs slow doesn't settle
+      a fresh play. A `bad-time` answer for such a start settles it at
+      once, as above.
 
 **The post** (proposed, the software's; mStream's
 `POST /api/v1/stats/plays` takes up to 200 plays a call):
