@@ -46,8 +46,8 @@ follows METADATA 2.13.2.
 
 Usage:
 
-    python tools/synthtransfer.py --add-to CARD --synthetic [--seed S] [--waves] [--moods] [--dry-run]
-    python tools/synthtransfer.py --add-to CARD --mpdj FILE [--waves] [--moods] [--dry-run]
+    python tools/synthtransfer.py --add-to CARD --synthetic [--seed S] [--waves] [--moods] [--acks A] [--dry-run]
+    python tools/synthtransfer.py --add-to CARD --mpdj FILE [--waves] [--moods] [--acks A] [--dry-run]
     python tools/synthtransfer.py --check CARD [--mood-filter Q]
 
 CARD is a card's root (E:\\) or a folder holding a card tree (synthcard's
@@ -136,6 +136,20 @@ records at stride 72 with no tails, minor 0. About 10 s more for synthcard.py's 
 the 19,410 qfps in pure Python (a 5.2 MB T); on a card in a reader the
 19,410 opens and their reads add their own.
 
+--acks DEV:EPOCH:SEQ[,...] gives the root an ACKS section (METADATA 2.5.6:
+the plays the software has, which the device's play log trims by, 2.20.2;
+the listening stats' trim checks, docs/LISTENING-STATS.md 9.5): DEV a
+deviceId's 12 hex digits (as `Hm` and tools/playlog.py print it), EPOCH in
+hex (0x allowed), SEQ in decimal, each (DEV, EPOCH) once; the entries
+written in 2.5.6's order by card_fixtures.msmf_raw(acks=). It is a test
+card's word, not a sync's: nothing checks SEQ against the card's log (a
+seq above the log's own reads as "the software has them all"). Without
+--acks the root has no ACKS (a root this tool wrote before isn't carried
+forward). It changes nothing of the refusals: a card whose /.mstream isn't
+empty needs --replace, and one another program wrote --replace-foreign, as
+for any commit; the new root then names the new generation's files and
+carries these entries.
+
 --dry-run builds and checks everything in memory and prints what it would
 write; nothing is written. --check reads a card's /.mstream back as the
 boot does (a Python mirror of cardroot::read, then Auto DJ's open and the
@@ -180,6 +194,7 @@ import unicodedata
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import card_fixtures as cf  # noqa: E402  (mptg, msmf_raw, comp_row, build_field: docs/METADATA.md 2.17)
+import playlog  # noqa: E402  (acks_bytes, read_acks, device_bytes: docs/METADATA.md 2.5.6)
 import moodfilter as mf  # noqa: E402  (the mood tail, word and filter: docs/MOOD-FILTERS.md 5.3, 5.4)
 import mpdj  # noqa: E402  (prepare, write, check, encode_slot: docs/AUTODJ-INDEX.md)
 import mpwf  # noqa: E402  (build, Reader, companion_matches: docs/WAVEFORM-INDEX.md)
@@ -879,19 +894,62 @@ def tags_file(generation, card_id, records=None):
                     "readRules": 1, "producer": PRODUCER, "records": records or []})
 
 
-def root_file(generation, card_id, base, commit_time, tags, autodj, waves=None):
+def root_file(generation, card_id, base, commit_time, tags, autodj, waves=None, acks=None):
     """The root naming T, the index and the waveform index, in that order (no
-    LIBR: /music is the only root)."""
+    LIBR: /music is the only root); with `acks` ([(deviceId hex, epoch,
+    seq)], parse_acks'), its ACKS section too (2.5.6)."""
     rows = [cf.comp_row(cf.companion_name("MPTG", generation), tags)]
     for kind, companion in (("MPDJ", autodj), ("MPWF", waves)):
         if companion is not None:
             rows.append(cf.comp_row(cf.companion_name(kind, struct.unpack_from("<I", companion, 20)[0]), companion))
+    acks_data = playlog.acks_bytes(acks) if acks else None
     h = hashlib.sha256(b"synthtransfer commit\0" + struct.pack("<IQI", generation, card_id, commit_time) + tags +
-                       (autodj or b"") + (waves or b""))
+                       (autodj or b"") + (waves or b"") + (acks_data or b""))
     desc = {"generation": generation, "cardId": card_id, "commitTime": commit_time, "flags": FINAL,
             "commitId": int.from_bytes(h.digest()[:8], "little"), "producer": PRODUCER, "serverRevision": "",
             "baseGeneration": base, "serverUrlKey": 0}
-    return cf.msmf_raw(desc, rows, [])
+    return cf.msmf_raw(desc, rows, [], acks=acks_data)
+
+
+def parse_acks(v):
+    """--acks: DEV:EPOCH:SEQ[,...] -> [(deviceId hex, epoch, seq)] in the
+    order given (acks_bytes sorts them). DEV a deviceId's 12 hex digits (':'
+    or '-' between pairs allowed), not all zeros; EPOCH in hex, 1 to 2^64-1;
+    SEQ in decimal, 1 to 2^32-1; each (DEV, EPOCH) once. Refused otherwise."""
+    out, seen = [], set()
+    for part in (v or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        bits = part.split(":")
+        if len(bits) < 3:
+            raise Refused("--acks %r: DEV:EPOCH:SEQ" % part)
+        dev, epoch, seq = ":".join(bits[:-2]), bits[-2], bits[-1]
+        try:
+            d = playlog.device_bytes(dev)
+            e = int(epoch, 16)
+            s = int(seq, 10)
+        except ValueError:
+            raise Refused("--acks %r: DEV (12 hex digits):EPOCH (hex):SEQ (decimal)" % part)
+        if d == bytes(6):
+            raise Refused("--acks %r: a deviceId of zeros is no device's (2.20.6)" % part)
+        if not 0 < e < 1 << 64:
+            raise Refused("--acks %r: the epoch is 1 to 2^64-1 (0 is none)" % part)
+        if not 0 < s < 1 << 32:
+            raise Refused("--acks %r: the seq is 1 to 2^32-1" % part)
+        if (d, e) in seen:
+            raise Refused("--acks: %s:%x twice (each deviceId and epoch once: 2.5.6)" % (d.hex(), e))
+        seen.add((d, e))
+        out.append((d.hex(), e, s))
+    if not out:
+        raise Refused("--acks: no entry")
+    return out
+
+
+def acks_text(acks):
+    """[(deviceId hex, epoch, seq)] as --acks takes it, in 2.5.6's order."""
+    rows = sorted(acks, key=lambda a: (bytes.fromhex(a[0]), a[1]))
+    return ",".join("%s:%016x:%d" % (d, e, s) for d, e, s in rows)
 
 
 def default_card_id(seed):
@@ -995,8 +1053,15 @@ def check_root(b):
     # An MPWF row costs only itself (WAVEFORM-INDEX.md 7.2): of two, neither
     # counts, and neither does one with the wrong name. The root stays valid.
     entry = waves[0] if len(waves) == 1 and waves[0]["name"] == mpwf.file_name(waves[0]["generation"]) else None
+    # ACKS (2.5.6): optional; one that breaks its rules is none (the root
+    # stays valid). None: no section; "broken": one that fails them.
+    acks = None
+    if b"ACKS" in secs:
+        ao, an, ac, astride = secs[b"ACKS"]
+        acks = playlog.read_acks(b[ao:ao + an], ac, astride) or ("broken" if ac else None)
     return "ok", dict(f, comps=comps, waves=entry, commitTime=commit_time, flags=flags, commitId=commit_id,
-                      baseGeneration=base, producer=cstring(strs, producer), roots=secs.get(b"LIBR", (0, 0, 0, 0))[2])
+                      baseGeneration=base, producer=cstring(strs, producer), roots=secs.get(b"LIBR", (0, 0, 0, 0))[2],
+                      acks=acks)
 
 
 def elect(roots):
@@ -1230,6 +1295,9 @@ def describe_check(c, w):
         c["rootName"], r["generation"], r["cardId"], r["commitId"], r["baseGeneration"],
         "FINAL" if r["flags"] & FINAL else "a checkpoint", r["producer"]))
     w("T %s: source %d, %d records\n" % (c["tags"]["name"], c["tags"]["source"], c["tags"]["records"]))
+    a = r.get("acks")
+    w("ACKS: %s\n" % ("none" if a is None else "a section that breaks 2.5.6's rules (read as none)" if a == "broken"
+                      else "%d entr%s, %s" % (len(a), "y" if len(a) == 1 else "ies", acks_text(a))))
     if c.get("moods"):
         describe_moods(c["tags"], c["moods"], w)
     dj = c["autoDj"]
@@ -1387,8 +1455,10 @@ def add_to(card, synthetic=False, mpdj_file=None, tags_path=None, seed=1, genera
            commit_time=None, replace=False, dry_run=False, allow_missing=False, k=mpdj.DEFAULT_K,
            head=mpdj.DEFAULT_HEAD, floor=mpdj.DEFAULT_FLOOR, genres=16, unindexed=1.0, probe=None,
            out=None, ops=None, replace_foreign=False, waves=False, unshaped=1.0, moods=False, mood_coverage=92.0,
-           mood_null=1.0):
+           mood_null=1.0, acks=None):
     """Writes CARD's /.mstream (or, dry_run, says what it would write).
+    `acks`: the root's ACKS entries ([(deviceId hex, epoch, seq)],
+    parse_acks'), or None: no ACKS section.
     Returns a summary dict. `ops`, when given, gets each step in order
     (("write", name), ("remove", name), ("rename", from, to)): the tests'
     view of the commit order."""
@@ -1490,7 +1560,7 @@ def add_to(card, synthetic=False, mpdj_file=None, tags_path=None, seed=1, genera
             w("warning: %d files' times are outside FAT's (fatTime 0): the device confirms each by its qfp, a read "
               "at every build\n" % mo["unknownTime"])
     tags = tags_file(generation, card_id, records)
-    root = root_file(generation, card_id, base, commit_time, tags, autodj, wave_file)
+    root = root_file(generation, card_id, base, commit_time, tags, autodj, wave_file, acks)
 
     # The companions in COMP's order: their writes come first, in this order.
     companions = {tags_name: tags, dj_name: autodj}
@@ -1498,7 +1568,11 @@ def add_to(card, synthetic=False, mpdj_file=None, tags_path=None, seed=1, genera
         companions[wv_name] = wave_file
 
     def reads_back(c):
-        return c["present"] and c["autoDj"].get("present") and (wave_file is None or c["waves"].get("present"))
+        acks_back = c.get("root", {}).get("acks")
+        same_acks = (acks_back is None) if not acks else (acks_back != "broken" and acks_back is not None and
+                                                         sorted(acks_back) == sorted(acks))
+        return (c["present"] and c["autoDj"].get("present") and (wave_file is None or c["waves"].get("present"))
+                and same_acks)
 
     # Checked as the boot reads it, before anything is written.
     mem = dict(companions, **{"manifest.bin": root})
@@ -1533,8 +1607,10 @@ def add_to(card, synthetic=False, mpdj_file=None, tags_path=None, seed=1, genera
         w("  %s  %10d bytes  headerCrc 0x%08X\n" % (wv_name, len(wave_file), hc(wave_file)))
     w("  manifest.bin  %10d bytes  headerCrc 0x%08X  commitId 0x%016X (written last, through manifest.tmp)\n" % (
         len(root), hc(root), c["root"]["commitId"]))
+    if acks:
+        w("  ACKS: %d entr%s, %s\n" % (len(acks), "y" if len(acks) == 1 else "ies", acks_text(acks)))
     summary = {"generation": generation, "cardId": card_id, "stats": stats, "waves": wave_stats, "moods": mood_stats,
-               "steps": steps, "bytes": {n: len(b) for n, b in mem.items()}}
+               "steps": steps, "bytes": {n: len(b) for n, b in mem.items()}, "acks": acks}
     if dry_run:
         w("dry run: would, in %s:\n" % ms)
         for s in steps:
@@ -1597,6 +1673,9 @@ def main(argv=None):
                     "generation; the contract files the new root doesn't name deleted after it)")
     ap.add_argument("--replace-foreign", action="store_true", help="with --replace: also over a /.mstream another "
                     "program wrote (a transfer's: its tags file, index and plan deleted)")
+    ap.add_argument("--acks", metavar="DEV:EPOCH:SEQ[,...]", help="the root's ACKS entries (METADATA 2.5.6): a "
+                    "deviceId's 12 hex digits, the epoch in hex, the seq in decimal; the device's play log trims by "
+                    "them")
     ap.add_argument("--dry-run", action="store_true", help="build and check in memory, say what it would write")
     ap.add_argument("--allow-missing", action="store_true", help="--mpdj: accept paths that aren't on the card")
     ap.add_argument("--genres", type=int, default=16, help="--synthetic: genres (default 16)")
@@ -1623,6 +1702,8 @@ def main(argv=None):
             ap.error("--mood-coverage and --mood-null go with --moods")
         if a.check and a.moods:
             ap.error("--moods goes with --add-to (--check reads T's records whatever wrote them)")
+        if a.check and a.acks is not None:
+            ap.error("--acks goes with --add-to (--check says the root's ACKS whatever wrote them)")
         if a.check:
             card = card_root(a.check)
             c = check_card(card)
@@ -1643,10 +1724,11 @@ def main(argv=None):
         null = 1.0 if a.mood_null is None else a.mood_null
         if not (0 <= coverage <= 100 and 0 <= null <= 100):
             ap.error("--mood-coverage, --mood-null: 0 to 100")
+        acks = parse_acks(a.acks) if a.acks is not None else None
         add_to(a.add_to, a.synthetic, a.mpdj, a.tags, a.seed, a.generation, a.card_id, a.time, a.replace,
                a.dry_run, a.allow_missing, a.k, a.head, a.floor, a.genres, a.unindexed,
                replace_foreign=a.replace_foreign, waves=a.waves, unshaped=a.unshaped, moods=a.moods,
-               mood_coverage=coverage, mood_null=null)
+               mood_coverage=coverage, mood_null=null, acks=acks)
     except Refused as e:
         print("refused: %s" % e, file=sys.stderr)
         return 2
