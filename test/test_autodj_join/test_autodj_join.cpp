@@ -48,7 +48,10 @@
 //   real 19,412-track library, with Auto DJ off and on (the rebuild's own
 //   fragmentation, the join after it taking only what no smaller block
 //   holds), then the same built from T with the mood words' block
-//   (MOOD-FILTERS.md 9.5's pass rule).
+//   (MOOD-FILTERS.md 9.5's pass rule); and with the listening stats'
+//   hash-keyed blocks (docs/LISTENING-STATS.md 6.7, S1's StatsRun: the load's
+//   chunks at the boot, the boot's fold of a log never synced after the
+//   boot's join, all held through the updates) under the same rule.
 // Run: pio test -e native -f test_autodj_join
 #include <unity.h>
 
@@ -80,6 +83,9 @@
 #include "LibraryIndex.h"
 #include "LibrarySynth.h"
 #include "LibraryUpdate.h"
+#include "PlayLog.h"
+#include "StatsFile.h"
+#include "StatsFold.h"
 
 namespace cc = cardcontract;
 namespace mpdj = cardcontract::mpdj;
@@ -2676,8 +2682,94 @@ struct MoodRun {
   bool moods = false;  // T's records carry mood tails: the index has words
 };
 
+// The listening stats' hash-keyed half (docs/LISTENING-STATS.md 6.7; S1's
+// C8), every block through the model heap as psramAlloc gives them on the
+// device: at PlayHistory::begin()'s place (setup(), after Auto DJ's glue)
+// the Fold itself, its HOUR, DAYS and MARK blocks, and the load's chunks
+// (stats.bin's RCNT and TRKD rows, and the spare), the read's work memory
+// taken and given back; after the boot's joinNow() (the boot's fold carves
+// only in a pass where the join isn't Working), the boot's fold of a log
+// never synced (the ranges, the indexes, RCNT growing until the save
+// prunes it), then the save (its work memory taken and given back; no
+// compaction: something plays). Then held through every update step: no
+// give-back.
+struct StatsRun {
+  uint32_t rcntRows = 0, trkdRows = 0;  // stats.bin's, loaded
+  uint32_t hashes = 0;                  // the tracks the log's plays are of (TRKD's loaded rows the first)
+  uint32_t slots = 0;                   // the boot's log, never synced
+  // What it came to.
+  size_t peak = 0, held = 0, loaded = 0;
+  uint32_t reserveFailed = 0;  // pieces whose room couldn't be taken first (the fold carved on demand)
+  bool noMemory = false;       // the fold found none: nothing more folded, no save
+};
+
+uint64_t statsHash(uint32_t i) { return cc::fnv1a64(&i, sizeof(i)); }
+
+// The load: stats.bin's rows, in its order, as StatsFile's read loads them.
+void statsLoad(statsfold::Fold& f, const StatsRun& sr) {
+  namespace sf = statsfold;
+  TEST_ASSERT_TRUE(f.reserveLoad(sr.rcntRows, sr.trkdRows));
+  std::vector<uint64_t> h(sr.trkdRows);
+  for (uint32_t i = 0; i < sr.trkdRows; ++i) h[i] = statsHash(i);
+  std::sort(h.begin(), h.end());
+  std::vector<uint8_t> rows(static_cast<size_t>(std::max(sr.trkdRows, sr.rcntRows)) * 24);
+  for (uint32_t i = 0; i < sr.trkdRows; ++i) {
+    sf::Track t;
+    t.hash = h[i];
+    t.plays = 3;
+    t.firstAt = t.lastAt = 100000 + i;
+    t.lastOrd = 1;
+    sf::encodeTrack(t, rows.data() + i * 24);
+  }
+  TEST_ASSERT_TRUE(f.loadRows(sf::kTrkd, rows.data(), sr.trkdRows, 24));
+  // RCNT: the last 32 days' (day, hash) rows, by day then hash.
+  std::vector<std::pair<uint16_t, uint64_t>> rc;
+  for (uint32_t i = 0; i < sr.rcntRows; ++i) rc.emplace_back(static_cast<uint16_t>(498 + i % 32), statsHash(i % 5000));
+  std::sort(rc.begin(), rc.end());
+  for (uint32_t i = 0; i < sr.rcntRows; ++i) {
+    uint8_t* r = rows.data() + i * 12;
+    cc::put16(r, rc[i].first);
+    cc::put16(r + 2, 1);
+    cc::put64(r + 4, rc[i].second);
+  }
+  TEST_ASSERT_TRUE(f.loadRows(sf::kRcnt, rows.data(), sr.rcntRows, 12));
+}
+
+// The boot's fold of a log never synced: `slots` plays of `hashes` tracks,
+// 25 a day for 524 days (the scan's pieces of 128, the room taken before
+// each), then the save: plan and saved (the card's writes aside).
+void statsBoot(statsfold::Fold& f, StatsRun& sr) {
+  namespace sf = statsfold;
+  namespace pl = playlog;
+  const uint8_t dev[6] = {0x00, 0x00, 0x5e, 0x00, 0x53, 0x01};
+  cc::msmf::Acks none;
+  TEST_ASSERT_TRUE(f.beginBoot(none));
+  std::mt19937 rng(sr.slots);
+  for (uint32_t q = 1; q <= sr.slots; ++q) {
+    if ((q - 1) % 128 == 0 && !f.reserve(128)) ++sr.reserveFailed;
+    pl::Slot s;
+    s.kind = pl::kKindPlay;
+    s.outcome = pl::kCompleted;
+    s.source = pl::kSourceManual;
+    s.clock = pl::kClockRtc;
+    s.seq = q;
+    s.epoch = 0x1122334455667788ull;
+    std::memcpy(s.deviceId, dev, 6);
+    s.startedAt = sf::kMinMs + static_cast<uint64_t>(q / 25) * sf::kDayMs + (q % 25) * sf::kHourMs / 2;
+    s.playedMs = s.durationMs = 200000;
+    s.pathHash = statsHash(static_cast<uint32_t>(rng() % sr.hashes));
+    f.bootSlot(s, q <= pl::kFileSlots ? 1 : 0);
+  }
+  sr.noMemory = f.noMemory();
+  void* work = ModelHeap::alloc(statsfile::kWorkBytes);
+  TEST_ASSERT_NOT_NULL(work);
+  sf::Fold::Plan plan;
+  if (f.plan(sf::kMinMs + 530ull * sf::kDayMs, false, 0, &plan)) f.saved(plan);
+  ModelHeap::release(work);
+}
+
 UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& records, const synthcard::Card& card,
-                         int steps, const MoodRun& mood = MoodRun()) {
+                         int steps, const MoodRun& mood = MoodRun(), StatsRun* stats = nullptr) {
   UpdateRun u;
   ModelHeap::reset(4089u * 1024u);
   auto take = [](std::initializer_list<size_t> sizes, std::vector<void*>* into) {
@@ -2714,6 +2806,20 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   take({5120}, &queue);
   g_durations = ModelHeap::alloc(index.trackCount() * 2);
   take({3680, 3584, 15432, 4148}, nullptr);  // Auto DJ's glue, its engine, the open file
+  // PlayHistory::begin(): the stats' Fold and its load (StatsRun).
+  statsfold::Fold* fold = nullptr;
+  if (stats) {
+    void* at = ModelHeap::alloc(sizeof(statsfold::Fold));
+    TEST_ASSERT_NOT_NULL(at);
+    fold = new (at) statsfold::Fold(ModelHeap::alloc, ModelHeap::release);
+    void* work = ModelHeap::alloc(statsfile::kWorkBytes);
+    TEST_ASSERT_NOT_NULL(work);
+    TEST_ASSERT_TRUE(fold->begin());
+    fold->clear();
+    statsLoad(*fold, *stats);
+    ModelHeap::release(work);
+    stats->loaded = fold->held();
+  }
   take({40960, 9216}, nullptr);              // the dance
   take({153600, 76800, 65536}, nullptr);     // the UI, Thumbs' pools among its blocks
   take({204800, 256, 256, 110592, 24, 24}, &thumbs);
@@ -2739,6 +2845,13 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   joinNow(&u.bootLowest);
   u.bootJoined = ModelHeap::largest();
   u.bootTopKept = u.topKept;
+  if (fold) {
+    // The boot's fold, after the boot's join; its blocks held from here.
+    fold->resetPeak();
+    statsBoot(*fold, *stats);
+    stats->peak = fold->peak();
+    stats->held = fold->held();
+  }
   for (int step = 0; step < steps; ++step) {
     // enterFence(): the queue, Thumbs' pools, the join, then the old index.
     for (void* p : queue) ModelHeap::release(p);
@@ -2781,6 +2894,10 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   }
   join.release();
   index.clear();
+  if (fold) {
+    fold->~Fold();
+    ModelHeap::release(fold);
+  }
   return u;
 }
 
@@ -2923,6 +3040,106 @@ void test_a_library_update_in_a_model_heap() {
   // B), 77,640 B of it at the top.
   TEST_ASSERT_EQUAL_size_t(on.joined, moodOn.joined);
   TEST_ASSERT_EQUAL_size_t(0, moodOn.topKept);
+
+}
+
+// The listening stats' hash-keyed half in the same model (docs/LISTENING-
+// STATS.md 6.7; S1's StatsRun), against the run without them as the control
+// (the 19,412-track library, two update steps), at P = 2,214 and P = 19,478
+// played tracks: stats.bin's RCNT and TRKD as such a card keeps them
+// (P = 2,214: 1,365 RCNT rows, one chunk, and 1,000 TRKD rows, two; P =
+// 19,478: RCNT at its 4,096-row cap, three chunks, and TRKD at the forced
+// compaction's 96 KB, 4,092 rows in six), loaded at PlayHistory::begin()'s
+// place; then, after the boot's join, the boot's fold of a short log (300
+// slots) or of a full one never synced (13,106 slots, of 2,214 tracks; of
+// 4,092: TRKD's rows). The mood plan's pass rule (9.5), with Auto DJ placed
+// and where the heap puts its blocks: the margin kept at the boot and after
+// the update; the fence's frees, the build and the Live step leave the heap
+// as Auto DJ off has it (with the same stats); given back, off's block;
+// joined within 122,880 B of the control's, and at or over 245,764 B where
+// the control is. It holds at P = 2,214 with a short boot fold. It doesn't
+// with a full log's fold, nor with P = 19,478's resident blocks: those
+// shapes are measured and pinned here, and the case is reported ignored
+// (6.7's ladder is the owner's call: docs/LISTENING-STATS.md 9.5 C8).
+void test_the_listening_stats_in_a_model_heap() {
+  const uint32_t tracks = 19412;
+  const synthcard::Card card = synthcard::make(synth::userShape(tracks));
+  synthcard::Write dw;
+  dw.source = cc::mptg::kSourceDevice;
+  const std::vector<uint8_t> d = synthcard::tagsFile(card, dw);
+  cc::MemSource records(d.data(), static_cast<uint32_t>(d.size()));
+  std::vector<uint8_t> saved;
+  {
+    LibraryIndex idx;
+    LibraryBuilder b;
+    synthcard::Facts facts(card, false);
+    synthcard::SameRows rows(LibraryBuilder::Status::Scanned, false, true);
+    LibraryBuilder::Config c;
+    c.device = &records;
+    c.rows = &rows;
+    c.facts = &facts;
+    TEST_ASSERT_TRUE(b.build(idx, c).built);
+    MemorySink sink;
+    LibraryIndex::Inputs in;
+    in.cardId = 1;
+    TEST_ASSERT_TRUE(idx.save(sink, in));
+    saved.assign(sink.data(), sink.data() + sink.size());
+  }
+  const UpdateRun off = libraryUpdates(Dj::Off, saved, records, card, 2);
+  const UpdateRun on = libraryUpdates(Dj::Placed, saved, records, card, 2);
+  struct Shape {
+    uint32_t played, slots;
+    bool passes;
+    size_t joined;  // Auto DJ placed, after the update (pinned where the rule fails)
+  };
+  const Shape shapes[] = {{2214, 300, true, 249844}, {2214, 2 * playlog::kFileSlots, false, 180212},
+                          {19478, 300, false, 180212}, {19478, 2 * playlog::kFileSlots, false, 225268}};
+  std::string failing;
+  for (const Shape& sh : shapes) {
+    StatsRun sr;
+    sr.rcntRows = sh.played < 10000 ? 1365 : 4096;
+    sr.trkdRows = sh.played < 10000 ? 1000 : 4092;
+    sr.hashes = sh.played < 10000 ? sh.played : 4092;
+    sr.slots = sh.slots;
+    StatsRun srOff = sr, srHeaps = sr;
+    const UpdateRun statsOff = libraryUpdates(Dj::Off, saved, records, card, 2, MoodRun(), &srOff);
+    const UpdateRun statsOn = libraryUpdates(Dj::Placed, saved, records, card, 2, MoodRun(), &sr);
+    const UpdateRun statsHeaps = libraryUpdates(Dj::WhereThe, saved, records, card, 2, MoodRun(), &srHeaps);
+    printf("[join] with the listening stats at P = %u (stats.bin: RCNT %u rows, TRKD %u; the boot's fold: %u slots of "
+           "%u tracks, %u pieces without their room first): the Fold's blocks %u B loaded, %u B at the fold's peak, %u "
+           "B held after the save. The largest free block after the update %u B with Auto DJ off (the control's %u "
+           "B). Auto DJ on: free at least %u B while placing at the boot; after the update %u B, joined %u B (%u B "
+           "of it at the top), given back %u B; free at least %u B while placing; the fence as off's: %s. Where the "
+           "heap puts them: joined %u B, given back %u B. Joined against the control's %u B: %+ld B: the pass rule "
+           "%s\n",
+           (unsigned)sh.played, (unsigned)sr.rcntRows, (unsigned)sr.trkdRows, (unsigned)sr.slots, (unsigned)sr.hashes,
+           (unsigned)sr.reserveFailed, (unsigned)sr.loaded, (unsigned)sr.peak, (unsigned)sr.held,
+           (unsigned)statsOff.largest, (unsigned)off.largest, (unsigned)statsOn.bootLowest, (unsigned)statsOn.largest,
+           (unsigned)statsOn.joined, (unsigned)statsOn.topKept, (unsigned)statsOn.givenBack, (unsigned)statsOn.lowest,
+           statsOn.fence == statsOff.fence ? "yes" : "no", (unsigned)statsHeaps.joined, (unsigned)statsHeaps.givenBack,
+           (unsigned)on.joined, (long)statsOn.joined - (long)on.joined, sh.passes ? "holds" : "FAILS");
+    TEST_ASSERT_FALSE(sr.noMemory);
+    TEST_ASSERT_TRUE(sr.peak < 512 * 1024);  // 5.6's and 11's figure for the fold's peak
+    TEST_ASSERT_EQUAL_size_t(sr.held, srOff.held);
+    TEST_ASSERT_TRUE(statsOn.lowest >= kMargin);
+    TEST_ASSERT_TRUE(statsOn.bootLowest >= kMargin);
+    TEST_ASSERT_TRUE(statsHeaps.lowest >= kMargin);
+    TEST_ASSERT_TRUE(statsHeaps.bootLowest >= kMargin);
+    TEST_ASSERT_EQUAL_size_t(sh.joined, statsOn.joined);
+    const bool rule = statsOn.fence == statsOff.fence && statsHeaps.fence == statsOff.fence &&
+                      statsOn.largest == statsOff.largest && statsOn.givenBack == statsOff.largest &&
+                      statsHeaps.largest == statsOff.largest && statsHeaps.givenBack == statsOff.largest &&
+                      statsOn.joined + 122880 >= on.joined && (statsOn.joined >= 245764 || on.joined < 245764);
+    TEST_ASSERT_EQUAL(sh.passes, rule);
+    if (!rule) {
+      char m[96];
+      std::snprintf(m, sizeof(m), " P = %u with %u slots (joined %+ld B);", (unsigned)sh.played, (unsigned)sh.slots,
+                    (long)statsOn.joined - (long)on.joined);
+      failing += m;
+    }
+  }
+  TEST_ASSERT_FALSE(failing.empty());
+  TEST_IGNORE_MESSAGE(("6.7's pass rule fails (the ladder is the owner's call):" + failing).c_str());
 }
 
 int main(int, char**) {
@@ -2953,5 +3170,6 @@ int main(int, char**) {
   RUN_TEST(test_another_task_s_block_meanwhile);
   RUN_TEST(test_the_placement_in_a_model_heap);
   RUN_TEST(test_a_library_update_in_a_model_heap);
+  RUN_TEST(test_the_listening_stats_in_a_model_heap);
   return UNITY_END();
 }

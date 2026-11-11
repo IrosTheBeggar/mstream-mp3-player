@@ -661,6 +661,7 @@ Carves are MODELLED: + 12 B, rounded up to the 1/32 class, + a 4 B header (`test
   1. the resident tables in 16 KB chunks (5.6, the design from the start), so they fill the holes the boot leaves: the model shows whether they do;
   2. hash → id for the lists' rows only (696 rows, about 8.4 KB: one chunk), with a walk after any re-rank that brings a new hash, instead of covering RCNT's 4,096 rows as well (saves up to 49 KB);
   3. RCNT capped at 2,048 rows (24.6 KB).
+- **As built (S1 C8, MODELLED):** `test_the_listening_stats_in_a_model_heap` (`test/test_autodj_join`) carves the Fold, its HOUR, DAYS and MARK blocks and the load's chunks at `PlayHistory::begin()`'s place, and the boot's fold after the boot's `joinNow()`, then holds them through two update steps of the 19,412-track library, against the run without them. The rule holds at P = 2,214 (1,365 RCNT rows, 1,000 TRKD rows: 80,192 B resident) with a short boot fold (300 slots): joined 249,844 B against the control's 360,436 B (-110,592 B), the fence as off's. It fails with a full never-synced log's fold at P = 2,214 (peak 347,456 B; 129,344 B held after the save; joined 180,212 B, -180,224 B; the fence not off's), at P = 19,478's resident ceiling with a short fold (RCNT at 4,096 rows, TRKD at 4,092: 194,880 B resident; joined 180,212 B, -180,224 B), and with both (peak 445,760 B; joined 225,268 B, -135,168 B). Carving the load before the library's blocks, or at the boot's end, changes none of these (tried, not kept). So the chunks don't fill the boot's holes: the resident blocks come out of the update's largest free block (110,592 B of it for 80,192 B resident; 180,224 B for 194,880 B), and ladder step 1 is not enough. The case is reported ignored, its figures pinned: the next step is the owner's (the ladder's 2-3, which S1 alone can't take further than RCNT's cap, or a redesign: 13).
 
 ### 6.8 The rankers and the per-track read (the card worker)
 
@@ -1376,7 +1377,7 @@ A slow pass is a UI hitch, not an audio risk: the sinks draw on a ring of about 
 | `findTrack()`'s cost at a live fold | µs on the `[listen]` fold line | S2 |
 | The owner's distinct played tracks (P) and plays a day | `H` after the first boot; TRKS rows over weeks | S5 |
 | PSRAM free and largest while playing at v0.14.0, Auto DJ off and on | Main at bc29b54 as a control in the same script as S1's and S2's builds | S1 (L), S2 (B, C) |
-| Whether the resident chunks fill the boot's holes or come out of the largest free block (the pass rule, 6.7) | `StatsRun` at P = 2,214 and 19,478; `D` against main | S1 (C8, L), S2 (C13, B, C) |
+| Whether the resident chunks fill the boot's holes or come out of the largest free block (the pass rule, 6.7) | `StatsRun` at P = 2,214 and 19,478 (S1 C8, MODELLED: they come out of it; the rule fails past P = 2,214's short boot fold, 6.7); `D` against main | S1 (C8, L), S2 (C13, B, C) |
 | Internal RAM with Bluetooth at v0.14.0 | `s`'s ram= and min= over 10 minutes with the owner's headphones linked | S2, if the owner links them |
 | Whether the resident and transient blocks keep Opus's blocks placeable after a FLAC update | The model's `StatsRun`; S2 C, D | S2 |
 | How often a real sync changes `buildStamp` | The stamp logged at the boot and after each update | S5 |
@@ -1405,7 +1406,7 @@ What would change the plan:
   - this session's saves are refused (a partial scan, a changed `stats.bin`);
   - the rotation comes in the orderly end's flush with under 1 s of its budget left (`src/app/PlayHistory.cpp:307`; `lib/core/PlayLog.cpp:505, 437`).
   Each needs the second rotation of a session (6,553 plays), or a boot whose save failed or was skipped. C8 asserts each count exactly.
-- **PSRAM at the ceiling.** A card where nearly every track has been played takes about 267 KB resident (in chunks) and up to about 195 KB more during a walk. A failed allocation leaves names as "Counting plays…" and never loses data. Fallbacks: 6.7's ladder; u32 prefixes for the played set (4 B, confirmed by the full hash on a match), album bits from fewer chunks.
+- **PSRAM at the ceiling.** A card where nearly every track has been played takes about 267 KB resident (in chunks) and up to about 195 KB more during a walk. A failed allocation leaves names as "Counting plays…" and never loses data. Fallbacks: 6.7's ladder; u32 prefixes for the played set (4 B, confirmed by the full hash on a match), album bits from fewer chunks. S1 C8's model (6.7) already fails the pass rule with S1's blocks alone at P = 19,478's resident ceiling (194,880 B) and after a full never-synced log's fold: S1 L on the device decides it, and the owner the ladder.
 - **Orphans.** Renames, Opus conversions and NFC/NFD changes take plays out of the shelves until ORIG is followed. The totals stay right.
 - **RCNT's cap** shortens the 30-day window for very heavy listening. Its cell says how many days.
 - **UTC days** mark the wrong "today" in the listener's evening west of UTC (or morning east of it) until S6. O4 accepted that.
