@@ -146,22 +146,35 @@ bool Journal::begin(const uint8_t deviceId[6], const cc::msmf::Acks& acks) {
   bootsAtMount_ = ids_.boots;
   appended_ = false;
   settle();
-  startScan();
+  startScan(false);
   return state_ != State::Off;
 }
 
-void Journal::startScan() {
+void Journal::startScan(bool again) {
   closeScan();
   scanFile_ = 0;
   file_ = FileScan();
-  trimmable_ = 0;
+  trimmable_ = foldedBefore_ = 0;
   booted_.files = booted_.slots = 0;
   booted_.bytes = 0;
   booted_.cardSeq = booted_.cardBoot = 0;
+  booted_.partial = 0;
   state_ = State::Scanning;
+  if (c_.folds) {
+    // (Their folds from a scan before a remount dropped: its slots come
+    // again. And the scan reads on a new epoch too: another epoch's slots
+    // and other players' are folded.)
+    c_.folds->scanBegan(again);
+    return;
+  }
   // A new epoch has no slot on the card (it was drawn now): with no ACKS
   // to trim by either, there is nothing to read.
   if (newEpoch_ && acks_.count == 0) finishScan();
+}
+
+void Journal::partialFile() {
+  ++booted_.partial;
+  if (c_.folds) c_.folds->partial();
 }
 
 void Journal::remounted() {
@@ -170,7 +183,7 @@ void Journal::remounted() {
   settle();
   if (state_ == State::Ready && appended_) return;
   ++booted_.restarts;
-  startScan();
+  startScan(true);
 }
 
 bool Journal::shared(Asking& a, const char* path) {
@@ -253,8 +266,13 @@ bool Journal::scan(uint32_t maxSlots) {
     if (!scanF_) {
       char name[kNameCap];
       logName(scanFile_, name, sizeof(name));
-      scanF_ = fs_.open(name, tagstore::Fs::Mode::Read);
+      bool cardFailed = false;
+      scanF_ = fs_.openRead(name, &cardFailed);
       if (!scanF_) {
+        // Taken for a missing file, as it always was; an open the card
+        // failed is a file not read whole for the folds (its slots may be
+        // there).
+        if (cardFailed) partialFile();
         file_ = FileScan();
         ++scanFile_;
         continue;
@@ -283,17 +301,21 @@ bool Journal::scan(uint32_t maxSlots) {
           continue;
         }
         if (v != Verdict::Ok) continue;  // (damaged: skipped, 2.20.6)
+        if (c_.folds) c_.folds->slot(s, scanFile_);
         // The boot rules (2.20.4): every valid slot of this device and
         // epoch, a play's seq, a play's or a drop note's bootSeq.
         if (s.epoch == ids_.epoch && std::memcmp(s.deviceId, dev_, 6) == 0) {
           booted_.cardBoot = std::max(booted_.cardBoot, s.bootSeq);
           if (s.kind == kKindPlay) booted_.cardSeq = std::max(booted_.cardSeq, s.seq);
         }
-        // The trim (2.20.2): every play acknowledged, one at least, a play last.
+        // The trim (2.20.2): every play acknowledged, one at least, a play
+        // last; with folds, every play at or under the card's MARK too
+        // (or saved before the trim: finishScan()).
         file_.lastIsPlay = s.kind == kKindPlay;
         if (s.kind == kKindPlay) {
           file_.anyPlay = true;
           if (!acknowledged(s, &acks_)) file_.allAcked = false;
+          if (file_.allFolded && c_.folds && !c_.folds->covered(s)) file_.allFolded = false;
         }
       }
       file_.next += n;
@@ -303,12 +325,14 @@ bool Journal::scan(uint32_t maxSlots) {
       // Unreadable from here: kept, and what it holds past here unknown.
       file_.unjudged = true;
       file_.next = file_.slots;
+      partialFile();
     }
     if (file_.next < file_.slots) return false;
     fs_.close(scanF_);
     scanF_ = nullptr;
     if (!file_.past && !file_.unjudged && file_.anyPlay && file_.allAcked && file_.lastIsPlay)
       trimmable_ |= 1u << scanFile_;
+    if (file_.allFolded) foldedBefore_ |= 1u << scanFile_;
     file_ = FileScan();
     ++scanFile_;
   }
@@ -320,12 +344,26 @@ bool Journal::finishScan() {
   // boot count stored before any slot uses it (NVS's at the mount: a scan
   // begun again comes to the same count, or a higher one).
   const uint32_t boots = std::max(bootsAtMount_, booted_.cardBoot) + 1;
+  // The folds' save (docs/LISTENING-STATS.md 5.5), after the boot rules and
+  // before the trim: no slot is written before Ready, so nothing changes
+  // under it. Never after a partial scan (5.6): its MARK would pass slots
+  // it never read.
+  const bool save = c_.folds && booted_.partial == 0;
   if (!nvs_.storeBoots(boots)) {
+    // (No log this boot, and no trim; the fold is whole all the same.)
+    if (save) c_.folds->save(Folds::Why::Boot);
     state_ = State::Off;
     return true;
   }
   ids_.boots = bootSeq_ = boots;
   seq_ = std::max(seq_, booted_.cardSeq);
+  // With folds a file goes only when the card's MARK covers it: after a
+  // save every file the scan read; else (failed, refused, or none after a
+  // partial scan) those the MARK read at the boot covered.
+  if (c_.folds) {
+    const bool saved = save && c_.folds->save(Folds::Why::Boot);
+    trimmable_ &= saved ? ~0u : foldedBefore_;
+  }
   // The trim, plays.1.jnl to plays.9.jnl, then plays.jnl (the reference's
   // order): a file ACKS acknowledges whole that no twin shares. None
   // without ACKS.
@@ -346,8 +384,9 @@ bool Journal::finishScan() {
   return true;
 }
 
-bool Journal::unread(uint32_t* lost) {
+bool Journal::unread(uint32_t* lost, bool* uncovered) {
   *lost = 0;
+  *uncovered = false;
   tagstore::File* f = fs_.open(kPrevPath, tagstore::Fs::Mode::Read);
   if (!f) return false;
   const uint32_t slots = std::min(f->size(), kFileBytes) / kSlot;
@@ -360,6 +399,7 @@ bool Journal::unread(uint32_t* lost) {
     for (uint32_t k = 0; ok && k < n; ++k) {
       Slot s;
       if (decode(c_.buf + k * kSlot, kSlot, &s) != Verdict::Ok) continue;
+      if (s.kind == kKindPlay && !*uncovered && c_.folds && !c_.folds->covered(s)) *uncovered = true;
       if (s.kind == kKindDrop) {
         pending += s.playedMs;  // a note the software hasn't read: its count goes on
       } else if (acknowledged(s, &acks_)) {
@@ -420,7 +460,9 @@ Journal::Wrote Journal::rotate() {
     // (or, a twin on its chain, to a twin name: a delete would free the
     // twin's clusters).
     uint32_t lost = 0;
-    if (unread(&lost)) {
+    bool uncovered = false;
+    const bool whole = unread(&lost, &uncovered);
+    if (whole) {
       unreadFails_ = 0;
     } else {
       // A read the card fails now may work at the next try: nothing goes
@@ -431,6 +473,13 @@ Journal::Wrote Journal::rotate() {
       if (unreadFails_ < kUnreadTries) return Wrote::Failed;
       op(Op::Unread, kPrevPath, nullptr, lost);
     }
+    // The folds' save (docs/LISTENING-STATS.md 5.5) before plays.1.jnl
+    // leaves the log's names, deleted or renamed to a twin: when it holds a
+    // play the card's MARK doesn't cover, or wasn't read whole (what it
+    // holds past there unknown). Never after a partial scan (no save this
+    // session). The rotation goes on whatever the save comes to: plays are
+    // never held back for the stats.
+    if (c_.folds && booted_.partial == 0 && (uncovered || !whole)) c_.folds->save(Folds::Why::Rotation);
     const bool sharesChain = shared(a, kPrevPath);
     if (a.failed()) return Wrote::Failed;
     if (!sharesChain) {
@@ -639,6 +688,7 @@ Outbox::Tried Outbox::done(Tried t, const Played& p) {
     if (t.gaveUp) ++counts_.lost;
   }
   env_.tried(t, p);
+  if (t.did == Did::Written) env_.written(t.slot, p);  // (before the pop: `p` is the ring's)
   tracker_.pop();
   tries_ = 0;
   taken_ = false;
