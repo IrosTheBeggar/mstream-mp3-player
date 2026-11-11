@@ -3466,5 +3466,2211 @@
   ],
   "slots": 4,
   "lost": 0
+ },
+ {
+  "name": "update-quiet",
+  "note": "A saves 1-2 at its boot; a library update with nothing new: the give-back writes nothing, the re-read finds the stats.bin it stood on. A plays 3; the next boot folds it.",
+  "cap": 4,
+  "players": {
+   "A": {
+    "device": "00005e005301",
+    "epochs": [
+     "0x1122334455667788"
+    ],
+    "nvs": null
+   }
+  },
+  "in": {},
+  "steps": [
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793523600000,
+    "playing": true,
+    "safePoint": false,
+    "read": "absent",
+    "why": null,
+    "folded": 0,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {}
+   },
+   {
+    "do": "play",
+    "hash": "0x832a7da9ed0311e6",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520000000,
+    "up": 1000,
+    "size": 4201190,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 1,
+    "out": {
+     "plays.jnl": "update-quiet/2"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9adbc88aa24ceb75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520060000,
+    "up": 61000,
+    "size": 4846709,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 2,
+    "out": {
+     "plays.jnl": "update-quiet/3"
+    }
+   },
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793610000000,
+    "playing": true,
+    "safePoint": false,
+    "read": "absent",
+    "why": null,
+    "folded": 2,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {
+     "plays.jnl": "update-quiet/3",
+     "stats.bin": "update-quiet/4"
+    }
+   },
+   {
+    "do": "giveback",
+    "player": "A",
+    "now": 1793613600000,
+    "saved": null,
+    "given": true,
+    "out": {
+     "plays.jnl": "update-quiet/3",
+     "stats.bin": "update-quiet/4"
+    }
+   },
+   {
+    "do": "takeback",
+    "player": "A",
+    "read": "loaded",
+    "same": true,
+    "folded": 0,
+    "covered": 0,
+    "over": 0,
+    "behind": false,
+    "out": {
+     "plays.jnl": "update-quiet/3",
+     "stats.bin": "update-quiet/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x3df15c814b89ab75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606400000,
+    "up": 2000000,
+    "size": 4633717,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 3,
+    "out": {
+     "plays.jnl": "update-quiet/7",
+     "stats.bin": "update-quiet/4"
+    }
+   },
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793696400000,
+    "playing": true,
+    "safePoint": false,
+    "read": "loaded",
+    "why": null,
+    "folded": 1,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {
+     "plays.jnl": "update-quiet/7",
+     "stats.bin": "update-quiet/8"
+    }
+   }
+  ],
+  "slots": 3,
+  "lost": 0
+ },
+ {
+  "name": "update-plays",
+  "note": "A plays 1-2 (live, unsaved); an update: the give-back saves them first (generation 1); 3-4 are written during the update, into the ring, and folded after the re-read (the same copy). A plays 5; a second update saves 3-5 first (generation 2), nothing in the ring. Hs then has nothing new; the next boot folds nothing.",
+  "cap": 6553,
+  "players": {
+   "A": {
+    "device": "00005e005301",
+    "epochs": [
+     "0x1122334455667788"
+    ],
+    "nvs": null
+   }
+  },
+  "in": {},
+  "steps": [
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793523600000,
+    "playing": true,
+    "safePoint": false,
+    "read": "absent",
+    "why": null,
+    "folded": 0,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {}
+   },
+   {
+    "do": "play",
+    "hash": "0x832a7da9ed0311e6",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520000000,
+    "up": 1000,
+    "size": 4201190,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 1,
+    "out": {
+     "plays.jnl": "update-plays/2"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9adbc88aa24ceb75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520060000,
+    "up": 61000,
+    "size": 4846709,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 2,
+    "out": {
+     "plays.jnl": "update-plays/3"
+    }
+   },
+   {
+    "do": "giveback",
+    "player": "A",
+    "now": 1793527200000,
+    "saved": true,
+    "given": true,
+    "out": {
+     "plays.jnl": "update-plays/3",
+     "stats.bin": "update-plays/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x3df15c814b89ab75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520000000,
+    "up": 4000000,
+    "size": 4633717,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 3,
+    "out": {
+     "plays.jnl": "update-plays/5",
+     "stats.bin": "update-plays/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xe604b5c8d82005d1",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520060000,
+    "up": 4060000,
+    "size": 4001489,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 4,
+    "out": {
+     "plays.jnl": "update-plays/6",
+     "stats.bin": "update-plays/4"
+    }
+   },
+   {
+    "do": "takeback",
+    "player": "A",
+    "read": "loaded",
+    "same": true,
+    "folded": 2,
+    "covered": 0,
+    "over": 0,
+    "behind": false,
+    "out": {
+     "plays.jnl": "update-plays/6",
+     "stats.bin": "update-plays/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xd222fa5e5713f77e",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520000000,
+    "up": 6000000,
+    "size": 4259966,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 5,
+    "out": {
+     "plays.jnl": "update-plays/8",
+     "stats.bin": "update-plays/4"
+    }
+   },
+   {
+    "do": "giveback",
+    "player": "A",
+    "now": 1793534400000,
+    "saved": true,
+    "given": true,
+    "out": {
+     "plays.jnl": "update-plays/8",
+     "stats.bin": "update-plays/9"
+    }
+   },
+   {
+    "do": "takeback",
+    "player": "A",
+    "read": "loaded",
+    "same": true,
+    "folded": 0,
+    "covered": 0,
+    "over": 0,
+    "behind": false,
+    "out": {
+     "plays.jnl": "update-plays/8",
+     "stats.bin": "update-plays/9"
+    }
+   },
+   {
+    "do": "hs",
+    "player": "A",
+    "now": 1793538000000,
+    "ok": true,
+    "out": {
+     "plays.jnl": "update-plays/8",
+     "stats.bin": "update-plays/9"
+    }
+   },
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793610000000,
+    "playing": true,
+    "safePoint": false,
+    "read": "loaded",
+    "why": null,
+    "folded": 0,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {
+     "plays.jnl": "update-plays/8",
+     "stats.bin": "update-plays/9"
+    }
+   }
+  ],
+  "slots": 5,
+  "lost": 0
+ },
+ {
+  "name": "update-save-fails",
+  "note": "A saves 1-2 at its boot, plays 3-4; the update's give-back can't save them (a full card) and gives its blocks back all the same. 5 is written during the update. The re-read finds generation 1, which doesn't hold 3-4: 5 is folded, and every later save this session is refused (Hs too), or MARK would cover 3-4 unfolded. The next boot folds 3-6: none lost.",
+  "cap": 6553,
+  "players": {
+   "A": {
+    "device": "00005e005301",
+    "epochs": [
+     "0x1122334455667788"
+    ],
+    "nvs": null
+   }
+  },
+  "in": {},
+  "steps": [
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793523600000,
+    "playing": true,
+    "safePoint": false,
+    "read": "absent",
+    "why": null,
+    "folded": 0,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {}
+   },
+   {
+    "do": "play",
+    "hash": "0x832a7da9ed0311e6",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520000000,
+    "up": 1000,
+    "size": 4201190,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 1,
+    "out": {
+     "plays.jnl": "update-save-fails/2"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9adbc88aa24ceb75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520060000,
+    "up": 61000,
+    "size": 4846709,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 2,
+    "out": {
+     "plays.jnl": "update-save-fails/3"
+    }
+   },
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793610000000,
+    "playing": true,
+    "safePoint": false,
+    "read": "absent",
+    "why": null,
+    "folded": 2,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {
+     "plays.jnl": "update-save-fails/3",
+     "stats.bin": "update-save-fails/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x3df15c814b89ab75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606400000,
+    "up": 1000,
+    "size": 4633717,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 3,
+    "out": {
+     "plays.jnl": "update-save-fails/5",
+     "stats.bin": "update-save-fails/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xe604b5c8d82005d1",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606460000,
+    "up": 61000,
+    "size": 4001489,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 4,
+    "out": {
+     "plays.jnl": "update-save-fails/6",
+     "stats.bin": "update-save-fails/4"
+    }
+   },
+   {
+    "do": "giveback",
+    "player": "A",
+    "now": 1793613600000,
+    "saveFails": true,
+    "saved": false,
+    "given": true,
+    "out": {
+     "plays.jnl": "update-save-fails/6",
+     "stats.bin": "update-save-fails/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xd222fa5e5713f77e",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606400000,
+    "up": 4000000,
+    "size": 4259966,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 5,
+    "out": {
+     "plays.jnl": "update-save-fails/8",
+     "stats.bin": "update-save-fails/4"
+    }
+   },
+   {
+    "do": "takeback",
+    "player": "A",
+    "read": "loaded",
+    "same": false,
+    "folded": 1,
+    "covered": 0,
+    "over": 0,
+    "behind": true,
+    "out": {
+     "plays.jnl": "update-save-fails/8",
+     "stats.bin": "update-save-fails/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x8d5c2e4c7ace92ce",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606400000,
+    "up": 6000000,
+    "size": 4955086,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 6,
+    "out": {
+     "plays.jnl": "update-save-fails/10",
+     "stats.bin": "update-save-fails/4"
+    }
+   },
+   {
+    "do": "hs",
+    "player": "A",
+    "now": 1793624400000,
+    "ok": false,
+    "out": {
+     "plays.jnl": "update-save-fails/10",
+     "stats.bin": "update-save-fails/4"
+    }
+   },
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793696400000,
+    "playing": true,
+    "safePoint": false,
+    "read": "loaded",
+    "why": null,
+    "folded": 4,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {
+     "plays.jnl": "update-save-fails/10",
+     "stats.bin": "update-save-fails/12"
+    }
+   }
+  ],
+  "slots": 6,
+  "lost": 0
+ },
+ {
+  "name": "update-rotation-saved",
+  "note": "The boot's save fails (a full card): plays.1.jnl (1-4) is covered by no MARK. An update's give-back saves 1-8 first (MARK 8). 9 is written during the update and rotates over plays.1.jnl: MARK covers it, so no save is asked; 9 is folded after the re-read, and the next boot folds it again from the log (nothing saved since). None lost.",
+  "cap": 4,
+  "players": {
+   "A": {
+    "device": "00005e005301",
+    "epochs": [
+     "0x1122334455667788"
+    ],
+    "nvs": null
+   }
+  },
+  "in": {},
+  "steps": [
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793523600000,
+    "playing": true,
+    "safePoint": false,
+    "read": "absent",
+    "why": null,
+    "folded": 0,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {}
+   },
+   {
+    "do": "play",
+    "hash": "0x832a7da9ed0311e6",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606400000,
+    "up": 1000,
+    "size": 4201190,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 1,
+    "out": {
+     "plays.jnl": "update-rotation-saved/2"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9adbc88aa24ceb75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606460000,
+    "up": 61000,
+    "size": 4846709,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 2,
+    "out": {
+     "plays.jnl": "update-rotation-saved/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x3df15c814b89ab75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606520000,
+    "up": 121000,
+    "size": 4633717,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 3,
+    "out": {
+     "plays.jnl": "update-rotation-saved/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xe604b5c8d82005d1",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606580000,
+    "up": 181000,
+    "size": 4001489,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 4,
+    "out": {
+     "plays.jnl": "update-rotation-saved/5"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xd222fa5e5713f77e",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606640000,
+    "up": 241000,
+    "size": 4259966,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 5,
+    "out": {
+     "plays.1.jnl": "update-rotation-saved/6",
+     "plays.jnl": "update-rotation-saved/6"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x8d5c2e4c7ace92ce",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606700000,
+    "up": 301000,
+    "size": 4955086,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 6,
+    "out": {
+     "plays.1.jnl": "update-rotation-saved/6",
+     "plays.jnl": "update-rotation-saved/7"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x145438baeaf72dba",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606760000,
+    "up": 361000,
+    "size": 4470458,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 7,
+    "out": {
+     "plays.1.jnl": "update-rotation-saved/6",
+     "plays.jnl": "update-rotation-saved/8"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9057bc2b792857af",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606820000,
+    "up": 421000,
+    "size": 4546735,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 8,
+    "out": {
+     "plays.1.jnl": "update-rotation-saved/6",
+     "plays.jnl": "update-rotation-saved/9"
+    }
+   },
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793696400000,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": true,
+    "read": "absent",
+    "why": null,
+    "folded": 8,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {
+     "plays.1.jnl": "update-rotation-saved/6",
+     "plays.jnl": "update-rotation-saved/9"
+    }
+   },
+   {
+    "do": "giveback",
+    "player": "A",
+    "now": 1793700000000,
+    "saveFails": false,
+    "saved": true,
+    "given": true,
+    "out": {
+     "plays.1.jnl": "update-rotation-saved/6",
+     "plays.jnl": "update-rotation-saved/9",
+     "stats.bin": "update-rotation-saved/11"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xebc4649938fbd8d3",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793707200000,
+    "up": 900000,
+    "size": 4776403,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 9,
+    "out": {
+     "plays.1.jnl": "update-rotation-saved/12",
+     "plays.jnl": "update-rotation-saved/12",
+     "stats.bin": "update-rotation-saved/11"
+    }
+   },
+   {
+    "do": "takeback",
+    "player": "A",
+    "read": "loaded",
+    "same": true,
+    "folded": 1,
+    "covered": 0,
+    "over": 0,
+    "behind": false,
+    "out": {
+     "plays.1.jnl": "update-rotation-saved/12",
+     "plays.jnl": "update-rotation-saved/12",
+     "stats.bin": "update-rotation-saved/11"
+    }
+   },
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793782800000,
+    "playing": true,
+    "safePoint": false,
+    "read": "loaded",
+    "why": null,
+    "folded": 1,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {
+     "plays.1.jnl": "update-rotation-saved/12",
+     "plays.jnl": "update-rotation-saved/12",
+     "stats.bin": "update-rotation-saved/14"
+    }
+   }
+  ],
+  "slots": 9,
+  "lost": 0
+ },
+ {
+  "name": "update-rotation-unsaved",
+  "note": "The boot's save fails (a full card): plays.1.jnl (1-4) is covered by no MARK. An update's give-back saves 1-8 first and fails too. 9 is written during the update and rotates over plays.1.jnl: its save is refused (the blocks given back), the rotation goes on, and 1-4 are lost to the stats (5.5's hole, 4); the re-read finds no stats.bin, the session is behind its log, and the next boot folds 5-9.",
+  "cap": 4,
+  "players": {
+   "A": {
+    "device": "00005e005301",
+    "epochs": [
+     "0x1122334455667788"
+    ],
+    "nvs": null
+   }
+  },
+  "in": {},
+  "steps": [
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793523600000,
+    "playing": true,
+    "safePoint": false,
+    "read": "absent",
+    "why": null,
+    "folded": 0,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {}
+   },
+   {
+    "do": "play",
+    "hash": "0x832a7da9ed0311e6",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606400000,
+    "up": 1000,
+    "size": 4201190,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 1,
+    "out": {
+     "plays.jnl": "update-rotation-unsaved/2"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9adbc88aa24ceb75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606460000,
+    "up": 61000,
+    "size": 4846709,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 2,
+    "out": {
+     "plays.jnl": "update-rotation-unsaved/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x3df15c814b89ab75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606520000,
+    "up": 121000,
+    "size": 4633717,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 3,
+    "out": {
+     "plays.jnl": "update-rotation-unsaved/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xe604b5c8d82005d1",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606580000,
+    "up": 181000,
+    "size": 4001489,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 4,
+    "out": {
+     "plays.jnl": "update-rotation-unsaved/5"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xd222fa5e5713f77e",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606640000,
+    "up": 241000,
+    "size": 4259966,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 5,
+    "out": {
+     "plays.1.jnl": "update-rotation-unsaved/6",
+     "plays.jnl": "update-rotation-unsaved/6"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x8d5c2e4c7ace92ce",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606700000,
+    "up": 301000,
+    "size": 4955086,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 6,
+    "out": {
+     "plays.1.jnl": "update-rotation-unsaved/6",
+     "plays.jnl": "update-rotation-unsaved/7"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x145438baeaf72dba",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606760000,
+    "up": 361000,
+    "size": 4470458,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 7,
+    "out": {
+     "plays.1.jnl": "update-rotation-unsaved/6",
+     "plays.jnl": "update-rotation-unsaved/8"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9057bc2b792857af",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606820000,
+    "up": 421000,
+    "size": 4546735,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 8,
+    "out": {
+     "plays.1.jnl": "update-rotation-unsaved/6",
+     "plays.jnl": "update-rotation-unsaved/9"
+    }
+   },
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793696400000,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": true,
+    "read": "absent",
+    "why": null,
+    "folded": 8,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {
+     "plays.1.jnl": "update-rotation-unsaved/6",
+     "plays.jnl": "update-rotation-unsaved/9"
+    }
+   },
+   {
+    "do": "giveback",
+    "player": "A",
+    "now": 1793700000000,
+    "saveFails": true,
+    "saved": false,
+    "given": true,
+    "out": {
+     "plays.1.jnl": "update-rotation-unsaved/6",
+     "plays.jnl": "update-rotation-unsaved/9"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xebc4649938fbd8d3",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793707200000,
+    "up": 900000,
+    "size": 4776403,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": false,
+    "seq": 9,
+    "out": {
+     "plays.1.jnl": "update-rotation-unsaved/12",
+     "plays.jnl": "update-rotation-unsaved/12"
+    }
+   },
+   {
+    "do": "takeback",
+    "player": "A",
+    "read": "absent",
+    "same": false,
+    "folded": 1,
+    "covered": 0,
+    "over": 0,
+    "behind": true,
+    "out": {
+     "plays.1.jnl": "update-rotation-unsaved/12",
+     "plays.jnl": "update-rotation-unsaved/12"
+    }
+   },
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793782800000,
+    "playing": true,
+    "safePoint": false,
+    "read": "absent",
+    "why": null,
+    "folded": 5,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {
+     "plays.1.jnl": "update-rotation-unsaved/12",
+     "plays.jnl": "update-rotation-unsaved/12",
+     "stats.bin": "update-rotation-unsaved/14"
+    }
+   }
+  ],
+  "slots": 9,
+  "lost": 4
+ },
+ {
+  "name": "update-other-player",
+  "note": "A saves 1-2, plays 3; an update's give-back saves 3 (generation 2); A 4 is written during it. The card goes into B, which folds A 4, compacts and saves (generation 3), then plays B 1. Back in A (a remount), the re-read finds B's stats.bin: A 4 is in it (MARK covers it: not folded again), but it isn't the copy A stood on, so A's saves are refused for the session (Hs too). A's next boot folds B 1 and A 5: every slot once.",
+  "cap": 4,
+  "players": {
+   "A": {
+    "device": "00005e005301",
+    "epochs": [
+     "0x1122334455667788"
+    ],
+    "nvs": null
+   },
+   "B": {
+    "device": "00005e005302",
+    "epochs": [
+     "0x0a0b0c0d0e0f1011"
+    ],
+    "nvs": null
+   }
+  },
+  "in": {},
+  "steps": [
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793523600000,
+    "playing": true,
+    "safePoint": false,
+    "read": "absent",
+    "why": null,
+    "folded": 0,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {}
+   },
+   {
+    "do": "play",
+    "hash": "0x832a7da9ed0311e6",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520000000,
+    "up": 1000,
+    "size": 4201190,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 1,
+    "out": {
+     "plays.jnl": "update-other-player/2"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9adbc88aa24ceb75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520060000,
+    "up": 61000,
+    "size": 4846709,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 2,
+    "out": {
+     "plays.jnl": "update-other-player/3"
+    }
+   },
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793610000000,
+    "playing": true,
+    "safePoint": false,
+    "read": "absent",
+    "why": null,
+    "folded": 2,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {
+     "plays.jnl": "update-other-player/3",
+     "stats.bin": "update-other-player/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x3df15c814b89ab75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606400000,
+    "up": 1000,
+    "size": 4633717,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 3,
+    "out": {
+     "plays.jnl": "update-other-player/5",
+     "stats.bin": "update-other-player/4"
+    }
+   },
+   {
+    "do": "giveback",
+    "player": "A",
+    "now": 1793613600000,
+    "saved": true,
+    "given": true,
+    "out": {
+     "plays.jnl": "update-other-player/5",
+     "stats.bin": "update-other-player/6"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xe604b5c8d82005d1",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606400000,
+    "up": 2000000,
+    "size": 4001489,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 4,
+    "out": {
+     "plays.jnl": "update-other-player/7",
+     "stats.bin": "update-other-player/6"
+    }
+   },
+   {
+    "do": "boot",
+    "player": "B",
+    "now": 1793696400000,
+    "playing": false,
+    "safePoint": true,
+    "read": "loaded",
+    "why": null,
+    "folded": 1,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": true,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {
+     "plays.jnl": "update-other-player/7",
+     "stats-00000001.bin": "update-other-player/8",
+     "stats.bin": "update-other-player/8"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xd222fa5e5713f77e",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793692800000,
+    "up": 1000,
+    "size": 4259966,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "B",
+    "save": null,
+    "seq": 1,
+    "out": {
+     "plays.1.jnl": "update-other-player/9",
+     "plays.jnl": "update-other-player/9",
+     "stats-00000001.bin": "update-other-player/8",
+     "stats.bin": "update-other-player/8"
+    }
+   },
+   {
+    "do": "remount",
+    "player": "A",
+    "out": {
+     "plays.1.jnl": "update-other-player/9",
+     "plays.jnl": "update-other-player/9",
+     "stats-00000001.bin": "update-other-player/8",
+     "stats.bin": "update-other-player/8"
+    }
+   },
+   {
+    "do": "takeback",
+    "player": "A",
+    "read": "loaded",
+    "same": false,
+    "folded": 0,
+    "covered": 1,
+    "over": 0,
+    "behind": true,
+    "out": {
+     "plays.1.jnl": "update-other-player/9",
+     "plays.jnl": "update-other-player/9",
+     "stats-00000001.bin": "update-other-player/8",
+     "stats.bin": "update-other-player/8"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x8d5c2e4c7ace92ce",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793692800000,
+    "up": 3000000,
+    "size": 4955086,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 5,
+    "out": {
+     "plays.1.jnl": "update-other-player/9",
+     "plays.jnl": "update-other-player/12",
+     "stats-00000001.bin": "update-other-player/8",
+     "stats.bin": "update-other-player/8"
+    }
+   },
+   {
+    "do": "hs",
+    "player": "A",
+    "now": 1793710800000,
+    "ok": false,
+    "out": {
+     "plays.1.jnl": "update-other-player/9",
+     "plays.jnl": "update-other-player/12",
+     "stats-00000001.bin": "update-other-player/8",
+     "stats.bin": "update-other-player/8"
+    }
+   },
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793782800000,
+    "playing": true,
+    "safePoint": false,
+    "read": "loaded",
+    "why": null,
+    "folded": 2,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {
+     "plays.1.jnl": "update-other-player/9",
+     "plays.jnl": "update-other-player/12",
+     "stats-00000001.bin": "update-other-player/8",
+     "stats.bin": "update-other-player/14"
+    }
+   }
+  ],
+  "slots": 6,
+  "lost": 0
+ },
+ {
+  "name": "update-ending",
+  "note": "A plays 1-8 (live; plays.1.jnl 1-4 covered by no MARK); an update's give-back saves them first (MARK 8). The orderly end comes before the re-read: its flush writes 9, which rotates over plays.1.jnl, covered by MARK (no save asked); 9 stays in the ring, never folded this session. The next boot folds it: none lost.",
+  "cap": 4,
+  "players": {
+   "A": {
+    "device": "00005e005301",
+    "epochs": [
+     "0x1122334455667788"
+    ],
+    "nvs": null
+   }
+  },
+  "in": {},
+  "steps": [
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793523600000,
+    "playing": true,
+    "safePoint": false,
+    "read": "absent",
+    "why": null,
+    "folded": 0,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {}
+   },
+   {
+    "do": "play",
+    "hash": "0x832a7da9ed0311e6",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606400000,
+    "up": 1000,
+    "size": 4201190,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 1,
+    "out": {
+     "plays.jnl": "update-ending/2"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9adbc88aa24ceb75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606460000,
+    "up": 61000,
+    "size": 4846709,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 2,
+    "out": {
+     "plays.jnl": "update-ending/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x3df15c814b89ab75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606520000,
+    "up": 121000,
+    "size": 4633717,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 3,
+    "out": {
+     "plays.jnl": "update-ending/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xe604b5c8d82005d1",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606580000,
+    "up": 181000,
+    "size": 4001489,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 4,
+    "out": {
+     "plays.jnl": "update-ending/5"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xd222fa5e5713f77e",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606640000,
+    "up": 241000,
+    "size": 4259966,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 5,
+    "out": {
+     "plays.1.jnl": "update-ending/6",
+     "plays.jnl": "update-ending/6"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x8d5c2e4c7ace92ce",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606700000,
+    "up": 301000,
+    "size": 4955086,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 6,
+    "out": {
+     "plays.1.jnl": "update-ending/6",
+     "plays.jnl": "update-ending/7"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x145438baeaf72dba",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606760000,
+    "up": 361000,
+    "size": 4470458,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 7,
+    "out": {
+     "plays.1.jnl": "update-ending/6",
+     "plays.jnl": "update-ending/8"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9057bc2b792857af",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606820000,
+    "up": 421000,
+    "size": 4546735,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 8,
+    "out": {
+     "plays.1.jnl": "update-ending/6",
+     "plays.jnl": "update-ending/9"
+    }
+   },
+   {
+    "do": "giveback",
+    "player": "A",
+    "now": 1793620800000,
+    "saved": true,
+    "given": true,
+    "out": {
+     "plays.1.jnl": "update-ending/6",
+     "plays.jnl": "update-ending/9",
+     "stats.bin": "update-ending/10"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xebc4649938fbd8d3",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793622600000,
+    "up": 900000,
+    "size": 4776403,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "now": 1793622900000,
+    "ending": true,
+    "left": 3000,
+    "save": null,
+    "seq": 9,
+    "out": {
+     "plays.1.jnl": "update-ending/11",
+     "plays.jnl": "update-ending/11",
+     "stats.bin": "update-ending/10"
+    }
+   },
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793696400000,
+    "playing": true,
+    "safePoint": false,
+    "read": "loaded",
+    "why": null,
+    "folded": 1,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {
+     "plays.1.jnl": "update-ending/11",
+     "plays.jnl": "update-ending/11",
+     "stats.bin": "update-ending/12"
+    }
+   }
+  ],
+  "slots": 9,
+  "lost": 0
+ },
+ {
+  "name": "update-ring-full",
+  "note": "A plays 1; an update's give-back saves it. 18 plays are written during the update: the ring holds 16, folded after the re-read; 2 go past it, so the session is behind its log and its saves are refused (Hs too). The next boot folds 2-19: none lost.",
+  "cap": 6553,
+  "players": {
+   "A": {
+    "device": "00005e005301",
+    "epochs": [
+     "0x1122334455667788"
+    ],
+    "nvs": null
+   }
+  },
+  "in": {},
+  "steps": [
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793523600000,
+    "playing": true,
+    "safePoint": false,
+    "read": "absent",
+    "why": null,
+    "folded": 0,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {}
+   },
+   {
+    "do": "play",
+    "hash": "0x832a7da9ed0311e6",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520000000,
+    "up": 1000,
+    "size": 4201190,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 1,
+    "out": {
+     "plays.jnl": "update-ring-full/2"
+    }
+   },
+   {
+    "do": "giveback",
+    "player": "A",
+    "now": 1793527200000,
+    "saved": true,
+    "given": true,
+    "out": {
+     "plays.jnl": "update-ring-full/2",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x832a7da9ed0311e6",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520000000,
+    "up": 2000000,
+    "size": 4201190,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 2,
+    "out": {
+     "plays.jnl": "update-ring-full/4",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9adbc88aa24ceb75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520060000,
+    "up": 2060000,
+    "size": 4846709,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 3,
+    "out": {
+     "plays.jnl": "update-ring-full/5",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x3df15c814b89ab75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520120000,
+    "up": 2120000,
+    "size": 4633717,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 4,
+    "out": {
+     "plays.jnl": "update-ring-full/6",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xe604b5c8d82005d1",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520180000,
+    "up": 2180000,
+    "size": 4001489,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 5,
+    "out": {
+     "plays.jnl": "update-ring-full/7",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xd222fa5e5713f77e",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520240000,
+    "up": 2240000,
+    "size": 4259966,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 6,
+    "out": {
+     "plays.jnl": "update-ring-full/8",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x8d5c2e4c7ace92ce",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520300000,
+    "up": 2300000,
+    "size": 4955086,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 7,
+    "out": {
+     "plays.jnl": "update-ring-full/9",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x145438baeaf72dba",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520360000,
+    "up": 2360000,
+    "size": 4470458,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 8,
+    "out": {
+     "plays.jnl": "update-ring-full/10",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9057bc2b792857af",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520420000,
+    "up": 2420000,
+    "size": 4546735,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 9,
+    "out": {
+     "plays.jnl": "update-ring-full/11",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xebc4649938fbd8d3",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520480000,
+    "up": 2480000,
+    "size": 4776403,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 10,
+    "out": {
+     "plays.jnl": "update-ring-full/12",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x832a7da9ed0311e6",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520540000,
+    "up": 2540000,
+    "size": 4201190,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 11,
+    "out": {
+     "plays.jnl": "update-ring-full/13",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9adbc88aa24ceb75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520600000,
+    "up": 2600000,
+    "size": 4846709,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 12,
+    "out": {
+     "plays.jnl": "update-ring-full/14",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x3df15c814b89ab75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520660000,
+    "up": 2660000,
+    "size": 4633717,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 13,
+    "out": {
+     "plays.jnl": "update-ring-full/15",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xe604b5c8d82005d1",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520720000,
+    "up": 2720000,
+    "size": 4001489,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 14,
+    "out": {
+     "plays.jnl": "update-ring-full/16",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xd222fa5e5713f77e",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520780000,
+    "up": 2780000,
+    "size": 4259966,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 15,
+    "out": {
+     "plays.jnl": "update-ring-full/17",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x8d5c2e4c7ace92ce",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520840000,
+    "up": 2840000,
+    "size": 4955086,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 16,
+    "out": {
+     "plays.jnl": "update-ring-full/18",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x145438baeaf72dba",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520900000,
+    "up": 2900000,
+    "size": 4470458,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 17,
+    "out": {
+     "plays.jnl": "update-ring-full/19",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9057bc2b792857af",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520960000,
+    "up": 2960000,
+    "size": 4546735,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 18,
+    "out": {
+     "plays.jnl": "update-ring-full/20",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xebc4649938fbd8d3",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793521020000,
+    "up": 3020000,
+    "size": 4776403,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 19,
+    "out": {
+     "plays.jnl": "update-ring-full/21",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "takeback",
+    "player": "A",
+    "read": "loaded",
+    "same": true,
+    "folded": 16,
+    "covered": 0,
+    "over": 2,
+    "behind": true,
+    "out": {
+     "plays.jnl": "update-ring-full/21",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "hs",
+    "player": "A",
+    "now": 1793538000000,
+    "ok": false,
+    "out": {
+     "plays.jnl": "update-ring-full/21",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793610000000,
+    "playing": true,
+    "safePoint": false,
+    "read": "loaded",
+    "why": null,
+    "folded": 18,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {
+     "plays.jnl": "update-ring-full/21",
+     "stats.bin": "update-ring-full/24"
+    }
+   }
+  ],
+  "slots": 19,
+  "lost": 0
  }
 ]

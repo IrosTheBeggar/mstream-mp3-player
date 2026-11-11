@@ -257,6 +257,9 @@ public:
   bool on() const { return on_; }
   bool changed() const { return changed_; }
   bool held() const { return held_.present; }
+  // The tmp held (written whole, its replace() failed): its generation and
+  // header CRC (present false: none held).
+  const Copy& heldCopy() const { return held_; }
 
 private:
   // What a read found: final; a card fault (read again at the boot); a

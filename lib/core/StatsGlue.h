@@ -49,6 +49,33 @@
 //   - The work memory (statsfile::kWorkBytes) is carved for each read and
 //     save through the allocator hook and given back after it, as the heap
 //     model takes it (6.7).
+//   - A library update's give-back (6.7, the owner's decision of
+//     2026-11-11), giveBack(): at the update's give-back point (its memory
+//     check's hook, LibraryUpdate::setGiveBack(), chained after Auto DJ's;
+//     and its fence, after Auto DJ's join), a fold holding plays the card's
+//     stats.bin doesn't is saved first (Kind::GiveBack: the rotation's path,
+//     never a compaction), then every resident block is given back but
+//     MARK's (Fold::giveBack()): covered() goes on answering by the card's
+//     MARK, so a trim or a rotation never deletes a play the card's stats
+//     don't hold. Not while the boot's fold runs (its blocks are the
+//     scan's), nor while the end flushes. While given back: no save (each
+//     refused, Refused::GivenBack; a rotation's then deletes what the card's
+//     MARK doesn't cover, 5.5's hole), no fold: each play written goes into
+//     a ring of kRing slots in this object (no carve), and one past it is
+//     counted. takeBack(), once the update is over and Auto DJ's rejoin done
+//     or abandoned, at a pass that may carve: stats.bin read once, no waits,
+//     a remount's verdicts (5.4; the stats off for the session if it
+//     doesn't read). Then the ring folded, but a play the card's MARK
+//     covers (another player folded it). The read must find the copy that
+//     holds every slot RAM held at the give-back (the card's copy then, or
+//     the give-back save's held tmp, which the read promotes first), and the
+//     ring must have held every play: else (the save didn't land, the fold
+//     had run out of memory, another stats.bin, a play past the ring) RAM
+//     lacks plays the log holds above the card's MARK, and every later save
+//     this session is refused (Refused::Behind): the next boot folds them.
+//     A remount's scan begun again while given back (Ready, before the
+//     first slot) waits for takeBack(), then reads at its first reserve(),
+//     as any remount's: its boot's fold folds the whole log again.
 // Loop task only.
 namespace statsglue {
 
@@ -57,19 +84,22 @@ enum class Kind : uint8_t {
   Boot,      // the boot's scan done, before its trim (Folds::Why::Boot)
   Rotation,  // plays.1.jnl about to leave the log's names (Folds::Why::Rotation)
   Hs,        // the console's (the rotation's path)
+  GiveBack,  // a library update's give-back, first (the rotation's path)
 };
-const char* kindName(Kind k);  // "boot", "rotation", "Hs"
+const char* kindName(Kind k);  // "boot", "rotation", "Hs", "give-back"
 
 // Why a save wasn't asked of the store (None: it was).
 enum class Refused : uint8_t {
   None,
-  Off,       // the stats off this session (unread, newer, no memory), or the folds dropped while ending
-  Ending,    // the boot's save while the orderly end flushes
-  Budget,    // a rotation's in the end's flush with under kEndSaveMs of its budget left
-  CardAway,  // the card out of the slot, refusing writes, or another card in it
-  Partial,   // a log file wasn't read whole this session
-  Booting,   // Hs during the boot's scan
-  Fenced,    // Hs behind the library update's fence
+  Off,        // the stats off this session (unread, newer, no memory), or the folds dropped while ending
+  Ending,     // the boot's save while the orderly end flushes
+  Budget,     // a rotation's in the end's flush with under kEndSaveMs of its budget left
+  CardAway,   // the card out of the slot, refusing writes, or another card in it
+  Partial,    // a log file wasn't read whole this session
+  Booting,    // Hs during the boot's scan
+  Fenced,     // Hs behind the library update's fence
+  GivenBack,  // the blocks given back to a library update (until takeBack())
+  Behind,     // RAM lacks plays the log holds above the card's MARK (a give-back): none this session
 };
 const char* refusedName(Refused r);
 
@@ -139,6 +169,36 @@ struct TrackLook {
   uint32_t reads = 0;  // the base's rows read (a binary search)
 };
 
+// The plays written while the blocks are given back, folded after the
+// re-read: a ring in the glue's own object (80 B a slot; no carve). An
+// update's give-back lasts its fence (15-25 s at 19,410 tracks) and the
+// rejoin, and a slot is written only at a pass the write gate lets through,
+// one a pass: a few plays at most (the end's flush: up to the Tracker's 32).
+constexpr uint32_t kRing = 16;
+
+// What the last giveBack() that gave back did.
+struct GaveBack {
+  size_t bytes = 0;           // the blocks given back (0: none; nothing held or not now)
+  size_t kept = 0;            // MARK's block, kept (covered()'s)
+  uint32_t markRows = 0;      // its rows
+  bool saveAsked = false;     // the fold held plays the card's stats.bin didn't: a save first
+  Refused refused = Refused::None;  // ... refused by the glue (None: the store's, Glue::last())
+  bool covers = false;        // the card's copy (or the give-back save's held tmp) holds every slot RAM held
+};
+
+// What the last takeBack() did.
+struct TookBack {
+  bool read = false;      // stats.bin read again (Glue::opened(): the verdict)
+  bool rescan = false;    // a remount's scan begun again meanwhile: its first reserve() reads it
+  bool on = false;        // the stats on after the read (else off for the session)
+  bool same = false;      // the read found the copy that holds every slot RAM held at the give-back
+  uint32_t folded = 0;    // the ring's plays folded
+  uint32_t covered = 0;   // ... not folded: the card's MARK covers them (another player folded them)
+  uint32_t over = 0;      // plays written past the ring (folded by the next boot)
+  uint32_t dropped = 0;   // the ring's plays not folded: the stats off after the read (the next boot's)
+  bool behind = false;    // every later save this session refused (Refused::Behind)
+};
+
 class Glue final : public playlog::Folds {
 public:
   // `fs`: the card's. Every block (the fold's, the work memory) through
@@ -189,6 +249,31 @@ public:
   // `untilMs` (the board's monotonic ms). notEnding(): back.
   void ending(uint64_t untilMs);
   void notEnding() { ending_ = false; }
+
+  // A library update's give-back (6.7): the fold saved first when it holds
+  // plays the card's stats.bin doesn't (Kind::GiveBack), then every
+  // resident block but MARK's given back. The bytes given back; 0: nothing
+  // held (the stats off), given back already, the boot's fold under way,
+  // or the end flushing. gaveBack() says what it did.
+  size_t giveBack();
+  // What giveBack() would give back now (the update's memory check counts
+  // it in the step's room: UpdateEnv::alsoFreed).
+  size_t resident() const;
+  bool givenBack() const { return given_; }
+  // The blocks again (the update over, Auto DJ's rejoin done or abandoned,
+  // a pass that may carve, the card not away; never while the end
+  // flushes): stats.bin read once, no waits, the ring folded. tookBack()
+  // says what it did.
+  const TookBack& takeBack();
+  // Every later save this session refused: RAM lacks plays the log holds
+  // above the card's MARK (the next boot folds them). A scan begun again
+  // (a remount's) folds the log again and clears it.
+  bool behind() const { return behind_; }
+  uint32_t ringCount() const { return ringN_; }  // plays waiting in the ring
+  uint32_t ringOver() const { return ringOver_; }  // ... and past it
+  uint32_t giveBacks() const { return giveBacks_; }
+  const GaveBack& gaveBack() const { return gave_; }
+  const TookBack& tookBack() const { return took_; }
 
   // The last save asked: which, refused or not, and what the store did.
   Kind lastKind() const { return lastKind_; }
@@ -242,6 +327,7 @@ private:
   bool refuse(Kind k, Refused r);
   bool commit(Kind k);
   void noteLog(const playlog::Slot& s);
+  void foldRing();
 
   tagstore::Fs& fs_;
   Env& env_;
@@ -264,6 +350,15 @@ private:
   uint64_t until_ = 0;
   LogKey log_[kLogKeys];
   uint32_t logN_ = 0, logMore_ = 0;
+  // The give-back (6.7).
+  bool given_ = false;   // the resident blocks given back (MARK's kept)
+  bool behind_ = false;  // every save refused this session (Refused::Behind)
+  bool holds_ = false;   // holding_ is a copy that holds every slot RAM held at the give-back
+  statsfile::Store::Copy holding_;
+  playlog::Slot ring_[kRing];
+  uint32_t ringN_ = 0, ringOver_ = 0, giveBacks_ = 0;
+  GaveBack gave_;
+  TookBack took_;
 };
 
 }  // namespace statsglue

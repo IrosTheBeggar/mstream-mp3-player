@@ -1531,6 +1531,56 @@ void test_release_gives_every_block_back() {
   TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
 }
 
+// A library update's give-back (docs/LISTENING-STATS.md 6.7): every block
+// but MARK's given back, exactly what givesBack() said; covered() and
+// markOf() answer as before (the card's MARK and RAM's); nothing while the
+// boot's fold runs; begin() carves HOUR and DAYS again (MARK's block kept)
+// for the next load.
+void test_give_back_keeps_mark_alone() {
+  gHeap.reset();
+  const size_t live0 = gHeap.live;
+  sf::Fold f(heapAlloc, heapFree);
+  TEST_ASSERT_TRUE(f.begin());
+  f.clear();
+  TEST_ASSERT_TRUE(f.reserveLoad(2000, 700));
+  cc::msmf::Acks none;
+  TEST_ASSERT_TRUE(f.beginBoot(none));
+  for (uint32_t q = 1; q <= 300; ++q)
+    f.bootSlot(slot(kDevA, kEpochA, q, hashOf(q), 200000, 200000, 1, 1, at(100, 8)), 0);
+  TEST_ASSERT_EQUAL_size_t(0, f.givesBack());  // (the boot's fold: its blocks are the scan's)
+  TEST_ASSERT_EQUAL_size_t(0, f.giveBack());
+  TEST_ASSERT_TRUE(f.booting());
+  sf::Fold::Plan p;
+  TEST_ASSERT_TRUE(f.plan(0, false, 0, &p));  // (the boot's end; the save landed:)
+  f.saved(p);
+  f.liveSlot(slot(kDevA, kEpochA, 301, hashOf(301), 200000, 200000, 1, 1, at(100, 9)));
+  TEST_ASSERT_TRUE(f.dirty());
+  const size_t mark = sf::kMarkBlockRows * sizeof(sf::Fold::MarkRow);
+  const size_t gives = f.givesBack();
+  TEST_ASSERT_EQUAL_size_t(f.held() - mark, gives);
+  TEST_ASSERT_EQUAL_size_t(gives, f.giveBack());
+  TEST_ASSERT_EQUAL_size_t(mark, f.held());
+  TEST_ASSERT_EQUAL_size_t(live0 + mark, gHeap.live);
+  TEST_ASSERT_EQUAL_size_t(0, f.givesBack());
+  TEST_ASSERT_EQUAL_size_t(0, f.giveBack());  // (twice: nothing more)
+  TEST_ASSERT_FALSE(f.spare());
+  TEST_ASSERT_EQUAL_UINT32(0, f.chunks(sf::kRcnt) + f.chunks(sf::kTrkd));
+  TEST_ASSERT_EQUAL_UINT32(0, f.rows(sf::kHour) + f.rows(sf::kDays) + f.rows(sf::kRcnt) + f.rows(sf::kTrkd));
+  // MARK kept: the card's 300 (the save's), RAM's 301.
+  TEST_ASSERT_EQUAL_UINT32(1, f.rows(sf::kMark));
+  TEST_ASSERT_TRUE(f.covered(slot(kDevA, kEpochA, 300, 1, 1, 1, 1, 1, 0)));
+  TEST_ASSERT_FALSE(f.covered(slot(kDevA, kEpochA, 301, 1, 1, 1, 1, 1, 0)));
+  TEST_ASSERT_EQUAL_UINT32(301, f.markOf(kDevA, kEpochA));
+  uint8_t plays = 0;
+  uint32_t ms = 0;
+  TEST_ASSERT_FALSE(f.hour(sf::hourOf(at(100, 8)), &plays, &ms));  // (no HOUR held)
+  // The next load: HOUR and DAYS again, MARK's block the same.
+  TEST_ASSERT_TRUE(f.begin());
+  TEST_ASSERT_EQUAL_size_t(6720 + 6400 + mark, f.held());
+  f.release();
+  TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
+}
+
 // ---------------------------------------------------------------------------
 // A full log never synced.
 // ---------------------------------------------------------------------------
@@ -1682,5 +1732,6 @@ int main(int, char**) {
   RUN_TEST(test_a_full_log_never_synced);
   RUN_TEST(test_a_boot_whose_save_doesnt_land);
   RUN_TEST(test_release_gives_every_block_back);
+  RUN_TEST(test_give_back_keeps_mark_alone);
   return UNITY_END();
 }

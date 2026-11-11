@@ -873,10 +873,65 @@ class SessionTests(unittest.TestCase):
         1 s left, one after a partial scan; 0.14.0's trim (HEAD's gap).
         Every other session loses nothing and counts nothing twice."""
         lost = {"rotation-fails": 4, "rotation-twin-fails": 4, "flush-late": 4, "partial-rotation": 4,
-                "old-firmware": 3}
+                "old-firmware": 3, "update-rotation-unsaved": 4}
         for e in self.index:
             self.assertEqual(e["lost"], lost.get(e["name"], 0), e["name"])
-        self.assertEqual(len(self.index), 15)
+        self.assertEqual(len(self.index), 23)
+
+    def test_the_updates_give_back(self):
+        """6.7's give-back (the owner's decision of 2026-11-11): a session
+        holding plays the card's stats.bin doesn't saves first; the plays
+        written while given back are folded after the re-read (but those
+        the card's MARK covers); another copy, a save that didn't land or a
+        play past the ring leaves the session behind its log, and every
+        later save of it refused. Each step's facts."""
+        by = self.by
+
+        def steps(name, do):
+            return [s for s in by[name]["steps"] if s["do"] == do]
+
+        self.assertEqual([s["saved"] for s in steps("update-quiet", "giveback")], [None])
+        self.assertEqual([(s["same"], s["folded"], s["behind"]) for s in steps("update-quiet", "takeback")],
+                         [(True, 0, False)])
+        self.assertEqual([s["saved"] for s in steps("update-plays", "giveback")], [True, True])
+        self.assertEqual([(s["same"], s["folded"], s["behind"]) for s in steps("update-plays", "takeback")],
+                         [(True, 2, False), (True, 0, False)])
+        self.assertEqual([s["ok"] for s in steps("update-plays", "hs")], [True])
+        self.assertEqual([s["saved"] for s in steps("update-save-fails", "giveback")], [False])
+        self.assertEqual([(s["read"], s["same"], s["folded"], s["behind"])
+                          for s in steps("update-save-fails", "takeback")], [("loaded", False, 1, True)])
+        self.assertEqual([s["ok"] for s in steps("update-save-fails", "hs")], [False])
+        # A rotation while given back: no save asked when the give-back's
+        # covered plays.1.jnl; asked and refused (1-4 lost) when it didn't.
+        self.assertIsNone(steps("update-rotation-saved", "play")[-1]["save"])
+        self.assertEqual(steps("update-rotation-unsaved", "play")[-1]["save"], False)
+        self.assertEqual(steps("update-rotation-unsaved", "takeback")[0]["read"], "absent")
+        # Another player meanwhile: its stats.bin holds the play the ring
+        # held (covered, not folded again); the session's saves refused.
+        t = steps("update-other-player", "takeback")[0]
+        self.assertEqual((t["same"], t["folded"], t["covered"], t["behind"]), (False, 0, 1, True))
+        self.assertEqual([s["ok"] for s in steps("update-other-player", "hs")], [False])
+        # The end while given back: no re-read; the flush's rotation covered.
+        self.assertEqual(steps("update-ending", "takeback"), [])
+        self.assertIsNone(steps("update-ending", "play")[-1]["save"])
+        t = steps("update-ring-full", "takeback")[0]
+        self.assertEqual((t["same"], t["folded"], t["over"], t["behind"]), (True, sr.RING, 2, True))
+        self.assertEqual([s["ok"] for s in steps("update-ring-full", "hs")], [False])
+
+    def test_a_take_back_reads_once(self):
+        """The re-read after a give-back is a remount's (5.4): one read, so a
+        stats.bin that fails its checks is unread (the stats off for the
+        session), never renamed stats.bad."""
+        good = bytearray(sr.write_stats(sr.Stats()))
+        good[-1] ^= 0xFF  # (HEAD's last byte: its section's CRC fails)
+        files = {sr.STATS_BIN: bytes(good)}
+        se = sr.Session(files, once=True)
+        self.assertEqual(se.read, "unread")
+        self.assertFalse(se.on)
+        self.assertIn(sr.STATS_BIN, files)
+        self.assertNotIn(sr.STATS_BAD, files)
+        se = sr.Session(dict(files))
+        self.assertEqual(se.read, "corrupt")
 
     def test_the_steps(self):
         by = self.by

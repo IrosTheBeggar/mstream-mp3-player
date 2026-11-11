@@ -621,6 +621,26 @@ void Fold::release() {
   days_ = Capped<DaysRow>();
 }
 
+size_t Fold::giveBack() {
+  if (booting_) return 0;
+  const size_t before = held_;
+  plan_ = nullptr;
+  releaseAll(rcnt_);
+  releaseAll(trkd_);
+  if (spare_) drop(spare_, kChunkBytes);
+  spare_ = nullptr;
+  if (hour_.rows) drop(hour_.rows, static_cast<size_t>(hour_.cap) * sizeof(HourRow));
+  hour_ = Capped<HourRow>();
+  if (days_.rows) drop(days_.rows, static_cast<size_t>(days_.cap) * sizeof(DaysRow));
+  days_ = Capped<DaysRow>();
+  return before - held_;
+}
+
+size_t Fold::givesBack() const {
+  if (booting_) return 0;
+  return held_ - static_cast<size_t>(markCap_) * sizeof(MarkRow);
+}
+
 bool Fold::reserveLoad(uint32_t rcntRows, uint32_t trkdRows) {
   return room(rcnt_, rcntRows) && room(trkd_, trkdRows) && keepSpare();
 }

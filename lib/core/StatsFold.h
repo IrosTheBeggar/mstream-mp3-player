@@ -190,6 +190,17 @@ public:
   // MARK): the stats off for the session (a read that isn't on), nothing
   // held for them. begin() before any load again.
   void release();
+  // A library update's give-back (docs/LISTENING-STATS.md 6.7, the owner's
+  // decision of 2026-11-11): the resident blocks given back (RCNT's and
+  // TRKD's chunks, the spare, HOUR, DAYS), MARK's block and rows kept, so
+  // covered() and markOf() answer as before (the card's MARK and RAM's);
+  // nothing else answers, and nothing may be folded, until the next load
+  // (begin(), then StatsFile's read). The bytes given back; 0 while the
+  // boot's fold runs (its blocks are the scan's).
+  size_t giveBack();
+  // What giveBack() would give back now (the update's memory check counts
+  // it in the step's room).
+  size_t givesBack() const;
   // The load's chunks: room for these rows of RCNT and TRKD (stats.bin's
   // counts) and one spare chunk (5.6). False: no memory.
   bool reserveLoad(uint32_t rcntRows, uint32_t trkdRows);

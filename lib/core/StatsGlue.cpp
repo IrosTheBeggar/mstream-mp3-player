@@ -18,6 +18,7 @@ const char* kindName(Kind k) {
     case Kind::Boot: return "boot";
     case Kind::Rotation: return "rotation";
     case Kind::Hs: return "Hs";
+    case Kind::GiveBack: return "give-back";
   }
   return "?";
 }
@@ -32,6 +33,8 @@ const char* refusedName(Refused r) {
     case Refused::Partial: return "partial";
     case Refused::Booting: return "booting";
     case Refused::Fenced: return "fenced";
+    case Refused::GivenBack: return "givenBack";
+    case Refused::Behind: return "behind";
   }
   return "?";
 }
@@ -74,6 +77,11 @@ const sx::Opened& Glue::begin(const cc::msmf::Acks& acks, sx::Store::WaitFn wait
 // ---------------------------------------------------------------------------
 void Glue::scanBegan(bool again) {
   partial_ = false;
+  // The boot's fold folds every slot of the log above the card's MARK:
+  // nothing is behind after it. (A scan begins again only before the
+  // boot's first slot: the ring holds none.)
+  behind_ = false;
+  ringN_ = ringOver_ = 0;
   logN_ = logMore_ = 0;
   bootPending_ = rereadPending_ = false;
   if (again) {
@@ -112,6 +120,9 @@ void Glue::drop() {
 }
 
 void Glue::settle() {
+  // Given back to a library update: nothing read or carved until
+  // takeBack() (a remount's read waits for it too).
+  if (given_) return;
   if (rereadPending_) {
     rereadPending_ = false;
     ++rereads_;
@@ -182,18 +193,25 @@ bool Glue::save(Why why) {
   settle();
   const Kind k = why == Why::Boot ? Kind::Boot : Kind::Rotation;
   if (!on()) return refuse(k, Refused::Off);
+  // (A rotation while given back: no fold to save; it deletes what the
+  // card's MARK doesn't cover, 5.5's hole. After a give-back whose save
+  // landed, the card's MARK covers every play of plays.1.jnl.)
+  if (given_) return refuse(k, Refused::GivenBack);
   if (ending_ && k == Kind::Boot) return refuse(k, Refused::Ending);
   if (ending_ && env_.monoMs() + kEndSaveMs > until_) return refuse(k, Refused::Budget);
   if (env_.cardAway()) return refuse(k, Refused::CardAway);
   if (partial_) return refuse(k, Refused::Partial);
+  if (behind_) return refuse(k, Refused::Behind);
   return commit(k);
 }
 
 bool Glue::hs(bool fenced) {
   if (fenced) return refuse(Kind::Hs, Refused::Fenced);
   if (!on() && !rereadPending_) return refuse(Kind::Hs, Refused::Off);
+  if (given_) return refuse(Kind::Hs, Refused::GivenBack);
   if (booting()) return refuse(Kind::Hs, Refused::Booting);
   if (partial_) return refuse(Kind::Hs, Refused::Partial);
+  if (behind_) return refuse(Kind::Hs, Refused::Behind);
   if (env_.cardAway()) return refuse(Kind::Hs, Refused::CardAway);
   return commit(Kind::Hs);
 }
@@ -232,6 +250,7 @@ bool Glue::commit(Kind k) {
 // The rest of the session.
 // ---------------------------------------------------------------------------
 bool Glue::reserve(uint32_t slots) {
+  if (given_) return false;  // (the scan waits for takeBack(): app/ListeningStats::mayScan())
   settle();
   return !(on() && fold_.booting()) || fold_.reserve(slots);
 }
@@ -242,12 +261,127 @@ void Glue::ready() {
 }
 
 void Glue::written(const pl::Slot& s) {
-  if (on()) fold_.liveSlot(s);
+  if (!on()) return;
+  if (given_) {
+    // No fold while given back: the ring, folded after the re-read; one
+    // past it is the next boot's (and no save this session: takeBack()).
+    if (!sf::counts(s)) return;
+    if (ringN_ < kRing) {
+      ring_[ringN_++] = s;
+    } else {
+      ++ringOver_;
+    }
+    return;
+  }
+  fold_.liveSlot(s);
 }
 
 bool Glue::keepSpare() {
-  if (!on() || booting() || fold_.noMemory() || fold_.spare()) return true;
+  if (!on() || given_ || booting() || fold_.noMemory() || fold_.spare()) return true;
   return fold_.keepSpare();
+}
+
+// ---------------------------------------------------------------------------
+// A library update's give-back (6.7).
+// ---------------------------------------------------------------------------
+size_t Glue::resident() const { return on() && !given_ && !booting() && !ending_ ? fold_.givesBack() : 0; }
+
+size_t Glue::giveBack() {
+  if (given_ || !on() || booting() || ending_) return 0;  // (gaveBack(): the last that gave back)
+  gave_ = GaveBack();
+  // A fold holding plays the card's stats.bin doesn't: saved first, the
+  // rotation's path (never a compaction), with a save's guards. Whatever it
+  // comes to, the blocks go: a save that doesn't land costs this session's
+  // saves (Refused::Behind after the re-read), never a play.
+  if (fold_.dirty()) {
+    gave_.saveAsked = true;
+    if (env_.cardAway()) {
+      refuse(Kind::GiveBack, Refused::CardAway);
+    } else if (partial_) {
+      refuse(Kind::GiveBack, Refused::Partial);
+    } else if (behind_) {
+      refuse(Kind::GiveBack, Refused::Behind);
+    } else {
+      commit(Kind::GiveBack);
+    }
+    gave_.refused = lastRefused_;
+  }
+  // The copy on the card that holds every slot RAM holds now, the re-read's
+  // judge: the card's copy (nothing new, or the save landed), or this
+  // save's tmp, held (its replace() failed: the read promotes it first).
+  // None: the save didn't land, or the fold ran out of memory (plays it
+  // never folded are in no copy).
+  holds_ = false;
+  if (!fold_.noMemory()) {
+    if (!fold_.dirty()) {
+      holding_ = store_.cardCopy();
+      holds_ = true;
+    } else if (gave_.saveAsked && lastRefused_ == Refused::None && last_.what == sx::Saved::Held) {
+      holding_ = store_.heldCopy();
+      holds_ = true;
+    }
+  }
+  gave_.covers = holds_;
+  gave_.markRows = fold_.rows(sf::kMark);
+  gave_.bytes = fold_.giveBack();
+  gave_.kept = fold_.held();
+  given_ = true;
+  ringN_ = ringOver_ = 0;
+  ++giveBacks_;
+  return gave_.bytes;
+}
+
+void Glue::foldRing() {
+  for (uint32_t i = 0; i < ringN_; ++i) {
+    const pl::Slot& s = ring_[i];
+    // (Another player folded it, the card in it meanwhile: its stats.bin
+    // holds it.)
+    if (fold_.covered(s)) {
+      ++took_.covered;
+      continue;
+    }
+    fold_.liveSlot(s);
+    ++took_.folded;
+  }
+  ringN_ = ringOver_ = 0;
+}
+
+const TookBack& Glue::takeBack() {
+  // (No read while the end flushes: 5.4.)
+  if (!given_ || ending_) return took_;
+  took_ = TookBack();
+  given_ = false;
+  if (rereadPending_) {
+    // A remount's scan begun again meanwhile (Ready, before the boot's
+    // first slot: the ring holds none): its first reserve() reads
+    // stats.bin, and its boot's fold folds the log again.
+    took_.rescan = true;
+    ringN_ = ringOver_ = 0;
+    return took_;
+  }
+  ++rereads_;
+  opened_ = readNow(nullptr);
+  took_.read = true;
+  took_.on = sx::statsOn(opened_.read);
+  took_.over = ringOver_;
+  if (!took_.on) {
+    // Off for the session, as a remount's read leaves them (5.4): the
+    // ring's plays are the next boot's.
+    took_.dropped = ringN_;
+    ringN_ = ringOver_ = 0;
+    return took_;
+  }
+  const bool present = opened_.read == sx::Read::Loaded;
+  took_.same = holds_ && present == holding_.present &&
+               (!present || (opened_.generation == holding_.generation && opened_.headerCrc == holding_.headerCrc));
+  foldRing();
+  // RAM lacks plays the log holds above the card's MARK (a save that
+  // didn't land, a fold out of memory, another stats.bin, a play past the
+  // ring): a later save would raise MARK past them unfolded. None this
+  // session: the next boot folds them.
+  if (!took_.same || took_.over) behind_ = true;
+  took_.behind = behind_;
+  return took_;
 }
 
 TrackLook Glue::track(uint64_t hash) {
