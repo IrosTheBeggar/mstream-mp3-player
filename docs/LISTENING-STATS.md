@@ -534,7 +534,7 @@ Slots, files, ACKS and the transfer's reading are unchanged. `test_play_log`'s 3
 
 ### 5.11 What the terminal may do
 
-- It may delete `/.player` whole (`docs/METADATA.md:1788`): the stats start again with the log. For caches "the device rebuilds" holds; for the stats it doesn't, and 2.11's row says so after S1.
+- It may delete `/.player` whole (`docs/METADATA.md:1788`): the stats start again with the log. For caches "the device rebuilds" holds; for the stats it doesn't, and 2.11's row says so (C2).
 - It never reads or writes the stats files. `device.txt` gains no key.
 - Its sync's ACKS lets the next boot trim, after the fold and the save.
 - Later (not v1): it may write mStream's per-track counts as a gen-named file of its own (spec 8.6). Not played yet would then mean never, and the counts would include other clients.
