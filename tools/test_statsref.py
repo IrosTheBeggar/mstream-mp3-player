@@ -17,17 +17,25 @@ docs/LISTENING-STATS.md).
 - The boot (5.4-5.6): the worked example (5.13) by hand; each slot once;
   the gap counted once; a failed save trims by the boot's MARK; a newer
   stats.bin turns the stats off; a corrupt one goes to stats.bad; a lost
-  base; the bases either side of the named one removed; the live fold's
-  round and a rotation's save, which never compacts; the compaction's
-  rule; retention (HOUR, DAYS, RCNT by date and by count); sinceDay.
+  base, and one that doesn't read whole (39 bytes: unread, never lost); a
+  stale base replaced by the next compaction; the bases either side of
+  the named one removed; the live fold's round and a rotation's save,
+  which never compacts; a live row and a boot's differ in lastOrd alone;
+  a partial scan (an open or a read the card failed: no save, the trim by
+  the boot's MARK, the next whole boot the same as one whole boot); the
+  compaction's rule; retention (HOUR, DAYS, RCNT by date and by count);
+  sinceDay, never after today.
 - The rankers and windows (4.2, 4.3, 7.6): each shelf's rule and ties,
   the caps plus 16, the windows' edges, no lists that need dates without
   a clock, Not played yet, the tray, the week.
 - The fixtures (test/fixtures/card/stats) as card_fixtures.py makes them,
-  and the plan's own figures in them.
+  and the plan's own figures in them; every log file in seq order per
+  (deviceId, epoch), and 5.6's ranges choosing the same slots as the
+  reference's keys on every boot.
 - seed: its refusals (no SYNTHCARD.TXT, a root another program wrote or
-  none, the system drive, not FAT32, files already there, a twin),
-  --dry-run, a history and a full log, --base; the command line.
+  none, the system drive, not FAT32, files already there, a twin of the
+  log, and with --base one of stats.bin), --dry-run, a history and a
+  full log, --base; the command line, dump with and without its base.
 """
 import contextlib
 import io
@@ -396,6 +404,33 @@ class BootTests(unittest.TestCase):
         broken["stats-00000001.bin"] = bytes(b)
         se = sr.Session(broken)
         self.assertEqual((se.read, se.why, se.on), ("unread", "SectionCrc", False))
+        for n, why in ((sr.HEADER_BYTES - 1, "Short"), (sr.HEADER_BYTES + 1, "Short"), (119, "FileBytes")):
+            cut = dict(files)
+            cut["stats-00000001.bin"] = files["stats-00000001.bin"][:n]   # its header doesn't read whole: a fault
+            se = sr.Session(cut)
+            self.assertEqual((se.read, se.why, se.on, se.stats.head["flags"]), ("unread", why, False, 0), n)
+            cut["plays.jnl"] = sr.log(*[play(q) for q in range(1, 5)])
+            r = sr.boot(cut, acks=[(A, E, 4)])
+            self.assertEqual((r["saved"], r["trimmed"], r["files"]), (False, [], cut), n)
+
+    def test_a_stale_base_is_replaced(self):
+        """5.3: after a stats.bin deleted or corrupt, or a base lost, baseGen
+        starts again and the first compaction writes stats-00000001.bin over
+        the stale file there (named by nothing); nothing is removed."""
+        files = sr.earlier([play(q, ["Brine", "Night Ticket"][q % 2]) for q in range(1, 5)])
+        stale = files["stats-00000001.bin"]
+        log = {"plays.jnl": sr.log(*[play(q, "Low Tide") for q in range(5, 7)])}
+        for name, card in (("absent", {"stats-00000001.bin": stale}),
+                           ("corrupt", {"stats.bin": files["stats.bin"][:-1], "stats-00000001.bin": stale}),
+                           ("lost", dict(files, **{"stats-00000001.bin": sr.write_base({}, 1)}))):
+            r = sr.boot(dict(card, **log))
+            new = r["files"]["stats-00000001.bin"]
+            self.assertTrue(r["compacted"], name)
+            self.assertEqual(r["removed"], [], name)
+            self.assertNotEqual(new, card["stats-00000001.bin"], name)
+            st = sr.load(r["files"])
+            self.assertEqual((st.head["baseGen"], st.head["baseCrc"], st.base), (1, sr.header_crc(new),
+                                                                                  sr.read_base(new, 1)), name)
 
     def test_live_folds_and_a_rotation_save(self):
         files = sr.earlier([play(q) for q in range(1, 3)])
@@ -410,6 +445,23 @@ class BootTests(unittest.TestCase):
         self.assertEqual((st.head["round"], st.track(sr.TRACKS["Brine"][1]).lastOrd), (3, 3))
         self.assertEqual(st.generation, 2)
         self.assertEqual(st.mark[(bytes.fromhex(A), E)], 3)
+
+    def test_live_and_boot_rows_differ_in_last_ord_alone(self):
+        """5.2, 5.6: the same slots folded live and saved by a rotation, or
+        folded at a boot, give rows the same but for lastOrd (a live
+        fold's round is HEAD.round + 2, a boot's + 1): the order holds."""
+        undated = [play(2, "Tidewater", src=3), play(3, "Tidewater", src=2)]
+        se = sr.Session(sr.earlier([play(1)]))
+        se.scan()
+        for s in undated:
+            se.live(s)
+        self.assertTrue(se.save(sr.MIN_MS, "rotation"))
+        live = sr.load(se.files).track(sr.TRACKS["Tidewater"][1])
+        card = sr.earlier([play(1)])
+        card["plays.jnl"] = sr.log(*undated)
+        booted = sr.boot(card, now=sr.MIN_MS)["stats"].track(sr.TRACKS["Tidewater"][1])
+        self.assertEqual((live.tuple()[:4], live.src), (booted.tuple()[:4], booted.src))
+        self.assertEqual((live.lastOrd, booted.lastOrd), (3, 2))
 
     def test_compaction_rule(self):
         due = sr.compaction_due
@@ -463,6 +515,61 @@ class BootTests(unittest.TestCase):
         st = sr.Stats()
         sr.since_day(st, None, None, 1000)
         self.assertEqual(st.head["sinceDay"], sr.UNSET_DAY)
+        st = sr.Stats()
+        sr.since_day(st, 26814, 313, None)                     # a play dated 2099, today day 313
+        self.assertEqual(st.head["sinceDay"], 313, "never after today")
+        st = sr.Stats()
+        sr.since_day(st, 26814, None, None)
+        self.assertEqual(st.head["sinceDay"], 26814, "with no today, nothing to cap it by")
+
+    def test_a_foreign_2099_slot_moves_nothing(self):
+        """5.2: one foreign slot dated 2099 (believable: 4.1) beside this
+        device's undated plays sets no sinceDay in 2099: the hub's first
+        month and Most played's tray go by today."""
+        now = sr.ms_of("2026-11-10T09:00:00")
+        foreign = sr.slot(sr.DEV_C, sr.EPOCH_C, 1, "Brine", 200000, 200000,
+                          startedAt=sr.ms_of("2099-06-01T10:00:00"), clock=2)
+        r = sr.boot(files_of(play(1, at=None), foreign), now=now)
+        st = r["stats"]
+        self.assertEqual(st.head["sinceDay"], sr.today_of(now))
+        later = sr.today_of(now) + 40
+        self.assertEqual((sr.counting_days(st, later), sr.windows_offered(sr.counting_days(st, later))),
+                         (41, [7, 30, None]))
+
+    def test_a_partial_scan(self):
+        """5.6: an open or a read the card failed. The fold goes on; no
+        save this session (the boot's, a rotation's, Hs); the trim keeps
+        the unread file and follows the MARK read at the boot; no gap is
+        counted. The next whole boot gives what one whole boot would."""
+        slots = [play(q, ["Brine", "Low Tide"][q % 2], startedAt=sr.MIN_MS + q * sr.HOUR_MS, clock=1)
+                 for q in range(1, 15)]
+        before = sr.earlier(slots[:8])                         # MARK 8
+        card = dict(before, **{"plays.1.jnl": sr.log(*slots[2:8]), "plays.jnl": sr.log(*slots[8:])})
+        acks = [(A, E, 14), (sr.DEV_B, sr.EPOCH_B, 9)]          # B's 1-9: a gap a whole scan would count
+        now = sr.MIN_MS + 2 * sr.DAY_MS
+        whole = sr.boot(card, acks, now)
+        self.assertEqual((whole["folded"], whole["gap"], whole["trimmed"]), (6, 9, ["plays.1.jnl", "plays.jnl"]))
+        for unread, folded, trimmed in (({"plays.1.jnl": None}, 6, []), ({"plays.1.jnl": 3}, 6, []),
+                                        ({"plays.jnl": 3}, 3, ["plays.1.jnl"]), ({"plays.jnl": 0}, 0, ["plays.1.jnl"])):
+            r = sr.boot(card, acks, now, unread=unread)
+            self.assertEqual((r["partial"], r["folded"], r["gap"], r["saved"], r["trimmed"]),
+                             (True, folded, 0, False, trimmed), unread)
+            self.assertEqual(r["files"]["stats.bin"], card["stats.bin"])
+            again = sr.boot(r["files"], acks, now)
+            self.assertEqual((again["folded"], again["twice"], again["saved"]), (6, 0, True), unread)
+            self.assertEqual(again["files"]["stats.bin"], whole["files"]["stats.bin"], unread)
+        # A read fault in plays.jnl's tail, a play written live, then Hs.
+        se = sr.Session(dict(card), acks, unread={"plays.jnl": 3})
+        se.scan()
+        self.assertFalse(se.save(now))
+        live = play(15, "Brine", startedAt=now, clock=1)
+        se.live(live)
+        self.assertFalse(se.save(now, "rotation"), "Hs (the rotation's path) refused after a partial scan")
+        self.assertEqual(se.trim(False), ["plays.1.jnl"])
+        self.assertEqual(se.files["stats.bin"], card["stats.bin"])
+        se.files["plays.jnl"] += sr.log(live)
+        again = sr.boot(se.files, acks, now)
+        self.assertEqual((again["folded"], again["stats"].head["plays"]), (7, 15))
 
     def test_rounds_saturate(self):
         files = sr.earlier([play(1)])
@@ -560,11 +667,73 @@ class FixtureTests(unittest.TestCase):
             for b in sc["boots"]:
                 acks = [(d, int(e, 16), s) for d, e, s in b["acks"]]
                 r = sr.boot(self.card(b["in"]), acks, b["now"], b["commitTime"], b["playing"], b["safePoint"],
-                            b["saveFails"])
+                            b["saveFails"], b["unread"])
                 self.assertEqual(r["files"], self.card(b["out"]), sc["name"])
-                for k in ("read", "folded", "twice", "gap", "saved", "compacted", "removed", "trimmed"):
+                for k in ("read", "why", "folded", "twice", "gap", "partial", "saved", "compacted", "removed",
+                          "trimmed"):
                     self.assertEqual(r[k], b[k], (sc["name"], k))
-                self.assertEqual(sr.stats_json(sr.load(r["files"])), b["stats"], sc["name"])
+                st = sr.load(r["files"])
+                self.assertEqual(None if st is None else sr.stats_json(st), b.get("stats"), sc["name"])
+
+    def logs(self):
+        """Every log file of every boot's in: (scenario, name, bytes)."""
+        for sc in self.index:
+            for b in sc["boots"]:
+                for n, d in b["in"].items():
+                    if n in sr.LOG_NAMES:
+                        yield sc["name"], n, self.files["stats/%s/%s" % (d, n)]
+
+    def test_each_file_in_seq_order(self):
+        """5.6: in one file, one device and epoch's seqs only rise, as a
+        device writes them; every fixture keeps to it."""
+        for name, n, data in self.logs():
+            last = {}
+            for _, why, s, _ in pl.read_file(data):
+                if why == "ok" and s["kind"] == pl.KIND_PLAY:
+                    k = (s["deviceId"], s["epoch"])
+                    self.assertGreaterEqual(s["seq"], last.get(k, 0), (name, n, s["seq"]))
+                    last[k] = s["seq"]
+
+    def test_the_ranges_choose_the_same_slots(self):
+        """5.6's technique for the C++ (in one file, a slot at or under the
+        seq last folded for its row from that file is skipped; across
+        files, one inside another file's range is skipped and counted in
+        twice) chooses the same slots as the reference's keys, in the same
+        order, with the same twice, on every boot of every fixture."""
+        for sc in self.index:
+            for b in sc["boots"]:
+                files = self.card(b["in"])
+                acks = [(d, int(e, 16), s) for d, e, s in b["acks"]]
+                r = sr.boot(files, acks, b["now"], b["commitTime"], b["playing"], b["safePoint"], b["saveFails"],
+                            b["unread"])
+                if r["read"] not in ("loaded", "absent", "corrupt"):
+                    continue
+                mark = r["session"].mark_at_boot
+                ranges, keys, twice = {}, [], 0
+                for name in sr.LOG_NAMES:
+                    if name not in files:
+                        continue
+                    data = files[name]
+                    if name in b["unread"]:
+                        data = data[:(b["unread"][name] or 0) * pl.SLOT]
+                    last, mine = {}, {}
+                    for _, why, s, _ in pl.read_file(data):
+                        if why != "ok" or not sr.counts(s):
+                            continue
+                        row, q = (pl.device_bytes(s["deviceId"]), s["epoch"]), s["seq"]
+                        if q <= mark.get(row, 0) or q <= last.get(row, 0):
+                            continue
+                        if any(lo <= q <= hi for lo, hi in ranges.get(row, ())):
+                            twice += 1
+                            continue
+                        last[row] = q
+                        lo, hi = mine.get(row, (q, q))
+                        mine[row] = (min(lo, q), max(hi, q))
+                        keys.append(row + (q,))
+                    for row, rg in mine.items():
+                        ranges.setdefault(row, []).append(rg)
+                        self.assertLessEqual(len(ranges[row]), 10)
+                self.assertEqual((keys, twice), (r["session"].keys, r["twice"]), sc["name"])
 
     def test_the_plans_figures(self):
         w = self.by["worked-example"]["boots"]
@@ -575,7 +744,9 @@ class FixtureTests(unittest.TestCase):
         x = st.track(sr.TRACKS["Weather Vane"][1])
         self.assertEqual(x.firstAt, 26948401)
         self.assertEqual(st.hour[7485], [2, 165000])
-        rows = [sr.load(self.card(self.by[n]["boots"][0]["out"])).tracks() for n in ("first-at-a", "first-at-b")]
+        outs = [self.by[n]["boots"][0]["out"] for n in ("first-at-a", "first-at-b")]
+        self.assertEqual(self.card(outs[0])["stats.bin"], self.card(outs[1])["stats.bin"], "the same stats.bin")
+        rows = [sr.load(self.card(o)).tracks() for o in outs]
         self.assertEqual(rows[0], rows[1])
         ha = sr.TRACKS["Harbour Lights"][1]
         self.assertEqual((rows[0][ha].firstAt, rows[0][ha].src), (t_at(305, 10), sr.YOU))
@@ -595,6 +766,46 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(self.by["twice"]["boots"][0]["twice"], 3)
         self.assertEqual(self.by["compaction"]["boots"][0]["removed"], ["stats-00000001.bin"])
         self.assertEqual(self.by["rules"]["boots"][0]["stats"]["head"]["plays"], 9)
+
+    def test_the_reads(self):
+        """5.4's verdicts and 5.12's newer minor, as the fixtures hold them."""
+        b = lambda name, i=0: self.by[name]["boots"][i]  # noqa: E731
+        for name, why in (("newer", "Major"), ("base-unread", "SectionCrc"), ("base-short", "Short")):
+            self.assertEqual((b(name)["read"], b(name)["why"], b(name)["folded"], b(name)["saved"],
+                              b(name)["trimmed"]), ("newer" if name == "newer" else "unread", why, 0, False, []))
+            self.assertEqual(self.card(b(name)["out"]), self.card(b(name)["in"]), name)
+            self.assertNotIn("stats", b(name))
+        c = b("corrupt")
+        self.assertEqual((c["read"], c["why"], c["folded"], c["compacted"], c["removed"]),
+                         ("corrupt", "FileBytes", 10, True, []))
+        self.assertEqual(self.card(c["out"])["stats.bad"], self.card(c["in"])["stats.bin"])
+        self.assertNotEqual(self.card(c["out"])["stats-00000001.bin"], self.card(c["in"])["stats-00000001.bin"],
+                            "the stale base replaced")
+        for name, compacted in (("base-lost", False), ("base-other", True)):
+            h = b(name)["stats"]["head"]
+            self.assertEqual((h["flags"] & sr.FLAG_BASE_LOST, h["plays"], b(name)["removed"], b(name)["compacted"]),
+                             (sr.FLAG_BASE_LOST, 10, [], compacted), name)
+        self.assertIn("stats-00000002.bin", b("base-lost")["out"])
+        self.assertEqual(b("base-neighbours")["removed"], ["stats-00000002.bin"])
+        nm = b("newer-minor")
+        self.assertEqual(struct.unpack_from("<H", self.card(nm["in"])["stats.bin"], 6)[0], 3)
+        out = self.card(nm["out"])["stats.bin"]
+        self.assertEqual(struct.unpack_from("<HHI", out, 4), (1, 0, 40))
+        self.assertEqual(out, sr.write_stats(sr.read_stats(out)), "minor 0, without the additions")
+        self.assertEqual(nm["stats"]["head"]["plays"], 10)
+
+    def test_clock_ahead_and_partial(self):
+        ca = [sr.load(self.card(b["out"])) for b in self.by["clock-ahead"]["boots"]]
+        self.assertEqual([sorted({d for d, _ in st.rcnt}) for st in ca], [[677], [313, 677]])
+        self.assertEqual([(len(st.hour), len(st.days), st.head["plays"], st.head["sinceDay"]) for st in ca],
+                         [(41, 41, 41, 273), (42, 42, 42, 273)])
+        self.assertEqual(self.by["clock-ahead"]["boots"][1]["added"], ["plays.jnl"])
+        for name, first, second in (("partial-open", 3, 7), ("partial-read", 5, 7), ("partial-tail", 3, 6)):
+            b1, b2 = self.by[name]["boots"]
+            self.assertEqual((b1["partial"], b1["folded"], b1["saved"], b2["partial"], b2["folded"], b2["saved"]),
+                             (True, first, False, False, second, True), name)
+            self.assertEqual(self.card(b1["out"])["stats.bin"], self.card(b1["in"])["stats.bin"], name)
+        self.assertEqual([b["trimmed"] for b in self.by["partial-tail"]["boots"]], [["plays.1.jnl"], ["plays.jnl"]])
 
     def test_the_library(self):
         lib = json.loads(self.files["stats/library.json"])
@@ -689,6 +900,18 @@ class SeedTests(unittest.TestCase):
             self.seed(days=2, per_day=2, replace=True)
         self.assertIn("disk check", str(e.exception))
         os.remove(os.path.join(self.player, "plays.xl1"))
+        # stats.bin's twin, with --base (which would remove stats.bin): refused, nothing changed.
+        self.seed(days=2, per_day=2, base=4, replace=True)
+        Path(self.player, "stats.xl1").write_bytes(b"")
+        before = sr.player_files(self.player)
+        listed = sorted(os.listdir(self.player))
+        with self.assertRaises(sr.Refused) as e:
+            self.seed(days=2, per_day=2, base=4, replace=True)
+        self.assertIn("disk check", str(e.exception))
+        self.assertEqual((sr.player_files(self.player), sorted(os.listdir(self.player))), (before, listed))
+        self.seed(days=2, per_day=2, replace=True)             # without --base the stats files aren't touched
+        self.assertEqual(sr.player_files(self.player)["stats.bin"], before["stats.bin"])
+        os.remove(os.path.join(self.player, "stats.xl1"))
         # No SYNTHCARD.TXT.
         os.remove(os.path.join(self.card, "SYNTHCARD.TXT"))
         with self.assertRaises(sr.Refused) as e:
@@ -734,11 +957,32 @@ class SeedTests(unittest.TestCase):
         res = json.loads(out.getvalue())
         self.assertEqual((res["read"], res["folded"], res["stats"]["head"]["plays"] <= 6), ("absent", 6, True))
         st = sr.boot(sr.player_files(self.player), now=UNTIL)
-        Path(self.tmp, "stats.bin").write_bytes(st["files"]["stats.bin"])
-        with contextlib.redirect_stdout(io.StringIO()) as out:
-            self.assertEqual(sr.main(["dump", os.path.join(self.tmp, "stats.bin"), "--rows"]), 0)
-        res = json.loads(out.getvalue())
-        self.assertEqual((res["read"], res["stats"]["head"]["flags"]), ("loaded", sr.FLAG_BASE_LOST), "its base not given")
+        here = Path(self.tmp, "dump")
+        here.mkdir()
+        Path(here, "stats.bin").write_bytes(st["files"]["stats.bin"])
+        head = sr.read_stats(st["files"]["stats.bin"]).head
+        self.assertEqual(head["baseGen"], 1)
+
+        def dump(*args):
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                code = sr.main(["dump", str(Path(here, "stats.bin"))] + list(args))
+            return code, json.loads(out.getvalue())
+        code, res = dump("--rows")                             # no base beside it: HEAD as read, never lost
+        self.assertEqual((code, res["read"], res["base"], res["stats"]["head"]), (0, "loaded", "not given", head))
+        Path(here, "the base.bin").write_bytes(st["files"]["stats-00000001.bin"])
+        code, res = dump(str(Path(here, "the base.bin")))      # given under another name
+        self.assertEqual((code, res["read"], res["stats"]["head"]["flags"], res["stats"]["rows"]["base"]),
+                         (0, "loaded", 0, head["baseRows"]))
+        Path(here, "stats-00000001.bin").write_bytes(st["files"]["stats-00000001.bin"])
+        code, res = dump()                                     # beside it
+        self.assertEqual((res["read"], res["stats"]["head"], res["stats"]["rows"]["base"]),
+                         ("loaded", head, head["baseRows"]))
+        Path(here, "other.bin").write_bytes(sr.write_base({}, 1))
+        code, res = dump(str(Path(here, "other.bin")))         # not the base it names: lost, as on the card
+        self.assertEqual((res["read"], res["stats"]["head"]["flags"]), ("loaded", sr.FLAG_BASE_LOST))
+        Path(here, "stats.bin").write_bytes(st["files"]["stats.bin"][:-1])
+        code, res = dump()
+        self.assertEqual((code, res), (1, {"read": "corrupt", "why": "FileBytes"}))
 
 
 if __name__ == "__main__":
