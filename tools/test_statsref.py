@@ -435,7 +435,10 @@ class BootTests(unittest.TestCase):
     def test_a_stale_base_is_replaced(self):
         """5.3: after a stats.bin deleted or corrupt, or a base lost, baseGen
         starts again and the first compaction writes stats-00000001.bin over
-        the stale file there (named by nothing); nothing is removed."""
+        the stale file there (named by nothing); nothing is removed. A lost
+        base 1 is named by stats.bin until a save: that boot doesn't compact
+        under its name (a cut after the create would leave a short base the
+        named one, unread at every boot), the next boot's does."""
         files = sr.earlier([play(q, ["Brine", "Night Ticket"][q % 2]) for q in range(1, 5)])
         stale = files["stats-00000001.bin"]
         log = {"plays.jnl": sr.log(*[play(q, "Low Tide") for q in range(5, 7)])}
@@ -443,6 +446,12 @@ class BootTests(unittest.TestCase):
                            ("corrupt", {"stats.bin": files["stats.bin"][:-1], "stats-00000001.bin": stale}),
                            ("lost", dict(files, **{"stats-00000001.bin": sr.write_base({}, 1)}))):
             r = sr.boot(dict(card, **log))
+            if name == "lost":
+                self.assertEqual((r["read"], r["saved"], r["compacted"], r["removed"]), ("loaded", True, False, []))
+                self.assertEqual(r["files"]["stats-00000001.bin"], card["stats-00000001.bin"], "left as it was")
+                self.assertEqual(sr.load(r["files"]).head["baseGen"], 0)
+                card = r["files"]
+                r = sr.boot(dict(card, **{"plays.jnl": sr.log(*[play(q, "Low Tide") for q in range(5, 8)])}))
             new = r["files"]["stats-00000001.bin"]
             self.assertTrue(r["compacted"], name)
             self.assertEqual(r["removed"], [], name)
@@ -800,11 +809,18 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(self.card(c["out"])["stats.bad"], self.card(c["in"])["stats.bin"])
         self.assertNotEqual(self.card(c["out"])["stats-00000001.bin"], self.card(c["in"])["stats-00000001.bin"],
                             "the stale base replaced")
-        for name, compacted in (("base-lost", False), ("base-other", True)):
+        for name in ("base-lost", "base-other"):
             h = b(name)["stats"]["head"]
             self.assertEqual((h["flags"] & sr.FLAG_BASE_LOST, h["plays"], b(name)["removed"], b(name)["compacted"]),
-                             (sr.FLAG_BASE_LOST, 10, [], compacted), name)
+                             (sr.FLAG_BASE_LOST, 10, [], False), name)
         self.assertIn("stats-00000002.bin", b("base-lost")["out"])
+        # base-other: no compaction under the name stats.bin names (5.3);
+        # the next boot's, its stats.bin naming no base, replaces that file.
+        o1, o2 = b("base-other"), b("base-other", 1)
+        self.assertEqual(self.card(o1["out"])["stats-00000001.bin"], self.card(o1["in"])["stats-00000001.bin"])
+        self.assertEqual((o1["stats"]["head"]["baseGen"], o2["compacted"], o2["removed"], o2["stats"]["head"]["baseGen"]),
+                         (0, True, [], 1))
+        self.assertNotEqual(self.card(o2["out"])["stats-00000001.bin"], self.card(o1["in"])["stats-00000001.bin"])
         self.assertEqual(b("base-neighbours")["removed"], ["stats-00000002.bin"])
         nm = b("newer-minor")
         self.assertEqual(struct.unpack_from("<H", self.card(nm["in"])["stats.bin"], 6)[0], 3)

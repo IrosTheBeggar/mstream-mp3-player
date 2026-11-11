@@ -280,9 +280,12 @@ bool sections(const Bytes& b, const cc::FormatSpec& spec, cc::Why* why, Section*
   return true;
 }
 
-Read readStats(sf::Fold& f, const Files& in, std::vector<sf::Track>* base) {
+// `named`: the base stats.bin names, whole or lost (a compaction never
+// writes that name: 5.3).
+Read readStats(sf::Fold& f, const Files& in, std::vector<sf::Track>* base, uint32_t* named = nullptr) {
   f.clear();
   base->clear();
+  if (named) *named = 0;
   auto it = in.find("stats.bin");
   if (it == in.end()) return Read::Absent;
   cc::Why why;
@@ -303,6 +306,7 @@ Read readStats(sf::Fold& f, const Files& in, std::vector<sf::Track>* base) {
     }
   }
   const sf::Head h = f.head();
+  if (named) *named = h.baseGen;
   if (h.baseGen) {
     auto b = in.find(baseName(h.baseGen));
     if (b != in.end() && b->second.size() < 40) return Read::Unread;  // its header doesn't read whole
@@ -790,7 +794,8 @@ void test_every_fixture_boot() {
       const Files out = cardOf(b["out"]);
       const cc::msmf::Acks acks = acksOf(b["acks"]);
       std::vector<sf::Track> base;
-      const Read read = readStats(f, in, &base);
+      uint32_t named = 0;
+      const Read read = readStats(f, in, &base, &named);
       TEST_ASSERT_EQUAL_STRING_MESSAGE(b["read"].c_str(), readName(read), what);
       ++boots;
       if (read == Read::Newer || read == Read::Unread) {
@@ -822,7 +827,8 @@ void test_every_fixture_boot() {
         TEST_ASSERT_EQUAL_MESSAGE(!b["partial"].boolean(), ok, what);
         if (ok && f.dirty()) {
           Bytes newBase;
-          if (sf::compactionDue(p.rows[sf::kTrkd], p.head.baseRows, b["playing"].boolean(), b["safePoint"].boolean())) {
+          if (sf::compactionDue(p.rows[sf::kTrkd], p.head.baseRows, b["playing"].boolean(), b["safePoint"].boolean()) &&
+              p.head.baseGen + 1 != named) {
             newBase = compact(f, &p, base);
             compacted = true;
             TEST_ASSERT_TRUE_MESSAGE(out.count(baseName(p.head.baseGen)) == 1, what);
@@ -854,8 +860,8 @@ void test_every_fixture_boot() {
     }
   }
   printf("fixtures: %d boots, %d saves byte for byte, %d bases, %d files trimmed\n", boots, saves, compactions, trims);
-  TEST_ASSERT_EQUAL_INT(33, boots);
-  TEST_ASSERT_EQUAL_INT(24, saves);
+  TEST_ASSERT_EQUAL_INT(34, boots);
+  TEST_ASSERT_EQUAL_INT(25, saves);
   TEST_ASSERT_EQUAL_INT(4, compactions);
   TEST_ASSERT_EQUAL_INT(22, trims);
 }

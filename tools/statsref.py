@@ -594,6 +594,7 @@ class Session:
 
     def _load(self):
         self.stats = Stats()
+        self.card_base = 0              # the base the card's stats.bin names, whole or lost (0: none)
         data = self.files.get(STATS_BIN)
         if data is None:
             return "absent", None
@@ -606,6 +607,7 @@ class Session:
             self.files[STATS_BAD] = self.files.pop(STATS_BIN)
             return "corrupt", e.why
         h = st.head
+        self.card_base = h["baseGen"]
         if h["baseGen"]:
             name = base_name(h["baseGen"])
             b = self.files.get(name)
@@ -723,7 +725,12 @@ class Session:
         stats.bin (generation + 1, retention applied, sinceDay set once), a
         new base when compacting, and removes the old base. The new base's
         name is one stats.bin doesn't name: a stale file there (a stats.bin
-        deleted or corrupt, or a base lost, left it) is replaced."""
+        deleted or corrupt, or a base lost, left it) is replaced. A
+        compaction whose name the card's stats.bin names (after a lost base
+        1, baseGen starts again at 0: its next is 1) waits for the next
+        boot: a cut after its create would leave a base shorter than its
+        header under the name stats.bin names, which every boot reads as
+        unread (5.3)."""
         if not self.on or fails or self.partial:
             return False
         if not self.new:
@@ -735,7 +742,8 @@ class Session:
         since_day(st, self.first_play_day, today, self.commit_time)
         retain(st, today)
         old_base = base_name(h["baseGen"]) if h["baseGen"] else None
-        self.compacted = why == "boot" and compaction_due(len(st.trkd), h["baseRows"], playing, safe_point)
+        self.compacted = (why == "boot" and compaction_due(len(st.trkd), h["baseRows"], playing, safe_point)
+                          and sat(h["baseGen"] + 1, M32) != self.card_base)
         if self.compacted:
             st.base = st.tracks()
             st.trkd = {}
@@ -749,6 +757,7 @@ class Session:
             del self.files[old_base]
             self.removed.append(old_base)
         self.saved_mark = dict(st.mark)
+        self.card_base = h["baseGen"]
         self.new = False
         self.wrote = True
         return True
@@ -1427,11 +1436,18 @@ def scenario_reads():
                 "device": dev, "files": lost, "boots": boot1(True)})
     other = dict(before, **logs)
     other["stats-00000001.bin"] = write_base({path_hash("Elsewhere/01 Other.mp3"): Row(1, 0, 0, 0, 1, YOU)}, 1)
+    later = slot(DEV_A, EPOCH_A, 11, "Paper Comets", 200000, 200000, at="2026-11-10T20:00:00")
     out.append({"name": "base-other",
                 "note": "Another file under the base's name: its header whole, its CRC not stats.bin's baseCrc. "
-                        "The base is lost (flags bit 1, the totals kept). Nothing playing, so the save compacts, "
-                        "and the new base, stats-00000001.bin again, replaces that file; nothing is removed.",
-                "device": dev, "files": other, "boots": boot1(False)})
+                        "The base is lost (flags bit 1, the totals kept). Boot 1: nothing plays, but the "
+                        "compaction's name would be stats-00000001.bin again, the one stats.bin names, and a cut "
+                        "after its create would leave a base shorter than its header there, unread at every boot "
+                        "(5.3): so no compaction (TRKD keeps the rows), nothing removed. Boot 2, a play later: its "
+                        "stats.bin names no base, so the save compacts, and the new base, stats-00000001.bin, "
+                        "replaces that file; nothing is removed.",
+                "device": dev, "files": other,
+                "boots": boot1(False) + [dict(acks=acks, now=now + DAY_MS, playing=False, safePoint=True,
+                                              add={"plays.jnl": log(later)})]})
     unread = dict(before, **logs)
     b = bytearray(before["stats-00000001.bin"])
     b[-1] ^= 1
