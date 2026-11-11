@@ -2172,8 +2172,19 @@ void test_an_updates_give_back() {
     TEST_ASSERT_TRUE(p.glue->core.rereadPending());
     TEST_ASSERT_TRUE(p.glue->core.wantsRoom());
     TEST_ASSERT_FALSE(p.glue->core.reserve(1));
+    // (The journal's questions meanwhile read nothing either: the folds
+    // dropped, nothing covered.)
+    Slot s;
+    s.kind = pl::kKindPlay;
+    std::memcpy(s.deviceId, p.id, 6);
+    s.epoch = p.j->epoch();
+    s.seq = 1;
+    TEST_ASSERT_FALSE(p.glue->core.covered(s));
+    TEST_ASSERT_EQUAL_UINT32(0, p.glue->core.markOf(p.id, p.j->epoch()));
+    p.glue->core.ready();
     TEST_ASSERT_EQUAL_UINT64(read0, card.bytesRead);
     TEST_ASSERT_EQUAL_UINT32(carves0, gHeap.carves);
+    TEST_ASSERT_EQUAL_UINT32(0, p.glue->core.rereads());
     TEST_ASSERT_FALSE(p.glue->hs());
     TEST_ASSERT_EQUAL_STRING("givenBack", refused(p));
     const statsglue::TookBack& t = p.glue->core.takeBack();
