@@ -2643,8 +2643,9 @@ struct UpdateRun {
   size_t bootTopKept = 0;      // ... its kept bytes at the top
   std::vector<std::pair<size_t, size_t>> fence;  // the free blocks at the fence (64 KB or more)
   size_t largest = 0;          // after the update, before the join
-  size_t joined = 0;           // ... joined again
-  size_t givenBack = 0;        // ... and given back
+  size_t joined = 0;           // ... joined again (and the listening stats' blocks taken again)
+  size_t joinOnly = 0;         // ... the join alone given back (the stats' blocks held)
+  size_t givenBack = 0;        // ... and given back (the stats' blocks too: the memory check's give-back)
   size_t topKept = 0;          // the kept bytes the join put at the top
   size_t bootLowest = SIZE_MAX;  // the lowest free while the boot's join placed its blocks
   size_t lowest = SIZE_MAX;      // ... while the joins after the update did
@@ -2696,14 +2697,23 @@ struct MoodRun {
 // RCNT growing until the fold's end holds it to its cap and the save
 // prunes it, then the save (its work memory taken and given back; no
 // compaction: something plays), or none landed (a refusal: the fold ended
-// alone). Then held through every update step: no give-back.
+// alone). Then, at each update step (the owner's decision of 2026-11-11),
+// given back at the fence after Auto DJ's join, and taken again after the
+// update's Live and Auto DJ's rejoin; the next memory check's give-back
+// (setGiveBack()'s chain: the join, then the stats). Or (giveBack false: S1
+// as first built) held through every update step.
 struct StatsRun {
   uint32_t rcntRows = 0, trkdRows = 0;  // stats.bin's, loaded
   uint32_t hashes = 0;                  // the tracks the log's plays are of (TRKD's loaded rows the first)
   uint32_t slots = 0;                   // the boot's log, never synced
   bool landed = true;                   // the boot's save lands (false: refused, its fold ended alone)
+  bool giveBack = false;                // given back at each update's fence, taken again after its rejoin
+  bool giveBackSaves = true;            // ... the give-back's save (a fold not saved yet) lands (false: refused)
   // What it came to.
   size_t peak = 0, held = 0, loaded = 0;
+  size_t given = 0, kept = 0, retaken = 0;  // the first give-back's bytes, what it kept, the first re-read's held
+  uint32_t giveBacks = 0, saves = 0;        // the give-backs, and the saves they asked first
+  uint32_t rcntAt = 0, trkdAt = 0;          // the rows stats.bin holds at the give-back (the re-read's)
   uint32_t reserveFailed = 0;  // pieces whose room couldn't be taken first (the fold carved on demand)
   bool noMemory = false;       // the fold found none: nothing more folded, no save
 };
@@ -2711,14 +2721,14 @@ struct StatsRun {
 uint64_t statsHash(uint32_t i) { return cc::fnv1a64(&i, sizeof(i)); }
 
 // The load: stats.bin's rows, in its order, as StatsFile's read loads them.
-void statsLoad(statsfold::Fold& f, const StatsRun& sr) {
+void statsLoad(statsfold::Fold& f, uint32_t rcntRows, uint32_t trkdRows) {
   namespace sf = statsfold;
-  TEST_ASSERT_TRUE(f.reserveLoad(sr.rcntRows, sr.trkdRows));
-  std::vector<uint64_t> h(sr.trkdRows);
-  for (uint32_t i = 0; i < sr.trkdRows; ++i) h[i] = statsHash(i);
+  TEST_ASSERT_TRUE(f.reserveLoad(rcntRows, trkdRows));
+  std::vector<uint64_t> h(trkdRows);
+  for (uint32_t i = 0; i < trkdRows; ++i) h[i] = statsHash(i);
   std::sort(h.begin(), h.end());
-  std::vector<uint8_t> rows(static_cast<size_t>(std::max(sr.trkdRows, sr.rcntRows)) * 24);
-  for (uint32_t i = 0; i < sr.trkdRows; ++i) {
+  std::vector<uint8_t> rows(static_cast<size_t>(std::max(trkdRows, rcntRows)) * 24);
+  for (uint32_t i = 0; i < trkdRows; ++i) {
     sf::Track t;
     t.hash = h[i];
     t.plays = 3;
@@ -2726,18 +2736,68 @@ void statsLoad(statsfold::Fold& f, const StatsRun& sr) {
     t.lastOrd = 1;
     sf::encodeTrack(t, rows.data() + i * 24);
   }
-  TEST_ASSERT_TRUE(f.loadRows(sf::kTrkd, rows.data(), sr.trkdRows, 24));
+  TEST_ASSERT_TRUE(f.loadRows(sf::kTrkd, rows.data(), trkdRows, 24));
   // RCNT: the last 32 days' (day, hash) rows, by day then hash.
   std::vector<std::pair<uint16_t, uint64_t>> rc;
-  for (uint32_t i = 0; i < sr.rcntRows; ++i) rc.emplace_back(static_cast<uint16_t>(498 + i % 32), statsHash(i % 5000));
+  for (uint32_t i = 0; i < rcntRows; ++i) rc.emplace_back(static_cast<uint16_t>(498 + i % 32), statsHash(i % 5000));
   std::sort(rc.begin(), rc.end());
-  for (uint32_t i = 0; i < sr.rcntRows; ++i) {
+  for (uint32_t i = 0; i < rcntRows; ++i) {
     uint8_t* r = rows.data() + i * 12;
     cc::put16(r, rc[i].first);
     cc::put16(r + 2, 1);
     cc::put64(r + 4, rc[i].second);
   }
-  TEST_ASSERT_TRUE(f.loadRows(sf::kRcnt, rows.data(), sr.rcntRows, 12));
+  TEST_ASSERT_TRUE(f.loadRows(sf::kRcnt, rows.data(), rcntRows, 12));
+}
+void statsLoad(statsfold::Fold& f, const StatsRun& sr) { statsLoad(f, sr.rcntRows, sr.trkdRows); }
+
+// The give-back at the update's fence (StatsGlue's giveBack(), after Auto
+// DJ's join): a fold not saved yet saved first (the rotation's path: its
+// work memory taken and given back; plan and saved, the card's writes
+// aside), then every resident block but MARK's given back. The rows
+// stats.bin then holds are the re-read's: RAM's when the save landed (or
+// nothing was new), the boot's file's when it was refused.
+void statsGiveBack(statsfold::Fold& f, StatsRun& sr) {
+  namespace sf = statsfold;
+  sr.rcntAt = f.rows(sf::kRcnt);
+  sr.trkdAt = f.rows(sf::kTrkd);
+  if (f.dirty()) {
+    ++sr.saves;
+    void* work = ModelHeap::alloc(statsfile::kWorkBytes);
+    TEST_ASSERT_NOT_NULL(work);
+    sf::Fold::Plan plan;
+    if (sr.giveBackSaves && f.plan(sf::kMinMs + 530ull * sf::kDayMs, false, 0, &plan)) {
+      f.saved(plan);
+      sr.rcntAt = f.rows(sf::kRcnt);
+      sr.trkdAt = f.rows(sf::kTrkd);
+    } else {
+      sr.rcntAt = sr.rcntRows;  // (the card's stats.bin: the one the boot read)
+      sr.trkdAt = sr.trkdRows;
+    }
+    ModelHeap::release(work);
+  }
+  const size_t gives = f.givesBack();
+  const size_t given = f.giveBack();
+  TEST_ASSERT_EQUAL_size_t(gives, given);
+  if (!sr.giveBacks++) {
+    sr.given = given;
+    sr.kept = f.held();
+  }
+  TEST_ASSERT_EQUAL_size_t(sr.kept, f.held());  // (MARK's block alone)
+}
+
+// The re-read after the update's Live and Auto DJ's rejoin (StatsGlue's
+// takeBack(), at a pass that may carve): HOUR and DAYS again (MARK's block
+// kept), the read's work memory, the load's chunks and the spare, the work
+// memory given back (readNow()'s order).
+void statsTakeAgain(statsfold::Fold& f, StatsRun& sr) {
+  TEST_ASSERT_TRUE(f.begin());
+  void* work = ModelHeap::alloc(statsfile::kWorkBytes);
+  TEST_ASSERT_NOT_NULL(work);
+  f.clear();
+  statsLoad(f, sr.rcntAt, sr.trkdAt);
+  ModelHeap::release(work);
+  if (!sr.retaken) sr.retaken = f.held();
 }
 
 // The boot's fold of a log never synced: `slots` plays of `hashes` tracks,
@@ -2866,12 +2926,15 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     stats->held = fold->held();
   }
   for (int step = 0; step < steps; ++step) {
-    // enterFence(): the queue, Thumbs' pools, the join, then the old index.
+    // enterFence(): the queue, Thumbs' pools, the join, the stats' blocks
+    // (their save first), then the old index.
     for (void* p : queue) ModelHeap::release(p);
     for (void* p : thumbs) ModelHeap::release(p);
     queue.clear();
     thumbs.clear();
     join.release();
+    const bool gives = fold && stats->giveBack;
+    if (gives) statsGiveBack(*fold, *stats);
     index.clear();  // (the words go with it)
     u.fence = ModelHeap::freeBlocks(64 * 1024);
     // The build, from D's records (or T's, D's rows Software rows).
@@ -2900,10 +2963,17 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     take({204800, 256, 256, 110592, 24, 24}, &thumbs);
     u.largest = ModelHeap::largest();
     joinNow(&u.lowest);
+    // The stats' blocks again, the rejoin done (a pass that may carve).
+    if (gives) statsTakeAgain(*fold, *stats);
     u.joined = ModelHeap::largest();
+    // The next update's memory check, short on its table's block: the
+    // join given back (setGiveBack()), then the stats' blocks (the chain).
     join.release();
+    u.joinOnly = ModelHeap::largest();
+    if (gives) statsGiveBack(*fold, *stats);
     u.givenBack = ModelHeap::largest();
     joinNow(&u.lowest);
+    if (gives) statsTakeAgain(*fold, *stats);
   }
   join.release();
   index.clear();
@@ -3065,16 +3135,22 @@ void test_a_library_update_in_a_model_heap() {
 // compaction's 96 KB, 4,092 rows in six), loaded at PlayHistory::begin()'s
 // place; then, after the boot's join, the boot's fold of a short log (300
 // slots) or of a full one never synced (13,106 slots, of 2,214 tracks; of
-// 4,092: TRKD's rows), its save landed, or (a full log's) refused. The
-// mood plan's pass rule (9.5), with Auto DJ placed and where the heap puts
-// its blocks: the margin kept at the boot and after the update; the
-// fence's frees, the build and the Live step leave the heap as Auto DJ off
-// has it (with the same stats); given back, off's block; joined within
-// 122,880 B of the control's, and at or over 245,764 B where the control
-// is. Each shape's figures are pinned, and whether the rule holds. It holds
-// at P = 2,214 with a short boot fold only, so the case FAILS (a failure,
-// not a skip) until the owner rules on 6.7's ladder or a redesign:
-// docs/LISTENING-STATS.md 9.5's Done-when isn't met before that.
+// 4,092: TRKD's rows), its save landed, or (a full log's) refused, and then
+// the give-back's own save landed or refused too. At each update step the
+// stats give their blocks back (the owner's decision of 2026-11-11:
+// StatsGlue's giveBack(), at the fence after Auto DJ's join; MARK's block
+// kept) and take them again after the update's Live and Auto DJ's rejoin
+// (takeBack(): the re-read, the load's chunks again); "given back" is the
+// next memory check's give-back, the join's and then the stats' (the
+// chain, setGiveBack()). The mood plan's pass rule (9.5), with Auto DJ
+// placed and where the heap puts its blocks: the margin kept at the boot
+// and after the update; the fence's frees, the build and the Live step
+// leave the heap as Auto DJ off has it (with the same stats); given back,
+// off's block; joined (the stats' blocks taken again) within 122,880 B of
+// the control's, and at or over 245,764 B where the control is. Every shape
+// passes; each one's figures are pinned, beside the run that holds the
+// blocks through the updates (S1 as first built, which failed the rule past
+// P = 2,214's short fold).
 void test_the_listening_stats_in_a_model_heap() {
   const uint32_t tracks = 19412;
   const synthcard::Card card = synthcard::make(synth::userShape(tracks));
@@ -3103,16 +3179,25 @@ void test_the_listening_stats_in_a_model_heap() {
   const UpdateRun on = libraryUpdates(Dj::Placed, saved, records, card, 2);
   struct Shape {
     uint32_t played, slots;
-    bool landed;    // the boot's save
-    bool passes;
-    size_t joined;  // Auto DJ placed, after the update (pinned)
-    size_t held;    // the Fold's blocks held through the updates (pinned)
+    bool landed;        // the boot's save
+    bool saves;         // the give-back's save (a fold the boot's save didn't land)
+    size_t held;        // the Fold's blocks after the boot's fold (pinned)
+    size_t given;       // the first give-back's bytes (pinned)
+    size_t retaken;     // the first re-read's (pinned)
+    size_t joined;      // Auto DJ placed, after the update, the stats taken again (pinned)
+    size_t heldJoined;  // ... with the blocks held through the updates instead (pinned)
   };
   const uint32_t full = 2 * playlog::kFileSlots;
-  const Shape shapes[] = {{2214, 300, true, true, 249844, 80192},     {2214, full, true, false, 180212, 129344},
-                          {19478, 300, true, false, 180212, 194880},  {19478, full, true, false, 225268, 194880},
-                          {2214, full, false, false, 180212, 145728}, {19478, full, false, false, 225268, 194880}};
-  std::string failing;
+  const Shape shapes[] = {
+      {2214, 300, true, true, 80192, 78656, 96576, 360436, 249844},
+      {2214, full, true, true, 129344, 127808, 129344, 360436, 180212},
+      {19478, 300, true, true, 194880, 193344, 194880, 344052, 180212},
+      {19478, full, true, true, 194880, 193344, 178496, 360436, 143348},
+      {2214, full, false, true, 145728, 127808, 129344, 360436, 180212},
+      {19478, full, false, true, 194880, 193344, 178496, 360436, 143348},
+      {2214, full, false, false, 145728, 144192, 80192, 360436, 180212},
+      {19478, full, false, false, 194880, 193344, 194880, 344052, 143348},
+  };
   for (const Shape& sh : shapes) {
     StatsRun sr;
     sr.rcntRows = sh.played < 10000 ? 1365 : 4096;
@@ -3120,56 +3205,74 @@ void test_the_listening_stats_in_a_model_heap() {
     sr.hashes = sh.played < 10000 ? sh.played : 4092;
     sr.slots = sh.slots;
     sr.landed = sh.landed;
+    sr.giveBackSaves = sh.saves;
+    StatsRun held = sr;
+    sr.giveBack = true;
     StatsRun srOff = sr, srHeaps = sr;
     const UpdateRun statsOff = libraryUpdates(Dj::Off, saved, records, card, 2, MoodRun(), &srOff);
     const UpdateRun statsOn = libraryUpdates(Dj::Placed, saved, records, card, 2, MoodRun(), &sr);
     const UpdateRun statsHeaps = libraryUpdates(Dj::WhereThe, saved, records, card, 2, MoodRun(), &srHeaps);
+    const UpdateRun heldOn = libraryUpdates(Dj::Placed, saved, records, card, 2, MoodRun(), &held);
+    const bool rule = statsOn.lowest >= kMargin && statsOn.bootLowest >= kMargin && statsHeaps.lowest >= kMargin &&
+                      statsHeaps.bootLowest >= kMargin && statsOn.fence == statsOff.fence &&
+                      statsHeaps.fence == statsOff.fence && statsOn.largest == statsOff.largest &&
+                      statsOn.givenBack == statsOff.largest && statsHeaps.largest == statsOff.largest &&
+                      statsHeaps.givenBack == statsOff.largest && statsOn.joined + 122880 >= on.joined &&
+                      (statsOn.joined >= 245764 || on.joined < 245764);
     printf("[join] with the listening stats at P = %u (stats.bin: RCNT %u rows, TRKD %u; the boot's fold: %u slots of "
            "%u tracks, %u pieces without their room first; its save %s): the Fold's blocks %u B loaded, %u B at the "
-           "fold's peak, %u B held after it. The largest free block after the update %u B with Auto DJ off (the "
-           "control's %u B). Auto DJ on: free at least %u B while placing at the boot; after the update %u B, joined "
-           "%u B (%u B "
-           "of it at the top), given back %u B; free at least %u B while placing; the fence as off's: %s. Where the "
-           "heap puts them: joined %u B, given back %u B. Joined against the control's %u B: %+ld B: the pass rule "
-           "%s\n",
+           "fold's peak, %u B held after it. Given back at each update (%u times, %u saves first%s): %u B, MARK's %u "
+           "B kept; %u B taken again by the re-read. The largest free block after the update %u B with Auto DJ off "
+           "(the control's %u B). Auto DJ on: free at least %u B while placing at the boot; after the update %u B, "
+           "joined (the stats taken again) %u B (%u B of it at the top), the join alone given back %u B, the stats' "
+           "blocks too %u B; free at least %u B while placing; the fence as off's: %s. Where the heap puts them: "
+           "joined %u B, given back %u B. Joined against the control's %u B: %+ld B (held through the updates: %u "
+           "B, %+ld B): the pass rule %s\n",
            (unsigned)sh.played, (unsigned)sr.rcntRows, (unsigned)sr.trkdRows, (unsigned)sr.slots, (unsigned)sr.hashes,
            (unsigned)sr.reserveFailed, sh.landed ? "landed" : "refused", (unsigned)sr.loaded, (unsigned)sr.peak,
-           (unsigned)sr.held,
-           (unsigned)statsOff.largest, (unsigned)off.largest, (unsigned)statsOn.bootLowest, (unsigned)statsOn.largest,
-           (unsigned)statsOn.joined, (unsigned)statsOn.topKept, (unsigned)statsOn.givenBack, (unsigned)statsOn.lowest,
-           statsOn.fence == statsOff.fence ? "yes" : "no", (unsigned)statsHeaps.joined, (unsigned)statsHeaps.givenBack,
-           (unsigned)on.joined, (long)statsOn.joined - (long)on.joined,
-           statsOn.fence == statsOff.fence && statsHeaps.fence == statsOff.fence &&
-                   statsOn.largest == statsOff.largest && statsOn.givenBack == statsOff.largest &&
-                   statsHeaps.largest == statsOff.largest && statsHeaps.givenBack == statsOff.largest &&
-                   statsOn.joined + 122880 >= on.joined && (statsOn.joined >= 245764 || on.joined < 245764)
-               ? "holds"
-               : "FAILS");
-    TEST_ASSERT_FALSE(sr.noMemory);
-    TEST_ASSERT_TRUE(sr.peak < 512 * 1024);  // 5.6's and 11's figure for the fold's peak
-    TEST_ASSERT_EQUAL_size_t(sr.held, srOff.held);
-    TEST_ASSERT_TRUE(statsOn.lowest >= kMargin);
-    TEST_ASSERT_TRUE(statsOn.bootLowest >= kMargin);
-    TEST_ASSERT_TRUE(statsHeaps.lowest >= kMargin);
-    TEST_ASSERT_TRUE(statsHeaps.bootLowest >= kMargin);
-    TEST_ASSERT_EQUAL_size_t(sh.joined, statsOn.joined);
-    TEST_ASSERT_EQUAL_size_t(sh.held, sr.held);
-    const bool rule = statsOn.fence == statsOff.fence && statsHeaps.fence == statsOff.fence &&
-                      statsOn.largest == statsOff.largest && statsOn.givenBack == statsOff.largest &&
-                      statsHeaps.largest == statsOff.largest && statsHeaps.givenBack == statsOff.largest &&
-                      statsOn.joined + 122880 >= on.joined && (statsOn.joined >= 245764 || on.joined < 245764);
-    TEST_ASSERT_EQUAL(sh.passes, rule);
-    if (!rule) {
-      char m[112];
-      std::snprintf(m, sizeof(m), " P = %u with %u slots%s (joined %+ld B);", (unsigned)sh.played, (unsigned)sh.slots,
-                    sh.landed ? "" : ", its save refused", (long)statsOn.joined - (long)on.joined);
-      failing += m;
-    }
+           (unsigned)sr.held, (unsigned)sr.giveBacks, (unsigned)sr.saves,
+           sr.saves ? (sh.saves ? ", landed" : ", refused") : "", (unsigned)sr.given, (unsigned)sr.kept,
+           (unsigned)sr.retaken, (unsigned)statsOff.largest, (unsigned)off.largest, (unsigned)statsOn.bootLowest,
+           (unsigned)statsOn.largest, (unsigned)statsOn.joined, (unsigned)statsOn.topKept, (unsigned)statsOn.joinOnly,
+           (unsigned)statsOn.givenBack, (unsigned)statsOn.lowest, statsOn.fence == statsOff.fence ? "yes" : "no",
+           (unsigned)statsHeaps.joined, (unsigned)statsHeaps.givenBack, (unsigned)on.joined,
+           (long)statsOn.joined - (long)on.joined, (unsigned)heldOn.joined, (long)heldOn.joined - (long)on.joined,
+           rule ? "holds" : "FAILS");
+    char w[96];
+    std::snprintf(w, sizeof(w), "P = %u, %u slots, the boot's save %s, the give-back's %s", (unsigned)sh.played,
+                  (unsigned)sh.slots, sh.landed ? "landed" : "refused", sh.saves ? "landed" : "refused");
+    TEST_ASSERT_FALSE_MESSAGE(sr.noMemory, w);
+    TEST_ASSERT_TRUE_MESSAGE(sr.peak < 512 * 1024, w);  // 5.6's and 11's figure for the fold's peak
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(sr.held, srOff.held, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(sr.held, held.held, w);
+    // Two updates, each given back at its fence and again at the next
+    // memory check's give-back; a save first only where the fold held what
+    // the card's stats.bin didn't (the boot's save refused).
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(4, sr.giveBacks, w);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(sh.landed ? 0 : 1, sr.saves, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(statsfold::kMarkBlockRows * sizeof(statsfold::Fold::MarkRow), sr.kept, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.held, sr.held, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.given, sr.given, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.retaken, sr.retaken, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.joined, statsOn.joined, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.heldJoined, heldOn.joined, w);
+    // The mood plan's rule, whole, for every shape.
+    TEST_ASSERT_TRUE_MESSAGE(statsOn.lowest >= kMargin, w);
+    TEST_ASSERT_TRUE_MESSAGE(statsOn.bootLowest >= kMargin, w);
+    TEST_ASSERT_TRUE_MESSAGE(statsHeaps.lowest >= kMargin, w);
+    TEST_ASSERT_TRUE_MESSAGE(statsHeaps.bootLowest >= kMargin, w);
+    TEST_ASSERT_TRUE_MESSAGE(statsOn.fence == statsOff.fence, w);
+    TEST_ASSERT_TRUE_MESSAGE(statsHeaps.fence == statsOff.fence, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(statsOff.largest, statsOn.largest, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(statsOff.largest, statsOn.givenBack, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(statsOff.largest, statsHeaps.largest, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(statsOff.largest, statsHeaps.givenBack, w);
+    TEST_ASSERT_TRUE_MESSAGE(statsOn.joined + 122880 >= on.joined, w);
+    TEST_ASSERT_TRUE_MESSAGE(statsOn.joined >= 245764 || on.joined < 245764, w);
+    TEST_ASSERT_TRUE_MESSAGE(rule, w);
+    // Given back, the update's room is Auto DJ off's without the stats.
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(off.largest, statsOff.largest, w);
   }
-  // The rule is the acceptance: a failure here, not a skip, until the owner
-  // rules (6.7's ladder or a redesign).
-  if (!failing.empty())
-    TEST_FAIL_MESSAGE(("6.7's pass rule fails (the ladder is the owner's call):" + failing).c_str());
 }
 
 int main(int, char**) {
