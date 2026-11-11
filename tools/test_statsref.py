@@ -873,10 +873,10 @@ class SessionTests(unittest.TestCase):
         1 s left, one after a partial scan; 0.14.0's trim (HEAD's gap).
         Every other session loses nothing and counts nothing twice."""
         lost = {"rotation-fails": 4, "rotation-twin-fails": 4, "flush-late": 4, "partial-rotation": 4,
-                "old-firmware": 3, "update-rotation-unsaved": 4}
+                "old-firmware": 3, "update-rotation-unsaved": 4, "update-behind-rotation": 2}
         for e in self.index:
             self.assertEqual(e["lost"], lost.get(e["name"], 0), e["name"])
-        self.assertEqual(len(self.index), 23)
+        self.assertEqual(len(self.index), 24)
 
     def test_the_updates_give_back(self):
         """6.7's give-back (the owner's decision of 2026-11-11): a session
@@ -901,6 +901,14 @@ class SessionTests(unittest.TestCase):
         self.assertEqual([(s["read"], s["same"], s["folded"], s["behind"])
                           for s in steps("update-save-fails", "takeback")], [("loaded", False, 1, True)])
         self.assertEqual([s["ok"] for s in steps("update-save-fails", "hs")], [False])
+        # Behind, then a rotation later in the session: its save refused,
+        # the plays the give-back's save didn't land (3-4) lost with
+        # plays.1.jnl (the give-back review).
+        self.assertEqual([s["saved"] for s in steps("update-behind-rotation", "giveback")], [False])
+        self.assertEqual([(s["read"], s["same"], s["behind"]) for s in steps("update-behind-rotation", "takeback")],
+                         [("loaded", False, True)])
+        self.assertEqual([s["save"] for s in steps("update-behind-rotation", "play")],
+                         [None, None, None, None, None, None, None, None, False])
         # A rotation while given back: no save asked when the give-back's
         # covered plays.1.jnl; asked and refused (1-4 lost) when it didn't.
         self.assertIsNone(steps("update-rotation-saved", "play")[-1]["save"])

@@ -4087,6 +4087,298 @@
   "lost": 0
  },
  {
+  "name": "update-behind-rotation",
+  "note": "A saves 1-2 at its boot (MARK 2), plays 3-4; the update's give-back can't save them (a full card) and gives its blocks back all the same. The re-read finds generation 1, which doesn't hold 3-4: the session is behind its log. A plays 5-9: 9 rotates over plays.1.jnl (1-4), whose 3-4 the card's MARK doesn't cover; the rotation's save is refused (behind) and the rotation goes on, so 3-4 are lost to the stats (2). Held through the update, that save would have landed and lost none. The next boot folds 5-9.",
+  "cap": 4,
+  "players": {
+   "A": {
+    "device": "00005e005301",
+    "epochs": [
+     "0x1122334455667788"
+    ],
+    "nvs": null
+   }
+  },
+  "in": {},
+  "steps": [
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793523600000,
+    "playing": true,
+    "safePoint": false,
+    "read": "absent",
+    "why": null,
+    "folded": 0,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {}
+   },
+   {
+    "do": "play",
+    "hash": "0x832a7da9ed0311e6",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520000000,
+    "up": 1000,
+    "size": 4201190,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 1,
+    "out": {
+     "plays.jnl": "update-behind-rotation/2"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9adbc88aa24ceb75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793520060000,
+    "up": 61000,
+    "size": 4846709,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 2,
+    "out": {
+     "plays.jnl": "update-behind-rotation/3"
+    }
+   },
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793610000000,
+    "playing": true,
+    "safePoint": false,
+    "read": "absent",
+    "why": null,
+    "folded": 2,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {
+     "plays.jnl": "update-behind-rotation/3",
+     "stats.bin": "update-behind-rotation/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x3df15c814b89ab75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606400000,
+    "up": 1000,
+    "size": 4633717,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 3,
+    "out": {
+     "plays.jnl": "update-behind-rotation/5",
+     "stats.bin": "update-behind-rotation/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xe604b5c8d82005d1",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606460000,
+    "up": 61000,
+    "size": 4001489,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 4,
+    "out": {
+     "plays.jnl": "update-behind-rotation/6",
+     "stats.bin": "update-behind-rotation/4"
+    }
+   },
+   {
+    "do": "giveback",
+    "player": "A",
+    "now": 1793613600000,
+    "saveFails": true,
+    "saved": false,
+    "given": true,
+    "out": {
+     "plays.jnl": "update-behind-rotation/6",
+     "stats.bin": "update-behind-rotation/4"
+    }
+   },
+   {
+    "do": "takeback",
+    "player": "A",
+    "read": "loaded",
+    "same": false,
+    "folded": 0,
+    "covered": 0,
+    "over": 0,
+    "behind": true,
+    "out": {
+     "plays.jnl": "update-behind-rotation/6",
+     "stats.bin": "update-behind-rotation/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xd222fa5e5713f77e",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606400000,
+    "up": 4000000,
+    "size": 4259966,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 5,
+    "out": {
+     "plays.1.jnl": "update-behind-rotation/9",
+     "plays.jnl": "update-behind-rotation/9",
+     "stats.bin": "update-behind-rotation/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x8d5c2e4c7ace92ce",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606460000,
+    "up": 4060000,
+    "size": 4955086,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 6,
+    "out": {
+     "plays.1.jnl": "update-behind-rotation/9",
+     "plays.jnl": "update-behind-rotation/10",
+     "stats.bin": "update-behind-rotation/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x145438baeaf72dba",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606520000,
+    "up": 4120000,
+    "size": 4470458,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 7,
+    "out": {
+     "plays.1.jnl": "update-behind-rotation/9",
+     "plays.jnl": "update-behind-rotation/11",
+     "stats.bin": "update-behind-rotation/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9057bc2b792857af",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606580000,
+    "up": 4180000,
+    "size": 4546735,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 8,
+    "out": {
+     "plays.1.jnl": "update-behind-rotation/9",
+     "plays.jnl": "update-behind-rotation/12",
+     "stats.bin": "update-behind-rotation/4"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xebc4649938fbd8d3",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793606640000,
+    "up": 4240000,
+    "size": 4776403,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": false,
+    "seq": 9,
+    "out": {
+     "plays.1.jnl": "update-behind-rotation/13",
+     "plays.jnl": "update-behind-rotation/13",
+     "stats.bin": "update-behind-rotation/4"
+    }
+   },
+   {
+    "do": "boot",
+    "player": "A",
+    "now": 1793696400000,
+    "playing": true,
+    "safePoint": false,
+    "read": "loaded",
+    "why": null,
+    "folded": 5,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "stats": true,
+    "trimmed": [],
+    "out": {
+     "plays.1.jnl": "update-behind-rotation/13",
+     "plays.jnl": "update-behind-rotation/13",
+     "stats.bin": "update-behind-rotation/14"
+    }
+   }
+  ],
+  "slots": 9,
+  "lost": 2
+ },
+ {
   "name": "update-rotation-saved",
   "note": "The boot's save fails (a full card): plays.1.jnl (1-4) is covered by no MARK. An update's give-back saves 1-8 first (MARK 8). 9 is written during the update and rotates over plays.1.jnl: MARK covers it, so no save is asked; 9 is folded after the re-read, and the next boot folds it again from the log (nothing saved since). None lost.",
   "cap": 4,

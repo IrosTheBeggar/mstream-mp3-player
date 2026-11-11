@@ -82,6 +82,7 @@ void Glue::scanBegan(bool again) {
   // boot's first slot: the ring holds none.)
   behind_ = false;
   ringN_ = ringOver_ = 0;
+  takeTries_ = 0;
   logN_ = logMore_ = 0;
   bootPending_ = rereadPending_ = false;
   if (again) {
@@ -261,10 +262,12 @@ void Glue::ready() {
 }
 
 void Glue::written(const pl::Slot& s) {
-  if (!on()) return;
   if (given_) {
     // No fold while given back: the ring, folded after the re-read; one
     // past it is the next boot's (and no save this session: takeBack()).
+    // (Given back with the stats on, or a remount's read to make, when no
+    // slot is written; and still so between the take-back's reads the
+    // card failed, the stats off then.)
     if (!sf::counts(s)) return;
     if (ringN_ < kRing) {
       ring_[ringN_++] = s;
@@ -273,6 +276,7 @@ void Glue::written(const pl::Slot& s) {
     }
     return;
   }
+  if (!on()) return;
   fold_.liveSlot(s);
 }
 
@@ -284,15 +288,27 @@ bool Glue::keepSpare() {
 // ---------------------------------------------------------------------------
 // A library update's give-back (6.7).
 // ---------------------------------------------------------------------------
-size_t Glue::resident() const { return on() && !given_ && !booting() && !ending_ ? fold_.givesBack() : 0; }
+// (Before the boot's fold begins, bootPending_, the fold holds what the
+// boot's read loaded, nothing folded: given back, the scan waits for
+// takeBack() and folds after it, its blocks carved then. A remount's read
+// still to make, rereadPending_: the folds dropped, the stats off until
+// it; what the fold still holds is given back, and the read waits for
+// takeBack() too. The boot's fold under way: its blocks are the scan's.)
+size_t Glue::resident() const {
+  return !given_ && !ending_ && !fold_.booting() && (on() || rereadPending_) ? fold_.givesBack() : 0;
+}
 
 size_t Glue::giveBack() {
-  if (given_ || !on() || booting() || ending_) return 0;  // (gaveBack(): the last that gave back)
+  // (gaveBack(): the last that gave back.)
+  if (given_ || ending_ || fold_.booting() || (!on() && !rereadPending_)) return 0;
   gave_ = GaveBack();
   // A fold holding plays the card's stats.bin doesn't: saved first, the
   // rotation's path (never a compaction), with a save's guards. Whatever it
-  // comes to, the blocks go: a save that doesn't land costs this session's
-  // saves (Refused::Behind after the re-read), never a play.
+  // comes to, the blocks go. A save that doesn't land leaves RAM behind its
+  // log after the re-read (Refused::Behind): the next boot folds those
+  // plays only while the log still holds them, and a rotation later this
+  // session deletes those in plays.1.jnl (5.5's hole), where a save held
+  // through would have landed.
   if (fold_.dirty()) {
     gave_.saveAsked = true;
     if (env_.cardAway()) {
@@ -346,6 +362,8 @@ void Glue::foldRing() {
   ringN_ = ringOver_ = 0;
 }
 
+bool Glue::takeBackDue() const { return given_ && !ending_ && (takeTries_ == 0 || env_.monoMs() >= takeAtMs_); }
+
 const TookBack& Glue::takeBack() {
   // (No read while the end flushes: 5.4.)
   if (!given_ || ending_) return took_;
@@ -357,20 +375,38 @@ const TookBack& Glue::takeBack() {
     // stats.bin, and its boot's fold folds the log again.
     took_.rescan = true;
     ringN_ = ringOver_ = 0;
+    takeTries_ = 0;
     return took_;
   }
   ++rereads_;
   opened_ = readNow(nullptr);
+  ++takeTries_;
   took_.read = true;
+  took_.tries = takeTries_;
   took_.on = sx::statsOn(opened_.read);
   took_.over = ringOver_;
   if (!took_.on) {
+    if (sx::cardFault(opened_) && takeTries_ < kTakeBackReads) {
+      // A read the card failed: the boot's would be made again after
+      // kBootWaitsMs (5.4), so this one is too, at a later pass, never a
+      // wait in the loop. Still given back meanwhile: the ring kept, no
+      // save, no fold (readNow() gave every block back; the next read
+      // carves them again).
+      given_ = true;
+      took_.again = true;
+      takeAtMs_ = env_.monoMs() + tagstore::kBootWaitsMs[takeTries_ - 1];
+      return took_;
+    }
     // Off for the session, as a remount's read leaves them (5.4): the
-    // ring's plays are the next boot's.
+    // ring's plays are the next boot's, and a rotation later this session
+    // deletes those in plays.1.jnl with no save (5.5's hole).
     took_.dropped = ringN_;
     ringN_ = ringOver_ = 0;
+    takeTries_ = 0;
+    bootPending_ = false;  // (no boot's fold with the stats off)
     return took_;
   }
+  takeTries_ = 0;
   const bool present = opened_.read == sx::Read::Loaded;
   took_.same = holds_ && present == holding_.present &&
                (!present || (opened_.generation == holding_.generation && opened_.headerCrc == holding_.headerCrc));
@@ -378,8 +414,13 @@ const TookBack& Glue::takeBack() {
   // RAM lacks plays the log holds above the card's MARK (a save that
   // didn't land, a fold out of memory, another stats.bin, a play past the
   // ring): a later save would raise MARK past them unfolded. None this
-  // session: the next boot folds them.
-  if (!took_.same || took_.over) behind_ = true;
+  // session: the next boot folds those the log still holds, and a
+  // rotation later this session deletes those in plays.1.jnl (its save
+  // refused: 5.5's hole). Not when the boot's fold is still to begin
+  // (given back before it): it folds every slot of the log above the
+  // MARK this read found, and no play was written before it (the ring
+  // holds none).
+  if (!bootPending_ && (!took_.same || took_.over)) behind_ = true;
   took_.behind = behind_;
   return took_;
 }

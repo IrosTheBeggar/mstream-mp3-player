@@ -56,26 +56,36 @@
 //     stats.bin doesn't is saved first (Kind::GiveBack: the rotation's path,
 //     never a compaction), then every resident block is given back but
 //     MARK's (Fold::giveBack()): covered() goes on answering by the card's
-//     MARK, so a trim or a rotation never deletes a play the card's stats
-//     don't hold. Not while the boot's fold runs (its blocks are the
+//     MARK, so the trim and a rotation go by it through the update. Also
+//     before the boot's fold begins (loaded, nothing folded yet: the scan
+//     then waits for takeBack() and folds after it), and with a remount's
+//     read still to make. Not while the boot's fold runs (its blocks are the
 //     scan's), nor while the end flushes. While given back: no save (each
 //     refused, Refused::GivenBack; a rotation's then deletes what the card's
 //     MARK doesn't cover, 5.5's hole), no fold: each play written goes into
 //     a ring of kRing slots in this object (no carve), and one past it is
 //     counted. takeBack(), once the update is over and Auto DJ's rejoin done
-//     or abandoned, at a pass that may carve: stats.bin read once, no waits,
-//     a remount's verdicts (5.4; the stats off for the session if it
-//     doesn't read). Then the ring folded, but a play the card's MARK
-//     covers (another player folded it). The read must find the copy that
-//     holds every slot RAM held at the give-back (the card's copy then, or
-//     the give-back save's held tmp, which the read promotes first), and the
-//     ring must have held every play: else (the save didn't land, the fold
-//     had run out of memory, another stats.bin, a play past the ring) RAM
-//     lacks plays the log holds above the card's MARK, and every later save
-//     this session is refused (Refused::Behind): the next boot folds them.
-//     A remount's scan begun again while given back (Ready, before the
-//     first slot) waits for takeBack(), then reads at its first reserve(),
-//     as any remount's: its boot's fold folds the whole log again.
+//     or abandoned, at a pass that may carve: stats.bin read, no waits in
+//     the loop, a remount's verdicts (5.4), but a read the card failed
+//     (statsfile::cardFault()) is made again at later passes, the boot's
+//     kBootWaitsMs apart (takeBackDue()), still given back, before the
+//     stats go off for the session. Then the ring folded, but a play the
+//     card's MARK covers (another player folded it). The read must find the
+//     copy that holds every slot RAM held at the give-back (the card's copy
+//     then, or the give-back save's held tmp, which the read promotes
+//     first), and the ring must have held every play: else (the save didn't
+//     land, the fold had run out of memory, another stats.bin, a play past
+//     the ring) RAM lacks plays the log holds above the card's MARK, and
+//     every later save this session is refused (Refused::Behind). Those
+//     plays are the next boot's only while the log still holds them: a
+//     rotation later this session deletes those in plays.1.jnl (its save
+//     refused), and they are lost to the stats (5.5's hole; statsref's
+//     update-behind-rotation). Held through the update, that rotation's
+//     save would have saved them. The same after a re-read that leaves the
+//     stats off. A remount's scan begun again while given back (Ready,
+//     before the first slot) waits for takeBack(), then reads at its first
+//     reserve(), as any remount's: its boot's fold folds the whole log
+//     again.
 // Loop task only.
 namespace statsglue {
 
@@ -176,6 +186,10 @@ struct TrackLook {
 // one a pass: a few plays at most (the end's flush: up to the Tracker's 32).
 constexpr uint32_t kRing = 16;
 
+// The take-back's reads at most: a read the card failed is made again after
+// each of tagstore::kBootWaitsMs (the boot's), at later passes.
+constexpr uint32_t kTakeBackReads = sizeof(tagstore::kBootWaitsMs) / sizeof(tagstore::kBootWaitsMs[0]) + 1;
+
 // What the last giveBack() that gave back did.
 struct GaveBack {
   size_t bytes = 0;           // the blocks given back (0: none; nothing held or not now)
@@ -189,6 +203,8 @@ struct GaveBack {
 // What the last takeBack() did.
 struct TookBack {
   bool read = false;      // stats.bin read again (Glue::opened(): the verdict)
+  bool again = false;     // ... the card failed it: still given back, read again once takeBackDue()
+  uint32_t tries = 0;     // the reads this take-back made, this one too
   bool rescan = false;    // a remount's scan begun again meanwhile: its first reserve() reads it
   bool on = false;        // the stats on after the read (else off for the session)
   bool same = false;      // the read found the copy that holds every slot RAM held at the give-back
@@ -226,6 +242,7 @@ public:
   // (reserve()): a read to make, a fold to begin, or a fold under way.
   bool wantsRoom() const { return rereadPending_ || bootPending_ || (on() && fold_.booting()); }
   bool rereadPending() const { return rereadPending_; }
+  bool bootPending() const { return bootPending_; }  // the boot's fold to begin (at the scan's next reserve())
 
   // Before each piece of the boot's scan, in a pass that may carve (Auto
   // DJ's join not Working, the write gate open): a remount's read, the
@@ -252,9 +269,11 @@ public:
 
   // A library update's give-back (6.7): the fold saved first when it holds
   // plays the card's stats.bin doesn't (Kind::GiveBack), then every
-  // resident block but MARK's given back. The bytes given back; 0: nothing
-  // held (the stats off), given back already, the boot's fold under way,
-  // or the end flushing. gaveBack() says what it did.
+  // resident block but MARK's given back; before the boot's fold begins
+  // too, and with a remount's read still to make (the scan then waits for
+  // takeBack()). The bytes given back; 0: nothing held (the stats off),
+  // given back already, the boot's fold under way, or the end flushing.
+  // gaveBack() says what it did.
   size_t giveBack();
   // What giveBack() would give back now (the update's memory check counts
   // it in the step's room: UpdateEnv::alsoFreed).
@@ -262,12 +281,21 @@ public:
   bool givenBack() const { return given_; }
   // The blocks again (the update over, Auto DJ's rejoin done or abandoned,
   // a pass that may carve, the card not away; never while the end
-  // flushes): stats.bin read once, no waits, the ring folded. tookBack()
-  // says what it did.
+  // flushes): stats.bin read, no waits, the ring folded. A read the card
+  // failed (statsfile::cardFault()): still given back, the ring kept, read
+  // again once takeBackDue() (the boot's kBootWaitsMs after it),
+  // kTakeBackReads reads in all; then off for the session. tookBack() says
+  // what it did.
   const TookBack& takeBack();
+  // Given back, and takeBack() may read now: its first read, or the wait
+  // after a read the card failed is over (not while the end flushes).
+  bool takeBackDue() const;
+  uint32_t takeBackTries() const { return takeTries_; }  // the take-back's reads the card failed so far
+  uint64_t takeBackAtMs() const { return takeAtMs_; }    // ... the next one's time (Env::monoMs())
   // Every later save this session refused: RAM lacks plays the log holds
-  // above the card's MARK (the next boot folds them). A scan begun again
-  // (a remount's) folds the log again and clears it.
+  // above the card's MARK. The next boot folds those the log still holds;
+  // a rotation meanwhile deletes those in plays.1.jnl (5.5's hole). A scan
+  // begun again (a remount's) folds the log again and clears it.
   bool behind() const { return behind_; }
   uint32_t ringCount() const { return ringN_; }  // plays waiting in the ring
   uint32_t ringOver() const { return ringOver_; }  // ... and past it
@@ -357,6 +385,8 @@ private:
   statsfile::Store::Copy holding_;
   playlog::Slot ring_[kRing];
   uint32_t ringN_ = 0, ringOver_ = 0, giveBacks_ = 0;
+  uint32_t takeTries_ = 0;  // the take-back's reads the card failed so far (0: none)
+  uint64_t takeAtMs_ = 0;   // ... when the next is due (Env::monoMs())
   GaveBack gave_;
   TookBack took_;
 };

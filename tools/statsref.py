@@ -2091,6 +2091,21 @@ def _update_sessions(A, B, names):
                         "generation 1, which doesn't hold 3-4: 5 is folded, and every later save this session is "
                         "refused (Hs too), or MARK would cover 3-4 unfolded. The next boot folds 3-6: none lost.",
                 "cap": playlog.FILE_SLOTS, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 0})
+    # The same give-back, then a rotation later in the session (the give-
+    # back review, 2026-11-11): the plays RAM threw away with its blocks
+    # are in the plays.1.jnl the rotation deletes, and its save is refused
+    # (behind). Held through, that save would have landed: 3-4 lost.
+    steps = [_boot("A", 1)] + _plays("A", names[:2], 1000, 1) + [_boot("A", 2)]
+    steps += _plays("A", names[2:4], 1000, 2) + [_give("A", 2, saveFails=True), _take("A")]
+    steps += _plays("A", names[4:9], 4000000, 2) + [_boot("A", 3)]
+    out.append({"name": "update-behind-rotation",
+                "note": "A saves 1-2 at its boot (MARK 2), plays 3-4; the update's give-back can't save them (a full "
+                        "card) and gives its blocks back all the same. The re-read finds generation 1, which doesn't "
+                        "hold 3-4: the session is behind its log. A plays 5-9: 9 rotates over plays.1.jnl (1-4), "
+                        "whose 3-4 the card's MARK doesn't cover; the rotation's save is refused (behind) and the "
+                        "rotation goes on, so 3-4 are lost to the stats (2). Held through the update, that save "
+                        "would have landed and lost none. The next boot folds 5-9.",
+                "cap": 4, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 2})
     # A rotation while given back, over a plays.1.jnl the boot's save
     # couldn't cover: the give-back's save covered it (nothing lost), or
     # failed too (1-4 lost: 5.5's hole).

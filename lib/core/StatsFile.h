@@ -171,6 +171,16 @@ struct Opened {
   bool quarantined = false;      // stats.bin renamed stats.bad (or to a twin, when one shared its chain)
   uint32_t removed = 0;          // neighbouring bases removed
 };
+// Unread because the card failed a read (Io: stats.bin's, its tmp's, a held
+// tmp's promotion, the base's; or the base's rows failing their CRC, a card
+// fault too): what the boot reads again after kBootWaitsMs, and a library
+// update's take-back at later passes (StatsGlue). Never damaged records
+// (FatRecords: no read again changes them), a newer or corrupt file, or no
+// memory.
+inline bool cardFault(const Opened& o) {
+  return o.read == Read::Unread &&
+         (o.why == cardcontract::Why::Io || (o.inBase && o.why == cardcontract::Why::SectionCrc));
+}
 
 // ---------------------------------------------------------------------------
 // The save (5.5).
