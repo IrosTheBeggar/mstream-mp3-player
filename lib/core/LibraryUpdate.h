@@ -49,7 +49,9 @@
 //             length left and a margin, 20-30 s: safeLeftMs(), and no seek
 //             came in the last 2 s), no Auto DJ pick owed (In::autoDjOwed:
 //             the queue's last entry waits for its next while Auto DJ's
-//             index joins), the worker's task up
+//             index joins), no card write waiting for a pass the play
+//             log's write gate lets through (In::writesWait: the listening
+//             stats' give-back would save first), the worker's task up
 //             (Out::wantWorker: the caller makes it; no internal RAM for its
 //             stack, the step waits here, the index untouched, rather than
 //             behind a fence no build can start under) and the card
@@ -308,7 +310,7 @@ public:
     Saved,     // step 6 ended (lastSave() says how): the step is over
   };
   // What the step waits for before its fence (the console).
-  enum class Wait : uint8_t { None, Walk, Compaction, Worker, SafePoint, AutoDj };
+  enum class Wait : uint8_t { None, Walk, Compaction, Worker, SafePoint, AutoDj, Writes };
 
   struct In {
     uint32_t nowMs = 0;
@@ -328,6 +330,13 @@ public:
     // Never set by Auto DJ's holds (Repeat One, the sleep timer, its
     // failure pause): a held Auto DJ never blocks a step.
     bool autoDjOwed = false;
+    // A card write of the step's own give-back waits for a pass the play
+    // log's write gate lets through (the listening stats' save first,
+    // docs/LISTENING-STATS.md 6.7: the gate shut this pass for a start's
+    // refill, a low ring, an underrun's wake or a moving list). The safe
+    // point lets a track's first seconds through (at least 20-30 s left),
+    // which the gate doesn't: no memory check or fence yet (Wait::Writes).
+    bool writesWait = false;
     // The memory check: free PSRAM, its largest block, what the step frees
     // besides the index (the queue's entries, Thumbs' pools).
     size_t psramFree = 0;
