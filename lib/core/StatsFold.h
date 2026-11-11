@@ -305,6 +305,9 @@ public:
     uint32_t seq;   // RAM's
     uint32_t card;  // the card's (the boot's read, or the last save's that landed)
   };
+  // MARK's row `i` of rows(kMark), in no set order (the save sorts them):
+  // the console's look (app/ListeningStats, Hm). Null past the last.
+  const MarkRow* markRow(uint32_t i) const { return i < markN_ ? &mark_[i] : nullptr; }
   struct HourRow {
     uint32_t hourPlays;  // hour u24 | plays u8 << 24
     uint32_t ms;

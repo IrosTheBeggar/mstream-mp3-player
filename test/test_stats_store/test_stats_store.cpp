@@ -3,11 +3,12 @@
 
 // Host unit tests for the listening stats' store as a whole: the proof of
 // docs/LISTENING-STATS.md 9.5's C8. The play log's Journal (lib/core PlayLog)
-// with the real fold (StatsFold) and files (StatsFile), joined by a Folds
-// shaped as app/ListeningStats will be (C9: the read before the journal's
-// begin(), the save's guards, the end's flush, the live fold at the Outbox's
-// written()), over a card in memory that can lose its power at any step
-// (test/support/CutFs.h) or fail chosen calls (test/support/FaultFs.h).
+// with the real fold (StatsFold) and files (StatsFile), joined by the
+// firmware's own glue (StatsGlue, which app/ListeningStats wraps: C9's read
+// before the journal's begin(), the save's guards, the end's flush, the live
+// fold at the Outbox's written(), Hs), over a card in memory that can lose
+// its power at any step (test/support/CutFs.h) or fail chosen calls
+// (test/support/FaultFs.h).
 // Each scenario runs the fold, the save, the trim and the reboot, and is
 // compared with tools/statsref.py's: the boots of test/fixtures/card/stats
 // (index.json) and its sessions (sessions.json: boots, plays, the end's
@@ -61,6 +62,7 @@
 #include "PlayLog.h"
 #include "StatsFile.h"
 #include "StatsFold.h"
+#include "StatsGlue.h"
 
 namespace cc = cardcontract;
 namespace pl = playlog;
@@ -258,110 +260,79 @@ void onOp(void* ctx, Journal::Op o, const char* a, const char* b, uint64_t n) {
 }
 
 // ---------------------------------------------------------------------------
-// The glue: the play log's Folds over the real Fold and Store, as
-// app/ListeningStats will be (docs/LISTENING-STATS.md 5.4-5.7, 9.5 C9).
+// The glue: lib/core StatsGlue, the firmware's own (app/ListeningStats wraps
+// it: docs/LISTENING-STATS.md 5.4-5.7, 9.5 C9), with a test's Env around it:
+// the calls it made, in order; the log's files on the card at each save the
+// store was asked for; a full card at a save; the board's clocks.
 // ---------------------------------------------------------------------------
-struct Glue final : pl::Folds {
-  Glue(tagstore::Fs& fs, CutFs& card, sf::Fold::AllocFn a, sf::Fold::FreeFn f) : fold(a, f), store(fs), card_(card) {}
-  sf::Fold fold;
-  sx::Store store;
-  Work work;
+struct Glue final : statsglue::Env {
+  Glue(tagstore::Fs& fs, CutFs& card, sf::Fold::AllocFn a, sf::Fold::FreeFn f)
+      : core(fs, *this, a, f),
+        fold(core.fold()),
+        store(core.store()),
+        first(core.first()),
+        opened(core.opened()),
+        last(core.last()),
+        card_(card) {}
+  statsglue::Glue core;
+  sf::Fold& fold;
+  sx::Store& store;
+  const sx::Opened& first;   // the boot's read
+  const sx::Opened& opened;  // the last read (a remount's)
+  const sx::SaveReport& last;
   cc::msmf::Acks acks;      // the root's
   sx::SaveAsk ask;          // the board's clock, the root's commitTime, the update step's safe point
   bool saveFails = false;   // a full card at a save: each of its steps refused
-  // The orderly end's flush (app/PlayHistory: the ending flag, the 3 s
-  // budget): the boot's save refused; a rotation's with 1 s of it left.
-  bool ending = false;
-  std::function<uint64_t()> mono;  // the board's monotonic clock
-  uint64_t until = 0;              // the flush's deadline
+  bool away = false;        // the card out of the slot, refusing writes, or another card in it
+  std::function<uint64_t()> mono;    // the board's monotonic clock
   std::function<void()> beforeSave;  // (a test's: a cut's set-up)
   std::vector<std::string> calls;
-  std::vector<std::string> seen;  // the log's files on the card at each save the store was asked for
-  sx::Opened first;   // the boot's read
-  sx::Opened opened;  // the last read (a remount's)
-  sx::SaveReport last;
-  bool partialSeen = false;
-  bool dropped = false;  // a remount inside the end's flush: the folds dropped, no save
-
-  bool on() const { return store.on() && !dropped; }
+  std::vector<std::string> seen;  // the log's files on the card at each boot's or rotation's save the store was asked for
 
   // PlayHistory::begin(): the read, before the journal's begin().
   sx::Opened read(sx::Store::WaitFn wait) {
-    TEST_ASSERT_TRUE(fold.begin());
-    first = opened = store.read(fold, work.p(), wait);
-    return first;
+    const sx::Opened& o = core.begin(acks, wait);
+    TEST_ASSERT_FALSE(o.read == sx::Read::NoMemory);
+    return o;
   }
-  void reserve(uint32_t slots) {
-    if (on() && fold.booting()) fold.reserve(slots);
-  }
-  void scanBegan(bool again) override {
-    calls.push_back(again ? "began again" : "began");
-    partialSeen = false;
-    if (again) {
-      if (ending) {
-        // 5.4: no read while the end flushes; the folds dropped, no save.
-        dropped = true;
-        fold.clear();
-        return;
-      }
-      opened = store.read(fold, work.p(), nullptr);  // a remount's: one read, no waits
-    }
-    if (on()) fold.beginBoot(acks);  // (false: no memory, the fold says so: no save)
-  }
-  void slot(const Slot& s, int file) override {
-    if (on()) fold.bootSlot(s, file);
-  }
-  void partial() override {
-    calls.push_back("partial");
-    partialSeen = true;
-    if (on()) fold.partial();
-  }
-  bool covered(const Slot& s) override { return on() && fold.covered(s); }
-  uint32_t markOf(const uint8_t dev[6], uint64_t epoch) override { return on() ? fold.markOf(dev, epoch) : 0; }
-  bool save(Why why) override {
-    const bool boot = why == Why::Boot;
-    const std::string name = boot ? "save boot" : "save rotation";
-    last = sx::SaveReport();
-    bool ok = false;
-    if (!on() || (boot && ending) || (!boot && ending && mono() + 1000 > until)) {
-      fold.endBoot();  // (store.save() would have)
-    } else {
+  void reserve(uint32_t slots) { core.reserve(slots); }
+  // The journal ready: a boot's fold that asked no save (a partial scan)
+  // ends here.
+  void ready() { core.ready(); }
+  // Outbox::Env::written(): the live fold.
+  void written(const Slot& s) { core.written(s); }
+  // Hs: the rotation's path (never a compaction).
+  bool hs() { return core.hs(false); }
+  // The orderly end's flush (app/PlayHistory: the ending flag, the 3 s
+  // budget): the boot's save refused; a rotation's with 1 s of it left.
+  void ending(uint64_t until) { core.ending(until); }
+  void notEnding() { core.notEnding(); }
+
+  // statsglue::Env
+  uint64_t monoMs() override { return mono ? mono() : 0; }
+  bool cardAway() override { return away; }
+  void asking(statsglue::Kind k, sx::SaveAsk* a) override {
+    *a = ask;
+    if (k != statsglue::Kind::Hs) {
       std::string names;
       for (const char* n : {kPrev, kLog})
         if (card_.dir.count(n)) names += (names.empty() ? "" : " ") + base(n);
       seen.push_back(names);
       if (beforeSave) beforeSave();
-      ok = commit(boot);
     }
-    calls.push_back(ok ? name : name + " (no)");
-    return ok;
+    if (saveFails) card_.refuse = true;
   }
-  // The journal ready: a boot's fold that asked no save (a partial scan)
-  // ends here.
-  void ready() {
-    if (fold.booting()) fold.endBoot();
-  }
-  // Outbox::Env::written(): the live fold.
-  void written(const Slot& s) {
-    if (on()) fold.liveSlot(s);
-  }
-  // Hs: the rotation's path (never a compaction); refused during the boot's
-  // scan and after a partial scan (the store refuses the rest).
-  bool hs() {
-    last = sx::SaveReport();
-    const bool ok = on() && !fold.booting() && !partialSeen && commit(false);
-    calls.push_back(ok ? "hs" : "hs (no)");
-    return ok;
+  void began(bool again, const sx::Opened*) override { calls.push_back(again ? "began again" : "began"); }
+  void partialFile() override { calls.push_back("partial"); }
+  void saved(statsglue::Kind k, statsglue::Refused r, const sx::SaveReport& rep) override {
+    card_.refuse = false;
+    const std::string name = k == statsglue::Kind::Boot       ? "save boot"
+                             : k == statsglue::Kind::Rotation ? "save rotation"
+                                                              : "hs";
+    calls.push_back(r == statsglue::Refused::None && sx::savedOk(rep.what) ? name : name + " (no)");
   }
 
 private:
-  bool commit(bool boot) {
-    ask.mayCompact = boot;
-    if (saveFails) card_.refuse = true;
-    last = store.save(fold, ask, work.p());
-    card_.refuse = false;
-    return sx::savedOk(last.what);
-  }
   CutFs& card_;
 };
 
@@ -451,7 +422,7 @@ struct Player {
     c.randomCtx = &epochs;
     c.onOp = onOp;
     c.opCtx = &ops;
-    c.folds = glue.get();
+    c.folds = glue ? &glue->core : nullptr;
     return c;
   }
   // A boot's start (a new session): the stats read, the journal's begin().
@@ -1265,13 +1236,12 @@ sf::Head runSession(const minijson::Value& sc) {
         // The orderly end's flush and its 3 s budget: the played file's
         // question takes what leaves `left` of it at the rotation's save.
         TEST_ASSERT_NOT_NULL(g);
-        g->ending = true;
-        g->until = p->oenv.now + 3000;
+        g->ending(p->oenv.now + 3000);
         p->oenv.perStat = 3000 - st["left"].u64();
         p->ended(spec);
         const pl::Outbox::Flushed f = p->out->flush(3000, 128);
         TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, f.written, w);
-        g->ending = false;
+        g->notEnding();
         p->oenv.perStat = 0;
       } else {
         TEST_ASSERT_TRUE_MESSAGE(p->write(spec) == pl::Outbox::Did::Written, w);
@@ -1411,6 +1381,266 @@ void test_first_at_through_a_rotations_save() {
     if (r.second.skips) TEST_ASSERT_EQUAL_UINT32(1, live.at(r.first).lastOrd);
 }
 
+// ---------------------------------------------------------------------------
+// The glue's own rules (StatsGlue: app/ListeningStats's), beyond what the
+// fixtures and the sessions run through it: the card away or another card in
+// the slot (no save; the trim by the MARK read at the boot); Hs refused with
+// the card away, behind the update's fence and during the boot's scan; the
+// boot's save while the end flushes, and a remount inside the end's flush (no
+// read, the folds dropped: nothing covered, nothing saved); the log's keys
+// (Hm); a track's row, base ⊕ delta (Ht); stats.bin's header (H).
+// ---------------------------------------------------------------------------
+namespace {
+
+const char* refused(const Player& p) { return statsglue::refusedName(p.glue->core.lastRefused()); }
+
+void sameTrack(const sf::Track& a, const sf::Track& b, const char* w) {
+  TEST_ASSERT_EQUAL_UINT64_MESSAGE(a.hash, b.hash, w);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(a.plays, b.plays, w);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(a.skips, b.skips, w);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(a.firstAt, b.firstAt, w);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(a.lastAt, b.lastAt, w);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(a.lastOrd, b.lastOrd, w);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(a.src, b.src, w);
+}
+
+}  // namespace
+
+void test_the_glues_own_rules() {
+  const minijson::Value& sc = scenario("worked-example");
+  const minijson::Value& b = sc["boots"][0];
+  const Files in = cardOf(b["in"]), want = cardOf(b["out"]);
+  const uint8_t* dev = reinterpret_cast<const uint8_t*>("\0\0\0\0\0\1");
+  // The card away at the boot's save: refused, nothing written, and the trim
+  // by the MARK read at the boot (41: plays.1.jnl's 30-45 aren't all under
+  // it, so nothing goes). Hs then: refused while the card is away and behind
+  // the fence; with the card back, the boot's stats.bin (worked-example's
+  // save doesn't compact, and the plan is the same).
+  {
+    CutFs card;
+    put(card, in);
+    Player p(card, dev);
+    deviceFor(p, sc);
+    p.begin(askOf(b));
+    p.glue->away = true;
+    TEST_ASSERT_TRUE(p.scan());
+    TEST_ASSERT_TRUE((p.glue->calls == std::vector<std::string>{"began", "save boot (no)"}));
+    TEST_ASSERT_EQUAL_STRING("cardAway", refused(p));
+    TEST_ASSERT_EQUAL_UINT32(7, p.glue->fold.folded());
+    TEST_ASSERT_TRUE(p.trimmed().empty());
+    sameFiles(in, filesOf(card), "the card away");
+    TEST_ASSERT_FALSE(p.glue->hs());
+    TEST_ASSERT_EQUAL_STRING("cardAway", refused(p));
+    p.glue->away = false;
+    TEST_ASSERT_FALSE(p.glue->core.hs(true));
+    TEST_ASSERT_EQUAL_STRING("fenced", refused(p));
+    TEST_ASSERT_TRUE(p.glue->hs());
+    TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
+    TEST_ASSERT_EQUAL_STRING("Hs", statsglue::kindName(p.glue->core.lastKind()));
+    TEST_ASSERT_TRUE(bytesOf(card, "stats.bin") == want.at("stats.bin"));
+    TEST_ASSERT_TRUE(p.glue->hs());  // (nothing new: nothing written)
+    TEST_ASSERT_EQUAL_STRING("nothing new", sx::savedName(p.glue->last.what));
+    TEST_ASSERT_EQUAL_UINT32(1, p.glue->core.savesWritten());
+    // stats.bin's header, as H reads it.
+    const statsglue::Glue::FileLook l = p.glue->core.lookFile();
+    TEST_ASSERT_TRUE(l.there);
+    TEST_ASSERT_FALSE(l.unread);
+    TEST_ASSERT_EQUAL_UINT32(sx::kMagic, l.magic);
+    TEST_ASSERT_EQUAL_UINT32(1, l.major);
+    TEST_ASSERT_EQUAL_UINT32(0, l.minor);
+    TEST_ASSERT_EQUAL_UINT32(want.at("stats.bin").size(), l.bytes);
+    TEST_ASSERT_EQUAL_UINT32(p.glue->store.cardCopy().generation, l.generation);
+  }
+  // Hs during the boot's scan: refused, and the boot goes on as the
+  // fixture's.
+  {
+    CutFs card;
+    put(card, in);
+    Player p(card, dev);
+    deviceFor(p, sc);
+    p.begin(askOf(b));
+    p.glue->reserve(1);
+    TEST_ASSERT_FALSE(p.j->scan(1));
+    TEST_ASSERT_FALSE(p.glue->hs());
+    TEST_ASSERT_EQUAL_STRING("booting", refused(p));
+    TEST_ASSERT_TRUE(p.scan());
+    sameOutcome(b, outcomeOf(p), "Hs during the boot's scan");
+    sameFiles(want, filesOf(card), "Hs during the boot's scan");
+  }
+  // The end's flush finishing the boot's scan: its save refused (the 3 s
+  // are the plays'), the trim by the MARK read at the boot. Then a remount
+  // inside the flush: no read, the folds dropped; the scan again folds
+  // nothing, saves nothing, and covers nothing (nothing trimmed).
+  {
+    CutFs card;
+    put(card, in);
+    Player p(card, dev);
+    deviceFor(p, sc);
+    p.begin(askOf(b));
+    p.glue->ending(1000000);
+    TEST_ASSERT_TRUE(p.scan());
+    TEST_ASSERT_TRUE((p.glue->calls == std::vector<std::string>{"began", "save boot (no)"}));
+    TEST_ASSERT_EQUAL_STRING("ending", refused(p));
+    TEST_ASSERT_EQUAL_UINT32(7, p.glue->fold.folded());
+    TEST_ASSERT_TRUE(p.glue->core.on());
+    sameFiles(in, filesOf(card), "the boot's save while ending");
+    p.j->remounted();  // (Ready, no slot yet: the scan again)
+    TEST_ASSERT_TRUE(p.glue->core.dropped());
+    TEST_ASSERT_FALSE(p.glue->core.on());
+    TEST_ASSERT_EQUAL_UINT32(0, p.glue->core.rereads());
+    TEST_ASSERT_EQUAL_UINT32(0, p.glue->fold.folded());
+    TEST_ASSERT_TRUE(p.scan());
+    TEST_ASSERT_TRUE(
+        (p.glue->calls == std::vector<std::string>{"began", "save boot (no)", "began again", "save boot (no)"}));
+    TEST_ASSERT_EQUAL_STRING("off", refused(p));
+    TEST_ASSERT_EQUAL_UINT32(0, p.glue->fold.folded());
+    TEST_ASSERT_TRUE(p.trimmed().empty());
+    sameFiles(in, filesOf(card), "a remount inside the end's flush");
+    p.glue->notEnding();
+    TEST_ASSERT_FALSE(p.glue->hs());
+    TEST_ASSERT_EQUAL_STRING("off", refused(p));
+  }
+  // The log's keys (Hm): each (deviceId, epoch) the boot's scan met in the
+  // log's play slots, its highest seq and its slots; MARK's rows as Hm lists
+  // them.
+  {
+    const minijson::Value& td = scenario("two-devices");
+    const minijson::Value& tb = td["boots"][0];
+    const Files tin = cardOf(tb["in"]);
+    std::map<std::pair<std::string, uint64_t>, std::pair<uint32_t, uint32_t>> log;
+    for (const auto& f : tin) {
+      if (f.first.compare(0, 6, "plays.") != 0) continue;
+      for (size_t at = 0; at + pl::kSlot <= f.second.size(); at += pl::kSlot) {
+        Slot s;
+        if (pl::decode(reinterpret_cast<const uint8_t*>(f.second.data()) + at, pl::kSlot, &s) != pl::Verdict::Ok)
+          continue;
+        if (s.kind != pl::kKindPlay || s.seq == 0) continue;
+        auto& e = log[{std::string(reinterpret_cast<const char*>(s.deviceId), 6), s.epoch}];
+        e.first = std::max(e.first, s.seq);
+        ++e.second;
+      }
+    }
+    CutFs card;
+    put(card, tin);
+    Player p(card, dev);
+    deviceFor(p, td);
+    TEST_ASSERT_TRUE(p.boot(askOf(tb)));
+    const statsglue::Glue& g = p.glue->core;
+    TEST_ASSERT_TRUE(log.size() >= 2);
+    TEST_ASSERT_EQUAL_UINT32(log.size(), g.logKeys());
+    TEST_ASSERT_EQUAL_UINT32(0, g.logKeysMore());
+    for (uint32_t i = 0; i < g.logKeys(); ++i) {
+      const statsglue::LogKey& k = g.logKey(i);
+      const auto it = log.find({std::string(reinterpret_cast<const char*>(k.dev), 6), k.epoch});
+      TEST_ASSERT_TRUE(it != log.end());
+      TEST_ASSERT_EQUAL_UINT32(it->second.first, k.seq);
+      TEST_ASSERT_EQUAL_UINT32(it->second.second, k.slots);
+    }
+    TEST_ASSERT_TRUE(g.fold().rows(sf::kMark) >= 2);
+    for (uint32_t i = 0; i < g.fold().rows(sf::kMark); ++i) {
+      const sf::Fold::MarkRow* m = g.fold().markRow(i);
+      TEST_ASSERT_NOT_NULL(m);
+      TEST_ASSERT_EQUAL_UINT32(m->seq, g.fold().markOf(m->dev, m->epoch));
+      TEST_ASSERT_EQUAL_UINT32(m->seq, m->card);  // (saved: the card's MARK is RAM's)
+    }
+    TEST_ASSERT_NULL(g.fold().markRow(g.fold().rows(sf::kMark)));
+  }
+  // A track's row, base ⊕ delta (Ht): compaction's boot leaves every row in
+  // its new base (TRKD empty); a live play of one of them merges with it.
+  {
+    const minijson::Value& cs = scenario("compaction");
+    const minijson::Value& cb = cs["boots"][0];
+    CutFs card;
+    put(card, cardOf(cb["in"]));
+    Player p(card, dev);
+    deviceFor(p, cs);
+    TEST_ASSERT_TRUE(p.boot(askOf(cb)));
+    TEST_ASSERT_TRUE(p.glue->last.compacted);
+    char name[sx::kNameCap];
+    TEST_ASSERT_TRUE(sx::baseName(p.glue->fold.head().baseGen, name, sizeof(name)));
+    const Bytes base = bytesOf(card, std::string(name).substr(kDir.size()));
+    const uint32_t rows = p.glue->fold.head().baseRows;
+    TEST_ASSERT_TRUE(rows >= 2);
+    TEST_ASSERT_EQUAL_UINT32(sx::kBaseRowsAt + rows * sf::kTrackBytes, base.size());
+    const auto row = [&](uint32_t i) {
+      return sf::decodeTrack(reinterpret_cast<const uint8_t*>(base.data()) + sx::kBaseRowsAt + i * sf::kTrackBytes);
+    };
+    for (uint32_t i : {0u, rows / 2, rows - 1}) {
+      const statsglue::TrackLook t = p.glue->core.track(row(i).hash);
+      TEST_ASSERT_TRUE(t.base == statsglue::TrackLook::Base::Found);
+      TEST_ASSERT_FALSE(t.delta);
+      sameTrack(row(i), t.row, "a base row");
+      TEST_ASSERT_TRUE(t.reads >= 1);
+    }
+    const statsglue::TrackLook none = p.glue->core.track(0x0123456789abcdefull);
+    TEST_ASSERT_TRUE(none.base == statsglue::TrackLook::Base::NotThere);
+    TEST_ASSERT_FALSE(none.delta);
+    TEST_ASSERT_EQUAL_UINT64(0, none.row.hash);
+    // A live play of the first row's track: base ⊕ delta.
+    PlaySpec ps;
+    ps.hash = row(0).hash;
+    ps.played = 120000;
+    ps.duration = 200000;
+    ps.at = sf::kMinMs + 300ull * sf::kDayMs;
+    ps.up = 5000;
+    TEST_ASSERT_TRUE(p.write(ps) == pl::Outbox::Did::Written);
+    const statsglue::TrackLook t = p.glue->core.track(ps.hash);
+    TEST_ASSERT_TRUE(t.base == statsglue::TrackLook::Base::Found);
+    TEST_ASSERT_TRUE(t.delta);
+    TEST_ASSERT_EQUAL_UINT32(1, t.deltaRow.plays);
+    sameTrack(sf::merge(row(0), t.deltaRow), t.row, "base and delta");
+    TEST_ASSERT_EQUAL_UINT32(row(0).plays + 1u, t.row.plays);
+  }
+}
+
+// Hs after a partial scan says why (the store would refuse it too: the
+// fold's plan), and Hs never compacts, not even where a boot's save would
+// (no base yet, nothing playing): the rotation's path.
+void test_hs_says_why_and_never_compacts() {
+  {
+    const minijson::Value& sc = scenario("partial-tail");
+    const minijson::Value& b = sc["boots"][0];
+    CutFs card;
+    put(card, cardOf(b["in"]));
+    ScanFaults faults(card);
+    Player p(card, reinterpret_cast<const uint8_t*>("\0\0\0\0\0\1"));
+    deviceFor(p, sc);
+    sameOutcome(b, fixtureBoot(p, faults, b), "partial-tail, boot 1");
+    TEST_ASSERT_TRUE(p.glue->core.partialSeen());
+    TEST_ASSERT_FALSE(p.glue->hs());
+    TEST_ASSERT_EQUAL_STRING("partial", refused(p));
+    sameFiles(cardOf(b["out"]), filesOf(card), "partial-tail, Hs");
+  }
+  {
+    const minijson::Value& sc = scenario("first-at-a");
+    const minijson::Value& b = sc["boots"][0];
+    CutFs card;
+    put(card, cardOf(b["in"]));
+    ScanFaults faults(card);
+    Player p(card, reinterpret_cast<const uint8_t*>("\0\0\0\0\0\1"));
+    deviceFor(p, sc);
+    sameOutcome(b, fixtureBoot(p, faults, b), "first-at-a");
+    TEST_ASSERT_FALSE(p.glue->last.compacted);
+    TEST_ASSERT_EQUAL_UINT32(0, p.glue->fold.head().baseGen);
+    PlaySpec ps;
+    ps.hash = 0x0123456789abcdefull;
+    ps.played = 120000;
+    ps.duration = 200000;
+    ps.at = sf::kMinMs + 310ull * sf::kDayMs;
+    ps.up = 5000;
+    TEST_ASSERT_TRUE(p.write(ps) == pl::Outbox::Did::Written);
+    p.glue->ask.playing = false;
+    p.glue->ask.safePoint = true;
+    // (A boot's save now would compact: no base, nothing playing.)
+    TEST_ASSERT_TRUE(sf::compactionDue(p.glue->fold.rows(sf::kTrkd), 0, false, true));
+    TEST_ASSERT_TRUE(p.glue->hs());
+    TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
+    TEST_ASSERT_FALSE(p.glue->last.compacted);
+    TEST_ASSERT_EQUAL_UINT32(0, p.glue->fold.head().baseGen);
+    for (const auto& f : filesOf(card)) TEST_ASSERT_FALSE_MESSAGE(f.first.compare(0, 6, "stats-") == 0, f.first.c_str());
+  }
+}
+
 int main(int, char**) {
   if (!cardfixtures::json("stats/index.json", &gIndex) || gIndex.size() == 0 ||
       !cardfixtures::json("stats/sessions.json", &gSessions) || gSessions.size() == 0) {
@@ -1430,5 +1660,7 @@ int main(int, char**) {
   RUN_TEST(test_players_nvs_and_old_firmware);
   RUN_TEST(test_first_at_through_a_rotations_save);
   RUN_TEST(test_a_full_log_never_synced);
+  RUN_TEST(test_the_glues_own_rules);
+  RUN_TEST(test_hs_says_why_and_never_compacts);
   return UNITY_END();
 }
