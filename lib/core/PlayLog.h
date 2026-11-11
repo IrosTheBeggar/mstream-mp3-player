@@ -226,14 +226,15 @@ public:
   bool begin(const uint8_t deviceId[6], const cardcontract::msmf::Acks& acks);
   // The boot's scan, at most `maxSlots` slots of it (whole files' opens
   // aside): every valid slot of the log's files, for the boot rules (the
-  // highest seq and bootSeq of this device and epoch), the trim and the
-  // folds; none read when the epoch is this boot's, the root has no ACKS
-  // and there are no folds. At its end the boot count is stored (before
-  // any slot uses it), the folds saved (Folds::Why::Boot, not after a
-  // partial scan), the trim done (2.20.2, only with ACKS: every file they
-  // acknowledge whole, that no twin shares, and with folds that the card's
-  // MARK covers: all after a save, else those it covered at the boot), and
-  // the log ready. True: ready (or off).
+  // highest seq and bootSeq of this device and epoch; the seq no lower
+  // than ACKS's for them, nor the folds' MARK: reservations, 2.20.4), the
+  // trim and the folds; none read when the epoch is this boot's, the root
+  // has no ACKS and there are no folds. At its end the boot count is
+  // stored (before any slot uses it), the folds saved (Folds::Why::Boot,
+  // not after a partial scan), the trim done (2.20.2, only with ACKS:
+  // every file they acknowledge whole, that no twin shares, and with
+  // folds that the card's MARK covers: all after a save, else those it
+  // covered at the boot), and the log ready. True: ready (or off).
   bool scan(uint32_t maxSlots);
   bool ready() const { return state_ == State::Ready; }
   bool off() const { return state_ == State::Off; }

@@ -11,8 +11,9 @@
 //   card in memory give plays/golden/<snapshot>/ byte for byte, and the
 //   reference model's ops one for one;
 // - the boot rules (vectors' atBoot: NVS behind or ahead of the card, a new
-//   epoch, another device, a conflict's two slots) and the boot's scan in
-//   pieces of any size;
+//   epoch, another device, a conflict's two slots, NVS put back behind a
+//   trimmed log and ACKS's seq) and the boot's scan in pieces of any size;
+//   the seq rule's reservations, ACKS's and the stats' MARK;
 // - ACKS (2.5.6) read on its own: the golden root's entries, the
 //   hardening files (damaged, out of order, short rows: absent, the root
 //   present; a newer minor's longer rows read by their prefix); this
@@ -543,29 +544,43 @@ void test_the_goldens_from_the_script() {
 // ---------------------------------------------------------------------------
 void test_the_boot_rules() {
   const Value& at = gVectors["plays"]["atBoot"];
-  TEST_ASSERT_EQUAL_size_t(5, at["cases"].size());
+  TEST_ASSERT_EQUAL_size_t(6, at["cases"].size());
   for (size_t c = 0; c < at["cases"].size(); ++c) {
     const Value& e = at["cases"][c];
-    CutFs fs;
+    CutFs card;
     if (e.has("readCase")) {
       bool found = false;
       for (size_t k = 0; k < gIndex.size(); ++k) {
         if (gIndex[k]["case"].str() != e["readCase"].str()) continue;
-        for (const auto& kv : gIndex[k]["files"].members) fs.put("/.player/" + kv.first, fixture("plays/" + kv.second.str()));
+        for (const auto& kv : gIndex[k]["files"].members)
+          card.put("/.player/" + kv.first, fixture("plays/" + kv.second.str()));
         found = true;
       }
       TEST_ASSERT_TRUE(found);
     } else {
       for (const char* n : {"plays.jnl", "plays.1.jnl"})
-        fs.put(std::string("/.player/") + n, fixture(at["log"].str() + "/" + n));
+        card.put(std::string("/.player/") + n, fixture(at["log"].str() + "/" + n));
     }
     uint8_t id[6];
     deviceOf(e["deviceId"], id);
     for (uint32_t piece : {1u, 3u, 1000u}) {  // the scan in any pieces
+      CutFs fs = card;  // (the card as it was, for each piece size)
       Device d(id);
       d.nvs.ids.epoch = e["epoch"].u64();
       d.nvs.ids.seq = static_cast<uint32_t>(e["nvsSeq"].u64());
       d.nvs.ids.boots = static_cast<uint32_t>(e["nvsBoots"].u64());
+      // The root's ACKS (the seq rule takes this device and epoch's).
+      if (e.has("acks")) {
+        for (size_t k = 0; k < e["acks"].size(); ++k) {
+          msmf::Ack a;
+          deviceOf(e["acks"][k]["deviceId"], a.deviceId);
+          a.epoch = e["acks"][k]["epoch"].u64();
+          a.seq = static_cast<uint32_t>(e["acks"][k]["seq"].u64());
+          d.acks.entries[d.acks.count++] = a;
+        }
+        d.acks.rows = d.acks.count;
+        d.acks.present = true;
+      }
       TEST_ASSERT_TRUE(d.boot(fs, piece));
       TEST_ASSERT_FALSE(d.j->newEpoch());
       TEST_ASSERT_EQUAL_UINT32_MESSAGE(e["nextBootSeq"].u64(), d.j->bootSeq(), e["note"].c_str());
@@ -577,9 +592,6 @@ void test_the_boot_rules() {
       TEST_ASSERT_EQUAL_UINT32(e["nextSeq"].u64(), s.seq);
       TEST_ASSERT_EQUAL_UINT32(e["nextSeq"].u64(), d.nvs.ids.seq);
       TEST_ASSERT_EQUAL_UINT32(e["nextBootSeq"].u64(), s.bootSeq);
-      // (Put the card back as it was for the next piece size.)
-      fs.put(kLog, fixture(e.has("readCase") ? std::string("plays/read/conflict-top/plays.jnl")
-                                             : at["log"].str() + "/plays.jnl"));
     }
   }
 }
@@ -3659,6 +3671,55 @@ void test_the_outbox_says_written() {
   TEST_ASSERT_EQUAL_UINT32(3, b.out->counts().written);
 }
 
+// The seq rule's two reservations (2.20.4; docs/LISTENING-STATS.md 5.6),
+// with NVS put back from a backup behind a log already trimmed (the
+// house's own end-of-check step): ACKS's seq for this device and epoch,
+// and with folds their MARK. A new play takes neither a seq ACKS
+// acknowledges (read as sent, it would never be sent) nor one MARK covers
+// (never folded). Another device's rows and another epoch's don't count.
+void test_the_seq_rules_two_sources() {
+  const Written w;
+  const uint64_t e = w.ids.epoch;
+  Journal::Ids back = w.ids;
+  back.seq = 2;
+  // ACKS: a sync acknowledged 1-8, and the boot trimmed both files.
+  CutFs fs = w.copy();
+  {
+    Device d;
+    bootWith(d, fs, w, nullptr, 8);
+    TEST_ASSERT_EQUAL_UINT32(2, d.j->booted().trimmed);
+  }
+  {
+    Device d;
+    d.nvs.ids = back;
+    setAcks(d.acks, {ack(kDevA, e, 8), ack(kDevA, e + 1, 100), ack(kDevB, e, 100)});
+    TEST_ASSERT_TRUE(d.boot(fs));
+    TEST_ASSERT_EQUAL_UINT32(0, d.j->booted().cardSeq);
+    TEST_ASSERT_EQUAL_UINT32(8, d.j->lastSeq());
+    Slot s = play(9, 60000, 9000);
+    TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
+    TEST_ASSERT_EQUAL_UINT32(9, s.seq);  // (NVS's and the log's alone: 3)
+    TEST_ASSERT_EQUAL_UINT32(9, d.nvs.ids.seq);
+  }
+  // MARK: the stats hold 1-8 (folded before a rotation deleted 5-8), an
+  // older sync's ACKS 4, the log empty: 9 with the folds, 5 without.
+  for (int withFolds = 0; withFolds < 2; ++withFolds) {
+    CutFs empty;
+    MemFolds f;
+    f.card[MemFolds::key(kDevA, e)] = 8;
+    f.card[MemFolds::key(kDevA, e + 1)] = 100;
+    f.card[MemFolds::key(kDevB, e)] = 100;
+    Device d;
+    d.nvs.ids = back;
+    d.folds = withFolds ? &f : nullptr;
+    setAcks(d.acks, {ack(kDevA, e, 4)});
+    TEST_ASSERT_TRUE(d.boot(empty));
+    Slot s = play(9, 60000, 9000);
+    TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
+    TEST_ASSERT_EQUAL_UINT32(withFolds ? 9 : 5, s.seq);
+  }
+}
+
 // device.txt's history (2.15): the vectors' texts read as the majors they
 // list; no key, an empty one, or no file: none. This firmware writes 1.
 void test_device_txt_says_history() {
@@ -3725,5 +3786,6 @@ int main(int, char**) {
   RUN_TEST(test_the_ends_flush_and_the_folds);
   RUN_TEST(test_a_partial_scan_calls_partial);
   RUN_TEST(test_the_outbox_says_written);
+  RUN_TEST(test_the_seq_rules_two_sources);
   return UNITY_END();
 }

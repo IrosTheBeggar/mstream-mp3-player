@@ -8,7 +8,8 @@ form, with the plan's section it implements: what counts (4.1), the fold
 of a slot into the aggregate and each slot once (5.6), the merge of two
 per-track rows (5.2), `/.player/stats.bin` and its base file byte for
 byte (5.2, 5.3), the boot (5.4-5.6: the read, the fold above MARK, the
-save, the trim), the shelves' rankers (4.3) and the windows (4.1, 4.2).
+save, the trim, the seq rule), the shelves' rankers (4.3) and the
+windows (4.1, 4.2).
 lib/core's StatsFold, StatsFile and StatsRank (S1, S2) are tested
 against what it makes: card_fixtures.py imports it for the fixtures in
 test/fixtures/card/stats, and test_statsref.py tests it. Standard library
@@ -702,6 +703,16 @@ class Session:
         at round HEAD.round + 2, in RAM only."""
         if self.on and counts(s):
             self.fold(s, sat(self.round + 2, M24))
+
+    def next_seq(self, nvs_seq, device_id, epoch):
+        """The seq rule (5.6, METADATA 2.20.4) for a device that keeps stats,
+        after the boot's scan: max(NVS's, the log's, ACKS's and MARK's for
+        this device and epoch) + 1 (playlog.boot_seq, given this session's
+        MARK). The log's files as they are: a trim takes only slots MARK
+        and ACKS cover, so before it or after, the same."""
+        mark = self.stats.mark.get((playlog.device_bytes(device_id), playlog.u64(epoch)), 0)
+        return playlog.boot_seq(nvs_seq, playlog.valid_slots({n: b for n, b in self.files.items() if n in LOG_NAMES}),
+                                device_id, epoch, self.acks, mark)
 
     # The save.
     def save(self, now=None, why="boot", playing=False, safe_point=True, fails=False):

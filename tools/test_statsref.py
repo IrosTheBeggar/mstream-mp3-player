@@ -347,6 +347,25 @@ class BootTests(unittest.TestCase):
         r = sr.boot(r["files"], acks=[(A, E, 50)])
         self.assertEqual((r["gap"], r["saved"], r["stats"].head["gap"]), (0, False, 40))
 
+    def test_the_seq_rule(self):
+        # C5 (5.6): the next seq at boot takes the stats' MARK and ACKS's
+        # seq for this device and epoch too: NVS put back behind a log
+        # already trimmed takes neither a seq ACKS acknowledges nor one MARK
+        # covers.
+        before = sr.earlier([play(q) for q in range(1, 11)])  # MARK 10, the log trimmed whole
+        se = sr.Session(dict(before), acks=[(A, E, 6)])
+        se.scan()
+        self.assertEqual(se.next_seq(3, A, E), 11, "MARK's 10 over ACKS's 6 and NVS's 3")
+        self.assertEqual(se.next_seq(3, A, E + 1), 4, "another epoch's MARK and ACKS don't count")
+        self.assertEqual(se.next_seq(3, sr.DEV_B, E), 4, "nor another device's")
+        se = sr.Session(dict(before), acks=[(A, E, 50)])
+        se.scan()
+        self.assertEqual(se.next_seq(3, A, E), 51, "ACKS's 50 (the gap raised MARK to it too)")
+        se = sr.Session(dict(before, **files_of(*[play(q) for q in range(11, 14)])))
+        se.scan()
+        self.assertEqual(se.next_seq(3, A, E), 14, "the log's 13, folded: MARK 13 too")
+        self.assertEqual(se.next_seq(20, A, E), 21, "NVS ahead")
+
     def test_a_failed_save_trims_by_the_boots_mark(self):
         sc = sr.scenario_save_fails()
         r = sr.boot(sc["files"], **self.args(sc["boots"][0]))

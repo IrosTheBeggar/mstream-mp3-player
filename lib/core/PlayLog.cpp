@@ -340,8 +340,8 @@ bool Journal::scan(uint32_t maxSlots) {
 }
 
 bool Journal::finishScan() {
-  // 2.20.4: NVS's or the card's, whichever is higher, and one more; the
-  // boot count stored before any slot uses it (NVS's at the mount: a scan
+  // 2.20.4's boot count: NVS's or the card's, whichever is higher, and one
+  // more, stored before any slot uses it (NVS's at the mount: a scan
   // begun again comes to the same count, or a higher one).
   const uint32_t boots = std::max(bootsAtMount_, booted_.cardBoot) + 1;
   // The folds' save (docs/LISTENING-STATS.md 5.5), after the boot rules and
@@ -356,7 +356,13 @@ bool Journal::finishScan() {
     return true;
   }
   ids_.boots = bootSeq_ = boots;
-  seq_ = std::max(seq_, booted_.cardSeq);
+  // The seq: NVS's, the card log's, and for this device and epoch the
+  // seq ACKS acknowledges and the stats' MARK (2.20.4). ACKS's and MARK's
+  // are reservations: with NVS put back behind a log already trimmed, a
+  // new play would take a seq ACKS acknowledges (read as sent, never
+  // sent) and MARK covers (never folded).
+  seq_ = std::max(std::max(seq_, booted_.cardSeq), acks_.seqOf(dev_, ids_.epoch));
+  if (c_.folds) seq_ = std::max(seq_, c_.folds->markOf(dev_, ids_.epoch));
   // With folds a file goes only when the card's MARK covers it: after a
   // save every file the scan read; else (failed, refused, or none after a
   // partial scan) those the MARK read at the boot covered.

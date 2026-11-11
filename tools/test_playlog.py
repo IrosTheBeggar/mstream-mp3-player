@@ -13,12 +13,13 @@ MSMF's ACKS, 2.5.6).
   slots with one key both dropped, the order by (deviceId, epoch, seq),
   the files' order irrelevant, a file read no further than the cap.
 - The device's model: the seq and the bootSeq at boot (NVS behind or
-  ahead of the card, every valid slot counting), a new epoch after an
-  NVS erase, the rotation under the cap, its drop note (an unread one's
-  count carried on), the trim by ACKS (never a note nobody read, nor a
-  slot it can't judge), a power cut between or inside the rotation's
-  steps and the twins it leaves, with no chain freed while a name uses
-  it.
+  ahead of the card, every valid slot counting; ACKS's seq and the
+  stats' MARK reserving theirs: NVS put back behind a trimmed log), a
+  new epoch after an NVS erase, the rotation under the cap, its drop
+  note (an unread one's count carried on), the trim by ACKS (never a
+  note nobody read, nor a slot it can't judge), a power cut between or
+  inside the rotation's steps and the twins it leaves, with no chain
+  freed while a name uses it.
 - The reader's rules: dating by the next dated play of a boot (the
   uptime wrapping), a play's file through the ledger (size, time, the
   skew), the posted mark held by a play still waiting.
@@ -172,6 +173,22 @@ class LogTests(unittest.TestCase):
         self.assertEqual(pl.boot_seq(0, plays, DEV, 7), 10)
         self.assertEqual(pl.boot_seq(2, plays, "00:00:5e:00:53:02", EPOCH), 3)
 
+    def test_boot_seq_takes_acks_and_mark(self):
+        # 2.20.4: ACKS's seq for this device and epoch, and the stats' MARK
+        # (docs/LISTENING-STATS.md 5.6), are reservations: NVS put back
+        # behind a log already trimmed doesn't take a seq ACKS acknowledges.
+        plays = pl.read_log({"plays.jnl": pl.encode(play(5))})["plays"]
+        mine = (pl.device_bytes(DEV).hex(), EPOCH, 9)
+        self.assertEqual(pl.boot_seq(3, plays, DEV, EPOCH, acks=[mine]), 10)
+        self.assertEqual(pl.boot_seq(3, [], DEV, EPOCH, acks=[mine]), 10, "the log trimmed: ACKS alone")
+        self.assertEqual(pl.boot_seq(3, [], DEV, EPOCH, mark=12), 13, "MARK alone")
+        self.assertEqual(pl.boot_seq(3, [], DEV, EPOCH, acks=[mine], mark=7), 10)
+        self.assertEqual(pl.boot_seq(11, plays, DEV, EPOCH, acks=[mine], mark=7), 12, "NVS ahead")
+        others = [(pl.device_bytes(DEV).hex(), 7, 40), ("00005e005302", EPOCH, 50)]
+        self.assertEqual(pl.boot_seq(3, plays, DEV, EPOCH, acks=others), 6, "another epoch's, another device's")
+        self.assertEqual(pl.boot_seq(3, plays, DEV, EPOCH, acks=[(DEV, "0x%016x" % EPOCH, 9)]), 10,
+                         "a deviceId and an epoch in any of their spellings")
+
     def test_the_boot_rules_take_every_valid_slot(self):
         # 2.20.4: a conflict's seq was used, though a reader drops both slots.
         files = {"plays.jnl": pl.encode(play(1)) + pl.encode(play(2, bootSeq=3)) +
@@ -281,6 +298,26 @@ class DeviceTests(unittest.TestCase):
         d.boot()
         s = d.play(1, 1000, 0x5D4773D5, 42, 1000, 2000, 1, 1, 30)
         self.assertEqual((s["seq"], s["bootSeq"]), (3, 3), "not boot 1 again: its plays would date this one")
+
+    def test_nvs_put_back_behind_a_trimmed_log(self):
+        # NVS written back from a backup (the house's end-of-check step)
+        # after a sync acknowledged seqs 1-6 and the boot trimmed them: the
+        # next play takes 7, not 3 (a seq ACKS acknowledges: read as sent,
+        # it would never be sent). With the stats' MARK above ACKS, past it.
+        d = pl.Device(DEV, [EPOCH], cap=3)
+        d.boot(clock=1)
+        for n in range(6):
+            player(d)(n)
+        backup = dict(d.nvs, seq=2)
+        acks = [(pl.device_bytes(DEV).hex(), EPOCH, 6)]
+        d.boot(clock=1, acks=acks)
+        self.assertEqual(sorted(d.files), [], "both files acknowledged: trimmed")
+        d.nvs = dict(backup)
+        d.boot(clock=1, acks=acks)
+        self.assertEqual(player(d)(7)["seq"], 7)
+        d.nvs = dict(backup)
+        d.boot(clock=1, acks=acks, mark=9)
+        self.assertEqual(player(d)(8)["seq"], 10)
 
 
 def player(d):

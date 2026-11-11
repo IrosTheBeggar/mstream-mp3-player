@@ -2658,7 +2658,7 @@
  },
  "plays": {
   "who": "both",
-  "note": "2.20 and 2.5.6: the play log. slot: one play slot's fields and bytes; note: a drop note's. ids: a play's id. names: what an outcome and a source read as. atBoot: the next seq and the next bootSeq at boot from NVS's values and the card's log (the golden sync-1, or readCase's files in plays/index.json), every valid slot counting (2.20.4). deviceOps: what the device model did with log.json's events (informative). files: plays/'s files (the goldens, the reader's cases in plays/index.json). acks: ACKS's bytes, the golden root's entries, and the hardening files. resolve: a golden log through a golden tags file (the software's): each new play, sent or not (why: 'file' its file isn't a ledger row's, 'clock' no start), where to and its start; then the posted marks once the server settled the sent ones. resolveCases: single plays. peers: where a play of each row of the card of several servers goes. deviceTxt: the history key.",
+  "note": "2.20 and 2.5.6: the play log. slot: one play slot's fields and bytes; note: a drop note's. ids: a play's id. names: what an outcome and a source read as. atBoot: the next seq and the next bootSeq at boot from NVS's values, the card's log (the golden sync-1, or readCase's files in plays/index.json), every valid slot counting, and the root's ACKS (acks; none when absent) for the seq (2.20.4). deviceOps: what the device model did with log.json's events (informative). files: plays/'s files (the goldens, the reader's cases in plays/index.json). acks: ACKS's bytes, the golden root's entries, and the hardening files. resolve: a golden log through a golden tags file (the software's): each new play, sent or not (why: 'file' its file isn't a ledger row's, 'clock' no start), where to and its start; then the posted marks once the server settled the sent ones. resolveCases: single plays. peers: where a play of each row of the card of several servers goes. deviceTxt: the history key.",
   "slot": {
    "fields": {
     "kind": 1,
@@ -2788,6 +2788,23 @@
      "nextSeq": 8,
      "nextBootSeq": 3,
      "note": "seq 7's two slots conflict, so a reader uses neither; the boot rule counts both"
+    },
+    {
+     "readCase": "end",
+     "nvsSeq": 3,
+     "nvsBoots": 1,
+     "deviceId": "00:00:5e:00:53:01",
+     "epoch": "0x1122334455667788",
+     "acks": [
+      {
+       "deviceId": "00:00:5e:00:53:01",
+       "epoch": "0x1122334455667788",
+       "seq": 7
+      }
+     ],
+     "nextSeq": 8,
+     "nextBootSeq": 2,
+     "note": "NVS put back from a backup (seq 3) behind a log already trimmed: EPOCH_1's slots are gone (the golden at its end holds EPOCH_2's), and ACKS's seq 7 reserves 4-7, which a new play would otherwise reuse and never be sent (0.14.0 took 4)"
     }
    ]
   },

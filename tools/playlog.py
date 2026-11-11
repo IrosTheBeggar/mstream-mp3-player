@@ -241,11 +241,19 @@ def last_seq(slots, device_id, epoch) -> int:
                default=0)
 
 
-def boot_seq(nvs_seq: int, slots, device_id, epoch) -> int:
+def boot_seq(nvs_seq: int, slots, device_id, epoch, acks=None, mark=0) -> int:
     """2.20.4: the next seq at boot, max(NVS's, the card's last for this
-    device and epoch) + 1, over every valid play slot (valid_slots(): a
-    conflicting pair's seq is used, though a reader drops both)."""
-    return max(nvs_seq, last_seq(slots, device_id, epoch)) + 1
+    device and epoch, the seq the root's ACKS acknowledges for them, and a
+    device that keeps listening stats their MARK for them) + 1, over every
+    valid play slot (valid_slots(): a conflicting pair's seq is used,
+    though a reader drops both). ACKS's and MARK's are reservations: with
+    NVS put back behind a log already trimmed, a new play would otherwise
+    take a seq ACKS acknowledges, and never be sent. acks: [(deviceId,
+    epoch, seq)] (None: no ACKS); mark: the stats' MARK seq for this device
+    and epoch (docs/LISTENING-STATS.md 5.6; statsref gives it; 0: none)."""
+    d, e = device_bytes(device_id), u64(epoch)
+    acked = max((s for ad, ae, s in acks or [] if device_bytes(ad) == d and u64(ae) == e), default=0)
+    return max(nvs_seq, last_seq(slots, device_id, epoch), acked, mark) + 1
 
 
 def boot_count(nvs_boots: int, slots, device_id, epoch) -> int:
@@ -528,10 +536,11 @@ class Device:
             if t in self.files and not self._shared(t):
                 self._delete(t, "twin")
 
-    def boot(self, clock=0, acks=None):
+    def boot(self, clock=0, acks=None, mark=0):
         """A boot with this card: NVS (a new epoch when it has none), the
-        settling of a cut rename, the boot rules (2.20.4); the trim by the
-        root's ACKS."""
+        settling of a cut rename, the boot rules (2.20.4: the seq takes
+        ACKS's for this device and epoch too, and `mark`, the stats' MARK
+        for them, when given); the trim by the root's ACKS."""
         self.down = self.blocked = False
         if self.nvs is None:
             self.nvs = {"epoch": self.epochs.pop(0), "seq": 0, "boots": 0}
@@ -539,7 +548,7 @@ class Device:
         self.settle()
         slots = valid_slots(self.files)
         self.nvs["boots"] = boot_count(self.nvs["boots"], slots, self.device_id, self.nvs["epoch"])
-        self.nvs["seq"] = boot_seq(self.nvs["seq"], slots, self.device_id, self.nvs["epoch"]) - 1
+        self.nvs["seq"] = boot_seq(self.nvs["seq"], slots, self.device_id, self.nvs["epoch"], acks, mark) - 1
         self.clock = clock
         if acks:
             self.trim(acks)

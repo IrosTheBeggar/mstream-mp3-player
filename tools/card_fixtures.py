@@ -1518,8 +1518,9 @@ def plays_vectors(golden: dict, snaps, ops):
         "who": "both",
         "note": ("2.20 and 2.5.6: the play log. slot: one play slot's fields and bytes; note: a drop note's. ids: "
                  "a play's id. names: what an outcome and a source read as. atBoot: the next seq and the next "
-                 "bootSeq at boot from NVS's values and the card's log (the golden sync-1, or readCase's files in "
-                 "plays/index.json), every valid slot counting (2.20.4). deviceOps: what the device model did "
+                 "bootSeq at boot from NVS's values, the card's log (the golden sync-1, or readCase's files in "
+                 "plays/index.json), every valid slot counting, and the root's ACKS (acks; none when absent) "
+                 "for the seq (2.20.4). deviceOps: what the device model did "
                  "with log.json's events (informative). files: plays/'s files (the goldens, the reader's cases in "
                  "plays/index.json). acks: ACKS's bytes, the golden root's entries, and the hardening files. "
                  "resolve: a golden log through a golden tags file (the software's): each new play, sent or not "
@@ -1550,7 +1551,12 @@ def plays_vectors(golden: dict, snaps, ops):
              "note": "another device's plays"},
             {"readCase": "conflict-top", "nvsSeq": 0, "nvsBoots": 0, "deviceId": DEVICE_A, "epoch": EPOCH_1,
              "nextSeq": 8, "nextBootSeq": 3,
-             "note": "seq 7's two slots conflict, so a reader uses neither; the boot rule counts both"}]},
+             "note": "seq 7's two slots conflict, so a reader uses neither; the boot rule counts both"},
+            {"readCase": "end", "nvsSeq": 3, "nvsBoots": 1, "deviceId": DEVICE_A, "epoch": EPOCH_1,
+             "acks": [{"deviceId": DEVICE_A, "epoch": EPOCH_1, "seq": 7}], "nextSeq": 8, "nextBootSeq": 2,
+             "note": "NVS put back from a backup (seq 3) behind a log already trimmed: EPOCH_1's slots are gone "
+                     "(the golden at its end holds EPOCH_2's), and ACKS's seq 7 reserves 4-7, which a new play "
+                     "would otherwise reuse and never be sent (0.14.0 took 4)"}]},
         "deviceOps": [list(o) for o in ops],
         "files": {"golden": sorted("plays/golden/%s/%s" % (s, n) for s in snaps for n in snaps[s])},
         "acks": {
@@ -2357,7 +2363,8 @@ def check_plays(pv, golden: dict, want):
     cases = {c[0]: c[1] for c in plays_read_cases(snaps)}
     for e in pv["atBoot"]["cases"]:
         slots = playlog.valid_slots(cases[e["readCase"]] if "readCase" in e else log_of(pv["atBoot"]["log"]))
-        want(playlog.boot_seq(e["nvsSeq"], slots, e["deviceId"], e["epoch"]) == e["nextSeq"] and
+        acks = [(a["deviceId"], u64(a["epoch"]), a["seq"]) for a in e.get("acks", [])]
+        want(playlog.boot_seq(e["nvsSeq"], slots, e["deviceId"], e["epoch"], acks) == e["nextSeq"] and
              playlog.boot_count(e["nvsBoots"], slots, e["deviceId"], e["epoch"]) == e["nextBootSeq"], "atBoot %r" % e)
     a = pv["acks"]
     want(playlog.acks_bytes([(a["entry"]["deviceId"], a["entry"]["epoch"], a["entry"]["seq"])]) ==

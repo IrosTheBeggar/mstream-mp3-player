@@ -2823,7 +2823,10 @@ goldens in `plays/` and `tags-0000002a.bin`):
   first sync (seven plays of EPOCH_1 in two boots): NVS at seq 0 and
   boot count 0 gives seq 8 and bootSeq 3, NVS at 9 and 5 gives 10 and 6,
   a new epoch 1 and 1. With seq 7's slot twice, different (a conflict a
-  reader drops), the next seq is still 8.
+  reader drops), the next seq is still 8. NVS put back at seq 3 and boot
+  count 1 over the golden at its end (EPOCH_1's slots trimmed), with
+  ACKS acknowledging EPOCH_1 to 7, gives seq 8 (ACKS's reservation:
+  2.20.4) and bootSeq 2.
 - The first sync's seven plays through `tags-0000002a.bin`: five sent
   (the first dated from the second, 185,000 ms of uptime later; a
   converted file's play goes to its row's `Music/Loose Intro.flac`), one
