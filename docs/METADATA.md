@@ -7693,14 +7693,17 @@ the changes):
   The console's `H`, `Hd`, `Hm`, `Ht<16 hex>` and `Hs` (README; the plan's
   9.3).
 - **Costs** (MEASURED-HOST: the core2 build and its link map, the host
-  tests). Flash 4,465,943 B after the S1 review's fixes (4,465,059 B
-  before them), 42,252 B over S0's 4,423,691 B (the fold, the files and
-  the glue linked); internal RAM 88 B more of statics; S0's 25
-  `libc_a-*` objects in `.iram0.text`, and IRAM left 5,157 B, 4 B under
-  S0's 5,161 B since the review's fixes: no new input in `.iram0.text`,
-  but `libphy.a(phy_chip_v7_cal.o)`'s `.iram1` relaxes to 4,159 B where
-  it relaxed to 4,155 (4,455 B before relaxing in both), the linker's
-  relaxation of its calls depending on where flash code lands. The loop's
+  tests). Flash 4,465,927 B at S1's gate (a626545; 4,465,059 B before
+  the review's fixes), 42,236 B over S0's 4,423,691 B (the fold, the
+  files and the glue linked). Internal RAM: 88 B more of statics.
+  `.iram0.text` holds S0's 25 `libc_a-*` objects. IRAM left is 5,157 B,
+  4 B under S0's 5,161 B since the review's fixes, with no new input in
+  `.iram0.text` and no call in it changed. `libphy.a(phy_chip_v7_cal.o)`'s
+  `.iram1` is 4,159 B where it was 4,155: its literal for
+  `phy_chan_gain_table+8` no longer equals a literal for
+  `phy_chan_pwr_index`, so the linker no longer merges them. The order
+  in which the linker gives libphy's COMMON symbols their addresses
+  changed (the plan's 9.5, C9's "As built"). The loop's
   stack (`-fstack-usage` sums, FatFs's own frames not counted): a
   rotation's save 2,448 B deep, 2,720 B in the end's flush, the boot's
   save with a compaction 1,712 B (ARCHITECTURE.md, "The loop task's
