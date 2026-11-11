@@ -50,7 +50,9 @@ class AutoDj;
 //     stats.bin read before the journal's begin(), the journal's Folds (the
 //     boot's fold and save before its trim, a rotation's save first), the
 //     live fold of each play written, the ending flag around the end's
-//     flush, and the console's H (Hs runs at a pass the gate lets through).
+//     flush, a library update's give-back and the blocks taken again after
+//     it (at a pass the gate lets through, nothing else of the card's that
+//     pass), and the console's H (Hs runs at a pass the gate lets through).
 // Only on the card with its records (Library::records()); never on the
 // flash. Loop task only.
 class PlayHistory final : private playlog::Tracker::Env, private playlog::Outbox::Env {
@@ -97,6 +99,13 @@ public:
   void remounted();
   // The console's H (app/ListeningStats): the text after the H.
   void statsCommand(const char* arg) { stats_.command(arg); }
+  // A library update's give-back (docs/LISTENING-STATS.md 6.7; main.cpp's
+  // memory check hook and its fence): the listening stats' resident blocks
+  // (their save first); the bytes. Taken again by loop() once the update
+  // is over and Auto DJ's join settled. statsResident(): what it would give
+  // back now (the step's alsoFreed).
+  size_t statsGiveBack(const char* where) { return active_ ? stats_.giveBack(where) : 0; }
+  size_t statsResident() const { return active_ ? stats_.resident() : 0; }
 
   // The boot's scan: slots a pass (four reads: about 10 KB).
   static constexpr uint32_t kScanSlotsPerPass = 4 * playlog::kReadBytes / playlog::kSlot;

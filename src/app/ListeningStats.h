@@ -35,9 +35,23 @@
 //     boot's save, a rotation's only with 1 s of its budget left);
 //   - every save refused while the card is away: out of the slot, refusing
 //     writes, or another card in it (sectordisk's guard);
+//   - a library update's give-back (6.7, the owner's decision of
+//     2026-11-11): giveBack() at the update's memory check (main.cpp's
+//     setGiveBack() hook, after Auto DJ's join) and at its fence (after
+//     Auto DJ's fence()): the fold saved first when it holds plays the
+//     card's stats.bin doesn't, then every resident block but MARK's given
+//     back (resident(): the step's UpdateEnv::alsoFreed counts them); the
+//     plays written meanwhile wait in the glue's ring. takeBack() once the
+//     update is over (LibraryUpdate::asked() false) and Auto DJ's join is
+//     settled (AutoDj::joinSettled(): rejoined, or none to come), at a pass
+//     the write gate lets through, the join not Working and the card not
+//     away: stats.bin read once (a remount's verdicts), the ring folded;
+//     the boot's scan begun again by a remount meanwhile waits for it
+//     (mayScan()) and reads it at its next piece;
 //   - [listen] lines: the read (and a remount's), each save (the boot's, a
 //     rotation's, Hs's) with its ms and bytes, a log file not read whole, the
-//     boot's fold at Ready;
+//     boot's fold at Ready, a library update's give-back (its save in the
+//     same line) and the re-read after it;
 //   - the console's H (command()): H the state; Hd the last 7 UTC days; Hm
 //     MARK beside ACKS and the log's highest seqs; Ht<16 hex> a track's row by
 //     path hash (base ⊕ delta, the base read now on the loop); Hs a save now,
@@ -56,12 +70,26 @@ public:
     uint32_t trackLeftMs = 0;  // of the heard track (0: not known)
     uint32_t seeks = 0;        // PlaybackController::seeks(), free-running
     bool joinWorking = false;  // Auto DJ's join (AutoDj::joinWorking())
+    bool joinSettled = true;   // ... neither under way nor to come (AutoDj::joinSettled(); no Auto DJ: true)
+    bool updating = false;     // a library update step asked, not over (LibraryUpdate::asked())
   };
   void pass(const Pass& p, uint32_t nowMs);
   // Before a piece of the boot's scan of `slots` slots: true, its room taken
   // (a remount's read made, the boot's fold begun, first), or nothing to
-  // take; false: the scan waits this pass (the join works).
+  // take; false: the scan waits this pass (the join works, or the blocks
+  // are given back to a library update until takeBack()).
   bool mayScan(uint32_t slots);
+  // A library update's give-back (6.7): `where` its point ("its memory
+  // check", "its fence"); the bytes given back (0: none held, given back
+  // already, the boot's fold under way). Its [listen] line.
+  size_t giveBack(const char* where);
+  // What giveBack() would give back now (the step's UpdateEnv::alsoFreed).
+  size_t resident() const { return glue_ ? glue_->resident() : 0; }
+  // The blocks again is due: given back, the update over, Auto DJ's join
+  // settled and not Working (this pass's look). takeBack() at a pass the
+  // write gate lets through, the card not away: the re-read, its line.
+  bool takeBackDue() const;
+  void takeBack();
   // The journal ready (the boot's scan done: `passes` and `scanUs` its
   // pieces' on the loop): a partial scan's fold ended; the fold's line.
   void ready(uint32_t passes, int64_t scanUs);
@@ -86,6 +114,8 @@ private:
   void saved(statsglue::Kind k, statsglue::Refused r, const statsfile::SaveReport& rep) override;
 
   void logRead(const statsfile::Opened& o, const char* when, float ms);
+  void logGiveBack(const char* where, size_t bytes);
+  void logTakeBack(float ms);
   void printState();
   void printDays();
   void printMarks();
@@ -99,6 +129,10 @@ private:
   bool waiting_ = false;  // a play waiting for the headphones, or a restart asked
   bool safePoint_ = true;
   bool joinWorking_ = false;
+  bool joinSettled_ = true;
+  bool updating_ = false;
+  uint32_t givenAt_ = 0;     // the last give-back (millis())
+  uint32_t givenWaits_ = 0;  // the boot's scan's passes waiting for the take-back
   bool seeksKnown_ = false;
   uint32_t seeks_ = 0;
   bool seekSeen_ = false;

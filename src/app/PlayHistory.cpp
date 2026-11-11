@@ -194,9 +194,20 @@ void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, boo
   sp.trackLeftMs = gate.trackLeftMs;
   sp.seeks = player_.seeks();
   sp.joinWorking = autoDj_ && autoDj_->joinWorking();
+  sp.joinSettled = !autoDj_ || autoDj_->joinSettled();
+  sp.updating = library_.update() && library_.update()->asked();
   stats_.pass(sp, gate.nowMs);
   const playlog::WriteGate::Wait w = gate_.update(gate);  // (every pass: it follows the starts)
   if (cardHeld || w != playlog::WriteGate::Wait::None) return;
+  // The stats' blocks again after a library update (docs/LISTENING-STATS.md
+  // 6.7): the update over, Auto DJ's rejoin done or none to come, the join
+  // not Working; stats.bin read once (not from a card that is away: out of
+  // the slot, refusing writes, another card). Nothing else of the card's
+  // this pass.
+  if (stats_.takeBackDue()) {
+    stats_.takeBack();
+    return;
+  }
   // Hs (the console's listening stats save): now, as the real saves are, at
   // a pass the gate lets through once the boot's scan is done (its line
   // out); nothing else of the card's this pass.

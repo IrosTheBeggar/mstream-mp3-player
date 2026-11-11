@@ -3307,23 +3307,32 @@ static bool decoderRefilling(uint32_t now) {
 }
 
 // The library update's memory check (LibraryUpdate::setGiveBack()): a new
-// track table that doesn't fit the largest free block while Auto DJ's join
-// holds blocks at its top (AutoDjJoin's placement: those that fit no
-// smaller free block): the join given back, PSRAM measured again. It joins
-// again after the update's Live, or at once when the update waits for the
-// next boot after all.
-static size_t autoDjGiveBack(void*, size_t* psramFree, size_t* psramLargest) {
-  if (!autoDj) return 0;
+// track table that doesn't fit the largest free block while memory that
+// goes with the step anyway is held: Auto DJ's join (its blocks at that
+// block's top: AutoDjJoin's placement, those that fit no smaller free
+// block) given back, then the listening stats' resident blocks (their save
+// first: docs/LISTENING-STATS.md 6.7, the order the heap model runs), PSRAM
+// measured again. The join joins again after the update's Live, or at once
+// when the update waits for the next boot after all; the stats take their
+// blocks again after that (PlayHistory::loop()).
+static size_t updateGiveBack(void*, size_t* psramFree, size_t* psramLargest) {
   const size_t before = *psramLargest;
-  const size_t given = autoDj->giveBack();
-  if (!given) return 0;
+  const size_t dj = autoDj ? autoDj->giveBack() : 0;
+  const size_t stats = playHistory.statsGiveBack("its memory check");
+  if (!dj && !stats) return 0;
   *psramFree = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
   *psramLargest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
-  Serial.printf("[dj] the library update's memory check: the join given back (%u B): PSRAM's largest free block %u B "
-                "-> %u B (up to %u B: the join's blocks at its top); it joins again after the update\n",
-                (unsigned)given, (unsigned)before, (unsigned)*psramLargest,
-                (unsigned)(before + autoDj->joinTopBytes()));
-  return given;
+  if (dj) {
+    Serial.printf("[dj] the library update's memory check: the join given back (%u B)%s: PSRAM's largest free block %u "
+                  "B -> %u B (up to %u B: the join's blocks at its top); it joins again after the update\n",
+                  (unsigned)dj, stats ? ", and the listening stats' blocks" : "", (unsigned)before,
+                  (unsigned)*psramLargest, (unsigned)(before + autoDj->joinTopBytes()));
+  } else {
+    Serial.printf("[lib] the update step's memory check: PSRAM's largest free block %u B -> %u B with the listening "
+                  "stats' blocks given back\n",
+                  (unsigned)before, (unsigned)*psramLargest);
+  }
+  return dj + stats;
 }
 
 static AutoDj::Env autoDjEnv(uint32_t now) {
@@ -3414,6 +3423,11 @@ static bool enterFence() {
   // reads it): given back before the index goes (counted in the memory
   // check's alsoFreed); it joins again after the fence.
   const size_t djFreed = autoDj ? autoDj->fence() : 0;
+  // The listening stats' resident blocks (docs/LISTENING-STATS.md 6.7; their
+  // save first; counted in alsoFreed too), unless the memory check's
+  // give-back took them already: taken again after the update and the
+  // rejoin.
+  const size_t statsFreed = playHistory.statsGiveBack("its fence");
   // 3. The old index (and the scan's memory); then the UI, which sees none.
   cardTasks->fenceUp();
   // The fence's own lowest PSRAM free (leaveFence()'s "lowest", the
@@ -3425,9 +3439,9 @@ static bool enterFence() {
   fenceLowWindow = diag::beginLowWindow();
   if (userInterface) userInterface->libraryUpdating();
   Serial.printf("[lib] the update step (%s): the fence is up; the build on the card worker (the loop goes on); PSRAM "
-                "free %u B before, %u B now (Auto DJ's join gave back %u B)\n",
+                "free %u B before, %u B now (Auto DJ's join gave back %u B, the listening stats %u B)\n",
                 library.update()->why(), (unsigned)fencePsramBefore,
-                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)djFreed);
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)djFreed, (unsigned)statsFreed);
   return true;
 }
 
@@ -3570,7 +3584,8 @@ static void stepCard(uint32_t now, bool input) {
   env.trackLeftMs = trackLeftMs();
   env.seekSeq = player.seeks();
   env.alsoFreed = queue.memoryBytes() + queueStore.savingBytes() +
-                  (userInterface ? userInterface->thumbs().poolBytes() : 0) + (autoDj ? autoDj->fenceBytes() : 0);
+                  (userInterface ? userInterface->thumbs().poolBytes() : 0) + (autoDj ? autoDj->fenceBytes() : 0) +
+                  playHistory.statsResident();
   // A pick owed while Auto DJ's index joins: no fence until it lands
   // (autodj::decide(), this pass's: stepAutoDj() ran before).
   env.autoDjOwed = autoDj && autoDj->owed();
@@ -3900,7 +3915,6 @@ void setup() {
   autoDj = psramNew<AutoDj>(library, player);
   if (autoDj) {
     autoDj->begin();
-    if (library.update()) library.update()->setGiveBack(autoDjGiveBack, nullptr);
   } else {
     Serial.println("[dj] no PSRAM for Auto DJ: off for this boot");
   }
@@ -3908,6 +3922,10 @@ void setup() {
   // boot's scan and the slots on the loop (Auto DJ's marks name a play's
   // source).
   playHistory.begin(autoDj);
+  // The update step's memory check gives back what goes with the step anyway
+  // when its new track table doesn't fit: Auto DJ's join, then the listening
+  // stats' blocks.
+  if (library.update()) library.update()->setGiveBack(updateGiveBack, nullptr);
   Serial.printf("[lib] library + queue: internal RAM %lu B free before, %lu B after\n",
                 (unsigned long)freeBeforeLibrary, (unsigned long)diag::heap().internalFree);
   diag::logHeap("library");
