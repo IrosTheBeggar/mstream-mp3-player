@@ -1552,12 +1552,19 @@ its stats aren't saved over); with nothing new it writes nothing. During
 a library update (the owner's decision of 2026-11-11) the stats give their
 resident blocks back after Auto DJ's join, at the update's memory check
 or its fence, saving first when they hold plays the card's `stats.bin`
-doesn't; MARK stays, so the trim and a rotation still go by the card's
-MARK, and the plays written meanwhile wait in a ring of 16. Once the
-update is over and Auto DJ has joined again, `stats.bin` is read again
-(once) and the ring folded; a session whose RAM then lacks plays the log
-holds (that save didn't land, another copy, the ring overflowed) saves
-nothing more, and the next boot folds them. Log lines: `[listen] ...`
+doesn't (the update waits in Asked for a pass the play log's write gate
+lets through, as every stats save does); MARK stays, so the trim and a
+rotation still go by the card's MARK, and the plays written meanwhile
+wait in a ring of 16. The boot's scan waits while an update is asked, so
+its fold never begins or grows behind one (a fold not begun yet is given
+back, and folds after the re-read). Once the update is over and Auto DJ
+has joined again, `stats.bin` is read again (a read the card fails made
+again, the boot's waits apart, before the stats go off) and the ring
+folded; a session whose RAM then lacks plays the log holds (that save
+didn't land, another copy, the ring overflowed) saves nothing more: the
+next boot folds those the log still holds, and a rotation in that session
+loses those in `plays.1.jnl` (where blocks held through would have saved
+them). Log lines: `[listen] ...`
 (the read, each save with its ms and bytes or why not, the boot's fold
 at the scan's end, a give-back and the re-read after it); the console's
 `H` commands (README).
@@ -2800,8 +2807,10 @@ strings.
   stats') or its fence, a save first when they hold new plays, MARK's
   1,536 B block kept; read again from the card once the update is over
   and the join is back, at a pass the write gate lets through. The model
-  then passes for every shape: joined the control's, or 16,384 B under it
-  at 19,478 played tracks (the plan's 6.7). With no PSRAM for the glue
+  then passes the mood plan's rule for every shape: joined the control's,
+  or 16,384 B under it at 19,478 played tracks, which is more than the
+  device's 16,368 B over its line after a FLAC update, so the case fails
+  on those two shapes until the owner rules (the plan's 6.7). With no PSRAM for the glue
   the journal gets no `Folds`: its trim is 0.14.0's, by ACKS alone.
 
 ## Input
