@@ -2068,7 +2068,7 @@ section and 2.12.8 say.
 
 | Name | What it holds |
 |---|---|
-| `state.json`, written through `state.new` | the card's settings and the software's private state: the card's label and the volume serial it was set up on; its selection (each source's libraries) and settings (layout, conversion, covers, AutoDJ); for a card of a multi-card set, the set and this card's place in it (the set's whole table, on each of its cards); for each of the card's servers, the keys the listener called that server (2.5.1), its manifest's revision when it isn't server 0 (2.10.2), a peer's endpointId (2.5.5); whether albums' art changed (2.12.1, step 10); the play log's posted mark of each (deviceId, epoch) (2.20.6), and its gift floor: of each (deviceId, epoch), the highest seq counted as a play of a card made for someone else (2.20.6, item 11; absent: none). Its members are the software's, versioned by its `version` |
+| `state.json`, written through `state.new` | the card's settings and the software's private state: the card's label and the volume serial it was set up on; its selection (each source's libraries) and settings (layout, conversion, covers, AutoDJ); for a card of a multi-card set, the set and this card's place in it (the set's whole table, on each of its cards); for each of the card's servers, the keys the listener called that server (2.5.1), its manifest's revision when it isn't server 0 (2.10.2), a peer's endpointId (2.5.5); whether albums' art changed (2.12.1, step 10); the play log's posted mark of each (deviceId, epoch) (2.20.6), and its gift ranges: of each (deviceId, epoch), the seqs counted as plays of a card made for someone else, from the first to the last of each time it was so (2.20.6, item 11; absent: none). Its members are the software's, versioned by its `version` |
 | `resume.json`, written through `resume.new` | the partial downloads kept for a later run; its members are 2.12.8's |
 | `resume/<8 hex>.part` | those partials (2.12.8) |
 | `run.lock` | informational: a run is writing the card (below) |
@@ -3221,32 +3221,36 @@ says the firmware keeps one (2.15).
 11. **A card made for someone else** (the software's setting, in
     `state.json`: 2.12.7) sends none of its plays, then or later. Each
     new play is counted and settled as it is, with a ledger or without:
-    it is never mapped, and the mark passes it. So does the card's
-    **gift floor**, in `state.json` beside the marks: of each (deviceId,
-    epoch), the highest seq counted so. Both are written by the one
-    write that settles those plays (the state file of a sync of such a
-    card; the write that makes it the listener's own again), never
-    before it, and the software keeps nothing of them in its own store:
-    a run that stops before that write leaves them as new as it found
-    them. The commits of the run that first counts a play so don't
-    acknowledge it (they come before the state file); the next commit's
-    ACKS do, and let the device trim it.
+    it is never mapped, and the mark passes it. The card's **gift
+    ranges**, in `state.json` beside the marks, take it in: of each
+    (deviceId, epoch), the seqs from the first play counted so to the
+    last, split where a play of the log between them wasn't (one the
+    software had mapped before the card was marked); a range that
+    touches or overlaps another of its (deviceId, epoch) joins it. Marks
+    and ranges are written by the one write that settles those plays
+    (the state file of a sync of such a card; the write that makes it
+    the listener's own again), never before it, and the software keeps
+    nothing of them in its own store: a run that stops before that write
+    leaves them as new as it found them. The commits of the run that
+    first counts a play so don't acknowledge it (they come before the
+    state file); the next commit's ACKS do, and let the device trim it.
     - Every look, by any software and whatever the setting says by then,
-      counts a new play at or below the floor as such a card's: never
-      mapped, never sent, the mark passing it. A state file with no
-      floor (an older one) has none. The floor is read whatever card id
-      the state file names, as the setting is.
+      counts a new play in a gift range as such a card's: never mapped,
+      never sent, the mark passing it. A state file with no ranges (an
+      older one) has none. The ranges are read whatever card id the
+      state file names, as the setting is.
     - The plays the log holds when the setting changes, either way, are
       such a card's too, since nothing tells when a play was made. A
       card just marked has them settled at its next sync. One made the
       listener's own again has them settled in the write that changes
-      the setting (the marks and the floor, in `state.json`), and keeps
+      the setting (the marks and the ranges, in `state.json`), and keeps
       the setting when the software can't read the log.
     - The plays the software had mapped before the card was marked wait
-      in its store, hold the mark at the first of them, and go from that
-      store once the card is the listener's own again: the floor passes
-      them over there, never anywhere else. Another computer, whose
-      store never held them, counts them under the floor as the rest.
+      in its store, hold the mark at the first of them, and go once the
+      card is the listener's own again. No gift range holds them: they
+      lie below the range of the time the card was marked, or between
+      two ranges. Another software, or the same one with its store lost,
+      maps them as the listener's own plays.
 12. **A rejection that may pass** doesn't settle its play, which waits
     in the store and holds its mark:
     - `unknown-track`, mStream's answer for a file its scan hasn't
