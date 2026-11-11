@@ -590,11 +590,18 @@ hundred bytes in PSRAM (app/TagConsole's `Work`).
   core2 build's flags (MEASURED-HOST, FatFs's own frames not counted): a
   rotation's save under a play's write (`PlayHistory::loop` →
   `Outbox::writeOne` → `append`, `put`, `place` → `rotate` →
-  `statsglue::Glue::save` → `statsfile::Store::save` → `replace` →
-  `FatFs::rename`) 2,304 B, 352 B over the rotation's own deepest without
-  them (1,952 B), and 2,576 B in the orderly end's flush; the boot's save
-  with a compaction (`loop` → `Journal::scan` → `finishScan` → ... →
-  `compact` → `FatFs::open`) 1,632 B. Not yet read on a device (the
+  `statsglue::Glue::save` → `commit` → `statsfile::Store::save` →
+  `replace` (or `settle`, `prepareTmp`) → `toTwin` → `FatFs::rename`)
+  2,448 B, 496 B over the rotation's own deepest without them (1,952 B),
+  and 2,720 B in the orderly end's flush; the boot's save with a
+  compaction (`loop` → `Journal::scan` → `finishScan` → ... → `compact`
+  → `FatFs::openRead` → `FatFile::openRead`) 1,712 B. A tmp an earlier
+  save holds is promoted in a call of its own (`Store::promote()`, from
+  `Glue::commit`), never under the save's frame: inside it, as first
+  built, the rotation's save was 2,528 B (the S1 review; the first sums
+  had also missed `replace()`'s `toTwin`). A remount's read of
+  `stats.bin` runs at the boot's scan's next piece (`loop` → `mayScan` →
+  `Glue::reserve` → ... → `Store::read`), 1,536 B. Not yet read on a device (the
   plan's runs G and K, against the house's lowest, 2,548 B left under a
   held boot with DO low: METADATA.md 3.8).
 - **ESTIMATED worst cases**, bytes used from the stack's top (from the
@@ -1518,10 +1525,12 @@ read and its verdicts, the save, the compaction into a new base, and
 journal, tracker and outbox). `app/ListeningStats`, a member of
 `app/PlayHistory`, is the firmware's side. The read is in
 `PlayHistory::begin()`, before the journal's: `stats.bin` and its base
-read whole, a card fault read again after 100, 300 and 1,000 ms. Unread,
-or a newer stats firmware's, the stats are off this session and the log
-is trimmed by nothing (no MARK known); corrupt twice, it is set aside as
-`stats.bad` and counting starts again from the log. The boot's scan
+read whole, a card fault read again after 100, 300 and 1,000 ms (a
+remount's read once, at the boot's scan's next piece). Unread, or a
+newer stats firmware's, the stats are off this session, holding no
+memory, and the log is trimmed by nothing (no MARK known); corrupt
+twice, it is set aside as `stats.bad` and counting starts again from the
+log. The boot's scan
 folds each slot above the MARK it read, once; each play written is
 folded live (RAM only: no card write for a play but its slot). Saves: at
 the scan's end, inside `finishScan()` before its trim (the only one that
@@ -2755,10 +2764,13 @@ strings.
   `setup()`, after Auto DJ's: HOUR, DAYS and MARK once (14,656 B), and
   the RCNT and TRKD chunks `stats.bin` needs (16,384 B each: never one
   block, never realloc'd) and one spare for the live folds. The boot's
-  fold grows them, with a transient index freed at the scan's end, only
-  in a pass where Auto DJ's join isn't Working (otherwise the scan waits
-  that pass), and the spare is carved again at such a pass after a live
-  fold took it. A read's and a save's work memory
+  fold grows them, with a transient index (and its ranges) carved at the
+  scan's first piece and freed at the scan's end, only in a pass where
+  Auto DJ's join isn't Working (otherwise the scan waits that pass); a
+  remount's read of `stats.bin` waits for such a pass too; and the spare
+  is carved again at such a pass after a live fold took it. RCNT is held
+  to its 4,096-row cap at the fold's end even when the save doesn't land.
+  With the stats off (unread, newer, no memory) every block is given back. A read's and a save's work memory
   (`statsfile::kWorkBytes`: the writer, its plan, two 4 KB buffers;
   10,896 B on the 64-bit host) is carved for each and given back. Internal RAM holds 88 B of
   statics. The key is a path hash, so a library update needs nothing. A
@@ -2767,8 +2779,9 @@ strings.
   (test_autodj_join, MODELLED) finds these blocks come out of a library
   update's largest free block rather than filling the boot's holes: its
   rule holds at 2,214 played tracks with a short boot fold, and fails at
-  19,478 played tracks and after a full never-synced log's fold (the
-  plan's 6.7: the next step is the owner's). With no PSRAM for the glue
+  19,478 played tracks and after a full never-synced log's fold, landed
+  or not (the plan's 6.7: the next step is the owner's; the case fails
+  until then). With no PSRAM for the glue
   the journal gets no `Folds`: its trim is 0.14.0's, by ACKS alone.
 
 ## Input

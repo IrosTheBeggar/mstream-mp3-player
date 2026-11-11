@@ -7609,23 +7609,34 @@ the changes):
   failure is Unread, the stats off this session. Its neighbours go once it
   checks whole. `StatsCheck`, `settle()`'s check of a lone tmp, answers
   Unknown (the tmp kept: it may be the only copy) for damaged records too.
-  A remount's read (`scanBegan(true)`): once, no waits, a corrupt file
-  left for the next boot (Unread, never renamed on one read); none while
-  the orderly end flushes (the folds dropped, nothing saved).
+  A remount drops the folds at once (`scanBegan(true)`); its read, once
+  and with no waits, runs at the scan's first piece, in a pass the write
+  gate lets through and where Auto DJ's join isn't Working, never in the
+  card guard's step (the S1 review); a corrupt file is left for the next
+  boot (Unread, never renamed on one read); none while the orderly end
+  flushes, or when the flush starts before it ran (the folds dropped,
+  nothing saved). A read that leaves the stats off (unread, newer, no
+  memory) gives every block of the fold back; a later read carves them
+  again.
 - **The fold** (5.6). HOUR, DAYS and MARK are carved once (14,656 B),
   RCNT and TRKD in 16,384 B chunks with one spare, all in PSRAM. At their
   caps HOUR and DAYS drop their oldest row, so RAM holds the newest 840
   and 400 the save keeps, whatever order the slots come in. Each slot
   once: per MARK row, the seq range each log file gave, at most 10. The
-  boot's transient index is freed at the scan's end, just before the
+  boot's fold's blocks (the ranges, the ACKS rows, the indexes) are
+  carved at the scan's first piece, not in `setup()` (the S1 review);
+  its transient index is freed at the scan's end, just before the
   save; with no memory for one (or past 65,535 rows) the fold goes on
   without it, slower; only a chunk, MARK or the ranges that can't be
-  carved stops the fold (no save that session, the trim by the card's
-  MARK). Live folds keep at most 64 rows unsorted, then sort the chunks
-  holding them. A full never-synced log grows RCNT too (pruned only at
-  the save): 412,992 B at the peak in test_stats_fold, 396,608 B through
-  the journal in test_stats_store (13,106 slots, 4,616 tracks); the plan
-  had modelled TRKD's growth alone.
+  carved stops the fold (no save that session, not even with no work
+  memory left for one, the trim by the card's MARK). Live folds keep at
+  most 64 rows unsorted, then sort the chunks holding them. A full
+  never-synced log grows RCNT too (pruned at the save; at the fold's end
+  held to its 4,096-row cap by whole days, so a boot whose save doesn't
+  land doesn't keep a full log's rows: the S1 review): 412,992 B at the
+  peak in test_stats_fold, 396,608 B through the journal in
+  test_stats_store (13,106 slots, 4,616 tracks); the plan had modelled
+  TRKD's growth alone.
 - **The saves** (5.5): the boot's, inside `finishScan()` (the only one
   that may compact, and only at the update step's safe point: nothing
   playing, or the heard track 20 s or more from its end and no seek in
@@ -7638,8 +7649,10 @@ the changes):
   card); a log file not read whole this session. `Hs`: the library
   update's fence, the stats off, the boot's scan, a partial scan, the
   card away. Then the store: a tmp an earlier save holds is promoted
-  first, only while its header is the one written (the next file takes
-  its generation + 1); `settle()`; `stats.bin`'s header on the card
+  first, in a call of its own before the save's work memory is carved
+  (its frames never under the save's), only while its header is the one
+  written (the next file takes its generation + 1); a fold out of memory
+  or a partial scan is refused before the work memory is asked; `settle()`; `stats.bin`'s header on the card
   against the one this RAM stands on (a change refuses this save and
   every later one this session); a compaction when due (base ⊕ delta
   streamed from the card, written with `FA_CREATE_ALWAYS` and its size
@@ -7680,39 +7693,53 @@ the changes):
   The console's `H`, `Hd`, `Hm`, `Ht<16 hex>` and `Hs` (README; the plan's
   9.3).
 - **Costs** (MEASURED-HOST: the core2 build and its link map, the host
-  tests). Flash 4,465,059 B, 41,368 B over S0's 4,423,691 B (the fold,
-  the files and the glue linked); internal RAM 88 B more of statics; IRAM
-  unchanged, 5,161 B left with S0's 25 `libc_a-*` objects in
-  `.iram0.text`. The loop's stack (`-fstack-usage` sums, FatFs's own
-  frames not counted): a rotation's save 2,304 B deep, 2,576 B in the
-  end's flush, the boot's save with a compaction 1,632 B (ARCHITECTURE.md,
-  "The loop task's stack"). A full log's `stats.bin` 133,616 B in 37
+  tests). Flash 4,465,943 B after the S1 review's fixes (4,465,059 B
+  before them), 42,252 B over S0's 4,423,691 B (the fold, the files and
+  the glue linked); internal RAM 88 B more of statics; S0's 25
+  `libc_a-*` objects in `.iram0.text`, and IRAM left 5,157 B, 4 B under
+  S0's 5,161 B since the review's fixes: no new input in `.iram0.text`,
+  but `libphy.a(phy_chip_v7_cal.o)`'s `.iram1` relaxes to 4,159 B where
+  it relaxed to 4,155 (4,455 B before relaxing in both), the linker's
+  relaxation of its calls depending on where flash code lands. The loop's
+  stack (`-fstack-usage` sums, FatFs's own frames not counted): a
+  rotation's save 2,448 B deep, 2,720 B in the end's flush, the boot's
+  save with a compaction 1,712 B (ARCHITECTURE.md, "The loop task's
+  stack"; the review corrected the first sums, 2,304, 2,576 and 1,632 B,
+  and took a held tmp's promotion out from under the save's frame). A full log's `stats.bin` 133,616 B in 37
   writes, 30 of them whole 4 KB pieces; the scan, the fold and the save
   about 1.55 µs a slot on this PC. None of these is a device's yet.
 - **The heap model** (the plan's 6.7, MODELLED: test_autodj_join's
-  `test_the_listening_stats_in_a_model_heap`, reported ignored with its
-  figures pinned). The stats' blocks come out of a library update's
-  largest free block rather than filling the boot's holes. The update's
-  rule holds at 2,214 played tracks with a short boot fold (80,192 B
-  resident; joined 249,844 B, the control 360,436 B), and fails at 19,478
-  played tracks (194,880 B resident) and after a full never-synced log's
-  fold. The next step (the plan's ladder, or a redesign) is the owner's;
-  the device's run L is the real measure.
-- **Tests.** New: `test_stats_fold` (17 cases: every fixture's boots and
-  saves byte for byte, a plain-map model, the memory), `test_stats_file`
-  (12: the read's verdicts, the saves and the bases byte for byte, a cut
-  at every write step three ways) and `test_stats_store` (14: the
+  `test_the_listening_stats_in_a_model_heap`, its figures pinned; it
+  FAILS, since the S1 review, where it had been reported ignored: the
+  plan's 9.5 Done-when isn't met until the owner rules). The stats' blocks
+  come out of a library update's largest free block rather than filling
+  the boot's holes. The update's rule holds at 2,214 played tracks with a
+  short boot fold (80,192 B resident; joined 249,844 B, the control
+  360,436 B), and fails at 19,478 played tracks (194,880 B resident) and
+  after a full never-synced log's fold, its save landed or not (145,728 B
+  held at 2,214 when it doesn't). The model carves in the firmware's
+  order: the glue, HOUR, DAYS and MARK, the read's work memory and load at
+  `PlayHistory::begin()`; the boot's fold after the boot's join. The next
+  step (the plan's ladder, or a redesign) is the owner's; the device's run
+  L is the real measure.
+- **Tests.** New: `test_stats_fold` (19 cases: every fixture's boots and
+  saves byte for byte, a plain-map model, the memory, a boot whose save
+  doesn't land), `test_stats_file`
+  (13: the read's verdicts, the saves and the bases byte for byte, a cut
+  at every write step three ways, a fold out of memory) and `test_stats_store` (16: the
   journal, the tracker and the outbox through the real glue over CutFs,
   FlakyFs and FaultFs, every boot of `stats/index.json` and every step of
   `stats/sessions.json` compared byte for byte; cuts, faults, remounts,
-  partial scans, two players, a 0.14.0 boot, the full log). In
-  `test_play_log` (41: the 33, the boot rules' sixth case, 7 for the
+  partial scans, two players, a 0.14.0 boot, the full log, the blocks
+  waiting for a reserve(), the end's budget at its edge). In
+  `test_play_log` (42: the 33, the boot rules' sixth case, 8 for the
   hooks, 1 for the seq rule), `test_card_root` (34: commitTime),
-  `test_autodj_join` (27, the stats' case ignored), `tools/test_statsref.py`
+  `test_autodj_join` (27, the stats' case failing until the owner rules),
+  `tools/test_statsref.py`
   (56), `tools/test_playlog.py` (32), `tools/test_synthtransfer.py` (63:
   `--acks`). Mutation checks: the fold 10 of 10 caught, the files 15 of
   15, the proof over the hooks and the files 13 of 15, the glue 9 of 12
-  (the rest equivalent).
+  (the rest equivalent), the S1 review's fixes 10 of 10.
 - **The device check** is the plan's 9.5 table, runs A-L on the spare card
   rebuilt (synthcard, synthtransfer, `statsref.py seed`), main at bc29b54
   the control in the same script. None has run.
