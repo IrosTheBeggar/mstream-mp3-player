@@ -1,0 +1,102 @@
+[
+ {
+  "album": "Copper Season",
+  "artist": "Ash Meridian",
+  "tracks": [
+   {
+    "path": "Ash Meridian/Copper Season/01 Copper Season.mp3",
+    "hash": "0x46fda6d44e64f3d8"
+   },
+   {
+    "path": "Ash Meridian/Copper Season/02 Brine.mp3",
+    "hash": "0x9adbc88aa24ceb75"
+   },
+   {
+    "path": "Ash Meridian/Copper Season/03 Low Tide.mp3",
+    "hash": "0x8d5c2e4c7ace92ce"
+   }
+  ]
+ },
+ {
+  "album": "Glass Harbour",
+  "artist": "Sefa Ilmar",
+  "tracks": [
+   {
+    "path": "Sefa Ilmar/Glass Harbour/01 Glass Harbour.mp3",
+    "hash": "0x3df15c814b89ab75"
+   },
+   {
+    "path": "Sefa Ilmar/Glass Harbour/02 Weather Vane.mp3",
+    "hash": "0xc3380bf65e7023d1"
+   },
+   {
+    "path": "Sefa Ilmar/Glass Harbour/03 North Pier.mp3",
+    "hash": "0xc1011123dcef40cd"
+   }
+  ]
+ },
+ {
+  "album": "Night Ticket",
+  "artist": "Lumen Ferry",
+  "tracks": [
+   {
+    "path": "Lumen Ferry/Night Ticket/01 Night Ticket.mp3",
+    "hash": "0x832a7da9ed0311e6"
+   },
+   {
+    "path": "Lumen Ferry/Night Ticket/02 Slow Lantern.mp3",
+    "hash": "0xd222fa5e5713f77e"
+   },
+   {
+    "path": "Lumen Ferry/Night Ticket/03 Harbour Lights.mp3",
+    "hash": "0x884ae8f96e37eac2"
+   }
+  ]
+ },
+ {
+  "album": "Paper Comets",
+  "artist": "Ilse Varga",
+  "tracks": [
+   {
+    "path": "Ilse Varga/Paper Comets/01 Paper Comets.mp3",
+    "hash": "0xe604b5c8d82005d1"
+   },
+   {
+    "path": "Ilse Varga/Paper Comets/02 Orbit Room.mp3",
+    "hash": "0x145438baeaf72dba"
+   },
+   {
+    "path": "Ilse Varga/Paper Comets/03 Glass Ladder.mp3",
+    "hash": "0xf78a2e6d090eff64"
+   }
+  ]
+ },
+ {
+  "album": "Quiet Engine",
+  "artist": "Halvard Moss",
+  "tracks": [
+   {
+    "path": "Halvard Moss/Quiet Engine/01 Quiet Engine.flac",
+    "hash": "0x9057bc2b792857af"
+   },
+   {
+    "path": "Halvard Moss/Quiet Engine/02 Signal Fires.flac",
+    "hash": "0xebc4649938fbd8d3"
+   }
+  ]
+ },
+ {
+  "album": "Tidewater Rooms",
+  "artist": "Mira Okafor",
+  "tracks": [
+   {
+    "path": "Mira Okafor/Tidewater Rooms/01 Tidewater.opus",
+    "hash": "0x5ab8d5025ca01351"
+   },
+   {
+    "path": "Mira Okafor/Tidewater Rooms/02 Salt Stairs.opus",
+    "hash": "0xc8b874afa782f35d"
+   }
+  ]
+ }
+]

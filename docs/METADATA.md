@@ -8607,7 +8607,8 @@ they disagreed:
   (2026-11-10) and their format, `/.player/stats.bin` and its base file
   (its 5.2-5.3; no software reads them), with what they change here: the
   device's files (2.11, 2.12.6), the trim (2.20.2) and the boot's seq
-  (2.20.4).
+  (2.20.4). `tools/statsref.py` is their reference; card_fixtures.py
+  writes their fixtures (`test/fixtures/card/stats`) with it.
 - **docs/UI-SPIKE.md:** the per-track memory figures.
 - **docs/GAPLESS.md** and **docs/QUEUE-MODES.md:** the update step's safe
   point and the queue's remap through `queue.txt`.

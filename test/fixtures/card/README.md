@@ -104,6 +104,31 @@ its container's check of known sections, whose stride and length rules
 would make the root absent: it finds ACKS by its type in the directory
 and checks it on its own.
 
+The listening stats (docs/LISTENING-STATS.md: `/.player/stats.bin` and
+its base file, 5.2-5.6) have their fixtures in `stats/`, made with
+`tools/statsref.py`, their reference, which card_fixtures.py imports.
+`stats/index.json` lists the scenarios. Each is a card's `/.player` before
+its first boot (the log's files, and a `stats.bin` and its base where an
+earlier boot left them), the booting device (`device`: its deviceId and
+epoch, which only the boot rules use: the stats fold every device's
+plays) and its boots in turn. A boot gives the files it starts from (`in`)
+and leaves (`out`), each name mapped to the folder that holds its bytes (a
+file is stored once, in the first folder with those bytes); its inputs
+(`acks`: the root's ACKS rows; `now`: the board's clock at the save in Unix
+ms, null while unset, and `today`, its UTC day counted from 2026-01-01;
+`commitTime`: the root's, Unix s; `playing` and `safePoint`, for the
+compaction's rule; `saveFails`: a full card); and what a device MUST make
+of them: `out` byte for byte, what the read found (`read`), the slots
+folded, met a second time, and missing under ACKS (`folded`, `twice`,
+`gap`), whether `stats.bin` was written (`saved`) and the base compacted,
+the files removed and the log files trimmed, and, read back, HEAD and MARK
+(`stats`), the shelves' lists (`lists`, by path hash, each its cap plus 16:
+`mostPlayed` per window [hash, plays in it]; `newFinds` [hash, plays,
+firstAt, its source]; `oldFavourites` [hash, plays, lastAt];
+`recentlyPlayed` [hash, plays, lastAt, lastOrd]; `notPlayed` by album) and
+the hub's numbers (`view`). `stats/library.json` is the made-up library
+behind Not played yet: its albums in A-Z order, each track's path and hash.
+
 The player's tests: `test/test_card_contract` (the vectors),
 `test/test_card_files` (the goldens, round trips, the hardening files,
 truncation at every byte and every flipped bit), `test/test_card_autodj`
@@ -111,4 +136,6 @@ truncation at every byte and every flipped bit), `test/test_card_autodj`
 index's own rules) and `test/test_name_key` (the keys the AutoDJ
 descriptions give). The play log's fixtures are for the
 firmware's log and the transfer software's reader, neither built yet;
-`tools/test_playlog.py` reads them today.
+`tools/test_playlog.py` reads them today. The stats' fixtures are for the
+firmware's stats (docs/LISTENING-STATS.md S1-S2), not built yet;
+`tools/test_statsref.py` checks them today.
