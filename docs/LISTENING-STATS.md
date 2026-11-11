@@ -6,7 +6,7 @@ Listening stats count the plays on the card and show them in the Library: a hub 
 
 **Status (2026-11-10):** nothing is built. This document is the build plan, read and written at firmware bc29b54 (main; v0.14.0 released). PR #58 moves NEXT_RELEASE to 0.15.0 (`tools/version.py:54`), so the stats ship in 0.15.0 at the earliest.
 
-**Designed** on the Claude Design canvas, https://claude.ai/artifact/MhGiBt7yLecJZEErFQgSTq. Its final frames are Entry, Main, MostPlayed, NewFinds, NoClock, EarlyDays, NoPlays, NowPlayingSheet and Week. AlbumPlays was dropped by the owner (decision O3). The A- (Glance), B- (Recap) and C- frames are the directions not taken (14). The final spec lived in a scratch folder that Windows cleans up after about a week, so its essentials are inlined here (sections 2, 4, 5, 7, 8). Where this plan departs from it, 1.1 and 3.2 say so.
+**Designed** on the Claude Design canvas, https://claude.ai/artifact/MhGiBt7yLecJZEErFQgSTq. Its final frames are Entry, Main, MostPlayed, NewFinds, NoClock, EarlyDays, NoPlays, NowPlayingSheet and Week. AlbumPlays was dropped by the owner (decision O3). The A- (Glance), B- (Recap) and C- frames are the directions not taken (14). The final spec lived in a scratch folder that Windows cleans up after about a week, so its essentials are inlined here (sections 2, 4, 5, 7, 8). Where this plan departs from it, 1.1 and 3.2 say so. The nine final frames are in [docs/img/listening-stats](img/listening-stats/README.md), captured from the canvas (C1).
 
 **Picked by the owner, 2026-11-10:** O1-O4 and O6 of 3.1. **O5 is open.**
 
