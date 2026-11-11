@@ -4,7 +4,21 @@ Listening stats count the plays on the card and show them in the Library: a hub 
 
 ## 1. Status
 
-**Status (2026-11-10):** nothing is built. This document is the build plan, read and written at firmware bc29b54 (main; v0.14.0 released). PR #58 moves NEXT_RELEASE to 0.15.0 (`tools/version.py:54`), so the stats ship in 0.15.0 at the earliest.
+**Status (2026-11-11):** **S1, the store, is built** (9.5's C4-C10), on `claude/listening-stats-s1`, stacked on S0's branch (PR #59: this document, the frames, the format text, `tools/statsref.py` and its fixtures). It is host-tested and built for `core2` and `core2-dio` with every guard. It is **not checked on a device**: 9.5's runs A-L wait for the owner's go-ahead. Nothing shows on the screen. S2-S6 are not started. As built: `docs/METADATA.md` 3.11, `docs/ARCHITECTURE.md` (Storage, "Listening stats"), the README's console table (`H`).
+
+This document is the build plan, read and written at firmware bc29b54 (main; v0.14.0 released). PR #58 moves NEXT_RELEASE to 0.15.0 (`tools/version.py:54`), so the stats ship in 0.15.0 at the earliest.
+
+**What S1 changed from this plan.** Each change is amended where its section stands, in the commit that made it, which says why:
+- **6.7's pass rule fails in the heap model** (C8, MODELLED). It holds at P = 2,214 with a short boot fold. At P = 19,478's resident ceiling, and after a full never-synced log's fold, the stats' blocks come out of a library update's largest free block: ladder step 1 is not enough. The case is reported ignored with its figures pinned. **The owner decides** the ladder's next steps or a redesign before S1 ships (6.7, 13).
+- **The seq rule (C5) is its own commit**, f45fb48: the owner hasn't OK'd it and may drop it. Two of the proof's sessions (`nvs-back`, `log-deleted`) rest on it (9.5's C8 "As built").
+- **The reference was wrong once** (c1b0751): after a lost base 1, a boot's compaction wrote under the name `stats.bin` names, and a cut there left the stats off for good. `tools/statsref.py`, the `base-other` fixture and 5.3 were fixed.
+- **The fold's peak** on a full never-synced log is 396,608 B through the journal (412,992 B in `test_stats_fold`'s own scan), MEASURED-HOST: RCNT grows too, pruned only at the save. This plan had modelled TRKD's growth alone (5.6, 6.7, 11).
+- **The fold** (5.6): HOUR and DAYS drop their oldest row at their caps; the boot's index is freed at the scan's end, before the save; with no memory for an index the fold goes on without it; live folds keep at most 64 rows unsorted.
+- **The files** (5.3-5.5, METADATA 2.12.6): the base is read whole at the boot, not its header alone (11's card reads); damaged records are read once; `StatsCheck` keeps a tmp with damaged records (Unknown); a remount never renames `stats.bad`, which never shares a cluster chain; a held tmp is promoted only while its header is the one written; a base's frame is written by hand, last.
+- **The glue** (9.5's C9 "As built"): its rules are portable (`lib/core/StatsGlue`), so the proof runs the firmware's own; the work memory is carved for each read and save, not held; the ending flag is set as `flush()` starts; Hs's refusals and their order; no PSRAM for the glue: no `Folds` (0.14.0's trim).
+- **The proof** (9.5's C8 "As built"): a second set of statsref fixtures, `stats/sessions.json` (15 sessions, 154 steps); `FlakyFs` and `FaultFs` moved to `test/support/FaultFs.h`.
+- **The play log's hooks** (C4): `openRead()` opens every log file, with or without folds (the same card commands); `Journal::Booted` gains `partial`; `written()` comes after `tried()`; the journal itself asks no save after a partial scan, and the glue refuses one too.
+- METADATA 3.10's "not flashed" is corrected (1.1).
 
 **Designed** on the Claude Design canvas, https://claude.ai/artifact/MhGiBt7yLecJZEErFQgSTq. Its final frames are Entry, Main, MostPlayed, NewFinds, NoClock, EarlyDays, NoPlays, NowPlayingSheet and Week. AlbumPlays was dropped by the owner (decision O3). The A- (Glance), B- (Recap) and C- frames are the directions not taken (14). The final spec lived in a scratch folder that Windows cleans up after about a week, so its essentials are inlined here (sections 2, 4, 5, 7, 8). Where this plan departs from it, 1.1 and 3.2 say so. The nine final frames are in [docs/img/listening-stats](img/listening-stats/README.md), captured from the canvas (C1).
 
@@ -16,7 +30,9 @@ Line numbers are at these commits:
 - firmware bc29b54
 - phone app (`mstream_music`) d17c3fa5
 - terminal player origin/main 410444f, and `claude/card-transfer` 3edd4a4 (PR #56)
-- `docs/METADATA.md` as this branch holds it: main 241642d's, with C2's edits and S0's review (main since bc29b54 changed only `tools/version.py` and docs, so the firmware's lines hold at 241642d too)
+- `docs/METADATA.md` as S0's branch holds it: main 241642d's, with C2's edits and S0's review (main since bc29b54 changed only `tools/version.py` and docs, so the firmware's lines hold at 241642d too)
+
+S1's commits have since moved lines: `lib/core/PlayLog.cpp`'s and `src/app/PlayHistory.cpp`'s, and `docs/METADATA.md`'s (its status paragraph, 2.12.6, 2.18, 3.10 and the new 3.11 add lines). The references here stay at the commits above.
 
 Paths with no repository named are the firmware's.
 
@@ -42,7 +58,7 @@ The code wins. Each item is READ at bc29b54.
 - **A resident table keyed by track id can't name the rankers' hashes.** RCNT and TRKS are keyed by path hash, so the 7- and 30-day tops, New finds and Recently played come out as hashes. This plan keeps no per-track table resident (6.1).
 - **The spec's walk cost** ("1.5 s idle, 3 s playing" with Auto DJ off) is the whole join's. A walk for stats is Folders and Hash only: no card reads, no sort. ESTIMATED 0.1-0.2 s of CPU (6.3).
 - **The spec's redraw costs are low.** A row redrawn in place is about 11 ms with its push (`src/ui/ListView.h:273-274`), not 3 ms; a header push (320 x 36) about 5 ms, not 1. Section 7.10 uses these.
-- **METADATA 3.10 says the play log was "not flashed"** (`docs/METADATA.md:7233`). The 0.14.0 checks ran it on the device: slots written in 14.8-16.6 ms (`docs/RELEASE-0.14.0-CHECKS.md:60`). S1's docs commit corrects it.
+- **METADATA 3.10 says the play log was "not flashed"** (`docs/METADATA.md:7233`). The 0.14.0 checks ran it on the device: slots written in 14.8-16.6 ms (`docs/RELEASE-0.14.0-CHECKS.md:60`). S1's docs commit (C10) corrected it.
 - **The terminal's time zone on Windows.** The design run's process map said `src/admin/tz.rs` gives no zone on Windows. Terminal origin/main reads the zone Windows is set to since 5eac90c (2026-10-29; terminal `src/admin/tz.rs:1-10, 32-49`). #56's branch (3edd4a4) doesn't have 5eac90c: there a Windows machine gets no zone (its `src/admin/tz.rs:6-7`). No branch sends it in `@time` yet (10).
 - **ScanScheduler's jobs** are at `lib/core/ScanScheduler.h:101-102` (`kJobs` 8), not `:119-120`.
 - **The log prefix.** `[stats]` is the audio's line (console `s`). The stats' lines are `[listen]`.
@@ -1132,6 +1148,8 @@ Needs S0. Console only.
   - `docs/ARCHITECTURE.md`: the Layers diagram (`:44`, `:70`), Storage (`:1411-1430`), the play log's paragraph (`:1432-1460`), a Listening stats bullet (`:2654-2667`).
   - `docs/METADATA.md` 3.11 "As built: the listening stats", and 3.10's "not flashed" (`:7233`) corrected.
   - `README.md`'s console table.
+
+  As built: those, and also ARCHITECTURE.md's loop pass (its step 4), the loop task's stack (the saves' `-fstack-usage` sums) and the Roadmap; a "Listening stats" paragraph in Storage beside the play log's, and the bullet in "Library and queue" for the memory; README's Layout (`StatsFold`, `StatsFile`, `StatsGlue`, `app/ListeningStats`); METADATA's status paragraph, 3.10's boot bullet and its write time (MEASURED in 0.14.0's checks), and 10.1's pointer to 3.11; this document's section 1 (the status, what S1 changed).
 
 **Tests:**
 - New: `test_stats_fold`, `test_stats_file`, `test_stats_store`.

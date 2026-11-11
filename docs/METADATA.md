@@ -85,7 +85,10 @@ Core2 is needed for about 4-7 days of measurement and soak, best done as
 one batch when it is free. **Since 2026-10-14 the firmware reads 2.13's
 AutoDJ index:** the device's Auto DJ is built (docs/AUTODJ.md;
 `device.txt` says `read.mpdj=2` from 0.11.0, 2.15), its join and its
-memory part of the update step and the budget (3.4.2, 3.5).
+memory part of the update step and the budget (3.4.2, 3.5). The play log
+(2.20) is built and ran on the Core2 for 0.14.0 (3.10); **the listening
+stats' store** (docs/LISTENING-STATS.md S1, `/.player/stats.bin`) is built
+and host-tested, not flashed (3.11).
 
 **In short:**
 
@@ -7234,7 +7237,17 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
 
 2.20's writer, for 0.14.0: `lib/core/PlayLog` (portable, host-tested in
 `test_play_log`) and its glue, `app/PlayHistory`; `device.txt` says
-`history=1` (2.15). Built for `core2` with every guard, **not flashed**.
+`history=1` (2.15). Built for `core2` with every guard, and **run on the
+Core2** in 0.14.0's pre-release checks (docs/RELEASE-0.14.0-CHECKS.md
+section 2, 2026-11-10, main's code at 218822a, the spare card, silent
+mode): a boot on an NVS earlier builds wrote kept the epoch, the seq and
+the boot count, and the log went on from the next seq; plays were written
+in 14.8-16.6 ms; tracks under a second weren't logged. The device check
+at this section's end (V2) didn't run as a whole: not the card pulls
+(its step 5), the idle power-off on battery (step 4) or Bluetooth (that
+document's section 5). (This said "not flashed" until the listening
+stats' S1 corrected it, docs/LISTENING-STATS.md 1.1.) The listening stats
+change the log's boot scan, its seq rule, its trim and its rotation: 3.11.
 What the code decided where 2.20 left room:
 
 - **A play** is `PlaybackController`'s (`setPlays()`, its class comment):
@@ -7297,7 +7310,8 @@ What the code decided where 2.20 left room:
   gate (4 reads of 2,560 bytes, five whole sectors each): every valid
   slot of `plays.jnl`,
   `plays.1.jnl` and `plays.2-9.jnl`, for the boot rules (2.20.4) and the
-  trim (2.20.2; only with ACKS). A new epoch with no ACKS reads nothing.
+  trim (2.20.2; only with ACKS). A new epoch with no ACKS reads nothing
+  (0.14.0's; with the listening stats every boot reads, 3.11).
   The boot count goes to NVS at the scan's end, before any slot.
 - **A remount** of the same card (the card guard's, 3.8; whatever
   follows it, a restart's flush included): the cut-rename rule again
@@ -7428,7 +7442,8 @@ What the code decided where 2.20 left room:
   reads whole (13,106 slots, about 660 card reads, 103 passes); a
   rotation reads `plays.1.jnl` once for its count (524,240 bytes, about
   230 card reads, on the loop in one go), once every 6,553 plays. NVS: one u32 write a play, one at each boot. The
-  device's write time is ESTIMATED at 15-20 ms (below).
+  device's write time was ESTIMATED at 15-20 ms (below); MEASURED at
+  14.8-16.6 ms in 0.14.0's checks (silent mode, the spare card).
 - **Tests.** `test_play_log`: the slot and the drop note byte for byte;
   log.json's events (boots, plays, a host's `@time`, a sync's ACKS, an NVS
   erase) through the Journal give `plays/golden/` byte for byte and the
@@ -7532,6 +7547,171 @@ What the code decided where 2.20 left room:
   6. NVS erased (the terminal's install with `--erase`): a new epoch at
      the next boot; the old slots stay; new plays' seqs from 1 under the
      new epoch.
+
+### 3.11 As built (S1): the listening stats
+
+docs/LISTENING-STATS.md's S1, the store (its 9.5: C4-C10), on
+`claude/listening-stats-s1`, 2026-11-11: every play on the card, from
+every player that wrote its log, counted from the play log (2.20) into
+`/.player/stats.bin` and the base file it names, `stats-<gen>.bin`
+(2.12.6's names; the format is that plan's 5.2-5.3, which no software
+reads), nothing on the screen yet. lib/core `StatsFold` (the aggregate in
+RAM and the fold), `StatsFile` (the card's files) and `StatsGlue` (the
+session's rules: the play log's `playlog::Folds`) are portable and
+host-tested against `tools/statsref.py`, the reference, and its fixtures
+(`test/fixtures/card/stats`, made by card_fixtures.py: 2.17's item 10);
+`app/ListeningStats`, a member of `app/PlayHistory`, is the firmware's
+side. Built for `core2` and `core2-dio` with every guard, **not
+flashed**: the plan's device pass (its 9.5, runs A-L on the spare card)
+waits for the owner's go-ahead. `device.txt` gains no key: the transfer
+never reads the stats (2.11). What the code decided where the plan left
+room (the plan's text amended in the same commits; its section 1 lists
+the changes):
+
+- **The play log's hooks** (`lib/core/PlayLog`). `Journal::Config::folds`,
+  null by default: the scan, the trim and the rotation as 0.14.0's
+  (test_play_log's 33 earlier cases pass without it). With folds the boot's scan always reads (no new
+  epoch's shortcut). Every log file is opened with `openRead()`, with or
+  without folds (the same file, the same card commands), and an open the
+  card failed or a read that failed is a file not read whole
+  (`Booted::partial`, `Folds::partial()`); a damaged file still reads as
+  missing. Each slot `decode()` says Ok goes to `slot()`, after the
+  damaged-slot skip. `finishScan()` asks `save(Boot)` after the boot
+  count and before the trim (and on the path where the boot count's NVS
+  write fails), never after a partial scan; the trim then takes a file
+  only when that save landed, or when the card's MARK covered every play
+  in it during the scan (`covered()`). `rotate()` asks `save(Rotation)`
+  after its count of `plays.1.jnl` and before the file is deleted or
+  renamed to a twin, when it holds a play the card's MARK doesn't cover
+  (or, after a whole scan, couldn't be read whole by the third try that
+  goes on); the answer is ignored: the log never waits on the stats.
+  `Outbox::Env::written()` (empty by default) comes after `tried()` and
+  before `pop()`, for a written slot only, with the encoded slot.
+- **The seq rule** (its own commit, f45fb48, which the owner may still
+  drop): 2.20.4's "At boot" sentence as written, the next seq max(NVS's,
+  the log's, ACKS's, MARK's) + 1, ACKS's for every build, MARK's with
+  the stats; `tools/playlog.py`'s `boot_seq()` and the vectors' sixth
+  `atBoot` case (NVS behind ACKS) with it. Dropping it undoes those, and
+  two of the stats' sessions (`nvs-back`, `log-deleted`) lose plays.
+- **The read** (the plan's 5.4), in `PlayHistory::begin()` before the
+  journal's `begin()`. A card fault (Io) is read again after 100, 300 and
+  1,000 ms through a wait hook (`delay()`); damaged records once. A
+  corrupt `stats.bin` is read twice, then renamed `stats.bad` (an older
+  one removed first), which never shares a cluster chain: with another
+  entry on `stats.bin`'s chain, `stats.bin` goes to a twin instead. The
+  base is read whole (the reference's `load()`: its rows' CRC, order and
+  count, no row kept; 24 B a played track) and is lost only when the card
+  says it isn't there or its header's CRC is another file's; any other
+  failure is Unread, the stats off this session. Its neighbours go once it
+  checks whole. `StatsCheck`, `settle()`'s check of a lone tmp, answers
+  Unknown (the tmp kept: it may be the only copy) for damaged records too.
+  A remount's read (`scanBegan(true)`): once, no waits, a corrupt file
+  left for the next boot (Unread, never renamed on one read); none while
+  the orderly end flushes (the folds dropped, nothing saved).
+- **The fold** (5.6). HOUR, DAYS and MARK are carved once (14,656 B),
+  RCNT and TRKD in 16,384 B chunks with one spare, all in PSRAM. At their
+  caps HOUR and DAYS drop their oldest row, so RAM holds the newest 840
+  and 400 the save keeps, whatever order the slots come in. Each slot
+  once: per MARK row, the seq range each log file gave, at most 10. The
+  boot's transient index is freed at the scan's end, just before the
+  save; with no memory for one (or past 65,535 rows) the fold goes on
+  without it, slower; only a chunk, MARK or the ranges that can't be
+  carved stops the fold (no save that session, the trim by the card's
+  MARK). Live folds keep at most 64 rows unsorted, then sort the chunks
+  holding them. A full never-synced log grows RCNT too (pruned only at
+  the save): 412,992 B at the peak in test_stats_fold, 396,608 B through
+  the journal in test_stats_store (13,106 slots, 4,616 tracks); the plan
+  had modelled TRKD's growth alone.
+- **The saves** (5.5): the boot's, inside `finishScan()` (the only one
+  that may compact, and only at the update step's safe point: nothing
+  playing, or the heard track 20 s or more from its end and no seek in
+  the last 2 s, never with a restart asked or a play waiting for the
+  headphones); a rotation's; and the console's `Hs`. The glue refuses
+  first, in this order: the stats off, or the folds dropped; the boot's
+  while the orderly end flushes (the flag set as `PlayHistory::flush()`
+  starts, before its remount); a rotation's in that flush with under 1 s
+  of its 3 s left; the card away (out of the slot, writes off, another
+  card); a log file not read whole this session. `Hs`: the library
+  update's fence, the stats off, the boot's scan, a partial scan, the
+  card away. Then the store: a tmp an earlier save holds is promoted
+  first, only while its header is the one written (the next file takes
+  its generation + 1); `settle()`; `stats.bin`'s header on the card
+  against the one this RAM stands on (a change refuses this save and
+  every later one this session); a compaction when due (base ⊕ delta
+  streamed from the card, written with `FA_CREATE_ALWAYS` and its size
+  checked, never under the name `stats.bin` names: after a lost base 1,
+  or a held compacted tmp promoted, it waits for the next boot; its 72 B
+  frame written last by hand, the merged count known only then);
+  `stats.tmp` through `ContainerWriter` in pieces ending on the file's 4
+  KB boundaries, its size checked, then `replace()`, whose false holds the
+  tmp. Nothing new since the card's copy: nothing written. The writer, its
+  plan and two 4 KB buffers are the caller's work memory
+  (`statsfile::kWorkBytes`), carved in PSRAM for each read and save and
+  given back.
+- **The trim** (2.20.2): a file goes when ACKS acknowledges it and every
+  play slot in it is at or under the card's MARK (the save's, or the
+  boot's after a save that failed or was refused). With the stats off
+  (unread, a newer major, no memory) the glue is still the journal's
+  `Folds` and covers nothing: nothing is trimmed, and the rotation alone
+  bounds the log. With no PSRAM for the glue the journal has none:
+  0.14.0's trim.
+- **The loop** (`PlayHistory::loop()`): the stats' look at every pass
+  (the safe point, the seeks counted there; the spare chunk carved again
+  where Auto DJ's join isn't Working), then, before each piece of the
+  boot's scan (128 slots), its room taken, so the piece carves nothing; or,
+  while the join is Working and the stats fold, the scan waits that pass.
+  `Hs` is refused at once during the boot's scan, else queued, and runs
+  at a pass the write gate lets through, after the boot's scan's line,
+  with nothing else of the card's that pass.
+- **The root's commitTime** is kept in `cardroot::Root` (0 without a
+  root): sinceDay's last fallback; a save's `hasCommit` is a commitTime
+  that isn't 0. `tools/synthtransfer.py --acks DEV:EPOCH:SEQ[,...]` writes
+  a root with ACKS rows (2.5.6), for the trim's device checks.
+- **Lines and console.** `[listen]`: the read (the boot's, a remount's),
+  each save (`saved (boot|rotation, before plays.1.jnl leaves the
+  log|Hs): stats.bin generation N, B bytes, in M ms ...` or `NOT saved
+  (...): why`; the boot's before `[plays] ready ... trimmed`), a log file
+  not read whole, the boot's fold at the scan's end (slots, met twice, the
+  gap, passes, the scan's ms on the loop, RAM held and at the peak, rows).
+  The console's `H`, `Hd`, `Hm`, `Ht<16 hex>` and `Hs` (README; the plan's
+  9.3).
+- **Costs** (MEASURED-HOST: the core2 build and its link map, the host
+  tests). Flash 4,465,059 B, 41,368 B over S0's 4,423,691 B (the fold,
+  the files and the glue linked); internal RAM 88 B more of statics; IRAM
+  unchanged, 5,161 B left with S0's 25 `libc_a-*` objects in
+  `.iram0.text`. The loop's stack (`-fstack-usage` sums, FatFs's own
+  frames not counted): a rotation's save 2,304 B deep, 2,576 B in the
+  end's flush, the boot's save with a compaction 1,632 B (ARCHITECTURE.md,
+  "The loop task's stack"). A full log's `stats.bin` 133,616 B in 37
+  writes, 30 of them whole 4 KB pieces; the scan, the fold and the save
+  about 1.55 µs a slot on this PC. None of these is a device's yet.
+- **The heap model** (the plan's 6.7, MODELLED: test_autodj_join's
+  `test_the_listening_stats_in_a_model_heap`, reported ignored with its
+  figures pinned). The stats' blocks come out of a library update's
+  largest free block rather than filling the boot's holes. The update's
+  rule holds at 2,214 played tracks with a short boot fold (80,192 B
+  resident; joined 249,844 B, the control 360,436 B), and fails at 19,478
+  played tracks (194,880 B resident) and after a full never-synced log's
+  fold. The next step (the plan's ladder, or a redesign) is the owner's;
+  the device's run L is the real measure.
+- **Tests.** New: `test_stats_fold` (17 cases: every fixture's boots and
+  saves byte for byte, a plain-map model, the memory), `test_stats_file`
+  (12: the read's verdicts, the saves and the bases byte for byte, a cut
+  at every write step three ways) and `test_stats_store` (14: the
+  journal, the tracker and the outbox through the real glue over CutFs,
+  FlakyFs and FaultFs, every boot of `stats/index.json` and every step of
+  `stats/sessions.json` compared byte for byte; cuts, faults, remounts,
+  partial scans, two players, a 0.14.0 boot, the full log). In
+  `test_play_log` (41: the 33, the boot rules' sixth case, 7 for the
+  hooks, 1 for the seq rule), `test_card_root` (34: commitTime),
+  `test_autodj_join` (27, the stats' case ignored), `tools/test_statsref.py`
+  (56), `tools/test_playlog.py` (32), `tools/test_synthtransfer.py` (63:
+  `--acks`). Mutation checks: the fold 10 of 10 caught, the files 15 of
+  15, the proof over the hooks and the files 13 of 15, the glue 9 of 12
+  (the rest equivalent).
+- **The device check** is the plan's 9.5 table, runs A-L on the spare card
+  rebuilt (synthcard, synthtransfer, `statsref.py seed`), main at bc29b54
+  the control in the same script. None has run.
 
 ---
 
@@ -8619,7 +8799,8 @@ they disagreed:
   (its 5.2-5.3; no software reads them), with what they change here: the
   device's files (2.11, 2.12.6), the trim (2.20.2) and the boot's seq
   (2.20.4). `tools/statsref.py` is their reference; card_fixtures.py
-  writes their fixtures (`test/fixtures/card/stats`) with it.
+  writes their fixtures (`test/fixtures/card/stats`) with it. Its S1,
+  the store, as built: 3.11.
 - **docs/UI-SPIKE.md:** the per-track memory figures.
 - **docs/GAPLESS.md** and **docs/QUEUE-MODES.md:** the update step's safe
   point and the queue's remap through `queue.txt`.
