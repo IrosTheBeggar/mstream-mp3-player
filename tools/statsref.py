@@ -1599,6 +1599,447 @@ def run_scenario(sc):
     return entry, out
 
 
+# ---------------------------------------------------------------------------
+# The sessions (test/fixtures/card/stats/sessions.json): players' boots and
+# plays in turn on one card, the play log written as the firmware's journal
+# writes it (tools/playlog.py's Device: the rotation under a cap, its drop
+# note, the twins) and the stats kept as 5.5-5.8 say (Session): the boot's
+# fold, save and trim; the live fold of each play written; the rotation's
+# save before plays.1.jnl leaves the log's names; Hs; the end's flush (a
+# rotation's save only with 1 s of its budget left); the card's copy checked
+# first (another player's stats.bin refuses every later save of a session);
+# a 0.14.0 boot (no stats: today's trim); NVS put back or erased. S1's C8
+# (test_stats_store) runs each step through the firmware's code and compares
+# the card's /.player after it, byte for byte.
+# ---------------------------------------------------------------------------
+class _Card:
+    """The card the session's players share: /.player's files ({name:
+    bytes}) and each one's first cluster (the cut-rename rule's chains)."""
+
+    def __init__(self, files):
+        self.files = dict(files)
+        self.chains = {}
+        self.chain = 0
+
+
+class _Player(playlog.Device):
+    """A player: playlog's Device over the shared card, and its session's
+    stats (None: none this boot, or a 0.14.0 boot)."""
+
+    def __init__(self, card, device_id, epochs, cap):
+        self.card = card
+        super().__init__(device_id, epochs, cap)
+        self.files = card.files
+        self.chains = card.chains
+        self.se = None
+        self.acks = []
+        self.seen = None          # the card's stats.bin this session stands on (read, or last written)
+        self.changed = False      # ... changed under it: every later save of the session refused
+        self.appended = False     # a slot asked for since the boot (a remount begins no scan again)
+
+    @property
+    def chain(self):
+        return self.card.chain
+
+    @chain.setter
+    def chain(self, v):
+        self.card.chain = v
+
+
+def _save(p, why, st):
+    """A save of player p's session (why: "boot", "rotation", "hs"): the
+    glue's guards (the end's flush: never the boot's; a rotation's with 1 s
+    of its budget left), then the store's (stats off, a changed card copy, a
+    partial scan: refused; nothing new: True, nothing written; the card's
+    copy not the one this session stands on: refused, for good this
+    session; a full card: refused). True: the card's stats.bin holds every
+    slot folded."""
+    se = p.se
+    if se is None:
+        return False
+    if st.get("ending") and (why == "boot" or st.get("left", 0) < 1000):
+        return False
+    if not se.on or p.changed or se.partial:
+        return False
+    if not se.new:
+        return True
+    if p.card.files.get(STATS_BIN) != p.seen:
+        p.changed = True
+        return False
+    if st.get("saveFails"):
+        return False
+    ok = se.save(st.get("now"), why, st.get("playing", False), st.get("safePoint", True))
+    p.seen = p.card.files.get(STATS_BIN)
+    return ok
+
+
+def _session_boot(p, st):
+    """A boot of player p: NVS (a new epoch when erased), the cut-rename
+    rule, the stats' read and the boot's fold, the boot rules (the seq with
+    ACKS's and MARK's), the boot's save (none after a partial scan), the
+    trim: with stats, a file every play of which the card's MARK covers
+    (after a save that landed, the one it wrote). stats false: a 0.14.0
+    boot, today's trim."""
+    acks = list(st.get("acks", []))
+    unread = dict(st.get("unread") or {})
+    p.down = p.blocked = False
+    p.acks, p.appended, p.changed = acks, False, False
+    if p.nvs is None:
+        p.nvs = {"epoch": p.epochs.pop(0), "seq": 0, "boots": 0}
+    p.settle()
+    stats = st.get("stats", True)
+    se = Session(p.card.files, acks, st.get("commitTime"), unread) if stats else None
+    p.se = se
+    p.seen = p.card.files.get(STATS_BIN)
+    if se is not None:
+        se.scan()
+    # The boot rules over the slots the scan read (a partial scan's, as far
+    # as it read).
+    logs = {}
+    for n, b in p.card.files.items():
+        if n in LOG_NAMES:
+            logs[n] = b if n not in unread else b"" if unread[n] is None else b[:unread[n] * playlog.SLOT]
+    slots = playlog.valid_slots(logs)
+    mark = se.stats.mark.get((playlog.device_bytes(p.device_id), p.nvs["epoch"]), 0) if se and se.on else 0
+    p.nvs["boots"] = playlog.boot_count(p.nvs["boots"], slots, p.device_id, p.nvs["epoch"])
+    p.nvs["seq"] = playlog.boot_seq(p.nvs["seq"], slots, p.device_id, p.nvs["epoch"], acks, mark) - 1
+    facts = {}
+    saved = False
+    if se is not None:
+        wrote = se.wrote
+        saved = False if se.partial else _save(p, "boot", st)
+        facts = {"read": se.read, "why": se.why, "folded": se.folded, "twice": se.twice, "gap": se.gap,
+                 "partial": se.partial, "saved": se.wrote and not wrote, "compacted": se.compacted,
+                 "removed": list(se.removed)}
+    # The trim, plays.1.jnl to plays.9.jnl, then plays.jnl.
+    trimmed = []
+    cover = None
+    if se is not None:
+        cover = Stats()
+        cover.mark = se.saved_mark if saved else se.mark_at_boot
+    for name in LOG_NAMES[1:] + LOG_NAMES[:1]:
+        data = p.card.files.get(name)
+        if not acks or data is None or name in unread or not playlog.trimmable(data, acks):
+            continue
+        if se is not None:
+            plays = [s for _, why, s, _ in playlog.read_file(data) if why == "ok" and s["kind"] == playlog.KIND_PLAY]
+            if not se.on or not all(cover.covered(s) for s in plays):
+                continue
+        if p._shared(name):
+            continue
+        p._delete(name, "acknowledged")
+        trimmed.append(name)
+    facts.update({"stats": stats, "trimmed": trimmed})
+    return facts
+
+
+def _session_play(p, st):
+    """One play of player p, written: the rotation's save first when the
+    append would rotate over a plays.1.jnl holding a play the card's MARK
+    doesn't cover (none after a partial scan; none without stats), then the
+    slot (playlog's Device: the rotation, the drop note), then the live
+    fold."""
+    se, files = p.se, p.card.files
+    save = None
+    cur = files.get("plays.jnl", b"")
+    if se is not None and len(cur) // playlog.SLOT + 1 > p.cap and "plays.1.jnl" in files and not se.partial:
+        cover = Stats()
+        cover.mark = se.saved_mark
+        plays = [s for _, why, s, _ in playlog.read_file(files["plays.1.jnl"])
+                 if why == "ok" and s["kind"] == playlog.KIND_PLAY]
+        if any(not cover.covered(s) for s in plays) or not se.on:
+            save = _save(p, "rotation", st)
+    p.clock = 1 if st["at"] else 0
+    slot = p.play(st["hash"], st["size"], st["fatTime"], st["generation"], st["played"], st["duration"],
+                  st["outcome"], st["src"], st["up"], started_at=st["at"], acks=p.acks)
+    p.appended = True
+    if slot is not None and se is not None:
+        se.live(slot)
+    return {"save": save, "seq": None if slot is None else slot["seq"]}
+
+
+def _link(card, a, b):
+    """b on a's chain: a rename cut between its two writes left it (or a
+    disk check's survivor)."""
+    card.files[b] = card.files[a]
+    if a not in card.chains:
+        card.chain += 1
+        card.chains[a] = card.chain
+    card.chains[b] = card.chains[a]
+
+
+def session_play(track, played=200000, duration=200000, outcome=1, src=1, at=None, up=1000, **kw):
+    """A play step's own fields (the journal fills seq, epoch, deviceId,
+    bootSeq): track a title of TRACKS or a path hash; at ISO UTC or None
+    (the clock unset: undated); up the board's monotonic ms at its start.
+    Outcomes 1-3 and plays of 1 s or more only (the Tracker's), a completed
+    one played to its end."""
+    h = TRACKS[track][1] if isinstance(track, str) else track
+    st = {"do": "play", "hash": h, "played": played, "duration": duration, "outcome": outcome, "src": src,
+          "at": ms_of(at) if at else 0, "up": up, "size": 4000000 + (h & 0xFFFFF), "fatTime": 0x5B684A00,
+          "generation": 1}
+    st.update(kw)
+    return st
+
+
+def _plays(player, tracks, first_up, at_day, **kw):
+    """A run of plays of `tracks` (titles), one a minute from 08:00 on
+    2026-11-<at_day> (at_day None: undated)."""
+    out = []
+    for i, t in enumerate(tracks):
+        at = None if at_day is None else "2026-11-%02dT08:%02d:00" % (at_day, i)
+        out.append(dict(session_play(t, at=at, up=first_up + 60000 * i, **kw), player=player))
+    return out
+
+
+def _boot(player, day, hour=9, **kw):
+    st = {"do": "boot", "player": player, "now": ms_of("2026-11-%02dT%02d:00:00" % (day, hour)), "playing": True,
+          "safePoint": False}
+    st.update(kw)
+    return st
+
+
+def session_specs():
+    """The sessions: each a card's /.player to start from, its players
+    (device, the epochs a fresh NVS draws, NVS as it starts: None erased),
+    the log's cap, its steps, and the plays the stats lose (`lost`: the
+    undercount 5.5 names, asserted)."""
+    A = lambda epochs=(EPOCH_A,), nvs=None: {"device": DEV_A, "epochs": list(epochs), "nvs": nvs}  # noqa: E731
+    B = lambda: {"device": DEV_B, "epochs": [EPOCH_B], "nvs": None}  # noqa: E731
+    names = ["Night Ticket", "Brine", "Glass Harbour", "Paper Comets", "Slow Lantern", "Low Tide", "Orbit Room",
+             "Quiet Engine", "Signal Fires"]
+    out = []
+    # A rotation over a plays.1.jnl no save covers: the boot's save failed
+    # (a full card), and the rotation's saves first (nothing lost), or fails
+    # too (1-4 lost: an undercount of 4). Also over a plays.1.jnl a twin's
+    # chain holds (renamed to a twin, not deleted: the save runs before).
+    for twin in (False, True):
+        for fails in (False, True):
+            steps = [_boot("A", 1)] + _plays("A", names[:8], 1000, 2)
+            steps += [_boot("A", 3, saveFails=True)]
+            if twin:
+                steps += [{"do": "link", "a": "plays.1.jnl", "b": "plays.xl1"}]
+            steps += [dict(session_play("Signal Fires", at="2026-11-03T12:00:00", up=900000, player="A",
+                                        now=ms_of("2026-11-03T12:05:00"), saveFails=fails))]
+            steps += [_boot("A", 4)]
+            out.append({"name": "rotation-%s%s" % ("twin-" if twin else "", "fails" if fails else "saves"),
+                        "note": "The boot's save fails (a full card): plays.1.jnl (1-4) is covered by no MARK. The "
+                                "next play rotates%s; the save runs first and %s. The next boot folds what the log "
+                                "still holds above MARK: %s." % (
+                                    " over a plays.1.jnl a twin's chain holds (renamed to a twin, not deleted)"
+                                    if twin else "", "fails too" if fails else "lands (MARK 8)",
+                                    "5-9; 1-4 are lost to the stats (5.5's undercount, 4)" if fails else "9; none lost"),
+                        "cap": 4, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 4 if fails else 0})
+    # The end's flush: a rotation over plays.1.jnl (1-4, this session's,
+    # no save covering them) with 3 s of the budget left, or 0.5 s (the
+    # played file's question took 2.5 s): saved, or 1-4 lost.
+    for left in (3000, 500):
+        steps = [_boot("A", 1)] + _plays("A", names[:8], 1000, 2)
+        steps += [dict(session_play("Signal Fires", at="2026-11-02T12:00:00", up=900000, player="A",
+                                    now=ms_of("2026-11-02T12:05:00"), ending=True, left=left))]
+        steps += [_boot("A", 3)]
+        out.append({"name": "flush-in-time" if left >= 1000 else "flush-late",
+                    "note": "The orderly end's flush writes the ninth play, which rotates over plays.1.jnl (1-4, "
+                            "saved by nothing). %s" % (
+                                "3 s of the budget left: the rotation's save runs first; none lost." if left >= 1000
+                                else "0.5 s left: no save, and 1-4 are lost to the stats (4)."),
+                    "cap": 4, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 0 if left >= 1000 else 4})
+    # A second player between two saves of the first.
+    steps = [_boot("A", 1)] + _plays("A", names[:3], 1000, 2) + [_boot("A", 3)]
+    steps += _plays("A", names[3:4], 1000, 3)
+    steps += [_boot("B", 4, playing=False, safePoint=True)] + _plays("B", names[4:5], 1000, 4)
+    steps += [{"do": "remount", "player": "A"}] + _plays("A", names[5:6], 2000000, 4)
+    steps += [{"do": "hs", "player": "A", "now": ms_of("2026-11-04T09:30:00")}, _boot("A", 5)]
+    out.append({"name": "second-player",
+                "note": "A saves 1-3 (stats.bin generation 1) and plays 4. The card goes into B, which folds A's 4, "
+                        "compacts (no base yet, nothing playing) and saves (generation 2), then plays B 1. Back in "
+                        "A (a remount, its session going on), A plays 5: Hs is refused, the card's stats.bin no "
+                        "longer the copy A's session stands on (5.5). A's next boot reads B's stats.bin and folds "
+                        "B 1 and A 5: every slot once.",
+                "cap": 4, "files": {}, "players": {"A": A(), "B": B()}, "steps": steps, "lost": 0})
+    # NVS put back after a trim (C5's seq rule).
+    acks4 = [(DEV_A, EPOCH_A, 4)]
+    steps = [_boot("A", 1)] + _plays("A", names[:4], 1000, 2) + [_boot("A", 3, acks=acks4)]
+    steps += [{"do": "nvs", "player": "A", "seq": 1}, _boot("A", 4, acks=acks4)]
+    steps += _plays("A", names[4:5], 1000, 4) + [_boot("A", 5, acks=acks4)]
+    out.append({"name": "nvs-back",
+                "note": "A plays 1-4; a sync's ACKS (4); the boot folds, saves and trims the log empty. NVS is "
+                        "then put back to seq 1 (a settings backup): the seq rule takes ACKS's and MARK's 4, so the "
+                        "next play is 5 (not 2, which ACKS acknowledges and MARK covers: never sent, never "
+                        "folded); the next boot folds it.",
+                "cap": 4, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 0})
+    # Two players alternating.
+    acks_ab = [(DEV_A, EPOCH_A, 3), (DEV_B, EPOCH_B, 2)]
+    steps = [_boot("A", 1)] + _plays("A", names[:2], 1000, 1) + [_boot("B", 2)] + _plays("B", names[2:4], 1000, 2)
+    steps += [_boot("A", 3)] + _plays("A", names[4:5], 1000, 3)
+    steps += [_boot("B", 4, acks=acks_ab)] + _plays("B", names[5:6], 1000, 4) + [_boot("A", 5, acks=acks_ab)]
+    out.append({"name": "alternating",
+                "note": "A and B take the card in turns, each boot folding the other's plays, a sync's ACKS "
+                        "between (A 3, B 2) trimming what the saved MARK covers: each slot once.",
+                "cap": 4, "files": {}, "players": {"A": A(), "B": B()}, "steps": steps, "lost": 0})
+    # A 0.14.0 boot's trim between.
+    acks6 = [(DEV_A, EPOCH_A, 6)]
+    steps = [_boot("A", 1)] + _plays("A", names[:3], 1000, 1) + [_boot("A", 2)]
+    steps += _plays("A", names[3:6], 1000, 2)
+    steps += [_boot("A", 3, acks=acks6, stats=False), _boot("A", 4, acks=acks6)]
+    out.append({"name": "old-firmware",
+                "note": "A saves 1-3, plays 4-6 (live, unsaved), then a sync's ACKS (6) and a boot of 0.14.0, "
+                        "which trims both files without folding them. The next stats boot finds ACKS above MARK "
+                        "with 4-6 in no file: HEAD's gap 3, MARK 6 (5.8's undercount, counted).",
+                "cap": 4, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 3})
+    # A partial scan, a live play, Hs refused; then a whole boot.
+    tail = scenario_partial()[2]
+    acks14 = [(DEV_A, EPOCH_A, 14)]
+    steps = [_boot("A", 10, acks=acks14, unread={"plays.jnl": 3})]
+    steps += [dict(session_play("Night Ticket", at="2026-11-10T10:00:00", up=5000, player="A",
+                                now=ms_of("2026-11-10T10:05:00")))]
+    steps += [{"do": "hs", "player": "A", "now": ms_of("2026-11-10T10:06:00")}, _boot("A", 11, acks=acks14)]
+    out.append({"name": "partial-hs",
+                "note": "partial-tail's card: the boot's scan fails a read after plays.jnl's third slot (9-11 "
+                        "folded, 12-14 not): no save; A then plays 15 and Hs is refused (a partial scan: no save "
+                        "this session). The next boot reads it all: 12-15 folded once, saved.",
+                "cap": playlog.FILE_SLOTS, "files": tail["files"],
+                "players": {"A": A(nvs=[EPOCH_A, 14, 1])}, "steps": steps, "lost": 0})
+    # firstAt through a rotation's save (the rows a boot's fold gives, but
+    # lastOrd, compared by order: test_stats_store).
+    xa = [("Harbour Lights", 3, None), ("Harbour Lights", 2, "2026-11-03T10:00:00"), ("Tidewater", 3, None)]
+    xb = [("Harbour Lights", 1, "2026-11-02T10:00:00"), ("Tidewater", 2, None),
+          ("North Pier", 1, "2026-11-05T10:00:00")]
+    steps = [_boot("B", 6)]
+    steps += [dict(session_play(t, src=s, at=at, up=1000 + 60000 * i), player="B") for i, (t, s, at) in enumerate(xb)]
+    steps += [_boot("A", 7)]
+    steps += [dict(session_play(t, src=s, at=at, up=1000 + 60000 * i), player="A") for i, (t, s, at) in enumerate(xa)]
+    steps += [dict(session_play("North Pier", played=9000, outcome=2, at="2026-11-04T10:00:00", up=200000),
+                   player="A")]
+    steps += _plays("A", ["Salt Stairs", "Brine"], 300000, 7) + [_boot("A", 8)]
+    out.append({"name": "first-at-live",
+                "note": "first-at-a's seven slots, B's folded at A's boot and A's live (an undated Auto DJ play, "
+                        "then a dated shuffle one, of Harbour Lights; an undated Auto DJ play of Tidewater; a skip "
+                        "of North Pier), saved by a rotation's save (the log's cap 4: plays.1.jnl holds A's first, "
+                        "which no save covers). Their rows are first-at-a's but lastOrd: the live plays' round is "
+                        "HEAD.round + 2, the boot's + 1. The next boot folds the last play.",
+                "cap": 4, "files": {}, "players": {"A": A(), "B": B()}, "steps": steps, "lost": 0})
+    # A rotation after a partial scan: no save this session, so plays.1.jnl
+    # leaves the log unsaved (5.5's undercount, 4).
+    opened = scenario_partial()[0]
+    steps = [_boot("A", 10, acks=[(DEV_A, EPOCH_A, 11)], unread={"plays.1.jnl": None})]
+    steps += _plays("A", names[:2], 5000, 10) + [_boot("A", 11, acks=[(DEV_A, EPOCH_A, 11)])]
+    out.append({"name": "partial-rotation",
+                "note": "partial-open's card (the stats' MARK 4; plays.1.jnl 1-8, its open failed at this boot; "
+                        "plays.jnl 9-11): no save this session. The second play rotates over plays.1.jnl, 5-8 "
+                        "unsaved: no save is asked (a partial scan), and 5-8 are lost to the stats (4).",
+                "cap": 4, "files": opened["files"], "players": {"A": A(nvs=[EPOCH_A, 11, 1])}, "steps": steps,
+                "lost": 4})
+    # The log deleted by hand (a PC), NVS put back: MARK alone holds the
+    # seq (C5): the next play is 5, not 2 (under MARK: never folded).
+    steps = [_boot("A", 1)] + _plays("A", names[:4], 1000, 1) + [_boot("A", 2)]
+    steps += [{"do": "delete", "name": "plays.jnl"}, {"do": "nvs", "player": "A", "seq": 1}, _boot("A", 3)]
+    steps += _plays("A", names[4:5], 1000, 3) + [_boot("A", 4)]
+    out.append({"name": "log-deleted",
+                "note": "A plays 1-4 and saves them (MARK 4, no sync). plays.jnl is then deleted on a PC and NVS "
+                        "put back to seq 1: with no log and no ACKS, the seq rule's MARK keeps the next play at 5 "
+                        "(2 would be under MARK: never folded).",
+                "cap": 4, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 0})
+    # A new epoch with no ACKS, in the middle of a session's history.
+    steps = [_boot("A", 1)] + _plays("A", names[:3], 1000, 1)
+    steps += [{"do": "erase", "player": "A"}, _boot("A", 2)] + _plays("A", names[3:4], 1000, 2) + [_boot("A", 3)]
+    out.append({"name": "new-epoch-live",
+                "note": "A plays 1-3, then its NVS is erased: the next boot draws a new epoch, and with no ACKS "
+                        "its scan still reads (0.14.0's didn't): 1-3 fold once under the old epoch's MARK row, and "
+                        "the new epoch's 1 under its own at the boot after.",
+                "cap": 4, "files": {}, "players": {"A": A(epochs=(EPOCH_A, EPOCH_A2))}, "steps": steps,
+                "lost": 0})
+    return out
+
+
+def _hex64(v):
+    return "0x%016x" % playlog.u64(v)
+
+
+def run_session(sc):
+    """Each step of a session in turn: (its sessions.json entry, {path:
+    bytes}). The card after each step is stored as run_scenario's files
+    are (each file once, in the first folder with those bytes)."""
+    card = _Card(sc["files"])
+    # The slots the stats should hold at the end: those the card's stats
+    # hold at the start, those of its log above their MARK (each once),
+    # and those the steps write.
+    first = Session(dict(sc["files"]))
+    first.scan()
+    expect = first.stats.head["slots"]
+    players = {}
+    for name, d in sorted(sc["players"].items()):
+        p = _Player(card, d["device"], d["epochs"], sc["cap"])
+        if d["nvs"] is not None:
+            p.nvs = {"epoch": d["nvs"][0], "seq": d["nvs"][1], "boots": d["nvs"][2]}
+        players[name] = p
+    out, where = {}, {}
+
+    def stored(folder):
+        for n, b in sorted(card.files.items()):
+            if n not in where or where[n][1] != b:
+                where[n] = (folder, b)
+                out["stats/sessions/%s/%s" % (folder, n)] = b
+        return {n: where[n][0] for n in sorted(card.files)}
+
+    entry = {"name": sc["name"], "note": sc["note"], "cap": sc["cap"],
+             "players": {n: {"device": d["device"], "epochs": [_hex64(e) for e in d["epochs"]],
+                             "nvs": None if d["nvs"] is None else [_hex64(d["nvs"][0]), d["nvs"][1], d["nvs"][2]]}
+                         for n, d in sorted(sc["players"].items())},
+             "in": stored("%s/0" % sc["name"]), "steps": []}
+    written = 0
+    for i, st in enumerate(sc["steps"], 1):
+        e = {k: v for k, v in st.items()}
+        if "acks" in e:
+            e["acks"] = acks_json(e["acks"])
+        if e["do"] == "play":
+            e["hash"] = _hex64(e["hash"])
+        p = players.get(st.get("player"))
+        if st["do"] == "boot":
+            e.update(_session_boot(p, st))
+        elif st["do"] == "play":
+            e.update(_session_play(p, st))
+            if e["seq"] is not None and counts(dict(kind=playlog.KIND_PLAY, epoch=p.nvs["epoch"], seq=e["seq"],
+                                                    deviceId=p.device_id)):
+                written += 1
+        elif st["do"] == "hs":
+            e["ok"] = _save(p, "hs", st)
+        elif st["do"] == "remount":
+            assert p.appended, "a remount before the session's first slot begins the scan again"
+            p.settle()
+        elif st["do"] == "nvs":
+            p.nvs["seq"] = st["seq"]
+        elif st["do"] == "erase":
+            p.erase_nvs()
+        elif st["do"] == "delete":
+            del card.files[st["name"]]
+            card.chains.pop(st["name"], None)
+        elif st["do"] == "link":
+            _link(card, st["a"], st["b"])
+        else:
+            raise ValueError(st["do"])
+        e["out"] = stored("%s/%d" % (sc["name"], i))
+        entry["steps"].append(e)
+    # The undercount: slots that count, written, that the card's stats
+    # don't hold (and with ACKS below MARK, counted in HEAD's gap).
+    st = load(card.files)
+    lost = expect + written - st.head["slots"]
+    assert lost == sc["lost"], (sc["name"], lost, sc["lost"])
+    entry["slots"], entry["lost"] = expect + written, lost
+    return entry, out
+
+
+def session_files():
+    """test/fixtures/card/stats/sessions.json and the sessions' files."""
+    files, index = {}, []
+    for sc in session_specs():
+        entry, out = run_session(sc)
+        index.append(entry)
+        files.update(out)
+    files["stats/sessions.json"] = (json.dumps(index, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
+    return files
+
+
 def fixture_files():
     """test/fixtures/card/stats/: {path under test/fixtures/card: bytes}."""
     files, index = {}, []
@@ -1610,6 +2051,7 @@ def fixture_files():
                                                           "hash": hx(path_hash("%s/%s/%s" % (artist, album, f)))}
                                                          for f in fs]}
            for artist, album, fs in sorted(LIBRARY, key=lambda a: a[1].casefold())]
+    files.update(session_files())
     files["stats/library.json"] = (json.dumps(lib, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
     files["stats/index.json"] = (json.dumps(index, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
     return files

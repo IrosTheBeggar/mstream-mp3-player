@@ -851,6 +851,86 @@ class FixtureTests(unittest.TestCase):
                 self.assertEqual(int(t["hash"], 16), cf.path_hash(t["path"]))
 
 
+class SessionTests(unittest.TestCase):
+    """The sessions (stats/sessions.json): players' boots and plays on one
+    card, the log as playlog's Device writes it and the stats as 5.5-5.8
+    keep them; test_stats_store runs each step through the firmware's code."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.files = sr.session_files()
+        cls.index = json.loads(cls.files["stats/sessions.json"])
+        cls.by = {e["name"]: e for e in cls.index}
+
+    def test_written_by_fixture_files(self):
+        all_files = sr.fixture_files()
+        for n, b in self.files.items():
+            self.assertEqual(all_files[n], b, n)
+
+    def test_the_undercounts(self):
+        """5.5's and 13's rotation hole, to the slot: a rotation whose save
+        fails (over a twin's chain too), one in the end's flush with under
+        1 s left, one after a partial scan; 0.14.0's trim (HEAD's gap).
+        Every other session loses nothing and counts nothing twice."""
+        lost = {"rotation-fails": 4, "rotation-twin-fails": 4, "flush-late": 4, "partial-rotation": 4,
+                "old-firmware": 3}
+        for e in self.index:
+            self.assertEqual(e["lost"], lost.get(e["name"], 0), e["name"])
+        self.assertEqual(len(self.index), 15)
+
+    def test_the_steps(self):
+        by = self.by
+        # The rotation's save runs before plays.1.jnl leaves the log's names,
+        # and the next boot folds what the log still holds.
+        steps = by["rotation-saves"]["steps"]
+        self.assertEqual([s["save"] for s in steps if s["do"] == "play"][-1], True)
+        self.assertEqual([s["save"] for s in by["rotation-fails"]["steps"] if s["do"] == "play"][-1], False)
+        self.assertEqual([s["save"] for s in by["flush-in-time"]["steps"] if s["do"] == "play"][-1], True)
+        self.assertEqual([s["save"] for s in by["flush-late"]["steps"] if s["do"] == "play"][-1], False)
+        self.assertIsNone([s["save"] for s in by["partial-rotation"]["steps"] if s["do"] == "play"][-1])
+        # Another player's stats.bin refuses every later save of a session.
+        hs = [s for s in by["second-player"]["steps"] if s["do"] == "hs"]
+        self.assertEqual([s["ok"] for s in hs], [False])
+        self.assertTrue(any(s.get("compacted") for s in by["second-player"]["steps"]))
+        self.assertEqual([s["ok"] for s in by["partial-hs"]["steps"] if s["do"] == "hs"], [False])
+        # The seq rule's reservations: the play after NVS put back is 5.
+        for name in ("nvs-back", "log-deleted"):
+            plays = [s["seq"] for s in by[name]["steps"] if s["do"] == "play"]
+            self.assertEqual(plays[-1], 5, name)
+        # 0.14.0's boot trims without folding; the next counts the gap.
+        old = by["old-firmware"]["steps"]
+        self.assertEqual(old[-2]["trimmed"], ["plays.1.jnl", "plays.jnl"])
+        self.assertEqual(old[-1]["gap"], 3)
+
+    def test_each_log_file_in_seq_order(self):
+        """5.6's ranges rely on it: in a file, a device and epoch's seqs only
+        rise."""
+        for path, data in self.files.items():
+            if path.rsplit("/", 1)[-1] not in sr.LOG_NAMES:
+                continue
+            last = {}
+            for _, why, s, _ in pl.read_file(data):
+                if why == "ok" and s["kind"] == pl.KIND_PLAY:
+                    k = (s["deviceId"], s["epoch"])
+                    self.assertGreater(s["seq"], last.get(k, 0), path)
+                    last[k] = s["seq"]
+
+    def test_live_and_rotation_rows(self):
+        """first-at-live: the rows a rotation's save holds are first-at-a's
+        but lastOrd (HEAD.round + 2 for a live play, + 1 for the boot's)."""
+        steps = self.by["first-at-live"]["steps"]
+        out = [s["out"] for s in steps if s.get("save")][0]
+        st = sr.read_stats(self.files["stats/sessions/%s/stats.bin" % out["stats.bin"]])
+        fa = json.loads(sr.fixture_files()["stats/index.json"])
+        boot = [e for e in fa if e["name"] == "first-at-a"][0]["boots"][0]
+        ref = sr.read_stats(sr.fixture_files()["stats/%s/stats.bin" % boot["out"]["stats.bin"]])
+        for h, r in ref.trkd.items():
+            got = st.trkd[h]
+            self.assertEqual((got.plays, got.skips, got.firstAt, got.lastAt, got.src),
+                             (r.plays, r.skips, r.firstAt, r.lastAt, r.src))
+            self.assertIn(got.lastOrd, (1, 2))
+
+
 class FakeProbe:
     def __init__(self, fs="FAT32", system="C:\\"):
         self.fs, self.sys = fs, system
