@@ -52,6 +52,17 @@
 //                 each column's height, 0-9. On whatever plays, until gw-.
 //   gw#<480 hex>  the same from 240 bars, through the reduction (wave::reduce())
 //   gw-           drops that shape
+//   gx            the card's write bench (docs/SWAP-MODE.md section 7): a
+//                 file of n MB written in turn with each of its settings
+//                 (piece size, f_expand, syncs, ACMD23, raw CMD25s); gx<n>
+//                 n MB a run
+//   gxs           ... its clock soak: n MB written raw inside one contiguous
+//                 file and read back, at 20 MHz, then at 26.67 MHz; gxs<n>
+//                 n MB
+//   gxc           the data blocks' CRC16s timed (the stock byte-at-a-time
+//                 table, the ROM's, the driver's two bytes a step); gxc0 the
+//                 driver back on the stock one until a restart, gxc1 on the
+//                 two-byte one again (the bench's A/B)
 namespace tagtext {
 
 enum class Command : uint8_t {
@@ -69,12 +80,23 @@ enum class Command : uint8_t {
   Bench,      // gl, glw: `n` 1 with the walks
   Wave,       // gw?, gw-, gw=<...>, gw#<...>: `path` from the letter after the w
   Moods,      // gm; gm<hex>: `n` the filter's q (moodfilter::valid())
+  WriteBench, // gx, gx<n>: `n` MB a run (kWriteBenchMb for gx alone)
+  WriteSoak,  // gxs, gxs<n>: `n` MB (kWriteSoakMb for gxs alone)
+  CrcBench,   // gxc: `n` kCrcReport (the CRC16s timed); gxc0, gxc1: `n` the driver's (0 the stock one, 1 the fast)
   Bad,        // anything else (g<n> out of 1-50,000 included)
 };
 // Cache's `n` for gc alone: the counts, nothing switched.
 constexpr uint32_t kCacheReport = 9;
 // Moods' `n` for gm alone: the words' figures, no filter (above any q).
 constexpr uint32_t kMoodsReport = 0x10000;
+// The write bench's sizes in MB: each run's (gx) and the soak's (gxs), by
+// default and at most.
+constexpr uint32_t kWriteBenchMb = 8;
+constexpr uint32_t kWriteBenchMaxMb = 64;
+constexpr uint32_t kWriteSoakMb = 64;
+constexpr uint32_t kWriteSoakMaxMb = 256;
+// CrcBench's `n` for gxc alone: the timings, nothing switched.
+constexpr uint32_t kCrcReport = 9;
 struct Parsed {
   Command command = Command::Bad;
   uint32_t n = 0;            // Synthetic's; Cache's, Bench's, Status's, Build's and Moods'

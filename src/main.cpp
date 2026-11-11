@@ -3891,6 +3891,8 @@ void setup() {
         Serial.println("[wave] no UI, so no Now Playing and no waveforms (no PSRAM at boot)");
       }
     };
+    // gx and gxs refuse while music plays or waits for the headphones.
+    j.playing = [] { return player.state() == PlayState::Playing || player.state() == PlayState::Waiting; };
     tc->setJobs(j);
   }
   // Auto DJ: its settings, and the index the card's root names, opened and

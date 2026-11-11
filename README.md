@@ -846,6 +846,7 @@ optional argument and Enter:
 | `gc` (`gc0`, `gc1`, `gc2`), `gl` (`glw`) | the card ([docs/METADATA.md](docs/METADATA.md) 6.3.1): `gc` the PSRAM sector cache's counts (hits, misses, the card's reads and their time), `gc0` off and `gc1` on (until restart, for A/B measurements), `gc2` on with every hit checked against the card (each prints the counts so far, then starts them again); `gl` the card's bench (its time per sector, the opens of a file under `/music`'s 1st, 353rd and 703rd entries with and without the cache), `glw` also the walks of `/music` (minutes on a big card; stop the music first) |
 | `gw?` (`gw=<99 digits>`, `gw#<480 hex>`, `gw-`) | the waveform index ([docs/WAVEFORM-INDEX.md](docs/WAVEFORM-INDEX.md)): `gw?` its state: the file, the track wanted, the record, the reads (hits, misses, damaged, the probes a read, the job's time); `gw=` a test shape with no card, a digit 0-9 for each of Now Playing's 99 columns, on whatever plays until `gw-`; `gw#` the same from 240 bars in hex, through the reduction. `gw` alone is the walk, above |
 | `gm` (`gm<hex>`) | the mood words, a track's from the transfer's mood scores ([docs/MOOD-FILTERS.md](docs/MOOD-FILTERS.md) 5.4, 9.3): `gm` how many of the library's tracks have one, and the block's bytes (or "no mood data"); `gm<hex>` the tracks and the albums the filter `<hex>` lets through (bare hex, 1-4 digits: `gm127` Sad, Relaxed, Vocals, Danceable at Standard), each pass's time in us and the first 8 of each, to set beside `tools/synthtransfer.py --check --mood-filter`; a value that isn't a filter (`gm800`) is refused, and while the library updates it says so and counts nothing |
+| `gx` (`gx<n>`), `gxs` (`gxs<n>`) | the card's write bench ([docs/SWAP-MODE.md](docs/SWAP-MODE.md) section 7): `gx` writes a file of 8 MB (`gx<n>`: n MB, 1-64) in `/.player` once per setting (4 to 64 KB pieces, `f_expand`, syncs, ACMD23, raw CMD25s) and prints each run's MB/s, its pieces' p50/p99/max and the driver's split of the time, some runs read back and checked; `gxs` the clock soak, 64 MB (`gxs<n>`: 1-256) written raw and read back at the mount's 20 MHz, then at 26.67 MHz; `gxc` the data blocks' CRC16s timed (the stock one, the ROM's, the driver's two bytes a step), `gxc0` the driver on the stock one until a restart and `gxc1` back (the A/B). Music paused; the loop waits throughout; the file is deleted after each run |
 | `e` (`e1`-`e5`) | font probe: list rows in FreeSans (folded) and the UI's VLW font, timed (efont only in a build with `-DUI_SPIKE_EFONT=1`) |
 | `j` (`j<n>`, `jw<n>`, `ja`) | thumbnail probe: cover.jpg to 40x40 / 80x80, decoder RAM, PSRAM and .565 caches |
 
@@ -1200,7 +1201,8 @@ docs/                 ARCHITECTURE.md, POC-RESULTS.md, MASCOT-POC.md, UI-SPIKE.m
                       (the AutoDJ index, MPDJ v2), AUTODJ.md (the
                       device's Auto DJ), WAVEFORM-INDEX.md (the waveform
                       index, MPWF v1), QUEUE-MODES.md (shuffle, repeat,
-                      the queue's cap; Auto DJ with them)
+                      the queue's cap; Auto DJ with them), SWAP-MODE.md
+                      (swap mode's research and the ESP-NOW link spike)
 LICENSES/             The licence texts THIRD-PARTY-NOTICES.md refers to
 THIRD-PARTY-NOTICES.md What else is in the firmware binary, and its licences
 ```
