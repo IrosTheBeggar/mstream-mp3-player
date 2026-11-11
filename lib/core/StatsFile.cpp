@@ -649,6 +649,13 @@ SaveReport Store::save(sf::Fold& fold, const SaveAsk& ask, uint8_t* work) {
     r.what = Saved::Changed;
     return r;
   }
+  // A partial scan, or a fold out of memory (plan()'s refusal, asked before
+  // the work memory: a fold that ran out before its first fold isn't dirty,
+  // and "nothing new" would let the trim pass plays it never folded).
+  if (fold.partialScan() || fold.noMemory()) {
+    r.what = Saved::Off;
+    return r;
+  }
   if (!work) {
     r.what = fold.dirty() ? Saved::NoMemory : Saved::Nothing;
     return r;

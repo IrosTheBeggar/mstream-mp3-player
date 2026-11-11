@@ -406,6 +406,7 @@ struct Player {
   bool stats = true;  // false: a 0.14.0 boot (no folds)
   sf::Fold::AllocFn alloc = nullptr;
   sf::Fold::FreeFn release = nullptr;
+  std::function<void()> afterRead;  // (a test's: between the stats' read and the journal's begin())
   std::unique_ptr<Glue> glue;
   std::unique_ptr<Journal> j;
   TEnv tenv;
@@ -438,6 +439,7 @@ struct Player {
       glue->mono = [this] { return oenv.now; };
       glue->read(wait);
     }
+    if (afterRead) afterRead();
     ops.clear();
     j.reset(new Journal(*fs, nvs, config()));
     TEST_ASSERT_TRUE(j->begin(id, b.acks));
@@ -1641,6 +1643,50 @@ void test_hs_says_why_and_never_compacts() {
   }
 }
 
+// A fold out of memory from the boot's first fold (its ranges couldn't be
+// carved) and no work memory for the save either (the same short heap): no
+// save, and the trim by the MARK read at the boot (5.5), never as after a
+// save. worked-example's whole boot trims plays.1.jnl (ACKS 45 covers it);
+// its MARK, 41, doesn't cover plays 42-45, never folded: it stays. Over a
+// loaded stats.bin and over none (no MARK: nothing covered).
+namespace {
+bool gShortHeap = false;  // the heap has nothing left
+void* shortAlloc(size_t n) { return gShortHeap ? nullptr : std::malloc(n); }
+void shortFree(void* p) { std::free(p); }
+}  // namespace
+
+void test_a_fold_out_of_memory_trims_by_the_boots_mark() {
+  const minijson::Value& sc = scenario("worked-example");
+  const minijson::Value& b = sc["boots"][0];
+  TEST_ASSERT_EQUAL_size_t(1, b["trimmed"].size());  // (the whole boot's)
+  for (int absent = 0; absent < 2; ++absent) {
+    const char* w = absent ? "no stats.bin" : "stats.bin loaded";
+    Files in = cardOf(b["in"]);
+    if (absent) in.erase("stats.bin");
+    CutFs card;
+    put(card, in);
+    Player p(card, reinterpret_cast<const uint8_t*>("\0\0\0\0\0\1"));
+    deviceFor(p, sc);
+    p.alloc = shortAlloc;
+    p.release = shortFree;
+    p.afterRead = [] { gShortHeap = true; };
+    p.begin(askOf(b));
+    TEST_ASSERT_TRUE_MESSAGE(p.glue->core.on(), w);
+    const bool ready = p.scan();
+    gShortHeap = false;
+    TEST_ASSERT_TRUE_MESSAGE(ready, w);
+    TEST_ASSERT_TRUE_MESSAGE(p.glue->fold.noMemory(), w);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, p.glue->fold.folded(), w);
+    std::string calls;
+    for (const std::string& c : p.glue->calls) calls += " " + c;
+    TEST_ASSERT_TRUE_MESSAGE((p.glue->calls == std::vector<std::string>{"began", "save boot (no)"}),
+                             (std::string(w) + ":" + calls).c_str());
+    TEST_ASSERT_FALSE_MESSAGE(sx::savedOk(p.glue->last.what), w);
+    TEST_ASSERT_TRUE_MESSAGE(p.trimmed().empty(), w);
+    sameFiles(in, filesOf(card), w);
+  }
+}
+
 int main(int, char**) {
   if (!cardfixtures::json("stats/index.json", &gIndex) || gIndex.size() == 0 ||
       !cardfixtures::json("stats/sessions.json", &gSessions) || gSessions.size() == 0) {
@@ -1662,5 +1708,6 @@ int main(int, char**) {
   RUN_TEST(test_a_full_log_never_synced);
   RUN_TEST(test_the_glues_own_rules);
   RUN_TEST(test_hs_says_why_and_never_compacts);
+  RUN_TEST(test_a_fold_out_of_memory_trims_by_the_boots_mark);
   return UNITY_END();
 }

@@ -1142,6 +1142,68 @@ void test_the_commit_steps() {
   }
 }
 
+// A fold that ran out of memory is never saved, with the save's work memory
+// or without it (5.5: the trim then follows the MARK read at the boot). One
+// that ran out before its first fold (beginBoot() couldn't carve its
+// ranges) isn't dirty, and the work memory, carved from the same short
+// heap, may be missing too: still no save, never "nothing new" (the
+// journal would trim every file ACKS acknowledges, plays never folded
+// among them). Nor a partial scan's that folded nothing. Over a loaded
+// stats.bin and over none (absent).
+namespace {
+bool gShort = false;  // the heap has nothing left
+void* shortAlloc(size_t n) { return gShort ? nullptr : std::malloc(n); }
+void shortFree(void* p) { std::free(p); }
+}  // namespace
+
+void test_a_fold_out_of_memory_is_never_saved() {
+  const minijson::Value& b = scenario("worked-example")["boots"][0];
+  const Files in = cardOf(b["in"]);
+  Work w;
+  int runs = 0;
+  for (int absent = 0; absent < 2; ++absent) {
+    for (int partial = 0; partial < 2; ++partial) {
+      for (int withWork = 0; withWork < 2; ++withWork) {
+        char what[96];
+        std::snprintf(what, sizeof(what), "%s, %s, %s", absent ? "absent" : "loaded",
+                      partial ? "every log file unread" : "no memory for the boot's fold",
+                      withWork ? "work memory" : "no work memory");
+        cutfs::CutFs card;
+        put(card, in);
+        if (absent) card.remove((kDir + "stats.bin").c_str());
+        sf::Fold f(shortAlloc, shortFree);
+        TEST_ASSERT_TRUE(f.begin());
+        sx::Store store(card);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(absent ? "absent" : "loaded", sx::readName(store.read(f, w.p(), waitHook).read),
+                                         what);
+        std::map<std::string, int> unread;
+        if (partial) {
+          for (const char* n : kLogNames)
+            if (card.dir.count(kDir + n)) unread[n] = -1;
+          TEST_ASSERT_TRUE_MESSAGE(f.beginBoot(acksOf(b["acks"])), what);
+        } else {
+          gShort = true;
+          TEST_ASSERT_FALSE_MESSAGE(f.beginBoot(acksOf(b["acks"])), what);
+        }
+        scanLog(f, card, unread);
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, f.folded(), what);
+        TEST_ASSERT_FALSE_MESSAGE(f.dirty(), what);
+        TEST_ASSERT_TRUE_MESSAGE(partial ? f.partialScan() : f.noMemory(), what);
+        const Files before = filesOf(card);
+        const long steps = card.steps;
+        const sx::SaveReport r = store.save(f, askOf(b), withWork ? w.p() : nullptr);
+        gShort = false;
+        TEST_ASSERT_FALSE_MESSAGE(sx::savedOk(r.what), (std::string(what) + ": " + sx::savedName(r.what)).c_str());
+        TEST_ASSERT_EQUAL_STRING_MESSAGE("off", sx::savedName(r.what), what);
+        TEST_ASSERT_EQUAL_INT32_MESSAGE(steps, card.steps, what);
+        sameFiles(before, filesOf(card), what);
+        ++runs;
+      }
+    }
+  }
+  TEST_ASSERT_EQUAL_INT(8, runs);
+}
+
 void test_a_cut_at_every_step_of_a_save() {
   // Each step of the boot's save cut, three ways; the next boot then finds
   // the old commit or the new one, folds again what the old one lacks,
@@ -1447,6 +1509,7 @@ int main(int, char**) {
   RUN_TEST(test_the_base_check);
   RUN_TEST(test_the_card_copy_is_checked_first);
   RUN_TEST(test_the_commit_steps);
+  RUN_TEST(test_a_fold_out_of_memory_is_never_saved);
   RUN_TEST(test_a_cut_at_every_step_of_a_save);
   RUN_TEST(test_compaction);
   RUN_TEST(test_the_writer_in_the_callers_memory);
