@@ -1074,10 +1074,12 @@ no more.
 
 **Readers:**
 
-- **The device** reads ACKS to trim its log (2.20.2). It checks the
-  section as 2.4.3 says (rows of at least 24 bytes, bytes = count ×
-  stride, its CRC, the order); one that fails is ignored, and the root
-  stays valid: ACKS only trims, so losing it only keeps more plays.
+- **The device** reads ACKS to trim its log (2.20.2) and, at boot, to
+  reserve seqs up to it (2.20.4; with listening stats also their gap,
+  docs/LISTENING-STATS.md 5.6). It checks the section as 2.4.3 says
+  (rows of at least 24 bytes, bytes = count × stride, its CRC, the
+  order); one that fails is ignored, and the root stays valid: ACKS only
+  trims and reserves, so losing it only keeps more plays.
   So a reader takes ACKS outside its container's check of the sections
   it knows (whose stride and length rules make the file absent: 2.4.3,
   the directory): it finds ACKS by its type in the directory and checks
@@ -1785,7 +1787,7 @@ each, about 1-2 minutes for 20,000 files through a USB reader
 | `/music/**` folders | create; remove only OWNED folders that are empty (OWNED in the ledger, or a folder op of the current plan: 2.12.5) | none | anything |
 | `/music` itself | create if missing | read | anything |
 | `/.mstream/**` | everything | **read only** (except as the sync agent: 2.12.4) | may delete it all (the device then scans; the software then sees a card with no ledger) |
-| `/.player/**` | **read only**; it relies on `device.txt` and the play log (`plays*.jnl`, 2.20) alone, and never reads the listening stats' files (`stats.bin`, `stats-<gen>.bin`: 2.12.6) | everything | may delete it all (the device rebuilds its caches; the log's plays not yet read are lost, and so is the listening stats' history, which the device can't rebuild: the plays its trims removed are counted nowhere else) |
+| `/.player/**` | **read only**; it relies on `device.txt` and the play log (`plays*.jnl`, 2.20) alone, and never reads the listening stats' files (`stats.bin`, `stats-<gen>.bin`: 2.12.6) | everything | may delete it all (the device rebuilds its caches; the log's plays not yet read are lost, and so is the listening stats' history, which the device can't rebuild: the plays its trims removed are counted nowhere else on the card, mStream keeping its own record of them) |
 | anything else on the card | never | never | anything |
 
 - **A file the listener changed** stops being the software's at the next
@@ -2615,6 +2617,9 @@ on any difference. The folder's README says how to read them.
    them by its 72-byte prefix. `tools/test_mood_vectors.py` runs mStream's
    own predicate text (`src/api/mood-filter.js`, its commit named) in
    SQLite over every row and filter, and the word must agree with it.
+10. **The listening stats** (`stats/`, made with `tools/statsref.py`;
+    docs/LISTENING-STATS.md): the device's own files (2.12.6), which no
+    software reads; a mirror MAY leave them out.
 
 ### 2.18 Conformance vectors
 
@@ -3038,8 +3043,10 @@ says the firmware keeps one (2.15).
   that keeps listening stats (docs/LISTENING-STATS.md 5.5) trims a file
   only once its stats on the card hold its plays too: every play slot in
   it at or under the seq the stats' MARK keeps for its deviceId and
-  epoch. Its rotation MAY save the stats first, so step 1 deletes no play
-  they don't hold.
+  epoch. Its rotation MAY save the stats first, so that step 1 deletes no
+  play they don't hold; it never waits on that save, and when the save
+  doesn't land those plays are lost to the stats
+  (docs/LISTENING-STATS.md 5.5).
 
 #### 2.20.3 The slot (80 bytes)
 

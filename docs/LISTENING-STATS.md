@@ -16,6 +16,7 @@ Line numbers are at these commits:
 - firmware bc29b54
 - phone app (`mstream_music`) d17c3fa5
 - terminal player origin/main 410444f, and `claude/card-transfer` 3edd4a4 (PR #56)
+- `docs/METADATA.md` as this branch holds it: main 241642d's, with C2's edits and S0's review (main since bc29b54 changed only `tools/version.py` and docs, so the firmware's lines hold at 241642d too)
 
 Paths with no repository named are the firmware's.
 
@@ -41,7 +42,7 @@ The code wins. Each item is READ at bc29b54.
 - **A resident table keyed by track id can't name the rankers' hashes.** RCNT and TRKS are keyed by path hash, so the 7- and 30-day tops, New finds and Recently played come out as hashes. This plan keeps no per-track table resident (6.1).
 - **The spec's walk cost** ("1.5 s idle, 3 s playing" with Auto DJ off) is the whole join's. A walk for stats is Folders and Hash only: no card reads, no sort. ESTIMATED 0.1-0.2 s of CPU (6.3).
 - **The spec's redraw costs are low.** A row redrawn in place is about 11 ms with its push (`src/ui/ListView.h:273-274`), not 3 ms; a header push (320 x 36) about 5 ms, not 1. Section 7.10 uses these.
-- **METADATA 3.10 says the play log was "not flashed"** (`docs/METADATA.md:7170`). The 0.14.0 checks ran it on the device: slots written in 14.8-16.6 ms (`docs/RELEASE-0.14.0-CHECKS.md:60`). S1's docs commit corrects it.
+- **METADATA 3.10 says the play log was "not flashed"** (`docs/METADATA.md:7233`). The 0.14.0 checks ran it on the device: slots written in 14.8-16.6 ms (`docs/RELEASE-0.14.0-CHECKS.md:60`). S1's docs commit corrects it.
 - **The terminal's time zone on Windows.** The design run's process map said `src/admin/tz.rs` gives no zone on Windows. Terminal origin/main reads the zone Windows is set to since 5eac90c (2026-10-29; terminal `src/admin/tz.rs:1-10, 32-49`). #56's branch (3edd4a4) doesn't have 5eac90c: there a Windows machine gets no zone (its `src/admin/tz.rs:6-7`). No branch sends it in `@time` yet (10).
 - **ScanScheduler's jobs** are at `lib/core/ScanScheduler.h:101-102` (`kJobs` 8), not `:119-120`.
 - **The log prefix.** `[stats]` is the audio's line (console `s`). The stats' lines are `[listen]`.
@@ -272,7 +273,7 @@ A card container (`docs/METADATA.md` 2.4; `lib/core/CardContainer.h`):
 - major 1, minor 0;
 - headerBytes 40, no type header;
 - generation: the save count, from 1;
-- cardId 0. The stats are never keyed to MSMF's cardId: a new set-up of `/.mstream` changes it while `/.player` stays (2.11's rows, `docs/METADATA.md:1787-1788`). The file is the card's because it is on the card.
+- cardId 0. The stats are never keyed to MSMF's cardId: a new set-up of `/.mstream` changes it while `/.player` stays (2.11's rows, `docs/METADATA.md:1789-1790`). The file is the card's because it is on the card.
 
 Its sections, in this order. Every one is REQUIRED (a reader that doesn't know one leaves the file alone: 5.4).
 
@@ -334,7 +335,7 @@ All little-endian.
 
 Strictly increasing by hash. A row exists for a track with a play or a skip.
 
-**Merging two rows of one hash**, `a ⊕ b` with `a` the older (the base before the delta; a row before a slot). Every rule is order-free, so a row saved from live folds (a rotation's save, `Hs`) and the same row folded at a boot (newest file first) are byte for byte the same:
+**Merging two rows of one hash**, `a ⊕ b` with `a` the older (the base before the delta; a row before a slot). Every rule is order-free, so a row saved from live folds (a rotation's save, `Hs`) and the same row folded at a boot (newest file first) are the same but for lastOrd, a round (5.6: a live fold's is HEAD.round + 2, a boot's + 1), which the proof compares by order:
 - plays, skips: sums, saturating;
 - firstAt: the earlier dated time. 0 (undated) only when neither side has a dated one. 0xFFFFFFFF (none) loses to both. The source flag goes with the time kept; on equal times, two undated included, the smaller source code wins;
 - lastAt, lastOrd: the larger.
@@ -406,7 +407,7 @@ With nothing new since the card's copy, it returns true and writes nothing.
 5. `replace()`. False: the tmp is kept, whole, and held; the next save promotes it first (step 1). A boot's `settle()` takes a whole tmp when `stats.bin` is gone, and drops one while `stats.bin` is there (`lib/core/TagStore.cpp:454, 463`): a held tmp not promoted before a restart is lost, and with it the plays of a `plays.1.jnl` a rotation deleted after that save (13).
 6. True: the card's MARK is now the one written, and an old base is removed.
 
-The `ContainerWriter` is about 2.1 KB (`lib/core/CardContainer.h:281-313`: 64 section entries, two u32[64], a 256 B header). The loop's stack is 8 KB, with 2.5-3.8 KB left at its lowest (`docs/METADATA.md:6259`; `docs/AUTODJ.md:1802-1803`). So the writer and the save's buffers are in PSRAM, never on the loop's stack.
+The `ContainerWriter` is about 2.1 KB (`lib/core/CardContainer.h:281-313`: 64 section entries, two u32[64], a 256 B header). The loop's stack is 8 KB, with 2.5-3.8 KB left at its lowest (`docs/METADATA.md:6322`; `docs/AUTODJ.md:1802-1803`). So the writer and the save's buffers are in PSRAM, never on the loop's stack.
 
 **The trim.**
 - A log file goes when today's rule holds (every play acknowledged, at least one, a play last, no twin on its chain: `lib/core/PlayLog.cpp:292-297, 310-311, 332-344`) **and** every play slot in it is at or under the card's MARK for its (deviceId, epoch).
@@ -471,7 +472,7 @@ The `ContainerWriter` is about 2.1 KB (`lib/core/CardContainer.h:281-313`: 64 se
 - On a card whose log was trimmed, new plays then reuse seqs under ACKS: they read as acknowledged and are never sent.
 - They are also under MARK, so the stats would skip them.
 - 2.20.4 lets a device reserve seqs, so a higher start breaks no reader. Its own commit in S1.
-- Two places state today's rule and change with it: METADATA 2.20.4's "At boot" sentence (`docs/METADATA.md:3084-3086`, C2) and the reference that writes the play log's goldens, `tools/playlog.py`'s `boot_seq()` (`:244-248`, used by `Device.boot` at `:531-545`; C5).
+- Two places state today's rule and change with it: METADATA 2.20.4's "At boot" sentence (`docs/METADATA.md:3112-3122`, C2) and the reference that writes the play log's goldens, `tools/playlog.py`'s `boot_seq()` (`:244-248`, used by `Device.boot` at `:531-545`; C5).
 
 **The play log after S1**, against 0.14.0:
 - the scan reads on a new epoch with no ACKS;
@@ -510,7 +511,7 @@ Slots, files, ACKS and the transfer's reading are unchanged. `test_play_log`'s 3
   - a save over a `stats.bin` that isn't the copy RAM stands on is refused (5.5);
   - live folds are RAM only, of Written slots, with fresh seqs (`lib/core/PlayLog.cpp:531-535`);
   - the trim and the rotation delete only what the card's MARK covers, or what is saved first;
-  - seqs only rise (`docs/METADATA.md:3081-3095`; and 5.6's rule).
+  - seqs only rise (`docs/METADATA.md:3109-3131`; and 5.6's rule).
 - Rare cases that undercount by design:
   - a slot given up on (3 card failures) whose bytes had landed, under a MARK raised later that session: never folded;
   - a firmware without stats (0.14.0) trims ACKed files it never folded (`lib/core/PlayLog.cpp:332-344`). The next stats boot sees ACKS above MARK with those seqs gone, and HEAD's gap says how many.
@@ -536,7 +537,7 @@ Slots, files, ACKS and the transfer's reading are unchanged. `test_play_log`'s 3
 
 ### 5.11 What the terminal may do
 
-- It may delete `/.player` whole (`docs/METADATA.md:1788`): the stats start again with the log. For caches "the device rebuilds" holds; for the stats it doesn't, and 2.11's row says so (C2).
+- It never writes `/.player` (2.11: read only). The listener may delete it whole (2.11's Listener column, `docs/METADATA.md:1790`), and a format the listener confirms (`@format`) clears it too: the stats start again with the log. For caches "the device rebuilds" holds; for the stats it doesn't, and 2.11's row says so (C2).
 - It never reads or writes the stats files. `device.txt` gains no key.
 - Its sync's ACKS lets the next boot trim, after the fold and the save.
 - Later (not v1): it may write mStream's per-track counts as a gen-named file of its own (spec 8.6). Not played yet would then mean never, and the counts would include other clients.
@@ -1044,15 +1045,15 @@ No firmware change, no device step.
 - **C1: the frames.** PNG captures (320 x 240) of the nine final frames from the canvas, into `docs/img/listening-stats/`, with a README naming each as this plan does and saying they are browser-font renders. Not AlbumPlays, and none of the A-, B- or C- frames.
 - **C2: the format text.**
   - `docs/METADATA.md` 2.12.6: a bullet for `stats.bin` (the queue's commit, the twins `stats.xl1`-`.xl9`, the only-tmp rule with a real check) and the base file (a fresh name, named by `stats.bin`).
-  - 2.11's `/.player` row (`:1788`): deleting it loses the stats' history the trims removed; the software never reads the stats files.
-  - 2.20.2 "Trimming by ACKS" (`:3013`): a device that keeps stats trims a file only once its stats hold its plays.
-  - 2.20.4's "At boot" sentence (`:3084-3086`): the next seq also takes ACKS's highest seq for this device and epoch, and a device that keeps stats its stats' highest (MARK's): a reservation, which the same item allows.
-  - 10.1's list (`:8532`).
+  - 2.11's `/.player` row (`:1790`): deleting it loses the stats' history the trims removed; the software never reads the stats files.
+  - 2.20.2 "Trimming by ACKS" (`:3034`): a device that keeps stats trims a file only once its stats hold its plays.
+  - 2.20.4's "At boot" sentence (`:3112-3122`): the next seq also takes ACKS's highest seq for this device and epoch, and a device that keeps stats its stats' highest (MARK's): a reservation, which the same item allows.
+  - 10.1's list (`:8595`).
   - The format itself is this document's 5.2-5.3: no software reads it.
 - **C3: the reference and the fixtures.**
   - `tools/statsref.py` (stdlib, imports `tools/playlog.py`): the rules of 4.1, the fold of 5.6 with its dedupe, `stats.bin` and the base byte for byte, ⊕, the rankers of 4.3, the windows, and a `seed` command (writes `plays.jnl` and `plays.1.jnl` of a history: N days of dated plays over a card's `/music` listing, another deviceId, a full log; with `--base <rows>`, also a `stats.bin` and its base of that many rows; for S1-S3's device passes).
   - As built: `statsref.py dump` reads a `stats.bin` (and its base) as the device does; `statsref.py boot DIR --now --acks` runs a boot over a copy of a card's `/.player` (nothing written) and prints what it folds, saves and trims, HEAD, MARK and the lists: the expected values of S1-S3's device passes. `seed CARD` takes `--days` (40) and `--per-day` (25), or `--slots N`, or `--full` (13,106: both files at the cap; `--slots 13102 --device <id>` is run G's log, 4 slots under the cap), `--device`, `--epoch`, `--until`, `--distinct` (5,000), `--base ROWS` (`--base-days`, 365), `--seed`, `--dry-run`, and `--replace` (log files, and with `--base` stats files, already there are refused without it; a twin always is). The container's frame is `tools/mpwf.py`'s writer, the same bytes as `card_fixtures.build_container`'s.
-  - `seed` refuses a card with no `SYNTHCARD.TXT` at its root, or whose `/.mstream` root `tools/synthtransfer.py` didn't write (its root's producer: `tools/synthtransfer.py:26-39`), and the system drive (synthtransfer's `check_drive`, `:1365`). It never touches a card without both: seeded plays on the owner's card would be posted to the owner's mStream at the next sync. `--dry-run` lists what it would write.
+  - `seed` refuses a card with no `SYNTHCARD.TXT` at its root, or whose `/.mstream` root `tools/synthtransfer.py` didn't write (its root's producer: `tools/synthtransfer.py:26-39`), and, when CARD is a drive's root, the system drive and any file system but FAT32/FAT16 (synthtransfer's `check_drive`, `:1365`); a synthcard tree in a folder, on C: too, passes, as with synthtransfer. It never touches a card without both: seeded plays on the owner's card would be posted to the owner's mStream at the next sync. `--dry-run` lists what it would write.
   - `tools/card_fixtures.py`'s `generate()` writes `test/fixtures/card/stats/`: scenarios (a log, a MARK, ACKS) and their expected `stats.bin`, base and lists. The worked example (5.13) is one.
   - `tools/test_statsref.py`, added to `.github/workflows/firmware.yml`'s "Card fixtures" step (`:115-121`), or it never runs in CI.
 
@@ -1100,7 +1101,7 @@ Needs S0. Console only.
   - a new epoch with no ACKS;
   - two devices alternating;
   - a 0.14.0 trim between (HEAD's gap);
-  - firstAt: dated then undated; undated then dated; two undated plays with different sources, folded in both orders and through a rotation's save (the rows byte for byte the same);
+  - firstAt: dated then undated; undated then dated; two undated plays with different sources, folded in both orders and through a rotation's save (the rows the same but lastOrd, compared by order);
   - retention: a save with the clock unset; a foreign slot dated 2099; today a year ahead at one save, then corrected (DAYS and HOUR untouched);
   - a full log never synced (13,106 slots): TRKD's rows equal the distinct hashes; the peak bytes and the µs a slot, printed.
 
@@ -1113,7 +1114,7 @@ Needs S0. Console only.
   - The commit message gives `-fstack-usage`'s sums for `writeOne` → `rotate` → save and for `scan` → `finishScan` → save.
 - **C10: docs.**
   - `docs/ARCHITECTURE.md`: the Layers diagram (`:44`, `:70`), Storage (`:1411-1430`), the play log's paragraph (`:1432-1460`), a Listening stats bullet (`:2654-2667`).
-  - `docs/METADATA.md` 3.11 "As built: the listening stats", and 3.10's "not flashed" (`:7170`) corrected.
+  - `docs/METADATA.md` 3.11 "As built: the listening stats", and 3.10's "not flashed" (`:7233`) corrected.
   - `README.md`'s console table.
 
 **Tests:**
@@ -1150,7 +1151,7 @@ The link map's `libc_a-*` objects in `.iram0.text` equal S0's list, and IRAM lef
 | H | `Hs` idle, with an MP3 (`qp`), and with the owner's headphones if they link them. `Hs` waits for the WriteGate, as the real saves do | The save's ms; `s`'s underruns and breaks around it; no `[ui] slow pass` from a tap |
 | I | The boot with a full seeded log (13,106 slots, about 5,000 hashes); then with an MP3 and with a FLAC playing as the scan ends, on a seeded base of about 19,000 rows (`statsref.py seed --base 19000`) | The fold's RAM (`H`), PSRAM free and largest (`D`), the scan's passes, against main at bc29b54 in the same script; the save's and the compaction's ms on the `[listen]` line; `s`'s underruns= and breaks=; `[ui] slow pass` |
 | J | `gc2` (the sector cache's verify mode, `src/app/TagConsole.h:46-49`), run B's plays (3 past 30 s, a skip, a stop), then `Hs`; `gc1` after, back to the normal cache | The tmp's size check holds with the cache verifying; `gc` counts no mismatch |
-| K | The loop stack's lowest at G's rotation save, and at a boot's save with DO low (METADATA 3.8's fault switch) | Each compared with 2,548 B, the house's lowest (`docs/METADATA.md:6259`) |
+| K | The loop stack's lowest at G's rotation save, and at a boot's save with DO low (METADATA 3.8's fault switch) | Each compared with 2,548 B, the house's lowest (`docs/METADATA.md:6322`) |
 | L | `gb` stopped, then an MP3, then a FLAC, then an Opus; `D`, `Dc` | Against main at bc29b54 in the same script: no `[heap] FAILED`; joined at or over 245,764 B where main is, and within 122,880 B of it (6.7); the Opus plays with 0 skipped |
 
 The failed rotation save (an undercount) is proved on the host only (C8). Then the settings put back (9.1).
@@ -1332,13 +1333,13 @@ Re-measure every line marked with a run.
 |---|---|---|---|---|
 | Flash | 4,423,679 B (70.3 %), the app 72 % of its 6 MB slot (`docs/RELEASE-0.14.0-CHECKS.md:47-48`, the build at `:43`: the 5ea8d34 build, bc29b54's code); 4,423,691 B at S0 (below). The guard warns at 80 % (`tools/flash_guard.py:49`) | Code 25-40 KB; strings 20-30 KB across ten catalogues | GUESS | `pio run`, each stage |
 | IRAM | 5,161 B left on 2026-11-06 (`docs/ARCHITECTURE.md:4513`), and again at S0 (below), after #27, #55, #56 | **0.** No `IRAM_ATTR`; nothing on an ISR. No libc object that the framework's `sections.ld` pins in IRAM and `iram_diet` leaves there (`tools/iram_diet.py:21-23`), unless 0.14.0 already links it. Among these: strtok_r, strsep, memrchr, strcasestr, strlwr, strupr, ldiv, memccpy, strncat (strspn, strcspn, div and strlcat are pinned too, but already linked: S0's list below); the console parsers (`Ht<16 hex>`, `Hl<shelf>[w]`, `uiS<shelf>[w]`, `uiSx<n>`) are where one would come in. (`iram_diet` moves gmtime and the rest of the time code to flash, `:58-66`; qsort and bsearch were never pinned.) The check at each stage: the link map's `libc_a-*` objects in `.iram0.text` equal S0's list, and IRAM left equals S0's figure; `iram_diet: 51 of 51` can't catch a new pinned object | READ | The link map and the memory summary, each stage |
-| Internal RAM | Steady 50 KB, 42 KB the lowest, with Bluetooth (`docs/METADATA.md:6259`) | Under 1 KB of statics (pointers, flags). Every block through `psramAlloc` | GUESS | `s`'s `ram=`, `min=` |
-| The loop's stack | 8 KB; lowest 3,480-3,788 B at a boot, 3,532 B in a join run, 2,548 B the lowest of all (a held boot under DO low) (`docs/METADATA.md:6259`; `docs/AUTODJ.md:1802-1803`) | The save's frames under 512 B more than a slot's write: the `ContainerWriter` (about 2.1 KB) and the buffers in PSRAM. The rotation's save is the deepest path: under `writeOne` → `append` → `put` → `place` (`rec[160]` and `tail[160]`: `lib/core/PlayLog.cpp:468, 487`) → `rotate` (`rec[160]`: `:458`), with FatFs's 512 B long-name buffer on the caller's stack for each call (`src/storage/CardFat.h:32-33`) | MODELLED | `-fstack-usage` (C9); S1 G and K |
+| Internal RAM | Steady 50 KB, 42 KB the lowest, with Bluetooth (`docs/METADATA.md:6322`) | Under 1 KB of statics (pointers, flags). Every block through `psramAlloc` | GUESS | `s`'s `ram=`, `min=` |
+| The loop's stack | 8 KB; lowest 3,480-3,788 B at a boot, 3,532 B in a join run, 2,548 B the lowest of all (a held boot under DO low) (`docs/METADATA.md:6322`; `docs/AUTODJ.md:1802-1803`) | The save's frames under 512 B more than a slot's write: the `ContainerWriter` (about 2.1 KB) and the buffers in PSRAM. The rotation's save is the deepest path: under `writeOne` → `append` → `put` → `place` (`rec[160]` and `tail[160]`: `lib/core/PlayLog.cpp:468, 487`) → `rotate` (`rec[160]`: `:458`), with FatFs's 512 B long-name buffer on the caller's stack for each call (`src/storage/CardFat.h:32-33`) | MODELLED | `-fstack-usage` (C9); S1 G and K |
 | PSRAM, resident | — | In 16 KB chunks (5.6), footprints (6.5). Typical about 98-115 KB: HEAD and MARK 1.7, HOUR 6.8 and DAYS 6.5 (at their caps), RCNT one chunk 16.9, TRKD 1-2 chunks 16.9-33.8, the spare chunk 16.9, hash → id one chunk 16.9, lists 11.3, the rest 4. Ceiling about 267 KB: RCNT 3 chunks 50.7, TRKD 6 chunks 101.4 (forced compaction), hash → id 4 chunks 67.6, the rest as typical. 6.7's ladder if the model or S1 L / S2 B, C fail the pass rule | MODELLED | S1 `H`, L; S2 A/B |
 | PSRAM, transient | — | The walk: played set 33.8-169 KB (2-10 chunks), folder states 25.1 KB. The rank's snapshot 16.9-152.1 KB (1-9 chunks). The boot fold's index 33.8 KB (32 KB at 5,000 hashes; 67.6 KB once doubled). A full never-synced log's fold: TRKD to about 120 KB (8 chunks, 135.2 KB) before its compaction | MODELLED | S1 I; S2 A/B |
-| PSRAM headroom | 0.34-0.66 MB (`docs/METADATA.md:5316`); largest free after an update with Auto DJ 180-295 KB (MOOD-FILTERS 9.6) | The resident blocks come out of every update's room (no give-back). Joined after a FLAC update and the rejoin is only 16-49 KB over the mood plan's 245,764 B line (6.7) | READ | S1 L; S2 C |
+| PSRAM headroom | 0.34-0.66 MB (`docs/METADATA.md:5379`); largest free after an update with Auto DJ 180-295 KB (MOOD-FILTERS 9.6) | The resident blocks come out of every update's room (no give-back). Joined after a FLAC update and the rejoin is only 16-49 KB over the mood plan's 245,764 B line (6.7) | READ | S1 L; S2 C |
 | Card writes, a play | The slot, 15-17 ms (MEASURED) | 0 | READ | — |
-| Card writes, a boot with new plays | — | One `stats.bin`: typical 21-44 KB, ceiling about 160 KB. On the loop: 0.05-0.17 s typical, 0.19-0.4 s at 160 KB (0.5-1 MB/s writes, `docs/METADATA.md:4482-4483`, plus 30-80 ms of directory and FAT work), plus the save's sort | ESTIMATED | S1 A, H, I |
+| Card writes, a boot with new plays | — | One `stats.bin`: typical 21-44 KB, ceiling about 160 KB. On the loop: 0.05-0.17 s typical, 0.19-0.4 s at 160 KB (0.5-1 MB/s writes, `docs/METADATA.md:4545-4546`, plus 30-80 ms of directory and FAT work), plus the save's sort | ESTIMATED | S1 A, H, I |
 | Card writes, a compaction | — | A base of 24 B a played track (53 KB at 2,214; 467 KB at 19,478), read and written: 0.8-1.6 s idle at 19,478, longer with an MP3; rare, and only at a safe point (5.3) | ESTIMATED | S1 I |
 | Card writes, a rotation | `plays.1.jnl`'s 524 KB read on the loop (today's) | A save when it holds plays not saved: never at a session's first rotation after the boot's save (5.5) | READ | S1 G |
 | Card reads | — | `stats.bin` once at the boot: 30-110 ms typical, 0.1-0.27 s at 160 KB, one pass with the CRCs; a remount before the boot's first slot repeats it on the loop (one read, no waits); the base once a rank, on the worker; 1,536 B a track start | ESTIMATED | S1 A; S2 A, E |
@@ -1346,7 +1347,7 @@ Re-measure every line marked with a run.
 | Loop time | Passes about 13.5 ms with the join | The fold with the index 2-10 µs a slot (MODELLED); the save once a boot, its sort in ms (printed by S1 A and I); the rank's snapshot copy, one pass; the walk 15-25 passes of up to 8 ms, never with the join; UI as 7.10 | GUESS | S1 A, I; S2 A, F; S3 |
 | Worker time | — | The rank: 0.1-1.5 s at priority 0 while lit (2-2.5x its 0.05-0.6 s of CPU: `lib/core/ScanScheduler.h:44-47`); a track's read 15-20 ms | GUESS | S2 A, E |
 | Strings | 663 ids in `i18n/en.json` (MEASURED-HOST) | 85 ids; 666 texts owed in nine languages, plus 18 short forms of ARB words (8.1) | READ | `gen_ui_strings --report` |
-| The track ceiling | 23k-27k (`docs/METADATA.md:5488-5491`, ESTIMATED) | About 1.1-1.3k fewer at 98-115 KB resident (90 B a track) | MODELLED | — |
+| The track ceiling | 23k-27k (`docs/METADATA.md:5551-5554`, ESTIMATED) | About 1.1-1.3k fewer at 98-115 KB resident (90 B a track) | MODELLED | — |
 
 A slow pass is a UI hitch, not an audio risk: the sinks draw on a ring of about 1.5 s (`docs/ARCHITECTURE.md:83`).
 
