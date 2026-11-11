@@ -198,7 +198,10 @@ void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, boo
   sp.updating = library_.update() && library_.update()->asked();
   stats_.pass(sp, gate.nowMs);
   const playlog::WriteGate::Wait w = gate_.update(gate);  // (every pass: it follows the starts)
-  if (cardHeld || w != playlog::WriteGate::Wait::None) return;
+  // (This pass's verdict, for the library update step's give-back save:
+  // statsSaveWaits(), main.cpp's stepCard() after this.)
+  gateOpen_ = !cardHeld && w == playlog::WriteGate::Wait::None;
+  if (!gateOpen_) return;
   // The stats' blocks again after a library update (docs/LISTENING-STATS.md
   // 6.7): the update over, Auto DJ's rejoin done or none to come, the join
   // not Working; stats.bin read once (not from a card that is away: out of

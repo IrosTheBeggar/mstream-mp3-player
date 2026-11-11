@@ -106,6 +106,13 @@ public:
   // back now (the step's alsoFreed).
   size_t statsGiveBack(const char* where) { return active_ ? stats_.giveBack(where) : 0; }
   size_t statsResident() const { return active_ ? stats_.resident() : 0; }
+  // The give-back would save stats.bin first and this pass's write gate is
+  // shut (a start's refill, the gapless window, a low ring, an underrun's
+  // wake, a moving list, the card held): the update step waits in Asked
+  // (LibraryUpdate::In::writesWait), so that save keeps out of them as
+  // every other stats save does. loop()'s verdict, this pass's: stepPlays()
+  // runs before stepCard().
+  bool statsSaveWaits() const { return active_ && !gateOpen_ && stats_.savesFirst(); }
 
   // The boot's scan: slots a pass (four reads: about 10 KB).
   static constexpr uint32_t kScanSlotsPerPass = 4 * playlog::kReadBytes / playlog::kSlot;
@@ -143,6 +150,7 @@ private:
   playlog::Journal* journal_ = nullptr;
   playlog::Outbox* outbox_ = nullptr;
   playlog::WriteGate gate_;
+  bool gateOpen_ = false;  // this pass's write gate let the card's writes through (loop())
   int64_t tryT0_ = 0;  // when the try under way began (esp_timer's us: its line's ms)
   ListeningStats stats_;
   int64_t scanUs_ = 0;  // the boot's scan's pieces on the loop

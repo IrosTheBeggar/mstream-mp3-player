@@ -90,7 +90,8 @@ const char* refusedText(sg::Refused r) {
              "the card's stats.bin doesn't hold)";
     case sg::Refused::Behind:
       return "this session's RAM lacks plays the log holds above the card's MARK (a library update's give-back): no "
-             "save this session, the next boot folds them";
+             "save this session; the next boot folds what the log still holds (a rotation meanwhile loses those in "
+             "plays.1.jnl)";
   }
   return "";
 }
@@ -159,11 +160,17 @@ void ListeningStats::pass(const Pass& p, uint32_t nowMs) {
 
 bool ListeningStats::mayScan(uint32_t slots) {
   if (!glue_ || !glue_->wantsRoom()) return true;
-  // Given back to a library update (a remount's scan begun again
-  // meanwhile): it waits for takeBack(), which lets its first piece read
-  // stats.bin (6.7).
-  if (glue_->givenBack()) {
-    ++givenWaits_;
+  // Given back to a library update (before the boot's fold began, or a
+  // remount's scan begun again meanwhile): it waits for takeBack(), which
+  // reads stats.bin (or lets its first piece read it) (6.7).
+  if (glue_->givenBack()) return false;
+  // A library update asked and not over: the boot's fold neither begins
+  // nor grows behind its memory check and its fence (the plays wait in the
+  // Tracker), so the stats' blocks are the update's give-back's to take
+  // (none once the fold has begun: its blocks are the scan's) and nothing
+  // is carved while the build runs (6.7).
+  if (updating_) {
+    ++updateWaits_;
     return false;
   }
   // The boot's fold carves only in a pass where Auto DJ's join isn't
@@ -199,10 +206,11 @@ void ListeningStats::ready(uint32_t passes, int64_t scanUs) {
                                  "the boot");
   }
   Serial.printf("[listen] the boot's fold: %lu slots folded (%lu met twice, gap %lu) in the scan's %lu passes (%.0f ms "
-                "on the loop%s%s); RAM %lu B held, %lu B at the peak; MARK %lu rows, TRKD %lu, RCNT %lu%s\n",
+                "on the loop%s%s%s); RAM %lu B held, %lu B at the peak; MARK %lu rows, TRKD %lu, RCNT %lu%s\n",
                 static_cast<ul>(f.folded()), static_cast<ul>(f.twice()), static_cast<ul>(f.gap()),
                 static_cast<ul>(passes), static_cast<float>(scanUs) / 1000.0f,
                 scanWaits_ ? ", some waiting for Auto DJ's join" : "",
+                updateWaits_ ? ", some waiting for a library update" : "",
                 reserveFailed_ ? ", some pieces' room not taken first" : "", static_cast<ul>(f.held()),
                 static_cast<ul>(f.peak()), static_cast<ul>(f.rows(sf::kMark)), static_cast<ul>(f.rows(sf::kTrkd)),
                 static_cast<ul>(f.rows(sf::kRcnt)), more);
@@ -228,12 +236,13 @@ size_t ListeningStats::giveBack(const char* where) {
   if (!glue_) return 0;
   // (The line's buffers in a frame of their own, never under the save's:
   // the loop's stack, docs/LISTENING-STATS.md 11.)
+  const bool was = glue_->givenBack();
   const size_t bytes = glue_->giveBack();
-  if (bytes) {
+  if (!was && glue_->givenBack()) {
     logGiveBack(where, bytes);
-  } else if (glue_->booting() && !glue_->givenBack()) {
-    Serial.printf("[listen] NOT given back to the library update (%s): the boot's scan is under way, its fold's "
-                  "blocks are the scan's (held through this update)\n",
+  } else if (glue_->fold().booting() && !glue_->givenBack()) {
+    Serial.printf("[listen] NOT given back to the library update (%s): the boot's fold is under way, its blocks are "
+                  "the scan's (held through this update; the scan waits for it, so they don't grow)\n",
                   where);
   }
   return bytes;
@@ -254,19 +263,24 @@ __attribute__((noinline)) void ListeningStats::logGiveBack(const char* where, si
     snprintf(save, sizeof(save), "NOT saved first (%s%s%s, %.0f ms)", savedText(glue_->last()),
              glue_->last().step[0] ? ": its " : "", glue_->last().step, lastMs_);
   }
+  const char* scan = glue_->rereadPending() ? "; the card mounted again: the boot's scan, begun again, waits for the "
+                                              "re-read"
+                     : glue_->bootPending() ? "; the boot's fold not begun yet: the boot's scan waits for the re-read"
+                                            : "";
   Serial.printf("[listen] given back to the library update (%s): %lu B of PSRAM (the chunks, the spare, HOUR, DAYS), "
-                "MARK's %lu B kept (%lu row%s: the trim's and a rotation's cover); %s%s; plays written meanwhile wait "
+                "MARK's %lu B kept (%lu row%s: the trim's and a rotation's cover); %s%s%s; plays written meanwhile wait "
                 "in a ring of %lu\n",
                 where, static_cast<ul>(bytes), static_cast<ul>(g.kept), static_cast<ul>(g.markRows),
                 g.markRows == 1 ? "" : "s", save,
                 g.covers ? ""
                          : "; the plays this session folded since the card's stats.bin are off the screen until the "
-                           "next boot, which folds them (no save this session after the re-read)",
-                static_cast<ul>(sg::kRing));
+                           "next boot, which folds what the log still holds (no save this session after the re-read: a "
+                           "rotation meanwhile loses those in plays.1.jnl)",
+                scan, static_cast<ul>(sg::kRing));
 }
 
 bool ListeningStats::takeBackDue() const {
-  return glue_ && glue_->givenBack() && !updating_ && joinSettled_ && !joinWorking_;
+  return glue_ && glue_->takeBackDue() && !updating_ && joinSettled_ && !joinWorking_;
 }
 
 void ListeningStats::takeBack() {
@@ -288,12 +302,26 @@ __attribute__((noinline)) void ListeningStats::logTakeBack(float ms) {
   }
   if (!t.read) return;
   const sx::Opened& o = glue_->opened();
+  if (t.again) {
+    // (A read the card failed: made again at a later pass, the boot's
+    // waits apart; still given back meanwhile.)
+    const uint64_t now = boardclock::monoMs(), at = glue_->takeBackAtMs();
+    Serial.printf("[listen] stats.bin NOT read again after the library update (%lu s given back; read %lu of %lu, %.0f "
+                  "ms): UNREAD (%s%s: the card failed a read): still given back, read again in %lu ms; %lu play%s "
+                  "wait in the ring\n",
+                  static_cast<ul>(after), static_cast<ul>(t.tries), static_cast<ul>(sg::kTakeBackReads), ms,
+                  o.inBase ? "its base: " : "", cc::whyName(o.why), static_cast<ul>(at > now ? at - now : 0),
+                  static_cast<ul>(glue_->ringCount()), glue_->ringCount() == 1 ? "" : "s");
+    return;
+  }
   if (!t.on) {
-    Serial.printf("[listen] stats.bin read again after the library update (%lu s given back; one read, %.0f ms): %s "
+    Serial.printf("[listen] stats.bin read again after the library update (%lu s given back; %lu read%s, %.0f ms): %s "
                   "(%s%s): the stats are OFF this session (no fold, no save, no trim); the %lu play%s written "
-                  "meanwhile are the next boot's\n",
-                  static_cast<ul>(after), ms, sx::readName(o.read), o.inBase ? "its base: " : "", cc::whyName(o.why),
-                  static_cast<ul>(t.dropped + t.over), t.dropped + t.over == 1 ? "" : "s");
+                  "meanwhile are the next boot's while the log holds them (a rotation this session loses those in "
+                  "plays.1.jnl)\n",
+                  static_cast<ul>(after), static_cast<ul>(t.tries), t.tries == 1 ? "" : "s", ms, sx::readName(o.read),
+                  o.inBase ? "its base: " : "", cc::whyName(o.why), static_cast<ul>(t.dropped + t.over),
+                  t.dropped + t.over == 1 ? "" : "s");
     return;
   }
   char file[80];
@@ -304,17 +332,18 @@ __attribute__((noinline)) void ListeningStats::logTakeBack(float ms) {
     snprintf(file, sizeof(file), "none on the card");
   }
   const sf::Fold& f = glue_->fold();
-  Serial.printf("[listen] stats.bin read again after the library update (%lu s given back; one read, %.0f ms): %s, "
+  Serial.printf("[listen] stats.bin read again after the library update (%lu s given back; %lu read%s, %.0f ms): %s, "
                 "%s; %lu play%s from the ring folded (%lu the card's MARK covers already), %lu past it; RAM %lu B "
                 "held; %s\n",
-                static_cast<ul>(after), ms, file,
-                t.same ? "every play this session held in it"
-                       : "NOT every play this session held in it (the give-back's save didn't land, the fold had run "
-                         "out of memory, or another copy)",
+                static_cast<ul>(after), static_cast<ul>(t.tries), t.tries == 1 ? "" : "s", ms, file,
+                glue_->bootPending() ? "the boot's fold folds the log above its MARK next (it hadn't begun)"
+                : t.same             ? "every play this session held in it"
+                                     : "NOT every play this session held in it (the give-back's save didn't land, the "
+                                       "fold had run out of memory, or another copy)",
                 static_cast<ul>(t.folded), t.folded == 1 ? "" : "s", static_cast<ul>(t.covered),
                 static_cast<ul>(t.over), static_cast<ul>(f.held()),
                 t.behind ? "saves REFUSED this session (RAM lacks plays the log holds above the card's MARK: the next "
-                           "boot folds them)"
+                           "boot folds what the log still holds; a rotation meanwhile loses those in plays.1.jnl)"
                          : "saves on");
 }
 
@@ -538,19 +567,30 @@ void ListeningStats::printState() {
                       : g.store().changed()       ? "on; the card's stats.bin changed: no save this session"
                       : f.noMemory()              ? "on; the fold ran out of memory: no save this session"
                       : g.behind()                ? "on; behind its log after a library update's give-back: no save "
-                                                    "this session (the next boot folds what RAM lacks)"
+                                                    "this session (the next boot folds what the log still holds of "
+                                                    "what RAM lacks; a rotation meanwhile loses those in plays.1.jnl)"
                                                   : "on";
   Serial.printf("[listen] H: %s; read %s (%s%s), %lu read again since\n", phase, sx::readName(o.read),
                 o.inBase ? "its base: " : "", cc::whyName(o.why), static_cast<ul>(g.rereads()));
   if (g.givenBack()) {
+    // (What waits for the re-read: the glue's own state, now.)
+    const char* scan = g.rereadPending() ? "; the boot's scan, begun again, waits for it"
+                       : g.bootPending() ? "; the boot's scan waits for it (its fold not begun)"
+                                         : "";
+    char tries[96] = "";
+    if (g.takeBackTries()) {
+      const uint64_t now = boardclock::monoMs(), at = g.takeBackAtMs();
+      snprintf(tries, sizeof(tries), "; the card failed %lu of its reads, the next in %lu ms",
+               static_cast<ul>(g.takeBackTries()), static_cast<ul>(at > now ? at - now : 0));
+    }
     Serial.printf("[listen] given back %lu s ago (%lu B; MARK's %lu B kept, %lu rows): %lu play%s in the ring, %lu past "
-                  "it; taken again once the update is over and Auto DJ's join settled (%s, %s%s)\n",
+                  "it; taken again once the update is over and Auto DJ's join settled (%s, %s%s%s)\n",
                   static_cast<ul>((millis() - givenAt_) / 1000), static_cast<ul>(g.gaveBack().bytes),
                   static_cast<ul>(g.gaveBack().kept), static_cast<ul>(g.gaveBack().markRows),
                   static_cast<ul>(g.ringCount()), g.ringCount() == 1 ? "" : "s", static_cast<ul>(g.ringOver()),
                   updating_ ? "the update not over" : "the update over",
-                  joinWorking_ ? "the join working" : joinSettled_ ? "the join settled" : "the join to come",
-                  givenWaits_ ? "; the boot's scan, begun again, waits for it" : "");
+                  joinWorking_ ? "the join working" : joinSettled_ ? "the join settled" : "the join to come", tries,
+                  scan);
   } else if (g.giveBacks()) {
     const sg::TookBack& t = g.tookBack();
     Serial.printf("[listen] given back to %lu library update%s this session; the last re-read: %s, %s, %lu folded from "

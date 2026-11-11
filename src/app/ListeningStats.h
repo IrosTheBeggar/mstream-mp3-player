@@ -23,13 +23,14 @@
 //     newer major, no memory for the fold) the glue is still given: it covers
 //     nothing, so nothing is trimmed (5.5);
 //   - each pass (pass()): the update step's safe point for a compaction
-//     (LibraryUpdate::safePoint(): nothing playing, or 20 s left of the heard
-//     track and no seek in the last 2 s; a play waiting for the headphones or
+//     (LibraryUpdate::safePoint(): nothing playing, or 20 s or more left of
+//     the heard track and no seek in the last 2 s; a play waiting for the headphones or
 //     a restart asked isn't one, and counts as playing for a compaction),
 //     the spare chunk again where Auto DJ's join isn't Working; before each
 //     piece of the boot's scan its room, and before its first the boot's
 //     fold begun or a remount's read of stats.bin made (mayScan(): none
-//     while the join is Working, and the scan waits that pass: 5.4, 5.6);
+//     while the join is Working, or while a library update is asked and
+//     not over, and the scan waits that pass: 5.4, 5.6, 6.7);
 //   - written(): the live fold of each play written (hash-keyed: no id in S1);
 //   - ending(): the orderly end's flush (no read at a remount inside it, no
 //     boot's save, a rotation's only with 1 s of its budget left);
@@ -41,13 +42,16 @@
 //     Auto DJ's fence()): the fold saved first when it holds plays the
 //     card's stats.bin doesn't, then every resident block but MARK's given
 //     back (resident(): the step's UpdateEnv::alsoFreed counts them); the
-//     plays written meanwhile wait in the glue's ring. takeBack() once the
-//     update is over (LibraryUpdate::asked() false) and Auto DJ's join is
-//     settled (AutoDj::joinSettled(): rejoined, or none to come), at a pass
-//     the write gate lets through, the join not Working and the card not
-//     away: stats.bin read once (a remount's verdicts), the ring folded;
-//     the boot's scan begun again by a remount meanwhile waits for it
-//     (mayScan()) and reads it at its next piece;
+//     plays written meanwhile wait in the glue's ring. The update step
+//     waits in Asked while that save would run at a pass the write gate
+//     shuts (savesFirst(), PlayHistory::statsSaveWaits()). takeBack() once
+//     the update is over (LibraryUpdate::asked() false) and Auto DJ's join
+//     is settled (AutoDj::joinSettled(): rejoined, or none to come), at a
+//     pass the write gate lets through, the join not Working and the card
+//     not away: stats.bin read (a remount's verdicts; a read the card
+//     failed made again at later passes, the boot's waits apart), the ring
+//     folded; the boot's scan, its fold not begun or begun again by a
+//     remount meanwhile, waits for it (mayScan());
 //   - [listen] lines: the read (and a remount's), each save (the boot's, a
 //     rotation's, Hs's) with its ms and bytes, a log file not read whole, the
 //     boot's fold at Ready, a library update's give-back (its save in the
@@ -76,8 +80,9 @@ public:
   void pass(const Pass& p, uint32_t nowMs);
   // Before a piece of the boot's scan of `slots` slots: true, its room taken
   // (a remount's read made, the boot's fold begun, first), or nothing to
-  // take; false: the scan waits this pass (the join works, or the blocks
-  // are given back to a library update until takeBack()).
+  // take; false: the scan waits this pass (the join works, a library update
+  // is asked and not over, or the blocks are given back to one until
+  // takeBack()).
   bool mayScan(uint32_t slots);
   // A library update's give-back (6.7): `where` its point ("its memory
   // check", "its fence"); the bytes given back (0: none held, given back
@@ -85,9 +90,14 @@ public:
   size_t giveBack(const char* where);
   // What giveBack() would give back now (the step's UpdateEnv::alsoFreed).
   size_t resident() const { return glue_ ? glue_->resident() : 0; }
+  // The give-back would save first (the fold holds plays the card's
+  // stats.bin doesn't): the update step waits for a pass the play log's
+  // write gate lets through (PlayHistory::statsSaveWaits()).
+  bool savesFirst() const { return glue_ && glue_->resident() && glue_->fold().dirty(); }
   // The blocks again is due: given back, the update over, Auto DJ's join
-  // settled and not Working (this pass's look). takeBack() at a pass the
-  // write gate lets through, the card not away: the re-read, its line.
+  // settled and not Working (this pass's look), and a read the card failed
+  // waited for. takeBack() at a pass the write gate lets through, the card
+  // not away: the re-read, its line.
   bool takeBackDue() const;
   void takeBack();
   // The journal ready (the boot's scan done: `passes` and `scanUs` its
@@ -131,8 +141,7 @@ private:
   bool joinWorking_ = false;
   bool joinSettled_ = true;
   bool updating_ = false;
-  uint32_t givenAt_ = 0;     // the last give-back (millis())
-  uint32_t givenWaits_ = 0;  // the boot's scan's passes waiting for the take-back
+  uint32_t givenAt_ = 0;  // the last give-back (millis())
   bool seeksKnown_ = false;
   uint32_t seeks_ = 0;
   bool seekSeen_ = false;
@@ -142,5 +151,6 @@ private:
   int64_t saveT0_ = 0;     // the save under way began (esp_timer's us)
   float lastMs_ = 0.0f;    // the last save's
   uint32_t reserveFailed_ = 0;
-  uint32_t scanWaits_ = 0;  // passes the boot's scan waited for the join
+  uint32_t scanWaits_ = 0;    // passes the boot's scan waited for the join
+  uint32_t updateWaits_ = 0;  // ... for a library update asked (LibraryUpdate::asked())
 };
