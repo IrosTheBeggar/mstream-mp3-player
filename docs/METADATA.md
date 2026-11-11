@@ -2034,10 +2034,11 @@ device MUST NOT write `/.mstream` in any other role.
   whole when its frame and every section's CRC hold (and when its major
   is newer, or it holds a REQUIRED section this firmware doesn't know:
   it is renamed, then left alone), torn only when the frame fails its own
-  checks, and no verdict (kept) when the card fails the read. The per-
-  track rows live in a **base file**, `stats-<gen>.bin`, written under a
-  fresh name (never one `stats.bin` names) and never replaced: `stats.bin`
-  names it, so the rename of `stats.bin` is the one commit point. A base file `stats.bin` doesn't
+  checks, and no verdict (kept) when the card fails the read or the
+  file's records are damaged. The per-track rows live in a **base
+  file**, `stats-<gen>.bin`, written under a fresh name (never one
+  `stats.bin` names) and never replaced: `stats.bin` names it, so the
+  rename of `stats.bin` is the one commit point. A base file `stats.bin` doesn't
   name (the one before or after a cut compaction) is removed only after
   the named one checked whole. The stats are primary data, not a cache: the
   device can't rebuild what its trims removed (2.11).
