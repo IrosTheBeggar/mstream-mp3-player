@@ -1502,32 +1502,59 @@ void test_compaction_rule() {
   TEST_ASSERT_FALSE(sf::compactionDue(4097, 100000, true, false));
 }
 
-// ---------------------------------------------------------------------------
-// A full log never synced.
-// ---------------------------------------------------------------------------
-void test_a_full_log_never_synced() {
-  // Both files at the cap: 13,106 slots, 25 plays a day for 524 days, of
-  // 5,000 tracks; the scan reads plays.jnl (the newer) first. As the glue
-  // would: reserve() before each piece of 128 slots.
-  const uint32_t total = 2 * pl::kFileSlots;
-  std::vector<pl::Slot> slots;
-  Rng rng(2026);
-  std::set<uint64_t> hashes;
-  for (uint32_t q = 1; q <= total; ++q) {
-    const uint64_t h = hashOf(rng.below(5000));
-    hashes.insert(h);
-    slots.push_back(slot(kDevA, kEpochA, q, h, 30000 + rng.below(200000), 200000, 1 + rng.below(3),
-                         static_cast<uint8_t>(rng.below(4)), at(q / 25, 8 + (q % 25) / 2, q % 60)));
-  }
+// release(): the stats off for the session: every block given back, and
+// begin() and a load carve them again.
+void test_release_gives_every_block_back() {
   gHeap.reset();
+  const size_t live0 = gHeap.live;
   sf::Fold f(heapAlloc, heapFree);
   TEST_ASSERT_TRUE(f.begin());
   f.clear();
-  TEST_ASSERT_TRUE(f.reserveLoad(0, 0));
-  f.resetPeak();
+  TEST_ASSERT_TRUE(f.reserveLoad(2000, 700));
   cc::msmf::Acks none;
-  Model m;
-  const auto t0 = std::chrono::steady_clock::now();
+  TEST_ASSERT_TRUE(f.beginBoot(none));
+  for (uint32_t q = 1; q <= 300; ++q)
+    f.bootSlot(slot(kDevA, kEpochA, q, hashOf(q), 200000, 200000, 1, 1, at(100, 8)), 0);
+  TEST_ASSERT_TRUE(f.held() > 0);
+  f.release();
+  TEST_ASSERT_EQUAL_size_t(0, f.held());
+  TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
+  TEST_ASSERT_FALSE(f.booting());
+  TEST_ASSERT_FALSE(f.spare());
+  TEST_ASSERT_EQUAL_UINT32(0, f.chunks(sf::kRcnt) + f.chunks(sf::kTrkd));
+  TEST_ASSERT_EQUAL_UINT32(0, f.folded());
+  // Again: the same as a fresh fold's.
+  TEST_ASSERT_TRUE(f.begin());
+  TEST_ASSERT_EQUAL_size_t(6720 + 6400 + 1536, f.held());
+  f.release();
+  f.release();  // (twice: nothing more)
+  TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
+}
+
+// ---------------------------------------------------------------------------
+// A full log never synced.
+// ---------------------------------------------------------------------------
+namespace {
+
+// Both files at the cap: 13,106 slots, 25 plays a day for 524 days, of
+// 5,000 tracks.
+std::vector<pl::Slot> fullLog(std::set<uint64_t>* hashes) {
+  const uint32_t total = 2 * pl::kFileSlots;
+  std::vector<pl::Slot> slots;
+  Rng rng(2026);
+  for (uint32_t q = 1; q <= total; ++q) {
+    const uint64_t h = hashOf(rng.below(5000));
+    if (hashes) hashes->insert(h);
+    slots.push_back(slot(kDevA, kEpochA, q, h, 30000 + rng.below(200000), 200000, 1 + rng.below(3),
+                         static_cast<uint8_t>(rng.below(4)), at(q / 25, 8 + (q % 25) / 2, q % 60)));
+  }
+  return slots;
+}
+
+// Its boot's fold, as the glue would: the scan reads plays.jnl (the newer)
+// first, reserve() before each piece of 128 slots; and into the model.
+void foldFullLog(sf::Fold& f, Model* m, const std::vector<pl::Slot>& slots) {
+  cc::msmf::Acks none;
   TEST_ASSERT_TRUE(f.beginBoot(none));
   uint32_t piece = 0;
   for (int file = 0; file <= 1; ++file) {
@@ -1535,8 +1562,28 @@ void test_a_full_log_never_synced() {
     for (uint32_t i = from; i < from + pl::kFileSlots; ++i) {
       if (piece++ % 128 == 0) TEST_ASSERT_TRUE(f.reserve(128));
       f.bootSlot(slots[i], file);
+      if (m) m->fold(slots[i], 1);
     }
   }
+}
+
+}  // namespace
+
+void test_a_full_log_never_synced() {
+  // As the glue would: reserve() before each piece of 128 slots.
+  const uint32_t total = 2 * pl::kFileSlots;
+  std::set<uint64_t> hashes;
+  const std::vector<pl::Slot> slots = fullLog(&hashes);
+  gHeap.reset();
+  sf::Fold f(heapAlloc, heapFree);
+  TEST_ASSERT_TRUE(f.begin());
+  f.clear();
+  TEST_ASSERT_TRUE(f.reserveLoad(0, 0));
+  f.resetPeak();
+  Model m;
+  const auto t0 = std::chrono::steady_clock::now();
+  foldFullLog(f, nullptr, slots);
+  const size_t rcntPeakRows = f.rows(sf::kRcnt), rcntPeakChunks = f.chunks(sf::kRcnt);
   f.endBoot();
   const auto t1 = std::chrono::steady_clock::now();
   for (int file = 0; file <= 1; ++file) {
@@ -1545,17 +1592,69 @@ void test_a_full_log_never_synced() {
   }
   TEST_ASSERT_EQUAL_UINT32(total, f.folded());
   TEST_ASSERT_EQUAL_UINT32(hashes.size(), f.rows(sf::kTrkd));
-  const size_t rcntRows = f.rows(sf::kRcnt), trkdChunks = f.chunks(sf::kTrkd), rcntChunks = f.chunks(sf::kRcnt);
+  TEST_ASSERT_EQUAL_UINT32(m.rcnt.size(), rcntPeakRows);
+  const size_t trkdChunks = f.chunks(sf::kTrkd);
   const Bytes mine = saveNow(f, at(530, 9));
   m.save(at(530, 9));
   TEST_ASSERT_TRUE_MESSAGE(mine == m.file(), hex(mine, m.file()).c_str());
   const double us = std::chrono::duration<double, std::micro>(t1 - t0).count();
-  printf("full log: %u slots, %u hashes (TRKD %u chunks), RCNT %u rows (%u chunks) before the save; "
+  printf("full log: %u slots, %u hashes (TRKD %u chunks), RCNT %u rows (%u chunks) at the fold's end; "
          "peak %u bytes held (heap %u), %.2f us a slot on this host; stats.bin %u bytes\n",
          static_cast<unsigned>(total), static_cast<unsigned>(hashes.size()), static_cast<unsigned>(trkdChunks),
-         static_cast<unsigned>(rcntRows), static_cast<unsigned>(rcntChunks), static_cast<unsigned>(f.peak()),
+         static_cast<unsigned>(rcntPeakRows), static_cast<unsigned>(rcntPeakChunks), static_cast<unsigned>(f.peak()),
          static_cast<unsigned>(gHeap.peak), us / total, static_cast<unsigned>(mine.size()));
   TEST_ASSERT_TRUE(f.peak() < 512 * 1024);
+}
+
+// A boot whose save doesn't land (refused, failed, held): RCNT, pruned
+// only by a save that lands, is held to its 4,096-row cap by whole days at
+// the fold's end (the save's cut without the date's), not a full log's
+// 13,000 rows for the session. A later save writes the file statsref's
+// would (the model's, which keeps every row till then): live plays dated
+// before that cut (a clock gone back) add no RCNT row, which that save
+// cuts anyway; with the clock unset (no date cut), and with it set.
+void test_a_boot_whose_save_doesnt_land() {
+  const std::vector<pl::Slot> slots = fullLog(nullptr);
+  size_t heldAfter = 0, heldLanded = 0;
+  for (int clock = 0; clock < 2; ++clock) {
+    gHeap.reset();
+    sf::Fold f(heapAlloc, heapFree);
+    TEST_ASSERT_TRUE(f.begin());
+    f.clear();
+    TEST_ASSERT_TRUE(f.reserveLoad(0, 0));
+    Model m;
+    foldFullLog(f, &m, slots);
+    TEST_ASSERT_TRUE(f.rows(sf::kRcnt) > sf::kRcntRows);
+    f.endBoot();  // (the boot's save refused: the glue ends the fold)
+    TEST_ASSERT_TRUE(f.rows(sf::kRcnt) <= sf::kRcntRows);
+    TEST_ASSERT_TRUE(f.rows(sf::kRcnt) > sf::kRcntRows - 25);  // (whole days of at most 25 rows)
+    TEST_ASSERT_TRUE(f.chunks(sf::kRcnt) <= 4);
+    TEST_ASSERT_TRUE(f.rcntFloor() > 0);
+    TEST_ASSERT_TRUE(f.dirty());
+    if (clock == 0) heldAfter = f.held();
+    // Live plays: one dated before the cut, two after (one a row RCNT
+    // holds, one new), one undated.
+    const uint32_t floor = f.rcntFloor();
+    const uint32_t seq0 = static_cast<uint32_t>(slots.size());
+    const pl::Slot live[4] = {
+        slot(kDevA, kEpochA, seq0 + 1, slots[0].pathHash, 120000, 200000, 1, 1, at(floor - 3, 9)),
+        slot(kDevA, kEpochA, seq0 + 2, slots.back().pathHash, 120000, 200000, 1, 1, slots.back().startedAt + 60000),
+        slot(kDevA, kEpochA, seq0 + 3, hashOf(9001), 120000, 200000, 1, 3, at(floor + 2, 10)),
+        slot(kDevA, kEpochA, seq0 + 4, hashOf(9002), 120000, 200000, 1, 2, 0)};
+    for (const pl::Slot& s : live) {
+      f.liveSlot(s);
+      m.fold(s, 2);
+    }
+    const uint64_t now = clock ? at(530, 9) : 0;
+    const Bytes mine = saveNow(f, now);
+    m.save(now);
+    TEST_ASSERT_TRUE_MESSAGE(mine == m.file(), hex(mine, m.file()).c_str());
+    TEST_ASSERT_EQUAL_UINT32(0, f.rcntFloor());  // (the save landed: the card's file is RAM's)
+    if (clock == 1) heldLanded = f.held();
+  }
+  printf("a full log's boot whose save doesn't land: %u bytes held after the fold (RCNT at its cap); %u after a "
+         "save that lands (the clock set)\n",
+         static_cast<unsigned>(heldAfter), static_cast<unsigned>(heldLanded));
 }
 
 int main(int, char**) {
@@ -1581,5 +1680,7 @@ int main(int, char**) {
   RUN_TEST(test_load_checks_the_order);
   RUN_TEST(test_compaction_rule);
   RUN_TEST(test_a_full_log_never_synced);
+  RUN_TEST(test_a_boot_whose_save_doesnt_land);
+  RUN_TEST(test_release_gives_every_block_back);
   return UNITY_END();
 }

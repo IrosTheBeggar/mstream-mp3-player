@@ -224,10 +224,6 @@ public:
   // is the one read, and a change seen before is forgotten.
   Opened read(statsfold::Fold& fold, uint8_t* work, WaitFn wait);
 
-  // The save of `fold` (5.5). The glue's own guards come first (the card
-  // away or another card, the end's flush for the boot's save).
-  SaveReport save(statsfold::Fold& fold, const SaveAsk& ask, uint8_t* work);
-
   // The card's copy this RAM stands on: none, or stats.bin's generation and
   // header CRC.
   struct Copy {
@@ -236,6 +232,27 @@ public:
     uint32_t headerCrc = 0;
     uint32_t baseGen = 0;  // the base it names (0: none), whole or lost: a compaction never writes that name
   };
+
+  // The save of `fold` (5.5). The glue's own guards come first (the card
+  // away or another card, the end's flush for the boot's save). Its step 1
+  // in two calls: promote() (a tmp held by an earlier save takes stats.bin's
+  // place, when the save would go that far), then save() with what it came
+  // to: the glue calls them one after the other, so the promotion's frames
+  // (replace()'s and a twin's rename's) are never under the save's (the
+  // loop's stack: 11). save(fold, ask, work) makes both calls. (One byte
+  // between the two: the held copy itself stays the store's.)
+  enum class Held : uint8_t {
+    None,      // no tmp held, or the save wouldn't come to its step 1
+    Promoted,  // it took stats.bin's place
+    Gone,      // it was gone: stats.bin is the held copy, or the one before it
+    Fault,     // the card failed a question of it: the save fails ("held tmp")
+  };
+  Held promote(statsfold::Fold& fold);
+  SaveReport save(statsfold::Fold& fold, const SaveAsk& ask, uint8_t* work, Held held);
+  SaveReport save(statsfold::Fold& fold, const SaveAsk& ask, uint8_t* work) {
+    const Held held = promote(fold);
+    return save(fold, ask, work, held);
+  }
   const Copy& cardCopy() const { return expect_; }
   bool on() const { return on_; }
   bool changed() const { return changed_; }

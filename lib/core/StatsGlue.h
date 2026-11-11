@@ -19,13 +19,19 @@
 // app/ListeningStats is the firmware's side (PSRAM, the card guard, the
 // clocks, the update step's safe point, the [listen] lines, the console's H).
 //   - The read (5.4): begin(), in PlayHistory::begin() before the journal's
-//     begin(), with the boot's waits; again at each scanBegan(true) (a
-//     remount: one read, no waits, the folds before it dropped). None while
-//     the orderly end flushes: the folds are dropped then, and nothing more
-//     is saved or trimmed by them this session.
-//   - The boot's fold (5.6): slot() and partial() to the fold, its room
-//     taken before each piece of the scan (reserve()), ended when the
-//     journal is ready (ready(): a partial scan's, which asks no save).
+//     begin(), with the boot's waits; again after each scanBegan(true) (a
+//     remount: one read, no waits, the folds before it dropped at once, the
+//     read itself at the scan's first reserve(), a pass that may carve).
+//     None while the orderly end flushes: the folds are dropped then, and
+//     nothing more is saved or trimmed by them this session. A read that
+//     leaves the stats off gives every block of the fold back.
+//   - The boot's fold (5.6): begun (its ranges, ACKS rows and indexes
+//     carved) at the scan's first reserve(), not at scanBegan(): in the
+//     loop, in a pass that may carve, never in setup(); slot() and
+//     partial() to the fold, its room taken before each piece of the scan
+//     (reserve()), ended when the journal is ready (ready(): a partial
+//     scan's, which asks no save). A scan no reserve() came before (the
+//     end's flush finishing it) begins it at its first call.
 //   - The live fold of each play written (written(): Outbox::Env's).
 //   - The saves (5.5): the boot's and a rotation's (the journal's), and Hs
 //     (the console's, the rotation's path: never a compaction). Each is
@@ -148,15 +154,22 @@ public:
   // `acks`: the root's (copied), for each boot's fold.
   const statsfile::Opened& begin(const cardcontract::msmf::Acks& acks, statsfile::Store::WaitFn wait);
   // The stats run: read (or absent, or corrupt and set aside), with memory
-  // for the fold, and not dropped at the end.
-  bool on() const { return store_.on() && !dropped_; }
+  // for the fold, not dropped at the end, and no remount's read waiting.
+  bool on() const { return store_.on() && !dropped_ && !rereadPending_; }
   bool dropped() const { return dropped_; }      // a remount in the end's flush dropped the folds
   bool partialSeen() const { return partial_; }  // a log file not read whole this session
-  bool booting() const { return fold_.booting(); }
+  // The boot's scan under way for the stats: a remount's read to make, the
+  // boot's fold to begin, or folding.
+  bool booting() const { return rereadPending_ || bootPending_ || fold_.booting(); }
   bool ending() const { return ending_; }
+  // The next piece of the boot's scan takes the stats' room first
+  // (reserve()): a read to make, a fold to begin, or a fold under way.
+  bool wantsRoom() const { return rereadPending_ || bootPending_ || (on() && fold_.booting()); }
+  bool rereadPending() const { return rereadPending_; }
 
   // Before each piece of the boot's scan, in a pass that may carve (Auto
-  // DJ's join not Working): room for the next `slots` folds. False: none
+  // DJ's join not Working, the write gate open): a remount's read, the
+  // boot's fold begun, and room for the next `slots` folds. False: no room
   // (nothing lost: a fold then carves what it needs).
   bool reserve(uint32_t slots);
   // The journal ready: a boot's fold that asked no save (a partial scan)
@@ -170,13 +183,11 @@ public:
   // The console's Hs: a save now, the rotation's path. `fenced`: the
   // library update's fence is up.
   bool hs(bool fenced);
-  // The orderly end flushes (PlayHistory::flush()): from here no read, no
-  // boot's save, and a rotation's only while kEndSaveMs of its budget is
-  // left before `untilMs` (the board's monotonic ms). notEnding(): back.
-  void ending(uint64_t untilMs) {
-    ending_ = true;
-    until_ = untilMs;
-  }
+  // The orderly end flushes (PlayHistory::flush()): from here no read (a
+  // remount's still to make: the folds dropped), no boot's save, and a
+  // rotation's only while kEndSaveMs of its budget is left before
+  // `untilMs` (the board's monotonic ms). notEnding(): back.
+  void ending(uint64_t untilMs);
   void notEnding() { ending_ = false; }
 
   // The last save asked: which, refused or not, and what the store did.
@@ -226,6 +237,8 @@ private:
   uint8_t* carve();
   void giveBack(uint8_t* p);
   statsfile::Opened readNow(statsfile::Store::WaitFn wait);
+  void settle();  // a remount's read, the boot's fold begun: whatever waits
+  void drop();    // the folds dropped (a remount while the end flushes)
   bool refuse(Kind k, Refused r);
   bool commit(Kind k);
   void noteLog(const playlog::Slot& s);
@@ -243,7 +256,8 @@ private:
   Kind lastKind_ = Kind::Boot;
   Refused lastRefused_ = Refused::None;
   uint32_t asked_ = 0, written_ = 0, rereads_ = 0;
-  bool foldReady_ = false;  // begin() carved the fold's blocks
+  bool rereadPending_ = false;  // a remount's read of stats.bin to make (settle())
+  bool bootPending_ = false;    // the boot's fold to begin (settle())
   bool partial_ = false;
   bool dropped_ = false;
   bool ending_ = false;

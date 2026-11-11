@@ -128,6 +128,7 @@ void ListeningStats::pass(const Pass& p, uint32_t nowMs) {
   }
   if (seekSeen_ && nowMs - seekAt_ >= LibraryUpdate::kSeekQuietMs) seekSeen_ = false;
   playing_ = p.playing;
+  waiting_ = p.waiting;
   safePoint_ = LibraryUpdate::safePoint(p.playing, p.waiting, p.trackLeftMs, seekSeen_ ? nowMs - seekAt_ : UINT32_MAX);
   // The spare chunk again, where it may be carved (5.6).
   if (!p.joinWorking && !glue_->booting()) glue_->keepSpare();
@@ -135,9 +136,11 @@ void ListeningStats::pass(const Pass& p, uint32_t nowMs) {
 }
 
 bool ListeningStats::mayScan(uint32_t slots) {
-  if (!glue_ || !glue_->on() || !glue_->booting()) return true;
+  if (!glue_ || !glue_->wantsRoom()) return true;
   // The boot's fold carves only in a pass where Auto DJ's join isn't
-  // Working: otherwise the scan waits this pass (5.6).
+  // Working: otherwise the scan waits this pass (5.6). So does a remount's
+  // read of stats.bin (its work memory, the load's chunks: reserve() makes
+  // it), and the boot's fold's first blocks.
   if (joinWorking_) {
     ++scanWaits_;
     return false;
@@ -201,7 +204,10 @@ void ListeningStats::asking(sg::Kind k, sx::SaveAsk* ask) {
   ask->nowMs = boardclock::now();  // (0 while the clock is unset)
   ask->hasCommit = hasCommit_;
   ask->commitSec = commitSec_;
-  ask->playing = playing_;
+  // (A play waiting for the headphones, or a restart asked, is playing for
+  // a compaction: its start, or the restart, mustn't wait behind one. Not
+  // a safe point either: LibraryUpdate::safePoint().)
+  ask->playing = playing_ || waiting_;
   ask->safePoint = safePoint_;
   saveT0_ = esp_timer_get_time();
 }
@@ -210,7 +216,7 @@ void ListeningStats::began(bool again, const sx::Opened* read) {
   readyLogged_ = false;
   if (!again) return;  // (the boot's read: begin()'s line)
   if (!read) {
-    Serial.println("[listen] the card mounted again while the end flushes: stats.bin NOT read again; the folds "
+    Serial.println("[listen] the card mounted again, and the end flushes: stats.bin NOT read again; the folds "
                    "dropped, nothing more saved this session (the next boot folds again)");
     return;
   }
@@ -383,6 +389,7 @@ void ListeningStats::printState() {
   const sf::Fold& f = g.fold();
   const sx::Opened& o = g.opened();
   const char* phase = g.dropped()                 ? "OFF (the folds dropped at the end)"
+                      : g.rereadPending()         ? "the card mounted again: stats.bin read at the scan's next piece"
                       : !g.on()                   ? "OFF"
                       : g.booting()               ? "folding (the boot's scan)"
                       : g.partialSeen()           ? "on; a log file not read whole: no save this session"

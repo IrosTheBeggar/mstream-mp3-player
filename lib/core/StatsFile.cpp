@@ -636,7 +636,23 @@ __attribute__((noinline)) bool Store::compact(sf::Fold& fold, Scratch* sc, uint8
   return true;
 }
 
-SaveReport Store::save(sf::Fold& fold, const SaveAsk& ask, uint8_t* work) {
+Store::Held Store::promote(sf::Fold& fold) {
+  // Only where save() would come to its step 1: the stats on, the card's
+  // copy unchanged, a fold that may be saved and has something new (the
+  // boot's fold ended first, as save() ends it: its gap may be new).
+  fold.endBoot();
+  if (!held_.present || !on_ || changed_ || fold.partialScan() || fold.noMemory() || !fold.dirty()) return Held::None;
+  const Promote pr = promoteHeld();
+  if (pr == Promote::Fault) return Held::Fault;  // (the tmp still held)
+  // Gone: stats.bin is the held copy, or the one before it, and the save
+  // that goes on takes either (held_ kept till then: a save that stops
+  // before it, no work memory, leaves the next one to ask again).
+  if (pr == Promote::Gone) return Held::Gone;
+  held_ = Copy();
+  return pr == Promote::Promoted ? Held::Promoted : Held::None;
+}
+
+SaveReport Store::save(sf::Fold& fold, const SaveAsk& ask, uint8_t* work, Held held) {
   SaveReport r;
   // The boot's fold ends here whatever the save does (plan()'s first step,
   // which a refused save never reaches).
@@ -678,18 +694,15 @@ SaveReport Store::save(sf::Fold& fold, const SaveAsk& ask, uint8_t* work) {
     return r;
   };
 
-  // 1. A held tmp promoted first; settle() with the real check; the card's
-  // copy against the one this RAM stands on; prepareTmp().
-  bool either = false;
+  // 1. A held tmp promoted first (promote(), before this call); settle()
+  // with the real check; the card's copy against the one this RAM stands
+  // on; prepareTmp().
+  if (held == Held::Fault) return failed("held tmp");
+  r.heldPromoted = held == Held::Promoted;
+  const bool either = held == Held::Gone;
   Copy alt;
-  if (held_.present) {
-    const Promote pr = promoteHeld();
-    if (pr == Promote::Fault) return failed("held tmp");
-    r.heldPromoted = pr == Promote::Promoted;
-    if (pr == Promote::Gone) {
-      either = true;  // stats.bin is the held copy, or the one before it
-      alt = held_;
-    }
+  if (either) {
+    alt = held_;
     held_ = Copy();
   }
   StatsCheck check(a, kBufBytes);

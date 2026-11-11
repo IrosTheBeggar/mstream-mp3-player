@@ -101,11 +101,13 @@ void waitHook(uint32_t ms) { gWaits.push_back(ms); }
 struct Heap {
   std::map<void*, size_t> blocks;
   size_t held = 0, peak = 0;
+  uint32_t carves = 0;
 };
 Heap gHeap;
 void* heapAlloc(size_t n) {
   void* p = std::malloc(n);
   if (!p) return nullptr;
+  ++gHeap.carves;
   gHeap.blocks[p] = n;
   gHeap.held += n;
   gHeap.peak = std::max(gHeap.peak, gHeap.held);
@@ -982,9 +984,19 @@ void test_the_base_faulted_at_the_boot() {
     card.faultFrom = from;
     Player p(card, (const uint8_t*)"\0\0\0\0\0\1");
     deviceFor(p, sc);
+    p.alloc = heapAlloc;
+    p.release = heapFree;
+    const size_t held0 = gHeap.held;
     gWaits.clear();
     p.boot(askOf(b));
     const char* w = from == 0 ? "the base's open" : "the base's header";
+    // The stats off: every block of the fold given back (stats.bin's chunks
+    // and the spare were carved before its base failed), nothing held for
+    // the session.
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(0, p.glue->fold.held(), w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(held0, gHeap.held, w);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, p.glue->fold.chunks(sf::kTrkd) + p.glue->fold.chunks(sf::kRcnt), w);
+    TEST_ASSERT_FALSE_MESSAGE(p.glue->fold.spare(), w);
     TEST_ASSERT_EQUAL_STRING_MESSAGE("unread", sx::readName(p.glue->first.read), w);
     TEST_ASSERT_EQUAL_STRING_MESSAGE("io", cc::whyName(p.glue->first.why), w);
     TEST_ASSERT_TRUE_MESSAGE(p.glue->first.inBase, w);
@@ -1001,6 +1013,12 @@ void test_the_base_faulted_at_the_boot() {
     q.boot(askOf(b));
     sameOutcome(b, outcomeOf(q), w);
     sameFiles(cardOf(b["out"]), filesOf(card), w);
+    // A remount's read, the card whole now: the fold's blocks carved again.
+    p.j->remounted();
+    TEST_ASSERT_TRUE_MESSAGE(p.scan(), w);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("loaded", sx::readName(p.glue->opened.read), w);
+    TEST_ASSERT_TRUE_MESSAGE(p.glue->core.on(), w);
+    TEST_ASSERT_TRUE_MESSAGE(p.glue->fold.held() > 0, w);
   }
 }
 
@@ -1502,6 +1520,41 @@ void test_the_glues_own_rules() {
     TEST_ASSERT_FALSE(p.glue->hs());
     TEST_ASSERT_EQUAL_STRING("off", refused(p));
   }
+  // A rotation's save in the end's flush, at the edge of its budget
+  // (kEndSaveMs, 5.5): a millisecond under 1 s left, refused (nothing
+  // written); 1 s left, saved. The sessions' flush-in-time and flush-late
+  // leave 3 s and 0.5 s: only this pins the edge.
+  {
+    CutFs card;
+    put(card, in);
+    Player p(card, dev);
+    deviceFor(p, sc);
+    TEST_ASSERT_TRUE(p.boot(askOf(b)));
+    PlaySpec ps;
+    ps.hash = 0x0123456789abcdefull;
+    ps.played = 120000;
+    ps.duration = 200000;
+    ps.at = sf::kMinMs + 313ull * sf::kDayMs;
+    ps.up = 5000;
+    TEST_ASSERT_TRUE(p.write(ps) == pl::Outbox::Did::Written);
+    TEST_ASSERT_TRUE(p.glue->fold.dirty());
+    const Bytes before = bytesOf(card, "stats.bin");
+    p.glue->ending(p.oenv.now + statsglue::kEndSaveMs - 1);
+    TEST_ASSERT_FALSE(p.glue->core.save(pl::Folds::Why::Rotation));
+    TEST_ASSERT_EQUAL_STRING("budget", refused(p));
+    TEST_ASSERT_TRUE(bytesOf(card, "stats.bin") == before);
+    p.glue->ending(p.oenv.now + statsglue::kEndSaveMs);
+    TEST_ASSERT_TRUE(p.glue->core.save(pl::Folds::Why::Rotation));
+    TEST_ASSERT_EQUAL_STRING("none", refused(p));
+    TEST_ASSERT_EQUAL_STRING("rotation", statsglue::kindName(p.glue->core.lastKind()));
+    TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
+    TEST_ASSERT_FALSE(bytesOf(card, "stats.bin") == before);
+    // (The boot's save in the end's flush: refused whatever is left.)
+    p.glue->ending(p.oenv.now + 60000);
+    TEST_ASSERT_FALSE(p.glue->core.save(pl::Folds::Why::Boot));
+    TEST_ASSERT_EQUAL_STRING("ending", refused(p));
+    p.glue->notEnding();
+  }
   // The log's keys (Hm): each (deviceId, epoch) the boot's scan met in the
   // log's play slots, its highest seq and its slots; MARK's rows as Hm lists
   // them.
@@ -1643,6 +1696,112 @@ void test_hs_says_why_and_never_compacts() {
   }
 }
 
+// The boot's fold's blocks (its ranges, ACKS rows, indexes), and a
+// remount's read of stats.bin (its work memory, the load's chunks), wait
+// for the scan's first reserve(): a pass that may carve (5.6: the join not
+// Working, the write gate open), never setup()'s, nor the remount's own
+// pass (the card guard's). A scan that asks no reserve() (the end's flush
+// finishing it) begins the fold at its first call. A remount's read still
+// to make when the end flushes is never made: the folds dropped.
+void test_the_folds_blocks_wait_for_a_reserve() {
+  const minijson::Value& sc = scenario("worked-example");
+  const minijson::Value& b = sc["boots"][0];
+  const Files in = cardOf(b["in"]), want = cardOf(b["out"]);
+  const uint8_t* dev = reinterpret_cast<const uint8_t*>("\0\0\0\0\0\1");
+  {
+    CutFs card;
+    put(card, in);
+    Player p(card, dev);
+    deviceFor(p, sc);
+    p.alloc = heapAlloc;
+    p.release = heapFree;
+    uint32_t afterRead = 0;
+    p.afterRead = [&afterRead] { afterRead = gHeap.carves; };
+    p.begin(askOf(b));
+    // The journal's begin() (scanBegan()): nothing carved for the stats.
+    TEST_ASSERT_EQUAL_UINT32(afterRead, gHeap.carves);
+    TEST_ASSERT_TRUE(p.glue->core.booting());
+    TEST_ASSERT_TRUE(p.glue->core.wantsRoom());
+    TEST_ASSERT_FALSE(p.glue->fold.booting());
+    TEST_ASSERT_EQUAL_UINT32(0, p.glue->fold.indexSize(sf::kTrkd));
+    TEST_ASSERT_FALSE(p.glue->hs());
+    TEST_ASSERT_EQUAL_STRING("booting", refused(p));
+    p.glue->reserve(1);
+    TEST_ASSERT_TRUE(p.glue->fold.booting());
+    TEST_ASSERT_TRUE(p.glue->fold.indexSize(sf::kTrkd) > 0);
+    TEST_ASSERT_TRUE(gHeap.carves > afterRead);
+    TEST_ASSERT_TRUE(p.scan());
+    sameOutcome(b, outcomeOf(p), "the boot's fold at its first reserve()");
+    sameFiles(want, filesOf(card), "the boot's fold at its first reserve()");
+    TEST_ASSERT_FALSE(p.glue->core.wantsRoom());
+    // A remount after Ready, before the first slot: the folds dropped at
+    // once; no read, no carve, nothing covered until the scan's next piece.
+    const uint64_t read0 = card.bytesRead;
+    const uint32_t carves0 = gHeap.carves;
+    const size_t calls0 = p.glue->calls.size();
+    p.j->remounted();
+    TEST_ASSERT_TRUE(p.glue->core.rereadPending());
+    TEST_ASSERT_TRUE(p.glue->core.wantsRoom());
+    TEST_ASSERT_TRUE(p.glue->core.booting());
+    TEST_ASSERT_FALSE(p.glue->core.on());
+    TEST_ASSERT_EQUAL_UINT32(0, p.glue->core.rereads());
+    TEST_ASSERT_EQUAL_UINT64(read0, card.bytesRead);
+    TEST_ASSERT_EQUAL_UINT32(carves0, gHeap.carves);
+    TEST_ASSERT_EQUAL_UINT32(0, p.glue->fold.folded());
+    TEST_ASSERT_EQUAL_size_t(calls0, p.glue->calls.size());  // (began(): at the read)
+    TEST_ASSERT_FALSE(p.glue->hs());
+    TEST_ASSERT_EQUAL_STRING("booting", refused(p));
+    p.glue->reserve(1);
+    TEST_ASSERT_EQUAL_UINT32(1, p.glue->core.rereads());
+    TEST_ASSERT_TRUE(card.bytesRead > read0);
+    TEST_ASSERT_TRUE(gHeap.carves > carves0);
+    TEST_ASSERT_TRUE(p.glue->core.on());
+    TEST_ASSERT_TRUE(p.glue->fold.booting());
+    TEST_ASSERT_EQUAL_STRING("began again", p.glue->calls.back().c_str());
+    TEST_ASSERT_TRUE(p.scan());
+    TEST_ASSERT_EQUAL_STRING("save boot", p.glue->calls.back().c_str());
+    TEST_ASSERT_EQUAL_STRING("nothing new", sx::savedName(p.glue->last.what));
+    sameFiles(want, filesOf(card), "a remount after Ready");
+  }
+  // A scan no reserve() came before: the fold begins at its first slot.
+  {
+    CutFs card;
+    put(card, in);
+    Player p(card, dev);
+    deviceFor(p, sc);
+    p.begin(askOf(b));
+    int pieces = 0;
+    while (!p.j->scan(3)) ++pieces;
+    TEST_ASSERT_TRUE(pieces > 0);
+    p.glue->ready();
+    sameOutcome(b, outcomeOf(p), "a scan with no reserve()");
+    sameFiles(want, filesOf(card), "a scan with no reserve()");
+  }
+  // A remount's read still to make when the end flushes: never made.
+  {
+    CutFs card;
+    put(card, in);
+    Player p(card, dev);
+    deviceFor(p, sc);
+    TEST_ASSERT_TRUE(p.boot(askOf(b)));
+    p.ops.clear();  // (the boot's trim)
+    p.j->remounted();
+    p.glue->ending(1000000);
+    TEST_ASSERT_TRUE(p.glue->core.dropped());
+    TEST_ASSERT_FALSE(p.glue->core.on());
+    TEST_ASSERT_FALSE(p.glue->core.rereadPending());
+    TEST_ASSERT_EQUAL_UINT32(0, p.glue->core.rereads());
+    TEST_ASSERT_EQUAL_STRING("began again", p.glue->calls.back().c_str());
+    TEST_ASSERT_EQUAL_size_t(0, p.glue->fold.held());
+    TEST_ASSERT_TRUE(p.scan());  // (the flush finishing the scan: no read)
+    TEST_ASSERT_EQUAL_UINT32(0, p.glue->core.rereads());
+    TEST_ASSERT_EQUAL_STRING("save boot (no)", p.glue->calls.back().c_str());
+    TEST_ASSERT_EQUAL_STRING("off", refused(p));
+    TEST_ASSERT_TRUE(p.trimmed().empty());
+    sameFiles(want, filesOf(card), "a remount's read when the end flushes");
+  }
+}
+
 // A fold out of memory from the boot's first fold (its ranges couldn't be
 // carved) and no work memory for the save either (the same short heap): no
 // save, and the trim by the MARK read at the boot (5.5), never as after a
@@ -1709,5 +1868,6 @@ int main(int, char**) {
   RUN_TEST(test_the_glues_own_rules);
   RUN_TEST(test_hs_says_why_and_never_compacts);
   RUN_TEST(test_a_fold_out_of_memory_trims_by_the_boots_mark);
+  RUN_TEST(test_the_folds_blocks_wait_for_a_reserve);
   return UNITY_END();
 }

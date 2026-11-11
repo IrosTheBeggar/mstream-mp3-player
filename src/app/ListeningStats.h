@@ -25,9 +25,11 @@
 //   - each pass (pass()): the update step's safe point for a compaction
 //     (LibraryUpdate::safePoint(): nothing playing, or 20 s left of the heard
 //     track and no seek in the last 2 s; a play waiting for the headphones or
-//     a restart asked isn't one), the spare chunk again where Auto DJ's join
-//     isn't Working; before each piece of the boot's scan its room (mayScan():
-//     none while the join is Working, and the scan waits that pass: 5.6);
+//     a restart asked isn't one, and counts as playing for a compaction),
+//     the spare chunk again where Auto DJ's join isn't Working; before each
+//     piece of the boot's scan its room, and before its first the boot's
+//     fold begun or a remount's read of stats.bin made (mayScan(): none
+//     while the join is Working, and the scan waits that pass: 5.4, 5.6);
 //   - written(): the live fold of each play written (hash-keyed: no id in S1);
 //   - ending(): the orderly end's flush (no read at a remount inside it, no
 //     boot's save, a rotation's only with 1 s of its budget left);
@@ -57,7 +59,8 @@ public:
   };
   void pass(const Pass& p, uint32_t nowMs);
   // Before a piece of the boot's scan of `slots` slots: true, its room taken
-  // (or nothing to take); false: the scan waits this pass (the join works).
+  // (a remount's read made, the boot's fold begun, first), or nothing to
+  // take; false: the scan waits this pass (the join works).
   bool mayScan(uint32_t slots);
   // The journal ready (the boot's scan done: `passes` and `scanUs` its
   // pieces' on the loop): a partial scan's fold ended; the fold's line.
@@ -93,6 +96,7 @@ private:
   bool hasCommit_ = false;
   uint32_t commitSec_ = 0;
   bool playing_ = false;
+  bool waiting_ = false;  // a play waiting for the headphones, or a restart asked
   bool safePoint_ = true;
   bool joinWorking_ = false;
   bool seeksKnown_ = false;

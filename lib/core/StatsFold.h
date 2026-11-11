@@ -186,6 +186,10 @@ public:
   // Empty, as a fresh start (no stats.bin: every slot on the card folds):
   // every counter, flag and table; the blocks kept for the next load.
   void clear();
+  // Empty, and every block given back (the chunks, the spare, HOUR, DAYS,
+  // MARK): the stats off for the session (a read that isn't on), nothing
+  // held for them. begin() before any load again.
+  void release();
   // The load's chunks: room for these rows of RCNT and TRKD (stats.bin's
   // counts) and one spare chunk (5.6). False: no memory.
   bool reserveLoad(uint32_t rcntRows, uint32_t trkdRows);
@@ -217,8 +221,13 @@ public:
   // of the scan in its order (`file`: logName()'s i), partial() for each
   // log file the scan couldn't read whole, ended when the scan is: the
   // gap (with `acks`, the root's ACKS) unless partial, HEAD's twice and
-  // gap, the transient index and ranges freed. plan() ends it too; after
-  // a partial scan (no save) the glue ends it when the journal is ready.
+  // gap, the transient index and ranges freed, and RCNT held to its
+  // 4,096-row cap by whole days, oldest first (the save's cut without the
+  // date's: a boot whose save doesn't land holds no more than that; a
+  // live play dated before that cut then adds no RCNT row, which any later
+  // save would cut: the file the same byte for byte). plan() ends it too;
+  // after a partial scan (no save) the glue ends it when the journal is
+  // ready.
   // A scan begun again (a remount) starts from clear() and the load: the
   // folds made before are dropped. beginBoot false: no memory.
   bool beginBoot(const cardcontract::msmf::Acks& acks);
@@ -296,6 +305,7 @@ public:
   uint32_t indexSize(Sec sec) const;
   uint32_t chunks(Sec sec) const;
   bool spare() const { return spare_ != nullptr; }
+  uint32_t rcntFloor() const { return rcntFloor_; }
 
   // Rows as RAM holds them (public for the implementation's helpers).
   struct MarkRow {
@@ -403,6 +413,7 @@ private:
   void sortTables();
   uint16_t newestDay() const;
   uint32_t rcntCut(uint32_t dateCut, uint32_t* kept);
+  void closeRcnt(uint32_t cut);
 
   AllocFn alloc_;
   FreeFn free_;
@@ -415,6 +426,7 @@ private:
   uint32_t loadedRound_ = 0;  // HEAD's round as loaded: the boot's +1, live +2
   uint32_t used_ = 0;         // the highest round used this session (0: none)
   uint16_t firstPlayDay_ = kUnsetDay;
+  uint32_t rcntFloor_ = 0;  // RCNT's rows end at the boot's cap: no new row dated before it until a save lands
   bool dirty_ = false;
   bool partial_ = false;
   bool noMemory_ = false;

@@ -592,6 +592,7 @@ void Fold::clear() {
   head_ = Head();
   generation_ = loadedRound_ = used_ = 0;
   firstPlayDay_ = kUnsetDay;
+  rcntFloor_ = 0;
   dirty_ = partial_ = noMemory_ = false;
   folded_ = twice_ = gap_ = 0;
   markN_ = markSorted_ = markHit_ = 0;
@@ -603,6 +604,21 @@ void Fold::clear() {
   for (uint32_t c = 0; c < trkd_.chunks; ++c) trkd_.sorted[c] = 0;
   for (bool& b : loadedAny_) b = false;
   plan_ = nullptr;
+}
+
+void Fold::release() {
+  clear();
+  releaseAll(rcnt_);
+  releaseAll(trkd_);
+  if (spare_) drop(spare_, kChunkBytes);
+  spare_ = nullptr;
+  if (mark_) drop(mark_, static_cast<size_t>(markCap_) * sizeof(MarkRow));
+  mark_ = nullptr;
+  markCap_ = 0;
+  if (hour_.rows) drop(hour_.rows, static_cast<size_t>(hour_.cap) * sizeof(HourRow));
+  hour_ = Capped<HourRow>();
+  if (days_.rows) drop(days_.rows, static_cast<size_t>(days_.cap) * sizeof(DaysRow));
+  days_ = Capped<DaysRow>();
 }
 
 bool Fold::reserveLoad(uint32_t rcntRows, uint32_t trkdRows) {
@@ -963,6 +979,17 @@ void Fold::endBoot() {
   head_.gap = add32(head_.gap, gap_);
   dropBoot();
   sortTables();
+  // RCNT, pruned only by a save that lands, to its 4,096-row cap by whole
+  // days (the save's cut without the date's): a boot whose save doesn't
+  // land (refused, failed, held) doesn't hold a full log's 13,000 rows for
+  // the session. Any later save cuts at least these days (they are under
+  // its cap whatever comes after), so it writes the same file.
+  uint32_t kept = 0;
+  const uint32_t cut = rcntCut(0, &kept);
+  if (kept < rcnt_.rows) {
+    closeRcnt(cut);
+    rcntFloor_ = std::max(rcntFloor_, cut);
+  }
 }
 
 void Fold::liveSlot(const Slot& s) {
@@ -983,6 +1010,7 @@ void Fold::foldTrack(const Slot& s, uint32_t round) {
 }
 
 void Fold::foldRcnt(uint16_t day, uint64_t hash) {
+  if (day < rcntFloor_) return;  // (a day the boot's cap cut: every later save cuts it too)
   const int64_t r = findRow<RcntKeys>(rcnt_, RcntKeys::Key{day, hash});
   if (r >= 0) {
     RcntRow& row = rcnt_.at(static_cast<uint32_t>(r));
@@ -1253,24 +1281,31 @@ bool Fold::nextTrack(Track* out) {
   return true;
 }
 
-void Fold::saved(const Plan& p) {
-  head_ = p.head;
-  generation_ = p.generation;
-  // RCNT's retention: the rows kept close up (one pass over the table at
-  // the save, never a row at a time), each chunk sorted again.
+void Fold::closeRcnt(uint32_t cut) {
+  // The rows kept close up (one pass over the table, never a row at a
+  // time), each chunk sorted again, the chunks past them given back.
   uint32_t w = 0;
   for (uint32_t r = 0; r < rcnt_.rows; ++r) {
     const RcntRow& x = rcnt_.at(r);
-    if (x.day < p.rcntCut) continue;
+    if (x.day < cut) continue;
     if (w != r) rcnt_.at(w) = x;
     ++w;
   }
   if (w != rcnt_.rows) {
     rcnt_.rows = w;
+    rcnt_.unsorted = 0;
     for (uint32_t c = 0; c < rcnt_.chunks; ++c) rcnt_.sorted[c] = 0;
     sortChunks<RcntKeys>(rcnt_);
     shrink(rcnt_);
   }
+}
+
+void Fold::saved(const Plan& p) {
+  head_ = p.head;
+  generation_ = p.generation;
+  // RCNT's retention (the card's file is RAM's now: no floor from here).
+  closeRcnt(p.rcntCut);
+  rcntFloor_ = 0;
   if (p.compact) {
     // Its rows are in the base now.
     trkd_.rows = trkd_.unsorted = 0;

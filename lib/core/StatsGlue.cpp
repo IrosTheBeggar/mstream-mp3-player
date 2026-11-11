@@ -53,21 +53,18 @@ void Glue::giveBack(uint8_t* p) {
 }
 
 sx::Opened Glue::readNow(sx::Store::WaitFn wait) {
-  uint8_t* w = carve();
+  // (HOUR's, DAYS' and MARK's blocks first: given back with the stats off.)
+  uint8_t* w = fold_.begin() ? carve() : nullptr;
   const sx::Opened o = store_.read(fold_, w, wait);  // (no work memory: NoMemory, the stats off)
   giveBack(w);
+  // The stats off this session (unread, newer, no memory): nothing held
+  // for them (a remount's read carves again).
+  if (!sx::statsOn(o.read)) fold_.release();
   return o;
 }
 
 const sx::Opened& Glue::begin(const cc::msmf::Acks& acks, sx::Store::WaitFn wait) {
   acks_ = acks;
-  foldReady_ = fold_.begin();
-  if (!foldReady_) {
-    first_ = sx::Opened();
-    first_.read = sx::Read::NoMemory;
-    opened_ = first_;
-    return first_;
-  }
   first_ = opened_ = readNow(wait);
   return first_;
 }
@@ -78,25 +75,61 @@ const sx::Opened& Glue::begin(const cc::msmf::Acks& acks, sx::Store::WaitFn wait
 void Glue::scanBegan(bool again) {
   partial_ = false;
   logN_ = logMore_ = 0;
+  bootPending_ = rereadPending_ = false;
   if (again) {
     if (ending_) {
-      // 5.4: no read while the end flushes (its 3 s are the plays'); the
-      // folds made before are dropped, and none is made or saved after.
-      dropped_ = true;
-      fold_.clear();
-      env_.began(true, nullptr);
+      drop();
       return;
     }
-    // A remount: stats.bin read again (one read, no waits), the folds made
-    // before it dropped, or each slot read before it would count twice. A
-    // stats.bin unread at the boot is tried again here.
-    if (foldReady_ && !dropped_) {
-      ++rereads_;
-      opened_ = readNow(nullptr);
+    if (!dropped_) {
+      // A remount: stats.bin read again (one read, no waits), the folds
+      // made before it dropped now, or each slot read before it would count
+      // twice. A stats.bin unread at the boot is tried again. The read (the
+      // work memory, the load's chunks) and the boot's fold's blocks wait
+      // for the scan's first reserve(): a pass that may carve (the write
+      // gate open, Auto DJ's join not Working: 5.6), never the remount's.
+      fold_.clear();
+      rereadPending_ = true;
+      return;  // (began(): at the read)
     }
+    env_.began(true, nullptr);
+    return;
   }
-  if (on()) fold_.beginBoot(acks_);  // (false: no memory: the fold says so, and no save follows)
-  env_.began(again, again && foldReady_ && !dropped_ ? &opened_ : nullptr);
+  // The boot's fold's blocks (its ranges, ACKS rows, indexes) wait for the
+  // scan's first reserve() too: carved in the loop, not in setup() between
+  // blocks held for the session (6.7).
+  bootPending_ = on();
+  env_.began(false, nullptr);
+}
+
+void Glue::drop() {
+  // 5.4: no read while the end flushes (its 3 s are the plays'); the folds
+  // made before are dropped, and none is made or saved after.
+  dropped_ = true;
+  bootPending_ = rereadPending_ = false;
+  fold_.release();
+  env_.began(true, nullptr);
+}
+
+void Glue::settle() {
+  if (rereadPending_) {
+    rereadPending_ = false;
+    ++rereads_;
+    opened_ = readNow(nullptr);
+    bootPending_ = on();
+    env_.began(true, &opened_);
+  }
+  if (bootPending_) {
+    bootPending_ = false;
+    fold_.beginBoot(acks_);  // (false: no memory: the fold says so, and no save follows)
+  }
+}
+
+void Glue::ending(uint64_t untilMs) {
+  ending_ = true;
+  until_ = untilMs;
+  // A remount's read not made yet: none now (5.4), the folds dropped.
+  if (rereadPending_) drop();
 }
 
 void Glue::noteLog(const pl::Slot& s) {
@@ -120,22 +153,33 @@ void Glue::noteLog(const pl::Slot& s) {
   k.slots = 1;
 }
 
+// (settle(): the scan's first reserve() made the read and began the boot's
+// fold; a scan the end's flush finishes, or a test's, asks no reserve().)
 void Glue::slot(const pl::Slot& s, int file) {
+  settle();
   noteLog(s);
   if (on()) fold_.bootSlot(s, file);
 }
 
 void Glue::partial() {
+  settle();
   partial_ = true;
   env_.partialFile();
   if (on()) fold_.partial();
 }
 
-bool Glue::covered(const pl::Slot& s) { return on() && fold_.covered(s); }
+bool Glue::covered(const pl::Slot& s) {
+  settle();
+  return on() && fold_.covered(s);
+}
 
-uint32_t Glue::markOf(const uint8_t deviceId[6], uint64_t epoch) { return on() ? fold_.markOf(deviceId, epoch) : 0; }
+uint32_t Glue::markOf(const uint8_t deviceId[6], uint64_t epoch) {
+  settle();
+  return on() ? fold_.markOf(deviceId, epoch) : 0;
+}
 
 bool Glue::save(Why why) {
+  settle();
   const Kind k = why == Why::Boot ? Kind::Boot : Kind::Rotation;
   if (!on()) return refuse(k, Refused::Off);
   if (ending_ && k == Kind::Boot) return refuse(k, Refused::Ending);
@@ -147,8 +191,8 @@ bool Glue::save(Why why) {
 
 bool Glue::hs(bool fenced) {
   if (fenced) return refuse(Kind::Hs, Refused::Fenced);
-  if (!on()) return refuse(Kind::Hs, Refused::Off);
-  if (fold_.booting()) return refuse(Kind::Hs, Refused::Booting);
+  if (!on() && !rereadPending_) return refuse(Kind::Hs, Refused::Off);
+  if (booting()) return refuse(Kind::Hs, Refused::Booting);
   if (partial_) return refuse(Kind::Hs, Refused::Partial);
   if (env_.cardAway()) return refuse(Kind::Hs, Refused::CardAway);
   return commit(Kind::Hs);
@@ -170,7 +214,11 @@ bool Glue::commit(Kind k) {
   env_.asking(k, &ask_);
   ask_.mayCompact = k == Kind::Boot;  // (a rotation's and Hs never compact: 5.3)
   uint8_t* w = carve();
-  last_ = store_.save(fold_, ask_, w);  // (no work memory: NoMemory, or Nothing with nothing new)
+  // A tmp the store holds, promoted first, in a call of its own: its
+  // frames (replace()'s, a twin's rename) never under the save's (the
+  // loop's stack: docs/LISTENING-STATS.md 11).
+  // (No work memory: NoMemory, or Nothing with nothing new.)
+  last_ = store_.save(fold_, ask_, w, store_.promote(fold_));
   giveBack(w);
   ++asked_;
   if (last_.what == sx::Saved::Wrote) ++written_;
@@ -183,9 +231,13 @@ bool Glue::commit(Kind k) {
 // ---------------------------------------------------------------------------
 // The rest of the session.
 // ---------------------------------------------------------------------------
-bool Glue::reserve(uint32_t slots) { return !(on() && fold_.booting()) || fold_.reserve(slots); }
+bool Glue::reserve(uint32_t slots) {
+  settle();
+  return !(on() && fold_.booting()) || fold_.reserve(slots);
+}
 
 void Glue::ready() {
+  settle();
   if (fold_.booting()) fold_.endBoot();
 }
 
@@ -194,7 +246,7 @@ void Glue::written(const pl::Slot& s) {
 }
 
 bool Glue::keepSpare() {
-  if (!on() || fold_.booting() || fold_.noMemory() || fold_.spare()) return true;
+  if (!on() || booting() || fold_.noMemory() || fold_.spare()) return true;
   return fold_.keepSpare();
 }
 
