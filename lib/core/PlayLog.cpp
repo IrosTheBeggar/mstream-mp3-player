@@ -271,8 +271,11 @@ bool Journal::scan(uint32_t maxSlots) {
       if (!scanF_) {
         // Taken for a missing file, as it always was; an open the card
         // failed is a file not read whole for the folds (its slots may be
-        // there).
-        if (cardFailed) partialFile();
+        // there), and so with folds is one whose records on the way to it
+        // are damaged (FatFs's FR_INT_ERR: no file, not the card's fault),
+        // which look() can't say isn't there: a MARK saved over the files
+        // after it would pass its slots, never folded (5.6).
+        if (cardFailed || (c_.folds && fs_.look(name) == tagstore::Fs::Seen::Unknown)) partialFile();
         file_ = FileScan();
         ++scanFile_;
         continue;

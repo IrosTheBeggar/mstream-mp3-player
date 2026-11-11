@@ -7574,8 +7574,12 @@ the changes):
   epoch's shortcut). Every log file is opened with `openRead()`, with or
   without folds (the same file, the same card commands), and an open the
   card failed or a read that failed is a file not read whole
-  (`Booted::partial`, `Folds::partial()`); a damaged file still reads as
-  missing. Each slot `decode()` says Ok goes to `slot()`, after the
+  (`Booted::partial`, `Folds::partial()`). Without folds a damaged file
+  still reads as missing; with folds an open that finds nothing, the card
+  not at fault, is asked `look()`, and Unknown (FatFs's FR_INT_ERR: the
+  records on the way to it damaged, the file perhaps there) is a file not
+  read whole too (the S1 review: a MARK saved past it would lose its
+  plays once a disk check makes it readable). Each slot `decode()` says Ok goes to `slot()`, after the
   damaged-slot skip. `finishScan()` asks `save(Boot)` after the boot
   count and before the trim (and on the path where the boot count's NVS
   write fails), never after a partial scan; the trim then takes a file

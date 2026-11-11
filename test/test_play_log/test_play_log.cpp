@@ -3054,6 +3054,26 @@ struct ScanFaults : FaultFs {
   }
 };
 
+// A file whose records on the way to it are damaged (FatFs's FR_INT_ERR at
+// its open): openRead() says no file, not the card's fault; look() says
+// Unknown (it may well be there). `looks`: the look()s asked.
+struct DamagedOpen : FaultFs {
+  using FaultFs::FaultFs;
+  std::string path;
+  uint32_t looks = 0;
+  tagstore::File* openRead(const char* p, bool* cardFailed) override {
+    if (path == p) {
+      *cardFailed = false;
+      return nullptr;
+    }
+    return FaultFs::openRead(p, cardFailed);
+  }
+  Seen look(const char* p) override {
+    ++looks;
+    return path == p ? Seen::Unknown : FaultFs::look(p);
+  }
+};
+
 std::vector<uint32_t> seqs(std::initializer_list<uint32_t> l) { return std::vector<uint32_t>(l); }
 
 }  // namespace
@@ -3490,6 +3510,55 @@ void test_a_partial_scan_calls_partial() {
   }
 }
 
+// A log file whose open finds its records damaged (no file, the card not at
+// fault: FatFs's FR_INT_ERR) is a file not read whole for the folds when
+// look() can't say it isn't there (5.6): no save, the trim by the card's
+// MARK, and the next boot (its records whole again: a disk check) folds it.
+// A MARK saved over plays.jnl's 5-8 would pass plays.1.jnl's 1-4, never
+// folded. Without folds it is a missing file, as ever, and no look() asked.
+void test_a_damaged_log_file_is_not_read_whole() {
+  const Written w;
+  {
+    CutFs card = w.copy();
+    DamagedOpen fs(card);
+    fs.path = kPrev;
+    MemFolds f;
+    {
+      Device d;
+      bootWith(d, fs, w, &f, 8);
+      TEST_ASSERT_TRUE((f.calls == Calls{"began", "partial"}));
+      TEST_ASSERT_EQUAL_UINT32(1, d.j->booted().partial);
+      TEST_ASSERT_EQUAL_UINT32(1, d.j->booted().files);
+      TEST_ASSERT_TRUE(f.folded == seqs({5, 6, 7, 8}));
+      TEST_ASSERT_EQUAL_UINT32(0, d.j->booted().trimmed);  // plays.jnl not covered, plays.1.jnl not read
+      TEST_ASSERT_EQUAL_UINT32(0, f.cardMark(kDevA, w.ids.epoch));
+      TEST_ASSERT_TRUE(card.dir.count(kPrev) == 1 && card.dir.count(kLog) == 1);
+      // (One look() for each log name the open found nothing at: the other
+      // eight are Gone.)
+      TEST_ASSERT_EQUAL_UINT32(pl::kNames - 1, fs.looks);
+    }
+    fs.path.clear();
+    Device d;
+    bootWith(d, fs, w, &f, 8);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "partial", "began", "save boot"}));
+    TEST_ASSERT_TRUE(f.folded == seqs({5, 6, 7, 8, 1, 2, 3, 4}));
+    TEST_ASSERT_EQUAL_UINT32(2, d.j->booted().trimmed);
+    TEST_ASSERT_EQUAL_UINT32(8, f.cardMark(kDevA, w.ids.epoch));
+  }
+  // Without folds: a missing file, as ever, and the card not asked again.
+  {
+    CutFs card = w.copy();
+    DamagedOpen fs(card);
+    fs.path = kPrev;
+    Device d;
+    bootWith(d, fs, w, nullptr, 8);
+    TEST_ASSERT_EQUAL_UINT32(0, d.j->booted().partial);
+    TEST_ASSERT_EQUAL_UINT32(4, d.j->booted().slots);
+    TEST_ASSERT_EQUAL_UINT32(0, fs.looks);
+    TEST_ASSERT_TRUE((d.ops == Calls{"delete plays.jnl acknowledged"}));
+  }
+}
+
 // Outbox::Env::written(): a Written play only, after tried() and before
 // the Tracker lets it go, with its slot as the card has it (a retry's, the
 // first try's); never a play kept or dropped.
@@ -3638,6 +3707,7 @@ int main(int, char**) {
   RUN_TEST(test_a_rotation_saves_first);
   RUN_TEST(test_the_ends_flush_and_the_folds);
   RUN_TEST(test_a_partial_scan_calls_partial);
+  RUN_TEST(test_a_damaged_log_file_is_not_read_whole);
   RUN_TEST(test_the_outbox_says_written);
   RUN_TEST(test_the_seq_rules_two_sources);
   return UNITY_END();
