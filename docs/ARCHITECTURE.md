@@ -595,7 +595,12 @@ hundred bytes in PSRAM (app/TagConsole's `Work`).
   2,448 B, 496 B over the rotation's own deepest without them (1,952 B),
   and 2,720 B in the orderly end's flush; the boot's save with a
   compaction (`loop` → `Journal::scan` → `finishScan` → ... → `compact`
-  → `FatFs::openRead` → `FatFile::openRead`) 1,712 B. A tmp an earlier
+  → `FatFs::openRead` → `FatFile::openRead`) 1,712 B. A library update's
+  give-back (LISTENING-STATS.md 6.7), from `loop()`'s own 592 B: its
+  save at the memory check (`CardTasks::loop` → `LibraryUpdate::update` →
+  `updateGiveBack` → ... → `Store::save` → `replace` → `toTwin` →
+  `rename`) 2,224 B, at the fence 1,840 B, the re-read after the update
+  2,112 B, all under a rotation's save from there (3,040 B). A tmp an earlier
   save holds is promoted in a call of its own (`Store::promote()`, from
   `Glue::commit`), never under the save's frame: inside it, as first
   built, the rotation's save was 2,528 B (the S1 review; the first sums
@@ -1543,10 +1548,19 @@ rename; a tmp whose rename the card refused is held and promoted at the
 next save. A save is refused with the card away or another card in the
 slot, after a log file not read whole, and once the card's `stats.bin`
 is no longer the copy this RAM stands on (another player had the card:
-its stats aren't saved over); with nothing new it writes nothing. Log
-lines: `[listen] ...` (the read, each save with its ms and bytes or why
-not, the boot's fold at the scan's end); the console's `H` commands
-(README).
+its stats aren't saved over); with nothing new it writes nothing. During
+a library update (the owner's decision of 2026-11-11) the stats give their
+resident blocks back after Auto DJ's join, at the update's memory check
+or its fence, saving first when they hold plays the card's `stats.bin`
+doesn't; MARK stays, so the trim and a rotation still go by the card's
+MARK, and the plays written meanwhile wait in a ring of 16. Once the
+update is over and Auto DJ has joined again, `stats.bin` is read again
+(once) and the ring folded; a session whose RAM then lacks plays the log
+holds (that save didn't land, another copy, the ring overflowed) saves
+nothing more, and the next boot folds them. Log lines: `[listen] ...`
+(the read, each save with its ms and bytes or why not, the boot's fold
+at the scan's end, a give-back and the re-read after it); the console's
+`H` commands (README).
 
 **FatFs itself, for the card's records** (`storage/CardFat`, METADATA.md
 3.8): the validation walk lists `/music` with `f_readdir`, whose `FILINFO`
@@ -2772,16 +2786,22 @@ strings.
   to its 4,096-row cap at the fold's end even when the save doesn't land.
   With the stats off (unread, newer, no memory) every block is given back. A read's and a save's work memory
   (`statsfile::kWorkBytes`: the writer, its plan, two 4 KB buffers;
-  10,896 B on the 64-bit host) is carved for each and given back. Internal RAM holds 88 B of
-  statics. The key is a path hash, so a library update needs nothing. A
+  10,896 B on the 64-bit host) is carved for each and given back. Internal RAM holds 96 B of
+  statics (8 B of them the give-back's look). The key is a path hash, so a library update changes no
+  row. A
   full never-synced log's fold (13,106 slots, 4,616 tracks) peaks at
-  396,608 B (MEASURED-HOST, through the journal). Auto DJ's heap model
-  (test_autodj_join, MODELLED) finds these blocks come out of a library
-  update's largest free block rather than filling the boot's holes: its
-  rule holds at 2,214 played tracks with a short boot fold, and fails at
-  19,478 played tracks and after a full never-synced log's fold, landed
-  or not (the plan's 6.7: the next step is the owner's; the case fails
-  until then). With no PSRAM for the glue
+  396,608 B (MEASURED-HOST, through the journal). Held through a library
+  update these blocks came out of its largest free block rather than
+  filling the boot's holes (Auto DJ's heap model, test_autodj_join,
+  MODELLED: the rule failed at 19,478 played tracks and after a full
+  never-synced log's fold), so they are given back during every update
+  (the owner's decision of 2026-11-11): after Auto DJ's join, at the
+  update's memory check (`setGiveBack()`'s hook, now the join's and the
+  stats') or its fence, a save first when they hold new plays, MARK's
+  1,536 B block kept; read again from the card once the update is over
+  and the join is back, at a pass the write gate lets through. The model
+  then passes for every shape: joined the control's, or 16,384 B under it
+  at 19,478 played tracks (the plan's 6.7). With no PSRAM for the glue
   the journal gets no `Folds`: its trim is 0.14.0's, by ACKS alone.
 
 ## Input

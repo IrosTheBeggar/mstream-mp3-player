@@ -7636,7 +7636,8 @@ the changes):
   land doesn't keep a full log's rows: the S1 review): 412,992 B at the
   peak in test_stats_fold, 396,608 B through the journal in
   test_stats_store (13,106 slots, 4,616 tracks); the plan had modelled
-  TRKD's growth alone.
+  TRKD's growth alone. During a library update the resident blocks are
+  given back (below).
 - **The saves** (5.5): the boot's, inside `finishScan()` (the only one
   that may compact, and only at the update step's safe point: nothing
   playing, or the heard track 20 s or more from its end and no seek in
@@ -7680,6 +7681,37 @@ the changes):
   `Hs` is refused at once during the boot's scan, else queued, and runs
   at a pass the write gate lets through, after the boot's scan's line,
   with nothing else of the card's that pass.
+- **A library update's give-back** (the plan's 6.7; the owner's decision
+  of 2026-11-11, "Give back in updates", after S1's gate found the heap
+  model's rule failing with the blocks held through every update). At
+  the update's give-back points, after Auto DJ's at each: its memory
+  check's hook (`LibraryUpdate::setGiveBack()`, now set on every boot:
+  main.cpp's `updateGiveBack`, the join and then the stats, PSRAM
+  measured once after both), when the new track table is short of a
+  block; and `enterFence()`, after Auto DJ's `fence()`. The step's
+  `alsoFreed` counts them. A fold holding plays the card's `stats.bin`
+  doesn't is saved first (the rotation's path, never a compaction; the
+  update's safe point, not the write gate), then RCNT's and TRKD's
+  chunks, the spare, HOUR and DAYS are given back
+  (`statsfold::Fold::giveBack()`), MARK's block kept: `covered()` goes on
+  answering by the card's MARK, so a trim or a rotation never deletes a
+  play the card's stats don't hold. Not while the boot's fold runs. While
+  given back every save is refused (a rotation's too, which then deletes
+  what that MARK doesn't cover: 5.5's hole) and Hs with its own reason;
+  each play written goes into a ring of 16 slots in the glue's object (no
+  carve), one past it counted. Taken again in `PlayHistory::loop()` once
+  the update is over and Auto DJ's join settled (`AutoDj::joinSettled()`),
+  at a pass the write gate lets through, the join not Working, the card
+  not away: `stats.bin` read once, a remount's verdicts (off for the
+  session if it doesn't read), then the ring folded, but a play the card's
+  MARK covers. When the read doesn't find the copy that held every slot
+  RAM held (the save didn't land, the fold had run out of memory, another
+  `stats.bin`), or a play went past the ring, the session saves nothing
+  more (`Refused::Behind`), so no MARK covers a play RAM never folded; the
+  next boot folds them. A remount's scan begun again meanwhile waits for
+  the re-read, then reads at its first piece. Nothing is lost by it; the
+  screen lacks those plays until the next boot (the plan's 5.5, "What a
+  give-back costs the screen").
 - **The root's commitTime** is kept in `cardroot::Root` (0 without a
   root): sinceDay's last fallback; a save's `hasCommit` is a commitTime
   that isn't 0. `tools/synthtransfer.py --acks DEV:EPOCH:SEQ[,...]` writes
@@ -7689,9 +7721,13 @@ the changes):
   log|Hs): stats.bin generation N, B bytes, in M ms ...` or `NOT saved
   (...): why`; the boot's before `[plays] ready ... trimmed`), a log file
   not read whole, the boot's fold at the scan's end (slots, met twice, the
-  gap, passes, the scan's ms on the loop, RAM held and at the peak, rows).
-  The console's `H`, `Hd`, `Hm`, `Ht<16 hex>` and `Hs` (README; the plan's
-  9.3).
+  gap, passes, the scan's ms on the loop, RAM held and at the peak, rows),
+  a library update's give-back (where, the bytes, MARK's kept, its save
+  first and what it came to) and the re-read after it (its verdict and ms,
+  the ring's plays folded and covered, those past it, saves on or
+  refused), one line each. The console's `H` (GIVEN BACK during an update,
+  and the last re-read), `Hd`, `Hm`, `Ht<16 hex>` and `Hs` (README; the
+  plan's 9.3).
 - **Costs** (MEASURED-HOST: the core2 build and its link map, the host
   tests). Flash 4,465,927 B at S1's gate (a626545; 4,465,059 B before
   the review's fixes), 42,236 B over S0's 4,423,691 B (the fold, the
@@ -7710,21 +7746,30 @@ the changes):
   stack"; the review corrected the first sums, 2,304, 2,576 and 1,632 B,
   and took a held tmp's promotion out from under the save's frame). A full log's `stats.bin` 133,616 B in 37
   writes, 30 of them whole 4 KB pieces; the scan, the fold and the save
-  about 1.55 µs a slot on this PC. None of these is a device's yet.
+  about 1.55 µs a slot on this PC. With the give-back (ff05909): flash 4,472,167 B (6,240 B over the gate's, 48,476 B over S0's), `.dram0.bss` 8 B more (96 B over S0), IRAM left 5,157 B and the 25 `libc_a-*` objects as at the gate.
+  The give-back's paths from `loop()`'s 592 B: the memory check's with
+  its save 2,224 B, the fence's 1,840 B, the re-read 2,112 B, all under a
+  rotation's save from there (3,040 B). None of these is a device's yet.
 - **The heap model** (the plan's 6.7, MODELLED: test_autodj_join's
-  `test_the_listening_stats_in_a_model_heap`, its figures pinned; it
-  FAILS, since the S1 review, where it had been reported ignored: the
-  plan's 9.5 Done-when isn't met until the owner rules). The stats' blocks
-  come out of a library update's largest free block rather than filling
-  the boot's holes. The update's rule holds at 2,214 played tracks with a
-  short boot fold (80,192 B resident; joined 249,844 B, the control
-  360,436 B), and fails at 19,478 played tracks (194,880 B resident) and
-  after a full never-synced log's fold, its save landed or not (145,728 B
-  held at 2,214 when it doesn't). The model carves in the firmware's
-  order: the glue, HOUR, DAYS and MARK, the read's work memory and load at
-  `PlayHistory::begin()`; the boot's fold after the boot's join. The next
-  step (the plan's ladder, or a redesign) is the owner's; the device's run
-  L is the real measure.
+  `test_the_listening_stats_in_a_model_heap`, its figures pinned).
+  Held through every update, the stats' blocks came out of a library
+  update's largest free block rather than filling the boot's holes: the
+  rule held at 2,214 played tracks with a short boot fold only (joined
+  249,844 B against the control's 360,436 B) and failed at 19,478 played
+  tracks and after a full never-synced log's fold (joined 180,212 B), so
+  the case failed on purpose from the S1 review until the owner's
+  decision. Given back at each update's fence and taken again after its
+  Live and the rejoin, every shape passes the mood plan's rule whole
+  (eight shapes: P = 2,214 and 19,478, a short and a full log's fold, the
+  boot's save and the give-back's landed or refused): joined the
+  control's 360,436 B, or 16,384 B under it at P = 19,478 when the
+  re-read loads the full ceiling (one chunk out of the largest block,
+  whose holes the rejoin took); given back (the join, then the stats:
+  the hook's chain) Auto DJ off's block. The model carves in the
+  firmware's order: the glue, HOUR, DAYS and MARK, the read's work memory
+  and load at `PlayHistory::begin()`; the boot's fold after the boot's
+  join; at each update the give-back after the join's, the re-read after
+  the rejoin. The device's run L is the real measure.
 - **Tests.** New: `test_stats_fold` (19 cases: every fixture's boots and
   saves byte for byte, a plain-map model, the memory, a boot whose save
   doesn't land), `test_stats_file`
@@ -7734,12 +7779,19 @@ the changes):
   FlakyFs and FaultFs, every boot of `stats/index.json` and every step of
   `stats/sessions.json` compared byte for byte; cuts, faults, remounts,
   partial scans, two players, a 0.14.0 boot, the full log, the blocks
-  waiting for a reserve(), the end's budget at its edge). In
+  waiting for a reserve(), the end's budget at its edge). With the
+  give-back: `test_stats_fold` 20, `test_stats_store` 18 (the give-back's
+  rules, a held tmp, the re-read failing, a remount's scan while given
+  back, a cut at each of the give-back's save's 8 steps three ways), and
+  `stats/sessions.json` 23 sessions, 264 steps (eight `update-*`: no
+  plays, plays during the update, the save failing, a rotation while
+  given back saved or not, another player meanwhile, the orderly end,
+  the ring full). In
   `test_play_log` (42: the 33, the boot rules' sixth case, 8 for the
   hooks, 1 for the seq rule), `test_card_root` (34: commitTime),
-  `test_autodj_join` (27, the stats' case failing until the owner rules),
+  `test_autodj_join` (27, the stats' case passing since the give-back),
   `tools/test_statsref.py`
-  (56), `tools/test_playlog.py` (32), `tools/test_synthtransfer.py` (63:
+  (58), `tools/test_playlog.py` (32), `tools/test_synthtransfer.py` (63:
   `--acks`). Mutation checks: the fold 10 of 10 caught, the files 15 of
   15, the proof over the hooks and the files 13 of 15, the glue 9 of 12
   (the rest equivalent), the S1 review's fixes 10 of 10.
