@@ -7,6 +7,7 @@
 #include "PlayLog.h"
 #include "PlaybackController.h"
 #include "app/Library.h"
+#include "app/ListeningStats.h"
 
 class AutoDj;
 
@@ -45,6 +46,11 @@ class AutoDj;
 //   - deviceId: the eFuse MAC (esp_efuse_mac_get_default()); a new epoch:
 //     the hardware RNG (esp_random()); ACKS: the root the boot read
 //     (Library::root()).
+//   - The listening stats (app/ListeningStats, docs/LISTENING-STATS.md):
+//     stats.bin read before the journal's begin(), the journal's Folds (the
+//     boot's fold and save before its trim, a rotation's save first), the
+//     live fold of each play written, the ending flag around the end's
+//     flush, and the console's H (Hs runs at a pass the gate lets through).
 // Only on the card with its records (Library::records()); never on the
 // flash. Loop task only.
 class PlayHistory final : private playlog::Tracker::Env, private playlog::Outbox::Env {
@@ -69,6 +75,9 @@ public:
     uint32_t positionMs = 0;
     bool positionKnown = true;
     uint32_t durationMs = 0;
+    // A restart asked (the update step's safe point says no to it too: the
+    // stats' compaction keeps out of it the same way).
+    bool restartAsked = false;
   };
   void loop(const Look& look, const playlog::WriteGate::In& gate, bool cardHeld);
 
@@ -86,6 +95,8 @@ public:
   // boot's scan again from its start (Journal::remounted()); a play the
   // card failed is tried again at once.
   void remounted();
+  // The console's H (app/ListeningStats): the text after the H.
+  void statsCommand(const char* arg) { stats_.command(arg); }
 
   // The boot's scan: slots a pass (four reads: about 10 KB).
   static constexpr uint32_t kScanSlotsPerPass = 4 * playlog::kReadBytes / playlog::kSlot;
@@ -108,6 +119,8 @@ private:
   uint64_t startedAt(uint64_t startMono, uint8_t* clock) override;
   // A try's line.
   void tried(const playlog::Outbox::Tried& t, const playlog::Played& p) override;
+  // A play's slot written: the listening stats' live fold.
+  void written(const playlog::Slot& s, const playlog::Played& p) override;
   static void onOp(void* ctx, playlog::Journal::Op op, const char* a, const char* b, uint64_t n);
 
   Library& library_;
@@ -122,4 +135,6 @@ private:
   playlog::Outbox* outbox_ = nullptr;
   playlog::WriteGate gate_;
   int64_t tryT0_ = 0;  // when the try under way began (esp_timer's us: its line's ms)
+  ListeningStats stats_;
+  int64_t scanUs_ = 0;  // the boot's scan's pieces on the loop
 };

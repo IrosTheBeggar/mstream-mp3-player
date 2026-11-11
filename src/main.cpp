@@ -2209,6 +2209,7 @@ static SerialConsole console({
       // (Dp's pick can take the listener's undo: the toast's Undo goes.)
       if (autoDj->takeUndoDropped() && userInterface) userInterface->queueUndoDropped();
     },
+    [](const char* a) { playHistory.statsCommand(a); },
     [](char* line, HostLine::Byte kind) { usbViz.onLine(line, kind); },
 });
 
@@ -3502,6 +3503,7 @@ static void stepPlays(uint32_t now) {
   look.positionMs = audio.positionMs();
   look.positionKnown = audio.positionKnown();
   look.durationMs = audio.durationMs();
+  look.restartAsked = restartPending();
   playlog::WriteGate::In in;
   in.nowMs = now;
   in.playing = look.state == PlayState::Playing;

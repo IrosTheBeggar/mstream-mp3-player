@@ -217,6 +217,10 @@ char SerialConsole::key(char c) {
         Serial.printf("> auto dj \"%s\"\n", arg_.c_str());
         if (actions_.autoDj) actions_.autoDj(arg_.c_str());
         break;
+      case Pending::Listen:
+        Serial.printf("> listening stats \"%s\"\n", arg_.c_str());
+        if (actions_.listen) actions_.listen(arg_.c_str());
+        break;
       case Pending::None:
         break;
     }
@@ -261,6 +265,7 @@ char SerialConsole::key(char c) {
     case 'G': pending_ = Pending::Gapless; arg_ = ""; break;
     case 'O': pending_ = Pending::Opus; arg_ = ""; break;
     case 'D': pending_ = Pending::AutoDj; arg_ = ""; break;
+    case 'H': pending_ = Pending::Listen; arg_ = ""; break;
     default: return 0;  // newlines etc.
   }
   if (pending_ != Pending::None) {
