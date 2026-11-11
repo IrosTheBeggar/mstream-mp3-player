@@ -2701,7 +2701,12 @@ struct MoodRun {
 // given back at the fence after Auto DJ's join, and taken again after the
 // update's Live and Auto DJ's rejoin; the next memory check's give-back
 // (setGiveBack()'s chain: the join, then the stats). Or (giveBack false: S1
-// as first built) held through every update step.
+// as first built) held through every update step. Or (foldAfter: an update
+// asked before the boot's scan's first piece, the give-back review) the
+// boot's fold not begun at the first update: the loaded blocks given back
+// at its fence (nothing to save), the scan held through the update
+// (app/ListeningStats::mayScan(): a library update asked; then given back),
+// and the boot's fold after the first take-back.
 struct StatsRun {
   uint32_t rcntRows = 0, trkdRows = 0;  // stats.bin's, loaded
   uint32_t hashes = 0;                  // the tracks the log's plays are of (TRKD's loaded rows the first)
@@ -2709,6 +2714,7 @@ struct StatsRun {
   bool landed = true;                   // the boot's save lands (false: refused, its fold ended alone)
   bool giveBack = false;                // given back at each update's fence, taken again after its rejoin
   bool giveBackSaves = true;            // ... the give-back's save (a fold not saved yet) lands (false: refused)
+  bool foldAfter = false;               // the boot's fold after the first update's take-back (not after the boot's join)
   // What it came to.
   size_t peak = 0, held = 0, loaded = 0;
   size_t given = 0, kept = 0, retaken = 0;  // the first give-back's bytes, what it kept, the first re-read's held
@@ -2918,13 +2924,15 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   joinNow(&u.bootLowest);
   u.bootJoined = ModelHeap::largest();
   u.bootTopKept = u.topKept;
-  if (fold) {
-    // The boot's fold, after the boot's join; its blocks held from here.
+  auto bootFold = [&] {
     fold->resetPeak();
     statsBoot(*fold, *stats);
     stats->peak = fold->peak();
     stats->held = fold->held();
-  }
+  };
+  // The boot's fold, after the boot's join; its blocks held from here (or,
+  // foldAfter, after the first update's take-back).
+  if (fold && !stats->foldAfter) bootFold();
   for (int step = 0; step < steps; ++step) {
     // enterFence(): the queue, Thumbs' pools, the join, the stats' blocks
     // (their save first), then the old index.
@@ -2965,6 +2973,8 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     joinNow(&u.lowest);
     // The stats' blocks again, the rejoin done (a pass that may carve).
     if (gives) statsTakeAgain(*fold, *stats);
+    // The boot's scan, held through the update, folds now (foldAfter).
+    if (fold && stats->foldAfter && step == 0) bootFold();
     u.joined = ModelHeap::largest();
     // The next update's memory check, short on its table's block: the
     // join given back (setGiveBack()), then the stats' blocks (the chain).
@@ -3136,7 +3146,10 @@ void test_a_library_update_in_a_model_heap() {
 // place; then, after the boot's join, the boot's fold of a short log (300
 // slots) or of a full one never synced (13,106 slots, of 2,214 tracks; of
 // 4,092: TRKD's rows), its save landed, or (a full log's) refused, and then
-// the give-back's own save landed or refused too. At each update step the
+// the give-back's own save landed or refused too; or (the give-back review)
+// a full log's fold after the first update, asked before the scan's first
+// piece (the loaded blocks given back, the scan held through the update,
+// then folding after the take-back). At each update step the
 // stats give their blocks back (the owner's decision of 2026-11-11:
 // StatsGlue's giveBack(), at the fence after Auto DJ's join; MARK's block
 // kept) and take them again after the update's Live and Auto DJ's rejoin
@@ -3148,9 +3161,16 @@ void test_a_library_update_in_a_model_heap() {
 // leave the heap as Auto DJ off has it (with the same stats); given back,
 // off's block; joined (the stats' blocks taken again) within 122,880 B of
 // the control's, and at or over 245,764 B where the control is. Every shape
-// passes; each one's figures are pinned, beside the run that holds the
+// passes it; each one's figures are pinned, beside the run that holds the
 // blocks through the updates (S1 as first built, which failed the rule past
-// P = 2,214's short fold).
+// P = 2,214's short fold). Then the device's room (the give-back review):
+// the model's joined is about 100 KB over the device's, so the 245,764 B
+// clause never binds; what the take-back costs joined must fit the 16,368 B
+// the device has over that line after a FLAC update (MOOD-FILTERS Run D).
+// Two P = 19,478 shapes cost one re-read chunk, 16,384 B: the case fails,
+// listing them, until the owner rules (6.7; with stats.bin's RCNT at 2,048
+// rows, ladder step 3's cap, every shape's joined is +0: the review's run,
+// MEASURED-HOST).
 void test_the_listening_stats_in_a_model_heap() {
   const uint32_t tracks = 19412;
   const synthcard::Card card = synthcard::make(synth::userShape(tracks));
@@ -3181,6 +3201,7 @@ void test_the_listening_stats_in_a_model_heap() {
     uint32_t played, slots;
     bool landed;        // the boot's save
     bool saves;         // the give-back's save (a fold the boot's save didn't land)
+    bool after;         // the boot's fold after the first update (asked before the scan's first piece)
     size_t held;        // the Fold's blocks after the boot's fold (pinned)
     size_t given;       // the first give-back's bytes (pinned)
     size_t retaken;     // the first re-read's (pinned)
@@ -3189,15 +3210,26 @@ void test_the_listening_stats_in_a_model_heap() {
   };
   const uint32_t full = 2 * playlog::kFileSlots;
   const Shape shapes[] = {
-      {2214, 300, true, true, 80192, 78656, 96576, 360436, 249844},
-      {2214, full, true, true, 129344, 127808, 129344, 360436, 180212},
-      {19478, 300, true, true, 194880, 193344, 194880, 344052, 180212},
-      {19478, full, true, true, 194880, 193344, 178496, 360436, 143348},
-      {2214, full, false, true, 145728, 127808, 129344, 360436, 180212},
-      {19478, full, false, true, 194880, 193344, 178496, 360436, 143348},
-      {2214, full, false, false, 145728, 144192, 80192, 360436, 180212},
-      {19478, full, false, false, 194880, 193344, 194880, 344052, 143348},
+      {2214, 300, true, true, false, 80192, 78656, 96576, 360436, 249844},
+      {2214, full, true, true, false, 129344, 127808, 129344, 360436, 180212},
+      {19478, 300, true, true, false, 194880, 193344, 194880, 344052, 180212},
+      {19478, full, true, true, false, 194880, 193344, 178496, 360436, 143348},
+      {2214, full, false, true, false, 145728, 127808, 129344, 360436, 180212},
+      {19478, full, false, true, false, 194880, 193344, 178496, 360436, 143348},
+      {2214, full, false, false, false, 145728, 144192, 80192, 360436, 180212},
+      {19478, full, false, false, false, 194880, 193344, 194880, 344052, 143348},
+      {2214, full, true, true, true, 129344, 78656, 80192, 360436, 249844},
+      {19478, full, true, true, true, 194880, 193344, 194880, 360436, 192500},
   };
+  // The device's room over the mood plan's 245,764 B line: joined after a
+  // FLAC update and the rejoin, moods on, is 262,132 B on the device
+  // (docs/MOOD-FILTERS.md Run D), 16,368 B over it. The model's joined is
+  // about 100 KB over the device's, so the rule's 245,764 B clause never
+  // binds here; what the take-back costs joined must fit the device's room
+  // (the give-back review). A shape that doesn't is listed at the end, and
+  // the case fails: the owner's call (6.7).
+  constexpr size_t kDeviceRoom = 262132 - 245764;
+  std::string crossing;
   for (const Shape& sh : shapes) {
     StatsRun sr;
     sr.rcntRows = sh.played < 10000 ? 1365 : 4096;
@@ -3206,6 +3238,7 @@ void test_the_listening_stats_in_a_model_heap() {
     sr.slots = sh.slots;
     sr.landed = sh.landed;
     sr.giveBackSaves = sh.saves;
+    sr.foldAfter = sh.after;
     StatsRun held = sr;
     sr.giveBack = true;
     StatsRun srOff = sr, srHeaps = sr;
@@ -3219,7 +3252,8 @@ void test_the_listening_stats_in_a_model_heap() {
                       statsOn.givenBack == statsOff.largest && statsHeaps.largest == statsOff.largest &&
                       statsHeaps.givenBack == statsOff.largest && statsOn.joined + 122880 >= on.joined &&
                       (statsOn.joined >= 245764 || on.joined < 245764);
-    printf("[join] with the listening stats at P = %u (stats.bin: RCNT %u rows, TRKD %u; the boot's fold: %u slots of "
+    const bool deviceRoom = statsOn.joined + kDeviceRoom >= on.joined;
+    printf("[join] with the listening stats at P = %u (stats.bin: RCNT %u rows, TRKD %u; the boot's fold%s: %u slots of "
            "%u tracks, %u pieces without their room first; its save %s): the Fold's blocks %u B loaded, %u B at the "
            "fold's peak, %u B held after it. Given back at each update (%u times, %u saves first%s): %u B, MARK's %u "
            "B kept; %u B taken again by the re-read. The largest free block after the update %u B with Auto DJ off "
@@ -3227,8 +3261,10 @@ void test_the_listening_stats_in_a_model_heap() {
            "joined (the stats taken again) %u B (%u B of it at the top), the join alone given back %u B, the stats' "
            "blocks too %u B; free at least %u B while placing; the fence as off's: %s. Where the heap puts them: "
            "joined %u B, given back %u B. Joined against the control's %u B: %+ld B (held through the updates: %u "
-           "B, %+ld B): the pass rule %s\n",
-           (unsigned)sh.played, (unsigned)sr.rcntRows, (unsigned)sr.trkdRows, (unsigned)sr.slots, (unsigned)sr.hashes,
+           "B, %+ld B): the pass rule %s; within the device's %u B of room: %s\n",
+           (unsigned)sh.played, (unsigned)sr.rcntRows, (unsigned)sr.trkdRows,
+           sh.after ? " after the first update (asked before its first piece)" : "", (unsigned)sr.slots,
+           (unsigned)sr.hashes,
            (unsigned)sr.reserveFailed, sh.landed ? "landed" : "refused", (unsigned)sr.loaded, (unsigned)sr.peak,
            (unsigned)sr.held, (unsigned)sr.giveBacks, (unsigned)sr.saves,
            sr.saves ? (sh.saves ? ", landed" : ", refused") : "", (unsigned)sr.given, (unsigned)sr.kept,
@@ -3237,10 +3273,11 @@ void test_the_listening_stats_in_a_model_heap() {
            (unsigned)statsOn.givenBack, (unsigned)statsOn.lowest, statsOn.fence == statsOff.fence ? "yes" : "no",
            (unsigned)statsHeaps.joined, (unsigned)statsHeaps.givenBack, (unsigned)on.joined,
            (long)statsOn.joined - (long)on.joined, (unsigned)heldOn.joined, (long)heldOn.joined - (long)on.joined,
-           rule ? "holds" : "FAILS");
-    char w[96];
-    std::snprintf(w, sizeof(w), "P = %u, %u slots, the boot's save %s, the give-back's %s", (unsigned)sh.played,
-                  (unsigned)sh.slots, sh.landed ? "landed" : "refused", sh.saves ? "landed" : "refused");
+           rule ? "holds" : "FAILS", (unsigned)kDeviceRoom, deviceRoom ? "yes" : "NO");
+    char w[128];
+    std::snprintf(w, sizeof(w), "P = %u, %u slots%s, the boot's save %s, the give-back's %s", (unsigned)sh.played,
+                  (unsigned)sh.slots, sh.after ? " folded after the first update" : "",
+                  sh.landed ? "landed" : "refused", sh.saves ? "landed" : "refused");
     TEST_ASSERT_FALSE_MESSAGE(sr.noMemory, w);
     TEST_ASSERT_TRUE_MESSAGE(sr.peak < 512 * 1024, w);  // 5.6's and 11's figure for the fold's peak
     TEST_ASSERT_EQUAL_size_t_MESSAGE(sr.held, srOff.held, w);
@@ -3272,6 +3309,18 @@ void test_the_listening_stats_in_a_model_heap() {
     TEST_ASSERT_TRUE_MESSAGE(rule, w);
     // Given back, the update's room is Auto DJ off's without the stats.
     TEST_ASSERT_EQUAL_size_t_MESSAGE(off.largest, statsOff.largest, w);
+    if (!deviceRoom) {
+      char c[160];
+      std::snprintf(c, sizeof(c), "%s%s (joined %+ld B)", crossing.empty() ? "" : "; ", w,
+                    (long)statsOn.joined - (long)on.joined);
+      crossing += c;
+    }
+  }
+  if (!crossing.empty()) {
+    const std::string m = "the take-back costs joined more than the device's 16,368 B of room over the 245,764 B line "
+                          "(MOOD-FILTERS Run D; the owner's call, 6.7): " +
+                          crossing;
+    TEST_FAIL_MESSAGE(m.c_str());
   }
 }
 
