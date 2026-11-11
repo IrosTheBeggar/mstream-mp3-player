@@ -1074,10 +1074,12 @@ no more.
 
 **Readers:**
 
-- **The device** reads ACKS to trim its log (2.20.2). It checks the
-  section as 2.4.3 says (rows of at least 24 bytes, bytes = count ×
-  stride, its CRC, the order); one that fails is ignored, and the root
-  stays valid: ACKS only trims, so losing it only keeps more plays.
+- **The device** reads ACKS to trim its log (2.20.2) and, at boot, to
+  reserve seqs up to it (2.20.4; with listening stats also their gap,
+  docs/LISTENING-STATS.md 5.6). It checks the section as 2.4.3 says
+  (rows of at least 24 bytes, bytes = count × stride, its CRC, the
+  order); one that fails is ignored, and the root stays valid: ACKS only
+  trims and reserves, so losing it only keeps more plays.
   So a reader takes ACKS outside its container's check of the sections
   it knows (whose stride and length rules make the file absent: 2.4.3,
   the directory): it finds ACKS by its type in the directory and checks
@@ -1785,7 +1787,7 @@ each, about 1-2 minutes for 20,000 files through a USB reader
 | `/music/**` folders | create; remove only OWNED folders that are empty (OWNED in the ledger, or a folder op of the current plan: 2.12.5) | none | anything |
 | `/music` itself | create if missing | read | anything |
 | `/.mstream/**` | everything | **read only** (except as the sync agent: 2.12.4) | may delete it all (the device then scans; the software then sees a card with no ledger) |
-| `/.player/**` | **read only**; it relies on `device.txt` and the play log (`plays*.jnl`, 2.20) alone | everything | may delete it all (the device rebuilds; the log's plays not yet read are lost) |
+| `/.player/**` | **read only**; it relies on `device.txt` and the play log (`plays*.jnl`, 2.20) alone, and never reads the listening stats' files (`stats.bin`, `stats-<gen>.bin`: 2.12.6) | everything | may delete it all (the device rebuilds its caches; the log's plays not yet read are lost, and so is the listening stats' history, which the device can't rebuild: the plays its trims removed are counted nowhere else on the card, mStream keeping its own record of them) |
 | anything else on the card | never | never | anything |
 
 - **A file the listener changed** stops being the software's at the next
@@ -2023,6 +2025,22 @@ device MUST NOT write `/.mstream` in any other role.
   on the card is what was written, is kept when its rename fails, and on
   the card the cut rule below holds for it, its twins `queue.xl1`-`.xl9`:
   3.2.2, "The queue's file".)
+- **The listening stats** (docs/LISTENING-STATS.md 5.2-5.5; a device
+  that keeps them): `/.player/stats.bin` is written as the queue's file
+  is. `stats.tmp` replaces it only once its size on the card is what was
+  written; when the rename fails the tmp is kept, whole, and the next
+  save renames it first. On the card the cut rule below holds for it,
+  its twins `stats.xl1`-`.xl9`. Its only-the-tmp check is a real one:
+  whole when its frame and every section's CRC hold (and when its major
+  is newer, or it holds a REQUIRED section this firmware doesn't know:
+  it is renamed, then left alone), torn only when the frame fails its own
+  checks, and no verdict (kept) when the card fails the read. The per-
+  track rows live in a **base file**, `stats-<gen>.bin`, written under a
+  fresh name and never replaced: `stats.bin` names it, so the rename of
+  `stats.bin` is the one commit point. A base file `stats.bin` doesn't
+  name (the one before or after a cut compaction) is removed only after
+  the named one checked whole. The stats are primary data, not a cache: the
+  device can't rebuild what its trims removed (2.11).
 - **`device.txt`** is written through `device.tmp` and a rename.
 - **A cut inside one of these renames** (2.12.1, "Cut renames") leaves
   `X` and `X.tmp` on one cluster chain, and the device's next write of
@@ -2599,6 +2617,9 @@ on any difference. The folder's README says how to read them.
    them by its 72-byte prefix. `tools/test_mood_vectors.py` runs mStream's
    own predicate text (`src/api/mood-filter.js`, its commit named) in
    SQLite over every row and filter, and the word must agree with it.
+10. **The listening stats** (`stats/`, made with `tools/statsref.py`;
+    docs/LISTENING-STATS.md): the device's own files (2.12.6), which no
+    software reads; a mirror MAY leave them out.
 
 ### 2.18 Conformance vectors
 
@@ -3018,7 +3039,14 @@ says the firmware keeps one (2.15).
   a file holding a play ACKS doesn't acknowledge, a drop note no play
   follows, or a slot it can't judge (a newer major's, or a valid slot of
   a kind it doesn't know: perhaps a later firmware's play). Neither the
-  trim nor the rotation deletes a file a twin shares (above).
+  trim nor the rotation deletes a file a twin shares (above). A device
+  that keeps listening stats (docs/LISTENING-STATS.md 5.5) trims a file
+  only once its stats on the card hold its plays too: every play slot in
+  it at or under the seq the stats' MARK keeps for its deviceId and
+  epoch. Its rotation MAY save the stats first, so that step 1 deletes no
+  play they don't hold; it never waits on that save, and when the save
+  doesn't land those plays are lost to the stats
+  (docs/LISTENING-STATS.md 5.5).
 
 #### 2.20.3 The slot (80 bytes)
 
@@ -3083,7 +3111,15 @@ says the firmware keeps one (2.15).
   slot that uses it (it MAY reserve several at once; the unused ones are
   skipped, and a reader takes no gap for a loss). **At boot:** the next
   seq is max(NVS's seq, the highest seq of a valid play slot of this
-  deviceId and epoch in the mounted card's log) + 1. Every valid slot of
+  deviceId and epoch in the mounted card's log, the seq the root's ACKS
+  (2.5.6) acknowledges for them, and, on a device that keeps listening
+  stats, the highest seq its stats hold for them: their MARK,
+  docs/LISTENING-STATS.md 5.6) + 1. ACKS's and MARK's are reservations,
+  as the sentence above allows: with NVS put back from a backup behind a
+  log the device already trimmed, a new play would otherwise reuse a seq
+  ACKS acknowledges: read as sent, it would never be sent.
+  (0.14.0 takes NVS's and the log's alone; ACKS's and MARK's come with
+  the stats' firmware, docs/LISTENING-STATS.md S1.) Every valid slot of
   the log's files (2.20.2's names) counts: both of a byte-equal pair,
   which a reader takes once, and both slots of a conflict, which a reader
   drops (2.20.6, item 3), since that seq was used. The twin names
@@ -8574,6 +8610,12 @@ they disagreed:
   settings, UI and console, and its device checks.
 - **docs/WAVEFORM-INDEX.md:** the waveform index's own specification (MPWF
   v1, 2026-11-01); 2.21 points to it and keeps what ties it to the contract.
+- **docs/LISTENING-STATS.md:** the listening stats' build plan
+  (2026-11-10) and their format, `/.player/stats.bin` and its base file
+  (its 5.2-5.3; no software reads them), with what they change here: the
+  device's files (2.11, 2.12.6), the trim (2.20.2) and the boot's seq
+  (2.20.4). `tools/statsref.py` is their reference; card_fixtures.py
+  writes their fixtures (`test/fixtures/card/stats`) with it.
 - **docs/UI-SPIKE.md:** the per-track memory figures.
 - **docs/GAPLESS.md** and **docs/QUEUE-MODES.md:** the update step's safe
   point and the queue's remap through `queue.txt`.
