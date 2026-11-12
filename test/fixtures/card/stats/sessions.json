@@ -5493,7 +5493,7 @@
  },
  {
   "name": "update-ring-full",
-  "note": "A plays 1; an update's give-back saves it. 18 plays are written during the update: the ring holds 16, folded after the re-read; 2 go past it, so the session is behind its log and its saves are refused (Hs too). The next boot folds 2-19: none lost.",
+  "note": "A plays 1; an update's give-back saves it. 34 plays are written during the update: the ring holds 32, folded after the re-read; 2 go past it, so the session is behind its log and its saves are refused (Hs too). The next boot folds 2-35: none lost.",
   "cap": 6553,
   "players": {
    "A": {
@@ -5916,16 +5916,336 @@
     }
    },
    {
+    "do": "play",
+    "hash": "0x832a7da9ed0311e6",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793521080000,
+    "up": 3080000,
+    "size": 4201190,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 20,
+    "out": {
+     "plays.jnl": "update-ring-full/22",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9adbc88aa24ceb75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793521140000,
+    "up": 3140000,
+    "size": 4846709,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 21,
+    "out": {
+     "plays.jnl": "update-ring-full/23",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x3df15c814b89ab75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793521200000,
+    "up": 3200000,
+    "size": 4633717,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 22,
+    "out": {
+     "plays.jnl": "update-ring-full/24",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xe604b5c8d82005d1",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793521260000,
+    "up": 3260000,
+    "size": 4001489,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 23,
+    "out": {
+     "plays.jnl": "update-ring-full/25",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xd222fa5e5713f77e",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793521320000,
+    "up": 3320000,
+    "size": 4259966,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 24,
+    "out": {
+     "plays.jnl": "update-ring-full/26",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x8d5c2e4c7ace92ce",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793521380000,
+    "up": 3380000,
+    "size": 4955086,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 25,
+    "out": {
+     "plays.jnl": "update-ring-full/27",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x145438baeaf72dba",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793521440000,
+    "up": 3440000,
+    "size": 4470458,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 26,
+    "out": {
+     "plays.jnl": "update-ring-full/28",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9057bc2b792857af",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793521500000,
+    "up": 3500000,
+    "size": 4546735,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 27,
+    "out": {
+     "plays.jnl": "update-ring-full/29",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xebc4649938fbd8d3",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793521560000,
+    "up": 3560000,
+    "size": 4776403,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 28,
+    "out": {
+     "plays.jnl": "update-ring-full/30",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x832a7da9ed0311e6",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793521620000,
+    "up": 3620000,
+    "size": 4201190,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 29,
+    "out": {
+     "plays.jnl": "update-ring-full/31",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x9adbc88aa24ceb75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793521680000,
+    "up": 3680000,
+    "size": 4846709,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 30,
+    "out": {
+     "plays.jnl": "update-ring-full/32",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x3df15c814b89ab75",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793521740000,
+    "up": 3740000,
+    "size": 4633717,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 31,
+    "out": {
+     "plays.jnl": "update-ring-full/33",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xe604b5c8d82005d1",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793521800000,
+    "up": 3800000,
+    "size": 4001489,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 32,
+    "out": {
+     "plays.jnl": "update-ring-full/34",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0xd222fa5e5713f77e",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793521860000,
+    "up": 3860000,
+    "size": 4259966,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 33,
+    "out": {
+     "plays.jnl": "update-ring-full/35",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x8d5c2e4c7ace92ce",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793521920000,
+    "up": 3920000,
+    "size": 4955086,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 34,
+    "out": {
+     "plays.jnl": "update-ring-full/36",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
+    "do": "play",
+    "hash": "0x145438baeaf72dba",
+    "played": 200000,
+    "duration": 200000,
+    "outcome": 1,
+    "src": 1,
+    "at": 1793521980000,
+    "up": 3980000,
+    "size": 4470458,
+    "fatTime": 1533561344,
+    "generation": 1,
+    "player": "A",
+    "save": null,
+    "seq": 35,
+    "out": {
+     "plays.jnl": "update-ring-full/37",
+     "stats.bin": "update-ring-full/3"
+    }
+   },
+   {
     "do": "takeback",
     "player": "A",
     "read": "loaded",
     "same": true,
-    "folded": 16,
+    "folded": 32,
     "covered": 0,
     "over": 2,
     "behind": true,
     "out": {
-     "plays.jnl": "update-ring-full/21",
+     "plays.jnl": "update-ring-full/37",
      "stats.bin": "update-ring-full/3"
     }
    },
@@ -5935,7 +6255,7 @@
     "now": 1793538000000,
     "ok": false,
     "out": {
-     "plays.jnl": "update-ring-full/21",
+     "plays.jnl": "update-ring-full/37",
      "stats.bin": "update-ring-full/3"
     }
    },
@@ -5947,7 +6267,7 @@
     "safePoint": false,
     "read": "loaded",
     "why": null,
-    "folded": 18,
+    "folded": 34,
     "twice": 0,
     "gap": 0,
     "partial": false,
@@ -5957,12 +6277,12 @@
     "stats": true,
     "trimmed": [],
     "out": {
-     "plays.jnl": "update-ring-full/21",
-     "stats.bin": "update-ring-full/24"
+     "plays.jnl": "update-ring-full/37",
+     "stats.bin": "update-ring-full/40"
     }
    }
   ],
-  "slots": 19,
+  "slots": 35,
   "lost": 0
  }
 ]

@@ -1787,7 +1787,7 @@ def _session_play(p, st):
     return {"save": save, "seq": None if slot is None else slot["seq"]}
 
 
-RING = 16  # StatsGlue's kRing: the plays a give-back keeps for the re-read
+RING = 32  # StatsGlue's kRing (the Tracker's kPending): the plays a give-back keeps for the re-read
 
 
 def _session_giveback(p, st):
@@ -2150,7 +2150,7 @@ def _update_sessions(A, B, names):
                         "session. The next boot folds it: none lost.",
                 "cap": 4, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 0})
     # More plays during the update than the ring holds.
-    many = (names * 2)[:RING + 2]
+    many = (names * 4)[:RING + 2]
     steps = [_boot("A", 1)] + _plays("A", names[:1], 1000, 1) + [_give("A", 1)]
     steps += _plays("A", many, 2000000, 1) + [_take("A")]
     steps += [{"do": "hs", "player": "A", "now": ms_of("2026-11-01T13:00:00")}, _boot("A", 2)]

@@ -2632,6 +2632,65 @@ void test_the_plays_waiting_come_first() {
   TEST_ASSERT_EQUAL_UINT64(wk.b["stats"]["head"]["slots"].u64() + 10, q.glue->fold.head().slots);
 }
 
+// The ring holds every play the Tracker can hand over while the blocks are
+// given back (its kPending, 32: S1's device round 1 found the ring at 16,
+// and a play past it turns the session's saves off). A run of short tracks
+// during the fence (the gate shut through each), the Tracker full; then the
+// gate opens and they are written into the ring, one a pass; the re-read
+// folds them all: none lost, none twice, the saves on.
+void test_many_short_plays_across_a_give_back() {
+  const Worked wk;
+  const uint8_t* dev = reinterpret_cast<const uint8_t*>("\0\0\0\0\0\1");
+  CutFs card;
+  put(card, wk.in);
+  Player p(card, dev);
+  wk.boot(p);
+  Loop l(p);
+  // 49 written live, then the update: its give-back saves it first.
+  TEST_ASSERT_TRUE(p.write(Worked::play(1)) == pl::Outbox::Did::Written);
+  l.updateAsked = true;
+  l.pass(true);
+  TEST_ASSERT_TRUE(p.glue->core.givenBack());
+  TEST_ASSERT_TRUE(p.glue->core.gaveBack().saveAsked && p.glue->core.gaveBack().covers);
+  TEST_ASSERT_EQUAL_UINT32(49, cardMark(card, p));
+  // The fence: a run of short tracks (3 s each, the gate shut through every
+  // one), the Tracker full (kPending waiting, none lost from it).
+  for (uint32_t i = 0; i < pl::Tracker::kPending; ++i) {
+    PlaySpec ps = Worked::play(100 + i);
+    ps.played = 3000;
+    ps.duration = 3200;
+    p.ended(ps);
+    l.pass(false);
+  }
+  TEST_ASSERT_EQUAL_UINT32(pl::Tracker::kPending, p.tracker->pending());
+  TEST_ASSERT_EQUAL_UINT32(0, p.tracker->counts().overflow);
+  // The gate opens: each written (the log has them), into the ring.
+  for (uint32_t i = 0; i < pl::Tracker::kPending; ++i) l.pass(true);
+  TEST_ASSERT_EQUAL_UINT32(0, p.tracker->pending());
+  TEST_ASSERT_EQUAL_UINT32(1 + pl::Tracker::kPending, p.out->counts().written);
+  TEST_ASSERT_EQUAL_UINT32(pl::Tracker::kPending, p.glue->core.ringCount());
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, p.glue->core.ringOver(), "plays past the ring");
+  // The re-read: the same copy, every play of the ring folded, saves on.
+  const statsglue::TookBack& t = p.glue->core.takeBack();
+  TEST_ASSERT_TRUE(t.read && t.on && t.same);
+  TEST_ASSERT_EQUAL_UINT32(pl::Tracker::kPending, t.folded);
+  TEST_ASSERT_EQUAL_UINT32(0, t.over);
+  TEST_ASSERT_FALSE_MESSAGE(t.behind || p.glue->core.behind(), "the session behind its log");
+  l.hsAsked = true;
+  l.pass(true);
+  TEST_ASSERT_FALSE(l.hsAsked);
+  TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
+  TEST_ASSERT_EQUAL_UINT32(49 + pl::Tracker::kPending, cardMark(card, p));
+  // The next boot: every play in stats.bin, once.
+  Player q(card, p.id);
+  deviceFor(q, wk.sc);
+  q.nvs = p.nvs;
+  TEST_ASSERT_TRUE(q.boot(wk.ask()));
+  TEST_ASSERT_EQUAL_UINT32(0, q.glue->fold.folded());
+  TEST_ASSERT_EQUAL_UINT64(wk.b["stats"]["head"]["slots"].u64() + 1 + pl::Tracker::kPending,
+                           q.glue->fold.head().slots);
+}
+
 int main(int, char**) {
   if (!cardfixtures::json("stats/index.json", &gIndex) || gIndex.size() == 0 ||
       !cardfixtures::json("stats/sessions.json", &gSessions) || gSessions.size() == 0) {
@@ -2658,5 +2717,6 @@ int main(int, char**) {
   RUN_TEST(test_an_updates_give_back);
   RUN_TEST(test_a_cut_during_the_give_backs_save);
   RUN_TEST(test_the_plays_waiting_come_first);
+  RUN_TEST(test_many_short_plays_across_a_give_back);
   return UNITY_END();
 }

@@ -63,8 +63,8 @@
 //     scan's), nor while the end flushes. While given back: no save (each
 //     refused, Refused::GivenBack; a rotation's then deletes what the card's
 //     MARK doesn't cover, 5.5's hole), no fold: each play written goes into
-//     a ring of kRing slots in this object (no carve), and one past it is
-//     counted. takeBack(), once the update is over and Auto DJ's rejoin done
+//     a ring of kRing slots in this object (no carve: the Tracker's 32), and
+//     one past it is counted. takeBack(), once the update is over and Auto DJ's rejoin done
 //     or abandoned, at a pass that may carve: stats.bin read, no waits in
 //     the loop, a remount's verdicts (5.4), but a read the card failed
 //     (statsfile::cardFault()) is made again at later passes, the boot's
@@ -180,11 +180,17 @@ struct TrackLook {
 };
 
 // The plays written while the blocks are given back, folded after the
-// re-read: a ring in the glue's own object (80 B a slot; no carve). An
-// update's give-back lasts its fence (15-25 s at 19,410 tracks) and the
-// rejoin, and a slot is written only at a pass the write gate lets through,
-// one a pass: a few plays at most (the end's flush: up to the Tracker's 32).
-constexpr uint32_t kRing = 16;
+// re-read: a ring in the glue's own object (80 B a slot; no carve), as many
+// as the Tracker holds (playlog::Tracker::kPending, 32). A run of tracks of
+// 7 s or less never opens the write gate, so its plays wait whole in the
+// Tracker and are handed over, one a pass, when it opens: up to its 32 at
+// once (S1's device round 1 found the ring at 16; one past it turns the
+// session's saves off, Refused::Behind). No play due waits behind the
+// give-back (updateWaits()), so only those that end while given back come
+// here, each at least a second played (2.20.5): more than 32 over one
+// update needs more than 32 of them to end during its fence, its save and
+// the rejoin (13.7 s, 2.7 s and a few seconds at 19,410 tracks, run L).
+constexpr uint32_t kRing = playlog::Tracker::kPending;
 
 // The take-back's reads at most: a read the card failed is made again after
 // each of tagstore::kBootWaitsMs (the boot's), at later passes.
