@@ -298,12 +298,12 @@ size_t Glue::resident() const {
   return !given_ && !ending_ && !fold_.booting() && (on() || rereadPending_) ? fold_.givesBack() : 0;
 }
 
-bool Glue::updateWaits(bool gateOpen, uint32_t slotsDue) const {
+bool Glue::updateWaits(bool gateOpen, uint32_t slotsQueued) const {
   if (!resident()) return false;
   // A play written now is folded live (the stats on, the boot's fold done):
   // the give-back's save holds it. (Before the boot's fold, or with a
-  // remount's read to make, the journal isn't ready: no slot is due.)
-  if (slotsDue && on() && !booting()) return true;
+  // remount's read to make, the journal isn't ready: none is queued.)
+  if (slotsQueued && on() && !booting()) return true;
   return !gateOpen && fold_.dirty();
 }
 

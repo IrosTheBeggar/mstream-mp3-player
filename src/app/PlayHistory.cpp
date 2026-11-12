@@ -267,6 +267,11 @@ uint32_t PlayHistory::slotsDue() {
   return tracker_->pending();
 }
 
+uint32_t PlayHistory::slotsQueued() {
+  if (!active_ || !journal_->ready() || !tracker_->pending() || cardAway()) return 0;
+  return tracker_->pending();
+}
+
 // What a try came to (the Outbox's word, the play still first in line).
 void PlayHistory::tried(const Outbox::Tried& t, const playlog::Played& p) {
   using Did = Outbox::Did;

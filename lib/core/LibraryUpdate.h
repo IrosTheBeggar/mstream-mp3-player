@@ -333,13 +333,13 @@ public:
     bool autoDjOwed = false;
     // The step's own give-back waits for the play log (the listening
     // stats', docs/LISTENING-STATS.md 6.7; statsglue::Glue::updateWaits()):
-    // while a play waits for its slot that the card may take (written first,
-    // it is folded live and the give-back's save holds it, not the ring),
-    // and while that save would write and the play log's write gate is shut
-    // this pass (a start's refill, a low ring, an underrun's wake or a
-    // moving list). The safe point lets a track's first seconds through (at
-    // least 20-30 s left), which the gate doesn't: no memory check or fence
-    // yet (Wait::Writes).
+    // while a play is queued for its slot, one behind a try the card failed
+    // too (written first, it is folded live and the give-back's save holds
+    // it, not the ring), and while that save would write and the play log's
+    // write gate is shut this pass (a start's refill, a low ring, an
+    // underrun's wake or a moving list). The safe point lets a track's first
+    // seconds through (at least 20-30 s left), which the gate doesn't: no
+    // memory check or fence yet (Wait::Writes).
     bool writesWait = false;
     // The memory check: free PSRAM, its largest block, what the step frees
     // besides the index (the queue's entries, Thumbs' pools).

@@ -43,11 +43,11 @@
 //     card's stats.bin doesn't, then every resident block but MARK's given
 //     back (resident(): the step's UpdateEnv::alsoFreed counts them); the
 //     plays written meanwhile wait in the glue's ring. The update step
-//     waits in Asked while a play waits for its slot that the card may take
-//     (written first, folded live: the save holds it, not the ring), and
-//     while that save would run at a pass the write gate shuts
-//     (updateWaits(), PlayHistory::statsSaveWaits()). takeBack() once
-//     the update is over (LibraryUpdate::asked() false) and Auto DJ's join
+//     waits in Asked while a play is queued for its slot, one behind a try
+//     the card failed too (written first, folded live: the save holds it,
+//     not the ring), and while that save would run at a pass the write
+//     gate shuts (updateWaits(), PlayHistory::statsSaveWaits()). takeBack()
+//     once the update is over (LibraryUpdate::asked() false) and Auto DJ's join
 //     is settled (AutoDj::joinSettled(): rejoined, or none to come), at a
 //     pass the write gate lets through, the join not Working and the card
 //     not away: stats.bin read (a remount's verdicts; a read the card
@@ -95,12 +95,12 @@ public:
   // What giveBack() would give back now (the step's UpdateEnv::alsoFreed).
   size_t resident() const { return glue_ ? glue_->resident() : 0; }
   // The update step waits before its give-back (Glue::updateWaits(),
-  // PlayHistory::statsSaveWaits()): a play waits for its slot that the card
-  // may take now (`slotsDue`: written first, the give-back's save holds
-  // it), or the give-back would save first and this pass's write gate is
-  // shut (`gateOpen`).
-  bool updateWaits(bool gateOpen, uint32_t slotsDue) const {
-    return glue_ && glue_->updateWaits(gateOpen, slotsDue);
+  // PlayHistory::statsSaveWaits()): a play is queued for its slot
+  // (`slotsQueued`, one behind a try the card failed too: written first,
+  // the give-back's save holds it), or the give-back would save first and
+  // this pass's write gate is shut (`gateOpen`).
+  bool updateWaits(bool gateOpen, uint32_t slotsQueued) const {
+    return glue_ && glue_->updateWaits(gateOpen, slotsQueued);
   }
   // The blocks again is due: given back, the update over, Auto DJ's join
   // settled and not Working (this pass's look), and a read the card failed

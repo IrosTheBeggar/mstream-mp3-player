@@ -185,11 +185,13 @@ struct TrackLook {
 // 7 s or less never opens the write gate, so its plays wait whole in the
 // Tracker and are handed over, one a pass, when it opens: up to its 32 at
 // once (S1's device round 1 found the ring at 16; one past it turns the
-// session's saves off, Refused::Behind). No play due waits behind the
-// give-back (updateWaits()), so only those that end while given back come
-// here, each at least a second played (2.20.5): more than 32 over one
-// update needs more than 32 of them to end during its fence, its save and
-// the rejoin (13.7 s, 2.7 s and a few seconds at 19,410 tracks, run L).
+// session's saves off, Refused::Behind). No play queued for the log waits
+// behind the give-back (updateWaits(): one behind a try the card failed
+// too, through its kRetryMs; with the card away or the journal not ready
+// none is written while given back), so only those that end while given
+// back come here, each at least a second played (2.20.5): more than 32 over
+// one update needs more than 32 of them to end during its fence, its save
+// and the rejoin (13.7 s, 2.7 s and a few seconds at 19,410 tracks, run L).
 constexpr uint32_t kRing = playlog::Tracker::kPending;
 
 // The take-back's reads at most: a read the card failed is made again after
@@ -225,11 +227,15 @@ struct TookBack {
 // is to hold them (S1's device round 1: at the pass the write gate opened,
 // Hs saved "nothing new" with 4 plays waiting for that same gate, and a
 // library update's give-back had "nothing to save first" with 3 completed
-// plays waiting, which then went into the ring). `slotsDue`: the plays
-// waiting for their slots that the card may take now: the Tracker's
-// pending(), the journal ready, the card not away, and the Outbox's head
-// due (no try the card failed still waiting out its kRetryMs; such a play
-// goes on waiting, and a save meanwhile holds what was written).
+// plays waiting, which then went into the ring). `slotsDue` (turnOf()'s,
+// Hs's): the plays waiting for their slots that the card may take now: the
+// Tracker's pending(), the journal ready, the card not away, and the
+// Outbox's head due (no try the card failed still waiting out its kRetryMs;
+// such a play goes on waiting, and Hs's save meanwhile holds what was
+// written). `slotsQueued` (updateWaits()'s): the same without the head's
+// due(): a library update's give-back waits out a failed try too, else the
+// plays queued behind it (up to the Tracker's 32) went into the ring after
+// it (S1's round-1 fix review).
 //
 // A pass the write gate lets through, the boot's scan done (app/
 // PlayHistory::loop(); the take-back, which may come before the scan, is
@@ -306,14 +312,16 @@ public:
   size_t resident() const;
   // The library update step waits in Asked (LibraryUpdate::In::writesWait),
   // before its memory check and its fence, whose give-back would take the
-  // blocks now: while a play waits for its slot that the card may take
-  // (`slotsDue`, turnOf()'s: written first, it is folded live and the
-  // give-back's save holds it, not the ring), and while the fold holds plays
-  // the card's stats.bin doesn't and this pass's write gate is shut
+  // blocks now: while a play is queued for its slot (`slotsQueued`, above:
+  // written first, it is folded live and the give-back's save holds it,
+  // not the ring; one behind a try the card failed waits that try out, at
+  // most (Outbox::kTries - 1) x kRetryMs, 10 s, a play the card goes on
+  // failing, which is then dropped), and while the fold holds plays the
+  // card's stats.bin doesn't and this pass's write gate is shut
   // (`gateOpen`: that save keeps out of a start's refill, the gapless
   // window, a low ring, an underrun's wake and a moving list, as every
   // stats save does). Never with nothing to give back.
-  bool updateWaits(bool gateOpen, uint32_t slotsDue) const;
+  bool updateWaits(bool gateOpen, uint32_t slotsQueued) const;
   bool givenBack() const { return given_; }
   // The blocks again (the update over, Auto DJ's rejoin done or abandoned,
   // a pass that may carve, the card not away; never while the end

@@ -109,16 +109,18 @@ public:
   size_t statsGiveBack(const char* where) { return active_ ? stats_.giveBack(where) : 0; }
   size_t statsResident() const { return active_ ? stats_.resident() : 0; }
   // The update step waits in Asked (LibraryUpdate::In::writesWait) before
-  // the give-back: while a play waits for its slot that the card may take
-  // now (slotsDue(): written first, at the passes the gate lets through,
-  // one a pass, it is folded live and the give-back's save holds it, not
-  // the ring); and while the give-back would save stats.bin first and this
-  // pass's write gate is shut (a start's refill, the gapless window, a low
-  // ring, an underrun's wake, a moving list, the card held), so that save
-  // keeps out of them as every other stats save does. The gate's verdict is
-  // loop()'s, this pass's (stepPlays() runs before stepCard()); the plays,
-  // now's (statsglue::Glue::updateWaits()).
-  bool statsSaveWaits() { return active_ && stats_.updateWaits(gateOpen_, slotsDue()); }
+  // the give-back: while a play is queued for its slot (slotsQueued():
+  // written first, at the passes the gate lets through, one a pass, it is
+  // folded live and the give-back's save holds it, not the ring; one
+  // behind a try the card failed waits that try out, at most 10 s a play
+  // the card goes on failing, then dropped); and while the give-back would
+  // save stats.bin first and this pass's write gate is shut (a start's
+  // refill, the gapless window, a low ring, an underrun's wake, a moving
+  // list, the card held), so that save keeps out of them as every other
+  // stats save does. The gate's verdict is loop()'s, this pass's
+  // (stepPlays() runs before stepCard()); the plays, now's
+  // (statsglue::Glue::updateWaits()).
+  bool statsSaveWaits() { return active_ && stats_.updateWaits(gateOpen_, slotsQueued()); }
 
   // The boot's scan: slots a pass (four reads: about 10 KB).
   static constexpr uint32_t kScanSlotsPerPass = 4 * playlog::kReadBytes / playlog::kSlot;
@@ -147,9 +149,14 @@ private:
   // The plays waiting for their slots that the card may take now (0:
   // none): the journal ready, the card not away, and the Outbox's head due
   // (no try the card failed still waiting out its 5 s). They come before
-  // Hs and before a library update's give-back (statsglue::turnOf(),
-  // Glue::updateWaits()).
+  // Hs (statsglue::turnOf()).
   uint32_t slotsDue();
+  // The plays queued for their slots (0: none, or none the card can take:
+  // the journal not ready, the card away): slotsDue() without the head's
+  // due(). They come before a library update's give-back
+  // (Glue::updateWaits()): those behind a try the card failed too, else
+  // they went into the ring after it (S1's round-1 fix review).
+  uint32_t slotsQueued();
 
   Library& library_;
   PlaybackController& player_;

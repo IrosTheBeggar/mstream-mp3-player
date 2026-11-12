@@ -2483,6 +2483,9 @@ struct Loop {
   // PlayHistory::slotsDue(): the journal ready, the card not away (the
   // test's never is), the Outbox's head due.
   uint32_t slotsDue() { return p.j->ready() && p.tracker->pending() && p.out->due() ? p.tracker->pending() : 0; }
+  // PlayHistory::slotsQueued(): the same without the head's due() (a play
+  // behind a try the card failed is queued too).
+  uint32_t slotsQueued() { return p.j->ready() ? p.tracker->pending() : 0; }
   void pass(bool gateOpen) {
     if (gateOpen) {
       switch (statsglue::turnOf(slotsDue(), hsAsked)) {
@@ -2495,7 +2498,7 @@ struct Loop {
       }
     }
     if (!updateAsked) return;
-    if (p.glue->core.updateWaits(gateOpen, slotsDue())) {
+    if (p.glue->core.updateWaits(gateOpen, slotsQueued())) {
       ++updateWaited;
       return;
     }
@@ -2691,6 +2694,118 @@ void test_many_short_plays_across_a_give_back() {
                            q.glue->fold.head().slots);
 }
 
+// The update waits for every play queued for the log, one behind a try the
+// card failed too (S1's round-1 fix review). A play whose try failed isn't
+// due for its kRetryMs, so Hs doesn't wait for it; the give-back does: else
+// the whole backlog (up to the Tracker's 32) went into the ring after it,
+// and one more play ending while given back passed the ring (the session's
+// saves off, Refused::Behind). The wait is bounded: the Outbox drops a play
+// at its kTries-th failure.
+void test_a_backlog_behind_a_failed_try() {
+  const Worked wk;
+  const uint8_t* dev = reinterpret_cast<const uint8_t*>("\0\0\0\0\0\1");
+  CutFs card;
+  put(card, wk.in);
+  Player p(card, dev);
+  wk.boot(p);  // (its save lands: the card's MARK 48, the fold clean)
+  TEST_ASSERT_EQUAL_UINT32(48, cardMark(card, p));
+  TEST_ASSERT_FALSE(p.glue->fold.dirty());
+  Loop l(p);
+  // A run of short tracks (3 s each, the gate shut through every one): the
+  // Tracker full.
+  for (uint32_t i = 0; i < pl::Tracker::kPending; ++i) {
+    PlaySpec ps = Worked::play(100 + i);
+    ps.played = 3000;
+    ps.duration = 3200;
+    p.ended(ps);
+    l.pass(false);
+  }
+  TEST_ASSERT_EQUAL_UINT32(pl::Tracker::kPending, p.tracker->pending());
+  TEST_ASSERT_EQUAL_UINT32(0, p.tracker->counts().overflow);
+  // The update is asked; the gate opens, and the card fails the head's
+  // question (kept, tried again after kRetryMs): nothing is due, but the
+  // update waits for the 32.
+  p.oenv.statFails = 1;
+  l.updateAsked = true;
+  l.pass(true);
+  TEST_ASSERT_EQUAL_UINT32(pl::Tracker::kPending, p.tracker->pending());
+  TEST_ASSERT_EQUAL_UINT32(0, l.slotsDue());
+  TEST_ASSERT_TRUE_MESSAGE(l.updateAsked, "the give-back with plays queued behind a failed try");
+  TEST_ASSERT_FALSE(p.glue->core.givenBack());
+  for (int k = 0; k < 4; ++k) {
+    p.oenv.now += 1000;
+    l.pass(true);
+    TEST_ASSERT_TRUE(l.updateAsked);
+  }
+  // Its try again: the 32 written one a pass, each folded live; the
+  // give-back at the pass of the last, its save holding them all, the ring
+  // none.
+  p.oenv.now += pl::Outbox::kRetryMs;
+  for (uint32_t i = 1; i < pl::Tracker::kPending; ++i) {
+    l.pass(true);
+    TEST_ASSERT_TRUE(l.updateAsked);
+  }
+  l.pass(true);
+  TEST_ASSERT_FALSE(l.updateAsked);
+  TEST_ASSERT_EQUAL_UINT32(0, p.tracker->pending());
+  TEST_ASSERT_EQUAL_UINT32(pl::Tracker::kPending, p.out->counts().written);
+  TEST_ASSERT_TRUE(p.glue->core.givenBack());
+  const statsglue::GaveBack& gb = p.glue->core.gaveBack();
+  TEST_ASSERT_TRUE(gb.saveAsked && gb.covers);
+  TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
+  TEST_ASSERT_EQUAL_UINT32(48 + pl::Tracker::kPending, cardMark(card, p));
+  TEST_ASSERT_EQUAL_UINT32(0, p.glue->core.ringCount());
+  // One more play while given back: the ring's first, nothing past it.
+  PlaySpec one = Worked::play(200);
+  one.played = 3000;
+  one.duration = 3200;
+  p.ended(one);
+  l.pass(true);
+  TEST_ASSERT_EQUAL_UINT32(1, p.glue->core.ringCount());
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, p.glue->core.ringOver(), "plays past the ring");
+  const statsglue::TookBack& t = p.glue->core.takeBack();
+  TEST_ASSERT_TRUE(t.read && t.on && t.same);
+  TEST_ASSERT_EQUAL_UINT32(1, t.folded);
+  TEST_ASSERT_EQUAL_UINT32(0, t.over);
+  TEST_ASSERT_FALSE_MESSAGE(t.behind || p.glue->core.behind(), "the session behind its log");
+  l.hsAsked = true;
+  l.pass(true);
+  TEST_ASSERT_FALSE(l.hsAsked);
+  TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
+  TEST_ASSERT_EQUAL_UINT32(49 + pl::Tracker::kPending, cardMark(card, p));
+
+  // A card that fails the head's every try: the update waits through its
+  // tries (kTries, kRetryMs apart), then the play is dropped and the
+  // give-back goes.
+  const uint32_t lost = p.out->counts().lost;
+  p.ended(Worked::play(201));
+  p.oenv.statFails = pl::Outbox::kTries;
+  l.updateWaited = 0;
+  l.updateAsked = true;
+  for (uint32_t k = 1; k < pl::Outbox::kTries; ++k) {
+    l.pass(true);
+    TEST_ASSERT_TRUE(l.updateAsked);
+    TEST_ASSERT_EQUAL_UINT32(1, p.tracker->pending());
+    p.oenv.now += pl::Outbox::kRetryMs;
+  }
+  l.pass(true);  // (its last try: dropped, given up)
+  TEST_ASSERT_EQUAL_UINT32(0, p.tracker->pending());
+  TEST_ASSERT_EQUAL_UINT32(lost + 1, p.out->counts().lost);
+  TEST_ASSERT_FALSE(l.updateAsked);
+  TEST_ASSERT_EQUAL_UINT32(pl::Outbox::kTries - 1, l.updateWaited);
+  TEST_ASSERT_TRUE(p.glue->core.givenBack());
+  TEST_ASSERT_FALSE(p.glue->core.gaveBack().saveAsked);  // (nothing new: Hs saved 81)
+  TEST_ASSERT_TRUE(p.glue->core.takeBack().same);
+  // The next boot folds nothing: every play (49-81) is in stats.bin, once.
+  Player q(card, p.id);
+  deviceFor(q, wk.sc);
+  q.nvs = p.nvs;
+  TEST_ASSERT_TRUE(q.boot(wk.ask()));
+  TEST_ASSERT_EQUAL_UINT32(0, q.glue->fold.folded());
+  TEST_ASSERT_EQUAL_UINT64(wk.b["stats"]["head"]["slots"].u64() + 1 + pl::Tracker::kPending,
+                           q.glue->fold.head().slots);
+}
+
 int main(int, char**) {
   if (!cardfixtures::json("stats/index.json", &gIndex) || gIndex.size() == 0 ||
       !cardfixtures::json("stats/sessions.json", &gSessions) || gSessions.size() == 0) {
@@ -2718,5 +2833,6 @@ int main(int, char**) {
   RUN_TEST(test_a_cut_during_the_give_backs_save);
   RUN_TEST(test_the_plays_waiting_come_first);
   RUN_TEST(test_many_short_plays_across_a_give_back);
+  RUN_TEST(test_a_backlog_behind_a_failed_try);
   return UNITY_END();
 }
