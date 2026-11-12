@@ -358,9 +358,14 @@ struct OEnv : pl::Outbox::Env {
   uint64_t perStat = 0;  // ms the played file's question takes
   uint64_t at = 0;       // the next play's startedAt (0: the clock unset)
   uint32_t size = 0, fatTime = 0;
+  uint32_t statFails = 0;  // the next questions of the played file the card fails
   Glue* glue = nullptr;
   File stat(const char*, uint32_t* s, uint32_t* t) override {
     now += perStat;
+    if (statFails) {
+      --statFails;
+      return File::Failed;
+    }
     *s = size;
     *t = fatTime;
     return File::There;
@@ -2454,6 +2459,179 @@ void test_a_cut_during_the_give_backs_save() {
   TEST_ASSERT_TRUE(again > 0 && again < runs);
 }
 
+// ---------------------------------------------------------------------------
+// The plays waiting for their slots come first (S1's device round 1, runs H
+// and L): at the pass the write gate opened, Hs saved "nothing new" with 4
+// plays waiting for that same gate, and a library update's give-back had
+// "nothing to save first" with 3 completed plays waiting, which then went
+// into the ring.
+// ---------------------------------------------------------------------------
+namespace {
+
+// app/PlayHistory::loop()'s turn at each pass the write gate lets through,
+// the boot's scan done (statsglue::turnOf(): one thing of the card's a
+// pass), then main.cpp's stepCard() (the update step asked: it waits while
+// Glue::updateWaits(), its LibraryUpdate::In::writesWait; else its memory
+// check and fence give the stats' blocks back), over the real Journal,
+// Tracker, Outbox and glue.
+struct Loop {
+  explicit Loop(Player& pl) : p(pl) {}
+  Player& p;
+  bool hsAsked = false;
+  bool updateAsked = false;
+  uint32_t updateWaited = 0;  // passes the update step waited for the play log
+  // PlayHistory::slotsDue(): the journal ready, the card not away (the
+  // test's never is), the Outbox's head due.
+  uint32_t slotsDue() { return p.j->ready() && p.tracker->pending() && p.out->due() ? p.tracker->pending() : 0; }
+  void pass(bool gateOpen) {
+    if (gateOpen) {
+      switch (statsglue::turnOf(slotsDue(), hsAsked)) {
+        case statsglue::Turn::Slot: p.out->writeOne(); break;
+        case statsglue::Turn::Hs:
+          hsAsked = false;
+          p.glue->hs();
+          break;
+        case statsglue::Turn::Nothing: break;
+      }
+    }
+    if (!updateAsked) return;
+    if (p.glue->core.updateWaits(gateOpen, slotsDue())) {
+      ++updateWaited;
+      return;
+    }
+    updateAsked = false;
+    p.glue->core.giveBack();
+  }
+};
+
+// The card's stats.bin's MARK for this player's epoch.
+uint32_t cardMark(CutFs& card, const Player& p) {
+  const Counts c = countsOf(card);
+  const auto it = c.mark.find({std::string(reinterpret_cast<const char*>(p.id), 6), p.j->epoch()});
+  return it == c.mark.end() ? 0 : it->second;
+}
+
+}  // namespace
+
+void test_the_plays_waiting_come_first() {
+  const Worked wk;
+  const uint8_t* dev = reinterpret_cast<const uint8_t*>("\0\0\0\0\0\1");
+  CutFs card;
+  put(card, wk.in);
+  Player p(card, dev);
+  wk.boot(p);  // (its save lands: the card's MARK 48)
+  TEST_ASSERT_EQUAL_UINT32(48, cardMark(card, p));
+  Loop l(p);
+  // Run H: Hs asked while 4 plays wait behind a shut gate (a run of short
+  // tracks: the gate shut for each start's first 2 s and last 5 s).
+  uint32_t folded = p.glue->fold.folded();
+  for (uint32_t i = 1; i <= 4; ++i) p.ended(Worked::play(i));
+  l.hsAsked = true;
+  for (int k = 0; k < 3; ++k) l.pass(false);
+  TEST_ASSERT_EQUAL_UINT32(4, p.tracker->pending());
+  TEST_ASSERT_TRUE(l.hsAsked);
+  // The gate opens (a pause): the 4 slots first, one a pass, each folded
+  // live (written()); Hs only at the pass after them, its save holding them.
+  for (uint32_t k = 1; k <= 4; ++k) {
+    l.pass(true);
+    TEST_ASSERT_TRUE_MESSAGE(l.hsAsked, "Hs before a play waiting for its slot");
+    TEST_ASSERT_EQUAL_UINT32(4 - k, p.tracker->pending());
+    TEST_ASSERT_EQUAL_UINT32(folded + k, p.glue->fold.folded());
+  }
+  const size_t calls = p.glue->calls.size();
+  l.pass(true);
+  TEST_ASSERT_FALSE(l.hsAsked);
+  TEST_ASSERT_EQUAL_size_t(calls + 1, p.glue->calls.size());
+  TEST_ASSERT_EQUAL_STRING("hs", p.glue->calls.back().c_str());
+  TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
+  TEST_ASSERT_EQUAL_UINT32(52, cardMark(card, p));  // (49-52 in stats.bin)
+  // Hs with a play whose try the card failed (its 5 s not over): that play
+  // isn't due, so Hs doesn't wait for it; the save holds what was written,
+  // and the play is folded live when its try comes.
+  p.ended(Worked::play(5));
+  p.oenv.statFails = 1;
+  l.hsAsked = true;
+  l.pass(true);  // (its first try: the card fails the played file's question; kept)
+  TEST_ASSERT_EQUAL_UINT32(1, p.tracker->pending());
+  TEST_ASSERT_EQUAL_UINT32(0, l.slotsDue());
+  l.pass(true);
+  TEST_ASSERT_FALSE(l.hsAsked);
+  TEST_ASSERT_EQUAL_STRING("nothing new", sx::savedName(p.glue->last.what));
+  p.oenv.now += pl::Outbox::kRetryMs;
+  l.pass(true);
+  TEST_ASSERT_EQUAL_UINT32(0, p.tracker->pending());
+  TEST_ASSERT_TRUE(p.glue->fold.dirty());  // (53 folded live, not in stats.bin)
+  TEST_ASSERT_TRUE(p.glue->hs());
+  TEST_ASSERT_EQUAL_UINT32(53, cardMark(card, p));
+
+  // Run L: a library update asked while 3 completed plays wait behind a
+  // shut gate (a start's 2 s; the stats.bin holding every play folded): the
+  // update step waits for them, gate shut or open; written one a pass, each
+  // folded live; then the give-back saves them first, and the ring holds
+  // none.
+  folded = p.glue->fold.folded();
+  for (uint32_t i = 6; i <= 8; ++i) p.ended(Worked::play(i));
+  TEST_ASSERT_FALSE(p.glue->fold.dirty());
+  l.updateAsked = true;
+  for (int k = 0; k < 3; ++k) l.pass(false);
+  TEST_ASSERT_TRUE_MESSAGE(l.updateAsked, "the give-back with plays waiting for their slots");
+  TEST_ASSERT_FALSE(p.glue->core.givenBack());
+  TEST_ASSERT_EQUAL_UINT32(3, l.updateWaited);
+  TEST_ASSERT_EQUAL_UINT32(3, p.tracker->pending());
+  for (int k = 0; k < 2; ++k) {
+    l.pass(true);
+    TEST_ASSERT_TRUE(l.updateAsked);
+  }
+  l.pass(true);  // (the last slot written: no slot due, the gate open)
+  TEST_ASSERT_FALSE(l.updateAsked);
+  TEST_ASSERT_EQUAL_UINT32(5, l.updateWaited);
+  TEST_ASSERT_EQUAL_UINT32(0, p.tracker->pending());
+  TEST_ASSERT_EQUAL_UINT32(folded + 3, p.glue->fold.folded());
+  TEST_ASSERT_TRUE(p.glue->core.givenBack());
+  const statsglue::GaveBack& gb = p.glue->core.gaveBack();
+  TEST_ASSERT_TRUE(gb.saveAsked && gb.covers);
+  TEST_ASSERT_EQUAL_STRING("none", statsglue::refusedName(gb.refused));
+  TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
+  TEST_ASSERT_EQUAL_UINT32(56, cardMark(card, p));  // (54-56 saved first)
+  TEST_ASSERT_EQUAL_UINT32(0, p.glue->core.ringCount());
+  const statsglue::TookBack& t = p.glue->core.takeBack();
+  TEST_ASSERT_TRUE(t.read && t.on && t.same && !t.behind);
+  TEST_ASSERT_EQUAL_UINT32(0, t.folded);
+
+  // The update's other wait, kept: the fold holds a play the card's
+  // stats.bin doesn't (written live at an open gate) and no slot is due:
+  // the give-back's save waits for a pass the gate lets through.
+  TEST_ASSERT_TRUE(p.write(Worked::play(9)) == pl::Outbox::Did::Written);
+  TEST_ASSERT_TRUE(p.glue->fold.dirty());
+  l.updateWaited = 0;
+  l.updateAsked = true;
+  l.pass(false);
+  TEST_ASSERT_TRUE(l.updateAsked);
+  TEST_ASSERT_EQUAL_UINT32(1, l.updateWaited);
+  l.pass(true);
+  TEST_ASSERT_FALSE(l.updateAsked);
+  TEST_ASSERT_TRUE(p.glue->core.gaveBack().saveAsked);
+  TEST_ASSERT_EQUAL_UINT32(57, cardMark(card, p));
+  // Given back: nothing to give back, so nothing to wait for (the plays
+  // written now go into the ring).
+  p.ended(Worked::play(10));
+  TEST_ASSERT_FALSE(p.glue->core.updateWaits(false, 1));
+  TEST_ASSERT_FALSE(p.glue->core.updateWaits(true, 1));
+  l.pass(true);
+  TEST_ASSERT_EQUAL_UINT32(1, p.glue->core.ringCount());
+  const statsglue::TookBack& u = p.glue->core.takeBack();
+  TEST_ASSERT_TRUE(u.same && !u.behind);
+  TEST_ASSERT_EQUAL_UINT32(1, u.folded);
+  TEST_ASSERT_TRUE(p.glue->hs());
+  // The next boot folds nothing: every play (49-58) is in stats.bin, once.
+  Player q(card, p.id);
+  deviceFor(q, wk.sc);
+  q.nvs = p.nvs;
+  TEST_ASSERT_TRUE(q.boot(wk.ask()));
+  TEST_ASSERT_EQUAL_UINT32(0, q.glue->fold.folded());
+  TEST_ASSERT_EQUAL_UINT64(wk.b["stats"]["head"]["slots"].u64() + 10, q.glue->fold.head().slots);
+}
+
 int main(int, char**) {
   if (!cardfixtures::json("stats/index.json", &gIndex) || gIndex.size() == 0 ||
       !cardfixtures::json("stats/sessions.json", &gSessions) || gSessions.size() == 0) {
@@ -2479,5 +2657,6 @@ int main(int, char**) {
   RUN_TEST(test_the_folds_blocks_wait_for_a_reserve);
   RUN_TEST(test_an_updates_give_back);
   RUN_TEST(test_a_cut_during_the_give_backs_save);
+  RUN_TEST(test_the_plays_waiting_come_first);
   return UNITY_END();
 }

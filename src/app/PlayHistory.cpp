@@ -211,17 +211,11 @@ void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, boo
     stats_.takeBack();
     return;
   }
-  // Hs (the console's listening stats save): now, as the real saves are, at
-  // a pass the gate lets through once the boot's scan is done (its line
-  // out); nothing else of the card's this pass.
-  if (booted_ && stats_.hsWaiting()) {
-    stats_.runHs(library_.update() && library_.update()->fenced());
-    return;
-  }
   // (Nothing is asked of a card that is away: the scan and the plays wait
-  // for the remount, remounted(), or the end's flush().)
-  if (!journal_->ready()) {
-    if (journal_->off() || cardAway()) return;
+  // for the remount, remounted(), or the end's flush(). A journal Off, NVS
+  // refusing the boot count, writes no slot: Hs still runs below.)
+  if (!journal_->ready() && !journal_->off()) {
+    if (cardAway()) return;
     // The fold's room for this piece first; none while Auto DJ's join is
     // Working: the scan waits that pass.
     if (!stats_.mayScan(kScanSlotsPerPass)) return;
@@ -251,12 +245,26 @@ void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, boo
     stats_.ready(scanPasses_, scanUs_);
     return;
   }
-  // One slot a pass. A play the card failed waits its 5 s (or the remount)
-  // at the head, and nothing behind it goes before it.
-  if (tracker_->pending() && !cardAway() && outbox_->due()) {
-    tryT0_ = esp_timer_get_time();
-    outbox_->writeOne();
+  // One thing of the card's a pass (statsglue::turnOf()). One slot a pass:
+  // a play the card failed waits its 5 s (or the remount) at the head, and
+  // nothing behind it goes before it. Hs (the console's listening stats
+  // save), now, as the real saves are, only at a pass with no slot due: the
+  // plays the gate held back are written first, each folded live
+  // (written()), so its save holds them (S1's device round 1: Hs at the
+  // pass the gate opened saved "nothing new" with 4 plays waiting).
+  switch (statsglue::turnOf(slotsDue(), stats_.hsWaiting())) {
+    case statsglue::Turn::Slot:
+      tryT0_ = esp_timer_get_time();
+      outbox_->writeOne();
+      break;
+    case statsglue::Turn::Hs: stats_.runHs(library_.update() && library_.update()->fenced()); break;
+    case statsglue::Turn::Nothing: break;
   }
+}
+
+uint32_t PlayHistory::slotsDue() {
+  if (!active_ || !journal_->ready() || !tracker_->pending() || cardAway() || !outbox_->due()) return 0;
+  return tracker_->pending();
 }
 
 // What a try came to (the Outbox's word, the play still first in line).

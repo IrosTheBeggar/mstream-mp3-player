@@ -774,7 +774,7 @@ void CardTasks::state(librarytext::Status* s, char* line, size_t size) const {
                                              "the worker",
                                              "the safe point",
                                              "Auto DJ's pick",
-                                             "the write gate (the stats save first)"};
+                                             "the play log (its plays, then the stats save first)"};
   constexpr int kWaits = static_cast<int>(sizeof(kUpdateWaits) / sizeof(kUpdateWaits[0]));
   char update[112] = "";
   if (updateAsked()) {

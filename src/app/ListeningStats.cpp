@@ -545,7 +545,8 @@ void ListeningStats::command(const char* arg) {
         return;
       }
       hsWaiting_ = true;
-      Serial.println("[listen] Hs: a save at the next pass the write gate lets through");
+      Serial.println("[listen] Hs: a save at the next pass the write gate lets through, after the plays waiting for "
+                     "their slots (written first, so the save holds them)");
       return;
     default:
       Serial.println("[listen] H: the state; Hd the last 7 UTC days; Hm MARK, ACKS and the log; Ht<16 hex> a track's "

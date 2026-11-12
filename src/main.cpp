@@ -3589,10 +3589,13 @@ static void stepCard(uint32_t now, bool input) {
   // A pick owed while Auto DJ's index joins: no fence until it lands
   // (autodj::decide(), this pass's: stepAutoDj() ran before).
   env.autoDjOwed = autoDj && autoDj->owed();
-  // The listening stats' give-back would save stats.bin first (at the
-  // memory check's hook or the fence) and the play log's write gate is
-  // shut this pass (stepPlays() ran before): no memory check or fence yet,
-  // so that save keeps out of a start's refill as every stats save does
+  // The listening stats' give-back (at the memory check's hook or the
+  // fence) waits: while a play waits for its slot that the card may take
+  // (written first at the passes the gate lets through, it is folded live
+  // and the give-back's save holds it, not the ring); and while it would
+  // save stats.bin first and the play log's write gate is shut this pass
+  // (stepPlays() ran before): no memory check or fence yet, so that save
+  // keeps out of a start's refill as every stats save does
   // (docs/LISTENING-STATS.md 5.5, 6.7).
   env.writesWait = playHistory.statsSaveWaits();
   cardTasks->loop(in, src, userInterface ? &userInterface->thumbs() : nullptr,

@@ -43,8 +43,10 @@
 //     card's stats.bin doesn't, then every resident block but MARK's given
 //     back (resident(): the step's UpdateEnv::alsoFreed counts them); the
 //     plays written meanwhile wait in the glue's ring. The update step
-//     waits in Asked while that save would run at a pass the write gate
-//     shuts (savesFirst(), PlayHistory::statsSaveWaits()). takeBack() once
+//     waits in Asked while a play waits for its slot that the card may take
+//     (written first, folded live: the save holds it, not the ring), and
+//     while that save would run at a pass the write gate shuts
+//     (updateWaits(), PlayHistory::statsSaveWaits()). takeBack() once
 //     the update is over (LibraryUpdate::asked() false) and Auto DJ's join
 //     is settled (AutoDj::joinSettled(): rejoined, or none to come), at a
 //     pass the write gate lets through, the join not Working and the card
@@ -59,9 +61,11 @@
 //   - the console's H (command()): H the state; Hd the last 7 UTC days; Hm
 //     MARK beside ACKS and the log's highest seqs; Ht<16 hex> a track's row by
 //     path hash (base ⊕ delta, the base read now on the loop); Hs a save now,
-//     the rotation's path, at the next pass the write gate lets through
-//     (refused during the boot's scan, behind the update's fence, with the
-//     card away, after a partial scan or a changed stats.bin).
+//     the rotation's path, at the next pass the write gate lets through with
+//     no play waiting for its slot that the card may take (those written
+//     first, one a pass: the save holds them; statsglue::turnOf()) (refused
+//     during the boot's scan, behind the update's fence, with the card away,
+//     after a partial scan or a changed stats.bin).
 // Loop task only.
 class ListeningStats final : private statsglue::Env {
 public:
@@ -90,10 +94,14 @@ public:
   size_t giveBack(const char* where);
   // What giveBack() would give back now (the step's UpdateEnv::alsoFreed).
   size_t resident() const { return glue_ ? glue_->resident() : 0; }
-  // The give-back would save first (the fold holds plays the card's
-  // stats.bin doesn't): the update step waits for a pass the play log's
-  // write gate lets through (PlayHistory::statsSaveWaits()).
-  bool savesFirst() const { return glue_ && glue_->resident() && glue_->fold().dirty(); }
+  // The update step waits before its give-back (Glue::updateWaits(),
+  // PlayHistory::statsSaveWaits()): a play waits for its slot that the card
+  // may take now (`slotsDue`: written first, the give-back's save holds
+  // it), or the give-back would save first and this pass's write gate is
+  // shut (`gateOpen`).
+  bool updateWaits(bool gateOpen, uint32_t slotsDue) const {
+    return glue_ && glue_->updateWaits(gateOpen, slotsDue);
+  }
   // The blocks again is due: given back, the update over, Auto DJ's join
   // settled and not Working (this pass's look), and a read the card failed
   // waited for. takeBack() at a pass the write gate lets through, the card
@@ -108,7 +116,8 @@ public:
   // PlayHistory::flush(): the orderly end (`untilMs`: the flush's deadline on
   // the board's monotonic clock; 0 before it starts).
   void ending(uint64_t untilMs);
-  // Hs asked, waiting for a pass the write gate lets through; run it then.
+  // Hs asked, waiting for a pass the write gate lets through with no slot
+  // due (PlayHistory::loop(): statsglue::turnOf()); run it then.
   bool hsWaiting() const { return hsWaiting_; }
   void runHs(bool fenced);
   // The console's H (the text after the H, Enter-ended).

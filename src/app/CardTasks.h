@@ -96,7 +96,7 @@ public:
     uint32_t seekSeq = 0;      // PlaybackController::seeks()
     size_t alsoFreed = 0;      // what the step frees besides the index: the queue's, Thumbs' pools
     bool autoDjOwed = false;   // Auto DJ owes a pick while its index joins (autodj::decide()): no fence yet
-    bool writesWait = false;   // the step's give-back would write (the stats' save) and the play log's gate is shut
+    bool writesWait = false;   // the step's give-back waits: plays to write first, or its stats save and the gate shut
   };
 
   CardTasks(Library& library, CardWorker& worker);

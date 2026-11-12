@@ -52,7 +52,9 @@ class AutoDj;
 //     live fold of each play written, the ending flag around the end's
 //     flush, a library update's give-back and the blocks taken again after
 //     it (at a pass the gate lets through, nothing else of the card's that
-//     pass), and the console's H (Hs runs at a pass the gate lets through).
+//     pass), and the console's H (Hs runs at a pass the gate lets through
+//     with no play waiting for its slot: those written first, so its save
+//     holds them; the update step's give-back waits for them too).
 // Only on the card with its records (Library::records()); never on the
 // flash. Loop task only.
 class PlayHistory final : private playlog::Tracker::Env, private playlog::Outbox::Env {
@@ -106,13 +108,17 @@ public:
   // back now (the step's alsoFreed).
   size_t statsGiveBack(const char* where) { return active_ ? stats_.giveBack(where) : 0; }
   size_t statsResident() const { return active_ ? stats_.resident() : 0; }
-  // The give-back would save stats.bin first and this pass's write gate is
-  // shut (a start's refill, the gapless window, a low ring, an underrun's
-  // wake, a moving list, the card held): the update step waits in Asked
-  // (LibraryUpdate::In::writesWait), so that save keeps out of them as
-  // every other stats save does. loop()'s verdict, this pass's: stepPlays()
-  // runs before stepCard().
-  bool statsSaveWaits() const { return active_ && !gateOpen_ && stats_.savesFirst(); }
+  // The update step waits in Asked (LibraryUpdate::In::writesWait) before
+  // the give-back: while a play waits for its slot that the card may take
+  // now (slotsDue(): written first, at the passes the gate lets through,
+  // one a pass, it is folded live and the give-back's save holds it, not
+  // the ring); and while the give-back would save stats.bin first and this
+  // pass's write gate is shut (a start's refill, the gapless window, a low
+  // ring, an underrun's wake, a moving list, the card held), so that save
+  // keeps out of them as every other stats save does. The gate's verdict is
+  // loop()'s, this pass's (stepPlays() runs before stepCard()); the plays,
+  // now's (statsglue::Glue::updateWaits()).
+  bool statsSaveWaits() { return active_ && stats_.updateWaits(gateOpen_, slotsDue()); }
 
   // The boot's scan: slots a pass (four reads: about 10 KB).
   static constexpr uint32_t kScanSlotsPerPass = 4 * playlog::kReadBytes / playlog::kSlot;
@@ -138,6 +144,12 @@ private:
   // A play's slot written: the listening stats' live fold.
   void written(const playlog::Slot& s, const playlog::Played& p) override;
   static void onOp(void* ctx, playlog::Journal::Op op, const char* a, const char* b, uint64_t n);
+  // The plays waiting for their slots that the card may take now (0:
+  // none): the journal ready, the card not away, and the Outbox's head due
+  // (no try the card failed still waiting out its 5 s). They come before
+  // Hs and before a library update's give-back (statsglue::turnOf(),
+  // Glue::updateWaits()).
+  uint32_t slotsDue();
 
   Library& library_;
   PlaybackController& player_;

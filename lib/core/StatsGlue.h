@@ -215,6 +215,26 @@ struct TookBack {
   bool behind = false;    // every later save this session refused (Refused::Behind)
 };
 
+// The plays the play log still has to write come before a stats save that
+// is to hold them (S1's device round 1: at the pass the write gate opened,
+// Hs saved "nothing new" with 4 plays waiting for that same gate, and a
+// library update's give-back had "nothing to save first" with 3 completed
+// plays waiting, which then went into the ring). `slotsDue`: the plays
+// waiting for their slots that the card may take now: the Tracker's
+// pending(), the journal ready, the card not away, and the Outbox's head
+// due (no try the card failed still waiting out its kRetryMs; such a play
+// goes on waiting, and a save meanwhile holds what was written).
+//
+// A pass the write gate lets through, the boot's scan done (app/
+// PlayHistory::loop(); the take-back, which may come before the scan, is
+// first): one thing of the card's a pass, the first of these.
+enum class Turn : uint8_t {
+  Nothing,
+  Slot,  // a play's slot (Outbox::writeOne(): written, folded live through written())
+  Hs,    // the console's save: no slot is due, so it holds every play the gate held back
+};
+Turn turnOf(uint32_t slotsDue, bool hsAsked);
+
 class Glue final : public playlog::Folds {
 public:
   // `fs`: the card's. Every block (the fold's, the work memory) through
@@ -278,6 +298,16 @@ public:
   // What giveBack() would give back now (the update's memory check counts
   // it in the step's room: UpdateEnv::alsoFreed).
   size_t resident() const;
+  // The library update step waits in Asked (LibraryUpdate::In::writesWait),
+  // before its memory check and its fence, whose give-back would take the
+  // blocks now: while a play waits for its slot that the card may take
+  // (`slotsDue`, turnOf()'s: written first, it is folded live and the
+  // give-back's save holds it, not the ring), and while the fold holds plays
+  // the card's stats.bin doesn't and this pass's write gate is shut
+  // (`gateOpen`: that save keeps out of a start's refill, the gapless
+  // window, a low ring, an underrun's wake and a moving list, as every
+  // stats save does). Never with nothing to give back.
+  bool updateWaits(bool gateOpen, uint32_t slotsDue) const;
   bool givenBack() const { return given_; }
   // The blocks again (the update over, Auto DJ's rejoin done or abandoned,
   // a pass that may carve, the card not away; never while the end
