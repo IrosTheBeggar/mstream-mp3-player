@@ -1554,8 +1554,9 @@ resident blocks back after Auto DJ's join, at the update's memory check
 or its fence, saving first when they hold plays the card's `stats.bin`
 doesn't (the update waits in Asked for a pass the play log's write gate
 lets through, as every stats save does, and for the plays still waiting
-for their slots, written first so that save holds them; `Hs` waits for
-those plays too); MARK stays, so the trim and a rotation still go by the
+for their slots, one behind a try the card failed too, written first so
+that save holds them; `Hs` waits for those the card may take now); MARK
+stays, so the trim and a rotation still go by the
 card's MARK, and the plays written meanwhile wait in a ring of 32 (the
 Tracker's: every play it can hand over at once). The boot's scan waits
 while an update is asked, so its fold never begins or grows behind one

@@ -7705,11 +7705,18 @@ the changes):
   update's safe point, and a pass the play log's write gate lets through:
   the step waits in Asked for one, `LibraryUpdate::Wait::Writes`, since
   the safe point lets a track's first seconds and their refill through;
-  and, since S1's device round 1, while a play waits for its slot that
-  the card may take: written first, it is folded live and this save holds
-  it, not the ring; `Glue::updateWaits()`. Round 1 had seen the fence's
-  give-back find "nothing to save first" with 3 completed plays queued
-  behind a start's 2 s, which then went into the ring),
+  and, since S1's device round 1, while a play is queued for its slot,
+  one behind a try the card failed too (its 5 s waited out, at most 10 s
+  a play the card goes on failing, then dropped; `Hs` doesn't wait for
+  it): written first, it is folded live and this save holds it, not the
+  ring; `Glue::updateWaits()`, given `PlayHistory::slotsQueued()`. Round
+  1 had seen it at two fences: at L3's the give-back found "nothing to
+  save first" with 3 completed plays queued behind a start's 2 s, all 3
+  into the ring; at L4's it saved 63 and 64 first and 65, queued with
+  them, went into the ring. The round-1 fixes waited only for a play due,
+  so a failed try's 5 s still let a backlog (up to the Tracker's 32) into
+  the ring, and one more play past it turned the saves off: the fixes'
+  review, `test_a_backlog_behind_a_failed_try`),
   then RCNT's and TRKD's chunks, the spare, HOUR and DAYS are given back
   (`statsfold::Fold::giveBack()`), MARK's block kept: `covered()` goes on
   answering by the card's MARK, so the trim and a rotation go by it. Not
@@ -7860,7 +7867,10 @@ the changes):
   more), `tools/test_statsref.py` 59 (`--now` with a trailing Z); their
   mutations 5 of 5 caught (Hs before the slots, the update ignoring the
   slots, the shut gate, or waiting with nothing to give back; the ring at
-  16).
+  16). Their review: `test_stats_store` 21 (a backlog behind a failed try:
+  the update waits it out, the ring 0; a card that fails every try: the
+  play dropped, then the give-back), which fails with the update given
+  the plays due alone (the round-1 fixes' rule).
 - **The device check** is the plan's 9.5 table, runs A-L on the spare card
   rebuilt (synthcard, synthtransfer, `statsref.py seed`), main at bc29b54
   the control in the same script. **Round 1** (2026-11-12 UTC, the owner's
@@ -7875,9 +7885,10 @@ the changes):
   2,548 B); G's rotation saves weren't run, and the DO-low half can't be:
   3.8's fault switch isn't in this firmware. L: the give-back and
   the re-read at each update (16-18 s given back, re-reads of 40-86 ms,
-  a save first of 52 ms), but the fence's give-back found "nothing to save
-  first" with 3 completed plays queued behind a start's 2 s, and they went
-  into the ring (fixed since); joined after the Opus run (L4) was 167,924
+  a save first of 52 ms), but L3's fence's give-back found "nothing to
+  save first" with 3 completed plays queued behind a start's 2 s, and they
+  went into the ring, and L4's saved 63 and 64 first while 65, queued with
+  them, went into the ring (fixed since); joined after the Opus run (L4) was 167,924
   B, which waits for main's control in the same script; the P = 19,478
   card and `gb` in a track's last 20-30 s not run. The `[ui] slow pass`
   lines (about 38 ms each, hundreds in A, C, D and K) came on an empty lit
