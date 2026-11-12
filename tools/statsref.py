@@ -2471,10 +2471,13 @@ def player_files(d):
 
 
 def parse_time(v):
-    """Unix ms, or an ISO time (UTC): '2026-11-10T09:00:00'."""
+    """Unix ms, or an ISO time (UTC): '2026-11-10T09:00:00', or with its
+    UTC designator, '2026-11-10T09:00:00Z' (as other tools print it)."""
     if v is None:
         return None
-    return int(v) if v.isdigit() else ms_of(v)
+    if v.isdigit():
+        return int(v)
+    return ms_of(v[:-1] if v[-1:] in ("Z", "z") else v)
 
 
 def parse_acks(v):

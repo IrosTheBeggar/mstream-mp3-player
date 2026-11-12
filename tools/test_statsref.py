@@ -994,6 +994,26 @@ class SessionTests(unittest.TestCase):
             self.assertIn(got.lastOrd, (1, 2))
 
 
+class ParseTests(unittest.TestCase):
+    def test_parse_time(self):
+        """--now and --until: Unix ms, or an ISO time in UTC, with or without
+        its 'Z' (S1's device round 1 passed "2026-11-12T03:00:00Z")."""
+        want = sr.ms_of("2026-11-12T03:00:00")
+        self.assertEqual(want, 1794452400000)
+        self.assertEqual(sr.parse_time("2026-11-12T03:00:00"), want)
+        self.assertEqual(sr.parse_time("2026-11-12T03:00:00Z"), want)
+        self.assertEqual(sr.parse_time("2026-11-12T03:00:00z"), want)
+        self.assertEqual(sr.parse_time(str(want)), want)
+        self.assertIsNone(sr.parse_time(None))
+        for bad in ("2026-11-12T03:00:00+01:00", "2026-11-12", "Z", "2026-11-12T03:00:00ZZ"):
+            with self.assertRaises(ValueError, msg=bad):
+                sr.parse_time(bad)
+        with tempfile.TemporaryDirectory(prefix="statsref_") as player, \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(sr.main(["boot", player, "--now", "2026-11-12T03:00:00Z"]), 0)
+        self.assertEqual(json.loads(out.getvalue())["read"], "absent")
+
+
 class FakeProbe:
     def __init__(self, fs="FAT32", system="C:\\"):
         self.fs, self.sys = fs, system
