@@ -26,7 +26,8 @@
 // - random folds, reloads and saves against a model of statsref's fold (a
 //   port here, std::map): the same file byte for byte, past every chunk's
 //   rows, HOUR's 840, DAYS' 400 and RCNT's 4,096;
-// - the memory: the blocks (chunks of 16,384 B, HOUR's 6,720, DAYS'
+// - the memory: the blocks (chunks of 16,392 B, whole rows of both
+//   tables: RCNT's cap in three, TRKD's 96 KB in six; HOUR's 6,720, DAYS'
 //   6,400, MARK's 1,536), never one table in one block, the spare, the
 //   index carved again at twice the size, reserve() leaving the folds
 //   nothing to carve, no memory at each carve (the fold stops, nothing is
@@ -1344,8 +1345,8 @@ void test_the_memory() {
     // The load's chunks: what stats.bin needs, and one spare.
     gHeap.carved.clear();
     TEST_ASSERT_TRUE(f.reserveLoad(2000, 700));
-    TEST_ASSERT_EQUAL_UINT32(2, f.chunks(sf::kRcnt));  // 1,365 a chunk
-    TEST_ASSERT_EQUAL_UINT32(2, f.chunks(sf::kTrkd));  // 682 a chunk
+    TEST_ASSERT_EQUAL_UINT32(2, f.chunks(sf::kRcnt));  // 1,366 a chunk
+    TEST_ASSERT_EQUAL_UINT32(2, f.chunks(sf::kTrkd));  // 683 a chunk
     TEST_ASSERT_TRUE(f.spare());
     for (size_t n : gHeap.carved) TEST_ASSERT_EQUAL_UINT32(sf::kChunkBytes, n);
     TEST_ASSERT_EQUAL_UINT32(5, gHeap.carved.size());
@@ -1385,6 +1386,20 @@ void test_the_memory() {
     f.saved(p);
     TEST_ASSERT_EQUAL_UINT32(0, f.chunks(sf::kTrkd));
     TEST_ASSERT_TRUE(f.spare());
+  }
+  {
+    // At the caps, the plan's budget (11): RCNT's 4,096 rows in three
+    // chunks, TRKD at the forced compaction's 96 KB (4,096 rows) in six,
+    // and the spare. (Chunks of 16,384 B took four and seven: S1's gate
+    // after the give-back.)
+    sf::Fold f(heapAlloc, heapFree);
+    TEST_ASSERT_TRUE(f.begin());
+    f.clear();
+    TEST_ASSERT_TRUE(f.reserveLoad(sf::kRcntRows, 96 * 1024 / sf::kTrackBytes));
+    TEST_ASSERT_EQUAL_UINT32(3, f.chunks(sf::kRcnt));
+    TEST_ASSERT_EQUAL_UINT32(6, f.chunks(sf::kTrkd));
+    TEST_ASSERT_TRUE(f.spare());
+    TEST_ASSERT_EQUAL_size_t(6720 + 6400 + 1536 + 10 * sf::kChunkBytes, f.held());
   }
   TEST_ASSERT_EQUAL_UINT32(live0, gHeap.live);
 }
@@ -1678,7 +1693,7 @@ void test_a_boot_whose_save_doesnt_land() {
     f.endBoot();  // (the boot's save refused: the glue ends the fold)
     TEST_ASSERT_TRUE(f.rows(sf::kRcnt) <= sf::kRcntRows);
     TEST_ASSERT_TRUE(f.rows(sf::kRcnt) > sf::kRcntRows - 25);  // (whole days of at most 25 rows)
-    TEST_ASSERT_TRUE(f.chunks(sf::kRcnt) <= 4);
+    TEST_ASSERT_EQUAL_UINT32(3, f.chunks(sf::kRcnt));  // (at its cap: three chunks, the plan's 11)
     TEST_ASSERT_TRUE(f.rcntFloor() > 0);
     TEST_ASSERT_TRUE(f.dirty());
     if (clock == 0) heldAfter = f.held();

@@ -25,9 +25,9 @@
 //   - the aggregate: HEAD; MARK (kept for good, a row each (deviceId,
 //     epoch) ever folded; the card's MARK beside RAM's, for the trim); HOUR
 //     and DAYS (their newest 840 and 400 rows, carved once at those caps);
-//     RCNT and TRKD in chunks of 16,384 B, never one block, never
-//     realloc'd; every block through the allocator hook (PSRAM on the
-//     device);
+//     RCNT and TRKD in chunks of 16,392 B (whole rows of both), never one
+//     block, never realloc'd; every block through the allocator hook
+//     (PSRAM on the device);
 //   - the boot's fold: each slot that counts above the MARK read at the
 //     boot, each once (5.6's ranges: in one file a device and epoch's seqs
 //     only rise; across files a slot inside another file's range is met
@@ -157,13 +157,19 @@ constexpr uint32_t kRcntDays = 32;
 constexpr uint32_t kRcntRows = 4096;
 bool compactionDue(uint32_t deltaRows, uint32_t baseRows, bool playing, bool safePoint);
 
-// The memory (5.6): RCNT and TRKD in chunks of this size (16,900 B carved:
-// 6.5); HOUR and DAYS once at their caps (6,720 B, 6,400 B); MARK in a
-// block of 64 rows (1,536 B), twice the rows each time it fills.
-constexpr uint32_t kChunkBytes = 16384;
+// The memory (5.6): RCNT and TRKD in chunks of this size, whole rows of
+// both tables and nothing over (1,366 of RCNT's 12 B, 683 of TRKD's 24 B),
+// so RCNT at its 4,096-row cap fills three and TRKD at the forced
+// compaction's 96 KB (4,096 rows) six, as the plan's budget has them (11).
+// 16,384 B held 1,365 and 682: a fourth and a seventh chunk for the caps'
+// last rows (S1's gate after the give-back). A chunk carves what 16,384 B
+// did, 16,900 B with the poisoning's 12 B and the header (6.5). HOUR and
+// DAYS once at their caps (6,720 B, 6,400 B); MARK in a block of 64 rows
+// (1,536 B), twice the rows each time it fills.
+constexpr uint32_t kChunkBytes = 16392;
 constexpr uint32_t kMarkBlockRows = 64;
-constexpr uint32_t kMaxTrkdChunks = 96;  // 65,472 rows
-constexpr uint32_t kMaxRcntChunks = 48;  // 65,520 rows
+constexpr uint32_t kMaxTrkdChunks = 96;  // 65,568 rows (past 65,535 the boot's fold has no index: 5.6)
+constexpr uint32_t kMaxRcntChunks = 48;  // 65,568 rows
 constexpr int kFiles = playlog::kNames;  // the log's files a scan reads (logName()'s i)
 
 // ---------------------------------------------------------------------------

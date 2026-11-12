@@ -51,7 +51,9 @@
 //   (MOOD-FILTERS.md 9.5's pass rule); and with the listening stats'
 //   hash-keyed blocks (docs/LISTENING-STATS.md 6.7, S1's StatsRun: the load's
 //   chunks at the boot, the boot's fold of a log never synced after the
-//   boot's join, all held through the updates) under the same rule.
+//   boot's join, given back at each update and taken again after it, or
+//   held through as S1 first built) under the same rule and the device's
+//   room.
 // Run: pio test -e native -f test_autodj_join
 #include <unity.h>
 
@@ -3142,10 +3144,13 @@ void test_a_library_update_in_a_model_heap() {
 // played tracks: stats.bin's RCNT and TRKD as such a card keeps them
 // (P = 2,214: 1,365 RCNT rows, one chunk, and 1,000 TRKD rows, two; P =
 // 19,478: RCNT at its 4,096-row cap, three chunks, and TRKD at the forced
-// compaction's 96 KB, 4,092 rows in six), loaded at PlayHistory::begin()'s
+// compaction's 96 KB, 4,096 rows in six: chunks of whole rows since S1's
+// gate after the give-back, which found 16,384 B chunks took a fourth and a
+// seventh for the caps' last rows, and this model 4,092 TRKD rows to fit
+// six), loaded at PlayHistory::begin()'s
 // place; then, after the boot's join, the boot's fold of a short log (300
 // slots) or of a full one never synced (13,106 slots, of 2,214 tracks; of
-// 4,092: TRKD's rows), its save landed, or (a full log's) refused, and then
+// 4,096: TRKD's rows), its save landed, or (a full log's) refused, and then
 // the give-back's own save landed or refused too; or (the give-back review)
 // a full log's fold after the first update, asked before the scan's first
 // piece (the loaded blocks given back, the scan held through the update,
@@ -3167,10 +3172,10 @@ void test_a_library_update_in_a_model_heap() {
 // the model's joined is about 100 KB over the device's, so the 245,764 B
 // clause never binds; what the take-back costs joined must fit the 16,368 B
 // the device has over that line after a FLAC update (MOOD-FILTERS Run D).
-// Two P = 19,478 shapes cost one re-read chunk, 16,384 B: the case fails,
-// listing them, until the owner rules (6.7; with stats.bin's RCNT at 2,048
-// rows, ladder step 3's cap, every shape's joined is +0: the review's run,
-// MEASURED-HOST).
+// Every shape's joined is the control's. (With 16,384 B chunks two P =
+// 19,478 shapes cost one re-read chunk, 16,384 B, and the case failed on
+// them: the eleventh chunk the caps' last rows took, S1's gate after the
+// give-back.) A shape that crosses it is listed, and the case fails.
 void test_the_listening_stats_in_a_model_heap() {
   const uint32_t tracks = 19412;
   const synthcard::Card card = synthcard::make(synth::userShape(tracks));
@@ -3210,16 +3215,16 @@ void test_the_listening_stats_in_a_model_heap() {
   };
   const uint32_t full = 2 * playlog::kFileSlots;
   const Shape shapes[] = {
-      {2214, 300, true, true, false, 80192, 78656, 96576, 360436, 249844},
-      {2214, full, true, true, false, 129344, 127808, 129344, 360436, 180212},
-      {19478, 300, true, true, false, 194880, 193344, 194880, 344052, 180212},
-      {19478, full, true, true, false, 194880, 193344, 178496, 360436, 143348},
-      {2214, full, false, true, false, 145728, 127808, 129344, 360436, 180212},
-      {19478, full, false, true, false, 194880, 193344, 178496, 360436, 143348},
-      {2214, full, false, false, false, 145728, 144192, 80192, 360436, 180212},
-      {19478, full, false, false, false, 194880, 193344, 194880, 344052, 143348},
-      {2214, full, true, true, true, 129344, 78656, 80192, 360436, 249844},
-      {19478, full, true, true, true, 194880, 193344, 194880, 360436, 192500},
+      {2214, 300, true, true, false, 80224, 78688, 96616, 360436, 249844},
+      {2214, full, true, true, false, 129400, 127864, 129400, 360436, 180212},
+      {19478, 300, true, true, false, 194968, 193432, 178576, 360436, 249844},
+      {19478, full, true, true, false, 194968, 193432, 178576, 360436, 180212},
+      {2214, full, false, true, false, 145792, 127864, 129400, 360436, 180212},
+      {19478, full, false, true, false, 194968, 193432, 178576, 360436, 180212},
+      {2214, full, false, false, false, 145792, 144256, 80224, 360436, 180212},
+      {19478, full, false, false, false, 194968, 193432, 178576, 360436, 180212},
+      {2214, full, true, true, true, 129400, 78688, 80224, 360436, 249844},
+      {19478, full, true, true, true, 194968, 177040, 178576, 360436, 262132},
   };
   // The device's room over the mood plan's 245,764 B line: joined after a
   // FLAC update and the rejoin, moods on, is 262,132 B on the device
@@ -3227,14 +3232,14 @@ void test_the_listening_stats_in_a_model_heap() {
   // about 100 KB over the device's, so the rule's 245,764 B clause never
   // binds here; what the take-back costs joined must fit the device's room
   // (the give-back review). A shape that doesn't is listed at the end, and
-  // the case fails: the owner's call (6.7).
+  // the case fails (6.7).
   constexpr size_t kDeviceRoom = 262132 - 245764;
   std::string crossing;
   for (const Shape& sh : shapes) {
     StatsRun sr;
     sr.rcntRows = sh.played < 10000 ? 1365 : 4096;
-    sr.trkdRows = sh.played < 10000 ? 1000 : 4092;
-    sr.hashes = sh.played < 10000 ? sh.played : 4092;
+    sr.trkdRows = sh.played < 10000 ? 1000 : 4096;
+    sr.hashes = sh.played < 10000 ? sh.played : 4096;
     sr.slots = sh.slots;
     sr.landed = sh.landed;
     sr.giveBackSaves = sh.saves;
@@ -3318,7 +3323,7 @@ void test_the_listening_stats_in_a_model_heap() {
   }
   if (!crossing.empty()) {
     const std::string m = "the take-back costs joined more than the device's 16,368 B of room over the 245,764 B line "
-                          "(MOOD-FILTERS Run D; the owner's call, 6.7): " +
+                          "(MOOD-FILTERS Run D; 6.7): " +
                           crossing;
     TEST_FAIL_MESSAGE(m.c_str());
   }

@@ -63,9 +63,14 @@ using DaysRow = Fold::DaysRow;
 using RcntRow = Fold::RcntRow;
 using TrkdRow = Fold::TrkdRow;
 // RAM's rows are the file's sizes (5.6's blocks: 1,536 B of MARK, 6,720 B
-// of HOUR, 6,400 B of DAYS; 1,365 RCNT rows and 682 TRKD rows a chunk).
+// of HOUR, 6,400 B of DAYS; 1,366 RCNT rows and 683 TRKD rows a chunk).
 static_assert(sizeof(MarkRow) == 24 && sizeof(HourRow) == 8 && sizeof(DaysRow) == 16, "the rows' sizes");
 static_assert(sizeof(RcntRow) == 12 && sizeof(TrkdRow) == 24, "the chunked rows' sizes");
+// A chunk holds whole rows of both tables, nothing over: RCNT at its cap
+// in three chunks, TRKD at the forced compaction's 96 KB in six (the
+// plan's 11).
+static_assert(kChunkBytes % sizeof(RcntRow) == 0 && kChunkBytes % sizeof(TrkdRow) == 0, "whole rows a chunk");
+static_assert(kRcntRows * sizeof(RcntRow) <= 3 * kChunkBytes && 96 * 1024 <= 6 * kChunkBytes, "the caps' chunks");
 
 // The chunked tables' keys.
 struct RcntKeys {
