@@ -7,6 +7,7 @@
 #include "PlayLog.h"
 #include "PlaybackController.h"
 #include "app/Library.h"
+#include "app/ListeningStats.h"
 
 class AutoDj;
 
@@ -45,6 +46,15 @@ class AutoDj;
 //   - deviceId: the eFuse MAC (esp_efuse_mac_get_default()); a new epoch:
 //     the hardware RNG (esp_random()); ACKS: the root the boot read
 //     (Library::root()).
+//   - The listening stats (app/ListeningStats, docs/LISTENING-STATS.md):
+//     stats.bin read before the journal's begin(), the journal's Folds (the
+//     boot's fold and save before its trim, a rotation's save first), the
+//     live fold of each play written, the ending flag around the end's
+//     flush, a library update's give-back and the blocks taken again after
+//     it (at a pass the gate lets through, nothing else of the card's that
+//     pass), and the console's H (Hs runs at a pass the gate lets through
+//     with no play waiting for its slot: those written first, so its save
+//     holds them; the update step's give-back waits for them too).
 // Only on the card with its records (Library::records()); never on the
 // flash. Loop task only.
 class PlayHistory final : private playlog::Tracker::Env, private playlog::Outbox::Env {
@@ -69,6 +79,9 @@ public:
     uint32_t positionMs = 0;
     bool positionKnown = true;
     uint32_t durationMs = 0;
+    // A restart asked (the update step's safe point says no to it too: the
+    // stats' compaction keeps out of it the same way).
+    bool restartAsked = false;
   };
   void loop(const Look& look, const playlog::WriteGate::In& gate, bool cardHeld);
 
@@ -86,6 +99,28 @@ public:
   // boot's scan again from its start (Journal::remounted()); a play the
   // card failed is tried again at once.
   void remounted();
+  // The console's H (app/ListeningStats): the text after the H.
+  void statsCommand(const char* arg) { stats_.command(arg); }
+  // A library update's give-back (docs/LISTENING-STATS.md 6.7; main.cpp's
+  // memory check hook and its fence): the listening stats' resident blocks
+  // (their save first); the bytes. Taken again by loop() once the update
+  // is over and Auto DJ's join settled. statsResident(): what it would give
+  // back now (the step's alsoFreed).
+  size_t statsGiveBack(const char* where) { return active_ ? stats_.giveBack(where) : 0; }
+  size_t statsResident() const { return active_ ? stats_.resident() : 0; }
+  // The update step waits in Asked (LibraryUpdate::In::writesWait) before
+  // the give-back: while a play is queued for its slot (slotsQueued():
+  // written first, at the passes the gate lets through, one a pass, it is
+  // folded live and the give-back's save holds it, not the ring; one
+  // behind a try the card failed waits that try out, at most 10 s a play
+  // the card goes on failing, then dropped); and while the give-back would
+  // save stats.bin first and this pass's write gate is shut (a start's
+  // refill, the gapless window, a low ring, an underrun's wake, a moving
+  // list, the card held), so that save keeps out of them as every other
+  // stats save does. The gate's verdict is loop()'s, this pass's
+  // (stepPlays() runs before stepCard()); the plays, now's
+  // (statsglue::Glue::updateWaits()).
+  bool statsSaveWaits() { return active_ && stats_.updateWaits(gateOpen_, slotsQueued()); }
 
   // The boot's scan: slots a pass (four reads: about 10 KB).
   static constexpr uint32_t kScanSlotsPerPass = 4 * playlog::kReadBytes / playlog::kSlot;
@@ -108,7 +143,20 @@ private:
   uint64_t startedAt(uint64_t startMono, uint8_t* clock) override;
   // A try's line.
   void tried(const playlog::Outbox::Tried& t, const playlog::Played& p) override;
+  // A play's slot written: the listening stats' live fold.
+  void written(const playlog::Slot& s, const playlog::Played& p) override;
   static void onOp(void* ctx, playlog::Journal::Op op, const char* a, const char* b, uint64_t n);
+  // The plays waiting for their slots that the card may take now (0:
+  // none): the journal ready, the card not away, and the Outbox's head due
+  // (no try the card failed still waiting out its 5 s). They come before
+  // Hs (statsglue::turnOf()).
+  uint32_t slotsDue();
+  // The plays queued for their slots (0: none, or none the card can take:
+  // the journal not ready, the card away): slotsDue() without the head's
+  // due(). They come before a library update's give-back
+  // (Glue::updateWaits()): those behind a try the card failed too, else
+  // they went into the ring after it (S1's round-1 fix review).
+  uint32_t slotsQueued();
 
   Library& library_;
   PlaybackController& player_;
@@ -121,5 +169,8 @@ private:
   playlog::Journal* journal_ = nullptr;
   playlog::Outbox* outbox_ = nullptr;
   playlog::WriteGate gate_;
+  bool gateOpen_ = false;  // this pass's write gate let the card's writes through (loop())
   int64_t tryT0_ = 0;  // when the try under way began (esp_timer's us: its line's ms)
+  ListeningStats stats_;
+  int64_t scanUs_ = 0;  // the boot's scan's pieces on the loop
 };

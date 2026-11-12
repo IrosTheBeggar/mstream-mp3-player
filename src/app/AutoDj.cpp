@@ -761,6 +761,19 @@ size_t AutoDj::fence() {
   return freed;
 }
 
+bool AutoDj::joinSettled() const {
+  if (file_ != File::Open || !dj_.settings().on) return true;
+  if (block_ == Block::Update) return false;  // (joins again after the update's Live)
+  if (block_ != Block::None) return true;     // (a retry's wait, the next build, reads failed: none now)
+  using S = autodj::Join::Status;
+  const S s = join_.status();
+  if (s == S::Working) return false;
+  if (s == S::Ready) return true;
+  // Idle or Aborted: stepJoin() begins one at its next pass, with an index.
+  const LibraryIndex* index = lib_.index();
+  return !index || !index->ready();
+}
+
 size_t AutoDj::giveBack() {
   const size_t held = join_.heldBytes();
   if (!held) return 0;

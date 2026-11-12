@@ -134,6 +134,7 @@ enum class Why : uint8_t {
   PendOp,           // an op of 0
   AcksOrder,        // ACKS's entries not strictly increasing by (deviceId, epoch): ACKS absent, never the root (2.5.6)
   FatRecords,       // a read failed on the file system's records of the file (tagstore::File::damaged())
+  Order,            // the stats' files (StatsFile): an array's rows not strictly increasing by their key
 };
 const char* whyName(Why w);
 

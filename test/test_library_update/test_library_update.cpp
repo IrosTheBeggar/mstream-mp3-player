@@ -366,6 +366,7 @@ struct Env {
   uint32_t trackLeftMs = 0;
   uint32_t seekSeq = 0;
   bool autoDjOwed = false;  // (autodj::decide()'s owed)
+  bool writesWait = false;  // (PlayHistory::statsSaveWaits())
   size_t psramFree = 64u << 20;
   size_t psramLargest = 64u << 20;
   size_t alsoFreed = 0;
@@ -467,6 +468,7 @@ struct Device {
     ui.trackLeftMs = e.trackLeftMs;
     ui.seekSeq = e.seekSeq;
     ui.autoDjOwed = e.autoDjOwed;
+    ui.writesWait = e.writesWait;
     ui.psramFree = e.psramFree;
     ui.psramLargest = e.psramLargest;
     ui.alsoFreed = e.alsoFreed;
@@ -3287,6 +3289,60 @@ void test_auto_dj_owed_holds_the_fence() {
   }
 }
 
+// The listening stats' give-back would save stats.bin first and the play
+// log's write gate is shut this pass (In::writesWait: the next track's
+// first seconds, its refill, which the safe point lets through; a low
+// ring, an underrun's wake, a moving list): the step waits in Asked
+// (Wait::Writes), after the safe point and Auto DJ's pick, before the
+// memory check (the deferral a short room would give comes only after it)
+// and the fence; the gate open, the fence goes up. Behind the fence it
+// changes nothing (the give-back review, docs/LISTENING-STATS.md 6.7).
+void test_the_stats_save_waits_for_the_write_gate() {
+  CutFs fs;
+  TestCard card;
+  handFilled(fs, card);
+  Device d(fs, card);
+  d.boot();
+  d.upd->ask("the scan's end");
+  Env e;
+  e.playing = true;
+  e.trackLeftMs = 240000;  // (a track just begun: the safe point)
+  e.writesWait = true;
+  e.psramFree = 1024;  // (the memory check would defer: it isn't reached)
+  // The compaction first (nothing of the fence's), then the wait.
+  d.runUntil([&] { return !d.store->hasJournals() && d.running == Job::None; }, e);
+  for (int i = 0; i < 200; ++i) {
+    d.pass(e);
+    TEST_ASSERT_TRUE(d.lastOut.wait == LibraryUpdate::Wait::Writes);
+    TEST_ASSERT_TRUE(d.lastOut.holdScan);
+    TEST_ASSERT_FALSE(d.lastOut.fenced);
+    TEST_ASSERT_FALSE(d.lastOut.updating);
+  }
+  TEST_ASSERT_FALSE(d.did(Do::Fence));
+  TEST_ASSERT_FALSE(d.did(Do::Deferred));
+  TEST_ASSERT_EQUAL_UINT32(0, d.upd->deferrals());
+  // The safe point and Auto DJ's pick are asked first.
+  e.trackLeftMs = 1000;
+  d.pass(e);
+  TEST_ASSERT_TRUE(d.lastOut.wait == LibraryUpdate::Wait::SafePoint);
+  e.trackLeftMs = 240000;
+  e.autoDjOwed = true;
+  d.pass(e);
+  TEST_ASSERT_TRUE(d.lastOut.wait == LibraryUpdate::Wait::AutoDj);
+  e.autoDjOwed = false;
+  d.pass(e);
+  TEST_ASSERT_TRUE(d.lastOut.wait == LibraryUpdate::Wait::Writes);
+  TEST_ASSERT_FALSE(d.did(Do::Deferred));
+  // The gate open: the memory check and the fence; shut again behind it,
+  // nothing changes.
+  e.writesWait = false;
+  e.psramFree = 64u << 20;
+  d.runUntil([&] { return d.did(Do::Fence); }, e);
+  e.writesWait = true;
+  d.runUntil([&] { return d.did(Do::Saved); }, e);
+  TEST_ASSERT_TRUE(d.upd->last().saved);
+}
+
 // The join and the update step: a join under way when the step is asked
 // owes the playing last entry its pick, so the fence waits for it; the pick
 // made, the fence goes up and releases the join's maps first (enterFence():
@@ -3621,6 +3677,7 @@ int main(int, char**) {
   RUN_TEST(test_the_marker_s_build_out_of_psram);
   RUN_TEST(test_a_failed_first_walk_keeps_the_library);
   RUN_TEST(test_auto_dj_owed_holds_the_fence);
+  RUN_TEST(test_the_stats_save_waits_for_the_write_gate);
   RUN_TEST(test_the_join_after_a_live_step);
   RUN_TEST(test_the_memory_check_has_auto_djs_join_given_back);
   return UNITY_END();

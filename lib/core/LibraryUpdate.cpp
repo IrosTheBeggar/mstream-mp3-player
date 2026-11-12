@@ -666,6 +666,14 @@ LibraryUpdate::Out LibraryUpdate::update(const In& in) {
         o.wait = Wait::AutoDj;
         break;
       }
+      // A card write the give-back makes (the listening stats' save first,
+      // at the memory check's hook or the fence) waits for a pass the play
+      // log's write gate lets through: the safe point lets the next track's
+      // first seconds through, its refill among them.
+      if (in.writesWait) {
+        o.wait = Wait::Writes;
+        break;
+      }
       // The worker's task, made now if it ended (3 s after its last step):
       // no internal RAM for its stack, and the step waits here, the index
       // as it is, never behind a fence whose build can't start.

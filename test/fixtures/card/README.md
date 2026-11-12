@@ -135,8 +135,28 @@ plays, lastAt, lastOrd]; `notPlayed` by album) and the hub's numbers
 (`view`). Each log file keeps one device and epoch's seqs in order, as a
 device writes them (5.6's ranges rely on it). `stats/library.json` is the
 made-up library behind Not played yet: its albums in A-Z order, each
-track's path and hash. Nothing but the device reads these files: a mirror
-of this folder MAY leave `stats/` out (docs/METADATA.md 2.17, item 10).
+track's path and hash. `stats/sessions.json` lists the sessions: players'
+boots and plays in turn on one card (`in`, under `stats/sessions/`), the
+play log written as tools/playlog.py's Device writes it and the stats kept
+as a device that keeps them does (the live fold of each play written, the
+rotation's save before plays.1.jnl leaves the log's names, `Hs`, the
+orderly end's flush, another player's `stats.bin` refusing a session's
+later saves, a 0.14.0 boot, NVS put back or erased, a log file deleted by
+hand, a library update's give-back and the re-read after it). Each player
+gives its deviceId, the epochs a fresh NVS draws and
+its NVS as the session starts (null: erased); each step its own fields (a
+boot's as a boot's above, and `stats` false for a 0.14.0 boot; a play's
+slot fields, `now` at a save it brings, `saveFails`, and `ending` with the
+budget `left` for the end's flush) and what a device MUST make of it: the
+card after it (`out`), a boot's facts as above, a play's seq and its
+rotation's save (`save`: null when none is asked, else whether it landed),
+Hs's `ok`, a give-back's save (`saved`: null when nothing was new) and the
+re-read's facts (`read`, `same`: the copy that held every slot the session
+held, the ring's plays `folded` and `covered`, those `over` it, and whether
+the session is `behind` its log, every later save refused). `slots` and `lost`: the slots that count the card ever held and
+those the stats lose (5.5's undercount, to the slot). Nothing but the
+device reads these files: a mirror of this folder MAY leave `stats/` out
+(docs/METADATA.md 2.17, item 10).
 
 The player's tests: `test/test_card_contract` (the vectors),
 `test/test_card_files` (the goldens, round trips, the hardening files,

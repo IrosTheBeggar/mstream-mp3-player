@@ -347,6 +347,25 @@ class BootTests(unittest.TestCase):
         r = sr.boot(r["files"], acks=[(A, E, 50)])
         self.assertEqual((r["gap"], r["saved"], r["stats"].head["gap"]), (0, False, 40))
 
+    def test_the_seq_rule(self):
+        # C5 (5.6): the next seq at boot takes the stats' MARK and ACKS's
+        # seq for this device and epoch too: NVS put back behind a log
+        # already trimmed takes neither a seq ACKS acknowledges nor one MARK
+        # covers.
+        before = sr.earlier([play(q) for q in range(1, 11)])  # MARK 10, the log trimmed whole
+        se = sr.Session(dict(before), acks=[(A, E, 6)])
+        se.scan()
+        self.assertEqual(se.next_seq(3, A, E), 11, "MARK's 10 over ACKS's 6 and NVS's 3")
+        self.assertEqual(se.next_seq(3, A, E + 1), 4, "another epoch's MARK and ACKS don't count")
+        self.assertEqual(se.next_seq(3, sr.DEV_B, E), 4, "nor another device's")
+        se = sr.Session(dict(before), acks=[(A, E, 50)])
+        se.scan()
+        self.assertEqual(se.next_seq(3, A, E), 51, "ACKS's 50 (the gap raised MARK to it too)")
+        se = sr.Session(dict(before, **files_of(*[play(q) for q in range(11, 14)])))
+        se.scan()
+        self.assertEqual(se.next_seq(3, A, E), 14, "the log's 13, folded: MARK 13 too")
+        self.assertEqual(se.next_seq(20, A, E), 21, "NVS ahead")
+
     def test_a_failed_save_trims_by_the_boots_mark(self):
         sc = sr.scenario_save_fails()
         r = sr.boot(sc["files"], **self.args(sc["boots"][0]))
@@ -416,7 +435,10 @@ class BootTests(unittest.TestCase):
     def test_a_stale_base_is_replaced(self):
         """5.3: after a stats.bin deleted or corrupt, or a base lost, baseGen
         starts again and the first compaction writes stats-00000001.bin over
-        the stale file there (named by nothing); nothing is removed."""
+        the stale file there (named by nothing); nothing is removed. A lost
+        base 1 is named by stats.bin until a save: that boot doesn't compact
+        under its name (a cut after the create would leave a short base the
+        named one, unread at every boot), the next boot's does."""
         files = sr.earlier([play(q, ["Brine", "Night Ticket"][q % 2]) for q in range(1, 5)])
         stale = files["stats-00000001.bin"]
         log = {"plays.jnl": sr.log(*[play(q, "Low Tide") for q in range(5, 7)])}
@@ -424,6 +446,12 @@ class BootTests(unittest.TestCase):
                            ("corrupt", {"stats.bin": files["stats.bin"][:-1], "stats-00000001.bin": stale}),
                            ("lost", dict(files, **{"stats-00000001.bin": sr.write_base({}, 1)}))):
             r = sr.boot(dict(card, **log))
+            if name == "lost":
+                self.assertEqual((r["read"], r["saved"], r["compacted"], r["removed"]), ("loaded", True, False, []))
+                self.assertEqual(r["files"]["stats-00000001.bin"], card["stats-00000001.bin"], "left as it was")
+                self.assertEqual(sr.load(r["files"]).head["baseGen"], 0)
+                card = r["files"]
+                r = sr.boot(dict(card, **{"plays.jnl": sr.log(*[play(q, "Low Tide") for q in range(5, 8)])}))
             new = r["files"]["stats-00000001.bin"]
             self.assertTrue(r["compacted"], name)
             self.assertEqual(r["removed"], [], name)
@@ -781,11 +809,18 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(self.card(c["out"])["stats.bad"], self.card(c["in"])["stats.bin"])
         self.assertNotEqual(self.card(c["out"])["stats-00000001.bin"], self.card(c["in"])["stats-00000001.bin"],
                             "the stale base replaced")
-        for name, compacted in (("base-lost", False), ("base-other", True)):
+        for name in ("base-lost", "base-other"):
             h = b(name)["stats"]["head"]
             self.assertEqual((h["flags"] & sr.FLAG_BASE_LOST, h["plays"], b(name)["removed"], b(name)["compacted"]),
-                             (sr.FLAG_BASE_LOST, 10, [], compacted), name)
+                             (sr.FLAG_BASE_LOST, 10, [], False), name)
         self.assertIn("stats-00000002.bin", b("base-lost")["out"])
+        # base-other: no compaction under the name stats.bin names (5.3);
+        # the next boot's, its stats.bin naming no base, replaces that file.
+        o1, o2 = b("base-other"), b("base-other", 1)
+        self.assertEqual(self.card(o1["out"])["stats-00000001.bin"], self.card(o1["in"])["stats-00000001.bin"])
+        self.assertEqual((o1["stats"]["head"]["baseGen"], o2["compacted"], o2["removed"], o2["stats"]["head"]["baseGen"]),
+                         (0, True, [], 1))
+        self.assertNotEqual(self.card(o2["out"])["stats-00000001.bin"], self.card(o1["in"])["stats-00000001.bin"])
         self.assertEqual(b("base-neighbours")["removed"], ["stats-00000002.bin"])
         nm = b("newer-minor")
         self.assertEqual(struct.unpack_from("<H", self.card(nm["in"])["stats.bin"], 6)[0], 3)
@@ -814,6 +849,169 @@ class FixtureTests(unittest.TestCase):
         for a in lib:
             for t in a["tracks"]:
                 self.assertEqual(int(t["hash"], 16), cf.path_hash(t["path"]))
+
+
+class SessionTests(unittest.TestCase):
+    """The sessions (stats/sessions.json): players' boots and plays on one
+    card, the log as playlog's Device writes it and the stats as 5.5-5.8
+    keep them; test_stats_store runs each step through the firmware's code."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.files = sr.session_files()
+        cls.index = json.loads(cls.files["stats/sessions.json"])
+        cls.by = {e["name"]: e for e in cls.index}
+
+    def test_written_by_fixture_files(self):
+        all_files = sr.fixture_files()
+        for n, b in self.files.items():
+            self.assertEqual(all_files[n], b, n)
+
+    def test_the_undercounts(self):
+        """5.5's and 13's rotation hole, to the slot: a rotation whose save
+        fails (over a twin's chain too), one in the end's flush with under
+        1 s left, one after a partial scan; 0.14.0's trim (HEAD's gap).
+        Every other session loses nothing and counts nothing twice."""
+        lost = {"rotation-fails": 4, "rotation-twin-fails": 4, "flush-late": 4, "partial-rotation": 4,
+                "old-firmware": 3, "update-rotation-unsaved": 4, "update-behind-rotation": 2}
+        for e in self.index:
+            self.assertEqual(e["lost"], lost.get(e["name"], 0), e["name"])
+        self.assertEqual(len(self.index), 24)
+
+    def test_the_updates_give_back(self):
+        """6.7's give-back (the owner's decision of 2026-11-11): a session
+        holding plays the card's stats.bin doesn't saves first; the plays
+        written while given back are folded after the re-read (but those
+        the card's MARK covers); another copy, a save that didn't land or a
+        play past the ring leaves the session behind its log, and every
+        later save of it refused. Each step's facts."""
+        by = self.by
+
+        def steps(name, do):
+            return [s for s in by[name]["steps"] if s["do"] == do]
+
+        self.assertEqual([s["saved"] for s in steps("update-quiet", "giveback")], [None])
+        self.assertEqual([(s["same"], s["folded"], s["behind"]) for s in steps("update-quiet", "takeback")],
+                         [(True, 0, False)])
+        self.assertEqual([s["saved"] for s in steps("update-plays", "giveback")], [True, True])
+        self.assertEqual([(s["same"], s["folded"], s["behind"]) for s in steps("update-plays", "takeback")],
+                         [(True, 2, False), (True, 0, False)])
+        self.assertEqual([s["ok"] for s in steps("update-plays", "hs")], [True])
+        self.assertEqual([s["saved"] for s in steps("update-save-fails", "giveback")], [False])
+        self.assertEqual([(s["read"], s["same"], s["folded"], s["behind"])
+                          for s in steps("update-save-fails", "takeback")], [("loaded", False, 1, True)])
+        self.assertEqual([s["ok"] for s in steps("update-save-fails", "hs")], [False])
+        # Behind, then a rotation later in the session: its save refused,
+        # the plays the give-back's save didn't land (3-4) lost with
+        # plays.1.jnl (the give-back review).
+        self.assertEqual([s["saved"] for s in steps("update-behind-rotation", "giveback")], [False])
+        self.assertEqual([(s["read"], s["same"], s["behind"]) for s in steps("update-behind-rotation", "takeback")],
+                         [("loaded", False, True)])
+        self.assertEqual([s["save"] for s in steps("update-behind-rotation", "play")],
+                         [None, None, None, None, None, None, None, None, False])
+        # A rotation while given back: no save asked when the give-back's
+        # covered plays.1.jnl; asked and refused (1-4 lost) when it didn't.
+        self.assertIsNone(steps("update-rotation-saved", "play")[-1]["save"])
+        self.assertEqual(steps("update-rotation-unsaved", "play")[-1]["save"], False)
+        self.assertEqual(steps("update-rotation-unsaved", "takeback")[0]["read"], "absent")
+        # Another player meanwhile: its stats.bin holds the play the ring
+        # held (covered, not folded again); the session's saves refused.
+        t = steps("update-other-player", "takeback")[0]
+        self.assertEqual((t["same"], t["folded"], t["covered"], t["behind"]), (False, 0, 1, True))
+        self.assertEqual([s["ok"] for s in steps("update-other-player", "hs")], [False])
+        # The end while given back: no re-read; the flush's rotation covered.
+        self.assertEqual(steps("update-ending", "takeback"), [])
+        self.assertIsNone(steps("update-ending", "play")[-1]["save"])
+        t = steps("update-ring-full", "takeback")[0]
+        self.assertEqual((t["same"], t["folded"], t["over"], t["behind"]), (True, sr.RING, 2, True))
+        self.assertEqual([s["ok"] for s in steps("update-ring-full", "hs")], [False])
+
+    def test_a_take_back_reads_once(self):
+        """The re-read after a give-back is a remount's (5.4): one read, so a
+        stats.bin that fails its checks is unread (the stats off for the
+        session), never renamed stats.bad."""
+        good = bytearray(sr.write_stats(sr.Stats()))
+        good[-1] ^= 0xFF  # (HEAD's last byte: its section's CRC fails)
+        files = {sr.STATS_BIN: bytes(good)}
+        se = sr.Session(files, once=True)
+        self.assertEqual(se.read, "unread")
+        self.assertFalse(se.on)
+        self.assertIn(sr.STATS_BIN, files)
+        self.assertNotIn(sr.STATS_BAD, files)
+        se = sr.Session(dict(files))
+        self.assertEqual(se.read, "corrupt")
+
+    def test_the_steps(self):
+        by = self.by
+        # The rotation's save runs before plays.1.jnl leaves the log's names,
+        # and the next boot folds what the log still holds.
+        steps = by["rotation-saves"]["steps"]
+        self.assertEqual([s["save"] for s in steps if s["do"] == "play"][-1], True)
+        self.assertEqual([s["save"] for s in by["rotation-fails"]["steps"] if s["do"] == "play"][-1], False)
+        self.assertEqual([s["save"] for s in by["flush-in-time"]["steps"] if s["do"] == "play"][-1], True)
+        self.assertEqual([s["save"] for s in by["flush-late"]["steps"] if s["do"] == "play"][-1], False)
+        self.assertIsNone([s["save"] for s in by["partial-rotation"]["steps"] if s["do"] == "play"][-1])
+        # Another player's stats.bin refuses every later save of a session.
+        hs = [s for s in by["second-player"]["steps"] if s["do"] == "hs"]
+        self.assertEqual([s["ok"] for s in hs], [False])
+        self.assertTrue(any(s.get("compacted") for s in by["second-player"]["steps"]))
+        self.assertEqual([s["ok"] for s in by["partial-hs"]["steps"] if s["do"] == "hs"], [False])
+        # The seq rule's reservations: the play after NVS put back is 5.
+        for name in ("nvs-back", "log-deleted"):
+            plays = [s["seq"] for s in by[name]["steps"] if s["do"] == "play"]
+            self.assertEqual(plays[-1], 5, name)
+        # 0.14.0's boot trims without folding; the next counts the gap.
+        old = by["old-firmware"]["steps"]
+        self.assertEqual(old[-2]["trimmed"], ["plays.1.jnl", "plays.jnl"])
+        self.assertEqual(old[-1]["gap"], 3)
+
+    def test_each_log_file_in_seq_order(self):
+        """5.6's ranges rely on it: in a file, a device and epoch's seqs only
+        rise."""
+        for path, data in self.files.items():
+            if path.rsplit("/", 1)[-1] not in sr.LOG_NAMES:
+                continue
+            last = {}
+            for _, why, s, _ in pl.read_file(data):
+                if why == "ok" and s["kind"] == pl.KIND_PLAY:
+                    k = (s["deviceId"], s["epoch"])
+                    self.assertGreater(s["seq"], last.get(k, 0), path)
+                    last[k] = s["seq"]
+
+    def test_live_and_rotation_rows(self):
+        """first-at-live: the rows a rotation's save holds are first-at-a's
+        but lastOrd (HEAD.round + 2 for a live play, + 1 for the boot's)."""
+        steps = self.by["first-at-live"]["steps"]
+        out = [s["out"] for s in steps if s.get("save")][0]
+        st = sr.read_stats(self.files["stats/sessions/%s/stats.bin" % out["stats.bin"]])
+        fa = json.loads(sr.fixture_files()["stats/index.json"])
+        boot = [e for e in fa if e["name"] == "first-at-a"][0]["boots"][0]
+        ref = sr.read_stats(sr.fixture_files()["stats/%s/stats.bin" % boot["out"]["stats.bin"]])
+        for h, r in ref.trkd.items():
+            got = st.trkd[h]
+            self.assertEqual((got.plays, got.skips, got.firstAt, got.lastAt, got.src),
+                             (r.plays, r.skips, r.firstAt, r.lastAt, r.src))
+            self.assertIn(got.lastOrd, (1, 2))
+
+
+class ParseTests(unittest.TestCase):
+    def test_parse_time(self):
+        """--now and --until: Unix ms, or an ISO time in UTC, with or without
+        its 'Z' (S1's device round 1 passed "2026-11-12T03:00:00Z")."""
+        want = sr.ms_of("2026-11-12T03:00:00")
+        self.assertEqual(want, 1794452400000)
+        self.assertEqual(sr.parse_time("2026-11-12T03:00:00"), want)
+        self.assertEqual(sr.parse_time("2026-11-12T03:00:00Z"), want)
+        self.assertEqual(sr.parse_time("2026-11-12T03:00:00z"), want)
+        self.assertEqual(sr.parse_time(str(want)), want)
+        self.assertIsNone(sr.parse_time(None))
+        for bad in ("2026-11-12T03:00:00+01:00", "2026-11-12", "Z", "2026-11-12T03:00:00ZZ"):
+            with self.assertRaises(ValueError, msg=bad):
+                sr.parse_time(bad)
+        with tempfile.TemporaryDirectory(prefix="statsref_") as player, \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(sr.main(["boot", player, "--now", "2026-11-12T03:00:00Z"]), 0)
+        self.assertEqual(json.loads(out.getvalue())["read"], "absent")
 
 
 class FakeProbe:

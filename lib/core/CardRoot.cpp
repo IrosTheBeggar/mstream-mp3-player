@@ -62,6 +62,7 @@ void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out, 
   r.hasRoot = false;
   r.cardId = 0;
   r.generation = 0;
+  r.commitTime = 0;
   r.present = false;
   r.identity = tagstore::Identity();
   r.tagsPath[0] = 0;
@@ -112,6 +113,7 @@ void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out, 
     r.hasRoot = true;
     r.cardId = m.frame().cardId;
     r.generation = m.frame().generation;
+    r.commitTime = m.commitTime();
     const uint32_t roots = m.rootCount();
     for (uint32_t i = 0; i < roots && r.rootCount < kMaxRoots; ++i) {
       const cc::Why w = m.root(i, r.roots[r.rootCount], sizeof(r.roots[0]));
