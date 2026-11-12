@@ -666,6 +666,21 @@ void ListeningStats::printState() {
                   refusedText(g.lastRefused()), static_cast<ul>(g.savesWritten()));
     return;
   }
+  if (r.what == sx::Saved::Nothing) {
+    // (Nothing written: the report holds no file. The card's copy RAM
+    // stands on is the one that holds it all; S1's device round 1 printed
+    // "0 bytes, generation 0" here with stats.bin at generation 5.)
+    const sx::Store::Copy& c = g.store().cardCopy();
+    char copy[64];
+    if (c.present) {
+      snprintf(copy, sizeof(copy), "stats.bin generation %lu holds it all", static_cast<ul>(c.generation));
+    } else {
+      snprintf(copy, sizeof(copy), "no stats.bin on the card");
+    }
+    Serial.printf("[listen] the last save: %s, nothing new (nothing written; %s), %.0f ms; %lu written this session\n",
+                  sg::kindName(g.lastKind()), copy, lastMs_, static_cast<ul>(g.savesWritten()));
+    return;
+  }
   Serial.printf("[listen] the last save: %s, %s%s%s, %lu bytes, generation %lu, %.0f ms%s; %lu written this session\n",
                 sg::kindName(g.lastKind()), sx::savedName(r.what), r.step[0] ? " at " : "", r.step,
                 static_cast<ul>(r.bytes), static_cast<ul>(r.generation), lastMs_, r.compacted ? ", compacted" : "",
