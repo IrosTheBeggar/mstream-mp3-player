@@ -88,7 +88,9 @@ AutoDJ index:** the device's Auto DJ is built (docs/AUTODJ.md;
 memory part of the update step and the budget (3.4.2, 3.5). The play log
 (2.20) is built and ran on the Core2 for 0.14.0 (3.10); **the listening
 stats' store** (docs/LISTENING-STATS.md S1, `/.player/stats.bin`) is built
-and host-tested, not flashed (3.11).
+and host-tested, and its device check's first round ran on the Core2
+(2026-11-12 UTC: A-D and J passed, H, K and L in part; what it found is
+fixed, the rest of the table owed: 3.11).
 
 **In short:**
 
@@ -7684,7 +7686,12 @@ the changes):
   while the join is Working and the stats fold, the scan waits that pass.
   `Hs` is refused at once during the boot's scan, else queued, and runs
   at a pass the write gate lets through, after the boot's scan's line,
-  with nothing else of the card's that pass.
+  with nothing else of the card's that pass, and only once no play waits
+  for its slot that the card may take (`statsglue::turnOf()`): those are
+  written first, one a pass, each folded live, so its save holds every
+  play the gate held back (S1's device round 1: Hs at the pass the gate
+  opened saved "nothing new" with 4 plays waiting). A play whose try the
+  card failed, its 5 s not over, isn't waited for.
 - **A library update's give-back** (the plan's 6.7; the owner's decision
   of 2026-11-11, "Give back in updates", after S1's gate found the heap
   model's rule failing with the blocks held through every update). At
@@ -7697,7 +7704,12 @@ the changes):
   doesn't is saved first (the rotation's path, never a compaction; the
   update's safe point, and a pass the play log's write gate lets through:
   the step waits in Asked for one, `LibraryUpdate::Wait::Writes`, since
-  the safe point lets a track's first seconds and their refill through),
+  the safe point lets a track's first seconds and their refill through;
+  and, since S1's device round 1, while a play waits for its slot that
+  the card may take: written first, it is folded live and this save holds
+  it, not the ring; `Glue::updateWaits()`. Round 1 had seen the fence's
+  give-back find "nothing to save first" with 3 completed plays queued
+  behind a start's 2 s, which then went into the ring),
   then RCNT's and TRKD's chunks, the spare, HOUR and DAYS are given back
   (`statsfold::Fold::giveBack()`), MARK's block kept: `covered()` goes on
   answering by the card's MARK, so the trim and a rotation go by it. Not
@@ -7706,8 +7718,10 @@ the changes):
   scan waits while an update is asked, so its fold never begins or grows
   behind the update. While given back every save is refused (a rotation's
   too, which then deletes what that MARK doesn't cover: 5.5's hole) and Hs
-  with its own reason; each play written goes into a ring of 16 slots in
-  the glue's object (no carve), one past it counted. Taken again in
+  with its own reason; each play written goes into a ring of 32 slots in
+  the glue's object (no carve; the Tracker's 32, every play it can hand
+  over at once: 16 until S1's device round 1), one past it counted.
+  Taken again in
   `PlayHistory::loop()` once the update is over and Auto DJ's join
   settled (`AutoDj::joinSettled()`), at a pass the write gate lets
   through, the join not Working, the card not away: `stats.bin` read, a
@@ -7742,8 +7756,10 @@ the changes):
   the ring's plays folded and covered, those past it, saves on or
   refused; a read the card failed: `NOT read again ... read again in N
   ms`), one line each. The console's `H` (GIVEN BACK during an update,
-  and the last re-read), `Hd`, `Hm`, `Ht<16 hex>` and `Hs` (README; the
-  plan's 9.3).
+  and the last re-read; the last save, and for one with nothing new the
+  generation of the card's `stats.bin` that holds it all, where round 1
+  printed "0 bytes, generation 0"), `Hd`, `Hm`, `Ht<16 hex>` and `Hs`
+  (README; the plan's 9.3).
 - **Costs** (MEASURED-HOST: the core2 build and its link map, the host
   tests). Flash 4,465,927 B at S1's gate (a626545; 4,465,059 B before
   the review's fixes), 42,236 B over S0's 4,423,691 B (the fold, the
@@ -7770,7 +7786,10 @@ the changes):
   save or the read. At S1's gate after the give-back (afbb05d, the chunks
   of whole rows): flash 4,473,839 B (48 B under dc77a7e's 4,473,887 B),
   RAM 59,160 B, IRAM left 5,157 B and the 25 `libc_a-*` objects S0's.
-  None of these is a device's yet.
+  The ring at 32 slots (S1's device round 1) grows the glue's object
+  1,280 B (5,824 B on the host, 5,136 B on the device by gdb; in PSRAM,
+  carved once in `setup()`).
+  None of these is measured on a device (gdb reads the ELF).
 - **The heap model** (the plan's 6.7, MODELLED: test_autodj_join's
   `test_the_listening_stats_in_a_model_heap`, its figures pinned).
   Held through every update, the stats' blocks came out of a library
@@ -7833,10 +7852,37 @@ the changes):
   (the rest equivalent), the S1 review's fixes 10 of 10, the give-back
   review's 9 of 11 (the glue's 8 of 10, the two missed equivalent; the
   update step's wait for the write gate 1 of 1); the gate's chunks 1 of 1
-  (16,384 B chunks fail `test_the_memory` and the heap-model case).
+  (16,384 B chunks fail `test_the_memory` and the heap-model case). S1's
+  device round 1's fixes: `test_stats_store` 20 (the plays waiting come
+  first, for Hs and the update's give-back; 32 short plays across a
+  give-back, the ring holding them all), `stats/sessions.json` 24
+  sessions, 294 steps (`update-ring-full` writes the ring's 32 and 2
+  more), `tools/test_statsref.py` 59 (`--now` with a trailing Z); their
+  mutations 5 of 5 caught (Hs before the slots, the update ignoring the
+  slots, the shut gate, or waiting with nothing to give back; the ring at
+  16).
 - **The device check** is the plan's 9.5 table, runs A-L on the spare card
   rebuilt (synthcard, synthtransfer, `statsref.py seed`), main at bc29b54
-  the control in the same script. None has run.
+  the control in the same script. **Round 1** (2026-11-12 UTC, the owner's
+  Core2 with the spare card, silent mode, S1 at 0164e8a; no control run):
+  A-D and J passed (the seed folded once, B's plays, skips and time, the
+  reset's fold and save then nothing more, the read-back, the tmp's size
+  check with the sector cache verifying). H, K and L passed in part. H:
+  Hs at the pass the gate opened saved "nothing new" with 4 plays waiting
+  for that gate (fixed since: the plays first); its saves' ms, 0
+  underruns and breaks, no slow pass; the headphones half not run. K: the
+  boot's save only (the loop's lowest 3,700 B unused, over the house's
+  2,548 B); G's rotation saves weren't run, and the DO-low half can't be:
+  3.8's fault switch isn't in this firmware. L: the give-back and
+  the re-read at each update (16-18 s given back, re-reads of 40-86 ms,
+  a save first of 52 ms), but the fence's give-back found "nothing to save
+  first" with 3 completed plays queued behind a start's 2 s, and they went
+  into the ring (fixed since); joined after the Opus run (L4) was 167,924
+  B, which waits for main's control in the same script; the P = 19,478
+  card and `gb` in a track's last 20-30 s not run. The `[ui] slow pass`
+  lines (about 38 ms each, hundreds in A, C, D and K) came on an empty lit
+  Now Playing, not from S1's code; main's control in the same script is
+  owed for them too. E, F, G and I not run.
 
 ---
 

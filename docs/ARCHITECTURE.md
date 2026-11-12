@@ -1553,10 +1553,13 @@ a library update (the owner's decision of 2026-11-11) the stats give their
 resident blocks back after Auto DJ's join, at the update's memory check
 or its fence, saving first when they hold plays the card's `stats.bin`
 doesn't (the update waits in Asked for a pass the play log's write gate
-lets through, as every stats save does); MARK stays, so the trim and a
-rotation still go by the card's MARK, and the plays written meanwhile
-wait in a ring of 16. The boot's scan waits while an update is asked, so
-its fold never begins or grows behind one (a fold not begun yet is given
+lets through, as every stats save does, and for the plays still waiting
+for their slots, written first so that save holds them; `Hs` waits for
+those plays too); MARK stays, so the trim and a rotation still go by the
+card's MARK, and the plays written meanwhile wait in a ring of 32 (the
+Tracker's: every play it can hand over at once). The boot's scan waits
+while an update is asked, so its fold never begins or grows behind one
+(a fold not begun yet is given
 back, and folds after the re-read). Once the update is over and Auto DJ
 has joined again, `stats.bin` is read again (a read the card fails made
 again, the boot's waits apart, before the stats go off) and the ring
@@ -2807,7 +2810,9 @@ strings.
   update's memory check (`setGiveBack()`'s hook, now the join's and the
   stats') or its fence, a save first when they hold new plays, MARK's
   1,536 B block kept; read again from the card once the update is over
-  and the join is back, at a pass the write gate lets through. The model
+  and the join is back, at a pass the write gate lets through. The glue's
+  object stays (5,824 B on the 64-bit host, its ring of the Tracker's 32
+  plays written meanwhile among it). The model
   then passes the mood plan's rule for every shape, and the device's
   16,368 B over its line after a FLAC update: joined is the control's
   (the plan's 6.7; at 19,478 played tracks the re-read's last chunk had
@@ -4795,6 +4800,7 @@ their own (the player stopped first, so nothing follows them).
    (`cfg.external_speaker.module_rca`), SD card verification, power management.
 6. **Listening stats** ([LISTENING-STATS.md](LISTENING-STATS.md)): its S1,
    the store, is built and host-tested (the plays counted from the play log
-   into `/.player/stats.bin`, the console's `H`; Storage above), not yet
-   run on a device; the lists, the Library's screens and Now Playing's row
-   (S2-S4) are next.
+   into `/.player/stats.bin`, the console's `H`; Storage above); its device
+   check's first round ran on the Core2 (2026-11-12 UTC; what it found is
+   fixed, the rest of the plan's 9.5 table owed); the lists, the Library's
+   screens and Now Playing's row (S2-S4) are next.
