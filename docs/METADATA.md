@@ -7619,7 +7619,10 @@ the changes):
   memory) gives every block of the fold back; a later read carves them
   again.
 - **The fold** (5.6). HOUR, DAYS and MARK are carved once (14,656 B),
-  RCNT and TRKD in 16,384 B chunks with one spare, all in PSRAM. At their
+  RCNT and TRKD in 16,392 B chunks with one spare, all in PSRAM: whole
+  rows of both (1,366 and 683), so RCNT's 4,096-row cap fills three and
+  TRKD's 96 KB six (16,384 B took four and seven, until S1's gate after
+  the give-back), each carving 16,900 B as before. At their
   caps HOUR and DAYS drop their oldest row, so RAM holds the newest 840
   and 400 the save keeps, whatever order the slots come in. Each slot
   once: per MARK row, the seq range each log file gave, at most 10. The
@@ -7633,9 +7636,10 @@ the changes):
   most 64 rows unsorted, then sort the chunks holding them. A full
   never-synced log grows RCNT too (pruned at the save; at the fold's end
   held to its 4,096-row cap by whole days, so a boot whose save doesn't
-  land doesn't keep a full log's rows: the S1 review): 412,992 B at the
-  peak in test_stats_fold, 396,608 B through the journal in
-  test_stats_store (13,106 slots, 4,616 tracks); the plan had modelled
+  land doesn't keep a full log's rows: the S1 review): 396,744 B at the
+  peak in test_stats_fold and through the journal in test_stats_store
+  (13,106 slots, 4,653 and 4,616 tracks; 412,992 B and 396,608 B with
+  16,384 B chunks); the plan had modelled
   TRKD's growth alone. During a library update the resident blocks are
   given back (below).
 - **The saves** (5.5): the boot's, inside `finishScan()` (the only one
@@ -7763,7 +7767,10 @@ the changes):
   its save 2,224 B, the fence's 1,840 B, the re-read 2,112 B, all under a
   rotation's save from there (3,040 B); their lines' frames 288 B and 208
   B since the give-back review (272 and 176 B before), never under the
-  save or the read. None of these is a device's yet.
+  save or the read. At S1's gate after the give-back (afbb05d, the chunks
+  of whole rows): flash 4,473,839 B (48 B under dc77a7e's 4,473,887 B),
+  RAM 59,160 B, IRAM left 5,157 B and the 25 `libc_a-*` objects S0's.
+  None of these is a device's yet.
 - **The heap model** (the plan's 6.7, MODELLED: test_autodj_join's
   `test_the_listening_stats_in_a_model_heap`, its figures pinned).
   Held through every update, the stats' blocks came out of a library
@@ -7777,9 +7784,10 @@ the changes):
   (eight shapes: P = 2,214 and 19,478, a short and a full log's fold, the
   boot's save and the give-back's landed or refused; and, since the
   give-back review, a full log's fold after the first update, asked before
-  the scan's first piece): joined the control's 360,436 B, or 16,384 B
-  under it at P = 19,478 when the re-read loads the full ceiling (one
-  chunk out of the largest block, whose holes the rejoin took); given back
+  the scan's first piece): joined the control's 360,436 B (16,384 B
+  under it at P = 19,478 when the re-read loaded the full ceiling, until
+  S1's gate after the give-back: the re-read's eleventh 16,384 B chunk,
+  one over the plan's budget, out of the largest block); given back
   (the join, then the stats: the hook's chain) Auto DJ off's block. The
   model carves in the firmware's order: the glue, HOUR, DAYS and MARK, the
   read's work memory and load at `PlayHistory::begin()`; the boot's fold
@@ -7787,10 +7795,11 @@ the changes):
   the re-read after the rejoin. The model's joined is about 100 KB over
   the device's, though: after a FLAC update the device has 16,368 B over
   the 245,764 B line (MOOD-FILTERS Run D), less than that one chunk, so
-  the case asks the take-back to cost joined no more than that, and fails
-  for the two P = 19,478 shapes until the owner rules (the plan's 6.7;
-  RCNT's cap at 2,048 rows gives +0 in every shape). The device's run L
-  is the real measure.
+  the case asks the take-back to cost joined no more than that. It failed
+  for two P = 19,478 shapes until S1's gate after the give-back gave the
+  chunks whole rows (16,392 B: RCNT's cap in three, not four), and every
+  shape meets it now, joined +0 (the plan's 6.7). The device's run L is
+  the real measure.
 - **Tests.** New: `test_stats_fold` (19 cases: every fixture's boots and
   saves byte for byte, a plain-map model, the memory, a boot whose save
   doesn't land), `test_stats_file`
@@ -7815,14 +7824,16 @@ the changes):
   `test_play_log` (42: the 33, the boot rules' sixth case, 8 for the
   hooks, 1 for the seq rule), `test_card_root` (34: commitTime),
   `test_autodj_join` (27, the stats' case passing since the give-back,
-  failing again since the give-back review on the device's room alone),
+  failing on the device's room alone from the give-back review to S1's
+  gate after it, passing since: chunks of whole rows),
   `tools/test_statsref.py`
   (58), `tools/test_playlog.py` (32), `tools/test_synthtransfer.py` (63:
   `--acks`). Mutation checks: the fold 10 of 10 caught, the files 15 of
   15, the proof over the hooks and the files 13 of 15, the glue 9 of 12
   (the rest equivalent), the S1 review's fixes 10 of 10, the give-back
   review's 9 of 11 (the glue's 8 of 10, the two missed equivalent; the
-  update step's wait for the write gate 1 of 1).
+  update step's wait for the write gate 1 of 1); the gate's chunks 1 of 1
+  (16,384 B chunks fail `test_the_memory` and the heap-model case).
 - **The device check** is the plan's 9.5 table, runs A-L on the spare card
   rebuilt (synthcard, synthtransfer, `statsref.py seed`), main at bc29b54
   the control in the same script. None has run.

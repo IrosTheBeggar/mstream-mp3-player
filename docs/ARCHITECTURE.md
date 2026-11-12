@@ -2783,8 +2783,9 @@ strings.
   Storage above): `app/ListeningStats` puts its glue and every block of
   the fold in PSRAM (`psramAlloc`), at `PlayHistory::begin()` in
   `setup()`, after Auto DJ's: HOUR, DAYS and MARK once (14,656 B), and
-  the RCNT and TRKD chunks `stats.bin` needs (16,384 B each: never one
-  block, never realloc'd) and one spare for the live folds. The boot's
+  the RCNT and TRKD chunks `stats.bin` needs (16,392 B each, whole rows
+  of both tables: never one block, never realloc'd) and one spare for the
+  live folds. The boot's
   fold grows them, with a transient index (and its ranges) carved at the
   scan's first piece and freed at the scan's end, only in a pass where
   Auto DJ's join isn't Working (otherwise the scan waits that pass); a
@@ -2797,7 +2798,7 @@ strings.
   statics (8 B of them the give-back's look). The key is a path hash, so a library update changes no
   row. A
   full never-synced log's fold (13,106 slots, 4,616 tracks) peaks at
-  396,608 B (MEASURED-HOST, through the journal). Held through a library
+  396,744 B (MEASURED-HOST, through the journal). Held through a library
   update these blocks came out of its largest free block rather than
   filling the boot's holes (Auto DJ's heap model, test_autodj_join,
   MODELLED: the rule failed at 19,478 played tracks and after a full
@@ -2807,10 +2808,11 @@ strings.
   stats') or its fence, a save first when they hold new plays, MARK's
   1,536 B block kept; read again from the card once the update is over
   and the join is back, at a pass the write gate lets through. The model
-  then passes the mood plan's rule for every shape: joined the control's,
-  or 16,384 B under it at 19,478 played tracks, which is more than the
-  device's 16,368 B over its line after a FLAC update, so the case fails
-  on those two shapes until the owner rules (the plan's 6.7). With no PSRAM for the glue
+  then passes the mood plan's rule for every shape, and the device's
+  16,368 B over its line after a FLAC update: joined is the control's
+  (the plan's 6.7; at 19,478 played tracks the re-read's last chunk had
+  crossed it until S1's gate after the give-back gave the chunks whole
+  rows). With no PSRAM for the glue
   the journal gets no `Folds`: its trim is 0.14.0's, by ACKS alone.
 
 ## Input
