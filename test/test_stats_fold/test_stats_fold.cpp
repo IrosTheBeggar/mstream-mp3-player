@@ -2,38 +2,46 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 // Host unit tests for the listening stats' fold (lib/core StatsFold;
-// docs/LISTENING-STATS.md 4.1, 5.2, 5.6), against tools/statsref.py's
-// fixtures (test/fixtures/card/stats/index.json) and a model of it:
+// docs/LISTENING-STATS.md 4.1, 5.2, 5.6, and S1's rework, 5.14: the
+// records, MARK and HEAD in the object, the card's rows merged at each
+// save), against tools/statsref.py's fixtures (test/fixtures/card/stats/
+// index.json) and a port of its fold:
 // - the rules of 4.1 (the line at an odd durationMs and at 0, the
 //   outcomes, the sources, dated's ends) and the worked example's hour,
 //   day and time; HEAD and a track's row byte for byte;
 // - the merge (5.2's ⊕) order-free: every order of the same slots gives
-//   the same row, but for lastOrd;
-// - every boot of every fixture: stats.bin and its base read as a boot
-//   reads them (a small reader here; StatsFile is the firmware's), the
-//   boot's fold over the log's files in the scan's order (a partial scan
-//   as the fixture says), the counts (folded, twice, gap), the save's
-//   stats.bin and a compaction's base byte for byte, and the trim the
+//   the same row, but for lastOrd; each section's rows as the file has
+//   them, their order and their ⊕ (compareRows, addRow), saturating;
+// - every boot of every fixture: stats.bin's HEAD and MARK loaded into the
+//   fold, its other sections kept as a reference table (the card's rows,
+//   StatsFile's to stream), the boot's fold into the records (and its
+//   overflow's chunks) over the log's files in the scan's order (a partial
+//   scan as the fixture says), the counts (folded, twice, gap), the
+//   records merged with the table through the cursors (the card's rows ⊕
+//   the records', the retention after, a compaction on the merged count)
+//   equal to statsref's stats.bin and base byte for byte, and the trim the
 //   card's MARK allows, file for file;
-// - each slot once (5.6's ranges: a slot met again in its own file, one
-//   met in another file's range, counted twice), the gap (an ACKS row of
-//   a key that never counts, a partial scan's none), the fold rounds (the
-//   boot's +1, live +2), MARK kept for good (the card's beside RAM's),
-//   sinceDay's four sources;
-// - the retention: HOUR's and DAYS' newest rows whatever order the slots
-//   come in, RCNT's 32 days from today or the newest day, and its 4,096
-//   rows (a day of more goes whole), nothing by date with the clock unset;
-// - random folds, reloads and saves against a model of statsref's fold (a
-//   port here, std::map): the same file byte for byte, past every chunk's
-//   rows, HOUR's 840, DAYS' 400 and RCNT's 4,096;
-// - the memory: the blocks (chunks of 16,392 B, whole rows of both
-//   tables: RCNT's cap in three, TRKD's 96 KB in six; HOUR's 6,720, DAYS'
-//   6,400, MARK's 1,536), never one table in one block, the spare, the
-//   index carved again at twice the size, reserve() leaving the folds
-//   nothing to carve, no memory at each carve (the fold stops, nothing is
-//   saved; an index that can't be carved finds the same rows without it);
-// - a full log never synced (13,106 slots): TRKD's rows the distinct
-//   hashes, the peak bytes and the µs a slot, printed.
+// - each slot once (5.6's ranges in the caller's block: a slot met again
+//   in its own file, one met in another file's range, counted twice), the
+//   gap (an ACKS row of a key that never counts, a partial scan's none),
+//   the fold rounds (the boot's +1, live +2), MARK kept for good (the
+//   card's beside RAM's), sinceDay's four sources;
+// - random sessions (boots with and without an overflow, live folds, the
+//   records' save at 64, saves held then promoted) against the port of
+//   statsref's whole aggregate: each save's file byte for byte, merged from
+//   the card's last one;
+// - the resident set: the records' 64 (due), 95 and 96 (kept), the 97th
+//   live (behind: not folded, the records dropped), the boot's overflow
+//   past 96 in chunks of 819 (16,384 B; 97, 915 and 916 records), a live
+//   slot in an overflow's room, reserve() leaving the folds nothing to
+//   carve, the chunks given back (a save landed or held, behind, clear(),
+//   the fold's end); MARK's 16 rows and the extra block (8 rows of room, a
+//   remount's read past it), Held's records emptied with the card's MARK
+//   kept till promoted; no memory at each carve (the fold stops, nothing
+//   is saved: never a wrong file);
+// - a full log never synced (13,106 slots): 16 chunks, the peak with the
+//   ranges' block (at most 273 KB as the device carves them), the file
+//   statsref writes, the us a slot and the save's merge, printed.
 // Run: pio test -e native -f test_stats_fold
 #include <unity.h>
 
@@ -100,6 +108,12 @@ pl::Slot slot(const uint8_t dev[6], uint64_t epoch, uint32_t seq, uint64_t hash,
   return s;
 }
 
+// A play of A's at seq q: track q % 50, dated day 300.
+pl::Slot playA(uint32_t q, uint64_t startedAt = 0) {
+  return slot(kDevA, kEpochA, q, 1000 + q % 50, 200000, 200000, pl::kCompleted, pl::kSourceManual,
+              startedAt ? startedAt : at(300, q % 24, q % 60));
+}
+
 // ---------------------------------------------------------------------------
 // A heap that counts: every block's size, the live bytes, and a carve that
 // fails on demand.
@@ -108,20 +122,22 @@ struct Heap {
   std::map<void*, size_t> blocks;
   std::vector<size_t> carved;  // every carve's size, in order
   size_t live = 0, peak = 0;
-  int failAfter = -1;          // carves before one fails (-1: none fails)
-  size_t failSize = 0;         // a carve of this size fails (0: none)
+  int asked = 0;               // carves asked since reset()
+  int failAt = -1;             // the carve that fails (-1: none)
+  bool failFrom = false;       // ... and every one after it
   void reset() {
     carved.clear();
     peak = live;
-    failAfter = -1;
-    failSize = 0;
+    asked = 0;
+    failAt = -1;
+    failFrom = false;
   }
 };
 Heap gHeap;
 
 void* heapAlloc(size_t n) {
-  if (gHeap.failAfter == 0 || (gHeap.failSize && n == gHeap.failSize)) return nullptr;
-  if (gHeap.failAfter > 0) --gHeap.failAfter;
+  const int k = gHeap.asked++;
+  if (gHeap.failAt >= 0 && (k == gHeap.failAt || (gHeap.failFrom && k > gHeap.failAt))) return nullptr;
   void* p = std::malloc(n);
   gHeap.blocks[p] = n;
   gHeap.carved.push_back(n);
@@ -138,6 +154,20 @@ void heapFree(void* p) {
   std::free(p);
 }
 
+// The caller's ranges' block for one boot's fold (the glue carves it at the
+// top; 8-byte aligned): kept until the fold's end.
+struct Ranges {
+  std::vector<uint64_t> mem;
+  size_t bytes = 0;
+  bool begin(sf::Fold& f, const cc::msmf::Acks& acks) {
+    bytes = f.bootBytes(acks);
+    mem.assign((bytes + 7) / 8, 0xA5A5A5A5A5A5A5A5ull);  // (not zeroed: beginBoot's to do)
+    return f.beginBoot(acks, mem.data(), bytes);
+  }
+};
+
+const cc::msmf::Acks kNoAcks;
+
 // ---------------------------------------------------------------------------
 // The file's frame (METADATA 2.4) as stats.bin and the base have it.
 // ---------------------------------------------------------------------------
@@ -150,6 +180,10 @@ const cc::FormatSpec kBaseSpec{kMagic, 40, kBaseSecs, 1};
 
 using Bytes = std::string;
 using Files = std::map<std::string, Bytes>;
+using Rows = std::vector<Bytes>;  // a section's rows, each its stride, in order
+
+const uint8_t* u8(const Bytes& b) { return reinterpret_cast<const uint8_t*>(b.data()); }
+uint8_t* u8(Bytes& b) { return reinterpret_cast<uint8_t*>(&b[0]); }
 
 Bytes frame(uint32_t generation, const std::vector<std::pair<uint32_t, std::pair<uint32_t, Bytes>>>& secs) {
   std::vector<cc::SectionOut> out;
@@ -178,85 +212,12 @@ Bytes frame(uint32_t generation, const std::vector<std::pair<uint32_t, std::pair
   return Bytes(reinterpret_cast<const char*>(buf.data()), fileBytes);
 }
 
-uint32_t headerCrc(const Bytes& b) { return cc::get32(reinterpret_cast<const uint8_t*>(b.data()) + 32); }
-
-// A section's rows as the fold gives them for a plan.
-Bytes rowsOf(sf::Fold& f, const sf::Fold::Plan& p, sf::Sec sec) {
-  Bytes out;
-  if (sec == sf::kHead) {
-    uint8_t h[sf::kHeadBytes];
-    sf::encodeHead(p.head, h);
-    return Bytes(reinterpret_cast<const char*>(h), sizeof(h));
-  }
-  f.rowsBegin(p, sec);
-  uint8_t buf[24 * 37];
-  for (uint32_t n; (n = f.nextRows(buf, 37)) > 0;) out.append(reinterpret_cast<const char*>(buf), n * sf::kStrides[sec]);
-  TEST_ASSERT_EQUAL_UINT32(p.bytesOf(sec), out.size());
-  return out;
-}
-
-Bytes statsBin(sf::Fold& f, const sf::Fold::Plan& p) {
-  std::vector<std::pair<uint32_t, std::pair<uint32_t, Bytes>>> secs;
-  for (int i = 0; i < sf::kSecs; ++i) {
-    const sf::Sec sec = static_cast<sf::Sec>(i);
-    secs.push_back({sf::kTypes[i], {sf::kStrides[i], rowsOf(f, p, sec)}});
-  }
-  return frame(p.generation, secs);
-}
+uint32_t headerCrc(const Bytes& b) { return cc::get32(u8(b) + 32); }
 
 std::string baseName(uint32_t gen) {
   char n[32];
   std::snprintf(n, sizeof(n), "stats-%08x.bin", static_cast<unsigned>(gen));
   return n;
-}
-
-// A compaction (5.3), as StatsFile will do it: base ⊕ delta, a merge of
-// two sorted streams, written as stats-<gen+1>.bin; the plan then names it
-// with an empty TRKD.
-Bytes compact(sf::Fold& f, sf::Fold::Plan* p, const std::vector<sf::Track>& base) {
-  Bytes rows;
-  f.rowsBegin(*p, sf::kTrkd);
-  sf::Track d;
-  bool more = f.nextTrack(&d);
-  size_t i = 0;
-  uint32_t n = 0;
-  uint8_t r[sf::kTrackBytes];
-  while (more || i < base.size()) {
-    sf::Track t;
-    if (more && (i == base.size() || d.hash < base[i].hash)) {
-      t = d;
-      more = f.nextTrack(&d);
-    } else if (!more || base[i].hash < d.hash) {
-      t = base[i++];
-    } else {
-      t = sf::merge(base[i++], d);
-      more = f.nextTrack(&d);
-    }
-    sf::encodeTrack(t, r);
-    rows.append(reinterpret_cast<const char*>(r), sizeof(r));
-    ++n;
-  }
-  const uint32_t gen = p->head.baseGen + 1;
-  const Bytes b = frame(gen, {{sf::kTrks, {24, rows}}});
-  p->head.baseGen = gen;
-  p->head.baseRows = n;
-  p->head.baseCrc = headerCrc(b);
-  p->compact = true;
-  return b;
-}
-
-// ---------------------------------------------------------------------------
-// The read (5.4) as a boot does it, small: StatsFile is the firmware's.
-// ---------------------------------------------------------------------------
-enum class Read { Loaded, Absent, Corrupt, Newer, Unread };
-const char* readName(Read r) {
-  switch (r) {
-    case Read::Loaded: return "loaded";
-    case Read::Absent: return "absent";
-    case Read::Corrupt: return "corrupt";
-    case Read::Newer: return "newer";
-    default: return "unread";
-  }
 }
 
 struct Section {
@@ -275,18 +236,63 @@ bool sections(const Bytes& b, const cc::FormatSpec& spec, cc::Why* why, Section*
     *why = c.checkCrc(i, buf, sizeof(buf));
     if (*why != cc::Why::Ok) return false;
     const cc::Section& s = c.section(i);
-    out[i] = {reinterpret_cast<const uint8_t*>(b.data()) + s.offset, s.bytes, s.count, s.stride};
+    out[i] = {u8(b) + s.offset, s.bytes, s.count, s.stride};
   }
   *generation = c.header().generation;
   return true;
 }
 
-// `named`: the base stats.bin names, whole or lost (a compaction never
-// writes that name: 5.3).
-Read readStats(sf::Fold& f, const Files& in, std::vector<sf::Track>* base, uint32_t* named = nullptr) {
+// ---------------------------------------------------------------------------
+// The card: stats.bin (HEAD and MARK the fold's after the read; its other
+// sections the reference table a save merges the records with, as StatsFile
+// streams them) and the base it names.
+// ---------------------------------------------------------------------------
+struct Card {
+  Bytes bin;                    // stats.bin ("": none, or renamed stats.bad)
+  std::vector<sf::Track> base;  // the base's rows
+  uint32_t named = 0;           // the base stats.bin names, whole or lost (no compaction under it: 5.3)
+};
+
+// A section's rows by their first minor's prefix (a newer minor's longer
+// rows: 5.12), as statsref reads them.
+Rows rowsOf(const Section& s, sf::Sec sec) {
+  Rows out;
+  for (uint32_t i = 0; i < s.count; ++i)
+    out.push_back(Bytes(reinterpret_cast<const char*>(s.p) + static_cast<size_t>(i) * s.stride, sf::kStrides[sec]));
+  return out;
+}
+
+void table(const Bytes& bin, Rows out[sf::kSecs]) {
+  for (int i = 0; i < sf::kSecs; ++i) out[i].clear();
+  if (bin.empty()) return;
+  cc::Why why;
+  Section s[6];
+  uint32_t gen = 0;
+  TEST_ASSERT_TRUE(sections(bin, kStatsSpec, &why, s, &gen));
+  for (int i = sf::kHour; i < sf::kSecs; ++i) out[i] = rowsOf(s[i], static_cast<sf::Sec>(i));
+}
+
+// The read (5.4) as a boot does it, small (StatsFile is the firmware's):
+// HEAD and MARK into the fold (MARK's block when the card's rows and 8 more
+// pass the object's 16), the base whole.
+enum class Read { Loaded, Absent, Corrupt, Newer, Unread };
+const char* readName(Read r) {
+  switch (r) {
+    case Read::Loaded: return "loaded";
+    case Read::Absent: return "absent";
+    case Read::Corrupt: return "corrupt";
+    case Read::Newer: return "newer";
+    default: return "unread";
+  }
+}
+
+// The boot's read's MARK block for each fold (the glue's, carved in setup
+// and kept for the session).
+std::map<const sf::Fold*, std::vector<uint32_t>> gMarkBlocks;
+
+Read readStats(sf::Fold& f, const Files& in, Card* card) {
   f.clear();
-  base->clear();
-  if (named) *named = 0;
+  *card = Card();
   auto it = in.find("stats.bin");
   if (it == in.end()) return Read::Absent;
   cc::Why why;
@@ -297,17 +303,29 @@ Read readStats(sf::Fold& f, const Files& in, std::vector<sf::Track>* base, uint3
     return Read::Corrupt;
   }
   if (s[0].bytes < sf::kHeadBytes) return Read::Corrupt;
-  TEST_ASSERT_TRUE(f.reserveLoad(s[sf::kRcnt].count, s[sf::kTrkd].count));
+  if (s[sf::kMark].count + sf::kMarkRoom > f.markCap()) {
+    std::vector<uint32_t>& block = gMarkBlocks[&f];
+    block.assign(sf::Fold::markBlockBytes(s[sf::kMark].count) / 4, 0);
+    TEST_ASSERT_TRUE(f.markBlock(block.data(), block.size() * 4));
+  }
   f.loadGeneration(gen);
   f.loadHead(s[0].p);
-  for (int i = 1; i < sf::kSecs; ++i) {
-    if (!f.loadRows(static_cast<sf::Sec>(i), s[i].p, s[i].count, s[i].stride)) {
-      f.clear();
-      return Read::Corrupt;
-    }
+  if (!f.loadMark(s[sf::kMark].p, s[sf::kMark].count, s[sf::kMark].stride)) {
+    f.clear();
+    return Read::Corrupt;
   }
+  // (The other sections' order: StatsFile checks it as it streams them.)
+  for (int i = sf::kHour; i < sf::kSecs; ++i) {
+    const Rows r = rowsOf(s[i], static_cast<sf::Sec>(i));
+    for (size_t k = 1; k < r.size(); ++k)
+      if (sf::compareRows(static_cast<sf::Sec>(i), u8(r[k - 1]), u8(r[k])) >= 0) {
+        f.clear();
+        return Read::Corrupt;
+      }
+  }
+  card->bin = it->second;
   const sf::Head h = f.head();
-  if (named) *named = h.baseGen;
+  card->named = h.baseGen;
   if (h.baseGen) {
     auto b = in.find(baseName(h.baseGen));
     if (b != in.end() && b->second.size() < 40) return Read::Unread;  // its header doesn't read whole
@@ -318,12 +336,169 @@ Read readStats(sf::Fold& f, const Files& in, std::vector<sf::Track>* base, uint3
       uint32_t g = 0;
       if (!sections(b->second, kBaseSpec, &why, &t, &g) || g != h.baseGen || t.count != h.baseRows) return Read::Unread;
       for (uint32_t i = 0; i < t.count; ++i) {
-        base->push_back(sf::decodeTrack(t.p + static_cast<size_t>(i) * t.stride));
-        if (i && (*base)[i].hash <= (*base)[i - 1].hash) return Read::Unread;
+        card->base.push_back(sf::decodeTrack(t.p + static_cast<size_t>(i) * t.stride));
+        if (i && card->base[i].hash <= card->base[i - 1].hash) return Read::Unread;
       }
     }
   }
   return Read::Loaded;
+}
+
+// ---------------------------------------------------------------------------
+// The save as StatsFile streams it, small: each section's card rows merged
+// with the records' (the cursor: a two-stream merge by compareRows, equal
+// keys ⊕'d by addRow), the retention after (statsref's retain()), a
+// compaction on the merged TRKD's count, HEAD and MARK from the plan.
+// ---------------------------------------------------------------------------
+Rows merged(sf::Fold& f, sf::Sec sec, const Rows& card) {
+  const uint32_t st = sf::kStrides[sec];
+  sf::Fold::Cursor c(f, sec);
+  Rows out;
+  uint8_t r[sf::kTrackBytes];
+  Bytes last;
+  bool more = c.next(r);
+  if (more) last.assign(reinterpret_cast<const char*>(r), st);
+  size_t i = 0;
+  while (more || i < card.size()) {
+    const int k = !more ? 1 : i == card.size() ? -1 : sf::compareRows(sec, r, u8(card[i]));
+    if (k < 0) {
+      out.push_back(Bytes(reinterpret_cast<const char*>(r), st));
+    } else if (k > 0) {
+      out.push_back(card[i++]);
+    } else {
+      Bytes a = card[i++];
+      sf::addRow(sec, u8(a), r);
+      out.push_back(a);
+    }
+    if (k <= 0) {
+      more = c.next(r);
+      // The cursor's rows strictly increasing: each key once.
+      if (more) {
+        TEST_ASSERT_TRUE_MESSAGE(sf::compareRows(sec, u8(last), r) < 0, "the cursor gave a key twice or out of order");
+        last.assign(reinterpret_cast<const char*>(r), st);
+      }
+    }
+  }
+  return out;
+}
+
+uint16_t dayOfRow(sf::Sec sec, const Bytes& r) { return sec == sf::kDays || sec == sf::kRcnt ? cc::get16(u8(r)) : 0; }
+
+// statsref's retain(): HOUR's and DAYS' newest 840 and 400; RCNT's 32 days
+// back from the earlier of today and DAYS' newest day (nothing by date with
+// the clock unset), then whole days, oldest first, past 4,096 rows.
+void retain(Rows rows[sf::kSecs], uint64_t nowMs) {
+  Rows& hr = rows[sf::kHour];
+  Rows& dy = rows[sf::kDays];
+  Rows& rc = rows[sf::kRcnt];
+  if (hr.size() > sf::kHourRows) hr.erase(hr.begin(), hr.end() - sf::kHourRows);
+  if (dy.size() > sf::kDaysRows) dy.erase(dy.begin(), dy.end() - sf::kDaysRows);
+  uint16_t today = 0;
+  if (sf::todayOf(nowMs, &today) && !dy.empty()) {
+    const int64_t ref = std::min<int64_t>(today, dayOfRow(sf::kDays, dy.back()));
+    rc.erase(std::remove_if(rc.begin(), rc.end(),
+                            [&](const Bytes& r) { return dayOfRow(sf::kRcnt, r) <= ref - static_cast<int64_t>(sf::kRcntDays); }),
+             rc.end());
+  }
+  while (rc.size() > sf::kRcntRows) {
+    const uint16_t oldest = dayOfRow(sf::kRcnt, rc.front());
+    size_t k = 0;
+    while (k < rc.size() && dayOfRow(sf::kRcnt, rc[k]) == oldest) ++k;
+    rc.erase(rc.begin(), rc.begin() + k);
+  }
+}
+
+Bytes join(const Rows& rows) {
+  Bytes out;
+  for (const Bytes& r : rows) out += r;
+  return out;
+}
+
+struct SaveAsk {
+  uint64_t nowMs = 0;
+  bool hasCommit = false;
+  uint64_t commitSec = 0;
+  bool playing = true;  // (with safePoint false: never a compaction)
+  bool safePoint = false;
+};
+
+struct SaveOut {
+  Bytes bin, base;
+  bool compacted = false;
+  uint32_t mergedTrkd = 0;
+  sf::Fold::Plan plan;
+};
+
+// The save's bytes; the fold unchanged (the caller says saved() or held()).
+SaveOut saveOf(sf::Fold& f, const Card& card, const SaveAsk& ask) {
+  SaveOut o;
+  TEST_ASSERT_TRUE(f.plan(ask.nowMs, ask.hasCommit, ask.commitSec, &o.plan));
+  sf::Fold::Plan& p = o.plan;
+  Rows t[sf::kSecs];
+  table(card.bin, t);
+  Rows m[sf::kSecs];
+  for (int i = sf::kHour; i < sf::kSecs; ++i) m[i] = merged(f, static_cast<sf::Sec>(i), t[i]);
+  retain(m, ask.nowMs);
+  o.mergedTrkd = static_cast<uint32_t>(m[sf::kTrkd].size());
+  // 5.3, on the merged count: base ⊕ TRKD into stats-<gen+1>.bin.
+  if (sf::compactionDue(o.mergedTrkd, p.head.baseRows, ask.playing, ask.safePoint) && p.head.baseGen + 1 != card.named) {
+    Rows rows;
+    size_t i = 0, k = 0;
+    uint8_t r[sf::kTrackBytes];
+    while (i < card.base.size() || k < m[sf::kTrkd].size()) {
+      sf::Track a;
+      if (k == m[sf::kTrkd].size() || (i < card.base.size() && card.base[i].hash < cc::get64(u8(m[sf::kTrkd][k])))) {
+        a = card.base[i++];
+      } else if (i == card.base.size() || cc::get64(u8(m[sf::kTrkd][k])) < card.base[i].hash) {
+        a = sf::decodeTrack(u8(m[sf::kTrkd][k++]));
+      } else {
+        a = sf::merge(card.base[i++], sf::decodeTrack(u8(m[sf::kTrkd][k++])));
+      }
+      sf::encodeTrack(a, r);
+      rows.push_back(Bytes(reinterpret_cast<const char*>(r), sf::kTrackBytes));
+    }
+    const uint32_t gen = p.head.baseGen + 1;
+    o.base = frame(gen, {{sf::kTrks, {24, join(rows)}}});
+    p.head.baseGen = gen;
+    p.head.baseRows = static_cast<uint32_t>(rows.size());
+    p.head.baseCrc = headerCrc(o.base);
+    p.compact = true;
+    o.compacted = true;
+    m[sf::kTrkd].clear();
+  }
+  Bytes head(sf::kHeadBytes, '\0'), mark(static_cast<size_t>(p.rows[sf::kMark]) * 24, '\0');
+  sf::encodeHead(p.head, u8(head));
+  uint32_t got = 0;
+  while (got < p.rows[sf::kMark]) {
+    const uint32_t k = f.markRows(got, u8(mark) + static_cast<size_t>(got) * 24, 5);  // (in pieces)
+    TEST_ASSERT_TRUE(k > 0);
+    got += k;
+  }
+  TEST_ASSERT_EQUAL_UINT32(0, f.markRows(got, u8(head), 1));
+  o.bin = frame(p.generation, {{sf::kTypes[0], {0, head}},
+                               {sf::kTypes[1], {24, mark}},
+                               {sf::kTypes[2], {8, join(m[sf::kHour])}},
+                               {sf::kTypes[3], {16, join(m[sf::kDays])}},
+                               {sf::kTypes[4], {12, join(m[sf::kRcnt])}},
+                               {sf::kTypes[5], {24, join(m[sf::kTrkd])}}});
+  return o;
+}
+
+// A save that lands: the card is the new file (and base), RAM saved().
+Bytes saveNow(sf::Fold& f, Card& card, uint64_t nowMs) {
+  SaveAsk ask;
+  ask.nowMs = nowMs;
+  SaveOut o = saveOf(f, card, ask);
+  f.saved(o.plan);
+  card.bin = o.bin;
+  card.named = o.plan.head.baseGen;
+  return o.bin;
+}
+
+// stats.bin's bytes loaded into a fold, as a boot's read.
+void load(sf::Fold& f, const Bytes& b, Card* card) {
+  Files in{{"stats.bin", b}};
+  TEST_ASSERT_EQUAL_STRING("loaded", readName(readStats(f, in, card)));
 }
 
 cc::msmf::Acks acksOf(const minijson::Value& v) {
@@ -344,9 +519,11 @@ const char* const kLogNames[sf::kFiles] = {"plays.jnl",   "plays.1.jnl", "plays.
                                            "plays.5.jnl", "plays.6.jnl", "plays.7.jnl", "plays.8.jnl", "plays.9.jnl"};
 
 // The boot's scan as the journal reads the log: each file in its order,
-// whole slots to the cap; `unread` the card's faults (-1 an open that
-// failed, else the slots read before a read failed).
+// whole slots to the cap, reserve() before each piece of 128 slots (the
+// glue's); `unread` the card's faults (-1 an open that failed, else the
+// slots read before a read failed).
 void scanLog(sf::Fold& f, const Files& in, const std::map<std::string, int>& unread) {
+  uint32_t piece = 0;
   for (int i = 0; i < sf::kFiles; ++i) {
     auto it = in.find(kLogNames[i]);
     if (it == in.end()) continue;
@@ -354,10 +531,9 @@ void scanLog(sf::Fold& f, const Files& in, const std::map<std::string, int>& unr
     auto u = unread.find(kLogNames[i]);
     if (u != unread.end()) slots = u->second < 0 ? 0 : std::min<uint32_t>(slots, static_cast<uint32_t>(u->second));
     for (uint32_t k = 0; k < slots; ++k) {
+      if (piece++ % 128 == 0) TEST_ASSERT_TRUE(f.reserve(128));
       pl::Slot s;
-      if (pl::decode(reinterpret_cast<const uint8_t*>(it->second.data()) + k * pl::kSlot, pl::kSlot, &s) ==
-          pl::Verdict::Ok)
-        f.bootSlot(s, i);
+      if (pl::decode(u8(it->second) + k * pl::kSlot, pl::kSlot, &s) == pl::Verdict::Ok) f.bootSlot(s, i);
     }
     if (u != unread.end()) f.partial();
   }
@@ -371,7 +547,7 @@ bool trimmed(sf::Fold& f, const Bytes& b, const cc::msmf::Acks& acks) {
   bool anyPlay = false, allAcked = true, lastIsPlay = false, covered = true;
   for (size_t k = 0; k + pl::kSlot <= b.size(); k += pl::kSlot) {
     pl::Slot s;
-    const pl::Verdict v = pl::decode(reinterpret_cast<const uint8_t*>(b.data()) + k, pl::kSlot, &s);
+    const pl::Verdict v = pl::decode(u8(b) + k, pl::kSlot, &s);
     if (v == pl::Verdict::Newer || v == pl::Verdict::Kind) return false;
     if (v != pl::Verdict::Ok) continue;
     lastIsPlay = s.kind == pl::kKindPlay;
@@ -390,8 +566,8 @@ Files cardOf(const minijson::Value& where) {
 }
 
 // ---------------------------------------------------------------------------
-// A model of statsref's fold, save and file, kept plain (std::map): the
-// random tests' reference.
+// A port of statsref's whole aggregate (Stats.fold, Session.save, write_
+// stats), kept plain (std::map): the random sessions' reference.
 // ---------------------------------------------------------------------------
 struct Model {
   sf::Head head;
@@ -515,9 +691,16 @@ struct Model {
     generation += 1;
   }
 
+  // A new session (statsref's next Session): its round and first day.
+  void session() {
+    used = 0;
+    anyUsed = false;
+    firstPlayDay = -1;
+  }
+
   Bytes file() const {
     Bytes h(sf::kHeadBytes, '\0'), mk, hr, dy, rc, tk;
-    sf::encodeHead(head, reinterpret_cast<uint8_t*>(&h[0]));
+    sf::encodeHead(head, u8(h));
     for (const auto& m : mark) {
       uint8_t r[24] = {};
       std::memcpy(r, m.first.first.data(), 6);
@@ -564,22 +747,6 @@ struct Model {
   }
 };
 
-// The fold's stats.bin for a save now (nothing compacted).
-Bytes saveNow(sf::Fold& f, uint64_t nowMs, bool hasCommit = false, uint64_t commitSec = 0) {
-  sf::Fold::Plan p;
-  TEST_ASSERT_TRUE(f.plan(nowMs, hasCommit, commitSec, &p));
-  const Bytes b = statsBin(f, p);
-  f.saved(p);
-  return b;
-}
-
-// stats.bin's bytes loaded into a fresh fold (generation, HEAD, rows).
-void load(sf::Fold& f, const Bytes& b) {
-  Files in{{"stats.bin", b}};
-  std::vector<sf::Track> base;
-  TEST_ASSERT_EQUAL_STRING("loaded", readName(readStats(f, in, &base)));
-}
-
 // A deterministic generator.
 struct Rng {
   uint64_t s;
@@ -602,6 +769,21 @@ std::string hex(const Bytes& a, const Bytes& b) {
   char m[96];
   std::snprintf(m, sizeof(m), "%zu and %zu bytes, first difference at %zu", a.size(), b.size(), i);
   return m;
+}
+
+// One boot's fold of `slots` (each in its file, in the scan's order),
+// reserve() before each piece of 128; and into the model at the boot's
+// round.
+void bootFold(sf::Fold& f, Ranges& rg, const std::vector<std::pair<pl::Slot, int>>& slots, Model* m,
+              const cc::msmf::Acks& acks = kNoAcks) {
+  TEST_ASSERT_TRUE(rg.begin(f, acks));
+  const uint32_t round = f.head().round + 1;
+  uint32_t piece = 0;
+  for (const auto& s : slots) {
+    if (piece++ % 128 == 0) TEST_ASSERT_TRUE(f.reserve(128));
+    f.bootSlot(s.first, s.second);
+    if (m) m->fold(s.first, round);
+  }
 }
 
 }  // namespace
@@ -706,7 +888,7 @@ void test_head_and_rows_byte_for_byte() {
 }
 
 // ---------------------------------------------------------------------------
-// The merge (5.2).
+// The merge (5.2), and each section's rows: their order and ⊕.
 // ---------------------------------------------------------------------------
 void test_the_merge_is_order_free() {
   // One track's slots: dated plays of two sources, undated plays of two
@@ -776,27 +958,139 @@ void test_the_merge_is_order_free() {
   TEST_ASSERT_EQUAL_UINT32(sf::kMaxRound, r.lastOrd);
   // Neither a play nor a skip: no row.
   TEST_ASSERT_FALSE(sf::slotTrack(slot(kDevA, kEpochA, 9, h, 8000, 0, pl::kStopped), 1, &r));
+  // The records' rows the same: every order of the slots above folded live,
+  // the cursor's TRKD row is the merge's (round: HEAD.round 4 + 2).
+  sf::Fold f;
+  uint8_t head[sf::kHeadBytes];
+  sf::Head h0;
+  h0.round = 4;
+  sf::encodeHead(h0, head);
+  std::vector<size_t> pick = {6, 0, 5, 3, 1, 4, 2};
+  for (int round = 0; round < 3; ++round) {
+    f.clear();
+    f.loadHead(head);
+    for (size_t i : pick) TEST_ASSERT_TRUE(f.liveSlot(s[i]));
+    sf::Fold::Cursor c(f, sf::kTrkd);
+    uint8_t row[24];
+    TEST_ASSERT_TRUE(c.next(row));
+    TEST_ASSERT_FALSE(c.next(row));
+    const sf::Track got = sf::decodeTrack(row);
+    TEST_ASSERT_EQUAL_UINT16(5, got.plays);
+    TEST_ASSERT_EQUAL_UINT16(2, got.skips);
+    TEST_ASSERT_EQUAL_UINT32(first.firstAt, got.firstAt);
+    TEST_ASSERT_EQUAL_UINT8(first.src, got.src);
+    TEST_ASSERT_EQUAL_UINT32(first.lastAt, got.lastAt);
+    TEST_ASSERT_EQUAL_UINT32(6, got.lastOrd);
+    sf::Track viaTrack;
+    TEST_ASSERT_TRUE(f.track(h, &viaTrack));
+    uint8_t again[24];
+    sf::encodeTrack(viaTrack, again);
+    TEST_ASSERT_EQUAL_MEMORY(row, again, 24);
+    std::reverse(pick.begin(), pick.end());
+    if (round == 1) std::rotate(pick.begin(), pick.begin() + 3, pick.end());
+  }
+}
+
+void test_the_rows_order_and_merge() {
+  // HOUR: the hour (bits 0-23) orders; plays (bits 24-31) u8 and ms u32
+  // saturate.
+  uint8_t a[24] = {}, b[24] = {};
+  cc::put32(a, 7485 | 250u << 24);
+  cc::put32(a + 4, 0xFFFFFF00u);
+  cc::put32(b, 7485 | 10u << 24);
+  cc::put32(b + 4, 0x200);
+  TEST_ASSERT_EQUAL_INT(0, sf::compareRows(sf::kHour, a, b));  // (plays aren't the key)
+  sf::addRow(sf::kHour, a, b);
+  TEST_ASSERT_EQUAL_HEX32(7485 | 255u << 24, cc::get32(a));
+  TEST_ASSERT_EQUAL_HEX32(0xFFFFFFFFu, cc::get32(a + 4));
+  cc::put32(b, 7486);
+  TEST_ASSERT_EQUAL_INT(-1, sf::compareRows(sf::kHour, a, b));
+  TEST_ASSERT_EQUAL_INT(1, sf::compareRows(sf::kHour, b, a));
+  // DAYS: the day; plays and skips u16, the sources' u8, ms u32.
+  std::memset(a, 0, 24);
+  std::memset(b, 0, 24);
+  cc::put16(a, 311);
+  cc::put16(a + 2, 0xFFF0);
+  cc::put16(a + 4, 3);
+  a[6] = 200;
+  a[7] = 1;
+  cc::put32(a + 8, 1000);
+  a[12] = 254;
+  a[13] = 0;
+  std::memcpy(b, a, 16);
+  sf::addRow(sf::kDays, a, b);
+  TEST_ASSERT_EQUAL_UINT16(311, cc::get16(a));
+  TEST_ASSERT_EQUAL_UINT16(0xFFFF, cc::get16(a + 2));
+  TEST_ASSERT_EQUAL_UINT16(6, cc::get16(a + 4));
+  TEST_ASSERT_EQUAL_UINT8(255, a[6]);
+  TEST_ASSERT_EQUAL_UINT8(2, a[7]);
+  TEST_ASSERT_EQUAL_UINT32(2000, cc::get32(a + 8));
+  TEST_ASSERT_EQUAL_UINT8(255, a[12]);
+  TEST_ASSERT_EQUAL_UINT8(0, a[14] | a[15]);
+  cc::put16(b, 310);
+  TEST_ASSERT_EQUAL_INT(1, sf::compareRows(sf::kDays, a, b));
+  // RCNT: the day, then the hash (a u64, not its bytes); plays u16.
+  std::memset(a, 0, 24);
+  std::memset(b, 0, 24);
+  cc::put16(a, 300);
+  cc::put16(a + 2, 0xFFFE);
+  cc::put64(a + 4, 0x0100000000000000ull);
+  cc::put16(b, 300);
+  cc::put16(b + 2, 5);
+  cc::put64(b + 4, 0x00000000000000FFull);
+  TEST_ASSERT_EQUAL_INT(1, sf::compareRows(sf::kRcnt, a, b));
+  cc::put16(b, 301);
+  TEST_ASSERT_EQUAL_INT(-1, sf::compareRows(sf::kRcnt, a, b));
+  cc::put64(b + 4, 0x0100000000000000ull);
+  cc::put16(b, 300);
+  TEST_ASSERT_EQUAL_INT(0, sf::compareRows(sf::kRcnt, a, b));
+  sf::addRow(sf::kRcnt, a, b);
+  TEST_ASSERT_EQUAL_UINT16(0xFFFF, cc::get16(a + 2));
+  // TRKD: the hash; ⊕ is merge().
+  sf::Track x, y;
+  TEST_ASSERT_TRUE(sf::slotTrack(slot(kDevA, kEpochA, 1, 9, 200000, 200000, 1, pl::kSourceAutoDj, at(300, 9)), 3, &x));
+  TEST_ASSERT_TRUE(sf::slotTrack(slot(kDevA, kEpochA, 2, 9, 200000, 200000, 1, pl::kSourceShuffle, at(299, 9)), 5, &y));
+  sf::encodeTrack(x, a);
+  sf::encodeTrack(y, b);
+  TEST_ASSERT_EQUAL_INT(0, sf::compareRows(sf::kTrkd, a, b));
+  sf::addRow(sf::kTrkd, a, b);
+  uint8_t want[24];
+  sf::encodeTrack(sf::merge(x, y), want);
+  TEST_ASSERT_EQUAL_MEMORY(want, a, 24);
+  y.hash = 10;
+  sf::encodeTrack(y, b);
+  TEST_ASSERT_EQUAL_INT(-1, sf::compareRows(sf::kTrkd, a, b));
+  // MARK: the deviceId's bytes, then the epoch (a u64).
+  std::memset(a, 0, 24);
+  std::memset(b, 0, 24);
+  std::memcpy(a, kDevB, 6);
+  std::memcpy(b, kDevA, 6);
+  cc::put64(a + 8, 1);
+  cc::put64(b + 8, 0x100);
+  TEST_ASSERT_EQUAL_INT(1, sf::compareRows(sf::kMark, a, b));
+  std::memcpy(b, kDevB, 6);
+  TEST_ASSERT_EQUAL_INT(-1, sf::compareRows(sf::kMark, a, b));
 }
 
 // ---------------------------------------------------------------------------
 // Every boot of every fixture.
 // ---------------------------------------------------------------------------
 void test_every_fixture_boot() {
-  sf::Fold f(heapAlloc, heapFree);
-  TEST_ASSERT_TRUE(f.begin());
-  int boots = 0, saves = 0, compactions = 0, trims = 0;
+  gHeap.reset();
+  const size_t live0 = gHeap.live;
+  int boots = 0, saves = 0, compactions = 0, trims = 0, overflows = 0;
   for (size_t i = 0; i < gIndex.size(); ++i) {
     const minijson::Value& sc = gIndex[i];
     for (size_t k = 0; k < sc["boots"].size(); ++k) {
       const minijson::Value& b = sc["boots"][k];
       char what[96];
       std::snprintf(what, sizeof(what), "%s, boot %u", sc["name"].c_str(), static_cast<unsigned>(k + 1));
+      sf::Fold f(heapAlloc, heapFree);
       const Files in = cardOf(b["in"]);
       const Files out = cardOf(b["out"]);
       const cc::msmf::Acks acks = acksOf(b["acks"]);
-      std::vector<sf::Track> base;
-      uint32_t named = 0;
-      const Read read = readStats(f, in, &base, &named);
+      Card card;
+      const Read read = readStats(f, in, &card);
       TEST_ASSERT_EQUAL_STRING_MESSAGE(b["read"].c_str(), readName(read), what);
       ++boots;
       if (read == Read::Newer || read == Read::Unread) {
@@ -806,42 +1100,56 @@ void test_every_fixture_boot() {
         TEST_ASSERT_EQUAL_MESSAGE(0, b["trimmed"].size(), what);
         continue;
       }
-      if (read == Read::Corrupt) f.clear();  // (renamed stats.bad: counting starts again)
+      if (read == Read::Corrupt) {
+        f.clear();  // (renamed stats.bad: counting starts again)
+        card = Card();
+      }
       std::map<std::string, int> unread;
       for (const auto& m : b["unread"].members) unread[m.first] = m.second.isNull() ? -1 : static_cast<int>(m.second.u64());
-      TEST_ASSERT_TRUE_MESSAGE(f.beginBoot(acks), what);
-      TEST_ASSERT_TRUE(f.reserve(128));
+      Ranges rg;
+      TEST_ASSERT_TRUE_MESSAGE(rg.begin(f, acks), what);
+      TEST_ASSERT_TRUE_MESSAGE(rg.bytes <= 3072, what);
       scanLog(f, in, unread);
       f.endBoot();
       TEST_ASSERT_FALSE_MESSAGE(f.noMemory(), what);
+      TEST_ASSERT_FALSE_MESSAGE(f.behind(), what);
       TEST_ASSERT_EQUAL_UINT32_MESSAGE(b["folded"].u64(), f.folded(), what);
       TEST_ASSERT_EQUAL_UINT32_MESSAGE(b["twice"].u64(), f.twice(), what);
       TEST_ASSERT_EQUAL_UINT32_MESSAGE(b["gap"].u64(), f.gap(), what);
       TEST_ASSERT_EQUAL_MESSAGE(b["partial"].boolean(), f.partialScan(), what);
+      // One record a slot folded: past 96, the chunks of 819 they fill.
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(f.folded(), f.records(), what);
+      const uint32_t over = f.records() > sf::kRecords ? f.records() - sf::kRecords : 0;
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE((over + sf::kChunkRecords - 1) / sf::kChunkRecords, f.chunks(), what);
+      if (over) ++overflows;
       // The save: none after a partial scan or on a full card; nothing
       // written when nothing is new.
       bool wrote = false, compacted = false;
       if (!b["saveFails"].boolean()) {
         sf::Fold::Plan p;
-        const bool ok = f.plan(b["now"].isNull() ? 0 : b["now"].u64(), !b["commitTime"].isNull(),
-                               b["commitTime"].u64(), &p);
+        const bool ok = f.plan(0, false, 0, &p);
         TEST_ASSERT_EQUAL_MESSAGE(!b["partial"].boolean(), ok, what);
         if (ok && f.dirty()) {
-          Bytes newBase;
-          if (sf::compactionDue(p.rows[sf::kTrkd], p.head.baseRows, b["playing"].boolean(), b["safePoint"].boolean()) &&
-              p.head.baseGen + 1 != named) {
-            newBase = compact(f, &p, base);
+          SaveAsk ask;
+          ask.nowMs = b["now"].isNull() ? 0 : b["now"].u64();
+          ask.hasCommit = !b["commitTime"].isNull();
+          ask.commitSec = b["commitTime"].u64();
+          ask.playing = b["playing"].boolean();
+          ask.safePoint = b["safePoint"].boolean();
+          const SaveOut o = saveOf(f, card, ask);
+          if (o.compacted) {
             compacted = true;
-            TEST_ASSERT_TRUE_MESSAGE(out.count(baseName(p.head.baseGen)) == 1, what);
-            const Bytes& want = out.at(baseName(p.head.baseGen));
-            TEST_ASSERT_TRUE_MESSAGE(newBase == want, (std::string(what) + ": the base, " + hex(newBase, want)).c_str());
+            const std::string name = baseName(o.plan.head.baseGen);
+            TEST_ASSERT_TRUE_MESSAGE(out.count(name) == 1, what);
+            TEST_ASSERT_TRUE_MESSAGE(o.base == out.at(name), (std::string(what) + ": the base, " + hex(o.base, out.at(name))).c_str());
             ++compactions;
           }
-          const Bytes mine = statsBin(f, p);
           const Bytes& want = out.at("stats.bin");
-          TEST_ASSERT_TRUE_MESSAGE(mine == want, (std::string(what) + ": stats.bin, " + hex(mine, want)).c_str());
-          f.saved(p);
+          TEST_ASSERT_TRUE_MESSAGE(o.bin == want, (std::string(what) + ": stats.bin, " + hex(o.bin, want)).c_str());
+          f.saved(o.plan);
           TEST_ASSERT_FALSE(f.dirty());
+          TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, f.records(), what);
+          TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, f.chunks(), what);
           wrote = true;
           ++saves;
         }
@@ -860,11 +1168,14 @@ void test_every_fixture_boot() {
       trims += static_cast<int>(got.size());
     }
   }
-  printf("fixtures: %d boots, %d saves byte for byte, %d bases, %d files trimmed\n", boots, saves, compactions, trims);
+  printf("fixtures: %d boots, %d saves merged byte for byte, %d bases, %d files trimmed, %d boots past the records\n",
+         boots, saves, compactions, trims, overflows);
   TEST_ASSERT_EQUAL_INT(34, boots);
   TEST_ASSERT_EQUAL_INT(25, saves);
   TEST_ASSERT_EQUAL_INT(4, compactions);
   TEST_ASSERT_EQUAL_INT(22, trims);
+  TEST_ASSERT_EQUAL_INT(2, overflows);  // (retention's 902, rcnt-cap's 4,128)
+  TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
 }
 
 // ---------------------------------------------------------------------------
@@ -872,10 +1183,9 @@ void test_every_fixture_boot() {
 // ---------------------------------------------------------------------------
 void test_each_slot_once() {
   sf::Fold f;
-  TEST_ASSERT_TRUE(f.begin());
-  f.clear();
-  cc::msmf::Acks none;
-  TEST_ASSERT_TRUE(f.beginBoot(none));
+  Ranges rg;
+  TEST_ASSERT_TRUE(rg.begin(f, kNoAcks));
+  TEST_ASSERT_EQUAL_size_t(sf::kMarkRows * sf::kFiles * sizeof(sf::Fold::Range), rg.bytes);  // 1,280 B: no ACKS
   auto s = [](uint32_t q) { return slot(kDevA, kEpochA, q, 100 + q, 200000, 200000, 1, 1, at(300, 8)); };
   // plays.jnl: 10-12; plays.1.jnl: 5-9, then 10 and 11 again (a twin's
   // copy); in plays.jnl a seq at or under its last (met again: not twice).
@@ -889,18 +1199,23 @@ void test_each_slot_once() {
   f.bootSlot(slot(kDevB, kEpochB, 6, 1, 200000, 200000), 2);
   f.endBoot();
   TEST_ASSERT_EQUAL_UINT32(10, f.folded());  // A 5-13, B 6
+  TEST_ASSERT_EQUAL_UINT32(10, f.records());
   TEST_ASSERT_EQUAL_UINT32(4, f.twice());    // 10, 11 in plays.1.jnl; 6, 7 in plays.2.jnl
   TEST_ASSERT_EQUAL_UINT32(4, f.head().twice);
   TEST_ASSERT_EQUAL_UINT32(13, f.markOf(kDevA, kEpochA));
   TEST_ASSERT_EQUAL_UINT32(6, f.markOf(kDevB, kEpochB));
   TEST_ASSERT_EQUAL_UINT64(10, f.head().plays);
+  // A boot's fold no longer folds once ended.
+  f.bootSlot(s(14), 0);
+  TEST_ASSERT_EQUAL_UINT32(10, f.folded());
   // Under the MARK read at the boot: not folded. Slots that don't count:
   // skipped (drop notes, epoch 0, deviceId zeros, seq 0).
-  const Bytes b = saveNow(f, at(313, 9));
+  Card card;
+  const Bytes b = saveNow(f, card, at(313, 9));
   sf::Fold g;
-  TEST_ASSERT_TRUE(g.begin());
-  load(g, b);
-  TEST_ASSERT_TRUE(g.beginBoot(none));
+  load(g, b, &card);
+  Ranges rg2;
+  TEST_ASSERT_TRUE(rg2.begin(g, kNoAcks));
   for (uint32_t q = 1; q <= 13; ++q) g.bootSlot(s(q), 0);
   pl::Slot note = s(14);
   note.kind = pl::kKindDrop;
@@ -911,6 +1226,7 @@ void test_each_slot_once() {
   g.bootSlot(s(14), 0);
   g.endBoot();
   TEST_ASSERT_EQUAL_UINT32(1, g.folded());
+  TEST_ASSERT_EQUAL_UINT32(1, g.records());
   TEST_ASSERT_EQUAL_UINT32(14, g.markOf(kDevA, kEpochA));
   TEST_ASSERT_EQUAL_UINT32(0, g.markOf(kZeros, kEpochA));
   TEST_ASSERT_EQUAL_UINT32(0, g.markOf(kDevA, 0));
@@ -921,12 +1237,11 @@ void test_the_gap() {
   // MARK (A) 10 on the card; ACKS (A) 50: the log holds 41-60, and 45 a
   // second time in another file; seqs 11-40 are gone: 30.
   sf::Fold f;
-  TEST_ASSERT_TRUE(f.begin());
-  f.clear();
-  cc::msmf::Acks none;
-  TEST_ASSERT_TRUE(f.beginBoot(none));
+  Ranges rg;
+  TEST_ASSERT_TRUE(rg.begin(f, kNoAcks));
   for (uint32_t q = 1; q <= 10; ++q) f.bootSlot(slot(kDevA, kEpochA, q, 5, 200000, 200000, 1, 1, at(300, 8)), 0);
-  const Bytes card = saveNow(f, at(300, 20));
+  Card base;
+  const Bytes card = saveNow(f, base, at(300, 20));
   cc::msmf::Acks acks;
   acks.present = true;
   acks.count = acks.rows = 3;
@@ -943,9 +1258,11 @@ void test_the_gap() {
   acks.entries[2].epoch = kEpochB;
   acks.entries[2].seq = 0;
   sf::Fold g;
-  TEST_ASSERT_TRUE(g.begin());
-  load(g, card);
-  TEST_ASSERT_TRUE(g.beginBoot(acks));
+  Card c;
+  load(g, card, &c);
+  Ranges rg2;
+  TEST_ASSERT_TRUE(rg2.begin(g, acks));
+  TEST_ASSERT_EQUAL_size_t(1280 + 2 * sizeof(sf::Fold::AckTrack), rg2.bytes);  // (two ACKS rows above MARK)
   for (uint32_t q = 41; q <= 60; ++q) g.bootSlot(slot(kDevA, kEpochA, q, 6, 200000, 200000, 1, 1, at(310, 8)), 0);
   g.bootSlot(slot(kDevA, kEpochA, 45, 6, 200000, 200000, 1, 1, at(310, 8)), 1);
   g.bootSlot(slot(kDevB, 0, 2, 6, 200000, 200000, 1, 1, at(310, 8)), 1);
@@ -960,28 +1277,42 @@ void test_the_gap() {
   TEST_ASSERT_EQUAL_UINT32(0, g.markOf(kDevC, kEpochB));
   TEST_ASSERT_TRUE(g.dirty());
   // The next boot: nothing new, the gap not counted again.
-  const Bytes next = saveNow(g, at(313, 9));
+  const Bytes next = saveNow(g, c, at(313, 9));
   sf::Fold h;
-  TEST_ASSERT_TRUE(h.begin());
-  load(h, next);
-  TEST_ASSERT_TRUE(h.beginBoot(acks));
+  Card d;
+  load(h, next, &d);
+  Ranges rg3;
+  TEST_ASSERT_TRUE(rg3.begin(h, acks));
   for (uint32_t q = 41; q <= 60; ++q) h.bootSlot(slot(kDevA, kEpochA, q, 6, 200000, 200000, 1, 1, at(310, 8)), 0);
   h.endBoot();
   TEST_ASSERT_EQUAL_UINT32(0, h.gap());
   TEST_ASSERT_EQUAL_UINT32(32, h.head().gap);
   TEST_ASSERT_FALSE(h.dirty());
+  // Only the gap new (MARK raised, no slot): dirty, no record, and the
+  // save writes the card's rows again with MARK's and HEAD's.
+  sf::Fold only;
+  Card e;
+  load(only, card, &e);
+  Ranges rg4;
+  TEST_ASSERT_TRUE(rg4.begin(only, acks));
+  only.endBoot();
+  TEST_ASSERT_TRUE(only.dirty());
+  TEST_ASSERT_EQUAL_UINT32(0, only.records());
+  TEST_ASSERT_EQUAL_UINT32(43, only.gap());  // (A's 40, B's 3: nothing held)
   // A partial scan counts no gap (the slots it didn't read may hold them),
   // and plans no save.
   sf::Fold p;
-  TEST_ASSERT_TRUE(p.begin());
-  load(p, card);
-  TEST_ASSERT_TRUE(p.beginBoot(acks));
+  Card pc;
+  load(p, card, &pc);
+  Ranges rg5;
+  TEST_ASSERT_TRUE(rg5.begin(p, acks));
   for (uint32_t q = 41; q <= 45; ++q) p.bootSlot(slot(kDevA, kEpochA, q, 6, 200000, 200000, 1, 1, at(310, 8)), 0);
   p.partial();
   p.endBoot();
   TEST_ASSERT_EQUAL_UINT32(0, p.gap());
   TEST_ASSERT_EQUAL_UINT32(45, p.markOf(kDevA, kEpochA));
   TEST_ASSERT_TRUE(p.partialScan());
+  TEST_ASSERT_FALSE(p.behind());  // (5 records: kept; only an overflow no save may take is dropped)
   sf::Fold::Plan plan;
   TEST_ASSERT_FALSE(p.plan(at(313, 9), false, 0, &plan));
 }
@@ -990,106 +1321,71 @@ void test_the_gap() {
 // Rounds, the live fold, MARK, sinceDay.
 // ---------------------------------------------------------------------------
 void test_rounds_and_the_live_fold() {
-  sf::Fold f;
-  TEST_ASSERT_TRUE(f.begin());
-  f.clear();
-  cc::msmf::Acks none;
   // A card whose HEAD says round 7.
-  TEST_ASSERT_TRUE(f.beginBoot(none));
+  sf::Fold f;
+  Ranges rg;
+  TEST_ASSERT_TRUE(rg.begin(f, kNoAcks));
   f.bootSlot(slot(kDevA, kEpochA, 1, 1, 200000, 200000, 1, 1, at(300, 8)), 0);
   f.endBoot();
-  sf::Fold::Plan p;
-  TEST_ASSERT_TRUE(f.plan(at(300, 9), false, 0, &p));
-  p.head.round = 7;
-  const Bytes card = statsBin(f, p);
+  {
+    sf::Fold::Plan p;
+    TEST_ASSERT_TRUE(f.plan(at(300, 9), false, 0, &p));
+    TEST_ASSERT_EQUAL_UINT32(1, p.head.round);  // (the boot's: HEAD.round 0 + 1)
+  }
+  uint8_t head[sf::kHeadBytes];
+  sf::Head h7 = f.head();
+  h7.round = 7;
+  sf::encodeHead(h7, head);
   sf::Fold g;
-  TEST_ASSERT_TRUE(g.begin());
-  load(g, card);
-  TEST_ASSERT_TRUE(g.beginBoot(none));
+  g.loadHead(head);
+  Ranges rg2;
+  TEST_ASSERT_TRUE(rg2.begin(g, kNoAcks));
   g.bootSlot(slot(kDevA, kEpochA, 2, 2, 200000, 200000, 1, 1, 0), 1);  // undated: ordered by its round
   g.endBoot();
   sf::Track t;
   TEST_ASSERT_TRUE(g.track(2, &t));
   TEST_ASSERT_EQUAL_UINT32(8, t.lastOrd);  // the boot's: HEAD.round + 1
-  g.liveSlot(slot(kDevA, kEpochA, 3, 3, 200000, 200000, 1, 1, 0));
+  TEST_ASSERT_TRUE(g.liveSlot(slot(kDevA, kEpochA, 3, 3, 200000, 200000, 1, 1, 0)));
   TEST_ASSERT_TRUE(g.track(3, &t));
   TEST_ASSERT_EQUAL_UINT32(9, t.lastOrd);  // live: + 2
   // A live slot that doesn't count, or a drop note: nothing.
-  g.liveSlot(slot(kDevA, 0, 4, 4, 200000, 200000));
+  TEST_ASSERT_FALSE(g.liveSlot(slot(kDevA, 0, 4, 4, 200000, 200000)));
+  pl::Slot note = slot(kDevA, kEpochA, 4, 4, 200000, 200000);
+  note.kind = pl::kKindDrop;
+  TEST_ASSERT_FALSE(g.liveSlot(note));
   TEST_ASSERT_FALSE(g.track(4, &t));
+  TEST_ASSERT_EQUAL_UINT32(2, g.records());
   // The save writes the highest round used; a later live fold this session
   // is still + 2 (of HEAD.round as loaded).
+  sf::Fold::Plan p;
   TEST_ASSERT_TRUE(g.plan(at(301, 9), false, 0, &p));
   TEST_ASSERT_EQUAL_UINT32(9, p.head.round);
   g.saved(p);
-  g.liveSlot(slot(kDevA, kEpochA, 5, 3, 200000, 200000, 1, 1, 0));
+  TEST_ASSERT_FALSE(g.track(3, &t));  // (the records emptied: the card holds them)
+  TEST_ASSERT_TRUE(g.liveSlot(slot(kDevA, kEpochA, 5, 3, 200000, 200000, 1, 1, 0)));
   TEST_ASSERT_TRUE(g.track(3, &t));
   TEST_ASSERT_EQUAL_UINT32(9, t.lastOrd);
-  TEST_ASSERT_EQUAL_UINT16(2, t.plays);
+  TEST_ASSERT_EQUAL_UINT16(1, t.plays);
   TEST_ASSERT_EQUAL_UINT32(3, g.folded());
   // A round at its 24-bit top saturates.
-  f.clear();
-  TEST_ASSERT_TRUE(f.beginBoot(none));
-  f.endBoot();
-  TEST_ASSERT_TRUE(f.plan(at(300, 9), false, 0, &p));
-  p.head.round = sf::kMaxRound - 1;
-  sf::Fold top;
-  TEST_ASSERT_TRUE(top.begin());
-  load(top, statsBin(f, p));
-  top.liveSlot(slot(kDevA, kEpochA, 9, 9, 200000, 200000));
-  TEST_ASSERT_TRUE(top.track(9, &t));
+  sf::Head top;
+  top.round = sf::kMaxRound - 1;
+  sf::encodeHead(top, head);
+  sf::Fold z;
+  z.loadHead(head);
+  TEST_ASSERT_TRUE(z.liveSlot(slot(kDevA, kEpochA, 9, 9, 200000, 200000)));
+  TEST_ASSERT_TRUE(z.track(9, &t));
   TEST_ASSERT_EQUAL_UINT32(sf::kMaxRound, t.lastOrd);
-}
-
-void test_mark_kept_for_good_and_covered() {
-  sf::Fold f;
-  TEST_ASSERT_TRUE(f.begin());
-  f.clear();
-  cc::msmf::Acks none;
-  TEST_ASSERT_TRUE(f.beginBoot(none));
-  // 70 (deviceId, epoch) pairs: MARK's block of 64 made larger (twice).
-  for (uint32_t e = 1; e <= 70; ++e) f.bootSlot(slot(kDevA, e, 3, e, 200000, 200000), e % 2);
-  f.endBoot();
-  TEST_ASSERT_EQUAL_UINT32(70, f.rows(sf::kMark));
-  // covered(): the card's MARK, not RAM's, until a save lands.
-  const pl::Slot s3 = slot(kDevA, 5, 3, 1, 1, 1), s0 = slot(kDevA, 5, 0, 1, 1, 1);
-  TEST_ASSERT_FALSE(f.covered(s3));
-  TEST_ASSERT_TRUE(f.covered(s0));  // (seq 0: covered with no row, as acknowledged() reads it)
-  TEST_ASSERT_EQUAL_UINT32(3, f.markOf(kDevA, 5));
-  const Bytes b = saveNow(f, at(300, 9));
-  TEST_ASSERT_TRUE(f.covered(s3));
-  TEST_ASSERT_FALSE(f.covered(slot(kDevA, 5, 4, 1, 1, 1)));
-  TEST_ASSERT_FALSE(f.covered(slot(kDevB, 5, 1, 1, 1, 1)));
-  // A live fold raises RAM's MARK, not the card's.
-  f.liveSlot(slot(kDevA, 5, 4, 1, 200000, 200000));
-  TEST_ASSERT_EQUAL_UINT32(4, f.markOf(kDevA, 5));
-  TEST_ASSERT_FALSE(f.covered(slot(kDevA, 5, 4, 1, 1, 1)));
-  // Kept for good: every row comes back from the file and goes into the
-  // next, though nothing of the pair is folded again.
-  sf::Fold g;
-  TEST_ASSERT_TRUE(g.begin());
-  load(g, b);
-  TEST_ASSERT_EQUAL_UINT32(70, g.rows(sf::kMark));
-  TEST_ASSERT_TRUE(g.beginBoot(none));
-  g.bootSlot(slot(kDevB, kEpochB, 1, 99, 200000, 200000), 0);
-  g.endBoot();
-  TEST_ASSERT_TRUE(g.covered(s3));
-  const Bytes c = saveNow(g, at(301, 9));
-  sf::Fold h;
-  TEST_ASSERT_TRUE(h.begin());
-  load(h, c);
-  TEST_ASSERT_EQUAL_UINT32(71, h.rows(sf::kMark));
-  for (uint32_t e = 1; e <= 70; ++e) TEST_ASSERT_EQUAL_UINT32(3, h.markOf(kDevA, e));
+  TEST_ASSERT_TRUE(z.plan(0, false, 0, &p));
+  TEST_ASSERT_EQUAL_UINT32(sf::kMaxRound, p.head.round);
 }
 
 void test_since_day() {
-  cc::msmf::Acks none;
   auto sinceOf = [&](const std::vector<pl::Slot>& slots, uint64_t now, bool hasCommit, uint64_t commit,
                      uint16_t* flags) {
     sf::Fold f;
-    TEST_ASSERT_TRUE(f.begin());
-    f.clear();
-    TEST_ASSERT_TRUE(f.beginBoot(none));
+    Ranges rg;
+    TEST_ASSERT_TRUE(rg.begin(f, kNoAcks));
     for (const pl::Slot& s : slots) f.bootSlot(s, 0);
     f.endBoot();
     sf::Fold::Plan p;
@@ -1119,245 +1415,524 @@ void test_since_day() {
   TEST_ASSERT_EQUAL_UINT16(sf::kUnsetDay, sinceOf(undated, 0, true, 1000, &flags));
   TEST_ASSERT_EQUAL_UINT16(sf::kUnsetDay, sinceOf(undated, 0, false, 0, &flags));
   TEST_ASSERT_EQUAL_UINT16(0, flags);
-  // Set once: a later save keeps it.
+  // Set once: a later save keeps it. Unset at a save (no date), the
+  // session's earliest dated play still sets it at a later one, though
+  // that save emptied the records (the day is the object's, not theirs).
   sf::Fold f;
-  TEST_ASSERT_TRUE(f.begin());
-  f.clear();
-  TEST_ASSERT_TRUE(f.beginBoot(none));
+  Ranges rg;
+  TEST_ASSERT_TRUE(rg.begin(f, kNoAcks));
   f.bootSlot(s[0], 0);
   f.endBoot();
-  const Bytes b = saveNow(f, at(313, 9));
+  Card card;
+  const Bytes b = saveNow(f, card, at(313, 9));
   sf::Fold g;
-  TEST_ASSERT_TRUE(g.begin());
-  load(g, b);
-  g.liveSlot(slot(kDevA, kEpochA, 9, 1, 200000, 200000, 1, 1, at(100, 8)));
+  Card c;
+  load(g, b, &c);
+  TEST_ASSERT_TRUE(g.liveSlot(slot(kDevA, kEpochA, 9, 1, 200000, 200000, 1, 1, at(100, 8))));
   sf::Fold::Plan p;
   TEST_ASSERT_TRUE(g.plan(at(314, 9), false, 0, &p));
   TEST_ASSERT_EQUAL_UINT16(290, p.head.sinceDay);
+  sf::Fold u;
+  TEST_ASSERT_TRUE(u.liveSlot(slot(kDevA, kEpochA, 1, 1, 200000, 200000, 1, 1, at(200, 8))));
+  TEST_ASSERT_TRUE(u.liveSlot(slot(kDevA, kEpochA, 2, 1, 200000, 200000, 1, 1, 0)));
+  TEST_ASSERT_TRUE(u.plan(0, false, 0, &p));
+  TEST_ASSERT_EQUAL_UINT16(200, p.head.sinceDay);  // (the clock unset: the play's day)
 }
 
 // ---------------------------------------------------------------------------
-// The retention (5.2).
+// MARK: the object's 16 rows and the extra block.
 // ---------------------------------------------------------------------------
-void test_hour_and_days_keep_the_newest() {
-  // 1,500 hours over 600 days, folded in a shuffled order and in a newest-
-  // first order: HOUR keeps its newest 840, DAYS its newest 400, whatever
-  // the order (5.2), as the model does at the save.
-  for (int order = 0; order < 3; ++order) {
-    std::vector<pl::Slot> slots;
-    for (uint32_t i = 0; i < 1500; ++i) {
-      const uint32_t day = 10 + (i * 2) / 5, hour = (i * 7) % 24;
-      for (uint32_t k = 0; k < 1 + i % 3; ++k)
-        slots.push_back(slot(kDevA, kEpochA, 0, hashOf(i % 97), 20000 + 15000 * k, 200000, 1 + k % 3,
-                             static_cast<uint8_t>(k % 4), at(day, hour, k)));
+void test_mark_rows_and_the_extra_block() {
+  gHeap.reset();
+  const size_t live0 = gHeap.live;
+  // The object's 16: 16 (deviceId, epoch) pairs fold; a 17th is the fold
+  // out of memory (no save), MARK and covered() as they were.
+  {
+    sf::Fold f(heapAlloc, heapFree);
+    TEST_ASSERT_EQUAL_UINT32(sf::kMarkRows, f.markCap());
+    Ranges rg;
+    TEST_ASSERT_TRUE(rg.begin(f, kNoAcks));
+    for (uint32_t e = 1; e <= 16; ++e) f.bootSlot(slot(kDevA, e, 3, e, 200000, 200000), 0);
+    TEST_ASSERT_FALSE(f.noMemory());
+    f.bootSlot(slot(kDevA, 17, 3, 17, 200000, 200000), 0);
+    TEST_ASSERT_TRUE(f.noMemory());
+    TEST_ASSERT_EQUAL_UINT32(16, f.folded());
+    f.endBoot();
+    sf::Fold::Plan p;
+    TEST_ASSERT_FALSE(f.plan(at(300, 9), false, 0, &p));
+    TEST_ASSERT_FALSE(f.liveSlot(slot(kDevA, 1, 4, 1, 200000, 200000)));
+    TEST_ASSERT_EQUAL_UINT32(0, gHeap.carved.size());  // (MARK and the records: the object's)
+  }
+  // MARK kept for good over sessions. A card with 8 rows fits the
+  // object with 8 rows of room; one with 9 needs the block (17 rows).
+  Card card;
+  Bytes eight, nine, seventeen;
+  {
+    sf::Fold f;
+    for (uint32_t e = 1; e <= 8; ++e) TEST_ASSERT_TRUE(f.liveSlot(slot(kDevA, e, 3, e, 200000, 200000)));
+    eight = saveNow(f, card, at(300, 9));
+    TEST_ASSERT_TRUE(f.liveSlot(slot(kDevA, 9, 3, 9, 200000, 200000)));
+    nine = saveNow(f, card, at(300, 9));
+  }
+  {
+    sf::Fold f;
+    Card c;
+    load(f, eight, &c);
+    TEST_ASSERT_EQUAL_UINT32(sf::kMarkRows, f.markCap());  // (no block: 8 + 8 fit)
+    TEST_ASSERT_EQUAL_UINT32(8, f.marks());
+    for (uint32_t e = 101; e <= 108; ++e) TEST_ASSERT_TRUE(f.liveSlot(slot(kDevB, e, 1, e, 200000, 200000)));
+    TEST_ASSERT_FALSE(f.liveSlot(slot(kDevB, 109, 1, 109, 200000, 200000)));
+    TEST_ASSERT_TRUE(f.noMemory());
+  }
+  {
+    sf::Fold f;
+    Card c;
+    load(f, nine, &c);
+    TEST_ASSERT_EQUAL_UINT32(17, f.markCap());  // its 9 rows and 8 more
+    TEST_ASSERT_EQUAL_size_t(17 * 28, sf::Fold::markBlockBytes(9));
+    TEST_ASSERT_EQUAL_UINT32(9, f.marks());
+    for (uint32_t e = 1; e <= 9; ++e) {
+      TEST_ASSERT_EQUAL_UINT32(3, f.markOf(kDevA, e));
+      TEST_ASSERT_TRUE(f.covered(slot(kDevA, e, 3, 1, 1, 1)));
+      TEST_ASSERT_FALSE(f.covered(slot(kDevA, e, 4, 1, 1, 1)));
     }
-    Rng rng(order + 1);
-    if (order == 1) std::reverse(slots.begin(), slots.end());
-    if (order == 2)
-      for (size_t i = slots.size(); i > 1; --i) std::swap(slots[i - 1], slots[rng.below(static_cast<uint32_t>(i))]);
-    for (size_t i = 0; i < slots.size(); ++i) slots[i].seq = static_cast<uint32_t>(i + 1);
+    // A boot's 8 new pairs; then the 9th: no memory.
+    Ranges rg;
+    TEST_ASSERT_TRUE(rg.begin(f, kNoAcks));
+    TEST_ASSERT_EQUAL_size_t(17 * sf::kFiles * sizeof(sf::Fold::Range), rg.bytes);  // (the ranges: a row each)
+    for (uint32_t e = 101; e <= 108; ++e) f.bootSlot(slot(kDevB, e, 1, e, 200000, 200000), 1);
+    TEST_ASSERT_FALSE(f.noMemory());
+    f.endBoot();
+    TEST_ASSERT_EQUAL_UINT32(17, f.marks());
+    seventeen = saveNow(f, c, at(301, 9));
+  }
+  // A remount's read past the room (another player wrote the card): no
+  // block carved, MARK's rows don't load: no memory (the stats off).
+  {
     sf::Fold f;
-    TEST_ASSERT_TRUE(f.begin());
+    std::vector<uint32_t> small(sf::Fold::markBlockBytes(1) / 4);  // a block of 9 rows from an earlier read
+    TEST_ASSERT_TRUE(f.markBlock(small.data(), small.size() * 4));
+    TEST_ASSERT_EQUAL_UINT32(9, f.markCap());
+    cc::Why why;
+    Section s[6];
+    uint32_t gen = 0;
+    TEST_ASSERT_TRUE(sections(seventeen, kStatsSpec, &why, s, &gen));
+    TEST_ASSERT_EQUAL_UINT32(17, s[sf::kMark].count);
     f.clear();
-    Model m;
-    for (const pl::Slot& s : slots) {
-      f.liveSlot(s);
-      m.fold(s, 2);
+    TEST_ASSERT_FALSE(f.loadMark(s[sf::kMark].p, s[sf::kMark].count, s[sf::kMark].stride));
+    TEST_ASSERT_TRUE(f.noMemory());
+    // The block given and taken back: rows copied in, the object's after.
+    f.clear();
+    TEST_ASSERT_TRUE(f.loadMark(s[sf::kMark].p, 9, s[sf::kMark].stride));
+    std::vector<uint32_t> big(sf::Fold::markBlockBytes(17) / 4);
+    TEST_ASSERT_FALSE(f.markBlock(big.data(), 8 * 28));  // (smaller than the 9 rows held)
+    TEST_ASSERT_TRUE(f.markBlock(big.data(), big.size() * 4));
+    TEST_ASSERT_EQUAL_UINT32(25, f.markCap());
+    TEST_ASSERT_EQUAL_UINT32(9, f.marks());
+    TEST_ASSERT_EQUAL_UINT32(3, f.markOf(kDevA, 9));
+    TEST_ASSERT_TRUE(f.loadMark(s[sf::kMark].p + 9 * 24, 8, s[sf::kMark].stride));
+    TEST_ASSERT_EQUAL_UINT32(17, f.marks());
+    f.dropMarkBlock();
+    TEST_ASSERT_EQUAL_UINT32(sf::kMarkRows, f.markCap());
+    TEST_ASSERT_EQUAL_UINT32(0, f.marks());
+  }
+  // covered(): the card's MARK, not RAM's, until a save lands; a slot
+  // whose pair has no row only at seq 0.
+  {
+    sf::Fold f;
+    Card c;
+    load(f, eight, &c);
+    const pl::Slot s3 = slot(kDevA, 5, 3, 1, 1, 1), s0 = slot(kDevA, 50, 0, 1, 1, 1);
+    TEST_ASSERT_TRUE(f.covered(s3));
+    TEST_ASSERT_TRUE(f.covered(s0));
+    TEST_ASSERT_FALSE(f.covered(slot(kDevB, 5, 1, 1, 1, 1)));
+    TEST_ASSERT_TRUE(f.liveSlot(slot(kDevA, 5, 4, 1, 200000, 200000)));
+    TEST_ASSERT_EQUAL_UINT32(4, f.markOf(kDevA, 5));
+    TEST_ASSERT_FALSE(f.covered(slot(kDevA, 5, 4, 1, 1, 1)));
+    saveNow(f, c, at(302, 9));
+    TEST_ASSERT_TRUE(f.covered(slot(kDevA, 5, 4, 1, 1, 1)));
+    // Hm's look: every row, the card's beside RAM's.
+    uint32_t seen = 0;
+    for (uint32_t i = 0; const sf::Fold::MarkRow* m = f.markRow(i); ++i) {
+      TEST_ASSERT_EQUAL_UINT32(m->seq, m->card);
+      ++seen;
     }
-    TEST_ASSERT_EQUAL_UINT32(840, f.rows(sf::kHour));
-    TEST_ASSERT_EQUAL_UINT32(400, f.rows(sf::kDays));
-    const uint64_t now = at(700, 12);
-    const Bytes mine = saveNow(f, now);
-    m.save(now);
-    TEST_ASSERT_TRUE_MESSAGE(mine == m.file(), hex(mine, m.file()).c_str());
+    TEST_ASSERT_EQUAL_UINT32(8, seen);
   }
-}
-
-void test_rcnt_retention() {
-  // 40 days (300-339) of 3 tracks; today 345: RCNT keeps days 308 on (32
-  // back from 339, the newest day folded, earlier than today).
-  auto build = [](sf::Fold& f, Model& m, uint32_t from, uint32_t days, uint32_t tracks) {
-    uint32_t q = 0;
-    for (uint32_t d = from; d < from + days; ++d)
-      for (uint32_t t = 0; t < tracks; ++t) {
-        const pl::Slot s = slot(kDevA, kEpochA, ++q, hashOf(t), 200000, 200000, 1, 1, at(d, 8, t % 60));
-        f.liveSlot(s);
-        m.fold(s, 2);
-      }
-  };
-  {
-    sf::Fold f;
-    TEST_ASSERT_TRUE(f.begin());
-    f.clear();
-    Model m;
-    build(f, m, 300, 40, 3);
-    sf::Fold::Plan p;
-    TEST_ASSERT_TRUE(f.plan(at(345, 9), false, 0, &p));
-    TEST_ASSERT_EQUAL_UINT32(308, p.rcntCut);
-    TEST_ASSERT_EQUAL_UINT32(32 * 3, p.rows[sf::kRcnt]);
-    const Bytes mine = statsBin(f, p);
-    f.saved(p);
-    m.save(at(345, 9));
-    TEST_ASSERT_TRUE(mine == m.file());
-    TEST_ASSERT_EQUAL_UINT32(96, f.rows(sf::kRcnt));
-    // Today earlier than the newest day (a slot from a fast clock): from today.
-    TEST_ASSERT_TRUE(f.plan(at(320, 9), false, 0, &p));
-    TEST_ASSERT_EQUAL_UINT32(320 - 31, p.rcntCut);
-  }
-  {
-    // The clock unset: nothing by date, then the cap.
-    sf::Fold f;
-    TEST_ASSERT_TRUE(f.begin());
-    f.clear();
-    Model m;
-    build(f, m, 100, 40, 3);
-    sf::Fold::Plan p;
-    TEST_ASSERT_TRUE(f.plan(0, false, 0, &p));
-    TEST_ASSERT_EQUAL_UINT32(0, p.rcntCut);
-    TEST_ASSERT_EQUAL_UINT32(120, p.rows[sf::kRcnt]);
-    const Bytes mine = statsBin(f, p);
-    m.save(0);
-    TEST_ASSERT_TRUE(mine == m.file());
-  }
-  {
-    // Past 4,096 rows: whole days, oldest first (3 days of 2,000: one goes).
-    sf::Fold f;
-    TEST_ASSERT_TRUE(f.begin());
-    f.clear();
-    Model m;
-    build(f, m, 200, 3, 2000);
-    TEST_ASSERT_EQUAL_UINT32(6000, f.rows(sf::kRcnt));
-    TEST_ASSERT_TRUE(f.chunks(sf::kRcnt) >= 5);
-    sf::Fold::Plan p;
-    TEST_ASSERT_TRUE(f.plan(at(202, 20), false, 0, &p));
-    TEST_ASSERT_EQUAL_UINT32(201, p.rcntCut);
-    TEST_ASSERT_EQUAL_UINT32(4000, p.rows[sf::kRcnt]);
-    const Bytes mine = statsBin(f, p);
-    f.saved(p);
-    m.save(at(202, 20));
-    TEST_ASSERT_TRUE(mine == m.file());
-    TEST_ASSERT_EQUAL_UINT32(4000, f.rows(sf::kRcnt));
-    TEST_ASSERT_EQUAL_UINT32(3, f.chunks(sf::kRcnt));  // (the rest given back)
-  }
-  {
-    // One day of 4,097 tracks goes whole: RCNT empty.
-    sf::Fold f;
-    TEST_ASSERT_TRUE(f.begin());
-    f.clear();
-    Model m;
-    build(f, m, 200, 1, 4097);
-    sf::Fold::Plan p;
-    TEST_ASSERT_TRUE(f.plan(at(200, 20), false, 0, &p));
-    TEST_ASSERT_EQUAL_UINT32(0, p.rows[sf::kRcnt]);
-    TEST_ASSERT_EQUAL_UINT32(201, p.rcntCut);
-    const Bytes mine = statsBin(f, p);
-    m.save(at(200, 20));
-    TEST_ASSERT_TRUE(mine == m.file());
-  }
+  TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
 }
 
 // ---------------------------------------------------------------------------
-// Random folds against the model.
+// Random sessions against the port of statsref's whole aggregate.
 // ---------------------------------------------------------------------------
-void test_random_folds_against_the_model() {
+void test_random_sessions_against_the_model() {
   const uint8_t* devs[3] = {kDevA, kDevB, kDevC};
   const uint64_t epochs[3] = {kEpochA, kEpochB, 0x77};
+  gHeap.reset();
   const size_t live0 = gHeap.live;
+  int saves = 0, helds = 0, overflows = 0;
   for (uint32_t seed = 1; seed <= 6; ++seed) {
     Rng rng(seed * 7919);
-    sf::Fold f(heapAlloc, heapFree);
-    TEST_ASSERT_TRUE(f.begin());
-    f.clear();
     Model m;
+    Card card;
     uint32_t seq[3] = {};
     uint64_t now = at(200, 0);
-    Bytes card;
-    // Three sessions: a boot's fold (two files, newest first), live folds,
-    // a save; the next session loads the card.
-    for (int session = 0; session < 3; ++session) {
-      if (session > 0) {
-        f.clear();
-        load(f, card);
+    auto randomSlot = [&](uint32_t trackFrom, uint32_t tracks) {
+      const int d = static_cast<int>(rng.below(3));
+      const uint32_t pick = rng.below(10);
+      uint64_t start = 0;
+      if (pick < 7) start = now - static_cast<uint64_t>(rng.below(60 * 24)) * 3600000ull - rng.below(3600000);
+      if (pick == 7) start = at(27000, 1);  // a foreign clock, 2099
+      // (pick 8, 9: undated.)
+      return slot(devs[d], epochs[d], ++seq[d], hashOf(trackFrom + rng.below(tracks)), rng.below(300000),
+                  rng.below(5) ? 1 + rng.below(400000) : 0, static_cast<uint8_t>(rng.below(5)),
+                  static_cast<uint8_t>(rng.below(5)), start);
+    };
+    // Each save's file: merged from the card's last one, statsref's byte for
+    // byte. A held one (1 in 4 of the records' saves): the same bytes in a
+    // tmp, promoted at the next save.
+    Bytes heldBin;
+    for (int session = 0; session < 4; ++session) {
+      sf::Fold f(heapAlloc, heapFree);
+      if (!card.bin.empty()) {
+        const Bytes bin = card.bin;
+        load(f, bin, &card);
       }
-      cc::msmf::Acks none;
-      TEST_ASSERT_TRUE(f.beginBoot(none));
+      m.session();
       const uint32_t base = f.head().round;
-      const uint32_t n = 1500 + rng.below(2500);
+      // The boot's fold: two files, the newer read first; 1 in 3 past the
+      // records (an overflow of up to five chunks).
+      const uint32_t n = rng.below(3) == 0 ? 900 + rng.below(3000) : rng.below(95);
       std::vector<std::pair<pl::Slot, int>> boot;
-      for (uint32_t i = 0; i < n; ++i) {
-        const int d = rng.below(3);
-        const uint32_t pick = rng.below(10);
-        uint64_t start = 0;
-        if (pick < 7) start = now - static_cast<uint64_t>(rng.below(60 * 24)) * 3600000ull - rng.below(3600000);
-        if (pick == 7) start = at(27000, 1);  // a foreign clock, 2099
-        // (pick 8, 9: undated.)
-        pl::Slot s = slot(devs[d], epochs[d], ++seq[d], hashOf(rng.below(2600)), rng.below(300000),
-                          rng.below(5) ? 1 + rng.below(400000) : 0, static_cast<uint8_t>(rng.below(5)),
-                          static_cast<uint8_t>(rng.below(5)), start);
-        boot.push_back({s, i < n / 2 ? 1 : 0});
-      }
-      // The scan reads plays.jnl (the newer half) first.
-      for (int file = 0; file <= 1; ++file)
-        for (const auto& b : boot)
-          if (b.second == file) {
-            f.bootSlot(b.first, file);
-            m.fold(b.first, base + 1);
-          }
+      for (uint32_t i = 0; i < n; ++i) boot.push_back({randomSlot(0, 2600), i < n / 2 ? 1 : 0});
+      std::stable_sort(boot.begin(), boot.end(), [](const std::pair<pl::Slot, int>& a, const std::pair<pl::Slot, int>& b) {
+        return a.second < b.second;
+      });
+      Ranges rg;
+      bootFold(f, rg, boot, &m);
       f.endBoot();
-      for (uint32_t i = 0; i < 300; ++i) {
-        const int d = rng.below(3);
-        const pl::Slot s = slot(devs[d], epochs[d], ++seq[d], hashOf(2600 + rng.below(900)), 20000 + rng.below(200000),
-                                200000, 1 + rng.below(3), static_cast<uint8_t>(rng.below(4)), now + i * 60000ull);
-        f.liveSlot(s);
+      TEST_ASSERT_EQUAL_UINT32(n, f.records());
+      if (n > sf::kRecords) ++overflows;
+      auto landOrHold = [&](bool mayHold) {
+        if (f.heldPending()) {
+          card.bin = heldBin;  // (the held tmp is stats.bin now)
+          f.promoted();
+        }
+        if (!f.dirty()) return;  // (nothing new: the card holds it all)
+        SaveAsk ask;
+        ask.nowMs = now;
+        const SaveOut o = saveOf(f, card, ask);
+        m.save(now);
+        const Bytes want = m.file();
+        TEST_ASSERT_TRUE_MESSAGE(o.bin == want, hex(o.bin, want).c_str());
+        if (mayHold && rng.below(4) == 0) {
+          f.held(o.plan);
+          heldBin = o.bin;
+          ++helds;
+        } else {
+          f.saved(o.plan);
+          card.bin = o.bin;
+        }
+        TEST_ASSERT_EQUAL_UINT32(0, f.records());
+        TEST_ASSERT_EQUAL_UINT32(0, f.chunks());
+        ++saves;
+      };
+      if (f.dirty()) landOrHold(false);
+      // Live plays, the records' save each time it is due; the session's
+      // end saves what is left (the next session reads the card).
+      const uint32_t plays = 40 + rng.below(200);
+      for (uint32_t i = 0; i < plays; ++i) {
+        const pl::Slot s = randomSlot(2600, 900);
+        TEST_ASSERT_TRUE(f.liveSlot(s));
         m.fold(s, base + 2);
+        if (f.due()) {
+          now += rng.below(3) * static_cast<uint64_t>(sf::kDayMs);
+          landOrHold(true);
+        }
       }
-      TEST_ASSERT_FALSE(f.noMemory());
       now += 9 * static_cast<uint64_t>(sf::kDayMs);
-      card = saveNow(f, now);
-      m.save(now);
-      const Bytes want = m.file();
-      TEST_ASSERT_TRUE_MESSAGE(card == want, hex(card, want).c_str());
-      TEST_ASSERT_EQUAL_UINT32(m.trkd.size(), f.rows(sf::kTrkd));
-      m.used = 0;
-      m.anyUsed = false;
-      m.firstPlayDay = -1;
+      if (f.dirty() || f.heldPending()) landOrHold(false);
+      TEST_ASSERT_FALSE(f.heldPending());
+      TEST_ASSERT_FALSE(f.noMemory());
+      TEST_ASSERT_FALSE(f.behind());
     }
   }
-  TEST_ASSERT_EQUAL_UINT32(live0, gHeap.live);  // (every block given back)
+  printf("random sessions: %d saves merged byte for byte (%d held, then promoted), %d boots past the records\n", saves,
+         helds, overflows);
+  TEST_ASSERT_TRUE(helds > 0 && overflows > 0);
+  TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);  // (every chunk given back)
 }
 
 // ---------------------------------------------------------------------------
-// The memory (5.6).
+// The resident set: the records, the overflow.
 // ---------------------------------------------------------------------------
-void test_the_memory() {
+void test_the_records_boundaries() {
+  gHeap.reset();
+  const size_t live0 = gHeap.live;
+  // Live: due from 64; 95 and 96 kept; the 97th not folded, behind.
+  {
+    sf::Fold f(heapAlloc, heapFree);
+    for (uint32_t q = 1; q <= 63; ++q) TEST_ASSERT_TRUE(f.liveSlot(playA(q)));
+    TEST_ASSERT_FALSE(f.due());
+    TEST_ASSERT_TRUE(f.liveSlot(playA(64)));
+    TEST_ASSERT_TRUE(f.due());
+    for (uint32_t q = 65; q <= 95; ++q) TEST_ASSERT_TRUE(f.liveSlot(playA(q)));
+    TEST_ASSERT_EQUAL_UINT32(95, f.records());
+    TEST_ASSERT_TRUE(f.liveSlot(playA(96)));
+    TEST_ASSERT_EQUAL_UINT32(96, f.records());
+    const sf::Head before = f.head();
+    TEST_ASSERT_FALSE(f.liveSlot(playA(97)));
+    TEST_ASSERT_TRUE(f.behind());
+    TEST_ASSERT_EQUAL_UINT32(0, f.records());  // (no save may take them: the next boot folds the log again)
+    TEST_ASSERT_FALSE(f.due());
+    TEST_ASSERT_EQUAL_UINT64(before.plays, f.head().plays);
+    TEST_ASSERT_EQUAL_UINT32(96, f.markOf(kDevA, kEpochA));
+    TEST_ASSERT_EQUAL_UINT32(96, f.folded());
+    TEST_ASSERT_FALSE(f.liveSlot(playA(98)));
+    sf::Fold::Plan p;
+    TEST_ASSERT_FALSE(f.plan(at(300, 23), false, 0, &p));
+    TEST_ASSERT_FALSE(f.covered(playA(1)));  // (the card's MARK: none)
+    TEST_ASSERT_EQUAL_UINT32(0, gHeap.carved.size());  // (live records never carve)
+  }
+  // A save empties them: 96 more fit.
+  {
+    sf::Fold f(heapAlloc, heapFree);
+    Card card;
+    for (uint32_t q = 1; q <= 64; ++q) TEST_ASSERT_TRUE(f.liveSlot(playA(q)));
+    saveNow(f, card, at(300, 23));
+    TEST_ASSERT_EQUAL_UINT32(0, f.records());
+    TEST_ASSERT_FALSE(f.due());
+    for (uint32_t q = 65; q <= 160; ++q) TEST_ASSERT_TRUE(f.liveSlot(playA(q)));
+    TEST_ASSERT_FALSE(f.liveSlot(playA(161)));
+    TEST_ASSERT_TRUE(f.behind());
+    TEST_ASSERT_TRUE(f.covered(playA(64)));
+    TEST_ASSERT_FALSE(f.covered(playA(65)));
+  }
+  // The boot's fold past 96: chunks of 819 records, as it needs them.
+  for (uint32_t n : {96u, 97u, 915u, 916u, 1734u, 1735u}) {
+    gHeap.reset();
+    sf::Fold f(heapAlloc, heapFree);
+    Ranges rg;
+    TEST_ASSERT_TRUE(rg.begin(f, kNoAcks));
+    for (uint32_t q = 1; q <= n; ++q) {
+      if ((q - 1) % 128 == 0) TEST_ASSERT_TRUE(f.reserve(128));
+      f.bootSlot(playA(q), 0);
+    }
+    f.endBoot();
+    const uint32_t want = n <= sf::kRecords ? 0 : (n - sf::kRecords + sf::kChunkRecords - 1) / sf::kChunkRecords;
+    char what[48];
+    std::snprintf(what, sizeof(what), "%u slots", static_cast<unsigned>(n));
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(n, f.records(), what);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(want, f.chunks(), what);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(want * sf::kChunkBytes, f.held(), what);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(live0 + want * sf::kChunkBytes, gHeap.live, what);
+    for (size_t b : gHeap.carved) TEST_ASSERT_EQUAL_size_t_MESSAGE(sf::kChunkBytes, b, what);
+    TEST_ASSERT_TRUE_MESSAGE(f.due(), what);
+  }
+  // Without reserve(): the fold carves the chunk it needs itself.
+  {
+    sf::Fold f(heapAlloc, heapFree);
+    Ranges rg;
+    TEST_ASSERT_TRUE(rg.begin(f, kNoAcks));
+    for (uint32_t q = 1; q <= 97; ++q) f.bootSlot(playA(q), 0);
+    TEST_ASSERT_EQUAL_UINT32(1, f.chunks());
+    TEST_ASSERT_FALSE(f.noMemory());
+    // An overflow waiting for its save (the boot's tries): a live slot
+    // goes in the last chunk's room; past it, behind.
+    f.endBoot();
+    for (uint32_t q = 98; q <= sf::kRecords + sf::kChunkRecords; ++q) TEST_ASSERT_TRUE(f.liveSlot(playA(q)));
+    TEST_ASSERT_EQUAL_UINT32(1, f.chunks());
+    TEST_ASSERT_FALSE(f.liveSlot(playA(sf::kRecords + sf::kChunkRecords + 1)));
+    TEST_ASSERT_TRUE(f.behind());
+    TEST_ASSERT_EQUAL_UINT32(0, f.chunks());
+    TEST_ASSERT_EQUAL_size_t(0, f.held());
+  }
+  TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
+}
+
+// 5.14's Held: the records emptied (the tmp holds them), RAM's HEAD the
+// plan's, the card's MARK the one before until the tmp is promoted; then
+// the next save merges only the records taken since onto the held copy.
+void test_held_and_promoted() {
   gHeap.reset();
   const size_t live0 = gHeap.live;
   {
     sf::Fold f(heapAlloc, heapFree);
-    TEST_ASSERT_TRUE(f.begin());
-    // HOUR, DAYS and MARK carved once, at their caps.
-    TEST_ASSERT_EQUAL_UINT32(3, gHeap.carved.size());
-    TEST_ASSERT_EQUAL_UINT32(6720, gHeap.carved[0]);
-    TEST_ASSERT_EQUAL_UINT32(6400, gHeap.carved[1]);
-    TEST_ASSERT_EQUAL_UINT32(1536, gHeap.carved[2]);
-    TEST_ASSERT_EQUAL_UINT32(6720 + 6400 + 1536, f.held());
-    f.clear();
-    // The load's chunks: what stats.bin needs, and one spare.
-    gHeap.carved.clear();
-    TEST_ASSERT_TRUE(f.reserveLoad(2000, 700));
-    TEST_ASSERT_EQUAL_UINT32(2, f.chunks(sf::kRcnt));  // 1,366 a chunk
-    TEST_ASSERT_EQUAL_UINT32(2, f.chunks(sf::kTrkd));  // 683 a chunk
-    TEST_ASSERT_TRUE(f.spare());
-    for (size_t n : gHeap.carved) TEST_ASSERT_EQUAL_UINT32(sf::kChunkBytes, n);
-    TEST_ASSERT_EQUAL_UINT32(5, gHeap.carved.size());
-    // The boot's fold: each index a power of two at least twice the rows.
-    cc::msmf::Acks none;
-    TEST_ASSERT_TRUE(f.beginBoot(none));
-    TEST_ASSERT_EQUAL_UINT32(256, f.indexSize(sf::kTrkd));
-    // reserve(): the next folds carve nothing; past half full the index
-    // is carved again at twice the size and filled from the rows.
+    Model m;
+    Card card;
+    std::vector<std::pair<pl::Slot, int>> boot;
+    for (uint32_t q = 1; q <= 200; ++q) boot.push_back({playA(q), 0});
+    Ranges rg;
+    bootFold(f, rg, boot, &m);
+    f.endBoot();
+    TEST_ASSERT_EQUAL_UINT32(1, f.chunks());
+    // The boot's save held: the chunk given back, nothing more to save.
+    SaveAsk ask;
+    ask.nowMs = at(300, 23);
+    SaveOut o = saveOf(f, card, ask);
+    m.save(ask.nowMs);
+    TEST_ASSERT_TRUE(o.bin == m.file());
+    f.held(o.plan);
+    TEST_ASSERT_TRUE(f.heldPending());
+    TEST_ASSERT_FALSE(f.dirty());
+    TEST_ASSERT_EQUAL_UINT32(0, f.records());
+    TEST_ASSERT_EQUAL_UINT32(0, f.chunks());
+    TEST_ASSERT_EQUAL_UINT32(o.plan.generation, f.generation());
+    TEST_ASSERT_EQUAL_UINT32(o.plan.head.sinceDay, f.head().sinceDay);
+    TEST_ASSERT_FALSE(f.covered(playA(1)));  // (the card's MARK: none until promoted)
+    TEST_ASSERT_EQUAL_UINT32(200, f.markOf(kDevA, kEpochA));
+    // Live plays meanwhile: RAM's MARK rises, the held tmp's doesn't.
+    for (uint32_t q = 201; q <= 203; ++q) {
+      TEST_ASSERT_TRUE(f.liveSlot(playA(q, at(301, 9, q % 60))));
+      m.fold(playA(q, at(301, 9, q % 60)), 2);
+    }
+    TEST_ASSERT_EQUAL_UINT32(3, f.records());
+    f.promoted();
+    card.bin = o.bin;
+    TEST_ASSERT_FALSE(f.heldPending());
+    TEST_ASSERT_TRUE(f.covered(playA(200)));
+    TEST_ASSERT_FALSE(f.covered(playA(201)));  // (the held tmp's MARK, not RAM's)
+    TEST_ASSERT_EQUAL_UINT32(203, f.markOf(kDevA, kEpochA));
+    // The next save: the three onto the held copy, none counted twice.
+    const Bytes b = saveNow(f, card, at(301, 23));
+    m.save(at(301, 23));
+    TEST_ASSERT_TRUE_MESSAGE(b == m.file(), hex(b, m.file()).c_str());
+    TEST_ASSERT_TRUE(f.covered(playA(203)));
+    f.promoted();  // (nothing held: nothing)
+    TEST_ASSERT_TRUE(f.covered(playA(203)));
+  }
+  // The tmp lost before it is promoted: behind, the card's MARK the one
+  // before (the log above it keeps those slots for the next boot).
+  {
+    sf::Fold f(heapAlloc, heapFree);
+    Card card;
+    for (uint32_t q = 1; q <= 10; ++q) TEST_ASSERT_TRUE(f.liveSlot(playA(q)));
+    saveNow(f, card, at(300, 23));
+    for (uint32_t q = 11; q <= 15; ++q) TEST_ASSERT_TRUE(f.liveSlot(playA(q)));
+    SaveAsk ask;
+    ask.nowMs = at(300, 23);
+    f.held(saveOf(f, card, ask).plan);
+    TEST_ASSERT_TRUE(f.liveSlot(playA(16)));
+    f.fallBehind();
+    TEST_ASSERT_TRUE(f.behind());
+    TEST_ASSERT_EQUAL_UINT32(0, f.records());
+    TEST_ASSERT_TRUE(f.covered(playA(10)));
+    TEST_ASSERT_FALSE(f.covered(playA(11)));
+    TEST_ASSERT_FALSE(f.liveSlot(playA(17)));
+    sf::Fold::Plan p;
+    TEST_ASSERT_FALSE(f.plan(at(300, 23), false, 0, &p));
+  }
+  // A held compaction: RAM's HEAD names the new base, so the save after the
+  // promotion writes a TRKD of the newer records over it (the old delta in
+  // the base, not lost).
+  {
+    sf::Fold f(heapAlloc, heapFree);
+    Card card;
+    for (uint32_t q = 1; q <= 30; ++q) TEST_ASSERT_TRUE(f.liveSlot(playA(q)));
+    SaveAsk ask;
+    ask.nowMs = at(300, 23);
+    ask.playing = false;  // (any delta over no base: due)
+    const SaveOut o = saveOf(f, card, ask);
+    TEST_ASSERT_TRUE(o.compacted);
+    f.held(o.plan);
+    TEST_ASSERT_EQUAL_UINT32(1, f.head().baseGen);
+    TEST_ASSERT_EQUAL_UINT32(30, f.head().baseRows);
+    TEST_ASSERT_EQUAL_UINT32(headerCrc(o.base), f.head().baseCrc);
+    TEST_ASSERT_TRUE(f.liveSlot(playA(31)));   // (a new track, 1031)
+    TEST_ASSERT_TRUE(f.liveSlot(playA(101)));  // (one the base has, 1001)
+    f.promoted();
+    card.bin = o.bin;
+    card.named = 1;
+    ask.playing = true;
+    const SaveOut next = saveOf(f, card, ask);
+    TEST_ASSERT_FALSE(next.compacted);
+    TEST_ASSERT_EQUAL_UINT32(1, next.plan.head.baseGen);
+    TEST_ASSERT_EQUAL_UINT32(2, next.mergedTrkd);  // (TRKD: the two newer rows alone)
+    f.saved(next.plan);
+  }
+  TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
+}
+
+// A boot's overflow kept while its save is tried again (the glue's four
+// tries), a live slot in its room meanwhile; given back when one lands, or
+// at the fourth failure (behind).
+void test_an_overflow_kept_till_a_save_lands() {
+  gHeap.reset();
+  const size_t live0 = gHeap.live;
+  std::vector<std::pair<pl::Slot, int>> boot;
+  Rng rng(77);
+  for (uint32_t q = 1; q <= 2000; ++q)
+    boot.push_back({slot(kDevA, kEpochA, q, hashOf(rng.below(700)), 30000 + rng.below(200000), 200000,
+                         static_cast<uint8_t>(1 + rng.below(3)), static_cast<uint8_t>(rng.below(4)), at(250 + q / 40, q % 24)),
+                    q <= 1000 ? 1 : 0});
+  std::stable_sort(boot.begin(), boot.end(),
+                   [](const std::pair<pl::Slot, int>& a, const std::pair<pl::Slot, int>& b) { return a.second < b.second; });
+  for (int lands = 0; lands < 2; ++lands) {
+    sf::Fold f(heapAlloc, heapFree);
+    Model m;
+    Card card;
+    Ranges rg;
+    bootFold(f, rg, boot, &m);
+    f.endBoot();
+    TEST_ASSERT_EQUAL_UINT32(3, f.chunks());  // (1,904 past the records)
+    SaveAsk ask;
+    ask.nowMs = at(300, 9);
+    // Three tries fail (nothing changes), a live play meanwhile.
+    for (int t = 0; t < 3; ++t) saveOf(f, card, ask);
+    const pl::Slot s = slot(kDevA, kEpochA, 2001, hashOf(5), 200000, 200000, 1, 1, at(300, 8));
+    TEST_ASSERT_TRUE(f.liveSlot(s));
+    m.fold(s, 2);
+    TEST_ASSERT_EQUAL_UINT32(2001, f.records());
+    TEST_ASSERT_EQUAL_UINT32(3, f.chunks());
+    if (lands) {
+      const Bytes b = saveNow(f, card, ask.nowMs);
+      m.save(ask.nowMs);
+      TEST_ASSERT_TRUE_MESSAGE(b == m.file(), hex(b, m.file()).c_str());
+      TEST_ASSERT_EQUAL_UINT32(0, f.chunks());
+      TEST_ASSERT_FALSE(f.behind());
+      TEST_ASSERT_TRUE(f.covered(s));
+    } else {
+      f.fallBehind();  // (the fourth failed)
+      TEST_ASSERT_EQUAL_UINT32(0, f.chunks());
+      TEST_ASSERT_EQUAL_UINT32(0, f.records());
+      TEST_ASSERT_FALSE(f.covered(boot[0].first));  // (the boot's MARK: the log keeps every slot)
+    }
+    TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
+  }
+  // A partial scan's overflow, or a fold out of memory's: no save may take
+  // it, so the fold's end drops it (behind); one within the records is kept.
+  {
+    sf::Fold f(heapAlloc, heapFree);
+    Ranges rg;
+    bootFold(f, rg, boot, nullptr);
+    f.partial();
+    f.endBoot();
+    TEST_ASSERT_TRUE(f.behind());
+    TEST_ASSERT_EQUAL_UINT32(0, f.chunks());
+    TEST_ASSERT_EQUAL_UINT32(0, f.records());
+  }
+  TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
+}
+
+void test_the_memory() {
+  gHeap.reset();
+  const size_t live0 = gHeap.live;
+  printf("the fold's object: %u bytes on this host (the records' %u, MARK's %u)\n",
+         static_cast<unsigned>(sizeof(sf::Fold)), static_cast<unsigned>(sf::kRecords * sizeof(sf::Fold::Record)),
+         static_cast<unsigned>(sf::kMarkRows * sizeof(sf::Fold::MarkRow)));
+  // The resident set (5.14's 3,584 B with the glue's and the store's state):
+  // the records (1,920 B), MARK's 16 rows (448 B), HEAD and the rest.
+  TEST_ASSERT_TRUE(sizeof(sf::Fold) <= 1920 + 448 + 512);
+  {
+    sf::Fold f(heapAlloc, heapFree);
+    TEST_ASSERT_EQUAL_UINT32(0, gHeap.carved.size());  // (nothing carved but the overflow)
+    TEST_ASSERT_TRUE(f.reserve(10000));                 // (outside a boot's fold: nothing)
+    TEST_ASSERT_EQUAL_UINT32(0, gHeap.carved.size());
+    // reserve(): the next folds carve nothing.
+    Ranges rg;
+    TEST_ASSERT_TRUE(rg.begin(f, kNoAcks));
     uint32_t q = 0;
-    for (int piece = 0; piece < 40; ++piece) {
+    for (int piece = 0; piece < 24; ++piece) {
       TEST_ASSERT_TRUE(f.reserve(128));
       const size_t before = gHeap.carved.size();
       for (int k = 0; k < 128; ++k) {
@@ -1366,140 +1941,265 @@ void test_the_memory() {
       }
       TEST_ASSERT_EQUAL_UINT32_MESSAGE(before, gHeap.carved.size(), "a fold carved after reserve()");
     }
-    TEST_ASSERT_EQUAL_UINT32(5120, f.rows(sf::kTrkd));
-    TEST_ASSERT_EQUAL_UINT32(16384, f.indexSize(sf::kTrkd));
-    TEST_ASSERT_EQUAL_UINT32(16384, f.indexSize(sf::kRcnt));
-    TEST_ASSERT_EQUAL_UINT32(8, f.chunks(sf::kTrkd));
-    for (size_t n : gHeap.carved)
-      TEST_ASSERT_TRUE_MESSAGE(n == sf::kChunkBytes || (n >= 512 && (n & (n - 1)) == 0) || n == 64 * 10 * 8,
-                               "a block that is no chunk, index or range");
-    const size_t peak = f.peak();
+    TEST_ASSERT_EQUAL_UINT32(3072, f.records());
+    TEST_ASSERT_EQUAL_UINT32(4, f.chunks());  // (2,976 past the records: three and a bit)
+    for (size_t n : gHeap.carved) TEST_ASSERT_EQUAL_size_t(sf::kChunkBytes, n);
+    TEST_ASSERT_EQUAL_size_t(4 * sf::kChunkBytes, f.held());
+    TEST_ASSERT_EQUAL_size_t(f.held(), f.peak());
     f.endBoot();
-    // The indexes and the ranges freed at the scan's end.
-    TEST_ASSERT_EQUAL_UINT32(0, f.indexSize(sf::kTrkd));
-    TEST_ASSERT_TRUE(f.held() < peak);
-    TEST_ASSERT_EQUAL_UINT32(gHeap.live - live0, f.held());
-    // A compaction's save gives TRKD's chunks back (one as the spare).
-    sf::Fold::Plan p;
-    TEST_ASSERT_TRUE(f.plan(at(300, 9), false, 0, &p));
-    p.compact = true;
-    f.saved(p);
-    TEST_ASSERT_EQUAL_UINT32(0, f.chunks(sf::kTrkd));
-    TEST_ASSERT_TRUE(f.spare());
-  }
-  {
-    // At the caps, the plan's budget (11): RCNT's 4,096 rows in three
-    // chunks, TRKD at the forced compaction's 96 KB (4,096 rows) in six,
-    // and the spare. (Chunks of 16,384 B took four and seven: S1's gate
-    // after the give-back.)
-    sf::Fold f(heapAlloc, heapFree);
-    TEST_ASSERT_TRUE(f.begin());
+    TEST_ASSERT_EQUAL_UINT32(4, f.chunks());  // (every one holds records)
+    // clear(): every chunk given back (a scan begun again).
     f.clear();
-    TEST_ASSERT_TRUE(f.reserveLoad(sf::kRcntRows, 96 * 1024 / sf::kTrackBytes));
-    TEST_ASSERT_EQUAL_UINT32(3, f.chunks(sf::kRcnt));
-    TEST_ASSERT_EQUAL_UINT32(6, f.chunks(sf::kTrkd));
-    TEST_ASSERT_TRUE(f.spare());
-    TEST_ASSERT_EQUAL_size_t(6720 + 6400 + 1536 + 10 * sf::kChunkBytes, f.held());
+    TEST_ASSERT_EQUAL_size_t(0, f.held());
+    TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
+    // At most 16: reserve() past them says no memory, and so does the fold.
+    Ranges rg2;
+    TEST_ASSERT_TRUE(rg2.begin(f, kNoAcks));
+    TEST_ASSERT_FALSE(f.reserve(sf::kRecords + sf::kMaxChunks * sf::kChunkRecords + 1));
+    TEST_ASSERT_EQUAL_UINT32(sf::kMaxChunks, f.chunks());
+    TEST_ASSERT_TRUE(f.reserve(sf::kRecords + sf::kMaxChunks * sf::kChunkRecords));
+    const uint32_t most = sf::kRecords + sf::kMaxChunks * sf::kChunkRecords;
+    for (uint32_t k = 1; k <= most; ++k) f.bootSlot(slot(kDevA, kEpochA, k, k, 200000, 200000), 0);
+    TEST_ASSERT_FALSE(f.noMemory());
+    f.bootSlot(slot(kDevA, kEpochA, most + 1, 1, 200000, 200000), 0);
+    TEST_ASSERT_TRUE(f.noMemory());
+    TEST_ASSERT_EQUAL_UINT32(most, f.records());
+    f.endBoot();  // (no save may take it: dropped)
+    TEST_ASSERT_TRUE(f.behind());
+    TEST_ASSERT_EQUAL_size_t(0, f.held());
+    TEST_ASSERT_FALSE(f.liveSlot(playA(1)));
   }
-  TEST_ASSERT_EQUAL_UINT32(live0, gHeap.live);
+  // The destructor gives back what is held.
+  {
+    sf::Fold f(heapAlloc, heapFree);
+    Ranges rg;
+    TEST_ASSERT_TRUE(rg.begin(f, kNoAcks));
+    TEST_ASSERT_TRUE(f.reserve(1000));
+    TEST_ASSERT_EQUAL_UINT32(2, f.chunks());
+  }
+  TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
 }
 
+// No memory at each point: the ranges' block, MARK, each chunk. The fold
+// stops (noMemory()) and nothing is saved, or it is whole and its file the
+// same: never a wrong file.
 void test_no_memory() {
+  gHeap.reset();
   const size_t live0 = gHeap.live;
-  cc::msmf::Acks none;
-  std::vector<pl::Slot> slots;
+  std::vector<std::pair<pl::Slot, int>> slots;
   for (uint32_t q = 1; q <= 3000; ++q)
-    slots.push_back(slot(kDevA, kEpochA, q, hashOf(q % 1500), 200000, 200000, 1, 1, at(200 + q / 100, q % 24)));
+    slots.push_back({slot(kDevA, kEpochA, q, hashOf(q % 1500), 200000, 200000, 1, 1, at(200 + q / 100, q % 24)), 0});
+  SaveAsk ask;
+  ask.nowMs = at(240, 9);
   // The control: everything carved.
   Bytes want;
   {
     sf::Fold f(heapAlloc, heapFree);
-    TEST_ASSERT_TRUE(f.begin());
-    f.clear();
-    TEST_ASSERT_TRUE(f.beginBoot(none));
-    for (const pl::Slot& s : slots) f.bootSlot(s, 0);
+    Ranges rg;
+    bootFold(f, rg, slots, nullptr);
     f.endBoot();
-    want = saveNow(f, at(240, 9));
+    Card card;
+    want = saveNow(f, card, ask.nowMs);
   }
-  // No memory for an index: each chunk's order finds the same rows.
-  gHeap.reset();
-  for (size_t size : {size_t{512}, size_t{1024}, size_t{2048}, size_t{8192}}) {
-    gHeap.failSize = size;
-    sf::Fold f(heapAlloc, heapFree);
-    TEST_ASSERT_TRUE(f.begin());
-    f.clear();
-    TEST_ASSERT_TRUE(f.beginBoot(none));
-    for (const pl::Slot& s : slots) f.bootSlot(s, 0);
-    f.endBoot();
-    TEST_ASSERT_FALSE(f.noMemory());
-    gHeap.failSize = 0;
-    TEST_ASSERT_TRUE(saveNow(f, at(240, 9)) == want);
-  }
-  // No memory at each carve in turn: either the fold is whole and the same,
-  // or it stopped (noMemory) and plans no save. Never a wrong file.
-  int stopped = 0, whole = 0;
-  for (int n = 0; n < 40; ++n) {
-    gHeap.reset();
-    gHeap.failAfter = n;
-    sf::Fold f(heapAlloc, heapFree);
-    const bool began = f.begin();
-    if (began) {
-      f.clear();
-      if (f.beginBoot(none)) {
-        for (const pl::Slot& s : slots) f.bootSlot(s, 0);
-        f.endBoot();
-      }
-    }
-    gHeap.failAfter = -1;
+  // No ranges' block, or one too small: no boot's fold, no save.
+  {
+    sf::Fold f;
+    TEST_ASSERT_FALSE(f.beginBoot(kNoAcks, nullptr, 0));
+    TEST_ASSERT_TRUE(f.noMemory());
+    f.bootSlot(slots[0].first, 0);
+    TEST_ASSERT_EQUAL_UINT32(0, f.folded());
     sf::Fold::Plan p;
-    if (!began || f.noMemory()) {
-      ++stopped;
-      if (began) TEST_ASSERT_FALSE(f.plan(at(240, 9), false, 0, &p));
-      continue;
+    TEST_ASSERT_FALSE(f.plan(ask.nowMs, false, 0, &p));
+    sf::Fold g;
+    std::vector<uint64_t> mem(100);
+    TEST_ASSERT_FALSE(g.beginBoot(kNoAcks, mem.data(), g.bootBytes(kNoAcks) - 1));
+    TEST_ASSERT_TRUE(g.noMemory());
+  }
+  // Each chunk's carve failing in turn (reserve()'s: the fold then carves
+  // its own), and every carve from one on (the fold stops).
+  int stopped = 0, whole = 0;
+  for (int from = 0; from < 2; ++from) {
+    for (int n = 0; n < 5; ++n) {
+      gHeap.reset();
+      gHeap.failAt = n;
+      gHeap.failFrom = from != 0;
+      sf::Fold f(heapAlloc, heapFree);
+      Ranges rg;
+      uint32_t piece = 0;
+      TEST_ASSERT_TRUE(rg.begin(f, kNoAcks));
+      for (const auto& s : slots) {
+        if (piece++ % 128 == 0) f.reserve(128);
+        f.bootSlot(s.first, s.second);
+      }
+      gHeap.failAt = -1;
+      f.endBoot();
+      sf::Fold::Plan p;
+      if (f.noMemory()) {
+        ++stopped;
+        TEST_ASSERT_FALSE(f.plan(ask.nowMs, false, 0, &p));
+        // An overflow dropped (no save may take it: behind); within the
+        // records, kept and never saved. No chunk held either way.
+        TEST_ASSERT_TRUE(f.behind() || f.records() == sf::kRecords);
+        TEST_ASSERT_EQUAL_size_t(0, f.held());
+        TEST_ASSERT_FALSE(f.covered(slots[0].first));
+        continue;
+      }
+      ++whole;
+      Card card;
+      TEST_ASSERT_TRUE(saveNow(f, card, ask.nowMs) == want);
     }
-    ++whole;
-    TEST_ASSERT_TRUE(saveNow(f, at(240, 9)) == want);
   }
   TEST_ASSERT_TRUE(stopped > 0 && whole > 0);
-  TEST_ASSERT_EQUAL_UINT32(live0, gHeap.live);
+  TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
 }
 
-void test_load_checks_the_order() {
-  // Rows not strictly increasing in any section: corrupt (5.4).
-  sf::Fold f;
-  TEST_ASSERT_TRUE(f.begin());
-  f.clear();
-  cc::msmf::Acks none;
-  TEST_ASSERT_TRUE(f.beginBoot(none));
-  f.bootSlot(slot(kDevA, kEpochA, 1, 1, 200000, 200000, 1, 1, at(300, 8)), 0);
-  f.bootSlot(slot(kDevB, kEpochB, 1, 2, 200000, 200000, 1, 1, at(301, 9)), 0);
-  f.endBoot();
-  sf::Fold::Plan p;
-  TEST_ASSERT_TRUE(f.plan(at(302, 9), false, 0, &p));
-  for (int sec = 1; sec < sf::kSecs; ++sec) {
-    const Bytes rows = rowsOf(f, p, static_cast<sf::Sec>(sec));
-    const uint32_t st = sf::kStrides[sec];
-    TEST_ASSERT_EQUAL_UINT32(2 * st, rows.size());
-    sf::Fold g;
-    TEST_ASSERT_TRUE(g.begin());
-    g.clear();
-    TEST_ASSERT_TRUE(g.loadRows(static_cast<sf::Sec>(sec), reinterpret_cast<const uint8_t*>(rows.data()), 2, st));
-    g.clear();
-    const Bytes swapped = rows.substr(st) + rows.substr(0, st);
-    TEST_ASSERT_FALSE(g.loadRows(static_cast<sf::Sec>(sec), reinterpret_cast<const uint8_t*>(swapped.data()), 2, st));
-    g.clear();
-    const Bytes twice = rows.substr(0, st) + rows.substr(0, st);
-    TEST_ASSERT_FALSE(g.loadRows(static_cast<sf::Sec>(sec), reinterpret_cast<const uint8_t*>(twice.data()), 2, st));
-    // A newer minor's longer rows, by their prefix; a stride under the
-    // section's: refused.
-    g.clear();
-    Bytes longer;
-    for (int r = 0; r < 2; ++r) longer += rows.substr(r * st, st) + Bytes(8, '\xee');
-    TEST_ASSERT_TRUE(g.loadRows(static_cast<sf::Sec>(sec), reinterpret_cast<const uint8_t*>(longer.data()), 2, st + 8));
-    TEST_ASSERT_EQUAL_UINT32(2, g.rows(static_cast<sf::Sec>(sec)));
-    g.clear();
-    TEST_ASSERT_FALSE(g.loadRows(static_cast<sf::Sec>(sec), reinterpret_cast<const uint8_t*>(rows.data()), 1, st - 4));
+// ---------------------------------------------------------------------------
+// A full log never synced.
+// ---------------------------------------------------------------------------
+namespace {
+
+// Both files at the cap: 13,106 slots, 25 plays a day for 524 days, of
+// 5,000 tracks; the scan reads plays.jnl (the newer half) first.
+std::vector<std::pair<pl::Slot, int>> fullLog() {
+  const uint32_t total = 2 * pl::kFileSlots;
+  std::vector<pl::Slot> slots;
+  Rng rng(2026);
+  for (uint32_t q = 1; q <= total; ++q) {
+    const uint64_t h = hashOf(rng.below(5000));
+    slots.push_back(slot(kDevA, kEpochA, q, h, 30000 + rng.below(200000), 200000, 1 + rng.below(3),
+                         static_cast<uint8_t>(rng.below(4)), at(q / 25, 8 + (q % 25) / 2, q % 60)));
   }
+  std::vector<std::pair<pl::Slot, int>> out;
+  for (uint32_t i = pl::kFileSlots; i < total; ++i) out.push_back({slots[i], 0});
+  for (uint32_t i = 0; i < pl::kFileSlots; ++i) out.push_back({slots[i], 1});
+  return out;
+}
+
+}  // namespace
+
+void test_a_full_log_never_synced() {
+  const std::vector<std::pair<pl::Slot, int>> log = fullLog();
+  gHeap.reset();
+  const size_t live0 = gHeap.live;
+  sf::Fold f(heapAlloc, heapFree);
+  Model m;
+  // The root's 16 ACKS rows (the ranges' block at its 3,072 B): A's own,
+  // every seq in the log, and 15 others of 5 seqs the log doesn't hold
+  // (MARK at its 16 rows).
+  cc::msmf::Acks acks;
+  acks.present = true;
+  std::memcpy(acks.entries[0].deviceId, kDevA, 6);
+  acks.entries[0].epoch = kEpochA;
+  acks.entries[0].seq = 2 * pl::kFileSlots;
+  for (uint32_t i = 1; i < cc::msmf::Acks::kMax; ++i) {
+    std::memcpy(acks.entries[i].deviceId, kDevB, 6);
+    acks.entries[i].epoch = 100 + i;
+    acks.entries[i].seq = 5;
+  }
+  acks.count = acks.rows = cc::msmf::Acks::kMax;
+  Ranges rg;
+  const auto t0 = std::chrono::steady_clock::now();
+  bootFold(f, rg, log, nullptr, acks);
+  f.endBoot();
+  const auto t1 = std::chrono::steady_clock::now();
+  for (const auto& s : log) m.fold(s.first, 1);
+  TEST_ASSERT_EQUAL_size_t(3072, rg.bytes);
+  TEST_ASSERT_EQUAL_UINT32(log.size(), f.folded());
+  TEST_ASSERT_EQUAL_UINT32(log.size(), f.records());
+  TEST_ASSERT_EQUAL_UINT32(sf::kMaxChunks, f.chunks());  // 96 + 16 x 819 = 13,200
+  TEST_ASSERT_EQUAL_size_t(sf::kMaxChunks * sf::kChunkBytes, f.peak());
+  // As the device carves them (6.5: 16,900 B a chunk) with the ranges'
+  // block: at most 273 KB (5.14).
+  const size_t device = f.chunks() * size_t{16900} + rg.bytes;
+  TEST_ASSERT_TRUE(device <= 273472);
+  // The save: the records (17 runs) merged into an empty card.
+  Card card;
+  SaveAsk ask;
+  ask.nowMs = at(530, 9);
+  const auto t2 = std::chrono::steady_clock::now();
+  const SaveOut o = saveOf(f, card, ask);
+  const auto t3 = std::chrono::steady_clock::now();
+  f.saved(o.plan);
+  m.save(ask.nowMs);
+  // (the gap: 15 rows of 5 seqs, none held)
+  TEST_ASSERT_EQUAL_UINT32(75, f.gap());
+  TEST_ASSERT_EQUAL_UINT32(sf::kMarkRows, f.marks());
+  m.head.gap = 75;
+  for (uint32_t i = 1; i < cc::msmf::Acks::kMax; ++i) {
+    std::array<uint8_t, 6> dev;
+    std::memcpy(dev.data(), kDevB, 6);
+    m.mark[{dev, 100 + i}] = 5;
+  }
+  TEST_ASSERT_TRUE_MESSAGE(o.bin == m.file(), hex(o.bin, m.file()).c_str());
+  TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
+  const double us = std::chrono::duration<double, std::micro>(t1 - t0).count();
+  const double ms = std::chrono::duration<double, std::milli>(t3 - t2).count();
+  printf("full log: %u slots, %u chunks (%u bytes held, %u as the device carves them with the ranges' %u); "
+         "%.2f us a slot on this host; the save's merge %.1f ms (the test's own reader and writer with it); "
+         "stats.bin %u bytes\n",
+         static_cast<unsigned>(log.size()), static_cast<unsigned>(sf::kMaxChunks), static_cast<unsigned>(f.peak()),
+         static_cast<unsigned>(device), static_cast<unsigned>(rg.bytes), us / log.size(), ms,
+         static_cast<unsigned>(o.bin.size()));
+}
+
+// ---------------------------------------------------------------------------
+// The load, compaction's rule.
+// ---------------------------------------------------------------------------
+void test_load_checks_the_order() {
+  // MARK's rows not strictly increasing: corrupt (5.4). (The other
+  // sections' StatsFile checks as it streams them, by compareRows.)
+  uint8_t rows[2 * 24] = {};
+  std::memcpy(rows, kDevA, 6);
+  cc::put64(rows + 8, kEpochA);
+  cc::put32(rows + 16, 9);
+  std::memcpy(rows + 24, kDevB, 6);
+  cc::put64(rows + 32, 1);
+  cc::put32(rows + 40, 3);
+  sf::Fold f;
+  TEST_ASSERT_TRUE(f.loadMark(rows, 2, 24));
+  TEST_ASSERT_EQUAL_UINT32(9, f.markOf(kDevA, kEpochA));
+  TEST_ASSERT_EQUAL_UINT32(3, f.markOf(kDevB, 1));
+  TEST_ASSERT_TRUE(f.covered(slot(kDevB, 1, 3, 1, 1, 1)));
+  f.clear();
+  uint8_t swapped[2 * 24];
+  std::memcpy(swapped, rows + 24, 24);
+  std::memcpy(swapped + 24, rows, 24);
+  TEST_ASSERT_FALSE(f.loadMark(swapped, 2, 24));
+  TEST_ASSERT_FALSE(f.noMemory());  // (corrupt, not no memory)
+  f.clear();
+  uint8_t twice[2 * 24];
+  std::memcpy(twice, rows, 24);
+  std::memcpy(twice + 24, rows, 24);
+  TEST_ASSERT_FALSE(f.loadMark(twice, 2, 24));
+  // Batches go on from the last row; a newer minor's longer rows by their
+  // prefix; a stride under 24: refused.
+  f.clear();
+  TEST_ASSERT_TRUE(f.loadMark(rows, 1, 24));
+  TEST_ASSERT_TRUE(f.loadMark(rows + 24, 1, 24));
+  TEST_ASSERT_FALSE(f.loadMark(rows, 1, 24));
+  f.clear();
+  uint8_t longer[2 * 32];
+  std::memset(longer, 0xEE, sizeof(longer));
+  std::memcpy(longer, rows, 24);
+  std::memcpy(longer + 32, rows + 24, 24);
+  TEST_ASSERT_TRUE(f.loadMark(longer, 2, 32));
+  TEST_ASSERT_EQUAL_UINT32(2, f.marks());
+  TEST_ASSERT_EQUAL_UINT32(3, f.markOf(kDevB, 1));
+  f.clear();
+  TEST_ASSERT_FALSE(f.loadMark(rows, 1, 20));
+  // The rows MARK writes: the file's, sorted, the reserved bytes 0.
+  f.clear();
+  TEST_ASSERT_TRUE(f.liveSlot(slot(kDevB, 1, 4, 1, 200000, 200000)));
+  TEST_ASSERT_TRUE(f.liveSlot(slot(kDevA, kEpochA, 10, 1, 200000, 200000)));
+  sf::Fold::Plan p;
+  TEST_ASSERT_TRUE(f.plan(0, false, 0, &p));
+  TEST_ASSERT_EQUAL_UINT32(2, p.rows[sf::kMark]);
+  uint8_t out[2 * 24];
+  std::memset(out, 0xEE, sizeof(out));
+  TEST_ASSERT_EQUAL_UINT32(2, f.markRows(0, out, 2));
+  cc::put32(rows + 16, 10);
+  cc::put32(rows + 40, 4);
+  TEST_ASSERT_EQUAL_MEMORY(rows, out, sizeof(out));
 }
 
 void test_compaction_rule() {
@@ -1517,211 +2217,6 @@ void test_compaction_rule() {
   TEST_ASSERT_FALSE(sf::compactionDue(4097, 100000, true, false));
 }
 
-// release(): the stats off for the session: every block given back, and
-// begin() and a load carve them again.
-void test_release_gives_every_block_back() {
-  gHeap.reset();
-  const size_t live0 = gHeap.live;
-  sf::Fold f(heapAlloc, heapFree);
-  TEST_ASSERT_TRUE(f.begin());
-  f.clear();
-  TEST_ASSERT_TRUE(f.reserveLoad(2000, 700));
-  cc::msmf::Acks none;
-  TEST_ASSERT_TRUE(f.beginBoot(none));
-  for (uint32_t q = 1; q <= 300; ++q)
-    f.bootSlot(slot(kDevA, kEpochA, q, hashOf(q), 200000, 200000, 1, 1, at(100, 8)), 0);
-  TEST_ASSERT_TRUE(f.held() > 0);
-  f.release();
-  TEST_ASSERT_EQUAL_size_t(0, f.held());
-  TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
-  TEST_ASSERT_FALSE(f.booting());
-  TEST_ASSERT_FALSE(f.spare());
-  TEST_ASSERT_EQUAL_UINT32(0, f.chunks(sf::kRcnt) + f.chunks(sf::kTrkd));
-  TEST_ASSERT_EQUAL_UINT32(0, f.folded());
-  // Again: the same as a fresh fold's.
-  TEST_ASSERT_TRUE(f.begin());
-  TEST_ASSERT_EQUAL_size_t(6720 + 6400 + 1536, f.held());
-  f.release();
-  f.release();  // (twice: nothing more)
-  TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
-}
-
-// A library update's give-back (docs/LISTENING-STATS.md 6.7): every block
-// but MARK's given back, exactly what givesBack() said; covered() and
-// markOf() answer as before (the card's MARK and RAM's); nothing while the
-// boot's fold runs; begin() carves HOUR and DAYS again (MARK's block kept)
-// for the next load.
-void test_give_back_keeps_mark_alone() {
-  gHeap.reset();
-  const size_t live0 = gHeap.live;
-  sf::Fold f(heapAlloc, heapFree);
-  TEST_ASSERT_TRUE(f.begin());
-  f.clear();
-  TEST_ASSERT_TRUE(f.reserveLoad(2000, 700));
-  cc::msmf::Acks none;
-  TEST_ASSERT_TRUE(f.beginBoot(none));
-  for (uint32_t q = 1; q <= 300; ++q)
-    f.bootSlot(slot(kDevA, kEpochA, q, hashOf(q), 200000, 200000, 1, 1, at(100, 8)), 0);
-  TEST_ASSERT_EQUAL_size_t(0, f.givesBack());  // (the boot's fold: its blocks are the scan's)
-  TEST_ASSERT_EQUAL_size_t(0, f.giveBack());
-  TEST_ASSERT_TRUE(f.booting());
-  sf::Fold::Plan p;
-  TEST_ASSERT_TRUE(f.plan(0, false, 0, &p));  // (the boot's end; the save landed:)
-  f.saved(p);
-  f.liveSlot(slot(kDevA, kEpochA, 301, hashOf(301), 200000, 200000, 1, 1, at(100, 9)));
-  TEST_ASSERT_TRUE(f.dirty());
-  const size_t mark = sf::kMarkBlockRows * sizeof(sf::Fold::MarkRow);
-  const size_t gives = f.givesBack();
-  TEST_ASSERT_EQUAL_size_t(f.held() - mark, gives);
-  TEST_ASSERT_EQUAL_size_t(gives, f.giveBack());
-  TEST_ASSERT_EQUAL_size_t(mark, f.held());
-  TEST_ASSERT_EQUAL_size_t(live0 + mark, gHeap.live);
-  TEST_ASSERT_EQUAL_size_t(0, f.givesBack());
-  TEST_ASSERT_EQUAL_size_t(0, f.giveBack());  // (twice: nothing more)
-  TEST_ASSERT_FALSE(f.spare());
-  TEST_ASSERT_EQUAL_UINT32(0, f.chunks(sf::kRcnt) + f.chunks(sf::kTrkd));
-  TEST_ASSERT_EQUAL_UINT32(0, f.rows(sf::kHour) + f.rows(sf::kDays) + f.rows(sf::kRcnt) + f.rows(sf::kTrkd));
-  // MARK kept: the card's 300 (the save's), RAM's 301.
-  TEST_ASSERT_EQUAL_UINT32(1, f.rows(sf::kMark));
-  TEST_ASSERT_TRUE(f.covered(slot(kDevA, kEpochA, 300, 1, 1, 1, 1, 1, 0)));
-  TEST_ASSERT_FALSE(f.covered(slot(kDevA, kEpochA, 301, 1, 1, 1, 1, 1, 0)));
-  TEST_ASSERT_EQUAL_UINT32(301, f.markOf(kDevA, kEpochA));
-  uint8_t plays = 0;
-  uint32_t ms = 0;
-  TEST_ASSERT_FALSE(f.hour(sf::hourOf(at(100, 8)), &plays, &ms));  // (no HOUR held)
-  // The next load: HOUR and DAYS again, MARK's block the same.
-  TEST_ASSERT_TRUE(f.begin());
-  TEST_ASSERT_EQUAL_size_t(6720 + 6400 + mark, f.held());
-  f.release();
-  TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
-}
-
-// ---------------------------------------------------------------------------
-// A full log never synced.
-// ---------------------------------------------------------------------------
-namespace {
-
-// Both files at the cap: 13,106 slots, 25 plays a day for 524 days, of
-// 5,000 tracks.
-std::vector<pl::Slot> fullLog(std::set<uint64_t>* hashes) {
-  const uint32_t total = 2 * pl::kFileSlots;
-  std::vector<pl::Slot> slots;
-  Rng rng(2026);
-  for (uint32_t q = 1; q <= total; ++q) {
-    const uint64_t h = hashOf(rng.below(5000));
-    if (hashes) hashes->insert(h);
-    slots.push_back(slot(kDevA, kEpochA, q, h, 30000 + rng.below(200000), 200000, 1 + rng.below(3),
-                         static_cast<uint8_t>(rng.below(4)), at(q / 25, 8 + (q % 25) / 2, q % 60)));
-  }
-  return slots;
-}
-
-// Its boot's fold, as the glue would: the scan reads plays.jnl (the newer)
-// first, reserve() before each piece of 128 slots; and into the model.
-void foldFullLog(sf::Fold& f, Model* m, const std::vector<pl::Slot>& slots) {
-  cc::msmf::Acks none;
-  TEST_ASSERT_TRUE(f.beginBoot(none));
-  uint32_t piece = 0;
-  for (int file = 0; file <= 1; ++file) {
-    const uint32_t from = file == 0 ? pl::kFileSlots : 0;
-    for (uint32_t i = from; i < from + pl::kFileSlots; ++i) {
-      if (piece++ % 128 == 0) TEST_ASSERT_TRUE(f.reserve(128));
-      f.bootSlot(slots[i], file);
-      if (m) m->fold(slots[i], 1);
-    }
-  }
-}
-
-}  // namespace
-
-void test_a_full_log_never_synced() {
-  // As the glue would: reserve() before each piece of 128 slots.
-  const uint32_t total = 2 * pl::kFileSlots;
-  std::set<uint64_t> hashes;
-  const std::vector<pl::Slot> slots = fullLog(&hashes);
-  gHeap.reset();
-  sf::Fold f(heapAlloc, heapFree);
-  TEST_ASSERT_TRUE(f.begin());
-  f.clear();
-  TEST_ASSERT_TRUE(f.reserveLoad(0, 0));
-  f.resetPeak();
-  Model m;
-  const auto t0 = std::chrono::steady_clock::now();
-  foldFullLog(f, nullptr, slots);
-  const size_t rcntPeakRows = f.rows(sf::kRcnt), rcntPeakChunks = f.chunks(sf::kRcnt);
-  f.endBoot();
-  const auto t1 = std::chrono::steady_clock::now();
-  for (int file = 0; file <= 1; ++file) {
-    const uint32_t from = file == 0 ? pl::kFileSlots : 0;
-    for (uint32_t i = from; i < from + pl::kFileSlots; ++i) m.fold(slots[i], 1);
-  }
-  TEST_ASSERT_EQUAL_UINT32(total, f.folded());
-  TEST_ASSERT_EQUAL_UINT32(hashes.size(), f.rows(sf::kTrkd));
-  TEST_ASSERT_EQUAL_UINT32(m.rcnt.size(), rcntPeakRows);
-  const size_t trkdChunks = f.chunks(sf::kTrkd);
-  const Bytes mine = saveNow(f, at(530, 9));
-  m.save(at(530, 9));
-  TEST_ASSERT_TRUE_MESSAGE(mine == m.file(), hex(mine, m.file()).c_str());
-  const double us = std::chrono::duration<double, std::micro>(t1 - t0).count();
-  printf("full log: %u slots, %u hashes (TRKD %u chunks), RCNT %u rows (%u chunks) at the fold's end; "
-         "peak %u bytes held (heap %u), %.2f us a slot on this host; stats.bin %u bytes\n",
-         static_cast<unsigned>(total), static_cast<unsigned>(hashes.size()), static_cast<unsigned>(trkdChunks),
-         static_cast<unsigned>(rcntPeakRows), static_cast<unsigned>(rcntPeakChunks), static_cast<unsigned>(f.peak()),
-         static_cast<unsigned>(gHeap.peak), us / total, static_cast<unsigned>(mine.size()));
-  TEST_ASSERT_TRUE(f.peak() < 512 * 1024);
-}
-
-// A boot whose save doesn't land (refused, failed, held): RCNT, pruned
-// only by a save that lands, is held to its 4,096-row cap by whole days at
-// the fold's end (the save's cut without the date's), not a full log's
-// 13,000 rows for the session. A later save writes the file statsref's
-// would (the model's, which keeps every row till then): live plays dated
-// before that cut (a clock gone back) add no RCNT row, which that save
-// cuts anyway; with the clock unset (no date cut), and with it set.
-void test_a_boot_whose_save_doesnt_land() {
-  const std::vector<pl::Slot> slots = fullLog(nullptr);
-  size_t heldAfter = 0, heldLanded = 0;
-  for (int clock = 0; clock < 2; ++clock) {
-    gHeap.reset();
-    sf::Fold f(heapAlloc, heapFree);
-    TEST_ASSERT_TRUE(f.begin());
-    f.clear();
-    TEST_ASSERT_TRUE(f.reserveLoad(0, 0));
-    Model m;
-    foldFullLog(f, &m, slots);
-    TEST_ASSERT_TRUE(f.rows(sf::kRcnt) > sf::kRcntRows);
-    f.endBoot();  // (the boot's save refused: the glue ends the fold)
-    TEST_ASSERT_TRUE(f.rows(sf::kRcnt) <= sf::kRcntRows);
-    TEST_ASSERT_TRUE(f.rows(sf::kRcnt) > sf::kRcntRows - 25);  // (whole days of at most 25 rows)
-    TEST_ASSERT_EQUAL_UINT32(3, f.chunks(sf::kRcnt));  // (at its cap: three chunks, the plan's 11)
-    TEST_ASSERT_TRUE(f.rcntFloor() > 0);
-    TEST_ASSERT_TRUE(f.dirty());
-    if (clock == 0) heldAfter = f.held();
-    // Live plays: one dated before the cut, two after (one a row RCNT
-    // holds, one new), one undated.
-    const uint32_t floor = f.rcntFloor();
-    const uint32_t seq0 = static_cast<uint32_t>(slots.size());
-    const pl::Slot live[4] = {
-        slot(kDevA, kEpochA, seq0 + 1, slots[0].pathHash, 120000, 200000, 1, 1, at(floor - 3, 9)),
-        slot(kDevA, kEpochA, seq0 + 2, slots.back().pathHash, 120000, 200000, 1, 1, slots.back().startedAt + 60000),
-        slot(kDevA, kEpochA, seq0 + 3, hashOf(9001), 120000, 200000, 1, 3, at(floor + 2, 10)),
-        slot(kDevA, kEpochA, seq0 + 4, hashOf(9002), 120000, 200000, 1, 2, 0)};
-    for (const pl::Slot& s : live) {
-      f.liveSlot(s);
-      m.fold(s, 2);
-    }
-    const uint64_t now = clock ? at(530, 9) : 0;
-    const Bytes mine = saveNow(f, now);
-    m.save(now);
-    TEST_ASSERT_TRUE_MESSAGE(mine == m.file(), hex(mine, m.file()).c_str());
-    TEST_ASSERT_EQUAL_UINT32(0, f.rcntFloor());  // (the save landed: the card's file is RAM's)
-    if (clock == 1) heldLanded = f.held();
-  }
-  printf("a full log's boot whose save doesn't land: %u bytes held after the fold (RCNT at its cap); %u after a "
-         "save that lands (the clock set)\n",
-         static_cast<unsigned>(heldAfter), static_cast<unsigned>(heldLanded));
-}
-
 int main(int, char**) {
   if (!cardfixtures::json("stats/index.json", &gIndex) || gIndex.size() == 0) {
     printf("the stats fixtures (test/fixtures/card/stats) can't be read\n");
@@ -1731,22 +2226,21 @@ int main(int, char**) {
   RUN_TEST(test_the_rules_of_4_1);
   RUN_TEST(test_head_and_rows_byte_for_byte);
   RUN_TEST(test_the_merge_is_order_free);
+  RUN_TEST(test_the_rows_order_and_merge);
   RUN_TEST(test_every_fixture_boot);
   RUN_TEST(test_each_slot_once);
   RUN_TEST(test_the_gap);
   RUN_TEST(test_rounds_and_the_live_fold);
-  RUN_TEST(test_mark_kept_for_good_and_covered);
   RUN_TEST(test_since_day);
-  RUN_TEST(test_hour_and_days_keep_the_newest);
-  RUN_TEST(test_rcnt_retention);
-  RUN_TEST(test_random_folds_against_the_model);
+  RUN_TEST(test_mark_rows_and_the_extra_block);
+  RUN_TEST(test_random_sessions_against_the_model);
+  RUN_TEST(test_the_records_boundaries);
+  RUN_TEST(test_held_and_promoted);
+  RUN_TEST(test_an_overflow_kept_till_a_save_lands);
   RUN_TEST(test_the_memory);
   RUN_TEST(test_no_memory);
+  RUN_TEST(test_a_full_log_never_synced);
   RUN_TEST(test_load_checks_the_order);
   RUN_TEST(test_compaction_rule);
-  RUN_TEST(test_a_full_log_never_synced);
-  RUN_TEST(test_a_boot_whose_save_doesnt_land);
-  RUN_TEST(test_release_gives_every_block_back);
-  RUN_TEST(test_give_back_keeps_mark_alone);
   return UNITY_END();
 }

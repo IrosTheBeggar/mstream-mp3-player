@@ -54,7 +54,7 @@
 #include "CardManifest.h"
 #include "PlayLog.h"
 #include "StatsFile.h"
-#include "StatsFold.h"
+#include "StatsFoldS1.h"
 
 namespace cc = cardcontract;
 namespace pl = playlog;
@@ -336,7 +336,7 @@ sx::SaveAsk askOf(const minijson::Value& b) {
 const char* const kLogNames[sf::kFiles] = {"plays.jnl",   "plays.1.jnl", "plays.2.jnl", "plays.3.jnl", "plays.4.jnl",
                                            "plays.5.jnl", "plays.6.jnl", "plays.7.jnl", "plays.8.jnl", "plays.9.jnl"};
 
-void scanLog(sf::Fold& f, const cutfs::CutFs& card, const std::map<std::string, int>& unread) {
+void scanLog(sf::s1::Fold& f, const cutfs::CutFs& card, const std::map<std::string, int>& unread) {
   for (int i = 0; i < sf::kFiles; ++i) {
     if (!card.dir.count(kDir + kLogNames[i])) continue;
     const Bytes b = bytesOf(card, kLogNames[i]);
@@ -354,7 +354,7 @@ void scanLog(sf::Fold& f, const cutfs::CutFs& card, const std::map<std::string, 
 
 // 2.20.2's trim as the journal judges a file, and 5.5's: every play slot
 // at or under the card's MARK.
-bool trimmable(sf::Fold& f, const Bytes& b, const cc::msmf::Acks& acks) {
+bool trimmable(sf::s1::Fold& f, const Bytes& b, const cc::msmf::Acks& acks) {
   if (b.size() > pl::kFileBytes) return false;
   bool anyPlay = false, allAcked = true, lastIsPlay = false, covered = true;
   for (size_t k = 0; k + pl::kSlot <= b.size(); k += pl::kSlot) {
@@ -377,7 +377,7 @@ struct BootOut {
   std::set<std::string> trimmed;
 };
 
-BootOut bootOnce(tagstore::Fs& fs, cutfs::CutFs& card, sx::Store& store, sf::Fold& f, uint8_t* work,
+BootOut bootOnce(tagstore::Fs& fs, cutfs::CutFs& card, sx::Store& store, sf::s1::Fold& f, uint8_t* work,
                  const cc::msmf::Acks& acks, const std::map<std::string, int>& unread, const sx::SaveAsk& ask,
                  bool saveFails = false, sx::Store::WaitFn wait = waitHook) {
   (void)fs;
@@ -404,7 +404,7 @@ BootOut bootOnce(tagstore::Fs& fs, cutfs::CutFs& card, sx::Store& store, sf::Fol
 // One boot of a fixture on `card` (its "in" put there by the caller).
 BootOut fixtureBoot(cutfs::CutFs& card, tagstore::Fs& fs, const minijson::Value& b, Work& w,
                     sx::Store::WaitFn wait = waitHook) {
-  sf::Fold f;
+  sf::s1::Fold f;
   TEST_ASSERT_TRUE(f.begin());
   sx::Store store(fs);
   return bootOnce(fs, card, store, f, w.p(), acksOf(b["acks"]), unreadOf(b), askOf(b), b["saveFails"].boolean(), wait);
@@ -542,7 +542,7 @@ void test_a_lone_major_2_tmp_survives_settle() {
   {
     cutfs::CutFs card;
     put(card, {{"stats.tmp", newer}});
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(card);
     gWaits.clear();
@@ -560,7 +560,7 @@ void test_a_lone_major_2_tmp_survives_settle() {
     // Ours (major 1), whole: promoted and loaded. Torn: removed, a fresh start.
     cutfs::CutFs card;
     put(card, {{"stats.tmp", good}});
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(card);
     sx::Opened o = store.read(f, w.p(), waitHook);
@@ -659,7 +659,7 @@ void test_the_boot_reads_again() {
     card.faultPrefix = sx::kStatsBin;
     card.faultFrom = c.from;
     card.faultTo = c.to;
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(card);
     gWaits.clear();
@@ -685,7 +685,7 @@ void test_the_boot_reads_again() {
     cutfs::CutFs card;
     put(card, in);
     card.damagedPrefix = sx::kStatsBin;
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(card);
     gWaits.clear();
@@ -701,7 +701,7 @@ void test_the_boot_reads_again() {
     card.faultPrefix = sx::kStatsTmp;
     card.faultFrom = 0;
     card.faultTo = 1;
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(card);
     gWaits.clear();
@@ -719,7 +719,7 @@ void test_the_boot_reads_again() {
     card.put(sx::kStatsBin, std::vector<uint8_t>(bad.begin(), bad.end()));
     gCard = &card;
     gOnWait = restoreGood;
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(card);
     gWaits.clear();
@@ -739,7 +739,7 @@ void test_the_boot_reads_again() {
     Bytes bad = in.at("stats.bin");
     bad.pop_back();
     card.put(sx::kStatsBin, std::vector<uint8_t>(bad.begin(), bad.end()));
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(card);
     const sx::Opened o = store.read(f, w.p(), nullptr);
@@ -761,7 +761,7 @@ void test_the_boot_reads_again() {
   {
     cutfs::CutFs card;
     put(card, in);
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(card);
     TEST_ASSERT_EQUAL_STRING("noMemory", sx::readName(store.read(f, nullptr, waitHook).read));
@@ -820,7 +820,7 @@ void test_stats_bad_never_shares_a_chain() {
     put(card, in);
     card.cutAt = k;
     {
-      sf::Fold f;
+      sf::s1::Fold f;
       TEST_ASSERT_TRUE(f.begin());
       sx::Store store(card);
       store.read(f, w.p(), waitHook);
@@ -866,7 +866,7 @@ void test_the_base_check() {
     card.faultFrom = c.from;
     card.faultTo = c.to;
     if (c.damaged) card.damagedPrefix = "/.player/stats-00000001.bin";
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(card);
     gWaits.clear();
@@ -894,7 +894,7 @@ void test_the_base_check() {
     card.faultPrefix = base;
     card.faultFrom = 0;
     card.faultTo = 1;
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(card);
     gWaits.clear();
@@ -925,7 +925,7 @@ void test_the_base_check() {
     cutfs::CutFs card;
     put(card, in);
     put(card, {{"stats.bin", frameOf(generationOf(stats), s2)}, {"stats-00000001.bin", nb}});
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(card);
     gWaits.clear();
@@ -952,7 +952,7 @@ void test_the_card_copy_is_checked_first() {
     Files start = in;
     if (c == 2) start.erase("stats.bin");
     put(card, start);
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(card);
     const sx::Opened o = store.read(f, w.p(), waitHook);
@@ -990,7 +990,7 @@ void test_the_commit_steps() {
     cutfs::CutFs card;
     put(card, cardOf(b2["in"]));
     const long before = card.steps;
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(card);
     const BootOut r = bootOnce(card, card, store, f, w.p(), acksOf(b2["acks"]), {}, askOf(b2));
@@ -1002,7 +1002,7 @@ void test_the_commit_steps() {
   {
     cutfs::CutFs card;
     put(card, in);
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(card);
     TEST_ASSERT_TRUE(statsOn(store.read(f, w.p(), waitHook).read));
@@ -1017,7 +1017,7 @@ void test_the_commit_steps() {
     put(card, in);
     Wrap fs(card);
     fs.sizeOff = -1;
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(fs);
     const BootOut r = bootOnce(fs, card, store, f, w.p(), acksOf(b["acks"]), {}, askOf(b));
@@ -1035,7 +1035,7 @@ void test_the_commit_steps() {
     put(card, in);
     Wrap fs(card);
     fs.failTmpRenames = 1;
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(fs);
     const BootOut r = bootOnce(fs, card, store, f, w.p(), acksOf(b["acks"]), {}, askOf(b));
@@ -1047,7 +1047,7 @@ void test_the_commit_steps() {
     TEST_ASSERT_EQUAL_UINT32(0, r.trimmed.size());
     {
       cutfs::CutFs next = card.reboot(cutfs::Variant::LoseUnsynced);
-      sf::Fold g;
+      sf::s1::Fold g;
       TEST_ASSERT_TRUE(g.begin());
       sx::Store s2(next);
       const sx::Opened o = s2.read(g, w.p(), waitHook);
@@ -1081,7 +1081,7 @@ void test_the_commit_steps() {
     put(card, in);
     Wrap fs(card);
     fs.failBinRemoves = 1;
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(fs);
     const BootOut r = bootOnce(fs, card, store, f, w.p(), acksOf(b["acks"]), {}, askOf(b));
@@ -1102,7 +1102,7 @@ void test_the_commit_steps() {
     put(card, in);
     Wrap fs(card);
     fs.failBinRemoves = 1;
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(fs);
     bootOnce(fs, card, store, f, w.p(), acksOf(b["acks"]), {}, askOf(b));
@@ -1118,7 +1118,7 @@ void test_the_commit_steps() {
   {
     cutfs::CutFs card;
     put(card, in);
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(card);
     const BootOut r = bootOnce(card, card, store, f, w.p(), acksOf(b["acks"]), {}, askOf(b), true);
@@ -1133,7 +1133,7 @@ void test_the_commit_steps() {
     const minijson::Value& p = scenario("partial-open")["boots"][0];
     cutfs::CutFs card;
     put(card, cardOf(p["in"]));
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(card);
     const BootOut r = bootOnce(card, card, store, f, w.p(), acksOf(p["acks"]), unreadOf(p), askOf(p));
@@ -1171,7 +1171,7 @@ void test_a_fold_out_of_memory_is_never_saved() {
         cutfs::CutFs card;
         put(card, in);
         if (absent) card.remove((kDir + "stats.bin").c_str());
-        sf::Fold f(shortAlloc, shortFree);
+        sf::s1::Fold f(shortAlloc, shortFree);
         TEST_ASSERT_TRUE(f.begin());
         sx::Store store(card);
         TEST_ASSERT_EQUAL_STRING_MESSAGE(absent ? "absent" : "loaded", sx::readName(store.read(f, w.p(), waitHook).read),
@@ -1226,7 +1226,7 @@ void test_a_cut_at_every_step_of_a_save() {
       for (cutfs::Variant v : {cutfs::Variant::InOrder, cutfs::Variant::LoseUnsynced, cutfs::Variant::Torn}) {
         cutfs::CutFs card;
         put(card, in);
-        sf::Fold f;
+        sf::s1::Fold f;
         TEST_ASSERT_TRUE(f.begin());
         sx::Store store(card);
         const sx::Opened o = store.read(f, w.p(), waitHook);
@@ -1303,7 +1303,7 @@ void test_compaction() {
   {
     cutfs::CutFs card;
     put(card, in);
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(card);
     TEST_ASSERT_TRUE(statsOn(store.read(f, w.p(), waitHook).read));
@@ -1325,7 +1325,7 @@ void test_compaction() {
   {
     cutfs::CutFs card;
     put(card, in);
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(card);
     TEST_ASSERT_TRUE(statsOn(store.read(f, w.p(), waitHook).read));
@@ -1362,7 +1362,7 @@ void test_compaction() {
     put(card, in);
     Wrap fs(card);
     fs.failTmpRenames = 1;
-    sf::Fold f;
+    sf::s1::Fold f;
     TEST_ASSERT_TRUE(f.begin());
     sx::Store store(fs);
     const BootOut r = bootOnce(fs, card, store, f, w.p(), acksOf(b["acks"]), {}, askOf(b));
@@ -1384,7 +1384,7 @@ void test_compaction() {
     TEST_ASSERT_EQUAL_UINT32(1, f.head().baseGen);  // RAM's: the old base, still there
     TEST_ASSERT_TRUE(bytesOf(card, "stats-00000001.bin") == in.at("stats-00000001.bin"));
     // The next boot reads it whole, and the orphan goes.
-    sf::Fold g;
+    sf::s1::Fold g;
     TEST_ASSERT_TRUE(g.begin());
     sx::Store s2(card);
     const sx::Opened o = s2.read(g, w.p(), waitHook);
@@ -1403,7 +1403,7 @@ void test_the_writer_in_the_callers_memory() {
   Work w;
   cutfs::CutFs card;
   Wrap fs(card);
-  sf::Fold f(heapAlloc, heapFree);
+  sf::s1::Fold f(heapAlloc, heapFree);
   TEST_ASSERT_TRUE(f.begin());
   sx::Store store(fs);
   TEST_ASSERT_EQUAL_STRING("absent", sx::readName(store.read(f, w.p(), waitHook).read));
@@ -1458,7 +1458,7 @@ void test_the_writer_in_the_callers_memory() {
   TEST_ASSERT_TRUE(tmpWrites <= r.bytes / 4096 + 6);
   TEST_ASSERT_TRUE(whole >= r.bytes / 4096 - 2);
   // Read back: the same stats.
-  sf::Fold g;
+  sf::s1::Fold g;
   TEST_ASSERT_TRUE(g.begin());
   sx::Store s2(card);
   const sx::Opened o = s2.read(g, w.p(), waitHook);
@@ -1485,7 +1485,7 @@ void test_the_writer_in_the_callers_memory() {
   TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(c.what));
   TEST_ASSERT_TRUE(c.compacted);
   TEST_ASSERT_EQUAL_UINT32(f.rows(sf::kTrkd) + 1, c.baseRows);
-  sf::Fold h;
+  sf::s1::Fold h;
   TEST_ASSERT_TRUE(h.begin());
   sx::Store s3(card);
   const sx::Opened o3 = s3.read(h, w.p(), waitHook);

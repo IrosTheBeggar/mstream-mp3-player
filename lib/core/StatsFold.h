@@ -9,38 +9,41 @@
 #include "PlayLog.h"
 #include "WallClock.h"
 
-// The listening stats' aggregate in RAM, and the fold of the play log's
-// slots into it (docs/LISTENING-STATS.md 4.1, 5.2, 5.6). tools/statsref.py
-// is the reference: what a boot folds, what a save writes of each section
-// (HEAD, MARK, HOUR, DAYS, RCNT, TRKD of /.player/stats.bin) byte for byte,
-// on every fixture of test/fixtures/card/stats (test_stats_fold).
-// Portable, host-tested; no file here: lib/core StatsFile reads and writes
-// the card's files (stats.bin, its base), app/ListeningStats is the glue
-// (the play log's Folds, the save's guards).
+// The listening stats' fold of the play log's slots (docs/LISTENING-STATS.md
+// 4.1, 5.2, 5.6, and S1's rework, 5.14: a fixed resident set). The fold
+// keeps no table: HEAD and MARK in the object, and one record a slot that
+// counts, folded since the card's stats.bin (or a held tmp) took them; a
+// save merges them with the card's sections (lib/core StatsFile reads and
+// writes the files). tools/statsref.py is the reference: the records merged
+// with the card's rows equal its whole aggregate's, byte for byte, given the
+// same save moments (test_stats_fold, every boot of test/fixtures/card/
+// stats/index.json and random sessions against a port of it).
 //   - the rules of 4.1: a slot that counts, the line, a play, a skip, the
 //     source, dated, its hour, its day, a row's time;
 //   - a track's row and the merge (5.2's ⊕): order-free, so a row folded
 //     live and the same row folded at a boot (newest file first) agree but
-//     for lastOrd, a round, compared by order;
-//   - the aggregate: HEAD; MARK (kept for good, a row each (deviceId,
-//     epoch) ever folded; the card's MARK beside RAM's, for the trim); HOUR
-//     and DAYS (their newest 840 and 400 rows, carved once at those caps);
-//     RCNT and TRKD in chunks of 16,392 B (whole rows of both), never one
-//     block, never realloc'd; every block through the allocator hook
-//     (PSRAM on the device);
+//     for lastOrd, a round, compared by order; each section's rows as the
+//     file has them, their order and their ⊕ (a save's merge);
+//   - the records: 96 in the object (20 B each: the slot's hash, time,
+//     playedMs, play or skip, source, round), and past them, during a
+//     boot's fold only, overflow chunks of 819 (16,384 B, at most 16: a
+//     full log's 13,106 slots) through the allocator hook (the firmware's:
+//     at the top of PSRAM); a live slot with the records full is not folded
+//     and the session is behind (no record, no save until the next boot);
+//   - MARK (a row each (deviceId, epoch) ever folded: RAM's seq, the card's
+//     for covered(), and a held tmp's): 16 rows in the object, or a block of
+//     the caller's for a card with more than 8 (its rows and 8 more);
 //   - the boot's fold: each slot that counts above the MARK read at the
 //     boot, each once (5.6's ranges: in one file a device and epoch's seqs
 //     only rise; across files a slot inside another file's range is met
-//     twice), through a transient open-addressing index of u16 row numbers
-//     for TRKD and RCNT; the gap (ACKS's seqs above MARK the log no longer
-//     holds); the live fold, of a Written slot; the fold rounds;
-//   - the save's side: the round, sinceDay (set once), the retention
-//     (HOUR's 840 rows, DAYS' 400, RCNT's 32 days back from the earlier of
-//     today and the newest dated day, then whole days past 4,096 rows), the
-//     sections' rows in order for the writer, and RAM after a save landed.
-// Nothing here moves a table for a slot: a row is found by key (the index,
-// or a binary search of each chunk's sorted rows and a short unsorted
-// tail) and a new one appended; sorting is a save's (and a short tail's).
+//     twice), the ranges and ACKS's rows in the caller's memory (the
+//     ranges' block, 3,072 B with 16 MARK rows); the gap (ACKS's seqs
+//     above MARK the log no longer holds); the live fold, of a Written
+//     slot; the fold rounds;
+//   - the save's side: the round, sinceDay (set once), the generation,
+//     MARK's rows, the records in each section's key order (Cursor: each
+//     run sorted in place, up to 17 merged, a key's records ⊕'d into one
+//     row), and RAM after a save landed, or was held.
 namespace statsfold {
 
 // ---------------------------------------------------------------------------
@@ -157,118 +160,141 @@ constexpr uint32_t kRcntDays = 32;
 constexpr uint32_t kRcntRows = 4096;
 bool compactionDue(uint32_t deltaRows, uint32_t baseRows, bool playing, bool safePoint);
 
-// The memory (5.6): RCNT and TRKD in chunks of this size, whole rows of
-// both tables and nothing over (1,366 of RCNT's 12 B, 683 of TRKD's 24 B),
-// so RCNT at its 4,096-row cap fills three and TRKD at the forced
-// compaction's 96 KB (4,096 rows) six, as the plan's budget has them (11).
-// 16,384 B held 1,365 and 682: a fourth and a seventh chunk for the caps'
-// last rows (S1's gate after the give-back). A chunk carves what 16,384 B
-// did, 16,900 B with the poisoning's 12 B and the header (6.5). HOUR and
-// DAYS once at their caps (6,720 B, 6,400 B); MARK in a block of 64 rows
-// (1,536 B), twice the rows each time it fills.
-constexpr uint32_t kChunkBytes = 16392;
-constexpr uint32_t kMarkBlockRows = 64;
-constexpr uint32_t kMaxTrkdChunks = 96;  // 65,568 rows (past 65,535 the boot's fold has no index: 5.6)
-constexpr uint32_t kMaxRcntChunks = 48;  // 65,568 rows
+// A section's rows as the file has them (kStrides[sec] bytes): their order
+// and their ⊕, for a save's merge of the card's rows with the records'
+// (5.14). compareRows(): <0, 0 or >0 by the section's key (MARK: deviceId,
+// then epoch; HOUR: the hour; DAYS: the day; RCNT: the day, then the hash;
+// TRKD: the hash). addRow(): `a` ⊕= `b`, their keys equal, `a` the older
+// (the card's): HOUR's plays (u8) and listenedMs (u32), DAYS' plays and
+// skips (u16), Auto DJ's and shuffle's (u8) and listenedMs (u32), RCNT's
+// plays (u16), each a saturating sum as the fold's; TRKD by merge(). Not
+// for HEAD or MARK (RAM writes them whole).
+int compareRows(Sec sec, const uint8_t* a, const uint8_t* b);
+void addRow(Sec sec, uint8_t* a, const uint8_t* b);
+
 constexpr int kFiles = playlog::kNames;  // the log's files a scan reads (logName()'s i)
 
+// The resident set (5.14): the records, and MARK's rows.
+constexpr uint32_t kRecords = 96;      // statsref's RECORDS: a live slot past them is behind
+constexpr uint32_t kSaveAt = 64;       // statsref's SAVE_AT: the records' save is due from this many
+constexpr uint32_t kRecordBytes = 20;
+// The boot's overflow past the records: chunks of 16,384 B (819 records,
+// 4 B over; a carve of 16,900 B with the poisoning's 12 B and the header,
+// 6.5), at most 16: a full log's 13,106 slots (96 + 16 x 819 = 13,200).
+constexpr uint32_t kChunkBytes = 16384;
+constexpr uint32_t kChunkRecords = kChunkBytes / kRecordBytes;
+constexpr uint32_t kMaxChunks = 16;
+constexpr uint32_t kMarkRows = 16;  // MARK's rows in the object
+constexpr uint32_t kMarkRoom = 8;   // new (deviceId, epoch) rows a boot may add to the card's
+
 // ---------------------------------------------------------------------------
-// The aggregate.
+// The fold.
 // ---------------------------------------------------------------------------
 class Fold {
 public:
   using AllocFn = void* (*)(size_t bytes);
   using FreeFn = void (*)(void* p);
 
-  // Every block through `alloc` (null: malloc). The object itself is about
-  // 1.5 KB: the firmware places it in PSRAM too.
+  // The overflow's chunks through `alloc` (null: malloc): the firmware's
+  // hook carves them at the top of PSRAM. Nothing else is carved here: the
+  // ranges' block and MARK's block are the caller's memory.
   explicit Fold(AllocFn alloc = nullptr, FreeFn release = nullptr);
   ~Fold();
   Fold(const Fold&) = delete;
   Fold& operator=(const Fold&) = delete;
 
-  // HOUR's, DAYS' and MARK's blocks, carved once. False: no memory.
-  bool begin();
-  // Empty, as a fresh start (no stats.bin: every slot on the card folds):
-  // every counter, flag and table; the blocks kept for the next load.
-  void clear();
-  // Empty, and every block given back (the chunks, the spare, HOUR, DAYS,
-  // MARK): the stats off for the session (a read that isn't on), nothing
-  // held for them. begin() before any load again.
-  void release();
-  // A library update's give-back (docs/LISTENING-STATS.md 6.7, the owner's
-  // decision of 2026-11-11): the resident blocks given back (RCNT's and
-  // TRKD's chunks, the spare, HOUR, DAYS), MARK's block and rows kept, so
-  // covered() and markOf() answer as before (the card's MARK and RAM's);
-  // nothing else answers, and nothing may be folded, until the next load
-  // (begin(), then StatsFile's read). The bytes given back; 0 while the
-  // boot's fold runs (its blocks are the scan's).
-  size_t giveBack();
-  // What giveBack() would give back now (the update's memory check counts
-  // it in the step's room).
-  size_t givesBack() const;
-  // The load's chunks: room for these rows of RCNT and TRKD (stats.bin's
-  // counts) and one spare chunk (5.6). False: no memory.
-  bool reserveLoad(uint32_t rcntRows, uint32_t trkdRows);
-  // One spare chunk held for whichever of TRKD and RCNT a fold fills first
-  // (the glue's, at a pass where Auto DJ's join isn't Working). False: no
-  // memory.
-  bool keepSpare();
-  // Room for the next `slots` folds with no allocation: TRKD's and RCNT's
-  // chunks, and during the boot's fold their indexes (each at most half
-  // full). The glue's, before each piece of the boot's scan, in a pass
-  // where it may carve. False: no memory (nothing lost: a fold then carves
-  // what it needs itself).
-  bool reserve(uint32_t slots);
+  // ---- MARK's room ----
+  // The rows MARK holds: the object's 16, or the caller's block.
+  uint32_t markCap() const { return markCap_; }
+  // A block for a card whose MARK has `cardRows` rows: those and kMarkRoom
+  // more. The boot's read gives one when cardRows + kMarkRoom > markCap()
+  // (5.14: carved once, in setup, kept for the session); a remount's read
+  // never does (MARK past markCap(): a read with no memory).
+  static size_t markBlockBytes(uint32_t cardRows);
+  // MARK in `mem` (`bytes`, 4-byte aligned) from now on, its rows copied:
+  // false when it holds fewer rows than MARK has. The caller keeps the
+  // block until dropMarkBlock() (or the fold's end).
+  bool markBlock(void* mem, size_t bytes);
+  // Back to the object's rows, MARK emptied (the stats off): the caller
+  // may free its block after.
+  void dropMarkBlock();
 
-  // The load (StatsFile's read), in the file's order: stats.bin's
-  // generation, HEAD (its first 128 bytes), then each array's rows (a
-  // newer minor's longer rows by their prefix: `stride` at least the
-  // section's). False: a row out of order (the file is corrupt: 5.4), or
-  // no memory (noMemory()).
+  // ---- The load (StatsFile's read) ----
+  // Empty, as a fresh start (no stats.bin: every slot on the card folds):
+  // HEAD, MARK, the records (the chunks given back), every counter and
+  // flag. MARK's block kept.
+  void clear();
+  // stats.bin's generation, HEAD (its first 128 bytes), MARK's rows in the
+  // file's order (batches are fine; a newer minor's longer rows by their
+  // prefix: `stride` at least 24). loadMark false: a row out of order (the
+  // file is corrupt: 5.4), or more rows than markCap() (noMemory()).
   void loadGeneration(uint32_t generation);
   void loadHead(const uint8_t* bytes);
-  bool loadRows(Sec sec, const uint8_t* rows, uint32_t n, uint32_t stride);
+  bool loadMark(const uint8_t* rows, uint32_t n, uint32_t stride);
   // The base stats.bin names is gone, or another file (5.4): flags bit 1,
   // baseGen, baseRows and baseCrc 0. The rows before it are lost; the
   // totals stay.
   void baseLost();
 
-  // The boot's fold (the play log's Folds): begun after the load, each slot
-  // of the scan in its order (`file`: logName()'s i), partial() for each
-  // log file the scan couldn't read whole, ended when the scan is: the
-  // gap (with `acks`, the root's ACKS) unless partial, HEAD's twice and
-  // gap, the transient index and ranges freed, and RCNT held to its
-  // 4,096-row cap by whole days, oldest first (the save's cut without the
-  // date's: a boot whose save doesn't land holds no more than that; a
-  // live play dated before that cut then adds no RCNT row, which any later
-  // save would cut: the file the same byte for byte). plan() ends it too;
-  // after a partial scan (no save) the glue ends it when the journal is
-  // ready.
-  // A scan begun again (a remount) starts from clear() and the load: the
-  // folds made before are dropped. beginBoot false: no memory.
-  bool beginBoot(const cardcontract::msmf::Acks& acks);
+  // ---- The boot's fold (the play log's Folds) ----
+  // The ranges' block a boot needs (after the load): a seq range a log
+  // file for each MARK row it may hold (80 B a row), and the root's ACKS
+  // rows above the card's MARK (112 B each): 3,072 B at most with 16 rows.
+  size_t bootBytes(const cardcontract::msmf::Acks& acks) const;
+  // Begun after the load in the caller's `mem` (`bytes`, 8-byte aligned,
+  // at least bootBytes(acks)), until endBoot(); each slot of the scan in
+  // its order (`file`: logName()'s i); partial() for each log file the scan
+  // couldn't read whole; ended when the scan is: the gap (with `acks`)
+  // unless partial, HEAD's twice and gap, the caller's block no longer
+  // used, the chunks no record needs given back, and a partial scan's or a
+  // fold out of memory's overflow dropped (behind: no save may take it).
+  // plan() ends it too; after a partial scan (no save) the glue ends it
+  // when the journal is ready. A scan begun again (a remount) starts from
+  // clear() and the load: the folds made before are dropped. beginBoot
+  // false: no memory (no block, or too small): nothing is saved.
+  bool beginBoot(const cardcontract::msmf::Acks& acks, void* mem, size_t bytes);
   void bootSlot(const playlog::Slot& s, int file);
   void partial();
   void endBoot();
   bool booting() const { return booting_; }
-  // A play written this session (Outbox::done(), Written only), at round
-  // HEAD.round + 2: RAM only.
-  void liveSlot(const playlog::Slot& s);
+  // Room for the next `slots` boot folds with no carve (the overflow's
+  // chunks): the glue's, before each piece of the boot's scan, in a pass
+  // where it may carve. False: no memory (a fold then carves what it needs
+  // itself, or stops: noMemory()). Outside the boot's fold: nothing.
+  bool reserve(uint32_t slots);
 
+  // ---- The live fold ----
+  // A play written this session (Outbox::done(), Written only), at round
+  // HEAD.round + 2, a record. True when folded. With the records full (and
+  // no chunk's room: a boot's overflow waiting for its save) the slot isn't
+  // folded and the session is behind (statsref's 97th).
+  bool liveSlot(const playlog::Slot& s);
+  // The session lacks a slot the log holds above the card's MARK (5.14's
+  // causes: the records full, a boot overflow's save not landing, a held
+  // tmp lost, a section damaged): the records dropped (no save may take
+  // them: the next boot folds the log again), the chunks given back, no
+  // more folded. MARK and covered() as they were.
+  void fallBehind();
+
+  // ---- Questions ----
   // A play slot at or under the card's MARK for its (deviceId, epoch) (the
-  // one read at the boot, or the last save's that landed); none: seq 0
-  // only. The trim's and the rotation's question.
+  // one read at the boot, or the last save's that landed, or a held tmp's
+  // once promoted); none: seq 0 only. The trim's and the rotation's.
   bool covered(const playlog::Slot& s) const;
   // RAM's MARK for (deviceId, epoch): the highest seq folded (0: none).
   uint32_t markOf(const uint8_t deviceId[6], uint64_t epoch) const;
-  // Folded, or MARK raised, since the card's copy (or since clear()).
+  // Folded, or MARK raised (the gap), since the card's copy (or clear()).
   bool dirty() const { return dirty_; }
   // A log file wasn't read whole this session: no save (5.6).
   bool partialScan() const { return partial_; }
-  // A fold found no memory: nothing more is folded and nothing saved.
+  // A fold found no memory (no ranges' block, MARK full, no chunk): nothing
+  // more is folded and nothing saved.
   bool noMemory() const { return noMemory_; }
-
+  bool behind() const { return behind_; }
+  // The records held (the boot's fold's past 96 in the chunks), and
+  // whether their save is due (kSaveAt or more, not behind).
+  uint32_t records() const { return n_; }
+  bool due() const { return !behind_ && n_ >= kSaveAt; }
   // This session's counts (since clear()): slots folded (the boot's and
   // live), met twice, the gap counted.
   uint32_t folded() const { return folded_; }
@@ -276,86 +302,71 @@ public:
   uint32_t gap() const { return gap_; }
   const Head& head() const { return head_; }
   uint32_t generation() const { return generation_; }
-  uint32_t rows(Sec sec) const;
-  // TRKD's row (the delta) for a path hash. False: none.
-  bool track(uint64_t hash, Track* out);
-  // HOUR's row for an hour; DAYS' for a day (16 bytes as the file has
-  // them). False: none.
-  bool hour(uint32_t hour, uint8_t* plays, uint32_t* listenedMs);
-  bool day(uint16_t day, uint8_t out[16]);
-  // The bytes held, and the most held at once (5.6's figures).
+  // The records' row for a path hash, ⊕'d (Ht: the card's row ⊕ this).
+  // False: none.
+  bool track(uint64_t hash, Track* out) const;
+  // The chunks held, their bytes, and the most held at once.
+  uint32_t chunks() const { return chunks_; }
   size_t held() const { return held_; }
   size_t peak() const { return peak_; }
   void resetPeak() { peak_ = held_; }
 
-  // The save (StatsFile's commit). plan(): what stats.bin is to hold now,
-  // RAM unchanged (a save that fails changes nothing): the round, sinceDay
-  // (set once: the day of the earliest dated play folded this session,
-  // not after today; else today; else the root's commitTime, flagged),
-  // the generation, and each section's rows after the retention. False:
-  // nothing may be saved (a partial scan, no memory). A save that
-  // compacts writes base ⊕ delta first (merge() over the base's rows and
-  // TRKD's, from rowsBegin(plan, kTrkd)), then sets the plan's base fields
-  // and `compact`: TRKD is then empty in this file. saved(): the file
-  // landed: RAM takes the plan's HEAD and retention, TRKD empties when it
-  // compacted, and the card's MARK is RAM's. plan(), the rows and saved()
-  // in one loop call: no fold between them.
+  // ---- The save (StatsFile's commit) ----
+  // plan(): what stats.bin is to hold of HEAD and MARK now, RAM unchanged
+  // (a save that fails changes nothing): the round (the highest used),
+  // sinceDay (set once: the day of the earliest dated play folded this
+  // session, not after today; else today; else the root's commitTime,
+  // flagged), the generation, MARK's rows (sorted: markRows()). False:
+  // nothing may be saved (a partial scan, no memory, behind). The caller
+  // counts and writes HOUR, DAYS, RCNT and TRKD: the card's rows merged
+  // with the records (Cursor), the retention after; a compaction writes
+  // base ⊕ TRKD first and sets the plan's base fields and `compact`.
+  // saved(): the file landed: RAM takes the plan's HEAD and generation, the
+  // records are emptied (the chunks given back), the card's MARK is RAM's.
+  // held(): replace() failed with the tmp whole (5.14's Held): the same,
+  // but the card's MARK stays the one before until promoted() (the tmp is
+  // stats.bin now): then it is the held tmp's. plan(), the rows and
+  // saved() or held() in one loop call: no fold between them.
   struct Plan {
     Head head;
     uint32_t generation = 0;
-    uint32_t rows[kSecs] = {};  // HEAD 1 (a blob); TRKD's before a compaction
-    uint32_t rcntCut = 0;       // RCNT's rows with an earlier day left out
+    uint32_t rows[kSecs] = {};  // HEAD 1 and MARK's: plan()'s; the rest the caller's count
     bool compact = false;
     uint32_t rowsOf(Sec sec) const { return sec == kTrkd && compact ? 0 : rows[sec]; }
     uint32_t bytesOf(Sec sec) const { return sec == kHead ? kHeadBytes : rowsOf(sec) * kStrides[sec]; }
   };
   bool plan(uint64_t nowMs, bool hasCommit, uint64_t commitSec, Plan* out);
-  // A section's rows as `p` writes them, in order: rowsBegin(), then
-  // nextRows() until it gives 0 (each row at the section's stride; HEAD
-  // is encodeHead(p.head)). nextTrack() reads TRKD's as rows.
-  void rowsBegin(const Plan& p, Sec sec);
-  uint32_t nextRows(uint8_t* out, uint32_t maxRows);
-  bool nextTrack(Track* out);
+  // MARK's rows [from, from + n) as the file has them (24 B each, RAM's
+  // seqs), in order after plan(); n (at most maxRows) given.
+  uint32_t markRows(uint32_t from, uint8_t* out, uint32_t maxRows) const;
+  uint32_t marks() const { return markN_; }
   void saved(const Plan& p);
+  void held(const Plan& p);
+  void promoted();
+  bool heldPending() const { return heldPending_; }
 
-  // (The tests' look inside.)
-  uint32_t indexSize(Sec sec) const;
-  uint32_t chunks(Sec sec) const;
-  bool spare() const { return spare_ != nullptr; }
-  uint32_t rcntFloor() const { return rcntFloor_; }
-
-  // Rows as RAM holds them (public for the implementation's helpers).
+  // Rows as RAM holds them (public for the implementation's helpers and
+  // the console's look).
+  struct Record {
+    uint32_t hashLo, hashHi;  // the path hash
+    uint32_t time;            // timeOf(startedAt); 0 undated
+    uint32_t playedMs;
+    uint8_t what;             // bits 0-1 the kind (kRecPlay, kRecSkip; 0 neither), 2-3 the source, 4 live
+    uint8_t reserved[3];
+  };
+  static constexpr uint8_t kRecPlay = 1, kRecSkip = 2, kRecLive = 0x10;
   struct MarkRow {
     uint8_t dev[6];
     uint16_t pad;
-    uint64_t epoch;
+    uint32_t epochLo, epochHi;
     uint32_t seq;   // RAM's
-    uint32_t card;  // the card's (the boot's read, or the last save's that landed)
+    uint32_t card;  // the card's (the boot's read, the last save's that landed, a held tmp's promoted)
+    uint32_t heldSeq;  // RAM's at a held save: the held tmp's
+    uint64_t epoch() const { return static_cast<uint64_t>(epochHi) << 32 | epochLo; }
   };
-  // MARK's row `i` of rows(kMark), in no set order (the save sorts them):
-  // the console's look (app/ListeningStats, Hm). Null past the last.
+  // MARK's row `i` of marks(), in no set order (plan() sorts them): the
+  // console's look (Hm). Null past the last.
   const MarkRow* markRow(uint32_t i) const { return i < markN_ ? &mark_[i] : nullptr; }
-  struct HourRow {
-    uint32_t hourPlays;  // hour u24 | plays u8 << 24
-    uint32_t ms;
-  };
-  struct DaysRow {
-    uint16_t day, plays, skips;
-    uint8_t djPlays, djSkips;
-    uint32_t ms;
-    uint8_t shufPlays, shufSkips;
-    uint16_t pad;
-  };
-  struct RcntRow {
-    uint32_t lo, hi;  // the path hash
-    uint16_t day, plays;
-  };
-  struct TrkdRow {
-    uint64_t hash;
-    uint16_t plays, skips;
-    uint32_t firstAt, lastAt;
-    uint32_t ord;  // lastOrd u24 | src << 24
-  };
   struct Range {
     uint32_t lo, hi;  // 0: none (seqs are at least 1)
   };
@@ -367,118 +378,84 @@ public:
     uint32_t held;   // seqs in (mark, seq] a valid play slot of the log holds, each once
     Range r[kFiles];
   };
-  struct Index {
-    uint16_t* e = nullptr;  // row numbers; 0xFFFF empty
-    uint32_t size = 0;      // a power of two
-    uint32_t count = 0;
-  };
-  // A table of fixed-size rows in chunks of kChunkBytes: rows dense from
-  // row 0 (every chunk full but the last with rows), chunks past it empty
-  // capacity; each chunk's rows [0, sorted) in order.
-  template <class Row, uint32_t kMax>
-  struct Chunked {
-    using RowType = Row;
-    static constexpr uint32_t kPer = kChunkBytes / sizeof(Row);
-    static constexpr uint32_t kMaxChunks = kMax;
-    Row* c[kMax] = {};
-    uint16_t sorted[kMax] = {};
-    uint32_t chunks = 0;
-    uint32_t rows = 0;
-    uint32_t unsorted = 0;  // rows appended since the last sort
-    Index ix;
-    Row& at(uint32_t r) { return c[r / kPer][r % kPer]; }
-    uint32_t inChunk(uint32_t i) const {
-      const uint32_t b = i * kPer;
-      return rows > b ? (rows - b < kPer ? rows - b : kPer) : 0;
-    }
-  };
-  // HOUR, DAYS: one block of `cap` rows; rows [s0, s1) in order, the rest
-  // (at most 64) not; full, a new key takes the oldest row's place.
-  template <class Row>
-  struct Capped {
-    Row* rows = nullptr;
-    uint32_t cap = 0, n = 0, s0 = 0, s1 = 0;
-    uint32_t hit = 0;  // the last row found (a slot's neighbours share it)
+
+  // The records in one section's key order, a key's records ⊕'d into one
+  // row as the file has it (kStrides[sec] bytes; HOUR, DAYS and RCNT of
+  // the dated ones, RCNT and TRKD's plays of plays, TRKD of plays and
+  // skips; a play's lastOrd its round). Each run (the object's records,
+  // each chunk) sorted in place first, then merged, up to 17: no memory but
+  // the cursor's own. No fold while one is in use.
+  class Cursor {
+  public:
+    Cursor(Fold& f, Sec sec);
+    // The next row; false: none left.
+    bool next(uint8_t* row);
+
+  private:
+    bool contributes(const Record& r) const;
+    int keyCmp(const Record& a, const Record& b) const;
+    void rowOf(const Record& r, uint8_t* out) const;
+    Fold& f_;
+    Sec sec_;
+    uint32_t runs_ = 0;
+    uint16_t pos_[kMaxChunks + 1] = {};
   };
 
 private:
-  void* grab(size_t bytes);
-  void drop(void* p, size_t bytes);
-  void* takeChunk();
-  void giveChunk(void* p);
-  template <class Tab>
-  bool room(Tab& t, uint32_t more);
-  template <class Tab>
-  void shrink(Tab& t);
-  template <class Tab>
-  void releaseAll(Tab& t);
-  template <class K, class Tab>
-  bool buildIndex(Tab& t, uint32_t atLeast);
-  template <class Tab>
-  void freeIndex(Tab& t);
-  template <class K, class Tab>
-  bool append(Tab& t, const typename K::Row& r);
+  enum class Order : uint8_t { None, Time, DayHash, Hash };
+  Record& rec(uint32_t i) { return i < kRecords ? recs_[i] : chunk_[(i - kRecords) / kChunkRecords][(i - kRecords) % kChunkRecords]; }
+  uint32_t capacity() const { return kRecords + chunks_ * kChunkRecords; }
+  bool carveChunk();
+  void giveChunks(uint32_t keep);
+  void dropRecords();
   void dropBoot();
-  bool growMark();
+  void sortRuns(Order o);
+  uint32_t runLength(uint32_t run) const;
+  Record* run(uint32_t r) { return r == 0 ? recs_ : chunk_[r - 1]; }
   MarkRow* findMark(const uint8_t dev[6], uint64_t epoch, uint32_t* at) const;
   MarkRow* addMark(const uint8_t dev[6], uint64_t epoch, uint32_t* at);
   void sortMark();
-  void fold(const playlog::Slot& s, uint32_t round);
-  void foldTrack(const playlog::Slot& s, uint32_t round);
-  void foldRcnt(uint16_t day, uint64_t hash);
+  void fold(const playlog::Slot& s, bool live);
   void heldSlot(const playlog::Slot& s, int file);
-  void sortTables();
-  uint16_t newestDay() const;
-  uint32_t rcntCut(uint32_t dateCut, uint32_t* kept);
-  void closeRcnt(uint32_t cut);
+  uint32_t roundOf(const Record& r) const;
 
   AllocFn alloc_;
   FreeFn free_;
   size_t held_ = 0;
   size_t peak_ = 0;
-  void* spare_ = nullptr;
 
   Head head_;
   uint32_t generation_ = 0;
   uint32_t loadedRound_ = 0;  // HEAD's round as loaded: the boot's +1, live +2
   uint32_t used_ = 0;         // the highest round used this session (0: none)
   uint16_t firstPlayDay_ = kUnsetDay;
-  uint32_t rcntFloor_ = 0;  // RCNT's rows end at the boot's cap: no new row dated before it until a save lands
   bool dirty_ = false;
   bool partial_ = false;
   bool noMemory_ = false;
+  bool behind_ = false;
   bool booting_ = false;
+  bool heldPending_ = false;
+  Order order_ = Order::None;
   uint32_t folded_ = 0, twice_ = 0, gap_ = 0;
 
-  MarkRow* mark_ = nullptr;
-  uint32_t markCap_ = 0, markN_ = 0, markSorted_ = 0;
+  // The records: the object's 96, then the chunks' (the boot's overflow).
+  uint32_t n_ = 0;
+  uint32_t chunks_ = 0;
+  Record recs_[kRecords];
+  Record* chunk_[kMaxChunks] = {};
+
+  // MARK: the object's rows, or the caller's block.
+  MarkRow markIn_[kMarkRows];
+  MarkRow* mark_ = markIn_;
+  uint32_t markCap_ = kMarkRows, markN_ = 0, markSorted_ = 0;
   mutable uint32_t markHit_ = 0;
-  Range* ranges_ = nullptr;  // the boot's: kFiles a MARK row, while booting
-  uint32_t rangesCap_ = 0;
-  AckTrack* acks_ = nullptr;  // the boot's: ACKS's rows above MARK
-  uint32_t acksCap_ = 0;
+  uint8_t lastMark_[14] = {};  // the load's order check
+
+  // The boot's, in the caller's block.
+  Range* ranges_ = nullptr;  // kFiles a MARK row
+  AckTrack* acks_ = nullptr;
   uint32_t acksN_ = 0;
   uint32_t ackHit_ = 0;
-
-  Capped<HourRow> hour_;
-  Capped<DaysRow> days_;
-  Chunked<RcntRow, kMaxRcntChunks> rcnt_;
-  Chunked<TrkdRow, kMaxTrkdChunks> trkd_;
-
-  // The load's order check: the last key of each section.
-  bool loadedAny_[kSecs] = {};
-  uint8_t lastMark_[14] = {};
-  uint32_t lastHour_ = 0;
-  uint16_t lastDay_ = 0;
-  uint16_t lastRcntDay_ = 0;
-  uint64_t lastRcntHash_ = 0;
-  uint64_t lastHash_ = 0;
-
-  // A save's rows, as rowsBegin() set them.
-  const Plan* plan_ = nullptr;
-  Sec sec_ = kHead;
-  uint32_t at_ = 0;
-  uint16_t pos_[kMaxTrkdChunks] = {};
 };
 
 }  // namespace statsfold

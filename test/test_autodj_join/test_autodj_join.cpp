@@ -98,7 +98,7 @@
 #include "LibraryUpdate.h"
 #include "PlayLog.h"
 #include "StatsFile.h"
-#include "StatsFold.h"
+#include "StatsFoldS1.h"
 #include "StatsGlue.h"
 
 namespace cc = cardcontract;
@@ -2740,7 +2740,7 @@ struct StatsRun {
 uint64_t statsHash(uint32_t i) { return cc::fnv1a64(&i, sizeof(i)); }
 
 // The load: stats.bin's rows, in its order, as StatsFile's read loads them.
-void statsLoad(statsfold::Fold& f, uint32_t rcntRows, uint32_t trkdRows) {
+void statsLoad(statsfold::s1::Fold& f, uint32_t rcntRows, uint32_t trkdRows) {
   namespace sf = statsfold;
   TEST_ASSERT_TRUE(f.reserveLoad(rcntRows, trkdRows));
   std::vector<uint64_t> h(trkdRows);
@@ -2768,7 +2768,7 @@ void statsLoad(statsfold::Fold& f, uint32_t rcntRows, uint32_t trkdRows) {
   }
   TEST_ASSERT_TRUE(f.loadRows(sf::kRcnt, rows.data(), rcntRows, 12));
 }
-void statsLoad(statsfold::Fold& f, const StatsRun& sr) { statsLoad(f, sr.rcntRows, sr.trkdRows); }
+void statsLoad(statsfold::s1::Fold& f, const StatsRun& sr) { statsLoad(f, sr.rcntRows, sr.trkdRows); }
 
 // The give-back at the update's fence (StatsGlue's giveBack(), after Auto
 // DJ's join): a fold not saved yet saved first (the rotation's path: its
@@ -2776,7 +2776,7 @@ void statsLoad(statsfold::Fold& f, const StatsRun& sr) { statsLoad(f, sr.rcntRow
 // aside), then every resident block but MARK's given back. The rows
 // stats.bin then holds are the re-read's: RAM's when the save landed (or
 // nothing was new), the boot's file's when it was refused.
-void statsGiveBack(statsfold::Fold& f, StatsRun& sr) {
+void statsGiveBack(statsfold::s1::Fold& f, StatsRun& sr) {
   namespace sf = statsfold;
   sr.rcntAt = f.rows(sf::kRcnt);
   sr.trkdAt = f.rows(sf::kTrkd);
@@ -2784,7 +2784,7 @@ void statsGiveBack(statsfold::Fold& f, StatsRun& sr) {
     ++sr.saves;
     void* work = ModelHeap::alloc(statsfile::kWorkBytes);
     TEST_ASSERT_NOT_NULL(work);
-    sf::Fold::Plan plan;
+    sf::s1::Fold::Plan plan;
     if (sr.giveBackSaves && f.plan(sf::kMinMs + 530ull * sf::kDayMs, false, 0, &plan)) {
       f.saved(plan);
       sr.rcntAt = f.rows(sf::kRcnt);
@@ -2809,7 +2809,7 @@ void statsGiveBack(statsfold::Fold& f, StatsRun& sr) {
 // takeBack(), at a pass that may carve): HOUR and DAYS again (MARK's block
 // kept), the read's work memory, the load's chunks and the spare, the work
 // memory given back (readNow()'s order).
-void statsTakeAgain(statsfold::Fold& f, StatsRun& sr) {
+void statsTakeAgain(statsfold::s1::Fold& f, StatsRun& sr) {
   TEST_ASSERT_TRUE(f.begin());
   void* work = ModelHeap::alloc(statsfile::kWorkBytes);
   TEST_ASSERT_NOT_NULL(work);
@@ -2822,7 +2822,7 @@ void statsTakeAgain(statsfold::Fold& f, StatsRun& sr) {
 // The boot's fold of a log never synced: `slots` plays of `hashes` tracks,
 // 25 a day for 524 days (the scan's pieces of 128, the room taken before
 // each), then the save: plan and saved (the card's writes aside).
-void statsBoot(statsfold::Fold& f, StatsRun& sr) {
+void statsBoot(statsfold::s1::Fold& f, StatsRun& sr) {
   namespace sf = statsfold;
   namespace pl = playlog;
   const uint8_t dev[6] = {0x00, 0x00, 0x5e, 0x00, 0x53, 0x01};
@@ -2851,7 +2851,7 @@ void statsBoot(statsfold::Fold& f, StatsRun& sr) {
   }
   void* work = ModelHeap::alloc(statsfile::kWorkBytes);
   TEST_ASSERT_NOT_NULL(work);
-  sf::Fold::Plan plan;
+  sf::s1::Fold::Plan plan;
   if (f.plan(sf::kMinMs + 530ull * sf::kDayMs, false, 0, &plan)) f.saved(plan);
   ModelHeap::release(work);
 }
@@ -2997,13 +2997,13 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   // PlayHistory::begin(): the stats' glue (the Fold inside it: the model
   // places a Fold at its block's start), HOUR, DAYS and MARK, then the
   // read's work memory and the load, the work memory given back (StatsRun).
-  statsfold::Fold* fold = nullptr;
+  statsfold::s1::Fold* fold = nullptr;
   void* glueAt = nullptr;
   if (stats) {
-    static_assert(sizeof(statsglue::Glue) >= sizeof(statsfold::Fold), "the Fold is the glue's");
+    static_assert(sizeof(statsglue::Glue) >= sizeof(statsfold::s1::Fold), "the Fold is the glue's");
     glueAt = ModelHeap::alloc(sizeof(statsglue::Glue));
     TEST_ASSERT_NOT_NULL(glueAt);
-    fold = new (glueAt) statsfold::Fold(ModelHeap::alloc, ModelHeap::release);
+    fold = new (glueAt) statsfold::s1::Fold(ModelHeap::alloc, ModelHeap::release);
     TEST_ASSERT_TRUE(fold->begin());
     void* work = ModelHeap::alloc(statsfile::kWorkBytes);
     TEST_ASSERT_NOT_NULL(work);
@@ -3477,7 +3477,7 @@ void test_the_listening_stats_in_a_model_heap() {
     // the card's stats.bin didn't (the boot's save refused).
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(4, sr.giveBacks, w);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(sh.landed ? 0 : 1, sr.saves, w);
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(statsfold::kMarkBlockRows * sizeof(statsfold::Fold::MarkRow), sr.kept, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(statsfold::s1::kMarkBlockRows * sizeof(statsfold::s1::Fold::MarkRow), sr.kept, w);
     TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.held, sr.held, w);
     TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.given, sr.given, w);
     TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.retaken, sr.retaken, w);

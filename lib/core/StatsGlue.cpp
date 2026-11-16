@@ -39,7 +39,7 @@ const char* refusedName(Refused r) {
   return "?";
 }
 
-Glue::Glue(tagstore::Fs& fs, Env& env, sf::Fold::AllocFn alloc, sf::Fold::FreeFn release)
+Glue::Glue(tagstore::Fs& fs, Env& env, sf::s1::Fold::AllocFn alloc, sf::s1::Fold::FreeFn release)
     : fs_(fs), env_(env), alloc_(alloc), free_(release), fold_(alloc, release), store_(fs) {}
 
 uint8_t* Glue::carve() {

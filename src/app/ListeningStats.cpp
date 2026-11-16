@@ -189,7 +189,7 @@ void ListeningStats::ready(uint32_t passes, int64_t scanUs) {
   if (!glue_ || readyLogged_) return;
   readyLogged_ = true;
   glue_->ready();
-  const sf::Fold& f = glue_->fold();
+  const sf::s1::Fold& f = glue_->fold();
   if (!glue_->on()) {
     Serial.printf("[listen] the boot's scan done (%lu passes, %.0f ms on the loop): the stats are OFF this session "
                   "(%s): nothing folded, saved or trimmed by them\n",
@@ -331,7 +331,7 @@ __attribute__((noinline)) void ListeningStats::logTakeBack(float ms) {
   } else {
     snprintf(file, sizeof(file), "none on the card");
   }
-  const sf::Fold& f = glue_->fold();
+  const sf::s1::Fold& f = glue_->fold();
   Serial.printf("[listen] stats.bin read again after the library update (%lu s given back; %lu read%s, %.0f ms): %s, "
                 "%s; %lu play%s from the ring folded (%lu the card's MARK covers already), %lu past it; RAM %lu B "
                 "held; %s\n",
@@ -557,7 +557,7 @@ void ListeningStats::command(const char* arg) {
 
 void ListeningStats::printState() {
   statsglue::Glue& g = *glue_;
-  const sf::Fold& f = g.fold();
+  const sf::s1::Fold& f = g.fold();
   const sx::Opened& o = g.opened();
   const char* phase = g.dropped()                 ? "OFF (the folds dropped at the end)"
                       : g.givenBack()             ? "GIVEN BACK to the library update (stats.bin read again after it)"
@@ -741,12 +741,12 @@ void ListeningStats::printDays() {
 
 void ListeningStats::printMarks() {
   statsglue::Glue& g = *glue_;
-  const sf::Fold& f = g.fold();
+  const sf::s1::Fold& f = g.fold();
   const cc::msmf::Acks& a = g.acks();
   char dev[16];
   // MARK's rows, each beside ACKS's row and the log's highest seq.
   for (uint32_t i = 0; i < f.rows(sf::kMark); ++i) {
-    const sf::Fold::MarkRow* m = f.markRow(i);
+    const sf::s1::Fold::MarkRow* m = f.markRow(i);
     if (!m) break;
     devText(m->dev, dev, sizeof(dev));
     char ack[24] = "none", log[40] = "none";

@@ -6,7 +6,7 @@
 #include <cstdint>
 
 #include "CardContainer.h"
-#include "StatsFold.h"
+#include "StatsFoldS1.h"
 #include "TagStore.h"
 
 // The listening stats' files on the card (docs/LISTENING-STATS.md 5.2-5.5,
@@ -107,7 +107,7 @@ void baseFrame(uint32_t gen, uint32_t rows, uint32_t rowsCrc, uint8_t out[kBaseR
 constexpr uint32_t kBufBytes = tagstore::kWriteAlign;  // 4 KB
 struct Scratch {
   cardcontract::ContainerWriter writer;
-  statsfold::Fold::Plan plan;
+  statsfold::s1::Fold::Plan plan;
   cardcontract::SectionOut sections[statsfold::kSecs];
   cardcontract::Container frame;  // stats.bin's, a base's, the old base's
   cardcontract::Stream stream;    // the old base's rows (a compaction's)
@@ -232,7 +232,7 @@ public:
   // card failed, 100 ms before a corrupt file's second read); nullptr: a
   // remount's, one read. A read starts the session again: the card's copy
   // is the one read, and a change seen before is forgotten.
-  Opened read(statsfold::Fold& fold, uint8_t* work, WaitFn wait);
+  Opened read(statsfold::s1::Fold& fold, uint8_t* work, WaitFn wait);
 
   // The card's copy this RAM stands on: none, or stats.bin's generation and
   // header CRC.
@@ -257,9 +257,9 @@ public:
     Gone,      // it was gone: stats.bin is the held copy, or the one before it
     Fault,     // the card failed a question of it: the save fails ("held tmp")
   };
-  Held promote(statsfold::Fold& fold);
-  SaveReport save(statsfold::Fold& fold, const SaveAsk& ask, uint8_t* work, Held held);
-  SaveReport save(statsfold::Fold& fold, const SaveAsk& ask, uint8_t* work) {
+  Held promote(statsfold::s1::Fold& fold);
+  SaveReport save(statsfold::s1::Fold& fold, const SaveAsk& ask, uint8_t* work, Held held);
+  SaveReport save(statsfold::s1::Fold& fold, const SaveAsk& ask, uint8_t* work) {
     const Held held = promote(fold);
     return save(fold, ask, work, held);
   }
@@ -275,14 +275,14 @@ private:
   // What a read found: final; a card fault (read again at the boot); a
   // file that failed its own checks (read once more at the boot).
   enum class Again : uint8_t { Final, CardFault, Corrupt };
-  Again readStats(statsfold::Fold& fold, Scratch* sc, uint8_t* a, uint8_t* b, Opened* o);
+  Again readStats(statsfold::s1::Fold& fold, Scratch* sc, uint8_t* a, uint8_t* b, Opened* o);
   Again checkBase(const statsfold::Head& h, Scratch* sc, uint8_t* a, Opened* o, bool* lost);
   bool quarantine();
   enum class Promote : uint8_t { Promoted, Gone, NotOurs, Fault };
   Promote promoteHeld();
   enum class Hdr : uint8_t { None, Whole, Short, Fault };  // a file's header: none there, read, too short, the card failed
   Hdr headerOf(const char* path, Copy* out);
-  bool compact(statsfold::Fold& fold, Scratch* sc, uint8_t* a, uint8_t* b, SaveReport* r, uint32_t* oldGen);
+  bool compact(statsfold::s1::Fold& fold, Scratch* sc, uint8_t* a, uint8_t* b, SaveReport* r, uint32_t* oldGen);
 
   tagstore::Fs& fs_;
   Copy expect_;

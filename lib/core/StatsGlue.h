@@ -8,7 +8,7 @@
 #include "CardManifest.h"
 #include "PlayLog.h"
 #include "StatsFile.h"
-#include "StatsFold.h"
+#include "StatsFoldS1.h"
 #include "TagStore.h"
 
 // The listening stats' session (docs/LISTENING-STATS.md 5.4-5.8, 9.5's C9):
@@ -251,8 +251,8 @@ class Glue final : public playlog::Folds {
 public:
   // `fs`: the card's. Every block (the fold's, the work memory) through
   // `alloc` (null: malloc).
-  Glue(tagstore::Fs& fs, Env& env, statsfold::Fold::AllocFn alloc = nullptr,
-       statsfold::Fold::FreeFn release = nullptr);
+  Glue(tagstore::Fs& fs, Env& env, statsfold::s1::Fold::AllocFn alloc = nullptr,
+       statsfold::s1::Fold::FreeFn release = nullptr);
   Glue(const Glue&) = delete;
   Glue& operator=(const Glue&) = delete;
 
@@ -377,8 +377,8 @@ public:
   };
   FileLook lookFile();
 
-  statsfold::Fold& fold() { return fold_; }
-  const statsfold::Fold& fold() const { return fold_; }
+  statsfold::s1::Fold& fold() { return fold_; }
+  const statsfold::s1::Fold& fold() const { return fold_; }
   statsfile::Store& store() { return store_; }
   const statsfile::Store& store() const { return store_; }
 
@@ -403,9 +403,9 @@ private:
 
   tagstore::Fs& fs_;
   Env& env_;
-  statsfold::Fold::AllocFn alloc_;
-  statsfold::Fold::FreeFn free_;
-  statsfold::Fold fold_;
+  statsfold::s1::Fold::AllocFn alloc_;
+  statsfold::s1::Fold::FreeFn free_;
+  statsfold::s1::Fold fold_;
   statsfile::Store store_;
   statsfile::SaveAsk ask_;
   cardcontract::msmf::Acks acks_;

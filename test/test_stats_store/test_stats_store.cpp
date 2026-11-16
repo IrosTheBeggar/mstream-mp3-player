@@ -61,7 +61,7 @@
 #include "CardManifest.h"
 #include "PlayLog.h"
 #include "StatsFile.h"
-#include "StatsFold.h"
+#include "StatsFoldS1.h"
 #include "StatsGlue.h"
 
 namespace cc = cardcontract;
@@ -268,7 +268,7 @@ void onOp(void* ctx, Journal::Op o, const char* a, const char* b, uint64_t n) {
 // store was asked for; a full card at a save; the board's clocks.
 // ---------------------------------------------------------------------------
 struct Glue final : statsglue::Env {
-  Glue(tagstore::Fs& fs, CutFs& card, sf::Fold::AllocFn a, sf::Fold::FreeFn f)
+  Glue(tagstore::Fs& fs, CutFs& card, sf::s1::Fold::AllocFn a, sf::s1::Fold::FreeFn f)
       : core(fs, *this, a, f),
         fold(core.fold()),
         store(core.store()),
@@ -277,7 +277,7 @@ struct Glue final : statsglue::Env {
         last(core.last()),
         card_(card) {}
   statsglue::Glue core;
-  sf::Fold& fold;
+  sf::s1::Fold& fold;
   sx::Store& store;
   const sx::Opened& first;   // the boot's read
   const sx::Opened& opened;  // the last read (a remount's)
@@ -412,8 +412,8 @@ struct Player {
   std::vector<uint8_t> buf = std::vector<uint8_t>(pl::kSlot);  // a slot a read: a read fault ends a file at its slot
   uint32_t piece = 5;
   bool stats = true;  // false: a 0.14.0 boot (no folds)
-  sf::Fold::AllocFn alloc = nullptr;
-  sf::Fold::FreeFn release = nullptr;
+  sf::s1::Fold::AllocFn alloc = nullptr;
+  sf::s1::Fold::FreeFn release = nullptr;
   std::function<void()> afterRead;  // (a test's: between the stats' read and the journal's begin())
   std::unique_ptr<Glue> glue;
   std::unique_ptr<Journal> j;
@@ -1337,7 +1337,7 @@ sf::Head runSession(const minijson::Value& sc) {
     sameFiles(sessionCard(st["out"]), filesOf(card), w);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, card.violations.size(), w);
   }
-  sf::Fold f;
+  sf::s1::Fold f;
   TEST_ASSERT_TRUE(f.begin());
   sx::Store store(card);
   Work work;
@@ -1634,7 +1634,7 @@ void test_the_glues_own_rules() {
     }
     TEST_ASSERT_TRUE(g.fold().rows(sf::kMark) >= 2);
     for (uint32_t i = 0; i < g.fold().rows(sf::kMark); ++i) {
-      const sf::Fold::MarkRow* m = g.fold().markRow(i);
+      const sf::s1::Fold::MarkRow* m = g.fold().markRow(i);
       TEST_ASSERT_NOT_NULL(m);
       TEST_ASSERT_EQUAL_UINT32(m->seq, g.fold().markOf(m->dev, m->epoch));
       TEST_ASSERT_EQUAL_UINT32(m->seq, m->card);  // (saved: the card's MARK is RAM's)
@@ -1938,7 +1938,7 @@ struct Counts {
   }
 };
 Counts countsOf(CutFs& card) {
-  sf::Fold f;
+  sf::s1::Fold f;
   TEST_ASSERT_TRUE(f.begin());
   sx::Store store(card);
   Work work;
@@ -1949,7 +1949,7 @@ Counts countsOf(CutFs& card) {
   c.slots = f.head().slots;
   c.listenedMs = f.head().listenedMs;
   for (uint32_t i = 0; i < f.rows(sf::kMark); ++i) {
-    const sf::Fold::MarkRow* m = f.markRow(i);
+    const sf::s1::Fold::MarkRow* m = f.markRow(i);
     c.mark[{std::string(reinterpret_cast<const char*>(m->dev), 6), m->epoch}] = m->seq;
   }
   for (const auto& t : tracksOf(bytesOf(card, "stats.bin")))
@@ -2001,7 +2001,7 @@ void test_an_updates_give_back() {
     TEST_ASSERT_TRUE(p.glue->fold.dirty());
     const size_t resident = p.glue->core.resident();
     TEST_ASSERT_EQUAL_size_t(p.glue->fold.givesBack(), resident);
-    TEST_ASSERT_EQUAL_size_t(p.glue->fold.held() - sf::kMarkBlockRows * sizeof(sf::Fold::MarkRow), resident);
+    TEST_ASSERT_EQUAL_size_t(p.glue->fold.held() - sf::s1::kMarkBlockRows * sizeof(sf::s1::Fold::MarkRow), resident);
     const Bytes before = bytesOf(card, "stats.bin");
     const size_t calls = p.glue->calls.size();
     const size_t bytes = p.glue->core.giveBack();
@@ -2014,7 +2014,7 @@ void test_an_updates_give_back() {
     TEST_ASSERT_TRUE(gb.saveAsked && gb.covers);
     TEST_ASSERT_EQUAL_STRING("none", statsglue::refusedName(gb.refused));
     TEST_ASSERT_TRUE(bytes > 0 && bytes <= resident);  // (the save's retention may give a chunk back first)
-    TEST_ASSERT_EQUAL_size_t(sf::kMarkBlockRows * sizeof(sf::Fold::MarkRow), gb.kept);
+    TEST_ASSERT_EQUAL_size_t(sf::s1::kMarkBlockRows * sizeof(sf::s1::Fold::MarkRow), gb.kept);
     TEST_ASSERT_EQUAL_size_t(gb.kept, p.glue->fold.held());
     TEST_ASSERT_EQUAL_UINT32(1, gb.markRows);
     TEST_ASSERT_TRUE(p.glue->core.givenBack());

@@ -73,7 +73,7 @@ Why ofFile(const File& f, Why w) { return w == Why::Io && f.damaged() ? Why::Fat
 // (its first 128 bytes), or an array's rows in batches of `b`, read by
 // their prefix. A row out of order stops the load, not the stream: the CRC
 // says whether the bytes or the rows are wrong.
-Why loadSection(sf::Fold& fold, cc::Source& src, const cc::Section& s, sf::Sec sec, uint8_t* a, uint8_t* b,
+Why loadSection(sf::s1::Fold& fold, cc::Source& src, const cc::Section& s, sf::Sec sec, uint8_t* a, uint8_t* b,
                 bool* noMemory) {
   cc::Stream st;
   st.begin(&src, s.offset, s.offset + s.bytes, a, kBufBytes);
@@ -211,7 +211,7 @@ const char* savedName(Saved s) {
 // ---------------------------------------------------------------------------
 // The read.
 // ---------------------------------------------------------------------------
-Store::Again Store::readStats(sf::Fold& fold, Scratch* sc, uint8_t* a, uint8_t* b, Opened* o) {
+Store::Again Store::readStats(sf::s1::Fold& fold, Scratch* sc, uint8_t* a, uint8_t* b, Opened* o) {
   fold.clear();
   o->bytes = o->generation = o->headerCrc = 0;
   bool cardFailed = false;
@@ -366,7 +366,7 @@ bool Store::quarantine() {
   return fs_.rename(kStatsBin, kStatsBad);
 }
 
-Opened Store::read(sf::Fold& fold, uint8_t* work, WaitFn wait) {
+Opened Store::read(sf::s1::Fold& fold, uint8_t* work, WaitFn wait) {
   Opened o;
   on_ = changed_ = false;
   expect_ = Copy();
@@ -516,9 +516,9 @@ Store::Promote Store::promoteHeld() {
 // Its own frame (the old base's Container and Stream, the merge's rows),
 // never inlined into save(): a rotation's save, the loop's deepest path,
 // never compacts.
-__attribute__((noinline)) bool Store::compact(sf::Fold& fold, Scratch* sc, uint8_t* a, uint8_t* b, SaveReport* r,
+__attribute__((noinline)) bool Store::compact(sf::s1::Fold& fold, Scratch* sc, uint8_t* a, uint8_t* b, SaveReport* r,
                                               uint32_t* oldGen) {
-  sf::Fold::Plan* p = &sc->plan;
+  sf::s1::Fold::Plan* p = &sc->plan;
   const uint32_t from = p->head.baseGen;
   const uint32_t to = from + 1;
   // Never under the name the card's stats.bin names (5.3): after a base
@@ -636,7 +636,7 @@ __attribute__((noinline)) bool Store::compact(sf::Fold& fold, Scratch* sc, uint8
   return true;
 }
 
-Store::Held Store::promote(sf::Fold& fold) {
+Store::Held Store::promote(sf::s1::Fold& fold) {
   // Only where save() would come to its step 1: the stats on, the card's
   // copy unchanged, a fold that may be saved and has something new (the
   // boot's fold ended first, as save() ends it: its gap may be new).
@@ -652,7 +652,7 @@ Store::Held Store::promote(sf::Fold& fold) {
   return pr == Promote::Promoted ? Held::Promoted : Held::None;
 }
 
-SaveReport Store::save(sf::Fold& fold, const SaveAsk& ask, uint8_t* work, Held held) {
+SaveReport Store::save(sf::s1::Fold& fold, const SaveAsk& ask, uint8_t* work, Held held) {
   SaveReport r;
   // The boot's fold ends here whatever the save does (plan()'s first step,
   // which a refused save never reaches).
@@ -679,7 +679,7 @@ SaveReport Store::save(sf::Fold& fold, const SaveAsk& ask, uint8_t* work, Held h
   Scratch* sc = new (work) Scratch;
   uint8_t* a = work + kScratchBytes;
   uint8_t* b = a + kBufBytes;
-  sf::Fold::Plan& p = sc->plan;
+  sf::s1::Fold::Plan& p = sc->plan;
   if (!fold.plan(ask.nowMs, ask.hasCommit, ask.commitSec, &p)) {
     r.what = Saved::Off;  // a partial scan, or the fold out of memory
     return r;
