@@ -53,8 +53,19 @@
 //   chunks at the boot, the boot's fold of a log never synced after the
 //   boot's join, given back at each update and taken again after it, or
 //   held through as S1 first built) under the same rule and the device's
-//   room.
+//   room;
+// - the listening stats across five library updates (docs/LISTENING-STATS.md
+//   5.14's yardstick, its R1): the decoders' blocks as the device asks for
+//   them, held as a history has them, joined after each update against
+//   main's run in the same history, beside main's own variation; S1 as built
+//   fails it on purpose until the rework (R6), and the shapes the rework's
+//   waits exist for fail it too.
 // Run: pio test -e native -f test_autodj_join
+// The yardstick's variants (5.14's R1), outside the suite, the case alone, in
+// a build folder of their own (from Git Bash in the worktree):
+//   PLATFORMIO_BUILD_FLAGS="-DSTATS_WIDE" PLATFORMIO_BUILD_DIR="$PWD/.pio/build-yard" \
+//     pio test -e native -f test_autodj_join -v
+// with -DSTATS_OLD_DECODERS, and both, the same way.
 #include <unity.h>
 
 #include <algorithm>
@@ -2845,8 +2856,102 @@ void statsBoot(statsfold::Fold& f, StatsRun& sr) {
   ModelHeap::release(work);
 }
 
+// The decoders' requests while a track plays (docs/LISTENING-STATS.md 5.14,
+// the yardstick), each held from the track's open to its end.
+#ifdef STATS_OLD_DECODERS
+// The shape the rework was first drawn on ("old"): the Opus's carved sizes
+// asked again (the model rounds them once more), a FLAC as one 64 KB block
+// and 16 KB.
+const std::vector<size_t> kOpusAsks = {65536, 62464};
+const std::vector<size_t> kFlacAsks = {65536, 16384};
+#else
+// The device's ("dev", the measure): the Opus's three
+// (src/audio/OpusGenerator.cpp:50-52; the logs' "[opus] buffers: 128023 B"),
+// in that order; libFLAC's (ESP8266Audio's, FLAC__ALIGN_MALLOC_DATA, the 64
+// Kbit bit reader of a non-ESP8266 build) for a stereo 4,096-sample FLAC: its
+// private struct (about 6 KB), the 8,192 B bit reader (bitreader.c:106, 274),
+// then each channel's output and residual (stream_decoder.c:1316-1325).
+const std::vector<size_t> kOpusAsks = {65307, 61440, 1276};
+const std::vector<size_t> kFlacAsks = {6000, 8192, 16400, 16415, 16400, 16415};
+#endif
+
+// An update history (5.14's yardstick): the Opus kept from one point on, a
+// FLAC playing through one update, a Dc (Auto DJ's join again) after each
+// update or not; no memory check's give-back (run L had none). Each update's
+// joined: the largest free block once its rejoin, the FLAC's end, the Dc, a
+// save and the Opus's open (when it opens there) are done.
+struct Updates {
+  static constexpr int kNever = -2;
+  int opusAt = kNever;  // -1: opened after the boot's join (and the boot's fold); k: after update k; kNever
+  int flacStep = -1;    // carved before update k's fence, given back after its rejoin; -1: no FLAC
+  bool dc = false;
+  size_t queueExtra = 0;  // the queue's block this much longer: main's own variation (the control)
+  std::vector<size_t> joined;
+  uint32_t carveFails = 0, joinFails = 0;  // a decoder's block, or a join, that found no room
+};
+
+// The rework's design (5.14) as the heap sees it, raw blocks: the resident
+// object at PlayHistory::begin()'s place; a records' save (its work memory and
+// two FatFiles, carved and freed in one call) in each update's fence pass and
+// after each update's Dc; the boot's scan holding its ranges' block and a
+// full log's overflow chunks across its passes, carved at the top of the
+// largest free block through the join's spacers keeping kMargin free, then
+// the boot's save (its work memory and three FatFiles) before they go. R1
+// runs it without one of its waits at a time (the shapes the waits exist
+// for), as the design's run did (docs/LISTENING-STATS.md 5.14), with the
+// scan's blocks the design's own; R6 makes StatsRun the rework's.
+struct Rework {
+  enum class Scan {
+    JoinFirst,     // the boot's join, then the scan
+    ScanFirst,     // the scan, the boot's join waiting for it
+    ThroughBuild,  // after the boot's join, held through update 0's build (no update waiting for it;
+                   // an Opus opened at the boot opens under them)
+    InFence,       // carved in update 0's fence, given back after its build (no scan waiting for the
+                   // update; an Opus opened at the boot opens before them)
+  };
+  static constexpr size_t kSaveWork = 10896;  // statsfile::kWorkBytes as 5.14 has it, on the device as on the host
+  size_t resident = 3584;
+  std::vector<size_t> save = {kSaveWork, 4148, 4148};
+  std::vector<size_t> scan;
+  std::vector<size_t> bootSave;
+  Scan when = Scan::ScanFirst;
+  bool opusUnder = true;  // (JoinFirst, ScanFirst; opusAt -1) the Opus opens while the scan's blocks are
+                          // held (no start waiting); false: after they go
+};
+
+// The scan's blocks of a full log's overflow (5.14): the ranges' block (3,072
+// B with MARK's 16 rows) and 16 chunks of 819 records; the boot's save's work
+// memory and three FatFiles (a compaction's).
+Rework fullLogOverflow(Rework::Scan when) {
+  Rework r;
+  r.scan.push_back(3072);
+  r.scan.insert(r.scan.end(), 16, 16384);
+  r.bootSave = {Rework::kSaveWork, 4148, 4148, 4148};
+  r.when = when;
+  return r;
+}
+
+void* topAlloc(size_t n) {
+  autodj::Spacers sp;
+  autodj::takeSpacers(n, kMargin, ModelHeap::largest, ModelHeap::freeBytes, ModelHeap::alloc, ModelHeap::release, &sp);
+  void* p = ModelHeap::alloc(n);
+  autodj::giveSpacers(&sp, ModelHeap::release);
+  return p;
+}
+
+void carveAndFree(const std::vector<size_t>& sizes) {
+  std::vector<void*> ps;
+  for (size_t n : sizes) {
+    void* p = ModelHeap::alloc(n);
+    TEST_ASSERT_NOT_NULL(p);
+    ps.push_back(p);
+  }
+  for (size_t i = ps.size(); i-- > 0;) ModelHeap::release(ps[i]);
+}
+
 UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& records, const synthcard::Card& card,
-                         int steps, const MoodRun& mood = MoodRun(), StatsRun* stats = nullptr) {
+                         int steps, const MoodRun& mood = MoodRun(), StatsRun* stats = nullptr,
+                         Updates* hist = nullptr, const Rework* rw = nullptr) {
   UpdateRun u;
   ModelHeap::reset(4089u * 1024u);
   auto take = [](std::initializer_list<size_t> sizes, std::vector<void*>* into) {
@@ -2880,9 +2985,15 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   }
   TEST_ASSERT_EQUAL(mood.moods, index.hasMoods());
   std::vector<void*> queue, thumbs;
-  take({5120}, &queue);
+  const size_t queueBytes = 5120 + (hist ? hist->queueExtra : 0);
+  take({queueBytes}, &queue);
   g_durations = ModelHeap::alloc(index.trackCount() * 2);
   take({3680, 3584, 15432, 4148}, nullptr);  // Auto DJ's glue, its engine, the open file
+  void* resident = nullptr;  // (the rework's object, at PlayHistory::begin()'s place)
+  if (rw) {
+    resident = ModelHeap::alloc(rw->resident);
+    TEST_ASSERT_NOT_NULL(resident);
+  }
   // PlayHistory::begin(): the stats' glue (the Fold inside it: the model
   // places a Fold at its block's start), HOUR, DAYS and MARK, then the
   // read's work memory and the load, the work memory given back (StatsRun).
@@ -2917,15 +3028,64 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   auto joinNow = [&](size_t* lowest) {
     if (dj == Dj::Off) return;
     ModelHeap::mark();
-    TEST_ASSERT_EQUAL_INT(static_cast<int>(Status::Working), static_cast<int>(join.begin(table, &index)));
+    if (hist) {
+      // (a history counts a join that can't place, and goes on)
+      if (join.begin(table, &index) != Status::Working) {
+        ++hist->joinFails;
+        return;
+      }
+    } else {
+      TEST_ASSERT_EQUAL_INT(static_cast<int>(Status::Working), static_cast<int>(join.begin(table, &index)));
+    }
     *lowest = std::min(*lowest, ModelHeap::low);
     u.topKept = join.stats().topKept;
     runJoin(join, &index);
     TEST_ASSERT_EQUAL_INT(static_cast<int>(Status::Ready), static_cast<int>(join.status()));
   };
+  // The decoders' blocks (a history's).
+  std::vector<void*> opusBlocks, flacBlocks;
+  auto carveInto = [&](const std::vector<size_t>& asks, std::vector<void*>* into) {
+    for (size_t n : asks) {
+      void* p = ModelHeap::alloc(n);
+      if (!p) {
+        ++hist->carveFails;
+        continue;
+      }
+      into->push_back(p);
+    }
+  };
+  // The rework's boot scan (its blocks at the top), and its end: the boot's
+  // save carved and freed, then the scan's blocks given back.
+  std::vector<void*> scanHeld;
+  auto scanBegin = [&] {
+    for (size_t n : rw->scan) {
+      void* p = topAlloc(n);
+      TEST_ASSERT_NOT_NULL(p);
+      scanHeld.push_back(p);
+    }
+  };
+  auto scanEnd = [&] {
+    carveAndFree(rw->bootSave);
+    for (void* p : scanHeld) ModelHeap::release(p);
+    scanHeld.clear();
+  };
+  using Scan = Rework::Scan;
+  const bool opusAtBoot = hist && hist->opusAt == -1;
+  bool opusOpen = false;
+  auto scanWithOpus = [&] {
+    scanBegin();
+    if (rw->opusUnder && opusAtBoot) {
+      carveInto(kOpusAsks, &opusBlocks);
+      opusOpen = true;
+    }
+    scanEnd();
+  };
+  if (rw && rw->when == Scan::ScanFirst) scanWithOpus();
   joinNow(&u.bootLowest);
   u.bootJoined = ModelHeap::largest();
   u.bootTopKept = u.topKept;
+  if (rw && rw->when == Scan::JoinFirst) scanWithOpus();
+  if (rw && rw->when == Scan::ThroughBuild) scanBegin();
   auto bootFold = [&] {
     fold->resetPeak();
     statsBoot(*fold, *stats);
@@ -2935,7 +3095,10 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   // The boot's fold, after the boot's join; its blocks held from here (or,
   // foldAfter, after the first update's take-back).
   if (fold && !stats->foldAfter) bootFold();
+  if (opusAtBoot && !opusOpen) carveInto(kOpusAsks, &opusBlocks);
   for (int step = 0; step < steps; ++step) {
+    if (hist && hist->flacStep == step) carveInto(kFlacAsks, &flacBlocks);
+    if (rw) carveAndFree(rw->save);  // (a records' save in the fence's pass)
     // enterFence(): the queue, Thumbs' pools, the join, the stats' blocks
     // (their save first), then the old index.
     for (void* p : queue) ModelHeap::release(p);
@@ -2946,6 +3109,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     const bool gives = fold && stats->giveBack;
     if (gives) statsGiveBack(*fold, *stats);
     index.clear();  // (the words go with it)
+    if (rw && rw->when == Scan::InFence && step == 0) scanBegin();
     u.fence = ModelHeap::freeBlocks(64 * 1024);
     // The build, from D's records (or T's, D's rows Software rows).
     LibraryBuilder b(ModelHeap::alloc, ModelHeap::release);
@@ -2959,6 +3123,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     c.facts = &facts;
     const LibraryBuilder::Result r = b.build(index, c);
     TEST_ASSERT_TRUE(r.built);
+    if (rw && (rw->when == Scan::ThroughBuild || rw->when == Scan::InFence) && step == 0) scanEnd();
     if (mood.transfer) {
       TEST_ASSERT_TRUE(r.transferUsed);  // T's records, not a restart from D
       TEST_ASSERT_EQUAL_UINT32(card.files.size(), r.fromTransfer);
@@ -2967,7 +3132,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     TEST_ASSERT_EQUAL(mood.moods, r.withMoods > 0);
     // leaveFence(): the queue read back, the durations, Thumbs' pools; then
     // the join (the next pass).
-    take({5120}, &queue);
+    take({queueBytes}, &queue);
     ModelHeap::release(g_durations);
     g_durations = ModelHeap::alloc(index.trackCount() * 2);
     take({204800, 256, 256, 110592, 24, 24}, &thumbs);
@@ -2975,9 +3140,26 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     joinNow(&u.lowest);
     // The stats' blocks again, the rejoin done (a pass that may carve).
     if (gives) statsTakeAgain(*fold, *stats);
+    if (hist) {
+      // The FLAC ends; the Dc; a records' save; the Opus opens (from here on).
+      if (hist->flacStep == step) {
+        for (void* p : flacBlocks) ModelHeap::release(p);
+        flacBlocks.clear();
+      }
+      if (hist->dc && dj != Dj::Off) {
+        join.release();
+        joinNow(&u.lowest);
+      }
+    }
+    if (rw) carveAndFree(rw->save);
+    if (hist) {
+      if (hist->opusAt == step) carveInto(kOpusAsks, &opusBlocks);
+      hist->joined.push_back(ModelHeap::largest());
+    }
     // The boot's scan, held through the update, folds now (foldAfter).
     if (fold && stats->foldAfter && step == 0) bootFold();
     u.joined = ModelHeap::largest();
+    if (hist) continue;  // (no memory check's give-back: run L had none)
     // The next update's memory check, short on its table's block: the
     // join given back (setGiveBack()), then the stats' blocks (the chain).
     join.release();
@@ -2989,10 +3171,13 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   }
   join.release();
   index.clear();
+  for (void* p : opusBlocks) ModelHeap::release(p);
+  for (void* p : flacBlocks) ModelHeap::release(p);
   if (fold) {
     fold->~Fold();
     ModelHeap::release(glueAt);
   }
+  ModelHeap::release(resident);
   return u;
 }
 
@@ -3329,8 +3514,364 @@ void test_the_listening_stats_in_a_model_heap() {
   }
 }
 
+namespace {
+
+// 5.14's yardstick, its histories: the comparison's H1-H4, H5-H8, K1-K4 and
+// D, round 2's own sequence on the device (the Opus kept before the first
+// update, the MP3 update, the Opus update, the FLAC playing through the
+// third, a Dc after each). STATS_WIDE: every combination (the Opus never,
+// before update 0, or after update 0-3; a FLAC through none or one of
+// updates 0-4; a Dc or not), 72 histories, the named among them.
+struct History {
+  std::string name;
+  const char* set;  // the named set it belongs to ("": none)
+  int opusAt, flacStep;
+  bool dc;
+};
+
+std::vector<History> yardstickHistories() {
+  const int never = Updates::kNever;
+  const std::vector<History> named = {
+      {"H1", "H1-H4", never, -1, false}, {"H2", "H1-H4", -1, 3, true},   {"H3", "H1-H4", 2, -1, true},
+      {"H4", "H1-H4", 0, -1, true},      {"H5", "H5-H8", -1, -1, false}, {"H6", "H5-H8", 1, 0, true},
+      {"H7", "H5-H8", never, 1, true},   {"H8", "H5-H8", 3, 4, true},    {"K1", "K1-K4", never, 4, true},
+      {"K2", "K1-K4", never, 4, false},  {"K3", "K1-K4", -1, 2, false},  {"K4", "K1-K4", -1, 4, true},
+      {"D", "D", -1, 2, true},
+  };
+#ifdef STATS_WIDE
+  std::vector<History> wide;
+  for (int o : {never, -1, 0, 1, 2, 3})
+    for (int f : {-1, 0, 1, 2, 3, 4})
+      for (bool dc : {true, false}) {
+        History h{"", "", o, f, dc};
+        for (const History& n : named)
+          if (n.opusAt == o && n.flacStep == f && n.dc == dc) h = n;
+        char b[48];
+        std::snprintf(b, sizeof(b), "opus %d flac %d dc %d", o, f, dc ? 1 : 0);
+        h.name = h.name.empty() ? std::string(b) : h.name + " (" + b + ")";
+        wide.push_back(h);
+      }
+  return wide;
+#else
+  return named;
+#endif
+}
+
+// The mood plan's rule (9.5), per update: joined at or over 245,764 B where
+// main's is, and within 122,880 B of main's.
+constexpr size_t kLine = 245764, kWithin = 122880;
+bool stepFails(size_t mainJoined, size_t joined) {
+  return (mainJoined >= kLine && joined < kLine) || joined + kWithin < mainJoined;
+}
+
+// One kind of run over every history.
+struct Yard {
+  std::string name;
+  std::vector<std::vector<size_t>> joined;  // [history][update]
+  std::vector<size_t> bootJoined;
+  uint32_t carveFails = 0, joinFails = 0;
+};
+
+}  // namespace
+
+// 5.14's yardstick (R1 of its build plan): the multi-update model. The
+// 19,412-track library, 5 update steps, each history's decoders as the
+// device asks for their blocks (STATS_OLD_DECODERS: as the design was first
+// drawn), a Dc after each step where the history has one, no memory check's
+// give-back; joined per step against main's run (the stats off) in the same
+// history, the mood plan's rule at each step, and the boot's join equal to
+// main's. Beside them: main with its queue block 2,048 B longer (main's own
+// variation, the control); S1 as built (StatsRun at P = 2,214, 300 slots, the
+// give-back at each fence, taken again after the rejoin); and the rework's
+// design without one of its waits at a time, the shapes they exist for (a
+// full log's overflow held through update 0's build, carved in its fence, and
+// with the Opus opening under it, the scan first), which must fail.
+// The suite's build (the device's decoders, the named histories): every
+// figure pinned, the control failing no step, and S1 as built failing on
+// purpose (its list in the message) until R6 makes StatsRun the rework's. The
+// variants (STATS_OLD_DECODERS, STATS_WIDE; this case alone, outside the
+// suite: PLATFORMIO_BUILD_FLAGS and a build folder of their own): every step
+// the stats fail must be one the control fails too; their figures go in the
+// commit message.
+void test_the_listening_stats_across_updates() {
+  const uint32_t tracks = 19412;
+  const synthcard::Card card = synthcard::make(synth::userShape(tracks));
+  synthcard::Write dw;
+  dw.source = cc::mptg::kSourceDevice;
+  const std::vector<uint8_t> d = synthcard::tagsFile(card, dw);
+  cc::MemSource records(d.data(), static_cast<uint32_t>(d.size()));
+  std::vector<uint8_t> saved;
+  {
+    LibraryIndex idx;
+    LibraryBuilder b;
+    synthcard::Facts facts(card, false);
+    synthcard::SameRows rows(LibraryBuilder::Status::Scanned, false, true);
+    LibraryBuilder::Config c;
+    c.device = &records;
+    c.rows = &rows;
+    c.facts = &facts;
+    TEST_ASSERT_TRUE(b.build(idx, c).built);
+    MemorySink sink;
+    LibraryIndex::Inputs in;
+    in.cardId = 1;
+    TEST_ASSERT_TRUE(idx.save(sink, in));
+    saved.assign(sink.data(), sink.data() + sink.size());
+  }
+
+  // The decoders' requests against the device's own figures.
+  size_t opusAsked = 0;
+  for (size_t n : kOpusAsks) opusAsked += n;
+  ModelHeap::reset(1024 * 1024);
+  const size_t before = ModelHeap::freeBytes();
+  std::vector<void*> flac;
+  for (size_t n : kFlacAsks) flac.push_back(ModelHeap::alloc(n));
+  const size_t flacTaken = before - ModelHeap::freeBytes();
+  for (void* p : flac) ModelHeap::release(p);
+  printf("[stats-yard] the decoders (%s): the Opus asks %u B in %u blocks, a FLAC takes %u B of free PSRAM in %u\n",
+#ifdef STATS_OLD_DECODERS
+         "the old shape",
+#else
+         "the device's",
+#endif
+         (unsigned)opusAsked, (unsigned)kOpusAsks.size(), (unsigned)flacTaken, (unsigned)kFlacAsks.size());
+#ifndef STATS_OLD_DECODERS
+  TEST_ASSERT_EQUAL_size_t(128023, opusAsked);  // "[opus] buffers: 128023 B"
+  // The control's FLAC (mainrun.log: 511,460 B free after qx, 429,340 B
+  // while it played): 82,120 B, within the private struct's class step
+  // (about 6 KB: 128 B) of the model's.
+  TEST_ASSERT_EQUAL_size_t(82072, flacTaken);
+  TEST_ASSERT_TRUE(flacTaken <= 82120 && 82120 - flacTaken < 128);
+#endif
+
+  const std::vector<History> hs = yardstickHistories();
+  auto run = [&](Yard& y, size_t queueExtra, bool s1, const Rework* rw) {
+    for (const History& h : hs) {
+      Updates up;
+      up.opusAt = h.opusAt;
+      up.flacStep = h.flacStep;
+      up.dc = h.dc;
+      up.queueExtra = queueExtra;
+      StatsRun sr;
+      sr.rcntRows = 1365;
+      sr.trkdRows = 1000;
+      sr.hashes = 2214;
+      sr.slots = 300;
+      sr.giveBack = true;
+      const UpdateRun u = libraryUpdates(Dj::Placed, saved, records, card, 5, MoodRun(), s1 ? &sr : nullptr, &up, rw);
+      TEST_ASSERT_EQUAL_size_t(5, up.joined.size());
+      y.joined.push_back(up.joined);
+      y.bootJoined.push_back(u.bootJoined);
+      y.carveFails += up.carveFails;
+      y.joinFails += up.joinFails;
+    }
+  };
+  const auto t0 = std::chrono::steady_clock::now();
+  Yard mainRun{"main"}, control{"main's queue 2,048 B longer"}, s1{"S1 as built (P = 2,214, 300 slots, the give-back)"};
+  run(mainRun, 0, false, nullptr);
+  run(control, 2048, false, nullptr);
+  run(s1, 0, true, nullptr);
+  const Rework through = fullLogOverflow(Rework::Scan::ThroughBuild);
+  const Rework inFence = fullLogOverflow(Rework::Scan::InFence);
+  const Rework under = fullLogOverflow(Rework::Scan::ScanFirst);
+  Yard throughRun{"no update waiting for the scan: a full log's overflow held through update 0's build"};
+  Yard fenceRun{"no scan waiting for the update: a full log's overflow carved in update 0's fence"};
+  Yard underRun{"no start waiting: the Opus opening under a full log's overflow, the scan first"};
+  run(throughRun, 0, false, &through);
+  run(fenceRun, 0, false, &inFence);
+  run(underRun, 0, false, &under);
+  const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+
+  // What each kind came to against main: per history, per named set, in all.
+  struct Score {
+    long long sum = 0, worst = 0;
+    int n = 0, fails = 0;
+    std::string where;
+  };
+  auto score = [&](const Yard& y, std::vector<std::pair<size_t, int>>* failing) {
+    std::map<std::string, Score> sets;
+    Score all;
+    for (size_t i = 0; i < hs.size(); ++i) {
+      printf("[stats-yard] %s | %s: boot %u/%u", hs[i].name.c_str(), y.name.c_str(), (unsigned)y.bootJoined[i],
+             (unsigned)mainRun.bootJoined[i]);
+      for (size_t k = 0; k < 5; ++k) {
+        const size_t m = mainRun.joined[i][k], j = y.joined[i][k];
+        const long long dlt = static_cast<long long>(j) - static_cast<long long>(m);
+        const bool f = stepFails(m, j);
+        printf(" %u: %u/%u (%+lld)%s", (unsigned)k, (unsigned)j, (unsigned)m, dlt, f ? " FAILS" : "");
+        for (Score* sc : {&all, hs[i].set[0] ? &sets[hs[i].set] : nullptr}) {
+          if (!sc) continue;
+          sc->sum += dlt;
+          sc->worst = std::min(sc->worst, dlt);
+          ++sc->n;
+          if (f) {
+            ++sc->fails;
+            char b[64];
+            std::snprintf(b, sizeof(b), "%s%s %u (%+lld B)", sc->where.empty() ? "" : ", ", hs[i].name.c_str(),
+                          (unsigned)k, dlt);
+            sc->where += b;
+          }
+        }
+        if (f && failing) failing->emplace_back(i, static_cast<int>(k));
+      }
+      printf("\n");
+    }
+    for (const char* set : {"H1-H4", "H5-H8", "K1-K4", "D"})
+      printf("[stats-yard] %s | %s: mean %+.0f B, worst %+lld B, %d of %d failing%s%s\n", set, y.name.c_str(),
+             sets[set].n ? static_cast<double>(sets[set].sum) / sets[set].n : 0.0, sets[set].worst, sets[set].fails,
+             sets[set].n, sets[set].where.empty() ? "" : ": ", sets[set].where.c_str());
+    printf("[stats-yard] all %u histories | %s: mean %+.0f B, worst %+lld B, %d of %d failing; the boot's join %u B "
+           "(main's %u B); decoder blocks without room %u, joins without room %u\n",
+           (unsigned)hs.size(), y.name.c_str(), all.n ? static_cast<double>(all.sum) / all.n : 0.0, all.worst,
+           all.fails, all.n, (unsigned)y.bootJoined[0], (unsigned)mainRun.bootJoined[0], (unsigned)y.carveFails,
+           (unsigned)y.joinFails);
+    return all.fails;
+  };
+  std::vector<std::pair<size_t, int>> controlFails, s1Fails, throughFails, fenceFails, underFails;
+  score(control, &controlFails);
+  score(s1, &s1Fails);
+  score(throughRun, &throughFails);
+  score(fenceRun, &fenceFails);
+  score(underRun, &underFails);
+  printf("[stats-yard] %u histories, 6 kinds of run, 5 updates each: %.1f s\n", (unsigned)hs.size(), secs);
+
+  // Main's, the control's and S1's runs: the decoders' blocks and every join
+  // placed (a shape the waits exist for may leave a decoder no room: with
+  // the old shapes a full log's overflow held through the build does, twice
+  // in the wide set); the boot's join the same in every history.
+  for (const Yard* y : {&mainRun, &control, &s1}) {
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, y->carveFails, y->name.c_str());
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, y->joinFails, y->name.c_str());
+  }
+  for (size_t i = 0; i < hs.size(); ++i) {
+    TEST_ASSERT_EQUAL_size_t(mainRun.bootJoined[0], mainRun.bootJoined[i]);
+    TEST_ASSERT_EQUAL_size_t(mainRun.bootJoined[0], control.bootJoined[i]);
+    TEST_ASSERT_EQUAL_size_t(s1.bootJoined[0], s1.bootJoined[i]);
+  }
+  auto among = [](const std::vector<std::pair<size_t, int>>& a, const std::vector<std::pair<size_t, int>>& b) {
+    for (const auto& f : a)
+      if (std::find(b.begin(), b.end(), f) == b.end()) return false;
+    return true;
+  };
+  // The shapes the waits exist for fail steps the control doesn't (with the
+  // old shapes the Opus under the overflow fails only the control's own,
+  // as the design's run found: it is the device's decoders that need a
+  // start to wait).
+  TEST_ASSERT_FALSE_MESSAGE(among(throughFails, controlFails), throughRun.name.c_str());
+  TEST_ASSERT_FALSE_MESSAGE(among(fenceFails, controlFails), fenceRun.name.c_str());
+#ifndef STATS_OLD_DECODERS
+  TEST_ASSERT_FALSE_MESSAGE(among(underFails, controlFails), underRun.name.c_str());
+#endif
+
+#if !defined(STATS_OLD_DECODERS) && !defined(STATS_WIDE)
+  // The suite's build: every figure pinned (MEASURED-HOST), joined after
+  // each of the 5 updates: main's, the control's, S1 as built's, then the
+  // three shapes the waits exist for (held through update 0's build, carved
+  // in its fence, the Opus under it with the scan first).
+  struct Pin {
+    const char* name;
+    size_t main[5], control[5], s1[5], through[5], fence[5], under[5];
+  };
+  const Pin pins[] = {
+      {"H1", {360436, 360436, 360436, 360436, 360436}, {360436, 360436, 360436, 360436, 360436},
+       {360436, 360436, 360436, 360436, 360436}, {401396, 360436, 360436, 360436, 360436},
+       {385012, 360436, 360436, 360436, 360436}, {360436, 360436, 360436, 360436, 360436}},
+      {"H2", {249844, 249844, 360436, 180212, 270324}, {249844, 249844, 360436, 180212, 270324},
+       {180212, 249844, 249844, 180212, 249844}, {225268, 249844, 311284, 180212, 249844},
+       {249844, 270324, 360436, 180212, 270324}, {180212, 180212, 249844, 184308, 249844}},
+      {"H3", {360436, 360436, 360436, 270324, 249844}, {360436, 360436, 360436, 270324, 249844},
+       {360436, 360436, 294900, 159732, 159732}, {401396, 360436, 294900, 176116, 286708},
+       {385012, 360436, 360436, 270324, 249844}, {360436, 360436, 360436, 270324, 249844}},
+      {"H4", {294900, 172020, 172020, 106484, 172020}, {294900, 172020, 172020, 106484, 172020},
+       {294900, 159732, 159732, 159732, 270324}, {335860, 249844, 360436, 249844, 249844},
+       {262132, 204788, 176116, 176116, 176116}, {294900, 172020, 172020, 106484, 172020}},
+      {"H5", {249844, 249844, 360436, 270324, 360436}, {249844, 249844, 360436, 270324, 360436},
+       {180212, 249844, 249844, 249844, 249844}, {225268, 249844, 311284, 249844, 360436},
+       {249844, 270324, 360436, 270324, 249844}, {180212, 180212, 249844, 294900, 249844}},
+      {"H6", {249844, 294900, 286708, 204788, 180212}, {249844, 294900, 286708, 204788, 176116},
+       {249844, 294900, 192500, 192500, 192500}, {335860, 360436, 249844, 249844, 270324},
+       {303092, 294900, 135156, 135156, 135156}, {249844, 294900, 286708, 204788, 176116}},
+      {"H7", {360436, 360436, 360436, 360436, 360436}, {360436, 360436, 360436, 360436, 360436},
+       {360436, 249844, 360436, 360436, 360436}, {401396, 311284, 360436, 360436, 360436},
+       {385012, 352244, 360436, 360436, 360436}, {360436, 360436, 360436, 360436, 360436}},
+      {"H8", {360436, 360436, 360436, 294900, 221172}, {360436, 360436, 360436, 294900, 221172},
+       {360436, 360436, 360436, 294900, 110580}, {401396, 360436, 360436, 294900, 180212},
+       {385012, 360436, 360436, 294900, 221172}, {360436, 360436, 360436, 294900, 221172}},
+      {"K1", {360436, 360436, 360436, 360436, 360436}, {360436, 360436, 360436, 360436, 360436},
+       {360436, 360436, 360436, 360436, 249844}, {401396, 360436, 360436, 360436, 360436},
+       {385012, 360436, 360436, 360436, 360436}, {360436, 360436, 360436, 360436, 360436}},
+      {"K2", {360436, 360436, 360436, 360436, 360436}, {360436, 360436, 360436, 360436, 360436},
+       {360436, 360436, 360436, 360436, 249844}, {401396, 360436, 360436, 360436, 360436},
+       {385012, 360436, 360436, 360436, 360436}, {360436, 360436, 360436, 360436, 360436}},
+      {"K3", {249844, 249844, 180212, 311284, 270324}, {249844, 249844, 180212, 249844, 270324},
+       {180212, 249844, 139252, 249844, 249844}, {225268, 249844, 180212, 311284, 249844},
+       {249844, 270324, 180212, 249844, 249844}, {180212, 180212, 192500, 249844, 294900}},
+      {"K4", {249844, 249844, 360436, 270324, 180212}, {249844, 249844, 360436, 270324, 180212},
+       {180212, 249844, 249844, 249844, 180212}, {225268, 249844, 311284, 249844, 212980},
+       {249844, 270324, 360436, 270324, 294900}, {180212, 180212, 249844, 294900, 188404}},
+      {"D", {249844, 249844, 180212, 311284, 270324}, {249844, 249844, 180212, 249844, 270324},
+       {180212, 249844, 217076, 249844, 249844}, {225268, 249844, 180212, 311284, 249844},
+       {249844, 270324, 192500, 249844, 249844}, {180212, 180212, 192500, 249844, 294900}},
+  };
+  TEST_ASSERT_EQUAL_size_t(sizeof(pins) / sizeof(pins[0]), hs.size());
+  for (size_t i = 0; i < hs.size(); ++i) {
+    const char* w = hs[i].name.c_str();
+    TEST_ASSERT_EQUAL_STRING(pins[i].name, w);
+    for (size_t k = 0; k < 5; ++k) {
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(pins[i].main[k], mainRun.joined[i][k], w);
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(pins[i].control[k], control.joined[i][k], w);
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(pins[i].s1[k], s1.joined[i][k], w);
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(pins[i].through[k], throughRun.joined[i][k], w);
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(pins[i].fence[k], fenceRun.joined[i][k], w);
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(pins[i].under[k], underRun.joined[i][k], w);
+    }
+  }
+  // The boot's join: main's (and the control's) 589,812 B; S1 as built's
+  // 507,892 B (its load's chunks, carved in setup).
+  TEST_ASSERT_EQUAL_size_t(589812, mainRun.bootJoined[0]);
+  TEST_ASSERT_EQUAL_size_t(507892, s1.bootJoined[0]);
+  // The control fails no step here, so the rule for the stats is every
+  // step; each shape the waits exist for fails these (MEASURED-HOST: held
+  // through the build H2 0, H3 3, H5 0, K3 0, K4 0, D 0; carved in the fence
+  // H6 2; the Opus under it H2, H5, K3, K4 and D at 0 and 1).
+  TEST_ASSERT_EQUAL_size_t(0, controlFails.size());
+  TEST_ASSERT_EQUAL_size_t(6, throughFails.size());
+  TEST_ASSERT_EQUAL_size_t(1, fenceFails.size());
+  TEST_ASSERT_EQUAL_size_t(10, underFails.size());
+  TEST_ASSERT_EQUAL_size_t(8, s1Fails.size());
+  for (const Yard* y : {&throughRun, &fenceRun, &underRun}) {
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, y->carveFails, y->name.c_str());
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, y->joinFails, y->name.c_str());
+  }
+#endif
+
+  // The rule: the boot's join main's, and every step the stats fail one the
+  // control fails too (none, in the suite's build). S1 as built breaks it:
+  // listed, and the case fails (R6 replaces StatsRun with the rework's).
+  std::string broken;
+  if (s1.bootJoined[0] != mainRun.bootJoined[0]) {
+    char b[96];
+    std::snprintf(b, sizeof(b), "the boot's join %u B (main's %u B)", (unsigned)s1.bootJoined[0],
+                  (unsigned)mainRun.bootJoined[0]);
+    broken += b;
+  }
+  for (const auto& f : s1Fails) {
+    if (std::find(controlFails.begin(), controlFails.end(), f) != controlFails.end()) continue;
+    const size_t m = mainRun.joined[f.first][f.second], j = s1.joined[f.first][f.second];
+    char b[128];
+    std::snprintf(b, sizeof(b), "%s%s's step %d %u B (main's %u B, %+lld B)", broken.empty() ? "" : "; ",
+                  hs[f.first].name.c_str(), f.second, (unsigned)j, (unsigned)m,
+                  static_cast<long long>(j) - static_cast<long long>(m));
+    broken += b;
+  }
+  if (!broken.empty()) {
+    const std::string m = "S1 as built fails 5.14's yardstick (the rework, R6, is owed): " + broken;
+    TEST_FAIL_MESSAGE(m.c_str());
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+#if !defined(STATS_OLD_DECODERS) && !defined(STATS_WIDE)  // (the yardstick's variants run it alone)
   RUN_TEST(test_filter_word);
   RUN_TEST(test_sort_pairs);
   RUN_TEST(test_goldens);
@@ -3358,5 +3899,7 @@ int main(int, char**) {
   RUN_TEST(test_the_placement_in_a_model_heap);
   RUN_TEST(test_a_library_update_in_a_model_heap);
   RUN_TEST(test_the_listening_stats_in_a_model_heap);
+#endif
+  RUN_TEST(test_the_listening_stats_across_updates);
   return UNITY_END();
 }
