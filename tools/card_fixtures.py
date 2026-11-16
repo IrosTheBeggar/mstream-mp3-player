@@ -3571,24 +3571,46 @@ made-up library behind Not played yet: its albums in A-Z order, each
 track's path and hash. `stats/sessions.json` lists the sessions: players'
 boots and plays in turn on one card (`in`, under `stats/sessions/`), the
 play log written as tools/playlog.py's Device writes it and the stats kept
-as a device that keeps them does (the live fold of each play written, the
-rotation's save before plays.1.jnl leaves the log's names, `Hs`, the
-orderly end's flush, another player's `stats.bin` refusing a session's
-later saves, a 0.14.0 boot, NVS put back or erased, a log file deleted by
-hand, a library update's give-back and the re-read after it). Each player
-gives its deviceId, the epochs a fresh NVS draws and
-its NVS as the session starts (null: erased); each step its own fields (a
-boot's as a boot's above, and `stats` false for a 0.14.0 boot; a play's
-slot fields, `now` at a save it brings, `saveFails`, and `ending` with the
-budget `left` for the end's flush) and what a device MUST make of it: the
-card after it (`out`), a boot's facts as above, a play's seq and its
-rotation's save (`save`: null when none is asked, else whether it landed),
-Hs's `ok`, a give-back's save (`saved`: null when nothing was new) and the
-re-read's facts (`read`, `same`: the copy that held every slot the session
-held, the ring's plays `folded` and `covered`, those `over` it, and whether
-the session is `behind` its log, every later save refused). `slots` and `lost`: the slots that count the card ever held and
-those the stats lose (5.5's undercount, to the slot). Nothing but the
-device reads these files: a mirror of this folder MAY leave `stats/` out
+as a device that keeps them does (docs/LISTENING-STATS.md 5.5 and 5.14: the
+live fold of each play written into the records, the records' save once
+they number 64, a library update's fence, the rotation's save before
+plays.1.jnl leaves the log's names, `Hs`, the orderly end's flush, a tmp
+held by a replace() that failed, a boot overflow's save tried four times,
+another player's `stats.bin` refusing a session's later saves, a section
+damaged under the session, a 0.14.0 boot, NVS put back or erased, a log
+file deleted by hand). Each player gives its deviceId, the epochs a fresh
+NVS draws and its NVS as the session starts (null: erased); each step its
+`do` and its own fields, and what a device MUST make of it: the card after
+it (`out`) and, for a player's step, its `records` after it (the slots
+that count folded since the card's copy took them) and whether its session
+is `behind` its log (no record, no save till the next boot). A boot's
+fields and facts are a boot's above, and `stats` false for a 0.14.0 boot,
+`saveFails` true (every try fails) or a number (the first tries fail),
+`replaceFails` (replace() fails with the tmp written whole: stats.bin's
+remove, so stats.bin stays the copy before, or with no stats.bin the tmp's
+rename), and its save's outcome (`bootSave`: null when none is asked) and
+`tries`, `held`. A save's outcome is `wrote`, `nothing` (nothing new),
+`held`, `failed`, or the refusal: `off`, `ending`, `budget` (a rotation's
+in the end's flush with under 1 s left), `fenced`, `partial`, `behind`,
+`changed`. A `play` gives the slot's fields, `now` (the board's clock at a
+save it brings), `saveFails`, `replaceFails`, and `ending` with the budget
+`left` for the end's flush; its facts the seq, the records' save asked
+before its slot (`recordsSave`, or after it when the slot brings the
+records to 96 under a fence; null when none) and its rotation's
+(`rotationSave`, and `save`: null when none is asked, else whether the
+card's stats.bin holds every slot after it). `plays` is a batch: each
+play's fields in the columns `plays`, the batch's `saveFails` on each,
+the card stored once after the last, each play's facts in the columns
+`each`. `hs` gives `now`; its facts `recordsSave` (the records' save,
+due, first), `hsSave` and `ok`. `fence` and `unfence` put a library
+update's fence up and down (the records' save waits under it, Hs is
+refused); `update` is a fence over no play, which moves no stats byte.
+`damage` flips the first byte of a section of `name` (its CRC fails, the
+header unchanged); `delete`, `link` (a twin on a file's chain), `remount`,
+`nvs` (NVS's seq put back) and `erase` (NVS erased) as named. `slots`
+and `lost`: the slots that count the card ever held and those the stats
+lose (5.5's and 5.14's undercount, to the slot). Nothing but the device
+reads these files: a mirror of this folder MAY leave `stats/` out
 (docs/METADATA.md 2.17, item 10).
 
 The player's tests: `test/test_card_contract` (the vectors),
