@@ -127,12 +127,12 @@ private:
   // statsglue::Env
   uint64_t monoMs() override;
   bool cardAway() override;
-  void asking(statsglue::Kind k, statsfile::SaveAsk* ask) override;
-  void began(bool again, const statsfile::Opened* read) override;
+  void asking(statsglue::Kind k, statsfile::s1::SaveAsk* ask) override;
+  void began(bool again, const statsfile::s1::Opened* read) override;
   void partialFile() override;
-  void saved(statsglue::Kind k, statsglue::Refused r, const statsfile::SaveReport& rep) override;
+  void saved(statsglue::Kind k, statsglue::Refused r, const statsfile::s1::SaveReport& rep) override;
 
-  void logRead(const statsfile::Opened& o, const char* when, float ms);
+  void logRead(const statsfile::s1::Opened& o, const char* when, float ms);
   void logGiveBack(const char* where, size_t bytes);
   void logTakeBack(float ms);
   void printState();

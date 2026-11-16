@@ -7,7 +7,7 @@
 
 #include "CardManifest.h"
 #include "PlayLog.h"
-#include "StatsFile.h"
+#include "StatsFileS1.h"
 #include "StatsFoldS1.h"
 #include "TagStore.h"
 
@@ -46,7 +46,7 @@
 //   - covered() and markOf() answer false and 0 while the stats are off:
 //     with no MARK known nothing is trimmed, and the seq rule takes the
 //     log's, NVS's and ACKS's alone.
-//   - The work memory (statsfile::kWorkBytes) is carved for each read and
+//   - The work memory (statsfile::s1::kWorkBytes) is carved for each read and
 //     save through the allocator hook and given back after it, as the heap
 //     model takes it (6.7).
 //   - A library update's give-back (6.7, the owner's decision of
@@ -67,7 +67,7 @@
 //     one past it is counted. takeBack(), once the update is over and Auto DJ's rejoin done
 //     or abandoned, at a pass that may carve: stats.bin read, no waits in
 //     the loop, a remount's verdicts (5.4), but a read the card failed
-//     (statsfile::cardFault()) is made again at later passes, the boot's
+//     (statsfile::s1::cardFault()) is made again at later passes, the boot's
 //     kBootWaitsMs apart (takeBackDue()), still given back, before the
 //     stats go off for the session. Then the ring folded, but a play the
 //     card's MARK covers (another player folded it). The read must find the
@@ -130,21 +130,21 @@ public:
   // A save is about to go to the store: `ask` brought up to date (the
   // board's clock, the root's commitTime, the update step's safe point;
   // the glue sets mayCompact after this, for the boot's alone).
-  virtual void asking(Kind k, statsfile::SaveAsk* ask) {
+  virtual void asking(Kind k, statsfile::s1::SaveAsk* ask) {
     (void)k;
     (void)ask;
   }
   // The boot's scan began (`again`: after a remount). `read`: that remount's
   // read of stats.bin, or nullptr (the boot's own, which begin() made; or
   // none: the folds dropped while the end flushes).
-  virtual void began(bool again, const statsfile::Opened* read) {
+  virtual void began(bool again, const statsfile::s1::Opened* read) {
     (void)again;
     (void)read;
   }
   // The scan couldn't read a log file whole (once for each such file).
   virtual void partialFile() {}
   // A save asked: refused (`r`, and `rep` empty), or what the store did.
-  virtual void saved(Kind k, Refused r, const statsfile::SaveReport& rep) {
+  virtual void saved(Kind k, Refused r, const statsfile::s1::SaveReport& rep) {
     (void)k;
     (void)r;
     (void)rep;
@@ -260,7 +260,7 @@ public:
   // DAYS and MARK carved, then stats.bin read into it (5.4), `wait` between
   // the reads a card fault asks for (the boot's: tagstore::kBootWaitsMs).
   // `acks`: the root's (copied), for each boot's fold.
-  const statsfile::Opened& begin(const cardcontract::msmf::Acks& acks, statsfile::Store::WaitFn wait);
+  const statsfile::s1::Opened& begin(const cardcontract::msmf::Acks& acks, statsfile::s1::Store::WaitFn wait);
   // The stats run: read (or absent, or corrupt and set aside), with memory
   // for the fold, not dropped at the end, and no remount's read waiting.
   bool on() const { return store_.on() && !dropped_ && !rereadPending_; }
@@ -326,7 +326,7 @@ public:
   // The blocks again (the update over, Auto DJ's rejoin done or abandoned,
   // a pass that may carve, the card not away; never while the end
   // flushes): stats.bin read, no waits, the ring folded. A read the card
-  // failed (statsfile::cardFault()): still given back, the ring kept, read
+  // failed (statsfile::s1::cardFault()): still given back, the ring kept, read
   // again once takeBackDue() (the boot's kBootWaitsMs after it),
   // kTakeBackReads reads in all; then off for the session. tookBack() says
   // what it did.
@@ -350,12 +350,12 @@ public:
   // The last save asked: which, refused or not, and what the store did.
   Kind lastKind() const { return lastKind_; }
   Refused lastRefused() const { return lastRefused_; }
-  const statsfile::SaveReport& last() const { return last_; }
+  const statsfile::s1::SaveReport& last() const { return last_; }
   bool anySave() const { return asked_ > 0; }
   uint32_t savesWritten() const { return written_; }  // this session's that wrote stats.bin
   // The boot's read, and the last read (a remount's).
-  const statsfile::Opened& first() const { return first_; }
-  const statsfile::Opened& opened() const { return opened_; }
+  const statsfile::s1::Opened& first() const { return first_; }
+  const statsfile::s1::Opened& opened() const { return opened_; }
   uint32_t rereads() const { return rereads_; }
   const cardcontract::msmf::Acks& acks() const { return acks_; }
   // The log's (deviceId, epoch)s the last scan met (Hm); `more`: past kLogKeys.
@@ -379,8 +379,8 @@ public:
 
   statsfold::s1::Fold& fold() { return fold_; }
   const statsfold::s1::Fold& fold() const { return fold_; }
-  statsfile::Store& store() { return store_; }
-  const statsfile::Store& store() const { return store_; }
+  statsfile::s1::Store& store() { return store_; }
+  const statsfile::s1::Store& store() const { return store_; }
 
   // playlog::Folds
   void scanBegan(bool again) override;
@@ -393,7 +393,7 @@ public:
 private:
   uint8_t* carve();
   void giveBack(uint8_t* p);
-  statsfile::Opened readNow(statsfile::Store::WaitFn wait);
+  statsfile::s1::Opened readNow(statsfile::s1::Store::WaitFn wait);
   void settle();  // a remount's read, the boot's fold begun: whatever waits
   void drop();    // the folds dropped (a remount while the end flushes)
   bool refuse(Kind k, Refused r);
@@ -406,11 +406,11 @@ private:
   statsfold::s1::Fold::AllocFn alloc_;
   statsfold::s1::Fold::FreeFn free_;
   statsfold::s1::Fold fold_;
-  statsfile::Store store_;
-  statsfile::SaveAsk ask_;
+  statsfile::s1::Store store_;
+  statsfile::s1::SaveAsk ask_;
   cardcontract::msmf::Acks acks_;
-  statsfile::Opened first_, opened_;
-  statsfile::SaveReport last_;
+  statsfile::s1::Opened first_, opened_;
+  statsfile::s1::SaveReport last_;
   Kind lastKind_ = Kind::Boot;
   Refused lastRefused_ = Refused::None;
   uint32_t asked_ = 0, written_ = 0, rereads_ = 0;
@@ -426,7 +426,7 @@ private:
   bool given_ = false;   // the resident blocks given back (MARK's kept)
   bool behind_ = false;  // every save refused this session (Refused::Behind)
   bool holds_ = false;   // holding_ is a copy that holds every slot RAM held at the give-back
-  statsfile::Store::Copy holding_;
+  statsfile::s1::Store::Copy holding_;
   playlog::Slot ring_[kRing];
   uint32_t ringN_ = 0, ringOver_ = 0, giveBacks_ = 0;
   uint32_t takeTries_ = 0;  // the take-back's reads the card failed so far (0: none)

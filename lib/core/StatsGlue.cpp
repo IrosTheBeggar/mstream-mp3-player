@@ -10,7 +10,7 @@ namespace statsglue {
 
 namespace cc = cardcontract;
 namespace sf = statsfold;
-namespace sx = statsfile;
+namespace sx = statsfile::s1;
 namespace pl = playlog;
 
 const char* kindName(Kind k) {

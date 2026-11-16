@@ -17,7 +17,7 @@ namespace {
 
 namespace cc = cardcontract;
 namespace sf = statsfold;
-namespace sx = statsfile;
+namespace sx = statsfile::s1;
 namespace sg = statsglue;
 
 using ul = unsigned long;

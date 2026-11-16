@@ -97,7 +97,7 @@
 #include "LibrarySynth.h"
 #include "LibraryUpdate.h"
 #include "PlayLog.h"
-#include "StatsFile.h"
+#include "StatsFileS1.h"
 #include "StatsFoldS1.h"
 #include "StatsGlue.h"
 
@@ -2782,7 +2782,7 @@ void statsGiveBack(statsfold::s1::Fold& f, StatsRun& sr) {
   sr.trkdAt = f.rows(sf::kTrkd);
   if (f.dirty()) {
     ++sr.saves;
-    void* work = ModelHeap::alloc(statsfile::kWorkBytes);
+    void* work = ModelHeap::alloc(statsfile::s1::kWorkBytes);
     TEST_ASSERT_NOT_NULL(work);
     sf::s1::Fold::Plan plan;
     if (sr.giveBackSaves && f.plan(sf::kMinMs + 530ull * sf::kDayMs, false, 0, &plan)) {
@@ -2811,7 +2811,7 @@ void statsGiveBack(statsfold::s1::Fold& f, StatsRun& sr) {
 // memory given back (readNow()'s order).
 void statsTakeAgain(statsfold::s1::Fold& f, StatsRun& sr) {
   TEST_ASSERT_TRUE(f.begin());
-  void* work = ModelHeap::alloc(statsfile::kWorkBytes);
+  void* work = ModelHeap::alloc(statsfile::s1::kWorkBytes);
   TEST_ASSERT_NOT_NULL(work);
   f.clear();
   statsLoad(f, sr.rcntAt, sr.trkdAt);
@@ -2849,7 +2849,7 @@ void statsBoot(statsfold::s1::Fold& f, StatsRun& sr) {
     f.endBoot();  // (Glue::refuse(): no work memory carved)
     return;
   }
-  void* work = ModelHeap::alloc(statsfile::kWorkBytes);
+  void* work = ModelHeap::alloc(statsfile::s1::kWorkBytes);
   TEST_ASSERT_NOT_NULL(work);
   sf::s1::Fold::Plan plan;
   if (f.plan(sf::kMinMs + 530ull * sf::kDayMs, false, 0, &plan)) f.saved(plan);
@@ -3005,7 +3005,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     TEST_ASSERT_NOT_NULL(glueAt);
     fold = new (glueAt) statsfold::s1::Fold(ModelHeap::alloc, ModelHeap::release);
     TEST_ASSERT_TRUE(fold->begin());
-    void* work = ModelHeap::alloc(statsfile::kWorkBytes);
+    void* work = ModelHeap::alloc(statsfile::s1::kWorkBytes);
     TEST_ASSERT_NOT_NULL(work);
     fold->clear();
     statsLoad(*fold, *stats);

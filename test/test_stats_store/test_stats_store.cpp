@@ -60,14 +60,14 @@
 #include "CardContainer.h"
 #include "CardManifest.h"
 #include "PlayLog.h"
-#include "StatsFile.h"
+#include "StatsFileS1.h"
 #include "StatsFoldS1.h"
 #include "StatsGlue.h"
 
 namespace cc = cardcontract;
 namespace pl = playlog;
 namespace sf = statsfold;
-namespace sx = statsfile;
+namespace sx = statsfile::s1;
 using cutfs::CutFs;
 using faultfs::FaultFs;
 using faultfs::FlakyFs;
