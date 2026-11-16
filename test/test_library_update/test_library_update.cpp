@@ -366,7 +366,7 @@ struct Env {
   uint32_t trackLeftMs = 0;
   uint32_t seekSeq = 0;
   bool autoDjOwed = false;  // (autodj::decide()'s owed)
-  bool writesWait = false;  // (PlayHistory::statsSaveWaits())
+  bool statsWait = false;  // (PlayHistory::statsScanHolds())
   size_t psramFree = 64u << 20;
   size_t psramLargest = 64u << 20;
   size_t alsoFreed = 0;
@@ -468,7 +468,7 @@ struct Device {
     ui.trackLeftMs = e.trackLeftMs;
     ui.seekSeq = e.seekSeq;
     ui.autoDjOwed = e.autoDjOwed;
-    ui.writesWait = e.writesWait;
+    ui.statsWait = e.statsWait;
     ui.psramFree = e.psramFree;
     ui.psramLargest = e.psramLargest;
     ui.alsoFreed = e.alsoFreed;
@@ -3289,15 +3289,15 @@ void test_auto_dj_owed_holds_the_fence() {
   }
 }
 
-// The listening stats' give-back would save stats.bin first and the play
-// log's write gate is shut this pass (In::writesWait: the next track's
-// first seconds, its refill, which the safe point lets through; a low
-// ring, an underrun's wake, a moving list): the step waits in Asked
-// (Wait::Writes), after the safe point and Auto DJ's pick, before the
-// memory check (the deferral a short room would give comes only after it)
-// and the fence; the gate open, the fence goes up. Behind the fence it
-// changes nothing (the give-back review, docs/LISTENING-STATS.md 6.7).
-void test_the_stats_save_waits_for_the_write_gate() {
+// The listening stats' boot scan holds blocks across passes (its ranges'
+// block, its overflow's chunks until its save lands: In::statsWait,
+// PlayHistory::statsScanHolds()): the step waits in Asked (Wait::Stats),
+// after the safe point and Auto DJ's pick, before the memory check (the
+// deferral a short room would give comes only after it) and the fence; the
+// blocks given back, the fence goes up. Behind the fence it changes nothing
+// (the scan's first piece waits for an asked update, so it never begins
+// there: docs/LISTENING-STATS.md 5.14).
+void test_the_update_waits_for_the_stats_scan() {
   CutFs fs;
   TestCard card;
   handFilled(fs, card);
@@ -3307,13 +3307,13 @@ void test_the_stats_save_waits_for_the_write_gate() {
   Env e;
   e.playing = true;
   e.trackLeftMs = 240000;  // (a track just begun: the safe point)
-  e.writesWait = true;
+  e.statsWait = true;
   e.psramFree = 1024;  // (the memory check would defer: it isn't reached)
   // The compaction first (nothing of the fence's), then the wait.
   d.runUntil([&] { return !d.store->hasJournals() && d.running == Job::None; }, e);
   for (int i = 0; i < 200; ++i) {
     d.pass(e);
-    TEST_ASSERT_TRUE(d.lastOut.wait == LibraryUpdate::Wait::Writes);
+    TEST_ASSERT_TRUE(d.lastOut.wait == LibraryUpdate::Wait::Stats);
     TEST_ASSERT_TRUE(d.lastOut.holdScan);
     TEST_ASSERT_FALSE(d.lastOut.fenced);
     TEST_ASSERT_FALSE(d.lastOut.updating);
@@ -3331,14 +3331,14 @@ void test_the_stats_save_waits_for_the_write_gate() {
   TEST_ASSERT_TRUE(d.lastOut.wait == LibraryUpdate::Wait::AutoDj);
   e.autoDjOwed = false;
   d.pass(e);
-  TEST_ASSERT_TRUE(d.lastOut.wait == LibraryUpdate::Wait::Writes);
+  TEST_ASSERT_TRUE(d.lastOut.wait == LibraryUpdate::Wait::Stats);
   TEST_ASSERT_FALSE(d.did(Do::Deferred));
-  // The gate open: the memory check and the fence; shut again behind it,
-  // nothing changes.
-  e.writesWait = false;
+  // The blocks given back: the memory check and the fence; held again
+  // behind it, nothing changes.
+  e.statsWait = false;
   e.psramFree = 64u << 20;
   d.runUntil([&] { return d.did(Do::Fence); }, e);
-  e.writesWait = true;
+  e.statsWait = true;
   d.runUntil([&] { return d.did(Do::Saved); }, e);
   TEST_ASSERT_TRUE(d.upd->last().saved);
 }
@@ -3677,7 +3677,7 @@ int main(int, char**) {
   RUN_TEST(test_the_marker_s_build_out_of_psram);
   RUN_TEST(test_a_failed_first_walk_keeps_the_library);
   RUN_TEST(test_auto_dj_owed_holds_the_fence);
-  RUN_TEST(test_the_stats_save_waits_for_the_write_gate);
+  RUN_TEST(test_the_update_waits_for_the_stats_scan);
   RUN_TEST(test_the_join_after_a_live_step);
   RUN_TEST(test_the_memory_check_has_auto_djs_join_given_back);
   return UNITY_END();

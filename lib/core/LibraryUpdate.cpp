@@ -666,12 +666,12 @@ LibraryUpdate::Out LibraryUpdate::update(const In& in) {
         o.wait = Wait::AutoDj;
         break;
       }
-      // A card write the give-back makes (the listening stats' save first,
-      // at the memory check's hook or the fence) waits for a pass the play
-      // log's write gate lets through: the safe point lets the next track's
-      // first seconds through, its refill among them.
-      if (in.writesWait) {
-        o.wait = Wait::Writes;
+      // The listening stats' boot scan's blocks (its ranges', its overflow's
+      // until its save lands) given back first: never held behind the memory
+      // check, across the fence or during the build (docs/LISTENING-STATS.md
+      // 5.14).
+      if (in.statsWait) {
+        o.wait = Wait::Stats;
         break;
       }
       // The worker's task, made now if it ended (3 s after its last step):

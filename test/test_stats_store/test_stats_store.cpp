@@ -2,40 +2,46 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 // Host unit tests for the listening stats' store as a whole: the proof of
-// docs/LISTENING-STATS.md 9.5's C8. The play log's Journal (lib/core PlayLog)
-// with the real fold (StatsFold) and files (StatsFile), joined by the
-// firmware's own glue (StatsGlue, which app/ListeningStats wraps: C9's read
-// before the journal's begin(), the save's guards, the end's flush, the live
-// fold at the Outbox's written(), Hs), over a card in memory that can lose
-// its power at any step (test/support/CutFs.h) or fail chosen calls
+// docs/LISTENING-STATS.md 9.5's C8, as S1's rework (5.14, R5) has it. The
+// play log's Journal (lib/core PlayLog) with the real fold (StatsFold: HEAD,
+// MARK and the records in its object) and files (StatsFile: each save merges
+// the records with stats.bin's sections), joined by the firmware's own glue
+// (StatsGlue, which app/ListeningStats wraps: the read before the journal's
+// begin(), the save's guards, the end's flush, the live fold at the Outbox's
+// written(), the records' save and the boot overflow's tries at a pass the
+// write gate lets through, Hs), over a card in memory that can lose its
+// power at any step (test/support/CutFs.h) or fail chosen calls
 // (test/support/FaultFs.h).
 // Each scenario runs the fold, the save, the trim and the reboot, and is
 // compared with tools/statsref.py's: the boots of test/fixtures/card/stats
-// (index.json) and its sessions (sessions.json: boots, plays, the end's
-// flush, Hs, two players, a 0.14.0 boot, NVS put back), file for file, byte
-// for byte. No play lost, none counted twice; the undercounts 5.5 names, to
-// the slot.
+// (index.json) and its sessions (sessions.json: boots, plays and batches of
+// them, the records' save and its fence, the end's flush, Hs, two players,
+// a 0.14.0 boot, NVS put back, a held tmp, a boot's overflow and its tries,
+// a section damaged), file for file, byte for byte, each save's outcome, the
+// records and behind after each step. No play lost, none counted twice; the
+// undercounts 5.5 and 5.14 name, to the slot.
 // - every boot of every fixture through the journal, chained boot to boot;
 //   a remount mid-scan, and one after Ready before the first slot;
 // - a cut at every write step of the boot's save, its compaction and the
-//   trim, three ways, then a boot; a question or a step the card fails,
-//   each in turn; a held tmp promoted by the next save, and one a reboot's
-//   settle() drops while stats.bin is there;
+//   trim, three ways, then a boot; a cut at every step of a records' save; a
+//   question or a step the card fails, each in turn; a held tmp promoted by
+//   the next save, and one a reboot's settle() drops while stats.bin is
+//   there;
 // - the base faulted at the boot (its open, its header's read): stats off,
-//   nothing lost, nothing removed;
-// - the partial scans (statsref's partial-*), then Hs refused;
-// - the sessions: a second player saving (and compacting) between two saves
-//   of the first; a rotation over an unsaved plays.1.jnl, the save failing,
-//   then a reboot (an undercount, exactly), also over a twin's chain; a
-//   rotation in the end's flush with 1 s of its budget left and with less,
-//   and one after a partial scan; NVS put back after a trim, and after the
-//   log deleted by hand (MARK alone holding the seq); two players
-//   alternating; a 0.14.0 boot's trim between (HEAD's gap); a new epoch
-//   with no ACKS; firstAt through a rotation's save;
-// - firstAt's orders, the retention (the clock unset, a foreign 2099, a
-//   clock a year ahead then corrected);
-// - a full log never synced (13,106 slots): TRKD's rows the distinct
-//   hashes; the peak bytes and the microseconds a slot, printed.
+//   nothing lost, nothing removed, nothing held;
+// - the sessions (every one of statsref's, each step through the firmware's
+//   code), the rotation hole, players, NVS and old firmware, firstAt
+//   through a rotation's save;
+// - firstAt's orders, the retention;
+// - a full log never synced (13,106 slots): the overflow's 16 chunks at the
+//   top, given back by the boot's save; the peak bytes and the microseconds
+//   a slot, printed;
+// - the glue's own rules: the card away, the end's flush, Hs's refusals,
+//   the log's keys (Hm), a track's row (Ht), the last 7 days (Hd), the
+//   records' save before the slot of its pass, its fence and its 96, behind
+//   only after a failure or a refusal; the boot overflow's tries; a
+//   remount's MARK past the room; the scan and a library update, never both
+//   waiting.
 // Run: pio test -e native -f test_stats_store
 #include <unity.h>
 
@@ -60,14 +66,15 @@
 #include "CardContainer.h"
 #include "CardManifest.h"
 #include "PlayLog.h"
-#include "StatsFileS1.h"
-#include "StatsFoldS1.h"
+#include "StatsFile.h"
+#include "StatsFold.h"
 #include "StatsGlue.h"
 
 namespace cc = cardcontract;
 namespace pl = playlog;
 namespace sf = statsfold;
-namespace sx = statsfile::s1;
+namespace sx = statsfile;
+namespace sg = statsglue;
 using cutfs::CutFs;
 using faultfs::FaultFs;
 using faultfs::FlakyFs;
@@ -97,7 +104,8 @@ struct Work {
 std::vector<uint32_t> gWaits;
 void waitHook(uint32_t ms) { gWaits.push_back(ms); }
 
-// A heap that counts the Fold's blocks (the full log's peak).
+// A heap that counts the glue's blocks (the work memory, the ranges' block,
+// the overflow's chunks, MARK's block).
 struct Heap {
   std::map<void*, size_t> blocks;
   size_t held = 0, peak = 0;
@@ -134,6 +142,8 @@ std::string hex(const Bytes& a, const Bytes& b) {
   std::snprintf(m, sizeof(m), "%zu and %zu bytes, first difference at %zu", a.size(), b.size(), i);
   return m;
 }
+
+const uint8_t* u8(const Bytes& b) { return reinterpret_cast<const uint8_t*>(b.data()); }
 
 // ---------------------------------------------------------------------------
 // The card's /.player, and the fixtures'.
@@ -199,8 +209,13 @@ cc::msmf::Acks acksOf(const minijson::Value& v) {
   return a;
 }
 
-const char* const kLogNames[sf::kFiles] = {"plays.jnl",   "plays.1.jnl", "plays.2.jnl", "plays.3.jnl", "plays.4.jnl",
-                                           "plays.5.jnl", "plays.6.jnl", "plays.7.jnl", "plays.8.jnl", "plays.9.jnl"};
+// A stats.bin's section offset and its rows' count (its directory).
+const cc::Section sectionOf(const Bytes& b, sf::Sec sec) {
+  cc::MemSource src(b.data(), static_cast<uint32_t>(b.size()));
+  cc::Container c;
+  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(c.open(src, sx::kStatsSpec, nullptr)));
+  return c.section(sec);
+}
 
 // The twins a cut rename of stats.tmp leaves, parted (a disk check) and
 // collected, as the next settle() does (2.12.6).
@@ -261,40 +276,109 @@ void onOp(void* ctx, Journal::Op o, const char* a, const char* b, uint64_t n) {
   v->push_back(t);
 }
 
+// The scan's card faults a fixture names (`unread`): a log file's open the
+// card fails, or its reads from a slot on; a replace() that fails (statsref's
+// replaceFails: at stats.bin's remove, or with no stats.bin at the tmp's
+// rename); the rest as FaultFs's.
+struct ScanFaults : FaultFs {
+  using FaultFs::FaultFs;
+  std::set<std::string> openFails;
+  int failBinRemoves = 0, failTmpRenames = 0;
+  tagstore::File* openRead(const char* p, bool* cardFailed) override {
+    if (openFails.count(p)) {
+      *cardFailed = true;
+      return nullptr;
+    }
+    return FaultFs::openRead(p, cardFailed);
+  }
+  bool remove(const char* p) override {
+    if (failBinRemoves > 0 && std::strcmp(p, sx::kStatsBin) == 0) {
+      --failBinRemoves;
+      return false;
+    }
+    return FaultFs::remove(p);
+  }
+  bool rename(const char* from, const char* to) override {
+    if (failTmpRenames > 0 && std::strcmp(from, sx::kStatsTmp) == 0 && std::strcmp(to, sx::kStatsBin) == 0) {
+      --failTmpRenames;
+      return false;
+    }
+    return FaultFs::rename(from, to);
+  }
+  void unread(const minijson::Value& u) {
+    openFails.clear();
+    badPath.clear();
+    bad = faultfs::Knob();
+    for (const auto& m : u.members) {
+      if (m.second.isNull()) {
+        openFails.insert(kDir + m.first);
+      } else {
+        TEST_ASSERT_TRUE_MESSAGE(badPath.empty(), "one log file's reads fail at a time");
+        badPath = kDir + m.first;
+        badFrom = static_cast<uint32_t>(m.second.u64()) * pl::kSlot;
+        badTo = 0xFFFFFFFFu;
+        bad.fail = -1;
+      }
+    }
+  }
+  void healed() { unread(minijson::Value()); }
+};
+
 // ---------------------------------------------------------------------------
 // The glue: lib/core StatsGlue, the firmware's own (app/ListeningStats wraps
-// it: docs/LISTENING-STATS.md 5.4-5.7, 9.5 C9), with a test's Env around it:
-// the calls it made, in order; the log's files on the card at each save the
-// store was asked for; a full card at a save; the board's clocks.
+// it: docs/LISTENING-STATS.md 5.4-5.7, 5.14), with a test's Env around it:
+// the calls it made, in order, and each save's outcome as statsref names
+// them; the log's files on the card at each boot's or rotation's save the
+// store was asked for; a full card at a save; a replace() that fails; the
+// board's clocks.
 // ---------------------------------------------------------------------------
-struct Glue final : statsglue::Env {
-  Glue(tagstore::Fs& fs, CutFs& card, sf::s1::Fold::AllocFn a, sf::s1::Fold::FreeFn f)
-      : core(fs, *this, a, f),
+// A save's outcome as statsref's sessions name it.
+std::string outcomeName(sg::Refused r, const sx::SaveReport& rep) {
+  if (r != sg::Refused::None) return sg::refusedName(r);
+  switch (rep.what) {
+    case sx::Saved::Wrote: return "wrote";
+    case sx::Saved::Nothing: return "nothing";
+    case sx::Saved::Held: return "held";
+    case sx::Saved::Failed: return "failed";
+    case sx::Saved::Changed: return "changed";
+    case sx::Saved::Off: return "off";
+    case sx::Saved::NoMemory: return "noMemory";
+    case sx::Saved::Behind:
+    case sx::Saved::Damaged: return "behind";
+  }
+  return "?";
+}
+
+struct Glue final : sg::Env {
+  Glue(tagstore::Fs& fs, CutFs& card, const sg::Memory& m, ScanFaults* faults)
+      : core(fs, *this, m),
         fold(core.fold()),
         store(core.store()),
         first(core.first()),
         opened(core.opened()),
         last(core.last()),
-        card_(card) {}
-  statsglue::Glue core;
-  sf::s1::Fold& fold;
+        card_(card),
+        faults_(faults) {}
+  sg::Glue core;
+  sf::Fold& fold;
   sx::Store& store;
   const sx::Opened& first;   // the boot's read
   const sx::Opened& opened;  // the last read (a remount's)
   const sx::SaveReport& last;
   cc::msmf::Acks acks;      // the root's
   sx::SaveAsk ask;          // the board's clock, the root's commitTime, the update step's safe point
-  bool saveFails = false;   // a full card at a save: each of its steps refused
+  int saveFails = 0;        // the next saves that fail (a full card at each of their steps); -1: every one
+  bool replaceFails = false;  // each save's replace() fails (its tmp held)
   bool away = false;        // the card out of the slot, refusing writes, or another card in it
   std::function<uint64_t()> mono;    // the board's monotonic clock
   std::function<void()> beforeSave;  // (a test's: a cut's set-up)
   std::vector<std::string> calls;
+  std::vector<std::pair<sg::Kind, std::string>> saves;  // each save asked and its outcome
   std::vector<std::string> seen;  // the log's files on the card at each boot's or rotation's save the store was asked for
 
   // PlayHistory::begin(): the read, before the journal's begin().
   sx::Opened read(sx::Store::WaitFn wait) {
     const sx::Opened& o = core.begin(acks, wait);
-    TEST_ASSERT_FALSE(o.read == sx::Read::NoMemory);
     return o;
   }
   void reserve(uint32_t slots) { core.reserve(slots); }
@@ -303,40 +387,50 @@ struct Glue final : statsglue::Env {
   void ready() { core.ready(); }
   // Outbox::Env::written(): the live fold.
   void written(const Slot& s) { core.written(s); }
-  // Hs: the rotation's path (never a compaction).
+  // Hs: never a compaction.
   bool hs() { return core.hs(false); }
   // The orderly end's flush (app/PlayHistory: the ending flag, the 3 s
-  // budget): the boot's save refused; a rotation's with 1 s of it left.
+  // budget): the boot's and the records' save refused; a rotation's with 1 s
+  // of it left.
   void ending(uint64_t until) { core.ending(until); }
   void notEnding() { core.notEnding(); }
+  // The last save's outcome (statsref's name).
+  std::string outcome() const { return outcomeName(core.lastRefused(), core.last()); }
 
   // statsglue::Env
   uint64_t monoMs() override { return mono ? mono() : 0; }
   bool cardAway() override { return away; }
-  void asking(statsglue::Kind k, sx::SaveAsk* a) override {
+  void asking(sg::Kind k, sx::SaveAsk* a) override {
     *a = ask;
-    if (k != statsglue::Kind::Hs) {
+    if (k == sg::Kind::Boot || k == sg::Kind::Rotation) {
       std::string names;
       for (const char* n : {kPrev, kLog})
         if (card_.dir.count(n)) names += (names.empty() ? "" : " ") + base(n);
       seen.push_back(names);
       if (beforeSave) beforeSave();
     }
-    if (saveFails) card_.refuse = true;
+    if (saveFails) {
+      card_.refuse = true;
+      if (saveFails > 0) --saveFails;
+    }
+    if (replaceFails && faults_) faults_->failBinRemoves = faults_->failTmpRenames = 1;
   }
   void began(bool again, const sx::Opened*) override { calls.push_back(again ? "began again" : "began"); }
   void partialFile() override { calls.push_back("partial"); }
-  void saved(statsglue::Kind k, statsglue::Refused r, const sx::SaveReport& rep) override {
+  void saved(sg::Kind k, sg::Refused r, const sx::SaveReport& rep) override {
     card_.refuse = false;
-    const std::string name = k == statsglue::Kind::Boot       ? "save boot"
-                             : k == statsglue::Kind::Rotation ? "save rotation"
-                             : k == statsglue::Kind::GiveBack ? "save give-back"
-                                                              : "hs";
-    calls.push_back(r == statsglue::Refused::None && sx::savedOk(rep.what) ? name : name + " (no)");
+    if (faults_) faults_->failBinRemoves = faults_->failTmpRenames = 0;
+    const std::string name = k == sg::Kind::Boot       ? "save boot"
+                             : k == sg::Kind::Rotation ? "save rotation"
+                             : k == sg::Kind::Records  ? "save records"
+                                                       : "hs";
+    calls.push_back(r == sg::Refused::None && sx::savedOk(rep.what) ? name : name + " (no)");
+    saves.emplace_back(k, outcomeName(r, rep));
   }
 
 private:
   CutFs& card_;
+  ScanFaults* faults_;
 };
 
 // ---------------------------------------------------------------------------
@@ -395,7 +489,8 @@ struct PlaySpec {
 struct BootAsk {
   cc::msmf::Acks acks;
   sx::SaveAsk ask;
-  bool saveFails = false;
+  int saveFails = 0;  // the boot's save and its tries: 0 none, n the first n, -1 every one
+  bool replaceFails = false;
 };
 
 struct Player {
@@ -404,6 +499,7 @@ struct Player {
   }
   CutFs& card;
   tagstore::Fs* fs;
+  ScanFaults* faults = nullptr;  // (the replace() knobs, when fs is one)
   uint8_t id[6];
   uint32_t cap;
   MemNvs nvs;
@@ -411,9 +507,9 @@ struct Player {
   std::vector<std::string> ops;
   std::vector<uint8_t> buf = std::vector<uint8_t>(pl::kSlot);  // a slot a read: a read fault ends a file at its slot
   uint32_t piece = 5;
-  bool stats = true;  // false: a 0.14.0 boot (no folds)
-  sf::s1::Fold::AllocFn alloc = nullptr;
-  sf::s1::Fold::FreeFn release = nullptr;
+  bool stats = true;   // false: a 0.14.0 boot (no folds)
+  bool fenced = false;  // a library update's fence is up (the records' save waits until 96; Hs refused)
+  sg::Memory mem;      // the glue's blocks (null: malloc)
   std::function<void()> afterRead;  // (a test's: between the stats' read and the journal's begin())
   std::unique_ptr<Glue> glue;
   std::unique_ptr<Journal> j;
@@ -439,11 +535,14 @@ struct Player {
     out.reset();
     tracker.reset();
     j.reset();
-    glue.reset(stats ? new Glue(*fs, card, alloc, release) : nullptr);
+    glue.reset();
+    fenced = false;
+    glue.reset(stats ? new Glue(*fs, card, mem, faults) : nullptr);
     if (glue) {
       glue->acks = b.acks;
       glue->ask = b.ask;
       glue->saveFails = b.saveFails;
+      glue->replaceFails = b.replaceFails;
       glue->mono = [this] { return oenv.now; };
       glue->read(wait);
     }
@@ -467,6 +566,18 @@ struct Player {
   bool boot(const BootAsk& b, sx::Store::WaitFn wait = waitHook) {
     begin(b, wait);
     return scan();
+  }
+  // The boot overflow's tries (statsglue's: kBootWaitsMs apart, at later
+  // passes), the board's clock moved to each; the tries made.
+  uint32_t tries() {
+    uint32_t n = 0;
+    while (glue && glue->core.retrying()) {
+      oenv.now = std::max<uint64_t>(oenv.now, glue->core.retryAtMs());
+      TEST_ASSERT_TRUE(glue->core.retryDue());
+      glue->core.retry();
+      ++n;
+    }
+    return n;
   }
   std::set<std::string> trimmed() const {
     std::set<std::string> t;
@@ -510,40 +621,12 @@ BootAsk askOf(const minijson::Value& b) {
   a.ask.commitSec = b["commitTime"].u64();
   a.ask.playing = b["playing"].boolean();
   a.ask.safePoint = b["safePoint"].boolean();
-  a.saveFails = b["saveFails"].boolean();
+  // (saveFails: true, every try; a number n, the first n.)
+  const minijson::Value& f = b["saveFails"];
+  a.saveFails = f.type == minijson::Value::Bool ? (f.boolean() ? -1 : 0) : static_cast<int>(f.u64());
+  a.replaceFails = b["replaceFails"].boolean();
   return a;
 }
-
-// The scan's card faults a fixture names (`unread`): a log file's open the
-// card fails, or its reads from a slot on; the rest as FaultFs's.
-struct ScanFaults : FaultFs {
-  using FaultFs::FaultFs;
-  std::set<std::string> openFails;
-  tagstore::File* openRead(const char* p, bool* cardFailed) override {
-    if (openFails.count(p)) {
-      *cardFailed = true;
-      return nullptr;
-    }
-    return FaultFs::openRead(p, cardFailed);
-  }
-  void unread(const minijson::Value& u) {
-    openFails.clear();
-    badPath.clear();
-    bad = faultfs::Knob();
-    for (const auto& m : u.members) {
-      if (m.second.isNull()) {
-        openFails.insert(kDir + m.first);
-      } else {
-        TEST_ASSERT_TRUE_MESSAGE(badPath.empty(), "one log file's reads fail at a time");
-        badPath = kDir + m.first;
-        badFrom = static_cast<uint32_t>(m.second.u64()) * pl::kSlot;
-        badTo = 0xFFFFFFFFu;
-        bad.fail = -1;
-      }
-    }
-  }
-  void healed() { unread(minijson::Value()); }
-};
 
 // A fixture's device on a card: NVS holds its epoch (new-epoch's is erased,
 // and draws it).
@@ -603,6 +686,7 @@ void sameOutcome(const minijson::Value& b, const Outcome& o, const std::string& 
 // `faults` (over `card`); the outcome, and the player kept for more.
 Outcome fixtureBoot(Player& p, ScanFaults& faults, const minijson::Value& b) {
   p.fs = &faults;
+  p.faults = &faults;
   faults.unread(b["unread"]);
   gWaits.clear();
   TEST_ASSERT_TRUE(p.boot(askOf(b)));
@@ -616,13 +700,30 @@ std::string what(const minijson::Value& sc, size_t k, const char* more = "") {
   return w;
 }
 
+// A card's stats as a boot reads them (a fold and a store of their own).
+struct Read {
+  sf::Fold fold;
+  sx::Store store;
+  sx::Opened o;
+  explicit Read(tagstore::Fs& fs) : store(fs) {
+    Work work;
+    o = store.read(fold, work.p(), nullptr);
+  }
+};
+
+// stats.bin's rows (its directory), as H reads them.
+uint32_t rowsOf(CutFs& card, sf::Sec sec) {
+  const Bytes b = bytesOf(card, "stats.bin");
+  return b.empty() ? 0 : sectionOf(b, sec).count;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
 // Every boot of every fixture, through the journal.
 // ---------------------------------------------------------------------------
 void test_every_fixture_through_the_journal() {
-  int boots = 0, saves = 0, compactions = 0, trims = 0;
+  int boots = 0, saves = 0, compactions = 0, trims = 0, past = 0;
   for (size_t i = 0; i < gIndex.size(); ++i) {
     const minijson::Value& sc = gIndex[i];
     CutFs card;
@@ -655,6 +756,10 @@ void test_every_fixture_through_the_journal() {
         const bool off = !sx::statsOn(g.first.read) || b["saveFails"].boolean();
         TEST_ASSERT_EQUAL_STRING_MESSAGE(off ? "save boot (no)" : "save boot", g.calls[1].c_str(), w.c_str());
       }
+      // The scan's blocks given back by its end (none held but an overflow
+      // whose save is tried again).
+      TEST_ASSERT_FALSE_MESSAGE(g.core.rangesHeld(), w.c_str());
+      if (!g.core.retrying()) TEST_ASSERT_FALSE_MESSAGE(g.core.scanHolds(), w.c_str());
       if (sc["name"].str() == "new-epoch") {
         TEST_ASSERT_TRUE(p.j->newEpoch());
         TEST_ASSERT_EQUAL_UINT32(3, p.j->booted().slots);  // (0.14.0's scan read none: a new epoch, no ACKS)
@@ -663,14 +768,16 @@ void test_every_fixture_through_the_journal() {
       saves += o.saved;
       compactions += o.compacted;
       trims += static_cast<int>(o.trimmed.size());
+      past += g.fold.folded() > sf::kRecords;
     }
   }
-  printf("fixtures through the journal: %d boots, %d saves, %d bases, %d files trimmed\n", boots, saves, compactions,
-         trims);
+  printf("fixtures through the journal: %d boots, %d saves, %d bases, %d files trimmed, %d past the records\n", boots,
+         saves, compactions, trims, past);
   TEST_ASSERT_EQUAL_INT(34, boots);
   TEST_ASSERT_EQUAL_INT(25, saves);
   TEST_ASSERT_EQUAL_INT(4, compactions);
   TEST_ASSERT_EQUAL_INT(22, trims);
+  TEST_ASSERT_EQUAL_INT(2, past);
 }
 
 // A remount in the boot's scan (after its first piece): the folds made
@@ -692,12 +799,14 @@ void test_a_remount_mid_scan_and_after_ready() {
       Player p(card, (const uint8_t*)"\0\0\0\0\0\1");
       deviceFor(p, sc);
       p.fs = &faults;
+      p.faults = &faults;
       p.piece = 2;
       p.begin(askOf(b));
       p.glue->reserve(1);
       const bool done = p.j->scan(1);  // (one slot read: every fixture's log has more)
       TEST_ASSERT_FALSE_MESSAGE(done, w.c_str());
       p.j->remounted();
+      TEST_ASSERT_FALSE_MESSAGE(p.glue->core.scanHolds(), w.c_str());  // (the fold's blocks given back at once)
       TEST_ASSERT_TRUE_MESSAGE(p.scan(), w.c_str());
       TEST_ASSERT_EQUAL_STRING_MESSAGE("began again", p.glue->calls[1].c_str(), w.c_str());
       Outcome o = outcomeOf(p);
@@ -912,8 +1021,9 @@ void test_a_held_tmp() {
   const minijson::Value& sc = scenario("worked-example");
   const minijson::Value& b = sc["boots"][0];
   const Files in = cardOf(b["in"]), want = cardOf(b["out"]);
-  // Promoted by Hs, the rotation's path: the same stats, the next
-  // generation (the held tmp a save that landed).
+  // Promoted by Hs: the held tmp is the boot's save whole (5.14's Held: the
+  // records emptied, HEAD the plan's, the card's MARK the one before until
+  // the promotion), and nothing new came since, so Hs writes nothing more.
   {
     CutFs card;
     put(card, in);
@@ -926,17 +1036,15 @@ void test_a_held_tmp() {
     p.scan();
     TEST_ASSERT_EQUAL_STRING("held", sx::savedName(p.glue->last.what));
     TEST_ASSERT_TRUE(p.glue->store.held());
+    TEST_ASSERT_EQUAL_UINT32(0, p.glue->fold.records());
     TEST_ASSERT_EQUAL_UINT32(0, card.dir.count(sx::kStatsBin));
     TEST_ASSERT_TRUE(bytesOf(card, "stats.tmp") == want.at("stats.bin"));
     TEST_ASSERT_TRUE(p.trimmed().empty());  // (the MARK read at the boot, 41, doesn't cover plays.1.jnl)
     TEST_ASSERT_TRUE(p.glue->hs());
     TEST_ASSERT_TRUE(p.glue->last.heldPromoted);
+    TEST_ASSERT_EQUAL_STRING("nothing new", sx::savedName(p.glue->last.what));
     TEST_ASSERT_EQUAL_UINT32(0, card.dir.count(sx::kStatsTmp));
-    const Bytes bin = bytesOf(card, "stats.bin");
-    const Bytes w = want.at("stats.bin");
-    TEST_ASSERT_EQUAL_UINT32(cc::get32(reinterpret_cast<const uint8_t*>(w.data()) + 20) + 1,
-                             cc::get32(reinterpret_cast<const uint8_t*>(bin.data()) + 20));
-    TEST_ASSERT_TRUE(bin.substr(40) == w.substr(40));  // (all but the header: the generation and its CRC)
+    TEST_ASSERT_TRUE(bytesOf(card, "stats.bin") == want.at("stats.bin"));
     // The next boot reads it, folds nothing, and trims what it covers.
     Player q(card, p.id);
     q.nvs = p.nvs;
@@ -944,9 +1052,7 @@ void test_a_held_tmp() {
     TEST_ASSERT_EQUAL_STRING("loaded", sx::readName(q.glue->first.read));
     TEST_ASSERT_EQUAL_UINT32(0, q.glue->fold.folded());
     TEST_ASSERT_TRUE((q.trimmed() == std::set<std::string>{"plays.1.jnl"}));
-    Files got = filesOf(card);
-    got["stats.bin"] = w;
-    sameFiles(want, got, "a held tmp, promoted");
+    sameFiles(want, filesOf(card), "a held tmp, promoted");
   }
   // Dropped by a reboot's settle() while stats.bin is there: the next boot
   // folds 42-48 again, and the card is the uncut boot's.
@@ -976,8 +1082,9 @@ void test_a_held_tmp() {
 // ---------------------------------------------------------------------------
 // The base faulted at the boot: its open, its header's read (each for good,
 // through the boot's waits): Unread, never a lost base; stats off, so no
-// fold, no save and no trim, and no stats-<n>.bin removed. The card
-// answering again, the next boot is the fixture's.
+// fold, no save and no trim, and no stats-<n>.bin removed; nothing held for
+// the stats but the glue's object. The card answering again, the next boot
+// is the fixture's.
 // ---------------------------------------------------------------------------
 void test_the_base_faulted_at_the_boot() {
   const minijson::Value& sc = scenario("base-neighbours");
@@ -990,19 +1097,17 @@ void test_the_base_faulted_at_the_boot() {
     card.faultFrom = from;
     Player p(card, (const uint8_t*)"\0\0\0\0\0\1");
     deviceFor(p, sc);
-    p.alloc = heapAlloc;
-    p.release = heapFree;
+    p.mem.alloc = heapAlloc;
+    p.mem.release = heapFree;
     const size_t held0 = gHeap.held;
     gWaits.clear();
     p.boot(askOf(b));
     const char* w = from == 0 ? "the base's open" : "the base's header";
-    // The stats off: every block of the fold given back (stats.bin's chunks
-    // and the spare were carved before its base failed), nothing held for
-    // the session.
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(0, p.glue->fold.held(), w);
+    // The stats off: nothing held for them (the read's work memory given
+    // back; no ranges' block, no chunk).
     TEST_ASSERT_EQUAL_size_t_MESSAGE(held0, gHeap.held, w);
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, p.glue->fold.chunks(sf::kTrkd) + p.glue->fold.chunks(sf::kRcnt), w);
-    TEST_ASSERT_FALSE_MESSAGE(p.glue->fold.spare(), w);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, p.glue->fold.chunks(), w);
+    TEST_ASSERT_FALSE_MESSAGE(p.glue->core.scanHolds(), w);
     TEST_ASSERT_EQUAL_STRING_MESSAGE("unread", sx::readName(p.glue->first.read), w);
     TEST_ASSERT_EQUAL_STRING_MESSAGE("io", cc::whyName(p.glue->first.why), w);
     TEST_ASSERT_TRUE_MESSAGE(p.glue->first.inBase, w);
@@ -1019,12 +1124,13 @@ void test_the_base_faulted_at_the_boot() {
     q.boot(askOf(b));
     sameOutcome(b, outcomeOf(q), w);
     sameFiles(cardOf(b["out"]), filesOf(card), w);
-    // A remount's read, the card whole now: the fold's blocks carved again.
+    // A remount's read, the card whole now: the stats on again, MARK loaded.
     p.j->remounted();
     TEST_ASSERT_TRUE_MESSAGE(p.scan(), w);
     TEST_ASSERT_EQUAL_STRING_MESSAGE("loaded", sx::readName(p.glue->opened.read), w);
     TEST_ASSERT_TRUE_MESSAGE(p.glue->core.on(), w);
-    TEST_ASSERT_TRUE_MESSAGE(p.glue->fold.held() > 0, w);
+    TEST_ASSERT_TRUE_MESSAGE(p.glue->fold.marks() > 0, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(held0, gHeap.held, w);
   }
 }
 
@@ -1046,17 +1152,22 @@ void test_first_at_orders_and_the_retention() {
   Player p(card, (const uint8_t*)"\0\0\0\0\0\1");
   deviceFor(p, ca);
   fixtureBoot(p, faults, ca["boots"][0]);
-  const uint32_t hour1 = p.glue->fold.rows(sf::kHour), days1 = p.glue->fold.rows(sf::kDays);
-  const uint32_t rcnt1 = p.glue->fold.rows(sf::kRcnt);
+  const uint32_t hour1 = rowsOf(card, sf::kHour), days1 = rowsOf(card, sf::kDays);
+  const uint32_t rcnt1 = rowsOf(card, sf::kRcnt);
   put(card, {{"plays.jnl", cardOf(ca["boots"][1]["in"]).at("plays.jnl")}});
   fixtureBoot(p, faults, ca["boots"][1]);
   TEST_ASSERT_EQUAL_UINT32(41, hour1);
   TEST_ASSERT_EQUAL_UINT32(41, days1);
   TEST_ASSERT_EQUAL_UINT32(1, rcnt1);
-  TEST_ASSERT_EQUAL_UINT32(hour1 + 1, p.glue->fold.rows(sf::kHour));
-  TEST_ASSERT_EQUAL_UINT32(days1 + 1, p.glue->fold.rows(sf::kDays));
-  TEST_ASSERT_EQUAL_UINT32(2, p.glue->fold.rows(sf::kRcnt));
+  TEST_ASSERT_EQUAL_UINT32(hour1 + 1, rowsOf(card, sf::kHour));
+  TEST_ASSERT_EQUAL_UINT32(days1 + 1, rowsOf(card, sf::kDays));
+  TEST_ASSERT_EQUAL_UINT32(2, rowsOf(card, sf::kRcnt));
   sameFiles(cardOf(ca["boots"][1]["out"]), filesOf(card), "clock-ahead");
+  // H reads the same rows from the card's directory.
+  const sg::Glue::FileLook l = p.glue->core.lookFile();
+  TEST_ASSERT_TRUE(l.there && l.frame);
+  TEST_ASSERT_EQUAL_UINT32(hour1 + 1, l.rows[sf::kHour]);
+  TEST_ASSERT_EQUAL_UINT32(2, l.rows[sf::kRcnt]);
   // A save with the clock unset; a foreign slot dated 2099 (sinceDay not
   // after today, nothing pruned by it).
   TEST_ASSERT_TRUE(scenario("no-clock")["boots"][0]["now"].isNull());
@@ -1068,52 +1179,66 @@ void test_first_at_orders_and_the_retention() {
 
 // ---------------------------------------------------------------------------
 // A full log never synced: both files at the cap, 13,106 slots, through the
-// journal's scan; TRKD's rows the distinct hashes. The peak of the fold's
-// blocks and the microseconds a slot (the scan and the fold), printed.
+// journal's scan. The overflow past the 96 records in 16 chunks, carved
+// through the glue's top hook before each piece (app/PlayHistory's 128
+// slots), held while the scan runs (a track's start and a library update
+// wait meanwhile), given back by the boot's save with the ranges' block;
+// TRKD's rows the distinct hashes. The peak bytes and the microseconds a
+// slot, printed.
 // ---------------------------------------------------------------------------
+namespace {
+// The slots of a full log never synced (the cap twice: plays.1.jnl the
+// older), their distinct hashes and plays.
+struct FullLog {
+  std::vector<uint8_t> files[2];
+  std::set<uint64_t> hashes;
+  uint64_t plays = 0;
+  FullLog(const uint8_t dev[6], uint64_t epoch) {
+    uint64_t x = 2026;
+    for (uint32_t q = 1; q <= 2 * pl::kFileSlots; ++q) {
+      x ^= x << 13;
+      x ^= x >> 7;
+      x ^= x << 17;
+      Slot s;
+      s.kind = pl::kKindPlay;
+      s.outcome = static_cast<uint8_t>(1 + x % 3);
+      s.source = static_cast<uint8_t>(x % 4);
+      s.clock = pl::kClockRtc;
+      s.seq = q;
+      s.epoch = epoch;
+      std::memcpy(s.deviceId, dev, 6);
+      s.startedAt = sf::kMinMs + static_cast<uint64_t>(q / 25) * sf::kDayMs + (q % 25) * sf::kHourMs / 2;
+      s.bootSeq = 1 + q / 100;
+      s.uptimeMs = q * 1000;
+      s.playedMs = 30000 + static_cast<uint32_t>(x % 200000);
+      s.durationMs = 200000;
+      const uint32_t track = static_cast<uint32_t>((x >> 20) % 5000);
+      s.pathHash = cc::fnv1a64(&track, sizeof(track));
+      hashes.insert(s.pathHash);
+      plays += sf::isPlay(s);
+      uint8_t b[pl::kSlot];
+      pl::encode(s, b);
+      std::vector<uint8_t>& f = files[q <= pl::kFileSlots ? 1 : 0];  // plays.1.jnl the older
+      f.insert(f.end(), b, b + pl::kSlot);
+    }
+  }
+};
+}  // namespace
+
 void test_a_full_log_never_synced() {
   const uint8_t dev[6] = {0x00, 0x00, 0x5e, 0x00, 0x53, 0x01};
   const uint64_t epoch = 0x1122334455667788ull;
   CutFs card;
-  std::set<uint64_t> hashes;
-  uint64_t x = 2026;
-  uint64_t plays = 0;
-  std::vector<uint8_t> files[2];
-  for (uint32_t q = 1; q <= 2 * pl::kFileSlots; ++q) {
-    x ^= x << 13;
-    x ^= x >> 7;
-    x ^= x << 17;
-    Slot s;
-    s.kind = pl::kKindPlay;
-    s.outcome = static_cast<uint8_t>(1 + x % 3);
-    s.source = static_cast<uint8_t>(x % 4);
-    s.clock = pl::kClockRtc;
-    s.seq = q;
-    s.epoch = epoch;
-    std::memcpy(s.deviceId, dev, 6);
-    s.startedAt = sf::kMinMs + static_cast<uint64_t>(q / 25) * sf::kDayMs + (q % 25) * sf::kHourMs / 2;
-    s.bootSeq = 1 + q / 100;
-    s.uptimeMs = q * 1000;
-    s.playedMs = 30000 + static_cast<uint32_t>(x % 200000);
-    s.durationMs = 200000;
-    const uint32_t track = static_cast<uint32_t>((x >> 20) % 5000);
-    s.pathHash = cc::fnv1a64(&track, sizeof(track));
-    hashes.insert(s.pathHash);
-    plays += sf::isPlay(s);
-    uint8_t b[pl::kSlot];
-    pl::encode(s, b);
-    std::vector<uint8_t>& f = files[q <= pl::kFileSlots ? 1 : 0];  // plays.1.jnl the older
-    f.insert(f.end(), b, b + pl::kSlot);
-  }
-  card.put(kLog, files[0]);
-  card.put(kPrev, files[1]);
+  const FullLog log(dev, epoch);
+  card.put(kLog, log.files[0]);
+  card.put(kPrev, log.files[1]);
   Player p(card, dev);
   p.nvs.ids.epoch = epoch;
   p.nvs.ids.seq = 2 * pl::kFileSlots;
   p.buf.assign(pl::kReadBytes, 0);  // the firmware's: 32 slots a read
   p.piece = 128;                    // app/PlayHistory's piece
-  p.alloc = heapAlloc;
-  p.release = heapFree;
+  p.mem.alloc = heapAlloc;
+  p.mem.release = heapFree;
   gHeap = Heap();
   BootAsk a;
   a.ask.nowMs = sf::kMinMs + 530ull * sf::kDayMs;
@@ -1122,39 +1247,59 @@ void test_a_full_log_never_synced() {
   p.begin(a);
   const size_t atRead = gHeap.held;
   gHeap.peak = gHeap.held;
-  p.glue->fold.resetPeak();
+  // The scan, a piece a call; the holds seen between its pieces.
+  bool held = false, waits = false;
   const auto t0 = std::chrono::steady_clock::now();
-  TEST_ASSERT_TRUE(p.scan());
+  for (int guard = 0; guard < 1000000; ++guard) {
+    p.glue->reserve(p.piece);
+    held = held || p.glue->core.overflowHeld();
+    waits = waits || p.glue->core.scanHolds();
+    if (p.j->scan(p.piece)) break;
+  }
+  p.glue->ready();
   const auto t1 = std::chrono::steady_clock::now();
+  TEST_ASSERT_TRUE(p.j->ready());
   const Glue& g = *p.glue;
+  TEST_ASSERT_TRUE(held && waits);
   TEST_ASSERT_EQUAL_UINT32(2 * pl::kFileSlots, g.fold.folded());
-  TEST_ASSERT_EQUAL_UINT32(hashes.size(), g.fold.rows(sf::kTrkd));
-  TEST_ASSERT_EQUAL_UINT64(plays, g.fold.head().plays);
+  TEST_ASSERT_EQUAL_UINT64(log.plays, g.fold.head().plays);
   TEST_ASSERT_EQUAL_UINT64(2 * pl::kFileSlots, g.fold.head().slots);
   TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(g.last.what));
+  TEST_ASSERT_EQUAL_UINT32(log.hashes.size(), g.last.rows[sf::kTrkd]);
   TEST_ASSERT_FALSE(g.fold.noMemory());
+  // Every block given back by the save: the chunks, the ranges' block, the
+  // save's work memory.
+  TEST_ASSERT_EQUAL_UINT32(0, g.fold.chunks());
+  TEST_ASSERT_EQUAL_UINT32(0, g.fold.records());
+  TEST_ASSERT_FALSE(g.core.scanHolds());
+  TEST_ASSERT_FALSE(g.core.overflowHeld());
+  TEST_ASSERT_EQUAL_size_t(atRead, gHeap.held);
+  TEST_ASSERT_EQUAL_size_t(sf::kMaxChunks * sf::kChunkBytes, g.fold.peak());
+  // The peak: the 16 chunks, the ranges' block and the save's work memory.
+  TEST_ASSERT_TRUE(gHeap.peak <= atRead + g.fold.peak() + g.core.rangesBytes() + sx::kWorkBytes);
   const double us = std::chrono::duration<double, std::micro>(t1 - t0).count();
   printf("a full log never synced, through the journal: %u slots, %u hashes (TRKD %u rows), RCNT %u rows after the "
-         "save; the fold's peak %u bytes (the heap's %u, %u at the read); %.2f us a slot on this host (the scan, the "
-         "fold, the save); stats.bin %u bytes\n",
-         static_cast<unsigned>(2 * pl::kFileSlots), static_cast<unsigned>(hashes.size()),
-         static_cast<unsigned>(g.fold.rows(sf::kTrkd)), static_cast<unsigned>(g.fold.rows(sf::kRcnt)),
-         static_cast<unsigned>(g.fold.peak()), static_cast<unsigned>(gHeap.peak), static_cast<unsigned>(atRead),
-         us / (2 * pl::kFileSlots), static_cast<unsigned>(g.last.bytes));
-  TEST_ASSERT_TRUE(g.fold.peak() < 512 * 1024);
+         "save; the overflow's peak %u bytes in %u chunks, the ranges' block %u, the heap's peak %u over the read's "
+         "%u; %.2f us a slot on this host (the scan, the fold, the save); stats.bin %u bytes\n",
+         static_cast<unsigned>(2 * pl::kFileSlots), static_cast<unsigned>(log.hashes.size()),
+         static_cast<unsigned>(g.last.rows[sf::kTrkd]), static_cast<unsigned>(g.last.rows[sf::kRcnt]),
+         static_cast<unsigned>(g.fold.peak()), static_cast<unsigned>(sf::kMaxChunks),
+         static_cast<unsigned>(g.core.rangesBytes()), static_cast<unsigned>(gHeap.peak - atRead),
+         static_cast<unsigned>(atRead), us / (2 * pl::kFileSlots), static_cast<unsigned>(g.last.bytes));
   // Read back by the next boot: the same rows, nothing folded again.
   Player q(card, dev);
   q.nvs = p.nvs;
   q.boot(a);
   TEST_ASSERT_EQUAL_STRING("loaded", sx::readName(q.glue->first.read));
   TEST_ASSERT_EQUAL_UINT32(0, q.glue->fold.folded());
-  TEST_ASSERT_EQUAL_UINT32(hashes.size(), q.glue->fold.rows(sf::kTrkd));
-  TEST_ASSERT_EQUAL_UINT64(plays, q.glue->fold.head().plays);
+  TEST_ASSERT_EQUAL_UINT32(log.hashes.size(), rowsOf(card, sf::kTrkd));
+  TEST_ASSERT_EQUAL_UINT64(log.plays, q.glue->fold.head().plays);
 }
 
 // ---------------------------------------------------------------------------
 // The sessions (stats/sessions.json): each step through the firmware's
-// code, the card after it compared with statsref's, file for file.
+// code, the card after it compared with statsref's, file for file; each
+// save's outcome, the records and behind after each step.
 // ---------------------------------------------------------------------------
 namespace {
 
@@ -1172,40 +1317,114 @@ const minijson::Value& session(const char* name) {
   return gSessions[0];
 }
 
-PlaySpec playOf(const minijson::Value& st) {
+// A play's fields: a play step's own (`i` SIZE_MAX), or a batch's column i.
+PlaySpec playOf(const minijson::Value& st, size_t i = SIZE_MAX) {
+  auto col = [&](const char* k) -> const minijson::Value& { return i == SIZE_MAX ? st[k] : st["plays"][k][i]; };
   PlaySpec p;
-  p.hash = st["hash"].u64();
-  p.played = static_cast<uint32_t>(st["played"].u64());
-  p.duration = static_cast<uint32_t>(st["duration"].u64());
-  p.outcome = static_cast<uint8_t>(st["outcome"].u64());
-  p.source = static_cast<uint8_t>(st["src"].u64());
-  p.at = st["at"].u64();
-  p.up = static_cast<uint32_t>(st["up"].u64());
-  p.size = static_cast<uint32_t>(st["size"].u64());
-  p.fatTime = static_cast<uint32_t>(st["fatTime"].u64());
-  p.generation = static_cast<uint32_t>(st["generation"].u64());
+  p.hash = col("hash").u64();
+  p.played = static_cast<uint32_t>(col("played").u64());
+  p.duration = static_cast<uint32_t>(col("duration").u64());
+  p.outcome = static_cast<uint8_t>(col("outcome").u64());
+  p.source = static_cast<uint8_t>(col("src").u64());
+  p.at = col("at").u64();
+  p.up = static_cast<uint32_t>(col("up").u64());
+  p.size = static_cast<uint32_t>(col("size").u64());
+  p.fatTime = static_cast<uint32_t>(col("fatTime").u64());
+  p.generation = static_cast<uint32_t>(col("generation").u64());
   return p;
 }
 
 // A stats.bin's TRKD rows, by hash.
 std::map<uint64_t, sf::Track> tracksOf(const Bytes& b) {
-  cc::MemSource src(b.data(), static_cast<uint32_t>(b.size()));
-  cc::Container c;
-  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(c.open(src, sx::kStatsSpec, nullptr)));
-  const cc::Section& s = c.section(sf::kTrkd);
+  const cc::Section s = sectionOf(b, sf::kTrkd);
   std::map<uint64_t, sf::Track> out;
   for (uint32_t i = 0; i < s.count; ++i) {
-    const sf::Track t = sf::decodeTrack(reinterpret_cast<const uint8_t*>(b.data()) + s.offset + i * s.stride);
+    const sf::Track t = sf::decodeTrack(u8(b) + s.offset + i * s.stride);
     out[t.hash] = t;
   }
   return out;
 }
 
+// A section's first byte flipped (XOR 0xFF), the header and the directory
+// (its CRC) as they were: statsref's `damage`.
+void damage(CutFs& card, const std::string& name, const std::string& section) {
+  Bytes b = bytesOf(card, name);
+  for (uint32_t s = 0; s < sf::kSecs; ++s)
+    if (sf::kTypes[s] == cc::get32(reinterpret_cast<const uint8_t*>(section.c_str()))) {
+      const cc::Section sec = sectionOf(b, static_cast<sf::Sec>(s));
+      TEST_ASSERT_TRUE(sec.bytes > 0);
+      b[sec.offset] = static_cast<char>(b[sec.offset] ^ 0xFF);
+    }
+  put(card, {{name, b}});
+}
+
+const char* factOf(const minijson::Value& v) { return v.isNull() ? "" : v.c_str(); }
+
+// One play of a session's player, as the firmware's loop takes it: at a
+// pass the write gate lets through, a records' save due first (before the
+// slot; statsglue::turnOf()); the slot (the journal's append: a rotation's
+// save first when plays.1.jnl holds a play the card's MARK doesn't cover);
+// under a fence, the records' save once they reach 96, whatever the fence.
+// In the orderly end's flush (`ending`): the played file's question takes
+// what leaves `left` of its 3 s budget at a rotation's save. Each save's
+// outcome against the step's facts.
+void sessionPlay(Player& p, const PlaySpec& spec, const minijson::Value& now, bool saveFails, bool replaceFails,
+                 bool ending, uint64_t left, const minijson::Value& seq, const minijson::Value& save,
+                 const minijson::Value& rotationSave, const minijson::Value& recordsSave, const std::string& w) {
+  Glue* g = p.glue.get();
+  if (g) {
+    g->ask = sx::SaveAsk();
+    g->ask.nowMs = now.isNull() ? 0 : now.u64();
+    g->saveFails = saveFails ? -1 : 0;
+    g->replaceFails = replaceFails;
+    if (ending) g->ending(p.oenv.now + 3000);
+  }
+  std::string rec, rot;
+  if (g && g->core.recordsDue(p.fenced)) {
+    g->core.recordsSave();
+    rec = g->outcome();
+  }
+  const size_t mark = g ? g->saves.size() : 0;
+  if (ending) {
+    TEST_ASSERT_NOT_NULL(g);
+    p.oenv.perStat = 3000 - left;
+    p.ended(spec);
+    const pl::Outbox::Flushed f = p.out->flush(3000, 128);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, f.written, w.c_str());
+    g->notEnding();
+    p.oenv.perStat = 0;
+  } else {
+    TEST_ASSERT_TRUE_MESSAGE(p.write(spec) == pl::Outbox::Did::Written, w.c_str());
+  }
+  for (size_t c = mark; g && c < g->saves.size(); ++c)
+    if (g->saves[c].first == sg::Kind::Rotation) rot = g->saves[c].second;
+  if (g && p.fenced && g->core.recordsDue(true)) {
+    g->core.recordsSave();
+    rec = g->outcome();
+  }
+  if (g) {
+    g->saveFails = 0;
+    g->replaceFails = false;
+  }
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(seq.u64(), p.j->lastSeq(), w.c_str());
+  TEST_ASSERT_EQUAL_STRING_MESSAGE(factOf(recordsSave), rec.c_str(), (w + ", the records' save").c_str());
+  TEST_ASSERT_EQUAL_STRING_MESSAGE(factOf(rotationSave), rot.c_str(), (w + ", the rotation's save").c_str());
+  const bool saved = rot == "wrote" || rot == "nothing";
+  TEST_ASSERT_EQUAL_MESSAGE(!save.isNull(), !rot.empty(), w.c_str());
+  if (!save.isNull()) TEST_ASSERT_EQUAL_MESSAGE(save.boolean(), saved, w.c_str());
+  // (When it ran, plays.1.jnl was still on the card: before its delete, or
+  // its rename to a twin.)
+  if (saved) TEST_ASSERT_EQUAL_STRING_MESSAGE("plays.1.jnl plays.jnl", g->seen.back().c_str(), w.c_str());
+}
+
+int gSessionSteps = 0;
+
 // One session, each step through the players' journals, glues, Trackers
 // and Outboxes over one card; the card compared after each step, and the
-// step's facts (a boot's read, folds, save and trim; a play's seq and its
-// rotation's save; Hs). The card's HEAD at the end, read back: every slot
-// but `lost`.
+// step's facts (a boot's read, folds, save, its overflow's tries and trim;
+// a play's seq, its records' and rotation's saves; Hs; the records and
+// behind after each step). The card's HEAD at the end, read back: every
+// slot but `lost`.
 sf::Head runSession(const minijson::Value& sc) {
   const std::string name = sc["name"].str();
   const uint32_t cap = static_cast<uint32_t>(sc["cap"].u64());
@@ -1218,6 +1437,7 @@ sf::Head runSession(const minijson::Value& sc) {
     deviceOf(m.second["device"].str(), dev);
     std::unique_ptr<Player> p(new Player(card, dev, cap));
     p->fs = &faults;
+    p->faults = &faults;
     for (size_t e = 0; e < m.second["epochs"].size(); ++e) p->epochs.list.push_back(m.second["epochs"][e].u64());
     const minijson::Value& nvs = m.second["nvs"];
     if (!nvs.isNull()) {
@@ -1230,96 +1450,90 @@ sf::Head runSession(const minijson::Value& sc) {
   for (size_t i = 0; i < sc["steps"].size(); ++i) {
     const minijson::Value& st = sc["steps"][i];
     const std::string doing = st["do"].str();
-    char w[160];
-    std::snprintf(w, sizeof(w), "%s, step %u (%s %s)", name.c_str(), static_cast<unsigned>(i + 1), doing.c_str(),
+    char wb[160];
+    std::snprintf(wb, sizeof(wb), "%s, step %u (%s %s)", name.c_str(), static_cast<unsigned>(i + 1), doing.c_str(),
                   st["player"].isNull() ? "" : st["player"].c_str());
+    const std::string w = wb;
     Player* p = st["player"].isNull() ? nullptr : players.at(st["player"].str()).get();
     if (doing == "boot") {
       p->stats = st["stats"].isNull() || st["stats"].boolean();
-      BootAsk a;
-      a.acks = acksOf(st["acks"]);
-      a.ask.nowMs = st["now"].isNull() ? 0 : st["now"].u64();
-      a.ask.playing = st["playing"].boolean();
-      a.ask.safePoint = st["safePoint"].boolean();
-      a.saveFails = st["saveFails"].boolean();
+      const BootAsk a = askOf(st);
       faults.unread(st["unread"]);
       gWaits.clear();
-      TEST_ASSERT_TRUE_MESSAGE(p->boot(a), w);
+      TEST_ASSERT_TRUE_MESSAGE(p->boot(a), w.c_str());
       faults.healed();
       std::set<std::string> want;
       for (size_t t = 0; t < st["trimmed"].size(); ++t) want.insert(st["trimmed"][t].str());
-      TEST_ASSERT_TRUE_MESSAGE(want == p->trimmed(), w);
-      if (p->stats) sameOutcome(st, outcomeOf(*p), w);
+      TEST_ASSERT_TRUE_MESSAGE(want == p->trimmed(), w.c_str());
+      if (p->stats) {
+        Glue& g = *p->glue;
+        Outcome o = outcomeOf(*p);
+        // The overflow's tries at later passes (kBootWaitsMs apart, the
+        // board's clock moved to each), then what the boot's save came to:
+        // any try that wrote, compacted or removed the old base.
+        while (g.core.retrying()) {
+          p->oenv.now = std::max<uint64_t>(p->oenv.now, g.core.retryAtMs());
+          TEST_ASSERT_TRUE_MESSAGE(g.core.retryDue(), w.c_str());
+          g.core.retry();
+          o.saved = o.saved || g.last.what == sx::Saved::Wrote;
+          o.compacted = o.compacted || g.last.compacted;
+          o.removed += g.last.oldBaseRemoved ? 1 : 0;
+        }
+        std::string boot;
+        for (const auto& s : g.saves)
+          if (s.first == sg::Kind::Boot) boot = s.second;
+        sameOutcome(st, o, w);
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(factOf(st["bootSave"]), boot.c_str(), w.c_str());
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(st["tries"].u64(), g.core.tries(), w.c_str());
+        TEST_ASSERT_EQUAL_MESSAGE(st["held"].boolean(), boot == "held", w.c_str());
+        TEST_ASSERT_FALSE_MESSAGE(g.core.scanHolds(), w.c_str());  // (the overflow given back: landed, or behind)
+        g.saveFails = 0;
+        g.replaceFails = false;
+      }
     } else if (doing == "play") {
-      const PlaySpec spec = playOf(st);
-      Glue* g = p->glue.get();
-      const size_t calls = g ? g->calls.size() : 0;
-      if (g) {
-        if (!st["now"].isNull()) g->ask.nowMs = st["now"].u64();
-        g->saveFails = st["saveFails"].boolean();
+      sessionPlay(*p, playOf(st), st["now"], st["saveFails"].boolean(), st["replaceFails"].boolean(),
+                  st["ending"].boolean(), st["left"].u64(), st["seq"], st["save"], st["rotationSave"],
+                  st["recordsSave"], w);
+    } else if (doing == "plays") {
+      const minijson::Value& each = st["each"];
+      for (size_t k = 0; k < each["seq"].size(); ++k) {
+        const std::string one = w + ", play " + std::to_string(k + 1);
+        sessionPlay(*p, playOf(st, k), st["plays"]["now"][k], st["saveFails"].boolean(), false, false, 0,
+                    each["seq"][k], each["save"][k], each["rotationSave"][k], each["recordsSave"][k], one);
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(each["records"][k].u64(), p->glue ? p->glue->fold.records() : 0,
+                                         one.c_str());
       }
-      if (st["ending"].boolean()) {
-        // The orderly end's flush and its 3 s budget: the played file's
-        // question takes what leaves `left` of it at the rotation's save.
-        TEST_ASSERT_NOT_NULL(g);
-        g->ending(p->oenv.now + 3000);
-        p->oenv.perStat = 3000 - st["left"].u64();
-        p->ended(spec);
-        const pl::Outbox::Flushed f = p->out->flush(3000, 128);
-        TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, f.written, w);
-        g->notEnding();
-        p->oenv.perStat = 0;
-      } else {
-        TEST_ASSERT_TRUE_MESSAGE(p->write(spec) == pl::Outbox::Did::Written, w);
-      }
-      if (g) g->saveFails = false;
-      TEST_ASSERT_EQUAL_UINT32_MESSAGE(st["seq"].u64(), p->j->lastSeq(), w);
-      // The rotation's save: asked or not, and what it came to; when it
-      // ran, plays.1.jnl was still on the card (before its delete, or its
-      // rename to a twin).
-      std::string save;
-      for (size_t c = calls; g && c < g->calls.size(); ++c) save = g->calls[c];
-      const char* want = st["save"].isNull() ? "" : st["save"].boolean() ? "save rotation" : "save rotation (no)";
-      TEST_ASSERT_EQUAL_STRING_MESSAGE(want, save.c_str(), w);
-      if (save == "save rotation") TEST_ASSERT_EQUAL_STRING_MESSAGE("plays.1.jnl plays.jnl", g->seen.back().c_str(), w);
     } else if (doing == "hs") {
-      p->glue->ask.nowMs = st["now"].u64();
-      TEST_ASSERT_EQUAL_MESSAGE(st["ok"].boolean(), p->glue->hs(), w);
-    } else if (doing == "giveback") {
-      // A library update's give-back (6.7): the save first when the fold
-      // holds plays the card's stats.bin doesn't, then the blocks given
-      // back, MARK's kept.
       Glue* g = p->glue.get();
-      g->ask.nowMs = st["now"].u64();
-      g->saveFails = st["saveFails"].boolean();
-      const size_t calls = g->calls.size();
-      const size_t held = g->fold.held();
-      const size_t bytes = g->core.giveBack();
-      g->saveFails = false;
-      std::string save;
-      for (size_t c = calls; c < g->calls.size(); ++c) save = g->calls[c];
-      const char* want = st["saved"].isNull() ? "" : st["saved"].boolean() ? "save give-back" : "save give-back (no)";
-      TEST_ASSERT_EQUAL_STRING_MESSAGE(want, save.c_str(), w);
-      TEST_ASSERT_EQUAL_MESSAGE(st["given"].boolean(), g->core.givenBack(), w);
-      const statsglue::GaveBack& gb = g->core.gaveBack();
-      TEST_ASSERT_EQUAL_size_t_MESSAGE(bytes, gb.bytes, w);
-      TEST_ASSERT_TRUE_MESSAGE(bytes > 0 && gb.kept > 0, w);  // (MARK's block, kept)
-      TEST_ASSERT_EQUAL_size_t_MESSAGE(gb.kept, g->fold.held(), w);
-      TEST_ASSERT_TRUE_MESSAGE(bytes + gb.kept >= held, w);  // (a save's retention may have given some back first)
-      TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, g->fold.chunks(sf::kTrkd) + g->fold.chunks(sf::kRcnt), w);
-      TEST_ASSERT_FALSE_MESSAGE(g->fold.spare(), w);
-    } else if (doing == "takeback") {
-      Glue* g = p->glue.get();
-      const statsglue::TookBack& t = g->core.takeBack();
-      TEST_ASSERT_TRUE_MESSAGE(t.read, w);
-      TEST_ASSERT_EQUAL_STRING_MESSAGE(st["read"].c_str(), sx::readName(g->opened.read), w);
-      TEST_ASSERT_EQUAL_MESSAGE(st["same"].boolean(), t.same, w);
-      TEST_ASSERT_EQUAL_UINT32_MESSAGE(st["folded"].u64(), t.folded, w);
-      TEST_ASSERT_EQUAL_UINT32_MESSAGE(st["covered"].u64(), t.covered, w);
-      TEST_ASSERT_EQUAL_UINT32_MESSAGE(st["over"].u64(), t.over, w);
-      TEST_ASSERT_EQUAL_MESSAGE(st["behind"].boolean(), g->core.behind(), w);
-      TEST_ASSERT_FALSE_MESSAGE(g->core.givenBack(), w);
-      TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, g->core.ringCount(), w);
+      std::string rec, hs = "off";
+      bool ok = false;
+      if (g) {
+        g->ask = sx::SaveAsk();
+        g->ask.nowMs = st["now"].isNull() ? 0 : st["now"].u64();
+        g->saveFails = st["saveFails"].boolean() ? -1 : 0;
+        g->replaceFails = st["replaceFails"].boolean();
+        // (A pass the write gate lets through: the records' save first,
+        // turnOf()'s, then Hs.)
+        if (g->core.recordsDue(p->fenced)) {
+          g->core.recordsSave();
+          rec = g->outcome();
+        }
+        ok = g->core.hs(p->fenced);
+        hs = g->outcome();
+        g->saveFails = 0;
+        g->replaceFails = false;
+      }
+      TEST_ASSERT_EQUAL_STRING_MESSAGE(factOf(st["recordsSave"]), rec.c_str(), (w + ", the records' save").c_str());
+      TEST_ASSERT_EQUAL_STRING_MESSAGE(factOf(st["hsSave"]), hs.c_str(), (w + ", Hs").c_str());
+      TEST_ASSERT_EQUAL_MESSAGE(st["ok"].boolean(), ok, w.c_str());
+    } else if (doing == "fence" || doing == "unfence") {
+      TEST_ASSERT_TRUE_MESSAGE(p->fenced != (doing == "fence"), w.c_str());
+      p->fenced = doing == "fence";
+    } else if (doing == "update") {
+      // (A fence over no play: nothing of the stats; the scan done, nothing
+      // held to wait for.)
+      TEST_ASSERT_FALSE_MESSAGE(p->fenced, w.c_str());
+      if (p->glue) TEST_ASSERT_FALSE_MESSAGE(p->glue->core.scanHolds(), w.c_str());
     } else if (doing == "remount") {
       p->j->remounted();
       p->out->remounted();
@@ -1328,52 +1542,57 @@ sf::Head runSession(const minijson::Value& sc) {
     } else if (doing == "erase") {
       p->nvs.ids = Journal::Ids();
     } else if (doing == "delete") {
-      TEST_ASSERT_TRUE_MESSAGE(card.remove((kDir + st["name"].str()).c_str()), w);
+      TEST_ASSERT_TRUE_MESSAGE(card.remove((kDir + st["name"].str()).c_str()), w.c_str());
     } else if (doing == "link") {
       card.link(kDir + st["a"].str(), kDir + st["b"].str());
+    } else if (doing == "damage") {
+      damage(card, st["name"].str(), st["section"].str());
     } else {
-      TEST_FAIL_MESSAGE(w);
+      TEST_FAIL_MESSAGE(w.c_str());
     }
+    if (p && st.has("records"))
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(st["records"].u64(), p->glue ? p->glue->fold.records() : 0, w.c_str());
+    if (p && st.has("behind"))
+      TEST_ASSERT_EQUAL_MESSAGE(st["behind"].boolean(), p->glue && p->glue->fold.behind(), w.c_str());
     sameFiles(sessionCard(st["out"]), filesOf(card), w);
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, card.violations.size(), w);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, card.violations.size(), w.c_str());
+    ++gSessionSteps;
   }
-  sf::s1::Fold f;
-  TEST_ASSERT_TRUE(f.begin());
-  sx::Store store(card);
-  Work work;
-  TEST_ASSERT_EQUAL_STRING_MESSAGE("loaded", sx::readName(store.read(f, work.p(), nullptr).read), name.c_str());
-  TEST_ASSERT_EQUAL_UINT64_MESSAGE(sc["slots"].u64() - sc["lost"].u64(), f.head().slots, name.c_str());
-  return f.head();
+  const Read r(card);
+  TEST_ASSERT_EQUAL_STRING_MESSAGE("loaded", sx::readName(r.o.read), name.c_str());
+  TEST_ASSERT_EQUAL_UINT64_MESSAGE(sc["slots"].u64() - sc["lost"].u64(), r.fold.head().slots, name.c_str());
+  return r.fold.head();
 }
 
 }  // namespace
 
 // Every session, each step through the firmware's code.
 void test_every_session() {
-  int steps = 0;
-  for (size_t i = 0; i < gSessions.size(); ++i) {
-    runSession(gSessions[i]);
-    steps += static_cast<int>(gSessions[i]["steps"].size());
-  }
-  printf("sessions: %u, %d steps, the card compared after each\n", static_cast<unsigned>(gSessions.size()), steps);
-  TEST_ASSERT_EQUAL_UINT32(24, gSessions.size());
+  gSessionSteps = 0;
+  for (size_t i = 0; i < gSessions.size(); ++i) runSession(gSessions[i]);
+  printf("sessions: %u, %d steps, the card compared after each\n", static_cast<unsigned>(gSessions.size()),
+         gSessionSteps);
+  TEST_ASSERT_EQUAL_UINT32(34, gSessions.size());
+  TEST_ASSERT_EQUAL_INT(276, gSessionSteps);
 }
 
 // A rotation over a plays.1.jnl no save covers (the boot's save failed): its
 // save first, before the delete or the rename to a twin; failing too, the
 // plays in it are lost to the stats (5.5, 13: the undercount), exactly. So
 // are they in a rotation in the end's flush with under 1 s of its budget
-// left.
+// left. And 5.14's: a session behind its log (the records' saves failing to
+// 96, a full log whose boot save failed all four tries) loses the plays of
+// the plays.1.jnl a rotation takes out.
 void test_the_rotation_hole() {
-  const std::pair<const char*, uint64_t> cases[] = {{"rotation-saves", 0},      {"rotation-fails", 4},
-                                                    {"rotation-twin-saves", 0}, {"rotation-twin-fails", 4},
-                                                    {"flush-in-time", 0},       {"flush-late", 4},
-                                                    {"partial-rotation", 4}};
+  const std::pair<const char*, uint64_t> cases[] = {
+      {"rotation-saves", 0},          {"rotation-fails", 4},     {"rotation-twin-saves", 0},
+      {"rotation-twin-fails", 4},     {"flush-in-time", 0},      {"flush-late", 4},
+      {"partial-rotation", 4},        {"records-behind-rotation", 64},
+      {"boot-overflow-full-rotation", 128}, {"boot-overflow-full-rotation-retry", 0}};
   for (const auto& c : cases) {
     const minijson::Value& sc = session(c.first);
     TEST_ASSERT_EQUAL_UINT64_MESSAGE(c.second, sc["lost"].u64(), c.first);
     const uint64_t slots = sc["slots"].u64();
-    TEST_ASSERT_EQUAL_UINT64_MESSAGE(std::string(c.first) == "partial-rotation" ? 13 : 9, slots, c.first);
     TEST_ASSERT_EQUAL_UINT64_MESSAGE(slots - c.second, runSession(sc).slots, c.first);
   }
 }
@@ -1449,11 +1668,12 @@ void test_first_at_through_a_rotations_save() {
 // the card away, behind the update's fence and during the boot's scan; the
 // boot's save while the end flushes, and a remount inside the end's flush (no
 // read, the folds dropped: nothing covered, nothing saved); the log's keys
-// (Hm); a track's row, base ⊕ delta (Ht); stats.bin's header (H).
+// (Hm); a track's row, base ⊕ stats.bin's TRKD ⊕ the records (Ht); stats.bin's
+// header and rows (H); the last 7 days (Hd).
 // ---------------------------------------------------------------------------
 namespace {
 
-const char* refused(const Player& p) { return statsglue::refusedName(p.glue->core.lastRefused()); }
+const char* refused(const Player& p) { return sg::refusedName(p.glue->core.lastRefused()); }
 
 void sameTrack(const sf::Track& a, const sf::Track& b, const char* w) {
   TEST_ASSERT_EQUAL_UINT64_MESSAGE(a.hash, b.hash, w);
@@ -1476,7 +1696,7 @@ void test_the_glues_own_rules() {
   // by the MARK read at the boot (41: plays.1.jnl's 30-45 aren't all under
   // it, so nothing goes). Hs then: refused while the card is away and behind
   // the fence; with the card back, the boot's stats.bin (worked-example's
-  // save doesn't compact, and the plan is the same).
+  // save doesn't compact, and the merge is the same).
   {
     CutFs card;
     put(card, in);
@@ -1488,6 +1708,7 @@ void test_the_glues_own_rules() {
     TEST_ASSERT_TRUE((p.glue->calls == std::vector<std::string>{"began", "save boot (no)"}));
     TEST_ASSERT_EQUAL_STRING("cardAway", refused(p));
     TEST_ASSERT_EQUAL_UINT32(7, p.glue->fold.folded());
+    TEST_ASSERT_EQUAL_UINT32(7, p.glue->fold.records());
     TEST_ASSERT_TRUE(p.trimmed().empty());
     sameFiles(in, filesOf(card), "the card away");
     TEST_ASSERT_FALSE(p.glue->hs());
@@ -1497,20 +1718,24 @@ void test_the_glues_own_rules() {
     TEST_ASSERT_EQUAL_STRING("fenced", refused(p));
     TEST_ASSERT_TRUE(p.glue->hs());
     TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
-    TEST_ASSERT_EQUAL_STRING("Hs", statsglue::kindName(p.glue->core.lastKind()));
+    TEST_ASSERT_EQUAL_STRING("Hs", sg::kindName(p.glue->core.lastKind()));
     TEST_ASSERT_TRUE(bytesOf(card, "stats.bin") == want.at("stats.bin"));
+    TEST_ASSERT_EQUAL_UINT32(0, p.glue->fold.records());
     TEST_ASSERT_TRUE(p.glue->hs());  // (nothing new: nothing written)
     TEST_ASSERT_EQUAL_STRING("nothing new", sx::savedName(p.glue->last.what));
     TEST_ASSERT_EQUAL_UINT32(1, p.glue->core.savesWritten());
-    // stats.bin's header, as H reads it.
-    const statsglue::Glue::FileLook l = p.glue->core.lookFile();
+    // stats.bin's header and directory, as H reads them.
+    const sg::Glue::FileLook l = p.glue->core.lookFile();
     TEST_ASSERT_TRUE(l.there);
     TEST_ASSERT_FALSE(l.unread);
+    TEST_ASSERT_TRUE(l.frame);
     TEST_ASSERT_EQUAL_UINT32(sx::kMagic, l.magic);
     TEST_ASSERT_EQUAL_UINT32(1, l.major);
     TEST_ASSERT_EQUAL_UINT32(0, l.minor);
     TEST_ASSERT_EQUAL_UINT32(want.at("stats.bin").size(), l.bytes);
     TEST_ASSERT_EQUAL_UINT32(p.glue->store.cardCopy().generation, l.generation);
+    for (uint32_t s = 0; s < sf::kSecs; ++s)
+      TEST_ASSERT_EQUAL_UINT32(sectionOf(want.at("stats.bin"), static_cast<sf::Sec>(s)).count, l.rows[s]);
   }
   // Hs during the boot's scan: refused, and the boot goes on as the
   // fixture's.
@@ -1564,7 +1789,8 @@ void test_the_glues_own_rules() {
   // A rotation's save in the end's flush, at the edge of its budget
   // (kEndSaveMs, 5.5): a millisecond under 1 s left, refused (nothing
   // written); 1 s left, saved. The sessions' flush-in-time and flush-late
-  // leave 3 s and 0.5 s: only this pins the edge.
+  // leave 3 s and 0.5 s: only this pins the edge. The records' save there:
+  // refused (the flush's plays only take records).
   {
     CutFs card;
     put(card, in);
@@ -1580,14 +1806,16 @@ void test_the_glues_own_rules() {
     TEST_ASSERT_TRUE(p.write(ps) == pl::Outbox::Did::Written);
     TEST_ASSERT_TRUE(p.glue->fold.dirty());
     const Bytes before = bytesOf(card, "stats.bin");
-    p.glue->ending(p.oenv.now + statsglue::kEndSaveMs - 1);
+    p.glue->ending(p.oenv.now + sg::kEndSaveMs - 1);
     TEST_ASSERT_FALSE(p.glue->core.save(pl::Folds::Why::Rotation));
     TEST_ASSERT_EQUAL_STRING("budget", refused(p));
     TEST_ASSERT_TRUE(bytesOf(card, "stats.bin") == before);
-    p.glue->ending(p.oenv.now + statsglue::kEndSaveMs);
+    TEST_ASSERT_FALSE(p.glue->core.recordsSave());
+    TEST_ASSERT_EQUAL_STRING("ending", refused(p));
+    p.glue->ending(p.oenv.now + sg::kEndSaveMs);
     TEST_ASSERT_TRUE(p.glue->core.save(pl::Folds::Why::Rotation));
     TEST_ASSERT_EQUAL_STRING("none", refused(p));
-    TEST_ASSERT_EQUAL_STRING("rotation", statsglue::kindName(p.glue->core.lastKind()));
+    TEST_ASSERT_EQUAL_STRING("rotation", sg::kindName(p.glue->core.lastKind()));
     TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
     TEST_ASSERT_FALSE(bytesOf(card, "stats.bin") == before);
     // (The boot's save in the end's flush: refused whatever is left.)
@@ -1608,8 +1836,7 @@ void test_the_glues_own_rules() {
       if (f.first.compare(0, 6, "plays.") != 0) continue;
       for (size_t at = 0; at + pl::kSlot <= f.second.size(); at += pl::kSlot) {
         Slot s;
-        if (pl::decode(reinterpret_cast<const uint8_t*>(f.second.data()) + at, pl::kSlot, &s) != pl::Verdict::Ok)
-          continue;
+        if (pl::decode(u8(f.second) + at, pl::kSlot, &s) != pl::Verdict::Ok) continue;
         if (s.kind != pl::kKindPlay || s.seq == 0) continue;
         auto& e = log[{std::string(reinterpret_cast<const char*>(s.deviceId), 6), s.epoch}];
         e.first = std::max(e.first, s.seq);
@@ -1621,28 +1848,29 @@ void test_the_glues_own_rules() {
     Player p(card, dev);
     deviceFor(p, td);
     TEST_ASSERT_TRUE(p.boot(askOf(tb)));
-    const statsglue::Glue& g = p.glue->core;
-    TEST_ASSERT_TRUE(log.size() >= 2);
+    const sg::Glue& g = p.glue->core;
+    TEST_ASSERT_TRUE(log.size() >= 2 && log.size() <= sg::kLogKeys);
     TEST_ASSERT_EQUAL_UINT32(log.size(), g.logKeys());
     TEST_ASSERT_EQUAL_UINT32(0, g.logKeysMore());
     for (uint32_t i = 0; i < g.logKeys(); ++i) {
-      const statsglue::LogKey& k = g.logKey(i);
+      const sg::LogKey& k = g.logKey(i);
       const auto it = log.find({std::string(reinterpret_cast<const char*>(k.dev), 6), k.epoch});
       TEST_ASSERT_TRUE(it != log.end());
       TEST_ASSERT_EQUAL_UINT32(it->second.first, k.seq);
       TEST_ASSERT_EQUAL_UINT32(it->second.second, k.slots);
     }
-    TEST_ASSERT_TRUE(g.fold().rows(sf::kMark) >= 2);
-    for (uint32_t i = 0; i < g.fold().rows(sf::kMark); ++i) {
-      const sf::s1::Fold::MarkRow* m = g.fold().markRow(i);
+    TEST_ASSERT_TRUE(g.fold().marks() >= 2);
+    for (uint32_t i = 0; i < g.fold().marks(); ++i) {
+      const sf::Fold::MarkRow* m = g.fold().markRow(i);
       TEST_ASSERT_NOT_NULL(m);
-      TEST_ASSERT_EQUAL_UINT32(m->seq, g.fold().markOf(m->dev, m->epoch));
+      TEST_ASSERT_EQUAL_UINT32(m->seq, g.fold().markOf(m->dev, m->epoch()));
       TEST_ASSERT_EQUAL_UINT32(m->seq, m->card);  // (saved: the card's MARK is RAM's)
     }
-    TEST_ASSERT_NULL(g.fold().markRow(g.fold().rows(sf::kMark)));
+    TEST_ASSERT_NULL(g.fold().markRow(g.fold().marks()));
   }
   // A track's row, base ⊕ delta (Ht): compaction's boot leaves every row in
-  // its new base (TRKD empty); a live play of one of them merges with it.
+  // its new base (TRKD empty); a live play of one of them merges with it, a
+  // record (the delta); saved by Hs, the delta is stats.bin's TRKD row.
   {
     const minijson::Value& cs = scenario("compaction");
     const minijson::Value& cb = cs["boots"][0];
@@ -1658,21 +1886,20 @@ void test_the_glues_own_rules() {
     const uint32_t rows = p.glue->fold.head().baseRows;
     TEST_ASSERT_TRUE(rows >= 2);
     TEST_ASSERT_EQUAL_UINT32(sx::kBaseRowsAt + rows * sf::kTrackBytes, base.size());
-    const auto row = [&](uint32_t i) {
-      return sf::decodeTrack(reinterpret_cast<const uint8_t*>(base.data()) + sx::kBaseRowsAt + i * sf::kTrackBytes);
-    };
+    const auto row = [&](uint32_t i) { return sf::decodeTrack(u8(base) + sx::kBaseRowsAt + i * sf::kTrackBytes); };
     for (uint32_t i : {0u, rows / 2, rows - 1}) {
-      const statsglue::TrackLook t = p.glue->core.track(row(i).hash);
-      TEST_ASSERT_TRUE(t.base == statsglue::TrackLook::Base::Found);
+      const sg::TrackLook t = p.glue->core.track(row(i).hash);
+      TEST_ASSERT_TRUE(t.base == sg::TrackLook::Base::Found);
       TEST_ASSERT_FALSE(t.delta);
+      TEST_ASSERT_FALSE(t.unread);
       sameTrack(row(i), t.row, "a base row");
       TEST_ASSERT_TRUE(t.reads >= 1);
     }
-    const statsglue::TrackLook none = p.glue->core.track(0x0123456789abcdefull);
-    TEST_ASSERT_TRUE(none.base == statsglue::TrackLook::Base::NotThere);
+    const sg::TrackLook none = p.glue->core.track(0x0123456789abcdefull);
+    TEST_ASSERT_TRUE(none.base == sg::TrackLook::Base::NotThere);
     TEST_ASSERT_FALSE(none.delta);
     TEST_ASSERT_EQUAL_UINT64(0, none.row.hash);
-    // A live play of the first row's track: base ⊕ delta.
+    // A live play of the first row's track: base ⊕ the record.
     PlaySpec ps;
     ps.hash = row(0).hash;
     ps.played = 120000;
@@ -1680,18 +1907,54 @@ void test_the_glues_own_rules() {
     ps.at = sf::kMinMs + 300ull * sf::kDayMs;
     ps.up = 5000;
     TEST_ASSERT_TRUE(p.write(ps) == pl::Outbox::Did::Written);
-    const statsglue::TrackLook t = p.glue->core.track(ps.hash);
-    TEST_ASSERT_TRUE(t.base == statsglue::TrackLook::Base::Found);
+    const sg::TrackLook t = p.glue->core.track(ps.hash);
+    TEST_ASSERT_TRUE(t.base == sg::TrackLook::Base::Found);
     TEST_ASSERT_TRUE(t.delta);
     TEST_ASSERT_EQUAL_UINT32(1, t.deltaRow.plays);
-    sameTrack(sf::merge(row(0), t.deltaRow), t.row, "base and delta");
+    sameTrack(sf::merge(row(0), t.deltaRow), t.row, "base and a record");
     TEST_ASSERT_EQUAL_UINT32(row(0).plays + 1u, t.row.plays);
+    // Saved: the same row, now stats.bin's TRKD ⊕ the base.
+    TEST_ASSERT_TRUE(p.glue->hs());
+    TEST_ASSERT_EQUAL_UINT32(0, p.glue->fold.records());
+    TEST_ASSERT_EQUAL_UINT32(1, rowsOf(card, sf::kTrkd));
+    const sg::TrackLook u = p.glue->core.track(ps.hash);
+    TEST_ASSERT_TRUE(u.delta);
+    sameTrack(t.row, u.row, "base and stats.bin's TRKD");
+  }
+  // The last 7 days (Hd): stats.bin's DAYS and HOUR merged with the
+  // records, the days the card's rows give, a record dated today added.
+  {
+    CutFs card;
+    put(card, in);
+    Player p(card, dev);
+    deviceFor(p, sc);
+    TEST_ASSERT_TRUE(p.boot(askOf(b)));
+    const Bytes bin = bytesOf(card, "stats.bin");
+    const cc::Section days = sectionOf(bin, sf::kDays);
+    TEST_ASSERT_TRUE(days.count > 0);
+    const uint16_t last = cc::get16(u8(bin) + days.offset + (days.count - 1) * days.stride);
+    sg::DaysLook d = p.glue->core.lookDays(last);
+    TEST_ASSERT_TRUE(d.read);
+    TEST_ASSERT_TRUE(d.d[6].any);
+    TEST_ASSERT_EQUAL_UINT16(last, d.d[6].day);
+    TEST_ASSERT_TRUE(std::memcmp(d.d[6].row, u8(bin) + days.offset + (days.count - 1) * days.stride, 16) == 0);
+    const uint16_t plays = cc::get16(d.d[6].row + 2);
+    TEST_ASSERT_TRUE(d.d[6].hours > 0);
+    PlaySpec ps;
+    ps.hash = 0x0123456789abcdefull;
+    ps.played = 120000;
+    ps.duration = 200000;
+    ps.at = sf::kMinMs + static_cast<uint64_t>(last) * sf::kDayMs + 3 * sf::kHourMs;
+    ps.up = 5000;
+    TEST_ASSERT_TRUE(p.write(ps) == pl::Outbox::Did::Written);
+    d = p.glue->core.lookDays(last);
+    TEST_ASSERT_EQUAL_UINT16(plays + 1, cc::get16(d.d[6].row + 2));
   }
 }
 
 // Hs after a partial scan says why (the store would refuse it too: the
 // fold's plan), and Hs never compacts, not even where a boot's save would
-// (no base yet, nothing playing): the rotation's path.
+// (no base yet, nothing playing).
 void test_hs_says_why_and_never_compacts() {
   {
     const minijson::Value& sc = scenario("partial-tail");
@@ -1727,8 +1990,8 @@ void test_hs_says_why_and_never_compacts() {
     TEST_ASSERT_TRUE(p.write(ps) == pl::Outbox::Did::Written);
     p.glue->ask.playing = false;
     p.glue->ask.safePoint = true;
-    // (A boot's save now would compact: no base, nothing playing.)
-    TEST_ASSERT_TRUE(sf::compactionDue(p.glue->fold.rows(sf::kTrkd), 0, false, true));
+    // (A boot's save now would compact: no base, nothing playing, a delta.)
+    TEST_ASSERT_TRUE(sf::compactionDue(rowsOf(card, sf::kTrkd) + 1, 0, false, true));
     TEST_ASSERT_TRUE(p.glue->hs());
     TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
     TEST_ASSERT_FALSE(p.glue->last.compacted);
@@ -1737,13 +2000,13 @@ void test_hs_says_why_and_never_compacts() {
   }
 }
 
-// The boot's fold's blocks (its ranges, ACKS rows, indexes), and a
-// remount's read of stats.bin (its work memory, the load's chunks), wait
-// for the scan's first reserve(): a pass that may carve (5.6: the join not
-// Working, the write gate open), never setup()'s, nor the remount's own
-// pass (the card guard's). A scan that asks no reserve() (the end's flush
-// finishing it) begins the fold at its first call. A remount's read still
-// to make when the end flushes is never made: the folds dropped.
+// The boot's fold's ranges' block, and a remount's read of stats.bin (its
+// work memory), wait for the scan's first reserve(): a pass that may carve
+// (5.6, 5.14: the join not Working, no library update asked, the write gate
+// open), never setup()'s, nor the remount's own pass (the card guard's). A
+// scan that asks no reserve() (the end's flush finishing it) begins the fold
+// at its first call. A remount's read still to make when the end flushes is
+// never made: the folds dropped.
 void test_the_folds_blocks_wait_for_a_reserve() {
   const minijson::Value& sc = scenario("worked-example");
   const minijson::Value& b = sc["boots"][0];
@@ -1754,27 +2017,39 @@ void test_the_folds_blocks_wait_for_a_reserve() {
     put(card, in);
     Player p(card, dev);
     deviceFor(p, sc);
-    p.alloc = heapAlloc;
-    p.release = heapFree;
+    p.mem.alloc = heapAlloc;
+    p.mem.release = heapFree;
     uint32_t afterRead = 0;
-    p.afterRead = [&afterRead] { afterRead = gHeap.carves; };
+    size_t heldAfterRead = 0;
+    p.afterRead = [&] {
+      afterRead = gHeap.carves;
+      heldAfterRead = gHeap.held;
+    };
     p.begin(askOf(b));
-    // The journal's begin() (scanBegan()): nothing carved for the stats.
+    // The journal's begin() (scanBegan()): nothing carved for the stats, and
+    // nothing held after the read (its work memory given back).
     TEST_ASSERT_EQUAL_UINT32(afterRead, gHeap.carves);
     TEST_ASSERT_TRUE(p.glue->core.booting());
     TEST_ASSERT_TRUE(p.glue->core.wantsRoom());
+    TEST_ASSERT_TRUE(p.glue->core.bootPending());
     TEST_ASSERT_FALSE(p.glue->fold.booting());
-    TEST_ASSERT_EQUAL_UINT32(0, p.glue->fold.indexSize(sf::kTrkd));
+    TEST_ASSERT_FALSE(p.glue->core.rangesHeld());
+    TEST_ASSERT_FALSE(p.glue->core.scanHolds());
     TEST_ASSERT_FALSE(p.glue->hs());
     TEST_ASSERT_EQUAL_STRING("booting", refused(p));
     p.glue->reserve(1);
     TEST_ASSERT_TRUE(p.glue->fold.booting());
-    TEST_ASSERT_TRUE(p.glue->fold.indexSize(sf::kTrkd) > 0);
-    TEST_ASSERT_TRUE(gHeap.carves > afterRead);
+    TEST_ASSERT_TRUE(p.glue->core.rangesHeld());
+    TEST_ASSERT_TRUE(p.glue->core.scanHolds());
+    TEST_ASSERT_FALSE(p.glue->core.overflowHeld());  // (7 slots: no chunk)
+    TEST_ASSERT_EQUAL_UINT32(afterRead + 1, gHeap.carves);
+    TEST_ASSERT_EQUAL_size_t(heldAfterRead + p.glue->core.rangesBytes(), gHeap.held);
     TEST_ASSERT_TRUE(p.scan());
     sameOutcome(b, outcomeOf(p), "the boot's fold at its first reserve()");
     sameFiles(want, filesOf(card), "the boot's fold at its first reserve()");
     TEST_ASSERT_FALSE(p.glue->core.wantsRoom());
+    TEST_ASSERT_FALSE(p.glue->core.scanHolds());
+    TEST_ASSERT_EQUAL_size_t(heldAfterRead, gHeap.held);  // (the ranges' block and the save's work memory back)
     // A remount after Ready, before the first slot: the folds dropped at
     // once; no read, no carve, nothing covered until the scan's next piece.
     const uint64_t read0 = card.bytesRead;
@@ -1833,7 +2108,7 @@ void test_the_folds_blocks_wait_for_a_reserve() {
     TEST_ASSERT_FALSE(p.glue->core.rereadPending());
     TEST_ASSERT_EQUAL_UINT32(0, p.glue->core.rereads());
     TEST_ASSERT_EQUAL_STRING("began again", p.glue->calls.back().c_str());
-    TEST_ASSERT_EQUAL_size_t(0, p.glue->fold.held());
+    TEST_ASSERT_EQUAL_UINT32(0, p.glue->fold.records());
     TEST_ASSERT_TRUE(p.scan());  // (the flush finishing the scan: no read)
     TEST_ASSERT_EQUAL_UINT32(0, p.glue->core.rereads());
     TEST_ASSERT_EQUAL_STRING("save boot (no)", p.glue->calls.back().c_str());
@@ -1843,12 +2118,13 @@ void test_the_folds_blocks_wait_for_a_reserve() {
   }
 }
 
-// A fold out of memory from the boot's first fold (its ranges couldn't be
-// carved) and no work memory for the save either (the same short heap): no
-// save, and the trim by the MARK read at the boot (5.5), never as after a
-// save. worked-example's whole boot trims plays.1.jnl (ACKS 45 covers it);
-// its MARK, 41, doesn't cover plays 42-45, never folded: it stays. Over a
-// loaded stats.bin and over none (no MARK: nothing covered).
+// A fold out of memory from the boot's first fold (its ranges' block
+// couldn't be carved) and no work memory for the save either (the same
+// short heap): no save, and the trim by the MARK read at the boot (5.5),
+// never as after a save. worked-example's whole boot trims plays.1.jnl
+// (ACKS 45 covers it); its MARK, 41, doesn't cover plays 42-45, never
+// folded: it stays. Over a loaded stats.bin and over none (no MARK: nothing
+// covered).
 namespace {
 bool gShortHeap = false;  // the heap has nothing left
 void* shortAlloc(size_t n) { return gShortHeap ? nullptr : std::malloc(n); }
@@ -1867,8 +2143,8 @@ void test_a_fold_out_of_memory_trims_by_the_boots_mark() {
     put(card, in);
     Player p(card, reinterpret_cast<const uint8_t*>("\0\0\0\0\0\1"));
     deviceFor(p, sc);
-    p.alloc = shortAlloc;
-    p.release = shortFree;
+    p.mem.alloc = shortAlloc;
+    p.mem.release = shortFree;
     p.afterRead = [] { gShortHeap = true; };
     p.begin(askOf(b));
     TEST_ASSERT_TRUE_MESSAGE(p.glue->core.on(), w);
@@ -1883,29 +2159,28 @@ void test_a_fold_out_of_memory_trims_by_the_boots_mark() {
                              (std::string(w) + ":" + calls).c_str());
     TEST_ASSERT_FALSE_MESSAGE(sx::savedOk(p.glue->last.what), w);
     TEST_ASSERT_TRUE_MESSAGE(p.trimmed().empty(), w);
+    TEST_ASSERT_FALSE_MESSAGE(p.glue->core.scanHolds(), w);
     sameFiles(in, filesOf(card), w);
   }
 }
 
 // ---------------------------------------------------------------------------
-// A library update's give-back (docs/LISTENING-STATS.md 6.7, the owner's
-// decision of 2026-11-11): the sessions' update-* steps (statsref's
-// giveback and takeback), pinned here; then what only the firmware has: a
-// cut at every step of the give-back's save, the re-read failing, a
-// remount's scan begun again while given back, a held tmp, and the glue's
-// own rules around it.
+// The saves at a pass the write gate lets through (statsglue::turnOf()):
+// the records' save before the slot of its pass, its wait behind a library
+// update's fence and its run at 96 whatever the fence, behind only after a
+// save asked failed or was refused; Hs after the plays waiting for their
+// slots (S1's device round 1).
 // ---------------------------------------------------------------------------
 namespace {
 
-// worked-example's boot (its save lands: MARK 48), then a live play (49):
-// the fold holds a play the card's stats.bin doesn't.
+// worked-example's boot (its save lands: MARK 48), the fold clean.
 struct Worked {
   const minijson::Value& sc = scenario("worked-example");
   const minijson::Value& b = sc["boots"][0];
   Files in = cardOf(b["in"]);
   static PlaySpec play(uint32_t i) {
     PlaySpec ps;
-    ps.hash = 0x0123456789abcdefull + i;
+    ps.hash = 0x0123456789abcdefull + i % 40;
     ps.played = 120000;
     ps.duration = 200000;
     ps.at = sf::kMinMs + 313ull * sf::kDayMs + i * 60000ull;
@@ -1923,6 +2198,7 @@ struct Worked {
     TEST_ASSERT_TRUE(p.boot(ask()));
     TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
   }
+  uint64_t slots() const { return b["stats"]["head"]["slots"].u64(); }
 };
 
 // The counts a card's stats hold, read as a boot reads them: HEAD (but its
@@ -1938,478 +2214,202 @@ struct Counts {
   }
 };
 Counts countsOf(CutFs& card) {
-  sf::s1::Fold f;
-  TEST_ASSERT_TRUE(f.begin());
-  sx::Store store(card);
-  Work work;
-  TEST_ASSERT_EQUAL_STRING("loaded", sx::readName(store.read(f, work.p(), nullptr).read));
+  const Read r(card);
+  TEST_ASSERT_EQUAL_STRING("loaded", sx::readName(r.o.read));
   Counts c;
-  c.plays = f.head().plays;
-  c.skips = f.head().skips;
-  c.slots = f.head().slots;
-  c.listenedMs = f.head().listenedMs;
-  for (uint32_t i = 0; i < f.rows(sf::kMark); ++i) {
-    const sf::s1::Fold::MarkRow* m = f.markRow(i);
-    c.mark[{std::string(reinterpret_cast<const char*>(m->dev), 6), m->epoch}] = m->seq;
+  c.plays = r.fold.head().plays;
+  c.skips = r.fold.head().skips;
+  c.slots = r.fold.head().slots;
+  c.listenedMs = r.fold.head().listenedMs;
+  for (uint32_t i = 0; i < r.fold.marks(); ++i) {
+    const sf::Fold::MarkRow* m = r.fold.markRow(i);
+    c.mark[{std::string(reinterpret_cast<const char*>(m->dev), 6), m->epoch()}] = m->seq;
   }
   for (const auto& t : tracksOf(bytesOf(card, "stats.bin")))
     c.tracks[t.first] = {t.second.plays, t.second.skips, t.second.firstAt, t.second.lastAt, t.second.src};
   return c;
 }
 
-}  // namespace
-
-void test_an_updates_give_back() {
-  // The sessions (statsref's), each step through the glue: their facts.
-  {
-    TEST_ASSERT_EQUAL_UINT64(statsglue::kRing + 3, runSession(session("update-ring-full")).slots);
-    const minijson::Value& ur = session("update-rotation-unsaved");
-    TEST_ASSERT_EQUAL_UINT64(4, ur["lost"].u64());
-    TEST_ASSERT_EQUAL_UINT64(5, runSession(ur).slots);  // (5-9: 1-4 deleted by the rotation while given back)
-    TEST_ASSERT_EQUAL_UINT64(9, runSession(session("update-rotation-saved")).slots);
-    TEST_ASSERT_EQUAL_UINT64(9, runSession(session("update-ending")).slots);
-    TEST_ASSERT_EQUAL_UINT64(6, runSession(session("update-other-player")).slots);
-    TEST_ASSERT_EQUAL_UINT64(6, runSession(session("update-save-fails")).slots);
-    // Behind its log after a give-back whose save didn't land, then a
-    // rotation later in the session: its save refused, 3-4 lost with
-    // plays.1.jnl (held through, that save would have landed).
-    const minijson::Value& br = session("update-behind-rotation");
-    TEST_ASSERT_EQUAL_UINT64(2, br["lost"].u64());
-    TEST_ASSERT_EQUAL_UINT64(7, runSession(br).slots);  // (1-2 and 5-9)
-    TEST_ASSERT_EQUAL_UINT64(5, runSession(session("update-plays")).slots);
-    TEST_ASSERT_EQUAL_UINT64(3, runSession(session("update-quiet")).slots);
-  }
-  const Worked wk;
-  const uint8_t* dev = reinterpret_cast<const uint8_t*>("\0\0\0\0\0\1");
-  // The rules: what is given back and kept; no give-back while the boot's
-  // fold runs, twice, with the stats off, or while the end flushes; Hs and
-  // the saves refused while given back; the re-read on the same copy.
-  {
-    CutFs card;
-    put(card, wk.in);
-    Player p(card, dev);
-    deviceFor(p, wk.sc);
-    p.begin(wk.ask());
-    p.glue->reserve(1);
-    TEST_ASSERT_FALSE(p.j->scan(1));
-    TEST_ASSERT_EQUAL_size_t(0, p.glue->core.resident());
-    TEST_ASSERT_EQUAL_size_t(0, p.glue->core.giveBack());  // (the boot's fold: its blocks are the scan's)
-    TEST_ASSERT_FALSE(p.glue->core.givenBack());
-    TEST_ASSERT_TRUE(p.scan());
-    sameFiles(cardOf(wk.b["out"]), filesOf(card), "a give-back asked during the boot's scan");
-    TEST_ASSERT_TRUE(p.write(Worked::play(1)) == pl::Outbox::Did::Written);
-    TEST_ASSERT_TRUE(p.glue->fold.dirty());
-    const size_t resident = p.glue->core.resident();
-    TEST_ASSERT_EQUAL_size_t(p.glue->fold.givesBack(), resident);
-    TEST_ASSERT_EQUAL_size_t(p.glue->fold.held() - sf::s1::kMarkBlockRows * sizeof(sf::s1::Fold::MarkRow), resident);
-    const Bytes before = bytesOf(card, "stats.bin");
-    const size_t calls = p.glue->calls.size();
-    const size_t bytes = p.glue->core.giveBack();
-    // The save first (49 isn't in stats.bin), the rotation's path.
-    TEST_ASSERT_EQUAL_size_t(calls + 1, p.glue->calls.size());
-    TEST_ASSERT_EQUAL_STRING("save give-back", p.glue->calls.back().c_str());
-    TEST_ASSERT_FALSE(p.glue->last.compacted);
-    TEST_ASSERT_FALSE(bytesOf(card, "stats.bin") == before);
-    const statsglue::GaveBack& gb = p.glue->core.gaveBack();
-    TEST_ASSERT_TRUE(gb.saveAsked && gb.covers);
-    TEST_ASSERT_EQUAL_STRING("none", statsglue::refusedName(gb.refused));
-    TEST_ASSERT_TRUE(bytes > 0 && bytes <= resident);  // (the save's retention may give a chunk back first)
-    TEST_ASSERT_EQUAL_size_t(sf::s1::kMarkBlockRows * sizeof(sf::s1::Fold::MarkRow), gb.kept);
-    TEST_ASSERT_EQUAL_size_t(gb.kept, p.glue->fold.held());
-    TEST_ASSERT_EQUAL_UINT32(1, gb.markRows);
-    TEST_ASSERT_TRUE(p.glue->core.givenBack());
-    TEST_ASSERT_EQUAL_size_t(0, p.glue->core.resident());
-    TEST_ASSERT_EQUAL_size_t(0, p.glue->core.giveBack());  // (given back already)
-    // covered() by the card's MARK (49 now), markOf() RAM's.
-    Slot s;
-    s.kind = pl::kKindPlay;
-    std::memcpy(s.deviceId, p.id, 6);
-    s.epoch = p.j->epoch();
-    s.seq = 49;
-    TEST_ASSERT_TRUE(p.glue->core.covered(s));
-    s.seq = 50;
-    TEST_ASSERT_FALSE(p.glue->core.covered(s));
-    TEST_ASSERT_EQUAL_UINT32(49, p.glue->core.markOf(p.id, p.j->epoch()));
-    // Saves refused, Hs too, with their own reason.
-    TEST_ASSERT_FALSE(p.glue->hs());
-    TEST_ASSERT_EQUAL_STRING("givenBack", refused(p));
-    TEST_ASSERT_FALSE(p.glue->core.save(pl::Folds::Why::Rotation));
-    TEST_ASSERT_EQUAL_STRING("givenBack", refused(p));
-    // Plays while given back: the ring (nothing carved: the fold holds MARK's block alone).
-    TEST_ASSERT_TRUE(p.write(Worked::play(2)) == pl::Outbox::Did::Written);
-    TEST_ASSERT_TRUE(p.write(Worked::play(3)) == pl::Outbox::Did::Written);
-    TEST_ASSERT_EQUAL_UINT32(2, p.glue->core.ringCount());
-    TEST_ASSERT_EQUAL_size_t(gb.kept, p.glue->fold.held());
-    TEST_ASSERT_FALSE(p.glue->fold.noMemory());
-    // No re-read while the end flushes.
-    p.glue->ending(p.oenv.now + 3000);
-    p.glue->core.takeBack();
-    TEST_ASSERT_TRUE(p.glue->core.givenBack());
-    TEST_ASSERT_EQUAL_size_t(0, p.glue->core.giveBack());
-    p.glue->notEnding();
-    // The re-read: the copy the give-back wrote; 50 and 51 folded.
-    const uint32_t rereads = p.glue->core.rereads();
-    const statsglue::TookBack& t = p.glue->core.takeBack();
-    TEST_ASSERT_TRUE(t.read && t.on && t.same && !t.behind && !t.rescan);
-    TEST_ASSERT_EQUAL_UINT32(2, t.folded);
-    TEST_ASSERT_EQUAL_UINT32(0, t.covered);
-    TEST_ASSERT_EQUAL_UINT32(rereads + 1, p.glue->core.rereads());
-    TEST_ASSERT_EQUAL_STRING("loaded", sx::readName(p.glue->opened.read));
-    TEST_ASSERT_EQUAL_UINT32(51, p.glue->core.markOf(p.id, p.j->epoch()));
-    TEST_ASSERT_TRUE(p.glue->fold.held() > gb.kept);
-    TEST_ASSERT_TRUE(p.glue->hs());
-    TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
-    // The next boot: 42-51, each once (49-51 in stats.bin: nothing folded).
-    Player q(card, p.id);
-    deviceFor(q, wk.sc);
-    q.nvs = p.nvs;
-    TEST_ASSERT_TRUE(q.boot(wk.ask()));
-    TEST_ASSERT_EQUAL_UINT32(0, q.glue->fold.folded());
-    TEST_ASSERT_EQUAL_UINT64(p.glue->fold.head().slots, q.glue->fold.head().slots);
-  }
-  // A fold out of memory, the card away at the give-back, a held tmp: the
-  // re-read's verdict on the session (behind, or not).
-  for (int c = 0; c < 4; ++c) {
-    const char* const names[] = {"the card away at the give-back", "the give-back save's tmp refused",
-                                 "the give-back save's rename refused (held)", "the boot's fold out of memory"};
-    const char* w = names[c];
-    CutFs card;
-    put(card, wk.in);
-    FaultFs fs(card);
-    Player p(card, dev);
-    p.fs = &fs;
-    if (c == 3) {
-      // (worked-example's boot with no memory from its fold's first block:
-      // nothing folded, no save; 49 written, not folded.)
-      deviceFor(p, wk.sc);
-      p.alloc = shortAlloc;
-      p.release = shortFree;
-      p.afterRead = [] { gShortHeap = true; };
-      TEST_ASSERT_TRUE_MESSAGE(p.boot(wk.ask()), w);
-      gShortHeap = false;
-      TEST_ASSERT_TRUE_MESSAGE(p.glue->fold.noMemory(), w);
-    } else {
-      wk.boot(p);
-    }
-    TEST_ASSERT_TRUE_MESSAGE(p.write(Worked::play(1)) == pl::Outbox::Did::Written, w);
-    if (c == 0) p.glue->away = true;
-    if (c == 1) fs.noCreate.fail = 1;
-    if (c == 2) fs.noRename.fail = 1;
-    TEST_ASSERT_TRUE_MESSAGE(p.glue->core.giveBack() > 0, w);
-    p.glue->away = false;
-    fs.noCreate = fs.noRename = faultfs::Knob();
-    const statsglue::GaveBack& gb = p.glue->core.gaveBack();
-    TEST_ASSERT_EQUAL_MESSAGE(c != 3, gb.saveAsked, w);
-    TEST_ASSERT_EQUAL_STRING_MESSAGE(c == 0 ? "cardAway" : "none", statsglue::refusedName(gb.refused), w);
-    if (c == 1) TEST_ASSERT_EQUAL_STRING_MESSAGE("failed", sx::savedName(p.glue->last.what), w);
-    if (c == 2) TEST_ASSERT_EQUAL_STRING_MESSAGE("held", sx::savedName(p.glue->last.what), w);
-    TEST_ASSERT_EQUAL_MESSAGE(c == 2, gb.covers, w);
-    TEST_ASSERT_TRUE_MESSAGE(p.write(Worked::play(2)) == pl::Outbox::Did::Written, w);
-    const statsglue::TookBack& t = p.glue->core.takeBack();
-    TEST_ASSERT_TRUE_MESSAGE(t.read && t.on, w);
-    TEST_ASSERT_EQUAL_MESSAGE(c == 2, t.same, w);
-    TEST_ASSERT_EQUAL_MESSAGE(c == 2, p.glue->opened.heldPromoted, w);
-    TEST_ASSERT_EQUAL_MESSAGE(c != 2, p.glue->core.behind(), w);
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, t.folded, w);
-    TEST_ASSERT_FALSE_MESSAGE(p.glue->fold.noMemory(), w);
-    TEST_ASSERT_EQUAL_MESSAGE(c == 2, p.glue->hs(), w);
-    if (c != 2) TEST_ASSERT_EQUAL_STRING_MESSAGE("behind", refused(p), w);
-    TEST_ASSERT_EQUAL_MESSAGE(c == 2, p.glue->core.save(pl::Folds::Why::Rotation), w);
-    // The next boot folds what the card's stats.bin doesn't hold, each
-    // once: 49-50 (50 too after a held tmp: Hs saved it; and 42-48 after the
-    // boot's fold that ran out of memory).
-    Player q(card, p.id);
-    deviceFor(q, wk.sc);
-    q.nvs = p.nvs;
-    TEST_ASSERT_TRUE_MESSAGE(q.boot(wk.ask()), w);
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(c == 2 ? 0 : c == 3 ? 9 : 2, q.glue->fold.folded(), w);
-    TEST_ASSERT_EQUAL_UINT64_MESSAGE(wk.b["stats"]["head"]["slots"].u64() + 2, q.glue->fold.head().slots, w);
-  }
-  // The re-read the card fails once (stats.bin's reads, that try's alone):
-  // still given back, read again at a later pass once the boot's first
-  // wait is over (never a wait in the loop); meanwhile the ring kept and a
-  // play joins it, no block held, the saves refused, nothing covered; then
-  // whole: the same copy, the ring folded, saves on (the give-back review).
-  {
-    CutFs card;
-    put(card, wk.in);
-    Player p(card, dev);
-    wk.boot(p);
-    TEST_ASSERT_TRUE(p.write(Worked::play(1)) == pl::Outbox::Did::Written);
-    TEST_ASSERT_TRUE(p.glue->core.giveBack() > 0);
-    TEST_ASSERT_TRUE(p.glue->core.gaveBack().covers);  // (49 saved first)
-    TEST_ASSERT_TRUE(p.write(Worked::play(2)) == pl::Outbox::Did::Written);
-    TEST_ASSERT_TRUE(p.glue->core.takeBackDue());
-    const uint32_t rereads = p.glue->core.rereads();
-    card.faultPrefix = sx::kStatsBin;
-    card.faultFrom = 0;
-    const statsglue::TookBack& t = p.glue->core.takeBack();
-    card.faultFrom = -1;
-    TEST_ASSERT_TRUE(t.read && t.again && !t.on);
-    TEST_ASSERT_EQUAL_UINT32(1, t.tries);
-    TEST_ASSERT_EQUAL_UINT32(0, t.dropped);
-    TEST_ASSERT_TRUE(sx::cardFault(p.glue->opened));
-    TEST_ASSERT_TRUE(p.glue->core.givenBack());
-    TEST_ASSERT_EQUAL_UINT32(1, p.glue->core.ringCount());
-    TEST_ASSERT_EQUAL_size_t(0, p.glue->fold.held());  // (the read gave every block back: the next carves them)
-    TEST_ASSERT_EQUAL_size_t(0, p.glue->core.resident());
-    TEST_ASSERT_EQUAL_size_t(0, p.glue->core.giveBack());  // (a second update meanwhile: nothing more)
-    TEST_ASSERT_EQUAL_UINT32(1, p.glue->core.takeBackTries());
-    TEST_ASSERT_EQUAL_UINT64(p.oenv.now + tagstore::kBootWaitsMs[0], p.glue->core.takeBackAtMs());
-    TEST_ASSERT_FALSE(p.glue->core.takeBackDue());
-    Slot s;
-    s.kind = pl::kKindPlay;
-    std::memcpy(s.deviceId, p.id, 6);
-    s.epoch = p.j->epoch();
-    s.seq = 49;
-    TEST_ASSERT_FALSE(p.glue->core.covered(s));  // (the stats off until a read: a rotation asks its save)
-    TEST_ASSERT_FALSE(p.glue->core.save(pl::Folds::Why::Rotation));
-    TEST_ASSERT_EQUAL_STRING("off", refused(p));
-    TEST_ASSERT_TRUE(p.write(Worked::play(3)) == pl::Outbox::Did::Written);
-    TEST_ASSERT_EQUAL_UINT32(2, p.glue->core.ringCount());
-    p.oenv.now = p.glue->core.takeBackAtMs() - 1;
-    TEST_ASSERT_FALSE(p.glue->core.takeBackDue());
-    p.oenv.now += 1;
-    TEST_ASSERT_TRUE(p.glue->core.takeBackDue());
-    const statsglue::TookBack& u = p.glue->core.takeBack();
-    TEST_ASSERT_TRUE(u.read && u.on && u.same && !u.again && !u.behind);
-    TEST_ASSERT_EQUAL_UINT32(2, u.tries);
-    TEST_ASSERT_EQUAL_UINT32(2, u.folded);  // (50, 51)
-    TEST_ASSERT_EQUAL_UINT32(rereads + 2, p.glue->core.rereads());
-    TEST_ASSERT_FALSE(p.glue->core.givenBack());
-    TEST_ASSERT_EQUAL_UINT32(0, p.glue->core.takeBackTries());
-    TEST_ASSERT_EQUAL_UINT32(51, p.glue->core.markOf(p.id, p.j->epoch()));
-    TEST_ASSERT_TRUE(p.glue->core.covered(s));
-    TEST_ASSERT_TRUE(p.glue->hs());
-    TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
-    Player q(card, p.id);
-    deviceFor(q, wk.sc);
-    q.nvs = p.nvs;
-    TEST_ASSERT_TRUE(q.boot(wk.ask()));
-    TEST_ASSERT_EQUAL_UINT32(0, q.glue->fold.folded());  // (49-51 in stats.bin)
-    TEST_ASSERT_EQUAL_UINT64(wk.b["stats"]["head"]["slots"].u64() + 3, q.glue->fold.head().slots);
-  }
-  // The re-read failing at every read (stats.bin's, each time): read again
-  // after each of the boot's waits, kTakeBackReads in all, then the stats
-  // off for the session, every block given back, the ring dropped; nothing
-  // trimmed or saved after; the card answering again, the next boot folds
-  // it all.
-  {
-    CutFs card;
-    put(card, wk.in);
-    Player p(card, dev);
-    wk.boot(p);
-    TEST_ASSERT_TRUE(p.write(Worked::play(1)) == pl::Outbox::Did::Written);
-    TEST_ASSERT_TRUE(p.glue->core.giveBack() > 0);
-    TEST_ASSERT_TRUE(p.write(Worked::play(2)) == pl::Outbox::Did::Written);
-    card.faultPrefix = sx::kStatsBin;
-    card.faultFrom = 0;
-    for (uint32_t k = 1; k < statsglue::kTakeBackReads; ++k) {
-      TEST_ASSERT_TRUE(p.glue->core.takeBackDue());
-      const statsglue::TookBack& t = p.glue->core.takeBack();
-      TEST_ASSERT_TRUE(t.read && t.again && !t.on);
-      TEST_ASSERT_EQUAL_UINT32(k, t.tries);
-      TEST_ASSERT_TRUE(p.glue->core.givenBack());
-      TEST_ASSERT_FALSE(p.glue->core.takeBackDue());
-      p.oenv.now += tagstore::kBootWaitsMs[k - 1];
-    }
-    TEST_ASSERT_TRUE(p.glue->core.takeBackDue());
-    const statsglue::TookBack& t = p.glue->core.takeBack();
-    card.faultFrom = -1;
-    TEST_ASSERT_TRUE(t.read);
-    TEST_ASSERT_FALSE(t.on || t.again);
-    TEST_ASSERT_EQUAL_UINT32(statsglue::kTakeBackReads, t.tries);
-    TEST_ASSERT_EQUAL_UINT32(4, statsglue::kTakeBackReads);  // (the boot's: a read and three waits)
-    TEST_ASSERT_EQUAL_UINT32(1, t.dropped);  // (50: the next boot's)
-    TEST_ASSERT_EQUAL_UINT32(0, t.folded);
-    TEST_ASSERT_EQUAL_STRING("unread", sx::readName(p.glue->opened.read));
-    TEST_ASSERT_FALSE(p.glue->core.on());
-    TEST_ASSERT_FALSE(p.glue->core.givenBack());
-    TEST_ASSERT_FALSE(p.glue->core.takeBackDue());
-    TEST_ASSERT_EQUAL_size_t(0, p.glue->fold.held());
-    TEST_ASSERT_EQUAL_UINT32(0, p.glue->core.ringCount());
-    Slot s;
-    s.kind = pl::kKindPlay;
-    std::memcpy(s.deviceId, p.id, 6);
-    s.epoch = p.j->epoch();
-    s.seq = 1;
-    TEST_ASSERT_FALSE(p.glue->core.covered(s));  // (nothing covered: nothing trimmed)
-    TEST_ASSERT_FALSE(p.glue->hs());
-    TEST_ASSERT_EQUAL_STRING("off", refused(p));
-    TEST_ASSERT_TRUE(p.write(Worked::play(3)) == pl::Outbox::Did::Written);
-    Player q(card, p.id);
-    deviceFor(q, wk.sc);
-    q.nvs = p.nvs;
-    TEST_ASSERT_TRUE(q.boot(wk.ask()));
-    TEST_ASSERT_EQUAL_UINT32(2, q.glue->fold.folded());  // (50, 51: 49 the give-back saved)
-  }
-  // A read that isn't the card's fault (a newer stats.bin meanwhile) is not
-  // read again: off at once, as a remount's.
-  {
-    CutFs card;
-    put(card, wk.in);
-    Player p(card, dev);
-    wk.boot(p);
-    TEST_ASSERT_TRUE(p.glue->core.giveBack() > 0);
-    Bytes b = bytesOf(card, "stats.bin");
-    cc::put16(reinterpret_cast<uint8_t*>(&b[4]), 2);  // (major 2)
-    put(card, Files{{"stats.bin", b}});
-    const statsglue::TookBack& t = p.glue->core.takeBack();
-    TEST_ASSERT_TRUE(t.read && !t.on && !t.again);
-    TEST_ASSERT_EQUAL_STRING("newer", sx::readName(p.glue->opened.read));
-    TEST_ASSERT_FALSE(p.glue->core.givenBack());
-  }
-  // A remount while given back, Ready before the boot's first slot: the
-  // scan begun again waits for the re-read (no read, no carve, no reserve),
-  // then reads at its first reserve(), its boot's fold the log again.
-  {
-    CutFs card;
-    put(card, wk.in);
-    Player p(card, dev);
-    p.alloc = heapAlloc;
-    p.release = heapFree;
-    wk.boot(p);
-    p.ops.clear();
-    TEST_ASSERT_TRUE(p.glue->core.giveBack() > 0);
-    TEST_ASSERT_FALSE(p.glue->core.gaveBack().saveAsked);  // (nothing new)
-    const uint64_t read0 = card.bytesRead;
-    const uint32_t carves0 = gHeap.carves;
-    p.j->remounted();  // (no slot yet: the scan again)
-    TEST_ASSERT_TRUE(p.glue->core.rereadPending());
-    TEST_ASSERT_TRUE(p.glue->core.wantsRoom());
-    TEST_ASSERT_FALSE(p.glue->core.reserve(1));
-    // (The journal's questions meanwhile read nothing either: the folds
-    // dropped, nothing covered.)
-    Slot s;
-    s.kind = pl::kKindPlay;
-    std::memcpy(s.deviceId, p.id, 6);
-    s.epoch = p.j->epoch();
-    s.seq = 1;
-    TEST_ASSERT_FALSE(p.glue->core.covered(s));
-    TEST_ASSERT_EQUAL_UINT32(0, p.glue->core.markOf(p.id, p.j->epoch()));
-    p.glue->core.ready();
-    TEST_ASSERT_EQUAL_UINT64(read0, card.bytesRead);
-    TEST_ASSERT_EQUAL_UINT32(carves0, gHeap.carves);
-    TEST_ASSERT_EQUAL_UINT32(0, p.glue->core.rereads());
-    TEST_ASSERT_FALSE(p.glue->hs());
-    TEST_ASSERT_EQUAL_STRING("givenBack", refused(p));
-    const statsglue::TookBack& t = p.glue->core.takeBack();
-    TEST_ASSERT_TRUE(t.rescan);
-    TEST_ASSERT_FALSE(t.read);
-    TEST_ASSERT_FALSE(p.glue->core.givenBack());
-    TEST_ASSERT_EQUAL_UINT64(read0, card.bytesRead);
-    TEST_ASSERT_TRUE(p.scan());
-    TEST_ASSERT_TRUE((p.glue->calls ==
-                      std::vector<std::string>{"began", "save boot", "hs (no)", "began again", "save boot"}));
-    TEST_ASSERT_EQUAL_STRING("nothing new", sx::savedName(p.glue->last.what));
-    TEST_ASSERT_TRUE(p.glue->core.on());
-    TEST_ASSERT_TRUE(p.glue->fold.held() > p.glue->core.gaveBack().kept);
-    sameFiles(cardOf(wk.b["out"]), filesOf(card), "a remount's scan while given back");
-  }
-  // An update before the boot's fold begins (the give-back review): the
-  // blocks the boot's read loaded given back, nothing to save first; the
-  // scan waits for the re-read (no reserve, no carve), then its fold folds
-  // the log above the MARK the re-read found: the boot as it is without the
-  // update, its save and its trim. And with a remount's read still to make
-  // (Ready, before the boot's first slot): what the fold still holds given
-  // back, the scan begun again waiting for the take-back, then reading.
-  // And before the boot's fold with the re-read failing at every read: no
-  // fold begun after it (the stats off: no block held), no save, no trim.
-  for (int c = 0; c < 3; ++c) {
-    const char* const names[] = {"an update before the boot's fold", "an update with a remount's read to make",
-                                 "an update before the boot's fold, the re-read failing"};
-    const char* w = names[c];
-    CutFs card;
-    put(card, wk.in);
-    Player p(card, dev);
-    p.alloc = heapAlloc;
-    p.release = heapFree;
-    deviceFor(p, wk.sc);
-    if (c != 1) {
-      p.begin(wk.ask());
-      TEST_ASSERT_TRUE_MESSAGE(p.glue->core.bootPending(), w);
-    } else {
-      wk.boot(p);
-      p.j->remounted();  // (no slot yet: the scan again)
-      TEST_ASSERT_TRUE_MESSAGE(p.glue->core.rereadPending(), w);
-    }
-    TEST_ASSERT_FALSE_MESSAGE(p.glue->fold.booting(), w);
-    const size_t resident = p.glue->core.resident();
-    TEST_ASSERT_TRUE_MESSAGE(resident > 0, w);
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(p.glue->fold.givesBack(), resident, w);
-    const size_t calls = p.glue->calls.size();
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(resident, p.glue->core.giveBack(), w);
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(calls, p.glue->calls.size(), w);  // (nothing to save first)
-    TEST_ASSERT_FALSE_MESSAGE(p.glue->core.gaveBack().saveAsked, w);
-    TEST_ASSERT_TRUE_MESSAGE(p.glue->core.givenBack(), w);
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(0, p.glue->core.resident(), w);
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(p.glue->core.gaveBack().kept, p.glue->fold.held(), w);
-    // The scan waits (app/ListeningStats::mayScan(): given back).
-    const uint64_t read0 = card.bytesRead;
-    const uint32_t carves0 = gHeap.carves;
-    TEST_ASSERT_TRUE_MESSAGE(p.glue->core.wantsRoom(), w);
-    TEST_ASSERT_FALSE_MESSAGE(p.glue->core.reserve(1), w);
-    TEST_ASSERT_EQUAL_UINT64_MESSAGE(read0, card.bytesRead, w);
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(carves0, gHeap.carves, w);
-    TEST_ASSERT_FALSE_MESSAGE(p.glue->hs(), w);
-    TEST_ASSERT_EQUAL_STRING_MESSAGE("givenBack", refused(p), w);
-    if (c == 2) {
-      card.faultPrefix = sx::kStatsBin;
-      card.faultFrom = 0;
-      for (uint32_t k = 1; k < statsglue::kTakeBackReads; ++k) {
-        TEST_ASSERT_TRUE_MESSAGE(p.glue->core.takeBack().again, w);
-        TEST_ASSERT_FALSE_MESSAGE(p.glue->core.reserve(1), w);  // (the scan waits still)
-        p.oenv.now += tagstore::kBootWaitsMs[k - 1];
-      }
-      const statsglue::TookBack& t = p.glue->core.takeBack();
-      card.faultFrom = -1;
-      TEST_ASSERT_TRUE_MESSAGE(t.read && !t.on && !t.again, w);
-      TEST_ASSERT_FALSE_MESSAGE(p.glue->core.givenBack() || p.glue->core.bootPending(), w);
-      TEST_ASSERT_FALSE_MESSAGE(p.glue->core.wantsRoom(), w);
-      TEST_ASSERT_TRUE_MESSAGE(p.scan(), w);
-      TEST_ASSERT_FALSE_MESSAGE(p.glue->core.on(), w);
-      TEST_ASSERT_EQUAL_size_t_MESSAGE(0, p.glue->fold.held(), w);
-      TEST_ASSERT_EQUAL_STRING_MESSAGE("off", refused(p), w);
-      TEST_ASSERT_TRUE_MESSAGE(p.trimmed().empty(), w);
-      sameFiles(wk.in, filesOf(card), w);  // (nothing saved, nothing trimmed)
-      continue;
-    }
-    const statsglue::TookBack& t = p.glue->core.takeBack();
-    TEST_ASSERT_FALSE_MESSAGE(p.glue->core.givenBack(), w);
-    if (c == 0) {
-      TEST_ASSERT_TRUE_MESSAGE(t.read && t.on && t.same && !t.behind && !t.rescan, w);
-      TEST_ASSERT_TRUE_MESSAGE(p.glue->core.bootPending(), w);  // (the scan's next reserve() begins it)
-    } else {
-      TEST_ASSERT_TRUE_MESSAGE(t.rescan && !t.read, w);
-    }
-    TEST_ASSERT_TRUE_MESSAGE(p.scan(), w);
-    TEST_ASSERT_TRUE_MESSAGE(p.glue->core.on() && !p.glue->core.behind(), w);
-    TEST_ASSERT_TRUE_MESSAGE(p.glue->fold.held() > p.glue->core.gaveBack().kept, w);
-    if (c == 0) {
-      TEST_ASSERT_EQUAL_STRING_MESSAGE("wrote", sx::savedName(p.glue->last.what), w);
-    } else {
-      TEST_ASSERT_EQUAL_STRING_MESSAGE("nothing new", sx::savedName(p.glue->last.what), w);
-    }
-    sameFiles(cardOf(wk.b["out"]), filesOf(card), w);
-  }
+// The card's stats.bin's MARK for this player's epoch.
+uint32_t cardMark(CutFs& card, const Player& p) {
+  const Counts c = countsOf(card);
+  const auto it = c.mark.find({std::string(reinterpret_cast<const char*>(p.id), 6), p.j->epoch()});
+  return it == c.mark.end() ? 0 : it->second;
 }
 
-// A cut at every write step of the give-back's save, three ways, then a
-// boot: the counts the uncut give-back's next boot holds, each play once
-// (stats.bin the boot's, the next boot folding 49 again; or the give-back's,
-// folding nothing). The power goes with the cut: the session ends there.
-void test_a_cut_during_the_give_backs_save() {
+// app/PlayHistory::loop()'s turn at each pass the write gate lets through,
+// the boot's scan done (statsglue::turnOf(): one thing of the card's a
+// pass), over the real Journal, Tracker, Outbox and glue.
+struct Loop {
+  explicit Loop(Player& pl) : p(pl) {}
+  Player& p;
+  bool hsAsked = false;
+  // PlayHistory::slotsDue(): the journal ready, the card not away (the
+  // test's never is), the Outbox's head due.
+  uint32_t slotsDue() { return p.j->ready() && p.tracker->pending() && p.out->due() ? p.tracker->pending() : 0; }
+  sg::Turn pass(bool gateOpen = true) {
+    if (!gateOpen) return sg::Turn::Nothing;
+    const sg::Turn t = sg::turnOf(p.glue->core.saveDue(p.fenced), slotsDue(), hsAsked);
+    switch (t) {
+      case sg::Turn::Save: p.glue->core.saveNow(p.fenced); break;
+      case sg::Turn::Slot: p.out->writeOne(); break;
+      case sg::Turn::Hs:
+        hsAsked = false;
+        p.glue->core.hs(p.fenced);
+        break;
+      case sg::Turn::Nothing: break;
+    }
+    return t;
+  }
+  // A play that ends, then its slot at the next pass.
+  void play(uint32_t i) {
+    p.ended(Worked::play(i));
+    TEST_ASSERT_TRUE(pass() == sg::Turn::Slot);
+  }
+};
+
+}  // namespace
+
+void test_the_saves_at_the_gate() {
   const Worked wk;
   const uint8_t* dev = reinterpret_cast<const uint8_t*>("\0\0\0\0\0\1");
-  // The boot, 49 written live, the give-back (its save cut at its step
-  // `cutAt`; 0: none); NVS as the session left it.
+  CutFs card;
+  put(card, wk.in);
+  Player p(card, dev);
+  wk.boot(p);
+  TEST_ASSERT_EQUAL_UINT32(48, cardMark(card, p));
+  TEST_ASSERT_EQUAL_UINT32(0, p.glue->fold.records());
+  Loop l(p);
+  uint32_t n = 0;  // the plays written this session
+  // Run H: Hs asked while 4 plays wait behind a shut gate: the slots first,
+  // one a pass, each folded live; Hs at the pass after them, its save
+  // holding them.
+  for (uint32_t i = 1; i <= 4; ++i) p.ended(Worked::play(i));
+  l.hsAsked = true;
+  for (int k = 0; k < 3; ++k) l.pass(false);
+  TEST_ASSERT_EQUAL_UINT32(4, p.tracker->pending());
+  for (uint32_t k = 1; k <= 4; ++k) {
+    TEST_ASSERT_TRUE_MESSAGE(l.pass() == sg::Turn::Slot, "Hs before a play waiting for its slot");
+    TEST_ASSERT_EQUAL_UINT32(k, p.glue->fold.records());
+  }
+  n += 4;
+  TEST_ASSERT_TRUE(l.pass() == sg::Turn::Hs);
+  TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
+  TEST_ASSERT_EQUAL_UINT32(48 + n, cardMark(card, p));
+  TEST_ASSERT_EQUAL_UINT32(0, p.glue->fold.records());
+
+  // The records' save before the slot of its pass: the 64th record written,
+  // the save due at the next pass the gate lets through, before the 65th's
+  // slot (it holds exactly 64).
+  for (uint32_t i = 0; i < 63; ++i) l.play(100 + i);
+  n += 63;
+  TEST_ASSERT_FALSE(p.glue->core.saveDue(false));
+  p.ended(Worked::play(200));
+  p.ended(Worked::play(201));
+  TEST_ASSERT_TRUE(l.pass() == sg::Turn::Slot);
+  ++n;
+  TEST_ASSERT_EQUAL_UINT32(sf::kSaveAt, p.glue->fold.records());
+  TEST_ASSERT_TRUE(p.glue->core.saveDue(false));
+  // (Waits while the card is away.)
+  p.glue->away = true;
+  TEST_ASSERT_FALSE(p.glue->core.saveDue(false));
+  p.glue->away = false;
+  TEST_ASSERT_TRUE(l.pass() == sg::Turn::Save);
+  TEST_ASSERT_EQUAL_STRING("records", sg::kindName(p.glue->core.lastKind()));
+  TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
+  TEST_ASSERT_FALSE(p.glue->last.compacted);
+  TEST_ASSERT_EQUAL_UINT32(48 + n, cardMark(card, p));
+  TEST_ASSERT_EQUAL_UINT32(1, p.tracker->pending());  // (the 65th, after the save)
+  TEST_ASSERT_TRUE(l.pass() == sg::Turn::Slot);
+  ++n;
+  TEST_ASSERT_EQUAL_UINT32(1, p.glue->fold.records());
+
+  // A library update's fence: no records' save behind it until the records
+  // are full (96), then whatever the fence; Hs refused behind it.
+  p.fenced = true;
+  for (uint32_t i = 0; i < 95; ++i) {
+    TEST_ASSERT_FALSE(p.glue->core.saveDue(true));
+    l.play(300 + i);
+  }
+  n += 95;
+  TEST_ASSERT_EQUAL_UINT32(sf::kRecords, p.glue->fold.records());
+  l.hsAsked = true;
+  TEST_ASSERT_TRUE(l.pass() == sg::Turn::Save);  // (the save first, whatever the fence)
+  TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
+  TEST_ASSERT_EQUAL_UINT32(48 + n, cardMark(card, p));
+  TEST_ASSERT_TRUE(l.pass() == sg::Turn::Hs);
+  TEST_ASSERT_EQUAL_STRING("fenced", refused(p));
+  TEST_ASSERT_FALSE(p.glue->fold.behind());
+  p.fenced = false;
+
+  // A records' save that failed, then a save of another kind that took the
+  // records (Hs): the records' save is due again from 64 new ones, not only
+  // past the count it failed at.
+  for (uint32_t i = 0; i < sf::kSaveAt; ++i) l.play(400 + i);
+  p.glue->saveFails = 1;
+  TEST_ASSERT_TRUE(l.pass() == sg::Turn::Save);
+  TEST_ASSERT_EQUAL_STRING("failed", sx::savedName(p.glue->last.what));
+  TEST_ASSERT_TRUE(l.pass() == sg::Turn::Nothing);
+  l.hsAsked = true;
+  TEST_ASSERT_TRUE(l.pass() == sg::Turn::Hs);
+  TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
+  TEST_ASSERT_EQUAL_UINT32(0, p.glue->fold.records());
+  for (uint32_t i = 0; i < sf::kSaveAt; ++i) l.play(450 + i);
+  n += 2 * sf::kSaveAt;
+  TEST_ASSERT_TRUE(l.pass() == sg::Turn::Save);
+  TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
+  TEST_ASSERT_EQUAL_UINT32(48 + n, cardMark(card, p));
+
+  // The card full from the 64th: tried at the pass after each later live
+  // record (never twice for one); at 96 tried once more; the 97th finds the
+  // records full: behind (no record, no save, Hs's too), never before.
+  for (uint32_t i = 0; i < 63; ++i) l.play(500 + i);
+  n += 63;
+  p.glue->saveFails = -1;
+  uint32_t tried = 0;
+  for (uint32_t i = 0; i < sf::kRecords - sf::kSaveAt + 2; ++i) {
+    l.play(600 + i);
+    ++n;
+    if (p.glue->fold.behind()) break;
+    TEST_ASSERT_TRUE(l.pass() == sg::Turn::Save);
+    TEST_ASSERT_EQUAL_STRING("failed", sx::savedName(p.glue->last.what));
+    ++tried;
+    TEST_ASSERT_TRUE(l.pass() == sg::Turn::Nothing);  // (no later record: not again)
+    TEST_ASSERT_FALSE(p.glue->fold.behind());
+  }
+  TEST_ASSERT_EQUAL_UINT32(sf::kRecords - sf::kSaveAt + 1, tried);  // (64 to 96)
+  TEST_ASSERT_TRUE(p.glue->fold.behind());
+  TEST_ASSERT_EQUAL_UINT32(0, p.glue->fold.records());
+  TEST_ASSERT_FALSE(p.glue->core.saveDue(false));
+  p.glue->saveFails = 0;
+  TEST_ASSERT_FALSE(p.glue->hs());
+  TEST_ASSERT_EQUAL_STRING("behind", refused(p));
+  const uint32_t saved = 48 + n - (sf::kRecords + 1);
+  TEST_ASSERT_EQUAL_UINT32(saved, cardMark(card, p));
+  // The next boot folds every unsaved play once (the log holds them): the
+  // card's stats then hold the whole session, each play once.
+  Player q(card, p.id);
+  deviceFor(q, wk.sc);
+  q.nvs = p.nvs;
+  TEST_ASSERT_TRUE(q.boot(wk.ask()));
+  TEST_ASSERT_EQUAL_UINT32(sf::kRecords + 1, q.glue->fold.folded());
+  TEST_ASSERT_EQUAL_UINT64(wk.slots() + n, q.glue->fold.head().slots);
+  TEST_ASSERT_EQUAL_UINT32(48 + n, cardMark(card, q));
+}
+
+// A cut at every step of a records' save (64 plays written live), then a
+// boot: the counts the uncut session leaves, every time (the 64 folded again
+// by the boot when the save didn't land, none when it did).
+void test_a_cut_during_the_records_save() {
+  const Worked wk;
+  const uint8_t* dev = reinterpret_cast<const uint8_t*>("\0\0\0\0\0\1");
   auto session = [&](CutFs& card, long cutAt) {
     Player p(card, dev);
     wk.boot(p);
-    TEST_ASSERT_TRUE(p.write(Worked::play(1)) == pl::Outbox::Did::Written);
-    if (cutAt > 0) p.glue->beforeSave = [&card, cutAt] { card.cutAt = card.steps + cutAt; };
-    p.glue->core.giveBack();
-    p.glue->beforeSave = nullptr;
+    for (uint32_t i = 0; i < sf::kSaveAt; ++i) TEST_ASSERT_TRUE(p.write(Worked::play(i)) == pl::Outbox::Did::Written);
+    TEST_ASSERT_TRUE(p.glue->core.recordsDue(false));
+    if (cutAt > 0) card.cutAt = card.steps + cutAt;
+    p.glue->core.recordsSave();
     if (!card.dead) TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
     return p.nvs;
   };
@@ -2425,9 +2425,9 @@ void test_a_cut_during_the_give_backs_save() {
   put(ref, wk.in);
   uint32_t folded = 0;
   next(ref, session(ref, 0), "uncut", &folded);
-  TEST_ASSERT_EQUAL_UINT32(0, folded);  // (49 in the give-back's stats.bin)
+  TEST_ASSERT_EQUAL_UINT32(0, folded);  // (the 64 in the records' stats.bin)
   const Counts want = countsOf(ref);
-  TEST_ASSERT_EQUAL_UINT64(wk.b["stats"]["head"]["slots"].u64() + 1, want.slots);
+  TEST_ASSERT_EQUAL_UINT64(wk.slots() + sf::kSaveAt, want.slots);
   int steps = 0, runs = 0, again = 0;
   for (long k = 1;; ++k) {
     bool cut = false;
@@ -2438,12 +2438,12 @@ void test_a_cut_during_the_give_backs_save() {
       if (!card.dead) break;
       cut = true;
       char w[96];
-      std::snprintf(w, sizeof(w), "the give-back's save cut at its step %ld, way %d", k, static_cast<int>(v));
+      std::snprintf(w, sizeof(w), "the records' save cut at its step %ld, way %d", k, static_cast<int>(v));
       TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, card.violations.size(), w);
       CutFs after = card.reboot(v);
       next(after, n, w, &folded);
-      TEST_ASSERT_TRUE_MESSAGE(folded <= 1, w);  // (49 again, or none: the give-back's landed)
-      again += static_cast<int>(folded);
+      TEST_ASSERT_TRUE_MESSAGE(folded == 0 || folded == sf::kSaveAt, w);
+      again += folded ? 1 : 0;
       TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, after.violations.size(), w);
       partTwins(after);
       TEST_ASSERT_TRUE_MESSAGE(countsOf(after) == want, w);
@@ -2452,7 +2452,7 @@ void test_a_cut_during_the_give_backs_save() {
     if (!cut) break;
     ++steps;
   }
-  printf("the give-back's save: %d steps cut three ways (%d runs), then a boot: the uncut counts each time (49 "
+  printf("the records' save: %d steps cut three ways (%d runs), then a boot: the uncut counts each time (the 64 "
          "folded again after %d of them)\n",
          steps, runs, again);
   TEST_ASSERT_TRUE(steps >= 5);
@@ -2460,350 +2460,321 @@ void test_a_cut_during_the_give_backs_save() {
 }
 
 // ---------------------------------------------------------------------------
-// The plays waiting for their slots come first (S1's device round 1, runs H
-// and L): at the pass the write gate opened, Hs saved "nothing new" with 4
-// plays waiting for that same gate, and a library update's give-back had
-// "nothing to save first" with 3 completed plays waiting, which then went
-// into the ring.
+// The boot's overflow (300 slots of a 0.14.0 history past the 96 records:
+// one chunk) and its save's tries: held through the boot's waits (100, 300
+// and 1,000 ms, kBootTries tries in all), a track's start and a library
+// update waiting meanwhile (overflowHeld(), scanHolds()); given back when a
+// try lands or is held, else after the last (behind); at once by the end's
+// flush. A live slot meanwhile goes in the last chunk's room.
 // ---------------------------------------------------------------------------
 namespace {
 
-// app/PlayHistory::loop()'s turn at each pass the write gate lets through,
-// the boot's scan done (statsglue::turnOf(): one thing of the card's a
-// pass), then main.cpp's stepCard() (the update step asked: it waits while
-// Glue::updateWaits(), its LibraryUpdate::In::writesWait; else its memory
-// check and fence give the stats' blocks back), over the real Journal,
-// Tracker, Outbox and glue.
-struct Loop {
-  explicit Loop(Player& pl) : p(pl) {}
-  Player& p;
-  bool hsAsked = false;
-  bool updateAsked = false;
-  uint32_t updateWaited = 0;  // passes the update step waited for the play log
-  // PlayHistory::slotsDue(): the journal ready, the card not away (the
-  // test's never is), the Outbox's head due.
-  uint32_t slotsDue() { return p.j->ready() && p.tracker->pending() && p.out->due() ? p.tracker->pending() : 0; }
-  // PlayHistory::slotsQueued(): the same without the head's due() (a play
-  // behind a try the card failed is queued too).
-  uint32_t slotsQueued() { return p.j->ready() ? p.tracker->pending() : 0; }
-  void pass(bool gateOpen) {
-    if (gateOpen) {
-      switch (statsglue::turnOf(slotsDue(), hsAsked)) {
-        case statsglue::Turn::Slot: p.out->writeOne(); break;
-        case statsglue::Turn::Hs:
-          hsAsked = false;
-          p.glue->hs();
-          break;
-        case statsglue::Turn::Nothing: break;
-      }
-    }
-    if (!updateAsked) return;
-    if (p.glue->core.updateWaits(gateOpen, slotsQueued())) {
-      ++updateWaited;
-      return;
-    }
-    updateAsked = false;
-    p.glue->core.giveBack();
+struct Overflow {
+  const minijson::Value& sc = session("boot-overflow");
+  const minijson::Value& st = sc["steps"][0];
+  uint8_t dev[6];
+  Overflow() { deviceOf(sc["players"]["A"]["device"].str(), dev); }
+  void player(Player& p) const {
+    const minijson::Value& nvs = sc["players"]["A"]["nvs"];
+    p.nvs.ids.epoch = nvs[0].u64();
+    p.nvs.ids.seq = static_cast<uint32_t>(nvs[1].u64());
+    p.nvs.ids.boots = static_cast<uint32_t>(nvs[2].u64());
+    p.piece = 128;
+    p.buf.assign(pl::kReadBytes, 0);
+    p.mem.alloc = heapAlloc;
+    p.mem.release = heapFree;
+  }
+  BootAsk ask(int saveFails) const {
+    BootAsk a = askOf(st);
+    a.saveFails = saveFails;
+    return a;
   }
 };
 
-// The card's stats.bin's MARK for this player's epoch.
-uint32_t cardMark(CutFs& card, const Player& p) {
-  const Counts c = countsOf(card);
-  const auto it = c.mark.find({std::string(reinterpret_cast<const char*>(p.id), 6), p.j->epoch()});
-  return it == c.mark.end() ? 0 : it->second;
+}  // namespace
+
+void test_the_boot_overflows_tries() {
+  const Overflow ov;
+  const uint32_t cap = static_cast<uint32_t>(ov.sc["cap"].u64());
+  // Every try fails: given back after the fourth, the session behind; the
+  // card as it was; the next boot folds the 300 again.
+  {
+    CutFs card;
+    put(card, sessionCard(ov.sc["in"]));
+    Player p(card, ov.dev, cap);
+    ov.player(p);
+    gHeap = Heap();
+    p.begin(ov.ask(-1));
+    const size_t atRead = gHeap.held;
+    bool held = false;
+    for (int guard = 0; guard < 100000; ++guard) {
+      p.glue->reserve(p.piece);
+      held = held || p.glue->core.overflowHeld();
+      if (p.j->scan(p.piece)) break;
+    }
+    p.glue->ready();
+    TEST_ASSERT_TRUE(held);
+    sg::Glue& g = p.glue->core;
+    TEST_ASSERT_EQUAL_UINT32(300, g.fold().folded());
+    TEST_ASSERT_EQUAL_UINT32(300, g.fold().records());
+    TEST_ASSERT_EQUAL_UINT32(1, g.fold().chunks());
+    TEST_ASSERT_TRUE(g.retrying());
+    TEST_ASSERT_EQUAL_UINT32(1, g.tries());
+    TEST_ASSERT_TRUE(g.overflowHeld() && g.scanHolds());
+    TEST_ASSERT_FALSE(g.rangesHeld());  // (the ranges' block given back at the scan's end)
+    TEST_ASSERT_EQUAL_size_t(atRead + sf::kChunkBytes, gHeap.held);
+    TEST_ASSERT_FALSE(g.hs(false));
+    TEST_ASSERT_EQUAL_STRING("booting", refused(p));
+    TEST_ASSERT_FALSE(g.recordsDue(false));
+    for (uint32_t t = 0; t + 1 < sg::kBootTries; ++t) {
+      const uint64_t at = g.retryAtMs();
+      TEST_ASSERT_EQUAL_UINT64(p.oenv.now + tagstore::kBootWaitsMs[t], at);
+      p.oenv.now = at - 1;
+      TEST_ASSERT_FALSE(g.saveDue(false));
+      p.oenv.now = at;
+      TEST_ASSERT_TRUE(g.saveDue(false));
+      TEST_ASSERT_FALSE(g.saveNow(false));
+      TEST_ASSERT_EQUAL_UINT32(t + 2, g.tries());
+      TEST_ASSERT_EQUAL_STRING("failed", sx::savedName(g.last().what));
+    }
+    TEST_ASSERT_FALSE(g.retrying());
+    TEST_ASSERT_TRUE(g.fold().behind());
+    TEST_ASSERT_EQUAL_UINT32(0, g.fold().chunks());
+    TEST_ASSERT_FALSE(g.overflowHeld() || g.scanHolds());
+    TEST_ASSERT_EQUAL_size_t(atRead, gHeap.held);
+    TEST_ASSERT_EQUAL_UINT32(0, card.dir.count(sx::kStatsBin));
+    Player q(card, ov.dev, cap);
+    q.nvs = p.nvs;
+    TEST_ASSERT_TRUE(q.boot(ov.ask(0)));
+    TEST_ASSERT_EQUAL_UINT32(300, q.glue->fold.folded());
+    TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(q.glue->last.what));
+  }
+  // The first two fail, the third lands; a live play meanwhile in the last
+  // chunk's room, held by it: nothing behind, the next boot folds none.
+  {
+    CutFs card;
+    put(card, sessionCard(ov.sc["in"]));
+    Player p(card, ov.dev, cap);
+    ov.player(p);
+    TEST_ASSERT_TRUE(p.boot(ov.ask(2)));
+    sg::Glue& g = p.glue->core;
+    TEST_ASSERT_TRUE(g.retrying());
+    TEST_ASSERT_TRUE(p.write(Worked::play(7)) == pl::Outbox::Did::Written);
+    TEST_ASSERT_EQUAL_UINT32(301, g.fold().records());
+    while (g.retrying()) {
+      p.oenv.now = g.retryAtMs();
+      g.saveNow(false);
+    }
+    TEST_ASSERT_EQUAL_UINT32(3, g.tries());
+    TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(g.last().what));
+    TEST_ASSERT_FALSE(g.fold().behind());
+    TEST_ASSERT_EQUAL_UINT32(0, g.fold().records());
+    TEST_ASSERT_FALSE(g.overflowHeld() || g.scanHolds());
+    TEST_ASSERT_EQUAL_UINT32(301, cardMark(card, p));
+    Player q(card, ov.dev, cap);
+    q.nvs = p.nvs;
+    TEST_ASSERT_TRUE(q.boot(ov.ask(0)));
+    TEST_ASSERT_EQUAL_UINT32(0, q.glue->fold.folded());
+    TEST_ASSERT_EQUAL_UINT64(301, q.glue->fold.head().slots);
+  }
+  // The orderly end while the tries wait: given back at once, behind.
+  {
+    CutFs card;
+    put(card, sessionCard(ov.sc["in"]));
+    Player p(card, ov.dev, cap);
+    ov.player(p);
+    TEST_ASSERT_TRUE(p.boot(ov.ask(1)));
+    sg::Glue& g = p.glue->core;
+    TEST_ASSERT_TRUE(g.retrying() && g.overflowHeld());
+    g.ending(p.oenv.now + 3000);
+    TEST_ASSERT_FALSE(g.retrying());
+    TEST_ASSERT_TRUE(g.fold().behind());
+    TEST_ASSERT_FALSE(g.overflowHeld() || g.scanHolds());
+    p.oenv.now += 10000;
+    TEST_ASSERT_FALSE(g.saveDue(false));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// MARK's room: the object's 16 rows, or a block for a card with more than 8
+// (its rows and 8 more), carved by the boot's read and kept; a remount's
+// read whose MARK passes it (another player wrote the card while it was
+// out) is a read with no memory: the stats off for the session (no fold, no
+// save, no trim), never a carve and never a MARK cut short.
+// ---------------------------------------------------------------------------
+namespace {
+
+// A play slot of `dev` (its seq 1, epoch `epoch`), dated.
+std::vector<uint8_t> slotOf(const uint8_t dev[6], uint64_t epoch, uint32_t i) {
+  Slot s;
+  s.kind = pl::kKindPlay;
+  s.outcome = pl::kCompleted;
+  s.source = pl::kSourceManual;
+  s.clock = pl::kClockRtc;
+  s.seq = 1;
+  s.epoch = epoch;
+  std::memcpy(s.deviceId, dev, 6);
+  s.startedAt = sf::kMinMs + 313ull * sf::kDayMs + i * 60000ull;
+  s.bootSeq = 1;
+  s.uptimeMs = 1000;
+  s.playedMs = 120000;
+  s.durationMs = 200000;
+  s.pathHash = 0x5eed000000000000ull + i;
+  std::vector<uint8_t> b(pl::kSlot);
+  pl::encode(s, b.data());
+  return b;
+}
+
+// The log with the slots of devices [from, to) added (one each).
+void addDevices(CutFs& card, uint32_t from, uint32_t to) {
+  std::vector<uint8_t> log = card.dir.count(kLog) ? card.bytes(kLog) : std::vector<uint8_t>();
+  for (uint32_t d = from; d < to; ++d) {
+    const uint8_t dev[6] = {0x02, 0x00, 0x00, 0x00, 0x00, static_cast<uint8_t>(d)};
+    const std::vector<uint8_t> s = slotOf(dev, 0x0BADC0FFEE000000ull + d, d);
+    log.insert(log.end(), s.begin(), s.end());
+  }
+  card.put(kLog, log);
 }
 
 }  // namespace
 
-void test_the_plays_waiting_come_first() {
-  const Worked wk;
-  const uint8_t* dev = reinterpret_cast<const uint8_t*>("\0\0\0\0\0\1");
+void test_marks_room_and_a_remount_past_it() {
+  const uint8_t me[6] = {0x02, 0xAA, 0, 0, 0, 1};
+  BootAsk a;
+  a.ask.nowMs = sf::kMinMs + 314ull * sf::kDayMs;
+  a.ask.playing = true;
+  a.ask.safePoint = false;
+  // 12 players' slots: MARK 12 rows (the object's 16 hold them).
   CutFs card;
-  put(card, wk.in);
-  Player p(card, dev);
-  wk.boot(p);  // (its save lands: the card's MARK 48)
-  TEST_ASSERT_EQUAL_UINT32(48, cardMark(card, p));
-  Loop l(p);
-  // Run H: Hs asked while 4 plays wait behind a shut gate (a run of short
-  // tracks: the gate shut for each start's first 2 s and last 5 s).
-  uint32_t folded = p.glue->fold.folded();
-  for (uint32_t i = 1; i <= 4; ++i) p.ended(Worked::play(i));
-  l.hsAsked = true;
-  for (int k = 0; k < 3; ++k) l.pass(false);
-  TEST_ASSERT_EQUAL_UINT32(4, p.tracker->pending());
-  TEST_ASSERT_TRUE(l.hsAsked);
-  // The gate opens (a pause): the 4 slots first, one a pass, each folded
-  // live (written()); Hs only at the pass after them, its save holding them.
-  for (uint32_t k = 1; k <= 4; ++k) {
-    l.pass(true);
-    TEST_ASSERT_TRUE_MESSAGE(l.hsAsked, "Hs before a play waiting for its slot");
-    TEST_ASSERT_EQUAL_UINT32(4 - k, p.tracker->pending());
-    TEST_ASSERT_EQUAL_UINT32(folded + k, p.glue->fold.folded());
+  addDevices(card, 0, 12);
+  {
+    Player x(card, me);
+    x.nvs.ids.epoch = 0x77;
+    TEST_ASSERT_TRUE(x.boot(a));
+    TEST_ASSERT_EQUAL_UINT32(0, x.glue->first.markBytes);
+    TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(x.glue->last.what));
+    TEST_ASSERT_EQUAL_UINT32(12, rowsOf(card, sf::kMark));
   }
-  const size_t calls = p.glue->calls.size();
-  l.pass(true);
-  TEST_ASSERT_FALSE(l.hsAsked);
-  TEST_ASSERT_EQUAL_size_t(calls + 1, p.glue->calls.size());
-  TEST_ASSERT_EQUAL_STRING("hs", p.glue->calls.back().c_str());
-  TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
-  TEST_ASSERT_EQUAL_UINT32(52, cardMark(card, p));  // (49-52 in stats.bin)
-  // Hs with a play whose try the card failed (its 5 s not over): that play
-  // isn't due, so Hs doesn't wait for it; the save holds what was written,
-  // and the play is folded live when its try comes.
-  p.ended(Worked::play(5));
-  p.oenv.statFails = 1;
-  l.hsAsked = true;
-  l.pass(true);  // (its first try: the card fails the played file's question; kept)
-  TEST_ASSERT_EQUAL_UINT32(1, p.tracker->pending());
-  TEST_ASSERT_EQUAL_UINT32(0, l.slotsDue());
-  l.pass(true);
-  TEST_ASSERT_FALSE(l.hsAsked);
-  TEST_ASSERT_EQUAL_STRING("nothing new", sx::savedName(p.glue->last.what));
-  p.oenv.now += pl::Outbox::kRetryMs;
-  l.pass(true);
-  TEST_ASSERT_EQUAL_UINT32(0, p.tracker->pending());
-  TEST_ASSERT_TRUE(p.glue->fold.dirty());  // (53 folded live, not in stats.bin)
-  TEST_ASSERT_TRUE(p.glue->hs());
-  TEST_ASSERT_EQUAL_UINT32(53, cardMark(card, p));
-
-  // Run L: a library update asked while 3 completed plays wait behind a
-  // shut gate (a start's 2 s; the stats.bin holding every play folded): the
-  // update step waits for them, gate shut or open; written one a pass, each
-  // folded live; then the give-back saves them first, and the ring holds
-  // none.
-  folded = p.glue->fold.folded();
-  for (uint32_t i = 6; i <= 8; ++i) p.ended(Worked::play(i));
-  TEST_ASSERT_FALSE(p.glue->fold.dirty());
-  l.updateAsked = true;
-  for (int k = 0; k < 3; ++k) l.pass(false);
-  TEST_ASSERT_TRUE_MESSAGE(l.updateAsked, "the give-back with plays waiting for their slots");
-  TEST_ASSERT_FALSE(p.glue->core.givenBack());
-  TEST_ASSERT_EQUAL_UINT32(3, l.updateWaited);
-  TEST_ASSERT_EQUAL_UINT32(3, p.tracker->pending());
-  for (int k = 0; k < 2; ++k) {
-    l.pass(true);
-    TEST_ASSERT_TRUE(l.updateAsked);
+  // Another card grown to 28 rows, 8 new players a boot: each boot's read
+  // carves MARK's block (its rows and 8 more), and the fold fills it.
+  CutFs other;
+  put(other, filesOf(card));
+  for (uint32_t rows = 12; rows < 28; rows += 8) {
+    addDevices(other, rows, rows + 8);
+    Player y(other, me);
+    y.nvs.ids.epoch = 0x77;
+    y.mem.alloc = heapAlloc;
+    y.mem.release = heapFree;
+    TEST_ASSERT_TRUE(y.boot(a));
+    TEST_ASSERT_EQUAL_UINT32(rows, y.glue->first.marks);
+    TEST_ASSERT_EQUAL_UINT32(sf::Fold::markBlockBytes(rows), y.glue->first.markBytes);
+    TEST_ASSERT_EQUAL_UINT32(rows + sf::kMarkRoom, y.glue->fold.markCap());
+    TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(y.glue->last.what));
+    TEST_ASSERT_EQUAL_UINT32(rows + 8, rowsOf(other, sf::kMark));
   }
-  l.pass(true);  // (the last slot written: no slot due, the gate open)
-  TEST_ASSERT_FALSE(l.updateAsked);
-  TEST_ASSERT_EQUAL_UINT32(5, l.updateWaited);
-  TEST_ASSERT_EQUAL_UINT32(0, p.tracker->pending());
-  TEST_ASSERT_EQUAL_UINT32(folded + 3, p.glue->fold.folded());
-  TEST_ASSERT_TRUE(p.glue->core.givenBack());
-  const statsglue::GaveBack& gb = p.glue->core.gaveBack();
-  TEST_ASSERT_TRUE(gb.saveAsked && gb.covers);
-  TEST_ASSERT_EQUAL_STRING("none", statsglue::refusedName(gb.refused));
-  TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
-  TEST_ASSERT_EQUAL_UINT32(56, cardMark(card, p));  // (54-56 saved first)
-  TEST_ASSERT_EQUAL_UINT32(0, p.glue->core.ringCount());
-  const statsglue::TookBack& t = p.glue->core.takeBack();
-  TEST_ASSERT_TRUE(t.read && t.on && t.same && !t.behind);
-  TEST_ASSERT_EQUAL_UINT32(0, t.folded);
-
-  // The update's other wait, kept: the fold holds a play the card's
-  // stats.bin doesn't (written live at an open gate) and no slot is due:
-  // the give-back's save waits for a pass the gate lets through.
-  TEST_ASSERT_TRUE(p.write(Worked::play(9)) == pl::Outbox::Did::Written);
-  TEST_ASSERT_TRUE(p.glue->fold.dirty());
-  l.updateWaited = 0;
-  l.updateAsked = true;
-  l.pass(false);
-  TEST_ASSERT_TRUE(l.updateAsked);
-  TEST_ASSERT_EQUAL_UINT32(1, l.updateWaited);
-  l.pass(true);
-  TEST_ASSERT_FALSE(l.updateAsked);
-  TEST_ASSERT_TRUE(p.glue->core.gaveBack().saveAsked);
-  TEST_ASSERT_EQUAL_UINT32(57, cardMark(card, p));
-  // Given back: nothing to give back, so nothing to wait for (the plays
-  // written now go into the ring).
-  p.ended(Worked::play(10));
-  TEST_ASSERT_FALSE(p.glue->core.updateWaits(false, 1));
-  TEST_ASSERT_FALSE(p.glue->core.updateWaits(true, 1));
-  l.pass(true);
-  TEST_ASSERT_EQUAL_UINT32(1, p.glue->core.ringCount());
-  const statsglue::TookBack& u = p.glue->core.takeBack();
-  TEST_ASSERT_TRUE(u.same && !u.behind);
-  TEST_ASSERT_EQUAL_UINT32(1, u.folded);
-  TEST_ASSERT_TRUE(p.glue->hs());
-  // The next boot folds nothing: every play (49-58) is in stats.bin, once.
-  Player q(card, p.id);
-  deviceFor(q, wk.sc);
-  q.nvs = p.nvs;
-  TEST_ASSERT_TRUE(q.boot(wk.ask()));
-  TEST_ASSERT_EQUAL_UINT32(0, q.glue->fold.folded());
-  TEST_ASSERT_EQUAL_UINT64(wk.b["stats"]["head"]["slots"].u64() + 10, q.glue->fold.head().slots);
+  // A player booting on the first card: its block holds 20 rows. A ninth
+  // new pair in one boot is the fold out of memory (no save, no trim by it).
+  Player g(card, me);
+  g.nvs.ids.epoch = 0x77;
+  g.mem.alloc = heapAlloc;
+  g.mem.release = heapFree;
+  TEST_ASSERT_TRUE(g.boot(a));
+  TEST_ASSERT_EQUAL_UINT32(20, g.glue->fold.markCap());
+  TEST_ASSERT_TRUE(g.glue->core.on());
+  // The card's stats.bin replaced by the other's (28 rows: another player's
+  // while it was out), then the card back: a remount's read, one, no carve.
+  put(card, {{"stats.bin", bytesOf(other, "stats.bin")}});
+  const uint32_t carves = gHeap.carves;
+  const size_t held = gHeap.held;
+  g.j->remounted();
+  TEST_ASSERT_TRUE(g.scan());
+  TEST_ASSERT_EQUAL_STRING("noMemory", sx::readName(g.glue->opened.read));
+  TEST_ASSERT_EQUAL_UINT32(28, g.glue->opened.marks);
+  TEST_ASSERT_FALSE(g.glue->core.on());
+  TEST_ASSERT_EQUAL_UINT32(carves + 1, gHeap.carves);  // (the read's work memory alone)
+  TEST_ASSERT_EQUAL_size_t(held, gHeap.held);
+  TEST_ASSERT_EQUAL_STRING("save boot (no)", g.glue->calls.back().c_str());
+  TEST_ASSERT_EQUAL_STRING("off", refused(g));
+  TEST_ASSERT_TRUE(g.trimmed().empty());
+  TEST_ASSERT_FALSE(g.glue->hs());
+  TEST_ASSERT_EQUAL_STRING("off", refused(g));
+  TEST_ASSERT_TRUE(bytesOf(card, "stats.bin") == bytesOf(other, "stats.bin"));  // (never a MARK cut short)
 }
 
-// The ring holds every play the Tracker can hand over while the blocks are
-// given back (its kPending, 32: S1's device round 1 found the ring at 16,
-// and a play past it turns the session's saves off). A run of short tracks
-// during the fence (the gate shut through each), the Tracker full; then the
-// gate opens and they are written into the ring, one a pass; the re-read
-// folds them all: none lost, none twice, the saves on.
-void test_many_short_plays_across_a_give_back() {
+// ---------------------------------------------------------------------------
+// The boot's scan and a library update, never both waiting (5.14): before
+// the fold's first piece the scan waits for an asked update (nothing carved
+// behind its check or during its build); once begun, the update waits for
+// the scan's blocks (scanHolds(): LibraryUpdate's Wait::Stats; test_library_
+// update has the step's side) until the boot's save gives them back, and
+// the scan goes on. Auto DJ's join: the scan's pieces wait while it works,
+// and it doesn't begin while the scan holds blocks.
+// ---------------------------------------------------------------------------
+void test_the_scan_and_a_library_update() {
   const Worked wk;
   const uint8_t* dev = reinterpret_cast<const uint8_t*>("\0\0\0\0\0\1");
-  CutFs card;
-  put(card, wk.in);
-  Player p(card, dev);
-  wk.boot(p);
-  Loop l(p);
-  // 49 written live, then the update: its give-back saves it first.
-  TEST_ASSERT_TRUE(p.write(Worked::play(1)) == pl::Outbox::Did::Written);
-  l.updateAsked = true;
-  l.pass(true);
-  TEST_ASSERT_TRUE(p.glue->core.givenBack());
-  TEST_ASSERT_TRUE(p.glue->core.gaveBack().saveAsked && p.glue->core.gaveBack().covers);
-  TEST_ASSERT_EQUAL_UINT32(49, cardMark(card, p));
-  // The fence: a run of short tracks (3 s each, the gate shut through every
-  // one), the Tracker full (kPending waiting, none lost from it).
-  for (uint32_t i = 0; i < pl::Tracker::kPending; ++i) {
-    PlaySpec ps = Worked::play(100 + i);
-    ps.played = 3000;
-    ps.duration = 3200;
-    p.ended(ps);
-    l.pass(false);
+  {
+    CutFs card;
+    put(card, wk.in);
+    Player p(card, dev);
+    deviceFor(p, wk.sc);
+    p.mem.alloc = heapAlloc;
+    p.mem.release = heapFree;
+    p.begin(wk.ask());
+    sg::Glue& g = p.glue->core;
+    const uint32_t carves = gHeap.carves;
+    // An update asked before the first piece: the scan waits (as many
+    // passes as it is asked), nothing carved, nothing held for it to wait on.
+    for (int k = 0; k < 5; ++k) {
+      TEST_ASSERT_TRUE(g.scanWaits(true, false) == sg::ScanWait::Update);
+      TEST_ASSERT_FALSE(g.scanHolds());
+    }
+    TEST_ASSERT_TRUE(g.scanWaits(false, true) == sg::ScanWait::Join);
+    TEST_ASSERT_EQUAL_UINT32(carves, gHeap.carves);
+    // The update over: the first piece takes its room.
+    TEST_ASSERT_TRUE(g.scanWaits(false, false) == sg::ScanWait::None);
+    g.reserve(1);
+    TEST_ASSERT_FALSE(p.j->scan(1));
+    TEST_ASSERT_TRUE(g.scanHolds());
+    // An update asked now: the scan goes on (only the join holds it), and
+    // the update waits for its blocks until the boot's save.
+    int pieces = 0;
+    for (;;) {
+      TEST_ASSERT_TRUE(g.scanWaits(true, false) == sg::ScanWait::None);
+      TEST_ASSERT_TRUE(g.scanWaits(true, true) == sg::ScanWait::Join);
+      TEST_ASSERT_TRUE(g.scanHolds());
+      g.reserve(1);
+      ++pieces;
+      if (p.j->scan(1)) break;
+    }
+    p.glue->ready();
+    TEST_ASSERT_TRUE(pieces > 3);
+    TEST_ASSERT_FALSE(g.scanHolds());
+    TEST_ASSERT_TRUE(g.scanWaits(true, true) == sg::ScanWait::None);
+    sameFiles(cardOf(wk.b["out"]), filesOf(card), "the scan with an update asked");
+    // A remount after Ready: its read pending, the scan's first piece waits
+    // for an asked update again.
+    p.j->remounted();
+    TEST_ASSERT_TRUE(g.scanWaits(true, false) == sg::ScanWait::Update);
+    TEST_ASSERT_FALSE(g.scanHolds());
   }
-  TEST_ASSERT_EQUAL_UINT32(pl::Tracker::kPending, p.tracker->pending());
-  TEST_ASSERT_EQUAL_UINT32(0, p.tracker->counts().overflow);
-  // The gate opens: each written (the log has them), into the ring.
-  for (uint32_t i = 0; i < pl::Tracker::kPending; ++i) l.pass(true);
-  TEST_ASSERT_EQUAL_UINT32(0, p.tracker->pending());
-  TEST_ASSERT_EQUAL_UINT32(1 + pl::Tracker::kPending, p.out->counts().written);
-  TEST_ASSERT_EQUAL_UINT32(pl::Tracker::kPending, p.glue->core.ringCount());
-  TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, p.glue->core.ringOver(), "plays past the ring");
-  // The re-read: the same copy, every play of the ring folded, saves on.
-  const statsglue::TookBack& t = p.glue->core.takeBack();
-  TEST_ASSERT_TRUE(t.read && t.on && t.same);
-  TEST_ASSERT_EQUAL_UINT32(pl::Tracker::kPending, t.folded);
-  TEST_ASSERT_EQUAL_UINT32(0, t.over);
-  TEST_ASSERT_FALSE_MESSAGE(t.behind || p.glue->core.behind(), "the session behind its log");
-  l.hsAsked = true;
-  l.pass(true);
-  TEST_ASSERT_FALSE(l.hsAsked);
-  TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
-  TEST_ASSERT_EQUAL_UINT32(49 + pl::Tracker::kPending, cardMark(card, p));
-  // The next boot: every play in stats.bin, once.
-  Player q(card, p.id);
-  deviceFor(q, wk.sc);
-  q.nvs = p.nvs;
-  TEST_ASSERT_TRUE(q.boot(wk.ask()));
-  TEST_ASSERT_EQUAL_UINT32(0, q.glue->fold.folded());
-  TEST_ASSERT_EQUAL_UINT64(wk.b["stats"]["head"]["slots"].u64() + 1 + pl::Tracker::kPending,
-                           q.glue->fold.head().slots);
-}
-
-// The update waits for every play queued for the log, one behind a try the
-// card failed too (S1's round-1 fix review). A play whose try failed isn't
-// due for its kRetryMs, so Hs doesn't wait for it; the give-back does: else
-// the whole backlog (up to the Tracker's 32) went into the ring after it,
-// and one more play ending while given back passed the ring (the session's
-// saves off, Refused::Behind). The wait is bounded: the Outbox drops a play
-// at its kTries-th failure.
-void test_a_backlog_behind_a_failed_try() {
-  const Worked wk;
-  const uint8_t* dev = reinterpret_cast<const uint8_t*>("\0\0\0\0\0\1");
-  CutFs card;
-  put(card, wk.in);
-  Player p(card, dev);
-  wk.boot(p);  // (its save lands: the card's MARK 48, the fold clean)
-  TEST_ASSERT_EQUAL_UINT32(48, cardMark(card, p));
-  TEST_ASSERT_FALSE(p.glue->fold.dirty());
-  Loop l(p);
-  // A run of short tracks (3 s each, the gate shut through every one): the
-  // Tracker full.
-  for (uint32_t i = 0; i < pl::Tracker::kPending; ++i) {
-    PlaySpec ps = Worked::play(100 + i);
-    ps.played = 3000;
-    ps.duration = 3200;
-    p.ended(ps);
-    l.pass(false);
+  // An overflow whose save failed once: the update waits through its tries
+  // (the scan's blocks), until one lands.
+  {
+    const Overflow ov;
+    const uint32_t cap = static_cast<uint32_t>(ov.sc["cap"].u64());
+    CutFs card;
+    put(card, sessionCard(ov.sc["in"]));
+    Player p(card, ov.dev, cap);
+    ov.player(p);
+    TEST_ASSERT_TRUE(p.boot(ov.ask(1)));
+    sg::Glue& g = p.glue->core;
+    TEST_ASSERT_TRUE(g.scanHolds() && g.overflowHeld());
+    TEST_ASSERT_TRUE(g.scanWaits(true, false) == sg::ScanWait::None);
+    p.oenv.now = g.retryAtMs();
+    TEST_ASSERT_TRUE(g.saveNow(false));
+    TEST_ASSERT_FALSE(g.scanHolds() || g.overflowHeld());
   }
-  TEST_ASSERT_EQUAL_UINT32(pl::Tracker::kPending, p.tracker->pending());
-  TEST_ASSERT_EQUAL_UINT32(0, p.tracker->counts().overflow);
-  // The update is asked; the gate opens, and the card fails the head's
-  // question (kept, tried again after kRetryMs): nothing is due, but the
-  // update waits for the 32.
-  p.oenv.statFails = 1;
-  l.updateAsked = true;
-  l.pass(true);
-  TEST_ASSERT_EQUAL_UINT32(pl::Tracker::kPending, p.tracker->pending());
-  TEST_ASSERT_EQUAL_UINT32(0, l.slotsDue());
-  TEST_ASSERT_TRUE_MESSAGE(l.updateAsked, "the give-back with plays queued behind a failed try");
-  TEST_ASSERT_FALSE(p.glue->core.givenBack());
-  for (int k = 0; k < 4; ++k) {
-    p.oenv.now += 1000;
-    l.pass(true);
-    TEST_ASSERT_TRUE(l.updateAsked);
-  }
-  // Its try again: the 32 written one a pass, each folded live; the
-  // give-back at the pass of the last, its save holding them all, the ring
-  // none.
-  p.oenv.now += pl::Outbox::kRetryMs;
-  for (uint32_t i = 1; i < pl::Tracker::kPending; ++i) {
-    l.pass(true);
-    TEST_ASSERT_TRUE(l.updateAsked);
-  }
-  l.pass(true);
-  TEST_ASSERT_FALSE(l.updateAsked);
-  TEST_ASSERT_EQUAL_UINT32(0, p.tracker->pending());
-  TEST_ASSERT_EQUAL_UINT32(pl::Tracker::kPending, p.out->counts().written);
-  TEST_ASSERT_TRUE(p.glue->core.givenBack());
-  const statsglue::GaveBack& gb = p.glue->core.gaveBack();
-  TEST_ASSERT_TRUE(gb.saveAsked && gb.covers);
-  TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
-  TEST_ASSERT_EQUAL_UINT32(48 + pl::Tracker::kPending, cardMark(card, p));
-  TEST_ASSERT_EQUAL_UINT32(0, p.glue->core.ringCount());
-  // One more play while given back: the ring's first, nothing past it.
-  PlaySpec one = Worked::play(200);
-  one.played = 3000;
-  one.duration = 3200;
-  p.ended(one);
-  l.pass(true);
-  TEST_ASSERT_EQUAL_UINT32(1, p.glue->core.ringCount());
-  TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, p.glue->core.ringOver(), "plays past the ring");
-  const statsglue::TookBack& t = p.glue->core.takeBack();
-  TEST_ASSERT_TRUE(t.read && t.on && t.same);
-  TEST_ASSERT_EQUAL_UINT32(1, t.folded);
-  TEST_ASSERT_EQUAL_UINT32(0, t.over);
-  TEST_ASSERT_FALSE_MESSAGE(t.behind || p.glue->core.behind(), "the session behind its log");
-  l.hsAsked = true;
-  l.pass(true);
-  TEST_ASSERT_FALSE(l.hsAsked);
-  TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
-  TEST_ASSERT_EQUAL_UINT32(49 + pl::Tracker::kPending, cardMark(card, p));
-
-  // A card that fails the head's every try: the update waits through its
-  // tries (kTries, kRetryMs apart), then the play is dropped and the
-  // give-back goes.
-  const uint32_t lost = p.out->counts().lost;
-  p.ended(Worked::play(201));
-  p.oenv.statFails = pl::Outbox::kTries;
-  l.updateWaited = 0;
-  l.updateAsked = true;
-  for (uint32_t k = 1; k < pl::Outbox::kTries; ++k) {
-    l.pass(true);
-    TEST_ASSERT_TRUE(l.updateAsked);
-    TEST_ASSERT_EQUAL_UINT32(1, p.tracker->pending());
-    p.oenv.now += pl::Outbox::kRetryMs;
-  }
-  l.pass(true);  // (its last try: dropped, given up)
-  TEST_ASSERT_EQUAL_UINT32(0, p.tracker->pending());
-  TEST_ASSERT_EQUAL_UINT32(lost + 1, p.out->counts().lost);
-  TEST_ASSERT_FALSE(l.updateAsked);
-  TEST_ASSERT_EQUAL_UINT32(pl::Outbox::kTries - 1, l.updateWaited);
-  TEST_ASSERT_TRUE(p.glue->core.givenBack());
-  TEST_ASSERT_FALSE(p.glue->core.gaveBack().saveAsked);  // (nothing new: Hs saved 81)
-  TEST_ASSERT_TRUE(p.glue->core.takeBack().same);
-  // The next boot folds nothing: every play (49-81) is in stats.bin, once.
-  Player q(card, p.id);
-  deviceFor(q, wk.sc);
-  q.nvs = p.nvs;
-  TEST_ASSERT_TRUE(q.boot(wk.ask()));
-  TEST_ASSERT_EQUAL_UINT32(0, q.glue->fold.folded());
-  TEST_ASSERT_EQUAL_UINT64(wk.b["stats"]["head"]["slots"].u64() + 1 + pl::Tracker::kPending,
-                           q.glue->fold.head().slots);
 }
 
 int main(int, char**) {
@@ -2829,10 +2800,10 @@ int main(int, char**) {
   RUN_TEST(test_hs_says_why_and_never_compacts);
   RUN_TEST(test_a_fold_out_of_memory_trims_by_the_boots_mark);
   RUN_TEST(test_the_folds_blocks_wait_for_a_reserve);
-  RUN_TEST(test_an_updates_give_back);
-  RUN_TEST(test_a_cut_during_the_give_backs_save);
-  RUN_TEST(test_the_plays_waiting_come_first);
-  RUN_TEST(test_many_short_plays_across_a_give_back);
-  RUN_TEST(test_a_backlog_behind_a_failed_try);
+  RUN_TEST(test_the_saves_at_the_gate);
+  RUN_TEST(test_a_cut_during_the_records_save);
+  RUN_TEST(test_the_boot_overflows_tries);
+  RUN_TEST(test_marks_room_and_a_remount_past_it);
+  RUN_TEST(test_the_scan_and_a_library_update);
   return UNITY_END();
 }

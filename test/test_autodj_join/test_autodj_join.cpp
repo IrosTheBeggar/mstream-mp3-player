@@ -2697,6 +2697,11 @@ struct MoodRun {
   bool moods = false;  // T's records carry mood tails: the index has words
 };
 
+// S1 as built's glue object on this host (sizeof(statsglue::Glue) at
+// 11aaf46: the give-back's, its ring of 32, R4's Opened): the rework's glue
+// (5.14, R5) is another object, so S1 as built's run carves this figure.
+constexpr size_t kS1GlueBytes = 5840;
+
 // The listening stats' hash-keyed half (docs/LISTENING-STATS.md 6.7; S1's
 // C8), every block through the model heap as psramAlloc gives them on the
 // device, in the firmware's order: at PlayHistory::begin()'s place
@@ -3000,8 +3005,8 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   statsfold::s1::Fold* fold = nullptr;
   void* glueAt = nullptr;
   if (stats) {
-    static_assert(sizeof(statsglue::Glue) >= sizeof(statsfold::s1::Fold), "the Fold is the glue's");
-    glueAt = ModelHeap::alloc(sizeof(statsglue::Glue));
+    static_assert(kS1GlueBytes >= sizeof(statsfold::s1::Fold), "the Fold is the glue's");
+    glueAt = ModelHeap::alloc(kS1GlueBytes);
     TEST_ASSERT_NOT_NULL(glueAt);
     fold = new (glueAt) statsfold::s1::Fold(ModelHeap::alloc, ModelHeap::release);
     TEST_ASSERT_TRUE(fold->begin());

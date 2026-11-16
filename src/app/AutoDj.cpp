@@ -637,6 +637,10 @@ void AutoDj::stepJoin(const Env& env) {
     if (!index || !index->ready() || !env.uiStarted || env.cardHeld) return;
     if (block_ == Block::Build || block_ == Block::Reads) return;
     if (block_ == Block::Retry && static_cast<int32_t>(env.nowMs - retryAtMs_) < 0) return;
+    // The listening stats' boot scan holds blocks (its ranges', its
+    // overflow's): the join would place around them, and can't around a full
+    // log's overflow (docs/LISTENING-STATS.md 5.14). Its next pass.
+    if (env.statsHold) return;
     block_ = Block::None;
     beginJoin(index);
     return;
@@ -759,19 +763,6 @@ size_t AutoDj::fence() {
   joinLogged_ = false;
   if (block_ == Block::Build || block_ == Block::Reads) block_ = Block::None;  // (a new build: try again)
   return freed;
-}
-
-bool AutoDj::joinSettled() const {
-  if (file_ != File::Open || !dj_.settings().on) return true;
-  if (block_ == Block::Update) return false;  // (joins again after the update's Live)
-  if (block_ != Block::None) return true;     // (a retry's wait, the next build, reads failed: none now)
-  using S = autodj::Join::Status;
-  const S s = join_.status();
-  if (s == S::Working) return false;
-  if (s == S::Ready) return true;
-  // Idle or Aborted: stepJoin() begins one at its next pass, with an index.
-  const LibraryIndex* index = lib_.index();
-  return !index || !index->ready();
 }
 
 size_t AutoDj::giveBack() {

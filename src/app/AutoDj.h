@@ -102,6 +102,10 @@ public:
     bool listMoving = false;     // Ui::listMoving()
     bool uiStarted = true;       // the UI's first frame is up (or there is no UI)
     bool refilling = false;      // the decoder fills the ring from empty (autodj::Env::refilling)
+    // The listening stats' boot scan holds blocks across passes
+    // (PlayHistory::statsScanHolds(): its ranges', its overflow's): no join
+    // begins around them (docs/LISTENING-STATS.md 5.14, 6.8's Block reason).
+    bool statsHold = false;
   };
 
   AutoDj(Library& library, PlaybackController& player);
@@ -128,13 +132,6 @@ public:
   size_t giveBack();
   // The join works (main.cpp: the loop's idle wait short meanwhile).
   bool joinWorking() const { return join_.status() == autodj::Join::Status::Working; }
-  // The join neither under way nor about to begin: Auto DJ off, no index
-  // open, none to join (no library, or behind the fence), joined, or a join
-  // that ended without maps (no memory, a library too big, reads failed, a
-  // retry's wait). Not while it is given back to the update step (it joins
-  // again after the step's Live). The listening stats take their blocks
-  // again after a library update only then (docs/LISTENING-STATS.md 6.7).
-  bool joinSettled() const;
   // The join's kept bytes at the top of PSRAM's largest free block when it
   // was placed (AutoDjJoin.h): what giving it back adds to that block.
   size_t joinTopBytes() const { return join_.stats().topKept; }
@@ -196,7 +193,8 @@ private:
   // (retryAtMs_); the next library build (no memory, a library too big);
   // kJoinTries joins in a row a read of the card failed, or the button's look-ups
   // twice: a library build, a remount, Dc or switching on; the update step it was given back to
-  // (giveBack()), until its Live or its end.
+  // (giveBack()), until its Live or its end. (Beside them, read each pass, not
+  // kept: the listening stats' boot scan holding blocks, Env::statsHold.)
   enum class Block : uint8_t { None, Retry, Build, Reads, Update };
   enum class Job : uint8_t { None, DryRun, Bench };
 

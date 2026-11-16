@@ -3,21 +3,29 @@
 
 #include "app/ListeningStats.h"
 
+#include <esp_heap_caps.h>
 #include <esp_timer.h>
 
 #include <cstring>
 
+#include "AutoDjJoin.h"
 #include "LibraryUpdate.h"
 #include "WallClock.h"
 #include "app/BoardClock.h"
 #include "app/Psram.h"
 #include "storage/SectorDisk.h"
 
+// The resident set (docs/LISTENING-STATS.md 5.14): the glue's object alone,
+// carved once in setup and never freed. A budget, not a figure the heap
+// model pins: R1's yardstick (test_autodj_join) can't tell up to about 4 KB
+// from main's own variation; past it, the device re-run decides.
+static_assert(sizeof(statsglue::Glue) <= 3584, "the listening stats' resident set is at most 3,584 B (5.14)");
+
 namespace {
 
 namespace cc = cardcontract;
 namespace sf = statsfold;
-namespace sx = statsfile::s1;
+namespace sx = statsfile;
 namespace sg = statsglue;
 
 using ul = unsigned long;
@@ -28,6 +36,25 @@ using ull = unsigned long long;
 void bootWait(uint32_t ms) { delay(ms); }
 
 float msSince(int64_t t0) { return static_cast<float>(esp_timer_get_time() - t0) / 1000.0f; }
+
+size_t psramLargest() { return heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM); }
+size_t psramFreeBytes() { return heap_caps_get_free_size(MALLOC_CAP_SPIRAM); }
+
+// A block the stats hold across passes (the boot's scan's ranges' block, its
+// overflow's chunks): at the top of PSRAM's largest free block, the join's
+// spacers under it while it is carved, never less than this free meanwhile
+// (Auto DJ's kJoinMarginBytes, for the same reason: another task's block may
+// come in that window, a track start's 4 KB probe, a seek's 8 KB, the Opus
+// packet buffer's 60 KB, the card worker's 4-16 KB). Carved there, a block
+// moves no long-lived block carved after it (5.14: the device's round 2).
+constexpr size_t kTopMarginBytes = 64 * 1024;
+void* topAlloc(size_t bytes) {
+  autodj::Spacers sp;
+  autodj::takeSpacers(bytes, kTopMarginBytes, psramLargest, psramFreeBytes, psramAlloc, psramFree, &sp);
+  void* p = psramAlloc(bytes);
+  autodj::giveSpacers(&sp, psramFree);
+  return p;
+}
 
 // "7 h 37 min", "45 min" (4.1's times).
 void listened(uint64_t ms, char* out, size_t cap) {
@@ -58,6 +85,16 @@ void devText(const uint8_t d[6], char* out, size_t cap) {
   snprintf(out, cap, "%02x%02x%02x%02x%02x%02x", d[0], d[1], d[2], d[3], d[4], d[5]);
 }
 
+// A section's type ("TRKD"; 0: stats.bin's frame).
+void typeText(uint32_t t, char* out, size_t cap) {
+  if (!t) {
+    snprintf(out, cap, "its frame");
+    return;
+  }
+  snprintf(out, cap, "%c%c%c%c", static_cast<char>(t), static_cast<char>(t >> 8), static_cast<char>(t >> 16),
+           static_cast<char>(t >> 24));
+}
+
 const char* srcName(uint8_t s) { return s == sf::kAutoDj ? "Auto DJ" : s == sf::kShuffle ? "shuffle" : "you"; }
 
 const char* settledText(tagstore::Settle s) {
@@ -83,31 +120,14 @@ const char* refusedText(sg::Refused r) {
              "to the stats";
     case sg::Refused::CardAway: return "the card is away (out of the slot, refusing writes, or another card in it)";
     case sg::Refused::Partial: return "a log file wasn't read whole this session (the next boot folds again)";
-    case sg::Refused::Booting: return "the boot's scan is under way";
+    case sg::Refused::Booting: return "the boot's scan (or its save, tried again) is under way";
     case sg::Refused::Fenced: return "the library update's fence is up";
-    case sg::Refused::GivenBack:
-      return "the blocks are given back to the library update (a rotation now deletes the plays of plays.1.jnl "
-             "the card's stats.bin doesn't hold)";
     case sg::Refused::Behind:
-      return "this session's RAM lacks plays the log holds above the card's MARK (a library update's give-back): no "
-             "save this session; the next boot folds what the log still holds (a rotation meanwhile loses those in "
-             "plays.1.jnl)";
+      return "this session lacks slots the log holds above the card's MARK (the records full, a save that didn't "
+             "land with the boot's overflow, a held stats.tmp lost, or a section damaged): no save this session; the "
+             "next boot folds what the log still holds (a rotation meanwhile loses those in plays.1.jnl)";
   }
   return "";
-}
-
-// A save's outcome in a few words (the give-back's line).
-const char* savedText(const sx::SaveReport& r) {
-  switch (r.what) {
-    case sx::Saved::Wrote: return "saved";
-    case sx::Saved::Nothing: return "nothing new";
-    case sx::Saved::Held: return "written, its rename refused: stats.tmp held, the re-read promotes it";
-    case sx::Saved::Failed: return "the card failed a step";
-    case sx::Saved::Changed: return "the card's stats.bin isn't the one this session stands on";
-    case sx::Saved::NoMemory: return "no PSRAM for its work memory";
-    case sx::Saved::Off: return "the fold ran out of memory";
-  }
-  return "?";
 }
 
 // (PlayHistory's own: the card isn't one to ask now.)
@@ -123,7 +143,11 @@ playlog::Folds* ListeningStats::begin(tagstore::Fs& fs, const cardroot::Root& ro
   fs_ = &fs;
   hasCommit_ = root.hasRoot && root.commitTime != 0;
   commitSec_ = root.commitTime;
-  glue_ = psramNew<sg::Glue>(fs, static_cast<sg::Env&>(*this), psramAlloc, psramFree);
+  sg::Memory m;
+  m.alloc = psramAlloc;
+  m.top = topAlloc;
+  m.release = psramFree;
+  glue_ = psramNew<sg::Glue>(fs, static_cast<sg::Env&>(*this), m);
   if (!glue_) {
     Serial.println("[listen] no listening stats this boot: no PSRAM for them (the play log trims as 0.14.0's)");
     return nullptr;
@@ -151,37 +175,28 @@ void ListeningStats::pass(const Pass& p, uint32_t nowMs) {
   playing_ = p.playing;
   waiting_ = p.waiting;
   safePoint_ = LibraryUpdate::safePoint(p.playing, p.waiting, p.trackLeftMs, seekSeen_ ? nowMs - seekAt_ : UINT32_MAX);
-  // The spare chunk again, where it may be carved (5.6).
-  if (!p.joinWorking && !glue_->booting()) glue_->keepSpare();
   joinWorking_ = p.joinWorking;
-  joinSettled_ = p.joinSettled;
   updating_ = p.updating;
 }
 
 bool ListeningStats::mayScan(uint32_t slots) {
-  if (!glue_ || !glue_->wantsRoom()) return true;
-  // Given back to a library update (before the boot's fold began, or a
-  // remount's scan begun again meanwhile): it waits for takeBack(), which
-  // reads stats.bin (or lets its first piece read it) (6.7).
-  if (glue_->givenBack()) return false;
-  // A library update asked and not over: the boot's fold neither begins
-  // nor grows behind its memory check and its fence (the plays wait in the
-  // Tracker), so the stats' blocks are the update's give-back's to take
-  // (none once the fold has begun: its blocks are the scan's) and nothing
-  // is carved while the build runs (6.7).
-  if (updating_) {
-    ++updateWaits_;
-    return false;
+  if (!glue_) return true;
+  switch (glue_->scanWaits(updating_, joinWorking_)) {
+    case sg::ScanWait::Update:
+      // A library update asked and not over, the boot's fold not begun:
+      // neither it nor a remount's read begins behind its memory check or
+      // during its build (the plays wait in the Tracker). Once begun, the
+      // update waits for the scan's blocks instead (Wait::Stats).
+      ++updateWaits_;
+      return false;
+    case sg::ScanWait::Join:
+      // The boot's fold carves only in a pass where Auto DJ's join isn't
+      // Working (5.6); so does a remount's read of stats.bin.
+      ++scanWaits_;
+      return false;
+    case sg::ScanWait::None: break;
   }
-  // The boot's fold carves only in a pass where Auto DJ's join isn't
-  // Working: otherwise the scan waits this pass (5.6). So does a remount's
-  // read of stats.bin (its work memory, the load's chunks: reserve() makes
-  // it), and the boot's fold's first blocks.
-  if (joinWorking_) {
-    ++scanWaits_;
-    return false;
-  }
-  if (!glue_->reserve(slots)) ++reserveFailed_;
+  if (glue_->wantsRoom() && !glue_->reserve(slots)) ++reserveFailed_;
   return true;
 }
 
@@ -189,7 +204,7 @@ void ListeningStats::ready(uint32_t passes, int64_t scanUs) {
   if (!glue_ || readyLogged_) return;
   readyLogged_ = true;
   glue_->ready();
-  const sf::s1::Fold& f = glue_->fold();
+  const sf::Fold& f = glue_->fold();
   if (!glue_->on()) {
     Serial.printf("[listen] the boot's scan done (%lu passes, %.0f ms on the loop): the stats are OFF this session "
                   "(%s): nothing folded, saved or trimmed by them\n",
@@ -197,23 +212,34 @@ void ListeningStats::ready(uint32_t passes, int64_t scanUs) {
                   glue_->dropped() ? "the folds dropped at the end" : sx::readName(glue_->opened().read));
     return;
   }
-  char more[200] = "";
+  char more[240] = "";
   if (glue_->partialSeen()) {
     snprintf(more, sizeof(more), "; a log file not read whole: NO save this session, the trim by the MARK read at "
-                                 "the boot, the next boot folds again");
+                                 "the boot, the next boot folds again%s",
+             f.behind() ? " (its overflow dropped: behind)" : "");
   } else if (f.noMemory()) {
     snprintf(more, sizeof(more), "; the fold ran OUT OF MEMORY: no save this session, the trim by the MARK read at "
                                  "the boot");
+  } else if (glue_->retrying()) {
+    const uint64_t now = boardclock::monoMs(), at = glue_->retryAtMs();
+    snprintf(more, sizeof(more), "; its save didn't land: the overflow held (%lu chunks), tried again in %lu ms (try "
+                                 "%lu of %lu), a track's start and a library update waiting meanwhile",
+             static_cast<ul>(f.chunks()), static_cast<ul>(at > now ? at - now : 0),
+             static_cast<ul>(glue_->tries() + 1), static_cast<ul>(sg::kBootTries));
+  } else if (f.behind()) {
+    snprintf(more, sizeof(more), "; BEHIND its log (%s): no save this session",
+             glue_->lastRefused() != sg::Refused::None ? sg::refusedName(glue_->lastRefused()) : "its save didn't land");
   }
   Serial.printf("[listen] the boot's fold: %lu slots folded (%lu met twice, gap %lu) in the scan's %lu passes (%.0f ms "
-                "on the loop%s%s%s); RAM %lu B held, %lu B at the peak; MARK %lu rows, TRKD %lu, RCNT %lu%s\n",
+                "on the loop%s%s%s); the ranges' block %lu B; the overflow %lu B at the peak (%lu chunks now); "
+                "%lu records, MARK %lu rows%s\n",
                 static_cast<ul>(f.folded()), static_cast<ul>(f.twice()), static_cast<ul>(f.gap()),
                 static_cast<ul>(passes), static_cast<float>(scanUs) / 1000.0f,
                 scanWaits_ ? ", some waiting for Auto DJ's join" : "",
-                updateWaits_ ? ", some waiting for a library update" : "",
-                reserveFailed_ ? ", some pieces' room not taken first" : "", static_cast<ul>(f.held()),
-                static_cast<ul>(f.peak()), static_cast<ul>(f.rows(sf::kMark)), static_cast<ul>(f.rows(sf::kTrkd)),
-                static_cast<ul>(f.rows(sf::kRcnt)), more);
+                updateWaits_ ? ", its first waiting for a library update" : "",
+                reserveFailed_ ? ", some pieces' room not taken first" : "", static_cast<ul>(glue_->rangesBytes()),
+                static_cast<ul>(f.peak()), static_cast<ul>(f.chunks()), static_cast<ul>(f.records()),
+                static_cast<ul>(f.marks()), more);
 }
 
 void ListeningStats::written(const playlog::Slot& s) {
@@ -224,127 +250,27 @@ void ListeningStats::ending(uint64_t untilMs) {
   if (glue_) glue_->ending(untilMs);
 }
 
+void ListeningStats::runSave(bool fenced) {
+  if (!glue_) return;
+  const bool retry = glue_->retryDue();
+  glue_->saveNow(fenced);  // (its line: saved())
+  if (!retry) return;
+  if (glue_->retrying()) {
+    const uint64_t now = boardclock::monoMs(), at = glue_->retryAtMs();
+    Serial.printf("[listen] the boot's overflow held: its save tried again in %lu ms (try %lu of %lu)\n",
+                  static_cast<ul>(at > now ? at - now : 0), static_cast<ul>(glue_->tries() + 1),
+                  static_cast<ul>(sg::kBootTries));
+  } else if (glue_->fold().behind()) {
+    Serial.printf("[listen] the boot's overflow given back after %lu tries of its save: the session is BEHIND its "
+                  "log (no save this session; the next boot folds what the log still holds, a rotation meanwhile "
+                  "loses those in plays.1.jnl)\n",
+                  static_cast<ul>(glue_->tries()));
+  }
+}
+
 void ListeningStats::runHs(bool fenced) {
   hsWaiting_ = false;
   if (glue_) glue_->hs(fenced);  // (its line: saved())
-}
-
-// ---------------------------------------------------------------------------
-// A library update's give-back (docs/LISTENING-STATS.md 6.7).
-// ---------------------------------------------------------------------------
-size_t ListeningStats::giveBack(const char* where) {
-  if (!glue_) return 0;
-  // (The line's buffers in a frame of their own, never under the save's:
-  // the loop's stack, docs/LISTENING-STATS.md 11.)
-  const bool was = glue_->givenBack();
-  const size_t bytes = glue_->giveBack();
-  if (!was && glue_->givenBack()) {
-    logGiveBack(where, bytes);
-  } else if (glue_->fold().booting() && !glue_->givenBack()) {
-    Serial.printf("[listen] NOT given back to the library update (%s): the boot's fold is under way, its blocks are "
-                  "the scan's (held through this update; the scan waits for it, so they don't grow)\n",
-                  where);
-  }
-  return bytes;
-}
-
-__attribute__((noinline)) void ListeningStats::logGiveBack(const char* where, size_t bytes) {
-  givenAt_ = millis();
-  const sg::GaveBack& g = glue_->gaveBack();
-  char save[200];
-  if (!g.saveAsked) {
-    snprintf(save, sizeof(save), "nothing to save first (the card's stats.bin holds every play folded)");
-  } else if (g.refused != sg::Refused::None) {
-    snprintf(save, sizeof(save), "NOT saved first: %s", refusedText(g.refused));
-  } else if (glue_->last().what == sx::Saved::Wrote) {
-    snprintf(save, sizeof(save), "saved first: stats.bin generation %lu, %lu bytes, in %.0f ms",
-             static_cast<ul>(glue_->last().generation), static_cast<ul>(glue_->last().bytes), lastMs_);
-  } else {
-    snprintf(save, sizeof(save), "NOT saved first (%s%s%s, %.0f ms)", savedText(glue_->last()),
-             glue_->last().step[0] ? ": its " : "", glue_->last().step, lastMs_);
-  }
-  const char* scan = glue_->rereadPending() ? "; the card mounted again: the boot's scan, begun again, waits for the "
-                                              "re-read"
-                     : glue_->bootPending() ? "; the boot's fold not begun yet: the boot's scan waits for the re-read"
-                                            : "";
-  Serial.printf("[listen] given back to the library update (%s): %lu B of PSRAM (the chunks, the spare, HOUR, DAYS), "
-                "MARK's %lu B kept (%lu row%s: the trim's and a rotation's cover); %s%s%s; plays written meanwhile wait "
-                "in a ring of %lu\n",
-                where, static_cast<ul>(bytes), static_cast<ul>(g.kept), static_cast<ul>(g.markRows),
-                g.markRows == 1 ? "" : "s", save,
-                g.covers ? ""
-                         : "; the plays this session folded since the card's stats.bin are off the screen until the "
-                           "next boot, which folds what the log still holds (no save this session after the re-read: a "
-                           "rotation meanwhile loses those in plays.1.jnl)",
-                scan, static_cast<ul>(sg::kRing));
-}
-
-bool ListeningStats::takeBackDue() const {
-  return glue_ && glue_->takeBackDue() && !updating_ && joinSettled_ && !joinWorking_;
-}
-
-void ListeningStats::takeBack() {
-  if (!glue_ || !glue_->givenBack() || away()) return;
-  const int64_t t0 = esp_timer_get_time();
-  glue_->takeBack();
-  logTakeBack(msSince(t0));
-}
-
-__attribute__((noinline)) void ListeningStats::logTakeBack(float ms) {
-  const sg::TookBack& t = glue_->tookBack();
-  const uint32_t after = (millis() - givenAt_) / 1000;
-  if (t.rescan) {
-    Serial.printf("[listen] taken again after the library update (%lu s given back): the card mounted again "
-                  "meanwhile, so the boot's scan, begun again, reads stats.bin at its next piece and folds the log "
-                  "again\n",
-                  static_cast<ul>(after));
-    return;
-  }
-  if (!t.read) return;
-  const sx::Opened& o = glue_->opened();
-  if (t.again) {
-    // (A read the card failed: made again at a later pass, the boot's
-    // waits apart; still given back meanwhile.)
-    const uint64_t now = boardclock::monoMs(), at = glue_->takeBackAtMs();
-    Serial.printf("[listen] stats.bin NOT read again after the library update (%lu s given back; read %lu of %lu, %.0f "
-                  "ms): UNREAD (%s%s: the card failed a read): still given back, read again in %lu ms; %lu play%s "
-                  "wait in the ring\n",
-                  static_cast<ul>(after), static_cast<ul>(t.tries), static_cast<ul>(sg::kTakeBackReads), ms,
-                  o.inBase ? "its base: " : "", cc::whyName(o.why), static_cast<ul>(at > now ? at - now : 0),
-                  static_cast<ul>(glue_->ringCount()), glue_->ringCount() == 1 ? "" : "s");
-    return;
-  }
-  if (!t.on) {
-    Serial.printf("[listen] stats.bin read again after the library update (%lu s given back; %lu read%s, %.0f ms): %s "
-                  "(%s%s): the stats are OFF this session (no fold, no save, no trim); the %lu play%s written "
-                  "meanwhile are the next boot's while the log holds them (a rotation this session loses those in "
-                  "plays.1.jnl)\n",
-                  static_cast<ul>(after), static_cast<ul>(t.tries), t.tries == 1 ? "" : "s", ms, sx::readName(o.read),
-                  o.inBase ? "its base: " : "", cc::whyName(o.why), static_cast<ul>(t.dropped + t.over),
-                  t.dropped + t.over == 1 ? "" : "s");
-    return;
-  }
-  char file[80];
-  if (o.read == sx::Read::Loaded) {
-    snprintf(file, sizeof(file), "generation %lu, %lu bytes%s", static_cast<ul>(o.generation),
-             static_cast<ul>(o.bytes), o.heldPromoted ? " (the give-back's held stats.tmp promoted first)" : "");
-  } else {
-    snprintf(file, sizeof(file), "none on the card");
-  }
-  const sf::s1::Fold& f = glue_->fold();
-  Serial.printf("[listen] stats.bin read again after the library update (%lu s given back; %lu read%s, %.0f ms): %s, "
-                "%s; %lu play%s from the ring folded (%lu the card's MARK covers already), %lu past it; RAM %lu B "
-                "held; %s\n",
-                static_cast<ul>(after), static_cast<ul>(t.tries), t.tries == 1 ? "" : "s", ms, file,
-                glue_->bootPending() ? "the boot's fold folds the log above its MARK next (it hadn't begun)"
-                : t.same             ? "every play this session held in it"
-                                     : "NOT every play this session held in it (the give-back's save didn't land, the "
-                                       "fold had run out of memory, or another copy)",
-                static_cast<ul>(t.folded), t.folded == 1 ? "" : "s", static_cast<ul>(t.covered),
-                static_cast<ul>(t.over), static_cast<ul>(f.held()),
-                t.behind ? "saves REFUSED this session (RAM lacks plays the log holds above the card's MARK: the next "
-                           "boot folds what the log still holds; a rotation meanwhile loses those in plays.1.jnl)"
-                         : "saves on");
 }
 
 // ---------------------------------------------------------------------------
@@ -359,9 +285,10 @@ void ListeningStats::asking(sg::Kind k, sx::SaveAsk* ask) {
   ask->nowMs = boardclock::now();  // (0 while the clock is unset)
   ask->hasCommit = hasCommit_;
   ask->commitSec = commitSec_;
-  // (A play waiting for the headphones, or a restart asked, is playing for
-  // a compaction: its start, or the restart, mustn't wait behind one. Not
-  // a safe point either: LibraryUpdate::safePoint().)
+  // (A play waiting, for the headphones or the stats' overflow, or a
+  // restart asked, is playing for a compaction: its start, or the restart,
+  // mustn't wait behind one. Not a safe point either:
+  // LibraryUpdate::safePoint().)
   ask->playing = playing_ || waiting_;
   ask->safePoint = safePoint_;
   saveT0_ = esp_timer_get_time();
@@ -384,23 +311,34 @@ void ListeningStats::partialFile() {
 }
 
 void ListeningStats::saved(sg::Kind k, sg::Refused r, const sx::SaveReport& rep) {
-  const char* kind = sg::kindName(k);
-  const char* where = k == sg::Kind::Rotation ? ", before plays.1.jnl leaves the log" : "";
-  if (k == sg::Kind::GiveBack) {
-    lastMs_ = r == sg::Refused::None ? msSince(saveT0_) : 0.0f;  // (the give-back's line says it: giveBack())
-    return;
-  }
-  if (r != sg::Refused::None) {
-    lastMs_ = 0.0f;
-    const char* off = r == sg::Refused::Off ? (glue_ && glue_->dropped() ? " (the folds dropped at the end)" : "") : "";
-    Serial.printf("[listen] NOT saved (%s%s): %s%s\n", kind, where, refusedText(r), off);
-    return;
-  }
-  const float ms = msSince(saveT0_);
+  const float ms = r == sg::Refused::None || rep.what != sx::Saved::Off ? msSince(saveT0_) : 0.0f;
   lastMs_ = ms;
+  if (r == sg::Refused::None || rep.what == sx::Saved::Damaged || rep.what == sx::Saved::Behind) {
+    logSaved(k, rep, ms);
+    return;
+  }
+  // (No buffer on this frame: it is under the save's caller, the loop's
+  // deepest path, docs/LISTENING-STATS.md 11.)
+  const char* off = r == sg::Refused::Off ? (glue_ && glue_->dropped() ? " (the folds dropped at the end)" : "") : "";
+  Serial.printf("[listen] NOT saved (%s%s): %s%s\n", sg::kindName(k),
+                k == sg::Kind::Rotation ? ", before plays.1.jnl leaves the log" : "", refusedText(r), off);
+}
+
+// (A frame of its own, never under the store's save: the loop's stack,
+// docs/LISTENING-STATS.md 11.)
+__attribute__((noinline)) void ListeningStats::logSaved(sg::Kind k, const sx::SaveReport& rep, float ms) {
+  char kind[48];
+  if (k == sg::Kind::Rotation) {
+    snprintf(kind, sizeof(kind), "rotation, before plays.1.jnl leaves the log");
+  } else if (k == sg::Kind::Boot && glue_ && glue_->tries() > 1) {
+    snprintf(kind, sizeof(kind), "boot, its try %lu of %lu", static_cast<ul>(glue_->tries()),
+             static_cast<ul>(sg::kBootTries));
+  } else {
+    snprintf(kind, sizeof(kind), "%s", sg::kindName(k));
+  }
   switch (rep.what) {
     case sx::Saved::Wrote: {
-      char base[120] = "";
+      char base[96] = "";
       if (rep.compacted) {
         snprintf(base, sizeof(base), "; compacted: stats-%08lx.bin, %lu rows, %lu bytes%s",
                  static_cast<ul>(glue_ ? glue_->fold().head().baseGen : 0), static_cast<ul>(rep.baseRows),
@@ -410,41 +348,56 @@ void ListeningStats::saved(sg::Kind k, sg::Refused r, const sx::SaveReport& rep)
       } else if (rep.compactSkipped) {
         snprintf(base, sizeof(base), "; the compaction waits for the next boot (its name is the one stats.bin names)");
       }
-      Serial.printf("[listen] saved (%s%s): stats.bin generation %lu, %lu bytes, in %.0f ms%s%s; %lu slots folded "
-                    "this session\n",
-                    kind, where, static_cast<ul>(rep.generation), static_cast<ul>(rep.bytes), ms,
+      Serial.printf("[listen] saved (%s): stats.bin generation %lu, %lu bytes (TRKD %lu rows, RCNT %lu), in %.0f ms%s%s; "
+                    "%lu slots folded this session\n",
+                    kind, static_cast<ul>(rep.generation), static_cast<ul>(rep.bytes),
+                    static_cast<ul>(rep.rows[sf::kTrkd]), static_cast<ul>(rep.rows[sf::kRcnt]), ms,
                     rep.heldPromoted ? "; a held stats.tmp promoted first" : "", base,
                     static_cast<ul>(glue_ ? glue_->fold().folded() : 0));
       return;
     }
     case sx::Saved::Nothing:
-      Serial.printf("[listen] saved (%s%s): nothing new since the card's stats.bin (nothing written; %.0f ms)\n", kind,
-                    where, ms);
+      Serial.printf("[listen] saved (%s): nothing new since the card's stats.bin (nothing written%s; %.0f ms)\n", kind,
+                    rep.heldPromoted ? "; a held stats.tmp promoted" : "", ms);
       return;
     case sx::Saved::Held:
-      Serial.printf("[listen] NOT saved (%s%s): stats.tmp written whole (%lu bytes) but the card refused its rename: "
+      Serial.printf("[listen] NOT saved (%s): stats.tmp written whole (%lu bytes) but the card refused its rename: "
                     "held, promoted first by the next save (%.0f ms)\n",
-                    kind, where, static_cast<ul>(rep.bytes), ms);
+                    kind, static_cast<ul>(rep.bytes), ms);
       return;
     case sx::Saved::Failed:
-      Serial.printf("[listen] NOT saved (%s%s): the card failed its %s step (%.0f ms): the card's stats.bin as it was; "
+      Serial.printf("[listen] NOT saved (%s): the card failed its %s step (%.0f ms): the card's stats.bin as it was; "
                     "the trim follows its MARK\n",
-                    kind, where, rep.step, ms);
+                    kind, rep.step, ms);
       return;
     case sx::Saved::Changed:
-      Serial.printf("[listen] NOT saved (%s%s): the card's stats.bin isn't the one this session read or wrote "
+      Serial.printf("[listen] NOT saved (%s): the card's stats.bin isn't the one this session read or wrote "
                     "(another player's, or deleted on a computer): no save this session, the next boot reads the "
                     "card's\n",
-                    kind, where);
+                    kind);
       return;
     case sx::Saved::NoMemory:
-      Serial.printf("[listen] NOT saved (%s%s): no PSRAM for the save's %u B of work memory\n", kind, where,
+      Serial.printf("[listen] NOT saved (%s): no PSRAM for the save's %u B of work memory\n", kind,
                     static_cast<unsigned>(sx::kWorkBytes));
       return;
     case sx::Saved::Off:
-      Serial.printf("[listen] NOT saved (%s%s): %s\n", kind, where,
+      Serial.printf("[listen] NOT saved (%s): %s\n", kind,
                     glue_ && glue_->fold().noMemory() ? "the fold ran out of memory this session"
                                                       : "the stats are off this session");
+      return;
+    case sx::Saved::Damaged: {
+      char sec[16];
+      typeText(rep.section, sec, sizeof(sec));
+      Serial.printf("[listen] NOT saved (%s): the card's stats.bin is DAMAGED (%s fails its check under the header "
+                    "this session stands on; %.0f ms): the session is behind, no save this session; the next boot reads "
+                    "it corrupt (stats.bad) and counts again from what the log still holds\n",
+                    kind, sec, ms);
+      return;
+    }
+    case sx::Saved::Behind:
+      Serial.printf("[listen] NOT saved (%s): %s%s\n", kind,
+                    rep.step[0] ? "the stats.tmp a save held was lost before its promotion: " : "",
+                    refusedText(sg::Refused::Behind));
       return;
   }
 }
@@ -477,11 +430,13 @@ void ListeningStats::logRead(const sx::Opened& o, const char* when, float ms) {
       } else {
         snprintf(base, sizeof(base), "; no base yet");
       }
-      Serial.printf("[listen] stats.bin read %s: generation %lu, %lu bytes%s%s%s%s%s: %llu plays, %lu MARK rows; "
+      char mark[64] = "";
+      if (o.markBytes) snprintf(mark, sizeof(mark), " (MARK's block %lu B, kept)", static_cast<ul>(o.markBytes));
+      Serial.printf("[listen] stats.bin read %s: generation %lu, %lu bytes%s%s%s%s%s: %llu plays, %lu MARK rows%s; "
                     "counting goes on above MARK\n",
                     when, static_cast<ul>(o.generation), static_cast<ul>(o.bytes), base, took, reads,
                     settledText(o.settled.what), held, static_cast<ull>(h.plays),
-                    static_cast<ul>(glue_->fold().rows(sf::kMark)));
+                    static_cast<ul>(glue_->fold().marks()), mark);
       break;
     }
     case sx::Read::Absent:
@@ -491,8 +446,7 @@ void ListeningStats::logRead(const sx::Opened& o, const char* when, float ms) {
       return;
     case sx::Read::Corrupt:
       Serial.printf("[listen] stats.bin read %s: CORRUPT (%s, read twice%s): %s; counting starts again from the log\n",
-                    when, cc::whyName(o.why), took,
-                    o.quarantined ? "renamed stats.bad" : "set aside");
+                    when, cc::whyName(o.why), took, o.quarantined ? "renamed stats.bad" : "set aside");
       return;
     case sx::Read::Newer:
       Serial.printf("[listen] stats.bin read %s: a NEWER stats firmware's (%s%s): left alone; the stats are OFF this "
@@ -507,9 +461,9 @@ void ListeningStats::logRead(const sx::Opened& o, const char* when, float ms) {
                     took, reads, std::strcmp(when, "at the boot") == 0 ? " (tried again at a remount)" : "");
       return;
     case sx::Read::NoMemory:
-      Serial.printf("[listen] stats.bin NOT read %s: no PSRAM for the fold or the read: the stats are OFF this session "
-                    "(no fold, no save, no trim)\n",
-                    when);
+      Serial.printf("[listen] stats.bin NOT read %s: no PSRAM for the read%s: the stats are OFF this session (no fold, "
+                    "no save, no trim)\n",
+                    when, o.marks ? " or MARK's rows past the room" : "");
       return;
   }
   if (o.settled.twins) Serial.printf("[listen] stats.bin's twins:%s\n", twins);
@@ -523,23 +477,12 @@ void ListeningStats::command(const char* arg) {
     Serial.println("[listen] no listening stats this boot (no play log, or no PSRAM for them)");
     return;
   }
-  // (Given back to a library update, the fold holds MARK alone: no days, no
-  // track rows until the re-read.)
-  if ((arg[0] == 'd' || arg[0] == 't') && glue_->givenBack()) {
-    Serial.println("[listen] the stats' blocks are given back to the library update: stats.bin is read again after "
-                   "it (H says when)");
-    return;
-  }
   switch (arg[0]) {
     case 0: printState(); return;
     case 'd': printDays(); return;
     case 'm': printMarks(); return;
     case 't': printTrack(arg + 1); return;
     case 's':
-      if (glue_->givenBack()) {
-        Serial.printf("[listen] Hs refused: %s\n", refusedText(sg::Refused::GivenBack));
-        return;
-      }
       if (glue_->booting()) {
         Serial.printf("[listen] Hs refused: %s\n", refusedText(sg::Refused::Booting));
         return;
@@ -557,50 +500,28 @@ void ListeningStats::command(const char* arg) {
 
 void ListeningStats::printState() {
   statsglue::Glue& g = *glue_;
-  const sf::s1::Fold& f = g.fold();
+  const sf::Fold& f = g.fold();
   const sx::Opened& o = g.opened();
-  const char* phase = g.dropped()                 ? "OFF (the folds dropped at the end)"
-                      : g.givenBack()             ? "GIVEN BACK to the library update (stats.bin read again after it)"
-                      : g.rereadPending()         ? "the card mounted again: stats.bin read at the scan's next piece"
-                      : !g.on()                   ? "OFF"
-                      : g.booting()               ? "folding (the boot's scan)"
-                      : g.partialSeen()           ? "on; a log file not read whole: no save this session"
-                      : g.store().changed()       ? "on; the card's stats.bin changed: no save this session"
-                      : f.noMemory()              ? "on; the fold ran out of memory: no save this session"
-                      : g.behind()                ? "on; behind its log after a library update's give-back: no save "
-                                                    "this session (the next boot folds what the log still holds of "
-                                                    "what RAM lacks; a rotation meanwhile loses those in plays.1.jnl)"
-                                                  : "on";
+  char tries[96] = "";
+  if (g.retrying()) {
+    const uint64_t now = boardclock::monoMs(), at = g.retryAtMs();
+    snprintf(tries, sizeof(tries), "the boot's save tried again in %lu ms (try %lu of %lu), its overflow held",
+             static_cast<ul>(at > now ? at - now : 0), static_cast<ul>(g.tries() + 1), static_cast<ul>(sg::kBootTries));
+  }
+  const char* phase = g.dropped()           ? "OFF (the folds dropped at the end)"
+                      : g.rereadPending()   ? "the card mounted again: stats.bin read at the scan's next piece"
+                      : !g.on()             ? "OFF"
+                      : g.bootPending()     ? "the boot's fold begins at the scan's next piece"
+                      : f.booting()         ? "folding (the boot's scan)"
+                      : g.retrying()        ? tries
+                      : g.partialSeen()     ? "on; a log file not read whole: no save this session"
+                      : g.store().changed() ? "on; the card's stats.bin changed: no save this session"
+                      : f.noMemory()        ? "on; the fold ran out of memory: no save this session"
+                      : f.behind()          ? "on; BEHIND its log: no save this session (the next boot folds what the "
+                                              "log still holds; a rotation meanwhile loses those in plays.1.jnl)"
+                                            : "on";
   Serial.printf("[listen] H: %s; read %s (%s%s), %lu read again since\n", phase, sx::readName(o.read),
                 o.inBase ? "its base: " : "", cc::whyName(o.why), static_cast<ul>(g.rereads()));
-  if (g.givenBack()) {
-    // (What waits for the re-read: the glue's own state, now.)
-    const char* scan = g.rereadPending() ? "; the boot's scan, begun again, waits for it"
-                       : g.bootPending() ? "; the boot's scan waits for it (its fold not begun)"
-                                         : "";
-    char tries[96] = "";
-    if (g.takeBackTries()) {
-      const uint64_t now = boardclock::monoMs(), at = g.takeBackAtMs();
-      snprintf(tries, sizeof(tries), "; the card failed %lu of its reads, the next in %lu ms",
-               static_cast<ul>(g.takeBackTries()), static_cast<ul>(at > now ? at - now : 0));
-    }
-    Serial.printf("[listen] given back %lu s ago (%lu B; MARK's %lu B kept, %lu rows): %lu play%s in the ring, %lu past "
-                  "it; taken again once the update is over and Auto DJ's join settled (%s, %s%s%s)\n",
-                  static_cast<ul>((millis() - givenAt_) / 1000), static_cast<ul>(g.gaveBack().bytes),
-                  static_cast<ul>(g.gaveBack().kept), static_cast<ul>(g.gaveBack().markRows),
-                  static_cast<ul>(g.ringCount()), g.ringCount() == 1 ? "" : "s", static_cast<ul>(g.ringOver()),
-                  updating_ ? "the update not over" : "the update over",
-                  joinWorking_ ? "the join working" : joinSettled_ ? "the join settled" : "the join to come", tries,
-                  scan);
-  } else if (g.giveBacks()) {
-    const sg::TookBack& t = g.tookBack();
-    Serial.printf("[listen] given back to %lu library update%s this session; the last re-read: %s, %s, %lu folded from "
-                  "the ring (%lu covered already, %lu past it)\n",
-                  static_cast<ul>(g.giveBacks()), g.giveBacks() == 1 ? "" : "s",
-                  t.rescan ? "a remount's scan's" : t.read ? sx::readName(o.read) : "none yet",
-                  t.same ? "every play held in it" : "NOT every play held in it", static_cast<ul>(t.folded),
-                  static_cast<ul>(t.covered), static_cast<ul>(t.over));
-  }
   const statsglue::Glue::FileLook l = g.lookFile();
   if (l.there && !l.unread) {
     Serial.printf("[listen] stats.bin on the card: generation %lu (the saves), %lu bytes, %s %u.%u; RAM stands on "
@@ -642,34 +563,36 @@ void ListeningStats::printState() {
                   (h.flags & sf::kFlagSinceCommit) ? ", from the sync's commitTime" : "", todayText,
                   days < 1 ? 1L : days, days == 1 ? "" : "s");
   }
-  Serial.printf("[listen] rows: MARK %lu (%lu B), HOUR %lu (%lu B), DAYS %lu (%lu B), RCNT %lu (%lu B), TRKD %lu (%lu "
-                "B); the base %s%08lx, %lu rows%s\n",
-                static_cast<ul>(f.rows(sf::kMark)), static_cast<ul>(f.rows(sf::kMark) * sf::kStrides[sf::kMark]),
-                static_cast<ul>(f.rows(sf::kHour)), static_cast<ul>(f.rows(sf::kHour) * sf::kStrides[sf::kHour]),
-                static_cast<ul>(f.rows(sf::kDays)), static_cast<ul>(f.rows(sf::kDays) * sf::kStrides[sf::kDays]),
-                static_cast<ul>(f.rows(sf::kRcnt)), static_cast<ul>(f.rows(sf::kRcnt) * sf::kStrides[sf::kRcnt]),
-                static_cast<ul>(f.rows(sf::kTrkd)), static_cast<ul>(f.rows(sf::kTrkd) * sf::kStrides[sf::kTrkd]),
-                h.baseGen ? "stats-" : "none ", static_cast<ul>(h.baseGen), static_cast<ul>(h.baseRows),
-                (h.flags & sf::kFlagBaseLost) ? " (a base was lost once)" : "");
-  Serial.printf("[listen] RAM: %lu B held (the fold's blocks; TRKD %lu chunks, RCNT %lu), %lu B at the peak; the spare "
-                "chunk %s; this session %lu folded, %lu met twice, gap %lu\n",
-                static_cast<ul>(f.held()), static_cast<ul>(f.chunks(sf::kTrkd)), static_cast<ul>(f.chunks(sf::kRcnt)),
-                static_cast<ul>(f.peak()), f.spare() ? "held" : "not held", static_cast<ul>(f.folded()),
+  if (l.frame) {
+    Serial.printf("[listen] stats.bin's rows: MARK %lu, HOUR %lu, DAYS %lu, RCNT %lu, TRKD %lu; the base %s%08lx, %lu "
+                  "rows%s\n",
+                  static_cast<ul>(l.rows[sf::kMark]), static_cast<ul>(l.rows[sf::kHour]),
+                  static_cast<ul>(l.rows[sf::kDays]), static_cast<ul>(l.rows[sf::kRcnt]),
+                  static_cast<ul>(l.rows[sf::kTrkd]), h.baseGen ? "stats-" : "none ", static_cast<ul>(h.baseGen),
+                  static_cast<ul>(h.baseRows), (h.flags & sf::kFlagBaseLost) ? " (a base was lost once)" : "");
+  }
+  Serial.printf("[listen] RAM: the object %u B (the records %lu of %lu, the save due from %lu; MARK %lu rows of %lu%s), "
+                "the overflow %lu chunks (%lu B, %lu B at the peak), the ranges' block %lu B%s; this session %lu "
+                "folded, %lu met twice, gap %lu\n",
+                static_cast<unsigned>(sizeof(statsglue::Glue)), static_cast<ul>(f.records()),
+                static_cast<ul>(sf::kRecords), static_cast<ul>(sf::kSaveAt), static_cast<ul>(f.marks()),
+                static_cast<ul>(f.markCap()), g.store().markBytes() ? ", its block beside it" : "",
+                static_cast<ul>(f.chunks()), static_cast<ul>(f.held()), static_cast<ul>(f.peak()),
+                static_cast<ul>(g.rangesBytes()), g.rangesHeld() ? " (held)" : "", static_cast<ul>(f.folded()),
                 static_cast<ul>(f.twice()), static_cast<ul>(f.gap()));
   if (!g.anySave()) {
     Serial.println("[listen] the last save: none asked yet this session");
     return;
   }
   const sx::SaveReport& r = g.last();
-  if (g.lastRefused() != sg::Refused::None) {
+  if (g.lastRefused() != sg::Refused::None && r.what != sx::Saved::Damaged && r.what != sx::Saved::Behind) {
     Serial.printf("[listen] the last save: %s, refused (%s); %lu written this session\n", sg::kindName(g.lastKind()),
                   refusedText(g.lastRefused()), static_cast<ul>(g.savesWritten()));
     return;
   }
   if (r.what == sx::Saved::Nothing) {
     // (Nothing written: the report holds no file. The card's copy RAM
-    // stands on is the one that holds it all; S1's device round 1 printed
-    // "0 bytes, generation 0" here with stats.bin at generation 5.)
+    // stands on is the one that holds it all.)
     const sx::Store::Copy& c = g.store().cardCopy();
     char copy[64];
     if (c.present) {
@@ -681,42 +604,40 @@ void ListeningStats::printState() {
                   sg::kindName(g.lastKind()), copy, lastMs_, static_cast<ul>(g.savesWritten()));
     return;
   }
-  Serial.printf("[listen] the last save: %s, %s%s%s, %lu bytes, generation %lu, %.0f ms%s; %lu written this session\n",
-                sg::kindName(g.lastKind()), sx::savedName(r.what), r.step[0] ? " at " : "", r.step,
+  char sec[24] = "";
+  if (r.what == sx::Saved::Damaged) {
+    char t[16];
+    typeText(r.section, t, sizeof(t));
+    snprintf(sec, sizeof(sec), " (%s)", t);
+  }
+  Serial.printf("[listen] the last save: %s, %s%s%s%s, %lu bytes, generation %lu, %.0f ms%s; %lu written this session\n",
+                sg::kindName(g.lastKind()), sx::savedName(r.what), sec, r.step[0] ? " at " : "", r.step,
                 static_cast<ul>(r.bytes), static_cast<ul>(r.generation), lastMs_, r.compacted ? ", compacted" : "",
                 static_cast<ul>(g.savesWritten()));
 }
 
 void ListeningStats::printDays() {
-  statsglue::Glue& g = *glue_;
   uint16_t today = 0;
   if (!sf::todayOf(boardclock::now(), &today)) {
     Serial.println("[listen] Hd: the board's clock is unset (or not believed): no today, so no last 7 days");
     return;
   }
+  const int64_t t0 = esp_timer_get_time();
+  const sg::DaysLook look = glue_->lookDays(today);
+  const float ms = msSince(t0);
   uint32_t plays = 0, skips = 0;
-  uint64_t ms = 0;
-  for (int k = 6; k >= 0; --k) {
-    if (today < k) continue;
-    const uint16_t d = static_cast<uint16_t>(today - k);
+  uint64_t total = 0;
+  for (uint32_t i = 0; i < 7; ++i) {
+    if (today + i < 6) continue;  // (before 2026-01-01)
+    const sg::DaysLook::Day& e = look.d[i];
     char date[16];
-    dayText(d, date, sizeof(date));
-    uint8_t row[16];
-    uint32_t hourPlays = 0, hours = 0;
-    uint64_t hourMs = 0;
-    for (uint32_t hr = 0; hr < 24; ++hr) {
-      uint8_t p = 0;
-      uint32_t m = 0;
-      if (g.fold().hour(static_cast<uint32_t>(d) * 24 + hr, &p, &m)) {
-        hourPlays += p;
-        hourMs += m;
-        ++hours;
-      }
-    }
-    if (!g.fold().day(d, row)) {
-      Serial.printf("[listen] %s (day %u): nothing%s\n", date, static_cast<unsigned>(d), hours ? " (HOUR has rows!)" : "");
+    dayText(e.day, date, sizeof(date));
+    if (!e.any) {
+      Serial.printf("[listen] %s (day %u): nothing%s\n", date, static_cast<unsigned>(e.day),
+                    e.hours ? " (HOUR has rows!)" : "");
       continue;
     }
+    const uint8_t* row = e.row;
     const uint16_t dp = cc::get16(row + 2), ds = cc::get16(row + 4);
     const uint8_t djp = row[6], djs = row[7], shp = row[12], shs = row[13];
     const uint32_t dms = cc::get32(row + 8);
@@ -724,42 +645,45 @@ void ListeningStats::printDays() {
     listened(dms, lis, sizeof(lis));
     Serial.printf("[listen] %s (day %u): %u plays, %u skips, %s (%lu ms); you %u/%u, shuffle %u/%u, Auto DJ %u/%u; "
                   "HOUR: %lu plays in %lu hours, %llu ms\n",
-                  date, static_cast<unsigned>(d), static_cast<unsigned>(dp), static_cast<unsigned>(ds), lis,
+                  date, static_cast<unsigned>(e.day), static_cast<unsigned>(dp), static_cast<unsigned>(ds), lis,
                   static_cast<ul>(dms), static_cast<unsigned>(dp - djp - shp), static_cast<unsigned>(ds - djs - shs),
                   static_cast<unsigned>(shp), static_cast<unsigned>(shs), static_cast<unsigned>(djp),
-                  static_cast<unsigned>(djs), static_cast<ul>(hourPlays), static_cast<ul>(hours),
-                  static_cast<ull>(hourMs));
+                  static_cast<unsigned>(djs), static_cast<ul>(e.hourPlays), static_cast<ul>(e.hours),
+                  static_cast<ull>(e.hourMs));
     plays += dp;
     skips += ds;
-    ms += dms;
+    total += dms;
   }
   char lis[32];
-  listened(ms, lis, sizeof(lis));
-  Serial.printf("[listen] the last 7 UTC days: %lu plays, %lu skips, %s listened\n", static_cast<ul>(plays),
-                static_cast<ul>(skips), lis);
+  listened(total, lis, sizeof(lis));
+  Serial.printf("[listen] the last 7 UTC days: %lu plays, %lu skips, %s listened (stats.bin's DAYS and HOUR with the "
+                "%lu records%s; %.0f ms)\n",
+                static_cast<ul>(plays), static_cast<ul>(skips), lis, static_cast<ul>(glue_->fold().records()),
+                look.read ? "" : "; stats.bin NOT read: the records alone", ms);
 }
 
 void ListeningStats::printMarks() {
   statsglue::Glue& g = *glue_;
-  const sf::s1::Fold& f = g.fold();
+  const sf::Fold& f = g.fold();
   const cc::msmf::Acks& a = g.acks();
   char dev[16];
   // MARK's rows, each beside ACKS's row and the log's highest seq.
-  for (uint32_t i = 0; i < f.rows(sf::kMark); ++i) {
-    const sf::s1::Fold::MarkRow* m = f.markRow(i);
+  for (uint32_t i = 0; i < f.marks(); ++i) {
+    const sf::Fold::MarkRow* m = f.markRow(i);
     if (!m) break;
     devText(m->dev, dev, sizeof(dev));
     char ack[24] = "none", log[40] = "none";
     for (uint32_t k = 0; k < a.count; ++k)
-      if (a.entries[k].epoch == m->epoch && std::memcmp(a.entries[k].deviceId, m->dev, 6) == 0)
+      if (a.entries[k].epoch == m->epoch() && std::memcmp(a.entries[k].deviceId, m->dev, 6) == 0)
         snprintf(ack, sizeof(ack), "%lu", static_cast<ul>(a.entries[k].seq));
     for (uint32_t k = 0; k < g.logKeys(); ++k) {
       const sg::LogKey& lk = g.logKey(k);
-      if (lk.epoch == m->epoch && std::memcmp(lk.dev, m->dev, 6) == 0)
+      if (lk.epoch == m->epoch() && std::memcmp(lk.dev, m->dev, 6) == 0)
         snprintf(log, sizeof(log), "%lu (%lu slots)", static_cast<ul>(lk.seq), static_cast<ul>(lk.slots));
     }
-    Serial.printf("[listen] MARK %s epoch %016llx: %lu (the card's %lu); ACKS %s; the log %s\n", dev,
-                  static_cast<ull>(m->epoch), static_cast<ul>(m->seq), static_cast<ul>(m->card), ack, log);
+    Serial.printf("[listen] MARK %s epoch %016llx: %lu (the card's %lu%s); ACKS %s; the log %s\n", dev,
+                  static_cast<ull>(m->epoch()), static_cast<ul>(m->seq), static_cast<ul>(m->card),
+                  f.heldPending() ? ", a held stats.tmp's at its promotion" : "", ack, log);
   }
   // ACKS's rows and the log's keys with no MARK row.
   for (uint32_t k = 0; k < a.count; ++k) {
@@ -775,11 +699,12 @@ void ListeningStats::printMarks() {
     Serial.printf("[listen] the log %s epoch %016llx: %lu (%lu slots); no MARK row\n", dev, static_cast<ull>(lk.epoch),
                   static_cast<ul>(lk.seq), static_cast<ul>(lk.slots));
   }
-  Serial.printf("[listen] Hm: MARK %lu rows, ACKS %lu (%lu on the card), the log's %lu keys%s (the boot's scan); "
-                "HEAD's twice %lu, gap %lu; this boot %lu met twice, gap %lu\n",
-                static_cast<ul>(f.rows(sf::kMark)), static_cast<ul>(a.count), static_cast<ul>(a.rows),
-                static_cast<ul>(g.logKeys()), g.logKeysMore() ? " and more" : "", static_cast<ul>(f.head().twice),
-                static_cast<ul>(f.head().gap), static_cast<ul>(f.twice()), static_cast<ul>(f.gap()));
+  Serial.printf("[listen] Hm: MARK %lu rows (room for %lu), ACKS %lu (%lu on the card), the log's %lu keys%s (the boot's "
+                "scan); HEAD's twice %lu, gap %lu; this boot %lu met twice, gap %lu\n",
+                static_cast<ul>(f.marks()), static_cast<ul>(f.markCap()), static_cast<ul>(a.count),
+                static_cast<ul>(a.rows), static_cast<ul>(g.logKeys()), g.logKeysMore() ? " and more" : "",
+                static_cast<ul>(f.head().twice), static_cast<ul>(f.head().gap), static_cast<ul>(f.twice()),
+                static_cast<ul>(f.gap()));
 }
 
 void ListeningStats::printTrack(const char* hex) {
@@ -805,9 +730,10 @@ void ListeningStats::printTrack(const char* hex) {
                      : t.base == sg::TrackLook::Base::Found    ? "in the base"
                      : t.base == sg::TrackLook::Base::NotThere ? "not in the base"
                                                                : "the base UNREAD";
+  const char* delta = t.unread ? ", stats.bin's TRKD UNREAD" : t.delta ? ", and in TRKD or the records" : "";
   if (t.row.hash == 0) {
-    Serial.printf("[listen] track %016llx: no row (%s, not in TRKD; %lu base reads, %.1f ms)\n", static_cast<ull>(h),
-                  base, static_cast<ul>(t.reads), ms);
+    Serial.printf("[listen] track %016llx: no row (%s%s; %lu base reads, %.1f ms)\n", static_cast<ull>(h), base,
+                  t.unread ? delta : ", not in TRKD or the records", static_cast<ul>(t.reads), ms);
     return;
   }
   char first[24], last[24];
@@ -816,6 +742,5 @@ void ListeningStats::printTrack(const char* hex) {
   Serial.printf("[listen] track %016llx: %u plays, %u skips; first %s (%s), last %s; lastOrd %lu (%s%s; %lu base reads, "
                 "%.1f ms)\n",
                 static_cast<ull>(h), static_cast<unsigned>(t.row.plays), static_cast<unsigned>(t.row.skips), first,
-                srcName(t.row.src), last, static_cast<ul>(t.row.lastOrd), base, t.delta ? ", and in TRKD" : "",
-                static_cast<ul>(t.reads), ms);
+                srcName(t.row.src), last, static_cast<ul>(t.row.lastOrd), base, delta, static_cast<ul>(t.reads), ms);
 }

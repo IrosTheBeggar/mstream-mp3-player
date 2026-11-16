@@ -451,10 +451,17 @@ static bool pauseIfPlaying() {
 
 // The player's hold (PlaybackController::Hold): a play waits while
 // Bluetooth is the output and the headphones aren't connected (PlayGate
-// connects them, and releases or ends the wait).
+// connects them, and releases or ends the wait), and while the listening
+// stats' boot scan holds overflow chunks (docs/LISTENING-STATS.md 5.14: a
+// decoder's blocks carved under them would land where the next library
+// update needs room; about 1.4 s and the boot's save for a full log, once a
+// card; stepStatsHold() releases such a wait). Not a track that follows
+// one playing (a remount's scan again, rare, while a track plays: a gap
+// would be worse): only a start from a pause, a stop or a wait.
 struct OutputHold : PlaybackController::Hold {
+  bool headphones() const { return !silent && audio.output() == Output::Bluetooth && !audio.bluetooth().connected(); }
   bool holdPlay() const override {
-    return !silent && audio.output() == Output::Bluetooth && !audio.bluetooth().connected();
+    return headphones() || (playHistory.overflowHeld() && player.state() != PlayState::Playing);
   }
 };
 static OutputHold outputHold;
@@ -2498,10 +2505,36 @@ static void handleBluetooth() {
   }
 }
 
+// A track's start waiting for the listening stats (OutputHold): their boot
+// scan holds overflow chunks (docs/LISTENING-STATS.md 5.14). Once they are
+// given back (the boot's save landed, or its last try failed) the wait is
+// released, or left to PlayGate when the headphones are what it waits for
+// then. Nothing starts by itself at a boot: a start the listener asked, a
+// tap on Play or the headphones' play key, waits here.
+static bool statsHeldStart = false;
+static void stepStatsHold() {
+  if (playHistory.overflowHeld()) {
+    if (player.state() == PlayState::Waiting && !statsHeldStart) {
+      statsHeldStart = true;
+      Serial.println("[play] the start waits for the listening stats (their boot scan holds its overflow until its "
+                     "save, once a card)");
+    }
+    return;
+  }
+  if (!statsHeldStart) return;
+  statsHeldStart = false;
+  if (player.state() != PlayState::Waiting || outputHold.headphones()) return;  // (cancelled; or PlayGate's now)
+  Serial.println("[play] the listening stats gave their overflow back: playing");
+  player.release();
+}
+
 // Play while Bluetooth is the output and the headphones aren't connected:
 // PlayGate's decisions (the player and the session are done in step()), and
 // what is left to do here: the radio and what the UI says.
 static void stepPlayGate(uint32_t now) {
+  // (A wait the listening stats hold is theirs until their overflow is given
+  // back: stepStatsHold(). The headphones' part of it, PlayGate's after.)
+  if (statsHeldStart) return;
   BtSink& bt = audio.bluetooth();
   PlayGate::In in;
   in.play = player.state();
@@ -3307,32 +3340,24 @@ static bool decoderRefilling(uint32_t now) {
 }
 
 // The library update's memory check (LibraryUpdate::setGiveBack()): a new
-// track table that doesn't fit the largest free block while memory that
-// goes with the step anyway is held: Auto DJ's join (its blocks at that
-// block's top: AutoDjJoin's placement, those that fit no smaller free
-// block) given back, then the listening stats' resident blocks (their save
-// first: docs/LISTENING-STATS.md 6.7, the order the heap model runs), PSRAM
-// measured again. The join joins again after the update's Live, or at once
-// when the update waits for the next boot after all; the stats take their
-// blocks again after that (PlayHistory::loop()).
-static size_t updateGiveBack(void*, size_t* psramFree, size_t* psramLargest) {
+// track table that doesn't fit the largest free block while Auto DJ's join
+// holds blocks at its top (AutoDjJoin's placement: those that fit no
+// smaller free block): the join given back, PSRAM measured again. It joins
+// again after the update's Live, or at once when the update waits for the
+// next boot after all. (The listening stats hold nothing to give back: a
+// fixed resident set, docs/LISTENING-STATS.md 5.14.)
+static size_t autoDjGiveBack(void*, size_t* psramFree, size_t* psramLargest) {
+  if (!autoDj) return 0;
   const size_t before = *psramLargest;
-  const size_t dj = autoDj ? autoDj->giveBack() : 0;
-  const size_t stats = playHistory.statsGiveBack("its memory check");
-  if (!dj && !stats) return 0;
+  const size_t given = autoDj->giveBack();
+  if (!given) return 0;
   *psramFree = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
   *psramLargest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
-  if (dj) {
-    Serial.printf("[dj] the library update's memory check: the join given back (%u B)%s: PSRAM's largest free block %u "
-                  "B -> %u B (up to %u B: the join's blocks at its top); it joins again after the update\n",
-                  (unsigned)dj, stats ? ", and the listening stats' blocks" : "", (unsigned)before,
-                  (unsigned)*psramLargest, (unsigned)(before + autoDj->joinTopBytes()));
-  } else {
-    Serial.printf("[lib] the update step's memory check: PSRAM's largest free block %u B -> %u B with the listening "
-                  "stats' blocks given back\n",
-                  (unsigned)before, (unsigned)*psramLargest);
-  }
-  return dj + stats;
+  Serial.printf("[dj] the library update's memory check: the join given back (%u B): PSRAM's largest free block %u B "
+                "-> %u B (up to %u B: the join's blocks at its top); it joins again after the update\n",
+                (unsigned)given, (unsigned)before, (unsigned)*psramLargest,
+                (unsigned)(before + autoDj->joinTopBytes()));
+  return given;
 }
 
 static AutoDj::Env autoDjEnv(uint32_t now) {
@@ -3348,6 +3373,9 @@ static AutoDj::Env autoDjEnv(uint32_t now) {
   e.listMoving = userInterface && userInterface->listMoving();
   e.uiStarted = !userInterface || userInterface->started();
   e.refilling = decoderRefilling(now);
+  // The listening stats' boot scan holds blocks (its ranges', its
+  // overflow's): no join begins around them (docs/LISTENING-STATS.md 5.14).
+  e.statsHold = playHistory.statsScanHolds();
   return e;
 }
 
@@ -3423,11 +3451,6 @@ static bool enterFence() {
   // reads it): given back before the index goes (counted in the memory
   // check's alsoFreed); it joins again after the fence.
   const size_t djFreed = autoDj ? autoDj->fence() : 0;
-  // The listening stats' resident blocks (docs/LISTENING-STATS.md 6.7; their
-  // save first; counted in alsoFreed too), unless the memory check's
-  // give-back took them already: taken again after the update and the
-  // rejoin.
-  const size_t statsFreed = playHistory.statsGiveBack("its fence");
   // 3. The old index (and the scan's memory); then the UI, which sees none.
   cardTasks->fenceUp();
   // The fence's own lowest PSRAM free (leaveFence()'s "lowest", the
@@ -3439,9 +3462,9 @@ static bool enterFence() {
   fenceLowWindow = diag::beginLowWindow();
   if (userInterface) userInterface->libraryUpdating();
   Serial.printf("[lib] the update step (%s): the fence is up; the build on the card worker (the loop goes on); PSRAM "
-                "free %u B before, %u B now (Auto DJ's join gave back %u B, the listening stats %u B)\n",
+                "free %u B before, %u B now (Auto DJ's join gave back %u B)\n",
                 library.update()->why(), (unsigned)fencePsramBefore,
-                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)djFreed, (unsigned)statsFreed);
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)djFreed);
   return true;
 }
 
@@ -3584,20 +3607,16 @@ static void stepCard(uint32_t now, bool input) {
   env.trackLeftMs = trackLeftMs();
   env.seekSeq = player.seeks();
   env.alsoFreed = queue.memoryBytes() + queueStore.savingBytes() +
-                  (userInterface ? userInterface->thumbs().poolBytes() : 0) + (autoDj ? autoDj->fenceBytes() : 0) +
-                  playHistory.statsResident();
+                  (userInterface ? userInterface->thumbs().poolBytes() : 0) + (autoDj ? autoDj->fenceBytes() : 0);
   // A pick owed while Auto DJ's index joins: no fence until it lands
   // (autodj::decide(), this pass's: stepAutoDj() ran before).
   env.autoDjOwed = autoDj && autoDj->owed();
-  // The listening stats' give-back (at the memory check's hook or the
-  // fence) waits: while a play is queued for its slot, one behind a try
-  // the card failed too (written first at the passes the gate lets
-  // through, it is folded live and the give-back's save holds it, not the
-  // ring); and while it would save stats.bin first and the play log's
-  // write gate is shut this pass (stepPlays() ran before): no memory check
-  // or fence yet, so that save keeps out of a start's refill as every stats
-  // save does (docs/LISTENING-STATS.md 5.5, 6.7).
-  env.writesWait = playHistory.statsSaveWaits();
+  // The listening stats' boot scan holds blocks across passes (its ranges'
+  // block, its overflow's chunks until its save lands): no memory check or
+  // fence until it gives them back, so they are never held across a build
+  // (docs/LISTENING-STATS.md 5.14; the scan's first piece waits for an asked
+  // update instead: never both).
+  env.statsWait = playHistory.statsScanHolds();
   cardTasks->loop(in, src, userInterface ? &userInterface->thumbs() : nullptr,
                   userInterface ? &userInterface->waves() : nullptr, userInterface && userInterface->coversAllowed(),
                   env);
@@ -3924,17 +3943,15 @@ void setup() {
   autoDj = psramNew<AutoDj>(library, player);
   if (autoDj) {
     autoDj->begin();
+    if (library.update()) library.update()->setGiveBack(autoDjGiveBack, nullptr);
   } else {
     Serial.println("[dj] no PSRAM for Auto DJ: off for this boot");
   }
   // The play log: NVS's ids, the cut-rename rule, the root's ACKS; the
   // boot's scan and the slots on the loop (Auto DJ's marks name a play's
-  // source).
+  // source); the listening stats' resident set (their glue's object, one
+  // PSRAM block for the session) and their read of stats.bin.
   playHistory.begin(autoDj);
-  // The update step's memory check gives back what goes with the step anyway
-  // when its new track table doesn't fit: Auto DJ's join, then the listening
-  // stats' blocks.
-  if (library.update()) library.update()->setGiveBack(updateGiveBack, nullptr);
   Serial.printf("[lib] library + queue: internal RAM %lu B free before, %lu B after\n",
                 (unsigned long)freeBeforeLibrary, (unsigned long)diag::heap().internalFree);
   diag::logHeap("library");
@@ -4051,6 +4068,7 @@ void loop() {
                               player.state() != PlayState::Waiting && !btLost) ||
                              usbViz.active());
   btSession.update(audio.bluetooth().link(), now);
+  stepStatsHold();
   stepPlayGate(now);
   // The fade's toast: a touch (swallowed as a wake, or on a lit screen; not
   // one "Touch when off" ignores, nor the glance's) or the PWR key's wake

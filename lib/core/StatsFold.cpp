@@ -46,6 +46,17 @@ int cmpPair(const uint8_t* devA, uint64_t epochA, const uint8_t* devB, uint64_t 
 
 int cmp64(uint64_t a, uint64_t b) { return a < b ? -1 : a > b ? 1 : 0; }
 
+// A sort with no recursion: a save sorts the records on the loop's stack
+// (5.14), and std::sort's introsort recurses up to 2 x log2(n) frames deep
+// (112 B each in the core2 build: 2 KB for a chunk's 819 records). A heap
+// sort's frames are a few, whatever the input; equal keys' records ⊕ into
+// one row in any order (5.2), so the order among them doesn't matter.
+template <typename T, typename Less>
+void heapSort(T* first, T* last, Less less) {
+  std::make_heap(first, last, less);
+  std::sort_heap(first, last, less);
+}
+
 using Record = Fold::Record;
 using MarkRow = Fold::MarkRow;
 // The resident set's rows (5.14): a record 20 B (96 in the object: 1,920 B),
@@ -306,16 +317,16 @@ void Fold::sortRuns(Order o) {
     const uint32_t n = runLength(r);
     switch (o) {
       case Order::Time:
-        std::sort(x, x + n, [](const Record& a, const Record& b) { return a.time < b.time; });
+        heapSort(x, x + n, [](const Record& a, const Record& b) { return a.time < b.time; });
         break;
       case Order::DayHash:
-        std::sort(x, x + n, [](const Record& a, const Record& b) {
+        heapSort(x, x + n, [](const Record& a, const Record& b) {
           const uint32_t da = dayKey(a), db = dayKey(b);
           return da != db ? da < db : hashOf(a) < hashOf(b);
         });
         break;
       case Order::Hash:
-        std::sort(x, x + n, [](const Record& a, const Record& b) { return hashOf(a) < hashOf(b); });
+        heapSort(x, x + n, [](const Record& a, const Record& b) { return hashOf(a) < hashOf(b); });
         break;
       default:
         break;
@@ -406,7 +417,7 @@ Fold::MarkRow* Fold::addMark(const uint8_t dev[6], uint64_t epoch, uint32_t* at)
 
 void Fold::sortMark() {
   if (markSorted_ < markN_)
-    std::sort(mark_, mark_ + markN_,
+    heapSort(mark_, mark_ + markN_,
               [](const MarkRow& a, const MarkRow& b) { return cmpPair(a.dev, a.epoch(), b.dev, b.epoch()) < 0; });
   markSorted_ = markN_;
   markHit_ = 0;
