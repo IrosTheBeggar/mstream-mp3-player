@@ -462,10 +462,20 @@ The rules that keep it deadlock- and glitch-free:
    the card's remount, and nothing is written behind it meanwhile). The
    listening stats ride on it (`app/ListeningStats`, Storage below): their
    look at each pass first (the update step's safe point, which a boot's
-   compaction waits for; the spare chunk carved again while Auto DJ's join
-   isn't Working), a piece of the boot's scan waiting a pass while that join
-   is Working (only while the stats fold), and the console's `Hs` run at a
-   pass the gate lets through, nothing else of the card's that pass.
+   compaction waits for; Auto DJ's join; a library update asked), a piece
+   of the boot's scan waiting a pass while that join is Working, or, before
+   its first piece, while an update is asked (its ranges' block and
+   overflow chunks are carved only in a pass that may carve). Then, at a
+   pass the gate lets through, one thing of the card's
+   (`statsglue::turnOf()`): a stats save due first (the records' save at
+   64 plays since the last, behind an update's fence until 96; the boot's
+   save tried again, its overflow held), else one play's slot, else the
+   console's `Hs` once no slot is due. While the scan holds its blocks a
+   library update asked waits in Asked (`LibraryUpdate::Wait::Stats`) and
+   Auto DJ's join doesn't begin; while it holds overflow chunks a track's
+   start waits (`stepStatsHold()`, before `stepPlayGate()`: main.cpp's
+   `OutputHold` holds a start that isn't from Playing, as for the
+   headphones).
 5. A track's learned length, a restart that is due, the `[queue] now at`
    and Repeat One lines, the spike tools, the calibration, the dancer.
 6. **`userInterface->loop()`:** the snapshot (`MainUiHost::snapshot()`,
@@ -584,31 +594,32 @@ hundred bytes in PSRAM (app/TagConsole's `Work`).
   prints no `[console]` line; `ui`'s lowest since the boot shows it
   (METADATA.md 6.3.1, L1).
 - **The listening stats save on the loop** (Storage below;
-  [LISTENING-STATS.md](LISTENING-STATS.md) 11), their writer, its plan
-  and two 4 KB buffers in PSRAM (`statsfile::kWorkBytes`, carved for each
-  read and save), never on this stack. `-fstack-usage`'s sums with the
-  core2 build's flags (MEASURED-HOST, FatFs's own frames not counted): a
+  [LISTENING-STATS.md](LISTENING-STATS.md) 11), their writer, its plan,
+  the merge's row readers and its buffers in PSRAM (`statsfile::kWorkBytes`,
+  11,456 B, carved for each read and save), never on this stack.
+  `-fstack-usage`'s sums with the core2 build's flags (MEASURED-HOST,
+  FatFs's own frames not counted; S1's rework, R5): the records' save,
+  once each 64 plays (`PlayHistory::loop` → `ListeningStats::runSave` →
+  `statsglue::Glue::saveNow` → `recordsSave` → `commit` →
+  `statsfile::Store::save` → `replace` → `toTwin` → `FatFs::rename`),
+  1,488 B (its sort of the records, a heap sort, 1,264 B; its merge's
+  read of `stats.bin`, 1,056 B), and a boot overflow's try the same; a
   rotation's save under a play's write (`PlayHistory::loop` →
   `Outbox::writeOne` → `append`, `put`, `place` → `rotate` →
-  `statsglue::Glue::save` → `commit` → `statsfile::Store::save` →
-  `replace` (or `settle`, `prepareTmp`) → `toTwin` → `FatFs::rename`)
-  2,448 B, 496 B over the rotation's own deepest without them (1,952 B),
-  and 2,720 B in the orderly end's flush; the boot's save with a
-  compaction (`loop` → `Journal::scan` → `finishScan` → ... → `compact`
-  → `FatFs::openRead` → `FatFile::openRead`) 1,712 B. A library update's
-  give-back (LISTENING-STATS.md 6.7), from `loop()`'s own 592 B: its
-  save at the memory check (`CardTasks::loop` → `LibraryUpdate::update` →
-  `updateGiveBack` → ... → `Store::save` → `replace` → `toTwin` →
-  `rename`) 2,224 B, at the fence 1,840 B, the re-read after the update
-  2,112 B, all under a rotation's save from there (3,040 B). A tmp an earlier
-  save holds is promoted in a call of its own (`Store::promote()`, from
-  `Glue::commit`), never under the save's frame: inside it, as first
-  built, the rotation's save was 2,528 B (the S1 review; the first sums
-  had also missed `replace()`'s `toTwin`). A remount's read of
-  `stats.bin` runs at the boot's scan's next piece (`loop` → `mayScan` →
-  `Glue::reserve` → ... → `Store::read`), 1,536 B. Not yet read on a device (the
-  plan's runs G and K, against the house's lowest, 2,548 B left under a
-  held boot with DO low: METADATA.md 3.8).
+  `Glue::save` → `commit` → `Store::save` → `replace` → `toTwin` →
+  `rename`) 2,464 B, 512 B over the rotation's own deepest without it
+  (1,952 B), and 2,736 B in the orderly end's flush; the boot's save
+  1,696 B; `Hs` 1,456 B; a remount's read of `stats.bin`, at the boot's
+  scan's next piece (`loop` → `mayScan` → `Glue::reserve` → `settle` →
+  `readNow` → `Store::read` → `promoteHeld` → `replace` → `toTwin` →
+  `rename`), 1,568 B. From `loop()`'s own 592 B the records' save is
+  2,080 B and a rotation's 3,056 B. A tmp an earlier save holds is
+  promoted in a call of its own (`Store::promote()`), never under the
+  save's frame, and the records sort by a heap sort, not `std::sort`,
+  whose introsort recursed up to about 2 KB more under `Store::save`.
+  Not yet read on a device (the plan's runs G and K, against the house's
+  lowest, 2,548 B left under a held boot with DO low: METADATA.md 3.8;
+  S1 as first built's boot save, round 1's run K, left 3,700 B unused).
 - **ESTIMATED worst cases**, bytes used from the stack's top (from the
   image: each function's `entry` frame, its calls and long calls, the
   VFS's, FatFs's disk and the console's function pointers by hand, the
@@ -1516,62 +1527,67 @@ bad. Log lines: `[plays] ...`, one per slot with the time its write took.
 
 **The listening stats** (`/.player/stats.bin` and the base it names;
 [LISTENING-STATS.md](LISTENING-STATS.md), METADATA.md 3.11; that plan's
-S1: counted and saved, nothing on the screen yet): every play on the
-card, from every player that wrote its log, counted from the play log
-into an aggregate in PSRAM and saved as one card container. lib/core
-`StatsFold` is the aggregate and the fold (HEAD's totals; MARK, the
-highest seq folded for each deviceId and epoch, kept for good; HOUR and
-DAYS; RCNT, the plays a day of each track over 32 days; TRKD, the
-per-track rows changed since the base), `StatsFile` the card's files (the
-read and its verdicts, the save, the compaction into a new base, and
+S1, reworked by its 5.14: counted and saved, nothing on the screen yet):
+every play on the card, from every player that wrote its log, counted
+from the play log into one card container. RAM holds a fixed few
+kilobytes; the aggregate lives in `stats.bin` alone, and each save merges
+the plays since the last into it as it streams. lib/core `StatsFold` is
+the fold (HEAD's totals; MARK, the highest seq folded for each deviceId
+and epoch, kept for good; the records: up to 96 slots folded since the
+last save; past them, a boot's overflow in chunks), `StatsFile` the
+card's files (the read and its verdicts; the save, a counting pass and a
+writing pass over `stats.bin`'s HOUR, DAYS, RCNT and TRKD merged with the
+records; the compaction into a new base, three sorted streams; and
 `stats-<gen>.bin`), `StatsGlue` the session's rules and the journal's
-`Folds`: each host-tested against tools/statsref.py's fixtures
-(test_stats_fold, test_stats_file, and test_stats_store through the real
-journal, tracker and outbox). `app/ListeningStats`, a member of
+`Folds`: each host-tested against tools/statsref.py's fixtures and
+sessions (test_stats_fold, test_stats_file, and test_stats_store through
+the real journal, tracker and outbox). `app/ListeningStats`, a member of
 `app/PlayHistory`, is the firmware's side. The read is in
-`PlayHistory::begin()`, before the journal's: `stats.bin` and its base
-read whole, a card fault read again after 100, 300 and 1,000 ms (a
-remount's read once, at the boot's scan's next piece). Unread, or a
-newer stats firmware's, the stats are off this session, holding no
-memory, and the log is trimmed by nothing (no MARK known); corrupt
+`PlayHistory::begin()`, before the journal's: `stats.bin` read whole in
+one pass, each section's CRC and order checked as it streams, HEAD and
+MARK kept, the rest not; its base read whole; a card fault read again
+after 100, 300 and 1,000 ms (a remount's read once, at the boot's scan's
+next piece). Unread, or a newer stats firmware's, the stats are off this
+session, and the log is trimmed by nothing (no MARK known); corrupt
 twice, it is set aside as `stats.bad` and counting starts again from the
-log. The boot's scan
-folds each slot above the MARK it read, once; each play written is
-folded live (RAM only: no card write for a play but its slot). Saves: at
-the scan's end, inside `finishScan()` before its trim (the only one that
-may compact, and only at the update step's safe point); before a
-rotation deletes a `plays.1.jnl` holding plays the card's stats don't
-(in the orderly end's flush only with 1 s of its 3 s left); and the
-console's `Hs`. Each is the queue's commit: `stats.tmp` written in
-pieces ending on the file's 4 KB boundaries, its size checked, then the
-rename; a tmp whose rename the card refused is held and promoted at the
+log. The boot's scan folds each slot above the MARK it read, once, into
+the records; past 96 (a card a 0.14.0 player used, or a session whose
+saves failed) into overflow chunks carved at the top of PSRAM's largest
+free block (64 KB kept free), at most 16 for a full log. Each play
+written is folded live into the records (RAM only: no card write for a
+play but its slot). Saves: at the scan's end, inside `finishScan()`
+before its trim (the only one that may compact, and only at the update
+step's safe point; with an overflow whose save failed, tried again 100,
+300 and 1,000 ms apart, four tries, before the session is behind its
+log); the records' save, once the records number 64, at a pass the write
+gate lets through, before that pass's slot (behind a library update's
+fence only at 96; never in the orderly end's flush); before a rotation
+deletes a `plays.1.jnl` holding plays the card's stats don't (in that
+flush only with 1 s of its 3 s left); and the console's `Hs`. Each is the
+queue's commit: `stats.tmp` written in pieces ending on the file's 4 KB
+boundaries, its size checked, then the rename; a tmp whose rename the
+card refused is held (the records it took are in it) and promoted at the
 next save. A save is refused with the card away or another card in the
-slot, after a log file not read whole, and once the card's `stats.bin`
-is no longer the copy this RAM stands on (another player had the card:
-its stats aren't saved over); with nothing new it writes nothing. During
-a library update (the owner's decision of 2026-11-11) the stats give their
-resident blocks back after Auto DJ's join, at the update's memory check
-or its fence, saving first when they hold plays the card's `stats.bin`
-doesn't (the update waits in Asked for a pass the play log's write gate
-lets through, as every stats save does, and for the plays still waiting
-for their slots, one behind a try the card failed too, written first so
-that save holds them; `Hs` waits for those the card may take now); MARK
-stays, so the trim and a rotation still go by the
-card's MARK, and the plays written meanwhile wait in a ring of 32 (the
-Tracker's: every play it can hand over at once). The boot's scan waits
-while an update is asked, so its fold never begins or grows behind one
-(a fold not begun yet is given
-back, and folds after the re-read). Once the update is over and Auto DJ
-has joined again, `stats.bin` is read again (a read the card fails made
-again, the boot's waits apart, before the stats go off) and the ring
-folded; a session whose RAM then lacks plays the log holds (that save
-didn't land, another copy, the ring overflowed) saves nothing more: the
-next boot folds those the log still holds, and a rotation in that session
-loses those in `plays.1.jnl` (where blocks held through would have saved
-them). Log lines: `[listen] ...`
-(the read, each save with its ms and bytes or why not, the boot's fold
-at the scan's end, a give-back and the re-read after it); the console's
-`H` commands (README).
+slot, after a log file not read whole, once the card's `stats.bin` is no
+longer the copy this RAM stands on (another player had the card: its
+stats aren't saved over), and once the session is behind its log (the
+97th record with a save that didn't land, the boot's overflow unsaved, a
+held tmp lost, a section of `stats.bin` damaged under the session): the
+next boot folds what the log still holds, and a rotation meanwhile loses
+those in `plays.1.jnl` to the stats. With nothing new a save writes
+nothing. A library update costs the stats nothing: no save, no give-back,
+no read after it. But the boot's scan doesn't begin while an update is
+asked, and once it has begun an update asked waits for its blocks (the
+ranges' block, the overflow), Auto DJ's join doesn't begin while they are
+held, and a track's start waits while overflow chunks are held (a start
+from a pause, a stop or a wait; a track following one playing isn't
+held). Log lines: `[listen] ...` (the read, each save with its ms and
+bytes or why not, the boot's fold at the scan's end, the overflow's
+tries); `[play] the start waits for the listening stats ...`; the
+console's `H` commands (README). (As first built, 2026-11-11, the stats
+held their aggregate in PSRAM, 62-195 KB, and gave it back during each
+library update; S1's device round 2 found the blocks carved again after
+each update moved the decoders' long-lived blocks: the plan's 5.14.)
 
 **FatFs itself, for the card's records** (`storage/CardFat`, METADATA.md
 3.8): the validation walk lists `/music` with `f_readdir`, whose `FILINFO`
@@ -2783,43 +2799,46 @@ strings.
   next boot. An open the card fails is a failed read, as a slot's: read again
   once, 2 s on, then none for that track. A library update needs nothing: the
   key is a path hash, not a track id. All of it is in PSRAM.
-- **Listening stats** ([LISTENING-STATS.md](LISTENING-STATS.md) 5.6, 6.7;
-  Storage above): `app/ListeningStats` puts its glue and every block of
-  the fold in PSRAM (`psramAlloc`), at `PlayHistory::begin()` in
-  `setup()`, after Auto DJ's: HOUR, DAYS and MARK once (14,656 B), and
-  the RCNT and TRKD chunks `stats.bin` needs (16,392 B each, whole rows
-  of both tables: never one block, never realloc'd) and one spare for the
-  live folds. The boot's
-  fold grows them, with a transient index (and its ranges) carved at the
-  scan's first piece and freed at the scan's end, only in a pass where
-  Auto DJ's join isn't Working (otherwise the scan waits that pass); a
-  remount's read of `stats.bin` waits for such a pass too; and the spare
-  is carved again at such a pass after a live fold took it. RCNT is held
-  to its 4,096-row cap at the fold's end even when the save doesn't land.
-  With the stats off (unread, newer, no memory) every block is given back. A read's and a save's work memory
-  (`statsfile::kWorkBytes`: the writer, its plan, two 4 KB buffers;
-  10,896 B on the 64-bit host) is carved for each and given back. Internal RAM holds 96 B of
-  statics (8 B of them the give-back's look). The key is a path hash, so a library update changes no
-  row. A
-  full never-synced log's fold (13,106 slots, 4,616 tracks) peaks at
-  396,744 B (MEASURED-HOST, through the journal). Held through a library
-  update these blocks came out of its largest free block rather than
-  filling the boot's holes (Auto DJ's heap model, test_autodj_join,
-  MODELLED: the rule failed at 19,478 played tracks and after a full
-  never-synced log's fold), so they are given back during every update
-  (the owner's decision of 2026-11-11): after Auto DJ's join, at the
-  update's memory check (`setGiveBack()`'s hook, now the join's and the
-  stats') or its fence, a save first when they hold new plays, MARK's
-  1,536 B block kept; read again from the card once the update is over
-  and the join is back, at a pass the write gate lets through. The glue's
-  object stays (5,824 B on the 64-bit host, its ring of the Tracker's 32
-  plays written meanwhile among it). The model
-  then passes the mood plan's rule for every shape, and the device's
-  16,368 B over its line after a FLAC update: joined is the control's
-  (the plan's 6.7; at 19,478 played tracks the re-read's last chunk had
-  crossed it until S1's gate after the give-back gave the chunks whole
-  rows). With no PSRAM for the glue
-  the journal gets no `Folds`: its trim is 0.14.0's, by ACKS alone.
+- **Listening stats** ([LISTENING-STATS.md](LISTENING-STATS.md) 5.6, 5.14,
+  6.7; Storage above): a fixed resident set. `app/ListeningStats` carves
+  one block, the glue's object (`statsglue::Glue`: the fold's HEAD,
+  MARK's first 16 rows and the 96 records, the store's and the session's
+  state), with `psramNew` at `PlayHistory::begin()` in `setup()`, after
+  Auto DJ's, and never frees it: 3,200 B on the device, held to at most
+  3,584 B by a `static_assert` (the core2 builds check it), whatever the
+  card holds. A card with more than 8 MARK rows (each new player or NVS
+  erase adds one) gets one block more at the boot's read, its rows and 8
+  more, kept for the session. Nothing else is held between saves, so a
+  library update needs nothing of the stats: nothing given back, nothing
+  read again. The transients: each read's and save's work memory
+  (`statsfile::kWorkBytes`, 11,456 B: the writer, its plan, the merge's
+  readers, a 4 KB buffer and two of 2 KB) and a 4,148 B FatFile for each
+  file open (`FatFs::open()`'s `psramNew<FatFile>`), carved and given
+  back in one call: 19,752 B in three blocks for a save, 23,900 B in four
+  for a compaction. The boot's scan carves, at its first piece and only
+  in a pass where Auto DJ's join isn't Working and no library update is
+  asked, its ranges' block (1,284 B with MARK's 16 rows and no ACKS row
+  above them, 3,076 B at most) and, past 96 records, overflow chunks of
+  16,384 B (819 records each, at most 16: 262,144 B for a full
+  never-synced log), all at the top of PSRAM's largest free block through
+  Auto DJ's spacers keeping 64 KB free, and gives them back at the fold's
+  end (the chunks once the boot's save lands, or after its fourth try).
+  Its first piece reserves 128 slots, so every boot's scan holds one
+  chunk while it runs. While the scan's blocks are held an update asked
+  waits in Asked (`LibraryUpdate::Wait::Stats`) and Auto DJ's join
+  doesn't begin; while chunks are held a track's start waits. Internal
+  RAM holds 104 B of statics over S0. In Auto DJ's heap model
+  (test_autodj_join, MODELLED, the firmware's own glue on a card in
+  memory) the stats fail none of 360 update steps the control passes
+  with the device's decoder requests (`test_the_listening_stats_across_updates`)
+  and join the control's 360,436 B after two updates in every shape
+  (`test_the_listening_stats_in_a_model_heap`). As first built
+  (2026-11-11) the stats held HOUR, DAYS, MARK and RCNT's and TRKD's
+  chunks in PSRAM (62-195 KB) and gave them back during each update;
+  S1's device round 2 found the carves again after each update cost the
+  largest free block up to 106,496 B against main, and the owner chose
+  the rework (2026-11-12). With no PSRAM for the glue the journal gets no
+  `Folds`: its trim is 0.14.0's, by ACKS alone.
 
 ## Input
 
@@ -4801,7 +4820,8 @@ their own (the player stopped first, so nothing follows them).
    (`cfg.external_speaker.module_rca`), SD card verification, power management.
 6. **Listening stats** ([LISTENING-STATS.md](LISTENING-STATS.md)): its S1,
    the store, is built and host-tested (the plays counted from the play log
-   into `/.player/stats.bin`, the console's `H`; Storage above); its device
-   check's first round ran on the Core2 (2026-11-12 UTC; what it found is
-   fixed, the rest of the plan's 9.5 table owed); the lists, the Library's
-   screens and Now Playing's row (S2-S4) are next.
+   into `/.player/stats.bin`, the console's `H`; Storage above), reworked
+   since its device rounds 1 and 2 (2026-11-12 UTC) to a fixed resident set
+   of at most 3,584 B (the plan's 5.14, R1-R7, 2026-11-16); the rework's gate
+   and its device re-run against main's figures are owed; the lists, the
+   Library's screens and Now Playing's row (S2-S4) are next.
