@@ -24,6 +24,10 @@ Memory normalized(const Memory& m) {
   if (!out.alloc) out.alloc = mallocAlloc;
   if (!out.top) out.top = out.alloc;
   if (!out.release) out.release = mallocFree;
+  if (!out.keep || !out.keepRelease) {
+    out.keep = out.alloc;
+    out.keepRelease = out.release;
+  }
   return out;
 }
 
@@ -71,7 +75,7 @@ Glue::Glue(tagstore::Fs& fs, Env& env, const Memory& memory)
       env_(env),
       mem_(normalized(memory)),
       fold_(mem_.top, mem_.release),
-      store_(fs, mem_.alloc, mem_.release),
+      store_(fs, mem_.keep, mem_.keepRelease),
       acks_(&kNoAcks) {}
 
 Glue::~Glue() {
@@ -86,8 +90,8 @@ void Glue::release(void* p) {
 
 sx::Opened Glue::readNow(sx::Store::WaitFn wait) {
   // (The work memory for this call alone; MARK's block, when the card's
-  // MARK needs one, the store's: carved by the boot's read, kept for the
-  // session.)
+  // MARK needs one, the store's: carved by the boot's read through
+  // Memory::keep, kept for the session.)
   uint8_t* w = carve();
   const sx::Opened o = store_.read(fold_, w, wait);  // (no work memory: NoMemory, the stats off)
   release(w);
@@ -416,7 +420,7 @@ bool Glue::scanAway() {
 
 void Glue::written(const pl::Slot& s) {
   // (A live slot while a boot's overflow waits for its save: the last
-  // chunk's room. The 97th with no room: behind.)
+  // chunk's room. The one past kRecords with no room: behind.)
   if (on()) fold_.liveSlot(s);
 }
 

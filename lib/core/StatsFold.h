@@ -24,7 +24,7 @@
 //     live and the same row folded at a boot (newest file first) agree but
 //     for lastOrd, a round, compared by order; each section's rows as the
 //     file has them, their order and their ⊕ (a save's merge);
-//   - the records: 96 in the object (20 B each: the slot's hash, time,
+//   - the records: 40 in the object (20 B each: the slot's hash, time,
 //     playedMs, play or skip, source, round), and past them, during a
 //     boot's fold only, overflow chunks of 819 (16,384 B, at most 16: a
 //     full log's 13,106 slots) through the allocator hook (the firmware's:
@@ -174,13 +174,16 @@ void addRow(Sec sec, uint8_t* a, const uint8_t* b);
 
 constexpr int kFiles = playlog::kNames;  // the log's files a scan reads (logName()'s i)
 
-// The resident set (5.14): the records, and MARK's rows.
-constexpr uint32_t kRecords = 96;      // statsref's RECORDS: a live slot past them is behind
-constexpr uint32_t kSaveAt = 64;       // statsref's SAVE_AT: the records' save is due from this many
+// The resident set (5.14): the records, and MARK's rows. In internal RAM on
+// the device (the glue's object, app/ListeningStats: .bss, at most 2,048 B),
+// so 40 records, not the design's 96: a save each 24 plays (5.14's "Moved
+// to internal RAM").
+constexpr uint32_t kRecords = 40;      // statsref's RECORDS: a live slot past them is behind
+constexpr uint32_t kSaveAt = 24;       // statsref's SAVE_AT: the records' save is due from this many
 constexpr uint32_t kRecordBytes = 20;
 // The boot's overflow past the records: chunks of 16,384 B (819 records,
 // 4 B over; a carve of 16,900 B with the poisoning's 12 B and the header,
-// 6.5), at most 16: a full log's 13,106 slots (96 + 16 x 819 = 13,200).
+// 6.5), at most 16: a full log's 13,106 slots (40 + 16 x 819 = 13,144).
 constexpr uint32_t kChunkBytes = 16384;
 constexpr uint32_t kChunkRecords = kChunkBytes / kRecordBytes;
 constexpr uint32_t kMaxChunks = 16;
@@ -267,7 +270,7 @@ public:
   // A play written this session (Outbox::done(), Written only), at round
   // HEAD.round + 2, a record. True when folded. With the records full (and
   // no chunk's room: a boot's overflow waiting for its save) the slot isn't
-  // folded and the session is behind (statsref's 97th).
+  // folded and the session is behind (statsref's one past RECORDS).
   bool liveSlot(const playlog::Slot& s);
   // The session lacks a slot the log holds above the card's MARK (5.14's
   // causes: the records full, a boot overflow's save not landing, a held
@@ -291,7 +294,7 @@ public:
   // more is folded and nothing saved.
   bool noMemory() const { return noMemory_; }
   bool behind() const { return behind_; }
-  // The records held (the boot's fold's past 96 in the chunks), and
+  // The records held (the boot's fold's past kRecords in the chunks), and
   // whether their save is due (kSaveAt or more, not behind).
   uint32_t records() const { return n_; }
   bool due() const { return !behind_ && n_ >= kSaveAt; }
@@ -438,7 +441,7 @@ private:
   Order order_ = Order::None;
   uint32_t folded_ = 0, twice_ = 0, gap_ = 0;
 
-  // The records: the object's 96, then the chunks' (the boot's overflow).
+  // The records: the object's kRecords, then the chunks' (the boot's overflow).
   uint32_t n_ = 0;
   uint32_t chunks_ = 0;
   Record recs_[kRecords];

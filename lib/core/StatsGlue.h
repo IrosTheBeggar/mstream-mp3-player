@@ -18,16 +18,18 @@
 // the rules one session keeps around them. Portable and host-tested:
 // test_stats_store drives it through the real Journal, Tracker and Outbox
 // against tools/statsref.py's fixtures and sessions. app/ListeningStats is
-// the firmware's side (PSRAM, the card guard, the clocks, the update step's
-// safe point, the [listen] lines, the console's H).
-//   - The resident set: this object alone (PlayHistory::begin() carves it
-//     once, in setup, and never frees it), at most 3,584 B on the device
-//     (app/ListeningStats' static_assert); MARK's block beside it for a card
-//     with more than 8 MARK rows (the store's, carved by the boot's read).
-//     Everything else is carved and given back: a read's or a save's work
-//     memory in one call (Memory::alloc), the boot's scan's ranges' block
-//     and its overflow's chunks across passes (Memory::top: the firmware's
-//     at the top of PSRAM's largest free block, 64 KB kept free).
+// the firmware's side (its memory, the card guard, the clocks, the update
+// step's safe point, the [listen] lines, the console's H).
+//   - The resident set: this object alone (the firmware's in internal RAM,
+//     .bss, made once in PlayHistory::begin() and never destroyed), at most
+//     2,048 B on the device (app/ListeningStats' static_assert); MARK's
+//     block beside it for a card with more than 8 MARK rows (the store's,
+//     carved by the boot's read through Memory::keep: the firmware's
+//     internal heap). Everything else is carved and given back: a read's or
+//     a save's work memory in one call (Memory::alloc), the boot's scan's
+//     ranges' block and its overflow's chunks across passes (Memory::top:
+//     the firmware's at the top of PSRAM's largest free block, 64 KB kept
+//     free).
 //   - The read (5.4): begin(), in PlayHistory::begin() before the journal's
 //     begin(), with the boot's waits; again after each scanBegan(true) (a
 //     remount: one read, no waits, the folds before it dropped at once, the
@@ -43,9 +45,10 @@
 //     away mid-scan (scanAway(): as a partial scan's). A scan no reserve()
 //     came before (the end's flush finishing it) begins it at its first call.
 //   - The live fold of each play written (written(): Outbox::Env's): a
-//     record; the 97th with the records full puts the session behind.
+//     record; the one past the records (statsfold::kRecords, 40) puts the
+//     session behind.
 //   - The saves (5.5, 5.14): the boot's and a rotation's (the journal's), the
-//     records' (Kind::Records: due at 64 records, at a pass the play log's
+//     records' (Kind::Records: due at kSaveAt, 24 records, at a pass the play log's
 //     write gate lets through, before that pass's slot: turnOf()), and Hs
 //     (the console's). Each is refused first by the session's rules: the
 //     stats off (unread, newer, no memory, the folds dropped); the boot's and
@@ -59,7 +62,7 @@
 //     card's copy checked before anything is written: a stats.bin this RAM
 //     doesn't stand on refuses this save and every later one). Only the
 //     boot's may compact.
-//   - The boot's overflow (past 96 records: chunks of 819): held until the
+//   - The boot's overflow (past the 40 records: chunks of 819): held until the
 //     boot's save lands or is held; a save that failed is tried again at
 //     later passes, tagstore::kBootWaitsMs apart (kBootTries tries in all),
 //     and after the last, or at once for a refusal or the end's flush, the
@@ -153,7 +156,7 @@ struct LogKey {
   uint32_t seq = 0;
   uint32_t slots = 0;
 };
-constexpr uint32_t kLogKeys = 8;
+constexpr uint32_t kLogKeys = 4;  // (the object is internal RAM's: 24 B a key)
 
 // A track's row as the stats hold it (the console's Ht): the base's (the
 // file stats.bin names, read now) ⊕ stats.bin's TRKD and the records'
@@ -200,7 +203,7 @@ Turn turnOf(bool saveDue, uint32_t slotsDue, bool hsAsked);
 
 // The look-ahead the firmware's reserve() asks before each piece of the
 // boot's scan (app/ListeningStats::mayScan()): none. The fold carves an
-// overflow chunk itself at the record past the 96 (Fold::bootSlot(), in the
+// overflow chunk itself at the record past the 40 (Fold::bootSlot(), in the
 // same piece of a pass that may carve), so chunks are held, and a track's
 // start waits (overflowHeld()), only for a fold that passes the records: a
 // full log's, once a card (5.14, the owner's default (1)). A look-ahead of
@@ -216,9 +219,13 @@ enum class ScanWait : uint8_t {
 
 // Where the glue's blocks go (null: malloc and free).
 struct Memory {
-  void* (*alloc)(size_t bytes) = nullptr;  // a read's or a save's work memory (one call), MARK's block (setup)
+  void* (*alloc)(size_t bytes) = nullptr;  // a read's or a save's work memory, given back in the call
   void* (*top)(size_t bytes) = nullptr;    // held across passes: the ranges' block, the overflow's chunks (null: alloc)
-  void (*release)(void* p) = nullptr;
+  void (*release)(void* p) = nullptr;      // alloc's and top's
+  // Held for the session: MARK's block (the boot's read, in setup), the
+  // one block the stats keep beside the object (null: alloc and release).
+  void* (*keep)(size_t bytes) = nullptr;
+  void (*keepRelease)(void* p) = nullptr;
 };
 
 class Glue final : public playlog::Folds {

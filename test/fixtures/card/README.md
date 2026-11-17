@@ -163,7 +163,7 @@ in the end's flush with under 1 s left), `fenced`, `partial`, `behind`,
 save it brings), `saveFails`, `replaceFails`, and `ending` with the budget
 `left` for the end's flush; its facts the seq, the records' save asked
 before its slot (`recordsSave`, or after it when the slot brings the
-records to 96 under a fence; null when none) and its rotation's
+records to RECORDS (statsref's, 40) under a fence; null when none) and its rotation's
 (`rotationSave`, and `save`: null when none is asked, else whether the
 card's stats.bin holds every slot after it). `plays` is a batch: each
 play's fields in the columns `plays`, the batch's `saveFails` on each,

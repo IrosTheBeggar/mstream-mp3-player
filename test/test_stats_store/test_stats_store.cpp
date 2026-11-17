@@ -38,7 +38,7 @@
 //   a slot, printed;
 // - the glue's own rules: the card away, the end's flush, Hs's refusals,
 //   the log's keys (Hm), a track's row (Ht), the last 7 days (Hd), the
-//   records' save before the slot of its pass, its fence and its 96, behind
+//   records' save before the slot of its pass, its fence and its 40, behind
 //   only after a failure or a refusal; the boot overflow's tries; a
 //   remount's MARK past the room; the scan and a library update, never both
 //   waiting.
@@ -126,6 +126,27 @@ void heapFree(void* p) {
   if (it != gHeap.blocks.end()) {
     gHeap.held -= it->second;
     gHeap.blocks.erase(it);
+  }
+  std::free(p);
+}
+// The blocks held for the session (Memory::keep: MARK's block; the
+// firmware's internal heap, beside the glue's object in .bss: 5.14's "Moved
+// to internal RAM").
+Heap gKeep;
+void* keepAlloc(size_t n) {
+  void* p = std::malloc(n);
+  if (!p) return nullptr;
+  ++gKeep.carves;
+  gKeep.blocks[p] = n;
+  gKeep.held += n;
+  gKeep.peak = std::max(gKeep.peak, gKeep.held);
+  return p;
+}
+void keepFree(void* p) {
+  auto it = gKeep.blocks.find(p);
+  if (it != gKeep.blocks.end()) {
+    gKeep.held -= it->second;
+    gKeep.blocks.erase(it);
   }
   std::free(p);
 }
@@ -1180,7 +1201,7 @@ void test_first_at_orders_and_the_retention() {
 
 // ---------------------------------------------------------------------------
 // A full log never synced: both files at the cap, 13,106 slots, through the
-// journal's scan. The overflow past the 96 records in 16 chunks, carved
+// journal's scan. The overflow past the 40 records in 16 chunks, carved
 // through the glue's top hook before each piece (app/PlayHistory's 128
 // slots), held while the scan runs (a track's start and a library update
 // wait meanwhile), given back by the boot's save with the ranges' block;
@@ -1365,7 +1386,7 @@ const char* factOf(const minijson::Value& v) { return v.isNull() ? "" : v.c_str(
 // pass the write gate lets through, a records' save due first (before the
 // slot; statsglue::turnOf()); the slot (the journal's append: a rotation's
 // save first when plays.1.jnl holds a play the card's MARK doesn't cover);
-// under a fence, the records' save once they reach 96, whatever the fence.
+// under a fence, the records' save once they reach 40, whatever the fence.
 // In the orderly end's flush (`ending`): the played file's question takes
 // what leaves `left` of its 3 s budget at a rotation's save. Each save's
 // outcome against the step's facts.
@@ -1535,7 +1556,7 @@ sf::Head runSession(const minijson::Value& sc) {
       // through, then down (LibraryUpdate's), over no play. Nothing of the
       // stats moves: the scan done, nothing held for it to wait for
       // (Wait::Stats: scanHolds()); a records' save due waits for the fence
-      // (until 96: none of statsref's updates comes with 96 records), so
+      // (until 40: none of statsref's updates comes with 40 records), so
       // turnOf() gives none in it, and it is due again after it.
       TEST_ASSERT_FALSE_MESSAGE(p->fenced, w.c_str());
       if (Glue* g = p->glue.get()) {
@@ -1593,7 +1614,7 @@ void test_every_session() {
 // plays in it are lost to the stats (5.5, 13: the undercount), exactly. So
 // are they in a rotation in the end's flush with under 1 s of its budget
 // left. And 5.14's: a session behind its log (the records' saves failing to
-// 96, a full log whose boot save failed all four tries) loses the plays of
+// 40, a full log whose boot save failed all four tries) loses the plays of
 // the plays.1.jnl a rotation takes out, and so does one whose rotations'
 // saves failed before it was behind (their plays were in the records
 // alone). Each session's slots pinned, so a fixture regenerated smaller
@@ -1611,7 +1632,7 @@ void test_the_rotation_hole() {
                         {"flush-late", 9, 4},
                         {"partial-rotation", 13, 4},
                         {"records-behind-rotation", 129, 64},
-                        {"records-fail-rotations", 99, 77},
+                        {"records-fail-rotations", 43, 30},
                         {"boot-overflow-full-rotation", 257, 128},
                         {"boot-overflow-full-rotation-retry", 257, 0}};
   for (const auto& c : cases) {
@@ -2066,7 +2087,7 @@ void test_the_folds_blocks_wait_for_a_reserve() {
     TEST_ASSERT_TRUE(p.glue->fold.booting());
     TEST_ASSERT_TRUE(p.glue->core.rangesHeld());
     TEST_ASSERT_TRUE(p.glue->core.scanHolds());
-    TEST_ASSERT_FALSE(p.glue->core.overflowHeld());  // (a reserve of 1, under the 96 records: no chunk)
+    TEST_ASSERT_FALSE(p.glue->core.overflowHeld());  // (a reserve of 1, under the 40 records: no chunk)
     TEST_ASSERT_EQUAL_UINT32(afterRead + 1, gHeap.carves);
     TEST_ASSERT_EQUAL_size_t(heldAfterRead + p.glue->core.rangesBytes(), gHeap.held);
     TEST_ASSERT_TRUE(p.scan());
@@ -2107,7 +2128,7 @@ void test_the_folds_blocks_wait_for_a_reserve() {
   // A boot in the firmware's pieces (PlayHistory::kScanSlotsPerPass, 128
   // slots) with its look-ahead (statsglue::kReserveAhead: none): a usual
   // boot's fold holds no overflow chunk at any piece, so no start waits on it
-  // (5.14, the owner's default (1): only a fold past the 96 records holds
+  // (5.14, the owner's default (1): only a fold past the 40 records holds
   // chunks, a full log's, once a card). A look-ahead of the piece's 128
   // slots would carve one at the first piece and hold it to the fold's end,
   // whatever the log holds (R6's finding): why the firmware asks none. (The
@@ -2222,7 +2243,7 @@ void test_a_fold_out_of_memory_trims_by_the_boots_mark() {
 // ---------------------------------------------------------------------------
 // The saves at a pass the write gate lets through (statsglue::turnOf()):
 // the records' save before the slot of its pass, its wait behind a library
-// update's fence and its run at 96 whatever the fence, behind only after a
+// update's fence and its run at 40 whatever the fence, behind only after a
 // save asked failed or was refused; Hs after the plays waiting for their
 // slots (S1's device round 1).
 // ---------------------------------------------------------------------------
@@ -2353,11 +2374,11 @@ void test_the_saves_at_the_gate() {
   TEST_ASSERT_EQUAL_UINT32(48 + n, cardMark(card, p));
   TEST_ASSERT_EQUAL_UINT32(0, p.glue->fold.records());
 
-  // The records' save before the slot of its pass: the 64th record written,
-  // the save due at the next pass the gate lets through, before the 65th's
-  // slot (it holds exactly 64).
-  for (uint32_t i = 0; i < 63; ++i) l.play(100 + i);
-  n += 63;
+  // The records' save before the slot of its pass: the kSaveAt-th record
+  // written, the save due at the next pass the gate lets through, before
+  // the next one's slot (it holds exactly kSaveAt).
+  for (uint32_t i = 0; i < sf::kSaveAt - 1; ++i) l.play(100 + i);
+  n += sf::kSaveAt - 1;
   TEST_ASSERT_FALSE(p.glue->core.saveDue(false));
   p.ended(Worked::play(200));
   p.ended(Worked::play(201));
@@ -2374,19 +2395,19 @@ void test_the_saves_at_the_gate() {
   TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
   TEST_ASSERT_FALSE(p.glue->last.compacted);
   TEST_ASSERT_EQUAL_UINT32(48 + n, cardMark(card, p));
-  TEST_ASSERT_EQUAL_UINT32(1, p.tracker->pending());  // (the 65th, after the save)
+  TEST_ASSERT_EQUAL_UINT32(1, p.tracker->pending());  // (the next, after the save)
   TEST_ASSERT_TRUE(l.pass() == sg::Turn::Slot);
   ++n;
   TEST_ASSERT_EQUAL_UINT32(1, p.glue->fold.records());
 
   // A library update's fence: no records' save behind it until the records
-  // are full (96), then whatever the fence; Hs refused behind it.
+  // are full (kRecords), then whatever the fence; Hs refused behind it.
   p.fenced = true;
-  for (uint32_t i = 0; i < 95; ++i) {
+  for (uint32_t i = 0; i < sf::kRecords - 1; ++i) {
     TEST_ASSERT_FALSE(p.glue->core.saveDue(true));
     l.play(300 + i);
   }
-  n += 95;
+  n += sf::kRecords - 1;
   TEST_ASSERT_EQUAL_UINT32(sf::kRecords, p.glue->fold.records());
   l.hsAsked = true;
   TEST_ASSERT_TRUE(l.pass() == sg::Turn::Save);  // (the save first, whatever the fence)
@@ -2398,7 +2419,7 @@ void test_the_saves_at_the_gate() {
   p.fenced = false;
 
   // A records' save that failed, then a save of another kind that took the
-  // records (Hs): the records' save is due again from 64 new ones, not only
+  // records (Hs): the records' save is due again from kSaveAt new ones, not only
   // past the count it failed at.
   for (uint32_t i = 0; i < sf::kSaveAt; ++i) l.play(400 + i);
   p.glue->saveFails = 1;
@@ -2415,11 +2436,12 @@ void test_the_saves_at_the_gate() {
   TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(p.glue->last.what));
   TEST_ASSERT_EQUAL_UINT32(48 + n, cardMark(card, p));
 
-  // The card full from the 64th: tried at the pass after each later live
-  // record (never twice for one); at 96 tried once more; the 97th finds the
-  // records full: behind (no record, no save, Hs's too), never before.
-  for (uint32_t i = 0; i < 63; ++i) l.play(500 + i);
-  n += 63;
+  // The card full from the kSaveAt-th: tried at the pass after each later
+  // live record (never twice for one); at kRecords tried once more; the one
+  // past finds the records full: behind (no record, no save, Hs's too),
+  // never before.
+  for (uint32_t i = 0; i < sf::kSaveAt - 1; ++i) l.play(500 + i);
+  n += sf::kSaveAt - 1;
   p.glue->saveFails = -1;
   uint32_t tried = 0;
   for (uint32_t i = 0; i < sf::kRecords - sf::kSaveAt + 2; ++i) {
@@ -2432,7 +2454,7 @@ void test_the_saves_at_the_gate() {
     TEST_ASSERT_TRUE(l.pass() == sg::Turn::Nothing);  // (no later record: not again)
     TEST_ASSERT_FALSE(p.glue->fold.behind());
   }
-  TEST_ASSERT_EQUAL_UINT32(sf::kRecords - sf::kSaveAt + 1, tried);  // (64 to 96)
+  TEST_ASSERT_EQUAL_UINT32(sf::kRecords - sf::kSaveAt + 1, tried);  // (kSaveAt to kRecords)
   TEST_ASSERT_TRUE(p.glue->fold.behind());
   TEST_ASSERT_EQUAL_UINT32(0, p.glue->fold.records());
   TEST_ASSERT_FALSE(p.glue->core.saveDue(false));
@@ -2452,8 +2474,8 @@ void test_the_saves_at_the_gate() {
   TEST_ASSERT_EQUAL_UINT32(48 + n, cardMark(card, q));
 }
 
-// A cut at every step of a records' save (64 plays written live), then a
-// boot: the counts the uncut session leaves, every time (the 64 folded again
+// A cut at every step of a records' save (kSaveAt plays written live), then a
+// boot: the counts the uncut session leaves, every time (the kSaveAt folded again
 // by the boot when the save didn't land, none when it did).
 void test_a_cut_during_the_records_save() {
   const Worked wk;
@@ -2480,7 +2502,7 @@ void test_a_cut_during_the_records_save() {
   put(ref, wk.in);
   uint32_t folded = 0;
   next(ref, session(ref, 0), "uncut", &folded);
-  TEST_ASSERT_EQUAL_UINT32(0, folded);  // (the 64 in the records' stats.bin)
+  TEST_ASSERT_EQUAL_UINT32(0, folded);  // (the kSaveAt in the records' stats.bin)
   const Counts want = countsOf(ref);
   TEST_ASSERT_EQUAL_UINT64(wk.slots() + sf::kSaveAt, want.slots);
   int steps = 0, runs = 0, again = 0;
@@ -2507,15 +2529,15 @@ void test_a_cut_during_the_records_save() {
     if (!cut) break;
     ++steps;
   }
-  printf("the records' save: %d steps cut three ways (%d runs), then a boot: the uncut counts each time (the 64 "
+  printf("the records' save: %d steps cut three ways (%d runs), then a boot: the uncut counts each time (the %u "
          "folded again after %d of them)\n",
-         steps, runs, again);
+         steps, runs, static_cast<unsigned>(sf::kSaveAt), again);
   TEST_ASSERT_TRUE(steps >= 5);
   TEST_ASSERT_TRUE(again > 0 && again < runs);
 }
 
 // ---------------------------------------------------------------------------
-// The boot's overflow (300 slots of a 0.14.0 history past the 96 records:
+// The boot's overflow (300 slots of a 0.14.0 history past the 40 records:
 // one chunk) and its save's tries: held through the boot's waits (100, 300
 // and 1,000 ms, kBootTries tries in all), a track's start and a library
 // update waiting meanwhile (overflowHeld(), scanHolds()); given back when a
@@ -2720,9 +2742,20 @@ void test_marks_room_and_a_remount_past_it() {
     y.nvs.ids.epoch = 0x77;
     y.mem.alloc = heapAlloc;
     y.mem.release = heapFree;
+    y.mem.keep = keepAlloc;
+    y.mem.keepRelease = keepFree;
+    const size_t held0 = gHeap.held, kept0 = gKeep.held;
+    const uint32_t carves0 = gHeap.carves, keeps0 = gKeep.carves;
     TEST_ASSERT_TRUE(y.boot(a));
     TEST_ASSERT_EQUAL_UINT32(rows, y.glue->first.marks);
     TEST_ASSERT_EQUAL_UINT32(sf::Fold::markBlockBytes(rows), y.glue->first.markBytes);
+    // MARK's block through Memory::keep alone (the device's internal heap),
+    // once; alloc's and top's blocks (PSRAM's: the read's and the save's
+    // work memory, the ranges' block) all given back by the boot's end.
+    TEST_ASSERT_EQUAL_UINT32(keeps0 + 1, gKeep.carves);
+    TEST_ASSERT_EQUAL_size_t(kept0 + sf::Fold::markBlockBytes(rows), gKeep.held);
+    TEST_ASSERT_TRUE(gHeap.carves > carves0);
+    TEST_ASSERT_EQUAL_size_t(held0, gHeap.held);
     TEST_ASSERT_EQUAL_UINT32(rows + sf::kMarkRoom, y.glue->fold.markCap());
     TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(y.glue->last.what));
     TEST_ASSERT_EQUAL_UINT32(rows + 8, rowsOf(other, sf::kMark));
@@ -2875,14 +2908,14 @@ void test_the_card_away_mid_scan() {
     sg::Glue& g = p.glue->core;
     g.reserve(sg::kReserveAhead);
     TEST_ASSERT_FALSE(p.j->scan(p.piece));  // (300 slots: the first piece, 128)
-    TEST_ASSERT_TRUE(g.overflowHeld() && g.scanHolds());  // (128 records: one chunk, the 97th's)
+    TEST_ASSERT_TRUE(g.overflowHeld() && g.scanHolds());  // (128 records: one chunk, the 41st's)
     TEST_ASSERT_EQUAL_UINT32(1, g.fold().chunks());
     p.glue->away = true;
     TEST_ASSERT_TRUE(g.scanAway());
     TEST_ASSERT_FALSE(g.scanAway());  // (once)
     TEST_ASSERT_FALSE(g.overflowHeld() || g.scanHolds() || g.booting());
     TEST_ASSERT_EQUAL_size_t(atRead, gHeap.held);
-    TEST_ASSERT_TRUE(g.fold().behind());  // (128 records past the 96: dropped)
+    TEST_ASSERT_TRUE(g.fold().behind());  // (128 records past the 40: dropped)
     TEST_ASSERT_FALSE(g.hs(false));
     TEST_ASSERT_EQUAL_STRING("partial", refused(p));
     TEST_ASSERT_EQUAL_UINT32(0, card.dir.count(sx::kStatsBin));

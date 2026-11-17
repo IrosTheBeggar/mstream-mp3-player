@@ -7,6 +7,7 @@
 #include <esp_timer.h>
 
 #include <cstring>
+#include <new>
 
 #include "AutoDjJoin.h"
 #include "LibraryUpdate.h"
@@ -15,11 +16,16 @@
 #include "app/Psram.h"
 #include "storage/SectorDisk.h"
 
-// The resident set (docs/LISTENING-STATS.md 5.14): the glue's object alone,
-// carved once in setup and never freed. A budget, not a figure the heap
-// model pins: R1's yardstick (test_autodj_join) can't tell up to about 4 KB
-// from main's own variation; past it, the device re-run decides.
-static_assert(sizeof(statsglue::Glue) <= 3584, "the listening stats' resident set is at most 3,584 B (5.14)");
+// The resident set (docs/LISTENING-STATS.md 5.14, "Moved to internal
+// RAM"): the glue's object alone, in internal RAM (.bss, below: never in
+// PSRAM, so PSRAM holds nothing of the stats' between calls but the boot's
+// scan's blocks, and its layout is main's), made once in setup and never
+// destroyed. Its budget is internal RAM's margin (11's Internal RAM row):
+// 2,048 B keeps G5's floors (docs/OPUS.md: steady 50 KB, the session's
+// lowest 42 KB, the headphones linked) at the lowest figures held with a
+// link (a walk under a Bluetooth play: 45,468 B; ram=52K steady), hence 40
+// records, not the design's 96 (statsfold::kRecords).
+static_assert(sizeof(statsglue::Glue) <= 2048, "the listening stats' resident set is at most 2,048 B (5.14, 11)");
 
 namespace {
 
@@ -39,6 +45,21 @@ float msSince(int64_t t0) { return static_cast<float>(esp_timer_get_time() - t0)
 
 size_t psramLargest() { return heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM); }
 size_t psramFreeBytes() { return heap_caps_get_free_size(MALLOC_CAP_SPIRAM); }
+
+// The glue's object: internal DRAM's .bss (not EXT_RAM_BSS_ATTR, not the
+// heap). Static rather than an internal-heap carve in setup: it is never in
+// the heap, so it splits no free block another internal carve would have
+// taken (the card worker's 7.5 KB stack at each burst, A2DP's buffers, a
+// track's 4.1 KB of decoder buffers): the same reason the PSRAM block moved
+// (the device's FLAC row, 5.14), and it can't fail. Its cost, the same
+// sizeof at every boot, card or none, shows in the build's RAM figure.
+alignas(statsglue::Glue) uint8_t s_glue[sizeof(statsglue::Glue)];
+
+// MARK's block, for a card with more than 8 MARK rows (statsfile::Store, at
+// the boot's read in setup; 28 B a row, its rows and 8 more): internal RAM
+// too, held for the session.
+void* internalAlloc(size_t n) { return heap_caps_malloc(n, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); }
+void internalFree(void* p) { heap_caps_free(p); }
 
 // A block the stats hold across passes (the boot's scan's ranges' block, its
 // overflow's chunks): at the top of PSRAM's largest free block, the join's
@@ -143,15 +164,18 @@ playlog::Folds* ListeningStats::begin(tagstore::Fs& fs, const cardroot::Root& ro
   fs_ = &fs;
   hasCommit_ = root.hasRoot && root.commitTime != 0;
   commitSec_ = root.commitTime;
+  if (glue_) return glue_;  // (once a boot: the object is never made again)
+  // Every PSRAM block the stats carve is given back in its call (a read's
+  // or a save's work memory and FatFiles) or by the boot's scan's end (the
+  // ranges' block; an overflow's chunks once its save lands, or after its
+  // last try): nothing of the stats' sits in PSRAM between them.
   sg::Memory m;
   m.alloc = psramAlloc;
   m.top = topAlloc;
   m.release = psramFree;
-  glue_ = psramNew<sg::Glue>(fs, static_cast<sg::Env&>(*this), m);
-  if (!glue_) {
-    Serial.println("[listen] no listening stats this boot: no PSRAM for them (the play log trims as 0.14.0's)");
-    return nullptr;
-  }
+  m.keep = internalAlloc;
+  m.keepRelease = internalFree;
+  glue_ = new (s_glue) sg::Glue(fs, static_cast<sg::Env&>(*this), m);
   const int64_t t0 = esp_timer_get_time();
   const sx::Opened& o = glue_->begin(root.acks, bootWait);
   logRead(o, "at the boot", msSince(t0));
@@ -499,7 +523,7 @@ void ListeningStats::logRead(const sx::Opened& o, const char* when, float ms) {
     case sx::Read::NoMemory:
       Serial.printf("[listen] stats.bin NOT read %s: no PSRAM for the read%s: the stats are OFF this session (no fold, "
                     "no save, no trim)\n",
-                    when, o.marks ? " or MARK's rows past the room" : "");
+                    when, o.marks ? ", or no internal RAM for MARK's block (or its rows past the room)" : "");
       return;
   }
   if (o.settled.twins) Serial.printf("[listen] stats.bin's twins:%s\n", twins);
@@ -510,7 +534,7 @@ void ListeningStats::logRead(const sx::Opened& o, const char* when, float ms) {
 // ---------------------------------------------------------------------------
 void ListeningStats::command(const char* arg) {
   if (!glue_) {
-    Serial.println("[listen] no listening stats this boot (no play log, or no PSRAM for them)");
+    Serial.println("[listen] no listening stats this boot (no play log)");
     return;
   }
   switch (arg[0]) {
@@ -607,12 +631,12 @@ void ListeningStats::printState() {
                   static_cast<ul>(l.rows[sf::kTrkd]), h.baseGen ? "stats-" : "none ", static_cast<ul>(h.baseGen),
                   static_cast<ul>(h.baseRows), (h.flags & sf::kFlagBaseLost) ? " (a base was lost once)" : "");
   }
-  Serial.printf("[listen] RAM: the object %u B (the records %lu of %lu, the save due from %lu; MARK %lu rows of %lu%s), "
-                "the overflow %lu chunks (%lu B, %lu B at the peak), the ranges' block %lu B%s; this session %lu "
-                "folded, %lu met twice, gap %lu\n",
+  Serial.printf("[listen] RAM: the object %u B, internal (the records %lu of %lu, the save due from %lu; MARK %lu rows "
+                "of %lu%s), the overflow %lu chunks (%lu B, %lu B at the peak), the ranges' block %lu B%s; this "
+                "session %lu folded, %lu met twice, gap %lu\n",
                 static_cast<unsigned>(sizeof(statsglue::Glue)), static_cast<ul>(f.records()),
                 static_cast<ul>(sf::kRecords), static_cast<ul>(sf::kSaveAt), static_cast<ul>(f.marks()),
-                static_cast<ul>(f.markCap()), g.store().markBytes() ? ", its block beside it" : "",
+                static_cast<ul>(f.markCap()), g.store().markBytes() ? ", its block beside it, internal" : "",
                 static_cast<ul>(f.chunks()), static_cast<ul>(f.held()), static_cast<ul>(f.peak()),
                 static_cast<ul>(g.rangesBytes()), g.rangesHeld() ? " (held)" : "", static_cast<ul>(f.folded()),
                 static_cast<ul>(f.twice()), static_cast<ul>(f.gap()));

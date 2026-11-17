@@ -12,17 +12,18 @@
 // The listening stats on the card (docs/LISTENING-STATS.md; S1, the store,
 // as 5.14 reworked it: a fixed resident set): the firmware's side of lib/core
 // StatsGlue, which keeps the session's rules over the fold (StatsFold: HEAD,
-// MARK and 96 records in its object) and the card's files (StatsFile: each
+// MARK and 40 records in its object) and the card's files (StatsFile: each
 // save merges the records with stats.bin's sections). app/PlayHistory owns
 // it and joins it to the play log:
 //   - begin(), in PlayHistory::begin() before the journal's begin(): the glue
-//     in PSRAM (one block, never freed: the resident set), stats.bin and its
-//     base read with the boot's waits (tagstore::kBootWaitsMs: nothing else
-//     is held up yet), MARK's block beside it for a card whose MARK needs
-//     one, and the Folds the journal is given. nullptr: no PSRAM for the
-//     glue, so no stats and the play log as 0.14.0's (its trim by ACKS
-//     alone). With the stats off (unread, a newer major, no memory) the glue
-//     is still given: it covers nothing, so nothing is trimmed (5.5);
+//     made in internal RAM (.bss, never destroyed: the resident set, at most
+//     2,048 B; nothing of the stats' is held in PSRAM between calls but the
+//     boot's scan's blocks), stats.bin and its base read with the boot's
+//     waits (tagstore::kBootWaitsMs: nothing else is held up yet), MARK's
+//     block beside it (the internal heap) for a card whose MARK needs one,
+//     and the Folds the journal is given. With the stats off (unread, a
+//     newer major, no memory) the glue is still given: it covers nothing, so
+//     nothing is trimmed (5.5);
 //   - each pass (pass()): the update step's safe point for a compaction
 //     (LibraryUpdate::safePoint(): nothing playing, or 20 s or more left of
 //     the heard track and no seek in the last 2 s; a play waiting, for the
@@ -36,7 +37,7 @@
 //   - while the boot's scan holds blocks (scanHolds(): the ranges' block, the
 //     overflow's chunks) a library update asked waits (LibraryUpdate::
 //     Wait::Stats) and Auto DJ's join doesn't begin; while overflow chunks
-//     are held (overflowHeld(): a fold past the 96 records, a full log's,
+//     are held (overflowHeld(): a fold past the 40 records, a full log's,
 //     once a card; about 1.4 s and the boot's save) a track's start waits
 //     (main.cpp: PlayState::Waiting, PlayGate's statsHold). The card going
 //     away mid-scan ends the fold as a partial scan's, its blocks given back
@@ -44,7 +45,7 @@
 //   - written(): the live fold of each play written (a record);
 //   - the saves at a pass the write gate lets through (saveDue(), runSave():
 //     statsglue::turnOf(), before that pass's slot): the boot overflow's
-//     tries again, the records' save (64 records; not behind a library
+//     tries again, the records' save (24 records; not behind a library
 //     update's fence until 96);
 //   - ending(): the orderly end's flush (no read at a remount inside it, no
 //     boot's or records' save, a rotation's only with 1 s of its budget left);
@@ -134,7 +135,7 @@ private:
   void printMarks();
   void printTrack(const char* hex);
 
-  statsglue::Glue* glue_ = nullptr;  // PSRAM: the resident set
+  statsglue::Glue* glue_ = nullptr;  // internal RAM (.bss): the resident set
   tagstore::Fs* fs_ = nullptr;
   bool hasCommit_ = false;
   uint32_t commitSec_ = 0;

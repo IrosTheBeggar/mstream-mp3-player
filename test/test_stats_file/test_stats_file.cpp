@@ -1162,7 +1162,7 @@ void runSession(const minijson::Value& sc, SessionRun& run, int* steps) {
       run.logs(out);
       run.fold(*p, st, SIZE_MAX, st["seq"]);
       if (p->fenced)
-        run.asked(*p, st, st["now"], st["recordsSave"], fail, replace, what + ", the records' save at 96");
+        run.asked(*p, st, st["now"], st["recordsSave"], fail, replace, what + ", the records' save at kRecords");
     } else if (doing == "plays") {
       const minijson::Value& each = st["each"];
       const bool fail = st["saveFails"].boolean();
@@ -1172,7 +1172,7 @@ void runSession(const minijson::Value& sc, SessionRun& run, int* steps) {
         if (!p->fenced) run.asked(*p, st, now, each["recordsSave"][k], fail, false, one + ", the records' save");
         run.asked(*p, st, now, each["rotationSave"][k], fail, false, one + ", the rotation's save");
         run.fold(*p, st, k, each["seq"][k]);
-        if (p->fenced) run.asked(*p, st, now, each["recordsSave"][k], fail, false, one + ", the records' save at 96");
+        if (p->fenced) run.asked(*p, st, now, each["recordsSave"][k], fail, false, one + ", the records' save at kRecords");
         TEST_ASSERT_EQUAL_UINT32_MESSAGE(each["records"][k].u64(), p->fold ? p->fold->records() : 0, one.c_str());
       }
       run.logs(out);
@@ -2434,12 +2434,12 @@ void sweep(const Sweep& c) {
   if (!compacts || secs[sf::kDays].data.size()) TEST_ASSERT_TRUE_MESSAGE(afterTmp > 0 && damagedAfterTmp > 0, name);
 }
 
-// The compaction's due edge's card: a base of 6,000 rows, a TRKD of 1,300,
-// and 95 records (30 of TRKD's tracks, 65 new); `more` new ones beside.
+// The compaction's due edge's card: a base of 6,000 rows, a TRKD of 1,330,
+// and 39 records (4 of TRKD's tracks, 35 new: one more fits the 40).
 void dueEdgeCard(Bytes* bin, Bytes* base, std::vector<pl::Slot>* slots, std::vector<uint64_t>* baseHashes,
                  std::vector<uint64_t>* trkdHashes, Bytes* trkd, sf::Head* head) {
   for (uint32_t i = 0; i < 6000; ++i) baseHashes->push_back(hashOf(i));
-  for (uint32_t i = 0; i < 1300; ++i) trkdHashes->push_back(hashOf(100000 + i));
+  for (uint32_t i = 0; i < 1330; ++i) trkdHashes->push_back(hashOf(100000 + i));
   std::sort(baseHashes->begin(), baseHashes->end());
   std::sort(trkdHashes->begin(), trkdHashes->end());
   Bytes baseRows;
@@ -2454,8 +2454,9 @@ void dueEdgeCard(Bytes* bin, Bytes* base, std::vector<pl::Slot>* slots, std::vec
   h.baseCrc = headerCrcOf(*base);
   *bin = statsFile(4, h, markRow(kDevA, kEpochA, 2000), daysRow(300, 2, 400000), "", "", *trkd);
   uint32_t q = 2001;
-  for (uint32_t i = 0; i < 30; ++i) slots->push_back(playA(q++, (*trkdHashes)[i * 7], at(305, 9, i)));
-  for (uint32_t i = 0; i < 65; ++i) slots->push_back(playA(q++, hashOf(200000 + i), at(306, 9, i)));
+  for (uint32_t i = 0; i < 4; ++i) slots->push_back(playA(q++, (*trkdHashes)[i * 7], at(305, 9, i)));
+  for (uint32_t i = 0; i < 35; ++i) slots->push_back(playA(q++, hashOf(200000 + i), at(306, 9, i)));
+  TEST_ASSERT_EQUAL_UINT32(sf::kRecords - 1, slots->size());
 }
 }  // namespace
 
@@ -2507,11 +2508,11 @@ void test_a_failure_in_either_pass() {
 
 void test_the_compaction_due_edge() {
   // A base of 6,000 rows (a quarter of it: 1,500 rows, so the 32 KB rule
-  // decides), a TRKD of 1,300 rows, and 95 records: 30 plays of tracks TRKD
-  // has (no new row) and 65 new: 1,365 merged rows, 32,760 bytes, not due
-  // (counted beside the card's, 1,395: due, the bytes not statsref's); one
-  // new track more, 1,366 rows, 32,784 bytes: due, base ⊕ TRKD ⊕ the
-  // records into stats-00000002.bin, three files open at once.
+  // decides), a TRKD of 1,330 rows, and 39 records: 4 plays of tracks TRKD
+  // has (no new row) and 35 new: 1,365 merged rows, 32,760 bytes, not due
+  // (counted beside the card's, 1,369: due, the bytes not statsref's); one
+  // new track more (the 40th record), 1,366 rows, 32,784 bytes: due, base ⊕
+  // TRKD ⊕ the records into stats-00000002.bin, three files open at once.
   Bytes bin, base, trkd;
   std::vector<pl::Slot> slots;
   std::vector<uint64_t> baseHashes, trkdHashes;
@@ -2532,7 +2533,7 @@ void test_the_compaction_due_edge() {
   TEST_ASSERT_EQUAL_UINT32(0, r.rows[sf::kTrkd]);
   TEST_ASSERT_EQUAL_UINT32(6000 + 1366, r.baseRows);
   TEST_ASSERT_EQUAL_UINT32(3, gPeakOpen);
-  // With a base TRKD shares rows with: a 1,310-row TRKD, 10 of its hashes
+  // With a base TRKD shares rows with: a 1,340-row TRKD, 10 of its hashes
   // the base's: 1,375 merged rows, due; the new base 7,365 rows (those 10
   // base ⊕ TRKD).
   Bytes shared = trkd;
@@ -2541,7 +2542,7 @@ void test_the_compaction_due_edge() {
   std::sort(rows.begin(), rows.end(),
             [](const Bytes& x, const Bytes& y) { return sf::compareRows(sf::kTrkd, u8(x), u8(y)) < 0; });
   const Bytes bin2 = statsFile(4, h, markRow(kDevA, kEpochA, 2000), daysRow(300, 2, 400000), "", "", join(rows));
-  slots.resize(95);
+  slots.resize(sf::kRecords - 1);
   r = saveAgainst(bin2, base, slots, ask, "a TRKD sharing hashes with the base");
   TEST_ASSERT_TRUE(r.compacted);
   TEST_ASSERT_EQUAL_UINT32(6000 + 1365, r.baseRows);
@@ -2712,7 +2713,9 @@ void test_the_writer_in_the_callers_memory() {
     s.durationMs = 200000;
     const uint32_t track = static_cast<uint32_t>((x >> 20) % 5000);
     s.pathHash = cc::fnv1a64(&track, sizeof(track));
-    if ((q - 1) % 128 == 0) TEST_ASSERT_TRUE(f.reserve(128));
+    // (A piece's own slots: the last holds 50, and 128 would pass the
+    // records and 16 chunks, 13,144.)
+    if ((q - 1) % 128 == 0) TEST_ASSERT_TRUE(f.reserve(std::min<uint32_t>(128, 2 * pl::kFileSlots - (q - 1))));
     f.bootSlot(s, 0);
   }
   f.endBoot();

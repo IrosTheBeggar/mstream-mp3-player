@@ -109,9 +109,8 @@ void PlayHistory::begin(AutoDj* autoDj) {
   c.onOp = onOp;
   c.opCtx = this;
   // The listening stats: stats.bin read (HEAD and MARK into the glue's
-  // object: the resident set) before the journal's begin(), whose scan folds
-  // into them (docs/LISTENING-STATS.md 5.4, 5.14). nullptr: no PSRAM for
-  // them, the log as without them.
+  // object: the resident set, in internal RAM) before the journal's begin(),
+  // whose scan folds into them (docs/LISTENING-STATS.md 5.4, 5.14).
   c.folds = buf_ && tracker_ ? stats_.begin(*library_.fatfs(), *library_.root()) : nullptr;
   journal_ = buf_ ? psramNew<Journal>(*library_.fatfs(), prefsNvs, c) : nullptr;
   outbox_ = tracker_ && journal_ ? psramNew<Outbox>(*tracker_, *journal_, static_cast<Outbox::Env&>(*this)) : nullptr;
@@ -242,8 +241,8 @@ void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, boo
     return;
   }
   // One thing of the card's a pass (statsglue::turnOf()). A listening stats
-  // save due first (the boot overflow's next try; the records' save, 64
-  // records, not behind a library update's fence until 96: 5.14), before
+  // save due first (the boot overflow's next try; the records' save, 24
+  // records, not behind a library update's fence until 40: 5.14), before
   // the pass's slot, so it holds exactly the records taken by then. One
   // slot a pass: a play the card failed waits its 5 s (or the remount) at
   // the head, and nothing behind it goes before it. Hs (the console's

@@ -526,9 +526,11 @@ COMPACT_FORCED = 96 * 1024
 ROW_BYTES = 24
 LOG_NAMES = playlog.NAMES               # the scan's order: plays.jnl, plays.1.jnl, then plays.2-9.jnl
 # The records (5.14, S1's rework): the slots that count folded since the
-# card's copy (or a held tmp) took them, all RAM keeps between saves.
-RECORDS = 96                            # the records a session holds; past them a boot's fold overflows
-SAVE_AT = 64                            # the records' save is due from this many
+# card's copy (or a held tmp) took them, all RAM keeps between saves. 40
+# since the resident set moved to the device's internal RAM (5.14, "Moved
+# to internal RAM": 2,048 B at most), the design's 96 before.
+RECORDS = 40                            # the records a session holds; past them a boot's fold overflows
+SAVE_AT = 24                            # the records' save is due from this many
 BOOT_TRIES = 4                          # a boot overflow's save: the boot's and three more (tagstore::kBootWaitsMs)
 
 
@@ -1685,7 +1687,7 @@ def run_scenario(sc):
 # note, the twins) and the stats kept as 5.5-5.8 and 5.14 say (Session):
 # the boot's fold, save and trim (a boot overflow's save tried four times);
 # the live fold of each play written into the records; the records' save
-# once they number 64 (waiting for a library update's fence, at 96 whatever
+# once they number SAVE_AT (waiting for a library update's fence, at RECORDS whatever
 # the fence, refused while the orderly end flushes); the rotation's save
 # before plays.1.jnl leaves the log's names; Hs; the end's flush (a
 # rotation's save only with 1 s of its budget left); the card's copy checked
@@ -2246,96 +2248,107 @@ def _history(n, cap, day):
 
 
 def _records_sessions(A):
-    """5.14's records (S1's rework, R2): the records' save's one trigger
-    and its waits, Held and its promotion, the boot overflow's tries, the
-    new causes of behind, a section damaged under the session, and a
-    library update that moves no stats byte."""
+    """5.14's records (S1's rework, R2; their counts SAVE_AT and RECORDS
+    since the move to internal RAM): the records' save's one trigger and
+    its waits, Held and its promotion, the boot overflow's tries, the new
+    causes of behind, a section damaged under the session, and a library
+    update that moves no stats byte."""
     out = []
     hs = lambda day, hour=12: {"do": "hs", "player": "A", "now": ms_of("2026-11-%02dT%02d:00:00" % (day, hour))}  # noqa
-    run = _run(70, 0, 2)
-    steps = [_boot("A", 1), _batch("A", run[:63]), _one("A", run[63]), _one("A", run[64]), _batch("A", run[65:]),
-             _boot("A", 3)]
+    S, R = SAVE_AT, RECORDS
+    run = _run(S + 6, 0, 2)
+    steps = [_boot("A", 1), _batch("A", run[:S - 1]), _one("A", run[S - 1]), _one("A", run[S]),
+             _batch("A", run[S + 1:]), _boot("A", 3)]
     out.append({"name": "records-save",
-                "note": "A plays 70: the 64th brings the records to 64, so the records' save runs at the next step, "
-                        "before the 65th's slot, holding 1-64 (stats.bin generation 1); 65-70 are records again, "
-                        "and the next boot folds those 6.",
+                "note": "A plays %d: the %dth brings the records to %d, so the records' save runs at the next step, "
+                        "before the %dth's slot, holding 1-%d (stats.bin generation 1); %d-%d are records again, "
+                        "and the next boot folds those 6." % (S + 6, S, S, S + 1, S, S + 1, S + 6),
                 "cap": playlog.FILE_SLOTS, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 0})
-    run = _run(98, 0, 2)
-    steps = [_boot("A", 1), _batch("A", run[:64]), _batch("A", run[64:96], saveFails=True),
-             _one("A", run[96], saveFails=True), _one("A", run[97]), hs(2), _boot("A", 3)]
+    run = _run(R + 2, 0, 2)
+    steps = [_boot("A", 1), _batch("A", run[:S]), _batch("A", run[S:R], saveFails=True),
+             _one("A", run[R], saveFails=True), _one("A", run[R + 1]), hs(2), _boot("A", 3)]
     out.append({"name": "records-save-fails",
-                "note": "A plays 64; the card is full from then on: the records' save is tried before each later "
-                        "play's slot and fails (65-97). 96 brings the records to 96; at 97 the save fails again and "
+                "note": "A plays %d; the card is full from then on: the records' save is tried before each later "
+                        "play's slot and fails (%d-%d). %d brings the records to %d; at %d the save fails again and "
                         "the slot has no room: not folded, and the session is behind its log (5.14): no record "
-                        "(98 neither), no save (Hs refused). The next boot folds every one once: 98.",
+                        "(%d neither), no save (Hs refused). The next boot folds every one once: %d." % (
+                            S, S + 1, R + 1, R, R, R + 1, R + 2, R + 2),
                 "cap": playlog.FILE_SLOTS, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 0})
-    run = _run(67, 0, 2)
-    steps = [_boot("A", 1), _batch("A", run[:63]), {"do": "fence", "player": "A"}, _batch("A", run[63:66]),
-             hs(2, 10), {"do": "unfence", "player": "A"}, _one("A", run[66]), _boot("A", 3)]
+    run = _run(S + 3, 0, 2)
+    steps = [_boot("A", 1), _batch("A", run[:S - 1]), {"do": "fence", "player": "A"}, _batch("A", run[S - 1:S + 2]),
+             hs(2, 10), {"do": "unfence", "player": "A"}, _one("A", run[S + 2]), _boot("A", 3)]
     out.append({"name": "records-save-fenced",
-                "note": "A plays 63; a library update's fence goes up, and 64-66 are written under it: the records' "
-                        "save, due from the 64th, waits for the fence, and Hs is refused under it. It comes down, and "
-                        "the save runs at the next step, before 67's slot, holding 66. The next boot folds 67.",
+                "note": "A plays %d; a library update's fence goes up, and %d-%d are written under it: the records' "
+                        "save, due from the %dth, waits for the fence, and Hs is refused under it. It comes down, and "
+                        "the save runs at the next step, before %d's slot, holding %d. The next boot folds %d." % (
+                            S - 1, S, S + 2, S, S + 3, S + 2, S + 3),
                 "cap": playlog.FILE_SLOTS, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 0})
-    run = _run(97, 0, 2, skips=(64 + 9, 64 + 19))
-    steps = [_boot("A", 1), _batch("A", run[:64]), {"do": "fence", "player": "A"}, _batch("A", run[64:]),
+    run = _run(R + 1, 0, 2, skips=(S + 4, S + 12))
+    steps = [_boot("A", 1), _batch("A", run[:S]), {"do": "fence", "player": "A"}, _batch("A", run[S:]),
              {"do": "unfence", "player": "A"}, hs(2, 11), _boot("A", 3)]
     out.append({"name": "records-save-fenced-backlog",
-                "note": "A plays 64 (the records' save due), and a library update's fence goes up before it runs: "
-                        "the Tracker's backlog and the plays that end under the fence, 65-97 (two of them, 74 and "
-                        "84, skips), are written under it. 96 brings the records to 96 with the save still waiting: "
-                        "it runs then, whatever the fence, holding 1-96; 97 is a record. Nothing behind; Hs saves "
-                        "97 after the fence; the next boot folds nothing.",
+                "note": "A plays %d (the records' save due), and a library update's fence goes up before it runs: "
+                        "the Tracker's backlog and the plays that end under the fence, %d-%d (two of them, %d and "
+                        "%d, skips), are written under it. %d brings the records to %d with the save still waiting: "
+                        "it runs then, whatever the fence, holding 1-%d; %d is a record. Nothing behind; Hs saves "
+                        "%d after the fence; the next boot folds nothing." % (
+                            S, S + 1, R + 1, S + 5, S + 13, R, R, R, R + 1, R + 1),
                 "cap": playlog.FILE_SLOTS, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 0})
-    run = _run(97, 0, 2)
-    steps = [_boot("A", 1), _batch("A", run[:64]), {"do": "fence", "player": "A"}, _batch("A", run[64:95]),
-             _one("A", run[95], saveFails=True), {"do": "unfence", "player": "A"},
-             {"do": "hs", "player": "A", "now": run[95]["now"], "saveFails": True}, _one("A", run[96]),
+    run = _run(R + 1, 0, 2)
+    steps = [_boot("A", 1), _batch("A", run[:S]), {"do": "fence", "player": "A"}, _batch("A", run[S:R - 1]),
+             _one("A", run[R - 1], saveFails=True), {"do": "unfence", "player": "A"},
+             {"do": "hs", "player": "A", "now": run[R - 1]["now"], "saveFails": True}, _one("A", run[R]),
              _boot("A", 3)]
     out.append({"name": "records-save-fenced-fails",
-                "note": "A plays 64 (the records' save due), and a library update's fence goes up before it runs: "
-                        "65-96 are written under it. 96 brings the records to 96: the save runs then, whatever the "
+                "note": "A plays %d (the records' save due), and a library update's fence goes up before it runs: "
+                        "%d-%d are written under it. %d brings the records to %d: the save runs then, whatever the "
                         "fence, and fails (a full card). The fence comes down. Hs, the card still full, fails, and "
                         "no records' save comes before it: one that didn't land is due again only after a later "
-                        "record, and none came. 97, the card mended: still none due, so its slot finds the records "
-                        "full: not folded, and the session is behind. The next boot folds 1-97 once.",
+                        "record, and none came. %d, the card mended: still none due, so its slot finds the records "
+                        "full: not folded, and the session is behind. The next boot folds 1-%d once." % (
+                            S, S + 1, R, R, R, R + 1, R + 1),
                 "cap": playlog.FILE_SLOTS, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 0})
-    run = _run(65, 0, 2)
-    steps = [_boot("A", 1), _batch("A", run[:63]), _one("A", run[63], ending=True, left=3000),
-             _one("A", run[64], ending=True, left=3000), _boot("A", 3)]
+    run = _run(S + 1, 0, 2)
+    steps = [_boot("A", 1), _batch("A", run[:S - 1]), _one("A", run[S - 1], ending=True, left=3000),
+             _one("A", run[S], ending=True, left=3000), _boot("A", 3)]
     out.append({"name": "records-save-ending",
-                "note": "A plays 63; the orderly end's flush writes the 64th, then the 65th: the records' save, due "
-                        "from the 64th, is refused while the end flushes (its plays only take records). Nothing is "
-                        "saved; the next boot folds them once: 65.",
+                "note": "A plays %d; the orderly end's flush writes the %dth, then the %dth: the records' save, due "
+                        "from the %dth, is refused while the end flushes (its plays only take records). Nothing is "
+                        "saved; the next boot folds them once: %d." % (S - 1, S, S + 1, S, S + 1),
                 "cap": playlog.FILE_SLOTS, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 0})
-    files, nvs = _history(70, playlog.FILE_SLOTS, 1)
-    run = _run(1, 70, 2)
+    n = S + 6  # (more than SAVE_AT, within RECORDS: no overflow)
+    files, nvs = _history(n, playlog.FILE_SLOTS, 1)
+    run = _run(1, n, 2)
     steps = [_boot("A", 2, saveFails=True), _one("A", run[0]), _boot("A", 3)]
-    out.append({"name": "boot-unsaved-70",
-                "note": "A's 0.14.0 left 70 plays unsynced. The first stats boot folds them (70 records, no "
+    out.append({"name": "boot-unsaved-records",
+                "note": "A's 0.14.0 left %d plays unsynced. The first stats boot folds them (%d records, no "
                         "overflow) and its save fails; the trim keeps the log. The records' save is due: it runs "
-                        "before the first live slot (71's), holding the 70. The next boot folds 71.",
+                        "before the first live slot (%d's), holding the %d. The next boot folds %d." % (
+                            n, n, n + 1, n, n + 1),
                 "cap": playlog.FILE_SLOTS, "files": files, "players": {"A": A(nvs=nvs)}, "steps": steps, "lost": 0})
     # Held: a save whose replace() fails (stats.bin's remove: it stays the
     # copy before), the tmp written whole and kept.
-    pre, run = _run(2, 0, 2), _run(67, 2, 4)
+    pre, run = _run(2, 0, 2), _run(S + 3, 2, 4)
     for lost_tmp in (False, True):
-        steps = [_boot("A", 1), _batch("A", pre), _boot("A", 3), _batch("A", run[:64]),
-                 _one("A", run[64], replaceFails=True)]
+        steps = [_boot("A", 1), _batch("A", pre), _boot("A", 3), _batch("A", run[:S]),
+                 _one("A", run[S], replaceFails=True)]
         if lost_tmp:
-            steps += [_one("A", run[65]), {"do": "delete", "name": STATS_TMP}, hs(4, 10), _one("A", run[66])]
+            steps += [_one("A", run[S + 1]), {"do": "delete", "name": STATS_TMP}, hs(4, 10), _one("A", run[S + 2])]
         else:
-            steps += [_batch("A", run[65:]), hs(4)]
+            steps += [_batch("A", run[S + 1:]), hs(4)]
         steps += [_boot("A", 5)]
         out.append({"name": "held-lost" if lost_tmp else "records-save-held",
-                    "note": "A saves 1-2 at a boot (generation 1, MARK 2), then plays 3-66; the records' save, before "
-                            "67's slot, writes stats.tmp whole (generation 2) but replace() fails (stats.bin's remove: "
+                    "note": "A saves 1-2 at a boot (generation 1, MARK 2), then plays 3-%d; the records' save, before "
+                            "%d's slot, writes stats.tmp whole (generation 2) but replace() fails (stats.bin's remove: "
                             "it stays generation 1): held. The records are emptied, the card's MARK stays 2. %s" % (
-                                "68 is written; the tmp is then removed (a PC, or another player's settle()). Hs "
-                                "finds no tmp and stats.bin the copy before: the session is behind (Hs refused, 69 "
-                                "not folded). The next boot folds 3-69 above MARK 2, once." if lost_tmp else
-                                "68-69 are written; Hs promotes the tmp (generation 2) and merges only 67-69 onto it "
-                                "(generation 3). No play counted twice; the next boot folds nothing."),
+                                S + 2, S + 3,
+                                "%d is written; the tmp is then removed (a PC, or another player's settle()). Hs "
+                                "finds no tmp and stats.bin the copy before: the session is behind (Hs refused, %d "
+                                "not folded). The next boot folds 3-%d above MARK 2, once." % (S + 4, S + 5, S + 5)
+                                if lost_tmp else
+                                "%d-%d are written; Hs promotes the tmp (generation 2) and merges only %d-%d onto it "
+                                "(generation 3). No play counted twice; the next boot folds nothing." % (
+                                    S + 4, S + 5, S + 3, S + 5)),
                     "cap": playlog.FILE_SLOTS, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 0})
     comp = scenario_compaction()[0]
     run = _run(2, 16, 11)
@@ -2360,26 +2373,27 @@ def _records_sessions(A):
                         "plays.1.jnl, which the promoted copy's MARK covers: no save asked. The next boot folds 9.",
                 "cap": 4, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 0})
     run = _run(129, 0, 2)
-    steps = [_boot("A", 1), _batch("A", run[:63]), _one("A", run[63]), _batch("A", run[64:96], saveFails=True),
-             _one("A", run[96], saveFails=True), _batch("A", run[97:128]), _one("A", run[128]), _boot("A", 3)]
+    steps = [_boot("A", 1), _batch("A", run[:S - 1]), _one("A", run[S - 1]), _batch("A", run[S:R], saveFails=True),
+             _one("A", run[R], saveFails=True), _batch("A", run[R + 1:128]), _one("A", run[128]), _boot("A", 3)]
     out.append({"name": "records-behind-rotation",
-                "note": "The log's cap 64. A plays 64; the card is full for 65-97: each records' save fails, and 97 "
-                        "finds the records full: the session is behind. The card mends; 98-128 aren't folded (no "
+                "note": "The log's cap 64. A plays %d; the card is full for %d-%d: each records' save fails, and %d "
+                        "finds the records full: the session is behind. The card mends; %d-128 aren't folded (no "
                         "record, no save). 129 rotates over plays.1.jnl (1-64, which no save covers): the rotation's "
                         "save is refused (behind), and 1-64 are lost to the stats (5.14's hole, 64). The next boot "
-                        "folds 65-129.",
+                        "folds 65-129." % (S, S + 1, R + 1, R + 1, R + 2),
                 "cap": 64, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 64})
-    run = _run(99, 0, 2)
-    steps = [_boot("A", 1), _batch("A", run[:97], saveFails=True), _one("A", run[97]), _one("A", run[98]),
+    run = _run(R + 3, 0, 2)
+    steps = [_boot("A", 1), _batch("A", run[:R + 1], saveFails=True), _one("A", run[R + 1]), _one("A", run[R + 2]),
              _boot("A", 3)]
     out.append({"name": "records-fail-rotations",
-                "note": "The log's cap 16. The card is full from A's first play to its 97th: each rotation's save "
+                "note": "The log's cap 8. The card is full from A's first play to its %dth: each rotation's save "
                         "fails (plays.1.jnl's plays, which no save covers, leave the log and are held only in the "
-                        "records), and from 65 each records' save fails too. 97 finds the records full: the session "
-                        "is behind, and the records go. The card mends; 98-99 aren't folded. The next boot folds "
+                        "records), and from %d each records' save fails too. %d finds the records full: the session "
+                        "is behind, and the records go. The card mends; %d-%d aren't folded. The next boot folds "
                         "what the log still holds: every play the rotations took out before behind is lost to the "
-                        "stats (5.14's hole: a rotation before behind loses plays too).",
-                "cap": 16, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 77})
+                        "stats (5.14's hole: a rotation before behind loses plays too)." % (
+                            R + 1, S + 1, R + 1, R + 2, R + 3),
+                "cap": 8, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 30})
     files, nvs = _history(300, playlog.FILE_SLOTS, 1)
     run = _run(1, 300, 2)
     for name, fails, note in (
@@ -2392,15 +2406,15 @@ def _records_sessions(A):
         steps = [_boot("A", 2, saveFails=fails), _one("A", run[0]), hs(2, 14), _boot("A", 3)]
         out.append({"name": name,
                     "note": "A's 0.14.0 left 300 plays unsynced. The first stats boot folds them, past the records "
-                            "(96): overflow chunks; %s" % note,
+                            "(%d): overflow chunks; %s" % (R, note),
                     "cap": playlog.FILE_SLOTS, "files": files, "players": {"A": A(nvs=nvs)}, "steps": steps,
                     "lost": 0})
     steps = [_boot("A", 2, unread={"plays.jnl": 200}), _one("A", run[0]), hs(2, 14), _boot("A", 3)]
     out.append({"name": "boot-overflow-partial",
                 "note": "The same 300 plays; the card fails a read after the scan's 200th slot: a partial scan, "
-                        "past the records (96), so its overflow goes at once (no save is asked, none tried again) "
+                        "past the records (%d), so its overflow goes at once (no save is asked, none tried again) "
                         "and the session is behind (301 not folded; Hs refused: the partial scan). The next boot "
-                        "reads it all: 301 folded once.",
+                        "reads it all: 301 folded once." % R,
                 "cap": playlog.FILE_SLOTS, "files": files, "players": {"A": A(nvs=nvs)}, "steps": steps, "lost": 0})
     files, nvs = _history(256, 128, 1)
     run = _run(1, 256, 2)
@@ -2428,14 +2442,14 @@ def _records_sessions(A):
                         "behind (Hs refused, 10 not folded). The next boot reads stats.bin Corrupt (stats.bad) and "
                         "counts from what the log still holds: 5-10; 1-4 are lost to the stats (4).",
                 "cap": 4, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 4})
-    run = _run(66, 0, 2)
-    steps = [_boot("A", 1), _batch("A", run[:64]), {"do": "update", "player": "A"}, _batch("A", run[64:]), hs(2),
+    run = _run(S + 2, 0, 2)
+    steps = [_boot("A", 1), _batch("A", run[:S]), {"do": "update", "player": "A"}, _batch("A", run[S:]), hs(2),
              _boot("A", 3)]
     out.append({"name": "update-nothing",
-                "note": "A plays 1-64 (the records' save due), then a library update (its fence over no play), then "
-                        "65-66: the update moves no stats byte (no give-back, no save, no read): the save due waits "
-                        "out its fence and runs at the next play, before 65's slot, holding 1-64. Hs saves 65-66; "
-                        "the next boot folds nothing.",
+                "note": "A plays 1-%d (the records' save due), then a library update (its fence over no play), then "
+                        "%d-%d: the update moves no stats byte (no give-back, no save, no read): the save due waits "
+                        "out its fence and runs at the next play, before %d's slot, holding 1-%d. Hs saves %d-%d; "
+                        "the next boot folds nothing." % (S, S + 1, S + 2, S + 1, S, S + 1, S + 2),
                 "cap": playlog.FILE_SLOTS, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 0})
     return out
 

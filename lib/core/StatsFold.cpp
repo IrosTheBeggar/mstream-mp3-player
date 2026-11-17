@@ -59,9 +59,9 @@ void heapSort(T* first, T* last, Less less) {
 
 using Record = Fold::Record;
 using MarkRow = Fold::MarkRow;
-// The resident set's rows (5.14): a record 20 B (96 in the object: 1,920 B),
+// The resident set's rows (5.14): a record 20 B (40 in the object: 800 B),
 // MARK's row 28 B (24 B as the file has it, and the held tmp's seq); 819
-// records a chunk, 16 chunks past the 96 for a full log (2 x 6,553 slots);
+// records a chunk, 16 chunks past the 40 for a full log (2 x 6,553 slots);
 // the ranges' block 3,072 B with 16 MARK rows and ACKS's 16.
 static_assert(sizeof(Record) == kRecordBytes && alignof(Record) == 4, "a record's 20 bytes");
 static_assert(sizeof(MarkRow) == 28 && alignof(MarkRow) == 4, "MARK's row");
@@ -556,7 +556,7 @@ void Fold::bootSlot(const Slot& s, int file) {
       return;
     }
   }
-  // A record: past the 96, the overflow's room (reserve()'s, or a chunk
+  // A record: past kRecords, the overflow's room (reserve()'s, or a chunk
   // carved now); no chunk: no memory, nothing more folded.
   if (n_ == capacity() && !carveChunk()) {
     noMemory_ = true;
@@ -609,7 +609,7 @@ bool Fold::reserve(uint32_t slots) {
 
 bool Fold::liveSlot(const Slot& s) {
   if (noMemory_ || behind_ || !counts(s)) return false;
-  // The records full (and no chunk's room): statsref's 97th.
+  // The records full (and no chunk's room): statsref's one past RECORDS.
   if (n_ >= capacity()) {
     fallBehind();
     return false;

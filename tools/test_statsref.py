@@ -32,9 +32,9 @@ docs/LISTENING-STATS.md).
   and the plan's own figures in them; every log file in seq order per
   (deviceId, epoch), and 5.6's ranges choosing the same slots as the
   reference's keys on every boot.
-- The sessions (5.5, 5.14): the records' save at 64 (before the slot of
-  the step after; waiting for a fence, at 96 whatever it; refused in the
-  end's flush), Held and its promotion (a compacting boot's too), a boot
+- The sessions (5.5, 5.14): the records' save at SAVE_AT, 24 (before the
+  slot of the step after; waiting for a fence, at RECORDS, 40, whatever
+  it; refused in the end's flush), Held and its promotion (a compacting boot's too), a boot
   overflow's four tries, behind and its undercounts, a section damaged
   under the session, a library update that moves no stats byte; the
   read's settle of stats.tmp; a remount's read reads once.
@@ -888,14 +888,15 @@ class SessionTests(unittest.TestCase):
         its sessions are gone (5.14)."""
         lost = {"rotation-fails": 4, "rotation-twin-fails": 4, "flush-late": 4, "partial-rotation": 4,
                 "old-firmware": 3, "records-behind-rotation": 64, "boot-overflow-full-rotation": 128,
-                "records-fail-rotations": 77, "section-damaged": 4}
+                "records-fail-rotations": 30, "section-damaged": 4}
         for e in self.index:
             self.assertEqual(e["lost"], lost.get(e["name"], 0), e["name"])
         self.assertEqual(len(self.index), 36)
         self.assertFalse([e["name"] for e in self.index if e["name"].startswith("update-") and
                           e["name"] != "update-nothing"])
         self.assertFalse(hasattr(sr, "RING"))
-        self.assertEqual((sr.RECORDS, sr.SAVE_AT, sr.BOOT_TRIES), (96, 64, 4))
+        # (40 and 24 since the resident set moved to internal RAM: 5.14.)
+        self.assertEqual((sr.RECORDS, sr.SAVE_AT, sr.BOOT_TRIES), (40, 24, 4))
 
     def steps(self, name, do=None):
         return [s for s in self.by[name]["steps"] if do is None or s["do"] == do]
@@ -921,85 +922,90 @@ class SessionTests(unittest.TestCase):
 
     def test_the_records_save(self):
         """5.14's one trigger: the records' save at the first step after the
-        records reach 64 (the boot's fold's or the live ones'), before that
-        step's slot; waiting while a library update's fence is up, run at
-        the step after it comes down, or at 96 whatever the fence; refused
-        in the orderly end's flush."""
-        self.assertEqual(self.records_saves("records-save"), [(65, "wrote")])
-        at65 = [s for s in self.steps("records-save", "play") if s["seq"] == 65][0]
-        self.assertEqual((self.stats_at(at65).head["slots"], at65["records"]), (64, 1))
+        records reach SAVE_AT (the boot's fold's or the live ones'), before
+        that step's slot; waiting while a library update's fence is up, run
+        at the step after it comes down, or at RECORDS whatever the fence;
+        refused in the orderly end's flush."""
+        S, R = sr.SAVE_AT, sr.RECORDS
+        self.assertEqual(self.records_saves("records-save"), [(S + 1, "wrote")])
+        at = [s for s in self.steps("records-save", "play") if s["seq"] == S + 1][0]
+        self.assertEqual((self.stats_at(at).head["slots"], at["records"]), (S, 1))
         self.assertEqual(self.steps("records-save", "boot")[-1]["folded"], 6)
-        # The fence: the save waits under it (64-66), Hs is refused under it,
-        # and the save runs before 67's slot.
-        self.assertEqual(self.records_saves("records-save-fenced"), [(67, "wrote")])
+        # The fence: the save waits under it (S to S + 2), Hs is refused
+        # under it, and the save runs before S + 3's slot.
+        self.assertEqual(self.records_saves("records-save-fenced"), [(S + 3, "wrote")])
         hs = self.steps("records-save-fenced", "hs")
-        self.assertEqual([(s["recordsSave"], s["hsSave"], s["records"]) for s in hs], [(None, "fenced", 66)])
-        at67 = self.steps("records-save-fenced", "play")[-1]
-        self.assertEqual(self.stats_at(at67).head["slots"], 66)
+        self.assertEqual([(s["recordsSave"], s["hsSave"], s["records"]) for s in hs], [(None, "fenced", S + 2)])
+        at = self.steps("records-save-fenced", "play")[-1]
+        self.assertEqual(self.stats_at(at).head["slots"], S + 2)
         self.assertEqual(self.steps("records-save-fenced", "boot")[-1]["folded"], 1)
-        # The backlog under a fence: the save at 96, whatever the fence.
-        self.assertEqual(self.records_saves("records-save-fenced-backlog"), [(96, "wrote")])
+        # The backlog under a fence: the save at RECORDS, whatever the fence.
+        self.assertEqual(self.records_saves("records-save-fenced-backlog"), [(R, "wrote")])
         batch = self.steps("records-save-fenced-backlog", "plays")[-1]
         self.assertEqual((self.stats_at(batch).head["slots"], self.stats_at(batch).head["skips"], batch["records"],
-                          batch["behind"]), (96, 2, 1, False))
+                          batch["behind"]), (R, 2, 1, False))
         self.assertEqual([s["hsSave"] for s in self.steps("records-save-fenced-backlog", "hs")], ["wrote"])
         self.assertEqual(self.steps("records-save-fenced-backlog", "boot")[-1]["folded"], 0)
         # The orderly end: refused; the next boot folds every one once.
-        self.assertEqual(self.records_saves("records-save-ending"), [(65, "ending")])
-        self.assertEqual(self.steps("records-save-ending", "boot")[-1]["folded"], 65)
-        # The boot's fold brings them to 70 and its save fails: the records'
-        # save before the first live slot holds the 70.
-        b = self.steps("boot-unsaved-70", "boot")[0]
+        self.assertEqual(self.records_saves("records-save-ending"), [(S + 1, "ending")])
+        self.assertEqual(self.steps("records-save-ending", "boot")[-1]["folded"], S + 1)
+        # The boot's fold brings them to S + 6 (within the records) and its
+        # save fails: the records' save before the first live slot holds them.
+        n = S + 6
+        self.assertLess(n, R)
+        b = self.steps("boot-unsaved-records", "boot")[0]
         self.assertEqual((b["bootSave"], b["tries"], b["folded"], b["records"], b["behind"]),
-                         ("failed", 1, 70, 70, False))
-        self.assertEqual(self.records_saves("boot-unsaved-70"), [(71, "wrote")])
-        self.assertEqual(self.stats_at(self.steps("boot-unsaved-70", "play")[0]).head["slots"], 70)
+                         ("failed", 1, n, n, False))
+        self.assertEqual(self.records_saves("boot-unsaved-records"), [(n + 1, "wrote")])
+        self.assertEqual(self.stats_at(self.steps("boot-unsaved-records", "play")[0]).head["slots"], n)
         # A library update moves no stats byte (no give-back, no save, no
-        # read): the save due at 64 waits out its fence, then runs before
-        # 65's slot.
+        # read): the save due at SAVE_AT waits out its fence, then runs
+        # before the next slot.
         st = self.steps("update-nothing")
         i = [s["do"] for s in st].index("update")
         self.assertEqual(st[i]["out"], st[i - 1]["out"])
-        self.assertEqual(st[i]["records"], 64)
-        self.assertEqual(self.records_saves("update-nothing"), [(65, "wrote")])
+        self.assertEqual(st[i]["records"], S)
+        self.assertEqual(self.records_saves("update-nothing"), [(S + 1, "wrote")])
         # One that didn't land is due again only after a later record: the
-        # save at 96 under a fence fails; Hs after the fence asks none
-        # before it; 97 asks none either, and is behind.
-        self.assertEqual(self.records_saves("records-save-fenced-fails"), [(96, "failed")])
+        # save at RECORDS under a fence fails; Hs after the fence asks none
+        # before it; the next play asks none either, and is behind.
+        self.assertEqual(self.records_saves("records-save-fenced-fails"), [(R, "failed")])
         hs = self.steps("records-save-fenced-fails", "hs")
-        self.assertEqual([(s["recordsSave"], s["hsSave"], s["records"]) for s in hs], [(None, "failed", 96)])
+        self.assertEqual([(s["recordsSave"], s["hsSave"], s["records"]) for s in hs], [(None, "failed", R)])
         last = self.steps("records-save-fenced-fails", "play")[-1]
-        self.assertEqual((last["seq"], last["recordsSave"], last["records"], last["behind"]), (97, None, 0, True))
-        self.assertEqual(self.steps("records-save-fenced-fails", "boot")[-1]["folded"], 97)
+        self.assertEqual((last["seq"], last["recordsSave"], last["records"], last["behind"]), (R + 1, None, 0, True))
+        self.assertEqual(self.steps("records-save-fenced-fails", "boot")[-1]["folded"], R + 1)
 
     def test_behind(self):
         """5.14's behind: the records full after a save asked failed (the
-        97th not folded), a boot overflow's four tries failing, a held tmp
+        one past RECORDS not folded), a boot overflow's four tries failing, a held tmp
         lost, a section damaged under the session. No record, no save (Hs,
         the rotation's) for the rest of the session; the next boot folds
         the log above the card's MARK, so only a rotation meanwhile loses
         plays (records-behind-rotation, boot-overflow-full-rotation)."""
+        S, R = sr.SAVE_AT, sr.RECORDS
         saves = self.records_saves("records-save-fails")
-        self.assertEqual(saves, [(q, "failed") for q in range(65, 98)])
-        self.assertEqual(dict(self.plays("records-save-fails"))[96]["records"], 96)
+        self.assertEqual(saves, [(q, "failed") for q in range(S + 1, R + 2)])
+        self.assertEqual(dict(self.plays("records-save-fails"))[R]["records"], R)
         self.assertEqual([s["behind"] for s in self.steps("records-save-fails", "plays")], [False, False])
         self.assertEqual([(s["seq"], s["records"], s["behind"]) for s in self.steps("records-save-fails", "play")],
-                         [(97, 0, True), (98, 0, True)])
+                         [(R + 1, 0, True), (R + 2, 0, True)])
         self.assertEqual([s["hsSave"] for s in self.steps("records-save-fails", "hs")], ["behind"])
-        self.assertEqual(self.steps("records-save-fails", "boot")[-1]["folded"], 98)
+        self.assertEqual(self.steps("records-save-fails", "boot")[-1]["folded"], R + 2)
         # Rotations before behind, their saves failing: the plays they took
-        # out were in the records alone, which behind drops.
+        # out were in the records alone, which behind drops (the log's cap 8:
+        # four rotations' saves before the records are full).
         b = self.steps("records-fail-rotations", "plays")[0]["each"]
-        self.assertEqual([q for q, r in zip(b["seq"], b["rotationSave"]) if r], [33, 48, 63, 78, 93])
+        self.assertEqual([q for q, r in zip(b["seq"], b["rotationSave"]) if r], [17, 24, 31, 38])
         self.assertEqual(set(r for r in b["rotationSave"] if r), {"failed"})
-        self.assertEqual(self.steps("records-fail-rotations", "boot")[-1]["folded"], 22)
+        self.assertEqual(self.steps("records-fail-rotations", "boot")[-1]["folded"], 13)
         # Behind, then a rotation: refused, plays.1.jnl's 1-64 lost.
         last = self.steps("records-behind-rotation", "play")[-1]
         self.assertEqual((last["seq"], last["rotationSave"], last["save"]), (129, "behind", False))
         self.assertEqual(self.steps("records-behind-rotation", "boot")[-1]["folded"], 65)
         # A held tmp lost before the next save promotes it.
         self.assertEqual([s["hsSave"] for s in self.steps("held-lost", "hs")], ["behind"])
-        self.assertEqual(self.steps("held-lost", "boot")[-1]["folded"], 67)
+        self.assertEqual(self.steps("held-lost", "boot")[-1]["folded"], S + 3)
         # A section damaged under the session: Hs refused; the next boot's read Corrupt.
         self.assertEqual([s["hsSave"] for s in self.steps("section-damaged", "hs")], ["behind"])
         self.assertEqual([s["read"] for s in self.steps("section-damaged", "boot")], ["absent", "absent", "corrupt"])
@@ -1020,17 +1026,18 @@ class SessionTests(unittest.TestCase):
         boot's: stats.bin then names the new base, its TRKD the newer
         records, the old delta in the base; the next boot removes the old
         base."""
+        S = sr.SAVE_AT
         st = self.steps("records-save-held")
         held = [s for s in st if s.get("recordsSave") == "held"][0]
-        self.assertEqual((held["seq"], held["records"]), (67, 1))
+        self.assertEqual((held["seq"], held["records"]), (S + 3, 1))
         self.assertIn(sr.STATS_TMP, held["out"])
         tmp = sr.read_stats(self.files["stats/sessions/%s/%s" % (held["out"][sr.STATS_TMP], sr.STATS_TMP)])
-        self.assertEqual((tmp.generation, tmp.head["slots"], self.stats_at(held).generation), (2, 66, 1))
+        self.assertEqual((tmp.generation, tmp.head["slots"], self.stats_at(held).generation), (2, S + 2, 1))
         hs = self.steps("records-save-held", "hs")[0]
         self.assertEqual((hs["hsSave"], hs["ok"]), ("wrote", True))
         self.assertNotIn(sr.STATS_TMP, hs["out"])
         after = self.stats_at(hs)
-        self.assertEqual((after.generation, after.head["slots"]), (3, 69))
+        self.assertEqual((after.generation, after.head["slots"]), (3, S + 5))
         self.assertEqual(self.steps("records-save-held", "boot")[-1]["folded"], 0)
         # The compacting boot's.
         b = self.steps("boot-compaction-held", "boot")
@@ -1065,7 +1072,7 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(self.steps("held-promoted-covers", "boot")[-1]["folded"], 1)
 
     def test_the_boot_overflow(self):
-        """5.14: a boot whose fold passes the records (96) holds overflow
+        """5.14: a boot whose fold passes the records (RECORDS) holds overflow
         chunks: its save is tried again while it fails, four tries in all
         (saveFails a number: the first that many fail); none landing, the
         session is behind, and a full log's first play rotates over a

@@ -27,12 +27,12 @@
 //   the fold rounds (the boot's +1, live +2), MARK kept for good (the
 //   card's beside RAM's), sinceDay's four sources;
 // - random sessions (boots with and without an overflow, live folds, the
-//   records' save at 64, saves held then promoted) against the port of
+//   records' save at kSaveAt, saves held then promoted) against the port of
 //   statsref's whole aggregate: each save's file byte for byte, merged from
 //   the card's last one;
-// - the resident set: the records' 64 (due), 95 and 96 (kept), the 97th
-//   live (behind: not folded, the records dropped), the boot's overflow
-//   past 96 in chunks of 819 (16,384 B; 97, 915 and 916 records), a live
+// - the resident set: the records' kSaveAt (due), kRecords - 1 and kRecords
+//   (kept), the one past live (behind: not folded, the records dropped), the
+//   boot's overflow past kRecords in chunks of 819 (16,384 B), a live
 //   slot in an overflow's room, reserve() leaving the folds nothing to
 //   carve, the chunks given back (a save landed or held, behind, clear(),
 //   the fold's end); MARK's 16 rows and the extra block (8 rows of room, a
@@ -772,15 +772,18 @@ std::string hex(const Bytes& a, const Bytes& b) {
 }
 
 // One boot's fold of `slots` (each in its file, in the scan's order),
-// reserve() before each piece of 128; and into the model at the boot's
-// round.
+// reserve() before each piece of 128 (its slots: a full log's last piece
+// holds 50, and 128 would pass the records and 16 chunks, 13,144); and into
+// the model at the boot's round.
 void bootFold(sf::Fold& f, Ranges& rg, const std::vector<std::pair<pl::Slot, int>>& slots, Model* m,
               const cc::msmf::Acks& acks = kNoAcks) {
   TEST_ASSERT_TRUE(rg.begin(f, acks));
   const uint32_t round = f.head().round + 1;
   uint32_t piece = 0;
   for (const auto& s : slots) {
-    if (piece++ % 128 == 0) TEST_ASSERT_TRUE(f.reserve(128));
+    if (piece % 128 == 0)
+      TEST_ASSERT_TRUE(f.reserve(std::min<uint32_t>(128, static_cast<uint32_t>(slots.size()) - piece)));
+    ++piece;
     f.bootSlot(s.first, s.second);
     if (m) m->fold(s.first, round);
   }
@@ -1602,7 +1605,7 @@ void test_random_sessions_against_the_model() {
       const uint32_t base = f.head().round;
       // The boot's fold: two files, the newer read first; 1 in 3 past the
       // records (an overflow of up to five chunks).
-      const uint32_t n = rng.below(3) == 0 ? 900 + rng.below(3000) : rng.below(95);
+      const uint32_t n = rng.below(3) == 0 ? 900 + rng.below(3000) : rng.below(sf::kRecords - 1);
       std::vector<std::pair<pl::Slot, int>> boot;
       for (uint32_t i = 0; i < n; ++i) boot.push_back({randomSlot(0, 2600), i < n / 2 ? 1 : 0});
       std::stable_sort(boot.begin(), boot.end(), [](const std::pair<pl::Slot, int>& a, const std::pair<pl::Slot, int>& b) {
@@ -1669,47 +1672,50 @@ void test_random_sessions_against_the_model() {
 void test_the_records_boundaries() {
   gHeap.reset();
   const size_t live0 = gHeap.live;
-  // Live: due from 64; 95 and 96 kept; the 97th not folded, behind.
+  constexpr uint32_t S = sf::kSaveAt, R = sf::kRecords;
+  static_assert(S == 24 && R == 40, "the records (5.14: 40 in internal RAM, the save from 24)");
+  // Live: due from S; R - 1 and R kept; the one past them not folded, behind.
   {
     sf::Fold f(heapAlloc, heapFree);
-    for (uint32_t q = 1; q <= 63; ++q) TEST_ASSERT_TRUE(f.liveSlot(playA(q)));
+    for (uint32_t q = 1; q <= S - 1; ++q) TEST_ASSERT_TRUE(f.liveSlot(playA(q)));
     TEST_ASSERT_FALSE(f.due());
-    TEST_ASSERT_TRUE(f.liveSlot(playA(64)));
+    TEST_ASSERT_TRUE(f.liveSlot(playA(S)));
     TEST_ASSERT_TRUE(f.due());
-    for (uint32_t q = 65; q <= 95; ++q) TEST_ASSERT_TRUE(f.liveSlot(playA(q)));
-    TEST_ASSERT_EQUAL_UINT32(95, f.records());
-    TEST_ASSERT_TRUE(f.liveSlot(playA(96)));
-    TEST_ASSERT_EQUAL_UINT32(96, f.records());
+    for (uint32_t q = S + 1; q <= R - 1; ++q) TEST_ASSERT_TRUE(f.liveSlot(playA(q)));
+    TEST_ASSERT_EQUAL_UINT32(R - 1, f.records());
+    TEST_ASSERT_TRUE(f.liveSlot(playA(R)));
+    TEST_ASSERT_EQUAL_UINT32(R, f.records());
     const sf::Head before = f.head();
-    TEST_ASSERT_FALSE(f.liveSlot(playA(97)));
+    TEST_ASSERT_FALSE(f.liveSlot(playA(R + 1)));
     TEST_ASSERT_TRUE(f.behind());
     TEST_ASSERT_EQUAL_UINT32(0, f.records());  // (no save may take them: the next boot folds the log again)
     TEST_ASSERT_FALSE(f.due());
     TEST_ASSERT_EQUAL_UINT64(before.plays, f.head().plays);
-    TEST_ASSERT_EQUAL_UINT32(96, f.markOf(kDevA, kEpochA));
-    TEST_ASSERT_EQUAL_UINT32(96, f.folded());
-    TEST_ASSERT_FALSE(f.liveSlot(playA(98)));
+    TEST_ASSERT_EQUAL_UINT32(R, f.markOf(kDevA, kEpochA));
+    TEST_ASSERT_EQUAL_UINT32(R, f.folded());
+    TEST_ASSERT_FALSE(f.liveSlot(playA(R + 2)));
     sf::Fold::Plan p;
     TEST_ASSERT_FALSE(f.plan(at(300, 23), false, 0, &p));
     TEST_ASSERT_FALSE(f.covered(playA(1)));  // (the card's MARK: none)
     TEST_ASSERT_EQUAL_UINT32(0, gHeap.carved.size());  // (live records never carve)
   }
-  // A save empties them: 96 more fit.
+  // A save empties them: R more fit.
   {
     sf::Fold f(heapAlloc, heapFree);
     Card card;
-    for (uint32_t q = 1; q <= 64; ++q) TEST_ASSERT_TRUE(f.liveSlot(playA(q)));
+    for (uint32_t q = 1; q <= S; ++q) TEST_ASSERT_TRUE(f.liveSlot(playA(q)));
     saveNow(f, card, at(300, 23));
     TEST_ASSERT_EQUAL_UINT32(0, f.records());
     TEST_ASSERT_FALSE(f.due());
-    for (uint32_t q = 65; q <= 160; ++q) TEST_ASSERT_TRUE(f.liveSlot(playA(q)));
-    TEST_ASSERT_FALSE(f.liveSlot(playA(161)));
+    for (uint32_t q = S + 1; q <= S + R; ++q) TEST_ASSERT_TRUE(f.liveSlot(playA(q)));
+    TEST_ASSERT_FALSE(f.liveSlot(playA(S + R + 1)));
     TEST_ASSERT_TRUE(f.behind());
-    TEST_ASSERT_TRUE(f.covered(playA(64)));
-    TEST_ASSERT_FALSE(f.covered(playA(65)));
+    TEST_ASSERT_TRUE(f.covered(playA(S)));
+    TEST_ASSERT_FALSE(f.covered(playA(S + 1)));
   }
-  // The boot's fold past 96: chunks of 819 records, as it needs them.
-  for (uint32_t n : {96u, 97u, 915u, 916u, 1734u, 1735u}) {
+  // The boot's fold past R: chunks of 819 records, as it needs them.
+  constexpr uint32_t C = sf::kChunkRecords;
+  for (uint32_t n : {R, R + 1, R + C, R + C + 1, R + 2 * C, R + 2 * C + 1}) {
     gHeap.reset();
     sf::Fold f(heapAlloc, heapFree);
     Ranges rg;
@@ -1734,13 +1740,13 @@ void test_the_records_boundaries() {
     sf::Fold f(heapAlloc, heapFree);
     Ranges rg;
     TEST_ASSERT_TRUE(rg.begin(f, kNoAcks));
-    for (uint32_t q = 1; q <= 97; ++q) f.bootSlot(playA(q), 0);
+    for (uint32_t q = 1; q <= R + 1; ++q) f.bootSlot(playA(q), 0);
     TEST_ASSERT_EQUAL_UINT32(1, f.chunks());
     TEST_ASSERT_FALSE(f.noMemory());
     // An overflow waiting for its save (the boot's tries): a live slot
     // goes in the last chunk's room; past it, behind.
     f.endBoot();
-    for (uint32_t q = 98; q <= sf::kRecords + sf::kChunkRecords; ++q) TEST_ASSERT_TRUE(f.liveSlot(playA(q)));
+    for (uint32_t q = R + 2; q <= sf::kRecords + sf::kChunkRecords; ++q) TEST_ASSERT_TRUE(f.liveSlot(playA(q)));
     TEST_ASSERT_EQUAL_UINT32(1, f.chunks());
     TEST_ASSERT_FALSE(f.liveSlot(playA(sf::kRecords + sf::kChunkRecords + 1)));
     TEST_ASSERT_TRUE(f.behind());
@@ -1920,9 +1926,10 @@ void test_the_memory() {
   printf("the fold's object: %u bytes on this host (the records' %u, MARK's %u)\n",
          static_cast<unsigned>(sizeof(sf::Fold)), static_cast<unsigned>(sf::kRecords * sizeof(sf::Fold::Record)),
          static_cast<unsigned>(sf::kMarkRows * sizeof(sf::Fold::MarkRow)));
-  // The resident set (5.14's 3,584 B with the glue's and the store's state):
-  // the records (1,920 B), MARK's 16 rows (448 B), HEAD and the rest.
-  TEST_ASSERT_TRUE(sizeof(sf::Fold) <= 1920 + 448 + 512);
+  // The resident set (5.14: 2,048 B of internal RAM on the device with the
+  // glue's and the store's state): the records (40: 800 B), MARK's 16 rows
+  // (448 B), HEAD and the rest.
+  TEST_ASSERT_TRUE(sizeof(sf::Fold) <= 800 + 448 + 512);
   {
     sf::Fold f(heapAlloc, heapFree);
     TEST_ASSERT_EQUAL_UINT32(0, gHeap.carved.size());  // (nothing carved but the overflow)
@@ -2106,7 +2113,7 @@ void test_a_full_log_never_synced() {
   TEST_ASSERT_EQUAL_size_t(3072, rg.bytes);
   TEST_ASSERT_EQUAL_UINT32(log.size(), f.folded());
   TEST_ASSERT_EQUAL_UINT32(log.size(), f.records());
-  TEST_ASSERT_EQUAL_UINT32(sf::kMaxChunks, f.chunks());  // 96 + 16 x 819 = 13,200
+  TEST_ASSERT_EQUAL_UINT32(sf::kMaxChunks, f.chunks());  // 40 + 16 x 819 = 13,144
   TEST_ASSERT_EQUAL_size_t(sf::kMaxChunks * sf::kChunkBytes, f.peak());
   // As the device carves them (6.5: 16,900 B a chunk) with the ranges'
   // block: at most 273 KB (5.14).

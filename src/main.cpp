@@ -454,7 +454,7 @@ static bool pauseIfPlaying() {
 // connects them, and releases or ends the wait), and while the listening
 // stats' boot fold holds overflow chunks (docs/LISTENING-STATS.md 5.14: a
 // decoder's blocks carved under them would land where the next library
-// update needs room; a fold past the 96 records, a full log's once a card,
+// update needs room; a fold past the 40 records, a full log's once a card,
 // about 1.4 s and the boot's save; PlayGate's statsHold releases such a
 // wait). Not a track that follows one playing (a remount's scan again,
 // rare, while a track plays: a gap would be worse): only a start from a
@@ -3935,8 +3935,8 @@ void setup() {
   }
   // The play log: NVS's ids, the cut-rename rule, the root's ACKS; the
   // boot's scan and the slots on the loop (Auto DJ's marks name a play's
-  // source); the listening stats' resident set (their glue's object, one
-  // PSRAM block for the session) and their read of stats.bin.
+  // source); the listening stats' resident set (their glue's object, in
+  // internal RAM's .bss: no PSRAM held) and their read of stats.bin.
   playHistory.begin(autoDj);
   Serial.printf("[lib] library + queue: internal RAM %lu B free before, %lu B after\n",
                 (unsigned long)freeBeforeLibrary, (unsigned long)diag::heap().internalFree);
