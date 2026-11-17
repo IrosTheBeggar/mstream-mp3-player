@@ -2851,7 +2851,8 @@ strings.
   51,000 B), so both of G5's floors hold with about 6 KB to spare (main
   now reads about 6 KB over 3.8's figures); on the speaker PSRAM is
   main's to the byte at every `D` and join line, and internal RAM
-  2,180-2,192 B under main's from the library's load on. Nothing else is
+  2,180-2,192 B under main's at the boots' lines from the library's load
+  on. Nothing else is
   held between saves, and nothing of the stats is in PSRAM between calls but the boot's scan's blocks (and MARK's
   block on a card past 8 rows), so PSRAM's layout is main's on a card of
   8 MARK rows or fewer, and a library update needs nothing of the stats:

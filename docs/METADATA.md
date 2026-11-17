@@ -7586,8 +7586,8 @@ device-checked** (2026-11-17, the spare card, main's firmware beside it
 in the same sequences; the plan's 5.14, "Its device re-run"): on the
 speaker its PSRAM equalled main's to the byte at all 46 `D` and
 `[dj] joined` lines, and its internal RAM read 2,180-2,192 B under
-main's from the library's load on (the build's 2,096 B of `.dram0.bss`
-and about 90 B more); with the headphones linked and a real A2DP
+main's at the boots' lines from the library's load on (the build's
+2,096 B of `.dram0.bss` and about 90 B more); with the headphones linked and a real A2DP
 stream, OPUS.md's G5 held on both firmwares, steady `ram=` 56K on the
 move (58K on main) against 50K and the session's lowest 49,124 B
 (51,000 B) against 42 KB. `device.txt` gains no key: the transfer never
@@ -7647,10 +7647,10 @@ section 1 and 5.14's "As built" notes list the changes):
   firmware beside it in the same sequence): steady `ram=` 56K (main 58K),
   the walk's lowest 49,288 B (51,304 B), the Rescan's 49,124 B (51,000 B),
   so both floors hold with about 6 KB to spare, on main too. That is
-  5,169-7,188 B over what was expected: main itself now reads about 6 KB
+  5,169-7,215 B over what was expected: main itself now reads about 6 KB
   over 3.8's figures (the Rescan here a whole re-read of 19,417 records,
   976-1,002 s, where 3.8's took 52 s), and the move costs 1,860-2,192 B
-  against main at every figure read to the byte.
+  against main at every figure read to the byte but one sampled (2,320 B).
   Before it (the rework as first built) the object was a 3,200 B PSRAM
   block under a 3,584 B budget. A card with more than 8 MARK rows (each
   player or NVS erase adds one) gets one block more at the boot's read,
