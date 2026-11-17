@@ -470,7 +470,9 @@ The rules that keep it deadlock- and glitch-free:
    (`statsglue::turnOf()`): a stats save due first (the records' save at
    24 plays since the last, behind an update's fence until 40; the boot's
    save tried again, its overflow held), else one play's slot, else the
-   console's `Hs` once no slot is due. While the scan holds its blocks a
+   console's `Hs` once no slot is due, else one of the console's looks
+   that read the card (`H`'s card part, `Hd`, `Ht`; never behind an
+   update's fence). While the scan holds its blocks a
    library update asked waits in Asked (`LibraryUpdate::Wait::Stats`) and
    Auto DJ's join doesn't begin; while it holds overflow chunks (a fold
    past the 40 records: a full log's, once a card) a track's start waits
@@ -616,7 +618,12 @@ hundred bytes in PSRAM (app/TagConsole's `Work`).
   1,696 B; `Hs` 1,456 B; a remount's read of `stats.bin`, at the boot's
   scan's next piece (`loop` → `mayScan` → `Glue::reserve` → `settle` →
   `readNow` → `Store::read` → `promoteHeld` → `replace` → `toTwin` →
-  `rename`), 1,568 B. From `loop()`'s own 592 B the records' save is
+  `rename`), 1,568 B; the console's looks that read the card, in `Hs`'s
+  turn since the plan's internal-RAM review (`PlayHistory::loop` →
+  `ListeningStats::runLook` → `printDays` → `Glue::lookDays` →
+  `lookRows` → `FatFs::openRead`), `Hd`'s open 1,296 B, its line about
+  2,096 B with printf's own; `Ht`'s open 1,248 B; `H`'s card part's open 848 B (each look's lines, printf's own with them, under `Hd`'s).
+  From `loop()`'s own 592 B the records' save is
   2,080 B and a rotation's 3,056 B. A save's `[listen]` line runs printf
   (about 1,392 B: `_svfprintf_r` 800 B, the ms's `_dtoa_r` 160 B): the
   records' 2,000 B and the boot's 2,208 B from `PlayHistory::loop`, under
@@ -2816,20 +2823,35 @@ strings.
   `.bss` (`s_glue`), made with placement new at `PlayHistory::begin()` in
   `setup()`, after Auto DJ's, and never destroyed: 1,992 B on the device,
   held to at most 2,048 B by a `static_assert` (the core2 builds check
-  it), whatever the card holds. Static, not an internal-heap carve: it
-  splits no free block the card worker's stack, A2DP's buffers or a
-  track's decoder buffers would have taken, and it can't fail. A card
-  with more than 8 MARK rows (each new player or NVS erase adds one) gets
-  one block more at the boot's read, its rows and 8 more, on the internal
-  heap (`statsglue::Memory::keep`), kept for the session. The budget is
-  internal RAM's margin: 2,048 B keeps OPUS.md's G5 floors at the lowest
-  figures held with the headphones linked (45,468 B under a card job:
-  43,420 B, over 42 KB; 52 KB steady: 50 KB); 3,200 B wouldn't have, so
-  the records are 40, not the design's 96, and their save comes each 24
-  plays. Nothing else is held between saves, and nothing of the stats is
-  in PSRAM between calls but the boot's scan's blocks, so PSRAM's layout
-  is main's, and a library update needs nothing of the stats: nothing
-  given back, nothing read again. The transients: each read's and save's work memory
+  it), whatever the card holds, and the stats' only internal RAM. Static,
+  not an internal-heap carve: it never splits a free block the card
+  worker's stack, A2DP's buffers or a track's decoder buffers would have
+  taken, and it can't fail; it does shrink the DRAM heap above `.bss` by
+  its size (`_heap_start` to 0x3FFE0000: 79,288 B, 2,096 B less than S0's
+  build), and `heap_caps_malloc()` tries the internal heaps in address
+  order, so a carve that fit at that heap's end can go to the next
+  internal heap (the plan's internal-RAM review). A card with more than 8
+  MARK rows (each new player or NVS erase adds one) gets one block more
+  at the boot's read, its rows and 8 more, at the top of PSRAM's largest
+  free block (`statsglue::Memory::keep`: `topAlloc()`), kept for the
+  session: on the internal heap its size, the card's, had no bound. The
+  budget is internal RAM's margin, counted as the build's `.dram0.bss`
+  over main's (2,096 B over S0's: the object, the rework's 96 B of
+  statics, `Ht`'s 8 B): at the lowest figures held with the headphones
+  linked, OPUS.md's G5 steady 50 KB holds with 0-1 KB to spare (`ram=52K`:
+  51,152-52,175 B) and a card job under a Bluetooth play keeps 364 B over
+  42 KB (45,468 B: 43,372 B), but a whole Rescan's scan (`min=43K`) comes
+  under 42 KB: the owner's call, measured by the move's re-run with a
+  link. 3,200 B would have put the steady figure and the card job under,
+  so the records are 40, not the design's 96, and their save comes each
+  24 plays. Nothing else is held between saves, and nothing of the stats
+  is in PSRAM between calls but the boot's scan's blocks (and MARK's
+  block on a card past 8 rows), so PSRAM's layout is main's on a card of
+  8 MARK rows or fewer, and a library update needs nothing of the stats:
+  nothing given back, nothing read again. The console's looks that read
+  the card (`H`'s card part, `Hd`, `Ht`) carve a save's work memory, so
+  they wait for a pass the write gate lets through, in `Hs`'s turn, and
+  never behind the update's fence. The transients: each read's and save's work memory
   (`statsfile::kWorkBytes`, 11,456 B: the writer, its plan, the merge's
   readers, a 4 KB buffer and two of 2 KB) and a 4,148 B FatFile for each
   file open (`FatFs::open()`'s `psramNew<FatFile>`), carved and given
@@ -4852,6 +4874,8 @@ their own (the player stopped first, so nothing follows them).
    into `/.player/stats.bin`, the console's `H`; Storage above), reworked
    since its device rounds 1 and 2 (2026-11-12 UTC) to a fixed resident set
    (the plan's 5.14, R1-R7, 2026-11-16), moved to internal RAM after its
-   device re-run (2026-11-17: at most 2,048 B, 40 records; PSRAM main's);
-   that move is host-gated and its device re-run is owed; the
+   device re-run (2026-11-17: at most 2,048 B, 40 records; PSRAM main's
+   on a card of 8 MARK rows or fewer, since the move's internal-RAM
+   review); that move is host-gated and its device re-run is owed (with
+   the headphones linked too: G5's floors); the
    lists, the Library's screens and Now Playing's row (S2-S4) are next.

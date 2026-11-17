@@ -7563,7 +7563,8 @@ which no software reads), nothing on the screen yet. Internal RAM holds
 a fixed resident set of at most 2,048 B (HEAD, MARK's first 16 rows and up
 to 40 records: the slots that count folded since the last save), and
 PSRAM nothing of the stats between calls but the boot's scan's blocks
-(since 2026-11-17: the plan's 5.14, "Moved to internal RAM"); the aggregate
+and, on a card past 8 MARK rows, MARK's block (since 2026-11-17: the
+plan's 5.14, "Moved to internal RAM", and its internal-RAM review); the aggregate
 is in `stats.bin` alone, and every save merges the records into it as it
 streams. lib/core `StatsFold` (the fold: HEAD, MARK, the records and a
 boot's overflow), `StatsFile` (the card's files: the read, the streaming
@@ -7622,20 +7623,26 @@ section 1 and 5.14's "As built" notes list the changes):
   Hm's 4 log keys, the counters), in internal DRAM's `.bss`
   (app/ListeningStats' `s_glue`, made with placement new in
   `PlayHistory::begin()`, never destroyed; not an internal-heap carve, so
-  it splits no free block another internal carve would take, and can't
-  fail): 1,992 B on the device (`xtensa-esp32-elf-g++`'s `sizeof`), under
-  a `static_assert` of 2,048 B, internal RAM's margin (the plan's 11: it
-  keeps OPUS.md's G5 floors at the lowest figures held with the
-  headphones linked, 45,468 B under a card job and 52 KB steady; the
-  Rescan's 43 KB under a Bluetooth play is the owner's call). Hence 40
+  it never splits a free block another internal carve would take and
+  can't fail, though it shrinks the DRAM heap above `.bss` by its size,
+  which can move a carve to the next internal heap): 1,992 B on the
+  device (`xtensa-esp32-elf-g++`'s `sizeof`), under a `static_assert` of
+  2,048 B, internal RAM's margin (the plan's 11, counted as the build's
+  `.dram0.bss` over main's, 2,096 B over S0's: at the lowest figures held
+  with the headphones linked G5's steady 50 KB holds with 0-1 KB to spare
+  and a walk on the card worker keeps 364 B over 42 KB, but a whole
+  Rescan's scan under a Bluetooth play, 43 KB on 2026-11-04, comes under
+  42 KB: the owner's call, which the re-run measures with a link). Hence 40
   records, not the design's 96, and their save each 24 plays, not 64;
   `tools/statsref.py`'s `RECORDS` and `SAVE_AT` and its sessions with them.
   Before it (the rework as first built) the object was a 3,200 B PSRAM
   block under a 3,584 B budget. A card with more than 8 MARK rows (each
   player or NVS erase adds one) gets one block more at the boot's read,
-  its rows and 8 more, on the internal heap (`statsglue::Memory::keep`:
-  `heap_caps_malloc(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)`), kept for the
-  session. Nothing else is held between saves: HOUR, DAYS, RCNT and TRKD
+  its rows and 8 more, at the top of PSRAM's largest free block
+  (`statsglue::Memory::keep`: `topAlloc()`, as the scan's held blocks),
+  kept for the session; internal RAM holds the object alone whatever the
+  card (the plan's internal-RAM review: on the internal heap the block's
+  size, the card's, had no bound and no place in the budget). Nothing else is held between saves: HOUR, DAYS, RCNT and TRKD
   are read from the card at each save, no library update asks anything of
   the stats, and every PSRAM block they carve is given back in its call
   (a read's, save's or look's work memory, its FatFiles and FILINFOs) or
@@ -7814,7 +7821,10 @@ section 1 and 5.14's "As built" notes list the changes):
   printed "0 bytes, generation 0"), `Hd` (`stats.bin`'s DAYS and HOUR
   merged with the records), `Hm`, `Ht<16 hex>` (the base's row ⊕
   `stats.bin`'s TRKD ⊕ the records) and `Hs` (README; the plan's 9.3): each
-  look carves the work memory for its call.
+  look carves the work memory for its call, and since the plan's
+  internal-RAM review waits for it as `Hs` does, at a pass the write gate
+  lets through and not behind the library update's fence (`H`'s RAM part
+  and `Hm` print at once).
 - **Costs** (MEASURED-HOST: the core2 build and its link map, the host
   tests; the resident set in internal RAM, 2026-11-17). Flash 4,466,803 B
   (core2-dio 4,466,835 B; the tree before its commit, its version string
@@ -7822,7 +7832,9 @@ section 1 and 5.14's "As built" notes list the changes):
   rework's gate 4,466,739 B; S1 as first built's last 4,474,431 B at
   414488c). RAM 61,152 B (`.dram0.data` 25,112 B, `.dram0.bss` 36,040 B):
   the glue's object (1,992 B) and 96 B of statics over S0 (the rework
-  with its object in PSRAM: 59,160 B). `iram_diet: 51 of 51`,
+  with its object in PSRAM: 59,160 B); 61,160 B since the plan's
+  internal-RAM review (`Ht`'s hash, 8 B: the console's looks wait for a
+  pass; core2 flash 4,467,151 B, the tree before its commits). `iram_diet: 51 of 51`,
   `cache_guard` and `flash_guard` ok. IRAM left 5,157 B with S0's 25
   `libc_a-*` objects in `.iram0.text` and no IRAM attribute: one
   `libphy.a(phy_chip_v7_cal.o)` literal, merged or not as libphy's COMMON
@@ -7833,7 +7845,9 @@ section 1 and 5.14's "As built" notes list the changes):
   its merge's read 1,056 B), a boot overflow's try the same, a rotation's
   save 2,464 B (the deepest: under the rotation's own deepest, its `onOp`
   printf, about 2,592 B), 2,736 B in the end's flush, the boot's save
-  1,696 B, `Hs` 1,456 B, a remount's read 1,568 B; the save's `[listen]`
+  1,696 B, `Hs` 1,456 B, a remount's read 1,568 B, the console's looks
+  in `Hs`'s turn since the internal-RAM review (`Hd`'s open 1,296 B, its
+  line about 2,096 B with printf's own; `Ht`'s open 1,248 B); the save's `[listen]`
   lines with printf's own (about 1,392 B): the records' 2,000 B and the
   boot's 2,208 B before `_dtoa_r`'s callees, a rotation's owed to the next
   pass (`ListeningStats::owedLine()`, 1,856 B), never under its save (the
@@ -7847,8 +7861,9 @@ section 1 and 5.14's "As built" notes list the changes):
   None of these is measured on a device.
 - **The heap model** (the plan's 6.7 and 5.14, MODELLED: test_autodj_join,
   the firmware's own glue on a card in memory, every PSRAM block it carves
-  through the model heap; nothing resident there since the object and
-  MARK's block are internal RAM's). S1 as first
+  through the model heap; nothing resident there since the object is
+  internal RAM's, but MARK's block on a card past 8 rows, at the top
+  since the internal-RAM review). S1 as first
   built held 62-195 KB in PSRAM and gave it back at each library update's
   fence; the two-update model passed, but S1's device round 2 (below) found
   the blocks carved again after each update moved the decoders'
