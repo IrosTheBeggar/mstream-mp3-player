@@ -472,10 +472,14 @@ The rules that keep it deadlock- and glitch-free:
    save tried again, its overflow held), else one play's slot, else the
    console's `Hs` once no slot is due. While the scan holds its blocks a
    library update asked waits in Asked (`LibraryUpdate::Wait::Stats`) and
-   Auto DJ's join doesn't begin; while it holds overflow chunks a track's
-   start waits (`stepStatsHold()`, before `stepPlayGate()`: main.cpp's
-   `OutputHold` holds a start that isn't from Playing, as for the
-   headphones).
+   Auto DJ's join doesn't begin; while it holds overflow chunks (a fold
+   past the 96 records: a full log's, once a card) a track's start waits
+   (main.cpp's `OutputHold` holds a start that isn't from Playing, as for
+   the headphones; `stepPlayGate()` gives PlayGate `In::statsHold`, which
+   starts a wait the stats held alone once they let go, and releases a
+   wait for the headphones, begun as ever, only after it). A card that
+   goes away mid-scan, which stops the scan there, ends the stats' fold as
+   a partial scan's, its blocks given back (`ListeningStats::scanAway()`).
 5. A track's learned length, a restart that is due, the `[queue] now at`
    and Repeat One lines, the spike tools, the calibration, the dancer.
 6. **`userInterface->loop()`:** the snapshot (`MainUiHost::snapshot()`,
@@ -607,13 +611,18 @@ hundred bytes in PSRAM (app/TagConsole's `Work`).
   rotation's save under a play's write (`PlayHistory::loop` →
   `Outbox::writeOne` → `append`, `put`, `place` → `rotate` →
   `Glue::save` → `commit` → `Store::save` → `replace` → `toTwin` →
-  `rename`) 2,464 B, 512 B over the rotation's own deepest without it
-  (1,952 B), and 2,736 B in the orderly end's flush; the boot's save
+  `rename`) 2,464 B, under the rotation's own deepest (its `onOp` printf,
+  about 2,592 B), and 2,736 B in the orderly end's flush; the boot's save
   1,696 B; `Hs` 1,456 B; a remount's read of `stats.bin`, at the boot's
   scan's next piece (`loop` → `mayScan` → `Glue::reserve` → `settle` →
   `readNow` → `Store::read` → `promoteHeld` → `replace` → `toTwin` →
   `rename`), 1,568 B. From `loop()`'s own 592 B the records' save is
-  2,080 B and a rotation's 3,056 B. A tmp an earlier save holds is
+  2,080 B and a rotation's 3,056 B. A save's `[listen]` line runs printf
+  (about 1,392 B: `_svfprintf_r` 800 B, the ms's `_dtoa_r` 160 B): the
+  records' 2,000 B and the boot's 2,208 B from `PlayHistory::loop`, under
+  their saves; a rotation's is owed to the next pass
+  (`ListeningStats::owedLine()`, 1,856 B), since under its save it was
+  the deepest of all (about 2,976 B: the rework review). A tmp an earlier save holds is
   promoted in a call of its own (`Store::promote()`), never under the
   save's frame, and the records sort by a heap sort, not `std::sort`,
   whose introsort recursed up to about 2 KB more under `Store::save`.
@@ -2823,14 +2832,19 @@ strings.
   never-synced log), all at the top of PSRAM's largest free block through
   Auto DJ's spacers keeping 64 KB free, and gives them back at the fold's
   end (the chunks once the boot's save lands, or after its fourth try).
-  Its first piece reserves 128 slots, so every boot's scan holds one
-  chunk while it runs. While the scan's blocks are held an update asked
+  Only a fold past the 96 records holds chunks (the scan's pieces reserve
+  no look-ahead, `statsglue::kReserveAhead`: the fold carves one at the
+  97th record), a full log's, once a card; a card that goes away mid-scan
+  gives them back (the fold ends as a partial scan's). While the scan's
+  blocks are held an update asked
   waits in Asked (`LibraryUpdate::Wait::Stats`) and Auto DJ's join
   doesn't begin; while chunks are held a track's start waits. Internal
   RAM holds 104 B of statics over S0. In Auto DJ's heap model
   (test_autodj_join, MODELLED, the firmware's own glue on a card in
   memory) the stats fail none of 360 update steps the control passes
-  with the device's decoder requests (`test_the_listening_stats_across_updates`)
+  with the device's decoder requests (`test_the_listening_stats_across_updates`;
+  a start let through under a full log's overflow beside the ranges'
+  block at its largest fails 10 of 65: the start's wait is load-bearing)
   and join the control's 360,436 B after two updates in every shape
   (`test_the_listening_stats_in_a_model_heap`). As first built
   (2026-11-11) the stats held HOUR, DAYS, MARK and RCNT's and TRKD's

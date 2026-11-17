@@ -7658,9 +7658,14 @@ section 1 and 5.14's "As built" notes list the changes):
   the fold's end. Each slot once and the gap as first built. Past 96
   records the boot's fold goes on in overflow chunks of 16,384 B (819
   records), carved at the top too, at most 16 (a full never-synced log,
-  13,106 slots: 262,144 B), taken before each scan piece (`reserve(128)`):
-  the first piece's 128 slots pass the 96 records, so every boot's scan
-  holds one chunk while it runs, whatever the log holds (R6's finding).
+  13,106 slots: 262,144 B), carved by the fold at the record that needs
+  one (the scan's pieces reserve no look-ahead, `statsglue::kReserveAhead`
+  0: R6 had found the first piece's reserve of 128 slots carving one at
+  every boot, which the rework review took out), so only a fold past the
+  96 records holds chunks, a full log's, once a card. A card that goes
+  away during the scan (out of the slot, or writes off), which stops the
+  scan until a remount, ends the fold at once as a partial scan's, its
+  blocks given back (`Glue::scanAway()`).
   Chunks no record needs are given back at the fold's end; a partial
   scan's overflow, or a fold out of memory's, is dropped there, and the
   session is behind its log (below); a fold out of memory within 96
@@ -7751,15 +7756,18 @@ section 1 and 5.14's "As built" notes list the changes):
   update asked waits in Asked (`LibraryUpdate::Wait::Stats`, its scan line
   "the listening stats' boot scan (its blocks)") and Auto DJ's join
   doesn't begin (`AutoDj::Env::statsHold`); never both waiting. While
-  overflow chunks are held a track's start waits (main.cpp's `OutputHold`
-  for a start not from Playing, `stepStatsHold()` before `stepPlayGate()`;
-  `[play] the start waits for the listening stats ...`, then `... gave
-  their overflow back: playing`): in the heap model a decoder opening
-  under the scan's blocks costs nothing with the device's decoder
-  requests, and since every boot's scan holds one chunk the start waits
-  during every scan (0.1-0.2 s a usual boot), not once a card as the
-  plan's default and the line's text have it; reserving only the slots the
-  log holds, or keeping the hold, is the owner's call. The memory check's
+  overflow chunks are held (a full log's fold, once a card) a track's
+  start waits (main.cpp's `OutputHold` for a start not from Playing;
+  lib/core PlayGate's `In::statsHold` decides the rest, host-tested: a
+  wait for the headphones begins as ever and is released only after the
+  hold, with its "Now playing on"; one on the speaker or with them
+  connected is the stats' alone, `[play] the start waits for the
+  listening stats ...` then `... gave their overflow back: playing`;
+  nothing is released, given up or cancelled meanwhile but by the
+  listener). Now Playing's "Waiting for SPYDRONE" strip, its [Play on
+  speaker] and [Cancel], and the "Waiting for" toasts show only for a
+  wait for the headphones (`AppState::headphonesWait()`); the stats'
+  moment shows the play button's spinner. The memory check's
   hook is Auto DJ's alone again; the stats add nothing to an update's
   fence or its `alsoFreed`.
 - **The root's commitTime** is kept in `cardroot::Root` (0 without a
@@ -7772,7 +7780,8 @@ section 1 and 5.14's "As built" notes list the changes):
   stats.bin generation N, B bytes (TRKD n rows, RCNT n), in M ms ...` or
   `NOT saved (...): why`; the boot's before `[plays] ready ... trimmed`; a
   try past the first `boot, its try n of 4`), the overflow held or given
-  back, a log file not read whole, the boot's fold at the scan's end
+  back, a log file not read whole, the card gone away during the boot's
+  scan (the fold ended as a partial scan's), the boot's fold at the scan's end
   (slots, met twice, the gap, passes, the scan's ms on the loop, the
   ranges' block, the overflow at its peak, the records, MARK's rows, and
   why no save if none), one line each. The console's `H` (the state, the
@@ -7785,24 +7794,27 @@ section 1 and 5.14's "As built" notes list the changes):
   `stats.bin`'s TRKD ⊕ the records) and `Hs` (README; the plan's 9.3): each
   look carves the work memory for its call.
 - **Costs** (MEASURED-HOST: the core2 build and its link map, the host
-  tests; the rework at 1724e50, its figures unchanged at 36007d4). Flash
-  4,465,959 B (core2-dio 4,465,991 B), 42,268 B over S0's 4,423,691 B and
-  8,472 B under S1 as first built's last (4,474,431 B at 414488c: its
-  fold, store and give-back no longer linked). RAM 59,168 B
-  (`.dram0.data` 25,112 B, `.dram0.bss` 34,056 B): 104 B of statics over
-  S0. `iram_diet: 51 of 51`, `cache_guard` and `flash_guard` ok. IRAM left
-  5,161 B, S0's figure, with S0's 25 `libc_a-*` objects in `.iram0.text`
-  and no IRAM attribute: S1 as first built had 5,157 B since its review's
-  fixes, one `libphy.a(phy_chip_v7_cal.o)` literal no longer merged after
-  libphy's COMMON symbols moved in `.dram0.bss` (the plan's 9.5, C9's "As
-  built"), and the rework's symbols moved them back, as S1's gate said a
-  symbol's change might. The loop's stack (`-fstack-usage` sums, FatFs's
-  own frames not counted): the records' save 1,488 B deep from
-  `PlayHistory::loop` (its sort 1,264 B, its merge's read 1,056 B), a boot
-  overflow's try the same, a rotation's save 2,464 B (512 B over the
-  rotation's own 1,952 B: the plan's 11 budget, at its edge), 2,736 B in
-  the end's flush, the boot's save 1,696 B, `Hs` 1,456 B, a remount's read
-  1,568 B (ARCHITECTURE.md, "The loop task's stack"). A full log's
+  tests; the rework with the rework review's fixes). Flash 4,466,739 B
+  (core2-dio 4,466,771 B), 43,048 B over S0's 4,423,691 B and 7,692 B
+  under S1 as first built's last (4,474,431 B at 414488c: its fold, store
+  and give-back no longer linked). RAM 59,160 B (`.dram0.data` 25,112 B,
+  `.dram0.bss` 34,048 B): 96 B of statics over S0. `iram_diet: 51 of 51`,
+  `cache_guard` and `flash_guard` ok. IRAM left 5,157 B with S0's 25
+  `libc_a-*` objects in `.iram0.text` and no IRAM attribute: one
+  `libphy.a(phy_chip_v7_cal.o)` literal, merged or not as libphy's COMMON
+  symbols move in `.dram0.bss` (the plan's 9.5, C9's "As built"), is the
+  4 B between it and S0's 5,161 B, which the rework at R5 had. The loop's
+  stack (`-fstack-usage` sums, FatFs's own frames not counted): the
+  records' save 1,488 B deep from `PlayHistory::loop` (its sort 1,264 B,
+  its merge's read 1,056 B), a boot overflow's try the same, a rotation's
+  save 2,464 B (the deepest: under the rotation's own deepest, its `onOp`
+  printf, about 2,592 B), 2,736 B in the end's flush, the boot's save
+  1,696 B, `Hs` 1,456 B, a remount's read 1,568 B; the save's `[listen]`
+  lines with printf's own (about 1,392 B): the records' 2,000 B and the
+  boot's 2,208 B before `_dtoa_r`'s callees, a rotation's owed to the next
+  pass (`ListeningStats::owedLine()`, 1,856 B), never under its save (the
+  rework review: under it, about 2,976 B, it had been the deepest)
+  (ARCHITECTURE.md, "The loop task's stack"). A full log's
   `stats.bin` is 133,616 B in 37 writes, 30 of them whole 4 KB pieces;
   its next save, compacting it, reads 270,420 B of the card; its overflow
   262,144 B in 16 chunks, the heap's peak with the boot save's work
@@ -7821,13 +7833,17 @@ section 1 and 5.14's "As built" notes list the changes):
   step against main's run in the same history) failed it at 47 of 360
   steps. The rework fails none of its 65 named steps nor of the 360 with
   the device's decoder requests (2 of 360 with the old shapes, both the
-  control's: main with its queue block 2,048 B longer), in each of eight
+  control's: main with its queue block 2,048 B longer), in each of ten
   ways (a usual boot or a full log, the scan or the join first, a records'
   save at 96 in a fence, a boot save failing all four tries, the scan
-  after an update), its boot's join main's 589,812 B; its waits are
-  load-bearing (a full log's overflow held through the first update's
-  build fails 13 of 65 steps, carved in its fence 1, with the device's
-  decoders). `test_the_listening_stats_in_a_model_heap`'s 13 shapes (P =
+  after an update, the root's ACKS 16 rows above MARK: the ranges' block
+  at its largest, 3,076 B), its boot's join main's (main's with the Opus
+  first where a start asked during a scan that comes first opens it
+  before the join, as the firmware orders it: the rework review); its
+  waits are load-bearing (a full log's overflow held through the first
+  update's build fails 13 of 65 steps, carved in its fence 1, and a start
+  let through under a full log's overflow beside a 3,076 B ranges' block
+  10, the boot's join 65,536 B lower, with the device's decoders). `test_the_listening_stats_in_a_model_heap`'s 13 shapes (P =
   2,214 and 19,478, 300 slots and a full log, saves landing or not, 12
   players' MARK rows) all join the control's 360,436 B. The model doesn't
   reproduce round 2 on round 2's own sequence: the device re-run against
@@ -7838,21 +7854,22 @@ section 1 and 5.14's "As built" notes list the changes):
   overflow, a fold out of memory), `test_stats_file` (19: the read's
   verdicts, every save and base byte for byte, a cut at every write step
   three ways, a failure at every question, the three streams, a damaged
-  section, 32 of the 34 sessions through the store), `test_stats_store`
-  (21: the real journal, tracker and outbox through the real glue over
-  CutFs, FlakyFs and FaultFs, every boot of `stats/index.json` and all 34
-  sessions of `stats/sessions.json`, 276 steps, compared byte for byte
+  section, 34 of the 36 sessions through the store), `test_stats_store`
+  (22: the real journal, tracker and outbox through the real glue over
+  CutFs, FlakyFs and FaultFs, every boot of `stats/index.json` and all 36
+  sessions of `stats/sessions.json`, 290 steps, compared byte for byte
   after each; cuts, faults, remounts, partial scans, two players, a 0.14.0
   boot, the full log, the saves at the gate, a cut at every step of a
   records' save, the overflow's tries, MARK's room and a remount past it,
-  the scan and a library update), `test_library_update` (39: the update
-  waiting for the stats' scan), `test_autodj_join` (28: the two cases
-  above), `test_play_log` (42: the 33, the boot rules' sixth case, 8 for
-  the hooks, 1 for the seq rule), `test_card_root` (34: commitTime);
-  `tools/test_statsref.py` (64), `tools/test_playlog.py` (32),
-  `tools/test_synthtransfer.py` (63: `--acks`); card_fixtures.py's 660
-  files. The whole native suite: 111 suites, 2,358 cases, all passing
-  (R6). Mutation checks of the rework: the reference 15 of 15 caught, the
+  the scan and a library update, the card away mid-scan),
+  `test_library_update` (39: the update waiting for the stats' scan),
+  `test_play_gate` (31: the start the stats hold, 7 cases),
+  `test_autodj_join` (28: the two cases above), `test_play_log` (42: the
+  33, the boot rules' sixth case, 8 for the hooks, 1 for the seq rule),
+  `test_card_root` (34: commitTime); `tools/test_statsref.py` (64),
+  `tools/test_playlog.py` (32), `tools/test_synthtransfer.py` (63:
+  `--acks`); card_fixtures.py's 671 files. The whole native suite: 111 suites, 2,366 cases,
+  all passing (the rework review's fixes; R6: 2,358). Mutation checks of the rework: the reference 15 of 15 caught, the
   fold 23 of 23, the store 23 of 24 and the glue 19 of 20 (the two missed
   equivalent).
 - **The device check** is the plan's 9.5 table (runs A-L on the spare card
