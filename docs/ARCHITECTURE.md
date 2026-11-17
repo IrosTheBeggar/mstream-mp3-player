@@ -2837,15 +2837,22 @@ strings.
   session: on the internal heap its size, the card's, had no bound. The
   budget is internal RAM's margin, counted as the build's `.dram0.bss`
   over main's (2,096 B over S0's: the object, the rework's 96 B of
-  statics, `Ht`'s 8 B): at the lowest figures held with the headphones
-  linked, OPUS.md's G5 steady 50 KB holds with 0-1 KB to spare (`ram=52K`:
-  51,152-52,175 B) and a card job under a Bluetooth play keeps 364 B over
-  42 KB (45,468 B: 43,372 B), but a whole Rescan's scan (`min=43K`) comes
-  under 42 KB: the owner's call, measured by the move's re-run with a
-  link. 3,200 B would have put the steady figure and the card job under,
-  so the records are 40, not the design's 96, and their save comes each
-  24 plays. Nothing else is held between saves, and nothing of the stats
-  is in PSRAM between calls but the boot's scan's blocks (and MARK's
+  statics, `Ht`'s 8 B): from the lowest figures then held with the
+  headphones linked (METADATA 3.8's, 2026-11-04), OPUS.md's G5 steady
+  50 KB was expected to hold with 0-1 KB to spare (`ram=52K`:
+  51,152-52,175 B), a card job under a Bluetooth play 364 B over 42 KB
+  (45,468 B: 43,372 B), and a whole Rescan's scan (`min=43K`) to come
+  under 42 KB. At those figures 3,200 B would have put the steady figure
+  and the card job under, so the records are 40, not the design's 96,
+  and their save comes each 24 plays. Measured since (2026-11-17, the
+  move's re-run, main's firmware beside it in the same sequences): with
+  the headphones linked and a real A2DP stream, steady `ram=` 56K (main
+  58K) and the session's lowest 49,124 B, in a whole Rescan (main
+  51,000 B), so both of G5's floors hold with about 6 KB to spare (main
+  now reads about 6 KB over 3.8's figures); on the speaker PSRAM is
+  main's to the byte at every `D` and join line, and internal RAM
+  2,180-2,192 B under main's from the library's load on. Nothing else is
+  held between saves, and nothing of the stats is in PSRAM between calls but the boot's scan's blocks (and MARK's
   block on a card past 8 rows), so PSRAM's layout is main's on a card of
   8 MARK rows or fewer, and a library update needs nothing of the stats:
   nothing given back, nothing read again. The console's looks that read
@@ -2884,7 +2891,8 @@ strings.
   re-run (2026-11-17), with the object in PSRAM, matched main's figures
   but after a library update made while a FLAC played: its 3.2 KB moved
   Auto DJ's kept block out of its hole (106,484 B against 188,404 B),
-  which is why it moved. As first built
+  which is why it moved; moved, the same sequence gave main's 188,404 B.
+  As first built
   (2026-11-11) the stats held HOUR, DAYS, MARK and RCNT's and TRKD's
   chunks in PSRAM (62-195 KB) and gave them back during each update;
   S1's device round 2 found the carves again after each update cost the
@@ -4876,6 +4884,8 @@ their own (the player stopped first, so nothing follows them).
    (the plan's 5.14, R1-R7, 2026-11-16), moved to internal RAM after its
    device re-run (2026-11-17: at most 2,048 B, 40 records; PSRAM main's
    on a card of 8 MARK rows or fewer, since the move's internal-RAM
-   review); that move is host-gated and its device re-run is owed (with
-   the headphones linked too: G5's floors); the
+   review); that move is host-gated and device-checked (2026-11-17, main's
+   firmware beside it: PSRAM main's to the byte at every `D` and join line
+   on the speaker; with the headphones linked G5's floors held with about
+   6 KB to spare); the
    lists, the Library's screens and Now Playing's row (S2-S4) are next.

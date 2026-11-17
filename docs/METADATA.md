@@ -7581,9 +7581,17 @@ sequence) matched main's PSRAM at every point but one: after a library
 update made while a FLAC played, 106,484 B largest free against main's
 188,404 B, the glue's 3.2 KB object having moved Auto DJ's kept block out
 of its hole. By the owner's decision ("Move it") the resident set is in
-internal RAM since; **that build is host-gated and not flashed**, and its
-device re-run waits for the owner's go-ahead. `device.txt` gains no key:
-the transfer never reads the stats (2.11). What the code decided where
+internal RAM since; **that build is host-gated, flashed and
+device-checked** (2026-11-17, the spare card, main's firmware beside it
+in the same sequences; the plan's 5.14, "Its device re-run"): on the
+speaker its PSRAM equalled main's to the byte at all 46 `D` and
+`[dj] joined` lines, and its internal RAM read 2,180-2,192 B under
+main's from the library's load on (the build's 2,096 B of `.dram0.bss`
+and about 90 B more); with the headphones linked and a real A2DP
+stream, OPUS.md's G5 held on both firmwares, steady `ram=` 56K on the
+move (58K on main) against 50K and the session's lowest 49,124 B
+(51,000 B) against 42 KB. `device.txt` gains no key: the transfer never
+reads the stats (2.11). What the code decided where
 the plan left room (the plan's text amended in the same commits; its
 section 1 and 5.14's "As built" notes list the changes):
 
@@ -7628,13 +7636,21 @@ section 1 and 5.14's "As built" notes list the changes):
   which can move a carve to the next internal heap): 1,992 B on the
   device (`xtensa-esp32-elf-g++`'s `sizeof`), under a `static_assert` of
   2,048 B, internal RAM's margin (the plan's 11, counted as the build's
-  `.dram0.bss` over main's, 2,096 B over S0's: at the lowest figures held
-  with the headphones linked G5's steady 50 KB holds with 0-1 KB to spare
-  and a walk on the card worker keeps 364 B over 42 KB, but a whole
-  Rescan's scan under a Bluetooth play, 43 KB on 2026-11-04, comes under
-  42 KB: the owner's call, which the re-run measures with a link). Hence 40
+  `.dram0.bss` over main's, 2,096 B over S0's: from the lowest figures
+  then held with the headphones linked, 3.8's of 2026-11-04, G5's steady
+  50 KB was expected to hold with 0-1 KB to spare, a walk on the card
+  worker 364 B over 42 KB, and a whole Rescan's scan under a Bluetooth
+  play, 43 KB then, to come under 42 KB). Hence 40
   records, not the design's 96, and their save each 24 plays, not 64;
   `tools/statsref.py`'s `RECORDS` and `SAVE_AT` and its sessions with them.
+  Measured with a link on 2026-11-17 (MEASURED, the move's re-run, main's
+  firmware beside it in the same sequence): steady `ram=` 56K (main 58K),
+  the walk's lowest 49,288 B (51,304 B), the Rescan's 49,124 B (51,000 B),
+  so both floors hold with about 6 KB to spare, on main too. That is
+  5,169-7,188 B over what was expected: main itself now reads about 6 KB
+  over 3.8's figures (the Rescan here a whole re-read of 19,417 records,
+  976-1,002 s, where 3.8's took 52 s), and the move costs 1,860-2,192 B
+  against main at every figure read to the byte.
   Before it (the rework as first built) the object was a 3,200 B PSRAM
   block under a 3,584 B budget. A card with more than 8 MARK rows (each
   player or NVS erase adds one) gets one block more at the boot's read,
@@ -7941,11 +7957,18 @@ section 1 and 5.14's "As built" notes list the changes):
   245,764 B line where main is over it), and 57,344 B under main's from
   the boot's join; the stats' resident blocks, carved again by good fit
   after each update, moved where the decoders' long-lived blocks landed.
-  The owner chose the rework. **The rework's re-run** (boot 2, run H and L
-  parts, Lo and Lo2 with `D` and `Dc` after each update, against main's
-  figures within the class of main's own; then E, H, a new run M for the
-  records' save, I for a full log's overflow and a tap on Play during it,
-  K for the stack) is owed. E, F, G and I were never run.
+  The owner chose the rework. **The rework's re-run** (2026-11-17: boot 2,
+  run H and L parts, Lo and Lo2 with `D` and `Dc` after each update,
+  against main's figures in the same sequence) matched main's PSRAM but
+  after the FLAC update (above), and the owner moved the resident set to
+  internal RAM. **The move's re-run** (2026-11-17, the same sequence,
+  main's firmware beside it) matched main's PSRAM to the byte at every
+  `D` and join line; then a short M (the records' save after the 24th
+  play's slot and after the 48th, 91 ms each; 70 slots, none lost) and
+  `Hs` (143 ms); then, with the headphones linked, OPUS.md's G5, 3.8's
+  walk and a whole Rescan under a Bluetooth play (the figures above; the
+  plan's 5.14, "Its device re-run"). E, F, G and I of S1 as first built's
+  table were never run.
 
 ---
 
