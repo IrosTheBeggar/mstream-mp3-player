@@ -1721,6 +1721,7 @@ class _Player(playlog.Device):
         self.appended = False     # a slot asked for since the boot (a remount begins no scan again)
         self.fenced = False       # a library update's fence is up ("fence" to "unfence"): the records' save waits
         self.held = None          # stats.tmp as a save whose replace() failed wrote it (5.14's Held), till promoted
+        self.tried = 0            # the records when their save last didn't land (0: none since; StatsGlue's recordsTried_)
 
     @property
     def chain(self):
@@ -1769,6 +1770,19 @@ SAVED = ("wrote", "nothing")            # the outcomes after which the card's st
 
 
 def _save(p, why, st):
+    """A save of player p's session (_ask's), and the records' save's
+    retry rule (StatsGlue's recordsTried_): one that didn't land, failed or
+    refused, is due again only after a later record (_records_due); any
+    save that writes, has nothing new or is held clears it."""
+    out = _ask(p, why, st)
+    if out in SAVED or out == "held":
+        p.tried = 0
+    elif why == "records" and p.se is not None:
+        p.tried = p.se.records
+    return out
+
+
+def _ask(p, why, st):
     """A save of player p's session (why: "boot", "records", "rotation",
     "hs"), its outcome: "wrote" (stats.bin written), "nothing" (nothing new:
     nothing written; the card's stats.bin holds it all), "held" (5.14's
@@ -1826,9 +1840,12 @@ def _save(p, why, st):
 
 def _records_due(p):
     """The records' save is due (5.14): the session's records number SAVE_AT
-    or more, the boot's fold's or the live ones', and it isn't behind."""
+    or more, the boot's fold's or the live ones', and it isn't behind; one
+    that didn't land is due again only once a later record came (the
+    records past the count it was tried at: StatsGlue's recordsDue())."""
     se = p.se
-    return se is not None and se.on and not se.behind and se.records >= SAVE_AT
+    return (se is not None and se.on and not se.behind and se.records >= SAVE_AT and
+            not (p.tried and se.records <= p.tried))
 
 
 def _session_boot(p, st):
@@ -1846,7 +1863,7 @@ def _session_boot(p, st):
     unread = dict(st.get("unread") or {})
     p.down = p.blocked = False
     p.acks, p.appended, p.changed = acks, False, False
-    p.fenced, p.held = False, None
+    p.fenced, p.held, p.tried = False, None, 0
     if p.nvs is None:
         p.nvs = {"epoch": p.epochs.pop(0), "seq": 0, "boots": 0}
     p.settle()
@@ -1915,8 +1932,8 @@ def _session_boot(p, st):
 
 def _session_play(p, st):
     """One play of player p, written: the records' save first when it is due
-    and no fence is up (refused in the end's flush; tried again at each
-    later play while it doesn't land); the rotation's save when the append
+    and no fence is up (refused in the end's flush; one that doesn't land is
+    due again only after a later record: _records_due); the rotation's save when the append
     would rotate over a plays.1.jnl holding a play the card's MARK doesn't
     cover (none after a partial scan; none without stats); then the slot
     (playlog's Device: the rotation, the drop note), then the live fold
@@ -2270,6 +2287,19 @@ def _records_sessions(A):
                         "it runs then, whatever the fence, holding 1-96; 97 is a record. Nothing behind; Hs saves "
                         "97 after the fence; the next boot folds nothing.",
                 "cap": playlog.FILE_SLOTS, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 0})
+    run = _run(97, 0, 2)
+    steps = [_boot("A", 1), _batch("A", run[:64]), {"do": "fence", "player": "A"}, _batch("A", run[64:95]),
+             _one("A", run[95], saveFails=True), {"do": "unfence", "player": "A"},
+             {"do": "hs", "player": "A", "now": run[95]["now"], "saveFails": True}, _one("A", run[96]),
+             _boot("A", 3)]
+    out.append({"name": "records-save-fenced-fails",
+                "note": "A plays 64 (the records' save due), and a library update's fence goes up before it runs: "
+                        "65-96 are written under it. 96 brings the records to 96: the save runs then, whatever the "
+                        "fence, and fails (a full card). The fence comes down. Hs, the card still full, fails, and "
+                        "no records' save comes before it: one that didn't land is due again only after a later "
+                        "record, and none came. 97, the card mended: still none due, so its slot finds the records "
+                        "full: not folded, and the session is behind. The next boot folds 1-97 once.",
+                "cap": playlog.FILE_SLOTS, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 0})
     run = _run(65, 0, 2)
     steps = [_boot("A", 1), _batch("A", run[:63]), _one("A", run[63], ending=True, left=3000),
              _one("A", run[64], ending=True, left=3000), _boot("A", 3)]
@@ -2339,6 +2369,17 @@ def _records_sessions(A):
                         "save is refused (behind), and 1-64 are lost to the stats (5.14's hole, 64). The next boot "
                         "folds 65-129.",
                 "cap": 64, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 64})
+    run = _run(99, 0, 2)
+    steps = [_boot("A", 1), _batch("A", run[:97], saveFails=True), _one("A", run[97]), _one("A", run[98]),
+             _boot("A", 3)]
+    out.append({"name": "records-fail-rotations",
+                "note": "The log's cap 16. The card is full from A's first play to its 97th: each rotation's save "
+                        "fails (plays.1.jnl's plays, which no save covers, leave the log and are held only in the "
+                        "records), and from 65 each records' save fails too. 97 finds the records full: the session "
+                        "is behind, and the records go. The card mends; 98-99 aren't folded. The next boot folds "
+                        "what the log still holds: every play the rotations took out before behind is lost to the "
+                        "stats (5.14's hole: a rotation before behind loses plays too).",
+                "cap": 16, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 77})
     files, nvs = _history(300, playlog.FILE_SLOTS, 1)
     run = _run(1, 300, 2)
     for name, fails, note in (
@@ -2387,12 +2428,14 @@ def _records_sessions(A):
                         "behind (Hs refused, 10 not folded). The next boot reads stats.bin Corrupt (stats.bad) and "
                         "counts from what the log still holds: 5-10; 1-4 are lost to the stats (4).",
                 "cap": 4, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 4})
-    run = _run(5, 0, 2)
-    steps = [_boot("A", 1), _batch("A", run[:3]), {"do": "update", "player": "A"}, _batch("A", run[3:]), hs(2),
+    run = _run(66, 0, 2)
+    steps = [_boot("A", 1), _batch("A", run[:64]), {"do": "update", "player": "A"}, _batch("A", run[64:]), hs(2),
              _boot("A", 3)]
     out.append({"name": "update-nothing",
-                "note": "A plays 1-3, a library update (its fence over no play), A plays 4-5: the update moves no "
-                        "stats byte (no give-back, no save, no read). Hs saves 1-5; the next boot folds nothing.",
+                "note": "A plays 1-64 (the records' save due), then a library update (its fence over no play), then "
+                        "65-66: the update moves no stats byte (no give-back, no save, no read): the save due waits "
+                        "out its fence and runs at the next play, before 65's slot, holding 1-64. Hs saves 65-66; "
+                        "the next boot folds nothing.",
                 "cap": playlog.FILE_SLOTS, "files": {}, "players": {"A": A()}, "steps": steps, "lost": 0})
     return out
 

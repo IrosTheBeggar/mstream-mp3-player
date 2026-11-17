@@ -880,17 +880,18 @@ class SessionTests(unittest.TestCase):
         save fails (over a twin's chain too), one in the end's flush with
         under 1 s left, one after a partial scan, one in a session behind
         its log (the records' saves failing, a full log's boot overflow
-        unsaved at four tries); 0.14.0's trim (HEAD's gap); a section
+        unsaved at four tries, rotations before behind whose saves failed);
+        0.14.0's trim (HEAD's gap); a section
         damaged under the session (the next boot's Corrupt counts again
         from the log, without what a trim took). Every other session loses
         nothing and counts nothing twice. No library update's give-back:
         its sessions are gone (5.14)."""
         lost = {"rotation-fails": 4, "rotation-twin-fails": 4, "flush-late": 4, "partial-rotation": 4,
                 "old-firmware": 3, "records-behind-rotation": 64, "boot-overflow-full-rotation": 128,
-                "section-damaged": 4}
+                "records-fail-rotations": 77, "section-damaged": 4}
         for e in self.index:
             self.assertEqual(e["lost"], lost.get(e["name"], 0), e["name"])
-        self.assertEqual(len(self.index), 34)
+        self.assertEqual(len(self.index), 36)
         self.assertFalse([e["name"] for e in self.index if e["name"].startswith("update-") and
                           e["name"] != "update-nothing"])
         self.assertFalse(hasattr(sr, "RING"))
@@ -953,11 +954,23 @@ class SessionTests(unittest.TestCase):
                          ("failed", 1, 70, 70, False))
         self.assertEqual(self.records_saves("boot-unsaved-70"), [(71, "wrote")])
         self.assertEqual(self.stats_at(self.steps("boot-unsaved-70", "play")[0]).head["slots"], 70)
-        # A library update moves no stats byte (no give-back, no save, no read).
+        # A library update moves no stats byte (no give-back, no save, no
+        # read): the save due at 64 waits out its fence, then runs before
+        # 65's slot.
         st = self.steps("update-nothing")
         i = [s["do"] for s in st].index("update")
         self.assertEqual(st[i]["out"], st[i - 1]["out"])
-        self.assertEqual(self.records_saves("update-nothing"), [])
+        self.assertEqual(st[i]["records"], 64)
+        self.assertEqual(self.records_saves("update-nothing"), [(65, "wrote")])
+        # One that didn't land is due again only after a later record: the
+        # save at 96 under a fence fails; Hs after the fence asks none
+        # before it; 97 asks none either, and is behind.
+        self.assertEqual(self.records_saves("records-save-fenced-fails"), [(96, "failed")])
+        hs = self.steps("records-save-fenced-fails", "hs")
+        self.assertEqual([(s["recordsSave"], s["hsSave"], s["records"]) for s in hs], [(None, "failed", 96)])
+        last = self.steps("records-save-fenced-fails", "play")[-1]
+        self.assertEqual((last["seq"], last["recordsSave"], last["records"], last["behind"]), (97, None, 0, True))
+        self.assertEqual(self.steps("records-save-fenced-fails", "boot")[-1]["folded"], 97)
 
     def test_behind(self):
         """5.14's behind: the records full after a save asked failed (the
@@ -974,6 +987,12 @@ class SessionTests(unittest.TestCase):
                          [(97, 0, True), (98, 0, True)])
         self.assertEqual([s["hsSave"] for s in self.steps("records-save-fails", "hs")], ["behind"])
         self.assertEqual(self.steps("records-save-fails", "boot")[-1]["folded"], 98)
+        # Rotations before behind, their saves failing: the plays they took
+        # out were in the records alone, which behind drops.
+        b = self.steps("records-fail-rotations", "plays")[0]["each"]
+        self.assertEqual([q for q, r in zip(b["seq"], b["rotationSave"]) if r], [33, 48, 63, 78, 93])
+        self.assertEqual(set(r for r in b["rotationSave"] if r), {"failed"})
+        self.assertEqual(self.steps("records-fail-rotations", "boot")[-1]["folded"], 22)
         # Behind, then a rotation: refused, plays.1.jnl's 1-64 lost.
         last = self.steps("records-behind-rotation", "play")[-1]
         self.assertEqual((last["seq"], last["rotationSave"], last["save"]), (129, "behind", False))

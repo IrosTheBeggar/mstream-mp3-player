@@ -1227,7 +1227,7 @@ void test_every_session_the_store_runs() {
   }
   printf("sessions: %d through the store, %d steps, %d saves (%d held, %d behind); not run (a twin's link):%s\n",
          sessions, steps, saves, held, behind, skipped.c_str());
-  TEST_ASSERT_EQUAL_INT(32, sessions);
+  TEST_ASSERT_EQUAL_INT(34, sessions);
   TEST_ASSERT_TRUE(held >= 4 && behind >= 3);
 }
 

@@ -1530,10 +1530,21 @@ sf::Head runSession(const minijson::Value& sc) {
       TEST_ASSERT_TRUE_MESSAGE(p->fenced != (doing == "fence"), w.c_str());
       p->fenced = doing == "fence";
     } else if (doing == "update") {
-      // (A fence over no play: nothing of the stats; the scan done, nothing
-      // held to wait for.)
+      // A library update: its fence up for a pass the write gate lets
+      // through, then down (LibraryUpdate's), over no play. Nothing of the
+      // stats moves: the scan done, nothing held for it to wait for
+      // (Wait::Stats: scanHolds()); a records' save due waits for the fence
+      // (until 96: none of statsref's updates comes with 96 records), so
+      // turnOf() gives none in it, and it is due again after it.
       TEST_ASSERT_FALSE_MESSAGE(p->fenced, w.c_str());
-      if (p->glue) TEST_ASSERT_FALSE_MESSAGE(p->glue->core.scanHolds(), w.c_str());
+      if (Glue* g = p->glue.get()) {
+        TEST_ASSERT_FALSE_MESSAGE(g->core.scanHolds(), w.c_str());
+        const bool due = g->core.recordsDue(false);
+        p->fenced = true;
+        TEST_ASSERT_TRUE_MESSAGE(sg::turnOf(g->core.saveDue(true), 0, false) == sg::Turn::Nothing, w.c_str());
+        p->fenced = false;
+        TEST_ASSERT_EQUAL_MESSAGE(due, g->core.recordsDue(false), w.c_str());
+      }
     } else if (doing == "remount") {
       p->j->remounted();
       p->out->remounted();
@@ -1572,8 +1583,8 @@ void test_every_session() {
   for (size_t i = 0; i < gSessions.size(); ++i) runSession(gSessions[i]);
   printf("sessions: %u, %d steps, the card compared after each\n", static_cast<unsigned>(gSessions.size()),
          gSessionSteps);
-  TEST_ASSERT_EQUAL_UINT32(34, gSessions.size());
-  TEST_ASSERT_EQUAL_INT(276, gSessionSteps);
+  TEST_ASSERT_EQUAL_UINT32(36, gSessions.size());
+  TEST_ASSERT_EQUAL_INT(290, gSessionSteps);
 }
 
 // A rotation over a plays.1.jnl no save covers (the boot's save failed): its
@@ -1582,18 +1593,31 @@ void test_every_session() {
 // are they in a rotation in the end's flush with under 1 s of its budget
 // left. And 5.14's: a session behind its log (the records' saves failing to
 // 96, a full log whose boot save failed all four tries) loses the plays of
-// the plays.1.jnl a rotation takes out.
+// the plays.1.jnl a rotation takes out, and so does one whose rotations'
+// saves failed before it was behind (their plays were in the records
+// alone). Each session's slots pinned, so a fixture regenerated smaller
+// shows here.
 void test_the_rotation_hole() {
-  const std::pair<const char*, uint64_t> cases[] = {
-      {"rotation-saves", 0},          {"rotation-fails", 4},     {"rotation-twin-saves", 0},
-      {"rotation-twin-fails", 4},     {"flush-in-time", 0},      {"flush-late", 4},
-      {"partial-rotation", 4},        {"records-behind-rotation", 64},
-      {"boot-overflow-full-rotation", 128}, {"boot-overflow-full-rotation-retry", 0}};
+  struct Case {
+    const char* name;
+    uint64_t slots, lost;
+  };
+  const Case cases[] = {{"rotation-saves", 9, 0},
+                        {"rotation-fails", 9, 4},
+                        {"rotation-twin-saves", 9, 0},
+                        {"rotation-twin-fails", 9, 4},
+                        {"flush-in-time", 9, 0},
+                        {"flush-late", 9, 4},
+                        {"partial-rotation", 13, 4},
+                        {"records-behind-rotation", 129, 64},
+                        {"records-fail-rotations", 99, 77},
+                        {"boot-overflow-full-rotation", 257, 128},
+                        {"boot-overflow-full-rotation-retry", 257, 0}};
   for (const auto& c : cases) {
-    const minijson::Value& sc = session(c.first);
-    TEST_ASSERT_EQUAL_UINT64_MESSAGE(c.second, sc["lost"].u64(), c.first);
-    const uint64_t slots = sc["slots"].u64();
-    TEST_ASSERT_EQUAL_UINT64_MESSAGE(slots - c.second, runSession(sc).slots, c.first);
+    const minijson::Value& sc = session(c.name);
+    TEST_ASSERT_EQUAL_UINT64_MESSAGE(c.lost, sc["lost"].u64(), c.name);
+    TEST_ASSERT_EQUAL_UINT64_MESSAGE(c.slots, sc["slots"].u64(), c.name);
+    TEST_ASSERT_EQUAL_UINT64_MESSAGE(c.slots - c.lost, runSession(sc).slots, c.name);
   }
 }
 
