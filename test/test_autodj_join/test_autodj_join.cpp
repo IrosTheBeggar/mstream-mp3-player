@@ -48,18 +48,17 @@
 //   real 19,412-track library, with Auto DJ off and on (the rebuild's own
 //   fragmentation, the join after it taking only what no smaller block
 //   holds), then the same built from T with the mood words' block
-//   (MOOD-FILTERS.md 9.5's pass rule); and with the listening stats'
-//   hash-keyed blocks (docs/LISTENING-STATS.md 6.7, S1's StatsRun: the load's
-//   chunks at the boot, the boot's fold of a log never synced after the
-//   boot's join, given back at each update and taken again after it, or
-//   held through as S1 first built) under the same rule and the device's
-//   room;
+//   (MOOD-FILTERS.md 9.5's pass rule); and with the listening stats
+//   (docs/LISTENING-STATS.md 5.14, S1's rework, its R6: the firmware's glue
+//   on a card in memory, its object held from setup, the boot's scan's
+//   blocks at the top until its save, each save's work memory and files in
+//   its own call) under the same rule, joined within the control's class;
 // - the listening stats across five library updates (docs/LISTENING-STATS.md
-//   5.14's yardstick, its R1): the decoders' blocks as the device asks for
-//   them, held as a history has them, joined after each update against
-//   main's run in the same history, beside main's own variation; S1 as built
-//   fails it on purpose until the rework (R6), and the shapes the rework's
-//   waits exist for fail it too.
+//   5.14's yardstick, its R1 and R6): the decoders' blocks as the device asks
+//   for them, held as a history has them, joined after each update against
+//   main's run in the same history, beside main's own variation; the rework
+//   fails no step the control doesn't, and the shapes its waits exist for
+//   (each wait left out) do.
 // Run: pio test -e native -f test_autodj_join
 // The yardstick's variants (5.14's R1), outside the suite, the case alone, in
 // a build folder of their own (from Git Bash in the worktree):
@@ -84,6 +83,7 @@
 #include <vector>
 
 #include "../support/CardFixtures.h"
+#include "../support/CutFs.h"
 #include "../support/FatModel.h"
 #include "../support/FatModelFs.h"
 #include "../support/SynthCard.h"
@@ -97,8 +97,8 @@
 #include "LibrarySynth.h"
 #include "LibraryUpdate.h"
 #include "PlayLog.h"
-#include "StatsFileS1.h"
-#include "StatsFoldS1.h"
+#include "StatsFile.h"
+#include "StatsFold.h"
 #include "StatsGlue.h"
 
 namespace cc = cardcontract;
@@ -2656,11 +2656,12 @@ struct UpdateRun {
   size_t bootTopKept = 0;      // ... its kept bytes at the top
   std::vector<std::pair<size_t, size_t>> fence;  // the free blocks at the fence (64 KB or more)
   size_t largest = 0;          // after the update, before the join
-  size_t joined = 0;           // ... joined again (and the listening stats' blocks taken again)
-  size_t joinOnly = 0;         // ... the join alone given back (the stats' blocks held)
-  size_t givenBack = 0;        // ... and given back (the stats' blocks too: the memory check's give-back)
+  size_t joined = 0;           // ... joined again (and the listening stats' records' save made)
+  size_t joinOnly = 0;         // ... the join given back (the memory check's give-back)
+  size_t givenBack = 0;        // ... the same (the stats give nothing back since 5.14's rework)
   size_t topKept = 0;          // the kept bytes the join put at the top
   size_t bootLowest = SIZE_MAX;  // the lowest free while the boot's join placed its blocks
+  bool opusFirst = false;        // a history's Opus at the boot opened before the boot's join
   size_t lowest = SIZE_MAX;      // ... while the joins after the update did
 };
 
@@ -2697,169 +2698,238 @@ struct MoodRun {
   bool moods = false;  // T's records carry mood tails: the index has words
 };
 
-// S1 as built's glue object on this host (sizeof(statsglue::Glue) at
-// 11aaf46: the give-back's, its ring of 32, R4's Opened): the rework's glue
-// (5.14, R5) is another object, so S1 as built's run carves this figure.
-constexpr size_t kS1GlueBytes = 5840;
+// The listening stats (docs/LISTENING-STATS.md 5.14: S1's rework, a fixed
+// resident set; its R6): the firmware's own glue (statsglue::Glue, its Fold
+// and its store) on a card in memory, every block it carves through the
+// model heap as the firmware's hooks carve them (app/ListeningStats.cpp):
+// - the glue's object at PlayHistory::begin()'s place (setup(), after Auto
+//   DJ's glue), carved at the 3,584 B the core2 build's static_assert holds
+//   it to (the device's object is 3,200 B and this host's 3,368 B: the
+//   budget is what S2-S6 may grow it to, so the model carves that); then
+//   its read (Glue::begin(), the boot's, with its waits): the work memory
+//   and a FatFile for each file open, given back in the call, and MARK's
+//   block for a card with more than 8 MARK rows, kept (the store's);
+// - the boot's scan, from its first reserve() (the fold begun): the ranges'
+//   block and a log's overflow chunks at the top of the largest free block
+//   through the join's spacers keeping kMargin free (Memory::top: the
+//   firmware's topAlloc()), held across the scan's passes until the boot's
+//   save gives them back (the ranges' block before it carves its work
+//   memory, the chunks once it lands, or after its fourth try); as built,
+//   one chunk whatever the log (the first piece's reserve() of 128 slots,
+//   past the 96 records), given back at the fold's end;
+// - each save's work memory (Memory::alloc) and its FatFiles (PsramFs), in
+//   the store's own order of opens and closes, given back in its call: the
+//   boot's (a compaction's two bases too), the records' (64 plays written
+//   live) in each update's fence pass and after it, one at 96 records in
+//   update 0's fence.
+// The card the boot finds (StatsCard) is written by the same glue in
+// earlier sessions, outside the model heap.
+constexpr size_t kGlueBudget = 3584;  // app/ListeningStats.cpp's static_assert on sizeof(statsglue::Glue)
+static_assert(sizeof(statsglue::Glue) <= kGlueBudget, "the glue's object within its budget on this host too");
+constexpr size_t kFatFileBytes = 4148;  // FatFs::open()'s psramNew<FatFile>(): a FIL with its own 4,096 B window
+constexpr uint64_t kStatsNowMs = statsfold::kMinMs + 600ull * statsfold::kDayMs;  // the board's clock at the saves
+const uint8_t kStatsDev[6] = {0x00, 0x00, 0x5e, 0x00, 0x53, 0x01};
+constexpr uint64_t kStatsEpoch = 0x1122334455667788ull;
 
-// The listening stats' hash-keyed half (docs/LISTENING-STATS.md 6.7; S1's
-// C8), every block through the model heap as psramAlloc gives them on the
-// device, in the firmware's order: at PlayHistory::begin()'s place
-// (setup(), after Auto DJ's glue) the glue (statsglue::Glue, the Fold
-// inside it), the Fold's HOUR, DAYS and MARK blocks, then the read's work
-// memory, the load's chunks (stats.bin's RCNT and TRKD rows, and the
-// spare), the work memory given back (Glue::begin()'s readNow()); after the
-// boot's joinNow(), the boot's fold of a log never synced: begun at the
-// scan's first reserve() (its ranges and indexes: StatsGlue's settle(),
-// never in setup(); the scan's pieces wait while the join is Working),
-// RCNT growing until the fold's end holds it to its cap and the save
-// prunes it, then the save (its work memory taken and given back; no
-// compaction: something plays), or none landed (a refusal: the fold ended
-// alone). Then, at each update step (the owner's decision of 2026-11-11),
-// given back at the fence after Auto DJ's join, and taken again after the
-// update's Live and Auto DJ's rejoin; the next memory check's give-back
-// (setGiveBack()'s chain: the join, then the stats). Or (giveBack false: S1
-// as first built) held through every update step. Or (foldAfter: an update
-// asked before the boot's scan's first piece, the give-back review) the
-// boot's fold not begun at the first update: the loaded blocks given back
-// at its fence (nothing to save), the scan held through the update
-// (app/ListeningStats::mayScan(): a library update asked; then given back),
-// and the boot's fold after the first take-back.
-struct StatsRun {
-  uint32_t rcntRows = 0, trkdRows = 0;  // stats.bin's, loaded
-  uint32_t hashes = 0;                  // the tracks the log's plays are of (TRKD's loaded rows the first)
-  uint32_t slots = 0;                   // the boot's log, never synced
-  bool landed = true;                   // the boot's save lands (false: refused, its fold ended alone)
-  bool giveBack = false;                // given back at each update's fence, taken again after its rejoin
-  bool giveBackSaves = true;            // ... the give-back's save (a fold not saved yet) lands (false: refused)
-  bool foldAfter = false;               // the boot's fold after the first update's take-back (not after the boot's join)
-  // What it came to.
-  size_t peak = 0, held = 0, loaded = 0;
-  size_t given = 0, kept = 0, retaken = 0;  // the first give-back's bytes, what it kept, the first re-read's held
-  uint32_t giveBacks = 0, saves = 0;        // the give-backs, and the saves they asked first
-  uint32_t rcntAt = 0, trkdAt = 0;          // the rows stats.bin holds at the give-back (the re-read's)
-  uint32_t reserveFailed = 0;  // pieces whose room couldn't be taken first (the fold carved on demand)
-  bool noMemory = false;       // the fold found none: nothing more folded, no save
+uint64_t statsHash(uint32_t track) { return cc::fnv1a64(&track, sizeof(track)); }
+
+// A completed manual play of `track` (its path hash statsHash()'s): slot
+// `seq` of player `dev` (a (deviceId, epoch) each: a MARK row each).
+playlog::Slot statsSlot(uint32_t seq, uint32_t track, uint64_t startedAt, uint32_t dev = 0) {
+  playlog::Slot s;
+  s.kind = playlog::kKindPlay;
+  s.outcome = playlog::kCompleted;
+  s.source = playlog::kSourceManual;
+  s.clock = playlog::kClockRtc;
+  s.seq = seq;
+  s.epoch = kStatsEpoch + dev;
+  std::memcpy(s.deviceId, kStatsDev, 6);
+  s.deviceId[5] = static_cast<uint8_t>(kStatsDev[5] + dev);
+  s.startedAt = startedAt;
+  s.playedMs = s.durationMs = 200000;
+  s.pathHash = statsHash(track);
+  return s;
+}
+
+// The card a boot finds: stats.bin and its base as plays of `played` tracks
+// left them (`trkd` of them in stats.bin's TRKD, the rest compacted into the
+// base), each session written by the glue (malloc's memory); `marks`
+// players' MARK rows; the log above the card's MARK from player 0's `seq`.
+struct StatsCard {
+  cutfs::CutFs card;
+  uint32_t played = 0, trkd = 0, marks = 1;
+  std::vector<uint32_t> seq;  // each player's next seq (above the card's MARK)
+  uint32_t sessions = 0;
 };
 
-uint64_t statsHash(uint32_t i) { return cc::fnv1a64(&i, sizeof(i)); }
+struct PlainStatsEnv final : statsglue::Env {
+  statsfile::SaveAsk ask;
+  uint64_t monoMs() override { return 0; }
+  void asking(statsglue::Kind, statsfile::SaveAsk* a) override { *a = ask; }
+};
 
-// The load: stats.bin's rows, in its order, as StatsFile's read loads them.
-void statsLoad(statsfold::s1::Fold& f, uint32_t rcntRows, uint32_t trkdRows) {
+// An earlier session: its boot folds one play each of tracks [t0, t0 + n),
+// dated over `days` days from `day`, by `players` players in turn; its save
+// compacts (nothing playing) or doesn't (a track playing, no safe point).
+void statsSession(StatsCard& c, uint32_t n, uint32_t t0, uint32_t day, uint32_t days, uint32_t players,
+                  bool compact) {
   namespace sf = statsfold;
-  TEST_ASSERT_TRUE(f.reserveLoad(rcntRows, trkdRows));
-  std::vector<uint64_t> h(trkdRows);
-  for (uint32_t i = 0; i < trkdRows; ++i) h[i] = statsHash(i);
-  std::sort(h.begin(), h.end());
-  std::vector<uint8_t> rows(static_cast<size_t>(std::max(trkdRows, rcntRows)) * 24);
-  for (uint32_t i = 0; i < trkdRows; ++i) {
-    sf::Track t;
-    t.hash = h[i];
-    t.plays = 3;
-    t.firstAt = t.lastAt = 100000 + i;
-    t.lastOrd = 1;
-    sf::encodeTrack(t, rows.data() + i * 24);
+  PlainStatsEnv env;
+  env.ask.nowMs = kStatsNowMs;
+  env.ask.playing = !compact;
+  env.ask.safePoint = compact;
+  const cc::msmf::Acks acks{};
+  statsglue::Glue g(c.card, env);
+  g.begin(acks, [](uint32_t) {});
+  TEST_ASSERT_TRUE(g.on());
+  g.scanBegan(false);
+  for (uint32_t i = 0; i < n; ++i) {
+    if (i % 128 == 0) TEST_ASSERT_TRUE(g.reserve(128));
+    const uint32_t d = i % players;
+    const uint64_t at = sf::kMinMs + (day + static_cast<uint64_t>(i) * days / n) * sf::kDayMs + (i % 24) * sf::kHourMs;
+    g.slot(statsSlot(c.seq[d]++, t0 + i, at, d), 0);
   }
-  TEST_ASSERT_TRUE(f.loadRows(sf::kTrkd, rows.data(), trkdRows, 24));
-  // RCNT: the last 32 days' (day, hash) rows, by day then hash.
-  std::vector<std::pair<uint16_t, uint64_t>> rc;
-  for (uint32_t i = 0; i < rcntRows; ++i) rc.emplace_back(static_cast<uint16_t>(498 + i % 32), statsHash(i % 5000));
-  std::sort(rc.begin(), rc.end());
-  for (uint32_t i = 0; i < rcntRows; ++i) {
-    uint8_t* r = rows.data() + i * 12;
-    cc::put16(r, rc[i].first);
-    cc::put16(r + 2, 1);
-    cc::put64(r + 4, rc[i].second);
-  }
-  TEST_ASSERT_TRUE(f.loadRows(sf::kRcnt, rows.data(), rcntRows, 12));
+  TEST_ASSERT_TRUE(g.save(playlog::Folds::Why::Boot));
+  TEST_ASSERT_TRUE(g.last().what == statsfile::Saved::Wrote);
+  TEST_ASSERT_EQUAL(compact, g.last().compacted);
+  g.ready();
+  ++c.sessions;
 }
-void statsLoad(statsfold::s1::Fold& f, const StatsRun& sr) { statsLoad(f, sr.rcntRows, sr.trkdRows); }
 
-// The give-back at the update's fence (StatsGlue's giveBack(), after Auto
-// DJ's join): a fold not saved yet saved first (the rotation's path: its
-// work memory taken and given back; plan and saved, the card's writes
-// aside), then every resident block but MARK's given back. The rows
-// stats.bin then holds are the re-read's: RAM's when the save landed (or
-// nothing was new), the boot's file's when it was refused.
-void statsGiveBack(statsfold::s1::Fold& f, StatsRun& sr) {
-  namespace sf = statsfold;
-  sr.rcntAt = f.rows(sf::kRcnt);
-  sr.trkdAt = f.rows(sf::kTrkd);
-  if (f.dirty()) {
-    ++sr.saves;
-    void* work = ModelHeap::alloc(statsfile::s1::kWorkBytes);
-    TEST_ASSERT_NOT_NULL(work);
-    sf::s1::Fold::Plan plan;
-    if (sr.giveBackSaves && f.plan(sf::kMinMs + 530ull * sf::kDayMs, false, 0, &plan)) {
-      f.saved(plan);
-      sr.rcntAt = f.rows(sf::kRcnt);
-      sr.trkdAt = f.rows(sf::kTrkd);
-    } else {
-      sr.rcntAt = sr.rcntRows;  // (the card's stats.bin: the one the boot read)
-      sr.trkdAt = sr.trkdRows;
+StatsCard statsCard(uint32_t played, uint32_t trkd, uint32_t marks = 1) {
+  StatsCard c;
+  c.played = played;
+  c.trkd = trkd;
+  c.marks = marks;
+  c.seq.assign(marks, 1);
+  // (A boot adds at most 8 players' rows to the card's MARK: the first
+  // sessions' 8 at most, the last one's the rest.)
+  uint32_t t = 0, day = 300;
+  while (t + trkd < played) {
+    const uint32_t n = std::min<uint32_t>(8000, played - trkd - t);
+    statsSession(c, n, t, day, 100, std::min<uint32_t>(marks, statsfold::kMarkRoom), true);
+    t += n;
+    day += 100;
+  }
+  if (trkd) statsSession(c, trkd, t, day, 60, marks, false);
+  return c;
+}
+
+// The card through the firmware's FatFs (src/storage/CardFat.cpp): a
+// FatFile carved for each file open, before the open (given back when it
+// fails), given back at its close; entry() an open and a close. (f_stat's
+// FILINFO, carved and freed with nothing between, leaves no trace in this
+// heap: not modelled.)
+class PsramFs final : public tagstore::Fs {
+public:
+  explicit PsramFs(cutfs::CutFs& card) : card_(card) {}
+  tagstore::File* open(const char* path, Mode mode) override {
+    void* b = ModelHeap::alloc(kFatFileBytes);
+    if (!b) return nullptr;
+    return kept(card_.open(path, mode), b);
+  }
+  tagstore::File* openRead(const char* path, bool* cardFailed) override {
+    void* b = ModelHeap::alloc(kFatFileBytes);
+    if (!b) {
+      *cardFailed = true;
+      return nullptr;
     }
-    ModelHeap::release(work);
+    return kept(card_.openRead(path, cardFailed), b);
   }
-  const size_t gives = f.givesBack();
-  const size_t given = f.giveBack();
-  TEST_ASSERT_EQUAL_size_t(gives, given);
-  if (!sr.giveBacks++) {
-    sr.given = given;
-    sr.kept = f.held();
+  Entry entry(const char* path) override {
+    Entry e;
+    tagstore::File* f = openRead(path, &e.cardFailed);
+    if (f) {
+      e.there = true;
+      e.firstCluster = card_.firstCluster(path);
+      close(f);
+    }
+    return e;
   }
-  TEST_ASSERT_EQUAL_size_t(sr.kept, f.held());  // (MARK's block alone)
-}
+  Seen look(const char* path) override { return card_.look(path); }
+  bool close(tagstore::File* f) override {
+    auto it = files_.find(f);
+    TEST_ASSERT_TRUE_MESSAGE(it != files_.end(), "a file PsramFs didn't open");
+    void* b = it->second;
+    files_.erase(it);
+    const bool ok = card_.close(f);
+    ModelHeap::release(b);
+    return ok;
+  }
+  bool exists(const char* path) override { return card_.exists(path); }
+  bool remove(const char* path) override { return card_.remove(path); }
+  bool rename(const char* from, const char* to) override { return card_.rename(from, to); }
+  uint32_t firstCluster(const char* path) override { return card_.firstCluster(path); }
+  size_t openNow() const { return files_.size(); }
 
-// The re-read after the update's Live and Auto DJ's rejoin (StatsGlue's
-// takeBack(), at a pass that may carve): HOUR and DAYS again (MARK's block
-// kept), the read's work memory, the load's chunks and the spare, the work
-// memory given back (readNow()'s order).
-void statsTakeAgain(statsfold::s1::Fold& f, StatsRun& sr) {
-  TEST_ASSERT_TRUE(f.begin());
-  void* work = ModelHeap::alloc(statsfile::s1::kWorkBytes);
-  TEST_ASSERT_NOT_NULL(work);
-  f.clear();
-  statsLoad(f, sr.rcntAt, sr.trkdAt);
-  ModelHeap::release(work);
-  if (!sr.retaken) sr.retaken = f.held();
-}
+private:
+  tagstore::File* kept(tagstore::File* f, void* b) {
+    if (!f) {
+      ModelHeap::release(b);
+      return nullptr;
+    }
+    files_[f] = b;
+    return f;
+  }
+  cutfs::CutFs& card_;
+  std::map<tagstore::File*, void*> files_;
+};
 
-// The boot's fold of a log never synced: `slots` plays of `hashes` tracks,
-// 25 a day for 524 days (the scan's pieces of 128, the room taken before
-// each), then the save: plan and saved (the card's writes aside).
-void statsBoot(statsfold::s1::Fold& f, StatsRun& sr) {
-  namespace sf = statsfold;
-  namespace pl = playlog;
-  const uint8_t dev[6] = {0x00, 0x00, 0x5e, 0x00, 0x53, 0x01};
-  cc::msmf::Acks none;
-  TEST_ASSERT_TRUE(f.beginBoot(none));
-  std::mt19937 rng(sr.slots);
-  for (uint32_t q = 1; q <= sr.slots; ++q) {
-    if ((q - 1) % 128 == 0 && !f.reserve(128)) ++sr.reserveFailed;
-    pl::Slot s;
-    s.kind = pl::kKindPlay;
-    s.outcome = pl::kCompleted;
-    s.source = pl::kSourceManual;
-    s.clock = pl::kClockRtc;
-    s.seq = q;
-    s.epoch = 0x1122334455667788ull;
-    std::memcpy(s.deviceId, dev, 6);
-    s.startedAt = sf::kMinMs + static_cast<uint64_t>(q / 25) * sf::kDayMs + (q % 25) * sf::kHourMs / 2;
-    s.playedMs = s.durationMs = 200000;
-    s.pathHash = statsHash(static_cast<uint32_t>(rng() % sr.hashes));
-    f.bootSlot(s, q <= pl::kFileSlots ? 1 : 0);
+// The glue's Env in a run: the board's clock (the overflow's tries), a
+// decoder open (compactionDue()'s `playing`), the card refusing every write
+// for the next `fails` saves; each save's outcome.
+struct StatsEnv final : statsglue::Env {
+  cutfs::CutFs* card = nullptr;
+  uint64_t mono = 0;
+  bool playing = false;
+  int fails = 0;
+  uint32_t saves = 0, wrote = 0, compacted = 0;
+  uint64_t monoMs() override { return mono; }
+  void asking(statsglue::Kind, statsfile::SaveAsk* a) override {
+    a->nowMs = kStatsNowMs;
+    a->hasCommit = false;
+    a->playing = playing;
+    a->safePoint = true;
+    if (fails > 0) {
+      card->refuse = true;
+      --fails;
+    }
   }
-  sr.noMemory = f.noMemory();
-  if (!sr.landed) {
-    f.endBoot();  // (Glue::refuse(): no work memory carved)
-    return;
+  void saved(statsglue::Kind, statsglue::Refused r, const statsfile::SaveReport& rep) override {
+    card->refuse = false;
+    ++saves;
+    if (r == statsglue::Refused::None && rep.what == statsfile::Saved::Wrote) ++wrote;
+    if (rep.compacted) ++compacted;
   }
-  void* work = ModelHeap::alloc(statsfile::s1::kWorkBytes);
-  TEST_ASSERT_NOT_NULL(work);
-  sf::s1::Fold::Plan plan;
-  if (f.plan(sf::kMinMs + 530ull * sf::kDayMs, false, 0, &plan)) f.saved(plan);
-  ModelHeap::release(work);
-}
+};
+
+// The rework's stats in a run of libraryUpdates(), and what they came to.
+struct StatsRun {
+  enum class Scan {
+    ScanFirst,     // the boot's scan, then the boot's join (waiting while the scan's blocks are held)
+    JoinFirst,     // the boot's join, then the scan
+    AfterUpdate,   // a library update asked before the scan's first piece: the scan after update 0's rejoin
+    ThroughBuild,  // (no update waiting for the scan's blocks) the scan after the boot's join, its blocks
+                   // held through update 0's build, its save after it
+    InFence,       // (no scan waiting for an asked update) the scan begun in update 0's fence, its save after
+                   // the build
+  };
+  const StatsCard* card = nullptr;
+  uint32_t slots = 70;      // the boot's log above the card's MARK: a usual boot's (at most 95: the last
+                            // session's records), 300 (an overflow chunk), a full log's 13,106 (16 chunks)
+  Scan when = Scan::ScanFirst;
+  bool startWaits = true;   // a start at the boot waits while overflow chunks are held (false: the shape the
+                            // wait exists for, the Opus opening under them)
+  int bootFails = 0;        // the boot's save's tries that fail (the card refusing writes); kBootTries: behind
+  int fenceSave = 0;        // a records' save at 96 records in update 0's fence: 1 before its build, 2 after it
+  bool stepSaves = true;    // the records' save (64 plays written) in each update's fence pass and after it
+  // What it came to.
+  size_t markBytes = 0;     // MARK's block (the boot's read's: kept for the session)
+  size_t rangesBytes = 0;   // the ranges' block the boot's fold carved
+  size_t chunkBytes = 0;    // the overflow's chunks at the scan's end
+  uint32_t chunks = 0, tries = 0, saves = 0, wrote = 0, compacted = 0, reserveFailed = 0;
+  bool behind = false;
+};
 
 // The decoders' requests while a track plays (docs/LISTENING-STATS.md 5.14,
 // the yardstick), each held from the track's open to its end.
@@ -2891,51 +2961,14 @@ struct Updates {
   int flacStep = -1;    // carved before update k's fence, given back after its rejoin; -1: no FLAC
   bool dc = false;
   size_t queueExtra = 0;  // the queue's block this much longer: main's own variation (the control)
+  bool opusFirst = false;  // (opusAt -1, no stats) the Opus opened before the boot's join, not after it
   std::vector<size_t> joined;
   uint32_t carveFails = 0, joinFails = 0;  // a decoder's block, or a join, that found no room
 };
 
-// The rework's design (5.14) as the heap sees it, raw blocks: the resident
-// object at PlayHistory::begin()'s place; a records' save (its work memory and
-// two FatFiles, carved and freed in one call) in each update's fence pass and
-// after each update's Dc; the boot's scan holding its ranges' block and a
-// full log's overflow chunks across its passes, carved at the top of the
-// largest free block through the join's spacers keeping kMargin free, then
-// the boot's save (its work memory and three FatFiles) before they go. R1
-// runs it without one of its waits at a time (the shapes the waits exist
-// for), as the design's run did (docs/LISTENING-STATS.md 5.14), with the
-// scan's blocks the design's own; R6 makes StatsRun the rework's.
-struct Rework {
-  enum class Scan {
-    JoinFirst,     // the boot's join, then the scan
-    ScanFirst,     // the scan, the boot's join waiting for it
-    ThroughBuild,  // after the boot's join, held through update 0's build (no update waiting for it;
-                   // an Opus opened at the boot opens under them)
-    InFence,       // carved in update 0's fence, given back after its build (no scan waiting for the
-                   // update; an Opus opened at the boot opens before them)
-  };
-  static constexpr size_t kSaveWork = 10896;  // statsfile::kWorkBytes as 5.14 has it, on the device as on the host
-  size_t resident = 3584;
-  std::vector<size_t> save = {kSaveWork, 4148, 4148};
-  std::vector<size_t> scan;
-  std::vector<size_t> bootSave;
-  Scan when = Scan::ScanFirst;
-  bool opusUnder = true;  // (JoinFirst, ScanFirst; opusAt -1) the Opus opens while the scan's blocks are
-                          // held (no start waiting); false: after they go
-};
-
-// The scan's blocks of a full log's overflow (5.14): the ranges' block (3,072
-// B with MARK's 16 rows) and 16 chunks of 819 records; the boot's save's work
-// memory and three FatFiles (a compaction's).
-Rework fullLogOverflow(Rework::Scan when) {
-  Rework r;
-  r.scan.push_back(3072);
-  r.scan.insert(r.scan.end(), 16, 16384);
-  r.bootSave = {Rework::kSaveWork, 4148, 4148, 4148};
-  r.when = when;
-  return r;
-}
-
+// app/ListeningStats.cpp's topAlloc(): a block held across passes at the top
+// of the largest free block, the join's spacers under it while it is carved,
+// kMargin kept free.
 void* topAlloc(size_t n) {
   autodj::Spacers sp;
   autodj::takeSpacers(n, kMargin, ModelHeap::largest, ModelHeap::freeBytes, ModelHeap::alloc, ModelHeap::release, &sp);
@@ -2944,19 +2977,9 @@ void* topAlloc(size_t n) {
   return p;
 }
 
-void carveAndFree(const std::vector<size_t>& sizes) {
-  std::vector<void*> ps;
-  for (size_t n : sizes) {
-    void* p = ModelHeap::alloc(n);
-    TEST_ASSERT_NOT_NULL(p);
-    ps.push_back(p);
-  }
-  for (size_t i = ps.size(); i-- > 0;) ModelHeap::release(ps[i]);
-}
-
 UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& records, const synthcard::Card& card,
                          int steps, const MoodRun& mood = MoodRun(), StatsRun* stats = nullptr,
-                         Updates* hist = nullptr, const Rework* rw = nullptr) {
+                         Updates* hist = nullptr) {
   UpdateRun u;
   ModelHeap::reset(4089u * 1024u);
   auto take = [](std::initializer_list<size_t> sizes, std::vector<void*>* into) {
@@ -2994,28 +3017,33 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   take({queueBytes}, &queue);
   g_durations = ModelHeap::alloc(index.trackCount() * 2);
   take({3680, 3584, 15432, 4148}, nullptr);  // Auto DJ's glue, its engine, the open file
-  void* resident = nullptr;  // (the rework's object, at PlayHistory::begin()'s place)
-  if (rw) {
-    resident = ModelHeap::alloc(rw->resident);
-    TEST_ASSERT_NOT_NULL(resident);
-  }
-  // PlayHistory::begin(): the stats' glue (the Fold inside it: the model
-  // places a Fold at its block's start), HOUR, DAYS and MARK, then the
-  // read's work memory and the load, the work memory given back (StatsRun).
-  statsfold::s1::Fold* fold = nullptr;
+  // PlayHistory::begin(): the stats' glue, its object (the resident set),
+  // then its read (the work memory and the files given back in the call;
+  // MARK's block kept for a card with more than 8 MARK rows).
+  const cc::msmf::Acks acks{};  // (the root's: none)
+  std::unique_ptr<cutfs::CutFs> statsCard;
+  std::unique_ptr<PsramFs> statsFs;
+  StatsEnv statsEnv;
+  std::unique_ptr<statsglue::Glue> glue;
   void* glueAt = nullptr;
+  uint32_t seq = 0, track = 0;
   if (stats) {
-    static_assert(kS1GlueBytes >= sizeof(statsfold::s1::Fold), "the Fold is the glue's");
-    glueAt = ModelHeap::alloc(kS1GlueBytes);
+    statsCard.reset(new cutfs::CutFs(stats->card->card.reboot(cutfs::Variant::InOrder)));
+    statsFs.reset(new PsramFs(*statsCard));
+    statsEnv.card = statsCard.get();
+    glueAt = ModelHeap::alloc(kGlueBudget);
     TEST_ASSERT_NOT_NULL(glueAt);
-    fold = new (glueAt) statsfold::s1::Fold(ModelHeap::alloc, ModelHeap::release);
-    TEST_ASSERT_TRUE(fold->begin());
-    void* work = ModelHeap::alloc(statsfile::s1::kWorkBytes);
-    TEST_ASSERT_NOT_NULL(work);
-    fold->clear();
-    statsLoad(*fold, *stats);
-    ModelHeap::release(work);
-    stats->loaded = fold->held();
+    statsglue::Memory m;
+    m.alloc = ModelHeap::alloc;
+    m.top = topAlloc;
+    m.release = ModelHeap::release;
+    glue.reset(new statsglue::Glue(*statsFs, statsEnv, m));
+    const statsfile::Opened& o = glue->begin(acks, [](uint32_t) {});
+    TEST_ASSERT_TRUE(o.read == statsfile::Read::Loaded);
+    TEST_ASSERT_TRUE(glue->on());
+    TEST_ASSERT_EQUAL_size_t(0, statsFs->openNow());
+    stats->markBytes = glue->store().markBytes();
+    seq = stats->card->seq[0];
   }
   take({40960, 9216}, nullptr);              // the dance
   take({153600, 76800, 65536}, nullptr);     // the UI, Thumbs' pools among its blocks
@@ -3053,68 +3081,125 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     for (size_t n : asks) {
       void* p = ModelHeap::alloc(n);
       if (!p) {
+        TEST_ASSERT_NOT_NULL_MESSAGE(hist, "a decoder's block with no room");
         ++hist->carveFails;
         continue;
       }
       into->push_back(p);
     }
   };
-  // The rework's boot scan (its blocks at the top), and its end: the boot's
-  // save carved and freed, then the scan's blocks given back.
-  std::vector<void*> scanHeld;
-  auto scanBegin = [&] {
-    for (size_t n : rw->scan) {
-      void* p = topAlloc(n);
-      TEST_ASSERT_NOT_NULL(p);
-      scanHeld.push_back(p);
-    }
-  };
-  auto scanEnd = [&] {
-    carveAndFree(rw->bootSave);
-    for (void* p : scanHeld) ModelHeap::release(p);
-    scanHeld.clear();
-  };
-  using Scan = Rework::Scan;
   const bool opusAtBoot = hist && hist->opusAt == -1;
   bool opusOpen = false;
-  auto scanWithOpus = [&] {
-    scanBegin();
-    if (rw->opusUnder && opusAtBoot) {
-      carveInto(kOpusAsks, &opusBlocks);
-      opusOpen = true;
-    }
-    scanEnd();
+  // A start the listener asks at the boot (opusAt -1): held while the boot's
+  // fold holds overflow chunks (main.cpp's OutputHold: overflowHeld()).
+  auto bootStart = [&] {
+    if (!opusAtBoot || opusOpen) return;
+    if (glue && stats->startWaits && glue->overflowHeld()) return;
+    carveInto(kOpusAsks, &opusBlocks);
+    opusOpen = true;
   };
-  if (rw && rw->when == Scan::ScanFirst) scanWithOpus();
+  // The stats' part of the boot's scan (a reserve() before each piece of
+  // 128, then its slots: the ranges' block and the overflow's chunks at the
+  // top), the log above the card's MARK in the scan's order (plays.jnl, the
+  // newest, then plays.1.jnl). Then finishScan(): the boot's save, its
+  // overflow's tries at later passes, the board's waits apart (the join, an
+  // asked update and a start waiting meanwhile: nothing else carves), and
+  // the journal ready. From then on plays are written.
+  bool statsReady = false;
+  auto statsScan = [&] {
+    namespace sf = statsfold;
+    const uint32_t n = stats->slots;
+    const uint32_t newer = std::min(n, playlog::kFileSlots);  // plays.jnl's; the rest plays.1.jnl's
+    glue->scanBegan(false);
+    uint32_t pieces = 0;
+    auto fold = [&](uint32_t i, int f) {
+      if (pieces++ % 128 == 0 && !glue->reserve(128)) ++stats->reserveFailed;
+      const uint64_t at = sf::kMinMs + (570 + static_cast<uint64_t>(i) * 29 / n) * sf::kDayMs + (i % 24) * sf::kHourMs;
+      glue->slot(statsSlot(seq + i, i % stats->card->played, at), f);
+    };
+    for (uint32_t i = n - newer; i < n; ++i) fold(i, 0);
+    for (uint32_t i = 0; i < n - newer; ++i) fold(i, 1);
+    seq += n;
+    stats->rangesBytes = glue->rangesBytes();
+    stats->chunks = glue->fold().chunks();
+    stats->chunkBytes = glue->fold().held();
+  };
+  auto playing = [&] { return !opusBlocks.empty() || !flacBlocks.empty(); };
+  auto statsBootSave = [&] {
+    statsEnv.playing = playing();
+    statsEnv.fails = stats->bootFails;
+    glue->save(playlog::Folds::Why::Boot);
+    while (glue->retrying()) {
+      statsEnv.mono = glue->retryAtMs();
+      TEST_ASSERT_TRUE(glue->saveDue(false));
+      glue->saveNow(false);
+    }
+    statsEnv.fails = 0;
+    glue->ready();
+    TEST_ASSERT_FALSE(glue->scanHolds());
+    TEST_ASSERT_EQUAL_size_t(0, statsFs->openNow());
+    stats->tries = glue->tries();
+    stats->behind = glue->fold().behind();
+    statsReady = true;
+  };
+  // `n` plays written (a pass the play log's write gate lets through each),
+  // a save due first at each such pass (statsglue::turnOf()): the records'
+  // save at 64 records, or at 96 behind an update's fence (`fenced`).
+  auto statsPlays = [&](uint32_t n, bool fenced) {
+    namespace sf = statsfold;
+    auto due = [&] {
+      if (!glue->saveDue(fenced)) return;
+      statsEnv.playing = playing();
+      glue->saveNow(fenced);
+      TEST_ASSERT_EQUAL_size_t(0, statsFs->openNow());
+    };
+    for (uint32_t i = 0; i < n; ++i) {
+      due();
+      glue->written(statsSlot(seq++, track++ % stats->card->played, sf::kMinMs + 599ull * sf::kDayMs + i * 60000));
+    }
+    due();
+  };
+  using Scan = StatsRun::Scan;
+  const Scan when = stats ? stats->when : Scan::JoinFirst;
+  if (stats && when == Scan::ScanFirst) {
+    statsScan();
+    bootStart();  // (under the scan's blocks, only when no start waits)
+    statsBootSave();
+  }
+  if (hist && hist->opusFirst) bootStart();
+  u.opusFirst = opusOpen;
   joinNow(&u.bootLowest);
   u.bootJoined = ModelHeap::largest();
   u.bootTopKept = u.topKept;
-  if (rw && rw->when == Scan::JoinFirst) scanWithOpus();
-  if (rw && rw->when == Scan::ThroughBuild) scanBegin();
-  auto bootFold = [&] {
-    fold->resetPeak();
-    statsBoot(*fold, *stats);
-    stats->peak = fold->peak();
-    stats->held = fold->held();
-  };
-  // The boot's fold, after the boot's join; its blocks held from here (or,
-  // foldAfter, after the first update's take-back).
-  if (fold && !stats->foldAfter) bootFold();
-  if (opusAtBoot && !opusOpen) carveInto(kOpusAsks, &opusBlocks);
+  if (stats && when == Scan::JoinFirst) {
+    statsScan();
+    bootStart();
+    statsBootSave();
+  }
+  if (stats && when == Scan::ThroughBuild) {
+    statsScan();
+    bootStart();
+  }
+  bootStart();  // (after the boot's join: main's; or after the overflow's chunks went)
   for (int step = 0; step < steps; ++step) {
     if (hist && hist->flacStep == step) carveInto(kFlacAsks, &flacBlocks);
-    if (rw) carveAndFree(rw->save);  // (a records' save in the fence's pass)
-    // enterFence(): the queue, Thumbs' pools, the join, the stats' blocks
-    // (their save first), then the old index.
+    // The update step's pass that raises the fence: the records' save, due
+    // there, before it (the save waits while the fence is up).
+    if (stats && statsReady && stats->stepSaves) statsPlays(statsfold::kSaveAt, false);
+    // enterFence(): the queue, Thumbs' pools, the join, then the old index.
     for (void* p : queue) ModelHeap::release(p);
     for (void* p : thumbs) ModelHeap::release(p);
     queue.clear();
     thumbs.clear();
     join.release();
-    const bool gives = fold && stats->giveBack;
-    if (gives) statsGiveBack(*fold, *stats);
     index.clear();  // (the words go with it)
-    if (rw && rw->when == Scan::InFence && step == 0) scanBegin();
+    if (stats && when == Scan::InFence && step == 0) {
+      statsScan();
+      bootStart();
+    }
+    // The plays written behind the fence: the records' save at 96, whatever
+    // the fence (before the build, or after it).
+    if (stats && stats->fenceSave == 1 && step == 0) statsPlays(statsfold::kRecords, true);
     u.fence = ModelHeap::freeBlocks(64 * 1024);
     // The build, from D's records (or T's, D's rows Software rows).
     LibraryBuilder b(ModelHeap::alloc, ModelHeap::release);
@@ -3128,7 +3213,11 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     c.facts = &facts;
     const LibraryBuilder::Result r = b.build(index, c);
     TEST_ASSERT_TRUE(r.built);
-    if (rw && (rw->when == Scan::ThroughBuild || rw->when == Scan::InFence) && step == 0) scanEnd();
+    if (stats && (when == Scan::ThroughBuild || when == Scan::InFence) && step == 0) {
+      statsBootSave();
+      bootStart();
+    }
+    if (stats && stats->fenceSave == 2 && step == 0) statsPlays(statsfold::kRecords, true);
     if (mood.transfer) {
       TEST_ASSERT_TRUE(r.transferUsed);  // T's records, not a restart from D
       TEST_ASSERT_EQUAL_UINT32(card.files.size(), r.fromTransfer);
@@ -3143,10 +3232,15 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     take({204800, 256, 256, 110592, 24, 24}, &thumbs);
     u.largest = ModelHeap::largest();
     joinNow(&u.lowest);
-    // The stats' blocks again, the rejoin done (a pass that may carve).
-    if (gives) statsTakeAgain(*fold, *stats);
+    // An update asked before the boot's scan's first piece: the scan once
+    // it is over (the scan's pieces waiting for the rejoin too).
+    if (stats && when == Scan::AfterUpdate && step == 0) {
+      statsScan();
+      bootStart();
+      statsBootSave();
+    }
     if (hist) {
-      // The FLAC ends; the Dc; a records' save; the Opus opens (from here on).
+      // The FLAC ends; the Dc.
       if (hist->flacStep == step) {
         for (void* p : flacBlocks) ModelHeap::release(p);
         flacBlocks.clear();
@@ -3156,33 +3250,33 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
         joinNow(&u.lowest);
       }
     }
-    if (rw) carveAndFree(rw->save);
+    // Plays, and the records' save they bring due.
+    if (stats && statsReady && stats->stepSaves) statsPlays(statsfold::kSaveAt, false);
     if (hist) {
       if (hist->opusAt == step) carveInto(kOpusAsks, &opusBlocks);
       hist->joined.push_back(ModelHeap::largest());
     }
-    // The boot's scan, held through the update, folds now (foldAfter).
-    if (fold && stats->foldAfter && step == 0) bootFold();
     u.joined = ModelHeap::largest();
     if (hist) continue;  // (no memory check's give-back: run L had none)
-    // The next update's memory check, short on its table's block: the
-    // join given back (setGiveBack()), then the stats' blocks (the chain).
+    // The next update's memory check, short on its table's block: the join
+    // given back (setGiveBack()).
     join.release();
     u.joinOnly = ModelHeap::largest();
-    if (gives) statsGiveBack(*fold, *stats);
     u.givenBack = ModelHeap::largest();
     joinNow(&u.lowest);
-    if (gives) statsTakeAgain(*fold, *stats);
   }
   join.release();
   index.clear();
   for (void* p : opusBlocks) ModelHeap::release(p);
   for (void* p : flacBlocks) ModelHeap::release(p);
-  if (fold) {
-    fold->~Fold();
+  if (stats) {
+    TEST_ASSERT_TRUE_MESSAGE(statsReady, "the boot's scan never ended");
+    stats->saves = statsEnv.saves;
+    stats->wrote = statsEnv.wrote;
+    stats->compacted = statsEnv.compacted;
+    glue.reset();  // (MARK's block given back with its store)
     ModelHeap::release(glueAt);
   }
-  ModelHeap::release(resident);
   return u;
 }
 
@@ -3328,44 +3422,31 @@ void test_a_library_update_in_a_model_heap() {
 
 }
 
-// The listening stats' hash-keyed half in the same model (docs/LISTENING-
-// STATS.md 6.7; S1's StatsRun), against the run without them as the control
-// (the 19,412-track library, two update steps), at P = 2,214 and P = 19,478
-// played tracks: stats.bin's RCNT and TRKD as such a card keeps them
-// (P = 2,214: 1,365 RCNT rows, one chunk, and 1,000 TRKD rows, two; P =
-// 19,478: RCNT at its 4,096-row cap, three chunks, and TRKD at the forced
-// compaction's 96 KB, 4,096 rows in six: chunks of whole rows since S1's
-// gate after the give-back, which found 16,384 B chunks took a fourth and a
-// seventh for the caps' last rows, and this model 4,092 TRKD rows to fit
-// six), loaded at PlayHistory::begin()'s
-// place; then, after the boot's join, the boot's fold of a short log (300
-// slots) or of a full one never synced (13,106 slots, of 2,214 tracks; of
-// 4,096: TRKD's rows), its save landed, or (a full log's) refused, and then
-// the give-back's own save landed or refused too; or (the give-back review)
-// a full log's fold after the first update, asked before the scan's first
-// piece (the loaded blocks given back, the scan held through the update,
-// then folding after the take-back). At each update step the
-// stats give their blocks back (the owner's decision of 2026-11-11:
-// StatsGlue's giveBack(), at the fence after Auto DJ's join; MARK's block
-// kept) and take them again after the update's Live and Auto DJ's rejoin
-// (takeBack(): the re-read, the load's chunks again); "given back" is the
-// next memory check's give-back, the join's and then the stats' (the
-// chain, setGiveBack()). The mood plan's pass rule (9.5), with Auto DJ
-// placed and where the heap puts its blocks: the margin kept at the boot
-// and after the update; the fence's frees, the build and the Live step
-// leave the heap as Auto DJ off has it (with the same stats); given back,
-// off's block; joined (the stats' blocks taken again) within 122,880 B of
-// the control's, and at or over 245,764 B where the control is. Every shape
-// passes it; each one's figures are pinned, beside the run that holds the
-// blocks through the updates (S1 as first built, which failed the rule past
-// P = 2,214's short fold). Then the device's room (the give-back review):
-// the model's joined is about 100 KB over the device's, so the 245,764 B
-// clause never binds; what the take-back costs joined must fit the 16,368 B
-// the device has over that line after a FLAC update (MOOD-FILTERS Run D).
-// Every shape's joined is the control's. (With 16,384 B chunks two P =
-// 19,478 shapes cost one re-read chunk, 16,384 B, and the case failed on
-// them: the eleventh chunk the caps' last rows took, S1's gate after the
-// give-back.) A shape that crosses it is listed, and the case fails.
+// The listening stats in the same model (docs/LISTENING-STATS.md 5.14, S1's
+// rework, its R6; 6.7's case), against the run without them as the control
+// (the 19,412-track library, two update steps): the firmware's glue on a
+// card of P = 2,214 played tracks (stats.bin's TRKD 1,000 rows, the rest in
+// the base) or P = 19,478 (TRKD at the forced compaction's 4,096 rows, the
+// base 15,382), its object carved at PlayHistory::begin()'s place, its boot's
+// scan folding a log of 300 slots (one overflow chunk) or a full one never
+// synced (13,106 slots: 16 chunks), the boot's save landing, landing at its
+// second try, or failing all four (behind: the chunks given back, no save
+// after); the scan first (the boot's join waiting for its blocks), the join
+// first, or the scan after the first update (asked before its first
+// piece); and a card with 12 MARK rows (MARK's block, carved by the boot's
+// read in setup). Plays are written at each update's fence pass and after
+// it, each 64 bringing the records' save. The mood plan's pass rule (9.5),
+// with Auto DJ placed and where the heap puts its blocks: the margin kept
+// at the boot and after the update; the fence's frees, the build and the
+// Live step leave the heap as Auto DJ off has it (with the same stats); the
+// join given back, off's block; joined within 122,880 B of the control's
+// and at or over 245,764 B where the control is. And 5.14's own, stricter:
+// joined the control's, or under it by no more than the class of the
+// control's figure (ModelHeap::largest()'s rounding: 8,192 B at 360,436 B,
+// half the device's 16,368 B of room over the line after a FLAC update,
+// MOOD-FILTERS Run D, which the give-back's case held it to); the boot's
+// join the control's the same way. Nothing per track is held, so P changes
+// nothing but the saves' compactions. Every figure pinned.
 void test_the_listening_stats_in_a_model_heap() {
   const uint32_t tracks = 19412;
   const synthcard::Card card = synthcard::make(synth::userShape(tracks));
@@ -3392,102 +3473,102 @@ void test_the_listening_stats_in_a_model_heap() {
   }
   const UpdateRun off = libraryUpdates(Dj::Off, saved, records, card, 2);
   const UpdateRun on = libraryUpdates(Dj::Placed, saved, records, card, 2);
+  const StatsCard small = statsCard(2214, 1000), big = statsCard(19478, 4096), players = statsCard(2214, 1000, 12);
+  printf("[join] the listening stats' cards: P = 2,214 (%u sessions), P = 19,478 (%u), 12 players' MARK rows (%u)\n",
+         (unsigned)small.sessions, (unsigned)big.sessions, (unsigned)players.sessions);
+  using Scan = StatsRun::Scan;
   struct Shape {
-    uint32_t played, slots;
-    bool landed;        // the boot's save
-    bool saves;         // the give-back's save (a fold the boot's save didn't land)
-    bool after;         // the boot's fold after the first update (asked before the scan's first piece)
-    size_t held;        // the Fold's blocks after the boot's fold (pinned)
-    size_t given;       // the first give-back's bytes (pinned)
-    size_t retaken;     // the first re-read's (pinned)
-    size_t joined;      // Auto DJ placed, after the update, the stats taken again (pinned)
-    size_t heldJoined;  // ... with the blocks held through the updates instead (pinned)
+    const StatsCard* card;
+    uint32_t slots;
+    Scan when;
+    int bootFails;
+    // Pinned (MEASURED-HOST): MARK's block, the ranges' block and the
+    // overflow's chunks at the scan's end (bytes), the boot save's tries,
+    // the saves landed and asked, the compactions, behind; Auto DJ placed:
+    // the boot's join and joined after the second update.
+    size_t mark, ranges, chunks;
+    uint32_t tries, wrote, saves, compacted;
+    bool behind;
+    size_t bootJoined, joined;
   };
   const uint32_t full = 2 * playlog::kFileSlots;
+  const int all = static_cast<int>(statsglue::kBootTries);
   const Shape shapes[] = {
-      {2214, 300, true, true, false, 80224, 78688, 96616, 360436, 249844},
-      {2214, full, true, true, false, 129400, 127864, 129400, 360436, 180212},
-      {19478, 300, true, true, false, 194968, 193432, 178576, 360436, 249844},
-      {19478, full, true, true, false, 194968, 193432, 178576, 360436, 180212},
-      {2214, full, false, true, false, 145792, 127864, 129400, 360436, 180212},
-      {19478, full, false, true, false, 194968, 193432, 178576, 360436, 180212},
-      {2214, full, false, false, false, 145792, 144256, 80224, 360436, 180212},
-      {19478, full, false, false, false, 194968, 193432, 178576, 360436, 180212},
-      {2214, full, true, true, true, 129400, 78688, 80224, 360436, 249844},
-      {19478, full, true, true, true, 194968, 177040, 178576, 360436, 262132},
+      {&small, 300, Scan::ScanFirst, 0, 0, 1284, 16384, 1, 5, 5, 1, false, 589812, 360436},
+      {&small, full, Scan::ScanFirst, 0, 0, 1284, 262144, 1, 5, 5, 1, false, 589812, 360436},
+      {&big, 300, Scan::ScanFirst, 0, 0, 1284, 16384, 1, 5, 5, 1, false, 589812, 360436},
+      {&big, full, Scan::ScanFirst, 0, 0, 1284, 262144, 1, 5, 5, 1, false, 589812, 360436},
+      {&small, full, Scan::JoinFirst, 0, 0, 1284, 262144, 1, 5, 5, 1, false, 589812, 360436},
+      {&big, full, Scan::JoinFirst, 0, 0, 1284, 262144, 1, 5, 5, 1, false, 589812, 360436},
+      {&small, full, Scan::ScanFirst, 1, 0, 1284, 262144, 2, 5, 6, 1, false, 589812, 360436},
+      {&big, full, Scan::ScanFirst, 1, 0, 1284, 262144, 2, 5, 6, 1, false, 589812, 360436},
+      {&small, full, Scan::ScanFirst, all, 0, 1284, 262144, 4, 0, 4, 0, true, 589812, 360436},
+      {&big, full, Scan::ScanFirst, all, 0, 1284, 262144, 4, 0, 4, 0, true, 589812, 360436},
+      {&small, full, Scan::AfterUpdate, 0, 0, 1284, 262144, 1, 4, 4, 1, false, 589812, 360436},
+      {&big, full, Scan::AfterUpdate, 0, 0, 1284, 262144, 1, 4, 4, 1, false, 589812, 360436},
+      {&players, 70, Scan::ScanFirst, 0, 560, 1604, 16384, 1, 5, 5, 1, false, 589812, 360436},
   };
-  // The device's room over the mood plan's 245,764 B line: joined after a
-  // FLAC update and the rejoin, moods on, is 262,132 B on the device
-  // (docs/MOOD-FILTERS.md Run D), 16,368 B over it. The model's joined is
-  // about 100 KB over the device's, so the rule's 245,764 B clause never
-  // binds here; what the take-back costs joined must fit the device's room
-  // (the give-back review). A shape that doesn't is listed at the end, and
-  // the case fails (6.7).
-  constexpr size_t kDeviceRoom = 262132 - 245764;
-  std::string crossing;
+  auto classOf = [](size_t largest) {
+    return static_cast<size_t>(1) << (ModelHeap::fls(largest + ModelHeap::kPoison) - ModelHeap::kSlLog2);
+  };
+  const char* whenName[] = {"the scan first", "the join first", "the scan after the first update", "", ""};
+  std::string broken;
   for (const Shape& sh : shapes) {
     StatsRun sr;
-    sr.rcntRows = sh.played < 10000 ? 1365 : 4096;
-    sr.trkdRows = sh.played < 10000 ? 1000 : 4096;
-    sr.hashes = sh.played < 10000 ? sh.played : 4096;
+    sr.card = sh.card;
     sr.slots = sh.slots;
-    sr.landed = sh.landed;
-    sr.giveBackSaves = sh.saves;
-    sr.foldAfter = sh.after;
-    StatsRun held = sr;
-    sr.giveBack = true;
+    sr.when = sh.when;
+    sr.bootFails = sh.bootFails;
     StatsRun srOff = sr, srHeaps = sr;
     const UpdateRun statsOff = libraryUpdates(Dj::Off, saved, records, card, 2, MoodRun(), &srOff);
     const UpdateRun statsOn = libraryUpdates(Dj::Placed, saved, records, card, 2, MoodRun(), &sr);
     const UpdateRun statsHeaps = libraryUpdates(Dj::WhereThe, saved, records, card, 2, MoodRun(), &srHeaps);
-    const UpdateRun heldOn = libraryUpdates(Dj::Placed, saved, records, card, 2, MoodRun(), &held);
+    char w[160];
+    std::snprintf(w, sizeof(w), "P = %u, %u MARK rows, %u slots, %s, the boot's save %s", (unsigned)sh.card->played,
+                  (unsigned)sh.card->marks, (unsigned)sh.slots, whenName[static_cast<int>(sh.when)],
+                  sh.bootFails == 0 ? "landing" : sh.bootFails == 1 ? "landing at its second try" : "failing every try");
     const bool rule = statsOn.lowest >= kMargin && statsOn.bootLowest >= kMargin && statsHeaps.lowest >= kMargin &&
                       statsHeaps.bootLowest >= kMargin && statsOn.fence == statsOff.fence &&
                       statsHeaps.fence == statsOff.fence && statsOn.largest == statsOff.largest &&
                       statsOn.givenBack == statsOff.largest && statsHeaps.largest == statsOff.largest &&
                       statsHeaps.givenBack == statsOff.largest && statsOn.joined + 122880 >= on.joined &&
                       (statsOn.joined >= 245764 || on.joined < 245764);
-    const bool deviceRoom = statsOn.joined + kDeviceRoom >= on.joined;
-    printf("[join] with the listening stats at P = %u (stats.bin: RCNT %u rows, TRKD %u; the boot's fold%s: %u slots of "
-           "%u tracks, %u pieces without their room first; its save %s): the Fold's blocks %u B loaded, %u B at the "
-           "fold's peak, %u B held after it. Given back at each update (%u times, %u saves first%s): %u B, MARK's %u "
-           "B kept; %u B taken again by the re-read. The largest free block after the update %u B with Auto DJ off "
-           "(the control's %u B). Auto DJ on: free at least %u B while placing at the boot; after the update %u B, "
-           "joined (the stats taken again) %u B (%u B of it at the top), the join alone given back %u B, the stats' "
-           "blocks too %u B; free at least %u B while placing; the fence as off's: %s. Where the heap puts them: "
-           "joined %u B, given back %u B. Joined against the control's %u B: %+ld B (held through the updates: %u "
-           "B, %+ld B): the pass rule %s; within the device's %u B of room: %s\n",
-           (unsigned)sh.played, (unsigned)sr.rcntRows, (unsigned)sr.trkdRows,
-           sh.after ? " after the first update (asked before its first piece)" : "", (unsigned)sr.slots,
-           (unsigned)sr.hashes,
-           (unsigned)sr.reserveFailed, sh.landed ? "landed" : "refused", (unsigned)sr.loaded, (unsigned)sr.peak,
-           (unsigned)sr.held, (unsigned)sr.giveBacks, (unsigned)sr.saves,
-           sr.saves ? (sh.saves ? ", landed" : ", refused") : "", (unsigned)sr.given, (unsigned)sr.kept,
-           (unsigned)sr.retaken, (unsigned)statsOff.largest, (unsigned)off.largest, (unsigned)statsOn.bootLowest,
-           (unsigned)statsOn.largest, (unsigned)statsOn.joined, (unsigned)statsOn.topKept, (unsigned)statsOn.joinOnly,
-           (unsigned)statsOn.givenBack, (unsigned)statsOn.lowest, statsOn.fence == statsOff.fence ? "yes" : "no",
-           (unsigned)statsHeaps.joined, (unsigned)statsHeaps.givenBack, (unsigned)on.joined,
-           (long)statsOn.joined - (long)on.joined, (unsigned)heldOn.joined, (long)heldOn.joined - (long)on.joined,
-           rule ? "holds" : "FAILS", (unsigned)kDeviceRoom, deviceRoom ? "yes" : "NO");
-    char w[128];
-    std::snprintf(w, sizeof(w), "P = %u, %u slots%s, the boot's save %s, the give-back's %s", (unsigned)sh.played,
-                  (unsigned)sh.slots, sh.after ? " folded after the first update" : "",
-                  sh.landed ? "landed" : "refused", sh.saves ? "landed" : "refused");
-    TEST_ASSERT_FALSE_MESSAGE(sr.noMemory, w);
-    TEST_ASSERT_TRUE_MESSAGE(sr.peak < 512 * 1024, w);  // 5.6's and 11's figure for the fold's peak
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(sr.held, srOff.held, w);
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(sr.held, held.held, w);
-    // Two updates, each given back at its fence and again at the next
-    // memory check's give-back; a save first only where the fold held what
-    // the card's stats.bin didn't (the boot's save refused).
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(4, sr.giveBacks, w);
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(sh.landed ? 0 : 1, sr.saves, w);
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(statsfold::s1::kMarkBlockRows * sizeof(statsfold::s1::Fold::MarkRow), sr.kept, w);
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.held, sr.held, w);
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.given, sr.given, w);
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.retaken, sr.retaken, w);
+    const bool inClass = statsOn.joined + classOf(on.joined) >= on.joined &&
+                         statsOn.bootJoined + classOf(on.bootJoined) >= on.bootJoined;
+    printf("[join] with the listening stats (%s): MARK's block %u B, the ranges' block %u B, the overflow %u B in %u "
+           "chunks at the scan's end; the boot's save %u tries%s, %u of %u saves landed (%u compacting). Auto DJ off: "
+           "after the update %u B (the control's %u B). Auto DJ on: the boot's join %u B (the control's %u B), free "
+           "at least %u B while placing; after the update %u B, joined %u B (%u B of it at the top), the join given "
+           "back %u B; free at least %u B while placing; the fence as off's: %s. Where the heap puts them: joined %u "
+           "B, given back %u B. Joined against the control's %u B: %+ld B: the pass rule %s; within the control's "
+           "class (%u B): %s\n",
+           w, (unsigned)sr.markBytes, (unsigned)sr.rangesBytes, (unsigned)sr.chunkBytes, (unsigned)sr.chunks,
+           (unsigned)sr.tries, sr.behind ? ", behind" : "", (unsigned)sr.wrote, (unsigned)sr.saves,
+           (unsigned)sr.compacted, (unsigned)statsOff.largest, (unsigned)off.largest, (unsigned)statsOn.bootJoined,
+           (unsigned)on.bootJoined, (unsigned)statsOn.bootLowest, (unsigned)statsOn.largest, (unsigned)statsOn.joined,
+           (unsigned)statsOn.topKept, (unsigned)statsOn.givenBack, (unsigned)statsOn.lowest,
+           statsOn.fence == statsOff.fence ? "yes" : "no", (unsigned)statsHeaps.joined, (unsigned)statsHeaps.givenBack,
+           (unsigned)on.joined, (long)statsOn.joined - (long)on.joined, rule ? "holds" : "FAILS",
+           (unsigned)classOf(on.joined), inClass ? "yes" : "NO");
+    // The same stats whatever Auto DJ does.
+    for (const StatsRun* o : {&srOff, &srHeaps}) {
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(sr.rangesBytes, o->rangesBytes, w);
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(sr.chunkBytes, o->chunkBytes, w);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(sr.wrote, o->wrote, w);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(sr.saves, o->saves, w);
+    }
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, sr.reserveFailed, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.mark, sr.markBytes, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.ranges, sr.rangesBytes, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.chunks, sr.chunkBytes, w);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(sh.chunks / statsfold::kChunkBytes, sr.chunks, w);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(sh.tries, sr.tries, w);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(sh.wrote, sr.wrote, w);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(sh.saves, sr.saves, w);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(sh.compacted, sr.compacted, w);
+    TEST_ASSERT_TRUE_MESSAGE(sh.behind == sr.behind, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.bootJoined, statsOn.bootJoined, w);
     TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.joined, statsOn.joined, w);
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.heldJoined, heldOn.joined, w);
     // The mood plan's rule, whole, for every shape.
     TEST_ASSERT_TRUE_MESSAGE(statsOn.lowest >= kMargin, w);
     TEST_ASSERT_TRUE_MESSAGE(statsOn.bootLowest >= kMargin, w);
@@ -3499,22 +3580,16 @@ void test_the_listening_stats_in_a_model_heap() {
     TEST_ASSERT_EQUAL_size_t_MESSAGE(statsOff.largest, statsOn.givenBack, w);
     TEST_ASSERT_EQUAL_size_t_MESSAGE(statsOff.largest, statsHeaps.largest, w);
     TEST_ASSERT_EQUAL_size_t_MESSAGE(statsOff.largest, statsHeaps.givenBack, w);
-    TEST_ASSERT_TRUE_MESSAGE(statsOn.joined + 122880 >= on.joined, w);
-    TEST_ASSERT_TRUE_MESSAGE(statsOn.joined >= 245764 || on.joined < 245764, w);
     TEST_ASSERT_TRUE_MESSAGE(rule, w);
-    // Given back, the update's room is Auto DJ off's without the stats.
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(off.largest, statsOff.largest, w);
-    if (!deviceRoom) {
-      char c[160];
-      std::snprintf(c, sizeof(c), "%s%s (joined %+ld B)", crossing.empty() ? "" : "; ", w,
-                    (long)statsOn.joined - (long)on.joined);
-      crossing += c;
+    if (!inClass) {
+      char c[256];
+      std::snprintf(c, sizeof(c), "%s%s (joined %+ld B, the boot's join %+ld B)", broken.empty() ? "" : "; ", w,
+                    (long)statsOn.joined - (long)on.joined, (long)statsOn.bootJoined - (long)on.bootJoined);
+      broken += c;
     }
   }
-  if (!crossing.empty()) {
-    const std::string m = "the take-back costs joined more than the device's 16,368 B of room over the 245,764 B line "
-                          "(MOOD-FILTERS Run D; 6.7): " +
-                          crossing;
+  if (!broken.empty()) {
+    const std::string m = "joined under the control's by more than its class (5.14's R6): " + broken;
     TEST_FAIL_MESSAGE(m.c_str());
   }
 }
@@ -3569,35 +3644,53 @@ bool stepFails(size_t mainJoined, size_t joined) {
   return (mainJoined >= kLine && joined < kLine) || joined + kWithin < mainJoined;
 }
 
-// One kind of run over every history.
+// One kind of run over every history: main's (no stats), main's own
+// variation (its queue block longer), or the stats' (a StatsRun).
 struct Yard {
   std::string name;
+  size_t queueExtra = 0;
+  const StatsRun* stats = nullptr;
+  bool rework = false;  // the rework as built (the rule applies), not a shape a wait exists for
+  bool opusFirst = false;  // (main's) a start at the boot opening the Opus before the boot's join
   std::vector<std::vector<size_t>> joined;  // [history][update]
   std::vector<size_t> bootJoined;
+  std::vector<bool> opened;  // [history]: the Opus at the boot opened before the boot's join
+  std::vector<StatsRun> runs;  // [history]: what the stats came to
   uint32_t carveFails = 0, joinFails = 0;
+  std::vector<std::pair<size_t, int>> fails;  // (history, update) failing the rule
 };
 
 }  // namespace
 
-// 5.14's yardstick (R1 of its build plan): the multi-update model. The
-// 19,412-track library, 5 update steps, each history's decoders as the
-// device asks for their blocks (STATS_OLD_DECODERS: as the design was first
-// drawn), a Dc after each step where the history has one, no memory check's
-// give-back; joined per step against main's run (the stats off) in the same
-// history, the mood plan's rule at each step, and the boot's join equal to
-// main's. Beside them: main with its queue block 2,048 B longer (main's own
-// variation, the control); S1 as built (StatsRun at P = 2,214, 300 slots, the
-// give-back at each fence, taken again after the rejoin); and the rework's
-// design without one of its waits at a time, the shapes they exist for (a
-// full log's overflow held through update 0's build, carved in its fence, and
-// with the Opus opening under it, the scan first), which must fail.
-// The suite's build (the device's decoders, the named histories): every
-// figure pinned, the control failing no step, and S1 as built failing on
-// purpose (its list in the message) until R6 makes StatsRun the rework's. The
-// variants (STATS_OLD_DECODERS, STATS_WIDE; this case alone, outside the
-// suite: PLATFORMIO_BUILD_FLAGS and a build folder of their own): every step
-// the stats fail must be one the control fails too; their figures go in the
-// commit message.
+// 5.14's yardstick (R1 of its build plan; R6 made it the rework's): the
+// multi-update model. The 19,412-track library, 5 update steps, each
+// history's decoders as the device asks for their blocks
+// (STATS_OLD_DECODERS: as the design was first drawn), a Dc after each step
+// where the history has one, no memory check's give-back; joined per step
+// against main's run (the stats off) in the same history, the mood plan's
+// rule at each step, and the boot's join equal to main's (to main's with
+// the Opus opening before it, where a start at the boot opened it before
+// the boot's join: the order's own cost). Beside them: main with its queue
+// block 2,048 B longer (main's own variation, the control), and main with
+// a start at the boot before its join; the rework as built (the firmware's
+// glue, StatsRun, on a card of P = 2,214 played tracks): a usual boot (70
+// records: the last session's) with the scan first (the boot's join
+// waiting for its blocks) or the join first, a records' save at 96 in
+// update 0's fence before or after its build, a full log never synced (16
+// overflow chunks) with the scan first or the join first, its boot's save
+// failing all four tries (behind), and the scan after update 0 (asked
+// before its first piece); a start at the boot waits while the scan holds
+// overflow chunks, which as built is every scan (its first reserve() of
+// 128 slots carves one past the 96 records). And the rework without one of
+// its waits at a time, the shapes they exist for: a full log's overflow
+// held through update 0's build, or carved in its fence, which must break
+// the rule; the Opus opening under the scan's blocks (a full log's, a
+// usual boot's), reported. The suite's build (the device's decoders, the
+// named histories): every figure pinned, the control failing no step, nor
+// the rework. The variants (STATS_OLD_DECODERS, STATS_WIDE; this case
+// alone, outside the suite: PLATFORMIO_BUILD_FLAGS and a build folder of
+// their own): every step the rework fails must be one the control fails
+// too; their figures go in the commit message.
 void test_the_listening_stats_across_updates() {
   const uint32_t tracks = 19412;
   const synthcard::Card card = synthcard::make(synth::userShape(tracks));
@@ -3648,42 +3741,69 @@ void test_the_listening_stats_across_updates() {
   TEST_ASSERT_TRUE(flacTaken <= 82120 && 82120 - flacTaken < 128);
 #endif
 
+  // The kinds of run.
+  const StatsCard sc = statsCard(2214, 1000);
+  using Scan = StatsRun::Scan;
+  const uint32_t full = 2 * playlog::kFileSlots;
+  StatsRun usual;
+  usual.card = &sc;
+  StatsRun usualJoin = usual, fenceBefore = usual, fenceAfter = usual, usualUnder = usual;
+  usualJoin.when = Scan::JoinFirst;
+  usualUnder.startWaits = false;
+  fenceBefore.fenceSave = 1;
+  fenceAfter.fenceSave = 2;
+  StatsRun fullLog = usual;
+  fullLog.slots = full;
+  StatsRun fullJoin = fullLog, fullFails = fullLog, fullAfter = fullLog, through = fullLog, inFence = fullLog,
+           under = fullLog;
+  fullJoin.when = Scan::JoinFirst;
+  fullFails.bootFails = static_cast<int>(statsglue::kBootTries);
+  fullAfter.when = Scan::AfterUpdate;
+  through.when = Scan::ThroughBuild;
+  inFence.when = Scan::InFence;
+  under.startWaits = false;
+  std::vector<Yard> yards = {
+      {"main"},
+      {"main's queue 2,048 B longer", 2048},
+      {"main, a start at the boot opening the Opus before its join", 0, nullptr, false, true},
+      {"the rework: a usual boot (70 records), the scan first", 0, &usual, true},
+      {"the rework: a usual boot, the join first", 0, &usualJoin, true},
+      {"the rework: a records' save at 96 in update 0's fence, before its build", 0, &fenceBefore, true},
+      {"the rework: a records' save at 96 in update 0's fence, after its build", 0, &fenceAfter, true},
+      {"the rework: a full log (16 overflow chunks), the scan first, a start waiting", 0, &fullLog, true},
+      {"the rework: a full log, the join first, a start waiting", 0, &fullJoin, true},
+      {"the rework: a full log, its boot's save failing all four tries (behind)", 0, &fullFails, true},
+      {"the rework: a full log, the scan after update 0 (asked before its first piece)", 0, &fullAfter, true},
+      {"no update waiting for the scan: a full log's overflow held through update 0's build", 0, &through},
+      {"no scan waiting for the update: a full log's overflow carved in update 0's fence", 0, &inFence},
+      {"no start waiting: the Opus opening under a full log's overflow, the scan first", 0, &under},
+      {"no start waiting: the Opus opening under a usual boot's scan blocks, the scan first", 0, &usualUnder},
+  };
+  enum { kMain, kControl, kMainFirst, kRework };
+  const size_t kThrough = yards.size() - 4, kFence = yards.size() - 3, kUnder = yards.size() - 2,
+               kUsualUnder = yards.size() - 1;
+
   const std::vector<History> hs = yardstickHistories();
-  auto run = [&](Yard& y, size_t queueExtra, bool s1, const Rework* rw) {
+  const auto t0 = std::chrono::steady_clock::now();
+  for (Yard& y : yards) {
     for (const History& h : hs) {
       Updates up;
       up.opusAt = h.opusAt;
       up.flacStep = h.flacStep;
       up.dc = h.dc;
-      up.queueExtra = queueExtra;
-      StatsRun sr;
-      sr.rcntRows = 1365;
-      sr.trkdRows = 1000;
-      sr.hashes = 2214;
-      sr.slots = 300;
-      sr.giveBack = true;
-      const UpdateRun u = libraryUpdates(Dj::Placed, saved, records, card, 5, MoodRun(), s1 ? &sr : nullptr, &up, rw);
+      up.queueExtra = y.queueExtra;
+      up.opusFirst = y.opusFirst;
+      StatsRun sr = y.stats ? *y.stats : StatsRun();
+      const UpdateRun u = libraryUpdates(Dj::Placed, saved, records, card, 5, MoodRun(), y.stats ? &sr : nullptr, &up);
       TEST_ASSERT_EQUAL_size_t(5, up.joined.size());
       y.joined.push_back(up.joined);
       y.bootJoined.push_back(u.bootJoined);
+      y.opened.push_back(u.opusFirst);
+      y.runs.push_back(sr);
       y.carveFails += up.carveFails;
       y.joinFails += up.joinFails;
     }
-  };
-  const auto t0 = std::chrono::steady_clock::now();
-  Yard mainRun{"main"}, control{"main's queue 2,048 B longer"}, s1{"S1 as built (P = 2,214, 300 slots, the give-back)"};
-  run(mainRun, 0, false, nullptr);
-  run(control, 2048, false, nullptr);
-  run(s1, 0, true, nullptr);
-  const Rework through = fullLogOverflow(Rework::Scan::ThroughBuild);
-  const Rework inFence = fullLogOverflow(Rework::Scan::InFence);
-  const Rework under = fullLogOverflow(Rework::Scan::ScanFirst);
-  Yard throughRun{"no update waiting for the scan: a full log's overflow held through update 0's build"};
-  Yard fenceRun{"no scan waiting for the update: a full log's overflow carved in update 0's fence"};
-  Yard underRun{"no start waiting: the Opus opening under a full log's overflow, the scan first"};
-  run(throughRun, 0, false, &through);
-  run(fenceRun, 0, false, &inFence);
-  run(underRun, 0, false, &under);
+  }
   const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 
   // What each kind came to against main: per history, per named set, in all.
@@ -3692,7 +3812,9 @@ void test_the_listening_stats_across_updates() {
     int n = 0, fails = 0;
     std::string where;
   };
-  auto score = [&](const Yard& y, std::vector<std::pair<size_t, int>>* failing) {
+  const Yard& mainRun = yards[kMain];
+  for (size_t yi = 1; yi < yards.size(); ++yi) {
+    Yard& y = yards[yi];
     std::map<std::string, Score> sets;
     Score all;
     for (size_t i = 0; i < hs.size(); ++i) {
@@ -3703,20 +3825,26 @@ void test_the_listening_stats_across_updates() {
         const long long dlt = static_cast<long long>(j) - static_cast<long long>(m);
         const bool f = stepFails(m, j);
         printf(" %u: %u/%u (%+lld)%s", (unsigned)k, (unsigned)j, (unsigned)m, dlt, f ? " FAILS" : "");
-        for (Score* sc : {&all, hs[i].set[0] ? &sets[hs[i].set] : nullptr}) {
-          if (!sc) continue;
-          sc->sum += dlt;
-          sc->worst = std::min(sc->worst, dlt);
-          ++sc->n;
+        for (Score* sc2 : {&all, hs[i].set[0] ? &sets[hs[i].set] : nullptr}) {
+          if (!sc2) continue;
+          sc2->sum += dlt;
+          sc2->worst = std::min(sc2->worst, dlt);
+          ++sc2->n;
           if (f) {
-            ++sc->fails;
+            ++sc2->fails;
             char b[64];
-            std::snprintf(b, sizeof(b), "%s%s %u (%+lld B)", sc->where.empty() ? "" : ", ", hs[i].name.c_str(),
+            std::snprintf(b, sizeof(b), "%s%s %u (%+lld B)", sc2->where.empty() ? "" : ", ", hs[i].name.c_str(),
                           (unsigned)k, dlt);
-            sc->where += b;
+            sc2->where += b;
           }
         }
-        if (f && failing) failing->emplace_back(i, static_cast<int>(k));
+        if (f) y.fails.emplace_back(i, static_cast<int>(k));
+      }
+      if (y.stats) {
+        const StatsRun& r = y.runs[i];
+        printf(" | ranges %u B, %u chunks, %u tries%s, %u of %u saves landed (%u compacting)",
+               (unsigned)r.rangesBytes, (unsigned)r.chunks, (unsigned)r.tries, r.behind ? " (behind)" : "",
+               (unsigned)r.wrote, (unsigned)r.saves, (unsigned)r.compacted);
       }
       printf("\n");
     }
@@ -3729,147 +3857,193 @@ void test_the_listening_stats_across_updates() {
            (unsigned)hs.size(), y.name.c_str(), all.n ? static_cast<double>(all.sum) / all.n : 0.0, all.worst,
            all.fails, all.n, (unsigned)y.bootJoined[0], (unsigned)mainRun.bootJoined[0], (unsigned)y.carveFails,
            (unsigned)y.joinFails);
-    return all.fails;
-  };
-  std::vector<std::pair<size_t, int>> controlFails, s1Fails, throughFails, fenceFails, underFails;
-  score(control, &controlFails);
-  score(s1, &s1Fails);
-  score(throughRun, &throughFails);
-  score(fenceRun, &fenceFails);
-  score(underRun, &underFails);
-  printf("[stats-yard] %u histories, 6 kinds of run, 5 updates each: %.1f s\n", (unsigned)hs.size(), secs);
-
-  // Main's, the control's and S1's runs: the decoders' blocks and every join
-  // placed (a shape the waits exist for may leave a decoder no room: with
-  // the old shapes a full log's overflow held through the build does, twice
-  // in the wide set); the boot's join the same in every history.
-  for (const Yard* y : {&mainRun, &control, &s1}) {
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, y->carveFails, y->name.c_str());
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, y->joinFails, y->name.c_str());
   }
-  for (size_t i = 0; i < hs.size(); ++i) {
-    TEST_ASSERT_EQUAL_size_t(mainRun.bootJoined[0], mainRun.bootJoined[i]);
-    TEST_ASSERT_EQUAL_size_t(mainRun.bootJoined[0], control.bootJoined[i]);
-    TEST_ASSERT_EQUAL_size_t(s1.bootJoined[0], s1.bootJoined[i]);
-  }
-  auto among = [](const std::vector<std::pair<size_t, int>>& a, const std::vector<std::pair<size_t, int>>& b) {
-    for (const auto& f : a)
-      if (std::find(b.begin(), b.end(), f) == b.end()) return false;
-    return true;
-  };
-  // The shapes the waits exist for fail steps the control doesn't (with the
-  // old shapes the Opus under the overflow fails only the control's own,
-  // as the design's run found: it is the device's decoders that need a
-  // start to wait).
-  TEST_ASSERT_FALSE_MESSAGE(among(throughFails, controlFails), throughRun.name.c_str());
-  TEST_ASSERT_FALSE_MESSAGE(among(fenceFails, controlFails), fenceRun.name.c_str());
-#ifndef STATS_OLD_DECODERS
-  TEST_ASSERT_FALSE_MESSAGE(among(underFails, controlFails), underRun.name.c_str());
-#endif
+  printf("[stats-yard] %u histories, %u kinds of run, 5 updates each: %.1f s\n", (unsigned)hs.size(),
+         (unsigned)yards.size(), secs);
 
-#if !defined(STATS_OLD_DECODERS) && !defined(STATS_WIDE)
-  // The suite's build: every figure pinned (MEASURED-HOST), joined after
-  // each of the 5 updates: main's, the control's, S1 as built's, then the
-  // three shapes the waits exist for (held through update 0's build, carved
-  // in its fence, the Opus under it with the scan first).
-  struct Pin {
-    const char* name;
-    size_t main[5], control[5], s1[5], through[5], fence[5], under[5];
-  };
-  const Pin pins[] = {
-      {"H1", {360436, 360436, 360436, 360436, 360436}, {360436, 360436, 360436, 360436, 360436},
-       {360436, 360436, 360436, 360436, 360436}, {401396, 360436, 360436, 360436, 360436},
-       {385012, 360436, 360436, 360436, 360436}, {360436, 360436, 360436, 360436, 360436}},
-      {"H2", {249844, 249844, 360436, 180212, 270324}, {249844, 249844, 360436, 180212, 270324},
-       {180212, 249844, 249844, 180212, 249844}, {225268, 249844, 311284, 180212, 249844},
-       {249844, 270324, 360436, 180212, 270324}, {180212, 180212, 249844, 184308, 249844}},
-      {"H3", {360436, 360436, 360436, 270324, 249844}, {360436, 360436, 360436, 270324, 249844},
-       {360436, 360436, 294900, 159732, 159732}, {401396, 360436, 294900, 176116, 286708},
-       {385012, 360436, 360436, 270324, 249844}, {360436, 360436, 360436, 270324, 249844}},
-      {"H4", {294900, 172020, 172020, 106484, 172020}, {294900, 172020, 172020, 106484, 172020},
-       {294900, 159732, 159732, 159732, 270324}, {335860, 249844, 360436, 249844, 249844},
-       {262132, 204788, 176116, 176116, 176116}, {294900, 172020, 172020, 106484, 172020}},
-      {"H5", {249844, 249844, 360436, 270324, 360436}, {249844, 249844, 360436, 270324, 360436},
-       {180212, 249844, 249844, 249844, 249844}, {225268, 249844, 311284, 249844, 360436},
-       {249844, 270324, 360436, 270324, 249844}, {180212, 180212, 249844, 294900, 249844}},
-      {"H6", {249844, 294900, 286708, 204788, 180212}, {249844, 294900, 286708, 204788, 176116},
-       {249844, 294900, 192500, 192500, 192500}, {335860, 360436, 249844, 249844, 270324},
-       {303092, 294900, 135156, 135156, 135156}, {249844, 294900, 286708, 204788, 176116}},
-      {"H7", {360436, 360436, 360436, 360436, 360436}, {360436, 360436, 360436, 360436, 360436},
-       {360436, 249844, 360436, 360436, 360436}, {401396, 311284, 360436, 360436, 360436},
-       {385012, 352244, 360436, 360436, 360436}, {360436, 360436, 360436, 360436, 360436}},
-      {"H8", {360436, 360436, 360436, 294900, 221172}, {360436, 360436, 360436, 294900, 221172},
-       {360436, 360436, 360436, 294900, 110580}, {401396, 360436, 360436, 294900, 180212},
-       {385012, 360436, 360436, 294900, 221172}, {360436, 360436, 360436, 294900, 221172}},
-      {"K1", {360436, 360436, 360436, 360436, 360436}, {360436, 360436, 360436, 360436, 360436},
-       {360436, 360436, 360436, 360436, 249844}, {401396, 360436, 360436, 360436, 360436},
-       {385012, 360436, 360436, 360436, 360436}, {360436, 360436, 360436, 360436, 360436}},
-      {"K2", {360436, 360436, 360436, 360436, 360436}, {360436, 360436, 360436, 360436, 360436},
-       {360436, 360436, 360436, 360436, 249844}, {401396, 360436, 360436, 360436, 360436},
-       {385012, 360436, 360436, 360436, 360436}, {360436, 360436, 360436, 360436, 360436}},
-      {"K3", {249844, 249844, 180212, 311284, 270324}, {249844, 249844, 180212, 249844, 270324},
-       {180212, 249844, 139252, 249844, 249844}, {225268, 249844, 180212, 311284, 249844},
-       {249844, 270324, 180212, 249844, 249844}, {180212, 180212, 192500, 249844, 294900}},
-      {"K4", {249844, 249844, 360436, 270324, 180212}, {249844, 249844, 360436, 270324, 180212},
-       {180212, 249844, 249844, 249844, 180212}, {225268, 249844, 311284, 249844, 212980},
-       {249844, 270324, 360436, 270324, 294900}, {180212, 180212, 249844, 294900, 188404}},
-      {"D", {249844, 249844, 180212, 311284, 270324}, {249844, 249844, 180212, 249844, 270324},
-       {180212, 249844, 217076, 249844, 249844}, {225268, 249844, 180212, 311284, 249844},
-       {249844, 270324, 192500, 249844, 249844}, {180212, 180212, 192500, 249844, 294900}},
-  };
-  TEST_ASSERT_EQUAL_size_t(sizeof(pins) / sizeof(pins[0]), hs.size());
-  for (size_t i = 0; i < hs.size(); ++i) {
-    const char* w = hs[i].name.c_str();
-    TEST_ASSERT_EQUAL_STRING(pins[i].name, w);
-    for (size_t k = 0; k < 5; ++k) {
-      TEST_ASSERT_EQUAL_size_t_MESSAGE(pins[i].main[k], mainRun.joined[i][k], w);
-      TEST_ASSERT_EQUAL_size_t_MESSAGE(pins[i].control[k], control.joined[i][k], w);
-      TEST_ASSERT_EQUAL_size_t_MESSAGE(pins[i].s1[k], s1.joined[i][k], w);
-      TEST_ASSERT_EQUAL_size_t_MESSAGE(pins[i].through[k], throughRun.joined[i][k], w);
-      TEST_ASSERT_EQUAL_size_t_MESSAGE(pins[i].fence[k], fenceRun.joined[i][k], w);
-      TEST_ASSERT_EQUAL_size_t_MESSAGE(pins[i].under[k], underRun.joined[i][k], w);
+  // Main's, the control's and the rework's runs: the decoders' blocks and
+  // every join placed (a shape the waits exist for may leave a decoder no
+  // room: with the old shapes a full log's overflow held through the build
+  // does); the stats' saves each landed (but a boot's whose tries all fail:
+  // behind, none after), their scan's blocks the same in every history.
+  const Yard& control = yards[kControl];
+  for (const Yard& y : yards) {
+    if (y.stats && !y.rework) continue;
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, y.carveFails, y.name.c_str());
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, y.joinFails, y.name.c_str());
+    if (!y.stats) continue;
+    for (size_t i = 0; i < hs.size(); ++i) {
+      const StatsRun& r = y.runs[i];
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, r.reserveFailed, y.name.c_str());
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(y.runs[0].rangesBytes, r.rangesBytes, y.name.c_str());
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(y.runs[0].chunks, r.chunks, y.name.c_str());
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(y.runs[0].saves, r.saves, y.name.c_str());
+      if (y.stats->bootFails) {
+        TEST_ASSERT_TRUE_MESSAGE(r.behind, y.name.c_str());
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(statsglue::kBootTries, r.tries, y.name.c_str());
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, r.wrote, y.name.c_str());
+      } else {
+        TEST_ASSERT_FALSE_MESSAGE(r.behind, y.name.c_str());
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, r.tries, y.name.c_str());
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(r.saves, r.wrote, y.name.c_str());
+      }
     }
   }
-  // The boot's join: main's (and the control's) 589,812 B; S1 as built's
-  // 507,892 B (its load's chunks, carved in setup).
-  TEST_ASSERT_EQUAL_size_t(589812, mainRun.bootJoined[0]);
-  TEST_ASSERT_EQUAL_size_t(507892, s1.bootJoined[0]);
-  // The control fails no step here, so the rule for the stats is every
-  // step; each shape the waits exist for fails these (MEASURED-HOST: held
-  // through the build H2 0, H3 3, H5 0, K3 0, K4 0, D 0; carved in the fence
-  // H6 2; the Opus under it H2, H5, K3, K4 and D at 0 and 1).
-  TEST_ASSERT_EQUAL_size_t(0, controlFails.size());
-  TEST_ASSERT_EQUAL_size_t(6, throughFails.size());
-  TEST_ASSERT_EQUAL_size_t(1, fenceFails.size());
-  TEST_ASSERT_EQUAL_size_t(10, underFails.size());
-  TEST_ASSERT_EQUAL_size_t(8, s1Fails.size());
-  for (const Yard* y : {&throughRun, &fenceRun, &underRun}) {
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, y->carveFails, y->name.c_str());
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, y->joinFails, y->name.c_str());
-  }
-#endif
-
-  // The rule: the boot's join main's, and every step the stats fail one the
-  // control fails too (none, in the suite's build). S1 as built breaks it:
-  // listed, and the case fails (R6 replaces StatsRun with the rework's).
+  // The rule (5.14): the boot's join main's in every history (main's with
+  // the Opus opening before it where a start at the boot opened it before
+  // the boot's join: the order's cost, not the stats'), and every step the
+  // stats fail one the control fails too (none, in the suite's build). What
+  // breaks it, for each kind of run.
+  const Yard& mainFirst = yards[kMainFirst];
+  auto breaks = [&](const Yard& y) {
+    std::string b;
+    for (size_t i = 0; i < hs.size(); ++i) {
+      const Yard& ref = y.opened[i] ? mainFirst : mainRun;
+      if (y.bootJoined[i] == ref.bootJoined[i]) continue;
+      char t[200];
+      std::snprintf(t, sizeof(t), "%s%s's boot's join %u B (%s %u B)", b.empty() ? "" : ", ", hs[i].name.c_str(),
+                    (unsigned)y.bootJoined[i], y.opened[i] ? "main's with the Opus first" : "main's",
+                    (unsigned)ref.bootJoined[i]);
+      b += t;
+    }
+    for (const auto& f : y.fails) {
+      if (std::find(control.fails.begin(), control.fails.end(), f) != control.fails.end()) continue;
+      const size_t m = mainRun.joined[f.first][f.second], j = y.joined[f.first][f.second];
+      char t[160];
+      std::snprintf(t, sizeof(t), "%s%s's step %d %u B (main's %u B, %+lld B)", b.empty() ? "" : ", ",
+                    hs[f.first].name.c_str(), f.second, (unsigned)j, (unsigned)m,
+                    static_cast<long long>(j) - static_cast<long long>(m));
+      b += t;
+    }
+    return b;
+  };
   std::string broken;
-  if (s1.bootJoined[0] != mainRun.bootJoined[0]) {
-    char b[96];
-    std::snprintf(b, sizeof(b), "the boot's join %u B (main's %u B)", (unsigned)s1.bootJoined[0],
-                  (unsigned)mainRun.bootJoined[0]);
-    broken += b;
+  for (size_t yi = 1; yi < yards.size(); ++yi) {
+    const Yard& y = yards[yi];
+    const std::string b = breaks(y);
+    printf("[stats-yard] the rule | %s: %s%s\n", y.name.c_str(), b.empty() ? "holds" : "broken: ", b.c_str());
+    if (y.rework && !b.empty()) broken += (broken.empty() ? std::string() : std::string("; ")) + y.name + ": " + b;
   }
-  for (const auto& f : s1Fails) {
-    if (std::find(controlFails.begin(), controlFails.end(), f) != controlFails.end()) continue;
-    const size_t m = mainRun.joined[f.first][f.second], j = s1.joined[f.first][f.second];
-    char b[128];
-    std::snprintf(b, sizeof(b), "%s%s's step %d %u B (main's %u B, %+lld B)", broken.empty() ? "" : "; ",
-                  hs[f.first].name.c_str(), f.second, (unsigned)j, (unsigned)m,
-                  static_cast<long long>(j) - static_cast<long long>(m));
-    broken += b;
+  for (size_t i = 0; i < hs.size(); ++i) TEST_ASSERT_EQUAL_size_t(mainRun.bootJoined[i], control.bootJoined[i]);
+  // The shapes the waits exist for: a full log's overflow held through
+  // update 0's build, or carved in its fence, breaks it in every build. The
+  // Opus opening under the scan's blocks (no start waiting) is reported,
+  // not asked to: with the firmware's blocks it costs the boot's join one
+  // class under main's with the Opus first with the old shapes (450,548 B
+  // against 466,932 B), and nothing with the device's decoders.
+  TEST_ASSERT_FALSE_MESSAGE(breaks(yards[kThrough]).empty(), yards[kThrough].name.c_str());
+  TEST_ASSERT_FALSE_MESSAGE(breaks(yards[kFence]).empty(), yards[kFence].name.c_str());
+
+#if !defined(STATS_OLD_DECODERS) && !defined(STATS_WIDE)
+  // The suite's build: every figure pinned (MEASURED-HOST), the boot's join
+  // and joined after each of the 5 updates, the histories in hs's order:
+  // main's, the control's, main's with the Opus opening before the boot's
+  // join, the rework's (a usual boot, the scan first), and three shapes
+  // (held through update 0's build, carved in its fence, the Opus under a
+  // full log's overflow). The rework's other seven kinds give its figures
+  // in every history, and the Opus under a usual boot's scan blocks gives
+  // the Opus under a full log's.
+  struct Pin {
+    size_t boot, joined[5];
+  };
+  const Pin pins[][13] = {
+      {  // main
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {249844, 249844, 360436, 180212, 270324}},
+          {589812, {360436, 360436, 360436, 270324, 249844}}, {589812, {294900, 172020, 172020, 106484, 172020}},
+          {589812, {249844, 249844, 360436, 270324, 360436}}, {589812, {249844, 294900, 286708, 204788, 180212}},
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 294900, 221172}},
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 360436, 360436}},
+          {589812, {249844, 249844, 180212, 311284, 270324}}, {589812, {249844, 249844, 360436, 270324, 180212}},
+          {589812, {249844, 249844, 180212, 311284, 270324}},
+      },
+      {  // the control
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {249844, 249844, 360436, 180212, 270324}},
+          {589812, {360436, 360436, 360436, 270324, 249844}}, {589812, {294900, 172020, 172020, 106484, 172020}},
+          {589812, {249844, 249844, 360436, 270324, 360436}}, {589812, {249844, 294900, 286708, 204788, 176116}},
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 294900, 221172}},
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 360436, 360436}},
+          {589812, {249844, 249844, 180212, 249844, 270324}}, {589812, {249844, 249844, 360436, 270324, 180212}},
+          {589812, {249844, 249844, 180212, 249844, 270324}},
+      },
+      {  // main, the Opus first
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {466932, {249844, 249844, 360436, 116724, 270324}},
+          {589812, {360436, 360436, 360436, 270324, 249844}}, {589812, {294900, 172020, 172020, 106484, 172020}},
+          {466932, {249844, 249844, 360436, 270324, 249844}}, {589812, {249844, 294900, 286708, 204788, 180212}},
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 294900, 221172}},
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 360436, 360436}},
+          {466932, {249844, 249844, 180212, 249844, 270324}}, {466932, {249844, 249844, 360436, 270324, 294900}},
+          {466932, {249844, 249844, 180212, 249844, 270324}},
+      },
+      {  // the rework
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {249844, 249844, 360436, 180212, 270324}},
+          {589812, {360436, 360436, 360436, 270324, 249844}}, {589812, {294900, 172020, 172020, 106484, 172020}},
+          {589812, {249844, 249844, 360436, 270324, 249844}}, {589812, {249844, 294900, 286708, 204788, 176116}},
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 294900, 221172}},
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 360436, 360436}},
+          {589812, {249844, 249844, 180212, 249844, 270324}}, {589812, {249844, 249844, 360436, 270324, 294900}},
+          {589812, {249844, 249844, 180212, 249844, 270324}},
+      },
+      {  // held through the build
+          {589812, {409588, 360436, 360436, 360436, 360436}}, {589812, {335860, 176116, 176116, 143348, 176116}},
+          {589812, {409588, 360436, 294900, 176116, 286708}}, {589812, {344052, 249844, 360436, 249844, 249844}},
+          {589812, {335860, 176116, 176116, 286708, 176116}}, {589812, {450548, 360436, 249844, 249844, 270324}},
+          {589812, {409588, 425972, 360436, 360436, 360436}}, {589812, {409588, 360436, 360436, 294900, 180212}},
+          {589812, {409588, 360436, 360436, 360436, 360436}}, {589812, {409588, 360436, 360436, 360436, 360436}},
+          {589812, {335860, 176116, 110580, 176116, 286708}}, {589812, {335860, 176116, 176116, 286708, 163828}},
+          {589812, {335860, 176116, 188404, 176116, 286708}},
+      },
+      {  // carved in the fence
+          {589812, {385012, 360436, 360436, 360436, 360436}}, {589812, {249844, 270324, 360436, 180212, 270324}},
+          {589812, {385012, 360436, 360436, 270324, 249844}}, {589812, {262132, 204788, 176116, 176116, 176116}},
+          {589812, {249844, 270324, 360436, 270324, 249844}}, {589812, {303092, 294900, 135156, 135156, 135156}},
+          {589812, {385012, 352244, 360436, 360436, 360436}}, {589812, {385012, 360436, 360436, 294900, 221172}},
+          {589812, {385012, 360436, 360436, 360436, 360436}}, {589812, {385012, 360436, 360436, 360436, 360436}},
+          {589812, {249844, 270324, 180212, 249844, 249844}}, {589812, {249844, 270324, 360436, 270324, 294900}},
+          {589812, {249844, 270324, 192500, 249844, 249844}},
+      },
+      {  // the Opus under a full log's overflow
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {466932, {249844, 249844, 360436, 112628, 270324}},
+          {589812, {360436, 360436, 360436, 270324, 249844}}, {589812, {294900, 172020, 172020, 106484, 172020}},
+          {466932, {249844, 249844, 360436, 270324, 249844}}, {589812, {249844, 294900, 286708, 204788, 176116}},
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 294900, 221172}},
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 360436, 360436}},
+          {466932, {249844, 249844, 180212, 249844, 249844}}, {466932, {249844, 249844, 360436, 270324, 249844}},
+          {466932, {249844, 249844, 180212, 249844, 249844}},
+      },
+  };
+  const size_t pinned[] = {kMain, kControl, kMainFirst, kRework, kThrough, kFence, kUnder};
+  TEST_ASSERT_EQUAL_size_t(sizeof(pins) / sizeof(pins[0]), sizeof(pinned) / sizeof(pinned[0]));
+  TEST_ASSERT_EQUAL_size_t(13, hs.size());
+  for (size_t p = 0; p < sizeof(pinned) / sizeof(pinned[0]); ++p) {
+    const Yard& y = yards[pinned[p]];
+    for (size_t i = 0; i < hs.size(); ++i) {
+      const std::string w = y.name + ", " + hs[i].name;
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(pins[p][i].boot, y.bootJoined[i], w.c_str());
+      for (size_t k = 0; k < 5; ++k) TEST_ASSERT_EQUAL_size_t_MESSAGE(pins[p][i].joined[k], y.joined[i][k], w.c_str());
+    }
   }
+  auto same = [&](size_t a, size_t b) {
+    for (size_t i = 0; i < hs.size(); ++i) {
+      const std::string w = yards[b].name + ", " + hs[i].name;
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(yards[a].bootJoined[i], yards[b].bootJoined[i], w.c_str());
+      TEST_ASSERT_TRUE_MESSAGE(yards[a].joined[i] == yards[b].joined[i], w.c_str());
+    }
+  };
+  for (size_t yi = kRework + 1; yi < kThrough; ++yi) same(kRework, yi);
+  same(kUnder, kUsualUnder);
+  // The control fails no step here, so the rule for the stats is every
+  // step. Held through the build fails 13 (H2 1, 2, 4; H3 3; H5 1, 2, 4; K3
+  // 1, 3; K4 1, 2; D 1, 3), carved in the fence H6's step 2; the Opus under
+  // the scan's blocks none, its boot's join main's with the Opus first.
+  TEST_ASSERT_EQUAL_size_t(0, control.fails.size());
+  TEST_ASSERT_EQUAL_size_t(0, mainFirst.fails.size());
+  TEST_ASSERT_EQUAL_size_t(13, yards[kThrough].fails.size());
+  TEST_ASSERT_EQUAL_size_t(1, yards[kFence].fails.size());
+  TEST_ASSERT_TRUE(breaks(yards[kUnder]).empty());
+  TEST_ASSERT_TRUE(breaks(yards[kUsualUnder]).empty());
+#endif
   if (!broken.empty()) {
-    const std::string m = "S1 as built fails 5.14's yardstick (the rework, R6, is owed): " + broken;
+    const std::string m = "the rework breaks 5.14's yardstick: " + broken;
     TEST_FAIL_MESSAGE(m.c_str());
   }
 }
