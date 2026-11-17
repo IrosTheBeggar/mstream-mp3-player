@@ -7559,9 +7559,11 @@ plan's 5.14 (R1-R7, 2026-11-16) after its second device round. Every play
 on the card, from every player that wrote its log, is counted from the
 play log (2.20) into `/.player/stats.bin` and the base file it names,
 `stats-<gen>.bin` (2.12.6's names; the format is that plan's 5.2-5.3,
-which no software reads), nothing on the screen yet. RAM holds a fixed
-resident set of at most 3,584 B (HEAD, MARK's first 16 rows and up to 96
-records: the slots that count folded since the last save); the aggregate
+which no software reads), nothing on the screen yet. Internal RAM holds
+a fixed resident set of at most 2,048 B (HEAD, MARK's first 16 rows and up
+to 40 records: the slots that count folded since the last save), and
+PSRAM nothing of the stats between calls but the boot's scan's blocks
+(since 2026-11-17: the plan's 5.14, "Moved to internal RAM"); the aggregate
 is in `stats.bin` alone, and every save merges the records into it as it
 streams. lib/core `StatsFold` (the fold: HEAD, MARK, the records and a
 boot's overflow), `StatsFile` (the card's files: the read, the streaming
@@ -7571,11 +7573,15 @@ log's `playlog::Folds`) are portable and host-tested against
 (`test/fixtures/card/stats`, made by card_fixtures.py: 2.17's item 10);
 `app/ListeningStats`, a member of `app/PlayHistory`, is the firmware's
 side. Built for `core2` and `core2-dio` with every guard. S1 as first
-built ran on the Core2 in two device rounds (below); **the rework is
-host-gated and not flashed**: its gate is met on the host (2026-11-16,
-the plan's section 1, "The rework's gate"), and its device re-run
-against main's figures (the plan's 5.14) waits for the owner's
-go-ahead. `device.txt` gains no key:
+built ran on the Core2 in two device rounds (below). The rework's gate was
+met on the host (2026-11-16, the plan's section 1, "The rework's gate"),
+and its device re-run (2026-11-17, against main's figures in the same
+sequence) matched main's PSRAM at every point but one: after a library
+update made while a FLAC played, 106,484 B largest free against main's
+188,404 B, the glue's 3.2 KB object having moved Auto DJ's kept block out
+of its hole. By the owner's decision ("Move it") the resident set is in
+internal RAM since; **that build is host-gated and not flashed**, and its
+device re-run waits for the owner's go-ahead. `device.txt` gains no key:
 the transfer never reads the stats (2.11). What the code decided where
 the plan left room (the plan's text amended in the same commits; its
 section 1 and 5.14's "As built" notes list the changes):
@@ -7609,18 +7615,32 @@ section 1 and 5.14's "As built" notes list the changes):
   the stats; `tools/playlog.py`'s `boot_seq()` and the vectors' sixth
   `atBoot` case (NVS behind ACKS) with it. Dropping it undoes those, and
   two of the stats' sessions (`nvs-back`, `log-deleted`) lose plays.
-- **The resident set** (the plan's 5.14). One block, the glue's object
-  (`statsglue::Glue`: the fold's HEAD, MARK's first 16 rows of 28 B and
-  the 96 records of 20 B, the store's copy of the card's header, the
-  last read's and the last save's reports, the counters), carved once with
-  `psramNew` in `PlayHistory::begin()` and never freed: 3,200 B on the
-  device (`xtensa-esp-elf-g++`'s `sizeof`; 3,368 B on the 64-bit host),
-  under a `static_assert` of 3,584 B in app/ListeningStats (a budget S2-S6
-  may grow it to, not a figure the heap model found). A card with more than
-  8 MARK rows (each player or NVS erase adds one) gets one block more at
-  the boot's read, its rows and 8 more, kept for the session. Nothing else
-  is held between saves: HOUR, DAYS, RCNT and TRKD are read from the card
-  at each save, and no library update asks anything of the stats.
+- **The resident set** (the plan's 5.14, "Moved to internal RAM",
+  2026-11-17). One object, the glue's (`statsglue::Glue`: the fold's HEAD,
+  MARK's first 16 rows of 28 B and the 40 records of 20 B, the store's
+  copy of the card's header, the last read's and the last save's reports,
+  Hm's 4 log keys, the counters), in internal DRAM's `.bss`
+  (app/ListeningStats' `s_glue`, made with placement new in
+  `PlayHistory::begin()`, never destroyed; not an internal-heap carve, so
+  it splits no free block another internal carve would take, and can't
+  fail): 1,992 B on the device (`xtensa-esp32-elf-g++`'s `sizeof`), under
+  a `static_assert` of 2,048 B, internal RAM's margin (the plan's 11: it
+  keeps OPUS.md's G5 floors at the lowest figures held with the
+  headphones linked, 45,468 B under a card job and 52 KB steady; the
+  Rescan's 43 KB under a Bluetooth play is the owner's call). Hence 40
+  records, not the design's 96, and their save each 24 plays, not 64;
+  `tools/statsref.py`'s `RECORDS` and `SAVE_AT` and its sessions with them.
+  Before it (the rework as first built) the object was a 3,200 B PSRAM
+  block under a 3,584 B budget. A card with more than 8 MARK rows (each
+  player or NVS erase adds one) gets one block more at the boot's read,
+  its rows and 8 more, on the internal heap (`statsglue::Memory::keep`:
+  `heap_caps_malloc(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)`), kept for the
+  session. Nothing else is held between saves: HOUR, DAYS, RCNT and TRKD
+  are read from the card at each save, no library update asks anything of
+  the stats, and every PSRAM block they carve is given back in its call
+  (a read's, save's or look's work memory, its FatFiles and FILINFOs) or
+  by the boot's scan's end (the ranges' block; a full log's overflow once
+  its save lands or after its last try).
 - **The read** (the plan's 5.4), in `PlayHistory::begin()` before the
   journal's `begin()`: `stats.bin` read whole in one pass, every section's
   CRC and order checked as it streams (the CRCs judged first, then a HEAD
@@ -7657,23 +7677,23 @@ section 1 and 5.14's "As built" notes list the changes):
   each, at most 16) for the gap; 1,284 B for 16 MARK rows and no ACKS row
   above them, 3,076 B at most (4 B over and aligned to 8: the ACKS rows
   hold a u64, and PSRAM's heap gives 4-byte-aligned blocks), given back at
-  the fold's end. Each slot once and the gap as first built. Past 96
+  the fold's end. Each slot once and the gap as first built. Past 40
   records the boot's fold goes on in overflow chunks of 16,384 B (819
   records), carved at the top too, at most 16 (a full never-synced log,
   13,106 slots: 262,144 B), carved by the fold at the record that needs
   one (the scan's pieces reserve no look-ahead, `statsglue::kReserveAhead`
   0: R6 had found the first piece's reserve of 128 slots carving one at
   every boot, which the rework review took out), so only a fold past the
-  96 records holds chunks, a full log's, once a card. A card that goes
+  40 records holds chunks, a full log's, once a card. A card that goes
   away during the scan (out of the slot, or writes off), which stops the
   scan until a remount, ends the fold at once as a partial scan's, its
   blocks given back (`Glue::scanAway()`).
   Chunks no record needs are given back at the fold's end; a partial
   scan's overflow, or a fold out of memory's, is dropped there, and the
-  session is behind its log (below); a fold out of memory within 96
+  session is behind its log (below); a fold out of memory within 40
   records keeps them, never saved. A play written is folded live into the
   records (while a boot's overflow waits for its save, into its last
-  chunk's room); the 97th, with the records full after a save that didn't
+  chunk's room); the 41st, with the records full after a save that didn't
   land, isn't folded, and the session is behind. Each save sorts the
   records in place for each section's key (a heap sort: `std::sort`'s
   introsort recursed on the loop's stack).
@@ -7681,10 +7701,10 @@ section 1 and 5.14's "As built" notes list the changes):
   one that may compact, and only at the update step's safe point: nothing
   playing, or the heard track 20 s or more from its end and no seek in
   the last 2 s, never with a restart asked or a play waiting); the
-  records' (new): due once the records number 64, however they came, at
+  records' (new): due once the records number 24, however they came, at
   the first pass the write gate lets through, before that pass's slot, so
   it holds exactly the records taken by then; it waits while the card is
-  away and behind a library update's fence until the records reach 96,
+  away and behind a library update's fence until the records reach 40,
   then runs whatever the fence; refused in the orderly end's flush; one
   that didn't land is due again once the records pass the count it was
   tried at; a rotation's; and the console's `Hs`. A boot overflow's save
@@ -7796,11 +7816,13 @@ section 1 and 5.14's "As built" notes list the changes):
   `stats.bin`'s TRKD ⊕ the records) and `Hs` (README; the plan's 9.3): each
   look carves the work memory for its call.
 - **Costs** (MEASURED-HOST: the core2 build and its link map, the host
-  tests; the rework with the rework review's fixes). Flash 4,466,739 B
-  (core2-dio 4,466,771 B), 43,048 B over S0's 4,423,691 B and 7,692 B
-  under S1 as first built's last (4,474,431 B at 414488c: its fold, store
-  and give-back no longer linked). RAM 59,160 B (`.dram0.data` 25,112 B,
-  `.dram0.bss` 34,048 B): 96 B of statics over S0. `iram_diet: 51 of 51`,
+  tests; the resident set in internal RAM, 2026-11-17). Flash 4,466,803 B
+  (core2-dio 4,466,835 B; the tree before its commit, its version string
+  6 B longer than a clean one's), 43,112 B over S0's 4,423,691 B (the
+  rework's gate 4,466,739 B; S1 as first built's last 4,474,431 B at
+  414488c). RAM 61,152 B (`.dram0.data` 25,112 B, `.dram0.bss` 36,040 B):
+  the glue's object (1,992 B) and 96 B of statics over S0 (the rework
+  with its object in PSRAM: 59,160 B). `iram_diet: 51 of 51`,
   `cache_guard` and `flash_guard` ok. IRAM left 5,157 B with S0's 25
   `libc_a-*` objects in `.iram0.text` and no IRAM attribute: one
   `libphy.a(phy_chip_v7_cal.o)` literal, merged or not as libphy's COMMON
@@ -7824,8 +7846,9 @@ section 1 and 5.14's "As built" notes list the changes):
   B); the scan, the fold and the save about 3.85 µs a slot on this PC.
   None of these is measured on a device.
 - **The heap model** (the plan's 6.7 and 5.14, MODELLED: test_autodj_join,
-  the firmware's own glue on a card in memory, every block it carves
-  through the model heap, the object at its 3,584 B budget). S1 as first
+  the firmware's own glue on a card in memory, every PSRAM block it carves
+  through the model heap; nothing resident there since the object and
+  MARK's block are internal RAM's). S1 as first
   built held 62-195 KB in PSRAM and gave it back at each library update's
   fence; the two-update model passed, but S1's device round 2 (below) found
   the blocks carved again after each update moved the decoders'
@@ -7837,22 +7860,28 @@ section 1 and 5.14's "As built" notes list the changes):
   the device's decoder requests (2 of 360 with the old shapes, both the
   control's: main with its queue block 2,048 B longer), in each of ten
   ways (a usual boot or a full log, the scan or the join first, a records'
-  save at 96 in a fence, a boot save failing all four tries, the scan
+  save at 40 in a fence, a boot save failing all four tries, the scan
   after an update, the root's ACKS 16 rows above MARK: the ranges' block
   at its largest, 3,076 B), its boot's join main's (main's with the Opus
   first where a start asked during a scan that comes first opens it
-  before the join, as the firmware orders it: the rework review); its
-  waits are load-bearing (a full log's overflow held through the first
-  update's build fails 13 of 65 steps, carved in its fence 1, and a start
-  let through under a full log's overflow beside a 3,076 B ranges' block
-  10, the boot's join 65,536 B lower, with the device's decoders). `test_the_listening_stats_in_a_model_heap`'s 13 shapes (P =
+  before the join, as the firmware orders it: the rework review). Since
+  the object left PSRAM, wherever no stats block is live when a decoder
+  opens the rework's figures are main's to the byte (a full log's ways),
+  and the old decoder shapes' boot's join is main's too (it was one class
+  under with the 3,584 B block); a usual boot's start opens the Opus under
+  the ranges' block and a few later steps differ within main's own
+  variation. Its waits are load-bearing (a full log's overflow held
+  through the first update's build fails 15 of 65 steps, carved in its
+  fence 1, and a start let through under a full log's overflow beside a
+  3,076 B ranges' block costs the boot's join 65,536 B, with the device's
+  decoders). `test_the_listening_stats_in_a_model_heap`'s 13 shapes (P =
   2,214 and 19,478, 300 slots and a full log, saves landing or not, 12
   players' MARK rows) all join the control's 360,436 B. The model doesn't
   reproduce round 2 on round 2's own sequence: the device re-run against
   main's figures decides.
 - **Tests.** `test_stats_fold` (19 cases: the records merged with every
   fixture's `stats.bin` through the cursors byte for byte, random sessions
-  against a plain-map model, the 64/95/96 edges, MARK's room, the
+  against a plain-map model, the 24/39/40 edges, MARK's room, the
   overflow, a fold out of memory), `test_stats_file` (19: the read's
   verdicts, every save and base byte for byte, a cut at every write step
   three ways, a failure at every question, the three streams, a damaged
@@ -7862,7 +7891,8 @@ section 1 and 5.14's "As built" notes list the changes):
   sessions of `stats/sessions.json`, 290 steps, compared byte for byte
   after each; cuts, faults, remounts, partial scans, two players, a 0.14.0
   boot, the full log, the saves at the gate, a cut at every step of a
-  records' save, the overflow's tries, MARK's room and a remount past it,
+  records' save, the overflow's tries, MARK's room (its block through
+  `Memory::keep` alone) and a remount past it,
   the scan and a library update, the card away mid-scan),
   `test_library_update` (39: the update waiting for the stats' scan),
   `test_play_gate` (31: the start the stats hold, 7 cases),
@@ -7871,7 +7901,7 @@ section 1 and 5.14's "As built" notes list the changes):
   `test_card_root` (34: commitTime); `tools/test_statsref.py` (64),
   `tools/test_playlog.py` (32), `tools/test_synthtransfer.py` (63:
   `--acks`); card_fixtures.py's 671 files. The whole native suite: 111 suites, 2,366 cases,
-  all passing (the rework review's fixes; R6: 2,358). Mutation checks of the rework: the reference 15 of 15 caught, the
+  all passing (the move to internal RAM; the rework review's fixes: 2,366; R6: 2,358). Mutation checks of the rework: the reference 15 of 15 caught, the
   fold 23 of 23, the store 23 of 24 and the glue 19 of 20 (the two missed
   equivalent).
 - **The device check** is the plan's 9.5 table (runs A-L on the spare card
