@@ -2714,9 +2714,11 @@ struct MoodRun {
 //   through the join's spacers keeping kMargin free (Memory::top: the
 //   firmware's topAlloc()), held across the scan's passes until the boot's
 //   save gives them back (the ranges' block before it carves its work
-//   memory, the chunks once it lands, or after its fourth try); as built,
-//   one chunk whatever the log (the first piece's reserve() of 128 slots,
-//   past the 96 records), given back at the fold's end;
+//   memory, the chunks once it lands, or after its fourth try); chunks only
+//   for a fold past the 96 records (the firmware's reserve() asks no
+//   look-ahead: statsglue::kReserveAhead; the fold carves one at the 97th);
+//   the ranges' block 1,284 B with no ACKS row above the card's MARK, 3,076 B
+//   with 16 (StatsRun::ackRows: a card a 0.14.0 player synced first);
 // - each save's work memory (Memory::alloc) and its FatFiles (PsramFs), in
 //   the store's own order of opens and closes, given back in its call: the
 //   boot's (a compaction's two bases too), the records' (64 plays written
@@ -2784,7 +2786,7 @@ void statsSession(StatsCard& c, uint32_t n, uint32_t t0, uint32_t day, uint32_t 
   TEST_ASSERT_TRUE(g.on());
   g.scanBegan(false);
   for (uint32_t i = 0; i < n; ++i) {
-    if (i % 128 == 0) TEST_ASSERT_TRUE(g.reserve(128));
+    if (i % 128 == 0) TEST_ASSERT_TRUE(g.reserve(statsglue::kReserveAhead));
     const uint32_t d = i % players;
     const uint64_t at = sf::kMinMs + (day + static_cast<uint64_t>(i) * days / n) * sf::kDayMs + (i % 24) * sf::kHourMs;
     g.slot(statsSlot(c.seq[d]++, t0 + i, at, d), 0);
@@ -2923,6 +2925,10 @@ struct StatsRun {
   int bootFails = 0;        // the boot's save's tries that fail (the card refusing writes); kBootTries: behind
   int fenceSave = 0;        // a records' save at 96 records in update 0's fence: 1 before its build, 2 after it
   bool stepSaves = true;    // the records' save (64 plays written) in each update's fence pass and after it
+  uint32_t ackRows = 0;     // the root's ACKS rows above the card's MARK (statsAcks(): at most 16, the ranges'
+                            // block then at its largest, 3,076 B)
+  uint32_t startAt = 0;     // (startWaits false) a start at the boot asked after this many of the scan's pieces
+                            // of 128 slots (0: after its last piece)
   // What it came to.
   size_t markBytes = 0;     // MARK's block (the boot's read's: kept for the session)
   size_t rangesBytes = 0;   // the ranges' block the boot's fold carved
@@ -2965,6 +2971,34 @@ struct Updates {
   std::vector<size_t> joined;
   uint32_t carveFails = 0, joinFails = 0;  // a decoder's block, or a join, that found no room
 };
+
+// The root's ACKS on a card a 0.14.0 player synced before this player's
+// first stats boot: `rows` rows above the card's MARK, each 112 B in the
+// ranges' block (at most Acks::kMax, 16: the block 80 x 16 + 112 x 16 =
+// 3,072 B, 3,076 B as carved). The first is player 0's, its seq inside the
+// log the boot folds (from `seq0`: no gap); the rest are players the log
+// doesn't hold (a gap of 5 each, a MARK row each at the fold's end: with
+// the card's one row, 16 in all, the object's room).
+cc::msmf::Acks statsAcks(uint32_t rows, uint32_t seq0) {
+  cc::msmf::Acks a;
+  a.present = rows > 0;
+  a.rows = a.count = rows;
+  for (uint32_t i = 0; i < rows; ++i) {
+    cc::msmf::Ack& e = a.entries[i];
+    if (i == 0) {
+      std::memcpy(e.deviceId, kStatsDev, 6);
+      e.epoch = kStatsEpoch;
+      e.seq = seq0 + 9;
+      a.own = 1;
+      continue;
+    }
+    const uint8_t dev[6] = {0x02, 0x00, 0x00, 0x00, 0x00, static_cast<uint8_t>(i)};
+    std::memcpy(e.deviceId, dev, 6);
+    e.epoch = 0x0BADC0FFEE000000ull + i;
+    e.seq = 5;
+  }
+  return a;
+}
 
 // app/ListeningStats.cpp's topAlloc(): a block held across passes at the top
 // of the largest free block, the join's spacers under it while it is carved,
@@ -3020,7 +3054,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   // PlayHistory::begin(): the stats' glue, its object (the resident set),
   // then its read (the work memory and the files given back in the call;
   // MARK's block kept for a card with more than 8 MARK rows).
-  const cc::msmf::Acks acks{};  // (the root's: none)
+  const cc::msmf::Acks acks = stats ? statsAcks(stats->ackRows, stats->card->seq[0]) : cc::msmf::Acks{};  // the root's
   std::unique_ptr<cutfs::CutFs> statsCard;
   std::unique_ptr<PsramFs> statsFs;
   StatsEnv statsEnv;
@@ -3099,9 +3133,11 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     opusOpen = true;
   };
   // The stats' part of the boot's scan (a reserve() before each piece of
-  // 128, then its slots: the ranges' block and the overflow's chunks at the
-  // top), the log above the card's MARK in the scan's order (plays.jnl, the
-  // newest, then plays.1.jnl). Then finishScan(): the boot's save, its
+  // 128, the firmware's look-ahead, then its slots: the ranges' block and the
+  // overflow's chunks at the top), the log above the card's MARK in the
+  // scan's order (plays.jnl, the newest, then plays.1.jnl); a start asked
+  // after piece `startAt` (no start waiting: the Opus opening there, the
+  // later chunks carved around it). Then finishScan(): the boot's save, its
   // overflow's tries at later passes, the board's waits apart (the join, an
   // asked update and a start waiting meanwhile: nothing else carves), and
   // the journal ready. From then on plays are written.
@@ -3113,7 +3149,8 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     glue->scanBegan(false);
     uint32_t pieces = 0;
     auto fold = [&](uint32_t i, int f) {
-      if (pieces++ % 128 == 0 && !glue->reserve(128)) ++stats->reserveFailed;
+      if (stats->startAt && pieces == stats->startAt * 128) bootStart();
+      if (pieces++ % 128 == 0 && !glue->reserve(statsglue::kReserveAhead)) ++stats->reserveFailed;
       const uint64_t at = sf::kMinMs + (570 + static_cast<uint64_t>(i) * 29 / n) * sf::kDayMs + (i % 24) * sf::kHourMs;
       glue->slot(statsSlot(seq + i, i % stats->card->played, at), f);
     };
@@ -3163,8 +3200,13 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   const Scan when = stats ? stats->when : Scan::JoinFirst;
   if (stats && when == Scan::ScanFirst) {
     statsScan();
-    bootStart();  // (under the scan's blocks, only when no start waits)
+    bootStart();  // (a start asked during the scan: under its blocks, unless overflow chunks hold it)
     statsBootSave();
+    // A start the chunks held: released at the pass after the save gave them
+    // back (main.cpp's stepPlayGate), before that pass's stepAutoDj begins
+    // the boot's join. So the Opus opens before the join, as main's with the
+    // Opus first.
+    bootStart();
   }
   if (hist && hist->opusFirst) bootStart();
   u.opusFirst = opusOpen;
@@ -3506,7 +3548,7 @@ void test_the_listening_stats_in_a_model_heap() {
       {&big, full, Scan::ScanFirst, all, 0, 1284, 262144, 4, 0, 4, 0, true, 589812, 360436},
       {&small, full, Scan::AfterUpdate, 0, 0, 1284, 262144, 1, 4, 4, 1, false, 589812, 360436},
       {&big, full, Scan::AfterUpdate, 0, 0, 1284, 262144, 1, 4, 4, 1, false, 589812, 360436},
-      {&players, 70, Scan::ScanFirst, 0, 560, 1604, 16384, 1, 5, 5, 1, false, 589812, 360436},
+      {&players, 70, Scan::ScanFirst, 0, 560, 1604, 0, 1, 5, 5, 1, false, 589812, 360436},
   };
   auto classOf = [](size_t largest) {
     return static_cast<size_t>(1) << (ModelHeap::fls(largest + ModelHeap::kPoison) - ModelHeap::kSlLog2);
@@ -3580,6 +3622,8 @@ void test_the_listening_stats_in_a_model_heap() {
     TEST_ASSERT_EQUAL_size_t_MESSAGE(statsOff.largest, statsOn.givenBack, w);
     TEST_ASSERT_EQUAL_size_t_MESSAGE(statsOff.largest, statsHeaps.largest, w);
     TEST_ASSERT_EQUAL_size_t_MESSAGE(statsOff.largest, statsHeaps.givenBack, w);
+    // Given back, the update's room is Auto DJ off's without the stats.
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(off.largest, statsOff.largest, w);
     TEST_ASSERT_TRUE_MESSAGE(rule, w);
     if (!inClass) {
       char c[256];
@@ -3673,24 +3717,36 @@ struct Yard {
 // the boot's join: the order's own cost). Beside them: main with its queue
 // block 2,048 B longer (main's own variation, the control), and main with
 // a start at the boot before its join; the rework as built (the firmware's
-// glue, StatsRun, on a card of P = 2,214 played tracks): a usual boot (70
-// records: the last session's) with the scan first (the boot's join
-// waiting for its blocks) or the join first, a records' save at 96 in
-// update 0's fence before or after its build, a full log never synced (16
-// overflow chunks) with the scan first or the join first, its boot's save
-// failing all four tries (behind), and the scan after update 0 (asked
-// before its first piece); a start at the boot waits while the scan holds
-// overflow chunks, which as built is every scan (its first reserve() of
-// 128 slots carves one past the 96 records). And the rework without one of
-// its waits at a time, the shapes they exist for: a full log's overflow
-// held through update 0's build, or carved in its fence, which must break
-// the rule; the Opus opening under the scan's blocks (a full log's, a
-// usual boot's), reported. The suite's build (the device's decoders, the
+// glue, StatsRun, on a card of P = 2,214 played tracks). With the scan
+// first (the boot's join waiting for its blocks), a start at the boot is
+// asked during the scan: it opens the Opus under the scan's blocks, or,
+// held while a full log's overflow chunks are, at the pass after the boot's
+// save, before that pass begins the boot's join (main.cpp's stepPlayGate
+// before stepAutoDj): either way before the boot's join, so its reference
+// is main's with the Opus first. The scan first: a usual boot (70 records:
+// the last session's; no chunk, so nothing holds its start), the same with
+// the root's ACKS 16 rows above the card's MARK (the ranges' block at its
+// largest, 3,076 B), a records' save at 96 in update 0's fence before or
+// after its build, a full log never synced (16 overflow chunks, a start
+// waiting), the same with ACKS's 16 rows, its boot's save failing all four
+// tries (behind). The join
+// first, or the scan after update 0 (asked before its first piece): a usual
+// boot, a full log. And the rework without one of its waits at a time, the
+// shapes they exist for: a full log's overflow held through update 0's
+// build, or carved in its fence, which must break the rule; the Opus
+// opening under a full log's overflow, the scan first, after its last
+// piece, its first, its 50th, and after its last with ACKS's 16 rows: the
+// start's wait, reported. The suite's build (the device's decoders, the
 // named histories): every figure pinned, the control failing no step, nor
 // the rework. The variants (STATS_OLD_DECODERS, STATS_WIDE; this case
 // alone, outside the suite: PLATFORMIO_BUILD_FLAGS and a build folder of
 // their own): every step the rework fails must be one the control fails
-// too; their figures go in the commit message.
+// too; their figures go in the commit message. With STATS_OLD_DECODERS a
+// usual boot's three ways with the scan first break the boot's join rule by
+// one class (450,548 B against 466,932 B, where a start comes during the
+// scan: nothing holds it since the scan reserves no chunk ahead, the
+// owner's default), so those variants exit 1: the owner's call (the plan's
+// 5.14, the rework review's 4 and 11).
 void test_the_listening_stats_across_updates() {
   const uint32_t tracks = 19412;
   const synthcard::Card card = synthcard::make(synth::userShape(tracks));
@@ -3747,41 +3803,58 @@ void test_the_listening_stats_across_updates() {
   const uint32_t full = 2 * playlog::kFileSlots;
   StatsRun usual;
   usual.card = &sc;
-  StatsRun usualJoin = usual, fenceBefore = usual, fenceAfter = usual, usualUnder = usual;
+  StatsRun usualAcks = usual, usualJoin = usual, fenceBefore = usual, fenceAfter = usual;
+  usualAcks.ackRows = cc::msmf::Acks::kMax;
   usualJoin.when = Scan::JoinFirst;
-  usualUnder.startWaits = false;
   fenceBefore.fenceSave = 1;
   fenceAfter.fenceSave = 2;
   StatsRun fullLog = usual;
   fullLog.slots = full;
-  StatsRun fullJoin = fullLog, fullFails = fullLog, fullAfter = fullLog, through = fullLog, inFence = fullLog,
-           under = fullLog;
+  StatsRun fullJoin = fullLog, fullFails = fullLog, fullAcks = fullLog, fullAfter = fullLog, through = fullLog,
+           inFence = fullLog, under = fullLog;
+  fullAcks.ackRows = cc::msmf::Acks::kMax;
   fullJoin.when = Scan::JoinFirst;
   fullFails.bootFails = static_cast<int>(statsglue::kBootTries);
   fullAfter.when = Scan::AfterUpdate;
   through.when = Scan::ThroughBuild;
   inFence.when = Scan::InFence;
   under.startWaits = false;
+  StatsRun underFirst = under, underMid = under, underAcks = under;
+  underFirst.startAt = 1;
+  underMid.startAt = 50;
+  underAcks.ackRows = cc::msmf::Acks::kMax;
   std::vector<Yard> yards = {
       {"main"},
       {"main's queue 2,048 B longer", 2048},
       {"main, a start at the boot opening the Opus before its join", 0, nullptr, false, true},
+      // The scan first: a start at the boot opens the Opus before the boot's join.
       {"the rework: a usual boot (70 records), the scan first", 0, &usual, true},
-      {"the rework: a usual boot, the join first", 0, &usualJoin, true},
+      {"the rework: a usual boot, the scan first, the root's ACKS 16 rows above MARK (the ranges' block 3,076 B)", 0,
+       &usualAcks, true},
       {"the rework: a records' save at 96 in update 0's fence, before its build", 0, &fenceBefore, true},
       {"the rework: a records' save at 96 in update 0's fence, after its build", 0, &fenceAfter, true},
       {"the rework: a full log (16 overflow chunks), the scan first, a start waiting", 0, &fullLog, true},
-      {"the rework: a full log, the join first, a start waiting", 0, &fullJoin, true},
       {"the rework: a full log, its boot's save failing all four tries (behind)", 0, &fullFails, true},
+      {"the rework: a full log, the scan first, a start waiting, the root's ACKS 16 rows above MARK", 0, &fullAcks,
+       true},
+      // The join first, or the scan after update 0: the Opus after the boot's join.
+      {"the rework: a usual boot, the join first", 0, &usualJoin, true},
+      {"the rework: a full log, the join first, a start waiting", 0, &fullJoin, true},
       {"the rework: a full log, the scan after update 0 (asked before its first piece)", 0, &fullAfter, true},
+      // The shapes the waits exist for.
       {"no update waiting for the scan: a full log's overflow held through update 0's build", 0, &through},
       {"no scan waiting for the update: a full log's overflow carved in update 0's fence", 0, &inFence},
-      {"no start waiting: the Opus opening under a full log's overflow, the scan first", 0, &under},
-      {"no start waiting: the Opus opening under a usual boot's scan blocks, the scan first", 0, &usualUnder},
+      {"no start waiting: the Opus opening under a full log's overflow after the scan's last piece", 0, &under},
+      {"no start waiting: the Opus opening after a full log's first piece (the later chunks around it)", 0,
+       &underFirst},
+      {"no start waiting: the Opus opening after a full log's 50th piece", 0, &underMid},
+      {"no start waiting: the Opus opening under a full log's overflow, the root's ACKS 16 rows above MARK", 0,
+       &underAcks},
   };
-  enum { kMain, kControl, kMainFirst, kRework };
-  const size_t kThrough = yards.size() - 4, kFence = yards.size() - 3, kUnder = yards.size() - 2,
-               kUsualUnder = yards.size() - 1;
+  enum { kMain, kControl, kMainFirst, kRework, kReworkAcks };
+  const size_t kFullAcks = 9, kReworkJoin = 10, kThrough = 13, kFence = 14, kUnder = 15, kUnderFirst = 16,
+               kUnderMid = 17, kUnderAcks = 18;
+  TEST_ASSERT_EQUAL_size_t(19, yards.size());
 
   const std::vector<History> hs = yardstickHistories();
   const auto t0 = std::chrono::steady_clock::now();
@@ -3925,24 +3998,40 @@ void test_the_listening_stats_across_updates() {
     if (y.rework && !b.empty()) broken += (broken.empty() ? std::string() : std::string("; ")) + y.name + ": " + b;
   }
   for (size_t i = 0; i < hs.size(); ++i) TEST_ASSERT_EQUAL_size_t(mainRun.bootJoined[i], control.bootJoined[i]);
+  // The ranges' block: 1,284 B with no ACKS row above MARK, 3,076 B with 16
+  // (the largest the docs budget), in every history.
+  TEST_ASSERT_EQUAL_size_t(1284, yards[kRework].runs[0].rangesBytes);
+  TEST_ASSERT_EQUAL_size_t(3076, yards[kReworkAcks].runs[0].rangesBytes);
+  TEST_ASSERT_EQUAL_size_t(3076, yards[kFullAcks].runs[0].rangesBytes);
+  TEST_ASSERT_EQUAL_size_t(3076, yards[kUnderAcks].runs[0].rangesBytes);
+  TEST_ASSERT_EQUAL_UINT32(0, yards[kRework].runs[0].chunks);  // (a usual boot: no chunk, nothing holds its start)
+  // A start at the boot asked during the scan first opens the Opus before
+  // the boot's join (a history with it at the boot), the join first after.
+  for (size_t i = 0; i < hs.size(); ++i) {
+    TEST_ASSERT_EQUAL(hs[i].opusAt == -1, yards[kRework].opened[i]);
+    TEST_ASSERT_FALSE(yards[kReworkJoin].opened[i]);
+  }
   // The shapes the waits exist for: a full log's overflow held through
   // update 0's build, or carved in its fence, breaks it in every build. The
   // Opus opening under the scan's blocks (no start waiting) is reported,
-  // not asked to: with the firmware's blocks it costs the boot's join one
-  // class under main's with the Opus first with the old shapes (450,548 B
-  // against 466,932 B), and nothing with the device's decoders.
+  // and pinned in the suite's build.
   TEST_ASSERT_FALSE_MESSAGE(breaks(yards[kThrough]).empty(), yards[kThrough].name.c_str());
   TEST_ASSERT_FALSE_MESSAGE(breaks(yards[kFence]).empty(), yards[kFence].name.c_str());
 
+  (void)kUnderFirst;  // (the variants report them)
+  (void)kUnderMid;
 #if !defined(STATS_OLD_DECODERS) && !defined(STATS_WIDE)
   // The suite's build: every figure pinned (MEASURED-HOST), the boot's join
   // and joined after each of the 5 updates, the histories in hs's order:
   // main's, the control's, main's with the Opus opening before the boot's
-  // join, the rework's (a usual boot, the scan first), and three shapes
-  // (held through update 0's build, carved in its fence, the Opus under a
-  // full log's overflow). The rework's other seven kinds give its figures
-  // in every history, and the Opus under a usual boot's scan blocks gives
-  // the Opus under a full log's.
+  // join, the rework's with the scan first (a usual boot: a start at the
+  // boot opening the Opus before the boot's join) and with the join first
+  // (the Opus after it), and three shapes (held through update 0's build,
+  // carved in its fence, the Opus under a full log's overflow with ACKS's 16
+  // rows above MARK). The rework's other kinds give the figures of their
+  // order's in every history, and so does the Opus under a full log's
+  // overflow with no ACKS row, opening after the scan's last piece, its
+  // first or its 50th.
   struct Pin {
     size_t boot, joined[5];
   };
@@ -3974,7 +4063,16 @@ void test_the_listening_stats_across_updates() {
           {466932, {249844, 249844, 180212, 249844, 270324}}, {466932, {249844, 249844, 360436, 270324, 294900}},
           {466932, {249844, 249844, 180212, 249844, 270324}},
       },
-      {  // the rework
+      {  // the rework, the scan first (a start at the boot opening the Opus before the boot's join)
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {466932, {249844, 249844, 360436, 112628, 270324}},
+          {589812, {360436, 360436, 360436, 270324, 249844}}, {589812, {294900, 172020, 172020, 106484, 172020}},
+          {466932, {249844, 249844, 360436, 270324, 249844}}, {589812, {249844, 294900, 286708, 204788, 176116}},
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 294900, 221172}},
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 360436, 360436}},
+          {466932, {249844, 249844, 180212, 249844, 249844}}, {466932, {249844, 249844, 360436, 270324, 249844}},
+          {466932, {249844, 249844, 180212, 249844, 249844}},
+      },
+      {  // the rework, the join first (the Opus after the boot's join)
           {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {249844, 249844, 360436, 180212, 270324}},
           {589812, {360436, 360436, 360436, 270324, 249844}}, {589812, {294900, 172020, 172020, 106484, 172020}},
           {589812, {249844, 249844, 360436, 270324, 249844}}, {589812, {249844, 294900, 286708, 204788, 176116}},
@@ -4001,17 +4099,17 @@ void test_the_listening_stats_across_updates() {
           {589812, {249844, 270324, 180212, 249844, 249844}}, {589812, {249844, 270324, 360436, 270324, 294900}},
           {589812, {249844, 270324, 192500, 249844, 249844}},
       },
-      {  // the Opus under a full log's overflow
-          {589812, {360436, 360436, 360436, 360436, 360436}}, {466932, {249844, 249844, 360436, 112628, 270324}},
+      {  // the Opus under a full log's overflow with ACKS's 16 rows above MARK
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {401396, {180212, 180212, 249844, 184308, 249844}},
           {589812, {360436, 360436, 360436, 270324, 249844}}, {589812, {294900, 172020, 172020, 106484, 172020}},
-          {466932, {249844, 249844, 360436, 270324, 249844}}, {589812, {249844, 294900, 286708, 204788, 176116}},
+          {401396, {180212, 180212, 249844, 294900, 249844}}, {589812, {249844, 294900, 286708, 204788, 176116}},
           {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 294900, 221172}},
           {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 360436, 360436}},
-          {466932, {249844, 249844, 180212, 249844, 249844}}, {466932, {249844, 249844, 360436, 270324, 249844}},
-          {466932, {249844, 249844, 180212, 249844, 249844}},
+          {401396, {180212, 180212, 192500, 249844, 294900}}, {401396, {180212, 180212, 249844, 294900, 188404}},
+          {401396, {180212, 180212, 192500, 249844, 294900}},
       },
   };
-  const size_t pinned[] = {kMain, kControl, kMainFirst, kRework, kThrough, kFence, kUnder};
+  const size_t pinned[] = {kMain, kControl, kMainFirst, kRework, kReworkJoin, kThrough, kFence, kUnderAcks};
   TEST_ASSERT_EQUAL_size_t(sizeof(pins) / sizeof(pins[0]), sizeof(pinned) / sizeof(pinned[0]));
   TEST_ASSERT_EQUAL_size_t(13, hs.size());
   for (size_t p = 0; p < sizeof(pinned) / sizeof(pinned[0]); ++p) {
@@ -4029,18 +4127,24 @@ void test_the_listening_stats_across_updates() {
       TEST_ASSERT_TRUE_MESSAGE(yards[a].joined[i] == yards[b].joined[i], w.c_str());
     }
   };
-  for (size_t yi = kRework + 1; yi < kThrough; ++yi) same(kRework, yi);
-  same(kUnder, kUsualUnder);
+  for (size_t yi = kRework + 1; yi < kReworkJoin; ++yi) same(kRework, yi);
+  for (size_t yi = kReworkJoin + 1; yi < kThrough; ++yi) same(kReworkJoin, yi);
+  for (const size_t yi : {kUnder, kUnderFirst, kUnderMid}) same(kRework, yi);
   // The control fails no step here, so the rule for the stats is every
   // step. Held through the build fails 13 (H2 1, 2, 4; H3 3; H5 1, 2, 4; K3
   // 1, 3; K4 1, 2; D 1, 3), carved in the fence H6's step 2; the Opus under
-  // the scan's blocks none, its boot's join main's with the Opus first.
+  // a full log's overflow with the ranges' block at its largest (ACKS's 16
+  // rows) 10 (H2, H5, K3, K4 and D at steps 0 and 1), its boot's join
+  // 401,396 B against main's with the Opus first 466,932 B in those five:
+  // the start's wait is load-bearing there. With no ACKS row the Opus under
+  // the overflow gives the rework's figures wherever the start comes.
   TEST_ASSERT_EQUAL_size_t(0, control.fails.size());
   TEST_ASSERT_EQUAL_size_t(0, mainFirst.fails.size());
   TEST_ASSERT_EQUAL_size_t(13, yards[kThrough].fails.size());
   TEST_ASSERT_EQUAL_size_t(1, yards[kFence].fails.size());
-  TEST_ASSERT_TRUE(breaks(yards[kUnder]).empty());
-  TEST_ASSERT_TRUE(breaks(yards[kUsualUnder]).empty());
+  TEST_ASSERT_EQUAL_size_t(10, yards[kUnderAcks].fails.size());
+  TEST_ASSERT_FALSE(breaks(yards[kUnderAcks]).empty());
+  for (const size_t yi : {kUnder, kUnderFirst, kUnderMid}) TEST_ASSERT_TRUE(breaks(yards[yi]).empty());
 #endif
   if (!broken.empty()) {
     const std::string m = "the rework breaks 5.14's yardstick: " + broken;
