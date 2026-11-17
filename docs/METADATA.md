@@ -7571,9 +7571,11 @@ log's `playlog::Folds`) are portable and host-tested against
 (`test/fixtures/card/stats`, made by card_fixtures.py: 2.17's item 10);
 `app/ListeningStats`, a member of `app/PlayHistory`, is the firmware's
 side. Built for `core2` and `core2-dio` with every guard. S1 as first
-built ran on the Core2 in two device rounds (below); **the rework is not
-flashed**: its gate and its device re-run against main's figures (the
-plan's 5.14) wait for the owner's go-ahead. `device.txt` gains no key:
+built ran on the Core2 in two device rounds (below); **the rework is
+host-gated and not flashed**: its gate is met on the host (2026-11-16,
+the plan's section 1, "The rework's gate"), and its device re-run
+against main's figures (the plan's 5.14) waits for the owner's
+go-ahead. `device.txt` gains no key:
 the transfer never reads the stats (2.11). What the code decided where
 the plan left room (the plan's text amended in the same commits; its
 section 1 and 5.14's "As built" notes list the changes):
@@ -7805,7 +7807,7 @@ section 1 and 5.14's "As built" notes list the changes):
   symbols move in `.dram0.bss` (the plan's 9.5, C9's "As built"), is the
   4 B between it and S0's 5,161 B, which the rework at R5 had. The loop's
   stack (`-fstack-usage` sums, FatFs's own frames not counted): the
-  records' save 1,488 B deep from `PlayHistory::loop` (its sort 1,264 B,
+  records' save 1,488 B deep from `PlayHistory::loop` (its sort 1,136 B,
   its merge's read 1,056 B), a boot overflow's try the same, a rotation's
   save 2,464 B (the deepest: under the rotation's own deepest, its `onOp`
   printf, about 2,592 B), 2,736 B in the end's flush, the boot's save

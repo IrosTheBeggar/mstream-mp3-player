@@ -606,7 +606,7 @@ hundred bytes in PSRAM (app/TagConsole's `Work`).
   once each 64 plays (`PlayHistory::loop` → `ListeningStats::runSave` →
   `statsglue::Glue::saveNow` → `recordsSave` → `commit` →
   `statsfile::Store::save` → `replace` → `toTwin` → `FatFs::rename`),
-  1,488 B (its sort of the records, a heap sort, 1,264 B; its merge's
+  1,488 B (its sort of the records, a heap sort, 1,136 B; its merge's
   read of `stats.bin`, 1,056 B), and a boot overflow's try the same; a
   rotation's save under a play's write (`PlayHistory::loop` →
   `Outbox::writeOne` → `append`, `put`, `place` → `rotate` →
@@ -4836,6 +4836,6 @@ their own (the player stopped first, so nothing follows them).
    the store, is built and host-tested (the plays counted from the play log
    into `/.player/stats.bin`, the console's `H`; Storage above), reworked
    since its device rounds 1 and 2 (2026-11-12 UTC) to a fixed resident set
-   of at most 3,584 B (the plan's 5.14, R1-R7, 2026-11-16); the rework's gate
-   and its device re-run against main's figures are owed; the lists, the
-   Library's screens and Now Playing's row (S2-S4) are next.
+   of at most 3,584 B (the plan's 5.14, R1-R7, 2026-11-16); the rework is
+   host-gated and its device re-run against main's figures is owed; the
+   lists, the Library's screens and Now Playing's row (S2-S4) are next.
