@@ -17,14 +17,24 @@
 #include "storage/SectorDisk.h"
 
 // The resident set (docs/LISTENING-STATS.md 5.14, "Moved to internal
-// RAM"): the glue's object alone, in internal RAM (.bss, below: never in
-// PSRAM, so PSRAM holds nothing of the stats' between calls but the boot's
-// scan's blocks, and its layout is main's), made once in setup and never
-// destroyed. Its budget is internal RAM's margin (11's Internal RAM row):
-// 2,048 B keeps G5's floors (docs/OPUS.md: steady 50 KB, the session's
-// lowest 42 KB, the headphones linked) at the lowest figures held with a
-// link (a walk under a Bluetooth play: 45,468 B; ram=52K steady), hence 40
-// records, not the design's 96 (statsfold::kRecords).
+// RAM"): the glue's object alone, in internal RAM (.bss, below), made once
+// in setup and never destroyed; internal RAM holds nothing else of the
+// stats', whatever the card (MARK's block, a card past 8 MARK rows, is
+// PSRAM's: begin()). PSRAM holds nothing of the stats' between calls but
+// the boot's scan's blocks (and that block), so its layout is main's on a
+// card of 8 MARK rows or fewer. Its budget is internal RAM's margin (11's
+// Internal RAM row): 2,048 B, hence 40 records, not the design's 96
+// (statsfold::kRecords). Against G5's floors (docs/OPUS.md: steady 50 KB,
+// the session's lowest 42 KB, the headphones linked) what counts is the
+// build's .dram0.bss growth over main's (2,096 B over S0's: this object,
+// the rework's 96 B of statics and Ht's 8 B), not sizeof alone. At the
+// figures held with a link (METADATA 3.8, 2026-11-04) G5's steady floor
+// holds with 0-1 KB to spare (ram=52K is 53,248-54,271 B: 51,152-52,175 B,
+// 48 B under 50 KB at the reading's low end), a walk on the card worker
+// keeps 364 B (45,468 B: 43,372 B), and the session's floor is not shown
+// kept: a whole Rescan's scan (min=43K: 44,032-45,055 B) comes to
+// 41,936-42,959 B, under 42 KB, until the re-run measures it with the
+// headphones linked (5.14, "Its device re-run").
 static_assert(sizeof(statsglue::Glue) <= 2048, "the listening stats' resident set is at most 2,048 B (5.14, 11)");
 
 namespace {
@@ -48,21 +58,23 @@ size_t psramFreeBytes() { return heap_caps_get_free_size(MALLOC_CAP_SPIRAM); }
 
 // The glue's object: internal DRAM's .bss (not EXT_RAM_BSS_ATTR, not the
 // heap). Static rather than an internal-heap carve in setup: it is never in
-// the heap, so it splits no free block another internal carve would have
-// taken (the card worker's 7.5 KB stack at each burst, A2DP's buffers, a
-// track's 4.1 KB of decoder buffers): the same reason the PSRAM block moved
-// (the device's FLAC row, 5.14), and it can't fail. Its cost, the same
-// sizeof at every boot, card or none, shows in the build's RAM figure.
+// the heap, so it never splits a free block another internal carve would
+// have taken (the card worker's 7.5 KB stack at each burst, A2DP's buffers,
+// a track's 4.1 KB of decoder buffers), and it can't fail. It does shrink
+// the DRAM heap above .bss by its size (that heap starts at _heap_start,
+// .dram0.bss's end; 79,288 B to 0x3FFE0000 in this build, 2,096 B less than
+// S0's), and heap_caps_malloc() tries the internal heaps in address order,
+// DRAM's before the D/IRAM ones above it: a carve that fit at that heap's
+// end on main can go to the next internal heap instead, the same class of
+// effect as the device's FLAC row in PSRAM (5.14). The re-run records the
+// internal largest= and the card worker's lowest beside main's. Its cost,
+// the same sizeof at every boot, card or none, shows in the build's RAM
+// figure.
 alignas(statsglue::Glue) uint8_t s_glue[sizeof(statsglue::Glue)];
 
-// MARK's block, for a card with more than 8 MARK rows (statsfile::Store, at
-// the boot's read in setup; 28 B a row, its rows and 8 more): internal RAM
-// too, held for the session.
-void* internalAlloc(size_t n) { return heap_caps_malloc(n, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); }
-void internalFree(void* p) { heap_caps_free(p); }
-
 // A block the stats hold across passes (the boot's scan's ranges' block, its
-// overflow's chunks): at the top of PSRAM's largest free block, the join's
+// overflow's chunks; MARK's block, past 8 rows, for the session): at the
+// top of PSRAM's largest free block, the join's
 // spacers under it while it is carved, never less than this free meanwhile
 // (Auto DJ's kJoinMarginBytes, for the same reason: another task's block may
 // come in that window, a track start's 4 KB probe, a seek's 8 KB, the Opus
@@ -104,6 +116,21 @@ void timeText(uint32_t t, char* out, size_t cap) {
 
 void devText(const uint8_t d[6], char* out, size_t cap) {
   snprintf(out, cap, "%02x%02x%02x%02x%02x%02x", d[0], d[1], d[2], d[3], d[4], d[5]);
+}
+
+// Ht's 16 hex digits, a track's path hash; false: not 16 hex digits.
+bool hashOf(const char* hex, uint64_t* out) {
+  uint64_t h = 0;
+  int n = 0;
+  for (; hex[n]; ++n) {
+    const char c = hex[n];
+    const int v = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+    if (v < 0 || n == 16) return false;
+    h = h << 4 | static_cast<uint64_t>(v);
+  }
+  if (n != 16) return false;
+  *out = h;
+  return true;
 }
 
 // A section's type ("TRKD"; 0: stats.bin's frame).
@@ -168,13 +195,21 @@ playlog::Folds* ListeningStats::begin(tagstore::Fs& fs, const cardroot::Root& ro
   // Every PSRAM block the stats carve is given back in its call (a read's
   // or a save's work memory and FatFiles) or by the boot's scan's end (the
   // ranges' block; an overflow's chunks once its save lands, or after its
-  // last try): nothing of the stats' sits in PSRAM between them.
+  // last try): nothing of the stats' sits in PSRAM between them but MARK's
+  // block. That one (statsfile::Store, a card with more than 8 MARK rows:
+  // its rows and 8 more, 28 B a row, as many as the card holds) is carved
+  // by this boot's read, in setup, at the top of PSRAM's largest free block
+  // (topAlloc(): the rule the scan's held blocks follow) and held for the
+  // session. Not internal RAM's: its size is the card's, with no bound
+  // (MARK's rows are never dropped; each player and each NVS erase adds
+  // one), and G5's margin has none to give (the internal-RAM review). A
+  // card of 8 rows or fewer carves none: PSRAM is main's byte for byte.
   sg::Memory m;
   m.alloc = psramAlloc;
   m.top = topAlloc;
   m.release = psramFree;
-  m.keep = internalAlloc;
-  m.keepRelease = internalFree;
+  m.keep = topAlloc;
+  m.keepRelease = psramFree;
   glue_ = new (s_glue) sg::Glue(fs, static_cast<sg::Env&>(*this), m);
   const int64_t t0 = esp_timer_get_time();
   const sx::Opened& o = glue_->begin(root.acks, bootWait);
@@ -523,7 +558,7 @@ void ListeningStats::logRead(const sx::Opened& o, const char* when, float ms) {
     case sx::Read::NoMemory:
       Serial.printf("[listen] stats.bin NOT read %s: no PSRAM for the read%s: the stats are OFF this session (no fold, "
                     "no save, no trim)\n",
-                    when, o.marks ? ", or no internal RAM for MARK's block (or its rows past the room)" : "");
+                    when, o.marks ? ", or for MARK's block (or its rows past the room)" : "");
       return;
   }
   if (o.settled.twins) Serial.printf("[listen] stats.bin's twins:%s\n", twins);
@@ -538,10 +573,30 @@ void ListeningStats::command(const char* arg) {
     return;
   }
   switch (arg[0]) {
-    case 0: printState(); return;
-    case 'd': printDays(); return;
+    case 0:
+      printState();
+      askLook(kLookState, "H: stats.bin on the card (its header and rows)");
+      return;
+    case 'd': {
+      uint16_t today = 0;
+      if (!sf::todayOf(boardclock::now(), &today)) {
+        Serial.println("[listen] Hd: the board's clock is unset (or not believed): no today, so no last 7 days");
+        return;
+      }
+      askLook(kLookDays, "Hd");
+      return;
+    }
     case 'm': printMarks(); return;
-    case 't': printTrack(arg + 1); return;
+    case 't': {
+      uint64_t h = 0;
+      if (!hashOf(arg + 1, &h)) {
+        Serial.println("[listen] Ht<16 hex digits>: a track's path hash (METADATA 2.3.3)");
+        return;
+      }
+      lookHash_ = h;
+      askLook(kLookTrack, "Ht");
+      return;
+    }
     case 's':
       if (glue_->booting()) {
         Serial.printf("[listen] Hs refused: %s\n", refusedText(sg::Refused::Booting));
@@ -555,6 +610,31 @@ void ListeningStats::command(const char* arg) {
       Serial.println("[listen] H: the state; Hd the last 7 UTC days; Hm MARK, ACKS and the log; Ht<16 hex> a track's "
                      "row; Hs a save now");
       return;
+  }
+}
+
+void ListeningStats::askLook(uint8_t look, const char* what) {
+  looks_ = static_cast<uint8_t>(looks_ | look);
+  Serial.printf("[listen] %s: read at the next pass the write gate lets through, after a save due and the plays "
+                "waiting for their slots, not behind the library update's fence\n",
+                what);
+}
+
+void ListeningStats::runLook() {
+  if (!glue_ || !looks_) {
+    looks_ = 0;
+    return;
+  }
+  // One a pass (one thing of the card's a pass), H's first.
+  if (looks_ & kLookState) {
+    looks_ = static_cast<uint8_t>(looks_ & ~kLookState);
+    printFile();
+  } else if (looks_ & kLookDays) {
+    looks_ = static_cast<uint8_t>(looks_ & ~kLookDays);
+    printDays();
+  } else {
+    looks_ = 0;
+    printTrack(lookHash_);
   }
 }
 
@@ -582,17 +662,6 @@ void ListeningStats::printState() {
                                             : "on";
   Serial.printf("[listen] H: %s; read %s (%s%s), %lu read again since\n", phase, sx::readName(o.read),
                 o.inBase ? "its base: " : "", cc::whyName(o.why), static_cast<ul>(g.rereads()));
-  const statsglue::Glue::FileLook l = g.lookFile();
-  if (l.there && !l.unread) {
-    Serial.printf("[listen] stats.bin on the card: generation %lu (the saves), %lu bytes, %s %u.%u; RAM stands on "
-                  "%s generation %lu%s\n",
-                  static_cast<ul>(l.generation), static_cast<ul>(l.bytes), l.magic == sx::kMagic ? "MPST" : "NOT MPST",
-                  static_cast<unsigned>(l.major), static_cast<unsigned>(l.minor),
-                  g.store().cardCopy().present ? "its" : "none,", static_cast<ul>(g.store().cardCopy().generation),
-                  g.store().held() ? "; a stats.tmp held" : "");
-  } else {
-    Serial.printf("[listen] stats.bin on the card: %s\n", l.unread ? "unread (the card failed the question)" : "none");
-  }
   const sf::Head& h = f.head();
   char lis[32], you[32], shuf[32], dj[32];
   listened(h.listenedMs, lis, sizeof(lis));
@@ -623,20 +692,12 @@ void ListeningStats::printState() {
                   (h.flags & sf::kFlagSinceCommit) ? ", from the sync's commitTime" : "", todayText,
                   days < 1 ? 1L : days, days == 1 ? "" : "s");
   }
-  if (l.frame) {
-    Serial.printf("[listen] stats.bin's rows: MARK %lu, HOUR %lu, DAYS %lu, RCNT %lu, TRKD %lu; the base %s%08lx, %lu "
-                  "rows%s\n",
-                  static_cast<ul>(l.rows[sf::kMark]), static_cast<ul>(l.rows[sf::kHour]),
-                  static_cast<ul>(l.rows[sf::kDays]), static_cast<ul>(l.rows[sf::kRcnt]),
-                  static_cast<ul>(l.rows[sf::kTrkd]), h.baseGen ? "stats-" : "none ", static_cast<ul>(h.baseGen),
-                  static_cast<ul>(h.baseRows), (h.flags & sf::kFlagBaseLost) ? " (a base was lost once)" : "");
-  }
   Serial.printf("[listen] RAM: the object %u B, internal (the records %lu of %lu, the save due from %lu; MARK %lu rows "
                 "of %lu%s), the overflow %lu chunks (%lu B, %lu B at the peak), the ranges' block %lu B%s; this "
                 "session %lu folded, %lu met twice, gap %lu\n",
                 static_cast<unsigned>(sizeof(statsglue::Glue)), static_cast<ul>(f.records()),
                 static_cast<ul>(sf::kRecords), static_cast<ul>(sf::kSaveAt), static_cast<ul>(f.marks()),
-                static_cast<ul>(f.markCap()), g.store().markBytes() ? ", its block beside it, internal" : "",
+                static_cast<ul>(f.markCap()), g.store().markBytes() ? ", its block in PSRAM" : "",
                 static_cast<ul>(f.chunks()), static_cast<ul>(f.held()), static_cast<ul>(f.peak()),
                 static_cast<ul>(g.rangesBytes()), g.rangesHeld() ? " (held)" : "", static_cast<ul>(f.folded()),
                 static_cast<ul>(f.twice()), static_cast<ul>(f.gap()));
@@ -674,6 +735,32 @@ void ListeningStats::printState() {
                 sg::kindName(g.lastKind()), sx::savedName(r.what), sec, r.step[0] ? " at " : "", r.step,
                 static_cast<ul>(r.bytes), static_cast<ul>(r.generation), lastMs_, r.compacted ? ", compacted" : "",
                 static_cast<ul>(g.savesWritten()));
+}
+
+// H's card part (runLook()): stats.bin's header and directory as the card has
+// them now.
+void ListeningStats::printFile() {
+  statsglue::Glue& g = *glue_;
+  const statsglue::Glue::FileLook l = g.lookFile();
+  if (l.there && !l.unread) {
+    Serial.printf("[listen] stats.bin on the card: generation %lu (the saves), %lu bytes, %s %u.%u; RAM stands on "
+                  "%s generation %lu%s\n",
+                  static_cast<ul>(l.generation), static_cast<ul>(l.bytes), l.magic == sx::kMagic ? "MPST" : "NOT MPST",
+                  static_cast<unsigned>(l.major), static_cast<unsigned>(l.minor),
+                  g.store().cardCopy().present ? "its" : "none,", static_cast<ul>(g.store().cardCopy().generation),
+                  g.store().held() ? "; a stats.tmp held" : "");
+  } else {
+    Serial.printf("[listen] stats.bin on the card: %s\n", l.unread ? "unread (the card failed the question)" : "none");
+  }
+  if (l.frame) {
+    const sf::Head& h = g.fold().head();
+    Serial.printf("[listen] stats.bin's rows: MARK %lu, HOUR %lu, DAYS %lu, RCNT %lu, TRKD %lu; the base %s%08lx, %lu "
+                  "rows%s\n",
+                  static_cast<ul>(l.rows[sf::kMark]), static_cast<ul>(l.rows[sf::kHour]),
+                  static_cast<ul>(l.rows[sf::kDays]), static_cast<ul>(l.rows[sf::kRcnt]),
+                  static_cast<ul>(l.rows[sf::kTrkd]), h.baseGen ? "stats-" : "none ", static_cast<ul>(h.baseGen),
+                  static_cast<ul>(h.baseRows), (h.flags & sf::kFlagBaseLost) ? " (a base was lost once)" : "");
+  }
 }
 
 void ListeningStats::printDays() {
@@ -767,22 +854,7 @@ void ListeningStats::printMarks() {
                 static_cast<ul>(f.gap()));
 }
 
-void ListeningStats::printTrack(const char* hex) {
-  uint64_t h = 0;
-  int n = 0;
-  for (; hex[n]; ++n) {
-    const char c = hex[n];
-    const int v = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
-    if (v < 0 || n == 16) {
-      n = -1;
-      break;
-    }
-    h = h << 4 | static_cast<uint64_t>(v);
-  }
-  if (n != 16) {
-    Serial.println("[listen] Ht<16 hex digits>: a track's path hash (METADATA 2.3.3)");
-    return;
-  }
+void ListeningStats::printTrack(uint64_t h) {
   const int64_t t0 = esp_timer_get_time();
   const sg::TrackLook t = glue_->track(h);
   const float ms = msSince(t0);

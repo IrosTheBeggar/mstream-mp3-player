@@ -144,7 +144,7 @@ private:
   // The plays waiting for their slots that the card may take now (0:
   // none): the journal ready, the card not away, and the Outbox's head due
   // (no try the card failed still waiting out its 5 s). They come before
-  // Hs (statsglue::turnOf()).
+  // Hs and the console's looks (statsglue::turnOf()).
   uint32_t slotsDue();
 
   Library& library_;

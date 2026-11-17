@@ -23,13 +23,14 @@
 //   - The resident set: this object alone (the firmware's in internal RAM,
 //     .bss, made once in PlayHistory::begin() and never destroyed), at most
 //     2,048 B on the device (app/ListeningStats' static_assert); MARK's
-//     block beside it for a card with more than 8 MARK rows (the store's,
-//     carved by the boot's read through Memory::keep: the firmware's
-//     internal heap). Everything else is carved and given back: a read's or
-//     a save's work memory in one call (Memory::alloc), the boot's scan's
-//     ranges' block and its overflow's chunks across passes (Memory::top:
-//     the firmware's at the top of PSRAM's largest free block, 64 KB kept
-//     free).
+//     block for a card with more than 8 MARK rows (the store's, its size the
+//     card's, carved by the boot's read through Memory::keep and kept for
+//     the session: the firmware's at the top of PSRAM's largest free block,
+//     never internal RAM's). Everything else is carved and given back: a
+//     read's or a save's work memory in one call (Memory::alloc), the
+//     boot's scan's ranges' block and its overflow's chunks across passes
+//     (Memory::top: the firmware's at the top of PSRAM's largest free
+//     block, 64 KB kept free).
 //   - The read (5.4): begin(), in PlayHistory::begin() before the journal's
 //     begin(), with the boot's waits; again after each scanBegan(true) (a
 //     remount: one read, no waits, the folds before it dropped at once, the
@@ -197,7 +198,10 @@ struct DaysLook {
 //     written()) while one is due (`slotsDue`: the Tracker's pending(), the
 //     journal ready, the card not away, the Outbox's head due);
 //   - Hs, once no slot is due: its save holds every play the gate held
-//     back (S1's device round 1).
+//     back (S1's device round 1); in its turn too, after it, the console's
+//     looks that read the card (app/ListeningStats: H's card part, Hd, Ht;
+//     `hsAsked` either), so their work memory is carved only where a
+//     save's is.
 enum class Turn : uint8_t { Nothing, Save, Slot, Hs };
 Turn turnOf(bool saveDue, uint32_t slotsDue, bool hsAsked);
 
@@ -222,8 +226,9 @@ struct Memory {
   void* (*alloc)(size_t bytes) = nullptr;  // a read's or a save's work memory, given back in the call
   void* (*top)(size_t bytes) = nullptr;    // held across passes: the ranges' block, the overflow's chunks (null: alloc)
   void (*release)(void* p) = nullptr;      // alloc's and top's
-  // Held for the session: MARK's block (the boot's read, in setup), the
-  // one block the stats keep beside the object (null: alloc and release).
+  // Held for the session: MARK's block (the boot's read, in setup; a card
+  // past 8 MARK rows, its rows and 8 more), the one block the stats keep
+  // beside the object (null: alloc and release; the firmware's: top's).
   void* (*keep)(size_t bytes) = nullptr;
   void (*keepRelease)(void* p) = nullptr;
 };

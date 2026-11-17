@@ -250,14 +250,24 @@ void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, boo
   // slot due: the plays the gate held back are written first, each folded
   // live (written()), so its save holds them (S1's device round 1: Hs at
   // the pass the gate opened saved "nothing new" with 4 plays waiting).
+  // The console's looks that read the card (H's card part, Hd, Ht) in the
+  // same turn, after Hs, one a pass, and never behind the fence: their
+  // PSRAM is carved only where the saves' is (the internal-RAM review).
   const bool fenced = library_.update() && library_.update()->fenced();
-  switch (statsglue::turnOf(stats_.saveDue(fenced), slotsDue(), stats_.hsWaiting())) {
+  const bool looks = stats_.lookWaiting() && !fenced;
+  switch (statsglue::turnOf(stats_.saveDue(fenced), slotsDue(), stats_.hsWaiting() || looks)) {
     case statsglue::Turn::Save: stats_.runSave(fenced); break;
     case statsglue::Turn::Slot:
       tryT0_ = esp_timer_get_time();
       outbox_->writeOne();
       break;
-    case statsglue::Turn::Hs: stats_.runHs(fenced); break;
+    case statsglue::Turn::Hs:
+      if (stats_.hsWaiting()) {
+        stats_.runHs(fenced);
+      } else {
+        stats_.runLook();
+      }
+      break;
     case statsglue::Turn::Nothing: break;
   }
 }

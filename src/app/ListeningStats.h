@@ -17,10 +17,12 @@
 // it and joins it to the play log:
 //   - begin(), in PlayHistory::begin() before the journal's begin(): the glue
 //     made in internal RAM (.bss, never destroyed: the resident set, at most
-//     2,048 B; nothing of the stats' is held in PSRAM between calls but the
-//     boot's scan's blocks), stats.bin and its base read with the boot's
+//     2,048 B, and all of the stats' in internal RAM; nothing of the stats'
+//     is held in PSRAM between calls but the boot's scan's blocks and MARK's
+//     block below), stats.bin and its base read with the boot's
 //     waits (tagstore::kBootWaitsMs: nothing else is held up yet), MARK's
-//     block beside it (the internal heap) for a card whose MARK needs one,
+//     block (PSRAM's, at the top of its largest free block, kept for the
+//     session) for a card whose MARK needs one (more than 8 rows),
 //     and the Folds the journal is given. With the stats off (unread, a
 //     newer major, no memory) the glue is still given: it covers nothing, so
 //     nothing is trimmed (5.5);
@@ -57,14 +59,17 @@
 //     next pass or after the end's flush (owedLine()): its save runs under
 //     the journal's append, the loop's deepest path, and printf's frames
 //     stay out from under it;
-//   - the console's H (command()): H the state; Hd the last 7 UTC days (the
-//     card's DAYS and HOUR with the records); Hm MARK beside ACKS and the
-//     log's highest seqs; Ht<16 hex> a track's row by path hash (base ⊕
-//     stats.bin's TRKD ⊕ the records, read now on the loop); Hs a save now,
-//     at the next pass the write gate lets through with no play waiting for
-//     its slot that the card may take (refused during the boot's scan, behind
-//     the update's fence, with the card away, after a partial scan, behind,
-//     or after a changed stats.bin).
+//   - the console's H (command()): H the state (RAM's at once; the card's
+//     header and rows at a look's pass); Hd the last 7 UTC days (the card's
+//     DAYS and HOUR with the records); Hm MARK beside ACKS and the log's
+//     highest seqs (RAM's, at once); Ht<16 hex> a track's row by path hash
+//     (base ⊕ stats.bin's TRKD ⊕ the records). The looks that read the card
+//     wait for a pass the write gate lets through with no slot due and the
+//     update's fence down (lookWaiting(), runLook(): one a pass). Hs a save
+//     now, at the next pass the write gate lets through with no play
+//     waiting for its slot that the card may take (refused during the
+//     boot's scan, behind the update's fence, with the card away, after a
+//     partial scan, behind, or after a changed stats.bin).
 // Loop task only.
 class ListeningStats final : private statsglue::Env {
 public:
@@ -112,6 +117,16 @@ public:
   // due (PlayHistory::loop(): statsglue::turnOf()); run it then.
   bool hsWaiting() const { return hsWaiting_; }
   void runHs(bool fenced);
+  // The console's looks that read the card (H's card part, Hd, Ht), asked
+  // by command() and made one a pass in Hs's turn (PlayHistory::loop():
+  // statsglue::turnOf(), Hs first), at a pass the write gate lets through
+  // and not behind the library update's fence, as the saves: their work
+  // memory and FatFile (PSRAM, given back in the call) are never carved in
+  // a start's, a jump's or a join's window, the gapless window or the fence,
+  // where a decoder's or the update's long-lived blocks may be carved
+  // beside them (the internal-RAM review; docs/LISTENING-STATS.md 5.14).
+  bool lookWaiting() const { return looks_ != 0; }
+  void runLook();
   // The console's H (the text after the H, Enter-ended).
   void command(const char* arg);
   // A rotation's save's line, owed since its save (PlayHistory::loop() at
@@ -130,11 +145,14 @@ private:
 
   void logRead(const statsfile::Opened& o, const char* when, float ms);
   void logSaved(statsglue::Kind k, const statsfile::SaveReport& rep, float ms);
-  void printState();
+  void askLook(uint8_t look, const char* what);
+  void printState();  // H's RAM part (at once)
+  void printFile();   // H's card part (runLook())
   void printDays();
   void printMarks();
-  void printTrack(const char* hex);
+  void printTrack(uint64_t hash);
 
+  static constexpr uint8_t kLookState = 1, kLookDays = 2, kLookTrack = 4;
   statsglue::Glue* glue_ = nullptr;  // internal RAM (.bss): the resident set
   tagstore::Fs* fs_ = nullptr;
   bool hasCommit_ = false;
@@ -149,7 +167,9 @@ private:
   bool seekSeen_ = false;
   uint32_t seekAt_ = 0;
   bool hsWaiting_ = false;
+  uint8_t looks_ = 0;  // the looks asked (kLook*), made one a pass (runLook())
   bool readyLogged_ = false;
+  uint64_t lookHash_ = 0;  // Ht's path hash, the last asked
   int64_t saveT0_ = 0;     // the save under way began (esp_timer's us)
   float lastMs_ = 0.0f;    // the last save's
   bool owed_ = false;      // a rotation's save's line (owedLine())

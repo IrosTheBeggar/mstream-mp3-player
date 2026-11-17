@@ -314,8 +314,8 @@ public:
   using AllocFn = void* (*)(size_t bytes);
   using FreeFn = void (*)(void* p);
   // `alloc`, `release`: MARK's block (null: malloc and free; the
-  // firmware's: the internal heap in setup, kept for the session: the
-  // glue's Memory::keep).
+  // firmware's: the top of PSRAM's largest free block in setup, kept for
+  // the session: the glue's Memory::keep).
   explicit Store(tagstore::Fs& fs, AllocFn alloc = nullptr, FreeFn release = nullptr);
   // MARK's block given back: the Fold must use MARK no more (the glue holds
   // both for the session).
