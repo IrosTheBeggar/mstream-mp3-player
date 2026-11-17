@@ -185,6 +185,7 @@ uint64_t PlayHistory::startedAt(uint64_t startMono, uint8_t* clock) {
 
 void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, bool cardHeld) {
   if (!active_) return;
+  stats_.owedLine();  // (a rotation's save's line: out of its save's frames)
   tracker_->tick(look.state, look.positionMs, look.positionKnown, look.positionKnown ? look.durationMs : 0);
   // The stats' look at this pass: the update step's safe point (a boot's
   // save compacts only at one), Auto DJ's join and an asked library update
@@ -203,10 +204,17 @@ void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, boo
   // for the remount, remounted(), or the end's flush(). A journal Off, NVS
   // refusing the boot count, writes no slot: Hs still runs below.)
   if (!journal_->ready() && !journal_->off()) {
-    if (cardAway()) return;
+    if (cardAway()) {
+      // The scan stops here until a remount (writes off: until a restart),
+      // so the listening stats' fold ends now as a partial scan's: its
+      // blocks given back, nothing left waiting on them (a track's start, a
+      // library update, Auto DJ's join).
+      stats_.scanAway();
+      return;
+    }
     // The fold's room for this piece first; none while Auto DJ's join is
     // Working: the scan waits that pass.
-    if (!stats_.mayScan(kScanSlotsPerPass)) return;
+    if (!stats_.mayScan()) return;
     ++scanPasses_;
     const int64_t t0 = esp_timer_get_time();
     const bool done = journal_->scan(kScanSlotsPerPass);
@@ -360,6 +368,7 @@ void PlayHistory::flush(const char* why) {
   stats_.ending(monoMs() + kFlushBudgetMs);  // (the Outbox's own deadline: its monoMs() is this)
   const Outbox::Flushed f = outbox_->flush(kFlushBudgetMs, kScanSlotsPerPass);
   const float ms = static_cast<float>(esp_timer_get_time() - t0) / 1000.0f;
+  stats_.owedLine();  // (a rotation's in the flush: its line now, before the end's)
   char left[160] = "";
   if (f.left) {
     snprintf(left, sizeof(left), "; %lu NOT written: %s", static_cast<unsigned long>(f.left),

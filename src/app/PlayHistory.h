@@ -110,9 +110,11 @@ public:
   // The scan doesn't wait for an update once its fold has begun (before it,
   // it does: never both waiting).
   bool statsScanHolds() const { return active_ && stats_.scanHolds(); }
-  // ... overflow chunks among them: a track's start waits (main.cpp's hold,
-  // PlayState::Waiting), about 1.4 s and the boot's save for a full log,
-  // once a card.
+  // ... overflow chunks among them (a boot's fold past the 96 records: a
+  // full log's, once a card): a track's start waits (main.cpp's hold,
+  // PlayState::Waiting; PlayGate's statsHold), about 1.4 s and the boot's
+  // save for a full log. A card that goes away mid-scan gives them back
+  // (ListeningStats::scanAway()).
   bool overflowHeld() const { return active_ && stats_.overflowHeld(); }
 
   // The boot's scan: slots a pass (four reads: about 10 KB).

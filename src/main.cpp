@@ -452,12 +452,13 @@ static bool pauseIfPlaying() {
 // The player's hold (PlaybackController::Hold): a play waits while
 // Bluetooth is the output and the headphones aren't connected (PlayGate
 // connects them, and releases or ends the wait), and while the listening
-// stats' boot scan holds overflow chunks (docs/LISTENING-STATS.md 5.14: a
+// stats' boot fold holds overflow chunks (docs/LISTENING-STATS.md 5.14: a
 // decoder's blocks carved under them would land where the next library
-// update needs room; about 1.4 s and the boot's save for a full log, once a
-// card; stepStatsHold() releases such a wait). Not a track that follows
-// one playing (a remount's scan again, rare, while a track plays: a gap
-// would be worse): only a start from a pause, a stop or a wait.
+// update needs room; a fold past the 96 records, a full log's once a card,
+// about 1.4 s and the boot's save; PlayGate's statsHold releases such a
+// wait). Not a track that follows one playing (a remount's scan again,
+// rare, while a track plays: a gap would be worse): only a start from a
+// pause, a stop or a wait.
 struct OutputHold : PlaybackController::Hold {
   bool headphones() const { return !silent && audio.output() == Output::Bluetooth && !audio.bluetooth().connected(); }
   bool holdPlay() const override {
@@ -2505,36 +2506,13 @@ static void handleBluetooth() {
   }
 }
 
-// A track's start waiting for the listening stats (OutputHold): their boot
-// scan holds overflow chunks (docs/LISTENING-STATS.md 5.14). Once they are
-// given back (the boot's save landed, or its last try failed) the wait is
-// released, or left to PlayGate when the headphones are what it waits for
-// then. Nothing starts by itself at a boot: a start the listener asked, a
-// tap on Play or the headphones' play key, waits here.
-static bool statsHeldStart = false;
-static void stepStatsHold() {
-  if (playHistory.overflowHeld()) {
-    if (player.state() == PlayState::Waiting && !statsHeldStart) {
-      statsHeldStart = true;
-      Serial.println("[play] the start waits for the listening stats (their boot scan holds its overflow until its "
-                     "save, once a card)");
-    }
-    return;
-  }
-  if (!statsHeldStart) return;
-  statsHeldStart = false;
-  if (player.state() != PlayState::Waiting || outputHold.headphones()) return;  // (cancelled; or PlayGate's now)
-  Serial.println("[play] the listening stats gave their overflow back: playing");
-  player.release();
-}
-
-// Play while Bluetooth is the output and the headphones aren't connected:
-// PlayGate's decisions (the player and the session are done in step()), and
-// what is left to do here: the radio and what the UI says.
+// Play while Bluetooth is the output and the headphones aren't connected,
+// and a start the listening stats hold (their boot fold's overflow chunks,
+// OutputHold): PlayGate's decisions (the player and the session are done in
+// step()), and what is left to do here: the radio and what the UI says.
+// Nothing starts by itself at a boot: a start the listener asked, a tap on
+// Play or the headphones' play key, is what the stats hold.
 static void stepPlayGate(uint32_t now) {
-  // (A wait the listening stats hold is theirs until their overflow is given
-  // back: stepStatsHold(). The headphones' part of it, PlayGate's after.)
-  if (statsHeldStart) return;
   BtSink& bt = audio.bluetooth();
   PlayGate::In in;
   in.play = player.state();
@@ -2543,6 +2521,7 @@ static void stepPlayGate(uint32_t now) {
   in.link = bt.link();
   in.sessionFailed = btSession.failed();
   in.nothingToFind = bt.nothingToFind();
+  in.statsHold = playHistory.overflowHeld();
   in.nowMs = now;
   const PlayGate::Do d = playGate.step(in, player, btSession);
   if (d == PlayGate::Do::None) return;
@@ -2582,6 +2561,13 @@ static void stepPlayGate(uint32_t now) {
       // Cancelled (or the speaker, or stopped): a link that comes later
       // answers nothing; the radio carries on as it was.
       Serial.printf("[play] the wait for %s ended (%s)\n", name, stateName());
+      break;
+    case PlayGate::Do::Held:
+      Serial.println("[play] the start waits for the listening stats (their boot fold holds overflow chunks until "
+                     "its save)");
+      break;
+    case PlayGate::Do::Start:
+      Serial.println("[play] the listening stats gave their overflow back: playing");
       break;
     case PlayGate::Do::None:
       break;
@@ -4068,7 +4054,6 @@ void loop() {
                               player.state() != PlayState::Waiting && !btLost) ||
                              usbViz.active());
   btSession.update(audio.bluetooth().link(), now);
-  stepStatsHold();
   stepPlayGate(now);
   // The fade's toast: a touch (swallowed as a wake, or on a lit screen; not
   // one "Touch when off" ignores, nor the glance's) or the PWR key's wake

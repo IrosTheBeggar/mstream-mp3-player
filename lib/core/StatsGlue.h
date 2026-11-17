@@ -39,7 +39,8 @@
 //     partial() to the fold, each piece's overflow chunks taken first
 //     (reserve()); ended at the boot's save (the ranges' block given back
 //     before the save carves its work memory), or when the journal is ready
-//     (ready(): a partial scan's, which asks no save). A scan no reserve()
+//     (ready(): a partial scan's, which asks no save), or when the card goes
+//     away mid-scan (scanAway(): as a partial scan's). A scan no reserve()
 //     came before (the end's flush finishing it) begins it at its first call.
 //   - The live fold of each play written (written(): Outbox::Env's): a
 //     record; the 97th with the records full puts the session behind.
@@ -197,6 +198,15 @@ struct DaysLook {
 enum class Turn : uint8_t { Nothing, Save, Slot, Hs };
 Turn turnOf(bool saveDue, uint32_t slotsDue, bool hsAsked);
 
+// The look-ahead the firmware's reserve() asks before each piece of the
+// boot's scan (app/ListeningStats::mayScan()): none. The fold carves an
+// overflow chunk itself at the record past the 96 (Fold::bootSlot(), in the
+// same piece of a pass that may carve), so chunks are held, and a track's
+// start waits (overflowHeld()), only for a fold that passes the records: a
+// full log's, once a card (5.14, the owner's default (1)). A look-ahead of
+// the piece's 128 slots would carve one at every boot's first piece.
+constexpr uint32_t kReserveAhead = 0;
+
 // Why the boot's scan waits this pass (scanWaits()).
 enum class ScanWait : uint8_t {
   None,
@@ -262,6 +272,15 @@ public:
   // The journal ready: a boot's fold that asked no save (a partial scan)
   // ends here.
   void ready();
+  // The card went away during the boot's scan (out of the slot, or refusing
+  // every write until a restart: app/PlayHistory's word), so the scan stops
+  // until a remount: a fold under way ends now as a partial scan's (no save
+  // this session, the trim by the MARK read at the boot, an overflow past
+  // the records dropped: behind), its ranges' block and chunks given back,
+  // so nothing waits on them (a track's start, a library update, Auto DJ's
+  // join). A remount's scanBegan(true) reads and folds again. True: a fold
+  // under way was ended.
+  bool scanAway();
   // A play's slot written (Outbox::Env::written()): the live fold, a record.
   void written(const playlog::Slot& s);
   // The orderly end flushes (PlayHistory::flush()): from here no read (a

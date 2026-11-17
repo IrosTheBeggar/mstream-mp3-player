@@ -24,7 +24,8 @@
 namespace ui {
 
 struct AppState {
-  // The player and the queue (Waiting: a play waits for the headphones).
+  // The player and the queue (Waiting: a play waits for the headphones, or
+  // for a moment for the listening stats: headphonesWait()).
   PlayState play = PlayState::Stopped;
   bool failed = false;           // the current track can't be played
   bool seekable = true;          // ... can start part of the way in (PlaybackController::seekable(): the entry's path asked of the backend; the seek bar's knob)
@@ -51,6 +52,16 @@ struct AppState {
   uint8_t btVolume = 0;
   bool headphonesSetVolume = false;  // AVRCP absolute volume
   bool silent = false;           // silent test mode (console z)
+  // `p` (the player's state, now or as this snapshot has it) waits for the
+  // headphones: Bluetooth the output and them not connected (main.cpp's
+  // Hold, PlayGate's wait: "Waiting for SPYDRONE...", [Play on speaker] and
+  // [Cancel]). A wait on the speaker, or with them connected, is a start the
+  // listening stats hold a moment (their boot fold's overflow chunks: docs/
+  // LISTENING-STATS.md 5.14): the play button's spinner alone says it.
+  bool headphonesWait(PlayState p) const {
+    return p == PlayState::Waiting && onBluetooth && !btConnected && !silent;
+  }
+  bool headphonesWait() const { return headphonesWait(play); }
   // Bluetooth for the Output card (OutputModel): what the link is doing,
   // and what the listener asked for (btSession.wanted(): the audio moves
   // to the headphones once they are linked; until then it stays put).

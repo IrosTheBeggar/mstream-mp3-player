@@ -36,8 +36,11 @@
 //   - while the boot's scan holds blocks (scanHolds(): the ranges' block, the
 //     overflow's chunks) a library update asked waits (LibraryUpdate::
 //     Wait::Stats) and Auto DJ's join doesn't begin; while overflow chunks
-//     are held (overflowHeld(): about 1.4 s and the boot's save for a full
-//     log, once a card) a track's start waits (main.cpp: PlayState::Waiting);
+//     are held (overflowHeld(): a fold past the 96 records, a full log's,
+//     once a card; about 1.4 s and the boot's save) a track's start waits
+//     (main.cpp: PlayState::Waiting, PlayGate's statsHold). The card going
+//     away mid-scan ends the fold as a partial scan's, its blocks given back
+//     (scanAway());
 //   - written(): the live fold of each play written (a record);
 //   - the saves at a pass the write gate lets through (saveDue(), runSave():
 //     statsglue::turnOf(), before that pass's slot): the boot overflow's
@@ -49,7 +52,10 @@
 //     writes, or another card in it (sectordisk's guard);
 //   - [listen] lines: the read (and a remount's), each save (the boot's and
 //     its tries, a rotation's, the records', Hs's) with its ms and bytes, a
-//     log file not read whole, the boot's fold at Ready;
+//     log file not read whole, the boot's fold at Ready. A rotation's at the
+//     next pass or after the end's flush (owedLine()): its save runs under
+//     the journal's append, the loop's deepest path, and printf's frames
+//     stay out from under it;
 //   - the console's H (command()): H the state; Hd the last 7 UTC days (the
 //     card's DAYS and HOUR with the records); Hm MARK beside ACKS and the
 //     log's highest seqs; Ht<16 hex> a track's row by path hash (base ⊕
@@ -73,11 +79,16 @@ public:
     bool updating = false;     // a library update step asked, not over (LibraryUpdate::asked())
   };
   void pass(const Pass& p, uint32_t nowMs);
-  // Before a piece of the boot's scan of `slots` slots: true, its room taken
-  // (a remount's read made, the boot's fold begun, first), or nothing to
-  // take; false: the scan waits this pass (statsglue::Glue::scanWaits():
-  // the join works; or its fold not begun and a library update asked).
-  bool mayScan(uint32_t slots);
+  // Before a piece of the boot's scan: true, its room taken (a remount's read
+  // made, the boot's fold begun, first: statsglue::kReserveAhead, no chunk
+  // ahead of the piece), or nothing to take; false: the scan waits this
+  // pass (statsglue::Glue::scanWaits(): the join works; or its fold not
+  // begun and a library update asked).
+  bool mayScan();
+  // The card went away mid-scan (PlayHistory's cardAway(): the scan stops
+  // until a remount): the fold ended as a partial scan's, its blocks given
+  // back (statsglue::Glue::scanAway()); its line once.
+  void scanAway();
   // The boot's scan holds blocks across passes (the update step's
   // Wait::Stats, Auto DJ's join's hold); overflow chunks among them (a
   // track's start waits).
@@ -102,6 +113,10 @@ public:
   void runHs(bool fenced);
   // The console's H (the text after the H, Enter-ended).
   void command(const char* arg);
+  // A rotation's save's line, owed since its save (PlayHistory::loop() at
+  // each pass's start, flush() after the end's): printed now, from a frame
+  // not under the journal's append.
+  void owedLine();
 
 private:
   // statsglue::Env
@@ -136,6 +151,8 @@ private:
   bool readyLogged_ = false;
   int64_t saveT0_ = 0;     // the save under way began (esp_timer's us)
   float lastMs_ = 0.0f;    // the last save's
+  bool owed_ = false;      // a rotation's save's line (owedLine())
+  float owedMs_ = 0.0f;
   uint32_t reserveFailed_ = 0;
   uint32_t scanWaits_ = 0;    // passes the boot's scan waited for the join
   uint32_t updateWaits_ = 0;  // ... for a library update asked before its fold began (LibraryUpdate::asked())

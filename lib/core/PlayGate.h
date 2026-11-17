@@ -38,7 +38,17 @@
 //     never scans by itself: SinkSearch): there is nothing to wait for. The
 //     wait ends paused at once, nothing is asked of the radio, and the UI
 //     says where pairing is. Not while the Pair screen has the radio: a
-//     play waits for the pairing under way there.
+//     play waits for the pairing under way there;
+//   - the listening stats hold a start too (In::statsHold: their boot fold
+//     holds overflow chunks, a full log's once a card, about 1.4 s and its
+//     save; docs/LISTENING-STATS.md 5.14; main.cpp's Hold holds it). While
+//     they do, nothing is released, given up or cancelled: a wait for the
+//     headphones begins as ever (Connect: the burst overlaps the hold) and
+//     is released once both are over ("Now playing on SPYDRONE" when they
+//     connected meanwhile); one on the speaker, or with them connected, is
+//     the stats' alone (Held, once), and starts when they let go (Start).
+//     The listener's cancel ends either (a hold that never ended would keep
+//     only that way out: the stats' own rule gives the blocks back).
 // The listener's own ways out are the player's: a tap on play (or B) while
 // waiting cancels it (Paused), and playOnSpeaker() is the explicit choice of
 // the speaker. Nothing moves to the speaker by itself: every way out of a
@@ -68,6 +78,7 @@ public:
     BtLink link;                          // what the link is doing (BtSink::link())
     bool sessionFailed = false;           // BtSession::failed(): the tries ran out
     bool nothingToFind = false;           // BtSink::nothingToFind(): none paired, no scan may find any
+    bool statsHold = false;               // the listening stats hold a start (PlayHistory::overflowHeld())
     uint32_t nowMs = 0;
   };
 
@@ -82,11 +93,14 @@ public:
     Ended,    // the wait ended some other way (cancelled, the speaker, stopped): BtSession::withdraw()
     NotPaired,  // nothing to wait for (none paired): PlaybackController::cancelWait(),
                 // BtSession::withdraw(); the UI points to Output > Pair new headphones
+    Held,       // a wait the listening stats hold alone began (on the speaker, or the headphones
+                // connected): nothing to do but say so
+    Start,      // ... and they let go: PlaybackController::release()
   };
 
   Do update(const In& in);
   // update(), with what it asks of the player and the session done here
-  // (Connect/Track: session.connect(); Release: player.release(); GiveUp,
+  // (Connect/Track: session.connect(); Release, Start: player.release(); GiveUp,
   // Cancel, NotPaired: player.cancelWait(); GiveUp, Cancel, Ended,
   // NotPaired: session.withdraw()).
   // main.cpp is left the radio (Connect: BtSink::connect()) and what the UI
@@ -95,6 +109,8 @@ public:
 
   State state() const { return state_; }
   bool waiting() const { return state_ == State::Waiting; }
+  // A wait the listening stats hold alone (Held, until Start or a cancel).
+  bool statsWaiting() const { return stats_; }
   bool failed() const { return state_ == State::Failed; }
   // Counts the failures: the UI shows the notice once for each.
   uint32_t failures() const { return failures_; }
@@ -118,6 +134,7 @@ public:
 
 private:
   State state_ = State::Idle;
+  bool stats_ = false;  // a wait the listening stats hold alone
   uint32_t sinceMs_ = 0;
   uint32_t failures_ = 0;
 };

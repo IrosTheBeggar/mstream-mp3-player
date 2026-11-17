@@ -74,6 +74,7 @@ struct Rig : PlaybackController::Hold {
   bool linked = false;
   BtLink link;
   bool nothingToFind = false;  // BtSink::nothingToFind(): none paired, nothing scans for any
+  bool stats = false;  // the listening stats hold a start (PlayHistory::overflowHeld())
   int pages = 0;  // BtSink::connect() calls
   uint32_t now = 1000;
 
@@ -91,8 +92,11 @@ struct Rig : PlaybackController::Hold {
     link.remembered = true;
     link.attempts = 3;
   }
-  // main.cpp's: Bluetooth is the output and the headphones aren't connected.
-  bool holdPlay() const override { return onBluetooth && !linked; }
+  // main.cpp's: Bluetooth is the output and the headphones aren't connected;
+  // or the listening stats hold a start (not a track following one playing).
+  bool holdPlay() const override {
+    return (onBluetooth && !linked) || (stats && player.state() != PlayState::Playing);
+  }
 
   Do pass(uint32_t ms = 100) {
     now += ms;
@@ -104,6 +108,7 @@ struct Rig : PlaybackController::Hold {
     in.link = link;
     in.sessionFailed = session.failed();
     in.nothingToFind = nothingToFind;
+    in.statsHold = stats;
     in.nowMs = now;
     const Do d = gate.step(in, player, session);
     if (d == Do::Connect) {
@@ -701,6 +706,161 @@ void test_stop_while_waiting_ends_it() {
   TEST_ASSERT_EQUAL(PlayGate::State::Idle, r.gate.state());
 }
 
+// ---- a start the listening stats hold (their boot fold's overflow chunks) ----
+
+// On the speaker: the stats' alone. Held (said once), nothing started, the
+// radio not asked; started when they let go.
+void test_the_stats_hold_a_start_on_the_speaker() {
+  Rig r;
+  r.onBluetooth = false;
+  r.stats = true;
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL(PlayState::Waiting, r.player.state());
+  TEST_ASSERT_EQUAL(Do::Held, r.pass());
+  TEST_ASSERT_TRUE(r.gate.statsWaiting());
+  TEST_ASSERT_FALSE(r.gate.waiting());
+  for (int i = 0; i < 10; ++i) TEST_ASSERT_EQUAL(Do::None, r.pass(150));
+  TEST_ASSERT_EQUAL_INT(0, r.audio.playCount);
+  TEST_ASSERT_EQUAL_INT(0, r.pages);
+  TEST_ASSERT_FALSE(r.session.wanted());
+  r.stats = false;  // the boot's save landed: the chunks given back
+  TEST_ASSERT_EQUAL(Do::Start, r.pass());
+  TEST_ASSERT_EQUAL(PlayState::Playing, r.player.state());
+  TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+  TEST_ASSERT_FALSE(r.gate.statsWaiting());
+  TEST_ASSERT_EQUAL(Do::None, r.pass());
+}
+
+// The headphones connected already: the stats' alone too, and no "Now
+// playing on" when it starts (Start, not Release: nothing was waited for).
+void test_the_stats_hold_a_start_with_the_headphones_connected() {
+  Rig r;
+  r.up();
+  r.stats = true;
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL(PlayState::Waiting, r.player.state());
+  TEST_ASSERT_EQUAL(Do::Held, r.pass());
+  TEST_ASSERT_EQUAL(Do::None, r.pass());
+  r.stats = false;
+  TEST_ASSERT_EQUAL(Do::Start, r.pass());
+  TEST_ASSERT_EQUAL(PlayState::Playing, r.player.state());
+  TEST_ASSERT_EQUAL_INT(0, r.pages);
+}
+
+// Bluetooth, the headphones not connected: their wait begins at once (the
+// burst overlaps the hold), they connect during it, and nothing starts
+// until the stats let go; then it is the headphones' Release ("Now playing
+// on SPYDRONE"), never a release behind PlayGate's back.
+void test_the_headphones_linked_during_the_stats_hold() {
+  Rig r;
+  r.stats = true;
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL(Do::Connect, r.pass());
+  TEST_ASSERT_TRUE(r.gate.waiting());
+  TEST_ASSERT_FALSE(r.gate.statsWaiting());
+  r.up();
+  for (int i = 0; i < 5; ++i) TEST_ASSERT_EQUAL(Do::None, r.pass(200));
+  TEST_ASSERT_EQUAL(PlayState::Waiting, r.player.state());
+  TEST_ASSERT_EQUAL_INT(0, r.audio.playCount);
+  r.stats = false;
+  TEST_ASSERT_EQUAL(Do::Release, r.pass());
+  TEST_ASSERT_EQUAL(PlayState::Playing, r.player.state());
+  TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+}
+
+// A wait for the headphones begun before the stats' hold (the scan's chunk
+// carved after the tap), linked during it: still PlayGate's. Released, with
+// its line and toast, once the hold is over: not Ended, not taken over.
+void test_a_headphones_wait_begun_before_the_stats_hold() {
+  Rig r;
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL(Do::Connect, r.pass());
+  r.stats = true;
+  TEST_ASSERT_EQUAL(Do::None, r.pass());
+  TEST_ASSERT_FALSE(r.gate.statsWaiting());
+  r.up();
+  TEST_ASSERT_EQUAL(Do::None, r.pass());
+  TEST_ASSERT_TRUE(r.gate.waiting());
+  TEST_ASSERT_EQUAL(PlayState::Waiting, r.player.state());
+  r.stats = false;
+  TEST_ASSERT_EQUAL(Do::Release, r.pass());
+  TEST_ASSERT_EQUAL(PlayState::Playing, r.player.state());
+  TEST_ASSERT_EQUAL(Do::None, r.pass());
+}
+
+// The listener's cancel during the hold (a tap on the spinner): paused,
+// nothing started when the stats let go. On Bluetooth the headphones' ask
+// is withdrawn as for any wait.
+void test_a_cancel_during_the_stats_hold() {
+  Rig r;
+  r.onBluetooth = false;
+  r.stats = true;
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL(Do::Held, r.pass());
+  r.player.togglePlayPause();  // the tap: cancelled
+  TEST_ASSERT_EQUAL(PlayState::Paused, r.player.state());
+  TEST_ASSERT_EQUAL(Do::None, r.pass());
+  TEST_ASSERT_FALSE(r.gate.statsWaiting());
+  r.stats = false;
+  TEST_ASSERT_EQUAL(Do::None, r.pass());
+  TEST_ASSERT_EQUAL(PlayState::Paused, r.player.state());
+  TEST_ASSERT_EQUAL_INT(0, r.audio.playCount);
+  Rig b;
+  b.stats = true;
+  b.player.togglePlayPause();
+  TEST_ASSERT_EQUAL(Do::Connect, b.pass());
+  b.player.togglePlayPause();
+  TEST_ASSERT_EQUAL(Do::Ended, b.pass());
+  TEST_ASSERT_FALSE(b.session.wanted());
+}
+
+// A hold that lasts (the stats' own rule gives the blocks back: the scan's
+// end, the overflow's last try, the card away; this is the gate's side of a
+// hold that didn't): nothing released, given up or cancelled meanwhile, the
+// backstop's too; the cancel still ends it. The headphones' wait past its
+// backstop under the hold gives up once the hold is over.
+void test_a_stats_hold_that_lasts() {
+  Rig r;
+  r.onBluetooth = false;
+  r.stats = true;
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL(Do::Held, r.pass());
+  for (int i = 0; i < 20; ++i) TEST_ASSERT_EQUAL(Do::None, r.pass(5000));
+  TEST_ASSERT_EQUAL(PlayState::Waiting, r.player.state());
+  TEST_ASSERT_EQUAL_INT(0, r.audio.playCount);
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL(Do::None, r.pass());
+  TEST_ASSERT_EQUAL(PlayState::Paused, r.player.state());
+  Rig b;
+  b.stats = true;
+  b.player.togglePlayPause();
+  TEST_ASSERT_EQUAL(Do::Connect, b.pass());
+  for (int i = 0; i < 6; ++i) TEST_ASSERT_EQUAL(Do::None, b.pass(5000));
+  TEST_ASSERT_EQUAL(PlayState::Waiting, b.player.state());
+  b.stats = false;
+  TEST_ASSERT_EQUAL(Do::GiveUp, b.pass());
+  TEST_ASSERT_EQUAL(PlayState::Paused, b.player.state());
+}
+
+// The output moving to the headphones (not connected) while the stats hold a
+// start on the speaker: the headphones' wait begins then, the hold within
+// it; released as theirs once both are over.
+void test_the_output_moving_to_the_headphones_during_the_stats_hold() {
+  Rig r;
+  r.onBluetooth = false;
+  r.stats = true;
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL(Do::Held, r.pass());
+  r.onBluetooth = true;
+  TEST_ASSERT_EQUAL(Do::Connect, r.pass());
+  TEST_ASSERT_FALSE(r.gate.statsWaiting());
+  r.stats = false;
+  TEST_ASSERT_EQUAL(Do::None, r.pass());
+  r.up();
+  TEST_ASSERT_EQUAL(Do::Release, r.pass());
+  TEST_ASSERT_EQUAL(PlayState::Playing, r.player.state());
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_play_while_unlinked_waits_and_connects_now);
@@ -727,5 +887,12 @@ int main() {
   RUN_TEST(test_library_and_queue_plays_wait_the_same);
   RUN_TEST(test_the_output_moving_away_ends_the_wait_paused);
   RUN_TEST(test_stop_while_waiting_ends_it);
+  RUN_TEST(test_the_stats_hold_a_start_on_the_speaker);
+  RUN_TEST(test_the_stats_hold_a_start_with_the_headphones_connected);
+  RUN_TEST(test_the_headphones_linked_during_the_stats_hold);
+  RUN_TEST(test_a_headphones_wait_begun_before_the_stats_hold);
+  RUN_TEST(test_a_cancel_during_the_stats_hold);
+  RUN_TEST(test_a_stats_hold_that_lasts);
+  RUN_TEST(test_the_output_moving_to_the_headphones_during_the_stats_hold);
   return UNITY_END();
 }

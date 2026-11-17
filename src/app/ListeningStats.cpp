@@ -179,7 +179,7 @@ void ListeningStats::pass(const Pass& p, uint32_t nowMs) {
   updating_ = p.updating;
 }
 
-bool ListeningStats::mayScan(uint32_t slots) {
+bool ListeningStats::mayScan() {
   if (!glue_) return true;
   switch (glue_->scanWaits(updating_, joinWorking_)) {
     case sg::ScanWait::Update:
@@ -196,8 +196,20 @@ bool ListeningStats::mayScan(uint32_t slots) {
       return false;
     case sg::ScanWait::None: break;
   }
-  if (glue_->wantsRoom() && !glue_->reserve(slots)) ++reserveFailed_;
+  if (glue_->wantsRoom() && !glue_->reserve(sg::kReserveAhead)) ++reserveFailed_;
   return true;
+}
+
+void ListeningStats::scanAway() {
+  if (!glue_) return;
+  const size_t ranges = glue_->rangesHeld() ? glue_->rangesBytes() : 0;
+  const uint32_t chunks = glue_->fold().chunks();
+  if (!glue_->scanAway()) return;
+  Serial.printf("[listen] the card went away during the boot's scan: its fold ended as a partial scan's (the ranges' "
+                "block %lu B and %lu overflow chunk%s given back%s): no save this session unless the card mounts "
+                "again (the scan then again from its start); the trim by the MARK read at the boot\n",
+                static_cast<ul>(ranges), static_cast<ul>(chunks), chunks == 1 ? "" : "s",
+                glue_->fold().behind() ? "; past the records: behind" : "");
 }
 
 void ListeningStats::ready(uint32_t passes, int64_t scanUs) {
@@ -313,19 +325,43 @@ void ListeningStats::partialFile() {
 void ListeningStats::saved(sg::Kind k, sg::Refused r, const sx::SaveReport& rep) {
   const float ms = r == sg::Refused::None || rep.what != sx::Saved::Off ? msSince(saveT0_) : 0.0f;
   lastMs_ = ms;
+  if (k == sg::Kind::Rotation) {
+    // A rotation's save runs under the journal's append (writeOne, append,
+    // put, place, rotate), the loop's deepest path (docs/LISTENING-STATS.md
+    // 11): its line waits for the next pass (owedLine()), so printf's frames
+    // (about 1.4 KB, the float's among them) are never under it.
+    owed_ = true;
+    owedMs_ = ms;
+    return;
+  }
   if (r == sg::Refused::None || rep.what == sx::Saved::Damaged || rep.what == sx::Saved::Behind) {
     logSaved(k, rep, ms);
     return;
   }
-  // (No buffer on this frame: it is under the save's caller, the loop's
-  // deepest path, docs/LISTENING-STATS.md 11.)
+  // (No buffer on this frame: it is under the save's caller.)
   const char* off = r == sg::Refused::Off ? (glue_ && glue_->dropped() ? " (the folds dropped at the end)" : "") : "";
-  Serial.printf("[listen] NOT saved (%s%s): %s%s\n", sg::kindName(k),
-                k == sg::Kind::Rotation ? ", before plays.1.jnl leaves the log" : "", refusedText(r), off);
+  Serial.printf("[listen] NOT saved (%s): %s%s\n", sg::kindName(k), refusedText(r), off);
 }
 
-// (A frame of its own, never under the store's save: the loop's stack,
-// docs/LISTENING-STATS.md 11.)
+void ListeningStats::owedLine() {
+  if (!owed_) return;
+  owed_ = false;
+  // (Nothing saved since: one thing of the card's a pass, and the end's
+  // flush writes slots alone once its scan is done. The glue's last save is
+  // the rotation's, its report and refusal.)
+  if (!glue_ || glue_->lastKind() != sg::Kind::Rotation) return;
+  const sg::Refused r = glue_->lastRefused();
+  const sx::SaveReport& rep = glue_->last();
+  if (r == sg::Refused::None || rep.what == sx::Saved::Damaged || rep.what == sx::Saved::Behind) {
+    logSaved(sg::Kind::Rotation, rep, owedMs_);
+    return;
+  }
+  const char* off = r == sg::Refused::Off ? (glue_->dropped() ? " (the folds dropped at the end)" : "") : "";
+  Serial.printf("[listen] NOT saved (rotation, before plays.1.jnl leaves the log): %s%s\n", refusedText(r), off);
+}
+
+// (A frame of its own, never under the store's save, nor under a rotation's
+// at all (owedLine()): the loop's stack, docs/LISTENING-STATS.md 11.)
 __attribute__((noinline)) void ListeningStats::logSaved(sg::Kind k, const sx::SaveReport& rep, float ms) {
   char kind[48];
   if (k == sg::Kind::Rotation) {

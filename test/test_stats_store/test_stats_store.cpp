@@ -554,10 +554,11 @@ struct Player {
     oenv.glue = glue.get();
     out.reset(new pl::Outbox(*tracker, *j, oenv));
   }
-  // The scan to its end, a piece a call, the fold's room taken before each.
+  // The scan to its end, a piece a call, the fold's room taken before each
+  // (the firmware's look-ahead: statsglue::kReserveAhead).
   bool scan() {
     for (int guard = 0; guard < 1000000; ++guard) {
-      if (glue) glue->reserve(piece);
+      if (glue) glue->reserve(sg::kReserveAhead);
       if (j->scan(piece)) break;
     }
     if (glue) glue->ready();
@@ -1251,7 +1252,7 @@ void test_a_full_log_never_synced() {
   bool held = false, waits = false;
   const auto t0 = std::chrono::steady_clock::now();
   for (int guard = 0; guard < 1000000; ++guard) {
-    p.glue->reserve(p.piece);
+    p.glue->reserve(sg::kReserveAhead);  // (the firmware's: the chunks carved as the fold needs them)
     held = held || p.glue->core.overflowHeld();
     waits = waits || p.glue->core.scanHolds();
     if (p.j->scan(p.piece)) break;
@@ -2065,7 +2066,7 @@ void test_the_folds_blocks_wait_for_a_reserve() {
     TEST_ASSERT_TRUE(p.glue->fold.booting());
     TEST_ASSERT_TRUE(p.glue->core.rangesHeld());
     TEST_ASSERT_TRUE(p.glue->core.scanHolds());
-    TEST_ASSERT_FALSE(p.glue->core.overflowHeld());  // (7 slots: no chunk)
+    TEST_ASSERT_FALSE(p.glue->core.overflowHeld());  // (a reserve of 1, under the 96 records: no chunk)
     TEST_ASSERT_EQUAL_UINT32(afterRead + 1, gHeap.carves);
     TEST_ASSERT_EQUAL_size_t(heldAfterRead + p.glue->core.rangesBytes(), gHeap.held);
     TEST_ASSERT_TRUE(p.scan());
@@ -2103,6 +2104,36 @@ void test_the_folds_blocks_wait_for_a_reserve() {
     TEST_ASSERT_EQUAL_STRING("nothing new", sx::savedName(p.glue->last.what));
     sameFiles(want, filesOf(card), "a remount after Ready");
   }
+  // A boot in the firmware's pieces (PlayHistory::kScanSlotsPerPass, 128
+  // slots) with its look-ahead (statsglue::kReserveAhead: none): a usual
+  // boot's fold holds no overflow chunk at any piece, so no start waits on it
+  // (5.14, the owner's default (1): only a fold past the 96 records holds
+  // chunks, a full log's, once a card). A look-ahead of the piece's 128
+  // slots would carve one at the first piece and hold it to the fold's end,
+  // whatever the log holds (R6's finding): why the firmware asks none. (The
+  // owner's call: were it the other way, kReserveAhead 128, the firmware's
+  // row here would hold the chunk.)
+  for (const uint32_t ahead : {sg::kReserveAhead, 128u}) {
+    CutFs card;
+    put(card, in);
+    Player p(card, dev);
+    deviceFor(p, sc);
+    p.piece = 128;
+    p.begin(askOf(b));
+    bool held = false;
+    for (int guard = 0; guard < 1000; ++guard) {
+      p.glue->reserve(ahead);
+      held = held || p.glue->core.overflowHeld();
+      if (p.j->scan(p.piece)) break;
+    }
+    TEST_ASSERT_EQUAL_MESSAGE(ahead > 0, held, ahead ? "a look-ahead of 128" : "the firmware's");
+    if (ahead) TEST_ASSERT_EQUAL_UINT32(sf::kChunkBytes, p.glue->fold.peak());
+    p.glue->ready();
+    TEST_ASSERT_FALSE(p.glue->core.overflowHeld() || p.glue->core.scanHolds());
+    sameOutcome(b, outcomeOf(p), "pieces of 128");
+    sameFiles(want, filesOf(card), "pieces of 128");
+  }
+  TEST_ASSERT_EQUAL_UINT32(0, sg::kReserveAhead);
   // A scan no reserve() came before: the fold begins at its first slot.
   {
     CutFs card;
@@ -2532,7 +2563,7 @@ void test_the_boot_overflows_tries() {
     const size_t atRead = gHeap.held;
     bool held = false;
     for (int guard = 0; guard < 100000; ++guard) {
-      p.glue->reserve(p.piece);
+      p.glue->reserve(sg::kReserveAhead);
       held = held || p.glue->core.overflowHeld();
       if (p.j->scan(p.piece)) break;
     }
@@ -2696,8 +2727,25 @@ void test_marks_room_and_a_remount_past_it() {
     TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(y.glue->last.what));
     TEST_ASSERT_EQUAL_UINT32(rows + 8, rowsOf(other, sf::kMark));
   }
-  // A player booting on the first card: its block holds 20 rows. A ninth
-  // new pair in one boot is the fold out of memory (no save, no trim by it).
+  // A ninth new pair in one boot on a card of 12 rows (its block holds 20)
+  // is the fold out of memory: no save (stats.bin as it was), no trim by it.
+  {
+    CutFs nine;
+    put(nine, filesOf(card));
+    addDevices(nine, 28, 37);
+    const Bytes before = bytesOf(nine, "stats.bin");
+    Player h(nine, me);
+    h.nvs.ids.epoch = 0x77;
+    h.mem.alloc = heapAlloc;
+    h.mem.release = heapFree;
+    TEST_ASSERT_TRUE(h.boot(a));
+    TEST_ASSERT_EQUAL_UINT32(20, h.glue->fold.markCap());
+    TEST_ASSERT_TRUE(h.glue->fold.noMemory());
+    TEST_ASSERT_EQUAL_STRING("save boot (no)", h.glue->calls.back().c_str());
+    TEST_ASSERT_TRUE(h.trimmed().empty());
+    TEST_ASSERT_TRUE(bytesOf(nine, "stats.bin") == before);
+  }
+  // A player booting on the first card: its block holds 20 rows.
   Player g(card, me);
   g.nvs.ids.epoch = 0x77;
   g.mem.alloc = heapAlloc;
@@ -2731,8 +2779,10 @@ void test_marks_room_and_a_remount_past_it() {
 // behind its check or during its build); once begun, the update waits for
 // the scan's blocks (scanHolds(): LibraryUpdate's Wait::Stats; test_library_
 // update has the step's side) until the boot's save gives them back, and
-// the scan goes on. Auto DJ's join: the scan's pieces wait while it works,
-// and it doesn't begin while the scan holds blocks.
+// the scan goes on. Auto DJ's join: the scan's pieces wait while it works
+// (scanWaits()); that the join doesn't begin while the scan holds blocks is
+// app/AutoDj's (Env::statsHold, from scanHolds()): only scanHolds() is
+// tested here.
 // ---------------------------------------------------------------------------
 void test_the_scan_and_a_library_update() {
   const Worked wk;
@@ -2801,6 +2851,63 @@ void test_the_scan_and_a_library_update() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// The card going away mid-scan (out of the slot, or writes off until a
+// restart: app/PlayHistory's cardAway() stops the scan there): the fold ends
+// as a partial scan's at once (scanAway()), its ranges' block and chunks
+// given back, so nothing waits on them (a track's start: overflowHeld(); a
+// library update and Auto DJ's join: scanHolds()); no save (Hs refused:
+// partial), and past the records behind. A remount begins the scan again:
+// read and folded again, saved as any boot's. A scan that goes on without
+// one finishes as a partial scan's: its save refused, nothing trimmed by it.
+// ---------------------------------------------------------------------------
+void test_the_card_away_mid_scan() {
+  const Overflow ov;
+  const uint32_t cap = static_cast<uint32_t>(ov.sc["cap"].u64());
+  for (const bool remount : {true, false}) {
+    CutFs card;
+    put(card, sessionCard(ov.sc["in"]));
+    Player p(card, ov.dev, cap);
+    ov.player(p);
+    gHeap = Heap();
+    p.begin(ov.ask(0));
+    const size_t atRead = gHeap.held;
+    sg::Glue& g = p.glue->core;
+    g.reserve(sg::kReserveAhead);
+    TEST_ASSERT_FALSE(p.j->scan(p.piece));  // (300 slots: the first piece, 128)
+    TEST_ASSERT_TRUE(g.overflowHeld() && g.scanHolds());  // (128 records: one chunk, the 97th's)
+    TEST_ASSERT_EQUAL_UINT32(1, g.fold().chunks());
+    p.glue->away = true;
+    TEST_ASSERT_TRUE(g.scanAway());
+    TEST_ASSERT_FALSE(g.scanAway());  // (once)
+    TEST_ASSERT_FALSE(g.overflowHeld() || g.scanHolds() || g.booting());
+    TEST_ASSERT_EQUAL_size_t(atRead, gHeap.held);
+    TEST_ASSERT_TRUE(g.fold().behind());  // (128 records past the 96: dropped)
+    TEST_ASSERT_FALSE(g.hs(false));
+    TEST_ASSERT_EQUAL_STRING("partial", refused(p));
+    TEST_ASSERT_EQUAL_UINT32(0, card.dir.count(sx::kStatsBin));
+    p.glue->away = false;
+    if (remount) {
+      p.j->remounted();
+      TEST_ASSERT_TRUE(g.rereadPending());
+      TEST_ASSERT_TRUE(p.scan());
+      TEST_ASSERT_EQUAL_UINT32(300, g.fold().folded());
+      TEST_ASSERT_EQUAL_STRING("save boot", p.glue->calls.back().c_str());
+      TEST_ASSERT_EQUAL_STRING("wrote", sx::savedName(g.last().what));
+      TEST_ASSERT_FALSE(g.fold().behind());
+      TEST_ASSERT_EQUAL_UINT32(300, cardMark(card, p));
+    } else {
+      TEST_ASSERT_TRUE(p.scan());
+      TEST_ASSERT_EQUAL_STRING("save boot (no)", p.glue->calls.back().c_str());
+      TEST_ASSERT_EQUAL_STRING("partial", refused(p));
+      TEST_ASSERT_EQUAL_UINT32(0, card.dir.count(sx::kStatsBin));
+      TEST_ASSERT_TRUE(p.trimmed().empty());
+    }
+    TEST_ASSERT_FALSE(g.overflowHeld() || g.scanHolds());
+    TEST_ASSERT_EQUAL_size_t(atRead, gHeap.held);
+  }
+}
+
 int main(int, char**) {
   if (!cardfixtures::json("stats/index.json", &gIndex) || gIndex.size() == 0 ||
       !cardfixtures::json("stats/sessions.json", &gSessions) || gSessions.size() == 0) {
@@ -2829,5 +2936,6 @@ int main(int, char**) {
   RUN_TEST(test_the_boot_overflows_tries);
   RUN_TEST(test_marks_room_and_a_remount_past_it);
   RUN_TEST(test_the_scan_and_a_library_update);
+  RUN_TEST(test_the_card_away_mid_scan);
   return UNITY_END();
 }

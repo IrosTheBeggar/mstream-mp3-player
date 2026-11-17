@@ -406,6 +406,14 @@ void Glue::ready() {
   endBoot();
 }
 
+bool Glue::scanAway() {
+  if (!fold_.booting()) return false;
+  partial_ = true;
+  fold_.partial();
+  endBoot();
+  return true;
+}
+
 void Glue::written(const pl::Slot& s) {
   // (A live slot while a boot's overflow waits for its save: the last
   // chunk's room. The 97th with no room: behind.)
