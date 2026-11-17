@@ -2702,13 +2702,15 @@ struct MoodRun {
 // resident set; its R6): the firmware's own glue (statsglue::Glue, its Fold
 // and its store) on a card in memory, every PSRAM block it carves through
 // the model heap as the firmware's hooks carve them (app/ListeningStats.cpp):
-// - nothing resident: the glue's object is internal RAM's on the device
-//   (.bss, at most 2,048 B: 5.14's "Moved to internal RAM", after the
-//   device's FLAC row), and so is MARK's block for a card with more than 8
-//   MARK rows (Memory::keep: here malloc's, outside the model heap); at
-//   PlayHistory::begin()'s place (setup(), after Auto DJ's glue) its read
-//   (Glue::begin(), the boot's, with its waits): the work memory and a
-//   FatFile for each file open, given back in the call;
+// - the glue's object is internal RAM's on the device (.bss, at most
+//   2,048 B: 5.14's "Moved to internal RAM", after the device's FLAC row),
+//   outside the model heap; at PlayHistory::begin()'s place (setup(), after
+//   Auto DJ's glue) its read (Glue::begin(), the boot's, with its waits):
+//   the work memory and a FatFile for each file open, given back in the
+//   call, and for a card with more than 8 MARK rows MARK's block, kept for
+//   the session at the top of the largest free block (Memory::keep: the
+//   firmware's topAlloc(); the internal-RAM review: internal RAM holds the
+//   object alone, whatever the card);
 // - the boot's scan, from its first reserve() (the fold begun): the ranges'
 //   block and a log's overflow chunks at the top of the largest free block
 //   through the join's spacers keeping kMargin free (Memory::top: the
@@ -2726,8 +2728,6 @@ struct MoodRun {
 //   update 0's fence.
 // The card the boot finds (StatsCard) is written by the same glue in
 // earlier sessions, outside the model heap.
-void* internalAlloc(size_t n) { return std::malloc(n); }  // (internal RAM's: not this model's)
-void internalFree(void* p) { std::free(p); }
 constexpr size_t kFatFileBytes = 4148;  // FatFs::open()'s psramNew<FatFile>(): a FIL with its own 4,096 B window
 constexpr uint64_t kStatsNowMs = statsfold::kMinMs + 600ull * statsfold::kDayMs;  // the board's clock at the saves
 const uint8_t kStatsDev[6] = {0x00, 0x00, 0x5e, 0x00, 0x53, 0x01};
@@ -2930,7 +2930,8 @@ struct StatsRun {
   uint32_t startAt = 0;     // (startWaits false) a start at the boot asked after this many of the scan's pieces
                             // of 128 slots (0: after its last piece)
   // What it came to.
-  size_t markBytes = 0;     // MARK's block (the boot's read's: kept for the session, in internal RAM)
+  size_t markBytes = 0;     // MARK's block (the boot's read's: kept for the session)
+  size_t markHeld = 0;      // what the boot's read left held in this heap: MARK's block's footprint (0: none)
   size_t rangesBytes = 0;   // the ranges' block the boot's fold carved
   size_t chunkBytes = 0;    // the overflow's chunks at the scan's end
   uint32_t chunks = 0, tries = 0, saves = 0, wrote = 0, compacted = 0, reserveFailed = 0;
@@ -3052,9 +3053,9 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   g_durations = ModelHeap::alloc(index.trackCount() * 2);
   take({3680, 3584, 15432, 4148}, nullptr);  // Auto DJ's glue, its engine, the open file
   // PlayHistory::begin(): the stats' read (the work memory and the files
-  // given back in the call). The glue's object and MARK's block (a card
-  // with more than 8 MARK rows) are internal RAM's: nothing of the stats'
-  // stays in this heap.
+  // given back in the call). The glue's object is internal RAM's; MARK's
+  // block (a card with more than 8 MARK rows) stays in this heap, at the
+  // top of its largest free block, and nothing else of the stats' does.
   const cc::msmf::Acks acks = stats ? statsAcks(stats->ackRows, stats->card->seq[0]) : cc::msmf::Acks{};  // the root's
   std::unique_ptr<cutfs::CutFs> statsCard;
   std::unique_ptr<PsramFs> statsFs;
@@ -3069,14 +3070,16 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     m.alloc = ModelHeap::alloc;
     m.top = topAlloc;
     m.release = ModelHeap::release;
-    m.keep = internalAlloc;
-    m.keepRelease = internalFree;
+    m.keep = topAlloc;
+    m.keepRelease = ModelHeap::release;
     glue.reset(new statsglue::Glue(*statsFs, statsEnv, m));
+    const size_t free0 = ModelHeap::freeBytes();
     const statsfile::Opened& o = glue->begin(acks, [](uint32_t) {});
     TEST_ASSERT_TRUE(o.read == statsfile::Read::Loaded);
     TEST_ASSERT_TRUE(glue->on());
     TEST_ASSERT_EQUAL_size_t(0, statsFs->openNow());
     stats->markBytes = glue->store().markBytes();
+    stats->markHeld = free0 - ModelHeap::freeBytes();
     seq = stats->card->seq[0];
   }
   take({40960, 9216}, nullptr);              // the dance
@@ -3468,15 +3471,16 @@ void test_a_library_update_in_a_model_heap() {
 // (the 19,412-track library, two update steps): the firmware's glue on a
 // card of P = 2,214 played tracks (stats.bin's TRKD 1,000 rows, the rest in
 // the base) or P = 19,478 (TRKD at the forced compaction's 4,096 rows, the
-// base 15,382), its read at PlayHistory::begin()'s place (its object and
-// MARK's block internal RAM's, outside the model), its boot's
+// base 15,382), its read at PlayHistory::begin()'s place (its object
+// internal RAM's, outside the model), its boot's
 // scan folding a log of 300 slots (one overflow chunk) or a full one never
 // synced (13,106 slots: 16 chunks), the boot's save landing, landing at its
 // second try, or failing all four (behind: the chunks given back, no save
 // after); the scan first (the boot's join waiting for its blocks), the join
 // first, or the scan after the first update (asked before its first
 // piece); and a card with 12 MARK rows (MARK's block, carved by the boot's
-// read in setup, in internal RAM). Plays are written at each update's fence
+// read in setup at the top of the largest free block and kept: PSRAM's on
+// the device, the internal-RAM review). Plays are written at each update's fence
 // pass and after it, each 24 bringing the records' save. The mood plan's pass rule (9.5),
 // with Auto DJ placed and where the heap puts its blocks: the margin kept
 // at the boot and after the update; the fence's frees, the build and the
@@ -3577,14 +3581,14 @@ void test_the_listening_stats_in_a_model_heap() {
                       (statsOn.joined >= 245764 || on.joined < 245764);
     const bool inClass = statsOn.joined + classOf(on.joined) >= on.joined &&
                          statsOn.bootJoined + classOf(on.bootJoined) >= on.bootJoined;
-    printf("[join] with the listening stats (%s): MARK's block %u B, the ranges' block %u B, the overflow %u B in %u "
-           "chunks at the scan's end; the boot's save %u tries%s, %u of %u saves landed (%u compacting). Auto DJ off: "
+    printf("[join] with the listening stats (%s): MARK's block %u B (%u B held in the heap), the ranges' block %u B, "
+           "the overflow %u B in %u chunks at the scan's end; the boot's save %u tries%s, %u of %u saves landed (%u compacting). Auto DJ off: "
            "after the update %u B (the control's %u B). Auto DJ on: the boot's join %u B (the control's %u B), free "
            "at least %u B while placing; after the update %u B, joined %u B (%u B of it at the top), the join given "
            "back %u B; free at least %u B while placing; the fence as off's: %s. Where the heap puts them: joined %u "
            "B, given back %u B. Joined against the control's %u B: %+ld B: the pass rule %s; within the control's "
            "class (%u B): %s\n",
-           w, (unsigned)sr.markBytes, (unsigned)sr.rangesBytes, (unsigned)sr.chunkBytes, (unsigned)sr.chunks,
+           w, (unsigned)sr.markBytes, (unsigned)sr.markHeld, (unsigned)sr.rangesBytes, (unsigned)sr.chunkBytes, (unsigned)sr.chunks,
            (unsigned)sr.tries, sr.behind ? ", behind" : "", (unsigned)sr.wrote, (unsigned)sr.saves,
            (unsigned)sr.compacted, (unsigned)statsOff.largest, (unsigned)off.largest, (unsigned)statsOn.bootJoined,
            (unsigned)on.bootJoined, (unsigned)statsOn.bootLowest, (unsigned)statsOn.largest, (unsigned)statsOn.joined,
@@ -3601,6 +3605,11 @@ void test_the_listening_stats_in_a_model_heap() {
     }
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, sr.reserveFailed, w);
     TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.mark, sr.markBytes, w);
+    // MARK's block, a card past 8 rows, in this heap (PSRAM's top on the
+    // device: Memory::keep, the firmware's topAlloc(); the internal-RAM
+    // review: internal RAM holds the object alone, whatever the card), one
+    // footprint; none for 8 rows or fewer.
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.mark ? ModelHeap::carved(sh.mark) + ModelHeap::kHeader : 0, sr.markHeld, w);
     TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.ranges, sr.rangesBytes, w);
     TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.chunks, sr.chunkBytes, w);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(sh.chunks / statsfold::kChunkBytes, sr.chunks, w);

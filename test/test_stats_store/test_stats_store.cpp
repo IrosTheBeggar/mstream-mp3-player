@@ -130,8 +130,9 @@ void heapFree(void* p) {
   std::free(p);
 }
 // The blocks held for the session (Memory::keep: MARK's block; the
-// firmware's internal heap, beside the glue's object in .bss: 5.14's "Moved
-// to internal RAM").
+// firmware's at the top of PSRAM's largest free block, the glue's object
+// alone in internal RAM's .bss: 5.14's "Moved to internal RAM" and the
+// internal-RAM review).
 Heap gKeep;
 void* keepAlloc(size_t n) {
   void* p = std::malloc(n);
@@ -2749,7 +2750,7 @@ void test_marks_room_and_a_remount_past_it() {
     TEST_ASSERT_TRUE(y.boot(a));
     TEST_ASSERT_EQUAL_UINT32(rows, y.glue->first.marks);
     TEST_ASSERT_EQUAL_UINT32(sf::Fold::markBlockBytes(rows), y.glue->first.markBytes);
-    // MARK's block through Memory::keep alone (the device's internal heap),
+    // MARK's block through Memory::keep alone (the device's PSRAM top),
     // once; alloc's and top's blocks (PSRAM's: the read's and the save's
     // work memory, the ranges' block) all given back by the boot's end.
     TEST_ASSERT_EQUAL_UINT32(keeps0 + 1, gKeep.carves);
