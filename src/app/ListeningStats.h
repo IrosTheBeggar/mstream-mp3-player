@@ -21,8 +21,8 @@
 //     is held in PSRAM between calls but the boot's scan's blocks and MARK's
 //     block below), stats.bin and its base read with the boot's
 //     waits (tagstore::kBootWaitsMs: nothing else is held up yet), MARK's
-//     block (PSRAM's, at the top of its largest free block, kept for the
-//     session) for a card whose MARK needs one (more than 8 rows),
+//     block (PSRAM's, plain psramAlloc, kept for the session) for a card
+//     whose MARK needs one (more than 8 rows),
 //     and the Folds the journal is given. With the stats off (unread, a
 //     newer major, no memory) the glue is still given: it covers nothing, so
 //     nothing is trimmed (5.5);
@@ -34,8 +34,10 @@
 //     boot's scan its room (mayScan(): before its first piece none while a
 //     library update is asked and not over, and none while Auto DJ's join is
 //     Working: the scan waits that pass), the ranges' block and the
-//     overflow's chunks at the top of PSRAM's largest free block, 64 KB kept
-//     free (as Auto DJ's join places its own);
+//     overflow's arena at the top of PSRAM's largest free block, 64 KB kept
+//     free (as Auto DJ's join places its own), the free block left above
+//     each closed by caps until the hold ends (5.14, fix A: its [listen]
+//     line at the next pass, owedLine());
 //   - while the boot's scan holds blocks (scanHolds(): the ranges' block, the
 //     overflow's chunks) a library update asked waits (LibraryUpdate::
 //     Wait::Stats) and Auto DJ's join doesn't begin; while overflow chunks
@@ -129,9 +131,11 @@ public:
   void runLook();
   // The console's H (the text after the H, Enter-ended).
   void command(const char* arg);
-  // A rotation's save's line, owed since its save (PlayHistory::loop() at
-  // each pass's start, flush() after the end's): printed now, from a frame
-  // not under the journal's append.
+  // The owed lines (PlayHistory::loop() at each pass's start, flush()
+  // after the end's), printed now from a frame under neither the journal's
+  // append nor the scan: the hold's takes' (a line each: the block, the
+  // caps that closed the free block above it or why it was left open, the
+  // heap walks' time), then a rotation's save's.
   void owedLine();
 
 private:

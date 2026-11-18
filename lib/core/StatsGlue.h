@@ -25,12 +25,13 @@
 //     2,048 B on the device (app/ListeningStats' static_assert); MARK's
 //     block for a card with more than 8 MARK rows (the store's, its size the
 //     card's, carved by the boot's read through Memory::keep and kept for
-//     the session: the firmware's at the top of PSRAM's largest free block,
-//     never internal RAM's). Everything else is carved and given back: a
-//     read's or a save's work memory in one call (Memory::alloc), the
-//     boot's scan's ranges' block and its overflow's chunks across passes
-//     (Memory::top: the firmware's at the top of PSRAM's largest free
-//     block, 64 KB kept free).
+//     the session: the firmware's plain PSRAM, where any session block
+//     goes, never internal RAM's). Everything else is carved and given back:
+//     a read's or a save's work memory in one call (Memory::alloc), the
+//     boot's scan's ranges' block and its overflow's arena across passes
+//     (Memory::top and topRelease: the firmware's at the top of PSRAM's
+//     largest free block, 64 KB kept free, the free block left above each
+//     closed by caps held with it, given back bottom-up: 5.14's fix A).
 //   - The read (5.4): begin(), in PlayHistory::begin() before the journal's
 //     begin(), with the boot's waits; again after each scanBegan(true) (a
 //     remount: one read, no waits, the folds before it dropped at once, the
@@ -224,11 +225,19 @@ enum class ScanWait : uint8_t {
 // Where the glue's blocks go (null: malloc and free).
 struct Memory {
   void* (*alloc)(size_t bytes) = nullptr;  // a read's or a save's work memory, given back in the call
-  void* (*top)(size_t bytes) = nullptr;    // held across passes: the ranges' block, the overflow's chunks (null: alloc)
-  void (*release)(void* p) = nullptr;      // alloc's and top's
+  void* (*top)(size_t bytes) = nullptr;    // held across passes: the ranges' block, the overflow's arena (null: alloc)
+  void (*release)(void* p) = nullptr;      // alloc's
+  // top's (null: release). The firmware's (app/ListeningStats:
+  // autodj::TopHold::give()) frees a block, then the caps that close the
+  // free block above it, once every top block carved after it is given
+  // back: a call here may free nothing yet (the ranges' block while the
+  // overflow's arena is held: commit() gives it back first) or more than
+  // its block (the arena, then the ranges' block waiting for it).
+  void (*topRelease)(void* p) = nullptr;
   // Held for the session: MARK's block (the boot's read, in setup; a card
   // past 8 MARK rows, its rows and 8 more), the one block the stats keep
-  // beside the object (null: alloc and release; the firmware's: top's).
+  // beside the object (null: alloc and release; the firmware's: psramAlloc,
+  // where any session block goes, never at a top: 5.14's fix G).
   void* (*keep)(size_t bytes) = nullptr;
   void (*keepRelease)(void* p) = nullptr;
 };
@@ -382,6 +391,7 @@ public:
 private:
   uint8_t* carve();
   void release(void* p);
+  void releaseTop(void* p);  // a top block (Memory::topRelease)
   statsfile::Opened readNow(statsfile::Store::WaitFn wait);
   void settle();     // a remount's read, the boot's fold begun: whatever waits
   void beginBoot();  // the ranges' block at the top, the fold begun in it

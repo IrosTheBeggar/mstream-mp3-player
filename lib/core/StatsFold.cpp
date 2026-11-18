@@ -279,22 +279,39 @@ Fold::Fold(AllocFn alloc, FreeFn release)
 
 Fold::~Fold() { giveChunks(0); }
 
+// A chunk: the arena's next 819 records, the arena carved at the first; no
+// room for the arena, a carve of its own (each chunk after it too, until
+// none is held). False: none (the caller's noMemory).
 bool Fold::carveChunk() {
   if (chunks_ == kMaxChunks) return false;
-  void* p = alloc_(kChunkBytes);
-  if (!p) return false;
-  chunk_[chunks_++] = static_cast<Record*>(p);
-  held_ += kChunkBytes;
-  peak_ = std::max(peak_, held_);
+  if (chunks_ == 0) {
+    arena_ = static_cast<Record*>(alloc_(kArenaBytes));
+    if (arena_) peak_ = std::max(peak_, kArenaBytes);
+  }
+  if (arena_) {
+    chunk_[chunks_] = arena_ + static_cast<size_t>(chunks_) * kChunkRecords;
+  } else {
+    void* p = alloc_(kChunkBytes);
+    if (!p) return false;
+    chunk_[chunks_] = static_cast<Record*>(p);
+    peak_ = std::max<size_t>(peak_, static_cast<size_t>(chunks_ + 1) * kChunkBytes);
+  }
+  ++chunks_;
   return true;
 }
 
+// The chunks past `keep` no longer in use: the arena given back whole once
+// none is (it can't give part of itself back: endBoot()'s room no record
+// needs stays in it until then); chunks of their own, each.
 void Fold::giveChunks(uint32_t keep) {
   while (chunks_ > keep) {
     --chunks_;
-    free_(chunk_[chunks_]);
+    if (!arena_) free_(chunk_[chunks_]);
     chunk_[chunks_] = nullptr;
-    held_ -= kChunkBytes;
+  }
+  if (chunks_ == 0 && arena_) {
+    free_(arena_);
+    arena_ = nullptr;
   }
 }
 

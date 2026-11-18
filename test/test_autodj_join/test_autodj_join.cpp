@@ -150,6 +150,13 @@ struct Heap {
 size_t Heap::live = 0, Heap::peak = 0, Heap::largest = 0, Heap::allocs = 0;
 long Heap::failAt = -1;
 
+// The listening stats' hold over the model heap (app/ListeningStats.cpp's
+// topAlloc() and topRelease(), the model's hooks): one a process, emptied
+// wherever the model heap is reset (and before each case), so that a case a
+// failure cut short (Unity's longjmp: no destructor ran) leaves no stale
+// entry for the next.
+autodj::TopHold g_modelTop;
+
 // ---------------------------------------------------------------------------
 // Files.
 // ---------------------------------------------------------------------------
@@ -503,6 +510,7 @@ const Join::Config kTiny = {2, 1, 1024};  // two pairs a run, one hash a slice, 
 void setUp() {
   Heap::reset();
   g_hashCalls = 0;
+  g_modelTop = autodj::TopHold();
 }
 void tearDown() {}
 
@@ -1916,6 +1924,13 @@ struct ModelHeap {
   static inline std::map<std::pair<int, int>, std::vector<size_t>> lists;  // (fl, sl): offsets, the head last
   static inline size_t freeNow = 0, low = 0, allocs = 0;
   static inline long failAt = -1;
+  // The carves and frees while `rec` is set, to replay them in a control (the
+  // stats' read at PlayHistory::begin()'s place): an alloc of `n` bytes at the
+  // block's offset, or (n 0) the release of the block at that offset.
+  struct Event {
+    size_t at, n;
+  };
+  static inline std::vector<Event>* rec = nullptr;
 
   static int fls(size_t v) {
     int r = -1;
@@ -1943,6 +1958,7 @@ struct ModelHeap {
     mem.assign(bytes, 0);
     blocks.clear();
     lists.clear();
+    g_modelTop = autodj::TopHold();
     blocks[0] = {bytes - kHeader, false};
     list(0);
     freeNow = low = bytes - kHeader - kPoison;
@@ -1967,6 +1983,7 @@ struct ModelHeap {
     freeNow -= b.size + kHeader;
     b.used = true;
     low = std::min(low, freeNow);
+    if (rec) rec->push_back({off, n});
     return mem.data() + off + kHeader;
   }
   static size_t offsetOf(const void* p) {
@@ -1976,6 +1993,7 @@ struct ModelHeap {
     if (!p) return;
     auto it = blocks.find(offsetOf(p));
     TEST_ASSERT_TRUE_MESSAGE(it != blocks.end() && it->second.used, "not a block of the model's");
+    if (rec) rec->push_back({it->first, 0});
     it->second.used = false;
     freeNow += it->second.size + kHeader;
     auto next = std::next(it);
@@ -2004,7 +2022,10 @@ struct ModelHeap {
       const size_t tail = it->first + kHeader + a;
       blocks[tail] = {it->second.size - a - kHeader, true};
       it->second.size = a;
+      std::vector<Event>* r = rec;  // (the tail is no carve of the caller's)
+      rec = nullptr;
       release(mem.data() + tail + kHeader);
+      rec = r;
     }
     return p;
   }
@@ -2031,6 +2052,39 @@ struct ModelHeap {
 };
 
 constexpr size_t kMargin = 64 * 1024;  // the firmware's (app/AutoDj.cpp's kJoinMarginBytes)
+
+// autodj::AboveFn over the model heap (app/ListeningStats.cpp's walks
+// heap_caps_walk(): the walker's pointer is TLSF's, malloc's less the
+// poisoning's 8 B; the model's pointers have no such offset, so a cap that
+// takes T's head returns T's own pointer here).
+uint32_t g_aboveCalls = 0;
+void (*g_aboveHook)(uint32_t call) = nullptr;  // (a test's: another task's carve before the walk)
+void modelAbove(const void* block, const void* spacer, autodj::Above* out) {
+  if (g_aboveHook) g_aboveHook(g_aboveCalls);
+  ++g_aboveCalls;
+  *out = autodj::Above();
+  auto it = ModelHeap::blocks.find(ModelHeap::offsetOf(block));
+  out->visits = static_cast<uint32_t>(ModelHeap::blocks.size());
+  if (it == ModelHeap::blocks.end() || !it->second.used) return;
+  out->visits = static_cast<uint32_t>(std::distance(ModelHeap::blocks.begin(), it) + 2);
+  out->found = true;
+  out->blockBytes = it->second.size;
+  if (spacer && it != ModelHeap::blocks.begin()) {
+    auto prev = std::prev(it);
+    const size_t s = ModelHeap::offsetOf(spacer);  // (arithmetic only: given back)
+    out->onSpacers = !prev->second.used && prev->first <= s && s < it->first;
+  }
+  auto next = std::next(it);
+  if (next == ModelHeap::blocks.end()) return;
+  out->free = !next->second.used;
+  out->bytes = next->second.size;
+  if (out->free) out->capAt = ModelHeap::mem.data() + next->first + ModelHeap::kHeader;
+}
+
+// The model's hold hooks (the firmware's kTop: its margin, the poisoning's 12 B).
+const autodj::TopHold::Hooks kModelTop = {ModelHeap::largest, ModelHeap::freeBytes, ModelHeap::alloc,
+                                          ModelHeap::release, modelAbove,           kMargin,
+                                          ModelHeap::kPoison};
 
 Join::Placement modelPlacement(size_t margin = kMargin) {
   Join::Placement p;
@@ -2491,6 +2545,547 @@ void test_another_task_s_block_meanwhile() {
   TEST_ASSERT_TRUE(shortOf >= 1);
 }
 
+// ---------------------------------------------------------------------------
+// The listening stats' hold (docs/LISTENING-STATS.md 5.14, fix A): a block
+// held at the top of the largest free block, the free block the spacers left
+// above it (T) closed by caps, given back bottom-up.
+// ---------------------------------------------------------------------------
+namespace {
+
+// A heap whose last free block is exactly `f` bytes, right above a block of
+// `a` bytes in use (with a block of 64 B in use above it when `withB`: the
+// tail trimmed off a third block, exact, not rounded); the block's pointer.
+void* gapAbove(size_t f, bool withB) {
+  const size_t ca = ModelHeap::carved(512);
+  if (!withB) {
+    ModelHeap::reset(ca + 2 * ModelHeap::kHeader + f);
+    return ModelHeap::alloc(512);
+  }
+  const size_t cx = ModelHeap::carved(f + 16), cb = ModelHeap::carved(64);
+  ModelHeap::reset(3 * ModelHeap::kHeader + ca + cx + cb);
+  TEST_ASSERT_NOT_NULL(ModelHeap::alloc(512));
+  void* x = ModelHeap::alloc(f + 16);
+  TEST_ASSERT_NOT_NULL(ModelHeap::alloc(64));
+  // Trimmed to a' (block_trim_used(): the request's own size, 4-aligned):
+  // the tail is cx - a' - 4 = f.
+  const size_t keep = cx - f - ModelHeap::kHeader;
+  TEST_ASSERT_NOT_NULL(ModelHeap::shrink(x, keep - ModelHeap::kPoison));
+  return x;
+}
+
+autodj::CloseHooks modelClose() {
+  autodj::CloseHooks c;
+  c.above = modelAbove;
+  c.alloc = ModelHeap::alloc;
+  c.release = ModelHeap::release;
+  c.overhead = ModelHeap::kPoison;
+  return c;
+}
+
+using Map = std::map<size_t, ModelHeap::Block>;
+bool sameMap(const Map& a, const Map& b) {
+  if (a.size() != b.size()) return false;
+  for (auto i = a.begin(), j = b.begin(); i != a.end(); ++i, ++j)
+    if (i->first != j->first || i->second.size != j->second.size || i->second.used != j->second.used) return false;
+  return true;
+}
+
+// The boot's heap in small (5 holes of 1,000 B under the free top: the
+// setup's, smaller than the ranges' block) .
+void bootHeap() { holesThenTop(std::vector<size_t>(5, 1000), 834836); }
+
+// The free block right above the model block at `p` (0: none).
+size_t freeAboveOf(const void* p) {
+  auto it = ModelHeap::blocks.find(ModelHeap::offsetOf(p));
+  auto next = std::next(it);
+  return next != ModelHeap::blocks.end() && !next->second.used ? next->second.size : 0;
+}
+
+}  // namespace
+
+// U1: the cap rule against the model heap (ESP-IDF 5.5's TLSF), every free
+// size from 12 B to 64 KB in 4 B steps and 2,000 more to 1 MB, each built
+// exactly (a heap's last block, or a block's trimmed tail under one in use):
+// closed by at most 3 caps, each at the address the walk gave, nothing a
+// request can take left above (0 B, or a 12 B block), the caps' footprints
+// and the rest's T's; freed, the heap as it was. The counts are capcheck's
+// (the spec's every size to 4 MB, its rules the model's).
+void test_caps_close_any_free_block() {
+  TEST_ASSERT_EQUAL_size_t(57332, autodj::capRequest(58212, 12));
+  TEST_ASSERT_EQUAL_size_t(852, autodj::capRequest(864, 12));
+  TEST_ASSERT_EQUAL_size_t(1236, autodj::capRequest(1276, 12));
+  TEST_ASSERT_EQUAL_size_t(12, autodj::capRequest(24, 12));
+  TEST_ASSERT_EQUAL_size_t(4, autodj::capRequest(16, 12));
+  TEST_ASSERT_EQUAL_size_t(0, autodj::capRequest(12, 12));
+  TEST_ASSERT_EQUAL_size_t(12, autodj::capRequest(12, 0));  // (no poisoning: TLSF's least, 12 B)
+  std::map<int, uint32_t> caps;
+  uint32_t rest12 = 0, rest0 = 0;
+  auto one = [&](size_t f, bool withB) {
+    void* a = gapAbove(f, withB);
+    TEST_ASSERT_NOT_NULL(a);
+    TEST_ASSERT_EQUAL_size_t(f, freeAboveOf(a));
+    const Map before = ModelHeap::blocks;
+    autodj::Caps c;
+    autodj::CloseReport r;
+    const autodj::Close why = autodj::closeAbove(a, nullptr, modelClose(), &c, &r);
+    char w[64];
+    std::snprintf(w, sizeof(w), "a free block of %u B%s", (unsigned)f, withB ? " under a block" : "");
+    TEST_ASSERT_TRUE_MESSAGE(why == (f < 16 ? autodj::Close::Nothing : autodj::Close::Closed), w);
+    TEST_ASSERT_TRUE_MESSAGE(c.n <= autodj::Caps::kMax, w);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(c.n, r.caps, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(f, r.aboveBytes, w);
+    // Each cap right above the one before (the block, then each cap).
+    const void* at = a;
+    size_t footprints = 0;
+    for (int k = 0; k < c.n; ++k) {
+      auto it = ModelHeap::blocks.find(ModelHeap::offsetOf(at));
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(it->first + ModelHeap::kHeader + it->second.size, ModelHeap::offsetOf(c.p[k]),
+                                       w);
+      footprints += ModelHeap::blocks[ModelHeap::offsetOf(c.p[k])].size + ModelHeap::kHeader;
+      at = c.p[k];
+    }
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(footprints, r.capBytes, w);
+    const size_t rest = freeAboveOf(at);
+    TEST_ASSERT_TRUE_MESSAGE(rest == 0 || rest == 12, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(f + ModelHeap::kHeader, footprints + (rest ? rest + ModelHeap::kHeader : 0), w);
+    if (withB) TEST_ASSERT_TRUE_MESSAGE(rest || ModelHeap::blocks.rbegin()->first == ModelHeap::offsetOf(at) +
+                                                       ModelHeap::kHeader + ModelHeap::blocks[ModelHeap::offsetOf(at)].size,
+                                        w);
+    for (int k = 0; k < c.n; ++k) ModelHeap::release(c.p[k]);
+    TEST_ASSERT_TRUE_MESSAGE(sameMap(before, ModelHeap::blocks), w);
+    return std::make_pair(static_cast<int>(c.n), rest);
+  };
+  for (size_t f = 12; f <= 65536; f += 4) {
+    const auto o = one(f, (f / 4) % 2 == 1);
+    ++caps[o.first];
+    ++(o.second ? rest12 : rest0);
+  }
+  printf("[hold] the caps, every free block of 12 B to 64 KB: 0 caps %u, 1 cap %u, 2 caps %u; 12 B left %u, 0 B %u\n",
+         (unsigned)caps[0], (unsigned)caps[1], (unsigned)caps[2], (unsigned)rest12, (unsigned)rest0);
+  // capcheck's counts over the same sizes.
+  TEST_ASSERT_EQUAL_UINT32(1, caps[0]);
+  TEST_ASSERT_EQUAL_UINT32(1213, caps[1]);
+  TEST_ASSERT_EQUAL_UINT32(15168, caps[2]);
+  TEST_ASSERT_EQUAL_UINT32(0, caps[3]);
+  TEST_ASSERT_EQUAL_UINT32(193, rest12);
+  TEST_ASSERT_EQUAL_UINT32(16189, rest0);
+  // To 1 MB: three caps (the first need for them is at 66,584 B).
+  std::mt19937 rng(58212);
+  std::map<int, uint32_t> big;
+  for (int i = 0; i < 2000; ++i) {
+    const size_t f = 12 + 4 * (rng() % ((1u << 20) / 4));
+    ++big[one(f, i % 2 == 1).first];
+  }
+  TEST_ASSERT_EQUAL_INT(2, one(66580, false).first);
+  TEST_ASSERT_EQUAL_INT(3, one(66584, false).first);
+  printf("[hold] the caps, 2,000 free blocks to 1 MB: 1 cap %u, 2 caps %u, 3 caps %u\n", (unsigned)big[1],
+         (unsigned)big[2], (unsigned)big[3]);
+  TEST_ASSERT_TRUE(big[3] > 0 && big[2] > 0);
+  TEST_ASSERT_EQUAL_UINT32(0, big[4]);
+}
+
+// U2: the boot's take (the ranges' block): T closed (nothing free between it
+// and the heap's end), then the first frame's canvas and a queue each where a
+// heap that never had the take puts them; given back, that heap's blocks.
+// Without the caps (no walk: fe61db9's topAlloc()) the sprite lands in T.
+void test_the_hold_closes_t() {
+  auto tail = [](bool take, bool caps) {
+    bootHeap();
+    autodj::TopHold hold;
+    autodj::TopHold::Hooks h = kModelTop;
+    if (!caps) h.above = nullptr;
+    autodj::CloseReport r;
+    void* block = take ? hold.take(h, 1284, &r) : nullptr;
+    if (take) {
+      TEST_ASSERT_NOT_NULL(block);
+      TEST_ASSERT_TRUE(r.why == (caps ? autodj::Close::Closed : autodj::Close::Nothing));
+      if (caps) {
+        // Nothing a request can take between the block and the heap's end.
+        for (auto it = ModelHeap::blocks.find(ModelHeap::offsetOf(block)); it != ModelHeap::blocks.end(); ++it)
+          TEST_ASSERT_TRUE(it->second.used || it->second.size < 16);
+        printf("[hold] the boot's take: the ranges' block %u B carved, the %u B above it closed by %u caps (%u B), "
+               "%u walks\n",
+               (unsigned)r.blockBytes, (unsigned)r.aboveBytes, (unsigned)r.caps, (unsigned)r.capBytes,
+               (unsigned)r.walks);
+        // (the caps' footprints T's, or T's but a 12 B block no request takes)
+        TEST_ASSERT_TRUE(r.capBytes == r.aboveBytes + 4 || r.capBytes + 16 == r.aboveBytes + 4);
+      }
+    }
+    std::vector<size_t> offs;
+    for (size_t n : {352, 19208, 1100, 1180}) offs.push_back(ModelHeap::offsetOf(ModelHeap::alloc(n)));
+    hold.give(h, block);
+    TEST_ASSERT_EQUAL_INT(0, hold.held());
+    return std::make_pair(offs, Map(ModelHeap::blocks));
+  };
+  const auto plain = tail(false, false), fixed = tail(true, true), open = tail(true, false);
+  TEST_ASSERT_TRUE(fixed.first == plain.first);
+  TEST_ASSERT_TRUE(sameMap(plain.second, fixed.second));
+  // As built: the sprite (and the queue) in T, the maps apart.
+  TEST_ASSERT_FALSE(open.first == plain.first);
+  TEST_ASSERT_FALSE(sameMap(plain.second, open.second));
+}
+
+// U3: a cap that lands elsewhere: another block heads T's own list when the
+// cap is asked (a filler takes T's head, a block of the same class is
+// carved from the big block with a guard above it, the filler given back
+// (T again), then that block given back: it heads the list now). The cap
+// comes back there: Missed, given back at once, no cap held, T still free;
+// the block given back, the heap as before the take with the guard.
+namespace {
+int g_capArmed = 0;
+void* g_y = nullptr;
+void* g_guard = nullptr;
+void* allocMisled(size_t n) {
+  if (g_capArmed == 2) {
+    g_capArmed = 3;
+    void* filler = ModelHeap::alloc(n);  // T's head
+    g_y = ModelHeap::alloc(n);           // T's list empty: the big block's
+    g_guard = ModelHeap::alloc(4096);    // (fits no hole: right above it)
+    ModelHeap::release(filler);          // T again, at its list's head
+    ModelHeap::release(g_y);             // ... and this one, the head now
+  }
+  if (g_capArmed == 1 && n == 1284) g_capArmed = 2;  // (the block: the next carve is the cap's)
+  return ModelHeap::alloc(n);
+}
+}  // namespace
+
+void test_a_cap_that_lands_elsewhere() {
+  bootHeap();
+  const Map start = ModelHeap::blocks;
+  autodj::TopHold hold;
+  autodj::TopHold::Hooks h = kModelTop;
+  h.alloc = allocMisled;
+  g_capArmed = 1;
+  autodj::CloseReport r;
+  void* block = hold.take(h, 1284, &r);
+  TEST_ASSERT_EQUAL_INT(3, g_capArmed);
+  TEST_ASSERT_NOT_NULL(block);
+  TEST_ASSERT_TRUE(r.why == autodj::Close::Missed);
+  TEST_ASSERT_EQUAL_UINT32(0, r.caps);
+  TEST_ASSERT_TRUE(r.got == g_y);  // (the model's pointers: T's head is the walk's capAt)
+  TEST_ASSERT_TRUE(r.want != g_y);
+  TEST_ASSERT_EQUAL_size_t(ModelHeap::offsetOf(block) + ModelHeap::kHeader +
+                               ModelHeap::blocks[ModelHeap::offsetOf(block)].size,
+                           ModelHeap::offsetOf(r.want));
+  TEST_ASSERT_EQUAL_size_t(r.aboveBytes, freeAboveOf(block));          // T still free, whole
+  TEST_ASSERT_FALSE(ModelHeap::blocks[ModelHeap::offsetOf(g_y)].used);  // the cap given back at once
+  hold.give(h, block);
+  ModelHeap::release(g_guard);
+  TEST_ASSERT_TRUE(sameMap(start, ModelHeap::blocks));
+  g_capArmed = 0;
+}
+
+// U4 (hazard 4): another task's 4 KB probe (4,224 B as carved) before each
+// carve of a take in turn (the spacers', the block's, each cap's), and before
+// the first walk: every cap held at the address the walk gave, inside T; the
+// take's outcome by where the probe came; given back with the probe freed,
+// the heap as it was. A 60 KB Opus packet buffer before the first cap: T
+// closed when it is under the buffer's class (62,464 B), else the buffer
+// takes T and the cap misses.
+namespace {
+long g_besideCalls = 0, g_besideAt = -1;
+size_t g_besideBytes = 4096;
+void* g_beside = nullptr;
+void* allocBeside(size_t n) {
+  if (g_besideCalls++ == g_besideAt) g_beside = ModelHeap::alloc(g_besideBytes);
+  return ModelHeap::alloc(n);
+}
+void probeBeforeWalk(uint32_t call) {
+  if (call == 0) g_beside = ModelHeap::alloc(4096);
+}
+}  // namespace
+
+void test_another_task_s_carve_before_the_cap() {
+  TEST_ASSERT_EQUAL_size_t(4224, ModelHeap::carved(4096));  // (a probe, and a FatFile's 4,148 B too)
+  TEST_ASSERT_EQUAL_size_t(4224, ModelHeap::carved(4148));  // (PsramFs's FatFile, kFatFileBytes)
+  // Where the carves of a take come: its alloc calls in order.
+  bootHeap();
+  const Map start = ModelHeap::blocks;
+  autodj::TopHold::Hooks h = kModelTop;
+  h.alloc = allocBeside;
+  g_besideCalls = 0;
+  g_besideAt = -1;
+  autodj::TopHold free0;
+  autodj::CloseReport r0;
+  void* b0 = free0.take(h, 1284, &r0);
+  const long calls = g_besideCalls;
+  const int spacers = static_cast<int>(calls) - 1 - r0.caps;  // (the spacers', the block's, the caps')
+  TEST_ASSERT_TRUE(r0.why == autodj::Close::Closed);
+  free0.give(h, b0);
+  TEST_ASSERT_TRUE(sameMap(start, ModelHeap::blocks));
+  printf("[hold] a take's carves: %d spacers, the block, %u caps; T %u B\n", spacers, (unsigned)r0.caps,
+         (unsigned)r0.aboveBytes);
+  for (long k = 0; k < calls; ++k) {
+    bootHeap();
+    g_besideCalls = 0;
+    g_besideAt = k;
+    g_beside = nullptr;
+    autodj::TopHold hold;
+    autodj::CloseReport r;
+    void* block = hold.take(h, 1284, &r);
+    TEST_ASSERT_NOT_NULL(block);
+    TEST_ASSERT_NOT_NULL(g_beside);
+    char w[48];
+    std::snprintf(w, sizeof(w), "the probe before carve %ld", k);
+    // Every cap held inside the free block T was right above the block.
+    const size_t t0 = ModelHeap::offsetOf(block) + ModelHeap::kHeader + ModelHeap::blocks[ModelHeap::offsetOf(block)].size;
+    TEST_ASSERT_TRUE_MESSAGE(r.why == autodj::Close::Closed || r.why == autodj::Close::NotOnTop ||
+                                 r.why == autodj::Close::Missed || r.why == autodj::Close::Nothing,
+                             w);
+    if (r.why == autodj::Close::Closed) {
+      // Nothing a request can take between the block and the heap's end.
+      for (auto it = ModelHeap::blocks.find(ModelHeap::offsetOf(block)); it != ModelHeap::blocks.end(); ++it)
+        TEST_ASSERT_TRUE_MESSAGE(it->second.used || it->second.size < 16, w);
+    }
+    printf("[hold] the probe before a take's carve %ld (%s): %s, %u caps\n", k,
+           k < spacers ? "a spacer's" : k == spacers ? "the block's" : "a cap's", autodj::closeName(r.why),
+           (unsigned)r.caps);
+    if (k == 0) {
+      TEST_ASSERT_TRUE_MESSAGE(r.why == autodj::Close::Closed, w);  // (the probe in the big block's bottom)
+    } else if (k < spacers) {
+    } else if (k == spacers) {
+      // In R's low end under the block: the block isn't on the spacers' top.
+      TEST_ASSERT_TRUE_MESSAGE(r.why == autodj::Close::NotOnTop, w);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, r.caps, w);
+    } else if (k == spacers + 1) {
+      // At the first cap: the probe takes T's head, the cap's class is
+      // T's floor and T is under it now: the cap comes from the big block.
+      TEST_ASSERT_TRUE_MESSAGE(r.why == autodj::Close::Missed, w);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, r.caps, w);
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(t0, ModelHeap::offsetOf(r.want), w);
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(t0, ModelHeap::offsetOf(g_beside), w);
+      TEST_ASSERT_TRUE_MESSAGE(r.got < block, w);
+    } else {
+      // At a later cap: the caps before it held; the probe in the big
+      // block; the rest closed.
+      TEST_ASSERT_TRUE_MESSAGE(r.why == autodj::Close::Closed, w);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(r0.caps, r.caps, w);
+    }
+    hold.give(h, block);
+    ModelHeap::release(g_beside);
+    TEST_ASSERT_TRUE_MESSAGE(sameMap(start, ModelHeap::blocks), w);
+  }
+  // Between the give-back of the spacers and the first walk: a block in use
+  // above (the probe, 4,224 B): Nothing, T's rest left open.
+  {
+    bootHeap();
+    autodj::TopHold hold;
+    autodj::TopHold::Hooks hw = kModelTop;
+    g_beside = nullptr;
+    g_aboveCalls = 0;
+    g_aboveHook = probeBeforeWalk;
+    autodj::CloseReport r;
+    void* block = hold.take(hw, 1284, &r);
+    g_aboveHook = nullptr;
+    TEST_ASSERT_TRUE(r.why == autodj::Close::Nothing);
+    TEST_ASSERT_EQUAL_size_t(4224, r.usedAbove);
+    TEST_ASSERT_EQUAL_UINT32(0, r.caps);
+    hold.give(hw, block);
+    ModelHeap::release(g_beside);
+    TEST_ASSERT_TRUE(sameMap(start, ModelHeap::blocks));
+  }
+  // The Opus packet buffer (61,440 B: 62,464 B carved) before the first cap.
+  {
+    bootHeap();
+    g_besideCalls = 0;
+    g_besideAt = spacers + 1;
+    g_besideBytes = 61440;
+    autodj::TopHold hold;
+    autodj::CloseReport r;
+    void* block = hold.take(h, 1284, &r);
+    g_besideBytes = 4096;
+    const bool fits = r0.aboveBytes >= ModelHeap::carved(61440);
+    printf("[hold] the Opus packet buffer before the first cap: T %u B, the buffer %u B carved: %s\n",
+           (unsigned)r0.aboveBytes, (unsigned)ModelHeap::carved(61440), autodj::closeName(r.why));
+    TEST_ASSERT_TRUE(r.why == (fits ? autodj::Close::Missed : autodj::Close::Closed));
+    hold.give(h, block);
+    ModelHeap::release(g_beside);
+    TEST_ASSERT_TRUE(sameMap(start, ModelHeap::blocks));
+  }
+}
+
+// U5: the hold's blocks given back bottom-up: the ranges' block, then the
+// arena under it; the ranges' given first waits (nothing freed); the arena's
+// frees the arena, its caps, the ranges' block, its caps, in rising
+// addresses, never a free block above a block still held; then the heap as
+// before. Given in the order taken back, each at once; a third take while
+// two are held untracked (Full) and freed at once; nullptr and a block not
+// taken here.
+namespace {
+std::vector<size_t> g_freed;
+std::vector<size_t> g_holdRegion;  // the hold's blocks and caps (offsets), held
+bool g_giving = false;             // (a give-back's frees watched; a take's spacers aren't)
+void releaseWatched(void* p) {
+  ModelHeap::release(p);
+  if (!g_giving) return;
+  g_freed.push_back(ModelHeap::offsetOf(p));
+  // No free block a request can take above the lowest block still held.
+  size_t lowest = SIZE_MAX;
+  for (size_t o : g_holdRegion) {
+    auto it = ModelHeap::blocks.find(o);
+    if (it != ModelHeap::blocks.end() && it->second.used) lowest = std::min(lowest, o);
+  }
+  if (lowest == SIZE_MAX) return;
+  for (auto it = ModelHeap::blocks.upper_bound(lowest); it != ModelHeap::blocks.end(); ++it)
+    TEST_ASSERT_TRUE_MESSAGE(it->second.used || it->second.size < 16, "a free block opened above a held one");
+}
+}  // namespace
+
+void test_the_hold_given_back_bottom_up() {
+  bootHeap();
+  const Map start = ModelHeap::blocks;
+  autodj::TopHold::Hooks h = kModelTop;
+  autodj::TopHold hold;
+  autodj::CloseReport rr, ra;
+  auto give = [&](void* p) {
+    g_giving = true;
+    hold.give(h, p);
+    g_giving = false;
+  };
+  void* ranges = hold.take(h, 1284, &rr);
+  void* arena = hold.take(h, statsfold::kArenaBytes, &ra);
+  TEST_ASSERT_TRUE(rr.why == autodj::Close::Closed);
+  TEST_ASSERT_TRUE(ra.why == autodj::Close::Closed);
+  TEST_ASSERT_EQUAL_INT(2, hold.held());
+  TEST_ASSERT_TRUE(arena < ranges);
+  printf("[hold] the ranges' block (%u B above it, %u caps) and the arena under it (%u B above it, %u caps): %u B "
+         "free held\n",
+         (unsigned)rr.aboveBytes, (unsigned)rr.caps, (unsigned)ra.aboveBytes, (unsigned)ra.caps,
+         (unsigned)ModelHeap::freeBytes());
+  g_holdRegion.clear();
+  for (auto it = ModelHeap::blocks.find(ModelHeap::offsetOf(arena)); it != ModelHeap::blocks.end(); ++it)
+    if (it->second.used) g_holdRegion.push_back(it->first);
+  TEST_ASSERT_EQUAL_size_t(2 + rr.caps + ra.caps, g_holdRegion.size());  // (nothing else up there)
+  h.release = releaseWatched;
+  g_freed.clear();
+  const Map held = ModelHeap::blocks;
+  give(ranges);  // (commit()'s endBoot: the arena still held)
+  TEST_ASSERT_EQUAL_INT(2, hold.held());
+  TEST_ASSERT_EQUAL_size_t(0, g_freed.size());
+  TEST_ASSERT_TRUE(sameMap(held, ModelHeap::blocks));
+  give(arena);  // (the save landed: the arena, then the ranges' block waiting for it)
+  TEST_ASSERT_EQUAL_INT(0, hold.held());
+  TEST_ASSERT_TRUE(g_freed == g_holdRegion);  // (in rising addresses: the arena, its caps, the ranges', its caps)
+  TEST_ASSERT_TRUE(sameMap(start, ModelHeap::blocks));
+  // In the order taken back: each at once.
+  ranges = hold.take(h, 1284, &rr);
+  arena = hold.take(h, statsfold::kArenaBytes, &ra);
+  g_freed.clear();
+  give(arena);
+  TEST_ASSERT_EQUAL_INT(1, hold.held());
+  TEST_ASSERT_EQUAL_size_t(1 + ra.caps, g_freed.size());
+  // A third take while two are held: Full, untracked, freed at once.
+  void* again = hold.take(h, statsfold::kArenaBytes, &ra);
+  void* third = hold.take(h, 1000, &ra);
+  TEST_ASSERT_TRUE(ra.why == autodj::Close::Full);
+  TEST_ASSERT_EQUAL_INT(2, hold.held());
+  g_freed.clear();
+  give(third);
+  TEST_ASSERT_EQUAL_size_t(1, g_freed.size());
+  give(nullptr);
+  void* other = ModelHeap::alloc(100);
+  give(other);  // (not a top block: freed at once)
+  TEST_ASSERT_EQUAL_size_t(2, g_freed.size());
+  TEST_ASSERT_EQUAL_INT(2, hold.held());
+  give(again);
+  give(ranges);
+  TEST_ASSERT_EQUAL_INT(0, hold.held());
+  TEST_ASSERT_TRUE(sameMap(start, ModelHeap::blocks));
+}
+
+// U6 (rule 2): a block a smaller free block took (a hole: here 8 KB, in a
+// smaller class than what the spacers leave) isn't on the spacers' top: no
+// cap, so a block carved next goes into the hole's rest, as on main.
+void test_a_block_in_a_hole_gets_no_cap() {
+  auto run = [](bool take) {
+    holesThenTop({8000}, 834836);
+    const size_t hole = ModelHeap::freeBlocks(4096).front().first;
+    autodj::TopHold hold;
+    autodj::CloseReport r;
+    void* block = take ? hold.take(kModelTop, 1284, &r) : nullptr;
+    if (take) {
+      TEST_ASSERT_TRUE(r.why == autodj::Close::NotOnTop);
+      TEST_ASSERT_EQUAL_UINT32(0, r.caps);
+      TEST_ASSERT_EQUAL_size_t(hole, ModelHeap::offsetOf(block));
+    }
+    void* next = ModelHeap::alloc(6000);
+    const size_t at = ModelHeap::offsetOf(next);
+    hold.give(kModelTop, block);
+    TEST_ASSERT_TRUE(at >= hole && at < hole + ModelHeap::carved(8000));  // (in the hole, as main's)
+    return at - hole;
+  };
+  printf("[hold] a block in a hole: the next 6,000 B at the hole's +%u B (main's +%u B)\n", (unsigned)run(true),
+         (unsigned)run(false));
+}
+
+// U7 (rule 3): the caps never leave under the margin free (keepFree and a
+// KB): one byte short of it, left open; at it, closed. And a take keeps
+// keepFree free with its block carved, whatever the block (the arena's
+// 262 KB included: the spacers count its carve, as the join counts its own).
+namespace {
+size_t g_freeNow = 0;
+size_t freeIs() { return g_freeNow; }
+}  // namespace
+
+void test_the_caps_keep_the_margin() {
+  for (size_t f : {1276, 58212, 60268}) {
+    for (int over = 0; over < 2; ++over) {
+      void* a = gapAbove(f, false);
+      autodj::CloseHooks c = modelClose();
+      c.freeBytes = freeIs;
+      c.keepFree = kMargin;
+      g_freeNow = f + 4 + kMargin + 1024 - (over ? 0 : 1);
+      autodj::Caps caps;
+      autodj::CloseReport r;
+      const autodj::Close why = autodj::closeAbove(a, nullptr, c, &caps, &r);
+      TEST_ASSERT_TRUE(why == (over ? autodj::Close::Closed : autodj::Close::Margin));
+      TEST_ASSERT_EQUAL_UINT32(over ? caps.n : 0, r.caps);
+      if (!over) TEST_ASSERT_EQUAL_size_t(f, freeAboveOf(a));
+    }
+  }
+  for (size_t n : {size_t{1284}, size_t{3076}, statsfold::kArenaBytes}) {
+    bootHeap();
+    autodj::TopHold hold;
+    autodj::CloseReport r;
+    ModelHeap::mark();
+    void* p = hold.take(kModelTop, n, &r);
+    printf("[hold] a take of %u B: the lowest free %u B (keepFree %u B), %s, %u caps\n", (unsigned)n,
+           (unsigned)ModelHeap::low, (unsigned)kMargin, autodj::closeName(r.why), (unsigned)r.caps);
+    TEST_ASSERT_TRUE(ModelHeap::low >= kMargin);
+    TEST_ASSERT_TRUE(r.why == autodj::Close::Closed);
+    hold.give(kModelTop, p);
+  }
+}
+
+// U8: a heap too full for a spacer: the block where the heap puts it, and
+// nothing closed (the rest of the largest block above it never capped);
+// and no walk (no `above` hook): nothing closed either.
+void test_no_spacers_no_cap() {
+  ModelHeap::reset(kMargin + 1024 + 4096);
+  autodj::TopHold hold;
+  autodj::CloseReport r;
+  void* p = hold.take(kModelTop, 1284, &r);
+  TEST_ASSERT_NOT_NULL(p);
+  TEST_ASSERT_TRUE(r.why == autodj::Close::NoSpacers);
+  TEST_ASSERT_EQUAL_UINT32(0, r.caps);
+  TEST_ASSERT_EQUAL_size_t(0, ModelHeap::offsetOf(p));
+  TEST_ASSERT_TRUE(freeAboveOf(p) > 16);
+  TEST_ASSERT_EQUAL_INT(1, hold.held());
+  hold.give(kModelTop, p);
+  TEST_ASSERT_EQUAL_INT(0, hold.held());
+  // No memory for the block: nothing held.
+  TEST_ASSERT_NULL(hold.take(kModelTop, 1u << 20, &r));
+  TEST_ASSERT_TRUE(r.why == autodj::Close::NoBlock);
+  TEST_ASSERT_EQUAL_INT(0, hold.held());
+  bootHeap();
+  autodj::TopHold::Hooks h = kModelTop;
+  h.above = nullptr;
+  p = hold.take(h, 1284, &r);
+  TEST_ASSERT_TRUE(r.why == autodj::Close::Nothing);
+  TEST_ASSERT_EQUAL_UINT32(0, r.walks);
+  hold.give(h, p);
+}
+
 // The placement under a model of the device's heap (problem 3 of the
 // device checks, 2026-10-13): the first boot of the 19k card joined at
 // once, the card's walk carved its buffers while the join ran, and a
@@ -2708,17 +3303,20 @@ struct MoodRun {
 //   Auto DJ's glue) its read (Glue::begin(), the boot's, with its waits):
 //   the work memory and a FatFile for each file open, given back in the
 //   call, and for a card with more than 8 MARK rows MARK's block, kept for
-//   the session at the top of the largest free block (Memory::keep: the
-//   firmware's topAlloc(); the internal-RAM review: internal RAM holds the
-//   object alone, whatever the card);
+//   the session where the heap puts it (Memory::keep: the firmware's
+//   psramAlloc, 5.14's fix G; the internal-RAM review: internal RAM holds
+//   the object alone, whatever the card);
 // - the boot's scan, from its first reserve() (the fold begun): the ranges'
-//   block and a log's overflow chunks at the top of the largest free block
-//   through the join's spacers keeping kMargin free (Memory::top: the
-//   firmware's topAlloc()), held across the scan's passes until the boot's
-//   save gives them back (the ranges' block before it carves its work
-//   memory, the chunks once it lands, or after its fourth try); chunks only
-//   for a fold past the 40 records (the firmware's reserve() asks no
-//   look-ahead: statsglue::kReserveAhead; the fold carves one at the 41st);
+//   block and a log's overflow arena (all 16 chunks' room) at the top of the
+//   largest free block through the join's spacers keeping kMargin free with
+//   the block carved, the free block they left above each closed by caps
+//   (Memory::top and topRelease: the firmware's topAlloc() and topRelease(),
+//   an autodj::TopHold, 5.14's fix A), held across the scan's passes until
+//   the boot's save gives them back, bottom-up (the ranges' block, given
+//   back first by commit(), waits for the arena: freed once it lands, or
+//   after its fourth try); the arena only for a fold past the 40 records
+//   (the firmware's reserve() asks no look-ahead:
+//   statsglue::kReserveAhead; the fold carves it at the 41st);
 //   the ranges' block 1,284 B with no ACKS row above the card's MARK, 3,076 B
 //   with 16 (StatsRun::ackRows: a card a 0.14.0 player synced first);
 // - each save's work memory (Memory::alloc) and its FatFiles (PsramFs), in
@@ -2817,6 +3415,32 @@ StatsCard statsCard(uint32_t played, uint32_t trkd, uint32_t marks = 1) {
   return c;
 }
 
+// A card past the object's 16 MARK rows: the compacted sessions' 8 players,
+// then TRKD's plays in sessions of 8 players more each (a boot adds at most
+// kMarkRoom rows to the card's MARK).
+StatsCard statsCardRows(uint32_t played, uint32_t trkd, uint32_t marks) {
+  StatsCard c;
+  c.played = played;
+  c.trkd = trkd;
+  c.marks = marks;
+  c.seq.assign(marks, 1);
+  uint32_t t = 0, day = 300;
+  while (t + trkd < played) {
+    const uint32_t n = std::min<uint32_t>(8000, played - trkd - t);
+    statsSession(c, n, t, day, 100, std::min<uint32_t>(marks, statsfold::kMarkRoom), true);
+    t += n;
+    day += 100;
+  }
+  const uint32_t parts = (marks - 1) / statsfold::kMarkRoom;
+  for (uint32_t k = 0; k < parts; ++k) {
+    const uint32_t n = trkd / parts + (k < trkd % parts ? 1 : 0);
+    statsSession(c, n, t, day, 60, std::min<uint32_t>(marks, statsfold::kMarkRoom * (k + 2)), false);
+    t += n;
+    day += 60;
+  }
+  return c;
+}
+
 // The card through the firmware's FatFs (src/storage/CardFat.cpp): a
 // FatFile carved for each file open, before the open (given back when it
 // fails), given back at its close; entry() an open and a close. (f_stat's
@@ -2886,8 +3510,13 @@ struct StatsEnv final : statsglue::Env {
   bool playing = false;
   int fails = 0;
   uint32_t saves = 0, wrote = 0, compacted = 0;
+  std::function<void()> onAsking;  // (a carve in the save's window: after endBoot, before its work memory)
   uint64_t monoMs() override { return mono; }
   void asking(statsglue::Kind, statsfile::SaveAsk* a) override {
+    if (onAsking) {
+      onAsking();
+      onAsking = nullptr;
+    }
     a->nowMs = kStatsNowMs;
     a->hasCommit = false;
     a->playing = playing;
@@ -2929,11 +3558,50 @@ struct StatsRun {
                             // block then at its largest, 3,076 B)
   uint32_t startAt = 0;     // (startWaits false) a start at the boot asked after this many of the scan's pieces
                             // of 128 slots (0: after its last piece)
+  // The hold's cases (5.14, fix A + G): main's own long-lived carves inside the boot's hold or around it, at the
+  // same points in the stats' run and in its twin without the stats (statsOff: main's run, the same pieces and the
+  // same carves, no glue); what the hold leaves is compared between the two.
+  static constexpr uint32_t kNever = UINT32_MAX, kInSave = UINT32_MAX - 1, kBetweenTries = UINT32_MAX - 2,
+                            kBeforeJoin = UINT32_MAX - 3;
+  bool statsOff = false;     // main's twin
+  bool scanFile = false;     // the play log's FatFile (PlayLog's open: 4,148 B), one a log file, held while the scan
+                             // reads it (main's too), carved after that piece's reserve()
+  uint32_t uiAt = kNever;    // the first frame (NowPlayingPage's cover: the M5Canvas object 352 B and its 98 x 98
+                             // sprite 19,208 B, kept; PanelScan's 4,096 B, freed at once): after the scan's piece k,
+                             // in the boot save's window (kInSave: commit() asks the Env after endBoot, before its
+                             // work memory), before the save's second try (kBetweenTries), or after the hold, before
+                             // the boot's join (kBeforeJoin: main's order); kNever: none (the yardstick's runs)
+  uint32_t queueAt = kNever; // a start from the console, a tap or a headphone key after the scan's piece k: the
+                             // queue's blocks (1,100 + 1,180 B, kept) and an MP3's 4 KB probe (freed at once; none
+                             // while overflow chunks hold a start)
+  bool remount = false;      // after the boot's join, a FLAC playing: a remount's re-read (scanBegan(true), the same
+                             // log again, all under the card's MARK), the next track's FLAC opened after its first
+                             // piece (the old one's blocks freed first), its save, ready(); then the Dc
+  bool takeHoles = false;    // (remount) every free block under 64 KB taken by a kept block first (both twins): the
+                             // ranges' block then sits on the spacers' top
+  const std::vector<ModelHeap::Event>* replayRead = nullptr;  // (statsOff) the stats' read replayed at its place,
+                                                              // its blocks never freed kept (MARK's)
+  std::vector<ModelHeap::Event> readEvents;  // the boot's read's carves and frees (the stats' run)
+  // What the hold left: at the boot's join (`boot`) and at the remount's Dc (`again`).
+  struct Seen {
+    std::vector<size_t> kept;  // the offsets of the blocks main carved in the hold and keeps (queue, canvas)
+    size_t largest = 0;        // rawLargest() after the hold, before the join
+    std::vector<std::pair<size_t, size_t>> free64;  // ... freeBlocks(64 KB)
+    Layout layout;             // the join's blocks
+    bool placed = false;
+    uint32_t keptElsewhere = 0, runsElsewhere = 0;
+    size_t topBytes = 0, topKept = 0;
+    size_t joined = 0;         // largest() once joined
+    int held = -1;             // the top blocks the hold still held after it (TopHold::held())
+  } boot, again;
+  int heldAtEnd = -1;        // ... at the run's end, the glue destroyed
+  size_t topAbove = 0;       // the free block right above the last block the stats held at a top (0: none)
   // What it came to.
   size_t markBytes = 0;     // MARK's block (the boot's read's: kept for the session)
   size_t markHeld = 0;      // what the boot's read left held in this heap: MARK's block's footprint (0: none)
   size_t rangesBytes = 0;   // the ranges' block the boot's fold carved
-  size_t chunkBytes = 0;    // the overflow's chunks at the scan's end
+  size_t chunkBytes = 0;    // the overflow's bytes held at the scan's end (Fold::held())
+  bool arena = false;       // ... its chunks in the arena (fix A), not each a carve of its own
   uint32_t chunks = 0, tries = 0, saves = 0, wrote = 0, compacted = 0, reserveFailed = 0;
   bool behind = false;
 };
@@ -3001,15 +3669,61 @@ cc::msmf::Acks statsAcks(uint32_t rows, uint32_t seq0) {
   return a;
 }
 
-// app/ListeningStats.cpp's topAlloc(): a block held across passes at the top
-// of the largest free block, the join's spacers under it while it is carved,
-// kMargin kept free.
+// app/ListeningStats.cpp's topAlloc() and topRelease() over the model heap
+// (autodj::TopHold, its hooks the model's: modelAbove() walks it): a block
+// held across passes at the top of the largest free block, the join's
+// spacers under it while it is carved (kMargin kept free with it carved),
+// the free block they left above it closed by caps; given back bottom-up.
+// g_topAbove: the free block the last take found above its block (T, as
+// fe61db9's left it open); g_topClose: what that take did.
+size_t g_topAbove = 0;
+autodj::Close g_topClose = autodj::Close::Nothing;
 void* topAlloc(size_t n) {
-  autodj::Spacers sp;
-  autodj::takeSpacers(n, kMargin, ModelHeap::largest, ModelHeap::freeBytes, ModelHeap::alloc, ModelHeap::release, &sp);
-  void* p = ModelHeap::alloc(n);
-  autodj::giveSpacers(&sp, ModelHeap::release);
+  autodj::CloseReport r;
+  void* p = g_modelTop.take(kModelTop, n, &r);
+  g_topAbove = r.aboveBytes;
+  g_topClose = r.why;
   return p;
+}
+void topRelease(void* p) { g_modelTop.give(kModelTop, p); }
+
+// Every free block under 64 KB taken by a kept block (into `kept`), each with
+// requests of its own size class's floor (the cap's rule), so it is taken
+// whole: what is left is under 16 B.
+void takeHolesInto(std::vector<void*>* kept) {
+  for (int guard = 0; guard < 10000; ++guard) {
+    size_t f = 0;
+    for (const auto& b : ModelHeap::blocks)
+      if (!b.second.used && b.second.size >= 16 && b.second.size < 64 * 1024) f = b.second.size;
+    if (!f) return;
+    const size_t req = f < ModelHeap::kSmall
+                           ? f - ModelHeap::kPoison
+                           : (f & ~((static_cast<size_t>(1) << (ModelHeap::fls(f) - ModelHeap::kSlLog2)) - 1)) -
+                                 ModelHeap::kPoison;
+    void* p = ModelHeap::alloc(req);
+    TEST_ASSERT_NOT_NULL(p);
+    kept->push_back(p);
+  }
+  TEST_FAIL_MESSAGE("the holes never all taken");
+}
+
+// A record of carves and frees (ModelHeap::rec's) replayed: each block kept
+// that the record never frees.
+void replayCarves(const std::vector<ModelHeap::Event>& ev, std::vector<void*>* kept) {
+  std::map<size_t, void*> live;
+  for (const ModelHeap::Event& e : ev) {
+    if (e.n) {
+      void* p = ModelHeap::alloc(e.n);
+      TEST_ASSERT_NOT_NULL(p);
+      live[e.at] = p;
+      continue;
+    }
+    auto it = live.find(e.at);
+    TEST_ASSERT_TRUE_MESSAGE(it != live.end(), "a release the record never carved");
+    ModelHeap::release(it->second);
+    live.erase(it);
+  }
+  for (const auto& l : live) kept->push_back(l.second);
 }
 
 UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& records, const synthcard::Card& card,
@@ -3062,19 +3776,31 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   StatsEnv statsEnv;
   std::unique_ptr<statsglue::Glue> glue;
   uint32_t seq = 0, track = 0;
-  if (stats) {
+  // The hold's cases: main's blocks carved in the hold (or around it) and
+  // kept for the run.
+  std::vector<void*> holdKept;
+  if (stats && stats->statsOff) {
+    // Main's twin: no glue; the stats' read's carves replayed (a control
+    // with MARK's block where the read leaves it), or nothing.
+    if (stats->replayRead) replayCarves(*stats->replayRead, &holdKept);
+    seq = stats->card->seq[0];
+  } else if (stats) {
     statsCard.reset(new cutfs::CutFs(stats->card->card.reboot(cutfs::Variant::InOrder)));
     statsFs.reset(new PsramFs(*statsCard));
     statsEnv.card = statsCard.get();
     statsglue::Memory m;
     m.alloc = ModelHeap::alloc;
     m.top = topAlloc;
+    m.topRelease = topRelease;
     m.release = ModelHeap::release;
-    m.keep = topAlloc;
+    m.keep = ModelHeap::alloc;  // (fix G: MARK's block where any session block goes)
     m.keepRelease = ModelHeap::release;
     glue.reset(new statsglue::Glue(*statsFs, statsEnv, m));
     const size_t free0 = ModelHeap::freeBytes();
+    stats->readEvents.clear();
+    ModelHeap::rec = &stats->readEvents;
     const statsfile::Opened& o = glue->begin(acks, [](uint32_t) {});
+    ModelHeap::rec = nullptr;
     TEST_ASSERT_TRUE(o.read == statsfile::Read::Loaded);
     TEST_ASSERT_TRUE(glue->on());
     TEST_ASSERT_EQUAL_size_t(0, statsFs->openNow());
@@ -3137,7 +3863,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   };
   // The stats' part of the boot's scan (a reserve() before each piece of
   // 128, the firmware's look-ahead, then its slots: the ranges' block and the
-  // overflow's chunks at the top), the log above the card's MARK in the
+  // overflow's arena at the top), the log above the card's MARK in the
   // scan's order (plays.jnl, the newest, then plays.1.jnl); a start asked
   // after piece `startAt` (no start waiting: the Opus opening there, the
   // later chunks carved around it). Then finishScan(): the boot's save, its
@@ -3145,31 +3871,96 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   // asked update and a start waiting meanwhile: nothing else carves), and
   // the journal ready. From then on plays are written.
   bool statsReady = false;
-  auto statsScan = [&] {
+  // The hold's cases: main's own carves (StatsRun::uiAt, queueAt), kept for
+  // the run, their offsets into `keptInto` while the hold is recorded.
+  std::vector<size_t>* keptInto = nullptr;
+  auto keep = [&](size_t n) {
+    void* p = ModelHeap::alloc(n);
+    TEST_ASSERT_NOT_NULL(p);
+    holdKept.push_back(p);
+    if (keptInto) keptInto->push_back(ModelHeap::offsetOf(p));
+  };
+  auto carveUi = [&] {
+    keep(352);    // NowPlayingPage's M5Canvas
+    keep(19208);  // its 98 x 98 sprite
+    ModelHeap::release(ModelHeap::alloc(4096));  // PanelScan's
+  };
+  auto carveQueue = [&] {
+    keep(1100);  // QueueModel's entries
+    keep(1180);  // ... and its undo
+    // An MP3's start: its 4 KB probe (none while overflow chunks hold it).
+    if (!(glue && stats->startWaits && glue->overflowHeld())) ModelHeap::release(ModelHeap::alloc(4096));
+  };
+  const uint32_t bootSeq = seq;  // (a remount scans the same log again)
+  auto statsScan = [&](bool again) {
     namespace sf = statsfold;
     const uint32_t n = stats->slots;
     const uint32_t newer = std::min(n, playlog::kFileSlots);  // plays.jnl's; the rest plays.1.jnl's
-    glue->scanBegan(false);
-    uint32_t pieces = 0;
+    const uint32_t seq0 = again ? bootSeq : seq;
+    g_topAbove = 0;
+    if (glue) glue->scanBegan(again);
+    uint32_t pieces = 0, done = 0;
+    void* file = nullptr;  // (scanFile) the play log's FatFile
+    int fileOf = -1;
+    auto afterPiece = [&](uint32_t k) {
+      if (again) {
+        // The next track's FLAC opens (the old one's blocks freed first).
+        if (k == 0 && !flacBlocks.empty()) {
+          for (void* p : flacBlocks) ModelHeap::release(p);
+          flacBlocks.clear();
+          carveInto(kFlacAsks, &flacBlocks);
+        }
+        return;
+      }
+      if (stats->queueAt == k) carveQueue();
+      if (stats->uiAt == k) carveUi();
+    };
     auto fold = [&](uint32_t i, int f) {
       if (stats->startAt && pieces == stats->startAt * 128) bootStart();
-      if (pieces++ % 128 == 0 && !glue->reserve(statsglue::kReserveAhead)) ++stats->reserveFailed;
+      if (pieces++ % 128 == 0 && glue && !glue->reserve(statsglue::kReserveAhead)) ++stats->reserveFailed;
+      if (stats->scanFile && fileOf != f) {
+        if (file) ModelHeap::release(file);
+        file = ModelHeap::alloc(kFatFileBytes);
+        fileOf = f;
+      }
       const uint64_t at = sf::kMinMs + (570 + static_cast<uint64_t>(i) * 29 / n) * sf::kDayMs + (i % 24) * sf::kHourMs;
-      glue->slot(statsSlot(seq + i, i % stats->card->played, at), f);
+      if (glue) glue->slot(statsSlot(seq0 + i, i % stats->card->played, at), f);
+      if (++done == n && file) {
+        ModelHeap::release(file);  // (the last file read whole: closed in its piece)
+        file = nullptr;
+      }
+      if (pieces % 128 == 0) afterPiece(pieces / 128 - 1);
     };
     for (uint32_t i = n - newer; i < n; ++i) fold(i, 0);
     for (uint32_t i = 0; i < n - newer; ++i) fold(i, 1);
-    seq += n;
+    if (pieces % 128) afterPiece(pieces / 128);
+    if (!again) seq += n;
+    if (!glue) return;
+    stats->topAbove = g_topAbove;
+    if (again) return;
     stats->rangesBytes = glue->rangesBytes();
     stats->chunks = glue->fold().chunks();
     stats->chunkBytes = glue->fold().held();
+    stats->arena = glue->fold().inArena();
   };
   auto playing = [&] { return !opusBlocks.empty() || !flacBlocks.empty(); };
-  auto statsBootSave = [&] {
+  auto statsBootSave = [&](bool boot) {
+    const bool ui = boot && (stats->uiAt == StatsRun::kInSave || stats->uiAt == StatsRun::kBetweenTries);
+    if (!glue) {
+      // Main's twin: no save; the same carve at its place.
+      if (ui) carveUi();
+      statsReady = true;
+      return;
+    }
     statsEnv.playing = playing();
-    statsEnv.fails = stats->bootFails;
+    statsEnv.fails = boot ? stats->bootFails : 0;
+    if (ui && stats->uiAt == StatsRun::kInSave) statsEnv.onAsking = carveUi;
     glue->save(playlog::Folds::Why::Boot);
+    statsEnv.onAsking = nullptr;
+    bool tried = false;
     while (glue->retrying()) {
+      if (ui && !tried && stats->uiAt == StatsRun::kBetweenTries) carveUi();
+      tried = true;
       statsEnv.mono = glue->retryAtMs();
       TEST_ASSERT_TRUE(glue->saveDue(false));
       glue->saveNow(false);
@@ -3177,16 +3968,36 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     statsEnv.fails = 0;
     glue->ready();
     TEST_ASSERT_FALSE(glue->scanHolds());
+    TEST_ASSERT_EQUAL_INT(0, g_modelTop.held());  // (the hold's blocks and caps all given back)
     TEST_ASSERT_EQUAL_size_t(0, statsFs->openNow());
+    statsReady = true;
+    if (!boot) return;
     stats->tries = glue->tries();
     stats->behind = glue->fold().behind();
-    statsReady = true;
+  };
+  // What the hold left (StatsRun::Seen): after it, and once joined.
+  auto seenHold = [&](StatsRun::Seen* s) {
+    s->largest = ModelHeap::rawLargest();
+    s->free64 = ModelHeap::freeBlocks(64 * 1024);
+    s->held = g_modelTop.held();
+  };
+  auto seenJoin = [&](StatsRun::Seen* s) {
+    s->joined = ModelHeap::largest();
+    if (dj == Dj::Off) return;
+    s->layout = layoutOf(join);
+    const Join::Stats& js = join.stats();
+    s->placed = js.placed;
+    s->keptElsewhere = js.keptElsewhere;
+    s->runsElsewhere = js.runsElsewhere;
+    s->topBytes = js.topBytes;
+    s->topKept = js.topKept;
   };
   // `n` plays written (a pass the play log's write gate lets through each),
   // a save due first at each such pass (statsglue::turnOf()): the records'
   // save at 24 records, or at 40 behind an update's fence (`fenced`).
   auto statsPlays = [&](uint32_t n, bool fenced) {
     namespace sf = statsfold;
+    if (!glue) return;
     auto due = [&] {
       if (!glue->saveDue(fenced)) return;
       statsEnv.playing = playing();
@@ -3202,9 +4013,11 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   using Scan = StatsRun::Scan;
   const Scan when = stats ? stats->when : Scan::JoinFirst;
   if (stats && when == Scan::ScanFirst) {
-    statsScan();
+    keptInto = &stats->boot.kept;
+    statsScan(false);
     bootStart();  // (a start asked during the scan: under its blocks, unless overflow chunks hold it)
-    statsBootSave();
+    statsBootSave(true);
+    keptInto = nullptr;
     // A start the chunks held: released at the pass after the save gave them
     // back (main.cpp's stepPlayGate), before that pass's stepAutoDj begins
     // the boot's join. So the Opus opens before the join, as main's with the
@@ -3213,19 +4026,38 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   }
   if (hist && hist->opusFirst) bootStart();
   u.opusFirst = opusOpen;
+  if (stats && stats->uiAt == StatsRun::kBeforeJoin) carveUi();  // (main's order: the first frame, then the join)
+  if (stats) seenHold(&stats->boot);
   joinNow(&u.bootLowest);
   u.bootJoined = ModelHeap::largest();
   u.bootTopKept = u.topKept;
+  if (stats) seenJoin(&stats->boot);
   if (stats && when == Scan::JoinFirst) {
-    statsScan();
+    statsScan(false);
     bootStart();
-    statsBootSave();
+    statsBootSave(true);
   }
   if (stats && when == Scan::ThroughBuild) {
-    statsScan();
+    statsScan(false);
     bootStart();
   }
-  bootStart();  // (after the boot's join: main's; or after the overflow's chunks went)
+  bootStart();  // (after the boot's join: main's; or after the overflow's arena went)
+  if (stats && stats->remount) {
+    // A FLAC playing (opened after the boot's join), then a remount mid-
+    // session: the stats read stats.bin again and fold the log again (all
+    // under the card's MARK) holding the ranges' block, the next track's
+    // FLAC opening in that hold; then the Dc.
+    carveInto(kFlacAsks, &flacBlocks);
+    if (stats->takeHoles) takeHolesInto(&holdKept);
+    keptInto = &stats->again.kept;
+    statsScan(true);
+    statsBootSave(false);
+    keptInto = nullptr;
+    seenHold(&stats->again);
+    join.release();
+    joinNow(&u.lowest);
+    seenJoin(&stats->again);
+  }
   for (int step = 0; step < steps; ++step) {
     if (hist && hist->flacStep == step) carveInto(kFlacAsks, &flacBlocks);
     // The update step's pass that raises the fence: the records' save, due
@@ -3239,7 +4071,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     join.release();
     index.clear();  // (the words go with it)
     if (stats && when == Scan::InFence && step == 0) {
-      statsScan();
+      statsScan(false);
       bootStart();
     }
     // The plays written behind the fence: the records' save at 40, whatever
@@ -3259,7 +4091,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     const LibraryBuilder::Result r = b.build(index, c);
     TEST_ASSERT_TRUE(r.built);
     if (stats && (when == Scan::ThroughBuild || when == Scan::InFence) && step == 0) {
-      statsBootSave();
+      statsBootSave(true);
       bootStart();
     }
     if (stats && stats->fenceSave == 2 && step == 0) statsPlays(statsfold::kRecords, true);
@@ -3280,9 +4112,9 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     // An update asked before the boot's scan's first piece: the scan once
     // it is over (the scan's pieces waiting for the rejoin too).
     if (stats && when == Scan::AfterUpdate && step == 0) {
-      statsScan();
+      statsScan(false);
       bootStart();
-      statsBootSave();
+      statsBootSave(true);
     }
     if (hist) {
       // The FLAC ends; the Dc.
@@ -3314,13 +4146,14 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   index.clear();
   for (void* p : opusBlocks) ModelHeap::release(p);
   for (void* p : flacBlocks) ModelHeap::release(p);
-  if (stats) {
-    TEST_ASSERT_TRUE_MESSAGE(statsReady, "the boot's scan never ended");
+  if (stats) TEST_ASSERT_TRUE_MESSAGE(statsReady, "the boot's scan never ended");
+  if (glue) {
     stats->saves = statsEnv.saves;
     stats->wrote = statsEnv.wrote;
     stats->compacted = statsEnv.compacted;
     glue.reset();  // (MARK's block given back with its store)
   }
+  if (stats) stats->heldAtEnd = g_modelTop.held();
   return u;
 }
 
@@ -3479,8 +4312,8 @@ void test_a_library_update_in_a_model_heap() {
 // after); the scan first (the boot's join waiting for its blocks), the join
 // first, or the scan after the first update (asked before its first
 // piece); and a card with 12 MARK rows (MARK's block, carved by the boot's
-// read in setup at the top of the largest free block and kept: PSRAM's on
-// the device, the internal-RAM review). Plays are written at each update's fence
+// read in setup where the heap puts it and kept: PSRAM's on the device, the
+// internal-RAM review, 5.14's fix G). Plays are written at each update's fence
 // pass and after it, each 24 bringing the records' save. The mood plan's pass rule (9.5),
 // with Auto DJ placed and where the heap puts its blocks: the margin kept
 // at the boot and after the update; the fence's frees, the build and the
@@ -3529,10 +4362,12 @@ void test_the_listening_stats_in_a_model_heap() {
     Scan when;
     int bootFails;
     // Pinned (MEASURED-HOST): MARK's block, the ranges' block and the
-    // overflow's chunks at the scan's end (bytes), the boot save's tries,
-    // the saves landed and asked, the compactions, behind; Auto DJ placed:
-    // the boot's join and joined after the second update.
-    size_t mark, ranges, chunks;
+    // overflow's chunks at the scan's end (in the arena: 262,080 B held
+    // whatever their count, 5.14's fix A), the boot save's tries, the saves
+    // landed and asked, the compactions, behind; Auto DJ placed: the boot's
+    // join and joined after the second update.
+    size_t mark, ranges;
+    uint32_t chunks;
     uint32_t tries, wrote, saves, compacted;
     bool behind;
     size_t bootJoined, joined;
@@ -3540,18 +4375,18 @@ void test_the_listening_stats_in_a_model_heap() {
   const uint32_t full = 2 * playlog::kFileSlots;
   const int all = static_cast<int>(statsglue::kBootTries);
   const Shape shapes[] = {
-      {&small, 300, Scan::ScanFirst, 0, 0, 1284, 16384, 1, 5, 5, 1, false, 589812, 360436},
-      {&small, full, Scan::ScanFirst, 0, 0, 1284, 262144, 1, 5, 5, 1, false, 589812, 360436},
-      {&big, 300, Scan::ScanFirst, 0, 0, 1284, 16384, 1, 5, 5, 1, false, 589812, 360436},
-      {&big, full, Scan::ScanFirst, 0, 0, 1284, 262144, 1, 5, 5, 1, false, 589812, 360436},
-      {&small, full, Scan::JoinFirst, 0, 0, 1284, 262144, 1, 5, 5, 1, false, 589812, 360436},
-      {&big, full, Scan::JoinFirst, 0, 0, 1284, 262144, 1, 5, 5, 1, false, 589812, 360436},
-      {&small, full, Scan::ScanFirst, 1, 0, 1284, 262144, 2, 5, 6, 1, false, 589812, 360436},
-      {&big, full, Scan::ScanFirst, 1, 0, 1284, 262144, 2, 5, 6, 1, false, 589812, 360436},
-      {&small, full, Scan::ScanFirst, all, 0, 1284, 262144, 4, 0, 4, 0, true, 589812, 360436},
-      {&big, full, Scan::ScanFirst, all, 0, 1284, 262144, 4, 0, 4, 0, true, 589812, 360436},
-      {&small, full, Scan::AfterUpdate, 0, 0, 1284, 262144, 1, 4, 4, 1, false, 589812, 360436},
-      {&big, full, Scan::AfterUpdate, 0, 0, 1284, 262144, 1, 4, 4, 1, false, 589812, 360436},
+      {&small, 300, Scan::ScanFirst, 0, 0, 1284, 1, 1, 5, 5, 1, false, 589812, 360436},
+      {&small, full, Scan::ScanFirst, 0, 0, 1284, 16, 1, 5, 5, 1, false, 589812, 360436},
+      {&big, 300, Scan::ScanFirst, 0, 0, 1284, 1, 1, 5, 5, 1, false, 589812, 360436},
+      {&big, full, Scan::ScanFirst, 0, 0, 1284, 16, 1, 5, 5, 1, false, 589812, 360436},
+      {&small, full, Scan::JoinFirst, 0, 0, 1284, 16, 1, 5, 5, 1, false, 589812, 360436},
+      {&big, full, Scan::JoinFirst, 0, 0, 1284, 16, 1, 5, 5, 1, false, 589812, 360436},
+      {&small, full, Scan::ScanFirst, 1, 0, 1284, 16, 2, 5, 6, 1, false, 589812, 360436},
+      {&big, full, Scan::ScanFirst, 1, 0, 1284, 16, 2, 5, 6, 1, false, 589812, 360436},
+      {&small, full, Scan::ScanFirst, all, 0, 1284, 16, 4, 0, 4, 0, true, 589812, 360436},
+      {&big, full, Scan::ScanFirst, all, 0, 1284, 16, 4, 0, 4, 0, true, 589812, 360436},
+      {&small, full, Scan::AfterUpdate, 0, 0, 1284, 16, 1, 4, 4, 1, false, 589812, 360436},
+      {&big, full, Scan::AfterUpdate, 0, 0, 1284, 16, 1, 4, 4, 1, false, 589812, 360436},
       {&players, 30, Scan::ScanFirst, 0, 560, 1604, 0, 1, 5, 5, 1, false, 589812, 360436},
   };
   auto classOf = [](size_t largest) {
@@ -3605,14 +4440,15 @@ void test_the_listening_stats_in_a_model_heap() {
     }
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, sr.reserveFailed, w);
     TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.mark, sr.markBytes, w);
-    // MARK's block, a card past 8 rows, in this heap (PSRAM's top on the
-    // device: Memory::keep, the firmware's topAlloc(); the internal-RAM
+    // MARK's block, a card past 8 rows, in this heap (PSRAM on the device:
+    // Memory::keep, the firmware's psramAlloc, 5.14's fix G; the internal-RAM
     // review: internal RAM holds the object alone, whatever the card), one
     // footprint; none for 8 rows or fewer.
     TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.mark ? ModelHeap::carved(sh.mark) + ModelHeap::kHeader : 0, sr.markHeld, w);
     TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.ranges, sr.rangesBytes, w);
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.chunks, sr.chunkBytes, w);
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(sh.chunks / statsfold::kChunkBytes, sr.chunks, w);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(sh.chunks, sr.chunks, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(sh.chunks ? statsfold::kArenaBytes : 0, sr.chunkBytes, w);
+    TEST_ASSERT_EQUAL_MESSAGE(sh.chunks > 0, sr.arena, w);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(sh.tries, sr.tries, w);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(sh.wrote, sr.wrote, w);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(sh.saves, sr.saves, w);
@@ -3643,6 +4479,175 @@ void test_the_listening_stats_in_a_model_heap() {
   }
   if (!broken.empty()) {
     const std::string m = "joined under the control's by more than its class (5.14's R6): " + broken;
+    TEST_FAIL_MESSAGE(m.c_str());
+  }
+}
+
+// The boot's hold (5.14, fix A + G; the device's B1 runs, 2026-11-17): what
+// the stats hold across passes (the ranges' block, a full log's overflow)
+// sits at the top of the largest free block, and main's own long-lived
+// carves made while it is held (the first frame's cover canvas, a queue
+// started from the console, a tap or a headphone key) must go where main
+// puts them, so that once the hold ends PSRAM's layout is main's. Each case
+// against its twin without the stats (statsOff: the same pieces, the same
+// carves at the same points, no glue): (a) the blocks main carved in the
+// hold at main's offsets; (b) after the hold, the largest free block and the
+// free blocks of 64 KB or more main's; (c) the boot's join (the Dc's after
+// a remount) main's: its blocks' offsets, its placement's figures, the
+// largest free block once joined. Y1 I-3m (the usual log, a queue, a start's
+// probe and the first frame after the scan's first piece); Y2 the first
+// frame alone in the hold; Y3 I-1 (a full log: the queue after piece 3, the
+// first frame after piece 70, about the 11th chunk, the start waiting); Y4
+// the first frame in the boot save's window (the ranges' block given back
+// by commit(), the overflow held); Y5 a remount's re-read mid-session (a
+// FLAC's next track opening in its hold; the holds under 64 KB taken first,
+// so the ranges' block sits on the spacers: a free block of 4 KB or more
+// above it, the case's T); Y6 a card past 8 MARK rows (12, and 40: MARK's
+// block kept for the session from the boot's read), against a control that
+// replays the read's carves (MARK's block where the read leaves it), and
+// against bare main within 5.14's one class; Y7 the first frame between the
+// boot save's tries.
+void test_the_hold_leaves_main_s_layout() {
+  const uint32_t tracks = 19412;
+  const synthcard::Card card = synthcard::make(synth::userShape(tracks));
+  synthcard::Write dw;
+  dw.source = cc::mptg::kSourceDevice;
+  const std::vector<uint8_t> d = synthcard::tagsFile(card, dw);
+  cc::MemSource records(d.data(), static_cast<uint32_t>(d.size()));
+  std::vector<uint8_t> saved;
+  {
+    LibraryIndex idx;
+    LibraryBuilder b;
+    synthcard::Facts facts(card, false);
+    synthcard::SameRows rows(LibraryBuilder::Status::Scanned, false, true);
+    LibraryBuilder::Config c;
+    c.device = &records;
+    c.rows = &rows;
+    c.facts = &facts;
+    TEST_ASSERT_TRUE(b.build(idx, c).built);
+    MemorySink sink;
+    LibraryIndex::Inputs in;
+    in.cardId = 1;
+    TEST_ASSERT_TRUE(idx.save(sink, in));
+    saved.assign(sink.data(), sink.data() + sink.size());
+  }
+  const StatsCard sc = statsCard(2214, 1000), rows12 = statsCard(2214, 1000, 12),
+                  rows40 = statsCardRows(2214, 1000, 40);
+  const uint32_t full = 2 * playlog::kFileSlots;
+  auto classOf = [](size_t largest) {
+    return static_cast<size_t>(1) << (ModelHeap::fls(largest + ModelHeap::kPoison) - ModelHeap::kSlLog2);
+  };
+  // One case: the stats' run and its twin; what differs, said.
+  std::string bad;
+  auto run = [&](const char* name, StatsRun on, bool replay, bool remount, StatsRun* outOn = nullptr,
+                 StatsRun* outOff = nullptr) {
+    on.scanFile = true;
+    StatsRun off = on;
+    off.statsOff = true;
+    const UpdateRun uOn = libraryUpdates(Dj::Placed, saved, records, card, 0, MoodRun(), &on);
+    if (replay) off.replayRead = &on.readEvents;
+    const UpdateRun uOff = libraryUpdates(Dj::Placed, saved, records, card, 0, MoodRun(), &off);
+    (void)uOn;
+    (void)uOff;
+    const StatsRun::Seen& a = remount ? on.again : on.boot;
+    const StatsRun::Seen& m = remount ? off.again : off.boot;
+    std::string why;
+    auto differ = [&](const char* what, bool same) {
+      if (same) return;
+      why += why.empty() ? "" : ", ";
+      why += what;
+    };
+    differ("the hold's kept blocks' offsets", a.kept == m.kept);
+    differ("the largest free block after the hold", a.largest == m.largest);
+    differ("the free blocks of 64 KB or more after the hold", a.free64 == m.free64);
+    differ("the join's blocks' offsets", a.layout.filters == m.layout.filters &&
+                                              a.layout.rowToTrack == m.layout.rowToTrack &&
+                                              a.layout.trackToRow == m.layout.trackToRow);
+    differ("the join's placement", a.placed == m.placed && a.keptElsewhere == m.keptElsewhere &&
+                                       a.runsElsewhere == m.runsElsewhere && a.topBytes == m.topBytes &&
+                                       a.topKept == m.topKept);
+    differ("the largest once joined", a.joined == m.joined);
+    differ("the hold's top blocks given back", a.held == 0 && on.heldAtEnd == 0);
+    printf("[hold] %s: after the hold %u B (main's %u B), %u free blocks of 64 KB+ (main's %u); joined %u B (main's %u "
+           "B, %+ld B), filters at %u (main's %u), %u B at the top (main's %u), kept elsewhere %u (%u), transient "
+           "elsewhere %u (%u); the ranges' block %u B, the overflow %u chunks; the stats' top left %u B free above it: "
+           "%s%s\n",
+           name, (unsigned)a.largest, (unsigned)m.largest, (unsigned)a.free64.size(), (unsigned)m.free64.size(),
+           (unsigned)a.joined, (unsigned)m.joined, (long)a.joined - (long)m.joined, (unsigned)a.layout.filters,
+           (unsigned)m.layout.filters, (unsigned)a.topBytes, (unsigned)m.topBytes, (unsigned)a.keptElsewhere,
+           (unsigned)m.keptElsewhere, (unsigned)a.runsElsewhere, (unsigned)m.runsElsewhere, (unsigned)on.rangesBytes,
+           (unsigned)on.chunks, (unsigned)on.topAbove, why.empty() ? "main's" : "NOT main's: ", why.c_str());
+    if (!why.empty()) bad += (bad.empty() ? std::string() : std::string("; ")) + name + ": " + why;
+    if (outOn) *outOn = on;
+    if (outOff) *outOff = off;
+  };
+  StatsRun usual;
+  usual.card = &sc;
+  StatsRun fullLog = usual;
+  fullLog.slots = full;
+
+  StatsRun y1 = usual;  // Y1: I-3m
+  y1.queueAt = 0;
+  y1.uiAt = 0;
+  run("Y1 I-3m (the usual log; a queue, a start's probe and the first frame after the first piece)", y1, false, false);
+  StatsRun y2 = usual;  // Y2
+  y2.uiAt = 0;
+  run("Y2 the first frame alone in the hold", y2, false, false);
+  StatsRun y3 = fullLog;  // Y3: I-1
+  y3.queueAt = 3;
+  y3.uiAt = 70;
+  run("Y3 I-1 (a full log; the queue after piece 3, the first frame after piece 70, the start waiting)", y3, false,
+      false);
+  StatsRun y4 = fullLog;  // Y4
+  y4.uiAt = StatsRun::kInSave;
+  run("Y4 a full log, the first frame in the boot save's window", y4, false, false);
+  StatsRun y5 = usual;  // Y5: a remount mid-session
+  y5.uiAt = StatsRun::kBeforeJoin;  // (main's order at the boot: its hold is I-2's)
+  y5.remount = true;
+  y5.takeHoles = true;
+  StatsRun y5on;
+  run("Y5 a remount's re-read mid-session, a FLAC's next track in its hold, the holes taken", y5, false, true, &y5on);
+  // (the case's T: the free block the ranges' block left above it at its top)
+  TEST_ASSERT_TRUE_MESSAGE(y5on.topAbove >= 4096, "Y5: the ranges' block left no T above it");
+  {
+    // The same without the holes taken: the ranges' block in a hole, within
+    // a class of main's.
+    StatsRun y5h = y5;
+    y5h.takeHoles = false;
+    StatsRun a, m;
+    const std::string before = bad;
+    run("Y5' the same, the holes not taken (the ranges' block in a hole)", y5h, false, true, &a, &m);
+    bad = before;  // (printed; asserted within a class)
+    TEST_ASSERT_TRUE_MESSAGE(a.again.joined + classOf(m.again.joined) >= m.again.joined, "Y5': under main's class");
+  }
+  // Y6: a card past 8 MARK rows.
+  for (const StatsCard* c : {&rows12, &rows40}) {
+    StatsRun y6 = usual;
+    y6.card = c;
+    y6.uiAt = 0;
+    char n6[128];
+    std::snprintf(n6, sizeof(n6), "Y6 %u MARK rows (MARK's block kept for the session), against the read's carves",
+                  (unsigned)c->marks);
+    StatsRun a;
+    run(n6, y6, true, false, &a);
+    // Against bare main (no stats, no read): 5.14's rule, a class at most.
+    StatsRun bare = y6;
+    bare.statsOff = true;
+    bare.scanFile = true;
+    libraryUpdates(Dj::Placed, saved, records, card, 0, MoodRun(), &bare);
+    const bool inClass = a.boot.joined + classOf(bare.boot.joined) >= bare.boot.joined;
+    printf("[hold] Y6 %u MARK rows (MARK's block %u B) against bare main: joined %u B (bare main's %u B, %+ld B): "
+           "%s\n",
+           (unsigned)c->marks, (unsigned)a.markBytes, (unsigned)a.boot.joined, (unsigned)bare.boot.joined,
+           (long)a.boot.joined - (long)bare.boot.joined, inClass ? "within its class" : "UNDER ITS CLASS");
+    if (!inClass) bad += std::string(bad.empty() ? "" : "; ") + n6 + ": under bare main's class";
+  }
+  StatsRun y7 = fullLog;  // Y7
+  y7.bootFails = 1;
+  y7.uiAt = StatsRun::kBetweenTries;
+  run("Y7 a full log, the first frame between the boot save's tries", y7, false, false);
+  if (!bad.empty()) {
+    const std::string m = "the hold leaves PSRAM not main's: " + bad;
     TEST_FAIL_MESSAGE(m.c_str());
   }
 }
@@ -4053,13 +5058,15 @@ void test_the_listening_stats_across_updates() {
   // ACKS's rows: main's with the Opus first; the join first, the scan after
   // update 0: main's. A usual boot's start opens the Opus under the ranges'
   // block (1,284 B, 3,076 B with ACKS's rows; given back at the boot's save):
-  // the later steps then differ from main's in four or five places (K3, K4
-  // and D's step 4, -20,480 to -45,056 B, the scan first; H5's, K3's, K4's and
-  // D's steps 3-4, -110,592 to +106,496 B, the join first), main's own
-  // variation's size (the control's -61,440 B at K3's and D's step 3), and no
-  // step fails. The records' saves at 40 in update 0's fence give the usual
-  // boot's figures, and so does the Opus under a full log's overflow with no
-  // ACKS row, opening after the scan's last piece, its first or its 50th.
+  // since fix A (the free block above the hold's blocks closed by caps, the
+  // overflow in one arena) main's with the Opus first to the byte with the
+  // scan first (K3, K4 and D's step 4 differed by -20,480 to -45,056 B
+  // before it), and with the join first H5's, K3's, K4's and D's steps 3-4
+  // differ as before (-110,592 to +106,496 B), main's own variation's size
+  // (the control's -61,440 B at K3's and D's step 3); no step fails. The
+  // records' saves at 40 in update 0's fence give the usual boot's figures,
+  // and so does the Opus under a full log's overflow, opening after the
+  // scan's last piece, its first or its 50th, with ACKS's rows too.
   struct Pin {
     size_t boot, joined[5];
   };
@@ -4091,23 +5098,23 @@ void test_the_listening_stats_across_updates() {
           {466932, {249844, 249844, 180212, 249844, 270324}}, {466932, {249844, 249844, 360436, 270324, 294900}},
           {466932, {249844, 249844, 180212, 249844, 270324}},
       },
-      {  // the rework, a usual boot, the scan first (a start at the boot opening the Opus under the ranges' block)
+      {  // the rework, a usual boot, the scan first (a start at the boot opening the Opus under the ranges' block): main's with the Opus first
           {589812, {360436, 360436, 360436, 360436, 360436}}, {466932, {249844, 249844, 360436, 116724, 270324}},
           {589812, {360436, 360436, 360436, 270324, 249844}}, {589812, {294900, 172020, 172020, 106484, 172020}},
           {466932, {249844, 249844, 360436, 270324, 249844}}, {589812, {249844, 294900, 286708, 204788, 180212}},
           {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 294900, 221172}},
           {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 360436, 360436}},
-          {466932, {249844, 249844, 180212, 249844, 249844}}, {466932, {249844, 249844, 360436, 270324, 249844}},
-          {466932, {249844, 249844, 180212, 249844, 249844}},
+          {466932, {249844, 249844, 180212, 249844, 270324}}, {466932, {249844, 249844, 360436, 270324, 294900}},
+          {466932, {249844, 249844, 180212, 249844, 270324}},
       },
-      {  // the same, the root's ACKS 16 rows above MARK (the ranges' block 3,076 B)
-          {589812, {360436, 360436, 360436, 360436, 360436}}, {466932, {249844, 249844, 360436, 118772, 270324}},
+      {  // the same, the root's ACKS 16 rows above MARK (the ranges' block 3,076 B): main's with the Opus first
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {466932, {249844, 249844, 360436, 116724, 270324}},
           {589812, {360436, 360436, 360436, 270324, 249844}}, {589812, {294900, 172020, 172020, 106484, 172020}},
           {466932, {249844, 249844, 360436, 270324, 249844}}, {589812, {249844, 294900, 286708, 204788, 180212}},
           {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 294900, 221172}},
           {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 360436, 360436}},
-          {466932, {249844, 249844, 180212, 249844, 249844}}, {466932, {249844, 249844, 360436, 270324, 249844}},
-          {466932, {249844, 249844, 180212, 249844, 249844}},
+          {466932, {249844, 249844, 180212, 249844, 270324}}, {466932, {249844, 249844, 360436, 270324, 294900}},
+          {466932, {249844, 249844, 180212, 249844, 270324}},
       },
       {  // the rework, a usual boot, the join first (the Opus under the ranges' block, after the boot's join)
           {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {249844, 249844, 360436, 180212, 270324}},
@@ -4119,31 +5126,31 @@ void test_the_listening_stats_across_updates() {
           {589812, {249844, 249844, 180212, 249844, 270324}},
       },
       {  // held through the build
-          {589812, {409588, 360436, 360436, 360436, 360436}}, {589812, {303092, 245748, 245748, 92148, 163828}},
-          {589812, {409588, 360436, 294900, 176116, 286708}}, {589812, {286708, 311284, 249844, 249844, 249844}},
-          {589812, {303092, 245748, 245748, 245748, 163828}}, {589812, {409588, 360436, 249844, 249844, 270324}},
-          {589812, {409588, 286708, 360436, 360436, 360436}}, {589812, {409588, 360436, 360436, 294900, 180212}},
-          {589812, {409588, 360436, 360436, 360436, 360436}}, {589812, {409588, 360436, 360436, 360436, 360436}},
-          {589812, {303092, 245748, 159732, 327668, 245748}}, {589812, {303092, 245748, 245748, 245748, 131060}},
-          {589812, {303092, 245748, 159732, 327668, 245748}},
+          {589812, {466932, 360436, 360436, 360436, 360436}}, {589812, {352244, 241652, 241652, 131060, 241652}},
+          {589812, {466932, 360436, 294900, 278516, 278516}}, {589812, {335860, 249844, 249844, 249844, 249844}},
+          {589812, {352244, 241652, 241652, 241652, 241652}}, {589812, {278516, 294900, 278516, 172020, 106484}},
+          {589812, {466932, 286708, 360436, 360436, 360436}}, {589812, {466932, 360436, 360436, 360436, 112628}},
+          {589812, {466932, 360436, 360436, 360436, 360436}}, {589812, {466932, 360436, 360436, 360436, 278516}},
+          {589812, {352244, 241652, 131060, 241652, 241652}}, {589812, {352244, 241652, 241652, 241652, 131060}},
+          {589812, {352244, 241652, 131060, 241652, 241652}},
       },
       {  // carved in the fence
-          {589812, {385012, 360436, 360436, 360436, 360436}}, {589812, {249844, 270324, 360436, 180212, 270324}},
-          {589812, {385012, 360436, 360436, 270324, 249844}}, {589812, {262132, 204788, 180212, 180212, 180212}},
-          {589812, {249844, 270324, 360436, 270324, 360436}}, {589812, {303092, 294900, 135156, 135156, 135156}},
-          {589812, {385012, 352244, 360436, 360436, 360436}}, {589812, {385012, 360436, 360436, 294900, 221172}},
-          {589812, {385012, 360436, 360436, 360436, 360436}}, {589812, {385012, 360436, 360436, 360436, 360436}},
-          {589812, {249844, 270324, 180212, 249844, 360436}}, {589812, {249844, 270324, 360436, 270324, 180212}},
-          {589812, {249844, 270324, 180212, 249844, 360436}},
+          {589812, {319476, 360436, 360436, 360436, 360436}}, {589812, {180212, 249844, 360436, 180212, 270324}},
+          {589812, {319476, 360436, 360436, 270324, 249844}}, {589812, {258036, 180212, 249844, 249844, 249844}},
+          {589812, {180212, 249844, 360436, 270324, 360436}}, {589812, {237556, 294900, 286708, 204788, 180212}},
+          {589812, {319476, 360436, 360436, 360436, 360436}}, {589812, {319476, 360436, 360436, 294900, 221172}},
+          {589812, {319476, 360436, 360436, 360436, 360436}}, {589812, {319476, 360436, 360436, 360436, 360436}},
+          {589812, {180212, 249844, 180212, 311284, 270324}}, {589812, {180212, 249844, 360436, 270324, 180212}},
+          {589812, {180212, 249844, 180212, 311284, 270324}},
       },
-      {  // the Opus under a full log's overflow with ACKS's 16 rows above MARK
-          {589812, {360436, 360436, 360436, 360436, 360436}}, {401396, {249844, 249844, 249844, 184308, 249844}},
+      {  // the Opus under a full log's overflow with ACKS's 16 rows above MARK: main's with the Opus first
+          {589812, {360436, 360436, 360436, 360436, 360436}}, {466932, {249844, 249844, 360436, 116724, 270324}},
           {589812, {360436, 360436, 360436, 270324, 249844}}, {589812, {294900, 172020, 172020, 106484, 172020}},
-          {401396, {249844, 249844, 249844, 327668, 249844}}, {589812, {249844, 294900, 286708, 204788, 180212}},
+          {466932, {249844, 249844, 360436, 270324, 249844}}, {589812, {249844, 294900, 286708, 204788, 180212}},
           {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 294900, 221172}},
           {589812, {360436, 360436, 360436, 360436, 360436}}, {589812, {360436, 360436, 360436, 360436, 360436}},
-          {401396, {249844, 249844, 98292, 249844, 327668}}, {401396, {249844, 249844, 249844, 327668, 180212}},
-          {401396, {249844, 249844, 180212, 249844, 327668}},
+          {466932, {249844, 249844, 180212, 249844, 270324}}, {466932, {249844, 249844, 360436, 270324, 294900}},
+          {466932, {249844, 249844, 180212, 249844, 270324}},
       },
   };
   const size_t pinned[] = {kMain, kControl, kMainFirst, kRework, kReworkAcks, kReworkJoin, kThrough, kFence, kUnderAcks};
@@ -4171,21 +5178,29 @@ void test_the_listening_stats_across_updates() {
   // and the Opus under a full log's overflow with no ACKS row.
   for (const size_t yi : {kFenceBefore, kFenceAfter, kUnder, kUnderFirst, kUnderMid}) same(kRework, yi);
   // The control fails no step here, so the rule for the stats is every
-  // step. Held through the build fails 15 (H2 1, 2, 4; H3 3; H5 1-4; K3 1,
-  // 4; K4 1-3; D 1, 4), carved in the fence H6's step 2; the Opus under a
-  // full log's overflow with the ranges' block at its largest (ACKS's 16
-  // rows) no step since the resident set left PSRAM (10 before it), but its
-  // boot's join 401,396 B against main's with the Opus first 466,932 B in
-  // H2, H5, K3, K4 and D: the start's wait is load-bearing there. With no
-  // ACKS row the Opus under the overflow gives the usual boot's figures
-  // wherever the start comes.
+  // step. Held through the build fails 16 (H2 1, 2, 4; H3 3; H5 1-4; K3 1,
+  // 3, 4; K4 1-3; D 1, 3, 4: 15 before fix A), carved in the fence 6 (step 0
+  // of H2, H5, H6, K3, K4, D: H6's step 2 alone before it): the hold's
+  // caps and the arena held through an update's build fragment it more,
+  // and the waits that keep them apart stay load-bearing. Since fix A the
+  // Opus under a full log's overflow gives main's figures with the Opus
+  // first wherever the start comes, the ranges' block at its largest
+  // (ACKS's 16 rows) too (before it: its boot's join 401,396 B against
+  // 466,932 B in H2, H5, K3, K4 and D): nothing it carves meanwhile lands in
+  // a free block the hold left open. The start's wait is kept (main.cpp's
+  // OutputHold: the device's decoders, not the model's, and the hold's
+  // peak).
   TEST_ASSERT_EQUAL_size_t(0, control.fails.size());
   TEST_ASSERT_EQUAL_size_t(0, mainFirst.fails.size());
-  TEST_ASSERT_EQUAL_size_t(15, yards[kThrough].fails.size());
-  TEST_ASSERT_EQUAL_size_t(1, yards[kFence].fails.size());
+  TEST_ASSERT_EQUAL_size_t(16, yards[kThrough].fails.size());
+  TEST_ASSERT_EQUAL_size_t(6, yards[kFence].fails.size());
   TEST_ASSERT_EQUAL_size_t(0, yards[kUnderAcks].fails.size());
-  TEST_ASSERT_FALSE(breaks(yards[kUnderAcks]).empty());
-  for (const size_t yi : {kUnder, kUnderFirst, kUnderMid}) TEST_ASSERT_TRUE(breaks(yards[yi]).empty());
+  for (const size_t yi : {kUnder, kUnderFirst, kUnderMid, kUnderAcks}) TEST_ASSERT_TRUE(breaks(yards[yi]).empty());
+  // Fix A: a usual boot's ways with the scan first (its start opening the
+  // Opus under the ranges' block) and the Opus under a full log's overflow
+  // with ACKS's rows are main's with the Opus first to the byte; the join
+  // first as before (main's own variation's size at H5 4, K3 3, K4 4, D 3).
+  for (const size_t yi : {size_t{kRework}, size_t{kReworkAcks}, kUnderAcks}) same(kMainFirst, yi);
 #endif
   if (!broken.empty()) {
     const std::string m = "the rework breaks 5.14's yardstick: " + broken;
@@ -4220,9 +5235,18 @@ int main(int, char**) {
   RUN_TEST(test_the_rejoin_anywhere_in_a_class);
   RUN_TEST(test_the_room_above_the_spacers);
   RUN_TEST(test_another_task_s_block_meanwhile);
+  RUN_TEST(test_caps_close_any_free_block);
+  RUN_TEST(test_the_hold_closes_t);
+  RUN_TEST(test_a_cap_that_lands_elsewhere);
+  RUN_TEST(test_another_task_s_carve_before_the_cap);
+  RUN_TEST(test_the_hold_given_back_bottom_up);
+  RUN_TEST(test_a_block_in_a_hole_gets_no_cap);
+  RUN_TEST(test_the_caps_keep_the_margin);
+  RUN_TEST(test_no_spacers_no_cap);
   RUN_TEST(test_the_placement_in_a_model_heap);
   RUN_TEST(test_a_library_update_in_a_model_heap);
   RUN_TEST(test_the_listening_stats_in_a_model_heap);
+  RUN_TEST(test_the_hold_leaves_main_s_layout);
 #endif
   RUN_TEST(test_the_listening_stats_across_updates);
   return UNITY_END();

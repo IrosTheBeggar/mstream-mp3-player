@@ -3331,7 +3331,10 @@ static bool decoderRefilling(uint32_t now) {
 // smaller free block): the join given back, PSRAM measured again. It joins
 // again after the update's Live, or at once when the update waits for the
 // next boot after all. (The listening stats hold nothing to give back: a
-// fixed resident set, docs/LISTENING-STATS.md 5.14.)
+// fixed resident set in internal RAM; their boot's hold, the scan's blocks
+// at PSRAM's top, ends before an update may begin, and with the free block
+// above them closed by caps nothing carved meanwhile pins the largest free
+// block split after it, docs/LISTENING-STATS.md 5.14's fix A.)
 static size_t autoDjGiveBack(void*, size_t* psramFree, size_t* psramLargest) {
   if (!autoDj) return 0;
   const size_t before = *psramLargest;

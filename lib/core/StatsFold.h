@@ -27,8 +27,9 @@
 //   - the records: 40 in the object (20 B each: the slot's hash, time,
 //     playedMs, play or skip, source, round), and past them, during a
 //     boot's fold only, overflow chunks of 819 (16,384 B, at most 16: a
-//     full log's 13,106 slots) through the allocator hook (the firmware's:
-//     at the top of PSRAM); a live slot with the records full is not folded
+//     full log's 13,106 slots) in one arena (all 16 chunks' room, carved at
+//     the first) through the allocator hook (the firmware's: at the top of
+//     PSRAM, 5.14's fix A); a live slot with the records full is not folded
 //     and the session is behind (no record, no save until the next boot);
 //   - MARK (a row each (deviceId, epoch) ever folded: RAM's seq, the card's
 //     for covered(), and a held tmp's): 16 rows in the object, or a block of
@@ -182,11 +183,22 @@ constexpr uint32_t kRecords = 40;      // statsref's RECORDS: a live slot past t
 constexpr uint32_t kSaveAt = 24;       // statsref's SAVE_AT: the records' save is due from this many
 constexpr uint32_t kRecordBytes = 20;
 // The boot's overflow past the records: chunks of 16,384 B (819 records,
-// 4 B over; a carve of 16,900 B with the poisoning's 12 B and the header,
-// 6.5), at most 16: a full log's 13,106 slots (40 + 16 x 819 = 13,144).
+// 4 B over), at most 16: a full log's 13,106 slots (40 + 16 x 819 = 13,144).
 constexpr uint32_t kChunkBytes = 16384;
 constexpr uint32_t kChunkRecords = kChunkBytes / kRecordBytes;
 constexpr uint32_t kMaxChunks = 16;
+// The overflow's arena (5.14, fix A): the kMaxChunks chunks' room in one
+// block, carved at the first chunk through the allocator hook (the
+// firmware's: the hold's top block, the free block above it closed by caps)
+// and given back whole when no chunk is in use; chunk k is its records
+// [k x 819, (k + 1) x 819), packed (16,380 B each). One block, so no gap
+// between chunks for another carve to pin. 262,080 B: with the poisoning's
+// 12 B, 262,092 B rounds to 262,144 B (TLSF's class boundary), not 270,336 B.
+// No room for it (a heap no free block of that size is left in: after a
+// library update, mid-session): each chunk a carve of its own (kChunkBytes),
+// as before the arena, so the fold folds what it did.
+constexpr size_t kArenaBytes = size_t{kMaxChunks} * kChunkRecords * kRecordBytes;
+static_assert(kArenaBytes == 262080, "the overflow's arena");
 constexpr uint32_t kMarkRows = 16;  // MARK's rows in the object
 constexpr uint32_t kMarkRoom = 8;   // new (deviceId, epoch) rows a boot may add to the card's
 
@@ -198,8 +210,9 @@ public:
   using AllocFn = void* (*)(size_t bytes);
   using FreeFn = void (*)(void* p);
 
-  // The overflow's chunks through `alloc` (null: malloc): the firmware's
-  // hook carves them at the top of PSRAM. Nothing else is carved here: the
+  // The overflow's arena (or, no room for it, its chunks one by one) through
+  // `alloc` (null: malloc), given back through `release`: the firmware's
+  // hooks hold it at the top of PSRAM. Nothing else is carved here: the
   // ranges' block and MARK's block are the caller's memory.
   explicit Fold(AllocFn alloc = nullptr, FreeFn release = nullptr);
   ~Fold();
@@ -308,11 +321,14 @@ public:
   // The records' row for a path hash, ⊕'d (Ht: the card's row ⊕ this).
   // False: none.
   bool track(uint64_t hash, Track* out) const;
-  // The chunks held, their bytes, and the most held at once.
+  // The chunks in use (the arena held while any is), the bytes the overflow
+  // holds (the arena's kArenaBytes; its chunks' kChunkBytes each without
+  // it; 0), and the most held at once; whether its chunks are the arena's.
   uint32_t chunks() const { return chunks_; }
-  size_t held() const { return held_; }
+  size_t held() const { return arena_ ? kArenaBytes : static_cast<size_t>(chunks_) * kChunkBytes; }
   size_t peak() const { return peak_; }
-  void resetPeak() { peak_ = held_; }
+  void resetPeak() { peak_ = held(); }
+  bool inArena() const { return arena_ != nullptr; }
 
   // ---- The save (StatsFile's commit) ----
   // plan(): what stats.bin is to hold of HEAD and MARK now, RAM unchanged
@@ -424,7 +440,6 @@ private:
 
   AllocFn alloc_;
   FreeFn free_;
-  size_t held_ = 0;
   size_t peak_ = 0;
 
   Head head_;
@@ -441,11 +456,13 @@ private:
   Order order_ = Order::None;
   uint32_t folded_ = 0, twice_ = 0, gap_ = 0;
 
-  // The records: the object's kRecords, then the chunks' (the boot's overflow).
+  // The records: the object's kRecords, then the chunks' (the boot's
+  // overflow: the arena's, or each a carve of its own without it).
   uint32_t n_ = 0;
   uint32_t chunks_ = 0;
   Record recs_[kRecords];
   Record* chunk_[kMaxChunks] = {};
+  Record* arena_ = nullptr;
 
   // MARK: the object's rows, or the caller's block.
   MarkRow markIn_[kMarkRows];

@@ -5,6 +5,7 @@
 
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
+#include <sdkconfig.h>
 
 #include <cstring>
 #include <new>
@@ -21,8 +22,13 @@
 // in setup and never destroyed; internal RAM holds nothing else of the
 // stats', whatever the card (MARK's block, a card past 8 MARK rows, is
 // PSRAM's: begin()). PSRAM holds nothing of the stats' between calls but
-// the boot's scan's blocks (and that block), so its layout is main's on a
-// card of 8 MARK rows or fewer. Its budget is internal RAM's margin (11's
+// the boot's scan's blocks (and that block); those it holds across passes
+// (the hold: the ranges' block, a full log's overflow arena) sit at the top
+// of the largest free block with the free block left above each closed by
+// caps (topAlloc()), so main's own carves made meanwhile go where main puts
+// them, and once the hold ends PSRAM's layout is main's (5.14, fix A: the
+// device's B1 runs found it split for the session without the caps). Its
+// budget is internal RAM's margin (11's
 // Internal RAM row): 2,048 B, hence 40 records, not the design's 96
 // (statsfold::kRecords). Against G5's floors (docs/OPUS.md: steady 50 KB,
 // the session's lowest 42 KB, the headphones linked) what counts is the
@@ -72,21 +78,213 @@ size_t psramFreeBytes() { return heap_caps_get_free_size(MALLOC_CAP_SPIRAM); }
 // figure.
 alignas(statsglue::Glue) uint8_t s_glue[sizeof(statsglue::Glue)];
 
-// A block the stats hold across passes (the boot's scan's ranges' block, its
-// overflow's chunks; MARK's block, past 8 rows, for the session): at the
-// top of PSRAM's largest free block, the join's
-// spacers under it while it is carved, never less than this free meanwhile
-// (Auto DJ's kJoinMarginBytes, for the same reason: another task's block may
-// come in that window, a track start's 4 KB probe, a seek's 8 KB, the Opus
-// packet buffer's 60 KB, the card worker's 4-16 KB). Carved there, a block
-// moves no long-lived block carved after it (5.14: the device's round 2).
+// The framework's heap (ESP-IDF 5.5's TLSF; sdkconfig's light poisoning):
+// each request 12 B larger to TLSF, 8 B of it before the bytes malloc gives
+// (a canary and the size) and 4 B after; heap_caps_walk() reports a block by
+// its TLSF pointer, the one before those 8 B, and its TLSF size (the
+// poisoning and the size class's rounding in, the 4 B size field out).
+#if CONFIG_HEAP_POISONING_LIGHT || CONFIG_HEAP_POISONING_COMPREHENSIVE
+constexpr size_t kPoisonHead = 8, kPoisonBytes = 12;
+#else
+constexpr size_t kPoisonHead = 0, kPoisonBytes = 0;
+#endif
+// The walk's bound before it meets the block (past it: Close::Lost).
+constexpr uint32_t kWalkVisits = 8192;
+
+// heap_caps_walk()'s state, on the caller's frame. The callback runs inside
+// the PSRAM heap's lock (multi_heap_walk: xPortEnterCriticalTimeout, this
+// core's interrupts masked to level 3; a PSRAM heap call on the other core
+// spins, its own masked, until the walk ends, as under any
+// heap_caps_get_largest_free_block()): it compares and copies words, nothing
+// else (no allocation, no line, no heap_caps_*, no timing).
+struct Walk {
+  uintptr_t block = 0, spacer = 0;  // walker pointers (malloc's less kPoisonHead); spacer 0: not asked
+  intptr_t heap = 0, prevHeap = 0;
+  uintptr_t prevAt = 0;
+  bool prevFree = false, seen = false, done = false;
+  autodj::Above* out = nullptr;
+};
+
+bool walkStep(walker_heap_into_t heap, walker_block_info_t b, void* user) {
+  Walk& w = *static_cast<Walk*>(user);
+  if (w.done) return false;
+  ++w.out->visits;
+  if (!w.seen && w.out->visits > kWalkVisits) {
+    w.out->bounded = true;
+    w.done = true;
+    return false;
+  }
+  const uintptr_t at = reinterpret_cast<uintptr_t>(b.ptr);
+  if (w.seen) {
+    // The block physically right above the held one (blocks come in
+    // address order), if in the same heap.
+    w.done = true;
+    if (heap.start == w.heap) {
+      w.out->free = !b.used;
+      w.out->bytes = b.size;
+      if (!b.used) w.out->capAt = reinterpret_cast<void*>(at + kPoisonHead);
+    }
+    return false;
+  }
+  if (at == w.block && b.used) {
+    w.seen = true;
+    w.heap = heap.start;
+    w.out->found = true;
+    w.out->blockBytes = b.size;
+    w.out->onSpacers = w.spacer && w.prevFree && w.prevHeap == heap.start && w.prevAt <= w.spacer && w.spacer < at;
+    return true;
+  }
+  w.prevAt = at;
+  w.prevFree = !b.used;
+  w.prevHeap = heap.start;
+  return true;
+}
+
+// autodj::AboveFn over PSRAM's heap.
+void psramAbove(const void* block, const void* spacer, autodj::Above* out) {
+  *out = autodj::Above();
+  Walk w;
+  w.block = reinterpret_cast<uintptr_t>(block) - kPoisonHead;
+  w.spacer = spacer ? reinterpret_cast<uintptr_t>(spacer) - kPoisonHead : 0;
+  w.out = out;
+  const int64_t t0 = esp_timer_get_time();
+  heap_caps_walk(MALLOC_CAP_SPIRAM, walkStep, &w);
+  out->us = static_cast<uint32_t>(esp_timer_get_time() - t0);
+}
+
+// The stats' hold (Memory::top and topRelease: the boot's scan's ranges'
+// block and a full log's overflow arena, held across passes): each at the
+// top of PSRAM's largest free block, the join's spacers under it while it is
+// carved, never less than this free with it carved (Auto DJ's
+// kJoinMarginBytes, for the same reason: another task's block may come in
+// that window, a track start's 4 KB probe, a seek's 8 KB, the Opus packet
+// buffer's 60 KB, the card worker's 4-16 KB); then the free block the
+// spacers left above it (T) closed by caps, held with it, so that a
+// long-lived carve made while it is held (the first frame's cover canvas, a
+// queue) goes where main puts it, not into T, where it would pin the
+// largest free block split once the hold ends (5.14, fix A; the device's B1
+// runs). Given back bottom-up, the newest first (autodj::TopHold): no free
+// block opens above a held one. Never for a block held for the session
+// (its caps would be): MARK's is plain psramAlloc (fix G).
 constexpr size_t kTopMarginBytes = 64 * 1024;
+const autodj::TopHold::Hooks kTop = {psramLargest, psramFreeBytes,  psramAlloc,  psramFree,
+                                     psramAbove,   kTopMarginBytes, kPoisonBytes};
+autodj::TopHold s_top;
+
+// A take's [listen] line, owed (printed at the next pass by owedLine(): a
+// take may be deep in the scan's frames, the arena's under Journal::scan).
+struct TopLine {
+  const void* at = nullptr;
+  uint32_t bytes = 0;
+  autodj::CloseReport r;
+  uint32_t blocks = 0;     // (the boot's first take) PSRAM's blocks, heap_caps_get_info()'s total_blocks
+  uint32_t largestUs = 0;  // ... one heap_caps_get_largest_free_block()'s time: a whole walk under the same lock
+};
+TopLine s_lines[2];  // (two takes at most between passes: the ranges' block, the arena)
+uint8_t s_lineN = 0;
+bool s_counted = false;
+
 void* topAlloc(size_t bytes) {
-  autodj::Spacers sp;
-  autodj::takeSpacers(bytes, kTopMarginBytes, psramLargest, psramFreeBytes, psramAlloc, psramFree, &sp);
-  void* p = psramAlloc(bytes);
-  autodj::giveSpacers(&sp, psramFree);
+  uint32_t blocks = 0, largestUs = 0;
+  if (!s_counted) {
+    s_counted = true;
+    multi_heap_info_t info;
+    heap_caps_get_info(&info, MALLOC_CAP_SPIRAM);
+    blocks = static_cast<uint32_t>(info.total_blocks);
+    const int64_t t0 = esp_timer_get_time();
+    (void)psramLargest();
+    largestUs = static_cast<uint32_t>(esp_timer_get_time() - t0);
+  }
+  autodj::CloseReport r;
+  void* p = s_top.take(kTop, bytes, &r);
+  TopLine& l = s_lines[s_lineN < 2 ? s_lineN++ : 1];  // (past two before a pass: the newest kept)
+  l.at = p;
+  l.bytes = static_cast<uint32_t>(bytes);
+  l.r = r;
+  l.blocks = blocks;
+  l.largestUs = largestUs;
   return p;
+}
+
+void topRelease(void* p) { s_top.give(kTop, p); }
+
+// The owed lines (owedLine(): at a pass's start, the loop's own frame).
+__attribute__((noinline)) void printTopLines() {
+  for (uint8_t i = 0; i < s_lineN; ++i) {
+    const TopLine& l = s_lines[i];
+    const autodj::CloseReport& r = l.r;
+    const char* which = l.bytes == sf::kArenaBytes ? "the overflow's arena" : "the ranges'";
+    if (r.why == autodj::Close::NoBlock) {
+      Serial.printf("[listen] the hold's top block (%s): NO PSRAM for its %lu B (the fold's own lines say what "
+                    "follows)\n",
+                    which, static_cast<ul>(l.bytes));
+      continue;
+    }
+    const ul f = static_cast<ul>(r.aboveBytes), n = r.caps, cb = static_cast<ul>(r.capBytes);
+    char kept[48] = "";
+    if (n) snprintf(kept, sizeof(kept), "; %lu cap%s kept (%lu B)", n, n == 1 ? "" : "s", cb);
+    char what[200];
+    switch (r.why) {
+      case autodj::Close::Closed:
+        snprintf(what, sizeof(what), "the %lu B free above it closed by %lu cap%s (%lu B)", f, n, n == 1 ? "" : "s",
+                 cb);
+        break;
+      case autodj::Close::Nothing:
+        if (r.usedAbove) {
+          snprintf(what, sizeof(what),
+                   "above it a block in use (%lu B; a 4 KB probe or a FatFile is 4,224 B): nothing to close",
+                   static_cast<ul>(r.usedAbove));
+        } else if (f) {
+          snprintf(what, sizeof(what), "the %lu B free above it too small for any request: nothing to close", f);
+        } else {
+          snprintf(what, sizeof(what), "above it PSRAM's end: nothing to close");
+        }
+        break;
+      case autodj::Close::NoSpacers:
+        snprintf(what, sizeof(what), "no spacers placed (PSRAM too full or too cut up): nothing closed");
+        break;
+      case autodj::Close::NotOnTop:
+        snprintf(what, sizeof(what), "in a smaller free block, not on the spacers' top: nothing closed");
+        break;
+      case autodj::Close::Margin:
+        snprintf(what, sizeof(what), "the %lu B free above it LEFT OPEN: closing it would leave under %lu KB free", f,
+                 static_cast<ul>(kTopMarginBytes / 1024 + 1));
+        break;
+      case autodj::Close::Missed:
+        snprintf(what, sizeof(what),
+                 "the %lu B free above it LEFT OPEN: a cap came back at 0x%08lx, not 0x%08lx (another block heads its "
+                 "list, or another task's carve came first), given back%s",
+                 f, static_cast<ul>(reinterpret_cast<uintptr_t>(r.got)),
+                 static_cast<ul>(reinterpret_cast<uintptr_t>(r.want)), kept);
+        break;
+      case autodj::Close::NoCap:
+        snprintf(what, sizeof(what), "the %lu B free above it LEFT OPEN: no PSRAM for a cap%s", f, kept);
+        break;
+      case autodj::Close::Lost:
+        snprintf(what, sizeof(what), "LEFT OPEN: the walk didn't meet it (%lu blocks%s)", static_cast<ul>(r.visits),
+                 r.bounded ? ", its bound" : "");
+        break;
+      case autodj::Close::Left:
+        snprintf(what, sizeof(what), "the %lu B free above it: %lu caps (%lu B), some LEFT OPEN", f, n, cb);
+        break;
+      case autodj::Close::Full:
+        snprintf(what, sizeof(what), "LEFT OPEN: the hold holds %d top blocks already", autodj::TopHold::kMax);
+        break;
+      default:
+        what[0] = 0;
+        break;
+    }
+    char first[80] = "";
+    if (l.blocks)
+      snprintf(first, sizeof(first), "; PSRAM %lu blocks, a largest-free-block walk %lu us", static_cast<ul>(l.blocks),
+               static_cast<ul>(l.largestUs));
+    Serial.printf("[listen] the hold's top block (%s): %lu B at 0x%08lx (%lu B carved); %s; %lu walk%s in %lu us (the "
+                  "longest %lu us, %lu blocks)%s\n",
+                  which, static_cast<ul>(l.bytes), static_cast<ul>(reinterpret_cast<uintptr_t>(l.at)),
+                  static_cast<ul>(r.blockBytes), what, static_cast<ul>(r.walks), r.walks == 1 ? "" : "s",
+                  static_cast<ul>(r.us), static_cast<ul>(r.usMax), static_cast<ul>(r.visits), first);
+  }
+  s_lineN = 0;
 }
 
 // "7 h 37 min", "45 min" (4.1's times).
@@ -194,21 +392,23 @@ playlog::Folds* ListeningStats::begin(tagstore::Fs& fs, const cardroot::Root& ro
   if (glue_) return glue_;  // (once a boot: the object is never made again)
   // Every PSRAM block the stats carve is given back in its call (a read's
   // or a save's work memory and FatFiles) or by the boot's scan's end (the
-  // ranges' block; an overflow's chunks once its save lands, or after its
-  // last try): nothing of the stats' sits in PSRAM between them but MARK's
-  // block. That one (statsfile::Store, a card with more than 8 MARK rows:
-  // its rows and 8 more, 28 B a row, as many as the card holds) is carved
-  // by this boot's read, in setup, at the top of PSRAM's largest free block
-  // (topAlloc(): the rule the scan's held blocks follow) and held for the
-  // session. Not internal RAM's: its size is the card's, with no bound
-  // (MARK's rows are never dropped; each player and each NVS erase adds
-  // one), and G5's margin has none to give (the internal-RAM review). A
-  // card of 8 rows or fewer carves none: PSRAM is main's byte for byte.
+  // ranges' block; an overflow's arena once its save lands, or after its
+  // last try: the hold, topAlloc()): nothing of the stats' sits in PSRAM
+  // between them but MARK's block. That one (statsfile::Store, a card with
+  // more than 8 MARK rows: its rows and 8 more, 28 B a row, as many as the
+  // card holds) is carved by this boot's read, in setup, and held for the
+  // session: plain psramAlloc, where any session block goes (5.14's fix G:
+  // at a top it would hold its cap for the session too). Not internal
+  // RAM's: its size is the card's, with no bound (MARK's rows are never
+  // dropped; each player and each NVS erase adds one), and G5's margin has
+  // none to give (the internal-RAM review). A card of 8 rows or fewer
+  // carves none.
   sg::Memory m;
   m.alloc = psramAlloc;
   m.top = topAlloc;
+  m.topRelease = topRelease;
   m.release = psramFree;
-  m.keep = topAlloc;
+  m.keep = psramAlloc;
   m.keepRelease = psramFree;
   glue_ = new (s_glue) sg::Glue(fs, static_cast<sg::Env&>(*this), m);
   const int64_t t0 = esp_timer_get_time();
@@ -403,6 +603,7 @@ void ListeningStats::saved(sg::Kind k, sg::Refused r, const sx::SaveReport& rep)
 }
 
 void ListeningStats::owedLine() {
+  printTopLines();  // (the hold's takes: a line each)
   if (!owed_) return;
   owed_ = false;
   // (Nothing saved since: one thing of the card's a pass, and the end's

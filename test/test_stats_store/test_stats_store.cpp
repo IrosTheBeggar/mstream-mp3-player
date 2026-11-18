@@ -63,6 +63,7 @@
 #include "../support/CardFixtures.h"
 #include "../support/CutFs.h"
 #include "../support/FaultFs.h"
+#include "AutoDjJoin.h"
 #include "CardContainer.h"
 #include "CardManifest.h"
 #include "PlayLog.h"
@@ -81,7 +82,11 @@ using faultfs::FlakyFs;
 using pl::Journal;
 using pl::Slot;
 
-void setUp() {}
+namespace {
+bool gTopSessions = false;  // runSession(): the players' top blocks through an autodj::TopHold (S1)
+}  // namespace
+
+void setUp() { gTopSessions = false; }
 void tearDown() {}
 
 namespace {
@@ -104,8 +109,38 @@ struct Work {
 std::vector<uint32_t> gWaits;
 void waitHook(uint32_t ms) { gWaits.push_back(ms); }
 
+// The top blocks (5.14, fix A): Memory::top and topRelease through an
+// autodj::TopHold, as the firmware's (app/ListeningStats: no walk on this
+// heap, so no caps, but its entries and its order: the newest given back
+// first, an older one given back meanwhile waiting for it), its blocks from
+// a malloc of their own that counts them.
+struct TopCount {
+  autodj::TopHold hold;
+  std::map<void*, size_t> live;  // the hold's blocks, carved and not freed
+  std::set<void*> taken;         // top blocks taken, not given back
+  std::set<void*> given;         // ... given back, the hold holding them still
+  std::vector<void*> freed;      // freed by the hold, in order
+  uint32_t takes = 0, gives = 0, waited = 0, arenas = 0;
+};
+TopCount gTop;
+void* topMalloc(size_t n) {
+  void* p = std::malloc(n);
+  if (p) gTop.live[p] = n;
+  return p;
+}
+void topFree(void* p) {
+  auto it = gTop.live.find(p);
+  TEST_ASSERT_TRUE_MESSAGE(it != gTop.live.end(), "the hold freed a block it never carved, or twice");
+  TEST_ASSERT_TRUE_MESSAGE(gTop.given.erase(p) == 1, "the hold freed a top block before it was given back");
+  gTop.live.erase(it);
+  gTop.freed.push_back(p);
+  std::free(p);
+}
+size_t noLargest() { return 0; }  // (no spacers on this heap)
+const autodj::TopHold::Hooks kCountedTop = {noLargest, nullptr, topMalloc, topFree, nullptr, 0, 0};
+
 // A heap that counts the glue's blocks (the work memory, the ranges' block,
-// the overflow's chunks, MARK's block).
+// the overflow's arena, MARK's block).
 struct Heap {
   std::map<void*, size_t> blocks;
   size_t held = 0, peak = 0;
@@ -122,6 +157,7 @@ void* heapAlloc(size_t n) {
   return p;
 }
 void heapFree(void* p) {
+  TEST_ASSERT_TRUE_MESSAGE(gTop.live.count(p) == 0, "Memory::release given a top block");
   auto it = gHeap.blocks.find(p);
   if (it != gHeap.blocks.end()) {
     gHeap.held -= it->second;
@@ -129,6 +165,42 @@ void heapFree(void* p) {
   }
   std::free(p);
 }
+// Memory::top and topRelease over gTop: each top block given back once,
+// through topRelease (never alloc's); the ranges' block given back while the
+// overflow's arena (carved after it) is held frees nothing (two held); a
+// give-back that frees, frees its own block first, then those that waited.
+void* countedTop(size_t n) {
+  autodj::CloseReport r;
+  void* p = gTop.hold.take(kCountedTop, n, &r);
+  if (!p) return nullptr;
+  TEST_ASSERT_TRUE_MESSAGE(r.why == autodj::Close::NoSpacers, "a top block the hold didn't track");
+  ++gTop.takes;
+  if (n == sf::kArenaBytes) ++gTop.arenas;
+  gTop.taken.insert(p);
+  return p;
+}
+void countedTopRelease(void* p) {
+  TEST_ASSERT_TRUE_MESSAGE(gTop.taken.count(p) == 1, "topRelease given a block top didn't carve, or twice");
+  TEST_ASSERT_TRUE_MESSAGE(gHeap.blocks.count(p) == 0, "topRelease given alloc's block");
+  gTop.taken.erase(p);
+  gTop.given.insert(p);
+  ++gTop.gives;
+  bool arenaHeld = false;  // (an arena taken after this block, still held)
+  for (void* t : gTop.taken) arenaHeld = arenaHeld || gTop.live.at(t) == sf::kArenaBytes;
+  const bool arena = gTop.live.at(p) == sf::kArenaBytes;
+  const size_t freed0 = gTop.freed.size();
+  const int held0 = gTop.hold.held();
+  gTop.hold.give(kCountedTop, p);
+  if (!arena && arenaHeld) {
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(freed0, gTop.freed.size(), "the ranges' block freed under a held arena");
+    TEST_ASSERT_EQUAL_INT(2, gTop.hold.held());
+    ++gTop.waited;
+    return;
+  }
+  TEST_ASSERT_TRUE_MESSAGE(gTop.freed.size() > freed0 && gTop.freed[freed0] == p, "a top block given back not freed");
+  TEST_ASSERT_EQUAL_INT(held0 - static_cast<int>(gTop.freed.size() - freed0), gTop.hold.held());
+}
+
 // The blocks held for the session (Memory::keep: MARK's block; the
 // firmware's at the top of PSRAM's largest free block, the glue's object
 // alone in internal RAM's .bss: 5.14's "Moved to internal RAM" and the
@@ -1297,7 +1369,7 @@ void test_a_full_log_never_synced() {
   TEST_ASSERT_FALSE(g.core.scanHolds());
   TEST_ASSERT_FALSE(g.core.overflowHeld());
   TEST_ASSERT_EQUAL_size_t(atRead, gHeap.held);
-  TEST_ASSERT_EQUAL_size_t(sf::kMaxChunks * sf::kChunkBytes, g.fold.peak());
+  TEST_ASSERT_EQUAL_size_t(sf::kArenaBytes, g.fold.peak());  // (the overflow's arena, all 16 chunks)
   // The peak: the 16 chunks, the ranges' block and the save's work memory.
   TEST_ASSERT_TRUE(gHeap.peak <= atRead + g.fold.peak() + g.core.rangesBytes() + sx::kWorkBytes);
   const double us = std::chrono::duration<double, std::micro>(t1 - t0).count();
@@ -1461,6 +1533,12 @@ sf::Head runSession(const minijson::Value& sc) {
     std::unique_ptr<Player> p(new Player(card, dev, cap));
     p->fs = &faults;
     p->faults = &faults;
+    if (gTopSessions) {
+      p->mem.alloc = heapAlloc;
+      p->mem.release = heapFree;
+      p->mem.top = countedTop;
+      p->mem.topRelease = countedTopRelease;
+    }
     for (size_t e = 0; e < m.second["epochs"].size(); ++e) p->epochs.list.push_back(m.second["epochs"][e].u64());
     const minijson::Value& nvs = m.second["nvs"];
     if (!nvs.isNull()) {
@@ -1608,6 +1686,38 @@ void test_every_session() {
          gSessionSteps);
   TEST_ASSERT_EQUAL_UINT32(36, gSessions.size());
   TEST_ASSERT_EQUAL_INT(290, gSessionSteps);
+}
+
+// S1 (5.14, fix A): every session again with the top blocks through an
+// autodj::TopHold (gTop: countedTop, countedTopRelease): each given back
+// once, through topRelease, never through release; the ranges' block given
+// back while the overflow's arena is held waits for it (commit()'s endBoot
+// before the save lands, refuse(), a remount's re-read), and the arena's
+// give-back frees the arena, then it; nothing held at each session's end
+// (the boot's save landing, held, failing its fourth try, the end's flush
+// with tries left, a drop).
+void test_top_blocks_given_back_once() {
+  gTopSessions = true;
+  uint32_t takes = 0, waited = 0, arenas = 0;
+  for (size_t i = 0; i < gSessions.size(); ++i) {
+    gTop = TopCount();
+    runSession(gSessions[i]);
+    const std::string n = gSessions[i]["name"].str();
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, gTop.hold.held(), n.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(gTop.taken.empty() && gTop.given.empty() && gTop.live.empty(), n.c_str());
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(gTop.takes, gTop.freed.size(), n.c_str());
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(gTop.takes, gTop.gives, n.c_str());
+    takes += gTop.takes;
+    waited += gTop.waited;
+    arenas += gTop.arenas;
+  }
+  gTopSessions = false;
+  printf("the top blocks through a TopHold: %u sessions, %u taken (%u arenas), %u ranges' blocks given back under a "
+         "held arena (waiting for it); every one given back once, nothing held at a session's end\n",
+         static_cast<unsigned>(gSessions.size()), static_cast<unsigned>(takes), static_cast<unsigned>(arenas),
+         static_cast<unsigned>(waited));
+  TEST_ASSERT_TRUE(arenas > 0);
+  TEST_ASSERT_TRUE(waited > 0);
 }
 
 // A rotation over a plays.1.jnl no save covers (the boot's save failed): its
@@ -2149,7 +2259,7 @@ void test_the_folds_blocks_wait_for_a_reserve() {
       if (p.j->scan(p.piece)) break;
     }
     TEST_ASSERT_EQUAL_MESSAGE(ahead > 0, held, ahead ? "a look-ahead of 128" : "the firmware's");
-    if (ahead) TEST_ASSERT_EQUAL_UINT32(sf::kChunkBytes, p.glue->fold.peak());
+    if (ahead) TEST_ASSERT_EQUAL_UINT32(sf::kArenaBytes, p.glue->fold.peak());
     p.glue->ready();
     TEST_ASSERT_FALSE(p.glue->core.overflowHeld() || p.glue->core.scanHolds());
     sameOutcome(b, outcomeOf(p), "pieces of 128");
@@ -2600,7 +2710,7 @@ void test_the_boot_overflows_tries() {
     TEST_ASSERT_EQUAL_UINT32(1, g.tries());
     TEST_ASSERT_TRUE(g.overflowHeld() && g.scanHolds());
     TEST_ASSERT_FALSE(g.rangesHeld());  // (the ranges' block given back at the scan's end)
-    TEST_ASSERT_EQUAL_size_t(atRead + sf::kChunkBytes, gHeap.held);
+    TEST_ASSERT_EQUAL_size_t(atRead + sf::kArenaBytes, gHeap.held);  // (the overflow's arena)
     TEST_ASSERT_FALSE(g.hs(false));
     TEST_ASSERT_EQUAL_STRING("booting", refused(p));
     TEST_ASSERT_FALSE(g.recordsDue(false));
@@ -2957,6 +3067,7 @@ int main(int, char**) {
   RUN_TEST(test_the_base_faulted_at_the_boot);
   RUN_TEST(test_first_at_orders_and_the_retention);
   RUN_TEST(test_every_session);
+  RUN_TEST(test_top_blocks_given_back_once);
   RUN_TEST(test_the_rotation_hole);
   RUN_TEST(test_players_nvs_and_old_firmware);
   RUN_TEST(test_first_at_through_a_rotations_save);

@@ -24,6 +24,7 @@ Memory normalized(const Memory& m) {
   if (!out.alloc) out.alloc = mallocAlloc;
   if (!out.top) out.top = out.alloc;
   if (!out.release) out.release = mallocFree;
+  if (!out.topRelease) out.topRelease = out.release;
   if (!out.keep || !out.keepRelease) {
     out.keep = out.alloc;
     out.keepRelease = out.release;
@@ -74,18 +75,24 @@ Glue::Glue(tagstore::Fs& fs, Env& env, const Memory& memory)
     : fs_(fs),
       env_(env),
       mem_(normalized(memory)),
-      fold_(mem_.top, mem_.release),
+      fold_(mem_.top, mem_.topRelease),
       store_(fs, mem_.keep, mem_.keepRelease),
       acks_(&kNoAcks) {}
 
 Glue::~Glue() {
-  if (ranges_) release(ranges_);
+  // (Waits for the overflow's arena while it is held: ~Fold gives both back,
+  // the arena first.)
+  releaseTop(ranges_);
 }
 
 uint8_t* Glue::carve() { return static_cast<uint8_t*>(mem_.alloc(sx::kWorkBytes)); }
 
 void Glue::release(void* p) {
   if (p) mem_.release(p);
+}
+
+void Glue::releaseTop(void* p) {
+  if (p) mem_.topRelease(p);
 }
 
 sx::Opened Glue::readNow(sx::Store::WaitFn wait) {
@@ -176,7 +183,7 @@ void Glue::beginBoot() {
   uint8_t* at = static_cast<uint8_t*>(m);
   if (at && reinterpret_cast<uintptr_t>(at) % kRangesAlign) at += kRangesAlign - reinterpret_cast<uintptr_t>(at) % kRangesAlign;
   if (!fold_.beginBoot(*acks_, at, m ? need : 0)) {
-    release(m);
+    releaseTop(m);
     return;
   }
   ranges_ = m;
@@ -185,7 +192,9 @@ void Glue::beginBoot() {
 
 void Glue::endBoot() {
   fold_.endBoot();  // (the ranges' block no longer used)
-  if (ranges_) release(ranges_);
+  // (The firmware's frees it once the overflow's arena, carved after it
+  // under it, is given back too: no free block opens above a held one.)
+  releaseTop(ranges_);
   ranges_ = nullptr;
 }
 

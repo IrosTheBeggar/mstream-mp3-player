@@ -125,12 +125,14 @@ struct Heap {
   int asked = 0;               // carves asked since reset()
   int failAt = -1;             // the carve that fails (-1: none)
   bool failFrom = false;       // ... and every one after it
+  size_t refuse = 0;           // a size every carve of fails (0: none)
   void reset() {
     carved.clear();
     peak = live;
     asked = 0;
     failAt = -1;
     failFrom = false;
+    refuse = 0;
   }
 };
 Heap gHeap;
@@ -138,6 +140,7 @@ Heap gHeap;
 void* heapAlloc(size_t n) {
   const int k = gHeap.asked++;
   if (gHeap.failAt >= 0 && (k == gHeap.failAt || (gHeap.failFrom && k > gHeap.failAt))) return nullptr;
+  if (n == gHeap.refuse) return nullptr;
   void* p = std::malloc(n);
   gHeap.blocks[p] = n;
   gHeap.carved.push_back(n);
@@ -1713,7 +1716,8 @@ void test_the_records_boundaries() {
     TEST_ASSERT_TRUE(f.covered(playA(S)));
     TEST_ASSERT_FALSE(f.covered(playA(S + 1)));
   }
-  // The boot's fold past R: chunks of 819 records, as it needs them.
+  // The boot's fold past R: chunks of 819 records, as it needs them, in one
+  // arena (all 16 chunks' room: 5.14's fix A) carved at the first.
   constexpr uint32_t C = sf::kChunkRecords;
   for (uint32_t n : {R, R + 1, R + C, R + C + 1, R + 2 * C, R + 2 * C + 1}) {
     gHeap.reset();
@@ -1730,9 +1734,12 @@ void test_the_records_boundaries() {
     std::snprintf(what, sizeof(what), "%u slots", static_cast<unsigned>(n));
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(n, f.records(), what);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(want, f.chunks(), what);
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(want * sf::kChunkBytes, f.held(), what);
-    TEST_ASSERT_EQUAL_size_t_MESSAGE(live0 + want * sf::kChunkBytes, gHeap.live, what);
-    for (size_t b : gHeap.carved) TEST_ASSERT_EQUAL_size_t_MESSAGE(sf::kChunkBytes, b, what);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(want ? sf::kArenaBytes : 0, f.held(), what);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(live0 + (want ? sf::kArenaBytes : 0), gHeap.live, what);
+    // (one carve, the arena, whatever the chunks: reserve()'s room took it at
+    // the first piece, and endBoot() gave it back when no record needed it)
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, gHeap.carved.size(), what);
+    for (size_t b : gHeap.carved) TEST_ASSERT_EQUAL_size_t_MESSAGE(sf::kArenaBytes, b, what);
     TEST_ASSERT_TRUE_MESSAGE(f.due(), what);
   }
   // Without reserve(): the fold carves the chunk it needs itself.
@@ -1950,8 +1957,9 @@ void test_the_memory() {
     }
     TEST_ASSERT_EQUAL_UINT32(3072, f.records());
     TEST_ASSERT_EQUAL_UINT32(4, f.chunks());  // (2,976 past the records: three and a bit)
-    for (size_t n : gHeap.carved) TEST_ASSERT_EQUAL_size_t(sf::kChunkBytes, n);
-    TEST_ASSERT_EQUAL_size_t(4 * sf::kChunkBytes, f.held());
+    TEST_ASSERT_EQUAL_UINT32(1, gHeap.carved.size());  // (one arena for every chunk)
+    for (size_t n : gHeap.carved) TEST_ASSERT_EQUAL_size_t(sf::kArenaBytes, n);
+    TEST_ASSERT_EQUAL_size_t(sf::kArenaBytes, f.held());
     TEST_ASSERT_EQUAL_size_t(f.held(), f.peak());
     f.endBoot();
     TEST_ASSERT_EQUAL_UINT32(4, f.chunks());  // (every one holds records)
@@ -1983,6 +1991,27 @@ void test_the_memory() {
     TEST_ASSERT_TRUE(rg.begin(f, kNoAcks));
     TEST_ASSERT_TRUE(f.reserve(1000));
     TEST_ASSERT_EQUAL_UINT32(2, f.chunks());
+  }
+  TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
+  // endBoot() with room no record needs (reserve()'s look-ahead): the chunks
+  // in use drop to those records need, and the arena stays whole (it can't
+  // give part of itself back) until none is: the save, behind, clear().
+  {
+    gHeap.reset();
+    sf::Fold f(heapAlloc, heapFree);
+    Ranges rg;
+    TEST_ASSERT_TRUE(rg.begin(f, kNoAcks));
+    TEST_ASSERT_TRUE(f.reserve(sf::kRecords + 2 * sf::kChunkRecords));
+    TEST_ASSERT_EQUAL_UINT32(2, f.chunks());
+    for (uint32_t k = 1; k <= sf::kRecords + 1; ++k) f.bootSlot(slot(kDevA, kEpochA, k, k, 200000, 200000), 0);
+    f.endBoot();
+    TEST_ASSERT_EQUAL_UINT32(1, f.chunks());
+    TEST_ASSERT_EQUAL_size_t(sf::kArenaBytes, f.held());
+    TEST_ASSERT_EQUAL_size_t(live0 + sf::kArenaBytes, gHeap.live);
+    f.fallBehind();
+    TEST_ASSERT_EQUAL_UINT32(0, f.chunks());
+    TEST_ASSERT_EQUAL_size_t(0, f.held());
+    TEST_ASSERT_EQUAL_UINT32(1, gHeap.carved.size());
   }
   TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
 }
@@ -2022,8 +2051,10 @@ void test_no_memory() {
     TEST_ASSERT_FALSE(g.beginBoot(kNoAcks, mem.data(), g.bootBytes(kNoAcks) - 1));
     TEST_ASSERT_TRUE(g.noMemory());
   }
-  // Each chunk's carve failing in turn (reserve()'s: the fold then carves
-  // its own), and every carve from one on (the fold stops).
+  // The arena's carve failing (reserve()'s: the fold then carves its own at
+  // the record past the 40), every carve failing (the fold stops there), and
+  // carves after the arena's failing (none is asked: the arena holds every
+  // chunk).
   int stopped = 0, whole = 0;
   for (int from = 0; from < 2; ++from) {
     for (int n = 0; n < 5; ++n) {
@@ -2057,6 +2088,30 @@ void test_no_memory() {
     }
   }
   TEST_ASSERT_TRUE(stopped > 0 && whole > 0);
+  TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
+  // No room for the arena (no free block of 262,080 B: a heap a library
+  // update cut up): each chunk a carve of its own (16,384 B), as before the
+  // arena, and the file the same.
+  {
+    gHeap.reset();
+    gHeap.refuse = sf::kArenaBytes;
+    sf::Fold f(heapAlloc, heapFree);
+    Ranges rg;
+    bootFold(f, rg, slots, nullptr);
+    f.endBoot();
+    TEST_ASSERT_FALSE(f.noMemory());
+    TEST_ASSERT_FALSE(f.inArena());
+    TEST_ASSERT_EQUAL_UINT32(4, f.chunks());
+    TEST_ASSERT_EQUAL_size_t(4 * sf::kChunkBytes, f.held());
+    TEST_ASSERT_EQUAL_size_t(4 * sf::kChunkBytes, f.peak());
+    TEST_ASSERT_EQUAL_UINT32(4, gHeap.carved.size());
+    for (size_t b : gHeap.carved) TEST_ASSERT_EQUAL_size_t(sf::kChunkBytes, b);
+    Card card;
+    TEST_ASSERT_TRUE(saveNow(f, card, ask.nowMs) == want);
+    TEST_ASSERT_EQUAL_UINT32(0, f.chunks());
+    TEST_ASSERT_EQUAL_size_t(0, f.held());
+    gHeap.refuse = 0;
+  }
   TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
 }
 
@@ -2114,10 +2169,10 @@ void test_a_full_log_never_synced() {
   TEST_ASSERT_EQUAL_UINT32(log.size(), f.folded());
   TEST_ASSERT_EQUAL_UINT32(log.size(), f.records());
   TEST_ASSERT_EQUAL_UINT32(sf::kMaxChunks, f.chunks());  // 40 + 16 x 819 = 13,144
-  TEST_ASSERT_EQUAL_size_t(sf::kMaxChunks * sf::kChunkBytes, f.peak());
-  // As the device carves them (6.5: 16,900 B a chunk) with the ranges'
-  // block: at most 273 KB (5.14).
-  const size_t device = f.chunks() * size_t{16900} + rg.bytes;
+  TEST_ASSERT_EQUAL_size_t(sf::kArenaBytes, f.peak());
+  // As the device carves them (5.14, fix A: the arena 262,144 B and its 4 B
+  // header, its 16 chunks packed) with the ranges' block: at most 273 KB.
+  const size_t device = size_t{262148} + rg.bytes;
   TEST_ASSERT_TRUE(device <= 273472);
   // The save: the records (17 runs) merged into an empty card.
   Card card;
@@ -2141,7 +2196,7 @@ void test_a_full_log_never_synced() {
   TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
   const double us = std::chrono::duration<double, std::micro>(t1 - t0).count();
   const double ms = std::chrono::duration<double, std::milli>(t3 - t2).count();
-  printf("full log: %u slots, %u chunks (%u bytes held, %u as the device carves them with the ranges' %u); "
+  printf("full log: %u slots, %u chunks (the arena's %u bytes held, %u as the device carves it with the ranges' %u); "
          "%.2f us a slot on this host; the save's merge %.1f ms (the test's own reader and writer with it); "
          "stats.bin %u bytes\n",
          static_cast<unsigned>(log.size()), static_cast<unsigned>(sf::kMaxChunks), static_cast<unsigned>(f.peak()),
