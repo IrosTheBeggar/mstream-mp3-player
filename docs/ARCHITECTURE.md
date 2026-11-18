@@ -1706,7 +1706,8 @@ mustn't get the last one's FAT and folders), `CTRL_TRIM` invalidates the
 freed range (and, on a nearly full card, points FatFs's next search for a
 free cluster at it: `lib/core/HoleHint`, METADATA.md 3.2.4 "The hole hint";
 with one free cluster that search read the whole FAT, 5.6 s for a queue
-save), a write with the cache off drops the sectors it wrote, and a
+save after a write that took and freed that cluster), a write with the
+cache off drops the sectors it wrote, and a
 write the card refused is written again once. The clear alone doesn't make
 a swap safe: everything the player holds in RAM is still the old card's.
 So the wrapper also keeps the card's identity at the mount (its size, the
@@ -2579,9 +2580,16 @@ strings.
   holds the loop), into `queue.tmp`, then renamed over `queue.txt`; an
   edit while a write is under way drops that write. On a nearly full card
   `queue.tmp` takes the clusters the last save freed at once (the hole
-  hint, METADATA.md 3.2.4; before it, with one free cluster, two saves in
-  a row read the whole FAT between them, and one took 5.6 s: the track
-  after it underran). **Edits that never
+  hint, METADATA.md 3.2.4). Before it, with one free cluster, two saves in
+  a row read the whole FAT between them (on the host model), and on the
+  device a save right after a write that took and freed the only cluster
+  took 5.6 s (the track after it underran). Its cost: the first time the
+  text needs a second cluster (over 32 KB), on a card whose few free
+  clusters are a run far from `queue.txt`, one save takes the freed
+  cluster and walks the whole FAT to the run (host model,
+  `test_hole_hint`: once in M9; 1-3 times in 124 saves of a growing
+  queue on three such cards, where FatFs alone walked 3-11 times, M10).
+  **Edits that never
   settle** (Auto DJ appending a 1-second track every second, at the cap
   each also pushing out the oldest entry: on the device's soak of
   2026-10-13 the file wasn't written for the last 59 minutes) get a

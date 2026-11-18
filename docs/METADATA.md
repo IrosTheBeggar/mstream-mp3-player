@@ -4018,20 +4018,28 @@ FatFs looks for a free cluster from the one after the last it allocated
 `f_truncate`) leaves `last_clst` where it was. On the device's 32 GB card
 filled to one free cluster (7,607 FAT sectors), a write that needed the
 cluster the last remove freed read the whole FAT first, about 5.3 s under
-the volume lock the decoder's reads wait on. The queue writes `queue.tmp`
-before it removes `queue.txt`, so two saves in a row read the whole FAT
-between them; one took 5,589 ms, and the next track underran (148
-underruns). Each remove's TRIM (one per run of clusters `remove_chain()`
-frees, after it counted them) now also points FatFs at that run, from the
-wrapper's `CTRL_TRIM`:
+the volume lock the decoder's reads wait on. On the device that was a queue
+save of 5,589 ms, and the next track underran (148 underruns): on the
+listening-stats firmware (v0.14.0-91), that visit's only queue save, right
+after the stats file's failed `stats.tmp` had taken and freed the only
+cluster (`test_hole_hint` M1's case). The queue alone does it too, on the
+model: it writes `queue.tmp` before it removes `queue.txt`, so with one
+free cluster two saves in a row read the whole FAT between them (M2; not
+yet measured on the device with main's firmware). Each remove's TRIM (one
+per run of clusters `remove_chain()` frees, after it counted them) now
+also points FatFs at that run, from the wrapper's `CTRL_TRIM`:
 `last_clst` = the run's first cluster - 1 (cluster 2: `n_fatent - 1`), the
 rule FatFs itself applies when `f_open`'s `FA_CREATE_ALWAYS` frees a chain.
 
 - Only when the free count is known and at most (FAT entries - 2) / 8,192:
   118 clusters (3.7 MB) on that card. With more room FatFs's order stays.
-- The lowest run since FatFs last allocated stays: a fragmented chain is
-  trimmed a run at a time, and a search from the lowest finds the rest
-  before it wraps.
+- Of the runs freed since FatFs last allocated, the lowest stays the start
+  while each later one lies at most 8,192 clusters above it (64 FAT
+  sectors): a fragmented chain is trimmed a run at a time, and a search
+  from the lowest finds the rest within those sectors. A run farther above
+  becomes the start, as a lone run does: a chain that took a lone low hole
+  and then walked to the free run far above ends in that run, and the next
+  search belongs there, not at the hole.
 - `last_clst` is only a start: FatFs clamps it and takes a cluster only when
   its entry reads free. The hook writes no FAT sector, count or flag.
 - On the model of that card (FatFs R0.15, `test_hole_hint`) the queue's
@@ -4040,12 +4048,24 @@ rule FatFs itself applies when `f_open`'s `FA_CREATE_ALWAYS` frees a chain.
 - **What it costs:** when the few free clusters are a run far from a
   cluster just freed (a card filled on a PC after `/.player`, stopped short
   of full), a write of more than one cluster takes the freed cluster, then
-  walks to the run. The queue's saves once its text needs two clusters
-  (over 32 KB): every second one walks the whole FAT (7,608 sectors), where
-  FatFs alone used the run at once (`test_hole_hint` M9).
+  walks to the run: a whole FAT (7,601 sectors, M9), where FatFs alone used
+  the run at once. For the queue on M9's card that is once, when its text
+  first needs two clusters (over 32 KB, about 400 tracks): the save after
+  that walk frees a chain that ends in the run, and the run is the start
+  from then on. Over 124 saves of a queue growing from 20 KB to 140 KB
+  the model walks 1, 2 and 3 times on three such cards, FatFs alone 3, 7
+  and 11 (M10). The first rule kept the lowest run wherever the later ones lay:
+  the hole stayed the start, and every second save walked the whole FAT
+  (M9: 1, 7,608, 1, 7,608, ...; M10: 54 of 124). The near limit's own
+  cost: a file in two pieces far apart, freed low piece first, starts the
+  next search at the high one, and the second write after it wraps to the
+  low (5,708 FAT sectors for the two writes, 1,904 under the first rule,
+  7,610 for FatFs alone: M8).
 - **Not covered:** the first allocation after a mount when FSINFO's
   next-free came from a PC or older firmware (the boot's `device.txt`,
-  5,281 ms, 2026-11-18); FSINFO keeps the hint only when no allocation
+  5,281 ms on the listening-stats firmware, 2026-11-18; the same rewrite
+  runs on main at the first boot of another firmware); FSINFO keeps the
+  hint only when no allocation
   synced after the last remove. An unknown free count; builds without the
   wrapper.
 - gc's `[cache] the card:` line counts the `hole hints`. `SectorDisk.cpp`
