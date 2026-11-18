@@ -218,6 +218,8 @@ const char* closeName(Close c) {
     case Close::Full: return "full";
     case Close::NoBlock: return "noBlock";
     case Close::Plain: return "plain";
+    case Close::Room: return "room";
+    case Close::NoRoom: return "noRoom";
   }
   return "?";
 }
@@ -319,11 +321,15 @@ Close closeAbove(const void* block, const void* spacer, const CloseHooks& h, Cap
     walked(a, rep);
     rep->capBytes += a.blockBytes + 4;
     if (!a.found) return rep->why = Close::Lost;  // (never: just carved)
-    if (!a.free) return rep->why = Close::Closed;
+    // In use above the cap: the caps took T whole (their footprints T's +
+    // 4: a cap that leaves a rest of 16 B or more splits it, else takes it
+    // all), or another task's block took the rest's head between the cap
+    // and this walk, the rest above it open: Left, not Closed.
+    if (!a.free) return rep->why = rep->capBytes >= rep->aboveBytes + 4 ? Close::Closed : Close::Left;
   }
 }
 
-void* TopHold::take(const Hooks& h, size_t bytes, CloseReport* rep, bool close) {
+void* TopHold::take(const Hooks& h, size_t bytes, CloseReport* rep, bool close, size_t room, bool yield) {
   *rep = CloseReport();
   // No free block takes it: said without asking (largest() is the largest
   // request TLSF's good fit serves, heap_caps_get_largest_free_block(): its
@@ -370,6 +376,23 @@ void* TopHold::take(const Hooks& h, size_t bytes, CloseReport* rep, bool close) 
     c.keepFree = h.keepFree;
     c.overhead = h.overhead;
     closeAbove(p, spacer, c, &e.caps, rep);
+  }
+  // A decoder's room (the next track's open in the hold: GAPLESS 2.1's one
+  // decoder at a time, the old one's blocks given back first, but an MP3
+  // gives back none and the session's first Opus carves 125 KB, kept): the
+  // caps keep the margin free, not those blocks, so while one may open the
+  // largest free block must still take them with every cap held. Short of
+  // that the hold's caps are given back, the newest block's first, as the
+  // overflow's fallback gives them back; still short, a block that can
+  // yield is given back too (the arena, before its first chunk is in use).
+  if (room && h.largest && h.largest() < carvedAtMost(room)) {
+    rep->uncapped = static_cast<uint8_t>(uncap(h));
+    if (yield && h.largest() < carvedAtMost(room)) {
+      give(h, p);  // (the newest entry: freed now, block first, its caps gone already)
+      rep->why = Close::NoRoom;
+      return nullptr;
+    }
+    if (rep->uncapped) rep->why = Close::Room;  // (none held: what the take did stands)
   }
   return p;
 }

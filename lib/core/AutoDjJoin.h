@@ -311,12 +311,16 @@ enum class Close : uint8_t {  // (Nothing first: a report's default is all zeros
   NoCap,      // no memory for a cap: the rest left open
   Lost,       // the walk didn't meet the block (or gave up at its visit bound): nothing closed
   Left,       // Caps::kMax caps and a free block still above (never under ESP-IDF 5.5's TLSF), or the block
-              // above grew between two caps (another task's block freed into it): the caps held kept, the
-              // rest left open
+              // above grew between two caps (another task's block freed into it), or another task's block
+              // took the rest's head between a cap and the next walk (the caps short of T): the caps held
+              // kept, the rest left open
   Full,       // TopHold already holds kMax blocks: carved, not tracked, nothing closed
   NoBlock,    // no memory for the block itself (no free block takes it: asked of `largest` first, no carve)
   Plain,      // taken with close false (the overflow's chunks without the arena): under its spacers,
               // keepFree alone kept, nothing closed by design
+  Room,       // (`room`) with the hold's caps held no free block took a decoder's blocks: every cap the
+              // hold held given back (this block's and the older blocks', at least one), T open again
+  NoRoom,     // (`room`, `yield`) not even with them given back: the block given back too (no block)
 };
 const char* closeName(Close c);  // "closed", "nothing", ...
 
@@ -330,7 +334,8 @@ struct Caps {
 struct CloseReport {
   Close why = Close::Nothing;
   bool bounded = false;       // (Lost) the walk gave up at its visit bound
-  uint8_t caps = 0;           // the caps held
+  uint8_t caps = 0;           // the caps held (Room, NoRoom: those this take carved, given back since)
+  uint8_t uncapped = 0;       // (Room, NoRoom) the hold's caps given back, this block's and the older blocks'
   size_t blockBytes = 0;      // the block as the heap counts it
   size_t aboveBytes = 0;      // the free block found above it (T; 0: none)
   size_t usedAbove = 0;       // (Nothing) the block in use above it
@@ -354,6 +359,11 @@ struct CloseHooks {
 // at the address the walk gave (anything else freed at once: Missed; no
 // retry, the same request finds the same list head), a walk after each,
 // until the block above is in use or nothing a request can take is left.
+// A block in use above the last cap is Closed only when the caps'
+// footprints are T's (each the heap's size + 4: they sum to T's + 4 when
+// they took it whole); short of that, another task's carve took the rest's
+// head between the cap and its walk, and the rest above that block is
+// open (Left).
 // The margin (keepFree + 1 KB free once closed) is checked against the
 // first walk's free block; each cap after the first only while the block
 // above is what the caps before it left (its size the first's less their
@@ -393,7 +403,18 @@ public:
   // one by one, no room for its arena): carved as before the caps, under
   // spacers keeping keepFree alone, nothing closed (Plain), still tracked
   // while there is room.
-  void* take(const Hooks& h, size_t bytes, CloseReport* rep, bool close = true);
+  // `room` (0: none): the bytes a decoder carves at its open, asked while
+  // one may open in the hold (a track playing or a start waiting: the next
+  // track's open is never held, docs/LISTENING-STATS.md 5.14). The caps
+  // keep keepFree + 1 KB free, not a decoder's blocks: with the block and
+  // every cap held, the largest free block must still take them (`largest`
+  // at least the room's carves, a thirty-second and 1 KB over), or the
+  // hold's caps are all given back, the newest block's first (Room: T open
+  // again, as before the caps), and with `yield` (a block that has a way
+  // without itself: the overflow's arena, its chunks one by one), if that
+  // isn't enough either, the block is given back too: nullptr (NoRoom).
+  void* take(const Hooks& h, size_t bytes, CloseReport* rep, bool close = true, size_t room = 0,
+             bool yield = false);
   // `p` given back: freed with its caps once every block taken after it is
   // given back (now, or with the newest's give-back). One not taken here
   // (or taken while Full) is freed at once; nullptr: nothing.
