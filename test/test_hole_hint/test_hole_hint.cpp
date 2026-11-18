@@ -7,17 +7,22 @@
 // already does for the chain it frees.
 // - U1-U5: the rule (lastClst(), clusterAt()) and the TRIM hook's glue
 //   (onTrim()) over a FATFS of its own: the cluster, the gate, the unknown
-//   count, mkfs's trims, another drive, the lowest run kept.
-// - M0-M9: under ChaN's FatFs R0.15 (test/support/FatModel.h, as the Core2
+//   count, mkfs's trims, another drive, the lowest run kept while the later
+//   ones are near it.
+// - M0-M10: under ChaN's FatFs R0.15 (test/support/FatModel.h, as the Core2
 //   builds it) on the device's card, 62,333,952 sectors in FAT32 with 32 KB
 //   clusters, filled to a few free clusters. Each scene is run with the hook
 //   off (FatFs as it is, the firmware before the hint) and on, and counts the
 //   FAT sectors a write reads (its disk_read calls: a write of whole sectors
 //   reads nothing else): a search through the whole FAT reads about 7,608,
 //   about 5.3 s on the device (2026-11-18: a queue save of 5,589 ms and 148
-//   underruns). M1-M8: what the hint saves (the "with" counts fail without
-//   it). M9: what it costs, pinned: free clusters in a run far from the one
-//   just freed, and a write of more than one cluster.
+//   underruns, on the listening-stats firmware after its failed stats.tmp
+//   took and freed the only cluster: M1's case). M1-M8: what the hint saves
+//   (the "with" counts fail without it); M8 far apart also what the near
+//   limit gives up. M9: what it costs, pinned: free clusters in a run far
+//   from the one just freed, and a write of more than one cluster: one walk.
+//   M10: a queue growing over 124 saves walks no more often than without the
+//   hint (pinned: the rule before the near limit walked every second save).
 // Run: pio test -e native -f test_hole_hint
 #include <unity.h>
 
@@ -151,13 +156,23 @@ void test_u5_on_trim() {
   TEST_ASSERT_FALSE(holehint::onTrim(&fs, 0, fakeSector(1000), mem));
   TEST_ASSERT_EQUAL_UINT32(500000, fs.last_clst);
 
-  // A chain freed low run first (A then B): A's stays.
+  // A chain freed low run first (A then B), B at most kNearRun clusters above
+  // A: A's stays.
+  TEST_ASSERT_EQUAL_UINT32(8192, holehint::kNearRun);
   fs.free_clst = 1;
   TEST_ASSERT_TRUE(holehint::onTrim(&fs, 0, fakeSector(1000), mem));
   TEST_ASSERT_EQUAL_UINT32(999, fs.last_clst);
   fs.free_clst = 2;
-  TEST_ASSERT_FALSE(holehint::onTrim(&fs, 0, fakeSector(300000), mem));
+  TEST_ASSERT_FALSE(holehint::onTrim(&fs, 0, fakeSector(1000 + holehint::kNearRun), mem));
   TEST_ASSERT_EQUAL_UINT32(999, fs.last_clst);
+  // ... a run farther above the kept one: its own (where the chain's walk
+  // ended), and then one far above that.
+  fs.free_clst = 3;
+  TEST_ASSERT_TRUE(holehint::onTrim(&fs, 0, fakeSector(1001 + holehint::kNearRun), mem));
+  TEST_ASSERT_EQUAL_UINT32(1000 + holehint::kNearRun, fs.last_clst);
+  fs.free_clst = 4;
+  TEST_ASSERT_TRUE(holehint::onTrim(&fs, 0, fakeSector(300000), mem));
+  TEST_ASSERT_EQUAL_UINT32(299999, fs.last_clst);
   // ... high run first (B then A): A's takes its place.
   holehint::Memory mem2;
   fs.last_clst = 500000;
@@ -167,18 +182,23 @@ void test_u5_on_trim() {
   fs.free_clst = 2;
   TEST_ASSERT_TRUE(holehint::onTrim(&fs, 0, fakeSector(1000), mem2));
   TEST_ASSERT_EQUAL_UINT32(999, fs.last_clst);
-  // Cluster 2 is the lowest there is (its hint n_fatent - 1 is no "higher").
+  // Cluster 2 is the lowest there is (its hint n_fatent - 1 is no "higher"):
+  // a run near it stays behind it, a run far above it doesn't.
   fs.free_clst = 3;
   TEST_ASSERT_TRUE(holehint::onTrim(&fs, 0, fakeSector(2), mem2));
   TEST_ASSERT_EQUAL_UINT32(kCardFatent - 1, fs.last_clst);
   fs.free_clst = 4;
   TEST_ASSERT_FALSE(holehint::onTrim(&fs, 0, fakeSector(1000), mem2));
   TEST_ASSERT_EQUAL_UINT32(kCardFatent - 1, fs.last_clst);
-  // FatFs allocated (cluster 2 taken): a higher run freed now is the start.
+  fs.free_clst = 5;
+  TEST_ASSERT_TRUE(holehint::onTrim(&fs, 0, fakeSector(400000), mem2));
+  TEST_ASSERT_EQUAL_UINT32(399999, fs.last_clst);
+  // FatFs allocated (last_clst moved): a run freed now is the start, even one
+  // near above the last.
   fs.last_clst = 2;
-  fs.free_clst = 4;
-  TEST_ASSERT_TRUE(holehint::onTrim(&fs, 0, fakeSector(300000), mem2));
-  TEST_ASSERT_EQUAL_UINT32(299999, fs.last_clst);
+  fs.free_clst = 5;
+  TEST_ASSERT_TRUE(holehint::onTrim(&fs, 0, fakeSector(400100), mem2));
+  TEST_ASSERT_EQUAL_UINT32(400099, fs.last_clst);
 }
 
 // ---- under FatFs, on the device's card ----
@@ -355,10 +375,15 @@ constexpr uint32_t kStretchReads = 3;
 
 // The queue's save as the firmware makes it through the VFS (QueueStore:
 // openTemp() opens queue.tmp to write, a new file; commitTemp() closes it;
-// replaceFile() removes queue.txt and renames queue.tmp): its write's disk
-// reads. 4 KB: the stdio buffer's flush (the text fits one cluster).
+// replaceFile() removes queue.txt and renames queue.tmp): its writes' disk
+// reads. `n` bytes (a multiple of 4 KB) in 4 KB writes, the stdio buffer's
+// flushes; 4 KB: a text that fits one cluster.
 uint32_t queueSave(uint32_t n = 4096) {
-  const uint32_t reads = writeNew("queue.tmp", n);
+  FIL f;
+  TEST_ASSERT_EQUAL(FR_OK, f_open(&f, at("queue.tmp").c_str(), FA_CREATE_ALWAYS | FA_WRITE));
+  uint32_t reads = 0;
+  for (uint32_t done = 0; done < n; done += 4096) reads += writeAt(&f, 4096);
+  TEST_ASSERT_EQUAL(FR_OK, f_close(&f));
   TEST_ASSERT_EQUAL(FR_OK, f_unlink(at("queue.txt").c_str()));
   TEST_ASSERT_EQUAL(FR_OK, f_rename(at("queue.tmp").c_str(), at("queue.txt").c_str()));
   return reads;
@@ -608,13 +633,15 @@ void test_m7_create_always_over_a_file() {
   TEST_ASSERT_EQUAL(FR_OK, f_close(&f));
 }
 
-// M8: a file in two pieces far apart (A < B, the only free clusters) removed,
-// then two files of one cluster. remove_chain() trims a run at a time in the
-// chain's order: the hint is the lowest run's, whichever comes first, so the
-// first write takes A at once and the second searches only from A to B.
-// Without the hint the two read the whole FAT between them.
-uint32_t twoPieces(bool hint, bool lowFirst, uint32_t* firstReads) {
-  const uint32_t A = kFatent / 4, B = kFatent / 2;
+// M8: a file in two pieces (A < B, the only free clusters) removed, then two
+// files of one cluster. remove_chain() trims a run at a time in the chain's
+// order. Without the hint the two writes read the whole FAT between them.
+// The pieces near (B at most kNearRun clusters above A): the hint is A's
+// whichever comes first, so the first write takes A at once and the second
+// searches only from A to B. Far apart (a quarter of the FAT): the low piece
+// first (A then B) leaves B's, the start the chain's walk ended at, so the
+// second write wraps to A; the high piece first leaves A's.
+uint32_t twoPieces(bool hint, bool lowFirst, uint32_t A, uint32_t B, uint32_t* firstReads, uint32_t* firstGot) {
   Card& c = scene({{A, nullptr}, {B, nullptr}}, hint);
   c.fs.last_clst = (lowFirst ? A : B) - 1;
   FIL f;
@@ -625,27 +652,49 @@ uint32_t twoPieces(bool hint, bool lowFirst, uint32_t* firstReads) {
   TEST_ASSERT_EQUAL(FR_OK, f_close(&f));
   TEST_ASSERT_EQUAL(FR_OK, f_unlink(at("frag.bin").c_str()));
   TEST_ASSERT_EQUAL_UINT32(2, c.fs.free_clst);
-  uint32_t g1 = 0, g2 = 0;
-  *firstReads = writeNew("g1.bin", 32768, &g1);
+  uint32_t g2 = 0;
+  *firstReads = writeNew("g1.bin", 32768, firstGot);
   const uint32_t second = writeNew("g2.bin", 32768, &g2);
-  TEST_ASSERT_TRUE((g1 == A && g2 == B) || (g1 == B && g2 == A));
-  if (hint) TEST_ASSERT_EQUAL_UINT32(A, g1);
+  TEST_ASSERT_TRUE((*firstGot == A && g2 == B) || (*firstGot == B && g2 == A));
   return *firstReads + second;
 }
 
-void test_m8_two_pieces_far_apart() {
-  const uint32_t A = kFatent / 4, B = kFatent / 2;
+void test_m8_two_pieces_near() {
+  const uint32_t A = kFatent / 4, B = A + 4000;
   for (int lowFirst = 0; lowFirst < 2; ++lowFirst) {
-    uint32_t offFirst = 0, onFirst = 0;
-    const uint32_t off = twoPieces(false, lowFirst != 0, &offFirst);
-    const uint32_t on = twoPieces(true, lowFirst != 0, &onFirst);
-    printf("[hole hint] M8 two pieces (%s first): two writes read %lu FAT sectors without the hint, %lu with it\n",
+    uint32_t offFirst = 0, onFirst = 0, offGot = 0, onGot = 0;
+    const uint32_t off = twoPieces(false, lowFirst != 0, A, B, &offFirst, &offGot);
+    const uint32_t on = twoPieces(true, lowFirst != 0, A, B, &onFirst, &onGot);
+    printf("[hole hint] M8 two pieces near (%s first): two writes read %lu FAT sectors without the hint, %lu with it\n",
            lowFirst ? "the low" : "the high", (unsigned long)off, (unsigned long)on);
     TEST_ASSERT_GREATER_OR_EQUAL_UINT32(kSpan - 2, off);
+    TEST_ASSERT_EQUAL_UINT32(A, onGot);
     TEST_ASSERT_LESS_OR_EQUAL_UINT32(2, onFirst);
     // The first at once; the second from A's FAT sector to B's.
     TEST_ASSERT_LESS_OR_EQUAL_UINT32(sectorOf(B) - sectorOf(A) + 3, on);
   }
+}
+
+void test_m8_two_pieces_far_apart() {
+  const uint32_t A = kFatent / 4, B = kFatent / 2;
+  uint32_t off[2], on[2];
+  for (int lowFirst = 0; lowFirst < 2; ++lowFirst) {
+    uint32_t offFirst = 0, onFirst = 0, offGot = 0, onGot = 0;
+    off[lowFirst] = twoPieces(false, lowFirst != 0, A, B, &offFirst, &offGot);
+    on[lowFirst] = twoPieces(true, lowFirst != 0, A, B, &onFirst, &onGot);
+    printf("[hole hint] M8 two pieces far apart (%s first): two writes read %lu FAT sectors without the hint, %lu "
+           "with it\n",
+           lowFirst ? "the low" : "the high", (unsigned long)off[lowFirst], (unsigned long)on[lowFirst]);
+    TEST_ASSERT_EQUAL_UINT32(lowFirst ? B : A, onGot);
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32(2, onFirst);
+  }
+  // Pinned: the high first, the second write from A's FAT sector to B's; the
+  // low first, from B's to the end and from the start to A's. FatFs alone
+  // read the whole FAT either way.
+  TEST_ASSERT_EQUAL_UINT32(7610, off[0]);
+  TEST_ASSERT_EQUAL_UINT32(7610, off[1]);
+  TEST_ASSERT_EQUAL_UINT32(1904, on[0]);
+  TEST_ASSERT_EQUAL_UINT32(5708, on[1]);
 }
 
 // M9: what the hint costs. A hole low on the card (a 1-cluster file removed)
@@ -675,38 +724,120 @@ void test_m9_hole_far_from_the_run() {
   printf("[hole hint] M9 a hole far from the run: a 2-cluster write read %lu FAT sectors without the hint, %lu with "
          "it; the next %lu and %lu\n",
          (unsigned long)off, (unsigned long)on, (unsigned long)offNext, (unsigned long)onNext);
-  TEST_ASSERT_LESS_OR_EQUAL_UINT32(kStretchReads, off);
-  // The hole's FAT sector, the walk to the run's, the hole's again (the link).
+  // Pinned. The hole's FAT sector, the walk to the run's, the hole's again
+  // (the link): a whole FAT less the run's few sectors.
+  TEST_ASSERT_EQUAL_UINT32(1, off);
+  TEST_ASSERT_EQUAL_UINT32(7601, on);
   TEST_ASSERT_LESS_OR_EQUAL_UINT32(sectorOf(kFatent - run) - sectorOf(H) + 3, on);
-  TEST_ASSERT_LESS_OR_EQUAL_UINT32(kStretchReads, offNext);
-  TEST_ASSERT_LESS_OR_EQUAL_UINT32(kStretchReads, onNext);
+  TEST_ASSERT_EQUAL_UINT32(1, offNext);
+  TEST_ASSERT_EQUAL_UINT32(1, onNext);
+}
+
+// The card of M9 and M10: queue.txt in kPlayer, one cluster; free a run of
+// `run` clusters at the end (under the gate), where FatFs's next search starts.
+Card& queueAndRun(bool hint, uint32_t run = 100) {
+  std::vector<Spot> spots{{kPlayer, "queue.txt"}};
+  for (uint32_t k = 0; k < run; ++k) spots.push_back({kFatent - 1 - k, nullptr});
+  Card& c = scene(spots, hint);
+  c.fs.last_clst = kFatent - 1 - run;
+  return c;
+}
+
+void printSaves(const char* what, const std::vector<uint32_t>& off, const std::vector<uint32_t>& on) {
+  printf("[hole hint] %s, FAT sectors read a save: without", what);
+  for (uint32_t r : off) printf(" %lu", (unsigned long)r);
+  printf("; with");
+  for (uint32_t r : on) printf(" %lu", (unsigned long)r);
+  printf("\n");
 }
 
 // ... and the queue's saves there once its text needs two clusters (more than
 // 32 KB: about 400 tracks or more). Without the hint they go through the run
-// at once (a walk only when it wraps, every 50 saves here). With it every
-// second save takes queue.txt's old low cluster first, then walks to the run:
-// the removes alternate between a chain in the run and one that starts low.
-// Each save walks at most once.
+// at once (a walk only when it wraps, every 50 saves here). With it the first
+// save's remove points FatFs at queue.txt's old low cluster, and the second
+// save takes it and walks to the run: M9's walk, once. That save's chain
+// starts low and ends in the run; when the third save's remove frees it, the
+// run's piece (far above the low one) is the start, and from then on the run
+// at once. Pinned: under a hint that kept the low piece (the lowest run freed,
+// wherever the later ones lay) every second save walked: 1 7608 1 7608 ...
 void test_m9_two_cluster_queue_saves() {
-  const uint32_t run = 100;
-  uint32_t reads[2][6];
+  std::vector<uint32_t> reads[2];
   for (int hint = 0; hint < 2; ++hint) {
-    std::vector<Spot> spots{{kPlayer, "queue.txt"}};
-    for (uint32_t k = 0; k < run; ++k) spots.push_back({kFatent - 1 - k, nullptr});
-    Card& c = scene(spots, hint != 0);
-    c.fs.last_clst = kFatent - 1 - run;
-    for (int i = 0; i < 6; ++i) reads[hint][i] = queueSave(65536);
+    queueAndRun(hint != 0);
+    for (int i = 0; i < 6; ++i) reads[hint].push_back(queueSave(65536));
   }
-  printf("[hole hint] M9 two-cluster queue saves, a run far from queue.txt: without %lu %lu %lu %lu %lu %lu; with %lu "
-         "%lu %lu %lu %lu %lu\n",
-         (unsigned long)reads[0][0], (unsigned long)reads[0][1], (unsigned long)reads[0][2],
-         (unsigned long)reads[0][3], (unsigned long)reads[0][4], (unsigned long)reads[0][5],
-         (unsigned long)reads[1][0], (unsigned long)reads[1][1], (unsigned long)reads[1][2],
-         (unsigned long)reads[1][3], (unsigned long)reads[1][4], (unsigned long)reads[1][5]);
-  for (int i = 0; i < 6; ++i) {
-    TEST_ASSERT_LESS_OR_EQUAL_UINT32(kStretchReads, reads[0][i]);
-    TEST_ASSERT_LESS_OR_EQUAL_UINT32(kSpan + kStretchReads, reads[1][i]);
+  printSaves("M9 two-cluster queue saves, a run far from queue.txt", reads[0], reads[1]);
+  const std::vector<uint32_t> without{1, 1, 1, 1, 1, 1}, with{1, 7608, 1, 1, 1, 1};
+  TEST_ASSERT_EQUAL_UINT32_ARRAY(without.data(), reads[0].data(), 6);
+  TEST_ASSERT_EQUAL_UINT32_ARRAY(with.data(), reads[1].data(), 6);
+}
+
+// M10: the queue growing a cluster at a time there (2, then 3, then 4
+// clusters: Auto DJ adding tracks). Each removed chain keeps its pieces near
+// each other in the run, the low one stays the start, and the saves take
+// turns in the run without drifting through it. Pinned, 12 saves: the one
+// walk of M9 and nothing more (under the lowest-run hint: 1 7608 1 7609 ...).
+void test_m10_growing_queue_saves() {
+  const uint32_t sizes[] = {65536, 65536, 65536, 98304, 98304, 98304, 98304, 131072, 131072, 131072, 131072, 131072};
+  std::vector<uint32_t> reads[2];
+  for (int hint = 0; hint < 2; ++hint) {
+    queueAndRun(hint != 0);
+    for (uint32_t n : sizes) reads[hint].push_back(queueSave(n));
+  }
+  printSaves("M10 a growing queue, a run far from queue.txt", reads[0], reads[1]);
+  const std::vector<uint32_t> without(12, 1);
+  std::vector<uint32_t> with(12, 1);
+  with[1] = 7608;
+  TEST_ASSERT_EQUAL_UINT32_ARRAY(without.data(), reads[0].data(), 12);
+  TEST_ASSERT_EQUAL_UINT32_ARRAY(with.data(), reads[1].data(), 12);
+}
+
+// ... over a long session: the text from 20 KB to 140 KB, 4 KB at a time, four
+// saves a size (124 saves), on three cards: the run at the end, the run in
+// the middle of the card (FatFs's start at the end), two lone holes and a run
+// of 50 at the end. Counted: the saves that read more than a stretch's
+// kStretchReads (each a walk of hundreds to thousands of FAT sectors here).
+// The hint walks no more often than FatFs alone (3, 7 and 11 times), and
+// pinned: 1, 2 and 3 times. Under rules tried before this one: the lowest run
+// freed, wherever the later ones lay, 54, 55 and 54 (every second save); the
+// last run freed, 5, 5 and 12 (the saves drift through the run and wrap).
+uint32_t longSession(bool hint, const std::vector<Spot>& spots, uint32_t lastClst) {
+  Card& c = scene(spots, hint);
+  c.fs.last_clst = lastClst;
+  uint32_t walks = 0;
+  for (uint32_t kb = 20; kb <= 140; kb += 4) {
+    for (int i = 0; i < 4; ++i) {
+      if (queueSave(kb * 1024) > kStretchReads) ++walks;
+    }
+  }
+  return walks;
+}
+
+void test_m10_long_session() {
+  const uint32_t run = 100;
+  std::vector<Spot> end{{kPlayer, "queue.txt"}}, middle{{kPlayer, "queue.txt"}},
+      holes{{kPlayer, "queue.txt"}, {kFatent / 4, nullptr}, {kHalf, nullptr}};
+  for (uint32_t k = 0; k < run; ++k) end.push_back({kFatent - 1 - k, nullptr});
+  for (uint32_t k = 0; k < run; ++k) middle.push_back({kHalf + k, nullptr});
+  for (uint32_t k = 0; k < 50; ++k) holes.push_back({kFatent - 1 - k, nullptr});
+  struct Layout {
+    const char* name;
+    const std::vector<Spot>& spots;
+    uint32_t lastClst;
+    uint32_t withoutWalks, withWalks;
+  } layouts[] = {
+      {"the run at the end", end, kFatent - 1 - run, 3, 1},
+      {"the run in the middle", middle, kFatent - 1, 7, 2},
+      {"two holes and a run", holes, kFatent - 51, 11, 3},
+  };
+  for (const Layout& l : layouts) {
+    const uint32_t off = longSession(false, l.spots, l.lastClst);
+    const uint32_t on = longSession(true, l.spots, l.lastClst);
+    printf("[hole hint] M10 124 saves of a growing queue, %s: %lu walked without the hint, %lu with it\n", l.name,
+           (unsigned long)off, (unsigned long)on);
+    TEST_ASSERT_LESS_OR_EQUAL_UINT32(off, on);
+    TEST_ASSERT_EQUAL_UINT32(l.withoutWalks, off);
+    TEST_ASSERT_EQUAL_UINT32(l.withWalks, on);
   }
 }
 
@@ -731,8 +862,11 @@ int main(int, char**) {
   RUN_TEST(test_m5_room_keeps_fatfs_order);
   RUN_TEST(test_m6_truncated_tail);
   RUN_TEST(test_m7_create_always_over_a_file);
+  RUN_TEST(test_m8_two_pieces_near);
   RUN_TEST(test_m8_two_pieces_far_apart);
   RUN_TEST(test_m9_hole_far_from_the_run);
   RUN_TEST(test_m9_two_cluster_queue_saves);
+  RUN_TEST(test_m10_growing_queue_saves);
+  RUN_TEST(test_m10_long_session);
   return UNITY_END();
 }
