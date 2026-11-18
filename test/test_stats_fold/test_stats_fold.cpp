@@ -2054,7 +2054,8 @@ void test_no_memory() {
   // The arena's carve failing (reserve()'s: the fold then carves its own at
   // the record past the 40), every carve failing (the fold stops there), and
   // carves after the arena's failing (none is asked: the arena holds every
-  // chunk).
+  // chunk, so nothing fails; the chunks failing one by one are the next
+  // case's, with no room for the arena).
   int stopped = 0, whole = 0;
   for (int from = 0; from < 2; ++from) {
     for (int n = 0; n < 5; ++n) {
@@ -2070,6 +2071,10 @@ void test_no_memory() {
         f.bootSlot(s.first, s.second);
       }
       gHeap.failAt = -1;
+      // (n 0: the arena's carve fails, and more are asked; past it, the
+      // arena's the one carve: nothing failed)
+      if (n == 0) TEST_ASSERT_TRUE(gHeap.asked > 1);
+      else TEST_ASSERT_EQUAL_INT(1, gHeap.asked);
       f.endBoot();
       sf::Fold::Plan p;
       if (f.noMemory()) {
@@ -2112,6 +2117,58 @@ void test_no_memory() {
     TEST_ASSERT_EQUAL_size_t(0, f.held());
     gHeap.refuse = 0;
   }
+  TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
+  // No room for the arena, and a chunk's own carve failing in turn (each
+  // carve after the refused arena: chunk 0 to 3, and past the last), alone
+  // or with every one after it: some chunks held, then no memory, the
+  // overflow dropped (behind) and each chunk given back on its own (no
+  // arena); or whole, and its file the same.
+  int mid = 0, recovered = 0;
+  stopped = whole = 0;
+  for (int from = 0; from < 2; ++from) {
+    for (int n = 1; n <= 7; ++n) {
+      gHeap.reset();
+      gHeap.refuse = sf::kArenaBytes;
+      gHeap.failAt = n;
+      gHeap.failFrom = from != 0;
+      sf::Fold f(heapAlloc, heapFree);
+      Ranges rg;
+      uint32_t piece = 0, most = 0;
+      TEST_ASSERT_TRUE(rg.begin(f, kNoAcks));
+      for (const auto& s : slots) {
+        if (piece++ % 128 == 0) f.reserve(128);
+        f.bootSlot(s.first, s.second);
+        most = std::max(most, f.chunks());
+      }
+      const bool failed = gHeap.asked > n;  // (the n-th carve asked: it failed)
+      gHeap.failAt = -1;
+      gHeap.refuse = 0;
+      TEST_ASSERT_FALSE(f.inArena());
+      f.endBoot();
+      sf::Fold::Plan p;
+      if (f.noMemory()) {
+        TEST_ASSERT_TRUE(failed);
+        ++stopped;
+        if (most > 0) ++mid;
+        TEST_ASSERT_FALSE(f.plan(ask.nowMs, false, 0, &p));
+        TEST_ASSERT_TRUE(f.behind() || f.records() == sf::kRecords);
+        TEST_ASSERT_EQUAL_size_t(0, f.held());
+        TEST_ASSERT_EQUAL_UINT32(0, f.chunks());
+        TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);  // (each chunk given back)
+        continue;
+      }
+      // (Whole with a carve failed: reserve()'s look-ahead, which stops
+      // nothing; the slot that needs the chunk carves it again.)
+      if (failed) ++recovered;
+      ++whole;
+      Card card;
+      TEST_ASSERT_TRUE(saveNow(f, card, ask.nowMs) == want);
+    }
+  }
+  printf("[fold] no room for the arena, a chunk's carve failing: stopped %d (mid-overflow %d), whole %d (%d after a "
+         "look-ahead's carve failed)\n",
+         stopped, mid, whole, recovered);
+  TEST_ASSERT_TRUE(mid > 0 && whole > 0);
   TEST_ASSERT_EQUAL_size_t(live0, gHeap.live);
 }
 
