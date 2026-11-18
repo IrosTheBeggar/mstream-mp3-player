@@ -19,7 +19,9 @@
 // with one free cluster, a write that needs the cluster the last remove freed
 // reads the whole FAT first: on the Core2's 32 GB card 7,607 single-sector
 // reads, about 5.3 s, all of it under the volume's lock that the decoder's
-// reads wait on (the queue's save, every second one: 2026-11-18). FatFs
+// reads wait on (a queue save of 5,589 ms on the device, 2026-11-18, after a
+// write that took and freed the only cluster; the queue's own saves with one
+// free cluster read the whole FAT every two saves on the host model). FatFs
 // points its search at a chain it frees in one place only, f_open()'s
 // FA_CREATE_ALWAYS over a file (`last_clst = cl - 1`, "Reuse the cluster
 // hole").
@@ -32,9 +34,10 @@
 //   - only on a nearly full volume (lastClst()'s gate: at most one free
 //     cluster for every 64 FAT sectors, 118 clusters on the 32 GB card).
 //     With more room FatFs's own order stays: a search from anywhere is short;
-//   - the lowest run freed since FatFs last allocated: a search from it finds
-//     every run freed after it before it wraps (a fragmented file freed, or
-//     several removes in a row).
+//   - the lowest run freed since FatFs last allocated, while every run freed
+//     after it lies at most kNearRun clusters above it: a search from it finds
+//     those runs within 64 FAT sectors (a fragmented file freed, or several
+//     removes in a row). A run farther above starts the search instead.
 // last_clst is only where a search starts: every FatFs reader clamps it to
 // the volume, and a cluster is taken only when its FAT entry reads free. A
 // wrong hint costs time, never a cluster. It writes no FAT sector, no count
@@ -49,6 +52,18 @@ namespace holehint {
 // judgement, not a measurement: any gate from about 16 clusters to a few
 // hundred fixes the one-free-cluster case.
 constexpr uint32_t kEntriesPerFree = 64u * 128u;
+
+// How far above the lowest run a run freed after it may lie and leave the
+// start on the lowest: 64 FAT sectors again (8,192 clusters). Farther, that
+// run is the start, as it is when it comes alone. A chain that took a lone
+// hole low on the card and then walked to the free run far above (the queue's
+// text grown past the cluster its old chain started in, on a card whose few
+// free clusters are a run) ends in that run; a start left on the hole sent
+// every second save back through that walk, a whole FAT (test_hole_hint M9,
+// M10). The cost: a file in two pieces far apart, low piece first, starts at
+// the high one, and the next write but one wraps to the low (M8). A
+// judgement: on the host model 1,024 gave the same counts as 8,192.
+constexpr uint32_t kNearRun = 64u * 128u;
 
 // FATFS's fields the rule reads.
 struct Volume {
@@ -106,8 +121,11 @@ inline bool onTrim(Fatfs* fs, uint8_t pdrv, uint32_t firstSector, Memory& mem) {
   if (at == 0) return false;
   const uint32_t cl = clusterAt(v, firstSector);
   // Nothing allocated since the last hint (an allocation moves last_clst),
-  // and that hint's run is lower: it stays.
-  if (mem.cluster != 0 && static_cast<uint32_t>(fs->last_clst) == mem.hint && cl > mem.cluster) return false;
+  // and that hint's run is lower and near: it stays.
+  if (mem.cluster != 0 && static_cast<uint32_t>(fs->last_clst) == mem.hint && cl > mem.cluster &&
+      cl - mem.cluster <= kNearRun) {
+    return false;
+  }
   fs->last_clst = at;
   mem.hint = at;
   mem.cluster = cl;

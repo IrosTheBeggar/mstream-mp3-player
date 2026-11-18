@@ -45,7 +45,8 @@
 //     points FatFs's next search for a free cluster at the clusters freed
 //     (lib/core HoleHint; METADATA.md 3.2.4, "The hole hint"): with one free
 //     cluster that search read the whole FAT, a queue save of 5.6 s on the
-//     device (2026-11-18). Counted: Stats::holeHints, gc's "hole hints".
+//     device after a write that took and freed it (2026-11-18). Counted:
+//     Stats::holeHints, gc's "hole hints".
 //   - Nothing writes the card around FatFs (SD.writeRAW() isn't used): if
 //     something ever does, it must invalidate() the range.
 //   - FatFs calls the driver under its volume's lock (one volume on the
