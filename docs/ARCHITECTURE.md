@@ -2823,13 +2823,14 @@ strings.
   (`statsglue::Glue`: the fold's HEAD, MARK's first 16 rows and the 40
   records, the store's and the session's state) is `app/ListeningStats`'
   `.bss` (`s_glue`), made with placement new at `PlayHistory::begin()` in
-  `setup()`, after Auto DJ's, and never destroyed: 1,992 B on the device,
+  `setup()`, after Auto DJ's, and never destroyed: 2,008 B on the device
+  since the PSRAM fix (1,992 B as moved),
   held to at most 2,048 B by a `static_assert` (the core2 builds check
   it), whatever the card holds, and the stats' only internal RAM. Static,
   not an internal-heap carve: it never splits a free block the card
   worker's stack, A2DP's buffers or a track's decoder buffers would have
   taken, and it can't fail; it does shrink the DRAM heap above `.bss` by
-  its size (`_heap_start` to 0x3FFE0000: 79,288 B, 2,096 B less than S0's
+  its size (`_heap_start` to 0x3FFE0000: 79,040 B, 2,344 B less than S0's
   build), and `heap_caps_malloc()` tries the internal heaps in address
   order, so a carve that fit at that heap's end can go to the next
   internal heap (the plan's internal-RAM review). A card with more than 8
@@ -2838,8 +2839,9 @@ strings.
   (`statsglue::Memory::keep`: plain `psramAlloc`, fix G), kept for the
   session: on the internal heap its size, the card's, had no bound. The
   budget is internal RAM's margin, counted as the build's `.dram0.bss`
-  over main's (2,096 B over S0's: the object, the rework's 96 B of
-  statics, `Ht`'s 8 B): from the lowest figures then held with the
+  over main's (2,344 B over S0's since the PSRAM fix: the object, the
+  rework's 96 B of statics, `Ht`'s 8 B, the hold's 232 B; 2,096 B as
+  moved): from the lowest figures then held with the
   headphones linked (METADATA 3.8's, 2026-11-04), OPUS.md's G5 steady
   50 KB was expected to hold with 0-1 KB to spare (`ram=52K`:
   51,152-52,175 B), a card job under a Bluetooth play 364 B over 42 KB

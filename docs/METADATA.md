@@ -7633,10 +7633,12 @@ section 1 and 5.14's "As built" notes list the changes):
   `PlayHistory::begin()`, never destroyed; not an internal-heap carve, so
   it never splits a free block another internal carve would take and
   can't fail, though it shrinks the DRAM heap above `.bss` by its size,
-  which can move a carve to the next internal heap): 1,992 B on the
-  device (`xtensa-esp32-elf-g++`'s `sizeof`), under a `static_assert` of
-  2,048 B, internal RAM's margin (the plan's 11, counted as the build's
-  `.dram0.bss` over main's, 2,096 B over S0's: from the lowest figures
+  which can move a carve to the next internal heap): 2,008 B on the
+  device since the PSRAM fix (`xtensa-esp32-elf-g++`'s `sizeof`; 1,992 B
+  as moved), under a `static_assert` of 2,048 B, internal RAM's margin
+  (the plan's 11, counted as the build's `.dram0.bss` over main's, 2,344 B
+  over S0's since the PSRAM fix, the hold's 232 B among it; 2,096 B as
+  moved: from the lowest figures
   then held with the headphones linked, 3.8's of 2026-11-04, G5's steady
   50 KB was expected to hold with 0-1 KB to spare, a walk on the card
   worker 364 B over 42 KB, and a whole Rescan's scan under a Bluetooth
@@ -7853,7 +7855,9 @@ section 1 and 5.14's "As built" notes list the changes):
   the glue's object (1,992 B) and 96 B of statics over S0 (the rework
   with its object in PSRAM: 59,160 B); 61,160 B since the plan's
   internal-RAM review (`Ht`'s hash, 8 B: the console's looks wait for a
-  pass; core2 flash 4,467,151 B, the tree before its commits). `iram_diet: 51 of 51`,
+  pass; core2 flash 4,467,151 B, the tree before its commits); 61,408 B
+  since the PSRAM fix and its review (`.dram0.bss` 36,296 B: the object
+  2,008 B, the hold's lines and state 232 B; the DRAM heap 79,040 B). `iram_diet: 51 of 51`,
   `cache_guard` and `flash_guard` ok. IRAM left 5,157 B with S0's 25
   `libc_a-*` objects in `.iram0.text` and no IRAM attribute: one
   `libphy.a(phy_chip_v7_cal.o)` literal, merged or not as libphy's COMMON
