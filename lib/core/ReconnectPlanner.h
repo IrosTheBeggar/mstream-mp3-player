@@ -19,8 +19,18 @@
 //   - Burst: on a drop, at boot and on any listener's ask (BtSink::connect():
 //     a play waiting for them, Connect or a tap on the card, a B hold, the
 //     console's o; the Pair screen closing without a pairing; the console's
-//     Pr1), kBurstPages pages, the next once the last one has ended and
-//     kBurstGapMs after it began. A page already on its way when the burst
+//     Pr1), kBurstPages pages (3), kAskPages (8) when a listener asked,
+//     the next kBurstPauseMs after the last one ended without a link (its
+//     page timeout, 5.12 s, when nobody answers): ~20 s for three, ~56 s
+//     for eight, the radio paging for three quarters of it. (They used to
+//     begin 10 s apart, the library's heartbeat, three for an ask too: a
+//     play's 20 s wait then covered two pages, 10 s on the air.) The
+//     pause is for the Core2's own page scan (every 1.28 s): headphones
+//     that are paging the Core2 just then get in. An ask gets eight
+//     because headphones that sit on a phone listen for pages only now
+//     and then (measured twice: five timed out in a row, the sixth was
+//     answered, 38 and 41 s after the first), and a listener is waiting;
+//     nobody is for the others. A page already on its way when the burst
 //     starts is its first. Opening the Output tab is not an ask: the
 //     resting card would never be seen (its Connect is one tap away).
 //   - Backoff: then one page at a time, kBackoffMs apart (30 s, 1, 2, 5
@@ -52,7 +62,7 @@ public:
 
   enum class Phase : uint8_t {
     Idle,     // not looking: linked, the listener let go, a pairing, the Pair screen, before the stack is up
-    Burst,    // paging, kBurstPages times
+    Burst,    // paging, burstPages() times
     Backoff,  // a page now and then, no inquiry
     Resting,  // connectable only: no pages, no scans
     Scan,     // nothing remembered, a name to look for: a scan by name
@@ -78,8 +88,21 @@ public:
     StopScan,  // stop the scan running (state UNCONNECTED, then cancel)
   };
 
-  static constexpr int kBurstPages = 3;
-  static constexpr uint32_t kBurstGapMs = 10000;  // a burst's pages begin at least this far apart (~ the heartbeat)
+  static constexpr int kBurstPages = 3;  // a drop's burst, the boot's
+  // A listener's ask (Why::Ask): they are waiting, and headphones that are
+  // connected to a phone answer a page only now and then. The device run
+  // of 2026-11-17, twice: five page timeouts in a row, then an answer, 38
+  // and 41 s after the first page (off the phone every ask was answered
+  // within three). Three tries failed the round; six (~42 s) linked from
+  // one tap with half a second to spare; eight (~56 s) leave room.
+  static constexpr int kAskPages = 8;
+  // A burst's next page begins this long after the last one ended without
+  // a link (pageEnded()): one of the Core2's own page scans (every 1.28 s)
+  // fits in it, so headphones paging the Core2 at that moment get in.
+  static constexpr uint32_t kBurstPauseMs = 2000;
+  // ... or, when the last one's end was never reported, this long after it
+  // began (the library gives a connection up after two 10 s heartbeats).
+  static constexpr uint32_t kBurstGapMs = 10000;
   // A page this recent may still be answered: the controller's page timeout
   // (5.12 s by default) and a margin. Nothing pages on top of it.
   static constexpr uint32_t kPageMs = 5500;
@@ -93,7 +116,8 @@ public:
   void start(Why why, bool remembered, bool canScan, uint32_t nowMs);
   // Every page made, ours or the library's (the boot's, a pairing's).
   void pageMade(uint32_t nowMs);
-  // The page got its answer without a link (refused, timed out).
+  // The page got its answer without a link (refused, timed out): a
+  // burst's next page follows kBurstPauseMs later.
   void pageEnded(uint32_t nowMs);
   // A link came up, or the listener took over (let go, the Pair screen, a
   // pairing): nothing to plan until the next start().
@@ -110,8 +134,11 @@ public:
   Do step(const In& in);
 
   Phase phase() const { return phase_; }
-  // In a burst: the number of the last page made (1..kBurstPages); else 0.
+  // In a burst: the number of the last page made (1..burstPages()); else 0.
   int burstTry() const { return phase_ == Phase::Burst ? pages_ : 0; }
+  // How many pages the burst under way (or the last one) has: kAskPages
+  // for a listener's ask, kBurstPages otherwise.
+  int burstPages() const { return burstPages_; }
   // A page made within kPageMs that hasn't had its answer.
   bool pageOnItsWay(uint32_t nowMs) const;
   // Backoff: how long until the next page (for the log); 0 otherwise.
@@ -127,11 +154,13 @@ private:
 
   Phase phase_ = Phase::Idle;
   int pages_ = 0;           // Burst: pages made in it
+  int burstPages_ = kBurstPages;  // ... of how many (start()'s why)
   int step_ = 0;            // Backoff: the next gap's index into kBackoffMs
   uint32_t sinceMs_ = 0;    // the burst's (or the scan's) start
   bool paged_ = false;      // a page was made (lastPageMs_: when)
   bool pageOpen_ = false;   // ... and hasn't had its answer
   uint32_t lastPageMs_ = 0;
+  uint32_t pageEndMs_ = 0;  // when it had its answer (pageEnded()), while !pageOpen_
 };
 
 // How much of the time the radio spends looking for the headphones

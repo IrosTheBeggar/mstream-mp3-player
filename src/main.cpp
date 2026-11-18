@@ -2516,7 +2516,7 @@ static void stepPlayGate(uint32_t now) {
   if (!name[0]) name = "the headphones";
   switch (d) {
     case PlayGate::Do::Connect:
-      // The paging burst now: try 1 of 3 (a background page on its way
+      // The paging burst now: try 1 of 8 (a background page on its way
       // counts as that try: BtSink doesn't page on top of it).
       bt.connect();
       // fall through

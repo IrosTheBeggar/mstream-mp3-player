@@ -3,10 +3,11 @@
 
 #include "ReconnectPlanner.h"
 
-void ReconnectPlanner::start(Why, bool remembered, bool canScan, uint32_t nowMs) {
+void ReconnectPlanner::start(Why why, bool remembered, bool canScan, uint32_t nowMs) {
   sinceMs_ = nowMs;
   step_ = 0;
   pages_ = 0;
+  burstPages_ = why == Why::Ask ? kAskPages : kBurstPages;
   if (!remembered) {
     // Nothing to page. No name to look for (a release build): quiet,
     // connectable only; the Pair screen is the way to headphones.
@@ -23,10 +24,15 @@ void ReconnectPlanner::pageMade(uint32_t nowMs) {
   paged_ = true;
   pageOpen_ = true;
   lastPageMs_ = nowMs;
-  if (phase_ == Phase::Burst && pages_ < kBurstPages) ++pages_;
+  if (phase_ == Phase::Burst && pages_ < burstPages_) ++pages_;
 }
 
-void ReconnectPlanner::pageEnded(uint32_t) { pageOpen_ = false; }
+void ReconnectPlanner::pageEnded(uint32_t nowMs) {
+  // (A DISCONNECTED with no page open, e.g. a connection the headphones
+  // began and dropped: the pause counts from it too, they are there.)
+  pageOpen_ = false;
+  pageEndMs_ = nowMs;
+}
 
 bool ReconnectPlanner::pageOnItsWay(uint32_t nowMs) const {
   return paged_ && pageOpen_ && !elapsed(nowMs, lastPageMs_, kPageMs);
@@ -92,8 +98,14 @@ ReconnectPlanner::Do ReconnectPlanner::step(const In& in) {
   if (pageOnItsWay(in.nowMs)) return Do::Nothing;
 
   if (phase_ == Phase::Burst) {
-    if (pages_ < kBurstPages) {
-      if (pages_ == 0 || !paged_ || elapsed(in.nowMs, lastPageMs_, kBurstGapMs)) return Do::Page;
+    if (pages_ < burstPages_) {
+      if (pages_ == 0 || !paged_) return Do::Page;
+      // The last page ended without a link: the next after a pause (the
+      // Core2's own page scan gets its turn). Its end never reported: the
+      // old spacing, from its start.
+      if (!pageOpen_ ? elapsed(in.nowMs, pageEndMs_, kBurstPauseMs) : elapsed(in.nowMs, lastPageMs_, kBurstGapMs)) {
+        return Do::Page;
+      }
       return Do::Nothing;
     }
     // The burst's pages have all had their answer: back off.

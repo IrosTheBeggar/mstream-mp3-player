@@ -25,6 +25,12 @@ using Why = ReconnectPlanner::Why;
 namespace {
 constexpr uint32_t kTickMs = 250;        // BtAppT's ticks from the loop
 constexpr uint32_t kPageTimeoutMs = 5120;  // the controller's page timeout
+// A burst nobody answers, as the model below runs it: a page's timeout is
+// seen at the tick after its 5.12 s (5.25 s), the next page goes
+// kBurstPauseMs after that. burstMs(n): by when n pages have all had
+// their answer (and before the back-off's first page, 30 s on).
+constexpr uint32_t kTryMs = 5250 + ReconnectPlanner::kBurstPauseMs;
+constexpr uint32_t burstMs(int pages) { return static_cast<uint32_t>(pages) * kTryMs; }
 
 // PlayerA2dp and the library, as the planner sees them.
 struct Sim {
@@ -96,8 +102,9 @@ void setUp() {}
 void tearDown() {}
 
 // The headphones drop and stay away (in their case, off): a burst of three
-// pages ~10 s apart, then one page at 30 s, 1, 2, 5, 5 min, then nothing
-// from 15 min on: connectable only. Never a scan.
+// pages, each kBurstPauseMs after the last one's page timeout, then one
+// page 30 s, 1, 2, 5, 5 min after the one before, then nothing from 15 min
+// on: connectable only. Never a scan.
 void test_the_back_off_schedule() {
   Sim s;
   const uint32_t t0 = s.now;
@@ -106,7 +113,8 @@ void test_the_back_off_schedule() {
   TEST_ASSERT_EQUAL(Phase::Burst, s.p.phase());
   TEST_ASSERT_EQUAL_INT(1, s.p.burstTry());
   s.run(20 * 60000);
-  const uint32_t expected[] = {0, 10000, 20000, 50000, 110000, 230000, 530000, 830000};
+  // (A page's end is seen at the tick after its 5.12 s: 5.25 s.)
+  const uint32_t expected[] = {0, 7250, 14500, 44500, 104500, 224500, 524500, 824500};
   const size_t n = sizeof(expected) / sizeof(expected[0]);
   TEST_ASSERT_EQUAL_size_t(n, s.pages.size());
   for (size_t i = 0; i < n; ++i) {
@@ -123,7 +131,7 @@ void test_the_burst_ends_once_its_last_page_has_its_answer() {
   Sim s;
   s.p.start(Why::Drop, true, true, s.now);
   s.step();
-  s.run(20000);  // the third page, just made
+  s.run(14500);  // the third page, just made
   TEST_ASSERT_EQUAL_size_t(3, s.pages.size());
   TEST_ASSERT_EQUAL(Phase::Burst, s.p.phase());
   TEST_ASSERT_EQUAL_INT(3, s.p.burstTry());
@@ -131,6 +139,100 @@ void test_the_burst_ends_once_its_last_page_has_its_answer() {
   TEST_ASSERT_EQUAL(Phase::Backoff, s.p.phase());
   TEST_ASSERT_EQUAL_INT(0, s.p.burstTry());
   TEST_ASSERT_UINT32_WITHIN(kTickMs, 30000 - kPageTimeoutMs - kTickMs, s.p.nextPageInMs(s.now));
+}
+
+// A burst's pages follow each other closely: the radio pages for most of
+// the time a listener waits. The three are done (each with its page
+// timeout) inside PlayGate's 20 s, and they begin less than 7 s apart;
+// between two of them the Core2 doesn't page for kBurstPauseMs (its own
+// page scan's turn: headphones paging it get in).
+void test_a_bursts_pages_follow_each_other() {
+  Sim s;
+  const uint32_t t0 = s.now;
+  s.p.start(Why::Drop, true, true, s.now);
+  s.step();
+  s.run(20000);
+  TEST_ASSERT_EQUAL_size_t(3, s.pages.size());
+  TEST_ASSERT_EQUAL(Phase::Backoff, s.p.phase());  // all three had their answer
+  for (size_t i = 1; i < 3; ++i) {
+    const uint32_t gap = s.pages[i] - s.pages[i - 1];
+    TEST_ASSERT_TRUE(gap >= kPageTimeoutMs + ReconnectPlanner::kBurstPauseMs);
+    TEST_ASSERT_TRUE(gap <= kPageTimeoutMs + ReconnectPlanner::kBurstPauseMs + 2 * kTickMs);
+  }
+  // On the air for 3 x 5.12 s of the first 20 s.
+  TEST_ASSERT_TRUE(s.pages[2] + kPageTimeoutMs - t0 <= 20000);
+}
+
+// A listener's ask gets kAskPages tries: they are waiting, and headphones
+// that sit on a phone answer a page only now and then (the device run of
+// 2026-11-17, twice: five timed out in a row, the sixth was answered). A
+// drop's burst and the boot's keep kBurstPages.
+void test_an_ask_gets_more_pages_than_a_drop() {
+  TEST_ASSERT_TRUE(ReconnectPlanner::kAskPages > ReconnectPlanner::kBurstPages);
+  Sim a;
+  const uint32_t t0 = a.now;
+  a.p.start(Why::Ask, true, true, a.now);
+  TEST_ASSERT_EQUAL_INT(ReconnectPlanner::kAskPages, a.p.burstPages());
+  a.step();
+  a.run(burstMs(ReconnectPlanner::kAskPages));
+  TEST_ASSERT_EQUAL_size_t(ReconnectPlanner::kAskPages, a.pages.size());
+  TEST_ASSERT_EQUAL(Phase::Backoff, a.p.phase());  // all of them had their answer
+  TEST_ASSERT_TRUE(a.pages.back() + kPageTimeoutMs - t0 <= burstMs(ReconnectPlanner::kAskPages));
+  // Long enough for headphones that answer 41 s after the first page (the
+  // phone case, measured), with a page's length to spare.
+  TEST_ASSERT_TRUE(a.pages.back() - t0 >= 41000 + kPageTimeoutMs);
+  const Why others[] = {Why::Drop, Why::Boot};
+  for (Why w : others) {
+    Sim d;
+    d.p.start(w, true, true, d.now);
+    TEST_ASSERT_EQUAL_INT(ReconnectPlanner::kBurstPages, d.p.burstPages());
+    d.step();
+    d.run(burstMs(ReconnectPlanner::kBurstPages) + 10000);  // (its back-off's first page is 30 s on)
+    TEST_ASSERT_EQUAL_size_t(ReconnectPlanner::kBurstPages, d.pages.size());
+  }
+  // The try's number runs to the burst's own count ("try 8 of 8").
+  Sim n;
+  n.p.start(Why::Ask, true, true, n.now);
+  n.step();
+  n.run((ReconnectPlanner::kAskPages - 1) * kTryMs + kTickMs);  // the last one, just made
+  TEST_ASSERT_EQUAL_INT(ReconnectPlanner::kAskPages, n.p.burstTry());
+  // An ask while a drop's burst is under way: the ask's count from there.
+  Sim m;
+  m.p.start(Why::Drop, true, true, m.now);
+  m.step();
+  m.run(3000);  // its first page on its way
+  m.p.start(Why::Ask, true, true, m.now);
+  TEST_ASSERT_EQUAL_INT(1, m.p.burstTry());
+  TEST_ASSERT_EQUAL_INT(ReconnectPlanner::kAskPages, m.p.burstPages());
+  m.run(burstMs(ReconnectPlanner::kAskPages));
+  TEST_ASSERT_EQUAL_size_t(ReconnectPlanner::kAskPages, m.pages.size());
+}
+
+// A page whose end is never reported (no DISCONNECTED came): the next one
+// waits kBurstGapMs from its start, as before.
+void test_a_page_with_no_end_reported_keeps_the_old_spacing() {
+  Sim s;
+  s.p.start(Why::Ask, true, true, s.now);
+  s.step();
+  const uint32_t first = s.now;
+  s.pageOpen = false;  // (the model never reports its end)
+  s.run(ReconnectPlanner::kBurstGapMs - kTickMs);
+  TEST_ASSERT_EQUAL_size_t(1, s.pages.size());
+  s.run(2 * kTickMs);
+  TEST_ASSERT_EQUAL_size_t(2, s.pages.size());
+  TEST_ASSERT_UINT32_WITHIN(kTickMs, ReconnectPlanner::kBurstGapMs, s.pages[1] - first);
+}
+
+// A page that ends early (refused, or answered and then dropped: 0.8 s
+// here) is followed as soon: kBurstPauseMs after its end.
+void test_a_page_that_ends_early_is_followed_after_the_pause() {
+  Sim s;
+  s.p.start(Why::Ask, true, true, s.now);
+  s.step();
+  s.pageEndsMs = s.now + 800;
+  s.run(800 + ReconnectPlanner::kBurstPauseMs + 2 * kTickMs);
+  TEST_ASSERT_EQUAL_size_t(2, s.pages.size());
+  TEST_ASSERT_UINT32_WITHIN(2 * kTickMs, 800 + ReconnectPlanner::kBurstPauseMs, s.pages[1] - s.pages[0]);
 }
 
 // A burst's next page waits for the last one's answer, however slow.
@@ -165,7 +267,8 @@ void test_no_discovery_while_remembered() {
 
 // Every listener's ask (BtSink::connect(): a play waiting for them,
 // Connect, a B hold; the Pair screen closing; Pr1: all start(Ask))
-// restarts a full burst at once, from the back-off and from resting.
+// restarts a full burst at once (an ask's: kAskPages), from the back-off
+// and from resting.
 // (Opening the Output tab isn't one: the resting card must be seen.)
 void test_an_ask_restarts_the_burst() {
   Sim s;
@@ -178,8 +281,8 @@ void test_an_ask_restarts_the_burst() {
   TEST_ASSERT_EQUAL(Phase::Burst, s.p.phase());
   TEST_ASSERT_EQUAL(Do::Page, s.step());
   TEST_ASSERT_EQUAL_INT(1, s.p.burstTry());
-  s.run(26000);
-  TEST_ASSERT_EQUAL_size_t(before + 3, s.pages.size());
+  s.run(burstMs(ReconnectPlanner::kAskPages));
+  TEST_ASSERT_EQUAL_size_t(before + ReconnectPlanner::kAskPages, s.pages.size());
   // From resting, likewise; and the 15 minutes count from the ask.
   s.run(20 * 60000);
   TEST_ASSERT_EQUAL(Phase::Resting, s.p.phase());
@@ -189,7 +292,7 @@ void test_an_ask_restarts_the_burst() {
   TEST_ASSERT_EQUAL(Do::Page, s.step());
   s.run(10 * 60000);
   TEST_ASSERT_EQUAL(Phase::Backoff, s.p.phase());
-  TEST_ASSERT_TRUE(s.pages.size() > before + 3);
+  TEST_ASSERT_TRUE(s.pages.size() > before + ReconnectPlanner::kAskPages);
   s.runUntil(askMs + ReconnectPlanner::kGiveUpMs + kTickMs);
   TEST_ASSERT_EQUAL(Phase::Resting, s.p.phase());
 }
@@ -197,14 +300,14 @@ void test_an_ask_restarts_the_burst() {
 // ARCHITECTURE.md "Play while the headphones aren't connected": a
 // background page still on its way when a play starts waiting is try 1
 // of the play's burst (not paged over, and not the last of an old burst):
-// two more follow, and only then the back-off.
+// the rest of an ask's tries follow, and only then the back-off.
 void test_a_page_in_flight_counts_as_try_1_of_a_plays_burst() {
   Sim s;
   s.p.start(Why::Drop, true, true, s.now);
   s.step();
-  s.run(49000);
+  s.run(43500);
   TEST_ASSERT_EQUAL(Phase::Backoff, s.p.phase());
-  s.run(1500);  // the back-off's first page, 50 s in, now on its way
+  s.run(1500);  // the back-off's first page, 44.5 s in, now on its way
   TEST_ASSERT_EQUAL_size_t(4, s.pages.size());
   TEST_ASSERT_TRUE(s.p.pageOnItsWay(s.now));
   const size_t before = s.pages.size();
@@ -212,9 +315,10 @@ void test_a_page_in_flight_counts_as_try_1_of_a_plays_burst() {
   TEST_ASSERT_EQUAL_INT(1, s.p.burstTry());
   TEST_ASSERT_EQUAL(Do::Nothing, s.step());  // not paged over
   s.run(kPageTimeoutMs);                     // its answer: none
-  s.run(30000);
-  TEST_ASSERT_EQUAL_size_t(before + 2, s.pages.size());  // tries 2 and 3
-  TEST_ASSERT_TRUE(s.pages[before] - s.pages[before - 1] >= ReconnectPlanner::kBurstGapMs);
+  s.run(burstMs(ReconnectPlanner::kAskPages));
+  TEST_ASSERT_EQUAL_size_t(before + ReconnectPlanner::kAskPages - 1, s.pages.size());  // the ask's other tries
+  // Try 2 only once that page had its answer, and the pause after it.
+  TEST_ASSERT_TRUE(s.pages[before] - s.pages[before - 1] >= kPageTimeoutMs + ReconnectPlanner::kBurstPauseMs);
   // The same in the boot's case: the library's page at stack-up is try 1.
   Sim b;
   b.p.pageMade(b.now);  // av_hdl_stack_evt's connect_to(), before the planner starts
@@ -448,7 +552,7 @@ void test_the_schedule_survives_millis_wraparound() {
   s.step();
   s.run(20 * 60000);
   TEST_ASSERT_EQUAL_size_t(8, s.pages.size());
-  TEST_ASSERT_UINT32_WITHIN(kTickMs, 830000, s.pages[7] - t0);
+  TEST_ASSERT_UINT32_WITHIN(kTickMs, 824500, s.pages[7] - t0);
   TEST_ASSERT_EQUAL(Phase::Resting, s.p.phase());
 }
 
@@ -478,6 +582,10 @@ int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_back_off_schedule);
   RUN_TEST(test_the_burst_ends_once_its_last_page_has_its_answer);
+  RUN_TEST(test_a_bursts_pages_follow_each_other);
+  RUN_TEST(test_an_ask_gets_more_pages_than_a_drop);
+  RUN_TEST(test_a_page_with_no_end_reported_keeps_the_old_spacing);
+  RUN_TEST(test_a_page_that_ends_early_is_followed_after_the_pause);
   RUN_TEST(test_a_page_on_its_way_is_never_paged_over);
   RUN_TEST(test_no_discovery_while_remembered);
   RUN_TEST(test_an_ask_restarts_the_burst);

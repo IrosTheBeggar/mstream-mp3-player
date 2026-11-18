@@ -149,7 +149,10 @@ a GPT card:
    device nearby with its kind and signal). The Core2 connects, moves the
    music to them and remembers them: after a drop or a restart it pages
    them (3 tries, then now and then, resting after 15 min), and they can
-   also reconnect by themselves whenever they wake up. Until some are
+   also reconnect by themselves whenever they wake up. When you ask for
+   them (Connect, a B hold, a play) it tries 8 times, about a minute:
+   headphones that are connected to a phone hardly listen for anyone
+   else, so disconnect them there first if you can. Until some are
    paired the Bluetooth card says "No headphones paired", and a B hold or a
    play on Bluetooth only points there.
 
@@ -496,7 +499,7 @@ pages do:
   Empty, it offers Open Library and Shuffle all (or Auto DJ: below).
 - **Dance**: the dancer (below).
 - **Output**: a card for the Bluetooth headphones (connected, with the
-  codec and delay; connecting, "try 2 of 3", with Cancel; failed, with Try
+  codec and delay; connecting, "try 2 of 8", with Cancel; failed, with Try
   again; Disconnect; Forget, which takes a second tap within 3 s, or,
   while connected, is in the "..." sheet and asks first) and one for the
   speaker; each shows its own volume (tap it for a slider). Tap a card to
