@@ -192,6 +192,143 @@ void giveSpacers(Spacers* s, void (*release)(void*)) {
   s->n = 0;
 }
 
+// ---- The listening stats' hold ----
+size_t capRequest(size_t bytes, size_t overhead) {
+  // The smallest block a request takes: 16 B with the poisoning (1 + 12,
+  // aligned to 4), TLSF's 12 B without.
+  const size_t least = std::max<size_t>(12, (1 + overhead + 3) & ~static_cast<size_t>(3));
+  if (bytes < least) return 0;
+  if (bytes < 128) return bytes - overhead;
+  int fl = 0;
+  for (size_t r = bytes >> 1; r; r >>= 1) ++fl;  // fls
+  return (bytes & ~((static_cast<size_t>(1) << (fl - 5)) - 1)) - overhead;
+}
+
+const char* closeName(Close c) {
+  switch (c) {
+    case Close::Nothing: return "nothing";
+    case Close::Closed: return "closed";
+    case Close::NoSpacers: return "noSpacers";
+    case Close::NotOnTop: return "notOnTop";
+    case Close::Margin: return "margin";
+    case Close::Missed: return "missed";
+    case Close::NoCap: return "noCap";
+    case Close::Lost: return "lost";
+    case Close::Left: return "left";
+    case Close::Full: return "full";
+    case Close::NoBlock: return "noBlock";
+  }
+  return "?";
+}
+
+namespace {
+
+void walked(const Above& a, CloseReport* rep) {
+  ++rep->walks;
+  rep->us += a.us;
+  rep->usMax = std::max(rep->usMax, a.us);
+  rep->visits = std::max(rep->visits, a.visits);
+}
+
+}  // namespace
+
+Close closeAbove(const void* block, const void* spacer, const CloseHooks& h, Caps* out, CloseReport* rep) {
+  Above a;
+  h.above(block, spacer, &a);
+  walked(a, rep);
+  if (!a.found) {
+    rep->bounded = a.bounded;
+    return rep->why = Close::Lost;
+  }
+  rep->blockBytes = a.blockBytes;
+  if (spacer && !a.onSpacers) return rep->why = Close::NotOnTop;
+  if (!a.free) {
+    rep->usedAbove = a.bytes;
+    return rep->why = Close::Nothing;
+  }
+  rep->aboveBytes = a.bytes;
+  // (Rule 3: the caps never leave under the margin free.)
+  if (h.freeBytes && h.freeBytes() < a.bytes + 4 + h.keepFree + 1024) return rep->why = Close::Margin;
+  for (;;) {
+    const size_t req = capRequest(a.bytes, h.overhead);
+    if (!req) return rep->why = out->n ? Close::Closed : Close::Nothing;  // (12 B: no request can take it)
+    if (out->n == Caps::kMax) return rep->why = Close::Left;
+    void* c = h.alloc(req);
+    if (c != a.capAt) {
+      // Another block heads T's list, or another task carved first: the
+      // same request would find the same head, so no retry.
+      rep->want = a.capAt;
+      rep->got = c;
+      if (c) h.release(c);
+      return rep->why = c ? Close::Missed : Close::NoCap;
+    }
+    out->p[out->n++] = c;
+    rep->caps = out->n;
+    h.above(c, nullptr, &a);
+    walked(a, rep);
+    rep->capBytes += a.blockBytes + 4;
+    if (!a.found) return rep->why = Close::Lost;  // (never: just carved)
+    if (!a.free) return rep->why = Close::Closed;
+  }
+}
+
+void* TopHold::take(const Hooks& h, size_t bytes, CloseReport* rep) {
+  *rep = CloseReport();
+  // The spacers keep keepFree free with the block itself carved (its carve
+  // counted, as the join counts its own): another task's carve in this
+  // window (a track start's probe, an Opus packet buffer, the card worker's)
+  // finds the margin, whatever the block's size.
+  Spacers sp;
+  const bool placed = h.largest &&
+                      takeSpacers(bytes, h.keepFree + carvedAtMost(bytes), h.largest, h.freeBytes, h.alloc, h.release, &sp);
+  void* p = h.alloc(bytes);
+  const void* spacer = placed ? sp.p[sp.n - 1] : nullptr;  // (the last: the largest's, right under the block)
+  giveSpacers(&sp, h.release);  // (the caps come after: free is back near what it was)
+  if (!p) {
+    rep->why = Close::NoBlock;
+    return nullptr;
+  }
+  if (n_ == kMax) {
+    rep->why = Close::Full;
+    return p;
+  }
+  Entry& e = e_[n_++];
+  e = Entry();
+  e.block = p;
+  if (!placed) {
+    rep->why = Close::NoSpacers;
+  } else if (!h.above) {
+    rep->why = Close::Nothing;
+  } else {
+    CloseHooks c;
+    c.above = h.above;
+    c.alloc = h.alloc;
+    c.release = h.release;
+    c.freeBytes = h.freeBytes;
+    c.keepFree = h.keepFree;
+    c.overhead = h.overhead;
+    closeAbove(p, spacer, c, &e.caps, rep);
+  }
+  return p;
+}
+
+void TopHold::give(const Hooks& h, void* p) {
+  if (!p) return;
+  int i = n_ - 1;
+  while (i >= 0 && e_[i].block != p) --i;
+  if (i < 0) {
+    h.release(p);
+    return;
+  }
+  e_[i].given = true;
+  while (n_ > 0 && e_[n_ - 1].given) {  // the newest first: the lowest
+    Entry& e = e_[--n_];
+    h.release(e.block);  // the block first: it merges with the free block under it
+    for (int k = 0; k < e.caps.n; ++k) h.release(e.caps.p[k]);  // then its caps, bottom-up
+    e = Entry();
+  }
+}
+
 uint32_t filterWord(uint16_t bpm10, uint8_t camelot, uint8_t flags, uint32_t artistKey) {
   uint32_t bpm = (static_cast<uint32_t>(bpm10) + 5) / 10;
   if (bpm > 255) bpm = 255;

@@ -236,6 +236,137 @@ bool takeSpacers(size_t bytes, size_t keepFree, size_t (*largest)(), size_t (*fr
                  void (*release)(void*), Spacers* out);
 void giveSpacers(Spacers* s, void (*release)(void*));
 
+// ---- The listening stats' hold (docs/LISTENING-STATS.md 5.14, fix A) ----
+// A block held across passes at the top of the largest free block (the
+// ranges' block, a full log's overflow) leaves a free block T above it, the
+// room the spacers left over; under TLSF's good fit any long-lived carve
+// made while it is held (a frame's canvas, a queue) goes into T, not where
+// main puts it, and pins the largest free block split for the session once
+// the hold ends (the device's B1, 2026-11-17). So T is closed: caps carved
+// into it, held with the block, given back after it.
+//
+// What a heap walk says of a block in use (by the pointer its alloc gave)
+// and of the block physically right above it. The firmware's hook walks
+// PSRAM's heap (heap_caps_walk(): ESP-IDF 5.5's TLSF, light poisoning); the
+// host's walks its model heap.
+struct Above {
+  bool found = false;      // the walk met the block, in use
+  bool bounded = false;    // the walk gave up at its visit bound before it met the block
+  bool onSpacers = false;  // (asked with a spacer) the free block right under it holds that spacer's address
+  bool free = false;       // the block right above it is free (false: in use, or the heap's end)
+  size_t blockBytes = 0;   // the block's own size as the heap counts it (TLSF's block_size(): poisoning, rounding)
+  size_t bytes = 0;        // the block right above: its size as the heap counts it (0: the heap's end)
+  void* capAt = nullptr;   // (free) the pointer a carve taking its head returns
+  uint32_t visits = 0;     // blocks the walk looked at
+  uint32_t us = 0;         // the walk's time (the firmware's; 0 on the host)
+};
+using AboveFn = void (*)(const void* block, const void* spacer, Above* out);
+
+// The request whose carve takes the head of a free block of `bytes` (a TLSF
+// block size) from that block's own free list and no more than it holds:
+// its size class's floor less `overhead` (the poisoning's 12 B), the whole
+// of it under 128 B (those lists hold one size each); 0 under 16 B with the
+// poisoning, which no request can take. TLSF rounds a request up to its
+// class's next boundary; the floor is one, so the carve is the floor and it
+// maps to the free block's own list, whose head that block is. Three caps
+// at most close any free block up to 4 MB, leaving 0 B or 12 B
+// (docs/LISTENING-STATS.md 5.14, fix A).
+size_t capRequest(size_t bytes, size_t overhead);
+
+enum class Close : uint8_t {  // (Nothing first: a report's default is all zeros, so .bss)
+  Nothing,    // the block above in use, or the heap's end, or a free block no request can take: nothing to close
+  Closed,     // the free block above closed (caps n >= 1; nothing a request can take is left above)
+  NoSpacers,  // takeSpacers() placed none: the block went where the heap put it, nothing closed
+  NotOnTop,   // not on the spacers' top (a smaller free block took it): nothing closed
+  Margin,     // closing it would leave under keepFree + 1 KB free: left open
+  Missed,     // a cap came back elsewhere (another task's carve first): given back at once, the rest left open
+  NoCap,      // no memory for a cap: the rest left open
+  Lost,       // the walk didn't meet the block (or gave up at its visit bound): nothing closed
+  Left,       // Caps::kMax caps and a free block still above (never under ESP-IDF 5.5's TLSF)
+  Full,       // TopHold already holds kMax blocks: carved, not tracked, nothing closed
+  NoBlock,    // no memory for the block itself
+};
+const char* closeName(Close c);  // "closed", "nothing", ...
+
+struct Caps {
+  static constexpr int kMax = 3;
+  void* p[kMax] = {};
+  uint8_t n = 0;
+};
+
+// What a take did (the firmware's [listen] line).
+struct CloseReport {
+  Close why = Close::Nothing;
+  bool bounded = false;       // (Lost) the walk gave up at its visit bound
+  uint8_t caps = 0;           // the caps held
+  size_t blockBytes = 0;      // the block as the heap counts it
+  size_t aboveBytes = 0;      // the free block found above it (T; 0: none)
+  size_t usedAbove = 0;       // (Nothing) the block in use above it
+  size_t capBytes = 0;        // the caps' footprints (each the heap's size + 4)
+  const void* want = nullptr; // (Missed) where the cap should have come back
+  const void* got = nullptr;  // ... and where it did
+  uint32_t walks = 0;
+  uint32_t us = 0, usMax = 0;  // the walks' time in all, and the longest one's
+  uint32_t visits = 0;         // the most blocks one walk looked at
+};
+
+struct CloseHooks {
+  AboveFn above = nullptr;
+  void* (*alloc)(size_t) = nullptr;
+  void (*release)(void*) = nullptr;
+  size_t (*freeBytes)() = nullptr;  // nullptr: no margin check
+  size_t keepFree = 0;
+  size_t overhead = 0;              // the heap's bytes a request (12: light poisoning)
+};
+// Close the free block above `block`: walk, then caps of capRequest() each
+// at the address the walk gave (anything else freed at once: Missed; no
+// retry, the same request finds the same list head), a walk after each,
+// until the block above is in use or nothing a request can take is left.
+// `spacer`: the last spacer takeSpacers() placed (given back already: its
+// address compared, never read); nullptr: not checked. The caps go to `out`.
+Close closeAbove(const void* block, const void* spacer, const CloseHooks& h, Caps* out, CloseReport* rep);
+
+// The listening stats' hold: blocks held across passes at the top of the
+// largest free block, each carved under takeSpacers()'s spacers (keepFree
+// and the block's own carve kept free while they are held: free never under
+// keepFree once it is carved), the spacers given back, then the free block
+// left above it closed (closeAbove()) when the block sits on the spacers'
+// top (in a hole it moves nothing main would put there). Given back
+// bottom-up: the newest first (each is carved under the ones before it, the
+// top of the largest free block being right under them), and a block given
+// back while a newer one is held waits for it; each block before its caps,
+// the caps in carve order. So no free block ever opens above a held one. Not
+// for a block held for the session (its caps would be). Loop task only. No
+// hooks stored: the caller passes the same Hooks each call.
+class TopHold {
+public:
+  static constexpr int kMax = 2;  // the ranges' block and the overflow's arena
+  struct Hooks {
+    size_t (*largest)() = nullptr;  // nullptr: no spacers (the block where the heap puts it, nothing closed)
+    size_t (*freeBytes)() = nullptr;
+    void* (*alloc)(size_t) = nullptr;
+    void (*release)(void*) = nullptr;
+    AboveFn above = nullptr;  // nullptr: no walk (nothing closed)
+    size_t keepFree = 0;
+    size_t overhead = 0;
+  };
+  void* take(const Hooks& h, size_t bytes, CloseReport* rep);  // nullptr: no memory
+  // `p` given back: freed with its caps once every block taken after it is
+  // given back (now, or with the newest's give-back). One not taken here
+  // (or taken while Full) is freed at once; nullptr: nothing.
+  void give(const Hooks& h, void* p);
+  int held() const { return n_; }
+
+private:
+  struct Entry {
+    void* block = nullptr;
+    Caps caps;
+    bool given = false;
+  };
+  Entry e_[kMax];
+  uint8_t n_ = 0;
+};
+
 class Join {
 public:
   using AllocFn = void* (*)(size_t bytes);
