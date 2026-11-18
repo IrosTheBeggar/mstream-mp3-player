@@ -3332,9 +3332,10 @@ static bool decoderRefilling(uint32_t now) {
 // again after the update's Live, or at once when the update waits for the
 // next boot after all. (The listening stats hold nothing to give back: a
 // fixed resident set in internal RAM; their boot's hold, the scan's blocks
-// at PSRAM's top, ends before an update may begin, and with the free block
-// above them closed by caps nothing carved meanwhile pins the largest free
-// block split after it, docs/LISTENING-STATS.md 5.14's fix A.)
+// at PSRAM's top, ends before an update may begin, and where caps close the
+// free block above them (fix A; its [listen] line says when not), nothing
+// carved meanwhile pins the largest free block split after it,
+// docs/LISTENING-STATS.md 5.14.)
 static size_t autoDjGiveBack(void*, size_t* psramFree, size_t* psramLargest) {
   if (!autoDj) return 0;
   const size_t before = *psramLargest;

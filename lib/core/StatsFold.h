@@ -196,7 +196,8 @@ constexpr uint32_t kMaxChunks = 16;
 // 12 B, 262,092 B rounds to 262,144 B (TLSF's class boundary), not 270,336 B.
 // No room for it (a heap no free block of that size is left in: after a
 // library update, mid-session): each chunk a carve of its own (kChunkBytes),
-// as before the arena, so the fold folds what it did.
+// as before the arena (the firmware's hook carves them as before the caps,
+// the hold's caps given back first), so the fold folds what it did.
 constexpr size_t kArenaBytes = size_t{kMaxChunks} * kChunkRecords * kRecordBytes;
 static_assert(kArenaBytes == 262080, "the overflow's arena");
 constexpr uint32_t kMarkRows = 16;  // MARK's rows in the object

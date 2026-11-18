@@ -26,21 +26,22 @@
 // (the hold: the ranges' block, a full log's overflow arena) sit at the top
 // of the largest free block with the free block left above each closed by
 // caps (topAlloc()), so main's own carves made meanwhile go where main puts
-// them, and once the hold ends PSRAM's layout is main's (5.14, fix A: the
-// device's B1 runs found it split for the session without the caps). Its
-// budget is internal RAM's margin (11's
+// them where the caps close it (the take's [listen] line says when they
+// don't: a missed cap, no spacers, a hole, the arena's fallback); in the
+// host's model PSRAM's layout is then main's once the hold ends (5.14, fix
+// A, its device re-run owed; the device's B1 runs found it split for the
+// session without the caps). Its budget is internal RAM's margin (11's
 // Internal RAM row): 2,048 B, hence 40 records, not the design's 96
 // (statsfold::kRecords). Against G5's floors (docs/OPUS.md: steady 50 KB,
 // the session's lowest 42 KB, the headphones linked) what counts is the
-// build's .dram0.bss growth over main's (2,096 B over S0's: this object,
-// the rework's 96 B of statics and Ht's 8 B), not sizeof alone. At the
-// figures held with a link (METADATA 3.8, 2026-11-04) G5's steady floor
-// holds with 0-1 KB to spare (ram=52K is 53,248-54,271 B: 51,152-52,175 B,
-// 48 B under 50 KB at the reading's low end), a walk on the card worker
-// keeps 364 B (45,468 B: 43,372 B), and the session's floor is not shown
-// kept: a whole Rescan's scan (min=43K: 44,032-45,055 B) comes to
-// 41,936-42,959 B, under 42 KB, until the re-run measures it with the
-// headphones linked (5.14, "Its device re-run").
+// build's .dram0.bss growth over main's (2,344 B over S0's: this object's
+// 2,008 B, the rework's 96 B of statics, Ht's 8 B and the hold's 232 B,
+// s_tl and s_top; 2,096 B as moved), not sizeof alone. At the figures
+// held with a link (METADATA 3.8, 2026-11-04) G5's steady floor was
+// expected to hold with 0-1 KB to spare and the session's floor not shown
+// kept; the move's re-run with the headphones linked (5.14, "Its device
+// re-run") measured both held with about 6 KB to spare at 2,096 B, the
+// fix's 248 B more of it not measured yet.
 static_assert(sizeof(statsglue::Glue) <= 2048, "the listening stats' resident set is at most 2,048 B (5.14, 11)");
 
 namespace {
@@ -68,7 +69,7 @@ size_t psramFreeBytes() { return heap_caps_get_free_size(MALLOC_CAP_SPIRAM); }
 // have taken (the card worker's 7.5 KB stack at each burst, A2DP's buffers,
 // a track's 4.1 KB of decoder buffers), and it can't fail. It does shrink
 // the DRAM heap above .bss by its size (that heap starts at _heap_start,
-// .dram0.bss's end; 79,288 B to 0x3FFE0000 in this build, 2,096 B less than
+// .dram0.bss's end; 79,040 B to 0x3FFE0000 in this build, 2,344 B less than
 // S0's), and heap_caps_malloc() tries the internal heaps in address order,
 // DRAM's before the D/IRAM ones above it: a carve that fit at that heap's
 // end on main can go to the next internal heap instead, the same class of
@@ -91,62 +92,20 @@ constexpr size_t kPoisonHead = 0, kPoisonBytes = 0;
 // The walk's bound before it meets the block (past it: Close::Lost).
 constexpr uint32_t kWalkVisits = 8192;
 
-// heap_caps_walk()'s state, on the caller's frame. The callback runs inside
-// the PSRAM heap's lock (multi_heap_walk: xPortEnterCriticalTimeout, this
-// core's interrupts masked to level 3; a PSRAM heap call on the other core
-// spins, its own masked, until the walk ends, as under any
-// heap_caps_get_largest_free_block()): it compares and copies words, nothing
-// else (no allocation, no line, no heap_caps_*, no timing).
-struct Walk {
-  uintptr_t block = 0, spacer = 0;  // walker pointers (malloc's less kPoisonHead); spacer 0: not asked
-  intptr_t heap = 0, prevHeap = 0;
-  uintptr_t prevAt = 0;
-  bool prevFree = false, seen = false, done = false;
-  autodj::Above* out = nullptr;
-};
-
+// autodj::AboveFn over PSRAM's heap: heap_caps_walk() hands walkStep()
+// each block, and autodj::WalkAbove (lib/core, host-tested) decides. The
+// callback runs inside the PSRAM heap's lock (multi_heap_walk:
+// xPortEnterCriticalTimeout, this core's interrupts masked to level 3; a
+// PSRAM heap call on the other core spins, its own masked, until the walk
+// ends, as under any heap_caps_get_largest_free_block()): it compares and
+// copies words, nothing else (no allocation, no line, no heap_caps_*, no
+// timing). The state is on the caller's frame.
 bool walkStep(walker_heap_into_t heap, walker_block_info_t b, void* user) {
-  Walk& w = *static_cast<Walk*>(user);
-  if (w.done) return false;
-  ++w.out->visits;
-  if (!w.seen && w.out->visits > kWalkVisits) {
-    w.out->bounded = true;
-    w.done = true;
-    return false;
-  }
-  const uintptr_t at = reinterpret_cast<uintptr_t>(b.ptr);
-  if (w.seen) {
-    // The block physically right above the held one (blocks come in
-    // address order), if in the same heap.
-    w.done = true;
-    if (heap.start == w.heap) {
-      w.out->free = !b.used;
-      w.out->bytes = b.size;
-      if (!b.used) w.out->capAt = reinterpret_cast<void*>(at + kPoisonHead);
-    }
-    return false;
-  }
-  if (at == w.block && b.used) {
-    w.seen = true;
-    w.heap = heap.start;
-    w.out->found = true;
-    w.out->blockBytes = b.size;
-    w.out->onSpacers = w.spacer && w.prevFree && w.prevHeap == heap.start && w.prevAt <= w.spacer && w.spacer < at;
-    return true;
-  }
-  w.prevAt = at;
-  w.prevFree = !b.used;
-  w.prevHeap = heap.start;
-  return true;
+  return static_cast<autodj::WalkAbove*>(user)->step(heap.start, reinterpret_cast<uintptr_t>(b.ptr), b.size, b.used);
 }
 
-// autodj::AboveFn over PSRAM's heap.
 void psramAbove(const void* block, const void* spacer, autodj::Above* out) {
-  *out = autodj::Above();
-  Walk w;
-  w.block = reinterpret_cast<uintptr_t>(block) - kPoisonHead;
-  w.spacer = spacer ? reinterpret_cast<uintptr_t>(spacer) - kPoisonHead : 0;
-  w.out = out;
+  autodj::WalkAbove w(block, spacer, kPoisonHead, kWalkVisits, out);
   const int64_t t0 = esp_timer_get_time();
   heap_caps_walk(MALLOC_CAP_SPIRAM, walkStep, &w);
   out->us = static_cast<uint32_t>(esp_timer_get_time() - t0);
@@ -177,32 +136,57 @@ struct TopLine {
   const void* at = nullptr;
   uint32_t bytes = 0;
   autodj::CloseReport r;
-  uint32_t blocks = 0;     // (the boot's first take) PSRAM's blocks, heap_caps_get_info()'s total_blocks
-  uint32_t largestUs = 0;  // ... one heap_caps_get_largest_free_block()'s time: a whole walk under the same lock
 };
-TopLine s_lines[2];  // (two takes at most between passes: the ranges' block, the arena)
-uint8_t s_lineN = 0;
-bool s_counted = false;
+struct TopLines {
+  // Three takes at most between passes: the ranges' block, then the
+  // overflow's arena or, no room for it, the arena refused and its first
+  // chunk alone (a slot's carve: kReserveAhead is 0). Never overwritten: a
+  // take past them is counted (lost).
+  TopLine line[3];
+  uint32_t blocks = 0;       // (the boot's first take) PSRAM's blocks, heap_caps_get_info()'s total_blocks
+  uint32_t largestUs = 0;    // ... one heap_caps_get_largest_free_block()'s time: a whole walk under the same lock
+  uint16_t outside = 0;      // takes past the hold's two blocks (Full: the fallback's chunks after its first)
+  uint16_t outsideSeen = 0;  // ... as the last pass left it: one line once a pass brings none
+  uint8_t n = 0, lost = 0;
+  uint8_t uncapped = 0;      // the hold's caps given back for the fallback's chunks (told on a chunk's line)
+  bool counted = false, firstOwed = false;
+};
+TopLines s_tl;
 
 void* topAlloc(size_t bytes) {
-  uint32_t blocks = 0, largestUs = 0;
-  if (!s_counted) {
-    s_counted = true;
+  if (!s_tl.counted) {
+    s_tl.counted = s_tl.firstOwed = true;
     multi_heap_info_t info;
     heap_caps_get_info(&info, MALLOC_CAP_SPIRAM);
-    blocks = static_cast<uint32_t>(info.total_blocks);
+    s_tl.blocks = static_cast<uint32_t>(info.total_blocks);
     const int64_t t0 = esp_timer_get_time();
     (void)psramLargest();
-    largestUs = static_cast<uint32_t>(esp_timer_get_time() - t0);
+    s_tl.largestUs = static_cast<uint32_t>(esp_timer_get_time() - t0);
   }
+  // The overflow's chunks one by one (no room for its arena: Fold::
+  // carveChunk()) are carved as before the caps: under spacers keeping 64 KB
+  // free, nothing closed, the hold's caps given back first, so the chunks
+  // find the room the caps held (an arena that can't be carved behaves as
+  // chunks that couldn't be before it; the ranges' block, still held, waits
+  // behind the first chunk). kChunkBytes is no other take's size: the arena
+  // is 262,080 B, the ranges' request the fold's need + 4 B, need a multiple
+  // of 16 (112 B an ACKS row, 80 B a MARK row's ranges: 8 B a log file).
+  const bool chunk = bytes == sf::kChunkBytes;
+  if (chunk) s_tl.uncapped = static_cast<uint8_t>(s_tl.uncapped + s_top.uncap(kTop));
   autodj::CloseReport r;
-  void* p = s_top.take(kTop, bytes, &r);
-  TopLine& l = s_lines[s_lineN < 2 ? s_lineN++ : 1];  // (past two before a pass: the newest kept)
+  void* p = s_top.take(kTop, bytes, &r, !chunk);
+  if (r.why == autodj::Close::Full) {
+    ++s_tl.outside;
+    return p;
+  }
+  if (s_tl.n == 3) {
+    ++s_tl.lost;
+    return p;
+  }
+  TopLine& l = s_tl.line[s_tl.n++];
   l.at = p;
   l.bytes = static_cast<uint32_t>(bytes);
   l.r = r;
-  l.blocks = blocks;
-  l.largestUs = largestUs;
   return p;
 }
 
@@ -210,14 +194,25 @@ void topRelease(void* p) { s_top.give(kTop, p); }
 
 // The owed lines (owedLine(): at a pass's start, the loop's own frame).
 __attribute__((noinline)) void printTopLines() {
-  for (uint8_t i = 0; i < s_lineN; ++i) {
-    const TopLine& l = s_lines[i];
+  for (uint8_t i = 0; i < s_tl.n; ++i) {
+    const TopLine& l = s_tl.line[i];
     const autodj::CloseReport& r = l.r;
-    const char* which = l.bytes == sf::kArenaBytes ? "the overflow's arena" : "the ranges'";
+    // (Named by size, as topAlloc() tells them: the arena 262,080 B, a chunk
+    // 16,384 B, the ranges' block anything else.)
+    const bool chunk = l.bytes == sf::kChunkBytes;
+    const char* which = l.bytes == sf::kArenaBytes ? "the overflow's arena"
+                        : chunk                    ? "an overflow chunk (no room for the arena)"
+                                                   : "the ranges'";
+    char uncapped[48] = "";
+    if (chunk && s_tl.uncapped) {
+      snprintf(uncapped, sizeof(uncapped), "; the hold's %u cap%s given back first", static_cast<unsigned>(s_tl.uncapped),
+               s_tl.uncapped == 1 ? "" : "s");
+      s_tl.uncapped = 0;
+    }
     if (r.why == autodj::Close::NoBlock) {
-      Serial.printf("[listen] the hold's top block (%s): NO PSRAM for its %lu B (the fold's own lines say what "
-                    "follows)\n",
-                    which, static_cast<ul>(l.bytes));
+      Serial.printf("[listen] the hold's top block (%s): NO PSRAM for its %lu B (no free block takes it; the fold's "
+                    "own lines say what follows)%s\n",
+                    which, static_cast<ul>(l.bytes), uncapped);
       continue;
     }
     const ul f = static_cast<ul>(r.aboveBytes), n = r.caps, cb = static_cast<ul>(r.capBytes);
@@ -265,26 +260,47 @@ __attribute__((noinline)) void printTopLines() {
                  r.bounded ? ", its bound" : "");
         break;
       case autodj::Close::Left:
-        snprintf(what, sizeof(what), "the %lu B free above it: %lu caps (%lu B), some LEFT OPEN", f, n, cb);
+        snprintf(what, sizeof(what),
+                 "the %lu B free above it: %lu cap%s (%lu B), the rest LEFT OPEN (the caps' most, or the block "
+                 "above grew: another task's block freed into it)",
+                 f, n, n == 1 ? "" : "s", cb);
         break;
-      case autodj::Close::Full:
-        snprintf(what, sizeof(what), "LEFT OPEN: the hold holds %d top blocks already", autodj::TopHold::kMax);
+      case autodj::Close::Plain:
+        snprintf(what, sizeof(what), "carved as before the caps (64 KB kept free under its spacers): nothing closed");
         break;
       default:
         what[0] = 0;
         break;
     }
+    // (The walks' clause only for a take that walked: NoSpacers and Plain
+    // takes have no block size from a walk.)
+    char walks[112] = "not walked";
+    if (r.walks)
+      snprintf(walks, sizeof(walks), "%lu B carved; %lu walk%s in %lu us, the longest %lu us, %lu blocks",
+               static_cast<ul>(r.blockBytes), static_cast<ul>(r.walks), r.walks == 1 ? "" : "s",
+               static_cast<ul>(r.us), static_cast<ul>(r.usMax), static_cast<ul>(r.visits));
     char first[80] = "";
-    if (l.blocks)
-      snprintf(first, sizeof(first), "; PSRAM %lu blocks, a largest-free-block walk %lu us", static_cast<ul>(l.blocks),
-               static_cast<ul>(l.largestUs));
-    Serial.printf("[listen] the hold's top block (%s): %lu B at 0x%08lx (%lu B carved); %s; %lu walk%s in %lu us (the "
-                  "longest %lu us, %lu blocks)%s\n",
-                  which, static_cast<ul>(l.bytes), static_cast<ul>(reinterpret_cast<uintptr_t>(l.at)),
-                  static_cast<ul>(r.blockBytes), what, static_cast<ul>(r.walks), r.walks == 1 ? "" : "s",
-                  static_cast<ul>(r.us), static_cast<ul>(r.usMax), static_cast<ul>(r.visits), first);
+    if (i == 0 && s_tl.firstOwed)
+      snprintf(first, sizeof(first), "; PSRAM %lu blocks, a largest-free-block walk %lu us",
+               static_cast<ul>(s_tl.blocks), static_cast<ul>(s_tl.largestUs));
+    Serial.printf("[listen] the hold's top block (%s): %lu B at 0x%08lx; %s (%s)%s%s\n", which,
+                  static_cast<ul>(l.bytes), static_cast<ul>(reinterpret_cast<uintptr_t>(l.at)), what, walks, uncapped,
+                  first);
   }
-  s_lineN = 0;
+  if (s_tl.n) s_tl.firstOwed = false;
+  if (s_tl.lost)
+    Serial.printf("[listen] the hold's top blocks: %u more taken before this pass, not told\n",
+                  static_cast<unsigned>(s_tl.lost));
+  // The takes past the hold's two blocks: one line once they stop coming (a
+  // pass that brought none).
+  if (s_tl.outside && s_tl.outside == s_tl.outsideSeen) {
+    Serial.printf("[listen] the hold's top blocks: %u more overflow chunk%s (no room for the arena) carved as before "
+                  "the caps past the hold's two blocks: not tracked, nothing closed, each freed when given back\n",
+                  static_cast<unsigned>(s_tl.outside), s_tl.outside == 1 ? "" : "s");
+    s_tl.outside = 0;
+  }
+  s_tl.outsideSeen = s_tl.outside;
+  s_tl.n = s_tl.lost = 0;
 }
 
 // "7 h 37 min", "45 min" (4.1's times).
