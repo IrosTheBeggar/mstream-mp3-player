@@ -7618,12 +7618,13 @@ section 1 and 5.14's "As built" notes list the changes):
   goes on); the answer is ignored: the log never waits on the stats.
   `Outbox::Env::written()` (empty by default) comes after `tried()` and
   before `pop()`, for a written slot only, with the encoded slot.
-- **The seq rule** (its own commit, f45fb48, which the owner may still
-  drop): 2.20.4's "At boot" sentence as written, the next seq max(NVS's,
-  the log's, ACKS's, MARK's) + 1, ACKS's for every build, MARK's with
-  the stats; `tools/playlog.py`'s `boot_seq()` and the vectors' sixth
-  `atBoot` case (NVS behind ACKS) with it. Dropping it undoes those, and
-  two of the stats' sessions (`nvs-back`, `log-deleted`) lose plays.
+- **The seq rule** (its own commit, f45fb48, which the owner kept on
+  2026-11-18): 2.20.4's "At boot" sentence as written, the next seq
+  max(NVS's, the log's, ACKS's, MARK's) + 1, ACKS's for every build,
+  MARK's with the stats; `tools/playlog.py`'s `boot_seq()` and the
+  vectors' sixth `atBoot` case (NVS behind ACKS) with it. Dropping it
+  would undo those, and two of the stats' sessions (`nvs-back`,
+  `log-deleted`) would lose plays.
 - **The resident set** (the plan's 5.14, "Moved to internal RAM",
   2026-11-17). One object, the glue's (`statsglue::Glue`: the fold's HEAD,
   MARK's first 16 rows of 28 B and the 40 records of 20 B, the store's
