@@ -15,6 +15,7 @@
 #include "PlayGate.h"
 #include "PlaybackController.h"
 #include "QueueModel.h"
+#include "ReconnectPlanner.h"
 #include "TrackCatalog.h"
 #include "hal/IAudioBackend.h"
 
@@ -90,7 +91,7 @@ struct Rig : PlaybackController::Hold {
     // since come to rest (ReconnectPlanner: connectable only).
     link.phase = P::Resting;
     link.remembered = true;
-    link.attempts = 3;
+    link.attempts = ReconnectPlanner::kAskPages;
   }
   // main.cpp's: Bluetooth is the output and the headphones aren't connected;
   // or the listening stats hold a start (not a track following one playing).
@@ -146,7 +147,7 @@ struct Rig : PlaybackController::Hold {
   bool tabRed() const { return !linked && session.failed(); }
   // The tries run out: BtSink goes on to the back-off.
   void triesRunOut() {
-    for (uint8_t t = 1; t <= 3; ++t) {
+    for (uint8_t t = 1; t <= ReconnectPlanner::kAskPages; ++t) {
       paging(t);
       TEST_ASSERT_EQUAL(Do::None, pass(5000));
       TEST_ASSERT_EQUAL(PlayState::Waiting, player.state());
@@ -420,30 +421,61 @@ void test_tries_run_out_ends_the_wait_paused_and_failed() {
   TEST_ASSERT_EQUAL(PlayState::Paused, r.player.state());
 }
 
-// The burst as the device runs it: try 1 at once, then one 10 s after the
-// last began (ReconnectPlanner), the back-off ~5 s after the third. The
-// 20 s backstop comes first, during the third try.
-void test_the_backstop_during_the_last_try_settles_the_session() {
+// The burst as the device runs it: try 1 at once, the next 2 s after
+// the last one's page timeout (ReconnectPlanner), eight of them for a
+// listener's ask: all are over, each with its answer, inside the backstop,
+// so it is the tries running out that ends a wait nobody answers, with
+// all of them made.
+void test_an_asks_tries_fit_inside_the_wait() {
+  const uint32_t pageTimeoutMs = 5120;  // the controller's
+  const uint32_t tries = ReconnectPlanner::kAskPages;
+  const uint32_t burstMs = tries * pageTimeoutMs + (tries - 1) * ReconnectPlanner::kBurstPauseMs;
+  // ... with room for a try answered at its very end to set its link up.
+  TEST_ASSERT_TRUE(PlayGate::kBackstopMs >= burstMs + 5000);
   Rig r;
   r.player.togglePlayPause();
   TEST_ASSERT_EQUAL(Do::Connect, r.pass());  // try 1
-  r.paging(2);
-  TEST_ASSERT_EQUAL(Do::None, r.pass(9000));
-  r.paging(3);
-  TEST_ASSERT_EQUAL(Do::None, r.pass(10000));
+  const uint32_t since = r.gate.sinceMs();
+  for (uint8_t t = 2; t <= tries; ++t) {
+    r.paging(t);
+    TEST_ASSERT_EQUAL(Do::None, r.pass(pageTimeoutMs + ReconnectPlanner::kBurstPauseMs));
+  }
+  TEST_ASSERT_EQUAL(Do::None, r.pass(pageTimeoutMs));  // the last one's answer: none
   TEST_ASSERT_EQUAL(PlayState::Waiting, r.player.state());
-  TEST_ASSERT_EQUAL(Do::GiveUp, r.pass(1000));  // 20 s: the third try still pages
+  r.backingOff();
+  TEST_ASSERT_EQUAL(Do::GiveUp, r.pass(250));
+  TEST_ASSERT_TRUE(r.now - since < PlayGate::kBackstopMs);
+  TEST_ASSERT_TRUE(r.session.failed());
+  TEST_ASSERT_EQUAL(BtCard::Failed, r.card());
+}
+
+// A try answered late: the link is being set up (BtSink still says "try 8
+// of 8") when the backstop comes. The wait ends there, the session with
+// it; the link that follows is quiet.
+void test_the_backstop_during_a_slow_set_up_settles_the_session() {
+  Rig r;
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL(Do::Connect, r.pass());  // try 1
+  uint32_t spent = 0;
+  for (uint8_t t = 2; t <= ReconnectPlanner::kAskPages; ++t) {
+    r.paging(t);
+    TEST_ASSERT_EQUAL(Do::None, r.pass(7100));
+    spent += 7100;
+  }
+  TEST_ASSERT_EQUAL(Do::None, r.pass(PlayGate::kBackstopMs - spent - 1000));
+  TEST_ASSERT_EQUAL(PlayState::Waiting, r.player.state());
+  TEST_ASSERT_EQUAL(Do::GiveUp, r.pass(1000));  // the backstop: the last try's link still being set up
   TEST_ASSERT_EQUAL(PlayState::Paused, r.player.state());
   TEST_ASSERT_TRUE(r.gate.failed());
   // The card and the tab agree with the notice from now on (not
-  // "Connecting... try 3 of 3" in amber), and nothing waits on the link.
+  // "Connecting... try 8 of 8" in amber), and nothing waits on the link.
   TEST_ASSERT_FALSE(r.session.wanted());
   TEST_ASSERT_TRUE(r.session.failed());
   TEST_ASSERT_EQUAL(BtCard::Failed, r.card());
   TEST_ASSERT_TRUE(r.tabRed());
   TEST_ASSERT_EQUAL(Do::None, r.pass(3000));
   TEST_ASSERT_EQUAL(BtCard::Failed, r.card());
-  // The third try reaches them: quietly (no "Now playing on", nothing
+  // The last try's link comes up: quietly (no "Now playing on", nothing
   // plays); the notice closes.
   TEST_ASSERT_FALSE(r.upWithEvent());
   TEST_ASSERT_EQUAL(Do::None, r.pass());
@@ -873,7 +905,8 @@ int main() {
   RUN_TEST(test_no_headphones_paired_but_the_pair_screen_is_up);
   RUN_TEST(test_a_wait_during_a_pairing_keeps_the_pairing);
   RUN_TEST(test_tries_run_out_ends_the_wait_paused_and_failed);
-  RUN_TEST(test_the_backstop_during_the_last_try_settles_the_session);
+  RUN_TEST(test_an_asks_tries_fit_inside_the_wait);
+  RUN_TEST(test_the_backstop_during_a_slow_set_up_settles_the_session);
   RUN_TEST(test_the_backstop_ends_a_wait_the_tries_dont);
   RUN_TEST(test_a_tap_on_play_cancels_the_wait);
   RUN_TEST(test_b_double_press_starts_then_cancels_the_wait);

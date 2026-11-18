@@ -16,7 +16,7 @@
 // the position holds; main.cpp's Hold says when). PlayGate decides the rest,
 // fed every loop pass:
 //   - a wait begins: connect now (BtSession::connect() and BtSink::connect():
-//     the paging burst, "try 1 of 3", not the back-off's next page, and
+//     the paging burst, "try 1 of 8", not the back-off's next page, and
 //     from resting too; a page under way counts as the burst's first try,
 //     BtSink's doing). While the Pair screen has the radio (its scan, or a
 //     pairing) only the session is asked: that scan isn't stopped for it;
@@ -58,11 +58,15 @@
 class PlayGate {
 public:
   // A wait that no link has answered in this long has failed, whatever the
-  // tries are doing. The listener's number: the burst itself takes 20-30 s
-  // (a try, then one every heartbeat, ~10 s), so this usually ends the wait
-  // during the third try, which carries on (a link it brings closes the
-  // notice, quietly).
-  static constexpr uint32_t kBackstopMs = 20000;
+  // tries are doing. An ask's eight tries take ~56 s (ReconnectPlanner's
+  // kAskPages: a page's 5.12 s, a 2 s pause, the next), so their failure
+  // (BtSession::failed()) ends a wait first; this is for a try that was
+  // answered late and is still setting the link up (authentication, the
+  // stream's set-up: a few seconds), which would otherwise bring a link
+  // just after the notice, playing nothing. (It was 20 s when an ask had
+  // three tries that began 10 s apart: the wait then ended as the third
+  // began, and headphones that answered it played nothing.)
+  static constexpr uint32_t kBackstopMs = 65000;
 
   enum class State : uint8_t {
     Idle,     // nothing waits

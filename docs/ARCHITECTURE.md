@@ -726,10 +726,19 @@ screen closing), and stays quiet, connectable only; a device a scan finds
 is taken only by the name a developer build was given (`BT_SINK_NAME`,
 changed with the console's `c<name>`), never by signal strength alone
 (that once picked a TV in the next room), but for one scan after the
-console's `Bs`. The library's stack-up, which scans whenever nothing is
-remembered, is kept from it then: while BtAppT is in that handler
-`has_last_connection()` answers yes, and the page of the zero address it
-then asks for isn't made. It remembers the
+console's `Bs`. The library's stack-up isn't used: it sleeps 10 s once
+the profiles are set up, the Core2 unconnectable meanwhile (Bluedroid
+starts that way), and only then pages the remembered headphones or scans.
+Headphones that try to come back by themselves in those seconds (switched
+on with the Core2, or dropped by its restart) find nobody, and may go on
+to another device they know; a play asked for meanwhile spent half its
+wait before the first page went out.
+`PlayerA2dp::av_hdl_stack_evt()` does the same set-up, call for call
+(compare the two on a library upgrade), waits 0.3 s for the A2DP service
+to register itself (`kStackSettleMs`: a connect before that hangs the
+stack's state machine), and then the Core2 is connectable and the
+planner pages, scans by name or rests: `[bt] stack up in 3xx ms,
+connectable; reconnect: ...`. It remembers the
 device it connected to, and all along it stays connectable (never
 discoverable) so the headphones can reconnect by themselves; other devices
 are refused. How it looks for them while no link is up is
@@ -738,10 +747,61 @@ are refused. How it looks for them while no link is up is
 forever, cost +35.5 mA for as long as they were away):
 
 - **Burst**: on a drop, at boot and on a listener's ask (a play waiting for
-  them, Connect or a tap on the card, a B hold, console `o`), 3 pages: one
-  at once, the next once the last has had its answer (refused, or the 5.12 s
-  page timeout) and 10 s after it began. A page already on its way is the
-  burst's first try, never paged over.
+  them, Connect or a tap on the card, a B hold, console `o`), 3 pages, 8
+  on a listener's ask (`kAskPages`): one at once, the next 2 s after the
+  last has had its answer (refused, or the 5.12 s page timeout;
+  `kBurstPauseMs`): ~20 s for three, ~56 s for eight, the radio paging for
+  three quarters of it. (They began 10 s apart, the library's heartbeat,
+  three for an ask too, until 0.15.0: 25 s, and a play's wait covered two
+  of them.) The pause is the Core2's own page scan's turn (every 1.28 s),
+  so headphones paging the Core2 at that moment get in. A page whose end
+  is never reported is followed 10 s after it began. A page already on
+  its way is the burst's first try, never paged over.
+- **Measured on the device** (2026-11-17: Powerbeats Pro, Bluetooth power
+  Normal, a build that leaves the card alone; "old" is main 241642d's
+  Bluetooth code flashed beside it, the same evening):
+  - A restart while linked: linked 6.6-7.1 s after the reset, 6 of 6
+    (old: 14.7-17.3 s, 7 of 7). Held in reset for 60 s, then on: 4.5-5.2 s
+    (old: 14.6-15.6 s). `[bt] stack up in 323-330 ms`. Once the headphones
+    connected in by themselves, about 5 s after the reset (their link's
+    timeout): `page: a connection to them exists already (they were
+    connecting too), after 1543 ms (HCI 0x0b)`, then `the headphones
+    opened a radio link by themselves: A2DP next`. The old build can't be
+    connected to at that moment.
+  - After a link ends they answer no page for a while: 11 to 22 s after
+    the Core2's Disconnect, 24 s after they closed it themselves. Every
+    page meanwhile is `no answer (the page timed out), after 513x ms (HCI
+    0x04)`; of the listener's 11 pages off the phone 6 were, and every ask
+    still linked within three tries (0.9 to 20 s after the tap).
+  - **Connected to a phone they hardly listen for pages.** Twice, five
+    pages in a row timed out and the sixth was answered, 38 and 41 s
+    after the first. With three tries the ask failed its first round and
+    linked on the second's third try (the listener's report: 2 to 4
+    rounds); with six, the same case linked from one tap, on try 6, with
+    half a second to spare, so an ask has eight (~56 s; eight weren't run
+    on the device: the count is the only change from the build that was).
+    Nothing refuses: they aren't listening. Disconnecting them from the
+    phone first avoids it; the eight tries are for when the listener
+    doesn't.
+- **What a page came to** is in the log, from the stack's reports of the
+  radio link under A2DP (the ACL: `ESP_BT_GAP_ACL_CONN_CMPL_STAT_EVT`,
+  which comes with a status for a page nobody answered too, and
+  `ESP_BT_GAP_ACL_DISCONN_CMPL_STAT_EVT`; noted on the BTC task, said by
+  BtAppT): `[bt] page: no answer (the page timed out), after N ms (HCI
+  0x04)`, `[bt] page: answered after N ms: setting up A2DP`, `[bt] the
+  headphones opened a radio link by themselves: A2DP next`, and when a
+  link closes, why: `[bt] the radio link closed N ms after it opened,
+  before A2DP was up: <reason> (HCI 0x..)`, `[bt] the radio link
+  closed: closed by the headphones (HCI 0x13)`. A try that fails after
+  its page was answered is a different fault from one nobody hears; the
+  log now tells them apart.
+- **A link the headphones open themselves** is theirs to finish: for 4 s
+  (`kTheirSetupMs`) no page of the Core2's goes on top of it (a connect
+  then is the stack's collision case). If no A2DP has come over it by
+  then, the Core2 opens it from its side, as a phone does when a headset
+  connects and stops short: a burst whose first try needs no page, also
+  from resting or the back-off (`[bt] the headphones' own radio link
+  brought no A2DP: connecting over it from here`).
 - **Back-off**: then one page at 30 s, 1, 2 and 5 min, then every 5 min.
   Never an inquiry while headphones are remembered (it can't find them
   unless they are in pairing mode); a scan found running is stopped.
@@ -1068,7 +1128,7 @@ out what it returns.
   is down makes the player **wait** (`PlayState::Waiting`: nothing starts,
   the position holds) and `PlayGate` (fed every loop pass after
   `BtSession`) **connects at once**: `BtSession::connect()` and
-  `BtSink::connect()`, the paging burst ("try 1 of 3"), not the back-off's
+  `BtSink::connect()`, the paging burst ("try 1 of 8"), not the back-off's
   next page, and from resting too. A page still on its way (within the
   page timeout, `ReconnectPlanner::kPageMs`, and not answered yet) isn't
   paged over: it counts as try 1 of a full burst, so a wait that begins at
@@ -1078,10 +1138,11 @@ out what it returns.
   mark goes (the tab bar and the card say Connecting). The link comes up:
   the wait is released and plays on them, "Now playing on SPYDRONE"
   (said once: the Connected event's own toast is skipped while the gate
-  waits). The tries run out (`BtSession::failed()`) or 20 s pass
-  (`kBackstopMs`, the listener's number: the burst itself takes ~25 s, a
-  try at once and then one 10 s after the last began, so this usually ends
-  the wait during the third try): the wait ends **paused**, and a notice says
+  waits). The tries run out (`BtSession::failed()`: ~56 s, all eight made,
+  each with its answer) or 65 s pass (`kBackstopMs`: for a try answered
+  late whose link is still being set up; it was 20 s while an ask had
+  three tries that began 10 s apart, and usually ended the wait as the
+  third began): the wait ends **paused**, and a notice says
   "Couldn't reach SPYDRONE. Are they on, out of the case, and not
   connected to your phone?" with Try again (a new wait and burst) and
   Play on speaker. The session's ask is **withdrawn** as failed
