@@ -2581,9 +2581,11 @@ strings.
   edit while a write is under way drops that write. On a nearly full card
   `queue.tmp` takes the clusters the last save freed at once (the hole
   hint, METADATA.md 3.2.4). Before it, with one free cluster, two saves in
-  a row read the whole FAT between them (on the host model), and on the
-  device a save right after a write that took and freed the only cluster
-  took 5.6 s (the track after it underran). Its cost: the first time the
+  a row read the whole FAT between them (on the host model, and on the
+  device with main's firmware: 5.3 s on every second save, 2026-11-18),
+  and a save right after a write that took and freed the only cluster
+  took 5.6 s (the track after it underran). With the hint those saves
+  read nothing from the card's FAT (135-146 ms). Its cost: the first time the
   text needs a second cluster (over 32 KB), on a card whose few free
   clusters are a run far from `queue.txt`, one save takes the freed
   cluster and walks the whole FAT to the run (host model,

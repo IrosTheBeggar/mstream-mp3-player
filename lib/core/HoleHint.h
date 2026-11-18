@@ -21,7 +21,8 @@
 // reads, about 5.3 s, all of it under the volume's lock that the decoder's
 // reads wait on (a queue save of 5,589 ms on the device, 2026-11-18, after a
 // write that took and freed the only cluster; the queue's own saves with one
-// free cluster read the whole FAT every two saves on the host model). FatFs
+// free cluster read the whole FAT every two saves, on the host model and on the
+// device with main's firmware, 2026-11-18). FatFs
 // points its search at a chain it frees in one place only, f_open()'s
 // FA_CREATE_ALWAYS over a file (`last_clst = cl - 1`, "Reuse the cluster
 // hole").

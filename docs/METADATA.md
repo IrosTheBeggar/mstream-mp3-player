@@ -4024,8 +4024,8 @@ listening-stats firmware (v0.14.0-91), that visit's only queue save, right
 after the stats file's failed `stats.tmp` had taken and freed the only
 cluster (`test_hole_hint` M1's case). The queue alone does it too, on the
 model: it writes `queue.tmp` before it removes `queue.txt`, so with one
-free cluster two saves in a row read the whole FAT between them (M2; not
-yet measured on the device with main's firmware). Each remove's TRIM (one
+free cluster two saves in a row read the whole FAT between them (M2; on
+the device with main's firmware too, below). Each remove's TRIM (one
 per run of clusters `remove_chain()` frees, after it counted them) now
 also points FatFs at that run, from the wrapper's `CTRL_TRIM`:
 `last_clst` = the run's first cluster - 1 (cluster 2: `n_fatent - 1`), the
@@ -4045,6 +4045,12 @@ rule FatFs itself applies when `f_open`'s `FA_CREATE_ALWAYS` frees a chain.
 - On the model of that card (FatFs R0.15, `test_hole_hint`) the queue's
   saves read 3,804 and 3,806 FAT sectors in turn without it, 1 with it; a
   write after one that took and freed the only cluster, 7,609 and 1.
+- On the device (2026-11-18, that card at one free cluster, nothing
+  playing, eight queue saves of about 180 tracks): main's firmware read
+  2, 0, 7,609, 0, 7,610, 0, 7,610 and 0 sectors from the card for them,
+  each walk 5,285-5,295 ms with the loop held (from the second save on,
+  any two in a row read the whole FAT); with the hint 2 and then 0 each,
+  135-146 ms, one hole hint a save. Same card writes on both.
 - **What it costs:** when the few free clusters are a run far from a
   cluster just freed (a card filled on a PC after `/.player`, stopped short
   of full), a write of more than one cluster takes the freed cluster, then
@@ -4063,8 +4069,10 @@ rule FatFs itself applies when `f_open`'s `FA_CREATE_ALWAYS` frees a chain.
   7,610 for FatFs alone: M8).
 - **Not covered:** the first allocation after a mount when FSINFO's
   next-free came from a PC or older firmware (the boot's `device.txt`,
-  5,281 ms on the listening-stats firmware, 2026-11-18; the same rewrite
-  runs on main at the first boot of another firmware); FSINFO keeps the
+  5,281 ms on the listening-stats firmware, 2026-11-18; at the first boot
+  of another firmware on that card, browsable 6,754 ms after the mount on
+  main and 6,749 ms with the hint, against about 1.6 s on a card with
+  room); FSINFO keeps the
   hint only when no allocation
   synced after the last remove. An unknown free count; builds without the
   wrapper.
