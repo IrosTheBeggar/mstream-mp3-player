@@ -222,6 +222,15 @@ enum class ScanWait : uint8_t {
   Join,    // Auto DJ's join Working: the fold carves only where the join doesn't
 };
 
+// A decoder's carves at its open (5.14, the hold's room; the firmware's
+// topAlloc() asks autodj::TopHold::take() for it while a track plays or a
+// start waits: the next track's open is never held, and the caps keep the
+// margin free, not these): the largest, the Opus's three buffers
+// (OpusGenerator::allocBuffers(): oggopus's page, packet and frame, 65,307 +
+// 61,440 + 1,276 B, kept from the session's first .opus on). A FLAC's are
+// about 80 KB and given back at its end; an MP3's are its pinned block's.
+constexpr size_t kDecoderRoomBytes = 65307 + 61440 + 1276;
+
 // Where the glue's blocks go (null: malloc and free).
 struct Memory {
   void* (*alloc)(size_t bytes) = nullptr;  // a read's or a save's work memory, given back in the call

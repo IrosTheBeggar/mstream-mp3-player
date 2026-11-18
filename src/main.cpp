@@ -458,7 +458,10 @@ static bool pauseIfPlaying() {
 // about 1.4 s and the boot's save; PlayGate's statsHold releases such a
 // wait). Not a track that follows one playing (a remount's scan again,
 // rare, while a track plays: a gap would be worse): only a start from a
-// pause, a stop or a wait.
+// pause, a stop or a wait. That track's decoder opens in the hold, so the
+// hold keeps its room itself while a track plays or a start waits
+// (app/ListeningStats' topAlloc(): the caps given back, and the overflow's
+// arena, when the largest free block wouldn't take the Opus's buffers).
 struct OutputHold : PlaybackController::Hold {
   bool headphones() const { return !silent && audio.output() == Output::Bluetooth && !audio.bluetooth().connected(); }
   bool holdPlay() const override {
