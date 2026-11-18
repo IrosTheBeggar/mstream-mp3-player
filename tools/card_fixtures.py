@@ -5,9 +5,11 @@
 
 Writes test/fixtures/card/: the conformance vectors (vectors.json), the
 mood filters' vectors (moods.json, made with tools/moodfilter.py), the
-library descriptions (libraries/*.json), their golden files (golden/*), and
-the hardening files (hardening/*.bin, listed in hardening/index.json), each
-broken in one way under valid CRCs. The player's host tests
+library descriptions (libraries/*.json), their golden files (golden/*), the
+hardening files (hardening/*.bin, listed in hardening/index.json), each
+broken in one way under valid CRCs, the play log's (plays/, made with
+tools/playlog.py) and the listening stats' (stats/, made with
+tools/statsref.py). The player's host tests
 (test/test_card_contract, test/test_card_files, test/test_card_autodj,
 test/test_card_waves, test/test_name_key) read them, as the transfer
 software's tests in mstream-terminal will.
@@ -44,6 +46,7 @@ import moodfilter  # noqa: E402  (the mood tail and word: METADATA 2.6.4, 3.4.3)
 import mpdj  # noqa: E402  (every MPDJ fixture: AUTODJ-INDEX.md 13)
 import mpwf  # noqa: E402  (every MPWF fixture: WAVEFORM-INDEX.md 13)
 import playlog  # noqa: E402  (the play log's fixtures: METADATA 2.20)
+import statsref  # noqa: E402  (the listening stats' fixtures: docs/LISTENING-STATS.md)
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "test" / "fixtures" / "card"
@@ -3527,6 +3530,40 @@ its container's check of known sections, whose stride and length rules
 would make the root absent: it finds ACKS by its type in the directory
 and checks it on its own.
 
+The listening stats (docs/LISTENING-STATS.md: `/.player/stats.bin` and
+its base file, 5.2-5.6) have their fixtures in `stats/`, made with
+`tools/statsref.py`, their reference, which card_fixtures.py imports.
+`stats/index.json` lists the scenarios. Each is a card's `/.player` before
+its first boot (the log's files, and a `stats.bin` and its base where an
+earlier boot left them), the booting device (`device`: its deviceId and
+epoch, which only the boot rules use: the stats fold every device's
+plays) and its boots in turn. A boot gives the files it starts from (`in`)
+and leaves (`out`), each name mapped to the folder that holds its bytes (a
+file is stored once, in the first folder with those bytes; files changed
+between two boots, a play the device wrote, are named in `added` and
+stored in `<boot>-in`); its inputs (`acks`: the root's ACKS rows; `now`:
+the board's clock at the save in Unix ms, null while unset, and `today`,
+its UTC day counted from 2026-01-01; `commitTime`: the root's, Unix s;
+`playing` and `safePoint`, for the compaction's rule; `saveFails`: a full
+card; `unread`: the scan's card faults, each log file's name mapped to the
+slots read before a read failed, or null for an open that failed); and
+what a device MUST make of them: `out` byte for byte, what the read found
+(`read`: loaded, absent, corrupt, newer or unread, and `why`, the check
+that failed by CardContainer's name), the slots folded, met a second time,
+and missing under ACKS (`folded`, `twice`, `gap`), whether the scan was
+partial (`partial`: no save follows), whether `stats.bin` was written
+(`saved`) and the base compacted, the files removed and the log files
+trimmed, and, read back where it reads, HEAD and MARK (`stats`), the
+shelves' lists (`lists`, by path hash, each its cap plus 16: `mostPlayed`
+per window [hash, plays in it]; `newFinds` [hash, plays, firstAt, its
+source]; `oldFavourites` [hash, plays, lastAt]; `recentlyPlayed` [hash,
+plays, lastAt, lastOrd]; `notPlayed` by album) and the hub's numbers
+(`view`). Each log file keeps one device and epoch's seqs in order, as a
+device writes them (5.6's ranges rely on it). `stats/library.json` is the
+made-up library behind Not played yet: its albums in A-Z order, each
+track's path and hash. Nothing but the device reads these files: a mirror
+of this folder MAY leave `stats/` out (docs/METADATA.md 2.17, item 10).
+
 The player's tests: `test/test_card_contract` (the vectors),
 `test/test_card_files` (the goldens, round trips, the hardening files,
 truncation at every byte and every flipped bit), `test/test_card_autodj`
@@ -3534,7 +3571,9 @@ truncation at every byte and every flipped bit), `test/test_card_autodj`
 index's own rules) and `test/test_name_key` (the keys the AutoDJ
 descriptions give). The play log's fixtures are for the
 firmware's log and the transfer software's reader, neither built yet;
-`tools/test_playlog.py` reads them today.
+`tools/test_playlog.py` reads them today. The stats' fixtures are for the
+firmware's stats (docs/LISTENING-STATS.md S1-S2), not built yet;
+`tools/test_statsref.py` checks them today.
 """
 
 
@@ -3559,6 +3598,7 @@ def generate():
     for name, data in golden.items():
         files["golden/" + name] = data
     files.update(plays_files(golden)[0])
+    files.update(statsref.fixture_files())
     v = vectors(golden)
     check_vectors(v, golden)
     files["vectors.json"] = (json.dumps(v, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
