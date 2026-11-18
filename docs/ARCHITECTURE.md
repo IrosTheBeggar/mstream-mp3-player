@@ -1703,7 +1703,10 @@ host-tested on their own and under FatFs: `disk_initialize` clears the
 cache (FatFs mounts the volume again by itself once a card stopped
 answering: pulled or swapped while on, with no card-detect, the next card
 mustn't get the last one's FAT and folders), `CTRL_TRIM` invalidates the
-freed range, a write with the cache off drops the sectors it wrote, and a
+freed range (and, on a nearly full card, points FatFs's next search for a
+free cluster at it: `lib/core/HoleHint`, METADATA.md 3.2.4 "The hole hint";
+with one free cluster that search read the whole FAT, 5.6 s for a queue
+save), a write with the cache off drops the sectors it wrote, and a
 write the card refused is written again once. The clear alone doesn't make
 a swap safe: everything the player holds in RAM is still the old card's.
 So the wrapper also keeps the card's identity at the mount (its size, the
@@ -2574,7 +2577,11 @@ strings.
   before the queue). The file is rewritten 2 s after the
   last edit, 32 lines a loop pass (a 10,000-track queue is ~700 KB and never
   holds the loop), into `queue.tmp`, then renamed over `queue.txt`; an
-  edit while a write is under way drops that write. **Edits that never
+  edit while a write is under way drops that write. On a nearly full card
+  `queue.tmp` takes the clusters the last save freed at once (the hole
+  hint, METADATA.md 3.2.4; before it, with one free cluster, two saves in
+  a row read the whole FAT between them, and one took 5.6 s: the track
+  after it underran). **Edits that never
   settle** (Auto DJ appending a 1-second track every second, at the cap
   each also pushing out the oldest entry: on the device's soak of
   2026-10-13 the file wasn't written for the last 59 minutes) get a

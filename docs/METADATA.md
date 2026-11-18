@@ -4012,6 +4012,47 @@ the SD library's non-static `ff_sd_initialize`, `ff_sd_status`,
   remount to it: another card put in while the player is on is
   write-protected until a restart (3.8, "The card's guard").
 
+**The hole hint** (2026-11-18; `lib/core/HoleHint.h`, `test_hole_hint`).
+FatFs looks for a free cluster from the one after the last it allocated
+(`last_clst`), one FAT entry at a time, wrapping; a remove (`f_unlink`,
+`f_truncate`) leaves `last_clst` where it was. On the device's 32 GB card
+filled to one free cluster (7,607 FAT sectors), a write that needed the
+cluster the last remove freed read the whole FAT first, about 5.3 s under
+the volume lock the decoder's reads wait on. The queue writes `queue.tmp`
+before it removes `queue.txt`, so two saves in a row read the whole FAT
+between them; one took 5,589 ms, and the next track underran (148
+underruns). Each remove's TRIM (one per run of clusters `remove_chain()`
+frees, after it counted them) now also points FatFs at that run, from the
+wrapper's `CTRL_TRIM`:
+`last_clst` = the run's first cluster - 1 (cluster 2: `n_fatent - 1`), the
+rule FatFs itself applies when `f_open`'s `FA_CREATE_ALWAYS` frees a chain.
+
+- Only when the free count is known and at most (FAT entries - 2) / 8,192:
+  118 clusters (3.7 MB) on that card. With more room FatFs's order stays.
+- The lowest run since FatFs last allocated stays: a fragmented chain is
+  trimmed a run at a time, and a search from the lowest finds the rest
+  before it wraps.
+- `last_clst` is only a start: FatFs clamps it and takes a cluster only when
+  its entry reads free. The hook writes no FAT sector, count or flag.
+- On the model of that card (FatFs R0.15, `test_hole_hint`) the queue's
+  saves read 3,804 and 3,806 FAT sectors in turn without it, 1 with it; a
+  write after one that took and freed the only cluster, 7,609 and 1.
+- **What it costs:** when the few free clusters are a run far from a
+  cluster just freed (a card filled on a PC after `/.player`, stopped short
+  of full), a write of more than one cluster takes the freed cluster, then
+  walks to the run. The queue's saves once its text needs two clusters
+  (over 32 KB): every second one walks the whole FAT (7,608 sectors), where
+  FatFs alone used the run at once (`test_hole_hint` M9).
+- **Not covered:** the first allocation after a mount when FSINFO's
+  next-free came from a PC or older firmware (the boot's `device.txt`,
+  5,281 ms, 2026-11-18); FSINFO keeps the hint only when no allocation
+  synced after the last remove. An unknown free count; builds without the
+  wrapper.
+- gc's `[cache] the card:` line counts the `hole hints`. `SectorDisk.cpp`
+  doesn't build against another FatFs (`FF_DEFINED` 80286, `FF_USE_TRIM` 1,
+  no exFAT): the hint relies on `remove_chain()` trimming after it counts,
+  checked in ESP-IDF 5.5.5's `ff.c` and in `libfatfs.a`'s disassembly.
+
 **What it speeds up:** every path lookup, the walk, the scanner's opens,
 the decoder's FAT-chain reads on a seek (fast seek is off), a track's
 open at a gapless advance. The decoder's longest wait for the volume lock
@@ -5790,7 +5831,9 @@ src/. What the code decided where 3.2-3.4 left room:
   step's `library.idx` saved with the old card's inputs. The card's guard
   (below) refuses all of it. `CTRL_TRIM` invalidates FatFs's range (its
   first and last sector)
-  before the SD driver's ioctl. The cache is one PSRAM block, allocated at
+  before the SD driver's ioctl, and on a nearly full card then points
+  FatFs's next search for a free cluster at that range (3.2.4, "The hole
+  hint"). The cache is one PSRAM block, allocated at
   the first mount (135,168 B), and the wrapper counts every read that
   reaches the SD driver (its sectors and its time), the cache on or off,
   and the mounts. **The device batch's switches:** `MSTREAM_SECTOR_CACHE=0`
