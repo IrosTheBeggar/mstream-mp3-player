@@ -508,7 +508,8 @@ const Join::Config kTiny = {2, 1, 1024};  // two pairs a run, one hash a slice, 
 }  // namespace
 
 // The player at a take (the firmware's ListeningStats::pass(), the pass
-// before the scan's piece): a track playing, a start waiting.
+// before the scan's piece): a track playing, a start waiting. The room's
+// rule reads only `playing` (statsglue::decoderRoom()).
 struct TopPlayer {
   bool playing = false, waiting = false;
 };
@@ -3304,7 +3305,7 @@ void test_a_block_freed_into_t_between_caps() {
 
 // U13 (the recheck, hazard 5): a decoder's room. When one may open in the
 // hold (the firmware's: the ranges' block at every take, the arena while a
-// track plays; U14, U15) a take asks room for the Opus's buffers
+// track plays; U14-U16) a take asks room for the Opus's buffers
 // (statsglue::kDecoderRoomBytes): in a roomy heap the
 // caps stay (Closed); where the caps would leave no free block for them,
 // every cap the hold holds is given back (Room: T open again, the older
@@ -4153,12 +4154,13 @@ cc::msmf::Acks statsAcks(uint32_t rows, uint32_t seq0) {
 // The overflow's chunks one by one (no room for its arena) as fe61db9
 // carved them: the hold's caps given back first, kMargin alone kept,
 // nothing closed. A decoder's room (the recheck; its trigger since the
-// final review), topRoom(): the hold's caps given back when the largest
-// free block wouldn't take the Opus's buffers, and the arena too (its
-// chunks then one by one). The ranges' block asks it at every take (no
+// final review): the hold's caps given back when the largest free block
+// wouldn't take the Opus's buffers, and the arena too (its chunks then one
+// by one). The rule is statsglue::decoderRoom(), the one the firmware's
+// topAlloc() calls (U16): the ranges' block asks it at every take (no
 // start is held while it alone is); the arena and a chunk only while a
-// track plays (g_topPlayer: the firmware's s_trackPlaying), since every
-// other start waits while they are held.
+// track plays (g_topPlayer's `playing`: the firmware's s_trackPlaying),
+// since every other start waits while they are held.
 // g_topAbove: the free block the last take found above its block (T, as
 // fe61db9's left it open); g_topClose: what that take did.
 size_t g_topAbove = 0;
@@ -4166,15 +4168,12 @@ autodj::Close g_topClose = autodj::Close::Nothing;
 void* fe61db9Top(size_t n);
 // fe61db9's hooks for the glue (it had no arena: the chunks one by one).
 void* fe61db9NoArena(size_t n) { return n == statsfold::kArenaBytes ? nullptr : fe61db9Top(n); }
-size_t topRoom(size_t n, const TopPlayer& s) {
-  const bool overflow = n == statsfold::kArenaBytes || n == statsfold::kChunkBytes;
-  return !overflow || s.playing ? statsglue::kDecoderRoomBytes : 0;
-}
 void* topAlloc(size_t n) {
   const bool chunk = n == statsfold::kChunkBytes;
   if (chunk) g_modelTop.uncap(kModelTop);
   autodj::CloseReport r;
-  const size_t room = topRoom(n, g_topPlayer ? g_topPlayer() : TopPlayer());
+  const bool playing = g_topPlayer && g_topPlayer().playing;
+  const size_t room = statsglue::decoderRoom(n, playing);
   void* p = g_modelTop.take(kModelTop, n, &r, !chunk, room, n == statsfold::kArenaBytes);
   g_topAbove = r.aboveBytes;
   g_topClose = r.why;
@@ -5556,10 +5555,12 @@ void test_a_waiting_start_asks_no_room() {
 
 // U15 (the final review: the room's trigger, a start in the ranges' hold).
 // The ranges' block asks a decoder's room at every take, whatever the
-// player. While it alone is held (no overflow chunk: a usual log, or the
-// arena given back mid-scan by fallBehind) OutputHold holds no start, so a
-// Play from a stop or a pause made after the take opens its decoder with
-// the block's caps held. One free block of 130-320 KB in 64 B steps (PSRAM
+// player. While it alone is held (before the overflow's first chunk: a
+// usual log, or a full log's first 40 records) OutputHold holds no start,
+// so a Play from a stop or a pause made after the take opens its decoder
+// with the block's caps held. (The arena is given back mid-scan only by its
+// own NoRoom, which gives the ranges' caps back first; its chunks then hold
+// every start.) One free block of 130-320 KB in 64 B steps (PSRAM
 // short: a remount's re-read mid-session), the player stopped at the take,
 // the ranges' request the model's smallest and largest (1,284 B: no ACKS
 // row; 3,076 B: 16), then the session's first Opus: it opens wherever
@@ -5567,7 +5568,12 @@ void test_a_waiting_start_asks_no_room() {
 // they would leave none. The take without the room (a stopped player's
 // before this fix) leaves the Opus short in a band of about 139-201 KB
 // where fe61db9's opened it: the page under the block, then the packet's
-// 61,440 B (in a few, the frame's 1,276 B) finding no free block.
+// 61,440 B (in a few, the frame's 1,276 B) finding no free block. Two
+// heaps leave it short with the room too (3,076 B at 133,120 and 133,184
+// B): the take leaves T open for the margin (Margin), but fix A's spacers
+// put the block 4 KB lower than fe61db9's, and the packet finds no block.
+// That is fix A's placement, not the room's; the count is pinned (2 at
+// 3,076 B, none at 1,284 B), so a change that widens it fails here.
 void test_the_ranges_take_asks_the_room() {
   g_topPlayer = [] { return topPlayer(false, false); };
   for (size_t req : {size_t{1284}, size_t{3076}}) {
@@ -5632,8 +5638,36 @@ void test_the_ranges_take_asks_the_room() {
            (unsigned)margins, (unsigned)before, (unsigned)beforeLo, (unsigned)beforeHi, (unsigned)shortAt[0],
            (unsigned)shortAt[1], (unsigned)shortAt[2]);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, worse, worseAt.c_str());
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(req == 3076 ? 2 : 0, margins,
+                                     "the Opus short where fe61db9's opened, a margin's take: fix A's placement moved");
     TEST_ASSERT_TRUE(rooms > 0);
     TEST_ASSERT_TRUE(before > 0);  // (the case reaches the band the review found)
+  }
+}
+
+// U16 (the final review's second round): the room's rule itself,
+// statsglue::decoderRoom(), which the firmware's topAlloc() calls as the
+// model's does (U14 and U15 run it through the model). Every ranges'
+// request asks the Opus's room, whatever the player: the fold's need, a
+// multiple of 16 B, and 4 B (the block's alignment), never the arena's
+// size or a chunk's. The arena and a chunk ask it only while a track plays
+// (the pass's `playing`): a start waiting, or none, asks nothing.
+void test_the_room_s_rule() {
+  const size_t room = statsglue::kDecoderRoomBytes;
+  for (const TopPlayer& s : {topPlayer(true, false), topPlayer(false, true), topPlayer(false, false)}) {
+    uint32_t asked = 0, ranges = 0;
+    for (size_t need = 16; need <= 512 * 1024; need += 16) {
+      ++ranges;
+      if (statsglue::decoderRoom(need + 4, s.playing) == room) ++asked;
+    }
+    const size_t arena = statsglue::decoderRoom(statsfold::kArenaBytes, s.playing);
+    const size_t chunk = statsglue::decoderRoom(statsfold::kChunkBytes, s.playing);
+    printf("[hold] U16 %s: the ranges' requests (20 B to 512 KB) ask %u B in %u of %u; the arena %u B, a chunk %u B\n",
+           s.playing ? "a track playing" : s.waiting ? "a start waiting" : "stopped", (unsigned)room,
+           (unsigned)asked, (unsigned)ranges, (unsigned)arena, (unsigned)chunk);
+    TEST_ASSERT_EQUAL_UINT32(ranges, asked);
+    TEST_ASSERT_EQUAL_size_t(s.playing ? room : 0, arena);
+    TEST_ASSERT_EQUAL_size_t(s.playing ? room : 0, chunk);
   }
 }
 
@@ -6239,6 +6273,7 @@ int main(int, char**) {
   RUN_TEST(test_the_arena_s_fallback_as_before);
   RUN_TEST(test_a_waiting_start_asks_no_room);
   RUN_TEST(test_the_ranges_take_asks_the_room);
+  RUN_TEST(test_the_room_s_rule);
 #endif
   RUN_TEST(test_the_listening_stats_across_updates);
   return UNITY_END();
