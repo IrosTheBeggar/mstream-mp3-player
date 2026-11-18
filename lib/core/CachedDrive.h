@@ -74,6 +74,7 @@ public:
     uint32_t writeFails = 0;    // ... refused the second time too
     uint32_t refused = 0;       // writes refused here: another card (foreign()), or writesOff()
     uint32_t trims = 0;
+    uint32_t holeHints = 0;  // ... after which FatFs's next search starts at the freed clusters (holeHinted())
     uint32_t inits = 0;     // mounts: the cache cleared
     uint32_t verified = 0;  // hits compared with the card (verify on)
     uint32_t stale = 0;     // ... that differed: a cache bug (L1 fails)
@@ -129,6 +130,8 @@ public:
   bool write(uint32_t lba, const uint8_t* data, uint32_t count);
   // FatFs's CTRL_TRIM range: the first and the last sector freed.
   void trim(uint32_t first, uint32_t last);
+  // The wrapper's hook moved FatFs's last_clst at that TRIM (lib/core HoleHint): counted.
+  void holeHinted() { ++stats_.holeHints; }
   // A look at a fault found a card it can't call the mount's: the wrapper's status says
   // STA_NOINIT, and FatFs's remount gives the verdict (init() clears it).
   bool remountDue() const { return remountDue_; }
