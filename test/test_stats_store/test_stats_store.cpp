@@ -136,8 +136,10 @@ void topFree(void* p) {
   gTop.freed.push_back(p);
   std::free(p);
 }
-size_t noLargest() { return 0; }  // (no spacers on this heap)
-const autodj::TopHold::Hooks kCountedTop = {noLargest, nullptr, topMalloc, topFree, nullptr, 0, 0};
+// (No `largest` hook: malloc has no largest free block to tell, so no
+// spacers and no NoBlock question; a hook answering 0 would say no free
+// block takes anything.)
+const autodj::TopHold::Hooks kCountedTop = {nullptr, nullptr, topMalloc, topFree, nullptr, 0, 0};
 
 // A heap that counts the glue's blocks (the work memory, the ranges' block,
 // the overflow's arena, MARK's block).
