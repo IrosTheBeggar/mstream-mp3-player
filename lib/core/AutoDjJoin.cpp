@@ -377,14 +377,15 @@ void* TopHold::take(const Hooks& h, size_t bytes, CloseReport* rep, bool close, 
     c.overhead = h.overhead;
     closeAbove(p, spacer, c, &e.caps, rep);
   }
-  // A decoder's room (the next track's open in the hold: GAPLESS 2.1's one
-  // decoder at a time, the old one's blocks given back first, but an MP3
-  // gives back none and the session's first Opus carves 125 KB, kept): the
-  // caps keep the margin free, not those blocks, so while one may open the
-  // largest free block must still take them with every cap held. Short of
-  // that the hold's caps are given back, the newest block's first, as the
-  // overflow's fallback gives them back; still short, a block that can
-  // yield is given back too (the arena, before its first chunk is in use).
+  // A decoder's room (an open in the hold: a playing track's next, or a
+  // start nothing holds; GAPLESS 2.1's one decoder at a time, the old
+  // one's blocks given back first, but an MP3 gives back none and the
+  // session's first Opus carves 125 KB, kept): the caps keep the margin
+  // free, not those blocks, so while one may open the largest free block
+  // must still take them with every cap held. Short of that the hold's
+  // caps are given back, the newest block's first, as the overflow's
+  // fallback gives them back; still short, a block that can yield is given
+  // back too (the arena, before its first chunk is in use).
   if (room && h.largest && h.largest() < carvedAtMost(room)) {
     rep->uncapped = static_cast<uint8_t>(uncap(h));
     if (yield && h.largest() < carvedAtMost(room)) {

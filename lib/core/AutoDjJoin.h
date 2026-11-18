@@ -403,16 +403,17 @@ public:
   // one by one, no room for its arena): carved as before the caps, under
   // spacers keeping keepFree alone, nothing closed (Plain), still tracked
   // while there is room.
-  // `room` (0: none): the bytes a decoder carves at its open, asked while
-  // one may open in the hold (a track playing or a start waiting: the next
-  // track's open is never held, docs/LISTENING-STATS.md 5.14). The caps
-  // keep keepFree + 1 KB free, not a decoder's blocks: with the block and
-  // every cap held, the largest free block must still take them (`largest`
-  // at least the room's carves, a thirty-second and 1 KB over), or the
-  // hold's caps are all given back, the newest block's first (Room: T open
-  // again, as before the caps), and with `yield` (a block that has a way
-  // without itself: the overflow's arena, its chunks one by one), if that
-  // isn't enough either, the block is given back too: nullptr (NoRoom).
+  // `room` (0: none): the bytes a decoder carves at its open, asked when
+  // one may open before the block is given back (the firmware's: the
+  // ranges' block at every take, the arena and a chunk while a track
+  // plays, docs/LISTENING-STATS.md 5.14). The caps keep keepFree + 1 KB
+  // free, not a decoder's blocks: with the block and every cap held, the
+  // largest free block must still take them (`largest` at least the room's
+  // carves, a thirty-second and 1 KB over), or the hold's caps are all
+  // given back, the newest block's first (Room: T open again, as before the
+  // caps), and with `yield` (a block that has a way without itself: the
+  // overflow's arena, its chunks one by one), if that isn't enough either,
+  // the block is given back too: nullptr (NoRoom).
   void* take(const Hooks& h, size_t bytes, CloseReport* rep, bool close = true, size_t room = 0,
              bool yield = false);
   // `p` given back: freed with its caps once every block taken after it is
