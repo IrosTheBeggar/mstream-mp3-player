@@ -507,13 +507,18 @@ const Join::Config kTiny = {2, 1, 1024};  // two pairs a run, one hash a slice, 
 
 }  // namespace
 
-std::function<bool()> g_topDecoder;  // (topAlloc()'s room: a decoder may open in the hold; libraryUpdates()')
+// The player at a take (the firmware's ListeningStats::pass(), the pass
+// before the scan's piece): a track playing, a start waiting.
+struct TopPlayer {
+  bool playing = false, waiting = false;
+};
+std::function<TopPlayer()> g_topPlayer;  // (topAlloc()'s room; null: stopped)
 
 void setUp() {
   Heap::reset();
   g_hashCalls = 0;
   g_modelTop = autodj::TopHold();
-  g_topDecoder = nullptr;
+  g_topPlayer = nullptr;
 }
 void tearDown() {}
 
@@ -3297,9 +3302,10 @@ void test_a_block_freed_into_t_between_caps() {
   TEST_ASSERT_EQUAL_UINT32(2, c2.n);
 }
 
-// U13 (the recheck, hazard 5): a decoder's room. While one may open in the
-// hold (the firmware's track playing or start waiting) a take asks room for
-// the Opus's buffers (statsglue::kDecoderRoomBytes): in a roomy heap the
+// U13 (the recheck, hazard 5): a decoder's room. When one may open in the
+// hold (the firmware's: the ranges' block at every take, the arena while a
+// track plays; U14, U15) a take asks room for the Opus's buffers
+// (statsglue::kDecoderRoomBytes): in a roomy heap the
 // caps stay (Closed); where the caps would leave no free block for them,
 // every cap the hold holds is given back (Room: T open again, the older
 // block's too), and a block that can yield (the arena) is given back too
@@ -4146,10 +4152,13 @@ cc::msmf::Acks statsAcks(uint32_t rows, uint32_t seq0) {
 // the free block they left above it closed by caps; given back bottom-up.
 // The overflow's chunks one by one (no room for its arena) as fe61db9
 // carved them: the hold's caps given back first, kMargin alone kept,
-// nothing closed. While a decoder may open (g_topDecoder: the firmware's
-// track playing or start waiting), a decoder's room (the recheck): the
-// hold's caps given back when the largest free block wouldn't take the
-// Opus's buffers, and the arena too (its chunks then one by one).
+// nothing closed. A decoder's room (the recheck; its trigger since the
+// final review), topRoom(): the hold's caps given back when the largest
+// free block wouldn't take the Opus's buffers, and the arena too (its
+// chunks then one by one). The ranges' block asks it at every take (no
+// start is held while it alone is); the arena and a chunk only while a
+// track plays (g_topPlayer: the firmware's s_trackPlaying), since every
+// other start waits while they are held.
 // g_topAbove: the free block the last take found above its block (T, as
 // fe61db9's left it open); g_topClose: what that take did.
 size_t g_topAbove = 0;
@@ -4157,11 +4166,15 @@ autodj::Close g_topClose = autodj::Close::Nothing;
 void* fe61db9Top(size_t n);
 // fe61db9's hooks for the glue (it had no arena: the chunks one by one).
 void* fe61db9NoArena(size_t n) { return n == statsfold::kArenaBytes ? nullptr : fe61db9Top(n); }
+size_t topRoom(size_t n, const TopPlayer& s) {
+  const bool overflow = n == statsfold::kArenaBytes || n == statsfold::kChunkBytes;
+  return !overflow || s.playing ? statsglue::kDecoderRoomBytes : 0;
+}
 void* topAlloc(size_t n) {
   const bool chunk = n == statsfold::kChunkBytes;
   if (chunk) g_modelTop.uncap(kModelTop);
   autodj::CloseReport r;
-  const size_t room = g_topDecoder && g_topDecoder() ? statsglue::kDecoderRoomBytes : 0;
+  const size_t room = topRoom(n, g_topPlayer ? g_topPlayer() : TopPlayer());
   void* p = g_modelTop.take(kModelTop, n, &r, !chunk, room, n == statsfold::kArenaBytes);
   g_topAbove = r.aboveBytes;
   g_topClose = r.why;
@@ -4334,12 +4347,13 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     }
   };
   const bool opusAtBoot = hist && hist->opusAt == -1;
-  bool opusOpen = false;
+  bool opusOpen = false, opusWaits = false;
   // A start the listener asks at the boot (opusAt -1): held while the boot's
   // fold holds overflow chunks (main.cpp's OutputHold: overflowHeld()).
   auto bootStart = [&] {
     if (!opusAtBoot || opusOpen) return;
-    if (glue && stats->startWaits && glue->overflowHeld()) return;
+    opusWaits = glue && stats->startWaits && glue->overflowHeld();
+    if (opusWaits) return;
     carveInto(kOpusAsks, &opusBlocks);
     opusOpen = true;
   };
@@ -4356,7 +4370,8 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   // The hold's cases: main's own carves (StatsRun::uiAt, queueAt), kept for
   // the run, their offsets into `keptInto` while the hold is recorded.
   std::vector<size_t>* keptInto = nullptr;
-  bool mp3 = false;  // an MP3 playing or its start waiting (it holds no PSRAM: a decoder may open all the same)
+  bool mp3 = false;       // an MP3 playing (it holds no PSRAM: its next track's decoder may open all the same)
+  bool mp3Waits = false;  // ... its start waiting (overflow chunks held), played once the boot's save gave them back
   auto keep = [&](size_t n) {
     void* p = ModelHeap::alloc(n);
     TEST_ASSERT_NOT_NULL(p);
@@ -4371,9 +4386,12 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   auto carveQueue = [&] {
     keep(1100);  // QueueModel's entries
     keep(1180);  // ... and its undo
+    // An MP3's start: its 4 KB probe (none while overflow chunks hold it:
+    // the start waits).
+    mp3Waits = glue && stats->startWaits && glue->overflowHeld();
+    if (mp3Waits) return;
     mp3 = true;
-    // An MP3's start: its 4 KB probe (none while overflow chunks hold it).
-    if (!(glue && stats->startWaits && glue->overflowHeld())) ModelHeap::release(ModelHeap::alloc(4096));
+    ModelHeap::release(ModelHeap::alloc(4096));
   };
   const uint32_t bootSeq = seq;  // (a remount scans the same log again)
   auto statsScan = [&](bool again) {
@@ -4447,9 +4465,14 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     stats->arena = glue->fold().inArena();
   };
   auto playing = [&] { return !opusBlocks.empty() || !flacBlocks.empty(); };
-  // topAlloc()'s room: a decoder may open in the hold (the firmware's
-  // ListeningStats::pass(): a track playing or a start waiting).
-  g_topDecoder = [&] { return mp3 || playing(); };
+  // The player at a take (the firmware's ListeningStats::pass()): a track
+  // playing (an MP3, an Opus or a FLAC), a start waiting.
+  g_topPlayer = [&] {
+    TopPlayer s;
+    s.playing = mp3 || playing();
+    s.waiting = mp3Waits || opusWaits;
+    return s;
+  };
   auto statsBootSave = [&](bool boot) {
     const bool ui = boot && (stats->uiAt == StatsRun::kInSave || stats->uiAt == StatsRun::kBetweenTries);
     if (!glue) {
@@ -4477,6 +4500,12 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     TEST_ASSERT_EQUAL_INT(0, g_modelTop.held());  // (the hold's blocks and caps all given back)
     TEST_ASSERT_EQUAL_size_t(0, statsFs->openNow());
     statsReady = true;
+    // (An MP3's start the chunks held plays from the pass after: main.cpp's
+    // stepPlayGate.)
+    if (mp3Waits) {
+      mp3Waits = false;
+      mp3 = true;
+    }
     if (!boot) return;
     stats->tries = glue->tries();
     stats->behind = glue->fold().behind();
@@ -4667,7 +4696,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     glue.reset();  // (MARK's block given back with its store)
   }
   if (stats) stats->heldAtEnd = g_modelTop.held();
-  g_topDecoder = nullptr;
+  g_topPlayer = nullptr;
   return u;
 }
 
@@ -5425,6 +5454,191 @@ void test_the_arena_s_fallback_as_before() {
 
 namespace {
 
+// The session's first Opus at its open (OpusGenerator::allocBuffers(): the
+// page, the packet and a frame, in that order, kept for the session): the
+// first of the three no free block takes (-1: all three carved). Each one
+// carved is given back.
+int opusShortAt() {
+  static const size_t kAsks[3] = {65307, 61440, 1276};
+  std::vector<void*> got;
+  int at = -1;
+  for (int i = 0; i < 3 && at < 0; ++i) {
+    if (void* p = ModelHeap::alloc(kAsks[i])) {
+      got.push_back(p);
+    } else {
+      at = i;
+    }
+  }
+  for (void* p : got) ModelHeap::release(p);
+  return at;
+}
+
+TopPlayer topPlayer(bool playing, bool waiting) {
+  TopPlayer s;
+  s.playing = playing;
+  s.waiting = waiting;
+  return s;
+}
+
+}  // namespace
+
+// U14 (the final review: the room's trigger, a start waiting). The arena
+// asks a decoder's room only while a track plays. A start that waits at
+// its take (the headphones not linked yet, a restart asked) can't open a
+// decoder while the arena is held: main.cpp's OutputHold holds every start
+// that isn't from Playing while overflow chunks are held, PlayGate's
+// statsHold keeps it waiting, and the arena and its chunks are given back
+// in one call. So the room asked for it could only give the caps back
+// (Room) or the arena (NoRoom: the chunks one by one) for nothing. One free
+// block of 480 KB: the ranges' block (Closed: the room is there), then the
+// arena with a start waiting: kept, its T closed, the caps held, though
+// with them held the Opus has no room; once both are given back it opens.
+// With a track playing the same take still asks (its next track opens in
+// the hold): NoRoom, the ranges' T open again. Through the glue a full log
+// folds in the arena with the start waiting.
+void test_a_waiting_start_asks_no_room() {
+  const size_t big = 480 * 1024;
+  for (bool playing : {false, true}) {
+    holesThenTop({}, big);
+    const Map start = ModelHeap::blocks;
+    g_topPlayer = [playing] { return topPlayer(playing, !playing); };
+    void* ranges = topAlloc(1284);
+    TEST_ASSERT_NOT_NULL(ranges);
+    TEST_ASSERT_TRUE(g_topClose == autodj::Close::Closed);
+    const size_t rangesAbove = g_topAbove;
+    void* arena = topAlloc(statsfold::kArenaBytes);
+    const autodj::Close why = g_topClose;
+    const int shortAt = opusShortAt();
+    printf("[hold] U14 one free block of %u B, %s: the ranges' block closed, the arena %s (%s), %d top blocks held; "
+           "the largest free block %u B: the Opus %s\n",
+           (unsigned)big, playing ? "a track playing" : "a start waiting", arena ? "kept" : "GIVEN BACK",
+           autodj::closeName(why), g_modelTop.held(), (unsigned)ModelHeap::largest(),
+           shortAt < 0 ? "opens" : "has no room (yet)");
+    if (!playing) {
+      TEST_ASSERT_NOT_NULL(arena);
+      TEST_ASSERT_TRUE(why == autodj::Close::Closed);  // (no Room, no NoRoom: no room asked)
+      TEST_ASSERT_EQUAL_INT(2, g_modelTop.held());
+      TEST_ASSERT_EQUAL_size_t(0, freeAboveOf(ranges));  // (the ranges' caps held)
+      TEST_ASSERT_TRUE(shortAt >= 0);                    // (the start waits: no decoder opens now)
+      // The save's order: the ranges' block given back first (it waits for
+      // the arena), then the arena: both freed with their caps at once.
+      topRelease(ranges);
+      TEST_ASSERT_EQUAL_INT(2, g_modelTop.held());
+      topRelease(arena);
+      TEST_ASSERT_EQUAL_INT(0, g_modelTop.held());
+      TEST_ASSERT_TRUE(sameMap(start, ModelHeap::blocks));
+      TEST_ASSERT_EQUAL_INT(-1, opusShortAt());  // (the start released: it opens)
+      continue;
+    }
+    TEST_ASSERT_NULL(arena);
+    TEST_ASSERT_TRUE(why == autodj::Close::NoRoom);
+    TEST_ASSERT_EQUAL_INT(1, g_modelTop.held());
+    TEST_ASSERT_EQUAL_size_t(rangesAbove, freeAboveOf(ranges));  // (its T open again)
+    TEST_ASSERT_EQUAL_INT(-1, shortAt);
+    topRelease(ranges);
+    TEST_ASSERT_TRUE(sameMap(start, ModelHeap::blocks));
+  }
+  // Through the glue (a full log, 16 chunks): the start waiting, the
+  // overflow in the arena; a track playing, its chunks one by one. Both
+  // fold the whole log and save it.
+  const StatsCard sc = statsCard(2214, 1000);
+  for (bool playing : {false, true}) {
+    g_topPlayer = [playing] { return topPlayer(playing, !playing); };
+    const FallbackRun f = foldFullLog(sc, {}, big, topAlloc, topRelease);
+    printf("[hold] U14 a full log in one free block of %u B, %s: %u chunks, %s, %s\n", (unsigned)big,
+           playing ? "a track playing" : "a start waiting", (unsigned)f.chunks,
+           f.arena ? "in the arena" : "one by one (the arena given back for the room)",
+           f.saved() ? "saved" : "NOT saved");
+    TEST_ASSERT_EQUAL(!playing, f.arena);
+    TEST_ASSERT_TRUE(f.saved());
+  }
+}
+
+// U15 (the final review: the room's trigger, a start in the ranges' hold).
+// The ranges' block asks a decoder's room at every take, whatever the
+// player. While it alone is held (no overflow chunk: a usual log, or the
+// arena given back mid-scan by fallBehind) OutputHold holds no start, so a
+// Play from a stop or a pause made after the take opens its decoder with
+// the block's caps held. One free block of 130-320 KB in 64 B steps (PSRAM
+// short: a remount's re-read mid-session), the player stopped at the take,
+// the ranges' request the model's smallest and largest (1,284 B: no ACKS
+// row; 3,076 B: 16), then the session's first Opus: it opens wherever
+// fe61db9's hooks left it room, the take giving the caps back (Room) where
+// they would leave none. The take without the room (a stopped player's
+// before this fix) leaves the Opus short in a band of about 139-201 KB
+// where fe61db9's opened it: the page under the block, then the packet's
+// 61,440 B (in a few, the frame's 1,276 B) finding no free block.
+void test_the_ranges_take_asks_the_room() {
+  g_topPlayer = [] { return topPlayer(false, false); };
+  for (size_t req : {size_t{1284}, size_t{3076}}) {
+    uint32_t heaps = 0, rooms = 0, worse = 0, margins = 0, before = 0;
+    uint32_t shortAt[3] = {0, 0, 0};  // (without the room: the page, the packet or the frame the one short)
+    size_t roomLo = 0, roomHi = 0, beforeLo = 0, beforeHi = 0;
+    std::string worseAt;
+    for (size_t top = 130 * 1024; top <= 320 * 1024; top += 64) {
+      ++heaps;
+      // fe61db9's hooks: the spacers keeping 64 KB, nothing closed.
+      holesThenTop({}, top);
+      void* o = fe61db9Top(req);
+      TEST_ASSERT_NOT_NULL(o);
+      const bool oldOpens = opusShortAt() < 0;
+      ModelHeap::release(o);
+      // The firmware's: the player stopped, the room asked.
+      holesThenTop({}, top);
+      void* p = topAlloc(req);
+      TEST_ASSERT_NOT_NULL(p);
+      const autodj::Close why = g_topClose;
+      const int fixShort = opusShortAt();
+      topRelease(p);
+      TEST_ASSERT_EQUAL_INT(0, g_modelTop.held());
+      // The same take without the room (94cdf0c's for a stopped player).
+      holesThenTop({}, top);
+      autodj::TopHold h;
+      autodj::CloseReport r;
+      void* q = h.take(kModelTop, req, &r, true, 0, false);
+      TEST_ASSERT_NOT_NULL(q);
+      const int beforeShort = opusShortAt();
+      h.give(kModelTop, q);
+      if (why == autodj::Close::Room) {
+        ++rooms;
+        if (!roomLo) roomLo = top;
+        roomHi = top;
+        TEST_ASSERT_EQUAL_INT(-1, fixShort);  // (all three carved: T open again)
+      }
+      if (oldOpens && beforeShort >= 0) {
+        ++before;
+        if (!beforeLo) beforeLo = top;
+        beforeHi = top;
+        ++shortAt[beforeShort];
+      }
+      if (oldOpens && fixShort >= 0) {
+        // (A take that left T open for the margin: fix A's spacers, not
+        // the room; the same without it.)
+        if (why == autodj::Close::Margin && beforeShort >= 0) {
+          ++margins;
+          continue;
+        }
+        if (++worse > 6) continue;  // (the first six said)
+        char w[96];
+        std::snprintf(w, sizeof(w), "%s%u B (%s)", worseAt.empty() ? "" : ", ", (unsigned)top, autodj::closeName(why));
+        worseAt += w;
+      }
+    }
+    printf("[hold] U15 the ranges' request %u B, %u heaps of one free block (130-320 KB), the player stopped: Room in "
+           "%u (%u-%u B), the Opus short where fe61db9's opened %u (a margin's take, T left open, %u); without the "
+           "room %u (%u-%u B; the one short the page's 65,307 B in %u, the packet's 61,440 B in %u, the frame's "
+           "1,276 B in %u)\n",
+           (unsigned)req, (unsigned)heaps, (unsigned)rooms, (unsigned)roomLo, (unsigned)roomHi, (unsigned)worse,
+           (unsigned)margins, (unsigned)before, (unsigned)beforeLo, (unsigned)beforeHi, (unsigned)shortAt[0],
+           (unsigned)shortAt[1], (unsigned)shortAt[2]);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, worse, worseAt.c_str());
+    TEST_ASSERT_TRUE(rooms > 0);
+    TEST_ASSERT_TRUE(before > 0);  // (the case reaches the band the review found)
+  }
+}
+
+namespace {
+
 // 5.14's yardstick, its histories: the comparison's H1-H4, H5-H8, K1-K4 and
 // D, round 2's own sequence on the device (the Opus kept before the first
 // update, the MP3 update, the Opus update, the FLAC playing through the
@@ -6023,6 +6237,8 @@ int main(int, char**) {
   RUN_TEST(test_the_listening_stats_in_a_model_heap);
   RUN_TEST(test_the_hold_leaves_main_s_layout);
   RUN_TEST(test_the_arena_s_fallback_as_before);
+  RUN_TEST(test_a_waiting_start_asks_no_room);
+  RUN_TEST(test_the_ranges_take_asks_the_room);
 #endif
   RUN_TEST(test_the_listening_stats_across_updates);
   return UNITY_END();
