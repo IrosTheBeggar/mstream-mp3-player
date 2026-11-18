@@ -90,8 +90,10 @@ memory part of the update step and the budget (3.4.2, 3.5). The play log
 stats' store** (docs/LISTENING-STATS.md S1, `/.player/stats.bin`) is built
 and host-tested; its first build ran on the Core2 in two device rounds
 (2026-11-12 UTC), and the second's finding reworked it to a fixed resident
-set of at most 3,584 B, the rest merged from the card at each save (that
-plan's 5.14, 2026-11-16), not yet flashed: 3.11.
+set, the rest merged from the card at each save (that plan's 5.14,
+2026-11-16), since 2026-11-17 in internal RAM (at most 2,048 B, 40
+records); flashed and device-checked against main's firmware (2026-11-17
+and 2026-11-18, the plan's 5.14): 3.11.
 
 **In short:**
 
@@ -7585,13 +7587,21 @@ internal RAM since; **that build is host-gated, flashed and
 device-checked** (2026-11-17, the spare card, main's firmware beside it
 in the same sequences; the plan's 5.14, "Its device re-run"): on the
 speaker its PSRAM equalled main's to the byte at all 46 `D` and
-`[dj] joined` lines, and its internal RAM read 2,180-2,192 B under
-main's at the boots' lines from the library's load on (the build's
-2,096 B of `.dram0.bss` and about 90 B more); with the headphones linked and a real A2DP
+`[dj] joined` lines (those runs' folds ended before the first frame),
+and its internal RAM read 2,180-2,192 B under main's at the boots'
+lines from the library's load on (the build's 2,096 B of `.dram0.bss`
+and about 90 B more); with the headphones linked and a real A2DP
 stream, OPUS.md's G5 held on both firmwares, steady `ram=` 56K on the
 move (58K on main) against 50K and the session's lowest 49,124 B
-(51,000 B) against 42 KB. `device.txt` gains no key: the transfer never
-reads the stats (2.11). What the code decided where
+(51,000 B) against 42 KB. On the same build B1 (2026-11-17) found the
+largest free block split for the session where the first frame or a
+queue came inside the boot's hold: 589,812 B against 638,964 B at the
+join, 442,356 B after a full-log boot. The plan's fix A + G and the
+room's trigger (5.14's "The hold's T") close it, device-checked
+2026-11-18: every take Closed, the join's largest and `D` main's to the
+byte, but for one after-stop `D` that the card's boot walk split as it
+splits main's (the plan's C3/M3). `device.txt` gains no key: the
+transfer never reads the stats (2.11). What the code decided where
 the plan left room (the plan's text amended in the same commits; its
 section 1 and 5.14's "As built" notes list the changes):
 
@@ -7777,8 +7787,11 @@ section 1 and 5.14's "As built" notes list the changes):
   the promotion. A section whose CRC fails under the header RAM stands on
   (`Saved::Damaged`: the card's copy damaged under the session): behind at
   once, `H` naming the section; the next boot reads it Corrupt. A read the
-  card fails in either pass is a save failed, tried again. Nothing new
-  since the card's copy: nothing written. The work memory
+  card fails in either pass is a save failed, tried again. No free space
+  is asked for first: on a card with one free cluster `stats.tmp`'s
+  allocation fails, and FatFs's search for its clusters held the loop
+  about 5.3 s a try after the first on the device (B2: Costs, below).
+  Nothing new since the card's copy: nothing written. The work memory
   (`statsfile::kWorkBytes`: the writer, its plan, two containers, two row
   readers, the cursor, the merge's rows, a 4 KB buffer and two of 2 KB)
   is 11,456 B on the device (11,488 B on the host), carved in PSRAM for
@@ -7858,7 +7871,14 @@ section 1 and 5.14's "As built" notes list the changes):
   internal-RAM review (`Ht`'s hash, 8 B: the console's looks wait for a
   pass; core2 flash 4,467,151 B, the tree before its commits); 61,408 B
   since the PSRAM fix and its review (`.dram0.bss` 36,296 B: the object
-  2,008 B, the hold's lines and state 232 B; the DRAM heap 79,040 B). `iram_diet: 51 of 51`,
+  2,008 B, the hold's lines and state 232 B; the DRAM heap 79,040 B).
+  Flash 4,472,587 B since the PSRAM fix and the room's trigger (d4a5357;
+  core2-dio 4,472,619 B), 48,896 B over S0's. At 9a0532c, main's #62
+  taken in: flash 4,475,447 B (core2-dio 4,475,479 B), RAM 61,424 B
+  (`.dram0.bss` 36,312 B), IRAM left 5,157 B. Read against main
+  89188f4's build (flash 4,426,627 B, RAM 59,080 B, IRAM left 5,161 B:
+  the plan's 11), not S0's, which would count #62's code as the stats':
+  48,820 B of flash, 2,344 B of RAM (all `.bss`), IRAM 4 B under. `iram_diet: 51 of 51`,
   `cache_guard` and `flash_guard` ok. IRAM left 5,157 B with S0's 25
   `libc_a-*` objects in `.iram0.text` and no IRAM attribute: one
   `libphy.a(phy_chip_v7_cal.o)` literal, merged or not as libphy's COMMON
@@ -7882,7 +7902,24 @@ section 1 and 5.14's "As built" notes list the changes):
   262,144 B in 16 chunks, the heap's peak with the boot save's work
   memory 273,632 B on the host (S1 as first built's fold peaked at 396,744
   B); the scan, the fold and the save about 3.85 µs a slot on this PC.
-  None of these is measured on a device.
+  Those are host figures, as are the flash, RAM and IRAM above. On the
+  device (the plan's 5.14, "Its device runs" and "Its device re-run";
+  the spare card): a full log's boot save, 143,856-143,872 B for 3,519
+  tracks, in 2,487-2,584 ms; its overflow in the arena, 262,080 B
+  (262,144 B carved) and 81,276 B of caps; the scan's 103 passes
+  3,678-3,773 ms on the loop with that save (about 1.2 s without); a
+  start asked meanwhile waiting 4.39-4.45 s; the next boot's compaction
+  1,336-1,384 ms (a 19,074-row base, 457,848 B); the records' saves
+  91 ms (a 16 KB `stats.bin`), 225 ms (60,688 B) and 502 ms (144,544 B);
+  `Hs` under an MP3 143 ms; the loop's stack's lowest since the boot
+  3,508-3,708 B across them, a bound (the rotation's save not read yet).
+  On a card with one free cluster (B2) each failed save after the first
+  held the loop 5,295-5,398 ms (the boot's 5,430 ms): FatFs's search for
+  `stats.tmp`'s clusters reads the whole FAT, and the store checks no
+  free space first. PR #63's hole hint should end that stall with no
+  stats code (shown on main's queue saves on the same card and in the
+  host's model, not on a stats build); whether a save should also check
+  free space first is the owner's call.
 - **The heap model** (the plan's 6.7 and 5.14, MODELLED: test_autodj_join,
   the firmware's own glue on a card in memory, every PSRAM block it carves
   through the model heap; nothing resident there since the object is
@@ -7919,7 +7956,11 @@ section 1 and 5.14's "As built" notes list the changes):
   2,214 and 19,478, 300 slots and a full log, saves landing or not, 12
   players' MARK rows) all join the control's 360,436 B. The model doesn't
   reproduce round 2 on round 2's own sequence: the device re-run against
-  main's figures decides.
+  main's figures decides. It has since: the move's re-run gave main's
+  PSRAM to the byte in its sequence, B1 found the move's hold splitting
+  the largest free block in others (a sequence the model didn't have),
+  and fix A + G's runs gave main's figures again (below); L, Lq and Lo2
+  after such a boot are not run.
 - **Tests.** `test_stats_fold` (19 cases: the records merged with every
   fixture's `stats.bin` through the cursors byte for byte, random sessions
   against a plain-map model, the 24/39/40 edges, MARK's room, the
@@ -7927,7 +7968,8 @@ section 1 and 5.14's "As built" notes list the changes):
   verdicts, every save and base byte for byte, a cut at every write step
   three ways, a failure at every question, the three streams, a damaged
   section, 34 of the 36 sessions through the store), `test_stats_store`
-  (22: the real journal, tracker and outbox through the real glue over
+  (23 since fix A, every session through the hold's `TopHold` too: the
+  real journal, tracker and outbox through the real glue over
   CutFs, FlakyFs and FaultFs, every boot of `stats/index.json` and all 36
   sessions of `stats/sessions.json`, 290 steps, compared byte for byte
   after each; cuts, faults, remounts, partial scans, two players, a 0.14.0
@@ -7936,15 +7978,20 @@ section 1 and 5.14's "As built" notes list the changes):
   `Memory::keep` alone) and a remount past it,
   the scan and a library update, the card away mid-scan),
   `test_library_update` (39: the update waiting for the stats' scan),
-  `test_play_gate` (31: the start the stats hold, 7 cases),
-  `test_autodj_join` (28: the two cases above), `test_play_log` (42: the
-  33, the boot rules' sixth case, 8 for the hooks, 1 for the seq rule),
+  `test_play_gate` (32: main's 24, #62's 1, and the start the stats
+  hold, 7), `test_autodj_join` (45: the two cases above, and fix A's
+  hold, its caps and a decoder's room, Y1-Y7 and U1-U11 and U13-U16),
+  `test_play_log` (42: the 33, the boot rules' sixth case, 8 for the
+  hooks, 1 for the seq rule),
   `test_card_root` (34: commitTime); `tools/test_statsref.py` (64),
   `tools/test_playlog.py` (32), `tools/test_synthtransfer.py` (63:
-  `--acks`); card_fixtures.py's 671 files. The whole native suite: 111 suites, 2,366 cases,
-  all passing (the move to internal RAM; the rework review's fixes: 2,366; R6: 2,358). Mutation checks of the rework: the reference 15 of 15 caught, the
-  fold 23 of 23, the store 23 of 24 and the glue 19 of 20 (the two missed
-  equivalent).
+  `--acks`); card_fixtures.py's 671 files. The whole native suite: 111
+  suites, 2,384 cases, all passing at d4a5357 (the room's trigger's gate;
+  the move to internal RAM: 2,366; the rework review's fixes: 2,366; R6:
+  2,358); at 9a0532c, main's #62 taken in, 2,389 of 2,389 (#62's 5
+  more). Mutation checks of the rework: the reference 15 of 15 caught,
+  the fold 23 of 23, the store 23 of 24 and the glue 19 of 20 (the two
+  missed equivalent).
 - **The device check** is the plan's 9.5 table (runs A-L on the spare card
   rebuilt with synthcard, synthtransfer and `statsref.py seed`) for S1 as
   first built, and 5.14's re-run for the rework. **Round 1** (2026-11-12
@@ -7977,8 +8024,25 @@ section 1 and 5.14's "As built" notes list the changes):
   play's slot and after the 48th, 91 ms each; 70 slots, none lost) and
   `Hs` (143 ms); then, with the headphones linked, OPUS.md's G5, 3.8's
   walk and a whole Rescan under a Bluetooth play (the figures above; the
-  plan's 5.14, "Its device re-run"). E, F, G and I of S1 as first built's
-  table were never run.
+  plan's 5.14, "Its device re-run"). **B1** (2026-11-17, the move, main
+  as the control): the hold's split (above); I's full log (a start
+  waiting 4.39 s, the save 143,856 B in 2,487 ms), I-2's compaction
+  (1,384 ms) and M2 (the records' save due under a library update's
+  fence ran after it came down, 225 ms) as planned. **Fix A + G**
+  (2026-11-18, 94cdf0c and d4a5357): `D` and the join main's to the byte
+  on the I-3m-like and full-log boots, every take Closed; a full log
+  (c1-i1) saved 143,872 B in 2,584 ms, the expectation's size, rows and
+  HEAD, its start waiting 4.45 s, and the next boot compacted in
+  1,336 ms; the after-stop split that run showed is main's own (C3/M3:
+  the card's boot walk, carving while a decoder is open). **M-full** on
+  a card with one free cluster (B2): 17 failed records' tries, behind
+  once the records were full, every slot written, `Hs` refused, and each
+  failed try after the first held the loop about 5.3 s (Costs, above).
+  E ran on S1 as first built in round 2 (2026-11-12) and passed: the
+  boot's save, 15,448 B, before `plays.jnl`'s trim, the next boot
+  nothing new; F's first half ran; G never ran. On the rework E's trim
+  and K's rotation saves are owed, and nothing of S1 with main's #62
+  (9a0532c) has run on a device.
 
 ---
 

@@ -30,9 +30,10 @@
 // them where the caps close it (the take's [listen] line says when they
 // don't: a missed cap, no spacers, a hole, the arena's fallback, a
 // decoder's room, the ranges' block's at every take and the arena's while a
-// track plays: the caps given back); in the host's model PSRAM's layout is
-// then main's once the hold ends (5.14, fix A, its device re-run owed; the
-// device's B1 runs found it split for the session without the caps). Its
+// track plays: the caps given back); PSRAM's layout is then main's once the
+// hold ends, in the host's model and on the device (5.14, fix A: runs C1,
+// C1-V and C2, 2026-11-18; the device's B1 runs had found it split for the
+// session without the caps). Its
 // budget is internal RAM's margin (11's Internal RAM row): 2,048 B, hence
 // 40 records, not the design's 96 (statsfold::kRecords). Against G5's
 // floors (docs/OPUS.md: steady 50 KB, the session's lowest 42 KB, the

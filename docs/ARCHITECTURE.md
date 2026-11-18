@@ -633,9 +633,14 @@ hundred bytes in PSRAM (app/TagConsole's `Work`).
   promoted in a call of its own (`Store::promote()`), never under the
   save's frame, and the records sort by a heap sort, not `std::sort`,
   whose introsort recursed up to about 2 KB more under `Store::save`.
-  Not yet read on a device (the plan's runs G and K, against the house's
-  lowest, 2,548 B left under a held boot with DO low: METADATA.md 3.8;
-  S1 as first built's boot save, round 1's run K, left 3,700 B unused).
+  Read on the device as a bound (the lowest since the boot, unchanged
+  across each save): 3,700 B across the move's two records' saves (the
+  plan's run M), 3,508 B across B1's M2 save (225 ms), 3,708 B through
+  a full log's boot save and B2's 17 failed records' tries, all over the
+  house's lowest, 2,548 B left under a held boot with DO low
+  (METADATA.md 3.8). S1 as first built's boot save left 3,700 B unused
+  (round 1's run K). The rotation's save (the plan's K) and DO low are
+  not read yet.
 - **ESTIMATED worst cases**, bytes used from the stack's top (from the
   image: each function's `entry` frame, its calls and long calls, the
   VFS's, FatFs's disk and the console's function pointers by hand, the
@@ -1610,7 +1615,7 @@ from the play log into one card container. RAM holds a fixed few
 kilobytes; the aggregate lives in `stats.bin` alone, and each save merges
 the plays since the last into it as it streams. lib/core `StatsFold` is
 the fold (HEAD's totals; MARK, the highest seq folded for each deviceId
-and epoch, kept for good; the records: up to 96 slots folded since the
+and epoch, kept for good; the records: up to 40 slots folded since the
 last save; past them, a boot's overflow in chunks), `StatsFile` the
 card's files (the read and its verdicts; the save, a counting pass and a
 writing pass over `stats.bin`'s HOUR, DAYS, RCNT and TRKD merged with the
@@ -1646,8 +1651,12 @@ flush only with 1 s of its 3 s left); and the console's `Hs`. Each is the
 queue's commit: `stats.tmp` written in pieces ending on the file's 4 KB
 boundaries, its size checked, then the rename; a tmp whose rename the
 card refused is held (the records it took are in it) and promoted at the
-next save. A save is refused with the card away or another card in the
-slot, after a log file not read whole, once the card's `stats.bin` is no
+next save. No free space is asked for first: on a card with one free
+cluster each failed try after the first held the loop about 5.3 s on
+the device (FatFs's search for `stats.tmp`'s clusters reads the whole
+FAT: LISTENING-STATS 5.14's B2), which PR #63's hole hint should end
+(not yet shown on a stats build). A save is refused with the card away
+or another card in the slot, after a log file not read whole, once the card's `stats.bin` is no
 longer the copy this RAM stands on (another player had the card: its
 stats aren't saved over), and once the session is behind its log (the
 41st record with a save that didn't land, the boot's overflow unsaved, a
@@ -2914,14 +2923,24 @@ strings.
   the headphones linked and a real A2DP stream, steady `ram=` 56K (main
   58K) and the session's lowest 49,124 B, in a whole Rescan (main
   51,000 B), so both of G5's floors hold with about 6 KB to spare (main
-  now reads about 6 KB over 3.8's figures); on the speaker PSRAM is
-  main's to the byte at every `D` and join line, and internal RAM
-  2,180-2,192 B under main's at the boots' lines from the library's load
-  on. Nothing else is
-  held between saves, and nothing of the stats is in PSRAM between calls but the boot's scan's blocks (and MARK's
-  block on a card past 8 rows), so PSRAM's layout is main's on a card of
-  8 MARK rows or fewer, and a library update needs nothing of the stats:
-  nothing given back, nothing read again. The console's looks that read
+  now reads about 6 KB over 3.8's figures); on the speaker PSRAM was
+  main's to the byte at every `D` and join line of those runs, whose
+  folds ended before the first frame, and internal RAM 2,180-2,192 B
+  under main's at the boots' lines from the library's load on. B1
+  (2026-11-17) then found the largest free block split for the session
+  where the first frame or a queue came inside the boot's hold (589,812 B
+  against main's 638,964 B at the join; 442,356 B after a full-log boot):
+  the free block the hold's blocks left above them took those carves.
+  With fix A + G (below) PSRAM is main's to the byte on those boots too
+  (device-checked 2026-11-18, the plan's runs c1-i3m2 and c1-i1), but for
+  c1-i1's after-stop `D`: the card's boot validation walk, carving while
+  a decoder was open, split it there as it splits main's (the plan's
+  C3/M3). Nothing else is held between saves, and nothing of the stats is
+  in PSRAM between calls but the boot's scan's blocks (and MARK's block
+  on a card past 8 rows); with the hold's caps closing the free block above them,
+  PSRAM's layout is main's once the hold ends on a card of 8 MARK rows or
+  fewer, and a library update needs nothing of the stats: nothing given
+  back, nothing read again. The console's looks that read
   the card (`H`'s card part, `Hd`, `Ht`) carve a save's work memory, so
   they wait for a pass the write gate lets through, in `Hs`'s turn, and
   never behind the update's fence. The transients: each read's and save's work memory
@@ -4958,10 +4977,17 @@ their own (the player stopped first, so nothing follows them).
    into `/.player/stats.bin`, the console's `H`; Storage above), reworked
    since its device rounds 1 and 2 (2026-11-12 UTC) to a fixed resident set
    (the plan's 5.14, R1-R7, 2026-11-16), moved to internal RAM after its
-   device re-run (2026-11-17: at most 2,048 B, 40 records; PSRAM main's
-   on a card of 8 MARK rows or fewer, since the move's internal-RAM
-   review); that move is host-gated and device-checked (2026-11-17, main's
-   firmware beside it: PSRAM main's to the byte at every `D` and join line
-   on the speaker; with the headphones linked G5's floors held with about
-   6 KB to spare); the
+   device re-run (2026-11-17: at most 2,048 B, 40 records); that move is
+   host-gated and device-checked (2026-11-17, main's firmware beside it:
+   PSRAM main's to the byte at every `D` and join line on the speaker;
+   with the headphones linked G5's floors held with about 6 KB to spare).
+   B1 then found the boot's hold splitting PSRAM's largest free block
+   where the first frame or a queue came inside it, and the plan's fix
+   A + G (caps over the hold's top blocks, one overflow arena, MARK's
+   block by plain `psramAlloc`) and the room's trigger make it main's to
+   the byte, device-checked 2026-11-18 on the spare card. Main's #62 is
+   taken in (2ff47e0; its test fixed at 9a0532c), not yet run on a device
+   with S1; on a nearly full card each failed save after the first holds
+   the loop about 5.3 s, which PR #63's hole hint should end (not yet
+   shown on a stats build). The
    lists, the Library's screens and Now Playing's row (S2-S4) are next.
