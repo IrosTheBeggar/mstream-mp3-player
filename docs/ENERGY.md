@@ -214,7 +214,7 @@ panel shares SPI with the SD card.
 - **Stays lit while:**
   - the start-up screen shows;
   - the calibration or spike screens own the display;
-  - a play waits for the headphones (PlayGate Waiting, at most its 20 s backstop);
+  - a play waits for the headphones (PlayGate Waiting, at most its 65 s backstop);
   - a pairing is under way;
   - a computer's visualizer session or `@identify` banner is up.
 - **Held lit** (added after batch 3, `holdLit`): while a toast with a
@@ -977,7 +977,13 @@ on-device checks below are still to do.** As built:
   page; `step()` on BtAppT's 250 ms ticks and heartbeats. A burst page
   goes at once, the next once the last has its answer and 10 s after it
   began (~25 s for the three). A page on its way when a burst starts is
-  its try 1 (the boot's page included).
+  its try 1 (the boot's page included). (Since 0.15.0 the next goes 2 s
+  after the last one's answer, ~20 s for the three, and the boot's first
+  page is the planner's, a third of a second after the stack is up
+  instead of 10 s: the same three pages, so the same energy, sooner. A
+  listener's ask pages eight times, ~56 s: five more pages, only when
+  the first three get no answer and only while someone waits.
+  ARCHITECTURE.md, "Bluetooth".)
 - The library's auto-reconnect is disarmed except during a pairing (whose
   tries are still the library's); `rememberPeer()` replaces the old
   re-arm on every link.
