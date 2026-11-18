@@ -1568,8 +1568,10 @@ session, and the log is trimmed by nothing (no MARK known); corrupt
 twice, it is set aside as `stats.bad` and counting starts again from the
 log. The boot's scan folds each slot above the MARK it read, once, into
 the records (40, in internal RAM); past them (a card a 0.14.0 player used, or a session whose
-saves failed) into overflow chunks carved at the top of PSRAM's largest
-free block (64 KB kept free), at most 16 for a full log. Each play
+saves failed) into overflow chunks, at most 16 for a full log, in one
+arena carved at the top of PSRAM's largest free block (64 KB kept free
+with it carved, the free block above it closed by caps until the save:
+LISTENING-STATS 5.14's fix A). Each play
 written is folded live into the records (RAM only: no card write for a
 play but its slot). Saves: at the scan's end, inside `finishScan()`
 before its trim (the only one that may compact, and only at the update
@@ -2832,8 +2834,8 @@ strings.
   order, so a carve that fit at that heap's end can go to the next
   internal heap (the plan's internal-RAM review). A card with more than 8
   MARK rows (each new player or NVS erase adds one) gets one block more
-  at the boot's read, its rows and 8 more, at the top of PSRAM's largest
-  free block (`statsglue::Memory::keep`: `topAlloc()`), kept for the
+  at the boot's read, its rows and 8 more, where PSRAM's heap puts it
+  (`statsglue::Memory::keep`: plain `psramAlloc`, fix G), kept for the
   session: on the internal heap its size, the card's, had no bound. The
   budget is internal RAM's margin, counted as the build's `.dram0.bss`
   over main's (2,096 B over S0's: the object, the rework's 96 B of
@@ -2868,10 +2870,16 @@ strings.
   in a pass where Auto DJ's join isn't Working and no library update is
   asked, its ranges' block (1,284 B with MARK's 16 rows and no ACKS row
   above them, 3,076 B at most) and, past 40 records, overflow chunks of
-  16,384 B (819 records each, at most 16: 262,144 B for a full
-  never-synced log), all at the top of PSRAM's largest free block through
-  Auto DJ's spacers keeping 64 KB free, and gives them back at the fold's
-  end (the chunks once the boot's save lands, or after its fourth try).
+  16,384 B (819 records each, at most 16, in one arena of 262,080 B for
+  a full never-synced log; chunk by chunk when PSRAM has no block for
+  it), all at the top of PSRAM's largest free block through Auto DJ's
+  spacers keeping 64 KB free with the block carved, the free block left
+  above each closed by caps found by a heap walk (LISTENING-STATS 5.14's
+  fix A: a carve made meanwhile, the first frame's canvas or a queue,
+  would otherwise land there and split the largest free block for the
+  session), and gives them back at the fold's end, bottom-up (the arena
+  once the boot's save lands, or after its fourth try; the ranges' block
+  waits for it).
   Only a fold past the 40 records holds chunks (the scan's pieces reserve
   no look-ahead, `statsglue::kReserveAhead`: the fold carves one at the
   41st record), a full log's, once a card; a card that goes away mid-scan

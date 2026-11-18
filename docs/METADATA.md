@@ -7654,9 +7654,9 @@ section 1 and 5.14's "As built" notes list the changes):
   Before it (the rework as first built) the object was a 3,200 B PSRAM
   block under a 3,584 B budget. A card with more than 8 MARK rows (each
   player or NVS erase adds one) gets one block more at the boot's read,
-  its rows and 8 more, at the top of PSRAM's largest free block
-  (`statsglue::Memory::keep`: `topAlloc()`, as the scan's held blocks),
-  kept for the session; internal RAM holds the object alone whatever the
+  its rows and 8 more (`statsglue::Memory::keep`: plain `psramAlloc`
+  since the plan's fix G; at the top of PSRAM's largest free block
+  through `topAlloc()` before it), kept for the session; internal RAM holds the object alone whatever the
   card (the plan's internal-RAM review: on the internal heap the block's
   size, the card's, had no bound and no place in the budget). Nothing else is held between saves: HOUR, DAYS, RCNT and TRKD
   are read from the card at each save, no library update asks anything of
@@ -7695,16 +7695,19 @@ section 1 and 5.14's "As built" notes list the changes):
   its playedMs, a play, a skip or neither, its source, boot or live (its
   round). The boot's fold carves, at the scan's first piece, its ranges'
   block at the top of PSRAM's largest free block (through Auto DJ's
-  spacers, 64 KB kept free): per MARK row the seq range each log file gave
+  spacers, 64 KB kept free with the block carved, the free block they
+  leave above it closed by caps until the fold's end: the plan's 5.14,
+  fix A): per MARK row the seq range each log file gave
   (80 B, at most 10 files), and the root's ACKS rows above MARK (112 B
   each, at most 16) for the gap; 1,284 B for 16 MARK rows and no ACKS row
   above them, 3,076 B at most (4 B over and aligned to 8: the ACKS rows
   hold a u64, and PSRAM's heap gives 4-byte-aligned blocks), given back at
   the fold's end. Each slot once and the gap as first built. Past 40
   records the boot's fold goes on in overflow chunks of 16,384 B (819
-  records), carved at the top too, at most 16 (a full never-synced log,
-  13,106 slots: 262,144 B), carved by the fold at the record that needs
-  one (the scan's pieces reserve no look-ahead, `statsglue::kReserveAhead`
+  records), at most 16 (a full never-synced log, 13,106 slots), in one
+  arena of 262,080 B carved at the top too at the first chunk (fix A;
+  chunk by chunk when PSRAM has no block for it), carved by the fold at
+  the record that needs one (the scan's pieces reserve no look-ahead, `statsglue::kReserveAhead`
   0: R6 had found the first piece's reserve of 128 slots carving one at
   every boot, which the rework review took out), so only a fold past the
   40 records holds chunks, a full log's, once a card. A card that goes
@@ -7879,7 +7882,9 @@ section 1 and 5.14's "As built" notes list the changes):
   the firmware's own glue on a card in memory, every PSRAM block it carves
   through the model heap; nothing resident there since the object is
   internal RAM's, but MARK's block on a card past 8 rows, at the top
-  since the internal-RAM review). S1 as first
+  from the internal-RAM review to fix G, where the heap puts it since;
+  the plan's 5.14, "The hold's T": the hold's cases Y1-Y7, main's line
+  with fix A). S1 as first
   built held 62-195 KB in PSRAM and gave it back at each library update's
   fence; the two-update model passed, but S1's device round 2 (below) found
   the blocks carved again after each update moved the decoders'
