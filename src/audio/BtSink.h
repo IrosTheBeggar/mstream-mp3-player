@@ -31,13 +31,18 @@ class PlayerA2dp;  // BtSink.cpp: ESP32-A2DP's source with the fixes below
 //
 // Which headphones: the ones the listener paired on the Pair screen
 // (Output > Pair new headphones: startPairScan(), pairWith()). Once
-// connected, that device is remembered: after a drop (or a boot, or a
-// listener's ask) the Core2 pages it 3 times (~25 s), then once at 30 s, 1,
-// 2 and 5 min and every 5 min, and rests after 15 min (at once after the 3
-// tries while nobody is around: setQuiet()); it never scans for remembered
-// headphones (ReconnectPlanner). All along it stays connectable (not
-// discoverable) so the headphones can come back by themselves, as they do
-// to a phone. Other devices can't connect in. forgetDevice() clears it.
+// connected, that device is remembered: after a drop or a boot the Core2
+// pages it 3 times, one page after the other (~20 s, 15 of them on the
+// air), on a listener's ask 8 times (~56 s: headphones that sit on a
+// phone answer only now and then), then once at 30 s, 1, 2 and 5 min and
+// every 5 min, and rests after 15 min (at once after the tries while
+// nobody is around: setQuiet()); it never scans for remembered headphones
+// (ReconnectPlanner). All along, from under a second after the stack
+// starts, it stays connectable (not discoverable) so the headphones can
+// come back by themselves, as they do to a phone. Other devices can't
+// connect in. forgetDevice() clears it. Every page's result is in the
+// serial log: no answer, answered after so long, or answered and why the
+// link then closed (the HCI code).
 // With none remembered it never picks a device by itself (SinkSearch): a
 // release build doesn't scan at all, at the boot or on any ask, and stays
 // quiet, connectable only. A developer build with a name (BT_SINK_NAME)
@@ -200,8 +205,8 @@ public:
   // ---- the Output screen (loop task; carried out on BtAppT) ----
   // What the link is doing (published by BtAppT a few times a second).
   BtLink link() const;
-  // Page the remembered headphones now (a burst of 3 tries, then the
-  // back-off); with none remembered, scan by name for 2 min if there is a
+  // Page the remembered headphones now (an ask's burst of 8 tries, then
+  // the back-off); with none remembered, scan by name for 2 min if there is a
   // name to look for (or Bs), else nothing (nothingToFind()). Undoes
   // disconnect().
   void connect();
