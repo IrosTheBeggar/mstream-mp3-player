@@ -850,14 +850,16 @@ void test_a_cancel_during_the_stats_hold() {
 // end, the overflow's last try, the card away; this is the gate's side of a
 // hold that didn't): nothing released, given up or cancelled meanwhile, the
 // backstop's too; the cancel still ends it. The headphones' wait past its
-// backstop under the hold gives up once the hold is over.
+// backstop under the hold gives up once the hold is over. Both waits run
+// past PlayGate::kBackstopMs, whatever it is (20 s when this was written,
+// 65 s since the headphones' eight tries).
 void test_a_stats_hold_that_lasts() {
   Rig r;
   r.onBluetooth = false;
   r.stats = true;
   r.player.togglePlayPause();
   TEST_ASSERT_EQUAL(Do::Held, r.pass());
-  for (int i = 0; i < 20; ++i) TEST_ASSERT_EQUAL(Do::None, r.pass(5000));
+  for (uint32_t t = 0; t <= PlayGate::kBackstopMs; t += 5000) TEST_ASSERT_EQUAL(Do::None, r.pass(5000));
   TEST_ASSERT_EQUAL(PlayState::Waiting, r.player.state());
   TEST_ASSERT_EQUAL_INT(0, r.audio.playCount);
   r.player.togglePlayPause();
@@ -867,7 +869,7 @@ void test_a_stats_hold_that_lasts() {
   b.stats = true;
   b.player.togglePlayPause();
   TEST_ASSERT_EQUAL(Do::Connect, b.pass());
-  for (int i = 0; i < 6; ++i) TEST_ASSERT_EQUAL(Do::None, b.pass(5000));
+  for (uint32_t t = 0; t <= PlayGate::kBackstopMs; t += 5000) TEST_ASSERT_EQUAL(Do::None, b.pass(5000));
   TEST_ASSERT_EQUAL(PlayState::Waiting, b.player.state());
   b.stats = false;
   TEST_ASSERT_EQUAL(Do::GiveUp, b.pass());
