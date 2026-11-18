@@ -138,14 +138,19 @@ autodj::TopHold s_top;
 // before the block is given back: the hold's caps given back when the
 // largest free block wouldn't take them, and the overflow's arena too (its
 // chunks then one by one, as before the caps: they take the room a piece at
-// a time). The ranges' block asks at every take: while it alone is held
-// (no overflow chunk: a usual log, or the arena given back mid-scan)
-// main.cpp's OutputHold holds no start, so a Play from a stop or a pause
-// opens its decoder under it. The arena and a chunk ask only while a track
-// plays (ListeningStats::pass(): the next track's open, or a skip, is never
-// held): while chunks are held OutputHold holds every other start, and the
-// arena and its chunks are given back in one call, so a start waiting at
-// their take opens nothing under them.
+// a time). Whether a take asks is statsglue::decoderRoom(), which the
+// host's model calls too. The ranges' block asks at every take: while it
+// alone is held (before the overflow's first chunk: a usual log, or a full
+// log's first 40 records) main.cpp's OutputHold holds no start, so a Play
+// from a stop or a pause opens its decoder under it. The arena and a chunk
+// ask only while a track plays (ListeningStats::pass(): the next track's
+// open, or a skip, is never held): while chunks are held OutputHold holds
+// every other start, and the arena and its chunks are given back in one
+// call, so a start waiting at their take opens nothing under them. (The
+// arena is given back mid-scan only by its own NoRoom, which gives the
+// ranges' caps back first; its chunks then hold every start. Else it goes
+// at the fold's end with the ranges' block, or later, the ranges' block
+// waiting for it.)
 bool s_trackPlaying = false;
 static_assert(sg::kDecoderRoomBytes == oggopus::kPageBytes + oggopus::kMaxPacketBytes + oggopus::kFramePacketBytes,
               "the hold's decoder room is the Opus's three buffers (OpusGenerator::allocBuffers())");
@@ -194,8 +199,7 @@ void* topAlloc(size_t bytes) {
   const bool chunk = bytes == sf::kChunkBytes, arena = bytes == sf::kArenaBytes;
   if (chunk) s_tl.uncapped = static_cast<uint8_t>(s_tl.uncapped + s_top.uncap(kTop));
   autodj::CloseReport r;
-  const size_t room = !(chunk || arena) || s_trackPlaying ? sg::kDecoderRoomBytes : 0;
-  void* p = s_top.take(kTop, bytes, &r, !chunk, room, arena);
+  void* p = s_top.take(kTop, bytes, &r, !chunk, sg::decoderRoom(bytes, s_trackPlaying), arena);
   if (r.why == autodj::Close::Full) {
     ++s_tl.outside;
     return p;

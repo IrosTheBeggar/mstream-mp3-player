@@ -222,16 +222,25 @@ enum class ScanWait : uint8_t {
   Join,    // Auto DJ's join Working: the fold carves only where the join doesn't
 };
 
-// A decoder's carves at its open (5.14, the hold's room; the firmware's
-// topAlloc() asks autodj::TopHold::take() for it at every take of the
-// ranges' block, as no start is held while it alone is, and at the
-// arena's or a chunk's while a track plays, its next track's open never
-// held; the caps keep the margin free, not these): the largest, the
-// Opus's three buffers (OpusGenerator::allocBuffers(): oggopus's page,
-// packet and frame, 65,307 + 61,440 + 1,276 B, kept from the session's
-// first .opus on). A FLAC's are about 80 KB and given back at its end; an
-// MP3's are its pinned block's.
+// A decoder's carves at its open (5.14, the hold's room; the caps keep the
+// margin free, not these): the largest, the Opus's three buffers
+// (OpusGenerator::allocBuffers(): oggopus's page, packet and frame, 65,307
+// + 61,440 + 1,276 B, kept from the session's first .opus on). A FLAC's
+// are about 80 KB and given back at its end; an MP3's are its pinned
+// block's.
 constexpr size_t kDecoderRoomBytes = 65307 + 61440 + 1276;
+
+// The room a take of the stats' hold asks (the firmware's topAlloc() gives
+// it to autodj::TopHold::take(); the host's model calls it too). The
+// ranges' block asks at every take: no start is held while it alone is.
+// The overflow's arena and a chunk ask only while a track plays, its next
+// track's open never held; any other start waits while they are held
+// (main.cpp's OutputHold), and they are given back in one call. Told
+// apart by size: the ranges' request is the fold's need (a multiple of 16
+// B) and 4 B, never the arena's or a chunk's.
+constexpr size_t decoderRoom(size_t bytes, bool trackPlaying) {
+  return (bytes != statsfold::kArenaBytes && bytes != statsfold::kChunkBytes) || trackPlaying ? kDecoderRoomBytes : 0;
+}
 
 // Where the glue's blocks go (null: malloc and free).
 struct Memory {
