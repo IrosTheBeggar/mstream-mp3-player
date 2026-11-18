@@ -223,12 +223,14 @@ enum class ScanWait : uint8_t {
 };
 
 // A decoder's carves at its open (5.14, the hold's room; the firmware's
-// topAlloc() asks autodj::TopHold::take() for it while a track plays or a
-// start waits: the next track's open is never held, and the caps keep the
-// margin free, not these): the largest, the Opus's three buffers
-// (OpusGenerator::allocBuffers(): oggopus's page, packet and frame, 65,307 +
-// 61,440 + 1,276 B, kept from the session's first .opus on). A FLAC's are
-// about 80 KB and given back at its end; an MP3's are its pinned block's.
+// topAlloc() asks autodj::TopHold::take() for it at every take of the
+// ranges' block, as no start is held while it alone is, and at the
+// arena's or a chunk's while a track plays, its next track's open never
+// held; the caps keep the margin free, not these): the largest, the
+// Opus's three buffers (OpusGenerator::allocBuffers(): oggopus's page,
+// packet and frame, 65,307 + 61,440 + 1,276 B, kept from the session's
+// first .opus on). A FLAC's are about 80 KB and given back at its end; an
+// MP3's are its pinned block's.
 constexpr size_t kDecoderRoomBytes = 65307 + 61440 + 1276;
 
 // Where the glue's blocks go (null: malloc and free).

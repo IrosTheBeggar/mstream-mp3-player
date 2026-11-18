@@ -29,21 +29,22 @@
 // caps (topAlloc()), so main's own carves made meanwhile go where main puts
 // them where the caps close it (the take's [listen] line says when they
 // don't: a missed cap, no spacers, a hole, the arena's fallback, a
-// decoder's room while a track plays: the caps given back); in the
-// host's model PSRAM's layout is then main's once the hold ends (5.14, fix
-// A, its device re-run owed; the device's B1 runs found it split for the
-// session without the caps). Its budget is internal RAM's margin (11's
-// Internal RAM row): 2,048 B, hence 40 records, not the design's 96
-// (statsfold::kRecords). Against G5's floors (docs/OPUS.md: steady 50 KB,
-// the session's lowest 42 KB, the headphones linked) what counts is the
-// build's .dram0.bss growth over main's (2,344 B over S0's: this object's
-// 2,008 B, the rework's 96 B of statics, Ht's 8 B and the hold's 232 B,
-// s_tl, s_top and the decoder's flag in their fill; 2,096 B as moved), not
-// sizeof alone. At the figures held with a link (METADATA 3.8, 2026-11-04)
-// G5's steady floor was expected to hold with 0-1 KB to spare and the
-// session's floor not shown kept; the move's re-run with the headphones
-// linked (5.14, "Its device re-run") measured both held with about 6 KB
-// to spare at 2,096 B, the fix's 248 B more of it not measured yet.
+// decoder's room, the ranges' block's at every take and the arena's while a
+// track plays: the caps given back); in the host's model PSRAM's layout is
+// then main's once the hold ends (5.14, fix A, its device re-run owed; the
+// device's B1 runs found it split for the session without the caps). Its
+// budget is internal RAM's margin (11's Internal RAM row): 2,048 B, hence
+// 40 records, not the design's 96 (statsfold::kRecords). Against G5's
+// floors (docs/OPUS.md: steady 50 KB, the session's lowest 42 KB, the
+// headphones linked) what counts is the build's .dram0.bss growth over
+// main's (2,344 B over S0's: this object's 2,008 B, the rework's 96 B of
+// statics, Ht's 8 B and the hold's 232 B, s_tl, s_top and the room's flag
+// in their fill; 2,096 B as moved), not sizeof alone. At the figures held
+// with a link (METADATA 3.8, 2026-11-04) G5's steady floor was expected to
+// hold with 0-1 KB to spare and the session's floor not shown kept; the
+// move's re-run with the headphones linked (5.14, "Its device re-run")
+// measured both held with about 6 KB to spare at 2,096 B, the fix's 248 B
+// more of it not measured yet.
 static_assert(sizeof(statsglue::Glue) <= 2048, "the listening stats' resident set is at most 2,048 B (5.14, 11)");
 
 namespace {
@@ -131,15 +132,21 @@ constexpr size_t kTopMarginBytes = 64 * 1024;
 const autodj::TopHold::Hooks kTop = {psramLargest, psramFreeBytes,  psramAlloc,  psramFree,
                                      psramAbove,   kTopMarginBytes, kPoisonBytes};
 autodj::TopHold s_top;
-// A decoder may open while the hold is held (ListeningStats::pass(): a
-// track playing, or a start waiting): the next track's open is never held
-// (main.cpp's OutputHold holds a start, not a track that follows one
-// playing), and the caps keep the margin free, not its blocks. So each take
-// asks the largest decoder's room then (statsglue::kDecoderRoomBytes, the
-// Opus's buffers): the hold's caps given back when the largest free block
-// wouldn't take them, and the overflow's arena too (its chunks then one by
-// one, as before the caps: they take the room a piece at a time).
-bool s_decoderMayOpen = false;
+// A decoder may open while the hold is held, and the caps keep the margin
+// free, not its blocks. So a take asks the largest decoder's room
+// (statsglue::kDecoderRoomBytes, the Opus's buffers) when one may open
+// before the block is given back: the hold's caps given back when the
+// largest free block wouldn't take them, and the overflow's arena too (its
+// chunks then one by one, as before the caps: they take the room a piece at
+// a time). The ranges' block asks at every take: while it alone is held
+// (no overflow chunk: a usual log, or the arena given back mid-scan)
+// main.cpp's OutputHold holds no start, so a Play from a stop or a pause
+// opens its decoder under it. The arena and a chunk ask only while a track
+// plays (ListeningStats::pass(): the next track's open, or a skip, is never
+// held): while chunks are held OutputHold holds every other start, and the
+// arena and its chunks are given back in one call, so a start waiting at
+// their take opens nothing under them.
+bool s_trackPlaying = false;
 static_assert(sg::kDecoderRoomBytes == oggopus::kPageBytes + oggopus::kMaxPacketBytes + oggopus::kFramePacketBytes,
               "the hold's decoder room is the Opus's three buffers (OpusGenerator::allocBuffers())");
 
@@ -184,10 +191,11 @@ void* topAlloc(size_t bytes) {
   // behind the first chunk). kChunkBytes is no other take's size: the arena
   // is 262,080 B, the ranges' request the fold's need + 4 B, need a multiple
   // of 16 (112 B an ACKS row, 80 B a MARK row's ranges: 8 B a log file).
-  const bool chunk = bytes == sf::kChunkBytes;
+  const bool chunk = bytes == sf::kChunkBytes, arena = bytes == sf::kArenaBytes;
   if (chunk) s_tl.uncapped = static_cast<uint8_t>(s_tl.uncapped + s_top.uncap(kTop));
   autodj::CloseReport r;
-  void* p = s_top.take(kTop, bytes, &r, !chunk, s_decoderMayOpen ? sg::kDecoderRoomBytes : 0, bytes == sf::kArenaBytes);
+  const size_t room = !(chunk || arena) || s_trackPlaying ? sg::kDecoderRoomBytes : 0;
+  void* p = s_top.take(kTop, bytes, &r, !chunk, room, arena);
   if (r.why == autodj::Close::Full) {
     ++s_tl.outside;
     return p;
@@ -228,10 +236,13 @@ __attribute__((noinline)) void printTopLines() {
                     which, static_cast<ul>(l.bytes), uncapped);
       continue;
     }
+    // (Why a decoder may open in the hold: the arena's room is asked only
+    // while a track plays, the ranges' at every take.)
+    const char* may = l.bytes == sf::kArenaBytes ? "a track playing" : "a start or a track playing";
     if (r.why == autodj::Close::NoRoom) {
       Serial.printf("[listen] the hold's top block (%s): its %lu B GIVEN BACK at once: with it held no free block "
-                    "takes a decoder's %lu B (a track playing or a start waiting), the hold's %u caps given back "
-                    "first; its chunks one by one, as before the caps%s\n",
+                    "takes a decoder's %lu B (a track playing), the hold's %u caps given back first; its chunks one "
+                    "by one, as before the caps%s\n",
                     which, static_cast<ul>(l.bytes), static_cast<ul>(sg::kDecoderRoomBytes),
                     static_cast<unsigned>(r.uncapped), uncapped);
       continue;
@@ -291,13 +302,13 @@ __attribute__((noinline)) void printTopLines() {
         if (n)
           snprintf(what, sizeof(what),
                    "the %lu B free above it LEFT OPEN: with the hold's caps held no free block takes a decoder's "
-                   "%lu B (a track playing or a start waiting): the hold's %u caps given back, its %lu among them",
-                   f, static_cast<ul>(sg::kDecoderRoomBytes), static_cast<unsigned>(r.uncapped), n);
+                   "%lu B (%s): the hold's %u caps given back, its %lu among them",
+                   f, static_cast<ul>(sg::kDecoderRoomBytes), may, static_cast<unsigned>(r.uncapped), n);
         else
           snprintf(what, sizeof(what),
-                   "with the hold's caps held no free block takes a decoder's %lu B (a track playing or a start "
-                   "waiting): the hold's %u caps given back, none of them its own",
-                   static_cast<ul>(sg::kDecoderRoomBytes), static_cast<unsigned>(r.uncapped));
+                   "with the hold's caps held no free block takes a decoder's %lu B (%s): the hold's %u caps given "
+                   "back, none of them its own",
+                   static_cast<ul>(sg::kDecoderRoomBytes), may, static_cast<unsigned>(r.uncapped));
         break;
       case autodj::Close::Plain:
         snprintf(what, sizeof(what), "carved as before the caps (64 KB kept free under its spacers): nothing closed");
@@ -487,7 +498,7 @@ void ListeningStats::pass(const Pass& p, uint32_t nowMs) {
   if (seekSeen_ && nowMs - seekAt_ >= LibraryUpdate::kSeekQuietMs) seekSeen_ = false;
   playing_ = p.playing;
   waiting_ = p.waiting;
-  s_decoderMayOpen = p.playing || p.waiting;
+  s_trackPlaying = p.playing;
   safePoint_ = LibraryUpdate::safePoint(p.playing, p.waiting, p.trackLeftMs, seekSeen_ ? nowMs - seekAt_ : UINT32_MAX);
   joinWorking_ = p.joinWorking;
   updating_ = p.updating;
