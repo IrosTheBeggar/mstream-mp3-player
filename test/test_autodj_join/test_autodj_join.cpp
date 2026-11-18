@@ -507,10 +507,13 @@ const Join::Config kTiny = {2, 1, 1024};  // two pairs a run, one hash a slice, 
 
 }  // namespace
 
+std::function<bool()> g_topDecoder;  // (topAlloc()'s room: a decoder may open in the hold; libraryUpdates()')
+
 void setUp() {
   Heap::reset();
   g_hashCalls = 0;
   g_modelTop = autodj::TopHold();
+  g_topDecoder = nullptr;
 }
 void tearDown() {}
 
@@ -2823,6 +2826,14 @@ void* allocBeside(size_t n) {
 void probeBeforeWalk(uint32_t call) {
   if (call == 0) g_beside = ModelHeap::alloc(4096);
 }
+// Another task's 512 B carve right after the g_raceAt-th alloc call's (counted in g_besideCalls).
+long g_raceAt = -1;
+void* g_race = nullptr;
+void* allocRacing(size_t n) {
+  void* p = ModelHeap::alloc(n);
+  if (g_besideCalls++ == g_raceAt) g_race = ModelHeap::alloc(512);
+  return p;
+}
 long g_failCall = -1;
 void* allocFailingAt(size_t n) {  // (the g_failCall-th alloc call, counted in g_besideCalls, finds no memory)
   if (g_besideCalls++ == g_failCall) return nullptr;
@@ -2973,6 +2984,44 @@ void test_another_task_s_carve_before_the_cap() {
     TEST_ASSERT_EQUAL_INT(1, hold.held());
     hold.give(hf, block);
     TEST_ASSERT_EQUAL_INT(0, hold.held());
+    TEST_ASSERT_TRUE(sameMap(start, ModelHeap::blocks));
+  }
+  // Another task's carve right after the first cap's, before its walk (a
+  // 512 B block: the cap leaves T's rest, about 1,000 B, whose list comes
+  // before the 1,012 B holes', so it takes the rest's head): the walk meets
+  // it in use above the cap, the caps' footprints short of T's: Left (not
+  // Closed), one cap kept, the rest above that block open; given back (the
+  // block, its cap), the heap as it was with that block.
+  {
+    bootHeap();
+    g_besideCalls = 0;
+    g_raceAt = spacers + 1;  // (cap 1's carve)
+    g_race = nullptr;
+    autodj::TopHold::Hooks hr = kModelTop;
+    hr.alloc = allocRacing;
+    autodj::TopHold hold;
+    autodj::CloseReport r;
+    void* block = hold.take(hr, 1284, &r);
+    g_raceAt = -1;
+    TEST_ASSERT_NOT_NULL(block);
+    TEST_ASSERT_NOT_NULL(g_race);
+    printf("[hold] another task's block at the rest's head before the walk: %s, %u cap (%u B) of T's %u B, %u B "
+           "left open above that block\n",
+           autodj::closeName(r.why), (unsigned)r.caps, (unsigned)r.capBytes, (unsigned)r.aboveBytes,
+           (unsigned)freeAboveOf(g_race));
+    TEST_ASSERT_TRUE(r.why == autodj::Close::Left);
+    TEST_ASSERT_EQUAL_UINT32(1, r.caps);
+    TEST_ASSERT_TRUE(r.capBytes < r.aboveBytes + 4);
+    auto it = std::next(ModelHeap::blocks.find(ModelHeap::offsetOf(block)));
+    void* cap = ModelHeap::mem.data() + it->first + ModelHeap::kHeader;
+    TEST_ASSERT_TRUE(it->second.used);
+    TEST_ASSERT_EQUAL_size_t(ModelHeap::offsetOf(cap) + ModelHeap::kHeader + it->second.size,
+                             ModelHeap::offsetOf(g_race));  // (right above the cap: the rest's head)
+    TEST_ASSERT_TRUE(freeAboveOf(g_race) > 0);
+    TEST_ASSERT_EQUAL_INT(1, hold.held());
+    hold.give(hr, block);
+    TEST_ASSERT_EQUAL_INT(0, hold.held());
+    ModelHeap::release(g_race);
     TEST_ASSERT_TRUE(sameMap(start, ModelHeap::blocks));
   }
   // The walk that doesn't meet the block (its bound reached first): Lost, no
@@ -3246,6 +3295,98 @@ void test_a_block_freed_into_t_between_caps() {
   autodj::CloseReport r2;
   TEST_ASSERT_TRUE(autodj::closeAbove(a, nullptr, c, &c2, &r2) == autodj::Close::Closed);
   TEST_ASSERT_EQUAL_UINT32(2, c2.n);
+}
+
+// U13 (the recheck, hazard 5): a decoder's room. While one may open in the
+// hold (the firmware's track playing or start waiting) a take asks room for
+// the Opus's buffers (statsglue::kDecoderRoomBytes): in a roomy heap the
+// caps stay (Closed); where the caps would leave no free block for them,
+// every cap the hold holds is given back (Room: T open again, the older
+// block's too), and a block that can yield (the arena) is given back too
+// when even that isn't enough (NoRoom: nullptr, nothing more held). Without
+// the room the same heap keeps the caps, and the Opus doesn't open.
+void test_a_decoder_s_room() {
+  const size_t room = statsglue::kDecoderRoomBytes;
+  auto opusOpens = [] {
+    std::vector<void*> got;
+    for (size_t n : {65307, 61440, 1276})
+      if (void* p = ModelHeap::alloc(n)) got.push_back(p);
+    const bool all = got.size() == 3;
+    for (void* p : got) ModelHeap::release(p);
+    return all;
+  };
+  // Roomy (the boot's heap): the room asked changes nothing.
+  {
+    bootHeap();
+    autodj::TopHold hold;
+    autodj::CloseReport r;
+    void* p = hold.take(kModelTop, 1284, &r, true, room);
+    TEST_ASSERT_TRUE(r.why == autodj::Close::Closed);
+    TEST_ASSERT_EQUAL_UINT32(0, r.uncapped);
+    TEST_ASSERT_TRUE(opusOpens());
+    hold.give(kModelTop, p);
+  }
+  // One free block of 180 KB: the ranges' caps would leave about 110 KB.
+  for (bool yield : {false, true}) {
+    holesThenTop({}, 180 * 1024);
+    const Map start = ModelHeap::blocks;
+    autodj::TopHold hold;
+    autodj::CloseReport r;
+    void* p = hold.take(kModelTop, 1284, &r, true, room, yield);
+    printf("[hold] a decoder's room, one free block of 184,320 B, the ranges' block%s: %s, %u caps given back, the "
+           "largest free block %u B\n",
+           yield ? " (may yield)" : "", autodj::closeName(r.why), (unsigned)r.uncapped, (unsigned)ModelHeap::largest());
+    if (yield) {
+      // (the caps gone, still short: the block given back too)
+      TEST_ASSERT_NULL(p);
+      TEST_ASSERT_TRUE(r.why == autodj::Close::NoRoom);
+      TEST_ASSERT_EQUAL_INT(0, hold.held());
+      TEST_ASSERT_TRUE(sameMap(start, ModelHeap::blocks));
+      continue;
+    }
+    TEST_ASSERT_NOT_NULL(p);
+    TEST_ASSERT_TRUE(r.why == autodj::Close::Room);
+    TEST_ASSERT_TRUE(r.caps > 0 && r.uncapped == r.caps);
+    TEST_ASSERT_EQUAL_size_t(r.aboveBytes, freeAboveOf(p));  // (T open again, whole)
+    TEST_ASSERT_TRUE(opusOpens());                            // (in T and under the block)
+    TEST_ASSERT_EQUAL_INT(1, hold.held());
+    hold.give(kModelTop, p);
+    TEST_ASSERT_TRUE(sameMap(start, ModelHeap::blocks));
+  }
+  // A full log's hold, one free block of 480 KB: the ranges' block (closed:
+  // room left), then the arena. Without the room both stay capped and the
+  // Opus finds no room; with it, every cap is given back (the ranges' too),
+  // and, that short as well, the arena is given back: its chunks would come
+  // one by one. The ranges' block stays held, open.
+  for (bool asked : {false, true}) {
+    holesThenTop({}, 480 * 1024);
+    const Map start = ModelHeap::blocks;
+    autodj::TopHold hold;
+    autodj::CloseReport rr, ra;
+    void* ranges = hold.take(kModelTop, 1284, &rr, true, asked ? room : 0);
+    TEST_ASSERT_TRUE(rr.why == autodj::Close::Closed);
+    void* arena = hold.take(kModelTop, statsfold::kArenaBytes, &ra, true, asked ? room : 0, true);
+    printf("[hold] a decoder's room, one free block of 491,520 B, the ranges' block (%u caps) then the arena, the "
+           "room %s: %s, %u caps given back; the largest free block %u B: the Opus %s\n",
+           (unsigned)rr.caps, asked ? "asked" : "not asked", autodj::closeName(ra.why), (unsigned)ra.uncapped,
+           (unsigned)ModelHeap::largest(), opusOpens() ? "opens" : "DOESN'T OPEN");
+    if (!asked) {
+      TEST_ASSERT_TRUE(ra.why == autodj::Close::Closed);
+      TEST_ASSERT_FALSE(opusOpens());  // (the hazard: the caps keep the margin, not its room)
+      hold.give(kModelTop, ranges);
+      hold.give(kModelTop, arena);
+    } else {
+      TEST_ASSERT_NULL(arena);
+      TEST_ASSERT_TRUE(ra.why == autodj::Close::NoRoom);
+      TEST_ASSERT_EQUAL_UINT32(rr.caps + ra.caps, ra.uncapped);  // (the ranges' caps given back too)
+      TEST_ASSERT_EQUAL_INT(1, hold.held());
+      TEST_ASSERT_EQUAL_size_t(rr.aboveBytes, freeAboveOf(ranges));  // (its T open again)
+      TEST_ASSERT_TRUE(opusOpens());
+      hold.give(kModelTop, ranges);
+    }
+    TEST_ASSERT_EQUAL_INT(0, hold.held());
+    TEST_ASSERT_TRUE(sameMap(start, ModelHeap::blocks));
+  }
 }
 
 // U10: no free block takes the block (no 262 KB one for the overflow's
@@ -3894,6 +4035,18 @@ struct StatsRun {
                              // piece (the old one's blocks freed first), its save, ready(); then the Dc
   bool takeHoles = false;    // (remount) every free block under 64 KB taken by a kept block first (both twins): the
                              // ranges' block then sits on the spacers' top
+  bool nextOpus = false;     // (remount) an MP3 playing, not a FLAC (no PSRAM held: its start's 4 KB probe freed at
+                             // once), the next track the session's first Opus, opening after the re-read's piece
+                             // `nextAt` (never held: OutputHold holds a start, not a track that follows one playing):
+                             // its start's probe, then its three buffers (kOpusAsks), kept for the session
+                             // (OpusGenerator's, made at the first .opus); one that finds no room: those carved given
+                             // back (allocBuffers()), the track skipped (nextShort)
+  uint32_t nextAt = 0;
+  size_t less = 0;           // (remount) the session's blocks this much more before it (a block kept: less free at
+                             // the remount, a larger library or a library update's growth)
+  bool fe61db9 = false;      // fe61db9's hooks (fe61db9Top(): the spacers keeping 64 KB alone, no caps, no arena: the
+                             // chunks one by one; each block given back at once)
+  uint32_t nextShort = 0;    // (nextOpus) the Opus's open found no room
   const std::vector<ModelHeap::Event>* replayRead = nullptr;  // (statsOff) the stats' read replayed at its place,
                                                               // its blocks never freed kept (MARK's)
   std::vector<ModelHeap::Event> readEvents;  // the boot's read's carves and frees (the stats' run)
@@ -3993,15 +4146,23 @@ cc::msmf::Acks statsAcks(uint32_t rows, uint32_t seq0) {
 // the free block they left above it closed by caps; given back bottom-up.
 // The overflow's chunks one by one (no room for its arena) as fe61db9
 // carved them: the hold's caps given back first, kMargin alone kept,
-// nothing closed. g_topAbove: the free block the last take found above its
-// block (T, as fe61db9's left it open); g_topClose: what that take did.
+// nothing closed. While a decoder may open (g_topDecoder: the firmware's
+// track playing or start waiting), a decoder's room (the recheck): the
+// hold's caps given back when the largest free block wouldn't take the
+// Opus's buffers, and the arena too (its chunks then one by one).
+// g_topAbove: the free block the last take found above its block (T, as
+// fe61db9's left it open); g_topClose: what that take did.
 size_t g_topAbove = 0;
 autodj::Close g_topClose = autodj::Close::Nothing;
+void* fe61db9Top(size_t n);
+// fe61db9's hooks for the glue (it had no arena: the chunks one by one).
+void* fe61db9NoArena(size_t n) { return n == statsfold::kArenaBytes ? nullptr : fe61db9Top(n); }
 void* topAlloc(size_t n) {
   const bool chunk = n == statsfold::kChunkBytes;
   if (chunk) g_modelTop.uncap(kModelTop);
   autodj::CloseReport r;
-  void* p = g_modelTop.take(kModelTop, n, &r, !chunk);
+  const size_t room = g_topDecoder && g_topDecoder() ? statsglue::kDecoderRoomBytes : 0;
+  void* p = g_modelTop.take(kModelTop, n, &r, !chunk, room, n == statsfold::kArenaBytes);
   g_topAbove = r.aboveBytes;
   g_topClose = r.why;
   return p;
@@ -4111,10 +4272,10 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     statsEnv.card = statsCard.get();
     statsglue::Memory m;
     m.alloc = ModelHeap::alloc;
-    m.top = topAlloc;
-    m.topRelease = topRelease;
+    m.top = stats->fe61db9 ? fe61db9NoArena : topAlloc;
+    m.topRelease = stats->fe61db9 ? ModelHeap::release : topRelease;
     m.release = ModelHeap::release;
-    m.keep = ModelHeap::alloc;  // (fix G: MARK's block where any session block goes)
+    m.keep = stats->fe61db9 ? fe61db9Top : ModelHeap::alloc;  // (fix G: MARK's block where any session block goes)
     m.keepRelease = ModelHeap::release;
     glue.reset(new statsglue::Glue(*statsFs, statsEnv, m));
     const size_t free0 = ModelHeap::freeBytes();
@@ -4195,6 +4356,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   // The hold's cases: main's own carves (StatsRun::uiAt, queueAt), kept for
   // the run, their offsets into `keptInto` while the hold is recorded.
   std::vector<size_t>* keptInto = nullptr;
+  bool mp3 = false;  // an MP3 playing or its start waiting (it holds no PSRAM: a decoder may open all the same)
   auto keep = [&](size_t n) {
     void* p = ModelHeap::alloc(n);
     TEST_ASSERT_NOT_NULL(p);
@@ -4209,6 +4371,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   auto carveQueue = [&] {
     keep(1100);  // QueueModel's entries
     keep(1180);  // ... and its undo
+    mp3 = true;
     // An MP3's start: its 4 KB probe (none while overflow chunks hold it).
     if (!(glue && stats->startWaits && glue->overflowHeld())) ModelHeap::release(ModelHeap::alloc(4096));
   };
@@ -4225,6 +4388,21 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     int fileOf = -1;
     auto afterPiece = [&](uint32_t k) {
       if (again) {
+        if (stats->nextOpus && k == stats->nextAt) {
+          // The next track the session's first Opus (the MP3 gives nothing
+          // back): its start's probe, then its buffers, all or none.
+          ModelHeap::release(ModelHeap::alloc(4096));
+          std::vector<void*> got;
+          for (size_t n : kOpusAsks)
+            if (void* p = ModelHeap::alloc(n)) got.push_back(p);
+          if (got.size() == kOpusAsks.size()) {
+            opusBlocks = got;
+          } else {
+            ++stats->nextShort;
+            for (void* p : got) ModelHeap::release(p);
+          }
+          return;
+        }
         // The next track's FLAC opens (the old one's blocks freed first).
         if (k == 0 && !flacBlocks.empty()) {
           for (void* p : flacBlocks) ModelHeap::release(p);
@@ -4269,6 +4447,9 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     stats->arena = glue->fold().inArena();
   };
   auto playing = [&] { return !opusBlocks.empty() || !flacBlocks.empty(); };
+  // topAlloc()'s room: a decoder may open in the hold (the firmware's
+  // ListeningStats::pass(): a track playing or a start waiting).
+  g_topDecoder = [&] { return mp3 || playing(); };
   auto statsBootSave = [&](bool boot) {
     const bool ui = boot && (stats->uiAt == StatsRun::kInSave || stats->uiAt == StatsRun::kBetweenTries);
     if (!glue) {
@@ -4371,8 +4552,15 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     // A FLAC playing (opened after the boot's join), then a remount mid-
     // session: the stats read stats.bin again and fold the log again (all
     // under the card's MARK) holding the ranges' block, the next track's
-    // FLAC opening in that hold; then the Dc.
-    carveInto(kFlacAsks, &flacBlocks);
+    // FLAC opening in that hold; then the Dc. (nextOpus: an MP3 playing,
+    // the next track an Opus.)
+    if (stats->less) keep(stats->less);
+    if (stats->nextOpus) {
+      ModelHeap::release(ModelHeap::alloc(4096));  // (the MP3's start: its probe)
+      mp3 = true;
+    } else {
+      carveInto(kFlacAsks, &flacBlocks);
+    }
     if (stats->takeHoles) takeHolesInto(&holdKept);
     keptInto = &stats->again.kept;
     statsScan(true);
@@ -4479,6 +4667,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     glue.reset();  // (MARK's block given back with its store)
   }
   if (stats) stats->heldAtEnd = g_modelTop.held();
+  g_topDecoder = nullptr;
   return u;
 }
 
@@ -4967,10 +5156,85 @@ void test_the_hold_leaves_main_s_layout() {
     printf("[hold] %s: the boot %s; the re-read's overflow %u chunks, %s\n", n5, a.behind ? "behind" : "NOT behind",
            (unsigned)a.againChunks,
            a.againArena ? "in the arena (carved mid-session)"
-                        : "one by one (no free block of 262 KB mid-session: open question 5, fe61db9's layout)");
+                        : "one by one (the arena given back for a decoder's room, a FLAC playing, or no free block "
+                          "of 262 KB mid-session: fe61db9's layout)");
     TEST_ASSERT_TRUE_MESSAGE(a.behind, n5);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(statsfold::kMaxChunks, a.againChunks, n5);
     if (!a.againArena) bad = before;  // (the fallback: printed, the owner's call)
+  }
+  // Y5d (the recheck, hazard 5): Y5b with an MP3 playing (it holds no
+  // PSRAM) and the next track the session's first Opus, opening in the
+  // re-read's hold (never held: OutputHold holds a start, not a track that
+  // follows one playing) after its first piece (the arena held: every
+  // chunk's room) or its last (fe61db9's 16 chunks held too), its three
+  // buffers kept for the session; with the session's blocks 0 to 224 KB more
+  // (less free at the remount: a larger library, a library update's growth),
+  // the holes taken and not. Against main's twin and fe61db9's hooks: the
+  // Opus never short where fe61db9's hold left it room (the caps keep the
+  // margin free, not a decoder's blocks: topAlloc()'s room gives them back,
+  // and the arena, when the largest free block wouldn't take them), never on
+  // main; at the model's own session (no more blocks) main's layout.
+  {
+    uint32_t cases = 0, mains = 0, fixShort = 0, oldShort = 0, yielded = 0, worseN = 0, noRoomBoth = 0;
+    std::string worse;
+    for (uint32_t at : {0u, 102u}) {
+      for (bool holes : {true, false}) {
+        for (size_t kb = 0; kb <= 224; kb += 16) {
+          StatsRun y = fullLog;
+          y.uiAt = StatsRun::kBeforeJoin;
+          y.bootFails = static_cast<int>(statsglue::kBootTries);
+          y.remount = true;
+          y.takeHoles = holes;
+          y.nextOpus = true;
+          y.nextAt = at;
+          y.less = kb * 1024;
+          y.scanFile = true;
+          StatsRun a = y, m = y, o = y;
+          m.statsOff = true;
+          o.fe61db9 = true;
+          libraryUpdates(Dj::Placed, saved, records, card, 0, MoodRun(), &a);
+          libraryUpdates(Dj::Placed, saved, records, card, 0, MoodRun(), &m);
+          libraryUpdates(Dj::Placed, saved, records, card, 0, MoodRun(), &o);
+          char w[112];
+          std::snprintf(w, sizeof(w), "Y5d the Opus after piece %u, the holes %s, %u KB less free", (unsigned)at,
+                        holes ? "taken" : "not taken", (unsigned)kb);
+          TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, m.nextShort, w);  // (main: no hold)
+          TEST_ASSERT_TRUE_MESSAGE(a.behind, w);
+          // (The re-read folds what fe61db9's did: the whole log wherever it did; short of room for its
+          // chunks, both out of memory.)
+          TEST_ASSERT_TRUE_MESSAGE(o.againChunks < statsfold::kMaxChunks || a.againChunks == statsfold::kMaxChunks, w);
+          noRoomBoth += a.againChunks < statsfold::kMaxChunks ? 1 : 0;
+          ++cases;
+          fixShort += a.nextShort;
+          oldShort += o.nextShort;
+          yielded += a.againArena ? 0 : 1;
+          const bool same = !a.nextShort && a.again.largest == m.again.largest && a.again.free64 == m.again.free64 &&
+                            a.again.joined == m.again.joined && a.again.layout.filters == m.again.layout.filters &&
+                            a.again.held == 0 && a.heldAtEnd == 0;
+          mains += same ? 1 : 0;
+          if (a.nextShort && !o.nextShort) {
+            ++worseN;
+            worse += std::string(worse.empty() ? "" : "; ") + w;
+          }
+          if (kb == 0) {
+            printf("[hold] %s: the Opus %s (fe61db9's %s); after the hold %u B (main's %u B, fe61db9's %u B), joined "
+                   "%u B (main's %u B, fe61db9's %u B); the re-read's overflow %s: %s\n",
+                   w, a.nextShort ? "SHORT" : "opened", o.nextShort ? "SHORT" : "opened", (unsigned)a.again.largest,
+                   (unsigned)m.again.largest, (unsigned)o.again.largest, (unsigned)a.again.joined,
+                   (unsigned)m.again.joined, (unsigned)o.again.joined,
+                   a.againArena ? "in the arena" : "one by one (the arena given back)", same ? "main's" : "NOT main's");
+            TEST_ASSERT_TRUE_MESSAGE(same, w);  // (the model's session: the room kept with the caps held)
+          }
+        }
+      }
+    }
+    printf("[hold] Y5d, %u cases (the Opus after the first piece or the last, the holes taken or not, 0-224 KB less "
+           "free): the Opus short %u (fe61db9's hooks %u; main's 0), short where fe61db9's opened %u; main's layout "
+           "%u; the arena given back for the room %u; the re-read short of room for its chunks %u (fe61db9's too)\n",
+           (unsigned)cases, (unsigned)fixShort, (unsigned)oldShort, (unsigned)worseN, (unsigned)mains,
+           (unsigned)yielded, (unsigned)noRoomBoth);
+    TEST_ASSERT_TRUE_MESSAGE(worse.empty(), ("the Opus short where fe61db9's hooks left it room: " + worse).c_str());
+    TEST_ASSERT_TRUE(oldShort > 0);  // (the case reaches where fe61db9's hold leaves no room either)
   }
   // Y5c: a remount on a card past 8 MARK rows (40): the re-read carves no
   // MARK block (the boot's covers its rows and 8 more), its hold the
@@ -5752,6 +6016,7 @@ int main(int, char**) {
   RUN_TEST(test_no_spacers_no_cap);
   RUN_TEST(test_a_block_freed_into_t_between_caps);
   RUN_TEST(test_no_block_asks_no_carve);
+  RUN_TEST(test_a_decoder_s_room);
   RUN_TEST(test_the_walk_above);
   RUN_TEST(test_the_placement_in_a_model_heap);
   RUN_TEST(test_a_library_update_in_a_model_heap);
