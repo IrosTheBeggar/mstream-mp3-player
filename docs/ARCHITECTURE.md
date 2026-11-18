@@ -2879,7 +2879,10 @@ strings.
   above each closed by caps found by a heap walk (LISTENING-STATS 5.14's
   fix A: a carve made meanwhile, the first frame's canvas or a queue,
   would otherwise land there and split the largest free block for the
-  session), and gives them back at the fold's end, bottom-up (the arena
+  session; while a track plays or a start waits the caps are given back,
+  and the arena, when the largest free block wouldn't then take the
+  Opus's buffers: the next track's decoder opens in the hold, never
+  held), and gives them back at the fold's end, bottom-up (the arena
   once the boot's save lands, or after its fourth try; the ranges' block
   waits for it).
   Only a fold past the 40 records holds chunks (the scan's pieces reserve
