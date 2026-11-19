@@ -7,177 +7,115 @@ ELF {{ELF}} for this build; ELF {{DIO_ELF}} for the `-dio-full.bin`).
 Source for this binary: {{SOURCE_URL}}, and with its libraries in
 `{{SOURCE_TAR}}` below.
 
-## What's new in 0.12.0
+## What's new in 0.14.0
 
-- **The power button turns the screen off.** A short press of the
-  button on the Core2's side turns a lit screen off at once, bright or
-  dim, and the music plays on; another short press lights it again, as
-  before. With **Screen off after: Never**, that is now how you turn the
-  screen off. While something keeps the screen lit (the start-up
-  screen, the touch calibration, a pairing, a play waiting for the
-  headphones, or a computer showing something on it), the press leaves
-  it on. A screen held lit goes off all the same: under the idle
-  power-off's warning, the sleep timer's fade, or the Pair screen's
-  search, which the press stops. A long hold still turns the Core2 off.
-- **The A-Z rail follows your finger.** On a long list, a finger
-  sliding down the letter rail moves its thumb and letter at every
-  frame, and the list catches up just behind: 60 ms after its last
-  draw, or at once when the finger rests. In 0.11.0 the thumb moved
-  only as often as the whole list could be drawn, 15 times a second on
-  the Artists list of a card of about 19,500 tracks, where it now moves
-  19 to 30 times; and the player's work on the card (checking it for
-  new music, reading tags) went on under the finger, on the bus the
-  screen shares. That work now waits until the list has been still for
-  half a second. Measured with nothing playing.
-- **A card that comes out while music plays no longer runs the queue
-  out.** In 0.11.0 every track after it failed to open, about 2 s each,
-  with a note for each, until the whole queue had failed, and the
-  player kept that as its place: a 25 s pull ended a 12-track album.
-  Now the screen lights with "Still no card: is it all the way in?" and
-  the player holds at the next track, still playing but silent: it
-  tries it again 2 s later, then after 4, 8 and 16 s, then every 30 s,
-  and once the card is back the music starts again by itself, from
-  where that track would have started. Still out after 2 minutes, it
-  pauses there, and Play tries again. The track that was playing when
-  the card came out still stops there, the rest of it lost. Each try
-  with the card out can hold the screen for a second or two, and the
-  idle power-off waits up to 2 minutes longer. Another card put in
-  meanwhile makes the player restart for it, as before, with no track
-  skipped. And a count of the free space asked from a computer over USB
-  now notices that the card was out: in 0.11.0 the player could then
-  write over files a computer had copied to it meanwhile.
-- **A card that misses a read for a moment no longer cuts the track.**
-  In 0.11.0 a single read the card didn't answer ended the track that
-  played, with no word, and restarted the player if it was working on
-  the card in the background. Now the player asks the card there and
-  then and, finding it back, reads again: the track plays on, and the
-  covers, Auto DJ and the work in the background carry on the same way.
-  A part of the card that keeps failing still ends the track.
-- **A card read that fails no longer costs you the queue.** In 0.11.0
-  a start that couldn't read the saved queue, or had no memory free to
-  read it, put the whole library in its place; one that couldn't read
-  the library's files cut the queue to the tracks it could still see
-  (on a test card, to nothing, for good); and a save the card refused
-  could leave the saved queue empty or gone. Now a queue it can't read
-  is left as it is on the card: the player reads it again a few times
-  over about 1.4 s, then starts with an empty queue, and Now Playing and
-  the Queue tab say "Card read failed at startup: restart to try
-  again". A restart that reads it brings it back, at its track and
-  second; until then, anything you play or add replaces it, about 2 s
-  later. A queued track the library leaves out (from a folder it
-  couldn't read) stays in the queue under its file name, with no
-  artist, album or cover, and plays, unless the card says it is gone. A
-  save counts only once its file is whole on the card; one that fails
-  is tried again 10 s later, then twice as long each time up to 5
-  minutes, and at once when the card is back. And when a card put back
-  makes the player restart ("Card back: restarting", when it was
-  working on the card in the background), it now waits up to 30 s for
-  the queue's save to work: 0.11.0 restarted 1.2 s on, and the queue's
-  last changes could be lost.
-- **A card with a bad spot no longer restarts the player at every
-  start.** A part of the card that never answers, read at every start,
-  could restart the player over and over (every 8 to 35 s on a test
-  card). Now such a read fails and the player carries on, keeping what
-  is on the card (below). Should the card make it restart twice in a
-  row all the same, the next start skips its work on the card and says
-  "Card read failed at startup: restart to try again" for a few
-  seconds; turning the Core2 off and on clears that, as do 30 minutes
-  of running. A card that keeps going silent (a dozen times) is left
-  alone until a restart: the player reads no covers, Auto DJ index or
-  waveforms from it and does no work on it in the background, and the
-  music plays on. Also fixed: a card slow to answer at the start passing
-  for another card, and one write the card refused stopping every track
-  from opening (if it keeps refusing, the player now stops writing to it
-  until a restart, and plays on).
-- **A card read that fails at a start no longer costs the library.** In
-  0.11.0 it could pass for a file that was gone: the player forgot the
-  tags it had read and read every file's again (about 3 to 6 minutes at
-  20,000 tracks), and on a card the transfer filled it dropped the
-  transfer's tags too, then did it all again at the next start. Now it
-  reads again a few times over about 1.4 s, then keeps what is on the
-  card: it plays from the library it saved (failing that, from the
-  folders by their names, for that session), saves nothing over it, and
-  leaves finding new music and reading tags to a start that can read
-  the card. Rescan, on the Output tab, says why: "Card read failed at
-  startup: restart to try again", the one new message, a machine
-  translation in the nine other languages like the rest.
-- **A stopped track shows its length.** A track nothing has played yet
-  since the start (no place saved in it) showed a dotted line and
-  "--:--" on Now Playing; it now shows 0:00 and the track's length, and
-  a tap on the line picks where Play will start, kept as a paused
-  track's place is. The length can read a second more until the track
-  plays. A track the library doesn't list keeps the dots.
-- **Taps answer sooner.** A press on a menu's row, the sleep timer's or
-  the volume panel's buttons or a letter of the A-Z grid draws that
-  control alone, in 2 to 10 ms where 0.11.0 took 36 to 58 ms, and a
-  dialog's buttons do the same; Now Playing's buttons draw their own
-  patch (3 ms for the volume, 12 before). A track change no longer draws
-  the whole Library or Queue list again (50 to 110 ms), only the rows
-  whose mark changes; going from a scrolled list to Now Playing takes
-  53 ms (76 before); a setting's tap draws its row alone (12 ms, 49
-  before); and the lines the player writes to its USB serial port no
-  longer hold it up 10 to 30 ms at a tap. A setting a tap changes is
-  saved once the taps rest (1.5 s after the last, 6 s at most), and
-  before the player restarts or turns itself off, rather than under the
-  finger.
-- **Now Playing's line can be the track's waveform.** On a card where
-  the transfer software wrote the tracks' waveforms (from mStream's
-  waveform data, as `/.mstream/waves-<gen>.bin`), the progress line is
-  the playing track's shape: 99 mirrored bars, what has played in
-  colour, a thin playhead. A tap or a drag on it seeks as on the line.
-  A track without one, or a card without the file, keeps the plain line
-  in the same place. **The transfer software isn't available yet,** so
-  no card has one today. From 0.12.0 the player says on the card that it
-  reads them (`read.mpwf=1` in `/.player/device.txt`, checked at each
-  start): that is how the transfer software will know to write them, so
-  once it is out, start the player once with the card in before the
-  first transfer. The times under the line sit 5 px lower, with or
-  without bars. The file's format, for any transfer software, is
-  `docs/WAVEFORM-INDEX.md` in the source.
-- **Auto DJ with an index rides out card faults and library updates**
-  (an index too needs the transfer software). A card read that failed
-  as Auto DJ opened its index, or read the transfer's files, left its
-  picks random for the whole session; it now tries again 2, 10 and 30 s
-  later, keeping its session, before it says "Can't read the Auto DJ
-  index". After a library update, Auto DJ could say "Not enough memory
-  for the Auto DJ index", with memory to spare, and pick at random until
-  a restart: fixed.
-- **The serial console says more about a stutter,** for bug reports:
-  the stats line counts the breaks in the sound beside its underruns
-  and gives a stall of any length whole, and the Bluetooth line the
-  link's signal (`rssi=`) and power mode (`mode=`). `@status`, which a
-  computer asks over USB, also says which transfer's card is in (`cid=`,
-  `-` on a card filled by hand).
-- Tested on a Core2 v1.3 as each change went in (2026-10-30 to 11-05):
-  the card's faults on a spare 32 GB card of 19,412 tracks with made-up
-  names, through test builds that leave chosen card commands unanswered
-  or failing (about 210 starts for the restarts alone), and by hand,
-  pulling the card and putting it or another one back, during a
-  Bluetooth play too; the saved queue compared by CRC after the faults,
-  and once after a Windows disk check (`chkdsk /f`); the screen's
-  timings on a card of about 19,500 tracks; the waveforms with test
-  shapes, and once with a file from a test build of the transfer
-  software; the power button by script and by hand; and, on this
-  release's code, the update from the published 0.11.0 and back again:
-  the library, the queue, the second a stopped track was paused at and
-  the settings kept both ways, nothing rebuilt.
-- **The firmware is a little bigger:** about 4.40 MB, up from 4.36 MB
-  in 0.11.0, for the waveforms and the card's checks (70 % of the space
-  it has on the flash, 69 % before). The steps below are the same.
-- **The update from 0.11.0** keeps the settings, the paired headphones,
-  the queue and the library as they are: nothing is rebuilt. From
-  0.10.0 it is the same, Auto DJ starting off, its settings at their
-  defaults. A card that 0.9.0 or 0.8.0 used last gets 0.10.0's one
-  rebuild of the library from the tags read before (about 10 s for
-  20,000 tracks; no file is read again, and the queue is kept), and a
-  unit updated from 0.9.0 or older stays in English, every setting
-  kept, until a language is picked in Output > Language. A card that
-  0.7.0 used last gets 0.8.0's first start instead (0.8.0's notes say
-  what it does).
-- **Going back to 0.11.0 later** keeps them too: 0.12.0 saves the
-  settings, the queue and the library as 0.11.0 does. 0.11.0 writes its
-  own `device.txt`, which doesn't ask for waveforms: start 0.12.0 once
-  with the card in before a transfer.
+- **The player formats a card itself.** A card it can't use, exFAT (as
+  cards of 64 GB and up come), NTFS, GPT (a card a Mac erased whole) or
+  one it can't read, now shows **Format...** beside Try again, on the
+  Library, the Queue and Now Playing. It asks twice: "Format this card?"
+  (Format... or Cancel), then "Erase the whole card?", where **Hold to
+  erase**, the red button, has to be held for 2 seconds by a hand: it
+  fills from the left while the finger stays on it, and a tap, a run of
+  taps, a lift or a slide off it does nothing. Either question goes away
+  with Cancel, or by itself after a minute with no answer. Then the
+  player restarts, shows "Formatting the card" over a bar ("Leave the
+  card in and the player on"), and makes the card FAT32 on an MBR with
+  an empty `/music`: 7.8 s for a 32 GB card on the Core2, a few minutes
+  for a card of a terabyte or two (estimated: only the 32 GB card was
+  formatted). "Card formatted: ready for your music" says it is done.
+  Everything on the card is erased, even what the player can't read; a
+  card it can't read at all is first sent to a computer ("Check it on a
+  computer first": a disk check may save what is on it), and erasing it
+  is the second step. With no card in the slot, there is no Format...
+  button. So an exFAT, NTFS or GPT card no longer needs a computer
+  ([The microSD card](#the-microsd-card), below).
+- **The player has a clock, set by a computer.** The Core2's own clock
+  chip keeps the time, in UTC; a computer on USB sets it (below), and
+  the player believes it from then on, at every start. It is there to
+  date the play history; nothing on the screen shows it yet. Until a
+  computer sets it once, the clock reads as unset, even when the chip
+  has a time: the Core2 comes with one, and other firmware sets it to
+  local time, hours out read as UTC.
+- **The player keeps a play history on the card,** in
+  `/.player/plays.jnl`, for the transfer software: each track played
+  from the card, when it started (once the clock is set), how long it
+  played, how it ended (to its end, skipped, or stopped) and whether
+  Auto DJ or the shuffle picked it. A sync reads it and reports the
+  plays to the mStream server the card came from, which then tells the
+  player which it has, so the player can clear them. Each play is
+  written about 2 s into the next track, away from the moment one track
+  joins the next (15 to 17 ms a play on the Core2); plays under a
+  second aren't kept, nor the built-in tracks. The transfer software
+  isn't available yet: until it is, the history only grows, to about
+  13,000 plays (1 MB on the card), and the oldest 6,500 then make room.
+- **A touch on the dark screen does nothing now, by default.** Output
+  has a new row after Brightness, **Touch when off**, with three
+  choices (a tap takes the next): **Nothing**, the default, so a pocket
+  or a bag can't light the screen or keep the player from turning
+  itself off: the power button turns it on; **Wake**, what every touch
+  did before 0.14.0; **Track**, a screen of what is playing for 10 s,
+  with nothing to tap (the cover, the title, the artist and the album,
+  the time and the waveform, and the output, volume and battery at the
+  top); another touch shows it 10 s more, and the power button opens
+  the whole screen. A dim screen still brightens at a touch, whatever
+  the choice, and the headphones lost, a track that failed or USB
+  plugged in or out still light it.
+- **Smoother lists.** A moving list draws a frame for each refresh of
+  the panel, about 70 a second, instead of 30, timed to the panel's
+  scan so it doesn't show a frame half drawn, and a row draws in 3.0 to
+  3.4 ms instead of 5.6. A fling on the Artists list of a 1 TB card
+  went from 30 to 68 frames a second with nothing playing, and from 30
+  to 54 with an MP3 playing; the A-Z rail's scrub follows the finger 16
+  times a second instead of 6.6 (8.5 instead of 5.3 with an MP3). The
+  lists feel the same: the same speed cap, the same snap to a row.
+- **For a computer on USB** (the software that talks to the player:
+  `docs/HOST-STATUS.md` in the source): `@time` asks the player's time
+  or sets it (`@time <unix-ms>`, answered `@time ok`); `@format` puts
+  the format's two questions on the player's screen, and only the
+  listener's tap and 2 s hold there format the card: nothing a computer
+  sends can erase it. `@status` gains `clock=ok` or `clock=unset`, and
+  `/.player/device.txt` says `history=1` (this firmware keeps a play
+  history). An older firmware answers `@time` and `@format` with
+  `@err 7`.
+- **The new messages** (the format's, Touch when off and its choices)
+  are in all ten languages, machine translations in the nine other
+  than English; the French and Polish "Hold to erase" are shortened to
+  fit their button.
+- Tested on a Core2 v1.3 (2026-11-09 and 10), in a silent test mode:
+  on a spare 32 GB card, the clock read at each start and set from a
+  computer (the chip had lost 74.6 s in about three weeks); plays
+  written while tracks played back to back; the format's questions
+  cancelled and left to their minute (nothing formatted), and holds the
+  console made that never format (a computer can't stand in for a
+  hand); a real format by hand, 7.8 s, the card then checked on a
+  computer (one FAT32 partition, no errors); the update from settings
+  written by earlier test builds. Then, with no card in the slot, the
+  update from settings 0.13.0 wrote: every setting kept, the clock unset
+  until a computer set it, then kept through a restart. Before they were
+  merged: Touch when off's three choices, and the lists, with every
+  number above, on the 1 TB card.
+  **Not checked on the Core2 for this release:** formatting an exFAT or
+  a GPT card (only the host tests format such cards, simulated), a card
+  pulled during a format, a card pulled and put back around plays, a
+  play or the library on a card right after the update from 0.13.0, the
+  idle power-off on battery, Bluetooth playback, a long listening
+  session, a real finger on the lists, and the 1 TB card on this build.
+- **The firmware is a little bigger:** about 4.52 MB, up from 4.45 MB
+  in 0.13.0, for the format, the clock, the play history, Touch when off
+  and the lists (72 % of the space it has on the flash, 71 % before).
+  The steps below are the same.
+- **The update from 0.13.0** keeps the settings, the paired headphones,
+  the queue and the library (its file is the same: no rebuild); a touch
+  on the dark screen then does nothing (**Touch when off**, Nothing):
+  set it to Wake for 0.13.0's way. The clock reads as unset until a
+  computer sets it once, even if the Core2's chip has a time.
+  From 0.12.0 it is the same, with 0.13.0's library rebuild; from older
+  versions, read their notes too.
+- **Going back to 0.13.0 later** keeps the settings, the paired
+  headphones and the queue; a touch wakes the screen again, no play
+  history is kept, and coming back to 0.14.0 finds Touch when off, the
+  clock and the history as they were (from the code: not tried on the
+  Core2).
 
 ## Hardware
 
@@ -235,14 +173,18 @@ if unsure, install both. On Linux, add yourself to the `dialout` group.
 
 ## The microSD card
 
-- Format it **FAT32**, with an **MBR** partition table ("Master Boot
-  Record"). Cards of 64 GB and up come exFAT, and a card a Mac erased
-  whole gets a GPT ("GUID Partition Map"): the player doesn't mount those
-  and says what it found ("This card is exFAT", "This card is NTFS",
-  "This card uses GPT", "Can't read this card"). Formatting erases the
-  card: copy anything on it off first, and check the disk you pick is the
-  card.
-- Up to 32 GB (and not GPT), the computer's own Format, FAT32, does it.
+- The player reads **FAT32** cards with an **MBR** partition table
+  ("Master Boot Record"). Cards of 64 GB and up come exFAT, and a card a
+  Mac erased whole gets a GPT ("GUID Partition Map"): the player doesn't
+  mount those and says what it found ("This card is exFAT", "This card
+  is NTFS", "This card uses GPT", "Can't read this card").
+- **The player can format it** (since 0.14.0): put the card in, tap
+  **Format...** under that message, then hold the red **Hold to erase**
+  for 2 seconds. It restarts and makes the card FAT32 on an MBR with an
+  empty `/music`. Formatting erases the whole card: copy anything on it
+  off first.
+- Or format it on a computer (check the disk you pick is the card). Up
+  to 32 GB (and not GPT), the computer's own Format, FAT32, does it.
   Over 32 GB, or a GPT card:
   - **Windows 11** updated since May 2026 (KB5089549): in a Terminal run
     as administrator, `format X: /FS:FAT32 /Q /V:MUSIC` (`X:` the card's
@@ -295,15 +237,29 @@ if unsure, install both. On Linux, add yourself to the `dialout` group.
   but for the lines that quote the screen. In three of Auto DJ's
   messages on two lines in Japanese and Chinese, shown only with an Auto
   DJ index, the first line touches the message's outline.
-- **Auto DJ's matching and the waveforms need files only the transfer
-  software will write,** and that isn't available yet: until it is,
-  Auto DJ adds random tracks from the library, and Now Playing shows the
-  plain line. With an index, tracks it doesn't cover are never picked
-  and don't steer it. Its session (what steers it, what it avoids) and
-  the DJ marks aren't kept across a restart; its switch and its
-  settings are. Over a long session, Stay on seed repeats: a seed has at
-  most 169 neighbours in the index, and once they have played, it
-  starts again among them.
+- **Auto DJ's matching, the waveforms and the mood filters need files
+  only the transfer software will write,** and that isn't available
+  yet: until it is, Auto DJ adds random tracks from the library, Now
+  Playing shows the plain line, the Albums list has no Filters row, and
+  Auto DJ's Smart filters row is dim. With an index, tracks it doesn't
+  cover are never picked and don't steer it. Its session (what steers
+  it, what it avoids) and the DJ marks aren't kept across a restart; its
+  switch and its settings are. Over a long session, Stay on seed
+  repeats: a seed has at most 169 neighbours in the index, and once they
+  have played, it starts again among them.
+- **The mood filters go by the scores on the card.** A track without
+  any (one mStream hasn't analysed, one from another mStream server, or
+  one copied to the card or changed on it by hand since the card's last
+  sync) never fits a filter, and an album with no scored track leaves
+  the Albums list under any filter (12 of 1,747 on the 1 TB test card).
+  An album is its folder, and it fits when more than half of its scored
+  tracks on this card fit. mStream's apps count all of the album's songs
+  on the server, so an album that is only partly on the card can fit
+  here and not there, or the other way round. The scores are a copy:
+  mStream's later changes to them reach the card with a later sync, not
+  always the next one. Only the Albums list and Auto DJ filter: Artists
+  and Folders always show everything. The Albums filter is forgotten at
+  a restart; Auto DJ's is kept.
 - The card taken out while the player runs and put back (music copied
   to it on a computer meanwhile) has its tag files, the Auto DJ index
   and the waveforms read again, but its folders aren't walked again

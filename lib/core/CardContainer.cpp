@@ -65,6 +65,7 @@ const char* whyName(Why w) {
     case Why::PendOrder: return "pendOrder";
     case Why::PendPath: return "pendPath";
     case Why::PendOp: return "pendOp";
+    case Why::AcksOrder: return "acksOrder";
     case Why::FatRecords: return "fatRecords";
   }
   return "?";

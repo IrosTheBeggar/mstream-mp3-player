@@ -76,6 +76,34 @@ counters. The rule (docs/AUTODJ-INDEX.md 11 is the index's side):
   without a gate. No row usable: a pick by track id. **No index:** a
   random library track by id, not the playing one, up to 16 tries for one
   outside a 50-track cooldown kept by id.
+- **A mood filter** (docs/MOOD-FILTERS.md 6.1): with the library's mood
+  words and an active filter (tools/moodfilter.py: a level alone filters
+  nothing), a row is a candidate only when its track (the row's first, as
+  the maps keep it) passes; the gate, dry, loosening and the classes then
+  work over those rows alone. No words, or no active filter: every row, as
+  before, and nothing below is reached.
+- **The mood's own ladder** (6.2, 6.3), never relaxing the mood. No
+  candidate inside it (jump 1), or every one cooled with none to loosen to
+  (jump 2: no repeat of a neighbour), and every random pick: the scan, one
+  pass over the tracks in order, keeping each one inside the mood whose
+  row is neither an anchor nor the playing track's (the first 64, then the
+  n-th in place of one at below(n) < 64); of those, each row once and only
+  if its own track passes; then the classes and the draw as for a random
+  pick, when one of them is fresh. None fresh: a track inside the mood with
+  no row, outside the cooldown by id, uniform in one pass (jump 3, by id).
+  None: a repeat, the oldest row of the track cooldown inside the mood
+  that isn't playing (cooldown level 2, ranked by its statuses as known).
+  None, or no index: by id, a fresh track inside the mood, else the oldest
+  of the cooldown by id, else the playing track; none fits: no pick. The
+  empty states' button the same: the scan with no exclusions, then one of
+  its rows (none: no track).
+- **Stay on seed's re-pin** (6.4, D2). Before either jump, once a pick and
+  before any draw: the playing track's row, inside the mood (its own
+  track), not the pin and not damaged, becomes the pin, and the anchors run
+  again in the same read budget (none left, or its read failed: the
+  random pick, which is the scan); nothing listed inside the mood there
+  either, the jump, both marked. A moved pin goes at a quick skip of it,
+  and at an Anchor change; a seed's stays.
 """
 import argparse
 import json
@@ -84,6 +112,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import moodfilter  # noqa: E402
 import mpdj  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -108,6 +137,7 @@ DRY = 50
 RANDOM_DRAWS = 64
 NO_INDEX_TRIES = 16
 SURPRISE_DRAWS = 64
+MOOD_SAMPLE = 64                # a mood filter's scan: tracks kept (MOOD-FILTERS.md 6.3)
 NO_ROW = 0xFFFF                 # Maps' u16 "none" (trackToRow, rowToTrack)
 NO_TRACK = 0xFFFFFFFF
 TIGHT_BPM, WIDE_BPM = 8, 10
@@ -121,6 +151,9 @@ FILTER_PRESENT = 0x80 << 8      # cam bit 7: the row maps to a track (the join's
 # Tempo and key statuses (lib/core/AutoDjTiers.h).
 T_NA, T_TIGHT, T_WIDE, T_WRONG, T_UNKNOWN = 0, 1, 2, 3, 4
 K_NA, K_GOOD, K_WRONG, K_UNKNOWN = 0, 1, 2, 3
+
+# Why a pick under a mood filter left the anchors' lists (Pick.jump, 6.2).
+J_NONE, J_NO_CANDIDATE, J_ALL_COOLED, J_NO_ROW = 0, 1, 2, 3
 
 # Slot reads (lib/core/AutoDjEngine.cpp's Read).
 R_OK, R_SUSPECT, R_DAMAGED, R_IO, R_BROKEN = "ok", "suspect", "damaged", "io", "broken"
@@ -310,13 +343,32 @@ class Settings:
         self.mode, self.floor, self.tempo, self.key = mode, floor, tempo, key
 
 
+class MoodView:
+    """A mood filter over the library's words (AutoDjJoin.h's MoodView;
+    MOOD-FILTERS.md 6.1): `words` a u16 per track id (None: no mood data),
+    `q` the filter's 11 bits, as read (an invalid q is none). On with words
+    and an active filter; off, every track passes."""
+
+    def __init__(self, words=None, q=0):
+        self.words, self.q = words, moodfilter.read_q(q)
+
+    def on(self):
+        return self.words is not None and moodfilter.active(self.q)
+
+    def passes(self, track):
+        if not self.on():
+            return True
+        return track < len(self.words) and moodfilter.matches(self.words[track], self.q)
+
+
 class Maps:
     """The join's product: track -> row, row -> track (NO_ROW: none) and a
-    filter word a row."""
+    filter word a row; the firmware's copy adds the mood filter."""
 
-    def __init__(self, track_to_row, row_to_track, filters):
+    def __init__(self, track_to_row, row_to_track, filters, mood=None):
         self.track_to_row, self.row_to_track, self.filters = list(track_to_row), list(row_to_track), list(filters)
         self.tracks, self.rows = len(self.track_to_row), len(self.row_to_track)
+        self.mood = mood or MoodView()
 
 
 def row_of(maps, track):
@@ -353,15 +405,17 @@ class SlotSource:
 
 class PickIn:
     def __init__(self, maps, slots, k=mpdj.DEFAULT_K, sel_head=mpdj.DEFAULT_HEAD, sel_floor=mpdj.DEFAULT_FLOOR,
-                 playing=NO_TRACK, library_tracks=0):
+                 playing=NO_TRACK, library_tracks=0, mood=None):
         self.maps, self.slots, self.k, self.sel_head, self.sel_floor = maps, slots, k, sel_head, sel_floor
         self.playing, self.library_tracks = playing, library_tracks
+        # The maps' mood filter, also given without them (picks by id).
+        self.mood = mood or (maps.mood if maps is not None else MoodView())
 
 
 class Pick:
     FIELDS = ("ok", "track", "row", "level", "cooldown_level", "music_rank", "dry", "loosened", "random", "no_index",
               "imputed_tempo", "imputed_key", "tempo_break", "key_break", "reads", "broken", "candidates", "gated",
-              "in_class")
+              "in_class", "jump", "repinned", "repeated", "no_fit")
 
     def __init__(self):
         self.ok = False
@@ -373,6 +427,10 @@ class Pick:
         self.reads = 0
         self.broken = False
         self.candidates = self.gated = self.in_class = 0
+        # A mood filter's (MOOD-FILTERS.md 6.2): why the pick jumped (J_*), the
+        # pin moved (6.4: not made yet), a repeat inside the mood, nothing fits.
+        self.jump = J_NONE
+        self.repinned = self.repeated = self.no_fit = False
 
     def as_dict(self):
         return {f: getattr(self, f) for f in self.FIELDS}
@@ -381,7 +439,7 @@ class Pick:
 class Stats:
     FIELDS = ("picks", "failed", "reads_at_pick", "prefetch_reads", "left_out", "damaged", "io_skips", "broken",
               "dry", "loosened", "random", "no_index", "imputed_tempo", "imputed_key", "classes", "mode_picks",
-              "tempo_breaks", "key_breaks", "quick_skips")
+              "tempo_breaks", "key_breaks", "quick_skips", "jumps", "repins", "mood_repeats", "no_fit")
 
     def __init__(self):
         for f in self.FIELDS:
@@ -424,6 +482,7 @@ class Engine:
         self.rng = Pcg32(seed)
         self.ring, self.cool, self.arts, self.ids = [], [], [], []
         self.pin = NO_ROW
+        self.pin_moved = False      # the pin moved onto a playing row (MOOD-FILTERS.md 6.4)
         self.key_anchor = 0
         self.seeded = False
         self.seed_awaits = NO_TRACK
@@ -480,6 +539,10 @@ class Engine:
             return False
         self.stats.quick_skips += 1
         row = row_of(maps, track)
+        if self.pin_moved and row != NO_ROW and row == self.pin:
+            # A moved pin quick-skipped goes (6.4): the next Stay on seed pick
+            # takes the playing track's row. A seed's stays.
+            self.pin, self.pin_moved = NO_ROW, False
         if row in self.ring:
             self.ring.remove(row)
             return True
@@ -487,6 +550,7 @@ class Engine:
 
     def mode_changed(self):
         self.pin = NO_ROW
+        self.pin_moved = False
         self.seed_awaits = NO_TRACK
 
     def file_reopened(self):
@@ -565,7 +629,28 @@ class Engine:
 
     # ---- the pick ----
     def pick(self, s, pin):
+        """One pick: a round, and a second when the first moved Stay on seed's
+        pin (MOOD-FILTERS.md 6.4), sharing its reads."""
         out = Pick()
+        again = [False]
+        p = self._pick_once(s, pin, out, again)
+        return self._pick_once(s, pin, out, None) if again[0] else p
+
+    def _repin(self, s, maps, playing_row, out):
+        """Stay on seed under a mood filter, nothing listed inside it or all of
+        it cooled (6.4, D2): the playing track's row, inside the mood (its own
+        track), not the pin and not damaged, is the pin now (moved: a quick
+        skip of it takes it away), and the anchors run again."""
+        if s.mode != LOCKED or playing_row in (NO_ROW, self.pin) or playing_row in self.damaged:
+            return False
+        if not maps.mood.passes(maps.row_to_track[playing_row]):
+            return False
+        self.pin, self.pin_moved, out.repinned = playing_row, True, True
+        return True
+
+    def _pick_once(self, s, pin, out, again):
+        """A round of the pick; `again` (a list, None in the second round) set
+        when it moved the pin, before any draw."""
         maps = pin.maps
         if maps is None or pin.slots is None:
             return self._no_index(s, pin, out)
@@ -615,15 +700,24 @@ class Engine:
         for i in reversed(usable):
             self._touch(i)
         acc = {}
+        mood = maps.mood
         for i in usable:
             for row, lv in self.cache[i][1]:
                 if row >= maps.rows or row in exclude or maps.row_to_track[row] == NO_ROW:
+                    continue
+                if not mood.passes(maps.row_to_track[row]):    # outside the mood (6.1)
                     continue
                 b, sm = acc.get(row, (0, 0))
                 acc[row] = (max(b, lv), sm + lv)
         cand = sorted((row, b, sm) for row, (b, sm) in acc.items())
         out.candidates = len(cand)
+        out.dry = out.loosened = False
         if not cand:
+            if mood.on():
+                if again is not None and self._repin(s, maps, playing_row, out):
+                    again[0] = True
+                    return out
+                out.jump = J_NO_CANDIDATE   # nothing listed inside the mood (6.2, 4a)
             return self._random(s, pin, playing_row, exclude, out)
         gate = floor_level(s.floor, pin.sel_floor)
         gated = [c for c in cand if c[1] >= gate]
@@ -636,6 +730,14 @@ class Engine:
             if fresh:
                 out.loosened = True
                 gated = closest(fresh)
+            elif mood.on():
+                # Every listed row inside the mood cooled: the jump, not a
+                # repeat of a neighbour (6.2, 4b), unless the pin moves.
+                if again is not None and self._repin(s, maps, playing_row, out):
+                    again[0] = True
+                    return out
+                out.jump, out.dry = J_ALL_COOLED, False
+                return self._random(s, pin, playing_row, exclude, out)
         out.gated = len(gated)
         rows = [c[0] for c in gated]
         j = self._choose(s, maps, rows, playing_row, out)
@@ -663,6 +765,8 @@ class Engine:
         return j
 
     def _random(self, s, pin, playing_row, exclude, out):
+        if pin.maps.mood.on():
+            return self._mood_pick(s, pin, playing_row, exclude, out)
         out.random = True
         maps = pin.maps
         rows = []
@@ -694,7 +798,87 @@ class Engine:
         st.key_breaks[s.mode] += out.key_break
         return self._count(s, out)
 
+    def _scan(self, maps, exclude):
+        """The scan (MOOD-FILTERS.md 6.3): every track inside the mood whose
+        row isn't in `exclude`, in track order; the first 64 kept, then the
+        n-th replaces one at below(n) < 64. Their rows, each once and only if
+        its own track passes: a pick of it plays that one (trackToRow is many
+        to one)."""
+        mood = maps.mood
+        kept, seen = [], 0
+        for t in range(maps.tracks):
+            r = maps.track_to_row[t]
+            if r >= maps.rows or r in exclude or not mood.passes(t):
+                continue
+            seen += 1
+            if seen <= MOOD_SAMPLE:
+                kept.append(t)
+            else:
+                j = self.rng.below(seen)
+                if j < MOOD_SAMPLE:
+                    kept[j] = t
+        rows = []
+        for t in kept:
+            r = maps.track_to_row[t]
+            first = maps.row_to_track[r]
+            if first != NO_ROW and mood.passes(first) and r not in rows:
+                rows.append(r)
+        return rows
+
+    def _mood_pick(self, s, pin, playing_row, exclude, out):
+        """A random pick inside the mood (MOOD-FILTERS.md 6.2, 5-8): the scan,
+        else a fresh track with no row, else the oldest repeat, else by id."""
+        out.random = True
+        maps = pin.maps
+        mood = maps.mood
+        # 6. The scan, past the anchors and the playing track's row.
+        rows = self._scan(maps, exclude)
+        out.candidates = out.gated = len(rows)
+        if any(r not in self.cool for r in rows):
+            j = self._choose(s, maps, rows, playing_row, out)
+            out.level = 0
+            return self._finish(s, maps, rows[j], out)
+        # 7. No fresh row: a fresh track inside the mood with no row, by id.
+        t = self._one_of(maps.tracks, lambda x: maps.track_to_row[x] >= maps.rows and x != pin.playing and
+                         mood.passes(x) and x not in self.ids)
+        if t != NO_TRACK:
+            out.jump, out.no_index = J_NO_ROW, True
+            out.ok, out.track, out.row = True, t, NO_ROW
+            ring_add(self.ids, t, TRACK_COOLDOWN)
+            return self._count(s, out)
+        # 8. Repeats, the oldest first: the track cooldown's first row inside
+        # the mood that isn't playing; unranked (its statuses as known).
+        for r in self.cool:
+            first = maps.row_to_track[r] if r < maps.rows else NO_ROW
+            if r == playing_row or first == NO_ROW or not mood.passes(first):
+                continue
+            f = maps.filters
+            ref = bpm_of(f[playing_row]) if s.tempo and playing_row != NO_ROW else 0
+            tempo = tempo_status(bpm_of(f[r]), ref)
+            key = key_status(camelot_of(f[r]), self.key_anchor, s.key)
+            out.repeated = True
+            out.cooldown_level, out.music_rank, out.level = 2, music_rank(tempo, key), 0
+            out.tempo_break = tempo in (T_WIDE, T_WRONG)
+            out.key_break = key == K_WRONG
+            return self._finish(s, maps, r, out)
+        # 9. By id (the playing track, if nothing else fits).
+        return self._no_index(s, pin, out)
+
+    def _one_of(self, n, hit):
+        """One of the tracks below n that `hit` admits, uniform, in one pass:
+        the i-th admitted replaces the choice when below(i) is 0."""
+        got, seen = NO_TRACK, 0
+        for t in range(n):
+            if hit(t):
+                seen += 1
+                if seen == 1 or self.rng.below(seen) == 0:
+                    got = t
+        return got
+
     def _no_index(self, s, pin, out):
+        mood = pin.maps.mood if pin.maps is not None else pin.mood
+        if mood.on():
+            return self._mood_by_id(s, pin, mood, out)
         out.random = out.no_index = True
         n = pin.library_tracks
         t = NO_TRACK
@@ -708,6 +892,28 @@ class Engine:
         if t == NO_TRACK:
             self.stats.failed += 1
             return out
+        return self._by_id(s, pin, t, out)
+
+    def _mood_by_id(self, s, pin, mood, out):
+        """A pick by id inside the mood (MOOD-FILTERS.md 6.2, 9): a fresh track
+        (not the playing one, outside the cooldown by id), else the oldest in
+        that cooldown, else the playing track; none fits: no pick (no_fit)."""
+        out.random = out.no_index = True
+        n = pin.library_tracks
+        t = self._one_of(n, lambda x: x != pin.playing and mood.passes(x) and x not in self.ids)
+        if t == NO_TRACK:
+            t = next((x for x in self.ids if x != pin.playing and x < n and mood.passes(x)), NO_TRACK)
+            if t == NO_TRACK and pin.playing < n and mood.passes(pin.playing):
+                t = pin.playing
+            out.repeated = t != NO_TRACK
+        if t == NO_TRACK:
+            out.no_fit = True
+            self.stats.failed += 1
+            self.stats.no_fit += 1
+            return out
+        return self._by_id(s, pin, t, out)
+
+    def _by_id(self, s, pin, t, out):
         out.ok, out.track, out.row = True, t, NO_ROW
         ring_add(self.ids, t, TRACK_COOLDOWN)
         row = row_of(pin.maps, t)
@@ -727,15 +933,27 @@ class Engine:
         st.loosened += out.loosened
         st.random += out.random
         st.no_index += out.no_index
+        st.jumps += out.jump != J_NONE
+        st.repins += out.repinned
+        st.mood_repeats += out.repeated
         return out
 
     def surprise(self, s, pin):
         """The empty states' Auto DJ button: a random row that maps to a track
-        (up to 64 draws). Changes nothing but the stream."""
+        (up to 64 draws); under a mood filter, the scan with no exclusions,
+        then one of its rows (MOOD-FILTERS.md 6.3). Changes nothing but the
+        stream."""
         out = Pick()
         out.random = True
         maps = pin.maps
         if maps is None:
+            return out
+        if maps.mood.on():
+            rows = self._scan(maps, ())
+            out.candidates = out.gated = len(rows)
+            if rows:
+                r = rows[self.rng.below(len(rows))]
+                out.ok, out.row, out.track = True, r, maps.row_to_track[r]
             return out
         for _ in range(SURPRISE_DRAWS):
             r = self.rng.below(maps.rows)
@@ -867,22 +1085,51 @@ def starve_table(rows=100, k=60):
     return {"rows": rows, "k": k, "selHead": 16, "selFloor": 140, "lists": lists, "filters": filters}
 
 
+def islands_table(rows=320, size=10, seed=9):
+    """Islands of `size` rows, each row listing only its island's other rows,
+    above every step but 100 %: under a mood filter an island's rows inside
+    it run out, and the pick jumps (MOOD-FILTERS.md 6.2, 9.8: syn's lists
+    cross its clusters, so it seldom does). Its filters as syn's, an island
+    a cluster: BPMs and keys near each other, a few missing; three artists
+    an island, a few 0."""
+    g = Pcg32(seed, SCENE_STREAM)
+    lists = []
+    for a in range(rows):
+        base = a - a % size
+        mates = [(b, 200 + (a * 7 + b * 11 + g.below(8)) % 37) for b in range(base, min(base + size, rows)) if b != a]
+        lists.append(sorted(mates, key=lambda e: (-e[1], e[0])))
+    filters = []
+    for r in range(rows):
+        c = r // size
+        bpm10 = 0 if g.below(8) == 0 else (90 + 3 * (c % 20) + g.below(24)) * 10 + g.below(10)
+        cam = 0 if g.below(8) == 0 else 1 + (c * 7 + g.below(5)) % 24
+        art = 0 if g.below(12) == 0 else 1 + c * 3 + g.below(3)
+        filters.append(pack_filter(bpm10, cam, g.below(2) == 0, art))
+    return {"rows": rows, "k": size - 1, "selHead": 16, "selFloor": 140, "lists": lists, "filters": filters}
+
+
 def encode_lists(lists):
     return ["".join("%04x%02x" % (r, lv) for r, lv in lst) for lst in lists]
 
 
-def make_maps(g, rows, extra, unmapped, base_filters, drop_bpm=0, drop_key=0):
+def make_maps(g, rows, extra, unmapped, base_filters, drop_bpm=0, drop_key=0, shared=0):
     """Tracks for the table's rows in a shuffled order, `extra` tracks with no
     row among them, `unmapped` rows with no track (per mille); BPMs and keys
-    dropped on a share of rows (per mille)."""
+    dropped on a share of rows (per mille). `shared` more tracks (per mille
+    of the rows mapped) on rows another track holds: trackToRow many to one,
+    and the row's track (rowToTrack's) the first of its files the join finds,
+    the smallest path hash (AutoDjJoin.cpp), so any of them."""
     mapped = [r for r in range(rows) if g.below(1000) >= unmapped]
     tracks = mapped + [NO_ROW] * (len(mapped) * extra // 1000)
+    if shared:
+        tracks += [mapped[g.below(len(mapped))] for _ in range(len(mapped) * shared // 1000)]
     for i in range(len(tracks) - 1, 0, -1):     # Fisher-Yates from the end
         j = g.below(i + 1)
         tracks[i], tracks[j] = tracks[j], tracks[i]
     row_to_track = [NO_ROW] * rows
+    hashes = [g.below(1 << 30) for _ in tracks] if shared else None
     for t, r in enumerate(tracks):
-        if r != NO_ROW:
+        if r != NO_ROW and (hashes is None or row_to_track[r] == NO_ROW or hashes[t] < hashes[row_to_track[r]]):
             row_to_track[r] = t
     filters = []
     for f in base_filters:
@@ -897,6 +1144,21 @@ def make_maps(g, rows, extra, unmapped, base_filters, drop_bpm=0, drop_key=0):
     return Maps(tracks, row_to_track, filters)
 
 
+def mood_words(g, tracks, coverage=920, nulls=10):
+    """A mood word per track (tools/moodfilter.py's word_of(), as the
+    library builder takes it from a tail): `coverage` per mille of the
+    tracks with a server row, each of its 8 scores to 4 places, uniform,
+    NULL at `nulls` per mille; the rest no row (word 0)."""
+    words = []
+    for _ in range(tracks):
+        if g.below(1000) >= coverage:
+            words.append(0)
+            continue
+        scores = [None if g.below(1000) < nulls else g.below(10001) / 10000.0 for _ in moodfilter.MOOD_COLUMNS]
+        words.append(moodfilter.word_of(scores))
+    return words
+
+
 def settings_json(s):
     return {"m": s.mode, "f": s.floor, "t": int(s.tempo), "k": int(s.key)}
 
@@ -908,25 +1170,38 @@ def pick_json(p):
          "noIndex": int(p.no_index),
          "impT": int(p.imputed_tempo), "impK": int(p.imputed_key), "tb": int(p.tempo_break),
          "kb": int(p.key_break), "reads": p.reads, "broken": int(p.broken), "cand": p.candidates,
-         "gated": p.gated, "inClass": p.in_class}
+         "gated": p.gated, "inClass": p.in_class, "jump": p.jump, "repin": int(p.repinned),
+         "rep": int(p.repeated), "noFit": int(p.no_fit)}
     return {k: v for k, v in d.items() if v}
 
 
+# Counters added since the fixture's first 26 sessions, (JSON key, Stats
+# field): written only when not 0, so those sessions' stats keep their bytes
+# (MOOD-FILTERS.md 9.8; test_autodj_ref.py holds them by hash).
+LATER_STATS = (("jumps", "jumps"), ("repins", "repins"), ("moodRepeats", "mood_repeats"), ("noFit", "no_fit"))
+
+
 def stats_json(st):
-    return {"picks": st.picks, "failed": st.failed, "readsAtPick": st.reads_at_pick,
-            "prefetchReads": st.prefetch_reads, "leftOut": st.left_out, "damaged": st.damaged,
-            "ioSkips": st.io_skips, "broken": st.broken, "dry": st.dry, "loosened": st.loosened, "random": st.random,
-            "noIndex": st.no_index, "imputedTempo": st.imputed_tempo, "imputedKey": st.imputed_key,
-            "classes": st.classes, "modePicks": st.mode_picks, "tempoBreaks": st.tempo_breaks,
-            "keyBreaks": st.key_breaks, "quickSkips": st.quick_skips}
+    d = {"picks": st.picks, "failed": st.failed, "readsAtPick": st.reads_at_pick,
+         "prefetchReads": st.prefetch_reads, "leftOut": st.left_out, "damaged": st.damaged,
+         "ioSkips": st.io_skips, "broken": st.broken, "dry": st.dry, "loosened": st.loosened, "random": st.random,
+         "noIndex": st.no_index, "imputedTempo": st.imputed_tempo, "imputedKey": st.imputed_key,
+         "classes": st.classes, "modePicks": st.mode_picks, "tempoBreaks": st.tempo_breaks,
+         "keyBreaks": st.key_breaks, "quickSkips": st.quick_skips}
+    for key, field in LATER_STATS:
+        if getattr(st, field):
+            d[key] = getattr(st, field)
+    return d
 
 
 class Scene:
     """One session's script, run on the reference as it is written: each event
     records what the engine must do."""
 
-    def __init__(self, name, table, tname, maps, faults=None, library_tracks=None, seed=1, note=""):
+    def __init__(self, name, table, tname, maps, faults=None, library_tracks=None, seed=1, note="", words=None):
         self.name, self.table, self.tname, self.maps, self.note = name, table, tname, maps, note
+        self.words = words          # the library's mood words, a u16 a track (None: no mood data)
+        self.mood = MoodView(words)
         self.faults = faults or {}
         self.src = SlotSource(table["lists"], self.faults) if table else None
         self.lib = library_tracks if library_tracks is not None else (maps.tracks if maps else 0)
@@ -943,7 +1218,15 @@ class Scene:
     def pin(self):
         t = self.table
         return PickIn(self.cur(), self.src if self.live else None, t["k"] if t else 0, t["selHead"] if t else 0,
-                      t["selFloor"] if t else 0, self.playing, self.lib)
+                      t["selFloor"] if t else 0, self.playing, self.lib, self.mood)
+
+    def filter(self, q):
+        """Auto DJ's mood filter from now (q, MOOD-FILTERS.md 5.4) over the
+        session's words: the maps' and the picks' (AutoDj::index())."""
+        self.mood = MoodView(self.words, q)
+        if self.maps is not None:
+            self.maps.mood = self.mood
+        self.events.append({"op": "filter", "q": q})
 
     def index(self, on):
         """The index goes away (picks by track id, no maps for the starts) or
@@ -1051,6 +1334,8 @@ class Scene:
             d["trackToRow"] = self.maps.track_to_row
             d["rowToTrack"] = self.maps.row_to_track
             d["filters"] = self.maps.filters
+        if self.words is not None:
+            d["moods"] = self.words
         if self.faults:
             d["faults"] = {k: sorted(v) for k, v in self.faults.items()}
         d["events"] = self.events
@@ -1068,8 +1353,8 @@ def scenes():
     g = Pcg32(20261013, SCENE_STREAM)
     both = Settings(ROLLING, 55, True, True)
 
-    def maps_for(t, extra=100, unmapped=30, drop_bpm=0, drop_key=0):
-        return make_maps(g, t["rows"], extra, unmapped, t["filters"], drop_bpm, drop_key)
+    def maps_for(t, extra=100, unmapped=30, drop_bpm=0, drop_key=0, shared=0):
+        return make_maps(g, t["rows"], extra, unmapped, t["filters"], drop_bpm, drop_key, shared)
 
     # 1. The defaults (D2: both off), Follow the vibe, the listener's tracks and skips.
     sc = Scene("defaults-rolling", mid, "autodj-mid", maps_for(mid), seed=11,
@@ -1390,6 +1675,357 @@ def scenes():
     sc.arrived()
     sc.run(Settings(LOCKED, 60), 3)
     out.append(sc)
+
+    # 25. A mood filter (MOOD-FILTERS.md 6.1): the runs hold only rows whose
+    # track passes, so dry and loosening work inside the mood. Follow the
+    # vibe only, and broad filters (about 64 % of the tracks pass), so no
+    # pick here is random or finds every candidate cooled: those take the
+    # mood's own ladder (6.2), and this session stays as it is.
+    m = maps_for(starve, extra=50, unmapped=0)
+    words = mood_words(g, m.tracks)
+    vocals_loose = moodfilter.pack(voice="vocals", level="loose")
+    danceable_loose = moodfilter.pack(tags=("danceable",), level="loose")
+    sc = Scene("mood-dry-loosen", starve, "starve", m, seed=37, words=words,
+               note="Vocals at Loose, then Danceable at Loose, Follow the vibe at 75 % and 100 % on the starving "
+                    "table: dry and loosened inside the mood, the runs made again for the new filter; the "
+                    "listener's tracks, quick skips, matching on and off")
+    sc.filter(vocals_loose)
+    seed_row = next(r for r in range(STARVE_CLIQUE) if sc.mood.passes(m.row_to_track[r]))
+    sc.new(3700, m.row_to_track[seed_row])
+    flips = [Settings(ROLLING, 75, True, True), Settings(ROLLING, 100, True, True), Settings(ROLLING, 75, True, False),
+             Settings(ROLLING, 100), Settings(ROLLING, 75, False, True), Settings(ROLLING, 100, True, True),
+             Settings(ROLLING, 75)]
+    sc.run(flips[0], 35, user=60, skips=60, flips=flips)
+    sc.filter(danceable_loose)
+    sc.run(flips[0], 35, user=60, skips=60, flips=flips)
+    out.append(sc)
+
+    # 26. A filter on a card with no mood data (D4): picks unfiltered, the
+    # same as the session with no filter at all, pick for pick.
+    m = maps_for(syn)
+    for name, filtered in (("mood-no-data", True), ("mood-no-data-control", False)):
+        sc = Scene(name, syn, "syn", m, seed=38,
+                   note="a filter set, changed and cleared on a card with no mood words: no filter, the same "
+                        "picks as its control" if filtered else
+                        "mood-no-data's control: the same session with no filter set")
+        if filtered:
+            sc.filter(moodfilter.pack("sad", "relaxed", "vocals", ("danceable",)))
+        sc.new(3800, sc.user_track())
+        sc.run(Settings(ROLLING, 60, True, True), 15, user=100, skips=80,
+               flips=[Settings(ROLLING, 60, True, True), Settings(ROLLING, 70), Settings(ROLLING, 55, False, True)])
+        if filtered:
+            sc.filter(moodfilter.pack("neutral", "neutral", level="loose"))
+        sc.run(Settings(ROLLING, 65, True, False), 10, user=100)
+        if filtered:
+            sc.filter(0)
+        sc.run(Settings(ROLLING, 55), 5)
+        out.append(sc)
+
+    # 27-31. The mood's own ladder (MOOD-FILTERS.md 6.2): nothing listed
+    # inside it, or all of it cooled, jumps to the scan; then a fresh track
+    # with no row, then repeats oldest first, then by id. Stay on seed only
+    # from a damaged pin (a random pick): it re-pins at a jump (6.4), so its
+    # other sessions wait for that rule.
+    m = maps_for(syn)
+    sc = Scene("mood-rolling", syn, "syn", m, seed=39, words=mood_words(g, m.tracks),
+               note="Follow the vibe under Relaxed, then Neutral, Aggressive and Danceable (a few tracks), then "
+                    "no filter, then Relaxed again: the ladder inside the mood (neighbours, jumps, a track with "
+                    "no row, repeats), the runs made again at each change; the listener's tracks, quick skips, "
+                    "matching on and off")
+    relaxed = moodfilter.pack(energy="relaxed")
+    sc.filter(relaxed)
+    sc.new(3900, sc.user_track())
+    flips = [Settings(ROLLING, 60, True, True), Settings(ROLLING, 100), Settings(ROLLING, 75, True, False),
+             Settings(ROLLING, 55, False, True), Settings(ROLLING, 65)]
+    sc.run(flips[0], 20, user=80, skips=60, flips=flips)
+    sc.filter(moodfilter.pack("neutral", "aggressive", tags=("danceable",)))
+    sc.run(flips[0], 15, user=60, flips=flips)
+    sc.filter(0)
+    sc.run(flips[0], 15, user=60, skips=60, flips=flips)
+    sc.filter(relaxed)
+    sc.run(flips[0], 15, skips=60, flips=flips)
+    out.append(sc)
+
+    tables["islands"] = islands = islands_table()
+    m = maps_for(islands)
+    sc = Scene("mood-jump", islands, "islands", m, seed=40, words=mood_words(g, m.tracks),
+               note="islands of 10 rows listing only each other, under Sad at Loose, then Vocals and Party: an "
+                    "island's rows inside the mood run out, and the pick jumps (nothing listed inside it, or all "
+                    "of it cooled) to the scan of every track, its 64 kept, its classes kept")
+    sc.filter(moodfilter.pack("sad", level="loose"))
+    sc.new(4000, sc.user_track())
+    flips = [Settings(ROLLING, 55), Settings(ROLLING, 70, True, True), Settings(ROLLING, 60, True, False),
+             Settings(ROLLING, 75, False, True)]
+    sc.run(flips[0], 90, user=50, skips=50, flips=flips)
+    sc.filter(moodfilter.pack(voice="vocals", tags=("party",)))
+    sc.run(flips[0], 60, user=50, skips=50, flips=flips)
+    out.append(sc)
+
+    m = maps_for(syn, extra=0, unmapped=0)
+    words = mood_words(g, m.tracks)
+    narrow = moodfilter.pack("happy", tags=("party",), level="strict")
+    sc = Scene("mood-repeats", syn, "syn", m, seed=41, words=words,
+               note="Happy and Party at Strict, which 21 of 300 tracks fit, each with a row: once each is "
+                    "cooled, the oldest inside the mood repeats, so each comes back after the other 20")
+    sc.filter(narrow)
+    sc.new(4100, m.row_to_track[0])
+    sc.run(Settings(ROLLING, 60, True, True), 100,
+           flips=[Settings(ROLLING, 60, True, True), Settings(ROLLING, 55), Settings(ROLLING, 70, False, True)])
+    out.append(sc)
+
+    lib = 60
+    words = mood_words(g, lib)
+    sc = Scene("mood-no-index", None, None, None, library_tracks=lib, seed=42, words=words,
+               note="no index, Sad and Vocals (7 of 60 tracks): tracks by id inside the mood, then the oldest of "
+                    "the cooldown by id; a filter only the playing track fits: it again; one nothing fits: no "
+                    "pick; the tracks renumbered: fresh again")
+    sad_vocals = moodfilter.pack("sad", voice="vocals")
+    sc.filter(sad_vocals)
+    sc.new(4200, 3)
+    sc.run(Settings(), 16, user=100)
+    valid = [q for q in range(1, 1 << 11) if moodfilter.q_valid(q) and moodfilter.active(q)]
+    fits = {q: [t for t in range(lib) if moodfilter.matches(words[t], q)] for q in valid}
+    only = next(q for q in valid if len(fits[q]) == 1)
+    none = next(q for q in valid if not fits[q])
+    sc.filter(only)
+    sc.left(sc.playing, 150000, True)
+    sc.start(fits[only][0], False)
+    sc.run(Settings(ROLLING, 60, True, True), 5)
+    sc.filter(none)
+    sc.run(Settings(), 3)
+    sc.renumber()
+    sc.filter(sad_vocals)
+    sc.run(Settings(), 12, user=100)
+    out.append(sc)
+
+    m = maps_for(syn, unmapped=0)
+    sc = Scene("mood-no-anchor", syn, "syn", m, seed=43, words=mood_words(g, m.tracks),
+               note="under Relaxed: a session with no seed, nothing playing; a broken slot; Stay on seed from a "
+                    "damaged pin, each new pin damaged in turn: random picks inside the mood, from the scan")
+    sc.filter(relaxed)
+    sc.new(4300)
+    sc.run(Settings(ROLLING, 60, True, True), 8)
+    held = {c[0] for c in sc.e.cache if c is not None}
+    sc.set_faults(broken=[r for r in range(syn["rows"]) if r not in held and g.below(3) == 0])
+    sc.run(Settings(ROLLING, 55, True, False), 8, user=300)
+    seeds = [r for r in range(syn["rows"]) if len(syn["lists"][r]) >= 20 and sc.mood.passes(m.row_to_track[r])]
+    for n, r in enumerate(seeds[:2]):
+        sc.set_faults(damaged=[r])
+        sc.reopen()
+        sc.new(4310 + n, m.row_to_track[r])
+        for i in range(4):
+            p = sc.pick(Settings(LOCKED, 60, i % 2 == 0, True))
+            sc.left(sc.playing, 150000, True)
+            sc.start(p.track, True)
+            sc.set_faults(damaged=[sc.e.pin])
+            sc.reopen()
+    out.append(sc)
+
+    # 32. The empty states' button under a mood filter (MOOD-FILTERS.md 6.3):
+    # the scan with no exclusions, then one of its rows; a session from it.
+    # A filter that only tracks with no row fit: no track for the button, a
+    # pick by id (jump 3); one nothing fits: none, and no pick. Follow the
+    # vibe only: Stay on seed re-pins at a jump (6.4).
+    m = maps_for(syn, unmapped=600)
+    words = mood_words(g, m.tracks)
+    sc = Scene("mood-surprise", syn, "syn", m, seed=44, words=words,
+               note="the empty states' Auto DJ button under Vocals at Loose, then Relaxed and Vocals: a row inside "
+                    "the mood from the scan of every track (its 64 kept), then a session seeded by it; a filter "
+                    "only tracks with no row fit, then one nothing fits: no track for the button")
+    for n in range(4):
+        if n % 2 == 0:
+            sc.filter(moodfilter.pack(voice="vocals", level="loose") if n == 0 else
+                      moodfilter.pack(energy="relaxed", voice="vocals"))
+        p = sc.surprise(both)
+        sc.new(4400 + n, p.track)
+        sc.run(Settings(ROLLING, 55 + 5 * n, n % 2 == 0, n % 3 != 0), 5, user=150)
+    valid = [q for q in range(1, 1 << 11) if moodfilter.q_valid(q) and moodfilter.active(q)]
+    with_row = {q: [t for t in range(m.tracks) if m.track_to_row[t] != NO_ROW and moodfilter.matches(words[t], q)]
+                for q in valid}
+    no_row = next(q for q in valid if not with_row[q] and
+                  any(m.track_to_row[t] == NO_ROW and moodfilter.matches(words[t], q) for t in range(m.tracks)))
+    none = next(q for q in valid if not any(moodfilter.matches(w, q) for w in words))
+    for q in (no_row, none):
+        sc.filter(q)
+        sc.surprise(both)
+        sc.run(Settings(ROLLING, 60), 2)
+    out.append(sc)
+
+    # 33-35. Stay on seed under a mood filter re-pins (MOOD-FILTERS.md 6.4,
+    # D2): nothing listed inside the mood, or all of it cooled, and the pin
+    # moves onto the playing track's row, inside the mood, before any jump;
+    # the second round shares the first's reads, and finding nothing it
+    # jumps. A moved pin goes at a quick skip of it; a seed's stays. A seed
+    # whose row lists nothing (`bare`) makes its session's first pick reach
+    # the re-pin.
+    bare = [r for r in range(syn["rows"]) if not syn["lists"][r]]
+    lock = Settings(LOCKED, 60, True, True)
+    flips = [lock, Settings(LOCKED, 70), Settings(LOCKED, 55, True, False), Settings(LOCKED, 65, False, True)]
+
+    def rows_inside(mood, listed=True):
+        return [r for r in range(m.rows) if m.row_to_track[r] != NO_ROW and mood.passes(m.row_to_track[r]) and
+                bool(syn["lists"][r]) == listed]
+
+    def stranded(seed, row, prefetch=True):
+        """A session from a seed whose row lists nothing, the listener's track
+        on `row` playing: its first pick re-pins onto it, or jumps."""
+        sc.new(seed, m.row_to_track[next(r for r in bare if m.row_to_track[r] != NO_ROW)])
+        sc.start(m.row_to_track[row], False)
+        if prefetch:
+            sc.prefetch(lock)
+        p = sc.pick(lock)
+        sc.left(sc.playing, 150000, True)
+        sc.start(p.track, True)
+        return p
+
+    m = maps_for(syn)
+    sc = Scene("mood-repin", syn, "syn", m, seed=45, words=mood_words(g, m.tracks),
+               note="Stay on seed under Neutral, then Happy and Relaxed: at no candidate inside the mood, or all of "
+                    "it cooled, the pin moves onto the playing track's row, its slot read in the same pick, and a "
+                    "second round finding nothing jumps; a Follow the vibe stretch, then a seed that lists nothing "
+                    "with the listener on a row read ahead: a re-pin with no read")
+    sc.filter(moodfilter.pack("neutral"))
+    sc.new(4500, m.row_to_track[rows_inside(sc.mood)[0]])
+    sc.run(lock, 50, user=60, flips=flips)
+    sc.filter(moodfilter.pack("happy", "relaxed"))
+    sc.mode()
+    sc.run(Settings(ROLLING, 60, True, True), 12, prefetch=3)
+    sc.mode()
+    held = [c[0] for c in sc.e.cache if c is not None and c[0] in sc.e.ring and sc.mood.passes(m.row_to_track[c[0]])]
+    stranded(4501, held[-1])
+    sc.run(lock, 27, user=60, flips=flips)
+    out.append(sc)
+
+    m = maps_for(syn, unmapped=0)
+    sc = Scene("mood-repin-edges", syn, "syn", m, seed=46, words=mood_words(g, m.tracks),
+               note="Stay on seed under Vocals and Party: a seed's pin kept at a quick skip; moved pins quick-skipped "
+                    "(the next pick takes the playing track's row), and an Anchor change; from seeds that list "
+                    "nothing: a playing track outside the mood (no re-pin: a jump), a new pin whose slot fails its "
+                    "CRC twice (the random pick's row the pin), the same row again (damaged: no re-pin), one whose "
+                    "read fails (the pin stays for the read ahead), one past the read budget")
+    sc.filter(moodfilter.pack(voice="vocals", tags=("party",)))
+    inside = rows_inside(sc.mood)
+    sc.new(4600, m.row_to_track[inside[0]])
+    p = sc.pick(lock)
+    sc.left(sc.playing, 4000, False)                        # the seed, quick-skipped: its pin stays
+    sc.start(p.track, True)
+    quick = 0
+    for n in range(46):
+        if g.below(8) == 0:
+            sc.left(sc.playing, 1000 * g.below(300), False)
+            sc.start(sc.user_track(), False)
+        p = sc.pick(flips[n % len(flips)])
+        skip = p.repinned and quick < 4                      # the moved pin, skipped as the pick waits next
+        quick += skip
+        sc.left(sc.playing, 1000 * g.below(30) if skip else 150000, not skip)
+        sc.start(p.track, True)
+    stranded(4601, inside[1])
+    sc.mode()                                                # the moved pin goes, and its mark
+    p = sc.pick(lock)
+    sc.left(sc.playing, 3000, False)                         # the pin taken at that pick stays
+    sc.start(p.track, True)
+    sc.run(lock, 2)
+    outside = [r for r in range(m.rows) if not sc.mood.passes(m.row_to_track[r])]
+    stranded(4602, outside[0])
+    fresh = [r for r in inside if r not in sc.src.count]
+    sc.set_faults(damaged=[fresh[0]])
+    stranded(4603, fresh[0])
+    stranded(4604, fresh[0])
+    sc.set_faults(io=[fresh[1]])
+    stranded(4605, fresh[1])
+    sc.run(lock, 3, prefetch=1)
+    flaky = next(r for r in bare if r not in sc.src.count)
+    sc.set_faults(flaky=[flaky])
+    sc.reopen()
+    sc.new(4606, m.row_to_track[flaky])
+    sc.start(m.row_to_track[fresh[2]], False)
+    p = sc.pick(lock)                                        # two reads of the seed's: none left for the new pin's
+    sc.left(sc.playing, 150000, True)
+    sc.start(p.track, True)
+    sc.run(lock, 3, prefetch=1)
+    out.append(sc)
+
+    m = maps_for(syn, unmapped=0)
+    sc = Scene("mood-index-away", syn, "syn", m, seed=47, words=mood_words(g, m.tracks),
+               note="Stay on seed under Sad at Loose: a pin moved, the index away (picks by id inside the mood, "
+                    "the pin kept) and back (it steers again); a session from a seed that lists nothing, begun "
+                    "while the index is away: its row the pin when the maps come, and the pick after re-pins")
+    sc.filter(moodfilter.pack("sad", level="loose"))
+    stranded(4700, rows_inside(sc.mood)[0])
+    sc.run(lock, 2)
+    sc.index(False)
+    sc.run(lock, 4)
+    sc.index(True)
+    sc.arrived()
+    sc.start(sc.playing, True)
+    sc.run(lock, 4, prefetch=1)
+    sc.index(False)
+    sc.new(4701, m.row_to_track[[r for r in bare if m.row_to_track[r] != NO_ROW][-1]])
+    sc.run(lock, 3)
+    sc.index(True)
+    sc.arrived()
+    sc.start(sc.playing, True)
+    sc.run(lock, 4)
+    out.append(sc)
+
+    # 39. Shared rows under a mood filter (MOOD-FILTERS.md 6.3: trackToRow is
+    # many to one, and a pick of a row plays its track): a quarter more tracks
+    # on rows other tracks hold, the row's track any of them, a copy's word
+    # its row's track's half the time (the same song). The runs, the scan
+    # (each row once, and only if its own track passes), the repeats and the
+    # re-pin (6.4) test the row's track, not the copy. Stay on seed with its
+    # pin damaged and the listener's copy inside the mood playing: the scan
+    # skips that row as well as the pin's.
+    m = maps_for(syn, shared=250)
+    words = mood_words(g, m.tracks)
+    for t in range(m.tracks):
+        r = m.track_to_row[t]
+        if r != NO_ROW and m.row_to_track[r] != t and g.below(2) == 0:
+            words[t] = words[m.row_to_track[r]]
+    sc = Scene("mood-shared-rows", syn, "syn", m, seed=48, words=words,
+               note="a quarter more tracks on rows other tracks hold, under Happy and Party, then a narrow Strict "
+                    "filter, then Relaxed and Vocals: jumps whose scan meets a row twice (kept once) or a copy "
+                    "whose row's track fails (left out); repeats; Stay on seed's re-pins onto the listener's copy, "
+                    "by its row's track; a damaged pin with the listener's copy inside the mood playing: the scan "
+                    "skips its row")
+    sc.filter(moodfilter.pack("happy", tags=("party",)))
+    sc.new(4800, sc.user_track())
+    sc.run(Settings(ROLLING, 60, True, True), 50, user=80, skips=60,
+           flips=[Settings(ROLLING, 60, True, True), Settings(ROLLING, 70), Settings(ROLLING, 55, True, False)])
+    sc.filter(moodfilter.pack("happy", "relaxed", "vocals", level="strict"))
+    sc.run(Settings(ROLLING, 60, True, True), 25, user=150)
+    sc.filter(moodfilter.pack(energy="relaxed", voice="vocals"))
+    sc.mode()
+    sc.run(lock, 20, user=60, flips=flips)
+
+    def copy_of(inside, row_inside, not_row=NO_ROW):
+        """A track on a row another track holds, not cooled by id and not on
+        `not_row`: inside the mood or not, its row's track inside it or not."""
+        return next(t for t in range(m.tracks) if m.track_to_row[t] not in (NO_ROW, not_row) and
+                    m.row_to_track[m.track_to_row[t]] != t and sc.mood.passes(t) == inside and
+                    sc.mood.passes(m.row_to_track[m.track_to_row[t]]) == row_inside and t not in sc.e.ids)
+
+    # From a seed that lists nothing, the listener's copy playing: outside
+    # the mood on a row whose track is inside (a re-pin), then inside it on
+    # a row whose track isn't (no re-pin: a jump).
+    seed = m.row_to_track[next(r for r in bare if m.row_to_track[r] != NO_ROW)]
+    for n, (inside, row_inside) in enumerate(((False, True), (True, False))):
+        sc.new(4801 + n, seed)
+        sc.start(copy_of(inside, row_inside), False)
+        p = sc.pick(lock)
+        sc.left(sc.playing, 150000, True)
+        sc.start(p.track, True)
+        sc.run(lock, 2)
+    for _ in range(3):
+        sc.set_faults(damaged=[sc.e.pin])
+        sc.reopen()
+        sc.left(sc.playing, 150000, True)
+        sc.start(copy_of(True, True, sc.e.pin), False)
+        p = sc.pick(lock)
+        sc.left(sc.playing, 150000, True)
+        sc.start(p.track, True)
+        sc.run(lock, 2)
+    out.append(sc)
     return tables, out
 
 
@@ -1418,8 +2054,11 @@ tests the reference itself.
   selFloor and each row's used slot entries as hex, 6 digits an entry (the
   row, then the level).
 - `sessions`: each a table (none: no index), the maps (`trackToRow`,
-  `rowToTrack`, 65535 none), the filter words (bpm | camelot << 8 |
+  many to one in mood-shared-rows, and `rowToTrack`, the track a pick of
+  the row plays; 65535 none), the filter words (bpm | camelot << 8 |
   artist16 << 16; BPM_ANALYSED and "present" in bits 13 and 15), the
+  library's mood words (`moods`, a u16 a track as `library.idx` v7 holds
+  them, docs/MOOD-FILTERS.md 5.4; left out: no mood data), the
   library's track count, the faults the slot reader injects by row
   (`damaged`: the CRC always fails; `flaky`: on the first read only;
   `io`: the first read fails, Why::Io; `broken`: a good CRC over a bad
@@ -1431,7 +2070,8 @@ tests the reference itself.
   library rebuilt: the by-id cooldown cleared), `index` (`on` 0: the index
   away from now, the engine given no maps and no slots; 1: back),
   `arrived` (the index joined: a seed track given without maps becomes the
-  pin), `prefetch` (one loop pass
+  pin), `filter` (Auto DJ's mood filter from now: its 11 bits `q`, 0
+  none; with no `moods` it filters nothing), `prefetch` (one loop pass
   in mode `m`: the row it reads, 65535 none, and the read's result),
   `pick` and `surprise` (the settings, the playing track, and every field
   of the result, a field left out being 0).

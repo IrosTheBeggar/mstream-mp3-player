@@ -39,17 +39,22 @@ CJK store, lib/core/CjkGlyphs16.cpp, both lack, or one TextFold always
 folds: the fullwidth forms U+FF01-FF5E, the halfwidth katakana, the minus
 sign U+2212), every one in a file named at once with its code point; a
 text with no placeholders longer than its "bytes" (or a line longer than
-its "line_bytes"); an @@autonym that isn't the language's name in itself.
+its "line_bytes"); a "wrap" room's text without "line_bytes"; an
+@@autonym that isn't the language's name in itself.
 A message a translation leaves out is English on the device (--report
 counts them).
 
 "bytes" in a message's metadata is the smallest buffer (its NUL included)
 the text goes through on the device, filled; "line_bytes" the same for
-each line, where the code copies the text a line at a time. The generator
-checks a text without placeholders; test_ui_strings checks every text
-filled at worst. A placeholder's "or" lists the other messages that may
-fill it (each at its own worst): the width test tries each in the UI's
-language, and keeps the widest (the byte test the longest).
+each line, where the code copies the text a line at a time (in a "wrap"
+room, each line the code wraps it into: textfit::wrap() loses a longer
+line's end, so every wrap room says it). The generator checks a text
+without placeholders, but for a wrap room's lines (where the fonts break
+them); test_ui_strings checks every text filled at worst, and a wrap
+room's lines as the fonts break them. A placeholder's "or" lists the
+other messages that may fill it (each at its own worst): the width test
+tries each in the UI's language, and keeps the widest (the byte test the
+longest).
 
 Out: per language, one blob of the messages (UTF-8, NUL after each form,
 the same text once) and an offset per id (0xFFFF: none, English is used);
@@ -160,14 +165,23 @@ def check_text(where, text, max_lines):
         raise Bad(f"{where}: {text.count(chr(10)) + 1} lines, the room has {max_lines}")
 
 
+def wrapped(meta):
+    """Whether the code wraps the text over its room's lines itself (a
+    "wrap" room): its lines are where the fonts break them."""
+    return any(r.get("layout") == "wrap" for r in rooms_of(meta))
+
+
 def check_bytes(where, text, meta):
     """A text with no placeholders against its buffers (meta's "bytes" and
-    "line_bytes", a NUL included); a filled one is test_ui_strings'."""
+    "line_bytes", a NUL included); a filled one is test_ui_strings', and
+    so are a wrap room's lines."""
     if placeholders(text):
         return
     n = len(text.encode("utf-8"))
     if "bytes" in meta and n + 1 > meta["bytes"]:
         raise Bad(f"{where}: {n} bytes of UTF-8, its buffer holds {meta['bytes'] - 1}")
+    if wrapped(meta):
+        return
     for line in text.split("\n"):
         n = len(line.encode("utf-8"))
         if "line_bytes" in meta and n + 1 > meta["line_bytes"]:
@@ -361,6 +375,8 @@ def check_english(data):
         for k in ("bytes", "line_bytes"):
             if k in meta and (not isinstance(meta[k], int) or isinstance(meta[k], bool) or meta[k] < 2):
                 raise Bad(f"{where}: {k} is a buffer's size (a whole number, 2 or more)")
+        if wrapped(meta) and "line_bytes" not in meta:
+            raise Bad(f"{where}: a wrap room needs line_bytes (the buffer of each line the code wraps it into)")
         m = Message(key, value, meta)
         lines = max_lines(meta)
         if m.plural:

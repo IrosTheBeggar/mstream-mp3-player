@@ -470,6 +470,9 @@ bool LibraryPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
         if (before[r - first] != playing(rowAt(r))) list.refreshRow(r);
       }
     }
+    // (A row the list keeps rendered just outside the band may be the one
+    // whose mark changed: those are rendered again when they come on.)
+    list.forgetHidden();
   }
   const bool frame = ui_.list().update(nowMs, frameDue, wholeRows);
   // The Albums segment's dot comes and goes once the list rests, never a
@@ -668,10 +671,13 @@ bool LibraryPage::emptyState(EmptyState& e) {
 }
 
 void LibraryPage::onEmptyAction(int i) {
-  (void)i;
   const AppState& s = ui_.state();
   if (!s.card && s.libraryTracks == 0) {
-    ui_.retryCard();
+    if (i == 1) {
+      ui_.askFormat(false);  // (Format...: a card that is in, not FAT32 or unreadable)
+    } else {
+      ui_.retryCard();
+    }
     return;
   }
   ui_.toast(tr(ui_.host().rescanRestarts() ? S::toast_card_found : S::library_looking_again), false);

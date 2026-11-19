@@ -4,6 +4,7 @@
 #pragma once
 #include <cstdint>
 
+#include "FormatAsk.h"
 #include "FrameClock.h"
 #include "HostStatus.h"
 #include "InputEvent.h"
@@ -20,6 +21,7 @@
 #include "ui/Input.h"
 #include "ui/ListScroller.h"
 #include "ui/ListView.h"
+#include "ui/PanelScan.h"
 #include "ui/Overlays.h"
 #include "ui/Page.h"
 #include "ui/Pages.h"
@@ -38,7 +40,8 @@
 //     ~48 KB left while playing). The loop already runs on core 1 below the
 //     decoder (priority 1 vs 2), so the audio always goes first, and it
 //     sleeps a little every pass. Frames are what needs care: the UI draws
-//     an animation frame only on its 30 fps deadlines (FrameClock), and
+//     an animation frame only when its frame clock says (FrameClock; a
+//     moving list's on the panel's scan, ui/PanelScan), and
 //     otherwise only what changed, in small pieces each under its own bus
 //     hold (ui/Gfx).
 //
@@ -63,6 +66,10 @@
 //     a "!" on its Queue row; the headphones lost while playing are a
 //     dialog that follows their reconnecting; the pages have their empty
 //     and no-card states (ui/EmptyState).
+//   - The glance ("Touch when off": Track; setGlance()): over the dark UI
+//     for its 10 s, Now Playing in its Glance mode (no controls) under the
+//     Output tab's status, nothing on it acting; the power button opens the
+//     whole screen as it was.
 //   - Album covers (ui/Thumbs): thumbnails made by the card worker below
 //     the loop (app/CardWorker, handed by app/CardTasks), never started
 //     while a list moves; a page redraws the row (or the cover) that shows
@@ -122,7 +129,8 @@ public:
   void resume();
   bool suspended() const { return suspended_; }
   // How long the loop may sleep (1-5 ms): less while a frame is due soon;
-  // 20 ms while the screen is off.
+  // 20 ms while the UI is dark (the screen off, or the glance: nothing on it
+  // moves faster than its seconds, and its touches act on nothing).
   uint32_t idleMs(uint32_t nowMs) const;
   // The screen went off (ScreenPower): nothing is drawn (gfx drops every
   // push), but the logic goes on: the snapshot, dialogs, toasts, their
@@ -132,6 +140,22 @@ public:
   // bar, the page, what is over it), the list's hardware scroll sent again.
   void setDark(bool on);
   bool dark() const { return dark_; }
+  // The glance ("Touch when off": Track; ScreenPower's Level::Glance): the
+  // screen lit for 10 s with the playing track and nothing to tap. The UI
+  // stays dark under it (its logic, toasts and dialogs go on, drawn
+  // nowhere); only the glance reaches the panel: the status row
+  // (TabBar::updateGlance()) and glance_, Now Playing in its Glance mode,
+  // drawn with the gfx gate lifted around those draws alone (as identify()'s
+  // banner). ScreenControl::apply() calls setGlance(true) once the panel is
+  // awake, before the backlight: it is drawn whole, and loop() then redraws
+  // what changed (the second, the track, the cover, the battery). True:
+  // drawn. Refused, and logged (false: the backlight stays off), unless the
+  // UI is up, not suspended, and dark. setGlance(false) draws nothing: the
+  // sleep-in follows, or setDark(false) draws the whole UI again (which
+  // then paints a list page's band whole at once: the panel's memory holds
+  // the glance, not the page).
+  bool setGlance(bool on);
+  bool glancing() const { return glancing_; }
   // The Pair screen's search runs (its 2 minutes at most; OutputPage):
   // main.cpp holds a lit screen lit for it (ScreenControl::Hold), so the
   // listener's taps on the list act instead of only waking a dim screen,
@@ -161,8 +185,11 @@ public:
     return started_ && !suspended_ && !dark_ && !identifying_ && !modalUp() && page_ &&
            (page_->animating() || (railHold_ && list_.attached() && list_.railTouch()));
   }
-  // A cover may be made now: the UI is up and lit.
-  bool coversAllowed() const { return started_ && !suspended_ && !dark_ && !identifying_; }
+  // A cover may be made now: the UI is up and lit, the whole UI or the
+  // glance (which shows the cover and the waveform: app/CardTasks gates
+  // both lanes on this, and its scan takes its lit slices for the glance's
+  // 10 s at most, its draws sharing the SPI bus with the card).
+  bool coversAllowed() const { return started_ && !suspended_ && (!dark_ || glancing_) && !identifying_; }
   // The Library tab's open album, artist or folder: its tracks (the scan's
   // "shown" source, 3.3.3); none when another page is up.
   LibraryIndex::Span shownTracks() const;
@@ -203,6 +230,12 @@ public:
   void browse(LibraryIndex* index);
 
   // ---- console ----
+  // uiBv: the sprites' fast text (Fonts::drawFast()) against M5GFX's, the
+  // library's names drawn both ways and the sprites' memory compared.
+  void verifyText(int step);
+  // The frame clock's period while a list page is up (Ui.cpp): short of a
+  // refresh when its frames go by the panel's scan, else 60 a second.
+  uint32_t listFrameMs() const;
   void printState() const;     // ui
   // ui<n>: tab n; uib back; uic the coach cards; uiL<tag> the language
   // (uiL the list, uiL- forget it and the tips); uiP the first boot's picker.
@@ -265,15 +298,23 @@ public:
   // minutes idle").
   void note(const char* text, uint32_t ms);
   // `primary`: the row that is the main choice (-1 none); `danger`: the
-  // row in red (-1 none). A touch that starts within Sheet::kSettleMs of
-  // its opening goes nowhere.
+  // row in red (-1 none); `inks`: each detail's colour (nullptr: all dim).
+  // A touch that starts within Sheet::kSettleMs of its opening goes
+  // nowhere.
   void openSheet(OverlayOwner* owner, const char* title, const char* const* rows, int n,
-                 const char* const* details = nullptr, int primary = -1, int danger = -1);
+                 const char* const* details = nullptr, int primary = -1, int danger = -1,
+                 const uint16_t* inks = nullptr);
   // What a row of the sheet just opened shows as its detail, and follows
   // while it is up: the sleep timer's state ("23 min", "Fading", "Off"),
   // shuffle ("On", "Off"), repeat ("Off", "All", "One") or Auto DJ ("On",
-  // "Off", "Waiting", "Paused"), from the snapshot each pass (a change
-  // from the console shows too).
+  // "Off", "Waiting", "Paused"; autoDjDetail()), from the snapshot each
+  // pass (a change from the console shows too).
+  // The playback menu's Auto DJ detail (autodjview::sheetDetail(), frames
+  // dj-menu, dj-menu-wait): with a mood filter on, "On · Relaxed ·
+  // Instrumental" in the accent, cut with "…" to the room beside the row's
+  // label (the sheet never cuts a detail itself); waiting for a track that
+  // fits it, "Waiting" in amber; else the state, dim. Returns the ink.
+  uint16_t autoDjDetail(char* buf, size_t size) const;
   enum class SheetFollow : uint8_t { None, Sleep, Shuffle, Repeat, AutoDj };
   void sheetFollows(int row, SheetFollow what);
   // A tap on row `row` of the sheet just opened doesn't close it: the
@@ -319,9 +360,16 @@ public:
   void autoDjToast(const char* text, bool switchedOn);
   // What Auto DJ's loop step had to say (autodjview::News bits, main.cpp
   // after its step): one toast (autodjview::newsToast(): a note for the
-  // failure pause). While a toast with Undo is up, it waits until that
-  // goes (the failure pause doesn't), and an Undo tapped drops it.
-  void autoDjNews(uint8_t news);
+  // failure pause and for few tracks fitting its mood filter, `few` of
+  // them now: autodjview::fewCount()). While a toast with Undo is up, it
+  // waits until that goes (the failure pause doesn't), and an Undo tapped
+  // drops it (but Few). While the mood filters' editor is up, all of it
+  // waits until the editor goes, the failure pause too (MOOD-FILTERS.md
+  // 4.5); Auto DJ's editor closed on a change drops the filter's own news
+  // that waited (the change says its own, from its count). A Few or Jump
+  // that the toast made of what waited outranks shows once it goes
+  // (autodjview::NewsWait).
+  void autoDjNews(uint8_t news, uint32_t few);
   // The Queue's entries that are Auto DJ's (its DJ marks): never marked as
   // a Library add, nor scrolled to (queueview::AddedMark).
   queueview::QuietKeys djKeys() const;
@@ -336,6 +384,43 @@ public:
   // .still: "Still no card: ...", "Still exFAT: ...", "Still GPT: ..."),
   // and the page drawn again if that changed.
   void retryCard();
+  // The format's question (docs/HOST-STATUS.md, "@format"): from a no-card
+  // page's Format… (a card that is in but isn't FAT32 or can't be read),
+  // or a computer's @format (`fromComputer`), which can do no more than
+  // this, over any card (one the player reads too). Two dialogs, each with
+  // Cancel: first what it does ("Format this card?": the whole card
+  // erased, even what the player can't read; a card the player reads, its
+  // music named; a transfer that didn't finish on it, said; a damaged
+  // card's "Check it on a computer first"), answered by a tap on
+  // Format...; then "Erase the whole card?" with "Hold to erase", red,
+  // where the first one's Cancel was, in the Dialog's hold mode: it acts
+  // only when held 2 s (HoldButton::kHoldMs), filling meanwhile, and the
+  // hint under the body says so from the start (format.hold_hint); a tap
+  // on it, a hold let go or slid off, does nothing but turn the hint
+  // amber, and a touch in that dialog's first 0.6 s (from the tap that
+  // opened it) goes nowhere (formatask: the double tap's second touch).
+  // The 2 s are the time the loop saw the finger on it, pass by pass
+  // (HoldButton): no lift answers it, however late it is read; a loop
+  // that loses sight of the finger for over half a second ends the hold;
+  // and only a hand holds it (the console's scripted finger, uit/uid,
+  // taps the first question and Cancel, and its hold presses nothing).
+  // Which touch answers what: DialogTouch, formatask (the step's answer,
+  // a loop pass's order). No tap, double tap or run of taps
+  // answers both. Cancel is the default: anything but a hold kept to its
+  // end closes it as Cancel (Cancel, a tab, another dialog, another
+  // screen taking the display, the language changed, a minute without an
+  // answer: formatask::kAskMs, which wins over a hold under way). The
+  // touch buttons A, B and C keep their own work under it (ButtonPolicy:
+  // they never answer a dialog), the PWR key too. Format:
+  // UiHost::formatCard(), the "Restarting to format" note. Taps tick, as
+  // every dialog's; the hold's end the double tick, a hold that fell short
+  // the inert buzz. The screen wakes for it. Asked again while it is up:
+  // it stays (a computer's ask is then the answer's too). False: the UI
+  // isn't up (not started, or another screen has the display).
+  bool askFormat(bool fromComputer);
+  bool formatAsking() const {
+    return dialog_.up() && (ownDialog_ == OwnDialog::FormatAsk || ownDialog_ == OwnDialog::FormatSure);
+  }
   bool toastUp() const { return toast_.up(); }
   void drawHeader(const Header& h);
 
@@ -357,6 +442,9 @@ private:
   void endPageTouch();
   // The toast's "View": the Queue, at that entry.
   void viewInQueue(uint32_t key);
+  // What is up for Auto DJ's news to wait on (djNews_): the editor, a
+  // toast with Undo, any toast.
+  autodjview::NewsWait::Up djUp() const;
   // Closes a sheet or dialog (telling its owner, if `notify`); true if one was up.
   bool closeModal(bool notify);
   // A modal went: what it covered drawn again (the coach cards if they're
@@ -391,6 +479,8 @@ private:
   void sleepTitle(char* buf, size_t size) const;
   // The Library's status line: the band shortened under it while it shows.
   void updateStatus(uint32_t nowMs);
+  // The line itself, `text` in it (empty: the line's background alone).
+  void drawStatusLine(const char* text);
   static constexpr int kStatusH = 20;
   bool statusBand_ = false;   // the list's band ends above the line
   uint32_t statusHash_ = 0;   // the text drawn (0: none, or to be drawn again)
@@ -432,6 +522,9 @@ private:
 
   NavModel nav_;
   ListScroller vscroll_;
+  // The panel's scan, measured when the UI starts: a moving list's frames
+  // go by it (ui/PanelScan, lib/core ScanSync).
+  PanelScan scan_;
   ListView list_;
   TabBar tabBar_;
   mutable tabbar::LabelFit tabFits_[tabbar::kTabs] = {};
@@ -463,7 +556,24 @@ private:
   bool playFailedDialog_ = false;  // ... is playFailed()'s
   // Which of the Ui's own dialogs onDialog() answers (the flags above are
   // cleared as a dialog closes, before its owner hears the button).
-  enum class OwnDialog : uint8_t { None, Lost, PlayFailed } ownDialog_ = OwnDialog::None;
+  enum class OwnDialog : uint8_t { None, Lost, PlayFailed, FormatAsk, FormatSure } ownDialog_ = OwnDialog::None;
+  // The format's question: a computer's @format asked it, its steps'
+  // clock (each one's minute, the second's settle), and why it goes when
+  // that isn't a button (the log's: set before it is closed).
+  bool formatFromComputer_ = false;
+  formatask::Question formatQuestion_;
+  const char* formatGone_ = nullptr;
+  void openFormatSure();
+  // The step up answered with `button` (formatask::Question::answered(),
+  // at dialogAnsweredMs_), -1 closed.
+  void formatAnswered(int button);
+  // A dialog's button answered (a tap, or the hold kept to its end:
+  // `held`) at `ms` (the tap's own time, or the loop pass's that saw the
+  // hold's end): its feedback, the dialog closed, its owner told.
+  void answerDialog(int button, bool held, uint32_t ms);
+  uint32_t dialogAnsweredMs_ = 0;  // (answerDialog()'s `ms`: the second question's clock starts there)
+  // What a touch did to the dialog's hold (Dialog::holdNews()).
+  void holdNews(HoldButton::News n);
   uint32_t gateFailuresSeen_ = 0;
   // The first boot: the tips seen (NVS "ui"/"coach"); a fresh unit's
   // language picker due or up; the tips (and the language's note) to show
@@ -482,10 +592,19 @@ private:
   QueuePage queuePage_;
   DancePage dancePage_;
   OutputPage outputPage_;
+  NowPlayingPage glance_;  // the glance's (Mode::Glance): never page_, never given an event
   Page* page_ = nullptr;
 
   AppState state_;
-  FrameClock clock_{33};
+  // A page's animation frames on the clock's deadlines: 30 a second (Now
+  // Playing's scrub); a list's, 60 a second, or on the panel's scan short
+  // of a refresh (the scan times the frames, the clock only keeps two out
+  // of one refresh); uif<ms>: a list's, forced.
+  static constexpr uint32_t kPageFrameMs = 33;
+  static constexpr uint32_t kListFrameMs = 16;
+  static constexpr uint32_t kScanFrameMs = 10;
+  uint32_t forcedFrameMs_ = 0;
+  FrameClock clock_{kPageFrameMs};
   ScrollGovernor governor_;
   ScrollGovernor::Budget budget_;
   bool started_ = false;
@@ -497,6 +616,28 @@ private:
   char identifyLabel_[hoststatus::kMaxLabel + 1] = "";
   void drawIdentify();
   void endIdentify();
+  // The glance (setGlance()): drawn now; wanted by the screen (set when it
+  // is drawn, cleared by setGlance(false) and setDark(false): a suspend()
+  // clears glancing_ alone, and resume() draws the glance again while it is
+  // wanted and the UI dark); drawn since the last redrawAll() (the panel's
+  // memory holds it, not the page: the next redrawAll() paints a list
+  // page's band whole at once); the hardware scroll's mapping it was drawn
+  // through (scrollSig(): a change in the dark, by a writer the gfx gate
+  // doesn't stop, draws it whole again); since when (for the log).
+  bool glancing_ = false;
+  bool glanceWanted_ = false;
+  bool gramStale_ = false;
+  uint32_t glanceScroll_ = 0;
+  uint32_t glanceSinceMs_ = 0;
+  NavModel::PageRef glanceRef_;  // (glance_.enter()'s: it names nothing)
+  // Every glance draw: the gate and the toast's cover lifted around the
+  // status row and glance_ (all of it, or what changed and a cover that
+  // `arrived`), then both put back. Through the list band's mapping, as
+  // identify()'s banner (the scroll stays as the page left it).
+  void drawGlance(bool all, uint32_t arrived = Thumbs::kNone);
+  // What maps the panel's rows now (ListScroller: on or off, its band's
+  // top and height, the start address sent).
+  uint32_t scrollSig() const;
   bool danceWasOn_ = false;   // the dancer was up when it went dark
   // The screen woke: draw everything again.
   void redrawAll();
@@ -513,7 +654,7 @@ private:
   uint32_t lastContent_ = 0;
   uint32_t lastUpNext_ = 0;
   uint32_t lastDjAdds_ = 0;  // Auto DJ's appends the last pass saw (no badge flash for them)
-  uint8_t pendingNews_ = 0;  // Auto DJ's news held while an Undo toast is up (autoDjNews())
+  autodjview::NewsWait djNews_;  // Auto DJ's news waiting: for an Undo toast, the editor, one that outranked it
   bool undoSwitchesDjOff_ = false;  // the toast's Undo also switches Auto DJ off (autoDjToast())
   uint32_t badgeUntilMs_ = 0;
   uint32_t nowMs_ = 0;
@@ -558,6 +699,14 @@ private:
     uint32_t railFrames = 0;  // a scrub's frames of the rail alone
     uint64_t railSumUs = 0;
     uint32_t railMaxUs = 0;
+    uint32_t thumbs = 0;      // ... and the thumb drawn with a row of a band
+    uint32_t heldMaxUs = 0;   // the longest the page held the loop in one pass
+    // A fling's frames: the time from one to the next (the longest, and
+    // how many came later than a frame and a half).
+    uint32_t lastFrameUs = 0;
+    uint32_t gapMaxUs = 0;
+    uint32_t gapsLate = 0;
+    uint32_t gaps = 0;
     uint32_t ringMin = 0;
     uint32_t underruns = 0;
   } motion_;

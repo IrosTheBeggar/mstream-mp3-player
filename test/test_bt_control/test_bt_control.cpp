@@ -543,6 +543,52 @@ void test_each_link_starts_safe() {
   TEST_ASSERT_EQUAL(Mode::Probing, c.volume().mode());
 }
 
+// AVRCP on the link (avrcpOnLink(), BtSink::avrcpUp(): what the card's
+// background work waits for after a link, 2026-11-19): AVRCP connected since
+// the link last went down, and the link up. Not up on the next link until
+// AVRCP connects on it, even with its disconnect never reported (Bluedroid
+// closes AVRCP with the A2DP stream and sets it up anew on each link); one
+// the headphones opened before A2DP counts at the link.
+void test_avrcp_on_the_link() {
+  FakeIo io;
+  BtControl c(io, 30);
+  TEST_ASSERT_FALSE(c.avrcpOnLink());
+  c.avrcpUp(0);  // AVRCP before A2DP: not on a link yet
+  TEST_ASSERT_TRUE(c.avrcpConnected());
+  TEST_ASSERT_FALSE(c.avrcpOnLink());
+  c.linkUp(100);  // ... and on it once the link is up
+  TEST_ASSERT_TRUE(c.avrcpOnLink());
+  c.linkDown(200);  // A2DP down, AVRCP's disconnect not (yet) reported
+  TEST_ASSERT_TRUE(c.avrcpConnected());
+  TEST_ASSERT_FALSE(c.avrcpOnLink());
+  c.avrcpDown(300);
+  c.linkUp(400);  // the next link: AVRCP not up on it until it connects
+  TEST_ASSERT_FALSE(c.avrcpOnLink());
+  c.avrcpUp(4150);
+  TEST_ASSERT_TRUE(c.avrcpOnLink());
+  c.avrcpDown(5000);  // AVRCP down, the link up
+  TEST_ASSERT_FALSE(c.avrcpOnLink());
+  c.capabilities(true, 6000);  // its capabilities come only over a connected AVRCP
+  TEST_ASSERT_TRUE(c.avrcpOnLink());
+  // AVRCP's disconnect lost: avrcpConnected() stays up over the reopen, and
+  // the new link waits for its own AVRCP all the same.
+  c.linkDown(7000);
+  c.linkUp(7100);
+  TEST_ASSERT_TRUE(c.avrcpConnected());
+  TEST_ASSERT_FALSE(c.avrcpOnLink());
+  c.tick(9000);
+  TEST_ASSERT_FALSE(c.avrcpOnLink());
+  c.avrcpUp(10850);  // its own, 3.75 s after the link
+  TEST_ASSERT_TRUE(c.avrcpOnLink());
+  // Its capabilities on a link whose AVRCP connect wasn't seen (avrcUp_
+  // left set): connected now.
+  c.linkDown(12000);
+  c.linkUp(12100);
+  TEST_ASSERT_FALSE(c.avrcpOnLink());
+  c.capabilities(true, 15900);
+  TEST_ASSERT_TRUE(c.avrcpOnLink());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_link_while_playing_waits_for_the_probe_then_lifts);
@@ -562,5 +608,6 @@ int main(int, char**) {
   RUN_TEST(test_suspend_now_after_a_pause);
   RUN_TEST(test_media_ctrl_failure_waits_for_the_schedule);
   RUN_TEST(test_each_link_starts_safe);
+  RUN_TEST(test_avrcp_on_the_link);
   return UNITY_END();
 }

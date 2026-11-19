@@ -57,7 +57,8 @@
 //        on the other core (stops the player)
 //   D... Auto DJ (lib/core AutoDjCommand.h has the list; app/AutoDj): D status,
 //        D0/D1 off/on, Dm0/Dm1 Anchor, Df55-Df75 strictness, Dt0/Dt1 and Dk0/Dk1
-//        BPM continuity and Harmonic mixing, Ds<hex> the next session's seed, Dr
+//        BPM continuity and Harmonic mixing, Dq<hex>/Dq0 the mood filter (its
+//        q, docs/MOOD-FILTERS.md 5.4) / none, Ds<hex> the next session's seed, Dr
 //        a new session, Dp a pick now, Dn<k> dry-run picks on a copy, Dj the
 //        join again, Dc the file reopened, Db<n> slot reads timed, Dh/Dh<id>
 //        and De "Auto DJ from here" and the Auto DJ button, Dx stop Dn/Db
@@ -75,6 +76,7 @@
 //   @count             the card's free space counted once (not while playing),
 //                      with progress lines
 //   @identify <label>  "This one" and the label on the screen for 5 s, a buzz
+//   @time [<unix-ms>]  the board's clock (Unix ms, or unset), or set it
 // Reading that starts mid-line (a boot while a computer sends, input lost
 // to an overflow) drops the line's tail instead of running it as keys
 // (HostLine's Sync, logged): the first key after a boot, sent with its

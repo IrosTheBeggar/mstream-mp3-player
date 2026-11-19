@@ -82,6 +82,10 @@ public:
   // A row asked for a cover and none is being made (ScanScheduler's
   // In::cover).
   bool wantsCover(uint32_t nowMs) const;
+  // Nothing asked for and nothing being made: what a row rendered now
+  // asks for is the next cover made (the list renders its neighbours'
+  // rows only then, so their covers don't go before the ones on screen).
+  bool idle() const;
   // The newest request as the worker's step, at `priority`. False: nothing
   // asked, or the worker couldn't take it (asked again when a row draws).
   bool startCover(CardWorker& worker, uint8_t priority, uint32_t nowMs);

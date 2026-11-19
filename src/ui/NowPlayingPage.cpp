@@ -27,6 +27,7 @@
 #include <cstring>
 
 #include "AutoDjJoin.h"
+#include "IdlePolicy.h"
 #include "LibraryText.h"
 #include "SheetLayout.h"
 #include "TextFit.h"
@@ -84,6 +85,9 @@ constexpr int kNavBottom = kCoverY + kCoverPx + 1;  // 137: under the cover's fr
 constexpr int kBarTouchY = 138;
 // The indicator's glyphs under the "..." dots, 4 px apart when both show.
 constexpr int kModesGap = 4;
+// The glance (Mode::Glance): its empty states end where the transport's
+// strip starts (y 36-175), which has its one line as when a track plays.
+constexpr int kGlanceEmptyH = kTransportDrawY - kContentY;  // 140
 
 static_assert(SeekBar::kLineX + SeekBar::kLineW == kW - 12, "the seek bar's line is drawBar()'s");
 static_assert(kTitleH == titlelayout::kStripH, "the title's lines are TitleLayout's");
@@ -414,7 +418,8 @@ void NowPlayingPage::drawLine(M5Canvas& c, const wave::Strip& now, int rx) {
     const uint16_t ink = now.playing ? accent::NowPlaying : col::DIM;
     c.fillRoundRect(x0, kThinRow, w, kThinH, kThinR, col::DIV);
     if (fill > 0) c.fillRoundRect(x0, kThinRow, fill, kThinH, kThinR, ink);
-    if (now.look != Look::Inert) c.fillCircle(x0 + fill, kCentreRow, kRestKnobR, ink);  // (it can be moved)
+    // (It can be moved: not on the glance, where nothing can.)
+    if (now.look != Look::Inert && !readOnly_) c.fillCircle(x0 + fill, kCentreRow, kRestKnobR, ink);
     return;
   }
   // A finger on it (pressed, scrubbing, off): the line thickens to 6 px.
@@ -642,7 +647,9 @@ uint32_t NowPlayingPage::waitSig() const {
 }
 
 void NowPlayingPage::drawMiddle() {
-  if (ui_.state().play == PlayState::Waiting) {
+  // (The glance: the rows while a play waits too; its buttons can't be
+  // pressed there, and the title strip says it waits.)
+  if (ui_.state().play == PlayState::Waiting && !readOnly_) {
     drawWaiting();
   } else {
     drawArtistAlbum();
@@ -677,8 +684,27 @@ void NowPlayingPage::drawTransport() {
   M5Canvas& c = gfx::strip();
   c.fillRect(0, 0, kW, kTransportDrawH, col::BG);
   const int cy = kTransportDrawH / 2;  // y 204
-  for (int z = 0; z < 5; ++z) {
-    drawZoneInto(c, z, z * kZoneW + kZoneW / 2, cy, pressed_ == static_cast<Zone>(Volume + z));
+  if (readOnly_) {
+    // The glance: nothing to press, so one line where the buttons are: what
+    // opens them, the power button (dim). While the idle power-off counts
+    // down its last 30 s, that countdown instead, in amber: its toast is
+    // drawn nowhere in the dark, a touch on the glance isn't input, and the
+    // glance isn't held lit, so this line is the listener's only warning
+    // (the power button keeps the player on).
+    char idle[128];  // (the toast's size: en.json's "bytes" for the message)
+    const char* line = tr(S::glance_hint);
+    uint16_t ink = col::DIM;
+    if (s.idleWarnS) {
+      IdlePolicy::warnText(s.idleWarnS, idle, sizeof(idle));
+      line = idle;
+      ink = col::AMBER;
+    }
+    Fonts::instance().draw(c, Font::Small, line, kW / 2, cy, uitext::kGlanceHintW, ink, col::BG, Fonts::Align::Centre);
+    drawn_.idleWarnS = s.idleWarnS;
+  } else {
+    for (int z = 0; z < 5; ++z) {
+      drawZoneInto(c, z, z * kZoneW + kZoneW / 2, cy, pressed_ == static_cast<Zone>(Volume + z));
+    }
   }
   gfx::push(c, 0, kTransportDrawY, kW, kTransportDrawH);
   drawn_.shuffle = s.shuffle;
@@ -771,15 +797,17 @@ bool NowPlayingPage::emptyState(EmptyState& e) const {
   }
   e.icon = &icons::kNote;
   e.title = tr(S::empty_nothing_playing_title);
-  // (Fits: the longer one didn't. Unread: what plays next replaces the file, and a restart may bring it back.)
-  e.lines = tr(s.queueUnread ? S::library_row_rescan_unread : S::empty_pick_in_library);
+  // (Fits: the longer one didn't. Unread: what plays next replaces the file, and a restart may bring it back.
+  // Auto DJ's mood filter fitting no track: said, with no second button: frame dj-empty.)
+  const bool noFit = autodjview::emptyNoFit(s.autoDj);
+  e.lines = tr(s.queueUnread ? S::library_row_rescan_unread : noFit ? S::empty_no_track_fits : S::empty_pick_in_library);
   e.buttons[0] = tr(S::empty_open_library);
   e.buttonIcons[0] = &icons::kLibrary;
   if (autodjview::emptyButton(s.autoDj, s.libraryTracks)) {
     // A usable Auto DJ index: Auto DJ in Shuffle all's place (D4).
     e.buttons[1] = tr(S::empty_autodj);
     e.buttonIcons[1] = &icons::kAutoDj;
-  } else if (s.libraryTracks > 0) {
+  } else if (s.libraryTracks > 0 && !noFit) {
     e.buttons[1] = tr(S::empty_shuffle_all);
     e.buttonIcons[1] = &icons::kShuffle;
   }
@@ -804,7 +832,11 @@ void NowPlayingPage::onEmptyEvent(const InputEvent& e) {
   ui_.tick();
   const AppState& s = ui_.state();
   if (!s.card && s.libraryTracks == 0) {
-    ui_.retryCard();
+    if (was == 1) {
+      ui_.askFormat(false);  // (Format...: a card that is in, not FAT32 or unreadable)
+    } else {
+      ui_.retryCard();
+    }
   } else if (was == 0) {
     ui_.showTab(NavModel::Tab::Library);
   } else if (es.buttonIcons[1] == &icons::kAutoDj) {
@@ -850,17 +882,37 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   const bool noCard = !s.card && s.libraryTracks == 0;
   if (empty) {
     const bool dj = autodjview::emptyButton(s.autoDj, s.libraryTracks);
+    const bool noFit = autodjview::emptyNoFit(s.autoDj);
     if (!drawn_.valid || !drawn_.empty || drawn_.noCard != noCard || drawn_.cardKind != s.cardKind ||
-        drawn_.autoDjButton != dj) {
+        drawn_.autoDjButton != dj || drawn_.noFit != noFit) {
       EmptyState es;
-      emptyState(es);
-      drawEmptyState(es, kContentY, kH - kContentY, accent::NowPlaying, emptyPressed_);
+      const bool noCard = emptyState(es);
+      // The glance: no Open Library, Shuffle all, Auto DJ or Try again
+      // (nothing on it can be pressed), and the state over y 36-175 only,
+      // its line under it in the transport's strip. A card in the slot that
+      // doesn't mount (exFAT, NTFS, GPT, another): its lines end "tap Try
+      // again", a button the glance hasn't, so they go too; its icon and
+      // title say what is wrong, and the power button opens the whole
+      // message with its button. (No card at all: its lines name no button.)
+      if (readOnly_) {
+        es.buttons[0] = es.buttons[1] = nullptr;
+        if (noCard && s.cardKind != cardformat::Kind::Unreadable) es.lines = "";
+      }
+      drawEmptyState(es, kContentY, readOnly_ ? kGlanceEmptyH : kH - kContentY, accent::NowPlaying, emptyPressed_);
       drawn_ = Drawn{};
       drawn_.valid = true;
       drawn_.empty = true;
       drawn_.noCard = noCard;
       drawn_.cardKind = s.cardKind;
       drawn_.autoDjButton = dj;
+      drawn_.noFit = noFit;
+      if (readOnly_) {
+        // (After the reset: drawTransport() notes what it drew in drawn_.)
+        drawTransport();
+        gfx::fill(0, kTransportDrawY + kTransportDrawH, kW, kH - (kTransportDrawY + kTransportDrawH), col::BG);
+      }
+    } else if (readOnly_ && s.idleWarnS != drawn_.idleWarnS) {
+      drawTransport();  // the idle countdown's next second (this branch returns before the line's own trigger)
     }
     return false;
   }
@@ -927,8 +979,13 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
     // (A new look at once: the pressed one on a Down, the rest after a touch.)
     drawSeekBar(strip, region.x, region.w, text);
   }
-  if (all || s.play != drawn_.play || s.volume != drawn_.volume || s.onBluetooth != drawn_.bluetooth ||
-      output != drawn_.output || s.shuffle != drawn_.shuffle || s.repeat != drawn_.repeat) {
+  if (readOnly_) {
+    // The glance's line: drawn whole once, and again only for the idle
+    // countdown's second (no zones: the play state, the volume, the output
+    // and the modes aren't in it, and the spinner's step below never runs).
+    if (all || s.idleWarnS != drawn_.idleWarnS) drawTransport();
+  } else if (all || s.play != drawn_.play || s.volume != drawn_.volume || s.onBluetooth != drawn_.bluetooth ||
+             output != drawn_.output || s.shuffle != drawn_.shuffle || s.repeat != drawn_.repeat) {
     drawTransport();
     nextSpinMs_ = nowMs + kSpinMs;
   } else if (waiting && static_cast<int32_t>(nowMs - nextSpinMs_) >= 0) {
@@ -1047,12 +1104,16 @@ void NowPlayingPage::openPlaybackMenu() {
   const char* const rows[4] = {tr(S::now_playing_shuffle), tr(S::now_playing_repeat), tr(S::now_playing_sleep_timer),
                                tr(S::now_playing_autodj)};
   const uint8_t repeat = s.repeat < 3 ? s.repeat : 0;
-  const char* dj = tr(autodjview::rowText(autodjview::rowState(s.autoDj)));
+  // Auto DJ's: its state, or with a mood filter on, what is set (the
+  // accent), or waiting for a track that fits it (amber): Ui::autoDjDetail().
+  char dj[96];
+  const uint16_t djInk = ui_.autoDjDetail(dj, sizeof(dj));
   const char* details[4] = {tr(s.shuffle ? S::now_playing_on : S::now_playing_off), tr(repeatMode(repeat)),
                             s.sleepRow, dj};
+  const uint16_t inks[4] = {col::DIM, col::DIM, col::DIM, djInk};
   Serial.printf("[ui] now playing: the playback menu (shuffle %s, repeat %s, sleep timer %s, Auto DJ %s)\n",
                 s.shuffle ? "on" : "off", repeatName(repeat), s.sleepRow, dj);
-  ui_.openSheet(this, tr(S::now_playing_playback_title), rows, 4, details);
+  ui_.openSheet(this, tr(S::now_playing_playback_title), rows, 4, details, -1, -1, inks);
   // Each row's state follows while it is up (a change from the console
   // shows too); Shuffle, Repeat and Auto DJ change in place, the sheet
   // staying.
@@ -1287,8 +1348,10 @@ void NowPlayingPage::onSheet(int choice) {
 
 void NowPlayingPage::describe(char* buf, size_t size) const {
   const AppState& s = ui_.state();
-  const int n = snprintf(buf, size, "Now Playing: track id %lu, entry %ld of %lu, %lu / %lu ms, cover of album %ld %s",
-                         static_cast<unsigned long>(s.trackId), static_cast<long>(s.current),
+  const int n = snprintf(buf, size,
+                         "Now Playing%s: track id %lu, entry %ld of %lu, %lu / %lu ms, cover of album %ld %s",
+                         readOnly_ ? " (the glance: read-only)" : "", static_cast<unsigned long>(s.trackId),
+                         static_cast<long>(s.current),
                          static_cast<unsigned long>(s.queueSize), static_cast<unsigned long>(s.positionMs),
                          static_cast<unsigned long>(s.durationMs),
                          static_cast<long>(drawn_.coverAlbum == LibraryIndex::kNone ? -1
@@ -1306,8 +1369,12 @@ void NowPlayingPage::describe(char* buf, size_t size) const {
     case wave::Look::RestPlaying:
     case wave::Look::RestPaused:
       // (The live x, where a touch finds the knob: what is drawn stands on the
-      // whole second, up to a second's px behind it.)
-      m = snprintf(rest, room, "; the bar: rest, the %s at x %d", bars ? "playhead" : "knob",
+      // whole second, up to a second's px behind it. The glance's plain line
+      // has no knob: its fill ends there.)
+      m = snprintf(rest, room, "; the bar: rest, %s at x %d",
+                   bars        ? "the playhead"
+                   : readOnly_ ? "the fill's end (no knob on the glance)"
+                               : "the knob",
                    wave::playheadX(s.positionMs, s.durationMs));
       break;
     case wave::Look::Pressed: m = snprintf(rest, room, "; the bar: pressed"); break;
@@ -1326,6 +1393,16 @@ void NowPlayingPage::describe(char* buf, size_t size) const {
     }
   }
   if (m < 0 || static_cast<size_t>(m) >= room) return;
+  if (readOnly_) {
+    // The glance has no indicator: what its line in the transport's place says.
+    if (drawn_.idleWarnS) {
+      snprintf(rest + m, room - static_cast<size_t>(m), "%s; the line: the idle power-off's countdown (%u s)",
+               bars ? ", bars" : "", static_cast<unsigned>(drawn_.idleWarnS));
+    } else {
+      snprintf(rest + m, room - static_cast<size_t>(m), "%s; the line: the power button's", bars ? ", bars" : "");
+    }
+    return;
+  }
   // The playback modes (docs/QUEUE-MODES.md), as the indicator shows them.
   snprintf(rest + m, room - static_cast<size_t>(m), "%s; shuffle %s, repeat %s", bars ? ", bars" : "",
            s.shuffle ? "on" : "off", repeatName(s.repeat));

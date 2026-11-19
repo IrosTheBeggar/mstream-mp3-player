@@ -975,9 +975,11 @@ namespace {
 struct Rec {
   TouchRecognizer r;
   std::vector<InputEvent> events;
+  bool scripted = false;  // the samples from now on are the console's scripted finger's
   void at(uint32_t ms, bool pressed, int x = 0, int y = 0, uint8_t edges = 0) {
     TouchRecognizer::Sample s;
     s.pressed = pressed;
+    s.scripted = pressed && scripted;
     s.x = static_cast<int16_t>(x);
     s.y = static_cast<int16_t>(y);
     s.rawX = static_cast<int16_t>(x + 1000);  // tells raw from corrected
@@ -990,6 +992,12 @@ struct Rec {
   std::string types() const {
     std::string s;
     for (const auto& e : events) s += std::string(InputEvent::name(e.type)) + ";";
+    return s;
+  }
+  // Which events say they are the scripted finger's: "s" or "-" each.
+  std::string whose() const {
+    std::string s;
+    for (const auto& e : events) s += e.scripted ? "s" : "-";
     return s;
   }
 };
@@ -1174,6 +1182,78 @@ void test_touch_right_edge_flag() {
   plain.x = 282;
   TEST_ASSERT_FALSE(plain.inRightEdgeZone(300));
   TEST_ASSERT_TRUE(plain.inRightEdgeZone(280));
+}
+
+// The console's scripted finger (ui/Input::simulate()): its samples say
+// whose they are, and so does every event of a touch it had a part in, to
+// that touch's end (InputEvent::scripted: what only a hand may do, the
+// format's hold, lib/core/HoldButton).
+void test_touch_scripted_events_say_so() {
+  // A hand's touches: none of their events.
+  Rec h;
+  h.at(0, true, 100, 120);
+  h.at(50, false);
+  h.at(100, true, 100, 120);
+  h.at(700, true, 100, 120);
+  h.at(800, false);
+  h.at(900, true, 100, 120);
+  h.at(930, true, 100, 160);
+  h.at(960, true, 100, 200);
+  h.at(990, false);
+  TEST_ASSERT_EQUAL_STRING("down;tap;down;long press;release;down;drag start;drag;drag end;fling;", h.types().c_str());
+  TEST_ASSERT_EQUAL_STRING("----------", h.whose().c_str());
+  // The scripted finger's: every one, the lift's too (no sample says it:
+  // nothing is on the panel then), and a Cancel.
+  Rec s;
+  s.scripted = true;
+  s.at(0, true, 100, 120);
+  s.at(50, false);
+  s.at(100, true, 100, 120);
+  s.at(700, true, 100, 120);
+  s.at(800, false);
+  s.at(900, true, 100, 120);
+  s.at(930, true, 100, 160);
+  s.at(960, true, 100, 200);
+  s.at(990, false);
+  s.at(1100, true, 100, 120);
+  s.events.push_back(s.r.cancel(1150));
+  s.at(1200, false);
+  TEST_ASSERT_EQUAL_STRING("down;tap;down;long press;release;down;drag start;drag;drag end;fling;down;cancel;",
+                           s.types().c_str());
+  TEST_ASSERT_EQUAL_STRING("ssssssssssss", s.whose().c_str());
+  // A hand's touch the scripted finger takes over (the panel never read
+  // as lifted: one touch): the scripted finger's from that sample to its
+  // end, a hand back on it or not. The next touch is its own.
+  Rec m;
+  m.at(0, true, 100, 120);
+  m.scripted = true;
+  m.at(10, true, 100, 160);
+  m.scripted = false;
+  m.at(20, true, 100, 200);
+  m.at(30, false);
+  m.at(100, true, 100, 120);
+  m.at(150, false);
+  TEST_ASSERT_EQUAL_STRING("down;drag start;drag;drag end;fling;down;tap;", m.types().c_str());
+  TEST_ASSERT_EQUAL_STRING("-ssss--", m.whose().c_str());
+  // ... and the other way round: it lands, a hand takes over.
+  Rec o;
+  o.scripted = true;
+  o.at(0, true, 100, 120);
+  o.scripted = false;
+  o.at(10, true, 100, 121);
+  o.at(60, false);
+  TEST_ASSERT_EQUAL_STRING("down;tap;", o.types().c_str());
+  TEST_ASSERT_EQUAL_STRING("ss", o.whose().c_str());
+  // A swipe up from the strip handed over (a touch that began there).
+  Rec c;
+  c.scripted = true;
+  c.at(0, true, 160, 260);
+  c.r.fromStrip();
+  c.at(10, true, 160, 230);
+  c.at(20, true, 160, 200);
+  c.at(30, false);
+  TEST_ASSERT_EQUAL_STRING("drag start;drag;drag end;fling;", c.types().c_str());
+  TEST_ASSERT_EQUAL_STRING("ssss", c.whose().c_str());
 }
 
 // ---- StripButtons (the buttons, from the touch point) ----
@@ -1878,6 +1958,7 @@ int main(int, char**) {
   RUN_TEST(test_touch_button_strip_and_cancel);
   RUN_TEST(test_touch_from_strip);
   RUN_TEST(test_touch_right_edge_flag);
+  RUN_TEST(test_touch_scripted_events_say_so);
   RUN_TEST(test_strip_columns_are_m5unifieds);
   RUN_TEST(test_strip_captured_swipe_presses_nothing);
   RUN_TEST(test_strip_glass_drag_resting_in_the_strip_presses_nothing);

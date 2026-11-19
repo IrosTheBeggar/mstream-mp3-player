@@ -2219,3 +2219,152 @@ nothing, and a bounced strip touch presses nothing (but a swipe up from it still
 scrolls: quick repeated flicks from the strip). Host tests replay each case
 (`test_touch_input`). The scripted finger takes the same path:
 `uis160,265,160,100,120` flings the list from the strip. Not yet tried by hand.
+
+## Frames on the panel's scan, and what a row costs (9 November 2026)
+
+The user: "the scrolling can still feel a bit janky sometimes, and using the
+scroll bar and large lists has some lag". Measured on the Core2 with the
+1 TB card (19,533 tracks, 698 artists, 1,747 albums), 240 MHz, the scripted
+finger on the Library's Artists list, with nothing playing and with a V0 MP3
+decoding to the muted speaker (`z`, `Rf`: the decoder takes 36-38 % of
+core 1). "Before" is ec05852 (0.13.0 and "Touch when off").
+
+**What was found.**
+
+- **A row's text was half its render.** M5GFX paints a VLW glyph with one
+  `writeFillRect()` a run: one for each row of its cell's background, one for
+  each anti-aliased pixel, each through the sprite's panel: some 94 us a
+  glyph. A two-line artist row (30 characters) rendered in 5.6 ms: 2.9 ms of
+  text, 2.0 ms the sprite's fill, 0.3 ms the fitting.
+- **The row sprites sat in the slow half of the PSRAM.** PSRAM from
+  0x3FA00000 up shares core 1's cache with the code that runs there
+  (RESAMPLER.md 10d found it for the MP3 decoder's state). The UI allocated
+  its sprites when it started, after the library: on this card (its index is
+  1.79 MB) they landed at 0x3FAEC2B4 and up. On the 77-track card of the
+  first measurements they sat low, and a row took 2.8 ms.
+- **The panel refreshes 71.5 times a second, and says where its scan is.**
+  The TE pin isn't wired, but the ILI9342C answers Get_Scanline (45h; M5GFX's
+  `getScanLine()`, 16 us a read): 244 lines a refresh (240 rows, two porches
+  of 2), 13.99 ms. Frames at 30 a second on that panel stay 2 or 3 refreshes
+  by turns, and each address change fell wherever the scan was: with the
+  scan inside the band (168 of the 244 lines), the rows above it show the
+  old place and the rows below the new one for that refresh.
+- **A fast fling's frame was heavy.** At 2,000 px/s and 30 frames a second
+  a frame pushes 67 lines (9.4 ms on the bus) and brings on a row and a
+  half; one row was rendered ahead. With the MP3: 30-46 ms for one frame in
+  most fast flings.
+- **A scrub held the loop for the whole band.** Every position is a jump:
+  the band rendered and pushed in one go (47 ms; 87 ms with the MP3, up to
+  103), no touch read meanwhile, the next band 60 ms after: 6.6 bands and
+  19 thumbs a second (5.3 and 10 with the MP3).
+
+**What was done** ([ARCHITECTURE.md](ARCHITECTURE.md#ui), "Lists" and
+"Frames").
+
+- **Text straight into the sprite** (`Fonts::drawFast()`): a line of the
+  font's own glyphs with a background, into a 16-bit sprite, is written by
+  the firmware: the glyph's rows read where they lie in flash, blended and
+  stored in the sprite's memory, step for step as M5GFX's `drawString()` and
+  `VLWfont::drawChar()` paint it. An ASCII glyph is found by its place in the
+  font, not by a search of the glyph table. Console `uiBv` draws lines both
+  ways and compares the sprites' memory: 7,047 lines (every artist and album
+  name on the card, every 8th track title, and made-up lines in each font,
+  alignment, place and clip), **0 different**; 137 of them have a glyph from
+  the CJK store and stay M5GFX's. A line: 1,312 us by M5GFX, 541 us so (its
+  fitting included).
+- **The list's memory reserved at boot** (`ui/HotMem`): 212 KB taken first
+  thing in `setup()`, while the lower 2 MB are free, for the six row sprites,
+  the rail and the shared strip; the fonts' glyph tables are loaded then too.
+  The block is at 0x3F802320 on this unit; the MP3 decoder's pinned state
+  moved up to 0x3F866120, still in the lower half.
+- **A frame every refresh, where the scan doesn't see it half done**
+  (`ui/PanelScan`, `lib/core/ScanSync`): the UI times four refreshes when it
+  starts (60 ms; `[ui] panel scan: 244 lines a refresh, 13992 us (71.5 Hz),
+  row 0 at line 2`). A move's hold then starts inside a window of the scan:
+  behind it at the strip's first row (the bus is slower than the scan, so it
+  stays behind), its address after the scan has left the band and before it
+  is back. The window is 3.8 ms wide for a move up the list (the strip is
+  the band's top rows), 3 ms down to 1.1 ms for a move down it (28 lines, a
+  fling's top speed). A list moving by itself is drawn where it will be when
+  that frame shows, sleeps to its window (a one-shot timer wakes it) and
+  holds the bus at priority 3, above the decoder; a finger's frames poll for
+  the window instead, so the frame has its latest place. **A frame the loop
+  comes too late for is drawn at once**, and so is the first frame after a
+  refresh that had none: its address goes out with the scan in the band (a
+  tear over the rows the scan had passed, for that one refresh, as every
+  frame had before), but no frame waits out a window it missed. Tried
+  first and dropped: waiting for the next refresh's window (with an MP3,
+  whose decoder's passes are 10 ms and now and then 21: a refresh in three
+  without its frame, 37-46 ms between two frames at the worst). Without an
+  answer from the panel the frames go by the frame clock, now 60 a second.
+- **Rows ahead**: while a list moves, the next row and from a fast step the
+  one after; while it rests, the row above the band and the row below it
+  (into its two spare slots), so a swipe's first frame only pushes.
+- **A scrub's band a row a loop pass**: the row's render and push (8-15 ms),
+  then the loop's pass (the finger read, the thumb drawn where it is now:
+  only the rail's rows the thumb left and takes), then the next row; the
+  next band starts when this one is done.
+
+**Measured after** (the same motions; `uis160,220,160,90,60` is a fling at
+the 2,000 px/s cap up the list, `uis160,100,160,230,60` down it,
+`uid300,80,300,230,3000` the whole rail in 3 s):
+
+| | Before | After |
+|---|---|---|
+| A row rendered (Artists, each row once) | 5.6 ms | 3.0-3.4 ms |
+| ... the same row again and again | 4.8 ms | 1.8 ms |
+| The band in place, 168 lines (4 rows and the push) | 46.6 ms | 35.6 ms |
+| A fast fling, nothing playing | 30 fps; draw mean 2.5, max 16-22 ms | 68-69 fps; draw mean 1.6, max 6-9 ms; no refresh without its frame while it moves (the frames at most 15.5 ms apart) |
+| A fast fling, MP3 | 30 fps; draw mean 2.7-4.3, max 30-46 ms (a frame over 35 ms in 2 of 3) | 54-55 fps; draw mean 3.5-4.5, max 23-31 ms; 1 refresh in 4 without its frame while it moves fast (26-37 ms between two frames at the worst) |
+| The address sent with the scan inside the band (a fast fling's frames) | as it fell: 2 in 3 (`uiv0`, the frame clock: 121-125 of 183) | nothing playing 4-9 of 205; MP3 1 in 3 (46-55 of 155) |
+| A slow drag (140 px in 0.6 s), nothing playing | 25 fps; max 4.8 ms | 50 fps; max 4.8 ms |
+| The scrub, nothing playing | 6.6 bands a second; the loop held 47-50 ms; 19 thumbs a second | 16 bands a second; the loop held 11.2 ms at most; 37-41 thumbs a second |
+| The scrub, MP3 | 5.3 bands a second; the loop held 87-103 ms; 10 thumbs a second | 8.5 bands a second; the loop held 35 ms at most; 20-24 thumbs a second |
+
+With the MP3 a fast fling still loses frames: the decoder takes 10 ms of
+every 26 (21 ms now and then), above the loop; a row costs 5 ms beside it,
+and at 2,000 px/s the holds alone are 4 ms of every 14. What is lost is a
+refresh's frame (the next one shows the list where it then is: a fling's
+frames are drawn for the moment they show), not the pace of the list. On
+the frame clock instead (`uiv0`, 60 a second) the same flings drew 59-60
+frames a second with 25-34 ms between two at the worst, and the address in
+the band for 2 frames in 3.
+
+The audio: the ring never left 1,416 ms in any run, no underruns, the
+decoder's load 37.1-38.0 % against 35.7 % before (its state shares core
+0's cache with the row sprites now; its longest pass 21 ms, as before).
+Over Bluetooth (silence streamed to the headphones, `Rt6`, the A2DP stream
+up: 44,100 frames a second, `gap=26ms`): flings at 67-68 fps, the scrub
+13.5 bands a second, no underrun, the gap as it was (measured before the
+late frames' rule above; nothing playing loads the loop the same).
+Internal RAM is unchanged (76-77 K free after the UI, as before); the loop
+task's stack 3,752-3,776 B never used (3,776 before).
+
+A soak (5 minutes with the MP3: 52 flings and drags and 12 scrubs over the
+Artists and Albums lists, an artist's and an album's pages, the Queue and
+Output, with tab changes): no restart, no underrun, no card error; the
+scrolls 49 fps on average, one frame over 35 ms (37.6).
+
+At 160 MHz (`Pcb160`, the CPU speed row's other choice): with nothing
+playing as at 240 (68-69 fps, the scrub 14.8 bands a second, the loop held
+12.6 ms at most). With the MP3 (the decoder 49.6 % of the core there, its
+longest pass 29 ms): flings at 41-46 fps, a frame of 54 ms in two of
+three, the scrub 6 bands a second with the loop held 43 ms at most.
+
+**Console:** `uiv` says how the frames go (`uiv0` / `uiv1`: off the scan
+and on it, to compare by eye; `uiv!` times the panel again), `uif<ms>` sets
+the frame clock's period, `uiB` times a row, the band and a move on the
+list shown, `uiBv` checks the fast text against M5GFX's, `uiBf0` / `uiBf1`
+turns it off and on. Every list motion logs a second line: `[ui] scroll
+moves: N in their window on the panel's scan (...), N late, N without the
+scan; the address a-b lines past the band (in the band for N); the fling's
+frames N ms apart at most, N of M late`.
+
+**Not checked:** by eye (the scripted finger and the logs say when a frame
+went out, not how it looks: `uiv0` and `uiv1` are there to compare, and
+where the scan really is on the glass rests on the datasheet: line 0 the
+back porch's first, the rows top to bottom); a real finger, on the lists
+and on the rail; an MP3 over Bluetooth while a list moves (only silence
+was streamed: the headphones may be on someone's ears); another Core2 (a
+panel that doesn't answer 45h leaves the frames on the clock; the newer
+ILI9342E wasn't tried).

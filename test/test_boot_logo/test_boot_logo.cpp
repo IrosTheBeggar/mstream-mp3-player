@@ -242,6 +242,13 @@ void test_layout_fits_the_screen() {
   const int hintTop = kHintY - kSmallH / 2;
   TEST_ASSERT_TRUE(versionBottom + 30 <= hintTop);
   TEST_ASSERT_TRUE(hintTop + kSmallH <= kH);
+  // The format's title between the version and its bar, the bar above
+  // its line (the rescue line's place), each kept apart.
+  const int formatTop = kFormatTitleY - kBodyH / 2;
+  TEST_ASSERT_TRUE(formatTop >= versionBottom + 8);
+  TEST_ASSERT_TRUE(formatTop + kBodyH + 6 <= kFormatBarY);
+  TEST_ASSERT_TRUE(kFormatBarY + kFormatBarH + 12 <= hintTop);
+  TEST_ASSERT_TRUE(kFormatBarX * 2 + kFormatBarW == kW);
   // The logo and the version together: at or a little above the middle.
   const int middle = (kLogoY + versionBottom) / 2;
   TEST_ASSERT_TRUE(middle <= kH / 2 && middle >= kH / 2 - 12);

@@ -80,6 +80,18 @@ public:
   const AbsVolumePolicy& volume() const { return policy_; }
   const StreamControl& stream() const { return stream_; }
   bool avrcpConnected() const { return avrcUp_; }
+  // AVRCP is connected on the A2DP link that is up: what the card's
+  // background work waits for after a link (ScanScheduler's
+  // In::btControlUp, through BtSink::avrcpUp()). AVRCP connected since the
+  // link last went down (an AVRCP the headphones opened before A2DP counts
+  // at the link), and the link up. Not avrcpConnected(): only AVRCP's own
+  // disconnect clears that, and Bluedroid closes AVRCP with the A2DP stream
+  // (bta_av_conn_chg() deletes the stream's RC, bta_av_del_rc()), so each
+  // link has its AVRCP set up anew: by Bluedroid 3.5 s after the open
+  // (bta_av_st_rc_timer, an SDP search first), or by the headphones. An
+  // avrcUp_ still set at a new link is only a disconnect reported late, or
+  // never: that link waits all the same.
+  bool avrcpOnLink() const { return avrcOnLink_ && stream_.linked(); }
 
 private:
   void act(const StreamControl::Actions& a, uint32_t nowMs);
@@ -90,6 +102,7 @@ private:
   AbsVolumePolicy policy_;
   StreamControl stream_;
   bool avrcUp_ = false;
+  bool avrcOnLink_ = false;    // AVRCP connected since the link last went down (avrcpOnLink())
   bool policyActive_ = false;  // what policy_ was last told about the stream
   bool gateOpen_ = true;       // what stream_ was last told about policy_.audioReady()
 };

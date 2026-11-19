@@ -232,6 +232,11 @@ inline constexpr int kNowPlayingMidW = 190;
 // line and it don't fit together) has a little more: centred, it still
 // ends 4 px short of a 16-hour mix's "999:59" either side (test_ui_library).
 inline constexpr int kNowPlayingWarnW = 200;
+// The glance ("Touch when off": Track; Now Playing with no buttons, over the
+// dark UI): one line in Small where the buttons are, centred on y 204, over
+// the seek bar's span (x 12-308): "Power button for controls", or the idle
+// power-off's countdown in amber ("Turning off in 30 s").
+inline constexpr int kGlanceHintW = 296;
 // The seek bar's readout (docs/SEEK-BAR.md section 4.2), in the row above
 // the line while a finger scrubs, on the side away from the knob: the
 // finger's second ("2:31", Title) and, kSeekReadoutGap px after it, the
@@ -289,6 +294,12 @@ inline constexpr int kWaitButtonPad = 8;  // a label has the box less this
 // is 4 px too wide in Body, so the Dialog draws it in Small).
 inline constexpr int kDialogTitleW = 260;
 inline constexpr int kDialogButtonTextW = 123;
+// The format's red hold button (the Dialog's hold mode: "Hold to erase"),
+// outlined: its 131 px less the 2-px outline and 6 px clear inside it at
+// each end (dialog::holdTextW()). At 123, French's and Polish's labels in
+// Small touched the outline on the device (2026-10-20), and English's in
+// Bold came 3 px from it.
+inline constexpr int kDialogHoldTextW = 115;
 // A title after the dialog's icon (the lost dialog's struck-out headphones,
 // 22 px, from x 14, then 8 px): to 12 px from the dialog's right edge (the
 // body keeps its 16), so "Headphones disconnected" (235 px) is whole.

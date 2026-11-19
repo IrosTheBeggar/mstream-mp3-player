@@ -104,9 +104,13 @@ void KineticScroll::jumpTo(float px) {
 
 bool KineticScroll::update(uint32_t ms) {
   const float before = offset_;
-  const float dt = static_cast<float>(ms - lastMs_);
+  // A time at or behind the clock changes nothing: a frame samples the
+  // fling at the moment it will show (ui/ListView, on the panel's scan),
+  // a few ms ahead of the loop pass that asks next.
+  const int32_t elapsed = static_cast<int32_t>(ms - lastMs_);
+  if (elapsed <= 0) return false;
   lastMs_ = ms;
-  if (dt <= 0) return false;
+  const float dt = static_cast<float>(elapsed);
   if (phase_ == Phase::Flinging) {
     // Exact decay of v' = -k v over dt: the offset moves by the integral.
     const float keep = std::pow(config_.frictionPerFrame, dt / config_.frameMs);

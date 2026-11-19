@@ -94,10 +94,34 @@ public:
   void end();
   bool active() const { return active_ == this; }
 
+  // When a move's bus hold starts (esp_timer_get_time()): the panel's scan
+  // must not see it half done (lib/core ScanSync, ui/PanelScan). The hold
+  // takes the bus, then waits for `earliestUs` (the caller asks a
+  // millisecond or two before); its address waits for `addressUs` (the scan
+  // has left the band: lines that went quicker than planned would send it
+  // early). Filled in: when the address went out, and how long the lines
+  // before it took.
+  struct Gate {
+    int64_t earliestUs = 0;
+    int64_t addressUs = 0;
+    int64_t sentUs = 0;
+    uint32_t linesUs = 0;
+  };
+
   // Shows content lines [offset, offset + height) (see "What a frame looks
   // like" above). Returns the number of content lines pushed. `sendUs`
   // (optional) gets the time the address took on the bus (0 if unsent).
-  int scrollTo(int32_t offset, Painter& painter, uint32_t* sendUs = nullptr);
+  // `gate` (optional) times a move's hold; a full redraw in place takes no
+  // notice of it (it is drawn where it shows, over several refreshes).
+  int scrollTo(int32_t offset, Painter& painter, uint32_t* sendUs = nullptr, Gate* gate = nullptr);
+  // A full redraw in place, planned and left to the caller to push: the
+  // spans (up to VScrollMap::kMaxSpans, top to bottom on screen) that make
+  // the band show content lines [offset, offset + height) under the start
+  // address the panel has. Nothing is sent or drawn; the caller pushes
+  // every span itself (ListView draws a scrub's band a row a loop pass),
+  // and until it has, the band shows the old lines below the new. Returns
+  // how many spans (0: not active).
+  int planInPlace(int32_t offset, VScrollMap::Span spans[VScrollMap::kMaxSpans]);
   // The scroll area and the start address sent again, as they are (the
   // screen woke from the panel's sleep-in, which should keep them: this
   // makes sure). Nothing moves.

@@ -74,6 +74,7 @@ public:
     uint32_t writeFails = 0;    // ... refused the second time too
     uint32_t refused = 0;       // writes refused here: another card (foreign()), or writesOff()
     uint32_t trims = 0;
+    uint32_t holeHints = 0;  // ... after which FatFs's next search starts at the freed clusters (holeHinted())
     uint32_t inits = 0;     // mounts: the cache cleared
     uint32_t verified = 0;  // hits compared with the card (verify on)
     uint32_t stale = 0;     // ... that differed: a cache bug (L1 fails)
@@ -129,6 +130,8 @@ public:
   bool write(uint32_t lba, const uint8_t* data, uint32_t count);
   // FatFs's CTRL_TRIM range: the first and the last sector freed.
   void trim(uint32_t first, uint32_t last);
+  // The wrapper's hook moved FatFs's last_clst at that TRIM (lib/core HoleHint): counted.
+  void holeHinted() { ++stats_.holeHints; }
   // A look at a fault found a card it can't call the mount's: the wrapper's status says
   // STA_NOINIT, and FatFs's remount gives the verdict (init() clears it).
   bool remountDue() const { return remountDue_; }
@@ -158,6 +161,11 @@ public:
   // (`sectors`: its size, the SD driver's). Invalid when a read fails, or
   // without a scratch.
   Identity readIdentity(uint32_t sectors);
+  // The same rule over any card (`sector`: 512 bytes of the caller's):
+  // what the format in the player holds a card to across its restart
+  // (lib/core CardMkfs, docs/HOST-STATUS.md "@format"). Each sector read
+  // twice at most.
+  static Identity identityOf(SectorCache::Device& card, uint32_t sectors, uint8_t* sector);
   // At the mount (the firmware's install(), before any other task reads
   // the card): this card's identity is the one remounts are held to. The
   // guard is armed from here on, even when the identity can't be read

@@ -10,7 +10,9 @@
 // from the card at boot; the first time it's the whole library followed by
 // the built-in test tones. A computer can drive the Dance tab's dancer over
 // the same USB serial port (app/UsbViz: the USB visualizer), and ask
-// what the board is and has (app/HostQuery: @status, @count, @identify).
+// what the board is and has, set its clock, and bring up the question
+// that formats its card (app/HostQuery: @status, @count, @identify, @time,
+// @format; the format itself at the next boot: storage/CardFormatter).
 
 #include <Arduino.h>
 #include <M5Unified.h>
@@ -27,6 +29,7 @@
 
 #include "ButtonPolicy.h"
 #include "CardBreaker.h"
+#include "CardMkfs.h"
 #include "ChipRevision.h"
 #include "DeviceInfo.h"
 #include "HeadsetKeys.h"
@@ -34,6 +37,7 @@
 #include "IdlePolicy.h"
 #include "InputEvent.h"
 #include "LibraryText.h"
+#include "OrderlyEnd.h"
 #include "OutputModel.h"
 #include "PlayGate.h"
 #include "PlaybackController.h"
@@ -52,6 +56,7 @@
 #include "app/CardTasks.h"
 #include "app/CardWorker.h"
 #include "app/DanceMode.h"
+#include "app/BoardClock.h"
 #include "app/BoardGuard.h"
 #include "app/BoardPower.h"
 #include "app/Diagnostics.h"
@@ -61,6 +66,7 @@
 #include "app/Library.h"
 #include "app/NvsLater.h"
 #include "app/NvsSchema.h"
+#include "app/PlayHistory.h"
 #include "app/PowerLab.h"
 #include "app/PowerSettings.h"
 #include "app/Psram.h"
@@ -74,11 +80,15 @@
 #include "app/Version.h"
 #include "audio/Core2AudioBackend.h"
 #include "spike/Spike.h"
+#include "storage/CardFormatter.h"
 #include "storage/CardSpace.h"
 #include "storage/LocalStorage.h"
 #include "storage/SectorDisk.h"
 #include "ui/BootScreen.h"
 #include "ui/CalibrationScreen.h"
+#include "ui/Fonts.h"
+#include "ui/Gfx.h"
+#include "ui/HotMem.h"
 #include "ui/Input.h"
 #include "ui/Ui.h"
 #include "ui/UiHost.h"
@@ -130,6 +140,10 @@ static Frozen frozen;
 static QueueModel queue(psramAlloc, psramFree, esp_random);
 static PlaybackController player(audio, queue, library.catalog());
 static QueueStore queueStore(storage, queue, player, library.catalog(), library.unlisted());
+// The play log on the card (/.player/plays.jnl, docs/METADATA.md 2.20): the
+// player's plays, a slot each at its end, written on the loop out of the
+// gapless window; flushed before every orderly power-off and restart.
+static PlayHistory playHistory(library, player);
 static DanceMode danceMode(audio, player);
 static Screenshot shot;
 static Haptics haptics;
@@ -137,9 +151,10 @@ static Haptics haptics;
 static Input input(haptics);
 // The screen policy (docs/ENERGY.md item 2; ScreenPower): lit, dim for the
 // last 10 s, then off after the chosen time without input, or at once by
-// the PWR key; a touch on a screen that isn't lit only wakes it (swallowed
-// by the input layer), and so do the PWR key on an off one and the events
-// that need the listener.
+// the PWR key. The PWR key on an off one wakes it, and so do the events
+// that need the listener; a touch there does what "Touch when off" says
+// (nothing by default, a wake, or the glance), and a touch on a dim one
+// only brightens it (each swallowed by the input layer).
 static ScreenControl screen(input);
 // What the touch buttons do, the same on every screen.
 static ButtonPolicy buttonPolicy;
@@ -252,11 +267,23 @@ static uint32_t restartAtMs = 0;
 // driver) would leave the card in its data phase, where the next boot's
 // CMD0 may be taken as data, and SD.begin() fail until a power cycle.
 static constexpr uint32_t kRestartWaitMs = 5000;
+// The end of every orderly restart and power-off (lib/core OrderlyEnd's
+// order): the settings the taps queued, the play log (`why`: its log's
+// words; the open play, stopped; not to another card; to the first play
+// the card fails or its deadline, PlayHistory::kFlushBudgetMs: no end
+// waits on a card gone bad), then `end`. The motor is stopped before
+// them, not after: a pattern under way doesn't buzz through the saves
+// (esp_restart() doesn't cut its supply, so it is off before `end` too).
+template <class End>
+static void endInOrder(const char* why, End end) {
+  haptics.stop();
+  orderlyend::finish([] { nvslater::flushNow(); }, [why] { playHistory.flush(why); }, end);
+}
 static void restartNow() {
   if (!cardWorker.waitIdle(kRestartWaitMs))
     Serial.printf("[card] the card worker's step still under way after %lu s: restarting once its SD call ends\n",
                   (unsigned long)(kRestartWaitMs / 1000));
-  powerSettings.restart();  // (Serial flushed; doesn't return)
+  endInOrder("restart", [] { powerSettings.restart(); });  // (Serial flushed; doesn't return)
 }
 
 static constexpr uint32_t kBootScreenMs = 3000;
@@ -631,8 +658,25 @@ static void applyRepeat(PlaybackController::Repeat r) {
 // page (the same): f exFAT, t NTFS, g a GPT, u nothing recognised ("Can't
 // read this card"); w play waiting for the headphones (Now Playing's
 // panel); uiF0 (or uiF) the real state. Display only: a button on a faked
-// card still does what it does.
+// card still does what it does, but for Format... (its question shows; its
+// Format is refused: the card in the slot isn't the one shown).
 static char uiFake = 0;
+
+// ---- the format in the player (docs/HOST-STATUS.md, "@format") ----
+
+// The listener confirmed it twice (MainUiHost::formatCard()): the card's
+// identity as the boot will hold it (the sector cache's mount identity,
+// or what LocalStorage read of a card that didn't mount), who asked, when;
+// stepFormatRestart() restarts once the player has let go of everything.
+struct FormatRestart {
+  bool on = false;
+  uint32_t askedMs = 0;
+  CachedDrive::Identity id;
+  cardmkfs::Origin origin = cardmkfs::Origin::None;
+};
+static FormatRestart formatRestart;
+// What this boot's format did (ran false: none was asked): the UI's note.
+static cardformatter::Outcome formatOutcome;
 
 // What the UI reads and asks for (ui/UiHost.h).
 struct MainUiHost : ui::UiHost {
@@ -707,6 +751,8 @@ struct MainUiHost : ui::UiHost {
     }
     s.card = storage.onCard();
     s.cardKind = s.card ? cardformat::Kind::Unreadable : storage.cardKind();
+    s.cardBytes = s.card ? storage.totalBytes() : storage.unmountedBytes();
+    s.cardPlan = s.card && library.root() && library.root()->plan;
     const LibraryIndex* index = library.index();
     s.libraryTracks = frozen.on ? frozen.libraryTracks : index && index->ready() ? index->trackCount() : 0;
     s.libraryStatus = cardTasks ? cardTasks->status() : librarytext::Status{};
@@ -744,6 +790,7 @@ struct MainUiHost : ui::UiHost {
     s.feedback = buttonPolicy.feedback();
     s.screenTimeout = static_cast<uint8_t>(screen.timeoutChoice());
     s.brightness = static_cast<uint8_t>(screen.brightnessChoice());
+    s.screenTouch = static_cast<uint8_t>(screen.offTouchChoice());
     s.sleepRunning = sleepTimer.running();
     s.sleepFading = sleepTimer.fading();
     s.sleepPick = static_cast<int8_t>(sleepPick());
@@ -778,6 +825,7 @@ struct MainUiHost : ui::UiHost {
                    : uiFake == 'g' ? Kind::Gpt
                    : uiFake == 'u' ? Kind::Other
                                    : Kind::Unreadable;
+      s.cardPlan = false;
       s.libraryTracks = 0;
       s.current = -1;
       return;
@@ -910,6 +958,8 @@ struct MainUiHost : ui::UiHost {
   void rescanLibrary() override;
   // (Only a boot asks for a card's root, or its jobs' memory, again.)
   bool rescanRestarts() const override { return library.records() && !(cardTasks && cardTasks->active()); }
+  bool formatCard(bool fromComputer) override;
+  void formatDeclined(bool fromComputer, const char* how) override;
   bool rescanTags() override {
     if (!cardTasks || !cardTasks->active() || frozen.on) return false;
     Serial.println("[ui] Rescan tags: the player's own files read again (the transfer's stay as they are)");
@@ -983,6 +1033,7 @@ struct MainUiHost : ui::UiHost {
     Serial.println("[power] idle: Keep on");
   }
   void setBrightness(int choice) override { screen.setBrightness(choice); }
+  void setScreenTouch(int choice) override { screen.setOffTouch(choice); }
   void wakeScreen(const char* why) override { screen.wake(why); }
   // Auto DJ (app/AutoDj). Its own [dj] lines say what each did. The Plays
   // (the button, "Auto DJ from here") are the listener's taps; behind the
@@ -991,6 +1042,14 @@ struct MainUiHost : ui::UiHost {
   bool autoDjSetMode(autodj::Mode m) override { return autoDj && autoDj->setMode(m); }
   bool autoDjSetFloor(uint8_t pct) override { return autoDj && autoDj->setFloor(pct); }
   bool autoDjSetMatch(bool tempo, bool key) override { return autoDj && autoDj->setMatch(tempo, key); }
+  uint32_t autoDjSetMoods(uint16_t q) override {
+    if (!autoDj) return 0;
+    autoDj->setMoods(q);  // (false: as it was; its count stands)
+    return autoDj->moodFit();
+  }
+  void autoDjMoodSettled() override {
+    if (autoDj) autoDj->moodSettled();
+  }
   autodjview::Started autoDjStart() override {
     if (!autoDj) return autodjview::Started::NoIndex;  // (no PSRAM for it at boot)
     if (frozen.on) return autodjview::Started::Refused;
@@ -1316,12 +1375,16 @@ static void openCalibration(CalibrationScreen::Start how, int targets = Calibrat
     Serial.println("[input] the calibration draws with the UI's sprites: not without the UI (no PSRAM)");
     return;
   }
-  if (screen.off() || screen.panelAsleep()) {
+  // (The glance too: the UI is dark under it; the wake opens the whole
+  // screen, then the calibration.)
+  if (screen.off() || screen.panelAsleep() || screen.glancing()) {
+    const bool onGlance = screen.glancing();  // (before the wake ends it)
     calibrationPending = true;
     pendingHow = how;
     pendingTargets = targets;
     screen.wake("the touch calibration");
-    Serial.println("[cal] the screen is off: it opens once the screen is awake");
+    Serial.println(onGlance ? "[cal] on the glance: it opens with the whole screen"
+                            : "[cal] the screen is off: it opens once the screen is awake");
     return;
   }
   calibrationPending = false;
@@ -1972,7 +2035,26 @@ static const char* identifyBoard(const char* label) {
   return nullptr;
 }
 
-static HostQuery hostQuery({hostFacts, countBlocked, identifyBoard});
+// A restart asked for and not yet carried out (the format's, the CPU
+// speed's, the loop's restartAtMs, the card guard's while it waits for the
+// queue's flush: below, with the guard).
+static bool restartPending();
+
+// @format: the format's question on the board's screen (ui/Ui::askFormat()),
+// all a computer can do: the listener answers it there, twice
+// (MainUiHost::formatCard(), formatDeclined()). Not on the start-up screen
+// or another screen's, nor under the dancer a computer drives, nor while a
+// restart is under way; nor with nothing in the slot.
+static const char* askFormatQuestion() {
+  if (!userInterface || !userInterface->started()) return "ui";
+  if (screenTaken() || uiHeld || userInterface->suspended()) return "screen";
+  if (hostModeOn()) return "viz";
+  if (restartPending()) return "busy";
+  if (!storage.onCard() && !storage.cardAnswered()) return "card";  // (card=none)
+  return userInterface->askFormat(true) ? nullptr : "ui";
+}
+
+static HostQuery hostQuery({hostFacts, countBlocked, identifyBoard, askFormatQuestion});
 
 static UsbViz usbViz(danceMode, hostQuery, {vizBusy, vizEnter, vizDanceGone});
 
@@ -2209,8 +2291,9 @@ static bool vizInput(const InputEvent& e) {
 }
 
 static void handleInput(uint32_t now) {
-  // The screen: the PWR key, USB, and whether a touch now would only wake
-  // it (dim or off: the input layer swallows that touch through its lift).
+  // The screen: the PWR key, USB, and whether a touch now acts (not on a
+  // dim or off screen, nor the glance: the input layer swallows that touch
+  // through its lift, and "Touch when off" says what it does).
   screen.beginPass(now);
   // (The visualizer keeps the screen lit, so the PWR key only counts as
   // input there: ending the visualizer is all it does.)
@@ -2220,7 +2303,7 @@ static void handleInput(uint32_t now) {
   }
   input.setSuspended(spike.ownsInput());
   input.update(now);
-  screen.afterInput(now);  // the wake it saw (logged), or input: the countdown again
+  screen.afterInput(now);  // the swallowed touch it saw (logged), or input: the countdown again
   touchedThisPass = false;
   for (InputEvent e; input.poll(e);) {
     if (e.type == InputEvent::Type::Down || e.isButton()) touchedThisPass = true;
@@ -2433,7 +2516,7 @@ static void stepPlayGate(uint32_t now) {
   if (!name[0]) name = "the headphones";
   switch (d) {
     case PlayGate::Do::Connect:
-      // The paging burst now: try 1 of 3 (a background page on its way
+      // The paging burst now: try 1 of 8 (a background page on its way
       // counts as that try: BtSink doesn't page on top of it).
       bt.connect();
       // fall through
@@ -2769,8 +2852,9 @@ static void stepIdle(uint32_t now, bool input) {
   if (o.warn) {
     Serial.printf("[power] idle: turning off in %lu s (%s); any input keeps it on\n",
                   (unsigned long)p.warnSeconds(now),
-                  screen.off() ? "the screen is off and stays off: it may be night"
-                               : "the warning is up, and the screen stays lit until it ends");
+                  screen.off()        ? "the screen is off and stays off: it may be night"
+                  : screen.glancing() ? "on the glance (it goes off in its 10 s; the PWR key keeps it on)"
+                                      : "the warning is up, and the screen stays lit until it ends");
   }
   if (o.warnEnd) {
     Serial.printf("[power] idle: kept on (%s)\n", p.blocker() != IdlePolicy::Blocker::None
@@ -2802,8 +2886,9 @@ static void stepIdle(uint32_t now, bool input) {
       return;
     }
     Serial.printf("[power] off now (%s)\n", bt.linkUp() ? "the headphones still linked after 3 s" : "headphones let go");
-    haptics.stop();
-    idlePower.powerOff();  // (doesn't return)
+    endInOrder("power-off", [] {  // (the motor stopped; the open play, paused: stopped)
+      idlePower.powerOff();  // (doesn't return)
+    });
   }
 }
 
@@ -2879,10 +2964,9 @@ bool MainUiHost::setCpuSpeed(uint16_t mhz) {
 // Every loop pass: the restart setCpuSpeed() asked for, once the headphones
 // are gone and the speaker's amp is off (at most 3 s, as before the idle
 // power-off). Never while the card's library is written (LibraryWrite: a
-// compaction, or the update step from its fence to its save's end, which
-// the pause may have let start after the ask): that waits, however long,
-// as the idle power-off does (the update step itself doesn't start once a
-// restart is asked: stepCard()).
+// compaction, which may start after the ask, or the update step from its
+// fence to its save's end, which doesn't: stepCard()): that waits, however
+// long, as the idle power-off does.
 static void stepCpuRestart(uint32_t now) {
   if (!cpuRestartMhz) return;
   // (Until the disconnect is done: connected() drops as soon as it starts.)
@@ -2894,8 +2978,89 @@ static void stepCpuRestart(uint32_t now) {
   Serial.printf("[power] restarting now at %u MHz (%s%s)\n", (unsigned)cpuRestartMhz,
                 linked ? "the headphones still linked after 3 s" : "headphones let go",
                 amp ? "; the speaker's amp still on after 3 s" : "");
+  endInOrder("restart", [] {  // (the motor stopped; the open play, paused first: stopped)
+    powerSettings.restart();  // (doesn't return)
+  });
+}
+
+// ---- the format in the player (docs/HOST-STATUS.md, "@format") ----
+
+// The format's question answered Format twice (ui/Ui::askFormat()): the
+// card in the slot formatted at the next boot (storage/CardFormatter),
+// before anything mounts it. The restart is the CPU speed's orderly one:
+// paused first (nothing plays after it by itself), the queue and the card
+// jobs' state saved, the headphones let go and the speaker's amp off, then
+// stepFormatRestart() once they are (at most 3 s; never while the
+// library's files are written), the settings saved and the play log
+// flushed (restartNow()).
+// Refused: the console's pretend card (uiF...: the card in the slot isn't
+// the one on screen), a restart under way, no card answering, a card the
+// boot couldn't hold to (no identity), a size FAT32 can't take; each
+// said in the log, and to a computer that asked as its @err.
+bool MainUiHost::formatCard(bool fromComputer) {
+  auto refuse = [fromComputer](const char* why, const char* detail) {
+    Serial.printf("[format] confirmed, but not now (%s): nothing formatted\n", why);
+    if (fromComputer) Serial.printf("@err 4 format %s\n", detail);
+    return false;
+  };
+  if (uiFake) return refuse("the console's pretend card state is up (uiF0 ends it)", "card");
+  if (restartPending()) return refuse("a restart is under way", "busy");
+  CachedDrive::Identity id;
+  if (storage.onCard()) {
+    if (sectordisk::guard().foreign) return refuse("another card is in the slot since the boot", "card");
+    id = sectordisk::mountIdentity();
+    if (!id.valid) return refuse("the mounted card's identity isn't kept (no sector cache)", "card");
+  } else {
+    if (!storage.cardAnswered()) return refuse("no card answered", "card");
+    id = storage.unmountedIdentity();
+  }
+  const cardmkfs::Layout l = cardmkfs::plan(id.sectors);
+  if (!l.ok()) return refuse(cardmkfs::text(l.why), cardmkfs::detail(l.why));
+  const bool paused = pauseIfPlaying();
+  const bool amp = SpeakerSink::ampOn();
+  queueStore.flushNow();
+  if (cardTasks) cardTasks->flushNow();
+  releaseHeadphones("[format] restarting");
+  if (amp) audio.speaker().requestAmp(SpeakerSink::Amp::Off);
+  formatRestart.on = true;
+  formatRestart.askedMs = millis();
+  formatRestart.id = id;
+  formatRestart.origin = fromComputer ? cardmkfs::Origin::Computer : cardmkfs::Origin::Screen;
+  Serial.printf("@format 0\n");
+  Serial.printf("[format] confirmed twice (%s): restarting to format the card (%lu sectors, %s, %.1f GB) at the "
+                "boot%s\n",
+                cardmkfs::originName(formatRestart.origin), static_cast<unsigned long>(id.sectors),
+                storage.onCard() ? "mounted" : cardformat::name(storage.cardKind()), l.cardBytes() / 1e9,
+                paused ? "; paused first" : "");
+  return true;
+}
+
+void MainUiHost::formatDeclined(bool fromComputer, const char* how) {
+  Serial.printf("[format] the question went (%s): nothing formatted\n", how);
+  if (fromComputer) Serial.printf("@format no\n");
+}
+
+// Every loop pass: the format's restart, once the headphones are gone and
+// the speaker's amp is off (at most 3 s), and the library's files aren't
+// being written; the request goes into RTC memory just before it.
+static void stepFormatRestart(uint32_t now) {
+  if (!formatRestart.on) return;
+  const bool linked = audio.bluetooth().linkUp();
+  const bool amp = SpeakerSink::ampOn();
+  const bool libraryWrite = cardTasks && cardTasks->libraryWrite();
+  if (!powerchoice::cpuRestartDue(now, formatRestart.askedMs, linked, amp, libraryWrite)) return;
+  if (queueStore.busy()) queueStore.flushNow();
+  cardformatter::ask(formatRestart.id, formatRestart.origin);
+  Serial.printf("[format] restarting now (%s%s)\n", linked ? "the headphones still linked after 3 s" : "headphones let go",
+                amp ? "; the speaker's amp still on after 3 s" : "");
   haptics.stop();
-  powerSettings.restart();  // (doesn't return)
+  restartNow();  // (the card worker's step ends first, the settings and the play log saved; doesn't return)
+}
+
+// The boot's format, as it goes: the boot screen's bar.
+static void formatProgress(uint8_t percent, void* ctx) {
+  (void)ctx;
+  bootScreen.formatting(percent);
 }
 
 // ---- a card swapped while on (docs/METADATA.md 3.8; storage/SectorDisk) ----
@@ -2906,6 +3071,11 @@ static bool cardHeld = false;
 // The guard's restart for the same card back under a job, waiting for the queue's flush (lib/core
 // RestartWait): the flush tried again on the saver's backoff, the restart once one works, or 30 s on.
 static RestartWait restartWait;
+// (Declared with the format's question, which a restart under way refuses. The guard's, waiting
+// for the flush, has no restartAtMs yet: for up to 30 s it would otherwise be no restart at all.)
+static bool restartPending() {
+  return powerchoice::restartAsked(formatRestart.on, cpuRestartMhz, restartAtMs, restartWait.active());
+}
 // The card's breaker (lib/core CardBreaker): RTC slow memory, which outlives
 // esp_restart(), not a power-on.
 RTC_NOINIT_ATTR static cardbreaker::Word cardBreakerWord;
@@ -3066,6 +3236,10 @@ static void stepCardGuard() {
   }
   if (g.remounts == remountsSeen) return;
   remountsSeen = g.remounts;
+  // The play log first, whatever follows (a restart's flush() included):
+  // its cut-rename rule again, and before the boot's first slot its boot's
+  // scan again (a file it held open is gone).
+  playHistory.remounted();
   const bool active = cardTasks && cardTasks->active();
   if (!active) {
     Serial.println("[card] the card answered again (FatFs mounted it again: the same card)");
@@ -3159,7 +3333,7 @@ static AutoDj::Env autoDjEnv(uint32_t now) {
   e.trackSeq = audio.trackSeq();
   e.positionMs = audio.positionMs();
   e.cardHeld = cardHeld;
-  e.restartSet = restartAtMs != 0 || cpuRestartMhz != 0;
+  e.restartSet = restartPending();
   e.sleepEndOfQueue = sleepTimer.running() && sleepTimer.choice() == SleepTimer::Choice::EndOfQueue;
   e.listMoving = userInterface && userInterface->listMoving();
   e.uiStarted = !userInterface || userInterface->started();
@@ -3179,9 +3353,15 @@ static void stepAutoDj(uint32_t now) {
   // Its pick took the listener's undo: an Undo toast still up goes.
   if (autoDj->takeUndoDropped() && userInterface) userInterface->queueUndoDropped();
   // What it has to say on the screen (a cued pick, the failure pause, a
-  // seed with no neighbours, picks at random): a toast.
+  // seed with no neighbours, picks at random; a mood filter's few tracks,
+  // a pick that plays once, no close match): a toast, with the count of
+  // the tracks that fit as it is now.
   const uint8_t news = autoDj->takeNews();
-  if (news && userInterface) userInterface->autoDjNews(news);
+  if (news && userInterface) {
+    autodjview::State v;
+    autoDj->view(&v);
+    userInterface->autoDjNews(news, autodjview::fewCount(v));
+  }
 }
 
 // ---- the card worker (docs/METADATA.md 3.3.4, 3.4.2) ----
@@ -3308,6 +3488,35 @@ static void leaveFence() {
   }
 }
 
+// Every loop pass, after the player's update() (a join taken first): the
+// play log's look at the backend, then a piece of its boot's scan or one
+// play's slot when this pass's audio lets it (lib/core PlayLog's
+// WriteGate: never in the gapless window or a start's refill) and no list
+// moves (the write holds the loop that draws its frames). Never while the
+// card is held for the guard's restart, nor (PlayHistory's own look at the
+// guard) while it is out of the slot or refuses every write: the plays
+// wait for the remount, or the end's flush.
+static void stepPlays(uint32_t now) {
+  PlayHistory::Look look;
+  look.state = player.state();
+  look.positionMs = audio.positionMs();
+  look.positionKnown = audio.positionKnown();
+  look.durationMs = audio.durationMs();
+  playlog::WriteGate::In in;
+  in.nowMs = now;
+  in.playing = look.state == PlayState::Playing;
+  in.ringMs = audio.bufferedMsNow();
+  in.ringCapacityMs = audio.ringCapacityMs();
+  in.underruns = audio.underrunsNow();
+  in.trackSeq = audio.trackSeq();
+  in.seeking = !look.positionKnown;
+  in.decoderAtEnd = in.playing && audio.heardSourceEnded();
+  in.trackLeftMs = trackLeftMs();
+  // (As the last pass's Ui::loop() left it: this pass's comes after.)
+  in.listMoving = userInterface && userInterface->listMoving();
+  playHistory.loop(look, in, cardHeld);
+}
+
 // Every loop pass, after the UI's (its covers taken in, its list's motion
 // known): what the card worker does next (ScanScheduler's inputs, as
 // METADATA.md 3.3.9 maps them; the update step's, LibraryUpdate's), the
@@ -3333,13 +3542,25 @@ static void stepCard(uint32_t now, bool input) {
   in.seekSeq = player.seeks();
   BtSink& bt = audio.bluetooth();
   in.btSetup = pairingUnderWay() || bt.link().phase == BtLink::Phase::Paging;
-  static bool linkWas = false;
-  static uint32_t linkEvents = 0;
-  if (bt.linkUp() != linkWas) {
-    linkWas = bt.linkUp();
-    ++linkEvents;
-  }
+  // The link and its events in one read (BtSink counts them as they
+  // happen, odd while up): a drop and a relink between two passes still
+  // show. A link holds the background work until its AVRCP is up (capped),
+  // and 3 s after: Bluedroid's AVRCP set-up, 3.5 s after A2DP opens,
+  // otherwise lands on the walk's worker (ScanScheduler.h, "The wait for
+  // AVRCP"). Before the link, the headphones' radio link being set up holds
+  // it too (capped), as the set-up and the walk's worker together went
+  // under G5's floor (ScanScheduler.h, "The radio link's set-up"): the
+  // set-up and its events in one read, before the link's (BtSink counts the
+  // link's rise before the set-up's end, so this pass sees one or the
+  // other).
+  const uint32_t linkSetups = bt.linkSetups();
+  in.btLinkSetup = (linkSetups & 1u) != 0;
+  in.btLinkSetupSeq = linkSetups;
+  const uint32_t linkEvents = bt.linkEvents();
+  const bool linked = (linkEvents & 1u) != 0;
   in.btSeq = linkEvents;
+  in.btLinked = linked;
+  in.btControlUp = linked && bt.avrcpUp();
   in.usb = screen.externalPower();
   in.battery = uiHost.batteryRaw;
   CardTasks::Sources src;
@@ -3352,9 +3573,10 @@ static void stepCard(uint32_t now, bool input) {
   // headphones isn't one) and what it frees besides the index.
   CardTasks::UpdateEnv env;
   env.playing = player.state() == PlayState::Playing;
-  // (A CPU speed's restart asked: not a safe point either. Its pause would
-  // make one, and the restart would cut the build it let start.)
-  env.waiting = player.state() == PlayState::Waiting || cpuRestartMhz != 0;
+  // (A restart asked, whichever: not a safe point either. Its pause would
+  // make one, and the restart would then wait for the whole build it let
+  // start, or cut it: restartNow() waits for the worker's step 5 s at most.)
+  env.waiting = player.state() == PlayState::Waiting || restartPending();
   env.trackLeftMs = trackLeftMs();
   env.seekSeq = player.seeks();
   env.alsoFreed = queue.memoryBytes() + queueStore.savingBytes() +
@@ -3501,8 +3723,46 @@ static void haltOnOldChip() {
   }
 }
 
+// malloc() tries internal RAM first up to this many bytes and PSRAM first
+// above it, each falling back to the other (heap_caps.c
+// heap_caps_malloc_default(); new, calloc and realloc too). The Arduino core
+// sets CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL, 4096, before setup()
+// (esp32-hal-psram.c psramAddToHeap()); one less puts every malloc of
+// exactly 4,096 B in PSRAM: the stdio buffer Arduino's VFS gives every File
+// (vfs_api.cpp: setvbuf(4096) on the card, FatFs's st_blksize being 0; the
+// flash library's LittleFS gives 4,096 as its st_blksize), so the playing
+// file's, the queue's save's, library.idx's and the Opus cache's; and the
+// response list of each of Bluedroid's SDP searches
+// (SDP_MAX_LIST_BYTE_COUNT, sdp_discovery.c: the link's, AVRCP's 3.5 s
+// after it, a pairing's). Both can be live at the boot's lowest internal
+// RAM (by code: the play file's 4 KB under the walk, AVRCP's set-up;
+// docs/OPUS.md 2.1, "G5 since the card worker"). The exact-4,096 B
+// allocations of everything the image links were audited
+// (docs/ARCHITECTURE.md, Build notes): each is a buffer only tasks read and
+// write, with the cache on; a task stack, a DMA buffer or what an IRAM
+// interrupt touches asks for internal RAM by its caps, which this limit
+// doesn't touch. IDF allows the limit anywhere from 0 (its default is
+// 16,384). Only where the core set its own (malloc may use PSRAM, and no
+// IRAM interrupt mallocs: CONFIG_ARDUINO_ISR_IRAM leaves malloc internal on
+// purpose), and only with PSRAM in the heap; a framework whose limit isn't
+// 4,096 stops the build, as its allocations between the two were never
+// audited.
+#if CONFIG_SPIRAM_USE_MALLOC && !CONFIG_ARDUINO_ISR_IRAM
+static_assert(CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL == 4096,
+              "the framework's malloc limit changed: audit kMallocInternalMax again (ARCHITECTURE.md, Build notes)");
+#endif
+constexpr size_t kMallocInternalMax = 4095;
+static bool mallocLimitSet = false;  // kMallocInternalMax is malloc's limit (the [heap] line)
+
 void setup() {
   haltOnOldChip();  // first: no PSRAM used yet
+#if CONFIG_SPIRAM_USE_MALLOC && !CONFIG_ARDUINO_ISR_IRAM
+  // (psramFound() is only the chip found: adding it to the heap can still fail.)
+  if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0) {
+    heap_caps_malloc_extmem_enable(kMallocInternalMax);
+    mallocLimitSet = true;
+  }
+#endif
   // A line for each failed PSRAM allocation (and any of 4 KB or more), from
   // the first: PSRAM's lowest since the boot read 0 B in every session of
   // the 2026-10-09 device run, and no caller logged a failure.
@@ -3554,10 +3814,29 @@ void setup() {
   uilang::log();
   powerSettings.begin();  // what the boot clock is, the Bluetooth power, and whether it restarted for the speed
   board::applyBootPower();  // the IMU suspended: nothing reads it
+  boardclock::begin();      // the RTC's time (M5.begin() found it), or unset: [clock]
   diag::logHeap("boot");
+  if (mallocLimitSet) {
+    Serial.printf("[heap] malloc: up to %u B internal RAM first, larger PSRAM first\n",
+                  static_cast<unsigned>(kMallocInternalMax));
+  } else {
+    Serial.println("[heap] malloc: the framework's own limit (no PSRAM in the heap, or malloc kept off it)");
+  }
+  // The UI's list memory and its fonts' glyph tables, first: while PSRAM's
+  // lower 2 MB are free (ui/HotMem: above 0x3FA00000 a row sprite shares
+  // core 1's cache with the code that draws it, and that is where the
+  // library's index, on a big card, leaves room).
+  ui::hotmem::reserve(ui::ListView::hotBytes() + ui::gfx::hotBytes());
+  ui::Fonts::instance().load();
 
   bootScreen.begin(version::player());
 
+  // A format the listener confirmed before this restart (docs/HOST-STATUS.md,
+  // "@format"; storage/CardFormatter): the card formatted now, before
+  // anything mounts it, the boot screen's bar as it goes. Then the mount
+  // below finds it as a new card.
+  formatOutcome = storage.formatIfAsked(formatProgress, nullptr);
+  if (formatOutcome.ran) bootScreen.formatDone();
   storage.begin();
   diag::logHeap("storage");
 
@@ -3681,6 +3960,10 @@ void setup() {
   } else {
     Serial.println("[dj] no PSRAM for Auto DJ: off for this boot");
   }
+  // The play log: NVS's ids, the cut-rename rule, the root's ACKS; the
+  // boot's scan and the slots on the loop (Auto DJ's marks name a play's
+  // source).
+  playHistory.begin(autoDj);
   Serial.printf("[lib] library + queue: internal RAM %lu B free before, %lu B after\n",
                 (unsigned long)freeBeforeLibrary, (unsigned long)diag::heap().internalFree);
   diag::logHeap("library");
@@ -3712,6 +3995,7 @@ void setup() {
   screen.onDark([](bool dark) {
     if (userInterface) userInterface->setDark(dark);
   });
+  screen.onGlance([](bool on) { return userInterface && userInterface->setGlance(on); });
   spike.onScreenReleased(uiResume);  // the UI draws again
   spike.onRebuild(walkAndRebuild);
   {
@@ -3766,7 +4050,7 @@ void setup() {
                  "internal RAM); "
                  "D Auto DJ (D status, D0/D1 off/on, D? its commands); "
                  "@ lines: a computer's (the USB visualizer, docs/USB-VISUALIZER.md; @status, @count, @identify, "
-                 "docs/HOST-STATUS.md), never commands");
+                 "@time, @format, docs/HOST-STATUS.md), never commands");
   // PSRAM's lowest from here is the running player's ([stats]' pmin=, the
   // [heap] lines' min=, the update step's line beside its fence's own):
   // setup()'s (the boot's library build among it) and the init's, once.
@@ -3791,13 +4075,15 @@ void loop() {
   // and the listener may still be wearing them: the back-off runs its 15
   // minutes (a range drop is what it is for).
   // (And while a computer drives the dancer: the player is paused for it.)
-  audio.bluetooth().setQuiet((screen.off() && player.state() != PlayState::Playing &&
+  // (The glance: as off. Nothing on it acts, and it may be a pocket's.)
+  audio.bluetooth().setQuiet(((screen.off() || screen.glancing()) && player.state() != PlayState::Playing &&
                               player.state() != PlayState::Waiting && !btLost) ||
                              usbViz.active());
   btSession.update(audio.bluetooth().link(), now);
   stepPlayGate(now);
-  // The fade's toast: a touch (swallowed as a wake, or on a lit screen) or
-  // the PWR key's wake while it fades; only its buttons act on the timer.
+  // The fade's toast: a touch (swallowed as a wake, or on a lit screen; not
+  // one "Touch when off" ignores, nor the glance's) or the PWR key's wake
+  // while it fades; only its buttons act on the timer.
   const bool woken = screen.takeWoken();
   if (sleepTimer.fading() && (woken || touchedThisPass) && userInterface) userInterface->sleepFading();
   stepSleep(now);
@@ -3807,6 +4093,7 @@ void loop() {
   powerSettings.update(audio.bluetooth().connected());
   nvslater::loop(now);  // settings the taps changed: written once they rest
   stepCpuRestart(now);
+  stepFormatRestart(now);
   audio.loop(now);
   powerLab.loop(now);
   stepCardGuard();
@@ -3816,6 +4103,7 @@ void loop() {
   }
   stepAutoDj(now);
   if (!cardHeld) queueStore.loop(now);
+  stepPlays(now);
   // What a track's length is, once the backend knows it (read from the
   // file; or its estimate 20 s in, exact for a constant bitrate): the
   // Queue's "49 min"; once per entry (each change redoes the Queue's sum).
@@ -3909,7 +4197,7 @@ void loop() {
   // The dancer (the Dance tab) draws its own frames (10/s idle, 24-30
   // dancing: DanceRate) into its box.
   danceMode.loop(now, silent);
-  // The UI: the tab bar, overlays, the page (list frames on 30 fps deadlines).
+  // The UI: the tab bar, overlays, the page (a moving list's frames on the panel's scan).
   if (rescueFinger && !calibrationUp() && now - rescueDownMs >= kRescueHoldMs) {
     rescueFinger = false;
     touchCheckOffered = true;  // (the calibration is what it would offer)
@@ -3944,6 +4232,12 @@ void loop() {
       } else if (heldByBreaker) {
         userInterface->note(uistr::tr(uistr::S::library_row_rescan_unread), 6000);
       }
+      // Or it restarted to format the card: what came of it.
+      if (formatOutcome.ok()) {
+        userInterface->note(uistr::tr(uistr::S::format_done), 6000);
+      } else if (formatOutcome.ran) {
+        userInterface->warn(uistr::tr(uistr::S::format_failed));
+      }
     }
     userInterface->loop(now);
   }
@@ -3953,6 +4247,10 @@ void loop() {
   // A count of the card's free space a computer asked for: a piece of the
   // FAT a pass (docs/HOST-STATUS.md).
   hostQuery.loop(now);
+  // The clock against the RTC: the boot's catch of its next tick, a
+  // @time's write on its second (a read every 10 ms or more while one runs,
+  // a few seconds at most; nothing otherwise).
+  boardclock::loop();
   shot.poll();
   // The screen, last: the countdown, and what keeps it lit (the start-up
   // screen, a screen of its own, a play waiting for the headphones, a
@@ -3982,7 +4280,7 @@ void loop() {
     screen.step(millis(), keepLit, hold);
   }
   // A calibration asked for in the dark: now that the panel is awake.
-  if (calibrationPending && !screen.off() && !screen.panelAsleep()) {
+  if (calibrationPending && !screen.off() && !screen.panelAsleep() && !screen.glancing()) {
     openCalibration(pendingHow, pendingTargets);
   }
   // A computer's @identify in the dark, likewise (dropped if another screen
@@ -4003,8 +4301,9 @@ void loop() {
     lastStats = now;
   }
   // Yield every pass (the decoder runs above the loop on this core), less
-  // while a list frame is due soon, 20 ms while the screen is off (the UI
-  // says so: nothing to draw, touches only wake; ENERGY.md item 9).
+  // while a list frame is due soon, 20 ms while the UI is dark (the screen
+  // off or the glance; the UI says so: nothing to draw but the glance's
+  // second, and a touch acts on nothing; ENERGY.md item 9).
   // (A power measurement's Pd stretches the wait while nothing animates.)
   const uint32_t uiIdleMs = userInterface ? userInterface->idleMs(millis()) : screen.off() ? 20 : 5;
   uint32_t loopDelayMs = powerLab.loopDelayMs(uiIdleMs, danceMode.active());

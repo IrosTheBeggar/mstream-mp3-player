@@ -32,9 +32,9 @@
 //   Epoch, Prior, Hop, Clock, Log: to the dancer (DanceMode's host*()).
 //
 // The same lines carry the computer's questions about the board
-// (docs/HOST-STATUS.md): Status, Count and Identify go to app/HostQuery,
-// in a session or not; a refusal it gives (a count while playing) goes
-// back as HostLink's @err, under its rate limit.
+// (docs/HOST-STATUS.md): Status, Count, Identify, Time and Format go to
+// app/HostQuery, in a session or not; a refusal it gives (a count while
+// playing) goes back as HostLink's @err, under its rate limit.
 //
 // Each reply goes out with one printf. Logged: a line on entry and one on
 // exit; nothing per line (the [dance] line every 5 s has the counters).

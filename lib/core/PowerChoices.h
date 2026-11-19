@@ -67,11 +67,22 @@ inline constexpr uint32_t kRestartWaitMs = 3000;
 // pass is stamped after it: that counts as 0 ms waited, not a wrap to ~49
 // days (which restarted at once, found on the device). millis() wrapping
 // around is fine. `libraryWrite` (IdlePolicy's LibraryWrite: a compaction,
-// or the library update step from its fence to its save's end, which may
-// have started after the ask: the pause made its safe point): the restart
-// waits for it, however long, as the idle power-off does; a cut there
-// loses the build and leaves the old index.
+// or the library update step from its fence to its save's end, already under
+// way: the step doesn't start after the ask, restartAsked()): the restart
+// waits for it, however long, as the idle power-off does; a cut there loses
+// the build and leaves the old index.
 bool cpuRestartDue(uint32_t nowMs, uint32_t askedMs, bool linked, bool ampOn, bool libraryWrite = false);
+// A restart asked for and not carried out yet: the format's (`format`), a
+// CPU speed's (`cpuMhz`, 0: none), the one the loop carries out at a set
+// time (`atMs`, 0: none: a card found, the card's guard, the console's Bf),
+// or the card guard's while it waits for the queue's flush (`guardWaits`:
+// RestartWait::active(), up to 30 s before its time is set).
+// While one is, the library update step doesn't start (LibraryUpdate::In's
+// `waiting`: the restart's pause would make its safe point, and the restart
+// would wait for the whole build), Auto DJ doesn't pick, and the format's
+// question is neither shown nor taken (it would race that restart: the
+// listener told "formatting", and a boot that formats nothing).
+bool restartAsked(bool format, uint16_t cpuMhz, uint32_t atMs, bool guardWaits = false);
 // The "Restarting at 160 MHz..." toast stays up this long: until the
 // restart, which comes at most kRestartWaitMs after it.
 inline constexpr uint32_t kRestartToastMs = kRestartWaitMs + 2000;

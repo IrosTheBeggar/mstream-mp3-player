@@ -174,8 +174,10 @@ void test_no_root_is_missing_and_no_fault() {
 }
 
 // Each read and open of the card failed once, in its turn. The plan's are the
-// status line's own, so a fault there leaves the root whole; any other leaves it
-// unread, and never reads as a card with no transfer data.
+// status line's own, so a fault there leaves the root whole; so does one in ACKS,
+// read on its own once the root is checked (the play log's: unread, it is none, and
+// costs that boot its trim); any other leaves the root unread, and never reads as a
+// card with no transfer data.
 void test_each_read_failed_in_its_turn_is_the_cards_fault() {
   for (const std::vector<uint8_t>* root : {&manifest(), &longRoot()}) {
     CutFs fs;
@@ -184,7 +186,7 @@ void test_each_read_failed_in_its_turn_is_the_cards_fault() {
     TEST_ASSERT_TRUE(readRoot(fs)->present);
     const long events = fs.faultEvents;
     TEST_ASSERT_GREATER_THAN_INT32(4, events);
-    int unread = 0, checkedNoName = 0;
+    int unread = 0, checkedNoName = 0, acksUnread = 0;
     for (long k = 0; k < events; ++k) {
       arm(fs, "/.mstream/", k, k + 1);
       auto r = readRoot(fs);
@@ -202,9 +204,13 @@ void test_each_read_failed_in_its_turn_is_the_cards_fault() {
         const bool named = r->tagsPath[0] != 0;
         TEST_ASSERT_TRUE_MESSAGE(std::strncmp(line, named ? "its T tags-" : "its root unread", named ? 11 : 15) == 0, line);
         if (r->hasRoot && !named) ++checkedNoName;
+      } else if (r->acksWhy == cc::Why::Io) {
+        ++acksUnread;
+        TEST_ASSERT_FALSE_MESSAGE(r->acks.present, msg);
       }
     }
-    TEST_ASSERT_EQUAL_INT_MESSAGE(events - 1, unread, "all but the plan's open");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(events - 1 - acksUnread, unread, "all but the plan's open and ACKS's reads");
+    TEST_ASSERT_GREATER_THAN_INT(0, acksUnread);
     TEST_ASSERT_GREATER_THAN_INT(0, checkedNoName);
   }
 }

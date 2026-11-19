@@ -39,6 +39,8 @@ void ScanScheduler::observe(const In& in, Out& o) {
     lastTrackSeq_ = in.trackSeq;
     lastSeekSeq_ = in.seekSeq;
     lastBtSeq_ = in.btSeq;
+    lastBtControlUp_ = in.btControlUp;
+    lastBtLinkSetupSeq_ = in.btLinkSetupSeq;
     primed_ = true;
   }
   input_.expire(now);
@@ -56,10 +58,73 @@ void ScanScheduler::observe(const In& in, Out& o) {
   if (in.decoderAtEnd || in.trackSeq != lastTrackSeq_) track_.open(now, config_.trackSettleMs);
   if (in.seeking || in.seekSeq != lastSeekSeq_) seek_.open(now, config_.seekSettleMs);
   if (in.btSetup || in.btSeq != lastBtSeq_) bt_.open(now, config_.btSettleMs);
+  // The radio link's set-up (the header's "The radio link's set-up"): from
+  // its rise, held as btSetup holds it while it lasts; its end the settle
+  // from the pass that sees it; the cap counts as its end at its rise +
+  // btLinkSetupMs (sparse passes or not), and ends the wait for that radio
+  // link for good (its end after the cap holds nothing). A rise: down at
+  // the last pass, or the count moved while it was up at both (a new radio
+  // link). Down now, a count that moved by more than the end of the one
+  // read up at the last pass (one; none if it read down): a set-up that came
+  // and went between the two passes, the settle (also after a set-up past
+  // its cap, whose own end holds nothing).
+  const uint32_t moved = in.btLinkSetupSeq - lastBtLinkSetupSeq_;
+  if (in.btLinkSetup && (!setup_ || moved != 0)) {
+    setupAtMs_ = now;
+    setupWait_ = true;
+  } else if (!in.btLinkSetup && moved > (setup_ ? 1u : 0u)) {
+    bt_.open(now, config_.btSettleMs);
+  }
+  setup_ = in.btLinkSetup;
+  if (setupWait_) {
+    if (now - setupAtMs_ >= config_.btLinkSetupMs) {
+      setupWait_ = false;
+      const uint32_t capAt = setupAtMs_ + config_.btLinkSetupMs;
+      if (after(capAt + config_.btSettleMs, now)) bt_.open(capAt, config_.btSettleMs);
+    } else {
+      bt_.open(now, config_.btSettleMs);
+      if (!in.btLinkSetup) setupWait_ = false;  // (ended: the settle that follows is the plain wait)
+    }
+  }
+  o.btLinkSetupWait = setupWait_;
+  lastBtLinkSetupSeq_ = in.btLinkSetupSeq;
+  // The link's wait for AVRCP (the header's "The wait for AVRCP"): from the
+  // link's rise, held open as btSetup holds it while AVRCP isn't up; its
+  // coming up is a link event; the cap counts as one at link +
+  // btControlWaitMs (sparse passes or not), and ends the wait for good, so
+  // a link that outlasts millis()'s wrap can't wait again. A link that drops
+  // ends it (btSeq's event holds the settle). A rise: the link down at the
+  // last pass, or btSeq moved while it was up at both (a drop and a relink
+  // between them).
+  if (!in.btLinked) {
+    linked_ = false;
+    controlWait_ = false;
+  } else {
+    if (!linked_ || in.btSeq != lastBtSeq_) {
+      linked_ = true;
+      linkAtMs_ = now;
+      controlWait_ = !in.btControlUp;
+    }
+    if (in.btControlUp) {
+      if (!lastBtControlUp_) bt_.open(now, config_.btSettleMs);
+      controlWait_ = false;
+    }
+    if (controlWait_) {
+      if (now - linkAtMs_ < config_.btControlWaitMs) {
+        bt_.open(now, config_.btSettleMs);
+      } else {
+        controlWait_ = false;
+        const uint32_t capAt = linkAtMs_ + config_.btControlWaitMs;
+        if (after(capAt + config_.btSettleMs, now)) bt_.open(capAt, config_.btSettleMs);
+      }
+    }
+  }
+  o.btControlWait = controlWait_;
   lastUnderruns_ = in.underruns;
   lastTrackSeq_ = in.trackSeq;
   lastSeekSeq_ = in.seekSeq;
   lastBtSeq_ = in.btSeq;
+  lastBtControlUp_ = in.btControlUp;
 
   // The battery floor, with its hysteresis (U13). A reading not known keeps
   // the state.

@@ -331,7 +331,7 @@ void Hud::draw() {
 // ---- Sheet ----
 
 void Sheet::open(const char* title, const char* const* rows, int n, uint16_t accent, const char* const* details,
-                 int primary, int danger) {
+                 int primary, int danger, const uint16_t* inks) {
   copy(title_, sizeof(title_), title);
   primary_ = primary;
   danger_ = danger;
@@ -339,6 +339,7 @@ void Sheet::open(const char* title, const char* const* rows, int n, uint16_t acc
   for (int i = 0; i < n_; ++i) {
     copy(rows_[i], sizeof(rows_[i]), rows[i]);
     copy(details_[i], sizeof(details_[i]), details ? details[i] : "");
+    inks_[i] = inks ? inks[i] : col::DIM;
   }
   accent_ = accent;
   pressed_ = -1;
@@ -348,9 +349,12 @@ void Sheet::open(const char* title, const char* const* rows, int n, uint16_t acc
   draw();
 }
 
-bool Sheet::setDetail(int i, const char* text) {
-  if (!up_ || i < 0 || i >= n_ || std::strcmp(details_[i], text ? text : "") == 0) return false;
+bool Sheet::setDetail(int i, const char* text) { return setDetail(i, text, col::DIM); }
+
+bool Sheet::setDetail(int i, const char* text, uint16_t ink) {
+  if (!up_ || i < 0 || i >= n_ || (std::strcmp(details_[i], text ? text : "") == 0 && inks_[i] == ink)) return false;
   copy(details_[i], sizeof(details_[i]), text);
+  inks_[i] = ink;
   if (!panel_) return false;
   drawRow(i);
   return true;
@@ -407,18 +411,19 @@ void Sheet::renderRow(int i) {
   // when it doesn't fit whole there (the label's words in the UI's
   // language: Spanish's "Temporizador de apagado" leaves 60 px), never
   // cut (sheet::detailOnTwoLines(), as measured). A name the page cut to
-  // the room first stays beside it.
+  // the room first stays beside it (and Auto DJ's mood filter: the Ui
+  // cuts it). In its own ink (dim, as most are).
   const int dw = details_[i][0] ? f.width(Font::Small, details_[i]) : -1;
   if (dw >= 0 && sheet::detailOnTwoLines(std::min(f.width(lf, rows_[i]), sheet::kTwoLineW), dw)) {
     f.draw(s, lf, rows_[i], 16, y + sheet::kTwoLineLabelY, sheet::kTwoLineW, ink, bg);
-    f.draw(s, Font::Small, details_[i], 16, y + sheet::kTwoLineDetailY, sheet::kTwoLineW, col::DIM, bg);
+    f.draw(s, Font::Small, details_[i], 16, y + sheet::kTwoLineDetailY, sheet::kTwoLineW, inks_[i], bg);
     return;
   }
   const int w = f.draw(s, lf, rows_[i], 16, y + kRowH / 2, kW - 32, ink, bg);
   if (dw >= 0) {
     // (Whole, should the label draw a pixel wider than measured.)
     const int room = std::max(sheet::detailRoom(w), dw);
-    f.draw(s, Font::Small, details_[i], kW - 16, y + kRowH / 2, room, col::DIM, bg, Fonts::Align::Right);
+    f.draw(s, Font::Small, details_[i], kW - 16, y + kRowH / 2, room, inks_[i], bg, Fonts::Align::Right);
   }
 }
 
@@ -967,18 +972,27 @@ int JumpGrid::onEvent(const InputEvent& e) {
 
 // ---- Dialog ----
 
+namespace {
+// The hold button's fill is drawn again at most this often while it grows
+// (its button alone: 131 x 36 px).
+constexpr uint32_t kFillFrameMs = 40;
+}  // namespace
+
 void Dialog::open(const char* title, const char* body, const char* const* buttons, int n, uint16_t accent,
-                  bool danger) {
+                  bool danger, int primary, const char* holdHint) {
   copy(title_, sizeof(title_), title);
   copy(body_, sizeof(body_), body);
-  n_ = std::max(1, std::min(2, n));
-  for (int i = 0; i < n_; ++i) copy(buttons_[i], sizeof(buttons_[i]), buttons[i]);
+  // (1 or 2 buttons, the primary the last unless `primary` says: DialogTouch.)
+  touch_.open(n, primary, holdHint != nullptr);
+  for (int i = 0; i < touch_.n(); ++i) copy(buttons_[i], sizeof(buttons_[i]), buttons[i]);
   accent_ = accent;
   danger_ = danger;
   status_[0] = 0;
   icon_ = nullptr;
   slashed_ = false;
-  pressed_ = -1;
+  news_ = HoldButton::News::None;
+  fillDrawn_ = 0;
+  copy(hint_, sizeof(hint_), holdHint ? holdHint : "");
   up_ = true;
   draw();
 }
@@ -1006,13 +1020,6 @@ int Dialog::titleRoom(bool icon) {
   return kW - (icon ? 12 : 16) - tx;
 }
 
-int Dialog::buttonAt(int x, int y) const {
-  if (y < kY + kH - 50 || y >= kY + kH) return -1;
-  if (x < kX) return -1;
-  // The right-hand button's hit area reaches the screen's edge.
-  return n_ == 1 ? 0 : std::min(1, (x - kX) * 2 / kW);
-}
-
 void Dialog::render() {
   M5Canvas& s = *panel_;
   Fonts& f = Fonts::instance();
@@ -1026,29 +1033,71 @@ void Dialog::render() {
     tx = 14 + icon_->w + 8;
   }
   f.draw(s, Font::Bold, title_, tx, 22, kW - (icon_ ? 12 : 16) - tx, col::TXT, col::CARD);
-  char lines[3][64];
-  const int maxLines = status_[0] ? 2 : 3;
+  // (A line longer than its buffer loses its end: en.json's line_bytes for
+  // the bodies, which test_ui_strings holds every language's lines to.)
+  // The hold mode keeps the body's three lines: its hint has a row of its
+  // own under them (dialog::kHintY), and it has no status line.
+  const bool hold = touch_.holdMode();
+  char lines[3][96];
+  const int maxLines = status_[0] && !hold ? 2 : 3;
   const int nl =
       textfit::wrap(f.fit(Font::Small), body_, strlen(body_), kW - 32, maxLines, &lines[0][0], sizeof(lines[0]));
-  for (int i = 0; i < nl; ++i) f.draw(s, Font::Small, lines[i], 16, 50 + i * 18, kW - 32, col::SOFT, col::CARD);
-  if (status_[0]) f.draw(s, Font::Small, status_, 16, 50 + nl * 18 + 6, kW - 32, statusColour_, col::CARD);
+  for (int i = 0; i < nl; ++i) {
+    f.draw(s, Font::Small, lines[i], 16, dialog::kBodyY + i * dialog::kLineH, kW - 32, col::SOFT, col::CARD);
+  }
+  if (status_[0] && !hold) {
+    f.draw(s, Font::Small, status_, 16, dialog::kBodyY + nl * dialog::kLineH + dialog::kStatusGap, kW - 32,
+           statusColour_, col::CARD);
+  }
+  if (hold) renderHint();
   panelOwner_ = this;
-  for (int i = 0; i < n_; ++i) renderButton(i);
+  for (int i = 0; i < touch_.n(); ++i) renderButton(i);
+}
+
+void Dialog::renderHint() {
+  // How the hold button is answered: from the start, in the body's colour;
+  // amber once a press on it fell short (a tap, a lift, a slide off:
+  // DialogTouch::hintAlert()).
+  M5Canvas& s = *panel_;
+  s.fillRect(16, dialog::kHintY - dialog::kLineH / 2, kW - 32, dialog::kLineH, col::CARD);
+  Fonts::instance().draw(s, Font::Small, hint_, 16, dialog::kHintY, kW - 32,
+                         touch_.hintAlert() ? col::AMBER : col::SOFT, col::CARD);
 }
 
 void Dialog::renderButton(int i) {
   M5Canvas& s = *panel_;
   Fonts& f = Fonts::instance();
-  const int bw = n_ == 1 ? kW - 24 : (kW - 30) / 2;
-  const int x = 12 + i * (bw + 6);
-  const bool primary = i == n_ - 1;
-  const uint16_t b = i == pressed_ ? col::BTN_HI : primary ? (danger_ ? col::RED : accent_) : col::BTN;
-  s.fillRect(x, kH - 46, bw, 36, col::CARD);  // (its corners, drawn again alone)
-  s.fillRoundRect(x, kH - 46, bw, 36, 8, b);
+  const int n = touch_.n();
+  const int bw = dialog::buttonW(n), bh = dialog::kButtonH;
+  const int x = dialog::buttonX(i, n), y = dialog::kButtonTop;
+  const bool primary = i == touch_.primary();
+  s.fillRect(x, y, bw, bh, col::CARD);  // (its corners, drawn again alone)
+  if (primary && touch_.holdMode()) {
+    // The hold button: empty, outlined in red, red from the left as far as
+    // the hold has come; its label (Bold, or Small past its room) over
+    // both, the glyphs alone (bg == fg).
+    s.fillRoundRect(x, y, bw, bh, 8, col::BTN);
+    if (fillDrawn_ > 0) {
+      s.setClipRect(x, y, std::min(fillDrawn_, bw), bh);
+      s.fillRoundRect(x, y, bw, bh, 8, col::RED);
+      s.clearClipRect();
+    }
+    static_assert(dialog::kHoldOutline == 2, "the outline: two rounded rectangles");
+    s.drawRoundRect(x, y, bw, bh, 8, col::RED);
+    s.drawRoundRect(x + 1, y + 1, bw - 2, bh - 2, 7, col::RED);
+    // Kept dialog::kHoldPad px clear of the outline (uitext::kDialogHoldTextW).
+    const int room = dialog::holdTextW(n);
+    const Font font = f.fitting(Font::Bold, buttons_[i], room);
+    f.draw(s, font, buttons_[i], x + bw / 2, y + bh / 2, room, col::TXT, col::TXT, Fonts::Align::Centre);
+    return;
+  }
+  const int pressed = touch_.pressed();
+  const uint16_t b = i == pressed ? col::BTN_HI : primary ? (danger_ ? col::RED : accent_) : col::BTN;
+  s.fillRoundRect(x, y, bw, bh, 8, b);
   // A label too wide for its button ("Play on speaker": 127 px of 123)
   // in Small, not cut.
   const Font font = f.fitting(primary ? Font::Bold : Font::Body, buttons_[i], bw - 8);
-  f.draw(s, font, buttons_[i], x + bw / 2, kH - 28, bw - 8, primary && i != pressed_ ? col::DARK : col::TXT, b,
+  f.draw(s, font, buttons_[i], x + bw / 2, y + bh / 2, bw - 8, primary && i != pressed ? col::DARK : col::TXT, b,
          Fonts::Align::Centre);
 }
 
@@ -1059,34 +1108,77 @@ void Dialog::draw() {
 }
 
 void Dialog::drawButton(int i) {
-  if (!up_ || !panel_ || i < 0 || i >= n_) return;
+  const int n = touch_.n();
+  if (!up_ || !panel_ || i < 0 || i >= n) return;
   if (panelOwner_ != this) render();
   renderButton(i);
-  const int bw = n_ == 1 ? kW - 24 : (kW - 30) / 2;
-  const int x = 12 + i * (bw + 6);
-  gfx::pushRect(*panel_, x, kH - 46, bw, 36, kX + x, kY + kH - 46, true);
+  const int x = dialog::buttonX(i, n), y = dialog::kButtonTop;
+  gfx::pushRect(*panel_, x, y, dialog::buttonW(n), dialog::kButtonH, kX + x, kY + y, true);
 }
 
+void Dialog::drawHint() {
+  if (!up_ || !panel_) return;
+  if (panelOwner_ != this) render();
+  renderHint();
+  const int y = dialog::kHintY - dialog::kLineH / 2;
+  gfx::pushRect(*panel_, 16, y, kW - 32, dialog::kLineH, kX + 16, kY + y, true);
+}
+
+void Dialog::drawHoldButton(int fillPx) {
+  fillDrawn_ = fillPx;
+  drawButton(touch_.primary());
+}
+
+// (Which touch answers what, the hold's included: DialogTouch, host-tested;
+// this draws what it changed.)
 int Dialog::onEvent(const InputEvent& e) {
-  using T = InputEvent::Type;
+  news_ = HoldButton::News::None;
   if (!up_) return -1;
-  // Presses draw the button alone (the whole dialog was 44 ms, twice a
-  // tap: MEASURED).
-  if (e.type == T::Down) {
-    pressed_ = buttonAt(e.x, e.y);
-    if (pressed_ >= 0) drawButton(pressed_);
-    return -1;
+  // Presses draw the button alone, the hold's fill and its emptying too, and
+  // a hold cut short the hint's row (the whole dialog was 44 ms, twice a tap:
+  // MEASURED).
+  const DialogTouch::Result r = touch_.onEvent(e);
+  news_ = r.news;
+  if (r.news == HoldButton::News::Began) {
+    fillDrawn_ = 0;  // (tick() draws it as it grows, from the first pass)
+    fillDrawnMs_ = e.ms - kFillFrameMs;
+  } else if (r.news == HoldButton::News::Short || r.news == HoldButton::News::Slid ||
+             r.news == HoldButton::News::Stalled || r.news == HoldButton::News::Dropped) {
+    fillDrawn_ = 0;  // empty again
   }
-  if (e.type == T::DragStart || e.type == T::Cancel || e.type == T::Release) {
-    const int was = pressed_;
-    pressed_ = -1;
-    if (was >= 0) drawButton(was);
-    return -1;
+  if (r.drawHint) drawHint();
+  if (r.drawButton >= 0) drawButton(r.drawButton);
+  return r.answer;
+}
+
+HoldButton::News Dialog::tick(uint32_t nowMs, const HoldButton::Finger& finger) {
+  using News = HoldButton::News;
+  if (!up_ || !touch_.holdMode()) return News::None;
+  const bool amber = touch_.hintAlert();
+  const News n = touch_.tick(nowMs, finger);
+  if (n == News::Confirmed) return n;
+  if (n == News::Stalled || n == News::Slid || n == News::Scripted) {
+    // The hold ended in this pass with nothing done: empty again, and the
+    // hint amber (its row only when it wasn't).
+    drawHoldButton(0);
+    if (!amber) drawHint();
+    return n;
   }
-  if (e.type != T::Tap) return -1;
-  const int b = pressed_;
-  pressed_ = -1;
-  return b;
+  if (!touch_.holding()) return News::None;
+  // (The fill is the time the finger was seen on it, the time tick()
+  // answers by: HoldButton::heldMs().)
+  const int px = touch_.hold().fill(dialog::buttonW(touch_.n()));
+  if (px != fillDrawn_ && static_cast<int32_t>(nowMs - fillDrawnMs_) >= static_cast<int32_t>(kFillFrameMs)) {
+    fillDrawnMs_ = nowMs;
+    drawHoldButton(px);
+  }
+  return HoldButton::News::None;
+}
+
+HoldButton::News Dialog::dropHold() {
+  const HoldButton::News n = touch_.dropHold();
+  if (n == HoldButton::News::Dropped) drawHoldButton(0);
+  return n;
 }
 
 // ---- Coach (the first-boot tips) ----

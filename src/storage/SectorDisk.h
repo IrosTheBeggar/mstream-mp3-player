@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "CachedDrive.h"
 #include "SectorCache.h"
 
 // The PSRAM sector cache under FatFs (docs/METADATA.md 3.2.4, 3.2.7;
@@ -40,7 +41,12 @@
 //     the device run's glitch, a status command sent to a busy card).
 //   - CTRL_TRIM (FatFs trims the clusters it frees, FF_USE_TRIM): the range
 //     is invalidated, then the SD driver's ioctl runs (it answers PARERR to
-//     a trim: FatFs ignores the answer).
+//     a trim: FatFs ignores the answer). On a nearly full card the trim also
+//     points FatFs's next search for a free cluster at the clusters freed
+//     (lib/core HoleHint; METADATA.md 3.2.4, "The hole hint"): with one free
+//     cluster that search read the whole FAT, a queue save of 5.6 s on the
+//     device after a write that took and freed it (2026-11-18). Counted:
+//     Stats::holeHints, gc's "hole hints".
 //   - Nothing writes the card around FatFs (SD.writeRAW() isn't used): if
 //     something ever does, it must invalidate() the range.
 //   - FatFs calls the driver under its volume's lock (one volume on the
@@ -92,7 +98,8 @@ struct Stats {
   uint32_t writeFails = 0;    // ... refused twice
   uint32_t refused = 0;       // writes refused: another card in the slot
   uint32_t trims = 0;
-  uint32_t inits = 0;        // mounts (FatFs's own after a card stopped answering too): the cache cleared
+  uint32_t holeHints = 0;    // ... after which FatFs's next search started at the freed clusters
+  uint32_t inits = 0;       // mounts (FatFs's own after a card stopped answering too): the cache cleared
   uint32_t verified = 0;     // hits compared with the card (verify on)
   uint32_t stale = 0;        // ... that differed: a cache bug (L1 fails)
   uint32_t staleLba = 0;     // the last such sector
@@ -126,6 +133,9 @@ bool cardOut();
 // The mount's card identity (`last`: the last remount's), for the log:
 // "62333952 sectors, sector 0 CRC 1a2b3c4d, boot sector 8192 CRC ...".
 size_t identityText(char* buf, size_t size, bool last = false);
+// ... as it is: what the format's restart holds the card to
+// (storage/CardFormatter). Invalid without the wrapper, or unread.
+CachedDrive::Identity mountIdentity();
 
 // The free-space count's watch (storage/CardSpace, docs/HOST-STATUS.md):
 // `fn(lba, count, ctx)` for every write FatFs makes through the wrapper,

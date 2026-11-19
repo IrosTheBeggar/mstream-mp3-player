@@ -8,7 +8,8 @@
 //   reason is the first that fails);
 // - the finished queue: picked and cued, under the same conditions;
 // - the holds (Repeat One, the sleep timer's End of queue, the failure
-//   pause) and what the "..." row shows, wherever the queue is;
+//   pause, a mood filter no track fits: docs/MOOD-FILTERS.md 6.5) and
+//   what the "..." row shows, wherever the queue is;
 // - autoDjOwed: true only while the index joins or reopens and a pick is
 //   otherwise due; never while held, never with tracks up next or nothing
 //   playing;
@@ -164,11 +165,18 @@ void test_every_condition() {
   in.failurePaused = true;
   expectWait(Wait::Failures, decide(in), "8: the failure pause");
   TEST_ASSERT_TRUE(decide(in).hold == Hold::Failures);
+  in = due();
+  in.noFit = true;
+  expectWait(Wait::NoFit, decide(in), "9: a mood filter nothing fits");
+  TEST_ASSERT_TRUE(decide(in).hold == Hold::NoFit);
+  TEST_ASSERT_FALSE(decide(in).owed);
+  TEST_ASSERT_EQUAL_STRING("no track fits the filters", autodj::waitName(Wait::NoFit));
 }
 
 // The reason is the first condition that fails, in 2.3's order.
 void test_the_first_condition_that_fails() {
   TriggerIn in = due();
+  in.noFit = true;
   in.failurePaused = true;
   in.sleepEndOfQueue = true;
   in.repeatOne = true;
@@ -193,6 +201,8 @@ void test_the_first_condition_that_fails() {
   in.sleepEndOfQueue = false;
   expectWait(Wait::Failures, decide(in), "from 8");
   in.failurePaused = false;
+  expectWait(Wait::NoFit, decide(in), "from 9");
+  in.noFit = false;
   expectWait(Wait::Due, decide(in), "none");
   // Off before everything, and no hold shown.
   in.on = false;
@@ -200,12 +210,12 @@ void test_the_first_condition_that_fails() {
   expectWait(Wait::Off, decide(in), "off");
   TEST_ASSERT_TRUE(decide(in).hold == Hold::None);
   // Every reason has a name.
-  for (int w = 0; w <= static_cast<int>(Wait::Failures); ++w)
+  for (int w = 0; w <= static_cast<int>(Wait::NoFit); ++w)
     TEST_ASSERT_TRUE(std::strcmp("?", autodj::waitName(static_cast<Wait>(w))) != 0);
 }
 
 // 2.3.1: a finished queue (stopped on its last entry at its end) is picked
-// for and cued, under conditions 1, 2 and 4-8; a stopped queue that didn't
+// for and cued, under conditions 1, 2 and 4-9; a stopped queue that didn't
 // finish there isn't.
 void test_a_finished_queue() {
   TriggerIn in = due();
@@ -227,7 +237,7 @@ void test_a_finished_queue() {
   in.finished = true;
   in.upNext = 1;
   expectWait(Wait::UpNext, decide(in), "finished, then + Queue");
-  // Each of 1, 2 and 4-8 holds it.
+  // Each of 1, 2 and 4-9 holds it.
   const auto blocked = [](void (*set)(TriggerIn&), Wait want, const char* what) {
     TriggerIn b = due();
     b.play = PlayState::Stopped;
@@ -246,14 +256,20 @@ void test_a_finished_queue() {
   blocked([](TriggerIn& b) { b.repeatOne = true; }, Wait::RepeatOne, "Repeat One");
   blocked([](TriggerIn& b) { b.sleepEndOfQueue = true; }, Wait::SleepTimer, "End of queue");
   blocked([](TriggerIn& b) { b.failurePaused = true; }, Wait::Failures, "failures");
+  blocked([](TriggerIn& b) { b.noFit = true; }, Wait::NoFit, "a filter nothing fits");
 }
 
 // The holds are shown wherever the queue is (the "..." row: Waiting or
-// Paused), Paused first; none while off.
+// Paused), Paused first, a filter nothing fits last; none while off.
 void test_the_holds_shown() {
   TriggerIn in = due();
   in.upNext = 4;
   in.play = PlayState::Paused;
+  in.noFit = true;
+  TEST_ASSERT_TRUE(decide(in).hold == Hold::NoFit);
+  in.sleepEndOfQueue = true;
+  TEST_ASSERT_TRUE(decide(in).hold == Hold::SleepTimer);
+  in.sleepEndOfQueue = false;
   in.repeatOne = true;
   TEST_ASSERT_TRUE(decide(in).hold == Hold::RepeatOne);
   in.sleepEndOfQueue = true;
@@ -270,11 +286,11 @@ void test_the_holds_shown() {
   TEST_ASSERT_TRUE(decide(in).hold == Hold::None);
 }
 
-// autoDjOwed: a pick due by 1-3 and 6-8 while the index joins or reopens.
+// autoDjOwed: a pick due by 1-3 and 6-9 while the index joins or reopens.
 // Every combination of the inputs that matter, against that rule.
 void test_owed_only_while_joining() {
   int owed = 0, cases = 0;
-  for (int bits = 0; bits < (1 << 11); ++bits) {
+  for (int bits = 0; bits < (1 << 12); ++bits) {
     TriggerIn in;
     in.on = bits & 1;
     in.joining = bits & 2;
@@ -287,9 +303,10 @@ void test_owed_only_while_joining() {
     in.failurePaused = bits & 256;
     in.fenced = bits & 512;
     in.cardHeld = bits & 1024;
+    in.noFit = bits & 2048;
     const bool session = in.play == PlayState::Playing || in.finished;
     const bool want = in.on && in.joining && in.queueSize && !in.upNext && session && !in.repeatOne &&
-                      !in.sleepEndOfQueue && !in.failurePaused;
+                      !in.sleepEndOfQueue && !in.failurePaused && !in.noFit;
     const TriggerOut o = decide(in);
     char msg[32];
     std::snprintf(msg, sizeof(msg), "inputs %#x", bits);
@@ -301,7 +318,7 @@ void test_owed_only_while_joining() {
     owed += o.owed;
     ++cases;
   }
-  TEST_ASSERT_EQUAL_INT(2048, cases);
+  TEST_ASSERT_EQUAL_INT(4096, cases);
   // Playing (finished or not: the player never says both) or stopped and
   // finished; fenced and the card held each way (they don't matter: the
   // update step has its own fence, and a held card holds it too).

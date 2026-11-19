@@ -21,12 +21,22 @@ public:
   void update(const tabbar::State& s);
   // The Now Playing cell's hairline and bars, and the rest, for 'ui'.
   const tabbar::State& drawn() const { return drawn_; }
+  // The glance's top row (Ui::setGlance(): "Touch when off": Track), y
+  // 0-35 over the dark UI: the background (no tabs, no surface, no rule;
+  // x 0-215 on `all`), and the Output cell's drawing (the output icon in
+  // its state's colour, the volume, the battery with its low blink and
+  // charging colour) on it at the tab bar's own pixels, drawn on `all` and
+  // when tabbar::glanceDirty() says (never for the EQ's steps). The bar is
+  // left invalid: the next update() draws it whole (the wake's redrawAll()
+  // does so anyway). The caller lifts the gfx gate around it.
+  void updateGlance(const tabbar::State& s, bool all);
 
 private:
   void drawCell(int tab, const tabbar::State& s);
 
   tabbar::State drawn_;
   bool valid_ = false;
+  tabbar::State glanceDrawn_;  // updateGlance()'s, as tabbar::glanceOf() has it
 };
 
 }  // namespace ui

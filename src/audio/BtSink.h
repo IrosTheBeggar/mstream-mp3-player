@@ -31,13 +31,18 @@ class PlayerA2dp;  // BtSink.cpp: ESP32-A2DP's source with the fixes below
 //
 // Which headphones: the ones the listener paired on the Pair screen
 // (Output > Pair new headphones: startPairScan(), pairWith()). Once
-// connected, that device is remembered: after a drop (or a boot, or a
-// listener's ask) the Core2 pages it 3 times (~25 s), then once at 30 s, 1,
-// 2 and 5 min and every 5 min, and rests after 15 min (at once after the 3
-// tries while nobody is around: setQuiet()); it never scans for remembered
-// headphones (ReconnectPlanner). All along it stays connectable (not
-// discoverable) so the headphones can come back by themselves, as they do
-// to a phone. Other devices can't connect in. forgetDevice() clears it.
+// connected, that device is remembered: after a drop or a boot the Core2
+// pages it 3 times, one page after the other (~20 s, 15 of them on the
+// air), on a listener's ask 8 times (~56 s: headphones that sit on a
+// phone answer only now and then), then once at 30 s, 1, 2 and 5 min and
+// every 5 min, and rests after 15 min (at once after the tries while
+// nobody is around: setQuiet()); it never scans for remembered headphones
+// (ReconnectPlanner). All along, from under a second after the stack
+// starts, it stays connectable (not discoverable) so the headphones can
+// come back by themselves, as they do to a phone. Other devices can't
+// connect in. forgetDevice() clears it. Every page's result is in the
+// serial log: no answer, answered after so long, or answered and why the
+// link then closed (the HCI code).
 // With none remembered it never picks a device by itself (SinkSearch): a
 // release build doesn't scan at all, at the boot or on any ask, and stays
 // quiet, connectable only. A developer build with a name (BT_SINK_NAME)
@@ -144,6 +149,32 @@ public:
   // waits before a restart or a power-off (the CPU speed, the idle
   // power-off) waits for this, so the headphones see the disconnect finish.
   bool linkUp() const { return linked_.load(); }
+  // linkUp()'s ups and downs, counted where they happen (free-running; odd
+  // while the link is up): one read gives the loop the link and its events
+  // together, and a drop and a relink between two of its passes still show
+  // (ScanScheduler's In::btSeq: a new link waits for its own AVRCP).
+  uint32_t linkEvents() const { return linkEvents_.load(); }
+  // AVRCP is up on the link that is up (BtControl::avrcpOnLink(): connected
+  // since the link last went down; false while linkUp() isn't): the card's
+  // background work waits for it after a link (ScanScheduler's
+  // In::btControlUp), as Bluedroid's AVRCP set-up, an SDP search 3.5 s after
+  // A2DP opens, dips internal RAM about 5.5 KB for a moment.
+  bool avrcpUp() const { return linked_.load() && avrcpUp_.load(); }
+  // The remembered headphones' radio link (their ACL) is up and A2DP isn't
+  // up over it yet, whoever opened it (they, or a page of ours they
+  // answered): the link being set up, SDP, A2DP and often AVRCP with it,
+  // in 0.6-2 s. Its rises and ends, counted where they happen on BtAppT
+  // (RadioLinkNotes; free-running, odd while one is set up), a new radio
+  // link over one never seen to close, or a page of ours over one up with
+  // no A2DP, counting two: one read gives the loop the set-up and its
+  // events together (ScanScheduler's In::btLinkSetup and btLinkSetupSeq:
+  // the card's background work waits through it, as the walk's worker and
+  // an incoming set-up together went under G5's floor).
+  // It ends when A2DP comes up, counted after linkEvents()' rise, so a
+  // pass that reads this first and linkEvents() after sees one or the
+  // other, never neither.
+  uint32_t linkSetups() const { return linkSetups_.load(); }
+  bool linkSettingUp() const { return (linkSetups() & 1u) != 0; }
   // The headphones' name: from discovery, or read after each connection.
   const char* deviceName() const { return deviceNames_[deviceNameIdx_.load()]; }
 
@@ -200,8 +231,8 @@ public:
   // ---- the Output screen (loop task; carried out on BtAppT) ----
   // What the link is doing (published by BtAppT a few times a second).
   BtLink link() const;
-  // Page the remembered headphones now (a burst of 3 tries, then the
-  // back-off); with none remembered, scan by name for 2 min if there is a
+  // Page the remembered headphones now (an ask's burst of 8 tries, then
+  // the back-off); with none remembered, scan by name for 2 min if there is a
   // name to look for (or Bs), else nothing (nothingToFind()). Undoes
   // disconnect().
   void connect();
@@ -383,6 +414,9 @@ private:
 
   // Set on Bluetooth tasks, read anywhere.
   std::atomic<bool> linked_{false};     // the A2DP link as reported to the loop
+  std::atomic<uint32_t> linkEvents_{0};  // linked_'s changes (linkEvents())
+  std::atomic<bool> avrcpUp_{false};    // BtControl::avrcpOnLink(), published by PlayerA2dp
+  std::atomic<uint32_t> linkSetups_{0};  // the radio link's set-ups (linkSetups()): RadioLinkNotes' count
   std::atomic<bool> streaming_{false};  // the stack reports the stream started
   std::atomic<uint8_t> streamState_{0};  // for stats(): StreamControl::State, bit 7 = held off
   // The link's signal and power mode, so a stutter can be told from a weak

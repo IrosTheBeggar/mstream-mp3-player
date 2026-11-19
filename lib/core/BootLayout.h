@@ -35,6 +35,12 @@ constexpr int kHintY = 229;
 constexpr int kBodyH = 19, kSmallH = 17;
 // The room kept between the logo and the version.
 constexpr int kGap = 10;
+// The format at the boot (ui/BootScreen::formatting(); docs/HOST-STATUS.md
+// "@format"), under the version: its title (Bold, centred on y
+// kFormatTitleY, kTextW wide), a bar that fills as it goes, and its line
+// in the rescue line's place (Small, on kHintY).
+constexpr int kFormatTitleY = 178;
+constexpr int kFormatBarX = 40, kFormatBarW = 240, kFormatBarY = 196, kFormatBarH = 8;
 
 // The colours, RGB888. The logo is navy on white on mStream's pages; here
 // it is recoloured for the dark: the bars of the "m" keep their two blues,

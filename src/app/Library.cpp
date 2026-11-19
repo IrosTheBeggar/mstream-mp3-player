@@ -4,6 +4,7 @@
 #include "app/Library.h"
 
 #include <esp_heap_caps.h>
+#include <esp_mac.h>
 #include <esp_timer.h>
 
 #include <algorithm>
@@ -260,8 +261,11 @@ bool Library::openRecords() {
     return false;
   }
   int64_t t0 = esp_timer_get_time();
+  // (The board's id, the play log's deviceId: its ACKS rows kept first.)
+  uint8_t mac[6] = {};
+  esp_efuse_mac_get_default(mac);
   void (*wait)(uint32_t) = [](uint32_t ms) { delay(ms); };
-  const uint32_t reads = cardroot::readAtBoot(*fat_, scratch, 1024, root_, wait);
+  const uint32_t reads = cardroot::readAtBoot(*fat_, scratch, 1024, root_, wait, mac);
   psramFree(scratch);
   stats_.rootMs = msSince(t0);
   if (reads > 1) {

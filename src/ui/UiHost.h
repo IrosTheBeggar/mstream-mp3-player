@@ -66,6 +66,12 @@ struct AppState {
   // None mounted: what the card that is in is (LocalStorage::cardKind(),
   // the empty state's message); Unreadable with none in, or one mounted.
   cardformat::Kind cardKind = cardformat::Kind::Unreadable;
+  // For the format's question (docs/HOST-STATUS.md, "@format"): the card's
+  // size, mounted or not (the CSD's: 0 not known); the mounted card's root
+  // has a transfer's plan on it (cardroot::Root::plan: a sync that didn't
+  // finish).
+  uint64_t cardBytes = 0;
+  bool cardPlan = false;
   uint32_t libraryTracks = 0;
   // The card worker's news for the Library's status line (3.3.6): checking
   // the card, reading tags (done / total), updating, a transfer that didn't
@@ -97,9 +103,10 @@ struct AppState {
   bool ringMatters = false;      // playing, and the ring has filled once (a low ring is a risk)
   ButtonPolicy::Feedback feedback;  // the touch buttons' last hold (the HUD)
   // The screen's settings (ScreenPower's choices: "Screen off after",
-  // "Brightness"), for the Output tab's rows.
+  // "Brightness", "Touch when off"), for the Output tab's rows.
   uint8_t screenTimeout = 1;
   uint8_t brightness = 1;
+  uint8_t screenTouch = 0;  // ScreenPower::OffTouch: Nothing, Wake, Track
   // The sleep timer (SleepTimer; ENERGY.md section 3): running (counting,
   // armed for an end, or fading), fading, the sheet's outlined choice
   // (SleepSheet's 0-7, -1 none), the "..." row's state ("Off", "23 min",
@@ -211,6 +218,16 @@ public:
   // queue saved, and a restart.
   virtual void rescanLibrary() = 0;
   virtual bool rescanRestarts() const = 0;
+  // The format's question answered "Format" twice (docs/HOST-STATUS.md,
+  // "@format"; `fromComputer`: a computer's @format brought it up): the
+  // card in the slot is formatted at a restart, the CPU speed's orderly
+  // way (paused, the queue and the play log saved, the headphones let go;
+  // storage/CardFormatter at the next boot). False: refused (another
+  // restart under way, no card answering, the console's pretend card).
+  virtual bool formatCard(bool fromComputer) = 0;
+  // ... or it went without a format (Cancel, a tab, its minute up, another
+  // dialog in its place): logged, and "@format no" for a computer's.
+  virtual void formatDeclined(bool fromComputer, const char* how) = 0;
   // Rescan tags (the Output tab's Library row, after its dialog: 3.3.6):
   // the device's own files' tags read again, the transfer's left as they
   // are; the library updates at the scan's end. False: no card's records
@@ -225,9 +242,11 @@ public:
   virtual void deviceInfo(deviceinfo::Facts& f) = 0;
 
   // ---- the screen (ScreenPower; saved) ----
-  // "Screen off after" and "Brightness": ScreenPower's choice indices.
+  // "Screen off after", "Brightness" and "Touch when off": ScreenPower's
+  // choice indices.
   virtual void setScreenTimeout(int choice) = 0;
   virtual void setBrightness(int choice) = 0;
+  virtual void setScreenTouch(int choice) = 0;
   // Something needs the listener (the headphones lost, "Couldn't reach", a
   // track that failed): the screen lights if it was dim or off, and the
   // countdown starts again. `why` is logged.
@@ -267,6 +286,15 @@ public:
   virtual bool autoDjSetMode(autodj::Mode m) = 0;
   virtual bool autoDjSetFloor(uint8_t pct) = 0;
   virtual bool autoDjSetMatch(bool tempo, bool key) = 0;
+  // The mood filter (Output > Auto DJ's editor, each tap: MOOD-FILTERS.md
+  // 4.3): applied and saved, and the tracks inside it counted at once.
+  // Returns that count (all the library's tracks with no group set), so the
+  // editor's count needn't wait for the next snapshot.
+  virtual uint32_t autoDjSetMoods(uint16_t q) = 0;
+  // The editor closed on a changed filter (as a Dq is at once): the change
+  // is settled, and what it means for the queue may be said (4.5: a queued
+  // pick outside it plays once). Behind the fence it says nothing.
+  virtual void autoDjMoodSettled() = 0;
   // The empty states' Auto DJ button (D4, the listener's tap): a random
   // track the index knows plays as a new queue, Auto DJ on (refused
   // behind the library update's fence).

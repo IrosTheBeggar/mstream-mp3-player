@@ -10,9 +10,11 @@
 // change, 6 s after the first at most), each namespace opened once, with
 // one log line ("[nvs] saved screen/bright ..."). A key queued again before
 // that is written once, with its last value. Before a restart or a
-// power-off (PowerSettings::restart(), IdlePower::powerOff()) flushNow()
-// writes what is queued at once. The namespace and key are string
-// literals (kept by pointer). Loop task only.
+// power-off flushNow() writes what is queued at once: main.cpp's
+// endInOrder(), before the play log's card writes (lib/core OrderlyEnd),
+// and PowerSettings::restart() and IdlePower::powerOff() again, whoever
+// calls them. The namespace and key are string literals (kept by
+// pointer). Loop task only.
 //
 // Why: a write held the loop a few ms in the middle of the tap that made
 // it (a sector erase, when NVS's page fills, much longer), and the other

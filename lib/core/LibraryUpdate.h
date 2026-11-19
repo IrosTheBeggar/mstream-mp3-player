@@ -167,7 +167,9 @@ public:
   static uint32_t pauseFor(uint32_t tracks);
   // Nothing plays (stopped, or paused), or it plays with `needLeftMs` left
   // and no seek for kSeekQuietMs. A play waiting for the headphones isn't a
-  // safe point: its start, when they connect, needs the path.
+  // safe point: its start, when they connect, needs the path. Nor is a
+  // restart asked (`waiting` too: powerchoice::restartAsked()): its pause
+  // would make one, and the restart would then wait for the whole build.
   static bool safePoint(bool playing, bool waiting, uint32_t trackLeftMs, uint32_t sinceSeekMs,
                         uint32_t needLeftMs = kSafeLeftMs);
   // This session's: safeLeftFor() the longer of the last step's measured
@@ -317,7 +319,7 @@ public:
     bool compactFailed = false;  // the last compaction failed (a full card, a walk being written): built from tags.bin alone
     // The safe point.
     bool playing = false;       // the player is Playing
-    bool waiting = false;       // ... Waiting for the headphones
+    bool waiting = false;       // ... Waiting for the headphones, or a restart is asked
     uint32_t trackLeftMs = 0;   // what is left of the heard track (0: not known)
     uint32_t seekSeq = 0;       // the seeks asked for, free-running (PlaybackController::seeks())
     // Auto DJ owes the queue's last entry a next track its engine can't

@@ -509,8 +509,9 @@ is learned once. main logs each loop from `repeats()` instead (section 6).
 
 ### 3.6 Saved: NVS `queue`/`repeat`, schema 2
 
-- A u8: 0 Off, 1 All, 2 One. Written at once on a change (a tap, the
-  console: flash wear is no concern at that rate). Read with `isKey()`
+- A u8: 0 Off, 1 All, 2 One. Written on a change (a tap, the console:
+  flash wear is no concern at that rate; since 0.12.0 once the taps rest,
+  `app/NvsLater`). Read with `isKey()`
   first (QueueStore's pattern: a missing key's read logs an `[E]` line).
   Absent: Off. Another value: Off, and logged.
 - **Schema 2.** A new key changes the layout the schema names (the key
@@ -2149,11 +2150,13 @@ test_playback, test_autodj_driver and test_queue.
 | Repeat One | no (a hold) | Waiting |
 | The sleep timer at End of queue | no (a hold) | Waiting |
 | 3 of its picks in a row failed to play | no (a hold, until a track plays, or Auto DJ is switched off and on) | Paused |
+| A mood filter no track on the card fits (docs/AUTODJ.md 3.14, docs/MOOD-FILTERS.md 6.5) | no (a hold, until the filter changes or a library update brings a track that fits) | Waiting |
 | The last entry, Playing or Waiting for the headphones | one, appended | On |
 | A finished queue (16.5) | one, cued | On |
 
 The "..." row shows the holds whatever the queue does: Waiting under
-Repeat One on any entry, Paused after the failures. A due pick also
+Repeat One on any entry or a filter nothing fits, Paused after the
+failures. A due pick also
 waits while the decoder fills the ring after a start or a skip (until it
 holds 500 ms, the track's source ends, or 1.5 s have passed): a pick
 timed across that refill measured the decoder (108 ms on 2026-10-13). It

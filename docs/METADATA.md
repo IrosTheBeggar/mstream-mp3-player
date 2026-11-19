@@ -347,6 +347,32 @@ built without exFAT and without GPT (`lib/core/CardFormat`). The tree:
   or `/.player`, and it skips every name under `/music` that starts with
   a dot (`src/storage/LocalStorage.cpp`, `walk()`).
 
+**A card the player formats** (firmware 0.14.0; docs/HOST-STATUS.md,
+"@format"). The listener can have the player format a card: one that
+isn't FAT32 or can't be read, from the player's own no-card screen, or
+any card when the software asks with `@format`, which only brings up the
+player's question; the listener confirms it there, twice (a tap, then a
+2 s hold). The software
+never formats a card through the player otherwise. The card it leaves
+(`lib/core/CardMkfs`, host-tested on ChaN's FatFs as the Core2 builds
+it), which the software MAY rely on:
+
+- Sector 0 is an MBR with one primary partition, type 0x0C (FAT32,
+  LBA), from sector 8192 (4 MiB) to the card's last sector; the sectors
+  between, and the card's last 64, are zero (nothing of a GPT is left).
+- The partition is FAT32: 512-byte sectors, 2 FATs, 32 KB clusters on a
+  card of 2.16 GB or more (on a smaller one the largest cluster that
+  leaves FAT32 its 65,526), the data area from a 4 MiB boundary; the
+  boot sector's backup at 6, FSINFO at 1 and 7, its free count valid.
+- `/music`, empty, and `/.player/device.txt`, the firmware's (2.15), so
+  the software reads what the player takes (Opus, `read.mpdj=2`,
+  `history=1`) before the card's first boot in a player; nothing else:
+  no `/.mstream`, so the software's set-up makes the card's first commit
+  (and its `cardId`).
+- A new volume serial and disk signature: a card the software knew is
+  another card after it (its `/.mstream`, and the `cardId` in it, are
+  gone).
+
 ### 2.3 Conventions shared by every file
 
 #### 2.3.1 Bytes
@@ -1048,10 +1074,12 @@ no more.
 
 **Readers:**
 
-- **The device** reads ACKS to trim its log (2.20.2). It checks the
-  section as 2.4.3 says (rows of at least 24 bytes, bytes = count ×
-  stride, its CRC, the order); one that fails is ignored, and the root
-  stays valid: ACKS only trims, so losing it only keeps more plays.
+- **The device** reads ACKS to trim its log (2.20.2) and, at boot, to
+  reserve seqs up to it (2.20.4; with listening stats also their gap,
+  docs/LISTENING-STATS.md 5.6). It checks the section as 2.4.3 says
+  (rows of at least 24 bytes, bytes = count × stride, its CRC, the
+  order); one that fails is ignored, and the root stays valid: ACKS only
+  trims and reserves, so losing it only keeps more plays.
   So a reader takes ACKS outside its container's check of the sections
   it knows (whose stride and length rules make the file absent: 2.4.3,
   the directory): it finds ACKS by its type in the directory and checks
@@ -1759,7 +1787,7 @@ each, about 1-2 minutes for 20,000 files through a USB reader
 | `/music/**` folders | create; remove only OWNED folders that are empty (OWNED in the ledger, or a folder op of the current plan: 2.12.5) | none | anything |
 | `/music` itself | create if missing | read | anything |
 | `/.mstream/**` | everything | **read only** (except as the sync agent: 2.12.4) | may delete it all (the device then scans; the software then sees a card with no ledger) |
-| `/.player/**` | **read only**; it relies on `device.txt` and the play log (`plays*.jnl`, 2.20) alone | everything | may delete it all (the device rebuilds; the log's plays not yet read are lost) |
+| `/.player/**` | **read only**; it relies on `device.txt` and the play log (`plays*.jnl`, 2.20) alone, and never reads the listening stats' files (`stats.bin`, `stats-<gen>.bin`: 2.12.6) | everything | may delete it all (the device rebuilds its caches; the log's plays not yet read are lost, and so is the listening stats' history, which the device can't rebuild: the plays its trims removed are counted nowhere else on the card, mStream keeping its own record of them) |
 | anything else on the card | never | never | anything |
 
 - **A file the listener changed** stops being the software's at the next
@@ -1997,6 +2025,22 @@ device MUST NOT write `/.mstream` in any other role.
   on the card is what was written, is kept when its rename fails, and on
   the card the cut rule below holds for it, its twins `queue.xl1`-`.xl9`:
   3.2.2, "The queue's file".)
+- **The listening stats** (docs/LISTENING-STATS.md 5.2-5.5; a device
+  that keeps them): `/.player/stats.bin` is written as the queue's file
+  is. `stats.tmp` replaces it only once its size on the card is what was
+  written; when the rename fails the tmp is kept, whole, and the next
+  save renames it first. On the card the cut rule below holds for it,
+  its twins `stats.xl1`-`.xl9`. Its only-the-tmp check is a real one:
+  whole when its frame and every section's CRC hold (and when its major
+  is newer, or it holds a REQUIRED section this firmware doesn't know:
+  it is renamed, then left alone), torn only when the frame fails its own
+  checks, and no verdict (kept) when the card fails the read. The per-
+  track rows live in a **base file**, `stats-<gen>.bin`, written under a
+  fresh name and never replaced: `stats.bin` names it, so the rename of
+  `stats.bin` is the one commit point. A base file `stats.bin` doesn't
+  name (the one before or after a cut compaction) is removed only after
+  the named one checked whole. The stats are primary data, not a cache: the
+  device can't rebuild what its trims removed (2.11).
 - **`device.txt`** is written through `device.tmp` and a rename.
 - **A cut inside one of these renames** (2.12.1, "Cut renames") leaves
   `X` and `X.tmp` on one cluster chain, and the device's next write of
@@ -2042,7 +2086,7 @@ section and 2.12.8 say.
 
 | Name | What it holds |
 |---|---|
-| `state.json`, written through `state.new` | the card's settings and the software's private state: the card's label and the volume serial it was set up on; its selection (each source's libraries) and settings (layout, conversion, covers, AutoDJ); for a card of a multi-card set, the set and this card's place in it (the set's whole table, on each of its cards); for each of the card's servers, the keys the listener called that server (2.5.1), its manifest's revision when it isn't server 0 (2.10.2), a peer's endpointId (2.5.5); whether albums' art changed (2.12.1, step 10); the play log's posted mark of each (deviceId, epoch) (2.20.6). Its members are the software's, versioned by its `version` |
+| `state.json`, written through `state.new` | the card's settings and the software's private state: the card's label and the volume serial it was set up on; its selection (each source's libraries) and settings (layout, conversion, covers, AutoDJ); for a card of a multi-card set, the set and this card's place in it (the set's whole table, on each of its cards); for each of the card's servers, the keys the listener called that server (2.5.1), its manifest's revision when it isn't server 0 (2.10.2), a peer's endpointId (2.5.5); whether albums' art changed (2.12.1, step 10); the play log's posted mark of each (deviceId, epoch) (2.20.6), and its gift ranges: of each (deviceId, epoch), the seqs counted as plays of a card made for someone else, from the first to the last of each time it was so (2.20.6, item 11; absent: none). Its members are the software's, versioned by its `version` |
 | `resume.json`, written through `resume.new` | the partial downloads kept for a later run; its members are 2.12.8's |
 | `resume/<8 hex>.part` | those partials (2.12.8) |
 | `run.lock` | informational: a run is writing the card (below) |
@@ -2399,7 +2443,7 @@ would change.
 
 ```
 contract=1
-firmware=0.11.0
+firmware=0.12.0
 read.msmf=1
 read.mptg=1
 read.mpdj=2
@@ -2409,6 +2453,7 @@ codecs=mp3,flac,opus
 extensions=mp3,flac,opus
 max_rate=48000
 max_channels=2
+history=1
 ```
 
 - `read.*` lists the majors the firmware reads, separated by commas; a
@@ -2422,8 +2467,10 @@ max_channels=2
   walk lists as audio (any case). The device recognises audio by
   extension, not by content, so both matter.
 - `history` lists the majors of the play log (2.20) the firmware writes:
-  `history=1` from the firmware that keeps it (not built yet); missing
-  or empty, it keeps none. It tells the software that this player logs
+  `history=1` from 0.14.0, the firmware that keeps it (3.10), the key
+  last; missing or empty, it keeps none (0.13.0 and older write no key;
+  the example above is the fixtures' `golden/device.txt`, whose
+  `firmware` value is a sample). It tells the software that this player logs
   plays, so its clock is worth setting; the software reads the log files
   whatever the key says (an older firmware's log stays on the card), each
   slot by its own major (2.20.7).
@@ -2570,6 +2617,9 @@ on any difference. The folder's README says how to read them.
    them by its 72-byte prefix. `tools/test_mood_vectors.py` runs mStream's
    own predicate text (`src/api/mood-filter.js`, its commit named) in
    SQLite over every row and filter, and the word must agree with it.
+10. **The listening stats** (`stats/`, made with `tools/statsref.py`;
+    docs/LISTENING-STATS.md): the device's own files (2.12.6), which no
+    software reads; a mirror MAY leave them out.
 
 ### 2.18 Conformance vectors
 
@@ -2936,7 +2986,9 @@ says the firmware keeps one (2.15).
 - A file is a sequence of 80-byte slots from offset 0, with no header.
   A trailing part shorter than a slot (a cut append) is ignored, and the
   device cuts it off before its next append, so it always appends at a
-  slot boundary. A slot, once written, is never rewritten.
+  slot boundary. A slot, once written, is never changed (the device MAY
+  write a slot's same bytes over it, where it is, to finish an append
+  whose sync the card failed: 2.20.5).
 - **The cap:** a file holds at most 6,553 slots (524,240 bytes), the two
   together at most 1,048,480 bytes: the room the software keeps for the
   log when it fills a card. A device MAY use a smaller cap.
@@ -2952,7 +3004,14 @@ says the firmware keeps one (2.15).
 
   A cut between steps 1 and 2 leaves `plays.jnl` alone, one between 2
   and 3 `plays.1.jnl` alone: the next append goes on either way (that
-  rotation's drop note is lost: 2.20.5).
+  rotation's drop note is lost: 2.20.5). A step the card fails with the
+  device still running loses nothing of that: the slot is tried again
+  (2.20.5) and the rotation with it, and step 1's count, once
+  `plays.1.jnl` is gone, goes before whichever slot lands next. A
+  `plays.1.jnl` the device can't read whole for step 1 (a sector gone
+  bad) is left as it is while a later try may read it; a device MAY then
+  go on with what it could read, the note counting that much, so the
+  log isn't held back for good.
 - **A cut inside step 2's rename** leaves both names on one cluster
   chain (2.12.1, "Cut renames"), and deleting either would free clusters
   the other still uses: 2.12.6's case, with `plays.jnl` as its tmp. So:
@@ -2980,7 +3039,14 @@ says the firmware keeps one (2.15).
   a file holding a play ACKS doesn't acknowledge, a drop note no play
   follows, or a slot it can't judge (a newer major's, or a valid slot of
   a kind it doesn't know: perhaps a later firmware's play). Neither the
-  trim nor the rotation deletes a file a twin shares (above).
+  trim nor the rotation deletes a file a twin shares (above). A device
+  that keeps listening stats (docs/LISTENING-STATS.md 5.5) trims a file
+  only once its stats on the card hold its plays too: every play slot in
+  it at or under the seq the stats' MARK keeps for its deviceId and
+  epoch. Its rotation MAY save the stats first, so that step 1 deletes no
+  play they don't hold; it never waits on that save, and when the save
+  doesn't land those plays are lost to the stats
+  (docs/LISTENING-STATS.md 5.5).
 
 #### 2.20.3 The slot (80 bytes)
 
@@ -3045,10 +3111,24 @@ says the firmware keeps one (2.15).
   slot that uses it (it MAY reserve several at once; the unused ones are
   skipped, and a reader takes no gap for a loss). **At boot:** the next
   seq is max(NVS's seq, the highest seq of a valid play slot of this
-  deviceId and epoch in the mounted card's log) + 1. Every valid slot
-  counts: twins, and both slots of a conflict, which a reader drops
-  (2.20.6, item 3), since that seq was used. A seq that would pass
-  2^32 − 1 takes a new epoch.
+  deviceId and epoch in the mounted card's log, the seq the root's ACKS
+  (2.5.6) acknowledges for them, and, on a device that keeps listening
+  stats, the highest seq its stats hold for them: their MARK,
+  docs/LISTENING-STATS.md 5.6) + 1. ACKS's and MARK's are reservations,
+  as the sentence above allows: with NVS put back from a backup behind a
+  log the device already trimmed, a new play would otherwise reuse a seq
+  ACKS acknowledges: read as sent, it would never be sent.
+  (0.14.0 takes NVS's and the log's alone; ACKS's and MARK's come with
+  the stats' firmware, docs/LISTENING-STATS.md S1.) Every valid slot of
+  the log's files (2.20.2's names) counts: both of a byte-equal pair,
+  which a reader takes once, and both slots of a conflict, which a reader
+  drops (2.20.6, item 3), since that seq was used. The twin names
+  (`plays.xl1` to `plays.xl9`) needn't be read: a twin holds the slots of
+  a `plays.1.jnl`, whose chain it still shares (read under that name), or
+  which it was until a rotation renamed it and moved `plays.jnl`, with
+  every later slot, to `plays.1.jnl`. So no twin holds a seq or a bootSeq
+  above those the log's files hold, or held before a trim. A seq that
+  would pass 2^32 − 1 takes a new epoch.
 - **bootSeq** counts the device's boots in one epoch, from 1; NVS keeps
   the count, stored at boot before any slot uses it. **At boot:** this
   boot's bootSeq is max(NVS's boot count, the highest bootSeq of a valid
@@ -3079,6 +3159,16 @@ says the firmware keeps one (2.15).
   the gapless window. The open play is ended (stopped) and written at
   every orderly power-off or restart: the idle power-off, the CPU
   speed's restart and the card guard's.
+- **A slot the card fails** (a write, a sync, a rename, a question of
+  the log's files; the card pulled) MAY be tried again, and is then the
+  same slot: the seq taken for it and the bytes first encoded, whatever
+  the clock says by then, so no play is two slots that differ and no seq
+  is used twice (2.20.4). A try whose write had landed, only its sync or
+  its close failing, is the log's last slot: the device writes those
+  bytes over themselves and syncs, and the play is one slot. (Were both
+  to land they are byte-equal: one play to a reader, 2.20.6 item 3.) The
+  device writes no later play before it, so the log's order is the
+  plays'; a play it gives up on is lost, its seq never on the card.
 - **The fields:** startedAt is the wall time the play began, the clock
   at the slot's write less the uptime since it began, so a clock set
   during the play still dates it; 0 (clock 0) while the clock is unset.
@@ -3140,18 +3230,86 @@ says the firmware keeps one (2.15).
    unknown, and the play isn't sent (item 8).
 8. **Not sent, counted:** a play with no row (the listener's own file),
    one whose file isn't the row's (its size or time differ), one with no
-   start (played before the clock was ever set). The software shows how
-   many, and the drop notes' sum: plays lost before it read them.
+   start (played before the clock was ever set), one mStream's schema
+   refuses (a serverPath over 2,048 characters; a start, a played time
+   or a length above 2^53 − 1: one such play fails the whole call it
+   rides in), and every play of a card made for someone else (item 11).
+   The software shows how many, and the drop notes' sum: plays lost
+   before it read them.
 9. **Where it goes:** only to the server that 2.11's test says is the
    row's own; a peer's play goes to its parent, with the peer's id and a
    track snapshot (mStream's federated plays). A play for a server the
-   software doesn't reach now waits in its store.
+   software doesn't reach now waits in its store. A play that waits
+   there stays until its server has answered it, whatever the posted
+   mark says by then (the device's rotation dropped its slot, or
+   another computer's run settled it): it goes when its server is next
+   read, which answers a play it already has as a duplicate. Only a run
+   that reads another server drops a waiting play the mark has passed.
 10. **The posted mark** of each (deviceId, epoch) rises to the highest
     seq up to which every play on the card is settled (the server
-    answered it: accepted, a duplicate, or rejected) or isn't sent. A
-    play still waiting holds it back; a seq the card doesn't hold (lost,
-    or reserved and never used) doesn't. The next commit's ACKS follow
-    the marks (2.5.6).
+    answered it: accepted, a duplicate, or rejected, but for the two
+    rejections of item 12) or isn't sent (item 8). A play still waiting
+    holds it back; a seq the card doesn't hold (lost, or reserved and
+    never used) doesn't. The next commit's ACKS follow the marks
+    (2.5.6). A look that sends the plays without a sync writes nothing
+    to the card: what it settled stays in the software's store until a
+    sync stores the marks.
+11. **A card made for someone else** (the software's setting, in
+    `state.json`: 2.12.7) sends none of its plays, then or later. Each
+    new play is counted and settled as it is, with a ledger or without:
+    it is never mapped, and the mark passes it. The card's **gift
+    ranges**, in `state.json` beside the marks, take it in: of each
+    (deviceId, epoch), the seqs from the first play counted so to the
+    last, split where a play of the log between them wasn't (one the
+    software had mapped before the card was marked); a range that
+    touches or overlaps another of its (deviceId, epoch) joins it. Marks
+    and ranges are written by the one write that settles those plays
+    (the state file of a sync of such a card; the write that makes it
+    the listener's own again), never before it, and the software keeps
+    nothing of them in its own store: a run that stops before that write
+    leaves them as new as it found them. The commits of the run that
+    first counts a play so don't acknowledge it (they come before the
+    state file); the next commit's ACKS do, and let the device trim it.
+    - Every look, by any software and whatever the setting says by then,
+      counts a new play in a gift range as such a card's: never mapped,
+      never sent, the mark passing it. A state file with no ranges (an
+      older one) has none. The ranges are read whatever card id the
+      state file names, as the setting is.
+    - The plays the log holds when the setting changes, either way, are
+      such a card's too, since nothing tells when a play was made. A
+      card just marked has them settled at its next sync. One made the
+      listener's own again has them settled in the write that changes
+      the setting (the marks and the ranges, in `state.json`), and keeps
+      the setting when the software can't read the log.
+    - The plays the software had mapped before the card was marked wait
+      in its store, hold the mark at the first of them, and go once the
+      card is the listener's own again. No gift range holds them: they
+      lie below the range of the time the card was marked, or between
+      two ranges. Another software, or the same one with its store lost,
+      maps them as the listener's own plays.
+12. **A rejection that may pass** doesn't settle its play, which waits
+    in the store and holds its mark:
+    - `unknown-track`, mStream's answer for a file its scan hasn't
+      reached as for one it no longer has. It settles the play only
+      when the run read the server's whole listing (the manifest of
+      part 4), no page of it saying a scan was running and its revision
+      the same on every page, and that listing covers the play's library
+      and lacks its path: the file is gone from the server. With no
+      listing read (a 304), one that holds the path, or one of other
+      libraries, the play waits. While a listing read during a scan
+      lacks its path, the play isn't sent at all;
+    - `bad-time`, when the software's own clock finds the start no more
+      than 5 minutes ahead: the server's clock is the one that is off.
+      A start further ahead (the player's clock was wrong) settles;
+    - either for 30 days from the play's start at most, by the
+      software's clock: past that the server's answer settles the play,
+      whatever its reason.
+    - a start more than 5 minutes ahead of the software's clock gives
+      no day to count those 30 from: such a play waits 30 days from
+      when the software first held it (a time it keeps with the play in
+      its store), so a software whose own clock runs slow doesn't settle
+      a fresh play. A `bad-time` answer for such a start settles it at
+      once, as above.
 
 **The post** (proposed, the software's; mStream's
 `POST /api/v1/stats/plays` takes up to 200 plays a call):
@@ -3164,14 +3322,30 @@ says the firmware keeps one (2.15).
 | playedMs, pauseCount | `playedMs`, `pauseCount` |
 | durationMs, when not 0 | `durationMs` |
 | outcome | `outcome`: `completed`, `skipped`, `stopped` |
-| source | `source`: `manual`, `shuffle`, `autodj`; not said: `other` |
+| source | `source`: `manual`, `shuffle`, `autodj`; not said: `device`, or `other` to an mStream older than that source |
 | the card | `client`: `name` `mstream-core2`, `version` the firmware in `device.txt`, `instanceId` the cardId as 16 lowercase hex digits |
 | a peer's row | posted to its parent, with `peerId` and `track` (title, artist and album from T's record; durationMs) |
 
 mStream decides what counts as a play (30 s, or half the track), and
 takes a startedAt at most 5 minutes ahead of its clock and within its
-retention (24 months by default): an older play comes back rejected,
-which settles it.
+retention (24 months by default): an older play comes back rejected
+(`bad-time`), and so does one ahead of its clock; a play whose path it
+has no track for comes back rejected too (`unknown-track`). Item 12
+says which of those settle a play.
+
+**A call mStream refuses whole** (a 400: its validator refuses every
+play of a call for one play's field). The plays the software knows it
+refuses are never sent (item 8). For the rest:
+- a call refused goes again one play at a time, each with the source
+  it had. A play with a `device` source refused alone goes once more
+  with `other` in its place: an mStream older than that source refuses
+  a call for it whole. Taken so, the plays after it go with `other` too.
+  A play refused alone (with `other` too, for a `device` one) is the one
+  at fault, and settles as a play not sent does, once the server has
+  taken another call of the same post. With no call taken the fault may
+  be the request's (the `client` block, a schema the software doesn't
+  know): nothing settles on it, and each play waits, 30 days from its
+  start at most, as item 12's do.
 
 #### 2.20.7 Versions
 
@@ -3873,6 +4047,75 @@ the SD library's non-static `ff_sd_initialize`, `ff_sd_status`,
 - The wrapper also keeps the card's identity at the mount and holds every
   remount to it: another card put in while the player is on is
   write-protected until a restart (3.8, "The card's guard").
+
+**The hole hint** (2026-11-18; `lib/core/HoleHint.h`, `test_hole_hint`).
+FatFs looks for a free cluster from the one after the last it allocated
+(`last_clst`), one FAT entry at a time, wrapping; a remove (`f_unlink`,
+`f_truncate`) leaves `last_clst` where it was. On the device's 32 GB card
+filled to one free cluster (7,607 FAT sectors), a write that needed the
+cluster the last remove freed read the whole FAT first, about 5.3 s under
+the volume lock the decoder's reads wait on. On the device that was a queue
+save of 5,589 ms, and the next track underran (148 underruns): on the
+listening-stats firmware (v0.14.0-91), that visit's only queue save, right
+after the stats file's failed `stats.tmp` had taken and freed the only
+cluster (`test_hole_hint` M1's case). The queue alone does it too, on the
+model: it writes `queue.tmp` before it removes `queue.txt`, so with one
+free cluster two saves in a row read the whole FAT between them (M2; on
+the device with main's firmware too, below). Each remove's TRIM (one
+per run of clusters `remove_chain()` frees, after it counted them) now
+also points FatFs at that run, from the wrapper's `CTRL_TRIM`:
+`last_clst` = the run's first cluster - 1 (cluster 2: `n_fatent - 1`), the
+rule FatFs itself applies when `f_open`'s `FA_CREATE_ALWAYS` frees a chain.
+
+- Only when the free count is known and at most (FAT entries - 2) / 8,192:
+  118 clusters (3.7 MB) on that card. With more room FatFs's order stays.
+- Of the runs freed since FatFs last allocated, the lowest stays the start
+  while each later one lies at most 8,192 clusters above it (64 FAT
+  sectors): a fragmented chain is trimmed a run at a time, and a search
+  from the lowest finds the rest within those sectors. A run farther above
+  becomes the start, as a lone run does: a chain that took a lone low hole
+  and then walked to the free run far above ends in that run, and the next
+  search belongs there, not at the hole.
+- `last_clst` is only a start: FatFs clamps it and takes a cluster only when
+  its entry reads free. The hook writes no FAT sector, count or flag.
+- On the model of that card (FatFs R0.15, `test_hole_hint`) the queue's
+  saves read 3,804 and 3,806 FAT sectors in turn without it, 1 with it; a
+  write after one that took and freed the only cluster, 7,609 and 1.
+- On the device (2026-11-18, that card at one free cluster, nothing
+  playing, eight queue saves of about 180 tracks): main's firmware read
+  2, 0, 7,609, 0, 7,610, 0, 7,610 and 0 sectors from the card for them,
+  each walk 5,285-5,295 ms with the loop held (from the second save on,
+  any two in a row read the whole FAT); with the hint 2 and then 0 each,
+  135-146 ms, one hole hint a save. Same card writes on both.
+- **What it costs:** when the few free clusters are a run far from a
+  cluster just freed (a card filled on a PC after `/.player`, stopped short
+  of full), a write of more than one cluster takes the freed cluster, then
+  walks to the run: a whole FAT (7,601 sectors, M9), where FatFs alone used
+  the run at once. For the queue on M9's card that is once, when its text
+  first needs two clusters (over 32 KB, about 400 tracks): the save after
+  that walk frees a chain that ends in the run, and the run is the start
+  from then on. Over 124 saves of a queue growing from 20 KB to 140 KB
+  the model walks 1, 2 and 3 times on three such cards, FatFs alone 3, 7
+  and 11 (M10). The first rule kept the lowest run wherever the later ones lay:
+  the hole stayed the start, and every second save walked the whole FAT
+  (M9: 1, 7,608, 1, 7,608, ...; M10: 54 of 124). The near limit's own
+  cost: a file in two pieces far apart, freed low piece first, starts the
+  next search at the high one, and the second write after it wraps to the
+  low (5,708 FAT sectors for the two writes, 1,904 under the first rule,
+  7,610 for FatFs alone: M8).
+- **Not covered:** the first allocation after a mount when FSINFO's
+  next-free came from a PC or older firmware (the boot's `device.txt`,
+  5,281 ms on the listening-stats firmware, 2026-11-18; at the first boot
+  of another firmware on that card, browsable 6,754 ms after the mount on
+  main and 6,749 ms with the hint, against about 1.6 s on a card with
+  room); FSINFO keeps the
+  hint only when no allocation
+  synced after the last remove. An unknown free count; builds without the
+  wrapper.
+- gc's `[cache] the card:` line counts the `hole hints`. `SectorDisk.cpp`
+  doesn't build against another FatFs (`FF_DEFINED` 80286, `FF_USE_TRIM` 1,
+  no exFAT): the hint relies on `remove_chain()` trimming after it counts,
+  checked in ESP-IDF 5.5.5's `ff.c` and in `libfatfs.a`'s disassembly.
 
 **What it speeds up:** every path lookup, the walk, the scanner's opens,
 the decoder's FAT-chain reads on a seek (fast seek is off), a track's
@@ -4592,14 +4835,25 @@ where 3.3.3-3.3.5 left room:
   in the last 5 s; a track change (from the decoder's end of file on the
   heard track to 2 s after the next is first heard: a gapless join, a
   start's or a skip's first audio); a seek, and the 2 s after; a pairing
-  or a link being set up, and the 3 s after a link event (up or down).
+  or a link being set up, and the 3 s after a link event (up or down); the
+  headphones' radio link up with A2DP not yet over it, at most 8 s from its
+  rise, and the 3 s after it ends or the 8 s run out; a link whose AVRCP
+  isn't up yet, at most 10 s from the link, and the 3 s after AVRCP comes
+  up or the 10 s run out (2026-11-19: "The wait for AVRCP" and "The radio
+  link's set-up" below).
   3.3.4's "an underrun since the last step" counts from the pass that sees
   it, and each window from the last pass its cause was seen. Three are new:
   input (a tap's redraw shares the SPI bus with the card); the long decode
   pass (G6 is 30 ms, and the 0.7.0 soak measured passes up to 30.5 ms on
   MP3 and 32.7 ms on FLAC with no scan, so over 40 ms the decoder waited
   for the card); and the settle after a link event (A2DP's start, AVRCP's
-  handover). Each is a `Config` value (ESTIMATED; L3 and L5 measure).
+  handover). Each is a `Config` value (ESTIMATED; L3 and L5 measure). The
+  settle was never measured against AVRCP: AVRCP's coming up wasn't a link
+  event, and it comes 3.73-3.80 s after the link on Powerbeats Pro
+  (MEASURED, four boots), so a 3 s settle released the work before it,
+  until the wait for AVRCP (`btControlWaitMs`, 10 s, set from that
+  measurement and the same headphones' ~7 s once a stream had started
+  before their AVRCP: ARCHITECTURE.md's late probe).
   Playing, and the battery above the floor, hold nothing.
 - **The battery floor (U13)** holds the scan and the DJNB check below 10%
   off USB, and lets them go on USB or above 15%; 10-15%, or a reading not
@@ -4710,6 +4964,180 @@ where 3.3.3-3.3.5 left room:
   and a later session's `gs` said 34.4 s of `Bluetooth` in all. Expected
   (paging ends; the walk is background work), but the walk's own time in
   `[card] the walk: ... in M ms` counts from its first slice, after it.
+- **The wait for AVRCP (2026-11-19).** Bluedroid opens AVRCP itself 3.5 s
+  after A2DP opens (`BTA_AV_RC_DISC_TIME_VAL`, compiled into the shipped
+  libbt.a; `bta_av_st_rc_timer`): an SDP search first, a dip of about
+  5.5 KB of internal RAM for a moment (MEASURED: `gs`'s lowest while a
+  step ran, 41,392 B, against the lowest since the boot; by code a 4,096 B
+  response list, a 1,000 B discovery record and an L2CAP channel,
+  ESTIMATED). The 3 s settle let a walk the burst held start at the link +
+  3.0 s, and AVRCP came 0.73-0.80 s into it in every recorded linked boot
+  (MEASURED: 3.73-3.80 s after `A2DP up`, Powerbeats Pro), with the walk's
+  worker and its 7.5 KB stack up. On main 89188f4 (2026-11-19, an MP3
+  playing in silent mode before the link, the link on the burst's third
+  page) internal RAM's lowest since the boot was 35,916 B (MEASURED;
+  `[stats]` ram=40K min=35K once AVRCP was up, 43K/42K with the walk and
+  the link before it), under G5's session floor (43,008 B, OPUS.md).
+  Nothing failed at it (0 underruns, 0 failed steps). So a link now holds
+  the walk, a compaction, the scan and the update step's save until AVRCP
+  is up (`btLinked`, `btControlUp`: `BtSink::avrcpUp()`, AVRCP connected
+  since the link last went down, and the link up), and AVRCP's coming up
+  is a link event (the 3 s after it); headphones that never open AVRCP
+  hold it `btControlWaitMs` (10 s) from the link, then the 3 s. A link
+  that drops before AVRCP ends the wait (the drop's own 3 s, as before);
+  an AVRCP the headphones opened before A2DP, up with the link, leaves the
+  link's 3 s alone. An AVRCP still reported up from the last link counts
+  for nothing: Bluedroid closes AVRCP with the A2DP stream
+  (`bta_av_conn_chg()` deletes the stream's RC) and sets it up anew on
+  each link, so an `avrcpConnected()` left up is only a disconnect
+  reported late or lost. An AVRCP that comes after the 10 s, or connects
+  again later on the link, is a link event too: the work waits 3 s after
+  it, so past the link + 13 s. A drop and a relink between two loop passes
+  (a long pass while the headphones reconnect by themselves) still show:
+  BtSink counts the link's flips where they happen (`linkEvents()`, odd
+  while up), and a `btSeq` that moved while the link read up at both
+  passes is a new link, whose wait starts again. Covers, waveforms' reads
+  and the build aren't held, as before. While the wait holds
+  (`Out::btControlWait`), the worker's idle task ends at once
+  (`ScanScheduler::mayRelease()`, `CardWorker::release()`, CardTasks), not
+  3 s after its last step. A link that comes mid-walk cuts the slice; the
+  3 s idle exit alone ends the task at about the link + 3.0-3.3 s,
+  0.2-0.5 s before AVRCP's set-up (before the wait, the next slice, handed
+  at the link + 3 s, kept it); the release makes that margin the whole
+  wait, and ends a task a cover made in the window. Only in that window (a
+  page's or a pairing's wait would make each cover end and remake the
+  task), with nothing handed that pass, and never while an update step is
+  asked (its build must find the task); host-tested
+  (`test_when_the_worker_may_go`), the release itself on the device only.
+  Not covered: a compaction, the update step's save or its build already
+  under way at the link isn't cut (only a slice is) and still meets
+  AVRCP's set-up; a cover asked in the window makes the task again; an
+  AVRCP that connects again mid-link, or one after the 10 s, cuts a slice
+  and holds 3 s but doesn't release the worker (the wait is over), and its
+  own SDP search comes with its connect (`bta_av_rc_opened()`, a connect
+  the headphones made), before the cut. Cost: the work starts at AVRCP +
+  3 s instead of the link + 3 s, about 3.8 s later on these headphones
+  (about 7 s later where their AVRCP came at about 7 s, once a stream had
+  started before it: a listener's PlayGate start; the link + 13 s for
+  headphones that never open AVRCP), so a hand-copied file (U11) and
+  "Found N new tracks" show that much later, and the Library tab goes that
+  much longer without "Checking the card..."; nothing audible. MEASURED on
+  the device (2026-11-19, the branch at a9c4636 with malloc's 4,095 B
+  limit, ARCHITECTURE.md Build notes; silent mode, an MP3 from the boot's
+  hold; OPUS.md 2.1, "G5 since the card worker"): run rd-g5-fix2, the
+  sequence main 89188f4 went to 35,916 B on (the link, AVRCP 3.5-3.8 s
+  after it: here a radio link the headphones opened at 10.0 s, A2DP up at
+  11.92 s, AVRCP at about 15.70 s, the link + about 3.8 s), started the
+  walk at about 18.70 s (AVRCP + 3.0 s, as designed; `gs`'s `Bluetooth`
+  6.0 s) and went to 45,124 B since the boot (45,768 B while a step ran),
+  +2,116 B over G5's
+  floor and +9,208 B over main's 35,916 B on that sequence (g5h-main1b).
+  AVRCP's set-up dipped about 3 KB (`[heap] bt-link` 55K min 54K, then
+  52K min 51K: its 4,096 B SDP list in PSRAM now); the low is the walk, the
+  link and the MP3 together. No `[card] the worker's task ends now` line
+  (the walk hadn't begun at the link). The times are the PC's, as the log
+  lines arrived: AVRCP's lines came at 15.77 s, in one burst behind the
+  console's `D` (sent at 15.44 s, its output at 15.77 s), so AVRCP came by
+  about 15.70 s: the first of those lines carries its own device stamp,
+  which says so, and the walk, started 3.0 s after the pass that saw
+  AVRCP, began at about 18.70 s (its end line at 50.59 s, 31,894 ms after
+  it). PROJECTED (not measured): about 50 KB for a listener on a real
+  stream. The same day's other run found a gap before the link: "The radio
+  link's set-up" below.
+- **The radio link's set-up (2026-11-19).** The wait for AVRCP starts at
+  A2DP's link, and the link is set up over the headphones' radio link
+  (their ACL) first: SDP, A2DP, and AVRCP with it when they open AVRCP
+  too (rd-g5-fix1), else Bluedroid's own AVRCP about 3.5-3.8 s after the
+  link (rd-g5-fix2). A2DP came about 0.6 s (rd-g5-fix1) and 1.9 s
+  (rd-g5-fix2) after a radio link the headphones opened, and 0.72 s after
+  a page of ours was answered (g5h-main1b): MEASURED, as the log lines
+  arrived. A page burst or a pairing held the work
+  through that (`btSetup`), but nothing held a radio link the headphones
+  opened after the burst. On run rd-g5-fix1 (the device, 2026-11-19, the
+  branch at a9c4636, silent mode, an MP3 from the boot's hold) the boot's
+  three pages went unanswered (a radio link the headphones opened at
+  12.83 s never brought A2DP and timed out 30.3 s later, HCI 0x08), the
+  burst backed off at 43.17 s, and its 3 s settle released the walk at
+  about 46.18 s (its end line at 81.89 s, 35,710 ms after it), about
+  0.15 s after the headphones opened another radio link (46.03 s, "the
+  headphones opened a radio link by themselves: A2DP next"). A2DP came up
+  at 46.64 s with AVRCP's lines before it in the same burst, so no wait
+  for AVRCP followed, and the walk's worker met the whole incoming set-up:
+  `[heap] bt-link` 44K min 41K (g5h-main1b's, with no worker up, 51K min
+  48K), internal RAM's lowest since the boot 42,544 B (42,716 B while a
+  step ran), 464 B under G5's floor (MEASURED). The 7 KB between the two
+  `bt-link` mins is about the worker (its 7,680 B stack and 352 B TCB). So
+  the remembered headphones' radio link up with A2DP not up over it
+  (whoever opened it: they, or a page of ours they answered) holds the
+  walk, a compaction, the scan and the update step's save as `btSetup`
+  does (`btLinkSetup`, `btLinkSetupSeq`: `BtSink::linkSetups()`), then the
+  3 s from the pass that sees it end; at most `btLinkSetupMs` (8 s) from
+  its rise, then the 3 s. A page of ours over a radio link already up
+  with no A2DP (A2DP opened over it, its SDP and set-up again with no new
+  radio link: a burst's page over theirs, a back-off's over one that
+  lingers past the 8 s, as rd-g5-fix1's pages 2 and 3 went over the
+  30.3 s one, the second 23.5 s after its rise) is a set-up again, its own
+  8 s from the page. The pass that sees the set-up's end sees the link's
+  rise too (BtSink counts the rise first, the loop reads the set-up
+  first); a pass may see the link before the end, holding both waits for
+  that pass, and the end a pass later holds the 3 s. Either way the wait
+  for AVRCP takes over with no pass between the two waits. Why 8 s: BtSink
+  leaves their radio link to them for 4 s (`kTheirSetupMs`), then opens
+  A2DP over it with a burst's page, which holds the work from then on
+  (`btSetup`, and the page's own set-up; in a burst already under way its
+  next page goes over their link); 8 s is that allowance twice, against
+  0.6-1.9 s measured, and a radio link that never brings A2DP (the 30.3 s
+  one) holds the work 8 + 3 s from its rise and from each page over it,
+  not for good. A new radio link waits again from its own rise: a rise, or
+  a count that moved while the set-up read up at both passes (BtSink
+  counts two for a radio link opened over one never seen to close, and
+  for a page over one up); one that came and went between two passes holds
+  the 3 s, whatever the last pass read (a set-up read up past its cap at
+  the last pass, then its end and a whole set-up before this one: the
+  count moved by three); its end after the cap holds nothing. While it holds
+  within the cap the worker's idle task ends at once (`Out::btLinkSetupWait`,
+  `mayRelease()`): the set-up's 0.6-2 s is shorter than the 3 s idle exit,
+  so a radio link that comes mid-walk cuts the slice and would still meet
+  its stack; a cover asked meanwhile makes the task again and the next pass
+  with nothing handed ends it, for 8 s at most (a page burst's wait, tens
+  of seconds, still doesn't release it). The radio link's notes and the
+  count are `RadioLinkNotes` (lib/core, host-tested in
+  `test_radio_link_notes`), on BtAppT, the count moving in the call that
+  changes it and published by `PlayerA2dp::noteSetup()` after each change
+  and every 250 ms tick: a radio link opened or a page's failure
+  (`aclOpened()`); one closed (`aclClosed()`: every close reaches BtAppT,
+  and the noted radio link's clears the notes whatever the remembered
+  addresses became since it opened, a scan by name's find replacing the
+  peer's); a page over it (`connect_to()`); A2DP's rise and drop; Forget, a
+  pairing's start and its failure, and the console's `Bn`/`Bn0` (the
+  remembered address changes: the notes start afresh unless linked). A
+  failed Connection Complete for the noted address while its radio link is
+  up keeps the notes, whatever its code: a device has one radio link, so
+  it is a page of ours that met theirs (HCI 0x0B, Connection Already
+  Exists, seen; another code, not seen), not that link's end. A close that
+  never reaches BtAppT (its queue full) leaves the set-up counted until
+  the cap, the next radio link, the link, or a change of the remembered
+  address. On rd-g5-fix1's timeline the walk now starts at the link + 3 s,
+  49.64 s (`test_the_set_up_after_a_back_off`, with `RadioLinkNotes` fed
+  that boot's reports). Not covered: a relink over a radio link that
+  stayed up after A2DP dropped (no new radio link: the drop's 3 s only); a
+  compaction, a save or a build already under way isn't cut, as for AVRCP;
+  radio links that open again and again and never bring A2DP: each new one
+  waits again from its own rise, so short ones (2 s every 5 s) would hold
+  the walk, the scan and the save for as long as they go on. None seen;
+  before the set-up's wait nothing held them outside a burst (a radio link
+  of theirs closed within 4 s starts none). Bounding that across radio
+  links (a set-up that came to nothing making the next ones within some
+  time hold only their rise's 3 s, or holding no more after a few in a
+  row) is the owner's call. MEASURED on 81402fd (rd-g5-ext1, docs/OPUS.md
+  2.1): a page answered, A2DP, AVRCP 3.7 s later, the walk at AVRCP + 3 s,
+  the lowest 45,124 B. rd-g5-fix1's sequence itself wasn't reached on the
+  device (two tries, rd-mid-ext1 and rd-mid-ext2: the headphones out of
+  their case after the back-off opened no radio link and answered no
+  page): PROJECTED, the set-up meets no worker, about 50 KB there (its
+  `bt-link` min 41K and the worker's 8 KB), and the session's lowest
+  becomes the walk, the link and the MP3 together, about 45 KB as on
+  rd-g5-fix2 and rd-g5-ext1.
 - **millis()'s wrap:** a window is cleared once it has passed, so an old
   one can't come back 24.8 days later (a device on USB for weeks).
 - **The glue's inputs (N10):** `listMoving` is the page's `animating()`
@@ -4724,9 +5152,13 @@ where 3.3.3-3.3.5 left room:
   decode task raises after each pass and the loop takes (swapped to 0);
   `decoderAtEnd` and `trackSeq` are the backend's join state and heard
   token; `btSetup` is `pairingUnderWay()` or a page burst (BtLink Paging),
-  `btSeq` counts the link's ups and downs; `battery` is -1 until read
-  (main.cpp's snapshot clamps a failed read to 0 today, which would hold
-  the scan).
+  `btSeq` counts the link's ups and downs (since 2026-11-19 BtSink's
+  `linkEvents()`, counted where they happen: odd while up, and `btLinked`
+  is its low bit, one read for both), `btControlUp` `avrcpUp()` (AVRCP on
+  the link that is up), `btLinkSetupSeq` BtSink's `linkSetups()` and
+  `btLinkSetup` its low bit (the radio link being set up, read before the
+  link's events); `battery` is -1 until read (main.cpp's snapshot clamps a
+  failed read to 0 today, which would hold the scan).
 - **`LibraryWrite`** (after `QueueWrite`, before `Busy`) holds for the
   whole update step, from the queue's flush (3.4.2, step 1) to the end of
   `library.idx`'s save, and for a whole compaction, not only for their
@@ -5338,9 +5770,21 @@ counts):
     the FLAC. The lowest free during the join of the update with nothing
     playing: 175,032 B against 180,876 B. After the FLAC an Opus opened
     its 128,023 B of buffers and played, 101 packets, 0 skipped, on both.
-    Not compared (it needs a fresh commit for each firmware): the first
-    walk after a new commit, then `gb`: 180,212 B with the words; without,
-    run B read 221,172 B at the join while its walk still ran, 335,860 B
+    In those runs `library.idx`'s save ended before the join.
+  - **The save after the rejoin,** a second A/B (MEASURED 2026-11-06,
+    both firmwares from S2's tip, `3461c41`; MOOD-FILTERS.md 9.6): each
+    after a boot that rebuilt the library, a reset, `z`, `D`, then `gb`
+    with nothing playing and no `gw` (not deferred), `D`, `Dc`, `D`. The
+    largest free block joined after the update, before the save: 294,900
+    against 327,668 B; after `library.idx`'s save and `Dc`: 180,212
+    against 204,788 B. The save landed after Auto DJ's rejoin (in the
+    control after the `D` that follows `gb`; with the words between the
+    join and that `D`), so the drop is the save's layout, not the words,
+    whose share there is −24,576 B: docs/AUTODJ.md 7.4 records 180,212 B
+    for it on 2026-10-14, before any mood work. The control is under
+    245,764 B too, so no redesign; a FLAC's 155,636 B still fits, and an
+    Opus's 65,536 and 62,464 B blocks. Run B, without the words and after
+    `gw`, read 221,172 B at the join while its walk still ran, 335,860 B
     after.
 - **Nothing is read whole** into PSRAM by the walk, the scan or the
   compaction: their temporaries are fixed buffers (above), whatever the
@@ -5640,7 +6084,9 @@ src/. What the code decided where 3.2-3.4 left room:
   step's `library.idx` saved with the old card's inputs. The card's guard
   (below) refuses all of it. `CTRL_TRIM` invalidates FatFs's range (its
   first and last sector)
-  before the SD driver's ioctl. The cache is one PSRAM block, allocated at
+  before the SD driver's ioctl, and on a nearly full card then points
+  FatFs's next search for a free cluster at that range (3.2.4, "The hole
+  hint"). The cache is one PSRAM block, allocated at
   the first mount (135,168 B), and the wrapper counts every read that
   reaches the SD driver (its sectors and its time), the cache on or off,
   and the mounts. **The device batch's switches:** `MSTREAM_SECTOR_CACHE=0`
@@ -5991,7 +6437,10 @@ src/. What the code decided where 3.2-3.4 left room:
   line names that wait; the restart forgets both. A card silent past 30 s still loses the edits,
   30 s later. The guard's other restarts (another card; an identity it couldn't read) don't wait:
   writes are refused there. Rescan's restart (`rescanLibrary()`) flushes once the same way and
-  isn't changed.
+  isn't changed. While the restart waits it counts as a restart under way though its time isn't
+  set yet (`powerchoice::restartAsked()`'s `guardWaits`, `test_power_choices`): the format's
+  question isn't shown and its answer isn't taken (`@err 4 format busy`, docs/HOST-STATUS.md),
+  which would otherwise race it, the listener told "formatting" and the boot formatting nothing.
 - **What such a card does** (MEASURED on a host rig, not in the tree: the real
   `sd_diskio.cpp`, `SectorDisk.cpp`, `Library`, `CardTasks`, `AutoDj`, `Waves` and FatFs
   over a byte-level model of a card; a sector with no answer unless it says
@@ -6234,9 +6683,11 @@ src/. What the code decided where 3.2-3.4 left room:
   the backend's; `seeking` a start not taken up yet (`positionKnown()`
   false: a seek's, a skip's) and `seekSeq` a new `PlaybackController::
   seeks()` (the seeks that did something); `btSetup` a pairing or the
-  link Paging, `btSeq` the link's ups and downs; `usb` external power;
-  `battery` the reading as it came, -1 until the first (the UI's snapshot
-  keeps its clamped copy).
+  link Paging, `btSeq` the link's ups and downs (`btLinked` and
+  `btControlUp`, the link and its AVRCP, and `btLinkSetup` and
+  `btLinkSetupSeq`, the radio link being set up before it, since
+  2026-11-19); `usb` external power; `battery` the reading as it came, -1
+  until the first (the UI's snapshot keeps its clamped copy).
 - **The walk** (`CardJobs`): its first step writes the scan's chunk (N7's
   rule, and `append()` refuses during a walk), opens T (streamed on the
   first walk after a commit, through HIDX after), D (`KnownD`) and
@@ -6690,8 +7141,9 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
      scan and new walks hold; a walk under way goes on to its end; the
      journals are compacted (the worker's Compact step; one that fails
      leaves the build to `tags.bin` alone, as N10's); with the worker
-     free, the safe point holds (a CPU speed's restart asked counts as
-     none: its pause would make one, and the restart would cut the build),
+     free, the safe point holds (a restart asked counts as none, whichever:
+     the format's, a CPU speed's, the loop's, `powerchoice::restartAsked()`:
+     its pause would make one, and the restart would wait for the build),
      the worker's task is there (`Out::wantWorker`: `CardWorker::ensure()`
      makes it, since it ends 3 s after its last step, and keeps it to the
      build's hand-off; no internal RAM for its 7.5 KB stack and the step
@@ -7035,6 +7487,309 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   check's cases went with the job, 2026-10-13), `test_playback`
   (`playStartsEntry()`), `test_tag_store` (the compaction's memory at the
   firmware's buffers, under 120 KB).
+
+### 3.10 As built (B14): the play log
+
+2.20's writer, for 0.14.0: `lib/core/PlayLog` (portable, host-tested in
+`test_play_log`) and its glue, `app/PlayHistory`; `device.txt` says
+`history=1` (2.15). Built for `core2` with every guard, **not flashed**.
+What the code decided where 2.20 left room:
+
+- **A play** is `PlaybackController`'s (`setPlays()`, its class comment):
+  it begins at each start of the current entry from 0:00 or a start
+  point (a pick, a skip, a restart, a resume point's start, Repeat One's
+  loop, a wait's release) and at each gapless join heard; a seek, a pause
+  and a wait on the same entry go on with it. Its end says the outcome:
+  a natural end or a join Completed; the listener's move to another
+  entry or back to 0:00 (next, prev, a pick, a cue, a Play, a Remove or
+  an Undo of the current entry, a seek to 0:00) Skipped; anything else
+  (stop, Clear, a failure, a library update that took the track away,
+  a power-off or restart) Stopped. A start that fails with the card out
+  (the card hold, 3.8) is one of those: its play ends Stopped when the
+  backend lets go, one a seek went on with too, with what it had played,
+  and each of the hold's tries begins a play that ends the same way, so
+  none is open while nothing is held (one left open would go on at a seek
+  on the entry the hold left paused, dated from the try). Plays of under
+  1 s of audio aren't
+  logged (2.20.5's MAY), nor the built-in tracks, nor files on the flash.
+- **playedMs** is the backend's position's steps while playing, each
+  counted when it moved no more than the board's clock did (plus 500 ms),
+  so a seek's jump, a step back and a start not taken up yet
+  (`positionKnown()` false) count nothing; the clock's time while it
+  isn't playing is no part of that allowance, so a seek while paused, or
+  right after, as long as the pause was, counts nothing either (it did:
+  the review's FP5); a Completed play adds what its
+  last look didn't see of its length (at most 2 s). **durationMs** is the
+  backend's length, else the catalog's hint. **pauseCount** counts the
+  passes that found it Paused after Playing. **source**: Auto DJ's mark
+  on the entry 3, else the queue shuffled 2, else 1. **generation** is
+  the root's the boot read (`Library::root()`; 0 none). **pathHash** is
+  the library's path's (`cardcontract::pathHash()`); **size** and
+  **fatTime** are `f_stat`'s at the write. **startedAt** is
+  `boardclock::at()` of the play's monotonic start at the write (0 while
+  the clock is unset: B13's `@time` or the RTC), **clock** the clock's
+  source then, **uptimeMs** the monotonic start mod 2^32.
+- **When it is written.** On the loop task, never on the audio's: a play
+  waits (at most 32, 10 KB of the Tracker's PSRAM; past them the newest
+  is lost and counted. It was 8: a track of 7 s or less never opens the
+  gate below, a start's 2 s and its last 5, so a run of interludes waits
+  whole, and the ninth was lost) until
+  `WriteGate` lets the loop touch the card: not within 2 s of a start or
+  a join (the backend's `trackSeq()`), not while a start isn't taken up,
+  not from 5 s before the heard track's end or while the decoder reads
+  the next one ahead (the gapless window), not with the PCM ring under
+  half while playing, not within 5 s of an underrun (ESTIMATED; the
+  device check measures it), not while a list moves or a finger is on its
+  A-Z rail (`Ui::listMoving()`, as for the card worker: the loop draws its
+  frames). Then one slot a pass: the seq to NVS
+  (`plays`/`seq`, nvslayout's schema 6), the append and its `f_sync`.
+- **The boot** (`setup()`, after Auto DJ): NVS's ids (a new epoch from
+  `esp_random()` when there is none), the deviceId from
+  `esp_efuse_mac_get_default()`, the cut-rename rule (2.20.2), the root's
+  ACKS (`msmf::readAcks()`: found by type in the directory, checked on its
+  own; `cardroot::Root::acks`, at most 16 entries kept, this board's
+  first: `Library::openRecords()` reads the root with the board's id, so
+  other boards' rows sorting before it never crowd out the ones its log
+  trims by; the boot's `[plays]` line gives the rows, this board's, and
+  any left out). Then the boot's scan, a piece a pass behind the same
+  gate (4 reads of 2,560 bytes, five whole sectors each): every valid
+  slot of `plays.jnl`,
+  `plays.1.jnl` and `plays.2-9.jnl`, for the boot rules (2.20.4) and the
+  trim (2.20.2; only with ACKS). A new epoch with no ACKS reads nothing.
+  The boot count goes to NVS at the scan's end, before any slot.
+- **A remount** of the same card (the card guard's, 3.8; whatever
+  follows it, a restart's flush included): the cut-rename rule again
+  (`Journal::remounted()`), and while no slot has been asked for this
+  boot, the boot's scan again from its start. A file the scan held open
+  across the remount reads nothing more (FatFs's mount changed), and a
+  scan that ran while the card was out found no file; the scan again
+  comes to the same boot count (NVS's at the mount, not one more) or a
+  higher one, and the same trim. After a slot, only the rule. **A rename
+  the card refuses** at the rule (not all nine twin names taken) holds
+  `plays.jnl` back only until one takes: each try of a slot asks it
+  again first (the play it can't place waits its three tries, then is
+  lost, said so: `the card refused the rename`); a remount settles
+  again, so a log blocked before a disk check goes on with the same card
+  back, and a play that waited is tried at once.
+- **The card's guard** (3.8; with 0.12.0's and 0.13.0's merged in). The
+  loop asks nothing of a card that isn't one to ask: held for the guard's
+  restart (`cardHeld`); out of the slot, none answering or another in it
+  (`sectordisk::cardOut()`, what the player's card hold goes by); or
+  refusing every write until a restart (writes off). The plays wait, 32 at
+  most, and the boot's scan too, until the guard's remount
+  (`remounted()`) or the end's `flush()`. Each ask of a card that is out
+  is a mount tried, a second or two of the SD driver's tries with the loop
+  held (the hold keeps its own tries on the decoder's task, 7 in its 2
+  minutes), a scan there asked ten opens in one pass, and a slot's
+  `f_stat` came to "the file isn't there", the play lost for a card that
+  was back a moment later. The play log being the first to ask a card
+  just pulled (nothing else read it since) no longer loses that play
+  either: the next bullet.
+- **A play the card fails is tried again** (`playlog::Outbox`; the
+  review's FP1: any card error popped the waiting play for good, though
+  2.20.3 names "the card pulled" as an outcome to log). The played
+  file's `f_stat` says whose word its "no" is (`CardFat`'s `statFile()`:
+  `FR_NO_FILE`, `FR_NO_PATH`: `the file isn't there`, no slot, as
+  before; anything else, the card failed the read), and the journal's
+  append says `Failed` for every card fault (a question of the log's
+  files, a write, a sync, a rename). On either the play stays first in
+  line: `[plays] seq 12 not written yet (the card refused it; 31.0 ms):
+  tried again in 5 s or when the card mounts again, the same slot (try 1
+  of 3); the plays behind it wait`. It is tried 5 s later
+  (`Outbox::kRetryMs`) or at the guard's remount, three tries in all
+  (`kTries`), then lost, and said so (`NOT written: the card failed it 3
+  times ... the play is lost`). **The same slot each time**
+  (`Journal::again()`): the seq NVS took at the first try and the bytes
+  encoded then, so a play is never two slots that differ, whatever the
+  clock did between the tries, and no second seq is drawn. A first try
+  whose write landed, only its sync or its close failing, is found as
+  the log's last slot (the drop note written with it, the slot before)
+  and written over itself there, with the sync it was owed: one slot. A
+  read the card fails on the way there says nothing, and nothing is
+  written at that try. **Nothing behind it is written meanwhile**: the
+  log's order stays the plays', and a card that is failing isn't asked
+  again for each play in the ring. NVS refusing the seq, a blocked log
+  (no twin name free) and no log lose the play at once, as before:
+  another try changes nothing there.
+- **A rotation tried again** ends as one the card never failed (the
+  host test compares the cards byte for byte). Its step 1's count is
+  owed a drop note from the moment `plays.1.jnl` is gone
+  (`Journal::owedDrops()`), and goes before whichever slot lands next,
+  the same play's at its next try or, that play lost, the next one's
+  (before, a failed step 2 or 3 lost the play and the note). A rename
+  the card fails at step 2 may have left both names on one chain: the
+  cut-rename rule runs again before the next slot, as at a mount. **A
+  `plays.1.jnl` that can't be read** for step 1's count (the review's
+  FP3: one bad sector there wedged the log for good once `plays.jnl` was
+  full, every later play paying the 524 KB read and lost): a read that
+  fails leaves everything as it was, since the next try may read it;
+  at the third rotation in a row that fails there
+  (`Journal::kUnreadTries`, with the three tries the third try of one
+  play) the file goes all the same, the note counting what was read
+  before the fault: `[plays] the rotation couldn't read plays.1.jnl
+  whole in 3 tries ...: it goes all the same, so the log goes on`.
+- **A question the card fails answers nothing** (3.2.2's rule for the
+  boot's files and 2.12.6's for the cut-rename rule, `tagstore::Fs::entry()`).
+  The journal asked `exists()` and `firstCluster()`, which on FatFs say
+  "no" and 0 for a read that failed as for a file that isn't there. On
+  such an answer the cut-rename rule could remove a twin whose chain
+  `plays.1.jnl` still used, the trim or a rotation remove `plays.1.jnl`
+  under a twin, and an append whose open failed take `plays.jnl` for
+  missing and make a new one over it (`FA_CREATE_ALWAYS`: every play not
+  yet sent gone); each needs the fault at that very call, the first three
+  a cut rename's twins on the card as well. Now every such question is
+  `entry()`'s, and the first the card fails ends what was being done with
+  nothing removed, renamed or made: the rule is left unsettled
+  (`Journal::unanswered()`: no slot until a `settle()` is answered, each
+  try of a slot asking again first, the play it can't place kept for
+  its next try),
+  a file the trim can't place stays for the next boot, a rotation fails
+  with the log as it was (and is tried again with its slot), and no new
+  `plays.jnl` is made unless the card says there is none.
+- **Power-offs and restarts.** `PlayHistory::flush()` ends the open play
+  (stopped), finishes the scan and writes every play waiting, gate or
+  not: before the idle power-off's `powerOff()` (after its last look at
+  USB power), before the CPU speed's restart, and in `restartNow()` (the
+  card guard's restarts, "Try again", the format's, the console's `Bf` and
+  forget), after the card worker's step. The settings the taps queued
+  (`app/NvsLater`) are written first (`lib/core/OrderlyEnd`): this is the
+  card, which can take long when it has gone bad, and that costs
+  the plays alone. **And not the end** (`Outbox::flush()`; the review's
+  FP6: no deadline, so a restart could hang on a dying card for the
+  scan and every play's timeouts): each play waiting is tried once, in
+  order, one in its 5 s wait too, and the flush is over at the first the
+  card fails (the plays behind it wouldn't fare better, and each ask of
+  a card that is going is the SD driver's second or two) and at 3 s
+  (`PlayHistory::kFlushBudgetMs`, looked at between a scan's pieces and
+  between plays: a healthy card's worst case, all 32 waiting at 15-20 ms
+  each with a rotation's 524 KB read among them, is under 2 s,
+  ESTIMATED). What is left is said: `[plays] before the restart: 2 of 5
+  plays written in 512 ms; 3 NOT written: the card failed one, the rest
+  weren't asked` (or `the flush's time ran out (a slow card)`, `the
+  boot's scan wasn't done in the flush's time`). The haptic motor is
+  stopped before the settings and the flush, not after
+  (`endInOrder()`): a pattern under way doesn't run through them. Not to
+  another card in the slot, nor to one whose
+  writes are off (FatFs refuses every write: those plays are lost, and
+  said so), nor with none in it: a card that was out is asked once (put
+  back, that mount is a remount, the rule and the scan again), and out
+  still, left alone (`NOT written (no card answers)`). `restartNow()` is
+  also Rescan's restart and the guard's once its wait for the queue's
+  flush is over (3.8). A hard power-off (PWR held, a flat battery) loses the open
+  play and the ones waiting (2.20.5).
+- **Costs (MEASURED on the host FatFs model**, `test_play_log`, a 32 GB
+  FAT32 card with 16 KB clusters and the sector cache): 80 bytes of log a
+  play; an append 2.14 card writes on average (one sector each: the
+  data's and the directory entry's, a FAT sector when a cluster is
+  added), at most 6, and 0.16 reads past the cache; the cap's worst case
+  on the card 1,048,480 bytes (both files full), which the boot's scan
+  reads whole (13,106 slots, about 660 card reads, 103 passes); a
+  rotation reads `plays.1.jnl` once for its count (524,240 bytes, about
+  230 card reads, on the loop in one go), once every 6,553 plays. NVS: one u32 write a play, one at each boot. The
+  device's write time is ESTIMATED at 15-20 ms (below).
+- **Tests.** `test_play_log`: the slot and the drop note byte for byte;
+  log.json's events (boots, plays, a host's `@time`, a sync's ACKS, an NVS
+  erase) through the Journal give `plays/golden/` byte for byte and the
+  reference's ops one for one; the vectors' boot rules, in scan pieces of
+  1, 3 and 1,000 slots; a new epoch; NVS refusing the seq, the seq's last
+  value; a cut append's tail written over; ACKS on the golden root and the
+  four hardening files, and this board's rows kept first among 21 (other
+  boards' before them: trimmed with them, kept without); the trim's ten
+  cases; a rename the card refuses, tried again, and a blocked log going
+  on after a disk check and a remount; a power cut at each of 28
+  steps of appends and three rotations, three ways (CutFs): no chain freed
+  that another name uses, every valid slot one the journal wrote, no seq
+  twice, the log going on, the twins collected after a disk check; all
+  nine twin names taken (blocked); an open the card fails, the question
+  after it too, never a new log over one that is there; each question of
+  the rule, the scan's opens, the trim and a rotation failed in its turn
+  with twins on the card (`FlakyFs`: FatFs's answers), no chain freed that
+  another name uses, the rule left unanswered holding the slots until it
+  is answered (7 mutations of those, 6 caught; the seventh is a rotation
+  that goes on past its first question, which the rename's refusal of an
+  existing `plays.1.jnl` stops all the same); the drop note and what a rotation
+  counts (a note read or not, no ACKS, saturating); the Tracker (a seek
+  as long as the pause before it, paused or as it plays on: not played;
+  a plain pause's audio either side counted); the
+  WriteGate (a run of 33 tracks of 7 s: never open, 32 waiting, one
+  lost); **a slot tried again** (`FaultFs`, a card that fails chosen
+  calls over CutFs): the write refused, the write landed and its sync
+  and close refused (unsynced: after the retry a power cut keeps it), its
+  answer lost, the look for it failing, the open and its question, a
+  remount between the tries: one slot each time, the first try's seq and
+  bytes; the directory's write refused on FatFs itself (the slot once on
+  the card after a mount); a rotation with each step failed in its turn
+  (the question, the delete, the rename refused and cut between its two
+  directory writes, the new file's open, its write, its sync) ending
+  byte for byte as the one nothing failed, the note kept past a play
+  given up on; a `plays.1.jnl` unreadable once (every slot counted) and
+  for good (the third try goes on, counting what it read), its open
+  refused; **the Outbox**: the `f_stat` failing once, the write refused
+  once (a clock set between the tries doesn't date it again), the sync
+  failing after the write, three failures of each kind (lost, the next
+  play's seq the next), the queue's order kept, what is dropped at once
+  (the file gone, NVS, blocked, no log), a remount ending the wait and
+  the scan again before the boot's first slot, the flush (all 32 with a
+  rotation, the first card failure, a play in its wait, the deadline on
+  the plays and on the scan); 28 mutations of these, 28 caught; the
+  card's commands; on the FatFs model, a cut append's tail
+  written over (37 bytes across a sector's end, 79, 1) and a remount
+  during the boot's scan (a file held open across it, the card out for
+  the whole scan, a scan again with the same count, none after a slot);
+  `history` in the vectors' `device.txt` texts. `test_playback`: the
+  controller's word for every action, at joins, Repeat One, failures, the
+  sleep timer's end of track, waits,
+  edits, the fence, the card hold (its let-go, its tries, a seek into it,
+  its end paused, a pause under it) and the firmware's `endPlay()`. `test_nvs_layout`
+  (schema 6, `plays` and `clock`; the unit that ran this work's builds
+  under schema 5), `test_card_contract` (`history=1`).
+- **The device check** (V2, on the spare card, never the music card):
+  1. Boot with the spare card: `[plays] the play log: epoch ... (new:
+     NVS had none)`, then `[plays] ready: boot 1 of this epoch, the next
+     seq 1`; `/.player/device.txt` ends `history=1`.
+  2. Set the clock (`@time`, HOST-STATUS.md), then play three tracks
+     through with gapless joins, skip a fourth after about 20 s, pause a
+     fifth once and stop it: one `[plays] seq N: ...` line each, about 2 s
+     into the next track, with its write time (expected 15-20 ms); the
+     `[stats]` lines' `underruns=` unchanged throughout, on the speaker
+     and on Bluetooth, and no click at the joins.
+  3. The card in a computer: `python tools/playlog.py read
+     .player/plays.jnl` lists seqs 1-5 with those outcomes, playedMs near
+     what played, one pause on the fifth, startedAt the wall time; a
+     sixth play made before `@time` (after a boot with the RTC unset)
+     has startedAt 0 and clock 0.
+  4. The orderly paths: on battery, pause mid-track and let the idle
+     power-off run (`Is30`; on USB it stays on and writes nothing):
+     `[plays] before the power-off: 1 play written`, and the play is in
+     the log, stopped. The same through the CPU speed's restart, and
+     through `Bf` (`restartNow()`; its next boot is a fresh unit for
+     Bluetooth, the pairing kept). Tap a setting within a second before
+     one of them (the Bluetooth power, then Restart on the CPU speed's
+     dialog; or Pause, `Is1`): `[nvs] saved power/bt_tx` comes before the
+     `[plays] before the ...` line, and the setting is there after the boot.
+  5. Cuts: hold PWR mid-track (a hard off): the next boot's log has every
+     play before it and not the open one, no damaged slot. Pull the card
+     while a slot is due (right after a skip), put it back: the card
+     guard's line, then the slot that waited and the next ones written
+     (no `NOT written: the file isn't there` for the pull; or the
+     restart's `NOT written` line for another card). If the slot was
+     asked before the guard knew the card was out: `[plays] ... not
+     written yet (...): tried again in 5 s or when the card mounts again,
+     the same slot (try 1 of 3)`, then at the remount its `seq N: ...
+     (written in ... ms, at its try 2)`, once in the log on a computer
+     (`tools/playlog.py read`: no seq twice, none missing but a play
+     said lost). Pull it during a
+     track, pause when the next one holds (`[queue] the card is out`),
+     put it back a minute later and press Play: no `[plays]` line while
+     it was out, the loop's passes as short as before the pull (`ui`),
+     and the cut track's slot about 2 s into the track that plays. After a boot, before any play
+     ends, pull the card and put it back: `[plays] the card mounted again
+     before this boot's first slot: the boot's scan begins again`, then
+     the `ready` line again with `begun again after a remount` and the same
+     boot number.
+  6. NVS erased (the terminal's install with `--erase`): a new epoch at
+     the next boot; the old slots stay; new plays' seqs from 1 under the
+     new epoch.
 
 ---
 
@@ -8117,6 +8872,12 @@ they disagreed:
   settings, UI and console, and its device checks.
 - **docs/WAVEFORM-INDEX.md:** the waveform index's own specification (MPWF
   v1, 2026-11-01); 2.21 points to it and keeps what ties it to the contract.
+- **docs/LISTENING-STATS.md:** the listening stats' build plan
+  (2026-11-10) and their format, `/.player/stats.bin` and its base file
+  (its 5.2-5.3; no software reads them), with what they change here: the
+  device's files (2.11, 2.12.6), the trim (2.20.2) and the boot's seq
+  (2.20.4). `tools/statsref.py` is their reference; card_fixtures.py
+  writes their fixtures (`test/fixtures/card/stats`) with it.
 - **docs/UI-SPIKE.md:** the per-track memory figures.
 - **docs/GAPLESS.md** and **docs/QUEUE-MODES.md:** the update step's safe
   point and the queue's remap through `queue.txt`.

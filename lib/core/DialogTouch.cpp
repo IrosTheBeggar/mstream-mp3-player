@@ -1,0 +1,78 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
+#include "DialogTouch.h"
+
+void DialogTouch::open(int n, int primary, bool hold) {
+  n_ = n < 1 ? 1 : n > 2 ? 2 : n;
+  primary_ = primary >= 0 && primary < n_ ? primary : n_ - 1;
+  pressed_ = -1;
+  hintAlert_ = false;
+  if (hold) {
+    hold_.arm(dialog::hitArea(primary_, n_));
+  } else {
+    hold_.disarm();
+  }
+}
+
+void DialogTouch::close() {
+  pressed_ = -1;
+  hold_.disarm();
+}
+
+void DialogTouch::fellShort(Result& r) {
+  // Nothing happens: empty again, and the hint says how, amber (its row
+  // only when it wasn't already).
+  r.drawButton = primary_;
+  r.drawHint = !hintAlert_;
+  hintAlert_ = true;
+}
+
+HoldButton::News DialogTouch::tick(uint32_t ms, const HoldButton::Finger& finger) {
+  using News = HoldButton::News;
+  const News n = hold_.update(ms, finger);
+  if (n == News::Stalled || n == News::Slid || n == News::Scripted) hintAlert_ = true;
+  return n;
+}
+
+DialogTouch::Result DialogTouch::onEvent(const InputEvent& e) {
+  using T = InputEvent::Type;
+  using News = HoldButton::News;
+  Result r;
+  if (hold_.armed()) {
+    // The hold button's touch is the hold's: no press highlight (its fill
+    // is one), and no event answers it: only a hold seen to its end does
+    // (tick()), never a lift, whenever it comes.
+    r.news = hold_.onEvent(e);
+    switch (r.news) {
+      case News::Began:
+        return r;  // (the fill: the dialog's tick() draws it as it grows)
+      case News::Short:
+      case News::Slid:
+      case News::Stalled:
+        fellShort(r);
+        return r;
+      case News::Dropped:
+        r.drawButton = primary_;
+        return r;
+      default:
+        break;
+    }
+    if (hold_.holding()) return r;  // (a move on it)
+  }
+  if (e.type == T::Down) {
+    pressed_ = dialog::buttonAt(e.x, e.y, n_);
+    if (hold_.armed() && pressed_ == primary_) pressed_ = -1;  // only a hold answers it
+    r.drawButton = pressed_;
+    return r;
+  }
+  if (e.type == T::DragStart || e.type == T::Cancel || e.type == T::Release) {
+    r.drawButton = pressed_;
+    pressed_ = -1;
+    return r;
+  }
+  if (e.type != T::Tap) return r;
+  r.answer = pressed_;
+  pressed_ = -1;
+  return r;
+}

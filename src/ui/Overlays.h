@@ -6,6 +6,9 @@
 
 #include <cstdint>
 
+#include "DialogLayout.h"
+#include "DialogTouch.h"
+#include "HoldButton.h"
 #include "InputEvent.h"
 #include "JumpIndex.h"
 #include "SheetLayout.h"
@@ -50,7 +53,10 @@
 //           within kSettleMs of its opening goes nowhere (Ui::route(): a
 //           double tap on what opened it never picks a row). A row can
 //           stay (Ui::sheetStays(): Now Playing's Shuffle and Repeat change
-//           in place, the sheet up, the row's detail the new state).
+//           in place, the sheet up, the row's detail the new state). A
+//           detail may have its own ink (Now Playing's Auto DJ row: the
+//           mood filter in the accent, waiting for a track that fits it in
+//           amber).
 //   VolumeSheet  the active output's volume (spec §6.1, mockup 04): − and +,
 //           a slider to tap or drag (5 % steps), the value; from y 124,
 //           closes 3 s after the last change or on a tap above it. Nothing
@@ -65,7 +71,12 @@
 //           bar still works (a tab tap closes it, as "cancel"). Optionally
 //           an icon before its title, a live status line under its body
 //           (the headphones-lost dialog's "Reconnecting... try 2 of 3"),
-//           and a red primary button for what can't be taken back.
+//           and a red primary button for what can't be taken back (the
+//           right-hand one, or the left: the format's second question puts
+//           it where the first one's Cancel was). Its hold mode (that
+//           second question): the red button acts only when held 2 s,
+//           filling meanwhile, and a hint under the body says so; a tap
+//           turns the hint amber (DialogTouch, HoldButton).
 //   Coach   the first-boot tips (once, remembered in NVS; About shows them
 //           again): the three red touch buttons and what their clicks and
 //           holds do, then "tap the tab you're on again to go back to its
@@ -196,9 +207,10 @@ public:
   static constexpr uint32_t kSettleMs = 300;
   // `details`: nullptr, or a dim text per row (nullptr or "" for none).
   // `primary`: the row drawn as the main choice (-1 none); `danger`: the
-  // row in red (-1 none).
+  // row in red (-1 none). `inks`: nullptr, or each detail's colour (DIM
+  // for a plain one).
   void open(const char* title, const char* const* rows, int n, uint16_t accent, const char* const* details = nullptr,
-            int primary = -1, int danger = -1);
+            int primary = -1, int danger = -1, const uint16_t* inks = nullptr);
   void close() { up_ = false; }
   bool up() const { return up_; }
   int top() const { return y0_; }
@@ -206,10 +218,11 @@ public:
   // A glass event: the row index on a Tap on a row, -2 on a Tap outside
   // or on ✕ (close), -1 otherwise. Presses highlight what's under the finger.
   int onEvent(const InputEvent& e);
-  // Row `i`'s dim detail is now `text` (the playback menu's rows follow
-  // the timer, shuffle and repeat): drawn again only if it changed. True:
-  // it was drawn.
-  bool setDetail(int i, const char* text);
+  // Row `i`'s detail is now `text`, in `ink` (the playback menu's rows
+  // follow the timer, shuffle, repeat and Auto DJ): drawn again only if
+  // either changed. True: it was drawn.
+  bool setDetail(int i, const char* text, uint16_t ink);
+  bool setDetail(int i, const char* text);  // (dim)
   // Row `i` drawn again as it is (a staying row's highlight gone after its
   // tap: onEvent() clears it on a Tap without drawing).
   void drawRow(int i);
@@ -227,6 +240,7 @@ private:
   char title_[96] = "";
   char rows_[kMaxRows][64] = {};
   char details_[kMaxRows][96] = {};
+  uint16_t inks_[kMaxRows] = {};  // each detail's colour
   int n_ = 0;
   int y0_ = 240;
   int pressed_ = -1;
@@ -359,43 +373,90 @@ private:
 
 class Dialog {
 public:
-  static constexpr int kX = 14, kY = 58, kW = 292, kH = 164;
-  // `buttons`: 1 or 2 labels, the last is the primary (red when `danger`).
-  // `accent`: its outline and primary button.
+  static constexpr int kX = dialog::kX, kY = dialog::kY, kW = dialog::kW, kH = dialog::kH;
+  // `buttons`: 1 or 2 labels; `primary` is the primary's index (-1: the
+  // last), red when `danger`. `accent`: its outline and primary button.
+  // `holdHint`: the hold mode (the format's second question): the primary
+  // acts only when held HoldButton::kHoldMs. It is drawn empty, outlined in
+  // red, and fills with red from the left while a finger stays on it
+  // (tick()). `holdHint` says so from the start, a line under the body's
+  // three in the body's colour; a tap on it, or a hold cut short (lifted,
+  // slid off), does nothing but turn the hint amber. The other button is a
+  // dialog's button as ever. (Which touch answers what: DialogTouch.)
   void open(const char* title, const char* body, const char* const* buttons, int n, uint16_t accent,
-            bool danger = false);
+            bool danger = false, int primary = -1, const char* holdHint = nullptr);
   // An icon before the title (`slashed`: a red slash across it).
   void setIcon(const icons::Icon* icon, uint16_t colour, bool slashed);
   // A status line under the body (""): redrawn only when it changes.
   void setStatus(const char* text, uint16_t colour);
   // The room its title has (Bold 16), with an icon before it or not.
   static int titleRoom(bool icon);
-  void close() { up_ = false; }
+  void close() {
+    up_ = false;
+    touch_.close();
+  }
   bool up() const { return up_; }
   void draw();
   // The button index on a Tap on a button, -1 otherwise (it is modal:
-  // taps elsewhere do nothing).
+  // taps elsewhere do nothing). In the hold mode a tap on the hold button
+  // is -1 too: what the touch did to the hold is holdNews().
   int onEvent(const InputEvent& e);
+
+  // ---- the hold mode ----
+  bool holdMode() const { return touch_.holdMode(); }
+  int holdButton() const { return touch_.primary(); }
+  bool holding() const { return touch_.holding(); }
+  uint32_t holdLastMs() const { return touch_.hold().lastHeldMs(); }  // (the log's)
+  uint32_t holdGapMs() const { return touch_.hold().lastGapMs(); }    // (the log's: Stalled)
+  // What the last onEvent() did to the hold (HoldButton::News): Began (the
+  // caller turns the recogniser's hold off for the touch: Input::noHold()),
+  // Short, Slid or Stalled (the hint amber), Dropped (a Cancel). Never
+  // Confirmed: no event answers the hold button, only tick().
+  HoldButton::News holdNews() const { return news_; }
+  // Every loop pass while it is up, with what the pass read of the panel
+  // (Input::finger()): the fill drawn as it grows (its button only, about
+  // 25 times a second), and Confirmed once a hand's finger has been seen
+  // on it kHoldMs (the caller closes the dialog with the hold button's
+  // answer, as a tap's). Stalled, Slid, Scripted: the hold ended in this
+  // pass with nothing done, the button drawn empty and the hint amber.
+  HoldButton::News tick(uint32_t nowMs, const HoldButton::Finger& finger);
+  // The touch left the dialog's hands (the screen went dark, a banner took
+  // it): the fill empties, nothing happens. Dropped if a hold was under way.
+  HoldButton::News dropHold();
 
 private:
   void render();
+  // Over the panel as rendered (a press look costs its button, not a render
+  // of the card): button i, the hold button with fillDrawn_ px of it filled;
+  // the hold mode's hint, in its colour now.
   void renderButton(int i);
-  // Button i drawn again alone: its press look.
+  void renderHint();
+  // Button i drawn again alone: its press look, the hold's fill.
   void drawButton(int i);
-  int buttonAt(int x, int y) const;
+  // The hint's row drawn again alone (its alert came on).
+  void drawHint();
+  // The hold button alone, `fillPx` of it filled.
+  void drawHoldButton(int fillPx);
   char title_[96] = "";
   char body_[256] = "";
   char status_[96] = "";
   uint16_t statusColour_ = 0;
   char buttons_[2][48] = {};
-  int n_ = 0;
-  int pressed_ = -1;
+  // Its buttons as the glass answers them (the press, the hold, the
+  // hint's alert): what it draws.
+  DialogTouch touch_;
   bool up_ = false;
   bool danger_ = false;
   uint16_t accent_ = 0;
   const icons::Icon* icon_ = nullptr;
   uint16_t iconColour_ = 0;
   bool slashed_ = false;
+  // The hold mode: its hint, the fill as last drawn and when, the last
+  // onEvent()'s news.
+  char hint_[96] = "";
+  int fillDrawn_ = 0;
+  uint32_t fillDrawnMs_ = 0;
+  HoldButton::News news_ = HoldButton::News::None;
 };
 
 class Coach {

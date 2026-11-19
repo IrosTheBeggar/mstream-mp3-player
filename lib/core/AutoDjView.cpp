@@ -3,6 +3,12 @@
 
 #include "AutoDjView.h"
 
+#include <algorithm>
+#include <initializer_list>
+
+#include "FilterGrid.h"
+#include "MoodFilter.h"
+
 namespace autodjview {
 
 using uistr::S;
@@ -26,7 +32,8 @@ RowState rowState(const State& s) {
   switch (s.hold) {
     case autodj::Hold::Failures: return RowState::Paused;
     case autodj::Hold::RepeatOne:
-    case autodj::Hold::SleepTimer: return RowState::Waiting;
+    case autodj::Hold::SleepTimer:
+    case autodj::Hold::NoFit: return RowState::Waiting;
     case autodj::Hold::None: break;
   }
   return RowState::On;
@@ -40,6 +47,25 @@ S rowText(RowState r) {
     case RowState::Off: break;
   }
   return S::now_playing_autodj_off;
+}
+
+Ink sheetDetail(const State& s, char* buf, size_t size) {
+  if (!buf || size == 0) return Ink::Dim;
+  const RowState r = rowState(s);
+  if (r == RowState::On && s.moodOn) {
+    // What is set after "On · ", whole words in what the frame leaves.
+    char what[filtergrid::kSummaryBytes];
+    const size_t frame = uistr::trf(buf, size, S::output_autodj_sub_on, "");
+    filtergrid::summary(moodfilter::Filter::unpack(s.moods), what, std::min(sizeof(what), size - frame));
+    if (what[0]) {
+      uistr::trf(buf, size, S::output_autodj_sub_on, what);
+    } else {
+      uistr::trf(buf, size, rowText(r));  // (not a word's room: the state alone)
+    }
+    return Ink::Accent;
+  }
+  uistr::trf(buf, size, rowText(r));
+  return r == RowState::Waiting && s.hold == autodj::Hold::NoFit ? Ink::Amber : Ink::Dim;
 }
 
 S modeText(autodj::Mode m) { return m == autodj::Mode::Locked ? S::autodj_anchor_locked : S::autodj_anchor_rolling; }
@@ -63,7 +89,23 @@ char* rootLine(const State& s, char* buf, size_t size, bool withMode) {
   return buf;
 }
 
-bool rowLive(PageRow r, const State& s) { return r == OnRow || r == StatusRow || s.usable; }
+bool rowLive(PageRow r, const State& s) {
+  if (r == FilterRow) return s.moodData;
+  return r == OnRow || r == StatusRow || s.usable;
+}
+
+char* filterValue(const State& s, char* buf, size_t size) {
+  if (!buf || size == 0) return buf;
+  const moodfilter::Filter f = moodfilter::Filter::unpack(s.moods);
+  if (!s.moodData) {
+    uistr::trf(buf, size, S::mood_no_data);
+  } else if (!f.active()) {
+    uistr::trf(buf, size, S::mood_any);
+  } else {
+    filtergrid::summary(f, buf, size);
+  }
+  return buf;
+}
 
 uint8_t nextFloor(uint8_t pct) {
   for (uint8_t p = autodj::kFloorMin; p <= autodj::kFloorMax; p = static_cast<uint8_t>(p + autodj::kFloorStep)) {
@@ -94,13 +136,32 @@ namespace {
 
 unsigned clampPct(uint8_t p) { return p > 100 ? 100u : p; }
 
-// The index's lines (the status row's, unheld).
+// The coverage once the index is read: BPM and key, and mood with mood data.
+void coverage(const State& s, char* l, size_t n) {
+  if (s.moodData) {
+    uistr::trf(l, n, S::autodj_status_coverage_mood, clampPct(s.bpmPct), clampPct(s.keyPct), clampPct(s.moodPct));
+  } else {
+    uistr::trf(l, n, S::autodj_status_coverage, clampPct(s.bpmPct), clampPct(s.keyPct));
+  }
+}
+
+// 1 to 50 tracks fit: fewer than the cooldown, so they repeat.
+bool few(const State& s) { return s.fit >= 1 && s.fit <= autodj::kTrackCooldown; }
+
+// A filter on, its count in the index's first line's place: with the index
+// read, or with none Auto DJ can use (its picks random inside the filter).
+// Found and Reading say what the index does, as with no filter.
+bool fitLine(const State& s) {
+  return s.moodOn && s.index != Index::Found && s.index != Index::Reading;
+}
+
+// The index's lines (the status row's, unheld, with no filter on).
 void indexLines(const State& s, char* l1, size_t n1, char* l2, size_t n2) {
   l2[0] = 0;
   switch (s.index) {
     case Index::Ready:
       uistr::trnf(l1, n1, S::autodj_status_ready, s.tracks, uistr::grouped(s.mapped), uistr::grouped(s.tracks));
-      uistr::trf(l2, n2, S::autodj_status_coverage, clampPct(s.bpmPct), clampPct(s.keyPct));
+      coverage(s, l2, n2);
       return;
     case Index::Found:
       uistr::trnf(l1, n1, S::autodj_status_found, s.rows, uistr::grouped(s.rows));
@@ -116,6 +177,24 @@ void indexLines(const State& s, char* l1, size_t n1, char* l2, size_t n2) {
   uistr::trf(l2, n2, S::autodj_status_random);
 }
 
+// With a filter on (fitLine()): how many fit, over the coverage once the
+// index is read, else over the index's first line.
+void fitLines(const State& s, char* l1, size_t n1, char* l2, size_t n2) {
+  if (few(s)) {
+    uistr::trnf(l1, n1, S::autodj_status_few, s.fit, s.fit);
+  } else {
+    uistr::trnf(l1, n1, S::autodj_status_fits, s.fitOf, uistr::grouped(s.fit), uistr::grouped(s.fitOf));
+  }
+  if (s.index != Index::Ready) {
+    char spare[8];
+    indexLines(s, l2, n2, spare, sizeof(spare));
+  } else if (few(s)) {
+    uistr::trf(l2, n2, S::autodj_status_few_sub, clampPct(s.bpmPct), clampPct(s.keyPct));
+  } else {
+    coverage(s, l2, n2);
+  }
+}
+
 }  // namespace
 
 void statusLines(const State& s, char* line1, size_t size1, char* line2, size_t size2) {
@@ -123,23 +202,97 @@ void statusLines(const State& s, char* line1, size_t size1, char* line2, size_t 
   line1[0] = line2[0] = 0;
   const RowState r = rowState(s);
   if (r != RowState::Waiting && r != RowState::Paused) {
-    indexLines(s, line1, size1, line2, size2);
+    if (fitLine(s)) {
+      fitLines(s, line1, size1, line2, size2);
+    } else {
+      indexLines(s, line1, size1, line2, size2);
+    }
     return;
   }
   // Why it adds nothing, over the index's first line.
   const S why = s.hold == autodj::Hold::Failures    ? S::autodj_status_paused
                 : s.hold == autodj::Hold::RepeatOne ? S::autodj_status_waits_repeat
+                : s.hold == autodj::Hold::NoFit     ? S::autodj_status_waits_fit
                                                     : S::autodj_status_waits_sleep;
   uistr::trf(line1, size1, why);
+  if (s.hold == autodj::Hold::NoFit && s.index == Index::Ready) {
+    coverage(s, line2, size2);  // (its count is 0: the coverage says what the filter had to go on)
+    return;
+  }
   char spare[8];
   indexLines(s, line2, size2, spare, sizeof(spare));
 }
 
-bool emptyButton(const State& s, uint32_t libraryTracks) { return s.usable && libraryTracks > 0; }
+bool statusAmber(const State& s) {
+  switch (rowState(s)) {
+    case RowState::Paused: return true;
+    case RowState::Waiting: return s.hold == autodj::Hold::NoFit;
+    case RowState::On:
+    case RowState::Off: break;
+  }
+  return fitLine(s) && s.fit <= autodj::kTrackCooldown;
+}
+
+bool emptyNoFit(const State& s) { return s.moodOn && s.fit == 0; }
+
+bool emptyButton(const State& s, uint32_t libraryTracks) {
+  return s.usable && libraryTracks > 0 && !emptyNoFit(s);
+}
+
+uint32_t fewCount(const State& s) { return s.on && s.moodOn && few(s) ? s.fit : 0; }
+
+namespace {
+
+constexpr uint8_t kOldNews = kNewsCued | kNewsPaused | kNewsNoNeighbours | kNewsSeedMoved | kNewsRandom;
+
+// The bits newsToast() answers before a mood filter's `bit`.
+uint8_t above(uint8_t bit) {
+  switch (bit) {
+    case kNewsFew: return kOldNews;
+    case kNewsOnce: return kOldNews | kNewsFew;
+    case kNewsJump: return kOldNews | kNewsFew | kNewsOnce;
+    default: return 0;
+  }
+}
+
+// Few has a count to say: 1 to 50 fit now (fewCount()).
+bool fewSays(uint32_t few) { return few >= 1 && few <= autodj::kTrackCooldown; }
+
+}  // namespace
+
+uint8_t NewsWatch::add(uint8_t bits) {
+  news_ = static_cast<uint8_t>(news_ | bits);
+  for (uint8_t b : {kNewsFew, kNewsOnce, kNewsJump}) {
+    if (!(news_ & b) || !(news_ & above(b))) continue;
+    // Outranked in this take (by this call's bits or an earlier call's):
+    // not raised. Few and Jump stay unsaid; Once goes.
+    news_ = static_cast<uint8_t>(news_ & ~b);
+    if (b == kNewsFew) fewSaid_ = false;
+    if (b == kNewsJump) jumpSaid_ = false;
+  }
+  return static_cast<uint8_t>(bits & news_);
+}
 
 uint8_t NewsWatch::switchedOn(bool usable) {
   randomSaid_ = !usable;
-  return usable ? 0 : kNewsRandom;
+  uint8_t news = usable ? 0 : kNewsRandom;
+  if (few_ && !fewSaid_) {
+    news |= kNewsFew;
+    fewSaid_ = true;
+  }
+  return add(news);
+}
+
+uint8_t NewsWatch::settled(bool on, bool known, bool outside) {
+  fewSaid_ = jumpSaid_ = false;  // (a changed filter: said again)
+  if (!known || !on) return 0;
+  uint8_t news = 0;
+  if (few_) {
+    news |= kNewsFew;
+    fewSaid_ = true;
+  }
+  if (outside) news |= kNewsOnce;
+  return add(news);
 }
 
 uint8_t NewsWatch::pass(const autodj::Pass& p, autodj::Mode mode, bool on) {
@@ -148,18 +301,34 @@ uint8_t NewsWatch::pass(const autodj::Pass& p, autodj::Mode mode, bool on) {
   if (p.cued) news |= kNewsCued;
   if (p.paused && on) news |= kNewsPaused;
   if (p.picked && p.pick.ok && p.added) {  // (a cued pick is appended too)
-    if (p.pick.noIndex) {
+    const autodj::Pick& k = p.pick;
+    if (k.jump != autodj::Jump::None || k.repeated || k.repinned) {
+      // A mood filter's jump, repeat or re-pin (MOOD-FILTERS.md 6.2, 6.4)
+      // says none of these: a jump's anchors had lists, a repeat is for
+      // want of tracks that fit, the pin stays or moves onto the playing
+      // track. A jump says its own (a repeat after one keeps its code).
+      if (k.jump != autodj::Jump::None && !jumpSaid_) {
+        news |= kNewsJump;
+        jumpSaid_ = true;
+      }
+    } else if (k.noIndex && !k.byIdJoined) {
       if (!randomSaid_) news |= kNewsRandom;
       randomSaid_ = true;
-    } else if (p.pick.random && picks_ == 0) {
+    } else if (k.random && picks_ == 0) {
       news |= mode == autodj::Mode::Locked ? kNewsSeedMoved : kNewsNoNeighbours;
+    }
+    // Few, while it holds and isn't said (the first pick after a boot or
+    // a Play that switched Auto DJ on; one outranked before).
+    if (on && few_ && !fewSaid_) {
+      news |= kNewsFew;
+      fewSaid_ = true;
     }
     ++picks_;
   }
-  return news;
+  return add(news);
 }
 
-bool newsToast(uint8_t news, Toast* out) {
+bool newsToast(uint8_t news, Toast* out, uint32_t few) {
   if (!out) return false;
   if (news & kNewsPaused) {
     *out = Toast{S::toast_autodj_paused, true};
@@ -171,10 +340,54 @@ bool newsToast(uint8_t news, Toast* out) {
     *out = Toast{S::toast_autodj_no_neighbours, false};
   } else if (news & kNewsRandom) {
     *out = Toast{S::toast_autodj_random, false};
+  } else if ((news & kNewsFew) && fewSays(few)) {
+    *out = Toast{S::toast_autodj_few, true, few};
+  } else if (news & kNewsOnce) {
+    *out = Toast{S::toast_autodj_plays_once, false};
+  } else if (news & kNewsJump) {
+    *out = Toast{S::toast_autodj_no_close, false};
   } else {
     return false;
   }
   return true;
+}
+
+bool NewsWait::take(uint8_t news, const Up& up, uint32_t few, Toast* out) {
+  if (up.editor || (!(news & kNewsPaused) && up.undo)) {
+    held_ = static_cast<uint8_t>(held_ | news);
+    return false;
+  }
+  news = static_cast<uint8_t>(news | held_ | later_);
+  held_ = later_ = 0;
+  Toast t;
+  if (!newsToast(news, &t, few)) return false;  // (a Few moot now, alone: it goes)
+  // A Few (with a count now) or a Jump that this toast outranks: next.
+  uint8_t left = static_cast<uint8_t>(news & kNewsJump);
+  if ((news & kNewsFew) && fewSays(few)) left = static_cast<uint8_t>(left | kNewsFew);
+  if (t.text == S::toast_autodj_few) left = static_cast<uint8_t>(left & ~kNewsFew);
+  if (t.text == S::toast_autodj_no_close) left = static_cast<uint8_t>(left & ~kNewsJump);
+  later_ = left;
+  if (out) *out = t;
+  return true;
+}
+
+bool NewsWait::due(const Up& up, bool on) {
+  if (!on) {
+    held_ = later_ = 0;
+    return false;
+  }
+  if (up.editor) return false;
+  return (held_ && !up.undo) || (later_ && !up.toast);
+}
+
+void NewsWait::filterChanged() {
+  held_ = static_cast<uint8_t>(held_ & ~(kNewsFew | kNewsJump | kNewsOnce));
+  later_ = static_cast<uint8_t>(later_ & ~(kNewsFew | kNewsJump));
+}
+
+void NewsWait::undone() {
+  later_ = static_cast<uint8_t>((held_ | later_) & kNewsFew);
+  held_ = 0;
 }
 
 }  // namespace autodjview

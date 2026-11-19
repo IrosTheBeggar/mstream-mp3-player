@@ -91,7 +91,7 @@ public:
   // memory parts).
   struct UpdateEnv {
     bool playing = false;      // PlayState::Playing
-    bool waiting = false;      // PlayState::Waiting (a play waiting for the headphones)
+    bool waiting = false;      // PlayState::Waiting (a play waiting for the headphones), or a restart asked
     uint32_t trackLeftMs = 0;  // what is left of the heard track (0: not known)
     uint32_t seekSeq = 0;      // PlaybackController::seeks()
     size_t alsoFreed = 0;      // what the step frees besides the index: the queue's, Thumbs' pools
@@ -286,6 +286,7 @@ private:
   bool walkSeen_ = false;  // the boot's walk has begun (the status says "Checking the card…" until it ends)
   bool bootWalkDone_ = false;  // the boot's walk ended: D's to-do is known, the scan may run
   ScanScheduler::Wait lastWait_ = ScanScheduler::Wait::None;
+  bool releaseLogged_ = false;  // this radio link's set-up or link's wait for AVRCP ended the worker (its line once)
   char toast_[64] = "";
   // For the console.
   cardwalk::CardWalk::Result lastWalk_;

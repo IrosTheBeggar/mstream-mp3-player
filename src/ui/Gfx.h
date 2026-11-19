@@ -4,6 +4,7 @@
 #pragma once
 #include <M5GFX.h>
 
+#include <cstddef>
 #include <cstdint>
 
 #include "ui/LcdLock.h"
@@ -33,8 +34,11 @@ namespace gfx {
 constexpr int kBand = 40;     // lines per bus hold
 constexpr int kStripH = 56;   // the shared strip sprite: 320 x 56 (35 KB)
 
-// Allocates the strip sprite (PSRAM). False: no memory.
+// Allocates the strip sprite (PSRAM: from the block reserved at boot when
+// there is one, ui/HotMem). False: no memory.
 bool begin();
+// What begin() takes from that block.
+size_t hotBytes();
 // The shared strip: draw something up to 320 x 56 into it, push it, done.
 // Not kept between uses.
 M5Canvas& strip();

@@ -138,6 +138,19 @@ bool parseHostU32(const char* s, uint32_t* out) {
   return true;
 }
 
+bool parseHostU64(const char* s, uint64_t* out) {
+  if (!s || !*s) return false;
+  uint64_t v = 0;
+  for (const char* p = s; *p; ++p) {
+    if (!isDigitChar(*p)) return false;
+    const auto d = static_cast<uint64_t>(*p - '0');
+    if (v > (UINT64_MAX - d) / 10) return false;
+    v = v * 10 + d;
+  }
+  *out = v;
+  return true;
+}
+
 bool parseHostI32(const char* s, int32_t* out) {
   if (!s || !*s) return false;
   const bool neg = *s == '-';

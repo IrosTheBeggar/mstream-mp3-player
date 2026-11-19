@@ -180,8 +180,13 @@ void Input::update(uint32_t nowMs) {
     scripted_ = false;
   } else if (sim_.on && simSample(nowMs, s)) {
     scripted_ = true;
+    s.scripted = true;  // (its touch's events say so: the format's hold is a hand's)
     id = kScriptedId;
   }
+  finger_.down = s.pressed;
+  finger_.scripted = s.pressed && s.scripted;
+  finger_.x = s.x;
+  finger_.y = s.y;
   // The first point is another finger than last pass's, with no lift
   // between (the first lifted while a second stayed on).
   const bool newTouch = id >= 0 && touchId_ >= 0 && id != touchId_;

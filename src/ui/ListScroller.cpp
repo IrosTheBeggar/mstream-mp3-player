@@ -83,7 +83,7 @@ void ListScroller::sendStartAddress(uint16_t vsp) {
   sentVsp_ = vsp;
 }
 
-int ListScroller::scrollTo(int32_t offset, Painter& painter, uint32_t* sendUs) {
+int ListScroller::scrollTo(int32_t offset, Painter& painter, uint32_t* sendUs, Gate* gate) {
   if (sendUs) *sendUs = 0;
   if (active_ != this) return 0;
   const bool moved = !map_.valid() || map_.offset() != offset;
@@ -109,13 +109,32 @@ int ListScroller::scrollTo(int32_t offset, Painter& painter, uint32_t* sendUs) {
   painter.prepareFixed(offset);
   {
     LcdLock lock(stats_);
+    int64_t start = esp_timer_get_time();
+    if (gate) {
+      while (start < gate->earliestUs) start = esp_timer_get_time();  // (a millisecond or two, the bus held)
+    }
     for (int i = 0; i < n; ++i) painter.push(spans[i], true);
-    const int64_t t0 = esp_timer_get_time();
+    int64_t t0 = esp_timer_get_time();
+    const int64_t linesDone = t0;
+    if (gate) {
+      while (t0 < gate->addressUs) t0 = esp_timer_get_time();  // (the lines were quicker than planned)
+    }
     sendStartAddress(map_.vsp());
-    if (sendUs) *sendUs = static_cast<uint32_t>(esp_timer_get_time() - t0);
+    const int64_t t1 = esp_timer_get_time();
+    if (sendUs) *sendUs = static_cast<uint32_t>(t1 - t0);
+    if (gate) {
+      gate->sentUs = t1;
+      gate->linesUs = static_cast<uint32_t>(linesDone - start);
+    }
     painter.pushFixed();
   }
   return lines;
+}
+
+int ListScroller::planInPlace(int32_t offset, VScrollMap::Span spans[VScrollMap::kMaxSpans]) {
+  if (active_ != this) return 0;
+  map_.invalidate();  // (a full redraw keeps the address: no move, whatever the distance)
+  return map_.plan(offset, spans);
 }
 
 void ListScroller::pushAtScreen(M5Canvas& sprite, int x, int screenY, SpiHoldStats* stats, int lines) {

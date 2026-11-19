@@ -46,7 +46,9 @@
 //                the playing track at the first pick, as the mobile app and
 //                the terminal). A pin whose slot is damaged gives way to the
 //                random pick it causes, as a seed without a row does. Its
-//                slot is the only one read.
+//                slot is the only one read. Under a mood filter it moves
+//                (MOOD-FILTERS.md 6.4, D2): see below; a moved pin goes at a
+//                quick skip of it, a seed's stays.
 //   the seed     newSession()'s track; without one, the first track to start
 //                (it anchors the ring, but is no pin) or the playing track at
 //                the first pick.
@@ -87,6 +89,28 @@
 //      the lowest class (a loosened pool has no level 2: the artist
 //      cooldown, then the tempo and key preferences order it, as any).
 //   5. The pick joins the ring and the cooldowns; the key anchor, the pin.
+// A mood filter (Maps::mood, docs/MOOD-FILTERS.md 6.1): on, a row whose
+// track (the row's first, rowToTrack's) fails it is left out of the runs,
+// so the candidates, the gate, dry, loosening and the classes hold only
+// rows inside the mood. Off, nothing changes: no word read, no draw.
+// On, the pick never leaves the mood (6.2, 6.3): no candidate inside it
+// (Jump::NoCandidate), or every one cooled with none to loosen to
+// (Jump::AllCooled: not a neighbour's repeat), and every random pick, take
+// the scan: one pass over the tracks in order, keeping each inside the mood
+// whose row is neither an anchor nor the playing track's (the first
+// kMoodSample, then the n-th in place of one at below(n) < kMoodSample);
+// of those, each row once and only if its own track passes (trackToRow is
+// many to one); then the classes and the draw as for a random pick, when
+// one of them is fresh. None fresh: a track inside the mood with no row,
+// outside the by-id cooldown, uniform in one pass (Jump::NoRow, by id).
+// None: a repeat, the track cooldown's oldest row inside the mood that
+// isn't playing (Pick::repeated, cooldown level 2, ranked by its statuses
+// as known). None, or no index: by id, a fresh track inside the mood, else
+// the by-id cooldown's oldest, else the playing track; none: no pick
+// (Pick::noFit). In Stay on seed, before either jump (once a pick, no draw
+// before it): the playing track's row, inside the mood, not the pin and not
+// damaged, becomes the pin (Pick::repinned) and the anchors run again, in
+// the same read budget; nothing found there, the jump, both marked.
 // Random picks (no usable anchor, no candidate, a broken file):
 // kRandomDraws uniform draws over the rows, each kept once unless it maps
 // to no track or is an anchor or the playing track's; then the classes and
@@ -112,7 +136,8 @@
 // sort and its scans (tools/autodj_ref.py; test_autodj_engine). Runs
 // belong to the maps they were made from: a maps generation, bumped by
 // mapsChanged() (the join ready again) and when the maps' arrays or counts
-// differ from the last seen; a pick that still draws a row with no track
+// differ from the last seen (the mood filter's words and q among them, while
+// it is on); a pick that still draws a row with no track
 // (maps changed in place, unannounced) remakes its runs and picks again
 // from the same stream.
 //
@@ -129,9 +154,11 @@
 // into), the runs (kSlotCache x (kMaxK + 1) entries of 8 bytes) and the
 // pick's scratch (kMaxUnion keys and 4-byte candidates, the pool's counts,
 // the tempo table: 512 bytes). pick() allocates nothing; its frames stay
-// small (the anchors and the cooled rows sorted: pick() about 420 bytes on
-// the ESP32, randomPick() and choose() under 200; no slot or list on the
-// stack). The object itself is about 750 bytes (rings, counters).
+// small (the anchors and the cooled rows sorted: pickOnce() about 384 bytes
+// on the ESP32 and pick() 128 over it, randomPick(), moodPick() and
+// choose() under 200; no slot or list on the stack; a mood filter's scan
+// keeps its tracks in the scratch). The object
+// itself is about 750 bytes (rings, counters).
 //
 // Not thread-safe: the firmware's loop task owns it.
 namespace autodj {
@@ -149,6 +176,7 @@ constexpr uint8_t kDry = 50;
 constexpr uint8_t kRandomDraws = 64;
 constexpr uint8_t kNoIndexTries = 16;
 constexpr uint8_t kSurpriseDraws = 64;
+constexpr uint8_t kMoodSample = 64;  // a mood filter's scan: tracks kept (MOOD-FILTERS.md 6.3)
 constexpr uint32_t kNoTrackId = 0xFFFFFFFFu;  // a track id (u32): none
 constexpr uint32_t kMaxUnion = kAnchors * cardcontract::mpdj::kMaxK;
 constexpr uint8_t kClasses = 3 * kRanks;
@@ -163,6 +191,10 @@ struct Settings {
   uint8_t floorPct = kFloorMin;  // Match strictness, 55..75 (any percent works; the clamp is selFloor)
   bool matchTempo = false;       // "BPM continuity" (D2: off by default)
   bool matchKey = false;         // "Harmonic mixing" (D2: off by default)
+  // The mood filter's 11 bits (docs/MOOD-FILTERS.md 5.4; 0 none, an invalid
+  // q never kept): saved with the rest. The pick doesn't read it: the glue
+  // makes Maps::mood and PickIn::mood of it over the library's words.
+  uint16_t moods = 0;
 };
 
 // The firmware's: mpdj::Table::slot() on the open file. Fills `bytes` (the
@@ -178,12 +210,21 @@ public:
 
 struct PickIn {
   const Maps* maps = nullptr;  // null: no index (picks by track id)
+  MoodView mood;               // the maps' (Maps::mood), also given without them: read only then (picks by id)
   SlotReader* slots = nullptr;  // null with no index
   uint16_t k = 0;               // the table's k: where a slot's levels start (2k)
   uint16_t selHead = 0;         // not used by v1 (two-hop, M7)
   uint8_t selFloor = 0;         // the gate's clamp
   uint32_t playingTrack = kNoTrackId;  // the current entry's track id
   uint32_t libraryTracks = 0;          // picks by id draw below it
+};
+
+// Why a pick under a mood filter left the anchors' lists (MOOD-FILTERS.md 6.2).
+enum class Jump : uint8_t {
+  None,
+  NoCandidate,  // nothing listed inside the mood
+  AllCooled,    // all of it in the track cooldown, nothing to loosen to
+  NoRow,        // ... and no fresh row inside it: a track with no row, by id
 };
 
 struct Pick {
@@ -196,6 +237,10 @@ struct Pick {
   bool loosened = false;    // that pool was all in the track cooldown: the kDry best sums outside it
   bool random = false;      // no anchor's list: drawn over the rows (or by id)
   bool noIndex = false;     // by track id
+  // ... with the index joined: a mood filter's (MOOD-FILTERS.md 6.2, 7 and
+  // 9), not for want of an index (the toasts', the pick line's; not in the
+  // fixture). (In a padding byte: Pick stays 40 B.)
+  bool byIdJoined = false;
   bool imputedTempo = false, imputedKey = false;  // D3 drew its status
   bool tempoBreak = false;  // a known BPM outside the tight windows of a known reference
   bool keyBreak = false;    // a known key outside the anchor's 6 codes
@@ -208,6 +253,11 @@ struct Pick {
   uint16_t damagedRow[kReadsPerPick] = {};
   bool broken = false;      // the file is broken: absent from now (until fileReopened())
   uint16_t candidates = 0, gated = 0, inClass = 0;
+  // A mood filter's (MOOD-FILTERS.md 6.2):
+  Jump jump = Jump::None;
+  bool repinned = false;    // Stay on seed's pin moved onto the playing row (6.4), before any jump
+  bool repeated = false;    // a repeat inside the mood: the oldest cooled row, or by id
+  bool noFit = false;       // not ok: no track fits the filter
 };
 
 // What prefetch() (and a pick's read) made of one read.
@@ -223,7 +273,7 @@ enum class SlotResult : uint8_t {
 // The console's D counters (since begin(); a session doesn't reset them).
 struct Stats {
   uint32_t picks = 0;    // pick()s that gave a track
-  uint32_t failed = 0;   // ... that gave none (no library track to draw)
+  uint32_t failed = 0;   // ... that gave none (no library track to draw, or none fits: noFit)
   uint32_t readsAtPick[kReadsPerPick + 1] = {};
   uint32_t prefetchReads = 0;
   uint32_t leftOut = 0;  // anchors left out of a pick by the read budget
@@ -236,6 +286,9 @@ struct Stats {
   uint32_t classes[kClasses] = {};  // picks with an index, by class
   uint32_t modePicks[2] = {}, tempoBreaks[2] = {}, keyBreaks[2] = {};  // by Mode
   uint32_t quickSkips = 0;
+  // A mood filter's: picks that jumped, re-pinned, repeated inside the mood;
+  // pick()s that gave none because no track fits.
+  uint32_t jumps = 0, repins = 0, moodRepeats = 0, noFit = 0;
 };
 
 // A fixed ring of the last N values, oldest first; add() moves a value
@@ -299,7 +352,8 @@ public:
   void trackStarted(uint32_t track, const Maps* maps, bool byAutoDj);
   // A track stopped being the current entry after `playedMs`: not a natural
   // end and under kQuickSkipMs, it leaves the ring (a quick skip: counted
-  // in Stats::quickSkips whether or not it had a row). True when it was in
+  // in Stats::quickSkips whether or not it had a row), and a pin moved onto
+  // it goes (MOOD-FILTERS.md 6.4; a seed's stays). True when it was in
   // the ring and left it (it no longer steers); false for a track with no
   // row, or one already out of the ring (it steered nothing).
   bool trackLeft(uint32_t track, const Maps* maps, uint32_t playedMs, bool naturalEnd);
@@ -311,7 +365,8 @@ public:
   // memory): out of the ring, as it never played; no quick skip; it stays
   // in the cooldowns.
   void pickRefused(uint16_t row);
-  // Anchor changed: the pin goes; the next Stay on seed pick takes it.
+  // Anchor changed: the pin goes (moved or not); the next Stay on seed pick
+  // takes it.
   void modeChanged();
   // The index joined after newSession() was given its seed track without
   // maps (Auto DJ switched on by "Auto DJ from here" or the empty states'
@@ -332,7 +387,9 @@ public:
   // The join's maps were made again (its Ready after a fence or a remount):
   // every cached slot's run is remade before it is used (runDue() on the
   // next loop passes, else at the pick). The engine also notices maps whose
-  // arrays or counts changed; this covers the same arrays filled again.
+  // arrays or counts changed, and a mood filter whose words or q did; this
+  // covers the same arrays filled again (the mood words too: a library
+  // rebuilt may put its new ones where the old ones were).
   void mapsChanged() { ++mapsGen_; }
 
   // ---- reads ----
@@ -351,8 +408,10 @@ public:
   // ---- picks ----
   Pick pick(const Settings& s, const PickIn& in);
   // The empty states' Auto DJ button: a random row that maps to a track
-  // (up to kSurpriseDraws draws); the session is untouched but for its
-  // stream. Not ok without an index.
+  // (up to kSurpriseDraws draws); under a mood filter (the maps'), the scan
+  // with no exclusions, then one of its rows, uniform (MOOD-FILTERS.md 6.3:
+  // candidates its count; none, not ok). The session is untouched but for
+  // its stream. Not ok without an index.
   Pick surprise(const Settings& s, const PickIn& in);
 
   // The console's Dn: this engine takes `from`'s session, slot cache and
@@ -365,6 +424,7 @@ public:
   uint8_t anchors() const { return ses_.ring.size(); }
   uint16_t anchor(uint8_t i) const { return ses_.ring.at(i); }  // oldest first
   uint16_t pin() const { return ses_.pin; }
+  bool pinMoved() const { return ses_.pinMoved; }
   uint8_t keyAnchor() const { return ses_.keyAnchor; }
   bool seeded() const { return ses_.seeded; }
   uint8_t cooledRows() const { return ses_.cool.size(); }
@@ -386,6 +446,7 @@ private:
     Ring<uint16_t, kArtistCooldown> arts;
     Ring<uint32_t, kTrackCooldown> ids;
     uint16_t pin = kNoRow;
+    bool pinMoved = false;  // the pin moved onto a playing row (MOOD-FILTERS.md 6.4): a quick skip takes it away
     uint8_t keyAnchor = 0;
     bool seeded = false;
     uint32_t seedAwaits = kNoTrackId;  // newSession()'s seed track, given no maps: mapsArrived()'s
@@ -407,14 +468,17 @@ private:
     uint32_t word;
   };
   // What the runs were made from (their maps generation moves on when it
-  // changes).
+  // changes). The mood filter's words and q only while it is on (null, 0
+  // off: the print with no filter is as before there was one).
   struct MapsPrint {
     const uint32_t* filters = nullptr;
     const uint16_t* rowToTrack = nullptr;
     uint32_t rows = 0, tracks = 0, mapped = 0;
+    const uint16_t* moods = nullptr;
+    uint16_t q = 0;
     bool operator==(const MapsPrint& o) const {
       return filters == o.filters && rowToTrack == o.rowToTrack && rows == o.rows && tracks == o.tracks &&
-             mapped == o.mapped;
+             mapped == o.mapped && moods == o.moods && q == o.q;
     }
   };
   // A candidate of the pool: its row, its best level, and its cooldown
@@ -432,6 +496,8 @@ private:
   // A pool counted by its candidates' bits (its classes, its statuses).
   struct Counts;
 
+  Pick pickOnce(const Settings& s, const PickIn& in, Pick& out, bool* again);
+  bool repin(const Settings& s, const Maps& m, uint16_t playingRow, Pick& out);
   void seed(uint32_t track, const Maps* maps, bool pin);
   void join(uint16_t row, const Maps& m);
   int find(uint16_t row) const;
@@ -445,16 +511,22 @@ private:
   void merge(const int8_t* usable, uint8_t nu, const Scope& sc, Visit&& visit) const;
   uint32_t closest(const int8_t* usable, uint8_t nu, const Scope& sc, bool freshOnly, Counts* counts);
   Pick randomPick(const Settings& s, const PickIn& in, const Scope& sc, Pick out);
+  uint32_t scan(const Maps& m, const uint16_t* anc, uint16_t playingRow);
+  Pick moodPick(const Settings& s, const PickIn& in, const Scope& sc, Pick out);
+  template <typename Hit>
+  uint32_t oneOf(uint32_t n, Hit&& hit);
   uint32_t choose(const Scope& sc, const Maps& m, uint32_t n, Counts& counts, Pick& out);
   Pick finish(const Settings& s, const Maps& m, uint16_t row, Pick out);
   Pick byId(const Settings& s, const PickIn& in, Pick out);
+  Pick moodById(const Settings& s, const PickIn& in, const MoodView& mood, Pick out);
+  Pick takeById(const Settings& s, const PickIn& in, uint32_t track, Pick out);
   Pick counted(const Settings& s, const Pick& out);
 
   AllocFn alloc_ = nullptr;
   FreeFn free_ = nullptr;
   void* block_ = nullptr;         // begin()'s one allocation, cut into:
   RunEntry* runs_ = nullptr;      // kSlotCache x (kMaxK + 1): each cached slot's run
-  uint32_t* keys_ = nullptr;      // kMaxUnion: a run's sort, a dry or loosened pool's sums
+  uint32_t* keys_ = nullptr;      // kMaxUnion: a run's sort, a dry or loosened pool's sums, the mood scan's tracks
   Cand* cand_ = nullptr;          // kMaxUnion: the pool
   Counts* counts_ = nullptr;      // the pool counted (256 bytes)
   uint8_t* tempo_ = nullptr;      // 256: the pick's tempo statuses by BPM

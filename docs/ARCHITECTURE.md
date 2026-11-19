@@ -22,6 +22,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  LibraryIndex  LibrarySynth  TextFold  TouchGesture           |
               |  LibraryBuilder  LibraryUpdate  CardJobs  ScanScheduler       |
               |  KineticScroll  ScrollGovernor  VScrollMap  RefillPacer       |
+              |  ScanSync  ScrubPacer  RadioLinkNotes                         |
               |  ByteStream  QueueModel  QueueText  TrackCatalog              |
               |  TouchCalibration  TouchCheck  TouchRecognizer  ButtonGesture |
               |  ButtonPolicy  InputEvent                                     |
@@ -40,6 +41,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  WaveShape  WaveBar  WaveState (the waveform)                 |
               |  MoodFilter (the mood tail, the word, the filter's rules)     |
               |  FilterGrid  FilteredAlbums (the filters' editor, Albums)     |
+              |  PlayLog (the play log: slot, files, tracker, outbox, gate)   |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -56,7 +58,8 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  app/NvsSchema (the NVS layout's number, migrations)          |
               |  app/IdlePower (the idle power-off: setting, note, power off) |
               |  app/PowerSettings (CPU speed, Bluetooth power: NVS, restart) |
-              |  ui/Ui: TabBar, ListView (ui/ListScroller), Overlays, pages,  |
+              |  ui/Ui: TabBar, ListView (ui/ListScroller, ui/PanelScan,      |
+              |         ui/HotMem), Overlays, pages,                          |
               |         Fonts (VLW DejaVu + CJK store), Icons, Gfx, Thumbs,   |
               |         EmptyState, FilterSheet (the mood filters' editor)    |
               |  ui/BootScreen (the mStream logo and the version)             |
@@ -64,6 +67,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  app/UsbViz (the USB visualizer: a computer drives the dancer)|
               |  app/AutoDj + app/AutoDjStore (Auto DJ: its index, NVS)       |
               |  app/Waves (the waveform index: Now Playing's shapes)         |
+              |  app/PlayHistory (the play log on the card: plays.jnl, NVS)   |
               |  main.cpp: input events, Bluetooth events, UiHost             |  ESP8266Audio
               +---------------------------------------------------------------+
 ```
@@ -363,8 +367,9 @@ The rules that keep it deadlock- and glitch-free:
   44.1 kHz track, never during a chain of gapless joins (a cut's rewind
   may need its rows), read from flash when there's no room; RESAMPLER.md
   section 10c). `RingOutput`
-  (3.1 KB) must stay in internal RAM, so it is asserted under 4 KB (the
-  framework puts a `new` of 4 KB or more in PSRAM). The console's `R` shows
+  (3.1 KB) must stay in internal RAM, so it is asserted under 4 KB (a
+  `new` of 4,096 B or more goes to PSRAM: malloc's limit is 4,095 B, [Build
+  notes](#build-notes)). The console's `R` shows
   the current track's conversion (source frames taken, ring frames made,
   the exact ratio, clamped samples); `Rt` plays the converter's test tracks
   (`tone:1000@48000`, `tone:silence@96000`, ...) on their own, outside the
@@ -407,7 +412,7 @@ The rules that keep it deadlock- and glitch-free:
 | speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake; switches the amp and I2S (M5.Speaker end/begin) off 2 s after it last queued audio and on again before the next buffer (`AmpGate`) |
 | M5.Speaker | 1 | 2 | mixes to 44.1 kHz mono (its input is always 44.1 kHz now); runs only while the amp is on |
 | the card worker (`card`, app/CardWorker) | 1 | 1 for a cover or a waveform's read (0 while a list moves or a finger is on its A-Z rail), the library update's build, a slice of the walk, and while the screen is dark a slice of the tag scan, a compaction and the update's save (a slice drops to 0, and ends after its unit, when a list moves or the scan's yields apply; a compaction or a save drops to 0 when the screen lights); 0 for the tag scan, compactions and the save while the screen is lit | one step at a time, only the one the loop hands it (app/CardTasks, ScanScheduler: docs/METADATA.md 3.3.4, 3.3.9, 3.8, 3.9): a cover (ui/Thumbs), a waveform's read (app/Waves), a slice of the validation walk (its folders for 18 ms lit, 250 ms dark), a compaction of `tags.bin`, a file of the tag scan a loop source names or a slice of its rest's files, the update step's build of the index and its save of `library.idx` (lib/core LibraryUpdate); made for the first step, gone after 3 s without one; 7.5 KB internal stack while it lives (6 KB until METADATA.md 3.8's device check, the figures here its; 5.4 KB used at most there, a read failing inside the reopen of D; 2.3 KB used at most on the device as the covers' worker; the card's jobs about 3.0 KB on N11's card, 3,140 B least left over 5,190 steps, MEASURED on df92c01 by `gs`; the deepest, ESTIMATED from the image, a compaction's reopen of D under its folders: about 4.0 KB (3,916 B MEASURED on 6c2a928, 2,228 B left), about 5.0 KB with the SD driver's log line on top, about 1.1 KB left before an interrupt's frame, 512 B more than before the 2026-10-09 review's `Container::open()`; the build MEASURED at 5,360 B on 6c2a928, 784 B left, its views' `std::sort` at libstdc++'s depth limit on the records' byte order, about 3.3-3.6 KB since `lib/core/IdSort` bounds the recursion at lg(n/16) + 1 frames, METADATA.md 3.9); reads the card in 4 KB pieces and writes it in 4 KB pieces that end on the file's 4 KB boundaries; covers level with the loop while nothing moves (at 0 they shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves; the tag scan, compactions and the update's save at 0 while the screen is lit, since the SD driver's reads busy-wait the CPU (the walk's slices, and while the screen is dark the scan's slices, a compaction and the save, at 1: above; at 0 the 2026-10-09 run measured a compaction about 1.75x its modelled card time, none having run at 1 there, and the save 2-4.5x its time on the loop at the boot); always below the decoder (below) |
-| Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and the dancer's frames (10/s idle; dancing 30/s at 240 MHz, 24/s below: `DanceRate`); sleeps 1-5 ms every pass (less while a list frame is due), 20 ms while the screen is off (`Ui::idleMs`; with no UI, main's own 20 ms), at most 2 ms while Auto DJ's join works; Auto DJ's step (below) |
+| Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and a moving list's frames on the panel's scan, one a refresh (71.5 a second; 60 on the frame clock's deadlines where the scan can't be read), each piece under its own short bus hold; **at priority 3 for a list frame's last wait and its hold** (`HoldBoost` in ui/ListView: a millisecond or two, then 4 ms at a fling's top speed, 12 at most; above the decoder, level with the speaker's pump, so a decoder pass can't fall on the frame's window or cut its hold; rendering stays at 1); on the Dance tab, the beat tracker and the dancer's frames (10/s idle; dancing 30/s at 240 MHz, 24/s below: `DanceRate`); sleeps 1-5 ms every pass (less while a list frame is due), 20 ms while the UI is dark (the screen off, or the glance: `Ui::idleMs`; with no UI, main's own 20 ms), at most 2 ms while Auto DJ's join works; Auto DJ's step (below) |
 
 ### The loop's pass
 
@@ -420,7 +425,8 @@ The rules that keep it deadlock- and glitch-free:
    speed's restart, `audio.loop()`, the power lab.
 2. **`stepCardGuard()`:** what the SD wrapper's guard found at FatFs's
    remounts (a card pulled and put back, or another put in: METADATA.md
-   3.8). Then `Waves::remount()`: the same counter, for the waveform index
+   3.8); the same card: the play log's `remounted()` first. Then
+   `Waves::remount()`: the same counter, for the waveform index
    (the root read again, the record dropped), and a read of the root the card
    failed, again when its wait is over (about 2.5 s against a card that doesn't
    answer, ESTIMATED; never while a list moves or behind the update's fence).
@@ -445,7 +451,14 @@ The rules that keep it deadlock- and glitch-free:
    index, and before the card's step, so a pick due this pass lands
    before the update step can raise its fence in the same pass.
 4. **`queueStore.loop()`** (not while the card is held): `queue.txt`, the
-   position and the resume point (Library and queue, below).
+   position and the resume point (Library and queue, below). Then
+   **`stepPlays()`**: the play log's look at the backend's position for
+   the play under way (`app/PlayHistory`, Storage below), and, when the
+   pass's audio and list let it (lib/core `PlayLog`'s `WriteGate`) and the
+   card isn't held, out of the slot or refusing writes (METADATA.md 3.10),
+   a piece of the boot's scan of the log or one play's slot (`Outbox`: a
+   play the card failed waits first in line for its next try, 5 s on or at
+   the card's remount, and nothing is written behind it meanwhile).
 5. A track's learned length, a restart that is due, the `[queue] now at`
    and Repeat One lines, the spike tools, the calibration, the dancer.
 6. **`userInterface->loop()`:** the snapshot (`MainUiHost::snapshot()`,
@@ -453,8 +466,8 @@ The rules that keep it deadlock- and glitch-free:
 7. **`stepCard()`** (not while the card is held): the card worker's loop
    side (`CardTasks::loop()`). Its `UpdateEnv` is what the library update
    step needs from the rest of the firmware (METADATA.md 3.4.2):
-   - the safe point's inputs (playing, waiting, what is left of the heard
-     track, the seeks);
+   - the safe point's inputs (playing, waiting or a restart asked, what is
+     left of the heard track, the seeks);
    - `alsoFreed`, what the step frees besides the index: the queue's
      entries and undo snapshot, a `queue.txt` snapshot write under way
      (`QueueStore::savingBytes()`), Thumbs' pools, and Auto DJ's join
@@ -653,10 +666,19 @@ screen closing), and stays quiet, connectable only; a device a scan finds
 is taken only by the name a developer build was given (`BT_SINK_NAME`,
 changed with the console's `c<name>`), never by signal strength alone
 (that once picked a TV in the next room), but for one scan after the
-console's `Bs`. The library's stack-up, which scans whenever nothing is
-remembered, is kept from it then: while BtAppT is in that handler
-`has_last_connection()` answers yes, and the page of the zero address it
-then asks for isn't made. It remembers the
+console's `Bs`. The library's stack-up isn't used: it sleeps 10 s once
+the profiles are set up, the Core2 unconnectable meanwhile (Bluedroid
+starts that way), and only then pages the remembered headphones or scans.
+Headphones that try to come back by themselves in those seconds (switched
+on with the Core2, or dropped by its restart) find nobody, and may go on
+to another device they know; a play asked for meanwhile spent half its
+wait before the first page went out.
+`PlayerA2dp::av_hdl_stack_evt()` does the same set-up, call for call
+(compare the two on a library upgrade), waits 0.3 s for the A2DP service
+to register itself (`kStackSettleMs`: a connect before that hangs the
+stack's state machine), and then the Core2 is connectable and the
+planner pages, scans by name or rests: `[bt] stack up in 3xx ms,
+connectable; reconnect: ...`. It remembers the
 device it connected to, and all along it stays connectable (never
 discoverable) so the headphones can reconnect by themselves; other devices
 are refused. How it looks for them while no link is up is
@@ -665,10 +687,69 @@ are refused. How it looks for them while no link is up is
 forever, cost +35.5 mA for as long as they were away):
 
 - **Burst**: on a drop, at boot and on a listener's ask (a play waiting for
-  them, Connect or a tap on the card, a B hold, console `o`), 3 pages: one
-  at once, the next once the last has had its answer (refused, or the 5.12 s
-  page timeout) and 10 s after it began. A page already on its way is the
-  burst's first try, never paged over.
+  them, Connect or a tap on the card, a B hold, console `o`), 3 pages, 8
+  on a listener's ask (`kAskPages`): one at once, the next 2 s after the
+  last has had its answer (refused, or the 5.12 s page timeout;
+  `kBurstPauseMs`): ~20 s for three, ~56 s for eight, the radio paging for
+  three quarters of it. (They began 10 s apart, the library's heartbeat,
+  three for an ask too, until 0.15.0: 25 s, and a play's wait covered two
+  of them.) The pause is the Core2's own page scan's turn (every 1.28 s),
+  so headphones paging the Core2 at that moment get in. A page whose end
+  is never reported is followed 10 s after it began. A page already on
+  its way is the burst's first try, never paged over.
+- **Measured on the device** (2026-11-17: Powerbeats Pro, Bluetooth power
+  Normal, a build that leaves the card alone; "old" is main 241642d's
+  Bluetooth code flashed beside it, the same evening):
+  - A restart while linked: linked 6.6-7.1 s after the reset, 6 of 6
+    (old: 14.7-17.3 s, 7 of 7). Held in reset for 60 s, then on: 4.5-5.2 s
+    (old: 14.6-15.6 s). `[bt] stack up in 323-330 ms`. Once the headphones
+    connected in by themselves, about 5 s after the reset (their link's
+    timeout): `page: a connection to them exists already (they were
+    connecting too), after 1543 ms (HCI 0x0b)`, then `the headphones
+    opened a radio link by themselves: A2DP next`. The old build can't be
+    connected to at that moment.
+  - After a link ends they answer no page for a while: 11 to 22 s after
+    the Core2's Disconnect, 24 s after they closed it themselves. Every
+    page meanwhile is `no answer (the page timed out), after 513x ms (HCI
+    0x04)`; of the listener's 11 pages off the phone 6 were, and every ask
+    still linked within three tries (0.9 to 20 s after the tap).
+  - **Connected to a phone they hardly listen for pages.** Twice, five
+    pages in a row timed out and the sixth was answered, 38 and 41 s
+    after the first. With three tries the ask failed its first round and
+    linked on the second's third try (the listener's report: 2 to 4
+    rounds); with six, the same case linked from one tap, on try 6, with
+    half a second to spare, so an ask has eight (~56 s; eight weren't run
+    on the device: the count is the only change from the build that was).
+    Nothing refuses: they aren't listening. Disconnecting them from the
+    phone first avoids it; the eight tries are for when the listener
+    doesn't.
+- **What a page came to** is in the log, from the stack's reports of the
+  radio link under A2DP (the ACL: `ESP_BT_GAP_ACL_CONN_CMPL_STAT_EVT`,
+  which comes with a status for a page nobody answered too, and
+  `ESP_BT_GAP_ACL_DISCONN_CMPL_STAT_EVT`; noted on the BTC task, said by
+  BtAppT): `[bt] page: no answer (the page timed out), after N ms (HCI
+  0x04)`, `[bt] page: answered after N ms: setting up A2DP`, `[bt] the
+  headphones opened a radio link by themselves: A2DP next`, and when a
+  link closes, why: `[bt] the radio link closed N ms after it opened,
+  before A2DP was up: <reason> (HCI 0x..)`, `[bt] the radio link
+  closed: closed by the headphones (HCI 0x13)`. A try that fails after
+  its page was answered is a different fault from one nobody hears; the
+  log now tells them apart. The radio link's notes behind those lines
+  (up, theirs, A2DP over it, the address they are about) are
+  `RadioLinkNotes` (lib/core, `test_radio_link_notes`): they also count
+  the link's set-up for the card's scheduler (METADATA.md 3.3.9, "The
+  radio link's set-up", 2026-11-19), so every close goes to BtAppT, the
+  noted radio link's clearing them whatever the remembered addresses
+  became, and a page's failure while their radio link is up keeps them
+  (`[bt] page: not needed, their own radio link is up (HCI 0x0b: ...)`,
+  or `... their own radio link up: kept` for another code).
+- **A link the headphones open themselves** is theirs to finish: for 4 s
+  (`kTheirSetupMs`) no page of the Core2's goes on top of it (a connect
+  then is the stack's collision case). If no A2DP has come over it by
+  then, the Core2 opens it from its side, as a phone does when a headset
+  connects and stops short: a burst whose first try needs no page, also
+  from resting or the back-off (`[bt] the headphones' own radio link
+  brought no A2DP: connecting over it from here`).
 - **Back-off**: then one page at 30 s, 1, 2 and 5 min, then every 5 min.
   Never an inquiry while headphones are remembered (it can't find them
   unless they are in pairing mode); a scan found running is stopped.
@@ -676,7 +757,8 @@ forever, cost +35.5 mA for as long as they were away):
   while nobody is around (the screen off and nothing playing or waiting,
   and not lost: a drop while listening pauses the player itself, and the
   listener may still wear them, so that gets the whole back-off;
-  `BtSink::setQuiet()`, fed with the screen policy's Off), no pages and
+  `BtSink::setQuiet()`, fed with the screen policy's Off, the glance
+  counted as off: nothing on it acts, and it may be a pocket's), no pages and
   no scans: connectable only, so headphones
   that are switched on or taken out of their case come back by themselves.
   A listener's ask starts a burst again.
@@ -994,7 +1076,7 @@ out what it returns.
   is down makes the player **wait** (`PlayState::Waiting`: nothing starts,
   the position holds) and `PlayGate` (fed every loop pass after
   `BtSession`) **connects at once**: `BtSession::connect()` and
-  `BtSink::connect()`, the paging burst ("try 1 of 3"), not the back-off's
+  `BtSink::connect()`, the paging burst ("try 1 of 8"), not the back-off's
   next page, and from resting too. A page still on its way (within the
   page timeout, `ReconnectPlanner::kPageMs`, and not answered yet) isn't
   paged over: it counts as try 1 of a full burst, so a wait that begins at
@@ -1004,10 +1086,11 @@ out what it returns.
   mark goes (the tab bar and the card say Connecting). The link comes up:
   the wait is released and plays on them, "Now playing on SPYDRONE"
   (said once: the Connected event's own toast is skipped while the gate
-  waits). The tries run out (`BtSession::failed()`) or 20 s pass
-  (`kBackstopMs`, the listener's number: the burst itself takes ~25 s, a
-  try at once and then one 10 s after the last began, so this usually ends
-  the wait during the third try): the wait ends **paused**, and a notice says
+  waits). The tries run out (`BtSession::failed()`: ~56 s, all eight made,
+  each with its answer) or 65 s pass (`kBackstopMs`: for a try answered
+  late whose link is still being set up; it was 20 s while an ask had
+  three tries that began 10 s apart, and usually ended the wait as the
+  third began): the wait ends **paused**, and a notice says
   "Couldn't reach SPYDRONE. Are they on, out of the case, and not
   connected to your phone?" with Try again (a new wait and burst) and
   Play on speaker. The session's ask is **withdrawn** as failed
@@ -1096,7 +1179,10 @@ End of album or End of queue before its last track can't say what is
 left, so +10 min is dim and does nothing there.
 
 During the fade any touch, strip press or PWR wake (swallowed as usual)
-shows the toast "Sleep timer: fading" with +10 min and Turn off, the only
+shows the toast "Sleep timer: fading" with +10 min and Turn off (in the
+dark only a wake does: the PWR key, or a touch with Touch when off on
+Wake; a touch Nothing ignores, and the glance's, aren't input, and the
+glance shows the fade as its moon's "fading"), the only
 controls that act on it; they come before an open sheet's (the toast is
 drawn over it) and take a tap to y 77. A screen lit when the fade starts
 stays lit while it counts down to the pause (the screen's `holdLit`,
@@ -1132,7 +1218,9 @@ from its fence (the queue's flush: its memory is the build's) to its
 save's end on the card worker, METADATA.md 3.9); no screen of its own
 (calibration, a spike tool). Anything that
 blocks restarts the countdown when it goes, and so does any input: a touch
-or strip press (a waking one too), PWR, a headphone key that acted (not a
+or strip press (a waking one too; not one Touch when off ignores on an
+off screen, nor the glance's, or a pocket would keep the device on), PWR,
+a headphone key that acted (not a
 Play ignored after the sleep timer's pause, a Pause while paused, a cue
 after the timer's pause: `HeadsetKeys::isInput()`), a console byte. So it
 counts from the pause, the sleep timer's too.
@@ -1143,7 +1231,10 @@ out:
 1. **The warning**, the last 30 s: the toast "Turning off in 30 s" (counting
    down) with **Keep on** (`Toast::showIdle`). Any input ends it, the
    button included; so does anything that blocks. It is drawn on a lit
-   screen only: it doesn't light a dark one (it may be night). A screen
+   screen only: it doesn't light a dark one (it may be night). On the
+   glance (UI, "The glance") its countdown takes the glance's own line,
+   in amber, without Keep on; the glance isn't held for it and its
+   touches aren't input, so the PWR key is what keeps the player on. A screen
    lit when it appears stays lit, brightened, until it ends (the screen's
    `holdLit`, below), so it can't go dark partway through the countdown
    (checked on the device from bright and from dim; an off screen stays
@@ -1162,7 +1253,13 @@ out:
    from CONNECTED until DISCONNECTED: the library's `connected()` goes
    false as soon as the disconnect starts, the stack's DISCONNECTING,
    0.15-1.5 s before the link is gone): the power status read once more (USB plugged in meanwhile:
-   it stays on), haptics stopped, `Serial.flush()`, `M5.Power.powerOff()`
+   it stays on), haptics stopped, the settings the taps queued saved
+   (`app/NvsLater`), then
+   the play log's open play ended (stopped) and every play waiting written
+   (`PlayHistory::flush()`; settings first, `lib/core/OrderlyEnd`: a card
+   gone bad costs the plays alone, and 3 s at most, the flush ending at
+   the first play the card fails and at its deadline),
+   `Serial.flush()`, `M5.Power.powerOff()`
    (the AXP192's power-off bit; M5Unified then deep-sleeps with no wake
    source in case it didn't take). Input or a blocker during step 3's wait
    cancels it: the note is cleared, the headphones stay let go (a play
@@ -1204,7 +1301,10 @@ host-tested in test_power_choices; `app/PowerSettings` keeps them in NVS
   (NVS "boot_cpu"), lets go of the headphones the idle power-off's way and
   asks the speaker's pump to switch the amp off (`requestAmp(Off)`, as
   `Pa0`: the AXP192 isn't reset by `esp_restart()`, so a live amp would pop
-  as its clock pins are reconfigured); `stepCpuRestart()` then calls
+  as its clock pins are reconfigured); `stepCpuRestart()` then saves the
+  settings the taps queued (`app/NvsLater`), flushes the play log (the
+  paused play ended, stopped, and written: `PlayHistory::flush()`; in that
+  order, `lib/core/OrderlyEnd`) and calls
   `esp_restart()` (under the LCD lock) once the headphones are unlinked
   (`BtSink::linkUp()` false: the disconnect done, as the idle power-off
   waits) and the amp is off, at most 3 s later
@@ -1356,16 +1456,27 @@ reset and without a session, about the board ([HOST-STATUS.md](HOST-STATUS.md)):
 `@status` (one line at once, from what the firmware holds: the version,
 the card's kind, size and free space, the library's tracks, the battery,
 the player's state, the card's id and commit from the root the boot read,
-the paired headphones), `@count` (the card's free
-clusters counted once, on request: Storage, "The free space") and
+whether the clock is set, the paired headphones), `@count` (the card's free
+clusters counted once, on request: Storage, "The free space"),
 `@identify <label>` (a full-screen "This one" banner for 5 s and a buzz,
-to tell two boards apart). `HostLink` routes them (in a session or not,
+to tell two boards apart), `@time [<unix-ms>]` (the board's clock, or
+set it) and `@format` (the question that formats the card, on the
+board's screen: the listener answers it there; Storage, "Formatting in
+the player"). `HostLink` routes them (in a session or not,
 declined or not, and none keeps a session alive or a decline going);
 `app/HostQuery` answers, with `lib/core/HostStatus` (the line, the FSINFO
 rule, the label's rule), `lib/core/FreeCount` and `storage/CardSpace` (the
-count), and `Ui::identify()` (the banner: drawn over everything, then the
+count), `Ui::identify()` (the banner: drawn over everything, then the
 UI's own drawing gated as while the screen is dark, everything drawn again
-when it goes). Older firmware answers `@err 7 status`.
+when it goes), and `app/BoardClock` over `lib/core/WallClock` and `lib/core/RtcSync`
+(the clock: the RTC, a BM8563, read at the boot with its voltage-low
+flag, believed when the time it keeps is one this player set (NVS
+`clock`/`set`: a factory's or another firmware's time isn't), and made
+exact at its next tick, caught from the loop with the phase
+the last `@time` measured; a `@time` sets the clock at once and writes the
+RTC on its next second; the time is that plus the board's monotonic ms,
+and `boardclock::now()` is how the firmware reads it). Older firmware answers
+`@err 7 status`, and before 0.14.0 `@err 7 time` and `@err 7 format`.
 
 ## Storage
 
@@ -1382,9 +1493,51 @@ is one read; OPUS.md section 10) and `thumbs/` (the album covers'
 thumbnails, below); on the card also `tags.bin` and its journals
 `tags.jnl` and `walk.jnl` (the device's tag records: docs/METADATA.md
 3.3.2), `device.txt` (what this firmware reads, for the transfer software:
-METADATA.md 2.15) and, for one boot, `build.req` (a library build deferred
-to the next boot). The transfer software's `/.mstream` (its root, its tags
-file, its AutoDJ index, its thumbnails) is read, never written.
+METADATA.md 2.15), `plays.jnl` and `plays.1.jnl` (the play log, below)
+and, for one boot, `build.req` (a library build deferred to the next
+boot). The transfer software's `/.mstream` (its root, its tags file, its
+AutoDJ index, its thumbnails) is read, never written, but for the root's
+ACKS section, which the play log trims by.
+
+**The play log** (`/.player/plays.jnl`, METADATA.md 2.20; lib/core
+`PlayLog`, host-tested in test_play_log against tools/playlog.py's
+goldens; `app/PlayHistory`): one 80-byte slot for each play of a card
+file under `/music`, which the transfer software reads in a card reader
+and reports to the listener's mStream. `PlaybackController` says when a
+play begins (a start from 0:00 or a start point, a gapless join heard)
+and how it ends (completed, skipped, stopped: `setPlays()`); the
+`Tracker` counts the audio played from the backend's position each pass
+(pauses and a seek's jump left out) and the pauses. At its end the play
+waits; the loop writes it when `WriteGate` lets it (not from 5 s before
+the heard track's end to 2 s after the next one's start, not during a
+seek or a start's refill, not with the ring under half, not within 5 s of
+an underrun, not while a list moves or a finger is on its A-Z rail, the
+write being on the loop that draws the list's frames): the file's size and
+FAT time (`f_stat`), its start from the
+board's clock (`boardclock::at()`; 0 while unset), the seq in NVS
+("plays"/"seq") first, then one append and its `f_sync`, rotating into
+`plays.1.jnl` at 6,553 slots with a drop note when plays no software read
+go. A play the card fails (its `f_stat`, its append) isn't lost at once:
+it stays first in line (`Outbox`) and is tried again 5 s later or at the
+card's remount, three tries in all, the journal's same slot each time
+(`Journal::again()`: its seq, its bytes; one whose write had landed is
+found at the log's end and written over itself there, then synced),
+nothing behind it written
+meanwhile; 32 plays can wait (a run of tracks of 7 s or less never opens
+the gate). At boot: NVS's epoch ("plays"/"epoch": a new random one when NVS has
+none), the cut-rename rule (`plays.xl1` to `plays.xl9`), then a scan of
+the log's files a few reads a pass (the boot rules for the seq and the
+boot count; the trim of the files the root's ACKS acknowledges whole:
+the root is read with the board's id, its ACKS rows kept first). The same
+card mounted again (`stepCardGuard()`): the cut-rename rule again, and
+before the boot's first slot the scan again from its start.
+Before every orderly power-off and restart, after the settings the taps
+queued (`lib/core/OrderlyEnd`, main.cpp's `endInOrder()`), the open play
+ends, stopped, and is written (`PlayHistory::flush()`: the idle power-off,
+the CPU speed's restart, `restartNow()`): each play waiting once, in
+order, until the card fails one or 3 s are up
+(`PlayHistory::kFlushBudgetMs`), so the end never waits on a card gone
+bad. Log lines: `[plays] ...`, one per slot with the time its write took.
 
 **FatFs itself, for the card's records** (`storage/CardFat`, METADATA.md
 3.8): the validation walk lists `/music` with `f_readdir`, whose `FILINFO`
@@ -1438,7 +1591,10 @@ Playing, the Library and the Queue then names it, one message per kind
 
 The last covers a blank or unformatted card, Linux's, and a FAT card that
 failed to mount for another reason (a flaky contact, say), so it never says
-"format it": that card may hold music a second Try again finds. GPT's text
+"format it": that card may hold music a second Try again finds. Each but
+"No microSD card" has a second button, Format..., the player's own format
+(below), whose question for this last kind first sends the card to a
+computer's disk check. GPT's text
 uses macOS Disk Utility's words ("Master Boot Record" is its Scheme), since
 a card a Mac erased whole is the usual GPT one. Try again reads the sectors
 again when the card still doesn't mount, so its note follows what is in.
@@ -1456,6 +1612,52 @@ and can't-read states without such a card (`uiFn`: no card).
 true makes the SD driver's `sdcard_mount()` run `f_mkfs(FM_ANY)` on any card
 FatFs finds no FAT volume on (`FR_NO_FILESYSTEM`), which is every exFAT,
 NTFS, GPT and blank card: someone's music wiped at boot without a word.
+A card is formatted only when the listener confirms it, twice (a tap,
+then a 2 s hold):
+
+**Formatting in the player** (0.14.0; [HOST-STATUS.md, "@format"](HOST-STATUS.md#format)).
+The no-card pages' Format... (a card that is in but isn't FAT32, or
+can't be read), or a computer's `@format`, which can do no more than
+bring up the same question: `Ui::askFormat()`'s two dialogs, "Format this
+card?" (the whole card erased, even what the player can't read; a card
+the player reads names its music, and a transfer that didn't finish on
+it; a damaged card's "Check it on a computer first") and "Erase the
+whole card?", whose red "Hold to erase" sits where the first one's
+Cancel was and answers only to a finger kept on it 2 s (the Dialog's
+hold mode, `lib/core/DialogTouch` and `HoldButton`: it fills meanwhile,
+and a hint under the body says how from the start; a tap, a hold let go
+or slid off, does nothing but turn the hint amber), with a settle for a
+double tap (`lib/core/FormatAsk`, from the answering tap's own time).
+The 2 s are the time the loop saw the finger there, pass by pass
+(`Input::finger()`), not the clock's: no lift answers it, however late
+it is read, and a loop that loses sight of the finger for over 0.5 s
+ends the hold (a stall is no hold). And the finger is a hand's: the
+console's scripted finger, on the same USB port as `@format`, taps the
+first question and Cancel, and its hold answers nothing.
+Cancel is the default: a tab, another dialog or screen, a minute with
+no answer (each step's, over a hold under way too: `formatask::pass()`,
+the loop's order). Format restarts the player
+the CPU speed's orderly way (paused, the queue, the settings and the play log saved,
+the headphones let go), with the card's identity (the guard's: its
+size, the CRCs of sector 0 and of its first partition's first sector) in
+RTC slow memory, which a restart keeps and a power cut doesn't; the next
+boot formats that card before anything mounts it (`storage/CardFormatter`,
+the boot screen's bar), and only that card, and only when that boot is
+the restart that asked (a boot from a crash, a watchdog, a brown-out or
+the reset button, which RTC memory can outlive too, drops the request:
+`cardmkfs::take()`). The layout is
+`lib/core/CardMkfs`'s (host-tested on ChaN's FatFs as the Core2 builds
+it, `test_card_mkfs`): sector 0 an MBR with one partition of type 0x0C
+from sector 8192 (4 MiB) to the card's end, the gap before it and the
+card's last 64 sectors zeroed (nothing of a GPT left), then FatFs's own
+`f_mkfs()` in that partition (FatFs's `VolToPart[]` set to it for the
+call: ESP-IDF builds FatFs with `FF_MULTI_PARTITION`): FAT32, 2 FATs,
+32 KB clusters from 2.16 GB up, the data area on a 4 MiB boundary, a
+valid FSINFO count; its boot sector held back and written last, so a
+format cut short leaves no FAT volume ("Can't read this card": format it
+again); read back, then `/music`, `/.player` and `device.txt`. Then the
+boot mounts it, a new card (`cid=-`). docs/METADATA.md 2.2 has the card
+it leaves, for the transfer software.
 
 **The card's size, not its free space.** About's "microSD card, <n> GB"
 is `SD.cardSize()`: the sector count from the card's CSD that the SD driver
@@ -1510,7 +1712,11 @@ host-tested on their own and under FatFs: `disk_initialize` clears the
 cache (FatFs mounts the volume again by itself once a card stopped
 answering: pulled or swapped while on, with no card-detect, the next card
 mustn't get the last one's FAT and folders), `CTRL_TRIM` invalidates the
-freed range, a write with the cache off drops the sectors it wrote, and a
+freed range (and, on a nearly full card, points FatFs's next search for a
+free cluster at it: `lib/core/HoleHint`, METADATA.md 3.2.4 "The hole hint";
+with one free cluster that search read the whole FAT, 5.6 s for a queue
+save after a write that took and freed that cluster), a write with the
+cache off drops the sectors it wrote, and a
 write the card refused is written again once. The clear alone doesn't make
 a swap safe: everything the player holds in RAM is still the old card's.
 So the wrapper also keeps the card's identity at the mount (its size, the
@@ -1683,7 +1889,57 @@ written once the taps rest (`app/AutoDjStore` through `app/NvsLater`,
 [AUTODJ.md](AUTODJ.md)). Its `migrate(3, 4)`
 step does nothing: an absent key, or a value this firmware doesn't take,
 reads as its default (off, Follow the vibe, 55 %, both off). 0.10.0
-leaves a schema-4 NVS as it is and never reads the namespace.
+leaves a schema-4 NVS as it is and never reads the namespace. Schema 5
+(from 0.13.0) is schema 4's keys and `autodj`/`moods`, Auto DJ's mood
+filter (a u16, its 11 bits: [MOOD-FILTERS.md](MOOD-FILTERS.md) 4.6, 5.4),
+written with the other four. Its `migrate(4, 5)` step does nothing (no
+key, or a value that isn't a filter: none), and 0.12.0 leaves a schema-5
+NVS as it is, never reading the key (its picks unfiltered). Schema 6 is
+schema 5's keys and what 0.14.0 adds, three things released together, so
+they share the number: one paragraph, no bump between them. First,
+`screen`/`touch_off`, **Touch when off** (a u8, `ScreenPower::OffTouch`'s
+index: 0 Nothing, 1 Wake, 2 Track; [ENERGY.md](ENERGY.md) item 2), queued
+and written once the taps rest: no key (every unit before it), or a value
+this firmware doesn't know, reads as Nothing, the default the update
+brings (`nvslayout::offTouchFrom()`), so an updated unit's touch no
+longer wakes its off screen: the user's choice, the PWR key does. Second,
+the `plays` namespace, the play log's ids ([METADATA.md](METADATA.md)
+2.20.4; `app/PlayHistory`): `epoch` (a u64, a random value other than 0,
+drawn whenever there is none), `seq` (a u32, the last seq a slot used,
+written before the slot) and `boots` (a u32, the boot count of that
+epoch, written at each boot). A new epoch writes `seq` and `boots` first
+and `epoch` last; an NVS erase drops the three, and the next boot's new
+epoch keeps the plays' ids new to mStream. Third, the `clock` namespace:
+`phase`, an i32, how many ms after the true seconds the RTC's own begin,
+measured by the last `@time`'s write and added at every boot's catch of
+the RTC's tick ([HOST-STATUS.md](HOST-STATUS.md), "@time";
+`app/BoardClock`). It is removed just before a `@time` writes the RTC and
+written once the chip's tick is caught; absent (no `@time` yet, a restart
+between the two, an NVS erase), the boots add none. And `set`, a u8: 1
+once a `@time`'s write of the RTC was read back as the time written, so
+the time the chip keeps is one this player set (written once, never
+removed). Without it the boot takes the RTC's time for the factory's or
+another firmware's (M5's own keep local time, hours off read as UTC; its
+voltage-low flag clear and its date fine all the same) and leaves the
+clock unset until a `@time`: `nvslayout::clockOursFrom()`,
+`wallclock::Boot::Foreign`. A kept `phase` stands for it (a phase is
+written only after such a write), which is what a unit that ran PR
+#27's builds has. The `migrate(5, 6)`
+step does nothing for any of them: no `touch_off` is Nothing, no epoch
+has the first boot draw one, no phase adds none, no `set` (and no phase)
+is a clock unset until the tab's `@time`, once. 0.13.0 leaves a schema-6
+NVS as it is and never reads the key or the two namespaces: back on it, a
+touch wakes the screen again, no log is kept and the RTC is read to the
+second. The card transfer's development builds (PR #27, before it was
+merged with schema 6) wrote `plays` and `clock` under the number 5, which
+0.13.0 then released without them: a unit that ran one holds a schema-5
+NVS with those keys and no `moods`. It takes the step from 5 to 6 as a
+0.13.0 unit does, and every key reads as it was written (its epoch, seq,
+boot count and phase kept, the phase standing for `set`, which those
+builds didn't write; no mood filter: `test_nvs_layout`'s matrix has
+it). The Bluetooth EQ, not merged yet, takes schema 6 too: whichever
+lands second takes 7, or, shipped in one release, they share 6 (as
+`touch_off`, `plays` and `clock` do).
 The rules:
 
 - **Never reuse a key name** (or a namespace) for anything else, even after
@@ -1710,7 +1966,8 @@ The rules:
 - Keys are at most 15 characters (NVS's limit).
 - **What a tap changes is written once the taps rest** (0.12.0:
   `app/NvsLater`; when, `lib/core/SaveLater`, host-tested in
-  test_save_later). The screen's off-after and brightness, the idle
+  test_save_later). The screen's off-after, brightness and Touch when
+  off, the idle
   power-off, the Bluetooth power, the repeat mode and Auto DJ's keys are
   queued (the value applies at once) and written 1.5 s after the last
   change, 6 s after the first at most, each namespace opened once, with
@@ -1718,20 +1975,28 @@ The rules:
   last value. A write held the loop a few ms in the middle of the tap that
   made it (longer when NVS's page fills and a sector is erased), and the
   other core's tasks that run from flash stand still while it lasts.
+  Before a restart or a power-off what is queued is written at once, ahead
+  of the play log's card writes (`lib/core/OrderlyEnd`).
   Before a restart or a power-off (`PowerSettings::restart()`,
   `IdlePower::powerOff()`) what is queued is written first. The language,
   the tips' flag, the CPU speed (its restart follows), the queue's
   position and resume point and the Bluetooth stack's keys are written as
   before.
 
-The keys of schema 4, by namespace: `meta` (schema); `input` (cal,
+The keys of schema 6, by namespace: `meta` (schema); `input` (cal,
 cal_ask, haptics, railtick); `player` (bt_name, bt_forgot, bt_fresh);
 ESP32-A2DP's `connected_bda` (last_bda: the remembered headphones); `power` (cpu_mhz,
-bt_tx, boot_cpu, idle_after, off_idle); `screen` (off_after, bright); `ui`
+bt_tx, boot_cpu, idle_after, off_idle); `screen` (off_after, bright, and
+schema 6's touch_off); `ui`
 (coach, and schema 3's lang); `queue` (gen, pos, resume, and schema 2's
-repeat); `autodj` (schema 4's on, mode, floor, match). Schema 3's are the
-same without `autodj`, schema 2's without `ui`/`lang` too, schema 1's
-without `queue`/`repeat` too. The Bluetooth stack keeps its bonds in
+repeat); `autodj` (schema 4's on, mode, floor, match, and schema 5's
+moods); `plays` (schema 6's epoch, seq, boots); `clock` (schema 6's
+phase, an i32, and set, a u8). Schema 5's are the same without `touch_off`, `plays` and
+`clock` (a unit that ran PR #27's builds has the last two all the same,
+but for `clock`/`set`),
+schema 4's without `moods` too, schema 3's without
+`autodj`, schema 2's without `ui`/`lang` too, schema 1's without
+`queue`/`repeat` too. The Bluetooth stack keeps its bonds in
 its own namespace, which the firmware never touches.
 
 ### Moving an existing unit to the new layout
@@ -1813,7 +2078,7 @@ a beta); the README has how to cut one.
   changed). With no `v*` tag reachable, `--always` gives only a hash, and
   the build reads `v<NEXT_RELEASE>-dev+abc1234[-dirty]`; `NEXT_RELEASE`, at
   the top of the script, is the only place a version is written by hand.
-  Without git at all: `v0.13.0-dev+nogit`.
+  Without git at all: `v0.15.0-dev+nogit`.
 - **One file recompiles.** The script writes
   `$BUILD_DIR/generated/PlayerVersion.h` (`PLAYER_VERSION`, the commit,
   its date and time in UTC), rewritten only when its text changes, and
@@ -2076,15 +2341,45 @@ strings.
   end is followed by the same 500 ms of quiet as a touch),
   the ring is low, a track changes, a seek or a Bluetooth setup is under
   way, after an underrun or a long decode pass, and the scan below 10%
-  battery off USB. A hand-off of the walk or of the scan's rest is a
-  slice of steps (18 ms lit; 60 ms dark, the walk's 250 ms), cut after
-  its step the moment one of those holds; the walk's slices run level
-  with the loop, the scan's, compactions and the save only while the
-  screen is dark (METADATA.md 3.3.9: one step a hand-off made the loop's
-  sleep each step's floor, 2.7 min for a 20k walk). A walk that fails
-  runs again a minute later, twice at most, and while the card's records
-  don't list it (the first boot's walk failed) no update step runs:
-  built from what the scan had read, it would keep only those tracks.
+  battery off USB. Bluetooth holds them, and the update step's save, for a
+  page burst or a pairing and the 3 s after a link event, and since
+  2026-11-19 a link until its AVRCP is up (at most 10 s from the link),
+  then 3 s: Bluedroid opens AVRCP itself 3.5 s after A2DP opens, an SDP
+  search that dips internal RAM about 5.5 KB for a moment (MEASURED), and
+  with the link's 3 s alone a walk the burst held started 0.73-0.80 s
+  before it in every recorded linked boot (MEASURED). With an MP3 playing
+  in silent mode before the link that took internal RAM to 35,916 B
+  (MEASURED, main 89188f4), under G5's session floor. A link that comes
+  mid-walk cuts the slice, and the worker's 3 s idle exit then ends its
+  task (its 7.5 KB stack) at about the link + 3.0-3.3 s, just before
+  AVRCP's set-up; while the link waits for AVRCP the idle task ends at
+  once (`CardWorker::release()`), which widens that margin to the whole
+  wait. A compaction, the update step's save or its build already running
+  at the link isn't cut (only a slice is) and still meets it; covers,
+  waveforms' reads and the build aren't held by Bluetooth at all. The work
+  starts about 3.8 s later after a link on Powerbeats Pro (about 7 s later
+  where their AVRCP came at about 7 s, once a stream had started before
+  it: a listener's PlayGate start), at the link + 13 s with headphones
+  that never open AVRCP, and an AVRCP that comes after the 10 s still
+  holds it 3 s after it (METADATA.md 3.3.9, "The wait for AVRCP"). On the
+  device (2026-11-19, rd-g5-fix2, that sequence) the low rose to 45,124 B
+  (MEASURED). Before the link, the headphones' radio link being set up
+  holds them too (at most 8 s from its rise, and from each page of ours
+  over it, then 3 s; the worker's task ends at once then as well): the
+  same day a radio link the headphones opened after the burst had backed
+  off met the walk the back-off's 3 s released about 0.15 s later, SDP,
+  A2DP and AVRCP together, and internal RAM went to 42,544 B (MEASURED,
+  rd-g5-fix1), 464 B under G5's floor (METADATA.md 3.3.9, "The radio
+  link's set-up"). A
+  hand-off of the walk or of the scan's rest is a slice of steps (18 ms
+  lit; 60 ms dark, the walk's 250 ms), cut after its step the moment one
+  of those holds; the walk's slices run level with the loop, the scan's,
+  compactions and the save only while the screen is dark (METADATA.md
+  3.3.9: one step a hand-off made the loop's sleep each step's floor, 2.7
+  min for a 20k walk). A walk that fails runs again a minute later, twice
+  at most, and while the card's records don't list it (the first boot's
+  walk failed) no update step runs: built from what the scan had read, it
+  would keep only those tracks.
   The **update step**
   (lib/core `LibraryUpdate`, METADATA.md 3.4.2 and 3.9: the index built
   again from the records, the queue carried through `queue.txt`) follows
@@ -2094,7 +2389,8 @@ strings.
   with the worker free and a safe point (nothing plays, or the heard track
   has the pause's length left and 5 s: the last step's measured fence, or
   1 ms a track before one, at least 20 s and at most 30 s; and no seek in
-  2 s), the worker's task there (made first: the build must start
+  2 s; none while a restart is asked, whose pause would make one), the
+  worker's task there (made first: the build must start
   at once), and memory for it (else `/.player/build.req`, and the next
   boot builds), the loop puts up a **fence**: the queue flushed and its
   memory lent to the build (the player fenced: pause and resume still
@@ -2321,7 +2617,20 @@ strings.
   before the queue). The file is rewritten 2 s after the
   last edit, 32 lines a loop pass (a 10,000-track queue is ~700 KB and never
   holds the loop), into `queue.tmp`, then renamed over `queue.txt`; an
-  edit while a write is under way drops that write. **Edits that never
+  edit while a write is under way drops that write. On a nearly full card
+  `queue.tmp` takes the clusters the last save freed at once (the hole
+  hint, METADATA.md 3.2.4). Before it, with one free cluster, two saves in
+  a row read the whole FAT between them (on the host model, and on the
+  device with main's firmware: 5.3 s on every second save, 2026-11-18),
+  and a save right after a write that took and freed the only cluster
+  took 5.6 s (the track after it underran). With the hint those saves
+  read nothing from the card's FAT (135-146 ms). Its cost: the first time the
+  text needs a second cluster (over 32 KB), on a card whose few free
+  clusters are a run far from `queue.txt`, one save takes the freed
+  cluster and walks the whole FAT to the run (host model,
+  `test_hole_hint`: once in M9; 1-3 times in 124 saves of a growing
+  queue on three such cards, where FatFs alone walked 3-11 times, M10).
+  **Edits that never
   settle** (Auto DJ appending a 1-second track every second, at the cap
   each also pushing out the oldest entry: on the device's soak of
   2026-10-13 the file wasn't written for the last 59 minutes) get a
@@ -2458,7 +2767,11 @@ strings.
   running player's (`diag::restartLows()`, one `[heap] PSRAM's lowest
   free: …` line between): heap_caps' since-boot PSRAM minimum reads 0 B
   from the first line on, the IDF's and the Arduino core's init
-  (METADATA.md 3.5).
+  (METADATA.md 3.5). The boot's lowest comes where a play, the link, the
+  card worker and the link's set-up meet (OPUS.md 2.1, "G5 since the card
+  worker"): the walk now waits through the headphones' radio link being
+  set up and for AVRCP, and malloc's limit of 4,095 B puts the play file's
+  4 KB stdio buffer in PSRAM ([Build notes](#build-notes)).
 - **Auto DJ** ([AUTODJ.md](AUTODJ.md)): `setup()` makes `app/AutoDj`
   after the library and the queue: its settings (NVS `autodj`), the
   engine's one block (19,016 B), and the index the card's root names,
@@ -2568,8 +2881,9 @@ layer is suspended).
     once the screen lights: the FT6336U likely takes its baseline at power
     up (still to check on the device).
   - The console: `a` (`a5`-`a9`), `ac`, `ab` (`ab0` forgets `cal_ask`).
-    With the screen off, these wake it and the screen opens once the panel
-    is awake: nothing may be drawn into a sleeping panel (below).
+    With the screen off (or the glance), these wake it and the screen
+    opens once the panel is awake, the whole UI drawn: nothing may be
+    drawn into a sleeping panel (below).
 
   The crosses (`TouchCheck::kCross`: 9, distinct x and y each; no cross's
   sample window reaches the Cancel pill, and none is drawn in the A
@@ -2773,8 +3087,12 @@ layer is suspended).
 
 - **The screen's wake** (`WakeLatch`, host-tested in test_ui_input with the
   recognisers and in test_screen_power; [ENERGY.md](ENERGY.md) item 2). A
-  finger that lands while a touch doesn't act (dim, off, or lit by an
-  event nobody has answered yet) only wakes it: every event is dropped
+  finger that lands while a touch doesn't act (dim, off, the glance, or
+  lit by an event nobody has answered yet) does only what the screen
+  policy makes of it (`ScreenPower::touch()`: it brightens a dim screen;
+  on an off one it does what **Touch when off** says, nothing by
+  default, a wake, or the glance; on the glance it shows it 10 s more; it
+  answers an event's wake): every event is dropped
   (the path the input lab's suspension takes; the recognisers keep
   following the finger) until no finger has been on the panel for 400 ms
   (`kQuietMs`, StripButtons' swipe bounce window: the panel loses a finger
@@ -2783,14 +3101,21 @@ layer is suspended).
   clicks on its lift, a tap and a fling are made there), and so is any
   other finger meanwhile: no tap, click, hold, volume repeat, swipe or
   tick. It is a hearing-safety rule: a press of B in a pocket, with the
-  speaker as the output, can't start music. Each wake logs `[screen] wake
-  by touch at x,y (raw)` (and the button, on the strip). A finger already
+  speaker as the output, can't start music. Each one logs where it landed
+  and what it did (and the button, on the strip): `[screen] wake by touch
+  at x,y (raw)`, `[screen] no wake by touch at x,y (raw): touch when off:
+  Nothing (swallowed until it lifts)`, `[screen] the glance by touch at
+  x,y (raw): off again in 10 s (swallowed until it lifts)`. A finger already
   resting on the panel as the screen dims is taken too (its glass touch
   ends with a Cancel), but isn't a wake. The scripted finger isn't a
-  finger for it: it acts in the dark (and lights the screen).
+  finger for it: it acts in the dark (and lights the screen; from the
+  glance its glass touches only open the whole screen, as `Ui::onEvent`
+  drops them there, while its strip presses, `uip`, reach `ButtonPolicy`
+  as from Off).
 - **The pocket rule** (`ScreenPower::unattended()`, `ButtonPolicy::
-  Transport::startRefused()`). After any wake from Off (a touch, the PWR
-  key, an event, or something that keeps it lit) nobody may be looking:
+  Transport::startRefused()`). After any wake from Off or the glance (a
+  touch, the PWR key, an event, or something that keeps it lit) nobody
+  may be looking (the glance itself is unattended: nothing on it acts):
   until a touch lands on the glass (or the PWR key on a screen kept lit, or
   the console), a B click that would start playing on the speaker does
   nothing but the inert buzz and a note, "Tap the screen first, then B
@@ -2837,14 +3162,22 @@ Queue, Dance and Output (with its Pair and About pages).
   counting after 15 s, `FingerActivity`, so a pocket's pressure can't keep
   it lit). The PWR key's short press (`ScreenPower::powerKey()`) turns a
   lit screen, bright or dim, off at once, a held one too (below; with
-  Never it is how the listener turns it off), and wakes an off one. On a
+  Never it is how the listener turns it off), and wakes an off one (from
+  the glance it opens the whole screen). On a
   screen something keeps lit (below) it stays on: the press only counts
   as input, deliberate (it answers a wake from Off nobody has answered,
   else the pocket rule ends), and logs `[screen] the power key: stays on`. A finger on
   the panel as it goes off is taken, as one resting as it dims. A touch
-  (glass or strip) on a screen that isn't bright
-  only wakes it (the input layer swallows the touch: "The screen's wake"
-  above). A wake from Off with no input after it goes off again 10 s
+  (glass or strip) on a dim screen only brightens it; on an off one it
+  does what **Touch when off** says (`ScreenPower::OffTouch`, the Output
+  tab's row, added later at the user's request): **Nothing**, the
+  default (no wake and no input: only the PWR key and the events below
+  light the screen), **Wake** (it wakes it and does nothing else, as
+  every touch did before) or **Track** (the glance, below: the playing
+  track for 10 s with nothing to tap; a touch on it, 10 s more). The
+  input layer swallows each ("The screen's wake" above). A wake from Off
+  by the PWR key or a touch, or from the glance by the PWR key, with no
+  input after it goes off again 10 s
   later, without the dim step (the pocket guard; not with Never). What
   needs the listener wakes it with the whole countdown: the headphones
   lost (the dialog), "Couldn't reach", a track that failed (their
@@ -2872,7 +3205,8 @@ Queue, Dance and Output (with its Pair and About pages).
   Pair screen's search stopped: the countdown again (dims in 19 s)`. One woken
   during it is held from the wake, except that a touch's or PWR's wake
   from Off keeps its pocket guard until input follows (for the idle
-  warning that wake is input, which ends the warning). `ScreenControl` alone switches the backlight, and the
+  warning that wake is input, which ends the warning); the glance is
+  never held, dimmed or kept by Never: 10 s from its last touch, then Off. `ScreenControl` alone switches the backlight, and the
   panel's sleep-in and sleep-out (under `LcdLock`, at least 120 ms apart;
   5 ms after a sleep-out before anything is drawn). Going
   off, the UI goes **dark** first (`Ui::setDark`): every `gfx` fill and
@@ -2885,19 +3219,57 @@ Queue, Dance and Output (with its Pair and About pages).
   its 5 ms, with the backlight still off, then the backlight. Nothing is
   drawn into the sleeping panel: on the device, pixels written in
   sleep-in landed garbled in its memory (rows shifted, colours
-  byte-swapped) and stayed so until drawn again. Each change logs
+  byte-swapped) and stayed so until drawn again. The glance
+  (`ScreenPower::Level::Glance`) is lit with the UI still dark under it,
+  and `ScreenControl::apply()` decides by what the panel and the UI show
+  now, never by the level before (one pass can change it twice): from
+  Off, the sleep-out, then `onGlance(true)` (`Ui::setGlance()` draws it
+  whole), then the backlight; to the whole screen (the PWR key, an
+  event, keepLit, the console), the backlight off, `onGlance(false)`,
+  `onDark(false)` (the UI drawn again), the backlight; to Off,
+  `onGlance(false)`, then the sleep-in. A glance the UI didn't draw
+  (refused, or no UI: no PSRAM) keeps the backlight off: the panel's
+  memory is stale. Each change logs
   `[screen] <from> -> <to> (<why>)`. The Bluetooth search rests at once
-  after its burst while the screen is off and nothing plays or waits,
-  unless the headphones dropped while listening (`BtSink::setQuiet()`). NVS namespace `screen`: `off_after`, `bright`.
+  after its burst while the screen is off (or the glance) and nothing
+  plays or waits,
+  unless the headphones dropped while listening (`BtSink::setQuiet()`). NVS namespace `screen`: `off_after`, `bright`, `touch_off` (schema 6).
 - **Frames.** Only what changed is redrawn (each page keeps what it drew and
   compares the one `AppState` snapshot the host fills per pass). Animation
-  (a moving list) is drawn on a **30 fps cap kept on deadlines**
-  (`FrameClock`: each frame due a period after the previous one's deadline,
-  so a late pass doesn't push the rest back; after a stall the cadence starts
-  over, no catch-up burst), with `ScrollGovernor` as the safety net (fewer
-  frames, or whole rows, when the decoder's buffer runs low). Everything is
-  drawn into a PSRAM sprite and pushed in pieces of at most 40 lines, each
-  under its own `LcdLock` (`ui/Gfx`).
+  is drawn on a **frame clock kept on deadlines** (`FrameClock`: each frame
+  due a period after the previous one's deadline, so a late pass doesn't
+  push the rest back; after a stall the cadence starts over, no catch-up
+  burst), with `ScrollGovernor` as the safety net (fewer frames, or whole
+  rows, when the decoder's buffer runs low). **A moving list's frames go by
+  the panel's scan** (0.14.0; `ui/PanelScan`, `lib/core/ScanSync`,
+  host-tested; [UI-SPIKE.md](UI-SPIKE.md), "Frames on the panel's scan"):
+  the Core2 doesn't wire the LCD's TE pin, but the ILI9342C says where its
+  scan is (Get_Scanline, 45h: 16 us a read), and the UI times four
+  refreshes when it starts (`[ui] panel scan: 244 lines a refresh, 13992 us
+  (71.5 Hz), row 0 at line 2: list frames follow it`). A move's bus hold
+  then starts in a window of the scan: just behind it at the first row of
+  the strip it rewrites (the bus is slower than the scan and stays behind),
+  with its address after the scan has left the band and before it is back,
+  so the scan never shows the move half done; every refresh may have its
+  frame (the clock's period is 10 ms there: it only keeps two frames out of
+  one refresh). A list moving by itself is drawn where it will be when the
+  frame shows, sleeps to its window and holds the bus at priority 3 (the
+  task table, above); a finger's frames poll for the window, so the frame
+  has the finger's latest place. A frame the loop comes too late for (a
+  decoder pass fell on its window), and the first one after a refresh that
+  had none, is drawn at once (a tear over the rows the scan had passed, for
+  that refresh; no frame waits out a window it missed). MEASURED on the
+  19,533-track card, a fling at the 2,000 px/s cap: 68-69 frames a second
+  with nothing playing, none more than 15.5 ms after the one before, the
+  address in the band for 4-9 frames of 205 (on the frame clock, `uiv0`:
+  2 in 3); with an MP3 playing 54-55 a second, 26-37 ms at the worst, 1 in
+  3 in the band (30 a second and a frame of 30-46 ms before 0.14.0). A
+  panel that doesn't answer
+  (`[ui] panel scan: not readable ...`) leaves the list on the clock, at 60
+  frames a second (30 until 0.14.0); so do a scrub's frames and full
+  redraws, always. Another page's animation (Now Playing while a finger
+  scrubs its seek bar) stays at 30 a second on the clock. Everything is drawn into a PSRAM sprite and pushed in
+  pieces of at most 40 lines, each under its own `LcdLock` (`ui/Gfx`).
 - **Navigation** (`NavModel`, host-tested): five tabs (Now Playing, Library,
   Queue, Dance, Output), a stack of pages each. A tab tap switches (the tab
   keeps its stack); a tap on the current tab takes it to its root (the Queue:
@@ -3023,7 +3395,13 @@ Queue, Dance and Output (with its Pair and About pages).
   row can stay up and show its new state, Now Playing's Shuffle, Repeat
   and Auto DJ) and a **dialog** (modal, the tab bar
   still works; optionally an icon, a live status line and a red primary
-  button) freeze the page under them; one that opens while a finger is
+  button, on the right or, the format's second question, the left; that
+  question's in the hold mode, answered only by a hand's finger the loop
+  saw on it for 2 s, `lib/core/HoldButton`, the buttons' hit areas
+  `lib/core/DialogLayout`;
+  which touch answers a dialog, `lib/core/DialogTouch`, host-tested, the
+  Dialog drawing what it says changed, that control alone)
+  freeze the page under them; one that opens while a finger is
   on the page (the headphones' drop dialog) ends that touch for the page (a
   Cancel), so its lift can't act or draw under it. When a toast goes, the
   header row it covered is drawn again (`Ui::uncover()`); a page with no
@@ -3061,8 +3439,11 @@ Queue, Dance and Output (with its Pair and About pages).
   opens goes, its Undo with it; one arriving while it is up covers its
   title row, and a Down there goes nowhere. A touch within 300 ms of its
   opening goes nowhere, as on a sheet. The Albums list opens it in the
-  Library's violet, counting albums; Auto DJ's page will in blue, counting
-  tracks (S5).
+  Library's violet, counting albums; Output > Auto DJ's Smart filters row
+  (`OutputPage`, a `FilterOwner` too) in blue, counting tracks, each tap
+  applied and saved through `UiHost::autoDjSetMoods()`, whose count the
+  editor shows; its close on a change settles it
+  (`UiHost::autoDjMoodSettled()`) and draws the page's rows again.
 - **Lists** (`ui/ListView`, with `ListLayout`, host-tested): virtualised rows
   (a source gives a count and a row renderer; standard pieces for 1- and
   2-line rows, the number column, a disc, a 40x40 thumbnail slot, a
@@ -3083,47 +3464,57 @@ Queue, Dance and Output (with its Pair and About pages).
   A drag on it scrubs (a haptic tick per new letter); the touch has no hold
   (`TouchRecognizer::noHold()`), so resting on it to read the letter and
   then sliding still scrubs. **A scrub's every position is a jump** (the
-  band drawn whole: 50-78 ms, 80-110 with an MP3 playing, and no touch
-  sampled meanwhile), so the band follows the finger at `ScrubPacer`'s
-  cadence (60 ms after the last band draw ended, or at once when the
-  finger has rested 40 ms) and **the rail alone follows the finger on
-  every frame between** (the thumb and its letter, a few ms, through the
-  scroll mapping). While a finger is on the rail the card worker is held
-  as for a moving list (`Ui::listMoving()`): no cover and no slice of the
-  walk or the scan reads the card under the scrub (on the user's
-  19,478-track card, 2026-10-30, the boot's walk and the covers ran under
-  every scrub, and the only moments a scrub counted as "moving" were the
-  passes between a position and its frame). MEASURED on that card with
-  the scripted finger (`uid300,80,300,230,3000`: the whole rail in 3 s,
-  695 artists, nothing playing): a band frame costs 48 ms (4 rows
-  rendered in 24.5 ms, the push 23 ms; 50-55 ms on the Albums list), so
-  the old way (`uir0`) drew 49 band frames, 15.4 a second, and the thumb
-  moved with them; paced (`uir1`) 21 band frames (6.6 a second) and 60
-  rail frames of 4.0 ms, the thumb at 19 a second. A scrub slow enough
-  to rest between positions (a pixel every 130 ms) draws the band for
-  every position, as before. Flings on the same lists: 30 fps, 2 ms a
-  frame. A tap on it opens the jump
+  band drawn whole: 35-50 ms, 80-100 with an MP3 playing), so under a
+  finger on the rail **the band is drawn a row a loop pass** (0.14.0,
+  `ListView::bandStep()`: the row's render and push, 8-15 ms, then the
+  loop's pass: the finger read, the thumb and its letter drawn where it is
+  now, only the rail's rows the thumb left and takes; then the next row),
+  and the next band starts when this one is done. While a finger is on the
+  rail the card worker is held as for a moving list (`Ui::listMoving()`):
+  no cover and no slice of the walk or the scan reads the card under the
+  scrub, and the play log's `WriteGate` holds its slot on the loop too (on
+  the user's 19,478-track card, 2026-10-30, the boot's walk and
+  the covers ran under every scrub, and the only moments a scrub counted
+  as "moving" were the passes between a position and its frame). MEASURED
+  on the 19,533-track card with the scripted finger
+  (`uid300,80,300,230,3000`: the whole rail in 3 s, 698 artists): 16 bands
+  a second with the loop held 11.5 ms at most and the thumb drawn 38 times
+  a second; with an MP3 playing 8.5 bands, 34-36 ms and 23 thumbs. (Until
+  0.14.0 a band was drawn in one go, 47 ms and 87 with the MP3, no touch
+  read meanwhile, and the next waited for `ScrubPacer`'s 60 ms: 6.6 bands
+  and 19 thumbs a second, 5.3 and 10 with the MP3. `uir0` still draws it
+  so.) A tap on it opens the jump
   grid (above). A
   press that only touches the list (a tap) doesn't hide it. **A move is
   drawn in steps of at most 84 lines a frame** (the hardware scroll's
   one-hold step, `ListLayout::stepToward()`): only flings were capped, so a
   finger faster than ~2,500 px/s made a frame move more than that, a full
   redraw of 50-78 ms (1 motion in 5 on the device). Now the list trails such
-  a finger by a frame or two (84 lines at 30 fps is 2,520 px/s) and catches
-  up as it slows; flings (2,000 px/s) are never held back, and jumps (a
-  scroll to a row, the rail, a page's first frame) still draw at once. The
-  rail and the scrollbar stay hidden until it has caught up. **The next
-  row is rendered ahead** (`ListView::renderAhead()`): the device showed
-  that the remaining long frames (35-90 ms, in most motions while an MP3
-  played) were not big steps but a single row's render (~5 ms) stretched
-  to 20-39 ms by the audio decoder, which runs above the loop, in the
-  middle of it. So between frames, while a list moves and the next frame
-  is at least 15 ms off, the row just past the edge it moves toward is
-  rendered into the spare slot (5 rows show at most, 6 slots); the frame
-  that brings it on screen only pushes it. Drags and flings then drew in
-  2-5 ms a frame on average, 10-25 ms at most; only very fast drags (over
-  ~3,000 px/s, two new rows in one frame) still have one frame of 35-55
-  ms. `ui` counts the rows rendered ahead. **What changes in place stays
+  a finger by a frame or two (84 lines a frame: 6,000 px/s at a frame a
+  refresh, 2,520 px/s at the 30 frames a second of before 0.14.0) and
+  catches up as it slows; flings (2,000 px/s) are never held back, and
+  jumps (a scroll to a row, the rail, a page's first frame) still draw at
+  once. The rail and the scrollbar stay hidden until it has caught up.
+  **The next row is rendered ahead** (`ListView::renderAhead()`): the
+  device showed that the remaining long frames (35-90 ms, in most motions
+  while an MP3 played) were not big steps but a single row's render
+  stretched to 20-39 ms by the audio decoder, which runs above the loop, in
+  the middle of it. So between frames, while a list moves and a row's time
+  (as the last ones took) is left before the next frame, the row just past
+  the edge it moves toward is rendered into the spare slot (5 rows show at
+  most, 6 slots), and from a fast step the row after it (in the slot of the
+  row leaving at the other edge, when none is spare); the frame that brings
+  it on screen only pushes it. **While the list rests, the row above the
+  band and the row below it** are rendered into its two spare slots
+  (`renderNeighbours()`, only while no cover is asked for or being made):
+  a swipe's first frame, which rendered a row or two itself (30-57 ms with
+  an MP3 playing), only pushes. Rows kept outside the band are forgotten
+  when a cover arrives or the playing track changes (they would hold the
+  placeholder, or the old mark). `ui` counts the rows rendered ahead.
+  **A row's text goes straight into its sprite** and **the sprites lie in
+  the PSRAM's fast half** (below: Text, and "The list's memory"): a row
+  renders in 3.0-3.4 ms (5.6 before 0.14.0), and a fling draws in 1-2 ms a
+  frame, 6-9 ms at most (23-31 ms with an MP3 playing). **What changes in place stays
   in place** (0.12.0, from the device's `ui` loop costs): a track change
   draws again only the rows on screen whose mark changes (the Library:
   usually none; the Queue: the one that played and the one that plays,
@@ -3142,7 +3533,9 @@ Queue, Dance and Output (with its Pair and About pages).
   or its header's pill (58 ms), a dialog's button (44 ms); each is drawn
   again over the panel sprite as last rendered (rendered whole first when
   another overlay drew in it since) and pushed by itself
-  (`gfx::pushRect()`). And **the band keeps its scroll mode under Now
+  (`gfx::pushRect()`). The hold mode's button goes the same way: its fill
+  as it grows and its emptying, and a press cut short the hint's row too,
+  so the panel always holds what the screen shows. And **the band keeps its scroll mode under Now
   Playing and the Dance tab** (`Ui::ensureScroller()`): their drawing goes
   through the same mapping as an overlay's (the dancer's box too,
   `DanceView::pushRect()`), so a switch from a list page neither clears
@@ -3183,7 +3576,37 @@ Queue, Dance and Output (with its Pair and About pages).
   descent, taking rows from their marks and the gaps around them, never
   from the letter: the rows stay 19, 17, 19 and 27 px high, as with Latin
   alone (a host test checks M5GFX's rule on the arrays). M5GFX keeps 9 B a
-  glyph of tables in PSRAM (26 KB for the four).
+  glyph of tables in PSRAM (26 KB for the four; loaded first thing in
+  `setup()`, so they lie in its fast lower half: "The list's memory",
+  below).
+  - **A line into a sprite is written by the firmware** (0.14.0,
+    `Fonts::drawFast()`): M5GFX paints a VLW glyph with a `writeFillRect()`
+    a run, one for each row of its cell's background and one for each
+    anti-aliased pixel, through the sprite's panel: some 94 us a glyph,
+    2.9 of a list row's 5.6 ms (MEASURED). A line of the font's own glyphs
+    with a background, into a 16-bit sprite, is instead blended straight
+    into the sprite's memory from the glyph's rows in flash, step for step
+    as `drawString()` and `VLWfont::drawChar()` paint it (the width, each
+    cell's fill, each pixel's blend, the clip rectangle), an ASCII glyph
+    found by its place in the font instead of a search of the glyph table:
+    541 us a line against 1,312. Anything else is M5GFX's as before: a
+    line with a glyph from the store (`drawMixed()`), one with no
+    background, the LCD itself, another colour depth. Console `uiBv` draws
+    the library's names both ways and compares the sprites' memory (7,047
+    lines on the 19,533-track card, 0 different); `uiBf0` turns the path
+    off.
+  - **The list's memory** (`ui/HotMem`): PSRAM from 0x3FA00000 up shares
+    core 1's cache with the code that runs there (RESAMPLER.md 10d), and a
+    list row is a 27 KB sprite the loop fills and draws on core 1. The
+    sprites used to be allocated when the UI starts, after the library: on
+    a big card (an index of 1.79 MB) they landed above the line (MEASURED:
+    0x3FAEC2B4 and up). So `setup()` reserves one block first, while the
+    lower 2 MB are free (212 KB: `[ui] list memory: 212032 B reserved at
+    0x3f802320, PSRAM, its lower 2 MB`), and the six row sprites, the rail
+    and the shared strip take their pixels from it: a row renders in 3.4 ms
+    there against 4.0 above the line (1.8 against 3.1 once its lines are
+    cached). The decoders' pinned block is allocated after it and stays in
+    the lower half (0x3F866120 on this unit).
   - **CJK and Hangul** come from a glyph store behind the fonts
     (`GlyphStore`, `CjkGlyphs16`: [I18N.md](I18N.md) phase 2): 10,557
     glyphs at 16 px, 4 bits a pixel, 1.05 MB of flash, read where they lie
@@ -3492,6 +3915,60 @@ Queue, Dance and Output (with its Pair and About pages).
     none has the plain line, in the same place, and nothing else moves. An
     inert bar never has bars. The bars appear when they arrive, with no
     animation, and a repaint draws them from `app/Waves`' record.
+- **The glance** (Output > Touch when off: Track, [ENERGY.md](ENERGY.md)
+  item 2; `Ui::setGlance()`): Now Playing, read-only, over the dark UI for
+  10 s after a touch on the off screen. It is `NowPlayingPage` in Glance
+  mode, a second instance the `Ui` owns beside the real page: never
+  `page_`, never given an event. Each branch that differs tests a const
+  `readOnly_` that is false for the real page, which draws and acts as it
+  did (Pages.h: anything that can be pressed checks `readOnly_`). What
+  the glance draws differently:
+  - the transport's strip (y 176-231) is one Small line centred on (160,
+    204) in 296 px (`uitext::kGlanceHintW`): "Power button for controls"
+    (`glance.hint`) in DIM, or in the idle power-off's last 30 s its
+    countdown in amber (`IdlePolicy::warnText()`, the toast's text, which
+    has a second room for it); no zones, no play disc, no spinner. It is
+    drawn whole, and again only when the countdown changes;
+  - the plain line has no rest knob (there is nothing to grab; the bars
+    have none at rest anyway);
+  - a play waiting for the headphones shows the artist and album rows,
+    not its buttons;
+  - nothing playing, or no card: the empty state in y 36-175 without its
+    buttons, the hint's line under it, then the background to y 239.
+
+  The top row, y 0-35, must not look like a tab bar: on the background
+  (no surface, no divider), only the Output cell's content at the tab
+  bar's pixels (the output's icon in its colour, the volume, the battery
+  with its low blink and charging colour), drawn by
+  `TabBar::updateGlance()` with the cell's own code, redrawn only when
+  one of those changes (never for the EQ bars), and leaving the real tab
+  bar invalid, so its next update draws it whole. `setGlance(true)`
+  (`ScreenControl::apply()`, after the sleep-out and before the
+  backlight) refuses, and says so, unless the UI is up, not suspended and
+  dark, and returns whether it drew (`[ui] glance: drawn in N ms`);
+  `setGlance(false)` draws nothing (the sleep-in, or the whole screen's
+  redraw, follows). Every glance draw goes through `drawGlance()`, which
+  lifts the dark gate and the toast's cover for its own draws only and
+  puts both back, as `Ui::identify()`'s banner does ("Host status"); it
+  draws through the list band's mapping. `Ui::loop`'s dark branch takes
+  in covers and waveforms and redraws what changed (Now Playing's own
+  diff: a new title, the cover, the waveform, the time once a second; no
+  frames), counted as the page's time (a slow pass names "the glance"). A
+  change of the hardware scroll's state, and `libraryChanged()` /
+  `libraryUpdating()` (whose `showTop()` can paint the Library's band and
+  reset the scroll registers in the dark, past the gate), draw it whole
+  again. `Ui::onEvent` returns at once while glancing: only the console's
+  scripted finger gets there (the latch swallows every real touch), and
+  its own wake opens the whole screen. `coversAllowed()` is true on the
+  glance, so its cover and waveform load (`CardTasks` runs its lit slices
+  for those 10 s). The PWR key gives `setDark(false)`'s `redrawAll()`,
+  the UI where it was: after a glance a list page's band and the Library's
+  status line are painted whole at once, under a modal too, so no glance
+  pixels show. `suspend()` ends it; `resume()` in the dark draws it whole
+  again if the policy still wants it. Its second cover sprite (98 x 98,
+  RGB565: 19,208 B of PSRAM) is made at its first `enter()` and kept
+  (never, if the choice is never Track). `ui` says `up, GLANCE (...)` and
+  what the glance shows.
 - **The Library** (spec §6.2, mockups 07-15, with the grafts): the root's
   header is the segmented control **Artists | Albums | Folders** (the root
   PageRef's id is the segment; each keeps its own scroll; the Library opens
@@ -3616,7 +4093,11 @@ Queue, Dance and Output (with its Pair and About pages).
   below), **Haptics** on/off (the
   input layer's saved setting), **Screen off after** and **Brightness**
   (the screen policy's; the value in a pill, a tap takes the next choice,
-  saved), **Turn off when idle** (the idle power-off's, the same way: 10 /
+  saved), **Touch when off** (the same way: Nothing, "the power button
+  wakes it" / Wake, "a tap wakes it" / Track, "a tap shows the track";
+  its icon the dark screen with a fingertip on its corner, a ring around
+  it when a touch there does something; from the next touch on an off
+  screen), **Turn off when idle** (the idle power-off's, the same way: 10 /
   20 / 60 min / Never, a power symbol), **CPU speed** (240 / 160 MHz, a
   chip, "Smoothest lists, dancing" / "Slower lists, saves a little"; a
   restart, asked first) and **Bluetooth power** (Low / Normal /
@@ -3681,8 +4162,8 @@ Queue, Dance and Output (with its Pair and About pages).
     and the status stay live. A value that can't sit beside its title
     (Match strictness's in de, es, it and pt) takes that line instead,
     dim or live (`uitext::autoDjSecondLine()`), so every language shows
-    it. Each change is saved at once (NVS `autodj`, schema 4) and applies
-    from the next pick. Switched on here with nothing queued and a usable
+    it. Each change is saved once the taps rest (NVS `autodj`, schema 4,
+    `app/NvsLater`) and applies from the next pick. Switched on here with nothing queued and a usable
     index: the toast "Auto DJ on: it follows the next track you play",
     and nothing starts.
   - **The empty states' button** (Now Playing's and the Queue's):
@@ -3716,17 +4197,31 @@ Queue, Dance and Output (with its Pair and About pages).
     (Follow the vibe) or "...: the first pick becomes the seed" (Stay on
     seed); "No Auto DJ index: picks are random", once a switch on or a
     boot (each Play is a session, so once a session would repeat it at
-    every album's end). A pick the queue refused says nothing. **They
-    wait while a toast with Undo is up** (`Ui::pendingNews_`: a pick
-    lands about half a second after a one-track Play starts, and would
-    take its Undo off the screen); the failure pause doesn't wait. A tap
-    on Undo, or Auto DJ switched off, drops what waits. When a pick takes
+    every album's end); under a mood filter, below those
+    (`NewsWatch`, docs/MOOD-FILTERS.md 4.5): "Only 37 tracks fit: they
+    will repeat" (amber, its count main.cpp's `fewCount()` of the view at
+    that moment), "Plays once, then the filters apply" and "No close
+    match: any track that fits". A pick the queue refused says nothing.
+    **They wait while a toast with Undo is up** (`Ui::djNews_`, an
+    `autodjview::NewsWait`, host-tested: a pick lands about half a second
+    after a one-track Play starts, and would take its Undo off the
+    screen); the failure pause doesn't wait. **All of them wait while the
+    mood filters' editor is up**, the failure pause too, and Auto DJ's
+    editor closed on a change drops the filter's own that waited (the
+    change says its own). What waited and the next take make one toast;
+    a Few or Jump it outranks waits for that toast to go, then shows. A
+    tap on Undo drops what waits but Few; Auto DJ switched off drops it
+    all. When a pick takes
     the listener's undo (`appendQuiet()`, above), main.cpp calls
     `Ui::queueUndoDropped()` and the Undo toast goes (`[ui] the Undo toast
     went: Auto DJ's pick took the undo`).
   - **UiHost's Auto DJ calls** (main.cpp's `MainUiHost`, into
     `app/AutoDj`): `autoDjSetOn()`, `autoDjSetMode()`, `autoDjSetFloor()`,
     `autoDjSetMatch()` (applied, saved, logged; true when changed);
+    `autoDjSetMoods(q)` (the same, returning the tracks that fit, counted
+    at once: the editor's count) and `autoDjMoodSettled()` (the editor
+    closed on a change: 1 to 50 fitting, or a queued pick outside it
+    that plays once, said);
     `autoDjStart()` (the button: `autodjview::Started` Played, NoTrack,
     NoIndex or Refused, Refused behind the fence or with no memory);
     `autoDjFromHere(track)` (false behind the fence or with no memory);
@@ -3857,8 +4352,11 @@ Queue, Dance and Output (with its Pair and About pages).
   and **no new job starts while a list moves**. **Its RAM:** a 7.5 KB stack in
   internal RAM (a task that reads the card or the flash can't have its
   stack in PSRAM), only while it lives: it is made for the first job and
-  ends after 3 s without one. It drives lgfx_tjpgd itself with its 3.9 KB
-  work pool **in PSRAM** (M5GFX's `drawJpg()` mallocs it, in internal RAM:
+  ends after 3 s without one, or at once while the headphones' radio link
+  is being set up or a link waits for its AVRCP (the walk's paragraph in
+  [Library and queue](#library-and-queue)).
+  It drives lgfx_tjpgd itself with its 3.9 KB work pool **in PSRAM**
+  (M5GFX's `drawJpg()` mallocs it, in internal RAM:
   with Arduino's File buffers, the spike's 8.6 KB), and reads with POSIX
   calls (no stdio buffer); the JPEG is streamed (its header walked at
   offsets by `jpeg::parseFile()`, TJpgDec fed from a 16 KB buffer: it was
@@ -3920,8 +4418,15 @@ Queue, Dance and Output (with its Pair and About pages).
   picker, `uiT` decodes
   the covers again (their timings), `uiV` shows the volume HUD, `uir0` /
   `uir1` has the A-Z rail's scrub as before 0.12.0 (every position a band
-  draw at once, the card worker not held) or paced (`uir` says which: to
-  compare the two by hand), and
+  draw at once, the card worker not held) or a row a pass (`uir` says
+  which: to compare the two by hand), `uiv` says how a moving list's
+  frames go (the panel's scan as timed, the list's reserved memory, what a
+  pushed line and a row cost now; `uiv0` / `uiv1` take the frames off the
+  scan and back, to compare by eye, `uiv!` times the panel again),
+  `uif<ms>` sets the frame clock's period, `uiB` times the list shown (a
+  row sprite's fill, a row's render, the band in place, a move), `uiBv`
+  checks the sprites' fast text against M5GFX's and `uiBf0` / `uiBf1`
+  turns it off and on, and
   **`uiF<c/s/p/r/l/n/f/t/g/u/w>`** shows a faked state for screenshots of what a test
   can't safely cause (display only: the radio and the card are left
   alone): the Bluetooth card connecting, searching, pairing or resting, the
@@ -3942,7 +4447,9 @@ Queue, Dance and Output (with its Pair and About pages).
   card's again (`g0` or a new `g<n>` re-points it). The screenshot (`X`) reads the list band back through the scroll
   offset, as before. For tests without a hand on the device there is a
   **scripted finger** (`Input::simulate`, replacing the panel until it
-  lifts; a real touch cancels it): `uit<x>,<y>` a tap, `uih<x>,<y>` a long
+  lifts; a real touch cancels it; it does all a finger does but hold the
+  format's "Hold to erase" to its end, which only a hand does:
+  HOST-STATUS.md, "@format"): `uit<x>,<y>` a tap, `uih<x>,<y>` a long
   press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` a swipe that lifts at once (a fling
   when fast), `uid...` the same resting 150 ms before the lift (a drag),
   `uip<x>,<ms>` a press on the button strip (y 260) for ms. A y from 240
@@ -3951,11 +4458,15 @@ Queue, Dance and Output (with its Pair and About pages).
   ends there and presses nothing, and `uis160,265,160,100,120` is a swipe
   up from the strip that flings the list (`uid...` the same as a drag).
   Every list motion logs `[ui] scroll: <ms>, <frames> (<fps>), draw mean/max
-  (n over 35 ms), ring min, underruns +n, governor` when it settles (a scrub
+  (n over 35 ms), ring min, underruns +n, governor` when it settles, and
+  under it its moves against the panel's scan: `[ui] scroll moves: N in
+  their window on the panel's scan (n of them with a strip row early), N
+  late, N without the scan; the address a-b lines past the band (in the
+  band for n); the fling's frames N ms apart at most, n of m late` (a scrub
   of Now Playing's seek bar the same as `[ui] scrub: ...`; a finger on the
   A-Z rail, from its landing to the band's last catch-up, as `[ui] rail
-  scrub: <ms>, <band frames> (<a second>; draw mean/max, n over 35), <rail
-  frames> (mean/max), ...`), and a
+  scrub: <ms>, <band frames> (<a second>; a band mean/max), the loop held
+  N ms at most; the thumb drawn <n> times (<a second>), ...`), and a
   frame over 50 ms logs `[ui] slow frame` with its move and its renders; every touch logs
   `[touch] down/tap/long press/fling x,y (raw x,y)` (with `scripted` for
   the scripted finger's), every move of the queue's current entry
@@ -4083,12 +4594,14 @@ by itself, so the firmware doesn't set it (docs/ENERGY.md section 5, Audit
 2: measured).
 
 **The knobs** (each says what it was and what it is now, and is undone by
-its opposite; only `Pcb` is saved):
+its opposite; only `Pcb` and `Pst` are saved):
 
 | Command | What it switches | Notes |
 |---|---|---|
-| `Pb<0-255>` | backlight while the screen is bright (M5GFX: AXP192 DCDC3, 2.5-3.275 V) | the screen policy's Bright level until restart, `Pb0` the setting's (Medium, 100; M5GFX's own default was 127, 2.875 V); refused while dim or off; it still dims and goes off (Screen off after: Never holds it) |
-| `Ps` / `Ps0` / `Ps1` / `Psk` | the screen policy: its state / Off now / on / the PWR key's short press, as if pressed | Off is the policy's (backlight off, ILI9342C sleep-in, the UI draws nothing); a touch wakes it and does nothing else (`[screen] wake by touch at x,y (raw)`), and with no input after that it goes off again in 10 s (the pocket guard); off with nothing playing, the Bluetooth search rests after its burst (`setQuiet`) |
+| `Pb<0-255>` | backlight while the screen is bright (M5GFX: AXP192 DCDC3, 2.5-3.275 V) | the screen policy's Bright level until restart, `Pb0` the setting's (Medium, 100; M5GFX's own default was 127, 2.875 V); refused while dim, off or on the glance (one set before shows on it); it still dims and goes off (Screen off after: Never holds it) |
+| `Ps` / `Ps0` / `Ps1` / `Psk` | the screen policy: its state / Off now / on / the PWR key's short press, as if pressed | Off is the policy's (backlight off, ILI9342C sleep-in, the UI draws nothing); a touch then does what Touch when off says (by default nothing, `[screen] no wake by touch at x,y (raw): touch when off: Nothing ...`; Wake: it wakes it and does nothing else, `[screen] wake by touch at x,y (raw)`; Track: the glance), and after a wake by a touch or the PWR key, with no input after it, it goes off again in 10 s (the pocket guard); `Ps1` on the glance opens the whole screen; `Ps` names the choice (`touch when off: Nothing`) and the glance; off (or the glance) with nothing playing, the Bluetooth search rests after its burst (`setQuiet`) |
+| `Psf` | a real finger landing at 160,120, as the wake latch reports it | on a screen where a touch doesn't act (off, dim, the glance, an event's wake), what Touch when off and the level make of it, logged as a real one's (`[screen] the glance by touch at 160,120 (raw): off again in 10 s ...`); on a lit screen it says a touch acts there (`uit` taps it). The scripted finger (`uit`, `uis`, `uip`) bypasses the latch, so it can't show the choice: from Off or the glance it opens the whole screen (its strip presses still act, as from Off) |
+| `Pst0` / `Pst1` / `Pst2` | Touch when off: Nothing / Wake / Track (saved) | as the Output row: `[screen] touch when off: Nothing -> Track (saved once the taps rest)`; from the next touch on an off screen (during a glance, from the next touch on it) |
 | `Pc<mhz>` | CPU clock now | only 160 ↔ 80 (same 320 MHz PLL); 240 ↔ 160/80 retunes the BBPLL the Bluetooth radio runs from, refused. 80 not while audio runs, and back to 160 by itself when it starts |
 | `Pcb<mhz>` | CPU clock from boot (saved) | 160 or 240 (`Pcb0` the default, 240), set before Bluetooth starts; the Output tab's CPU speed is the same NVS value |
 | `Pt<min>,<max>` | Bluetooth BR/EDR TX power levels 0-7 (−12..+9 dBm) | a test until restart, not saved (the Output tab's Bluetooth power is the setting, default 0,5: −12..+3 dBm; a change there wins); `Pt` alone reports the setting too; from the next page, scan or connection (with a link up the line says "applies from the next connection": the link keeps its level; `Pt` alone reads back the controller's setting, the new range at once, not the link's level) |
@@ -4129,6 +4642,121 @@ their own (the player stopped first, so nothing follows them).
   libraries keep WiFi's optional IRAM code in flash
   ([SWAP-MODE.md](SWAP-MODE.md) section 5.2; section 6 ranks what to
   free next).
+- **malloc's internal limit is 4,095 B, not the core's 4,096**
+  (2026-11-19; main.cpp's `kMallocInternalMax`, set first thing in
+  `setup()`, logged after `[heap] boot` as `[heap] malloc: up to 4095 B
+  internal RAM first, larger PSRAM first`). The Arduino core sets
+  `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL` (4,096) before `setup()`; malloc,
+  `new`, calloc and realloc try internal RAM first up to the limit and
+  PSRAM first above it, each falling back to the other (heap_caps.c
+  `heap_caps_malloc_default()`). It is set only where the core set its own
+  (`CONFIG_SPIRAM_USE_MALLOC` without `CONFIG_ARDUINO_ISR_IRAM`, which
+  keeps malloc internal so IRAM interrupts may call it) and with PSRAM in
+  the heap (`heap_caps_get_total_size(MALLOC_CAP_SPIRAM)`: `psramFound()`
+  is only the chip found, and adding it to the heap can still fail); a
+  `static_assert` stops the build if the framework's limit isn't 4,096, as
+  the allocations between the two were never audited. One less moves every
+  allocation of exactly 4,096 B: the stdio buffer of every File (the
+  card's: FatFs's `st_blksize` is 0, so Arduino's VFS calls
+  `setvbuf(4096)`; the flash library's: newlib sizes it by LittleFS's
+  `st_blksize`, 4,096): the playing file's, the queue's save's,
+  library.idx's and the Opus cache's; and the response list of each
+  Bluedroid SDP search (`SDP_MAX_LIST_BYTE_COUNT`: the link's, AVRCP's
+  3.5 s after it, a pairing's). By code both can be live at the boot's
+  lowest internal RAM ([OPUS.md](OPUS.md) 2.1, "G5 since the card
+  worker"). MEASURED there: the dip's size at AVRCP's set-up (about
+  5.5 KB on main, about 3 KB with the limit: rd-g5-fix2, 2026-11-19) and
+  the MP3 play's (about 9 KB); and with the headphones in their case the
+  boot's lowest internal RAM rose 4.4 KB with the limit (`gs`: 59,408 B
+  since the boot on main, 63,768 B on the branch at a9c4636; 59,924 B and
+  64,264 B while a step ran; rd-bench-main2 and rd-bench-fix, 2026-11-19),
+  which fits the play file's one 4,112 B block. Code reading, unconfirmed
+  until the owed reading below: that the SDP list is still allocated at
+  the dip's bottom (it is freed with the SDP channel, perhaps before AVCTP
+  opens). `RingOutput`'s assert (under 4,096 B) keeps it internal.
+
+  **Its cost on the decode path.** Each refill (newlib's `__srefill`, a
+  4,096 B `f_read`) now fills the PSRAM buffer, the SD driver copying the
+  SPI FIFO by CPU (lib/SD `sd_diskio.cpp`: by code 128 cache lines written
+  at about 525 cycles each, RESAMPLER.md 10d, about 0.28 ms at 240 MHz,
+  under FatFs's volume lock and holding the SPI bus), and the decoder then
+  reads it out of PSRAM. MEASURED on the device (2026-11-19, the
+  headphones in their case, after the boot's walk, 240 MHz; `b` on main
+  89188f4's firmware, run rd-bench-main2, against the branch at a9c4636,
+  rd-bench-fix; two benches each), on two bench-only noise files outside
+  `/music`, never played: `/bench/ram/n320.mp3` (40 s of pink noise, MP3
+  320k CBR, 44.1 kHz) and `/bench/ram/n2496.flac` (30 s of white noise,
+  FLAC 24/96, 2.1 Mb/s):
+
+  | Bench | main (rd-bench-main2) | the limit (rd-bench-fix) |
+  |---|---|---|
+  | n320.mp3, 20.1 s decoded | 4.98 / 5.03 s (24.8 / 25.1 % of a core) | 5.13 / 5.10 s (25.6 / 25.4 %) |
+  | n2496.flac, decode only, 20.0 s | 7.47 / 7.35 s (37.3 / 36.7 %) | 8.24 / 7.97 s (41.2 / 39.8 %) |
+  | n2496.flac, decode + convert to 44.1 kHz | 14.22 / 14.22 s (71.1 / 71.0 %) | 14.77 / 14.77 s (73.8 / 73.8 %) |
+  | an MP3 of silence on the card, 20.1 s decoded (the control) | 1.86 s (9.3 %) | 1.85 s (9.2 %) |
+
+  The difference over the refills (the bytes read over 4,096): about
+  0.56 ms a refill on the MP3 (+0.11 s over 196), 0.54 ms on the FLAC
+  decoding (+0.69 s over 1,297), 0.42 ms with the converter (+0.55 s over
+  1,297): about 0.55 ms each, inside the 0.3-0.7 ms estimated before the
+  bench. In a core's share: +0.5 points on the MP3 320k, +3.5 decoding the
+  24/96 FLAC, +2.8 with the converter; a 16/44.1 FLAC (about 0.9 Mb/s,
+  about 550 refills in 20 s) about +1.5 points (PROJECTED from the
+  per-refill cost). 88.2 and 96 kHz don't play in the shipped build
+  (`MSTREAM_HIRES_RATES` 0): the 24/96 cost matters once hi-res is on. Of
+  the 0.42-0.56 ms a refill, the fill is what holds the volume lock and the
+  bus (by code about 0.3 ms, above; the rest is the decoder reading the
+  buffer out of PSRAM, outside both): the decoder's hold of them grows by
+  at most about 0.5 ms at each refill, about 0.3 ms of it by code
+  (DecodePass's 40 ms and G6 unchanged). The buffer lands
+  wherever the heap puts it, each open anew: the decode task runs on core
+  1, and from 0x3FA00000 up PSRAM shares core 1's cache with the decoder's
+  code (RESAMPLER.md 10d, `ui/HotMem.h`: why libmad's state is pinned
+  below it); where these benches' buffers landed wasn't recorded. If that
+  cost is too much (the owner's call), one 4 KB block pinned in the lower
+  2 MB for the play file (the option the limit was chosen over: a
+  play-file source on `cardfat::FatFile`) fixes the placement, the limit
+  kept for the rest.
+
+  **The audit** (2026-11-19, of what the image links: the project's
+  objects and every archive member the linker map names, disassembled with
+  their relocations, each constant followed into the allocator calls; the
+  sizes that vary, read by hand):
+
+  | Allocation of 4,096 B | In this image | In PSRAM |
+  |---|---|---|
+  | A File's stdio buffer: Arduino FS `VFSFileImpl`'s `setvbuf(f, NULL, _IOFBF, 4096)` on the card (vfs_api.cpp, a read and a write open: FatFs's `st_blksize` is 0); newlib's own on the flash library, sized by LittleFS's `st_blksize` (4,096; esp_littlefs `vfs_littlefs_fstat()`) | every File: the card's and the flash's | fine: tasks copy in and out; FatFs moves sectors over the SPI FIFO, as the walk's PSRAM FILs and the sector cache do already; a LittleFS whole-block read into it passes through `esp_flash_read()`'s temporary internal bounce buffer (it works, and the flash library isn't on G5's path) |
+  | Bluedroid's SDP response list (sdp_discovery.c `process_service_attr_rsp`, `process_service_search_attr_rsp`) | every SDP search | fine: parsed on the BTU task; Bluedroid's 4,112 B buffers are in PSRAM already |
+  | Bluedroid `bta_gattc_discover_pri_service`, `bta_hf_client_at_parse` | linked, never run (no GATT client, no HFP) | fine: task data |
+  | Arduino SD `sdcard_mount`'s `f_mkfs` work buffer (`FF_MAX_SS`) | only with `format_if_empty`, which LocalStorage never passes | fine: the SPI FIFO |
+  | The Bluetooth controller's OSI `_malloc` (IDF bt.c: plain `malloc`, called from libbtdm_app) | yes: `btdm_task_post()`'s copy of a posted message's parameter, its only caller (small control messages: the controller's init, enable and disable, Tx power, coexistence; HCI packets don't go this way) | fine: task context; the controller's DMA and interrupt memory comes from `_malloc_internal` (internal, DMA-capable by its caps) or its reserved exchange memory |
+  | FreeRTOS's timer task stack (`vApplicationGetTimerTaskMemory`) | yes | not moved: `pvPortMalloc()` asks for `MALLOC_CAP_INTERNAL`, as every task stack does |
+  | OTA's sector buffer (Arduino `Updater.cpp`, `EspClass::getSketchMD5()`; esp_ota_ops, esp_https_ota) | not linked (this firmware has no OTA) | would work: `esp_flash_write()` copies a buffer outside DRAM through a 32 B stack buffer, `esp_flash_read()` reads into one through an internal bounce buffer |
+  | WiFi, LWIP, wear levelling (`CONFIG_WL_SECTOR_SIZE` 4096) | not linked | - |
+  | `xRingbufferCreate()` storage (plain malloc) | `i2cSlaveInit()`, Bluedroid's SPP: linked, never called; the UART driver asks by caps (`xRingbufferCreateWithCaps`) | - |
+  | sizes that can come to 4,096: a FILE's own buffer (`st_blksize`), libFLAC's rice and residual arrays (partition order 10, a 1,024-sample block), Print, String and log buffers, vectors, Bluedroid's packets | yes | fine: task data (libFLAC's usual arrays, 16 KB at 4,096-sample blocks, are in PSRAM already) |
+
+  Nothing that needs internal RAM gets it from malloc's limit: a task
+  stack, a DMA buffer (the I2S driver's, `CONFIG_I2S_ISR_IRAM_SAFE`, by
+  its caps; the SPI master driver bounces one) and what an IRAM interrupt
+  touches are all asked for by caps. The linked M5GFX (0.2.30) has no
+  guard of its own: its SPI DMA sends whatever it is given (Bus_SPI.inl
+  `writeBytes()`). Today's calls are safe: a sprite asks for DMA only
+  through `SpriteBuffer::use_dma()`, which checks `heap_capable_dma()`
+  (SpriteBuffer.inl, LGFX_Sprite.hpp), `pushImage()` defaults to no DMA (a
+  write under 1 KB is copied into its DMA-capable flip buffer and sent
+  from there), and nothing in src/ calls `pushImageDMA()`. A future
+  `pushImageDMA()` or `writeImage(..., true)` from a plain-malloc buffer
+  of exactly 4,096 B would now send DMA from PSRAM, which the ESP32 can't:
+  such a buffer must come from `heap_caps_malloc(..., MALLOC_CAP_DMA)`.
+  ESP-IDF allows the limit anywhere from 0 to 131,072 (its own default
+  16,384), so its code can't count on it. Owed on the device: the play
+  file's internal RAM around its open (about 4.1 KB before, about 0
+  after), the bench on a real 16/44.1 FLAC and an Opus file before and
+  after, each with the play FILE's buffer address beside it
+  (`fp->_bf._base`, against 0x3FA00000), and a pairing from the Pair
+  screen. The console's bench is `b/path` (the rest of the line, spaces
+  kept; OPUS.md's `b</path>` is notation).
 - **The MP3 synth loop is pinned at the front of flash.** The same
   `tools/iram_diet.py` puts libmad's synthesis (`dct32`, `synth_full`,
   `mad_synth_frame_onens`), AudioGeneratorMP3's per-sample `GetOneSample`

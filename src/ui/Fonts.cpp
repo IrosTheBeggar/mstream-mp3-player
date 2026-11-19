@@ -67,7 +67,27 @@ const textink::Vlw& inkFont(Font f) {
   return fonts[i];
 }
 
+// Each loaded font's place for U+0021, when it has U+0021..U+007E in a row
+// (DejaVu's files do): an ASCII glyph is then found by its place, with no
+// search through the glyph table (which lies in PSRAM: nine probes, each a
+// cache line the row sprite's fill may just have evicted). Set by load().
+constexpr uint32_t kAsciiFirst = 0x21, kAsciiCount = 0x7F - 0x21;
+constexpr uint16_t kNoRun = 0xFFFF;
+struct AsciiRun {
+  const lgfx::VLWfont* font = nullptr;
+  uint16_t first = kNoRun;
+};
+AsciiRun asciiRuns[4];
+
 bool vlwHas(const lgfx::VLWfont& v, uint32_t cp, uint16_t* idx) {
+  if (cp - kAsciiFirst < kAsciiCount) {
+    for (const AsciiRun& r : asciiRuns) {
+      if (r.font != &v) continue;
+      if (r.first == kNoRun) break;
+      *idx = static_cast<uint16_t>(r.first + (cp - kAsciiFirst));
+      return true;
+    }
+  }
   return cp <= 0xFFFF && v.getUnicodeIndex(static_cast<uint16_t>(cp), idx);
 }
 
@@ -230,6 +250,17 @@ bool Fonts::load() {
     ok = slots_[i].font.loadFont(&slots_[i].data) && ok;
   }
   loaded_ = ok;
+  // Where each font keeps its ASCII glyphs (vlwHas()).
+  for (int i = 0; i < 4 && ok; ++i) {
+    const lgfx::VLWfont& v = slots_[i].font;
+    asciiRuns[i].font = &v;
+    asciiRuns[i].first = kNoRun;
+    uint16_t at = 0;
+    if (!v.getUnicodeIndex(kAsciiFirst, &at) || at + kAsciiCount > v.gCount) continue;
+    bool run = true;
+    for (uint32_t k = 0; k < kAsciiCount && run; ++k) run = v.gUnicode[at + k] == kAsciiFirst + k;
+    if (run) asciiRuns[i].first = at;
+  }
   return ok;
 }
 
@@ -336,8 +367,208 @@ __attribute__((noinline)) int Fonts::drawMixed(lgfx::LovyanGFX& g, Font f, const
   return pen - x0;
 }
 
-int Fonts::draw(lgfx::LovyanGFX& g, Font f, const char* text, size_t len, int x, int y, int maxW, uint16_t fg,
-                uint16_t bg, Align align) const {
+// ---- a Latin line straight into a 16-bit sprite's memory ----
+//
+// M5GFX paints a VLW glyph with a writeFillRect() a run: one for each row
+// of its cell's background, one for each anti-aliased pixel. Through the
+// sprite's panel that is some 100 us a glyph, and a list row's three lines
+// took 2.9 of its 5.6 ms (MEASURED, the Artists list, 240 MHz). drawFast()
+// writes the same pixels itself: the glyph's rows read where they lie in
+// flash, blended and stored straight into the sprite's memory.
+//
+// It is M5GFX's drawString() at a middle datum and VLWfont::drawChar() at
+// size 1 with a background (fore != back), step for step: the line's width
+// as LGFXBase::text_width() takes it, each glyph's cell filled where
+// drawChar() fills it (the rows above and below the glyph, then each of its
+// rows), each pixel blended as it blends (fore over back at 1 + coverage,
+// in RGB888, then the sprite's own conversion), the clip rectangle honoured
+// as writeFillRect() honours it. Console uiBv draws lines both ways and
+// compares the sprites' memory.
+
+namespace {
+
+// A 16-bit sprite's pixels (RGB565 with its bytes swapped, as the panel
+// keeps them) and its clip rectangle, both ends included.
+struct Pixels {
+  uint16_t* px;
+  int stride;
+  int left, top, right, bottom;
+};
+
+// LGFXBase::writeFillRect() on them.
+inline void fillPixels(const Pixels& t, int x, int y, int w, int h, uint16_t raw) {
+  if (x < t.left) {
+    w += x - t.left;
+    x = t.left;
+  }
+  if (w > t.right - x + 1) w = t.right - x + 1;
+  if (w < 1) return;
+  if (y < t.top) {
+    h += y - t.top;
+    y = t.top;
+  }
+  if (h > t.bottom - y + 1) h = t.bottom - y + 1;
+  if (h < 1) return;
+  uint16_t* row = t.px + y * t.stride + x;
+  do {
+    for (int i = 0; i < w; ++i) row[i] = raw;
+    row += t.stride;
+  } while (--h);
+}
+
+// The line's two colours and what lies between them: fore over back at
+// each coverage, made the first time a pixel asks (a line's glyphs share a
+// few dozen levels).
+struct Ink {
+  lgfx::color_conv_t* conv;
+  uint32_t fore, back;  // 0xRRGGBB
+  uint16_t foreRaw, backRaw;
+  uint16_t level[256];
+  uint32_t made[8];
+  uint16_t at(uint8_t a) {
+    uint32_t& word = made[a >> 5];
+    const uint32_t bit = 1u << (a & 31);
+    if (!(word & bit)) {
+      level[a] = static_cast<uint16_t>(conv->convert(blend(fore, back, a)));
+      word |= bit;
+    }
+    return level[a];
+  }
+};
+
+inline uint32_t be32(const uint8_t* p) {
+  return static_cast<uint32_t>(p[0]) << 24 | static_cast<uint32_t>(p[1]) << 16 | static_cast<uint32_t>(p[2]) << 8 | p[3];
+}
+
+// One glyph of `file` (the VLW font `v` was loaded from) at the pen, in the
+// line whose top row is `top`: VLWfont::drawChar() with a background at
+// size 1. Returns its advance.
+int blitGlyph(const Pixels& t, const lgfx::VLWfont& v, const uint8_t* file, uint32_t cp, int pen, int top, Ink& ink,
+              int32_t& filled) {
+  // Its record: 28 bytes of big-endian words (the code point, the height,
+  // the width, the advance, dY, dX, padding). A space only moves the pen
+  // (its cell is filled): drawChar() takes its advance and nothing else.
+  int32_t h = 0, w = 0, advance = v.spaceWidth, dY = 0, xo = 0;
+  const uint8_t* pixel = nullptr;
+  uint16_t idx = 0;
+  if (cp == 0x20) {
+    if (vlwHas(v, cp, &idx)) advance = static_cast<int32_t>(be32(file + 36 + idx * 28));
+  } else {
+    vlwHas(v, cp, &idx);  // (it has it: drawFast() looked)
+    const uint8_t* rec = file + 28 + idx * 28;
+    h = static_cast<int32_t>(be32(rec));
+    w = static_cast<int32_t>(be32(rec + 4));
+    advance = static_cast<int32_t>(be32(rec + 8));
+    dY = static_cast<int16_t>(be32(rec + 12));
+    xo = static_cast<int8_t>(be32(rec + 16));
+    pixel = file + v.gBitmap[idx];
+  }
+  const int yoff = static_cast<int>(v.maxAscent) - dY;
+  const int lineH = v.yAdvance;
+  const int left = std::max<int>(filled, pen + (xo < 0 ? xo : 0));
+  const int right = pen + std::max<int>(w + xo, advance);
+  filled = right;
+  const int gx = pen + xo;
+  int bx = gx, bw = w;
+  if (gx < t.left) {
+    bw += gx - t.left;
+    bx = t.left;
+  }
+  if (bw > t.right + 1 - bx) bw = t.right + 1 - bx;
+  if (bw < 0) return advance;
+  if (left < right) {
+    if (yoff > 0) fillPixels(t, left, top, right - left, yoff, ink.backRaw);
+    if (yoff + h < lineH) fillPixels(t, left, top + yoff + h, right - left, lineH - (yoff + h), ink.backRaw);
+  }
+  if (w <= 0) return advance;
+  // The glyph's columns inside the clip rectangle.
+  const int j0 = gx < t.left ? t.left - gx : 0;
+  const int j1 = gx + w - 1 > t.right ? t.right - gx + 1 : w;
+  for (int i = 0; i < h; ++i, pixel += w) {
+    const int y0 = yoff + i;
+    if (y0 > t.bottom - top) break;
+    if (left < right) fillPixels(t, left, top + y0, right - left, 1, ink.backRaw);
+    if (top + y0 < t.top) continue;
+    uint16_t* d = t.px + (top + y0) * t.stride + gx;
+    for (int j = j0; j < j1; ++j) {
+      const uint8_t a = pixel[j];
+      if (a == 0) continue;
+      d[j] = a == 0xFF ? ink.foreRaw : ink.at(a);
+    }
+  }
+  return advance;
+}
+
+bool fastText = true;
+uint32_t fastCount = 0;
+
+}  // namespace
+
+void Fonts::setFast(bool on) { fastText = on; }
+bool Fonts::fast() { return fastText; }
+uint32_t Fonts::fastLines() { return fastCount; }
+
+// Never inlined into draw(): its colours' table (Ink, 560 B) is on the
+// stack only while a line is drawn.
+__attribute__((noinline)) bool Fonts::drawFast(M5Canvas& c, Font f, const char* s, int x, int y, Align align,
+                                               int* drawn) const {
+  const lgfx::VLWfont* font = vlw(f);
+  if (!font) return false;
+  const lgfx::VLWfont& v = *font;
+  const lgfx::TextStyle& st = c.getTextStyle();
+  if (st.fore_rgb888 == st.back_rgb888 || st.size_x != 1.0f || st.size_y != 1.0f || !st.utf8 || st.padding_x != 0) {
+    return false;
+  }
+  if (c.getColorDepth() != lgfx::rgb565_2Byte || c.getRotation() != 0) return false;
+  auto* px = static_cast<uint16_t*>(c.getBuffer());
+  if (!px) return false;
+  // Every character one this path draws (one the font has, or a space), and
+  // the line's width as LGFXBase::text_width() takes it: to the last
+  // glyph's ink or advance, with the ink a first glyph has left of the pen
+  // (draw_string() starts the pen that far in).
+  int left = 0, right = 0, lead = 0;
+  bool first = true;
+  for (const char* p = s; *p;) {
+    const uint32_t cp = textfold::decode(p);
+    if (cp < 0x20 || cp == 0xFFFD || cp > 0xFFFF || (cp >= 0xFE00 && cp < 0xFE10)) return false;
+    int w = v.spaceWidth, adv = v.spaceWidth, xo = 0;
+    uint16_t idx = 0;
+    if (vlwHas(v, cp, &idx)) {
+      w = v.gWidth[idx], adv = v.gxAdvance[idx], xo = v.gdX[idx];
+    } else if (cp != 0x20) {
+      return false;
+    }
+    if (first && xo < 0) lead = -xo;
+    first = false;
+    if (left == 0 && right == 0 && xo < 0) left = right = -xo;
+    right = left + std::max(adv, w + xo);
+    left += adv;
+  }
+  const int x0 = align == Align::Right ? x - right : align == Align::Centre ? x - (right >> 1) : x;
+  const int top = y - (v.yAdvance >> 1);
+  int32_t cx, cy, cw, ch;
+  c.getClipRect(&cx, &cy, &cw, &ch);
+  const Pixels t{px, static_cast<int>(c.width()), cx, cy, cx + cw - 1, cy + ch - 1};
+  Ink ink;
+  ink.conv = c.getColorConverter();
+  ink.fore = st.fore_rgb888;
+  ink.back = st.back_rgb888;
+  ink.foreRaw = static_cast<uint16_t>(ink.conv->convert(st.fore_rgb888));
+  ink.backRaw = static_cast<uint16_t>(ink.conv->convert(st.back_rgb888));
+  memset(ink.made, 0, sizeof(ink.made));
+  const uint8_t* file = kSources[static_cast<int>(f)].data;
+  int32_t filled = 0;
+  int sum = lead;
+  for (const char* p = s; *p;) {
+    const uint32_t cp = textfold::decode(p);
+    sum += blitGlyph(t, v, file, cp, x0 + sum, top, ink, filled);
+  }
+  *drawn = sum;
+  return true;
+}
+
+int Fonts::drawOn(lgfx::LovyanGFX& g, M5Canvas* sprite, Font f, const char* text, size_t len, int x, int y, int maxW,
+                  uint16_t fg, uint16_t bg, Align align) const {
   char buf[200];
   g.setFont(get(f));
   if (loaded_) {
@@ -368,17 +599,39 @@ int Fonts::draw(lgfx::LovyanGFX& g, Font f, const char* text, size_t len, int x,
       if (!vlwHas(*v, textfold::decode(p), &idx)) return drawMixed(g, f, buf, x, y, align);
     }
   }
+  // Into a 16-bit sprite: straight into its memory (the same pixels).
+  int w = 0;
+  if (sprite && fastText && drawFast(*sprite, f, buf, x, y, align, &w)) {
+    ++fastCount;
+    g.setTextDatum(textdatum_t::top_left);  // (as drawString() below leaves it)
+    return w;
+  }
   g.setTextDatum(align == Align::Left ? textdatum_t::middle_left
                  : align == Align::Right ? textdatum_t::middle_right
                                          : textdatum_t::middle_center);
-  const int w = g.drawString(buf, x, y);
+  w = g.drawString(buf, x, y);
   g.setTextDatum(textdatum_t::top_left);
   return w;
 }
 
+int Fonts::draw(lgfx::LovyanGFX& g, Font f, const char* text, size_t len, int x, int y, int maxW, uint16_t fg,
+                uint16_t bg, Align align) const {
+  return drawOn(g, nullptr, f, text, len, x, y, maxW, fg, bg, align);
+}
+
 int Fonts::draw(lgfx::LovyanGFX& g, Font f, const char* text, int x, int y, int maxW, uint16_t fg, uint16_t bg,
                 Align align) const {
-  return draw(g, f, text, strlen(text), x, y, maxW, fg, bg, align);
+  return drawOn(g, nullptr, f, text, strlen(text), x, y, maxW, fg, bg, align);
+}
+
+int Fonts::draw(M5Canvas& c, Font f, const char* text, size_t len, int x, int y, int maxW, uint16_t fg, uint16_t bg,
+                Align align) const {
+  return drawOn(c, &c, f, text, len, x, y, maxW, fg, bg, align);
+}
+
+int Fonts::draw(M5Canvas& c, Font f, const char* text, int x, int y, int maxW, uint16_t fg, uint16_t bg,
+                Align align) const {
+  return drawOn(c, &c, f, text, strlen(text), x, y, maxW, fg, bg, align);
 }
 
 }  // namespace ui

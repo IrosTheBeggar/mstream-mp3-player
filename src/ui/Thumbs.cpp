@@ -544,6 +544,10 @@ bool Thumbs::wantsCover(uint32_t nowMs) const {
          static_cast<int32_t>(nowMs - retryAtMs_) >= 0;
 }
 
+bool Thumbs::idle() const {
+  return !ready_ || lent_ || (job_->state.load() == Idle && cache_.wanted() == 0 && cache_.making() == kNone);
+}
+
 bool Thumbs::startCover(CardWorker& worker, uint8_t priority, uint32_t nowMs) {
   if (!wantsCover(nowMs)) return false;
   uint32_t album;

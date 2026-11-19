@@ -24,6 +24,7 @@
 #include "app/UiLang.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
+#include "ui/HotMem.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
 
@@ -96,19 +97,32 @@ Ui::Ui(UiHost& host, Input& input, PlaybackController& player, QueueModel& queue
       queuePage_(*this),
       dancePage_(*this),
       outputPage_(*this),
+      glance_(*this, NowPlayingPage::Mode::Glance),
       thumbs_(library),
       waves_(library) {
   // The list's safety net (UI spike): fewer frames, or whole rows, while
   // the decoder's buffer runs low.
   ScrollGovernor::Config g;
-  g.normalFrameMs = 33;  // 30 fps
+  g.normalFrameMs = kPageFrameMs;  // (a list's own period: listFrameMs())
   g.reducedFrameMs = 66;
   governor_.setConfig(g);
+}
+
+// The frame clock's period while a list page is up and the governor has
+// nothing to say. On the panel's scan every refresh may have a frame (71.5
+// a second on the Core2): the clock only keeps two out of one refresh.
+// Without it, 60 a second on the clock's deadlines (30 until 0.14.0: at
+// 2,000 px/s a frame then pushed 67 lines and brought on a row and a half,
+// 20-45 ms with an MP3 playing; half of that a frame fits).
+uint32_t Ui::listFrameMs() const {
+  if (forcedFrameMs_) return forcedFrameMs_;
+  return scan_.ok() && list_.scanSync() ? kScanFrameMs : kListFrameMs;
 }
 
 bool Ui::begin() {
   Fonts& f = Fonts::instance();
   if (!f.load()) Serial.println("[ui] VLW fonts failed to load: the built-in bitmap fonts instead");
+  list_.setScan(&scan_);
   if (!gfx::begin() || !overlaysBegin() || !list_.begin(vscroll_, input_)) {
     Serial.println("[ui] no PSRAM for the UI's sprites");
     return false;
@@ -155,6 +169,9 @@ void Ui::start(uint32_t nowMs) {
   tabBar_.invalidate();
   tabBar_.update(tabState(nowMs));
   showTop();
+  // The panel's scan (awake since the boot screen): timed once, ~60 ms.
+  scan_.calibrate();
+  scan_.print();
   if (pickerDue_) {
     Serial.println("[ui] up: the first boot's language picker (then the touch check and the tips; console ui: the "
                    "navigation state)");
@@ -328,6 +345,91 @@ void Ui::retryCard() {
   warn(tr(uitext::cardMessage(state_.cardKind).still));
 }
 
+bool Ui::askFormat(bool fromComputer) {
+  if (!started_ || suspended_) return false;
+  if (formatAsking()) {
+    // Up already: it stays, and a computer that asks now hears the answer.
+    formatFromComputer_ = formatFromComputer_ || fromComputer;
+    return true;
+  }
+  host_.wakeScreen("the format's question");  // (the listener answers it)
+  host_.snapshot(state_);                     // the card in the slot now
+  const AppState& s = state_;
+  // A card that answered but holds nothing the player knows (blank, a FAT
+  // that didn't mount, unreadable): a computer's disk check first; erasing
+  // is the second, explicit step.
+  const bool damaged =
+      !s.card && (s.cardKind == cardformat::Kind::Other || s.cardKind == cardformat::Kind::Unreadable);
+  const S body = s.card ? (s.cardPlan ? S::format_plan_body : S::format_music_body)
+                 : damaged ? S::format_damaged_body
+                           : S::format_ask_body;
+  // (Format... on the right: formatask::kAskFormatButton.)
+  static_assert(formatask::kAskFormatButton == 1, "the first question's buttons: Cancel, Format...");
+  const char* const buttons[2] = {tr(S::dialog_cancel), tr(S::format_button)};
+  endPageTouch();
+  closeModal(true);
+  dialogOwner_ = this;
+  lostDialog_ = false;
+  playFailedDialog_ = false;
+  dialog_.open(tr(damaged ? S::format_damaged_title : S::format_ask_title), tr(body), buttons, 2, accent(),
+               /*danger=*/true);
+  ownDialog_ = OwnDialog::FormatAsk;
+  formatFromComputer_ = fromComputer;
+  formatQuestion_.end();
+  formatQuestion_.ask(nowMs_);
+  formatGone_ = nullptr;
+  applyCover();
+  Serial.printf("[ui] format: \"%s\" (%s; %s%s)\n", tr(damaged ? S::format_damaged_title : S::format_ask_title),
+                fromComputer ? "a computer's @format" : "Format... on the no-card page",
+                s.card ? "the card the player reads" : cardformat::name(s.cardKind),
+                s.cardPlan ? ", a transfer's plan on it" : "");
+  return true;
+}
+
+// The second question: "Erase the whole card?", "Hold to erase" (red) on
+// the left, where the first one's Cancel was, in the Dialog's hold mode:
+// it acts only when held 2 s, and its hint says so (format.hold_hint;
+// amber after a tap). Its clock (the minute, the settle) is already
+// running, from the tap that answered the first (formatAnswered()).
+void Ui::openFormatSure() {
+  char body[256];
+  trf(body, sizeof(body), S::format_sure_body, uistr::decimal(static_cast<double>(state_.cardBytes) / 1e9, 1));
+  static_assert(formatask::kSureFormatButton == 0, "the second question's buttons: Hold to erase, Cancel");
+  const char* const buttons[2] = {tr(S::format_sure_button), tr(S::dialog_cancel)};
+  dialogOwner_ = this;
+  dialog_.open(tr(S::format_sure_title), body, buttons, 2, accent(), /*danger=*/true,
+               /*primary=*/formatask::kSureFormatButton, tr(S::format_hold_hint));
+  ownDialog_ = OwnDialog::FormatSure;
+  formatGone_ = nullptr;
+  applyCover();
+}
+
+void Ui::formatAnswered(int button) {
+  // (What the step's button means, and the second step's clock from the
+  // answer's own time, the tap's: formatask, host-tested.)
+  const formatask::Answer answer = formatQuestion_.answered(button, dialogAnsweredMs_);
+  if (answer == formatask::Answer::Second) {
+    Serial.println("[ui] format: the first question answered Format...; the second");
+    openFormatSure();
+    return;
+  }
+  const bool fromComputer = formatFromComputer_;
+  formatFromComputer_ = false;
+  // (The second question's hold button: only its hold kept to the end
+  // gives it, the Dialog's hold mode; never a tap.)
+  if (answer == formatask::Answer::Format) {
+    if (host_.formatCard(fromComputer)) {
+      note(tr(S::format_restarting), 5000);
+    } else {
+      warn(tr(S::format_failed));  // (refused: the log says why; nothing was written)
+    }
+    return;
+  }
+  const char* how = formatGone_ ? formatGone_ : button >= 0 ? "Cancel" : "closed (a tab, or another dialog)";
+  formatGone_ = nullptr;
+  host_.formatDeclined(fromComputer, how);
+}
+
 void Ui::shuffleAll() {
   if (state_.libraryFenced) {  // the library update's fence: the index is the build's
     toast(tr(S::library_updating_wait), false);
@@ -415,23 +517,37 @@ void Ui::autoDjToast(const char* text, bool switchedOn) {
   undoSwitchesDjOff_ = switchedOn;
 }
 
-void Ui::autoDjNews(uint8_t news) {
+autodjview::NewsWait::Up Ui::djUp() const {
+  autodjview::NewsWait::Up up;
+  up.editor = filters_.up();
+  up.undo = toast_.up() && toast_.undo();
+  up.toast = toast_.up();
+  return up;
+}
+
+void Ui::autoDjNews(uint8_t news, uint32_t few) {
   // An Undo toast up (a Play's, the button's, "Auto DJ from here"'s): what
   // Auto DJ says waits until it goes, so its Undo stays offered for its 4
   // s (a pick lands half a second after a one-track Play starts). The
-  // failure pause, a note, at once.
-  if (!(news & autodjview::kNewsPaused) && toast_.up() && toast_.undo()) {
-    pendingNews_ = static_cast<uint8_t>(pendingNews_ | news);
-    return;
-  }
-  news = static_cast<uint8_t>(news | pendingNews_);
-  pendingNews_ = 0;
+  // failure pause, a note, at once. The mood filters' editor up: all of
+  // it waits, the failure pause too (MOOD-FILTERS.md 4.5): a toast would
+  // cover its title row, and the count it shows says the rest. What
+  // waited and this take make one toast; a Few or a Jump it outranks
+  // waits for it to go (autodjview::NewsWait), not lost.
   autodjview::Toast t;
-  if (!autodjview::newsToast(news, &t)) return;
+  if (!djNews_.take(news, djUp(), few, &t)) return;
+  // A count (Toast::count): its text says it, "Only 37 tracks fit: they
+  // will repeat"; the others are their message as it is.
+  char text[160];
+  const char* say = tr(t.text);
+  if (t.count) {
+    trnf(text, sizeof(text), t.text, t.count, t.count);
+    say = text;
+  }
   if (t.warn) {
-    warn(tr(t.text));
+    warn(say);
   } else {
-    toast(tr(t.text), false);
+    toast(say, false);
   }
 }
 
@@ -472,6 +588,13 @@ void Ui::showTop() {
   // The first frame at once, whatever the cadence: navigation should feel instant.
   if (page_->update(nowMs_, true, false)) clock_.drawn(nowMs_);
   if (!hud_.up()) tabBar_.update(tabState(nowMs_));
+  // Under the glance (a console tab change or browse, a library update's
+  // reset, in the dark: none wakes the screen), that first frame went past
+  // the gfx gate (a list pushes to the panel itself), and setListBand() may
+  // have filled the band and written the scroll registers: the glance whole
+  // again, at once, through the mapping as it is now. (resume() draws it
+  // itself: suspend() ended glancing_.)
+  if (glancing_) drawGlance(true);
 }
 
 void Ui::push(const NavModel::PageRef& p) {
@@ -613,6 +736,13 @@ void Ui::libraryChanged() {
   thumbs_.libraryChanged();
   resetLibraryTab();
   if (started_ && !suspended_ && list_.attached()) list_.reload();  // (the Queue's rows: new keys)
+  // Under the glance: its cover's album id is another's now. And with the
+  // Library tab on top, resetLibraryTab()'s showTop() drew the list's first
+  // frame at once, past the gfx gate (ListView pushes to the panel itself),
+  // and its band may have been set again (the scroll registers written):
+  // the glance whole again, through the mapping as it is now. (The list
+  // shows for that one band render, tens of ms.)
+  if (glancing_) drawGlance(true);
 }
 
 void Ui::libraryUpdating() {
@@ -623,6 +753,9 @@ void Ui::libraryUpdating() {
   host_.snapshot(state_);
   resetLibraryTab();
   if (started_ && !suspended_ && list_.attached()) list_.reload();
+  // (Under the glance, as libraryChanged(): the fence's placeholder cover,
+  // and the list frame showTop() drew over it.)
+  if (glancing_) drawGlance(true);
 }
 
 void Ui::browse(LibraryIndex* index) {
@@ -687,6 +820,13 @@ bool Ui::closeModal(bool notify) {
     const bool changed = filters_.changed();
     filters_.close();
     closed = true;
+    // Auto DJ's filter changed, its owner told: the filter's own news that
+    // waited under the editor are an older filter's (its few tracks, a
+    // jump); the change says its own, from its count (onFiltersClosed():
+    // AutoDj::moodSettled(), MOOD-FILTERS.md 4.5). The rest still waits
+    // for the next pass. (At a suspend() the owner isn't told: what waited
+    // stays, Few said by the count at the resume.)
+    if (notify && changed && owner && owner->filterScope() == filtergrid::Scope::Tracks) djNews_.filterChanged();
     Serial.printf("[ui] filters: the editor closed%s\n", changed ? ", the filter changed" : "");
     if (notify && owner) owner->onFiltersClosed(changed);
   }
@@ -826,14 +966,14 @@ void Ui::endPageTouch() {
 }
 
 void Ui::openSheet(OverlayOwner* owner, const char* title, const char* const* rows, int n,
-                   const char* const* details, int primary, int danger) {
+                   const char* const* details, int primary, int danger, const uint16_t* inks) {
   endPageTouch();
   closeModal(true);
   sheetOwner_ = owner;
   for (SheetFollow& f : sheetFollow_) f = SheetFollow::None;
   sheetStays_ = 0;
   sheetOpenedMs_ = millis();
-  sheet_.open(title, rows, n, accent(), details, primary, danger);
+  sheet_.open(title, rows, n, accent(), details, primary, danger, inks);
   applyCover();
   // A 4-row sheet would reach the header row: a toast up stays on top.
   if (toast_.up() && sheet_.top() < toast_.bottom()) toast_.draw();
@@ -847,19 +987,42 @@ void Ui::sheetStays(int row) {
   if (sheet_.up() && row >= 0 && row < Sheet::kMaxRows) sheetStays_ |= static_cast<uint8_t>(1u << row);
 }
 
+uint16_t Ui::autoDjDetail(char* buf, size_t size) const {
+  if (!buf || size == 0) return col::DIM;
+  char whole[96];
+  const autodjview::Ink ink = autodjview::sheetDetail(state_.autoDj, whole, sizeof(whole));
+  if (ink != autodjview::Ink::Accent) {
+    snprintf(buf, size, "%s", whole);
+    return ink == autodjview::Ink::Amber ? col::AMBER : col::DIM;
+  }
+  // What is set, cut with "…" where the label leaves off (frame dj-menu),
+  // so it stays beside it (Sheet::renderRow() puts a detail too wide there
+  // under the label, whole). English's "On · Relaxed · Instrumental" is
+  // 178 px of 213: whole (test_ui_library).
+  Fonts& f = Fonts::instance();
+  const int room = sheet::detailRoom(f.width(Font::Body, tr(S::now_playing_autodj)));
+  textfit::fit(f.fit(Font::Small), whole, std::strlen(whole), buf, size, room);
+  return accent();
+}
+
 void Ui::followSheet(int pressed) {
   if (!sheet_.up()) return;
   bool pressedDrawn = false;
   for (int i = 0; i < Sheet::kMaxRows; ++i) {
     const char* text = nullptr;
+    char dj[96];
+    uint16_t ink = col::DIM;
     switch (sheetFollow_[i]) {
       case SheetFollow::Sleep: text = state_.sleepRow; break;
       case SheetFollow::Shuffle: text = tr(state_.shuffle ? S::now_playing_on : S::now_playing_off); break;
       case SheetFollow::Repeat: text = tr(uitext::repeatMode(state_.repeat)); break;
-      case SheetFollow::AutoDj: text = tr(autodjview::rowText(autodjview::rowState(state_.autoDj))); break;
+      case SheetFollow::AutoDj:
+        ink = autoDjDetail(dj, sizeof(dj));
+        text = dj;
+        break;
       default: continue;
     }
-    if (sheet_.setDetail(i, text) && i == pressed) pressedDrawn = true;
+    if (sheet_.setDetail(i, text, ink) && i == pressed) pressedDrawn = true;
   }
   if (pressed >= 0 && !pressedDrawn) sheet_.drawRow(pressed);
 }
@@ -1154,6 +1317,10 @@ void Ui::updatePlayFailed() {
 void Ui::onDialog(int button) {
   const OwnDialog which = ownDialog_;
   ownDialog_ = OwnDialog::None;
+  if (which == OwnDialog::FormatAsk || which == OwnDialog::FormatSure) {
+    formatAnswered(button);
+    return;
+  }
   if (which == OwnDialog::PlayFailed) {
     if (button == 0) {
       Serial.println("[ui] play failed: play on the speaker");
@@ -1166,6 +1333,53 @@ void Ui::onDialog(int button) {
   }
   // headphonesLost()'s dialog: "Use speaker" moves the output (paused: B plays).
   if (which == OwnDialog::Lost && button == 0) host_.selectOutput(false);
+}
+
+void Ui::answerDialog(int button, bool held, uint32_t ms) {
+  dialogAnsweredMs_ = ms;
+  if (held) {
+    input_.holdTick();  // (the hold's end: the double tick)
+  } else {
+    tick();
+  }
+  OverlayOwner* owner = dialogOwner_;
+  dialog_.close();
+  lostDialog_ = false;
+  playFailedDialog_ = false;
+  repaintUnder();
+  if (owner) owner->onDialog(button);
+}
+
+void Ui::holdNews(HoldButton::News n) {
+  switch (n) {
+    case HoldButton::News::Began:
+      // The recogniser's own hold off for this touch: it stays a press while
+      // the finger rests, and says every move past its slop (the slide off).
+      input_.noHold();
+      Serial.println("[ui] format: Format pressed: held 2 s, it formats");
+      break;
+    case HoldButton::News::Short:
+    case HoldButton::News::Slid:
+      input_.missBuzz();  // (nothing happened: the hint, amber now, says how)
+      Serial.printf("[ui] format: Format %s after %lu ms: nothing formatted (the hint amber)\n",
+                    n == HoldButton::News::Short ? "let go" : "slid off",
+                    static_cast<unsigned long>(dialog_.holdLastMs()));
+      break;
+    case HoldButton::News::Dropped:
+      Serial.println("[ui] format: Format's hold dropped (the touch was cancelled): nothing formatted");
+      break;
+    case HoldButton::News::Stalled:
+      // The loop lost sight of the finger for longer than the hold allows
+      // (HoldButton::kGapMs): what it did meanwhile isn't known, so the
+      // time doesn't count. Held again, it starts from nothing.
+      input_.missBuzz();
+      Serial.printf("[ui] format: Format's hold dropped: the loop stalled %lu ms (the finger seen on it %lu ms before "
+                    "that): nothing formatted (the hint amber)\n",
+                    static_cast<unsigned long>(dialog_.holdGapMs()), static_cast<unsigned long>(dialog_.holdLastMs()));
+      break;
+    default:  // (never Confirmed: no event presses it, only the loop's pass)
+      break;
+  }
 }
 
 void Ui::volumeKeys() { volumeHudDue_ = true; }
@@ -1313,9 +1527,8 @@ tabbar::LabelFit Ui::tabLabelFit(int tab) const {
   return tabFits_[tab];
 }
 
-// A row renders in ~5 ms unhurried: renderAhead() only this far before a frame.
-static constexpr uint32_t kAheadMinMs = 15;
-// A frame longer than this missed the 30 fps cadence (counted per motion).
+// A frame longer than this is a hitch anyone sees (two refreshes and a
+// half; counted per motion: it was the 30 fps cadence missed, until 0.14.0).
 static constexpr uint32_t kSlowFrameUs = 35000;
 
 // A pass or an event longer than this is logged with its parts.
@@ -1350,7 +1563,8 @@ void Ui::loop(uint32_t nowMs) {
       c.thumbsMaxUs = std::max(c.thumbsMaxUs, thumbsUs);
       if (us > kSlowPassUs) {
         Serial.printf("[ui] slow pass %lu us on %s: %s %lu us, snapshot %lu, tab bar %lu, status %lu, covers %lu\n",
-                      (unsigned long)us, ui.page_ ? ui.page_->name() : "no page", frame ? "a frame" : "the page (no frame)",
+                      (unsigned long)us, ui.glancing_ ? "the glance" : ui.page_ ? ui.page_->name() : "no page",
+                      frame ? "a frame" : "the page (no frame)",
                       (unsigned long)pageUs, (unsigned long)snapshotUs, (unsigned long)tabUs, (unsigned long)statusUs,
                       (unsigned long)thumbsUs);
       }
@@ -1371,6 +1585,49 @@ void Ui::loop(uint32_t nowMs) {
   if (identifying_ && static_cast<int32_t>(nowMs - identifyUntilMs_) >= 0) {
     endIdentify();
     Serial.println("[ui] identify: over");
+  }
+  // The format's question, a pass in formatask::pass()'s order (tested on
+  // the host): unanswered for a minute, Cancel, the default (each of its
+  // steps; over a hold under way too); then the dialog's hold (the second
+  // question's), live only while the touch that began it is the dialog's
+  // (not one the dark, a banner or a screen took), its fill drawn as it
+  // grows; seen to its end, the hold button's answer. This is the one way
+  // to that answer (no event gives it, a lift least of all), and it takes
+  // this pass's own look at the panel (Input::finger(), `nowMs` its time):
+  // a hand's finger on the button now, 2 s after it landed, and never more
+  // than HoldButton::kGapMs between two looks that saw it there. A pass
+  // that comes later than that (the loop stalled: a card write, the
+  // display's bus) ends the hold instead, and the console's scripted
+  // finger, held to the end, presses nothing.
+  const bool dialogsTouch = touch_ == TouchOn::Dialog && !identifying_ && !dark_;
+  switch (formatask::pass(formatAsking(), formatQuestion_, dialog_, nowMs, dialogsTouch, input_.finger())) {
+    case formatask::Pass::Expired:
+      if (dialog_.holding()) Serial.println("[ui] format: the minute ran out while Format was held");
+      formatGone_ = "no answer in a minute";
+      closeModal(true);
+      repaintUnder();
+      break;
+    case formatask::Pass::Dropped:
+      Serial.println("[ui] format: Format's hold dropped (its touch was taken): nothing formatted");
+      break;
+    case formatask::Pass::Stalled:
+      holdNews(HoldButton::News::Stalled);
+      break;
+    case formatask::Pass::Slid:
+      holdNews(HoldButton::News::Slid);
+      break;
+    case formatask::Pass::Scripted:
+      // (docs/HOST-STATUS.md, "@format": a computer brings up the question
+      // and can tap it; the hold that erases is a hand's.)
+      Serial.println("[format] a scripted finger never erases a card: hold it by hand");
+      break;
+    case formatask::Pass::Confirmed:
+      touch_ = TouchOn::None;  // (the rest of that touch, its lift, goes nowhere)
+      Serial.printf("[ui] format: Format held %lu ms\n", static_cast<unsigned long>(dialog_.holdLastMs()));
+      answerDialog(dialog_.holdButton(), true, nowMs);
+      break;
+    default:
+      break;
   }
 
   updateHud(nowMs);
@@ -1448,9 +1705,10 @@ void Ui::loop(uint32_t nowMs) {
   }
   const bool toggled = undoWatch_.modeChanged();
   // What Auto DJ had to say while an Undo toast was up: now it has gone
-  // (moot if Auto DJ was switched off meanwhile).
-  if (pendingNews_ && !state_.autoDj.on) pendingNews_ = 0;
-  if (pendingNews_ && !(toast_.up() && toast_.undo())) autoDjNews(0);
+  // (moot if Auto DJ was switched off meanwhile). Nor while the mood
+  // filters' editor is up (MOOD-FILTERS.md 4.5). A Few or Jump the last
+  // one outranked: now that toast has gone.
+  if (djNews_.due(djUp(), state_.autoDj.on)) autoDjNews(0, autodjview::fewCount(state_.autoDj));
   // Tracks added: the Queue badge flashes (not for Auto DJ's own appends:
   // one each time the last track starts; the engine design's 2.14).
   const bool contentChanged = state_.contentVersion != lastContent_;
@@ -1463,15 +1721,25 @@ void Ui::loop(uint32_t nowMs) {
   if (dark_ || identifying_) {
     // The screen is off, or identify()'s banner covers it: nothing drawn
     // (the page, the tab bar, frames); what the cover worker made comes
-    // in, and no new job starts.
+    // in, and no new job starts. The glance over the dark UI: its own
+    // redraws only (what changed: the second, the track, a cover, the
+    // status), counted as the page's.
     if (dance_.active()) {
       dance_.setActive(false);  // (a console tab change while dark)
       danceWasOn_ = true;
     }
     // (A list's rows are rendered again on the wake, as when a modal goes:
     // the row that asked for this cover still holds the placeholder.)
-    if (thumbs_.loop(nowMs) != Thumbs::kNone) thumbsStale_ = true;
-    waves_.loop(nowMs);
+    const uint32_t arrived = thumbs_.loop(nowMs);
+    if (arrived != Thumbs::kNone) thumbsStale_ = true;
+    waves_.loop(nowMs);  // (first: a waveform read this pass is drawn this pass)
+    if (glancing_) {
+      const uint32_t t = micros();
+      // Whole when the scroll's mapping changed under it (a writer the gate
+      // doesn't stop: setListBand(), ensureScroller()); else what changed.
+      drawGlance(scrollSig() != glanceScroll_, arrived);
+      pageUs = micros() - t;
+    }
     return;
   }
   if (!hud_.up()) {
@@ -1482,18 +1750,38 @@ void Ui::loop(uint32_t nowMs) {
 
   // The page: redraws what changed, and animation frames on the cadence.
   budget_ = governor_.update(nowMs, state_.ringMs, state_.underruns, state_.ringMatters);
-  clock_.setPeriod(budget_.frameMs);
+  // (A list's frames have their own period; another page's animation, Now
+  // Playing's scrub, keeps the governor's 30 a second.)
+  clock_.setPeriod(budget_.level == ScrollGovernor::Level::Normal && list_.attached() ? listFrameMs() : budget_.frameMs);
   const bool due = budget_.draw && clock_.due(nowMs);
   const bool modal = modalUp();
   const uint32_t t0 = micros();
   frame = page_ && !modal && page_->update(nowMs, due, budget_.wholeRows);
   pageUs = micros() - t0;
-  if (frame) {
+  // A row of a scrub's band (the band is drawn a row a pass): no frame of
+  // the clock's, unless the thumb was drawn with it.
+  const ListView::FrameCost* cost = frame && list_.attached() ? &list_.lastFrame() : nullptr;
+  const bool piece = cost && cost->kind == ListView::FrameCost::Kind::Piece;
+  if (piece) {
+    const uint32_t us = micros() - t0;
+    if (cost->rail) clock_.drawn(nowMs);
+    if (motion_.on) {
+      if (cost->rail) ++motion_.thumbs;
+      if (us > motion_.heldMaxUs) motion_.heldMaxUs = us;
+    }
+  } else if (frame) {
     clock_.drawn(nowMs);
     ++frames_;
     ++framesInWindow_;
     if (motion_.on) {
-      const uint32_t us = micros() - t0;
+      uint32_t us = micros() - t0;
+      if (us > motion_.heldMaxUs) motion_.heldMaxUs = us;
+      if (cost && cost->waitUs < us) us -= cost->waitUs;  // (its work, not its wait for the panel's scan)
+      // A band drawn a row a pass: its time from its first row to its last.
+      if (cost && cost->kind == ListView::FrameCost::Kind::Band && cost->bandUs) {
+        us = cost->bandUs;
+        if (cost->rail) ++motion_.thumbs;
+      }
       if (list_.attached() && list_.lastFrame().kind == ListView::FrameCost::Kind::Rail) {
         // A scrub's frame of the rail alone (ScrubPacer): counted apart.
         ++motion_.railFrames;
@@ -1504,8 +1792,24 @@ void Ui::loop(uint32_t nowMs) {
         motion_.sumUs += us;
         if (us > motion_.maxUs) motion_.maxUs = us;
         if (us > kSlowFrameUs) ++motion_.slow;
+        // A fling's cadence: the time between its frames while every
+        // refresh moves it (over ~150 px/s: 2 px a frame).
+        const uint32_t at = micros();
+        const KineticScroll& k = list_.scroll();
+        if (list_.attached() && k.phase() == KineticScroll::Phase::Flinging && std::fabs(k.velocity()) > 150.0f) {
+          if (motion_.lastFrameUs) {
+            const uint32_t gap = at - motion_.lastFrameUs;
+            const uint32_t period = scan_.ok() && list_.scanSync() ? scan_.sync().panel().frameUs : clock_.period() * 1000;
+            ++motion_.gaps;
+            if (gap > motion_.gapMaxUs) motion_.gapMaxUs = gap;
+            if (gap > period + period / 2) ++motion_.gapsLate;
+          }
+          motion_.lastFrameUs = at;
+        } else {
+          motion_.lastFrameUs = 0;
+        }
       }
-      if (us > 50000 && list_.attached()) {
+      if (us > 50000 && list_.attached() && !(cost && cost->bandUs)) {  // (not a band drawn a row a pass)
         const ListView::FrameCost& fc = list_.lastFrame();
         Serial.printf("[ui] slow frame %lu us: offset %ld to %ld, %lu items rendered in %lu us\n", (unsigned long)us,
                       (long)fc.from, (long)fc.to, (unsigned long)fc.renders, (unsigned long)fc.renderUs);
@@ -1515,9 +1819,11 @@ void Ui::loop(uint32_t nowMs) {
   trackMotion(nowMs);
   // Between frames: the row the list moves toward, rendered ahead while
   // the next frame is far enough off (ListView::renderAhead).
-  if (page_ && !modal && list_.attached() && budget_.draw && page_->animating() &&
-      clock_.msUntilDue(millis()) >= kAheadMinMs) {
-    list_.renderAhead();
+  if (page_ && !modal && list_.attached() && budget_.draw && page_->animating()) {
+    list_.renderAhead(clock_.msUntilDue(millis()));
+  } else if (page_ && !modal && list_.attached() && !frame && thumbs_.idle()) {
+    // At rest: the rows just outside the band, for the next swipe's first frame.
+    list_.renderNeighbours();
   }
   // Covers: one that arrived is drawn where it shows (a modal's page draws
   // it all when the modal goes). New ones are the card worker's, never
@@ -1525,6 +1831,7 @@ void Ui::loop(uint32_t nowMs) {
   const uint32_t t1 = micros();
   const uint32_t arrived = thumbs_.loop(nowMs);
   if (arrived != Thumbs::kNone) {
+    if (list_.attached()) list_.forgetHidden();  // (a row rendered ahead holds the placeholder)
     if (page_ && !modalUp()) {
       page_->thumbReady(arrived);
     } else {
@@ -1561,6 +1868,7 @@ void Ui::trackMotion(uint32_t nowMs) {
   const bool moving = page_ && !modalUp() && (page_->animating() || rail);
   if (moving && !motion_.on) {
     motion_ = Motion{};
+    list_.takeScanStats();  // (counted from here)
     motion_.on = true;
     motion_.list = list_.attached();
     motion_.startMs = nowMs;
@@ -1578,13 +1886,21 @@ void Ui::trackMotion(uint32_t nowMs) {
   if (motion_.ringMin != UINT32_MAX) snprintf(ring, sizeof(ring), "%lu ms", (unsigned long)motion_.ringMin);
   const float meanMs = motion_.frames ? motion_.sumUs / 1000.0f / motion_.frames : 0.0f;
   if (motion_.rail) {
-    Serial.printf("[ui] rail scrub: %lu ms, %lu band frames (%.1f a second; draw mean %.1f max %.1f ms, %lu over 35), "
-                  "%lu rail frames (mean %.1f max %.1f ms), ring min %s, underruns +%lu, governor %s\n",
+    // The thumb: its own frames (uir0's pacing), and the ones drawn with a
+    // row of a band.
+    const uint32_t thumbs = motion_.railFrames + motion_.thumbs;
+    char alone[56] = "";
+    if (motion_.railFrames) {
+      snprintf(alone, sizeof(alone), "; alone mean %.1f max %.1f ms", motion_.railSumUs / 1000.0f / motion_.railFrames,
+               motion_.railMaxUs / 1000.0f);
+    }
+    Serial.printf("[ui] rail scrub: %lu ms, %lu band frames (%.1f a second; a band mean %.1f max %.1f ms), the loop "
+                  "held %.1f ms at most; the thumb drawn %lu times (%.1f a second%s), ring min %s, underruns +%lu, "
+                  "governor %s\n",
                   (unsigned long)ms, (unsigned long)motion_.frames, ms ? motion_.frames * 1000.0f / ms : 0.0f, meanMs,
-                  motion_.maxUs / 1000.0f, (unsigned long)motion_.slow, (unsigned long)motion_.railFrames,
-                  motion_.railFrames ? motion_.railSumUs / 1000.0f / motion_.railFrames : 0.0f,
-                  motion_.railMaxUs / 1000.0f, ring, (unsigned long)(state_.underruns - motion_.underruns),
-                  ScrollGovernor::name(budget_.level));
+                  motion_.maxUs / 1000.0f, motion_.heldMaxUs / 1000.0f, (unsigned long)thumbs,
+                  ms ? thumbs * 1000.0f / ms : 0.0f, alone, ring,
+                  (unsigned long)(state_.underruns - motion_.underruns), ScrollGovernor::name(budget_.level));
     return;
   }
   Serial.printf("[ui] %s: %lu ms, %lu frames (%.1f fps), draw mean %.1f max %.1f ms (%lu over 35), ring min %s, underruns +%lu, "
@@ -1592,6 +1908,19 @@ void Ui::trackMotion(uint32_t nowMs) {
                 motion_.list ? "scroll" : "scrub", (unsigned long)ms, (unsigned long)motion_.frames,
                 ms ? motion_.frames * 1000.0f / ms : 0.0f, meanMs, motion_.maxUs / 1000.0f, (unsigned long)motion_.slow, ring,
                 (unsigned long)(state_.underruns - motion_.underruns), ScrollGovernor::name(budget_.level));
+  if (!motion_.list) return;
+  // Its moves against the panel's scan, and a fling's cadence.
+  const ListView::ScanStats st = list_.takeScanStats();
+  if (st.frames + st.late + st.unsynced == 0) return;
+  char gaps[72] = "";
+  if (motion_.gaps) {
+    snprintf(gaps, sizeof(gaps), "; the fling's frames %.1f ms apart at most, %lu of %lu late", motion_.gapMaxUs / 1000.0f,
+             (unsigned long)motion_.gapsLate, (unsigned long)motion_.gaps);
+  }
+  Serial.printf("[ui] scroll moves: %lu in their window on the panel's scan (%lu of them with a strip row early), %lu "
+                "late, %lu without the scan; the address %d-%d lines past the band (in the band for %lu)%s\n",
+                (unsigned long)st.frames, (unsigned long)st.early, (unsigned long)st.late, (unsigned long)st.unsynced,
+                st.phaseMax >= 0 ? st.phaseMin : 0, st.phaseMax >= 0 ? st.phaseMax : 0, (unsigned long)st.inBand, gaps);
 }
 
 LibraryIndex::Span Ui::shownTracks() const {
@@ -1633,17 +1962,23 @@ void Ui::updateStatus(uint32_t nowMs) {
   if (h == statusHash_ || (statusHash_ != 0 && nowMs - statusAtMs_ < 500)) return;
   statusHash_ = h;
   statusAtMs_ = nowMs;
+  drawStatusLine(text);
+}
+
+void Ui::drawStatusLine(const char* text) {
   M5Canvas& c = gfx::strip();
   Fonts& f = Fonts::instance();
   c.fillRect(0, 0, kW, kStatusH, col::HEAD);
   c.drawFastHLine(0, 0, kW, col::DIV);
-  f.draw(c, Font::Small, text, 8, kStatusH / 2 + 1, uitext::kStatusW, col::DIM, col::HEAD);
+  if (text[0]) f.draw(c, Font::Small, text, 8, kStatusH / 2 + 1, uitext::kStatusW, col::DIM, col::HEAD);
   gfx::push(c, 0, kH - kStatusH, kW, kStatusH);
 }
 
 uint32_t Ui::idleMs(uint32_t nowMs) const {
-  if (dark_ && started_ && !suspended_) return 20;  // nothing to draw: touches read every 20 ms
+  // Nothing to draw (or the glance's seconds): touches read every 20 ms.
+  if (dark_ && started_ && !suspended_) return 20;
   if (!started_ || suspended_ || !page_ || !page_->animating()) return 5;
+  if (list_.bandUnderWay() && !modalUp()) return 1;  // a scrub's band: its next row at once
   return std::max<uint32_t>(1, std::min<uint32_t>(5, clock_.msUntilDue(nowMs)));
 }
 
@@ -1652,6 +1987,14 @@ uint32_t Ui::idleMs(uint32_t nowMs) const {
 void Ui::onEvent(const InputEvent& e) {
   using T = InputEvent::Type;
   if (!started_ || suspended_ || !e.isGlass()) return;
+  // The glance: nothing on it acts. Only the console's scripted finger gets
+  // here (the input layer swallows every real touch on the glance through
+  // its lift), and its own wake (Why::Console) opens the whole screen at
+  // this pass's end: the touch goes nowhere, and touch_ stays None, so its
+  // Tap or Release after the wake does nothing either. (On an off screen
+  // the scripted finger acts on the dark UI; on the glance it only opens
+  // it. Its strip presses aren't the UI's: ButtonPolicy has them.)
+  if (glancing_) return;
   // The event's cost (a tab's tap opens its page here: its header and
   // more), the longest kept for the console's ui, a slow one logged.
   struct Timed {
@@ -1691,6 +2034,8 @@ void Ui::onEvent(const InputEvent& e) {
   }
   if (e.type == T::Release && holdUnused_) {
     // Nothing held: a slow tap, if the finger is still where it pressed.
+    // (test_hold_button's Asker::pass() models this rule, and route()'s
+    // dialog touch below: keep them in step.)
     holdUnused_ = false;
     constexpr int kSlowTapSlop = 24;
     if (std::abs(e.x - hold_.x) <= kSlowTapSlop && std::abs(e.y - hold_.y) <= kSlowTapSlop) {
@@ -1714,6 +2059,12 @@ void Ui::route(const InputEvent& e) {
       // The fade toast's buttons, drawn over whatever is open (a sheet, the
       // volume sheet): the only controls that act on the timer, first.
       touch_ = TouchOn::Toast;
+    } else if (dialog_.up() && ownDialog_ == OwnDialog::FormatSure && !formatQuestion_.lands(e.ms)) {
+      // The format's second question: a touch this soon after it opened is
+      // the finger that answered the first (a double tap): it goes nowhere.
+      // (test_hold_button's Asker::route() models this: keep it in step.)
+      touch_ = TouchOn::None;
+      Serial.println("[ui] format: a touch right after the second question opened, ignored");
     } else if (dialog_.up()) {
       touch_ = TouchOn::Dialog;
     } else if ((sheet_.up() || sleepSheet_.up() || filters_.up()) &&
@@ -1776,15 +2127,11 @@ void Ui::route(const InputEvent& e) {
       break;
     case TouchOn::Dialog: {
       const int b = dialog_.onEvent(e);
-      if (b >= 0) {
-        tick();
-        OverlayOwner* owner = dialogOwner_;
-        dialog_.close();
-        lostDialog_ = false;
-        playFailedDialog_ = false;
-        repaintUnder();
-        if (owner) owner->onDialog(b);
-      }
+      const HoldButton::News n = dialog_.holdNews();
+      if (n != HoldButton::News::None) holdNews(n);
+      // (A tap's answer: never the hold button's, which no event gives,
+      // only the loop's pass that sees the hold to its end.)
+      if (b >= 0) answerDialog(b, false, e.ms);
       break;
     }
     case TouchOn::Sheet: {
@@ -1920,8 +2267,9 @@ void Ui::route(const InputEvent& e) {
                         back);
           // The Auto DJ button's or "Auto DJ from here"'s Play, which also
           // switched Auto DJ on: undone whole, Auto DJ off again. What
-          // Auto DJ had to say about that queue goes with it.
-          pendingNews_ = 0;
+          // Auto DJ had to say about that queue goes with it (a Few that
+          // waited stays: the filter's, said after this toast while on).
+          djNews_.undone();
           if (undone && undoSwitchesDjOff_) {
             Serial.println("[ui] undo: Auto DJ off again (the tap undone had switched it on)");
             host_.autoDjSetOn(false);
@@ -1956,10 +2304,16 @@ void Ui::suspend() {
   if (suspended_) return;
   suspended_ = true;
   identifying_ = false;  // (the screen that takes over draws its own)
+  glancing_ = false;     // (likewise; still wanted: resume() draws it again)
   // The screen that takes the display draws as ever (it keeps it lit).
   gfx::setDark(false);
   danceWasOn_ = false;  // its page is left below
   if (!started_) return;
+  if (formatAsking()) {
+    // (Not left up under it, unanswered: Cancel.)
+    formatGone_ = "another screen took the display";
+    closeModal(true);
+  }
   closeModal(false);
   if (coach_.up()) coach_.close();  // shown again at the next boot (not marked seen)
   toast_.hide();
@@ -1979,6 +2333,14 @@ void Ui::resume() {
   gfx::fill(0, 0, kW, kH, col::BG, true);
   tabBar_.invalidate();
   showTop();
+  // The glance still up (a console spike command ran under it, and took no
+  // screen of its own: a screen it took is lit, so the glance would have
+  // gone): drawn whole again over whatever the tool and showTop()'s list
+  // frame left, not left frozen for the rest of its 10 s.
+  if (glanceWanted_ && dark_) {
+    glancing_ = true;
+    drawGlance(true);
+  }
 }
 
 // ---- the screen off (ScreenPower) ----
@@ -2007,6 +2369,11 @@ void Ui::setDark(bool on) {
     return;
   }
   gfx::setDark(false);
+  // (ScreenControl ends the glance first, setGlance(false): this makes sure.
+  // From the glance, setDark(true) is nothing: the UI is dark already, so
+  // the way to off ends the glance itself, before the sleep-in.)
+  glancing_ = false;
+  glanceWanted_ = false;
   if (!started_ || suspended_) return;
   redrawAll();
 }
@@ -2033,7 +2400,24 @@ void Ui::redrawAll() {
     coach_.draw();
   } else if (page_) {
     page_->repaint();
+    // After a glance the panel's memory holds the glance, not this page's
+    // last frame: a list page's band can't wait for the next frame, nor for
+    // the modal over it to go (its glance pixels would show around a dialog,
+    // above a short sheet, and for a frame on every wake). Its band whole
+    // now, as showTop()'s first frame (the A-Z rail with it), before what
+    // is over it; and the Library's status line, which updateStatus() leaves
+    // alone under a modal (drawn again there once it may: statusHash_ 0).
+    // The filters' editor covers the content: nothing of it shows.
+    if (gramStale_ && list_.attached() && !filters_.up()) {
+      if (list_.update(nowMs_, true, false)) clock_.drawn(nowMs_);
+      if (statusBand_) {
+        char text[64] = "";
+        if (page_ == &libraryPage_ && !browse_) librarytext::statusText(state_.libraryStatus, text, sizeof(text));
+        drawStatusLine(text);
+      }
+    }
   }
+  gramStale_ = false;
   if (sheet_.up()) sheet_.draw();
   if (sleepSheet_.up()) sleepSheet_.draw();
   if (filters_.up()) filters_.draw();
@@ -2041,6 +2425,72 @@ void Ui::redrawAll() {
   if (dialog_.up()) dialog_.draw();
   if (toast_.up()) toast_.draw();
   Serial.printf("[ui] awake: drawn again in %lu ms\n", (unsigned long)(millis() - t0));
+}
+
+// ---- the glance ("Touch when off": Track) ----
+
+bool Ui::setGlance(bool on) {
+  if (!on) {
+    glanceWanted_ = false;
+    if (!glancing_) return false;
+    glancing_ = false;
+    glance_.leave();
+    Serial.printf("[ui] glance: over after %lu ms\n", (unsigned long)(nowMs_ - glanceSinceMs_));
+    return false;
+  }
+  if (!started_ || suspended_ || !dark_) {
+    // (Lit with nothing drawn, the panel would show its stale memory for 10
+    // s: ScreenControl keeps the backlight off instead.)
+    Serial.printf("[ui] glance: not drawn (%s)\n", !started_    ? "the UI isn't up"
+                                                   : suspended_ ? "another screen has the display"
+                                                                : "the UI isn't dark");
+    return false;
+  }
+  const uint32_t t0 = millis();
+  // A touch the dark UI still had (the console's scripted finger: it acts
+  // in the dark) ends, as when the screen went dark: nothing reaches it now.
+  endPageTouch();
+  touch_ = TouchOn::None;
+  holdUnused_ = false;
+  glancing_ = true;
+  glanceWanted_ = true;
+  gramStale_ = true;
+  glanceSinceMs_ = nowMs_;
+  // The panel keeps its scroll registers through sleep-in; sent again
+  // anyway (as redrawAll()).
+  if (vscroll_.active()) vscroll_.resend();
+  drawGlance(true);
+  Serial.printf("[ui] glance: drawn in %lu ms (the track; nothing on it acts)\n", (unsigned long)(millis() - t0));
+  return true;
+}
+
+void Ui::drawGlance(bool all, uint32_t arrived) {
+  // The glance draws all of y 0-239, the toast's rows (36-71) with the
+  // rest: a toast up in the dark stays unseen (redrawAll() brings it on the
+  // wake), so its cover goes for these draws (the page draws without
+  // `over`). The gate is lifted for them alone, as identify()'s banner:
+  // everything else the dark UI draws meanwhile still goes nowhere.
+  gfx::setCover(0, 0);
+  gfx::setDark(false);
+  tabBar_.updateGlance(tabState(nowMs_), all);
+  if (all) {
+    glance_.enter(glanceRef_);  // all of it (its 98 x 98 cover sprite made the first time)
+    glanceScroll_ = scrollSig();
+  } else {
+    glance_.update(nowMs_, false, false);
+    if (arrived != Thumbs::kNone) glance_.thumbReady(arrived);
+  }
+  gfx::setDark(dark_);
+  applyCover();
+}
+
+uint32_t Ui::scrollSig() const {
+  // (The UI's lists are the only scroller while it draws: a spike tool's
+  // suspends it.)
+  if (!vscroll_.active()) return 0;
+  const VScrollMap& m = vscroll_.map();
+  return 1u | static_cast<uint32_t>(ListScroller::activeVsp()) << 1 | static_cast<uint32_t>(m.top()) << 9 |
+         static_cast<uint32_t>(m.height()) << 17;
 }
 
 // ---- a computer's @identify ----
@@ -2189,10 +2639,11 @@ void Ui::drawHeader(const Header& h) {
 
 void Ui::printState() const {
   Serial.printf("[ui] %s; tab %s, page %s (depth %d)%s\n",
-                !started_    ? "not started"
-                : suspended_ ? "SUSPENDED (another screen has the display)"
-                : dark_      ? "up, DARK (the screen is off: nothing drawn)"
-                             : "up",
+                !started_             ? "not started"
+                : suspended_          ? "SUSPENDED (another screen has the display)"
+                : dark_ && glancing_  ? "up, GLANCE (the track over the dark UI: nothing on it acts)"
+                : dark_               ? "up, DARK (the screen is off: nothing drawn)"
+                                      : "up",
                 NavModel::name(nav_.tab()), pageKindName(nav_.top().kind), nav_.depth(),
                 vscroll_.active() ? ", hardware scroll on" : "");
   for (int t = 0; t < NavModel::kTabs; ++t) {
@@ -2212,6 +2663,11 @@ void Ui::printState() const {
     char desc[256];  // (Now Playing's with its seek bar: up to ~180)
     page_->describe(desc, sizeof(desc));
     Serial.printf("[ui] page: %s\n", desc);
+  }
+  if (glancing_) {
+    char desc[320];  // (the glance's line too)
+    glance_.describe(desc, sizeof(desc));
+    Serial.printf("[ui] glance: %s\n", desc);
   }
   if (list_.attached()) {
     Serial.printf("[ui] list: %lu rows, %lu items, offset %ld px, open row %ld, %s, %lu frames, %lu rows rendered ahead\n",
@@ -2295,7 +2751,9 @@ void Ui::languageCommand(const char* a) {
 // pass's time, the carve) and the editor; uiMa<hex> sets it (bare hex, as
 // gm<hex>: an invalid q refused), uiMa0 clears it, its pass logged with its
 // time as every pass is; uiMe opens the editor over the page shown, its
-// taps then the scripted finger's (docs/MOOD-FILTERS.md 9.3). Behind the
+// taps then the scripted finger's (docs/MOOD-FILTERS.md 9.3): the Albums
+// list's, or over Output > Auto DJ, Auto DJ's (as Smart filters' tap: on
+// a card with no mood data, its note instead). Behind the
 // library update's fence the index is the build's: uiMa and uiMe say so
 // and do nothing.
 void Ui::filtersCommand(const char* a) {
@@ -2304,6 +2762,12 @@ void Ui::filtersCommand(const char* a) {
     return;
   }
   if (a[0] == 'e' && !a[1]) {
+    if (page_ == &outputPage_ && outputPage_.onAutoDj()) {
+      // Over Output > Auto DJ: its editor, as Smart filters' tap opens it
+      // (or its note: no mood data).
+      outputPage_.editMoods();
+      return;
+    }
     libraryPage_.refreshFilter();  // (its albums, if the fence or a rebuild dropped them)
     openFilters(&libraryPage_);
     return;
@@ -2347,6 +2811,131 @@ void Ui::filtersCommand(const char* a) {
                 static_cast<unsigned>(filters_.word()), filters_.changed() ? ", changed since it opened" : "");
 }
 
+// uiBv: the sprites' fast text path (Fonts::drawFast()) against M5GFX's
+// drawString(): lines drawn both ways into two sprites whose memory is then
+// compared, byte for byte. The library's names (every `step`-th artist,
+// album and track title; 0: every artist and album, every 8th track), each
+// in a variant picked by its number (font, alignment, place, room,
+// colours), and a few made-up lines in every font and alignment.
+void Ui::verifyText(int step) {
+  M5Canvas a, b;
+  constexpr int kTw = 320, kTh = 40;
+  a.setPsram(true);
+  b.setPsram(true);
+  a.setColorDepth(16);
+  b.setColorDepth(16);
+  if (!a.createSprite(kTw, kTh) || !b.createSprite(kTw, kTh)) {
+    Serial.println("[ui] text check: no memory for two sprites");
+    return;
+  }
+  const bool was = Fonts::fast();
+  Fonts::setFast(true);
+  Fonts& f = Fonts::instance();
+  constexpr uint16_t kCanvas = 0x780F;
+  a.fillSprite(kCanvas);
+  b.fillSprite(kCanvas);
+  struct Pair {
+    uint16_t fg, bg;
+  };
+  static const Pair kPairs[] = {{col::TXT, col::BG},        {col::DIM, col::ROW_SEL},       {col::DARK, accent::Library},
+                                {accent::Queue, col::CARD}, {col::FAINT, col::SELECTED},    {col::TXT, kCanvas}};
+  static const Font kFonts[] = {Font::Body, Font::Small, Font::Bold, Font::Title};
+  static const Fonts::Align kAligns[] = {Fonts::Align::Left, Fonts::Align::Centre, Fonts::Align::Right};
+  // x, y, maxW: in a row; cut short; at the edges and past them.
+  struct Place {
+    int16_t x, y, maxW;
+  };
+  static const Place kPlaces[] = {{50, 13, 234},  {50, 31, 234}, {160, 20, 120}, {8, 20, 60},   {300, 20, 1000},
+                                  {-9, 20, 400},  {160, 2, 300}, {160, 38, 300}, {318, 20, 90}, {1, 20, 319}};
+  uint32_t lines = 0, bad = 0, fastUs = 0, slowUs = 0, notFast = 0;
+  auto one = [&](const char* text, size_t len, unsigned variant, bool all) {
+    const int nf = all ? 4 : 1, na = all ? 3 : 1;
+    for (int fi = 0; fi < nf; ++fi) {
+      for (int ai = 0; ai < na; ++ai) {
+        const Font font = all ? kFonts[fi] : kFonts[variant % 4];
+        const Fonts::Align align = all ? kAligns[ai] : kAligns[(variant / 4) % 3];
+        const Place& pl = kPlaces[(variant / 12 + fi + ai) % (sizeof(kPlaces) / sizeof(kPlaces[0]))];
+        const Pair& pr = kPairs[(variant / 5 + fi) % (sizeof(kPairs) / sizeof(kPairs[0]))];
+        // A clip rectangle now and then, as nothing in the UI sets one today.
+        const bool clip = variant % 7 == 3;
+        if (clip) {
+          a.setClipRect(40, 6, 200, 26);
+          b.setClipRect(40, 6, 200, 26);
+        }
+        uint32_t t = micros();
+        const int wa = f.draw(static_cast<lgfx::LovyanGFX&>(a), font, text, len, pl.x, pl.y, pl.maxW, pr.fg, pr.bg, align);
+        slowUs += micros() - t;
+        const uint32_t before = Fonts::fastLines();
+        t = micros();
+        const int wb = f.draw(b, font, text, len, pl.x, pl.y, pl.maxW, pr.fg, pr.bg, align);
+        fastUs += micros() - t;
+        if (Fonts::fastLines() == before) ++notFast;
+        if (clip) {
+          a.clearClipRect();
+          b.clearClipRect();
+        }
+        ++lines;
+        const auto* pa = static_cast<const uint16_t*>(a.getBuffer());
+        const auto* pb = static_cast<const uint16_t*>(b.getBuffer());
+        if (wa == wb && memcmp(pa, pb, kTw * kTh * 2) == 0) continue;
+        ++bad;
+        int at = 0;
+        while (at < kTw * kTh && pa[at] == pb[at]) ++at;
+        if (bad <= 12) {
+          Serial.printf("[ui] text check: DIFFERENT: \"%.*s\" font %d align %d at %d,%d room %d%s: widths %d / %d, first "
+                        "pixel %d,%d: %04X / %04X\n",
+                        static_cast<int>(len), text, static_cast<int>(font), static_cast<int>(align), pl.x, pl.y,
+                        pl.maxW, clip ? " clipped" : "", wa, wb, at % kTw, at / kTw, at < kTw * kTh ? pa[at] : 0,
+                        at < kTw * kTh ? pb[at] : 0);
+        }
+        memcpy(b.getBuffer(), a.getBuffer(), kTw * kTh * 2);  // level again
+      }
+    }
+  };
+  static const char* const kMade[] = {
+      "jam jar",          "The quick brown fox jumps over the lazy dog",
+      "!\"#$%&'()*+,-./0123456789:;<=>?@",                 "ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`",
+      "abcdefghijklmnopqrstuvwxyz{|}~",                    "  two  spaces  ",
+      "\xC3\x89milie Simon, V\xC3\xA9g\xC3\xA9tal",        "T\xE2\x80\x90Pain \xE2\x80\x99 \xE2\x80\xA6",
+      "\xC3\x85\xC3\x84\xC3\x96\xC3\x9C\xC3\x91\xC3\x87 \xC3\xA5\xC3\xA4\xC3\xB6\xC3\xBC\xC3\xB1\xC3\xA7",
+      "\xD0\x9C\xD1\x83\xD0\xB7\xD1\x8B\xD0\xBA\xD0\xB0",                                  // Cyrillic
+      "\xCE\x91\xCE\xB8\xCE\xAE\xCE\xBD\xCE\xB1",                                           // Greek
+      "f",                "W",              " ",              "06",          "3 albums \xC2\xB7 41 tracks",
+      "jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj",
+      "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E mixed",                                          // the store's (never fast)
+  };
+  unsigned v = 0;
+  for (const char* m : kMade) {
+    for (unsigned k = 0; k < 10; ++k) one(m, strlen(m), v++ * 12 + k * 12, true);
+  }
+  const uint32_t made = lines;
+  if (const LibraryIndex* i = browseIndex(); i && i->ready()) {
+    const uint32_t st = step > 0 ? static_cast<uint32_t>(step) : 1;
+    for (uint32_t k = 0; k < i->artistCount(); k += st) {
+      const char* n = i->artistName(k);
+      one(n, strlen(n), v++, false);
+      if ((k & 63) == 0) delay(1);
+    }
+    for (uint32_t k = 0; k < i->albumCount(); k += st) {
+      const char* n = i->albumName(k);
+      one(n, strlen(n), v++, false);
+      if ((k & 63) == 0) delay(1);
+    }
+    for (uint32_t k = 0; k < i->trackCount(); k += step > 0 ? st : 8) {
+      uint8_t len = 0;
+      const char* n = i->trackTitle(k, &len);
+      one(n, len, v++, false);
+      if ((k & 63) == 0) delay(1);
+    }
+  }
+  Fonts::setFast(was);
+  Serial.printf("[ui] text check: %lu lines drawn both ways (%lu made up, the rest the library's names), %lu "
+                "DIFFERENT; %lu not the fast path's (a glyph from the store); M5GFX %lu us a line, the fast path %lu "
+                "us\n",
+                (unsigned long)lines, (unsigned long)made, (unsigned long)bad, (unsigned long)notFast,
+                lines ? (unsigned long)(slowUs / lines) : 0UL, lines ? (unsigned long)(fastUs / lines) : 0UL);
+}
+
 void Ui::command(const char* a) {
   if (!a || !a[0]) {
     printState();
@@ -2370,6 +2959,42 @@ void Ui::command(const char* a) {
                   railHold_ ? "paced (the rail follows the finger on every frame, the band at ScrubPacer's cadence; "
                               "the card worker is held while a finger is on the rail)"
                             : "every position a band draw at once, the card worker not held (as before 0.12.0)");
+    return;
+  } else if (a[0] == 'B') {
+    // uiB: the list's bench (what a frame is made of); uiBv[step]: the
+    // sprites' fast text against M5GFX's, pixel for pixel; uiBf0 / uiBf1:
+    // that fast path off / on (uiB's rows and uiBv's times then compare).
+    if (a[1] == 'f') {
+      if (a[2] == '0' || a[2] == '1') Fonts::setFast(a[2] == '1');
+      Serial.printf("[ui] sprites' text: %s\n", Fonts::fast() ? "straight into their memory (the fast path)"
+                                                               : "by M5GFX (uiBf0: until uiBf1 or a restart)");
+      list_.refreshAll();
+    } else if (a[1] == 'v') {
+      verifyText(atoi(a + 2));
+    } else if (list_.attached()) {
+      list_.bench();
+    } else {
+      Serial.println("[ui] bench: no list page up (ui1, ui2 or ui4 first)");
+    }
+    return;
+  } else if (a[0] == 'v') {
+    // uiv: the panel's scan; uiv0 / uiv1: a moving list's frames ignore /
+    // follow it (to compare by eye); uiv!: timed again.
+    if (a[1] == '0' || a[1] == '1') list_.setScanSync(a[1] == '1');
+    if (a[1] == '!') scan_.calibrate();
+    scan_.print();
+    hotmem::print();
+    Serial.printf("[ui] list frames: %s; a pushed line %lu us, a row %lu us (as the last ones took)\n",
+                  !scan_.ok()          ? "on the frame clock (the scan can't be read)"
+                  : list_.scanSync()   ? "on the panel's scan"
+                                       : "on the frame clock (uiv0)",
+                  (unsigned long)list_.lineUs(), (unsigned long)list_.rowUs());
+    return;
+  } else if (a[0] == 'f') {
+    // uif<ms>: the frame clock's period for a moving list (uif: as it is by itself).
+    forcedFrameMs_ = static_cast<uint32_t>(atoi(a + 1));
+    Serial.printf("[ui] frame clock: %lu ms a frame while a list moves%s\n", (unsigned long)listFrameMs(),
+                  forcedFrameMs_ ? " (uif: as it is by itself)" : "");
     return;
   } else if (a[0] == 'b') {
     back();
@@ -2399,7 +3024,9 @@ void Ui::command(const char* a) {
                    "the tips: the next boot is a fresh unit's); uiP the first boot's language picker; uiT the covers "
                    "decoded again (timings); uil<n> the Library browses a synthetic library of n tracks (uil0: the "
                    "card's); uit/uih/uis/uid/uip a scripted finger; uiM the Albums list's mood filter (uiMa<hex> set "
-                   "it, uiMa0 clear it, uiMe the editor)");
+                   "it, uiMa0 clear it, uiMe the editor); uiv the panel's scan and the list's frames (uiv0 / uiv1 "
+                   "ignore / follow it, uiv! time it again), uif<ms> the frame clock's period; uiB the list's bench, "
+                   "uiBv the sprites' text checked against M5GFX's, uiBf0 / uiBf1 their fast text off / on");
     return;
   }
   printState();

@@ -57,23 +57,6 @@ void scaleOf(double first, double second, uint8_t* value, bool* secondOver) {
   *value = valueOf(*secondOver ? second : first);
 }
 
-// A filter as the field values each group holds for, a bit each, so one
-// word is a handful of shifts (count() runs it over every track). A scale
-// field is 0-7 (4 NULL); the voice is NULL<<2 | the instrumental bucket; a
-// tag is its bucket. An inactive filter's Test asks for no kAnalysed and
-// keeps every mask full, so it holds for every word (4.1).
-struct Test {
-  uint16_t analysed = kAnalysed;
-  uint8_t valence = 0xFF, energy = 0xFF, voice = 0xFF;
-  uint8_t acoustic = 0xF, party = 0xF, danceable = 0xF;
-
-  bool holds(uint16_t w) const {
-    return (w & analysed) == analysed && (valence >> ((w >> 11) & 7) & 1) && (energy >> ((w >> 8) & 7) & 1) &&
-           (voice >> (((w >> 12) & 4) | ((w >> 6) & 3)) & 1) && (acoustic >> ((w >> 4) & 3) & 1) &&
-           (party >> ((w >> 2) & 3) & 1) && (danceable >> (w & 3) & 1);
-  }
-};
-
 uint8_t atLeast(uint8_t need) { return static_cast<uint8_t>((0xFu << need) & 0xFu); }  // buckets >= need
 uint8_t below(uint8_t under) { return static_cast<uint8_t>((1u << under) - 1u); }       // buckets < under
 
@@ -86,7 +69,9 @@ uint8_t scaleMask(Scale s, Bars b) {
   }
 }
 
-Test testOf(const Filter& f) {
+}  // namespace
+
+Test Test::of(const Filter& f) {
   const Bars b = barsOf(f.level);
   Test t;
   if (!f.active()) {
@@ -102,8 +87,6 @@ Test testOf(const Filter& f) {
   if (f.tags & kDanceable) t.danceable = atLeast(b.need);
   return t;
 }
-
-}  // namespace
 
 bool Filter::active() const {
   return valence != Scale::Any || energy != Scale::Any || voice != Voice::Any || (tags & 7);
@@ -165,10 +148,10 @@ void tailOf(const double* scores, uint8_t out[8]) {
   out[kDanceableByte] = valueOf(scores[kHeadDanceable]);
 }
 
-bool matches(uint16_t word, const Filter& f) { return testOf(f).holds(word); }
+bool matches(uint16_t word, const Filter& f) { return Test::of(f).holds(word); }
 
 Tally tally(const uint16_t* words, const uint32_t* ids, uint32_t n, const Filter& f) {
-  const Test t = testOf(f);
+  const Test t = Test::of(f);
   Tally out;
   out.unfiltered = !f.active();
   for (uint32_t i = 0; i < n; ++i) {
@@ -181,7 +164,7 @@ Tally tally(const uint16_t* words, const uint32_t* ids, uint32_t n, const Filter
 }
 
 uint32_t count(const uint16_t* words, uint32_t n, const Filter& f, uint32_t* analysed) {
-  const Test t = testOf(f);
+  const Test t = Test::of(f);
   uint32_t pass = 0, seen = 0;
   for (uint32_t i = 0; i < n; ++i) {
     const uint16_t w = words[i];

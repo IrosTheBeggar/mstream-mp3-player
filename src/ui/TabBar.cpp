@@ -63,6 +63,35 @@ void drawBattery(M5Canvas& c, int x, int y, const tabbar::State& s, uint16_t bg)
          Fonts::Align::Centre);
 }
 
+// The icons' top in a cell: an inactive tab's (no label under it), the
+// active one's (its label under it).
+constexpr int kIconTop = 7, kIconTopLabelled = 3;
+
+// The Output cell's drawing, x from the cell's left: the output icon (in its
+// state's colour; `ink` for the speaker and the resting headphones) at
+// `iconTop`, the volume beside it in `volumeInk` on `plateBg` (the active
+// tab's plate, or what is behind the cell), and the battery right of the
+// plate on `barBg`. The tab bar's cell and the glance's top row
+// (updateGlance()) both draw it, so the glance shows the same status at
+// the same pixels.
+void drawOutput(M5Canvas& c, const tabbar::State& s, int iconTop, uint16_t ink, uint16_t volumeInk, uint16_t plateBg,
+                uint16_t barBg) {
+  const bool bt = s.output != tabbar::Output::Speaker;
+  const uint16_t oc = outputColour(s.output, ink);
+  const int ix = 6;  // the icon, then the volume beside it, both on the plate
+  icons::draw(c, bt ? icons::kHeadphones : icons::kSpeaker, ix, iconTop, oc);
+  if (s.output == tabbar::Output::BtLost) c.drawLine(ix, iconTop + 17, ix + 21, iconTop, col::RED);
+  if (s.output == tabbar::Output::BtConnecting) {
+    for (int i = 0; i < 3; ++i) c.fillRect(ix + 5 + i * 5, iconTop + 12, 2, 2, col::AMBER);
+  }
+  // The volume, beside the icon: part of the Output tab (a separate
+  // chip in the corner stole every tap meant for this tab).
+  char v[16];
+  trf(v, sizeof(v), uistr::S::format_percent, s.volume);
+  Fonts::instance().draw(c, Font::Small, v, tabbar::kVolumeX, iconTop + 9, tabbar::kVolumeW, volumeInk, plateBg);
+  drawBattery(c, tabbar::kBatteryX, 6, s, barBg);
+}
+
 }  // namespace
 
 void TabBar::drawCell(int t, const tabbar::State& s) {
@@ -91,7 +120,7 @@ void TabBar::drawCell(int t, const tabbar::State& s) {
   // Active: the icon moves up for its label (none when the label fits
   // nowhere: tabbar::labelFit()), and the accent underlines it.
   const bool labelled = active && s.label != tabbar::LabelFit::None;
-  const int iconTop = labelled ? 3 : 7;
+  const int iconTop = labelled ? kIconTopLabelled : kIconTop;
   const uint16_t ink = active ? acc : col::ICON;
   switch (tab) {
     case NavModel::Tab::NowPlaying:
@@ -124,23 +153,9 @@ void TabBar::drawCell(int t, const tabbar::State& s) {
     case NavModel::Tab::Dance:
       icons::drawCentred(c, icons::kCrab, cx, iconTop + 8, ink);
       break;
-    case NavModel::Tab::Output: {
-      const bool bt = s.output != tabbar::Output::Speaker;
-      const uint16_t oc = outputColour(s.output, ink);
-      const int ix = 6;  // the icon, then the volume beside it, both on the plate
-      icons::draw(c, bt ? icons::kHeadphones : icons::kSpeaker, ix, iconTop, oc);
-      if (s.output == tabbar::Output::BtLost) c.drawLine(ix, iconTop + 17, ix + 21, iconTop, col::RED);
-      if (s.output == tabbar::Output::BtConnecting) {
-        for (int i = 0; i < 3; ++i) c.fillRect(ix + 5 + i * 5, iconTop + 12, 2, 2, col::AMBER);
-      }
-      // The volume, beside the icon: part of the Output tab (a separate
-      // chip in the corner stole every tap meant for this tab).
-      char v[16];
-      trf(v, sizeof(v), uistr::S::format_percent, s.volume);
-      f.draw(c, Font::Small, v, tabbar::kVolumeX, iconTop + 9, tabbar::kVolumeW, active ? col::TXT : col::SOFT, bg);
-      drawBattery(c, tabbar::kBatteryX, 6, s, col::SURF);
+    case NavModel::Tab::Output:
+      drawOutput(c, s, iconTop, ink, active ? col::TXT : col::SOFT, bg, col::SURF);
       break;
-    }
   }
   if (labelled && s.label == tabbar::LabelFit::Spill) {
     // Wider than its plate (the Library's or the Queue's): centred over the
@@ -170,6 +185,24 @@ void TabBar::update(const tabbar::State& s) {
   }
   drawn_ = s;
   valid_ = true;
+}
+
+void TabBar::updateGlance(const tabbar::State& s, bool all) {
+  const tabbar::State g = tabbar::glanceOf(s);
+  // Left of the Output cell: the background only (the tabs aren't there).
+  if (all) gfx::fill(0, 0, tabbar::kOutputX, tabbar::kHeight, col::BG, true);
+  if (all || tabbar::glanceDirty(glanceDrawn_, g)) {
+    // The Output cell as an inactive tab draws it, on the background: no
+    // surface, no plate, no rule under it (104 x 36, ~1 ms).
+    M5Canvas& c = gfx::strip();
+    const int x0 = tabbar::kOutputX;
+    const int w = tabbar::cellX1(tabbar::kTabs - 1) - x0 + 1;
+    c.fillRect(0, 0, w, tabbar::kHeight, col::BG);
+    drawOutput(c, g, kIconTop, col::ICON, col::SOFT, col::BG, col::BG);
+    gfx::push(c, x0, 0, w, tabbar::kHeight, true);
+  }
+  glanceDrawn_ = g;
+  valid_ = false;  // (what the panel holds there isn't the bar's any more)
 }
 
 }  // namespace ui

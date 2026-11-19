@@ -45,6 +45,11 @@ struct InputEvent {
   // follow it (start the drag there: no jump), nothing may take it for a
   // press.
   bool fromStrip = false;
+  // Glass: the touch was the console's scripted finger's (ui/Input::
+  // simulate()), in part at least, not a hand's alone
+  // (TouchRecognizer::Sample::scripted): for what only a hand may do (the
+  // format's hold: HoldButton).
+  bool scripted = false;
   int16_t x = 0, y = 0;
   int16_t dx = 0, dy = 0;
   int16_t rawX = 0, rawY = 0;

@@ -114,7 +114,7 @@ bool PowerSettings::takeBootNote(char* buf, size_t size) {
 }
 
 void PowerSettings::restart() {
-  nvslater::flushNow();  // a setting changed moments ago, still queued
+  nvslater::flushNow();  // a setting changed moments ago (main.cpp's endInOrder() saved them before the plays)
   Serial.flush();
   // The panel shares SPI with the card: nothing half-sent to either (the
   // lock is never released: nothing else runs after this).

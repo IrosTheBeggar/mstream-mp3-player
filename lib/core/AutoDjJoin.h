@@ -8,6 +8,7 @@
 #include "CardAutoDj.h"
 #include "CardContainer.h"
 #include "LibraryIndex.h"
+#include "MoodFilter.h"
 
 // Auto DJ's join (docs/AUTODJ-INDEX.md 11.2; the engine design's 3.3): the
 // card's AutoDJ index, an open mpdj::Table, turned into this library's
@@ -139,6 +140,36 @@ inline uint16_t filterArtist(uint32_t f) { return static_cast<uint16_t>(f >> 16)
 // The word of a DJRF record's values (4.4), present clear.
 uint32_t filterWord(uint16_t bpm10, uint8_t camelot, uint8_t flags, uint32_t artistKey);
 
+// Auto DJ's mood filter over the library's words (docs/MOOD-FILTERS.md
+// 6.1): on() with words and an active filter, and then a row is a
+// candidate only when its track passes (the engine's runs hold no other).
+// Off (no mood data, no filter, a level alone): every track passes, and
+// the engine is as without one. The firmware's AutoDj sets it on its copy
+// of the maps; the join never does.
+struct MoodView {
+  const uint16_t* words = nullptr;  // LibraryIndex::moodWords(): a word per track id (null: no mood data)
+  uint32_t tracks = 0;              // ... how many
+  uint16_t q = 0;                   // the filter's 11 bits (5.4), as read: an invalid q is 0
+  moodfilter::Filter f;             // ... unpacked
+  // ... made ready once: passes() runs once a track in the scan and the
+  // passes by id (6.3), where matches() made it again each time. On the
+  // Core2 at 19,413 tracks a jump's pick took 29.5 ms that way, 11.7 ms
+  // this way, idle (MEASURED 2026-11-06, MOOD-FILTERS.md 9.8).
+  moodfilter::Test test;
+  bool active = false;  // f.active()
+  MoodView() = default;
+  MoodView(const uint16_t* w, uint32_t n, uint16_t bits)
+      : words(w),
+        tracks(n),
+        q(moodfilter::valid(bits) ? bits : 0),
+        f(moodfilter::Filter::unpack(bits)),
+        test(moodfilter::Test::of(f)),
+        active(f.active()) {}
+  bool on() const { return words && active; }
+  // A track with no word (beyond `tracks`) passes no active filter.
+  bool passes(uint32_t track) const { return !on() || (track < tracks && test.holds(words[track])); }
+};
+
 // The join's product. The coverage counts are in tracks, so the Auto DJ
 // page's "{mapped} of {tracks} tracks have neighbours" and "BPM {n}% · key
 // {n}%" (withBpm and withKey over mapped) share one denominator.
@@ -152,6 +183,7 @@ struct Maps {
   uint16_t* trackToRow = nullptr;  // kNoRow: no row (nullptr when tracks is 0)
   uint16_t* rowToTrack = nullptr;  // kNoTrack: no track (and filterPresent() false)
   uint32_t* filters = nullptr;     // filterWord()s, present set
+  MoodView mood;                   // off in the join's own; AutoDj::index() sets its copy's
 };
 
 // Sorts n (key, id) pairs, held in two parallel arrays, by key then id: a

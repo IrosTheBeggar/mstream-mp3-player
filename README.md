@@ -39,6 +39,12 @@ stops there (on battery it powers off after a minute).
   it doesn't recognise, such as a blank card).
 - Formatting erases the card: copy anything on it off first, and check
   the disk you pick is the card (by its size) before you erase.
+- Or let the player format it (since 0.14.0): a card it can't use offers
+  **Format...** beside Try again. It asks twice, restarts and formats the
+  card FAT32 on an MBR, with an empty `/music` (seconds on a small card, a
+  few minutes on a big one: a bar on the start-up screen). Everything on
+  the card goes, even what the player can't read; a card it can't read at
+  all is first sent to a computer's disk check.
 - Put the music under **`/music`**, e.g. `/music/Artist/Album/01 - Title.mp3`.
   An album's cover is the `cover.jpg` (or `folder.jpg`) next to its tracks.
 - The player reads the files' tags (ID3, FLAC and Opus comments) in the
@@ -143,7 +149,10 @@ a GPT card:
    device nearby with its kind and signal). The Core2 connects, moves the
    music to them and remembers them: after a drop or a restart it pages
    them (3 tries, then now and then, resting after 15 min), and they can
-   also reconnect by themselves whenever they wake up. Until some are
+   also reconnect by themselves whenever they wake up. When you ask for
+   them (Connect, a B hold, a play) it tries 8 times, about a minute:
+   headphones that are connected to a phone hardly listen for anyone
+   else, so disconnect them there first if you can. Until some are
    paired the Bluetooth card says "No headphones paired", and a B hold or a
    play on Bluetooth only points there.
 
@@ -226,9 +235,9 @@ still change). `tools/version.py` names every build from git
 |---|---|
 | From the tag | `v0.5.0` |
 | 3 commits past it, with uncommitted changes | `v0.5.0-3-gabc1234-dirty` |
-| No `v*` tag reachable (before the first release, or a clone without its tags: `git fetch --tags`) | `v0.13.0-dev+abc1234` (`-dirty` too) |
+| No `v*` tag reachable (before the first release, or a clone without its tags: `git fetch --tags`) | `v0.15.0-dev+abc1234` (`-dirty` too) |
 
-The `0.13.0` in the last one is `NEXT_RELEASE`, at the top of
+The `0.15.0` in the last one is `NEXT_RELEASE`, at the top of
 `tools/version.py`: the one place the next version is written. The date a
 build shows is its commit's, not the day it was built.
 
@@ -375,10 +384,37 @@ went) over the tab bar for a moment.
 **The power button** on the side: a short press turns the screen off at
 once, and the music plays on; another short press lights it again. (By
 itself the screen goes off after the time in **Screen off after**, on the
-Output tab.) The press doesn't turn it off while something keeps it lit,
-such as the start-up screen, the touch calibration, a pairing or a play
-waiting for the headphones. Held for about 4 s, the button turns the Core2
-off.
+Output tab, dimming for its last 10 s (from 7 s with 15 s); a touch on
+the dim screen brightens it.) The press doesn't turn it off while
+something keeps it lit, such as the start-up screen, the touch
+calibration, a pairing or a play waiting for the headphones. Held for
+about 4 s, the button turns the Core2 off.
+
+While the screen is off, a touch on it or on the three buttons does what
+**Touch when off** on the Output tab says:
+
+- **Nothing** (the default): nothing at all, so a pocket or a bag can't
+  light the screen or press anything: the power button turns it on.
+- **Wake**: the touch turns the screen on and does nothing else; the next
+  one acts.
+- **Track**: the touch shows what is playing for 10 s, on a screen with
+  nothing to tap: the cover, the title, the artist and the album, the
+  time, and the output, volume and battery at the top. Another touch shows
+  it 10 s more; the power button opens the whole screen with its
+  controls.
+
+Whichever you pick, the touch that finds the screen dim or dark presses
+nothing, and something that needs you (the headphones lost, a track that
+failed, USB plugged in or out) still turns the screen on by itself. After
+the screen comes on from dark (by the power button or a touch),
+play/pause won't start the music on the speaker until you have touched
+the screen itself ("Tap the screen first, then B plays"), so a pocket
+can't start it out loud; pausing, the volume and the headphones aren't
+affected. To pause without looking once the screen has gone dark, press
+the power button, then play/pause (with Wake: a touch, then play/pause).
+While it is still bright, play/pause pauses at once (on a dim screen the
+first press only brightens it): the power button would turn it off, and
+the press after it would then do nothing.
 
 **Gapless playback**: when a track ends by itself the next one starts on
 the very next sample, with no gap and no fade, so albums whose tracks run
@@ -463,7 +499,7 @@ pages do:
   Empty, it offers Open Library and Shuffle all (or Auto DJ: below).
 - **Dance**: the dancer (below).
 - **Output**: a card for the Bluetooth headphones (connected, with the
-  codec and delay; connecting, "try 2 of 3", with Cancel; failed, with Try
+  codec and delay; connecting, "try 2 of 8", with Cancel; failed, with Try
   again; Disconnect; Forget, which takes a second tap within 3 s, or,
   while connected, is in the "..." sheet and asks first) and one for the
   speaker; each shows its own volume (tap it for a slider). Tap a card to
@@ -481,7 +517,8 @@ pages do:
   starts another. Each search is in the serial log: every audio device
   it found, and at its end how many devices it saw. Then the line-out
   module's place (not fitted yet), **Auto DJ** (below), **Haptics**
-  on/off, **Screen off after**, **Brightness**, **Turn off when idle**, **CPU speed** (240 MHz, the default,
+  on/off, **Screen off after**, **Brightness**, **Touch when off**
+  (Nothing, Wake or Track: above), **Turn off when idle**, **CPU speed** (240 MHz, the default,
   is the smooth one; 160 MHz saves a little battery, but lists scroll at
   about half speed while music plays; it takes a restart, asked first: the
   music pauses, and after it waits at the same second until you play) and
@@ -512,7 +549,8 @@ again). With no microSD card (and no music on the flash), the pages say so
 and offer **Try again** (with a card in, the player restarts to use it);
 a card that is in but doesn't mount is named as what it is ("This card is
 exFAT", "This card is NTFS", "This card uses GPT", "Can't read this card"),
-with what to do ([The microSD card](#the-microsd-card)); a card without
+with what to do ([The microSD card](#the-microsd-card)) and **Format...**
+(the player formats it, after asking twice); a card without
 music offers the same, which looks through `/music` again.
 If the headphones drop out while playing, the music pauses (it never
 carries on out loud) and a message follows their reconnecting, with **Use
@@ -767,7 +805,11 @@ headphones (`@status`); counts the card's free space once when asked
 (`@count`, never while music plays, and FatFs keeps the count after it);
 and can light the screen with "This one" and the port's name for 5 s,
 with a buzz (`@identify COM5`), to tell two boards apart. Since 0.9.0;
-older firmware answers `@err 7 status`.
+older firmware answers `@err 7 status`. Since 0.14.0 it also reads and
+sets the board's clock (`@time`: the Core2's RTC, which dates the plays
+the player will log; `@status` says `clock=ok` or `unset`), and can put
+the question that formats the card on the board's screen (`@format`: only
+the listener's two answers there, a tap and a 2 s hold, format it).
 
 ![The crab over two beats, phase 0/8 to 7/8 of each](docs/img/crab-phases.png)
 
@@ -782,17 +824,17 @@ The serial console (115200 baud) is there for scripted testing:
 | `s` / `l` | stats / list the queue | `t<bpm>` | tempo prior for the dance (`t` clears) |
 | `f` | forget the paired headphones and restart | `y<ms>` | dance latency offset (not saved) |
 | `z` | silent test mode: speaker at volume 0, Bluetooth doesn't take over (until restart) | `k<n>` | freeze the dance pose, 0-15 (`k` unfreezes) |
-| `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag, `uip<x>,<ms>` a press on the button strip (y >= 240 is the strip in all of them); `uir0` / `uir1` the A-Z rail's scrub as before 0.12.0 (every position drawn at once, the card worker not held) / paced, to compare by hand (`uir` says which); `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uiM` the Albums list's mood filter ([docs/MOOD-FILTERS.md](docs/MOOD-FILTERS.md) 9.3: what is set, the albums it holds, the last pass's time, the editor), `uiMa<hex>` set it (bare hex, as `gm<hex>`: `uiMa127`; each pass logs its us), `uiMa0` clear it, `uiMe` open the editor (its taps then the scripted finger's; while the library updates both say so and do nothing); `uic` the coach cards, `uiL` the languages (`uiL<tag>` uses one, `uiL-` forgets it and the tips, `uiP` the first start's picker), `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/r/l/n/f/t/g/u/w>` show a faked Bluetooth (connecting, searching, pairing, resting, lost), no-card, exFAT-card, NTFS-card, GPT-card, can't-read-the-card or waiting-for-the-headphones state for screenshots, `uiF0` the real one; `uk1` the scripted finger on a skewed panel (the measured one's x), `uk2` the same with up to 4 px of jitter, `uk0` off: the touch check and the calibration run end to end without a hand |
+| `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag, `uip<x>,<ms>` a press on the button strip (y >= 240 is the strip in all of them); `uir0` / `uir1` the A-Z rail's scrub as before 0.12.0 (every position drawn at once, the card worker not held) / a row a loop pass, to compare by hand (`uir` says which); `uiv` how a moving list's frames go (the panel's scan as timed, the list's reserved memory; `uiv0` / `uiv1` take them off the scan and back, to compare by eye; `uiv!` times the panel again), `uif<ms>` the frame clock's period; `uiB` times the list shown (a row, the band, a move), `uiBv` checks the sprites' fast text against M5GFX's pixel for pixel, `uiBf0` / `uiBf1` turns that text off and on; `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uiM` the Albums list's mood filter ([docs/MOOD-FILTERS.md](docs/MOOD-FILTERS.md) 9.3: what is set, the albums it holds, the last pass's time, the editor), `uiMa<hex>` set it (bare hex, as `gm<hex>`: `uiMa127`; each pass logs its us), `uiMa0` clear it, `uiMe` open the editor (over Output > Auto DJ, Auto DJ's, as its Smart filters row's tap; its taps then the scripted finger's; while the library updates both say so and do nothing); `uic` the coach cards, `uiL` the languages (`uiL<tag>` uses one, `uiL-` forgets it and the tips, `uiP` the first start's picker), `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/r/l/n/f/t/g/u/w>` show a faked Bluetooth (connecting, searching, pairing, resting, lost), no-card, exFAT-card, NTFS-card, GPT-card, can't-read-the-card or waiting-for-the-headphones state for screenshots, `uiF0` the real one; `uk1` the scripted finger on a skewed panel (the measured one's x), `uk2` the same with up to 4 px of jitter, `uk0` off: the touch check and the calibration run end to end without a hand |
 | `m` | next dancer: crab (default) / stick figure | | |
 | `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | `q...` | the queue: `q` status, `qa` play everything, `qb` the built-in tracks, `ql` list albums, `qp<n>` / `qn<n>` / `q+<n>` album n: play / play next / add, `qr<n>` remove entry n, `qc` clear up next, `qx` clear, `qu` undo, `qs<sec>` start the current entry that far in, as a resume point would (`qs0` none), `qS` shuffle on/off (`qS0` / `qS1`), `qR` repeat off / all / one in turn (`qR0`-`qR2`) |
-| `L` | the partition table as flashed, the running app slot and the next, NVS use (the boot log has a `[flash]` line too) | `P...` | power measurement ([ARCHITECTURE.md](docs/ARCHITECTURE.md#power-measurement)): `P` a line (5 s of the power chip's readings: USB in, battery, the state), `Pl` one every 5 s, `Pw` to `/.player/power.csv`, `Pm<name>` a marker, `Pq1` the coulomb counter; A/B knobs (`P?`): backlight, screen off, CPU clock, Bluetooth TX power, 5 V boost, LED, IMU, speaker amp, loop delay, the dance tracker, the background reconnect; `Pz` plays an hour of silence |
+| `L` | the partition table as flashed, the running app slot and the next, NVS use (the boot log has a `[flash]` line too) | `P...` | power measurement ([ARCHITECTURE.md](docs/ARCHITECTURE.md#power-measurement)): `P` a line (5 s of the power chip's readings: USB in, battery, the state), `Pl` one every 5 s, `Pw` to `/.player/power.csv`, `Pm<name>` a marker, `Pq1` the coulomb counter; A/B knobs (`P?`): backlight, screen off (and Touch when off, a finger's landing on it), CPU clock, Bluetooth TX power, 5 V boost, LED, IMU, speaker amp, loop delay, the dance tracker, the background reconnect; `Pz` plays an hour of silence |
 | | | `R...` | the rate converter ([docs/RESAMPLER.md](docs/RESAMPLER.md)): `R` the current track's conversion (the exact ratio, source frames taken, ring frames made, clamped samples); `Rt` lists its test tracks (a 1 kHz tone and silence at other rates), `Rt<n>` or `Rt<tone:...@rate>` plays one on its own (the player is stopped first, keeping your place in the track: nothing follows it; only silence on Bluetooth, a tone only in silent mode `z`); `Rf</music/...>` plays a file on its own (silent mode only; `Rf48000</music/...>` converts it as if it were 48 kHz, a load test), `Rx` stops what `Rt` or `Rf` started; `Rb` its bench (the MAC16 kernel's self-test and route check, then 10 s of audio per rate with each kernel: cycles and share of a core at the clock running; 88.2/96 kHz too, though they don't play yet) |
 | | | `G...` | gapless playback ([docs/GAPLESS.md](docs/GAPLESS.md)): `G` its status (what the player says comes next, the join waiting to be heard, joins, cuts and failed opens since boot, the decoding track's LAME trim); `G0` / `G1` off / on (off: tracks end as before 0.6.0, for an A/B; RAM only); `Gt0` / `Gt1` trimming by the LAME tag off / on from the next track; `Gx<n>` the ring's cut against a reader on the other core (a stress test: stops the player, keeping your place) |
 | | | `O...` | Opus knobs for the device checks ([docs/OPUS.md](docs/OPUS.md); a file the library doesn't list plays by its path, `Rf</bench/opus/x.opus>` in silent mode, or benches by it, `b</bench/opus/x.opus>`): `O` status, `Ol` / `Oi` / `Oh` the decoder's state in the pinned PSRAM block / internal RAM / the PSRAM above 0x3FA00000 from the next open (an A/B of where it decodes fastest), `Ot1` / `Ot0` the rate converter's 7.6 KB table copy in a PSRAM block pinned next to it (the default: 7.6 KB of internal RAM stay free, for about 3 points of a core) / in internal RAM, from the next converted track |
 | | | `B...` | Bluetooth tests that leave your pairing alone: `B` status; `Bs` auto-pair by signal for the next scan (a device at -55 dBm or closer, whatever its name; RAM only, off at boot, logged; it starts that scan, with none remembered: `Bn` first), `Bs0` off; `Bf` the next boot as a fresh unit (a flag that boot clears: as if nothing were remembered and there were no `BT_SINK_NAME`, the stored address and the bond not read or touched; restarts now); `Bn` the same for this session (RAM only; not while linked or pairing), `Bn0` back |
-| | | `D...` | Auto DJ ([docs/AUTODJ.md](docs/AUTODJ.md)): `D` its status (the settings, the index or why there is none, the join, the session, the counters, the memory, the last pick's reads and time); `D0` / `D1` off / on; `Dm0` / `Dm1` Anchor: Follow the vibe / Stay on seed; `Df55`-`Df75` Match strictness, by 5; `Dt0` / `Dt1` BPM continuity off / on, `Dk0` / `Dk1` Harmonic mixing off / on (each saved, as the UI's); `Ds<hex>` the next session's seed (1-8 hex digits, for a reproducible run), `Dr` a new session now; `Dp` a pick appended now, whatever the trigger says (cued at a finished queue), with its decision; `Dn<k>` k dry-run picks (1-2,000) on a copy of the session, the live one untouched, `Db<n>` n slot reads of random rows (1-5,000), a bench, both one a loop pass, `Dx` stops either with its summary so far; `Dj` the join again (only while Auto DJ is on), `Dc` the index file closed and opened again (a new session; after a read of the card's root that failed, the root read again, the session kept unless it names otherwise than an earlier read did); `Dh` / `Dh<id>` Auto DJ from here on the current track or on library track id, `De` the empty states' Auto DJ button (both play, as `qp` does); `D?` the list. None touches the output or the volume |
+| | | `D...` | Auto DJ ([docs/AUTODJ.md](docs/AUTODJ.md)): `D` its status (the settings, the index or why there is none, the join, the session, the counters, the memory, the last pick's reads and time); `D0` / `D1` off / on; `Dm0` / `Dm1` Anchor: Follow the vibe / Stay on seed; `Df55`-`Df75` Match strictness, by 5; `Dt0` / `Dt1` BPM continuity off / on, `Dk0` / `Dk1` Harmonic mixing off / on (each saved, as the UI's); `Dq<hex>` the mood filter, its q as `gm<hex>` takes it, every pick then inside it (saved; [docs/MOOD-FILTERS.md](docs/MOOD-FILTERS.md) 6), `Dq0` none, a value that isn't a filter (`Dq800`) refused; `Ds<hex>` the next session's seed (1-8 hex digits, for a reproducible run), `Dr` a new session now; `Dp` a pick appended now, whatever the trigger says (cued at a finished queue), with its decision; `Dn<k>` k dry-run picks (1-2,000) on a copy of the session, the live one untouched, `Db<n>` n slot reads of random rows (1-5,000), a bench, both one a loop pass, `Dx` stops either with its summary so far; `Dj` the join again (only while Auto DJ is on), `Dc` the index file closed and opened again (a new session; after a read of the card's root that failed, the root read again, the session kept unless it names otherwise than an earlier read did); `Dh` / `Dh<id>` Auto DJ from here on the current track or on library track id, `De` the empty states' Auto DJ button (both play, as `qp` does); `D?` the list. None touches the output or the volume |
 | | | `a...` | touch and haptics: `a` touch calibration (9 crosses; `a5`-`a9` for fewer), `ac` test taps, `ab` the first-start touch check (`ab0`: ask it again at the next start), `as` status, `ad` remove the calibration (no correction), `ah0` / `ah1` haptics off / on, `ar0` / `ar1` the A-Z rail's ticks off / on, `aq` close (saved on the device) |
-| | | `@...` | not a command: a computer's line (the USB visualizer, [docs/USB-VISUALIZER.md](docs/USB-VISUALIZER.md); the board's status for the terminal player's MP3 Player tab, `@status`, `@count` and `@identify <port>`, [docs/HOST-STATUS.md](docs/HOST-STATUS.md)). Every byte from the `@` to the end of the line is the line's, never a key; an `@` abandons a half-typed command (logged), except inside an `R` argument that has text (`Rttone:1000@48000`). Typed by hand such a line gets an `@err` reply and does nothing else (but `@status` answers, `@count` counts and `@identify COM5` shows the banner, as a computer's would). `tools/usb_viz.py` sends the visualizer's (`--dry-run` prints them instead). If the Core2 starts reading in the middle of one (it booted while the computer sent, or input was lost), the rest of that line is dropped, not run as keys (`[console] dropped ...`); a command sent with its Enter in that moment goes too: send it again |
+| | | `@...` | not a command: a computer's line (the USB visualizer, [docs/USB-VISUALIZER.md](docs/USB-VISUALIZER.md); the board's status for the terminal player's MP3 Player tab, `@status`, `@count`, `@identify <port>`, `@time [<unix-ms>]` and `@format`, [docs/HOST-STATUS.md](docs/HOST-STATUS.md)). Every byte from the `@` to the end of the line is the line's, never a key; an `@` abandons a half-typed command (logged), except inside an `R` argument that has text (`Rttone:1000@48000`). Typed by hand such a line gets an `@err` reply and does nothing else (but `@status` answers, `@count` counts, `@identify COM5` shows the banner, `@time` says the board's time or sets it and `@format` puts up the format's question, as a computer's would). `tools/usb_viz.py` sends the visualizer's (`--dry-run` prints them instead). If the Core2 starts reading in the middle of one (it booted while the computer sent, or input was lost), the rest of that line is dropped, not run as keys (`[console] dropped ...`); a command sent with its Enter in that moment goes too: send it again |
 
 The UI spike's tools ([docs/UI-SPIKE.md](docs/UI-SPIKE.md)) measure the
 browsing UI's risks before its screens are built. Each is a letter, an
@@ -950,11 +992,27 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       build's name only; never by signal but for console Bs)
   CardFormat          What a card that didn't mount is (exFAT, NTFS, GPT),
                       from its first sectors
+  CardMkfs            The card a player formats: its FAT32 layout (f_mkfs's
+                      arithmetic), the MBR, the writer that holds the boot
+                      sector to the last, the read-back, the request kept
+                      across the restart
+  HoldButton, FormatAsk
+                      The format's second step, a 2 s hold (a press the loop
+                      sees on the button all the while, by hand; its fill; a
+                      lift, a slide or a stalled loop that empties it); the
+                      question's clock (each step's minute, the second's
+                      settle), its answers and a loop pass's order
   HostStatus, FreeCount
                       A computer's questions (docs/HOST-STATUS.md): the
                       @status line, the FSINFO rule, @identify's label; the
                       card's free clusters counted a piece of the FAT at a
                       time, exact with FatFs writing between the pieces
+  WallClock, RtcSync  The board's clock: the RTC's boot reading (its
+                      voltage-low flag, the range 2026-2099, whether this
+                      player set the time it keeps), a computer's
+                      @time, the UTC calendar both ways; the RTC's next
+                      tick caught (the boot's ms), a @time's write on its
+                      second and the phase it measures
   CardContract, CardContainer, CardTags, CardManifest, CardAutoDj, CardWaves
                       The card contract with the transfer software
                       (docs/METADATA.md part 2): its files' readers and
@@ -973,7 +1031,19 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   AutoDjView          What the UI shows and says of Auto DJ
   AutoDjOpen          What a failed open of its index comes to: the card's
                       fault tried again
+  PlayLog             The play log (/.player/plays.jnl, docs/METADATA.md
+                      2.20): its slot, the device's files (the boot rules,
+                      the rotation, the trim by the root's ACKS), a play
+                      from its start to its end, the plays waiting (a slot
+                      the card fails tried again, the same one; the orderly
+                      end's flush), when the loop may write
   SheetLayout         Where a sheet sits (3 rows, or 4 from y 40)
+  DialogLayout        Where a dialog and its buttons sit, and their hit areas
+  DialogTouch         Which touch answers a dialog (a press, a tap, the hold
+                      mode's hold button and its hint), and which control
+                      that draws again alone, the Dialog's own
+  OrderlyEnd          The last things before a restart or a power-off, in
+                      their order: the settings queued, the play log, the end
   LibraryIndex, LibraryBuilder, LibraryBoot
                       The library index (library.idx v7), its build from
                       the tag records, the boot's decision
@@ -998,7 +1068,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       again, the card's identity: a card swapped while on
                       is write-protected), the SD driver's busy waits
   NvsLayout           The NVS schema number's boot step; the resume point's
-                      versioned blob; the repeat mode's key
+                      versioned blob; the repeat mode's key; the play
+                      log's ids
   hal/                IAudioBackend, IStorage
 lib/SD/               The Arduino core's SD library (Apache-2.0), with
                       sd_diskio.cpp patched to wait out the card's busy
@@ -1042,11 +1113,16 @@ src/                  Core2 firmware
                       app description), BoardGuard (not a Core2: says so
                       and stops), NvsSchema (the NVS layout's number),
                       UsbViz (the USB visualizer), HostQuery (a computer's
-                      @status, @count and @identify: docs/HOST-STATUS.md),
+                      @status, @count, @identify and @time:
+                      docs/HOST-STATUS.md), BoardClock (the RTC at the
+                      boot, its tick caught from the loop, and for a
+                      @time; now() for the firmware),
                       AutoDj + AutoDjStore (Auto DJ on the device: the
                       card's AutoDJ index, its join, the loop step, the
                       console's D; its settings in NVS), Waves (the card's
-                      waveform index: Now Playing's shapes, the console's gw?)
+                      waveform index: Now Playing's shapes, the console's gw?),
+                      PlayHistory (the play log on the card: the player's
+                      plays, a slot each, written on the loop; NVS's ids)
   spike/              UI spike tools: input lab, scroll lab, font and thumbnail
                       probes (docs/UI-SPIKE.md)
   main.cpp            Wires it together; input events (the buttons' policy),

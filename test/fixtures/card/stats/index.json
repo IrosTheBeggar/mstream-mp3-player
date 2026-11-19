@@ -1,0 +1,9472 @@
+[
+ {
+  "name": "worked-example",
+  "note": "LISTENING-STATS.md 5.13: device A, epoch E; stats.bin's MARK (A, E) 41; plays.1.jnl seqs 30-45, plays.jnl 46-48; ACKS (A, E) 45. 42 is X (Weather Vane) played 120 s of 200 s by Auto DJ at 2026-11-08T21:40Z (day 311, hour 7,485, time 26,948,401); 43 Y (Orbit Room) skipped at 12 s of 240 s; 44 Y stopped at 25 s of 40 s, a play (line 20 s); 45 durationMs 0, 8 s: neither; 46-48 three plays. The first boot plays on through its save (no compaction): it folds 42-48, MARK 48, and trims plays.1.jnl (under MARK and ACKS); plays.jnl stays (over ACKS). The second finds nothing above 48: no save, nothing trimmed.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "worked-example/0",
+     "plays.jnl": "worked-example/0",
+     "stats-00000001.bin": "worked-example/0",
+     "stats.bin": "worked-example/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      45
+     ]
+    ],
+    "now": 1794295800000,
+    "today": 313,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.jnl": "worked-example/0",
+     "stats-00000001.bin": "worked-example/0",
+     "stats.bin": "worked-example/1"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 7,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [
+     "plays.1.jnl"
+    ],
+    "stats": {
+     "generation": 2,
+     "head": {
+      "plays": 46,
+      "skips": 1,
+      "listenedMs": 8955000,
+      "slots": 48,
+      "you": [
+       44,
+       1,
+       8655000
+      ],
+      "shuffle": [
+       1,
+       0,
+       180000
+      ],
+      "autodj": [
+       1,
+       0,
+       120000
+      ],
+      "undated": 0,
+      "sinceDay": 304,
+      "flags": 0,
+      "round": 2,
+      "baseGen": 1,
+      "baseRows": 4,
+      "baseCrc": 1790735307,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       48
+      ]
+     ],
+     "rows": {
+      "hour": 43,
+      "days": 8,
+      "rcnt": 29,
+      "trkd": 4,
+      "base": 4
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0x832a7da9ed0311e6",
+       11,
+       26309041,
+       0
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       11,
+       26298061,
+       0
+      ],
+      [
+       "0xe604b5c8d82005d1",
+       10,
+       26305381,
+       0
+      ],
+      [
+       "0x3df15c814b89ab75",
+       10,
+       26301721,
+       0
+      ],
+      [
+       "0xc3380bf65e7023d1",
+       2,
+       26948401,
+       2
+      ],
+      [
+       "0xc8b874afa782f35d",
+       1,
+       26985841,
+       1
+      ],
+      [
+       "0x145438baeaf72dba",
+       1,
+       26948701,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0x832a7da9ed0311e6",
+       11,
+       26986081,
+       2
+      ],
+      [
+       "0xc8b874afa782f35d",
+       1,
+       26985841,
+       2
+      ],
+      [
+       "0xc3380bf65e7023d1",
+       2,
+       26985601,
+       2
+      ],
+      [
+       "0x145438baeaf72dba",
+       1,
+       26948701,
+       2
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       11,
+       26748901,
+       1
+      ],
+      [
+       "0xe604b5c8d82005d1",
+       10,
+       26741701,
+       1
+      ],
+      [
+       "0x3df15c814b89ab75",
+       10,
+       26738101,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Quiet Engine"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0x832a7da9ed0311e6",
+        6
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        5
+       ],
+       [
+        "0x3df15c814b89ab75",
+        4
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        4
+       ],
+       [
+        "0xc3380bf65e7023d1",
+        2
+       ],
+       [
+        "0xc8b874afa782f35d",
+        1
+       ],
+       [
+        "0x145438baeaf72dba",
+        1
+       ]
+      ],
+      "30": [
+       [
+        "0x832a7da9ed0311e6",
+        11
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        11
+       ],
+       [
+        "0x3df15c814b89ab75",
+        10
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        10
+       ],
+       [
+        "0xc3380bf65e7023d1",
+        2
+       ],
+       [
+        "0xc8b874afa782f35d",
+        1
+       ],
+       [
+        "0x145438baeaf72dba",
+        1
+       ]
+      ],
+      "all": [
+       [
+        "0x832a7da9ed0311e6",
+        11
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        11
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        10
+       ],
+       [
+        "0x3df15c814b89ab75",
+        10
+       ],
+       [
+        "0xc3380bf65e7023d1",
+        2
+       ],
+       [
+        "0xc8b874afa782f35d",
+        1
+       ],
+       [
+        "0x145438baeaf72dba",
+        1
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 8955000,
+     "plays": 46,
+     "sinceDay": 304,
+     "countingDays": 10,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        307,
+        1200000,
+        6
+       ],
+       [
+        308,
+        1200000,
+        6
+       ],
+       [
+        309,
+        1200000,
+        6
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        165000,
+        2
+       ],
+       [
+        312,
+        590000,
+        3
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 4355000,
+      "plays": 23,
+      "topDay": 309,
+      "autodj": [
+       1,
+       0
+      ]
+     },
+     "newFinds": 7,
+     "oldFavourites": 0,
+     "notPlayed": 1
+    }
+   },
+   {
+    "in": {
+     "plays.jnl": "worked-example/0",
+     "stats-00000001.bin": "worked-example/0",
+     "stats.bin": "worked-example/1"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      45
+     ]
+    ],
+    "now": 1794382200000,
+    "today": 314,
+    "commitTime": null,
+    "playing": false,
+    "safePoint": true,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.jnl": "worked-example/0",
+     "stats-00000001.bin": "worked-example/0",
+     "stats.bin": "worked-example/1"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 0,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [],
+    "stats": {
+     "generation": 2,
+     "head": {
+      "plays": 46,
+      "skips": 1,
+      "listenedMs": 8955000,
+      "slots": 48,
+      "you": [
+       44,
+       1,
+       8655000
+      ],
+      "shuffle": [
+       1,
+       0,
+       180000
+      ],
+      "autodj": [
+       1,
+       0,
+       120000
+      ],
+      "undated": 0,
+      "sinceDay": 304,
+      "flags": 0,
+      "round": 2,
+      "baseGen": 1,
+      "baseRows": 4,
+      "baseCrc": 1790735307,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       48
+      ]
+     ],
+     "rows": {
+      "hour": 43,
+      "days": 8,
+      "rcnt": 29,
+      "trkd": 4,
+      "base": 4
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0x832a7da9ed0311e6",
+       11,
+       26309041,
+       0
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       11,
+       26298061,
+       0
+      ],
+      [
+       "0xe604b5c8d82005d1",
+       10,
+       26305381,
+       0
+      ],
+      [
+       "0x3df15c814b89ab75",
+       10,
+       26301721,
+       0
+      ],
+      [
+       "0xc3380bf65e7023d1",
+       2,
+       26948401,
+       2
+      ],
+      [
+       "0xc8b874afa782f35d",
+       1,
+       26985841,
+       1
+      ],
+      [
+       "0x145438baeaf72dba",
+       1,
+       26948701,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0x832a7da9ed0311e6",
+       11,
+       26986081,
+       2
+      ],
+      [
+       "0xc8b874afa782f35d",
+       1,
+       26985841,
+       2
+      ],
+      [
+       "0xc3380bf65e7023d1",
+       2,
+       26985601,
+       2
+      ],
+      [
+       "0x145438baeaf72dba",
+       1,
+       26948701,
+       2
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       11,
+       26748901,
+       1
+      ],
+      [
+       "0xe604b5c8d82005d1",
+       10,
+       26741701,
+       1
+      ],
+      [
+       "0x3df15c814b89ab75",
+       10,
+       26738101,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Quiet Engine"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0x832a7da9ed0311e6",
+        4
+       ],
+       [
+        "0x3df15c814b89ab75",
+        3
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        3
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        3
+       ],
+       [
+        "0xc3380bf65e7023d1",
+        2
+       ],
+       [
+        "0xc8b874afa782f35d",
+        1
+       ],
+       [
+        "0x145438baeaf72dba",
+        1
+       ]
+      ],
+      "30": [
+       [
+        "0x832a7da9ed0311e6",
+        11
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        11
+       ],
+       [
+        "0x3df15c814b89ab75",
+        10
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        10
+       ],
+       [
+        "0xc3380bf65e7023d1",
+        2
+       ],
+       [
+        "0xc8b874afa782f35d",
+        1
+       ],
+       [
+        "0x145438baeaf72dba",
+        1
+       ]
+      ],
+      "all": [
+       [
+        "0x832a7da9ed0311e6",
+        11
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        11
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        10
+       ],
+       [
+        "0x3df15c814b89ab75",
+        10
+       ],
+       [
+        "0xc3380bf65e7023d1",
+        2
+       ],
+       [
+        "0xc8b874afa782f35d",
+        1
+       ],
+       [
+        "0x145438baeaf72dba",
+        1
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 8955000,
+     "plays": 46,
+     "sinceDay": 304,
+     "countingDays": 11,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        308,
+        1200000,
+        6
+       ],
+       [
+        309,
+        1200000,
+        6
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        165000,
+        2
+       ],
+       [
+        312,
+        590000,
+        3
+       ],
+       [
+        313,
+        0,
+        0
+       ],
+       [
+        314,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 3155000,
+      "plays": 17,
+      "topDay": 309,
+      "autodj": [
+       1,
+       0
+      ]
+     },
+     "newFinds": 7,
+     "oldFavourites": 0,
+     "notPlayed": 1
+    }
+   }
+  ]
+ },
+ {
+  "name": "rules",
+  "note": "4.1 on each kind of slot, no stats.bin before (a fresh start: every slot folded). plays.1.jnl: the line at an odd durationMs (20,000 of 40,001 ms is under it, 20,001 a play), durationMs 0 (30 s), a skip, completed and stopped under the line (neither), outcomes 0 and 4 (stopped), sources 0 and 4 (you), a skip over the line (a play), Auto DJ's skip, an undated play and one dated 2025 (undated), a drop note, then seq 12 damaged and again whole; its last slot a play, ACKS covering it: trimmed. plays.jnl: device B's play dated 2099 (dated), a slot with epoch 0 (not counted, never acknowledged) and device C's newer-major slot (not read): kept.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "rules/0",
+     "plays.jnl": "rules/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      14
+     ],
+     [
+      "00005e005302",
+      "0x0a0b0c0d0e0f1011",
+      1
+     ]
+    ],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": false,
+    "safePoint": true,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.jnl": "rules/0",
+     "stats-00000001.bin": "rules/1",
+     "stats.bin": "rules/1"
+    },
+    "read": "absent",
+    "why": null,
+    "folded": 15,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": true,
+    "removed": [],
+    "trimmed": [
+     "plays.1.jnl"
+    ],
+    "stats": {
+     "generation": 1,
+     "head": {
+      "plays": 9,
+      "skips": 2,
+      "listenedMs": 1046000,
+      "slots": 15,
+      "you": [
+       7,
+       1,
+       970000
+      ],
+      "shuffle": [
+       1,
+       0,
+       31000
+      ],
+      "autodj": [
+       1,
+       1,
+       45000
+      ],
+      "undated": 2,
+      "sinceDay": 312,
+      "flags": 0,
+      "round": 1,
+      "baseGen": 1,
+      "baseRows": 7,
+      "baseCrc": 1192002114,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       14
+      ],
+      [
+       "00005e005302",
+       "0x0a0b0c0d0e0f1011",
+       1
+      ]
+     ],
+     "rows": {
+      "hour": 9,
+      "days": 2,
+      "rcnt": 6,
+      "trkd": 0,
+      "base": 7
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0xe604b5c8d82005d1",
+       2,
+       27003601,
+       0
+      ],
+      [
+       "0xf78a2e6d090eff64",
+       1,
+       27010801,
+       0
+      ],
+      [
+       "0x9057bc2b792857af",
+       1,
+       26996401,
+       1
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       1,
+       26989201,
+       0
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       1,
+       26985601,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0x145438baeaf72dba",
+       1,
+       2316765601,
+       1
+      ],
+      [
+       "0xf78a2e6d090eff64",
+       1,
+       27010801,
+       1
+      ],
+      [
+       "0xe604b5c8d82005d1",
+       2,
+       27007201,
+       1
+      ],
+      [
+       "0x9057bc2b792857af",
+       1,
+       26996401,
+       1
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       1,
+       26989201,
+       1
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       1,
+       26985601,
+       1
+      ],
+      [
+       "0xebc4649938fbd8d3",
+       2,
+       0,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Glass Harbour",
+      "Night Ticket",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        1
+       ],
+       [
+        "0x9057bc2b792857af",
+        1
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        1
+       ],
+       [
+        "0xf78a2e6d090eff64",
+        1
+       ]
+      ],
+      "30": [
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        1
+       ],
+       [
+        "0x9057bc2b792857af",
+        1
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        1
+       ],
+       [
+        "0xf78a2e6d090eff64",
+        1
+       ]
+      ],
+      "all": [
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ],
+       [
+        "0xebc4649938fbd8d3",
+        2
+       ],
+       [
+        "0x145438baeaf72dba",
+        1
+       ],
+       [
+        "0xf78a2e6d090eff64",
+        1
+       ],
+       [
+        "0x9057bc2b792857af",
+        1
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        1
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        1
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 1046000,
+     "plays": 9,
+     "sinceDay": 312,
+     "countingDays": 2,
+     "windows": [],
+     "week": {
+      "days": [
+       [
+        307,
+        0,
+        0
+       ],
+       [
+        308,
+        0,
+        0
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        766000,
+        6
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 766000,
+      "plays": 6,
+      "topDay": 312,
+      "autodj": [
+       0,
+       1
+      ]
+     },
+     "newFinds": 5,
+     "oldFavourites": 0,
+     "notPlayed": 3
+    }
+   }
+  ]
+ },
+ {
+  "name": "first-at-a",
+  "note": "5.2's merge is order-free: the same seven slots of two devices, read B's then A's (the scan reads plays.jnl first). Harbour Lights: B's dated play is earlier than A's (firstAt B's, source you); Tidewater: two undated plays, Auto DJ and shuffle (firstAt 0, the smaller source: shuffle); North Pier: a skip, then a play (firstAt the play's). first-at-a and first-at-b must give the same stats.bin.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "first-at-a/0",
+     "plays.jnl": "first-at-a/0"
+    },
+    "added": [],
+    "acks": [],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.1.jnl": "first-at-a/0",
+     "plays.jnl": "first-at-a/0",
+     "stats.bin": "first-at-a/1"
+    },
+    "read": "absent",
+    "why": null,
+    "folded": 7,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [],
+    "stats": {
+     "generation": 1,
+     "head": {
+      "plays": 6,
+      "skips": 1,
+      "listenedMs": 1209000,
+      "slots": 7,
+      "you": [
+       2,
+       1,
+       409000
+      ],
+      "shuffle": [
+       2,
+       0,
+       400000
+      ],
+      "autodj": [
+       2,
+       0,
+       400000
+      ],
+      "undated": 3,
+      "sinceDay": 305,
+      "flags": 0,
+      "round": 1,
+      "baseGen": 0,
+      "baseRows": 0,
+      "baseCrc": 0,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       4
+      ],
+      [
+       "00005e005302",
+       "0x0a0b0c0d0e0f1011",
+       3
+      ]
+     ],
+     "rows": {
+      "hour": 4,
+      "days": 4,
+      "rcnt": 3,
+      "trkd": 3,
+      "base": 0
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0x884ae8f96e37eac2",
+       3,
+       26388001,
+       0
+      ],
+      [
+       "0xc1011123dcef40cd",
+       1,
+       26647201,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0xc1011123dcef40cd",
+       1,
+       26647201,
+       1
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       3,
+       26474401,
+       1
+      ],
+      [
+       "0x5ab8d5025ca01351",
+       2,
+       0,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Copper Season",
+      "Paper Comets",
+      "Quiet Engine"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0xc1011123dcef40cd",
+        1
+       ]
+      ],
+      "30": [
+       [
+        "0x884ae8f96e37eac2",
+        2
+       ],
+       [
+        "0xc1011123dcef40cd",
+        1
+       ]
+      ],
+      "all": [
+       [
+        "0x884ae8f96e37eac2",
+        3
+       ],
+       [
+        "0x5ab8d5025ca01351",
+        2
+       ],
+       [
+        "0xc1011123dcef40cd",
+        1
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 1209000,
+     "plays": 6,
+     "sinceDay": 305,
+     "countingDays": 9,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        307,
+        9000,
+        0
+       ],
+       [
+        308,
+        200000,
+        1
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        0,
+        0
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 209000,
+      "plays": 1,
+      "topDay": 308,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 2,
+     "oldFavourites": 0,
+     "notPlayed": 3
+    }
+   }
+  ]
+ },
+ {
+  "name": "first-at-b",
+  "note": "5.2's merge is order-free: the same seven slots of two devices, read A's then B's (the scan reads plays.jnl first). Harbour Lights: B's dated play is earlier than A's (firstAt B's, source you); Tidewater: two undated plays, Auto DJ and shuffle (firstAt 0, the smaller source: shuffle); North Pier: a skip, then a play (firstAt the play's). first-at-a and first-at-b must give the same stats.bin.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "first-at-b/0",
+     "plays.jnl": "first-at-b/0"
+    },
+    "added": [],
+    "acks": [],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.1.jnl": "first-at-b/0",
+     "plays.jnl": "first-at-b/0",
+     "stats.bin": "first-at-b/1"
+    },
+    "read": "absent",
+    "why": null,
+    "folded": 7,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [],
+    "stats": {
+     "generation": 1,
+     "head": {
+      "plays": 6,
+      "skips": 1,
+      "listenedMs": 1209000,
+      "slots": 7,
+      "you": [
+       2,
+       1,
+       409000
+      ],
+      "shuffle": [
+       2,
+       0,
+       400000
+      ],
+      "autodj": [
+       2,
+       0,
+       400000
+      ],
+      "undated": 3,
+      "sinceDay": 305,
+      "flags": 0,
+      "round": 1,
+      "baseGen": 0,
+      "baseRows": 0,
+      "baseCrc": 0,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       4
+      ],
+      [
+       "00005e005302",
+       "0x0a0b0c0d0e0f1011",
+       3
+      ]
+     ],
+     "rows": {
+      "hour": 4,
+      "days": 4,
+      "rcnt": 3,
+      "trkd": 3,
+      "base": 0
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0x884ae8f96e37eac2",
+       3,
+       26388001,
+       0
+      ],
+      [
+       "0xc1011123dcef40cd",
+       1,
+       26647201,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0xc1011123dcef40cd",
+       1,
+       26647201,
+       1
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       3,
+       26474401,
+       1
+      ],
+      [
+       "0x5ab8d5025ca01351",
+       2,
+       0,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Copper Season",
+      "Paper Comets",
+      "Quiet Engine"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0xc1011123dcef40cd",
+        1
+       ]
+      ],
+      "30": [
+       [
+        "0x884ae8f96e37eac2",
+        2
+       ],
+       [
+        "0xc1011123dcef40cd",
+        1
+       ]
+      ],
+      "all": [
+       [
+        "0x884ae8f96e37eac2",
+        3
+       ],
+       [
+        "0x5ab8d5025ca01351",
+        2
+       ],
+       [
+        "0xc1011123dcef40cd",
+        1
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 1209000,
+     "plays": 6,
+     "sinceDay": 305,
+     "countingDays": 9,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        307,
+        9000,
+        0
+       ],
+       [
+        308,
+        200000,
+        1
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        0,
+        0
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 209000,
+      "plays": 1,
+      "topDay": 308,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 2,
+     "oldFavourites": 0,
+     "notPlayed": 3
+    }
+   }
+  ]
+ },
+ {
+  "name": "two-devices",
+  "note": "Every player's plays on the card count (O2). stats.bin holds A's 1-3 (MARK (A) 3, no row for B); plays.1.jnl holds A 1-5 and B 1-3, plays.jnl A 6-8 and B 4-5; ACKS (A) 8, (B) 3. The boot folds A 4-8 and B 1-5: MARK (A) 8, (B) 5. plays.1.jnl is under ACKS and the saved MARK: trimmed; plays.jnl holds B 4-5 over ACKS: kept.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "two-devices/0",
+     "plays.jnl": "two-devices/0",
+     "stats-00000001.bin": "two-devices/0",
+     "stats.bin": "two-devices/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      8
+     ],
+     [
+      "00005e005302",
+      "0x0a0b0c0d0e0f1011",
+      3
+     ]
+    ],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.jnl": "two-devices/0",
+     "stats-00000001.bin": "two-devices/0",
+     "stats.bin": "two-devices/1"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 10,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [
+     "plays.1.jnl"
+    ],
+    "stats": {
+     "generation": 2,
+     "head": {
+      "plays": 13,
+      "skips": 0,
+      "listenedMs": 2600000,
+      "slots": 13,
+      "you": [
+       13,
+       0,
+       2600000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 304,
+      "flags": 0,
+      "round": 2,
+      "baseGen": 1,
+      "baseRows": 1,
+      "baseCrc": 2503048224,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       8
+      ],
+      [
+       "00005e005302",
+       "0x0a0b0c0d0e0f1011",
+       5
+      ]
+     ],
+     "rows": {
+      "hour": 13,
+      "days": 6,
+      "rcnt": 8,
+      "trkd": 6,
+      "base": 1
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0xd222fa5e5713f77e",
+       3,
+       26730001,
+       0
+      ],
+      [
+       "0x9057bc2b792857af",
+       3,
+       26298001,
+       0
+      ],
+      [
+       "0xebc4649938fbd8d3",
+       2,
+       26470801,
+       0
+      ],
+      [
+       "0x3df15c814b89ab75",
+       2,
+       26384401,
+       0
+      ],
+      [
+       "0x832a7da9ed0311e6",
+       1,
+       26902801,
+       0
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       1,
+       26820001,
+       0
+      ],
+      [
+       "0xc3380bf65e7023d1",
+       1,
+       26391601,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0x832a7da9ed0311e6",
+       1,
+       26902801,
+       2
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       1,
+       26820001,
+       2
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       3,
+       26816401,
+       2
+      ],
+      [
+       "0xebc4649938fbd8d3",
+       2,
+       26474401,
+       2
+      ],
+      [
+       "0xc3380bf65e7023d1",
+       1,
+       26391601,
+       2
+      ],
+      [
+       "0x3df15c814b89ab75",
+       2,
+       26388001,
+       2
+      ],
+      [
+       "0x9057bc2b792857af",
+       3,
+       26305201,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Paper Comets",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0xd222fa5e5713f77e",
+        3
+       ],
+       [
+        "0x832a7da9ed0311e6",
+        1
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        1
+       ]
+      ],
+      "30": [
+       [
+        "0xd222fa5e5713f77e",
+        3
+       ],
+       [
+        "0x9057bc2b792857af",
+        3
+       ],
+       [
+        "0xebc4649938fbd8d3",
+        2
+       ],
+       [
+        "0x3df15c814b89ab75",
+        2
+       ],
+       [
+        "0x832a7da9ed0311e6",
+        1
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        1
+       ],
+       [
+        "0xc3380bf65e7023d1",
+        1
+       ]
+      ],
+      "all": [
+       [
+        "0xd222fa5e5713f77e",
+        3
+       ],
+       [
+        "0x9057bc2b792857af",
+        3
+       ],
+       [
+        "0xebc4649938fbd8d3",
+        2
+       ],
+       [
+        "0x3df15c814b89ab75",
+        2
+       ],
+       [
+        "0x832a7da9ed0311e6",
+        1
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        1
+       ],
+       [
+        "0xc3380bf65e7023d1",
+        1
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 2600000,
+     "plays": 13,
+     "sinceDay": 304,
+     "countingDays": 10,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        307,
+        0,
+        0
+       ],
+       [
+        308,
+        0,
+        0
+       ],
+       [
+        309,
+        400000,
+        2
+       ],
+       [
+        310,
+        400000,
+        2
+       ],
+       [
+        311,
+        200000,
+        1
+       ],
+       [
+        312,
+        0,
+        0
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 1000000,
+      "plays": 5,
+      "topDay": 310,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 7,
+     "oldFavourites": 0,
+     "notPlayed": 2
+    }
+   }
+  ]
+ },
+ {
+  "name": "twice",
+  "note": "Each slot once: plays.2.jnl (a later firmware's longer rotation) holds seqs 3-4 again, as plays.1.jnl does, and a seq 6 whose bytes differ from plays.jnl's (a conflict). The scan reads plays.jnl, plays.1.jnl, then plays.2.jnl: each key's first read is kept, and the three met again from another file count in HEAD's twice. No ACKS: nothing trimmed.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "twice/0",
+     "plays.2.jnl": "twice/0",
+     "plays.jnl": "twice/0"
+    },
+    "added": [],
+    "acks": [],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.1.jnl": "twice/0",
+     "plays.2.jnl": "twice/0",
+     "plays.jnl": "twice/0",
+     "stats.bin": "twice/1"
+    },
+    "read": "absent",
+    "why": null,
+    "folded": 6,
+    "twice": 3,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [],
+    "stats": {
+     "generation": 1,
+     "head": {
+      "plays": 6,
+      "skips": 0,
+      "listenedMs": 1200000,
+      "slots": 6,
+      "you": [
+       6,
+       0,
+       1200000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 312,
+      "flags": 0,
+      "round": 1,
+      "baseGen": 0,
+      "baseRows": 0,
+      "baseCrc": 0,
+      "twice": 3,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       6
+      ]
+     ],
+     "rows": {
+      "hour": 6,
+      "days": 1,
+      "rcnt": 4,
+      "trkd": 4,
+      "base": 0
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0x832a7da9ed0311e6",
+       2,
+       27000001,
+       0
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       2,
+       26982001,
+       0
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       1,
+       26989201,
+       0
+      ],
+      [
+       "0x8d5c2e4c7ace92ce",
+       1,
+       26985601,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0x832a7da9ed0311e6",
+       2,
+       27003601,
+       1
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       2,
+       26992801,
+       1
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       1,
+       26989201,
+       1
+      ],
+      [
+       "0x8d5c2e4c7ace92ce",
+       1,
+       26985601,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Glass Harbour",
+      "Paper Comets",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0x832a7da9ed0311e6",
+        2
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        2
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        1
+       ],
+       [
+        "0x8d5c2e4c7ace92ce",
+        1
+       ]
+      ],
+      "30": [
+       [
+        "0x832a7da9ed0311e6",
+        2
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        2
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        1
+       ],
+       [
+        "0x8d5c2e4c7ace92ce",
+        1
+       ]
+      ],
+      "all": [
+       [
+        "0x832a7da9ed0311e6",
+        2
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        2
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        1
+       ],
+       [
+        "0x8d5c2e4c7ace92ce",
+        1
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 1200000,
+     "plays": 6,
+     "sinceDay": 312,
+     "countingDays": 2,
+     "windows": [],
+     "week": {
+      "days": [
+       [
+        307,
+        0,
+        0
+       ],
+       [
+        308,
+        0,
+        0
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        1200000,
+        6
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 1200000,
+      "plays": 6,
+      "topDay": 312,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 4,
+     "oldFavourites": 0,
+     "notPlayed": 4
+    }
+   }
+  ]
+ },
+ {
+  "name": "new-epoch",
+  "note": "The device boots with a new epoch (NVS erased: its epoch is device[1]) and the root has no ACKS: 0.14.0's scan reads nothing then (PlayLog.cpp startScan); with stats the scan reads, and the old epoch's slots fold once under their own MARK row.",
+  "device": [
+   "00005e005301",
+   "0x2233445566778899"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.jnl": "new-epoch/0"
+    },
+    "added": [],
+    "acks": [],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.jnl": "new-epoch/0",
+     "stats.bin": "new-epoch/1"
+    },
+    "read": "absent",
+    "why": null,
+    "folded": 3,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [],
+    "stats": {
+     "generation": 1,
+     "head": {
+      "plays": 3,
+      "skips": 0,
+      "listenedMs": 600000,
+      "slots": 3,
+      "you": [
+       3,
+       0,
+       600000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 311,
+      "flags": 0,
+      "round": 1,
+      "baseGen": 0,
+      "baseRows": 0,
+      "baseCrc": 0,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       3
+      ]
+     ],
+     "rows": {
+      "hour": 3,
+      "days": 1,
+      "rcnt": 1,
+      "trkd": 1,
+      "base": 0
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0xe604b5c8d82005d1",
+       3,
+       26906401,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0xe604b5c8d82005d1",
+       3,
+       26913601,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Copper Season",
+      "Glass Harbour",
+      "Night Ticket",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0xe604b5c8d82005d1",
+        3
+       ]
+      ],
+      "30": [
+       [
+        "0xe604b5c8d82005d1",
+        3
+       ]
+      ],
+      "all": [
+       [
+        "0xe604b5c8d82005d1",
+        3
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 600000,
+     "plays": 3,
+     "sinceDay": 311,
+     "countingDays": 3,
+     "windows": [],
+     "week": {
+      "days": [
+       [
+        307,
+        0,
+        0
+       ],
+       [
+        308,
+        0,
+        0
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        600000,
+        3
+       ],
+       [
+        312,
+        0,
+        0
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 600000,
+      "plays": 3,
+      "topDay": 311,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 1,
+     "oldFavourites": 0,
+     "notPlayed": 5
+    }
+   }
+  ]
+ },
+ {
+  "name": "retention",
+  "note": "5.2's retention at a save, today day 452 (2027-03-29): two plays a day for 450 days (900 hours), one tomorrow by a fast clock, and device C's play dated 2099. HOUR keeps its newest 840 rows and DAYS its newest 400, 2099's and tomorrow's among them: rows by count, never by date. RCNT keeps the 32 days back from the earlier of today and the newest dated day (2099's): days 421-452, and tomorrow's and 2099's rows, newer than that. TRKD and HEAD keep everything.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.jnl": "retention/0"
+    },
+    "added": [],
+    "acks": [],
+    "now": 1806354000000,
+    "today": 452,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.jnl": "retention/0",
+     "stats.bin": "retention/1"
+    },
+    "read": "absent",
+    "why": null,
+    "folded": 902,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [],
+    "stats": {
+     "generation": 1,
+     "head": {
+      "plays": 902,
+      "skips": 0,
+      "listenedMs": 180400000,
+      "slots": 902,
+      "you": [
+       902,
+       0,
+       180400000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 3,
+      "flags": 0,
+      "round": 1,
+      "baseGen": 0,
+      "baseRows": 0,
+      "baseCrc": 0,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       901
+      ],
+      [
+       "00005e005303",
+       "0x5a5b5c5d5e5f6061",
+       1
+      ]
+     ],
+     "rows": {
+      "hour": 840,
+      "days": 400,
+      "rcnt": 66,
+      "trkd": 16,
+      "base": 0
+     }
+    },
+    "lists": {
+     "newFinds": [],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0xf78a2e6d090eff64",
+       58,
+       2316765601,
+       1
+      ],
+      [
+       "0x9057bc2b792857af",
+       57,
+       39171601,
+       1
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       57,
+       39124801,
+       1
+      ],
+      [
+       "0x3df15c814b89ab75",
+       57,
+       39038401,
+       1
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       57,
+       38995201,
+       1
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       56,
+       38952001,
+       1
+      ],
+      [
+       "0xc3380bf65e7023d1",
+       56,
+       38908801,
+       1
+      ],
+      [
+       "0x5ab8d5025ca01351",
+       56,
+       38865601,
+       1
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       56,
+       38822401,
+       1
+      ],
+      [
+       "0xebc4649938fbd8d3",
+       56,
+       38779201,
+       1
+      ],
+      [
+       "0xc8b874afa782f35d",
+       56,
+       38736001,
+       1
+      ],
+      [
+       "0xe604b5c8d82005d1",
+       56,
+       38649601,
+       1
+      ],
+      [
+       "0x145438baeaf72dba",
+       56,
+       38606401,
+       1
+      ],
+      [
+       "0xc1011123dcef40cd",
+       56,
+       38563201,
+       1
+      ],
+      [
+       "0x832a7da9ed0311e6",
+       56,
+       38520001,
+       1
+      ],
+      [
+       "0x8d5c2e4c7ace92ce",
+       56,
+       38476801,
+       1
+      ]
+     ],
+     "notPlayed": [],
+     "mostPlayed": {
+      "7": [
+       [
+        "0x884ae8f96e37eac2",
+        1
+       ],
+       [
+        "0xf78a2e6d090eff64",
+        1
+       ],
+       [
+        "0x3df15c814b89ab75",
+        1
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        1
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        1
+       ],
+       [
+        "0xc3380bf65e7023d1",
+        1
+       ],
+       [
+        "0x5ab8d5025ca01351",
+        1
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        1
+       ],
+       [
+        "0xc8b874afa782f35d",
+        1
+       ],
+       [
+        "0xebc4649938fbd8d3",
+        1
+       ],
+       [
+        "0x9057bc2b792857af",
+        1
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        1
+       ],
+       [
+        "0x145438baeaf72dba",
+        1
+       ],
+       [
+        "0xc1011123dcef40cd",
+        1
+       ]
+      ],
+      "30": [
+       [
+        "0x884ae8f96e37eac2",
+        4
+       ],
+       [
+        "0xf78a2e6d090eff64",
+        4
+       ],
+       [
+        "0x3df15c814b89ab75",
+        4
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        4
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        4
+       ],
+       [
+        "0xc3380bf65e7023d1",
+        4
+       ],
+       [
+        "0x5ab8d5025ca01351",
+        4
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        4
+       ],
+       [
+        "0xc8b874afa782f35d",
+        4
+       ],
+       [
+        "0xebc4649938fbd8d3",
+        4
+       ],
+       [
+        "0x9057bc2b792857af",
+        4
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        4
+       ],
+       [
+        "0x145438baeaf72dba",
+        3
+       ],
+       [
+        "0xc1011123dcef40cd",
+        3
+       ],
+       [
+        "0x832a7da9ed0311e6",
+        3
+       ],
+       [
+        "0x8d5c2e4c7ace92ce",
+        3
+       ]
+      ],
+      "all": [
+       [
+        "0xf78a2e6d090eff64",
+        58
+       ],
+       [
+        "0x9057bc2b792857af",
+        57
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        57
+       ],
+       [
+        "0x3df15c814b89ab75",
+        57
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        57
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        56
+       ],
+       [
+        "0xc3380bf65e7023d1",
+        56
+       ],
+       [
+        "0x5ab8d5025ca01351",
+        56
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        56
+       ],
+       [
+        "0xebc4649938fbd8d3",
+        56
+       ],
+       [
+        "0xc8b874afa782f35d",
+        56
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        56
+       ],
+       [
+        "0x145438baeaf72dba",
+        56
+       ],
+       [
+        "0xc1011123dcef40cd",
+        56
+       ],
+       [
+        "0x832a7da9ed0311e6",
+        56
+       ],
+       [
+        "0x8d5c2e4c7ace92ce",
+        56
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 180400000,
+     "plays": 902,
+     "sinceDay": 3,
+     "countingDays": 450,
+     "windows": [
+      7,
+      30,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        446,
+        400000,
+        2
+       ],
+       [
+        447,
+        400000,
+        2
+       ],
+       [
+        448,
+        400000,
+        2
+       ],
+       [
+        449,
+        400000,
+        2
+       ],
+       [
+        450,
+        400000,
+        2
+       ],
+       [
+        451,
+        400000,
+        2
+       ],
+       [
+        452,
+        400000,
+        2
+       ]
+      ],
+      "listenedMs": 2800000,
+      "plays": 14,
+      "topDay": 452,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 0,
+     "oldFavourites": 0,
+     "notPlayed": 0
+    }
+   }
+  ]
+ },
+ {
+  "name": "rcnt-cap",
+  "note": "32 days (288-319) of the same 129 tracks (made-up paths outside the fixture library: orphans to the shelves, kept by the rankers) played once a day: 4,128 RCNT rows, over the 4,096 cap, so day 288 goes whole and 3,999 rows stay; the 30-day window then holds 30 days still.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.jnl": "rcnt-cap/0"
+    },
+    "added": [],
+    "acks": [],
+    "now": 1794870000000,
+    "today": 319,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.jnl": "rcnt-cap/0",
+     "stats.bin": "rcnt-cap/1"
+    },
+    "read": "absent",
+    "why": null,
+    "folded": 4128,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [],
+    "stats": {
+     "generation": 1,
+     "head": {
+      "plays": 4128,
+      "skips": 0,
+      "listenedMs": 127968000,
+      "slots": 4128,
+      "you": [
+       4128,
+       0,
+       127968000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 288,
+      "flags": 0,
+      "round": 1,
+      "baseGen": 0,
+      "baseRows": 0,
+      "baseCrc": 0,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       4128
+      ]
+     ],
+     "rows": {
+      "hour": 64,
+      "days": 32,
+      "rcnt": 3999,
+      "trkd": 129,
+      "base": 0
+     }
+    },
+    "lists": {
+     "newFinds": [],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0x0a7b9dd88d871203",
+       32,
+       27566721,
+       1
+      ],
+      [
+       "0xd3e81ce1448aa5d6",
+       32,
+       27566681,
+       1
+      ],
+      [
+       "0x6d4e51d3c075a87d",
+       32,
+       27566641,
+       1
+      ],
+      [
+       "0x124921e4552af8b0",
+       32,
+       27566601,
+       1
+      ],
+      [
+       "0xfdd1d8eed16fb277",
+       32,
+       27566561,
+       1
+      ],
+      [
+       "0x5f8035deeabe2e2a",
+       32,
+       27566521,
+       1
+      ],
+      [
+       "0xa120cce47ea734b1",
+       32,
+       27566481,
+       1
+      ],
+      [
+       "0x6d433e0111e92ca4",
+       32,
+       27566441,
+       1
+      ],
+      [
+       "0x58cbd50b8e2db00b",
+       32,
+       27566401,
+       1
+      ],
+      [
+       "0x6b152595b09b996b",
+       32,
+       27566361,
+       1
+      ],
+      [
+       "0x7f8c8e8b34571604",
+       32,
+       27566321,
+       1
+      ],
+      [
+       "0x029a2d3f33253cb5",
+       32,
+       27566281,
+       1
+      ],
+      [
+       "0x17119634b6e0b94e",
+       32,
+       27566241,
+       1
+      ],
+      [
+       "0x912c756509c0cfef",
+       32,
+       27566201,
+       1
+      ],
+      [
+       "0xa610de5a8dd91e68",
+       32,
+       27566161,
+       1
+      ],
+      [
+       "0x608da95bf26a6ae9",
+       32,
+       27566121,
+       1
+      ],
+      [
+       "0xde55f149bf57e422",
+       32,
+       27566081,
+       1
+      ],
+      [
+       "0x1cc46e62aff421e3",
+       32,
+       27566041,
+       1
+      ],
+      [
+       "0x9966f970d1c1887c",
+       32,
+       27566001,
+       1
+      ],
+      [
+       "0x63ce8a94d17476fa",
+       32,
+       27565961,
+       1
+      ],
+      [
+       "0xfd351f874d601cc1",
+       32,
+       27565921,
+       1
+      ],
+      [
+       "0x47a0de6022250958",
+       32,
+       27565881,
+       1
+      ],
+      [
+       "0xe10773529e10af1f",
+       32,
+       27565841,
+       1
+      ],
+      [
+       "0x8ff5d639129e8dfe",
+       32,
+       27565801,
+       1
+      ],
+      [
+       "0x23b8ef56a6e14ba5",
+       32,
+       27565761,
+       1
+      ],
+      [
+       "0xbd30375d2aa0286c",
+       32,
+       27565721,
+       1
+      ],
+      [
+       "0x14d9ee635c423b53",
+       32,
+       27565681,
+       1
+      ],
+      [
+       "0x2b86f3626e860bd2",
+       32,
+       27565641,
+       1
+      ],
+      [
+       "0x2b276b784e2524d9",
+       32,
+       27565601,
+       1
+      ],
+      [
+       "0x936ceffdadd72d00",
+       32,
+       27565561,
+       1
+      ],
+      [
+       "0x2a96291b44fd4a07",
+       32,
+       27565521,
+       1
+      ],
+      [
+       "0xce5e30f233e85612",
+       32,
+       27565481,
+       1
+      ],
+      [
+       "0x2483a9032b88c419",
+       32,
+       27565441,
+       1
+      ],
+      [
+       "0xb68c74e80803c7ac",
+       32,
+       27565401,
+       1
+      ],
+      [
+       "0xb7b12bf321a48593",
+       32,
+       27565361,
+       1
+      ],
+      [
+       "0x32cd13c8d800d83e",
+       32,
+       27565321,
+       1
+      ],
+      [
+       "0xc9f62ce66f26bee5",
+       32,
+       27565281,
+       1
+      ],
+      [
+       "0x44631beb026bd198",
+       32,
+       27565241,
+       1
+      ],
+      [
+       "0xda63b0dd7b744e5f",
+       32,
+       27565201,
+       1
+      ],
+      [
+       "0x53975f298155b0d1",
+       32,
+       27565161,
+       1
+      ],
+      [
+       "0x687b481f056d25ca",
+       32,
+       27565121,
+       1
+      ],
+      [
+       "0x8deeb2efea07982f",
+       32,
+       27565081,
+       1
+      ],
+      [
+       "0x4c4e1bea561e91a8",
+       32,
+       27565041,
+       1
+      ],
+      [
+       "0xa8d76acefb6aaff5",
+       32,
+       27565001,
+       1
+      ],
+      [
+       "0xbd4ed3c47f262c8e",
+       32,
+       27564961,
+       1
+      ],
+      [
+       "0x1620abed8d57c123",
+       32,
+       27564921,
+       1
+      ],
+      [
+       "0x962936fbb20850bc",
+       32,
+       27564881,
+       1
+      ],
+      [
+       "0x0364e6ebb7ccb529",
+       32,
+       27564841,
+       1
+      ],
+      [
+       "0x84932ed9879d5762",
+       32,
+       27564801,
+       1
+      ],
+      [
+       "0xe9ef15cfa33be5d2",
+       32,
+       27564761,
+       1
+      ],
+      [
+       "0xe98f8de582dafed9",
+       32,
+       27564721,
+       1
+      ],
+      [
+       "0xaefdd4db1d2abcc0",
+       32,
+       27564681,
+       1
+      ],
+      [
+       "0xec3c0dfd996c5bc7",
+       32,
+       27564641,
+       1
+      ],
+      [
+       "0x44e911ec5ff9e366",
+       32,
+       27564601,
+       1
+      ],
+      [
+       "0x300548f6dbe2a4cd",
+       32,
+       27564561,
+       1
+      ],
+      [
+       "0xb6d970fcc4cb9e34",
+       32,
+       27564521,
+       1
+      ],
+      [
+       "0x4a9c8a1a590e5bdb",
+       32,
+       27564481,
+       1
+      ],
+      [
+       "0x2236ad02062a50fa",
+       32,
+       27564441,
+       1
+      ],
+      [
+       "0xbb9d41f48215f6c1",
+       32,
+       27564401,
+       1
+      ],
+      [
+       "0xdb2c90cfe4a9fbe3",
+       32,
+       27564361,
+       1
+      ],
+      [
+       "0x57cf1bde0677627c",
+       32,
+       27564321,
+       1
+      ],
+      [
+       "0x3b55c8f63277b45d",
+       32,
+       27564281,
+       1
+      ],
+      [
+       "0xfb1e8fd3b3afbe36",
+       32,
+       27564241,
+       1
+      ],
+      [
+       "0x21a1cbe13db0c857",
+       32,
+       27564201,
+       1
+      ],
+      [
+       "0xe2fa94dbac4ebc10",
+       32,
+       27564161,
+       1
+      ],
+      [
+       "0x6bc24406edc61791",
+       32,
+       27564121,
+       1
+      ],
+      [
+       "0x80a62cfc71dd8c8a",
+       32,
+       27564081,
+       1
+      ],
+      [
+       "0x297d4802e551736b",
+       32,
+       27564041,
+       1
+      ],
+      [
+       "0x3df4b0f8690cf004",
+       32,
+       27564001,
+       1
+      ],
+      [
+       "0x75361dd63a3d6c14",
+       32,
+       27563961,
+       1
+      ],
+      [
+       "0xb88432cd9e83b53b",
+       32,
+       27563921,
+       1
+      ],
+      [
+       "0xb6362584a4c5ba5e",
+       32,
+       27563881,
+       1
+      ],
+      [
+       "0x50093a77210d5885",
+       32,
+       27563841,
+       1
+      ],
+      [
+       "0xca76297bb4526b38",
+       32,
+       27563801,
+       1
+      ],
+      [
+       "0x0aad429e331a2aff",
+       32,
+       27563761,
+       1
+      ],
+      [
+       "0x57d6be82e8b13f32",
+       32,
+       27563721,
+       1
+      ],
+      [
+       "0xadfcb693e05286b9",
+       32,
+       27563681,
+       1
+      ],
+      [
+       "0xe6d606a8bfa9a44c",
+       32,
+       27563641,
+       1
+      ],
+      [
+       "0x3b19bdaeee688e33",
+       32,
+       27563601,
+       1
+      ],
+      [
+       "0x83b191c96fe3ea15",
+       32,
+       27563561,
+       1
+      ],
+      [
+       "0x9828fabef39f66ae",
+       32,
+       27563521,
+       1
+      ],
+      [
+       "0x42b18a1b055b9bcb",
+       32,
+       27563481,
+       1
+      ],
+      [
+       "0x00a3f3157115c364",
+       32,
+       27563441,
+       1
+      ],
+      [
+       "0x311b81f8daf0a271",
+       32,
+       27563401,
+       1
+      ],
+      [
+       "0x45ffeaee5f08f0ea",
+       32,
+       27563361,
+       1
+      ],
+      [
+       "0xe4518dfe45ba7537",
+       32,
+       27563321,
+       1
+      ],
+      [
+       "0xf8c8d6f3c975bb70",
+       32,
+       27563281,
+       1
+      ],
+      [
+       "0x53ce06e334c06b3d",
+       32,
+       27563241,
+       1
+      ],
+      [
+       "0xbdcdd1f0bbb89196",
+       32,
+       27563201,
+       1
+      ],
+      [
+       "0x75807cbcad78e9a6",
+       32,
+       27563161,
+       1
+      ],
+      [
+       "0x609cb3c72961ab0d",
+       32,
+       27563121,
+       1
+      ],
+      [
+       "0xff4ec495c1f334ac",
+       32,
+       27563081,
+       1
+      ],
+      [
+       "0x00737ba0db93f293",
+       32,
+       27563041,
+       1
+      ],
+      [
+       "0x1720809fedd7c312",
+       32,
+       27563001,
+       1
+      ],
+      [
+       "0x6d45f8b0e5783119",
+       32,
+       27562961,
+       1
+      ],
+      [
+       "0x8d256b98bc5b3e98",
+       32,
+       27562921,
+       1
+      ],
+      [
+       "0x2326008b3563bb5f",
+       32,
+       27562881,
+       1
+      ],
+      [
+       "0x7b8f637691f0453e",
+       32,
+       27562841,
+       1
+      ],
+      [
+       "0x12b87c9429162be5",
+       32,
+       27562801,
+       1
+      ],
+      [
+       "0x523936b18b2fce97",
+       32,
+       27562761,
+       1
+      ],
+      [
+       "0x66b0ffa70eebee50",
+       32,
+       27562721,
+       1
+      ],
+      [
+       "0x4c27369971bc2229",
+       32,
+       27562681,
+       1
+      ],
+      [
+       "0xcd557e87418cc462",
+       32,
+       27562641,
+       1
+      ],
+      [
+       "0x5ee2fb9b47472e23",
+       32,
+       27562601,
+       1
+      ],
+      [
+       "0xdeeb86a96bf7bdbc",
+       32,
+       27562561,
+       1
+      ],
+      [
+       "0xf199ba7cb55a1cf5",
+       32,
+       27562521,
+       1
+      ],
+      [
+       "0x061123723915998e",
+       32,
+       27562481,
+       1
+      ],
+      [
+       "0xd6b1029da3f7052f",
+       32,
+       27562441,
+       1
+      ],
+      [
+       "0x95106b98100dfea8",
+       32,
+       27562401,
+       1
+      ],
+      [
+       "0x857116e2d2c1ccc8",
+       32,
+       27562361,
+       1
+      ],
+      [
+       "0x708d2ded4eaa57cf",
+       32,
+       27562321,
+       1
+      ],
+      [
+       "0xa19ec31782113a6a",
+       32,
+       27562281,
+       1
+      ],
+      [
+       "0x8cba5a21fdf8ebf1",
+       32,
+       27562241,
+       1
+      ],
+      [
+       "0x5c42cb3e941e0ce4",
+       32,
+       27562201,
+       1
+      ],
+      [
+       "0x9e5062442863e54b",
+       32,
+       27562161,
+       1
+      ],
+      [
+       "0x196caa19dec0db16",
+       32,
+       27562121,
+       1
+      ],
+      [
+       "0xaf6cdf0c57c8b4bd",
+       32,
+       27562081,
+       1
+      ],
+      [
+       "0x5467af1cec7e04f0",
+       32,
+       27562041,
+       1
+      ],
+      [
+       "0x3ff0662768c2beb7",
+       32,
+       27562001,
+       1
+      ],
+      [
+       "0x452e660ea5e34859",
+       32,
+       27561961,
+       1
+      ],
+      [
+       "0x458dedf8c6442f52",
+       32,
+       27561921,
+       1
+      ],
+      [
+       "0x47dae626bc74a547",
+       32,
+       27561881,
+       1
+      ],
+      [
+       "0x0a9cad0440330640",
+       32,
+       27561841,
+       1
+      ],
+      [
+       "0x8ba4211ffeeaee4d",
+       32,
+       27561801,
+       1
+      ],
+      [
+       "0xa087ea1583022ce6",
+       32,
+       27561761,
+       1
+      ],
+      [
+       "0xa63b62437c16a55b",
+       32,
+       27561721,
+       1
+      ],
+      [
+       "0x12784925e7d3e7b4",
+       32,
+       27561681,
+       1
+      ],
+      [
+       "0x173c1a1da51e4041",
+       32,
+       27561641,
+       1
+      ],
+      [
+       "0x7dd5852b29329a7a",
+       32,
+       27561601,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Copper Season",
+      "Glass Harbour",
+      "Night Ticket",
+      "Paper Comets",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0x00737ba0db93f293",
+        7
+       ],
+       [
+        "0x00a3f3157115c364",
+        7
+       ],
+       [
+        "0x029a2d3f33253cb5",
+        7
+       ],
+       [
+        "0x0364e6ebb7ccb529",
+        7
+       ],
+       [
+        "0x061123723915998e",
+        7
+       ],
+       [
+        "0x0a7b9dd88d871203",
+        7
+       ],
+       [
+        "0x0a9cad0440330640",
+        7
+       ],
+       [
+        "0x0aad429e331a2aff",
+        7
+       ],
+       [
+        "0x124921e4552af8b0",
+        7
+       ],
+       [
+        "0x12784925e7d3e7b4",
+        7
+       ],
+       [
+        "0x12b87c9429162be5",
+        7
+       ],
+       [
+        "0x14d9ee635c423b53",
+        7
+       ],
+       [
+        "0x1620abed8d57c123",
+        7
+       ],
+       [
+        "0x17119634b6e0b94e",
+        7
+       ],
+       [
+        "0x1720809fedd7c312",
+        7
+       ],
+       [
+        "0x173c1a1da51e4041",
+        7
+       ],
+       [
+        "0x196caa19dec0db16",
+        7
+       ],
+       [
+        "0x1cc46e62aff421e3",
+        7
+       ],
+       [
+        "0x21a1cbe13db0c857",
+        7
+       ],
+       [
+        "0x2236ad02062a50fa",
+        7
+       ],
+       [
+        "0x2326008b3563bb5f",
+        7
+       ],
+       [
+        "0x23b8ef56a6e14ba5",
+        7
+       ],
+       [
+        "0x2483a9032b88c419",
+        7
+       ],
+       [
+        "0x297d4802e551736b",
+        7
+       ],
+       [
+        "0x2a96291b44fd4a07",
+        7
+       ],
+       [
+        "0x2b276b784e2524d9",
+        7
+       ],
+       [
+        "0x2b86f3626e860bd2",
+        7
+       ],
+       [
+        "0x300548f6dbe2a4cd",
+        7
+       ],
+       [
+        "0x311b81f8daf0a271",
+        7
+       ],
+       [
+        "0x32cd13c8d800d83e",
+        7
+       ],
+       [
+        "0x3b19bdaeee688e33",
+        7
+       ],
+       [
+        "0x3b55c8f63277b45d",
+        7
+       ],
+       [
+        "0x3df4b0f8690cf004",
+        7
+       ],
+       [
+        "0x3ff0662768c2beb7",
+        7
+       ],
+       [
+        "0x42b18a1b055b9bcb",
+        7
+       ],
+       [
+        "0x44631beb026bd198",
+        7
+       ],
+       [
+        "0x44e911ec5ff9e366",
+        7
+       ],
+       [
+        "0x452e660ea5e34859",
+        7
+       ],
+       [
+        "0x458dedf8c6442f52",
+        7
+       ],
+       [
+        "0x45ffeaee5f08f0ea",
+        7
+       ],
+       [
+        "0x47a0de6022250958",
+        7
+       ],
+       [
+        "0x47dae626bc74a547",
+        7
+       ],
+       [
+        "0x4a9c8a1a590e5bdb",
+        7
+       ],
+       [
+        "0x4c27369971bc2229",
+        7
+       ],
+       [
+        "0x4c4e1bea561e91a8",
+        7
+       ],
+       [
+        "0x50093a77210d5885",
+        7
+       ],
+       [
+        "0x523936b18b2fce97",
+        7
+       ],
+       [
+        "0x53975f298155b0d1",
+        7
+       ],
+       [
+        "0x53ce06e334c06b3d",
+        7
+       ],
+       [
+        "0x5467af1cec7e04f0",
+        7
+       ],
+       [
+        "0x57cf1bde0677627c",
+        7
+       ],
+       [
+        "0x57d6be82e8b13f32",
+        7
+       ],
+       [
+        "0x58cbd50b8e2db00b",
+        7
+       ],
+       [
+        "0x5c42cb3e941e0ce4",
+        7
+       ],
+       [
+        "0x5ee2fb9b47472e23",
+        7
+       ],
+       [
+        "0x5f8035deeabe2e2a",
+        7
+       ],
+       [
+        "0x608da95bf26a6ae9",
+        7
+       ],
+       [
+        "0x609cb3c72961ab0d",
+        7
+       ],
+       [
+        "0x63ce8a94d17476fa",
+        7
+       ],
+       [
+        "0x66b0ffa70eebee50",
+        7
+       ],
+       [
+        "0x687b481f056d25ca",
+        7
+       ],
+       [
+        "0x6b152595b09b996b",
+        7
+       ],
+       [
+        "0x6bc24406edc61791",
+        7
+       ],
+       [
+        "0x6d433e0111e92ca4",
+        7
+       ],
+       [
+        "0x6d45f8b0e5783119",
+        7
+       ],
+       [
+        "0x6d4e51d3c075a87d",
+        7
+       ]
+      ],
+      "30": [
+       [
+        "0x00737ba0db93f293",
+        30
+       ],
+       [
+        "0x00a3f3157115c364",
+        30
+       ],
+       [
+        "0x029a2d3f33253cb5",
+        30
+       ],
+       [
+        "0x0364e6ebb7ccb529",
+        30
+       ],
+       [
+        "0x061123723915998e",
+        30
+       ],
+       [
+        "0x0a7b9dd88d871203",
+        30
+       ],
+       [
+        "0x0a9cad0440330640",
+        30
+       ],
+       [
+        "0x0aad429e331a2aff",
+        30
+       ],
+       [
+        "0x124921e4552af8b0",
+        30
+       ],
+       [
+        "0x12784925e7d3e7b4",
+        30
+       ],
+       [
+        "0x12b87c9429162be5",
+        30
+       ],
+       [
+        "0x14d9ee635c423b53",
+        30
+       ],
+       [
+        "0x1620abed8d57c123",
+        30
+       ],
+       [
+        "0x17119634b6e0b94e",
+        30
+       ],
+       [
+        "0x1720809fedd7c312",
+        30
+       ],
+       [
+        "0x173c1a1da51e4041",
+        30
+       ],
+       [
+        "0x196caa19dec0db16",
+        30
+       ],
+       [
+        "0x1cc46e62aff421e3",
+        30
+       ],
+       [
+        "0x21a1cbe13db0c857",
+        30
+       ],
+       [
+        "0x2236ad02062a50fa",
+        30
+       ],
+       [
+        "0x2326008b3563bb5f",
+        30
+       ],
+       [
+        "0x23b8ef56a6e14ba5",
+        30
+       ],
+       [
+        "0x2483a9032b88c419",
+        30
+       ],
+       [
+        "0x297d4802e551736b",
+        30
+       ],
+       [
+        "0x2a96291b44fd4a07",
+        30
+       ],
+       [
+        "0x2b276b784e2524d9",
+        30
+       ],
+       [
+        "0x2b86f3626e860bd2",
+        30
+       ],
+       [
+        "0x300548f6dbe2a4cd",
+        30
+       ],
+       [
+        "0x311b81f8daf0a271",
+        30
+       ],
+       [
+        "0x32cd13c8d800d83e",
+        30
+       ],
+       [
+        "0x3b19bdaeee688e33",
+        30
+       ],
+       [
+        "0x3b55c8f63277b45d",
+        30
+       ],
+       [
+        "0x3df4b0f8690cf004",
+        30
+       ],
+       [
+        "0x3ff0662768c2beb7",
+        30
+       ],
+       [
+        "0x42b18a1b055b9bcb",
+        30
+       ],
+       [
+        "0x44631beb026bd198",
+        30
+       ],
+       [
+        "0x44e911ec5ff9e366",
+        30
+       ],
+       [
+        "0x452e660ea5e34859",
+        30
+       ],
+       [
+        "0x458dedf8c6442f52",
+        30
+       ],
+       [
+        "0x45ffeaee5f08f0ea",
+        30
+       ],
+       [
+        "0x47a0de6022250958",
+        30
+       ],
+       [
+        "0x47dae626bc74a547",
+        30
+       ],
+       [
+        "0x4a9c8a1a590e5bdb",
+        30
+       ],
+       [
+        "0x4c27369971bc2229",
+        30
+       ],
+       [
+        "0x4c4e1bea561e91a8",
+        30
+       ],
+       [
+        "0x50093a77210d5885",
+        30
+       ],
+       [
+        "0x523936b18b2fce97",
+        30
+       ],
+       [
+        "0x53975f298155b0d1",
+        30
+       ],
+       [
+        "0x53ce06e334c06b3d",
+        30
+       ],
+       [
+        "0x5467af1cec7e04f0",
+        30
+       ],
+       [
+        "0x57cf1bde0677627c",
+        30
+       ],
+       [
+        "0x57d6be82e8b13f32",
+        30
+       ],
+       [
+        "0x58cbd50b8e2db00b",
+        30
+       ],
+       [
+        "0x5c42cb3e941e0ce4",
+        30
+       ],
+       [
+        "0x5ee2fb9b47472e23",
+        30
+       ],
+       [
+        "0x5f8035deeabe2e2a",
+        30
+       ],
+       [
+        "0x608da95bf26a6ae9",
+        30
+       ],
+       [
+        "0x609cb3c72961ab0d",
+        30
+       ],
+       [
+        "0x63ce8a94d17476fa",
+        30
+       ],
+       [
+        "0x66b0ffa70eebee50",
+        30
+       ],
+       [
+        "0x687b481f056d25ca",
+        30
+       ],
+       [
+        "0x6b152595b09b996b",
+        30
+       ],
+       [
+        "0x6bc24406edc61791",
+        30
+       ],
+       [
+        "0x6d433e0111e92ca4",
+        30
+       ],
+       [
+        "0x6d45f8b0e5783119",
+        30
+       ],
+       [
+        "0x6d4e51d3c075a87d",
+        30
+       ]
+      ],
+      "all": [
+       [
+        "0x0a7b9dd88d871203",
+        32
+       ],
+       [
+        "0xd3e81ce1448aa5d6",
+        32
+       ],
+       [
+        "0x6d4e51d3c075a87d",
+        32
+       ],
+       [
+        "0x124921e4552af8b0",
+        32
+       ],
+       [
+        "0xfdd1d8eed16fb277",
+        32
+       ],
+       [
+        "0x5f8035deeabe2e2a",
+        32
+       ],
+       [
+        "0xa120cce47ea734b1",
+        32
+       ],
+       [
+        "0x6d433e0111e92ca4",
+        32
+       ],
+       [
+        "0x58cbd50b8e2db00b",
+        32
+       ],
+       [
+        "0x6b152595b09b996b",
+        32
+       ],
+       [
+        "0x7f8c8e8b34571604",
+        32
+       ],
+       [
+        "0x029a2d3f33253cb5",
+        32
+       ],
+       [
+        "0x17119634b6e0b94e",
+        32
+       ],
+       [
+        "0x912c756509c0cfef",
+        32
+       ],
+       [
+        "0xa610de5a8dd91e68",
+        32
+       ],
+       [
+        "0x608da95bf26a6ae9",
+        32
+       ],
+       [
+        "0xde55f149bf57e422",
+        32
+       ],
+       [
+        "0x1cc46e62aff421e3",
+        32
+       ],
+       [
+        "0x9966f970d1c1887c",
+        32
+       ],
+       [
+        "0x63ce8a94d17476fa",
+        32
+       ],
+       [
+        "0xfd351f874d601cc1",
+        32
+       ],
+       [
+        "0x47a0de6022250958",
+        32
+       ],
+       [
+        "0xe10773529e10af1f",
+        32
+       ],
+       [
+        "0x8ff5d639129e8dfe",
+        32
+       ],
+       [
+        "0x23b8ef56a6e14ba5",
+        32
+       ],
+       [
+        "0xbd30375d2aa0286c",
+        32
+       ],
+       [
+        "0x14d9ee635c423b53",
+        32
+       ],
+       [
+        "0x2b86f3626e860bd2",
+        32
+       ],
+       [
+        "0x2b276b784e2524d9",
+        32
+       ],
+       [
+        "0x936ceffdadd72d00",
+        32
+       ],
+       [
+        "0x2a96291b44fd4a07",
+        32
+       ],
+       [
+        "0xce5e30f233e85612",
+        32
+       ],
+       [
+        "0x2483a9032b88c419",
+        32
+       ],
+       [
+        "0xb68c74e80803c7ac",
+        32
+       ],
+       [
+        "0xb7b12bf321a48593",
+        32
+       ],
+       [
+        "0x32cd13c8d800d83e",
+        32
+       ],
+       [
+        "0xc9f62ce66f26bee5",
+        32
+       ],
+       [
+        "0x44631beb026bd198",
+        32
+       ],
+       [
+        "0xda63b0dd7b744e5f",
+        32
+       ],
+       [
+        "0x53975f298155b0d1",
+        32
+       ],
+       [
+        "0x687b481f056d25ca",
+        32
+       ],
+       [
+        "0x8deeb2efea07982f",
+        32
+       ],
+       [
+        "0x4c4e1bea561e91a8",
+        32
+       ],
+       [
+        "0xa8d76acefb6aaff5",
+        32
+       ],
+       [
+        "0xbd4ed3c47f262c8e",
+        32
+       ],
+       [
+        "0x1620abed8d57c123",
+        32
+       ],
+       [
+        "0x962936fbb20850bc",
+        32
+       ],
+       [
+        "0x0364e6ebb7ccb529",
+        32
+       ],
+       [
+        "0x84932ed9879d5762",
+        32
+       ],
+       [
+        "0xe9ef15cfa33be5d2",
+        32
+       ],
+       [
+        "0xe98f8de582dafed9",
+        32
+       ],
+       [
+        "0xaefdd4db1d2abcc0",
+        32
+       ],
+       [
+        "0xec3c0dfd996c5bc7",
+        32
+       ],
+       [
+        "0x44e911ec5ff9e366",
+        32
+       ],
+       [
+        "0x300548f6dbe2a4cd",
+        32
+       ],
+       [
+        "0xb6d970fcc4cb9e34",
+        32
+       ],
+       [
+        "0x4a9c8a1a590e5bdb",
+        32
+       ],
+       [
+        "0x2236ad02062a50fa",
+        32
+       ],
+       [
+        "0xbb9d41f48215f6c1",
+        32
+       ],
+       [
+        "0xdb2c90cfe4a9fbe3",
+        32
+       ],
+       [
+        "0x57cf1bde0677627c",
+        32
+       ],
+       [
+        "0x3b55c8f63277b45d",
+        32
+       ],
+       [
+        "0xfb1e8fd3b3afbe36",
+        32
+       ],
+       [
+        "0x21a1cbe13db0c857",
+        32
+       ],
+       [
+        "0xe2fa94dbac4ebc10",
+        32
+       ],
+       [
+        "0x6bc24406edc61791",
+        32
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 127968000,
+     "plays": 4128,
+     "sinceDay": 288,
+     "countingDays": 32,
+     "windows": [
+      7,
+      30,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        313,
+        3999000,
+        129
+       ],
+       [
+        314,
+        3999000,
+        129
+       ],
+       [
+        315,
+        3999000,
+        129
+       ],
+       [
+        316,
+        3999000,
+        129
+       ],
+       [
+        317,
+        3999000,
+        129
+       ],
+       [
+        318,
+        3999000,
+        129
+       ],
+       [
+        319,
+        3999000,
+        129
+       ]
+      ],
+      "listenedMs": 27993000,
+      "plays": 903,
+      "topDay": 319,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 0,
+     "oldFavourites": 0,
+     "notPlayed": 6
+    }
+   }
+  ]
+ },
+ {
+  "name": "no-clock",
+  "note": "The clock never set: three undated plays, now unset at the save. sinceDay comes from the root's commitTime (flags bit 0); the shelves that need dates have no list, Most played's All time and Recently played (by lastOrd) do.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.jnl": "no-clock/0"
+    },
+    "added": [],
+    "acks": [],
+    "now": null,
+    "today": null,
+    "commitTime": 1793534400,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.jnl": "no-clock/0",
+     "stats.bin": "no-clock/1"
+    },
+    "read": "absent",
+    "why": null,
+    "folded": 3,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [],
+    "stats": {
+     "generation": 1,
+     "head": {
+      "plays": 3,
+      "skips": 0,
+      "listenedMs": 600000,
+      "slots": 3,
+      "you": [
+       3,
+       0,
+       600000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 3,
+      "sinceDay": 304,
+      "flags": 1,
+      "round": 1,
+      "baseGen": 0,
+      "baseRows": 0,
+      "baseCrc": 0,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       3
+      ]
+     ],
+     "rows": {
+      "hour": 0,
+      "days": 0,
+      "rcnt": 0,
+      "trkd": 2,
+      "base": 0
+     }
+    },
+    "lists": {
+     "newFinds": null,
+     "oldFavourites": null,
+     "recentlyPlayed": [
+      [
+       "0x832a7da9ed0311e6",
+       1,
+       0,
+       1
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       2,
+       0,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Copper Season",
+      "Glass Harbour",
+      "Paper Comets",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": null,
+      "30": null,
+      "all": [
+       [
+        "0xd222fa5e5713f77e",
+        2
+       ],
+       [
+        "0x832a7da9ed0311e6",
+        1
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 600000,
+     "plays": 3,
+     "sinceDay": 304,
+     "countingDays": null,
+     "windows": [],
+     "week": null,
+     "newFinds": null,
+     "oldFavourites": null,
+     "notPlayed": 5
+    }
+   }
+  ]
+ },
+ {
+  "name": "no-clock-dated",
+  "note": "The board's clock unset, but device B's plays are dated, 100 days back: sinceDay is their earliest day (not flagged), and with no today nothing is pruned by date, so their RCNT rows stay.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "no-clock-dated/0",
+     "plays.jnl": "no-clock-dated/0"
+    },
+    "added": [],
+    "acks": [],
+    "now": null,
+    "today": null,
+    "commitTime": 1793534400,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.1.jnl": "no-clock-dated/0",
+     "plays.jnl": "no-clock-dated/0",
+     "stats.bin": "no-clock-dated/1"
+    },
+    "read": "absent",
+    "why": null,
+    "folded": 5,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [],
+    "stats": {
+     "generation": 1,
+     "head": {
+      "plays": 5,
+      "skips": 0,
+      "listenedMs": 1000000,
+      "slots": 5,
+      "you": [
+       5,
+       0,
+       1000000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 3,
+      "sinceDay": 212,
+      "flags": 0,
+      "round": 1,
+      "baseGen": 0,
+      "baseRows": 0,
+      "baseCrc": 0,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       3
+      ],
+      [
+       "00005e005302",
+       "0x0a0b0c0d0e0f1011",
+       2
+      ]
+     ],
+     "rows": {
+      "hour": 2,
+      "days": 2,
+      "rcnt": 2,
+      "trkd": 3,
+      "base": 0
+     }
+    },
+    "lists": {
+     "newFinds": null,
+     "oldFavourites": null,
+     "recentlyPlayed": [
+      [
+       "0x9adbc88aa24ceb75",
+       2,
+       18439201,
+       1
+      ],
+      [
+       "0x832a7da9ed0311e6",
+       1,
+       0,
+       1
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       2,
+       0,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Glass Harbour",
+      "Paper Comets",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": null,
+      "30": null,
+      "all": [
+       [
+        "0x9adbc88aa24ceb75",
+        2
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        2
+       ],
+       [
+        "0x832a7da9ed0311e6",
+        1
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 1000000,
+     "plays": 5,
+     "sinceDay": 212,
+     "countingDays": null,
+     "windows": [],
+     "week": null,
+     "newFinds": null,
+     "oldFavourites": null,
+     "notPlayed": 4
+    }
+   }
+  ]
+ },
+ {
+  "name": "compaction",
+  "note": "A base of 6 rows (stats-00000001.bin) and a delta of 4 new rows from the log: over a quarter of the base, and nothing playing, so the boot's save compacts: stats-00000002.bin holds base (+) delta, stats.bin names it with an empty TRKD, and the old base goes. ACKS covers the log, which the new MARK covers too: trimmed.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.jnl": "compaction/0",
+     "stats-00000001.bin": "compaction/0",
+     "stats.bin": "compaction/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      16
+     ]
+    ],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": false,
+    "safePoint": true,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "stats-00000002.bin": "compaction/1",
+     "stats.bin": "compaction/1"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 4,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": true,
+    "removed": [
+     "stats-00000001.bin"
+    ],
+    "trimmed": [
+     "plays.jnl"
+    ],
+    "stats": {
+     "generation": 2,
+     "head": {
+      "plays": 16,
+      "skips": 0,
+      "listenedMs": 3200000,
+      "slots": 16,
+      "you": [
+       16,
+       0,
+       3200000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 274,
+      "flags": 0,
+      "round": 2,
+      "baseGen": 2,
+      "baseRows": 9,
+      "baseCrc": 2208826366,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       16
+      ]
+     ],
+     "rows": {
+      "hour": 16,
+      "days": 16,
+      "rcnt": 14,
+      "trkd": 0,
+      "base": 9
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0xc3380bf65e7023d1",
+       1,
+       26474401,
+       0
+      ],
+      [
+       "0x5ab8d5025ca01351",
+       1,
+       26388001,
+       0
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       1,
+       26301601,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0x9adbc88aa24ceb75",
+       3,
+       26560801,
+       2
+      ],
+      [
+       "0xc3380bf65e7023d1",
+       1,
+       26474401,
+       2
+      ],
+      [
+       "0x5ab8d5025ca01351",
+       1,
+       26388001,
+       2
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       1,
+       26301601,
+       2
+      ],
+      [
+       "0x8d5c2e4c7ace92ce",
+       2,
+       24573601,
+       1
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       2,
+       24487201,
+       1
+      ],
+      [
+       "0xf78a2e6d090eff64",
+       2,
+       24400801,
+       1
+      ],
+      [
+       "0x3df15c814b89ab75",
+       2,
+       24314401,
+       1
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       2,
+       24228001,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Quiet Engine"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0x9adbc88aa24ceb75",
+        1
+       ]
+      ],
+      "30": [
+       [
+        "0x9adbc88aa24ceb75",
+        2
+       ],
+       [
+        "0xc3380bf65e7023d1",
+        1
+       ],
+       [
+        "0x5ab8d5025ca01351",
+        1
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        1
+       ],
+       [
+        "0x8d5c2e4c7ace92ce",
+        1
+       ]
+      ],
+      "all": [
+       [
+        "0x9adbc88aa24ceb75",
+        3
+       ],
+       [
+        "0x8d5c2e4c7ace92ce",
+        2
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        2
+       ],
+       [
+        "0xf78a2e6d090eff64",
+        2
+       ],
+       [
+        "0x3df15c814b89ab75",
+        2
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        2
+       ],
+       [
+        "0xc3380bf65e7023d1",
+        1
+       ],
+       [
+        "0x5ab8d5025ca01351",
+        1
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        1
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 3200000,
+     "plays": 16,
+     "sinceDay": 274,
+     "countingDays": 40,
+     "windows": [
+      7,
+      30,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        307,
+        200000,
+        1
+       ],
+       [
+        308,
+        0,
+        0
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        0,
+        0
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 200000,
+      "plays": 1,
+      "topDay": 307,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 3,
+     "oldFavourites": 0,
+     "notPlayed": 1
+    }
+   }
+  ]
+ },
+ {
+  "name": "compaction-playing",
+  "note": "As compaction, with a track playing at the save: the delta (96 B) is under 96 KB, so no compaction; TRKD holds the 4 rows and the base stays.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.jnl": "compaction-playing/0",
+     "stats-00000001.bin": "compaction-playing/0",
+     "stats.bin": "compaction-playing/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      16
+     ]
+    ],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": true,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "stats-00000001.bin": "compaction-playing/0",
+     "stats.bin": "compaction-playing/1"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 4,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [
+     "plays.jnl"
+    ],
+    "stats": {
+     "generation": 2,
+     "head": {
+      "plays": 16,
+      "skips": 0,
+      "listenedMs": 3200000,
+      "slots": 16,
+      "you": [
+       16,
+       0,
+       3200000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 274,
+      "flags": 0,
+      "round": 2,
+      "baseGen": 1,
+      "baseRows": 6,
+      "baseCrc": 3475875791,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       16
+      ]
+     ],
+     "rows": {
+      "hour": 16,
+      "days": 16,
+      "rcnt": 14,
+      "trkd": 4,
+      "base": 6
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0xc3380bf65e7023d1",
+       1,
+       26474401,
+       0
+      ],
+      [
+       "0x5ab8d5025ca01351",
+       1,
+       26388001,
+       0
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       1,
+       26301601,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0x9adbc88aa24ceb75",
+       3,
+       26560801,
+       2
+      ],
+      [
+       "0xc3380bf65e7023d1",
+       1,
+       26474401,
+       2
+      ],
+      [
+       "0x5ab8d5025ca01351",
+       1,
+       26388001,
+       2
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       1,
+       26301601,
+       2
+      ],
+      [
+       "0x8d5c2e4c7ace92ce",
+       2,
+       24573601,
+       1
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       2,
+       24487201,
+       1
+      ],
+      [
+       "0xf78a2e6d090eff64",
+       2,
+       24400801,
+       1
+      ],
+      [
+       "0x3df15c814b89ab75",
+       2,
+       24314401,
+       1
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       2,
+       24228001,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Quiet Engine"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0x9adbc88aa24ceb75",
+        1
+       ]
+      ],
+      "30": [
+       [
+        "0x9adbc88aa24ceb75",
+        2
+       ],
+       [
+        "0xc3380bf65e7023d1",
+        1
+       ],
+       [
+        "0x5ab8d5025ca01351",
+        1
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        1
+       ],
+       [
+        "0x8d5c2e4c7ace92ce",
+        1
+       ]
+      ],
+      "all": [
+       [
+        "0x9adbc88aa24ceb75",
+        3
+       ],
+       [
+        "0x8d5c2e4c7ace92ce",
+        2
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        2
+       ],
+       [
+        "0xf78a2e6d090eff64",
+        2
+       ],
+       [
+        "0x3df15c814b89ab75",
+        2
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        2
+       ],
+       [
+        "0xc3380bf65e7023d1",
+        1
+       ],
+       [
+        "0x5ab8d5025ca01351",
+        1
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        1
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 3200000,
+     "plays": 16,
+     "sinceDay": 274,
+     "countingDays": 40,
+     "windows": [
+      7,
+      30,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        307,
+        200000,
+        1
+       ],
+       [
+        308,
+        0,
+        0
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        0,
+        0
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 200000,
+      "plays": 1,
+      "topDay": 307,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 3,
+     "oldFavourites": 0,
+     "notPlayed": 1
+    }
+   }
+  ]
+ },
+ {
+  "name": "gap",
+  "note": "stats.bin's MARK (A) is 10; 0.14.0 then ran, the card was synced (ACKS (A) 50) and 0.14.0 trimmed the files holding 11-40 without folding them. The log now holds 41-60. The boot folds 41-60, counts seqs 11-40 in HEAD's gap (30: plays lost to the stats), and MARK covers them. The second boot finds nothing new: no save, no second count of the gap.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.jnl": "gap/0",
+     "stats-00000001.bin": "gap/0",
+     "stats.bin": "gap/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      50
+     ]
+    ],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.jnl": "gap/0",
+     "stats-00000001.bin": "gap/0",
+     "stats.bin": "gap/1"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 20,
+    "twice": 0,
+    "gap": 30,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [],
+    "stats": {
+     "generation": 2,
+     "head": {
+      "plays": 30,
+      "skips": 0,
+      "listenedMs": 6000000,
+      "slots": 30,
+      "you": [
+       30,
+       0,
+       6000000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 304,
+      "flags": 0,
+      "round": 2,
+      "baseGen": 1,
+      "baseRows": 1,
+      "baseCrc": 4031974253,
+      "twice": 0,
+      "gap": 30
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       60
+      ]
+     ],
+     "rows": {
+      "hour": 15,
+      "days": 2,
+      "rcnt": 2,
+      "trkd": 1,
+      "base": 1
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0xf78a2e6d090eff64",
+       20,
+       26899201,
+       0
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       10,
+       26298001,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0xf78a2e6d090eff64",
+       20,
+       26913601,
+       2
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       10,
+       26330401,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Glass Harbour",
+      "Night Ticket",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0xf78a2e6d090eff64",
+        20
+       ]
+      ],
+      "30": [
+       [
+        "0xf78a2e6d090eff64",
+        20
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        10
+       ]
+      ],
+      "all": [
+       [
+        "0xf78a2e6d090eff64",
+        20
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        10
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 6000000,
+     "plays": 30,
+     "sinceDay": 304,
+     "countingDays": 10,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        307,
+        0,
+        0
+       ],
+       [
+        308,
+        0,
+        0
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        4000000,
+        20
+       ],
+       [
+        312,
+        0,
+        0
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 4000000,
+      "plays": 20,
+      "topDay": 311,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 2,
+     "oldFavourites": 0,
+     "notPlayed": 4
+    }
+   },
+   {
+    "in": {
+     "plays.jnl": "gap/0",
+     "stats-00000001.bin": "gap/0",
+     "stats.bin": "gap/1"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      50
+     ]
+    ],
+    "now": 1794387600000,
+    "today": 314,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.jnl": "gap/0",
+     "stats-00000001.bin": "gap/0",
+     "stats.bin": "gap/1"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 0,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [],
+    "stats": {
+     "generation": 2,
+     "head": {
+      "plays": 30,
+      "skips": 0,
+      "listenedMs": 6000000,
+      "slots": 30,
+      "you": [
+       30,
+       0,
+       6000000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 304,
+      "flags": 0,
+      "round": 2,
+      "baseGen": 1,
+      "baseRows": 1,
+      "baseCrc": 4031974253,
+      "twice": 0,
+      "gap": 30
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       60
+      ]
+     ],
+     "rows": {
+      "hour": 15,
+      "days": 2,
+      "rcnt": 2,
+      "trkd": 1,
+      "base": 1
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0xf78a2e6d090eff64",
+       20,
+       26899201,
+       0
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       10,
+       26298001,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0xf78a2e6d090eff64",
+       20,
+       26913601,
+       2
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       10,
+       26330401,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Glass Harbour",
+      "Night Ticket",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0xf78a2e6d090eff64",
+        20
+       ]
+      ],
+      "30": [
+       [
+        "0xf78a2e6d090eff64",
+        20
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        10
+       ]
+      ],
+      "all": [
+       [
+        "0xf78a2e6d090eff64",
+        20
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        10
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 6000000,
+     "plays": 30,
+     "sinceDay": 304,
+     "countingDays": 11,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        308,
+        0,
+        0
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        4000000,
+        20
+       ],
+       [
+        312,
+        0,
+        0
+       ],
+       [
+        313,
+        0,
+        0
+       ],
+       [
+        314,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 4000000,
+      "plays": 20,
+      "topDay": 311,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 2,
+     "oldFavourites": 0,
+     "notPlayed": 4
+    }
+   }
+  ]
+ },
+ {
+  "name": "save-fails",
+  "note": "stats.bin covers plays.1.jnl (MARK (A) 4); plays.jnl holds 5-8; ACKS (A) 8 covers both. The card is full: the boot's save fails, stats.bin stays as it was, and the trim follows the MARK read at the boot: plays.1.jnl goes, plays.jnl stays for the next boot to fold.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "save-fails/0",
+     "plays.jnl": "save-fails/0",
+     "stats-00000001.bin": "save-fails/0",
+     "stats.bin": "save-fails/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      8
+     ]
+    ],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": false,
+    "safePoint": true,
+    "saveFails": true,
+    "unread": {},
+    "out": {
+     "plays.jnl": "save-fails/0",
+     "stats-00000001.bin": "save-fails/0",
+     "stats.bin": "save-fails/0"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 4,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [
+     "plays.1.jnl"
+    ],
+    "stats": {
+     "generation": 1,
+     "head": {
+      "plays": 4,
+      "skips": 0,
+      "listenedMs": 800000,
+      "slots": 4,
+      "you": [
+       4,
+       0,
+       800000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 305,
+      "flags": 0,
+      "round": 1,
+      "baseGen": 1,
+      "baseRows": 1,
+      "baseCrc": 932067447,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       4
+      ]
+     ],
+     "rows": {
+      "hour": 4,
+      "days": 1,
+      "rcnt": 1,
+      "trkd": 0,
+      "base": 1
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0x5ab8d5025ca01351",
+       4,
+       26384401,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0x5ab8d5025ca01351",
+       4,
+       26395201,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Copper Season",
+      "Glass Harbour",
+      "Night Ticket",
+      "Paper Comets",
+      "Quiet Engine"
+     ],
+     "mostPlayed": {
+      "7": [],
+      "30": [
+       [
+        "0x5ab8d5025ca01351",
+        4
+       ]
+      ],
+      "all": [
+       [
+        "0x5ab8d5025ca01351",
+        4
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 800000,
+     "plays": 4,
+     "sinceDay": 305,
+     "countingDays": 9,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        307,
+        0,
+        0
+       ],
+       [
+        308,
+        0,
+        0
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        0,
+        0
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 0,
+      "plays": 0,
+      "topDay": null,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 1,
+     "oldFavourites": 0,
+     "notPlayed": 5
+    }
+   }
+  ]
+ },
+ {
+  "name": "newer",
+  "note": "stats.bin of a newer major (2; its frame whole). The stats are off this session: nothing folded, no save, and no trim although ACKS covers the log; every file is left as it is.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "newer/0",
+     "plays.jnl": "newer/0",
+     "stats-00000001.bin": "newer/0",
+     "stats.bin": "newer/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      10
+     ]
+    ],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": false,
+    "safePoint": true,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.1.jnl": "newer/0",
+     "plays.jnl": "newer/0",
+     "stats-00000001.bin": "newer/0",
+     "stats.bin": "newer/0"
+    },
+    "read": "newer",
+    "why": "Major",
+    "folded": 0,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "trimmed": []
+   }
+  ]
+ },
+ {
+  "name": "corrupt",
+  "note": "stats.bin one byte short (FileBytes), and an older stats.bad. stats.bin is renamed stats.bad over the older one, and counting starts again from the log: every slot in it folded. The stale stats-00000001.bin it named is named by nothing now: nothing playing, the save compacts and writes the new base under that name, over it (5.3).",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "corrupt/0",
+     "plays.jnl": "corrupt/0",
+     "stats-00000001.bin": "corrupt/0",
+     "stats.bad": "corrupt/0",
+     "stats.bin": "corrupt/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      10
+     ]
+    ],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": false,
+    "safePoint": true,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "stats-00000001.bin": "corrupt/1",
+     "stats.bad": "corrupt/1",
+     "stats.bin": "corrupt/1"
+    },
+    "read": "corrupt",
+    "why": "FileBytes",
+    "folded": 10,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": true,
+    "removed": [],
+    "trimmed": [
+     "plays.1.jnl",
+     "plays.jnl"
+    ],
+    "stats": {
+     "generation": 1,
+     "head": {
+      "plays": 10,
+      "skips": 0,
+      "listenedMs": 2000000,
+      "slots": 10,
+      "you": [
+       10,
+       0,
+       2000000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 305,
+      "flags": 0,
+      "round": 1,
+      "baseGen": 1,
+      "baseRows": 4,
+      "baseCrc": 2323625286,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       10
+      ]
+     ],
+     "rows": {
+      "hour": 10,
+      "days": 2,
+      "rcnt": 5,
+      "trkd": 0,
+      "base": 4
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0x9adbc88aa24ceb75",
+       4,
+       26384401,
+       0
+      ],
+      [
+       "0xe604b5c8d82005d1",
+       2,
+       26985601,
+       0
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       2,
+       26391601,
+       0
+      ],
+      [
+       "0x832a7da9ed0311e6",
+       2,
+       26388001,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0xe604b5c8d82005d1",
+       2,
+       26992801,
+       1
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       4,
+       26989201,
+       1
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       2,
+       26402401,
+       1
+      ],
+      [
+       "0x832a7da9ed0311e6",
+       2,
+       26398801,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Glass Harbour",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0x9adbc88aa24ceb75",
+        2
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ]
+      ],
+      "30": [
+       [
+        "0x9adbc88aa24ceb75",
+        4
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        2
+       ],
+       [
+        "0x832a7da9ed0311e6",
+        2
+       ]
+      ],
+      "all": [
+       [
+        "0x9adbc88aa24ceb75",
+        4
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        2
+       ],
+       [
+        "0x832a7da9ed0311e6",
+        2
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 2000000,
+     "plays": 10,
+     "sinceDay": 305,
+     "countingDays": 9,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        307,
+        0,
+        0
+       ],
+       [
+        308,
+        0,
+        0
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        800000,
+        4
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 800000,
+      "plays": 4,
+      "topDay": 312,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 4,
+     "oldFavourites": 0,
+     "notPlayed": 3
+    }
+   }
+  ]
+ },
+ {
+  "name": "base-lost",
+  "note": "The base stats.bin names (stats-00000001.bin) isn't there; a stats-00000002.bin (a cut compaction's) is. The base is lost: flags bit 1, baseGen 0, its rows gone, the totals kept; the fold goes on, and no stats-<n>.bin is removed on this boot. A track plays: no compaction.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "base-lost/0",
+     "plays.jnl": "base-lost/0",
+     "stats-00000002.bin": "base-lost/0",
+     "stats.bin": "base-lost/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      10
+     ]
+    ],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "stats-00000002.bin": "base-lost/0",
+     "stats.bin": "base-lost/1"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 4,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [
+     "plays.1.jnl",
+     "plays.jnl"
+    ],
+    "stats": {
+     "generation": 2,
+     "head": {
+      "plays": 10,
+      "skips": 0,
+      "listenedMs": 2000000,
+      "slots": 10,
+      "you": [
+       10,
+       0,
+       2000000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 305,
+      "flags": 2,
+      "round": 2,
+      "baseGen": 0,
+      "baseRows": 0,
+      "baseCrc": 0,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       10
+      ]
+     ],
+     "rows": {
+      "hour": 10,
+      "days": 2,
+      "rcnt": 5,
+      "trkd": 2,
+      "base": 0
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0xe604b5c8d82005d1",
+       2,
+       26985601,
+       0
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       2,
+       26982001,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0xe604b5c8d82005d1",
+       2,
+       26992801,
+       2
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       2,
+       26989201,
+       2
+      ]
+     ],
+     "notPlayed": [
+      "Glass Harbour",
+      "Night Ticket",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0x9adbc88aa24ceb75",
+        2
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ]
+      ],
+      "30": [
+       [
+        "0x9adbc88aa24ceb75",
+        4
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        2
+       ],
+       [
+        "0x832a7da9ed0311e6",
+        2
+       ]
+      ],
+      "all": [
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        2
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 2000000,
+     "plays": 10,
+     "sinceDay": 305,
+     "countingDays": 9,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        307,
+        0,
+        0
+       ],
+       [
+        308,
+        0,
+        0
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        800000,
+        4
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 800000,
+      "plays": 4,
+      "topDay": 312,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 2,
+     "oldFavourites": 0,
+     "notPlayed": 4
+    }
+   }
+  ]
+ },
+ {
+  "name": "base-other",
+  "note": "Another file under the base's name: its header whole, its CRC not stats.bin's baseCrc. The base is lost (flags bit 1, the totals kept). Nothing playing, so the save compacts, and the new base, stats-00000001.bin again, replaces that file; nothing is removed.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "base-other/0",
+     "plays.jnl": "base-other/0",
+     "stats-00000001.bin": "base-other/0",
+     "stats.bin": "base-other/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      10
+     ]
+    ],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": false,
+    "safePoint": true,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "stats-00000001.bin": "base-other/1",
+     "stats.bin": "base-other/1"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 4,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": true,
+    "removed": [],
+    "trimmed": [
+     "plays.1.jnl",
+     "plays.jnl"
+    ],
+    "stats": {
+     "generation": 2,
+     "head": {
+      "plays": 10,
+      "skips": 0,
+      "listenedMs": 2000000,
+      "slots": 10,
+      "you": [
+       10,
+       0,
+       2000000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 305,
+      "flags": 2,
+      "round": 2,
+      "baseGen": 1,
+      "baseRows": 2,
+      "baseCrc": 1049946614,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       10
+      ]
+     ],
+     "rows": {
+      "hour": 10,
+      "days": 2,
+      "rcnt": 5,
+      "trkd": 0,
+      "base": 2
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0xe604b5c8d82005d1",
+       2,
+       26985601,
+       0
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       2,
+       26982001,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0xe604b5c8d82005d1",
+       2,
+       26992801,
+       2
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       2,
+       26989201,
+       2
+      ]
+     ],
+     "notPlayed": [
+      "Glass Harbour",
+      "Night Ticket",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0x9adbc88aa24ceb75",
+        2
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ]
+      ],
+      "30": [
+       [
+        "0x9adbc88aa24ceb75",
+        4
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        2
+       ],
+       [
+        "0x832a7da9ed0311e6",
+        2
+       ]
+      ],
+      "all": [
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        2
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 2000000,
+     "plays": 10,
+     "sinceDay": 305,
+     "countingDays": 9,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        307,
+        0,
+        0
+       ],
+       [
+        308,
+        0,
+        0
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        800000,
+        4
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 800000,
+      "plays": 4,
+      "topDay": 312,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 2,
+     "oldFavourites": 0,
+     "notPlayed": 4
+    }
+   }
+  ]
+ },
+ {
+  "name": "base-unread",
+  "note": "The base's header is the one stats.bin names, but its last row fails its CRC: a card fault, never a lost base. The stats are off this session (unread): nothing folded, no save, no trim; every file left as it is.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "base-unread/0",
+     "plays.jnl": "base-unread/0",
+     "stats-00000001.bin": "base-unread/0",
+     "stats.bin": "base-unread/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      10
+     ]
+    ],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": false,
+    "safePoint": true,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.1.jnl": "base-unread/0",
+     "plays.jnl": "base-unread/0",
+     "stats-00000001.bin": "base-unread/0",
+     "stats.bin": "base-unread/0"
+    },
+    "read": "unread",
+    "why": "SectionCrc",
+    "folded": 0,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "trimmed": []
+   }
+  ]
+ },
+ {
+  "name": "base-short",
+  "note": "The base cut to 39 bytes: its header doesn't read whole, so the card failed it (unread), as at 41 bytes (Short) or any length (FileBytes): never a lost base.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "base-short/0",
+     "plays.jnl": "base-short/0",
+     "stats-00000001.bin": "base-short/0",
+     "stats.bin": "base-short/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      10
+     ]
+    ],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": false,
+    "safePoint": true,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.1.jnl": "base-short/0",
+     "plays.jnl": "base-short/0",
+     "stats-00000001.bin": "base-short/0",
+     "stats.bin": "base-short/0"
+    },
+    "read": "unread",
+    "why": "Short",
+    "folded": 0,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "trimmed": []
+   }
+  ]
+ },
+ {
+  "name": "base-neighbours",
+  "note": "A stats-00000002.bin (a compaction cut before stats.bin named it) beside a stats.bin naming stats-00000001.bin, which checks whole: the neighbour is removed. A track plays: no compaction.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "base-neighbours/0",
+     "plays.jnl": "base-neighbours/0",
+     "stats-00000001.bin": "base-neighbours/0",
+     "stats-00000002.bin": "base-neighbours/0",
+     "stats.bin": "base-neighbours/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      10
+     ]
+    ],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "stats-00000001.bin": "base-neighbours/0",
+     "stats.bin": "base-neighbours/1"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 4,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [
+     "stats-00000002.bin"
+    ],
+    "trimmed": [
+     "plays.1.jnl",
+     "plays.jnl"
+    ],
+    "stats": {
+     "generation": 2,
+     "head": {
+      "plays": 10,
+      "skips": 0,
+      "listenedMs": 2000000,
+      "slots": 10,
+      "you": [
+       10,
+       0,
+       2000000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 305,
+      "flags": 0,
+      "round": 2,
+      "baseGen": 1,
+      "baseRows": 3,
+      "baseCrc": 650263197,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       10
+      ]
+     ],
+     "rows": {
+      "hour": 10,
+      "days": 2,
+      "rcnt": 5,
+      "trkd": 2,
+      "base": 3
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0x9adbc88aa24ceb75",
+       4,
+       26384401,
+       0
+      ],
+      [
+       "0xe604b5c8d82005d1",
+       2,
+       26985601,
+       0
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       2,
+       26391601,
+       0
+      ],
+      [
+       "0x832a7da9ed0311e6",
+       2,
+       26388001,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0xe604b5c8d82005d1",
+       2,
+       26992801,
+       2
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       4,
+       26989201,
+       2
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       2,
+       26402401,
+       1
+      ],
+      [
+       "0x832a7da9ed0311e6",
+       2,
+       26398801,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Glass Harbour",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0x9adbc88aa24ceb75",
+        2
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ]
+      ],
+      "30": [
+       [
+        "0x9adbc88aa24ceb75",
+        4
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        2
+       ],
+       [
+        "0x832a7da9ed0311e6",
+        2
+       ]
+      ],
+      "all": [
+       [
+        "0x9adbc88aa24ceb75",
+        4
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        2
+       ],
+       [
+        "0x832a7da9ed0311e6",
+        2
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 2000000,
+     "plays": 10,
+     "sinceDay": 305,
+     "countingDays": 9,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        307,
+        0,
+        0
+       ],
+       [
+        308,
+        0,
+        0
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        800000,
+        4
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 800000,
+      "plays": 4,
+      "topDay": 312,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 4,
+     "oldFavourites": 0,
+     "notPlayed": 3
+    }
+   }
+  ]
+ },
+ {
+  "name": "newer-minor",
+  "note": "stats.bin of minor 3 (5.12): HEAD 32 bytes longer, every array's rows 8 bytes longer, and an OPTIONAL section XTRA. It reads (loaded) by its known sections and row prefixes; the save writes minor 0, without the additions. A track plays: no compaction.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "newer-minor/0",
+     "plays.jnl": "newer-minor/0",
+     "stats.bin": "newer-minor/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      10
+     ]
+    ],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "stats.bin": "newer-minor/1"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 4,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [
+     "plays.1.jnl",
+     "plays.jnl"
+    ],
+    "stats": {
+     "generation": 2,
+     "head": {
+      "plays": 10,
+      "skips": 0,
+      "listenedMs": 2000000,
+      "slots": 10,
+      "you": [
+       10,
+       0,
+       2000000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 305,
+      "flags": 0,
+      "round": 2,
+      "baseGen": 0,
+      "baseRows": 0,
+      "baseCrc": 0,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       10
+      ]
+     ],
+     "rows": {
+      "hour": 10,
+      "days": 2,
+      "rcnt": 5,
+      "trkd": 4,
+      "base": 0
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0x9adbc88aa24ceb75",
+       4,
+       26384401,
+       0
+      ],
+      [
+       "0xe604b5c8d82005d1",
+       2,
+       26985601,
+       0
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       2,
+       26391601,
+       0
+      ],
+      [
+       "0x832a7da9ed0311e6",
+       2,
+       26388001,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0xe604b5c8d82005d1",
+       2,
+       26992801,
+       2
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       4,
+       26989201,
+       2
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       2,
+       26402401,
+       1
+      ],
+      [
+       "0x832a7da9ed0311e6",
+       2,
+       26398801,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Glass Harbour",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0x9adbc88aa24ceb75",
+        2
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ]
+      ],
+      "30": [
+       [
+        "0x9adbc88aa24ceb75",
+        4
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        2
+       ],
+       [
+        "0x832a7da9ed0311e6",
+        2
+       ]
+      ],
+      "all": [
+       [
+        "0x9adbc88aa24ceb75",
+        4
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        2
+       ],
+       [
+        "0x832a7da9ed0311e6",
+        2
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 2000000,
+     "plays": 10,
+     "sinceDay": 305,
+     "countingDays": 9,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        307,
+        0,
+        0
+       ],
+       [
+        308,
+        0,
+        0
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        800000,
+        4
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 800000,
+      "plays": 4,
+      "topDay": 312,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 4,
+     "oldFavourites": 0,
+     "notPlayed": 3
+    }
+   }
+  ]
+ },
+ {
+  "name": "clock-ahead",
+  "note": "stats.bin holds 40 days of plays to day 312 (2026-11-09; RCNT its last 32 days). Boot 1: the board's clock a year ahead (day 677), and a play dated by it. RCNT keeps the 32 days back from 677: only that play's row. Boot 2: the clock corrected (day 313) and a new play (plays.jnl gains it before the boot): RCNT keeps 313's row and 677's (newer than the reference). HOUR, DAYS, TRKD and HEAD keep every row and count at both: the cost is RCNT's month, never a lifetime figure, an hour or a day. sinceDay stays day 273.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.jnl": "clock-ahead/0",
+     "stats-00000001.bin": "clock-ahead/0",
+     "stats.bin": "clock-ahead/0"
+    },
+    "added": [],
+    "acks": [],
+    "now": 1825761600000,
+    "today": 677,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.jnl": "clock-ahead/0",
+     "stats-00000001.bin": "clock-ahead/0",
+     "stats.bin": "clock-ahead/1"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 1,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [],
+    "stats": {
+     "generation": 2,
+     "head": {
+      "plays": 41,
+      "skips": 0,
+      "listenedMs": 8200000,
+      "slots": 41,
+      "you": [
+       41,
+       0,
+       8200000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 273,
+      "flags": 0,
+      "round": 2,
+      "baseGen": 1,
+      "baseRows": 16,
+      "baseCrc": 2818123896,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       41
+      ]
+     ],
+     "rows": {
+      "hour": 41,
+      "days": 41,
+      "rcnt": 1,
+      "trkd": 1,
+      "base": 16
+     }
+    },
+    "lists": {
+     "newFinds": [],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0x9057bc2b792857af",
+       3,
+       58528801,
+       2
+      ],
+      [
+       "0x145438baeaf72dba",
+       3,
+       26992801,
+       1
+      ],
+      [
+       "0xc1011123dcef40cd",
+       3,
+       26906401,
+       1
+      ],
+      [
+       "0x832a7da9ed0311e6",
+       3,
+       26820001,
+       1
+      ],
+      [
+       "0x8d5c2e4c7ace92ce",
+       3,
+       26733601,
+       1
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       3,
+       26647201,
+       1
+      ],
+      [
+       "0xf78a2e6d090eff64",
+       3,
+       26560801,
+       1
+      ],
+      [
+       "0x3df15c814b89ab75",
+       3,
+       26474401,
+       1
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       3,
+       26388001,
+       1
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       2,
+       26301601,
+       1
+      ],
+      [
+       "0xc3380bf65e7023d1",
+       2,
+       26215201,
+       1
+      ],
+      [
+       "0x5ab8d5025ca01351",
+       2,
+       26128801,
+       1
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       2,
+       26042401,
+       1
+      ],
+      [
+       "0xebc4649938fbd8d3",
+       2,
+       25956001,
+       1
+      ],
+      [
+       "0xc8b874afa782f35d",
+       2,
+       25869601,
+       1
+      ],
+      [
+       "0xe604b5c8d82005d1",
+       2,
+       25696801,
+       1
+      ]
+     ],
+     "notPlayed": [],
+     "mostPlayed": {
+      "7": [
+       [
+        "0x9057bc2b792857af",
+        1
+       ]
+      ],
+      "30": [
+       [
+        "0x9057bc2b792857af",
+        1
+       ]
+      ],
+      "all": [
+       [
+        "0x9057bc2b792857af",
+        3
+       ],
+       [
+        "0x145438baeaf72dba",
+        3
+       ],
+       [
+        "0xc1011123dcef40cd",
+        3
+       ],
+       [
+        "0x832a7da9ed0311e6",
+        3
+       ],
+       [
+        "0x8d5c2e4c7ace92ce",
+        3
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        3
+       ],
+       [
+        "0xf78a2e6d090eff64",
+        3
+       ],
+       [
+        "0x3df15c814b89ab75",
+        3
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        3
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        2
+       ],
+       [
+        "0xc3380bf65e7023d1",
+        2
+       ],
+       [
+        "0x5ab8d5025ca01351",
+        2
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        2
+       ],
+       [
+        "0xebc4649938fbd8d3",
+        2
+       ],
+       [
+        "0xc8b874afa782f35d",
+        2
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 8200000,
+     "plays": 41,
+     "sinceDay": 273,
+     "countingDays": 405,
+     "windows": [
+      7,
+      30,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        671,
+        0,
+        0
+       ],
+       [
+        672,
+        0,
+        0
+       ],
+       [
+        673,
+        0,
+        0
+       ],
+       [
+        674,
+        0,
+        0
+       ],
+       [
+        675,
+        0,
+        0
+       ],
+       [
+        676,
+        0,
+        0
+       ],
+       [
+        677,
+        200000,
+        1
+       ]
+      ],
+      "listenedMs": 200000,
+      "plays": 1,
+      "topDay": 677,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 0,
+     "oldFavourites": 0,
+     "notPlayed": 0
+    }
+   },
+   {
+    "in": {
+     "plays.jnl": "clock-ahead/2-in",
+     "stats-00000001.bin": "clock-ahead/0",
+     "stats.bin": "clock-ahead/1"
+    },
+    "added": [
+     "plays.jnl"
+    ],
+    "acks": [],
+    "now": 1794312000000,
+    "today": 313,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.jnl": "clock-ahead/2-in",
+     "stats-00000001.bin": "clock-ahead/0",
+     "stats.bin": "clock-ahead/2"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 1,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [],
+    "stats": {
+     "generation": 3,
+     "head": {
+      "plays": 42,
+      "skips": 0,
+      "listenedMs": 8400000,
+      "slots": 42,
+      "you": [
+       42,
+       0,
+       8400000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 273,
+      "flags": 0,
+      "round": 3,
+      "baseGen": 1,
+      "baseRows": 16,
+      "baseCrc": 2818123896,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       42
+      ]
+     ],
+     "rows": {
+      "hour": 42,
+      "days": 42,
+      "rcnt": 2,
+      "trkd": 2,
+      "base": 16
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0xebc4649938fbd8d3",
+       3,
+       24573601,
+       0
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       2,
+       24919201,
+       0
+      ],
+      [
+       "0xc3380bf65e7023d1",
+       2,
+       24832801,
+       0
+      ],
+      [
+       "0x5ab8d5025ca01351",
+       2,
+       24746401,
+       0
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       2,
+       24660001,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0x9057bc2b792857af",
+       3,
+       58528801,
+       2
+      ],
+      [
+       "0xebc4649938fbd8d3",
+       3,
+       27079201,
+       3
+      ],
+      [
+       "0x145438baeaf72dba",
+       3,
+       26992801,
+       1
+      ],
+      [
+       "0xc1011123dcef40cd",
+       3,
+       26906401,
+       1
+      ],
+      [
+       "0x832a7da9ed0311e6",
+       3,
+       26820001,
+       1
+      ],
+      [
+       "0x8d5c2e4c7ace92ce",
+       3,
+       26733601,
+       1
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       3,
+       26647201,
+       1
+      ],
+      [
+       "0xf78a2e6d090eff64",
+       3,
+       26560801,
+       1
+      ],
+      [
+       "0x3df15c814b89ab75",
+       3,
+       26474401,
+       1
+      ],
+      [
+       "0x46fda6d44e64f3d8",
+       3,
+       26388001,
+       1
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       2,
+       26301601,
+       1
+      ],
+      [
+       "0xc3380bf65e7023d1",
+       2,
+       26215201,
+       1
+      ],
+      [
+       "0x5ab8d5025ca01351",
+       2,
+       26128801,
+       1
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       2,
+       26042401,
+       1
+      ],
+      [
+       "0xc8b874afa782f35d",
+       2,
+       25869601,
+       1
+      ],
+      [
+       "0xe604b5c8d82005d1",
+       2,
+       25696801,
+       1
+      ]
+     ],
+     "notPlayed": [],
+     "mostPlayed": {
+      "7": [
+       [
+        "0xebc4649938fbd8d3",
+        1
+       ]
+      ],
+      "30": [
+       [
+        "0xebc4649938fbd8d3",
+        1
+       ]
+      ],
+      "all": [
+       [
+        "0x9057bc2b792857af",
+        3
+       ],
+       [
+        "0xebc4649938fbd8d3",
+        3
+       ],
+       [
+        "0x145438baeaf72dba",
+        3
+       ],
+       [
+        "0xc1011123dcef40cd",
+        3
+       ],
+       [
+        "0x832a7da9ed0311e6",
+        3
+       ],
+       [
+        "0x8d5c2e4c7ace92ce",
+        3
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        3
+       ],
+       [
+        "0xf78a2e6d090eff64",
+        3
+       ],
+       [
+        "0x3df15c814b89ab75",
+        3
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        3
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        2
+       ],
+       [
+        "0xc3380bf65e7023d1",
+        2
+       ],
+       [
+        "0x5ab8d5025ca01351",
+        2
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        2
+       ],
+       [
+        "0xc8b874afa782f35d",
+        2
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        2
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 8400000,
+     "plays": 42,
+     "sinceDay": 273,
+     "countingDays": 41,
+     "windows": [
+      7,
+      30,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        307,
+        200000,
+        1
+       ],
+       [
+        308,
+        200000,
+        1
+       ],
+       [
+        309,
+        200000,
+        1
+       ],
+       [
+        310,
+        200000,
+        1
+       ],
+       [
+        311,
+        200000,
+        1
+       ],
+       [
+        312,
+        200000,
+        1
+       ],
+       [
+        313,
+        200000,
+        1
+       ]
+      ],
+      "listenedMs": 1400000,
+      "plays": 7,
+      "topDay": 313,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 5,
+     "oldFavourites": 0,
+     "notPlayed": 0
+    }
+   }
+  ]
+ },
+ {
+  "name": "partial-open",
+  "note": "stats.bin's MARK (A) 4; plays.1.jnl holds 1-8, plays.jnl 9-11; ACKS (A) 11. Boot 1: the card fails plays.1.jnl's open (unread, null: no slot read). The scan goes on: 9-11 folded, but the scan was partial, so no save; the trim keeps plays.1.jnl (unread) and follows the MARK read at the boot (4), so plays.jnl stays. Boot 2 reads both whole: 5-11 folded, each once; saved; both trimmed.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "partial-open/0",
+     "plays.jnl": "partial-open/0",
+     "stats-00000001.bin": "partial-open/0",
+     "stats.bin": "partial-open/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      11
+     ]
+    ],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {
+     "plays.1.jnl": null
+    },
+    "out": {
+     "plays.1.jnl": "partial-open/0",
+     "plays.jnl": "partial-open/0",
+     "stats-00000001.bin": "partial-open/0",
+     "stats.bin": "partial-open/0"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 3,
+    "twice": 0,
+    "gap": 0,
+    "partial": true,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [],
+    "stats": {
+     "generation": 1,
+     "head": {
+      "plays": 4,
+      "skips": 0,
+      "listenedMs": 800000,
+      "slots": 4,
+      "you": [
+       4,
+       0,
+       800000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 306,
+      "flags": 0,
+      "round": 1,
+      "baseGen": 1,
+      "baseRows": 3,
+      "baseCrc": 3613896457,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       4
+      ]
+     ],
+     "rows": {
+      "hour": 4,
+      "days": 2,
+      "rcnt": 4,
+      "trkd": 0,
+      "base": 3
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0xd222fa5e5713f77e",
+       2,
+       26470801,
+       0
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       1,
+       26478001,
+       0
+      ],
+      [
+       "0x145438baeaf72dba",
+       1,
+       26474401,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0xd222fa5e5713f77e",
+       2,
+       26553601,
+       1
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       1,
+       26478001,
+       1
+      ],
+      [
+       "0x145438baeaf72dba",
+       1,
+       26474401,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Copper Season",
+      "Glass Harbour",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0xd222fa5e5713f77e",
+        1
+       ]
+      ],
+      "30": [
+       [
+        "0xd222fa5e5713f77e",
+        2
+       ],
+       [
+        "0x145438baeaf72dba",
+        1
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        1
+       ]
+      ],
+      "all": [
+       [
+        "0xd222fa5e5713f77e",
+        2
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        1
+       ],
+       [
+        "0x145438baeaf72dba",
+        1
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 800000,
+     "plays": 4,
+     "sinceDay": 306,
+     "countingDays": 8,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        307,
+        200000,
+        1
+       ],
+       [
+        308,
+        0,
+        0
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        0,
+        0
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 200000,
+      "plays": 1,
+      "topDay": 307,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 3,
+     "oldFavourites": 0,
+     "notPlayed": 4
+    }
+   },
+   {
+    "in": {
+     "plays.1.jnl": "partial-open/0",
+     "plays.jnl": "partial-open/0",
+     "stats-00000001.bin": "partial-open/0",
+     "stats.bin": "partial-open/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      11
+     ]
+    ],
+    "now": 1794387600000,
+    "today": 314,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "stats-00000001.bin": "partial-open/0",
+     "stats.bin": "partial-open/2"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 7,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [
+     "plays.1.jnl",
+     "plays.jnl"
+    ],
+    "stats": {
+     "generation": 2,
+     "head": {
+      "plays": 11,
+      "skips": 0,
+      "listenedMs": 2200000,
+      "slots": 11,
+      "you": [
+       11,
+       0,
+       2200000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 306,
+      "flags": 0,
+      "round": 2,
+      "baseGen": 1,
+      "baseRows": 3,
+      "baseCrc": 3613896457,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       11
+      ]
+     ],
+     "rows": {
+      "hour": 11,
+      "days": 3,
+      "rcnt": 9,
+      "trkd": 3,
+      "base": 3
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0x145438baeaf72dba",
+       4,
+       26474401,
+       0
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       4,
+       26470801,
+       0
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       3,
+       26478001,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0x145438baeaf72dba",
+       4,
+       26650801,
+       2
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       4,
+       26647201,
+       2
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       3,
+       26643601,
+       2
+      ]
+     ],
+     "notPlayed": [
+      "Copper Season",
+      "Glass Harbour",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0x145438baeaf72dba",
+        2
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        1
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        1
+       ]
+      ],
+      "30": [
+       [
+        "0x145438baeaf72dba",
+        4
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        4
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        3
+       ]
+      ],
+      "all": [
+       [
+        "0x145438baeaf72dba",
+        4
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        4
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        3
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 2200000,
+     "plays": 11,
+     "sinceDay": 306,
+     "countingDays": 9,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        308,
+        800000,
+        4
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        0,
+        0
+       ],
+       [
+        313,
+        0,
+        0
+       ],
+       [
+        314,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 800000,
+      "plays": 4,
+      "topDay": 308,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 3,
+     "oldFavourites": 0,
+     "notPlayed": 4
+    }
+   }
+  ]
+ },
+ {
+  "name": "partial-read",
+  "note": "As partial-open, but the card fails a read midway through plays.1.jnl: 6 slots read (1-6, so 5-6 folded), 7-8 not. 9-11 folded too; no save; nothing trimmed. Boot 2 folds 5-11 once.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "partial-read/0",
+     "plays.jnl": "partial-read/0",
+     "stats-00000001.bin": "partial-read/0",
+     "stats.bin": "partial-read/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      11
+     ]
+    ],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {
+     "plays.1.jnl": 6
+    },
+    "out": {
+     "plays.1.jnl": "partial-read/0",
+     "plays.jnl": "partial-read/0",
+     "stats-00000001.bin": "partial-read/0",
+     "stats.bin": "partial-read/0"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 5,
+    "twice": 0,
+    "gap": 0,
+    "partial": true,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [],
+    "stats": {
+     "generation": 1,
+     "head": {
+      "plays": 4,
+      "skips": 0,
+      "listenedMs": 800000,
+      "slots": 4,
+      "you": [
+       4,
+       0,
+       800000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 306,
+      "flags": 0,
+      "round": 1,
+      "baseGen": 1,
+      "baseRows": 3,
+      "baseCrc": 3613896457,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       4
+      ]
+     ],
+     "rows": {
+      "hour": 4,
+      "days": 2,
+      "rcnt": 4,
+      "trkd": 0,
+      "base": 3
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0xd222fa5e5713f77e",
+       2,
+       26470801,
+       0
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       1,
+       26478001,
+       0
+      ],
+      [
+       "0x145438baeaf72dba",
+       1,
+       26474401,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0xd222fa5e5713f77e",
+       2,
+       26553601,
+       1
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       1,
+       26478001,
+       1
+      ],
+      [
+       "0x145438baeaf72dba",
+       1,
+       26474401,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Copper Season",
+      "Glass Harbour",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0xd222fa5e5713f77e",
+        1
+       ]
+      ],
+      "30": [
+       [
+        "0xd222fa5e5713f77e",
+        2
+       ],
+       [
+        "0x145438baeaf72dba",
+        1
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        1
+       ]
+      ],
+      "all": [
+       [
+        "0xd222fa5e5713f77e",
+        2
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        1
+       ],
+       [
+        "0x145438baeaf72dba",
+        1
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 800000,
+     "plays": 4,
+     "sinceDay": 306,
+     "countingDays": 8,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        307,
+        200000,
+        1
+       ],
+       [
+        308,
+        0,
+        0
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        0,
+        0
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 200000,
+      "plays": 1,
+      "topDay": 307,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 3,
+     "oldFavourites": 0,
+     "notPlayed": 4
+    }
+   },
+   {
+    "in": {
+     "plays.1.jnl": "partial-read/0",
+     "plays.jnl": "partial-read/0",
+     "stats-00000001.bin": "partial-read/0",
+     "stats.bin": "partial-read/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      11
+     ]
+    ],
+    "now": 1794387600000,
+    "today": 314,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "stats-00000001.bin": "partial-read/0",
+     "stats.bin": "partial-read/2"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 7,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [
+     "plays.1.jnl",
+     "plays.jnl"
+    ],
+    "stats": {
+     "generation": 2,
+     "head": {
+      "plays": 11,
+      "skips": 0,
+      "listenedMs": 2200000,
+      "slots": 11,
+      "you": [
+       11,
+       0,
+       2200000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 306,
+      "flags": 0,
+      "round": 2,
+      "baseGen": 1,
+      "baseRows": 3,
+      "baseCrc": 3613896457,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       11
+      ]
+     ],
+     "rows": {
+      "hour": 11,
+      "days": 3,
+      "rcnt": 9,
+      "trkd": 3,
+      "base": 3
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0x145438baeaf72dba",
+       4,
+       26474401,
+       0
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       4,
+       26470801,
+       0
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       3,
+       26478001,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0x145438baeaf72dba",
+       4,
+       26650801,
+       2
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       4,
+       26647201,
+       2
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       3,
+       26643601,
+       2
+      ]
+     ],
+     "notPlayed": [
+      "Copper Season",
+      "Glass Harbour",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0x145438baeaf72dba",
+        2
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        1
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        1
+       ]
+      ],
+      "30": [
+       [
+        "0x145438baeaf72dba",
+        4
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        4
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        3
+       ]
+      ],
+      "all": [
+       [
+        "0x145438baeaf72dba",
+        4
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        4
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        3
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 2200000,
+     "plays": 11,
+     "sinceDay": 306,
+     "countingDays": 9,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        308,
+        800000,
+        4
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        0,
+        0
+       ],
+       [
+        313,
+        0,
+        0
+       ],
+       [
+        314,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 800000,
+      "plays": 4,
+      "topDay": 308,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 3,
+     "oldFavourites": 0,
+     "notPlayed": 4
+    }
+   }
+  ]
+ },
+ {
+  "name": "partial-tail",
+  "note": "stats.bin's MARK (A) 8; plays.1.jnl holds 3-8, plays.jnl 9-14; ACKS (A) 14. Boot 1: a read fault after plays.jnl's third slot (9-11 folded, 12-14 not): no save; the trim follows the MARK read at the boot, under which all of plays.1.jnl is: it goes (ACKS covers it), and plays.jnl (unread) stays. Boot 2 folds 9-14 once, saves, and trims plays.jnl.",
+  "device": [
+   "00005e005301",
+   "0x1122334455667788"
+  ],
+  "boots": [
+   {
+    "in": {
+     "plays.1.jnl": "partial-tail/0",
+     "plays.jnl": "partial-tail/0",
+     "stats-00000001.bin": "partial-tail/0",
+     "stats.bin": "partial-tail/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      14
+     ]
+    ],
+    "now": 1794301200000,
+    "today": 313,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {
+     "plays.jnl": 3
+    },
+    "out": {
+     "plays.jnl": "partial-tail/0",
+     "stats-00000001.bin": "partial-tail/0",
+     "stats.bin": "partial-tail/0"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 3,
+    "twice": 0,
+    "gap": 0,
+    "partial": true,
+    "saved": false,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [
+     "plays.1.jnl"
+    ],
+    "stats": {
+     "generation": 1,
+     "head": {
+      "plays": 8,
+      "skips": 0,
+      "listenedMs": 1600000,
+      "slots": 8,
+      "you": [
+       8,
+       0,
+       1600000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 306,
+      "flags": 0,
+      "round": 1,
+      "baseGen": 1,
+      "baseRows": 3,
+      "baseCrc": 2240070763,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       8
+      ]
+     ],
+     "rows": {
+      "hour": 8,
+      "days": 3,
+      "rcnt": 7,
+      "trkd": 0,
+      "base": 3
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0x145438baeaf72dba",
+       3,
+       26474401,
+       0
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       3,
+       26470801,
+       0
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       2,
+       26478001,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0x145438baeaf72dba",
+       3,
+       26640001,
+       1
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       3,
+       26564401,
+       1
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       2,
+       26560801,
+       1
+      ]
+     ],
+     "notPlayed": [
+      "Copper Season",
+      "Glass Harbour",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0x145438baeaf72dba",
+        2
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        2
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        1
+       ]
+      ],
+      "30": [
+       [
+        "0x145438baeaf72dba",
+        3
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        3
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        2
+       ]
+      ],
+      "all": [
+       [
+        "0x145438baeaf72dba",
+        3
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        3
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        2
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 1600000,
+     "plays": 8,
+     "sinceDay": 306,
+     "countingDays": 8,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        307,
+        800000,
+        4
+       ],
+       [
+        308,
+        200000,
+        1
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        0,
+        0
+       ],
+       [
+        313,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 1000000,
+      "plays": 5,
+      "topDay": 307,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 3,
+     "oldFavourites": 0,
+     "notPlayed": 4
+    }
+   },
+   {
+    "in": {
+     "plays.jnl": "partial-tail/0",
+     "stats-00000001.bin": "partial-tail/0",
+     "stats.bin": "partial-tail/0"
+    },
+    "added": [],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      14
+     ]
+    ],
+    "now": 1794387600000,
+    "today": 314,
+    "commitTime": null,
+    "playing": true,
+    "safePoint": false,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "stats-00000001.bin": "partial-tail/0",
+     "stats.bin": "partial-tail/2"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 6,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": false,
+    "removed": [],
+    "trimmed": [
+     "plays.jnl"
+    ],
+    "stats": {
+     "generation": 2,
+     "head": {
+      "plays": 14,
+      "skips": 0,
+      "listenedMs": 2800000,
+      "slots": 14,
+      "you": [
+       14,
+       0,
+       2800000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 306,
+      "flags": 0,
+      "round": 2,
+      "baseGen": 1,
+      "baseRows": 3,
+      "baseCrc": 2240070763,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       14
+      ]
+     ],
+     "rows": {
+      "hour": 14,
+      "days": 4,
+      "rcnt": 12,
+      "trkd": 3,
+      "base": 3
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0x145438baeaf72dba",
+       5,
+       26474401,
+       0
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       5,
+       26470801,
+       0
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       4,
+       26478001,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0x145438baeaf72dba",
+       5,
+       26733601,
+       2
+      ],
+      [
+       "0xd222fa5e5713f77e",
+       5,
+       26730001,
+       2
+      ],
+      [
+       "0x884ae8f96e37eac2",
+       4,
+       26726401,
+       2
+      ]
+     ],
+     "notPlayed": [
+      "Copper Season",
+      "Glass Harbour",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0x145438baeaf72dba",
+        3
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        2
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        2
+       ]
+      ],
+      "30": [
+       [
+        "0x145438baeaf72dba",
+        5
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        5
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        4
+       ]
+      ],
+      "all": [
+       [
+        "0x145438baeaf72dba",
+        5
+       ],
+       [
+        "0xd222fa5e5713f77e",
+        5
+       ],
+       [
+        "0x884ae8f96e37eac2",
+        4
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 2800000,
+     "plays": 14,
+     "sinceDay": 306,
+     "countingDays": 9,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        308,
+        800000,
+        4
+       ],
+       [
+        309,
+        600000,
+        3
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        0,
+        0
+       ],
+       [
+        313,
+        0,
+        0
+       ],
+       [
+        314,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 1400000,
+      "plays": 7,
+      "topDay": 308,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 3,
+     "oldFavourites": 0,
+     "notPlayed": 4
+    }
+   }
+  ]
+ }
+]

@@ -11,10 +11,14 @@
 #include <cstring>
 #include <new>
 
+#include <esp_timer.h>
+
 #include "UiText.h"
 #include "app/Psram.h"
 #include "ui/Gfx.h"
+#include "ui/HotMem.h"
 #include "ui/Icons.h"
+#include "ui/PanelScan.h"
 #include "ui/Theme.h"
 
 namespace ui {
@@ -23,18 +27,110 @@ namespace {
 constexpr int kPitch = ListLayout::kPitch;
 constexpr int kRailW = 36;   // the rail's column, x 284-319 (its touch zone starts at kEdgeHitX)
 constexpr int kThumbH = 30;
+constexpr size_t kRowBytes = static_cast<size_t>(kW) * kRowH * 2;
+constexpr size_t kRailBytes = static_cast<size_t>(kRailW) * ListView::kHeight * 2;
+constexpr size_t line32(size_t n) { return (n + 31) & ~static_cast<size_t>(31); }
+
+// ---- frames on the panel's scan (lib/core ScanSync) ----
+// A frame under a finger is taken up this long before its window opens
+// (the loop's passes come a millisecond or two apart): it sleeps to the
+// window, then holds the bus.
+constexpr int32_t kNearUs = 1500;
+// ... and the sleep ends this long before the window: the hold takes the
+// bus and waits out the rest there.
+constexpr int32_t kSpinUs = 250;
+// A hold begun this long after its window closed still counts as in it
+// (the window ends 8 scan lines before the band: half of that).
+constexpr int32_t kLateOkUs = 230;
+// A hold's time besides its lines (the window's commands, the clip).
+constexpr uint32_t kHoldExtraUs = 60;
+// A second row is rendered ahead from this many lines a frame.
+constexpr int kAheadTwoStep = 10;
+// A list moving by itself sleeps up to this long for its frame's window
+// (a finger's frames poll instead: its latest place counts).
+constexpr int32_t kSleepMaxUs = 13000;
+// The loop task's priority for a frame's last wait and its hold: above the
+// audio decoder (2, on this core too), level with the speaker's pump.
+constexpr UBaseType_t kHoldPriority = 3;
+
+// The loop task above the decoder while a frame waits out the last of its
+// window and holds the bus (a millisecond or two, then 4 ms at a fling's
+// top speed, 12 at the most): an MP3's decoder runs some 10 ms at a time,
+// and a pass of it across a window made every other frame miss its
+// refresh, one across a hold sent the address late (a tear). It has 1.4 s
+// of audio buffered and every moment between the holds; rendering stays
+// below it.
+class HoldBoost {
+public:
+  HoldBoost() : was_(uxTaskPriorityGet(nullptr)) {
+    if (was_ < kHoldPriority) vTaskPrioritySet(nullptr, kHoldPriority);
+  }
+  ~HoldBoost() {
+    if (was_ < kHoldPriority) vTaskPrioritySet(nullptr, was_);
+  }
+  HoldBoost(const HoldBoost&) = delete;
+  HoldBoost& operator=(const HoldBoost&) = delete;
+
+private:
+  UBaseType_t was_;
+};
+
+// The calling task asleep until `atUs` (esp_timer_get_time()), to a tenth
+// of a millisecond: a one-shot timer wakes it (a tick's sleep would end up
+// to a millisecond early, every frame, and the wait for the window is
+// spent above the decoder). Made at the first use (a semaphore and a
+// timer: ~150 B of internal RAM); without them, a tick's sleep that ends
+// early.
+void sleepUntil(int64_t atUs) {
+  static SemaphoreHandle_t woke = nullptr;
+  static esp_timer_handle_t timer = nullptr;
+  static bool made = false;
+  if (!made) {
+    made = true;
+    woke = xSemaphoreCreateBinary();
+    if (woke) {
+      esp_timer_create_args_t args = {};
+      args.callback = [](void* arg) { xSemaphoreGive(static_cast<SemaphoreHandle_t>(arg)); };
+      args.arg = woke;
+      args.dispatch_method = ESP_TIMER_TASK;
+      args.name = "list frame";
+      if (esp_timer_create(&args, &timer) != ESP_OK) timer = nullptr;
+    }
+  }
+  const int64_t wait = atUs - esp_timer_get_time();
+  if (wait < 150) return;
+  if (!timer) {
+    if (wait >= 1000) vTaskDelay(pdMS_TO_TICKS(wait / 1000));
+    return;
+  }
+  xSemaphoreTake(woke, 0);  // (one given after a wait that timed out)
+  if (esp_timer_start_once(timer, static_cast<uint64_t>(wait)) != ESP_OK) return;
+  if (xSemaphoreTake(woke, pdMS_TO_TICKS(wait / 1000 + 4)) != pdTRUE) esp_timer_stop(timer);
+}
 }  // namespace
+
+size_t ListView::hotBytes() {
+  return line32(kSlots * sizeof(Slot)) + kSlots * line32(kRowBytes) + line32(sizeof(M5Canvas)) + line32(kRailBytes);
+}
 
 bool ListView::begin(ListScroller& scroller, Input& input) {
   vs_ = &scroller;
   input_ = &input;
+  // The sprites and their pixels from the block reserved at boot (the fast
+  // half of the PSRAM: ui/HotMem), else their own, wherever the heap has room.
   if (!slots_) {
-    void* mem = psramAlloc(kSlots * sizeof(Slot));
+    void* mem = hotmem::take(kSlots * sizeof(Slot));
+    slotsHot_ = mem != nullptr;
+    if (!mem) mem = psramAlloc(kSlots * sizeof(Slot));
     if (!mem) return false;
     slots_ = static_cast<Slot*>(mem);
     for (int i = 0; i < kSlots; ++i) new (&slots_[i]) Slot();
     for (int i = 0; i < kSlots; ++i) {
       M5Canvas& s = slots_[i].sprite;
+      if (void* px = hotmem::take(kRowBytes)) {
+        s.setBuffer(px, kW, kRowH, 16);
+        continue;
+      }
       s.setPsram(true);  // before createSprite(): otherwise internal RAM
       s.setColorDepth(16);
       if (!s.createSprite(kW, kRowH)) {
@@ -44,23 +140,46 @@ bool ListView::begin(ListScroller& scroller, Input& input) {
     }
   }
   if (!rail_) {
-    rail_ = psramNew<M5Canvas>();
+    void* mem = hotmem::take(sizeof(M5Canvas));
+    railHot_ = mem != nullptr;
+    rail_ = mem ? new (mem) M5Canvas() : psramNew<M5Canvas>();
     if (!rail_) return false;
-    rail_->setPsram(true);
-    rail_->setColorDepth(16);
-    if (!rail_->createSprite(kRailW, kHeight)) {  // the tallest band
-      psramDelete(rail_);
-      rail_ = nullptr;
-      return false;
+    if (void* px = hotmem::take(kRailBytes)) {
+      rail_->setBuffer(px, kRailW, kHeight, 16);
+    } else {
+      rail_->setPsram(true);
+      rail_->setColorDepth(16);
+      if (!rail_->createSprite(kRailW, kHeight)) {  // the tallest band
+        if (railHot_) {
+          rail_->~M5Canvas();
+        } else {
+          psramDelete(rail_);
+        }
+        rail_ = nullptr;
+        return false;
+      }
     }
   }
+  if (scan_) scan_->setBand(kTop, height_);
+  // A scrub's bands follow one another: each is drawn a row a loop pass
+  // (bandStep()), so none holds the loop, and the next may start when the
+  // last is done. (uir0's bands, drawn in one go, come as the finger moves.)
+  ScrubPacer::Config pc = pacer_.config();
+  pc.cadenceMs = 0;
+  pacer_.setConfig(pc);
   return true;
+}
+
+void ListView::setScan(PanelScan* scan) {
+  scan_ = scan;
+  if (scan_) scan_->setBand(kTop, height_);
 }
 
 void ListView::setHeight(int h) {
   h = std::max(kPitch, std::min(kHeight, h));
   if (h == height_) return;
   height_ = h;
+  if (scan_) scan_->setBand(kTop, height_);
   if (src_) {
     setEdge();
     scroll_.setExtent(static_cast<float>(layout_.contentPx()), height_);
@@ -76,7 +195,7 @@ void ListView::dropSlots() {
     slots_[i].sprite.deleteSprite();
     slots_[i].~Slot();
   }
-  psramFree(slots_);
+  if (!slotsHot_) psramFree(slots_);  // (the reserved block's is never given back)
   slots_ = nullptr;
 }
 
@@ -133,12 +252,14 @@ void ListView::invalidate() {
     for (int i = 0; i < kSlots; ++i) slots_[i].item = -1;
   }
   force_ = true;
+  band_.active = false;  // (a band a row a pass: the frame draws it whole)
   railUp_ = false;  // the frame redraws the band; the rail with it if it's wanted
   railOffset_ = -1;
 }
 
 void ListView::redraw() {
   force_ = true;
+  band_.active = false;
   railUp_ = false;
   railOffset_ = -1;
 }
@@ -257,8 +378,10 @@ ListView::Slot* ListView::renderedSlot(uint32_t item) {
   if (s->item != static_cast<int32_t>(item)) {
     const uint32_t t0 = micros();
     renderItem(s->sprite, item);
+    const uint32_t us = micros() - t0;
     ++cost_.renders;
-    cost_.renderUs += micros() - t0;
+    cost_.renderUs += us;
+    noteRowTime(us);
     s->item = static_cast<int32_t>(item);
   }
   return s;
@@ -349,14 +472,17 @@ void ListView::renderItem(M5Canvas& c, uint32_t item) {
   if (!expanded) c.drawFastHLine(r.x + 8, kRowH - 1, layoutWidth() - r.x - 8, col::ROW_DIV);
 }
 
-void ListView::render(int32_t off) {
+// `gate`: when a move's hold starts (ListScroller::Gate). Returns the
+// lines pushed.
+int ListView::render(int32_t off, ListScroller::Gate* gate) {
   if (force_) vs_->invalidate();
   const uint32_t n = layout_.itemCount();
   const int32_t top = std::max<int32_t>(off, 0);
   keepFirst_ = static_cast<uint32_t>(top / kPitch);
   keepLast_ = std::min<uint32_t>(n ? n - 1 : 0, static_cast<uint32_t>((top + height_ - 1) / kPitch));
-  vs_->scrollTo(off, *this);
+  const int lines = vs_->scrollTo(off, *this, nullptr, gate);
   if (n == 0 || emptyUnderTopRow()) drawEmpty();
+  return lines;
 }
 
 // A move's new lines, before its commit: every item they come from, drawn now.
@@ -415,7 +541,7 @@ void ListView::push(const VScrollMap::Span& span, bool committing) {
 void ListView::prepareFixed(int32_t off) {
   railDue_ = edge_ != Edge::None && railWanted_ && rail_;
   if (!railDue_) return;
-  drawRailSprite(off);
+  railY_ = drawRailSprite(off);
   railOffset_ = off;  // (pushFixed() follows in the same frame)
 }
 
@@ -476,7 +602,8 @@ void ListView::drawEmpty() {
 
 // ---- the rail / scrollbar ----
 
-void ListView::drawRailSprite(int32_t off) {
+// Returns the A-Z thumb's top row in it (-1: the scrollbar's sprite).
+int ListView::drawRailSprite(int32_t off) {
   M5Canvas& s = *rail_;
   s.fillSprite(col::BG);
   const int32_t maxOff = layout_.maxOffset(height_);
@@ -486,7 +613,7 @@ void ListView::drawRailSprite(int32_t off) {
     const int th = std::max(16, static_cast<int>(static_cast<int64_t>(track) * height_ / layout_.contentPx()));
     const int y = 4 + ListLayout::thumbTop(off, maxOff, track, th);
     s.fillRoundRect(2, y, 3, th, 1, col::FAINT);
-    return;
+    return -1;
   }
   const int y = 2 + ListLayout::thumbTop(off, maxOff, height_ - 4, kThumbH);
   const int32_t item = std::max<int32_t>(0, off / kPitch);
@@ -500,17 +627,19 @@ void ListView::drawRailSprite(int32_t off) {
   s.fillRoundRect(11, y, 22, kThumbH, 5, thumb);
   Fonts::instance().draw(s, Font::Bold, key, 22, y + kThumbH / 2, 20, touchOn_ == TouchOn::Rail ? col::DARK : col::TXT,
                          thumb, Fonts::Align::Centre);
+  return y;
 }
 
 void ListView::hideRail() {
   gfx::fill(railX(), kTop, kW - railX(), height_, col::BG);
   railUp_ = false;
   railOffset_ = -1;
+  railY_ = -1;
 }
 
 void ListView::showRail(int32_t off) {
   if (!rail_ || !vs_->active()) return;
-  drawRailSprite(off);
+  railY_ = drawRailSprite(off);
   gfx::push(*rail_, railX(), kTop, kW - railX(), height_);
   railUp_ = true;
   railOffset_ = off;
@@ -518,11 +647,22 @@ void ListView::showRail(int32_t off) {
 
 // A scrub's frame between two band draws: the thumb and its letter where
 // the finger is now, over the band as it stands (through the scroll
-// mapping, like pushFixed()).
+// mapping, like pushFixed()). With the rail on the glass, only the rows
+// the thumb left and the rows it takes (the rail's other rows are the same
+// pixels: the whole column was 12 KB on the bus, 2.4-2.9 ms; a thumb moved
+// a few rows is a tenth of that).
 void ListView::pushRail(int32_t off) {
   if (!rail_ || !vs_->active()) return;
-  drawRailSprite(off);
-  vs_->pushAtScreen(*rail_, railX(), kTop, &gfx::holds(), height_);
+  const int was = railUp_ ? railY_ : -1;
+  const int y = drawRailSprite(off);
+  if (was >= 0 && y >= 0) {
+    const int y0 = std::max(0, std::min(was, y));
+    const int y1 = std::min(height_, std::max(was, y) + kThumbH);
+    if (y1 > y0) vs_->pushRectAtScreen(*rail_, 0, y0, kW - railX(), y1 - y0, railX(), kTop + y0, &gfx::holds());
+  } else {
+    vs_->pushAtScreen(*rail_, railX(), kTop, &gfx::holds(), height_);
+  }
+  railY_ = y;
   railUp_ = true;
   railOffset_ = off;
 }
@@ -549,31 +689,311 @@ bool ListView::moving() const {
 }
 
 bool ListView::animating() const {
-  return src_ && (scroll_.moving() || force_ || offset() != drawnOffset_);
+  return src_ && (scroll_.moving() || force_ || band_.active || offset() != drawnOffset_);
 }
 
-bool ListView::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
-  if (!src_ || !slots_) return false;
-  scroll_.update(nowMs);
-  int32_t off = offset();
+// ---- a scrub's band, a row a pass ----
+//
+// Every position a scrub asks for is a jump: the band's 168 lines drawn
+// again in place, 35-47 ms with nothing playing and 80-100 ms with an MP3
+// (MEASURED). Drawn in one go, that was the loop standing still: no touch
+// read, the thumb at 10-19 frames a second, the next band 60 ms after (so
+// the loop could breathe): 5-7 bands a second. So under a finger on the
+// rail the band is drawn a row a loop pass instead: the row's render and
+// its push (8-15 ms), then the loop's pass (the finger read, the thumb
+// drawn where it is now), then the next row. The band takes as long as it
+// did; the thumb never waits for it, and the next band starts when this
+// one is done (ScrubPacer's cadence, 0 here).
+
+// Whether a jump to `off` under the finger is drawn so (a jump the
+// hardware scroll takes as a move is one hold already).
+bool ListView::bandInRows(int32_t off) const {
+  if (touchOn_ != TouchOn::Rail || !pacing_ || force_ || drawnOffset_ < 0 || gfx::dark()) return false;
+  if (!vs_->active() || !vs_->map().valid()) return false;
+  const int32_t d = off - vs_->map().offset();
+  return d > vs_->map().maxStep() || -d > vs_->map().maxStep();
+}
+
+void ListView::startBand(int32_t off) {
+  band_ = Band{};
+  band_.spans = vs_->planInPlace(off, band_.span);
+  if (band_.spans <= 0) return;
+  band_.active = true;
+  band_.from = drawnOffset_;
+  band_.off = off;
+  band_.line = band_.span[0].contentY;
+  band_.startUs = micros();
+  drawnOffset_ = off;  // (what the band is becoming)
+  jumped_ = false;
+  lastDir_ = 0;
+  if (!railUp_ && railWanted_) showRail(off);
+}
+
+// The band's next row (and first the thumb, if the finger moved on and a
+// frame is due). True: something was drawn (lastFrame() says what).
+bool ListView::bandStep(bool frameDue) {
+  cost_ = FrameCost{};
+  cost_.kind = FrameCost::Kind::Piece;
+  cost_.from = band_.from;
+  cost_.to = band_.off;
+  const int32_t finger = offset();
+  if (frameDue && touchOn_ == TouchOn::Rail && rail_ && railWanted_ && railOffset_ != finger) {
+    pushRail(finger);
+    cost_.rail = true;
+  }
+  // The rows of the band keep their slots while it is drawn.
+  const uint32_t n = layout_.itemCount();
+  const int32_t top = std::max<int32_t>(band_.off, 0);
+  keepFirst_ = static_cast<uint32_t>(top / kPitch);
+  keepLast_ = std::min<uint32_t>(n ? n - 1 : 0, static_cast<uint32_t>((top + height_ - 1) / kPitch));
+  const VScrollMap::Span& span = band_.span[band_.at];
+  const int32_t end = span.contentY + span.h;
+  // Up to the end of this line's item (a row), or of the span.
+  const int32_t c = band_.line;
+  const int32_t itemEnd = c >= 0 ? (c / kPitch + 1) * kPitch : 0;
+  VScrollMap::Span piece;
+  piece.contentY = c;
+  piece.gramY = span.gramY + (c - span.contentY);
+  piece.h = std::min(end, itemEnd) - c;
+  push(piece, false);
+  band_.renders += cost_.renders;
+  band_.renderUs += cost_.renderUs;
+  band_.line = c + piece.h;
+  if (band_.line >= end) {
+    if (++band_.at < band_.spans) {
+      band_.line = band_.span[band_.at].contentY;
+    } else {
+      // Done: a band frame, its time from its first row to its last.
+      band_.active = false;
+      cost_.kind = FrameCost::Kind::Band;
+      cost_.renders = band_.renders;
+      cost_.renderUs = band_.renderUs;
+      cost_.bandUs = micros() - band_.startUs;
+      if (n == 0 || emptyUnderTopRow()) drawEmpty();
+      pacer_.bandDrawn(millis());
+      ++frames_;
+      if (!moving() && ref_) saveRef();
+    }
+  }
+  return true;
+}
+
+// The offset to draw now: where the scroll is, or a step towards it.
+int32_t ListView::frameOffset(bool rows) const {
+  const int32_t off = offset();
   // A step of at most kMaxStep lines a frame (one bus hold of new lines):
   // a finger faster than that is followed a frame or two late instead of
   // costing a full redraw. Jumps and redraws in place go straight there.
   // In whole rows (the governor, when the audio is short of time): the
   // rounding is part of the step, never on top of it.
-  const bool rows = wholeRows && moving();
   if (!force_ && !jumped_ && drawnOffset_ >= 0) {
-    off = rows ? ListLayout::stepTowardRows(drawnOffset_, off, kMaxStep, kPitch)
-               : ListLayout::stepToward(drawnOffset_, off, kMaxStep);
-  } else if (rows) {
-    off = off / kPitch * kPitch;
+    return rows ? ListLayout::stepTowardRows(drawnOffset_, off, kMaxStep, kPitch)
+                : ListLayout::stepToward(drawnOffset_, off, kMaxStep);
   }
+  return rows ? off / kPitch * kPitch : off;
+}
+
+// A frame at `off`, drawn now.
+void ListView::drawFrame(int32_t off) {
+  cost_ = FrameCost{};
+  cost_.from = drawnOffset_;
+  cost_.to = off;
+  if (drawnOffset_ >= 0 && off != drawnOffset_) {
+    lastDir_ = off > drawnOffset_ ? 1 : -1;
+    lastStep_ = off > drawnOffset_ ? off - drawnOffset_ : drawnOffset_ - off;
+  }
+  // A move: where the scan was when its address went out (the report's).
+  const bool move = !force_ && !jumped_ && drawnOffset_ >= 0 && off != drawnOffset_;
+  const int line = move && scan_ && scan_->ready() ? scan_->line() : -1;
+  const int64_t readUs = esp_timer_get_time();
+  ListScroller::Gate gate;
+  render(off, line >= 0 ? &gate : nullptr);
+  if (line >= 0 && gate.sentUs) {
+    noteAddress(line, readUs, gate.sentUs);
+    ++scanStats_.unsynced;
+  }
+  if (touchOn_ == TouchOn::Rail) pacer_.bandDrawn(millis());
+  drawnOffset_ = off;
+  force_ = false;
+  jumped_ = false;
+  ++frames_;
+  if (!moving() && ref_) saveRef();
+}
+
+bool ListView::onScan() const {
+  return scan_ && scanOn_ && scan_->ready() && !railWanted_ && vs_->active() && vs_->map().valid() && !gfx::dark();
+}
+
+uint32_t ListView::holdFor(int d) const { return static_cast<uint32_t>(d < 0 ? -d : d) * lineUs_ + kHoldExtraUs; }
+
+// A row took `us` to render: what the next one is taken to cost (a render
+// the decoder cut into counts for less: it would only scare the look-ahead
+// off).
+void ListView::noteRowTime(uint32_t us) {
+  if (us > rowUs_ * 3) us = rowUs_ * 3;
+  rowUs_ = (rowUs_ * 3 + us) / 4;
+}
+
+// Where the scan was when a move's address went out: `line` read at
+// `readUs`, the address at `sentUs`. Counted from the band's last row: up
+// to the porches and the fixed rows above the band it is outside the band
+// (the frame is whole); past that the scan was inside it (a tear).
+void ListView::noteAddress(int line, int64_t readUs, int64_t sentUs) {
+  const ScanSync& sync = scan_->sync();
+  const ScanSync::Panel& p = sync.panel();
+  const int64_t lines = (sentUs - readUs) * p.lines / p.frameUs;
+  int phase = static_cast<int>((line + lines - (kTop + height_ + p.firstRow)) % p.lines);
+  if (phase < 0) phase += p.lines;
+  if (phase < scanStats_.phaseMin) scanStats_.phaseMin = static_cast<int16_t>(phase);
+  if (phase > scanStats_.phaseMax) scanStats_.phaseMax = static_cast<int16_t>(phase);
+  if (phase >= p.lines - height_) ++scanStats_.inBand;
+}
+
+// The rows a move from the drawn offset to `off` brings on, rendered now:
+// before the bus, and before the move's window.
+void ListView::prerender(int32_t off) {
+  const auto items = static_cast<int32_t>(layout_.itemCount());
+  const bool up = off > drawnOffset_;
+  const int32_t a = up ? drawnOffset_ + height_ : off;  // content lines [a, b)
+  const int32_t b = up ? off + height_ : drawnOffset_;
+  const int32_t i0 = std::max<int32_t>(0, a / kPitch);
+  const int32_t i1 = std::min<int32_t>(items - 1, (b - 1) / kPitch);
+  // The rows on screen after the move keep their slots.
+  const int32_t top = std::max<int32_t>(off, 0);
+  keepFirst_ = static_cast<uint32_t>(top / kPitch);
+  keepLast_ = std::min<uint32_t>(items ? items - 1 : 0, static_cast<uint32_t>((top + height_ - 1) / kPitch));
+  for (int32_t i = i0; i <= i1; ++i) renderedSlot(static_cast<uint32_t>(i));
+}
+
+// A move drawn where the panel's scan doesn't see it half done (lib/core
+// ScanSync): its rows rendered first, its hold started inside the window of
+// the refresh under way. False: its window opens later (the loop comes
+// back: nothing is owed to this pass), or nothing moved.
+//
+// A window the loop comes too late for (the audio decoder runs above it,
+// some 10 ms at a time while an MP3 plays) is never waited out to the next
+// refresh: the frame is drawn at once, late. Its address then goes out
+// with the scan back in the band, and the rows the scan had passed show it
+// a refresh later (a tear, for that one refresh, as every frame had before
+// the scan was read), but the list keeps its pace. Nor does a frame wait
+// for its window when the refresh before had none: it is drawn at once
+// too. (MEASURED with an MP3, whose decoder's passes are 10 ms and now and
+// then 21: waiting out the next window lost a refresh in three, with 37-46
+// ms between two frames at the worst.)
+bool ListView::scanFrame(bool rows) {
+  const ScanSync& sync = scan_->sync();
+  cost_ = FrameCost{};
+  cost_.from = drawnOffset_;
+  const int line = scan_->line();
+  const int64_t readUs = esp_timer_get_time();
+  if (line < 0) {  // not readable just now: a frame as without it
+    drawFrame(frameOffset(rows));
+    return true;
+  }
+  int32_t off = frameOffset(rows);
+  int d = off - drawnOffset_;
+  if (d == 0) return false;
+  const int32_t refreshUs = static_cast<int32_t>(sync.panel().frameUs);
+  // The window of the refresh under way, ahead, open or just over (never
+  // the next one's: see above). But one frame a refresh: once this one has
+  // its frame, the next one's window.
+  auto plan = [&](int step) {
+    ScanSync::Window win = sync.plan(line, step, holdFor(step), static_cast<uint32_t>(refreshUs));
+    if (lastShowUs_ && readUs + win.showsUs < lastShowUs_ + refreshUs / 2) {
+      win = sync.plan(line, step, holdFor(step));
+      if (readUs + win.showsUs < lastShowUs_ + refreshUs / 2) {  // (its window is still open)
+        win.earliestUs += refreshUs;
+        win.latestUs += refreshUs;
+        win.addressUs += refreshUs;
+        win.showsUs += refreshUs;
+      }
+    }
+    return win;
+  };
+  ScanSync::Window w = plan(d);
+  // A refresh went by without a frame (the loop was held: a decoder pass
+  // of 20 ms, a row rendered in the frame's way; or the list stood still):
+  // this frame doesn't wait for its window on top of that, it is drawn
+  // now (as a late one: the list moves again a few ms sooner).
+  const bool behind = !lastShowUs_ || readUs + w.showsUs - lastShowUs_ > refreshUs + refreshUs / 2;
+  const KineticScroll::Phase phase = scroll_.phase();
+  const bool coasting = phase == KineticScroll::Phase::Flinging || phase == KineticScroll::Phase::Snapping;
+  if (coasting) {
+    // A list moving by itself is drawn where it will be when the frame
+    // shows: frames a refresh apart then move it a refresh's worth,
+    // whenever in the refresh the loop got to them. (One drawn now shows
+    // as its address goes out.)
+    const int32_t showsUs = w.late || behind ? static_cast<int32_t>(holdFor(d)) : w.showsUs;
+    scroll_.update(millis() + static_cast<uint32_t>((showsUs + 500) / 1000));
+    off = frameOffset(rows);
+    d = off - drawnOffset_;
+    if (d == 0) return false;
+    w = plan(d);  // (the hold is as long as the step)
+  }
+  prerender(off);
+  const int64_t now = esp_timer_get_time();
+  const bool atOnce = w.late || behind;
+  const int64_t earliest = atOnce ? now : readUs + w.earliestUs;
+  const int64_t wait = earliest - now;
+  // Under a finger the loop comes back for the window (its passes read
+  // the finger meanwhile: the frame is drawn where it is then).
+  if (wait > (coasting ? kSleepMaxUs : kNearUs)) return false;
+  ListScroller::Gate gate;
+  gate.earliestUs = earliest;
+  gate.addressUs = atOnce ? 0 : readUs + w.addressUs;
+  cost_.to = off;
+  {
+    // From here to the address nothing below the speaker's pump runs on
+    // this core: asleep to just before the window (the timer wakes this
+    // task over the decoder), then the hold.
+    HoldBoost boost;
+    sleepUntil(earliest - kSpinUs);
+    render(off, &gate);
+  }
+  const int64_t began = gate.sentUs - gate.linesUs;  // (about: its lines' time back from the address)
+  // (The frame's cost is its work: not the wait for its window.)
+  if (began > now) cost_.waitUs = static_cast<uint32_t>(began - now);
+  if (atOnce || began > readUs + w.latestUs + kLateOkUs) {
+    ++scanStats_.late;
+  } else {
+    ++scanStats_.frames;
+    if (!w.clean) ++scanStats_.early;
+  }
+  noteAddress(line, readUs, gate.sentUs);
+  lastHoldUs_ = began;
+  // The refresh this frame was for (one drawn at once is whole on the
+  // glass by then too: the frame after it is the next refresh's, in its
+  // window again).
+  lastShowUs_ = readUs + w.showsUs;
+  // What a line costs on the bus, from the hold itself (one a higher task
+  // cut into doesn't count).
+  const int n = d < 0 ? -d : d;
+  if (n >= 8 && gate.linesUs > kHoldExtraUs) {
+    const uint32_t per = (gate.linesUs - kHoldExtraUs) / static_cast<uint32_t>(n);
+    if (per < lineUs_ * 2) lineUs_ = (lineUs_ * 3 + per) / 4;
+  }
+  lastDir_ = d > 0 ? 1 : -1;
+  lastStep_ = n;
+  drawnOffset_ = off;
+  ++frames_;
+  if (!moving() && ref_) saveRef();
+  return true;
+}
+
+bool ListView::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
+  if (!src_ || !slots_) return false;
+  scroll_.update(nowMs);
+  const bool rows = wholeRows && moving();
+  const int32_t off = frameOffset(rows);
   // The rail sits in the scrolled band: hidden while the list moves, back
   // once it settles, or at once under a finger.
   // (Still catching up with the finger, a step a frame, is moving too.)
-  const bool catchingUp = !force_ && !jumped_ && drawnOffset_ >= 0 && off != offset();
+  const bool stepped = !force_ && !jumped_ && drawnOffset_ >= 0;
+  const bool catchingUp = stepped && off != offset();
   railWanted_ = edge_ != Edge::None && (touchOn_ == TouchOn::Rail || (!moving() && !catchingUp));
   if (!railWanted_ && railUp_) hideRail();
+  // A scrub's band under way: its next row, whatever the frame clock says.
+  if (band_.active) return bandStep(frameDue);
   const bool owed = off != drawnOffset_ || force_;
   if (owed && frameDue) {
     // A scrub's position is a jump (the band drawn whole): it waits for
@@ -589,43 +1009,197 @@ bool ListView::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       ++frames_;
       return true;
     }
-    cost_ = FrameCost{};
-    cost_.from = drawnOffset_;
-    cost_.to = off;
-    if (drawnOffset_ >= 0 && off != drawnOffset_) lastDir_ = off > drawnOffset_ ? 1 : -1;
-    render(off);
-    if (touchOn_ == TouchOn::Rail) pacer_.bandDrawn(millis());
-    drawnOffset_ = off;
-    force_ = false;
-    jumped_ = false;
-    ++frames_;
-    if (!moving() && ref_) saveRef();
+    // A move of a list that moves: on the panel's scan when it can be read.
+    if (stepped && onScan()) return scanFrame(rows);
+    // A scrub's jump: the band a row a pass, the thumb between them.
+    if (bandInRows(off)) {
+      startBand(off);
+      if (band_.active) return bandStep(false);
+    }
+    drawFrame(off);
     return true;
   }
   if (!owed && railWanted_ && !railUp_) showRail(drawnOffset_);
   return false;
 }
 
-bool ListView::renderAhead() {
+// `untilDueMs`: how long the frame clock gives until the next frame (the
+// Ui's; on the panel's scan the list knows better: its last hold's start,
+// a refresh before the next).
+bool ListView::renderAhead(uint32_t untilDueMs) {
   if (!src_ || !slots_ || drawnOffset_ < 0 || force_ || jumped_ || lastDir_ == 0 || !moving()) return false;
+  const auto n = static_cast<int32_t>(layout_.itemCount());
+  if (n == 0) return false;
+  // Time for a row before the next frame's window (or its deadline)?
+  if (onScan() && lastHoldUs_) {
+    // The next hold begins about a refresh after the last one did (later,
+    // as a fling slows: its window follows the step). A row must be done a
+    // millisecond before; once that moment is near, or just past, the
+    // frame comes first. (A hold two refreshes ago says nothing: a
+    // motion's first frames take what comes.)
+    const int64_t frameUs = scan_->sync().panel().frameUs;
+    const int64_t since = esp_timer_get_time() - lastHoldUs_;
+    if (since < 2 * frameUs && since + rowUs_ + 1000 > frameUs) return false;
+  } else if (untilDueMs * 1000 < rowUs_ + 2000) {
+    return false;
+  }
+  const int32_t first = std::max<int32_t>(0, drawnOffset_ / kPitch);
+  const int32_t last = std::min<int32_t>(n - 1, (drawnOffset_ + height_ - 1) / kPitch);
+  // The row past the edge the list moves toward, and from a fast step the
+  // one after it (the frame that brings two rows on would render one).
+  for (int k = 1; k <= (lastStep_ >= kAheadTwoStep ? 2 : 1); ++k) {
+    const int32_t next = lastDir_ > 0 ? last + k : first - k;
+    if (next < 0 || next >= n) return false;
+    bool ready = false;
+    for (int i = 0; i < kSlots; ++i) ready = ready || slots_[i].item == next;
+    if (ready) continue;
+    // The rows on screen keep their slots (the next move pushes the rest
+    // of the edge ones), and the first row ahead; a spare one takes this.
+    // With none spare, the second row ahead takes the slot of the row
+    // about to leave at the other edge: its lines are on the glass, and
+    // only a turn back would want them again (it is rendered again then).
+    keepFirst_ = static_cast<uint32_t>(lastDir_ > 0 ? first : std::max<int32_t>(0, first - (k - 1)));
+    keepLast_ = static_cast<uint32_t>(lastDir_ > 0 ? std::min<int32_t>(n - 1, last + (k - 1)) : last);
+    if (k == 2) {
+      bool spare = false;
+      for (int i = 0; i < kSlots; ++i) {
+        const int32_t r = slots_[i].item;
+        spare = spare || r < 0 || r < static_cast<int32_t>(keepFirst_) || r > static_cast<int32_t>(keepLast_);
+      }
+      if (!spare) {
+        if (lastDir_ > 0) {
+          ++keepFirst_;
+        } else {
+          --keepLast_;
+        }
+      }
+    }
+    Slot* s = slotFor(static_cast<uint32_t>(next));
+    const uint32_t t0 = micros();
+    renderItem(s->sprite, static_cast<uint32_t>(next));
+    noteRowTime(micros() - t0);
+    s->item = next;
+    ++aheadRenders_;
+    return true;
+  }
+  return false;
+}
+
+// While the list rests: the row just above the band and the row just
+// below it, one a call, into the two slots a list at rest has spare (it
+// rests on a row boundary: four rows show, of six slots).
+bool ListView::renderNeighbours() {
+  if (!src_ || !slots_ || force_ || jumped_ || drawnOffset_ < 0 || band_.active || gfx::dark()) return false;
+  if (scroll_.moving() || touchOn_ != TouchOn::None || offset() != drawnOffset_) return false;
   const auto n = static_cast<int32_t>(layout_.itemCount());
   if (n == 0) return false;
   const int32_t first = std::max<int32_t>(0, drawnOffset_ / kPitch);
   const int32_t last = std::min<int32_t>(n - 1, (drawnOffset_ + height_ - 1) / kPitch);
-  const int32_t next = lastDir_ > 0 ? last + 1 : first - 1;
-  if (next < 0 || next >= n) return false;
-  for (int i = 0; i < kSlots; ++i) {
-    if (slots_[i].item == next) return false;  // ready
+  keepFirst_ = static_cast<uint32_t>(std::max<int32_t>(0, first - 1));
+  keepLast_ = static_cast<uint32_t>(std::min<int32_t>(n - 1, last + 1));
+  for (const int32_t next : {last + 1, first - 1}) {
+    if (next < 0 || next >= n) continue;
+    bool ready = false, spare = false;
+    for (int i = 0; i < kSlots; ++i) {
+      const int32_t r = slots_[i].item;
+      ready = ready || r == next;
+      spare = spare || r < 0 || r < static_cast<int32_t>(keepFirst_) || r > static_cast<int32_t>(keepLast_);
+    }
+    if (ready || !spare) continue;
+    Slot* s = slotFor(static_cast<uint32_t>(next));
+    renderItem(s->sprite, static_cast<uint32_t>(next));
+    s->item = next;
+    ++aheadRenders_;
+    return true;
   }
-  // The items on screen keep their slots (the next move pushes the rest of
-  // the edge ones); the spare one takes this.
-  keepFirst_ = static_cast<uint32_t>(first);
-  keepLast_ = static_cast<uint32_t>(last);
-  Slot* s = slotFor(static_cast<uint32_t>(next));
-  renderItem(s->sprite, static_cast<uint32_t>(next));
-  s->item = next;
-  ++aheadRenders_;
-  return true;
+  return false;
+}
+
+void ListView::forgetHidden() {
+  if (!src_ || !slots_ || drawnOffset_ < 0) return;
+  const int32_t first = drawnOffset_ / kPitch;
+  const int32_t last = (drawnOffset_ + height_ - 1) / kPitch;
+  for (int i = 0; i < kSlots; ++i) {
+    if (slots_[i].item < first || slots_[i].item > last) slots_[i].item = -1;
+  }
+}
+
+// Console uiB: what the list's frames are made of, timed on the list shown
+// (the numbers docs/UI-SPIKE.md's "Frames on the panel's scan" has; run it
+// with nothing playing, and again with a track, to see what the decoder
+// takes). The band is drawn again when it is done.
+void ListView::bench() {
+  if (!src_ || !slots_ || !vs_->active() || layout_.itemCount() == 0 || gfx::dark() || band_.active) {
+    Serial.println("[ui] bench: no list on a lit screen");
+    return;
+  }
+  const int32_t off = std::max<int32_t>(0, offset());
+  const uint32_t n = layout_.itemCount();
+  const uint32_t first = static_cast<uint32_t>(off / kPitch);
+  uint32_t t0;
+  Serial.printf("[ui] bench: row sprites at %p .. %p (PSRAM from 0x3FA00000 up shares core 1's cache with the code)\n",
+                slots_[0].sprite.getBuffer(), slots_[kSlots - 1].sprite.getBuffer());
+  // A row sprite's memory (26,880 B): filled cold (each sprite in turn) and
+  // warm (the same one again).
+  t0 = micros();
+  for (int k = 0; k < 12; ++k) slots_[k % kSlots].sprite.fillSprite(col::BG);
+  const uint32_t fillUs = (micros() - t0) / 12;
+  t0 = micros();
+  for (int k = 0; k < 12; ++k) slots_[0].sprite.fillSprite(col::BG);
+  const uint32_t fillSameUs = (micros() - t0) / 12;
+  // Rows: each item on screen once (cold), then the first one 8 times (warm).
+  uint32_t coldUs = 0;
+  int rows = 0;
+  for (uint32_t i = first; i < n && rows < 5; ++i, ++rows) {
+    t0 = micros();
+    renderItem(slots_[rows].sprite, i);
+    coldUs += micros() - t0;
+  }
+  t0 = micros();
+  for (int k = 0; k < 8; ++k) renderItem(slots_[0].sprite, first);
+  const uint32_t warmUs = (micros() - t0) / 8;
+  Serial.printf("[ui] bench: a row sprite filled in %lu us (the same one again %lu); a row rendered in %lu us (%d "
+                "rows, each once), %lu us (the first, again and again); text %s\n",
+                (unsigned long)fillUs, (unsigned long)fillSameUs, rows ? (unsigned long)(coldUs / rows) : 0UL, rows,
+                (unsigned long)warmUs, Fonts::fast() ? "straight into the sprites" : "by M5GFX (uiBf0)");
+  // The band: rendered and pushed in place; then pushed alone.
+  invalidate();
+  cost_ = FrameCost{};
+  t0 = micros();
+  render(off);
+  const uint32_t drawUs = micros() - t0;
+  const uint32_t renders = cost_.renders, renderUs = cost_.renderUs;
+  force_ = false;
+  jumped_ = false;
+  drawnOffset_ = off;
+  redraw();
+  t0 = micros();
+  render(off);
+  const uint32_t pushUs = micros() - t0;
+  force_ = false;
+  Serial.printf("[ui] bench: the band in place (%d lines, %d px wide): %lu us (%lu rows rendered in %lu us); pushed "
+                "alone %lu us\n",
+                height_, pushWidth(), (unsigned long)drawUs, (unsigned long)renders, (unsigned long)renderUs,
+                (unsigned long)pushUs);
+  // A move of one row and back, and of 7 lines (the hardware scroll's
+  // path), the rows rendered first.
+  if (off + kPitch <= layout_.maxOffset(height_)) {
+    keepFirst_ = first;
+    keepLast_ = std::min<uint32_t>(n - 1, static_cast<uint32_t>((off + kPitch + height_ - 1) / kPitch));
+    for (uint32_t i = keepFirst_; i <= keepLast_; ++i) renderedSlot(i);
+    uint32_t us[4];
+    const int32_t to[4] = {off + kPitch, off, off + 7, off};
+    for (int k = 0; k < 4; ++k) {
+      t0 = micros();
+      vs_->scrollTo(to[k], *this);
+      us[k] = micros() - t0;
+    }
+    Serial.printf("[ui] bench: a move of 42 lines %lu us, back %lu us; of 7 lines %lu us, back %lu us%s\n",
+                  (unsigned long)us[0], (unsigned long)us[1], (unsigned long)us[2], (unsigned long)us[3],
+                  railWanted_ ? " (the rail put back after each)" : "");
+  }
+  invalidate();
+  jumped_ = true;
 }
 
 // ---- touch ----
