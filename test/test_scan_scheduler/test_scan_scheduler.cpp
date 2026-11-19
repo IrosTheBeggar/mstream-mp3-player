@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <random>
 
+#include "RadioLinkNotes.h"
 #include "ScanScheduler.h"
 
 void setUp() {}
@@ -814,8 +815,8 @@ uint32_t firstStartRadio(S& s, uint32_t from, uint32_t to, S::In in, const Radio
 // then btSettleMs from its end; A2DP's coming up hands over to the wait for
 // AVRCP with no pass between; at most btLinkSetupMs from its rise, then
 // btSettleMs; a new radio link waits again. (On the device a walk the
-// burst's settle released started 0.16 s into one, and internal RAM went to
-// 42,544 B, under G5's floor.)
+// burst's settle released started about 0.15 s into one, and internal RAM
+// went to 42,544 B, under G5's floor.)
 void test_the_radio_links_set_up() {
   const uint32_t t = 45010;  // the radio link
   // Its end without A2DP (the radio link closed): 3 s after it. The wait's
@@ -839,8 +840,8 @@ void test_the_radio_links_set_up() {
     }
   }
   // A2DP and AVRCP in the same pass as the set-up's end (rd-g5-fix1's
-  // second radio link: A2DP up 0.61 s after it, AVRCP's lines in the same
-  // burst): the link's own settle, from the link.
+  // second radio link: A2DP up about 0.6 s after it, AVRCP's lines in the
+  // same burst): the link's own settle, from the link.
   {
     S s;
     s.update(base(0));
@@ -864,13 +865,14 @@ void test_the_radio_links_set_up() {
     r.link.controlAt = t + 610;
     TEST_ASSERT_EQUAL_UINT32(t + 3620, firstStartRadio(s, t, t + 20000, base(t), r));
   }
-  // A2DP, then AVRCP 3.84 s later (rd-g5-fix2, its times on the loop's 10
-  // ms: the radio link at 10.02 s, A2DP at 11.92 s, AVRCP at 15.77 s; the
-  // walk on the device from about 18.70 s): AVRCP + 3 s, and no pass
-  // between the two waits: from the radio link to AVRCP one of the two
-  // flags holds (the worker may go throughout).
+  // A2DP, then AVRCP about 3.8 s later (rd-g5-fix2, its times on the
+  // loop's 10 ms: the radio link at 10.02 s, A2DP at 11.92 s, AVRCP at
+  // about 15.70 s; its log lines arrived at 15.77 s, behind the console's
+  // D, and the walk on the device began at about 18.70 s): AVRCP + 3 s, and
+  // no pass between the two waits: from the radio link to AVRCP one of the
+  // two flags holds (the worker may go throughout).
   {
-    const uint32_t acl = 10020, a2dp = 11920, avrcp = 15770;
+    const uint32_t acl = 10020, a2dp = 11920, avrcp = 15700;
     Radio r;
     r.from[0] = acl;
     r.to[0] = a2dp;
@@ -992,8 +994,36 @@ void test_the_radio_links_set_up() {
     TEST_ASSERT_FALSE(o.btLinkSetupWait);
     TEST_ASSERT_EQUAL_UINT32(t + 3000, firstStart(s, t + 10, t + 10000, in));
   }
-  // A radio link that comes mid-slice: the slice is cut at once (at 0), the
-  // worker told it may go; the next is held to the set-up's end + 3 s.
+  // ... and after a set-up read up past its cap at the last pass (a stuck
+  // radio link, whose own end holds nothing): its end and a whole set-up
+  // after it before the next pass (the count moved by three, the loop held
+  // a while) hold the settle from that pass; its end alone (by one) holds
+  // nothing.
+  for (uint32_t by = 1; by <= 3; by += 2) {
+    S s;
+    s.update(base(0));
+    S::In in = base(t);
+    in.btLinkSetup = true;
+    in.btLinkSetupSeq = 1;
+    TEST_ASSERT_EQUAL(W::Bluetooth, s.update(in).wait);
+    in.nowMs = t + 20000;  // past the cap and its settle, still up
+    TEST_ASSERT_EQUAL(J::Scan, s.update(in).job);
+    in.nowMs = t + 20010;
+    in.btLinkSetup = false;
+    in.btLinkSetupSeq = 1 + by;
+    const S::Out o = s.update(in);
+    TEST_ASSERT_FALSE(o.btLinkSetupWait);
+    if (by == 1) {
+      TEST_ASSERT_EQUAL(J::Scan, o.job);
+    } else {
+      TEST_ASSERT_EQUAL(W::Bluetooth, o.wait);
+      TEST_ASSERT_EQUAL_UINT32(t + 23010, firstStart(s, t + 20020, t + 30000, in));
+    }
+  }
+  // A radio link that comes mid-slice: the slice is cut at once (at 0) and
+  // the wait's flag is set; the first pass with the slice ended releases
+  // the worker (before the 3 s idle exit); the next is held to the set-up's
+  // end + 3 s.
   {
     S s;
     S::In in = base(0);
@@ -1010,8 +1040,14 @@ void test_the_radio_links_set_up() {
     TEST_ASSERT_TRUE(o.cut);
     TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, o.priority);
     TEST_ASSERT_TRUE(o.btLinkSetupWait);
+    TEST_ASSERT_FALSE(S::mayRelease(o, false, false));  // (the slice under way)
     in.running = J::None;  // (the slice ended after its unit)
-    TEST_ASSERT_EQUAL_UINT32(t + 4900, firstStartRadio(s, t + 10, t + 20000, in, r, J::Walk));
+    in.nowMs = t + 10;
+    r.set(in, t + 10);
+    const S::Out freed = s.update(in);
+    TEST_ASSERT_EQUAL(J::None, freed.job);
+    TEST_ASSERT_TRUE(S::mayRelease(freed, true, false));
+    TEST_ASSERT_EQUAL_UINT32(t + 4900, firstStartRadio(s, t + 20, t + 20000, in, r, J::Walk));
   }
   // What it holds is what the Bluetooth wait holds: the save, the walk, a
   // compaction, the scan; not a waveform's read, a cover or the update
@@ -1061,13 +1097,15 @@ void test_the_radio_links_set_up() {
 }
 
 // rd-g5-fix1 (2026-11-19), its times on the loop's 10 ms: the boot's burst
-// pages from 6.36 s; the headphones open a radio link at 12.83 s that never
-// brings A2DP and closes 30.3 s later, at 43.17 s, as the burst backs off;
-// they open another at 46.03 s, and A2DP and AVRCP come up together at
-// 46.64 s. Before the set-up's wait the walk the burst held started 3 s
-// after the back-off, 0.13 s into the second radio link (0.16 s on the
-// device, the walk's first slice at about 46.19 s), and met the incoming
-// set-up (internal RAM to 42,544 B). Now it waits for the link + 3 s.
+// pages from 6.36 s (page 1 unanswered at 11.48 s); the headphones open a
+// radio link at 12.83 s that never brings A2DP (pages 2 and 3 go over it,
+// at 17.08 s and 36.34 s) and closes 30.3 s later, at 43.17 s, as the burst
+// backs off; they open another at 46.03 s, and A2DP and AVRCP come up
+// together at 46.64 s. Before the set-up's wait the walk the burst held
+// started 3 s after the back-off, 0.13 s into the second radio link (about
+// 0.15 s on the device, the walk's first slice at about 46.18 s), and met
+// the incoming set-up (internal RAM to 42,544 B). Now it waits for the
+// link + 3 s.
 void test_the_set_up_after_a_back_off() {
   Radio r;
   r.pagingUntil = 43170;
@@ -1096,23 +1134,38 @@ void test_the_set_up_after_a_back_off() {
     TEST_ASSERT_EQUAL_UINT32(46160, started);
     TEST_ASSERT_TRUE(started > r.from[1] && started < r.to[1]);  // inside the second set-up
   }
-  // Now: the link + 3 s. The worker may go during either radio link's wait
-  // (the first's to its cap at 20.83 s; the burst's pages alone after that
-  // don't release it), and during the second's.
+  // Now, the set-up as BtSink counts it (RadioLinkNotes, fed what BtAppT
+  // saw; the link's rise counted before the set-up's end): the link + 3 s.
+  // Pages 2 and 3 over the first radio link are set-ups again, each its own
+  // cap. The worker may go during each set-up's wait (the first radio
+  // link's from 12.83 s, page 2's to its cap at 25.08 s, page 3's to the
+  // radio link's close; the burst's pages alone between them don't release
+  // it), and during the second radio link's.
+  RadioLinkNotes notes;
+  const uint64_t them = 0x0011223344AAull;
   S s;
   s.update(base(0));
   for (uint32_t now = 6360; now < 49640; now += 10) {
+    if (now == 11480) notes.opened(them, false, true, now);  // page 1: no answer (HCI 0x04)
+    if (now == 12830 || now == 46030) notes.opened(them, true, false, now);
+    if (now == 17080 || now == 36340) notes.paged(them);  // pages 2 and 3, over it
+    if (now == 43170) notes.closed(them);                 // HCI 0x08, no A2DP
     in.nowMs = now;
-    r.set(in, now);
+    r.link.set(in, now);
+    if (now == r.link.linkAt) notes.linkUp(them);
+    in.btSetup = now < r.pagingUntil;
+    in.btLinkSetup = notes.settingUp();
+    in.btLinkSetupSeq = notes.count();
     const S::Out o = s.update(in);
     TEST_ASSERT_EQUAL(J::None, o.job);
     TEST_ASSERT_EQUAL(W::Bluetooth, o.wait);
-    const bool waits = (now >= 12830 && now < 20830) || (now >= 46030 && now < 46640);
+    const bool waits = (now >= 12830 && now < 25080) || (now >= 36340 && now < 43170) || (now >= 46030 && now < 46640);
     TEST_ASSERT_EQUAL(waits, o.btLinkSetupWait);
     TEST_ASSERT_EQUAL(waits, S::mayRelease(o, true, false));
   }
+  TEST_ASSERT_EQUAL_UINT32(8, notes.count());
   in.nowMs = 49640;
-  r.set(in, 49640);
+  r.link.set(in, 49640);
   TEST_ASSERT_EQUAL(J::Walk, s.update(in).job);
 }
 
@@ -1761,7 +1814,9 @@ void test_the_order_of_the_work() {
 }
 
 // millis() wraps after 49.7 days: a window across the wrap ends on time,
-// and an old one never comes back (a device on USB for weeks).
+// and an old one never comes back (a device on USB for weeks); the radio
+// link's set-up and the wait for AVRCP end at their caps across it, and a
+// set-up or a link that stays up for weeks never waits again.
 void test_the_wrap() {
   S s;
   S::In in = base(0xFFFFF000u);
@@ -1792,6 +1847,55 @@ void test_the_wrap() {
     if (o.job != J::Scan) ++held;
   }
   TEST_ASSERT_EQUAL_UINT64(3, held);  // the passes at 0, 10 and 20 s of the underrun's 30
+  // A radio link's set-up and a link waiting for its AVRCP, each rising 4 s
+  // before the wrap and never ending, a pass every 10 ms: the wait's flag
+  // for exactly its cap (8 s, 10 s), the scan at the cap + 3 s.
+  for (int link = 0; link < 2; ++link) {
+    S u;
+    S::In w = base(0xFFFFE000u);
+    u.update(w);
+    const uint32_t rise = 0xFFFFF000u, capMs = link ? 10000u : 8000u;
+    if (link) {
+      w.btLinked = true;
+      w.btSeq = 1;
+    } else {
+      w.btLinkSetup = true;
+      w.btLinkSetupSeq = 1;
+    }
+    uint32_t scanAt = UINT32_MAX;
+    for (uint32_t i = 0; i <= 2000 && scanAt == UINT32_MAX; ++i) {
+      w.nowMs = rise + i * 10;
+      const S::Out o = u.update(w);
+      TEST_ASSERT_EQUAL(i * 10 < capMs, link ? o.btControlWait : o.btLinkSetupWait);
+      TEST_ASSERT_EQUAL(i * 10 < capMs, S::mayRelease(o, true, false));
+      if (o.job == J::Scan) scanAt = w.nowMs;
+    }
+    TEST_ASSERT_EQUAL_UINT32(rise + capMs + 3000u, scanAt);
+  }
+  // ... and up for 60 days from day 1, a pass every 10 s: held at the rise's
+  // pass and the next (the cap's settle) only, the wait's flag at the rise's
+  // alone, never waiting again across millis()' wrap.
+  for (int link = 0; link < 2; ++link) {
+    S u;
+    S::In w = base(5);
+    u.update(w);
+    uint64_t heldPasses = 0, waits = 0;
+    for (uint64_t ms = 86400000ull; ms < 60ull * 86400000ull; ms += 10000) {
+      w.nowMs = static_cast<uint32_t>(ms);
+      if (link) {
+        w.btLinked = true;
+        w.btSeq = 1;
+      } else {
+        w.btLinkSetup = true;
+        w.btLinkSetupSeq = 1;
+      }
+      const S::Out o = u.update(w);
+      if (o.job != J::Scan) ++heldPasses;
+      if (o.btLinkSetupWait || o.btControlWait) ++waits;
+    }
+    TEST_ASSERT_EQUAL_UINT64(2, heldPasses);
+    TEST_ASSERT_EQUAL_UINT64(1, waits);
+  }
 }
 
 // After a walk that found changes (3.3.3, U11): build at once for 200 new
@@ -1935,14 +2039,19 @@ struct Model {
     if (in.btSetup || in.btSeq != btSeq) btAt = t;
     // A radio link being set up holds as a page does, to its cap, and its
     // end within that is an event; the cap is one, at its time. A new one:
-    // a rise, or the count moved while up at both passes; moved while down
-    // at both, one came and went between them (an event).
+    // a rise, or the count moved while up at both passes. Down now: the
+    // count's moves are the end of the one up at the last pass (if it was)
+    // and then whole set-ups, rise and end, between the passes; any of
+    // those is an event.
     const bool setupMoved = in.btLinkSetupSeq != setupSeq;
     if (in.btLinkSetup && (!setup || setupMoved)) {
       setupAt = t;
       setupWait = true;
     }
-    if (!in.btLinkSetup && !setup && setupMoved) btAt = t;
+    if (!in.btLinkSetup) {
+      const uint32_t moved = in.btLinkSetupSeq - setupSeq, ends = setup ? 1u : 0u;
+      if (moved >= ends && (moved - ends) / 2 > 0) btAt = t;
+    }
     setup = in.btLinkSetup;
     setupSeq = in.btLinkSetupSeq;
     if (setupWait && t - setupAt >= c.btLinkSetupMs) {
