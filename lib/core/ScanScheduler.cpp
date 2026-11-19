@@ -40,6 +40,7 @@ void ScanScheduler::observe(const In& in, Out& o) {
     lastSeekSeq_ = in.seekSeq;
     lastBtSeq_ = in.btSeq;
     lastBtControlUp_ = in.btControlUp;
+    lastBtLinkSetupSeq_ = in.btLinkSetupSeq;
     primed_ = true;
   }
   input_.expire(now);
@@ -57,6 +58,33 @@ void ScanScheduler::observe(const In& in, Out& o) {
   if (in.decoderAtEnd || in.trackSeq != lastTrackSeq_) track_.open(now, config_.trackSettleMs);
   if (in.seeking || in.seekSeq != lastSeekSeq_) seek_.open(now, config_.seekSettleMs);
   if (in.btSetup || in.btSeq != lastBtSeq_) bt_.open(now, config_.btSettleMs);
+  // The radio link's set-up (the header's "The radio link's set-up"): from
+  // its rise, held as btSetup holds it while it lasts; its end the settle
+  // from the pass that sees it; the cap counts as its end at its rise +
+  // btLinkSetupMs (sparse passes or not), and ends the wait for that radio
+  // link for good (its end after the cap holds nothing). A rise: down at
+  // the last pass, or the count moved while it was up at both (a new radio
+  // link). A count that moved while it was down at both: a set-up that came
+  // and went between the two passes, the settle.
+  if (in.btLinkSetup && (!setup_ || in.btLinkSetupSeq != lastBtLinkSetupSeq_)) {
+    setupAtMs_ = now;
+    setupWait_ = true;
+  } else if (!in.btLinkSetup && !setup_ && in.btLinkSetupSeq != lastBtLinkSetupSeq_) {
+    bt_.open(now, config_.btSettleMs);
+  }
+  setup_ = in.btLinkSetup;
+  if (setupWait_) {
+    if (now - setupAtMs_ >= config_.btLinkSetupMs) {
+      setupWait_ = false;
+      const uint32_t capAt = setupAtMs_ + config_.btLinkSetupMs;
+      if (after(capAt + config_.btSettleMs, now)) bt_.open(capAt, config_.btSettleMs);
+    } else {
+      bt_.open(now, config_.btSettleMs);
+      if (!in.btLinkSetup) setupWait_ = false;  // (ended: the settle that follows is the plain wait)
+    }
+  }
+  o.btLinkSetupWait = setupWait_;
+  lastBtLinkSetupSeq_ = in.btLinkSetupSeq;
   // The link's wait for AVRCP (the header's "The wait for AVRCP"): from the
   // link's rise, held open as btSetup holds it while AVRCP isn't up; its
   // coming up is a link event; the cap counts as one at link +
