@@ -3576,13 +3576,25 @@ static void stepCard(uint32_t now, bool input) {
   in.seekSeq = player.seeks();
   BtSink& bt = audio.bluetooth();
   in.btSetup = pairingUnderWay() || bt.link().phase == BtLink::Phase::Paging;
-  static bool linkWas = false;
-  static uint32_t linkEvents = 0;
-  if (bt.linkUp() != linkWas) {
-    linkWas = bt.linkUp();
-    ++linkEvents;
-  }
+  // The link and its events in one read (BtSink counts them as they
+  // happen, odd while up): a drop and a relink between two passes still
+  // show. A link holds the background work until its AVRCP is up (capped),
+  // and 3 s after: Bluedroid's AVRCP set-up, 3.5 s after A2DP opens,
+  // otherwise lands on the walk's worker (ScanScheduler.h, "The wait for
+  // AVRCP"). Before the link, the headphones' radio link being set up holds
+  // it too (capped), as the set-up and the walk's worker together went
+  // under G5's floor (ScanScheduler.h, "The radio link's set-up"): the
+  // set-up and its events in one read, before the link's (BtSink counts the
+  // link's rise before the set-up's end, so this pass sees one or the
+  // other).
+  const uint32_t linkSetups = bt.linkSetups();
+  in.btLinkSetup = (linkSetups & 1u) != 0;
+  in.btLinkSetupSeq = linkSetups;
+  const uint32_t linkEvents = bt.linkEvents();
+  const bool linked = (linkEvents & 1u) != 0;
   in.btSeq = linkEvents;
+  in.btLinked = linked;
+  in.btControlUp = linked && bt.avrcpUp();
   in.usb = screen.externalPower();
   in.battery = uiHost.batteryRaw;
   CardTasks::Sources src;
@@ -3751,8 +3763,46 @@ static void haltOnOldChip() {
   }
 }
 
+// malloc() tries internal RAM first up to this many bytes and PSRAM first
+// above it, each falling back to the other (heap_caps.c
+// heap_caps_malloc_default(); new, calloc and realloc too). The Arduino core
+// sets CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL, 4096, before setup()
+// (esp32-hal-psram.c psramAddToHeap()); one less puts every malloc of
+// exactly 4,096 B in PSRAM: the stdio buffer Arduino's VFS gives every File
+// (vfs_api.cpp: setvbuf(4096) on the card, FatFs's st_blksize being 0; the
+// flash library's LittleFS gives 4,096 as its st_blksize), so the playing
+// file's, the queue's save's, library.idx's and the Opus cache's; and the
+// response list of each of Bluedroid's SDP searches
+// (SDP_MAX_LIST_BYTE_COUNT, sdp_discovery.c: the link's, AVRCP's 3.5 s
+// after it, a pairing's). Both can be live at the boot's lowest internal
+// RAM (by code: the play file's 4 KB under the walk, AVRCP's set-up;
+// docs/OPUS.md 2.1, "G5 since the card worker"). The exact-4,096 B
+// allocations of everything the image links were audited
+// (docs/ARCHITECTURE.md, Build notes): each is a buffer only tasks read and
+// write, with the cache on; a task stack, a DMA buffer or what an IRAM
+// interrupt touches asks for internal RAM by its caps, which this limit
+// doesn't touch. IDF allows the limit anywhere from 0 (its default is
+// 16,384). Only where the core set its own (malloc may use PSRAM, and no
+// IRAM interrupt mallocs: CONFIG_ARDUINO_ISR_IRAM leaves malloc internal on
+// purpose), and only with PSRAM in the heap; a framework whose limit isn't
+// 4,096 stops the build, as its allocations between the two were never
+// audited.
+#if CONFIG_SPIRAM_USE_MALLOC && !CONFIG_ARDUINO_ISR_IRAM
+static_assert(CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL == 4096,
+              "the framework's malloc limit changed: audit kMallocInternalMax again (ARCHITECTURE.md, Build notes)");
+#endif
+constexpr size_t kMallocInternalMax = 4095;
+static bool mallocLimitSet = false;  // kMallocInternalMax is malloc's limit (the [heap] line)
+
 void setup() {
   haltOnOldChip();  // first: no PSRAM used yet
+#if CONFIG_SPIRAM_USE_MALLOC && !CONFIG_ARDUINO_ISR_IRAM
+  // (psramFound() is only the chip found: adding it to the heap can still fail.)
+  if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM) > 0) {
+    heap_caps_malloc_extmem_enable(kMallocInternalMax);
+    mallocLimitSet = true;
+  }
+#endif
   // A line for each failed PSRAM allocation (and any of 4 KB or more), from
   // the first: PSRAM's lowest since the boot read 0 B in every session of
   // the 2026-10-09 device run, and no caller logged a failure.
@@ -3806,6 +3856,12 @@ void setup() {
   board::applyBootPower();  // the IMU suspended: nothing reads it
   boardclock::begin();      // the RTC's time (M5.begin() found it), or unset: [clock]
   diag::logHeap("boot");
+  if (mallocLimitSet) {
+    Serial.printf("[heap] malloc: up to %u B internal RAM first, larger PSRAM first\n",
+                  static_cast<unsigned>(kMallocInternalMax));
+  } else {
+    Serial.println("[heap] malloc: the framework's own limit (no PSRAM in the heap, or malloc kept off it)");
+  }
   // The UI's list memory and its fonts' glyph tables, first: while PSRAM's
   // lower 2 MB are free (ui/HotMem: above 0x3FA00000 a row sprite shares
   // core 1's cache with the code that draws it, and that is where the

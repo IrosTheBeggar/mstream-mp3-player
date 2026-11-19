@@ -121,6 +121,13 @@ bool CardWorker::poll(uint32_t nowMs, Job* job, uint32_t* ms) {
   return got;
 }
 
+bool CardWorker::release() {
+  if (!alive_.load() || state_.load() != kIdle) return false;
+  state_.store(kExit);
+  xTaskNotifyGive(task_);
+  return true;
+}
+
 void CardWorker::setPriority(uint8_t priority) {
   if (!task_ || !alive_.load() || priority_ == priority) return;
   const uint8_t st = state_.load();

@@ -248,6 +248,133 @@ G5's figures over a real stream wait for M2 (section 6). The runbook
 records whether the link held for each play (headphones that switch
 themselves off when idle drop it; it pages them again between plays).
 
+**G5 since the card worker (2026-11-19).** Part b links first and plays
+after, and G5 was set and passed before the card worker existed. The order
+that gives the boot's lowest figure is the other one: a play started
+during the boot's pages, before the link (the boot's walk waits for the
+pages), then the link, the walk released 3 s after it on the card worker
+(its 7.5 KB stack) and AVRCP's set-up 3.5 s after it (Bluedroid's, an SDP
+search that dips internal RAM about 5.5 KB), all within about 4 s. On main
+89188f4 that order, in silent mode with an MP3, the link on the burst's
+third page, went to **35,916 B** since the boot (MEASURED, run g5h-main1b,
+2026-11-19: `[stats]` ram=43K min=42K with the walk and the link,
+ram=40K min=35K once AVRCP was up; `gs`'s `lowest 41392 B while a step
+ran`), 7,092 B under the session floor, with nothing failing (0
+underruns, 0 failed steps). The fix holds the card's background work
+through the headphones' link: while their radio link is being set up
+(at most 8 s from its rise, and from each page of ours over it), then
+until AVRCP is up (at most 10 s from the link), then
+3 s (ScanScheduler's set-up's wait and wait for AVRCP, METADATA.md 3.3.9);
+and it puts every malloc of exactly 4,096 B in PSRAM (the play file's
+stdio buffer, an SDP search's response list:
+[ARCHITECTURE.md](ARCHITECTURE.md), Build notes).
+
+MEASURED on the device, 2026-11-19: the branch at a9c4636 (the wait for
+AVRCP and the 4,095 B limit; the set-up's wait came after these runs), the
+spare card, 240 MHz, silent mode, an MP3 played from the boot's hold; the
+headphones out of their case, switched on, near the Core2, linking by
+themselves (the runs paired, forgot and set nothing). That isn't the
+runbook's order below (on once two pages have gone unanswered): in
+rd-g5-fix2 they were on at the boot (page 1 met their own connect 0.43 s
+after it went out), and in g5h-main1b and rd-g5-fix1 the boot's first
+pages went unanswered all the same. The times are the PC's, as the log
+lines arrived:
+
+| Run | Sequence | `[heap] bt-link` | Lowest since the boot / while a step ran |
+|---|---|---|---|
+| g5h-main1b (main 89188f4) | page 3 answered, A2DP up at 26.2 s; the walk at the link + 3.0 s; AVRCP about 0.75 s into it | 51K min 48K | **35,916** / 41,392 B |
+| rd-g5-fix1 | pages 1-3 unanswered (a radio link the headphones opened at 12.83 s never brought A2DP: timed out after 30.3 s, HCI 0x08); the burst backed off at 43.17 s and its 3 s released the walk at about 46.18 s; the headphones opened a radio link at 46.03 s, A2DP up at 46.64 s with AVRCP's lines before it in the same burst (no wait for AVRCP) | 44K min 41K | **42,544** / 42,716 B: 464 B under 43,008 |
+| rd-g5-fix2 | page 1 collided (HCI 0x0b: they were connecting); their radio link at 10.0 s, A2DP up at 11.92 s, AVRCP at about 15.70 s (the link + about 3.8 s; its lines arrived at 15.77 s, behind `D`'s output); the walk from about 18.70 s (AVRCP + 3.0 s; `gs`'s `Bluetooth` 6.0 s) | 55K min 54K | **45,124** / 45,768 B: +2,116 over 43,008, +9,208 over main |
+
+rd-g5-fix2 is g5h-main1b's sequence, and the wait for AVRCP holds the
+walk as designed: AVRCP's set-up dipped only about 3 KB (55K, then 52K
+min 51K: its 4,096 B SDP list in PSRAM now), and the low is the walk, the
+link and the MP3 together. rd-g5-fix1 found a gap: only a page burst or
+a pairing held the work before the link, so a radio link the headphones
+opened by themselves after the burst backed off wasn't a Bluetooth wait,
+and the walk the back-off's settle released started about 0.15 s into its
+set-up: the worker's stack (7,680 + 352 B, about the 7 KB between
+rd-g5-fix1's and g5h-main1b's `bt-link` mins) and the incoming SDP, A2DP
+and AVRCP together. Neither fix run logged `[card] the worker's task ends
+now` (in rd-g5-fix1 AVRCP came with the link, in rd-g5-fix2 the walk
+hadn't begun at the link). So the radio link's set-up now holds the work
+too (METADATA.md 3.3.9, "The radio link's set-up").
+
+MEASURED on the branch at 81402fd (the set-up's wait too), the same day and
+setting: **rd-g5-ext1**, the headphones out and on before the boot: page 1
+unanswered, page 2 answered after 2,970 ms at 16.70 s (its radio link a
+set-up, inside the burst), A2DP up at 17.39 s, AVRCP at about 21.1 s (the
+link + about 3.7 s), the walk from about 24.1 s (AVRCP + 3 s; `gs`'s
+`Bluetooth` 11.5 s): `bt-link` 55K min 54K, the lowest since the boot
+**45,124 B** (45,764 B while a step ran), rd-g5-fix2's to the byte. Two
+tries at rd-g5-fix1's sequence on it (rd-mid-ext1 and rd-mid-ext2: the
+headphones in their case at the boot, out of it when the burst backed
+off) got no radio link: the headphones opened none and answered neither
+back-off page (HCI 0x04), so the walk ran with no link (the lowest 50K).
+So that sequence on the set-up's wait is host-tested only
+(`test_the_set_up_after_a_back_off` replays rd-g5-fix1's reports through
+`RadioLinkNotes`). PROJECTED, not reached on the device: rd-g5-fix1's
+sequence on that wait about 50 KB at the set-up (its `bt-link` min 41K and
+the worker's 8 KB), the session's lowest then the walk, the link and the
+MP3 together, about 45 KB as on rd-g5-fix2 and rd-g5-ext1; a listener on a
+real stream about 50 KB.
+
+The same day's bench of the 4,095 B limit (headphones in their case, after
+the boot's walk, 240 MHz; rd-bench-main2 on main against rd-bench-fix on
+a9c4636; ARCHITECTURE.md, Build notes, has the table): the play file's
+refill through a PSRAM buffer costs about 0.55 ms each 4 KB (MP3 320k +0.5
+points of a core, a 24/96 FLAC +3.5 points decoding, +2.8 with the
+converter; MEASURED), and the unlinked boot's lowest rose 4.4 KB (`gs`:
+59,408 B since the boot on main, 63,768 B on the fix).
+
+So part b runs two more sequences, each from a fresh boot at 240 MHz, and
+records each figure with its mode. The floors stay as the table has them:
+changing them is the owner's call, and so is whether these
+play-before-link figures count against the session floor; until then they
+are recorded beside it.
+
+1. **Play before the link, silent.** The headphones off (or in their
+   case) at the boot; `z`; an MP3 album played from the Library tab or
+   the console while the boot pages them (an album of silence keeps the
+   night quiet); the headphones on once two pages have gone unanswered.
+   `s` at the link + 3.3 s, at + 4.0 s and every 5 s through the walk;
+   `gs` at the walk's end. Read: which sequence came (the `[bt]` lines: a
+   page answered, a radio link the headphones opened, the back-off), the
+   walk's first slice against `[bt] A2DP up` and `[bt] AVRCP` (on the fix
+   at the link + 3.0 s or after, and at AVRCP + 3.0 s or after; a radio
+   link the headphones opened after the back-off, rd-g5-fix1's, now holds
+   it too; `[card] the worker's task ends now` if the worker was up, saying
+   which wait), `gs`'s `Bluetooth` wait (MEASURED: 6.0 s on rd-g5-fix2,
+   whose link came at 11.9 s; 37.3 s on rd-g5-fix1, its pages to 43.2 s),
+   its `lowest ... while a step ran` and `since the boot`, and `min=`.
+2. **Play before the link, a real stream.** The same without `z`: the
+   headphones the output, so the play waits for the link (PlayGate) and
+   starts with it. Silent mode holds the speaker's I2S (about 8 KB) through
+   the link; a real stream ends it 2 s after the link and holds the A2DP
+   stream's buffers (about 3 KB) instead, so the same state reads about
+   5 KB higher there (PROJECTED). A silent album keeps it inaudible.
+3. **The limit's cost** (rd-bench-main2 and rd-bench-fix ran it): the
+   headphones in their case, after the boot's walk, on main and on the
+   fix, each twice: `b/bench/ram/n320.mp3` (40 s of pink noise, MP3 320k
+   CBR at 44.1 kHz) and `b/bench/ram/n2496.flac` (30 s of white noise,
+   FLAC 24/96, 2.1 Mb/s), then `gs`. The command is typed as shown: the
+   console's bench takes the rest of the line as the path, spaces kept
+   (`b</path>` elsewhere in this document is notation: "By path" above).
+   Both files are noise for the bench only, outside `/music` (the walk
+   doesn't list them): never played.
+
+On the fix, three checks besides: an album tapped during the walk (the
+queue's save writes through another 4 KB stdio buffer at the low); the
+headphones switched on mid-walk under a speaker play (the worker's task
+ends before the AVRCP lines: `[card] the worker's task ends now`, or `gs`
+saying it isn't running; `min=` stays above the worker + AVRCP level);
+and the headphones switched on after the boot's burst has backed off
+(rd-g5-fix1's order: the radio link they open holds the walk, and a walk
+under way is cut and its worker ends, `[card] the worker's task ends now:
+the headphones' radio link is being set up`). Those releases are
+host-tested only for when they may happen (`test_when_the_worker_may_go`,
+`test_the_set_up_after_a_back_off`); the release itself shows only here.
+
 ### 2.2 Gate by gate
 
 | # | Measure | Commands | Reads from |
@@ -256,7 +383,7 @@ themselves off when idle drop it; it pages them again between plays).
 | G2 | `load=` playing 128k 10 min, the Dance tab up | part b: `d`, `Rf</bench/opus/long128k.opus>` (14 min: the real tracks are 3:30 and `Rf` plays one file with nothing after it), `s` every 30 s, `Ps1` every 15 s | `[stats] ... load=x%` over the first 10 min (`pos=` up to 600 s): the median and the max. `load=` is the track's decode and convert time over the audio made since its start |
 | G3 | the 30 min soak with the gapless album on repeat and an Opus/MP3 join | needs the library index and the queue (M2): not runnable in M0 as written. What runs, part b: `Rf` on `/bench/opus/album/01.opus` ... `04.opus` one after another (each to its end, a stop and a start between them), the Dance tab up, for 30 min | `[stats] underruns=` (counted since boot: the rise over the 30 min), `buf=` after each part's ring first reaches 1,000 ms and up to its `[opus] end:` line (the drain after it is on purpose), and no `[E]` line |
 | G4 | decode-stack free | The figure is the lowest free since boot (one decode task, made at boot), so the order matters: from a fresh boot, every real file benched and played first (the reading after the last of them is the real files' figure), then `b</bench/opus/fuzz.opus>` last (its reading is the fuzz figure; loud noise if ever played, so bench only). A real file after the fuzz one shows the fuzz file's figure: restart first | pass: >= 3,072 B after the real files, >= 1,536 B after `fuzz.opus`. The final `kDecodeStack` is the most used (20,480 - the lowest free) + 3 KB, rounded up to 1 KB |
-| G5 | `[heap] playing` | part b, the headphones linked: the first play after the boot (`long128k.opus`) logs `[heap] playing` once, 2 s in; `s`'s `ram=` while playing, `min=` (`heap_caps_get_minimum_free_size()`, the lowest since boot) at the end. Part b has no `Oi` bench (G1's internal-RAM placement holds the 38 KB state in internal RAM and would lower the minimum for the rest of the boot) and no fuzz file | steady: the median `ram=` playing; the session min: the lowest `min=` of part b's 240 MHz boot |
+| G5 | `[heap] playing` | part b, the headphones linked: the first play after the boot (`long128k.opus`) logs `[heap] playing` once, 2 s in; `s`'s `ram=` while playing, `min=` (`heap_caps_get_minimum_free_size()`, the lowest since boot) at the end. Part b has no `Oi` bench (G1's internal-RAM placement holds the 38 KB state in internal RAM and would lower the minimum for the rest of the boot) and no fuzz file. Since 2026-11-19 also the two play-before-link sequences, silent and on a real stream (2.1, "G5 since the card worker") | steady: the median `ram=` playing; the session min: the lowest `min=` of part b's 240 MHz boot. Beside it, each play-before-link boot's `min=` with its mode (whether they count against the session floor is the owner's call: 2.1). MEASURED 2026-11-19, silent, the lowest since the boot: main 89188f4 35,916 B (g5h-main1b); the branch at a9c4636 42,544 B (rd-g5-fix1: a radio link the headphones opened after the back-off, since held by the set-up's wait) and 45,124 B (rd-g5-fix2: g5h-main1b's sequence) |
 | G6 | the longest pass | part a: every real file played to its end (`f120.opus` included), part b's plays too | `pass_max=Nus` (<= 20,000 at M0; <= 30,000 since 8.11), the track's longest pass: the whole pass, `loop()` and the converter's `commit()`. The bench's `longest decode call` bounds one frame and its `longest loop()` is a 4,096-frame burst: neither is this figure |
 | G7 | MP3 and FLAC on this image | From a fresh boot, before any `.opus` is opened (an Opus open keeps 128 KB of PSRAM buffers for good, which moves libFLAC's mallocs: RESAMPLER.md section 10d saw layout alone move FLAC 4.7x -> 4.3x): `b</music/Daft Punk/Discovery/01 - One More Time.mp3>` and `b</music/Kanye West/Graduation/03 Stronger.flac>` by path (the `b27` / `b2` tracks of ENERGY.md section 10 and RESAMPLER.md section 10d, named as the earlier sessions' logs have them), twice each. No queue command is needed (and `qp`/`q+` would replace the listener's queue) | the `[bench]` lines (and `[bench] libmad's state: pinned at ...`), against 4.9x / 4.7x |
 | G8 | 160 MHz | `Pcb160` and a restart (`Pc160` at runtime is refused from 240 MHz: it would retune the PLL the Bluetooth radio runs from; `Pc` alone shows the clock), `z`; part a: `b</bench/opus/ms128k.opus>` and `b</bench/opus/ms96k.opus>`; part b: `Rf</bench/opus/long128k.opus>` for 10 min without the Dance tab, then `Rx`; `Pcb0` and a restart after each | `[bench]` (`at 160 MHz` in its second line), `[stats] underruns=` |

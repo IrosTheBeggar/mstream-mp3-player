@@ -10,9 +10,21 @@
 #include <cstdio>
 
 #include "CachedDrive.h"
+#include "HoleHint.h"
 #include "app/Psram.h"
 #include "diskio_impl.h"  // ff_diskio_register(), ff_diskio_impl_t
 #include "ff.h"
+
+// The hole hint (wIoctl(), lib/core HoleHint) leans on the prebuilt FatFs: TRIM on, and
+// remove_chain() trimming each run after it zeroed and counted its clusters (checked for
+// R0.15 in ESP-IDF 5.5.5's ff.c and in libfatfs.a's remove_chain disassembly), with no exFAT
+// (no bitmap). Another FatFs must be checked again before this builds: without TRIM the
+// hint would silently stop, and a remove_chain that trimmed before it counted would see
+// the free count one run short.
+static_assert(FF_USE_TRIM == 1, "the hole hint needs FatFs's CTRL_TRIM (FF_USE_TRIM 1)");
+#if FF_DEFINED != 80286 || FF_FS_EXFAT != 0
+#error "Another FatFs: check remove_chain()'s TRIM against holehint::onTrim() (METADATA.md 3.2.4), then this guard"
+#endif
 
 // The SD library's FatFs driver (sd_diskio.cpp): global, with no header
 // that declares them; the same signatures as its definitions.
@@ -60,7 +72,8 @@ SdCard s_card;
 SdLink s_link;
 CachedDrive s_drive(s_cache, s_card, nowUs);
 uint8_t* s_check = nullptr;  // verify's sector (PSRAM)
-FATFS* s_fs = nullptr;       // the volume, for its window (wWrite()); nullptr: not found
+FATFS* s_fs = nullptr;       // the volume, for its window (wWrite()) and the hole hint; nullptr: not found
+holehint::Memory s_holeMemory;  // the hook's last hint (wIoctl(); under FatFs's volume lock)
 // The free-space count's watch (watchWrites()): read and set under FatFs's
 // volume lock only.
 WriteWatch s_watch = nullptr;
@@ -113,6 +126,10 @@ DRESULT wIoctl(unsigned char pdrv, unsigned char cmd, void* buff) {
     // FatFs's range: the first and the last sector freed.
     const LBA_t* r = static_cast<const LBA_t*>(buff);
     s_drive.trim(static_cast<uint32_t>(r[0]), static_cast<uint32_t>(r[1]));
+    // FatFs freed these clusters (remove_chain(), inside the FatFs call that holds the
+    // volume's lock): on a nearly full card its next search for a free cluster starts here,
+    // as f_open()'s FA_CREATE_ALWAYS does for the chain it frees (lib/core HoleHint).
+    if (holehint::onTrim(s_fs, pdrv, static_cast<uint32_t>(r[0]), s_holeMemory)) s_drive.holeHinted();
   }
   return ff_sd_ioctl(pdrv, cmd, buff);
 }
@@ -142,7 +159,10 @@ bool install(uint8_t pdrv) {
     delay(500);
   }
   // The volume FatFs mounted on this drive, as CardSpace finds it: a directory of the root
-  // names it (no sector read, one status command).
+  // names it (no sector read, one status command). None found: none kept (the hole hint
+  // writes through it), and no hint kept from the last mount.
+  s_fs = nullptr;
+  s_holeMemory = holehint::Memory{};
   char root[4] = {static_cast<char>('0' + pdrv), ':', '/', '\0'};
   FF_DIR dir;
   if (f_opendir(&dir, root) == FR_OK) {
@@ -190,6 +210,7 @@ Stats stats() {
   s.writeFails = d.writeFails;
   s.refused = d.refused;
   s.trims = d.trims;
+  s.holeHints = d.holeHints;
   s.inits = d.inits;
   s.verified = d.verified;
   s.stale = d.stale;
