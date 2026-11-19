@@ -80,6 +80,17 @@ public:
   const AbsVolumePolicy& volume() const { return policy_; }
   const StreamControl& stream() const { return stream_; }
   bool avrcpConnected() const { return avrcUp_; }
+  // AVRCP is connected and the A2DP link is up: what the card's background
+  // work waits for after a link (ScanScheduler's In::btControlUp, through
+  // BtSink::avrcpUp()). False while unlinked, whatever avrcpConnected()
+  // says: only AVRCP's own disconnect clears that, and it may come after
+  // the link's. An AVRCP still up when the link comes back (it stayed up
+  // over an A2DP close and reopen) counts at once: Bluedroid starts no new
+  // AVRCP set-up (its SDP search) while the old one's handle is open
+  // (bta_av_st_rc_timer), so there is nothing to wait for. Were its
+  // disconnect never reported, the next link wouldn't wait either: the
+  // link's own settle, as before the wait.
+  bool avrcpOnLink() const { return avrcUp_ && stream_.linked(); }
 
 private:
   void act(const StreamControl::Actions& a, uint32_t nowMs);

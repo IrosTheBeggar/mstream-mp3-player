@@ -3549,6 +3549,11 @@ static void stepCard(uint32_t now, bool input) {
     ++linkEvents;
   }
   in.btSeq = linkEvents;
+  // A link holds the background work until its AVRCP is up (capped), and 3 s
+  // after: Bluedroid's AVRCP set-up, 3.5 s after A2DP opens, otherwise lands
+  // on the walk's worker (ScanScheduler.h, "The wait for AVRCP").
+  in.btLinked = bt.linkUp();
+  in.btControlUp = bt.avrcpUp();
   in.usb = screen.externalPower();
   in.battery = uiHost.batteryRaw;
   CardTasks::Sources src;

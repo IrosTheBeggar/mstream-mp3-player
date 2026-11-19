@@ -1030,6 +1030,7 @@ void PlayerA2dp::publish() {
   sink->headroom_.store(v.headroomQ15());
   sink->control_.store(static_cast<uint8_t>(v.mode()));
   sink->headsetVolume_.store(static_cast<int16_t>(v.headsetAbsolute()));
+  sink->avrcpUp_.store(ctl_.avrcpOnLink());
   const StreamControl& s = ctl_.stream();
   sink->streaming_ = s.streaming();
   sink->streamState_ = static_cast<uint8_t>(s.state()) | (s.heldOff() ? kHeldOffBit : 0);

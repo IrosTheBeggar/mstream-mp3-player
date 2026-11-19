@@ -321,6 +321,21 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
     // A wait came, or a list moves: the slice under way ends after its unit.
     if (o.cut) jobs_.cutSlice();
   }
+  // A link waiting for its AVRCP (ScanScheduler.h, "The wait for AVRCP"):
+  // the worker's idle task ends now, not kIdleExitMs after its last step.
+  // A link that comes mid-walk or mid-scan cuts the slice, and its 7.5 KB
+  // stack would otherwise still be there when AVRCP's set-up comes 3.5 s
+  // after the link (kIdleExitMs is 3 s, and the slice's own end comes
+  // after the link). Only in that window: a page's or a pairing's wait
+  // would end it between every two covers. Not with a step handed this
+  // pass (a cover, a waveform's read), nor while an update step is asked
+  // (its build must find the task: ensure()).
+  if (!o.btControlWait) {
+    releaseLogged_ = false;
+  } else if (free && o.job == Job::None && !(up && up->asked()) && worker_.release() && !releaseLogged_) {
+    releaseLogged_ = true;
+    Serial.println("[card] the worker's task ends now: the headphones' link waits for AVRCP (its stack back first)");
+  }
   // 6. The step.
   if (o.job == Job::Cover) {
     if (thumbs) thumbs->startCover(worker_, o.priority, now);
