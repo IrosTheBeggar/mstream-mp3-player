@@ -695,8 +695,10 @@ The converter's histories are read 96 times per output, so `RingOutput`
 (3,192 bytes with its stage, its block and the converter) must stay in
 internal RAM.
 The framework's sdkconfig has `CONFIG_SPIRAM_USE_MALLOC=y` with
-`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096`: a `new RingOutput` of 4 KB or
-more would go to PSRAM without a word. So `RingOutput` has
+`CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=4096`, and since 2026-11-19 `setup()`
+lowers malloc's limit to 4,095 B (ARCHITECTURE.md, Build notes: "malloc's
+internal limit is 4,095 B"): a `new RingOutput` of 4 KB or more would go
+to PSRAM without a word. So `RingOutput` has
 `static_assert(sizeof(RingOutput) < 4096)` (`src/audio/RingOutput.h`), and
 the firmware build checks it; `test_ring_feed` bounds `sizeof(RingFeed)`
 too.

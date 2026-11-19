@@ -149,6 +149,32 @@ public:
   // waits before a restart or a power-off (the CPU speed, the idle
   // power-off) waits for this, so the headphones see the disconnect finish.
   bool linkUp() const { return linked_.load(); }
+  // linkUp()'s ups and downs, counted where they happen (free-running; odd
+  // while the link is up): one read gives the loop the link and its events
+  // together, and a drop and a relink between two of its passes still show
+  // (ScanScheduler's In::btSeq: a new link waits for its own AVRCP).
+  uint32_t linkEvents() const { return linkEvents_.load(); }
+  // AVRCP is up on the link that is up (BtControl::avrcpOnLink(): connected
+  // since the link last went down; false while linkUp() isn't): the card's
+  // background work waits for it after a link (ScanScheduler's
+  // In::btControlUp), as Bluedroid's AVRCP set-up, an SDP search 3.5 s after
+  // A2DP opens, dips internal RAM about 5.5 KB for a moment.
+  bool avrcpUp() const { return linked_.load() && avrcpUp_.load(); }
+  // The remembered headphones' radio link (their ACL) is up and A2DP isn't
+  // up over it yet, whoever opened it (they, or a page of ours they
+  // answered): the link being set up, SDP, A2DP and often AVRCP with it,
+  // in 0.6-2 s. Its rises and ends, counted where they happen on BtAppT
+  // (RadioLinkNotes; free-running, odd while one is set up), a new radio
+  // link over one never seen to close, or a page of ours over one up with
+  // no A2DP, counting two: one read gives the loop the set-up and its
+  // events together (ScanScheduler's In::btLinkSetup and btLinkSetupSeq:
+  // the card's background work waits through it, as the walk's worker and
+  // an incoming set-up together went under G5's floor).
+  // It ends when A2DP comes up, counted after linkEvents()' rise, so a
+  // pass that reads this first and linkEvents() after sees one or the
+  // other, never neither.
+  uint32_t linkSetups() const { return linkSetups_.load(); }
+  bool linkSettingUp() const { return (linkSetups() & 1u) != 0; }
   // The headphones' name: from discovery, or read after each connection.
   const char* deviceName() const { return deviceNames_[deviceNameIdx_.load()]; }
 
@@ -388,6 +414,9 @@ private:
 
   // Set on Bluetooth tasks, read anywhere.
   std::atomic<bool> linked_{false};     // the A2DP link as reported to the loop
+  std::atomic<uint32_t> linkEvents_{0};  // linked_'s changes (linkEvents())
+  std::atomic<bool> avrcpUp_{false};    // BtControl::avrcpOnLink(), published by PlayerA2dp
+  std::atomic<uint32_t> linkSetups_{0};  // the radio link's set-ups (linkSetups()): RadioLinkNotes' count
   std::atomic<bool> streaming_{false};  // the stack reports the stream started
   std::atomic<uint8_t> streamState_{0};  // for stats(): StreamControl::State, bit 7 = held off
   // The link's signal and power mode, so a stutter can be told from a weak

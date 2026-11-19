@@ -58,6 +58,7 @@ void BtControl::linkUp(uint32_t nowMs) {
 
 void BtControl::linkDown(uint32_t nowMs) {
   stream_.linkDown();
+  avrcOnLink_ = false;  // the next link has AVRCP set up again (avrcpOnLink())
   policyActive_ = false;
   apply(policy_.linkDown());
   settle(nowMs);
@@ -65,12 +66,14 @@ void BtControl::linkDown(uint32_t nowMs) {
 
 void BtControl::avrcpUp(uint32_t nowMs) {
   avrcUp_ = true;
+  avrcOnLink_ = true;
   policy_.avrcpUp(nowMs);
   settle(nowMs);
 }
 
 void BtControl::avrcpDown(uint32_t nowMs) {
   avrcUp_ = false;
+  avrcOnLink_ = false;
   apply(policy_.avrcpDown());
   settle(nowMs);
 }
@@ -80,6 +83,7 @@ void BtControl::capabilities(bool volumeChange, uint32_t nowMs) {
     avrcUp_ = true;
     policy_.avrcpUp(nowMs);
   }
+  avrcOnLink_ = true;  // (connected now, whatever came before)
   apply(policy_.capabilities(volumeChange, nowMs));
   settle(nowMs);
 }

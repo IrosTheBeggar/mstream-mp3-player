@@ -286,6 +286,7 @@ private:
   bool walkSeen_ = false;  // the boot's walk has begun (the status says "Checking the card…" until it ends)
   bool bootWalkDone_ = false;  // the boot's walk ended: D's to-do is known, the scan may run
   ScanScheduler::Wait lastWait_ = ScanScheduler::Wait::None;
+  bool releaseLogged_ = false;  // this radio link's set-up or link's wait for AVRCP ended the worker (its line once)
   char toast_[64] = "";
   // For the console.
   cardwalk::CardWalk::Result lastWalk_;

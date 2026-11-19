@@ -4835,14 +4835,25 @@ where 3.3.3-3.3.5 left room:
   in the last 5 s; a track change (from the decoder's end of file on the
   heard track to 2 s after the next is first heard: a gapless join, a
   start's or a skip's first audio); a seek, and the 2 s after; a pairing
-  or a link being set up, and the 3 s after a link event (up or down).
+  or a link being set up, and the 3 s after a link event (up or down); the
+  headphones' radio link up with A2DP not yet over it, at most 8 s from its
+  rise, and the 3 s after it ends or the 8 s run out; a link whose AVRCP
+  isn't up yet, at most 10 s from the link, and the 3 s after AVRCP comes
+  up or the 10 s run out (2026-11-19: "The wait for AVRCP" and "The radio
+  link's set-up" below).
   3.3.4's "an underrun since the last step" counts from the pass that sees
   it, and each window from the last pass its cause was seen. Three are new:
   input (a tap's redraw shares the SPI bus with the card); the long decode
   pass (G6 is 30 ms, and the 0.7.0 soak measured passes up to 30.5 ms on
   MP3 and 32.7 ms on FLAC with no scan, so over 40 ms the decoder waited
   for the card); and the settle after a link event (A2DP's start, AVRCP's
-  handover). Each is a `Config` value (ESTIMATED; L3 and L5 measure).
+  handover). Each is a `Config` value (ESTIMATED; L3 and L5 measure). The
+  settle was never measured against AVRCP: AVRCP's coming up wasn't a link
+  event, and it comes 3.73-3.80 s after the link on Powerbeats Pro
+  (MEASURED, four boots), so a 3 s settle released the work before it,
+  until the wait for AVRCP (`btControlWaitMs`, 10 s, set from that
+  measurement and the same headphones' ~7 s once a stream had started
+  before their AVRCP: ARCHITECTURE.md's late probe).
   Playing, and the battery above the floor, hold nothing.
 - **The battery floor (U13)** holds the scan and the DJNB check below 10%
   off USB, and lets them go on USB or above 15%; 10-15%, or a reading not
@@ -4953,6 +4964,180 @@ where 3.3.3-3.3.5 left room:
   and a later session's `gs` said 34.4 s of `Bluetooth` in all. Expected
   (paging ends; the walk is background work), but the walk's own time in
   `[card] the walk: ... in M ms` counts from its first slice, after it.
+- **The wait for AVRCP (2026-11-19).** Bluedroid opens AVRCP itself 3.5 s
+  after A2DP opens (`BTA_AV_RC_DISC_TIME_VAL`, compiled into the shipped
+  libbt.a; `bta_av_st_rc_timer`): an SDP search first, a dip of about
+  5.5 KB of internal RAM for a moment (MEASURED: `gs`'s lowest while a
+  step ran, 41,392 B, against the lowest since the boot; by code a 4,096 B
+  response list, a 1,000 B discovery record and an L2CAP channel,
+  ESTIMATED). The 3 s settle let a walk the burst held start at the link +
+  3.0 s, and AVRCP came 0.73-0.80 s into it in every recorded linked boot
+  (MEASURED: 3.73-3.80 s after `A2DP up`, Powerbeats Pro), with the walk's
+  worker and its 7.5 KB stack up. On main 89188f4 (2026-11-19, an MP3
+  playing in silent mode before the link, the link on the burst's third
+  page) internal RAM's lowest since the boot was 35,916 B (MEASURED;
+  `[stats]` ram=40K min=35K once AVRCP was up, 43K/42K with the walk and
+  the link before it), under G5's session floor (43,008 B, OPUS.md).
+  Nothing failed at it (0 underruns, 0 failed steps). So a link now holds
+  the walk, a compaction, the scan and the update step's save until AVRCP
+  is up (`btLinked`, `btControlUp`: `BtSink::avrcpUp()`, AVRCP connected
+  since the link last went down, and the link up), and AVRCP's coming up
+  is a link event (the 3 s after it); headphones that never open AVRCP
+  hold it `btControlWaitMs` (10 s) from the link, then the 3 s. A link
+  that drops before AVRCP ends the wait (the drop's own 3 s, as before);
+  an AVRCP the headphones opened before A2DP, up with the link, leaves the
+  link's 3 s alone. An AVRCP still reported up from the last link counts
+  for nothing: Bluedroid closes AVRCP with the A2DP stream
+  (`bta_av_conn_chg()` deletes the stream's RC) and sets it up anew on
+  each link, so an `avrcpConnected()` left up is only a disconnect
+  reported late or lost. An AVRCP that comes after the 10 s, or connects
+  again later on the link, is a link event too: the work waits 3 s after
+  it, so past the link + 13 s. A drop and a relink between two loop passes
+  (a long pass while the headphones reconnect by themselves) still show:
+  BtSink counts the link's flips where they happen (`linkEvents()`, odd
+  while up), and a `btSeq` that moved while the link read up at both
+  passes is a new link, whose wait starts again. Covers, waveforms' reads
+  and the build aren't held, as before. While the wait holds
+  (`Out::btControlWait`), the worker's idle task ends at once
+  (`ScanScheduler::mayRelease()`, `CardWorker::release()`, CardTasks), not
+  3 s after its last step. A link that comes mid-walk cuts the slice; the
+  3 s idle exit alone ends the task at about the link + 3.0-3.3 s,
+  0.2-0.5 s before AVRCP's set-up (before the wait, the next slice, handed
+  at the link + 3 s, kept it); the release makes that margin the whole
+  wait, and ends a task a cover made in the window. Only in that window (a
+  page's or a pairing's wait would make each cover end and remake the
+  task), with nothing handed that pass, and never while an update step is
+  asked (its build must find the task); host-tested
+  (`test_when_the_worker_may_go`), the release itself on the device only.
+  Not covered: a compaction, the update step's save or its build already
+  under way at the link isn't cut (only a slice is) and still meets
+  AVRCP's set-up; a cover asked in the window makes the task again; an
+  AVRCP that connects again mid-link, or one after the 10 s, cuts a slice
+  and holds 3 s but doesn't release the worker (the wait is over), and its
+  own SDP search comes with its connect (`bta_av_rc_opened()`, a connect
+  the headphones made), before the cut. Cost: the work starts at AVRCP +
+  3 s instead of the link + 3 s, about 3.8 s later on these headphones
+  (about 7 s later where their AVRCP came at about 7 s, once a stream had
+  started before it: a listener's PlayGate start; the link + 13 s for
+  headphones that never open AVRCP), so a hand-copied file (U11) and
+  "Found N new tracks" show that much later, and the Library tab goes that
+  much longer without "Checking the card..."; nothing audible. MEASURED on
+  the device (2026-11-19, the branch at a9c4636 with malloc's 4,095 B
+  limit, ARCHITECTURE.md Build notes; silent mode, an MP3 from the boot's
+  hold; OPUS.md 2.1, "G5 since the card worker"): run rd-g5-fix2, the
+  sequence main 89188f4 went to 35,916 B on (the link, AVRCP 3.5-3.8 s
+  after it: here a radio link the headphones opened at 10.0 s, A2DP up at
+  11.92 s, AVRCP at about 15.70 s, the link + about 3.8 s), started the
+  walk at about 18.70 s (AVRCP + 3.0 s, as designed; `gs`'s `Bluetooth`
+  6.0 s) and went to 45,124 B since the boot (45,768 B while a step ran),
+  +2,116 B over G5's
+  floor and +9,208 B over main's 35,916 B on that sequence (g5h-main1b).
+  AVRCP's set-up dipped about 3 KB (`[heap] bt-link` 55K min 54K, then
+  52K min 51K: its 4,096 B SDP list in PSRAM now); the low is the walk, the
+  link and the MP3 together. No `[card] the worker's task ends now` line
+  (the walk hadn't begun at the link). The times are the PC's, as the log
+  lines arrived: AVRCP's lines came at 15.77 s, in one burst behind the
+  console's `D` (sent at 15.44 s, its output at 15.77 s), so AVRCP came by
+  about 15.70 s: the first of those lines carries its own device stamp,
+  which says so, and the walk, started 3.0 s after the pass that saw
+  AVRCP, began at about 18.70 s (its end line at 50.59 s, 31,894 ms after
+  it). PROJECTED (not measured): about 50 KB for a listener on a real
+  stream. The same day's other run found a gap before the link: "The radio
+  link's set-up" below.
+- **The radio link's set-up (2026-11-19).** The wait for AVRCP starts at
+  A2DP's link, and the link is set up over the headphones' radio link
+  (their ACL) first: SDP, A2DP, and AVRCP with it when they open AVRCP
+  too (rd-g5-fix1), else Bluedroid's own AVRCP about 3.5-3.8 s after the
+  link (rd-g5-fix2). A2DP came about 0.6 s (rd-g5-fix1) and 1.9 s
+  (rd-g5-fix2) after a radio link the headphones opened, and 0.72 s after
+  a page of ours was answered (g5h-main1b): MEASURED, as the log lines
+  arrived. A page burst or a pairing held the work
+  through that (`btSetup`), but nothing held a radio link the headphones
+  opened after the burst. On run rd-g5-fix1 (the device, 2026-11-19, the
+  branch at a9c4636, silent mode, an MP3 from the boot's hold) the boot's
+  three pages went unanswered (a radio link the headphones opened at
+  12.83 s never brought A2DP and timed out 30.3 s later, HCI 0x08), the
+  burst backed off at 43.17 s, and its 3 s settle released the walk at
+  about 46.18 s (its end line at 81.89 s, 35,710 ms after it), about
+  0.15 s after the headphones opened another radio link (46.03 s, "the
+  headphones opened a radio link by themselves: A2DP next"). A2DP came up
+  at 46.64 s with AVRCP's lines before it in the same burst, so no wait
+  for AVRCP followed, and the walk's worker met the whole incoming set-up:
+  `[heap] bt-link` 44K min 41K (g5h-main1b's, with no worker up, 51K min
+  48K), internal RAM's lowest since the boot 42,544 B (42,716 B while a
+  step ran), 464 B under G5's floor (MEASURED). The 7 KB between the two
+  `bt-link` mins is about the worker (its 7,680 B stack and 352 B TCB). So
+  the remembered headphones' radio link up with A2DP not up over it
+  (whoever opened it: they, or a page of ours they answered) holds the
+  walk, a compaction, the scan and the update step's save as `btSetup`
+  does (`btLinkSetup`, `btLinkSetupSeq`: `BtSink::linkSetups()`), then the
+  3 s from the pass that sees it end; at most `btLinkSetupMs` (8 s) from
+  its rise, then the 3 s. A page of ours over a radio link already up
+  with no A2DP (A2DP opened over it, its SDP and set-up again with no new
+  radio link: a burst's page over theirs, a back-off's over one that
+  lingers past the 8 s, as rd-g5-fix1's pages 2 and 3 went over the
+  30.3 s one, the second 23.5 s after its rise) is a set-up again, its own
+  8 s from the page. The pass that sees the set-up's end sees the link's
+  rise too (BtSink counts the rise first, the loop reads the set-up
+  first); a pass may see the link before the end, holding both waits for
+  that pass, and the end a pass later holds the 3 s. Either way the wait
+  for AVRCP takes over with no pass between the two waits. Why 8 s: BtSink
+  leaves their radio link to them for 4 s (`kTheirSetupMs`), then opens
+  A2DP over it with a burst's page, which holds the work from then on
+  (`btSetup`, and the page's own set-up; in a burst already under way its
+  next page goes over their link); 8 s is that allowance twice, against
+  0.6-1.9 s measured, and a radio link that never brings A2DP (the 30.3 s
+  one) holds the work 8 + 3 s from its rise and from each page over it,
+  not for good. A new radio link waits again from its own rise: a rise, or
+  a count that moved while the set-up read up at both passes (BtSink
+  counts two for a radio link opened over one never seen to close, and
+  for a page over one up); one that came and went between two passes holds
+  the 3 s, whatever the last pass read (a set-up read up past its cap at
+  the last pass, then its end and a whole set-up before this one: the
+  count moved by three); its end after the cap holds nothing. While it holds
+  within the cap the worker's idle task ends at once (`Out::btLinkSetupWait`,
+  `mayRelease()`): the set-up's 0.6-2 s is shorter than the 3 s idle exit,
+  so a radio link that comes mid-walk cuts the slice and would still meet
+  its stack; a cover asked meanwhile makes the task again and the next pass
+  with nothing handed ends it, for 8 s at most (a page burst's wait, tens
+  of seconds, still doesn't release it). The radio link's notes and the
+  count are `RadioLinkNotes` (lib/core, host-tested in
+  `test_radio_link_notes`), on BtAppT, the count moving in the call that
+  changes it and published by `PlayerA2dp::noteSetup()` after each change
+  and every 250 ms tick: a radio link opened or a page's failure
+  (`aclOpened()`); one closed (`aclClosed()`: every close reaches BtAppT,
+  and the noted radio link's clears the notes whatever the remembered
+  addresses became since it opened, a scan by name's find replacing the
+  peer's); a page over it (`connect_to()`); A2DP's rise and drop; Forget, a
+  pairing's start and its failure, and the console's `Bn`/`Bn0` (the
+  remembered address changes: the notes start afresh unless linked). A
+  failed Connection Complete for the noted address while its radio link is
+  up keeps the notes, whatever its code: a device has one radio link, so
+  it is a page of ours that met theirs (HCI 0x0B, Connection Already
+  Exists, seen; another code, not seen), not that link's end. A close that
+  never reaches BtAppT (its queue full) leaves the set-up counted until
+  the cap, the next radio link, the link, or a change of the remembered
+  address. On rd-g5-fix1's timeline the walk now starts at the link + 3 s,
+  49.64 s (`test_the_set_up_after_a_back_off`, with `RadioLinkNotes` fed
+  that boot's reports). Not covered: a relink over a radio link that
+  stayed up after A2DP dropped (no new radio link: the drop's 3 s only); a
+  compaction, a save or a build already under way isn't cut, as for AVRCP;
+  radio links that open again and again and never bring A2DP: each new one
+  waits again from its own rise, so short ones (2 s every 5 s) would hold
+  the walk, the scan and the save for as long as they go on. None seen;
+  before the set-up's wait nothing held them outside a burst (a radio link
+  of theirs closed within 4 s starts none). Bounding that across radio
+  links (a set-up that came to nothing making the next ones within some
+  time hold only their rise's 3 s, or holding no more after a few in a
+  row) is the owner's call. MEASURED on 81402fd (rd-g5-ext1, docs/OPUS.md
+  2.1): a page answered, A2DP, AVRCP 3.7 s later, the walk at AVRCP + 3 s,
+  the lowest 45,124 B. rd-g5-fix1's sequence itself wasn't reached on the
+  device (two tries, rd-mid-ext1 and rd-mid-ext2: the headphones out of
+  their case after the back-off opened no radio link and answered no
+  page): PROJECTED, the set-up meets no worker, about 50 KB there (its
+  `bt-link` min 41K and the worker's 8 KB), and the session's lowest
+  becomes the walk, the link and the MP3 together, about 45 KB as on
+  rd-g5-fix2 and rd-g5-ext1.
 - **millis()'s wrap:** a window is cleared once it has passed, so an old
   one can't come back 24.8 days later (a device on USB for weeks).
 - **The glue's inputs (N10):** `listMoving` is the page's `animating()`
@@ -4967,9 +5152,13 @@ where 3.3.3-3.3.5 left room:
   decode task raises after each pass and the loop takes (swapped to 0);
   `decoderAtEnd` and `trackSeq` are the backend's join state and heard
   token; `btSetup` is `pairingUnderWay()` or a page burst (BtLink Paging),
-  `btSeq` counts the link's ups and downs; `battery` is -1 until read
-  (main.cpp's snapshot clamps a failed read to 0 today, which would hold
-  the scan).
+  `btSeq` counts the link's ups and downs (since 2026-11-19 BtSink's
+  `linkEvents()`, counted where they happen: odd while up, and `btLinked`
+  is its low bit, one read for both), `btControlUp` `avrcpUp()` (AVRCP on
+  the link that is up), `btLinkSetupSeq` BtSink's `linkSetups()` and
+  `btLinkSetup` its low bit (the radio link being set up, read before the
+  link's events); `battery` is -1 until read (main.cpp's snapshot clamps a
+  failed read to 0 today, which would hold the scan).
 - **`LibraryWrite`** (after `QueueWrite`, before `Busy`) holds for the
   whole update step, from the queue's flush (3.4.2, step 1) to the end of
   `library.idx`'s save, and for a whole compaction, not only for their
@@ -6494,9 +6683,11 @@ src/. What the code decided where 3.2-3.4 left room:
   the backend's; `seeking` a start not taken up yet (`positionKnown()`
   false: a seek's, a skip's) and `seekSeq` a new `PlaybackController::
   seeks()` (the seeks that did something); `btSetup` a pairing or the
-  link Paging, `btSeq` the link's ups and downs; `usb` external power;
-  `battery` the reading as it came, -1 until the first (the UI's snapshot
-  keeps its clamped copy).
+  link Paging, `btSeq` the link's ups and downs (`btLinked` and
+  `btControlUp`, the link and its AVRCP, and `btLinkSetup` and
+  `btLinkSetupSeq`, the radio link being set up before it, since
+  2026-11-19); `usb` external power; `battery` the reading as it came, -1
+  until the first (the UI's snapshot keeps its clamped copy).
 - **The walk** (`CardJobs`): its first step writes the scan's chunk (N7's
   rule, and `append()` refuses during a walk), opens T (streamed on the
   first walk after a commit, through HIDX after), D (`KnownD`) and
