@@ -39,10 +39,11 @@
 // flash can't have its stack in PSRAM), only while there is work: the task
 // is made for the first step (or just before one that must start at once:
 // ensure(), the library update's build) and ends itself kIdleExitMs after
-// the last, or at once while a link waits for its AVRCP (release():
-// Bluedroid's AVRCP set-up, 3.5 s after the link, dips internal RAM about
-// 5.5 KB for a moment; kIdleExitMs alone ends the task only 0.2-0.5 s
-// before it when a link cuts a slice).
+// the last, or at once while the headphones' radio link is being set up or
+// a link waits for its AVRCP (release(): the set-up, 0.6-2 s, is shorter
+// than kIdleExitMs; Bluedroid's AVRCP set-up, 3.5 s after the link, dips
+// internal RAM about 5.5 KB for a moment, and kIdleExitMs alone ends the
+// task only 0.2-0.5 s before it when a link cuts a slice).
 // What the steps hold is in PSRAM (their jobs' memory, FatFs's FIL, DIR
 // and FILINFO); on the stack: TagScan's about 1 KB, FatFs's 512 B long-name
 // buffer, the frames (the deepest: a compaction's reopen of D, about 3.9
@@ -84,9 +85,11 @@ public:
   bool poll(uint32_t nowMs, Job* job, uint32_t* ms);
   // The task ends now if it is there and idle (no step handed, none
   // waiting for poll()), as poll() ends it kIdleExitMs after its last step:
-  // a link waiting for its AVRCP (ScanScheduler's Out::btControlWait), so
-  // its 7.5 KB stack is back before AVRCP's set-up. True: it was told to end
-  // (start() refuses until it has; the next step makes it again).
+  // a radio link being set up or a link waiting for its AVRCP
+  // (ScanScheduler's Out::btLinkSetupWait, Out::btControlWait), so its
+  // 7.5 KB stack is back before the set-up's SDP, A2DP and AVRCP. True: it
+  // was told to end (start() refuses until it has; the next step makes it
+  // again).
   bool release();
   // The step under way's priority (ScanScheduler's Out::priority).
   void setPriority(uint8_t priority);

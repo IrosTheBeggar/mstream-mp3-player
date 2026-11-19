@@ -387,6 +387,14 @@ private:
   static void onAclWork(uint16_t what, void* note);
   void aclOpened(const AclNote& n);
   void aclClosed(const AclNote& n);
+  // BtSink::linkSetups() from aclUp_, aclLinked_ and linkUp_ as they are
+  // now: counted when the set-up begins or ends, and by two when `opened`
+  // (a radio link just came up) finds one already counted (its close never
+  // reported): a new set-up all the same. Every change of the three ends in
+  // a call: aclOpened() and aclClosed() call it, and publishLink() (every
+  // tick, and after the link's rise and fall, forgetPeer(), a pairing's
+  // start and its failure) does, so a missed one is mended within 250 ms.
+  void noteSetup(bool opened = false);
   bool remembers(const uint8_t* bda) const {
     return packBda(bda) != 0 && (std::memcmp(bda, last_connection, ESP_BD_ADDR_LEN) == 0 ||
                                  std::memcmp(bda, peer_bd_addr, ESP_BD_ADDR_LEN) == 0);
@@ -465,6 +473,7 @@ private:
   // What a page came to, for the log (aclOpened(), aclClosed()).
   bool pageOpen_ = false;        // a page (connect_to()) whose radio link hasn't been reported yet
   uint32_t pageMs_ = 0;          // when it was made
+  // aclUp_ && !aclLinked_ && !linkUp_: the link being set up (noteSetup()).
   bool aclUp_ = false;           // the remembered headphones' radio link is up (A2DP may not be yet)
   bool aclTheirs_ = false;       // ... opened by them, no page of ours open (planStep() leaves A2DP to them a while)
   bool aclLinked_ = false;       // ... and A2DP came up over it
@@ -1253,6 +1262,7 @@ void PlayerA2dp::aclOpened(const AclNote& n) {
       Serial.printf("[bt] a radio link the headphones began failed: %s (HCI 0x%02x)\n", hciText(code), code);
     }
   }
+  noteSetup(up);
 }
 
 // BtAppT: HCI's Disconnection Complete for the headphones' radio link.
@@ -1269,6 +1279,20 @@ void PlayerA2dp::aclClosed(const AclNote& n) {
   aclUp_ = false;
   aclTheirs_ = false;
   aclLinked_ = false;
+  noteSetup();
+}
+
+// BtAppT, but for publishLink()'s one call from begin(), on the loop task
+// before the stack is up, when nothing has changed (no store).
+void PlayerA2dp::noteSetup(bool opened) {
+  const bool on = aclUp_ && !aclLinked_ && !linkUp_;
+  const uint32_t n = sink->linkSetups_.load();
+  const bool was = (n & 1u) != 0;
+  if (on != was) {
+    sink->linkSetups_.store(n + 1);
+  } else if (on && opened) {
+    sink->linkSetups_.store(n + 2);
+  }
 }
 
 void PlayerA2dp::onAclWork(uint16_t what, void* note) {
@@ -1335,12 +1359,17 @@ void PlayerA2dp::app_gap_callback(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_par
       // The library reports any ACL drop as our link going down (:465-471),
       // also one to another device, e.g. one we refused.
       const uint8_t* bda = param->acl_disconn_cmpl_stat.bda;
-      if (packBda(bda) != linkedBda_.load() && std::memcmp(bda, peer_bd_addr, ESP_BD_ADDR_LEN) != 0) return;
-      // Why it closed, for the log (aclClosed()).
+      const bool ours = packBda(bda) == linkedBda_.load() || std::memcmp(bda, peer_bd_addr, ESP_BD_ADDR_LEN) == 0;
+      // Why it closed, for the log, and the radio link's notes cleared
+      // (aclClosed()): for every address aclOpened() notes a radio link of
+      // (remembers(): the remembered one too), so no set-up stays counted
+      // for a radio link that closed (BtSink::linkSetups()).
+      if (!ours && std::memcmp(bda, last_connection, ESP_BD_ADDR_LEN) != 0) return;
       AclNote n;
       std::memcpy(n.bda, bda, ESP_BD_ADDR_LEN);
       n.status = static_cast<uint16_t>(param->acl_disconn_cmpl_stat.reason);
       bt_app_work_dispatch(onAclWork, kAclClosed, &n, sizeof(n), nullptr);
+      if (!ours) return;  // (the library's report: the link's or the peer's alone, as before)
       break;
     }
     case ESP_BT_GAP_READ_RSSI_DELTA_EVT: {
@@ -1413,6 +1442,7 @@ void PlayerA2dp::publishLink() {
                             std::memory_order_relaxed);
   sink->reconnectPhase_.store(static_cast<uint8_t>(reconnect_.phase()), std::memory_order_relaxed);
   sink->linkRemembered_.store(has_last_connection(), std::memory_order_relaxed);
+  noteSetup();
 }
 
 // Connect (the card, a B hold, a play waiting for them): a full burst of

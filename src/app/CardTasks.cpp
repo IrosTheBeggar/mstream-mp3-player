@@ -327,13 +327,20 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   // alone would end the task at about the link + 3.0-3.3 s, 0.2-0.5 s
   // before AVRCP's set-up at about + 3.5 s (before the wait, the next
   // slice, handed at the link + 3 s, kept it). This makes that margin the
-  // whole wait, and ends a task a cover made in it. When:
-  // ScanScheduler::mayRelease() (only the link's wait, not a page's or a
-  // pairing's; nothing handed this pass; no update step asked).
-  if (!o.btControlWait) releaseLogged_ = false;
+  // whole wait, and ends a task a cover made in it. The same while the
+  // headphones' radio link is being set up (ScanScheduler.h, "The radio
+  // link's set-up"): SDP, A2DP and AVRCP over it take 0.6-2 s, under the
+  // idle exit, so a radio link that comes mid-walk would meet the stack.
+  // When: ScanScheduler::mayRelease() (only those two waits, each capped,
+  // not a page's or a pairing's; nothing handed this pass; no update step
+  // asked). One line for the two back to back.
+  if (!o.btControlWait && !o.btLinkSetupWait) releaseLogged_ = false;
   if (ScanScheduler::mayRelease(o, free, up && up->asked()) && worker_.release() && !releaseLogged_) {
     releaseLogged_ = true;
-    Serial.println("[card] the worker's task ends now: the headphones' link waits for AVRCP (its stack back first)");
+    Serial.println(o.btLinkSetupWait ? "[card] the worker's task ends now: the headphones' radio link is being set up "
+                                       "(its stack back first)"
+                                     : "[card] the worker's task ends now: the headphones' link waits for AVRCP (its "
+                                       "stack back first)");
   }
   // 6. The step.
   if (o.job == Job::Cover) {

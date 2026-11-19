@@ -3547,7 +3547,15 @@ static void stepCard(uint32_t now, bool input) {
   // show. A link holds the background work until its AVRCP is up (capped),
   // and 3 s after: Bluedroid's AVRCP set-up, 3.5 s after A2DP opens,
   // otherwise lands on the walk's worker (ScanScheduler.h, "The wait for
-  // AVRCP").
+  // AVRCP"). Before the link, the headphones' radio link being set up holds
+  // it too (capped), as the set-up and the walk's worker together went
+  // under G5's floor (ScanScheduler.h, "The radio link's set-up"): the
+  // set-up and its events in one read, before the link's (BtSink counts the
+  // link's rise before the set-up's end, so this pass sees one or the
+  // other).
+  const uint32_t linkSetups = bt.linkSetups();
+  in.btLinkSetup = (linkSetups & 1u) != 0;
+  in.btLinkSetupSeq = linkSetups;
   const uint32_t linkEvents = bt.linkEvents();
   const bool linked = (linkEvents & 1u) != 0;
   in.btSeq = linkEvents;
