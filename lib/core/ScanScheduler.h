@@ -77,10 +77,32 @@
 //               into the next one; a start's or a skip's first 2 s too.
 //   Seek        a seek under way, and the 2 s after it.
 //   Bluetooth   a pairing or a link being set up, and the 3 s after a link
-//               event (up or down).
+//               event (up or down); and a link up whose AVRCP isn't yet,
+//               at most 10 s from the link, then the 3 s after AVRCP comes
+//               up (or after the 10 s).
 // Playing doesn't hold it, nor does the battery above the floor: the scan
 // runs on battery and while playing (the user's choice, 3.3.5). The times
-// are ESTIMATED; L3 and L5 measure them (Config).
+// are ESTIMATED; L3 and L5 measure them (Config), but for the wait for
+// AVRCP, whose reason is measured (below).
+//
+// The wait for AVRCP (2026-11-19). Bluedroid opens AVRCP itself 3.5 s
+// after A2DP opens (BTA_AV_RC_DISC_TIME_VAL, compiled into the shipped
+// libbt.a): an SDP search first, about 5.5 KB of internal RAM for a moment
+// (a 4,096 B response list, a 1,000 B discovery record, an L2CAP channel).
+// The owner's headphones came up 3.73-3.80 s after the link in every
+// recorded boot, so the 3 s settle let the boot's walk start 0.5-0.8 s
+// before it: the walk's worker (its 7.5 KB stack) and AVRCP's set-up met,
+// and with an MP3 playing in silent mode internal RAM fell to 35,916 B
+// (G5's session floor is 43,008 B). So a link holds the background work
+// until AVRCP is up (In::btControlUp), and AVRCP's coming up is a link
+// event of its own (the settle after it); headphones that never open it
+// hold it Config::btControlWaitMs, then the settle. A link that drops
+// before AVRCP ends the wait (its own event holds the settle, as before).
+// Out::btControlWait says the wait holds: the card worker's idle task goes
+// at once then (app/CardTasks), so a link that comes mid-walk frees its
+// stack before AVRCP's set-up. A compaction, the update step's save or its
+// build already under way at the link isn't cut (only a slice is), and the
+// build isn't held at all: they still meet AVRCP's set-up.
 //
 // The idle power-off and the sleep timer (which turns the power off only
 // through the idle power-off) have no blocker for the scan: a power-off
@@ -116,7 +138,7 @@ public:
     DecodePass,   // a decode pass over Config::passLimitUs, in the last passBackoffMs
     TrackChange,  // the decoder at the heard track's end, until trackSettleMs into the next
     Seek,         // a seek under way, and seekSettleMs after
-    Bluetooth,    // a pairing or link setup, and btSettleMs after a link event
+    Bluetooth,    // a pairing or link setup, btSettleMs after a link event; a link's wait for AVRCP
   };
   static constexpr int kWaits = 12;
 
@@ -152,6 +174,12 @@ public:
     uint32_t trackSettleMs = 2000;
     uint32_t seekSettleMs = 2000;
     uint32_t btSettleMs = 3000;
+    // The longest a link waits for its AVRCP (In::btControlUp), from the
+    // link; then btSettleMs, as if AVRCP had come then. AVRCP came 3.73-3.80
+    // s after the link on the owner's headphones (MEASURED, four boots);
+    // Powerbeats Pro were seen at about 7 s once a stream played
+    // (docs/ARCHITECTURE.md). 0: no wait (the link's own settle).
+    uint32_t btControlWaitMs = 10000;
     // The battery floor (U13): held below floorPct off USB, until USB or a
     // reading above resumeAbovePct.
     int floorPct = 10;
@@ -196,6 +224,8 @@ public:
     // ---- Bluetooth ----
     bool btSetup = false;  // a pairing (the Pair screen's scan, a pairing) or a link being set up (paging)
     uint32_t btSeq = 0;    // the link events (up, down), free-running
+    bool btLinked = false;     // the A2DP link is up (its rise starts the wait for AVRCP)
+    bool btControlUp = false;  // AVRCP is up on that link (BtSink::avrcpUp(): false while unlinked)
     // ---- power ----
     bool usb = false;  // external power (ACIN or VBUS); unknown counts as present
     int battery = -1;  // percent (0-100); negative: not known (the floor keeps its state)
@@ -212,6 +242,10 @@ public:
     bool cut = false;
     bool batteryHeld = false;      // the floor holds the scan from this pass (the log, the status line)
     bool batteryReleased = false;  // ... and lets it go from this one
+    // A link is up and its AVRCP isn't yet, within Config::btControlWaitMs:
+    // the worker's task may go now, idle (CardWorker::release()), its stack
+    // free before AVRCP's set-up.
+    bool btControlWait = false;
   };
 
   ScanScheduler() = default;
@@ -289,6 +323,13 @@ private:
   Wait lastWait_ = Wait::None;
   uint32_t lastUnderruns_ = 0, lastTrackSeq_ = 0, lastSeekSeq_ = 0, lastBtSeq_ = 0;
   Window input_, underrun_, pass_, track_, seek_, bt_;
+  // The link's wait for AVRCP: the link seen up at the last pass, since
+  // linkAtMs_; the wait holds (AVRCP not up, the cap not reached); AVRCP
+  // at the last pass.
+  bool linked_ = false;
+  bool controlWait_ = false;
+  bool lastBtControlUp_ = false;
+  uint32_t linkAtMs_ = 0;
   bool batteryLow_ = false;
   uint64_t waited_[kWaits] = {};
   uint32_t steps_[kJobs] = {};
