@@ -40,8 +40,9 @@
 // is made for the first step (or just before one that must start at once:
 // ensure(), the library update's build) and ends itself kIdleExitMs after
 // the last, or at once while a link waits for its AVRCP (release():
-// Bluedroid's AVRCP set-up, 3.5 s after the link, needs about 5.5 KB of
-// internal RAM for a moment, and kIdleExitMs is only 3 s).
+// Bluedroid's AVRCP set-up, 3.5 s after the link, dips internal RAM about
+// 5.5 KB for a moment; kIdleExitMs alone ends the task only 0.2-0.5 s
+// before it when a link cuts a slice).
 // What the steps hold is in PSRAM (their jobs' memory, FatFs's FIL, DIR
 // and FILINFO); on the stack: TagScan's about 1 KB, FatFs's 512 B long-name
 // buffer, the frames (the deepest: a compaction's reopen of D, about 3.9

@@ -62,12 +62,14 @@ void ScanScheduler::observe(const In& in, Out& o) {
   // coming up is a link event; the cap counts as one at link +
   // btControlWaitMs (sparse passes or not), and ends the wait for good, so
   // a link that outlasts millis()'s wrap can't wait again. A link that drops
-  // ends it (btSeq's event holds the settle).
+  // ends it (btSeq's event holds the settle). A rise: the link down at the
+  // last pass, or btSeq moved while it was up at both (a drop and a relink
+  // between them).
   if (!in.btLinked) {
     linked_ = false;
     controlWait_ = false;
   } else {
-    if (!linked_) {
+    if (!linked_ || in.btSeq != lastBtSeq_) {
       linked_ = true;
       linkAtMs_ = now;
       controlWait_ = !in.btControlUp;

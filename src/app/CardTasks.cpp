@@ -323,16 +323,15 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   }
   // A link waiting for its AVRCP (ScanScheduler.h, "The wait for AVRCP"):
   // the worker's idle task ends now, not kIdleExitMs after its last step.
-  // A link that comes mid-walk or mid-scan cuts the slice, and its 7.5 KB
-  // stack would otherwise still be there when AVRCP's set-up comes 3.5 s
-  // after the link (kIdleExitMs is 3 s, and the slice's own end comes
-  // after the link). Only in that window: a page's or a pairing's wait
-  // would end it between every two covers. Not with a step handed this
-  // pass (a cover, a waveform's read), nor while an update step is asked
-  // (its build must find the task: ensure()).
-  if (!o.btControlWait) {
-    releaseLogged_ = false;
-  } else if (free && o.job == Job::None && !(up && up->asked()) && worker_.release() && !releaseLogged_) {
+  // A link that comes mid-walk or mid-scan cuts the slice; the idle exit
+  // alone would end the task at about the link + 3.0-3.3 s, 0.2-0.5 s
+  // before AVRCP's set-up at about + 3.5 s (before the wait, the next
+  // slice, handed at the link + 3 s, kept it). This makes that margin the
+  // whole wait, and ends a task a cover made in it. When:
+  // ScanScheduler::mayRelease() (only the link's wait, not a page's or a
+  // pairing's; nothing handed this pass; no update step asked).
+  if (!o.btControlWait) releaseLogged_ = false;
+  if (ScanScheduler::mayRelease(o, free, up && up->asked()) && worker_.release() && !releaseLogged_) {
     releaseLogged_ = true;
     Serial.println("[card] the worker's task ends now: the headphones' link waits for AVRCP (its stack back first)");
   }
