@@ -55,6 +55,7 @@ private:
 
 static_assert(AudioShared::kRingRate == RateConverter::kOutRate, "the ring holds what the converter makes");
 // The converter's histories are read 96 times per output: RingOutput must
-// stay in internal RAM. With CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL = 4096, a
-// `new` of 4 KB or more would go to PSRAM without a word.
+// stay in internal RAM. malloc's limit is 4,095 B (main.cpp's
+// kMallocInternalMax), so a `new` of 4 KB or more would go to PSRAM without
+// a word.
 static_assert(sizeof(RingOutput) < 4096, "RingOutput must stay under 4 KB to be allocated in internal RAM");

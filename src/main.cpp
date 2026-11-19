@@ -3716,8 +3716,29 @@ static void haltOnOldChip() {
   }
 }
 
+// malloc() tries internal RAM first up to this many bytes and PSRAM first
+// above it, each falling back to the other (heap_caps.c
+// heap_caps_malloc_default(); new, calloc and realloc too). The Arduino core
+// sets CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL, 4096, before setup()
+// (esp32-hal-psram.c psramAddToHeap()); one less puts every malloc of
+// exactly 4,096 B in PSRAM: the stdio buffer Arduino's VFS gives every File
+// opened on the card (vfs_api.cpp: setvbuf(4096), FatFs's st_blksize being
+// 0), so the playing file's, the queue's save's, library.idx's and the Opus
+// cache's; and the response list of each of Bluedroid's SDP searches
+// (SDP_MAX_LIST_BYTE_COUNT, sdp_discovery.c: the link's, AVRCP's 3.5 s
+// after it, a pairing's). Those met at the boot's lowest internal RAM (the
+// play file's 4 KB under the walk, AVRCP's set-up: docs/OPUS.md 2.1, "G5
+// since the card worker"). The exact-4,096 B allocations of everything the
+// image links were audited (docs/ARCHITECTURE.md, Build notes): each is a
+// buffer only tasks read and write, with the cache on; a task stack,
+// a DMA buffer or what an IRAM interrupt touches asks for internal RAM by
+// its caps, which this limit doesn't touch. IDF allows the limit anywhere
+// from 0 (its default is 16,384).
+constexpr size_t kMallocInternalMax = 4095;
+
 void setup() {
   haltOnOldChip();  // first: no PSRAM used yet
+  if (psramFound()) heap_caps_malloc_extmem_enable(kMallocInternalMax);
   // A line for each failed PSRAM allocation (and any of 4 KB or more), from
   // the first: PSRAM's lowest since the boot read 0 B in every session of
   // the 2026-10-09 device run, and no caller logged a failure.
@@ -3771,6 +3792,8 @@ void setup() {
   board::applyBootPower();  // the IMU suspended: nothing reads it
   boardclock::begin();      // the RTC's time (M5.begin() found it), or unset: [clock]
   diag::logHeap("boot");
+  Serial.printf("[heap] malloc: up to %u B internal RAM first, larger PSRAM first%s\n",
+                static_cast<unsigned>(kMallocInternalMax), psramFound() ? "" : " (no PSRAM: internal only)");
   // The UI's list memory and its fonts' glyph tables, first: while PSRAM's
   // lower 2 MB are free (ui/HotMem: above 0x3FA00000 a row sprite shares
   // core 1's cache with the code that draws it, and that is where the
