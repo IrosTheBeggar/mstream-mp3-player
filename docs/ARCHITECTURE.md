@@ -22,7 +22,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  LibraryIndex  LibrarySynth  TextFold  TouchGesture           |
               |  LibraryBuilder  LibraryUpdate  CardJobs  ScanScheduler       |
               |  KineticScroll  ScrollGovernor  VScrollMap  RefillPacer       |
-              |  ScanSync  ScrubPacer                                         |
+              |  ScanSync  ScrubPacer  RadioLinkNotes                         |
               |  ByteStream  QueueModel  QueueText  TrackCatalog              |
               |  TouchCalibration  TouchCheck  TouchRecognizer  ButtonGesture |
               |  ButtonPolicy  InputEvent                                     |
@@ -734,7 +734,15 @@ forever, cost +35.5 mA for as long as they were away):
   before A2DP was up: <reason> (HCI 0x..)`, `[bt] the radio link
   closed: closed by the headphones (HCI 0x13)`. A try that fails after
   its page was answered is a different fault from one nobody hears; the
-  log now tells them apart.
+  log now tells them apart. The radio link's notes behind those lines
+  (up, theirs, A2DP over it, the address they are about) are
+  `RadioLinkNotes` (lib/core, `test_radio_link_notes`): they also count
+  the link's set-up for the card's scheduler (METADATA.md 3.3.9, "The
+  radio link's set-up", 2026-11-19), so every close goes to BtAppT, the
+  noted radio link's clearing them whatever the remembered addresses
+  became, and a page's failure while their radio link is up keeps them
+  (`[bt] page: not needed, their own radio link is up (HCI 0x0b: ...)`,
+  or `... their own radio link up: kept` for another code).
 - **A link the headphones open themselves** is theirs to finish: for 4 s
   (`kTheirSetupMs`) no page of the Core2's goes on top of it (a connect
   then is the stack's collision case). If no A2DP has come over it by
@@ -2352,12 +2360,13 @@ strings.
   holds it 3 s after it (METADATA.md 3.3.9, "The wait for AVRCP"). On the
   device (2026-11-19, rd-g5-fix2, that sequence) the low rose to 45,124 B
   (MEASURED). Before the link, the headphones' radio link being set up
-  holds them too (at most 8 s from its rise, then 3 s; the worker's task
-  ends at once then as well): the same day a radio link the headphones
-  opened after the burst had backed off met the walk the back-off's 3 s
-  released 0.16 s earlier, SDP, A2DP and AVRCP together, and internal RAM
-  went to 42,544 B (MEASURED, rd-g5-fix1), 464 B under G5's floor
-  (METADATA.md 3.3.9, "The radio link's set-up"). A
+  holds them too (at most 8 s from its rise, and from each page of ours
+  over it, then 3 s; the worker's task ends at once then as well): the
+  same day a radio link the headphones opened after the burst had backed
+  off met the walk the back-off's 3 s released about 0.15 s later, SDP,
+  A2DP and AVRCP together, and internal RAM went to 42,544 B (MEASURED,
+  rd-g5-fix1), 464 B under G5's floor (METADATA.md 3.3.9, "The radio
+  link's set-up"). A
   hand-off of the walk or of the scan's rest is a slice of steps (18 ms
   lit; 60 ms dark, the walk's 250 ms), cut after its step the moment one
   of those holds; the walk's slices run level with the loop, the scan's,
@@ -4671,11 +4680,14 @@ their own (the player stopped first, so nothing follows them).
   1,297): about 0.55 ms each, inside the 0.3-0.7 ms estimated before the
   bench. In a core's share: +0.5 points on the MP3 320k, +3.5 decoding the
   24/96 FLAC, +2.8 with the converter; a 16/44.1 FLAC (about 0.9 Mb/s,
-  about 690 refills in 20 s) about +1.9 points (PROJECTED from the
+  about 550 refills in 20 s) about +1.5 points (PROJECTED from the
   per-refill cost). 88.2 and 96 kHz don't play in the shipped build
-  (`MSTREAM_HIRES_RATES` 0): the 24/96 cost matters once hi-res is on. It
-  adds about 0.5 ms to the decoder's hold of the volume lock and the bus at
-  each refill (DecodePass's 40 ms and G6 unchanged). The buffer lands
+  (`MSTREAM_HIRES_RATES` 0): the 24/96 cost matters once hi-res is on. Of
+  the 0.42-0.56 ms a refill, the fill is what holds the volume lock and the
+  bus (by code about 0.3 ms, above; the rest is the decoder reading the
+  buffer out of PSRAM, outside both): the decoder's hold of them grows by
+  at most about 0.5 ms at each refill, about 0.3 ms of it by code
+  (DecodePass's 40 ms and G6 unchanged). The buffer lands
   wherever the heap puts it, each open anew: the decode task runs on core
   1, and from 0x3FA00000 up PSRAM shares core 1's cache with the decoder's
   code (RESAMPLER.md 10d, `ui/HotMem.h`: why libmad's state is pinned

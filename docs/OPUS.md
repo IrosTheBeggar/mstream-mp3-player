@@ -262,7 +262,8 @@ ram=40K min=35K once AVRCP was up; `gs`'s `lowest 41392 B while a step
 ran`), 7,092 B under the session floor, with nothing failing (0
 underruns, 0 failed steps). The fix holds the card's background work
 through the headphones' link: while their radio link is being set up
-(at most 8 s), then until AVRCP is up (at most 10 s from the link), then
+(at most 8 s from its rise, and from each page of ours over it), then
+until AVRCP is up (at most 10 s from the link), then
 3 s (ScanScheduler's set-up's wait and wait for AVRCP, METADATA.md 3.3.9);
 and it puts every malloc of exactly 4,096 B in PSRAM (the play file's
 stdio buffer, an SDP search's response list:
@@ -270,14 +271,20 @@ stdio buffer, an SDP search's response list:
 
 MEASURED on the device, 2026-11-19: the branch at a9c4636 (the wait for
 AVRCP and the 4,095 B limit; the set-up's wait came after these runs), the
-spare card, 240 MHz, silent mode, an MP3 played from the boot's hold, the
-headphones switched on during the pages:
+spare card, 240 MHz, silent mode, an MP3 played from the boot's hold; the
+headphones out of their case, switched on, near the Core2, linking by
+themselves (the runs paired, forgot and set nothing). That isn't the
+runbook's order below (on once two pages have gone unanswered): in
+rd-g5-fix2 they were on at the boot (page 1 met their own connect 0.43 s
+after it went out), and in g5h-main1b and rd-g5-fix1 the boot's first
+pages went unanswered all the same. The times are the PC's, as the log
+lines arrived:
 
 | Run | Sequence | `[heap] bt-link` | Lowest since the boot / while a step ran |
 |---|---|---|---|
 | g5h-main1b (main 89188f4) | page 3 answered, A2DP up at 26.2 s; the walk at the link + 3.0 s; AVRCP about 0.75 s into it | 51K min 48K | **35,916** / 41,392 B |
-| rd-g5-fix1 | pages 1-3 unanswered (a radio link the headphones opened at 12.83 s never brought A2DP: timed out after 30.3 s, HCI 0x08); the burst backed off at 43.17 s and its 3 s released the walk at about 46.19 s; the headphones opened a radio link at 46.03 s, A2DP up at 46.64 s with AVRCP in the same burst (no wait for AVRCP) | 44K min 41K | **42,544** / 42,716 B: 464 B under 43,008 |
-| rd-g5-fix2 | page 1 collided (HCI 0x0b: they were connecting); their radio link at 10.0 s, A2DP up at 11.92 s, AVRCP at 15.77 s (the link + 3.84 s); the walk from about 18.70 s (AVRCP + 2.93 s; `gs`'s `Bluetooth` 6.0 s) | 55K min 54K | **45,124** / 45,768 B: +2,116 over 43,008, +9,208 over main |
+| rd-g5-fix1 | pages 1-3 unanswered (a radio link the headphones opened at 12.83 s never brought A2DP: timed out after 30.3 s, HCI 0x08); the burst backed off at 43.17 s and its 3 s released the walk at about 46.18 s; the headphones opened a radio link at 46.03 s, A2DP up at 46.64 s with AVRCP's lines before it in the same burst (no wait for AVRCP) | 44K min 41K | **42,544** / 42,716 B: 464 B under 43,008 |
+| rd-g5-fix2 | page 1 collided (HCI 0x0b: they were connecting); their radio link at 10.0 s, A2DP up at 11.92 s, AVRCP at about 15.70 s (the link + about 3.8 s; its lines arrived at 15.77 s, behind `D`'s output); the walk from about 18.70 s (AVRCP + 3.0 s; `gs`'s `Bluetooth` 6.0 s) | 55K min 54K | **45,124** / 45,768 B: +2,116 over 43,008, +9,208 over main |
 
 rd-g5-fix2 is g5h-main1b's sequence, and the wait for AVRCP holds the
 walk as designed: AVRCP's set-up dipped only about 3 KB (55K, then 52K
@@ -285,7 +292,7 @@ min 51K: its 4,096 B SDP list in PSRAM now), and the low is the walk, the
 link and the MP3 together. rd-g5-fix1 found a gap: only a page burst or
 a pairing held the work before the link, so a radio link the headphones
 opened by themselves after the burst backed off wasn't a Bluetooth wait,
-and the walk the back-off's settle released started 0.16 s into its
+and the walk the back-off's settle released started about 0.15 s into its
 set-up: the worker's stack (7,680 + 352 B, about the 7 KB between
 rd-g5-fix1's and g5h-main1b's `bt-link` mins) and the incoming SDP, A2DP
 and AVRCP together. Neither fix run logged `[card] the worker's task ends

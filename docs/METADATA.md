@@ -4958,71 +4958,109 @@ where 3.3.3-3.3.5 left room:
   hold; OPUS.md 2.1, "G5 since the card worker"): run rd-g5-fix2, the
   sequence main 89188f4 went to 35,916 B on (the link, AVRCP 3.5-3.8 s
   after it: here a radio link the headphones opened at 10.0 s, A2DP up at
-  11.92 s, AVRCP at 15.77 s, the link + 3.84 s), started the walk at
-  about 18.70 s (AVRCP + 2.93 s; `gs`'s `Bluetooth` 6.0 s) and went to
-  45,124 B since the boot (45,768 B while a step ran), +2,116 B over G5's
+  11.92 s, AVRCP at about 15.70 s, the link + about 3.8 s), started the
+  walk at about 18.70 s (AVRCP + 3.0 s, as designed; `gs`'s `Bluetooth`
+  6.0 s) and went to 45,124 B since the boot (45,768 B while a step ran),
+  +2,116 B over G5's
   floor and +9,208 B over main's 35,916 B on that sequence (g5h-main1b).
   AVRCP's set-up dipped about 3 KB (`[heap] bt-link` 55K min 54K, then
   52K min 51K: its 4,096 B SDP list in PSRAM now); the low is the walk, the
   link and the MP3 together. No `[card] the worker's task ends now` line
-  (the walk hadn't begun at the link). PROJECTED (not measured): about
-  50 KB for a listener on a real stream. The same day's other run found a
-  gap before the link: "The radio link's set-up" below.
+  (the walk hadn't begun at the link). The times are the PC's, as the log
+  lines arrived: AVRCP's lines came at 15.77 s, in one burst behind the
+  console's `D` (sent at 15.44 s, its output at 15.77 s), so AVRCP came by
+  about 15.70 s: the first of those lines carries its own device stamp,
+  which says so, and the walk, started 3.0 s after the pass that saw
+  AVRCP, began at about 18.70 s (its end line at 50.59 s, 31,894 ms after
+  it). PROJECTED (not measured): about 50 KB for a listener on a real
+  stream. The same day's other run found a gap before the link: "The radio
+  link's set-up" below.
 - **The radio link's set-up (2026-11-19).** The wait for AVRCP starts at
   A2DP's link, and the link is set up over the headphones' radio link
-  (their ACL) first: SDP, A2DP, and AVRCP with it when they open it
-  themselves. A2DP came 0.61 s (rd-g5-fix1) and 1.91 s (rd-g5-fix2) after
-  a radio link the headphones opened, and 0.72 s after a page of ours was
-  answered (g5h-main1b): MEASURED. A page burst or a pairing held the work
+  (their ACL) first: SDP, A2DP, and AVRCP with it when they open AVRCP
+  too (rd-g5-fix1), else Bluedroid's own AVRCP about 3.5-3.8 s after the
+  link (rd-g5-fix2). A2DP came about 0.6 s (rd-g5-fix1) and 1.9 s
+  (rd-g5-fix2) after a radio link the headphones opened, and 0.72 s after
+  a page of ours was answered (g5h-main1b): MEASURED, as the log lines
+  arrived. A page burst or a pairing held the work
   through that (`btSetup`), but nothing held a radio link the headphones
   opened after the burst. On run rd-g5-fix1 (the device, 2026-11-19, the
   branch at a9c4636, silent mode, an MP3 from the boot's hold) the boot's
   three pages went unanswered (a radio link the headphones opened at
   12.83 s never brought A2DP and timed out 30.3 s later, HCI 0x08), the
   burst backed off at 43.17 s, and its 3 s settle released the walk at
-  about 46.19 s, 0.16 s after the headphones opened another radio link
-  (46.03 s, "the headphones opened a radio link by themselves: A2DP
-  next"). A2DP came up at 46.64 s with AVRCP in the same burst, so no wait
+  about 46.18 s (its end line at 81.89 s, 35,710 ms after it), about
+  0.15 s after the headphones opened another radio link (46.03 s, "the
+  headphones opened a radio link by themselves: A2DP next"). A2DP came up
+  at 46.64 s with AVRCP's lines before it in the same burst, so no wait
   for AVRCP followed, and the walk's worker met the whole incoming set-up:
   `[heap] bt-link` 44K min 41K (g5h-main1b's, with no worker up, 51K min
   48K), internal RAM's lowest since the boot 42,544 B (42,716 B while a
   step ran), 464 B under G5's floor (MEASURED). The 7 KB between the two
   `bt-link` mins is about the worker (its 7,680 B stack and 352 B TCB). So
   the remembered headphones' radio link up with A2DP not up over it
-  (whoever opened it: they, a page of ours, a back-off's page) holds the
+  (whoever opened it: they, or a page of ours they answered) holds the
   walk, a compaction, the scan and the update step's save as `btSetup`
   does (`btLinkSetup`, `btLinkSetupSeq`: `BtSink::linkSetups()`), then the
   3 s from the pass that sees it end; at most `btLinkSetupMs` (8 s) from
-  its rise, then the 3 s. A2DP's coming up ends it in the pass the link
-  rises (BtSink counts the link's rise before the set-up's end, and the
-  loop reads the set-up first), so the wait for AVRCP takes over with no
-  pass between the two waits. Why 8 s: BtSink leaves their radio link to
-  them for 4 s (`kTheirSetupMs`), then opens A2DP over it with a burst's
-  page, which holds the work from then on (`btSetup`; in a burst already
-  under way its next page goes over their link); 8 s is that allowance
-  twice, against 0.6-1.9 s measured, and a radio link that never brings
-  A2DP (the 30.3 s one) holds the work 8 + 3 s, not for good. A new radio
-  link waits again from its own rise: a rise, or a count that moved while
-  the set-up read up at both passes (BtSink counts two for a radio link
-  opened over one never seen to close); one that came and went between two
-  passes holds the 3 s; its end after the cap holds nothing. While it holds
+  its rise, then the 3 s. A page of ours over a radio link already up
+  with no A2DP (A2DP opened over it, its SDP and set-up again with no new
+  radio link: a burst's page over theirs, a back-off's over one that
+  lingers past the 8 s, as rd-g5-fix1's pages 2 and 3 went over the
+  30.3 s one, the second 23.5 s after its rise) is a set-up again, its own
+  8 s from the page. The pass that sees the set-up's end sees the link's
+  rise too (BtSink counts the rise first, the loop reads the set-up
+  first); a pass may see the link before the end, holding both waits for
+  that pass, and the end a pass later holds the 3 s. Either way the wait
+  for AVRCP takes over with no pass between the two waits. Why 8 s: BtSink
+  leaves their radio link to them for 4 s (`kTheirSetupMs`), then opens
+  A2DP over it with a burst's page, which holds the work from then on
+  (`btSetup`, and the page's own set-up; in a burst already under way its
+  next page goes over their link); 8 s is that allowance twice, against
+  0.6-1.9 s measured, and a radio link that never brings A2DP (the 30.3 s
+  one) holds the work 8 + 3 s from its rise and from each page over it,
+  not for good. A new radio link waits again from its own rise: a rise, or
+  a count that moved while the set-up read up at both passes (BtSink
+  counts two for a radio link opened over one never seen to close, and
+  for a page over one up); one that came and went between two passes holds
+  the 3 s, whatever the last pass read (a set-up read up past its cap at
+  the last pass, then its end and a whole set-up before this one: the
+  count moved by three); its end after the cap holds nothing. While it holds
   within the cap the worker's idle task ends at once (`Out::btLinkSetupWait`,
   `mayRelease()`): the set-up's 0.6-2 s is shorter than the 3 s idle exit,
   so a radio link that comes mid-walk cuts the slice and would still meet
   its stack; a cover asked meanwhile makes the task again and the next pass
   with nothing handed ends it, for 8 s at most (a page burst's wait, tens
-  of seconds, still doesn't release it). BtSink keeps the count where the
-  radio link's notes change, on BtAppT (`PlayerA2dp::noteSetup()`: a radio
-  link noted open or failed, `aclOpened()`; closed, `aclClosed()`, which a
-  close of the remembered address now reaches as the peer's did; A2DP's
-  rise and drop; Forget; a pairing's start and its failure), and every
-  250 ms tick counts it again from the notes; a close that never reaches
-  BtAppT (its queue full) leaves it up until the cap, the next radio link
-  or the next link. On rd-g5-fix1's timeline the walk now starts at the
-  link + 3 s, 49.64 s (`test_the_set_up_after_a_back_off`). Not covered: a
-  relink over a radio link that stayed up after A2DP dropped (no new radio
-  link: the drop's 3 s only); a compaction, a save or a build already under
-  way isn't cut, as for AVRCP. PROJECTED until the next device run: on
+  of seconds, still doesn't release it). The radio link's notes and the
+  count are `RadioLinkNotes` (lib/core, host-tested in
+  `test_radio_link_notes`), on BtAppT, the count moving in the call that
+  changes it and published by `PlayerA2dp::noteSetup()` after each change
+  and every 250 ms tick: a radio link opened or a page's failure
+  (`aclOpened()`); one closed (`aclClosed()`: every close reaches BtAppT,
+  and the noted radio link's clears the notes whatever the remembered
+  addresses became since it opened, a scan by name's find replacing the
+  peer's); a page over it (`connect_to()`); A2DP's rise and drop; Forget, a
+  pairing's start and its failure, and the console's `Bn`/`Bn0` (the
+  remembered address changes: the notes start afresh unless linked). A
+  failed Connection Complete for the noted address while its radio link is
+  up keeps the notes, whatever its code: a device has one radio link, so
+  it is a page of ours that met theirs (HCI 0x0B, Connection Already
+  Exists, seen; another code, not seen), not that link's end. A close that
+  never reaches BtAppT (its queue full) leaves the set-up counted until
+  the cap, the next radio link, the link, or a change of the remembered
+  address. On rd-g5-fix1's timeline the walk now starts at the link + 3 s,
+  49.64 s (`test_the_set_up_after_a_back_off`, with `RadioLinkNotes` fed
+  that boot's reports). Not covered: a relink over a radio link that
+  stayed up after A2DP dropped (no new radio link: the drop's 3 s only); a
+  compaction, a save or a build already under way isn't cut, as for AVRCP;
+  radio links that open again and again and never bring A2DP: each new one
+  waits again from its own rise, so short ones (2 s every 5 s) would hold
+  the walk, the scan and the save for as long as they go on. None seen;
+  before the set-up's wait nothing held them outside a burst (a radio link
+  of theirs closed within 4 s starts none). Bounding that across radio
+  links (a set-up that came to nothing making the next ones within some
+  time hold only their rise's 3 s, or holding no more after a few in a
+  row) is the owner's call. PROJECTED until the next device run: on
   rd-g5-fix1's sequence the set-up meets no worker, about 50 KB there (its
   `bt-link` min 41K and the worker's 8 KB), and the session's lowest
   becomes the walk, the link and the MP3 together, about 45 KB as on
