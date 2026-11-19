@@ -64,12 +64,15 @@ void ScanScheduler::observe(const In& in, Out& o) {
   // btLinkSetupMs (sparse passes or not), and ends the wait for that radio
   // link for good (its end after the cap holds nothing). A rise: down at
   // the last pass, or the count moved while it was up at both (a new radio
-  // link). A count that moved while it was down at both: a set-up that came
-  // and went between the two passes, the settle.
-  if (in.btLinkSetup && (!setup_ || in.btLinkSetupSeq != lastBtLinkSetupSeq_)) {
+  // link). Down now, a count that moved by more than the end of the one
+  // read up at the last pass (one; none if it read down): a set-up that came
+  // and went between the two passes, the settle (also after a set-up past
+  // its cap, whose own end holds nothing).
+  const uint32_t moved = in.btLinkSetupSeq - lastBtLinkSetupSeq_;
+  if (in.btLinkSetup && (!setup_ || moved != 0)) {
     setupAtMs_ = now;
     setupWait_ = true;
-  } else if (!in.btLinkSetup && !setup_ && in.btLinkSetupSeq != lastBtLinkSetupSeq_) {
+  } else if (!in.btLinkSetup && moved > (setup_ ? 1u : 0u)) {
     bt_.open(now, config_.btSettleMs);
   }
   setup_ = in.btLinkSetup;

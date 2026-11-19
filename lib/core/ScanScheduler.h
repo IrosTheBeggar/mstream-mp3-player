@@ -93,7 +93,9 @@
 // (MEASURED: the worker's sampled lowest against the lowest since the boot;
 // by code a 4,096 B response list, a 1,000 B discovery record and an L2CAP
 // channel, ESTIMATED). On Powerbeats Pro AVRCP came up 3.73-3.80 s after the
-// link in every recorded boot, so the 3 s settle let the boot's walk start
+// link in every boot recorded on main (about 3.8 s on rd-g5-fix2 too; on
+// rd-g5-fix1 they opened it themselves, with the link: "The radio link's
+// set-up" below), so the 3 s settle let the boot's walk start
 // 0.73-0.80 s before it (0.5 s before the timer, by code): the walk's worker
 // (its 7.5 KB stack) and AVRCP's set-up met, and with an MP3 playing in
 // silent mode internal RAM fell to 35,916 B (G5's session floor is 43,008 B).
@@ -119,33 +121,46 @@
 //
 // The radio link's set-up (2026-11-19). Before A2DP's link the headphones'
 // radio link (their ACL) comes up, and the link's set-up runs over it: SDP,
-// A2DP, and AVRCP with it when they open it themselves. A2DP came 0.61 s
-// and 1.91 s after a radio link the headphones opened, 0.72 s after a page
-// of ours was answered (MEASURED, three boots). A page burst or a pairing
-// held the work through that (btSetup), but nothing held a radio link the
-// headphones opened after the burst, backing off or resting: on the device
-// (2026-11-19) the walk the burst's settle released started 0.16 s into
-// one, A2DP and AVRCP came up together 0.61 s after it, and internal RAM
-// went to 42,544 B, under G5's session floor (43,008 B). So the remembered
-// headphones' radio link up with A2DP not up over it (In::btLinkSetup,
-// BtSink::linkSetups()) holds the work as btSetup does, at most
-// Config::btLinkSetupMs from its rise, then the settle; its end within
-// that holds the settle from the pass that sees it. A2DP's coming up ends
-// it and is the link's rise in the same pass (BtSink counts the link
-// before the set-up's end), so the wait for AVRCP takes over with no pass
-// between them. A new radio link, a rise or a count that moved while it
-// read up at both passes (In::btLinkSetupSeq), waits again from its own
-// rise; one that came and went between two passes holds the settle. The
-// cap ends the wait for that radio link for good, and its end after the
-// cap holds nothing: a radio link that never brings A2DP (one stayed up
-// 30.3 s) holds the work 8 + 3 s, not for good. While it holds within the cap
-// the worker's idle task goes at once too (Out::btLinkSetupWait,
+// A2DP, and AVRCP with it when they open AVRCP too (rd-g5-fix1), else
+// Bluedroid's own AVRCP about 3.5-3.8 s after the link (rd-g5-fix2). A2DP
+// came about 0.6 s and 1.9 s after a radio link the headphones opened,
+// 0.72 s after a page of ours was answered (MEASURED, three boots, the
+// log's arrival times). A page burst or a pairing held the work through
+// that (btSetup), but nothing held a radio link the headphones opened
+// after the burst, backing off or resting: on the device (2026-11-19,
+// rd-g5-fix1) the walk the burst's settle released started about 0.15 s
+// into one, A2DP and AVRCP came up together about 0.6 s after it, and
+// internal RAM went to 42,544 B, under G5's session floor (43,008 B). So
+// the remembered headphones' radio link up with A2DP not up over it
+// (In::btLinkSetup, BtSink::linkSetups(), RadioLinkNotes) holds the work as
+// btSetup does, at most Config::btLinkSetupMs from its rise, then the
+// settle; its end within that holds the settle from the pass that sees it.
+// A page of ours over a radio link already up (A2DP opened over it: a
+// back-off's page over one that lingers) is a set-up again, its own cap
+// from the page. The pass that sees the set-up's end sees the link's rise
+// too (BtSink counts the rise first, the loop reads the set-up first); a
+// pass may see the link before the end, holding both waits for that pass;
+// either way the wait for AVRCP takes over with no pass between them. A
+// new radio link, a rise or a count that moved while it read up at both
+// passes (In::btLinkSetupSeq), waits again from its own rise; one that
+// came and went between two passes holds the settle. The cap ends the
+// wait for that radio link for good, and its end after the cap holds
+// nothing: a radio link that never brings A2DP (one stayed up 30.3 s)
+// holds the work 8 + 3 s, not for good. While it holds within the cap the
+// worker's idle task goes at once too (Out::btLinkSetupWait,
 // mayRelease()): the set-up takes 0.6-2 s, shorter than the worker's 3 s
 // idle exit, so a radio link that comes mid-walk would otherwise still
 // meet its stack. A cover asked meanwhile makes the task again, and the
 // next pass with nothing handed ends it: at most for the cap. Not covered:
 // a relink over a radio link that stayed up after A2DP dropped (no new
-// radio link: the drop's 3 s only).
+// radio link: the drop's 3 s only); radio links that open again and again
+// without ever bringing A2DP: each new one waits again from its own rise,
+// so short ones (2 s every 5 s) would hold the work, the save too, for as
+// long as they go on (none seen; before the set-up's wait nothing held
+// them outside a burst). Bounding that across radio links (a set-up that
+// came to nothing making the next ones within some time hold only their
+// rise's settle, or holding no more after a few in a row) is the owner's
+// call.
 //
 // The idle power-off and the sleep timer (which turns the power off only
 // through the idle power-off) have no blocker for the scan: a power-off
@@ -227,13 +242,14 @@ public:
     uint32_t btControlWaitMs = 10000;
     // The longest a radio link being set up holds the work
     // (In::btLinkSetup), from its rise; then btSettleMs, as if it had ended
-    // then. A2DP came 0.61-1.91 s after the headphones' own radio link and
-    // 0.72 s after a page of ours was answered (MEASURED, 2026-11-19).
+    // then. A2DP came about 0.6-1.9 s after the headphones' own radio link
+    // and 0.72 s after a page of ours was answered (MEASURED, 2026-11-19).
     // BtSink leaves their radio link to them for 4 s (kTheirSetupMs), then
     // opens A2DP over it itself with a burst's page, which holds the work
-    // from there (btSetup); in a burst already under way its next page goes
-    // over their link. Twice that 4 s: their whole allowance, and as long
-    // again for the Core2's own open over it should no page hold the work.
+    // from there (btSetup), and is a set-up again from the page (its own
+    // cap); in a burst already under way its next page goes over their
+    // link. Twice that 4 s: their whole allowance, and as long again for
+    // the Core2's own open over it should no page hold the work.
     // A radio link that never brought A2DP stayed up 30.3 s (2026-11-19): it
     // holds the work 8 s and the settle, not for good. 0: the rise's settle
     // alone.
@@ -292,10 +308,12 @@ public:
     // held as btSetup is, capped by Config::btLinkSetupMs from its rise.
     bool btLinkSetup = false;
     // Its rises and ends, free-running (BtSink::linkSetups()): a new radio
-    // link over one never seen to close counts two, so a count that moved
-    // while btLinkSetup read up at both passes is a new set-up (its cap
-    // again), and one that moved while it read down at both is a set-up
-    // that came and went between them (the settle).
+    // link over one never seen to close, or a page of ours over one up,
+    // counts two, so a count that moved while btLinkSetup read up at both
+    // passes is a new set-up (its cap again), and one that, read down now,
+    // moved by more than the end of the set-up read up at the last pass
+    // (one; none if it read down) is a set-up that came and went between
+    // them (the settle).
     uint32_t btLinkSetupSeq = 0;
     // ---- power ----
     bool usb = false;  // external power (ACIN or VBUS); unknown counts as present
