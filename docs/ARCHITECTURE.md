@@ -2349,7 +2349,15 @@ strings.
   where their AVRCP came at about 7 s, once a stream had started before
   it: a listener's PlayGate start), at the link + 13 s with headphones
   that never open AVRCP, and an AVRCP that comes after the 10 s still
-  holds it 3 s after it (METADATA.md 3.3.9, "The wait for AVRCP"). A
+  holds it 3 s after it (METADATA.md 3.3.9, "The wait for AVRCP"). On the
+  device (2026-11-19, rd-g5-fix2, that sequence) the low rose to 45,124 B
+  (MEASURED). Before the link, the headphones' radio link being set up
+  holds them too (at most 8 s from its rise, then 3 s; the worker's task
+  ends at once then as well): the same day a radio link the headphones
+  opened after the burst had backed off met the walk the back-off's 3 s
+  released 0.16 s earlier, SDP, A2DP and AVRCP together, and internal RAM
+  went to 42,544 B (MEASURED, rd-g5-fix1), 464 B under G5's floor
+  (METADATA.md 3.3.9, "The radio link's set-up"). A
   hand-off of the walk or of the scan's rest is a slice of steps (18 ms
   lit; 60 ms dark, the walk's 250 ms), cut after its step the moment one
   of those holds; the walk's slices run level with the loop, the scan's,
@@ -2734,10 +2742,10 @@ strings.
   free: …` line between): heap_caps' since-boot PSRAM minimum reads 0 B
   from the first line on, the IDF's and the Arduino core's init
   (METADATA.md 3.5). The boot's lowest comes where a play, the link, the
-  card worker and AVRCP's set-up meet (OPUS.md 2.1, "G5 since the card
-  worker"): the walk now waits for AVRCP, and malloc's limit of 4,095 B
-  puts the play file's 4 KB stdio buffer in PSRAM ([Build
-  notes](#build-notes)).
+  card worker and the link's set-up meet (OPUS.md 2.1, "G5 since the card
+  worker"): the walk now waits through the headphones' radio link being
+  set up and for AVRCP, and malloc's limit of 4,095 B puts the play file's
+  4 KB stdio buffer in PSRAM ([Build notes](#build-notes)).
 - **Auto DJ** ([AUTODJ.md](AUTODJ.md)): `setup()` makes `app/AutoDj`
   after the library and the queue: its settings (NVS `autodj`), the
   engine's one block (19,016 B), and the index the card's root names,
@@ -4318,8 +4326,9 @@ Queue, Dance and Output (with its Pair and About pages).
   and **no new job starts while a list moves**. **Its RAM:** a 7.5 KB stack in
   internal RAM (a task that reads the card or the flash can't have its
   stack in PSRAM), only while it lives: it is made for the first job and
-  ends after 3 s without one, or at once while a link waits for its
-  AVRCP (the walk's paragraph in [Library and queue](#library-and-queue)).
+  ends after 3 s without one, or at once while the headphones' radio link
+  is being set up or a link waits for its AVRCP (the walk's paragraph in
+  [Library and queue](#library-and-queue)).
   It drives lgfx_tjpgd itself with its 3.9 KB work pool **in PSRAM**
   (M5GFX's `drawJpg()` mallocs it, in internal RAM:
   with Arduino's File buffers, the spike's 8.6 KB), and reads with POSIX
@@ -4626,31 +4635,55 @@ their own (the player stopped first, so nothing follows them).
   3.5 s after it, a pairing's). By code both can be live at the boot's
   lowest internal RAM ([OPUS.md](OPUS.md) 2.1, "G5 since the card
   worker"). MEASURED there: the dip's size at AVRCP's set-up (about
-  5.5 KB) and the MP3 play's (about 9 KB). Code reading, unconfirmed until
-  the owed reading below: that the play file holds one 4,112 B block, and
-  that the SDP list is still allocated at the dip's bottom (it is freed
-  with the SDP channel, perhaps before AVCTP opens). `RingOutput`'s assert
-  (under 4,096 B) keeps it internal.
+  5.5 KB on main, about 3 KB with the limit: rd-g5-fix2, 2026-11-19) and
+  the MP3 play's (about 9 KB); and with the headphones in their case the
+  boot's lowest internal RAM rose 4.4 KB with the limit (`gs`: 59,408 B
+  since the boot on main, 63,768 B on the branch at a9c4636; 59,924 B and
+  64,264 B while a step ran; rd-bench-main2 and rd-bench-fix, 2026-11-19),
+  which fits the play file's one 4,112 B block. Code reading, unconfirmed
+  until the owed reading below: that the SDP list is still allocated at
+  the dip's bottom (it is freed with the SDP channel, perhaps before AVCTP
+  opens). `RingOutput`'s assert (under 4,096 B) keeps it internal.
 
-  **Its cost on the decode path** (PROJECTED, not benched): each refill
-  (newlib's `__srefill`, a 4,096 B `f_read`) now fills the PSRAM buffer,
-  the SD driver copying the SPI FIFO by CPU (lib/SD `sd_diskio.cpp`): 128
-  cache lines written at about 525 cycles each (RESAMPLER.md 10d), about
-  0.28 ms at 240 MHz, under FatFs's volume lock and holding the SPI bus;
-  the decoder then reads it out, about 0.15 ms of misses; with the code
-  lines the fill evicts, about 0.3-0.7 ms a refill (first estimated at
-  0.1-0.3 ms, the copy alone). That adds about 0.3 ms to the decoder's
-  hold of the volume lock and the bus at each refill (DecodePass's 40 ms
-  and G6 unchanged), and it scales with the bitrate: about 10 refills a
-  second for a 320 kbps MP3 (under 1 % of core 1), about 27 for a 16/44.1
-  FLAC, 75-100 for a 24/96 FLAC (2-7 %, a format that already needs
-  240 MHz). The buffer lands wherever the heap puts it, each open anew:
-  the decode task runs on core 1, and from 0x3FA00000 up PSRAM shares core
-  1's cache with the decoder's code (RESAMPLER.md 10d, `ui/HotMem.h`: why
-  libmad's state is pinned below it). If the benches show too much, one
-  4 KB block pinned in the lower 2 MB for the play file (the option the
-  limit was chosen over: a play-file source on `cardfat::FatFile`) fixes
-  the placement, the limit kept for the rest.
+  **Its cost on the decode path.** Each refill (newlib's `__srefill`, a
+  4,096 B `f_read`) now fills the PSRAM buffer, the SD driver copying the
+  SPI FIFO by CPU (lib/SD `sd_diskio.cpp`: by code 128 cache lines written
+  at about 525 cycles each, RESAMPLER.md 10d, about 0.28 ms at 240 MHz,
+  under FatFs's volume lock and holding the SPI bus), and the decoder then
+  reads it out of PSRAM. MEASURED on the device (2026-11-19, the
+  headphones in their case, after the boot's walk, 240 MHz; `b` on main
+  89188f4's firmware, run rd-bench-main2, against the branch at a9c4636,
+  rd-bench-fix; two benches each), on two bench-only noise files outside
+  `/music`, never played: `/bench/ram/n320.mp3` (40 s of pink noise, MP3
+  320k CBR, 44.1 kHz) and `/bench/ram/n2496.flac` (30 s of white noise,
+  FLAC 24/96, 2.1 Mb/s):
+
+  | Bench | main (rd-bench-main2) | the limit (rd-bench-fix) |
+  |---|---|---|
+  | n320.mp3, 20.1 s decoded | 4.98 / 5.03 s (24.8 / 25.1 % of a core) | 5.13 / 5.10 s (25.6 / 25.4 %) |
+  | n2496.flac, decode only, 20.0 s | 7.47 / 7.35 s (37.3 / 36.7 %) | 8.24 / 7.97 s (41.2 / 39.8 %) |
+  | n2496.flac, decode + convert to 44.1 kHz | 14.22 / 14.22 s (71.1 / 71.0 %) | 14.77 / 14.77 s (73.8 / 73.8 %) |
+  | an MP3 of silence on the card, 20.1 s decoded (the control) | 1.86 s (9.3 %) | 1.85 s (9.2 %) |
+
+  The difference over the refills (the bytes read over 4,096): about
+  0.56 ms a refill on the MP3 (+0.11 s over 196), 0.54 ms on the FLAC
+  decoding (+0.69 s over 1,297), 0.42 ms with the converter (+0.55 s over
+  1,297): about 0.55 ms each, inside the 0.3-0.7 ms estimated before the
+  bench. In a core's share: +0.5 points on the MP3 320k, +3.5 decoding the
+  24/96 FLAC, +2.8 with the converter; a 16/44.1 FLAC (about 0.9 Mb/s,
+  about 690 refills in 20 s) about +1.9 points (PROJECTED from the
+  per-refill cost). 88.2 and 96 kHz don't play in the shipped build
+  (`MSTREAM_HIRES_RATES` 0): the 24/96 cost matters once hi-res is on. It
+  adds about 0.5 ms to the decoder's hold of the volume lock and the bus at
+  each refill (DecodePass's 40 ms and G6 unchanged). The buffer lands
+  wherever the heap puts it, each open anew: the decode task runs on core
+  1, and from 0x3FA00000 up PSRAM shares core 1's cache with the decoder's
+  code (RESAMPLER.md 10d, `ui/HotMem.h`: why libmad's state is pinned
+  below it); where these benches' buffers landed wasn't recorded. If that
+  cost is too much (the owner's call), one 4 KB block pinned in the lower
+  2 MB for the play file (the option the limit was chosen over: a
+  play-file source on `cardfat::FatFile`) fixes the placement, the limit
+  kept for the rest.
 
   **The audit** (2026-11-19, of what the image links: the project's
   objects and every archive member the linker map names, disassembled with
@@ -4686,10 +4719,11 @@ their own (the player stopped first, so nothing follows them).
   ESP-IDF allows the limit anywhere from 0 to 131,072 (its own default
   16,384), so its code can't count on it. Owed on the device: the play
   file's internal RAM around its open (about 4.1 KB before, about 0
-  after), the `b27` bench before and after (MP3, FLAC and Opus at 44.1,
-  and a 24/96 FLAC at 240 MHz), each with the play FILE's buffer address
-  beside it (`fp->_bf._base`, against 0x3FA00000), and a pairing from the
-  Pair screen.
+  after), the bench on a real 16/44.1 FLAC and an Opus file before and
+  after, each with the play FILE's buffer address beside it
+  (`fp->_bf._base`, against 0x3FA00000), and a pairing from the Pair
+  screen. The console's bench is `b/path` (the rest of the line, spaces
+  kept; OPUS.md's `b</path>` is notation).
 - **The MP3 synth loop is pinned at the front of flash.** The same
   `tools/iram_diet.py` puts libmad's synthesis (`dct32`, `synth_full`,
   `mad_synth_frame_onens`), AudioGeneratorMP3's per-sample `GetOneSample`
