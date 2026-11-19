@@ -6,8 +6,9 @@
 // while playing; one step at a time; a waveform's read, then covers, first;
 // the update step's build before everything; each yield (input, the ring, an
 // underrun, a long decode pass, a track change, a seek, Bluetooth) holding the
-// background work for exactly its window, in its order; a list "moving" in the
-// dark holding nothing (2026-10-14); the battery floor and its hysteresis;
+// background work for exactly its window, in its order; a link's wait for its
+// AVRCP, capped (2026-11-19); a list "moving" in the dark holding nothing
+// (2026-10-14); the battery floor and its hysteresis;
 // the jobs' and the scan's sources' order; millis()'s wrap; the build after a
 // walk (U11); a slice of the walk or the scan cut, and dropped to 0, by any
 // wait (2026-10-09); each step's units; and a random run against an
@@ -69,12 +70,18 @@ void test_defaults() {
   TEST_ASSERT_EQUAL_UINT32(2000, c.trackSettleMs);
   TEST_ASSERT_EQUAL_UINT32(2000, c.seekSettleMs);
   TEST_ASSERT_EQUAL_UINT32(3000, c.btSettleMs);
+  TEST_ASSERT_EQUAL_UINT32(10000, c.btControlWaitMs);  // the wait for AVRCP's cap (2026-11-19)
   TEST_ASSERT_EQUAL_INT(10, c.floorPct);  // U13
   TEST_ASSERT_EQUAL_INT(15, c.resumeAbovePct);
   TEST_ASSERT_EQUAL_UINT32(3, S::kQueueNext);
   TEST_ASSERT_EQUAL_UINT32(200, S::kQueueSoon);
   TEST_ASSERT_EQUAL_UINT32(200, S::kBuildNowAdded);
   TEST_ASSERT_EQUAL_UINT32(60000, S::kBuildNowScanMs);
+  // No link and no AVRCP unless the glue says so: the tests that leave them
+  // out keep their meaning.
+  const S::In blank;
+  TEST_ASSERT_FALSE(blank.btLinked);
+  TEST_ASSERT_FALSE(blank.btControlUp);
   // Nothing to do: nothing starts, nothing waits.
   S s;
   S::In in = base(0);
@@ -82,6 +89,7 @@ void test_defaults() {
   const S::Out o = s.update(in);
   TEST_ASSERT_EQUAL(J::None, o.job);
   TEST_ASSERT_EQUAL(W::None, o.wait);
+  TEST_ASSERT_FALSE(o.btControlWait);
 }
 
 // The user's choice (3.3.5): playing, on battery, at 11%, the scan goes on,
@@ -193,10 +201,11 @@ void test_one_step_at_a_time() {
 // A slice of the walk or the scan under way (CardJobs, 2026-10-09) is cut
 // after its unit, and dropped below the loop, by whatever would hold the
 // next one: input, the ring, an underrun, a long decode pass, a track
-// change, a seek, Bluetooth, a moving list (the screen lit: a list moves
-// only there), and for the scan the battery floor. So a wait takes effect
-// within a unit and a pass, as with one-unit steps. A cover, a waveform's read,
-// a compaction, the build and the save aren't slices.
+// change, a seek, Bluetooth (a link's wait for AVRCP too), a moving list
+// (the screen lit: a list moves only there), and for the scan the battery
+// floor. So a wait takes effect within a unit and a pass, as with one-unit
+// steps. A cover, a waveform's read, a compaction, the build and the save
+// aren't slices.
 void test_a_slice_is_cut_by_any_wait() {
   struct Cause {
     const char* name;
@@ -209,6 +218,7 @@ void test_a_slice_is_cut_by_any_wait() {
       {"track change", [](S::In& in) { in.decoderAtEnd = true; }},
       {"seek", [](S::In& in) { in.seeking = true; }},
       {"bluetooth", [](S::In& in) { in.btSetup = true; }},
+      {"the wait for AVRCP", [](S::In& in) { in.btLinked = true; }},  // (no btSeq: the wait alone)
       {"list", [](S::In& in) {
          in.listMoving = true;
          in.dark = false;
@@ -449,6 +459,232 @@ void test_bluetooth() {
   TEST_ASSERT_EQUAL_UINT32(48010, firstStart(s, 45010, 60000, in));
   in.btSeq = 2;  // dropped at 60,000
   TEST_ASSERT_EQUAL_UINT32(63000, firstStart(s, 60000, 70000, in));
+}
+
+namespace {
+
+// A link as main.cpp's stepCard feeds it: up from `linkAt` until `dropAt`
+// (UINT32_MAX: never), btSeq counting its flips; AVRCP up from `controlAt`
+// (UINT32_MAX: never), only while linked (BtSink::avrcpUp() is tied to the
+// link) unless `tied` is false (AVRCP's flag up before the link: not what the
+// glue gives, the scheduler takes it all the same).
+struct Link {
+  uint32_t linkAt = UINT32_MAX, dropAt = UINT32_MAX, controlAt = UINT32_MAX;
+  bool tied = true;
+  void set(S::In& in, uint32_t t) const {
+    const bool up = t >= linkAt && t < dropAt;
+    in.btLinked = up;
+    in.btControlUp = (up || !tied) && t >= controlAt;
+    in.btSeq = (t >= linkAt ? 1u : 0u) + (t >= dropAt ? 1u : 0u);
+  }
+};
+
+// Passes every 10 ms from `from` to `to` (inclusive), the worker free, the
+// link as `link` has it: the first that hands `job` (UINT32_MAX: none);
+// every pass before it waits for Bluetooth.
+uint32_t firstStartLinked(S& s, uint32_t from, uint32_t to, S::In in, const Link& link, J job = J::Scan) {
+  for (uint32_t t = from;; t += 10) {
+    in.nowMs = t;
+    link.set(in, t);
+    const S::Out o = s.update(in);
+    if (o.job == job) return t;
+    TEST_ASSERT_EQUAL(J::None, o.job);
+    TEST_ASSERT_EQUAL(W::Bluetooth, o.wait);
+    if (t == to) return UINT32_MAX;
+  }
+}
+
+}  // namespace
+
+// The wait for AVRCP (2026-11-19): a link holds the background work until
+// its AVRCP is up, then btSettleMs (AVRCP's set-up, an SDP search 3.5 s after
+// A2DP opens, took internal RAM to 35,916 B under the boot's walk); at most
+// btControlWaitMs from the link, then btSettleMs; a link that drops ends it.
+void test_the_wait_for_avrcp() {
+  const uint32_t t = 45010;  // the link
+  // AVRCP 3.8 s after the link (the owner's headphones, 3.73-3.80 s): the
+  // first start at AVRCP + 3 s, not at the link + 3 s.
+  {
+    S s;
+    s.update(base(0));
+    Link l;
+    l.linkAt = t;
+    l.controlAt = t + 3800;
+    TEST_ASSERT_EQUAL_UINT32(t + 6800, firstStartLinked(s, t, t + 20000, base(t), l));
+  }
+  // Out::btControlWait: from the link to AVRCP, not after (the settle that
+  // follows is the plain Bluetooth wait).
+  {
+    S s;
+    s.update(base(0));
+    Link l;
+    l.linkAt = t;
+    l.controlAt = t + 3800;
+    for (uint32_t now = t - 10; now <= t + 7000; now += 10) {
+      S::In in = base(now);
+      l.set(in, now);
+      const S::Out o = s.update(in);
+      TEST_ASSERT_EQUAL(now >= t && now < t + 3800, o.btControlWait);
+    }
+  }
+  // AVRCP never: the cap at the link + 10 s, then 3 s.
+  {
+    S s;
+    s.update(base(0));
+    Link l;
+    l.linkAt = t;
+    TEST_ASSERT_EQUAL_UINT32(t + 13000, firstStartLinked(s, t, t + 30000, base(t), l));
+    // ... and the link stays up without it: no wait again.
+    S::In in = base(t + 20000);
+    l.set(in, t + 20000);
+    const S::Out o = s.update(in);
+    TEST_ASSERT_EQUAL(J::Scan, o.job);
+    TEST_ASSERT_FALSE(o.btControlWait);
+  }
+  // Sparse passes (the loop held): the cap's settle still ends at the link +
+  // 13 s, and a first pass past it holds nothing.
+  {
+    S s;
+    s.update(base(0));
+    Link l;
+    l.linkAt = t;
+    S::In in = base(t);
+    l.set(in, t);
+    TEST_ASSERT_EQUAL(W::Bluetooth, s.update(in).wait);
+    in.nowMs = t + 12990;
+    TEST_ASSERT_EQUAL(W::Bluetooth, s.update(in).wait);
+    in.nowMs = t + 13000;
+    TEST_ASSERT_EQUAL(J::Scan, s.update(in).job);
+    S s2;
+    s2.update(base(0));
+    in.nowMs = t;
+    TEST_ASSERT_EQUAL(W::Bluetooth, s2.update(in).wait);
+    in.nowMs = t + 25000;  // the next pass long after the cap
+    TEST_ASSERT_EQUAL(J::Scan, s2.update(in).job);
+  }
+  // AVRCP up with the link (the same pass), or before it: the link's own
+  // settle, as before the wait.
+  for (int before = 0; before < 2; ++before) {
+    S s;
+    s.update(base(0));
+    Link l;
+    l.linkAt = t;
+    l.controlAt = before ? t - 1000 : t;
+    l.tied = !before;
+    for (uint32_t now = t - 1000; now < t; now += 10) {  // (before the link: nothing holds it)
+      S::In in = base(now);
+      l.set(in, now);
+      TEST_ASSERT_EQUAL(J::Scan, s.update(in).job);
+    }
+    TEST_ASSERT_EQUAL_UINT32(t + 3000, firstStartLinked(s, t, t + 20000, base(t), l));
+  }
+  // A later AVRCP (Powerbeats Pro, about 7 s once a stream played): 3 s
+  // after it.
+  {
+    S s;
+    s.update(base(0));
+    Link l;
+    l.linkAt = t;
+    l.controlAt = t + 7000;
+    TEST_ASSERT_EQUAL_UINT32(t + 10000, firstStartLinked(s, t, t + 20000, base(t), l));
+  }
+  // AVRCP after the cap, while the cap's settle still holds: a link event
+  // of its own, 3 s after it.
+  {
+    S s;
+    s.update(base(0));
+    Link l;
+    l.linkAt = t;
+    l.controlAt = t + 11000;
+    TEST_ASSERT_EQUAL_UINT32(t + 14000, firstStartLinked(s, t, t + 30000, base(t), l));
+  }
+  // The link drops before AVRCP: the drop's settle, as before (the wait
+  // ends with the link). The next link waits for its own AVRCP, its cap
+  // from its own rise.
+  {
+    S s;
+    s.update(base(0));
+    Link l;
+    l.linkAt = t;
+    l.dropAt = t + 2000;
+    TEST_ASSERT_EQUAL_UINT32(t + 5000, firstStartLinked(s, t, t + 20000, base(t), l));
+    S::In in = base(t + 30000);
+    in.btSeq = 3;  // up again at t + 30 s
+    in.btLinked = true;
+    S::Out o = s.update(in);
+    TEST_ASSERT_EQUAL(W::Bluetooth, o.wait);
+    TEST_ASSERT_TRUE(o.btControlWait);
+    uint32_t started = UINT32_MAX;
+    for (uint32_t now = t + 30010; now <= t + 50000 && started == UINT32_MAX; now += 10) {
+      in.nowMs = now;
+      if (s.update(in).job == J::Scan) started = now;
+    }
+    TEST_ASSERT_EQUAL_UINT32(t + 43000, started);
+  }
+  // A link that comes mid-slice: the slice is cut at once (at 0), the worker
+  // told the wait holds; the next is held to AVRCP + 3 s.
+  {
+    S s;
+    S::In in = base(0);
+    in.walk = true;
+    in.running = J::Walk;
+    s.update(in);
+    Link l;
+    l.linkAt = t;
+    l.controlAt = t + 3750;
+    in.nowMs = t;
+    l.set(in, t);
+    const S::Out o = s.update(in);
+    TEST_ASSERT_EQUAL(W::Step, o.wait);
+    TEST_ASSERT_TRUE(o.cut);
+    TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, o.priority);
+    TEST_ASSERT_TRUE(o.btControlWait);
+    in.running = J::None;  // (the slice ended after its unit)
+    TEST_ASSERT_EQUAL_UINT32(t + 6750, firstStartLinked(s, t + 10, t + 20000, in, l, J::Walk));
+  }
+  // What the wait holds is what the Bluetooth wait holds: the save, the
+  // walk, a compaction, the scan; not a waveform's read, a cover or the
+  // update step's build.
+  struct Work {
+    const char* name;
+    void (*set)(S::In&);
+    J job;  // handed during the wait; None: held
+  } work[] = {
+      {"build", [](S::In& in) { in.build = true; }, J::Build},
+      {"wave", [](S::In& in) { in.wave = true; }, J::Wave},
+      {"cover", [](S::In& in) { in.cover = true; }, J::Cover},
+      {"save", [](S::In& in) { in.save = true; }, J::None},
+      {"walk", [](S::In& in) { in.walk = true; }, J::None},
+      {"compaction", [](S::In& in) {
+         in.compact = true;
+         in.restPending = false;
+       }, J::None},
+      {"scan", [](S::In&) {}, J::None},
+  };
+  for (const Work& w : work) {
+    S s;
+    s.update(base(0));
+    Link l;
+    l.linkAt = t;
+    S::In in = base(t);
+    l.set(in, t);
+    s.update(in);
+    in.nowMs = t + 1000;
+    w.set(in);
+    const S::Out o = s.update(in);
+    TEST_ASSERT_EQUAL_MESSAGE(w.job, o.job, w.name);
+    TEST_ASSERT_EQUAL_MESSAGE(w.job == J::None ? W::Bluetooth : W::None, o.wait, w.name);
+  }
+  // A cap of 0: no wait for AVRCP, the link's settle alone.
+  {
+    S::Config c;
+    c.btControlWaitMs = 0;
+    S s(c);
+    s.update(base(0));
+    Link l;
+    l.linkAt = t;
+    TEST_ASSERT_EQUAL_UINT32(t + 3000, firstStartLinked(s, t, t + 20000, base(t), l));
+  }
 }
 
 // Input: each touch holds it 0.5 s; a moving list holds everything (covers
@@ -1085,6 +1321,11 @@ struct Model {
   int64_t inputAt = INT64_MIN / 2, underrunAt = INT64_MIN / 2, passAt = INT64_MIN / 2, trackAt = INT64_MIN / 2,
           seekAt = INT64_MIN / 2, btAt = INT64_MIN / 2;
   bool low = false;
+  // The wait for AVRCP: the link since linkAt, the wait holding, AVRCP at
+  // the last pass.
+  bool linked = false, controlWait = false, controlWas = false;
+  int64_t linkAt = 0;
+  uint32_t caps = 0;  // the waits the cap ended
 
   static bool within(int64_t t, int64_t at, uint32_t windowMs) { return t - at < static_cast<int64_t>(windowMs); }
 
@@ -1094,6 +1335,7 @@ struct Model {
       trackSeq = in.trackSeq;
       seekSeq = in.seekSeq;
       btSeq = in.btSeq;
+      controlWas = in.btControlUp;
       primed = true;
     }
     if (in.input) inputAt = t;
@@ -1102,11 +1344,35 @@ struct Model {
     if (in.decoderAtEnd || in.trackSeq != trackSeq) trackAt = t;
     if (in.seeking || in.seekSeq != seekSeq) seekAt = t;
     if (in.btSetup || in.btSeq != btSeq) btAt = t;
+    // A link without AVRCP holds as a page does, to the cap; AVRCP's
+    // coming up (linked) is a link event, and so is the cap, at its time.
+    if (!in.btLinked) {
+      linked = controlWait = false;
+    } else {
+      if (!linked) {
+        linked = true;
+        linkAt = t;
+        controlWait = !in.btControlUp;
+      }
+      if (in.btControlUp) {
+        if (!controlWas) btAt = t;
+        controlWait = false;
+      }
+      if (controlWait && t - linkAt < c.btControlWaitMs) {
+        btAt = t;
+      } else if (controlWait) {
+        controlWait = false;
+        ++caps;
+        if (linkAt + c.btControlWaitMs > btAt) btAt = linkAt + c.btControlWaitMs;
+      }
+    }
+    controlWas = in.btControlUp;
     underruns = in.underruns;
     trackSeq = in.trackSeq;
     seekSeq = in.seekSeq;
     btSeq = in.btSeq;
     S::Out o;
+    o.btControlWait = controlWait;
     const bool wasLow = low;
     if (in.usb) low = false;
     else if (in.battery >= 0 && in.battery < c.floorPct) low = true;
@@ -1199,7 +1465,7 @@ void test_random_against_a_model() {
   S::In in = base(0);
   int64_t t = 0xFFFFFFFFll - 3600000ll;  // an hour before the wrap
   uint64_t runUntil = 0;
-  uint32_t scans = 0, covers = 0, waves = 0, builds = 0, cuts = 0, held[S::kWaits] = {};
+  uint32_t scans = 0, covers = 0, waves = 0, builds = 0, cuts = 0, controlWaits = 0, held[S::kWaits] = {};
   for (int pass = 0; pass < 900000; ++pass) {
     t += 5 + rng() % 36;
     in.nowMs = static_cast<uint32_t>(t);
@@ -1210,6 +1476,10 @@ void test_random_against_a_model() {
     flip(in.decoderAtEnd, in.playing ? 100 : 0, 1500);
     flip(in.seeking, in.playing ? 50 : 0, 3000);
     flip(in.btSetup, 20, 500);
+    // A link for about 37 s every 2 min; AVRCP about 5.6 s into it (past
+    // the cap about one link in six), rarely up unlinked.
+    flip(in.btLinked, 20, 60);
+    flip(in.btControlUp, in.btLinked ? 400 : 20, in.btLinked ? 30 : 400);
     flip(in.usb, 10, 10);
     flip(in.updating, 100, 200);
     if (chance(500)) in.build = in.updating && chance(30000);
@@ -1243,9 +1513,11 @@ void test_random_against_a_model() {
     TEST_ASSERT_EQUAL_MESSAGE(want.cut, got.cut, "cut");
     TEST_ASSERT_EQUAL_MESSAGE(want.batteryHeld, got.batteryHeld, "held");
     TEST_ASSERT_EQUAL_MESSAGE(want.batteryReleased, got.batteryReleased, "released");
+    TEST_ASSERT_EQUAL_MESSAGE(want.btControlWait, got.btControlWait, "the wait for AVRCP");
     TEST_ASSERT_EQUAL(m.low, s.batteryLow());
     ++held[static_cast<int>(got.wait)];
     if (got.cut) ++cuts;
+    if (got.btControlWait) ++controlWaits;
     if (got.job != J::None) {
       TEST_ASSERT_EQUAL(J::None, in.running);
       if (got.job == J::Scan) {
@@ -1265,6 +1537,8 @@ void test_random_against_a_model() {
   TEST_ASSERT_TRUE(waves > 1000);
   TEST_ASSERT_TRUE(builds > 10);
   TEST_ASSERT_TRUE(cuts > 1000);
+  TEST_ASSERT_TRUE(controlWaits > 1000);  // links waited for AVRCP ...
+  TEST_ASSERT_TRUE(m.caps > 10);          // ... and the cap ended some of the waits
   for (int w = 1; w < S::kWaits; ++w) TEST_ASSERT_TRUE_MESSAGE(held[w] > 0, S::waitName(static_cast<W>(w)));
 }
 
@@ -1281,6 +1555,7 @@ int main(int, char**) {
   RUN_TEST(test_underruns);
   RUN_TEST(test_long_decode_passes);
   RUN_TEST(test_bluetooth);
+  RUN_TEST(test_the_wait_for_avrcp);
   RUN_TEST(test_input_and_lists);
   RUN_TEST(test_a_dark_screen_holds_nothing_for_a_list);
   RUN_TEST(test_the_order_of_the_yields);

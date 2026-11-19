@@ -543,6 +543,38 @@ void test_each_link_starts_safe() {
   TEST_ASSERT_EQUAL(Mode::Probing, c.volume().mode());
 }
 
+// AVRCP on the link (avrcpOnLink(), BtSink::avrcpUp(): what the card's
+// background work waits for after a link, 2026-11-19): only while the A2DP
+// link is up, whatever avrcpConnected() says (only AVRCP's own disconnect
+// clears that, and it may come after the link's). Not up on the next link
+// until AVRCP connects on it; one that stayed up over an A2DP reopen counts
+// at the reopen (Bluedroid opens no new AVRCP while its handle is open).
+void test_avrcp_on_the_link() {
+  FakeIo io;
+  BtControl c(io, 30);
+  TEST_ASSERT_FALSE(c.avrcpOnLink());
+  c.avrcpUp(0);  // AVRCP before A2DP: not on a link yet
+  TEST_ASSERT_TRUE(c.avrcpConnected());
+  TEST_ASSERT_FALSE(c.avrcpOnLink());
+  c.linkUp(100);
+  TEST_ASSERT_TRUE(c.avrcpOnLink());
+  c.linkDown(200);  // A2DP down, AVRCP's disconnect not (yet) reported
+  TEST_ASSERT_TRUE(c.avrcpConnected());
+  TEST_ASSERT_FALSE(c.avrcpOnLink());
+  c.avrcpDown(300);
+  c.linkUp(400);  // the next link: AVRCP not up on it until it connects
+  TEST_ASSERT_FALSE(c.avrcpOnLink());
+  c.avrcpUp(4150);
+  TEST_ASSERT_TRUE(c.avrcpOnLink());
+  c.avrcpDown(5000);  // AVRCP down, the link up
+  TEST_ASSERT_FALSE(c.avrcpOnLink());
+  c.capabilities(true, 6000);  // its capabilities come only over a connected AVRCP
+  TEST_ASSERT_TRUE(c.avrcpOnLink());
+  c.linkDown(7000);
+  c.linkUp(7100);  // AVRCP stayed up over the reopen
+  TEST_ASSERT_TRUE(c.avrcpOnLink());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_link_while_playing_waits_for_the_probe_then_lifts);
@@ -562,5 +594,6 @@ int main(int, char**) {
   RUN_TEST(test_suspend_now_after_a_pause);
   RUN_TEST(test_media_ctrl_failure_waits_for_the_schedule);
   RUN_TEST(test_each_link_starts_safe);
+  RUN_TEST(test_avrcp_on_the_link);
   return UNITY_END();
 }
