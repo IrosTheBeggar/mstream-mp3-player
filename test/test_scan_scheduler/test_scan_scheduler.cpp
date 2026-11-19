@@ -502,8 +502,8 @@ uint32_t firstStartLinked(S& s, uint32_t from, uint32_t to, S::In in, const Link
 // btControlWaitMs from the link, then btSettleMs; a link that drops ends it.
 void test_the_wait_for_avrcp() {
   const uint32_t t = 45010;  // the link
-  // AVRCP 3.8 s after the link (the owner's headphones, 3.73-3.80 s): the
-  // first start at AVRCP + 3 s, not at the link + 3 s.
+  // AVRCP 3.8 s after the link (Powerbeats Pro, 3.73-3.80 s): the first
+  // start at AVRCP + 3 s, not at the link + 3 s.
   {
     S s;
     s.update(base(0));
@@ -527,13 +527,23 @@ void test_the_wait_for_avrcp() {
       TEST_ASSERT_EQUAL(now >= t && now < t + 3800, o.btControlWait);
     }
   }
-  // AVRCP never: the cap at the link + 10 s, then 3 s.
+  // AVRCP never: the cap at the link + 10 s, then 3 s. The cap's settle is
+  // the plain Bluetooth wait: the worker isn't released in it.
   {
     S s;
     s.update(base(0));
     Link l;
     l.linkAt = t;
     TEST_ASSERT_EQUAL_UINT32(t + 13000, firstStartLinked(s, t, t + 30000, base(t), l));
+    S s2;
+    s2.update(base(0));
+    for (uint32_t now = t; now < t + 13000; now += 10) {
+      S::In in = base(now);
+      l.set(in, now);
+      const S::Out o = s2.update(in);
+      TEST_ASSERT_EQUAL(W::Bluetooth, o.wait);
+      TEST_ASSERT_EQUAL(now < t + 10000, o.btControlWait);
+    }
     // ... and the link stays up without it: no wait again.
     S::In in = base(t + 20000);
     l.set(in, t + 20000);
@@ -578,8 +588,8 @@ void test_the_wait_for_avrcp() {
     }
     TEST_ASSERT_EQUAL_UINT32(t + 3000, firstStartLinked(s, t, t + 20000, base(t), l));
   }
-  // A later AVRCP (Powerbeats Pro, about 7 s once a stream played): 3 s
-  // after it.
+  // A later AVRCP (the same headphones, about 7 s once a stream had started
+  // before it: a listener's PlayGate start): 3 s after it.
   {
     S s;
     s.update(base(0));
@@ -642,6 +652,70 @@ void test_the_wait_for_avrcp() {
     in.running = J::None;  // (the slice ended after its unit)
     TEST_ASSERT_EQUAL_UINT32(t + 6750, firstStartLinked(s, t + 10, t + 20000, in, l, J::Walk));
   }
+  // AVRCP that drops and comes back mid-link, a scan slice running: its
+  // coming back is a link event (it cuts the slice and holds the next 3 s),
+  // not a wait for AVRCP (the link's wait ended with its first AVRCP).
+  {
+    S s;
+    s.update(base(0));
+    Link l;
+    l.linkAt = t;
+    l.controlAt = t + 3750;
+    TEST_ASSERT_EQUAL_UINT32(t + 6750, firstStartLinked(s, t, t + 20000, base(t), l));
+    S::In in = base(t + 20000);
+    l.set(in, t + 20000);
+    in.running = J::Scan;
+    S::Out o = s.update(in);
+    TEST_ASSERT_FALSE(o.cut);
+    in.nowMs = t + 21000;
+    in.btControlUp = false;  // AVRCP down, the link up
+    o = s.update(in);
+    TEST_ASSERT_FALSE(o.cut);  // (AVRCP's going isn't held)
+    TEST_ASSERT_FALSE(o.btControlWait);
+    in.nowMs = t + 25000;
+    in.btControlUp = true;  // ... and back
+    o = s.update(in);
+    TEST_ASSERT_TRUE(o.cut);
+    TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, o.priority);
+    TEST_ASSERT_FALSE(o.btControlWait);
+    in.running = J::None;  // (the slice ended after its unit)
+    TEST_ASSERT_EQUAL_UINT32(t + 28000, firstStart(s, t + 25010, t + 40000, in));
+  }
+  // A drop and a relink between two passes (the loop held; BtSink counts
+  // the flips, so btSeq moves by two while the link reads up at both): a
+  // new link, whose wait for its own AVRCP starts again, even with the old
+  // link's AVRCP seen up at the last pass.
+  {
+    S s;
+    s.update(base(0));
+    Link l;
+    l.linkAt = t;
+    l.controlAt = t + 3750;
+    TEST_ASSERT_EQUAL_UINT32(t + 6750, firstStartLinked(s, t, t + 20000, base(t), l));
+    S::In in = base(t + 20000);
+    l.set(in, t + 20000);
+    TEST_ASSERT_EQUAL(J::Scan, s.update(in).job);
+    in.nowMs = t + 30000;
+    in.btSeq += 2;
+    in.btControlUp = false;  // the new link's AVRCP not up yet
+    S::Out o = s.update(in);
+    TEST_ASSERT_EQUAL(W::Bluetooth, o.wait);
+    TEST_ASSERT_TRUE(o.btControlWait);
+    uint32_t started = UINT32_MAX;
+    for (uint32_t now = t + 30010; now <= t + 50000 && started == UINT32_MAX; now += 10) {
+      in.nowMs = now;
+      in.btControlUp = now >= t + 33750;
+      if (s.update(in).job == J::Scan) started = now;
+    }
+    TEST_ASSERT_EQUAL_UINT32(t + 36750, started);
+    // ... and one whose AVRCP was up by the next pass: the relink's settle.
+    in.nowMs = t + 60000;
+    in.btSeq += 2;
+    o = s.update(in);
+    TEST_ASSERT_EQUAL(W::Bluetooth, o.wait);
+    TEST_ASSERT_FALSE(o.btControlWait);
+    TEST_ASSERT_EQUAL_UINT32(t + 63000, firstStart(s, t + 60010, t + 70000, in));
+  }
   // What the wait holds is what the Bluetooth wait holds: the save, the
   // walk, a compaction, the scan; not a waveform's read, a cover or the
   // update step's build.
@@ -669,7 +743,8 @@ void test_the_wait_for_avrcp() {
     S::In in = base(t);
     l.set(in, t);
     s.update(in);
-    in.nowMs = t + 1000;
+    in.nowMs = t + 5000;  // (the link's own settle ended at t + 3 s: the wait for AVRCP alone)
+    l.set(in, in.nowMs);
     w.set(in);
     const S::Out o = s.update(in);
     TEST_ASSERT_EQUAL_MESSAGE(w.job, o.job, w.name);
@@ -685,6 +760,93 @@ void test_the_wait_for_avrcp() {
     l.linkAt = t;
     TEST_ASSERT_EQUAL_UINT32(t + 3000, firstStartLinked(s, t, t + 20000, base(t), l));
   }
+}
+
+// When the card worker's idle task may end at once (mayRelease(), app/
+// CardTasks: CardWorker::release()): only in the link's wait for AVRCP,
+// with the worker free, nothing handed that pass and no update step asked.
+// Not in a page burst's or a pairing's wait (each cover would end and remake
+// the task), nor in the settle after AVRCP or after the cap.
+void test_when_the_worker_may_go() {
+  const uint32_t t = 45010;  // the link
+  auto at = [](S& s, uint32_t now, void (*set)(S::In&)) {
+    S::In in = base(now);
+    set(in);
+    return s.update(in);
+  };
+  S s;
+  s.update(base(0));
+  // A page burst (unlinked): the Bluetooth wait, not the link's.
+  S::Out o = at(s, t - 1000, [](S::In& in) { in.btSetup = true; });
+  TEST_ASSERT_EQUAL(W::Bluetooth, o.wait);
+  TEST_ASSERT_FALSE(S::mayRelease(o, true, false));
+  // The link, AVRCP not up: the scan held, nothing handed.
+  o = at(s, t, [](S::In& in) {
+    in.btLinked = true;
+    in.btSeq = 1;
+  });
+  TEST_ASSERT_EQUAL(W::Bluetooth, o.wait);
+  TEST_ASSERT_EQUAL(J::None, o.job);
+  TEST_ASSERT_TRUE(S::mayRelease(o, true, false));
+  TEST_ASSERT_FALSE(S::mayRelease(o, false, false));  // a step under way, or gs holding it
+  TEST_ASSERT_FALSE(S::mayRelease(o, true, true));    // an update step asked
+  // A cover, a waveform's read or the build handed in the wait: not then.
+  void (*handed[])(S::In&) = {
+      [](S::In& in) {
+        in.btLinked = true;
+        in.btSeq = 1;
+        in.cover = true;
+      },
+      [](S::In& in) {
+        in.btLinked = true;
+        in.btSeq = 1;
+        in.wave = true;
+      },
+      [](S::In& in) {
+        in.btLinked = true;
+        in.btSeq = 1;
+        in.build = true;
+      },
+  };
+  uint32_t now = t + 1000;
+  for (auto set : handed) {
+    o = at(s, now, set);
+    TEST_ASSERT_TRUE(o.btControlWait);
+    TEST_ASSERT_TRUE(o.job != J::None);
+    TEST_ASSERT_FALSE(S::mayRelease(o, true, false));
+    now += 10;
+  }
+  // A pairing on the link, its AVRCP up: the Bluetooth wait, not the link's.
+  o = at(s, t + 4000, [](S::In& in) {
+    in.btLinked = true;
+    in.btSeq = 1;
+    in.btControlUp = true;
+    in.btSetup = true;
+  });
+  TEST_ASSERT_EQUAL(W::Bluetooth, o.wait);
+  TEST_ASSERT_FALSE(S::mayRelease(o, true, false));
+  // The settle after AVRCP.
+  o = at(s, t + 6000, [](S::In& in) {
+    in.btLinked = true;
+    in.btSeq = 1;
+    in.btControlUp = true;
+  });
+  TEST_ASSERT_EQUAL(W::Bluetooth, o.wait);
+  TEST_ASSERT_FALSE(S::mayRelease(o, true, false));
+  // The cap's settle (another link, AVRCP never).
+  S s2;
+  s2.update(base(0));
+  o = at(s2, t, [](S::In& in) {
+    in.btLinked = true;
+    in.btSeq = 1;
+  });
+  TEST_ASSERT_TRUE(S::mayRelease(o, true, false));
+  o = at(s2, t + 11000, [](S::In& in) {
+    in.btLinked = true;
+    in.btSeq = 1;
+  });
+  TEST_ASSERT_EQUAL(W::Bluetooth, o.wait);
+  TEST_ASSERT_FALSE(S::mayRelease(o, true, false));
 }
 
 // Input: each touch holds it 0.5 s; a moving list holds everything (covers
@@ -1349,7 +1511,7 @@ struct Model {
     if (!in.btLinked) {
       linked = controlWait = false;
     } else {
-      if (!linked) {
+      if (!linked || in.btSeq != btSeq) {  // a rise, or a drop and a relink between passes
         linked = true;
         linkAt = t;
         controlWait = !in.btControlUp;
@@ -1556,6 +1718,7 @@ int main(int, char**) {
   RUN_TEST(test_long_decode_passes);
   RUN_TEST(test_bluetooth);
   RUN_TEST(test_the_wait_for_avrcp);
+  RUN_TEST(test_when_the_worker_may_go);
   RUN_TEST(test_input_and_lists);
   RUN_TEST(test_a_dark_screen_holds_nothing_for_a_list);
   RUN_TEST(test_the_order_of_the_yields);
