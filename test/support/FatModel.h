@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "CachedDrive.h"
+#include "HoleHint.h"
 #include "SectorCache.h"
 #include "fatfs/FatFsHost.h"
 
@@ -106,6 +107,10 @@ private:
 // answering: pulled, or another put in). `front` (set: `cache` and
 // `wrapper` are ignored) takes every read and write in front of the disk:
 // the format in the player's writer (cardmkfs::Writer, test_card_mkfs).
+// `holeHint` (with `fs` set): the firmware wrapper's TRIM hook, which points
+// FatFs's next search at the clusters it just freed on a nearly full volume
+// (lib/core HoleHint; storage/SectorDisk's wIoctl(); test_hole_hint). Off
+// unless a test asks: FatFs's own order, as before.
 struct Drive {
   RamDisk* disk = nullptr;
   SectorCache* cache = nullptr;
@@ -125,12 +130,15 @@ struct Drive {
   uint32_t noAnswerReads = UINT32_MAX;     // ... for this many reads of it, then it answers (1: a one-off)
   uint32_t noAnswerWriteLba = UINT32_MAX;  // ... a write's (the mark too)
   bool errorWriteLba = false;  // ... with no mark: an R1 error, a data response's refusal (noAnswerWriteLba's sector)
-  FATFS* fs = nullptr;  // the volume, for its window (the firmware's wWrite())
+  FATFS* fs = nullptr;  // the volume, for its window (the firmware's wWrite()) and the hole hint
+  bool holeHint = false;
+  holehint::Memory holeMemory;  // the hook's (the firmware clears it at its install())
   bool marked = false;
   bool silent = false;
   bool silentForGood = false;  // ... and its init fails too (the card is out)
   struct Asked {
     uint64_t reads = 0, singleReads = 0, readSectors = 0, writes = 0, trims = 0;
+    uint64_t holeHints = 0;  // trims after which the hook moved FatFs's last_clst
   } asked;
 };
 
@@ -435,6 +443,11 @@ extern "C" DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void* buff) {
         d.cache->invalidate(static_cast<uint32_t>(r[0]), static_cast<uint32_t>(r[1] - r[0] + 1));
       }
       d.disk->trim(static_cast<uint32_t>(r[0]), static_cast<uint32_t>(r[1]));
+      // The wrapper's hole hint (storage/SectorDisk's wIoctl()), when asked for.
+      if (d.holeHint && holehint::onTrim(d.fs, pdrv, static_cast<uint32_t>(r[0]), d.holeMemory)) {
+        ++d.asked.holeHints;
+        if (d.wrapper) d.wrapper->holeHinted();
+      }
       return RES_OK;
     }
   }
