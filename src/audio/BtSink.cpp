@@ -2340,10 +2340,12 @@ void BtSink::onConnectionChanged(esp_a2d_connection_state_t state, void*) {
   BtSink& s = *sink;
   if (state == ESP_A2D_CONNECTION_STATE_CONNECTED) {
     if (s.linked_.exchange(true)) return;
+    s.linkEvents_.fetch_add(1);
     s.post(Event::Connected);
   } else if (state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) {
     // Only a link that was up: a failed (re)connect attempt reports this too.
     if (!s.linked_.exchange(false)) return;
+    s.linkEvents_.fetch_add(1);
     s.streaming_ = false;
     s.post(Event::Disconnected);
   }

@@ -149,10 +149,16 @@ public:
   // waits before a restart or a power-off (the CPU speed, the idle
   // power-off) waits for this, so the headphones see the disconnect finish.
   bool linkUp() const { return linked_.load(); }
-  // AVRCP is up on the link that is up (false while linkUp() is): the card's
+  // linkUp()'s ups and downs, counted where they happen (free-running; odd
+  // while the link is up): one read gives the loop the link and its events
+  // together, and a drop and a relink between two of its passes still show
+  // (ScanScheduler's In::btSeq: a new link waits for its own AVRCP).
+  uint32_t linkEvents() const { return linkEvents_.load(); }
+  // AVRCP is up on the link that is up (BtControl::avrcpOnLink(): connected
+  // since the link last went down; false while linkUp() isn't): the card's
   // background work waits for it after a link (ScanScheduler's
   // In::btControlUp), as Bluedroid's AVRCP set-up, an SDP search 3.5 s after
-  // A2DP opens, takes about 5.5 KB of internal RAM for a moment.
+  // A2DP opens, dips internal RAM about 5.5 KB for a moment.
   bool avrcpUp() const { return linked_.load() && avrcpUp_.load(); }
   // The headphones' name: from discovery, or read after each connection.
   const char* deviceName() const { return deviceNames_[deviceNameIdx_.load()]; }
@@ -393,6 +399,7 @@ private:
 
   // Set on Bluetooth tasks, read anywhere.
   std::atomic<bool> linked_{false};     // the A2DP link as reported to the loop
+  std::atomic<uint32_t> linkEvents_{0};  // linked_'s changes (linkEvents())
   std::atomic<bool> avrcpUp_{false};    // BtControl::avrcpOnLink(), published by PlayerA2dp
   std::atomic<bool> streaming_{false};  // the stack reports the stream started
   std::atomic<uint8_t> streamState_{0};  // for stats(): StreamControl::State, bit 7 = held off

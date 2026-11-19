@@ -3542,18 +3542,17 @@ static void stepCard(uint32_t now, bool input) {
   in.seekSeq = player.seeks();
   BtSink& bt = audio.bluetooth();
   in.btSetup = pairingUnderWay() || bt.link().phase == BtLink::Phase::Paging;
-  static bool linkWas = false;
-  static uint32_t linkEvents = 0;
-  if (bt.linkUp() != linkWas) {
-    linkWas = bt.linkUp();
-    ++linkEvents;
-  }
+  // The link and its events in one read (BtSink counts them as they
+  // happen, odd while up): a drop and a relink between two passes still
+  // show. A link holds the background work until its AVRCP is up (capped),
+  // and 3 s after: Bluedroid's AVRCP set-up, 3.5 s after A2DP opens,
+  // otherwise lands on the walk's worker (ScanScheduler.h, "The wait for
+  // AVRCP").
+  const uint32_t linkEvents = bt.linkEvents();
+  const bool linked = (linkEvents & 1u) != 0;
   in.btSeq = linkEvents;
-  // A link holds the background work until its AVRCP is up (capped), and 3 s
-  // after: Bluedroid's AVRCP set-up, 3.5 s after A2DP opens, otherwise lands
-  // on the walk's worker (ScanScheduler.h, "The wait for AVRCP").
-  in.btLinked = bt.linkUp();
-  in.btControlUp = bt.avrcpUp();
+  in.btLinked = linked;
+  in.btControlUp = linked && bt.avrcpUp();
   in.usb = screen.externalPower();
   in.battery = uiHost.batteryRaw;
   CardTasks::Sources src;
