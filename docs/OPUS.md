@@ -249,27 +249,28 @@ records whether the link held for each play (headphones that switch
 themselves off when idle drop it; it pages them again between plays).
 
 **G5 since the card worker (2026-11-19).** Part b links first and plays
-after, and G5 was set and passed before the card worker existed. The
-order that gives the boot's lowest figure is the other one: a play
-started during the boot's pages, before the link (the boot's walk waits
-for the pages), then the link, the walk released 3 s after it on the
-card worker (its 7.5 KB stack) and AVRCP's set-up 3.5 s after it
-(Bluedroid's, an SDP search of about 5.5 KB of internal RAM), all within
-about 4 s. On main 89188f4 that order, in silent mode with an MP3, the
-link on the burst's third page, went to **35,916 B** since the boot
-(MEASURED: `[stats]` ram=43K min=42K with the walk and the link, ram=40K
-min=35K once AVRCP was up; `gs`'s `lowest 41392 B while a step ran`),
-7,092 B under the session floor, with nothing failing (0 underruns, 0
-failed steps). The fix holds the card's background work until AVRCP is
-up (ScanScheduler's wait for AVRCP, METADATA.md 3.3.9) and puts every
-malloc of exactly 4,096 B in PSRAM (the play file's stdio buffer, an SDP
-search's response list: [ARCHITECTURE.md](ARCHITECTURE.md), Build
-notes). PROJECTED, not measured: about 45.5 KB in silent mode (the walk's
-sampled 41,392 B plus the stdio buffer's 4,112 B; an upper estimate),
-about 50 KB for a listener on a real stream. So part b runs two more
-sequences, each from a fresh boot at 240 MHz, and records each figure with
-its mode. The floors stay as the table has them: changing them is the
-owner's call.
+after, and G5 was set and passed before the card worker existed. The order
+that gives the boot's lowest figure is the other one: a play started
+during the boot's pages, before the link (the boot's walk waits for the
+pages), then the link, the walk released 3 s after it on the card worker
+(its 7.5 KB stack) and AVRCP's set-up 3.5 s after it (Bluedroid's, an SDP
+search that dips internal RAM about 5.5 KB), all within about 4 s. On main
+89188f4 that order, in silent mode with an MP3, the link on the burst's
+third page, went to **35,916 B** since the boot (MEASURED: `[stats]`
+ram=43K min=42K with the walk and the link, ram=40K min=35K once AVRCP was
+up; `gs`'s `lowest 41392 B while a step ran`), 7,092 B under the session
+floor, with nothing failing (0 underruns, 0 failed steps). The fix holds
+the card's background work until AVRCP is up (ScanScheduler's wait for
+AVRCP, METADATA.md 3.3.9) and puts every malloc of exactly 4,096 B in
+PSRAM (the play file's stdio buffer, an SDP search's response list:
+[ARCHITECTURE.md](ARCHITECTURE.md), Build notes). PROJECTED, not measured:
+about 45.5 KB in silent mode (the walk's sampled 41,392 B plus the stdio
+buffer's 4,112 B; an upper estimate), about 50 KB for a listener on a real
+stream. So part b runs two more sequences, each from a fresh boot at
+240 MHz, and records each figure with its mode. The floors stay as the
+table has them: changing them is the owner's call, and so is whether these
+play-before-link figures count against the session floor; until then they
+are recorded beside it.
 
 1. **Play before the link, silent.** The headphones off (or in their
    case) at the boot; `z`; an MP3 album played from the Library tab or
@@ -278,9 +279,9 @@ owner's call.
    `s` at the link + 3.3 s, at + 4.0 s and every 5 s through the walk;
    `gs` at the walk's end. Read: the walk's first slice against `[bt]
    AVRCP` (on the fix at AVRCP + 3.0 s or after; `[card] the worker's task
-   ends now` if the worker was up), `gs`'s `Bluetooth` wait (about 21 s on
-   the 11-19 boot's timing), its `lowest ... while a step ran` and `since
-   the boot`, and `min=`.
+   ends now` if the worker was up), `gs`'s `Bluetooth` wait (PROJECTED:
+   about 21 s on the 11-19 boot's timing, its 17.3 s and AVRCP's 3.8 s),
+   its `lowest ... while a step ran` and `since the boot`, and `min=`.
 2. **Play before the link, a real stream.** The same without `z`: the
    headphones the output, so the play waits for the link (PlayGate) and
    starts with it. Silent mode holds the speaker's I2S (about 8 KB) through
@@ -289,10 +290,12 @@ owner's call.
    5 KB higher there (PROJECTED). A silent album keeps it inaudible.
 
 On the fix, two checks besides: an album tapped during the walk (the
-queue's save writes through another 4 KB stdio buffer at the low), and
-the headphones switched on mid-walk under a speaker play (the worker's
-task ends, `gs` says it isn't running, before the AVRCP lines; `min=`
-stays above the worker + AVRCP level).
+queue's save writes through another 4 KB stdio buffer at the low), and the
+headphones switched on mid-walk under a speaker play (the worker's task
+ends before the AVRCP lines: `[card] the worker's task ends now`, or `gs`
+saying it isn't running; `min=` stays above the worker + AVRCP level).
+That release is host-tested only for when it may happen
+(`test_when_the_worker_may_go`); the release itself shows only here.
 
 ### 2.2 Gate by gate
 
@@ -302,7 +305,7 @@ stays above the worker + AVRCP level).
 | G2 | `load=` playing 128k 10 min, the Dance tab up | part b: `d`, `Rf</bench/opus/long128k.opus>` (14 min: the real tracks are 3:30 and `Rf` plays one file with nothing after it), `s` every 30 s, `Ps1` every 15 s | `[stats] ... load=x%` over the first 10 min (`pos=` up to 600 s): the median and the max. `load=` is the track's decode and convert time over the audio made since its start |
 | G3 | the 30 min soak with the gapless album on repeat and an Opus/MP3 join | needs the library index and the queue (M2): not runnable in M0 as written. What runs, part b: `Rf` on `/bench/opus/album/01.opus` ... `04.opus` one after another (each to its end, a stop and a start between them), the Dance tab up, for 30 min | `[stats] underruns=` (counted since boot: the rise over the 30 min), `buf=` after each part's ring first reaches 1,000 ms and up to its `[opus] end:` line (the drain after it is on purpose), and no `[E]` line |
 | G4 | decode-stack free | The figure is the lowest free since boot (one decode task, made at boot), so the order matters: from a fresh boot, every real file benched and played first (the reading after the last of them is the real files' figure), then `b</bench/opus/fuzz.opus>` last (its reading is the fuzz figure; loud noise if ever played, so bench only). A real file after the fuzz one shows the fuzz file's figure: restart first | pass: >= 3,072 B after the real files, >= 1,536 B after `fuzz.opus`. The final `kDecodeStack` is the most used (20,480 - the lowest free) + 3 KB, rounded up to 1 KB |
-| G5 | `[heap] playing` | part b, the headphones linked: the first play after the boot (`long128k.opus`) logs `[heap] playing` once, 2 s in; `s`'s `ram=` while playing, `min=` (`heap_caps_get_minimum_free_size()`, the lowest since boot) at the end. Part b has no `Oi` bench (G1's internal-RAM placement holds the 38 KB state in internal RAM and would lower the minimum for the rest of the boot) and no fuzz file. Since 2026-11-19 also the two play-before-link sequences, silent and on a real stream (2.1, "G5 since the card worker") | steady: the median `ram=` playing; the session min: the lowest `min=` of part b's 240 MHz boot, and of each play-before-link boot, each with its mode |
+| G5 | `[heap] playing` | part b, the headphones linked: the first play after the boot (`long128k.opus`) logs `[heap] playing` once, 2 s in; `s`'s `ram=` while playing, `min=` (`heap_caps_get_minimum_free_size()`, the lowest since boot) at the end. Part b has no `Oi` bench (G1's internal-RAM placement holds the 38 KB state in internal RAM and would lower the minimum for the rest of the boot) and no fuzz file. Since 2026-11-19 also the two play-before-link sequences, silent and on a real stream (2.1, "G5 since the card worker") | steady: the median `ram=` playing; the session min: the lowest `min=` of part b's 240 MHz boot. Beside it, each play-before-link boot's `min=` with its mode (whether they count against the session floor is the owner's call: 2.1) |
 | G6 | the longest pass | part a: every real file played to its end (`f120.opus` included), part b's plays too | `pass_max=Nus` (<= 20,000 at M0; <= 30,000 since 8.11), the track's longest pass: the whole pass, `loop()` and the converter's `commit()`. The bench's `longest decode call` bounds one frame and its `longest loop()` is a 4,096-frame burst: neither is this figure |
 | G7 | MP3 and FLAC on this image | From a fresh boot, before any `.opus` is opened (an Opus open keeps 128 KB of PSRAM buffers for good, which moves libFLAC's mallocs: RESAMPLER.md section 10d saw layout alone move FLAC 4.7x -> 4.3x): `b</music/Daft Punk/Discovery/01 - One More Time.mp3>` and `b</music/Kanye West/Graduation/03 Stronger.flac>` by path (the `b27` / `b2` tracks of ENERGY.md section 10 and RESAMPLER.md section 10d, named as the earlier sessions' logs have them), twice each. No queue command is needed (and `qp`/`q+` would replace the listener's queue) | the `[bench]` lines (and `[bench] libmad's state: pinned at ...`), against 4.9x / 4.7x |
 | G8 | 160 MHz | `Pcb160` and a restart (`Pc160` at runtime is refused from 240 MHz: it would retune the PLL the Bluetooth radio runs from; `Pc` alone shows the clock), `z`; part a: `b</bench/opus/ms128k.opus>` and `b</bench/opus/ms96k.opus>`; part b: `Rf</bench/opus/long128k.opus>` for 10 min without the Dance tab, then `Rx`; `Pcb0` and a restart after each | `[bench]` (`at 160 MHz` in its second line), `[stats] underruns=` |

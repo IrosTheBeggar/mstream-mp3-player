@@ -2329,30 +2329,36 @@ strings.
   end is followed by the same 500 ms of quiet as a touch),
   the ring is low, a track changes, a seek or a Bluetooth setup is under
   way, after an underrun or a long decode pass, and the scan below 10%
-  battery off USB. Bluetooth holds them, and the update step's save, for
-  a page burst or a pairing and the 3 s after a link event, and since
+  battery off USB. Bluetooth holds them, and the update step's save, for a
+  page burst or a pairing and the 3 s after a link event, and since
   2026-11-19 a link until its AVRCP is up (at most 10 s from the link),
   then 3 s: Bluedroid opens AVRCP itself 3.5 s after A2DP opens, an SDP
-  search of about 5.5 KB of internal RAM for a moment, and with the link's
-  3 s alone a walk the burst held started 0.73-0.80 s before it in every
-  recorded linked boot (MEASURED). With an MP3 playing in silent mode before
-  the link that took internal RAM to 35,916 B (MEASURED, main 89188f4),
-  under G5's session floor. While a link waits for AVRCP the worker's idle
-  task ends at once (`CardWorker::release()`), so a link that comes
-  mid-walk frees its 7.5 KB stack before AVRCP's set-up; a compaction, the
-  update step's save or its build already running at the link isn't cut
-  (only a slice is) and still meets it; covers, waveforms' reads and the
-  build aren't held by Bluetooth at all. The work starts about 3.8 s later
-  after a link on the owner's headphones (the link + 13 s at most;
-  METADATA.md 3.3.9, "The wait for AVRCP"). A hand-off of the walk or of the scan's rest is a
-  slice of steps (18 ms lit; 60 ms dark, the walk's 250 ms), cut after
-  its step the moment one of those holds; the walk's slices run level
-  with the loop, the scan's, compactions and the save only while the
-  screen is dark (METADATA.md 3.3.9: one step a hand-off made the loop's
-  sleep each step's floor, 2.7 min for a 20k walk). A walk that fails
-  runs again a minute later, twice at most, and while the card's records
-  don't list it (the first boot's walk failed) no update step runs:
-  built from what the scan had read, it would keep only those tracks.
+  search that dips internal RAM about 5.5 KB for a moment (MEASURED), and
+  with the link's 3 s alone a walk the burst held started 0.73-0.80 s
+  before it in every recorded linked boot (MEASURED). With an MP3 playing
+  in silent mode before the link that took internal RAM to 35,916 B
+  (MEASURED, main 89188f4), under G5's session floor. A link that comes
+  mid-walk cuts the slice, and the worker's 3 s idle exit then ends its
+  task (its 7.5 KB stack) at about the link + 3.0-3.3 s, just before
+  AVRCP's set-up; while the link waits for AVRCP the idle task ends at
+  once (`CardWorker::release()`), which widens that margin to the whole
+  wait. A compaction, the update step's save or its build already running
+  at the link isn't cut (only a slice is) and still meets it; covers,
+  waveforms' reads and the build aren't held by Bluetooth at all. The work
+  starts about 3.8 s later after a link on Powerbeats Pro (about 7 s later
+  where their AVRCP came at about 7 s, once a stream had started before
+  it: a listener's PlayGate start), at the link + 13 s with headphones
+  that never open AVRCP, and an AVRCP that comes after the 10 s still
+  holds it 3 s after it (METADATA.md 3.3.9, "The wait for AVRCP"). A
+  hand-off of the walk or of the scan's rest is a slice of steps (18 ms
+  lit; 60 ms dark, the walk's 250 ms), cut after its step the moment one
+  of those holds; the walk's slices run level with the loop, the scan's,
+  compactions and the save only while the screen is dark (METADATA.md
+  3.3.9: one step a hand-off made the loop's sleep each step's floor, 2.7
+  min for a 20k walk). A walk that fails runs again a minute later, twice
+  at most, and while the card's records don't list it (the first boot's
+  walk failed) no update step runs: built from what the scan had read, it
+  would keep only those tracks.
   The **update step**
   (lib/core `LibraryUpdate`, METADATA.md 3.4.2 and 3.9: the index built
   again from the records, the queue carried through `queue.txt`) follows
@@ -4312,9 +4318,10 @@ Queue, Dance and Output (with its Pair and About pages).
   and **no new job starts while a list moves**. **Its RAM:** a 7.5 KB stack in
   internal RAM (a task that reads the card or the flash can't have its
   stack in PSRAM), only while it lives: it is made for the first job and
-  ends after 3 s without one, or at once while a link waits for its AVRCP
-  (the walk's paragraph in [Library and queue](#library-and-queue)). It drives lgfx_tjpgd itself with its 3.9 KB
-  work pool **in PSRAM** (M5GFX's `drawJpg()` mallocs it, in internal RAM:
+  ends after 3 s without one, or at once while a link waits for its
+  AVRCP (the walk's paragraph in [Library and queue](#library-and-queue)).
+  It drives lgfx_tjpgd itself with its 3.9 KB work pool **in PSRAM**
+  (M5GFX's `drawJpg()` mallocs it, in internal RAM:
   with Arduino's File buffers, the spike's 8.6 KB), and reads with POSIX
   calls (no stdio buffer); the JPEG is streamed (its header walked at
   offsets by `jpeg::parseFile()`, TJpgDec fed from a 16 KB buffer: it was
@@ -4603,26 +4610,60 @@ their own (the player stopped first, so nothing follows them).
   `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL` (4,096) before `setup()`; malloc,
   `new`, calloc and realloc try internal RAM first up to the limit and
   PSRAM first above it, each falling back to the other (heap_caps.c
-  `heap_caps_malloc_default()`). One less moves every allocation of exactly
-  4,096 B: the stdio buffer Arduino's VFS gives every File on the card
-  (FatFs's `st_blksize` is 0, so `setvbuf(4096)`): the playing file's, the
-  queue's save's, library.idx's and the Opus cache's; and the response list
-  of each Bluedroid SDP search (`SDP_MAX_LIST_BYTE_COUNT`: the link's,
-  AVRCP's 3.5 s after it, a pairing's). Both meet at the boot's lowest
-  internal RAM ([OPUS.md](OPUS.md) 2.1, "G5 since the card worker"). Cost:
-  the decoder's reads copy out of PSRAM, a memcpy a 4 KB refill (ESTIMATED
-  0.1-0.3 ms; not benched yet). `RingOutput`'s assert (under 4,096 B) keeps
-  it internal. **The audit** (2026-11-19, of what the image links: the
-  project's objects and every archive member the linker map names,
-  disassembled with their relocations, each constant followed into the
-  allocator calls; the sizes that vary, read by hand):
+  `heap_caps_malloc_default()`). It is set only where the core set its own
+  (`CONFIG_SPIRAM_USE_MALLOC` without `CONFIG_ARDUINO_ISR_IRAM`, which
+  keeps malloc internal so IRAM interrupts may call it) and with PSRAM in
+  the heap (`heap_caps_get_total_size(MALLOC_CAP_SPIRAM)`: `psramFound()`
+  is only the chip found, and adding it to the heap can still fail); a
+  `static_assert` stops the build if the framework's limit isn't 4,096, as
+  the allocations between the two were never audited. One less moves every
+  allocation of exactly 4,096 B: the stdio buffer of every File (the
+  card's: FatFs's `st_blksize` is 0, so Arduino's VFS calls
+  `setvbuf(4096)`; the flash library's: newlib sizes it by LittleFS's
+  `st_blksize`, 4,096): the playing file's, the queue's save's,
+  library.idx's and the Opus cache's; and the response list of each
+  Bluedroid SDP search (`SDP_MAX_LIST_BYTE_COUNT`: the link's, AVRCP's
+  3.5 s after it, a pairing's). By code both can be live at the boot's
+  lowest internal RAM ([OPUS.md](OPUS.md) 2.1, "G5 since the card
+  worker"). MEASURED there: the dip's size at AVRCP's set-up (about
+  5.5 KB) and the MP3 play's (about 9 KB). Code reading, unconfirmed until
+  the owed reading below: that the play file holds one 4,112 B block, and
+  that the SDP list is still allocated at the dip's bottom (it is freed
+  with the SDP channel, perhaps before AVCTP opens). `RingOutput`'s assert
+  (under 4,096 B) keeps it internal.
+
+  **Its cost on the decode path** (PROJECTED, not benched): each refill
+  (newlib's `__srefill`, a 4,096 B `f_read`) now fills the PSRAM buffer,
+  the SD driver copying the SPI FIFO by CPU (lib/SD `sd_diskio.cpp`): 128
+  cache lines written at about 525 cycles each (RESAMPLER.md 10d), about
+  0.28 ms at 240 MHz, under FatFs's volume lock and holding the SPI bus;
+  the decoder then reads it out, about 0.15 ms of misses; with the code
+  lines the fill evicts, about 0.3-0.7 ms a refill (first estimated at
+  0.1-0.3 ms, the copy alone). That adds about 0.3 ms to the decoder's
+  hold of the volume lock and the bus at each refill (DecodePass's 40 ms
+  and G6 unchanged), and it scales with the bitrate: about 10 refills a
+  second for a 320 kbps MP3 (under 1 % of core 1), about 27 for a 16/44.1
+  FLAC, 75-100 for a 24/96 FLAC (2-7 %, a format that already needs
+  240 MHz). The buffer lands wherever the heap puts it, each open anew:
+  the decode task runs on core 1, and from 0x3FA00000 up PSRAM shares core
+  1's cache with the decoder's code (RESAMPLER.md 10d, `ui/HotMem.h`: why
+  libmad's state is pinned below it). If the benches show too much, one
+  4 KB block pinned in the lower 2 MB for the play file (the option the
+  limit was chosen over: a play-file source on `cardfat::FatFile`) fixes
+  the placement, the limit kept for the rest.
+
+  **The audit** (2026-11-19, of what the image links: the project's
+  objects and every archive member the linker map names, disassembled with
+  their relocations, each constant followed into the allocator calls; the
+  sizes that vary, read by hand):
 
   | Allocation of 4,096 B | In this image | In PSRAM |
   |---|---|---|
-  | Arduino FS `VFSFileImpl`: `setvbuf(f, NULL, _IOFBF, 4096)` (vfs_api.cpp, a read and a write open) | every File on the card | fine: tasks copy in and out; FatFs moves sectors over the SPI FIFO, as the walk's PSRAM FILs and the sector cache do already |
+  | A File's stdio buffer: Arduino FS `VFSFileImpl`'s `setvbuf(f, NULL, _IOFBF, 4096)` on the card (vfs_api.cpp, a read and a write open: FatFs's `st_blksize` is 0); newlib's own on the flash library, sized by LittleFS's `st_blksize` (4,096; esp_littlefs `vfs_littlefs_fstat()`) | every File: the card's and the flash's | fine: tasks copy in and out; FatFs moves sectors over the SPI FIFO, as the walk's PSRAM FILs and the sector cache do already; a LittleFS whole-block read into it passes through `esp_flash_read()`'s temporary internal bounce buffer (it works, and the flash library isn't on G5's path) |
   | Bluedroid's SDP response list (sdp_discovery.c `process_service_attr_rsp`, `process_service_search_attr_rsp`) | every SDP search | fine: parsed on the BTU task; Bluedroid's 4,112 B buffers are in PSRAM already |
   | Bluedroid `bta_gattc_discover_pri_service`, `bta_hf_client_at_parse` | linked, never run (no GATT client, no HFP) | fine: task data |
   | Arduino SD `sdcard_mount`'s `f_mkfs` work buffer (`FF_MAX_SS`) | only with `format_if_empty`, which LocalStorage never passes | fine: the SPI FIFO |
+  | The Bluetooth controller's OSI `_malloc` (IDF bt.c: plain `malloc`, called from libbtdm_app) | yes: `btdm_task_post()`'s copy of a posted message's parameter, its only caller (small control messages: the controller's init, enable and disable, Tx power, coexistence; HCI packets don't go this way) | fine: task context; the controller's DMA and interrupt memory comes from `_malloc_internal` (internal, DMA-capable by its caps) or its reserved exchange memory |
   | FreeRTOS's timer task stack (`vApplicationGetTimerTaskMemory`) | yes | not moved: `pvPortMalloc()` asks for `MALLOC_CAP_INTERNAL`, as every task stack does |
   | OTA's sector buffer (Arduino `Updater.cpp`, `EspClass::getSketchMD5()`; esp_ota_ops, esp_https_ota) | not linked (this firmware has no OTA) | would work: `esp_flash_write()` copies a buffer outside DRAM through a 32 B stack buffer, `esp_flash_read()` reads into one through an internal bounce buffer |
   | WiFi, LWIP, wear levelling (`CONFIG_WL_SECTOR_SIZE` 4096) | not linked | - |
@@ -4631,13 +4672,24 @@ their own (the player stopped first, so nothing follows them).
 
   Nothing that needs internal RAM gets it from malloc's limit: a task
   stack, a DMA buffer (the I2S driver's, `CONFIG_I2S_ISR_IRAM_SAFE`, by
-  its caps; M5GFX's SPI DMA sends a buffer that isn't DMA-capable by the
-  CPU, Bus_SPI.inl; the SPI master driver bounces one) and what an IRAM
-  interrupt touches are all asked for by caps. ESP-IDF allows the limit
-  anywhere from 0 to 131,072 (its own default 16,384), so its code can't
-  count on it. Owed on the device: the play file's internal RAM around its
-  open (about 4.1 KB before, about 0 after), the `b27` bench before and
-  after, and a pairing from the Pair screen.
+  its caps; the SPI master driver bounces one) and what an IRAM interrupt
+  touches are all asked for by caps. The linked M5GFX (0.2.30) has no
+  guard of its own: its SPI DMA sends whatever it is given (Bus_SPI.inl
+  `writeBytes()`). Today's calls are safe: a sprite asks for DMA only
+  through `SpriteBuffer::use_dma()`, which checks `heap_capable_dma()`
+  (SpriteBuffer.inl, LGFX_Sprite.hpp), `pushImage()` defaults to no DMA (a
+  write under 1 KB is copied into its DMA-capable flip buffer and sent
+  from there), and nothing in src/ calls `pushImageDMA()`. A future
+  `pushImageDMA()` or `writeImage(..., true)` from a plain-malloc buffer
+  of exactly 4,096 B would now send DMA from PSRAM, which the ESP32 can't:
+  such a buffer must come from `heap_caps_malloc(..., MALLOC_CAP_DMA)`.
+  ESP-IDF allows the limit anywhere from 0 to 131,072 (its own default
+  16,384), so its code can't count on it. Owed on the device: the play
+  file's internal RAM around its open (about 4.1 KB before, about 0
+  after), the `b27` bench before and after (MP3, FLAC and Opus at 44.1,
+  and a 24/96 FLAC at 240 MHz), each with the play FILE's buffer address
+  beside it (`fp->_bf._base`, against 0x3FA00000), and a pairing from the
+  Pair screen.
 - **The MP3 synth loop is pinned at the front of flash.** The same
   `tools/iram_diet.py` puts libmad's synthesis (`dct32`, `synth_full`,
   `mad_synth_frame_onens`), AudioGeneratorMP3's per-sample `GetOneSample`
