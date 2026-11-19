@@ -298,11 +298,26 @@ rd-g5-fix1's and g5h-main1b's `bt-link` mins) and the incoming SDP, A2DP
 and AVRCP together. Neither fix run logged `[card] the worker's task ends
 now` (in rd-g5-fix1 AVRCP came with the link, in rd-g5-fix2 the walk
 hadn't begun at the link). So the radio link's set-up now holds the work
-too (METADATA.md 3.3.9, "The radio link's set-up"). PROJECTED until the
-next device run: rd-g5-fix1's sequence on that wait about 50 KB at the
-set-up (its `bt-link` min 41K and the worker's 8 KB), the session's
-lowest then the walk, the link and the MP3 together, about 45 KB as on
-rd-g5-fix2; a listener on a real stream about 50 KB.
+too (METADATA.md 3.3.9, "The radio link's set-up").
+
+MEASURED on the branch at 81402fd (the set-up's wait too), the same day and
+setting: **rd-g5-ext1**, the headphones out and on before the boot: page 1
+unanswered, page 2 answered after 2,970 ms at 16.70 s (its radio link a
+set-up, inside the burst), A2DP up at 17.39 s, AVRCP at about 21.1 s (the
+link + about 3.7 s), the walk from about 24.1 s (AVRCP + 3 s; `gs`'s
+`Bluetooth` 11.5 s): `bt-link` 55K min 54K, the lowest since the boot
+**45,124 B** (45,764 B while a step ran), rd-g5-fix2's to the byte. Two
+tries at rd-g5-fix1's sequence on it (rd-mid-ext1 and rd-mid-ext2: the
+headphones in their case at the boot, out of it when the burst backed
+off) got no radio link: the headphones opened none and answered neither
+back-off page (HCI 0x04), so the walk ran with no link (the lowest 50K).
+So that sequence on the set-up's wait is host-tested only
+(`test_the_set_up_after_a_back_off` replays rd-g5-fix1's reports through
+`RadioLinkNotes`). PROJECTED, not reached on the device: rd-g5-fix1's
+sequence on that wait about 50 KB at the set-up (its `bt-link` min 41K and
+the worker's 8 KB), the session's lowest then the walk, the link and the
+MP3 together, about 45 KB as on rd-g5-fix2 and rd-g5-ext1; a listener on a
+real stream about 50 KB.
 
 The same day's bench of the 4,095 B limit (headphones in their case, after
 the boot's walk, 240 MHz; rd-bench-main2 on main against rd-bench-fix on

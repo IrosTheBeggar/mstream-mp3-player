@@ -5060,11 +5060,15 @@ where 3.3.3-3.3.5 left room:
   of theirs closed within 4 s starts none). Bounding that across radio
   links (a set-up that came to nothing making the next ones within some
   time hold only their rise's 3 s, or holding no more after a few in a
-  row) is the owner's call. PROJECTED until the next device run: on
-  rd-g5-fix1's sequence the set-up meets no worker, about 50 KB there (its
+  row) is the owner's call. MEASURED on 81402fd (rd-g5-ext1, docs/OPUS.md
+  2.1): a page answered, A2DP, AVRCP 3.7 s later, the walk at AVRCP + 3 s,
+  the lowest 45,124 B. rd-g5-fix1's sequence itself wasn't reached on the
+  device (two tries, rd-mid-ext1 and rd-mid-ext2: the headphones out of
+  their case after the back-off opened no radio link and answered no
+  page): PROJECTED, the set-up meets no worker, about 50 KB there (its
   `bt-link` min 41K and the worker's 8 KB), and the session's lowest
   becomes the walk, the link and the MP3 together, about 45 KB as on
-  rd-g5-fix2.
+  rd-g5-fix2 and rd-g5-ext1.
 - **millis()'s wrap:** a window is cleared once it has passed, so an old
   one can't come back 24.8 days later (a device on USB for weeks).
 - **The glue's inputs (N10):** `listMoving` is the page's `animating()`
