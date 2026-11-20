@@ -138,6 +138,10 @@ headphones.
   the likely next step. (The code PlatformIO compiles has been built
   without the workaround's flags since ENERGY.md section 5, P3a; the
   prebuilt libs and their IRAM copies wait for that rebuild, P3b.)
+  (Measured since, 2026-10-19: the WiFi driver and ESP-NOW, without
+  lwIP, take 2,676 B and fit, leaving 2,485 B. Arduino's prebuilt
+  libraries keep WiFi's optional IRAM code in flash:
+  [SWAP-MODE.md](SWAP-MODE.md) section 5.2.)
 - **pioarduino on Windows** must be run from PowerShell with `MSYSTEM` unset,
   needs PlatformIO Core ≥ 6.2.0, and links every library object unless
   `lib_archive = yes` is set.
