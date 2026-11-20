@@ -2585,6 +2585,106 @@ def session_files():
     return files
 
 
+# ---------------------------------------------------------------------------
+# The rankers' scenarios (test/fixtures/card/stats/rank.json; S2's C12): a
+# card's stats.bin and its base as a long history leaves them, every list
+# past its cap and 16, and the lists the rankers MUST give over them.
+# ---------------------------------------------------------------------------
+RANK_TODAY = 320                        # 2026-11-17
+
+
+def _rank_stats(seed, today=RANK_TODAY, tracks=900, base_share=0.7, delta=320, rcnt=1800, ties=False):
+    """A card's stats as a long history leaves them: `tracks` hashes, about
+    base_share of them in the base (compacted), `delta` rows in TRKD (some
+    over a base row, some new), RCNT's rows over the 32 days to `today` and
+    the day after it (a clock ahead), none before day 0. Rows of every kind: dated, undated
+    (lastAt 0, by lastOrd), skips only, old favourites, new finds. ties:
+    plays and times from a few values, so the hash decides."""
+    rng = random.Random(seed)
+    hashes = sorted({rng.getrandbits(64) | 1 for _ in range(tracks)})
+    day_s = 86400
+
+    def t_of(day):
+        return day * day_s + rng.randrange(day_s) + 1 if not ties else day * day_s + 1
+
+    def row():
+        k = rng.random()
+        if k < 0.06:
+            return Row(0, rng.randint(1, 4), NO_FIRST, 0, 0, YOU)       # skips only
+        plays = rng.choice([1, 2, 3, 5, 8]) if ties else rng.randint(1, 30)
+        src = rng.choice([YOU, SHUFFLE, AUTODJ])
+        if k < 0.14:
+            return Row(plays, rng.randint(0, 2), 0, 0, rng.randint(1, 900), src)   # undated
+        if k < 0.34 and not ties:  # found in the 30 days
+            first_day = rng.randint(max(0, today - 29), today)
+            last_day = rng.randint(first_day, today)
+        else:
+            last_day = max(0, rng.choice([today, today - 3, today - 40]) if ties else rng.randint(today - 400, today))
+            first_day = last_day if ties else rng.randint(max(0, last_day - 300), last_day)
+        first, last = t_of(first_day), t_of(last_day)
+        if first > last:
+            first, last = last, first
+        return Row(plays, rng.randint(0, 3), first, last, rng.randint(1, 900), src)
+
+    st = Stats()
+    for h in hashes:
+        if rng.random() < base_share:
+            st.base[h] = row()
+    in_base = sorted(st.base)
+    for h in rng.sample(in_base, min(delta // 2, len(in_base))):
+        st.trkd[h] = row()                                              # over a base row
+    rest = [h for h in hashes if h not in st.base]
+    for h in rest[:delta - min(delta // 2, len(in_base))]:
+        st.trkd[h] = row()                                              # new since the base
+    played = [h for h, r in st.tracks().items() if r.plays]
+    while len(st.rcnt) < rcnt:
+        day = rng.randint(max(0, today - 31), today + 1)
+        st.rcnt[(day, rng.choice(played))] = rng.choice([1, 2]) if ties else rng.randint(1, 6)
+    st.generation = 9
+    if st.base:
+        st.head["baseGen"], st.head["baseRows"] = 8, len(st.base)
+        st.head["baseCrc"] = header_crc(write_base(st.base, 8))
+    st.head["sinceDay"] = max(0, today - 400)
+    return st
+
+
+def rank_scenarios():
+    """(name, note, stats, today): the rankers' scenarios."""
+    big = _rank_stats(1)
+    return [
+        ("rank-big", "900 hashes: 619 in the base, 320 TRKD rows (160 over a base row), 1,800 RCNT rows over "
+         "the 32 days to day 320 and day 321 (a clock ahead): every list past its cap and 16", big, RANK_TODAY),
+        ("rank-no-clock", "rank-big's files with the clock unset: Most played All time and Recently played "
+         "alone", big, None),
+        ("rank-ties", "plays, days and times from a few values: the hash decides most places, the caps' edges "
+         "among them", _rank_stats(2, ties=True), RANK_TODAY),
+        ("rank-early", "a history to day 12: the windows begin before 2026-01-01", _rank_stats(3, today=12), 12),
+        ("rank-no-base", "TRKD alone (no base yet), 300 hashes", _rank_stats(4, tracks=300, base_share=0,
+                                                                            delta=300, rcnt=700), RANK_TODAY),
+    ]
+
+
+def rank_files():
+    """test/fixtures/card/stats/rank.json and the scenarios' files."""
+    files, index, where = {}, [], {}
+    for name, note, st, today in rank_scenarios():
+        bin_b = write_stats(st)
+        folder = where.get(bin_b)
+        if folder is None:
+            folder = where[bin_b] = "rank/" + name
+            files["stats/%s/stats.bin" % folder] = bin_b
+            if st.base:
+                files["stats/%s/%s" % (folder, base_name(st.head["baseGen"]))] = write_base(st.base,
+                                                                                     st.head["baseGen"])
+        rows = st.tracks()
+        index.append({"name": name, "note": note, "in": folder, "today": today,
+                      "rows": {"base": len(st.base), "trkd": len(st.trkd), "rcnt": len(st.rcnt),
+                               "played": sum(1 for r in rows.values() if r.plays)},
+                      "lists": lists_json(lists(st, today))})
+    files["stats/rank.json"] = (json.dumps(index, indent=1) + "\n").encode("utf-8")
+    return files
+
+
 def fixture_files():
     """test/fixtures/card/stats/: {path under test/fixtures/card: bytes}."""
     files, index = {}, []
@@ -2592,6 +2692,7 @@ def fixture_files():
         entry, out = run_scenario(sc)
         index.append(entry)
         files.update(out)
+    files.update(rank_files())
     lib = [{"album": album, "artist": artist, "tracks": [{"path": "%s/%s/%s" % (artist, album, f),
                                                           "hash": hx(path_hash("%s/%s/%s" % (artist, album, f)))}
                                                          for f in fs]}

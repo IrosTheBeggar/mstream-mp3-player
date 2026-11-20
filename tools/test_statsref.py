@@ -677,6 +677,26 @@ class RankTests(unittest.TestCase):
         self.assertIsNone(sr.week(st, None))
         self.assertIsNone(sr.week(sr.Stats(), 50)["topDay"])
 
+    def test_rank_scenarios(self):
+        """rank.json's lists are statsref's over its files read back (each
+        list past its cap and 16 where the note says), and the clock unset
+        offers Most played All time and Recently played alone."""
+        files = sr.rank_files()
+        index = json.loads(files["stats/rank.json"])
+        self.assertEqual([e["name"] for e in index], [n for n, _, _, _ in sr.rank_scenarios()])
+        for e in index:
+            st = sr.read_stats(files["stats/%s/stats.bin" % e["in"]])
+            if st.head["baseGen"]:
+                st.base = sr.read_base(files["stats/%s/%s" % (e["in"], sr.base_name(st.head["baseGen"]))],
+                                       st.head["baseGen"])
+            self.assertEqual(sr.lists_json(sr.lists(st, e["today"])), e["lists"], e["name"])
+            self.assertEqual(e["rows"]["base"], len(st.base), e["name"])
+        big = index[0]["lists"]
+        self.assertEqual([len(big["mostPlayed"][w]) for w in ("7", "30", "all")], [66] * 3)
+        self.assertEqual([len(big[k]) for k in ("newFinds", "oldFavourites", "recentlyPlayed")], [66, 216, 216])
+        none = index[1]["lists"]
+        self.assertEqual((none["mostPlayed"]["7"], none["newFinds"], none["oldFavourites"]), (None, None, None))
+
 
 class FixtureTests(unittest.TestCase):
     @classmethod
