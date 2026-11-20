@@ -227,7 +227,8 @@ enum class ScanWait : uint8_t {
 // (OpusGenerator::allocBuffers(): oggopus's page, packet and frame, 65,307
 // + 61,440 + 1,276 B, kept from the session's first .opus on). A FLAC's
 // are about 80 KB and given back at its end; an MP3's are its pinned
-// block's.
+// block's. Since #64's 4,095 B malloc limit every track's File carves its
+// 4 KB stdio buffer in PSRAM too (4,224 B): not counted here.
 constexpr size_t kDecoderRoomBytes = 65307 + 61440 + 1276;
 
 // The room a take of the stats' hold asks (the firmware's topAlloc() gives

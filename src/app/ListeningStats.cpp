@@ -32,8 +32,10 @@
 // decoder's room, the ranges' block's at every take and the arena's while a
 // track plays: the caps given back); PSRAM's layout is then main's once the
 // hold ends, in the host's model and on the device (5.14, fix A: runs C1,
-// C1-V and C2, 2026-11-18; the device's B1 runs had found it split for the
-// session without the caps). Its
+// C1-V and C2, 2026-11-18; and under #64's 4,095 B malloc limit, a File's
+// 4 KB stdio buffer in PSRAM, C4 and visit A against main 987216f,
+// 2026-11-19, a track's buffer opened inside the hold among them; the
+// device's B1 runs had found it split for the session without the caps). Its
 // budget is internal RAM's margin (11's Internal RAM row): 2,048 B, hence
 // 40 records, not the design's 96 (statsfold::kRecords). Against G5's
 // floors (docs/OPUS.md: steady 50 KB, the session's lowest 42 KB, the
@@ -44,8 +46,12 @@
 // with a link (METADATA 3.8, 2026-11-04) G5's steady floor was expected to
 // hold with 0-1 KB to spare and the session's floor not shown kept; the
 // move's re-run with the headphones linked (5.14, "Its device re-run")
-// measured both held with about 6 KB to spare at 2,096 B, the fix's 248 B
-// more of it not measured yet.
+// measured both held with about 6 KB to spare at 2,096 B, the link first
+// and a real stream. At 2,344 B, main 987216f merged (5.14, "Its device
+// runs", 2026-11-19), G5's play-before-link order read 50,764 B on a real
+// stream (main 52,872 B), the figure the session's floor counts (the
+// owner's call), and 42,808 B in silent mode (main 45,140 B), 200 B under,
+// recorded beside it.
 static_assert(sizeof(statsglue::Glue) <= 2048, "the listening stats' resident set is at most 2,048 B (5.14, 11)");
 
 namespace {
@@ -121,12 +127,14 @@ void psramAbove(const void* block, const void* spacer, autodj::Above* out) {
 // carved, never less than this free with it carved (Auto DJ's
 // kJoinMarginBytes, for the same reason: another task's block may come in
 // that window, a track start's 4 KB probe, a seek's 8 KB, the Opus packet
-// buffer's 60 KB, the card worker's 4-16 KB); then the free block the
-// spacers left above it (T) closed by caps, held with it, so that a
-// long-lived carve made while it is held (the first frame's cover canvas, a
-// queue) goes where main puts it, not into T, where it would pin the
-// largest free block split once the hold ends (5.14, fix A; the device's B1
-// runs). Given back bottom-up, the newest first (autodj::TopHold): no free
+// buffer's 60 KB, the card worker's 4-16 KB, and since #64's 4,095 B malloc
+// limit a File's 4 KB stdio buffer or an SDP search's list); then the free
+// block the spacers left above it (T) closed by caps, held with it, so that
+// a long-lived carve made while it is held (the first frame's cover canvas,
+// a queue, a track's stdio buffer) goes where main puts it, not into T,
+// where it would pin the largest free block split once the hold ends (5.14,
+// fix A; the device's B1 runs; with #64's limit, C4 and visit A). Given
+// back bottom-up, the newest first (autodj::TopHold): no free
 // block opens above a held one. Never for a block held for the session
 // (its caps would be): MARK's is plain psramAlloc (fix G).
 constexpr size_t kTopMarginBytes = 64 * 1024;

@@ -50,7 +50,7 @@
 //   - the saves at a pass the write gate lets through (saveDue(), runSave():
 //     statsglue::turnOf(), before that pass's slot): the boot overflow's
 //     tries again, the records' save (24 records; not behind a library
-//     update's fence until 96);
+//     update's fence until 40);
 //   - ending(): the orderly end's flush (no read at a remount inside it, no
 //     boot's or records' save, a rotation's only with 1 s of its budget left);
 //   - every save refused while the card is away: out of the slot, refusing
