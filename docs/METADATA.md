@@ -8195,12 +8195,13 @@ section 1 and 5.14's "As built" notes list the changes):
   B); the scan, the fold and the save about 3.85 µs a slot on this PC.
   Those are host figures, as are the flash, RAM and IRAM above. On the
   device (the plan's 5.14, "Its device runs" and "Its device re-run";
-  the spare card): a full log's boot save, 143,856-143,872 B for 3,519
-  tracks, in 2,487-2,584 ms; its overflow in the arena, 262,080 B
-  (262,144 B carved) and 81,276 B of caps; the scan's 103 passes
-  3,678-3,773 ms on the loop with that save (about 1.2 s without); a
-  start asked meanwhile waiting 4.39-4.45 s; the next boot's compaction
-  1,336-1,384 ms (a 19,074-row base, 457,848 B); the records' saves
+  the spare card): a full log's boot save, 143,672-143,872 B for
+  3,518-3,519 tracks, in 2,487-2,689 ms; its overflow in the arena,
+  262,080 B (262,144 B carved) and 81,276 B of caps; the scan's 103
+  passes 3,678-4,040 ms on the loop with that save (about 1.2-1.4 s
+  without); a start asked meanwhile waiting 4.39-4.75 s; the next boot's
+  compaction 1,336-1,442 ms (a 19,074-19,079-row base, 457,848-457,968
+  B), the upper ends visit A's (s1mv-a1, s1mv-a2); the records' saves
   91 ms (a 16 KB `stats.bin`), 225 ms (60,688 B) and 502 ms (144,544 B);
   `Hs` under an MP3 143 ms; the loop's stack's lowest since the boot
   3,508-3,708 B across them, a bound (the rotation's save not read yet).
@@ -8353,8 +8354,8 @@ section 1 and 5.14's "As built" notes list the changes):
   the byte, every take Closed; visit B (one free cluster, #63 in), 17
   failed records' tries at 98-191 ms each, the boot's save 5,523 ms (the
   first allocation after the computer's fill); visit C (the card freed,
-  fatscan and chkdsk clean), the next boot's fold of B's 43 slots, none
-  lost or twice. 0 underruns and 0 breaks in every run on 985f4a9.
+  fatscan and chkdsk clean), the next boot's fold of the 43 slots above
+  MARK (s1mv-a4rot2's last 4 and M-full's 39), none lost or twice. 0 underruns and 0 breaks in every run on 985f4a9.
 
 ---
 

@@ -1664,9 +1664,11 @@ next save. No free space is asked for first: on a card with one free
 cluster each failed try after the first held the loop about 5.3 s on
 the device before #63 (FatFs's search for `stats.tmp`'s clusters reads
 the whole FAT: LISTENING-STATS 5.14's B2); with #63's hole hint
-(METADATA.md 3.2.4) each took 98-191 ms (the plan's visit B, 2026-11-19),
-and only the first allocation after a computer filled the card still
-walks the FAT, once a mount (5,523 ms). A save is refused with the card away
+(METADATA.md 3.2.4) each took 98-191 ms (the plan's visit B, 2026-11-19);
+the first allocation after a computer filled the card still walks the
+FAT once a mount (5,523 ms), and a few free clusters far apart or a free
+count not known stay uncured, by code (LISTENING-STATS 13's "A nearly
+full card"; whether a save checks free space first is the owner's call). A save is refused with the card away
 or another card in the slot, after a log file not read whole, once the card's `stats.bin` is no
 longer the copy this RAM stands on (another player had the card: its
 stats aren't saved over), and once the session is behind its log (the
@@ -3004,9 +3006,10 @@ strings.
   c1-i1's after-stop `D`: the card's boot validation walk, carving while
   a decoder was open, split it there as it splits main's (the plan's
   C3/M3). Under #64's 4,095 B malloc limit ([Build notes](#build-notes)),
-  which puts each File's 4 KB stdio buffer in PSRAM, a track's buffer
-  opened inside the hold still left PSRAM main 987216f's to the byte
-  (2026-11-19, the plan's C4/M4 and visit A). Nothing else is held between saves, and nothing of the stats is
+  which puts each File's 4 KB stdio buffer in PSRAM, PSRAM stayed main
+  987216f's to the byte (2026-11-19, the plan's C4/M4 and visit A), a
+  track's buffer opened inside the hold among those runs (visit A's
+  s1mv-a3). Nothing else is held between saves, and nothing of the stats is
   in PSRAM between calls but the boot's scan's blocks (and MARK's block
   on a card past 8 rows); with the hold's caps closing the free block above them,
   PSRAM's layout is main's once the hold ends on a card of 8 MARK rows or
