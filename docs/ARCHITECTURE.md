@@ -5096,18 +5096,21 @@ their own (the player stopped first, so nothing follows them).
   `unity_config.c`, and FatFs (test/support/fatfs, in each suite's
   `fatfs_unit.c`), which `FatFsBuild.c` takes out with those pragmas. On
   every build (and before an upload) it prints what it reached, as
-  `shadow_guard: -Werror=shadow=local on 215 of our files (src/ 69,
-  lib/core 146)`, and reaching nothing fails the build; lib/core is the
-  `core` folder of the project's `lib_dir`. When it came in (2026-11-19)
-  it found 8: the noCard, five in the firmware (Core2AudioBackend's FLAC
-  metadata walk, the sleep line's x, CardTags' section stride,
-  LibraryBuilder's seen record, TagStore's sort comparator) and two in
-  the tests (test_hold_button, test_ogg_opus), each inner one renamed
-  (no change in behaviour). The full `-Wshadow` stays off: on src/ and
-  lib/core it gave 28 warnings then, 17 a parameter or local named as a
-  member (a constructor's `alloc` and `release`, say), 5 as a global and
-  the 6 of this class (test/ not counted), the first 22 not read one by
-  one.
+  core2's `shadow_guard: -Werror=shadow=local on 219 of our files (src/
+  70, lib/core 149)` with main 4454316 merged in (each new file of src/
+  or lib/core adds one), and reaching nothing fails the build; lib/core
+  is the `core` folder of the project's `lib_dir`. When it came in
+  (2026-11-19) it found 8: the noCard, five in the firmware
+  (Core2AudioBackend's FLAC metadata walk, the sleep line's x, CardTags'
+  section stride, LibraryBuilder's seen record, TagStore's sort
+  comparator) and two in the tests (test_hold_button, test_ogg_opus);
+  merging main 4454316 (#61, the listening stats' S1) in brought two
+  more, in test_autodj_join's model of the stats' boot scan (a `file`
+  and a loop's `n`); each inner one renamed (no change in behaviour).
+  The full `-Wshadow` stays off: on src/ and lib/core it gave 28
+  warnings then, 17 a parameter or local named as a member (a
+  constructor's `alloc` and `release`, say), 5 as a global and the 6 of
+  this class (test/ not counted), the first 22 not read one by one.
 - **Flash: QIO at 80 MHz** from 0.6.0 (`[env:core2]`; docs/ENERGY.md
   section 5, P2; measured: list scrolling with an MP3 +65 % at 240, MP3
   decode -9 %). The QIO bootloader (`bootloader_qio_80m.elf`) switches

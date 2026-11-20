@@ -45,8 +45,9 @@ already (tools/version.py's, for src/): its source is then the object's.
 It says what it reached, as a guard that matched nothing would pass in
 silence: on every build (the default targets, which pio test's build
 includes, and before an upload) it prints the files it gave the flag by
-folder, "shadow_guard: -Werror=shadow=local on 215 of our files (src/ 69,
-lib/core 146)", and none at all fails the build.
+folder, core2's "shadow_guard: -Werror=shadow=local on 219 of our files
+(src/ 70, lib/core 149)" with main 4454316 merged in (each new file of src/
+or lib/core adds one), and none at all fails the build.
 """
 import os
 import sys
