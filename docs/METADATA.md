@@ -8204,7 +8204,8 @@ section 1 and 5.14's "As built" notes list the changes):
   B), the upper ends visit A's (s1mv-a1, s1mv-a2); the records' saves
   91 ms (a 16 KB `stats.bin`), 225 ms (60,688 B) and 502 ms (144,544 B);
   `Hs` under an MP3 143 ms; the loop's stack's lowest since the boot
-  3,508-3,708 B across them, a bound (the rotation's save not read yet).
+  3,508-3,708 B across them, a bound, and 3,708 B at every stop of K's
+  two rotation saves (b3h-kcap, 2026-11-19).
   On a card with one free cluster (B2, d4a5357, before #63) each failed
   save after the first held the loop 5,295-5,398 ms (the boot's 5,430 ms):
   FatFs's search for `stats.tmp`'s clusters reads the whole FAT, and the
@@ -8284,7 +8285,7 @@ section 1 and 5.14's "As built" notes list the changes):
   suites, 2,384 cases, all passing at d4a5357 (the room's trigger's gate;
   the move to internal RAM: 2,366; the rework review's fixes: 2,366; R6:
   2,358); at 9a0532c, main's #62 taken in, 2,389 of 2,389 (#62's 5
-  more); at 985f4a9, main 987216f taken in, 112 suites, 2,423 of 2,423
+  more); at 985f4a9, main 987216f taken in, 113 suites, 2,423 of 2,423
   (main 987216f's CI: 2,325). Mutation checks of the rework: the reference 15 of 15 caught,
   the fold 23 of 23, the store 23 of 24 and the glue 19 of 20 (the two
   missed equivalent).

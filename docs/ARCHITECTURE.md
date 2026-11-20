@@ -640,8 +640,8 @@ hundred bytes in PSRAM (app/TagConsole's `Work`).
   a full log's boot save and B2's 17 failed records' tries, all over the
   house's lowest, 2,548 B left under a held boot with DO low
   (METADATA.md 3.8). S1 as first built's boot save left 3,700 B unused
-  (round 1's run K). The rotation's save (the plan's K) and DO low are
-  not read yet.
+  (round 1's run K). The rotation's save read 3,708 B at every stop of
+  the plan's K (two rotation saves, 2026-11-19); DO low is not read yet.
 - **ESTIMATED worst cases**, bytes used from the stack's top (from the
   image: each function's `entry` frame, its calls and long calls, the
   VFS's, FatFs's disk and the console's function pointers by hand, the
