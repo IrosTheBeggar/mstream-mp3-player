@@ -789,11 +789,11 @@ void NowPlayingPage::drawPlayButton(M5Canvas& c, int cx, int cy, bool down) {
 }
 
 
-bool NowPlayingPage::emptyState(EmptyState& e) const {
+void NowPlayingPage::emptyState(EmptyState& e) const {
   const AppState& s = ui_.state();
   if (!s.card && s.libraryTracks == 0) {
     noCardState(e, s.cardKind);
-    return true;
+    return;
   }
   e.icon = &icons::kNote;
   e.title = tr(S::empty_nothing_playing_title);
@@ -811,7 +811,6 @@ bool NowPlayingPage::emptyState(EmptyState& e) const {
     e.buttons[1] = tr(S::empty_shuffle_all);
     e.buttonIcons[1] = &icons::kShuffle;
   }
-  return true;
 }
 
 void NowPlayingPage::onEmptyEvent(const InputEvent& e) {
@@ -878,6 +877,10 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   }
   if (bar_.active()) bar_.live(s.positionMs);  // the marker follows where it plays
   // Nothing queued: the empty state, drawn when it (or the card) changes.
+  // The test compares this pass's values with drawn_'s, the last draw's,
+  // so each is stored as tested (noCard: the card's, two lines down). In
+  // 0.14.0 a second noCard, emptyState()'s result, always true, hid it
+  // inside: with a card in, every pass redrew the whole state, about 38 ms.
   const bool empty = s.current < 0;
   const bool noCard = !s.card && s.libraryTracks == 0;
   if (empty) {
@@ -886,7 +889,7 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
     if (!drawn_.valid || !drawn_.empty || drawn_.noCard != noCard || drawn_.cardKind != s.cardKind ||
         drawn_.autoDjButton != dj || drawn_.noFit != noFit) {
       EmptyState es;
-      const bool noCard = emptyState(es);
+      emptyState(es);
       // The glance: no Open Library, Shuffle all, Auto DJ or Try again
       // (nothing on it can be pressed), and the state over y 36-175 only,
       // its line under it in the transport's strip. A card in the slot that

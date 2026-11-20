@@ -276,7 +276,8 @@ private:
   // the index may have gone while the menu was up).
   void goToLibrary(Go where, uint32_t track);
   // Nothing queued: the empty (or no-card) state instead of the player.
-  bool emptyState(EmptyState& e) const;
+  // (No result: update()'s no-card test is its own, the one drawn_ keeps.)
+  void emptyState(EmptyState& e) const;
   void onEmptyEvent(const InputEvent& e);
 
   struct Drawn {
