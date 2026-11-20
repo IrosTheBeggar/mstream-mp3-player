@@ -4308,7 +4308,26 @@ Queue, Dance and Output (with its Pair and About pages).
   output. A Library Play or a Queue Play now that waits says so in its
   note ("Waiting for SPYDRONE: One More Time"). Now Playing with nothing
   queued: "Nothing playing", Open Library, Shuffle all (or Auto DJ in its
-  place while the card has a usable Auto DJ index: above). With nothing
+  place while the card has a usable Auto DJ index: above). It is drawn
+  when it or the card changes, not on every pass: `update()` keeps in
+  `drawn_` what it drew (no card, the card's kind, the Auto DJ button,
+  the mood fit) and compares this pass's with it. In 0.14.0 a second
+  `noCard`, `emptyState()`'s result, always true, hid the card's: with a
+  card in, every lit pass redrew the whole state (about 130 KB over the
+  bus the card shares, about 38 ms), so touches there were read about 8
+  times less often and the boot's Auto DJ join took about 6 s instead of
+  about 2.5 s. `emptyState()` returns nothing now, and
+  `-Werror=shadow=local` stops the slip itself ([Build
+  notes](#build-notes)). Owed to the 0.15.0 release notes (feature
+  branches never edit `.github/release-notes.md`), a line in their
+  style: **An empty Now Playing no longer redraws itself all the
+  time.** Since 0.14.0, Now Playing with nothing queued and a card in
+  drew its whole "Nothing playing" screen again on every pass while the
+  screen was lit: touches on that screen were read about 8 times less
+  often, and Auto DJ's join at a start took about 6 s instead of about
+  2.5 s. It is drawn once again, and again only when it changes. (The
+  line's figures are from the code, the logs and a host harness; the
+  fixed build hasn't run on the Core2 yet.) With nothing
   queued the A/B/C clicks are inert, Auto DJ on or not: a short double
   buzz instead of the tap tick (`ButtonPolicy::Transport::idle()`; the input layer plays the
   buttons' feedback once the policy has acted).
@@ -4782,6 +4801,27 @@ their own (the player stopped first, so nothing follows them).
   after every 8- and 16-bit store; the link keeps it, so the prebuilt
   libs and the IRAM layout don't move. It needs a rev-3 chip, so
   `setup()` halts first on an older one (docs/ENERGY.md section 5, P3a).
+- **`tools/shadow_guard.py`** (a pre-script, in core2 and the envs that
+  extend it, and in native) compiles our own code, src/, lib/core and
+  test/, with `-Werror=shadow=local`: a local, a parameter or a lambda's
+  parameter that hides a local or a parameter of an enclosing scope fails
+  the build (both of GCC's classes: `local` and `compatible-local`). The
+  framework, `.pio/libdeps` and lib/SD (the Arduino core's SD library,
+  copied) keep their flags. 0.14.0's empty Now Playing redrew itself on
+  every lit pass because of such a slip ([UI](#ui), Now Playing with
+  nothing queued). It is a build middleware, as no_psram_fix's, that adds
+  the flag in place to each environment collecting one of those files
+  (the project's, lib/core's): `build_src_flags` reaches src/ and test/
+  only, and a `library.json` for lib/core would change the builder
+  PlatformIO picks for it. When it came in (2026-11-19) it found 8: the
+  noCard, five in the firmware (Core2AudioBackend's FLAC metadata walk,
+  the sleep line's x, CardTags' section stride, LibraryBuilder's seen
+  record, TagStore's sort comparator) and two in the tests
+  (test_hold_button, test_ogg_opus), each inner one renamed (no change in
+  behaviour). The full `-Wshadow` stays off: on src/ and lib/core it gave
+  28 warnings then, 17 a parameter or local named as a member (a
+  constructor's `alloc` and `release`, say), 5 as a global and the 6 of
+  this class (test/ not counted), the first 22 not read one by one.
 - **Flash: QIO at 80 MHz** from 0.6.0 (`[env:core2]`; docs/ENERGY.md
   section 5, P2; measured: list scrolling with an MP3 +65 % at 240, MP3
   decode -9 %). The QIO bootloader (`bootloader_qio_80m.elf`) switches
