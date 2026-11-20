@@ -4579,7 +4579,36 @@ Queue, Dance and Output (with its Pair and About pages).
   output. A Library Play or a Queue Play now that waits says so in its
   note ("Waiting for SPYDRONE: One More Time"). Now Playing with nothing
   queued: "Nothing playing", Open Library, Shuffle all (or Auto DJ in its
-  place while the card has a usable Auto DJ index: above). With nothing
+  place while the card has a usable Auto DJ index: above). It is drawn
+  when it or the card changes, not on every pass: `update()` keeps in
+  `drawn_` what it drew (no card, the card's kind, the Auto DJ button,
+  the mood fit) and compares this pass's with it. In 0.14.0 a second
+  `noCard`, `emptyState()`'s result, always true, hid the card's: with a
+  card in, every lit pass redrew the whole state (about 130 KB over the
+  bus the card shares, about 38 ms), so the loop ran about 16 passes a
+  second there instead of 120 to 140 (touches read about 8 times less
+  often) and the boot's Auto DJ join took 5 to 6 s instead of under 2 s.
+  `emptyState()` returns nothing now, and
+  `-Werror=shadow=local` stops the slip itself ([Build
+  notes](#build-notes)). Owed to the 0.15.0 release notes (feature
+  branches never edit `.github/release-notes.md`), a line in their
+  style: **An empty Now Playing no longer redraws itself all the
+  time.** Since 0.14.0, Now Playing with nothing queued and a card in
+  drew its whole "Nothing playing" screen again on every pass while the
+  screen was lit: touches on that screen were read about 8 times less
+  often, and Auto DJ's join at a start took 5 to 6 s instead of under
+  2 s. It is drawn once again, and again only when it changes. (MEASURED
+  on the Core2 on 2026-11-20, the spare card, an empty queue, Auto DJ
+  on, nothing playing, the same console script on both builds: #61's
+  merge without the fix (985f4a9) logged 261 slow passes of about 39 ms
+  between `[ui] up` and `[ui] dark`, its loop ran 16 passes a second
+  while the join ran, and the boot's join took 5,332 ms; the fix
+  (4b1b602) logged 2, one at each of the script's faked state changes
+  (uiFn, uiF0: the redraw a change owes), ran 123 to 140 passes a
+  second, and joined in 1,642 ms. Main's idle boots before #61 (89188f4,
+  987216f) joined in 6,230 to 6,367 ms. The glance, a touch on the dark
+  screen, wasn't brought up on the device: the host harness covers it.)
+  With nothing
   queued the A/B/C clicks are inert, Auto DJ on or not: a short double
   buzz instead of the tap tick (`ButtonPolicy::Transport::idle()`; the input layer plays the
   buttons' feedback once the policy has acted).
@@ -5053,6 +5082,45 @@ their own (the player stopped first, so nothing follows them).
   after every 8- and 16-bit store; the link keeps it, so the prebuilt
   libs and the IRAM layout don't move. It needs a rev-3 chip, so
   `setup()` halts first on an older one (docs/ENERGY.md section 5, P3a).
+- **`tools/shadow_guard.py`** (a pre-script, in core2 and the envs that
+  extend it, and in native) compiles our own code, src/, lib/core and
+  test/, with `-Werror=shadow=local`: a local, a parameter or a lambda's
+  parameter that hides a local or a parameter of an enclosing scope
+  fails the build (both of GCC's classes: `local` and
+  `compatible-local`). The framework, `.pio/libdeps` and lib/SD (the
+  Arduino core's SD library, copied) keep their flags; their headers
+  don't escape it where our files include them (with `-I`, not
+  `-isystem`: an inline function or a template in M5GFX's, M5Unified's
+  or the IDF's is compiled with the flag). None trips it today; one an
+  upgrade brings goes between `#pragma GCC diagnostic push`, `ignored
+  "-Wshadow=local"` and `ignored "-Wshadow=compatible-local"` (both:
+  ignoring `-Wshadow` leaves them on) and `pop` around its include.
+  0.14.0's empty Now Playing redrew itself on every lit pass because of
+  such a slip ([UI](#ui), Now Playing with nothing queued). It is a
+  build middleware, as no_psram_fix's, that adds the flag in place to
+  each environment collecting one of those files (the project's,
+  lib/core's): `build_src_flags` reaches src/ and test/ only, and a
+  `library.json` for lib/core would change the builder PlatformIO picks
+  for it. Being an environment's, the flag reaches what else that
+  environment compiles: in native, PlatformIO's generated
+  `unity_config.c`, and FatFs (test/support/fatfs, in each suite's
+  `fatfs_unit.c`), which `FatFsBuild.c` takes out with those pragmas. On
+  every build (and before an upload) it prints what it reached, as
+  core2's `shadow_guard: -Werror=shadow=local on 219 of our files (src/
+  70, lib/core 149)` with main 4454316 merged in (each new file of src/
+  or lib/core adds one), and reaching nothing fails the build; lib/core
+  is the `core` folder of the project's `lib_dir`. When it came in
+  (2026-11-19) it found 8: the noCard, five in the firmware
+  (Core2AudioBackend's FLAC metadata walk, the sleep line's x, CardTags'
+  section stride, LibraryBuilder's seen record, TagStore's sort
+  comparator) and two in the tests (test_hold_button, test_ogg_opus);
+  merging main 4454316 (#61, the listening stats' S1) in brought two
+  more, in test_autodj_join's model of the stats' boot scan (a `file`
+  and a loop's `n`); each inner one renamed (no change in behaviour).
+  The full `-Wshadow` stays off: on src/ and lib/core it gave 28
+  warnings then, 17 a parameter or local named as a member (a
+  constructor's `alloc` and `release`, say), 5 as a global and the 6 of
+  this class (test/ not counted), the first 22 not read one by one.
 - **Flash: QIO at 80 MHz** from 0.6.0 (`[env:core2]`; docs/ENERGY.md
   section 5, P2; measured: list scrolling with an MP3 +65 % at 240, MP3
   decode -9 %). The QIO bootloader (`bootloader_qio_80m.elf`) switches

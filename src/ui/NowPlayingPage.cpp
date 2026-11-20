@@ -515,9 +515,9 @@ void NowPlayingPage::drawProgressText(M5Canvas& c, int top) {
     const char* text = fit.text == Text::Full ? mid : fit.text == Text::Base ? base : fit.text == Text::Warn ? warn : "";
     const uint16_t tc = fit.text == Text::Warn ? col::AMBER : mc;
     const int tw = !text[0] ? 0 : fit.text == Text::Warn ? warnW : f.width(Font::Small, text);
-    const int x0 = kW / 2 - fit.width / 2;
-    if (text[0]) f.draw(c, Font::Small, text, x0, textY, tw, tc, col::BG);
-    const int sx = text[0] ? x0 + tw + kSleepGap : x0;
+    const int lineX = kW / 2 - fit.width / 2;
+    if (text[0]) f.draw(c, Font::Small, text, lineX, textY, tw, tc, col::BG);
+    const int sx = text[0] ? lineX + tw + kSleepGap : lineX;
     const uint16_t sc = s.sleepFading ? col::AMBER : col::SOFT;
     if (fit.moon) icons::drawMoon(c, sx, textY - 6, 11, sc);
     if (fit.moonText) f.draw(c, Font::Small, s.sleepShort, sx + kSleepMoonW, textY, sw - kSleepMoonW, sc, col::BG);
@@ -789,11 +789,11 @@ void NowPlayingPage::drawPlayButton(M5Canvas& c, int cx, int cy, bool down) {
 }
 
 
-bool NowPlayingPage::emptyState(EmptyState& e) const {
+void NowPlayingPage::emptyState(EmptyState& e) const {
   const AppState& s = ui_.state();
   if (!s.card && s.libraryTracks == 0) {
     noCardState(e, s.cardKind);
-    return true;
+    return;
   }
   e.icon = &icons::kNote;
   e.title = tr(S::empty_nothing_playing_title);
@@ -811,7 +811,6 @@ bool NowPlayingPage::emptyState(EmptyState& e) const {
     e.buttons[1] = tr(S::empty_shuffle_all);
     e.buttonIcons[1] = &icons::kShuffle;
   }
-  return true;
 }
 
 void NowPlayingPage::onEmptyEvent(const InputEvent& e) {
@@ -878,6 +877,18 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   }
   if (bar_.active()) bar_.live(s.positionMs);  // the marker follows where it plays
   // Nothing queued: the empty state, drawn when it (or the card) changes.
+  // The test compares this pass's values with drawn_'s, the last draw's,
+  // so each is stored as tested (noCard: the card's, two lines down). In
+  // 0.14.0 a second noCard, emptyState()'s result, always true, hid it
+  // inside: with a card in, every pass redrew the whole state, about 38 ms.
+  // Two of emptyState()'s inputs aren't in the test: queueUnread (the
+  // lines) and libraryTracks > 0 (Shuffle all). Once the UI is up, and
+  // while nothing is queued, each changes only with a library rebuild or
+  // update (an unread queue.txt isn't written for an empty queue:
+  // QueueStore::keepUnread()), whose libraryChanged() or libraryUpdating()
+  // repaints this page or the glance. Changed anywhere else, either would
+  // need to be in the test: onEmptyEvent() takes this pass's emptyState()
+  // as the one drawn.
   const bool empty = s.current < 0;
   const bool noCard = !s.card && s.libraryTracks == 0;
   if (empty) {
@@ -886,7 +897,7 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
     if (!drawn_.valid || !drawn_.empty || drawn_.noCard != noCard || drawn_.cardKind != s.cardKind ||
         drawn_.autoDjButton != dj || drawn_.noFit != noFit) {
       EmptyState es;
-      const bool noCard = emptyState(es);
+      emptyState(es);
       // The glance: no Open Library, Shuffle all, Auto DJ or Try again
       // (nothing on it can be pressed), and the state over y 36-175 only,
       // its line under it in the transport's strip. A card in the slot that

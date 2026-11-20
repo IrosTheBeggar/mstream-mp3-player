@@ -137,10 +137,10 @@ Run play(oggopus::Reader& r, bool perFrame = true, const oggopus::StartPlan* pla
       fill += p.samples;
     }
     for (int64_t left = fill; left > 0;) {
-      const uint32_t n = left > oggopus::kMaxFrameSamples ? oggopus::kMaxFrameSamples : static_cast<uint32_t>(left);
-      keep(run, n);
-      run.filled += n;
-      left -= n;
+      const uint32_t chunk = left > oggopus::kMaxFrameSamples ? oggopus::kMaxFrameSamples : static_cast<uint32_t>(left);
+      keep(run, chunk);
+      run.filled += chunk;
+      left -= chunk;
     }
     if (!framed) {
       run.tl.packetDone();

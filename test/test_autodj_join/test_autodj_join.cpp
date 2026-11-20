@@ -4401,7 +4401,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     g_topAbove = 0;
     if (glue) glue->scanBegan(again);
     uint32_t pieces = 0, done = 0;
-    void* file = nullptr;  // (scanFile) the play log's FatFile
+    void* logFile = nullptr;  // (scanFile) the play log's FatFile
     int fileOf = -1;
     auto afterPiece = [&](uint32_t k) {
       if (again) {
@@ -4410,8 +4410,8 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
           // back): its start's probe, then its buffers, all or none.
           ModelHeap::release(ModelHeap::alloc(4096));
           std::vector<void*> got;
-          for (size_t n : kOpusAsks)
-            if (void* p = ModelHeap::alloc(n)) got.push_back(p);
+          for (size_t ask : kOpusAsks)
+            if (void* p = ModelHeap::alloc(ask)) got.push_back(p);
           if (got.size() == kOpusAsks.size()) {
             opusBlocks = got;
           } else {
@@ -4435,15 +4435,15 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
       if (stats->startAt && pieces == stats->startAt * 128) bootStart();
       if (pieces++ % 128 == 0 && glue && !glue->reserve(statsglue::kReserveAhead)) ++stats->reserveFailed;
       if (stats->scanFile && fileOf != f) {
-        if (file) ModelHeap::release(file);
-        file = ModelHeap::alloc(kFatFileBytes);
+        if (logFile) ModelHeap::release(logFile);
+        logFile = ModelHeap::alloc(kFatFileBytes);
         fileOf = f;
       }
       const uint64_t at = sf::kMinMs + (570 + static_cast<uint64_t>(i) * 29 / n) * sf::kDayMs + (i % 24) * sf::kHourMs;
       if (glue) glue->slot(statsSlot(seq0 + i, i % stats->card->played, at), f);
-      if (++done == n && file) {
-        ModelHeap::release(file);  // (the last file read whole: closed in its piece)
-        file = nullptr;
+      if (++done == n && logFile) {
+        ModelHeap::release(logFile);  // (the last file read whole: closed in its piece)
+        logFile = nullptr;
       }
       if (pieces % 128 == 0) afterPiece(pieces / 128 - 1);
     };

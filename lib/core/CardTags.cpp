@@ -891,11 +891,11 @@ bool write(Sink& out, const Meta& meta, const RecordIn* recs, size_t n, const Fo
   SectionOut s[kMaxSections];
   const uint8_t* data[kMaxSections];
   uint32_t ns = 0;
-  auto section = [&](uint32_t type, uint32_t flags, uint32_t count, uint32_t stride, const std::vector<uint8_t>& b) {
+  auto section = [&](uint32_t type, uint32_t flags, uint32_t count, uint32_t rowStride, const std::vector<uint8_t>& b) {
     s[ns].type = type;
     s[ns].flags = flags;
     s[ns].count = count;
-    s[ns].stride = stride;
+    s[ns].stride = rowStride;
     s[ns].bytes = static_cast<uint32_t>(b.size());
     data[ns] = b.data();
     ++ns;

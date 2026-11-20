@@ -1175,13 +1175,13 @@ bool Core2AudioBackend::prepare(const std::string& path, const StartAt& at, Prep
   // embedded picture: megabytes) before the first frame, so at a join a big
   // one must fit in what the ring holds (logged; docs/GAPLESS.md section 12).
   if (p->rate) {
-    uint32_t at = tag + 4;
-    for (int i = 0; i < 64 && at + 4 <= size; ++i) {
+    uint32_t blockAt = tag + 4;
+    for (int i = 0; i < 64 && blockAt + 4 <= size; ++i) {
       uint8_t h[4];
-      if (!file_->seek(static_cast<int32_t>(at), SEEK_SET) || file_->read(h, sizeof(h)) != sizeof(h)) break;
+      if (!file_->seek(static_cast<int32_t>(blockAt), SEEK_SET) || file_->read(h, sizeof(h)) != sizeof(h)) break;
       const uint32_t len = (static_cast<uint32_t>(h[1]) << 16) | (static_cast<uint32_t>(h[2]) << 8) | h[3];
       p->metadataBytes += 4 + len;
-      at += 4 + len;
+      blockAt += 4 + len;
       if (h[0] & 0x80) break;  // the last block
     }
   }
