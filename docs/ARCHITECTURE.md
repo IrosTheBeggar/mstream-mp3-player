@@ -1662,9 +1662,11 @@ boundaries, its size checked, then the rename; a tmp whose rename the
 card refused is held (the records it took are in it) and promoted at the
 next save. No free space is asked for first: on a card with one free
 cluster each failed try after the first held the loop about 5.3 s on
-the device (FatFs's search for `stats.tmp`'s clusters reads the whole
-FAT: LISTENING-STATS 5.14's B2), which PR #63's hole hint should end
-(not yet shown on a stats build). A save is refused with the card away
+the device before #63 (FatFs's search for `stats.tmp`'s clusters reads
+the whole FAT: LISTENING-STATS 5.14's B2); with #63's hole hint
+(METADATA.md 3.2.4) each took 98-191 ms (the plan's visit B, 2026-11-19),
+and only the first allocation after a computer filled the card still
+walks the FAT, once a mount (5,523 ms). A save is refused with the card away
 or another card in the slot, after a log file not read whole, once the card's `stats.bin` is no
 longer the copy this RAM stands on (another player had the card: its
 stats aren't saved over), and once the session is behind its log (the
@@ -2983,7 +2985,13 @@ strings.
   the headphones linked and a real A2DP stream, steady `ram=` 56K (main
   58K) and the session's lowest 49,124 B, in a whole Rescan (main
   51,000 B), so both of G5's floors hold with about 6 KB to spare (main
-  now reads about 6 KB over 3.8's figures); on the speaker PSRAM was
+  now reads about 6 KB over 3.8's figures) in that sequence, the link
+  first and a real stream. In G5's play-before-link order (OPUS.md 2.1;
+  MEASURED 2026-11-19) main 89188f4 read 35,916 B since the boot, main
+  987216f 45,140 B in silent mode and 52,872 B on a real stream, and the
+  merged build (985f4a9) 42,808 B and 50,764 B: by the owner's call the
+  session floor counts the real stream's figure, silent mode's, 200 B
+  under, recorded beside it. On the speaker PSRAM was
   main's to the byte at every `D` and join line of those runs, whose
   folds ended before the first frame, and internal RAM 2,180-2,192 B
   under main's at the boots' lines from the library's load on. B1
@@ -2995,7 +3003,10 @@ strings.
   (device-checked 2026-11-18, the plan's runs c1-i3m2 and c1-i1), but for
   c1-i1's after-stop `D`: the card's boot validation walk, carving while
   a decoder was open, split it there as it splits main's (the plan's
-  C3/M3). Nothing else is held between saves, and nothing of the stats is
+  C3/M3). Under #64's 4,095 B malloc limit ([Build notes](#build-notes)),
+  which puts each File's 4 KB stdio buffer in PSRAM, a track's buffer
+  opened inside the hold still left PSRAM main 987216f's to the byte
+  (2026-11-19, the plan's C4/M4 and visit A). Nothing else is held between saves, and nothing of the stats is
   in PSRAM between calls but the boot's scan's blocks (and MARK's block
   on a card past 8 rows); with the hold's caps closing the free block above them,
   PSRAM's layout is main's once the hold ends on a card of 8 MARK rows or
@@ -3003,7 +3014,11 @@ strings.
   back, nothing read again. The console's looks that read
   the card (`H`'s card part, `Hd`, `Ht`) carve a save's work memory, so
   they wait for a pass the write gate lets through, in `Hs`'s turn, and
-  never behind the update's fence. The transients: each read's and save's work memory
+  never behind the update's fence. The stats' work is the loop's, so
+  none of the card worker's Bluetooth waits (a radio link's set-up,
+  AVRCP: "The card worker's jobs", above) holds it: a save can run while
+  a link is set up (READ, not measured; the plan's 5.14, "S1 and #64's
+  waits"). The transients: each read's and save's work memory
   (`statsfile::kWorkBytes`, 11,456 B: the writer, its plan, the merge's
   readers, a 4 KB buffer and two of 2 KB) and a 4,148 B FatFile for each
   file open (`FatFs::open()`'s `psramNew<FatFile>`), carved and given
@@ -5158,14 +5173,20 @@ their own (the player stopped first, so nothing follows them).
    device re-run (2026-11-17: at most 2,048 B, 40 records); that move is
    host-gated and device-checked (2026-11-17, main's firmware beside it:
    PSRAM main's to the byte at every `D` and join line on the speaker;
-   with the headphones linked G5's floors held with about 6 KB to spare).
+   with the headphones linked first and a real stream G5's floors held
+   with about 6 KB to spare).
    B1 then found the boot's hold splitting PSRAM's largest free block
    where the first frame or a queue came inside it, and the plan's fix
    A + G (caps over the hold's top blocks, one overflow arena, MARK's
    block by plain `psramAlloc`) and the room's trigger make it main's to
    the byte, device-checked 2026-11-18 on the spare card. Main's #62 is
-   taken in (2ff47e0; its test fixed at 9a0532c), not yet run on a device
-   with S1; on a nearly full card each failed save after the first holds
-   the loop about 5.3 s, which PR #63's hole hint should end (not yet
-   shown on a stats build). The
+   taken in (2ff47e0; its test fixed at 9a0532c) and ran with S1 on
+   2026-11-19 (E, K, and `D` equal to main 89188f4's); main 987216f
+   (#63's hole hint, #64's waits and 4,095 B malloc limit) is merged in
+   at 985f4a9 and was device-checked the same day: PSRAM main 987216f's
+   to the byte, a failed save on a nearly full card 98-191 ms a try (about
+   5.3 s before #63), and in G5's play-before-link order 50,764 B on a
+   real stream (the session floor's figure, the owner's call) and
+   42,808 B, 200 B under, in silent mode (main 89188f4 alone: 35,916 B).
+   The
    lists, the Library's screens and Now Playing's row (S2-S4) are next.

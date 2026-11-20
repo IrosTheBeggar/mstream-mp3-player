@@ -93,7 +93,8 @@ and host-tested; its first build ran on the Core2 in two device rounds
 set, the rest merged from the card at each save (that plan's 5.14,
 2026-11-16), since 2026-11-17 in internal RAM (at most 2,048 B, 40
 records); flashed and device-checked against main's firmware (2026-11-17
-and 2026-11-18, the plan's 5.14): 3.11.
+to 2026-11-19, the last with main 987216f merged: #63's hole hint, #64's
+waits and its 4,095 B malloc limit; the plan's 5.14): 3.11.
 
 **In short:**
 
@@ -7852,8 +7853,8 @@ speaker its PSRAM equalled main's to the byte at all 46 `D` and
 `[dj] joined` lines (those runs' folds ended before the first frame),
 and its internal RAM read 2,180-2,192 B under main's at the boots'
 lines from the library's load on (the build's 2,096 B of `.dram0.bss`
-and about 90 B more); with the headphones linked and a real A2DP
-stream, OPUS.md's G5 held on both firmwares, steady `ram=` 56K on the
+and about 90 B more); with the headphones linked first and a real
+A2DP stream, OPUS.md's G5 held on both firmwares, steady `ram=` 56K on the
 move (58K on main) against 50K and the session's lowest 49,124 B
 (51,000 B) against 42 KB. On the same build B1 (2026-11-17) found the
 largest free block split for the session where the first frame or a
@@ -7862,7 +7863,22 @@ join, 442,356 B after a full-log boot. The plan's fix A + G and the
 room's trigger (5.14's "The hold's T") close it, device-checked
 2026-11-18: every take Closed, the join's largest and `D` main's to the
 byte, but for one after-stop `D` that the card's boot walk split as it
-splits main's (the plan's C3/M3). `device.txt` gains no key: the
+splits main's (the plan's C3/M3). On 2026-11-19 (the plan's section 1
+and 5.14, "Its device runs"): the head with main's #62 (6e09a55) passed
+E (the boot's save before the trim, M-full's slots folded) and K (each
+rotation's save before its delete) and equalled main 89188f4's `D`
+(C3h/M3h); with main 987216f merged in (985f4a9: #63's hole hint, #64's
+waits and its 4,095 B malloc limit, which puts each File's 4 KB stdio
+buffer in PSRAM) PSRAM equalled main 987216f's to the byte at every
+compared `D` and join, a track's buffer opened inside the hold among
+them (C4/M4, visit A), and a failed save on a card with one free
+cluster took 98-191 ms a try (visit B), about 5.3 s before #63. In G5's
+play-before-link order (OPUS.md 2.1) main 89188f4 itself read 35,916 B,
+under the session floor; on the merged build silent mode read 42,808 B
+(200 B under 42 KB; main 987216f 45,140 B) and a real stream 50,764 B
+(7,756 B over; main 52,872 B). By the owner's call (2026-11-19) the
+session floor counts the real stream's figure, silent mode's recorded
+beside it. `device.txt` gains no key: the
 transfer never reads the stats (2.11). What the code decided where
 the plan left room (the plan's text amended in the same commits; its
 section 1 and 5.14's "As built" notes list the changes):
@@ -7921,11 +7937,18 @@ section 1 and 5.14's "As built" notes list the changes):
   Measured with a link on 2026-11-17 (MEASURED, the move's re-run, main's
   firmware beside it in the same sequence): steady `ram=` 56K (main 58K),
   the walk's lowest 49,288 B (51,304 B), the Rescan's 49,124 B (51,000 B),
-  so both floors hold with about 6 KB to spare, on main too. That is
+  so both floors hold with about 6 KB to spare, on main too (the link
+  first, a real stream). That is
   5,169-7,215 B over what was expected: main itself now reads about 6 KB
   over 3.8's figures (the Rescan here a whole re-read of 19,417 records,
   976-1,002 s, where 3.8's took 52 s), and the move costs 1,860-2,192 B
   against main at every figure read to the byte but one sampled (2,320 B).
+  In G5's play-before-link order (OPUS.md 2.1; MEASURED 2026-11-19):
+  main 89188f4 35,916 B since the boot (g5h-main1b), main 987216f
+  45,140 B in silent mode and 52,872 B on a real stream, the merged build
+  (985f4a9) 42,808 B and 50,764 B: S1 2,108-2,332 B under main, about its
+  `.bss`. The owner's call (2026-11-19): the session floor counts the real
+  stream's figure, silent mode's, 200 B under, recorded beside it.
   Before it (the rework as first built) the object was a 3,200 B PSRAM
   block under a 3,584 B budget. A card with more than 8 MARK rows (each
   player or NVS erase adds one) gets one block more at the boot's read,
@@ -8052,7 +8075,8 @@ section 1 and 5.14's "As built" notes list the changes):
   card fails in either pass is a save failed, tried again. No free space
   is asked for first: on a card with one free cluster `stats.tmp`'s
   allocation fails, and FatFs's search for its clusters held the loop
-  about 5.3 s a try after the first on the device (B2: Costs, below).
+  about 5.3 s a try after the first on the device before #63 (B2), and
+  98-191 ms a try with #63's hole hint (visit B: Costs, below).
   Nothing new since the card's copy: nothing written. The work memory
   (`statsfile::kWorkBytes`: the writer, its plan, two containers, two row
   readers, the cursor, the merge's rows, a 4 KB buffer and two of 2 KB)
@@ -8140,7 +8164,12 @@ section 1 and 5.14's "As built" notes list the changes):
   (`.dram0.bss` 36,312 B), IRAM left 5,157 B. Read against main
   89188f4's build (flash 4,426,627 B, RAM 59,080 B, IRAM left 5,161 B:
   the plan's 11), not S0's, which would count #62's code as the stats':
-  48,820 B of flash, 2,344 B of RAM (all `.bss`), IRAM 4 B under. `iram_diet: 51 of 51`,
+  48,820 B of flash, 2,344 B of RAM (all `.bss`), IRAM 4 B under. At
+  985f4a9, main 987216f merged (#63, #64): flash 4,478,003 B (core2-dio
+  4,478,035 B), RAM 61,464 B (`.dram0.bss` 36,352 B), IRAM left 5,157 B;
+  against main 987216f's CI build (flash 4,428,759 B, RAM 59,120 B, IRAM
+  left 5,161 B: the plan's 11), 49,244 B of flash, 2,344 B of RAM (all
+  `.bss`), IRAM 4 B under. `iram_diet: 51 of 51`,
   `cache_guard` and `flash_guard` ok. IRAM left 5,157 B with S0's 25
   `libc_a-*` objects in `.iram0.text` and no IRAM attribute: one
   `libphy.a(phy_chip_v7_cal.o)` literal, merged or not as libphy's COMMON
@@ -8175,13 +8204,15 @@ section 1 and 5.14's "As built" notes list the changes):
   91 ms (a 16 KB `stats.bin`), 225 ms (60,688 B) and 502 ms (144,544 B);
   `Hs` under an MP3 143 ms; the loop's stack's lowest since the boot
   3,508-3,708 B across them, a bound (the rotation's save not read yet).
-  On a card with one free cluster (B2) each failed save after the first
-  held the loop 5,295-5,398 ms (the boot's 5,430 ms): FatFs's search for
-  `stats.tmp`'s clusters reads the whole FAT, and the store checks no
-  free space first. PR #63's hole hint should end that stall with no
-  stats code (shown on main's queue saves on the same card and in the
-  host's model, not on a stats build); whether a save should also check
-  free space first is the owner's call.
+  On a card with one free cluster (B2, d4a5357, before #63) each failed
+  save after the first held the loop 5,295-5,398 ms (the boot's 5,430 ms):
+  FatFs's search for `stats.tmp`'s clusters reads the whole FAT, and the
+  store checks no free space first. With #63's hole hint (3.2.4; in S1
+  since 985f4a9) the same card and stops took 98-191 ms a try (visit B,
+  2026-11-19), and the boot's save, the first allocation after a computer
+  filled the card, 5,523 ms once (#63's uncovered case, main's too); a
+  few free clusters far apart and a free count not known stay uncured, by
+  code. Whether a save also checks free space first is the owner's call.
 - **The heap model** (the plan's 6.7 and 5.14, MODELLED: test_autodj_join,
   the firmware's own glue on a card in memory, every PSRAM block it carves
   through the model heap; nothing resident there since the object is
@@ -8251,7 +8282,8 @@ section 1 and 5.14's "As built" notes list the changes):
   suites, 2,384 cases, all passing at d4a5357 (the room's trigger's gate;
   the move to internal RAM: 2,366; the rework review's fixes: 2,366; R6:
   2,358); at 9a0532c, main's #62 taken in, 2,389 of 2,389 (#62's 5
-  more). Mutation checks of the rework: the reference 15 of 15 caught,
+  more); at 985f4a9, main 987216f taken in, 112 suites, 2,423 of 2,423
+  (main 987216f's CI: 2,325). Mutation checks of the rework: the reference 15 of 15 caught,
   the fold 23 of 23, the store 23 of 24 and the glue 19 of 20 (the two
   missed equivalent).
 - **The device check** is the plan's 9.5 table (runs A-L on the spare card
@@ -8299,12 +8331,30 @@ section 1 and 5.14's "As built" notes list the changes):
   the card's boot walk, carving while a decoder is open). **M-full** on
   a card with one free cluster (B2): 17 failed records' tries, behind
   once the records were full, every slot written, `Hs` refused, and each
-  failed try after the first held the loop about 5.3 s (Costs, above).
+  failed try after the first held the loop about 5.3 s (d4a5357, before
+  #63: Costs, above).
   E ran on S1 as first built in round 2 (2026-11-12) and passed: the
   boot's save, 15,448 B, before `plays.jnl`'s trim, the next boot
-  nothing new; F's first half ran; G never ran. On the rework E's trim
-  and K's rotation saves are owed, and nothing of S1 with main's #62
-  (9a0532c) has run on a device.
+  nothing new; F's first half ran; G never ran. **The head with #62**
+  (6e09a55, 2026-11-18 to 19): E passed on the rework (b3h-e: the boot's
+  save, generation 4, 60,848 B in 240 ms with M-full's 39 slots and B2's
+  4, before both log files were trimmed; HEAD and MARK the expectation's;
+  a 0 B `stats.tmp` B2 had left removed by the read), K passed (b3h-kcap,
+  the log's cap at 8: each rotation's save, 245 and 243 ms, before its
+  delete; the next boot 31 slots more, none lost or twice), and C3h/M3h
+  equalled main 89188f4's five `D` lines to the byte. In G5's
+  play-before-link order main 89188f4 alone read 35,916 B (g5h-main1b);
+  the head never linked. **The merged build** (985f4a9, main 987216f
+  beside it, 2026-11-19): C4/M4, every `D` and the join equal to the
+  byte; G5 linked, silent mode 42,808 B (main 45,140 B), a real stream
+  50,764 B (main 52,872 B); visit A (a long log re-seeded: a track's 4 KB
+  stdio buffer opened inside the ranges' hold, a long log's arena hold
+  with a start waiting, the compaction's boot), `D` equal to main's to
+  the byte, every take Closed; visit B (one free cluster, #63 in), 17
+  failed records' tries at 98-191 ms each, the boot's save 5,523 ms (the
+  first allocation after the computer's fill); visit C (the card freed,
+  fatscan and chkdsk clean), the next boot's fold of B's 43 slots, none
+  lost or twice. 0 underruns and 0 breaks in every run on 985f4a9.
 
 ---
 
