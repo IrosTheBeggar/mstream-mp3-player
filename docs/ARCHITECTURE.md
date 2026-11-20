@@ -4597,8 +4597,12 @@ Queue, Dance and Output (with its Pair and About pages).
   screen was lit: touches on that screen were read about 8 times less
   often, and Auto DJ's join at a start took about 6 s instead of about
   2.5 s. It is drawn once again, and again only when it changes. (The
-  line's figures are from the code, the logs and a host harness; the
-  fixed build hasn't run on the Core2 yet.) With nothing
+  line's figures are 0.14.0's, from the code, the logs of builds before
+  main 4454316 and a host harness; the fixed build hasn't run on the
+  Core2 yet. With #61's listening stats in, a boot's join begins only
+  once their boot scan lets its blocks go (`AutoDj::Env::statsHold`):
+  read the boot's join on the merged build before the line keeps "about
+  2.5 s".) With nothing
   queued the A/B/C clicks are inert, Auto DJ on or not: a short double
   buzz instead of the tap tick (`ButtonPolicy::Transport::idle()`; the input layer plays the
   buttons' feedback once the policy has acted).
