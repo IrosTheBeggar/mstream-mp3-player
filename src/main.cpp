@@ -451,10 +451,23 @@ static bool pauseIfPlaying() {
 
 // The player's hold (PlaybackController::Hold): a play waits while
 // Bluetooth is the output and the headphones aren't connected (PlayGate
-// connects them, and releases or ends the wait).
+// connects them, and releases or ends the wait), and while the listening
+// stats' boot fold holds overflow chunks (docs/LISTENING-STATS.md 5.14: a
+// decoder's blocks carved under them would land where the next library
+// update needs room; a fold past the 40 records, a full log's once a card,
+// about 1.4 s and the boot's save; PlayGate's statsHold releases such a
+// wait). Not a track that follows one playing (a remount's scan again,
+// rare, while a track plays: a gap would be worse): only a start from a
+// pause, a stop or a wait. Nor any start while the fold holds only its
+// ranges' block (no overflow chunk). Those decoders open in the hold, so
+// the hold keeps their room itself (app/ListeningStats' topAlloc(): the
+// caps given back, and the overflow's arena, when the largest free block
+// wouldn't take the Opus's buffers; the ranges' block asks at every take,
+// the arena and its chunks while a track plays).
 struct OutputHold : PlaybackController::Hold {
+  bool headphones() const { return !silent && audio.output() == Output::Bluetooth && !audio.bluetooth().connected(); }
   bool holdPlay() const override {
-    return !silent && audio.output() == Output::Bluetooth && !audio.bluetooth().connected();
+    return headphones() || (playHistory.overflowHeld() && player.state() != PlayState::Playing);
   }
 };
 static OutputHold outputHold;
@@ -2209,6 +2222,7 @@ static SerialConsole console({
       // (Dp's pick can take the listener's undo: the toast's Undo goes.)
       if (autoDj->takeUndoDropped() && userInterface) userInterface->queueUndoDropped();
     },
+    [](const char* a) { playHistory.statsCommand(a); },
     [](char* line, HostLine::Byte kind) { usbViz.onLine(line, kind); },
 });
 
@@ -2497,9 +2511,12 @@ static void handleBluetooth() {
   }
 }
 
-// Play while Bluetooth is the output and the headphones aren't connected:
-// PlayGate's decisions (the player and the session are done in step()), and
-// what is left to do here: the radio and what the UI says.
+// Play while Bluetooth is the output and the headphones aren't connected,
+// and a start the listening stats hold (their boot fold's overflow chunks,
+// OutputHold): PlayGate's decisions (the player and the session are done in
+// step()), and what is left to do here: the radio and what the UI says.
+// Nothing starts by itself at a boot: a start the listener asked, a tap on
+// Play or the headphones' play key, is what the stats hold.
 static void stepPlayGate(uint32_t now) {
   BtSink& bt = audio.bluetooth();
   PlayGate::In in;
@@ -2509,6 +2526,7 @@ static void stepPlayGate(uint32_t now) {
   in.link = bt.link();
   in.sessionFailed = btSession.failed();
   in.nothingToFind = bt.nothingToFind();
+  in.statsHold = playHistory.overflowHeld();
   in.nowMs = now;
   const PlayGate::Do d = playGate.step(in, player, btSession);
   if (d == PlayGate::Do::None) return;
@@ -2548,6 +2566,13 @@ static void stepPlayGate(uint32_t now) {
       // Cancelled (or the speaker, or stopped): a link that comes later
       // answers nothing; the radio carries on as it was.
       Serial.printf("[play] the wait for %s ended (%s)\n", name, stateName());
+      break;
+    case PlayGate::Do::Held:
+      Serial.println("[play] the start waits for the listening stats (their boot fold holds overflow chunks until "
+                     "its save)");
+      break;
+    case PlayGate::Do::Start:
+      Serial.println("[play] the listening stats gave their overflow back: playing");
       break;
     case PlayGate::Do::None:
       break;
@@ -3310,7 +3335,12 @@ static bool decoderRefilling(uint32_t now) {
 // holds blocks at its top (AutoDjJoin's placement: those that fit no
 // smaller free block): the join given back, PSRAM measured again. It joins
 // again after the update's Live, or at once when the update waits for the
-// next boot after all.
+// next boot after all. (The listening stats hold nothing to give back: a
+// fixed resident set in internal RAM; their boot's hold, the scan's blocks
+// at PSRAM's top, ends before an update may begin, and where caps close the
+// free block above them (fix A; its [listen] line says when not), nothing
+// carved meanwhile pins the largest free block split after it,
+// docs/LISTENING-STATS.md 5.14.)
 static size_t autoDjGiveBack(void*, size_t* psramFree, size_t* psramLargest) {
   if (!autoDj) return 0;
   const size_t before = *psramLargest;
@@ -3338,6 +3368,9 @@ static AutoDj::Env autoDjEnv(uint32_t now) {
   e.listMoving = userInterface && userInterface->listMoving();
   e.uiStarted = !userInterface || userInterface->started();
   e.refilling = decoderRefilling(now);
+  // The listening stats' boot scan holds blocks (its ranges', its
+  // overflow's): no join begins around them (docs/LISTENING-STATS.md 5.14).
+  e.statsHold = playHistory.statsScanHolds();
   return e;
 }
 
@@ -3502,6 +3535,7 @@ static void stepPlays(uint32_t now) {
   look.positionMs = audio.positionMs();
   look.positionKnown = audio.positionKnown();
   look.durationMs = audio.durationMs();
+  look.restartAsked = restartPending();
   playlog::WriteGate::In in;
   in.nowMs = now;
   in.playing = look.state == PlayState::Playing;
@@ -3584,6 +3618,12 @@ static void stepCard(uint32_t now, bool input) {
   // A pick owed while Auto DJ's index joins: no fence until it lands
   // (autodj::decide(), this pass's: stepAutoDj() ran before).
   env.autoDjOwed = autoDj && autoDj->owed();
+  // The listening stats' boot scan holds blocks across passes (its ranges'
+  // block, its overflow's chunks until its save lands): no memory check or
+  // fence until it gives them back, so they are never held across a build
+  // (docs/LISTENING-STATS.md 5.14; the scan's first piece waits for an asked
+  // update instead: never both).
+  env.statsWait = playHistory.statsScanHolds();
   cardTasks->loop(in, src, userInterface ? &userInterface->thumbs() : nullptr,
                   userInterface ? &userInterface->waves() : nullptr, userInterface && userInterface->coversAllowed(),
                   env);
@@ -3960,7 +4000,8 @@ void setup() {
   }
   // The play log: NVS's ids, the cut-rename rule, the root's ACKS; the
   // boot's scan and the slots on the loop (Auto DJ's marks name a play's
-  // source).
+  // source); the listening stats' resident set (their glue's object, in
+  // internal RAM's .bss: no PSRAM held) and their read of stats.bin.
   playHistory.begin(autoDj);
   Serial.printf("[lib] library + queue: internal RAM %lu B free before, %lu B after\n",
                 (unsigned long)freeBeforeLibrary, (unsigned long)diag::heap().internalFree);

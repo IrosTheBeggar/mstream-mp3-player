@@ -497,7 +497,7 @@ void Ui::autoDjStart() {
   if (!player_.catalog().title(queue_.currentTrack(), title, sizeof(title))) {
     snprintf(title, sizeof(title), "%s", tr(S::queue_it));
   }
-  if (player_.state() == PlayState::Waiting) {
+  if (state_.headphonesWait(player_.state())) {
     // The headphones aren't connected: it plays once they are (as the
     // Library's Play says it).
     if (state_.btName[0]) {

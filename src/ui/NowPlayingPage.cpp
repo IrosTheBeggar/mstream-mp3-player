@@ -176,9 +176,9 @@ void NowPlayingPage::leave() {
 }
 
 uint16_t NowPlayingPage::navBg() const {
-  // The press look (a Down highlights): not while a play waits (the cover
-  // alone takes the touch then, and isn't lit).
-  return pressed_ == Nav && ui_.state().play != PlayState::Waiting ? col::ROW_SEL : col::BG;
+  // The press look (a Down highlights): not while a play waits for the
+  // headphones (the cover alone takes the touch then, and isn't lit).
+  return pressed_ == Nav && !ui_.state().headphonesWait() ? col::ROW_SEL : col::BG;
 }
 
 void NowPlayingPage::fillNav() {
@@ -269,7 +269,7 @@ void NowPlayingPage::drawTitle(int rows) {
   if (s.current >= 0) ui_.player().catalog().title(s.trackId, title, sizeof(title));
   const uint16_t ink = s.current >= 0 ? col::TXT : col::DIM;
   const int x = kTextX - kColumnX;
-  if (s.play == PlayState::Waiting) {
+  if (s.headphonesWait()) {
     // The wait's status takes the strip's lower lines: the title on one
     // line over "Waiting for SPYDRONE…" (amber) and "try 2 of 3".
     f.draw(c, Font::Bold, title, x, 9, kTextW, ink, ink);
@@ -309,7 +309,7 @@ void NowPlayingPage::repaintHeader() {
   // The states with a layout of their own (nothing loaded, no card, a play
   // that waits): all of it, as before.
   const AppState& s = ui_.state();
-  if (s.current < 0 || drawn_.empty || drawn_.noCard || drawn_.waiting || s.play == PlayState::Waiting) {
+  if (s.current < 0 || drawn_.empty || drawn_.noCard || drawn_.waiting || s.headphonesWait()) {
     repaint();
     return;
   }
@@ -590,7 +590,7 @@ void NowPlayingPage::drawReadout() {
   // Entering the scrub's look (or after the middle was drawn again) while
   // a play waits: the buttons' upper halves (y 94-109) would stick out
   // above the readout, so the artist row goes too.
-  if (!drawn_.scrubUp && ui_.state().play == PlayState::Waiting) {
+  if (!drawn_.scrubUp && ui_.state().headphonesWait()) {
     gfx::fill(kColumnX, kArtistY, kW - kColumnX, kArtistH, col::BG);
   }
   gfx::push(c, 0, kReadoutY, kW, kReadoutH);
@@ -649,15 +649,15 @@ uint32_t NowPlayingPage::waitSig() const {
 void NowPlayingPage::drawMiddle() {
   // (The glance: the rows while a play waits too; its buttons can't be
   // pressed there, and the title strip says it waits.)
-  if (ui_.state().play == PlayState::Waiting && !readOnly_) {
+  if (ui_.state().headphonesWait() && !readOnly_) {
     drawWaiting();
   } else {
     drawArtistAlbum();
   }
 }
 
-// While a play waits: [Play on speaker] and [Cancel] in the artist and
-// album rows (Cancel reaches the screen's edge; the status is the title
+// While a play waits for the headphones: [Play on speaker] and [Cancel] in
+// the artist and album rows (Cancel reaches the screen's edge; the status is the title
 // strip's, drawTitle()).
 void NowPlayingPage::drawWaiting() {
   using namespace uitext;
@@ -926,7 +926,7 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   const uint32_t names = ui_.player().catalog().namesVersion();
   const bool newTrack =
       all || s.trackId != drawn_.track || (s.current < 0) != (drawn_.current < 0) || names != drawn_.names;
-  const bool waiting = s.play == PlayState::Waiting;
+  const bool waiting = s.headphonesWait();  // (the stats' moment: the play button's spinner alone)
   const uint32_t wsig = waiting ? waitSig() : 0;
   if (!waiting && (pressed_ == WaitSpeaker || pressed_ == WaitCancel)) pressed_ = None;
   const bool scrub = bar_.scrubbing();
@@ -1024,7 +1024,7 @@ NowPlayingPage::Zone NowPlayingPage::zoneAt(const InputEvent& e) const {
   if (e.y >= kBarTouchY) return Bar;
   // The cover's column: the navigation menu, waiting or not.
   if (e.x < kColumnX) return Nav;
-  if (ui_.state().play == PlayState::Waiting) {
+  if (ui_.state().headphonesWait()) {
     // The title strip holds the wait's status (inert); the rows under it
     // the buttons, which take y 90-137. Cancel reaches the edge.
     if (e.y < kArtistY) return None;
@@ -1214,7 +1214,7 @@ void NowPlayingPage::seekTo(const SeekBar::Out& o, uint32_t nowMs) {
   }
   const PlayState st = player.state();
   const char* then = r == S::Started              ? "plays from there"
-                     : st == PlayState::Waiting ? "waiting, it starts there when they connect"
+                     : st == PlayState::Waiting ? "waiting, it starts there when the wait ends"
                      : st == PlayState::Stopped ? "stopped, the next play starts there"
                                                 : "paused, the next play starts there";
   Serial.printf("[ui] now playing: seek %s -> %s of %s (%s): %s\n", from, to, of, how, then);
@@ -1247,7 +1247,7 @@ void NowPlayingPage::onEvent(const InputEvent& e) {
   }
   bar_.cancel();  // (a Down: a touch whose end never came is over)
   const Zone z = zoneAt(e);
-  const bool waiting = s.play == PlayState::Waiting;
+  const bool waiting = s.headphonesWait();
   if (e.type == T::Down) {
     pressed_ = z;
     if (z == Bar) {

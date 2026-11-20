@@ -6476,7 +6476,7 @@
  },
  {
   "name": "base-other",
-  "note": "Another file under the base's name: its header whole, its CRC not stats.bin's baseCrc. The base is lost (flags bit 1, the totals kept). Nothing playing, so the save compacts, and the new base, stats-00000001.bin again, replaces that file; nothing is removed.",
+  "note": "Another file under the base's name: its header whole, its CRC not stats.bin's baseCrc. The base is lost (flags bit 1, the totals kept). Boot 1: nothing plays, but the compaction's name would be stats-00000001.bin again, the one stats.bin names, and a cut after its create would leave a base shorter than its header there, unread at every boot (5.3): so no compaction (TRKD keeps the rows), nothing removed. Boot 2, a play later: its stats.bin names no base, so the save compacts, and the new base, stats-00000001.bin, replaces that file; nothing is removed.",
   "device": [
    "00005e005301",
    "0x1122334455667788"
@@ -6505,7 +6505,7 @@
     "saveFails": false,
     "unread": {},
     "out": {
-     "stats-00000001.bin": "base-other/1",
+     "stats-00000001.bin": "base-other/0",
      "stats.bin": "base-other/1"
     },
     "read": "loaded",
@@ -6515,7 +6515,7 @@
     "gap": 0,
     "partial": false,
     "saved": true,
-    "compacted": true,
+    "compacted": false,
     "removed": [],
     "trimmed": [
      "plays.1.jnl",
@@ -6547,9 +6547,9 @@
       "sinceDay": 305,
       "flags": 2,
       "round": 2,
-      "baseGen": 1,
-      "baseRows": 2,
-      "baseCrc": 1049946614,
+      "baseGen": 0,
+      "baseRows": 0,
+      "baseCrc": 0,
       "twice": 0,
       "gap": 0
      },
@@ -6564,8 +6564,8 @@
       "hour": 10,
       "days": 2,
       "rcnt": 5,
-      "trkd": 0,
-      "base": 2
+      "trkd": 2,
+      "base": 0
      }
     },
     "lists": {
@@ -6694,6 +6694,228 @@
       ],
       "listenedMs": 800000,
       "plays": 4,
+      "topDay": 312,
+      "autodj": [
+       0,
+       0
+      ]
+     },
+     "newFinds": 2,
+     "oldFavourites": 0,
+     "notPlayed": 4
+    }
+   },
+   {
+    "in": {
+     "plays.jnl": "base-other/2-in",
+     "stats-00000001.bin": "base-other/0",
+     "stats.bin": "base-other/1"
+    },
+    "added": [
+     "plays.jnl"
+    ],
+    "acks": [
+     [
+      "00005e005301",
+      "0x1122334455667788",
+      10
+     ]
+    ],
+    "now": 1794387600000,
+    "today": 314,
+    "commitTime": null,
+    "playing": false,
+    "safePoint": true,
+    "saveFails": false,
+    "unread": {},
+    "out": {
+     "plays.jnl": "base-other/2-in",
+     "stats-00000001.bin": "base-other/2",
+     "stats.bin": "base-other/2"
+    },
+    "read": "loaded",
+    "why": null,
+    "folded": 1,
+    "twice": 0,
+    "gap": 0,
+    "partial": false,
+    "saved": true,
+    "compacted": true,
+    "removed": [],
+    "trimmed": [],
+    "stats": {
+     "generation": 3,
+     "head": {
+      "plays": 11,
+      "skips": 0,
+      "listenedMs": 2200000,
+      "slots": 11,
+      "you": [
+       11,
+       0,
+       2200000
+      ],
+      "shuffle": [
+       0,
+       0,
+       0
+      ],
+      "autodj": [
+       0,
+       0,
+       0
+      ],
+      "undated": 0,
+      "sinceDay": 305,
+      "flags": 2,
+      "round": 3,
+      "baseGen": 1,
+      "baseRows": 2,
+      "baseCrc": 2256403144,
+      "twice": 0,
+      "gap": 0
+     },
+     "mark": [
+      [
+       "00005e005301",
+       "0x1122334455667788",
+       11
+      ]
+     ],
+     "rows": {
+      "hour": 11,
+      "days": 3,
+      "rcnt": 6,
+      "trkd": 0,
+      "base": 2
+     }
+    },
+    "lists": {
+     "newFinds": [
+      [
+       "0xe604b5c8d82005d1",
+       3,
+       26985601,
+       0
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       2,
+       26982001,
+       0
+      ]
+     ],
+     "oldFavourites": [],
+     "recentlyPlayed": [
+      [
+       "0xe604b5c8d82005d1",
+       3,
+       27115201,
+       3
+      ],
+      [
+       "0x9adbc88aa24ceb75",
+       2,
+       26989201,
+       2
+      ]
+     ],
+     "notPlayed": [
+      "Glass Harbour",
+      "Night Ticket",
+      "Quiet Engine",
+      "Tidewater Rooms"
+     ],
+     "mostPlayed": {
+      "7": [
+       [
+        "0xe604b5c8d82005d1",
+        3
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        2
+       ]
+      ],
+      "30": [
+       [
+        "0x9adbc88aa24ceb75",
+        4
+       ],
+       [
+        "0xe604b5c8d82005d1",
+        3
+       ],
+       [
+        "0x46fda6d44e64f3d8",
+        2
+       ],
+       [
+        "0x832a7da9ed0311e6",
+        2
+       ]
+      ],
+      "all": [
+       [
+        "0xe604b5c8d82005d1",
+        3
+       ],
+       [
+        "0x9adbc88aa24ceb75",
+        2
+       ]
+      ]
+     }
+    },
+    "view": {
+     "listenedMs": 2200000,
+     "plays": 11,
+     "sinceDay": 305,
+     "countingDays": 10,
+     "windows": [
+      7,
+      null
+     ],
+     "week": {
+      "days": [
+       [
+        308,
+        0,
+        0
+       ],
+       [
+        309,
+        0,
+        0
+       ],
+       [
+        310,
+        0,
+        0
+       ],
+       [
+        311,
+        0,
+        0
+       ],
+       [
+        312,
+        800000,
+        4
+       ],
+       [
+        313,
+        200000,
+        1
+       ],
+       [
+        314,
+        0,
+        0
+       ]
+      ],
+      "listenedMs": 1000000,
+      "plays": 5,
       "topDay": 312,
       "autodj": [
        0,

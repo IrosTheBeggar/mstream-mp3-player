@@ -422,6 +422,77 @@ class CardTests(unittest.TestCase):
         self.assertEqual((res["check"]["autoDj"]["mapped"], res["check"]["waves"]["hits"]),
                          (len(self.tracks), len(self.tracks)))
 
+    def test_acks(self):
+        # --acks: the root's ACKS (2.5.6), in its order, read back by the
+        # Python mirror and by the firmware's own reader (cardroot::read, the
+        # play log's ACKS); the companions and the commit order unchanged.
+        acks = st.parse_acks("00005e005302:2233445566778899:7,00:00:5e:00:53:01:0x1122334455667788:45")
+        res, ops, said = self.add(acks=acks)
+        self.assertTrue(res["written"])
+        self.assertEqual(ops, [("write", "tags-00000001.bin"), ("write", "autodj-00000001.bin"),
+                               ("write", "manifest.tmp"), ("rename", "manifest.tmp", "manifest.bin")])
+        ms = os.path.join(self.card, st.MSTREAM)
+        root = Path(ms, "manifest.bin").read_bytes()
+        why, r = st.check_root(root)
+        self.assertEqual(why, "ok")
+        want = [("00005e005301", 0x1122334455667788, 45), ("00005e005302", 0x2233445566778899, 7)]
+        self.assertEqual(r["acks"], want, "2.5.6's order: by deviceId, then epoch")
+        p = cf.parse_container(root)
+        sec = [s for s in p["sections"] if s[0] == "ACKS"]
+        self.assertEqual(len(sec), 1)
+        self.assertIn("ACKS: 2 entries, 00005e005301:1122334455667788:45,00005e005302:2233445566778899:7", said)
+        self.assertEqual(res["acks"], acks)
+        self.assertEqual(res["check"]["root"]["acks"], want)
+        # Without --acks: no ACKS, and the root's bytes as before --acks was.
+        tags = Path(ms, "tags-00000001.bin").read_bytes()
+        dj = Path(ms, "autodj-00000001.bin").read_bytes()
+        plain = st.root_file(1, res["cardId"], 0, TIME, tags, dj)
+        self.assertIsNone(st.check_root(plain)[1]["acks"])
+        self.assertNotIn("ACKS", [s[0] for s in cf.parse_container(plain)["sections"]])
+        self.assertEqual(st.root_file(1, res["cardId"], 0, TIME, tags, dj, None, None), plain)
+        # The firmware's reader takes the same rows (and the commitTime).
+        exe, how = build_probe()
+        if exe is not None:
+            got = run_probe(exe, self.card, self.tracks)
+            self.assertTrue(got["present"], got)
+            self.assertEqual(got["commitTime"], TIME)
+            self.assertTrue(got["acks"]["present"], got["acks"])
+            self.assertEqual(got["acks"]["why"], "ok")
+            self.assertEqual([(d, int(e, 16), s) for d, e, s in got["acks"]["rows"]], want)
+        # The refusals are any commit's: a /.mstream that isn't empty needs
+        # --replace (then the next generation carries them), one another
+        # program wrote --replace-foreign too.
+        with self.assertRaises(st.Refused):
+            self.add(acks=acks)
+        res2, _, _ = self.add(replace=True, acks=acks[:1])
+        self.assertEqual(res2["generation"], 2)
+        self.assertEqual(st.check_card(self.card)["root"]["acks"], [("00005e005302", 0x2233445566778899, 7)])
+        shutil.rmtree(ms)
+        with mock.patch.object(st, "PRODUCER", "mstream transfer 9"):
+            self.add(seed=3)
+        before = {n: Path(ms, n).read_bytes() for n in self.mstream()}
+        with self.assertRaises(st.Refused) as e:
+            self.add(replace=True, acks=acks)
+        self.assertIn("another program's files", str(e.exception))
+        self.assertEqual({n: Path(ms, n).read_bytes() for n in self.mstream()}, before, "nothing changed")
+        # The command line: --acks parsed (refused when it isn't one), with
+        # --add-to only.
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(st.main(["--add-to", self.card, "--synthetic", "--replace", "--replace-foreign",
+                                      "--acks", "00005e005301:0:1", "--time", str(TIME)]), 2)
+            with self.assertRaises(SystemExit):
+                st.main(["--check", self.card, "--acks", "00005e005301:1:1"])
+            self.assertEqual(st.main(["--add-to", self.card, "--synthetic", "--replace", "--replace-foreign",
+                                      "--acks", "00005e005301:1122334455667788:45", "--dry-run",
+                                      "--time", str(TIME)]), 0)
+        self.assertIn("ACKS: 1 entry, 00005e005301:1122334455667788:45", out.getvalue())
+        self.assertEqual({n: Path(ms, n).read_bytes() for n in self.mstream()}, before, "nothing changed")
+        for bad in ("x", "000000000000:1:1", "00005e005301:1:0", "00005e005301:1:4294967296",
+                    "00005e005301:1:1,00005e005301:1:2", "00005e00530:1:1", ","):
+            with self.assertRaises(st.Refused, msg=bad):
+                st.parse_acks(bad)
+
     def test_firmware_readers(self):
         exe, how = build_probe()
         if exe is None:
@@ -1733,6 +1804,15 @@ int main(int argc, char** argv) {
               ",\"roots\":%" PRIu32,
               root.present ? "true" : "false", cc::whyName(root.why), root.identity.generation, root.identity.cardId,
               root.identity.commitId, root.tagsRecords, root.tagsPath, root.plan ? "true" : "false", root.rootCount);
+  // The root's commitTime and ACKS (the play log's trim; --acks).
+  std::printf(",\"commitTime\":%" PRIu32 ",\"acks\":{\"present\":%s,\"why\":\"%s\",\"rows\":[", root.commitTime,
+              root.acks.present ? "true" : "false", cc::whyName(root.acksWhy));
+  for (uint32_t i = 0; i < root.acks.count; ++i) {
+    const cc::msmf::Ack& e = root.acks.entries[i];
+    std::printf("%s[\"%02x%02x%02x%02x%02x%02x\",\"%016" PRIx64 "\",%" PRIu32 "]", i ? "," : "", e.deviceId[0],
+                e.deviceId[1], e.deviceId[2], e.deviceId[3], e.deviceId[4], e.deviceId[5], e.epoch, e.seq);
+  }
+  std::printf("]}");
   std::printf(",\"autoDj\":{\"present\":%s", root.autoDj.present ? "true" : "false");
   if (root.autoDj.present) {
     std::printf(",\"path\":\"%s\"", root.autoDj.path);

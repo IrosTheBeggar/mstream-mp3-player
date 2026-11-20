@@ -666,6 +666,14 @@ LibraryUpdate::Out LibraryUpdate::update(const In& in) {
         o.wait = Wait::AutoDj;
         break;
       }
+      // The listening stats' boot scan's blocks (its ranges', its overflow's
+      // until its save lands) given back first: never held behind the memory
+      // check, across the fence or during the build (docs/LISTENING-STATS.md
+      // 5.14).
+      if (in.statsWait) {
+        o.wait = Wait::Stats;
+        break;
+      }
       // The worker's task, made now if it ended (3 s after its last step):
       // no internal RAM for its stack, and the step waits here, the index
       // as it is, never behind a fence whose build can't start.

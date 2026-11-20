@@ -102,6 +102,10 @@ public:
     bool listMoving = false;     // Ui::listMoving()
     bool uiStarted = true;       // the UI's first frame is up (or there is no UI)
     bool refilling = false;      // the decoder fills the ring from empty (autodj::Env::refilling)
+    // The listening stats' boot scan holds blocks across passes
+    // (PlayHistory::statsScanHolds(): its ranges', its overflow's): no join
+    // begins around them (docs/LISTENING-STATS.md 5.14, 6.8's Block reason).
+    bool statsHold = false;
   };
 
   AutoDj(Library& library, PlaybackController& player);
@@ -189,7 +193,8 @@ private:
   // (retryAtMs_); the next library build (no memory, a library too big);
   // kJoinTries joins in a row a read of the card failed, or the button's look-ups
   // twice: a library build, a remount, Dc or switching on; the update step it was given back to
-  // (giveBack()), until its Live or its end.
+  // (giveBack()), until its Live or its end. (Beside them, read each pass, not
+  // kept: the listening stats' boot scan holding blocks, Env::statsHold.)
   enum class Block : uint8_t { None, Retry, Build, Reads, Update };
   enum class Job : uint8_t { None, DryRun, Bench };
 

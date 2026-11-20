@@ -452,9 +452,9 @@ void TagConsole::scanLine() {
     return;
   }
   librarytext::Status s;
-  // The worker's part whole (208 B at most: five 5-digit counts, the
-  // longest wait's name, the update step's clause with the safe point's
-  // length; 96 B cut that clause off). No card read under it.
+  // The worker's part whole (212 B at most: five 5-digit counts, the
+  // longest wait's name, the update step's clause waiting for the play log;
+  // 96 B cut that clause off). No card read under it.
   char line[224] = "", text[96] = "";
   jobs_.state(&s, line, sizeof(line));
   librarytext::statusText(s, text, sizeof(text));

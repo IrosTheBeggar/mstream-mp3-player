@@ -331,7 +331,10 @@ So part b runs two more sequences, each from a fresh boot at 240 MHz, and
 records each figure with its mode. The floors stay as the table has them:
 changing them is the owner's call, and so is whether these
 play-before-link figures count against the session floor; until then they
-are recorded beside it.
+are recorded beside it. (Settled 2026-11-19, with the listening stats' S1:
+in the play-before-link order the session floor is read on the real
+stream's figure, and silent mode's is recorded beside it;
+docs/LISTENING-STATS.md, section 1.)
 
 1. **Play before the link, silent.** The headphones off (or in their
    case) at the boot; `z`; an MP3 album played from the Library tab or

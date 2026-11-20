@@ -155,6 +155,40 @@ void test_a_whole_card_reads_whole_and_says_no_fault() {
   TEST_ASSERT_FALSE(r->readFailed());
 }
 
+// The root's commitTime is kept (the listening stats' sinceDay falls back on
+// its day: docs/LISTENING-STATS.md 4.1), with or without its T; none without a
+// root, and none once a read again finds none.
+void test_the_root_keeps_its_commit_time() {
+  CutFs fs;
+  fill(fs);
+  std::vector<uint8_t> scratch(1024);
+  std::unique_ptr<Root> r(new Root());
+  const auto again = [&]() { cardroot::read(fs, scratch.data(), static_cast<uint32_t>(scratch.size()), r.get()); };
+  again();
+  TEST_ASSERT_TRUE(r->present);
+  TEST_ASSERT_EQUAL_UINT32(1791400000u, r->commitTime);  // (the golden root's: card_fixtures.py)
+  fs.remove(kTags);
+  again();
+  TEST_ASSERT_TRUE(r->hasRoot);
+  TEST_ASSERT_FALSE(r->present);
+  TEST_ASSERT_EQUAL_UINT32(1791400000u, r->commitTime);
+  // A root the card fails to read: nothing kept of it.
+  arm(fs, "/.mstream/", 0, -1);
+  again();
+  TEST_ASSERT_TRUE(r->readFailed());
+  TEST_ASSERT_EQUAL_UINT32(0, r->commitTime);
+  fs.faultFrom = -1;
+  fs.remove(kBin);
+  again();
+  TEST_ASSERT_FALSE(r->hasRoot);
+  TEST_ASSERT_EQUAL_UINT32(0, r->commitTime);
+  // A root whose commitTime is 0 (longRoot()'s: never set) reads as 0.
+  fill(fs, longRoot());
+  again();
+  TEST_ASSERT_TRUE(r->present);
+  TEST_ASSERT_EQUAL_UINT32(0, r->commitTime);
+}
+
 void test_no_root_is_missing_and_no_fault() {
   CutFs fs;
   auto r = readRoot(fs);
@@ -1623,6 +1657,7 @@ void test_on_fatfs_a_question_with_no_answer_doesnt_lose_the_read() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_whole_card_reads_whole_and_says_no_fault);
+  RUN_TEST(test_the_root_keeps_its_commit_time);
   RUN_TEST(test_no_root_is_missing_and_no_fault);
   RUN_TEST(test_each_read_failed_in_its_turn_is_the_cards_fault);
   RUN_TEST(test_a_card_that_fails_every_read_or_is_gone_is_unread);

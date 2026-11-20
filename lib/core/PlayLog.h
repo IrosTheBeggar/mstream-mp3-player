@@ -42,7 +42,11 @@
 //   - WriteGate: when the loop may write a slot (or read the boot's scan):
 //     never in the gapless window (the decoder reading the next track
 //     ahead, until the join has settled), a start's refill, a seek, or a
-//     ring under half; nor while a list moves (the loop draws its frames).
+//     ring under half; nor while a list moves (the loop draws its frames);
+//   - Folds: the listening stats' hooks (docs/LISTENING-STATS.md 5.5,
+//     5.6): the boot's scan's slots, its save before the trim, a
+//     rotation's save before plays.1.jnl leaves the log's names. None
+//     (Journal::Config::folds null): the journal as it always was.
 namespace playlog {
 
 // ---------------------------------------------------------------------------
@@ -110,6 +114,49 @@ constexpr tagstore::Names kTwinNames{kPrevPath, kLogPath, "/.player/plays"};
 bool logName(int i, char* out, size_t cap);
 
 // ---------------------------------------------------------------------------
+// The listening stats' hooks (docs/LISTENING-STATS.md 5.5, 5.6): what the
+// journal tells them of the boot's scan, and when it asks them to save.
+// app/ListeningStats is the firmware's. A file the stats haven't saved is
+// never trimmed, and one a rotation is about to take out of the log's
+// names is saved first: the stats count each slot once, from a log the
+// trims and the rotations delete.
+// ---------------------------------------------------------------------------
+class Folds {
+public:
+  enum class Why : uint8_t {
+    Boot,      // the boot's scan done: before its trim (and when NVS refused the boot count: no trim)
+    Rotation,  // plays.1.jnl about to leave the log's names (deleted, or renamed to a twin)
+  };
+  // The boot's scan begins: at the mount (`again` false), or again after a
+  // remount (true: what was folded since the last scanBegan() is to be
+  // dropped and stats.bin read again, or each slot read before the
+  // remount would count twice).
+  virtual void scanBegan(bool again) = 0;
+  // Each slot of the boot's scan that decode() says Ok, a play or a drop
+  // note, in the scan's order; `file` is its log file (logName()'s i: 0
+  // plays.jnl, 1 plays.1.jnl, then plays.2-9.jnl).
+  virtual void slot(const Slot& s, int file) = 0;
+  // The scan couldn't read a log file whole: an open the card failed, or a
+  // read that failed (from there the file is read no further). Once for
+  // each such file. The journal asks for no save after it in this
+  // session: MARK raised past slots never read would lose them for good.
+  virtual void partial() = 0;
+  // A play slot at or under the card's MARK for its (deviceId, epoch): the
+  // MARK of the stats.bin on the card (read at the boot, or the last
+  // save's), never one only in RAM. The trim and the rotation ask it.
+  virtual bool covered(const Slot& s) = 0;
+  // The highest seq the stats hold for (deviceId, epoch): MARK's (0: none,
+  // or the stats off). The boot's seq rule takes it (2.20.4).
+  virtual uint32_t markOf(const uint8_t deviceId[6], uint64_t epoch) = 0;
+  // Save now. True: the card's stats.bin holds every slot folded (written,
+  // or nothing new to write). False: skipped or failed.
+  virtual bool save(Why why) = 0;
+
+protected:
+  ~Folds() = default;
+};
+
+// ---------------------------------------------------------------------------
 // The device's files.
 // ---------------------------------------------------------------------------
 class Journal {
@@ -156,6 +203,15 @@ public:
     void* randomCtx = nullptr;
     OnOp onOp = nullptr;
     void* opCtx = nullptr;
+    // The listening stats (null: none, and the journal as without them).
+    // With them the boot's scan reads on a new epoch with no ACKS (another
+    // epoch's slots and other players' are folded), each file opened with
+    // openRead() (an open the card failed is partial(), not a missing
+    // file); the boot's save comes before the trim, which then takes only
+    // what the card's MARK covers when it fails (or after a partial scan:
+    // no save); a rotation saves first when plays.1.jnl holds a play the
+    // card's MARK doesn't cover, or (the scan whole) can't be read whole.
+    Folds* folds = nullptr;
   };
 
   Journal(tagstore::Fs& fs, Nvs& nvs, const Config& c) : fs_(fs), nvs_(nvs), c_(c) {}
@@ -170,11 +226,15 @@ public:
   bool begin(const uint8_t deviceId[6], const cardcontract::msmf::Acks& acks);
   // The boot's scan, at most `maxSlots` slots of it (whole files' opens
   // aside): every valid slot of the log's files, for the boot rules (the
-  // highest seq and bootSeq of this device and epoch) and the trim; none
-  // read when the epoch is this boot's and the root has no ACKS. At its
-  // end the boot count is stored (before any slot uses it), the trim done
-  // (2.20.2, only with ACKS: every file they acknowledge whole, that no
-  // twin shares), and the log ready. True: ready (or off).
+  // highest seq and bootSeq of this device and epoch; the seq no lower
+  // than ACKS's for them, nor the folds' MARK: reservations, 2.20.4), the
+  // trim and the folds; none read when the epoch is this boot's, the root
+  // has no ACKS and there are no folds. At its end the boot count is
+  // stored (before any slot uses it), the folds saved (Folds::Why::Boot,
+  // not after a partial scan), the trim done (2.20.2, only with ACKS:
+  // every file they acknowledge whole, that no twin shares, and with
+  // folds that the card's MARK covers: all after a save, else those it
+  // covered at the boot), and the log ready. True: ready (or off).
   bool scan(uint32_t maxSlots);
   bool ready() const { return state_ == State::Ready; }
   bool off() const { return state_ == State::Off; }
@@ -193,7 +253,8 @@ public:
   // start, since what it read before the card went may be partial (a file
   // open across the remount reads nothing more, a read or an open the card
   // refused while it was out). Its boot rules come out the same or higher
-  // (the boot count from NVS's at the mount), its trim by the same ACKS.
+  // (the boot count from NVS's at the mount), its trim by the same ACKS;
+  // the folds told (Folds::scanBegan(true)) and saved again at its end.
   void remounted();
 
   enum class Wrote : uint8_t {
@@ -211,8 +272,10 @@ public:
   // (a cut append) is written over: the slot goes at the slot boundary.
   // When the next slot would pass the cap, the rotation: plays.1.jnl
   // deleted (counting what in it no ACKS acknowledges), or renamed to a
-  // twin when one shares its chain; plays.jnl renamed plays.1.jnl; a new
-  // plays.jnl with the drop note first when the count isn't 0.
+  // twin when one shares its chain, the folds saved first when it holds a
+  // play the card's MARK doesn't cover (Folds::Why::Rotation; the rotation
+  // goes on whatever the save comes to); plays.jnl renamed plays.1.jnl; a
+  // new plays.jnl with the drop note first when the count isn't 0.
   Wrote append(Slot& play);
   // The last append() again, after the card failed it (Failed): the same
   // slot, byte for byte as append() made it (its seq; its startedAt as the
@@ -250,6 +313,7 @@ public:
     uint32_t trimmed = 0;     // files ACKS let go
     uint32_t twins = 0;       // twins left (the card wants a disk check)
     uint32_t restarts = 0;    // scans begun again (remounted())
+    uint32_t partial = 0;     // log files not read whole: an open or a read the card failed (Folds::partial())
   };
   const Booted& booted() const { return booted_; }
   // The last rotation's drop note's count (0: it had none to write), the
@@ -278,10 +342,13 @@ private:
   // card refuses the rename, false when it failed a question.
   bool toTwin(Asking& a, const char* path);
   void collectTwins(Asking& a);
-  // The boot's scan from its start (the cut-rename rule done first).
-  void startScan();
-  // The scan's end: the boot rules, the trim.
+  // The boot's scan from its start (the cut-rename rule done first); again:
+  // after a remount (Folds::scanBegan()'s).
+  void startScan(bool again);
+  // The scan's end: the boot rules, the folds' save, the trim.
   bool finishScan();
+  // A log file the scan couldn't read whole (Folds::partial()).
+  void partialFile();
   void closeScan() {
     if (scanF_) fs_.close(scanF_);
     scanF_ = nullptr;
@@ -292,12 +359,15 @@ private:
     bool past = false;    // longer than a reader reads (2.20.6, item 1)
     bool unjudged = false;  // a newer major's slot, or a valid one of an unknown kind
     bool anyPlay = false, allAcked = true, lastIsPlay = false;
+    bool allFolded = true;  // every play at or under the card's MARK (Folds::covered(); no folds: true)
   };
   // What a rotation's step 1 counts in plays.1.jnl (2.20.2): its valid
   // play slots ACKS doesn't acknowledge, and the `dropped` of each drop
   // note no acknowledged play follows. Saturating. False: unreadable (an
   // open or a read the card failed: *lost is what it counted before that).
-  bool unread(uint32_t* lost);
+  // *uncovered: with folds, a play slot it read that the card's MARK
+  // doesn't cover (Folds::covered()).
+  bool unread(uint32_t* lost, bool* uncovered);
   // The slot in last_ to the card (append()'s and again()'s), and its op.
   Wrote put(bool again);
   Wrote place(bool again);
@@ -329,6 +399,7 @@ private:
   tagstore::File* scanF_ = nullptr;  // scanFile_'s, open between pieces
   FileScan file_;
   uint32_t trimmable_ = 0;  // bit i: log file i may go
+  uint32_t foldedBefore_ = 0;  // bit i: log file i's plays all at or under the card's MARK at the boot
   Booted booted_;
   uint32_t lastDropped_ = 0;
   uint8_t last_[kSlot] = {};  // the last append()'s slot, as encoded
@@ -484,6 +555,16 @@ public:
     // What a try came to, the play still at the head (the firmware's log
     // line).
     virtual void tried(const Tried& t, const Played& p) = 0;
+    // A play's slot appended and synced (Did::Written only), after tried()
+    // and before the Tracker lets the play go (`p` still the ring's
+    // oldest): `s` as the card has it (Tried::slot: the journal's seq,
+    // epoch, deviceId and bootSeq; a retry's, the first try's). The
+    // listening stats' live fold (docs/LISTENING-STATS.md 5.6). Nothing by
+    // default.
+    virtual void written(const Slot& s, const Played& p) {
+      (void)s;
+      (void)p;
+    }
 
   protected:
     ~Env() = default;

@@ -108,6 +108,10 @@ void PlayHistory::begin(AutoDj* autoDj) {
   c.random = randomEpoch;
   c.onOp = onOp;
   c.opCtx = this;
+  // The listening stats: stats.bin read (HEAD and MARK into the glue's
+  // object: the resident set, in internal RAM) before the journal's begin(),
+  // whose scan folds into them (docs/LISTENING-STATS.md 5.4, 5.14).
+  c.folds = buf_ && tracker_ ? stats_.begin(*library_.fatfs(), *library_.root()) : nullptr;
   journal_ = buf_ ? psramNew<Journal>(*library_.fatfs(), prefsNvs, c) : nullptr;
   outbox_ = tracker_ && journal_ ? psramNew<Outbox>(*tracker_, *journal_, static_cast<Outbox::Env&>(*this)) : nullptr;
   if (!tracker_ || !journal_ || !outbox_) {
@@ -180,15 +184,41 @@ uint64_t PlayHistory::startedAt(uint64_t startMono, uint8_t* clock) {
 
 void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, bool cardHeld) {
   if (!active_) return;
+  stats_.owedLine();  // (a rotation's save's line: out of its save's frames)
   tracker_->tick(look.state, look.positionMs, look.positionKnown, look.positionKnown ? look.durationMs : 0);
+  // The stats' look at this pass: the update step's safe point (a boot's
+  // save compacts only at one), Auto DJ's join and an asked library update
+  // (the boot's scan waits for them: mayScan()).
+  ListeningStats::Pass sp;
+  sp.playing = look.state == PlayState::Playing;
+  sp.waiting = look.state == PlayState::Waiting || look.restartAsked;
+  sp.trackLeftMs = gate.trackLeftMs;
+  sp.seeks = player_.seeks();
+  sp.joinWorking = autoDj_ && autoDj_->joinWorking();
+  sp.updating = library_.update() && library_.update()->asked();
+  stats_.pass(sp, gate.nowMs);
   const playlog::WriteGate::Wait w = gate_.update(gate);  // (every pass: it follows the starts)
   if (cardHeld || w != playlog::WriteGate::Wait::None) return;
   // (Nothing is asked of a card that is away: the scan and the plays wait
-  // for the remount, remounted(), or the end's flush().)
-  if (!journal_->ready()) {
-    if (journal_->off() || cardAway()) return;
+  // for the remount, remounted(), or the end's flush(). A journal Off, NVS
+  // refusing the boot count, writes no slot: Hs still runs below.)
+  if (!journal_->ready() && !journal_->off()) {
+    if (cardAway()) {
+      // The scan stops here until a remount (writes off: until a restart),
+      // so the listening stats' fold ends now as a partial scan's: its
+      // blocks given back, nothing left waiting on them (a track's start, a
+      // library update, Auto DJ's join).
+      stats_.scanAway();
+      return;
+    }
+    // The fold's room for this piece first; none while Auto DJ's join is
+    // Working: the scan waits that pass.
+    if (!stats_.mayScan()) return;
     ++scanPasses_;
-    if (!journal_->scan(kScanSlotsPerPass)) return;
+    const int64_t t0 = esp_timer_get_time();
+    const bool done = journal_->scan(kScanSlotsPerPass);
+    scanUs_ += esp_timer_get_time() - t0;
+    if (!done) return;
   }
   if (!booted_) {
     booted_ = true;
@@ -207,14 +237,44 @@ void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, boo
                   : journal_->unsettled() ? "; plays.jnl shares plays.1.jnl's chain and the card refused its rename: "
                                             "tried again at each play"
                                           : "");
+    stats_.ready(scanPasses_, scanUs_);
     return;
   }
-  // One slot a pass. A play the card failed waits its 5 s (or the remount)
-  // at the head, and nothing behind it goes before it.
-  if (tracker_->pending() && !cardAway() && outbox_->due()) {
-    tryT0_ = esp_timer_get_time();
-    outbox_->writeOne();
+  // One thing of the card's a pass (statsglue::turnOf()). A listening stats
+  // save due first (the boot overflow's next try; the records' save, 24
+  // records, not behind a library update's fence until 40: 5.14), before
+  // the pass's slot, so it holds exactly the records taken by then. One
+  // slot a pass: a play the card failed waits its 5 s (or the remount) at
+  // the head, and nothing behind it goes before it. Hs (the console's
+  // listening stats save), as the real saves are, only at a pass with no
+  // slot due: the plays the gate held back are written first, each folded
+  // live (written()), so its save holds them (S1's device round 1: Hs at
+  // the pass the gate opened saved "nothing new" with 4 plays waiting).
+  // The console's looks that read the card (H's card part, Hd, Ht) in the
+  // same turn, after Hs, one a pass, and never behind the fence: their
+  // PSRAM is carved only where the saves' is (the internal-RAM review).
+  const bool fenced = library_.update() && library_.update()->fenced();
+  const bool looks = stats_.lookWaiting() && !fenced;
+  switch (statsglue::turnOf(stats_.saveDue(fenced), slotsDue(), stats_.hsWaiting() || looks)) {
+    case statsglue::Turn::Save: stats_.runSave(fenced); break;
+    case statsglue::Turn::Slot:
+      tryT0_ = esp_timer_get_time();
+      outbox_->writeOne();
+      break;
+    case statsglue::Turn::Hs:
+      if (stats_.hsWaiting()) {
+        stats_.runHs(fenced);
+      } else {
+        stats_.runLook();
+      }
+      break;
+    case statsglue::Turn::Nothing: break;
   }
+}
+
+uint32_t PlayHistory::slotsDue() {
+  if (!active_ || !journal_->ready() || !tracker_->pending() || cardAway() || !outbox_->due()) return 0;
+  return tracker_->pending();
 }
 
 // What a try came to (the Outbox's word, the play still first in line).
@@ -273,11 +333,21 @@ void PlayHistory::tried(const Outbox::Tried& t, const playlog::Played& p) {
   tryT0_ = esp_timer_get_time();  // (a flush's next try: its own time)
 }
 
+void PlayHistory::written(const playlog::Slot& s, const playlog::Played& p) {
+  (void)p;
+  stats_.written(s);
+}
+
 void PlayHistory::flush(const char* why) {
   if (!active_) return;
   player_.endPlay();  // (the open play, stopped)
   const uint32_t waiting = tracker_->pending();
   if (!waiting) return;
+  // The listening stats from here: no read at a remount (the folds dropped),
+  // no boot's or records' save (an overflow waiting for its save's next try:
+  // behind); a rotation's only with 1 s of the budget left, once the flush
+  // starts (5.4, 5.5, 5.14).
+  stats_.ending(0);
   // A card that takes no write, FatFs refusing them all (another card in the
   // slot, writes off), or none in the slot: nothing written. The mount's
   // card out as far as the last mount knew is asked once first (FatFs's
@@ -304,8 +374,10 @@ void PlayHistory::flush(const char* why) {
   // the end doesn't wait on a card gone bad.
   const int64_t t0 = esp_timer_get_time();
   tryT0_ = t0;
+  stats_.ending(monoMs() + kFlushBudgetMs);  // (the Outbox's own deadline: its monoMs() is this)
   const Outbox::Flushed f = outbox_->flush(kFlushBudgetMs, kScanSlotsPerPass);
   const float ms = static_cast<float>(esp_timer_get_time() - t0) / 1000.0f;
+  stats_.owedLine();  // (a rotation's in the flush: its line now, before the end's)
   char left[160] = "";
   if (f.left) {
     snprintf(left, sizeof(left), "; %lu NOT written: %s", static_cast<unsigned long>(f.left),

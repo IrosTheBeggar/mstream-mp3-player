@@ -63,6 +63,10 @@
 //        join again, Dc the file reopened, Db<n> slot reads timed, Dh/Dh<id>
 //        and De "Auto DJ from here" and the Auto DJ button, Dx stop Dn/Db
 //        (Dn and Db run one step a loop pass: the loop never freezes)
+//   H... the listening stats (app/ListeningStats, docs/LISTENING-STATS.md 9.3):
+//        H the state, Hd the last 7 UTC days, Hm MARK beside ACKS and the log,
+//        Ht<16 hex> a track's row by path hash (base and delta), Hs a save now
+//        (at the next pass the write gate lets through)
 // '@' lines are a computer's, not commands (docs/USB-VISUALIZER.md: the USB
 // visualizer's protocol; HostLine): every byte from an '@' to the end of
 // its line goes to hostLine, never to the keys above, and is never echoed.
@@ -151,6 +155,8 @@ public:
     std::function<void(const char*)> opus;
     // Auto DJ (D): the argument as typed (may be "").
     std::function<void(const char*)> autoDj;
+    // The listening stats (H): the argument as typed (may be "").
+    std::function<void(const char*)> listen;
     // A computer's '@' line: complete (HostLine::Byte::Line: `line` is its
     // text from the '@', writable) or not one (Bad, Long, Restart: `line`
     // nullptr).
@@ -180,7 +186,7 @@ private:
   enum class Pending {
     None, PlayIndex, Bench, HeadphonesName, Headroom, TempoPrior, DanceOffset, Freeze,
     InputLab, ScrollLab, LibraryIndex, FontProbe, ThumbProbe, Queue, Touch, Power, Sleep, Idle, BluetoothTest,
-    Rate, Gapless, Opus, AutoDj,
+    Rate, Gapless, Opus, AutoDj, Listen,
   };
 
   Actions actions_;

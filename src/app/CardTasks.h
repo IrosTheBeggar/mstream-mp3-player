@@ -96,6 +96,7 @@ public:
     uint32_t seekSeq = 0;      // PlaybackController::seeks()
     size_t alsoFreed = 0;      // what the step frees besides the index: the queue's, Thumbs' pools
     bool autoDjOwed = false;   // Auto DJ owes a pick while its index joins (autodj::decide()): no fence yet
+    bool statsWait = false;    // the listening stats' boot scan holds blocks (PlayHistory::statsScanHolds())
   };
 
   CardTasks(Library& library, CardWorker& worker);
