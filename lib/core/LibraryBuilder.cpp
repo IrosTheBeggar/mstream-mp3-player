@@ -290,12 +290,12 @@ LibraryBuilder::Outcome LibraryBuilder::attempt(LibraryIndex& index, const Confi
     return a != LibraryIndex::Add::NoMemory;
   };
   auto seen = [](const mptg::Walker& wk) {
-    Seen s;
-    s.present = true;
-    s.size = wk.record().size;
-    s.fatTime = wk.record().fatTime;
-    s.flags = wk.record().flags;
-    return s;
+    Seen got;
+    got.present = true;
+    got.size = wk.record().size;
+    got.fatTime = wk.record().fatTime;
+    got.flags = wk.record().flags;
+    return got;
   };
   auto rowOf = [&](const mptg::Walker& wk) {
     if (c.rows) return c.rows->row(wk.recordIndex());

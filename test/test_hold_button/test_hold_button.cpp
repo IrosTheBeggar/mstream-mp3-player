@@ -1181,10 +1181,10 @@ struct Asker {
       if (e.type == T::Release && holdUnused) {
         holdUnused = false;
         if (std::abs(e.x - holdAt.x) <= 24 && std::abs(e.y - holdAt.y) <= 24) {
-          const uint32_t ms = e.ms;
+          const uint32_t liftMs = e.ms;
           e = holdAt;
           e.type = T::Tap;
-          e.ms = ms;
+          e.ms = liftMs;
         }
       }
       route(e);

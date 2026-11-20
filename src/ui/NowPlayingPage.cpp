@@ -515,9 +515,9 @@ void NowPlayingPage::drawProgressText(M5Canvas& c, int top) {
     const char* text = fit.text == Text::Full ? mid : fit.text == Text::Base ? base : fit.text == Text::Warn ? warn : "";
     const uint16_t tc = fit.text == Text::Warn ? col::AMBER : mc;
     const int tw = !text[0] ? 0 : fit.text == Text::Warn ? warnW : f.width(Font::Small, text);
-    const int x0 = kW / 2 - fit.width / 2;
-    if (text[0]) f.draw(c, Font::Small, text, x0, textY, tw, tc, col::BG);
-    const int sx = text[0] ? x0 + tw + kSleepGap : x0;
+    const int lineX = kW / 2 - fit.width / 2;
+    if (text[0]) f.draw(c, Font::Small, text, lineX, textY, tw, tc, col::BG);
+    const int sx = text[0] ? lineX + tw + kSleepGap : lineX;
     const uint16_t sc = s.sleepFading ? col::AMBER : col::SOFT;
     if (fit.moon) icons::drawMoon(c, sx, textY - 6, 11, sc);
     if (fit.moonText) f.draw(c, Font::Small, s.sleepShort, sx + kSleepMoonW, textY, sw - kSleepMoonW, sc, col::BG);

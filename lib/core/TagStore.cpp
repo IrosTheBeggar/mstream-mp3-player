@@ -2667,7 +2667,7 @@ TagStore::Compacted TagStore::compact(bool rescan) {
       uint64_t h;
       uint32_t r;
     };
-    auto less = [](const Pair& a, const Pair& b) { return a.h != b.h ? a.h < b.h : a.r < b.r; };
+    auto less = [](const Pair& x, const Pair& y) { return x.h != y.h ? x.h < y.h : x.r < y.r; };
     uint8_t* const region = w->binFolderBuf;
     const size_t regionBytes = static_cast<size_t>(w->arena + w->arenaBytes - region);
     const uint32_t readBytes = regionBytes >= 4u * kSortRead ? kSortRead : cfg_.runBuffer;
