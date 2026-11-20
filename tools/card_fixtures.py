@@ -3568,7 +3568,13 @@ plays, lastAt, lastOrd]; `notPlayed` by album) and the hub's numbers
 (`view`). Each log file keeps one device and epoch's seqs in order, as a
 device writes them (5.6's ranges rely on it). `stats/library.json` is the
 made-up library behind Not played yet: its albums in A-Z order, each
-track's path and hash. `stats/sessions.json` lists the sessions: players'
+track's path and hash. `stats/rank.json` lists the rankers' scenarios
+(docs/LISTENING-STATS.md 4.3 and 6.8): each a card's `stats.bin` and its
+base as a long history leaves them (`in`, under `stats/rank/`), every list
+past its cap and 16, `today` (null: the clock unset), the rows each
+section holds and how many tracks have a play (`rows`), and the lists the
+rankers MUST give over them (`lists`, as a boot's above, without
+`notPlayed`). `stats/sessions.json` lists the sessions: players'
 boots and plays in turn on one card (`in`, under `stats/sessions/`), the
 play log written as tools/playlog.py's Device writes it and the stats kept
 as a device that keeps them does (docs/LISTENING-STATS.md 5.5 and 5.14: the

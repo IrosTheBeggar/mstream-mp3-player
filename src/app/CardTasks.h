@@ -19,6 +19,7 @@ namespace ui {
 class Thumbs;
 }
 class Waves;
+class StatsLists;
 
 // The card worker's loop side (docs/METADATA.md 3.2.3, 3.3, 3.4.2;
 // milestones N10, N12): every loop pass it asks ScanScheduler (N7) what the
@@ -30,6 +31,9 @@ class Waves;
 // (ScanScheduler's Out::cut). The jobs:
 //   - covers (ui/Thumbs), on any storage;
 //   - a waveform's read for Now Playing (app/Waves), in the covers' lane;
+//   - the listening stats' asks (app/StatsLists, S2: docs/LISTENING-STATS.md
+//     6.8): a track's read (Hp) in that lane after the waveform's, a rank
+//     (Hr, Hl, Hw) as background work after a compaction (Job::Stats);
 //   - on the SD card, over the records Library opened: the validation
 //     walk, 2 s after the UI's first frame (3.2.3); the compactions; the
 //     tag scan (lib/core CardJobs); the update step's build and its save
@@ -135,9 +139,10 @@ public:
   // Every loop pass. `in`: the environment (nowMs; listMoving, input; the
   // audio's ring, underruns, decode pass, track and seek; Bluetooth;
   // power); `covers`: a cover or a waveform's read may start (the UI is up
-  // and lit); `env`: the update step's.
-  void loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumbs, Waves* waves, bool covers,
-            const UpdateEnv& env);
+  // and lit); `env`: the update step's; `lists`: the listening stats' asks
+  // (nullptr: none).
+  void loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumbs, Waves* waves, StatsLists* lists,
+            bool covers, const UpdateEnv& env);
 
   // ---- the update step (3.4.2, lib/core LibraryUpdate) ----
   // `deferToBoot` (gb!, L4.4): the memory check made to fail, so the step

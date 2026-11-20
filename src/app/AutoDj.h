@@ -132,6 +132,12 @@ public:
   size_t giveBack();
   // The join works (main.cpp: the loop's idle wait short meanwhile).
   bool joinWorking() const { return join_.status() == autodj::Join::Status::Working; }
+  // The join works, or will begin (on, the index open, the library's index
+  // readable and the join not Ready for it, nothing blocking it but a
+  // retry's wait or the listening stats' hold): a listening stats rank
+  // starts only when it is neither (docs/LISTENING-STATS.md 6.8: Auto DJ
+  // off, or its join Ready since the last Live or boot).
+  bool joinPending() const;
   // The join's kept bytes at the top of PSRAM's largest free block when it
   // was placed (AutoDjJoin.h): what giving it back adds to that block.
   size_t joinTopBytes() const { return join_.stats().topKept; }

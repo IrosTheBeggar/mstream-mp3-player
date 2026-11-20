@@ -13,7 +13,8 @@
 // folders, or passes of a big one, for about 18 ms while the screen is lit,
 // 250 ms while it is dark: the firmware's CardTasks); a compaction of
 // tags.bin (3.3.2); a file of the scan (3.3.1) a loop source names, or a
-// slice of its rest's files. The loop calls update() every pass, where the
+// slice of its rest's files; the listening stats' step (docs/LISTENING-
+// STATS.md 6.8, S2): a track's read, or a rank. The loop calls update() every pass, where the
 // inputs are, and hands the worker what it says at the priority it says. So
 // the jobs never overlap (a build, a compaction and a scan never run at
 // once), and each step starts only when nothing it would disturb is under
@@ -26,28 +27,35 @@
 //   2. A list is moving (on a lit screen: listHolds()), or a finger is on
 //      its A-Z rail (a scrub, or resting on it before one): nothing else
 //      starts, covers and waveforms included (Thumbs' rule).
-//   3. A waveform's read, then a cover, one lane: at priority 1, dropped to 0
-//      while a list moves under it (Thumbs' rule): rows on screen come first
-//      (3.3.3, 0). The audio's yields below don't hold them. The read goes
-//      first: a few small reads, where a cover may be a decode.
+//   3. A waveform's read, then the listening stats' track read, then a
+//      cover, one lane: at priority 1, dropped to 0 while a list moves under
+//      it (Thumbs' rule): rows on screen come first (3.3.3, 0). The audio's
+//      yields below don't hold them. The reads go first: a few small reads
+//      (the stats' a binary search of the base), where a cover may be a
+//      decode.
 //   4. The update step's save of library.idx, at priority 0, 1 while the
 //      screen is dark (as the scan's slices): it ends the update step. It
 //      yields as the background work does, but not to the battery floor
 //      (the build is paid for).
 //   5. The background work, one job at a time, the first with work: the
-//      walk, a compaction, the scan. None of them starts while the update
-//      step holds the worker (from its build's fence to its save's end:
-//      nothing writes tags.bin or the journals while the build streams
-//      them, 3.4.2). At priority 0, but for three (3.3.9, 2026-10-09): a
+//      walk, a compaction, the listening stats' rank, the scan. None of them
+//      starts while the update step holds the worker (from its build's fence
+//      to its save's end: nothing writes tags.bin or the journals while the
+//      build streams them, 3.4.2; the rank so starts after library.idx's
+//      save). At priority 0, but for four (3.3.9, 2026-10-09): a
 //      slice of the walk at 1, as a cover (seconds once a boot, while the
-//      Library tab says "Checking the card..."); a slice of the scan, and a
-//      compaction, at 1 while the screen is dark (In::dark: the loop has
-//      nothing to draw). At 0 they share what the loop leaves with the idle
+//      Library tab says "Checking the card..."); a slice of the scan, a
+//      compaction and a rank, at 1 while the screen is dark (In::dark: the
+//      loop has nothing to draw). A rank is one step, never cut: it reads
+//      the whole base (467 KB at 19,478 played) holding the SPI bus and
+//      FatFs's volume lock against the decoder, so it never starts under a
+//      yield, and at 1 while lit it would time-slice with the loop for its
+//      whole step. At 0 they share what the loop leaves with the idle
 //      task, half of it (covers measured 2-2.5x slower at 0; the save
 //      4.5-9.9 s on the worker against 2.2 s on the loop at boot, the
-//      2026-10-09 device run). A compaction or a save under way drops to 0
-//      the pass the screen lights (it isn't a slice: it runs on to its end,
-//      below the loop).
+//      2026-10-09 device run). A compaction, a save or a rank under way
+//      drops to 0 the pass the screen lights (it isn't a slice: it runs on
+//      to its end, below the loop).
 // A slice under way drops to 0 and is cut after its unit (Out::cut) the
 // moment a list moves or a wait below applies: so a wait holds the walk and
 // the scan within one unit (a folder, a file) and a pass, as before slices.
@@ -177,9 +185,10 @@ public:
   // The worker's jobs. A step: a cover; a waveform's read; the build (one
   // step); the save (one step); a slice of the walk (its folders, or passes
   // of a big one); a compaction (one step); a file of the scan from a loop
-  // source, or a slice of its rest.
-  enum class Job : uint8_t { None, Cover, Wave, Build, Save, Walk, Compact, Scan };
-  static constexpr int kJobs = 8;
+  // source, or a slice of its rest; the listening stats' step, a track's read
+  // or a rank (one step each: Out::statsRank says which).
+  enum class Job : uint8_t { None, Cover, Wave, Build, Save, Walk, Compact, Scan, Stats };
+  static constexpr int kJobs = 9;
   // Where the scan's next file comes from (3.3.3).
   enum class Source : uint8_t { None, Playing, QueueNext, QueueSoon, Shown, Rest };
   // What the worker's next start waits for (the first that applies, in this
@@ -272,6 +281,13 @@ public:
     bool wave = false;      // a waveform's read is asked for (Now Playing's track)
     bool walk = false;      // the validation walk has folders left
     bool compact = false;   // a compaction is wanted (the journal's limits, a scan's end, before a build)
+    // The listening stats (docs/LISTENING-STATS.md 6.8): a track's read is
+    // asked (the console's Hp: a binary search of the base), in the waveform
+    // read's lane after it; a rank is asked (Hr, Hl, Hw: the base, stats.bin's
+    // TRKD and RCNT), background work after a compaction.
+    bool statsTrack = false;
+    bool statsRank = false;
+    bool runningRank = false;  // the Stats step under way is a rank (its priority: as a compaction's)
     // The scan's sources (3.3.3), each true when it has a file to read. The
     // glue sets them only once the scan may run (D's to-do is known).
     bool playingPending = false;    // the playing track is Pending
@@ -325,6 +341,7 @@ public:
     Source source = Source::None;  // job Scan: where its file comes from
     uint8_t priority = kLowPriority;  // the worker's priority: the running step's, else `job`'s
     Wait wait = Wait::None;        // why nothing starts (None: `job` starts, or nothing to do)
+    bool statsRank = false;        // job Stats: a rank (false: a track's read)
     // The step under way is a slice of the walk or the scan, and a list
     // moves or a wait applies (the scan's battery floor included): it ends
     // after its unit (CardJobs::cutSlice()), at priority 0 meanwhile.
@@ -394,10 +411,14 @@ public:
     return (o.btLinkSetupWait || o.btControlWait) && workerFree && o.job == Job::None && !updateAsked;
   }
   // A step's priority (3.3.4, 3.3.9) when no wait applies: the build 1; a
-  // cover, a waveform's read and the walk 1, 0 while a list moves; the scan,
-  // a compaction and the save 1 while the screen is dark, else 0. (A list
-  // "moving" in the dark is none: listHolds().)
+  // cover, a waveform's read, the stats' track read (Job::Stats) and the
+  // walk 1, 0 while a list moves; the scan, a compaction and the save 1
+  // while the screen is dark, else 0. (A list "moving" in the dark is none:
+  // listHolds().) A rank: rankPriority().
   static uint8_t priorityOf(Job job, bool listMoving, bool dark = false);
+  // The stats' rank (Job::Stats, Out::statsRank): a compaction's, 1 while
+  // the screen is dark, else 0.
+  static uint8_t rankPriority(bool listMoving, bool dark) { return priorityOf(Job::Compact, listMoving, dark); }
   // A list that moves holds work (the wait List, a slice cut, a cover, a
   // waveform's read or the walk below the loop) only while the screen is
   // lit: in the dark (In::dark: nothing drawn) no list is seen moving, and

@@ -12,7 +12,10 @@
 // (2026-10-14); the battery floor and its hysteresis;
 // the jobs' and the scan's sources' order; millis()'s wrap; the build after a
 // walk (U11); a slice of the walk or the scan cut, and dropped to 0, by any
-// wait (2026-10-09); each step's units; and a random run against an
+// wait (2026-10-09); each step's units; the listening stats' two lanes
+// (docs/LISTENING-STATS.md 6.8: a track's read after a waveform's, a rank
+// as background work after a compaction, never under the update step or a
+// yield, at 0 while lit, never cut); and a random run against an
 // independent model. The LibraryWrite blocker is in test_idle_policy.
 // Run: pio test -e native
 #include <unity.h>
@@ -1984,8 +1987,199 @@ void test_the_time_waited() {
   TEST_ASSERT_EQUAL_UINT64(0, s.waitedMs(W::Ring));
 }
 
+// The listening stats' lanes (6.8): the track's read beside a waveform's,
+// after it and before a cover, at 1 (0 while a list moves under it), held
+// by a moving list but not by the audio's yields; the rank as background
+// work, after the walk and a compaction and before the scan, never under
+// the update step, a moving list or any yield, never before a waveform's
+// read or a cover, the battery floor not holding it, at 0 while lit and 1
+// while dark, and under way never cut, dropping to 0 the pass the screen
+// lights.
+void test_the_listening_stats_lanes() {
+  // The track's read: after the waveform's, before a cover.
+  {
+    S s;
+    S::In in = base(0);
+    in.restPending = false;
+    in.wave = in.statsTrack = in.cover = true;
+    in.statsRank = true;
+    S::Out o = s.update(in);
+    TEST_ASSERT_EQUAL(J::Wave, o.job);
+    in.wave = false;
+    o = s.update(in);
+    TEST_ASSERT_EQUAL(J::Stats, o.job);
+    TEST_ASSERT_FALSE(o.statsRank);
+    TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);
+    in.statsTrack = false;
+    o = s.update(in);
+    TEST_ASSERT_EQUAL(J::Cover, o.job);
+    in.cover = false;
+    o = s.update(in);
+    TEST_ASSERT_EQUAL(J::Stats, o.job);  // the rank, last
+    TEST_ASSERT_TRUE(o.statsRank);
+  }
+  // The track's read under the audio's yields: it starts; a moving list
+  // holds it; under way, 0 while a list moves.
+  {
+    S s;
+    S::In in = base(0);
+    in.statsTrack = true;
+    in.input = true;
+    ++in.trackSeq;
+    s.update(in);  // (primed)
+    in.underruns = 3;
+    in.nowMs = 10;
+    S::Out o = s.update(in);
+    TEST_ASSERT_EQUAL(J::Stats, o.job);
+    TEST_ASSERT_FALSE(o.statsRank);
+    in.listMoving = true;
+    o = s.update(in);
+    TEST_ASSERT_EQUAL(J::None, o.job);
+    TEST_ASSERT_EQUAL(W::List, o.wait);
+    in.running = J::Stats;
+    o = s.update(in);
+    TEST_ASSERT_EQUAL(W::Step, o.wait);
+    TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, o.priority);
+    TEST_ASSERT_FALSE(o.cut);
+    in.listMoving = false;
+    o = s.update(in);
+    TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);
+  }
+  // The rank: the work's order (the walk, a compaction, the rank, the scan).
+  {
+    S s;
+    S::In in = base(0);
+    in.walk = in.compact = in.statsRank = true;
+    const J jobs[] = {J::Walk, J::Compact, J::Stats, J::Scan};
+    for (J j : jobs) {
+      const S::Out o = s.update(in);
+      TEST_ASSERT_EQUAL(j, o.job);
+      TEST_ASSERT_EQUAL(j == J::Stats, o.statsRank);
+      if (j == J::Walk) in.walk = false;
+      if (j == J::Compact) in.compact = false;
+      if (j == J::Stats) in.statsRank = false;
+    }
+  }
+  // The update step holds it (and the save of library.idx comes first); a
+  // moving list; each yield, for its window.
+  {
+    S s;
+    S::In in = base(0);
+    in.restPending = false;
+    in.statsRank = true;
+    in.updating = true;
+    S::Out o = s.update(in);
+    TEST_ASSERT_EQUAL(J::None, o.job);
+    TEST_ASSERT_EQUAL(W::Updating, o.wait);
+    in.save = true;
+    o = s.update(in);
+    TEST_ASSERT_EQUAL(J::Save, o.job);
+    in.save = in.updating = false;
+    in.listMoving = true;
+    o = s.update(in);
+    TEST_ASSERT_EQUAL(W::List, o.wait);
+    in.listMoving = false;
+    TEST_ASSERT_EQUAL(J::Stats, s.update(in).job);
+  }
+  {
+    // Each yield holds it until its window ends, as it holds the scan.
+    struct Case {
+      const char* name;
+      W wait;
+      uint32_t ms;
+    };
+    const S::Config c;
+    const Case cases[] = {{"input", W::Input, c.inputQuietMs},       {"underrun", W::Underrun, c.underrunBackoffMs},
+                          {"pass", W::DecodePass, c.passBackoffMs},   {"track", W::TrackChange, c.trackSettleMs},
+                          {"seek", W::Seek, c.seekSettleMs},          {"bt", W::Bluetooth, c.btSettleMs}};
+    for (const Case& k : cases) {
+      S s;
+      S::In in = base(1000);
+      in.restPending = false;
+      in.statsRank = true;
+      s.update(in);
+      in.nowMs = 2000;
+      if (k.wait == W::Input) in.input = true;
+      if (k.wait == W::Underrun) ++in.underruns;
+      if (k.wait == W::DecodePass) in.decodePassUs = 50000;
+      if (k.wait == W::TrackChange) ++in.trackSeq;
+      if (k.wait == W::Seek) ++in.seekSeq;
+      if (k.wait == W::Bluetooth) ++in.btSeq;
+      S::Out o = s.update(in);
+      TEST_ASSERT_EQUAL_MESSAGE(k.wait, o.wait, k.name);
+      TEST_ASSERT_EQUAL_MESSAGE(J::None, o.job, k.name);
+      in.input = false;
+      in.decodePassUs = 0;
+      W seen = W::None;
+      const uint32_t at = firstStart(s, 2010, 2000 + k.ms + 100, in, J::Stats, &seen);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(2000 + k.ms, at, k.name);
+    }
+    // The ring below half.
+    S s;
+    S::In in = base(0);
+    in.restPending = false;
+    in.statsRank = true;
+    in.ringMs = kRing / 3;
+    TEST_ASSERT_EQUAL(W::Ring, s.update(in).wait);
+  }
+  // The battery floor holds the scan, not the rank.
+  {
+    S s;
+    S::In in = base(0);
+    in.battery = 5;
+    in.statsRank = true;
+    S::Out o = s.update(in);
+    TEST_ASSERT_TRUE(s.batteryLow());
+    TEST_ASSERT_EQUAL(J::Stats, o.job);
+    in.statsRank = false;
+    TEST_ASSERT_EQUAL(W::Battery, s.update(in).wait);
+  }
+  // Its priority: 0 while lit, 1 while dark; under way never cut, 0 the
+  // pass the screen lights, whatever waits.
+  {
+    S s;
+    S::In in = base(0);
+    in.restPending = false;
+    in.statsRank = true;
+    S::Out o = s.update(in);
+    TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, o.priority);
+    in.dark = true;
+    o = s.update(in);
+    TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);
+    TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, S::rankPriority(false, true));
+    TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, S::rankPriority(false, false));
+    in.running = J::Stats;
+    in.runningRank = true;
+    in.input = true;
+    in.nowMs = 10;
+    o = s.update(in);
+    TEST_ASSERT_EQUAL(W::Step, o.wait);
+    TEST_ASSERT_FALSE(o.cut);
+    TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);
+    in.dark = false;
+    o = s.update(in);
+    TEST_ASSERT_FALSE(o.cut);
+    TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, o.priority);
+    in.listMoving = true;
+    o = s.update(in);
+    TEST_ASSERT_FALSE(o.cut);
+    TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, o.priority);
+  }
+  // A track's read and a rank asked, nothing else: the read first.
+  {
+    S s;
+    S::In in = base(0);
+    in.restPending = false;
+    in.statsRank = in.statsTrack = true;
+    const S::Out o = s.update(in);
+    TEST_ASSERT_EQUAL(J::Stats, o.job);
+    TEST_ASSERT_FALSE(o.statsRank);
+  }
+}
+
 void test_names() {
-  TEST_ASSERT_EQUAL_INT(8, S::kJobs);
+  TEST_ASSERT_EQUAL_INT(9, S::kJobs);
+  TEST_ASSERT_EQUAL_STRING("stats", S::jobName(J::Stats));
   TEST_ASSERT_EQUAL_STRING("scan", S::jobName(J::Scan));
   TEST_ASSERT_EQUAL_STRING("compaction", S::jobName(J::Compact));
   TEST_ASSERT_EQUAL_STRING("wave", S::jobName(J::Wave));
@@ -2119,9 +2313,12 @@ struct Model {
       o.wait = W::Step;
       const bool slice = in.running == J::Walk || in.running == J::Scan;
       o.cut = slice && (moving || yield != W::None || (in.running == J::Scan && low));
+      const bool rank = in.running == J::Stats && in.runningRank;
       if (o.cut) o.priority = 0;
       else if (in.running == J::Build) o.priority = 1;
-      else if (in.running == J::Cover || in.running == J::Wave || in.running == J::Walk) o.priority = moving ? 0 : 1;
+      else if (rank) o.priority = in.dark ? 1 : 0;
+      else if (in.running == J::Cover || in.running == J::Wave || in.running == J::Walk || in.running == J::Stats)
+        o.priority = moving ? 0 : 1;
       else if (in.running == J::Scan || in.running == J::Compact || in.running == J::Save)
         o.priority = in.dark ? 1 : 0;
       else o.priority = 0;
@@ -2132,8 +2329,8 @@ struct Model {
       o.priority = 1;
       return o;
     }
-    const bool bg = in.walk || in.compact || scan;
-    if (!in.wave && !in.cover && !in.save && !bg) return o;
+    const bool bg = in.walk || in.compact || in.statsRank || scan;
+    if (!in.wave && !in.statsTrack && !in.cover && !in.save && !bg) return o;
     if (moving) {
       o.wait = W::List;
       return o;
@@ -2143,12 +2340,22 @@ struct Model {
       o.priority = 1;
       return o;
     }
+    if (in.statsTrack) {
+      o.job = J::Stats;
+      o.priority = 1;
+      return o;
+    }
     if (in.cover) {
       o.job = J::Cover;
       o.priority = 1;
       return o;
     }
-    J next = in.save ? J::Save : in.updating ? J::None : in.walk ? J::Walk : in.compact ? J::Compact : J::Scan;
+    J next = in.save        ? J::Save
+             : in.updating  ? J::None
+             : in.walk      ? J::Walk
+             : in.compact   ? J::Compact
+             : in.statsRank ? J::Stats
+                            : J::Scan;
     if (next == J::None) {
       o.wait = W::Updating;
       return o;
@@ -2159,7 +2366,11 @@ struct Model {
       return o;
     }
     o.job = next;
-    o.priority = next == J::Walk || ((next == J::Scan || next == J::Compact || next == J::Save) && in.dark) ? 1 : 0;
+    o.statsRank = next == J::Stats;
+    o.priority =
+        next == J::Walk || ((next == J::Scan || next == J::Compact || next == J::Save || next == J::Stats) && in.dark)
+            ? 1
+            : 0;
     o.source = next == J::Scan ? (in.playingPending     ? Src::Playing
                                   : in.queueNextPending ? Src::QueueNext
                                   : in.queueSoonPending ? Src::QueueSoon
@@ -2186,6 +2397,10 @@ void test_random_against_a_model() {
   // A state that lasts: on with `on` a pass, off again with `off`.
   auto flip = [&](bool& b, uint32_t on, uint32_t off) { b = b ? !chance(off) : chance(on); };
   auto chanceSetup = [&](uint32_t n) { return rngSetup() % 100000 < n; };
+  // The listening stats' lanes (S2) from their own draws too.
+  std::mt19937 rngStats(20261120);
+  auto chanceStats = [&](uint32_t n) { return rngStats() % 100000 < n; };
+  uint32_t ranks = 0, trackReads = 0;
   S s;
   Model m;
   S::In in = base(0);
@@ -2196,7 +2411,10 @@ void test_random_against_a_model() {
   for (int pass = 0; pass < 900000; ++pass) {
     t += 5 + rng() % 36;
     in.nowMs = static_cast<uint32_t>(t);
-    if (static_cast<uint64_t>(t) >= runUntil) in.running = J::None;
+    if (static_cast<uint64_t>(t) >= runUntil) {
+      in.running = J::None;
+      in.runningRank = false;
+    }
     flip(in.playing, 200, 100);
     flip(in.listMoving, 200, 2000);
     flip(in.dark, 100, 100);
@@ -2228,6 +2446,8 @@ void test_random_against_a_model() {
     if (chance(500)) in.queueSoonPending = chance(40000);
     if (chance(500)) in.shownPending = chance(30000);
     if (chance(200)) in.restPending = chance(80000);
+    if (chanceStats(300)) in.statsTrack = chanceStats(20000);
+    if (chanceStats(300)) in.statsRank = chanceStats(30000);
     // Events.
     in.input = chance(800);
     if (chance(5)) ++in.underruns;
@@ -2250,6 +2470,7 @@ void test_random_against_a_model() {
     TEST_ASSERT_EQUAL_MESSAGE(want.batteryReleased, got.batteryReleased, "released");
     TEST_ASSERT_EQUAL_MESSAGE(want.btControlWait, got.btControlWait, "the wait for AVRCP");
     TEST_ASSERT_EQUAL_MESSAGE(want.btLinkSetupWait, got.btLinkSetupWait, "the radio link's set-up");
+    TEST_ASSERT_EQUAL_MESSAGE(want.statsRank, got.statsRank, "a rank");
     TEST_ASSERT_EQUAL(m.low, s.batteryLow());
     ++held[static_cast<int>(got.wait)];
     if (got.cut) ++cuts;
@@ -2264,7 +2485,20 @@ void test_random_against_a_model() {
       if (got.job == J::Cover) ++covers;
       if (got.job == J::Wave) ++waves;
       if (got.job == J::Build) ++builds;
+      if (got.job == J::Stats) {
+        // A rank: never under the update step or a yield.
+        // Each ask is one step: handed, it is taken.
+        if (got.statsRank) {
+          TEST_ASSERT_FALSE(in.updating);
+          in.statsRank = false;
+          ++ranks;
+        } else {
+          in.statsTrack = false;
+          ++trackReads;
+        }
+      }
       in.running = got.job;
+      in.runningRank = got.statsRank;
       runUntil = static_cast<uint64_t>(t) + 5 + rng() % 80;
     }
   }
@@ -2273,6 +2507,8 @@ void test_random_against_a_model() {
   TEST_ASSERT_TRUE(covers > 1000);
   TEST_ASSERT_TRUE(waves > 1000);
   TEST_ASSERT_TRUE(builds > 10);
+  TEST_ASSERT_TRUE(ranks > 100);
+  TEST_ASSERT_TRUE(trackReads > 100);
   TEST_ASSERT_TRUE(cuts > 1000);
   TEST_ASSERT_TRUE(controlWaits > 1000);  // links waited for AVRCP ...
   TEST_ASSERT_TRUE(m.caps > 10);          // ... and the cap ended some of the waits
@@ -2310,6 +2546,7 @@ int main(int, char**) {
   RUN_TEST(test_the_wrap);
   RUN_TEST(test_the_build_after_a_walk);
   RUN_TEST(test_the_time_waited);
+  RUN_TEST(test_the_listening_stats_lanes);
   RUN_TEST(test_names);
   RUN_TEST(test_random_against_a_model);
   return UNITY_END();

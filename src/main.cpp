@@ -3369,8 +3369,9 @@ static AutoDj::Env autoDjEnv(uint32_t now) {
   e.uiStarted = !userInterface || userInterface->started();
   e.refilling = decoderRefilling(now);
   // The listening stats' boot scan holds blocks (its ranges', its
-  // overflow's): no join begins around them (docs/LISTENING-STATS.md 5.14).
-  e.statsHold = playHistory.statsScanHolds();
+  // overflow's), or an S2 ask its block (Hr, Hl, Hw, Hp): no join begins
+  // around them (docs/LISTENING-STATS.md 5.14, 6.8's Block reason).
+  e.statsHold = playHistory.statsScanHolds() || playHistory.listsHold();
   return e;
 }
 
@@ -3395,6 +3396,18 @@ static void stepAutoDj(uint32_t now) {
     autoDj->view(&v);
     userInterface->autoDjNews(news, autodjview::fewCount(v));
   }
+}
+
+// The listening stats' S2 asks (app/StatsLists: Hl, Hw): the walk's slices,
+// right after Auto DJ's step (docs/LISTENING-STATS.md 6.2: never in a pass
+// the join works, up to 8 ms a pass; the loop's idle wait short meanwhile).
+static void stepStatsMap(uint32_t now) {
+  StatsLists* lists = playHistory.statsLists();
+  if (!lists || !lists->walking()) return;
+  StatsLists::Gates g = playHistory.listsGates(now, cardHeld);
+  g.uiStarted = !userInterface || userInterface->started();
+  g.listMoving = userInterface && userInterface->listMoving();
+  lists->stepMap(g);
 }
 
 // ---- the card worker (docs/METADATA.md 3.3.4, 3.4.2) ----
@@ -3446,6 +3459,11 @@ static bool enterFence() {
   // reads it): given back before the index goes (counted in the memory
   // check's alsoFreed); it joins again after the fence.
   const size_t djFreed = autoDj ? autoDj->fence() : 0;
+  // An S2 ask's block (the lists' ids are the old index's): never held here
+  // (the update waits for it in Asked: statsWait), so this is the guard;
+  // given back, the ask begins again after the Live.
+  StatsLists* lists = playHistory.statsLists();
+  const size_t listsFreed = lists ? lists->drop() : 0;
   // 3. The old index (and the scan's memory); then the UI, which sees none.
   cardTasks->fenceUp();
   // The fence's own lowest PSRAM free (leaveFence()'s "lowest", the
@@ -3457,9 +3475,10 @@ static bool enterFence() {
   fenceLowWindow = diag::beginLowWindow();
   if (userInterface) userInterface->libraryUpdating();
   Serial.printf("[lib] the update step (%s): the fence is up; the build on the card worker (the loop goes on); PSRAM "
-                "free %u B before, %u B now (Auto DJ's join gave back %u B)\n",
+                "free %u B before, %u B now (Auto DJ's join gave back %u B%s)\n",
                 library.update()->why(), (unsigned)fencePsramBefore,
-                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)djFreed);
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)djFreed,
+                listsFreed ? ", a listening stats ask its block" : "");
   return true;
 }
 
@@ -3615,6 +3634,7 @@ static void stepCard(uint32_t now, bool input) {
   env.seekSeq = player.seeks();
   env.alsoFreed = queue.memoryBytes() + queueStore.savingBytes() +
                   (userInterface ? userInterface->thumbs().poolBytes() : 0) + (autoDj ? autoDj->fenceBytes() : 0);
+  // (An S2 ask's block isn't in it: the step waits for it, statsWait below.)
   // A pick owed while Auto DJ's index joins: no fence until it lands
   // (autodj::decide(), this pass's: stepAutoDj() ran before).
   env.autoDjOwed = autoDj && autoDj->owed();
@@ -3623,10 +3643,12 @@ static void stepCard(uint32_t now, bool input) {
   // fence until it gives them back, so they are never held across a build
   // (docs/LISTENING-STATS.md 5.14; the scan's first piece waits for an asked
   // update instead: never both).
-  env.statsWait = playHistory.statsScanHolds();
+  // An S2 ask's block (Hr, Hl, Hw, Hp: a second or two) the same: never in
+  // the memory check, never across a build.
+  env.statsWait = playHistory.statsScanHolds() || playHistory.listsHold();
   cardTasks->loop(in, src, userInterface ? &userInterface->thumbs() : nullptr,
-                  userInterface ? &userInterface->waves() : nullptr, userInterface && userInterface->coversAllowed(),
-                  env);
+                  userInterface ? &userInterface->waves() : nullptr, playHistory.statsLists(),
+                  userInterface && userInterface->coversAllowed(), env);
   switch (cardTasks->takeAct()) {
     case LibraryUpdate::Do::Fence:
       if (!enterFence()) {
@@ -4141,6 +4163,7 @@ void loop() {
     userInterface->waves().remount(cardHeld, !userInterface->started() || userInterface->listMoving() || frozen.on);
   }
   stepAutoDj(now);
+  stepStatsMap(now);
   if (!cardHeld) queueStore.loop(now);
   stepPlays(now);
   // What a track's length is, once the backend knows it (read from the
@@ -4350,5 +4373,8 @@ void loop() {
   // come a pass at a time (2026-10-13: 20 ms a pass in the dark made a join
   // 4.6-7.2 s).
   if (autoDj && autoDj->joinWorking() && loopDelayMs > kJoinLoopDelayMs) loopDelayMs = kJoinLoopDelayMs;
+  // The listening stats' walk (Hl, Hw) the same (docs/LISTENING-STATS.md 6.2).
+  StatsLists* lists = playHistory.statsLists();
+  if (lists && lists->walking() && loopDelayMs > kJoinLoopDelayMs) loopDelayMs = kJoinLoopDelayMs;
   delay(loopDelayMs);
 }

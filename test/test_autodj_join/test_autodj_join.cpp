@@ -100,6 +100,8 @@
 #include "StatsFile.h"
 #include "StatsFold.h"
 #include "StatsGlue.h"
+#include "StatsMap.h"
+#include "StatsRank.h"
 
 namespace cc = cardcontract;
 namespace mpdj = cardcontract::mpdj;
@@ -4081,7 +4083,42 @@ struct StatsRun {
   bool againArena = false;  // ... in the arena, carved mid-session (false: the chunks one by one, or none)
   uint32_t chunks = 0, tries = 0, saves = 0, wrote = 0, compacted = 0, reserveFailed = 0;
   bool behind = false;
+  // S2 (C13; the owner's "A: nothing held", 2026-11-20): a console ask (Hr,
+  // Hl, Hw) after the boot's join and after each update's rejoin and plays:
+  // its one block at the top through the hold (the decoder's room asked; it
+  // yields), stats.bin's and the base's FatFiles opened beside it (the
+  // loop's), held through the rank's step and the walk, then everything
+  // given back. Nothing of it between asks.
+  enum class Ask : uint8_t { None, Rank, Walk };  // Hr; Hw (Hl3's blocks, the largest an ask carves)
+  Ask ask = Ask::None;
+  bool askOpus = false;      // the session's first Opus opens while the ask holds its block (a start, the next track)
+  size_t askBytes = 0;       // its block, as app/StatsLists sizes it for this card and library
+  uint32_t asks = 0, askRefused = 0;
+  bool askTraceless = true;  // after each give-back: free, the largest free block and the free blocks of 64 KB or
+                             // more as before its take
+  size_t askLowestLargest = SIZE_MAX;  // the largest free block while an ask held its block
+  size_t askLowestFree = SIZE_MAX;     // ... free
+  uint32_t askOpusShort = 0;           // (askOpus) the Opus's carves that found no room
 };
+
+// An ask's block as app/StatsLists::turn() sizes it (its head, the firmware's
+// struct Ask, about 4.4 KB on the device: the ranker, the map and the walk's
+// 512 B path buffer among it; taken here as 4,608 B), for a card of
+// `played` hashes (base and TRKD) with 40 records, over a library of
+// `folders` folders and `albums` albums.
+size_t s2AskBytes(StatsRun::Ask a, uint32_t played, uint32_t folders, uint32_t albums) {
+  auto up = [](size_t n) { return (n + 15) & ~static_cast<size_t>(15); };
+  const uint32_t records = statsfold::kRecords;
+  size_t n = up(4608) + up(statsfile::kWorkBytes) + up(statsrank::Ranker::kBytes) +
+             up(statsrank::Windows::bytesFor(statsfold::kRcntRows + records)) +
+             up(static_cast<size_t>(records) * (statsfold::kTrackBytes + 12));
+  if (a == StatsRun::Ask::Walk) {
+    n += static_cast<size_t>(statsrank::playedChunks(played + records)) * statsrank::kPlayedChunkBytes;
+    n += up(pathhash::Walk::bytesFor(folders)) + up(statsmap::albumBytes(albums));
+    n += static_cast<size_t>(statsmap::wantedChunks(statsrank::Ranker::kEntries)) * statsmap::kChunkBytes;
+  }
+  return n;
+}
 
 // The decoders' requests while a track plays (docs/LISTENING-STATS.md 5.14,
 // the yardstick), each held from the track's open to its end.
@@ -4464,6 +4501,52 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     stats->arena = glue->fold().inArena();
   };
   auto playing = [&] { return !opusBlocks.empty() || !flacBlocks.empty(); };
+  // S2's ask (StatsRun::ask): the firmware's order (app/StatsLists): its
+  // block at the top, the two files, the worker's step and the walk (no
+  // carve: their memory is the block's), the files closed, the block given
+  // back. Main's twin (statsOff) carves nothing; the rest of the run is the
+  // same. With askOpus the session's first Opus opens inside the hold, kept.
+  auto statsAsk = [&] {
+    if (!stats || stats->ask == StatsRun::Ask::None || stats->statsOff) return;
+    stats->askBytes = s2AskBytes(stats->ask, stats->card->played, index.folderCount(), index.albumCount());
+    const size_t free0 = ModelHeap::freeBytes(), largest0 = ModelHeap::rawLargest();
+    const std::vector<std::pair<size_t, size_t>> free64 = ModelHeap::freeBlocks(64 * 1024);
+    ++stats->asks;
+    autodj::CloseReport r;
+    void* p = g_modelTop.take(kModelTop, stats->askBytes, &r, true, statsglue::kDecoderRoomBytes, true);
+    if (!p) {
+      ++stats->askRefused;
+      if (ModelHeap::freeBytes() != free0 || ModelHeap::rawLargest() != largest0) stats->askTraceless = false;
+      return;
+    }
+    void* bin = ModelHeap::alloc(kFatFileBytes);
+    void* base = ModelHeap::alloc(kFatFileBytes);
+    TEST_ASSERT_NOT_NULL(bin);
+    TEST_ASSERT_NOT_NULL(base);
+    stats->askLowestLargest = std::min(stats->askLowestLargest, ModelHeap::largest());
+    stats->askLowestFree = std::min(stats->askLowestFree, ModelHeap::freeBytes());
+    bool opened = false;
+    if (stats->askOpus && opusBlocks.empty()) {
+      std::vector<void*> got;
+      for (size_t a : kOpusAsks)
+        if (void* q = ModelHeap::alloc(a)) got.push_back(q);
+      if (got.size() == kOpusAsks.size()) {
+        opusBlocks = got;
+        opened = true;
+      } else {
+        ++stats->askOpusShort;
+        for (void* q : got) ModelHeap::release(q);
+      }
+    }
+    ModelHeap::release(base);
+    ModelHeap::release(bin);
+    g_modelTop.give(kModelTop, p);
+    TEST_ASSERT_EQUAL_INT(0, g_modelTop.held());
+    // (An Opus opened in the hold keeps its blocks: no trace to ask of it.)
+    if (!opened && (ModelHeap::freeBytes() != free0 || ModelHeap::rawLargest() != largest0 ||
+                    ModelHeap::freeBlocks(64 * 1024) != free64))
+      stats->askTraceless = false;
+  };
   // The player at a take (the firmware's ListeningStats::pass()): a track
   // playing (an MP3, an Opus or a FLAC), a start waiting.
   g_topPlayer = [&] {
@@ -4563,6 +4646,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   if (stats && stats->uiAt == StatsRun::kBeforeJoin) carveUi();  // (main's order: the first frame, then the join)
   if (stats) seenHold(&stats->boot);
   joinNow(&u.bootLowest);
+  if (stats && statsReady) statsAsk();  // (S2: an ask once the boot's join is Ready)
   u.bootJoined = ModelHeap::largest();
   u.bootTopKept = u.topKept;
   if (stats) seenJoin(&stats->boot);
@@ -4670,6 +4754,8 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     }
     // Plays, and the records' save they bring due.
     if (stats && statsReady && stats->stepSaves) statsPlays(statsfold::kSaveAt, false);
+    // S2: an ask once the rejoin is Ready and the update over.
+    if (stats && statsReady) statsAsk();
     if (hist) {
       if (hist->opusAt == step) carveInto(kOpusAsks, &opusBlocks);
       hist->joined.push_back(ModelHeap::largest());
@@ -5022,6 +5108,107 @@ void test_the_listening_stats_in_a_model_heap() {
   if (!broken.empty()) {
     const std::string m = "joined under the control's by more than its class (5.14's R6): " + broken;
     TEST_FAIL_MESSAGE(m.c_str());
+  }
+}
+
+// S2's id-keyed half (docs/LISTENING-STATS.md 6.7, 9.6's C13), as the
+// owner's "A: nothing held" (2026-11-20) has it: no block of the lists, the
+// ids or the album bits between asks; each console ask (Hr, Hl, Hw) one
+// block at the top through the hold (5.14's fix A), the decoder's room asked
+// (it yields: the ask refused), the rank's two FatFiles beside it, all given
+// back at its end. At P = 2,214 and P = 19,478, Hr's block and Hw's (the
+// played set, the folders' states, the bits and the wanted set: the largest
+// an ask carves), an ask after the boot's join and after each update's rejoin
+// and plays, against the twin with no ask: every figure of the run the
+// twin's (the boot's join, the fence's free blocks, joined, given back), each
+// ask leaving free, the largest free block and the free blocks of 64 KB or
+// more as they were (traceless), the mood plan's rule whole; the asks refused
+// for room pinned (MODELLED). And the session's first Opus opening inside an
+// ask's hold: it finds its room (the decoder's room the take asks).
+void test_an_s2_ask_in_a_model_heap() {
+  const uint32_t tracks = 19412;
+  const synthcard::Card card = synthcard::make(synth::userShape(tracks));
+  synthcard::Write dw;
+  dw.source = cc::mptg::kSourceDevice;
+  const std::vector<uint8_t> d = synthcard::tagsFile(card, dw);
+  cc::MemSource records(d.data(), static_cast<uint32_t>(d.size()));
+  std::vector<uint8_t> saved;
+  {
+    LibraryIndex idx;
+    LibraryBuilder b;
+    synthcard::Facts facts(card, false);
+    synthcard::SameRows rows(LibraryBuilder::Status::Scanned, false, true);
+    LibraryBuilder::Config c;
+    c.device = &records;
+    c.rows = &rows;
+    c.facts = &facts;
+    TEST_ASSERT_TRUE(b.build(idx, c).built);
+    MemorySink sink;
+    LibraryIndex::Inputs in;
+    in.cardId = 1;
+    TEST_ASSERT_TRUE(idx.save(sink, in));
+    saved.assign(sink.data(), sink.data() + sink.size());
+  }
+  const UpdateRun on = libraryUpdates(Dj::Placed, saved, records, card, 2);
+  const StatsCard small = statsCard(2214, 1000), big = statsCard(19478, 4096);
+  using Ask = StatsRun::Ask;
+  struct Shape {
+    const StatsCard* card;
+    Ask ask;
+    bool opus;
+    // Pinned (MODELLED): the asks made (the boot's and one after each of the
+    // two updates) and those refused for room. Hw's block at P = 19,478
+    // (289,948 B: ten chunks of the played set) is refused after each
+    // update: with it held no free block would take a decoder's buffers
+    // (joined 360,436 B here; on the device 262-295 KB after an update). So
+    // is P = 2,214's once the session's first Opus holds its 128 KB from
+    // the first ask's hold on. Hr's (83,872 B) always fits.
+    uint32_t asks, refused;
+  };
+  const Shape shapes[] = {
+      {&small, Ask::Rank, false, 3, 0}, {&small, Ask::Walk, false, 3, 0}, {&big, Ask::Rank, false, 3, 0},
+      {&big, Ask::Walk, false, 3, 2},   {&small, Ask::Walk, true, 3, 2},  {&big, Ask::Walk, true, 3, 2},
+  };
+  for (const Shape& sh : shapes) {
+    StatsRun with, twin;
+    with.card = twin.card = sh.card;
+    with.slots = twin.slots = 30;
+    with.ask = sh.ask;
+    with.askOpus = sh.opus;
+    const UpdateRun a = libraryUpdates(Dj::Placed, saved, records, card, 2, MoodRun(), &with);
+    const UpdateRun b = libraryUpdates(Dj::Placed, saved, records, card, 2, MoodRun(), &twin);
+    char w[160];
+    std::snprintf(w, sizeof(w), "P = %u, %s%s", (unsigned)sh.card->played, sh.ask == Ask::Rank ? "Hr" : "Hw",
+                  sh.opus ? ", the Opus opening in its hold" : "");
+    printf("[join] an S2 ask (%s): its block %u B; %u asks, %u refused for room; while held the largest free block "
+           "at least %u B, free at least %u B; traceless: %s; the boot's join %u B (the twin's %u B), joined %u B "
+           "(the twin's %u B, Auto DJ on with no stats %u B)%s\n",
+           w, (unsigned)with.askBytes, (unsigned)with.asks, (unsigned)with.askRefused,
+           (unsigned)(with.askLowestLargest == SIZE_MAX ? 0 : with.askLowestLargest),
+           (unsigned)(with.askLowestFree == SIZE_MAX ? 0 : with.askLowestFree), with.askTraceless ? "yes" : "NO",
+           (unsigned)a.bootJoined, (unsigned)b.bootJoined, (unsigned)a.joined, (unsigned)b.joined, (unsigned)on.joined,
+           sh.opus ? (with.askOpusShort ? "; the Opus found NO room" : "; the Opus opened") : "");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(sh.asks, with.asks, w);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(sh.refused, with.askRefused, w);
+    TEST_ASSERT_TRUE_MESSAGE(with.askTraceless, w);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, with.askOpusShort, w);
+    // The decoder's room kept while held: the largest free block takes the
+    // Opus's three buffers (their carves, a thirty-second and 1 KB over).
+    if (with.askLowestLargest != SIZE_MAX)
+      TEST_ASSERT_TRUE_MESSAGE(with.askLowestLargest >= statsglue::kDecoderRoomBytes, w);
+    // Free never under the hold's margin while held.
+    if (with.askLowestFree != SIZE_MAX) TEST_ASSERT_TRUE_MESSAGE(with.askLowestFree >= kMargin, w);
+    // Nothing between asks: the run's figures the twin's (with the Opus
+    // opened in the hold, the twin opens none: only the rule).
+    if (!sh.opus) {
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(b.bootJoined, a.bootJoined, w);
+      TEST_ASSERT_TRUE_MESSAGE(b.fence == a.fence, w);
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(b.largest, a.largest, w);
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(b.joined, a.joined, w);
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(b.givenBack, a.givenBack, w);
+    }
+    TEST_ASSERT_TRUE_MESSAGE(a.lowest >= kMargin && a.bootLowest >= kMargin, w);
+    TEST_ASSERT_TRUE_MESSAGE(a.joined + 122880 >= on.joined && (a.joined >= 245764 || on.joined < 245764), w);
   }
 }
 
@@ -6269,6 +6456,7 @@ int main(int, char**) {
   RUN_TEST(test_the_placement_in_a_model_heap);
   RUN_TEST(test_a_library_update_in_a_model_heap);
   RUN_TEST(test_the_listening_stats_in_a_model_heap);
+  RUN_TEST(test_an_s2_ask_in_a_model_heap);
   RUN_TEST(test_the_hold_leaves_main_s_layout);
   RUN_TEST(test_the_arena_s_fallback_as_before);
   RUN_TEST(test_a_waiting_start_asks_no_room);

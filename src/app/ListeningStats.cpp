@@ -17,6 +17,7 @@
 #include "app/BoardClock.h"
 #include "app/Psram.h"
 #include "storage/SectorDisk.h"
+#include "StatsRank.h"
 
 // The resident set (docs/LISTENING-STATS.md 5.14, "Moved to internal
 // RAM"): the glue's object alone, in internal RAM (.bss, below), made once
@@ -225,6 +226,19 @@ void* topAlloc(size_t bytes) {
 }
 
 void topRelease(void* p) { s_top.give(kTop, p); }
+
+// S2's asks (app/StatsLists: Hr, Hl, Hw, Hp): one block an ask, held across
+// passes (the worker's step, the walk), so at the top as the boot hold's,
+// in the same TopHold (an ask waits for the boot's scan to end, and the
+// boot's scan of a remount waits while an ask holds its block: never both).
+// A decoder may open while it is held (a start, the next track): its room
+// asked at every take, as for the ranges' block; with no room the block
+// yields (NoRoom: the ask refused, its line says so). statshold::take()
+// and give(), below the namespace.
+void* listsTake(size_t bytes, autodj::CloseReport* r) {
+  return s_top.take(kTop, bytes, r, true, sg::kDecoderRoomBytes, true);
+}
+void listsGive(void* p) { s_top.give(kTop, p); }
 
 // The owed lines (owedLine(): at a pass's start, the loop's own frame).
 __attribute__((noinline)) void printTopLines() {
@@ -463,6 +477,9 @@ bool away() {
 
 }  // namespace
 
+void* statshold::take(size_t bytes, autodj::CloseReport* r) { return listsTake(bytes, r); }
+void statshold::give(void* p) { listsGive(p); }
+
 playlog::Folds* ListeningStats::begin(tagstore::Fs& fs, const cardroot::Root& root) {
   fs_ = &fs;
   hasCommit_ = root.hasRoot && root.commitTime != 0;
@@ -489,6 +506,7 @@ playlog::Folds* ListeningStats::begin(tagstore::Fs& fs, const cardroot::Root& ro
   m.keep = psramAlloc;
   m.keepRelease = psramFree;
   glue_ = new (s_glue) sg::Glue(fs, static_cast<sg::Env&>(*this), m);
+  lists_.begin(glue_, &fs);
   const int64_t t0 = esp_timer_get_time();
   const sx::Opened& o = glue_->begin(root.acks, bootWait);
   logRead(o, "at the boot", msSince(t0));
@@ -519,6 +537,9 @@ void ListeningStats::pass(const Pass& p, uint32_t nowMs) {
 
 bool ListeningStats::mayScan() {
   if (!glue_) return true;
+  // An S2 ask holds its block at the top (a remount's scan: an ask waits
+  // for the boot's): the scan's pieces wait for it, a pass at a time.
+  if (lists_.holds()) return false;
   switch (glue_->scanWaits(updating_, joinWorking_)) {
     case sg::ScanWait::Update:
       // A library update asked and not over, the boot's fold not begun:
@@ -597,6 +618,9 @@ void ListeningStats::written(const playlog::Slot& s) {
 }
 
 void ListeningStats::ending(uint64_t untilMs) {
+  // (An S2 ask's step on the card worker ends first: no rotation's save
+  // replaces stats.bin under its reads. Its block given back.)
+  if (untilMs == 0) lists_.ending(3000);
   if (glue_) glue_->ending(untilMs);
 }
 
@@ -877,6 +901,10 @@ void ListeningStats::command(const char* arg) {
       askLook(kLookTrack, "Ht");
       return;
     }
+    case 'r':
+    case 'l':
+    case 'w':
+    case 'p': lists_.command(arg); return;
     case 's':
       if (glue_->booting()) {
         Serial.printf("[listen] Hs refused: %s\n", refusedText(sg::Refused::Booting));
@@ -888,7 +916,7 @@ void ListeningStats::command(const char* arg) {
       return;
     default:
       Serial.println("[listen] H: the state; Hd the last 7 UTC days; Hm MARK, ACKS and the log; Ht<16 hex> a track's "
-                     "row; Hs a save now");
+                     "row; Hs a save now; Hr rank now; Hl<shelf>[window] a list; Hw walk now; Hp the playing track");
       return;
   }
 }
@@ -1137,22 +1165,25 @@ void ListeningStats::printMarks() {
 void ListeningStats::printTrack(uint64_t h) {
   const int64_t t0 = esp_timer_get_time();
   const sg::TrackLook t = glue_->track(h);
-  const float ms = msSince(t0);
+  printTrackLook("track", h, t, msSince(t0));
+}
+
+void ListeningStats::printTrackLook(const char* who, uint64_t h, const sg::TrackLook& t, float ms) {
   const char* base = t.base == sg::TrackLook::Base::None       ? "no base"
                      : t.base == sg::TrackLook::Base::Found    ? "in the base"
                      : t.base == sg::TrackLook::Base::NotThere ? "not in the base"
                                                                : "the base UNREAD";
   const char* delta = t.unread ? ", stats.bin's TRKD UNREAD" : t.delta ? ", and in TRKD or the records" : "";
   if (t.row.hash == 0) {
-    Serial.printf("[listen] track %016llx: no row (%s%s; %lu base reads, %.1f ms)\n", static_cast<ull>(h), base,
+    Serial.printf("[listen] %s %016llx: no row (%s%s; %lu base reads, %.1f ms)\n", who, static_cast<ull>(h), base,
                   t.unread ? delta : ", not in TRKD or the records", static_cast<ul>(t.reads), ms);
     return;
   }
   char first[24], last[24];
   timeText(t.row.firstAt, first, sizeof(first));
   timeText(t.row.lastAt, last, sizeof(last));
-  Serial.printf("[listen] track %016llx: %u plays, %u skips; first %s (%s), last %s; lastOrd %lu (%s%s; %lu base reads, "
+  Serial.printf("[listen] %s %016llx: %u plays, %u skips; first %s (%s), last %s; lastOrd %lu (%s%s; %lu base reads, "
                 "%.1f ms)\n",
-                static_cast<ull>(h), static_cast<unsigned>(t.row.plays), static_cast<unsigned>(t.row.skips), first,
+                who, static_cast<ull>(h), static_cast<unsigned>(t.row.plays), static_cast<unsigned>(t.row.skips), first,
                 srcName(t.row.src), last, static_cast<ul>(t.row.lastOrd), base, delta, static_cast<ul>(t.reads), ms);
 }

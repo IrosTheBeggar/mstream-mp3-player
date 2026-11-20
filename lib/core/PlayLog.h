@@ -470,6 +470,9 @@ public:
   // the player's state and the backend's position and length.
   void tick(PlayState state, uint32_t positionMs, bool positionKnown, uint32_t durationMs);
   bool open() const { return open_; }
+  // The open play's path hash (the console's Hp: docs/LISTENING-STATS.md
+  // 9.3): 0 when none is open or it names no card file.
+  uint64_t openHash() const { return open_ && logged_ ? cur_.file.pathHash : 0; }
   // The plays waiting for their slots, oldest first.
   uint32_t pending() const { return count_; }
   const Played& oldest() const { return ring_[head_]; }
