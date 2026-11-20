@@ -102,23 +102,6 @@ void introRun(Pairs& p, uint32_t first, uint32_t last, int budget) {
 
 }  // namespace
 
-// The path hash (AUTODJ-INDEX.md 2.3) of the track's path as the index
-// writes it: "/music/" (any case) and the rest is pathHash()'s, the root's
-// literal lowercase; any other path its bytes' FNV-1a 64.
-bool trackPathHash(const LibraryIndex& index, uint32_t track, char* path, size_t size, uint64_t* hash) {
-  const size_t n = index.trackPath(track, path, size);
-  if (n == 0) return false;
-  static const char kRoot[] = "/music/";
-  const size_t k = sizeof(kRoot) - 1;
-  bool root = n > k;
-  for (size_t i = 0; i < k && root; ++i) {
-    const char c = path[i];
-    root = (c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c) == kRoot[i];
-  }
-  *hash = root ? cc::pathHash(path + k, n - k) : cc::fnv1a64(path, n);
-  return true;
-}
-
 namespace {
 
 // What blocks of `bytes` in all can take of the heap: each one's rounding to
@@ -492,10 +475,10 @@ size_t Join::freeTransient() {
   give(buf_, bufBytes_);
   buf_ = nullptr;
   bufBytes_ = 0;
-  give(folderHash_, folderBytes());
-  folderHash_ = nullptr;
-  folderLen_ = nullptr;
+  give(folderBlock_, folderBytes());
+  folderBlock_ = nullptr;
   folderCount_ = 0;
+  walk_.end();
   return before - held_;
 }
 
@@ -573,7 +556,7 @@ Join::Status Join::begin(const mpdj::Table& table, const LibraryIndex* index) {
   runCount_ = (n + c.runTracks - 1) / c.runTracks;
   // The folders' states: with the default hash, for a library of up to
   // kMaxFolders folders.
-  folderCount_ = hash_ == defaultPathHash && index->folderCount() <= kMaxFolders ? index->folderCount() : 0;
+  folderCount_ = hash_ == defaultPathHash ? pathhash::Walk::foldersFor(*index) : 0;
   const bool ok = place_.largest && place_.freeBytes ? takePlaced(n, rows) : takeKept(n, rows) && takeTransient(n);
   if (!ok) {
     fail(Status::NoMemory, cc::Why::Ok);
@@ -582,7 +565,9 @@ Join::Status Join::begin(const mpdj::Table& table, const LibraryIndex* index) {
   if (n) std::memset(maps_.trackToRow, 0xFF, static_cast<size_t>(n) * sizeof(uint16_t));
   std::memset(maps_.rowToTrack, 0xFF, static_cast<size_t>(rows) * sizeof(uint16_t));
   std::memset(maps_.filters, 0, static_cast<size_t>(rows) * sizeof(uint32_t));
-  nextTrack_ = fillRun_ = sortRun_ = nextFolder_ = 0;
+  fillRun_ = sortRun_ = 0;
+  walk_.setHash(hash_, hashCtx_);
+  walk_.begin(index, folderCount_, folderBlock_);
   phase_ = folderCount_ ? Phase::Folders : Phase::Hash;
   status_ = Status::Working;
   why_ = cc::Why::Ok;
@@ -625,8 +610,7 @@ bool Join::takeFolders(void* block) {
     folderCount_ = 0;
     return false;
   }
-  folderHash_ = static_cast<uint64_t*>(block);
-  folderLen_ = reinterpret_cast<uint16_t*>(folderHash_ + folderCount_);
+  folderBlock_ = block;
   return true;
 }
 
@@ -755,7 +739,7 @@ bool Join::takePlaced(uint32_t n, uint32_t rows) {
       ok = runs_[r].keys != nullptr;
       if (ok) runs_[r].ids = reinterpret_cast<uint16_t*>(runs_[r].keys + runs_[r].cap);
     }
-    if (ok && folderCount_ && !folderHash_) ok = takeFolders(take(folderBytes()));
+    if (ok && folderCount_ && !folderBlock_) ok = takeFolders(take(folderBytes()));
     if (ok && !buf_) {
       buf_ = static_cast<uint8_t*>(take(cfg_.sliceBytes));
       ok = buf_ != nullptr;
@@ -816,67 +800,28 @@ Join::Status Join::step(const LibraryIndex* index) {
 }
 
 bool Join::foldersSlice() {
-  const uint32_t end =
-      folderCount_ - nextFolder_ > cfg_.foldersPerSlice ? nextFolder_ + cfg_.foldersPerSlice : folderCount_;
-  for (uint32_t f = nextFolder_; f < end; ++f) {
-    // trackPathHash()'s rule on the folder's path: a track's is it, '/'
-    // and its name, so "/music" (any case) alone or before a '/' starts
-    // pathHash()'s (from the root's literal lowercase), any other its bytes'.
-    const size_t n = index_->folderPath(f, path_, sizeof(path_));
-    if (n == 0) {
-      folderLen_[f] = kNoPath;
-      continue;
-    }
-    static const char kRoot[] = "/music";
-    bool root = n >= 6 && (n == 6 || path_[6] == '/');
-    for (size_t i = 0; i < 6 && root; ++i) {
-      const char c = path_[i];
-      root = (c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c) == kRoot[i];
-    }
-    folderHash_[f] = root ? cc::fnv1a64(path_ + 6, n - 6, cc::kMusicHash) : cc::fnv1a64(path_, n);
-    folderLen_[f] = static_cast<uint16_t>(n);
-  }
-  nextFolder_ = end;
-  if (end == folderCount_) {
+  walk_.foldersSlice(cfg_.foldersPerSlice);
+  if (walk_.foldersDone()) {
     stats_.folders = folderCount_;
     phase_ = Phase::Hash;
   }
   return true;
 }
 
-bool Join::trackHash(uint32_t t, uint64_t* h) {
-  if (!folderHash_) return hash_(*index_, t, path_, sizeof(path_), h, hashCtx_);
-  const LibraryIndex::Track& track = index_->track(t);
-  const char* name = index_->str(track.name);
-  const size_t len = std::strlen(name);
-  // (An empty name, which no file has: trackPathHash()'s own way.)
-  if (len == 0) return hash_(*index_, t, path_, sizeof(path_), h, hashCtx_);
-  if (track.folder >= folderCount_ || folderLen_[track.folder] == kNoPath) return false;
-  // trackPath()'s: the folder's path, '/', the name and a NUL in kPathBytes.
-  if (folderLen_[track.folder] + 1 + len + 1 > kPathBytes) return false;
-  *h = cc::fnv1a64(name, len, cc::fnv1a64("/", 1, folderHash_[track.folder]));
-  return true;
+void Join::fillRun(void* ctx, uint32_t t, uint64_t h) {
+  Join& j = *static_cast<Join*>(ctx);
+  while (j.runs_[j.fillRun_].len == j.runs_[j.fillRun_].cap) ++j.fillRun_;  // every track has a place
+  Run& r = j.runs_[j.fillRun_];
+  r.keys[r.len] = static_cast<uint32_t>(h >> 32);
+  r.ids[r.len] = static_cast<uint16_t>(t);
+  ++r.len;
 }
 
 bool Join::hashSlice() {
-  const uint32_t n = maps_.tracks;
-  const uint32_t end = n - nextTrack_ > cfg_.hashPerSlice ? nextTrack_ + cfg_.hashPerSlice : n;
-  const bool worked = nextTrack_ < end;
-  for (uint32_t t = nextTrack_; t < end; ++t) {
-    uint64_t h;
-    if (!trackHash(t, &h)) {
-      ++stats_.unhashed;
-      continue;
-    }
-    while (runs_[fillRun_].len == runs_[fillRun_].cap) ++fillRun_;  // every track has a place
-    Run& r = runs_[fillRun_];
-    r.keys[r.len] = static_cast<uint32_t>(h >> 32);
-    r.ids[r.len] = static_cast<uint16_t>(t);
-    ++r.len;
-    ++stats_.hashed;
-  }
-  nextTrack_ = end;
-  if (nextTrack_ == n) phase_ = Phase::Sort;
+  const bool worked = walk_.hashSlice(cfg_.hashPerSlice, fillRun, this);
+  stats_.hashed = walk_.hashed();
+  stats_.unhashed = walk_.unhashed();
+  if (walk_.tracksDone()) phase_ = Phase::Sort;
   return worked;
 }
 
@@ -1029,7 +974,7 @@ void Join::merge(uint64_t hash, uint16_t row) {
     for (uint32_t j = run.cur; j < run.len && run.keys[j] == prefix; ++j) {
       uint64_t full;
       ++stats_.confirms;
-      if (!trackHash(run.ids[j], &full) || full != hash) {
+      if (!walk_.trackHash(run.ids[j], &full) || full != hash) {
         ++stats_.prefixOnly;
         continue;
       }

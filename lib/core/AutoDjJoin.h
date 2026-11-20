@@ -9,6 +9,7 @@
 #include "CardContainer.h"
 #include "LibraryIndex.h"
 #include "MoodFilter.h"
+#include "PathHashWalk.h"
 
 // Auto DJ's join (docs/AUTODJ-INDEX.md 11.2; the engine design's 3.3): the
 // card's AutoDJ index, an open mpdj::Table, turned into this library's
@@ -42,6 +43,8 @@
 //             32 bits and its id in parallel u32 and u16 arrays (6 bytes a
 //             track, no padding), in runs of 4,096 (24 KB a block, so no
 //             block grows with the library): hashPerSlice tracks a slice.
+//             Folders and Hash are pathhash::Walk's (PathHashWalk.h), the
+//             listening stats' map's walk too: one hashing rule.
 //   Sort      each run by (prefix, id), one run a slice: sortPairs(), the
 //             bounded introsort of IdSort.h over the two arrays.
 //   Strings   STRS checked by mpdj::Table::check() (8.3; a few hundred
@@ -199,7 +202,8 @@ void sortPairs(uint32_t* keys, uint16_t* ids, uint32_t n);
 // lowercase), any other path its bytes' FNV-1a 64. False: no path (it
 // doesn't fit). Join's default hook; the firmware's Auto DJ button looks a
 // track's row up with it (mpdj::Table::rowOf()) while nothing is joined.
-bool trackPathHash(const LibraryIndex& index, uint32_t track, char* path, size_t size, uint64_t* hash);
+// pathhash::trackPathHash(), PathHashWalk's.
+using pathhash::trackPathHash;
 
 // The spacer that puts `bytes` at the top of the free block that `largest`
 // tells of, under a TLSF heap (ESP-IDF's: a request is rounded up to its size
@@ -473,7 +477,7 @@ public:
     uint32_t foldersPerSlice = 250;   // Folders: folders hashed a slice
   };
   // The folders' states up to this many folders (an 80 KB block).
-  static constexpr uint32_t kMaxFolders = 8192;
+  static constexpr uint32_t kMaxFolders = pathhash::Walk::kMaxFolders;
 
   // For the console's D, the tests and the one-off measurements.
   struct Stats {
@@ -553,7 +557,7 @@ public:
   size_t heldBytes() const { return held_; }
   const Stats& stats() const { return stats_; }
 
-  static constexpr size_t kPathBytes = 512;  // the default hash's path buffer
+  static constexpr size_t kPathBytes = pathhash::Walk::kPathBytes;  // the default hash's path buffer
 
 private:
   struct Run {
@@ -582,8 +586,8 @@ private:
   // `bufEnd`): a slice takes records while it needs at most one.
   uint32_t refillsTo(uint32_t recEnd, uint32_t* bufEnd) const;
   void merge(uint64_t hash, uint16_t row);
-  // A track's path hash: from its folder's state (Folders), else the hook.
-  bool trackHash(uint32_t track, uint64_t* hash);
+  // The Hash phase's visitor: a track's hash into the run being filled.
+  static void fillRun(void* ctx, uint32_t track, uint64_t hash);
 
   // begin()'s blocks: the kept ones (the maps), the transient ones (the
   // runs' table, the runs, the buffer, the folders' states). False: one
@@ -592,7 +596,7 @@ private:
   bool takeTransient(uint32_t n);
   // The folders' states in `block` (folderBytes() of it); none wanted: true.
   bool takeFolders(void* block);
-  size_t folderBytes() const { return static_cast<size_t>(folderCount_) * (sizeof(uint64_t) + sizeof(uint16_t)); }
+  size_t folderBytes() const { return pathhash::Walk::bytesFor(folderCount_); }
   // Under the placement (setPlacement()): every block where the heap puts
   // it unless that is the largest free block, the rest at its top.
   bool takePlaced(uint32_t n, uint32_t rows);
@@ -623,25 +627,21 @@ private:
 
   Run* runs_ = nullptr;
   uint32_t runCount_ = 0;
-  uint32_t nextTrack_ = 0;  // Hash: the next track
   uint32_t fillRun_ = 0;    // Hash: the run being filled
   uint32_t sortRun_ = 0;    // Sort: the next run
   uint8_t* buf_ = nullptr;  // the stream's buffer
   uint32_t bufBytes_ = 0;
-  // Folders: each folder's path hash so far and its path's length
-  // (kNoPath: it has none: deeper than LibraryIndex::folderPath() goes, or
-  // longer than kPathBytes), in one block; nullptr: the hook's hash.
-  static constexpr uint16_t kNoPath = 0xFFFF;
-  uint64_t* folderHash_ = nullptr;
-  uint16_t* folderLen_ = nullptr;
+  // Folders: the folders' states' block (folderBytes() of it, the walk's
+  // while it works) and how many; nullptr: the hook's hash.
+  void* folderBlock_ = nullptr;
   uint32_t folderCount_ = 0;
-  uint32_t nextFolder_ = 0;
+  // Folders and Hash, and the Paths' confirms: each track's path hash.
+  pathhash::Walk walk_;
   cardcontract::Stream stream_;
   uint32_t streamEnd_ = 0;  // the section's end
   uint32_t bufEnd_ = 0;     // the end of the stream's buffered bytes (refillsTo())
   uint32_t rec_ = 0;        // the next record of the section
   uint64_t prevHash_ = 0;   // Paths: the last entry's hash
-  char path_[kPathBytes] = {};
 };
 
 }  // namespace autodj
