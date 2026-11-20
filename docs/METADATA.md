@@ -8213,7 +8213,8 @@ section 1 and 5.14's "As built" notes list the changes):
   2026-11-19), and the boot's save, the first allocation after a computer
   filled the card, 5,523 ms once (#63's uncovered case, main's too); a
   few free clusters far apart and a free count not known stay uncured, by
-  code. Whether a save also checks free space first is the owner's call.
+  code. A save doesn't check free space first (the owner's call, settled
+  2026-11-19 with the other eight: the plan's section 1).
 - **The heap model** (the plan's 6.7 and 5.14, MODELLED: test_autodj_join,
   the firmware's own glue on a card in memory, every PSRAM block it carves
   through the model heap; nothing resident there since the object is

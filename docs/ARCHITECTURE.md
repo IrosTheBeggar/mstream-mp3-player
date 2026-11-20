@@ -1668,7 +1668,7 @@ the whole FAT: LISTENING-STATS 5.14's B2); with #63's hole hint
 the first allocation after a computer filled the card still walks the
 FAT once a mount (5,523 ms), and a few free clusters far apart or a free
 count not known stay uncured, by code (LISTENING-STATS 13's "A nearly
-full card"; whether a save checks free space first is the owner's call). A save is refused with the card away
+full card"; a save doesn't check free space first: the owner's call, settled 2026-11-19). A save is refused with the card away
 or another card in the slot, after a log file not read whole, once the card's `stats.bin` is no
 longer the copy this RAM stands on (another player had the card: its
 stats aren't saved over), and once the session is behind its log (the
