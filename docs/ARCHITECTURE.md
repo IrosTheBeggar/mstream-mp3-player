@@ -3085,7 +3085,9 @@ strings.
   nothing between asks (the owner's "A: nothing held", 2026-11-20). Each
   console ask (`app/StatsLists`: Hr, Hl, Hw, Hp; one at a time) waits for
   the stats on and the boot's scan done, no library update asked, Auto
-  DJ's join neither working nor due (a rank), the card there; then, at a
+  DJ's join neither working nor due and the card worker's walk and
+  compactions done (a rank, which comes after them), the card there;
+  then, at a
   pass the play log's write gate lets through (the turn Hs and the looks
   take), carves ONE block at the top of PSRAM's largest free block
   through the boot hold's TopHold (the free block above it closed by
