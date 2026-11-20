@@ -4585,9 +4585,10 @@ Queue, Dance and Output (with its Pair and About pages).
   the mood fit) and compares this pass's with it. In 0.14.0 a second
   `noCard`, `emptyState()`'s result, always true, hid the card's: with a
   card in, every lit pass redrew the whole state (about 130 KB over the
-  bus the card shares, about 38 ms), so touches there were read about 8
-  times less often and the boot's Auto DJ join took about 6 s instead of
-  about 2.5 s. `emptyState()` returns nothing now, and
+  bus the card shares, about 38 ms), so the loop ran about 16 passes a
+  second there instead of 120 to 140 (touches read about 8 times less
+  often) and the boot's Auto DJ join took 5 to 6 s instead of under 2 s.
+  `emptyState()` returns nothing now, and
   `-Werror=shadow=local` stops the slip itself ([Build
   notes](#build-notes)). Owed to the 0.15.0 release notes (feature
   branches never edit `.github/release-notes.md`), a line in their
@@ -4595,14 +4596,19 @@ Queue, Dance and Output (with its Pair and About pages).
   time.** Since 0.14.0, Now Playing with nothing queued and a card in
   drew its whole "Nothing playing" screen again on every pass while the
   screen was lit: touches on that screen were read about 8 times less
-  often, and Auto DJ's join at a start took about 6 s instead of about
-  2.5 s. It is drawn once again, and again only when it changes. (The
-  line's figures are 0.14.0's, from the code, the logs of builds before
-  main 4454316 and a host harness; the fixed build hasn't run on the
-  Core2 yet. With #61's listening stats in, a boot's join begins only
-  once their boot scan lets its blocks go (`AutoDj::Env::statsHold`):
-  read the boot's join on the merged build before the line keeps "about
-  2.5 s".) With nothing
+  often, and Auto DJ's join at a start took 5 to 6 s instead of under
+  2 s. It is drawn once again, and again only when it changes. (MEASURED
+  on the Core2 on 2026-11-20, the spare card, an empty queue, Auto DJ
+  on, nothing playing, the same console script on both builds: #61's
+  merge without the fix (985f4a9) logged 261 slow passes of about 39 ms
+  between `[ui] up` and `[ui] dark`, its loop ran 16 passes a second
+  while the join ran, and the boot's join took 5,332 ms; the fix
+  (4b1b602) logged 2, one at each of the script's faked state changes
+  (uiFn, uiF0: the redraw a change owes), ran 123 to 140 passes a
+  second, and joined in 1,642 ms. Main's idle boots before #61 (89188f4,
+  987216f) joined in 6,230 to 6,367 ms. The glance, a touch on the dark
+  screen, wasn't brought up on the device: the host harness covers it.)
+  With nothing
   queued the A/B/C clicks are inert, Auto DJ on or not: a short double
   buzz instead of the tap tick (`ButtonPolicy::Transport::idle()`; the input layer plays the
   buttons' feedback once the policy has acted).
