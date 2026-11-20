@@ -43,6 +43,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  FilterGrid  FilteredAlbums (the filters' editor, Albums)     |
               |  PlayLog (the play log: slot, files, tracker, outbox, gate)   |
               |  StatsFold  StatsFile  StatsGlue (the listening stats)        |
+              |  StatsRank  StatsMap  PathHashWalk (their lists, their map)   |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -70,6 +71,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  app/Waves (the waveform index: Now Playing's shapes)         |
               |  app/PlayHistory (the play log on the card: plays.jnl, NVS)   |
               |  app/ListeningStats (listening stats: stats.bin, console H)   |
+              |  app/StatsLists (their lists on the console: Hr Hl Hw Hp)     |
               |  main.cpp: input events, Bluetooth events, UiHost             |  ESP8266Audio
               +---------------------------------------------------------------+
 ```
@@ -2935,7 +2937,14 @@ strings.
   another index. Switched off, the join is given back (155,284 B at
   19,410 tracks, MEASURED 2026-10-13), so a listener who never uses Auto
   DJ keeps that PSRAM. All of it is in PSRAM; internal RAM holds
-  main.cpp's pointer.
+  main.cpp's pointer. The join's Folders and Hash phases (each folder's
+  path hashed once, each track's hash from its folder's) are
+  `lib/core/PathHashWalk`'s (`pathhash::Walk`, with `trackPathHash()`),
+  the walk the listening stats' map takes too (LISTENING-STATS.md 6.2):
+  one hashing rule, the join's output unchanged (`test_autodj_join`).
+  The join doesn't begin while the listening stats hold a block: the
+  boot scan's, or a console ask's (Hr, Hl, Hw, Hp: `Env::statsHold`); and
+  a rank waits for a join that works or is due (`AutoDj::joinPending()`).
 - **Waveforms** ([WAVEFORM-INDEX.md](WAVEFORM-INDEX.md) 11): `app/Waves`,
   a member of the `Ui`, takes the path and the row the boot's root names,
   and opens nothing. Now Playing wants its track's path hash, with no card
@@ -3071,6 +3080,37 @@ strings.
   S1's device round 2 found the carves again after each update cost the
   largest free block up to 106,496 B against main, and the owner chose
   the rework (2026-11-12).
+
+  S2 (the lists, the map: LISTENING-STATS.md 6, 9.6; console only) keeps
+  nothing between asks (the owner's "A: nothing held", 2026-11-20). Each
+  console ask (`app/StatsLists`: Hr, Hl, Hw, Hp; one at a time) waits for
+  the stats on and the boot's scan done, no library update asked, Auto
+  DJ's join neither working nor due (a rank), the card there; then, at a
+  pass the play log's write gate lets through (the turn Hs and the looks
+  take), carves ONE block at the top of PSRAM's largest free block
+  through the boot hold's TopHold (the free block above it closed by
+  caps; a decoder's room asked, the ask refused without it), holding the
+  ask's state and everything its steps fill (the rank's work memory, the
+  lists, the 30 days' RCNT rows, a copy of the records, and for Hl or Hw
+  the played set, the folders' states, the album bits, the lists'
+  hashes), and opens `stats.bin` and its base there (the worker
+  allocates nothing). The card worker then ranks (`ScanScheduler::
+  Job::Stats` in the Rank lane: background work after a compaction,
+  never under the update step or a yield, priority 0 lit and 1 dark,
+  never cut; `lib/core/StatsRank`: the base, `stats.bin`'s TRKD and the
+  records merged by hash, RCNT summed by hash, each list its cap and 16)
+  or reads a track's rows (Hp, the Track lane beside the waveform read:
+  a binary search of the base, no sparse index kept). While its step is
+  queued or runs, no stats save and no slot is made (`PlayHistory::loop`),
+  so nothing replaces `stats.bin` under its reads. Hl and Hw then walk the
+  library on the loop after Auto DJ's step (`lib/core/StatsMap` over
+  `pathhash::Walk`, up to 8 ms a pass, never in a pass the join works,
+  the loop's idle wait short meanwhile; an index that changes under it
+  begins it again). The block is given back when the ask ends; while it is
+  held a library update waits in Asked (`UpdateEnv::statsWait`, as for the
+  boot scan's blocks), Auto DJ's join doesn't begin, and a remount's boot
+  scan waits a pass at a time. `.bss` holds the ask's few bytes of state
+  (`ListeningStats::lists_`); its PSRAM comes and goes with it.
 
 ## Input
 
