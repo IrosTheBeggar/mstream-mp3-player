@@ -4,7 +4,7 @@ Listening stats count the plays on the card and show them in the Library: a hub 
 
 ## 1. Status
 
-**Status (2026-11-20): S2 built (C11-C15), reviewed, host-gated and device-checked (9.6's runs A-F on the spare, main 645679f the control), on the local branch `claude/listening-stats-s2` from main 645679f; the owner's "A: nothing held"; the push and the PR owed.** S2's sections as planned (6.1, 6.5, 6.7's S2 half, 6.8) were written before S1's rework (5.14) and held a hash → id map and the album bits resident, re-taken after every Live, and a rank copying a RAM snapshot of TRKD and RCNT. Since the rework RAM holds only the 40 records (`lib/core/StatsFold.h:182`), and 13 ("The resident set's budget", "PSRAM at the ceiling") says the map can't be resident. Asked, the owner chose **A: nothing held** (2026-11-20, relayed word for word: "A: nothing held"):
+**Status (2026-11-20): S2 built (C11-C15), reviewed, host-gated and device-checked (9.6's runs A-F on the spare, main 645679f the control), on the branch `claude/listening-stats-s2` from main 645679f; the owner's "A: nothing held"; the dips at an ask's peak accepted by the owner; pushed for its PR.** S2's sections as planned (6.1, 6.5, 6.7's S2 half, 6.8) were written before S1's rework (5.14) and held a hash → id map and the album bits resident, re-taken after every Live, and a rank copying a RAM snapshot of TRKD and RCNT. Since the rework RAM holds only the 40 records (`lib/core/StatsFold.h:182`), and 13 ("The resident set's budget", "PSRAM at the ceiling") says the map can't be resident. Asked, the owner chose **A: nothing held** (2026-11-20, relayed word for word: "A: nothing held"):
 - nothing of S2 is held between asks, and S2 ranks only when asked: no rank at the boot, after a Live or at a day's change;
 - each console ask (`Hr`, `Hl`, `Hw`) carves one block at the top through the hold (5.14's fix A: `autodj::TopHold`, caps), ranks on the card worker (`Job::Stats`, the Rank lane, gated against Auto DJ's join), walks on the loop, prints, and gives every block back;
 - `Hp`'s read is a binary search of the base in the Track lane; no sparse index is kept;
@@ -27,8 +27,9 @@ The review (9.1) ran, its fixes their own commit (72af6b9, "Code: what the revie
 - after an update `Hw` is refused for room, as modelled;
 - the Opus plays.
 
-Run F found one defect, fixed in a5c2950: a rank's ask had held its block while queued behind the boot's walk. Owed: the push and the PR (the owner's word). The owner's calls left open:
-- whether 9.6's B and C lines (within 122,880 B of main's, at or over 245,764 B where main is) bind at an ask's own 1-3 s peak (`Hw`'s 204,788 B idle, `Hr`'s 233,460 B after one update);
+Run F found one defect, fixed in a5c2950: a rank's ask had held its block while queued behind the boot's walk.
+
+**The owner accepts the dips (2026-11-20, relayed word for word: "Accept dips, push PR").** At an ask's own 1-3 s peak the largest free block dips under 9.6's B and C lines (`Hw`'s 204,788 B idle, `Hr`'s 233,460 B after one update). Those lines apply between asks, where S2 matches main. At the peak they don't apply: Auto DJ's join and a library update wait for the ask's block, and an ask is refused unless a decoder's buffers still fit beside it. If S3 holds a page's lists longer than a moment, the lines apply again. The push and the PR: the owner's word, the same message. The owner's calls left open:
 - O5 (3.1, S3's);
 - whether S3 must make `Hw`/Not played yet fit after an update on a card of nearly every track played (13's "PSRAM at the ceiling").
 
@@ -1855,7 +1856,9 @@ pio run -e core2 -e core2-dio
 
 **The owner's decision (2026-11-20): "A: nothing held"** (section 1). It amends the list above: nothing held between asks and no automatic rank (6.4, 6.8); the fence's drop and redo is a guard, since a library update waits for an ask's block; `Hp` reads by a binary search, with no sparse index kept; the live fold's id isn't asked (no list held to patch). The device runs B and F become: **B** `D` after the boot (Auto DJ off and on), and `D` at the rank's peak (`Hw` asked, `D` while it holds its block) with Auto DJ on; **F** a reset with Auto DJ on, `Hw` asked during the boot's join: the rank waits for the join (its "waits: Auto DJ's join" line), and the walk is never in the join's pass.
 
-**As built (2026-11-20)**, on `claude/listening-stats-s2` from main 645679f (local, not pushed):
+**The owner's call on B and C (2026-11-20, after the device pass: "Accept dips, push PR").** B's and C's lines (joined within 122,880 B of the control, at or over 245,764 B where the control is) apply between asks. They don't apply at an ask's own 1-3 s peak, where Auto DJ's join and a library update wait for the ask's block and an ask is refused unless a decoder's buffers still fit beside it. They apply again if S3 holds a page's lists longer than a moment.
+
+**As built (2026-11-20)**, on `claude/listening-stats-s2` from main 645679f (one PR, with the device pass's fix and these docs):
 - **C11** 3f6f180 `lib/core/PathHashWalk`; `test_stats_map`'s walk cases.
 - **C12** 2c54a44 `lib/core/StatsRank`; `tools/statsref.py`'s `rank_scenarios()` and `rank_files()` (`stats/rank.json`, `stats/rank/`: 8 files, 679 in all), `tools/test_statsref.py` 65; `test_stats_rank`.
 - **C13** 04f4213 `lib/core/StatsMap` and its cases in `test_stats_map`; 3b51cfa the heap model's S2 half (`test_autodj_join`'s `test_an_s2_ask_in_a_model_heap`; 46 cases).
@@ -1897,7 +1900,8 @@ pio run -e core2 -e core2-dio
   - **Not met as written, at an ask's own peak:**
     - `Hw`'s block, at 285,836 B, is itself larger than 122,880 B, so `D` at its peak can't come within 122,880 B of main's. It reads 204,788 B idle, under 245,764 B where main's 557,044 B is over it.
     - `Hr`'s peak after the first update reads 233,460 B, under 245,764 B where main's 319,476 B is over it (it is within 122,880 B of main's).
-  - Under A each peak lasts 1-3 s: an update and the join wait for it (`statsWait`, `statsHold`), and the ask is refused unless a decoder's buffers fit beside it. The table's lines were written for blocks held between asks. **Whether they bind at an ask's peak is the owner's call**, beside 13's "PSRAM at the ceiling" (S3's).
+  - Under A each peak lasts 1-3 s: an update and the join wait for it (`statsWait`, `statsHold`), and the ask is refused unless a decoder's buffers fit beside it. The table's lines were written for blocks held between asks.
+  - **The owner accepts the dips (2026-11-20, relayed word for word: "Accept dips, push PR").** B's and C's lines apply between asks, where S2 matches main to the byte. They don't apply at an ask's own 1-3 s peak. There, the gate covers what the lines protect (Auto DJ's join and a library update wait for the ask's block), and so does the refusal rule (an ask is refused unless a decoder's buffers still fit beside it). If S3 holds a page's lists longer than a moment, the lines apply again (13's "PSRAM at the ceiling" stays S3's).
 - **Not covered:** a lit screen, a real Bluetooth stream or the headphones (silent mode only), Auto DJ off, and the music card (S5a first).
 - **The board** was left parked in its ROM bootloader (`read-mac`, "Staying in bootloader"), on main 645679f's CI build, with the spare in. The spare's state is that of the runs' plays and library updates.
 - **a5c2950's gate:** it changes `src/app` alone (`CardTasks`, `StatsLists`), which no host test compiles, so the host gate above stands. `pio run -e core2 -e core2-dio` succeeds for both (built with these docs' edits uncommitted, so the version string ends in "-dirty"; the core2 size equals a clean build's). Against main 645679f's CI build:
