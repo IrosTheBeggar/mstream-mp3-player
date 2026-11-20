@@ -6,8 +6,15 @@
 // folder, not test/support), tools/fatmodel.py compiles it with gcc. The
 // disk functions FatFs calls are test/support/FatModel.h's.
 #include "FatFsHost.h"
+// FatFs isn't ours to rename: the native build's -Werror=shadow=local
+// (tools/shadow_guard.py, on the suite's whole environment) is off for it.
+// Both classes: ignoring "-Wshadow" leaves them on.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wshadow=local"
+#pragma GCC diagnostic ignored "-Wshadow=compatible-local"
 #include "ff.c"
 #include "ffunicode.c"
+#pragma GCC diagnostic pop
 
 // FF_MULTI_PARTITION 1, as ESP-IDF builds it: its diskio.c's table, logical
 // drive n on physical drive n with its partition found (0: the volume at
