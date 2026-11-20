@@ -116,6 +116,14 @@ public:
   // save for a full log. A card that goes away mid-scan gives them back
   // (ListeningStats::scanAway()).
   bool overflowHeld() const { return active_ && stats_.overflowHeld(); }
+  // S2's asks (app/StatsLists: Hr, Hl, Hw, Hp): nullptr without a play log.
+  // Their gates this pass (the walk's own, uiStarted and listMoving, are
+  // main.cpp's to add).
+  StatsLists* statsLists() { return active_ ? &stats_.lists() : nullptr; }
+  StatsLists::Gates listsGates(uint32_t nowMs, bool cardHeld);
+  // An ask holds its block: the update step waits in Asked (as for
+  // statsScanHolds()), and Auto DJ's join doesn't begin.
+  bool listsHold() const { return active_ && stats_.lists().holds(); }
 
   // The boot's scan: slots a pass (four reads: about 10 KB).
   static constexpr uint32_t kScanSlotsPerPass = 4 * playlog::kReadBytes / playlog::kSlot;

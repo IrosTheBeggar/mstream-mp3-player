@@ -297,7 +297,64 @@ struct Rows {
 
 }  // namespace
 
-Report rank(tagstore::Fs& fs, const Input& in, const Memory& mem, Ranker& ranker) {
+Outcome open(tagstore::Fs& fs, const Input& in, Files* out) {
+  *out = Files();
+  bool cardFailed = false;
+  out->bin = fs.openRead(sx::kStatsBin, &cardFailed);
+  if (!out->bin && cardFailed) return Outcome::Io;
+  // stats.bin: the copy the session stands on, or none on either side.
+  if (!out->bin != !in.present) {
+    close(fs, out);
+    return Outcome::Changed;
+  }
+  if (in.baseGen != 0) {
+    char name[sx::kNameCap];
+    sx::baseName(in.baseGen, name, sizeof(name));
+    cardFailed = false;
+    out->base = fs.openRead(name, &cardFailed);
+    if (!out->base) {
+      close(fs, out);
+      return cardFailed ? Outcome::Io : Outcome::Base;
+    }
+  }
+  return Outcome::Ok;
+}
+
+void close(tagstore::Fs& fs, Files* f) {
+  if (f->base) fs.close(f->base);
+  if (f->bin) fs.close(f->bin);
+  *f = Files();
+}
+
+namespace {
+
+// stats.bin's frame (the copy the session stands on: its generation and
+// header CRC) and the base's (the one HEAD names: its generation, header
+// CRC and rows), each through its watch.
+Outcome frames(const Files& f, const Input& in, sx::Scratch* sc, tagstore::ReadWatch& binSrc,
+               tagstore::ReadWatch& baseSrc, uint64_t* bytes) {
+  if (!f.bin != !in.present || (in.baseGen != 0) != (f.base != nullptr)) return Outcome::Changed;
+  if (f.bin) {
+    const cc::Why w = sc->frame.open(binSrc, sx::kStatsSpec, nullptr);
+    if (w != cc::Why::Ok) return binSrc.failed() ? Outcome::Io : Outcome::Changed;
+    if (sc->frame.header().generation != in.generation || sc->frame.header().headerCrc != in.headerCrc)
+      return Outcome::Changed;
+    *bytes += sx::kHeaderBytes + static_cast<uint64_t>(sc->frame.header().sectionCount) * cc::kDirEntryBytes;
+  }
+  if (f.base) {
+    cc::Why w = sc->base.open(baseSrc, sx::kBaseSpec, nullptr);
+    if (w == cc::Why::Ok && (sc->base.header().generation != in.baseGen || sc->base.header().headerCrc != in.baseCrc ||
+                             sc->base.section(0).count != in.baseRows))
+      w = cc::Why::Counts;
+    if (w != cc::Why::Ok) return baseSrc.failed() ? Outcome::Io : Outcome::Base;
+    *bytes += sx::kBaseRowsAt;
+  }
+  return Outcome::Ok;
+}
+
+}  // namespace
+
+Report rank(const Files& f, const Input& in, const Memory& mem, Ranker& ranker) {
   Report rep;
   ranker.begin(mem.lists, in.hasToday, in.today);
   Windows win;
@@ -311,55 +368,17 @@ Report rank(tagstore::Fs& fs, const Input& in, const Memory& mem, Ranker& ranker
   sx::Scratch* sc = new (mem.work) sx::Scratch;
   uint8_t* r1 = mem.work + sx::kScratchBytes + sx::kBufBytes;
   uint8_t* r2 = r1 + sx::kReadBytes;
-
-  // stats.bin: the copy the session stands on, or none on either side.
-  bool cardFailed = false;
-  tagstore::File* bin = fs.openRead(sx::kStatsBin, &cardFailed);
-  if (!bin && cardFailed) {
-    rep.outcome = Outcome::Io;
+  tagstore::ReadWatch binSrc(f.bin), baseSrc(f.base);
+  rep.outcome = frames(f, in, sc, binSrc, baseSrc, &rep.bytesRead);
+  if (rep.outcome != Outcome::Ok) {
+    ranker.finish();
     return rep;
-  }
-  tagstore::ReadWatch binSrc(bin);
-  if (!bin != !in.present) {
-    if (bin) fs.close(bin);
-    rep.outcome = Outcome::Changed;
-    return rep;
-  }
-  if (bin) {
-    const cc::Why w = sc->frame.open(binSrc, sx::kStatsSpec, nullptr);
-    if (w != cc::Why::Ok || sc->frame.header().generation != in.generation ||
-        sc->frame.header().headerCrc != in.headerCrc) {
-      fs.close(bin);
-      rep.outcome = w == cc::Why::Ok ? Outcome::Changed : binSrc.failed() ? Outcome::Io : Outcome::Changed;
-      return rep;
-    }
-    rep.bytesRead += sx::kHeaderBytes + static_cast<uint64_t>(sc->frame.header().sectionCount) * cc::kDirEntryBytes;
-  }
-
-  // The base HEAD names: its header's CRC HEAD's, its rows HEAD's count.
-  tagstore::File* base = nullptr;
-  tagstore::ReadWatch baseSrc;
-  if (in.baseGen != 0) {
-    char name[sx::kNameCap];
-    sx::baseName(in.baseGen, name, sizeof(name));
-    base = fs.openRead(name, &cardFailed);
-    baseSrc.watch(base);
-    cc::Why w = base ? sc->base.open(baseSrc, sx::kBaseSpec, nullptr) : cc::Why::Missing;
-    if (w == cc::Why::Ok && (sc->base.header().generation != in.baseGen || sc->base.header().headerCrc != in.baseCrc ||
-                             sc->base.section(0).count != in.baseRows))
-      w = cc::Why::Counts;
-    if (w != cc::Why::Ok) {
-      if (base) fs.close(base);
-      if (bin) fs.close(bin);
-      rep.outcome = (!base && cardFailed) || baseSrc.failed() ? Outcome::Io : Outcome::Base;
-      return rep;
-    }
-    rep.bytesRead += sx::kBaseRowsAt;
   }
 
   // The tracks: base ⊕ TRKD ⊕ the records', by hash.
-  sc->old.begin(base ? &baseSrc : nullptr, base ? sc->base.section(0) : cc::Section(), sf::kTrkd, r1, sx::kReadBytes);
-  sc->card.begin(bin ? &binSrc : nullptr, bin ? sc->frame.section(sf::kTrkd) : cc::Section(), sf::kTrkd, r2,
+  sc->old.begin(f.base ? &baseSrc : nullptr, f.base ? sc->base.section(0) : cc::Section(), sf::kTrkd, r1,
+                sx::kReadBytes);
+  sc->card.begin(f.bin ? &binSrc : nullptr, f.bin ? sc->frame.section(sf::kTrkd) : cc::Section(), sf::kTrkd, r2,
                  sx::kReadBytes);
   Rows recs{in.trkd, in.trkdRows, 0, sf::kTrackBytes};
   uint8_t* bRow = sc->row[0];
@@ -418,11 +437,10 @@ Report rank(tagstore::Fs& fs, const Input& in, const Memory& mem, Ranker& ranker
   rep.bytesRead += static_cast<uint64_t>(rep.baseRows + rep.trkdRows) * sf::kTrackBytes;
   Outcome o = ofWhy(sc->old.end());
   if (o == Outcome::Ok) o = ofWhy(sc->card.end());
-  if (base) fs.close(base);
 
   // RCNT's rows and the records': the windows.
   if (o == Outcome::Ok) {
-    sc->card.begin(bin ? &binSrc : nullptr, bin ? sc->frame.section(sf::kRcnt) : cc::Section(), sf::kRcnt, r2,
+    sc->card.begin(f.bin ? &binSrc : nullptr, f.bin ? sc->frame.section(sf::kRcnt) : cc::Section(), sf::kRcnt, r2,
                    sx::kReadBytes);
     Rows rc{in.rcnt, in.rcntRows, 0, sf::kStrides[sf::kRcnt]};
     uint8_t* row = sc->row[0];
@@ -440,10 +458,71 @@ Report rank(tagstore::Fs& fs, const Input& in, const Memory& mem, Ranker& ranker
     rep.windowRows = win.rows();
     if (o == Outcome::Ok) win.finish(ranker);
   }
-  if (bin) fs.close(bin);
   ranker.finish();
   rep.outcome = o;
   return rep;
+}
+
+Report rank(tagstore::Fs& fs, const Input& in, const Memory& mem, Ranker& ranker) {
+  Files f;
+  const Outcome o = open(fs, in, &f);
+  if (o != Outcome::Ok) {
+    Report rep;
+    ranker.begin(mem.lists, in.hasToday, in.today);
+    ranker.finish();
+    rep.outcome = o;
+    return rep;
+  }
+  const Report rep = rank(f, in, mem, ranker);
+  close(fs, &f);
+  return rep;
+}
+
+TrackRows trackRows(const Files& f, const Input& in, uint64_t hash, uint8_t* work) {
+  TrackRows t;
+  sx::Scratch* sc = new (work) sx::Scratch;
+  uint8_t* r1 = work + sx::kScratchBytes + sx::kBufBytes;
+  tagstore::ReadWatch binSrc(f.bin), baseSrc(f.base);
+  uint64_t bytes = 0;
+  t.outcome = frames(f, in, sc, binSrc, baseSrc, &bytes);
+  if (t.outcome != Outcome::Ok) return t;
+  // The base's row: a binary search, a 24 B read a step.
+  if (f.base) {
+    uint32_t lo = 0, hi = in.baseRows;
+    uint8_t* row = sc->row[0];
+    while (lo < hi) {
+      const uint32_t mid = lo + (hi - lo) / 2;
+      ++t.reads;
+      if (!baseSrc.read(sx::kBaseRowsAt + mid * sf::kTrackBytes, row, sf::kTrackBytes)) {
+        t.outcome = Outcome::Io;
+        return t;
+      }
+      const uint64_t h = cc::get64(row);
+      if (h == hash) {
+        t.base = true;
+        t.baseRow = sf::decodeTrack(row);
+        break;
+      }
+      if (h < hash) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+  }
+  // stats.bin's TRKD row: streamed (its CRC and order checked to its end).
+  if (f.bin) {
+    sc->card.begin(&binSrc, sc->frame.section(sf::kTrkd), sf::kTrkd, r1, sx::kReadBytes);
+    uint8_t* row = sc->row[1];
+    while (sc->card.next(row)) {
+      if (cc::get64(row) != hash) continue;
+      t.delta = true;
+      t.deltaRow = sf::decodeTrack(row);
+    }
+    t.outcome = ofWhy(sc->card.end());
+    t.trkdRows = sc->card.rows();
+  }
+  return t;
 }
 
 }  // namespace statsrank

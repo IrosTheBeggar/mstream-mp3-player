@@ -18,7 +18,9 @@
 //   (each 64th base row: span() finds every base row);
 // - the refusals: another stats.bin than the session's copy, none where
 //   there was one, the base gone or another file, a read the card fails, a
-//   section damaged, the windows' block short.
+//   section damaged, the windows' block short;
+// - a track's rows (Hp's read): the base's by a binary search, TRKD's
+//   streamed, as the files hold them.
 // Run: pio test -e native -f test_stats_rank
 #include <unity.h>
 
@@ -607,6 +609,79 @@ void test_the_refusals() {
   }
 }
 
+void sameTrack(const sf::Track& a, const sf::Track& b) {
+  TEST_ASSERT_TRUE(a.hash == b.hash);
+  TEST_ASSERT_EQUAL_UINT16(a.plays, b.plays);
+  TEST_ASSERT_EQUAL_UINT16(a.skips, b.skips);
+  TEST_ASSERT_EQUAL_UINT32(a.firstAt, b.firstAt);
+  TEST_ASSERT_EQUAL_UINT32(a.lastAt, b.lastAt);
+  TEST_ASSERT_EQUAL_UINT32(a.lastOrd, b.lastOrd);
+  TEST_ASSERT_EQUAL_UINT8(a.src, b.src);
+}
+
+// A track's rows (Hp's read: the Track lane): the base's by a binary search
+// (at most a read a level), stats.bin's TRKD streamed; for every hash of
+// rank-big's base and TRKD, and hashes in neither, as the files hold them;
+// files open()ed once for many reads, closed after; another copy refused.
+void test_a_tracks_rows() {
+  const minijson::Value& sc = rankScenario("rank-big");
+  const RankCard c = rankCard(sc);
+  cutfs::CutFs card;
+  putRankCard(card, c);
+  Session s;
+  readCard(card, s, todayOf(sc["today"]));
+  std::map<uint64_t, sf::Track> base, trkd;
+  const Bytes trks = sectionOf(c.base, sx::kBaseSpec, 0);
+  for (size_t o = 0; o < trks.size(); o += sf::kTrackBytes) {
+    const sf::Track t = sf::decodeTrack(u8(trks) + o);
+    base[t.hash] = t;
+  }
+  const Bytes td = sectionOf(c.bin, sx::kStatsSpec, sf::kTrkd);
+  for (size_t o = 0; o < td.size(); o += sf::kTrackBytes) {
+    const sf::Track t = sf::decodeTrack(u8(td) + o);
+    trkd[t.hash] = t;
+  }
+  std::vector<uint64_t> hashes;
+  for (const auto& kv : base) hashes.push_back(kv.first);
+  for (const auto& kv : trkd) hashes.push_back(kv.first);
+  for (uint64_t k = 1; k < 40; ++k) hashes.push_back(k * 0x9E3779B97F4A7C15ull);
+  hashes.push_back(0);
+  hashes.push_back(UINT64_MAX);
+  Block work(sx::kWorkBytes);
+  sr::Files f;
+  TEST_ASSERT_EQUAL_STRING("ok", sr::outcomeName(sr::open(card, s.in, &f)));
+  TEST_ASSERT_EQUAL_UINT32(2, card.openNow);
+  uint32_t most = 0;
+  for (uint64_t h : hashes) {
+    const sr::TrackRows t = sr::trackRows(f, s.in, h, work.p());
+    TEST_ASSERT_EQUAL_STRING("ok", sr::outcomeName(t.outcome));
+    TEST_ASSERT_EQUAL(base.count(h) == 1, t.base);
+    TEST_ASSERT_EQUAL(trkd.count(h) == 1, t.delta);
+    if (t.base) sameTrack(base[h], t.baseRow);
+    if (t.delta) sameTrack(trkd[h], t.deltaRow);
+    TEST_ASSERT_EQUAL_UINT32(trkd.size(), t.trkdRows);
+    if (t.reads > most) most = t.reads;
+  }
+  uint32_t levels = 0;
+  while ((1u << levels) <= s.in.baseRows) ++levels;
+  TEST_ASSERT_TRUE(most <= levels);
+  printf("[rank] a track's rows: at most %u base reads over %u rows\n", static_cast<unsigned>(most),
+         static_cast<unsigned>(s.in.baseRows));
+  sr::Input other = s.in;
+  other.generation += 1;
+  TEST_ASSERT_EQUAL_STRING("changed", sr::outcomeName(sr::trackRows(f, other, hashes[0], work.p()).outcome));
+  sr::close(card, &f);
+  TEST_ASSERT_EQUAL_UINT32(0, card.openNow);
+  // open()'s refusals: none there where the session stands on one; the base gone.
+  cutfs::CutFs none;
+  TEST_ASSERT_EQUAL_STRING("changed", sr::outcomeName(sr::open(none, s.in, &f)));
+  cutfs::CutFs noBase;
+  put(noBase, "stats.bin", c.bin);
+  TEST_ASSERT_EQUAL_STRING("base", sr::outcomeName(sr::open(noBase, s.in, &f)));
+  TEST_ASSERT_EQUAL_UINT32(0, noBase.openNow);
+  TEST_ASSERT_TRUE(f.bin == nullptr && f.base == nullptr);
+}
+
 int main(int, char**) {
   if (!cardfixtures::json("stats/index.json", &gIndex) || gIndex.size() == 0 ||
       !cardfixtures::json("stats/rank.json", &gRank) || gRank.size() == 0) {
@@ -619,5 +694,6 @@ int main(int, char**) {
   RUN_TEST(test_the_records_merged_in);
   RUN_TEST(test_the_sparse_index);
   RUN_TEST(test_the_refusals);
+  RUN_TEST(test_a_tracks_rows);
   return UNITY_END();
 }

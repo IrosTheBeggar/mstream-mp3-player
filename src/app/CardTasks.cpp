@@ -14,6 +14,7 @@
 #include "UiText.h"
 #include "app/Diagnostics.h"
 #include "app/Psram.h"
+#include "app/StatsLists.h"
 #include "app/Waves.h"
 #include "storage/SectorDisk.h"
 #include "ui/Thumbs.h"
@@ -167,8 +168,8 @@ void CardTasks::sources(ScanScheduler::In& in, const Sources& src) {
   in.restPending = jobs_.restWork();
 }
 
-void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumbs, Waves* waves, bool covers,
-                     const UpdateEnv& env) {
+void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumbs, Waves* waves, StatsLists* lists,
+                     bool covers, const UpdateEnv& env) {
   const uint32_t now = in.nowMs;
   playing_ = src.playing;
   // The update step's fence is up and its build not handed yet: the
@@ -262,6 +263,7 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   lastUpdate_ = uo;
   // 4. What has work (only read with the worker free: a step may change it).
   in.running = worker_.running();
+  in.runningRank = lists && lists->rankRunning();
   // Internal RAM's lowest while a step runs (gs; L3 and L4).
   if (in.running != Job::None) worker_.noteInternal(static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
   // (While gs waits for the step under way, nothing is handed:
@@ -274,6 +276,10 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
     in.cover = covers && thumbs && thumbs->wantsCover(now) && uo.act != LibraryUpdate::Do::Fence &&
                !sectordisk::guard().tooSilent;
     in.wave = covers && waves && waves->wantsRead(now) && uo.act != LibraryUpdate::Do::Fence;
+    // The listening stats' asks (their block carved and their files open on
+    // the loop: the step reads only). Not in the fence's pass.
+    in.statsTrack = lists && lists->wantsTrack() && uo.act != LibraryUpdate::Do::Fence;
+    in.statsRank = lists && lists->wantsRank() && uo.act != LibraryUpdate::Do::Fence;
     if (active_) {
       // A walk under way goes on to its end when the update step is asked:
       // the compaction before the build can't run while it writes walk.jnl
@@ -348,6 +354,8 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
     if (thumbs) thumbs->startCover(worker_, o.priority, now);
   } else if (o.job == Job::Wave) {
     if (waves) waves->start(worker_, o.priority, now);
+  } else if (o.job == Job::Stats) {
+    if (lists && lists->start(worker_, o.priority, o.statsRank, now)) lastWorkMs_ = now;
   } else if (o.job == Job::Build) {
     if (up && worker_.start(Job::Build, o.priority, buildEntry, this, now)) {
       up->buildStarted();
@@ -422,9 +430,9 @@ void CardTasks::scanEnded() {
 }
 
 void CardTasks::taken(Job job, uint32_t nowMs, uint32_t ms) {
-  if (job == Job::Cover || job == Job::Wave || job == Job::None) {
+  if (job == Job::Cover || job == Job::Wave || job == Job::Stats || job == Job::None) {
     sched_.stepDone(job, ms);
-    return;  // Thumbs and Waves take their own in
+    return;  // Thumbs, Waves and StatsLists take their own in
   }
   if (job == Job::Build || job == Job::Save) {
     sched_.stepDone(job, ms);

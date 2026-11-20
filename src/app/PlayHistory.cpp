@@ -182,9 +182,27 @@ uint64_t PlayHistory::startedAt(uint64_t startMono, uint8_t* clock) {
   return at;
 }
 
+StatsLists::Gates PlayHistory::listsGates(uint32_t nowMs, bool cardHeld) {
+  StatsLists::Gates g;
+  g.nowMs = nowMs;
+  g.index = library_.index();
+  g.updateAsked = library_.update() && library_.update()->asked();
+  g.joinPending = autoDj_ && autoDj_->joinPending();
+  g.joinWorking = autoDj_ && autoDj_->joinWorking();
+  g.cardHeld = cardHeld;
+  g.cardAway = cardAway();
+  g.playingHash = tracker_ ? tracker_->openHash() : 0;
+  return g;
+}
+
 void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, bool cardHeld) {
   if (!active_) return;
   stats_.owedLine();  // (a rotation's save's line: out of its save's frames)
+  // S2's ask: a step the card worker finished, taken in (its files closed
+  // here, where they were opened), its result printed or its walk begun.
+  StatsLists& lists = stats_.lists();
+  const StatsLists::Gates lg = listsGates(gate.nowMs, cardHeld);
+  lists.loop(lg);
   tracker_->tick(look.state, look.positionMs, look.positionKnown, look.positionKnown ? look.durationMs : 0);
   // The stats' look at this pass: the update step's safe point (a boot's
   // save compacts only at one), Auto DJ's join and an asked library update
@@ -253,9 +271,16 @@ void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, boo
   // The console's looks that read the card (H's card part, Hd, Ht) in the
   // same turn, after Hs, one a pass, and never behind the fence: their
   // PSRAM is carved only where the saves' is (the internal-RAM review).
+  // An S2 ask's step on the card worker (queued or under way) reads
+  // stats.bin and its base: no stats save meanwhile, nor a slot (a slot's
+  // rotation saves), so nothing replaces them under its reads. A second or
+  // two at most; the plays wait in the Tracker.
+  if (lists.workerOwned()) return;
   const bool fenced = library_.update() && library_.update()->fenced();
   const bool looks = stats_.lookWaiting() && !fenced;
-  switch (statsglue::turnOf(stats_.saveDue(fenced), slotsDue(), stats_.hsWaiting() || looks)) {
+  // (An ask's carve at the same turn as Hs and the looks: after them.)
+  const bool ask = !fenced && lists.turnWanted(lg);
+  switch (statsglue::turnOf(stats_.saveDue(fenced), slotsDue(), stats_.hsWaiting() || looks || ask)) {
     case statsglue::Turn::Save: stats_.runSave(fenced); break;
     case statsglue::Turn::Slot:
       tryT0_ = esp_timer_get_time();
@@ -264,8 +289,10 @@ void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, boo
     case statsglue::Turn::Hs:
       if (stats_.hsWaiting()) {
         stats_.runHs(fenced);
-      } else {
+      } else if (looks) {
         stats_.runLook();
+      } else {
+        lists.turn(lg);
       }
       break;
     case statsglue::Turn::Nothing: break;

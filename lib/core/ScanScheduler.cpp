@@ -168,7 +168,9 @@ void ScanScheduler::decide(const In& in, Out& o) const {
     o.wait = Wait::Step;
     const bool sliced = in.running == Job::Walk || in.running == Job::Scan;
     o.cut = sliced && (moving || yieldOf(in) != Wait::None || (in.running == Job::Scan && batteryLow_));
-    o.priority = o.cut ? kLowPriority : priorityOf(in.running, moving, in.dark);
+    o.priority = o.cut                                         ? kLowPriority
+                 : in.running == Job::Stats && in.runningRank ? rankPriority(moving, in.dark)
+                                                               : priorityOf(in.running, moving, in.dark);
     return;
   }
   if (in.build) {
@@ -177,8 +179,8 @@ void ScanScheduler::decide(const In& in, Out& o) const {
     return;
   }
   const Source src = sourceOf(in);
-  const bool background = in.walk || in.compact || src != Source::None;
-  if (!in.wave && !in.cover && !in.save && !background) return;  // nothing to do
+  const bool background = in.walk || in.compact || in.statsRank || src != Source::None;
+  if (!in.wave && !in.statsTrack && !in.cover && !in.save && !background) return;  // nothing to do
   if (moving) {
     o.wait = Wait::List;
     return;
@@ -186,6 +188,11 @@ void ScanScheduler::decide(const In& in, Out& o) const {
   if (in.wave) {
     o.job = Job::Wave;
     o.priority = priorityOf(Job::Wave, false);
+    return;
+  }
+  if (in.statsTrack) {
+    o.job = Job::Stats;
+    o.priority = priorityOf(Job::Stats, false);
     return;
   }
   if (in.cover) {
@@ -203,6 +210,8 @@ void ScanScheduler::decide(const In& in, Out& o) const {
     next = Job::Walk;
   } else if (in.compact) {
     next = Job::Compact;
+  } else if (in.statsRank) {
+    next = Job::Stats;
   } else {
     next = Job::Scan;  // (only the scan is left: `background` holds)
   }
@@ -217,7 +226,8 @@ void ScanScheduler::decide(const In& in, Out& o) const {
   }
   o.job = next;
   o.source = next == Job::Scan ? src : Source::None;
-  o.priority = priorityOf(next, false, in.dark);
+  o.statsRank = next == Job::Stats;
+  o.priority = o.statsRank ? rankPriority(false, in.dark) : priorityOf(next, false, in.dark);
 }
 
 ScanScheduler::Source ScanScheduler::sourceOf(const In& in) {
@@ -235,6 +245,7 @@ uint8_t ScanScheduler::priorityOf(Job job, bool listMoving, bool dark) {
     case Job::Build: return kHighPriority;
     case Job::Cover:
     case Job::Wave:
+    case Job::Stats:
     case Job::Walk: return listMoving ? kLowPriority : kHighPriority;
     case Job::Scan:
     case Job::Compact:
@@ -314,6 +325,7 @@ const char* ScanScheduler::jobName(Job j) {
     case Job::Walk: return "walk";
     case Job::Compact: return "compaction";
     case Job::Scan: return "scan";
+    case Job::Stats: return "stats";
   }
   return "?";
 }

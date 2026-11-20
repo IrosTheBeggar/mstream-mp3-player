@@ -652,6 +652,19 @@ void AutoDj::stepJoin(const Env& env) {
   joinStatus();
 }
 
+bool AutoDj::joinPending() const {
+  if (file_ != File::Open || !dj_.settings().on) return false;
+  using S = autodj::Join::Status;
+  const S s = join_.status();
+  if (s == S::Working) return true;
+  const LibraryIndex* index = const_cast<Library&>(lib_).index();
+  if (s == S::Ready) return !join_.matches(index);
+  // Idle or Aborted: due unless the next build (Block::Build) or a run of
+  // failed reads (Block::Reads) holds it; an update it was given back to is
+  // the update's (the rank waits for that anyway).
+  return (s == S::Idle || s == S::Aborted) && block_ != Block::Build && block_ != Block::Reads;
+}
+
 void AutoDj::beginJoin(const LibraryIndex* index) {
   joinT0Us_ = esp_timer_get_time();
   joinLogged_ = false;

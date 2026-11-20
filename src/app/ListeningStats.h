@@ -8,6 +8,7 @@
 #include "PlayLog.h"
 #include "StatsGlue.h"
 #include "TagStore.h"
+#include "app/StatsLists.h"
 
 // The listening stats on the card (docs/LISTENING-STATS.md; S1, the store,
 // as 5.14 reworked it: a fixed resident set): the firmware's side of lib/core
@@ -71,7 +72,11 @@
 //     now, at the next pass the write gate lets through with no play
 //     waiting for its slot that the card may take (refused during the
 //     boot's scan, behind the update's fence, with the card away, after a
-//     partial scan, behind, or after a changed stats.bin).
+//     partial scan, behind, or after a changed stats.bin). Hr, Hl, Hw and Hp
+//     (S2: the lists, the map and a track's facts) are app/StatsLists',
+//     one ask at a time, nothing held between asks; their block comes from
+//     the same top hold as the boot scan's (listsTake()), and the boot's
+//     scan (a remount's) waits a pass while an ask holds it.
 // Loop task only.
 class ListeningStats final : private statsglue::Env {
 public:
@@ -137,6 +142,11 @@ public:
   // caps that closed the free block above it or why it was left open, the
   // heap walks' time), then a rotation's save's.
   void owedLine();
+  // S2's asks (Hr, Hl, Hw, Hp).
+  StatsLists& lists() { return lists_; }
+  const StatsLists& lists() const { return lists_; }
+  // A track's facts as Ht prints them (Hp's too: `who`, its ms).
+  static void printTrackLook(const char* who, uint64_t hash, const statsglue::TrackLook& t, float ms);
 
 private:
   // statsglue::Env
@@ -158,6 +168,7 @@ private:
 
   static constexpr uint8_t kLookState = 1, kLookDays = 2, kLookTrack = 4;
   statsglue::Glue* glue_ = nullptr;  // internal RAM (.bss): the resident set
+  StatsLists lists_;                 // S2's asks: their state alone (their memory is an ask's block)
   tagstore::Fs* fs_ = nullptr;
   bool hasCommit_ = false;
   uint32_t commitSec_ = 0;

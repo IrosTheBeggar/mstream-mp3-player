@@ -223,7 +223,38 @@ struct Report {
   uint64_t bytesRead = 0;
 };
 
-// The rank: the lists into `ranker`, the played set and the sparse index.
+// The files a rank (or a track's read) reads: stats.bin and the base HEAD
+// names, opened by the caller (the loop: a FatFile is a PSRAM carve, and the
+// worker allocates nothing: 6.8), closed by it after.
+struct Files {
+  tagstore::File* bin = nullptr;
+  tagstore::File* base = nullptr;
+};
+// The opens: Ok; Changed (stats.bin there where the session stands on none,
+// or gone where it stands on one); Io (the card failed an open); Base (the
+// base HEAD names isn't there). Nothing left open but on Ok.
+Outcome open(tagstore::Fs& fs, const Input& in, Files* out);
+void close(tagstore::Fs& fs, Files* f);
+
+// The rank (the card worker's step, over files open()ed): the lists into
+// `ranker`, the played set and the sparse index. Reads only.
+Report rank(const Files& f, const Input& in, const Memory& mem, Ranker& ranker);
+// open(), the rank, close() (the host's tests).
 Report rank(tagstore::Fs& fs, const Input& in, const Memory& mem, Ranker& ranker);
+
+// A track's rows (the console's Hp: the Track lane, the card worker's step):
+// the base's by a binary search (a 24 B read a step: no sparse index is
+// kept between asks, the owner's "A", 2026-11-20), stats.bin's TRKD streamed
+// for it (its CRC and order to its end), the frames checked as rank()'s.
+// `work`: statsfile::kWorkBytes. The records' row is the loop's to add
+// (Fold::track()).
+struct TrackRows {
+  Outcome outcome = Outcome::Ok;
+  bool base = false, delta = false;  // a row found in the base, in TRKD
+  statsfold::Track baseRow, deltaRow;
+  uint32_t reads = 0;     // the base's rows read
+  uint32_t trkdRows = 0;  // TRKD's rows passed
+};
+TrackRows trackRows(const Files& f, const Input& in, uint64_t hash, uint8_t* work);
 
 }  // namespace statsrank
