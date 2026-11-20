@@ -3093,15 +3093,17 @@ strings.
   ask's state and everything its steps fill (the rank's work memory, the
   lists, the 30 days' RCNT rows, a copy of the records, and for Hl or Hw
   the played set, the folders' states, the album bits, the lists'
-  hashes), and opens `stats.bin` and its base there (the worker
-  allocates nothing). The card worker then ranks (`ScanScheduler::
+  hashes). At the hand-off (the worker free, on the loop) it copies the
+  records and opens `stats.bin` and its base (the worker allocates
+  nothing); a step the worker hasn't taken in 30 s is given up. The card
+  worker then ranks (`ScanScheduler::
   Job::Stats` in the Rank lane: background work after a compaction,
   never under the update step or a yield, priority 0 lit and 1 dark,
   never cut; `lib/core/StatsRank`: the base, `stats.bin`'s TRKD and the
   records merged by hash, RCNT summed by hash, each list its cap and 16)
   or reads a track's rows (Hp, the Track lane beside the waveform read:
-  a binary search of the base, no sparse index kept). While its step is
-  queued or runs, no stats save and no slot is made (`PlayHistory::loop`),
+  a binary search of the base, no sparse index kept). While its step
+  runs, no stats save and no slot is made (`PlayHistory::loop`),
   so nothing replaces `stats.bin` under its reads. Hl and Hw then walk the
   library on the loop after Auto DJ's step (`lib/core/StatsMap` over
   `pathhash::Walk`, up to 8 ms a pass, never in a pass the join works,
@@ -3110,7 +3112,9 @@ strings.
   held a library update waits in Asked (`UpdateEnv::statsWait`, as for the
   boot scan's blocks), Auto DJ's join doesn't begin, and a remount's boot
   scan waits a pass at a time. `.bss` holds the ask's few bytes of state
-  (`ListeningStats::lists_`); its PSRAM comes and goes with it.
+  (`ListeningStats::lists_`); its PSRAM comes and goes with it. The walk
+  keeps nothing Auto DJ's join keeps, so the join's object (824 B, in
+  Auto DJ's PSRAM from setup) is main's size.
 
 ## Input
 
