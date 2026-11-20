@@ -169,7 +169,8 @@ struct Sparse {
   uint32_t cap = 0, n = 0;
   uint64_t hashAt(uint32_t i) const;
   uint32_t rowAt(uint32_t i) const;
-  // The base rows [*from, *to) that hold `hash` if any row does.
+  // The base rows [*from, *to) that hold `hash` if any row does (no index:
+  // the whole base).
   void span(uint64_t hash, uint32_t baseRows, uint32_t* from, uint32_t* to) const;
 };
 

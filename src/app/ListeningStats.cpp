@@ -233,7 +233,8 @@ void topRelease(void* p) { s_top.give(kTop, p); }
 // boot's scan of a remount waits while an ask holds its block: never both).
 // A decoder may open while it is held (a start, the next track): its room
 // asked at every take, as for the ranges' block; with no room the block
-// yields (NoRoom: the ask refused, its line says so).
+// yields (NoRoom: the ask refused, its line says so). statshold::take()
+// and give(), below the namespace.
 void* listsTake(size_t bytes, autodj::CloseReport* r) {
   return s_top.take(kTop, bytes, r, true, sg::kDecoderRoomBytes, true);
 }
@@ -476,6 +477,9 @@ bool away() {
 
 }  // namespace
 
+void* statshold::take(size_t bytes, autodj::CloseReport* r) { return listsTake(bytes, r); }
+void statshold::give(void* p) { listsGive(p); }
+
 playlog::Folds* ListeningStats::begin(tagstore::Fs& fs, const cardroot::Root& root) {
   fs_ = &fs;
   hasCommit_ = root.hasRoot && root.commitTime != 0;
@@ -502,10 +506,7 @@ playlog::Folds* ListeningStats::begin(tagstore::Fs& fs, const cardroot::Root& ro
   m.keep = psramAlloc;
   m.keepRelease = psramFree;
   glue_ = new (s_glue) sg::Glue(fs, static_cast<sg::Env&>(*this), m);
-  StatsLists::Hold hold;
-  hold.take = listsTake;
-  hold.give = listsGive;
-  lists_.begin(glue_, &fs, hold, printTrackLook);
+  lists_.begin(glue_, &fs);
   const int64_t t0 = esp_timer_get_time();
   const sx::Opened& o = glue_->begin(root.acks, bootWait);
   logRead(o, "at the boot", msSince(t0));

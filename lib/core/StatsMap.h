@@ -104,7 +104,13 @@ public:
   void release();
 
   Status status() const { return status_; }
-  bool matches(const LibraryIndex* index) const { return walk_.matches(index); }
+  // `index` is the one begin() was given, as it was then: the same object,
+  // ready, the same tracks and build stamp (Join::matches()' test). False
+  // once released, or after an Abort.
+  bool matches(const LibraryIndex* index) const {
+    return index_ && index == index_ && index->ready() && index->trackCount() == tracks_ &&
+           index->buildStamp() == stamp_;
+  }
   const Stats& stats() const { return stats_; }
   // Ready: whether album `a` has a played track; the albums without one.
   bool albumPlayed(uint32_t a) const { return bits_ && a < albums_ && (bits_[a / 8] >> (a % 8) & 1) != 0; }
@@ -115,6 +121,9 @@ private:
   Config cfg_;
   pathhash::Walk walk_;
   const LibraryIndex* index_ = nullptr;
+  uint32_t tracks_ = 0;
+  uint64_t stamp_ = 0;
+  uint32_t visited_ = 0;  // tracks the walk handed (hashed)
   const statsrank::Played* played_ = nullptr;
   Wanted* wanted_ = nullptr;
   uint8_t* bits_ = nullptr;

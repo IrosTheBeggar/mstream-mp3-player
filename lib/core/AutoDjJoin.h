@@ -522,10 +522,7 @@ public:
 
   // Before begin(); the next begin() uses them.
   void setConfig(const Config& c) { cfg_ = c; }
-  void setPathHash(PathHashFn fn, void* ctx) {
-    hash_ = fn;
-    hashCtx_ = ctx;
-  }
+  void setPathHash(PathHashFn fn, void* ctx) { walk_.setHash(fn, ctx); }
   void setPlacement(const Placement& p) { place_ = p; }
 
   // Starts a join of `table` (opened: Table::open() said Ok) and `index`
@@ -596,7 +593,7 @@ private:
   bool takeTransient(uint32_t n);
   // The folders' states in `block` (folderBytes() of it); none wanted: true.
   bool takeFolders(void* block);
-  size_t folderBytes() const { return pathhash::Walk::bytesFor(folderCount_); }
+  size_t folderBytes() const { return pathhash::Walk::bytesFor(walk_.folders()); }
   // Under the placement (setPlacement()): every block where the heap puts
   // it unless that is the largest free block, the rest at its top.
   bool takePlaced(uint32_t n, uint32_t rows);
@@ -610,8 +607,6 @@ private:
 
   AllocFn alloc_;
   FreeFn free_;
-  PathHashFn hash_;
-  void* hashCtx_ = nullptr;
   Placement place_;
   Config cfg_;
 
@@ -631,11 +626,11 @@ private:
   uint32_t sortRun_ = 0;    // Sort: the next run
   uint8_t* buf_ = nullptr;  // the stream's buffer
   uint32_t bufBytes_ = 0;
-  // Folders: the folders' states' block (folderBytes() of it, the walk's
-  // while it works) and how many; nullptr: the hook's hash.
-  void* folderBlock_ = nullptr;
-  uint32_t folderCount_ = 0;
-  // Folders and Hash, and the Paths' confirms: each track's path hash.
+  // Folders and Hash, and the Paths' confirms: each track's path hash; the
+  // folders' states wanted and their block (folderBytes() of it, taken
+  // here), and the hook (setPathHash()). It keeps nothing the join keeps
+  // too: the join's object is the size it was before the walk (it is
+  // Auto DJ's, in PSRAM from setup).
   pathhash::Walk walk_;
   cardcontract::Stream stream_;
   uint32_t streamEnd_ = 0;  // the section's end

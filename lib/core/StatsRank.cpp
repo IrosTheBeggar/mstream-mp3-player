@@ -256,6 +256,12 @@ uint64_t Sparse::hashAt(uint32_t i) const { return cc::get64(rows + static_cast<
 uint32_t Sparse::rowAt(uint32_t i) const { return cc::get32(rows + static_cast<size_t>(i) * kSparseRowBytes + 8); }
 
 void Sparse::span(uint64_t hash, uint32_t baseRows, uint32_t* from, uint32_t* to) const {
+  // No index: the whole base.
+  if (n == 0) {
+    *from = 0;
+    *to = baseRows;
+    return;
+  }
   // The last index row at or below the hash, to the next one.
   uint32_t lo = 0, hi = n;
   while (lo < hi) {
@@ -347,7 +353,7 @@ Outcome frames(const Files& f, const Input& in, sx::Scratch* sc, tagstore::ReadW
                              sc->base.section(0).count != in.baseRows))
       w = cc::Why::Counts;
     if (w != cc::Why::Ok) return baseSrc.failed() ? Outcome::Io : Outcome::Base;
-    *bytes += sx::kBaseRowsAt;
+    *bytes += sc->base.section(0).offset;
   }
   return Outcome::Ok;
 }
@@ -486,14 +492,17 @@ TrackRows trackRows(const Files& f, const Input& in, uint64_t hash, uint8_t* wor
   uint64_t bytes = 0;
   t.outcome = frames(f, in, sc, binSrc, baseSrc, &bytes);
   if (t.outcome != Outcome::Ok) return t;
-  // The base's row: a binary search, a 24 B read a step.
+  // The base's row: a binary search, a 24 B read a step, by TRKS's own
+  // offset and stride (a newer minor's base: longer rows, read by their
+  // prefix, 5.12).
   if (f.base) {
+    const cc::Section& trks = sc->base.section(0);
     uint32_t lo = 0, hi = in.baseRows;
     uint8_t* row = sc->row[0];
     while (lo < hi) {
       const uint32_t mid = lo + (hi - lo) / 2;
       ++t.reads;
-      if (!baseSrc.read(sx::kBaseRowsAt + mid * sf::kTrackBytes, row, sf::kTrackBytes)) {
+      if (!baseSrc.read(trks.offset + mid * trks.stride, row, sf::kTrackBytes)) {
         t.outcome = Outcome::Io;
         return t;
       }

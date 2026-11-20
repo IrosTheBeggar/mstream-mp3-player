@@ -2636,7 +2636,7 @@ def _rank_stats(seed, today=RANK_TODAY, tracks=900, base_share=0.7, delta=320, r
     rest = [h for h in hashes if h not in st.base]
     for h in rest[:delta - min(delta // 2, len(in_base))]:
         st.trkd[h] = row()                                              # new since the base
-    played = [h for h, r in st.tracks().items() if r.plays]
+    played = sorted(h for h, r in st.tracks().items() if r.plays)  # (sorted: a set's order is CPython's)
     while len(st.rcnt) < rcnt:
         day = rng.randint(max(0, today - 31), today + 1)
         st.rcnt[(day, rng.choice(played))] = rng.choice([1, 2]) if ties else rng.randint(1, 6)

@@ -271,10 +271,10 @@ void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, boo
   // The console's looks that read the card (H's card part, Hd, Ht) in the
   // same turn, after Hs, one a pass, and never behind the fence: their
   // PSRAM is carved only where the saves' is (the internal-RAM review).
-  // An S2 ask's step on the card worker (queued or under way) reads
-  // stats.bin and its base: no stats save meanwhile, nor a slot (a slot's
-  // rotation saves), so nothing replaces them under its reads. A second or
-  // two at most; the plays wait in the Tracker.
+  // An S2 ask's step on the card worker (handed, its files open, until it
+  // is taken in) reads stats.bin and its base: no stats save meanwhile, nor
+  // a slot (a slot's rotation saves), so nothing replaces them under its
+  // reads. A rank's step, a second or two; the plays wait in the Tracker.
   if (lists.workerOwned()) return;
   const bool fenced = library_.update() && library_.update()->fenced();
   const bool looks = stats_.lookWaiting() && !fenced;

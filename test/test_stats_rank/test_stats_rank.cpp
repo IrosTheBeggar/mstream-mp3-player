@@ -21,6 +21,8 @@
 //   section damaged, the windows' block short;
 // - a track's rows (Hp's read): the base's by a binary search, TRKD's
 //   streamed, as the files hold them.
+// - a newer minor's base (longer header and rows): read by its rows'
+//   prefixes, the rank's and a track's read alike (5.12).
 // Run: pio test -e native -f test_stats_rank
 #include <unity.h>
 
@@ -32,6 +34,7 @@
 #include <map>
 #include <memory>
 #include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -682,6 +685,100 @@ void test_a_tracks_rows() {
   TEST_ASSERT_TRUE(f.bin == nullptr && f.base == nullptr);
 }
 
+// A newer minor's base (5.12: read by its known sections and its rows'
+// prefixes): TRKS rows of 32 B (the first minor's 24 and 8 more) after a
+// longer header. The rank (CardRows: the section's stride) and a track's
+// read (the binary search: TRKS's own offset and stride) give the rows the
+// 24 B prefixes hold.
+void test_a_newer_minor_s_base() {
+  const minijson::Value& sc = rankScenario("rank-no-base");
+  const RankCard c = rankCard(sc);  // (TRKD alone: its stats.bin names no base)
+  // A base of 300 rows of 32 B, minor 3, a 48 B header.
+  std::vector<sf::Track> rows;
+  std::mt19937_64 rng(3);
+  std::set<uint64_t> seen;
+  while (rows.size() < 300) {
+    sf::Track t;
+    t.hash = rng() | 1;
+    if (!seen.insert(t.hash).second) continue;
+    t.plays = static_cast<uint16_t>(1 + rng() % 9);
+    t.firstAt = 300u * 86400 + 1;
+    t.lastAt = 310u * 86400 + 1 + static_cast<uint32_t>(rng() % 86400);
+    t.lastOrd = 7;
+    rows.push_back(t);
+  }
+  std::sort(rows.begin(), rows.end(), [](const sf::Track& a, const sf::Track& b) { return a.hash < b.hash; });
+  Bytes data;
+  for (const sf::Track& t : rows) {
+    uint8_t r[32] = {};
+    sf::encodeTrack(t, r);
+    std::memset(r + 24, 0xA5, 8);  // (a newer minor's tail)
+    data.append(reinterpret_cast<const char*>(r), sizeof(r));
+  }
+  cc::SectionOut out;
+  out.type = sf::kTrks;
+  out.flags = cc::kSectionRequired;
+  out.stride = 32;
+  out.count = static_cast<uint32_t>(rows.size());
+  out.bytes = static_cast<uint32_t>(data.size());
+  std::vector<uint8_t> buf(48 + 32 + data.size() + 64);
+  cc::BufferSink sink(buf.data(), static_cast<uint32_t>(buf.size()));
+  cc::FileMeta meta;
+  meta.magic = sx::kMagic;
+  meta.major = sx::kMajor;
+  meta.minor = 3;
+  meta.generation = 5;
+  const uint8_t typeHeader[8] = {};
+  cc::ContainerWriter w;
+  TEST_ASSERT_TRUE(w.begin(sink, meta, typeHeader, 48, &out, 1));
+  TEST_ASSERT_TRUE(w.write(data.data(), static_cast<uint32_t>(data.size())));
+  uint32_t fileBytes = 0;
+  TEST_ASSERT_TRUE(w.finish(&fileBytes));
+  const Bytes base(reinterpret_cast<const char*>(buf.data()), fileBytes);
+  cc::MemSource src(base.data(), static_cast<uint32_t>(base.size()));
+  cc::Container fr;
+  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(fr.open(src, sx::kBaseSpec, nullptr)));
+  TEST_ASSERT_TRUE(fr.section(0).offset != sx::kBaseRowsAt);  // (not where the first minor's rows are)
+  // A card of TRKD (rank-no-base's stats.bin) and this base: HEAD's base
+  // fields given as the input's (the rank checks them, not HEAD).
+  cutfs::CutFs card;
+  put(card, "stats.bin", c.bin);
+  char n[sx::kNameCap];
+  TEST_ASSERT_TRUE(sx::baseName(5, n, sizeof(n)));
+  put(card, std::string(n).substr(kDir.size()), base);
+  Session s;
+  const int today = todayOf(sc["today"]);
+  readCard(card, s, today);
+  s.in.baseGen = 5;
+  s.in.baseRows = static_cast<uint32_t>(rows.size());
+  s.in.baseCrc = fr.header().headerCrc;
+  Mem mem(4096, 4096, s.in.baseRows);
+  sr::Ranker r;
+  const sr::Report rep = sr::rank(card, s.in, mem.m, r);
+  TEST_ASSERT_EQUAL_STRING("ok", sr::outcomeName(rep.outcome));
+  TEST_ASSERT_EQUAL_UINT32(rows.size(), rep.baseRows);
+  Ref ref;
+  for (const sf::Track& t : rows) addRow(ref, t);
+  {
+    const Bytes trkd = sectionOf(c.bin, sx::kStatsSpec, sf::kTrkd);
+    for (size_t o = 0; o < trkd.size(); o += sf::kTrackBytes) addRow(ref, sf::decodeTrack(u8(trkd) + o));
+    const Bytes rc = sectionOf(c.bin, sx::kStatsSpec, sf::kRcnt);
+    for (size_t o = 0; o < rc.size(); o += 12)
+      ref.rcnt[{cc::get16(u8(rc) + o), cc::get64(u8(rc) + o + 4)}] += cc::get16(u8(rc) + o + 2);
+  }
+  sameAsRef(r, ref, today, "a newer minor's base");
+  Block work(sx::kWorkBytes);
+  sr::Files f;
+  TEST_ASSERT_EQUAL_STRING("ok", sr::outcomeName(sr::open(card, s.in, &f)));
+  for (const sf::Track& t : rows) {
+    const sr::TrackRows tr = sr::trackRows(f, s.in, t.hash, work.p());
+    TEST_ASSERT_EQUAL_STRING("ok", sr::outcomeName(tr.outcome));
+    TEST_ASSERT_TRUE(tr.base);
+    sameTrack(t, tr.baseRow);
+  }
+  sr::close(card, &f);
+}
+
 int main(int, char**) {
   if (!cardfixtures::json("stats/index.json", &gIndex) || gIndex.size() == 0 ||
       !cardfixtures::json("stats/rank.json", &gRank) || gRank.size() == 0) {
@@ -695,5 +792,6 @@ int main(int, char**) {
   RUN_TEST(test_the_sparse_index);
   RUN_TEST(test_the_refusals);
   RUN_TEST(test_a_tracks_rows);
+  RUN_TEST(test_a_newer_minor_s_base);
   return UNITY_END();
 }

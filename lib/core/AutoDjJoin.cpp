@@ -18,10 +18,6 @@ namespace {
 void* defaultAlloc(size_t n) { return std::malloc(n); }
 void defaultFree(void* p) { std::free(p); }
 
-bool defaultPathHash(const LibraryIndex& index, uint32_t track, char* path, size_t size, uint64_t* hash, void*) {
-  return trackPathHash(index, track, path, size, hash);
-}
-
 // ---- the run sort: IdSort.h's introsort over two parallel arrays ----
 struct Pairs {
   uint32_t* k;
@@ -445,7 +441,7 @@ void sortPairs(uint32_t* keys, uint16_t* ids, uint32_t n) {
 // Join
 // ---------------------------------------------------------------------------
 Join::Join(AllocFn alloc, FreeFn dealloc)
-    : alloc_(alloc ? alloc : defaultAlloc), free_(dealloc ? dealloc : defaultFree), hash_(defaultPathHash) {}
+    : alloc_(alloc ? alloc : defaultAlloc), free_(dealloc ? dealloc : defaultFree) {}
 
 Join::~Join() { freeAll(); }
 
@@ -475,10 +471,8 @@ size_t Join::freeTransient() {
   give(buf_, bufBytes_);
   buf_ = nullptr;
   bufBytes_ = 0;
-  give(folderBlock_, folderBytes());
-  folderBlock_ = nullptr;
-  folderCount_ = 0;
-  walk_.end();
+  give(walk_.block(), folderBytes());
+  walk_.end();  // (the folders' states and their block forgotten)
   return before - held_;
 }
 
@@ -556,7 +550,7 @@ Join::Status Join::begin(const mpdj::Table& table, const LibraryIndex* index) {
   runCount_ = (n + c.runTracks - 1) / c.runTracks;
   // The folders' states: with the default hash, for a library of up to
   // kMaxFolders folders.
-  folderCount_ = hash_ == defaultPathHash ? pathhash::Walk::foldersFor(*index) : 0;
+  walk_.wantFolders(walk_.hashIsDefault() ? pathhash::Walk::foldersFor(*index) : 0);
   const bool ok = place_.largest && place_.freeBytes ? takePlaced(n, rows) : takeKept(n, rows) && takeTransient(n);
   if (!ok) {
     fail(Status::NoMemory, cc::Why::Ok);
@@ -566,9 +560,8 @@ Join::Status Join::begin(const mpdj::Table& table, const LibraryIndex* index) {
   std::memset(maps_.rowToTrack, 0xFF, static_cast<size_t>(rows) * sizeof(uint16_t));
   std::memset(maps_.filters, 0, static_cast<size_t>(rows) * sizeof(uint32_t));
   fillRun_ = sortRun_ = 0;
-  walk_.setHash(hash_, hashCtx_);
-  walk_.begin(index, folderCount_, folderBlock_);
-  phase_ = folderCount_ ? Phase::Folders : Phase::Hash;
+  walk_.begin(index);
+  phase_ = walk_.folders() ? Phase::Folders : Phase::Hash;
   status_ = Status::Working;
   why_ = cc::Why::Ok;
   return status_;
@@ -601,16 +594,16 @@ bool Join::takeTransient(uint32_t n) {
   buf_ = static_cast<uint8_t*>(take(cfg_.sliceBytes));
   if (!buf_) return false;
   bufBytes_ = cfg_.sliceBytes;
-  return !folderCount_ || takeFolders(take(folderBytes()));
+  return !walk_.folders() || takeFolders(take(folderBytes()));
 }
 
 bool Join::takeFolders(void* block) {
-  if (!folderCount_) return true;
+  if (!walk_.folders()) return true;
   if (!block) {
-    folderCount_ = 0;
+    walk_.dropFolders();
     return false;
   }
-  folderBlock_ = block;
+  walk_.giveBlock(block);
   return true;
 }
 
@@ -685,10 +678,10 @@ bool Join::takePlaced(uint32_t n, uint32_t rows) {
       topTransient += static_cast<size_t>(runs_[r].cap) * 6;
     }
   }
-  if (folderCount_) {
+  if (walk_.folders()) {
     void* block = probe(folderBytes(), largest, &minTop, &low, &failed);
     if (failed) {
-      folderCount_ = 0;
+      walk_.dropFolders();
       return false;
     }
     if (block) {
@@ -726,7 +719,7 @@ bool Join::takePlaced(uint32_t n, uint32_t rows) {
                               place_.freeBytes, alloc_, free_, &sp);
   if (!stats_.placed) giveSpacers(&sp, free_);  // (none placed: where the heap puts them, the kept ones first)
   noteFree();
-  const uint32_t folders = folderCount_;
+  const uint32_t folders = walk_.folders();
   bool ok = true;
   auto takeKeptOnTop = [&](int i) {
     *kept[i] = take(keptBytes[i]);
@@ -739,7 +732,7 @@ bool Join::takePlaced(uint32_t n, uint32_t rows) {
       ok = runs_[r].keys != nullptr;
       if (ok) runs_[r].ids = reinterpret_cast<uint16_t*>(runs_[r].keys + runs_[r].cap);
     }
-    if (ok && folderCount_ && !folderBlock_) ok = takeFolders(take(folderBytes()));
+    if (ok && walk_.folders() && !walk_.block()) ok = takeFolders(take(folderBytes()));
     if (ok && !buf_) {
       buf_ = static_cast<uint8_t*>(take(cfg_.sliceBytes));
       ok = buf_ != nullptr;
@@ -756,7 +749,7 @@ bool Join::takePlaced(uint32_t n, uint32_t rows) {
       // some of it meanwhile): the rest where the heap puts them, with the
       // spacers gone. A failed block isn't a heap with no room for it.
       ok = true;
-      folderCount_ = folders;
+      if (walk_.folders() != folders) walk_.wantFolders(folders);  // (none taken: takeFolders() let them go)
       stats_.placed = false;
       stats_.topShort = true;
     }
@@ -802,7 +795,7 @@ Join::Status Join::step(const LibraryIndex* index) {
 bool Join::foldersSlice() {
   walk_.foldersSlice(cfg_.foldersPerSlice);
   if (walk_.foldersDone()) {
-    stats_.folders = folderCount_;
+    stats_.folders = walk_.folders();
     phase_ = Phase::Hash;
   }
   return true;
@@ -815,12 +808,12 @@ void Join::fillRun(void* ctx, uint32_t t, uint64_t h) {
   r.keys[r.len] = static_cast<uint32_t>(h >> 32);
   r.ids[r.len] = static_cast<uint16_t>(t);
   ++r.len;
+  ++j.stats_.hashed;
 }
 
 bool Join::hashSlice() {
   const bool worked = walk_.hashSlice(cfg_.hashPerSlice, fillRun, this);
-  stats_.hashed = walk_.hashed();
-  stats_.unhashed = walk_.unhashed();
+  stats_.unhashed = walk_.position() - stats_.hashed;
   if (walk_.tracksDone()) phase_ = Phase::Sort;
   return worked;
 }

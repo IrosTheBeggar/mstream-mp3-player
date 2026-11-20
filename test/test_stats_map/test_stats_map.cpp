@@ -7,7 +7,7 @@
 // - The walk: every track's hash is trackPathHash()'s, and none where it
 //   has none, whatever the slices' sizes, with the folders' states and
 //   without them; a library past kMaxFolders folders takes whole paths; an
-//   index rebuilt under the walk no longer matches().
+//   index rebuilt under the map no longer matches() (StatsMap's).
 // - The map (lib/core/StatsMap): the album bits and the wanted hashes' ids
 //   against a count made track by track, in slices of every size, orphans
 //   and hashes no list wants among them; a 64-bit collision maps neither;
@@ -97,12 +97,10 @@ Seen walkAll(const LibraryIndex& idx, bool states, uint32_t folders, uint32_t tr
   Seen s;
   uint32_t slices = 0;
   while (!w->foldersDone()) {
-    TEST_ASSERT_TRUE(w->matches(&idx));
     w->foldersSlice(folders);
     TEST_ASSERT_TRUE(++slices < 100000);
   }
   while (!w->tracksDone()) {
-    TEST_ASSERT_TRUE(w->matches(&idx));
     TEST_ASSERT_TRUE(w->hashSlice(tracks, see, &s));
     TEST_ASSERT_TRUE(++slices < 100000);
   }
@@ -142,8 +140,7 @@ void test_every_hash_is_track_path_hash() {
         TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, s.twice, root);
         TEST_ASSERT_EQUAL_UINT32_MESSAGE(want.size(), s.hashes.size(), root);
         TEST_ASSERT_TRUE_MESSAGE(want == s.hashes, root);
-        TEST_ASSERT_EQUAL_UINT32_MESSAGE(want.size(), w.hashed(), root);
-        TEST_ASSERT_EQUAL_UINT32_MESSAGE(idx.trackCount() - want.size(), w.unhashed(), root);
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(idx.trackCount(), w.position(), root);  // (every track passed)
         TEST_ASSERT_EQUAL_UINT32_MESSAGE(states ? idx.folderCount() : 0, s.folders, root);
       }
     }
@@ -202,9 +199,10 @@ void test_past_the_folders_limit() {
   }
 }
 
-// matches(): the index begin() was given, as it was (rebuilt from the same
-// files: the same stamp, the same ids, still); rebuilt with a file more
-// (another track count and stamp), another object, none: no longer.
+// The map's matches(): the index begin() was given, as it was (rebuilt
+// from the same files: the same stamp, the same ids, still), Ready too;
+// rebuilt with a file more (another track count and stamp), another
+// object, none, released: no longer.
 void test_matches() {
   LibraryIndex idx, other;
   for (LibraryIndex* x : {&idx, &other}) {
@@ -213,10 +211,13 @@ void test_matches() {
     x->addFile("/music/B/b.mp3");
     TEST_ASSERT_TRUE(x->finish());
   }
-  Walk w;
+  sm::Map w;
   TEST_ASSERT_FALSE(w.matches(&idx));  // (nothing begun)
-  w.begin(&idx, 0, nullptr);
+  w.begin(&idx, nullptr, nullptr, nullptr, nullptr);
   TEST_ASSERT_TRUE(w.matches(&idx));
+  while (w.status() == sm::Map::Status::Working) w.step(&idx);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(sm::Map::Status::Ready), static_cast<int>(w.status()));
+  TEST_ASSERT_TRUE(w.matches(&idx));  // (Ready: still the index it walked)
   TEST_ASSERT_FALSE(w.matches(&other));
   TEST_ASSERT_FALSE(w.matches(nullptr));
   idx.clear();
@@ -236,7 +237,7 @@ void test_matches() {
   idx.addFile("/music/A/a.mp3");
   TEST_ASSERT_TRUE(idx.finish());
   TEST_ASSERT_FALSE(w.matches(&idx));  // (another count)
-  w.end();
+  w.release();
   TEST_ASSERT_FALSE(w.matches(&idx));
 }
 

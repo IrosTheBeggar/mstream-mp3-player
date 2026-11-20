@@ -76,6 +76,9 @@ Map::Status Map::begin(const LibraryIndex* index, const statsrank::Played* playe
     return status_;
   }
   index_ = index;
+  tracks_ = index->trackCount();
+  stamp_ = index->buildStamp();
+  visited_ = 0;
   played_ = played && albumBits ? played : nullptr;
   wanted_ = wanted;
   bits_ = played_ ? albumBits : nullptr;
@@ -96,6 +99,7 @@ void Map::release() {
 
 void Map::visit(void* ctx, uint32_t t, uint64_t h) {
   Map& m = *static_cast<Map*>(ctx);
+  ++m.visited_;
   if (m.played_ && m.played_->contains(h)) {
     ++m.stats_.playedTracks;
     const uint32_t a = m.index_->track(t).album;
@@ -113,8 +117,9 @@ void Map::visit(void* ctx, uint32_t t, uint64_t h) {
 
 Map::Status Map::step(const LibraryIndex* index) {
   if (status_ != Status::Working) return status_;
-  if (!walk_.matches(index)) {
+  if (!matches(index)) {
     walk_.end();
+    index_ = nullptr;
     status_ = Status::Aborted;
     return status_;
   }
@@ -124,8 +129,8 @@ Map::Status Map::step(const LibraryIndex* index) {
     return status_;
   }
   walk_.hashSlice(cfg_.tracksPerSlice, visit, this);
-  stats_.tracks = walk_.hashed() + walk_.unhashed();
-  stats_.unhashed = walk_.unhashed();
+  stats_.tracks = walk_.position();
+  stats_.unhashed = walk_.position() - visited_;
   if (!walk_.tracksDone()) return status_;
   // Ready: the counts.
   for (uint32_t a = 0; a < albums_; ++a) stats_.albumsPlayed += albumPlayed(a) ? 1 : 0;

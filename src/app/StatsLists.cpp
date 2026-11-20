@@ -14,6 +14,7 @@
 #include "StatsFold.h"
 #include "WallClock.h"
 #include "app/BoardClock.h"
+#include "app/ListeningStats.h"
 
 namespace {
 
@@ -30,6 +31,10 @@ using ull = unsigned long long;
 // 8 ms a pass"), and the times an index that changed under it begins it again.
 constexpr int64_t kWalkPassUs = 8000;
 constexpr uint8_t kRestarts = 3;
+// A step queued this long and not taken by the card worker (none this boot,
+// or held behind the boot's walk, a compaction and the yields) is given up:
+// its block back, a line.
+constexpr uint32_t kQueuedMs = 30000;
 constexpr size_t kAlign = 16;
 
 size_t up(size_t n) { return (n + kAlign - 1) & ~(kAlign - 1); }
@@ -82,6 +87,9 @@ const char* closeText(autodj::Close c) {
     case autodj::Close::Left: return "the free block above it partly LEFT OPEN";
     case autodj::Close::Room: return "the caps given back (a decoder's room)";
     case autodj::Close::Plain: return "carved under spacers, nothing closed";
+    case autodj::Close::Full: return "the hold full: not tracked, nothing closed";
+    case autodj::Close::NoRoom: return "given back: no room for a decoder's buffers";
+    case autodj::Close::NoBlock: return "no free block takes it";
     default: return "?";
   }
 }
@@ -124,6 +132,7 @@ struct StatsLists::Ask {
   uint32_t trkdRecords = 0, rcntRecords = 0;
   statsfold::Track recordRow;  // Hp: the records' row
   bool recordFound = false;
+  uint8_t* records = nullptr;  // the records' copy: 40 TRKD rows' room, then 40 RCNT rows'
   sm::Map map;
   sm::Wanted wanted;
   uint8_t* bits = nullptr;
@@ -132,13 +141,12 @@ struct StatsLists::Ask {
   uint32_t passes = 0;
   int64_t walkT0 = 0, walkUs = 0, walkMaxUs = 0;
   size_t parts[8] = {};  // the regions' bytes (Hr's line)
+  size_t bytes = 0;      // the block's
 };
 
-void StatsLists::begin(sg::Glue* glue, tagstore::Fs* fs, const Hold& hold, PrintTrackFn print) {
+void StatsLists::begin(sg::Glue* glue, tagstore::Fs* fs) {
   glue_ = glue;
   fs_ = fs;
-  hold_ = hold;
-  print_ = print;
 }
 
 const char* StatsLists::name() const {
@@ -179,10 +187,8 @@ void StatsLists::command(const char* arg) {
   }
   if (s == kAsked) Serial.printf("[listen] %s replaced by the new ask (it hadn't begun)\n", name());
   kind_ = k;
-  again_ = false;
   restarts_ = 0;
   waitLogged_ = 0;
-  askedMs_ = millis();
   state_.store(kAsked);
   Serial.printf("[listen] %s: at the next pass the write gate lets through, the boot's scan done, no library update "
                 "asked%s; its memory given back when it ends (nothing held between asks)\n",
@@ -191,19 +197,21 @@ void StatsLists::command(const char* arg) {
 
 bool StatsLists::turnWanted(const Gates& g) const {
   if (state_.load() != kAsked || !glue_) return false;
-  // Each gate that holds it, said once (a bit each).
-  uint32_t why = 0;
+  // Each gate that holds it, said once (a bit each). The index only for Hl
+  // and Hw (their walk); a library update asked for every ask (the index
+  // goes behind its fence; and the update waits for an ask's block).
+  const bool walk = kind_ == kList || kind_ == kWalkAsk;
+  uint8_t why = 0;
   if (!glue_->on()) why = 1;
   else if (glue_->booting() || glue_->scanHolds()) why = 2;
   else if (glue_->store().held()) why = 4;
-  else if (g.updateAsked || !g.index) why = 8;
+  else if (g.updateAsked || (walk && (!g.index || !g.index->ready()))) why = 8;
   else if (g.cardHeld || g.cardAway) why = 16;
   else if (kind_ != kTrack && g.joinPending) why = 32;
-  else if ((kind_ == kList || kind_ == kWalkAsk) && !g.index->ready()) why = 8;
   if (why == 0) return true;
   StatsLists* self = const_cast<StatsLists*>(this);
   if (!(waitLogged_ & why)) {
-    self->waitLogged_ |= why;
+    self->waitLogged_ = static_cast<uint8_t>(self->waitLogged_ | why);
     Serial.printf("[listen] %s waits: %s\n", name(),
                   why == 1    ? "the stats are off this session"
                   : why == 2  ? "the boot's scan (its fold, its save)"
@@ -225,12 +233,29 @@ void StatsLists::refuse(const char* why) {
 void StatsLists::turn(const Gates& g) {
   if (!turnWanted(g)) return;
   const int64_t t0 = esp_timer_get_time();
-  sf::Fold& fold = glue_->fold();
   const sx::Store::Copy& copy = glue_->store().cardCopy();
-  // stats.bin's directory now (its TRKD's rows: the played set's room), the
-  // copy the session stands on.
+  const bool rank = kind_ != kTrack;
+  const bool walk = kind_ == kList || kind_ == kWalkAsk;
+  const bool playedSet = kind_ == kWalkAsk || (kind_ == kList && shelf_ == 3);
+  // A list the clock unset can't give (Most played's 7 and 30 days, New
+  // finds, Old favourites): said now, nothing carved.
+  uint16_t today = 0;
+  if (kind_ == kList && shelf_ != 3 && shelf_ != 4 && !(shelf_ == 0 && window_ == 2) &&
+      !sf::todayOf(boardclock::now(), &today)) {
+    char label[48];
+    listLabel(shelf_, window_, label, sizeof(label));
+    Serial.printf("[listen] %s: needs the board's clock (unset): nothing ranked\n", label);
+    kind_ = kNone;
+    state_.store(kIdle);
+    return;
+  }
+  if (kind_ == kTrack && g.playingHash == 0) {
+    refuse("nothing playing");
+    return;
+  }
+  // stats.bin's directory now (its TRKD's rows: the played set's room).
   uint32_t trkdRows = 0;
-  if (copy.present) {
+  if (copy.present && playedSet) {
     const sg::Glue::FileLook l = glue_->lookFile();
     if (!l.there || !l.frame || l.generation != copy.generation) {
       refuse(l.unread ? "the card failed a read of stats.bin" : "stats.bin isn't the copy this session stands on");
@@ -238,16 +263,11 @@ void StatsLists::turn(const Gates& g) {
     }
     trkdRows = l.rows[sf::kTrkd];
   }
-  if (kind_ == kTrack && g.playingHash == 0) {
-    refuse("nothing playing");
-    return;
-  }
-  const sf::Head& h = fold.head();
-  const bool rank = kind_ != kTrack;
-  const bool walk = kind_ == kList || kind_ == kWalkAsk;
-  const bool playedSet = kind_ == kWalkAsk || (kind_ == kList && shelf_ == 3);
-  const uint32_t records = fold.records();
-  // The regions.
+  const sf::Head& h = glue_->fold().head();
+  // The regions. The records' room is all 40 (kRecords): the copy is made
+  // at the hand-off (prepare()), when more may have been folded; a records'
+  // save meanwhile moves them into TRKD, which the played set's count holds.
+  const uint32_t records = sf::kRecords;
   size_t parts[8] = {};
   parts[0] = up(sizeof(Ask));
   parts[1] = up(sx::kWorkBytes);
@@ -274,7 +294,7 @@ void StatsLists::turn(const Gates& g) {
   size_t bytes = 0;
   for (size_t p : parts) bytes += p;
   autodj::CloseReport cr;
-  void* p = hold_.take ? hold_.take(bytes, &cr) : nullptr;
+  void* p = statshold::take(bytes, &cr);
   if (!p) {
     char why[128];
     snprintf(why, sizeof(why), "no PSRAM for its %lu B block (%s)", static_cast<ul>(bytes),
@@ -284,50 +304,19 @@ void StatsLists::turn(const Gates& g) {
     return;
   }
   block_ = new (p) Ask;
-  bytes_ = bytes;
   Ask& a = *block_;
+  a.bytes = bytes;
   for (int i = 0; i < 8; ++i) a.parts[i] = parts[i];
   uint8_t* at = static_cast<uint8_t*>(p) + parts[0];
   a.mem.work = at;
   at += parts[1];
-  // The rank's input: the copy the session stands on, its base, today.
-  a.in.present = copy.present;
-  a.in.generation = copy.generation;
-  a.in.headerCrc = copy.headerCrc;
-  a.in.baseGen = h.baseGen;
-  a.in.baseRows = h.baseRows;
-  a.in.baseCrc = h.baseCrc;
-  uint16_t today = 0;
-  a.in.hasToday = sf::todayOf(boardclock::now(), &today);
-  a.in.today = today;
   if (rank) {
     a.mem.lists = at;
     at += parts[2];
     a.mem.windows = at;
     a.mem.windowRows = sf::kRcntRows + records;
     at += parts[3];
-    // The records' copy (5.14's "The screens"): TRKD's rows, then RCNT's,
-    // each sorted and a key's records ⊕'d (Fold::Cursor, in this call: no
-    // fold while it is in use).
-    const int64_t c0 = esp_timer_get_time();
-    uint8_t* recs = at;
-    {
-      sf::Fold::Cursor cur(fold, sf::kTrkd);
-      while (a.trkdRecords < records && cur.next(recs + static_cast<size_t>(a.trkdRecords) * sf::kTrackBytes))
-        ++a.trkdRecords;
-    }
-    uint8_t* rc = recs + static_cast<size_t>(records) * sf::kTrackBytes;
-    {
-      sf::Fold::Cursor cur(fold, sf::kRcnt);
-      while (a.rcntRecords < records &&
-             cur.next(rc + static_cast<size_t>(a.rcntRecords) * sf::kStrides[sf::kRcnt]))
-        ++a.rcntRecords;
-    }
-    a.copyUs = esp_timer_get_time() - c0;
-    a.in.trkd = recs;
-    a.in.trkdRows = a.trkdRecords;
-    a.in.rcnt = rc;
-    a.in.rcntRows = a.rcntRecords;
+    a.records = at;
     at += parts[4];
     if (playedSet) {
       for (uint32_t i = 0; i < playedChunks; ++i)
@@ -346,21 +335,11 @@ void StatsLists::turn(const Gates& g) {
         a.wanted.chunk[a.wanted.chunks++] = at + static_cast<size_t>(i) * sm::kChunkBytes;
     }
   } else {
-    // Hp: the records' row (the loop's: Fold::track()).
     a.hash = g.playingHash;
-    a.recordFound = fold.track(a.hash, &a.recordRow);
   }
-  // The files, opened here (a FatFile each: PSRAM; the worker allocates
-  // nothing).
-  const sr::Outcome o = sr::open(*fs_, a.in, &a.files);
-  if (o != sr::Outcome::Ok) {
-    char why[96];
-    snprintf(why, sizeof(why), "its files didn't open (%s)", sr::outcomeName(o));
-    refuse(why);
-    return;
-  }
-  a.queuedUs = esp_timer_get_time();
   rank_ = rank;
+  queuedMs_ = g.nowMs;
+  a.queuedUs = esp_timer_get_time();
   Serial.printf("[listen] %s: its block %lu B at 0x%08lx (%s, %u cap%s); %s queued for the card worker (%.1f ms on "
                 "the loop)\n",
                 name(), static_cast<ul>(bytes), static_cast<ul>(reinterpret_cast<uintptr_t>(p)), closeText(cr.why),
@@ -369,13 +348,76 @@ void StatsLists::turn(const Gates& g) {
   state_.store(rank ? kRankQueued : kTrackQueued);
 }
 
+// At the hand-off, on the loop (CardTasks' pass), with the worker free: the
+// rank's input as the session stands now (the card's copy, its base,
+// today), the records' copy (5.14's "The screens": TRKD's rows, then
+// RCNT's, each sorted and a key's records ⊕'d, Fold::Cursor in this call:
+// no fold while it is in use), and stats.bin and the base opened (a FatFile
+// each: PSRAM; the worker allocates nothing). From here until the step is
+// taken in, no stats save and no slot is made (workerOwned()). False: the
+// files didn't open (refused).
+bool StatsLists::prepare() {
+  Ask& a = *block_;
+  sf::Fold& fold = glue_->fold();
+  const sx::Store::Copy& copy = glue_->store().cardCopy();
+  const sf::Head& h = fold.head();
+  a.in = sr::Input();
+  a.in.present = copy.present;
+  a.in.generation = copy.generation;
+  a.in.headerCrc = copy.headerCrc;
+  a.in.baseGen = h.baseGen;
+  a.in.baseRows = h.baseRows;
+  a.in.baseCrc = h.baseCrc;
+  uint16_t today = 0;
+  a.in.hasToday = sf::todayOf(boardclock::now(), &today);
+  a.in.today = today;
+  if (rank_) {
+    const uint32_t records = sf::kRecords;
+    const int64_t c0 = esp_timer_get_time();
+    uint8_t* recs = a.records;
+    a.trkdRecords = a.rcntRecords = 0;
+    {
+      sf::Fold::Cursor cur(fold, sf::kTrkd);
+      while (a.trkdRecords < records && cur.next(recs + static_cast<size_t>(a.trkdRecords) * sf::kTrackBytes))
+        ++a.trkdRecords;
+    }
+    uint8_t* rc = recs + static_cast<size_t>(records) * sf::kTrackBytes;
+    {
+      sf::Fold::Cursor cur(fold, sf::kRcnt);
+      while (a.rcntRecords < records &&
+             cur.next(rc + static_cast<size_t>(a.rcntRecords) * sf::kStrides[sf::kRcnt]))
+        ++a.rcntRecords;
+    }
+    a.copyUs = esp_timer_get_time() - c0;
+    a.in.trkd = recs;
+    a.in.trkdRows = a.trkdRecords;
+    a.in.rcnt = rc;
+    a.in.rcntRows = a.rcntRecords;
+  } else {
+    a.recordFound = fold.track(a.hash, &a.recordRow);
+  }
+  const sr::Outcome o = sr::open(*fs_, a.in, &a.files);
+  if (o == sr::Outcome::Ok) return true;
+  char why[96];
+  snprintf(why, sizeof(why), "its files didn't open (%s)", sr::outcomeName(o));
+  refuse(why);
+  return false;
+}
+
 bool StatsLists::start(CardWorker& worker, uint8_t priority, bool rank, uint32_t nowMs) {
   const uint8_t s = state_.load();
   if (!block_ || (rank ? s != kRankQueued : s != kTrackQueued)) return false;
+  // The same checks as the turn's: the session's card still the one to read.
+  if (!glue_->on() || glue_->store().held() || glue_->booting()) {
+    refuse("the stats' state changed while it waited for the card worker");
+    return false;
+  }
+  if (!prepare()) return false;
   block_->priority = priority;
   state_.store(kRunning);
   if (!worker.start(CardWorker::Job::Stats, priority, entry, this, nowMs)) {
-    state_.store(rank ? kRankQueued : kTrackQueued);  // (asked again at the next pass)
+    sr::close(*fs_, &block_->files);  // (opened again at the next hand-off)
+    state_.store(rank ? kRankQueued : kTrackQueued);
     return false;
   }
   return true;
@@ -398,13 +440,17 @@ void StatsLists::giveBack() {
   if (!block_) return;
   if (fs_) sr::close(*fs_, &block_->files);
   block_->~Ask();
-  if (hold_.give) hold_.give(block_);
+  statshold::give(block_);
   block_ = nullptr;
-  bytes_ = 0;
 }
 
 void StatsLists::loop(const Gates& g) {
-  if (state_.load() != kDone) return;
+  const uint8_t s = state_.load();
+  if ((s == kRankQueued || s == kTrackQueued) && g.nowMs - queuedMs_ >= kQueuedMs) {
+    refuse("the card worker didn't take it in 30 s (none, or busy all that time)");
+    return;
+  }
+  if (s != kDone) return;
   Ask& a = *block_;
   sr::close(*fs_, &a.files);  // (on the loop, where they were opened)
   if (rank_) {
@@ -447,16 +493,18 @@ void StatsLists::finishRank(const Gates& g) {
     }
     Serial.printf("[listen] Hr: the lists (each its cap and 16 at most): %s; its block %lu B (work %lu, lists %lu, "
                   "the windows' rows %lu, the records' copy %lu), given back\n",
-                  lists, static_cast<ul>(bytes_), static_cast<ul>(a.parts[1]), static_cast<ul>(a.parts[2]),
+                  lists, static_cast<ul>(a.bytes), static_cast<ul>(a.parts[1]), static_cast<ul>(a.parts[2]),
                   static_cast<ul>(a.parts[3]), static_cast<ul>(a.parts[4]));
     giveBack();
     kind_ = kNone;
     state_.store(kIdle);
     return;
   }
-  // Hl, Hw: the wanted set from the lists, then the walk.
+  // Hl, Hw: the wanted set from the lists, then the walk. (Its blocks were
+  // sized for the index at the turn: one of more albums, or of more folders
+  // where it keeps their states, isn't walked.)
   if (!g.index || !g.index->ready() || g.index->albumCount() > a.albumsCap ||
-      pathhash::Walk::foldersFor(*g.index) > a.foldersCap) {
+      (a.folders && pathhash::Walk::foldersFor(*g.index) > a.foldersCap)) {
     refuse("the library's index changed before its walk");
     return;
   }
@@ -512,11 +560,11 @@ void StatsLists::finishTrack() {
   } else {
     look.row.hash = 0;
   }
-  if (print_) print_("Hp", a.hash, look, ms);
+  ListeningStats::printTrackLook("Hp", a.hash, look, ms);
   Serial.printf("[listen] Hp: read on the card worker in %.1f ms (priority %u; queued %.1f ms before it): %lu base "
                 "rows read (a binary search), TRKD's %lu rows passed; its block %lu B given back\n",
                 ms, static_cast<unsigned>(a.priority), (a.startUs - a.queuedUs) / 1000.0f, static_cast<ul>(t.reads),
-                static_cast<ul>(t.trkdRows), static_cast<ul>(bytes_));
+                static_cast<ul>(t.trkdRows), static_cast<ul>(a.bytes));
   giveBack();
   kind_ = kNone;
   state_.store(kIdle);
@@ -546,7 +594,7 @@ void StatsLists::stepMap(const Gates& g) {
     Serial.printf("[listen] %s: the library's index changed under its walk: begun again (%u of %u)\n", name(),
                   static_cast<unsigned>(restarts_), static_cast<unsigned>(kRestarts));
     // (Its blocks were sized for the index it began on.)
-    if (pathhash::Walk::foldersFor(*g.index) > a.foldersCap || g.index->albumCount() > a.albumsCap) {
+    if ((a.folders && pathhash::Walk::foldersFor(*g.index) > a.foldersCap) || g.index->albumCount() > a.albumsCap) {
       refuse("the library's new index is larger than its block");
       return;
     }
@@ -581,7 +629,7 @@ void StatsLists::printWalk(const Gates& g) {
                 static_cast<ul>(matched), static_cast<ul>(played - matched), static_cast<ul>(m.albumsPlayed),
                 static_cast<ul>(albums), static_cast<ul>(albums - m.albumsPlayed), static_cast<ul>(a.wanted.n),
                 static_cast<ul>(m.wantedMapped), static_cast<ul>(m.collisions), (a.endUs - a.startUs) / 1000.0f,
-                static_cast<ul>(bytes_));
+                static_cast<ul>(a.bytes));
 }
 
 void StatsLists::printLists(const Gates& g) {
@@ -668,11 +716,15 @@ size_t StatsLists::drop() {
   // (A worker's step under way: its end first, the files it reads closed
   // after; the fence never comes while the block is held, holds() keeping
   // the update waiting: this is the guard.)
-  if (!waitWorker(5000)) return 0;
-  const size_t n = bytes_;
+  if (!waitWorker(5000)) {
+    Serial.printf("[listen] %s: its card worker's step still reading at the library update's fence: its block "
+                  "held through it\n",
+                  name());
+    return 0;
+  }
+  const size_t n = block_->bytes;
   giveBack();
   if (kind_ != kNone) {
-    again_ = true;
     restarts_ = 0;
     waitLogged_ = 0;
     state_.store(kAsked);
@@ -683,7 +735,10 @@ size_t StatsLists::drop() {
 }
 
 void StatsLists::ending(uint32_t maxMs) {
-  if (!waitWorker(maxMs)) return;  // (still reading: the end comes all the same, nothing saved over it)
+  // (Still reading after `maxMs`: the end goes on. A rotation's save in the
+  // end's flush may then replace stats.bin under its reads, which fail their
+  // checks: it only reads, and its result is never taken in.)
+  if (!waitWorker(maxMs)) return;
   giveBack();
   kind_ = kNone;
   state_.store(kIdle);
