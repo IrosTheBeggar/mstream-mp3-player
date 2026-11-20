@@ -881,6 +881,14 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   // so each is stored as tested (noCard: the card's, two lines down). In
   // 0.14.0 a second noCard, emptyState()'s result, always true, hid it
   // inside: with a card in, every pass redrew the whole state, about 38 ms.
+  // Two of emptyState()'s inputs aren't in the test: queueUnread (the
+  // lines) and libraryTracks > 0 (Shuffle all). Once the UI is up, and
+  // while nothing is queued, each changes only with a library rebuild or
+  // update (an unread queue.txt isn't written for an empty queue:
+  // QueueStore::keepUnread()), whose libraryChanged() or libraryUpdating()
+  // repaints this page or the glance. Changed anywhere else, either would
+  // need to be in the test: onEmptyEvent() takes this pass's emptyState()
+  // as the one drawn.
   const bool empty = s.current < 0;
   const bool noCard = !s.card && s.libraryTracks == 0;
   if (empty) {
