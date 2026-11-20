@@ -264,6 +264,15 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   // 4. What has work (only read with the worker free: a step may change it).
   in.running = worker_.running();
   in.runningRank = lists && lists->rankRunning();
+  // The background work a rank comes after (ScanScheduler's order: the
+  // walk, a compaction): an ask doesn't take its block while there is some,
+  // or its rank would queue behind it holding the block (the device pass:
+  // the boot's walk, 22 s, and the ask's 30 s queue given up).
+  // (The boot's walk counts from the boot: it is armed after the first frame
+  // and held while Bluetooth pages, so an ask between would meet it.)
+  if (lists)
+    lists->workerAhead(active_ && (!bootWalkDone_ || walkArmed_ || jobs_.walking() || jobs_.walkWork() ||
+                                   jobs_.compactWork() || compacting_));
   // Internal RAM's lowest while a step runs (gs; L3 and L4).
   if (in.running != Job::None) worker_.noteInternal(static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
   // (While gs waits for the step under way, nothing is handed:

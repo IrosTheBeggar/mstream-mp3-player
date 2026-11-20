@@ -108,6 +108,10 @@ public:
   void stepMap(const Gates& g);
 
   // ---- the card worker (app/CardTasks) ----
+  // The card worker has background work a rank comes after (a walk, a
+  // compaction): a rank's ask waits for it before it takes its block (each
+  // pass, CardTasks' word).
+  void workerAhead(bool ahead) { workerAhead_ = ahead; }
   bool wantsRank() const { return state_.load() == kRankQueued; }
   bool wantsTrack() const { return state_.load() == kTrackQueued; }
   bool rankRunning() const {
@@ -160,6 +164,7 @@ private:
   uint8_t shelf_ = 0;         // Hl's: 0 Most played, 1 New finds, 2 Old favourites, 3 Not played yet, 4 Recently played
   uint8_t window_ = 2;        // Most played's: 0 7 days, 1 30 days, 2 All time
   uint8_t restarts_ = 0;      // the walk begun again (an index that changed)
+  bool workerAhead_ = false;  // the card worker's walk or a compaction comes before a rank (workerAhead())
   uint8_t waitLogged_ = 0;    // the gate that held the ask, said once (a bit each)
   uint32_t queuedMs_ = 0;     // the step queued (Gates::nowMs)
 };

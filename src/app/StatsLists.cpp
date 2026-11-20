@@ -208,6 +208,7 @@ bool StatsLists::turnWanted(const Gates& g) const {
   else if (g.updateAsked || (walk && (!g.index || !g.index->ready()))) why = 8;
   else if (g.cardHeld || g.cardAway) why = 16;
   else if (kind_ != kTrack && g.joinPending) why = 32;
+  else if (kind_ != kTrack && workerAhead_) why = 64;
   if (why == 0) return true;
   StatsLists* self = const_cast<StatsLists*>(this);
   if (!(waitLogged_ & why)) {
@@ -218,7 +219,8 @@ bool StatsLists::turnWanted(const Gates& g) const {
                   : why == 4  ? "a save's tmp held (Hs or the next save promotes it first)"
                   : why == 8  ? "the library update (or the index isn't readable)"
                   : why == 16 ? "the card (away, or held)"
-                              : "Auto DJ's join (working, or due)");
+                  : why == 32 ? "Auto DJ's join (working, or due)"
+                              : "the card worker's walk or compaction (a rank comes after them)");
   }
   return false;
 }
