@@ -15,6 +15,7 @@ const char* PlayGate::stateName(State s) {
 PlayGate::Do PlayGate::update(const In& in) {
   using P = BtLink::Phase;
   if (in.play != PlayState::Waiting) {
+    stats_ = false;  // (the stats' wait cancelled, or started)
     // No wait (any more). A failure's notice lasts until the headphones are
     // back or the speaker is the output: then it has nothing more to say.
     if (state_ == State::Failed && (in.linked || !in.onBluetooth)) state_ = State::Idle;
@@ -23,6 +24,24 @@ PlayGate::Do PlayGate::update(const In& in) {
     // played on the speaker, or stopped: what it asked for is withdrawn.
     state_ = State::Idle;
     return Do::Ended;
+  }
+  // The listening stats hold this start (their boot fold's overflow chunks:
+  // a decoder's blocks carved under them land where the next library update
+  // needs room). Nothing is released, given up or cancelled while they do.
+  const bool alone = !in.onBluetooth || in.linked;  // (no headphones to wait for)
+  if (in.statsHold) {
+    if (state_ == State::Waiting) return Do::None;  // the headphones' wait: on after the hold
+    if (alone) {
+      if (stats_) return Do::None;
+      stats_ = true;
+      return Do::Held;
+    }
+    // Bluetooth, the headphones not connected: their wait begins now (below),
+    // the hold within it.
+    stats_ = false;
+  } else if (stats_) {
+    stats_ = false;
+    if (alone && state_ != State::Waiting) return Do::Start;
   }
   if (!in.onBluetooth) {
     // The output moved without the listener choosing the speaker for this
@@ -69,7 +88,8 @@ PlayGate::Do PlayGate::step(const In& in, PlaybackController& player, BtSession&
     case Do::Track:
       if (!session.wanted()) session.connect(in.nowMs);
       break;
-    case Do::Release: player.release(); break;
+    case Do::Release:
+    case Do::Start: player.release(); break;
     case Do::GiveUp:
       player.cancelWait();
       session.withdraw(true);
@@ -80,6 +100,7 @@ PlayGate::Do PlayGate::step(const In& in, PlaybackController& player, BtSession&
       session.withdraw(false);
       break;
     case Do::Ended: session.withdraw(false); break;
+    case Do::Held:
     case Do::None: break;
   }
   return d;

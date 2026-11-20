@@ -192,6 +192,240 @@ void giveSpacers(Spacers* s, void (*release)(void*)) {
   s->n = 0;
 }
 
+// ---- The listening stats' hold ----
+size_t capRequest(size_t bytes, size_t overhead) {
+  // The smallest block a request takes: 16 B with the poisoning (1 + 12,
+  // aligned to 4), TLSF's 12 B without.
+  const size_t least = std::max<size_t>(12, (1 + overhead + 3) & ~static_cast<size_t>(3));
+  if (bytes < least) return 0;
+  if (bytes < 128) return bytes - overhead;
+  int fl = 0;
+  for (size_t r = bytes >> 1; r; r >>= 1) ++fl;  // fls
+  return (bytes & ~((static_cast<size_t>(1) << (fl - 5)) - 1)) - overhead;
+}
+
+const char* closeName(Close c) {
+  switch (c) {
+    case Close::Nothing: return "nothing";
+    case Close::Closed: return "closed";
+    case Close::NoSpacers: return "noSpacers";
+    case Close::NotOnTop: return "notOnTop";
+    case Close::Margin: return "margin";
+    case Close::Missed: return "missed";
+    case Close::NoCap: return "noCap";
+    case Close::Lost: return "lost";
+    case Close::Left: return "left";
+    case Close::Full: return "full";
+    case Close::NoBlock: return "noBlock";
+    case Close::Plain: return "plain";
+    case Close::Room: return "room";
+    case Close::NoRoom: return "noRoom";
+  }
+  return "?";
+}
+
+WalkAbove::WalkAbove(const void* b, const void* s, size_t h, uint32_t bnd, Above* o)
+    : block(reinterpret_cast<uintptr_t>(b) - h),
+      spacer(s ? reinterpret_cast<uintptr_t>(s) - h : 0),
+      head(h),
+      bound(bnd),
+      out(o) {
+  *out = Above();
+}
+
+bool WalkAbove::step(intptr_t heapStart, uintptr_t at, size_t size, bool used) {
+  if (done) return false;
+  ++out->visits;
+  if (!seen && bound && out->visits > bound) {
+    out->bounded = true;
+    done = true;
+    return false;
+  }
+  if (seen) {
+    // The block physically right above the held one (blocks come in
+    // address order), if in the same heap.
+    done = true;
+    if (heapStart == heap) {
+      out->free = !used;
+      out->bytes = size;
+      if (!used) out->capAt = reinterpret_cast<void*>(at + head);
+    }
+    return false;
+  }
+  if (at == block && used) {
+    seen = true;
+    heap = heapStart;
+    out->found = true;
+    out->blockBytes = size;
+    out->onSpacers = spacer && prevFree && prevHeap == heapStart && prevAt <= spacer && spacer < at;
+    return true;
+  }
+  prevAt = at;
+  prevFree = !used;
+  prevHeap = heapStart;
+  return true;
+}
+
+namespace {
+
+void walked(const Above& a, CloseReport* rep) {
+  ++rep->walks;
+  rep->us += a.us;
+  rep->usMax = std::max(rep->usMax, a.us);
+  rep->visits = std::max(rep->visits, a.visits);
+}
+
+}  // namespace
+
+Close closeAbove(const void* block, const void* spacer, const CloseHooks& h, Caps* out, CloseReport* rep) {
+  Above a;
+  h.above(block, spacer, &a);
+  walked(a, rep);
+  if (!a.found) {
+    rep->bounded = a.bounded;
+    return rep->why = Close::Lost;
+  }
+  rep->blockBytes = a.blockBytes;
+  if (spacer && !a.onSpacers) return rep->why = Close::NotOnTop;
+  if (!a.free) {
+    rep->usedAbove = a.bytes;
+    return rep->why = Close::Nothing;
+  }
+  rep->aboveBytes = a.bytes;
+  // (Rule 3: the caps never leave under the margin free.)
+  if (h.freeBytes && h.freeBytes() < a.bytes + 4 + h.keepFree + 1024) return rep->why = Close::Margin;
+  for (;;) {
+    const size_t req = capRequest(a.bytes, h.overhead);
+    if (!req) return rep->why = out->n ? Close::Closed : Close::Nothing;  // (12 B: no request can take it)
+    if (out->n == Caps::kMax) return rep->why = Close::Left;
+    // (A cap after the first: the block above is what the caps left, T less
+    // their footprints, and the margin holds as it did at the first, unless
+    // another task freed the block above it meanwhile: merged in, it heads
+    // its list at the walk's capAt, so the next cap would land there and
+    // take the freed block's room with no margin asked. Left open.)
+    if (out->n && (a.bytes + rep->capBytes > rep->aboveBytes ||
+                   (h.freeBytes && h.freeBytes() < a.bytes + 4 + h.keepFree + 1024)))
+      return rep->why = Close::Left;
+    void* c = h.alloc(req);
+    if (c != a.capAt) {
+      // Another block heads T's list, or another task carved first: the
+      // same request would find the same head, so no retry.
+      rep->want = a.capAt;
+      rep->got = c;
+      if (c) h.release(c);
+      return rep->why = c ? Close::Missed : Close::NoCap;
+    }
+    out->p[out->n++] = c;
+    rep->caps = out->n;
+    h.above(c, nullptr, &a);
+    walked(a, rep);
+    rep->capBytes += a.blockBytes + 4;
+    if (!a.found) return rep->why = Close::Lost;  // (never: just carved)
+    // In use above the cap: the caps took T whole (their footprints T's +
+    // 4: a cap that leaves a rest of 16 B or more splits it, else takes it
+    // all), or another task's block took the rest's head between the cap
+    // and this walk, the rest above it open: Left, not Closed.
+    if (!a.free) return rep->why = rep->capBytes >= rep->aboveBytes + 4 ? Close::Closed : Close::Left;
+  }
+}
+
+void* TopHold::take(const Hooks& h, size_t bytes, CloseReport* rep, bool close, size_t room, bool yield) {
+  *rep = CloseReport();
+  // No free block takes it: said without asking (largest() is the largest
+  // request TLSF's good fit serves, heap_caps_get_largest_free_block(): its
+  // largest free block's class floor less the poisoning's 12 B), a failed
+  // heap_caps_malloc being the firmware's "[heap] FAILED" line and count.
+  if (h.largest && h.largest() < bytes) {
+    rep->why = Close::NoBlock;
+    return nullptr;
+  }
+  // The spacers keep keepFree free with the block itself carved (its carve
+  // counted, as the join counts its own): another task's carve in this
+  // window (a track start's probe, an Opus packet buffer, the card worker's)
+  // finds the margin, whatever the block's size. Not closing (the
+  // overflow's chunks one by one): keepFree alone, as before the caps.
+  Spacers sp;
+  const size_t keep = close ? h.keepFree + carvedAtMost(bytes) : h.keepFree;
+  const bool placed = h.largest && takeSpacers(bytes, keep, h.largest, h.freeBytes, h.alloc, h.release, &sp);
+  void* p = h.alloc(bytes);
+  const void* spacer = placed ? sp.p[sp.n - 1] : nullptr;  // (the last: the largest's, right under the block)
+  giveSpacers(&sp, h.release);  // (the caps come after: free is back near what it was)
+  if (!p) {
+    rep->why = Close::NoBlock;
+    return nullptr;
+  }
+  if (n_ == kMax) {
+    rep->why = Close::Full;
+    return p;
+  }
+  Entry& e = e_[n_++];
+  e = Entry();
+  e.block = p;
+  if (!placed) {
+    rep->why = Close::NoSpacers;
+  } else if (!close) {
+    rep->why = Close::Plain;
+  } else if (!h.above) {
+    rep->why = Close::Nothing;
+  } else {
+    CloseHooks c;
+    c.above = h.above;
+    c.alloc = h.alloc;
+    c.release = h.release;
+    c.freeBytes = h.freeBytes;
+    c.keepFree = h.keepFree;
+    c.overhead = h.overhead;
+    closeAbove(p, spacer, c, &e.caps, rep);
+  }
+  // A decoder's room (an open in the hold: a playing track's next, or a
+  // start nothing holds; GAPLESS 2.1's one decoder at a time, the old
+  // one's blocks given back first, but an MP3 gives back none and the
+  // session's first Opus carves 125 KB, kept): the caps keep the margin
+  // free, not those blocks, so while one may open the largest free block
+  // must still take them with every cap held. Short of that the hold's
+  // caps are given back, the newest block's first, as the overflow's
+  // fallback gives them back; still short, a block that can yield is given
+  // back too (the arena, before its first chunk is in use).
+  if (room && h.largest && h.largest() < carvedAtMost(room)) {
+    rep->uncapped = static_cast<uint8_t>(uncap(h));
+    if (yield && h.largest() < carvedAtMost(room)) {
+      give(h, p);  // (the newest entry: freed now, block first, its caps gone already)
+      rep->why = Close::NoRoom;
+      return nullptr;
+    }
+    if (rep->uncapped) rep->why = Close::Room;  // (none held: what the take did stands)
+  }
+  return p;
+}
+
+void TopHold::give(const Hooks& h, void* p) {
+  if (!p) return;
+  int i = n_ - 1;
+  while (i >= 0 && e_[i].block != p) --i;
+  if (i < 0) {
+    h.release(p);
+    return;
+  }
+  e_[i].given = true;
+  while (n_ > 0 && e_[n_ - 1].given) {  // the newest first: the lowest
+    Entry& e = e_[--n_];
+    h.release(e.block);  // the block first: it merges with the free block under it
+    for (int k = 0; k < e.caps.n; ++k) h.release(e.caps.p[k]);  // then its caps, bottom-up
+    e = Entry();
+  }
+}
+
+int TopHold::uncap(const Hooks& h) {
+  int n = 0;
+  for (int i = n_ - 1; i >= 0; --i) {
+    Caps& c = e_[i].caps;
+    for (int k = 0; k < c.n; ++k) h.release(c.p[k]);
+    n += c.n;
+    c = Caps();
+  }
+  return n;
+}
+
 uint32_t filterWord(uint16_t bpm10, uint8_t camelot, uint8_t flags, uint32_t artistKey) {
   uint32_t bpm = (static_cast<uint32_t>(bpm10) + 5) / 10;
   if (bpm > 255) bpm = 255;

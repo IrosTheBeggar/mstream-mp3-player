@@ -214,6 +214,7 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
     ui.trackLeftMs = env.trackLeftMs;
     ui.seekSeq = env.seekSeq;
     ui.autoDjOwed = env.autoDjOwed;
+    ui.statsWait = env.statsWait;
     if (up->phase() == LibraryUpdate::Phase::Asked) {  // (the memory check's: read only when it may be asked)
       ui.psramFree = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
       ui.psramLargest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
@@ -749,7 +750,7 @@ librarytext::Status CardTasks::status() const {
                         up == LibraryUpdate::Phase::Building || up == LibraryUpdate::Phase::Live ||
                         (up == LibraryUpdate::Phase::Asked &&
                          (w == LibraryUpdate::Wait::SafePoint || w == LibraryUpdate::Wait::AutoDj ||
-                          w == LibraryUpdate::Wait::Worker));
+                          w == LibraryUpdate::Wait::Worker || w == LibraryUpdate::Wait::Stats));
   if (updating) {
     s.phase = P::Updating;
   } else if (jobs_.walking() || walkSeen_ || walkArmed_) {
@@ -788,8 +789,13 @@ void CardTasks::state(librarytext::Status* s, char* line, size_t size) const {
     return;
   }
   const cardjobs::Jobs::Counts& c = jobs_.counts();
-  static const char* const kUpdateWaits[] = {"",           "a walk's end",   "its compaction",
-                                             "the worker", "the safe point", "Auto DJ's pick"};
+  static const char* const kUpdateWaits[] = {"",
+                                             "a walk's end",
+                                             "its compaction",
+                                             "the worker",
+                                             "the safe point",
+                                             "Auto DJ's pick",
+                                             "the listening stats' boot scan (its blocks)"};
   constexpr int kWaits = static_cast<int>(sizeof(kUpdateWaits) / sizeof(kUpdateWaits[0]));
   char update[112] = "";
   if (updateAsked()) {

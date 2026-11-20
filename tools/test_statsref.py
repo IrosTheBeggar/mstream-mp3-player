@@ -32,6 +32,12 @@ docs/LISTENING-STATS.md).
   and the plan's own figures in them; every log file in seq order per
   (deviceId, epoch), and 5.6's ranges choosing the same slots as the
   reference's keys on every boot.
+- The sessions (5.5, 5.14): the records' save at SAVE_AT, 24 (before the
+  slot of the step after; waiting for a fence, at RECORDS, 40, whatever
+  it; refused in the end's flush), Held and its promotion (a compacting boot's too), a boot
+  overflow's four tries, behind and its undercounts, a section damaged
+  under the session, a library update that moves no stats byte; the
+  read's settle of stats.tmp; a remount's read reads once.
 - seed: its refusals (no SYNTHCARD.TXT, a root another program wrote or
   none, the system drive, not FAT32, files already there, a twin of the
   log, and with --base one of stats.bin), --dry-run, a history and a
@@ -347,6 +353,25 @@ class BootTests(unittest.TestCase):
         r = sr.boot(r["files"], acks=[(A, E, 50)])
         self.assertEqual((r["gap"], r["saved"], r["stats"].head["gap"]), (0, False, 40))
 
+    def test_the_seq_rule(self):
+        # C5 (5.6): the next seq at boot takes the stats' MARK and ACKS's
+        # seq for this device and epoch too: NVS put back behind a log
+        # already trimmed takes neither a seq ACKS acknowledges nor one MARK
+        # covers.
+        before = sr.earlier([play(q) for q in range(1, 11)])  # MARK 10, the log trimmed whole
+        se = sr.Session(dict(before), acks=[(A, E, 6)])
+        se.scan()
+        self.assertEqual(se.next_seq(3, A, E), 11, "MARK's 10 over ACKS's 6 and NVS's 3")
+        self.assertEqual(se.next_seq(3, A, E + 1), 4, "another epoch's MARK and ACKS don't count")
+        self.assertEqual(se.next_seq(3, sr.DEV_B, E), 4, "nor another device's")
+        se = sr.Session(dict(before), acks=[(A, E, 50)])
+        se.scan()
+        self.assertEqual(se.next_seq(3, A, E), 51, "ACKS's 50 (the gap raised MARK to it too)")
+        se = sr.Session(dict(before, **files_of(*[play(q) for q in range(11, 14)])))
+        se.scan()
+        self.assertEqual(se.next_seq(3, A, E), 14, "the log's 13, folded: MARK 13 too")
+        self.assertEqual(se.next_seq(20, A, E), 21, "NVS ahead")
+
     def test_a_failed_save_trims_by_the_boots_mark(self):
         sc = sr.scenario_save_fails()
         r = sr.boot(sc["files"], **self.args(sc["boots"][0]))
@@ -416,7 +441,10 @@ class BootTests(unittest.TestCase):
     def test_a_stale_base_is_replaced(self):
         """5.3: after a stats.bin deleted or corrupt, or a base lost, baseGen
         starts again and the first compaction writes stats-00000001.bin over
-        the stale file there (named by nothing); nothing is removed."""
+        the stale file there (named by nothing); nothing is removed. A lost
+        base 1 is named by stats.bin until a save: that boot doesn't compact
+        under its name (a cut after the create would leave a short base the
+        named one, unread at every boot), the next boot's does."""
         files = sr.earlier([play(q, ["Brine", "Night Ticket"][q % 2]) for q in range(1, 5)])
         stale = files["stats-00000001.bin"]
         log = {"plays.jnl": sr.log(*[play(q, "Low Tide") for q in range(5, 7)])}
@@ -424,6 +452,12 @@ class BootTests(unittest.TestCase):
                            ("corrupt", {"stats.bin": files["stats.bin"][:-1], "stats-00000001.bin": stale}),
                            ("lost", dict(files, **{"stats-00000001.bin": sr.write_base({}, 1)}))):
             r = sr.boot(dict(card, **log))
+            if name == "lost":
+                self.assertEqual((r["read"], r["saved"], r["compacted"], r["removed"]), ("loaded", True, False, []))
+                self.assertEqual(r["files"]["stats-00000001.bin"], card["stats-00000001.bin"], "left as it was")
+                self.assertEqual(sr.load(r["files"]).head["baseGen"], 0)
+                card = r["files"]
+                r = sr.boot(dict(card, **{"plays.jnl": sr.log(*[play(q, "Low Tide") for q in range(5, 8)])}))
             new = r["files"]["stats-00000001.bin"]
             self.assertTrue(r["compacted"], name)
             self.assertEqual(r["removed"], [], name)
@@ -781,11 +815,18 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(self.card(c["out"])["stats.bad"], self.card(c["in"])["stats.bin"])
         self.assertNotEqual(self.card(c["out"])["stats-00000001.bin"], self.card(c["in"])["stats-00000001.bin"],
                             "the stale base replaced")
-        for name, compacted in (("base-lost", False), ("base-other", True)):
+        for name in ("base-lost", "base-other"):
             h = b(name)["stats"]["head"]
             self.assertEqual((h["flags"] & sr.FLAG_BASE_LOST, h["plays"], b(name)["removed"], b(name)["compacted"]),
-                             (sr.FLAG_BASE_LOST, 10, [], compacted), name)
+                             (sr.FLAG_BASE_LOST, 10, [], False), name)
         self.assertIn("stats-00000002.bin", b("base-lost")["out"])
+        # base-other: no compaction under the name stats.bin names (5.3);
+        # the next boot's, its stats.bin naming no base, replaces that file.
+        o1, o2 = b("base-other"), b("base-other", 1)
+        self.assertEqual(self.card(o1["out"])["stats-00000001.bin"], self.card(o1["in"])["stats-00000001.bin"])
+        self.assertEqual((o1["stats"]["head"]["baseGen"], o2["compacted"], o2["removed"], o2["stats"]["head"]["baseGen"]),
+                         (0, True, [], 1))
+        self.assertNotEqual(self.card(o2["out"])["stats-00000001.bin"], self.card(o1["in"])["stats-00000001.bin"])
         self.assertEqual(b("base-neighbours")["removed"], ["stats-00000002.bin"])
         nm = b("newer-minor")
         self.assertEqual(struct.unpack_from("<H", self.card(nm["in"])["stats.bin"], 6)[0], 3)
@@ -814,6 +855,387 @@ class FixtureTests(unittest.TestCase):
         for a in lib:
             for t in a["tracks"]:
                 self.assertEqual(int(t["hash"], 16), cf.path_hash(t["path"]))
+
+
+class SessionTests(unittest.TestCase):
+    """The sessions (stats/sessions.json): players' boots and plays on one
+    card, the log as playlog's Device writes it and the stats as 5.5-5.8
+    and 5.14 keep them (the records and their save, the fence, the end,
+    Held, a boot overflow's tries, behind); test_stats_store runs each step
+    through the firmware's code."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.files = sr.session_files()
+        cls.index = json.loads(cls.files["stats/sessions.json"])
+        cls.by = {e["name"]: e for e in cls.index}
+
+    def test_written_by_fixture_files(self):
+        all_files = sr.fixture_files()
+        for n, b in self.files.items():
+            self.assertEqual(all_files[n], b, n)
+
+    def test_the_undercounts(self):
+        """5.5's, 5.14's and 13's rotation hole, to the slot: a rotation whose
+        save fails (over a twin's chain too), one in the end's flush with
+        under 1 s left, one after a partial scan, one in a session behind
+        its log (the records' saves failing, a full log's boot overflow
+        unsaved at four tries, rotations before behind whose saves failed);
+        0.14.0's trim (HEAD's gap); a section
+        damaged under the session (the next boot's Corrupt counts again
+        from the log, without what a trim took). Every other session loses
+        nothing and counts nothing twice. No library update's give-back:
+        its sessions are gone (5.14)."""
+        lost = {"rotation-fails": 4, "rotation-twin-fails": 4, "flush-late": 4, "partial-rotation": 4,
+                "old-firmware": 3, "records-behind-rotation": 64, "boot-overflow-full-rotation": 128,
+                "records-fail-rotations": 30, "section-damaged": 4}
+        for e in self.index:
+            self.assertEqual(e["lost"], lost.get(e["name"], 0), e["name"])
+        self.assertEqual(len(self.index), 36)
+        self.assertFalse([e["name"] for e in self.index if e["name"].startswith("update-") and
+                          e["name"] != "update-nothing"])
+        self.assertFalse(hasattr(sr, "RING"))
+        # (40 and 24 since the resident set moved to internal RAM: 5.14.)
+        self.assertEqual((sr.RECORDS, sr.SAVE_AT, sr.BOOT_TRIES), (40, 24, 4))
+
+    def steps(self, name, do=None):
+        return [s for s in self.by[name]["steps"] if do is None or s["do"] == do]
+
+    def plays(self, name):
+        """Every play of a session, a batch's one by one: [(seq, its facts)]."""
+        out = []
+        for s in self.steps(name):
+            if s["do"] == "play":
+                out.append((s["seq"], s))
+            elif s["do"] == "plays":
+                ev = s["each"]
+                out += [(q, {k: ev[k][i] for k in ev}) for i, q in enumerate(ev["seq"])]
+        return out
+
+    def records_saves(self, name):
+        return [(q, f["recordsSave"]) for q, f in self.plays(name) if f["recordsSave"] is not None]
+
+    def stats_at(self, step):
+        """The card's stats.bin after a step, read back (None: none)."""
+        where = step["out"].get(sr.STATS_BIN)
+        return None if where is None else sr.read_stats(self.files["stats/sessions/%s/%s" % (where, sr.STATS_BIN)])
+
+    def test_the_records_save(self):
+        """5.14's one trigger: the records' save at the first step after the
+        records reach SAVE_AT (the boot's fold's or the live ones'), before
+        that step's slot; waiting while a library update's fence is up, run
+        at the step after it comes down, or at RECORDS whatever the fence;
+        refused in the orderly end's flush."""
+        S, R = sr.SAVE_AT, sr.RECORDS
+        self.assertEqual(self.records_saves("records-save"), [(S + 1, "wrote")])
+        at = [s for s in self.steps("records-save", "play") if s["seq"] == S + 1][0]
+        self.assertEqual((self.stats_at(at).head["slots"], at["records"]), (S, 1))
+        self.assertEqual(self.steps("records-save", "boot")[-1]["folded"], 6)
+        # The fence: the save waits under it (S to S + 2), Hs is refused
+        # under it, and the save runs before S + 3's slot.
+        self.assertEqual(self.records_saves("records-save-fenced"), [(S + 3, "wrote")])
+        hs = self.steps("records-save-fenced", "hs")
+        self.assertEqual([(s["recordsSave"], s["hsSave"], s["records"]) for s in hs], [(None, "fenced", S + 2)])
+        at = self.steps("records-save-fenced", "play")[-1]
+        self.assertEqual(self.stats_at(at).head["slots"], S + 2)
+        self.assertEqual(self.steps("records-save-fenced", "boot")[-1]["folded"], 1)
+        # The backlog under a fence: the save at RECORDS, whatever the fence.
+        self.assertEqual(self.records_saves("records-save-fenced-backlog"), [(R, "wrote")])
+        batch = self.steps("records-save-fenced-backlog", "plays")[-1]
+        self.assertEqual((self.stats_at(batch).head["slots"], self.stats_at(batch).head["skips"], batch["records"],
+                          batch["behind"]), (R, 2, 1, False))
+        self.assertEqual([s["hsSave"] for s in self.steps("records-save-fenced-backlog", "hs")], ["wrote"])
+        self.assertEqual(self.steps("records-save-fenced-backlog", "boot")[-1]["folded"], 0)
+        # The orderly end: refused; the next boot folds every one once.
+        self.assertEqual(self.records_saves("records-save-ending"), [(S + 1, "ending")])
+        self.assertEqual(self.steps("records-save-ending", "boot")[-1]["folded"], S + 1)
+        # The boot's fold brings them to S + 6 (within the records) and its
+        # save fails: the records' save before the first live slot holds them.
+        n = S + 6
+        self.assertLess(n, R)
+        b = self.steps("boot-unsaved-records", "boot")[0]
+        self.assertEqual((b["bootSave"], b["tries"], b["folded"], b["records"], b["behind"]),
+                         ("failed", 1, n, n, False))
+        self.assertEqual(self.records_saves("boot-unsaved-records"), [(n + 1, "wrote")])
+        self.assertEqual(self.stats_at(self.steps("boot-unsaved-records", "play")[0]).head["slots"], n)
+        # A library update moves no stats byte (no give-back, no save, no
+        # read): the save due at SAVE_AT waits out its fence, then runs
+        # before the next slot.
+        st = self.steps("update-nothing")
+        i = [s["do"] for s in st].index("update")
+        self.assertEqual(st[i]["out"], st[i - 1]["out"])
+        self.assertEqual(st[i]["records"], S)
+        self.assertEqual(self.records_saves("update-nothing"), [(S + 1, "wrote")])
+        # One that didn't land is due again only after a later record: the
+        # save at RECORDS under a fence fails; Hs after the fence asks none
+        # before it; the next play asks none either, and is behind.
+        self.assertEqual(self.records_saves("records-save-fenced-fails"), [(R, "failed")])
+        hs = self.steps("records-save-fenced-fails", "hs")
+        self.assertEqual([(s["recordsSave"], s["hsSave"], s["records"]) for s in hs], [(None, "failed", R)])
+        last = self.steps("records-save-fenced-fails", "play")[-1]
+        self.assertEqual((last["seq"], last["recordsSave"], last["records"], last["behind"]), (R + 1, None, 0, True))
+        self.assertEqual(self.steps("records-save-fenced-fails", "boot")[-1]["folded"], R + 1)
+
+    def test_behind(self):
+        """5.14's behind: the records full after a save asked failed (the
+        one past RECORDS not folded), a boot overflow's four tries failing, a held tmp
+        lost, a section damaged under the session. No record, no save (Hs,
+        the rotation's) for the rest of the session; the next boot folds
+        the log above the card's MARK, so only a rotation meanwhile loses
+        plays (records-behind-rotation, boot-overflow-full-rotation)."""
+        S, R = sr.SAVE_AT, sr.RECORDS
+        saves = self.records_saves("records-save-fails")
+        self.assertEqual(saves, [(q, "failed") for q in range(S + 1, R + 2)])
+        self.assertEqual(dict(self.plays("records-save-fails"))[R]["records"], R)
+        self.assertEqual([s["behind"] for s in self.steps("records-save-fails", "plays")], [False, False])
+        self.assertEqual([(s["seq"], s["records"], s["behind"]) for s in self.steps("records-save-fails", "play")],
+                         [(R + 1, 0, True), (R + 2, 0, True)])
+        self.assertEqual([s["hsSave"] for s in self.steps("records-save-fails", "hs")], ["behind"])
+        self.assertEqual(self.steps("records-save-fails", "boot")[-1]["folded"], R + 2)
+        # Rotations before behind, their saves failing: the plays they took
+        # out were in the records alone, which behind drops (the log's cap 8:
+        # four rotations' saves before the records are full).
+        b = self.steps("records-fail-rotations", "plays")[0]["each"]
+        self.assertEqual([q for q, r in zip(b["seq"], b["rotationSave"]) if r], [17, 24, 31, 38])
+        self.assertEqual(set(r for r in b["rotationSave"] if r), {"failed"})
+        self.assertEqual(self.steps("records-fail-rotations", "boot")[-1]["folded"], 13)
+        # Behind, then a rotation: refused, plays.1.jnl's 1-64 lost.
+        last = self.steps("records-behind-rotation", "play")[-1]
+        self.assertEqual((last["seq"], last["rotationSave"], last["save"]), (129, "behind", False))
+        self.assertEqual(self.steps("records-behind-rotation", "boot")[-1]["folded"], 65)
+        # A held tmp lost before the next save promotes it.
+        self.assertEqual([s["hsSave"] for s in self.steps("held-lost", "hs")], ["behind"])
+        self.assertEqual(self.steps("held-lost", "boot")[-1]["folded"], S + 3)
+        # A section damaged under the session: Hs refused; the next boot's read Corrupt.
+        self.assertEqual([s["hsSave"] for s in self.steps("section-damaged", "hs")], ["behind"])
+        self.assertEqual([s["read"] for s in self.steps("section-damaged", "boot")], ["absent", "absent", "corrupt"])
+        damaged = self.steps("section-damaged", "damage")[0]
+        files = {n: self.files["stats/sessions/%s/%s" % (w, n)] for n, w in damaged["out"].items()}
+        with self.assertRaises(sr.Bad) as e:
+            sr.read_stats(files[sr.STATS_BIN])
+        self.assertEqual(e.exception.why, "SectionCrc")
+        before = self.steps("section-damaged")[self.steps("section-damaged").index(damaged) - 1]
+        self.assertEqual(sr.header_crc(files[sr.STATS_BIN]),
+                         sr.header_crc(self.files["stats/sessions/%s/stats.bin" % before["out"]["stats.bin"]]))
+
+    def test_held(self):
+        """5.14's Held: a save whose replace() fails leaves stats.tmp whole
+        and stats.bin the copy before; the records are emptied and the
+        card's MARK stays; the next save promotes the tmp and merges only
+        the newer records onto it (no play counted twice). A compacting
+        boot's: stats.bin then names the new base, its TRKD the newer
+        records, the old delta in the base; the next boot removes the old
+        base."""
+        S = sr.SAVE_AT
+        st = self.steps("records-save-held")
+        held = [s for s in st if s.get("recordsSave") == "held"][0]
+        self.assertEqual((held["seq"], held["records"]), (S + 3, 1))
+        self.assertIn(sr.STATS_TMP, held["out"])
+        tmp = sr.read_stats(self.files["stats/sessions/%s/%s" % (held["out"][sr.STATS_TMP], sr.STATS_TMP)])
+        self.assertEqual((tmp.generation, tmp.head["slots"], self.stats_at(held).generation), (2, S + 2, 1))
+        hs = self.steps("records-save-held", "hs")[0]
+        self.assertEqual((hs["hsSave"], hs["ok"]), ("wrote", True))
+        self.assertNotIn(sr.STATS_TMP, hs["out"])
+        after = self.stats_at(hs)
+        self.assertEqual((after.generation, after.head["slots"]), (3, S + 5))
+        self.assertEqual(self.steps("records-save-held", "boot")[-1]["folded"], 0)
+        # The compacting boot's.
+        b = self.steps("boot-compaction-held", "boot")
+        self.assertEqual((b[0]["bootSave"], b[0]["held"], b[0]["compacted"], b[0]["saved"], b[0]["folded"]),
+                         ("held", True, True, False, 4))
+        out = b[0]["out"]
+        self.assertEqual(sorted(out), ["plays.jnl", "stats-00000001.bin", "stats-00000002.bin", "stats.bin",
+                                       "stats.tmp"])
+        self.assertEqual((self.stats_at(b[0]).head["baseGen"], self.stats_at(b[0]).generation), (1, 1))
+        tmp = sr.read_stats(self.files["stats/sessions/%s/%s" % (out[sr.STATS_TMP], sr.STATS_TMP)])
+        self.assertEqual((tmp.head["baseGen"], tmp.trkd), (2, {}))
+        hs = self.steps("boot-compaction-held", "hs")[0]
+        after = self.stats_at(hs)
+        self.assertEqual((after.head["baseGen"], after.generation, after.head["slots"]), (2, 3, 18))
+        newer = {s for s in self.by["boot-compaction-held"]["steps"][1]["plays"]["hash"]}
+        self.assertEqual({sr.hx(h) for h in after.trkd}, newer)
+        self.assertIn("stats-00000001.bin", hs["out"])
+        self.assertEqual(b[1]["removed"], ["stats-00000001.bin"])
+        self.assertEqual(b[1]["folded"], 0)
+        self.assertNotIn("stats-00000001.bin", b[1]["out"])
+        # Held with no stats.bin (the tmp's rename failed): the next Hs
+        # promotes it with nothing more to write, and its MARK is the card's
+        # from then on: a rotation over what it holds asks no save.
+        hs = self.steps("held-promoted-covers", "hs")
+        self.assertEqual([(s["hsSave"], s["ok"]) for s in hs], [("held", False), ("nothing", True)])
+        self.assertEqual(sorted(hs[0]["out"]), ["plays.1.jnl", "plays.jnl", "stats.tmp"])
+        self.assertEqual(sorted(hs[1]["out"]), ["plays.1.jnl", "plays.jnl", "stats.bin"])
+        self.assertEqual(self.files["stats/sessions/%s/stats.tmp" % hs[0]["out"]["stats.tmp"]],
+                         self.files["stats/sessions/%s/stats.bin" % hs[1]["out"]["stats.bin"]])
+        nine = self.steps("held-promoted-covers", "play")[-1]
+        self.assertEqual((nine["seq"], nine["rotationSave"], nine["save"], nine["records"]), (9, None, None, 1))
+        self.assertEqual(self.steps("held-promoted-covers", "boot")[-1]["folded"], 1)
+
+    def test_the_boot_overflow(self):
+        """5.14: a boot whose fold passes the records (RECORDS) holds overflow
+        chunks: its save is tried again while it fails, four tries in all
+        (saveFails a number: the first that many fail); none landing, the
+        session is behind, and a full log's first play rotates over a
+        plays.1.jnl no save covers."""
+        tries = {"boot-overflow": (1, "wrote", False), "boot-overflow-retry": (2, "wrote", False),
+                 "boot-overflow-unsaved": (4, "failed", True), "boot-overflow-full-rotation": (4, "failed", True),
+                 "boot-overflow-full-rotation-retry": (2, "wrote", False)}
+        for name, want in tries.items():
+            b = self.steps(name, "boot")[0]
+            self.assertGreater(b["folded"], sr.RECORDS, name)
+            self.assertEqual((b["tries"], b["bootSave"], b["behind"]), want, name)
+            self.assertEqual(b["records"], 0, name)
+        self.assertEqual([s["hsSave"] for s in self.steps("boot-overflow-unsaved", "hs")], ["behind"])
+        self.assertEqual(self.steps("boot-overflow-unsaved", "boot")[-1]["folded"], 301)
+        self.assertEqual([s["hsSave"] for s in self.steps("boot-overflow-retry", "hs")], ["wrote"])
+        full = self.steps("boot-overflow-full-rotation", "play")[0]
+        self.assertEqual((full["seq"], full["rotationSave"]), (257, "behind"))
+        retry = self.steps("boot-overflow-full-rotation-retry", "play")[0]
+        self.assertEqual((retry["seq"], retry["rotationSave"], retry["records"]), (257, None, 1))
+        # A partial scan's overflow: no save asked, none made again, behind at once.
+        b = self.steps("boot-overflow-partial", "boot")
+        self.assertEqual((b[0]["partial"], b[0]["folded"], b[0]["bootSave"], b[0]["tries"], b[0]["records"],
+                          b[0]["behind"]), (True, 200, None, 0, 0, True))
+        self.assertEqual([s["hsSave"] for s in self.steps("boot-overflow-partial", "hs")], ["partial"])
+        self.assertEqual(self.steps("boot-overflow-partial", "play")[0]["records"], 0)
+        self.assertEqual(b[1]["folded"], 301)
+
+    def test_the_read_settles_a_tmp(self):
+        """The read settles stats.tmp first (tagstore::settle(), 2.12.6):
+        beside stats.bin a leftover, removed; alone and whole (a newer
+        major's too), promoted; alone and torn, removed."""
+        st = sr.Stats()
+        st.generation = 1
+        one = sr.write_stats(st)
+        st.generation = 2
+        two = sr.write_stats(st)
+        files = {sr.STATS_BIN: one, sr.STATS_TMP: two}
+        self.assertEqual(sr.Session(files).read, "loaded")
+        self.assertEqual(files, {sr.STATS_BIN: one})
+        files = {sr.STATS_TMP: two}
+        se = sr.Session(files)
+        self.assertEqual((se.read, se.stats.generation, files), ("loaded", 2, {sr.STATS_BIN: two}))
+        files = {sr.STATS_TMP: two[:-1]}
+        self.assertEqual((sr.Session(files).read, files), ("absent", {}))
+        files = {sr.STATS_TMP: sr.resealed(two, major=2)}
+        self.assertEqual((sr.Session(files).read, sorted(files)), ("newer", [sr.STATS_BIN]))
+        files = {sr.STATS_BIN: one, sr.STATS_TMP: two}
+        self.assertEqual(sr.load(files).generation, 1)
+        self.assertIn(sr.STATS_TMP, files, "load() reads a copy")
+
+    def test_the_records_in_a_session(self):
+        """Session's records: every slot folded (the boot's and the live
+        ones') is a record until a save writes or holds them; a live slot
+        with RECORDS of them isn't folded and the session is behind (its
+        records 0, nothing folded or saved after); a held save writes
+        stats.tmp, keeps stats.bin, the card's MARK and the base it names."""
+        files = {}
+        se = sr.Session(files)
+        for q in range(1, sr.RECORDS + 1):
+            self.assertTrue(se.live(play(q, at="2026-11-02T08:00:00")))
+        self.assertEqual((se.records, se.behind), (sr.RECORDS, False))
+        self.assertFalse(se.live(play(sr.RECORDS + 1)))
+        self.assertEqual((se.records, se.behind, se.folded), (0, True, sr.RECORDS))
+        self.assertFalse(se.live(play(sr.RECORDS + 2)))
+        se = sr.Session(files)
+        se.live(play(1, at="2026-11-02T08:00:00"))
+        self.assertTrue(se.save(sr.ms_of("2026-11-02T09:00:00"), "records"))
+        self.assertEqual((se.records, se.new, sorted(files)), (0, False, [sr.STATS_BIN]))
+        bin1, mark1 = files[sr.STATS_BIN], dict(se.saved_mark)
+        se.live(play(2, at="2026-11-02T08:05:00"))
+        self.assertFalse(se.save(sr.ms_of("2026-11-02T09:00:00"), "records", held=True))
+        self.assertEqual((se.records, se.new, se.wrote), (0, False, True))
+        self.assertEqual((files[sr.STATS_BIN], se.saved_mark, se.card_base), (bin1, mark1, 0))
+        tmp = sr.read_stats(files[sr.STATS_TMP])
+        self.assertEqual((tmp.generation, tmp.head["slots"], list(tmp.mark.values())), (2, 2, [2]))
+        self.assertEqual(se.stats.generation, 2)
+
+    def test_a_remounts_read_reads_once(self):
+        """A remount's read (5.4): one read, so a stats.bin that fails its
+        checks is unread (the stats off for the session), never renamed
+        stats.bad."""
+        good = bytearray(sr.write_stats(sr.Stats()))
+        good[-1] ^= 0xFF  # (HEAD's last byte: its section's CRC fails)
+        files = {sr.STATS_BIN: bytes(good)}
+        se = sr.Session(files, once=True)
+        self.assertEqual(se.read, "unread")
+        self.assertFalse(se.on)
+        self.assertIn(sr.STATS_BIN, files)
+        self.assertNotIn(sr.STATS_BAD, files)
+        se = sr.Session(dict(files))
+        self.assertEqual(se.read, "corrupt")
+
+    def test_the_steps(self):
+        by = self.by
+        # The rotation's save runs before plays.1.jnl leaves the log's names,
+        # and the next boot folds what the log still holds.
+        steps = by["rotation-saves"]["steps"]
+        self.assertEqual([s["save"] for s in steps if s["do"] == "play"][-1], True)
+        self.assertEqual([s["save"] for s in by["rotation-fails"]["steps"] if s["do"] == "play"][-1], False)
+        self.assertEqual([s["save"] for s in by["flush-in-time"]["steps"] if s["do"] == "play"][-1], True)
+        self.assertEqual([s["save"] for s in by["flush-late"]["steps"] if s["do"] == "play"][-1], False)
+        self.assertIsNone([s["save"] for s in by["partial-rotation"]["steps"] if s["do"] == "play"][-1])
+        # Another player's stats.bin refuses every later save of a session.
+        hs = [s for s in by["second-player"]["steps"] if s["do"] == "hs"]
+        self.assertEqual([s["ok"] for s in hs], [False])
+        self.assertTrue(any(s.get("compacted") for s in by["second-player"]["steps"]))
+        self.assertEqual([s["ok"] for s in by["partial-hs"]["steps"] if s["do"] == "hs"], [False])
+        # The seq rule's reservations: the play after NVS put back is 5.
+        for name in ("nvs-back", "log-deleted"):
+            plays = [s["seq"] for s in by[name]["steps"] if s["do"] == "play"]
+            self.assertEqual(plays[-1], 5, name)
+        # 0.14.0's boot trims without folding; the next counts the gap.
+        old = by["old-firmware"]["steps"]
+        self.assertEqual(old[-2]["trimmed"], ["plays.1.jnl", "plays.jnl"])
+        self.assertEqual(old[-1]["gap"], 3)
+
+    def test_each_log_file_in_seq_order(self):
+        """5.6's ranges rely on it: in a file, a device and epoch's seqs only
+        rise."""
+        for path, data in self.files.items():
+            if path.rsplit("/", 1)[-1] not in sr.LOG_NAMES:
+                continue
+            last = {}
+            for _, why, s, _ in pl.read_file(data):
+                if why == "ok" and s["kind"] == pl.KIND_PLAY:
+                    k = (s["deviceId"], s["epoch"])
+                    self.assertGreater(s["seq"], last.get(k, 0), path)
+                    last[k] = s["seq"]
+
+    def test_live_and_rotation_rows(self):
+        """first-at-live: the rows a rotation's save holds are first-at-a's
+        but lastOrd (HEAD.round + 2 for a live play, + 1 for the boot's)."""
+        steps = self.by["first-at-live"]["steps"]
+        out = [s["out"] for s in steps if s.get("save")][0]
+        st = sr.read_stats(self.files["stats/sessions/%s/stats.bin" % out["stats.bin"]])
+        fa = json.loads(sr.fixture_files()["stats/index.json"])
+        boot = [e for e in fa if e["name"] == "first-at-a"][0]["boots"][0]
+        ref = sr.read_stats(sr.fixture_files()["stats/%s/stats.bin" % boot["out"]["stats.bin"]])
+        for h, r in ref.trkd.items():
+            got = st.trkd[h]
+            self.assertEqual((got.plays, got.skips, got.firstAt, got.lastAt, got.src),
+                             (r.plays, r.skips, r.firstAt, r.lastAt, r.src))
+            self.assertIn(got.lastOrd, (1, 2))
+
+
+class ParseTests(unittest.TestCase):
+    def test_parse_time(self):
+        """--now and --until: Unix ms, or an ISO time in UTC, with or without
+        its 'Z' (S1's device round 1 passed "2026-11-12T03:00:00Z")."""
+        want = sr.ms_of("2026-11-12T03:00:00")
+        self.assertEqual(want, 1794452400000)
+        self.assertEqual(sr.parse_time("2026-11-12T03:00:00"), want)
+        self.assertEqual(sr.parse_time("2026-11-12T03:00:00Z"), want)
+        self.assertEqual(sr.parse_time("2026-11-12T03:00:00z"), want)
+        self.assertEqual(sr.parse_time(str(want)), want)
+        self.assertIsNone(sr.parse_time(None))
+        for bad in ("2026-11-12T03:00:00+01:00", "2026-11-12", "Z", "2026-11-12T03:00:00ZZ"):
+            with self.assertRaises(ValueError, msg=bad):
+                sr.parse_time(bad)
+        with tempfile.TemporaryDirectory(prefix="statsref_") as player, \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(sr.main(["boot", player, "--now", "2026-11-12T03:00:00Z"]), 0)
+        self.assertEqual(json.loads(out.getvalue())["read"], "absent")
 
 
 class FakeProbe:

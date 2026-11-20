@@ -11,8 +11,9 @@
 //   card in memory give plays/golden/<snapshot>/ byte for byte, and the
 //   reference model's ops one for one;
 // - the boot rules (vectors' atBoot: NVS behind or ahead of the card, a new
-//   epoch, another device, a conflict's two slots) and the boot's scan in
-//   pieces of any size;
+//   epoch, another device, a conflict's two slots, NVS put back behind a
+//   trimmed log and ACKS's seq) and the boot's scan in pieces of any size;
+//   the seq rule's reservations, ACKS's and the stats' MARK;
 // - ACKS (2.5.6) read on its own: the golden root's entries, the
 //   hardening files (damaged, out of order, short rows: absent, the root
 //   present; a newer minor's longer rows read by their prefix); this
@@ -43,7 +44,15 @@
 //   host FatFs model (ChaN's FatFs as the Core2 builds it, the sector
 //   cache in front: test_card_io's card): bytes per play and the cap's
 //   worst case; a cut append's tail written over; a remount during the
-//   boot's scan.
+//   boot's scan;
+// - the listening stats' hooks (playlog::Folds, a MemFolds; docs/
+//   LISTENING-STATS.md 5.5, 5.6): a new epoch read with folds, a scan
+//   begun again; the trim waits for the folds' save, and after a failed one
+//   takes what the card's MARK covers; a rotation saves first (a twin's
+//   rename too, a plays.1.jnl not read whole); the orderly end's flush
+//   (the boot's save refused, a rotation's with 1 s left); a partial scan
+//   (an open or a read the card failed): partial(), no save; the Outbox's
+//   written(). With no Folds every case above runs as it always did.
 // Run: pio test -e native -f test_play_log
 #include <unity.h>
 
@@ -51,17 +60,20 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <map>
 #include <memory>
 #include <random>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "../support/FatModel.h"
 #include "../support/FatModelFs.h"
 #include "../support/CardFixtures.h"
 #include "../support/CutFs.h"
+#include "../support/FaultFs.h"
 #include "CachedDrive.h"
 #include "CardContainer.h"
 #include "CardContract.h"
@@ -74,6 +86,9 @@ namespace msmf = cardcontract::msmf;
 namespace pl = playlog;
 using Bytes = std::vector<uint8_t>;
 using cutfs::CutFs;
+using faultfs::FaultFs;
+using faultfs::FlakyFs;
+using faultfs::Knob;
 using minijson::Value;
 using pl::Journal;
 using pl::Slot;
@@ -184,6 +199,7 @@ struct Device {
   uint8_t id[6];
   uint32_t cap;
   msmf::Acks acks;
+  pl::Folds* folds = nullptr;  // the listening stats (none: the journal as without them)
   std::unique_ptr<Journal> j;
   explicit Device(const uint8_t dev[6] = kDevA, uint32_t capSlots = pl::kFileSlots) : cap(capSlots) {
     std::memcpy(id, dev, 6);
@@ -197,6 +213,7 @@ struct Device {
     c.randomCtx = &epochs;
     c.onOp = onOp;
     c.opCtx = &ops;
+    c.folds = folds;
     return c;
   }
   // A boot with this card: begin(), then the scan in pieces of `piece`.
@@ -243,6 +260,85 @@ msmf::Ack ack(const uint8_t dev[6], uint64_t epoch, uint32_t seq) {
 // The log's files on a card (CutFs's names).
 const char* const kLog = pl::kLogPath;
 const char* const kPrev = pl::kPrevPath;
+
+// The listening stats as the journal sees them (playlog::Folds), in
+// memory: MARK by (deviceId, epoch), the card's (`card`: read at the boot,
+// or the last save's) and RAM's (`ram`: with the folds since). A play slot
+// is folded once, when its seq is above the card's MARK at scanBegan();
+// scanBegan() drops RAM's folds (stats.bin read again). A save copies
+// RAM's MARK to the card's, unless the scan was partial, the card fails it
+// (failSave), or the glue's own rule (`may`: the orderly end's) says no.
+struct MemFolds : pl::Folds {
+  using Key = std::pair<std::string, uint64_t>;
+  static Key key(const uint8_t dev[6], uint64_t epoch) {
+    return Key(std::string(reinterpret_cast<const char*>(dev), 6), epoch);
+  }
+  std::map<Key, uint32_t> card, ram, atBoot;
+  std::set<std::pair<Key, uint32_t>> took;  // the slots folded since scanBegan()
+  std::vector<uint32_t> folded;             // their seqs, in order (the live ones too)
+  std::vector<int> files;                   // slot()'s `file`, for each slot
+  std::vector<std::string> calls;           // began, began again, partial, save boot (no), save rotation (no)
+  std::vector<std::string> seen;            // the log's files on the card at each save
+  bool partialScan = false;
+  bool failSave = false;
+  uint32_t saves = 0;                       // saves that landed
+  std::function<bool(Why)> may;             // the glue's own word (none: yes)
+  const CutFs* on = nullptr;                // the card, for `seen`
+
+  void scanBegan(bool again) override {
+    calls.push_back(again ? "began again" : "began");
+    ram = atBoot = card;
+    took.clear();
+    folded.clear();
+    files.clear();
+    partialScan = false;
+  }
+  void slot(const Slot& s, int file) override {
+    files.push_back(file);
+    if (s.kind == pl::kKindPlay) fold(s);
+  }
+  // A play slot into RAM (the boot's fold, and the live one's: written()).
+  void fold(const Slot& s) {
+    const Key k = key(s.deviceId, s.epoch);
+    auto b = atBoot.find(k);
+    if ((b != atBoot.end() && s.seq <= b->second) || !took.insert(std::make_pair(k, s.seq)).second) return;
+    folded.push_back(s.seq);
+    uint32_t& m = ram[k];
+    m = std::max(m, s.seq);
+  }
+  void partial() override {
+    calls.push_back("partial");
+    partialScan = true;
+  }
+  bool covered(const Slot& s) override {
+    auto c = card.find(key(s.deviceId, s.epoch));
+    return c != card.end() && s.seq <= c->second;
+  }
+  uint32_t markOf(const uint8_t dev[6], uint64_t epoch) override {
+    auto r = ram.find(key(dev, epoch));
+    return r == ram.end() ? 0 : r->second;
+  }
+  bool save(Why why) override {
+    std::string what = why == Why::Boot ? "save boot" : "save rotation";
+    if (on) {
+      std::string names;
+      for (const char* n : {kPrev, kLog})
+        if (on->dir.count(n)) names += (names.empty() ? "" : " ") + base(n);
+      seen.push_back(names);
+    }
+    const bool ok = !partialScan && !failSave && (!may || may(why));
+    calls.push_back(ok ? what : what + " (no)");
+    if (!ok) return false;
+    card = ram;
+    ++saves;
+    return true;
+  }
+  uint32_t cardMark(const uint8_t dev[6], uint64_t epoch) const {
+    auto c = card.find(key(dev, epoch));
+    return c == card.end() ? 0 : c->second;
+  }
+};
+using Calls = std::vector<std::string>;
 
 // A memory Source over bytes.
 struct VecSource : cc::Source {
@@ -452,29 +548,43 @@ void test_the_goldens_from_the_script() {
 // ---------------------------------------------------------------------------
 void test_the_boot_rules() {
   const Value& at = gVectors["plays"]["atBoot"];
-  TEST_ASSERT_EQUAL_size_t(5, at["cases"].size());
+  TEST_ASSERT_EQUAL_size_t(6, at["cases"].size());
   for (size_t c = 0; c < at["cases"].size(); ++c) {
     const Value& e = at["cases"][c];
-    CutFs fs;
+    CutFs card;
     if (e.has("readCase")) {
       bool found = false;
       for (size_t k = 0; k < gIndex.size(); ++k) {
         if (gIndex[k]["case"].str() != e["readCase"].str()) continue;
-        for (const auto& kv : gIndex[k]["files"].members) fs.put("/.player/" + kv.first, fixture("plays/" + kv.second.str()));
+        for (const auto& kv : gIndex[k]["files"].members)
+          card.put("/.player/" + kv.first, fixture("plays/" + kv.second.str()));
         found = true;
       }
       TEST_ASSERT_TRUE(found);
     } else {
       for (const char* n : {"plays.jnl", "plays.1.jnl"})
-        fs.put(std::string("/.player/") + n, fixture(at["log"].str() + "/" + n));
+        card.put(std::string("/.player/") + n, fixture(at["log"].str() + "/" + n));
     }
     uint8_t id[6];
     deviceOf(e["deviceId"], id);
     for (uint32_t piece : {1u, 3u, 1000u}) {  // the scan in any pieces
+      CutFs fs = card;  // (the card as it was, for each piece size)
       Device d(id);
       d.nvs.ids.epoch = e["epoch"].u64();
       d.nvs.ids.seq = static_cast<uint32_t>(e["nvsSeq"].u64());
       d.nvs.ids.boots = static_cast<uint32_t>(e["nvsBoots"].u64());
+      // The root's ACKS (the seq rule takes this device and epoch's).
+      if (e.has("acks")) {
+        for (size_t k = 0; k < e["acks"].size(); ++k) {
+          msmf::Ack a;
+          deviceOf(e["acks"][k]["deviceId"], a.deviceId);
+          a.epoch = e["acks"][k]["epoch"].u64();
+          a.seq = static_cast<uint32_t>(e["acks"][k]["seq"].u64());
+          d.acks.entries[d.acks.count++] = a;
+        }
+        d.acks.rows = d.acks.count;
+        d.acks.present = true;
+      }
       TEST_ASSERT_TRUE(d.boot(fs, piece));
       TEST_ASSERT_FALSE(d.j->newEpoch());
       TEST_ASSERT_EQUAL_UINT32_MESSAGE(e["nextBootSeq"].u64(), d.j->bootSeq(), e["note"].c_str());
@@ -486,9 +596,6 @@ void test_the_boot_rules() {
       TEST_ASSERT_EQUAL_UINT32(e["nextSeq"].u64(), s.seq);
       TEST_ASSERT_EQUAL_UINT32(e["nextSeq"].u64(), d.nvs.ids.seq);
       TEST_ASSERT_EQUAL_UINT32(e["nextBootSeq"].u64(), s.bootSeq);
-      // (Put the card back as it was for the next piece size.)
-      fs.put(kLog, fixture(e.has("readCase") ? std::string("plays/read/conflict-top/plays.jnl")
-                                             : at["log"].str() + "/plays.jnl"));
     }
   }
 }
@@ -1690,61 +1797,6 @@ void test_a_remount_and_the_boots_scan() {
 // ---------------------------------------------------------------------------
 // A question or an open the card fails (docs/METADATA.md 3.8, 3.10).
 // ---------------------------------------------------------------------------
-namespace {
-
-// A card that fails some of its questions and opens, as the firmware's FatFs
-// says them (storage/CardFat): open() says no file, exists() no,
-// firstCluster() 0, and only entry() and openRead() say it was the card.
-// They are numbered from 0 in `events`; those from failFrom up to failTo
-// fail (failFrom -1: none; failTo -1: for ever).
-struct FlakyFs : CutFs {
-  long failFrom = -1, failTo = -1, events = 0;
-  void failing(long from, long to) {
-    events = 0;
-    failFrom = from;
-    failTo = to;
-  }
-  tagstore::File* open(const char* p, Mode m) override {
-    // (Create is no question: it makes the file, and empties one that is there.)
-    if (!inside_ && m != Mode::Create && fails()) return nullptr;
-    return CutFs::open(p, m);
-  }
-  tagstore::File* openRead(const char* p, bool* cardFailed) override {
-    if (fails()) {
-      *cardFailed = true;
-      return nullptr;
-    }
-    Inside in(*this);
-    return CutFs::openRead(p, cardFailed);
-  }
-  Entry entry(const char* p) override {
-    if (fails()) {
-      Entry e;
-      e.cardFailed = true;
-      return e;
-    }
-    Inside in(*this);
-    return CutFs::entry(p);
-  }
-  bool exists(const char* p) override { return !(!inside_ && fails()) && CutFs::exists(p); }
-  uint32_t firstCluster(const char* p) override { return !inside_ && fails() ? 0 : CutFs::firstCluster(p); }
-
-private:
-  struct Inside {
-    explicit Inside(FlakyFs& f) : f_(f), was_(f.inside_) { f_.inside_ = true; }
-    ~Inside() { f_.inside_ = was_; }
-    FlakyFs& f_;
-    bool was_;
-  };
-  bool fails() {
-    if (failFrom < 0) return false;
-    const long k = events++;
-    return k >= failFrom && (failTo < 0 || k < failTo);
-  }
-  bool inside_ = false;
-};
-
-}  // namespace
 
 // A slot's open the card fails says nothing of plays.jnl. The question that
 // follows (is there one?) decides whether a new one is made, and one the card
@@ -1961,102 +2013,6 @@ void test_a_question_the_card_fails_frees_no_chain() {
 // orderly end's flush).
 // ---------------------------------------------------------------------------
 namespace {
-
-// So many calls pass, then so many fail (-1: every one from there).
-struct Knob {
-  long skip = 0, fail = 0;
-  bool hit() {
-    if (skip > 0) {
-      --skip;
-      return false;
-    }
-    if (fail == 0) return false;
-    if (fail > 0) --fail;
-    return true;
-  }
-};
-
-// A card that fails chosen calls, over CutFs (the journal's files through
-// it): a write, a sync, a close, an open to write, a rename, a remove, a
-// question; a read of a file's bad stretch. A write that fails lands or not
-// (`lands`); a sync that fails leaves its file unsynced, and a close that
-// fails (a written file's: the knob counts those) doesn't sync it either
-// (the card refused both).
-struct FaultFs : tagstore::Fs {
-  CutFs& cut;
-  Knob noWrite, noSync, noClose, noCreate, noUpdate, noRename, halfRename, noRemove, noEntry;
-  bool lands = false;
-  std::string badPath;  // reads of it that touch [badFrom, badTo) fail, by `bad`
-  uint32_t badFrom = 0, badTo = 0;
-  Knob bad;
-  uint32_t writes = 0;  // writes that reached the card
-  explicit FaultFs(CutFs& c) : cut(c) {}
-
-  struct F : tagstore::File {
-    FaultFs& fs;
-    tagstore::File* in;
-    std::string path;
-    bool wrote = false;
-    F(FaultFs& f, tagstore::File* i, const char* p) : fs(f), in(i), path(p) {}
-    uint32_t size() const override { return in->size(); }
-    bool damaged() const override { return in->damaged(); }
-    bool read(uint32_t off, void* out, uint32_t n) override {
-      if (path == fs.badPath && off < fs.badTo && off + n > fs.badFrom && fs.bad.hit()) return false;
-      return in->read(off, out, n);
-    }
-    bool write(uint32_t off, const void* d, uint32_t n) override {
-      if (fs.noWrite.hit()) {
-        if (fs.lands && in->write(off, d, n)) {
-          ++fs.writes;
-          wrote = true;
-        }
-        return false;
-      }
-      if (!in->write(off, d, n)) return false;
-      ++fs.writes;
-      wrote = true;
-      return true;
-    }
-    bool sync() override { return !fs.noSync.hit() && in->sync(); }
-    bool truncate(uint32_t s) override { return in->truncate(s); }
-  };
-  tagstore::File* wrap(tagstore::File* in, const char* p) { return in ? new F(*this, in, p) : nullptr; }
-  tagstore::File* open(const char* p, Mode m) override {
-    if (m == Mode::Create && noCreate.hit()) return nullptr;
-    if (m == Mode::Update && noUpdate.hit()) return nullptr;
-    return wrap(cut.open(p, m), p);
-  }
-  tagstore::File* openRead(const char* p, bool* cardFailed) override { return wrap(cut.openRead(p, cardFailed), p); }
-  Entry entry(const char* p) override {
-    if (noEntry.hit()) {
-      Entry e;
-      e.cardFailed = true;
-      return e;
-    }
-    return cut.entry(p);
-  }
-  bool close(tagstore::File* file) override {
-    F* f = static_cast<F*>(file);
-    const bool refused = f->wrote && noClose.hit();
-    const bool was = cut.refuse;
-    if (refused) cut.refuse = true;  // (its own sync of a written file refused too)
-    const bool ok = cut.close(f->in);
-    cut.refuse = was;
-    delete f;
-    return ok && !refused;
-  }
-  bool exists(const char* p) override { return cut.exists(p); }
-  bool remove(const char* p) override { return !noRemove.hit() && cut.remove(p); }
-  bool rename(const char* from, const char* to) override {
-    if (noRename.hit()) return false;
-    if (halfRename.hit()) {  // the new entry written, the old one not removed
-      cut.link(from, to);
-      return false;
-    }
-    return cut.rename(from, to);
-  }
-  uint32_t firstCluster(const char* p) override { return cut.firstCluster(p); }
-};
 
 std::vector<Slot> slotsOf(const Bytes& b) {
   std::vector<Slot> v;
@@ -2571,6 +2527,19 @@ struct OutEnv : pl::Outbox::Env {
     if (t.hasSlot) line += " seq " + std::to_string(t.slot.seq);
     lines.push_back(line);
   }
+  // written(): what it was told (the slot as the card has it, the play
+  // still the ring's oldest: `tracker`), and the live fold (`folds`).
+  const pl::Tracker* tracker = nullptr;
+  MemFolds* folds = nullptr;
+  std::vector<Slot> wrote;
+  std::vector<std::string> wroteLines;
+  void written(const Slot& s, const pl::Played& p) override {
+    wrote.push_back(s);
+    std::string line = "seq " + std::to_string(s.seq) + ": t" + std::to_string(p.file.pathHash - 0x1000);
+    if (tracker) line += &tracker->oldest() == &p ? ", the oldest of " + std::to_string(tracker->pending()) : ", gone";
+    wroteLines.push_back(line);
+    if (folds) folds->fold(s);
+  }
 };
 
 // A device with plays waiting: the journal over a card that fails on
@@ -2583,7 +2552,10 @@ struct Box {
   pl::Tracker tracker{tenv};
   OutEnv env;
   std::unique_ptr<pl::Outbox> out;
-  explicit Box(uint32_t cap = pl::kFileSlots) : d(kDevA, cap) {
+  explicit Box(uint32_t cap = pl::kFileSlots, MemFolds* folds = nullptr) : d(kDevA, cap) {
+    d.folds = folds;
+    env.folds = folds;
+    env.tracker = &tracker;
     TEST_ASSERT_TRUE(d.boot(fs));
     out.reset(new pl::Outbox(tracker, *d.j, env));
   }
@@ -3035,6 +3007,641 @@ void test_the_outbox_flush() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// The listening stats' hooks (playlog::Folds; docs/LISTENING-STATS.md 5.5,
+// 5.6), through a MemFolds.
+// ---------------------------------------------------------------------------
+namespace {
+
+// A card kDevA wrote under a cap of 4 in one boot: plays.1.jnl seqs 1-4,
+// plays.jnl 5-8, no drop note; and the NVS it left.
+struct Written {
+  CutFs card;
+  Journal::Ids ids;
+  Written() {
+    Device w(kDevA, 4);
+    TEST_ASSERT_TRUE(w.boot(card));
+    for (uint32_t i = 1; i <= 8; ++i) {
+      Slot s = play(i, 60000, 1000 * i);
+      TEST_ASSERT_TRUE(w.j->append(s) == Journal::Wrote::Ok);
+    }
+    ids = w.nvs.ids;
+  }
+  // The card as the next boot finds it, a copy.
+  CutFs copy() const { return card.reboot(cutfs::Variant::InOrder); }
+};
+
+// A boot of kDevA over `fs` with that NVS, `folds`, and ACKS up to
+// `acked` (0: no ACKS); the scan in pieces of 3.
+void bootWith(Device& d, tagstore::Fs& fs, const Written& w, MemFolds* folds, uint32_t acked) {
+  d.nvs.ids = w.ids;
+  d.folds = folds;
+  if (acked) setAcks(d.acks, {ack(kDevA, w.ids.epoch, acked)});
+  TEST_ASSERT_TRUE(d.boot(fs, 3));
+}
+
+// A card whose opens of one file to read fail (openRead(): the card's
+// fault); its other calls as FaultFs's.
+struct ScanFaults : FaultFs {
+  using FaultFs::FaultFs;
+  std::string openFails;
+  tagstore::File* openRead(const char* p, bool* cardFailed) override {
+    if (openFails == p) {
+      *cardFailed = true;
+      return nullptr;
+    }
+    return FaultFs::openRead(p, cardFailed);
+  }
+};
+
+// A file whose records on the way to it are damaged (FatFs's FR_INT_ERR at
+// its open): openRead() says no file, not the card's fault; look() says
+// Unknown (it may well be there). `looks`: the look()s asked.
+struct DamagedOpen : FaultFs {
+  using FaultFs::FaultFs;
+  std::string path;
+  uint32_t looks = 0;
+  tagstore::File* openRead(const char* p, bool* cardFailed) override {
+    if (path == p) {
+      *cardFailed = false;
+      return nullptr;
+    }
+    return FaultFs::openRead(p, cardFailed);
+  }
+  Seen look(const char* p) override {
+    ++looks;
+    return path == p ? Seen::Unknown : FaultFs::look(p);
+  }
+};
+
+std::vector<uint32_t> seqs(std::initializer_list<uint32_t> l) { return std::vector<uint32_t>(l); }
+
+}  // namespace
+
+// With folds the boot's scan reads on a new epoch with no ACKS: the old
+// epoch's slots are folded (an NVS erase would leave them, and other
+// players', never folded). The boot rules are the new epoch's still. A
+// scan begun again (a remount) tells the folds so, and each slot comes
+// once more; after Ready, before the first slot, the save runs again.
+void test_a_new_epoch_is_read_with_folds() {
+  const Written w;
+  for (int withFolds = 0; withFolds < 2; ++withFolds) {
+    CutFs fs = w.copy();
+    MemFolds f;
+    Device d;
+    d.epochs.list = {0xF0E1D2C3B4A59687ull};  // (NVS erased: this is drawn)
+    d.folds = withFolds ? &f : nullptr;
+    TEST_ASSERT_TRUE(d.boot(fs));
+    TEST_ASSERT_TRUE(d.j->newEpoch());
+    TEST_ASSERT_EQUAL_UINT32(1, d.j->bootSeq());
+    if (!withFolds) {
+      TEST_ASSERT_EQUAL_UINT32(0, d.j->booted().slots);  // (test_a_new_epoch: nothing read)
+      continue;
+    }
+    TEST_ASSERT_EQUAL_UINT32(8, d.j->booted().slots);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "save boot"}));
+    TEST_ASSERT_TRUE((f.files == std::vector<int>{0, 0, 0, 0, 1, 1, 1, 1}));  // plays.jnl first
+    TEST_ASSERT_TRUE(f.folded == seqs({5, 6, 7, 8, 1, 2, 3, 4}));
+    TEST_ASSERT_EQUAL_UINT32(8, f.cardMark(kDevA, w.ids.epoch));
+    Slot s = play(9, 60000, 9000);
+    TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
+    TEST_ASSERT_EQUAL_UINT32(1, s.seq);  // the new epoch's
+    TEST_ASSERT_EQUAL_UINT64(0xF0E1D2C3B4A59687ull, s.epoch);
+  }
+  // A remount in the scan: its folds dropped, the scan again from its
+  // start, each slot folded once.
+  CutFs fs = w.copy();
+  MemFolds f;
+  Device d;
+  d.epochs.list = {0xF0E1D2C3B4A59687ull};
+  d.folds = &f;
+  d.j.reset(new Journal(fs, d.nvs, d.config()));
+  TEST_ASSERT_TRUE(d.j->begin(d.id, d.acks));
+  TEST_ASSERT_FALSE(d.j->scan(5));  // plays.jnl's four, plays.1.jnl's first
+  TEST_ASSERT_TRUE(f.folded == seqs({5, 6, 7, 8, 1}));
+  auto finish = [&] {
+    d.j->remounted();
+    for (int guard = 0; guard < 100 && !d.j->scan(5); ++guard) {
+    }
+    TEST_ASSERT_TRUE(d.j->ready());
+  };
+  finish();
+  TEST_ASSERT_TRUE((f.calls == Calls{"began", "began again", "save boot"}));
+  TEST_ASSERT_TRUE(f.folded == seqs({5, 6, 7, 8, 1, 2, 3, 4}));
+  // After Ready, before the first slot: the scan again, and its save
+  // (nothing new: all under the card's MARK now).
+  finish();
+  TEST_ASSERT_TRUE((f.calls == Calls{"began", "began again", "save boot", "began again", "save boot"}));
+  TEST_ASSERT_TRUE(f.folded.empty());
+  TEST_ASSERT_EQUAL_UINT32(2, d.j->booted().restarts);
+}
+
+// With folds a file goes only when the card's MARK covers it, so the boot's
+// save comes first, both files still on the card; a save that fails trims
+// what the MARK read at the boot covers (the next test). NVS refusing the
+// boot count: no log, no trim, and the save all the same (the fold is
+// whole).
+void test_the_trim_waits_for_the_folds() {
+  const Written w;
+  {
+    CutFs fs = w.copy();
+    Device d;
+    bootWith(d, fs, w, nullptr, 8);  // (no folds: today's trim)
+    TEST_ASSERT_EQUAL_UINT32(2, d.j->booted().trimmed);
+  }
+  {
+    CutFs fs = w.copy();
+    MemFolds f;
+    f.on = &fs;
+    Device d;
+    bootWith(d, fs, w, &f, 8);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "save boot"}));
+    TEST_ASSERT_TRUE((f.seen == Calls{"plays.1.jnl plays.jnl"}));  // the save before the trim
+    TEST_ASSERT_EQUAL_UINT32(8, f.cardMark(kDevA, w.ids.epoch));
+    TEST_ASSERT_EQUAL_UINT32(2, d.j->booted().trimmed);
+    TEST_ASSERT_TRUE((d.ops == Calls{"delete plays.1.jnl acknowledged", "delete plays.jnl acknowledged"}));
+  }
+  {
+    // A fresh stats.bin (MARK none) that the card won't take: nothing goes.
+    CutFs fs = w.copy();
+    MemFolds f;
+    f.failSave = true;
+    Device d;
+    bootWith(d, fs, w, &f, 8);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "save boot (no)"}));
+    TEST_ASSERT_EQUAL_UINT32(0, d.j->booted().trimmed);
+    TEST_ASSERT_TRUE(fs.dir.count(kPrev) == 1 && fs.dir.count(kLog) == 1);
+  }
+  {
+    CutFs fs = w.copy();
+    MemFolds f;
+    Device d;
+    d.nvs.ids = w.ids;
+    d.nvs.failBoots = true;
+    d.folds = &f;
+    setAcks(d.acks, {ack(kDevA, w.ids.epoch, 8)});
+    TEST_ASSERT_FALSE(d.boot(fs));
+    TEST_ASSERT_TRUE(d.j->off());
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "save boot"}));
+    TEST_ASSERT_EQUAL_UINT32(8, f.cardMark(kDevA, w.ids.epoch));
+    TEST_ASSERT_EQUAL_UINT32(0, d.j->booted().trimmed);
+  }
+  {
+    // No ACKS: the save, no trim, as ever.
+    CutFs fs = w.copy();
+    MemFolds f;
+    Device d;
+    bootWith(d, fs, w, &f, 0);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "save boot"}));
+    TEST_ASSERT_EQUAL_UINT32(0, d.j->booted().trimmed);
+  }
+}
+
+// The card's MARK at 4 (an earlier boot saved seqs 1-4) and this boot's save
+// failing (a full card): plays.1.jnl goes, which the MARK covers; plays.jnl
+// waits. The next boot folds 5-8 again (the first's folds never reached the
+// card) and, its save landing, trims it. Stats off (no MARK known: covered()
+// says no, the save is refused): nothing goes.
+void test_a_failed_save_trims_what_the_card_covers() {
+  const Written w;
+  const MemFolds::Key k = MemFolds::key(kDevA, w.ids.epoch);
+  CutFs fs = w.copy();
+  MemFolds f;
+  f.card[k] = 4;
+  f.failSave = true;
+  {
+    Device d;
+    bootWith(d, fs, w, &f, 8);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "save boot (no)"}));
+    TEST_ASSERT_TRUE(f.folded == seqs({5, 6, 7, 8}));
+    TEST_ASSERT_TRUE((d.ops == Calls{"delete plays.1.jnl acknowledged"}));
+    TEST_ASSERT_TRUE(fs.dir.count(kPrev) == 0 && fs.dir.count(kLog) == 1);
+    TEST_ASSERT_EQUAL_UINT32(4, f.cardMark(kDevA, w.ids.epoch));
+  }
+  f.failSave = false;
+  f.calls.clear();
+  {
+    Device d;
+    bootWith(d, fs, w, &f, 8);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "save boot"}));
+    TEST_ASSERT_TRUE(f.folded == seqs({5, 6, 7, 8}));
+    TEST_ASSERT_TRUE((d.ops == Calls{"delete plays.jnl acknowledged"}));
+    TEST_ASSERT_EQUAL_UINT32(8, f.cardMark(kDevA, w.ids.epoch));
+  }
+  {
+    struct Off : MemFolds {
+      bool covered(const Slot&) override { return false; }
+      bool save(Why) override { return false; }
+    } off;
+    CutFs fs2 = w.copy();
+    Device d;
+    bootWith(d, fs2, w, &off, 8);
+    TEST_ASSERT_EQUAL_UINT32(0, d.j->booted().trimmed);
+  }
+}
+
+// A rotation takes plays.1.jnl out of the log's names (deleted, or renamed
+// to a twin): when it holds a play the card's MARK doesn't cover, the folds
+// are saved first, the file still on the card; the rotation goes on
+// whatever the save comes to. After the boot's save the session's first
+// rotations save nothing (the file is the one that save covered); a later
+// one over this session's plays does. A plays.1.jnl not read whole (a
+// scan that was) is saved over too; after a partial scan nothing is.
+void test_a_rotation_saves_first() {
+  const Written w;
+  const uint64_t e = w.ids.epoch;
+  auto add = [](Device& d, MemFolds& f, uint32_t seq) {
+    Slot s = play(seq, 60000, 1000 * seq);
+    const Journal::Wrote r = d.j->append(s);
+    if (r == Journal::Wrote::Ok) f.fold(s);  // (the live fold: Outbox::Env::written())
+    return r;
+  };
+  // After a boot whose save failed: 1-4 saved before plays.1.jnl goes.
+  {
+    CutFs fs = w.copy();
+    MemFolds f;
+    f.on = &fs;
+    f.failSave = true;
+    Device d(kDevA, 4);
+    bootWith(d, fs, w, &f, 0);
+    f.failSave = false;
+    d.ops.clear();
+    TEST_ASSERT_TRUE(add(d, f, 9) == Journal::Wrote::Ok);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "save boot (no)", "save rotation"}));
+    TEST_ASSERT_TRUE((f.seen == Calls{"plays.1.jnl plays.jnl", "plays.1.jnl plays.jnl"}));
+    TEST_ASSERT_TRUE(
+        (d.ops == Calls{"delete plays.1.jnl rotation", "rename plays.jnl plays.1.jnl", "note 4", "play 9"}));
+    TEST_ASSERT_EQUAL_UINT32(8, f.cardMark(kDevA, e));  // (9 isn't written yet at the save)
+  }
+  // The boot's save done: the rotations at 9 and 12 delete what it covers,
+  // and save nothing; the one at 15 deletes 9-11, this session's: saved.
+  {
+    CutFs fs = w.copy();
+    MemFolds f;
+    Device d(kDevA, 4);
+    bootWith(d, fs, w, &f, 0);
+    for (uint32_t seq = 9; seq <= 14; ++seq) TEST_ASSERT_TRUE(add(d, f, seq) == Journal::Wrote::Ok);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "save boot"}));
+    TEST_ASSERT_TRUE(add(d, f, 15) == Journal::Wrote::Ok);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "save boot", "save rotation"}));
+    TEST_ASSERT_EQUAL_UINT32(14, f.cardMark(kDevA, e));
+    TEST_ASSERT_EQUAL_size_t(3, std::count(d.ops.begin(), d.ops.end(), std::string("delete plays.1.jnl rotation")));
+  }
+  // The save fails: the rotation goes on, and 1-4 are in no file the scan
+  // reads and in no stats.bin (the undercount 5.5 names).
+  {
+    CutFs fs = w.copy();
+    MemFolds f;
+    f.failSave = true;
+    Device d(kDevA, 4);
+    bootWith(d, fs, w, &f, 0);
+    d.ops.clear();
+    TEST_ASSERT_TRUE(add(d, f, 9) == Journal::Wrote::Ok);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "save boot (no)", "save rotation (no)"}));
+    TEST_ASSERT_EQUAL_STRING("delete plays.1.jnl rotation", d.ops.front().c_str());
+    TEST_ASSERT_EQUAL_UINT32(0, f.cardMark(kDevA, e));
+  }
+  // A twin on plays.1.jnl's chain: the save before its rename to a twin.
+  {
+    CutFs fs = w.copy();
+    fs.link(kPrev, "/.player/plays.xl1");
+    MemFolds f;
+    f.on = &fs;
+    f.failSave = true;
+    Device d(kDevA, 4);
+    bootWith(d, fs, w, &f, 0);
+    f.failSave = false;
+    d.ops.clear();
+    TEST_ASSERT_TRUE(add(d, f, 9) == Journal::Wrote::Ok);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "save boot (no)", "save rotation"}));
+    TEST_ASSERT_EQUAL_STRING("plays.1.jnl plays.jnl", f.seen.back().c_str());
+    TEST_ASSERT_TRUE(
+        (d.ops == Calls{"twin plays.1.jnl plays.xl2", "rename plays.jnl plays.1.jnl", "note 4", "play 9"}));
+    TEST_ASSERT_EQUAL_UINT32(8, f.cardMark(kDevA, e));
+    TEST_ASSERT_TRUE(fs.violations.empty());
+  }
+  // plays.1.jnl can't be read whole (its last slot), every play in it
+  // covered: the rotation's first two tries leave the log as it was and
+  // save nothing; the third goes on, saving first.
+  {
+    CutFs card = w.copy();
+    FaultFs fs(card);
+    MemFolds f;
+    Device d(kDevA, 4);
+    bootWith(d, fs, w, &f, 0);
+    fs.badPath = kPrev;
+    fs.badFrom = 3 * pl::kSlot;
+    fs.badTo = 4 * pl::kSlot;
+    fs.bad.fail = -1;
+    Slot s = play(9, 60000, 9000);
+    TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Failed);
+    TEST_ASSERT_TRUE(d.j->again() == Journal::Wrote::Failed);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "save boot"}));
+    TEST_ASSERT_TRUE(d.j->again() == Journal::Wrote::Ok);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "save boot", "save rotation"}));
+  }
+  // After a partial scan (plays.1.jnl's open failed) no save at all: the
+  // rotation deletes 1-4 unsaved.
+  {
+    CutFs card = w.copy();
+    ScanFaults fs(card);
+    fs.openFails = kPrev;
+    MemFolds f;
+    Device d(kDevA, 4);
+    bootWith(d, fs, w, &f, 0);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "partial"}));
+    d.ops.clear();
+    TEST_ASSERT_TRUE(add(d, f, 9) == Journal::Wrote::Ok);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "partial"}));
+    TEST_ASSERT_EQUAL_STRING("delete plays.1.jnl rotation", d.ops.front().c_str());
+  }
+}
+
+// The orderly end's flush (app/PlayHistory: an "ending" flag, the 3 s
+// budget), as the glue's rule in MemFolds::may: the boot's save never (the
+// budget is the plays'; the next boot folds again), and a rotation's only
+// with 1 s of the budget left. The journal asks both in the flush: the
+// scan's end (the save, then the trim by what the card covers), and the
+// rotation (the save before its delete).
+void test_the_ends_flush_and_the_folds() {
+  bool ending = false;
+  // The boot's scan not done when the end comes: finished in the flush,
+  // its save refused, so nothing goes that the card's MARK (none) doesn't
+  // cover. The next boot folds every slot, saves and trims.
+  {
+    const Written w;
+    MemFolds f;
+    f.may = [&](pl::Folds::Why why) { return !(ending && why == pl::Folds::Why::Boot); };
+    Box b;
+    b.card = w.copy();
+    b.d.nvs.ids = w.ids;
+    b.d.folds = &f;
+    b.env.folds = &f;
+    setAcks(b.d.acks, {ack(kDevA, w.ids.epoch, 8)});
+    b.d.j.reset(new Journal(b.fs, b.d.nvs, b.d.config()));
+    TEST_ASSERT_TRUE(b.d.j->begin(b.d.id, b.d.acks));
+    b.out.reset(new pl::Outbox(b.tracker, *b.d.j, b.env));
+    b.played(1);
+    b.played(2);
+    ending = true;
+    const pl::Outbox::Flushed fl = b.out->flush(3000, 2);
+    TEST_ASSERT_TRUE(b.d.j->ready());
+    TEST_ASSERT_EQUAL_UINT32(2, fl.written);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "save boot (no)"}));
+    TEST_ASSERT_EQUAL_UINT32(0, b.d.j->booted().trimmed);
+    TEST_ASSERT_TRUE(b.card.dir.count(kPrev) == 1);
+    TEST_ASSERT_TRUE(f.folded == seqs({5, 6, 7, 8, 1, 2, 3, 4, 9, 10}));  // (the two live)
+    ending = false;
+    f.calls.clear();
+    Device d;
+    bootWith(d, b.card, w, &f, 8);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "save boot"}));
+    TEST_ASSERT_TRUE(f.folded == seqs({5, 6, 7, 8, 9, 10, 1, 2, 3, 4}));
+    TEST_ASSERT_EQUAL_UINT32(10, f.cardMark(kDevA, w.ids.epoch));
+    TEST_ASSERT_TRUE((d.ops == Calls{"delete plays.1.jnl acknowledged"}));  // (plays.jnl: 9 and 10 unacknowledged)
+  }
+  // A rotation in the flush over plays.1.jnl (1-4, this session's, the
+  // card's MARK none): saved with 3 s left; with 0.5 s left (the played
+  // file's question took 2.5 s) not, and 1-4 are lost to the stats.
+  for (const uint64_t statMs : {0ull, 2500ull}) {
+    ending = false;
+    MemFolds f;
+    Box b(4, &f);
+    uint64_t until = 0;
+    f.may = [&](pl::Folds::Why why) {
+      if (!ending) return true;
+      return why == pl::Folds::Why::Rotation && until >= b.env.now + 1000;
+    };
+    for (uint32_t t = 1; t <= 8; ++t) {
+      b.played(t);
+      TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Written);
+    }
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "save boot"}));  // (the first rotation: no plays.1.jnl)
+    b.played(9);
+    ending = true;
+    b.env.perStat = statMs;
+    until = b.env.now + 3000;
+    b.d.ops.clear();
+    const pl::Outbox::Flushed fl = b.out->flush(3000, 128);
+    TEST_ASSERT_EQUAL_UINT32(1, fl.written);
+    TEST_ASSERT_EQUAL_STRING("delete plays.1.jnl rotation", b.d.ops.front().c_str());
+    TEST_ASSERT_EQUAL_STRING(statMs ? "save rotation (no)" : "save rotation", f.calls.back().c_str());
+    TEST_ASSERT_EQUAL_UINT32(statMs ? 0 : 8, f.cardMark(kDevA, b.d.j->epoch()));
+  }
+}
+
+// A log file the scan can't read whole (an open or a read the card failed)
+// is partial(): no save this session; the trim by the MARK read at the boot
+// keeps it (as ever: not judged). The next whole boot folds each slot once
+// and saves. Without folds the scan is as it was (it counts them).
+void test_a_partial_scan_calls_partial() {
+  const Written w;
+  const MemFolds::Key k = MemFolds::key(kDevA, w.ids.epoch);
+  // plays.1.jnl's open fails while plays.jnl reads; the card's MARK at 4.
+  {
+    CutFs card = w.copy();
+    ScanFaults fs(card);
+    fs.openFails = kPrev;
+    MemFolds f;
+    f.card[k] = 4;
+    Device d;
+    bootWith(d, fs, w, &f, 8);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "partial"}));
+    TEST_ASSERT_EQUAL_UINT32(1, d.j->booted().partial);
+    TEST_ASSERT_TRUE(f.folded == seqs({5, 6, 7, 8}));
+    TEST_ASSERT_EQUAL_UINT32(0, d.j->booted().trimmed);  // plays.jnl not covered, plays.1.jnl not read
+    TEST_ASSERT_EQUAL_UINT32(4, f.cardMark(kDevA, w.ids.epoch));
+  }
+  // A read fault in plays.jnl's tail (its last slot), plays.1.jnl whole:
+  // plays.1.jnl goes, which the MARK at the boot covers.
+  {
+    CutFs card = w.copy();
+    FaultFs fs(card);
+    fs.badPath = kLog;
+    fs.badFrom = 3 * pl::kSlot;
+    fs.badTo = 4 * pl::kSlot;
+    fs.bad.fail = -1;
+    MemFolds f;
+    f.card[k] = 4;
+    Device d;
+    bootWith(d, fs, w, &f, 8);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "partial"}));
+    TEST_ASSERT_TRUE(f.folded == seqs({5, 6, 7}));
+    TEST_ASSERT_TRUE((d.ops == Calls{"delete plays.1.jnl acknowledged"}));
+    TEST_ASSERT_TRUE(card.dir.count(kLog) == 1);
+  }
+  // A read fault midway through plays.1.jnl (its last slot), the card's
+  // MARK none: nothing goes. Then a whole boot: each slot once, the save,
+  // both trimmed.
+  {
+    CutFs card = w.copy();
+    FaultFs fs(card);
+    fs.badPath = kPrev;
+    fs.badFrom = 3 * pl::kSlot;
+    fs.badTo = 4 * pl::kSlot;
+    fs.bad.fail = -1;
+    MemFolds f;
+    {
+      Device d;
+      bootWith(d, fs, w, &f, 8);
+      TEST_ASSERT_TRUE((f.calls == Calls{"began", "partial"}));
+      TEST_ASSERT_TRUE(f.folded == seqs({5, 6, 7, 8, 1, 2}));  // (the scan's read of slots 3-4 failed)
+      TEST_ASSERT_EQUAL_UINT32(0, d.j->booted().trimmed);
+    }
+    fs.badPath.clear();
+    Device d;
+    bootWith(d, fs, w, &f, 8);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "partial", "began", "save boot"}));
+    TEST_ASSERT_TRUE(f.folded == seqs({5, 6, 7, 8, 1, 2, 3, 4}));
+    TEST_ASSERT_EQUAL_UINT32(0, d.j->booted().partial);
+    TEST_ASSERT_EQUAL_UINT32(2, d.j->booted().trimmed);
+    TEST_ASSERT_EQUAL_UINT32(8, f.cardMark(kDevA, w.ids.epoch));
+  }
+  // Without folds: plays.1.jnl's open failing is a missing file, as ever.
+  {
+    CutFs card = w.copy();
+    ScanFaults fs(card);
+    fs.openFails = kPrev;
+    Device d;
+    bootWith(d, fs, w, nullptr, 8);
+    TEST_ASSERT_EQUAL_UINT32(1, d.j->booted().partial);
+    TEST_ASSERT_EQUAL_UINT32(4, d.j->booted().slots);
+    TEST_ASSERT_TRUE((d.ops == Calls{"delete plays.jnl acknowledged"}));
+  }
+}
+
+// A log file whose open finds its records damaged (no file, the card not at
+// fault: FatFs's FR_INT_ERR) is a file not read whole for the folds when
+// look() can't say it isn't there (5.6): no save, the trim by the card's
+// MARK, and the next boot (its records whole again: a disk check) folds it.
+// A MARK saved over plays.jnl's 5-8 would pass plays.1.jnl's 1-4, never
+// folded. Without folds it is a missing file, as ever, and no look() asked.
+void test_a_damaged_log_file_is_not_read_whole() {
+  const Written w;
+  {
+    CutFs card = w.copy();
+    DamagedOpen fs(card);
+    fs.path = kPrev;
+    MemFolds f;
+    {
+      Device d;
+      bootWith(d, fs, w, &f, 8);
+      TEST_ASSERT_TRUE((f.calls == Calls{"began", "partial"}));
+      TEST_ASSERT_EQUAL_UINT32(1, d.j->booted().partial);
+      TEST_ASSERT_EQUAL_UINT32(1, d.j->booted().files);
+      TEST_ASSERT_TRUE(f.folded == seqs({5, 6, 7, 8}));
+      TEST_ASSERT_EQUAL_UINT32(0, d.j->booted().trimmed);  // plays.jnl not covered, plays.1.jnl not read
+      TEST_ASSERT_EQUAL_UINT32(0, f.cardMark(kDevA, w.ids.epoch));
+      TEST_ASSERT_TRUE(card.dir.count(kPrev) == 1 && card.dir.count(kLog) == 1);
+      // (One look() for each log name the open found nothing at: the other
+      // eight are Gone.)
+      TEST_ASSERT_EQUAL_UINT32(pl::kNames - 1, fs.looks);
+    }
+    fs.path.clear();
+    Device d;
+    bootWith(d, fs, w, &f, 8);
+    TEST_ASSERT_TRUE((f.calls == Calls{"began", "partial", "began", "save boot"}));
+    TEST_ASSERT_TRUE(f.folded == seqs({5, 6, 7, 8, 1, 2, 3, 4}));
+    TEST_ASSERT_EQUAL_UINT32(2, d.j->booted().trimmed);
+    TEST_ASSERT_EQUAL_UINT32(8, f.cardMark(kDevA, w.ids.epoch));
+  }
+  // Without folds: a missing file, as ever, and the card not asked again.
+  {
+    CutFs card = w.copy();
+    DamagedOpen fs(card);
+    fs.path = kPrev;
+    Device d;
+    bootWith(d, fs, w, nullptr, 8);
+    TEST_ASSERT_EQUAL_UINT32(0, d.j->booted().partial);
+    TEST_ASSERT_EQUAL_UINT32(4, d.j->booted().slots);
+    TEST_ASSERT_EQUAL_UINT32(0, fs.looks);
+    TEST_ASSERT_TRUE((d.ops == Calls{"delete plays.jnl acknowledged"}));
+  }
+}
+
+// Outbox::Env::written(): a Written play only, after tried() and before
+// the Tracker lets it go, with its slot as the card has it (a retry's, the
+// first try's); never a play kept or dropped.
+void test_the_outbox_says_written() {
+  Box b;
+  for (uint32_t t = 5; t <= 7; ++t) b.played(t);
+  b.env.stats = {OutFile::Failed, OutFile::There, OutFile::There, OutFile::Gone};
+  TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Kept);  // (no seq taken)
+  TEST_ASSERT_TRUE(b.env.wrote.empty());
+  b.env.now += pl::Outbox::kRetryMs;
+  TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Written);
+  TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Written);
+  TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Dropped);
+  // A slot the card failed, tried again: written() once, at the try that
+  // landed.
+  b.played(8);
+  b.card.refuse = true;
+  TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Kept);
+  b.card.refuse = false;
+  b.env.now += pl::Outbox::kRetryMs;
+  TEST_ASSERT_TRUE(b.out->writeOne().did == Did::Written);
+  const Calls want = {"seq 1: t5, the oldest of 3", "seq 2: t6, the oldest of 2", "seq 3: t8, the oldest of 1"};
+  TEST_ASSERT_TRUE(b.env.wroteLines == want);
+  const std::vector<Slot> card = b.slots();
+  TEST_ASSERT_EQUAL_size_t(3, card.size());
+  for (size_t i = 0; i < card.size(); ++i) {
+    uint8_t told[pl::kSlot], have[pl::kSlot];
+    pl::encode(b.env.wrote[i], told);
+    pl::encode(card[i], have);
+    TEST_ASSERT_EQUAL_MEMORY(have, told, pl::kSlot);
+  }
+  TEST_ASSERT_EQUAL_UINT32(3, b.out->counts().written);
+}
+
+// The seq rule's two reservations (2.20.4; docs/LISTENING-STATS.md 5.6),
+// with NVS put back from a backup behind a log already trimmed (the
+// house's own end-of-check step): ACKS's seq for this device and epoch,
+// and with folds their MARK. A new play takes neither a seq ACKS
+// acknowledges (read as sent, it would never be sent) nor one MARK covers
+// (never folded). Another device's rows and another epoch's don't count.
+void test_the_seq_rules_two_sources() {
+  const Written w;
+  const uint64_t e = w.ids.epoch;
+  Journal::Ids back = w.ids;
+  back.seq = 2;
+  // ACKS: a sync acknowledged 1-8, and the boot trimmed both files.
+  CutFs fs = w.copy();
+  {
+    Device d;
+    bootWith(d, fs, w, nullptr, 8);
+    TEST_ASSERT_EQUAL_UINT32(2, d.j->booted().trimmed);
+  }
+  {
+    Device d;
+    d.nvs.ids = back;
+    setAcks(d.acks, {ack(kDevA, e, 8), ack(kDevA, e + 1, 100), ack(kDevB, e, 100)});
+    TEST_ASSERT_TRUE(d.boot(fs));
+    TEST_ASSERT_EQUAL_UINT32(0, d.j->booted().cardSeq);
+    TEST_ASSERT_EQUAL_UINT32(8, d.j->lastSeq());
+    Slot s = play(9, 60000, 9000);
+    TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
+    TEST_ASSERT_EQUAL_UINT32(9, s.seq);  // (NVS's and the log's alone: 3)
+    TEST_ASSERT_EQUAL_UINT32(9, d.nvs.ids.seq);
+  }
+  // MARK: the stats hold 1-8 (folded before a rotation deleted 5-8), an
+  // older sync's ACKS 4, the log empty: 9 with the folds, 5 without.
+  for (int withFolds = 0; withFolds < 2; ++withFolds) {
+    CutFs empty;
+    MemFolds f;
+    f.card[MemFolds::key(kDevA, e)] = 8;
+    f.card[MemFolds::key(kDevA, e + 1)] = 100;
+    f.card[MemFolds::key(kDevB, e)] = 100;
+    Device d;
+    d.nvs.ids = back;
+    d.folds = withFolds ? &f : nullptr;
+    setAcks(d.acks, {ack(kDevA, e, 4)});
+    TEST_ASSERT_TRUE(d.boot(empty));
+    Slot s = play(9, 60000, 9000);
+    TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
+    TEST_ASSERT_EQUAL_UINT32(withFolds ? 9 : 5, s.seq);
+  }
+}
+
 // device.txt's history (2.15): the vectors' texts read as the majors they
 // list; no key, an empty one, or no file: none. This firmware writes 1.
 void test_device_txt_says_history() {
@@ -3094,5 +3701,14 @@ int main(int, char**) {
   RUN_TEST(test_a_tail_on_the_fatfs_card);
   RUN_TEST(test_a_remount_and_the_boots_scan);
   RUN_TEST(test_device_txt_says_history);
+  RUN_TEST(test_a_new_epoch_is_read_with_folds);
+  RUN_TEST(test_the_trim_waits_for_the_folds);
+  RUN_TEST(test_a_failed_save_trims_what_the_card_covers);
+  RUN_TEST(test_a_rotation_saves_first);
+  RUN_TEST(test_the_ends_flush_and_the_folds);
+  RUN_TEST(test_a_partial_scan_calls_partial);
+  RUN_TEST(test_a_damaged_log_file_is_not_read_whole);
+  RUN_TEST(test_the_outbox_says_written);
+  RUN_TEST(test_the_seq_rules_two_sources);
   return UNITY_END();
 }

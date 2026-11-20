@@ -53,6 +53,11 @@ struct Root {
   bool hasRoot = false;
   uint64_t cardId = 0;
   uint32_t generation = 0;
+  // That root's commitTime (2.5.2: Unix seconds UTC, when the transfer
+  // committed it; 0 when hasRoot is false). The listening stats' sinceDay
+  // falls back on its day when no play is dated and the board's clock is
+  // unset (docs/LISTENING-STATS.md 4.1).
+  uint32_t commitTime = 0;
   // T: the root's tags file, checked as above.
   bool present = false;
   tagstore::Identity identity;  // present: the commit (cardId, generation, commitId, T's headerCrc)

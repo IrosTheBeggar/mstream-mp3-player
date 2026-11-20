@@ -637,6 +637,10 @@ void AutoDj::stepJoin(const Env& env) {
     if (!index || !index->ready() || !env.uiStarted || env.cardHeld) return;
     if (block_ == Block::Build || block_ == Block::Reads) return;
     if (block_ == Block::Retry && static_cast<int32_t>(env.nowMs - retryAtMs_) < 0) return;
+    // The listening stats' boot scan holds blocks (its ranges', its
+    // overflow's): the join would place around them, and can't around a full
+    // log's overflow (docs/LISTENING-STATS.md 5.14). Its next pass.
+    if (env.statsHold) return;
     block_ = Block::None;
     beginJoin(index);
     return;

@@ -684,7 +684,7 @@ void QueuePage::onAction(int32_t row, int action) {
       // current entry anywhere without a line in the log).
       Serial.printf("[ui] queue: play entry %lu (its row's bar)\n", static_cast<unsigned long>(pos + 1));
       p.play(pos);
-      if (p.state() == PlayState::Waiting) {
+      if (ui_.state().headphonesWait(p.state())) {
         // The headphones aren't connected: it plays once they are (Now
         // Playing shows the wait, and its way out).
         if (ui_.state().btName[0]) {

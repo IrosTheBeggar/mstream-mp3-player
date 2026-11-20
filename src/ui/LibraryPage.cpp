@@ -834,9 +834,10 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
   switch (action) {
     case 0:
       if (ok) ui_.added().clear();  // a new queue: nothing "added" to show in it
-      if (ok && p.state() == PlayState::Waiting) {
+      if (ok && ui_.state().headphonesWait(p.state())) {
         // The headphones aren't connected: it plays once they are (Now
-        // Playing shows the wait, and its way out).
+        // Playing shows the wait, and its way out). (A start the listening
+        // stats hold a moment says Playing.)
         const char* plays = start >= 0 ? what : name;
         if (ui_.state().btName[0]) {
           trf(text, sizeof(text), S::library_waiting_for, ui_.state().btName, plays);
@@ -1027,7 +1028,7 @@ void LibraryPage::autoDjFromHere(uint32_t track) {
   }
   ui_.added().clear();  // a new queue: nothing "added" to show in it
   char text[128];
-  if (ui_.player().state() == PlayState::Waiting) {
+  if (ui_.state().headphonesWait(ui_.player().state())) {
     // The headphones aren't connected: it plays once they are.
     if (ui_.state().btName[0]) {
       trf(text, sizeof(text), S::library_waiting_for, ui_.state().btName, what);
