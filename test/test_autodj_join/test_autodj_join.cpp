@@ -67,7 +67,11 @@
 //   leaving no trace; a reduced-room shape at 286,708 B, the snapshot
 //   elsewhere or out of the largest free block; and A4, the snapshot held
 //   from each visit to the next fence (512, 3,860 and 4,096 B), as ways of
-//   the yardstick, failing no step the control doesn't.
+//   the yardstick, failing no step the control doesn't; 9.7's fallback for
+//   run 3a-4 (the snapshot freed before each decoder's open and each join's
+//   begin), every figure the visits alone's to the byte, with its cost (how
+//   often a page loses its lists, how long a snapshot is held); A4's moves
+//   traced through the model heap; and a top placement for comparison.
 // Run: pio test -e native -f test_autodj_join
 // The yardstick's variants (5.14's R1), outside the suite, the case alone, in
 // a build folder of their own (from Git Bash in the worktree):
@@ -77,6 +81,7 @@
 #include <unity.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -1933,6 +1938,87 @@ namespace {
 // allocation and back at each free, less the 12 B. Real memory (the join writes
 // its maps, LibraryIndex its strings). Its free bytes' lowest since mark(); the
 // `failAt`-th allocation since reset() fails.
+//
+// A run's carves and frees in order, for a trace (the yardstick's A4 trace,
+// S3a's V5): each with the run's place (the update step, -1 the boot; its
+// point, a TracePoint) and whether it is the stats pages' snapshot's own;
+// the blocks in use by offset (each its carve's index), and the heap at each
+// update's figure. ModelHeap records into it while ModelHeap::trace points
+// at one (reset() leaves it).
+struct HeapTrace {
+  struct Ev {
+    size_t at = 0;     // the block's offset
+    size_t n = 0;      // the request (0: a free)
+    size_t block = 0;  // the block's size (a free: before it merges)
+    size_t from = 0;   // (a carve) the free block it came out of
+    size_t free = 0, largest = 0;  // free and the largest free block (raw) before it
+    int step = -1, point = 0;
+    bool snap = false;
+  };
+  struct Block {
+    size_t at = 0, size = 0;
+    bool used = false;
+    size_t carve = SIZE_MAX;  // (used) its carve's index in ev; SIZE_MAX: before the trace
+  };
+  std::vector<Ev> ev;
+  std::map<size_t, size_t> live;
+  std::vector<std::vector<Block>> figures;  // [update]: the heap at its figure (Updates::joined's)
+  std::vector<size_t> figureAt;             // ... ev's size then
+  int step = -1, point = 0;
+  bool snap = false;
+  void carved(size_t at, size_t n, size_t block, size_t from, size_t free0, size_t largest0) {
+    Ev e;
+    e.at = at;
+    e.n = n;
+    e.block = block;
+    e.from = from;
+    e.free = free0;
+    e.largest = largest0;
+    e.step = step;
+    e.point = point;
+    e.snap = snap;
+    live[at] = ev.size();
+    ev.push_back(e);
+  }
+  void freed(size_t at, size_t block, size_t free0, size_t largest0) {
+    Ev e;
+    e.at = at;
+    e.block = block;
+    e.free = free0;
+    e.largest = largest0;
+    e.step = step;
+    e.point = point;
+    e.snap = snap;
+    ev.push_back(e);
+    live.erase(at);
+  }
+};
+
+// A trace's points: where in libraryUpdates() a carve or a free was made.
+enum TracePoint : int {
+  kTpBoot,      // the boot, up to its join
+  kTpBootJoin,  // the boot's join
+  kTpFlacOpen,  // an update step's FLAC opening, before its fence
+  kTpSave,      // the fence pass's records' save
+  kTpFence,     // enterFence()
+  kTpBuild,     // the build
+  kTpLive,      // leaveFence(): the queue, the durations, Thumbs' pools
+  kTpRejoin,    // the rejoin
+  kTpVisit,     // the stats pages' visit
+  kTpFlacEnd,   // the FLAC's end
+  kTpDc,        // the Dc: the join again
+  kTpPlays,     // the plays written, their records' save
+  kTpOpusOpen,  // the Opus opening
+  kTpEnd,       // the run's end
+};
+const char* tracePointName(int p) {
+  static const char* const names[] = {"the boot",       "the boot's join", "the FLAC's open", "the records' save",
+                                      "the fence",      "the build",       "the Live",        "the rejoin",
+                                      "the visit",      "the FLAC's end",  "the Dc's join",   "the plays' save",
+                                      "the Opus's open", "the run's end"};
+  return p >= 0 && p <= kTpEnd ? names[p] : "?";
+}
+
 struct ModelHeap {
   struct Block {
     size_t size;  // usable bytes: the block's footprint is kHeader more
@@ -1952,6 +2038,7 @@ struct ModelHeap {
     size_t at, n;
   };
   static inline std::vector<Event>* rec = nullptr;
+  static inline HeapTrace* trace = nullptr;
 
   static int fls(size_t v) {
     int r = -1;
@@ -1989,6 +2076,7 @@ struct ModelHeap {
   static void* alloc(size_t n) {
     if (failAt >= 0 && static_cast<long>(allocs++) == failAt) return nullptr;
     if (n == 0) return nullptr;
+    const size_t free0 = freeNow, largest0 = trace ? rawLargest() : 0;
     const size_t a = carved(n);
     auto it = lists.lower_bound(classOf(a));
     while (it != lists.end() && it->second.empty()) ++it;
@@ -1996,6 +2084,7 @@ struct ModelHeap {
     const size_t off = it->second.back();
     unlist(off);
     Block& b = blocks[off];
+    const size_t from = b.size;
     if (b.size >= kSplit + a) {
       blocks[off + kHeader + a] = {b.size - a - kHeader, false};
       list(off + kHeader + a);
@@ -2005,6 +2094,7 @@ struct ModelHeap {
     b.used = true;
     low = std::min(low, freeNow);
     if (rec) rec->push_back({off, n});
+    if (trace) trace->carved(off, n, b.size, from, free0, largest0);
     return mem.data() + off + kHeader;
   }
   static size_t offsetOf(const void* p) {
@@ -2015,6 +2105,7 @@ struct ModelHeap {
     auto it = blocks.find(offsetOf(p));
     TEST_ASSERT_TRUE_MESSAGE(it != blocks.end() && it->second.used, "not a block of the model's");
     if (rec) rec->push_back({it->first, 0});
+    if (trace) trace->freed(it->first, it->second.size, freeNow, rawLargest());
     it->second.used = false;
     freeNow += it->second.size + kHeader;
     auto next = std::next(it);
@@ -2071,6 +2162,22 @@ struct ModelHeap {
     return v;
   }
 };
+
+// The heap now into the trace's figures (an update's figure).
+void traceFigure(HeapTrace* t) {
+  std::vector<HeapTrace::Block> v;
+  for (const auto& b : ModelHeap::blocks) {
+    HeapTrace::Block k;
+    k.at = b.first;
+    k.size = b.second.size;
+    k.used = b.second.used;
+    const auto it = t->live.find(b.first);
+    if (k.used && it != t->live.end()) k.carve = it->second;
+    v.push_back(k);
+  }
+  t->figures.push_back(v);
+  t->figureAt.push_back(t->ev.size());
+}
 
 constexpr size_t kMargin = 64 * 1024;  // the firmware's (app/AutoDj.cpp's kJoinMarginBytes)
 
@@ -4125,12 +4232,32 @@ struct StatsRun {
   // opening, the next step's records' save) and freed at the next fence
   // (StatsLists::drop(): after Auto DJ's join, before the old index), and at
   // the run's end. None: Hv's, freed at the landing (a console ask holds
-  // nothing).
-  enum class Carve : uint8_t { None, Plain };
+  // nothing). Top (a placement for comparison, not the firmware's): carved
+  // as the visit's grades are (statshold::take(): at the top of the largest
+  // free block under the hold's spacers, the free block above it closed by
+  // caps, a decoder's room asked; it yields), in the same hold, its caps
+  // held with it, given back at the fence. `fallback` (9.7's "If 3a-4
+  // fails"): freed besides before each long-lived carve made while it is
+  // held, a decoder's open (the FLAC's, the Opus's) or a join's begin (the
+  // Dc), and not carved again until the next visit (the page attached again
+  // at 0 rows with Try again: nothing asks by itself).
+  enum class Carve : uint8_t { None, Plain, Top };
   struct Page {
     size_t bytes = 0;
     Carve carve = Carve::None;
+    bool fallback = false;
   } page;
+  // What the page's snapshot came to: freed by the fallback before a FLAC's
+  // open, an Opus's open, a join's begin (letGo[]); the model's points each
+  // held snapshot lived through (each decoder's open, the FLAC's end, the
+  // Dc, each records' save and the step's figure passed with it held; the
+  // fence or the run's end frees it), and the visits whose snapshot was
+  // still held at their step's figure (the boot's: its join's figure).
+  enum { kLetGoFlac, kLetGoOpus, kLetGoJoin };
+  uint32_t letGo[3] = {0, 0, 0};
+  uint32_t heldPoints = 0, heldAtFigure = 0;
+  std::map<std::string, uint32_t> topWhy;  // (Top) the snapshot's takes, by CloseReport::why (closeName())
+  uint32_t topOutOfL = 0;                  // ... carved out of the largest free block
   // Each S3 ask's turn.
   struct Turn {
     uint32_t rows = 0;     // the u40 set's rows: HEAD's baseRows + TRKD's (stats.bin's directory) + the records'
@@ -4424,8 +4551,42 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(table.open(src)));
   Join join(ModelHeap::alloc, ModelHeap::release);
   if (dj == Dj::Placed) join.setPlacement(modelPlacement());
+  // A trace's place (ModelHeap::trace: the yardstick's A4 trace).
+  HeapTrace* const trace = ModelHeap::trace;
+  auto tracePoint = [&](int p) {
+    if (trace) trace->point = p;
+  };
+  // A4 (StatsRun::page): the stats pages' held snapshot (S3a's s3Ask(),
+  // below). Freed at a fence (StatsLists::drop(): after Auto DJ's join,
+  // before the old index), at the run's end, and with page.fallback before
+  // each decoder's open and each join's begin made while it is held (9.7's
+  // fallback: statsRelease() from the player's open and the join's begin).
+  void* page = nullptr;
+  auto freePage = [&] {
+    if (!page) return;
+    if (trace) trace->snap = true;
+    if (stats->page.carve == StatsRun::Carve::Top) {
+      g_modelTop.give(kModelTop, page);
+    } else {
+      ModelHeap::release(page);
+    }
+    if (trace) trace->snap = false;
+    page = nullptr;
+    ++stats->pageFreed;
+  };
+  auto letGo = [&](int kind) {
+    if (!page || !stats->page.fallback) return;
+    freePage();
+    ++stats->letGo[kind];
+  };
+  // A point of the step passed (StatsRun::heldPoints): with the snapshot
+  // held, one more.
+  auto heldPoint = [&] {
+    if (page) ++stats->heldPoints;
+  };
   auto joinNow = [&](size_t* lowest) {
     if (dj == Dj::Off) return;
+    letGo(StatsRun::kLetGoJoin);  // (9.7's fallback: before the join's begin)
     ModelHeap::mark();
     if (hist) {
       // (a history counts a join that can't place, and goes on)
@@ -4444,6 +4605,10 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   // The decoders' blocks (a history's).
   std::vector<void*> opusBlocks, flacBlocks;
   auto carveInto = [&](const std::vector<size_t>& asks, std::vector<void*>* into) {
+    const bool opus = &asks == &kOpusAsks;
+    letGo(opus ? StatsRun::kLetGoOpus : StatsRun::kLetGoFlac);  // (9.7's fallback: before the player's open)
+    const int was = trace ? trace->point : 0;
+    tracePoint(opus ? kTpOpusOpen : kTpFlacOpen);
     for (size_t n : asks) {
       void* p = ModelHeap::alloc(n);
       if (!p) {
@@ -4453,6 +4618,8 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
       }
       into->push_back(p);
     }
+    tracePoint(was);
+    heldPoint();
   };
   const bool opusAtBoot = hist && hist->opusAt == -1;
   bool opusOpen = false, opusWaits = false;
@@ -4637,14 +4804,10 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   // nothing), a page's kept (Hu's). Main's twin (statsOff) carves nothing.
   // Each ask's traces: the take's (free, the largest free block, the free
   // blocks of 64 KB or more as after the snapshot's carve) and, with no
-  // page kept, the whole ask's (as before it).
-  void* page = nullptr;  // A4: the held snapshot (StatsRun::page)
-  auto freePage = [&] {
-    if (!page) return;
-    ModelHeap::release(page);
-    page = nullptr;
-    ++stats->pageFreed;
-  };
+  // page kept, the whole ask's (as before it). A4's page (StatsRun::page,
+  // `page` above): carved plain, or (Top) through the hold as the grades
+  // are, refused there when it finds no room (the visit's "No room": no
+  // grade asked).
   auto s3Ask = [&] {
     if (!stats || stats->statsOff) return;
     const bool visit = stats->ask == StatsRun::Ask::Visit;
@@ -4661,6 +4824,8 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     const uint32_t albums = index.albumCount();
     const size_t foldersBytes = pathhash::Walk::bytesFor(pathhash::Walk::foldersFor(index));
     void* snap = page;
+    const bool top = stats->page.carve == StatsRun::Carve::Top;
+    tracePoint(kTpVisit);
     if (visit && !snap) {
       // Out of the largest free block, or elsewhere (TLSF's good fit: the
       // smallest free class that holds it).
@@ -4670,10 +4835,27 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
           lAt = b.first;
           lBytes = b.second.size;
         }
-      snap = ModelHeap::alloc(stats->page.bytes ? stats->page.bytes : sv::bytesFor(albums));
-      TEST_ASSERT_NOT_NULL(snap);
+      const size_t snapBytes = stats->page.bytes ? stats->page.bytes : sv::bytesFor(albums);
+      if (trace) trace->snap = true;
+      if (top) {
+        autodj::CloseReport r;
+        snap = g_modelTop.take(kModelTop, snapBytes, &r, true, statsglue::kDecoderRoomBytes, true);
+        ++stats->topWhy[autodj::closeName(r.why)];
+      } else {
+        snap = ModelHeap::alloc(snapBytes);
+      }
+      if (trace) trace->snap = false;
+      if (!snap) {
+        // (Top) no room for it with a decoder's: the visit's "No room", no
+        // grade asked.
+        TEST_ASSERT_TRUE(top);
+        ++stats->askRefused;
+        stats->turns.push_back(t);
+        return;
+      }
       t.snapCarved = true;
       t.outOfL = ModelHeap::offsetOf(snap) >= lAt && ModelHeap::offsetOf(snap) < lAt + lBytes + ModelHeap::kHeader;
+      if (top && t.outOfL) ++stats->topOutOfL;
     }
     const size_t freeT = ModelHeap::freeBytes(), largestT = ModelHeap::rawLargest();
     const std::vector<std::pair<size_t, size_t>> free64T = ModelHeap::freeBlocks(64 * 1024);
@@ -4714,7 +4896,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
       ModelHeap::release(base);
       ModelHeap::release(bin);
       g_modelTop.give(kModelTop, p);
-      TEST_ASSERT_EQUAL_INT(0, g_modelTop.held());
+      TEST_ASSERT_EQUAL_INT(top && snap ? 1 : 0, g_modelTop.held());  // ((Top) the snapshot's, still held)
       if (!opened && (ModelHeap::freeBytes() != freeT || ModelHeap::rawLargest() != largestT ||
                       ModelHeap::freeBlocks(64 * 1024) != free64T))
         stats->askTraceless = false;
@@ -4724,8 +4906,16 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     // The snapshot: a page's kept (one held before this ask, whatever it
     // came to; one it carved, if it took a grade); else freed (every grade
     // refused, this ask's carve; or Hv's).
-    const bool held = snap && stats->page.carve == StatsRun::Carve::Plain && (p || !t.snapCarved);
-    if (snap && !held) ModelHeap::release(snap);
+    const bool held = snap && stats->page.carve != StatsRun::Carve::None && (p || !t.snapCarved);
+    if (snap && !held) {
+      if (trace) trace->snap = true;
+      if (top) {
+        g_modelTop.give(kModelTop, snap);
+      } else {
+        ModelHeap::release(snap);
+      }
+      if (trace) trace->snap = false;
+    }
     page = held ? snap : nullptr;
     if (!opened && !held &&
         (ModelHeap::freeBytes() != free0 || ModelHeap::rawLargest() != largest0 ||
@@ -4831,10 +5021,14 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   u.opusFirst = opusOpen;
   if (stats && stats->uiAt == StatsRun::kBeforeJoin) carveUi();  // (main's order: the first frame, then the join)
   if (stats) seenHold(&stats->boot);
+  tracePoint(kTpBootJoin);
   joinNow(&u.bootLowest);
   if (stats && statsReady) statsAsk();  // (S2: an ask once the boot's join is Ready)
   if (stats && statsReady) s3Ask();     // (S3a: the same)
   u.bootJoined = ModelHeap::largest();
+  heldPoint();  // (the boot's figure)
+  if (page) ++stats->heldAtFigure;
+  tracePoint(kTpBoot);
   u.bootTopKept = u.topKept;
   if (stats) seenJoin(&stats->boot);
   if (stats && when == Scan::JoinFirst) {
@@ -4871,11 +5065,17 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     seenJoin(&stats->again);
   }
   for (int step = 0; step < steps; ++step) {
+    if (trace) trace->step = step;
     if (hist && hist->flacStep == step) carveInto(kFlacAsks, &flacBlocks);
     // The update step's pass that raises the fence: the records' save, due
     // there, before it (the save waits while the fence is up).
-    if (stats && statsReady && stats->stepSaves) statsPlays(statsfold::kSaveAt, false);
+    tracePoint(kTpSave);
+    if (stats && statsReady && stats->stepSaves) {
+      statsPlays(statsfold::kSaveAt, false);
+      heldPoint();
+    }
     // enterFence(): the queue, Thumbs' pools, the join, then the old index.
+    tracePoint(kTpFence);
     for (void* p : queue) ModelHeap::release(p);
     for (void* p : thumbs) ModelHeap::release(p);
     queue.clear();
@@ -4892,6 +5092,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     if (stats && stats->fenceSave == 1 && step == 0) statsPlays(statsfold::kRecords, true);
     u.fence = ModelHeap::freeBlocks(64 * 1024);
     // The build, from D's records (or T's, D's rows Software rows).
+    tracePoint(kTpBuild);
     LibraryBuilder b(ModelHeap::alloc, ModelHeap::release);
     synthcard::Facts facts(card, false);
     synthcard::SameRows rows(mood.transfer ? LibraryBuilder::Status::Software : LibraryBuilder::Status::Scanned, false,
@@ -4916,11 +5117,13 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     TEST_ASSERT_EQUAL(mood.moods, r.withMoods > 0);
     // leaveFence(): the queue read back, the durations, Thumbs' pools; then
     // the join (the next pass).
+    tracePoint(kTpLive);
     take({queueBytes}, &queue);
     ModelHeap::release(g_durations);
     g_durations = ModelHeap::alloc(index.trackCount() * 2);
     take({204800, 256, 256, 110592, 24, 24}, &thumbs);
     u.largest = ModelHeap::largest();
+    tracePoint(kTpRejoin);
     joinNow(&u.lowest);
     // S3a: the stats pages' ask once the Live and the rejoin are done (a
     // page's snapshot carved before its take, held to the next fence).
@@ -4935,21 +5138,32 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     if (hist) {
       // The FLAC ends; the Dc.
       if (hist->flacStep == step) {
+        tracePoint(kTpFlacEnd);
         for (void* p : flacBlocks) ModelHeap::release(p);
         flacBlocks.clear();
+        heldPoint();
       }
       if (hist->dc && dj != Dj::Off) {
+        tracePoint(kTpDc);
         join.release();
         joinNow(&u.lowest);
+        heldPoint();
       }
     }
     // Plays, and the records' save they bring due.
-    if (stats && statsReady && stats->stepSaves) statsPlays(statsfold::kSaveAt, false);
+    tracePoint(kTpPlays);
+    if (stats && statsReady && stats->stepSaves) {
+      statsPlays(statsfold::kSaveAt, false);
+      heldPoint();
+    }
     // S2: an ask once the rejoin is Ready and the update over.
     if (stats && statsReady) statsAsk();
     if (hist) {
       if (hist->opusAt == step) carveInto(kOpusAsks, &opusBlocks);
       hist->joined.push_back(ModelHeap::largest());
+      heldPoint();  // (the step's figure)
+      if (page) ++stats->heldAtFigure;
+      if (trace) traceFigure(trace);
     }
     u.joined = ModelHeap::largest();
     if (hist) continue;  // (no memory check's give-back: run L had none)
@@ -4960,6 +5174,7 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     u.givenBack = ModelHeap::largest();
     joinNow(&u.lowest);
   }
+  tracePoint(kTpEnd);
   join.release();
   index.clear();
   if (stats) freePage();  // (the orderly end: StatsLists::ending())
@@ -6463,6 +6678,263 @@ struct Yard {
   std::vector<std::pair<size_t, int>> fails;  // (history, update) failing the rule
 };
 
+// What largest() reports for a free block of `raw` bytes: its class floor
+// less the poisoning's 12 B.
+size_t reportedOf(size_t raw) {
+  if (raw < ModelHeap::kSmall) return raw > ModelHeap::kPoison ? raw - ModelHeap::kPoison : 0;
+  return (raw & ~((static_cast<size_t>(1) << (ModelHeap::fls(raw) - ModelHeap::kSlLog2)) - 1)) - ModelHeap::kPoison;
+}
+
+// "update 3's the Dc's join", "the boot's the visit".
+std::string placeOf(const HeapTrace::Ev& e) {
+  char b[80];
+  if (e.step < 0) {
+    std::snprintf(b, sizeof(b), "the boot, %s", tracePointName(e.point));
+  } else {
+    std::snprintf(b, sizeof(b), "update %d, %s", e.step, tracePointName(e.point));
+  }
+  return b;
+}
+
+// The yardstick's A4 trace (S3a's V5; printed, not pinned): history `h`
+// run with `held` (A4's page) and with its snapshot, the same size, freed
+// at its landing (Hv's: nothing held), every carve and free traced
+// (HeapTrace), beside the visits alone (`visits`: the library's
+// snapshot). At update `step`'s figure: the figure each way; where each
+// snapshot held then landed (the free block it came out of); the first
+// carve that landed elsewhere than with nothing held (the one a held
+// snapshot displaced) and where it went; and the largest free block both
+// ways, with what sits, the snapshot held, inside the largest free block
+// that nothing held leaves: why it reports a class less.
+void traceHeldMove(const char* label, const std::vector<uint8_t>& saved, cc::Source& records,
+                   const synthcard::Card& card, const StatsRun& visits, const StatsRun& held, const History& h,
+                   int step) {
+  HeapTrace tr[2];
+  Updates up[3];
+  for (int k = 0; k < 3; ++k) {
+    up[k].opusAt = h.opusAt;
+    up[k].flacStep = h.flacStep;
+    up[k].dc = h.dc;
+    StatsRun sr = k == 1 ? held : visits;
+    if (k == 0) sr.page.bytes = held.page.bytes;  // (carve None: freed at its landing)
+    ModelHeap::trace = k < 2 ? &tr[k] : nullptr;
+    libraryUpdates(Dj::Placed, saved, records, card, 5, MoodRun(), &sr, &up[k]);
+    ModelHeap::trace = nullptr;
+    if (k < 2) TEST_ASSERT_EQUAL_size_t(5, tr[k].figures.size());
+  }
+  const size_t s = static_cast<size_t>(step);
+  const size_t j0 = up[0].joined[s], j1 = up[1].joined[s];
+  printf("[stats-yard] A4's move traced | %s, %s, update %d's figure: %u B held, %u B freed at its landing (%+lld B), "
+         "the visits alone's %u B%s\n",
+         label, h.name.c_str(), step, (unsigned)j1, (unsigned)j0,
+         static_cast<long long>(j1) - static_cast<long long>(j0), (unsigned)up[2].joined[s],
+         j0 == j1 ? ": not moved in this build" : "");
+  if (j0 == j1) return;
+  const size_t end1 = tr[1].figureAt[s];
+  // The snapshots carved before the figure (held: freed after it, or never).
+  for (size_t e = 0; e < end1; ++e) {
+    const HeapTrace::Ev& c = tr[1].ev[e];
+    if (!c.snap || !c.n) continue;
+    size_t freedAt = SIZE_MAX;
+    for (size_t f = e + 1; f < tr[1].ev.size() && freedAt == SIZE_MAX; ++f)
+      if (tr[1].ev[f].snap && !tr[1].ev[f].n && tr[1].ev[f].at == c.at) freedAt = f;
+    if (c.step < step - 1) continue;  // (the two last visits')
+    printf("[stats-yard] A4's move traced |   the snapshot carved at %s: a %u B block at %u, out of a free block of "
+           "%u B (its rest %u B left free), %s\n",
+           placeOf(c).c_str(), (unsigned)c.block, (unsigned)c.at, (unsigned)c.from,
+           (unsigned)(c.from > c.block ? c.from - c.block - ModelHeap::kHeader : 0),
+           freedAt == SIZE_MAX ? "held to the run's end"
+           : freedAt < end1    ? ("freed before the figure, at " + placeOf(tr[1].ev[freedAt])).c_str()
+                               : ("held at the figure, freed at " + placeOf(tr[1].ev[freedAt])).c_str());
+  }
+  // The carves that landed elsewhere (the snapshot's own left out), the
+  // two runs' events side by side while they ask the same: the first, the
+  // first that outlived its call (given back at a later point, or never:
+  // a decoder's, a join's, the Live's), and the first still held at the
+  // figure. Where the runs first ask otherwise (a spacer more or less, a
+  // smaller one), the decisive point: each run's free and largest free
+  // block there, and its next requests.
+  std::vector<bool> atFigure(tr[1].ev.size(), false);
+  for (const HeapTrace::Block& x : tr[1].figures[s])
+    if (x.used && x.carve != SIZE_MAX) atFigure[x.carve] = true;
+  std::vector<size_t> freedAt(tr[1].ev.size(), SIZE_MAX);  // a carve's free (tr[1]'s index)
+  {
+    std::map<size_t, size_t> open;
+    for (size_t e = 0; e < tr[1].ev.size(); ++e) {
+      const HeapTrace::Ev& d = tr[1].ev[e];
+      if (d.n) {
+        open[d.at] = e;
+        continue;
+      }
+      const auto it = open.find(d.at);
+      if (it == open.end()) continue;
+      freedAt[it->second] = e;
+      open.erase(it);
+    }
+  }
+  auto outlives = [&](size_t e) {
+    const size_t f = freedAt[e];
+    return f == SIZE_MAX || tr[1].ev[f].step != tr[1].ev[e].step || tr[1].ev[f].point != tr[1].ev[e].point;
+  };
+  size_t a = 0, b = 0, alike = 0, elsewhere = 0;
+  size_t first[2] = {SIZE_MAX, SIZE_MAX}, kept[2] = {SIZE_MAX, SIZE_MAX}, asks[2] = {SIZE_MAX, SIZE_MAX},
+         lasting[2] = {SIZE_MAX, SIZE_MAX};
+  auto past = [](const HeapTrace& t, size_t* i) {
+    while (*i < t.ev.size() && t.ev[*i].snap) ++*i;
+  };
+  for (;;) {
+    past(tr[0], &a);
+    past(tr[1], &b);
+    if (a >= tr[0].figureAt[s] || b >= tr[1].figureAt[s]) break;
+    const HeapTrace::Ev& e0 = tr[0].ev[a];
+    const HeapTrace::Ev& e1 = tr[1].ev[b];
+    if (e0.n != e1.n) {
+      asks[0] = a;
+      asks[1] = b;
+      break;
+    }
+    if (e0.n && e0.at != e1.at) {
+      ++elsewhere;
+      if (first[0] == SIZE_MAX) {
+        first[0] = a;
+        first[1] = b;
+      }
+      if (kept[0] == SIZE_MAX && atFigure[b]) {
+        kept[0] = a;
+        kept[1] = b;
+      }
+      if (lasting[0] == SIZE_MAX && outlives(b)) {
+        lasting[0] = a;
+        lasting[1] = b;
+      }
+    } else if (first[0] == SIZE_MAX) {
+      ++alike;
+    }
+    ++a;
+    ++b;
+  }
+  // The snapshot held at tr[1]'s event `at` (its carve before it, its free
+  // after it): the free block it came out of, [at, at + from + header).
+  auto holeAt = [&](size_t at, size_t* lo, size_t* hi) {
+    size_t sAt = SIZE_MAX, sFrom = 0;
+    for (size_t e = 0; e < at; ++e) {
+      const HeapTrace::Ev& c = tr[1].ev[e];
+      if (!c.snap) continue;
+      if (c.n) {
+        sAt = c.at;
+        sFrom = c.from;
+      } else if (c.at == sAt) {
+        sAt = SIZE_MAX;
+      }
+    }
+    *lo = sAt;
+    *hi = sAt == SIZE_MAX ? 0 : sAt + sFrom + ModelHeap::kHeader;
+  };
+  auto said = [&](const char* what, const size_t at[2]) {
+    const HeapTrace::Ev& e0 = tr[0].ev[at[0]];
+    const HeapTrace::Ev& e1 = tr[1].ev[at[1]];
+    size_t lo = 0, hi = 0;
+    holeAt(at[1], &lo, &hi);
+    const bool inHole = e0.at >= lo && e0.at < hi;
+    const size_t f = freedAt[at[1]];
+    const std::string until = atFigure[at[1]] ? std::string("held at the figure")
+                              : f == SIZE_MAX ? std::string("never given back")
+                              : !outlives(at[1]) ? std::string("given back in its call")
+                                                 : "given back at " + placeOf(tr[1].ev[f]);
+    printf("[stats-yard] A4's move traced |   %s: %s, a request of %u B (a %u B block): with nothing held at %u, out "
+           "of a free block of %u B%s; with the snapshot held at %u, out of a free block of %u B (%s)\n",
+           what, placeOf(e1).c_str(), (unsigned)e0.n, (unsigned)e0.block, (unsigned)e0.at, (unsigned)e0.from,
+           inHole ? " (the one the held snapshot came out of)" : "", (unsigned)e1.at, (unsigned)e1.from,
+           until.c_str());
+  };
+  printf("[stats-yard] A4's move traced |   %u carves and frees alike, then %u carves that landed elsewhere%s%s\n",
+         (unsigned)alike, (unsigned)elsewhere, asks[0] == SIZE_MAX ? " before the figure" : ", up to ",
+         asks[0] == SIZE_MAX ? "" : placeOf(tr[1].ev[asks[1]]).c_str());
+  if (first[0] != SIZE_MAX) said("the first carve that landed elsewhere", first);
+  if (lasting[0] != SIZE_MAX && lasting[0] != first[0]) said("the first of them that outlived its call", lasting);
+  if (kept[0] != SIZE_MAX && kept[0] != first[0] && kept[0] != lasting[0])
+    said("the first of them held at the figure", kept);
+  if (asks[0] != SIZE_MAX) {
+    std::string next[2];
+    for (int k = 0; k < 2; ++k) {
+      uint32_t c = 0;
+      for (size_t e = asks[k]; e < tr[k].ev.size() && c < 4; ++e) {
+        const HeapTrace::Ev& d = tr[k].ev[e];
+        if (d.snap || !d.n) continue;
+        next[k] += (c++ ? ", " : "") + std::to_string(d.n);
+      }
+    }
+    const HeapTrace::Ev& e0 = tr[0].ev[asks[0]];
+    const HeapTrace::Ev& e1 = tr[1].ev[asks[1]];
+    printf("[stats-yard] A4's move traced |   the runs first ask otherwise at %s: with nothing held (free %u B, the "
+           "largest free block %u B) its requests %s B; with the snapshot held (free %u B, %+lld B; the largest %u "
+           "B) %s B\n",
+           placeOf(e1).c_str(), (unsigned)e0.free, (unsigned)e0.largest, next[0].c_str(), (unsigned)e1.free,
+           static_cast<long long>(e1.free) - static_cast<long long>(e0.free), (unsigned)e1.largest,
+           next[1].c_str());
+  }
+  // The largest free block at the figure, both ways.
+  HeapTrace::Block big[2];
+  for (int k = 0; k < 2; ++k)
+    for (const HeapTrace::Block& x : tr[k].figures[s])
+      if (!x.used && x.size > big[k].size) big[k] = x;
+  printf("[stats-yard] A4's move traced |   at the figure the largest free block: with nothing held %u B at %u "
+         "(reported %u B: its class from %u B); with the snapshot held %u B at %u (reported %u B)\n",
+         (unsigned)big[0].size, (unsigned)big[0].at, (unsigned)reportedOf(big[0].size),
+         (unsigned)(reportedOf(big[0].size) + ModelHeap::kPoison), (unsigned)big[1].size, (unsigned)big[1].at,
+         (unsigned)reportedOf(big[1].size));
+  // What sits there, the snapshot held: the blocks in use inside the
+  // largest free block that nothing held leaves, each with its carve's
+  // place and where the same carve (that place's same request, as many
+  // before it) is with nothing held.
+  auto twinOf = [&](size_t idx) {
+    const HeapTrace::Ev& c = tr[1].ev[idx];
+    uint32_t nth = 0;
+    for (size_t e = 0; e < idx; ++e) {
+      const HeapTrace::Ev& d = tr[1].ev[e];
+      if (!d.snap && d.n == c.n && d.step == c.step && d.point == c.point) ++nth;
+    }
+    for (size_t e = 0; e < tr[0].ev.size(); ++e) {
+      const HeapTrace::Ev& d = tr[0].ev[e];
+      if (d.snap || d.n != c.n || d.step != c.step || d.point != c.point) continue;
+      if (nth == 0) return e;
+      --nth;
+    }
+    return SIZE_MAX;
+  };
+  const size_t lo = big[0].at, hi = big[0].at + big[0].size + ModelHeap::kHeader;
+  std::string in;
+  uint32_t n = 0;
+  size_t bytes = 0;
+  for (const HeapTrace::Block& x : tr[1].figures[s]) {
+    if (!x.used || x.at + x.size + ModelHeap::kHeader <= lo || x.at >= hi) continue;
+    ++n;
+    bytes += x.size + ModelHeap::kHeader;
+    if (n > 4) continue;
+    char t[240];
+    if (x.carve == SIZE_MAX) {
+      std::snprintf(t, sizeof(t), "%s%u B at %u", in.empty() ? "" : "; ", (unsigned)x.size, (unsigned)x.at);
+    } else {
+      const HeapTrace::Ev& c = tr[1].ev[x.carve];
+      const size_t w = c.snap ? SIZE_MAX : twinOf(x.carve);
+      char was[80] = "";
+      if (w != SIZE_MAX) {
+        bool there = false;
+        for (const HeapTrace::Block& y : tr[0].figures[s]) there = there || (y.used && y.carve == w);
+        std::snprintf(was, sizeof(was), "; with nothing held at %u%s", (unsigned)tr[0].ev[w].at,
+                      there ? "" : ", given back by the figure");
+      }
+      std::snprintf(t, sizeof(t), "%s%u B at %u (a request of %u B at %s%s%s)", in.empty() ? "" : "; ",
+                    (unsigned)x.size, (unsigned)x.at, (unsigned)c.n, placeOf(c).c_str(),
+                    c.snap ? ", the snapshot's" : "", was);
+    }
+    in += t;
+  }
+  printf("[stats-yard] A4's move traced |   in that block with the snapshot held: %u block%s in use (%u B with "
+         "headers)%s%s%s\n",
+         (unsigned)n, n == 1 ? "" : "s", (unsigned)bytes, n ? ": " : "", in.c_str(), n > 4 ? "; ..." : "");
+}
+
 }  // namespace
 
 // 5.14's yardstick (R1 of its build plan; R6 made it the rework's): the
@@ -6517,6 +6989,20 @@ struct Yard {
 // ("A4's score"). The model's histories have no memory check (run L had
 // none), so alsoFreed's count of the snapshot at the fence isn't modelled:
 // it is freed there, after Auto DJ's join, before the old index.
+// V5's 3a-4 fallback (9.7, "If 3a-4 fails"): A4 at 3,860 and 4,096 B with
+// the snapshot freed besides before each long-lived carve made while it is
+// held (a decoder's open, the FLAC's or the Opus's; a join's begin, the Dc)
+// and not carved again until the next visit: every figure the visits
+// alone's to the byte in every build (run 3a-4's rule), with the fallback's
+// frees counted per history (how often a page would lose its lists) and the
+// model's points each snapshot lives through ("3a-4's fallback"). Each held
+// way's figures against the visits alone ("moved"). A placement for
+// comparison, printed, not the rule's: the snapshot at the top through the
+// hold, as the grades are, held as A4 holds it ("the top"). And A4's moves
+// traced through the model heap ("A4's move traced": where the snapshot
+// landed, the first carve that landed elsewhere, what sits in the largest
+// free block): the 3,860 B way at D's update 4 and at its worst in the wide
+// build, and the 4,096 B way at its worst there.
 void test_the_listening_stats_across_updates() {
   const uint32_t tracks = 19412;
   const synthcard::Card card = synthcard::make(synth::userShape(tracks));
@@ -6606,6 +7092,15 @@ void test_the_listening_stats_across_updates() {
   a4Small.page = {512, StatsRun::Carve::Plain};
   a4.page = {3860, StatsRun::Carve::Plain};
   a4Bound.page = {4096, StatsRun::Carve::Plain};
+  // 9.7's fallback ("If 3a-4 fails"): A4's snapshot freed besides before
+  // each decoder's open and each join's begin made while it is held, at
+  // 3,860 and 4,096 B. And a placement for comparison (not the firmware's):
+  // the snapshot carved at the top through the hold (statshold::take(), as
+  // the grades are: under the spacers, its caps closing the free block
+  // above it, held with it), held as A4 holds it.
+  StatsRun fallback = a4, fallbackBound = a4Bound, onTop = a4, onTopBound = a4Bound;
+  fallback.page.fallback = fallbackBound.page.fallback = true;
+  onTop.page.carve = onTopBound.page.carve = StatsRun::Carve::Top;
   std::vector<Yard> yards = {
       {"main"},
       {"main's queue 2,048 B longer", 2048},
@@ -6641,12 +7136,21 @@ void test_the_listening_stats_across_updates() {
        true},
       {"A4: the snapshot held, 4,096 B plain, carved before each visit's take, freed at the next fence", 0, &a4Bound,
        true},
+      // 9.7's fallback, then the top for comparison (printed, not the rule's).
+      {"3a-4's fallback: the snapshot held, 3,860 B plain, freed before each decoder's open and join's begin", 0,
+       &fallback, true},
+      {"3a-4's fallback: the snapshot held, 4,096 B plain, freed before each decoder's open and join's begin", 0,
+       &fallbackBound, true},
+      {"for comparison: the snapshot held, 3,860 B at the top through the hold, freed at the next fence", 0, &onTop},
+      {"for comparison: the snapshot held, 4,096 B at the top through the hold, freed at the next fence", 0,
+       &onTopBound},
   };
   enum { kMain, kControl, kMainFirst, kRework, kReworkAcks };
   const size_t kFenceBefore = 5, kFenceAfter = 6, kFullLog = 7, kFullFails = 8, kFullAcks = 9, kReworkJoin = 10,
                kFullJoin = 11, kFullAfter = 12, kThrough = 13, kFence = 14, kUnder = 15, kUnderFirst = 16,
-               kUnderMid = 17, kUnderAcks = 18, kVisits = 19, kA4Small = 20, kA4 = 21, kA4Bound = 22;
-  TEST_ASSERT_EQUAL_size_t(23, yards.size());
+               kUnderMid = 17, kUnderAcks = 18, kVisits = 19, kA4Small = 20, kA4 = 21, kA4Bound = 22,
+               kFallback = 23, kFallbackBound = 24, kTop = 25, kTopBound = 26;
+  TEST_ASSERT_EQUAL_size_t(27, yards.size());
 
   const std::vector<History> hs = yardstickHistories();
   const auto t0 = std::chrono::steady_clock::now();
@@ -6715,8 +7219,17 @@ void test_the_listening_stats_across_updates() {
           for (const StatsRun::Turn& t : r.turns) out += t.outOfL ? 1 : 0;
           printf(" | the visits: %s; the snapshot %s, out of the largest free block %u of %u; traceless: %s",
                  tookOf(r).c_str(),
-                 r.page.carve == StatsRun::Carve::Plain ? "held to the next fence" : "freed at each landing",
+                 r.page.carve == StatsRun::Carve::None ? "freed at each landing"
+                 : r.page.fallback                     ? "held to the next fence or long-lived carve"
+                                                       : "held to the next fence",
                  (unsigned)out, (unsigned)r.turns.size(), r.askTraceless ? "yes" : "NO");
+          if (r.page.carve != StatsRun::Carve::None)
+            printf("; held through %u of the model's points, at %u of its figures", (unsigned)r.heldPoints,
+                   (unsigned)r.heldAtFigure);
+          if (r.page.fallback)
+            printf("; let go before a FLAC's open %u, an Opus's open %u, a join's begin %u", (unsigned)r.letGo[0],
+                   (unsigned)r.letGo[1], (unsigned)r.letGo[2]);
+          for (const auto& w : r.topWhy) printf("; its take %s %u", w.first.c_str(), (unsigned)w.second);
         }
       }
       printf("\n");
@@ -6845,6 +7358,165 @@ void test_the_listening_stats_across_updates() {
   // figures to the byte in every history of every build: no ask leaves a
   // trace.
   same(kRework, kVisits);
+  // What each held snapshot moved: its run's figures (the boot's join's and
+  // each update's) against the visits alone's, history by history, and the
+  // steps it fails that the control doesn't. Printed for A4, 9.7's fallback
+  // and the top (V5's 3a-4 fallback).
+  struct Moves {
+    uint32_t n = 0, under = 0, over = 0, notControl = 0;
+    long long least = 0, most = 0;  // the largest move under, and over
+    std::string leastAt, mostAt;
+  };
+  auto movesOf = [&](size_t yi) {
+    Moves m;
+    const Yard& y = yards[yi];
+    for (size_t i = 0; i < hs.size(); ++i) {
+      for (int k = -1; k < 5; ++k) {
+        const size_t v = k < 0 ? yards[kVisits].bootJoined[i] : yards[kVisits].joined[i][static_cast<size_t>(k)];
+        const size_t j = k < 0 ? y.bootJoined[i] : y.joined[i][static_cast<size_t>(k)];
+        if (j == v) continue;
+        const long long dlt = static_cast<long long>(j) - static_cast<long long>(v);
+        ++m.n;
+        char b[120];
+        std::snprintf(b, sizeof(b), "%s %s (%u B against %u B)", hs[i].name.c_str(),
+                      k < 0 ? "boot" : std::to_string(k).c_str(), (unsigned)j, (unsigned)v);
+        if (dlt < 0) {
+          ++m.under;
+          if (dlt < m.least) {
+            m.least = dlt;
+            m.leastAt = b;
+          }
+        } else {
+          ++m.over;
+          if (dlt > m.most) {
+            m.most = dlt;
+            m.mostAt = b;
+          }
+        }
+      }
+    }
+    for (const auto& f : y.fails)
+      if (std::find(control.fails.begin(), control.fails.end(), f) == control.fails.end()) ++m.notControl;
+    printf("[stats-yard] moved | %s: %u of %u figures (the boot's join and 5 updates, %u histories) not the visits "
+           "alone's: %u under (at most %+lld B%s%s), %u over (at most %+lld B%s%s); %u of %u steps failing (the "
+           "control %u), %u the control doesn't\n",
+           y.name.c_str(), (unsigned)m.n, (unsigned)(hs.size() * 6), (unsigned)hs.size(), (unsigned)m.under, m.least,
+           m.under ? ": " : "", m.leastAt.c_str(), (unsigned)m.over, m.most, m.over ? ": " : "", m.mostAt.c_str(),
+           (unsigned)y.fails.size(), (unsigned)(hs.size() * 5), (unsigned)control.fails.size(),
+           (unsigned)m.notControl);
+    return m;
+  };
+  for (const size_t yi : {kA4Small, kA4, kA4Bound}) movesOf(yi);
+  // 9.7's fallback ("If 3a-4 fails"; V5's 3a-4 fallback): the snapshot
+  // freed before each decoder's open and each join's begin made while it is
+  // held (statsRelease() from the player's open and the join's begin), not
+  // carved again until the next visit. Every figure the visits alone's to
+  // the byte (nothing held: run 3a-4's rule), in every history of every
+  // build; the visits' grades the same, each held snapshot freed once, none
+  // out of the largest free block, no ask leaving a trace. Its cost,
+  // printed: how often a page loses its lists (the fallback's frees), and
+  // how long a snapshot is held, in the model's points (each decoder's
+  // open, the FLAC's end, the Dc, each records' save and the step's figure
+  // it lives through), against A4 at the same size (to the next fence).
+  auto pointsOf = [&](size_t yi, uint32_t* atFigure) {
+    uint32_t points = 0, kept = 0;
+    *atFigure = 0;
+    for (const StatsRun& r : yards[yi].runs) {
+      points += r.heldPoints;
+      kept += r.pageFreed;
+      *atFigure += r.heldAtFigure;
+    }
+    return kept ? static_cast<double>(points) / kept : 0.0;
+  };
+  for (const size_t yi : {kFallback, kFallbackBound}) {
+    const Yard& y = yards[yi];
+    const size_t a4yi = yi == kFallback ? kA4 : kA4Bound;
+    same(kVisits, yi);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, movesOf(yi).n, y.name.c_str());
+    uint32_t fired[3] = {0, 0, 0}, kept = 0, histories = 0, most = 0;
+    std::string mostAt;
+    for (size_t i = 0; i < hs.size(); ++i) {
+      const StatsRun& r = y.runs[i];
+      const std::string w = y.name + ", " + hs[i].name;
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(6, r.turns.size(), w.c_str());
+      TEST_ASSERT_TRUE_MESSAGE(r.askTraceless, w.c_str());
+      TEST_ASSERT_EQUAL_STRING_MESSAGE(tookOf(yards[kVisits].runs[i]).c_str(), tookOf(r).c_str(), w.c_str());
+      uint32_t took = 0;
+      for (const StatsRun::Turn& t : r.turns) {
+        TEST_ASSERT_TRUE_MESSAGE(t.snapCarved, w.c_str());
+        TEST_ASSERT_FALSE_MESSAGE(t.outOfL, w.c_str());
+        took += t.took >= 0 ? 1 : 0;
+      }
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(took, r.pageFreed, w.c_str());  // (each kept snapshot freed once)
+      const uint32_t f = r.letGo[0] + r.letGo[1] + r.letGo[2];
+      TEST_ASSERT_TRUE_MESSAGE(f <= took, w.c_str());
+      for (int k = 0; k < 3; ++k) fired[k] += r.letGo[k];
+      kept += took;
+      histories += f ? 1 : 0;
+      if (f > most) {
+        most = f;
+        mostAt = hs[i].name;
+      } else if (f == most && f) {
+        mostAt += mostAt.size() < 80 ? ", " + hs[i].name : std::string();
+      }
+    }
+    uint32_t atFigure = 0, a4AtFigure = 0;
+    const double held = pointsOf(yi, &atFigure), a4Held = pointsOf(a4yi, &a4AtFigure);
+    const uint32_t all = fired[0] + fired[1] + fired[2];
+    printf("[stats-yard] 3a-4's fallback | %s: every figure the visits alone's, to the byte (%u histories, the boot's "
+           "join and 5 updates each); the snapshot freed by the fallback %u times of the %u kept after a visit "
+           "(before a FLAC's open %u, an Opus's open %u, a join's begin %u), in %u of %u histories, %.2f a history, "
+           "at most %u (%s); kept to the next fence or the run's end %u times; held through %.2f of the model's "
+           "points on average (A4 at the same size %.2f), at its step's figure %u times (A4 %u)\n",
+           y.name.c_str(), (unsigned)hs.size(), (unsigned)all, (unsigned)kept, (unsigned)fired[0],
+           (unsigned)fired[1], (unsigned)fired[2], (unsigned)histories, (unsigned)hs.size(),
+           static_cast<double>(all) / hs.size(), (unsigned)most, mostAt.c_str(), (unsigned)(kept - all), held, a4Held,
+           (unsigned)atFigure, (unsigned)a4AtFigure);
+  }
+  // Its frees and holds are the history's and the visits' grades',
+  // whatever the snapshot's size: 4,096 B's are 3,860 B's, history by
+  // history.
+  for (size_t i = 0; i < hs.size(); ++i) {
+    const StatsRun& p = yards[kFallback].runs[i];
+    const StatsRun& q = yards[kFallbackBound].runs[i];
+    for (int k = 0; k < 3; ++k) TEST_ASSERT_EQUAL_UINT32_MESSAGE(p.letGo[k], q.letGo[k], hs[i].name.c_str());
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(p.heldPoints, q.heldPoints, hs[i].name.c_str());
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(p.heldAtFigure, q.heldAtFigure, hs[i].name.c_str());
+  }
+  // A placement for comparison (printed, not pinned, not the rule's): the
+  // snapshot at the top through the hold, held as A4 holds it. Its moves
+  // against the visits alone, beside A4's above, and its takes.
+  uint32_t visitsTaken = 0;
+  for (const StatsRun& r : yards[kVisits].runs)
+    for (const StatsRun::Turn& t : r.turns) visitsTaken += t.took >= 0 ? 1 : 0;
+  for (const size_t yi : {kTop, kTopBound}) {
+    const Yard& y = yards[yi];
+    movesOf(yi);
+    std::map<std::string, uint32_t> why;
+    uint32_t refused = 0, outOfL = 0, took = 0, turns = 0;
+    for (const StatsRun& r : y.runs) {
+      for (const auto& w : r.topWhy) why[w.first] += w.second;
+      outOfL += r.topOutOfL;
+      for (const StatsRun::Turn& t : r.turns) {
+        ++turns;
+        refused += t.snapCarved ? 0 : 1;
+        took += t.took >= 0 ? 1 : 0;
+      }
+    }
+    std::string ws;
+    for (const auto& w : why) ws += (ws.empty() ? "" : ", ") + w.first + " " + std::to_string(w.second);
+    printf("[stats-yard] the top | %s: the snapshot's takes: %s; out of the largest free block %u of %u, refused "
+           "(no room with a decoder's) %u; the visits took a grade %u times of %u (the visits alone %u)\n",
+           y.name.c_str(), ws.c_str(), (unsigned)outOfL, (unsigned)turns, (unsigned)refused, (unsigned)took,
+           (unsigned)turns, (unsigned)visitsTaken);
+  }
+  // A4's moves traced (printed): the 3,860 B way's suite step (D's update
+  // 4), its worst in the wide build ("opus 2 flac 2 dc 0", update 4) and
+  // the worst of every way there (4,096 B, "opus 3 flac 3 dc 1", update 4).
+  traceHeldMove("A4 at 3,860 B", saved, records, card, visits, a4, History{"D", "D", -1, 2, true}, 4);
+  traceHeldMove("A4 at 3,860 B", saved, records, card, visits, a4, History{"opus 2 flac 2 dc 0", "", 2, 2, false}, 4);
+  traceHeldMove("A4 at 4,096 B", saved, records, card, visits, a4Bound, History{"opus 3 flac 3 dc 1", "", 3, 3, true},
+                4);
   // The ranges' block: 1,284 B with no ACKS row above MARK, 3,076 B with 16
   // (the largest the docs budget), in every history.
   TEST_ASSERT_EQUAL_size_t(1284, yards[kRework].runs[0].rangesBytes);
@@ -7072,6 +7744,36 @@ void test_the_listening_stats_across_updates() {
     for (const StatsRun::Turn& t : yards[kVisits].runs[i].turns) visitsTook += t.took >= 0 ? 1 : 0;
   TEST_ASSERT_EQUAL_UINT32(68, visitsTook);
   TEST_ASSERT_EQUAL_STRING("Full, Full, Full, Full, Full, Lists", tookOf(yards[kVisits].runs[7]).c_str());  // H8
+  // V5's 3a-4 fallback, history by history (MEASURED-HOST; 3,860 B's, the
+  // 4,096 B way's the same, above): its frees before a FLAC's open, an
+  // Opus's open and a join's begin, the model's points its snapshots lived
+  // through and the figures (the boot's and 5 updates') they were held at.
+  // 39 frees of the 68 snapshots kept (3 at a FLAC's open, 36 at a join's
+  // begin, none at an Opus's: no named history opens it after an update
+  // without a Dc first), in 11 of the 13 histories; 81 points (1.19 a
+  // snapshot, A4's 3.46), 32 figures (A4's 68). Where a Dc follows each
+  // update (H2-H4, H6-H8, K1, K4, D) every update's snapshot it kept goes
+  // at that Dc, held through the FLAC's end at most; a page keeps its
+  // lists to the next fence in H1, H5, K2 and K3 (no Dc), but for the
+  // snapshot a FLAC's open takes in K2 and K3, and the boot's visit's to
+  // update 0's fence everywhere but H6 (its FLAC opening there).
+  struct Fell {
+    uint32_t flac, opus, join, points, figures;
+  };
+  const Fell fell[13] = {
+      {0, 0, 0, 16, 6}, {0, 0, 4, 2, 1}, {0, 0, 5, 2, 1}, {0, 0, 1, 2, 1}, {0, 0, 0, 16, 6},
+      {1, 0, 3, 2, 1},  {0, 0, 5, 3, 1}, {0, 0, 5, 3, 1}, {0, 0, 5, 3, 1}, {1, 0, 0, 16, 6},
+      {1, 0, 0, 12, 5}, {0, 0, 4, 2, 1}, {0, 0, 4, 2, 1},
+  };
+  for (size_t i = 0; i < hs.size(); ++i) {
+    const StatsRun& r = yards[kFallback].runs[i];
+    const std::string w = yards[kFallback].name + ", " + hs[i].name;
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(fell[i].flac, r.letGo[StatsRun::kLetGoFlac], w.c_str());
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(fell[i].opus, r.letGo[StatsRun::kLetGoOpus], w.c_str());
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(fell[i].join, r.letGo[StatsRun::kLetGoJoin], w.c_str());
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(fell[i].points, r.heldPoints, w.c_str());
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(fell[i].figures, r.heldAtFigure, w.c_str());
+  }
 #endif
   if (!broken.empty()) {
     const std::string m = "the rework breaks 5.14's yardstick: " + broken;
