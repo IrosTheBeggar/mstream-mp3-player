@@ -44,6 +44,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  PlayLog (the play log: slot, files, tracker, outbox, gate)   |
               |  StatsFold  StatsFile  StatsGlue (the listening stats)        |
               |  StatsRank  StatsMap  PathHashWalk (their lists, their map)   |
+              |  StatsVisit (their pages' snapshot, its grades, the phase)    |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -71,7 +72,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  app/Waves (the waveform index: Now Playing's shapes)         |
               |  app/PlayHistory (the play log on the card: plays.jnl, NVS)   |
               |  app/ListeningStats (listening stats: stats.bin, console H)   |
-              |  app/StatsLists (their lists on the console: Hr Hl Hw Hp)     |
+              |  app/StatsLists (their lists, the pages' asks: console H)     |
               |  main.cpp: input events, Bluetooth events, UiHost             |  ESP8266Audio
               +---------------------------------------------------------------+
 ```
@@ -2943,8 +2944,9 @@ strings.
   the walk the listening stats' map takes too (LISTENING-STATS.md 6.2):
   one hashing rule, the join's output unchanged (`test_autodj_join`).
   The join doesn't begin while the listening stats hold a block: the
-  boot scan's, or a console ask's (Hr, Hl, Hw, Hp: `Env::statsHold`); and
-  a rank waits for a join that works or is due (`AutoDj::joinPending()`).
+  boot scan's, or an ask's (Hr, Hl, Hw, Hp; S3a's stats pages' asks and
+  Hv, Hn, Hu, but not their held snapshot: `Env::statsHold`); and a rank
+  waits for a join that works or is due (`AutoDj::joinPending()`).
 - **Waveforms** ([WAVEFORM-INDEX.md](WAVEFORM-INDEX.md) 11): `app/Waves`,
   a member of the `Ui`, takes the path and the row the boot's root names,
   and opens nothing. Now Playing wants its track's path hash, with no card
@@ -2961,7 +2963,7 @@ strings.
   once, 2 s on, then none for that track. A library update needs nothing: the
   key is a path hash, not a track id. All of it is in PSRAM.
 - **Listening stats** ([LISTENING-STATS.md](LISTENING-STATS.md) 5.6, 5.14,
-  6.7, 11; Storage above): a fixed resident set, in internal RAM since
+  6.7, 9.7, 11; Storage above): a fixed resident set, in internal RAM since
   2026-11-17 (5.14's "Moved to internal RAM"). The glue's object
   (`statsglue::Glue`: the fold's HEAD, MARK's first 16 rows and the 40
   records, the store's and the session's state) is `app/ListeningStats`'
@@ -3117,6 +3119,71 @@ strings.
   (`ListeningStats::lists_`); its PSRAM comes and goes with it. The walk
   keeps nothing Auto DJ's join keeps, so the join's object (824 B, in
   Auto DJ's PSRAM from setup) is main's size.
+
+  S3a (the stats pages' asks: LISTENING-STATS.md 9.7, under "A: nothing
+  held"; on the console until S3b's screens) shares S2's one slot. A
+  page's ask (`StatsLists::ask()`, forwarded by `PlayHistory::statsAsk()`
+  for S3b's `UiHost`) is a visit's (every list, the 7 days and Not played
+  yet) or Not played yet's lean ask, and only the listener's navigation
+  makes one; with the card away or held it is dropped at once (No card).
+  In Asked it holds nothing and waits for S2's gates and for the Rank
+  lane's own waits (a lit list moving, input in the last 0.5 s, the ring,
+  an underrun, a long decode pass, a track change, a seek, Bluetooth:
+  `ScanScheduler::yieldNow()`, which `CardTasks` hands over each pass as
+  it hands `workerAhead()`, and the pass's own input), so no block is
+  taken while one holds; the pages' phase (`statsvisit::phaseOf()`, pure)
+  reads Working, then Waiting from 3 s. At its turn a visit first carves
+  its **snapshot**: one plain `psramAlloc` block (`lib/core/StatsVisit`:
+  3,860 B on the spare's 1,706 albums, at most 4,096 B; byte-packed, a
+  160 B header with the key, the totals, the 7 days and DAYS' span, each
+  list's rows with u16 track ids, Not played yet's album bits and their
+  A-Z directory). The snapshot is held after the ask while a stats page
+  shows, served (`snapshot()`) only once its ask has landed. Then the
+  grades are tried in order through S2's hold, each one block whose dead
+  regions are reused (`statsvisit::layout()`, the one arithmetic for the
+  firmware, the console and the heap model; its head is
+  `sizeof(StatsLists::Ask)`, 1,600 B, held to
+  `statsvisit::kAskHeadBytes` by a `static_assert`): Full (the lists and
+  a u40 played set, each played hash's top 40 bits) 130,800 B on the
+  spare, else Lists 81,472 B; Not played yet's Lean 122,448 B, else No
+  folders 109,856 B. Every grade refused frees the snapshot the ask
+  carved (No room). The card worker ranks (DAYS, then RCNT, then the
+  tracks; the lean ask's rank reads the tracks alone, into the u40 set);
+  at `finishRank()` the loop seals the wanted set (a heap sort) and
+  copies every kept row into the snapshot (`statsvisit::write()`), then
+  walks the library for the lists' ids and, over the u40 set, the album
+  bits (lit, 100 tracks a slice, 4 ms a pass, none in a pass with
+  input; dark, S2's), and in the walk's last pass `resolve()` and
+  `notPlayed()` write the track ids and the album bits into the
+  snapshot, the block given back in that pass. A take's hold is bounded:
+  a wait before the hand-off, the walk held 1 s, or the card worker
+  taking no step of it in 30 s gives the block back, the ask back in
+  Asked, no count (after the 30 s give-up it is held there 30 s more,
+  holding nothing: `statsvisit::stallHolds()`); each take's figures are
+  a `[listen]` line, landed or not. The lit cap (`kLitCap`, off until
+  the device's run 3a-1; `Hc0`/`Hc1` switch it for the session): a
+  visit's rank at priority 1 and its walk at the dark's pace, lit or
+  not, and its block given back once its holds reach 3 s in all
+  (Capped, nothing asked by itself). The snapshot is freed, a `[listen]`
+  line each, by `release()` (S3b's `Ui`: the pages left, another tab,
+  the dark), at the library update's fence (`StatsLists::drop()`: its
+  bytes in the fence's `[lib]` line and in the memory check's
+  `alsoFreed`), at the orderly end (`PlayHistory::flush()`, plays
+  pending or not), with the card away or held and with the stats off,
+  and when the library's index is no longer its key (a remount:
+  `StatsLists::loop()`, each pass). A held snapshot holds neither Auto
+  DJ's join nor a library update: `listsHold()` is the ask's block alone.
+  The console's twins: `Hv` (`Hv1` Lists forced) and `Hn` (`Hn1` without
+  the folders' states) ask as a page does, `Hu` holds a visit's snapshot
+  as a page would until `Hu0` (the fence frees it and asks again after
+  the Live), `Hk` prints the held snapshot, paced by the serial port's
+  room, and `Hc0`, `Hc1`, `Hc` the cap. `.bss` is 16 B over main's
+  (`StatsLists` 24 to 44 B); `ui::Ui`, `CardTasks` and Auto DJ's object
+  are main's sizes. Whether a held snapshot leaves PSRAM main's to the
+  byte is the device's run 3a-4 to decide: the heap model (MODELLED)
+  finds it moves figures where a decoder opens or Auto DJ's join is made
+  while it is held, and freeing it before those (the plan's 3a-4
+  fallback) gives the figures of the visits alone in every history.
 
 ## Input
 

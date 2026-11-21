@@ -4,6 +4,8 @@ Listening stats count the plays on the card and show them in the Library: a hub 
 
 ## 1. Status
 
+**Status (2026-11-21): S3a built (V1-V7) and host-gated, not yet on a device.** On `claude/listening-stats-s3` from main de4f52f, not pushed: V1 700ce6d (`StatsRank`), V2 b07da2a (`StatsMap`), V3 f7cd731 and 9f8c224 (`StatsVisit`, the fold's getters), V4 dbd3283, 443b755, 47543bb and 6ea01b0 (the firmware), V5 09ac8dd, fc5bf26 and 3250036 (the heap model, with the 3a-4 fallback), V6 93d38f6 and cf72100 (the review: 12 of its 13 findings fixed in code, the other a docs finding recorded here; then a livelock its 30 s give-up fix brought, fixed), V7 these docs. 9.7's "As built (S3a)" has every departure and figure. The ask's head is 1,600 B, so every grade is 112 B over 9.7's table (Full 130,800 B on the spare); `.bss` is 16 B over main's, the image 26,488 B larger, and `ui::Ui`, `CardTasks` and Auto DJ's object are main's sizes. For run 3a-4 the model (MODELLED) predicts a fail: a held 3,860 B snapshot passes A4's step rule (0 of 65 and 0 of 360 steps failing) but moves figures the visits alone don't (1 of 78 in the suite, D's update 4 at 262,132 B against 270,324 B; 12 of 432 wide, the worst 20,480 B under), each through a decoder's open or Auto DJ's join made while it is held. The fallback (the snapshot freed before each of those) gives the visits alone's figures to the byte in every history; its cost is a page's lists at 39 of the suite's 68 snapshots, 36 of them at a `Dc`. The device runs must decide: whether a lit hold passes 3 s (3a-1: `kLitCap`, and the figures to the owner); each loop piece under 35 ms (3a-2); the fit's near cells and where the snapshot lands (3a-3: in the model's 286,708 B heap a page's visit at P = 19,478 takes Full either way, and the model takes cells 9.7's rule refuses); main's PSRAM to the byte with a snapshot held (3a-4), and if not, the fallback and its cost go to the owner before S3b; nothing held (3a-5); the boot's wait (3a-6); G5 on a real stream (3a-7, the owner's hands). The whole `pio test -e native` has not run on S3a's tree.
+
 **Status (2026-11-20, later): S3's design under A; the owner's four calls.** S3 is designed, not built: the branch `claude/listening-stats-s3` is main de4f52f (S0 #59, S1 #61, S2 #66 merged), with no S3 code. A design run (three designs, two judges, a synthesis and an adversarial review of it, every load-bearing citation read at de4f52f) put four calls to the owner, and the owner picked the recommended option of each (2026-11-20; the option labels relayed as picked):
 1. **"While on stats pages"** (how long a page holds its lists). One ask when the stats pages are entered ranks every list and walks once: about 1-2 s of "Counting plays…" on the hub. Its lists go into a **snapshot**: one plain PSRAM block of at most 4,096 B, 3,860 B on the spare (9.7's layout; the 3.5 KB put to the owner left out each list's 16 rows past its cap, which the copy-out needs). The snapshot stays while the listener moves between stats pages, and an album or a sheet opened from one counts as on them. It is freed when they leave them or the screen goes dark; coming back asks again. It is the same kind of page-held block as the mood filters' 6.8 KB FilteredAlbums block on Albums (`lib/core/FilteredAlbums.*`; `docs/MOOD-FILTERS.md:605`, `:1024`). It must be checked against main on the board before it is relied on: 9.7's run 3a-4, which passes only where PSRAM is main's to the byte (free less the snapshot's carve) and sends any difference to the owner. There is no 60 s linger, and nothing is kept across tabs, Now Playing or the dark. *This replaces* "S3 decides how long a page holds its lists" (the S2 status below) and 7.6's "kept until the next `enter()`".
 2. **"Lifetime line, no memory"** (the week's figures). The entry row (Library > Artists, item 0) shows lifetime figures already in RAM: HEAD's listened time since the first day ("74 h 10 min since 1 Sep"), with fixed bars as its icon. Last 7 days (hub row 1 and the Week page) fills from the hub's ask, a 1-2 s wait: the ask reads the 7 days (DAYS ⊕ the records) into the snapshot. Nothing new is held: no week block, no ring of plays, no hub summary, and no growth of the UI's PSRAM object (`ui::Ui`, `psramNew` at `src/main.cpp:4068`). *This replaces* 2's and 7.3's "7 h 37 min in the last 7 days" with the week's bars, and the design run's 400 B week-and-ring block and 112 B hub summary. Two readings of the call are the plan's, not the owner's, and go to the owner with S3b's figures:
@@ -475,6 +477,8 @@ All are the plan's, and the owner can overrule each.
 - **Updating:** the fence frees the snapshot (`StatsLists::drop()`, its bytes in the fence's line and `alsoFreed`: `src/main.cpp:3635`), and the tab goes back to Artists as before.
 - **A remount** (which doesn't reset the tab: the second bullet above) frees a snapshot whose key (`buildStamp()`, `trackCount()`) no longer matches, at the page's next `update()`, and attaches the page again at 0 rows with Try again.
 - **The dark** frees it and attaches the page again at 0 rows (an open bar folds into its ref, a sheet closes: 7.2). A wake on a stats page asks again.
+
+*As built (S3a, 2026-11-21; 9.7's "As built (S3a)"):* the phases are `statsvisit::phaseOf()`'s as above, with these departures. A wait met after the take reads Working, then Waiting from 3 s, as before the take. Waiting also comes for 30 s after the card worker took no step of the ask in 30 s (held in Asked, holding nothing, then taken again). The remount's key check is `StatsLists::loop()`'s, each pass, not a page's `update()`, and it gives No card, as the card does, until the next ask. A landing reads Ready only while its snapshot is served; once it is freed, Idle (No card where the card or a remount's key freed it).
 
 ### 4.5 Toasts
 
@@ -1294,6 +1298,7 @@ Carves are MODELLED: + 12 B, rounded up to the 1/32 class, + a 4 B header (`test
 - **The visit's ask** is one block at the top through the hold, as S2's. Its regions are reused once dead: the Ranker's, the work memory's and the records' room becomes the folders' states, the album bits and the wanted set (8,352 B for the lists' 696 rows); the RCNT window's room becomes the u40 played set. On the spare: **Full** 130,688 B (P = 19,478 with TRKD 1,365: 139,264 B), **Lists** 81,360 B, **Lists without a clock** 34,624 B.
 - **The lean Not played yet ask**: 122,336 B (130,912 B), and 109,744 B (118,320 B) without the folders' states.
 - **Compared with S2's `Hw`**: 285,836 B on the spare. 9.7 gives the regions' bytes.
+- *As built (S3a, 2026-11-21):* the ask's head is 1,600 B, not the estimated 1,488 B, so each ask above is 112 B more: Full 130,800 B (139,376 B), Lists 81,472 B, Lists without a clock 34,736 B, the lean ask 122,448 B (131,024 B), without the folders' states 109,856 B (118,432 B). The snapshot is as above (9.7's "As built (S3a)").
 
 ### 6.6 Rebuilds, renames, orphans
 
@@ -1402,6 +1407,10 @@ The model doesn't reproduce S1's device round 2 on round 2's own sequence, so th
 - **The UI's asks.** Typed asks (a visit, a lean Not played yet), cancel, release, a phase, why, outcome and version; the snapshot carved before the take; the grades tried in order; the copy-out into the snapshot at `finishRank()`. Only the listener's navigation asks: entering the stats pages, coming back, a wake on one, Try again. Nothing is patched between asks: a page shows its lists as of its ask.
 - **One slot, as S2's.** A UI ask meeting a console ask under way waits behind it. A console ask meeting a UI ask is refused "under way" (`src/app/StatsLists.cpp:164-166`). S2's "replaced while it hadn't begun" (`:188`) doesn't apply to UI asks.
 - **History.** The list's "Rank" work (a RAM snapshot of TRKD and RCNT, a sparse index kept for `Hp`), its "When the lists rank" and its "Between ranks" are the plan before A. S2's "As built" says what replaced them, and these notes what S3 adds.
+
+*As built (S3a, 2026-11-21; 9.7's "As built (S3a)"):*
+- **The read's order** is DAYS ⊕ the records' DAYS rows first, then RCNT ⊕ the records' RCNT rows into the windows, finished into the Ranker, then the tracks (`lib/core/StatsRank.cpp`, `rank()`). A rank with lists reads both, clock or not: their CRCs are checked as S2's are, RCNT gives its oldest day and DAYS gives O5's span. S2's `Hr`, `Hl` and `Hw` stream DAYS too, so a DAYS section that fails its CRC or its read refuses them (Damaged, Io). The lean ask's played-set-only rank reads neither.
+- **The 30 s give-up**, for S3a's asks: the block is given back and the ask held in Asked 30 s from the give-up (`statsvisit::stallHolds()`: the gate's 64, holding nothing), then taken again; no count and no end. S2's asks are still given up. `StatsLists::start()` makes the records' copy and the opens only while the card worker's task is there or its spawn is due (`CardWorker::mayStart()`).
 
 ## 7. The UI
 
@@ -1642,6 +1651,8 @@ No animation. Covers come from the thumb cache. Nothing reads the card in `enter
 
 These rows go: "A fold while Week shows", "A fold while a list shows", "The lists ranked or named" (became the arrival row) and "A new UTC day ... a re-rank". The turn's `lookFile()`, the hand-off's two opens, `finishRank()` and `resolve()` run on the loop task outside `Ui::loop`, so `[ui] slow pass` (`src/ui/Ui.cpp:1535`) doesn't see them, and a touch that lands while one runs waits for it. Run 3a-2 times each and holds each under 35 ms.
 
+*As built (S3a, 2026-11-21):* the landing runs in the walk's last pass: its last slice, then `resolve()` and `notPlayed()`, and the block is given back. The landing's line gives each loop piece in µs: the turn (`stats.bin`'s directory among it, the turn's own lines left out), the hand-off (the records' copy, the opens), `finishRank()` (the seal, `write()`), `resolve()` and `notPlayed()`. A take that ends without landing gives its pieces so far ("the take's figures (not landed)").
+
 ### 7.11 Where the code goes
 
 - **`lib/core/StatsView.{h,cpp}`** (pure, host-tested in `test_ui_stats`): the phase from its inputs; hub row kinds by state; which tray cells; `trayCellAt()`; Recently played's sections (as `librarytext::Discs`, `lib/core/LibraryText.h:120-140`); bar heights; the NP row's choice; `notPlayedOpen(countingDays, dated)` (O5; false while not dated).
@@ -1863,6 +1874,20 @@ S0 --> S1 --> S2 --> S3 --> S4
 - *As decided (2026-11-20, later):* `v`, `n`, `u`, `k` and `c` are free under `H` (`src/app/ListeningStats.cpp:878-917` takes the empty line, `d`, `m`, `t`, `r`, `l`, `w`, `p`, `s`). S2's `Hr`, `Hl`, `Hw`, `Hp` don't change; `Hw` and `Hl3` stay the exact (u64) reference.
 - `H` is free at the top level (`src/app/SerialConsole.cpp:226-263`). `E` belongs to the ESP-NOW spike's branch, and `g`'s sub-letters overlap PR #25's `gx`.
 - `uiS` (capital) is not `uis` (the scripted swipe, `uis<x0>,<y0>,<x1>,<y1>,<ms>`: its help at `src/main.cpp:1528-1537`, its parser at `:1538-1555`), and Ui's own letters are r, B, v, f, b, c, L, P, T, M (`src/ui/Ui.cpp:2939-3030`).
+- *As built (S3a, 2026-11-21; `src/app/StatsLists.cpp`, `command()`):* S3a's rows above, with these departures.
+  - **`Hv`** frees its snapshot after it only if it carved it. Over a held one (a page's, or `Hu`'s) it rewrites that one whole and keeps it.
+  - **`Hv`'s lines:**
+    - the carve: the address, the block, what it took of free, and the largest free block before and after it, out of it or elsewhere by a heap walk;
+    - each grade refused;
+    - the take: the grade, the block, `sizeof(Ask)`, the u40 rows, the folders and albums, T and its caps, the waits met, lit or dark, and the turn's µs with its own lines left out;
+    - each change of the pages' phase;
+    - the landing: the hold, lit or dark at the take, the rank and the walk; the visit's holds; the priority; the queued, rank and walk ms, the tracks, the passes and the longest; the loop's pieces in µs;
+    - then the snapshot, as `Hk`'s header gives it.
+  - **A take that ends without landing** says its own figures ("the take's figures (not landed)").
+  - **`Hn`** writes its count into a held snapshot that has landed, else counts from its walk's bits.
+  - **`Hu`** asks Full, else Lists. The snapshot is `Hu`'s only when its own ask carved it. Over a page's snapshot it stays the page's (`Hu0`: "isn't Hu's: kept"), and a page's visit over `Hu`'s takes it over.
+  - **`Hk`** prints over later passes, a piece at a time while the serial port's TX buffer has room for it: each of the header's three pieces at 768 B free, each row or album at 320 B. The header comes first, then each list's rows, with titles once landed over this library, then Not played yet's first 20 albums. No pass waits on the UART.
+  - **`Hc`** alone says the cap's state, as `Hc0` and `Hc1` do after switching it.
 
 ### 9.4 S0: the contract
 
@@ -2134,6 +2159,10 @@ Needs S2.
 - **Ids are u16.** A library past 65,534 tracks gets no ask; none fits PSRAM anyway (11's ceiling is 23k-27k tracks). During the ask the id field holds the row's wanted-set index (at most 695), so the block is served to the pages only once the visit's ask has landed (`snapshot()` null until then). A shelf acts on its rows in place, through the queue's id view (7.6): each list's ids at their stride (4, 4, 6 and 5 B).
 - **Past about 3,200 albums** (11's ceiling is about 2,500), Old favourites and Recently played give up their last rows to stay at 4,096 B.
 - **Saturation:** counts saturate at 65,535 (New finds' at 16,383), and `when` at 2057.
+- *As built (S3a, 2026-11-21):*
+  - **The header's fields** take 154 B; the other 6 B are zero.
+  - **The ask's time** is a row's time (`statsfold::timeOf()`: seconds since 2026-01-01 plus 1; 0 undated), not plain seconds. Plain seconds would read 2026-01-01 00:00:00 as undated, and `when` reads a row's minutes as (time − 1) / 60.
+  - **The trim** starts at 3,217 albums: the block is 4,096 B at 3,216. Old favourites and Recently played have given up all 216 rows from 18,361 albums, and from 18,433 albums the block passes 4,096 B.
 
 **S3a: the grades.** `statsvisit::layout()` computes each grade's layout, reusing regions once they are dead. Each grade is one block at the top through S2's hold (`statshold::take()`: its caps, a decoder's room and the yield unchanged).
 - **The parts**, as 9.6's device pass and the code give them:
@@ -2161,6 +2190,18 @@ Needs S2.
 
 At TRKD's forced-compaction cap (4,096 rows: 23,614 rows in the set), Full is 152,928 B, the lean ask 144,576 B and no folders 131,984 B. At P = 2,214 the window outweighs the played set: Full is 84,480 B.
 
+*As built (S3a, 2026-11-21):* the ask's head is 1,600 B on both ELFs. V4 first built it at 1,704 B, and 6ea01b0 trimmed its bookkeeping. A `static_assert` in `StatsLists::begin()` holds it to `statsvisit::kAskHeadBytes`, which the heap model reads. Every grade is 112 B over the table:
+
+| Grade | Spare | P = 19,478 | TRKD's cap |
+|---|---|---|---|
+| Full | 130,800 B | 139,376 B (P = 2,214: 84,592 B) | 153,040 B |
+| Lists | 81,472 B | 81,472 B | — |
+| Lists, no clock | 34,736 B | 34,736 B | — |
+| Lean | 122,448 B | 131,024 B | 144,688 B |
+| No folders | 109,856 B | 118,432 B | 132,096 B |
+
+On the host `statsfile::kWorkBytes` is 11,488 B against the device's 11,456 B (5.14's R4). So where the work memory sets a grade's room (Lists with a clock, and No folders), the host's grades read 32 B more again. `test_stats_visit` checks `layout()` against the table at its 1,488 B head.
+
 **S3a: the fit**, by the take's rule B ≤ (L − 133,047 − T) × 32/33, with T about 5.4 KB after an update. This is MODELLED from S2's device pass. T varies: `Hr`'s take once went into a smaller free block (9.6).
 
 The snapshot is carved first, as a plain block (3,860-4,096 B). TLSF's good fit serves it from the smallest free class that holds it, so it comes out of the largest free block only when no smaller one takes it. When it does, L reads one class less: 8,192 B from 262,144 B up, 4,096 B under. Each cell gives the margin both ways: the snapshot elsewhere / out of L.
@@ -2180,6 +2221,29 @@ The snapshot is carved first, as a plain block (3,860-4,096 B). TLSF's good fit 
 - **At every point the board measured after an update,** a visit takes Full on the spare, with 5,136 B or more to spare either way. At P = 19,478 and 286,708 B it takes Full only while the snapshot stays out of the largest free block, by 4,504 B, near the line. Otherwise it takes Lists, and Not played yet's Try again makes the lean ask, which fits by 4,912 B, near the line too. So call 3's "fits at every point measured on the board after an update" holds for the lean ask, at P = 19,478 within a class of the line.
 - **The model's lowest points** refuse Not played yet. The model's points aren't the device's (13).
 - **Margins:** the near cells rest on T, the head's estimate and where the snapshot lands. Run 3a-3 reads all three: `Hv`'s line gives the largest free block before and after the snapshot's carve, and the take's free block above.
+
+*As built (S3a, 2026-11-21; MODELLED: V5's `test_an_s3_ask_in_a_reduced_room`, fc5bf26).* The 286,708 B row in a model heap:
+- the raw block at its class's floor, 286,720 B;
+- the rest of free in blocks under the snapshot's class, with one free block of the snapshot's size (elsewhere) or none (out of L);
+- the spare's parts and the 1,600 B head;
+- each grade asked alone through the hold with the snapshot held.
+
+Each cell gives the margin over 133,047 B, elsewhere / out of L, with T in brackets:
+
+| Rows | Full | Lists | Lean | No folders |
+|---|---|---|---|---|
+| P = 19,478 (20,883) | +6,205 (4,088) / +2,109 (1,584) | +67,645 (4,088) / +63,549 (3,376) | +14,397 (8,184) / +10,301 (5,296) | +26,685 (8,184) / +22,589 (4,656) |
+| TRKD's cap (23,614) | −6,083 (4,088) / −10,179 (3,504) | +67,645 (4,088) / +63,549 (3,376) | +2,109 (4,088) / −1,987 (2,992) | +14,397 (4,088) / +10,301 (2,352) |
+
+Across the class (128 raw sizes, 64 B apart), each grade is taken at all 128 or at none. The one exception is the lean ask at TRKD's cap out of L, taken at 66 (No folders at the other 62).
+
+Where the model and the table above differ:
+- **P = 19,478, Full, out of L.** The table says refused: 3,440 B short, or 3,552 B at this head. The model takes it at every raw size. Its spacers leave T at 1,584 B, and given back they are a free block of 137,860 B, reported 135,156 B: the class floor takes 2,692 B, where the rule's 32/33 takes a whole thirty-second.
+- **TRKD's cap, Lean, elsewhere.** The table says 808 B short, or 920 B at this head. The model takes it (+2,109 B).
+- **TRKD's cap, Lean, out of L.** The table says 8,752 B short, more than a class, so not near. The model has it near: 1,987 B short at the floor, and taken at 66 raw sizes.
+- **Near cells the model takes at every size:** P = 19,478's Lean out of L (4,912 B in the table) and TRKD's cap's No folders out of L (3,840 B).
+
+So the rule, with T fixed at 5.4 KB, is pessimistic in this heap. At P = 19,478 a page's visit takes Full either way, so "Lists, then Not played yet's Try again" is reached there by `Hn` alone. The 249,844 B row agrees with the model (`test_an_s3_ask_in_a_model_heap`, the yardstick's library, an Opus kept: 249,844 B after each update). At P = 19,478 the visit takes Lists after each update, and the lean ask and No folders are refused. Run 3a-3 decides the device's cells.
 
 **S3a: the commits.** Each comes with its host tests: Git Bash for the tests, PowerShell with MSYSTEM unset for the builds (9.1).
 - **V1, `lib/core/StatsRank`** (`test_stats_rank`; `tools/statsref.py`, `tools/test_statsref.py` and the fixtures):
@@ -2247,6 +2311,40 @@ void setWindow(uint8_t w); // Most played's window into the held snapshot's head
   - the lit cap reached (cap on): Capped.
 - **`StatsLists`' `.bss`** holds the phase, why, outcome, the UI ask's kind, the version, the news byte, the snapshot's pointer, the held fake's flag, the wait's start, the Rank lane's wait (1 B), the cap's switch (1 B) and the visit's summed hold (4 B). It is at most 32 B over S2's, measured at the gate against main's `.dram0.bss` and counted against G5's real-stream margin (7,756 B; section 1).
 
+*As built (S3a, 2026-11-21; `src/app/StatsLists.h`, `lib/core/StatsVisit.h`):* the API as above, but for these lines:
+```
+enum class Outcome : uint8_t { None, Ok, NoRoom, NoBlock, Changed, Io, Damaged, Base, Cancelled,
+                               Room, CardAway };
+bool ask(UiAsk a, bool cardGone);  // false: dropped: the stats off; the card gone (No card, the
+                                   // snapshot freed); NotPlayed with no landed snapshot
+void release(const char* why);     // `why`: its [listen] line's words
+uint16_t version() const;  // +1 at each phase change, each landing, each free of the snapshot, and
+                           // when a visit asked again over a served snapshot rewrites it (write())
+size_t snapshotBytes() const;      // the held block (0: none): main.cpp's alsoFreed counts it
+```
+- **`snapshot()`** is null from a re-ask's `write()` to its landing, so a page reads it at each use and keeps no pointer.
+- **`PlayHistory`** forwards the calls for S3b's `UiHost`: `statsAsk()` (`cardGone` from main.cpp's `cardHeld` and the card away), `statsCancel()`, `statsRelease()`, `statsSnapshot()`, `statsPhase()`, `statsVersion()`, `statsNews()`, `statsSetWindow()` and `statsHeldBytes()`.
+- **`news()`** compares the version's low byte.
+- **`Room` and `CardAway`** are V3's. `Room` is the rank's, which every grade's refusal reads as; the lean ask's u40 set short of its room ends there too. `CardAway` is an ask the card dropped or cancelled.
+- **`phaseOf(why, outcome, wait, waitedMs, capped, served)`** takes a sixth argument, `served`: the landed snapshot still held.
+
+*As built (S3a), the phase from why:*
+- **A wait after the take**, its block given back, is the gate's wait again: Working, then Waiting from 3 s, counted from its own start and uncounted. This is the V3 bullet's and the tests' reading, not the list's "Waiting" at once (4.4's Waiting is "held past 3 s"): a tap's 0.5 s Input wait after a take would otherwise flash "Waiting for the card…".
+- **64** also holds a visit for 30 s after the card worker's give-up (no step of its ask in 30 s: `kStalled`, `statsvisit::stallHolds()`). It holds nothing meanwhile (Working, then Waiting), and the ask is taken again once the 30 s are up, with no count and no end. The rule lives in `lib/core/StatsVisit.h` (`kStallMs`, `stallHolds()`, `waitStartMoves()`): while stalled, the wait's start stays the give-up's until the take (cf72100).
+- **16**: the ask is stopped with `Outcome::CardAway` and the snapshot freed. The phase is No card until the next ask, even once 16 has gone, so the page's Try again shows once the card is back. An ask made with the card gone is dropped at once the same way. A remount's key free gives No card too.
+- **A landing** reads Ready only while its snapshot is served (`served`), else Idle. Cancelled and the stats off read Idle.
+- **A page's ask waiting behind a console ask** reads Working.
+- **A page's ask during a remount's re-read of `stats.bin`** waits as for the boot's scan (2: Working), not dropped as with the stats off.
+
+*As built (S3a), `.bss`:* `StatsLists` is 44 B, against S2's 24 B. It holds:
+- the version (u16), the Rank lane's waits met (u16), the visit's holds (u16 ms, saturating);
+- the news byte, the last phase, why, the outcome, the page's ask waiting;
+- one flags byte: the UI's, forced, `Hu`'s fake, the cap's switch, capped, carved, stalled, `Hu`'s ask;
+- the Rank lane's wait, and the visits past the cap;
+- `Hk`'s two bytes, in its tail padding.
+
+`.dram0.bss` is 16 B over main's (`ListeningStats` 112 to 128 B, `PlayHistory` 200 to 216 B).
+
 **S3a: the snapshot's life.**
 - **Carved** at a visit ask's turn, before the take, if none is held.
 - **Freed** (`release()`), each time with a `[listen]` line saying why:
@@ -2276,6 +2374,18 @@ void setWindow(uint8_t w); // Most played's window into the held snapshot's head
 - **The held condition** is `statsview::onStatsPages()` (7.1). `Ui` evaluates it after each navigation, tab change and dark change; its edges call `statsRelease()` and `statsAsk(Visit)`. A wake reaches the ask through the dark change's edge, not through `enter()`.
 - **Nothing patches a page.** A page shows its lists as of the ask. A play counted while a stats page is open changes no row; the next visit's ask has it.
 
+*As built (S3a, 2026-11-21):*
+- **S3a's own frees:**
+  - at the fence (`drop()`);
+  - at the orderly end (`PlayHistory::flush()` calls `StatsLists::ending()`, plays pending or not);
+  - with the card away or held, and with the stats off;
+  - at a remount's key: `StatsLists::loop()` checks it each pass, not at a page's `update()`, and not while a visit's ask is under way, since that ask rewrites the snapshot over the index it took.
+- **The frees a navigation makes** (leaving, another tab, the dark, a Live or a rebuild, `browse`) are calls to `release()`, which S3b's `Ui` makes.
+- **A held snapshot short of the library's albums** is carved again at the next visit's turn.
+- **A console visit** (`Hv`, `Hv1`) frees at its landing the snapshot it carved.
+- **`Hu`'s** snapshot is kept: `kFake`, set only when `Hu`'s own ask carved it.
+- **A refused visit** frees the snapshot it carved when every grade is refused.
+
 **S3a: the lit hold** (the owner's default (a)).
 - **Each UI ask's line** gives:
   - the hold, from the take to the give-back;
@@ -2290,6 +2400,21 @@ void setWindow(uint8_t w); // Most played's window into the held snapshot's head
   - A backstop: when a visit's summed hold reaches `kLitCapMs`, its block is given back at its next point (queued at once, walking at once, on the worker at the step's end). The page then shows Capped, "Waiting for the card…" with Try again, and asks nothing by itself, so a visit can't hold 3 s again and again.
 - **Its switch:** S3a builds the cap whole behind `kLitCap` (a constant, off) and `Hc0`/`Hc1` (RAM, the session). Run 3a-1 measures every ask with it off and on.
 - **After run 3a-1:** if no lit hold passes 3 s with the cap off, `kLitCap` stays off, and the figures are recorded. Otherwise `kLitCap` is set on for S3b, and the figures, the cap's costs and its form go to the owner, who may overrule: another form (the backstop alone, say), or no cap, the lit holds accepted as measured.
+
+*As built (S3a, 2026-11-21):*
+- **`kLitCap`** is `false`.
+- **The landing's line** gives every figure listed above.
+- **A take that ends without landing** gives its own line, `sayTake()` (V6): put back, capped, ended with a reason, or at the fence. The line reads "[listen] X: the take's figures (not landed): …" and gives:
+  - the hold and the screen at the take;
+  - the rank's priority and the screen at its start, with the queued and rank ms, or "not ranked" with the queued ms;
+  - the walk's ms, passes, slices and longest, or "no walk";
+  - the loop's pieces so far.
+
+  Run 3a-1 reads put-back and capped takes there.
+- **A visit whose holds pass 3 s** is said once ("past the 3 s cap") and counted for the session.
+- **The visit's summed hold** is a u16 of ms, saturating.
+- **The cap** applies to the lean ask too. Its backstop also acts when a give-back brings the holds to 3 s.
+- **The walk's 1 s hold** gives the block back for a list moving, the card's guard, input (lit, or under the cap), Auto DJ's join working, or the UI or index not up.
 
 **S3a: tests.**
 - `test_stats_rank`:
@@ -2323,6 +2448,20 @@ void setWindow(uint8_t w); // Most played's window into the held snapshot's head
   - **A reduced-room shape** at 286,708 B: Full taken at P = 19,478 with TRKD 1,365 with the snapshot elsewhere, refused with it carved out of that block (Lists, then the lean ask taken); at TRKD's cap, Full and the lean ask refused and the no-folders grade taken.
 - `test_stats_store` and `test_stats_file`: unchanged, as the control.
 
+*As built (S3a, 2026-11-21):* the tests as listed, with these differences.
+- **`test_stats_rank`**: the u40 set keeps two equal rows for two played hashes sharing their top 40 bits, as the u64 set keeps two, so it equals the u64 set's top 40 bits row for row. Three rank scenarios are new (rank-days: DAYS at its 400 rows; rank-midnight: plays around UTC midnights; rank-rcnt-cap: RCNT capped, its oldest day inside the 30), eight in all. rank-big's description is corrected to its 635 base rows: it said 619, and its rows didn't change.
+- **`test_stats_map`**: `seal()` is pinned against S2's insertion sort, kept in the test as the reference.
+- **`test_stats_visit`** has eight cases:
+  - it checks `layout()` against the grade table at the table's 1,488 B head; the model takes the firmware's 1,600 B;
+  - it runs the visit's whole way on the 31 fixture boots;
+  - it checks `phaseOf()` exhaustively, `served` and `CardAway` among the inputs;
+  - since cf72100, `test_the_worker_s_give_up_holds_30_s_then_the_take` runs StatsLists' pass order over the stall's rules. The ask is held 30 s and taken at the first pass at or past 30 s (10 ms and 37 ms passes, `millis()` wrapping), reading Waiting from 3 s; a Rank-lane wait, S2's join gate or the write gate across the 30 s mark takes it at its first clear pass; the rule before the fix takes none in 60,000 passes.
+- **`test_scan_scheduler`**: `test_yield_now_is_a_ranks_wait`.
+- **`test_autodj_join`** has 48 cases.
+  - `test_an_s3_ask_in_a_model_heap` has the grades and nothing held. Since V6 (finding 10) it also has a page's 3,860 B snapshot carved before each visit's take and held, at P = 2,214 and P = 19,478, through the second update's memory check (the join given back) and its rejoin. It pins against the visits alone: Full, Full, Full; three snapshots freed (two fences, the end); the boot's join 589,812 B, joined 360,436 B, the check's give-back 360,436 B; the boot's lowest 168,136 B and the rejoins' 446,796 B (MODELLED). The model's memory check gives back the join alone, so main.cpp's `alsoFreed` count of the snapshot isn't modelled.
+  - `test_an_s3_ask_in_a_reduced_room` asks each grade alone, with the snapshot held (fc5bf26), not only a page's chain.
+  - A4's ways and the fallback's are ways of `test_the_listening_stats_across_updates`. Their snapshot is carved before each step's visit take and after the boot's join (held to update 0's fence), with the S3 asks right after each Live and rejoin. The histories have no MP3 start and no memory check.
+
 **S3a: Done when:**
 ```
 pio test -e native -f test_stats_rank -f test_stats_map -f test_stats_visit -f test_stats_fold -f test_stats_store -f test_stats_file -f test_scan_scheduler -f test_autodj_join
@@ -2340,6 +2479,21 @@ The builds are read against main de4f52f's CI build:
 - IRAM left and the `libc_a-*` objects main's;
 - `iram_diet`, `cache_guard`, `flash_guard` and `shadow_guard` ok;
 - Auto DJ's object, `CardTasks` and `ui::Ui` at main's sizes (gdb on both ELFs).
+
+*As built (S3a, 2026-11-21; MEASURED-HOST).* What has run on the branch:
+- **The first command's seven suites besides `test_autodj_join`**: 126 of 126 at 93d38f6. `test_stats_visit` again at cf72100: 8 of 8, with its new case.
+- **`test_autodj_join`**: 48 of 48 at cf72100 (12 min 47 s).
+- **The wide command**: 1 of 1 at 3250036 (44 min 5 s; 27 kinds of run, 72 histories), its output naming A4's ways and the fallback's. `-DSTATS_OLD_DECODERS`: 1 of 1 (9 min 59 s). Neither has run since: V6 changed no yardstick way, and `kS3AskHead` keeps its value.
+- **`card_fixtures.py --check`**: 684 files up to date. **`test_statsref`**: 68 OK.
+- **`pio run -e core2 -e core2-dio`**: both SUCCESS, from cf72100's tree before its commit (a "-dirty" version string).
+- **The whole `pio test -e native` hasn't run on S3a's tree.** It is owed before the PR.
+
+Against main de4f52f's CI build:
+- core2 4,523,895 B (+26,488 B: `.flash.text` +17,480 B, `.flash.rodata` +9,008 B); core2-dio 4,523,927 B (+26,488 B);
+- RAM 61,504 B, +16 B, all `.dram0.bss` (36,392 B);
+- `.iram0.text` and `.iram0.vectors` main's (IRAM left 5,157 B), with main's 25 `libc_a-*` objects;
+- `iram_diet` 51 of 51; `cache_guard`, `flash_guard` and `shadow_guard` ok;
+- `ui::Ui` 9,416 B, `CardTasks` 2,824 B and Auto DJ's object 3,864 B, main's sizes; `StatsLists` 44 B and `StatsLists::Ask` 1,600 B (gdb on both ELFs).
 
 **S3a: device runs.** These are console only. The setup:
 - the spare as S2's pass left it (its stats are test data), with silent mode (`z`) after every boot, but in run 3a-7;
@@ -2372,12 +2526,137 @@ A bare `ui` line doesn't wake the screen: it prints the state and returns (`Ui.c
 
 **If 3a-4 fails** (a held snapshot moves a figure that main's doesn't), the fallback must remove what it failed on: a long-lived carve made while the snapshot is held. That is a decoder's open (a track's start, a skip, the gapless next's open, a Play from a shelf's bar) or Auto DJ's join (`Dc`, or "Auto DJ from here" on a shelf's sheet). So the fallback, still under A, frees the snapshot before each of them: `statsRelease()` from the player's open and the join's begin. The page it was on is attached again at 0 rows with Try again, and nothing asks by itself. It is checked by its own run: 3a-4's script with the fallback built, against main, by 3a-4's rule. The per-page hold (freed at each `leave()`, asked at each `enter()`) is not a fallback by itself: a shelf's Play still opens a decoder under it, so it is offered only with a 3a-4 run of its own. The figures and the choice go to the owner.
 
+*As built (S3a, 2026-11-21; MODELLED: 3250036, `StatsRun::page.fallback`).* The fallback is in the heap model at 3,860 and 4,096 B: the snapshot is freed from the model's decoder opens (`carveInto()`: a FLAC's, an Opus's) and the join's begin (`joinNow()`: the `Dc`), and isn't carved again until the next visit. Every build asserts that:
+- every figure (the boot's join and the five updates') is the visits alone's to the byte;
+- the visits' grades are the same;
+- each kept snapshot is freed once, none out of the largest free block, and no ask leaves a trace;
+- the 4,096 B way's frees and holds are the 3,860 B way's.
+
+Its cost is how often a page would lose its lists:
+
+| Build | Snapshots kept | Freed by the fallback (FLAC / Opus / join) | Histories it fired in | A history, mean (most) | Kept to the fence or the end | Points held, mean (A4's) | Held at its step's figure (A4's) |
+|---|---|---|---|---|---|---|---|
+| Suite (13 histories) | 68 | 39 (3 / 0 / 36) | 11 | 3.00 (5) | 29 | 1.19 (3.46) | 32 (68) |
+| Wide (72) | 351 | 192 (28 / 24 / 140) | 70 | 2.67 (6) | 159 | 1.41 (3.44) | 187 (354; 355 at 4,096 B) |
+| Old decoders (13) | 72 | 42 (3 / 0 / 39) | 11 | 3.23 (5) | 30 | 1.18 (3.47) | 33 (72) |
+
+A point is one the model lets a snapshot live through: each decoder's open, the FLAC's end, the `Dc`, each records' save, and the step's figure. Where a `Dc` follows each update (H2-H4, H6-H8, K1, K4, D), every update's snapshot goes at that `Dc`. In the suite a page keeps its lists to the next fence only in the histories with no `Dc`: H1 and H5 lose none, K2 and K3 one each, at a FLAC's open.
+
+**Why A4 moves figures** (traced through the model heap, printed): every lasting move goes through a long-lived carve made while the snapshot is held, which are the carves the fallback frees it before.
+- **3,860 B, D's update 4** (262,132 B against 270,324 B). The snapshot's 3,904 B block comes out of a 10,216 B free block that lies on top of the rejoin's region.
+  - At the `Dc`, with nothing held, that region and the block merge into 364,536 B. With the snapshot there, the merge stops under it at 354,316 B, reported 352,244 B, a class under.
+  - The `Dc` sizes its spacer from the report: 217,024 B against 225,216 B. Its blocks sit 8,192 B lower.
+  - The free block under them, the largest at the figure, is 268,296 B against 276,488 B. That is under its class floor (270,336 B), so it is reported a class less.
+- **3,860 B, the worst wide step** ("opus 2 flac 2 dc 0", update 4: 249,844 B against 270,324 B).
+  - Update 2's FLAC opens before its fence with update 1's snapshot held, and its 6,000 B struct lands 3,908 B higher.
+  - Update 2's visit then sees a largest free block 3,908 B smaller (94,244 B against 98,152 B), its take asks another spacer, and the runs place blocks differently from there.
+  - At update 4's Live, Thumbs' 110,592 B pool lands at the bottom of what is, with nothing held, the largest free block.
+- **4,096 B, the worst wide step of all** ("opus 3 flac 3 dc 1", update 4: 249,844 B against 327,668 B).
+  - The same FLAC shift comes first.
+  - Then update 3's Opus opens with the snapshot held. Its 65,307 B buffer, kept for the session, goes to a 71,688 B free block high in PSRAM; with nothing held it comes out of the 364,536 B largest.
+  - Update 4's build then puts its 64 KB string chunks high, and the largest falls from 334,348 B to 251,892 B.
+- **Old decoders.** 3,860 B moves no figure, and 4,096 B moves 6 of 78. Traced, "opus 3 flac 3 dc 1" moves by 4,096 B through free alone: at the `Dc` free is 4,228 B less, so the margin caps the spacer 4,096 B shorter.
+- **In every trace** the first carve to land elsewhere is the records' save's 11,488 B work memory, in the snapshot's hole and given back in its call. It leaves no lasting difference.
+
+**A top placement** (printed only, not the rule's) is worse. Here the snapshot is carved through the hold as the grades are, under the spacers with caps closing the block above it.
+
+| Way | Suite moved | Suite failing | Wide moved | Wide failing | Old decoders moved | Old decoders failing |
+|---|---|---|---|---|---|---|
+| Top, 3,860 B | 14 of 78 (all under, at most −8,192 B) | 13 of 65 | 42 of 432 (33 under, at most −20,480 B) | 28 of 360 | 15 of 78 | 15 |
+| Top, 4,096 B | 22 of 78 | 15 | 84 of 432 (72 under, at most −86,016 B) | 45 (44 not the control's) | 25 of 78 | 15 |
+
+On the top the snapshot comes out of the largest free block and lowers it at once. In the suite at 3,860 B it landed on the top 13 times, in a hole 63 times, and was refused twice; wide, 31, 379 and 22.
+
 **S3a: effort.** 5-6.5 (a guess; the checkers' round added the played-set-only rank, the heap sort, `phaseOf()`, the Rank lane's waits in the gate and the cap):
 - V1-V3: 1.75-2.25;
 - V4: 1.25-1.75;
 - V5: 0.75-1;
 - the review: 0.25;
 - the device runs: 1-1.25.
+
+**As built (S3a, 2026-11-21)**, on `claude/listening-stats-s3` from main de4f52f. Not pushed, and not yet on a device. The commits, each with its host tests:
+- **V1** 700ce6d `lib/core/StatsRank`, with `tools/statsref.py`'s `totals()`, `days7()` and `played40()`, three new rank scenarios and `stats/rank.json`.
+- **V2** b07da2a `lib/core/StatsMap`.
+- **V3** f7cd731 `lib/core/StatsVisit` and `StatsFold`'s two getters; 9f8c224, the check's fixes.
+- **V4** dbd3283 `ScanScheduler::yieldNow()`; 443b755, the u40 set's one-way error said to hold only while the set lost no hash; 47543bb, the firmware (`src/app/StatsLists`, `ListeningStats`, `CardTasks`, `PlayHistory`, `main.cpp`); 6ea01b0, the two checkers' fixes.
+- **V5** 09ac8dd, the heap model's S3 half; fc5bf26, the check's fixes; 3250036, the 3a-4 fallback in the model, A4's moves traced, and a top placement for comparison.
+- **V6** 93d38f6 "Code: what the review found"; cf72100, the check of its fixes.
+- **V7** these docs: ARCHITECTURE's Listening stats bullet and diagram, the README's console table and Layout, and this plan's "As built" notes (section 1, 4.4, 6.5, 6.8, 7.10, 9.3, 9.7, 11, 13).
+
+The tables' and the API's departures are in the notes beside them: the snapshot, the grades, the fit, the API, the phase, `.bss`, the snapshot's life, the lit hold, the tests, Done when, and "If 3a-4 fails". The rest, by commit:
+
+**V1:**
+- DAYS is read before RCNT, and both are read with the clock unset too (6.8's "As built").
+- `Report::recordRows` counts the records' rows read: TRKD's, RCNT's and DAYS'. `Report::daysRows` counts DAYS'.
+- Each day's field saturates at its DAYS row's width, as a save's ⊕ does: plays at 65,535, Auto DJ's plays and skips at 255, listenedMs at a u32's top. `statsrank::Day` is 12 B in the report (84 B for the 7 days), packed to 10 B (70 B) in the snapshot.
+- `Played40::at(i)` is the 40-bit key.
+
+**V2:**
+- `seal()` sifts by hand over the chunked rows; they have no random-access iterator for `std::make_heap`. Its sift-down stops at the held row's place, where libstdc++'s goes on to a leaf and back up. After the dedup the sealed set equals the insertion sort's byte for byte.
+- `Wanted::region()` and `bytesFor()` sit beside `rowsCap`.
+- A `begin(index, nullptr, ...)` overload: an untyped null was ambiguous between the two sets.
+- On the host, 696 rows take 279 µs against the insertion sort's 2,476 µs.
+
+**V3:**
+- `write(ranker, wanted, report, ctx, snap, bytes)`. A `statsvisit::Context` carries what isn't the rank's: the key, the albums, the ask's time, `sinceDay`, the grade, Most played's window (a re-ask passes the held one's), the version and the live round. `bytes` is the carved block's, and `write()` refuses, writing nothing, when `bytesFor(albums)` is more.
+- `notPlayed(map, index, snap)` checks the index against the map and the snapshot's key. `albumAt(k)` gives the album's place in `albumsAZ()`, not its id: the page maps it.
+- `layout(grade, head, rows, foldersBytes, albums, dated)`.
+- `Fold::sinceDayNow(nowMs = 0)`. With the board's clock it is the day the first save would set (the earliest dated play's, at most today, else today). Without, it is HEAD's sinceDay, else the earliest dated play's day.
+
+**V4:**
+- `sizeof(StatsLists::Ask)` is 1,600 B (the grades' note).
+- `CardTasks` hands over `yieldNow()` after the turn's pass. This pass's input reaches the turn through `Gates::input`, so a tap's or a console line's own pass never takes. The lane's other waits arrive a pass late, and a take they catch is given back the next pass. `yieldNow()` is `List` while `listHolds()`, else `yieldOf()`: not Step, Updating or Battery.
+- **A visit's u40 set that lost a hash** to its room lands with the grade written Lists (no Not played yet). The lean ask's ends `Room` (No room).
+- **A library index changed** before the walk, or under it, puts the ask back to be asked again over the new one. After three re-asks it ends Cancelled.
+- **A Full visit whose `notPlayed()` is refused** (the snapshot's key not the index's) still writes grade Full, with no bits; its landing's note says why. S3b keys Not played yet on `hasNotPlayed()`, not on `grade() == Full`.
+- **The carve's line** says whether the snapshot came out of the largest free block by a heap walk (`statshold::largestFree()`: that block's own range before the carve), beside the reported class floors.
+- **The fence's `[lib]` line** counts the snapshot's bytes, and main.cpp's `alsoFreed` adds `statsHeldBytes()`.
+- **Each change of the pages' phase** says a line: "[listen] the stats pages' phase: <phase> (version N, at T ms): …".
+- **The image** was 24,432 B over main's after V4 (6ea01b0, V1-V4); Done when's note has the final figure.
+
+**V5:**
+- The model's head is 1,600 B (`kS3AskHead`, since V6 `statsvisit::kAskHeadBytes`).
+- **The yardstick's library** (`synth::userShape(19412)`) has 2,562 folders and 1,785 albums, so its snapshot is 3,872 B, not the spare's 2,478 folders and 1,706 albums. Full and Lean are 848 B over the spare's column with the same rows: 140,224 and 131,872 B at P = 19,478. The reduced room uses the spare's parts.
+- **A4's steps** include the visit's take (`Hu`'s ask), as run 3a-4 does. A snapshot is also carved after the boot's join and held to update 0's fence. The S3 asks come right after each Live and rejoin.
+- `StatsRun::Page{bytes, Carve::Plain}` is A4's; `Carve::None` is `Hv`'s.
+
+**A4 in the model** (MODELLED; V5, with 3250036's counts):
+- **The step rule.** The held snapshot passes it at 512, 3,860 and 4,096 B. In the suite 0 of 65 steps fail (the control 0); wide, 0 of 360 (the control 2); with the old decoders, 0 of 65 (the control 2). It never comes out of the largest free block.
+- **The figures.** It moves figures the visits alone don't, out of the boot's join and five updates each history:
+
+  | Snapshot | Suite (78) | Wide (432) | Old decoders (78) |
+  |---|---|---|---|
+  | 512 B | 2, both over | 15: 2 under (at most −20,480 B), 13 over | 0 |
+  | 3,860 B | 1: D's update 4, 262,132 B against 270,324 B | 12: 3 under (at most −20,480 B), 9 over | 0 |
+  | 4,096 B | 3, each −8,192 B | 24: 12 under (at most −77,824 B), 12 over | 6 |
+
+- **The baseline.** The visits alone, with nothing held, give the rework's figures to the byte in all 13 named histories and all 72 wide.
+- **The prediction.** By run 3a-4's rule (main's to the byte) the model predicts the run fails where a decoder opens or a `Dc` joins while a snapshot is held. The fallback gives the visits alone's figures everywhere ("If 3a-4 fails", "As built").
+
+**The review** (V6, 93d38f6: six lenses, 13 findings, each checked; none rejected, 12 fixed in code, one recorded here):
+1. **A row's time, and the phase after a give-back**: a docs finding, recorded in the snapshot's and the phase's notes.
+2. **A re-ask's `write()` over a served snapshot** unserved it with no version move. Now the version moves there (the API's note).
+3. **The 30 s worker give-up** took the block again in the same pass: take, 30 s queued, give up, take, the block held nearly all the time.
+   - Now the give-up sets `kStalled`, and the visit is held in Asked 30 s more, holding nothing, then taken again. There is no count and no end.
+   - Its lines: the put-back's "…: taken again 30 s from now", the waits' "the card worker (no step of this ask's in 30 s: taken again 30 s after)", and the take's "the card worker's give-up".
+   - `kStalled` is cleared at the take, at a new ask, at the fence's re-ask and by an S2 command.
+   - `CardWorker::mayStart()` (the task there, or its spawn due after `kRetryMs`, 5 s) lets `StatsLists::start()` skip the records' copy and the opens while a spawn was refused.
+4. **A page's ask behind a console ask** no longer clears the outcome, so a console ask stopped on the card worker keeps its result dropped.
+5. **The orderly end** frees the snapshot with no plays pending too (`PlayHistory::flush()` calls `StatsLists::ending(0)`).
+6. **`sayTake()`**: every take that ends without landing says its figures (the lit hold's note).
+7. **The take line's turn time** leaves out its own console lines: "(stats.bin's directory N us; its lines' N us left out)".
+8. **`Hk`** is paced by the TX buffer's room (9.3's note). `Serial.availableForWrite()` gives at most 1,016 B for the 2 KB ring. The parts are 1-3 the header, 4-9 the lists, 10 Not played yet's albums.
+9. **`statsvisit::kAskHeadBytes`**, with a `static_assert(sizeof(Ask) == …)` in `StatsLists::begin()` (`Ask` is private), read by the model, which asserts the 1,600 B its pins assume. The table's "moves byte for byte" is now held at build time.
+10. **A held snapshot through the memory check** (the tests' note).
+11. **The landing's "not counted" note** no longer blames a short set for a refused `notPlayed()`.
+12. **`kFake` only when `Hu`'s ask carved the snapshot.** `Hu` over a page's snapshot leaves it the page's (`Hu0`: "isn't Hu's: kept"). A page's visit over `Hu`'s takes it over, and the fence doesn't ask `Hu` again for it.
+13. **The key check's comments.** `write()`'s short-block refusal and `finishVisit()`'s NoRoom are backstops: `turnVisit()` carves a short snapshot again, `finishVisit()` checks the albums, and `StatsLists::loop()` checks the key.
+
+**The check of the fixes** (cf72100) found two things, both fixed:
+- **A blocker: finding 3's fix livelocked.** `PlayHistory::loop()` calls `lists.loop()` before the turn with the same `nowMs`. In the pass where the stall's 30 s ran out, `loop()` moved the wait's start to that pass, and the turn's gate then held the ask again, for good. Now the start stays the give-up's until the take. The rules moved to `lib/core/StatsVisit.h` (`kStallMs`, `stallHolds()`, `waitStartMoves()`), host-tested (the tests' note).
+- **A nit.** `freeSnap()` returns its line's µs, so a short snapshot's re-carve line is left out of the take's turn time too.
+
+The stall has had no device run: it needs a card worker that takes no step for 30 s.
 
 **S3b: the screens** (C16-C23 as changed):
 
@@ -2603,6 +2882,12 @@ Re-measure every line marked with a run.
 | Worker time | The rank lit at priority 0: unmeasured (dark 0.70-1.02 s: 9.6). The DAYS pass adds at most 6,400 B to the read | GUESS | Run 3a-1 |
 | Strings | 86 ids; 675 texts owed in nine languages, plus 18 short forms: 693 (8.2) | READ | `gen_ui_strings --report` |
 
+*As built (S3a, 2026-11-21; 9.7's "As built (S3a)"):*
+- **PSRAM, transient:** the head is 1,600 B, so each ask is 112 B more. Full is 130,800 B (139,376 B), Lists 81,472 B, Lists without a clock 34,736 B, the lean ask 122,448 B (131,024 B), and No folders 109,856 B (118,432 B). READ from `statsvisit::layout()` with `sizeof(Ask)` (gdb).
+- **Internal RAM:** 16 B of `.dram0.bss` over main's (`StatsLists` 24 to 44 B). MEASURED at the gate; run 3a-7 is still owed.
+- **Loop time:** V2's heap sort takes 279 µs for 696 rows on the host, against the insertion sort's 2,476 µs. The device's pieces are run 3a-2's.
+- **Flash:** 26,488 B over main de4f52f's build.
+
 A slow pass is a UI hitch, not an audio risk: the sinks draw on a ring of about 1.5 s (`docs/ARCHITECTURE.md:83`).
 
 **S0 baselines** (MEASURED-HOST, 2026-11-11, on this Windows box). The tree was cad1449: main 241642d's code with C0-C2's docs. Main since bc29b54 changed only `tools/version.py` (#58, NEXT_RELEASE 0.15.0) and docs, so this is bc29b54's firmware with the next version's string. Every later stage compares against these.
@@ -2707,8 +2992,8 @@ What would change the plan:
 - **The held snapshot** (call 1). A plain 3.9-4 KB PSRAM block held for minutes, across decoder opens and the dark's edge. The precedent is FilteredAlbums' 6.8 KB block on Albums, whose device record is one `D` before and after its carve, with no control run (`docs/MOOD-FILTERS.md:1051`). 5.14 shows the model missed a resident block's 81,920 B on the device, so the model's A4 is a pre-check and run 3a-4 decides, to the byte: the B and C lines would have passed that very case. If it fails, the fallback that frees the snapshot before any decoder opens or join begins (9.7), its own run against main, and the owner.
 - **Changes to S2's checked core:** the RCNT-first order, the u40 set, the reused regions, the DAYS pass and the copy-out by index. They are guarded by statsref's equality on every fixture, the u40-against-u64 test, the overlay pattern test and `Hw`'s count on the device (run 3a-3).
 - **The u40 error.** At worst about 1e-4 wrongly hidden albums a walk, deterministic until the played set changes. It never shows a played album, and a host test pins it.
-- **Margins that rest on estimates.** Full at P = 19,478 has 4,504 B to spare at the device's worst after-update point (286,708 B) with the snapshot elsewhere, and is 3,440 B short with the snapshot carved out of that block. Both are within one class of the line, where the rule's floors can't call it (9.7's fit). They rest on T (about 5.4 KB, which varies), the head's 1,488 B (ESTIMATED) and where the snapshot lands. Past it, the visit takes Lists, and Not played yet's Try again makes its lean ask (4,912 B to spare, near the line too).
-- **The seal's loop time.** S2's `Wanted::seal()` is an insertion sort on the loop, never timed (ESTIMATED tens of ms at 696 rows). V2 makes it a heap sort, and run 3a-2 holds `finishRank()` under 35 ms.
+- **Margins that rest on estimates.** Full at P = 19,478 has 4,504 B to spare at the device's worst after-update point (286,708 B) with the snapshot elsewhere, and is 3,440 B short with the snapshot carved out of that block. Both are within one class of the line, where the rule's floors can't call it (9.7's fit). They rest on T (about 5.4 KB, which varies), the head's 1,488 B (ESTIMATED) and where the snapshot lands. Past it, the visit takes Lists, and Not played yet's Try again makes its lean ask (4,912 B to spare, near the line too). *As built (S3a, MODELLED; 9.7's fit):* the head is 1,600 B. In the model's 286,708 B heap, Full at P = 19,478 is taken either way (+6,205 / +2,109 B), so a page there never reaches the lean ask. `Hn`'s lean ask is taken either way too (+14,397 / +10,301 B). Run 3a-3 decides.
+- **The seal's loop time.** S2's `Wanted::seal()` is an insertion sort on the loop, never timed (ESTIMATED tens of ms at 696 rows). V2 makes it a heap sort, and run 3a-2 holds `finishRank()` under 35 ms. *As built:* 279 µs for 696 rows on the host, against the insertion sort's 2,476 µs (MEASURED-HOST).
 - **Opus cards.** Opus's buffers (128,023 B) stay held while the take still asks a whole decoder's room (`StatsGlue.h:232`). If run 3a-3 shows frequent refusals with an Opus kept, "a decoder's room by what's held" goes to the owner.
 - **The turn's loop work** (`lookFile()`, the two opens, `finishRank()`, `resolve()`) runs outside `Ui::loop`, unseen by `[ui] slow pass`. A touch that lands meanwhile waits for it. Run 3a-2 holds each under 35 ms.
 - **Remounts.** A remount while the card worker is busy restarts the board (`src/main.cpp:3274-3290`). Each UI ask's rank, about 1 s on the worker, raises the overlap's odds slightly.
