@@ -36,7 +36,8 @@
 //   3 s, nothing counted), the boot's scan (Working however long), the
 //   read faults (Unread, and nothing else Unread), the refusals (NoRoom),
 //   the cap (Capped), the card (NoCard, and an ask it cancelled NoCard
-//   until the next), the stats off (Idle).
+//   until the next), the stats off (Idle); landed: Ready only while its
+//   snapshot is served, Idle once it is freed.
 // Run: pio test -e native -f test_stats_visit
 #include <unity.h>
 
@@ -1150,8 +1151,10 @@ void test_phase_of() {
   using W = ScanScheduler::Wait;
   using O = sv::Outcome;
   using P = sv::Phase;
-  auto ph = [](uint8_t why, O o, W w, uint32_t ms, bool capped) {
-    return static_cast<int>(sv::phaseOf(why, o, w, ms, capped));
+  // (`served`: the landed snapshot still held, snapshot() non-null; it
+  // matters to Ok alone, below.)
+  auto ph = [](uint8_t why, O o, W w, uint32_t ms, bool capped, bool served = true) {
+    return static_cast<int>(sv::phaseOf(why, o, w, ms, capped, served));
   };
   const int working = static_cast<int>(P::Working), waiting = static_cast<int>(P::Waiting);
   // Under way, nothing holding it: Working, however long it ranks or walks.
@@ -1201,9 +1204,34 @@ void test_phase_of() {
         TEST_ASSERT_EQUAL_INT(static_cast<int>(P::NoCard), ph(why, O::CardAway, static_cast<W>(w), 9000, capped));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Idle), ph(1, O::CardAway, W::None, 0, false));
   TEST_ASSERT_EQUAL_STRING("card away", sv::outcomeName(O::CardAway));
-  // Landed: Ready (its holds done; the gates are for an ask in Asked).
+  // Landed: Ready (its holds done; the gates are for an ask in Asked),
+  // while its snapshot is served. Freed since (release(), a console ask's
+  // own, the key's free after a remount, Hu0): Idle, never Ready with
+  // snapshot() null (V4's check: a page read Ready over no lists).
   TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Ready), ph(0, O::Ok, W::None, 0, false));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Ready), ph(8, O::Ok, W::Input, 5000, false));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Idle), ph(0, O::Ok, W::None, 0, false, false));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Idle), ph(8, O::Ok, W::Input, 5000, false, false));
+  // ... and the card's or the stats off's word over it, served or not.
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(P::NoCard), ph(16, O::Ok, W::None, 0, false, false));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(P::NoCard), ph(0, O::CardAway, W::None, 0, false, false));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Idle), ph(1, O::Ok, W::None, 0, false, true));
+  // `served` changes nothing but a landing's Ready: every other input
+  // gives the same phase either way.
+  for (int why = 0; why < 128; ++why)
+    for (int o = 0; o <= static_cast<int>(O::CardAway); ++o)
+      for (int w = 0; w < ScanScheduler::kWaits; ++w)
+        for (uint32_t ms : {0u, 3000u})
+          for (bool capped : {false, true}) {
+            const int a = ph(static_cast<uint8_t>(why), static_cast<O>(o), static_cast<W>(w), ms, capped, true);
+            const int b = ph(static_cast<uint8_t>(why), static_cast<O>(o), static_cast<W>(w), ms, capped, false);
+            if (a == static_cast<int>(P::Ready)) {
+              TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Idle), b);
+            } else {
+              TEST_ASSERT_EQUAL_INT(a, b);
+              TEST_ASSERT_TRUE(b != static_cast<int>(P::Ready));
+            }
+          }
   // Every grade refused (NoRoom, NoBlock, the rank's Room): NoRoom.
   for (O o : {O::NoRoom, O::NoBlock, O::Room}) {
     TEST_ASSERT_EQUAL_INT(static_cast<int>(P::NoRoom), ph(0, o, W::None, 0, false));

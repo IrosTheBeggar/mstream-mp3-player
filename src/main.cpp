@@ -3556,9 +3556,11 @@ static void leaveFence() {
 // moves (the write holds the loop that draws its frames). Never while the
 // card is held for the guard's restart, nor (PlayHistory's own look at the
 // guard) while it is out of the slot or refuses every write: the plays
-// wait for the remount, or the end's flush.
-static void stepPlays(uint32_t now) {
+// wait for the remount, or the end's flush. `input`: this pass's (the
+// listening stats' visit asks take no turn in it: StatsLists).
+static void stepPlays(uint32_t now, bool input) {
   PlayHistory::Look look;
+  look.input = input;
   look.state = player.state();
   look.positionMs = audio.positionMs();
   look.positionKnown = audio.positionKnown();
@@ -4177,7 +4179,7 @@ void loop() {
   stepAutoDj(now);
   stepStatsMap(now, anyInput);
   if (!cardHeld) queueStore.loop(now);
-  stepPlays(now);
+  stepPlays(now, anyInput);
   // What a track's length is, once the backend knows it (read from the
   // file; or its estimate 20 s in, exact for a constant bitrate): the
   // Queue's "49 min"; once per entry (each change redoes the Queue's sum).

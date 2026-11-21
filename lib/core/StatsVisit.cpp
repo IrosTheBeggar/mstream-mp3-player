@@ -473,7 +473,7 @@ Outcome outcomeOf(sr::Outcome o) {
   return Outcome::Io;
 }
 
-Phase phaseOf(uint8_t why, Outcome outcome, ScanScheduler::Wait wait, uint32_t waitedMs, bool capped) {
+Phase phaseOf(uint8_t why, Outcome outcome, ScanScheduler::Wait wait, uint32_t waitedMs, bool capped, bool served) {
   if (why & kWhyOff) return Phase::Idle;
   // The card away or held: the ask cancelled, the snapshot freed (9.7);
   // an ask it ended stays No card until the next, the page offering Try
@@ -481,7 +481,7 @@ Phase phaseOf(uint8_t why, Outcome outcome, ScanScheduler::Wait wait, uint32_t w
   if (why & kWhyCard) return Phase::NoCard;
   switch (outcome) {
     case Outcome::CardAway: return Phase::NoCard;
-    case Outcome::Ok: return Phase::Ready;
+    case Outcome::Ok: return served ? Phase::Ready : Phase::Idle;  // (no Ready over no lists)
     case Outcome::NoRoom:
     case Outcome::NoBlock:
     case Outcome::Room: return Phase::NoRoom;  // every grade refused

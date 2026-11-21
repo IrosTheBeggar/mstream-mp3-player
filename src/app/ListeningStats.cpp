@@ -115,6 +115,23 @@ bool walkStep(walker_heap_into_t heap, walker_block_info_t b, void* user) {
   return static_cast<autodj::WalkAbove*>(user)->step(heap.start, reinterpret_cast<uintptr_t>(b.ptr), b.size, b.used);
 }
 
+// PSRAM's largest free block by a heap walk (statshold::largestFree()): its
+// TLSF block's address and size, as walkStep() reads them (the same lock,
+// the same rules: words compared and copied, nothing else). Every block
+// visited: heap_caps_get_largest_free_block() walks them all too.
+struct LargestFree {
+  uintptr_t at = 0;
+  size_t bytes = 0;
+};
+bool largestStep(walker_heap_into_t, walker_block_info_t b, void* user) {
+  LargestFree& l = *static_cast<LargestFree*>(user);
+  if (!b.used && b.size > l.bytes) {
+    l.bytes = b.size;
+    l.at = reinterpret_cast<uintptr_t>(b.ptr);
+  }
+  return true;
+}
+
 void psramAbove(const void* block, const void* spacer, autodj::Above* out) {
   autodj::WalkAbove w(block, spacer, kPoisonHead, kWalkVisits, out);
   const int64_t t0 = esp_timer_get_time();
@@ -479,6 +496,12 @@ bool away() {
 
 void* statshold::take(size_t bytes, autodj::CloseReport* r) { return listsTake(bytes, r); }
 void statshold::give(void* p) { listsGive(p); }
+size_t statshold::largestFree(uintptr_t* at) {
+  LargestFree l;
+  heap_caps_walk(MALLOC_CAP_SPIRAM, largestStep, &l);
+  *at = l.at;
+  return l.bytes;
+}
 
 playlog::Folds* ListeningStats::begin(tagstore::Fs& fs, const cardroot::Root& root) {
   fs_ = &fs;

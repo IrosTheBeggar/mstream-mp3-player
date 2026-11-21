@@ -87,6 +87,10 @@ public:
     // The UI up and lit (CardTasks' covers): the stats pages' asks' lines
     // (lit at the take).
     bool lit = false;
+    // Input this pass (main.cpp's anyInput: a touch, a console line): the
+    // stats pages' asks take no turn in it (StatsLists::Gates::input; the
+    // Rank lane's Input wait reaches StatsLists only after this pass's turn).
+    bool input = false;
   };
   void loop(const Look& look, const playlog::WriteGate::In& gate, bool cardHeld);
 

@@ -261,11 +261,13 @@ constexpr uint32_t kWaitingMs = 3000;  // held this long by a wait: Waiting
 // The phase of an ask made (Asked, under way, or ended with `outcome`; with
 // none made the page's phase is Idle, the caller's). `why`: the gate's bits
 // holding it; `wait`: the Rank lane's; `waitedMs`: how long a wait has held
-// it; `capped`: the lit cap reached (cap on). In order:
+// it; `capped`: the lit cap reached (cap on); `served`: the landed snapshot
+// still held (StatsLists::snapshot() non-null). In order:
 //   the stats off (1): Idle; the card away or held (16), or an ask it
 //   ended (CardAway): NoCard;
-//   landed: Ready; NoRoom, NoBlock or Room: NoRoom; Io, Changed, Damaged,
-//   Base: Unread (nothing else);
+//   landed: Ready while its snapshot is served, else Idle (freed since:
+//   release(), a console ask's own, a remount's key, Hu0); NoRoom, NoBlock
+//   or Room: NoRoom; Io, Changed, Damaged, Base: Unread (nothing else);
 //   the cap: Capped; Cancelled: Idle;
 //   the boot's scan (2): Working, however long (4.4's Folding, "Counting
 //   plays…"; S2 gives it before every later gate);
@@ -277,6 +279,6 @@ constexpr uint32_t kWaitingMs = 3000;  // held this long by a wait: Waiting
 // from kWaitingMs, as 9.7's V3 bullet and its tests have it, so a tap's
 // 0.5 s wait doesn't flash "Waiting for the card…" (the API's phase list
 // says Waiting at once; 4.4's Waiting is "held past 3 s").
-Phase phaseOf(uint8_t why, Outcome outcome, ScanScheduler::Wait wait, uint32_t waitedMs, bool capped);
+Phase phaseOf(uint8_t why, Outcome outcome, ScanScheduler::Wait wait, uint32_t waitedMs, bool capped, bool served);
 
 }  // namespace statsvisit

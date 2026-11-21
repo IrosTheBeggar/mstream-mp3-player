@@ -209,6 +209,7 @@ void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, boo
   StatsLists& lists = stats_.lists();
   StatsLists::Gates lg = listsGates(gate.nowMs, cardHeld);
   lg.lit = look.lit;
+  lg.input = look.input;  // (the turn below: none in a pass with input, for S3a's asks)
   lists.loop(lg);
   tracker_->tick(look.state, look.positionMs, look.positionKnown, look.positionKnown ? look.durationMs : 0);
   // The stats' look at this pass: the update step's safe point (a boot's

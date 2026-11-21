@@ -78,7 +78,9 @@
 //   1. asked; before its turn it waits for S2's gates and the Rank lane's
 //      own waits (a lit list moving, input in the last 0.5 s, the ring,
 //      an underrun, a long decode pass, a track change, a seek, Bluetooth:
-//      ScanScheduler::yieldNow(), CardTasks' word each pass, rankWait()),
+//      ScanScheduler::yieldNow(), CardTasks' word each pass, rankWait();
+//      and this pass's input, Gates::input, which CardTasks' word only has
+//      after the turn: a tap's or a console line's own pass never takes),
 //      holding nothing: phaseOf()'s Working, then Waiting from 3 s. With
 //      the card away or held it is dropped (NoCard) and the snapshot freed;
 //   2. at the turn: a visit's snapshot carved first (psramAlloc, if none is
@@ -107,15 +109,25 @@
 //      (Capped, no re-ask).
 // listsHold() stays the ask's block alone (holds()): a held snapshot holds
 // neither Auto DJ's join nor a library update. The fence frees it (drop(),
-// its bytes in the fence's line and in the memory check's alsoFreed).
+// its bytes in the fence's line and in the memory check's alsoFreed). The
+// frees with no ask under way give the pages their phase (9.7's "Phase from
+// why"): the card's and a remount's key No card (Try again once it is
+// back), the stats off Idle; and every free moves the version (news()).
+// Each phase change is said on the console (a [listen] line: the device
+// runs read it).
 // Loop task, but for the worker's step (its own ask's fields, published by
 // state_).
 // The top of PSRAM's hold for an ask's block (app/ListeningStats.cpp:
 // autodj::TopHold over the heap, the boot hold's): take a block (the
-// decoder's room asked; null: no room, `r` says why), give it back.
+// decoder's room asked; null: no room, `r` says why), give it back. And
+// PSRAM's largest free block as a heap walk finds it (its TLSF block's
+// address and bytes, the poisoning in: not the class floor that
+// heap_caps_get_largest_free_block() reports; 0: none), for a visit's
+// snapshot's line (whether its carve came out of it: run 3a-3).
 namespace statshold {
 void* take(size_t bytes, autodj::CloseReport* r);
 void give(void* p);
+size_t largestFree(uintptr_t* at);
 }  // namespace statshold
 
 class StatsLists {
@@ -137,7 +149,11 @@ public:
     bool listMoving = false;
     uint64_t playingHash = 0;             // the open play's path hash (Hp; 0: none)
     bool lit = false;                     // the UI up and lit (CardTasks' covers): a visit's walk's pace, its lines
-    bool input = false;                   // input this pass: a visit's walk skips it while lit (or capped)
+    // Input this pass (main.cpp's anyInput: a touch, a console line): a
+    // visit's walk skips it while lit (or capped), and an S3a ask takes no
+    // turn in it (the Rank lane's Input wait, which CardTasks hands over
+    // only after this pass's turn: rankWait()).
+    bool input = false;
   };
 
   // The console's H's letters r, l, w, p, and S3a's v, n, u, k, c (the text
@@ -159,10 +175,14 @@ public:
   void cancel();
   // cancel(), and the snapshot freed (`why`: its [listen] line's words).
   void release(const char* why);
+  // The pages' phase (statsvisit::phaseOf(): Ready only while snapshot()
+  // serves one; a free with no ask under way gives No card for the card or
+  // a remount's key, Idle for the stats off).
   Phase phase() const;
   uint8_t why() const { return why_; }  // S2's gate bits holding the ask (statsvisit::kWhy...)
   Outcome outcome() const { return outcome_; }
-  uint16_t version() const { return version_; }  // +1 at each phase change and each landing
+  // +1 at each phase change, each landing and each free of the snapshot.
+  uint16_t version() const { return version_; }
   bool news();  // the version moved since the UI last asked
   // The held snapshot once the visit's ask has landed (resolved); else null.
   const statsvisit::Snapshot* snapshot() const {
@@ -195,7 +215,8 @@ public:
   void workerAhead(bool ahead) { workerAhead_ = ahead; }
   // S3a: the Rank lane's own wait this pass (ScanScheduler::yieldNow()): a
   // visit's ask takes no block while it isn't None, and one queued gives its
-  // block back (each pass, CardTasks' word, as workerAhead()).
+  // block back (each pass, CardTasks' word, as workerAhead(); after the
+  // turn's pass, so the turn reads Gates::input too).
   void rankWait(ScanScheduler::Wait w) { rankWait_ = static_cast<uint8_t>(w); }
   // A rank's priority: `p` (ScanScheduler's), or 1 for a visit's ask under
   // the lit cap (it ranks as dark), at the hand-off and while it runs.
@@ -238,10 +259,11 @@ private:
   // flags_: the ask is the UI's; forced (Hv1: Lists; Hn1: No folders); the
   // snapshot is Hu's (the console's held fake visit: kept as a page keeps
   // it, carved again after a fence); the lit cap on (Hc1); the visit
-  // capped; this ask carved the snapshot; Hk owed (printed at the next
-  // loop(), with the index); the ask is Hu's.
-  static constexpr uint8_t kFromUi = 1, kForced = 2, kFake = 4, kCapOn = 8, kCapped = 16, kCarved = 32,
-                           kShowSnap = 64, kHu = 128;
+  // capped; this ask carved the snapshot; the ask is Hu's.
+  static constexpr uint8_t kFromUi = 1, kForced = 2, kFake = 4, kCapOn = 8, kCapped = 16, kCarved = 32, kHu = 128;
+  // Hk's rows a pass (hkPart_): the loop's 2 KB TX buffer about full each
+  // pass, not 35 KB in one (about 3 s of the loop held).
+  static constexpr uint8_t kHkRows = 16;
   struct Ask;  // the block's head (StatsLists.cpp)
   static void entry(void* self);
   bool prepare();
@@ -256,6 +278,13 @@ private:
   // S3a's.
   bool visiting() const { return kind_ == kVisit || kind_ == kLean; }
   uint8_t gateOf(const Gates& g) const;  // S2's gate bits holding an ask in Asked (0: none)
+  // The Rank lane's wait this pass: CardTasks' word, or Input for this
+  // pass's input (Gates::input), which its word has only after the turn.
+  ScanScheduler::Wait laneWait(const Gates& g) const;
+  Phase phaseAt(uint32_t nowMs, ScanScheduler::Wait lane) const;
+  // The pages' phase changed (`p`): its line (`heldMs`: an ask in Asked,
+  // how long its waits held it to this pass).
+  void sayPhase(Phase p, uint32_t nowMs, ScanScheduler::Wait lane, uint32_t heldMs) const;
   void beginAsk(Kind k, uint8_t flags, uint32_t nowMs);
   void turnVisit(const Gates& g);
   void finishVisit(const Gates& g);
@@ -269,7 +298,10 @@ private:
   void capVisit();                                  // ... at the lit cap: Capped, no ask by itself
   void stop(Outcome o, const char* why);            // the ask under way stopped (cancel(), the card, the stats off)
   void freeSnap(const char* why);
-  void printSnapshot(const Gates& g, const char* who, bool rows);
+  // The held snapshot's header as a page reads it (Hk's first part, a
+  // console visit's landing): true, written (its rows may follow).
+  bool printSnapshot(const Gates& g, const char* who);
+  void stepHk(const Gates& g);  // Hk's next part (hkPart_), at loop()
 
   statsglue::Glue* glue_ = nullptr;
   tagstore::Fs* fs_ = nullptr;
@@ -298,4 +330,9 @@ private:
   uint8_t flags_ = 0;         // k... above
   uint8_t rankWait_ = 0;      // ScanScheduler::Wait, CardTasks' word (rankWait())
   uint8_t pastCap_ = 0;       // visits whose holds passed kLitCapMs this session (saturating)
+  // Hk owed, a part a pass: 0 none; 1 the header; 2-7 a list's rows
+  // (kHkRows a pass, from hkRow_); 8 Not played yet's first albums. (Both
+  // in the object's tail padding: no .bss.)
+  uint8_t hkPart_ = 0;
+  uint8_t hkRow_ = 0;
 };
