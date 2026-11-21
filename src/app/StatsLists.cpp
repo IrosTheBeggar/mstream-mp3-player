@@ -16,7 +16,6 @@
 #include "WallClock.h"
 #include "app/BoardClock.h"
 #include "app/ListeningStats.h"
-#include "app/Psram.h"
 
 namespace {
 
@@ -43,9 +42,10 @@ constexpr size_t kAlign = 16;
 
 // S3a (docs/LISTENING-STATS.md 9.7, "The lit hold", the owner's default (a)):
 // the lit cap's default (Hc0/Hc1 change it for the session, RAM) and the
-// visit's summed hold it is set against. Off until run 3a-1 has measured the
-// lit holds with it off and on.
-constexpr bool kLitCap = false;
+// visit's summed hold it is set against. On: run 3a-1 measured every lit
+// Full and Lists visit with it off holding its block past 3 s (up to
+// 6,104 ms a take), and under 2.4 s with it on; the owner's "Cap on".
+constexpr bool kLitCap = true;
 constexpr uint32_t kLitCapMs = 3000;
 // A visit's walk while lit (7.10): 100 tracks a slice, up to 4 ms a pass;
 // dark (or capped) S2's: 250 tracks, up to kWalkPassUs.
@@ -137,7 +137,8 @@ const char* gateName(uint8_t why) {
          : why == sv::kWhyUpdate ? "the library update (or the index isn't readable)"
          : why == sv::kWhyCard   ? "the card (away, or held)"
          : why == sv::kWhyJoin   ? "Auto DJ's join (working, or due)"
-                                 : "the card worker's walk or compaction (a rank comes after them)";
+         : why == sv::kWhyWorker ? "the card worker's walk or compaction (a rank comes after them)"
+                                 : "the card worker's tag scan (its memory held)";
 }
 
 // The waits an ask met before its take: S2's gate bits and the Rank lane's
@@ -146,10 +147,12 @@ const char* gateName(uint8_t why) {
 void waitsText(uint8_t gates, uint16_t lane, bool stalled, char* out, size_t cap) {
   size_t n = 0;
   out[0] = 0;
-  static constexpr uint8_t kShort[] = {sv::kWhyBoot, sv::kWhyTmp, sv::kWhyUpdate, sv::kWhyCard, sv::kWhyJoin,
-                                       sv::kWhyWorker};
-  static constexpr const char* kShortName[] = {"the boot's scan", "a save's tmp",   "the library update",
-                                               "the card",        "Auto DJ's join", "the card worker's walk"};
+  static constexpr uint8_t kShort[] = {sv::kWhyBoot, sv::kWhyTmp,    sv::kWhyUpdate, sv::kWhyCard,
+                                       sv::kWhyJoin, sv::kWhyWorker, sv::kWhyRest};
+  static constexpr const char* kShortName[] = {"the boot's scan", "a save's tmp",           "the library update",
+                                               "the card",        "Auto DJ's join",         "the card worker's walk",
+                                               "the card worker's tag scan"};
+  static_assert(sizeof(kShort) == sizeof(kShortName) / sizeof(kShortName[0]), "a name a gate bit");
   for (size_t i = 0; i < sizeof(kShort); ++i) {
     if (!(gates & kShort[i]) || n + 2 >= cap) continue;
     const char* what = stalled && kShort[i] == sv::kWhyWorker ? "the card worker's give-up" : kShortName[i];
@@ -277,6 +280,9 @@ void StatsLists::begin(sg::Glue* glue, tagstore::Fs* fs) {
   // byte, so the model's constant and its pinned grades move with it.
   static_assert(sizeof(Ask) == sv::kAskHeadBytes,
                 "StatsLists::Ask changed: statsvisit::kAskHeadBytes and test/test_autodj_join's pinned S3 grades");
+  // The object (internal RAM's .bss): S3a's 32 B over S2's at most (9.7);
+  // the tag scan's gate a bit beside the walk's (ahead_), no byte more.
+  static_assert(sizeof(StatsLists) == 44, "StatsLists' .bss: 44 B (9.7's cap)");
   glue_ = glue;
   fs_ = fs;
   if (kLitCap) flags_ = static_cast<uint8_t>(flags_ | kCapOn);
@@ -321,9 +327,9 @@ void StatsLists::command(const char* arg) {
       return;
     case 'u':
       if (arg[1] != '0') break;
-      // Hu0: the held fake visit's snapshot freed (its ask too, if one is
-      // asked again after a fence). Hu's alone (9.3): a page's, or one an
-      // ask under way carved, is kept.
+      // Hu0: the held fake visit's snapshot released (its ask too, if one
+      // is asked again after a fence). Hu's alone (9.3): a page's, or one an
+      // ask under way borrowed, is kept.
       if (kind_ == kVisit && !(flags_ & kFromUi) && (flags_ & kHu) && state_.load() != kIdle) {
         stop(Outcome::Cancelled, "Hu0");
       }
@@ -384,11 +390,11 @@ void StatsLists::command(const char* arg) {
   }
   if (s == kAsked && visiting()) {
     // (In Asked it holds no block; but a console visit given back after its
-    // take, putBack(), still holds the snapshot it carved: freed with it,
-    // as no ask would own it any more.)
+    // take, putBack(), still holds the snapshot it borrowed: released with
+    // it, as no ask would own it any more.)
     const bool carved = (flags_ & kCarved) && !(flags_ & kFake) && snap_;
     Serial.printf("[listen] %s replaced by the new ask (in Asked, holding no block%s)\n", name(),
-                  carved ? "; the snapshot it carved freed" : "");
+                  carved ? "; the snapshot it borrowed released" : "");
     if (carved) freeSnap("its console ask replaced (a console ask holds nothing)");
   } else if (s == kAsked) {
     Serial.printf("[listen] %s replaced by the new ask (it hadn't begun)\n", name());
@@ -397,20 +403,22 @@ void StatsLists::command(const char* arg) {
     beginAsk(k, flags, millis());
     Serial.printf("[listen] %s: %s, as a stats page asks: at the next pass the write gate lets through, the boot's "
                   "scan done, no library update asked, Auto DJ's join neither working nor due, no card worker's walk "
-                  "or compaction, and the Rank lane's waits clear (none taken while one holds); its block given back "
-                  "when it ends%s\n",
+                  "or compaction, no tag scan holding its memory, and the Rank lane's waits clear (none taken while "
+                  "one holds); its block given back when it ends%s\n",
                   name(),
                   k == kLean        ? (flags ? "Not played yet's lean ask, without the folders' states (forced)"
                                              : "Not played yet's lean ask (the u40 set; without the folders' states if "
                                                "refused)")
-                  : flags & kHu     ? "a held fake visit (Full, else Lists): its snapshot kept as a page keeps it, "
-                                      "until Hu0 or a fence (then asked again after the Live and the rejoin)"
+                  : flags & kHu     ? "a held fake visit (Full, else Lists): its snapshot (the Dance tab's block, "
+                                      "lent) kept as a page keeps it, until Hu0, the Dance tab or a fence (then asked "
+                                      "again after the Live and the rejoin)"
                   : flags & kForced ? "a visit's ask with the Lists grade forced"
                                     : "a visit's ask (Full when Not played yet may open, else Lists; Full refused, "
                                       "Lists)",
-                  k == kVisit && !(flags & kHu) ? "; its snapshot freed after it (a console ask holds nothing) "
-                                                    "unless one was held before"
-                                                  : "");
+                  k == kVisit && !(flags & kHu) ? "; its snapshot (the Dance tab's block, lent: refused while that "
+                                                  "tab is up) released after it (a console ask holds nothing) unless "
+                                                  "one was held before"
+                                                : "");
     return;
   }
   kind_ = k;
@@ -437,7 +445,11 @@ uint8_t StatsLists::gateOf(const Gates& g) const {
   if (g.updateAsked || (walk && (!g.index || !g.index->ready()))) return sv::kWhyUpdate;
   if (g.cardHeld || g.cardAway) return sv::kWhyCard;
   if (kind_ != kTrack && g.joinPending) return sv::kWhyJoin;
-  if (kind_ != kTrack && workerAhead_) return sv::kWhyWorker;
+  if (kind_ != kTrack && (ahead_ & kAheadWalk)) return sv::kWhyWorker;
+  // S3a's asks: the tag scan while it holds its memory (its work memory and
+  // any View: 90-124 KB of PSRAM no gate counts; the owner's "Only while
+  // held", 2026-11-21). S2's asks don't wait for it.
+  if (visiting() && (ahead_ & kAheadRest)) return sv::kWhyRest;
   // S3a's asks after the 30 s worker give-up (kStalled): in Asked, holding
   // nothing, sv::kStallMs from it (queuedMs_, which no pass moves while
   // stalled: loop()'s sv::waitStartMoves()), then taken again, the stall
@@ -608,8 +620,8 @@ void StatsLists::turn(const Gates& g) {
 }
 
 // S3a's turn (9.7: "the snapshot at the turn", "the grades"): a visit's
-// snapshot carved first if none is held, then each grade through the hold
-// in order; every grade refused, the snapshot this ask carved freed, No
+// snapshot lent first if none is held, then each grade through the hold
+// in order; every grade refused, the snapshot this ask borrowed released, No
 // room. On the loop, at PlayHistory's turn (the write gate's pass), the
 // Rank lane's waits clear.
 void StatsLists::turnVisit(const Gates& g) {
@@ -660,60 +672,57 @@ void StatsLists::turnVisit(const Gates& g) {
   const bool dated = sf::todayOf(boardclock::now(), &today);
   const uint32_t folders = pathhash::Walk::foldersFor(idx);
   const size_t foldersBytes = pathhash::Walk::bytesFor(folders);
-  // A visit's snapshot, before the take (9.7's fit): TLSF's good fit serves
-  // it from the smallest free class that holds it, so it comes out of the
-  // largest free block only when no smaller one takes it; its line says
-  // which (run 3a-3), its block (its class) and what it took of free (its
-  // header too: run 3a-4's figure). Which is the heap walk's: the largest
-  // free block's own range before the carve, the snapshot inside it or
-  // not. (The reported largest is a class floor, 8 KB wide from 256 KB up:
-  // a carve out of it lowers that only when its rest drops below the
-  // floor.) (Each line printed as it comes: the loop's stack, 11. Their
-  // time, a full TX buffer's wait among it, is left out of the turn's:
-  // lineUs; a held snapshot's free before the re-carve among them, by
-  // freeSnap()'s word.)
+  // A visit's snapshot, before the take: the Dance tab's 4,096 B block,
+  // lent (the owner's "Borrow Dance's block", 2026-11-21: carved at the
+  // boot for the tab's tracker and kept, so nothing is carved here and
+  // PSRAM stays as without the stats). Refused while the tab is up (its
+  // tracker reads into it), past 18,432 albums (more than the block), or
+  // with no block (no PSRAM for the dancer at the boot): No room. Its line
+  // gives the block's address and PSRAM's free beside it, unchanged. (Each
+  // line printed as it comes: the loop's stack, 11. Their time, a full TX
+  // buffer's wait among it, is left out of the turn's: lineUs; a held
+  // snapshot's release among them, by freeSnap()'s word.)
   int64_t lineUs = 0;
   if (!lean) {
     const size_t need = sv::bytesFor(albums);
-    if (snap_ && snapshotBytes() < need) lineUs += freeSnap("short of the library's albums now: carved again");
+    // (The loan is the block whole: short only past 18,432 albums, where
+    // no loan is made, the held one released first.)
+    if (snap_ && snapshotBytes() < need) {
+      lineUs += freeSnap("short of the library's albums now (past the Dance tab's 4,096 B block: 18,432 albums)");
+    }
     if (snap_) {
       const int64_t p0 = esp_timer_get_time();
-      Serial.printf("[listen] %s: the snapshot held at 0x%08lx (%lu B): rewritten whole\n", name(),
-                    static_cast<ul>(reinterpret_cast<uintptr_t>(snap_)), static_cast<ul>(snapshotBytes()));
+      Serial.printf("[listen] %s: the snapshot held at 0x%08lx (%lu B of the Dance tab's block): rewritten whole\n",
+                    name(), static_cast<ul>(reinterpret_cast<uintptr_t>(snap_)), static_cast<ul>(need));
       lineUs += esp_timer_get_time() - p0;
     } else {
-      const int64_t w0 = esp_timer_get_time();
-      uintptr_t lAt = 0;
-      const size_t lBlock = statshold::largestFree(&lAt);
-      const uint32_t heapWalkUs = static_cast<uint32_t>(esp_timer_get_time() - w0);
-      const size_t l0 = psramLargest(), f0 = psramFreeBytes();
-      void* s = psramAlloc(need);
-      const size_t l1 = psramLargest(), f1 = psramFreeBytes();
+      const size_t f0 = psramFreeBytes();
+      void* s = statshold::borrow(need);
+      const size_t f1 = psramFreeBytes();
       if (!s) {
-        Serial.printf("[listen] %s: no PSRAM for its snapshot's %lu B (the largest free block %lu B)\n", name(),
-                      static_cast<ul>(need), static_cast<ul>(l0));
+        Serial.printf("[listen] %s: no block for its snapshot's %lu B: %s\n", name(), static_cast<ul>(need),
+                      need > sv::kBound ? "past the Dance tab's 4,096 B block (more than 18,432 albums)"
+                                        : "the Dance tab is up (its tracker's block in use: the lists count again "
+                                          "once it is down), or the block wasn't made at the boot (no PSRAM)");
         endVisit(Outcome::NoBlock, "No room");
         return;
       }
-      // (Its header zeroed: no magic, nothing served until write().)
+      // (Its header zeroed: no magic, nothing served until write(). The
+      // block holds the tab's last audio, or an earlier snapshot.)
       std::memset(s, 0, sv::kHeaderBytes);
       snap_ = sv::Snapshot::at(s);
       flags_ = static_cast<uint8_t>(flags_ | kCarved);
-      const uintptr_t at = reinterpret_cast<uintptr_t>(s);
-      const bool outOfL = lBlock && at >= lAt && at < lAt + lBlock;
       const int64_t p0 = esp_timer_get_time();
-      Serial.printf("[listen] %s: the snapshot %lu B carved at 0x%08lx: a %lu B block, %lu B of PSRAM's free with "
-                    "its header; the largest free block %lu B before it, %lu B after (as reported: class floors); "
-                    "%s the largest free block (its %lu B at 0x%08lx before it, by a heap walk of %lu us)\n",
-                    name(), static_cast<ul>(need), static_cast<ul>(at), static_cast<ul>(heap_caps_get_allocated_size(s)),
-                    static_cast<ul>(f0 - f1), static_cast<ul>(l0), static_cast<ul>(l1),
-                    outOfL ? "carved OUT OF" : "carved elsewhere than", static_cast<ul>(lBlock),
-                    static_cast<ul>(lAt), static_cast<ul>(heapWalkUs));
+      Serial.printf("[listen] %s: the snapshot %lu B in the Dance tab's block at 0x%08lx (%lu B): lent, not carved "
+                    "(PSRAM's free %lu B before, %lu B after)\n",
+                    name(), static_cast<ul>(need), static_cast<ul>(reinterpret_cast<uintptr_t>(s)),
+                    static_cast<ul>(sv::kBound), static_cast<ul>(f0), static_cast<ul>(f1));
       lineUs += esp_timer_get_time() - p0;
     }
-    // (Hu's: the snapshot it carved kept after its ask, as a page keeps it.
-    // One held before it, a page's, stays the page's: Hu0 and the fence's
-    // re-ask leave it alone. Over its own, kFake is kept from beginAsk().)
+    // (Hu's: the snapshot it borrowed kept after its ask, as a page keeps
+    // it. One held before it, a page's, stays the page's: Hu0 and the
+    // fence's re-ask leave it alone. Over its own, kFake is kept from
+    // beginAsk().)
     if ((flags_ & kHu) && (flags_ & kCarved)) flags_ = static_cast<uint8_t>(flags_ | kFake);
   }
   // The grades through the hold (statshold::take(): a decoder's room asked;
@@ -737,7 +746,7 @@ void StatsLists::turnVisit(const Gates& g) {
     lineUs += esp_timer_get_time() - p0;
   }
   if (!p) {
-    if ((flags_ & kCarved) && snap_) freeSnap("every grade refused (this ask carved it)");
+    if ((flags_ & kCarved) && snap_) freeSnap("every grade refused (this ask borrowed it)");
     endVisit(cr.why == autodj::Close::NoBlock ? Outcome::NoBlock : Outcome::NoRoom, "every grade refused: No room");
     return;
   }
@@ -936,7 +945,7 @@ void StatsLists::loop(const Gates& g) {
   // remount whose index isn't the snapshot's key (not while a visit's ask
   // is under way: it rewrites the snapshot over the index it took). Each
   // gives the pages their phase, whatever the last ask came to (landed,
-  // its snapshot freed here; refused, unread, capped; or one waiting behind
+  // its snapshot released here; refused, unread, capped; or one waiting behind
   // a console ask): No card (16), or Idle with the stats off (1); a free
   // moves the version (freeSnap()). (A remount's read of stats.bin to make
   // isn't the stats off: an S3a ask waits for it as for the boot's scan,
@@ -1166,7 +1175,8 @@ void StatsLists::finishVisit(const Gates& g) {
   }
   if (!lean) {
     if (!snap_) {
-      endVisit(Outcome::Cancelled, "its snapshot was freed meanwhile");
+      endVisit(Outcome::Cancelled,
+               "its snapshot released meanwhile (the Dance tab came up, or the fence): nothing written");
       return;
     }
     // The wanted set: every list's hashes (the ids the walk maps), in one
@@ -1202,7 +1212,7 @@ void StatsLists::finishVisit(const Gates& g) {
     a.writeUs = static_cast<uint32_t>(esp_timer_get_time() - w0);
     if (served && !snapshot()) ++version_;
     if (!written) {
-      // (A backstop: turnVisit() carves again a held snapshot short of the
+      // (A backstop: turnVisit() releases a held snapshot short of the
       // index's albums, the albums' check above puts the ask back, and the
       // remount's key check (loop()) frees one over another index.)
       endVisit(Outcome::NoRoom, "its snapshot is short of the library's albums");
@@ -1373,7 +1383,8 @@ void StatsLists::landVisit(const Gates& g) {
   const char* note = "";
   if (!lean) {
     if (!snap_) {
-      endVisit(Outcome::Cancelled, "its snapshot was freed meanwhile");
+      endVisit(Outcome::Cancelled,
+               "its snapshot released meanwhile (the Dance tab came up, or the fence): nothing written");
       return;
     }
     const int64_t r0 = esp_timer_get_time();
@@ -1429,7 +1440,7 @@ void StatsLists::landVisit(const Gates& g) {
                 static_cast<ul>(a.handUs), static_cast<ul>(a.copyUs), static_cast<ul>(a.openUs),
                 static_cast<ul>(a.finishUs), static_cast<ul>(a.sealUs), static_cast<ul>(a.writeUs),
                 static_cast<ul>(a.resolveUs), static_cast<ul>(a.notPlayedUs), np);
-  // (The console's visit prints its snapshot, then frees it if it carved
+  // (The console's visit prints its snapshot, then releases it if it borrowed
   // it: endVisit(). A lean ask's snapshot, Hu's and a page's stay.)
   const bool landed = !lean || counted;
   if (landed) ++version_;
@@ -1614,8 +1625,8 @@ StatsLists::Phase StatsLists::phaseAt(uint32_t nowMs, Wait lane) const {
   if (uiWant_) return Phase::Working;  // (behind a console ask, or a stopped one's step)
   const uint8_t s = state_.load();
   const bool capped = (flags_ & kCapped) != 0;
-  // (Ready only over a snapshot served: one freed since its landing reads
-  // Idle, or No card where the card or a remount freed it.)
+  // (Ready only over a snapshot served: one released since its landing
+  // reads Idle, or No card where the card or a remount released it.)
   const bool served = snapshot() != nullptr;
   if (s == kIdle || !visiting()) {
     // None made (or none ended yet): the caller's Idle.
@@ -1625,7 +1636,7 @@ StatsLists::Phase StatsLists::phaseAt(uint32_t nowMs, Wait lane) const {
   if (outcome_ != Outcome::None) {
     return sv::phaseOf(0, outcome_, Wait::None, 0, false, served);  // (stopped on the worker)
   }
-  if (s != kAsked) return Phase::Working;  // carved, ranking, walking
+  if (s != kAsked) return Phase::Working;  // taken, ranking, walking
   return sv::phaseOf(why_, Outcome::None, lane, sv::elapsedMs(nowMs, queuedMs_), false, served);
 }
 
@@ -1661,8 +1672,6 @@ bool StatsLists::news() {
   newsSeen_ = v;
   return true;
 }
-
-size_t StatsLists::snapshotBytes() const { return snap_ ? heap_caps_get_allocated_size(snap_) : 0; }
 
 uint32_t StatsLists::holdMs() const {
   return block_ && block_->takeUs ? static_cast<uint32_t>((esp_timer_get_time() - block_->takeUs) / 1000) : 0;
@@ -1752,7 +1761,7 @@ void StatsLists::endVisit(Outcome o, const char* why) {
   }
   giveBack();
   outcome_ = o;
-  // A console ask holds nothing: the snapshot it carved freed (Hu's kept,
+  // A console ask holds nothing: the snapshot it borrowed released (Hu's kept,
   // as a page's).
   if (!(flags_ & (kFromUi | kFake)) && (flags_ & kCarved) && snap_) freeSnap("a console ask holds nothing");
   kind_ = kNone;
@@ -1794,15 +1803,17 @@ uint32_t StatsLists::freeSnap(const char* why) {
   if (!snap_) return 0;
   const size_t n = snapshotBytes();
   void* p = snap_;
+  // (The pointer dropped: the block is the Dance tab's, lent, never the
+  // stats' to free.)
   snap_ = nullptr;
   flags_ = static_cast<uint8_t>(flags_ & ~(kFake | kCarved));
   // (What snapshot() serves changed: the pages' news(), whether or not the
   // phase moves with it.)
   ++version_;
-  psramFree(p);
   const int64_t p0 = esp_timer_get_time();
-  Serial.printf("[listen] the stats pages' snapshot freed (%lu B at 0x%08lx): %s\n", static_cast<ul>(n),
-                static_cast<ul>(reinterpret_cast<uintptr_t>(p)), why);
+  Serial.printf("[listen] the stats pages' snapshot released (%lu B at 0x%08lx, the Dance tab's block: nothing "
+                "freed): %s\n",
+                static_cast<ul>(n), static_cast<ul>(reinterpret_cast<uintptr_t>(p)), why);
   return static_cast<uint32_t>(esp_timer_get_time() - p0);
 }
 
@@ -1891,7 +1902,7 @@ __attribute__((noinline)) void StatsLists::stepHk(const Gates& g) {
     return;
   }
   if (!snap_ || !snap_->written()) {
-    Serial.println("[listen] Hk: the snapshot freed, or under an ask's rewrite, since its header: the rest not "
+    Serial.println("[listen] Hk: the snapshot released, or under an ask's rewrite, since its header: the rest not "
                    "printed");
     hkPart_ = 0;
     return;
@@ -2006,11 +2017,13 @@ size_t StatsLists::drop() {
       gave = n;
     }
   }
-  // The stats pages' snapshot (9.7's free points: the fence), its bytes in
-  // the fence's line (the memory check's alsoFreed counted them).
+  // The stats pages' snapshot (9.7's free points: the fence), released (its
+  // ids are the old index's): its heap bytes in the fence's line, as the
+  // memory check's alsoFreed counted them, which are none (the Dance tab's
+  // block, lent).
   const bool fake = (flags_ & kFake) || (kind_ == kVisit && (flags_ & kHu));  // (Hu's snapshot, or its ask)
   if (snap_) {
-    n += snapshotBytes();
+    n += snapshotHeapBytes();
     freeSnap("the library update's fence");
   }
   if (block_) return n;  // (still read by the worker: the ask as it is)
@@ -2041,7 +2054,7 @@ size_t StatsLists::drop() {
     // at the first pass the gates let through (as a visit made after it).
     if (kind_ == kNone) {
       beginAsk(kVisit, kHu, millis());
-      Serial.println("[listen] Hu: its visit asked again after the Live and Auto DJ's rejoin (its snapshot carved "
+      Serial.println("[listen] Hu: its visit asked again after the Live and Auto DJ's rejoin (its snapshot lent "
                      "again at its turn)");
     } else if (!(kind_ == kVisit && (flags_ & kHu))) {
       Serial.printf("[listen] Hu: its visit NOT asked again: %s holds the one slot (Hu again after it)\n", name());

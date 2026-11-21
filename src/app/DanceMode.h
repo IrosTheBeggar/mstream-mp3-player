@@ -40,13 +40,32 @@
 // a heard clock over USB. The taps are off; the tracker is fed the
 // computer's hops (BeatTracker::feedHop(), at the epoch's rate: 44.1 or 48
 // kHz) and the dancer drawn for HostClock's frame in place of the tap's.
+//
+// The tracker's scratch is lent while the tab is down (lendScratch()), and
+// taken back as it comes up: setActive(true) calls dancelend::reclaim()
+// (main.cpp: the stats pages' snapshot released, "the Dance tab") before
+// the tracker reads into it. A free function, so the object keeps its size.
+namespace dancelend {
+void reclaim();
+}  // namespace dancelend
+
 class DanceMode {
 public:
   DanceMode(Core2AudioBackend& audio, PlaybackController& player) : audio_(audio), player_(player) {}
 
   // Tracker scratch and the sprite, in PSRAM. False: can't dance.
   bool begin();
+  // On: dancelend::reclaim() first (the block's borrower gives it back),
+  // then the tab's tracker reads into the scratch.
   void setActive(bool on);
+  // The tracker's scratch (4,096 B of PSRAM, carved at begin() and kept for
+  // the session; read only while the tab is up), lent while the tab is down
+  // (the owner's "Borrow Dance's block", 2026-11-21): the stats pages'
+  // snapshot (StatsLists, through main.cpp's statshold::borrow()). Null with
+  // the tab up, for more than statsvisit::kBound, or with no block (no
+  // PSRAM at the boot): statsvisit::loanOk(). Keyed on the block, not on
+  // ready(): a failed skin change clears that and keeps the block.
+  void* lendScratch(size_t n) const;
   bool active() const { return active_; }
   bool ready() const { return ready_; }
   // Every loop pass. Draws a frame when one is due (`silent`: the silent
@@ -124,7 +143,7 @@ private:
   dance::Dancer dancer_;        // the stick figure's state
   crab::Crab crab_;             // the crab's
   dance::TempoFold fold_;       // the dance tempo's octave, kept between frames
-  int16_t* scratch_ = nullptr;  // PSRAM
+  int16_t* scratch_ = nullptr;  // PSRAM; lent while the tab is down (lendScratch())
   bool ready_ = false;
   bool active_ = false;
   bool tracking_ = true;

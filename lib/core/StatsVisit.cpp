@@ -498,9 +498,9 @@ Phase phaseOf(uint8_t why, Outcome outcome, ScanScheduler::Wait wait, uint32_t w
   // (the boot's scan): Working" (4.4's Folding, "Counting plays…"). S2
   // gives it before every later gate, so it stands for them too.
   if (why & kWhyBoot) return Phase::Working;
-  // S2's other gates (4, 8, 32, 64) and the Rank lane's waits (before the
-  // take, or after it, the block given back): Working, then Waiting from
-  // 3 s. Nothing is counted.
+  // S2's other gates (4, 8, 32, 64), S3a's tag scan's (128) and the Rank
+  // lane's waits (before the take, or after it, the block given back):
+  // Working, then Waiting from 3 s. Nothing is counted.
   if (why != 0 || wait != ScanScheduler::Wait::None) return waitedMs >= kWaitingMs ? Phase::Waiting : Phase::Working;
   return Phase::Working;
 }

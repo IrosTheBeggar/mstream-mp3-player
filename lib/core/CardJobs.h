@@ -234,6 +234,12 @@ public:
   bool compactWork() const;  // asked, wanted by the journal, or before a walk
   bool restWork() const;     // the View may have more (unknown until it ends)
   bool walking() const { return walk_ != nullptr; }  // a walk is under way (between its steps)
+  // The scan holds its memory (its work memory, about 93 KB, and with it
+  // any View: the View lives in it): from a scan step's prepare() until
+  // trim() gives it back (or the object goes). The stats pages' visits wait
+  // it out (app/CardTasks, StatsLists' kWhyRest: the owner's "Only while
+  // held"); a scan the battery holds with its memory given back doesn't.
+  bool scanHeld() const { return scan_ != nullptr; }
   Mode mode() const { return mode_; }
   // A chunk waits for tags.jnl.
   bool chunkPending() const;

@@ -36,8 +36,9 @@ class StatsLists;
 //     (Hr, Hl, Hw; S3a's visit asks) as background work after a compaction
 //     (Job::Stats); each pass they are told what a rank comes after (the
 //     walk, a compaction: workerAhead()) and, for S3a's, the Rank lane's own
-//     wait (ScanScheduler::yieldNow(): rankWait()), so no block is taken
-//     while one holds;
+//     wait (ScanScheduler::yieldNow(): rankWait()) and the tag scan's memory
+//     held (CardJobs::scanHeld(): restAhead()), so no block is taken while
+//     one holds;
 //   - on the SD card, over the records Library opened: the validation
 //     walk, 2 s after the UI's first frame (3.2.3); the compactions; the
 //     tag scan (lib/core CardJobs); the update step's build and its save

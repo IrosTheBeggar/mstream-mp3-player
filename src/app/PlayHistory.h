@@ -150,9 +150,10 @@ public:
   void statsSetWindow(uint8_t w) {
     if (active_) stats_.lists().setWindow(w);
   }
-  // The held snapshot's bytes (0: none): freed at the update's fence, so in
-  // its memory check's alsoFreed (main.cpp).
-  size_t statsHeldBytes() const { return active_ ? stats_.lists().snapshotBytes() : 0; }
+  // The held snapshot's heap bytes, for the update's memory check's
+  // alsoFreed (main.cpp; the fence releases it): none, as it sits in the
+  // Dance tab's block, lent (StatsLists::snapshotHeapBytes()).
+  size_t statsHeldBytes() const { return active_ ? stats_.lists().snapshotHeapBytes() : 0; }
 
   // The boot's scan: slots a pass (four reads: about 10 KB).
   static constexpr uint32_t kScanSlotsPerPass = 4 * playlog::kReadBytes / playlog::kSlot;

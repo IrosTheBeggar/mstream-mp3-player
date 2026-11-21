@@ -32,8 +32,8 @@
 //   spare's column and P = 19,478's, with and without a clock, at TRKD's
 //   cap and at P = 2,214; each region inside the block, and what overlaps
 //   dead by the time it is written;
-// - phaseOf(): every why, each Rank-lane wait (Working, then Waiting from
-//   3 s, nothing counted), the boot's scan (Working however long), the
+// - phaseOf(): every why (S3a's tag scan's, 128, among them), each
+//   Rank-lane wait (Working, then Waiting from 3 s, nothing counted), the boot's scan (Working however long), the
 //   read faults (Unread, and nothing else Unread), the refusals (NoRoom),
 //   the cap (Capped), the card (NoCard, and an ask it cancelled NoCard
 //   until the next), the stats off (Idle); landed: Ready only while its
@@ -42,7 +42,10 @@
 //   StatsLists' order, loop() then the turn in the same pass: held 30 s
 //   from it (Waiting from 3 s), then taken, a Rank-lane wait, S2's gate or
 //   a turn the write gate held across its end included; the rule before
-//   the check of the review's fixes never took it.
+//   the check of the review's fixes never took it;
+// - the loan of the Dance tab's block (loanOk(), the owner's "Borrow
+//   Dance's block"): only while the block exists and the tab is down, and
+//   for a snapshot within kBound (4,096 B: to 18,432 albums).
 // Run: pio test -e native -f test_stats_visit
 #include <unity.h>
 
@@ -1165,10 +1168,11 @@ void test_phase_of() {
   // Under way, nothing holding it: Working, however long it ranks or walks.
   TEST_ASSERT_EQUAL_INT(working, ph(0, O::None, W::None, 0, false));
   TEST_ASSERT_EQUAL_INT(working, ph(0, O::None, W::None, 60000, false));
-  // S2's whys 4, 8, 32 and 64, and each Rank-lane wait (a wait after the
+  // S2's whys 4, 8, 32 and 64, S3a's tag scan's 128 (its memory held: the
+  // owner's "Only while held"), and each Rank-lane wait (a wait after the
   // take, its block given back, is the same): Working, then Waiting from
   // 3 s; never a refusal or a fault (nothing counted).
-  const uint8_t whys[] = {4, 8, 32, 64, 4 | 64, 8 | 32};
+  const uint8_t whys[] = {4, 8, 32, 64, 128, 4 | 64, 8 | 32, 64 | 128, 8 | 128};
   for (uint8_t why : whys) {
     TEST_ASSERT_EQUAL_INT(working, ph(why, O::None, W::None, 0, false));
     TEST_ASSERT_EQUAL_INT(working, ph(why, O::None, W::None, 2999, false));
@@ -1180,7 +1184,7 @@ void test_phase_of() {
   // (S2 gives 2 before them all).
   for (int w = 0; w < ScanScheduler::kWaits; ++w)
     for (uint32_t ms : {0u, 2999u, 3000u, 600000u})
-      for (uint8_t why : {2, 2 | 4, 2 | 64, 2 | 8 | 32}) {
+      for (uint8_t why : {2, 2 | 4, 2 | 64, 2 | 8 | 32, 2 | 128}) {
         TEST_ASSERT_EQUAL_INT(working, ph(why, O::None, static_cast<W>(w), ms, false));
         TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Capped), ph(why, O::None, static_cast<W>(w), ms, true));
       }
@@ -1190,6 +1194,8 @@ void test_phase_of() {
     TEST_ASSERT_EQUAL_INT(working, ph(0, O::None, wait, 2999, false));
     TEST_ASSERT_EQUAL_INT(waiting, ph(0, O::None, wait, 3000, false));
     TEST_ASSERT_EQUAL_INT(waiting, ph(32, O::None, wait, 3000, false));
+    TEST_ASSERT_EQUAL_INT(working, ph(128, O::None, wait, 2999, false));
+    TEST_ASSERT_EQUAL_INT(waiting, ph(128, O::None, wait, 3000, false));
   }
   TEST_ASSERT_EQUAL_UINT32(3000, sv::kWaitingMs);
   // The stats off (why 1): Idle, whatever else. The card away or held (16):
@@ -1204,7 +1210,7 @@ void test_phase_of() {
   // back (16 gone), until the next ask: the page offers Try again there
   // (9.7's "the card back"; 4.4's No card), never Idle.
   for (int w = 0; w < ScanScheduler::kWaits; ++w)
-    for (uint8_t why : {0, 2, 4, 8, 32, 64})
+    for (uint8_t why : {0, 2, 4, 8, 32, 64, 128})
       for (bool capped : {false, true})
         TEST_ASSERT_EQUAL_INT(static_cast<int>(P::NoCard), ph(why, O::CardAway, static_cast<W>(w), 9000, capped));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Idle), ph(1, O::CardAway, W::None, 0, false));
@@ -1223,7 +1229,7 @@ void test_phase_of() {
   TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Idle), ph(1, O::Ok, W::None, 0, false, true));
   // `served` changes nothing but a landing's Ready: every other input
   // gives the same phase either way.
-  for (int why = 0; why < 128; ++why)
+  for (int why = 0; why < 256; ++why)
     for (int o = 0; o <= static_cast<int>(O::CardAway); ++o)
       for (int w = 0; w < ScanScheduler::kWaits; ++w)
         for (uint32_t ms : {0u, 3000u})
@@ -1253,7 +1259,7 @@ void test_phase_of() {
   // Unread for the read faults alone, every input: no wait, why, refusal,
   // time or cap gives it.
   uint32_t unread = 0, cases = 0;
-  for (int why = 0; why < 128; ++why)
+  for (int why = 0; why < 256; ++why)
     for (int o = 0; o <= static_cast<int>(O::CardAway); ++o)
       for (int w = 0; w < ScanScheduler::kWaits; ++w)
         for (uint32_t ms : {0u, 2999u, 3000u, 100000u})
@@ -1351,7 +1357,7 @@ void test_the_worker_s_give_up_holds_30_s_then_the_take() {
   // The start moves only at a pass nothing holds, and never while stalled.
   TEST_ASSERT_TRUE(sv::waitStartMoves(0, W::None, false));
   TEST_ASSERT_FALSE(sv::waitStartMoves(0, W::None, true));
-  for (uint8_t why : {4, 8, 32, 64})
+  for (uint8_t why : {4, 8, 32, 64, 128})
     for (bool stalled : {false, true}) TEST_ASSERT_FALSE(sv::waitStartMoves(why, W::None, stalled));
   for (int w = 1; w < ScanScheduler::kWaits; ++w) {
     TEST_ASSERT_FALSE(sv::waitStartMoves(0, static_cast<W>(w), false));
@@ -1428,7 +1434,7 @@ void test_elapsed_ms_with_a_start_ahead_of_now() {
   TEST_ASSERT_EQUAL_UINT32(0x7FFFFFFFu, sv::elapsedMs(0x7FFFFFFFu, 0));
   // The phase over it: each wait but the boot's scan's reads Working for its
   // first 3 s (the start ahead read as 0 ms held), not Waiting at once.
-  const uint8_t whys[] = {4, 8, 32, 64};
+  const uint8_t whys[] = {4, 8, 32, 64, 128};
   for (uint8_t why : whys) {
     TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Working),
                           static_cast<int>(sv::phaseOf(why, O::None, W::None, sv::elapsedMs(1000, 1002), false, false)));
@@ -1448,6 +1454,42 @@ void test_elapsed_ms_with_a_start_ahead_of_now() {
   TEST_ASSERT_FALSE(sv::stallHolds(false, 1000, 1002));
 }
 
+// ---------------------------------------------------------------------------
+// The loan of the Dance tab's block (the owner's "Borrow Dance's block",
+// 2026-11-21): the snapshot sits in the Dance tab's 4,096 B tracker scratch
+// (DanceMode::lendScratch() is loanOk() over its block and its tab), so
+// the stats carve nothing.
+// ---------------------------------------------------------------------------
+void test_the_dance_tab_s_block_lent() {
+  TEST_ASSERT_EQUAL_UINT32(4096, sv::kBound);
+  // The block there and the tab down: lent for any snapshot within it.
+  TEST_ASSERT_TRUE(sv::loanOk(true, false, sv::kHeaderBytes));
+  TEST_ASSERT_TRUE(sv::loanOk(true, false, sv::bytesFor(1706)));  // the spare's 3,860 B
+  TEST_ASSERT_EQUAL_UINT32(3860, sv::bytesFor(1706));
+  TEST_ASSERT_TRUE(sv::loanOk(true, false, sv::kBound));
+  // The tab up (its tracker reads into it from setActive(true)): never,
+  // whatever the size; no block (no PSRAM for the dancer at the boot):
+  // never.
+  for (size_t n : {size_t{1}, size_t{sv::kHeaderBytes}, sv::bytesFor(1706), sv::kBound}) {
+    TEST_ASSERT_FALSE(sv::loanOk(true, true, n));
+    TEST_ASSERT_FALSE(sv::loanOk(false, false, n));
+    TEST_ASSERT_FALSE(sv::loanOk(false, true, n));
+  }
+  // Past the block: no loan (the library past 18,432 albums: No room).
+  TEST_ASSERT_FALSE(sv::loanOk(true, false, sv::kBound + 1));
+  // Every library up to 18,432 albums fits the block; one more doesn't.
+  uint32_t last = 0;
+  for (uint32_t albums = 0; albums <= 20000; ++albums) {
+    if (sv::loanOk(true, false, sv::bytesFor(albums))) last = albums;
+  }
+  TEST_ASSERT_EQUAL_UINT32(18432, last);
+  TEST_ASSERT_TRUE(sv::loanOk(true, false, sv::bytesFor(18432)));
+  TEST_ASSERT_FALSE(sv::loanOk(true, false, sv::bytesFor(18433)));
+  static_assert(sv::loanOk(true, false, sv::kBound) && !sv::loanOk(true, true, 1), "loanOk() at compile time");
+  printf("[visit] the Dance tab's block: lent while the tab is down, to 18,432 albums (%u B at 18,432)\n",
+         static_cast<unsigned>(sv::bytesFor(18432)));
+}
+
 int main(int, char**) {
   if (!cardfixtures::json("stats/index.json", &gIndex) || gIndex.size() == 0 ||
       !cardfixtures::json("stats/rank.json", &gRank) || gRank.size() == 0) {
@@ -1464,5 +1506,6 @@ int main(int, char**) {
   RUN_TEST(test_phase_of);
   RUN_TEST(test_the_worker_s_give_up_holds_30_s_then_the_take);
   RUN_TEST(test_elapsed_ms_with_a_start_ahead_of_now);
+  RUN_TEST(test_the_dance_tab_s_block_lent);
   return UNITY_END();
 }

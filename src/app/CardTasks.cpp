@@ -415,6 +415,12 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
       jobs_.idleFlush(now);
     if (now - lastScanStepMs_ >= kTrimMs && !jobs_.restWork()) jobs_.trim();
   }
+  // The stats pages' visits wait out the tag scan while it holds its memory
+  // (CardJobs::scanHeld(): its work memory and any View in it; the owner's
+  // "Only while held", 2026-11-21): a scan the battery holds with its memory
+  // given back doesn't hold them, a Rescan does while its memory is held.
+  // After the trim above, so memory given back this pass holds nothing.
+  if (lists) lists->restAhead(active_ && jobs_.scanHeld());
 }
 
 // The scan's end: the update step when the journal took records since the

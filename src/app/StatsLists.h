@@ -71,25 +71,32 @@
 // 1's four calls): the stats pages' asks, typed (ask(): a visit, Not played
 // yet's lean ask), in the same one slot, and their console twins (Hv, Hv1,
 // Hn, Hn1, Hu; Hk, Hc). A visit's ask leaves its lists in the SNAPSHOT
-// (lib/core StatsVisit), one plain psramAlloc block of at most 4,096 B,
-// held after the ask until release() (the pages leave, the dark, the card,
-// the fence, the orderly end...): snapshot() serves it once the visit has
-// landed. Each ask:
-//   1. asked; before its turn it waits for S2's gates and the Rank lane's
-//      own waits (a lit list moving, input in the last 0.5 s, the ring,
-//      an underrun, a long decode pass, a track change, a seek, Bluetooth:
+// (lib/core StatsVisit), which lives in the Dance tab's 4,096 B tracker
+// scratch, lent while that tab is down (the owner's "Borrow Dance's block",
+// 2026-11-21: the stats own no memory, PSRAM stays as without them;
+// DanceMode::lendScratch() through statshold::borrow()), held after the
+// ask until release() (the pages leave, the dark, the card, the fence, the
+// orderly end, the Dance tab coming up: dancelend::reclaim()...):
+// snapshot() serves it once the visit has landed. Each ask:
+//   1. asked; before its turn it waits for S2's gates, the tag scan while
+//      it holds its memory (CardTasks' word each pass, restAhead(): the
+//      owner's "Only while held"; kWhyRest) and the Rank lane's own waits
+//      (a lit list moving, input in the last 0.5 s, the ring, an underrun,
+//      a long decode pass, a track change, a seek, Bluetooth:
 //      ScanScheduler::yieldNow(), CardTasks' word each pass, rankWait();
 //      and this pass's input, Gates::input, which CardTasks' word only has
 //      after the turn: a tap's or a console line's own pass never takes),
 //      holding nothing: phaseOf()'s Working, then Waiting from 3 s. With
-//      the card away or held it is dropped (NoCard) and the snapshot freed;
-//   2. at the turn: a visit's snapshot carved first (psramAlloc, if none is
-//      held; a re-ask rewrites the held one whole), then the grades tried
-//      in order through the hold (statsvisit::layout(), the real
-//      sizeof(Ask)): Full then Lists (Lists alone while Not played yet
+//      the card away or held it is dropped (NoCard) and the snapshot
+//      released;
+//   2. at the turn: a visit's snapshot lent first (the Dance tab's block,
+//      if none is held: refused while that tab is up, or past 18,432
+//      albums, No room; a re-ask rewrites the held one whole), then the
+//      grades tried in order through the hold (statsvisit::layout(), the
+//      real sizeof(Ask)): Full then Lists (Lists alone while Not played yet
 //      can't open, or Hv1), Not played yet's Lean then No folders (Hn1: No
-//      folders). Every grade refused: the snapshot freed if this ask carved
-//      it, No room. A refused take leaves no trace;
+//      folders). Every grade refused: the snapshot released if this ask
+//      borrowed it, No room. A refused take leaves no trace;
 //   3. the rank on the card worker (the played-set-only rank for the lean
 //      ask), then finishRank() on the loop: the wanted set in the block's
 //      tail, sealed (a heap sort), statsvisit::write() into the snapshot,
@@ -106,16 +113,19 @@
 //      then Waiting; not taken again at once for a worker that never comes).
 //      A take that ends without landing says its figures (sayTake()).
 //      The walk while lit: 100 tracks a slice, 4 ms a pass, none in a pass
-//      that handled input; dark as S2's. The lit cap (kLitCap, Hc0/Hc1):
-//      the rank at priority 1 and the walk at the dark's passes, lit or not,
-//      and a visit's block given back once its holds reach kLitCapMs
-//      (Capped, no re-ask).
+//      that handled input; dark as S2's. The lit cap (kLitCap, on: the
+//      owner's "Cap on"; Hc0/Hc1): the rank at priority 1 and the walk at
+//      the dark's passes, lit or not, and a visit's block given back once
+//      its holds reach kLitCapMs (Capped, no re-ask).
 // listsHold() stays the ask's block alone (holds()): a held snapshot holds
-// neither Auto DJ's join nor a library update. The fence frees it (drop(),
-// its bytes in the fence's line and in the memory check's alsoFreed). The
-// frees with no ask under way give the pages their phase (9.7's "Phase from
-// why"): the card's and a remount's key No card (Try again once it is
-// back), the stats off Idle; and every free moves the version (news()).
+// neither Auto DJ's join nor a library update. The fence releases it
+// (drop(): no heap bytes, so none in the fence's line or the memory check's
+// alsoFreed). An ask whose snapshot is released under it (the Dance tab,
+// the fence) ends without writing (finishVisit(), landVisit(): Cancelled).
+// The releases with no ask under way give the pages their phase (9.7's
+// "Phase from why"): the card's and a remount's key No card (Try again once
+// it is back), the stats off Idle; and every release moves the version
+// (news()).
 // Each phase change is said on the console (a [listen] line: the device
 // runs read it).
 // Loop task, but for the worker's step (its own ask's fields, published by
@@ -123,14 +133,14 @@
 // The top of PSRAM's hold for an ask's block (app/ListeningStats.cpp:
 // autodj::TopHold over the heap, the boot hold's): take a block (the
 // decoder's room asked; null: no room, `r` says why), give it back. And
-// PSRAM's largest free block as a heap walk finds it (its TLSF block's
-// address and bytes, the poisoning in: not the class floor that
-// heap_caps_get_largest_free_block() reports; 0: none), for a visit's
-// snapshot's line (whether its carve came out of it: run 3a-3).
+// the snapshot's loan (main.cpp: DanceMode::lendScratch(), the Dance tab's
+// 4,096 B block; null while that tab is up, for more than
+// statsvisit::kBound, or with no block), given back by dropping the
+// pointer.
 namespace statshold {
 void* take(size_t bytes, autodj::CloseReport* r);
 void give(void* p);
-size_t largestFree(uintptr_t* at);
+void* borrow(size_t bytes);
 }  // namespace statshold
 
 class StatsLists {
@@ -170,21 +180,24 @@ public:
   // Queued (Asked): true. Behind a console ask under way, it waits for it;
   // another UI ask under way is cancelled first. Dropped at once (false)
   // with the stats off, with the card away or held (`cardGone`: NoCard, the
-  // snapshot freed), and Not played yet's with no landed snapshot to write.
+  // snapshot released), and Not played yet's with no landed snapshot to
+  // write.
   bool ask(UiAsk a, bool cardGone);
   // Asked: dropped; queued with its block: given back; on the worker: its
   // result dropped at its end (a step is never cut: about 1 s at most);
   // walking: map.release(), given back that pass. A console ask goes on.
   void cancel();
-  // cancel(), and the snapshot freed (`why`: its [listen] line's words).
+  // cancel(), and the snapshot released (`why`: its [listen] line's words;
+  // the Dance tab's block given back to it). A console ask under way goes
+  // on, and ends without writing (Cancelled) if it had borrowed it.
   void release(const char* why);
   // The pages' phase (statsvisit::phaseOf(): Ready only while snapshot()
-  // serves one; a free with no ask under way gives No card for the card or
-  // a remount's key, Idle for the stats off).
+  // serves one; a release with no ask under way gives No card for the card
+  // or a remount's key, Idle for the stats off).
   Phase phase() const;
   uint8_t why() const { return why_; }  // S2's gate bits holding the ask (statsvisit::kWhy...)
   Outcome outcome() const { return outcome_; }
-  // +1 at each phase change, each landing and each free of the snapshot,
+  // +1 at each phase change, each landing and each release of the snapshot,
   // and when a visit asked again over a served snapshot rewrites it
   // (finishVisit()'s write(): snapshot() null from there to the landing).
   uint16_t version() const { return version_; }
@@ -199,9 +212,14 @@ public:
   void setWindow(uint8_t w) {
     if (snap_ && snap_->written()) snap_->setWindow(w);
   }
-  // The held snapshot's block (0: none): the fence frees it (main.cpp's
-  // memory check counts it in alsoFreed).
-  size_t snapshotBytes() const;
+  // The held snapshot's room (0: none): the Dance tab's block, lent whole,
+  // statsvisit::kBound (4,096 B): write()'s bytes, the albums' check, the
+  // lines.
+  size_t snapshotBytes() const { return snap_ ? statsvisit::kBound : 0; }
+  // ... and the heap's bytes it holds: none, held or not (the block is the
+  // Dance tab's, carved at the boot and kept). The fence releases it:
+  // drop()'s count and main.cpp's memory check (alsoFreed) take this.
+  size_t snapshotHeapBytes() const { return 0; }
 
   // ---- the loop (app/PlayHistory, main.cpp) ----
   // An ask waits and may carve now (PlayHistory's turn, statsglue::turnOf()'s
@@ -219,7 +237,13 @@ public:
   // The card worker has background work a rank comes after (a walk, a
   // compaction): a rank's ask waits for it before it takes its block (each
   // pass, CardTasks' word).
-  void workerAhead(bool ahead) { workerAhead_ = ahead; }
+  void workerAhead(bool ahead) { setAhead(kAheadWalk, ahead); }
+  // S3a: the card worker's tag scan holds its memory (CardJobs::scanHeld():
+  // its work memory and any View; the owner's "Only while held",
+  // 2026-11-21): a visit's ask (and the lean ask) waits it out before its
+  // take, and one queued gives its block back (gateOf()'s kWhyRest); S2's
+  // asks don't wait for it. Each pass, CardTasks' word.
+  void restAhead(bool held) { setAhead(kAheadRest, held); }
   // S3a: the Rank lane's own wait this pass (ScanScheduler::yieldNow()): a
   // visit's ask takes no block while it isn't None, and one queued gives its
   // block back (each pass, CardTasks' word, as workerAhead(); after the
@@ -250,23 +274,25 @@ public:
   bool holds() const { return block_ != nullptr; }
   // The walk works (main.cpp: the loop's idle wait short meanwhile).
   bool walking() const { return state_.load() == kWalk; }
-  // The update's fence went up: an ask's block (it shouldn't be held) and the
-  // stats pages' snapshot freed (their bytes, for the fence's line); S2's
-  // and the console's asks kept to begin again after the Live (Hu's visit
-  // too, its snapshot carved again), a UI ask cancelled (the fence takes
-  // the tab back to Artists).
+  // The update's fence went up: an ask's block (it shouldn't be held) given
+  // back and the stats pages' snapshot released (the heap's bytes given
+  // back, for the fence's line: the block's alone, the snapshot's none);
+  // S2's and the console's asks kept to begin again after the Live (Hu's
+  // visit too, its snapshot lent again), a UI ask cancelled (the fence
+  // takes the tab back to Artists).
   size_t drop();
   // The orderly end: a worker step under way finished first (at most
-  // `maxMs`), then the block given back and the snapshot freed.
+  // `maxMs`), then the block given back and the snapshot released.
   void ending(uint32_t maxMs);
 
 private:
   enum Kind : uint8_t { kNone, kRank, kList, kWalkAsk, kTrack, kVisit, kLean };
   enum State : uint8_t { kIdle, kAsked, kRankQueued, kTrackQueued, kRunning, kDone, kWalk };
   // flags_: the ask is the UI's; forced (Hv1: Lists; Hn1: No folders); the
-  // snapshot is Hu's (the console's held fake visit, carved by Hu's ask:
-  // kept as a page keeps it, carved again after a fence); the lit cap on
-  // (Hc1); the visit capped; this ask carved the snapshot; stalled (an S3a
+  // snapshot is Hu's (the console's held fake visit, lent to Hu's ask:
+  // kept as a page keeps it, lent again after a fence); the lit cap on
+  // (Hc1); the visit capped; this ask borrowed the snapshot (kCarved: the
+  // Dance tab's block lent to it); stalled (an S3a
   // ask the card worker took no step of in 30 s: in Asked, holding nothing,
   // statsvisit::kStallMs from that give-up before its next take: gateOf()'s
   // kWhyWorker, the wait's start kept from it until the take); the ask is
@@ -318,9 +344,15 @@ private:
   void endVisit(Outcome o, const char* why);        // the ask ended (its block back), `why` said
   void capVisit();                                  // ... at the lit cap: Capped, no ask by itself
   void stop(Outcome o, const char* why);            // the ask under way stopped (cancel(), the card, the stats off)
-  // The snapshot freed, `why` said: its line's us (turnVisit()'s re-carve
-  // leaves it out of the take's turn, as its other lines; 0: none held).
+  // The snapshot released (the pointer dropped: the Dance tab's block is
+  // the tab's again, nothing freed), `why` said: its line's us
+  // (turnVisit()'s leaves it out of the take's turn, as its other lines;
+  // 0: none held).
   uint32_t freeSnap(const char* why);
+  // kAheadWalk: the card worker's walk or a compaction comes before a rank
+  // (workerAhead()); kAheadRest: the tag scan holds its memory (restAhead()).
+  static constexpr uint8_t kAheadWalk = 1, kAheadRest = 2;
+  void setAhead(uint8_t bit, bool on) { ahead_ = static_cast<uint8_t>(on ? ahead_ | bit : ahead_ & ~bit); }
   // The held snapshot's header as a page reads it (Hk's first parts, a
   // console visit's landing): `piece` 0 all of it; 1 the key and the rows'
   // counts, 2 the 7 days, 3 DAYS' span and Not played yet's count (Hk's,
@@ -331,14 +363,14 @@ private:
   statsglue::Glue* glue_ = nullptr;
   tagstore::Fs* fs_ = nullptr;
   Ask* block_ = nullptr;  // the ask's block (its head: Ask, which keeps its bytes)
-  statsvisit::Snapshot* snap_ = nullptr;  // the stats pages' snapshot (a plain psramAlloc block), held
+  statsvisit::Snapshot* snap_ = nullptr;  // the stats pages' snapshot (the Dance tab's block, lent), held
   std::atomic<uint8_t> state_{kIdle};
   Kind kind_ = kNone;
   bool rank_ = false;         // the queued (or running) step is a rank
   uint8_t shelf_ = 0;         // Hl's: 0 Most played, 1 New finds, 2 Old favourites, 3 Not played yet, 4 Recently played
   uint8_t window_ = 2;        // Most played's: 0 7 days, 1 30 days, 2 All time
   uint8_t restarts_ = 0;      // the walk begun again (an index that changed)
-  bool workerAhead_ = false;  // the card worker's walk or a compaction comes before a rank (workerAhead())
+  uint8_t ahead_ = 0;         // what the card worker has ahead of an ask (kAheadWalk, kAheadRest: CardTasks' word)
   uint8_t waitLogged_ = 0;    // the gate that held the ask, said once (a bit each)
   // In Asked, the wait's start (the last pass nothing held it: phaseOf()'s
   // waitedMs); queued, the step queued (Gates::nowMs).

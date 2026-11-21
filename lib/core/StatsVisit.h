@@ -14,9 +14,11 @@
 // The listening stats' visit (docs/LISTENING-STATS.md 9.7's S3a, under the
 // owner's "A: nothing held" and the four calls of section 1): what a visit's
 // ask leaves for the stats pages, and the arithmetic of its block.
-//   - The snapshot (9.7's table): one plain block (the firmware's
-//     psramAlloc: at 4,095 B or less malloc would land in internal RAM),
-//     byte-packed, read with cardcontract's get16/get32. A 160 B header
+//   - The snapshot (9.7's table): one plain block, the firmware's the Dance
+//     tab's 4,096 B tracker scratch in PSRAM (DanceMode, kept for the
+//     session), lent while that tab is down (the owner's "Borrow Dance's
+//     block", 2026-11-21: the stats own no memory; loanOk()), byte-packed,
+//     read with cardcontract's get16/get32. A 160 B header
 //     (the grade and flags, the key, the ask's time, today, the live round,
 //     each list's rows and total, the span, the 7 days, Not played yet's
 //     count and offsets, Most played's window, the version); each list in
@@ -51,7 +53,14 @@ using statsrank::List;
 // The snapshot (9.7's table)
 // ---------------------------------------------------------------------------
 constexpr uint32_t kHeaderBytes = 160;
-constexpr size_t kBound = 4096;        // the block's bytes at most, to 18,432 albums (bytesFor())
+constexpr size_t kBound = 4096;        // the block's bytes at most, to 18,432 albums (bytesFor()): the Dance tab's block
+// The loan of the Dance tab's block (DanceMode::lendScratch()): made only
+// while the block exists (`exists`: carved at the boot; keyed on it, not on
+// the dancer being ready, as a failed skin change clears that and keeps the
+// block), the tab is down (`danceActive` false: from setActive(true) on the
+// tab's tracker reads into it), and for `n` within it (kBound: 4,096 B; a
+// library past 18,432 albums gets none, No room).
+constexpr bool loanOk(bool exists, bool danceActive, size_t n) { return exists && !danceActive && n <= kBound; }
 constexpr uint16_t kMagic = 0x5653;    // "SV", little-endian
 constexpr uint32_t kMaxTracks = 65534;  // a library past it gets no ask: ids are u16 (0xFFFF none)
 constexpr uint32_t kMaxAlbums = 0xFFFF;
@@ -184,7 +193,8 @@ struct Context {
 // False, nothing written: a library past kMaxTracks or kMaxAlbums, or a
 // block short of bytesFor(ctx.albums) (a held snapshot re-asked over an
 // index with more albums). A backstop in the firmware: StatsLists'
-// turnVisit() carves again a held snapshot short of the index's albums,
+// turnVisit() releases a held snapshot short of the index's albums (the
+// loan is kBound, so only past 18,432 albums: no loan then, No room),
 // finishVisit() puts the ask back when the index's albums aren't the
 // turn's, and StatsLists::loop()'s key check frees a snapshot over another
 // index (a remount's: 9.7's "the snapshot's life").
@@ -266,9 +276,12 @@ const char* phaseName(Phase p);
 const char* outcomeName(Outcome o);
 Outcome outcomeOf(statsrank::Outcome o);
 // S2's gate bits (StatsLists::turnWanted()'s why: one at a time, the first
-// that holds in this order).
+// that holds in this order), and S3a's own last: kWhyRest, the card
+// worker's tag scan holding its memory (its View or its work memory:
+// CardJobs::scanHeld(); the owner's "Only while held", 2026-11-21), which
+// only the visit's and lean asks wait out (S2's asks don't).
 constexpr uint8_t kWhyOff = 1, kWhyBoot = 2, kWhyTmp = 4, kWhyUpdate = 8, kWhyCard = 16, kWhyJoin = 32,
-                  kWhyWorker = 64;
+                  kWhyWorker = 64, kWhyRest = 128;
 constexpr uint32_t kWaitingMs = 3000;  // held this long by a wait: Waiting
 // The phase of an ask made (Asked, under way, or ended with `outcome`; with
 // none made the page's phase is Idle, the caller's). `why`: the gate's bits
@@ -283,8 +296,8 @@ constexpr uint32_t kWaitingMs = 3000;  // held this long by a wait: Waiting
 //   the cap: Capped; Cancelled: Idle;
 //   the boot's scan (2): Working, however long (4.4's Folding, "Counting
 //   plays…"; S2 gives it before every later gate);
-//   4, 8, 32 or 64, or a Rank-lane wait: Working, then Waiting from
-//   kWaitingMs (no count);
+//   4, 8, 32, 64 or 128 (the tag scan's memory held), or a Rank-lane wait:
+//   Working, then Waiting from kWaitingMs (no count);
 //   else (carved, ranking, walking): Working.
 // A wait met after the take, its block given back (V4's hold bounds), is
 // the gate's wait again, `waitedMs` from its start: Working, then Waiting
