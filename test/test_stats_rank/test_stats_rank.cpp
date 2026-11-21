@@ -712,7 +712,6 @@ void test_the_rank_scenarios() {
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(rows["played"].u64(), rep.played, what.c_str());
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(rows["played"].u64(), mem.played.n, what.c_str());
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, mem.played.lost, what.c_str());
-    // The u40 set: statsref's bytes.
     // The u40 set: statsref's bytes; the u64 set, given too, not touched
     // (one set or the other).
     Mem mem40(static_cast<uint32_t>(rows["rcnt"].u64()), static_cast<uint32_t>(rows["played"].u64()),

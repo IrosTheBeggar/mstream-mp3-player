@@ -17,7 +17,8 @@
 //     (statsrank::Played: Hw, Hl3, exact) or, since S3a, the u40 set
 //     (statsrank::Played40: S3's asks), which matches a hash by its top 40
 //     bits: an unplayed track can read as played, hiding its album, but a
-//     played album is never shown (the owner's call 3, 4.3);
+//     played album is never shown (the owner's call 3, 4.3) while the set
+//     lost no hash to its room (Played40::lost 0);
 //   - in the wanted set (the hashes the lists hold): its track id kept
 //     (u32: no 65,534 cap, unlike Auto DJ's u16 maps). A hash two tracks
 //     of this library share (a 64-bit collision) maps neither, as the join

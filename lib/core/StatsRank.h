@@ -181,8 +181,11 @@ struct Played {
 // hashes: the top bits of an ascending u64 sequence ascend, so no sort. Two
 // played hashes that share their top 40 bits give two equal rows, as the
 // u64 set gives two. contains() matches by the top 40 bits alone, so the
-// error goes one way: a hash whose top 40 bits equal a played one's reads
-// as played (an unplayed album hidden, never a played one shown).
+// error goes one way while `lost` is 0: a hash whose top 40 bits equal a
+// played one's reads as played (an unplayed album hidden, never a played
+// one shown). With `lost` above 0 the set is short, and a played hash left
+// out of it reads as not played: a played album could show as not played,
+// so the caller counts no Not played yet from it (app/StatsLists).
 struct Played40 {
   static constexpr size_t kRowBytes = 5;
   // The region for `rows`: rows x 5, rounded up to 16 (9.7's grades).
