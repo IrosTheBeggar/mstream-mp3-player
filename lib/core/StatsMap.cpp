@@ -15,6 +15,17 @@ uint64_t Wanted::hashAt(uint32_t i) const { return cc::get64(row(i)); }
 uint32_t Wanted::idAt(uint32_t i) const { return cc::get32(row(i) + 8); }
 void Wanted::setId(uint32_t i, uint32_t id) { cc::put32(row(i) + 8, id); }
 
+bool Wanted::region(uint8_t* p, uint32_t rows) {
+  *this = Wanted();
+  if (rows == 0) return true;
+  if (!p || rows > kMaxChunks * kChunkRows) return false;
+  // Chunk k at the region's row k x kChunkRows: row(i) is the region's i-th.
+  chunks = wantedChunks(rows);
+  for (uint32_t k = 0; k < chunks; ++k) chunk[k] = p + static_cast<size_t>(k) * kChunkBytes;
+  rowsCap = rows;
+  return true;
+}
+
 bool Wanted::add(uint64_t hash) {
   if (n == cap()) return false;
   uint8_t* r = row(n++);
@@ -23,19 +34,54 @@ bool Wanted::add(uint64_t hash) {
   return true;
 }
 
-void Wanted::seal() {
-  // An insertion sort over the chunked rows (at most a few hundred: the
-  // lists' hashes), then each hash once.
-  for (uint32_t i = 1; i < n; ++i) {
-    const uint64_t h = hashAt(i);
-    uint32_t j = i;
-    while (j > 0 && hashAt(j - 1) > h) {
-      std::memcpy(row(j), row(j - 1), kRowBytes);
-      --j;
+namespace {
+
+// The row held in `held` (its hash `key`) sifted down from `hole` in the
+// max-heap of rows [0, end): the larger child moved up into the hole while
+// it is larger than the row, then the row put in the hole. A loop, no
+// recursion, as libstdc++'s __adjust_heap under the save's sort (11's
+// loop-stack row), which goes on to a leaf and pushes back up instead of
+// stopping.
+void siftDown(const Wanted& w, uint32_t hole, uint32_t end, const uint8_t* held, uint64_t key) {
+  for (;;) {
+    uint32_t c = 2 * hole + 1;
+    if (c >= end) break;
+    uint64_t hc = w.hashAt(c);
+    if (c + 1 < end) {
+      const uint64_t right = w.hashAt(c + 1);
+      if (right > hc) {
+        ++c;
+        hc = right;
+      }
     }
-    cc::put64(row(j), h);
-    cc::put32(row(j) + 8, kNoId);
+    if (hc <= key) break;
+    std::memcpy(w.row(hole), w.row(c), kRowBytes);
+    hole = c;
   }
+  std::memcpy(w.row(hole), held, kRowBytes);
+}
+
+}  // namespace
+
+void Wanted::seal() {
+  // A heap sort in place over the rows, chunked or one region (S3a's V2;
+  // finishRank() seals on the loop): S2's insertion sort took about n^2 / 4
+  // steps for the lists' 674-696 rows, which come in rank order (by hash,
+  // as good as random), a heap sort about 2n log2 n. Its frames are a few,
+  // whatever the input, as the save's sort's (lib/core/StatsFold.cpp: no
+  // recursion on the loop's stack). Equal hashes become one row below, so
+  // their order doesn't matter.
+  uint8_t held[kRowBytes];
+  for (uint32_t i = n / 2; i-- > 0;) {
+    std::memcpy(held, row(i), kRowBytes);
+    siftDown(*this, i, n, held, cc::get64(held));
+  }
+  for (uint32_t end = n; end-- > 1;) {
+    std::memcpy(held, row(end), kRowBytes);
+    std::memcpy(row(end), row(0), kRowBytes);
+    siftDown(*this, 0, end, held, cc::get64(held));
+  }
+  // Each hash once, every id kNoId.
   uint32_t out = 0;
   for (uint32_t i = 0; i < n; ++i) {
     if (out > 0 && hashAt(out - 1) == hashAt(i)) continue;
@@ -69,8 +115,20 @@ uint32_t Wanted::idOf(uint64_t hash) const {
 
 Map::Status Map::begin(const LibraryIndex* index, const statsrank::Played* played, Wanted* wanted,
                        uint8_t* albumBits, void* folders) {
+  return start(index, played, nullptr, wanted, albumBits, folders);
+}
+
+Map::Status Map::begin(const LibraryIndex* index, const statsrank::Played40* played, Wanted* wanted,
+                       uint8_t* albumBits, void* folders) {
+  return start(index, nullptr, played, wanted, albumBits, folders);
+}
+
+Map::Status Map::start(const LibraryIndex* index, const statsrank::Played* played,
+                       const statsrank::Played40* played40, Wanted* wanted, uint8_t* albumBits, void* folders) {
   release();
   stats_ = Stats();
+  played_ = nullptr;
+  played40_ = nullptr;
   if (!index || !index->ready()) {
     status_ = Status::Aborted;
     return status_;
@@ -80,8 +138,9 @@ Map::Status Map::begin(const LibraryIndex* index, const statsrank::Played* playe
   stamp_ = index->buildStamp();
   visited_ = 0;
   played_ = played && albumBits ? played : nullptr;
+  played40_ = played40 && albumBits ? played40 : nullptr;
   wanted_ = wanted;
-  bits_ = played_ ? albumBits : nullptr;
+  bits_ = played_ || played40_ ? albumBits : nullptr;
   albums_ = bits_ ? index->albumCount() : 0;
   if (bits_) std::memset(bits_, 0, albumBytes(albums_));
   if (wanted_)
@@ -100,7 +159,7 @@ void Map::release() {
 void Map::visit(void* ctx, uint32_t t, uint64_t h) {
   Map& m = *static_cast<Map*>(ctx);
   ++m.visited_;
-  if (m.played_ && m.played_->contains(h)) {
+  if (m.isPlayed(h)) {
     ++m.stats_.playedTracks;
     const uint32_t a = m.index_->track(t).album;
     if (a < m.albums_) m.bits_[a / 8] = static_cast<uint8_t>(m.bits_[a / 8] | 1u << (a % 8));
