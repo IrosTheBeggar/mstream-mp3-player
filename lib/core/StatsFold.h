@@ -319,6 +319,17 @@ public:
   uint32_t gap() const { return gap_; }
   const Head& head() const { return head_; }
   uint32_t generation() const { return generation_; }
+  // S3a (9.7's V3; 4.2 as decided: the entry line's day and the snapshot's):
+  // HEAD's sinceDay, else the day the first save will set from what is
+  // folded: the earliest dated play's (firstPlayDay_), not after today when
+  // `nowMs` is a clock believed; else today; else kUnsetDay. plan()'s rule,
+  // but for the root's commitTime, which only plan() is given. With no
+  // clock (nowMs 0): HEAD's sinceDay, else the earliest dated play's day.
+  uint16_t sinceDayNow(uint64_t nowMs = 0) const;
+  // The round a live fold gives its record (HEAD's round as loaded + 2,
+  // saturating: roundOf()'s), so a row whose lastOrd is it was played this
+  // session (Recently played's "This session" with no clock, 7.6).
+  uint32_t liveRound() const;
   // The records' row for a path hash, ⊕'d (Ht: the card's row ⊕ this).
   // False: none.
   bool track(uint64_t hash, Track* out) const;
@@ -435,6 +446,10 @@ private:
   MarkRow* findMark(const uint8_t dev[6], uint64_t epoch, uint32_t* at) const;
   MarkRow* addMark(const uint8_t dev[6], uint64_t epoch, uint32_t* at);
   void sortMark();
+  // sinceDay as a save would set it from the fold alone (HEAD's unset): the
+  // earliest dated play folded, not after `today` when `known`; else today
+  // when known; else kUnsetDay (plan() then tries the commitTime).
+  uint16_t firstSaveDay(bool known, uint16_t today) const;
   void fold(const playlog::Slot& s, bool live);
   void heldSlot(const playlog::Slot& s, int file);
   uint32_t roundOf(const Record& r) const;
