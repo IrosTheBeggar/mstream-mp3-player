@@ -4240,8 +4240,19 @@ struct StatsRun {
   // fails"): freed besides before each long-lived carve made while it is
   // held, a decoder's open (the FLAC's, the Opus's) or a join's begin (the
   // Dc), and not carved again until the next visit (the page attached again
-  // at 0 rows with Try again: nothing asks by itself).
-  enum class Carve : uint8_t { None, Plain, Top };
+  // at 0 rows with Try again: nothing asks by itself). Borrowed (S3a's V8,
+  // the owner's "Borrow Dance's block", 2026-11-21: the firmware's): the
+  // snapshot lent DanceMode's 4,096 B scratch (statshold::borrow(), its rule
+  // statsvisit::loanOk(): the block made at the boot, the Dance tab down,
+  // the library's bytesFor() within kBound; refused: the visit's "No room",
+  // no grade asked), held to the next fence or the Dance tab, nothing carved
+  // for it and nothing freed: the block is main's, carved at the boot and
+  // kept for the session. The model's boot carves the dance as [heap]
+  // dance's PSRAM, in K (40,960 + 9,216 B: the scratch, the tracker's four
+  // buffers and the crab's sprite, about 48,900 B on the device, in five
+  // blocks), so the scratch is inside that, not a block of its own: the
+  // same in every way, main's included, so lending it moves nothing.
+  enum class Carve : uint8_t { None, Plain, Top, Borrowed };
   struct Page {
     size_t bytes = 0;
     Carve carve = Carve::None;
@@ -4266,6 +4277,7 @@ struct StatsRun {
     size_t largest = 0;    // largest() at the ask, before its snapshot
     bool snapCarved = false;  // (a visit) its snapshot carved by this ask
     bool outOfL = false;      // ... out of the largest free block
+    bool snapLent = false;    // (a visit, Borrowed) its snapshot lent the Dance tab's block: nothing carved
   };
   std::vector<Turn> turns;
   uint32_t pageFreed = 0;  // (page) the snapshot freed at a fence or the run's end, held
@@ -4811,7 +4823,10 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   // page kept, the whole ask's (as before it). A4's page (StatsRun::page,
   // `page` above): carved plain, or (Top) through the hold as the grades
   // are, refused there when it finds no room (the visit's "No room": no
-  // grade asked).
+  // grade asked). Borrowed (V8's, the firmware's): lent the Dance tab's
+  // block (statsvisit::loanOk(), the tab down), no carve, nothing kept in
+  // `page` (its memory is main's dance block); a refused loan the visit's
+  // "No room".
   auto s3Ask = [&] {
     if (!stats || stats->statsOff) return;
     const bool visit = stats->ask == StatsRun::Ask::Visit;
@@ -4830,7 +4845,17 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
     void* snap = page;
     const bool top = stats->page.carve == StatsRun::Carve::Top;
     tracePoint(kTpVisit);
-    if (visit && !snap) {
+    if (visit && stats->page.carve == StatsRun::Carve::Borrowed) {
+      // (StatsLists::turnVisit(): statshold::borrow(need), DanceMode's
+      // lendScratch(), the tab down in the model's run.)
+      TEST_ASSERT_NULL(snap);
+      t.snapLent = sv::loanOk(true, false, stats->page.bytes ? stats->page.bytes : sv::bytesFor(albums));
+      if (!t.snapLent) {
+        ++stats->askRefused;
+        stats->turns.push_back(t);
+        return;
+      }
+    } else if (visit && !snap) {
       // Out of the largest free block, or elsewhere (TLSF's good fit: the
       // smallest free class that holds it).
       size_t lAt = 0, lBytes = 0;
@@ -7051,6 +7076,12 @@ void traceHeldMove(const char* label, const std::vector<uint8_t>& saved, cc::Sou
 // landed, the first carve that landed elsewhere, what sits in the largest
 // free block): the 3,860 B way at D's update 4 and at its worst in the wide
 // build, and the 4,096 B way at its worst there.
+// S3a's V8, the firmware's since the owner's "Borrow Dance's block"
+// (2026-11-21; V9 models it): the visits with each snapshot lent the Dance
+// tab's 4,096 B block (main's, carved at the boot and kept), nothing carved
+// for it: every figure the rework's and the visits alone's to the byte, and
+// the visits alone's grades, history by history, in every build ("V8's
+// borrowed snapshot").
 void test_the_listening_stats_across_updates() {
   const uint32_t tracks = 19412;
   const synthcard::Card card = synthcard::make(synth::userShape(tracks));
@@ -7149,6 +7180,11 @@ void test_the_listening_stats_across_updates() {
   StatsRun fallback = a4, fallbackBound = a4Bound, onTop = a4, onTopBound = a4Bound;
   fallback.page.fallback = fallbackBound.page.fallback = true;
   onTop.page.carve = onTopBound.page.carve = StatsRun::Carve::Top;
+  // S3a's V8 (the owner's "Borrow Dance's block", 2026-11-21; V9 models
+  // it): the visits as above, each snapshot lent the Dance tab's 4,096 B
+  // block (main's, carved at the boot), nothing carved for it.
+  StatsRun borrowed = visits;
+  borrowed.page.carve = StatsRun::Carve::Borrowed;
   std::vector<Yard> yards = {
       {"main"},
       {"main's queue 2,048 B longer", 2048},
@@ -7192,13 +7228,17 @@ void test_the_listening_stats_across_updates() {
       {"for comparison: the snapshot held, 3,860 B at the top through the hold, freed at the next fence", 0, &onTop},
       {"for comparison: the snapshot held, 4,096 B at the top through the hold, freed at the next fence", 0,
        &onTopBound},
+      // S3a's V8, the firmware's (V9): the snapshot in a block main holds.
+      {"V8: a visit after the boot's join and each update's rejoin, the snapshot lent the Dance tab's block "
+       "(nothing carved)",
+       0, &borrowed, true},
   };
   enum { kMain, kControl, kMainFirst, kRework, kReworkAcks };
   const size_t kFenceBefore = 5, kFenceAfter = 6, kFullLog = 7, kFullFails = 8, kFullAcks = 9, kReworkJoin = 10,
                kFullJoin = 11, kFullAfter = 12, kThrough = 13, kFence = 14, kUnder = 15, kUnderFirst = 16,
                kUnderMid = 17, kUnderAcks = 18, kVisits = 19, kA4Small = 20, kA4 = 21, kA4Bound = 22,
-               kFallback = 23, kFallbackBound = 24, kTop = 25, kTopBound = 26;
-  TEST_ASSERT_EQUAL_size_t(27, yards.size());
+               kFallback = 23, kFallbackBound = 24, kTop = 25, kTopBound = 26, kBorrowed = 27;
+  TEST_ASSERT_EQUAL_size_t(28, yards.size());
 
   const std::vector<History> hs = yardstickHistories();
   const auto t0 = std::chrono::steady_clock::now();
@@ -7267,11 +7307,12 @@ void test_the_listening_stats_across_updates() {
           for (const StatsRun::Turn& t : r.turns) out += t.outOfL ? 1 : 0;
           printf(" | the visits: %s; the snapshot %s, out of the largest free block %u of %u; traceless: %s",
                  tookOf(r).c_str(),
-                 r.page.carve == StatsRun::Carve::None ? "freed at each landing"
-                 : r.page.fallback                     ? "held to the next fence or long-lived carve"
-                                                       : "held to the next fence",
+                 r.page.carve == StatsRun::Carve::None       ? "freed at each landing"
+                 : r.page.carve == StatsRun::Carve::Borrowed ? "lent the Dance tab's block, nothing carved"
+                 : r.page.fallback                           ? "held to the next fence or long-lived carve"
+                                                             : "held to the next fence",
                  (unsigned)out, (unsigned)r.turns.size(), r.askTraceless ? "yes" : "NO");
-          if (r.page.carve != StatsRun::Carve::None)
+          if (r.page.carve == StatsRun::Carve::Plain || r.page.carve == StatsRun::Carve::Top)
             printf("; held through %u of the model's points, at %u of its figures", (unsigned)r.heldPoints,
                    (unsigned)r.heldAtFigure);
           if (r.page.fallback)
@@ -7557,6 +7598,63 @@ void test_the_listening_stats_across_updates() {
            "(no room with a decoder's) %u; the visits took a grade %u times of %u (the visits alone %u)\n",
            y.name.c_str(), ws.c_str(), (unsigned)outOfL, (unsigned)turns, (unsigned)refused, (unsigned)took,
            (unsigned)turns, (unsigned)visitsTaken);
+  }
+  // S3a's V8, the firmware's (the owner's "Borrow Dance's block",
+  // 2026-11-21; V9 models it): each visit's snapshot lent the Dance tab's
+  // 4,096 B block, which main carves at the boot and keeps, so nothing is
+  // carved for it. Every figure the rework's and the visits alone's to the
+  // byte (the boot's join and each update's), in every history of every
+  // build; the same steps failing (none the control doesn't); the visits
+  // asked as the visits alone ask (each turn's rows, grades' blocks and
+  // largest free block at the ask) and taking their grades, history by
+  // history; each snapshot lent (the model's library within kBound, the tab
+  // down), none carved, freed or held in the model heap, no ask leaving a
+  // trace.
+  {
+    const Yard& y = yards[kBorrowed];
+    same(kRework, kBorrowed);
+    same(kVisits, kBorrowed);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, movesOf(kBorrowed).n, y.name.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(y.fails == yards[kVisits].fails, y.name.c_str());
+    uint32_t lent = 0, took = 0, turns = 0;
+    for (size_t i = 0; i < hs.size(); ++i) {
+      const StatsRun& r = y.runs[i];
+      const StatsRun& v = yards[kVisits].runs[i];
+      const std::string w = y.name + ", " + hs[i].name;
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(6, r.turns.size(), w.c_str());
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(v.turns.size(), r.turns.size(), w.c_str());
+      TEST_ASSERT_TRUE_MESSAGE(r.askTraceless, w.c_str());
+      TEST_ASSERT_EQUAL_STRING_MESSAGE(tookOf(v).c_str(), tookOf(r).c_str(), w.c_str());
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(v.asks, r.asks, w.c_str());
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(v.askRefused, r.askRefused, w.c_str());
+      for (size_t k = 0; k < r.turns.size(); ++k) {
+        const StatsRun::Turn& t = r.turns[k];
+        TEST_ASSERT_TRUE_MESSAGE(t.snapLent, w.c_str());
+        TEST_ASSERT_FALSE_MESSAGE(t.snapCarved, w.c_str());
+        TEST_ASSERT_FALSE_MESSAGE(t.outOfL, w.c_str());
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(v.turns[k].rows, t.rows, w.c_str());
+        TEST_ASSERT_EQUAL_size_t_MESSAGE(v.turns[k].bytes[0], t.bytes[0], w.c_str());
+        TEST_ASSERT_EQUAL_size_t_MESSAGE(v.turns[k].bytes[1], t.bytes[1], w.c_str());
+        TEST_ASSERT_EQUAL_size_t_MESSAGE(v.turns[k].largest, t.largest, w.c_str());
+        TEST_ASSERT_EQUAL_INT_MESSAGE(v.turns[k].took, t.took, w.c_str());
+        lent += t.snapLent ? 1 : 0;
+        took += t.took >= 0 ? 1 : 0;
+        ++turns;
+      }
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, r.pageFreed, w.c_str());
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, r.heldPoints, w.c_str());
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, r.heldAtFigure, w.c_str());
+      for (int k = 0; k < 3; ++k) TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, r.letGo[k], w.c_str());
+      TEST_ASSERT_TRUE_MESSAGE(r.topWhy.empty(), w.c_str());
+    }
+    TEST_ASSERT_EQUAL_UINT32(visitsTaken, took);
+    printf("[stats-yard] V8's borrowed snapshot | %s: every figure the rework's and the visits alone's, to the byte "
+           "(%u histories, the boot's join and 5 updates each); %u of %u steps failing (the visits alone %u); the "
+           "snapshot lent %u of %u visits, carved 0 times; the visits took a grade %u times of %u (the visits alone "
+           "%u), the same grades history by history\n",
+           y.name.c_str(), (unsigned)hs.size(), (unsigned)y.fails.size(), (unsigned)(hs.size() * 5),
+           (unsigned)yards[kVisits].fails.size(), (unsigned)lent, (unsigned)turns, (unsigned)took, (unsigned)turns,
+           (unsigned)visitsTaken);
   }
   // A4's moves traced (printed): the 3,860 B way's suite step (D's update
   // 4), its worst in the wide build ("opus 2 flac 2 dc 0", update 4) and
