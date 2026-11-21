@@ -3,6 +3,7 @@
 
 #include "app/StatsLists.h"
 
+#include <esp_heap_caps.h>
 #include <esp_timer.h>
 
 #include <cstring>
@@ -15,6 +16,7 @@
 #include "WallClock.h"
 #include "app/BoardClock.h"
 #include "app/ListeningStats.h"
+#include "app/Psram.h"
 
 namespace {
 
@@ -23,6 +25,8 @@ namespace sx = statsfile;
 namespace sr = statsrank;
 namespace sm = statsmap;
 namespace sg = statsglue;
+namespace sv = statsvisit;
+using Wait = ScanScheduler::Wait;
 
 using ul = unsigned long;
 using ull = unsigned long long;
@@ -37,8 +41,27 @@ constexpr uint8_t kRestarts = 3;
 constexpr uint32_t kQueuedMs = 30000;
 constexpr size_t kAlign = 16;
 
+// S3a (docs/LISTENING-STATS.md 9.7, "The lit hold", the owner's default (a)):
+// the lit cap's default (Hc0/Hc1 change it for the session, RAM) and the
+// visit's summed hold it is set against. Off until run 3a-1 has measured the
+// lit holds with it off and on.
+constexpr bool kLitCap = false;
+constexpr uint32_t kLitCapMs = 3000;
+// A visit's walk while lit (7.10): 100 tracks a slice, up to 4 ms a pass;
+// dark (or capped) S2's: 250 tracks, up to kWalkPassUs.
+constexpr int64_t kLitWalkPassUs = 4000;
+constexpr uint32_t kLitSlice = 100;
+constexpr uint32_t kDarkSlice = 250;
+// A visit's walk that skips passes this long gives its block back (a lit
+// list moving, the card held: 9.7's hold bounds).
+constexpr uint32_t kWalkSkipMs = 1000;
+// Not played yet opens after this many counting days (call 4, O5).
+constexpr long kNotPlayedDays = 30;
+
 size_t up(size_t n) { return (n + kAlign - 1) & ~(kAlign - 1); }
 float msSince(int64_t t0) { return static_cast<float>(esp_timer_get_time() - t0) / 1000.0f; }
+size_t psramLargest() { return heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM); }
+size_t psramFreeBytes() { return heap_caps_get_free_size(MALLOC_CAP_SPIRAM); }
 
 struct PassClock {
   int64_t endUs;
@@ -74,6 +97,18 @@ sr::List listOf(uint8_t shelf, uint8_t window) {
   }
 }
 
+// A list as the snapshot's lines name it.
+const char* listText(sr::List l) {
+  switch (l) {
+    case sr::kMost7: return "most played 7 days";
+    case sr::kMost30: return "30 days";
+    case sr::kMostAll: return "All time";
+    case sr::kNewFinds: return "new finds";
+    case sr::kOldFavourites: return "old favourites";
+    default: return "recently played";
+  }
+}
+
 const char* closeText(autodj::Close c) {
   switch (c) {
     case autodj::Close::Closed: return "the free block above it closed by caps";
@@ -94,6 +129,38 @@ const char* closeText(autodj::Close c) {
   }
 }
 
+// S2's gate bits (statsvisit::kWhy...), as the waits' lines name them.
+const char* gateName(uint8_t why) {
+  return why == sv::kWhyOff      ? "the stats are off this session"
+         : why == sv::kWhyBoot   ? "the boot's scan (its fold, its save)"
+         : why == sv::kWhyTmp    ? "a save's tmp held (Hs or the next save promotes it first)"
+         : why == sv::kWhyUpdate ? "the library update (or the index isn't readable)"
+         : why == sv::kWhyCard   ? "the card (away, or held)"
+         : why == sv::kWhyJoin   ? "Auto DJ's join (working, or due)"
+                                 : "the card worker's walk or compaction (a rank comes after them)";
+}
+
+// The waits an ask met before its take: S2's gate bits and the Rank lane's
+// (a bit a ScanScheduler::Wait), "none" for none.
+void waitsText(uint8_t gates, uint16_t lane, char* out, size_t cap) {
+  size_t n = 0;
+  out[0] = 0;
+  static constexpr uint8_t kShort[] = {sv::kWhyBoot, sv::kWhyTmp, sv::kWhyUpdate, sv::kWhyCard, sv::kWhyJoin,
+                                       sv::kWhyWorker};
+  static constexpr const char* kShortName[] = {"the boot's scan", "a save's tmp",   "the library update",
+                                               "the card",        "Auto DJ's join", "the card worker's walk"};
+  for (size_t i = 0; i < sizeof(kShort); ++i) {
+    if (!(gates & kShort[i]) || n + 2 >= cap) continue;
+    n += static_cast<size_t>(snprintf(out + n, cap - n, "%s%s", n ? ", " : "", kShortName[i]));
+  }
+  for (int w = 0; w < ScanScheduler::kWaits; ++w) {
+    if (!(lane & (1u << w)) || n + 2 >= cap) continue;
+    n += static_cast<size_t>(
+        snprintf(out + n, cap - n, "%s%s", n ? ", " : "", ScanScheduler::waitName(static_cast<Wait>(w))));
+  }
+  if (n == 0) snprintf(out, cap, "none");
+}
+
 // A row's time (seconds since 2026-01-01, plus 1) as "2026-11-08 21:40", as
 // Ht prints it; a UTC day as "2026-11-08".
 void timeText(uint32_t t, char* out, size_t cap) {
@@ -105,11 +172,46 @@ void timeText(uint32_t t, char* out, size_t cap) {
   snprintf(out, cap, "%04d-%02d-%02d %02d:%02d", c.year, c.month, c.day, c.hour, c.minute);
 }
 void dayText(uint32_t day, char* out, size_t cap) {
+  if (day == sf::kUnsetDay) {
+    snprintf(out, cap, "none");
+    return;
+  }
   const wallclock::Civil c = wallclock::toCivil(sf::kMinMs + static_cast<uint64_t>(day) * sf::kDayMs);
   snprintf(out, cap, "%04d-%02d-%02d", c.year, c.month, c.day);
 }
+// Recently played's `when` (minutes since 2026-01-01, or the undated codes).
+void whenText(uint32_t when, char* out, size_t cap) {
+  if (when == sv::kWhenSession || when == sv::kWhenEarlier) {
+    snprintf(out, cap, "%s", when == sv::kWhenSession ? "undated, this session" : "undated, before it");
+    return;
+  }
+  const wallclock::Civil c = wallclock::toCivil(sf::kMinMs + static_cast<uint64_t>(when) * 60000);
+  snprintf(out, cap, "%04d-%02d-%02d %02d:%02d", c.year, c.month, c.day, c.hour, c.minute);
+}
+// "7 h 37 min", "45 min" (4.1's times).
+void listenedText(uint32_t ms, char* out, size_t cap) {
+  const uint32_t min = ms / 60000;
+  if (min >= 60) {
+    snprintf(out, cap, "%lu h %lu min", static_cast<ul>(min / 60), static_cast<ul>(min % 60));
+  } else {
+    snprintf(out, cap, "%lu min", static_cast<ul>(min));
+  }
+}
 
 const char* srcName(uint8_t s) { return s == sf::kAutoDj ? "Auto DJ" : s == sf::kShuffle ? "shuffle" : "you"; }
+
+// Whether Not played yet may open (call 4, O5: S3b's statsview::
+// notPlayedOpen() decides the shelf; this is the visit's grade): dated, 30
+// counting days or more; with no clock, perhaps (DAYS' span, the ask's
+// report, decides it), so the visit asks for its played set too.
+bool notPlayedMayOpen(const sf::Fold& fold) {
+  const uint64_t now = boardclock::now();
+  uint16_t today = 0;
+  if (!sf::todayOf(now, &today)) return true;
+  const uint16_t since = fold.sinceDayNow(now);
+  if (since == sf::kUnsetDay) return false;
+  return static_cast<long>(today) - static_cast<long>(since) + 1 >= kNotPlayedDays;
+}
 
 }  // namespace
 
@@ -121,6 +223,7 @@ struct StatsLists::Ask {
   sr::Memory mem;
   sr::Files files;
   sr::Played played;
+  sr::Played40 played40;  // S3a's asks' (a visit's Full grade, the lean ask)
   sr::Ranker ranker;
   sr::Report report;
   sr::TrackRows track;
@@ -129,10 +232,10 @@ struct StatsLists::Ask {
   uint8_t priority = 0;
   // The loop's.
   int64_t copyUs = 0;      // the records' copy (Fold::Cursor), on the loop
-  uint32_t trkdRecords = 0, rcntRecords = 0;
+  uint32_t trkdRecords = 0, rcntRecords = 0, daysRecords = 0;
   statsfold::Track recordRow;  // Hp: the records' row
   bool recordFound = false;
-  uint8_t* records = nullptr;  // the records' copy: 40 TRKD rows' room, then 40 RCNT rows'
+  uint8_t* records = nullptr;  // the records' copy: 40 TRKD rows' room, then 40 RCNT rows' (and S3a's 40 DAYS rows')
   sm::Map map;
   sm::Wanted wanted;
   uint8_t* bits = nullptr;
@@ -142,11 +245,22 @@ struct StatsLists::Ask {
   int64_t walkT0 = 0, walkUs = 0, walkMaxUs = 0;
   size_t parts[8] = {};  // the regions' bytes (Hr's line)
   size_t bytes = 0;      // the block's
+  // S3a's visit and lean asks: the grade's layout (statsvisit::layout()),
+  // the hold and the loop's pieces (run 3a-2: each under 35 ms).
+  sv::Layout y;
+  int64_t takeUs = 0;               // the take: the hold's start
+  int64_t turnUs = 0, lookUs = 0;   // the turn on the loop (stats.bin's directory among it)
+  int64_t handUs = 0, openUs = 0;   // the hand-off on the loop (the records' copy, the opens)
+  int64_t finishUs = 0, sealUs = 0, writeUs = 0, resolveUs = 0, notPlayedUs = 0;
+  uint32_t walkLastMs = 0;          // the walk's last pass with a slice (Gates::nowMs)
+  bool litTake = false, litRank = false, litWalk = false;
+  bool set = false;                 // the walk keeps the album bits (the u40 set whole)
 };
 
 void StatsLists::begin(sg::Glue* glue, tagstore::Fs* fs) {
   glue_ = glue;
   fs_ = fs;
+  if (kLitCap) flags_ = static_cast<uint8_t>(flags_ | kCapOn);
 }
 
 const char* StatsLists::name() const {
@@ -155,17 +269,61 @@ const char* StatsLists::name() const {
     case kList: return "Hl";
     case kWalkAsk: return "Hw";
     case kTrack: return "Hp";
+    case kVisit:
+      return (flags_ & kFromUi) ? "the visit's ask" : (flags_ & kHu) ? "Hu" : (flags_ & kForced) ? "Hv1" : "Hv";
+    case kLean: return (flags_ & kFromUi) ? "Not played yet's ask" : (flags_ & kForced) ? "Hn1" : "Hn";
     default: return "H";
   }
 }
 
 void StatsLists::command(const char* arg) {
+  // S3a's letters that ask nothing.
+  switch (arg[0]) {
+    case 'k':
+      if (!snap_) {
+        Serial.println("[listen] Hk: no snapshot held (Hu holds one; a stats page's visit)");
+      } else {
+        flags_ = static_cast<uint8_t>(flags_ | kShowSnap);  // (printed at the next pass, with the index)
+      }
+      return;
+    case 'c':
+      if (arg[1] == '0' || arg[1] == '1') {
+        flags_ = static_cast<uint8_t>(arg[1] == '1' ? flags_ | kCapOn : flags_ & ~kCapOn);
+      }
+      Serial.printf("[listen] Hc: the lit cap %s this session (its default %s, kLitCap): %s\n",
+                    (flags_ & kCapOn) ? "ON" : "off", kLitCap ? "on" : "off",
+                    (flags_ & kCapOn) ? "the stats pages' asks and Hv, Hn, Hu rank at priority 1 and walk with the "
+                                        "dark's passes, lit or not, and a visit's block is given back once its holds "
+                                        "reach 3 s in all (Capped)"
+                                      : "lit asks rank at priority 0, and a lit walk takes 4 ms a pass");
+      return;
+    case 'u':
+      if (arg[1] != '0') break;
+      // Hu0: the held fake visit's snapshot freed (its ask too, if one is
+      // asked again after a fence).
+      if (kind_ == kVisit && !(flags_ & kFromUi) && (flags_ & kHu) && state_.load() != kIdle) {
+        stop(Outcome::Cancelled, "Hu0");
+      }
+      if (!snap_) {
+        Serial.println("[listen] Hu0: no snapshot held");
+      } else {
+        freeSnap("Hu0");
+      }
+      flags_ = static_cast<uint8_t>(flags_ & ~kFake);
+      return;
+    default: break;
+  }
   const uint8_t s = state_.load();
+  if (s != kIdle && (flags_ & kFromUi)) {
+    Serial.printf("[listen] H%c: %s under way: one ask at a time\n", arg[0], name());
+    return;
+  }
   if (s != kIdle && s != kAsked) {
     Serial.printf("[listen] %s under way: one ask at a time\n", name());
     return;
   }
   Kind k = kNone;
+  uint8_t flags = 0;
   switch (arg[0]) {
     case 'r': k = kRank; break;
     case 'w': k = kWalkAsk; break;
@@ -183,10 +341,43 @@ void StatsLists::command(const char* arg) {
       k = kList;
       break;
     }
+    case 'v':
+      k = kVisit;
+      if (arg[1] == '1') flags = kForced;
+      break;
+    case 'n':
+      k = kLean;
+      if (arg[1] == '1') flags = kForced;
+      break;
+    case 'u':
+      k = kVisit;
+      flags = kHu;
+      break;
     default: return;
   }
   if (s == kAsked) Serial.printf("[listen] %s replaced by the new ask (it hadn't begun)\n", name());
+  if (k == kVisit || k == kLean) {
+    beginAsk(k, flags, millis());
+    Serial.printf("[listen] %s: %s, as a stats page asks: at the next pass the write gate lets through, the boot's "
+                  "scan done, no library update asked, Auto DJ's join neither working nor due, no card worker's walk "
+                  "or compaction, and the Rank lane's waits clear (none taken while one holds); its block given back "
+                  "when it ends%s\n",
+                  name(),
+                  k == kLean        ? (flags ? "Not played yet's lean ask, without the folders' states (forced)"
+                                             : "Not played yet's lean ask (the u40 set; without the folders' states if "
+                                               "refused)")
+                  : flags & kHu     ? "a held fake visit (Full, else Lists): its snapshot kept as a page keeps it, "
+                                      "until Hu0 or a fence (then asked again after the Live and the rejoin)"
+                  : flags & kForced ? "a visit's ask with the Lists grade forced"
+                                    : "a visit's ask (Full when Not played yet may open, else Lists; Full refused, "
+                                      "Lists)",
+                  k == kVisit && !(flags & kHu) ? "; its snapshot freed after it (a console ask holds nothing) "
+                                                    "unless one was held before"
+                                                  : "");
+    return;
+  }
   kind_ = k;
+  flags_ = static_cast<uint8_t>(flags_ & (kCapOn | kFake | kShowSnap | kCapped));
   restarts_ = 0;
   waitLogged_ = 0;
   state_.store(kAsked);
@@ -195,34 +386,25 @@ void StatsLists::command(const char* arg) {
                 name(), k == kTrack ? "" : ", Auto DJ's join neither working nor due");
 }
 
+uint8_t StatsLists::gateOf(const Gates& g) const {
+  // The index only for the asks that walk; a library update asked for every
+  // ask (the index goes behind its fence; and the update waits for an ask's
+  // block).
+  const bool walk = kind_ == kList || kind_ == kWalkAsk || visiting();
+  if (!glue_->on()) return sv::kWhyOff;
+  if (glue_->booting() || glue_->scanHolds()) return sv::kWhyBoot;
+  if (glue_->store().held()) return sv::kWhyTmp;
+  if (g.updateAsked || (walk && (!g.index || !g.index->ready()))) return sv::kWhyUpdate;
+  if (g.cardHeld || g.cardAway) return sv::kWhyCard;
+  if (kind_ != kTrack && g.joinPending) return sv::kWhyJoin;
+  if (kind_ != kTrack && workerAhead_) return sv::kWhyWorker;
+  return 0;
+}
+
 bool StatsLists::turnWanted(const Gates& g) const {
-  if (state_.load() != kAsked || !glue_) return false;
-  // Each gate that holds it, said once (a bit each). The index only for Hl
-  // and Hw (their walk); a library update asked for every ask (the index
-  // goes behind its fence; and the update waits for an ask's block).
-  const bool walk = kind_ == kList || kind_ == kWalkAsk;
-  uint8_t why = 0;
-  if (!glue_->on()) why = 1;
-  else if (glue_->booting() || glue_->scanHolds()) why = 2;
-  else if (glue_->store().held()) why = 4;
-  else if (g.updateAsked || (walk && (!g.index || !g.index->ready()))) why = 8;
-  else if (g.cardHeld || g.cardAway) why = 16;
-  else if (kind_ != kTrack && g.joinPending) why = 32;
-  else if (kind_ != kTrack && workerAhead_) why = 64;
-  if (why == 0) return true;
-  StatsLists* self = const_cast<StatsLists*>(this);
-  if (!(waitLogged_ & why)) {
-    self->waitLogged_ = static_cast<uint8_t>(self->waitLogged_ | why);
-    Serial.printf("[listen] %s waits: %s\n", name(),
-                  why == 1    ? "the stats are off this session"
-                  : why == 2  ? "the boot's scan (its fold, its save)"
-                  : why == 4  ? "a save's tmp held (Hs or the next save promotes it first)"
-                  : why == 8  ? "the library update (or the index isn't readable)"
-                  : why == 16 ? "the card (away, or held)"
-                  : why == 32 ? "Auto DJ's join (working, or due)"
-                              : "the card worker's walk or compaction (a rank comes after them)");
-  }
-  return false;
+  if (state_.load() != kAsked || !glue_ || gateOf(g) != 0) return false;
+  // S3a's asks: none while the Rank lane waits (9.7's pre-turn gate).
+  return !visiting() || static_cast<Wait>(rankWait_) == Wait::None;
 }
 
 void StatsLists::refuse(const char* why) {
@@ -234,6 +416,10 @@ void StatsLists::refuse(const char* why) {
 
 void StatsLists::turn(const Gates& g) {
   if (!turnWanted(g)) return;
+  if (visiting()) {
+    turnVisit(g);
+    return;
+  }
   const int64_t t0 = esp_timer_get_time();
   const sx::Store::Copy& copy = glue_->store().cardCopy();
   const bool rank = kind_ != kTrack;
@@ -350,14 +536,165 @@ void StatsLists::turn(const Gates& g) {
   state_.store(rank ? kRankQueued : kTrackQueued);
 }
 
+// S3a's turn (9.7: "the snapshot at the turn", "the grades"): a visit's
+// snapshot carved first if none is held, then each grade through the hold
+// in order; every grade refused, the snapshot this ask carved freed, No
+// room. On the loop, at PlayHistory's turn (the write gate's pass), the
+// Rank lane's waits clear.
+void StatsLists::turnVisit(const Gates& g) {
+  const int64_t t0 = esp_timer_get_time();
+  const LibraryIndex& idx = *g.index;  // (gateOf(): ready)
+  const bool lean = kind_ == kLean;
+  const uint32_t tracks = idx.trackCount(), albums = idx.albumCount();
+  if (tracks > sv::kMaxTracks || albums > sv::kMaxAlbums) {
+    endVisit(Outcome::NoRoom, "the library is past the snapshot's u16 ids (65,534 tracks): no ask");
+    return;
+  }
+  // Not played yet's lean ask writes its count into the held snapshot at
+  // its landing: a page's needs one landed (the console's counts without).
+  if (lean && (flags_ & kFromUi) && !snapshot()) {
+    endVisit(Outcome::Cancelled, "no landed snapshot to write its count into (a visit's ask first)");
+    return;
+  }
+  // The grades, in order (9.7's grade table).
+  sv::Grade grades[2] = {sv::Grade::Lists, sv::Grade::Lists};
+  int n = 0;
+  const bool forced = (flags_ & kForced) != 0;
+  if (lean) {
+    if (!forced) grades[n++] = sv::Grade::Lean;
+    grades[n++] = sv::Grade::NoFolders;
+  } else {
+    if (!forced && notPlayedMayOpen(glue_->fold())) grades[n++] = sv::Grade::Full;
+    grades[n++] = sv::Grade::Lists;
+  }
+  // stats.bin's directory now, for a grade with a played set (its TRKD's
+  // rows: the u40 set's room, HEAD's baseRows + TRKD's + the 40 records',
+  // as S2 counts them).
+  const sx::Store::Copy& copy = glue_->store().cardCopy();
+  uint32_t trkdRows = 0;
+  int64_t lookUs = 0;
+  if (grades[0] != sv::Grade::Lists && copy.present) {
+    const int64_t l0 = esp_timer_get_time();
+    const sg::Glue::FileLook l = glue_->lookFile();
+    lookUs = esp_timer_get_time() - l0;
+    if (!l.there || !l.frame || l.generation != copy.generation) {
+      endVisit(l.unread ? Outcome::Io : Outcome::Changed,
+               l.unread ? "the card failed a read of stats.bin" : "stats.bin isn't the copy this session stands on");
+      return;
+    }
+    trkdRows = l.rows[sf::kTrkd];
+  }
+  const uint32_t rows = glue_->fold().head().baseRows + trkdRows + sf::kRecords;
+  uint16_t today = 0;
+  const bool dated = sf::todayOf(boardclock::now(), &today);
+  const uint32_t folders = pathhash::Walk::foldersFor(idx);
+  const size_t foldersBytes = pathhash::Walk::bytesFor(folders);
+  // A visit's snapshot, before the take (9.7's fit): TLSF's good fit serves
+  // it from the smallest free class that holds it, so it comes out of the
+  // largest free block only when no smaller one takes it; its line says
+  // which (run 3a-3), its block (its class) and what it took of free (its
+  // header too: run 3a-4's figure). (Each line printed as it comes: the
+  // loop's stack, 11.)
+  if (!lean) {
+    const size_t need = sv::bytesFor(albums);
+    if (snap_ && snapshotBytes() < need) freeSnap("short of the library's albums now: carved again");
+    if (snap_) {
+      Serial.printf("[listen] %s: the snapshot held at 0x%08lx (%lu B): rewritten whole\n", name(),
+                    static_cast<ul>(reinterpret_cast<uintptr_t>(snap_)), static_cast<ul>(snapshotBytes()));
+    } else {
+      const size_t l0 = psramLargest(), f0 = psramFreeBytes();
+      void* s = psramAlloc(need);
+      const size_t l1 = psramLargest(), f1 = psramFreeBytes();
+      if (!s) {
+        Serial.printf("[listen] %s: no PSRAM for its snapshot's %lu B (the largest free block %lu B)\n", name(),
+                      static_cast<ul>(need), static_cast<ul>(l0));
+        endVisit(Outcome::NoBlock, "No room");
+        return;
+      }
+      // (Its header zeroed: no magic, nothing served until write().)
+      std::memset(s, 0, sv::kHeaderBytes);
+      snap_ = sv::Snapshot::at(s);
+      flags_ = static_cast<uint8_t>(flags_ | kCarved);
+      Serial.printf("[listen] %s: the snapshot %lu B carved at 0x%08lx: a %lu B block, %lu B of PSRAM's free with "
+                    "its header; the largest free block %lu B before it, %lu B after (%s)\n",
+                    name(), static_cast<ul>(need), static_cast<ul>(reinterpret_cast<uintptr_t>(s)),
+                    static_cast<ul>(heap_caps_get_allocated_size(s)), static_cast<ul>(f0 - f1), static_cast<ul>(l0),
+                    static_cast<ul>(l1), l1 < l0 ? "out of it" : "elsewhere");
+    }
+    // (Hu's: the snapshot kept after its ask, as a page keeps it.)
+    if (flags_ & kHu) flags_ = static_cast<uint8_t>(flags_ | kFake);
+  }
+  // The grades through the hold (statshold::take(): a decoder's room asked;
+  // NoBlock asks the largest free block first, NoRoom gives the block back:
+  // a refused take leaves no trace).
+  autodj::CloseReport cr;
+  void* p = nullptr;
+  sv::Layout y;
+  for (int i = 0; i < n && !p; ++i) {
+    y = sv::layout(grades[i], sizeof(Ask), rows, foldersBytes, albums, dated);
+    cr = autodj::CloseReport();
+    const size_t largest = psramLargest();
+    p = statshold::take(y.bytes, &cr);
+    if (p) break;
+    Serial.printf("[listen] %s: %s refused: its %lu B (%s; the largest free block %lu B)\n", name(),
+                  sv::gradeName(grades[i]), static_cast<ul>(y.bytes),
+                  cr.why == autodj::Close::NoRoom ? "with it held no free block takes a decoder's buffers"
+                                                  : "no free block takes it",
+                  static_cast<ul>(largest));
+  }
+  if (!p) {
+    if ((flags_ & kCarved) && snap_) freeSnap("every grade refused (this ask carved it)");
+    endVisit(cr.why == autodj::Close::NoBlock ? Outcome::NoBlock : Outcome::NoRoom, "every grade refused: No room");
+    return;
+  }
+  block_ = new (p) Ask;
+  Ask& a = *block_;
+  a.y = y;
+  a.bytes = y.bytes;
+  uint8_t* b = static_cast<uint8_t*>(p);
+  a.mem.work = b + y.work.at;
+  if (y.ranker.bytes) a.mem.lists = b + y.ranker.at;
+  if (y.windows.bytes) {
+    a.mem.windows = b + y.windows.at;
+    a.mem.windowRows = y.windowRows;
+  }
+  a.records = b + y.records.at;
+  if (y.played.bytes) {
+    a.played40.rows = b + y.played.at;
+    a.played40.cap = y.playedRows;
+    a.mem.played40 = &a.played40;
+  }
+  a.foldersCap = folders;
+  a.albumsCap = albums;
+  a.litTake = g.lit;
+  a.lookUs = lookUs;
+  rank_ = true;
+  queuedMs_ = g.nowMs;
+  a.takeUs = a.queuedUs = esp_timer_get_time();
+  a.turnUs = a.takeUs - t0;
+  char waits[128];
+  waitsText(waitLogged_, rankWaits_, waits, sizeof(waits));
+  Serial.printf("[listen] %s: %s taken: its block %lu B at 0x%08lx (sizeof(Ask) %lu B; %lu u40 rows, %lu folders, "
+                "%lu albums, %s; the free block above it %lu B: %s, %u cap%s); waits met before it: %s; the screen "
+                "%s; the turn %lu us on the loop (stats.bin's directory %lu us): the rank queued for the card worker\n",
+                name(), sv::gradeName(y.grade), static_cast<ul>(y.bytes),
+                static_cast<ul>(reinterpret_cast<uintptr_t>(p)), static_cast<ul>(sizeof(Ask)),
+                static_cast<ul>(y.playedRows), static_cast<ul>(folders), static_cast<ul>(albums),
+                dated ? "dated" : "undated: no window room", static_cast<ul>(cr.aboveBytes), closeText(cr.why),
+                static_cast<unsigned>(cr.caps), cr.caps == 1 ? "" : "s", waits, g.lit ? "lit" : "dark",
+                static_cast<ul>(a.turnUs), static_cast<ul>(a.lookUs));
+  state_.store(kRankQueued);
+}
+
 // At the hand-off, on the loop (CardTasks' pass), with the worker free: the
 // rank's input as the session stands now (the card's copy, its base,
 // today), the records' copy (5.14's "The screens": TRKD's rows, then
 // RCNT's, each sorted and a key's records ⊕'d, Fold::Cursor in this call:
-// no fold while it is in use), and stats.bin and the base opened (a FatFile
-// each: PSRAM; the worker allocates nothing). From here until the step is
-// taken in, no stats save and no slot is made (workerOwned()). False: the
-// files didn't open (refused).
+// no fold while it is in use; S3a's visit DAYS' after them, its lean ask
+// TRKD's alone), and stats.bin and the base opened (a FatFile each: PSRAM;
+// the worker allocates nothing). From here until the step is taken in, no
+// stats save and no slot is made (workerOwned()). False: the files didn't
+// open (refused, or for S3a's asks ended Unread).
 bool StatsLists::prepare() {
   Ask& a = *block_;
   sf::Fold& fold = glue_->fold();
@@ -373,49 +710,85 @@ bool StatsLists::prepare() {
   uint16_t today = 0;
   a.in.hasToday = sf::todayOf(boardclock::now(), &today);
   a.in.today = today;
+  // (A visit's layout made undated has no window room: it ranks undated,
+  // should the clock be set since its turn.)
+  if (visiting() && !a.y.dated) a.in.hasToday = false;
   if (rank_) {
     const uint32_t records = sf::kRecords;
+    const bool lists = !visiting() || a.mem.lists;  // (the lean ask's played-set-only rank: TRKD's alone)
     const int64_t c0 = esp_timer_get_time();
     uint8_t* recs = a.records;
-    a.trkdRecords = a.rcntRecords = 0;
+    a.trkdRecords = a.rcntRecords = a.daysRecords = 0;
     {
       sf::Fold::Cursor cur(fold, sf::kTrkd);
       while (a.trkdRecords < records && cur.next(recs + static_cast<size_t>(a.trkdRecords) * sf::kTrackBytes))
         ++a.trkdRecords;
     }
     uint8_t* rc = recs + static_cast<size_t>(records) * sf::kTrackBytes;
-    {
+    if (lists) {
       sf::Fold::Cursor cur(fold, sf::kRcnt);
       while (a.rcntRecords < records &&
              cur.next(rc + static_cast<size_t>(a.rcntRecords) * sf::kStrides[sf::kRcnt]))
         ++a.rcntRecords;
     }
+    uint8_t* dy = rc + static_cast<size_t>(records) * sf::kStrides[sf::kRcnt];
+    if (visiting() && lists) {
+      sf::Fold::Cursor cur(fold, sf::kDays);
+      while (a.daysRecords < records &&
+             cur.next(dy + static_cast<size_t>(a.daysRecords) * sf::kStrides[sf::kDays]))
+        ++a.daysRecords;
+    }
     a.copyUs = esp_timer_get_time() - c0;
     a.in.trkd = recs;
     a.in.trkdRows = a.trkdRecords;
-    a.in.rcnt = rc;
-    a.in.rcntRows = a.rcntRecords;
+    if (lists) {
+      a.in.rcnt = rc;
+      a.in.rcntRows = a.rcntRecords;
+    }
+    if (a.daysRecords) {
+      a.in.days = dy;
+      a.in.daysRows = a.daysRecords;
+    }
   } else {
     a.recordFound = fold.track(a.hash, &a.recordRow);
   }
+  const int64_t o0 = esp_timer_get_time();
   const sr::Outcome o = sr::open(*fs_, a.in, &a.files);
+  a.openUs = esp_timer_get_time() - o0;
   if (o == sr::Outcome::Ok) return true;
   char why[96];
   snprintf(why, sizeof(why), "its files didn't open (%s)", sr::outcomeName(o));
-  refuse(why);
+  if (visiting()) {
+    endVisit(sv::outcomeOf(o), why);
+  } else {
+    refuse(why);
+  }
   return false;
 }
 
-bool StatsLists::start(CardWorker& worker, uint8_t priority, bool rank, uint32_t nowMs) {
+uint8_t StatsLists::rankPriority(uint8_t p) const {
+  return visiting() && (flags_ & kCapOn) ? ScanScheduler::kHighPriority : p;
+}
+
+bool StatsLists::start(CardWorker& worker, uint8_t priority, bool rank, uint32_t nowMs, bool dark) {
   const uint8_t s = state_.load();
   if (!block_ || (rank ? s != kRankQueued : s != kTrackQueued)) return false;
   // The same checks as the turn's: the session's card still the one to read.
   if (!glue_->on() || glue_->store().held() || glue_->booting()) {
-    refuse("the stats' state changed while it waited for the card worker");
+    if (visiting()) {
+      putBack("the stats' state changed while it waited for the card worker", nowMs);
+    } else {
+      refuse("the stats' state changed while it waited for the card worker");
+    }
     return false;
   }
+  const int64_t h0 = esp_timer_get_time();
   if (!prepare()) return false;
+  // The lit cap: a visit's rank at priority 1, lit or not (9.7).
+  priority = rankPriority(priority);
   block_->priority = priority;
+  block_->litRank = !dark;
+  block_->handUs = esp_timer_get_time() - h0;
   state_.store(kRunning);
   if (!worker.start(CardWorker::Job::Stats, priority, entry, this, nowMs)) {
     sr::close(*fs_, &block_->files);  // (opened again at the next hand-off)
@@ -447,18 +820,110 @@ void StatsLists::giveBack() {
 }
 
 void StatsLists::loop(const Gates& g) {
-  const uint8_t s = state_.load();
-  if ((s == kRankQueued || s == kTrackQueued) && g.nowMs - queuedMs_ >= kQueuedMs) {
-    refuse("the card worker didn't take it in 30 s (none, or busy all that time)");
-    return;
+  if (!glue_) return;
+  const uint32_t now = g.nowMs;
+  if (flags_ & kShowSnap) {
+    flags_ = static_cast<uint8_t>(flags_ & ~kShowSnap);
+    printSnapshot(g, "Hk", true);
   }
-  if (s != kDone) return;
-  Ask& a = *block_;
-  sr::close(*fs_, &a.files);  // (on the loop, where they were opened)
-  if (rank_) {
-    finishRank(g);
-  } else {
-    finishTrack();
+  // The snapshot's frees that come with no navigation (9.7's "the snapshot's
+  // life"): the stats off; the card away or held (an S3a ask under way
+  // dropped with it: No card, the page's Try again once it is back); a
+  // remount whose index isn't the snapshot's key (not while a visit's ask
+  // is under way: it rewrites the snapshot over the index it took).
+  const bool cardGone = g.cardHeld || g.cardAway;
+  if (!glue_->on() || cardGone) {
+    const Outcome o = cardGone ? Outcome::CardAway : Outcome::Cancelled;
+    if (visiting() && state_.load() != kIdle) {
+      stop(o, cardGone ? "the card away or held: dropped" : "the stats are off this session: dropped");
+    }
+    if (uiWant_) {
+      uiWant_ = 0;
+      outcome_ = o;
+    }
+    if (snap_) freeSnap(cardGone ? "the card away or held" : "the stats are off this session");
+  } else if (snap_ && !(kind_ == kVisit && state_.load() != kIdle) && g.index && g.index->ready() &&
+             snap_->written() && !snap_->matches(g.index->buildStamp(), g.index->trackCount())) {
+    freeSnap("the library's index isn't the snapshot's key (a remount, or another build)");
+  }
+  uint8_t s = state_.load();
+  if (s == kRankQueued || s == kTrackQueued) {
+    if (visiting()) {
+      // S3a's hold bounds (9.7): a block never queues behind a wait.
+      const uint8_t why = gateOf(g);
+      const Wait w = static_cast<Wait>(rankWait_);
+      if (capReached()) {
+        capVisit();
+      } else if (why || w != Wait::None) {
+        char text[112];
+        snprintf(text, sizeof(text), "a wait came before the hand-off: %s",
+                 why ? gateName(why) : ScanScheduler::waitName(w));
+        putBack(text, now);
+      } else if (now - queuedMs_ >= kQueuedMs) {
+        putBack("the card worker didn't take it in 30 s (none, or busy all that time)", now);
+      }
+    } else if (now - queuedMs_ >= kQueuedMs) {
+      refuse("the card worker didn't take it in 30 s (none, or busy all that time)");
+      return;
+    }
+    s = state_.load();
+  }
+  if (s == kAsked) {
+    // Each gate that holds it, said once (a bit each); S3a's asks the Rank
+    // lane's waits too (a bit a wait), and the wait's start (phaseOf()'s
+    // waitedMs: Working, then Waiting from 3 s) is the last pass nothing
+    // held it.
+    const uint8_t why = gateOf(g);
+    why_ = why;
+    if (why && !(waitLogged_ & why)) {
+      waitLogged_ = static_cast<uint8_t>(waitLogged_ | why);
+      Serial.printf("[listen] %s waits: %s\n", name(), gateName(why));
+    }
+    if (visiting()) {
+      const Wait w = static_cast<Wait>(rankWait_);
+      const uint16_t bit = static_cast<uint16_t>(1u << static_cast<unsigned>(w));
+      if (!why && w != Wait::None && !(rankWaits_ & bit)) {
+        rankWaits_ = static_cast<uint16_t>(rankWaits_ | bit);
+        Serial.printf("[listen] %s waits: %s (the Rank lane's: no block taken while it holds)\n", name(),
+                      ScanScheduler::waitName(w));
+      }
+      if (!why && w == Wait::None) queuedMs_ = now;
+    }
+  }
+  if (s == kDone) {
+    Ask& a = *block_;
+    sr::close(*fs_, &a.files);  // (on the loop, where they were opened)
+    if (visiting()) {
+      // Stopped while on the worker (cancel(), the card): its result
+      // dropped; the lit cap reached: given back at the step's end.
+      if (outcome_ != Outcome::None) {
+        endVisit(outcome_, "its rank's result dropped (stopped while on the card worker)");
+      } else if (capReached()) {
+        capVisit();
+      } else {
+        finishVisit(g);
+      }
+    } else if (rank_) {
+      finishRank(g);
+    } else {
+      finishTrack();
+    }
+  } else if (s == kWalk && visiting() && capReached()) {
+    block_->map.release();
+    capVisit();
+  }
+  // A UI ask that waited behind a console ask (or for a cancelled one's
+  // step to end) begins.
+  if (state_.load() == kIdle && uiWant_) {
+    const Kind k = uiWant_ == 1 ? kVisit : kLean;
+    uiWant_ = 0;
+    beginAsk(k, kFromUi, now);
+  }
+  // Each phase change moves the version (the pages' news()).
+  const uint8_t ph = static_cast<uint8_t>(phase());
+  if (ph != lastPhase_) {
+    lastPhase_ = ph;
+    ++version_;
   }
 }
 
@@ -528,6 +993,94 @@ void StatsLists::finishRank(const Gates& g) {
   state_.store(kWalk);
 }
 
+// S3a's finishRank() (9.7): the wanted set built in the block's tail from
+// every list and sealed (V2's heap sort), statsvisit::write() into the
+// snapshot (the copy-out, before the Ranker's room is reused), then the
+// folders' states and the album bits at the block's head over the dead
+// Ranker, and the walk begun over the u40 set. The lean ask: the walk over
+// its u40 set alone. A u40 set that lost a hash to its room counts no Not
+// played yet: a short set would show played albums as not played.
+void StatsLists::finishVisit(const Gates& g) {
+  Ask& a = *block_;
+  const sr::Report& r = a.report;
+  if (r.outcome != sr::Outcome::Ok) {
+    char why[96];
+    snprintf(why, sizeof(why), "the rank came to %s on the card worker", sr::outcomeName(r.outcome));
+    endVisit(sv::outcomeOf(r.outcome), why);
+    return;
+  }
+  // The index its block was sized for (a remount's may not be): asked again.
+  if (!g.index || !g.index->ready() || g.index->albumCount() != a.albumsCap ||
+      pathhash::Walk::foldersFor(*g.index) > a.foldersCap || g.index->trackCount() > sv::kMaxTracks) {
+    if (++restarts_ > kRestarts) {
+      endVisit(Outcome::Cancelled, "the library's index changed before its walk, again and again");
+      return;
+    }
+    putBack("the library's index changed before its walk", g.nowMs);
+    return;
+  }
+  const bool lean = kind_ == kLean;
+  uint8_t* b = reinterpret_cast<uint8_t*>(block_);
+  const int64_t f0 = esp_timer_get_time();
+  a.set = a.y.played.bytes != 0 && a.played40.lost == 0;
+  if (a.y.played.bytes && a.played40.lost) {
+    Serial.printf("[listen] %s: the u40 set lost %lu played hashes past its room (%lu rows): no Not played yet from "
+                  "it (a short set would show played albums as not played)\n",
+                  name(), static_cast<ul>(a.played40.lost), static_cast<ul>(a.played40.cap));
+    if (lean) {
+      endVisit(Outcome::Room, "Not played yet not counted (its u40 set short)");
+      return;
+    }
+  }
+  if (!lean) {
+    if (!snap_) {
+      endVisit(Outcome::Cancelled, "its snapshot was freed meanwhile");
+      return;
+    }
+    // The wanted set: every list's hashes (the ids the walk maps), in one
+    // region of the Ranker's rows (Wanted::rowsCap) at A's tail.
+    const sr::Ranker& k = a.ranker;
+    a.wanted.region(b + a.y.wanted.at, a.y.wantedRows);
+    for (int li = 0; li < sr::kLists; ++li) {
+      const sr::List l = static_cast<sr::List>(li);
+      for (uint32_t i = 0; i < k.size(l); ++i) a.wanted.add(k.at(l, i).hash);
+    }
+    const int64_t s0 = esp_timer_get_time();
+    a.wanted.seal();
+    const int64_t w0 = esp_timer_get_time();
+    a.sealUs = w0 - s0;
+    const LibraryIndex& idx = *g.index;
+    const uint64_t nowMs = boardclock::now();
+    uint16_t today = 0;
+    sv::Context ctx;
+    ctx.grade = a.set ? sv::Grade::Full : sv::Grade::Lists;  // (what it serves: no Not played yet from a short set)
+    ctx.buildStamp = idx.buildStamp();
+    ctx.trackCount = idx.trackCount();
+    ctx.albums = idx.albumCount();
+    ctx.time = a.in.hasToday && sf::todayOf(nowMs, &today) ? sf::timeOf(nowMs) : 0;
+    ctx.liveRound = glue_->fold().liveRound();
+    ctx.sinceDay = glue_->fold().sinceDayNow(nowMs);
+    ctx.window = snap_->written() ? snap_->window() : sv::kAllTime;  // (a re-ask keeps the page's window)
+    ctx.version = version_;
+    const bool written = sv::write(a.ranker, a.wanted, r, ctx, snap_, snapshotBytes());
+    a.writeUs = esp_timer_get_time() - w0;
+    if (!written) {
+      endVisit(Outcome::NoRoom, "its snapshot is short of the library's albums");
+      return;
+    }
+  }
+  a.folders = a.y.folders.bytes ? b + a.y.folders.at : nullptr;
+  a.bits = a.set ? b + a.y.bits.at : nullptr;
+  a.map.begin(g.index, a.set ? &a.played40 : nullptr, lean ? nullptr : &a.wanted, a.bits, a.folders);
+  a.finishUs = esp_timer_get_time() - f0;
+  a.litWalk = g.lit;
+  a.walkT0 = esp_timer_get_time();
+  a.walkLastMs = g.nowMs;
+  a.passes = 0;
+  a.walkUs = a.walkMaxUs = 0;
+  state_.store(kWalk);
+}
+
 void StatsLists::finishTrack() {
   Ask& a = *block_;
   const sr::TrackRows& t = a.track;
@@ -574,6 +1127,10 @@ void StatsLists::finishTrack() {
 
 void StatsLists::stepMap(const Gates& g) {
   if (state_.load() != kWalk) return;
+  if (visiting()) {
+    stepVisit(g);
+    return;
+  }
   Ask& a = *block_;
   // Never with the join's slices in the same pass (6.2: two walks in one
   // pass), a list moving, the card held, the UI not up. (Not held by an
@@ -612,6 +1169,131 @@ void StatsLists::stepMap(const Gates& g) {
   giveBack();
   kind_ = kNone;
   state_.store(kIdle);
+}
+
+// S3a's walk (9.7, 7.10): lit, 100 tracks a slice, up to 4 ms a pass, none
+// in a pass that handled input; dark, S2's (250 tracks, up to 8 ms); with
+// the lit cap on, lit as dark, still none in a pass that handled input.
+// Skipping passes for 1 s (a list moving, the card held, the join, input)
+// gives the block back (map.release()), the ask in Asked again; an index
+// that changes under it, the same (asked again over the new one: the
+// snapshot's key is the turn's).
+void StatsLists::stepVisit(const Gates& g) {
+  Ask& a = *block_;
+  const bool capOn = (flags_ & kCapOn) != 0;
+  const bool litPace = g.lit && !capOn;
+  const bool inputHeld = (g.lit || capOn) && g.input;
+  if (g.joinWorking || g.listMoving || g.cardHeld || !g.uiStarted || !g.index || inputHeld) {
+    if (g.nowMs - a.walkLastMs >= kWalkSkipMs) {
+      a.map.release();
+      putBack(g.listMoving  ? "its walk held 1 s by a list moving"
+              : g.cardHeld  ? "its walk held 1 s by the card's guard"
+              : inputHeld   ? "its walk held 1 s by input"
+              : g.joinWorking ? "its walk held 1 s by Auto DJ's join"
+                            : "its walk held 1 s (the UI, or the index, not up)",
+              g.nowMs);
+    }
+    return;
+  }
+  a.walkLastMs = g.nowMs;
+  sm::Map::Config c;
+  c.foldersPerSlice = c.tracksPerSlice = litPace ? kLitSlice : kDarkSlice;
+  a.map.setConfig(c);
+  const int64_t t0 = esp_timer_get_time();
+  PassClock clock{t0 + (litPace ? kLitWalkPassUs : kWalkPassUs)};
+  const sm::Map::Status s = a.map.stepPass(g.index, passTimeLeft, &clock);
+  const int64_t us = esp_timer_get_time() - t0;
+  ++a.passes;
+  a.walkUs += us;
+  if (us > a.walkMaxUs) a.walkMaxUs = us;
+  if (s == sm::Map::Status::Working) return;
+  if (s == sm::Map::Status::Aborted) {
+    if (++restarts_ > kRestarts) {
+      endVisit(Outcome::Cancelled, "the library's index changed under its walk, again and again");
+      return;
+    }
+    putBack("the library's index changed under its walk", g.nowMs);
+    return;
+  }
+  landVisit(g);
+}
+
+// The walk done: resolve() (each row's track id; orphans and collisions
+// out) and notPlayed() (the bits, the directory, the count) into the
+// snapshot, on the loop, and the block given back in this pass. The lean
+// ask's count only now into the held snapshot (its lists served all along);
+// the console's with none held, counted from the walk's bits.
+void StatsLists::landVisit(const Gates& g) {
+  Ask& a = *block_;
+  const LibraryIndex& idx = *g.index;
+  const bool lean = kind_ == kLean;
+  const float walkMs = msSince(a.walkT0);
+  uint32_t count = 0;
+  bool counted = false;
+  const char* note = "";
+  if (!lean) {
+    if (!snap_) {
+      endVisit(Outcome::Cancelled, "its snapshot was freed meanwhile");
+      return;
+    }
+    const int64_t r0 = esp_timer_get_time();
+    sv::resolve(a.wanted, snap_);
+    a.resolveUs = esp_timer_get_time() - r0;
+    if (a.set) {
+      const int64_t n0 = esp_timer_get_time();
+      counted = sv::notPlayed(a.map, idx, snap_);
+      a.notPlayedUs = esp_timer_get_time() - n0;
+      count = snap_->notPlayedCount();
+      if (!counted) note = " (the snapshot's key isn't the index's: not written)";
+    }
+  } else if (snap_ && snap_->resolved()) {
+    const int64_t n0 = esp_timer_get_time();
+    counted = sv::notPlayed(a.map, idx, snap_);
+    a.notPlayedUs = esp_timer_get_time() - n0;
+    count = snap_->notPlayedCount();
+    if (!counted) note = " (the held snapshot's key isn't the index's: its count not written)";
+  } else if (!(flags_ & kFromUi)) {
+    const LibraryIndex::Span az = idx.albumsAZ();
+    for (uint32_t i = 0; i < az.count; ++i) count += a.map.albumPlayed(az[i]) ? 0 : 1;
+    counted = true;
+    note = " (no snapshot held: counted from the walk's bits)";
+  } else {
+    note = " (no snapshot held any more: dropped)";
+  }
+  const sm::Map::Stats& m = a.map.stats();
+  const uint32_t hold = holdMs();
+  const uint32_t sum = holdSumMs_ + hold > 0xFFFF ? 0xFFFF : holdSumMs_ + hold;
+  char np[96];
+  if (counted) {
+    snprintf(np, sizeof(np), "%lu albums of %lu%s", static_cast<ul>(count), static_cast<ul>(idx.albumCount()), note);
+  } else {
+    snprintf(np, sizeof(np), "not counted%s",
+             lean                ? note
+             : a.y.played.bytes ? " (its u40 set short)"
+                                 : " (Lists: no played set)");
+  }
+  Serial.printf("[listen] %s: landed (%s; sizeof(Ask) %lu B, its block %lu B): held %lu ms (the screen %s at the "
+                "take, %s at the rank, %s at the walk; the visit's holds %lu ms%s); the rank at priority %u: queued "
+                "%.1f ms, ranked %.1f ms, walked %.0f ms (%lu tracks in %lu passes, %.1f ms of slices, the longest "
+                "%.1f ms; %u restarts; the folders' states %s); on the loop: the turn %lu us (stats.bin's directory "
+                "%lu us), the hand-off %lu us (the records' copy %lu us, the opens %lu us), finishRank() %lu us (the "
+                "seal %lu us, write %lu us), resolve %lu us, notPlayed %lu us; not played yet: %s\n",
+                name(), sv::gradeName(a.y.grade), static_cast<ul>(sizeof(Ask)), static_cast<ul>(a.bytes),
+                static_cast<ul>(hold), a.litTake ? "lit" : "dark", a.litRank ? "lit" : "dark",
+                a.litWalk ? "lit" : "dark", static_cast<ul>(sum), sum >= kLitCapMs ? ", past the 3 s cap" : "",
+                static_cast<unsigned>(a.priority), (a.startUs - a.queuedUs) / 1000.0f,
+                (a.endUs - a.startUs) / 1000.0f, walkMs, static_cast<ul>(m.tracks), static_cast<ul>(a.passes),
+                a.walkUs / 1000.0f, a.walkMaxUs / 1000.0f, static_cast<unsigned>(restarts_),
+                a.folders ? "kept" : "none (whole paths)", static_cast<ul>(a.turnUs), static_cast<ul>(a.lookUs),
+                static_cast<ul>(a.handUs), static_cast<ul>(a.copyUs), static_cast<ul>(a.openUs),
+                static_cast<ul>(a.finishUs), static_cast<ul>(a.sealUs), static_cast<ul>(a.writeUs),
+                static_cast<ul>(a.resolveUs), static_cast<ul>(a.notPlayedUs), np);
+  // (The console's visit prints its snapshot, then frees it if it carved
+  // it: endVisit(). A lean ask's snapshot, Hu's and a page's stay.)
+  const bool landed = !lean || counted;
+  if (landed) ++version_;
+  if (!lean && !(flags_ & kFromUi)) printSnapshot(g, name(), false);
+  endVisit(landed ? Outcome::Ok : Outcome::Cancelled, nullptr);
 }
 
 void StatsLists::printWalk(const Gates& g) {
@@ -707,6 +1389,306 @@ void StatsLists::printLists(const Gates& g) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// S3a: the stats pages' asks (9.7's API), the hold, the snapshot.
+// ---------------------------------------------------------------------------
+void StatsLists::beginAsk(Kind k, uint8_t flags, uint32_t nowMs) {
+  kind_ = k;
+  flags_ = static_cast<uint8_t>((flags_ & (kCapOn | kFake | kShowSnap)) | flags);
+  outcome_ = Outcome::None;
+  why_ = 0;
+  restarts_ = 0;
+  waitLogged_ = 0;
+  rankWaits_ = 0;
+  holdSumMs_ = 0;  // (a new visit: its holds summed from here)
+  queuedMs_ = nowMs;
+  state_.store(kAsked);
+}
+
+bool StatsLists::ask(UiAsk a, bool cardGone) {
+  const char* what = a == UiAsk::Visit ? "the visit's ask" : "Not played yet's ask";
+  if (!glue_ || !glue_->on()) {
+    why_ = sv::kWhyOff;
+    Serial.printf("[listen] %s: dropped: the stats are off this session\n", what);
+    return false;
+  }
+  if (cardGone) {
+    release("the card away or held");
+    outcome_ = Outcome::CardAway;
+    Serial.printf("[listen] %s: dropped: the card away or held (No card; Try again once it is back)\n", what);
+    return false;
+  }
+  if (a == UiAsk::NotPlayed && !snapshot()) {
+    Serial.printf("[listen] %s: dropped: no landed snapshot to write its count into (a visit's ask first)\n", what);
+    return false;
+  }
+  const Kind k = a == UiAsk::Visit ? kVisit : kLean;
+  const uint8_t want = a == UiAsk::Visit ? 1 : 2;
+  const uint8_t s = state_.load();
+  if (s != kIdle && !(flags_ & kFromUi)) {
+    // One slot (6.8 as decided): behind the console's ask under way.
+    uiWant_ = want;
+    outcome_ = Outcome::None;
+    flags_ = static_cast<uint8_t>(flags_ & ~kCapped);
+    Serial.printf("[listen] %s: waits behind %s (one ask at a time)\n", what, name());
+    return true;
+  }
+  if (s != kIdle) {
+    if (kind_ == k && outcome_ == Outcome::None) return true;  // (the same, under way)
+    stop(Outcome::Cancelled, "cancelled: another ask of the stats pages");
+    if (state_.load() != kIdle) {
+      uiWant_ = want;  // (begun once its rank's step ends)
+      return true;
+    }
+  }
+  uiWant_ = 0;
+  beginAsk(k, kFromUi, millis());
+  Serial.printf("[listen] %s: asked (%s): its turn once S2's gates and the Rank lane's waits clear\n", what,
+                k == kVisit ? "Full when Not played yet may open, else Lists" : "the lean ask, then no folders");
+  return true;
+}
+
+void StatsLists::cancel() {
+  uiWant_ = 0;
+  if (!(flags_ & kFromUi) || !visiting() || state_.load() == kIdle) return;
+  stop(Outcome::Cancelled, "cancelled");
+}
+
+void StatsLists::release(const char* why) {
+  cancel();
+  freeSnap(why);
+}
+
+StatsLists::Phase StatsLists::phase() const {
+  if (uiWant_) return Phase::Working;  // (behind a console ask, or a stopped one's step)
+  const uint8_t s = state_.load();
+  const bool capped = (flags_ & kCapped) != 0;
+  if (s == kIdle || !visiting()) {
+    // None made (or none ended yet): the caller's Idle.
+    if (outcome_ == Outcome::None && !capped) return Phase::Idle;
+    return sv::phaseOf(0, outcome_, Wait::None, 0, capped);
+  }
+  if (outcome_ != Outcome::None) return sv::phaseOf(0, outcome_, Wait::None, 0, false);  // (stopped on the worker)
+  if (s != kAsked) return Phase::Working;  // carved, ranking, walking
+  return sv::phaseOf(why_, Outcome::None, static_cast<Wait>(rankWait_), millis() - queuedMs_, false);
+}
+
+bool StatsLists::news() {
+  const uint8_t v = static_cast<uint8_t>(version_);
+  if (v == newsSeen_) return false;
+  newsSeen_ = v;
+  return true;
+}
+
+size_t StatsLists::snapshotBytes() const { return snap_ ? heap_caps_get_allocated_size(snap_) : 0; }
+
+uint32_t StatsLists::holdMs() const {
+  return block_ && block_->takeUs ? static_cast<uint32_t>((esp_timer_get_time() - block_->takeUs) / 1000) : 0;
+}
+
+bool StatsLists::capReached() const {
+  return (flags_ & kCapOn) && visiting() && holdSumMs_ + holdMs() >= kLitCapMs;
+}
+
+void StatsLists::addHold(uint32_t ms) {
+  const uint32_t before = holdSumMs_;
+  const uint32_t sum = before + ms > 0xFFFF ? 0xFFFF : before + ms;
+  holdSumMs_ = static_cast<uint16_t>(sum);
+  // A visit whose holds pass kLitCapMs is counted and said (9.7's lit hold).
+  if (before < kLitCapMs && sum >= kLitCapMs) {
+    if (pastCap_ < 0xFF) ++pastCap_;
+    Serial.printf("[listen] %s: the visit's holds %lu ms: past the 3 s cap (%u visit%s this session; the cap %s)\n",
+                  name(), static_cast<ul>(sum), static_cast<unsigned>(pastCap_), pastCap_ == 1 ? "" : "s",
+                  (flags_ & kCapOn) ? "on" : "off");
+  }
+}
+
+void StatsLists::putBack(const char* why, uint32_t nowMs) {
+  const uint32_t hold = holdMs();
+  addHold(hold);
+  Serial.printf("[listen] %s: its block given back after %lu ms held (%s): back in Asked, no count (the visit's "
+                "holds %lu ms)\n",
+                name(), static_cast<ul>(hold), why, static_cast<ul>(holdSumMs_));
+  giveBack();
+  // (The lit cap's backstop: no ask by itself once its holds reach it.)
+  if ((flags_ & kCapOn) && holdSumMs_ >= kLitCapMs) {
+    capVisit();
+    return;
+  }
+  waitLogged_ = 0;
+  rankWaits_ = 0;
+  queuedMs_ = nowMs;
+  state_.store(kAsked);
+}
+
+void StatsLists::endVisit(Outcome o, const char* why) {
+  if (block_) {
+    const uint32_t hold = holdMs();
+    addHold(hold);
+    if (why) {
+      Serial.printf("[listen] %s: %s: its block %lu B given back after %lu ms held (the visit's holds %lu ms)\n",
+                    name(), why, static_cast<ul>(block_->bytes), static_cast<ul>(hold),
+                    static_cast<ul>(holdSumMs_));
+    }
+  } else if (why) {
+    Serial.printf("[listen] %s: %s\n", name(), why);
+  }
+  giveBack();
+  outcome_ = o;
+  // A console ask holds nothing: the snapshot it carved freed (Hu's kept,
+  // as a page's).
+  if (!(flags_ & (kFromUi | kFake)) && (flags_ & kCarved) && snap_) freeSnap("a console ask holds nothing");
+  kind_ = kNone;
+  state_.store(kIdle);
+}
+
+void StatsLists::capVisit() {
+  const uint32_t sum = holdSumMs_ + holdMs();
+  Serial.printf("[listen] %s: CAPPED: the visit's holds reached %lu ms (kLitCapMs %lu, the lit cap on): Capped, "
+                "\"Waiting for the card...\" with Try again; nothing asked by itself\n",
+                name(), static_cast<ul>(sum > 0xFFFF ? 0xFFFF : sum), static_cast<ul>(kLitCapMs));
+  endVisit(Outcome::None, "given back at the lit cap");
+  flags_ = static_cast<uint8_t>(flags_ | kCapped);
+}
+
+void StatsLists::stop(Outcome o, const char* why) {
+  switch (state_.load()) {
+    case kIdle: return;
+    case kAsked:
+    case kRankQueued:
+    case kTrackQueued: endVisit(o, why); return;
+    case kWalk:
+      block_->map.release();
+      endVisit(o, why);
+      return;
+    default:
+      // On the card worker: a step is never cut; its result dropped at its
+      // end (loop(), kDone).
+      if (outcome_ == Outcome::None) {
+        outcome_ = o;
+        Serial.printf("[listen] %s: %s: its rank's result dropped when its step on the card worker ends\n", name(),
+                      why);
+      }
+      return;
+  }
+}
+
+void StatsLists::freeSnap(const char* why) {
+  if (!snap_) return;
+  const size_t n = snapshotBytes();
+  void* p = snap_;
+  snap_ = nullptr;
+  flags_ = static_cast<uint8_t>(flags_ & ~(kFake | kCarved));
+  psramFree(p);
+  Serial.printf("[listen] the stats pages' snapshot freed (%lu B at 0x%08lx): %s\n", static_cast<ul>(n),
+                static_cast<ul>(reinterpret_cast<uintptr_t>(p)), why);
+}
+
+// Hk, and a console visit's landing (`rows` false: the header's figures
+// alone): the held snapshot as a page reads it.
+__attribute__((noinline)) void StatsLists::printSnapshot(const Gates& g, const char* who, bool rows) {
+  if (!snap_) {
+    Serial.printf("[listen] %s: no snapshot held\n", who);
+    return;
+  }
+  const sv::Snapshot& s = *snap_;
+  const ul at = static_cast<ul>(reinterpret_cast<uintptr_t>(snap_));
+  if (!s.written()) {
+    Serial.printf("[listen] %s: the snapshot %lu B at 0x%08lx: not written (its ask under way, or one that didn't "
+                  "land)\n",
+                  who, static_cast<ul>(snapshotBytes()), at);
+    return;
+  }
+  const bool mine = g.index && g.index->ready() && s.matches(g.index->buildStamp(), g.index->trackCount());
+  char asked[24], today[16], since[16];
+  timeText(s.time(), asked, sizeof(asked));
+  dayText(s.today(), today, sizeof(today));
+  dayText(s.sinceDay(), since, sizeof(since));
+  Serial.printf("[listen] %s: the snapshot %lu B at 0x%08lx (its block %lu B; %s, %s, %s): key %016llx, %lu tracks, "
+                "%lu albums%s; asked %s (today %s, the live round %lu); counting since %s; Most played's window %s; "
+                "version %lu\n",
+                who, static_cast<ul>(s.bytes()), at, static_cast<ul>(snapshotBytes()), sv::gradeName(s.grade()),
+                s.dated() ? "dated" : "undated", s.resolved() ? "landed" : "NOT landed",
+                static_cast<ull>(s.buildStamp()), static_cast<ul>(s.trackCount()), static_cast<ul>(s.albums()),
+                g.index && !mine ? " (NOT this index's)" : "", asked, today, static_cast<ul>(s.liveRound()), since,
+                windowName(s.window()), static_cast<ul>(s.version()));
+  Serial.printf("[listen] %s: rows (of every row offered): most played 7 days %lu (%lu), 30 days %lu (%lu), All time "
+                "%lu (%lu); new finds %lu (%lu); old favourites %lu (%lu); recently played %lu (%lu)\n",
+                who, static_cast<ul>(s.rows(sr::kMost7)), static_cast<ul>(s.total(sr::kMost7)),
+                static_cast<ul>(s.rows(sr::kMost30)), static_cast<ul>(s.total(sr::kMost30)),
+                static_cast<ul>(s.rows(sr::kMostAll)), static_cast<ul>(s.total(sr::kMostAll)),
+                static_cast<ul>(s.rows(sr::kNewFinds)), static_cast<ul>(s.total(sr::kNewFinds)),
+                static_cast<ul>(s.rows(sr::kOldFavourites)), static_cast<ul>(s.total(sr::kOldFavourites)),
+                static_cast<ul>(s.rows(sr::kRecent)), static_cast<ul>(s.total(sr::kRecent)));
+  for (uint32_t i = 0; i < sr::kWeekDays; ++i) {
+    const sr::Day d = s.day(i);
+    char day[16], lis[24];
+    if (s.dated() && s.today() != sf::kUnsetDay && s.today() >= sr::kWeekDays - 1 - i) {
+      dayText(s.today() - (sr::kWeekDays - 1 - i), day, sizeof(day));
+    } else {
+      snprintf(day, sizeof(day), "day %lu", static_cast<ul>(i + 1));
+    }
+    listenedText(d.listenedMs, lis, sizeof(lis));
+    Serial.printf("[listen] %s: the 7 days, %s: %s, %u plays (Auto DJ's %u, %u skips)\n", who, day, lis,
+                  static_cast<unsigned>(d.plays), static_cast<unsigned>(d.autoDjPlays),
+                  static_cast<unsigned>(d.autoDjSkips));
+  }
+  char first[16], newest[16], rcnt[16];
+  dayText(s.firstDay(), first, sizeof(first));
+  dayText(s.newestDay(), newest, sizeof(newest));
+  dayText(s.rcntFirstDay(), rcnt, sizeof(rcnt));
+  Serial.printf("[listen] %s: DAYS' first dated day %s, newest %s (a span of %lu days); RCNT's first %s; not played "
+                "yet %s\n",
+                who, first, newest, static_cast<ul>(s.spanDays()), rcnt,
+                s.hasNotPlayed() ? "" : "not counted (no played set: the Lists grade, or a short set)");
+  if (s.hasNotPlayed()) {
+    Serial.printf("[listen] %s: not played yet %lu albums of %lu\n", who, static_cast<ul>(s.notPlayedCount()),
+                  static_cast<ul>(s.albums()));
+  }
+  if (!rows) return;
+  const LibraryIndex* idx = mine && s.resolved() ? g.index : nullptr;
+  for (int li = 0; li < sr::kLists; ++li) {
+    const sr::List l = static_cast<sr::List>(li);
+    Serial.printf("  %s: %lu rows%s\n", listText(l), static_cast<ul>(s.rows(l)),
+                  idx ? "" : " (no titles: not landed, or not this index's)");
+    for (uint32_t i = 0; i < s.rows(l); ++i) {
+      const sv::Row r = s.rowAt(l, i);
+      char what[48];
+      char t[24];
+      switch (l) {
+        case sr::kNewFinds:
+          snprintf(what, sizeof(what), "%u plays (%s)", static_cast<unsigned>(r.count), srcName(r.src));
+          break;
+        case sr::kOldFavourites:
+          dayText(r.lastDay, t, sizeof(t));
+          snprintf(what, sizeof(what), "%u plays, last %s", static_cast<unsigned>(r.count), t);
+          break;
+        case sr::kRecent:
+          whenText(r.when, t, sizeof(t));
+          snprintf(what, sizeof(what), "%s", t);
+          break;
+        default: snprintf(what, sizeof(what), "%u plays", static_cast<unsigned>(r.count)); break;
+      }
+      uint8_t len = 0;
+      const char* title = idx && r.id < idx->trackCount() ? idx->trackTitle(r.id, &len) : "";
+      Serial.printf("  %3lu. #%-5u %s  %.*s\n", static_cast<ul>(i + 1), static_cast<unsigned>(r.id), what,
+                    static_cast<int>(len), title);
+    }
+  }
+  if (s.hasNotPlayed()) {
+    const uint32_t n = s.notPlayedCount();
+    const uint32_t shown = n < 20 ? n : 20;
+    Serial.printf("  not played yet: %lu albums, the first %lu\n", static_cast<ul>(n), static_cast<ul>(shown));
+    if (!idx) return;
+    const LibraryIndex::Span az = idx->albumsAZ();
+    for (uint32_t k = 0; k < shown; ++k) {
+      const uint32_t pos = s.albumAt(k);
+      if (pos >= az.count) break;
+      Serial.printf("  %3lu. #%lu %.80s\n", static_cast<ul>(k + 1), static_cast<ul>(az[pos]), idx->albumName(az[pos]));
+    }
+  }
+}
+
 bool StatsLists::waitWorker(uint32_t maxMs) {
   const uint32_t t0 = millis();
   while (state_.load() == kRunning && millis() - t0 < maxMs) delay(5);
@@ -714,29 +1696,64 @@ bool StatsLists::waitWorker(uint32_t maxMs) {
 }
 
 size_t StatsLists::drop() {
-  if (!block_) return 0;
-  // (A worker's step under way: its end first, the files it reads closed
-  // after; the fence never comes while the block is held, holds() keeping
-  // the update waiting: this is the guard.)
-  if (!waitWorker(5000)) {
-    Serial.printf("[listen] %s: its card worker's step still reading at the library update's fence: its block "
-                  "held through it\n",
-                  name());
-    return 0;
+  size_t n = 0;
+  if (block_) {
+    // (A worker's step under way: its end first, the files it reads closed
+    // after; the fence never comes while the block is held, holds() keeping
+    // the update waiting: this is the guard.)
+    if (!waitWorker(5000)) {
+      Serial.printf("[listen] %s: its card worker's step still reading at the library update's fence: its block "
+                    "held through it\n",
+                    name());
+    } else {
+      n = block_->bytes;
+      if (visiting()) block_->map.release();
+      addHold(holdMs());
+      giveBack();
+      Serial.printf("[listen] %s: its block given back at the library update's fence (%lu B)\n", name(),
+                    static_cast<ul>(n));
+    }
   }
-  const size_t n = block_->bytes;
-  giveBack();
-  if (kind_ != kNone) {
+  // The stats pages' snapshot (9.7's free points: the fence), its bytes in
+  // the fence's line (the memory check's alsoFreed counted them).
+  const bool fake = (flags_ & kFake) || (kind_ == kVisit && (flags_ & kHu));  // (Hu's snapshot, or its ask)
+  if (snap_) {
+    n += snapshotBytes();
+    freeSnap("the library update's fence");
+  }
+  if (block_) return n;  // (still read by the worker: the ask as it is)
+  uiWant_ = 0;
+  if (visiting() && (flags_ & kFromUi)) {
+    // (The fence takes the Library tab back to Artists: the pages are left.)
+    if (state_.load() != kIdle) endVisit(Outcome::Cancelled, "cancelled at the library update's fence");
+  } else if (kind_ != kNone) {
+    // S2's and the console's asks: begun again after the Live.
     restarts_ = 0;
     waitLogged_ = 0;
+    rankWaits_ = 0;
+    queuedMs_ = millis();
     state_.store(kAsked);
-    Serial.printf("[listen] %s: its block given back at the library update's fence (%lu B): begun again after it\n",
-                  name(), static_cast<ul>(n));
+    Serial.printf("[listen] %s: begun again after the library update's fence\n", name());
+  }
+  if (fake) {
+    // Hu's held fake visit: asked again after the Live and Auto DJ's rejoin,
+    // at the first pass the gates let through (as a visit made after it).
+    if (kind_ == kNone) {
+      beginAsk(kVisit, kHu, millis());
+      Serial.println("[listen] Hu: its visit asked again after the Live and Auto DJ's rejoin (its snapshot carved "
+                     "again at its turn)");
+    } else if (!(kind_ == kVisit && (flags_ & kHu))) {
+      Serial.printf("[listen] Hu: its visit NOT asked again: %s holds the one slot (Hu again after it)\n", name());
+    }
   }
   return n;
 }
 
 void StatsLists::ending(uint32_t maxMs) {
+  // The snapshot first (the orderly end: 9.7's last free point; the worker
+  // never reads it).
+  uiWant_ = 0;
+  freeSnap("the orderly end");
   // (Still reading after `maxMs`: the end goes on. A rotation's save in the
   // end's flush may then replace stats.bin under its reads, which fail their
   // checks: it only reads, and its result is never taken in.)

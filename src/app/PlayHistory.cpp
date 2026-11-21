@@ -195,13 +195,20 @@ StatsLists::Gates PlayHistory::listsGates(uint32_t nowMs, bool cardHeld) {
   return g;
 }
 
+bool PlayHistory::statsAsk(StatsLists::UiAsk a, bool cardHeld) {
+  return active_ && stats_.lists().ask(a, cardHeld || cardAway());
+}
+
 void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, bool cardHeld) {
   if (!active_) return;
   stats_.owedLine();  // (a rotation's save's line: out of its save's frames)
   // S2's ask: a step the card worker finished, taken in (its files closed
   // here, where they were opened), its result printed or its walk begun.
+  // S3a's too, and the snapshot's frees that come with no navigation (the
+  // card, the stats off, a remount's key).
   StatsLists& lists = stats_.lists();
-  const StatsLists::Gates lg = listsGates(gate.nowMs, cardHeld);
+  StatsLists::Gates lg = listsGates(gate.nowMs, cardHeld);
+  lg.lit = look.lit;
   lists.loop(lg);
   tracker_->tick(look.state, look.positionMs, look.positionKnown, look.positionKnown ? look.durationMs : 0);
   // The stats' look at this pass: the update step's safe point (a boot's

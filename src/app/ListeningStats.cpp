@@ -904,7 +904,15 @@ void ListeningStats::command(const char* arg) {
     case 'r':
     case 'l':
     case 'w':
-    case 'p': lists_.command(arg); return;
+    case 'p':
+    // S3a's (9.3): the stats pages' asks as a page makes them (Hv, Hv1, Hn,
+    // Hn1), Hu's held fake visit (Hu0 frees it), the held snapshot (Hk) and
+    // the lit cap (Hc0, Hc1, Hc).
+    case 'v':
+    case 'n':
+    case 'u':
+    case 'k':
+    case 'c': lists_.command(arg); return;
     case 's':
       if (glue_->booting()) {
         Serial.printf("[listen] Hs refused: %s\n", refusedText(sg::Refused::Booting));
@@ -916,7 +924,10 @@ void ListeningStats::command(const char* arg) {
       return;
     default:
       Serial.println("[listen] H: the state; Hd the last 7 UTC days; Hm MARK, ACKS and the log; Ht<16 hex> a track's "
-                     "row; Hs a save now; Hr rank now; Hl<shelf>[window] a list; Hw walk now; Hp the playing track");
+                     "row; Hs a save now; Hr rank now; Hl<shelf>[window] a list; Hw walk now; Hp the playing track; "
+                     "Hv a visit's ask (Hv1 Lists forced); Hn Not played yet's lean ask (Hn1 without the folders); Hu "
+                     "a held fake visit (Hu0 frees it); Hk the held snapshot; Hc0, Hc1 the lit cap off, on (Hc: "
+                     "which)");
       return;
   }
 }

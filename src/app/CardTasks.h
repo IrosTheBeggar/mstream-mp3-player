@@ -33,7 +33,11 @@ class StatsLists;
 //   - a waveform's read for Now Playing (app/Waves), in the covers' lane;
 //   - the listening stats' asks (app/StatsLists, S2: docs/LISTENING-STATS.md
 //     6.8): a track's read (Hp) in that lane after the waveform's, a rank
-//     (Hr, Hl, Hw) as background work after a compaction (Job::Stats);
+//     (Hr, Hl, Hw; S3a's visit asks) as background work after a compaction
+//     (Job::Stats); each pass they are told what a rank comes after (the
+//     walk, a compaction: workerAhead()) and, for S3a's, the Rank lane's own
+//     wait (ScanScheduler::yieldNow(): rankWait()), so no block is taken
+//     while one holds;
 //   - on the SD card, over the records Library opened: the validation
 //     walk, 2 s after the UI's first frame (3.2.3); the compactions; the
 //     tag scan (lib/core CardJobs); the update step's build and its save

@@ -327,13 +327,19 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   in.dark = !covers;
   // 5. The scheduler.
   const ScanScheduler::Out o = sched_.update(in);
+  // The listening stats' visit asks (S3a, docs/LISTENING-STATS.md 9.7): the
+  // Rank lane's own wait over this pass's In, as workerAhead() above: no
+  // block is taken while it isn't None, and one queued is given back.
+  if (lists) lists->rankWait(sched_.yieldNow(in));
   if (o.batteryHeld) Serial.println("[card] the battery is below 10%: the scan waits for USB or 15%");
   if (o.batteryReleased) Serial.println("[card] the battery floor lifted: the scan goes on");
   // (While gs waits for the step under way, the wait it will report is the
   // one before it, as when it blocked the loop: holdForConsole().)
   if (consoleHold_ != tagcheck::Hold::Worker) lastWait_ = o.wait;
   if (in.running != Job::None) {
-    worker_.setPriority(o.priority);
+    // (A visit's rank under the lit cap stays at 1, lit or not: StatsLists.)
+    worker_.setPriority(lists && in.running == Job::Stats && in.runningRank ? lists->rankPriority(o.priority)
+                                                                            : o.priority);
     // A wait came, or a list moves: the slice under way ends after its unit.
     if (o.cut) jobs_.cutSlice();
   }
@@ -364,7 +370,7 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   } else if (o.job == Job::Wave) {
     if (waves) waves->start(worker_, o.priority, now);
   } else if (o.job == Job::Stats) {
-    if (lists && lists->start(worker_, o.priority, o.statsRank, now)) lastWorkMs_ = now;
+    if (lists && lists->start(worker_, o.priority, o.statsRank, now, in.dark)) lastWorkMs_ = now;
   } else if (o.job == Job::Build) {
     if (up && worker_.start(Job::Build, o.priority, buildEntry, this, now)) {
       up->buildStarted();
