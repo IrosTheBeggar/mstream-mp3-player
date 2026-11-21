@@ -4272,12 +4272,16 @@ struct StatsRun {
 };
 
 // The firmware's sizeof(StatsLists::Ask) (src/app/StatsLists.cpp; the host
-// build can't see src/app): 1,600 B, as the xtensa gdb reads it on both of
-// S3a's V4 ELFs (core2 and core2-dio, at 6ea01b0: print
-// sizeof('StatsLists::Ask')), and as Hv's take line prints it. The head of
-// every grade's block (statsvisit::layout()), which moves with it byte for
-// byte: 112 B over 9.7's estimate (1,488 B), each grade 112 B over its table.
-constexpr size_t kS3AskHead = 1600;
+// build can't see src/app): statsvisit::kAskHeadBytes, 1,600 B, as the
+// xtensa gdb reads it on both of S3a's V4 ELFs (core2 and core2-dio, at
+// 6ea01b0: print sizeof('StatsLists::Ask')), and as Hv's take line prints
+// it; the firmware's static_assert (StatsLists::begin()) holds Ask to it,
+// so a change to Ask fails the build until this and the pins below move.
+// The head of every grade's block (statsvisit::layout()), which moves with
+// it byte for byte: 112 B over 9.7's estimate (1,488 B), each grade 112 B
+// over its table.
+constexpr size_t kS3AskHead = statsvisit::kAskHeadBytes;
+static_assert(kS3AskHead == 1600, "the pinned S3 grades below are at a 1,600 B head");
 
 // The grades an S3 ask tries, in order (StatsLists::turnVisit(); the model's
 // clock is set, its card counts days from day 300 to the board's 600: Not
@@ -5766,6 +5770,50 @@ void test_an_s3_ask_in_a_model_heap() {
     }
     TEST_ASSERT_TRUE_MESSAGE(a.lowest >= kMargin && a.bootLowest >= kMargin, w);
     TEST_ASSERT_TRUE_MESSAGE(a.joined + 122880 >= on.joined && (a.joined >= 245764 || on.joined < 245764), w);
+  }
+  // A4's held snapshot through the memory check (9.7's A4: "the next memory
+  // check"), which the yardstick's histories skip (run L had none): a
+  // page's 3,860 B snapshot carved plain before each visit's take and held,
+  // freed at the next fence (StatsLists::drop()) and at the end, so the
+  // second update's memory check (the join given back: givenBack) and its
+  // rejoin run with it held. (What the check counts of it, main.cpp's
+  // alsoFreed, isn't modelled: the model's check gives back the join alone,
+  // as the firmware's hook does; the snapshot goes at the fence.) Pinned
+  // (MODELLED) against the visits alone (the twin's figures, above): the
+  // grades taken as theirs, three snapshots freed, and every figure.
+  struct PageShape {
+    const StatsCard* card;
+    size_t bootJoined, joined, givenBack;  // with the page held (the visits alone's: the twin's)
+  };
+  const PageShape pageShapes[] = {
+      {&small, bSmall.bootJoined, bSmall.joined, bSmall.givenBack},
+      {&big, bBig.bootJoined, bBig.joined, bBig.givenBack},
+  };
+  for (const PageShape& ps : pageShapes) {
+    StatsRun with;
+    with.card = ps.card;
+    with.slots = 30;
+    with.ask = Ask::Visit;
+    with.page = {3860, StatsRun::Carve::Plain};
+    const UpdateRun a = libraryUpdates(Dj::Placed, saved, records, card, 2, MoodRun(), &with);
+    const UpdateRun& b = ps.card == &small ? bSmall : bBig;
+    char w[96];
+    std::snprintf(w, sizeof(w), "P = %u, Hv with a page's 3,860 B snapshot held",
+                  (unsigned)(ps.card == &small ? 2214 : 19478));
+    printf("[join] an S3 ask (%s): %s; %u snapshots freed (fences and the end); the boot's join %u B (the visits "
+           "alone's %u B), joined %u B (%u B), the memory check's give-back %u B (%u B), the boot's lowest %u B, the "
+           "rejoins' %u B\n",
+           w, tookOf(with).c_str(), (unsigned)with.pageFreed, (unsigned)a.bootJoined, (unsigned)b.bootJoined,
+           (unsigned)a.joined, (unsigned)b.joined, (unsigned)a.givenBack, (unsigned)b.givenBack,
+           (unsigned)a.bootLowest, (unsigned)a.lowest);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("Full, Full, Full", tookOf(with).c_str(), w);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(3, with.asks, w);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(3, with.pageFreed, w);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, with.heldAtEnd, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(ps.bootJoined, a.bootJoined, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(ps.joined, a.joined, w);
+    TEST_ASSERT_EQUAL_size_t_MESSAGE(ps.givenBack, a.givenBack, w);
+    TEST_ASSERT_TRUE_MESSAGE(a.lowest >= kMargin && a.bootLowest >= kMargin, w);
   }
 }
 

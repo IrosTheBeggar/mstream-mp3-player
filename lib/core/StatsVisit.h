@@ -181,8 +181,11 @@ struct Context {
 // (bytesFor(ctx.albums)) zero. `snap` is a block of `bytes`, as carved.
 // False, nothing written: a library past kMaxTracks or kMaxAlbums, or a
 // block short of bytesFor(ctx.albums) (a held snapshot re-asked over an
-// index with more albums, before update()'s key check has freed it: 9.7's
-// "the snapshot's life").
+// index with more albums). A backstop in the firmware: StatsLists'
+// turnVisit() carves again a held snapshot short of the index's albums,
+// finishVisit() puts the ask back when the index's albums aren't the
+// turn's, and StatsLists::loop()'s key check frees a snapshot over another
+// index (a remount's: 9.7's "the snapshot's life").
 bool write(const statsrank::Ranker& ranker, const statsmap::Wanted& wanted, const statsrank::Report& report,
            const Context& ctx, Snapshot* snap, size_t bytes);
 // After the walk: each row's id the wanted row's track id; a row with none
@@ -238,6 +241,13 @@ struct Layout {
 // pathhash::Walk::bytesFor(foldersFor(index)) (0: whole paths); `dated`
 // the clock set (no window room without it: Windows::add() returns first).
 Layout layout(Grade grade, size_t head, uint32_t rows, size_t foldersBytes, uint32_t albums, bool dated);
+// The firmware's `head`: sizeof(StatsLists::Ask) (src/app/StatsLists.cpp,
+// whose static_assert pins it to this), as the xtensa gdb reads it on the
+// core2 and core2-dio ELFs. The heap model's S3 grades
+// (test/test_autodj_join) read it, as the host can't build src/app: a
+// change to Ask fails the firmware's build until this and the model's
+// pinned grades move with it. (test_stats_visit keeps 9.7's 1,488 B.)
+constexpr size_t kAskHeadBytes = 1600;
 
 // ---------------------------------------------------------------------------
 // The phase (9.7's API: the pages' line)

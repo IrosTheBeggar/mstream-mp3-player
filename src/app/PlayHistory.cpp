@@ -377,7 +377,14 @@ void PlayHistory::flush(const char* why) {
   if (!active_) return;
   player_.endPlay();  // (the open play, stopped)
   const uint32_t waiting = tracker_->pending();
-  if (!waiting) return;
+  if (!waiting) {
+    // The stats pages' snapshot freed all the same (9.7's last free point,
+    // with its line); no plays to flush, so no rotation's save: the card
+    // worker's step under way isn't waited for (ListeningStats::ending()'s
+    // 3 s are for that).
+    stats_.lists().ending(0);
+    return;
+  }
   // The listening stats from here: no read at a remount (the folds dropped),
   // no boot's or records' save (an overflow waiting for its save's next try:
   // behind); a rotation's only with 1 s of the budget left, once the flush

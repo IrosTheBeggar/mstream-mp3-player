@@ -101,7 +101,10 @@
 //      as not played);
 //   4. its hold bounded: a wait between the take and the hand-off, the walk
 //      skipping passes for 1 s and the 30 s worker give-up each give the
-//      block back in the pass that sees it, the ask back in Asked, no count.
+//      block back in the pass that sees it, the ask back in Asked, no count
+//      (after the give-up held there 30 s more, holding nothing: Working,
+//      then Waiting; not taken again at once for a worker that never comes).
+//      A take that ends without landing says its figures (sayTake()).
 //      The walk while lit: 100 tracks a slice, 4 ms a pass, none in a pass
 //      that handled input; dark as S2's. The lit cap (kLitCap, Hc0/Hc1):
 //      the rank at priority 1 and the walk at the dark's passes, lit or not,
@@ -181,10 +184,14 @@ public:
   Phase phase() const;
   uint8_t why() const { return why_; }  // S2's gate bits holding the ask (statsvisit::kWhy...)
   Outcome outcome() const { return outcome_; }
-  // +1 at each phase change, each landing and each free of the snapshot.
+  // +1 at each phase change, each landing and each free of the snapshot,
+  // and when a visit asked again over a served snapshot rewrites it
+  // (finishVisit()'s write(): snapshot() null from there to the landing).
   uint16_t version() const { return version_; }
   bool news();  // the version moved since the UI last asked
   // The held snapshot once the visit's ask has landed (resolved); else null.
+  // (A visit asked again over it serves it until its rank's write(), which
+  // moves the version: the pages read it at each use, not a pointer kept.)
   const statsvisit::Snapshot* snapshot() const {
     return snap_ && snap_->resolved() ? snap_ : nullptr;
   }
@@ -257,13 +264,20 @@ private:
   enum Kind : uint8_t { kNone, kRank, kList, kWalkAsk, kTrack, kVisit, kLean };
   enum State : uint8_t { kIdle, kAsked, kRankQueued, kTrackQueued, kRunning, kDone, kWalk };
   // flags_: the ask is the UI's; forced (Hv1: Lists; Hn1: No folders); the
-  // snapshot is Hu's (the console's held fake visit: kept as a page keeps
-  // it, carved again after a fence); the lit cap on (Hc1); the visit
-  // capped; this ask carved the snapshot; the ask is Hu's.
-  static constexpr uint8_t kFromUi = 1, kForced = 2, kFake = 4, kCapOn = 8, kCapped = 16, kCarved = 32, kHu = 128;
-  // Hk's rows a pass (hkPart_): the loop's 2 KB TX buffer about full each
-  // pass, not 35 KB in one (about 3 s of the loop held).
-  static constexpr uint8_t kHkRows = 16;
+  // snapshot is Hu's (the console's held fake visit, carved by Hu's ask:
+  // kept as a page keeps it, carved again after a fence); the lit cap on
+  // (Hc1); the visit capped; this ask carved the snapshot; stalled (an S3a
+  // ask the card worker took no step of in 30 s: in Asked, holding nothing,
+  // kQueuedMs from that give-up before its next take: gateOf()'s
+  // kWhyWorker); the ask is Hu's.
+  static constexpr uint8_t kFromUi = 1, kForced = 2, kFake = 4, kCapOn = 8, kCapped = 16, kCarved = 32,
+                           kStalled = 64, kHu = 128;
+  // Hk's pace (stepHk()): a part, or a row, only while the loop's TX buffer
+  // has room for its worst case (Serial.availableForWrite(): at most 1,016
+  // B, half the 2 KB ring less an item's header, reported empty), so no
+  // pass waits on the UART; the rest at later passes.
+  static constexpr int kHkPieceRoom = 768;  // a header's piece (its lines at most about 700 B)
+  static constexpr int kHkRowRoom = 320;    // a list's row (a 255 B title: 319 B), its list's line or an album's
   struct Ask;  // the block's head (StatsLists.cpp)
   static void entry(void* self);
   bool prepare();
@@ -285,6 +299,7 @@ private:
   // The pages' phase changed (`p`): its line (`heldMs`: an ask in Asked,
   // how long its waits held it to this pass).
   void sayPhase(Phase p, uint32_t nowMs, ScanScheduler::Wait lane, uint32_t heldMs) const;
+  const char* whyName(uint8_t why) const;  // a gate bit's words (kWhyWorker while stalled: the give-up's)
   void beginAsk(Kind k, uint8_t flags, uint32_t nowMs);
   void turnVisit(const Gates& g);
   void finishVisit(const Gates& g);
@@ -293,14 +308,21 @@ private:
   uint32_t holdMs() const;  // the block's hold so far (0: none held)
   bool capReached() const;  // the lit cap on, and the visit's holds at kLitCapMs
   void addHold(uint32_t ms);
+  // A take that ends without landing: its figures (9.7's lit hold: the
+  // screen at the take, the rank's start and the walk's; the priority; the
+  // queued, rank and walk ms, the passes and the longest; the loop's
+  // pieces), said while block_ is held (landVisit()'s line has a landing's).
+  void sayTake() const;
   void putBack(const char* why, uint32_t nowMs);   // the block given back, the ask in Asked again (no count)
   void endVisit(Outcome o, const char* why);        // the ask ended (its block back), `why` said
   void capVisit();                                  // ... at the lit cap: Capped, no ask by itself
   void stop(Outcome o, const char* why);            // the ask under way stopped (cancel(), the card, the stats off)
   void freeSnap(const char* why);
-  // The held snapshot's header as a page reads it (Hk's first part, a
-  // console visit's landing): true, written (its rows may follow).
-  bool printSnapshot(const Gates& g, const char* who);
+  // The held snapshot's header as a page reads it (Hk's first parts, a
+  // console visit's landing): `piece` 0 all of it; 1 the key and the rows'
+  // counts, 2 the 7 days, 3 DAYS' span and Not played yet's count (Hk's,
+  // a part each). True: written (its rows may follow).
+  bool printSnapshot(const Gates& g, const char* who, uint8_t piece = 0);
   void stepHk(const Gates& g);  // Hk's next part (hkPart_), at loop()
 
   statsglue::Glue* glue_ = nullptr;
@@ -330,9 +352,10 @@ private:
   uint8_t flags_ = 0;         // k... above
   uint8_t rankWait_ = 0;      // ScanScheduler::Wait, CardTasks' word (rankWait())
   uint8_t pastCap_ = 0;       // visits whose holds passed kLitCapMs this session (saturating)
-  // Hk owed, a part a pass: 0 none; 1 the header; 2-7 a list's rows
-  // (kHkRows a pass, from hkRow_); 8 Not played yet's first albums. (Both
-  // in the object's tail padding: no .bss.)
+  // Hk owed, as the TX buffer's room allows (stepHk()): 0 none; 1-3 the
+  // header's pieces; 4-9 a list's rows (from hkRow_); 10 Not played yet's
+  // first albums (from hkRow_). (Both in the object's tail padding: no
+  // .bss.)
   uint8_t hkPart_ = 0;
   uint8_t hkRow_ = 0;
 };

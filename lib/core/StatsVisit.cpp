@@ -207,8 +207,9 @@ bool write(const sr::Ranker& ranker, const sm::Wanted& wanted, const sr::Report&
            Snapshot* snap, size_t bytes) {
   if (!snap || ctx.trackCount > kMaxTracks || ctx.albums > kMaxAlbums) return false;
   // The block as carved, not the index's albums alone: a held snapshot
-  // re-asked after a remount with more albums (its key not yet checked at
-  // update()) would be written past its end.
+  // re-asked over an index with more albums would be written past its end.
+  // (A backstop: StatsLists carves such a snapshot again at the turn, and
+  // its loop()'s key check frees one over a remount's index.)
   if (bytesFor(ctx.albums) > bytes) return false;
   uint8_t* p = reinterpret_cast<uint8_t*>(snap);
   // The flags first, then every byte: a block an earlier try left
