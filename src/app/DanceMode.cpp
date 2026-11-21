@@ -74,8 +74,9 @@ void DanceMode::setActive(bool on) {
   }
   if (on == active_) return;
   // The scratch back from its borrower before the tracker reads into it
-  // (the stats pages' snapshot: released, its ask's lists counted again
-  // once the tab is down).
+  // (the stats pages' snapshot released: an ask in flight ends without
+  // writing; a page asks again once the tab is down, a console ask, Hu's
+  // among them, isn't asked again).
   if (on) dancelend::reclaim();
   active_ = on;
   syncTaps();  // on before follow(): the reader starts from what is written next

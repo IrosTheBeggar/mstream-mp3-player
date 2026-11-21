@@ -906,7 +906,7 @@ void ListeningStats::command(const char* arg) {
     case 'w':
     case 'p':
     // S3a's (9.3): the stats pages' asks as a page makes them (Hv, Hv1, Hn,
-    // Hn1), Hu's held fake visit (Hu0 frees it), the held snapshot (Hk) and
+    // Hn1), Hu's held fake visit (Hu0 releases it), the held snapshot (Hk) and
     // the lit cap (Hc0, Hc1, Hc).
     case 'v':
     case 'n':
@@ -926,8 +926,8 @@ void ListeningStats::command(const char* arg) {
       Serial.println("[listen] H: the state; Hd the last 7 UTC days; Hm MARK, ACKS and the log; Ht<16 hex> a track's "
                      "row; Hs a save now; Hr rank now; Hl<shelf>[window] a list; Hw walk now; Hp the playing track; "
                      "Hv a visit's ask (Hv1 Lists forced); Hn Not played yet's lean ask (Hn1 without the folders); Hu "
-                     "a held fake visit (Hu0 frees it); Hk the held snapshot; Hc0, Hc1 the lit cap off, on (Hc: "
-                     "which)");
+                     "a held fake visit (Hu0 releases it); Hk the held snapshot; Hc0, Hc1 the lit cap off, on (Hc: "
+                     "which; on by default)");
       return;
   }
 }

@@ -136,11 +136,12 @@
 // the snapshot's loan (main.cpp: DanceMode::lendScratch(), the Dance tab's
 // 4,096 B block; null while that tab is up, for more than
 // statsvisit::kBound, or with no block), given back by dropping the
-// pointer.
+// pointer; danceUp() says whether the tab is up (a refused loan's line).
 namespace statshold {
 void* take(size_t bytes, autodj::CloseReport* r);
 void give(void* p);
 void* borrow(size_t bytes);
+bool danceUp();
 }  // namespace statshold
 
 class StatsLists {
@@ -242,7 +243,12 @@ public:
   // its work memory and any View; the owner's "Only while held",
   // 2026-11-21): a visit's ask (and the lean ask) waits it out before its
   // take, and one queued gives its block back (gateOf()'s kWhyRest); S2's
-  // asks don't wait for it. Each pass, CardTasks' word.
+  // asks don't wait for it. Each pass, CardTasks' word: not while the
+  // memory is one no step gives back (CardJobs::scanStuck()). A battery
+  // floor met mid-rest keeps the memory, so the asks wait out the floor
+  // (USB or 15%) and then the rest's end (a fresh card's or a Rescan's
+  // whole rest: minutes). It stops a take only: a scan that starts during
+  // a visit's hold (from its rank's end through its walk) carves beside it.
   void restAhead(bool held) { setAhead(kAheadRest, held); }
   // S3a: the Rank lane's own wait this pass (ScanScheduler::yieldNow()): a
   // visit's ask takes no block while it isn't None, and one queued gives its

@@ -204,7 +204,7 @@ void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, boo
   stats_.owedLine();  // (a rotation's save's line: out of its save's frames)
   // S2's ask: a step the card worker finished, taken in (its files closed
   // here, where they were opened), its result printed or its walk begun.
-  // S3a's too, and the snapshot's frees that come with no navigation (the
+  // S3a's too, and the snapshot's releases that come with no navigation (the
   // card, the stats off, a remount's key).
   StatsLists& lists = stats_.lists();
   StatsLists::Gates lg = listsGates(gate.nowMs, cardHeld);
@@ -378,7 +378,7 @@ void PlayHistory::flush(const char* why) {
   player_.endPlay();  // (the open play, stopped)
   const uint32_t waiting = tracker_->pending();
   if (!waiting) {
-    // The stats pages' snapshot freed all the same (9.7's last free point,
+    // The stats pages' snapshot released all the same (9.7's last release,
     // with its line); no plays to flush, so no rotation's save: the card
     // worker's step under way isn't waited for (ListeningStats::ending()'s
     // 3 s are for that).

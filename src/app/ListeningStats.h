@@ -78,9 +78,10 @@
 //     the same top hold as the boot scan's (listsTake()), and the boot's
 //     scan (a remount's) waits a pass while an ask holds it. S3a's Hv, Hn,
 //     Hu, Hk and Hc too: the stats pages' asks (a visit's, Not played yet's
-//     lean ask) as a page makes them, their snapshot (a plain PSRAM block,
-//     held only by a page or Hu, freed at the fence and the orderly end)
-//     and the lit cap (docs/LISTENING-STATS.md 9.3, 9.7).
+//     lean ask) as a page makes them, their snapshot (the Dance tab's
+//     block, lent; held only by a page or Hu, released at the fence, the
+//     Dance tab coming up and the orderly end) and the lit cap
+//     (docs/LISTENING-STATS.md 9.3, 9.7).
 // Loop task only.
 class ListeningStats final : private statsglue::Env {
 public:

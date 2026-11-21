@@ -150,6 +150,7 @@ static DanceMode danceMode(audio, player);
 // back as it comes up, the snapshot released first (the owner's "Borrow
 // Dance's block", 2026-11-21: the stats own no memory; StatsLists).
 void* statshold::borrow(size_t bytes) { return danceMode.lendScratch(bytes); }
+bool statshold::danceUp() { return danceMode.active(); }
 void dancelend::reclaim() { playHistory.statsRelease("the Dance tab"); }
 static Screenshot shot;
 static Haptics haptics;

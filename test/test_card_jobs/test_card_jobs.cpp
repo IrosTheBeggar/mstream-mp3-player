@@ -1630,6 +1630,16 @@ void test_a_card_that_refuses() {
     TEST_ASSERT_EQUAL_UINT32(1, s.jobs.counts().appendFailures);
     TEST_ASSERT_TRUE(s.jobs.chunkPending());
     TEST_ASSERT_FALSE(s.jobs.newRecords());
+    // The scan's memory, stuck (scanStuck(): the stats pages' visits don't
+    // wait for it, app/CardTasks): held, with no compaction handed and the
+    // rest over, and a trim keeps it (the chunk waits).
+    TEST_ASSERT_TRUE(s.jobs.scanHeld());
+    TEST_ASSERT_FALSE(s.jobs.restWork());
+    TEST_ASSERT_FALSE(s.jobs.compactWork());
+    TEST_ASSERT_TRUE(s.jobs.scanStuck());
+    s.jobs.trim();
+    TEST_ASSERT_TRUE(s.jobs.scanHeld());
+    TEST_ASSERT_TRUE(s.jobs.scanStuck());
     // Not tried again pass after pass: each try is an open and a write.
     const uint32_t opensAfterTry = fs.opens;
     TEST_ASSERT_TRUE(opensAfterTry >= opens);
@@ -1648,6 +1658,25 @@ void test_a_card_that_refuses() {
     TEST_ASSERT_TRUE(s.jobs.newRecords());
     s.jobs.markRecords();  // the update step
     TEST_ASSERT_FALSE(s.jobs.newRecords());
+    // The chunk out: nothing stuck, and the trim gives the memory back.
+    TEST_ASSERT_FALSE(s.jobs.scanStuck());
+    s.jobs.trim();
+    TEST_ASSERT_FALSE(s.jobs.scanHeld());
+    // Stuck again (another track read, its chunk refused), then a
+    // compaction asked (askCompact(): a Rescan's, gr): not stuck while it
+    // is handed, and stuck again once it fails.
+    fs.refuse = true;
+    TEST_ASSERT_TRUE(s.run(Job::Scan, Src::Playing, "Artist/Other/01 - c.mp3").read);
+    TEST_ASSERT_FALSE(s.jobs.idleFlush(s.now + 120000));
+    TEST_ASSERT_TRUE(s.jobs.scanStuck());
+    s.jobs.askCompact();
+    TEST_ASSERT_FALSE(s.jobs.scanStuck());
+    TEST_ASSERT_TRUE(s.jobs.compactWork());
+    TEST_ASSERT_TRUE(s.jobs.scanHeld());
+    TEST_ASSERT_FALSE(s.run(Job::Compact).compacted);
+    TEST_ASSERT_TRUE(s.jobs.scanStuck());
+    TEST_ASSERT_TRUE(s.jobs.scanHeld());
+    fs.refuse = false;
   }
   {
     // A rest that ends because the card can't be read says so; one that
@@ -1960,10 +1989,11 @@ void test_begun_again_after_a_remount() {
 // ---------------------------------------------------------------------------
 // scanHeld() (the stats pages' visits wait it out: app/CardTasks'
 // restAhead(), the owner's "Only while held", 2026-11-21): the scan's memory
-// held from its first step's prepare() until trim() gives it back; never
-// for the walk or a compaction; trim() keeps it while a View is open or a
-// chunk waits; after prepareUpdate() (the View closed, the chunk out) it
-// goes.
+// held from its first step's prepare() until trim() gives it back; the walk
+// and a compaction carve none of it (one run mid-rest keeps what the scan
+// holds); trim() keeps it while a View is open or a chunk waits; after
+// prepareUpdate() (the View closed, the chunk out) it goes. (scanStuck():
+// test_a_card_that_refuses.)
 // ---------------------------------------------------------------------------
 void test_the_scans_memory_held() {
   CutFs fs;
@@ -2032,6 +2062,13 @@ void test_the_scans_memory_held() {
   TEST_ASSERT_TRUE(s.jobs.restWork());
   s.run(Job::Scan);
   TEST_ASSERT_TRUE(s.jobs.scanHeld());
+  // A compaction mid-rest (asked: the update step's) carves none of the
+  // scan's memory and gives none back: still held after it.
+  s.jobs.askCompact();
+  TEST_ASSERT_TRUE(s.run(Job::Compact).compacted);
+  TEST_ASSERT_TRUE(s.jobs.scanHeld());
+  TEST_ASSERT_FALSE(s.jobs.scanStuck());
+  TEST_ASSERT_TRUE(s.jobs.restWork());
   // Mid-rest, prepareUpdate() closes the View and puts the chunk out: the
   // trim then gives the memory back (the rest begins its View again later).
   s.jobs.prepareUpdate();

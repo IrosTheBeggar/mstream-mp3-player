@@ -417,10 +417,23 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   }
   // The stats pages' visits wait out the tag scan while it holds its memory
   // (CardJobs::scanHeld(): its work memory and any View in it; the owner's
-  // "Only while held", 2026-11-21): a scan the battery holds with its memory
-  // given back doesn't hold them, a Rescan does while its memory is held.
-  // After the trim above, so memory given back this pass holds nothing.
-  if (lists) lists->restAhead(active_ && jobs_.scanHeld());
+  // "Only while held", 2026-11-21), a Rescan's too. After the trim above, so
+  // memory given back this pass holds nothing. The trim waits for the
+  // rest's end (!restWork()), so a battery floor met mid-rest keeps the
+  // memory and the visits wait out the floor (USB or 15%) and then the
+  // rest's end, and a fresh card's or a Rescan's whole rest (minutes); only
+  // a floor met before the scan's first step (or after a fence gave the
+  // memory back) holds nothing. Memory no step will give back doesn't hold
+  // them (CardJobs::scanStuck(): a chunk the card refused after a failed
+  // compaction): they go on and meet the take's own check (a decoder's
+  // room), as before the gate. With the card jobs off after a remount
+  // (active_ false: cardJobsHeld(), or the card's begin() failed) the
+  // scan's memory may stay carved for the session; nothing gives it back,
+  // so it doesn't hold them either. The gate stops a take only: a scan's
+  // first carve can come beside a visit already taken (from its rank's end
+  // through its walk, about 3 s at most with the cap), with no decoder-room
+  // check, as main's carves come.
+  if (lists) lists->restAhead(active_ && jobs_.scanHeld() && !jobs_.scanStuck());
 }
 
 // The scan's end: the update step when the journal took records since the

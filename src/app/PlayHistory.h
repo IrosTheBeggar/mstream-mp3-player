@@ -135,7 +135,7 @@ public:
   // S3a: the stats pages' asks (app/StatsLists' API, docs/LISTENING-STATS.md
   // 9.7), for S3b's UiHost: a visit's or Not played yet's ask (`cardHeld`:
   // main.cpp's; dropped at once with the card away or held), cancel, release
-  // (the snapshot freed, `why` its [listen] line's), and what the pages read.
+  // (the snapshot released, `why` its [listen] line's), and what the pages read.
   bool statsAsk(StatsLists::UiAsk a, bool cardHeld);
   void statsCancel() {
     if (active_) stats_.lists().cancel();

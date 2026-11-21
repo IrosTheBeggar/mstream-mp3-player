@@ -4826,7 +4826,10 @@ UpdateRun libraryUpdates(Dj dj, const std::vector<uint8_t>& saved, cc::Source& r
   // grade asked). Borrowed (V8's, the firmware's): lent the Dance tab's
   // block (statsvisit::loanOk(), the tab down), no carve, nothing kept in
   // `page` (its memory is main's dance block); a refused loan the visit's
-  // "No room".
+  // "No room". (The model has no tag scan's memory: its visits never wait
+  // out a rest, statsvisit::kWhyRest, so each comes at its point here,
+  // where the device's, Hu's re-ask after the fence among them, may come
+  // only after a rest the update's Pending rows start, and its trim.)
   auto s3Ask = [&] {
     if (!stats || stats->statsOff) return;
     const bool visit = stats->ask == StatsRun::Ask::Visit;

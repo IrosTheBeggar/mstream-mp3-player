@@ -119,7 +119,7 @@ public:
   bool hasNotPlayed() const { return written() && (flags() & kFlagNotPlayed) != 0; }
   Grade grade() const;
   // The key (the index it was made over) and whether `stamp` and `tracks`
-  // are it (a remount's index that isn't frees it: 9.7's "the snapshot's
+  // are it (a remount's index that isn't releases it: 9.7's "the snapshot's
   // life").
   uint64_t buildStamp() const;
   uint32_t trackCount() const;
@@ -196,7 +196,7 @@ struct Context {
 // turnVisit() releases a held snapshot short of the index's albums (the
 // loan is kBound, so only past 18,432 albums: no loan then, No room),
 // finishVisit() puts the ask back when the index's albums aren't the
-// turn's, and StatsLists::loop()'s key check frees a snapshot over another
+// turn's, and StatsLists::loop()'s key check releases a snapshot over another
 // index (a remount's: 9.7's "the snapshot's life").
 bool write(const statsrank::Ranker& ranker, const statsmap::Wanted& wanted, const statsrank::Report& report,
            const Context& ctx, Snapshot* snap, size_t bytes);
@@ -278,8 +278,9 @@ Outcome outcomeOf(statsrank::Outcome o);
 // S2's gate bits (StatsLists::turnWanted()'s why: one at a time, the first
 // that holds in this order), and S3a's own last: kWhyRest, the card
 // worker's tag scan holding its memory (its View or its work memory:
-// CardJobs::scanHeld(); the owner's "Only while held", 2026-11-21), which
-// only the visit's and lean asks wait out (S2's asks don't).
+// CardJobs::scanHeld(), not CardJobs::scanStuck(): app/CardTasks; the
+// owner's "Only while held", 2026-11-21), which only the visit's and lean
+// asks wait out (S2's asks don't).
 constexpr uint8_t kWhyOff = 1, kWhyBoot = 2, kWhyTmp = 4, kWhyUpdate = 8, kWhyCard = 16, kWhyJoin = 32,
                   kWhyWorker = 64, kWhyRest = 128;
 constexpr uint32_t kWaitingMs = 3000;  // held this long by a wait: Waiting
@@ -290,7 +291,7 @@ constexpr uint32_t kWaitingMs = 3000;  // held this long by a wait: Waiting
 // still held (StatsLists::snapshot() non-null). In order:
 //   the stats off (1): Idle; the card away or held (16), or an ask it
 //   ended (CardAway): NoCard;
-//   landed: Ready while its snapshot is served, else Idle (freed since:
+//   landed: Ready while its snapshot is served, else Idle (released since:
 //   release(), a console ask's own, a remount's key, Hu0); NoRoom, NoBlock
 //   or Room: NoRoom; Io, Changed, Damaged, Base: Unread (nothing else);
 //   the cap: Capped; Cancelled: Idle;

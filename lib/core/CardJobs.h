@@ -236,10 +236,23 @@ public:
   bool walking() const { return walk_ != nullptr; }  // a walk is under way (between its steps)
   // The scan holds its memory (its work memory, about 93 KB, and with it
   // any View: the View lives in it): from a scan step's prepare() until
-  // trim() gives it back (or the object goes). The stats pages' visits wait
-  // it out (app/CardTasks, StatsLists' kWhyRest: the owner's "Only while
-  // held"); a scan the battery holds with its memory given back doesn't.
+  // trim() gives it back (or the object goes). The walk and a compaction
+  // carve none of it (one run mid-rest keeps what the scan holds). The
+  // stats pages' visits wait it out (app/CardTasks, StatsLists' kWhyRest:
+  // the owner's "Only while held"). A battery floor met mid-rest doesn't
+  // give it back (the loop trims only once the rest is done: !restWork()),
+  // so the visits wait out the floor (USB or 15%) and then the rest's end
+  // (a fresh card's or a Rescan's whole rest: minutes); only a scan the
+  // floor held before its first step, or one a fence's prepareUpdate() and
+  // trim() emptied, holds nothing.
   bool scanHeld() const { return scan_ != nullptr; }
+  // The scan's memory that no step gives back: a chunk the card refused
+  // after a failed compaction. No compaction is handed (compactWork()), the
+  // rest is over (restWork()) and trim() keeps it, until a compaction runs
+  // and lands (a Rescan's askCompact(), or the update step's), a remount's
+  // begin(), or the card takes idleFlush()'s try 30 s on. The visits don't
+  // wait for it (app/CardTasks): no scan step comes to give it back.
+  bool scanStuck() const { return scan_ != nullptr && appendBlocked_ && compactFailed_; }
   Mode mode() const { return mode_; }
   // A chunk waits for tags.jnl.
   bool chunkPending() const;

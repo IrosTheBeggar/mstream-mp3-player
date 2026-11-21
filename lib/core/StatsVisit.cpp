@@ -206,10 +206,12 @@ uint32_t Snapshot::albumAt(uint32_t k) const {
 bool write(const sr::Ranker& ranker, const sm::Wanted& wanted, const sr::Report& report, const Context& ctx,
            Snapshot* snap, size_t bytes) {
   if (!snap || ctx.trackCount > kMaxTracks || ctx.albums > kMaxAlbums) return false;
-  // The block as carved, not the index's albums alone: a held snapshot
-  // re-asked over an index with more albums would be written past its end.
-  // (A backstop: StatsLists carves such a snapshot again at the turn, and
-  // its loop()'s key check frees one over a remount's index.)
+  // The block's room (StatsLists' snapshotBytes(): the Dance tab's block,
+  // lent whole), not the index's albums alone: a held snapshot re-asked
+  // over an index with more albums would be written past its end. (A
+  // backstop: StatsLists releases such a snapshot at the turn, the loan
+  // then refused past 18,432 albums, No room, and its loop()'s key check
+  // releases one over a remount's index.)
   if (bytesFor(ctx.albums) > bytes) return false;
   uint8_t* p = reinterpret_cast<uint8_t*>(snap);
   // The flags first, then every byte: a block an earlier try left
@@ -476,7 +478,7 @@ Outcome outcomeOf(sr::Outcome o) {
 
 Phase phaseOf(uint8_t why, Outcome outcome, ScanScheduler::Wait wait, uint32_t waitedMs, bool capped, bool served) {
   if (why & kWhyOff) return Phase::Idle;
-  // The card away or held: the ask cancelled, the snapshot freed (9.7);
+  // The card away or held: the ask cancelled, the snapshot released (9.7);
   // an ask it ended stays No card until the next, the page offering Try
   // again once the card is back (CardAway, why 16 gone).
   if (why & kWhyCard) return Phase::NoCard;

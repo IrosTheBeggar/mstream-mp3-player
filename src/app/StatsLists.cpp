@@ -141,6 +141,15 @@ const char* gateName(uint8_t why) {
                                  : "the card worker's tag scan (its memory held)";
 }
 
+// Why the Dance tab's block wasn't lent for a snapshot of `need` bytes
+// (statshold::borrow() refused: statsvisit::loanOk()).
+const char* noLoanText(size_t need) {
+  return need > sv::kBound       ? "past the Dance tab's 4,096 B block (more than 18,432 albums)"
+         : statshold::danceUp() ? "the Dance tab is up (its tracker reads into the block; a page asks again once the "
+                                  "tab is down, a console ask doesn't)"
+                                : "the Dance tab's block wasn't made at the boot (no PSRAM for the dancer)";
+}
+
 // The waits an ask met before its take: S2's gate bits and the Rank lane's
 // (a bit a ScanScheduler::Wait), "none" for none. (`stalled`: kWhyWorker
 // was the 30 s worker give-up's hold, not the walk's.)
@@ -403,15 +412,16 @@ void StatsLists::command(const char* arg) {
     beginAsk(k, flags, millis());
     Serial.printf("[listen] %s: %s, as a stats page asks: at the next pass the write gate lets through, the boot's "
                   "scan done, no library update asked, Auto DJ's join neither working nor due, no card worker's walk "
-                  "or compaction, no tag scan holding its memory, and the Rank lane's waits clear (none taken while "
-                  "one holds); its block given back when it ends%s\n",
+                  "or compaction, no tag scan holding its memory (a battery floor met mid-rest keeps it: then until "
+                  "USB or 15%% and the rest's end), and the Rank lane's waits clear (none taken while one holds); its "
+                  "block given back when it ends%s\n",
                   name(),
                   k == kLean        ? (flags ? "Not played yet's lean ask, without the folders' states (forced)"
                                              : "Not played yet's lean ask (the u40 set; without the folders' states if "
                                                "refused)")
                   : flags & kHu     ? "a held fake visit (Full, else Lists): its snapshot (the Dance tab's block, "
-                                      "lent) kept as a page keeps it, until Hu0, the Dance tab or a fence (then asked "
-                                      "again after the Live and the rejoin)"
+                                      "lent) kept as a page keeps it, until Hu0, the Dance tab coming up (not asked "
+                                      "again) or a fence (then asked again after the Live and the rejoin)"
                   : flags & kForced ? "a visit's ask with the Lists grade forced"
                                     : "a visit's ask (Full when Not played yet may open, else Lists; Full refused, "
                                       "Lists)",
@@ -448,7 +458,8 @@ uint8_t StatsLists::gateOf(const Gates& g) const {
   if (kind_ != kTrack && (ahead_ & kAheadWalk)) return sv::kWhyWorker;
   // S3a's asks: the tag scan while it holds its memory (its work memory and
   // any View: 90-124 KB of PSRAM no gate counts; the owner's "Only while
-  // held", 2026-11-21). S2's asks don't wait for it.
+  // held", 2026-11-21; CardTasks' word, which leaves out memory no step
+  // gives back: CardJobs::scanStuck()). S2's asks don't wait for it.
   if (visiting() && (ahead_ & kAheadRest)) return sv::kWhyRest;
   // S3a's asks after the 30 s worker give-up (kStalled): in Asked, holding
   // nothing, sv::kStallMs from it (queuedMs_, which no pass moves while
@@ -650,6 +661,16 @@ void StatsLists::turnVisit(const Gates& g) {
     if (!forced && notPlayedMayOpen(glue_->fold())) grades[n++] = sv::Grade::Full;
     grades[n++] = sv::Grade::Lists;
   }
+  // A visit with no snapshot held whose loan would be refused (below):
+  // ended before stats.bin's directory is read (a card read and a work
+  // memory's carve for an ask that can't go on). borrow() only looks.
+  const size_t need = sv::bytesFor(albums);
+  if (!lean && !snap_ && !statshold::borrow(need)) {
+    Serial.printf("[listen] %s: no block for its snapshot's %lu B: %s\n", name(), static_cast<ul>(need),
+                  noLoanText(need));
+    endVisit(Outcome::NoBlock, "No room");
+    return;
+  }
   // stats.bin's directory now, for a grade with a played set (its TRKD's
   // rows: the u40 set's room, HEAD's baseRows + TRKD's + the 40 records',
   // as S2 counts them).
@@ -684,7 +705,6 @@ void StatsLists::turnVisit(const Gates& g) {
   // snapshot's release among them, by freeSnap()'s word.)
   int64_t lineUs = 0;
   if (!lean) {
-    const size_t need = sv::bytesFor(albums);
     // (The loan is the block whole: short only past 18,432 albums, where
     // no loan is made, the held one released first.)
     if (snap_ && snapshotBytes() < need) {
@@ -701,9 +721,7 @@ void StatsLists::turnVisit(const Gates& g) {
       const size_t f1 = psramFreeBytes();
       if (!s) {
         Serial.printf("[listen] %s: no block for its snapshot's %lu B: %s\n", name(), static_cast<ul>(need),
-                      need > sv::kBound ? "past the Dance tab's 4,096 B block (more than 18,432 albums)"
-                                        : "the Dance tab is up (its tracker's block in use: the lists count again "
-                                          "once it is down), or the block wasn't made at the boot (no PSRAM)");
+                      noLoanText(need));
         endVisit(Outcome::NoBlock, "No room");
         return;
       }
@@ -939,14 +957,14 @@ void StatsLists::loop(const Gates& g) {
   const uint32_t now = g.nowMs;
   const Wait lane = laneWait(g);  // (this pass's input in it)
   if (hkPart_) stepHk(g);
-  // The snapshot's frees that come with no navigation (9.7's "the snapshot's
+  // The snapshot's releases that come with no navigation (9.7's "the snapshot's
   // life"): the stats off; the card away or held (an S3a ask under way
   // dropped with it: No card, the page's Try again once it is back); a
   // remount whose index isn't the snapshot's key (not while a visit's ask
   // is under way: it rewrites the snapshot over the index it took). Each
   // gives the pages their phase, whatever the last ask came to (landed,
   // its snapshot released here; refused, unread, capped; or one waiting behind
-  // a console ask): No card (16), or Idle with the stats off (1); a free
+  // a console ask): No card (16), or Idle with the stats off (1); a release
   // moves the version (freeSnap()). (A remount's read of stats.bin to make
   // isn't the stats off: an S3a ask waits for it as for the boot's scan,
   // gateOf().)
@@ -1206,7 +1224,7 @@ void StatsLists::finishVisit(const Gates& g) {
     ctx.version = version_;
     // A visit asked again over a served snapshot (a re-ask reuses it):
     // write() unserves it, its rows wanted-set indices until the landing,
-    // so the version moves, as at a free (the phase stays Working).
+    // so the version moves, as at a release (the phase stays Working).
     const bool served = snapshot() != nullptr;
     const bool written = sv::write(a.ranker, a.wanted, r, ctx, snap_, snapshotBytes());
     a.writeUs = static_cast<uint32_t>(esp_timer_get_time() - w0);
@@ -1214,7 +1232,7 @@ void StatsLists::finishVisit(const Gates& g) {
     if (!written) {
       // (A backstop: turnVisit() releases a held snapshot short of the
       // index's albums, the albums' check above puts the ask back, and the
-      // remount's key check (loop()) frees one over another index.)
+      // remount's key check (loop()) releases one over another index.)
       endVisit(Outcome::NoRoom, "its snapshot is short of the library's albums");
       return;
     }
@@ -2017,7 +2035,7 @@ size_t StatsLists::drop() {
       gave = n;
     }
   }
-  // The stats pages' snapshot (9.7's free points: the fence), released (its
+  // The stats pages' snapshot (9.7's release points: the fence), released (its
   // ids are the old index's): its heap bytes in the fence's line, as the
   // memory check's alsoFreed counted them, which are none (the Dance tab's
   // block, lent).
@@ -2064,7 +2082,7 @@ size_t StatsLists::drop() {
 }
 
 void StatsLists::ending(uint32_t maxMs) {
-  // The snapshot first (the orderly end: 9.7's last free point; the worker
+  // The snapshot first (the orderly end: 9.7's last release point; the worker
   // never reads it).
   uiWant_ = 0;
   freeSnap("the orderly end");
