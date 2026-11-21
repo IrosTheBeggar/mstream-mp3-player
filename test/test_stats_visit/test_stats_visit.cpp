@@ -1410,6 +1410,44 @@ void test_the_worker_s_give_up_holds_30_s_then_the_take() {
          "the old rule never took it in 10 minutes\n");
 }
 
+// The device pass's run 3a-6: a console ask stamps its start with millis()
+// after the loop's pass took its nowMs, so that pass's loop() and phase read
+// a start ahead of now ("held 4294967294 ms"). elapsedMs() reads 0 there, and
+// the phase is Working for 3 s from the ask, as for any other ask.
+void test_elapsed_ms_with_a_start_ahead_of_now() {
+  using W = ScanScheduler::Wait;
+  using O = sv::Outcome;
+  using P = sv::Phase;
+  TEST_ASSERT_EQUAL_UINT32(100, sv::elapsedMs(1000, 900));
+  TEST_ASSERT_EQUAL_UINT32(0, sv::elapsedMs(1000, 1000));
+  // A start a pass ahead (a console ask's millis(), the fence's re-ask).
+  TEST_ASSERT_EQUAL_UINT32(0, sv::elapsedMs(1000, 1002));
+  TEST_ASSERT_EQUAL_UINT32(0, sv::elapsedMs(1000, 1000 + 0x7FFFFFFFu));
+  // millis() wrapping: a start just before the wrap, now just after it.
+  TEST_ASSERT_EQUAL_UINT32(21, sv::elapsedMs(5, 0xFFFFFFF0u));
+  TEST_ASSERT_EQUAL_UINT32(0x7FFFFFFFu, sv::elapsedMs(0x7FFFFFFFu, 0));
+  // The phase over it: each wait but the boot's scan's reads Working for its
+  // first 3 s (the start ahead read as 0 ms held), not Waiting at once.
+  const uint8_t whys[] = {4, 8, 32, 64};
+  for (uint8_t why : whys) {
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Working),
+                          static_cast<int>(sv::phaseOf(why, O::None, W::None, sv::elapsedMs(1000, 1002), false, false)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Waiting),
+                          static_cast<int>(sv::phaseOf(why, O::None, W::None, sv::elapsedMs(4002, 1002), false, false)));
+  }
+  for (int w = 1; w < ScanScheduler::kWaits; ++w) {
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Working),
+                          static_cast<int>(sv::phaseOf(0, O::None, static_cast<W>(w), sv::elapsedMs(1000, 1003),
+                                                       false, false)));
+  }
+  // The stall's hold from a start ahead: held (0 ms of its 30 s gone), and
+  // let go 30 s after it.
+  TEST_ASSERT_TRUE(sv::stallHolds(true, 1000, 1002));
+  TEST_ASSERT_TRUE(sv::stallHolds(true, 31001, 1002));
+  TEST_ASSERT_FALSE(sv::stallHolds(true, 31002, 1002));
+  TEST_ASSERT_FALSE(sv::stallHolds(false, 1000, 1002));
+}
+
 int main(int, char**) {
   if (!cardfixtures::json("stats/index.json", &gIndex) || gIndex.size() == 0 ||
       !cardfixtures::json("stats/rank.json", &gRank) || gRank.size() == 0) {
@@ -1425,5 +1463,6 @@ int main(int, char**) {
   RUN_TEST(test_the_layouts_against_the_grade_table);
   RUN_TEST(test_phase_of);
   RUN_TEST(test_the_worker_s_give_up_holds_30_s_then_the_take);
+  RUN_TEST(test_elapsed_ms_with_a_start_ahead_of_now);
   return UNITY_END();
 }

@@ -1016,7 +1016,7 @@ void StatsLists::loop(const Gates& g) {
       Serial.printf("[listen] %s waits: %s (the Rank lane's: no block taken while it holds)\n", name(),
                     ScanScheduler::waitName(lane));
     }
-    heldMs = now - queuedMs_;
+    heldMs = sv::elapsedMs(now, queuedMs_);  // (0 for a start stamped after this pass's now)
     if (sv::waitStartMoves(why, lane, (flags_ & kStalled) != 0)) queuedMs_ = now;
   }
   if (s == kDone) {
@@ -1626,7 +1626,7 @@ StatsLists::Phase StatsLists::phaseAt(uint32_t nowMs, Wait lane) const {
     return sv::phaseOf(0, outcome_, Wait::None, 0, false, served);  // (stopped on the worker)
   }
   if (s != kAsked) return Phase::Working;  // carved, ranking, walking
-  return sv::phaseOf(why_, Outcome::None, lane, nowMs - queuedMs_, false, served);
+  return sv::phaseOf(why_, Outcome::None, lane, sv::elapsedMs(nowMs, queuedMs_), false, served);
 }
 
 void StatsLists::sayPhase(Phase p, uint32_t nowMs, Wait lane, uint32_t heldMs) const {

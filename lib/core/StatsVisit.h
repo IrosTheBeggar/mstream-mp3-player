@@ -303,8 +303,19 @@ Phase phaseOf(uint8_t why, Outcome outcome, ScanScheduler::Wait wait, uint32_t w
 // them, and the turn's gate in the same pass (the same nowMs) would hold
 // the ask again, every 30 s for good (the check of the review's fixes).
 constexpr uint32_t kStallMs = 30000;
+// The ms from the wait's start to nowMs, millis() wrapping, and 0 for a
+// start a little after nowMs: a console ask (and Hu's re-ask at a fence)
+// stamps its start with millis() after the loop's pass took its nowMs, so
+// that pass's loop() and phase read a start up to a pass ahead (the device
+// pass, run 3a-6: "held 4294967294 ms", and a wait but the boot's scan's
+// would have read Waiting at once, not from 3 s). A start more than 2^31 ms
+// ahead reads as one behind, as millis() wrapping makes it.
+inline uint32_t elapsedMs(uint32_t nowMs, uint32_t startMs) {
+  const uint32_t d = nowMs - startMs;
+  return d > 0x7FFFFFFFu ? 0 : d;
+}
 inline bool stallHolds(bool stalled, uint32_t nowMs, uint32_t startMs) {
-  return stalled && nowMs - startMs < kStallMs;
+  return stalled && elapsedMs(nowMs, startMs) < kStallMs;
 }
 inline bool waitStartMoves(uint8_t why, ScanScheduler::Wait wait, bool stalled) {
   return why == 0 && wait == ScanScheduler::Wait::None && !stalled;
