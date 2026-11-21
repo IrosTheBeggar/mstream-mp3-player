@@ -368,6 +368,20 @@ public:
   // window opens for them).
   Out update(const In& in);
 
+  // The Rank lane's own wait in `in`, this pass's update() made (its
+  // windows): a list moving on a lit screen (listHolds()), then the yields
+  // (yieldOf()), the first that applies, as decide() orders them: the wait
+  // decide() gives a rank in the same In, None the pass it would start one.
+  // With or without a rank asked: the listening stats' visit ask waits for
+  // it before it takes its block (docs/LISTENING-STATS.md 9.7, S3a's
+  // pre-turn gate: app/CardTasks hands it to app/StatsLists each pass), so
+  // no block sits queued behind a wait. Not Step (a step under way: the
+  // queue waits for it), Updating (the update step: the gate's own "update
+  // asked" holds the ask) nor Battery (the scan's alone).
+  Wait yieldNow(const In& in) const {
+    return listHolds(in.listMoving, in.dark) ? Wait::List : yieldOf(in);
+  }
+
   // The worker finished a step of `job` that took `ms` (its own clock) and
   // did `units` of its work (a slice's CardWalk steps, or files of the
   // scan: 0 when it only looked at rows): the scan's rate for the estimate
