@@ -11,7 +11,9 @@ byte (5.2, 5.3), the boot (5.4-5.6: the read, the fold above MARK, the
 save, the trim, the seq rule), the sessions' save moments (5.5, 5.14:
 the records and their save, a library update's fence, the orderly end, a
 held tmp, a boot overflow's tries, behind), the shelves' rankers (4.3)
-and the windows (4.1, 4.2). It keeps the whole aggregate in RAM: the
+and the windows (4.1, 4.2), and what S3's visit reads besides the lists
+(9.7's S3a: the totals, the 7 days from DAYS and their span, the u40
+played set). It keeps the whole aggregate in RAM: the
 firmware (S1's rework) keeps only the records and merges the card's rows
 at each save, which writes the same bytes given the same save moments.
 lib/core's StatsFold, StatsFile and StatsRank (S1, S2) are tested
@@ -1046,6 +1048,67 @@ def view(st: Stats, today, albums=None):
     if albums is not None:
         out["notPlayed"] = len(not_played(st, albums, rows))
     return out
+
+
+# ---------------------------------------------------------------------------
+# What the visit's ask reads besides the lists (9.7's S3a, V1): the totals,
+# the 7 days and their span, the u40 played set
+# ---------------------------------------------------------------------------
+def totals(st: Stats, today, rows=None):
+    """Every list's offers before its cap (Ranker::total(); hub rows 3-4
+    count New finds' and Old favourites', 4.2 as decided): the rows its rule
+    takes. Most played's windows: the hashes with a play in the window
+    (RCNT's); All time and Recently played: the tracks with a play. None for
+    a list that needs the clock while it is unset. Same shape as lists()."""
+    rows = st.tracks() if rows is None else rows
+
+    def in_window(days):
+        w = window(today, days)
+        return None if w is None else len({h for (d, h), n in st.rcnt.items() if n and w[0] <= d <= w[1]})
+
+    nf, of = new_finds(st, today, rows, False), old_favourites(st, today, rows, False)
+    played = sum(1 for r in rows.values() if r.plays >= 1)
+    return {"mostPlayed": {"7": in_window(7), "30": in_window(30), "all": played},
+            "newFinds": None if nf is None else len(nf), "oldFavourites": None if of is None else len(of),
+            "recentlyPlayed": played}
+
+
+def days7(st: Stats, today):
+    """The last 7 days from DAYS (4.2 as decided: hub row 1 and Week by UTC
+    day, HOUR not read), oldest first: each day's [listenedMs, plays, Auto
+    DJ's plays, Auto DJ's skips], a day with no row all 0; None while the
+    clock is unset. A play counts whole on the day it began (4.1), one that
+    runs past a UTC midnight too. And the span, clock or not: DAYS' first
+    and newest day (None: no row) and spanDays, newest - first + 1 (0 with
+    no row: 3.1's datedSpanDays, O5); RCNT's oldest day (rcntFirstDay, None:
+    no row), which a capped RCNT moves inside the 30 days (7.6's
+    stats.days_n)."""
+    w = window(today, 7)
+    days = None
+    if w is not None:
+        days = []
+        for d in range(w[0], w[1] + 1):
+            r = st.days.get(d)
+            days.append([0, 0, 0, 0] if r is None else [r[4], r[0], r[2], r[3]])
+    first = min(st.days) if st.days else None
+    newest = max(st.days) if st.days else None
+    return {"days": days, "firstDay": first, "newestDay": newest, "spanDays": newest - first + 1 if st.days else 0,
+            "rcntFirstDay": min(d for d, _ in st.rcnt) if st.rcnt else None}
+
+
+def played40(st: Stats, rows=None):
+    """Not played yet's played set (call 3, "5-byte fingerprints", 4.3): the
+    top 40 bits of each played hash, in the hashes' ascending order (their
+    top bits ascend with them: no sort). Two played hashes that share their
+    top 40 bits give two equal keys."""
+    rows = st.tracks() if rows is None else rows
+    return [h >> 24 for h in sorted(h for h, r in rows.items() if r.plays >= 1)]
+
+
+def played40_bytes(keys) -> bytes:
+    """The u40 set as the rank's region holds it (statsrank::Played40): 5 B
+    a key, little-endian, in order."""
+    return b"".join(k.to_bytes(5, "little") for k in keys)
 
 
 # ---------------------------------------------------------------------------
@@ -2588,18 +2651,23 @@ def session_files():
 # ---------------------------------------------------------------------------
 # The rankers' scenarios (test/fixtures/card/stats/rank.json; S2's C12): a
 # card's stats.bin and its base as a long history leaves them, every list
-# past its cap and 16, and the lists the rankers MUST give over them.
+# past its cap and 16, and the lists the rankers MUST give over them; since
+# S3a's V1, the totals, the 7 days and their span, and the u40 played set.
 # ---------------------------------------------------------------------------
 RANK_TODAY = 320                        # 2026-11-17
 
 
-def _rank_stats(seed, today=RANK_TODAY, tracks=900, base_share=0.7, delta=320, rcnt=1800, ties=False):
+def _rank_stats(seed, today=RANK_TODAY, tracks=900, base_share=0.7, delta=320, rcnt=1800, ties=False,
+                days_from=None, days_share=0.8):
     """A card's stats as a long history leaves them: `tracks` hashes, about
     base_share of them in the base (compacted), `delta` rows in TRKD (some
     over a base row, some new), RCNT's rows over the 32 days to `today` and
     the day after it (a clock ahead), none before day 0. Rows of every kind: dated, undated
     (lastAt 0, by lastOrd), skips only, old favourites, new finds. ties:
-    plays and times from a few values, so the hash decides."""
+    plays and times from a few values, so the hash decides. DAYS (S3a): a
+    row on about days_share of the days from days_from (60 days back by
+    default, not before day 0) to the day after today, from a generator of
+    its own, so the rows above are the ones S2's fixtures had."""
     rng = random.Random(seed)
     hashes = sorted({rng.getrandbits(64) | 1 for _ in range(tracks)})
     day_s = 86400
@@ -2640,6 +2708,14 @@ def _rank_stats(seed, today=RANK_TODAY, tracks=900, base_share=0.7, delta=320, r
     while len(st.rcnt) < rcnt:
         day = rng.randint(max(0, today - 31), today + 1)
         st.rcnt[(day, rng.choice(played))] = rng.choice([1, 2]) if ties else rng.randint(1, 6)
+    drng = random.Random(seed + 1000)
+    for day in range(max(0, today - 60) if days_from is None else days_from, today + 2):
+        if drng.random() < days_share:
+            plays = drng.randint(0, 60)
+            adj, shuffle = drng.randint(0, min(plays, 40)), drng.randint(0, min(plays, 20))
+            # [plays, skips, Auto DJ's plays and skips, listenedMs, shuffle's plays and skips]
+            st.days[day] = [plays, drng.randint(0, 9), adj, drng.randint(0, 5),
+                            plays * drng.randint(30000, 400000) + drng.randint(0, 120000), shuffle, drng.randint(0, 3)]
     st.generation = 9
     if st.base:
         st.head["baseGen"], st.head["baseRows"] = 8, len(st.base)
@@ -2648,19 +2724,84 @@ def _rank_stats(seed, today=RANK_TODAY, tracks=900, base_share=0.7, delta=320, r
     return st
 
 
+def _rank_days(today=500):
+    """DAYS at its 400 rows (5.2's retention, the newest kept): a row on
+    most days from day 40 to the day after today, then retain(), as a save
+    leaves them."""
+    st = _rank_stats(6, today=today, tracks=400, delta=200, rcnt=900, days_from=40, days_share=0.92)
+    if len(st.days) <= DAYS_ROWS:
+        raise ValueError("rank-days: %d DAYS rows, not past %d" % (len(st.days), DAYS_ROWS))
+    retain(st, today)
+    return st
+
+
+def _rank_midnight(today=RANK_TODAY):
+    """Plays around UTC midnights, folded as a boot folds them (Stats.fold):
+    a play counts whole on the day it began (4.1), one that runs past
+    midnight too. No base."""
+    def at(day, h, m, s, ms=0):
+        return dict(startedAt=MIN_MS + day * DAY_MS + ((h * 60 + m) * 60 + s) * 1000 + ms, clock=1)
+
+    a = lambda seq, *args, **kw: slot(DEV_A, EPOCH_A, seq, *args, **kw)  # noqa: E731
+    slots = [
+        a(1, "Night Ticket", 1200000, 1500000, src=3, **at(today - 1, 23, 50, 0)),    # Auto DJ, 20 min past midnight
+        a(2, "Brine", 10000, 200000, outcome=2, src=3, **at(today - 1, 23, 59, 59, 999)),  # an Auto DJ skip
+        a(3, "Low Tide", 200000, 200000, src=2, **at(today, 0, 0, 0)),                 # shuffle, at midnight
+        a(4, "Orbit Room", 240000, 240000, **at(today, 23, 59, 59)),                   # today's, into tomorrow
+        a(5, "Paper Comets", 1800000, 1800000, **at(today - 7, 23, 58, 0)),            # into the window's first day
+        a(6, "Quiet Engine", 200000, 200000, src=3, **at(today - 6, 0, 0, 0)),         # the window's first day
+        a(7, "Signal Fires", 5000, 200000, outcome=3, **at(today - 3, 12, 0, 0)),      # stopped under the line
+        a(8, "Glass Harbour", 200000, 200000, **at(today + 1, 0, 10, 0)),              # a clock ahead
+        a(9, "Slow Lantern", 200000, 200000),                                          # undated
+        a(10, "Copper Season", 200000, 200000, **at(today - 40, 9, 0, 0)),             # the span's first day
+        a(11, "Orbit Room", 300000, 300000, src=3, **at(today - 1, 0, 0, 0)),
+    ]
+    st = Stats()
+    for s in slots:
+        st.fold(s, 1)
+    st.generation = 9
+    st.head["sinceDay"] = today - 40
+    return st
+
+
+def _rank_rcnt_cap(today=RANK_TODAY):
+    """RCNT capped (5.2): 300 played tracks on each of the last 20 days,
+    6,000 rows, so retain() drops whole days, oldest first, to 3,900: RCNT
+    holds 13 days, and its oldest is inside the 30 days (7.6's
+    stats.days_n)."""
+    st = _rank_stats(5, rcnt=0)
+    rng = random.Random(5 + 2000)
+    played = sorted(h for h, r in st.tracks().items() if r.plays)
+    for day in range(today - 19, today + 1):
+        for h in rng.sample(played, 300):
+            st.rcnt[(day, h)] = rng.randint(1, 3)
+    retain(st, today)
+    return st
+
+
 def rank_scenarios():
     """(name, note, stats, today): the rankers' scenarios."""
     big = _rank_stats(1)
+    big.days[RANK_TODAY - 2] = [M16, 7, M8, M8, M32, 3, 1]  # a row at its fields' tops, in the 7 days
     return [
-        ("rank-big", "900 hashes: 619 in the base, 320 TRKD rows (160 over a base row), 1,800 RCNT rows over "
-         "the 32 days to day 320 and day 321 (a clock ahead): every list past its cap and 16", big, RANK_TODAY),
+        ("rank-big", "900 hashes: 635 in the base, 320 TRKD rows (160 over a base row), 1,800 RCNT rows over "
+         "the 32 days to day 320 and day 321 (a clock ahead): every list past its cap and 16. DAYS on most of the "
+         "60 days to day 321, day 318's row at its fields' tops", big, RANK_TODAY),
         ("rank-no-clock", "rank-big's files with the clock unset: Most played All time and Recently played "
-         "alone", big, None),
+         "alone; no 7 days, the span still read", big, None),
         ("rank-ties", "plays, days and times from a few values: the hash decides most places, the caps' edges "
          "among them", _rank_stats(2, ties=True), RANK_TODAY),
         ("rank-early", "a history to day 12: the windows begin before 2026-01-01", _rank_stats(3, today=12), 12),
         ("rank-no-base", "TRKD alone (no base yet), 300 hashes", _rank_stats(4, tracks=300, base_share=0,
                                                                             delta=300, rcnt=700), RANK_TODAY),
+        ("rank-days", "DAYS at its 400 rows (the newest kept, day 501 a clock ahead), today day 500",
+         _rank_days(), 500),
+        ("rank-midnight", "plays folded around UTC midnights: each counts whole on the day it began (an Auto DJ "
+         "play from 23:50 on day 319, a skip at 23:59:59.999, a shuffle play at 00:00 on day 320, one from "
+         "23:59:59 on day 320, one from 23:58 on day 313, outside the 7 days); a stop under the line, an undated "
+         "play, a clock ahead", _rank_midnight(), RANK_TODAY),
+        ("rank-rcnt-cap", "RCNT capped: 300 tracks a day over 20 days, the oldest 7 dropped whole, so its oldest "
+         "day is 308, inside the 30 days", _rank_rcnt_cap(), RANK_TODAY),
     ]
 
 
@@ -2677,10 +2818,15 @@ def rank_files():
                 files["stats/%s/%s" % (folder, base_name(st.head["baseGen"]))] = write_base(st.base,
                                                                                      st.head["baseGen"])
         rows = st.tracks()
+        w = window(today, 30)
         index.append({"name": name, "note": note, "in": folder, "today": today,
                       "rows": {"base": len(st.base), "trkd": len(st.trkd), "rcnt": len(st.rcnt),
-                               "played": sum(1 for r in rows.values() if r.plays)},
-                      "lists": lists_json(lists(st, today))})
+                               "played": sum(1 for r in rows.values() if r.plays), "days": len(st.days),
+                               "tracks": len(rows),
+                               "window": 0 if w is None else sum(1 for (d, _), n in st.rcnt.items()
+                                                                 if n and w[0] <= d <= w[1])},
+                      "lists": lists_json(lists(st, today)), "totals": totals(st, today, rows),
+                      "days7": days7(st, today), "played40": played40_bytes(played40(st, rows)).hex()})
     files["stats/rank.json"] = (json.dumps(index, indent=1) + "\n").encode("utf-8")
     return files
 

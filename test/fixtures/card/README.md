@@ -139,9 +139,16 @@ track's path and hash. `stats/rank.json` lists the rankers' scenarios
 (docs/LISTENING-STATS.md 4.3 and 6.8): each a card's `stats.bin` and its
 base as a long history leaves them (`in`, under `stats/rank/`), every list
 past its cap and 16, `today` (null: the clock unset), the rows each
-section holds and how many tracks have a play (`rows`), and the lists the
-rankers MUST give over them (`lists`, as a boot's above, without
-`notPlayed`). `stats/sessions.json` lists the sessions: players'
+section holds, how many tracks there are and how many have a play, and
+RCNT's rows in the 30-day window (`rows`), and what a rank MUST give over
+them (9.7's S3a): the lists (`lists`, as a boot's above, without
+`notPlayed`); every list's rows offered before its cap (`totals`, the
+lists' shape, null for a list the clock unset can't give); the 7 days
+from DAYS, oldest first, each [listenedMs, plays, Auto DJ's plays, Auto
+DJ's skips] (null with the clock unset), DAYS' first and newest day and
+their span, and RCNT's oldest day (`days7`, null: no row); and the u40
+played set, each played hash's top 40 bits in the hashes' order, 5 bytes
+each, little-endian, in hex (`played40`). `stats/sessions.json` lists the sessions: players'
 boots and plays in turn on one card (`in`, under `stats/sessions/`), the
 play log written as tools/playlog.py's Device writes it and the stats kept
 as a device that keeps them does (docs/LISTENING-STATS.md 5.5 and 5.14: the

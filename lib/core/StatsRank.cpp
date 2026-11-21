@@ -109,6 +109,7 @@ void Ranker::begin(void* mem, bool hasToday, uint16_t today) {
   for (int l = 0; l < kLists; ++l) {
     list_[l] = base + kOffsets[l];
     n_[l] = 0;
+    total_[l] = 0;
   }
   hasToday_ = hasToday;
   today_ = hasToday ? today : 0;
@@ -117,6 +118,7 @@ void Ranker::begin(void* mem, bool hasToday, uint16_t today) {
 }
 
 void Ranker::offer(List l, const Entry& x) {
+  ++total_[l];  // every offer, kept or not (S3a's totals)
   Heap h{l, list_[l]};
   const uint32_t cap = rowsOf(l);
   if (n_[l] < cap) {
@@ -252,6 +254,27 @@ bool Played::contains(uint64_t hash) const {
   return false;
 }
 
+uint64_t Played40::at(uint32_t i) const {
+  const uint8_t* p = rows + static_cast<size_t>(i) * kRowBytes;
+  return static_cast<uint64_t>(p[4]) << 32 | cc::get32(p);
+}
+
+bool Played40::contains(uint64_t hash) const {
+  const uint64_t key = keyOf(hash);
+  uint32_t lo = 0, hi = n;
+  while (lo < hi) {
+    const uint32_t mid = lo + (hi - lo) / 2;
+    const uint64_t k = at(mid);
+    if (k == key) return true;
+    if (k < key) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return false;
+}
+
 uint64_t Sparse::hashAt(uint32_t i) const { return cc::get64(rows + static_cast<size_t>(i) * kSparseRowBytes); }
 uint32_t Sparse::rowAt(uint32_t i) const { return cc::get32(rows + static_cast<size_t>(i) * kSparseRowBytes + 8); }
 
@@ -358,42 +381,107 @@ Outcome frames(const Files& f, const Input& in, sx::Scratch* sc, tagstore::ReadW
   return Outcome::Ok;
 }
 
-}  // namespace
+// A saturating sum at a row field's width (a save's ⊕: addRow()).
+uint32_t addAt(uint32_t a, uint32_t b, uint32_t top) {
+  const uint64_t s = static_cast<uint64_t>(a) + b;
+  return s > top ? top : static_cast<uint32_t>(s);
+}
 
-Report rank(const Files& f, const Input& in, const Memory& mem, Ranker& ranker) {
-  Report rep;
-  ranker.begin(mem.lists, in.hasToday, in.today);
+// What one rank reads with, through its three parts below.
+struct Read {
+  const Files& f;
+  const Input& in;
+  const Memory& mem;
+  sx::Scratch* sc;
+  tagstore::ReadWatch& binSrc;
+  tagstore::ReadWatch& baseSrc;
+  uint8_t* r1;  // a read stream's buffer (the base's)
+  uint8_t* r2;  // another (stats.bin's sections)
+  Report& rep;
+};
+
+// DAYS ⊕ the records' DAYS rows (S3a; 4.2 as decided): every row's day to
+// the span, clock or not; a day of the 7-day window to its report's day,
+// its fields summed as a save's ⊕ sums them. stats.bin's rows are read
+// whole (their CRC and order).
+Outcome readDays(Read& r) {
+  r.sc->card.begin(r.f.bin ? &r.binSrc : nullptr, r.f.bin ? r.sc->frame.section(sf::kDays) : cc::Section(), sf::kDays,
+                   r.r2, sx::kReadBytes);
+  Rows recs{r.in.days, r.in.daysRows, 0, sf::kStrides[sf::kDays]};
+  uint8_t* row = r.sc->row[0];
+  Report& rep = r.rep;
+  for (int from = 0; from < 2; ++from) {
+    // (day u16, plays u16, skips u16, Auto DJ's plays u8 and skips u8,
+    // listenedMs u32, shuffle's plays and skips u8, 2 B)
+    while (from == 0 ? r.sc->card.next(row) : recs.next(row)) {
+      const uint16_t day = cc::get16(row);
+      if (rep.firstDay == sf::kUnsetDay || day < rep.firstDay) rep.firstDay = day;
+      if (rep.newestDay == sf::kUnsetDay || day > rep.newestDay) rep.newestDay = day;
+      if (!r.in.hasToday || day > r.in.today || static_cast<uint32_t>(r.in.today - day) >= kWeekDays) continue;
+      Day& d = rep.days[kWeekDays - 1 - (r.in.today - day)];
+      d.plays = static_cast<uint16_t>(addAt(d.plays, cc::get16(row + 2), 0xFFFF));
+      d.autoDjPlays = static_cast<uint16_t>(addAt(d.autoDjPlays, row[6], 0xFF));
+      d.autoDjSkips = static_cast<uint16_t>(addAt(d.autoDjSkips, row[7], 0xFF));
+      d.listenedMs = addAt(d.listenedMs, cc::get32(row + 8), 0xFFFFFFFF);
+    }
+  }
+  rep.daysRows = r.sc->card.rows();
+  rep.recordRows += r.in.daysRows;
+  rep.bytesRead += static_cast<uint64_t>(rep.daysRows) * sf::kStrides[sf::kDays];
+  return ofWhy(r.sc->card.end());
+}
+
+// RCNT's rows and the records' into the windows, finished into the Ranker
+// (the windows' rows dead from here); RCNT's oldest day to the report.
+// Room (the windows' block short) is said once the section is read whole.
+Outcome readWindows(Read& r, Ranker& ranker) {
   Windows win;
-  win.begin(mem.windows, mem.windowRows, in.hasToday, in.today);
-  if (mem.played) {
-    mem.played->n = 0;
-    mem.played->lost = 0;
+  win.begin(r.mem.windows, r.mem.windowRows, r.in.hasToday, r.in.today);
+  r.sc->card.begin(r.f.bin ? &r.binSrc : nullptr, r.f.bin ? r.sc->frame.section(sf::kRcnt) : cc::Section(), sf::kRcnt,
+                   r.r2, sx::kReadBytes);
+  Rows rc{r.in.rcnt, r.in.rcntRows, 0, sf::kStrides[sf::kRcnt]};
+  uint8_t* row = r.sc->row[0];
+  Report& rep = r.rep;
+  bool room30 = true;
+  for (int from = 0; from < 2; ++from) {
+    while (from == 0 ? r.sc->card.next(row) : rc.next(row)) {
+      // (day u16, plays u16, hash u64)
+      const uint16_t day = cc::get16(row);
+      if (rep.rcntFirstDay == sf::kUnsetDay || day < rep.rcntFirstDay) rep.rcntFirstDay = day;
+      room30 = win.add(day, cc::get64(row + 4), cc::get16(row + 2)) && room30;
+    }
   }
-  if (mem.sparse) mem.sparse->n = 0;
+  rep.rcntRows = r.sc->card.rows();
+  rep.recordRows += r.in.rcntRows;
+  rep.bytesRead += static_cast<uint64_t>(rep.rcntRows) * sf::kStrides[sf::kRcnt];
+  Outcome o = ofWhy(r.sc->card.end());
+  if (o == Outcome::Ok && !room30) o = Outcome::Room;
+  rep.windowRows = win.rows();
+  if (o == Outcome::Ok) win.finish(ranker);
+  return o;
+}
 
-  sx::Scratch* sc = new (mem.work) sx::Scratch;
-  uint8_t* r1 = mem.work + sx::kScratchBytes + sx::kBufBytes;
-  uint8_t* r2 = r1 + sx::kReadBytes;
-  tagstore::ReadWatch binSrc(f.bin), baseSrc(f.base);
-  rep.outcome = frames(f, in, sc, binSrc, baseSrc, &rep.bytesRead);
-  if (rep.outcome != Outcome::Ok) {
-    ranker.finish();
-    return rep;
-  }
-
-  // The tracks: base ⊕ TRKD ⊕ the records', by hash.
-  sc->old.begin(f.base ? &baseSrc : nullptr, f.base ? sc->base.section(0) : cc::Section(), sf::kTrkd, r1,
+// The tracks: base ⊕ TRKD ⊕ the records', by hash, each whole row to the
+// Ranker (none: the played-set-only rank) and, played, to the played set.
+Outcome readTracks(Read& r, Ranker* ranker) {
+  const Files& f = r.f;
+  sx::Scratch* sc = r.sc;
+  Report& rep = r.rep;
+  sc->old.begin(f.base ? &r.baseSrc : nullptr, f.base ? sc->base.section(0) : cc::Section(), sf::kTrkd, r.r1,
                 sx::kReadBytes);
-  sc->card.begin(f.bin ? &binSrc : nullptr, f.bin ? sc->frame.section(sf::kTrkd) : cc::Section(), sf::kTrkd, r2,
+  sc->card.begin(f.bin ? &r.binSrc : nullptr, f.bin ? sc->frame.section(sf::kTrkd) : cc::Section(), sf::kTrkd, r.r2,
                  sx::kReadBytes);
-  Rows recs{in.trkd, in.trkdRows, 0, sf::kTrackBytes};
+  Rows recs{r.in.trkd, r.in.trkdRows, 0, sf::kTrackBytes};
   uint8_t* bRow = sc->row[0];
   uint8_t* dRow = sc->row[1];
   uint8_t* rRow = sc->row[2];
   bool hb = sc->old.next(bRow), hd = sc->card.next(dRow), hr = recs.next(rRow);
   uint32_t baseAt = 0;
-  Played* played = mem.played;
+  // One set or the other: the u40 set when given.
+  Played40* played40 = r.mem.played40;
+  Played* played = played40 ? nullptr : r.mem.played;
   const uint32_t room = played ? played->chunks * kPlayedChunk : 0;
+  Sparse* sparse = r.mem.sparse;
   while (hb || hd || hr) {
     uint64_t h = UINT64_MAX;
     if (hb) h = std::min(h, cc::get64(bRow));
@@ -404,8 +492,8 @@ Report rank(const Files& f, const Input& in, const Memory& mem, Ranker& ranker) 
     if (hb && cc::get64(bRow) == h) {
       t = sf::decodeTrack(bRow);
       any = true;
-      if (mem.sparse && baseAt % kSparseEvery == 0 && mem.sparse->n < mem.sparse->cap) {
-        uint8_t* s = mem.sparse->rows + static_cast<size_t>(mem.sparse->n++) * kSparseRowBytes;
+      if (sparse && baseAt % kSparseEvery == 0 && sparse->n < sparse->cap) {
+        uint8_t* s = sparse->rows + static_cast<size_t>(sparse->n++) * kSparseRowBytes;
         cc::put64(s, h);
         cc::put32(s + 8, baseAt);
       }
@@ -419,15 +507,24 @@ Report rank(const Files& f, const Input& in, const Memory& mem, Ranker& ranker) 
       hd = sc->card.next(dRow);
     }
     if (hr && cc::get64(rRow) == h) {
-      const sf::Track r = sf::decodeTrack(rRow);
-      t = any ? sf::merge(t, r) : r;
+      const sf::Track rec = sf::decodeTrack(rRow);
+      t = any ? sf::merge(t, rec) : rec;
       hr = recs.next(rRow);
     }
     ++rep.tracks;
-    ranker.track(t);
+    if (ranker) ranker->track(t);
     if (t.plays >= 1) {
       ++rep.played;
-      if (played) {
+      if (played40) {
+        if (played40->n < played40->cap) {
+          uint8_t* p = played40->rows + static_cast<size_t>(played40->n++) * Played40::kRowBytes;
+          const uint64_t key = Played40::keyOf(h);
+          cc::put32(p, static_cast<uint32_t>(key));
+          p[4] = static_cast<uint8_t>(key >> 32);
+        } else {
+          ++played40->lost;
+        }
+      } else if (played) {
         if (played->n < room) {
           played->chunk[played->n / kPlayedChunk][played->n % kPlayedChunk] = h;
           ++played->n;
@@ -439,32 +536,44 @@ Report rank(const Files& f, const Input& in, const Memory& mem, Ranker& ranker) 
   }
   rep.baseRows = sc->old.rows();
   rep.trkdRows = sc->card.rows();
-  rep.recordRows = in.trkdRows + in.rcntRows;
+  rep.recordRows += r.in.trkdRows;
   rep.bytesRead += static_cast<uint64_t>(rep.baseRows + rep.trkdRows) * sf::kTrackBytes;
-  Outcome o = ofWhy(sc->old.end());
-  if (o == Outcome::Ok) o = ofWhy(sc->card.end());
+  const Outcome o = ofWhy(sc->old.end());
+  return o == Outcome::Ok ? ofWhy(sc->card.end()) : o;
+}
 
-  // RCNT's rows and the records': the windows.
-  if (o == Outcome::Ok) {
-    sc->card.begin(f.bin ? &binSrc : nullptr, f.bin ? sc->frame.section(sf::kRcnt) : cc::Section(), sf::kRcnt, r2,
-                   sx::kReadBytes);
-    Rows rc{in.rcnt, in.rcntRows, 0, sf::kStrides[sf::kRcnt]};
-    uint8_t* row = sc->row[0];
-    bool room30 = true;
-    for (int from = 0; from < 2; ++from) {
-      while (from == 0 ? sc->card.next(row) : rc.next(row)) {
-        // (day u16, plays u16, hash u64)
-        room30 = win.add(cc::get16(row), cc::get64(row + 4), cc::get16(row + 2)) && room30;
-      }
-    }
-    rep.rcntRows = sc->card.rows();
-    rep.bytesRead += static_cast<uint64_t>(rep.rcntRows) * sf::kStrides[sf::kRcnt];
-    o = ofWhy(sc->card.end());
-    if (o == Outcome::Ok && !room30) o = Outcome::Room;
-    rep.windowRows = win.rows();
-    if (o == Outcome::Ok) win.finish(ranker);
+}  // namespace
+
+Report rank(const Files& f, const Input& in, const Memory& mem, Ranker& ranker) {
+  Report rep;
+  // No lists: the played-set-only rank (S3a's V1): the Ranker not touched.
+  const bool lists = mem.lists != nullptr;
+  if (lists) ranker.begin(mem.lists, in.hasToday, in.today);
+  if (mem.played40) {
+    mem.played40->n = 0;
+    mem.played40->lost = 0;
+  } else if (mem.played) {
+    mem.played->n = 0;
+    mem.played->lost = 0;
   }
-  ranker.finish();
+  if (mem.sparse) mem.sparse->n = 0;
+
+  sx::Scratch* sc = new (mem.work) sx::Scratch;
+  uint8_t* r1 = mem.work + sx::kScratchBytes + sx::kBufBytes;
+  uint8_t* r2 = r1 + sx::kReadBytes;
+  tagstore::ReadWatch binSrc(f.bin), baseSrc(f.base);
+  Outcome o = frames(f, in, sc, binSrc, baseSrc, &rep.bytesRead);
+  Read rd{f, in, mem, sc, binSrc, baseSrc, r1, r2, rep};
+  // S3a's order (9.7's V1; 6.8 as decided): DAYS and RCNT first (stats.bin
+  // holds them before TRKD), the windows finished into the Ranker, so
+  // their rows are dead before the first played hash is written (the u40
+  // set may take their room) and Room is said before the tracks are read;
+  // then the tracks. Each list is its own bounded heap with the hash as its
+  // last tie-break, so the order of the offers moves no row.
+  if (o == Outcome::Ok && lists) o = readDays(rd);
+  if (o == Outcome::Ok && lists) o = readWindows(rd, ranker);
+  if (o == Outcome::Ok) o = readTracks(rd, lists ? &ranker : nullptr);
+  if (lists) ranker.finish();
   rep.outcome = o;
   return rep;
 }
@@ -474,8 +583,10 @@ Report rank(tagstore::Fs& fs, const Input& in, const Memory& mem, Ranker& ranker
   const Outcome o = open(fs, in, &f);
   if (o != Outcome::Ok) {
     Report rep;
-    ranker.begin(mem.lists, in.hasToday, in.today);
-    ranker.finish();
+    if (mem.lists) {
+      ranker.begin(mem.lists, in.hasToday, in.today);
+      ranker.finish();
+    }
     rep.outcome = o;
     return rep;
   }
