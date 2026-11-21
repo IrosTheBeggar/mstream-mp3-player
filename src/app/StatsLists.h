@@ -268,8 +268,9 @@ private:
   // kept as a page keeps it, carved again after a fence); the lit cap on
   // (Hc1); the visit capped; this ask carved the snapshot; stalled (an S3a
   // ask the card worker took no step of in 30 s: in Asked, holding nothing,
-  // kQueuedMs from that give-up before its next take: gateOf()'s
-  // kWhyWorker); the ask is Hu's.
+  // statsvisit::kStallMs from that give-up before its next take: gateOf()'s
+  // kWhyWorker, the wait's start kept from it until the take); the ask is
+  // Hu's.
   static constexpr uint8_t kFromUi = 1, kForced = 2, kFake = 4, kCapOn = 8, kCapped = 16, kCarved = 32,
                            kStalled = 64, kHu = 128;
   // Hk's pace (stepHk()): a part, or a row, only while the loop's TX buffer
@@ -317,7 +318,9 @@ private:
   void endVisit(Outcome o, const char* why);        // the ask ended (its block back), `why` said
   void capVisit();                                  // ... at the lit cap: Capped, no ask by itself
   void stop(Outcome o, const char* why);            // the ask under way stopped (cancel(), the card, the stats off)
-  void freeSnap(const char* why);
+  // The snapshot freed, `why` said: its line's us (turnVisit()'s re-carve
+  // leaves it out of the take's turn, as its other lines; 0: none held).
+  uint32_t freeSnap(const char* why);
   // The held snapshot's header as a page reads it (Hk's first parts, a
   // console visit's landing): `piece` 0 all of it; 1 the key and the rows'
   // counts, 2 the 7 days, 3 DAYS' span and Not played yet's count (Hk's,

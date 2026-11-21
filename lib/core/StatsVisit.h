@@ -39,7 +39,9 @@
 //     regions reused (9.7's grades), the one arithmetic for StatsLists, the
 //     console and the heap model.
 //   - phaseOf(): the stats pages' phase from the ask's state (9.7's "Phase
-//     from why"), pure.
+//     from why"), pure; stallHolds() and waitStartMoves(): the card
+//     worker's 30 s give-up's hold and the wait's start (StatsLists'
+//     gateOf() and loop()), pure.
 // Portable, host-tested (test_stats_visit). No allocation.
 namespace statsvisit {
 
@@ -290,5 +292,22 @@ constexpr uint32_t kWaitingMs = 3000;  // held this long by a wait: Waiting
 // 0.5 s wait doesn't flash "Waiting for the card…" (the API's phase list
 // says Waiting at once; 4.4's Waiting is "held past 3 s").
 Phase phaseOf(uint8_t why, Outcome outcome, ScanScheduler::Wait wait, uint32_t waitedMs, bool capped, bool served);
+
+// The wait's start in Asked (StatsLists' queuedMs_: phaseOf()'s waitedMs)
+// and the card worker's give-up. An S3a ask the worker took no step of in
+// 30 s is given back to Asked, stalled: held kStallMs from that give-up
+// (stallHolds(): gateOf()'s kWhyWorker), then taken again; the stall
+// clears at the take. loop()'s pass moves the start to this pass when
+// nothing holds the ask (`why` 0, no Rank-lane wait), but never while it
+// is stalled: the pass that saw the stall's 30 s run out would restart
+// them, and the turn's gate in the same pass (the same nowMs) would hold
+// the ask again, every 30 s for good (the check of the review's fixes).
+constexpr uint32_t kStallMs = 30000;
+inline bool stallHolds(bool stalled, uint32_t nowMs, uint32_t startMs) {
+  return stalled && nowMs - startMs < kStallMs;
+}
+inline bool waitStartMoves(uint8_t why, ScanScheduler::Wait wait, bool stalled) {
+  return why == 0 && wait == ScanScheduler::Wait::None && !stalled;
+}
 
 }  // namespace statsvisit

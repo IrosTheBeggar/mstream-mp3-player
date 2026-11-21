@@ -439,11 +439,12 @@ uint8_t StatsLists::gateOf(const Gates& g) const {
   if (kind_ != kTrack && g.joinPending) return sv::kWhyJoin;
   if (kind_ != kTrack && workerAhead_) return sv::kWhyWorker;
   // S3a's asks after the 30 s worker give-up (kStalled): in Asked, holding
-  // nothing, kQueuedMs from it (queuedMs_, which no pass a gate holds
-  // moves), then taken again; not at once, for a worker that never comes
-  // (its task unmade, or held): the take, 30 s queued, the give-up, the
-  // take again, the block held all the while and the page Working.
-  if (visiting() && (flags_ & kStalled) && g.nowMs - queuedMs_ < kQueuedMs) return sv::kWhyWorker;
+  // nothing, sv::kStallMs from it (queuedMs_, which no pass moves while
+  // stalled: loop()'s sv::waitStartMoves()), then taken again, the stall
+  // cleared at the take; not at once, for a worker that never comes (its
+  // task unmade, or held): the take, 30 s queued, the give-up, the take
+  // again, the block held all the while and the page Working.
+  if (visiting() && sv::stallHolds((flags_ & kStalled) != 0, g.nowMs, queuedMs_)) return sv::kWhyWorker;
   return 0;
 }
 
@@ -669,11 +670,12 @@ void StatsLists::turnVisit(const Gates& g) {
   // a carve out of it lowers that only when its rest drops below the
   // floor.) (Each line printed as it comes: the loop's stack, 11. Their
   // time, a full TX buffer's wait among it, is left out of the turn's:
-  // lineUs.)
+  // lineUs; a held snapshot's free before the re-carve among them, by
+  // freeSnap()'s word.)
   int64_t lineUs = 0;
   if (!lean) {
     const size_t need = sv::bytesFor(albums);
-    if (snap_ && snapshotBytes() < need) freeSnap("short of the library's albums now: carved again");
+    if (snap_ && snapshotBytes() < need) lineUs += freeSnap("short of the library's albums now: carved again");
     if (snap_) {
       const int64_t p0 = esp_timer_get_time();
       Serial.printf("[listen] %s: the snapshot held at 0x%08lx (%lu B): rewritten whole\n", name(),
@@ -997,7 +999,11 @@ void StatsLists::loop(const Gates& g) {
     // S3a's asks: each gate that holds it, said once (a bit each), every
     // pass (S2's say theirs at turnWanted()); the Rank lane's waits too (a
     // bit a wait), and the wait's start (phaseOf()'s waitedMs: Working,
-    // then Waiting from 3 s) is the last pass nothing held it.
+    // then Waiting from 3 s) is the last pass nothing held it. Not while
+    // stalled (sv::waitStartMoves()): the start is the give-up's until the
+    // take, so the pass whose gate the stall's 30 s no longer holds leaves
+    // it, and this pass's turn (the same nowMs) takes the ask; moved here,
+    // the turn's gateOf() would hold it 30 s more, every 30 s for good.
     const uint8_t why = gateOf(g);
     why_ = why;
     if (why && !(waitLogged_ & why)) {
@@ -1011,7 +1017,7 @@ void StatsLists::loop(const Gates& g) {
                     ScanScheduler::waitName(lane));
     }
     heldMs = now - queuedMs_;
-    if (!why && lane == Wait::None) queuedMs_ = now;
+    if (sv::waitStartMoves(why, lane, (flags_ & kStalled) != 0)) queuedMs_ = now;
   }
   if (s == kDone) {
     Ask& a = *block_;
@@ -1784,8 +1790,8 @@ void StatsLists::stop(Outcome o, const char* why) {
   }
 }
 
-void StatsLists::freeSnap(const char* why) {
-  if (!snap_) return;
+uint32_t StatsLists::freeSnap(const char* why) {
+  if (!snap_) return 0;
   const size_t n = snapshotBytes();
   void* p = snap_;
   snap_ = nullptr;
@@ -1794,8 +1800,10 @@ void StatsLists::freeSnap(const char* why) {
   // phase moves with it.)
   ++version_;
   psramFree(p);
+  const int64_t p0 = esp_timer_get_time();
   Serial.printf("[listen] the stats pages' snapshot freed (%lu B at 0x%08lx): %s\n", static_cast<ul>(n),
                 static_cast<ul>(reinterpret_cast<uintptr_t>(p)), why);
+  return static_cast<uint32_t>(esp_timer_get_time() - p0);
 }
 
 // Hk's first parts, and a console visit's landing: the held snapshot's

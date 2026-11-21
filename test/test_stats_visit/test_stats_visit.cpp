@@ -37,7 +37,12 @@
 //   read faults (Unread, and nothing else Unread), the refusals (NoRoom),
 //   the cap (Capped), the card (NoCard, and an ask it cancelled NoCard
 //   until the next), the stats off (Idle); landed: Ready only while its
-//   snapshot is served, Idle once it is freed.
+//   snapshot is served, Idle once it is freed;
+// - the card worker's 30 s give-up (stallHolds(), waitStartMoves()) in
+//   StatsLists' order, loop() then the turn in the same pass: held 30 s
+//   from it (Waiting from 3 s), then taken, a Rank-lane wait, S2's gate or
+//   a turn the write gate held across its end included; the rule before
+//   the check of the review's fixes never took it.
 // Run: pio test -e native -f test_stats_visit
 #include <unity.h>
 
@@ -1279,6 +1284,132 @@ void test_phase_of() {
          static_cast<unsigned>(unread));
 }
 
+// ---------------------------------------------------------------------------
+// The card worker's give-up (stallHolds(), waitStartMoves())
+// ---------------------------------------------------------------------------
+// StatsLists' order at each pass for an S3a ask in Asked, over the
+// firmware's own rules (the host can't build src/app): loop()'s gate
+// (gateOf(): S2's other gates first, then the stall), the wait's start
+// moved or not, the phase; then PlayHistory's turn in the same pass, with
+// the same nowMs (turnWanted(): the same gate and no Rank-lane wait),
+// which takes the ask and clears the stall. The give-up's own pass first
+// (putBack(): the wait's start that pass, the stall set, loop()'s kAsked
+// block after it).
+namespace {
+struct StallRun {
+  uint32_t takenMs = 0;    // the take's pass (0: none in the run)
+  uint32_t waitingMs = 0;  // the first pass the phase read Waiting (0: none)
+  uint32_t backToWorking = 0;  // passes read Working after a Waiting, but the take's own
+  uint32_t passes = 0;
+};
+// `other(now)`: S2's other gates' bits; `lane(now)`: the Rank lane's wait;
+// `turn(now)`: PlayHistory's turn reached that pass (the write gate's);
+// `stallKept`: false for the rule before this fix (loop() moved the start
+// whenever nothing held the ask, the stall's own pass after its 30 s too).
+template <typename Other, typename Lane, typename Turn>
+StallRun runStall(uint32_t giveUpMs, uint32_t passMs, uint32_t passes, Other other, Lane lane, Turn turn,
+                  bool stallKept = true) {
+  StallRun r;
+  uint32_t start = giveUpMs;
+  bool stalled = true;
+  auto gate = [&](uint32_t now) -> uint8_t {
+    const uint8_t o = other(now);
+    if (o) return o;
+    return sv::stallHolds(stalled, now, start) ? sv::kWhyWorker : 0;
+  };
+  for (uint32_t i = 0; i <= passes; ++i) {
+    const uint32_t now = giveUpMs + i * passMs;
+    ++r.passes;
+    const uint8_t why = gate(now);
+    const ScanScheduler::Wait w = lane(now);
+    if (sv::waitStartMoves(why, w, stallKept && stalled)) start = now;
+    const sv::Phase p = sv::phaseOf(why, sv::Outcome::None, w, now - start, false, false);
+    if (p == sv::Phase::Waiting && !r.waitingMs) r.waitingMs = now;
+    if (turn(now) && gate(now) == 0 && w == ScanScheduler::Wait::None) {
+      r.takenMs = now;  // (its pass Working: nothing holds it, loop()'s phase before the turn)
+      return r;
+    }
+    if (p == sv::Phase::Working && r.waitingMs) ++r.backToWorking;
+  }
+  return r;
+}
+}  // namespace
+
+void test_the_worker_s_give_up_holds_30_s_then_the_take() {
+  using W = ScanScheduler::Wait;
+  TEST_ASSERT_EQUAL_UINT32(30000, sv::kStallMs);
+  // The rules alone: held from the give-up for kStallMs, not a ms more
+  // (millis() wrapping between them too); never when not stalled.
+  for (uint32_t t0 : {0u, 1000u, 0xFFFFFFFFu - 10000u}) {
+    TEST_ASSERT_TRUE(sv::stallHolds(true, t0, t0));
+    TEST_ASSERT_TRUE(sv::stallHolds(true, t0 + 29999, t0));
+    TEST_ASSERT_FALSE(sv::stallHolds(true, t0 + 30000, t0));
+    TEST_ASSERT_FALSE(sv::stallHolds(true, t0 + 600000, t0));
+    TEST_ASSERT_FALSE(sv::stallHolds(false, t0, t0));
+    TEST_ASSERT_FALSE(sv::stallHolds(false, t0 + 29999, t0));
+  }
+  // The start moves only at a pass nothing holds, and never while stalled.
+  TEST_ASSERT_TRUE(sv::waitStartMoves(0, W::None, false));
+  TEST_ASSERT_FALSE(sv::waitStartMoves(0, W::None, true));
+  for (uint8_t why : {4, 8, 32, 64})
+    for (bool stalled : {false, true}) TEST_ASSERT_FALSE(sv::waitStartMoves(why, W::None, stalled));
+  for (int w = 1; w < ScanScheduler::kWaits; ++w) {
+    TEST_ASSERT_FALSE(sv::waitStartMoves(0, static_cast<W>(w), false));
+    TEST_ASSERT_FALSE(sv::waitStartMoves(0, static_cast<W>(w), true));
+  }
+  auto none = [](uint32_t) -> uint8_t { return 0; };
+  auto noLane = [](uint32_t) { return W::None; };
+  auto always = [](uint32_t) { return true; };
+  const uint32_t kTenMinutes = 60000;  // passes (10 minutes of 10 ms ones)
+  // Nothing else holding it: Working, Waiting from 3 s, taken at the first
+  // pass 30 s from the give-up (10 ms passes, and an odd 37 ms pace), and
+  // with millis() wrapping under it.
+  for (uint32_t t0 : {1000u, 0xFFFFFFFFu - 12345u}) {
+    const StallRun a = runStall(t0, 10, kTenMinutes, none, noLane, always);
+    TEST_ASSERT_EQUAL_UINT32(t0 + 30000, a.takenMs);
+    TEST_ASSERT_EQUAL_UINT32(t0 + 3000, a.waitingMs);
+    const StallRun b = runStall(t0, 37, kTenMinutes, none, noLane, always);
+    TEST_ASSERT_EQUAL_UINT32(t0 + (30000 + 36) / 37 * 37, b.takenMs);
+  }
+  const uint32_t t0 = 5000;
+  // A Rank-lane wait across the stall's end (input from 29 s to 31.5 s):
+  // taken at its first pass clear; Waiting throughout (the wait's start
+  // still the give-up's), never Working again before the take.
+  {
+    auto input = [t0](uint32_t now) { return now - t0 >= 29000 && now - t0 < 31500 ? W::Input : W::None; };
+    const StallRun r = runStall(t0, 10, kTenMinutes, none, input, always);
+    TEST_ASSERT_EQUAL_UINT32(t0 + 31500, r.takenMs);
+    TEST_ASSERT_EQUAL_UINT32(t0 + 3000, r.waitingMs);
+    TEST_ASSERT_EQUAL_UINT32(0, r.backToWorking);
+  }
+  // S2's other gate over it (Auto DJ's join, 20 s to 45 s): taken at once
+  // when it clears, the stall's 30 s long run out.
+  {
+    auto join = [t0](uint32_t now) -> uint8_t { return now - t0 >= 20000 && now - t0 < 45000 ? 32 : 0; };
+    const StallRun r = runStall(t0, 10, kTenMinutes, join, noLane, always);
+    TEST_ASSERT_EQUAL_UINT32(t0 + 45000, r.takenMs);
+    TEST_ASSERT_EQUAL_UINT32(0, r.backToWorking);
+  }
+  // The turn not reached where the stall runs out (the write gate holding
+  // PlayHistory's turn from 29 s to 30.5 s): loop()'s passes don't restart
+  // the 30 s meanwhile; taken at the turn's first pass back.
+  {
+    auto turn = [t0](uint32_t now) { return now - t0 < 29000 || now - t0 >= 30500; };
+    const StallRun r = runStall(t0, 10, kTenMinutes, none, noLane, turn);
+    TEST_ASSERT_EQUAL_UINT32(t0 + 30500, r.takenMs);
+  }
+  // The rule before this fix (the check of the review's fixes): loop()'s
+  // pass that saw the 30 s run out moved the start, and the same pass's
+  // turn held it again: no take in 10 minutes of passes, whatever else.
+  {
+    const StallRun r = runStall(t0, 10, kTenMinutes, none, noLane, always, false);
+    TEST_ASSERT_EQUAL_UINT32(0, r.takenMs);
+    TEST_ASSERT_EQUAL_UINT32(kTenMinutes + 1, r.passes);
+  }
+  printf("[visit] the worker's give-up: held 30 s from it, then taken (lane waits, S2's gates, a turn held after it); "
+         "the old rule never took it in 10 minutes\n");
+}
+
 int main(int, char**) {
   if (!cardfixtures::json("stats/index.json", &gIndex) || gIndex.size() == 0 ||
       !cardfixtures::json("stats/rank.json", &gRank) || gRank.size() == 0) {
@@ -1293,5 +1424,6 @@ int main(int, char**) {
   RUN_TEST(test_the_fixture_boots_end_to_end);
   RUN_TEST(test_the_layouts_against_the_grade_table);
   RUN_TEST(test_phase_of);
+  RUN_TEST(test_the_worker_s_give_up_holds_30_s_then_the_take);
   return UNITY_END();
 }
