@@ -3160,11 +3160,12 @@ strings.
   taking no step of it in 30 s gives the block back, the ask back in
   Asked, no count (after the 30 s give-up it is held there 30 s more,
   holding nothing: `statsvisit::stallHolds()`); each take's figures are
-  a `[listen]` line, landed or not. The lit cap (`kLitCap`, off until
-  the device's run 3a-1; `Hc0`/`Hc1` switch it for the session): a
-  visit's rank at priority 1 and its walk at the dark's pace, lit or
-  not, and its block given back once its holds reach 3 s in all
-  (Capped, nothing asked by itself). The snapshot is freed, a `[listen]`
+  a `[listen]` line, landed or not. The lit cap (`kLitCap`, off in S3a;
+  the device's run 3a-1 found lit visits past 3 s, so it goes on for
+  S3b unless the owner overrules; `Hc0`/`Hc1` switch it for the
+  session): a visit's rank at priority 1 and its walk at the dark's
+  pace, lit or not, and its block given back once its holds reach 3 s
+  in all (Capped, nothing asked by itself). The snapshot is freed, a `[listen]`
   line each, by `release()` (S3b's `Ui`: the pages left, another tab,
   the dark), at the library update's fence (`StatsLists::drop()`: its
   bytes in the fence's `[lib]` line and in the memory check's
@@ -3179,11 +3180,16 @@ strings.
   the Live), `Hk` prints the held snapshot, paced by the serial port's
   room, and `Hc0`, `Hc1`, `Hc` the cap. `.bss` is 16 B over main's
   (`StatsLists` 24 to 44 B); `ui::Ui`, `CardTasks` and Auto DJ's object
-  are main's sizes. Whether a held snapshot leaves PSRAM main's to the
-  byte is the device's run 3a-4 to decide: the heap model (MODELLED)
-  finds it moves figures where a decoder opens or Auto DJ's join is made
-  while it is held, and freeing it before those (the plan's 3a-4
-  fallback) gives the figures of the visits alone in every history.
+  are main's sizes. A held snapshot doesn't leave PSRAM main's to the
+  byte: the heap model (MODELLED) finds it moves figures where a decoder
+  opens or Auto DJ's join is made while it is held, and the device's
+  run 3a-4 (2026-11-21) read the largest free block 24,576-90,112 B
+  under main's from the second library update (an MP3 playing) on,
+  and free 3,908 B under while it was held, where the visits alone,
+  nothing held, are main's to the byte. Freeing it before those (the
+  plan's 3a-4 fallback, in the model only) gives the figures of the
+  visits alone in every history; which way is the owner's call
+  (LISTENING-STATS.md 9.7, "S3a: the device pass").
 
 ## Input
 
