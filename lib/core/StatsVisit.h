@@ -49,7 +49,7 @@ using statsrank::List;
 // The snapshot (9.7's table)
 // ---------------------------------------------------------------------------
 constexpr uint32_t kHeaderBytes = 160;
-constexpr size_t kBound = 4096;        // the block's bytes at most, to about 18,400 albums (bytesFor())
+constexpr size_t kBound = 4096;        // the block's bytes at most, to 18,432 albums (bytesFor())
 constexpr uint16_t kMagic = 0x5653;    // "SV", little-endian
 constexpr uint32_t kMaxTracks = 65534;  // a library past it gets no ask: ids are u16 (0xFFFF none)
 constexpr uint32_t kMaxAlbums = 0xFFFF;
@@ -76,10 +76,11 @@ const char* gradeName(Grade g);  // "Full", "Lists", "Lean", "No folders"
 
 // The rows Old favourites and Recently played each give up for a block of
 // `albums`, the fewest that keep it to kBound: none up to 3,216 albums; all
-// 216 past about 18,400 (no library an ask takes: 11's ceiling is about
-// 2,500 albums), where the block passes kBound.
+// 216 from 18,361, and past 18,432 the block passes kBound (no library an
+// ask takes: 11's ceiling is about 2,500 albums).
 uint32_t trimFor(uint32_t albums);
-// A list's room (its cap and 16, less the trim) and its first row's offset.
+// A list's room (its cap and 16, less the trim) and its first row's offset;
+// 0 for a list past the six.
 uint32_t roomOf(List l, uint32_t albums);
 size_t offsetOf(List l, uint32_t albums);
 // The block for `albums`: 3,860 B at 1,706; 0 past kMaxAlbums (no ask).
@@ -114,8 +115,10 @@ public:
   bool matches(uint64_t stamp, uint32_t tracks) const {
     return valid() && buildStamp() == stamp && trackCount() == tracks;
   }
-  // The ask's time (a row's: seconds since 2026-01-01 plus 1; 0 undated),
-  // today (kUnsetDay undated) and the live round.
+  // The ask's time (a row's: seconds since 2026-01-01 plus 1, so 0 stays
+  // undated and a row's minutes are (time - 1) / 60 as `when` reads them;
+  // 9.7's table says plain seconds), today (kUnsetDay undated) and the live
+  // round.
   uint32_t time() const;
   uint16_t today() const;
   uint32_t liveRound() const;
@@ -146,7 +149,7 @@ public:
   uint32_t version() const;
   Row rowAt(List l, uint32_t i) const;
   // A list's first row: its id (u16) at every kStrides[l] bytes (the
-  // queue's id view, 7.6).
+  // queue's id view, 7.6); null for a list past the six.
   const uint8_t* ids(List l) const;
   size_t bytes() const { return bytesFor(albums()); }
 
@@ -175,10 +178,13 @@ struct Context {
 // cleared first), every kept row of `ranker` (each list to its room) with
 // its row in `wanted` (kNoRow when it has none) and its facts, the totals,
 // the 7 days and the span from `report`; every other byte of the block
-// (bytesFor(ctx.albums)) zero. False, nothing written: a library past
-// kMaxTracks or kMaxAlbums.
+// (bytesFor(ctx.albums)) zero. `snap` is a block of `bytes`, as carved.
+// False, nothing written: a library past kMaxTracks or kMaxAlbums, or a
+// block short of bytesFor(ctx.albums) (a held snapshot re-asked over an
+// index with more albums, before update()'s key check has freed it: 9.7's
+// "the snapshot's life").
 bool write(const statsrank::Ranker& ranker, const statsmap::Wanted& wanted, const statsrank::Report& report,
-           const Context& ctx, Snapshot* snap);
+           const Context& ctx, Snapshot* snap, size_t bytes);
 // After the walk: each row's id the wanted row's track id; a row with none
 // (kNoRow, an orphan, a collision) dropped, each list compacted and cut to
 // its cap, its total less the rows dropped; the rows past it zeroed. False:
@@ -238,26 +244,39 @@ Layout layout(Grade grade, size_t head, uint32_t rows, size_t foldersBytes, uint
 // ---------------------------------------------------------------------------
 enum class Phase : uint8_t { Idle, Working, Waiting, Ready, NoRoom, Unread, NoCard, Capped };
 // An ask's end. Room: the rank's (the window's block short), which every
-// grade's refusal reads as.
-enum class Outcome : uint8_t { None, Ok, NoRoom, NoBlock, Changed, Io, Damaged, Base, Cancelled, Room };
+// grade's refusal reads as. Cancelled: by the UI (cancel(), release()).
+// CardAway: by the card, away or held (an ask dropped at once while it is,
+// or cancelled when it goes), which keeps the page's No card until the
+// next ask, the page offering Try again once the card is back (9.7's "the
+// card back"; 4.4's No card). Room and CardAway are beyond 9.7's API enum.
+enum class Outcome : uint8_t { None, Ok, NoRoom, NoBlock, Changed, Io, Damaged, Base, Cancelled, Room, CardAway };
 const char* phaseName(Phase p);
 const char* outcomeName(Outcome o);
 Outcome outcomeOf(statsrank::Outcome o);
-// S2's gate bits (StatsLists::turnWanted()'s why).
+// S2's gate bits (StatsLists::turnWanted()'s why: one at a time, the first
+// that holds in this order).
 constexpr uint8_t kWhyOff = 1, kWhyBoot = 2, kWhyTmp = 4, kWhyUpdate = 8, kWhyCard = 16, kWhyJoin = 32,
                   kWhyWorker = 64;
 constexpr uint32_t kWaitingMs = 3000;  // held this long by a wait: Waiting
 // The phase of an ask made (Asked, under way, or ended with `outcome`; with
 // none made the page's phase is Idle, the caller's). `why`: the gate's bits
-// holding it; `wait`: the Rank lane's (a wait met after the take, its block
-// given back, is the same); `waitedMs`: how long a wait has held it;
-// `capped`: the lit cap reached (cap on). In order:
-//   the stats off (1): Idle; the card away or held (16): NoCard;
+// holding it; `wait`: the Rank lane's; `waitedMs`: how long a wait has held
+// it; `capped`: the lit cap reached (cap on). In order:
+//   the stats off (1): Idle; the card away or held (16), or an ask it
+//   ended (CardAway): NoCard;
 //   landed: Ready; NoRoom, NoBlock or Room: NoRoom; Io, Changed, Damaged,
 //   Base: Unread (nothing else);
 //   the cap: Capped; Cancelled: Idle;
-//   a why or a wait: Working, then Waiting from kWaitingMs (no count);
+//   the boot's scan (2): Working, however long (4.4's Folding, "Counting
+//   plays…"; S2 gives it before every later gate);
+//   4, 8, 32 or 64, or a Rank-lane wait: Working, then Waiting from
+//   kWaitingMs (no count);
 //   else (carved, ranking, walking): Working.
+// A wait met after the take, its block given back (V4's hold bounds), is
+// the gate's wait again, `waitedMs` from its start: Working, then Waiting
+// from kWaitingMs, as 9.7's V3 bullet and its tests have it, so a tap's
+// 0.5 s wait doesn't flash "Waiting for the card…" (the API's phase list
+// says Waiting at once; 4.4's Waiting is "held past 3 s").
 Phase phaseOf(uint8_t why, Outcome outcome, ScanScheduler::Wait wait, uint32_t waitedMs, bool capped);
 
 }  // namespace statsvisit

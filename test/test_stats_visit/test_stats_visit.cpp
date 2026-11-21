@@ -33,9 +33,10 @@
 //   cap and at P = 2,214; each region inside the block, and what overlaps
 //   dead by the time it is written;
 // - phaseOf(): every why, each Rank-lane wait (Working, then Waiting from
-//   3 s, nothing counted), the read faults (Unread, and nothing else
-//   Unread), the refusals (NoRoom), the cap (Capped), the card (NoCard),
-//   the stats off (Idle).
+//   3 s, nothing counted), the boot's scan (Working however long), the
+//   read faults (Unread, and nothing else Unread), the refusals (NoRoom),
+//   the cap (Capped), the card (NoCard, and an ask it cancelled NoCard
+//   until the next), the stats off (Idle).
 // Run: pio test -e native -f test_stats_visit
 #include <unity.h>
 
@@ -300,8 +301,10 @@ void test_the_snapshot_s_bytes() {
   // pair), down to none.
   TEST_ASSERT_EQUAL_UINT32(4096, sv::bytesFor(3216));
   TEST_ASSERT_EQUAL_UINT32(0, sv::trimFor(3216));
-  uint32_t firstTrim = 0, lastTrim = 0;
-  for (uint32_t a = 0; a <= 70000; a = a < 4000 ? a + 1 : a + 37) {
+  // Every album count to 70,000: the first trimmed, the first with all 216
+  // rows given up, the first past the bound.
+  uint32_t firstTrim = 0, allGiven = 0, firstPast = 0;
+  for (uint32_t a = 0; a <= 70000; ++a) {
     const size_t bytes = sv::bytesFor(a);
     if (a > sv::kMaxAlbums) {
       TEST_ASSERT_EQUAL_UINT32(0, bytes);  // (no library an ask takes)
@@ -317,8 +320,9 @@ void test_the_snapshot_s_bytes() {
     if (t < 216) {
       TEST_ASSERT_TRUE(bytes <= sv::kBound);
       if (t > 0) TEST_ASSERT_TRUE(bytes + 11 > sv::kBound);  // (the fewest rows given)
-    } else if (bytes > sv::kBound) {
-      if (!lastTrim) lastTrim = a;  // (no rows left to give: past any library an ask takes)
+    } else {
+      if (!allGiven) allGiven = a;
+      if (bytes > sv::kBound && !firstPast) firstPast = a;  // (no rows left to give: past any library an ask takes)
     }
     if (t > 0 && !firstTrim) firstTrim = a;
   }
@@ -326,12 +330,24 @@ void test_the_snapshot_s_bytes() {
   TEST_ASSERT_EQUAL_UINT32(1, sv::trimFor(3217));
   TEST_ASSERT_EQUAL_UINT32(2, sv::trimFor(3300));
   TEST_ASSERT_EQUAL_UINT32(4087, sv::bytesFor(3300));
-  TEST_ASSERT_TRUE(lastTrim > 18000);
+  // 18,432 albums the last the bound holds: 3,592 + 2,304 + 2 x 288 - 216
+  // x 11 = 4,096 B; 18,433 albums 4,099 B.
+  TEST_ASSERT_EQUAL_UINT32(216, sv::trimFor(18432));
+  TEST_ASSERT_EQUAL_UINT32(4096, sv::bytesFor(18432));
+  TEST_ASSERT_EQUAL_UINT32(4099, sv::bytesFor(18433));
+  TEST_ASSERT_EQUAL_UINT32(18433, firstPast);
+  TEST_ASSERT_EQUAL_UINT32(18361, allGiven);  // (2,870 B of bits and directory: 216 rows' 2,376 B under)
   TEST_ASSERT_EQUAL_UINT32(1216 + 8192 + 2048, sv::bytesFor(sv::kMaxAlbums));
+  // A list number past the six: no room, no offset, no rows.
+  for (uint32_t bad : {static_cast<uint32_t>(sr::kLists), 7u, 200u, 255u}) {
+    const sr::List l = static_cast<sr::List>(bad);
+    TEST_ASSERT_EQUAL_UINT32(0, sv::roomOf(l, 1706));
+    TEST_ASSERT_EQUAL_UINT32(0, sv::offsetOf(l, 1706));
+  }
   printf("[visit] the snapshot: 160 B header, 3,592 B of lists; 3,860 B at 1,706 albums, 3,867 B at 1,747; 4,096 B "
-         "from 3,216 albums, the last rows of Old favourites and Recently played given up from %u, none left past "
-         "%u\n",
-         static_cast<unsigned>(firstTrim), static_cast<unsigned>(lastTrim));
+         "from 3,216 albums, the last rows of Old favourites and Recently played given up from %u, all 216 from %u, "
+         "past 4,096 B from %u\n",
+         static_cast<unsigned>(firstTrim), static_cast<unsigned>(allGiven), static_cast<unsigned>(firstPast));
 }
 
 // ---------------------------------------------------------------------------
@@ -372,9 +388,9 @@ void test_write_and_resolve_on_the_rank_scenarios() {
     } else {
       part.fill(0xFF);
     }
-    TEST_ASSERT_TRUE_MESSAGE(sv::write(k, wr.w, r->rep, ctx, snapOf(zero)), what.c_str());
-    TEST_ASSERT_TRUE_MESSAGE(sv::write(k, wr.w, r->rep, ctx, snapOf(pattern)), what.c_str());
-    TEST_ASSERT_TRUE_MESSAGE(sv::write(k, wr.w, r->rep, ctx, snapOf(part)), what.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(sv::write(k, wr.w, r->rep, ctx, snapOf(zero), zero.bytes), what.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(sv::write(k, wr.w, r->rep, ctx, snapOf(pattern), pattern.bytes), what.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(sv::write(k, wr.w, r->rep, ctx, snapOf(part), part.bytes), what.c_str());
     TEST_ASSERT_TRUE_MESSAGE(zero.str() == pattern.str(), (what + ": rewritten whole over a pattern").c_str());
     TEST_ASSERT_TRUE_MESSAGE(zero.str() == part.str(), (what + ": rewritten whole over an earlier try").c_str());
     TEST_ASSERT_TRUE(zero.guarded() && pattern.guarded() && part.guarded());
@@ -439,6 +455,14 @@ void test_write_and_resolve_on_the_rank_scenarios() {
         sameFacts(l, e, row, live, mi);
       }
     }
+    // A list number past the six: no ids, no rows, an empty row.
+    for (uint32_t bad : {static_cast<uint32_t>(sr::kLists), 200u}) {
+      const sr::List l = static_cast<sr::List>(bad);
+      TEST_ASSERT_NULL(sn.ids(l));
+      TEST_ASSERT_EQUAL_UINT32(0, sn.rows(l));
+      TEST_ASSERT_EQUAL_UINT32(0, sn.total(l));
+      TEST_ASSERT_EQUAL_UINT32(0, sn.rowAt(l, 0).id);
+    }
     // The walk's ids, made up: an orphan each 5th wanted row, a collision
     // each 7th, else an id the index never gives the row's own place.
     for (uint32_t i = 0; i < wr.w.n; ++i)
@@ -476,7 +500,7 @@ void test_write_and_resolve_on_the_rank_scenarios() {
     }
     TEST_ASSERT_FALSE(sv::resolve(wr.w, snapOf(zero)));  // (once)
     // No orphan: each list its rows cut to the cap, the totals the Ranker's.
-    TEST_ASSERT_TRUE(sv::write(k, wr.w, r->rep, ctx, snapOf(pattern)));
+    TEST_ASSERT_TRUE(sv::write(k, wr.w, r->rep, ctx, snapOf(pattern), pattern.bytes));
     for (uint32_t i = 0; i < wr.w.n; ++i) wr.w.setId(i, i);
     TEST_ASSERT_TRUE(sv::resolve(wr.w, snapOf(pattern)));
     for (sr::List l : kAll) {
@@ -558,7 +582,7 @@ void test_saturation_and_when_s_codes() {
   w.seal();
   sv::Context ctx = contextOf(10, live, 1);
   Block b(sv::bytesFor(10));
-  TEST_ASSERT_TRUE(sv::write(k, w, sr::Report(), ctx, snapOf(b)));
+  TEST_ASSERT_TRUE(sv::write(k, w, sr::Report(), ctx, snapOf(b), b.bytes));
   const sv::Snapshot& sn = *snapOf(b);
   auto rowOf = [&](sr::List l, uint64_t hash) {
     for (uint32_t i = 0; i < k.size(l); ++i)
@@ -606,7 +630,7 @@ void test_saturation_and_when_s_codes() {
   k2.finish();
   WantedRegion wr2(k2);
   Block b2(sv::bytesFor(1));
-  TEST_ASSERT_TRUE(sv::write(k2, wr2.w, sr::Report(), contextOf(1, live, 1), snapOf(b2)));
+  TEST_ASSERT_TRUE(sv::write(k2, wr2.w, sr::Report(), contextOf(1, live, 1), snapOf(b2), b2.bytes));
   const sv::Snapshot& s2 = *snapOf(b2);
   TEST_ASSERT_FALSE(s2.dated());
   TEST_ASSERT_EQUAL_UINT32(0, s2.time());
@@ -626,14 +650,37 @@ void test_saturation_and_when_s_codes() {
   TEST_ASSERT_EQUAL_UINT32(total30 - 1, sn.total(sr::kMost30));
   // A library past 65,534 tracks gets no snapshot.
   ctx.trackCount = sv::kMaxTracks + 1;
-  TEST_ASSERT_FALSE(sv::write(k, w, sr::Report(), ctx, snapOf(b)));
+  TEST_ASSERT_FALSE(sv::write(k, w, sr::Report(), ctx, snapOf(b), b.bytes));
   ctx.trackCount = sv::kMaxTracks;
-  TEST_ASSERT_TRUE(sv::write(k, w, sr::Report(), ctx, snapOf(b)));
+  TEST_ASSERT_TRUE(sv::write(k, w, sr::Report(), ctx, snapOf(b), b.bytes));
   ctx.albums = sv::kMaxAlbums + 1;
-  TEST_ASSERT_FALSE(sv::write(k, w, sr::Report(), ctx, snapOf(b)));
+  TEST_ASSERT_FALSE(sv::write(k, w, sr::Report(), ctx, snapOf(b), b.bytes));
+  // A held block (carved for 10 albums: 3,596 B) re-asked over an index
+  // with more albums (a remount's, before update()'s key check frees it):
+  // refused, nothing written, when the block is short by a byte or more;
+  // taken when it holds them (16 albums: 3,596 B too).
+  ctx.albums = 10;
+  TEST_ASSERT_TRUE(sv::write(k, w, sr::Report(), ctx, snapOf(b), b.bytes));
+  const std::string held = b.str();
+  TEST_ASSERT_EQUAL_UINT32(3596, b.bytes);
+  for (uint32_t more : {17u, 65u, 3000u}) {
+    ctx.albums = more;
+    TEST_ASSERT_TRUE(sv::bytesFor(more) > b.bytes);
+    TEST_ASSERT_FALSE(sv::write(k, w, sr::Report(), ctx, snapOf(b), b.bytes));
+    TEST_ASSERT_TRUE(held == b.str() && b.guarded());
+  }
+  ctx.albums = 10;
+  TEST_ASSERT_FALSE(sv::write(k, w, sr::Report(), ctx, snapOf(b), 0));  // (no block)
+  TEST_ASSERT_FALSE(sv::write(k, w, sr::Report(), ctx, snapOf(b), b.bytes - 1));
+  TEST_ASSERT_TRUE(held == b.str());
+  ctx.albums = 16;
+  TEST_ASSERT_EQUAL_UINT32(b.bytes, sv::bytesFor(16));
+  TEST_ASSERT_TRUE(sv::write(k, w, sr::Report(), ctx, snapOf(b), b.bytes));
+  TEST_ASSERT_EQUAL_UINT32(16, sn.albums());
+  TEST_ASSERT_TRUE(b.guarded());
   // The window: the UI's one write; a value past All time reads All time.
   ctx.albums = 10;
-  TEST_ASSERT_TRUE(sv::write(k, w, sr::Report(), ctx, snapOf(b)));
+  TEST_ASSERT_TRUE(sv::write(k, w, sr::Report(), ctx, snapOf(b), b.bytes));
   snapOf(b)->setWindow(0);
   TEST_ASSERT_EQUAL_UINT8(0, sn.window());
   snapOf(b)->setWindow(9);
@@ -749,7 +796,7 @@ void test_the_directory_and_album_at() {
     ctx.buildStamp = idx->buildStamp();
     ctx.trackCount = idx->trackCount();
     TEST_ASSERT_FALSE(sv::notPlayed(m, *idx, snapOf(b)));  // (not written)
-    TEST_ASSERT_TRUE(sv::write(k, wr.w, sr::Report(), ctx, snapOf(b)));
+    TEST_ASSERT_TRUE(sv::write(k, wr.w, sr::Report(), ctx, snapOf(b), b.bytes));
     TEST_ASSERT_FALSE_MESSAGE(sv::notPlayed(m, *idx, snapOf(b)), what.c_str());  // (the walk not Ready)
     TEST_ASSERT_EQUAL_INT(static_cast<int>(sm::Map::Status::Ready), static_cast<int>(runMap(m, idx.get())));
     for (uint32_t i = 0; i < wr.w.n; ++i) wr.w.setId(i, i);
@@ -759,19 +806,19 @@ void test_the_directory_and_album_at() {
     sv::Context other = ctx;
     other.trackCount = ctx.trackCount + 1;
     Block ob(sv::bytesFor(albums));
-    TEST_ASSERT_TRUE(sv::write(k, wr.w, sr::Report(), other, snapOf(ob)));
+    TEST_ASSERT_TRUE(sv::write(k, wr.w, sr::Report(), other, snapOf(ob), ob.bytes));
     TEST_ASSERT_FALSE(sv::notPlayed(m, *idx, snapOf(ob)));
     other = ctx;
     other.albums = albums + 1;
     Block ob2(sv::bytesFor(albums + 1));
-    TEST_ASSERT_TRUE(sv::write(k, wr.w, sr::Report(), other, snapOf(ob2)));
+    TEST_ASSERT_TRUE(sv::write(k, wr.w, sr::Report(), other, snapOf(ob2), ob2.bytes));
     TEST_ASSERT_FALSE(sv::notPlayed(m, *idx, snapOf(ob2)));
     const auto idx2 = libraryOf(albums, 3);
     TEST_ASSERT_FALSE(sv::notPlayed(m, *idx2, snapOf(b)));
     TEST_ASSERT_FALSE(snapOf(b)->hasNotPlayed());
     // The bits.
     b.fill(0);
-    TEST_ASSERT_TRUE(sv::write(k, wr.w, sr::Report(), ctx, snapOf(b)));
+    TEST_ASSERT_TRUE(sv::write(k, wr.w, sr::Report(), ctx, snapOf(b), b.bytes));
     TEST_ASSERT_TRUE(sv::resolve(wr.w, snapOf(b)));
     std::memset(b.p() + snapOf(b)->bitsOffset(), 0x77, b.bytes - snapOf(b)->bitsOffset());  // (any old bytes)
     TEST_ASSERT_TRUE_MESSAGE(sv::notPlayed(m, *idx, snapOf(b)), what.c_str());
@@ -814,7 +861,7 @@ void test_the_directory_and_album_at() {
       TEST_ASSERT_EQUAL_UINT32(k.total(sr::kRecent), sn.total(sr::kRecent));  // (rows given up aren't orphans)
     }
     // write() again (a visit's re-ask): the bits gone, the flag clear.
-    TEST_ASSERT_TRUE(sv::write(k, wr.w, sr::Report(), ctx, snapOf(b)));
+    TEST_ASSERT_TRUE(sv::write(k, wr.w, sr::Report(), ctx, snapOf(b), b.bytes));
     TEST_ASSERT_FALSE(sn.hasNotPlayed());
     TEST_ASSERT_EQUAL_UINT32(0, sn.notPlayedCount());
     TEST_ASSERT_EQUAL_UINT32(sv::kNoAlbum, sn.albumAt(0));
@@ -862,7 +909,7 @@ void test_the_fixture_boots_end_to_end() {
       ctx.trackCount = idx.trackCount();
       Block b(sv::bytesFor(idx.albumCount()));
       b.fill(0xA7);
-      TEST_ASSERT_TRUE(sv::write(k, wr.w, r->rep, ctx, snapOf(b)));
+      TEST_ASSERT_TRUE(sv::write(k, wr.w, r->rep, ctx, snapOf(b), b.bytes));
       Block bits(sm::albumBytes(idx.albumCount()));
       Block folders(Walk::bytesFor(Walk::foldersFor(idx)));
       sm::Map m;
@@ -908,7 +955,7 @@ void test_the_fixture_boots_end_to_end() {
       const std::string full = b.str();
       ctx.grade = sv::Grade::Lists;
       Block held(sv::bytesFor(idx.albumCount()));
-      TEST_ASSERT_TRUE(sv::write(k, wr.w, r->rep, ctx, snapOf(held)));
+      TEST_ASSERT_TRUE(sv::write(k, wr.w, r->rep, ctx, snapOf(held), held.bytes));
       TEST_ASSERT_TRUE(sv::resolve(wr.w, snapOf(held)));
       TEST_ASSERT_FALSE(snapOf(held)->hasNotPlayed());
       const std::string listsOnly = held.str();
@@ -1110,16 +1157,25 @@ void test_phase_of() {
   // Under way, nothing holding it: Working, however long it ranks or walks.
   TEST_ASSERT_EQUAL_INT(working, ph(0, O::None, W::None, 0, false));
   TEST_ASSERT_EQUAL_INT(working, ph(0, O::None, W::None, 60000, false));
-  // S2's whys 2, 4, 8, 32 and 64, and each Rank-lane wait (a wait after
-  // the take, its block given back, is the same): Working, then Waiting
-  // from 3 s; never a refusal or a fault (nothing counted).
-  const uint8_t whys[] = {2, 4, 8, 32, 64, 2 | 64, 8 | 32};
+  // S2's whys 4, 8, 32 and 64, and each Rank-lane wait (a wait after the
+  // take, its block given back, is the same): Working, then Waiting from
+  // 3 s; never a refusal or a fault (nothing counted).
+  const uint8_t whys[] = {4, 8, 32, 64, 4 | 64, 8 | 32};
   for (uint8_t why : whys) {
     TEST_ASSERT_EQUAL_INT(working, ph(why, O::None, W::None, 0, false));
     TEST_ASSERT_EQUAL_INT(working, ph(why, O::None, W::None, 2999, false));
     TEST_ASSERT_EQUAL_INT(waiting, ph(why, O::None, W::None, 3000, false));
     TEST_ASSERT_EQUAL_INT(waiting, ph(why, O::None, W::None, 600000, false));
   }
+  // The boot's scan (2): Working however long it holds (4.4's Folding,
+  // "Counting plays…"), a Rank-lane wait or a later gate beside it or not
+  // (S2 gives 2 before them all).
+  for (int w = 0; w < ScanScheduler::kWaits; ++w)
+    for (uint32_t ms : {0u, 2999u, 3000u, 600000u})
+      for (uint8_t why : {2, 2 | 4, 2 | 64, 2 | 8 | 32}) {
+        TEST_ASSERT_EQUAL_INT(working, ph(why, O::None, static_cast<W>(w), ms, false));
+        TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Capped), ph(why, O::None, static_cast<W>(w), ms, true));
+      }
   for (int w = 1; w < ScanScheduler::kWaits; ++w) {
     const W wait = static_cast<W>(w);
     TEST_ASSERT_EQUAL_INT(working, ph(0, O::None, wait, 0, false));
@@ -1130,12 +1186,21 @@ void test_phase_of() {
   TEST_ASSERT_EQUAL_UINT32(3000, sv::kWaitingMs);
   // The stats off (why 1): Idle, whatever else. The card away or held (16):
   // NoCard, whatever else but the stats off.
-  for (int o = 0; o <= static_cast<int>(O::Room); ++o) {
+  for (int o = 0; o <= static_cast<int>(O::CardAway); ++o) {
     TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Idle), ph(1, static_cast<O>(o), W::Input, 5000, true));
     TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Idle), ph(1 | 16, static_cast<O>(o), W::None, 0, false));
     TEST_ASSERT_EQUAL_INT(static_cast<int>(P::NoCard), ph(16, static_cast<O>(o), W::None, 0, false));
     TEST_ASSERT_EQUAL_INT(static_cast<int>(P::NoCard), ph(16 | 8, static_cast<O>(o), W::Seek, 9000, true));
   }
+  // An ask the card cancelled (CardAway) stays NoCard once the card is
+  // back (16 gone), until the next ask: the page offers Try again there
+  // (9.7's "the card back"; 4.4's No card), never Idle.
+  for (int w = 0; w < ScanScheduler::kWaits; ++w)
+    for (uint8_t why : {0, 2, 4, 8, 32, 64})
+      for (bool capped : {false, true})
+        TEST_ASSERT_EQUAL_INT(static_cast<int>(P::NoCard), ph(why, O::CardAway, static_cast<W>(w), 9000, capped));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Idle), ph(1, O::CardAway, W::None, 0, false));
+  TEST_ASSERT_EQUAL_STRING("card away", sv::outcomeName(O::CardAway));
   // Landed: Ready (its holds done; the gates are for an ask in Asked).
   TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Ready), ph(0, O::Ok, W::None, 0, false));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(P::Ready), ph(8, O::Ok, W::Input, 5000, false));
@@ -1156,7 +1221,7 @@ void test_phase_of() {
   // time or cap gives it.
   uint32_t unread = 0, cases = 0;
   for (int why = 0; why < 128; ++why)
-    for (int o = 0; o <= static_cast<int>(O::Room); ++o)
+    for (int o = 0; o <= static_cast<int>(O::CardAway); ++o)
       for (int w = 0; w < ScanScheduler::kWaits; ++w)
         for (uint32_t ms : {0u, 2999u, 3000u, 100000u})
           for (bool capped : {false, true}) {
@@ -1165,7 +1230,11 @@ void test_phase_of() {
             const bool want = fault && (why & 17) == 0;
             const int got = ph(static_cast<uint8_t>(why), out, static_cast<W>(w), ms, capped);
             TEST_ASSERT_EQUAL(want, got == static_cast<int>(P::Unread));
-            TEST_ASSERT_TRUE(got != static_cast<int>(P::Waiting) || (out == O::None && !capped && (why & 17) == 0));
+            // Waiting only for an ask in Asked held 3 s by a gate but the
+            // stats off, the boot's scan and the card (1 | 2 | 16).
+            TEST_ASSERT_TRUE(got != static_cast<int>(P::Waiting) ||
+                             (out == O::None && !capped && (why & 19) == 0 && ms >= 3000 &&
+                              (why != 0 || w != static_cast<int>(W::None))));
             unread += got == static_cast<int>(P::Unread) ? 1 : 0;
             ++cases;
           }

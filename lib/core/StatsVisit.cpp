@@ -91,11 +91,13 @@ uint32_t trimFor(uint32_t albums) {
 }
 
 uint32_t roomOf(List l, uint32_t albums) {
+  if (l >= sr::kLists) return 0;
   const uint32_t room = sr::rowsOf(l);
   return l == sr::kOldFavourites || l == sr::kRecent ? room - trimFor(albums) : room;
 }
 
 size_t offsetOf(List l, uint32_t albums) {
+  if (l >= sr::kLists) return 0;
   size_t at = kHeaderBytes;
   for (int m = 0; m < l; ++m) at += static_cast<size_t>(roomOf(static_cast<List>(m), albums)) * kStrides[m];
   return at;
@@ -147,7 +149,7 @@ sr::Day Snapshot::day(uint32_t i) const {
   return d;
 }
 
-const uint8_t* Snapshot::ids(List l) const { return b() + offsetOf(l, albums()); }
+const uint8_t* Snapshot::ids(List l) const { return l < sr::kLists ? b() + offsetOf(l, albums()) : nullptr; }
 
 Row Snapshot::rowAt(List l, uint32_t i) const {
   Row r;
@@ -202,8 +204,12 @@ uint32_t Snapshot::albumAt(uint32_t k) const {
 // The copy-out, the ids, Not played yet
 // ---------------------------------------------------------------------------
 bool write(const sr::Ranker& ranker, const sm::Wanted& wanted, const sr::Report& report, const Context& ctx,
-           Snapshot* snap) {
+           Snapshot* snap, size_t bytes) {
   if (!snap || ctx.trackCount > kMaxTracks || ctx.albums > kMaxAlbums) return false;
+  // The block as carved, not the index's albums alone: a held snapshot
+  // re-asked after a remount with more albums (its key not yet checked at
+  // update()) would be written past its end.
+  if (bytesFor(ctx.albums) > bytes) return false;
   uint8_t* p = reinterpret_cast<uint8_t*>(snap);
   // The flags first, then every byte: a block an earlier try left
   // part-written (a yield, Unread) is rewritten whole, never read meanwhile.
@@ -450,6 +456,7 @@ const char* outcomeName(Outcome o) {
     case Outcome::Base: return "base";
     case Outcome::Cancelled: return "cancelled";
     case Outcome::Room: return "room";
+    case Outcome::CardAway: return "card away";
   }
   return "?";
 }
@@ -469,9 +476,11 @@ Outcome outcomeOf(sr::Outcome o) {
 Phase phaseOf(uint8_t why, Outcome outcome, ScanScheduler::Wait wait, uint32_t waitedMs, bool capped) {
   if (why & kWhyOff) return Phase::Idle;
   // The card away or held: the ask cancelled, the snapshot freed (9.7);
-  // the page offers Try again once it is back.
+  // an ask it ended stays No card until the next, the page offering Try
+  // again once the card is back (CardAway, why 16 gone).
   if (why & kWhyCard) return Phase::NoCard;
   switch (outcome) {
+    case Outcome::CardAway: return Phase::NoCard;
     case Outcome::Ok: return Phase::Ready;
     case Outcome::NoRoom:
     case Outcome::NoBlock:
@@ -484,8 +493,13 @@ Phase phaseOf(uint8_t why, Outcome outcome, ScanScheduler::Wait wait, uint32_t w
   }
   if (capped) return Phase::Capped;
   if (outcome == Outcome::Cancelled) return Phase::Idle;
-  // S2's gates and the Rank lane's waits (before the take, or after it, the
-  // block given back): Working, then Waiting from 3 s. Nothing is counted.
+  // The boot's scan (its fold, its save): Working however long, 9.7's "2
+  // (the boot's scan): Working" (4.4's Folding, "Counting plays…"). S2
+  // gives it before every later gate, so it stands for them too.
+  if (why & kWhyBoot) return Phase::Working;
+  // S2's other gates (4, 8, 32, 64) and the Rank lane's waits (before the
+  // take, or after it, the block given back): Working, then Waiting from
+  // 3 s. Nothing is counted.
   if (why != 0 || wait != ScanScheduler::Wait::None) return waitedMs >= kWaitingMs ? Phase::Waiting : Phase::Working;
   return Phase::Working;
 }
