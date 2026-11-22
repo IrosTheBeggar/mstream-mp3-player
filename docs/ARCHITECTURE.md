@@ -3216,8 +3216,9 @@ strings.
   nothing held, were main's to the byte. The loan carves nothing, so
   PSRAM is main's by construction: the heap model's borrowed way gives
   the visits alone's figures in every history (MODELLED), and 3a-4's
-  re-run against main is owed (LISTENING-STATS.md 9.7, "S3a: the
-  owner's calls as built").
+  re-run against main (2026-11-22, V10b's image) found it so on the
+  device: every `D`, join and fence main's to the byte, free included
+  (MEASURED; LISTENING-STATS.md 9.7, "S3a: V8-V10's device pass").
 
 ## Input
 
