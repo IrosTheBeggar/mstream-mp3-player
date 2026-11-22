@@ -139,6 +139,10 @@ bool stale(const ListLayout& from, const ListLayout& to, uint32_t p, uint32_t ch
     return true;
   }
   if (was.kind != is.kind || was.row != is.row) return true;
+  // The expanded row is drawn otherwise (ListView::renderItem: the selected
+  // fill, no divider), so a bar folding or opening under an unchanged row
+  // leaves that row stale.
+  if (is.kind == Kind::Row) return (from.expanded() == is.row) != (to.expanded() == is.row);
   if (is.kind != Kind::None) return false;
   // Past both lists' items: the ground. The old empty line (with no rows,
   // drawn somewhere under the lead items: ListView::drawEmpty()) goes
@@ -148,13 +152,14 @@ bool stale(const ListLayout& from, const ListLayout& to, uint32_t p, uint32_t ch
 
 }  // namespace
 
-Staging staging(const ListLayout& from, Edge fromEdge, const ListLayout& to, Edge toEdge, int32_t offset,
-                int32_t heightPx, uint32_t changedRow, bool leadChanged) {
+Staging staging(const ListLayout& from, Edge fromEdge, const ListLayout& to, Edge toEdge, int32_t drawn,
+                int32_t target, int32_t heightPx, uint32_t changedRow, bool leadChanged) {
   Staging s;
   s.edge = fromEdge != toEdge;
   s.rail = s.edge || (toEdge != Edge::None && from.contentPx() != to.contentPx());
-  const int32_t off = offset > 0 ? offset : 0;
-  s.moves = off > to.maxOffset(heightPx);
+  const int32_t off = drawn > 0 ? drawn : 0;
+  s.offset = ListLayout::clamp(target, to.maxOffset(heightPx));
+  s.moves = s.offset != off;
   if (heightPx <= 0) return s;
   constexpr int32_t kPitch = ListLayout::kPitch;
   // The positions on screen: each one whose 42 lines meet the viewport's.

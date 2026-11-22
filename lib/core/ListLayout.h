@@ -149,19 +149,24 @@ Place arrival(int32_t refScroll, int32_t refExpanded, uint32_t rows, uint32_t le
               int32_t heightPx);
 
 // What a recount leaves stale on screen (7.2 item 4, as decided: a recount
-// pushes one stale item a pass, never the whole band), at the drawn offset.
-// A position is stale when its item changed (kind, row), when its data row
-// is at or past `changedRow` (the first row whose picture may differ: 0 for
-// all, as at an arrival or a tray tap; from's rows() for only the new
-// ones), when the edge changed (every row's width), or when it held the old
-// empty line's ground (a list with no rows: everything under its lead
-// items) and the new list doesn't draw its own there. A blank ground under
-// the new empty line isn't: that line is the caller's to draw, after the
-// pushes, when `to` has no rows.
+// pushes one stale item a pass, never the whole band), at the drawn offset
+// `drawn`. A position is stale when its item changed (kind, row), when its
+// data row is at or past `changedRow` (the first row whose picture may
+// differ: 0 for all, as at an arrival or a tray tap; from's rows() for only
+// the new ones), when its row became or stopped being the expanded one (a
+// bar folded or opened: the row's fill and divider), when the edge changed
+// (every row's width), or when it held the old empty line's ground (a list
+// with no rows: everything under its lead items) and the new list doesn't
+// draw its own there. A blank ground under the new empty line isn't: that
+// line is the caller's to draw, after the pushes, when `to` has no rows.
+// `target`: where the list is to stand after (arrival()'s offset at a
+// landing, resolved by the caller; the drawn offset for a recount in
+// place); below 0 reads as 0.
 struct Staging {
   // The positions to push one a pass, top first: [first, end), none when
-  // first == end. Any between that aren't stale are pushed as well (a
-  // superset, never a miss). A position at or past `to`'s items is cleared.
+  // first == end, at the drawn offset. Any between that aren't stale are
+  // pushed as well (a superset, never a miss). A position at or past `to`'s
+  // items is cleared.
   uint32_t first = 0, end = 0;
   // Item 0 is a lead item (the top row, or a top bar) in both and on
   // screen, and its picture changed (`leadChanged`: the tray's 30-day cell
@@ -173,11 +178,17 @@ struct Staging {
   // The edge is drawn again: it changed, or the list's height did under a
   // scrollbar or rail (the thumb's size and place follow it).
   bool rail = false;
-  // The drawn offset is past `to`'s end: the list has to move as well,
-  // which a push in place can't do.
+  // Where the list stands after: `target`, clamped to `to`'s items.
+  int32_t offset = 0;
+  // `offset` isn't the drawn one, either way: the list has to move as well,
+  // which a push in place can't do. That is a shrink past the new end (the
+  // drawn offset clamped), or a kept scroll put back at a landing (a shelf
+  // drawn at 0 while its rows were pending, its ref's 420 px). A move of
+  // more than ListView::kMaxStep (84 px) isn't one hardware-scroll step:
+  // how the caller makes it is its own rule, not this one's.
   bool moves = false;
 };
-Staging staging(const ListLayout& from, Edge fromEdge, const ListLayout& to, Edge toEdge, int32_t offset,
-                int32_t heightPx, uint32_t changedRow, bool leadChanged);
+Staging staging(const ListLayout& from, Edge fromEdge, const ListLayout& to, Edge toEdge, int32_t drawn,
+                int32_t target, int32_t heightPx, uint32_t changedRow, bool leadChanged);
 
 }  // namespace listlayout

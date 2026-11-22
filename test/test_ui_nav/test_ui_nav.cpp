@@ -407,40 +407,66 @@ void test_list_staging_order() {
   // refreshTopRow), then the top bar and the rows, top first.
   from.set(0, false, true);
   to.set(20, true, true);
-  Staging s = staging(from, Edge::None, to, Edge::Bar, 0, 168, 0, false);
+  Staging s = staging(from, Edge::None, to, Edge::Bar, 0, 0, 168, 0, false);
   TEST_ASSERT_TRUE(s.edge);
   TEST_ASSERT_TRUE(s.rail);
   TEST_ASSERT_TRUE(s.lead);
   TEST_ASSERT_FALSE(s.moves);
+  TEST_ASSERT_EQUAL_INT32(0, s.offset);
   TEST_ASSERT_EQUAL_UINT32(1, s.first);
   TEST_ASSERT_EQUAL_UINT32(4, s.end);
-  // Off the top of the screen the tray is nobody's: positions 1-4 on screen
+  // The same landing after a wake on a scrolled shelf (run 3b-3): drawn at
+  // 0 while pending, its ref kept at 420 (arrival()). The stale set is the
+  // one at the drawn 0, and the list has to go 420 px as well, five rows,
+  // more than ListView::kMaxStep (84): the caller's to make, not a push's.
+  s = staging(from, Edge::None, to, Edge::Bar, 0, 420, 168, 0, false);
+  TEST_ASSERT_TRUE(s.moves);
+  TEST_ASSERT_EQUAL_INT32(420, s.offset);
+  TEST_ASSERT_TRUE(s.lead);
+  TEST_ASSERT_TRUE(s.edge);
+  TEST_ASSERT_EQUAL_UINT32(1, s.first);
+  TEST_ASSERT_EQUAL_UINT32(4, s.end);
+  // ... a target past the new end is clamped to it (22 items, 924 px: 756),
+  s = staging(from, Edge::None, to, Edge::Bar, 0, 2000, 168, 0, false);
+  TEST_ASSERT_TRUE(s.moves);
+  TEST_ASSERT_EQUAL_INT32(756, s.offset);
+  // ... one row's move is a move too,
+  s = staging(from, Edge::None, to, Edge::Bar, 0, 42, 168, 0, false);
+  TEST_ASSERT_TRUE(s.moves);
+  TEST_ASSERT_EQUAL_INT32(42, s.offset);
+  // ... and a target below 0 (a kShowPlaying the caller didn't resolve)
+  // reads as 0: no move.
+  s = staging(from, Edge::None, to, Edge::Bar, 0, -2, 168, 0, false);
+  TEST_ASSERT_FALSE(s.moves);
+  TEST_ASSERT_EQUAL_INT32(0, s.offset);
+  // Off the top of the screen the tray is nobody's: positions 1-5 on screen
   // at 50 (lines 50-217), all stale with the edge.
-  s = staging(from, Edge::None, to, Edge::Bar, 50, 168, 0, false);
+  s = staging(from, Edge::None, to, Edge::Bar, 50, 50, 168, 0, false);
   TEST_ASSERT_FALSE(s.lead);
+  TEST_ASSERT_FALSE(s.moves);
   TEST_ASSERT_EQUAL_UINT32(1, s.first);
   TEST_ASSERT_EQUAL_UINT32(6, s.end);
   // Two rows land (168 px: no edge), and the tray's 30-day cell now reads
   // "16 days" (RCNT capped, 7.6): the lead item changed, the caller redraws it.
   to.set(2, true, true);
-  s = staging(from, Edge::None, to, Edge::None, 0, 168, 0, true);
+  s = staging(from, Edge::None, to, Edge::None, 0, 0, 168, 0, true);
   TEST_ASSERT_FALSE(s.edge);
   TEST_ASSERT_FALSE(s.rail);
   TEST_ASSERT_TRUE(s.lead);
   TEST_ASSERT_EQUAL_UINT32(1, s.first);
   TEST_ASSERT_EQUAL_UINT32(4, s.end);
   // ... without the change, the tray stays as drawn.
-  TEST_ASSERT_FALSE(staging(from, Edge::None, to, Edge::None, 0, 168, 0, false).lead);
+  TEST_ASSERT_FALSE(staging(from, Edge::None, to, Edge::None, 0, 0, 168, 0, false).lead);
   // The lead item alone changed: nothing else to push.
   from.set(5, true, true);
   to.set(5, true, true);
-  s = staging(from, Edge::Bar, to, Edge::Bar, 0, 168, 5, true);
+  s = staging(from, Edge::Bar, to, Edge::Bar, 0, 0, 168, 5, true);
   TEST_ASSERT_TRUE(s.lead);
   TEST_ASSERT_FALSE(s.rail);
   TEST_ASSERT_EQUAL_UINT32(s.first, s.end);
   // A tray tap (every row new, the same count): the top bar stays, the rows
   // under it go one a pass.
-  s = staging(from, Edge::Bar, to, Edge::Bar, 0, 168, 0, false);
+  s = staging(from, Edge::Bar, to, Edge::Bar, 0, 0, 168, 0, false);
   TEST_ASSERT_FALSE(s.lead);
   TEST_ASSERT_EQUAL_UINT32(2, s.first);
   TEST_ASSERT_EQUAL_UINT32(4, s.end);
@@ -450,7 +476,7 @@ void test_list_staging_order() {
   from.set(6, false);
   to.set(7, false);
   for (int32_t off : {0, 42, 84}) {
-    s = staging(from, Edge::Bar, to, Edge::Bar, off, 168, 6, false);
+    s = staging(from, Edge::Bar, to, Edge::Bar, off, off, 168, 6, false);
     TEST_ASSERT_FALSE(s.edge);
     TEST_ASSERT_TRUE(s.rail);
     TEST_ASSERT_FALSE(s.lead);
@@ -460,7 +486,7 @@ void test_list_staging_order() {
   // A short list gaining a row: that row alone.
   from.set(3, false);
   to.set(4, false);
-  s = staging(from, Edge::None, to, Edge::None, 0, 168, 3, false);
+  s = staging(from, Edge::None, to, Edge::None, 0, 0, 168, 3, false);
   TEST_ASSERT_FALSE(s.rail);
   TEST_ASSERT_EQUAL_UINT32(3, s.first);
   TEST_ASSERT_EQUAL_UINT32(4, s.end);
@@ -468,8 +494,9 @@ void test_list_staging_order() {
   // list has to move as well; the edge goes (312 to 320).
   from.set(20, true, true);
   to.set(2, true, true);
-  s = staging(from, Edge::Bar, to, Edge::None, 30, 168, 0, false);
+  s = staging(from, Edge::Bar, to, Edge::None, 30, 30, 168, 0, false);
   TEST_ASSERT_TRUE(s.moves);
+  TEST_ASSERT_EQUAL_INT32(0, s.offset);
   TEST_ASSERT_TRUE(s.edge);
   TEST_ASSERT_TRUE(s.lead);
   TEST_ASSERT_EQUAL_UINT32(1, s.first);
@@ -478,35 +505,53 @@ void test_list_staging_order() {
   // the empty line under the tray is the caller's.
   from.set(2, true, true);
   to.set(0, false, true);
-  s = staging(from, Edge::None, to, Edge::None, 0, 168, 0, false);
+  s = staging(from, Edge::None, to, Edge::None, 0, 0, 168, 0, false);
   TEST_ASSERT_FALSE(s.lead);
   TEST_ASSERT_EQUAL_UINT32(1, s.first);
   TEST_ASSERT_EQUAL_UINT32(4, s.end);
   // None to none under the same lead items ("Counting plays…" to "Nothing
   // in this period."): no item; the caller draws its empty line again.
   from.set(0, false, true);
-  s = staging(from, Edge::None, to, Edge::None, 0, 168, 0, false);
+  s = staging(from, Edge::None, to, Edge::None, 0, 0, 168, 0, false);
   TEST_ASSERT_EQUAL_UINT32(s.first, s.end);
   // A blank ground past the end stays blank: only the new row.
   from.set(1, false);
   to.set(2, false);
-  s = staging(from, Edge::None, to, Edge::None, 0, 168, 1, false);
+  s = staging(from, Edge::None, to, Edge::None, 0, 0, 168, 1, false);
   TEST_ASSERT_EQUAL_UINT32(1, s.first);
   TEST_ASSERT_EQUAL_UINT32(2, s.end);
   // The old empty line goes wherever it stood (a shelf with no lead items:
   // the line at line 40), past the new items too.
   from.set(0, false);
   to.set(1, true);
-  s = staging(from, Edge::None, to, Edge::None, 0, 168, 0, false);
+  s = staging(from, Edge::None, to, Edge::None, 0, 0, 168, 0, false);
   TEST_ASSERT_FALSE(s.lead);
   TEST_ASSERT_EQUAL_UINT32(0, s.first);
   TEST_ASSERT_EQUAL_UINT32(4, s.end);
-  // A bar folded across a recount: the items from its place down move up.
+  // A bar folded across a recount: the items from its place down move up,
+  // and its row loses the expanded look (ListView::renderItem: the selected
+  // fill, no divider), though its kind and row stay.
   from.set(5, false);
   from.setExpanded(1, 0, 168);
   to.set(5, false);
-  s = staging(from, Edge::Bar, to, Edge::Bar, 0, 168, 5, false);
+  s = staging(from, Edge::Bar, to, Edge::Bar, 0, 0, 168, 5, false);
   TEST_ASSERT_TRUE(s.rail);
+  TEST_ASSERT_EQUAL_UINT32(1, s.first);
+  TEST_ASSERT_EQUAL_UINT32(4, s.end);
+  // A bar opening over unchanged rows: its row takes the look, the bar comes
+  // under it (a 1-row list: nothing else on screen changes).
+  from.set(1, false);
+  to.set(1, false);
+  to.setExpanded(0, 0, 168);
+  s = staging(from, Edge::None, to, Edge::None, 0, 0, 168, 1, false);
+  TEST_ASSERT_FALSE(s.rail);
+  TEST_ASSERT_EQUAL_UINT32(0, s.first);
+  TEST_ASSERT_EQUAL_UINT32(2, s.end);
+  // ... or further down a longer list, the rows above it left as drawn.
+  from.set(6, false);
+  to.set(6, false);
+  to.setExpanded(2, 0, 168);
+  s = staging(from, Edge::Bar, to, Edge::Bar, 0, 0, 168, 6, false);
   TEST_ASSERT_EQUAL_UINT32(2, s.first);
   TEST_ASSERT_EQUAL_UINT32(4, s.end);
 }

@@ -101,9 +101,8 @@ public:
   // Moves of up to this many lines are one bus hold of new lines (2 rows,
   // the scroll lab's setting); more is a full redraw in place.
   static constexpr int kMaxStep = 2 * 42;
-  // A long alphabetical list gets the A-Z rail (the review: only above
-  // about 30 entries; the rule is listlayout::edgeOf()).
-  static constexpr uint32_t kRailMinRows = listlayout::kRailMinRows;
+  // (A long alphabetical list gets the A-Z rail: listlayout::edgeOf(), over
+  // listlayout::kRailMinRows rows.)
 
   // What a row renderer gets: the sprite (cleared to `bg`), and the
   // columns: content from x to right (a checkbox before x in selection
