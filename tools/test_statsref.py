@@ -27,7 +27,9 @@ docs/LISTENING-STATS.md).
   sinceDay, never after today.
 - The rankers and windows (4.2, 4.3, 7.6): each shelf's rule and ties,
   the caps plus 16, the windows' edges, no lists that need dates without
-  a clock, Not played yet, the tray, the week.
+  a clock, Not played yet, the tray, the week; S3a's totals (past the
+  caps), the 7 days from DAYS and their span (a play past a UTC midnight,
+  no clock), the u40 played set; rank.json's expectations statsref's.
 - The fixtures (test/fixtures/card/stats) as card_fixtures.py makes them,
   and the plan's own figures in them; every log file in seq order per
   (deviceId, epoch), and 5.6's ranges choosing the same slots as the
@@ -677,10 +679,66 @@ class RankTests(unittest.TestCase):
         self.assertIsNone(sr.week(st, None))
         self.assertIsNone(sr.week(sr.Stats(), 50)["topDay"])
 
+    def test_totals(self):
+        """Every list's offers before its cap (S3a): the uncapped lists'
+        lengths, Most played's windows by hash; None without the clock."""
+        today = 200
+        st = sr.Stats()
+        st.base = {h: sr.Row(5, 0, t_at(today - 5), t_at(today - 40 if h % 2 else today), 1, 0) for h in range(1, 301)}
+        st.base[999] = sr.Row(0, 2, sr.NO_FIRST, 0, 0, 0)                     # skips only: in none
+        st.rcnt = {(today - d, h): 1 for h in range(1, 101) for d in (0, 10, 40)}
+        t = sr.totals(st, today)
+        self.assertEqual(t, {"mostPlayed": {"7": 100, "30": 100, "all": 300}, "newFinds": 300, "oldFavourites": 150,
+                             "recentlyPlayed": 300})
+        self.assertGreater(t["newFinds"], sr.CAPS["newFinds"] + sr.PAST_CAP, "past the cap and 16")
+        self.assertEqual(len(sr.new_finds(st, today)), sr.CAPS["newFinds"] + sr.PAST_CAP)
+        st.base = {h: sr.Row(5, 0, t_at(10), t_at(20), 1, 0) for h in range(216)}  # at Old favourites' cap and 16
+        t = sr.totals(st, today)
+        self.assertEqual((t["oldFavourites"], t["newFinds"], t["mostPlayed"]["all"]), (216, 0, 216))
+        self.assertEqual(sr.totals(st, None), {"mostPlayed": {"7": None, "30": None, "all": 216}, "newFinds": None,
+                                               "oldFavourites": None, "recentlyPlayed": 216})
+
+    def test_days7_and_the_span(self):
+        """The 7 days from DAYS, oldest first, a missing day all 0; none
+        without the clock, the span still; a play counts whole on the day it
+        began, one past a UTC midnight too (the fold's rule, 4.1)."""
+        st = sr.Stats()
+        st.days = {50: [3, 1, 2, 1, 1500, 0, 0], 44: [1, 0, 0, 0, 9, 1, 0], 43: [9, 0, 9, 0, 9, 0, 0],
+                   51: [1, 0, 0, 0, 7, 0, 0], 12: [1, 0, 0, 0, 1, 0, 0]}
+        st.rcnt = {(40, 1): 1, (50, 2): 3}
+        d = sr.days7(st, 50)
+        self.assertEqual(d["days"], [[9, 1, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0],
+                                     [0, 0, 0, 0], [1500, 3, 2, 1]])
+        self.assertEqual((d["firstDay"], d["newestDay"], d["spanDays"], d["rcntFirstDay"]), (12, 51, 40, 40))
+        none = sr.days7(st, None)
+        self.assertIsNone(none["days"])
+        self.assertEqual((none["firstDay"], none["newestDay"], none["spanDays"]), (12, 51, 40))
+        self.assertEqual(sr.days7(sr.Stats(), 3), {"days": [[0, 0, 0, 0]] * 7, "firstDay": None, "newestDay": None,
+                                                   "spanDays": 0, "rcntFirstDay": None})
+        self.assertEqual(sr.days7(st, 2)["days"][:4], [[0, 0, 0, 0]] * 4, "the days before day 0")
+        # Across a UTC midnight: whole on the day it began.
+        st = sr.Stats()
+        st.fold(play(1, played=1200000, duration=1500000, src=3, clock=1,
+                     startedAt=sr.MIN_MS + 50 * sr.DAY_MS - 600000), 1)
+        st.fold(play(2, played=200000, clock=1, startedAt=sr.MIN_MS + 50 * sr.DAY_MS), 1)
+        self.assertEqual(sr.days7(st, 50)["days"][-2:], [[1200000, 1, 1, 0], [200000, 1, 0, 0]])
+
+    def test_played40(self):
+        """The top 40 bits of each played hash, ascending, a shared top
+        kept twice; their bytes 5 each, little-endian."""
+        st = sr.Stats()
+        st.base = {0x0123456789ABCDEF: sr.Row(1, 0, 0, 0, 1, 0), 0x0123456789FFFFFF: sr.Row(2, 0, 0, 0, 1, 0),
+                   0x00000000FF000001: sr.Row(0, 1, sr.NO_FIRST, 0, 0, 0), 0xFEDCBA9876543210: sr.Row(1, 0, 0, 0, 1, 0)}
+        keys = sr.played40(st)
+        self.assertEqual(keys, [0x0123456789, 0x0123456789, 0xFEDCBA9876])
+        self.assertEqual(sr.played40_bytes(keys[:1]), bytes([0x89, 0x67, 0x45, 0x23, 0x01]))
+        self.assertEqual(len(sr.played40_bytes(keys)), 15)
+
     def test_rank_scenarios(self):
-        """rank.json's lists are statsref's over its files read back (each
-        list past its cap and 16 where the note says), and the clock unset
-        offers Most played All time and Recently played alone."""
+        """rank.json's lists, totals, 7 days and u40 set are statsref's over
+        its files read back (each list past its cap and 16 where the note
+        says), and the clock unset offers Most played All time and Recently
+        played alone."""
         files = sr.rank_files()
         index = json.loads(files["stats/rank.json"])
         self.assertEqual([e["name"] for e in index], [n for n, _, _, _ in sr.rank_scenarios()])
@@ -690,12 +748,27 @@ class RankTests(unittest.TestCase):
                 st.base = sr.read_base(files["stats/%s/%s" % (e["in"], sr.base_name(st.head["baseGen"]))],
                                        st.head["baseGen"])
             self.assertEqual(sr.lists_json(sr.lists(st, e["today"])), e["lists"], e["name"])
+            self.assertEqual(sr.totals(st, e["today"]), e["totals"], e["name"])
+            self.assertEqual(sr.days7(st, e["today"]), e["days7"], e["name"])
+            self.assertEqual(sr.played40_bytes(sr.played40(st)).hex(), e["played40"], e["name"])
             self.assertEqual(e["rows"]["base"], len(st.base), e["name"])
-        big = index[0]["lists"]
+            self.assertEqual((e["rows"]["days"], e["rows"]["tracks"]), (len(st.days), len(st.tracks())), e["name"])
+        by = {e["name"]: e for e in index}
+        big = by["rank-big"]["lists"]
         self.assertEqual([len(big["mostPlayed"][w]) for w in ("7", "30", "all")], [66] * 3)
         self.assertEqual([len(big[k]) for k in ("newFinds", "oldFavourites", "recentlyPlayed")], [66, 216, 216])
-        none = index[1]["lists"]
+        t = by["rank-big"]["totals"]
+        self.assertTrue(all(t["mostPlayed"][w] > 66 for w in ("7", "30", "all")) and t["newFinds"] > 66 and
+                        t["oldFavourites"] > 216 and t["recentlyPlayed"] > 216, "every list's offers past its rows")
+        none = by["rank-no-clock"]["lists"]
         self.assertEqual((none["mostPlayed"]["7"], none["newFinds"], none["oldFavourites"]), (None, None, None))
+        self.assertIsNone(by["rank-no-clock"]["days7"]["days"])
+        self.assertEqual(by["rank-days"]["rows"]["days"], sr.DAYS_ROWS)
+        self.assertEqual(by["rank-rcnt-cap"]["days7"]["rcntFirstDay"], sr.RANK_TODAY - 12)
+        self.assertLessEqual(by["rank-rcnt-cap"]["rows"]["rcnt"], sr.RCNT_ROWS)
+        mid = by["rank-midnight"]["days7"]["days"]
+        self.assertEqual((mid[5], mid[6]), ([1510000, 2, 2, 1], [440000, 2, 0, 0]),
+                         "319: 23:50's 20 min, 23:59:59.999's skip, 00:00's; 320: 00:00's and 23:59:59's")
 
 
 class FixtureTests(unittest.TestCase):

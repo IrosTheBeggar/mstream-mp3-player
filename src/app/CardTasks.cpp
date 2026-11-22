@@ -327,13 +327,19 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   in.dark = !covers;
   // 5. The scheduler.
   const ScanScheduler::Out o = sched_.update(in);
+  // The listening stats' visit asks (S3a, docs/LISTENING-STATS.md 9.7): the
+  // Rank lane's own wait over this pass's In, as workerAhead() above: no
+  // block is taken while it isn't None, and one queued is given back.
+  if (lists) lists->rankWait(sched_.yieldNow(in));
   if (o.batteryHeld) Serial.println("[card] the battery is below 10%: the scan waits for USB or 15%");
   if (o.batteryReleased) Serial.println("[card] the battery floor lifted: the scan goes on");
   // (While gs waits for the step under way, the wait it will report is the
   // one before it, as when it blocked the loop: holdForConsole().)
   if (consoleHold_ != tagcheck::Hold::Worker) lastWait_ = o.wait;
   if (in.running != Job::None) {
-    worker_.setPriority(o.priority);
+    // (A visit's rank under the lit cap stays at 1, lit or not: StatsLists.)
+    worker_.setPriority(lists && in.running == Job::Stats && in.runningRank ? lists->rankPriority(o.priority)
+                                                                            : o.priority);
     // A wait came, or a list moves: the slice under way ends after its unit.
     if (o.cut) jobs_.cutSlice();
   }
@@ -364,7 +370,7 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   } else if (o.job == Job::Wave) {
     if (waves) waves->start(worker_, o.priority, now);
   } else if (o.job == Job::Stats) {
-    if (lists && lists->start(worker_, o.priority, o.statsRank, now)) lastWorkMs_ = now;
+    if (lists && lists->start(worker_, o.priority, o.statsRank, now, in.dark)) lastWorkMs_ = now;
   } else if (o.job == Job::Build) {
     if (up && worker_.start(Job::Build, o.priority, buildEntry, this, now)) {
       up->buildStarted();
@@ -409,6 +415,35 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
       jobs_.idleFlush(now);
     if (now - lastScanStepMs_ >= kTrimMs && !jobs_.restWork()) jobs_.trim();
   }
+  // The stats pages' visits wait out the tag scan while it holds its memory
+  // (CardJobs::scanHeld(): its work memory and any View in it; the owner's
+  // "Only while held", 2026-11-21), a Rescan's too: a fresh card's or a
+  // Rescan's whole rest (minutes). After the trim above, so memory given
+  // back this pass holds nothing. statsvisit::restHolds() has the rule,
+  // host-tested. Not while the battery floor pauses the scan
+  // (sched_.batteryLow(), this pass's update() above; the owner's "Don't
+  // wait at the floor", 2026-11-22): the trim waits for the rest's end
+  // (!restWork()), so memory carved mid-rest stays held at the floor with
+  // no step to give it back, and a visit goes ahead; its take still checks
+  // there's room for a decoder (statshold::take()), so playback stays safe.
+  // Memory no step will give back doesn't hold them either
+  // (CardJobs::scanStuck(): a chunk the card refused after a failed
+  // compaction): they go on and meet the take's own check, as before the
+  // gate. With the card jobs off after a remount (active_ false:
+  // cardJobsHeld(), or the card's begin() failed) the scan's memory may
+  // stay carved for the session; nothing gives it back, so it doesn't hold
+  // them either. The gate stops a take only: a scan's first carve can come
+  // beside a visit already taken (from its rank's end through its walk,
+  // about 3 s at most with the cap), with no decoder-room check, as main's
+  // carves come. A floor met mid-rest that lifts during a visit's hold
+  // carves nothing new beside it (the memory is already carved). The word
+  // reaches the asks a pass late (they run before this, main.cpp's
+  // stepPlays()): a visit queued at the lift's own pass, or taken in its
+  // turn on the floor's word, is usually handed to the worker at step 6
+  // above and goes on, as one under way does; one still queued after it
+  // gives its block back and waits again.
+  if (lists)
+    lists->restAhead(active_ && statsvisit::restHolds(jobs_.scanHeld(), jobs_.scanStuck(), sched_.batteryLow()));
 }
 
 // The scan's end: the update step when the journal took records since the

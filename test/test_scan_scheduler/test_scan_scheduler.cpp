@@ -15,8 +15,10 @@
 // wait (2026-10-09); each step's units; the listening stats' two lanes
 // (docs/LISTENING-STATS.md 6.8: a track's read after a waveform's, a rank
 // as background work after a compaction, never under the update step or a
-// yield, at 0 while lit, never cut); and a random run against an
-// independent model. The LibraryWrite blocker is in test_idle_policy.
+// yield, at 0 while lit, never cut); the Rank lane's own wait, yieldNow(),
+// the wait decide() gives a rank in the same In (S3a: the visit ask's
+// pre-turn gate); and a random run against an independent model. The
+// LibraryWrite blocker is in test_idle_policy.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -1533,14 +1535,20 @@ void test_the_order_of_the_yields() {
 
 // U13: below 10% off USB the scan pauses; 10-15% keeps the state; above
 // 15%, or USB, lets it go. A reading not known keeps it. The rest doesn't
-// stop for it.
+// stop for it. batteryLow() follows it at every pass (the stats visits'
+// rest gate reads it: statsvisit::restHolds(), the owner's "Don't wait at
+// the floor", 2026-11-22).
 void test_the_battery_floor() {
   S s;
   S::In in = base(0);
+  in.battery = -1;  // no reading yet (main.cpp's batteryRaw until the UI's first): not low
+  TEST_ASSERT_EQUAL(J::Scan, s.update(in).job);
+  TEST_ASSERT_FALSE(s.batteryLow());
   in.battery = 10;
   S::Out o = s.update(in);
   TEST_ASSERT_EQUAL(J::Scan, o.job);
   TEST_ASSERT_FALSE(o.batteryHeld);
+  TEST_ASSERT_FALSE(s.batteryLow());
   in.battery = 9;
   o = s.update(in);
   TEST_ASSERT_TRUE(o.batteryHeld);
@@ -1552,26 +1560,36 @@ void test_the_battery_floor() {
     o = s.update(in);
     TEST_ASSERT_FALSE(o.batteryHeld || o.batteryReleased);
     TEST_ASSERT_EQUAL(W::Battery, o.wait);
+    TEST_ASSERT_TRUE(s.batteryLow());  // kept until a reading above resumeAbovePct
   }
   in.battery = 16;
   o = s.update(in);
   TEST_ASSERT_TRUE(o.batteryReleased);
   TEST_ASSERT_EQUAL(J::Scan, o.job);
+  TEST_ASSERT_FALSE(s.batteryLow());
   in.battery = -1;  // not known: stays let go
   TEST_ASSERT_EQUAL(J::Scan, s.update(in).job);
+  TEST_ASSERT_FALSE(s.batteryLow());
   // USB at 5%: runs; unplugged at 5%: held again; plugged: let go at once.
   in.battery = 5;
   in.usb = true;
   o = s.update(in);
   TEST_ASSERT_EQUAL(J::Scan, o.job);
   TEST_ASSERT_FALSE(o.batteryHeld);
+  TEST_ASSERT_FALSE(s.batteryLow());
   in.usb = false;
   o = s.update(in);
   TEST_ASSERT_TRUE(o.batteryHeld);
+  TEST_ASSERT_TRUE(s.batteryLow());
   in.usb = true;
   o = s.update(in);
   TEST_ASSERT_TRUE(o.batteryReleased);
   TEST_ASSERT_EQUAL(J::Scan, o.job);
+  TEST_ASSERT_FALSE(s.batteryLow());
+  in.battery = -1;  // on USB with no reading: still let go
+  s.update(in);
+  TEST_ASSERT_FALSE(s.batteryLow());
+  in.battery = 5;
   // Held: the walk, a compaction, the save, a cover, a waveform's read and the
   // build go on.
   in.usb = false;
@@ -2177,6 +2195,136 @@ void test_the_listening_stats_lanes() {
   }
 }
 
+// S3a (docs/LISTENING-STATS.md 9.7, V4's pre-turn gate): yieldNow() is the
+// wait decide() gives a rank in the same In, the pass's update() made, for
+// each of the Rank lane's own waits (a lit list moving, then the yields), at
+// every pass of its window; None the pass the rank would start. It doesn't
+// need a rank asked (the visit's ask waits for it before it takes its
+// block, so In::statsRank is false then): a twin fed the same passes with
+// none asked gives the same. Not Step, Updating or Battery: a step under
+// way, the update step (S2's gate holds the ask for an update asked) and
+// the scan's floor aren't the Rank lane's own.
+void test_yield_now_is_a_ranks_wait() {
+  struct Case {
+    const char* name;
+    W wait;
+    uint32_t ms;
+  };
+  const S::Config c;
+  const Case cases[] = {{"input", W::Input, c.inputQuietMs},       {"underrun", W::Underrun, c.underrunBackoffMs},
+                        {"pass", W::DecodePass, c.passBackoffMs},   {"track", W::TrackChange, c.trackSettleMs},
+                        {"seek", W::Seek, c.seekSettleMs},          {"bt", W::Bluetooth, c.btSettleMs},
+                        {"list", W::List, 300},                     {"ring", W::Ring, 400}};
+  for (const Case& k : cases) {
+    S s, twin;
+    S::In in = base(1000);
+    in.restPending = false;
+    in.statsRank = true;
+    S::In none = in;
+    none.statsRank = false;
+    s.update(in);
+    twin.update(none);
+    TEST_ASSERT_EQUAL_MESSAGE(W::None, s.yieldNow(in), k.name);
+    TEST_ASSERT_EQUAL_MESSAGE(W::None, twin.yieldNow(none), k.name);
+    bool seen = false, started = false;
+    for (uint32_t t = 2000; t <= 2000 + k.ms + 100 && !started; t += 10) {
+      in.nowMs = none.nowMs = t;
+      // The wait's event at 2,000 (the list and the ring held to its end).
+      const bool at = t == 2000, held = t < 2000 + k.ms;
+      in.input = k.wait == W::Input && at;
+      if (k.wait == W::Underrun && at) ++in.underruns;
+      in.decodePassUs = k.wait == W::DecodePass && at ? 50000 : 0;
+      if (k.wait == W::TrackChange && at) ++in.trackSeq;
+      if (k.wait == W::Seek && at) ++in.seekSeq;
+      if (k.wait == W::Bluetooth && at) ++in.btSeq;
+      in.listMoving = k.wait == W::List && held;
+      in.ringMs = k.wait == W::Ring && held ? kRing / 3 : kRing;
+      none.input = in.input;
+      none.underruns = in.underruns;
+      none.decodePassUs = in.decodePassUs;
+      none.trackSeq = in.trackSeq;
+      none.seekSeq = in.seekSeq;
+      none.btSeq = in.btSeq;
+      none.listMoving = in.listMoving;
+      none.ringMs = in.ringMs;
+      const S::Out o = s.update(in);
+      const S::Out on = twin.update(none);
+      TEST_ASSERT_EQUAL_MESSAGE(J::None, on.job, k.name);  // (nothing asked of the twin)
+      const W want = o.job == J::Stats ? W::None : o.wait;
+      TEST_ASSERT_EQUAL_MESSAGE(want, s.yieldNow(in), k.name);
+      TEST_ASSERT_EQUAL_MESSAGE(want, twin.yieldNow(none), k.name);
+      if (o.job == J::Stats) {
+        started = true;
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(2000 + k.ms, t, k.name);
+      } else {
+        TEST_ASSERT_EQUAL_MESSAGE(k.wait, o.wait, k.name);
+        seen = true;
+      }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(seen, k.name);
+    TEST_ASSERT_TRUE_MESSAGE(started, k.name);
+  }
+  // A list "moving" in the dark holds nothing (listHolds()): no wait, and
+  // the rank starts.
+  {
+    S s;
+    S::In in = base(0);
+    in.restPending = false;
+    in.statsRank = true;
+    in.listMoving = in.dark = true;
+    const S::Out o = s.update(in);
+    TEST_ASSERT_EQUAL(J::Stats, o.job);
+    TEST_ASSERT_EQUAL(W::None, s.yieldNow(in));
+  }
+  // The first that applies, as decide() orders them: a list before the
+  // yields, input before Bluetooth.
+  {
+    S s;
+    S::In in = base(0);
+    in.restPending = false;
+    in.statsRank = true;
+    s.update(in);
+    in.nowMs = 10;
+    in.input = true;
+    ++in.btSeq;
+    in.listMoving = true;
+    S::Out o = s.update(in);
+    TEST_ASSERT_EQUAL(W::List, o.wait);
+    TEST_ASSERT_EQUAL(W::List, s.yieldNow(in));
+    in.listMoving = in.input = false;
+    in.nowMs = 20;
+    o = s.update(in);
+    TEST_ASSERT_EQUAL(W::Input, o.wait);
+    TEST_ASSERT_EQUAL(W::Input, s.yieldNow(in));
+    in.nowMs = 10 + c.inputQuietMs;
+    o = s.update(in);
+    TEST_ASSERT_EQUAL(W::Bluetooth, o.wait);
+    TEST_ASSERT_EQUAL(W::Bluetooth, s.yieldNow(in));
+  }
+  // Not the Rank lane's own: the update step (Updating), a step under way
+  // (Step) and the scan's battery floor give the yield under them (None
+  // here: S2's gate and the queue wait for those).
+  {
+    S s;
+    S::In in = base(0);
+    in.restPending = false;
+    in.statsRank = true;
+    in.updating = true;
+    TEST_ASSERT_EQUAL(W::Updating, s.update(in).wait);
+    TEST_ASSERT_EQUAL(W::None, s.yieldNow(in));
+    in.updating = false;
+    in.running = J::Cover;
+    TEST_ASSERT_EQUAL(W::Step, s.update(in).wait);
+    TEST_ASSERT_EQUAL(W::None, s.yieldNow(in));
+    in.running = J::None;
+    in.statsRank = false;
+    in.restPending = true;
+    in.battery = 5;
+    TEST_ASSERT_EQUAL(W::Battery, s.update(in).wait);
+    TEST_ASSERT_EQUAL(W::None, s.yieldNow(in));
+  }
+}
+
 void test_names() {
   TEST_ASSERT_EQUAL_INT(9, S::kJobs);
   TEST_ASSERT_EQUAL_STRING("stats", S::jobName(J::Stats));
@@ -2547,6 +2695,7 @@ int main(int, char**) {
   RUN_TEST(test_the_build_after_a_walk);
   RUN_TEST(test_the_time_waited);
   RUN_TEST(test_the_listening_stats_lanes);
+  RUN_TEST(test_yield_now_is_a_ranks_wait);
   RUN_TEST(test_names);
   RUN_TEST(test_random_against_a_model);
   return UNITY_END();

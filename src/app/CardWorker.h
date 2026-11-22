@@ -99,6 +99,13 @@ public:
   bool waitIdle(uint32_t maxMs);
 
   bool alive() const { return alive_.load(); }
+  // start() may hand a step now as far as the task goes: it is there, or
+  // its spawn is due (not within kRetryMs of a refused one). (A caller's
+  // own work before start(), StatsLists' records' copy and opens, isn't
+  // made every pass for a task that can't be.)
+  bool mayStart(uint32_t nowMs) const {
+    return alive_.load() || static_cast<int32_t>(nowMs - retryAtMs_) >= 0;
+  }
   // Its stack's high-water mark: the least left over every life of the
   // task since resetStats() (bytes; 0: no step yet), and this life's.
   uint32_t stackLeastLeft() const { return resetLeast_.load() || leastLeft_ == UINT32_MAX ? 0 : leastLeft_; }

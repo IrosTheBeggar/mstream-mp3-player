@@ -10,10 +10,15 @@
 #include <cmath>
 #include <cstdint>
 
+#include "StatsVisit.h"
 #include "app/Diagnostics.h"
 
 namespace {
 constexpr uint32_t kScratchFrames = 2048;  // mono frames handed to the tracker at a time (PSRAM)
+// The block lent to the stats pages' snapshot while the tab is down holds
+// its most (lendScratch()).
+static_assert(kScratchFrames * sizeof(int16_t) >= statsvisit::kBound,
+              "the Dance tab's block holds the stats pages' snapshot (statsvisit::kBound)");
 // Aim the figure this much before the sound (then the LCD's own delay):
 // ahead of the beat looks right, behind it looks late.
 constexpr uint32_t kAimEarlyUs = 15000;
@@ -68,6 +73,11 @@ void DanceMode::setActive(bool on) {
     return;
   }
   if (on == active_) return;
+  // The scratch back from its borrower before the tracker reads into it
+  // (the stats pages' snapshot released: an ask in flight ends without
+  // writing; a page asks again once the tab is down, a console ask, Hu's
+  // among them, isn't asked again).
+  if (on) dancelend::reclaim();
   active_ = on;
   syncTaps();  // on before follow(): the reader starts from what is written next
   if (!on) {
@@ -89,6 +99,10 @@ void DanceMode::setActive(bool on) {
   frames_ = 0;
   trackerUs_ = 0;
   framesSinceMs_ = millis();
+}
+
+void* DanceMode::lendScratch(size_t n) const {
+  return statsvisit::loanOk(scratch_ != nullptr, active_, n) ? scratch_ : nullptr;
 }
 
 void DanceMode::setPrior(float bpm) {

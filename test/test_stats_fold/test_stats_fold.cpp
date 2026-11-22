@@ -41,7 +41,9 @@
 //   is saved: never a wrong file);
 // - a full log never synced (13,106 slots): 16 chunks, the peak with the
 //   ranges' block (at most 273 KB as the device carves them), the file
-//   statsref writes, the us a slot and the save's merge, printed.
+//   statsref writes, the us a slot and the save's merge, printed;
+// - S3a's getters (9.7's V3): sinceDayNow() (set, unset, the first save's
+//   day) and liveRound() (a live fold's round).
 // Run: pio test -e native -f test_stats_fold
 #include <unity.h>
 
@@ -1445,6 +1447,101 @@ void test_since_day() {
   TEST_ASSERT_EQUAL_UINT16(200, p.head.sinceDay);  // (the clock unset: the play's day)
 }
 
+// S3a's getters (9.7's V3): sinceDayNow(), the entry line's day and the
+// snapshot's (4.2 as decided: HEAD's sinceDay, else the day the first save
+// will set from what the fold holds), and liveRound(), the round a live fold
+// gives its record (Recently played's "This session": 7.6).
+void test_since_day_now_and_live_round() {
+  // Unset: nothing folded, no HEAD's.
+  sf::Fold f;
+  TEST_ASSERT_EQUAL_UINT16(sf::kUnsetDay, f.sinceDayNow());
+  TEST_ASSERT_EQUAL_UINT16(sf::kUnsetDay, f.sinceDayNow(0));
+  TEST_ASSERT_EQUAL_UINT32(2, f.liveRound());  // (HEAD's round 0: a live fold's + 2)
+  // The first save's day: the earliest dated play folded (a skip earlier
+  // and an undated play don't count), as plan() sets it, then HEAD's.
+  Ranges rg;
+  TEST_ASSERT_TRUE(rg.begin(f, kNoAcks));
+  f.bootSlot(slot(kDevA, kEpochA, 1, 1, 200000, 200000, 1, 1, at(290, 8)), 0);
+  f.bootSlot(slot(kDevA, kEpochA, 2, 1, 5000, 200000, pl::kSkipped, 1, at(280, 8)), 0);
+  f.bootSlot(slot(kDevA, kEpochA, 3, 1, 200000, 200000, 1, 1, 0), 0);
+  f.endBoot();
+  TEST_ASSERT_EQUAL_UINT16(290, f.sinceDayNow());
+  TEST_ASSERT_EQUAL_UINT16(290, f.sinceDayNow(at(313, 9)));
+  Card card;
+  const Bytes b = saveNow(f, card, at(313, 9));
+  TEST_ASSERT_EQUAL_UINT16(290, f.head().sinceDay);
+  TEST_ASSERT_EQUAL_UINT16(290, f.sinceDayNow());
+  // Set: HEAD's, whatever is folded after (an earlier play, the clock).
+  sf::Fold g;
+  Card c;
+  load(g, b, &c);
+  TEST_ASSERT_EQUAL_UINT16(290, g.sinceDayNow());
+  TEST_ASSERT_TRUE(g.liveSlot(slot(kDevA, kEpochA, 9, 1, 200000, 200000, 1, 1, at(100, 8))));
+  TEST_ASSERT_EQUAL_UINT16(290, g.sinceDayNow());
+  TEST_ASSERT_EQUAL_UINT16(290, g.sinceDayNow(at(50, 1)));
+  // Unset at the load, each case as the first save will set it: a play
+  // dated ahead of today capped at today (with the clock; the play's day
+  // without); no dated play: today, else unset (the root's commitTime is
+  // plan()'s alone: it isn't the fold's).
+  auto firstSave = [](const std::vector<pl::Slot>& slots, uint64_t now, uint16_t* plannedOut) {
+    sf::Fold h;
+    for (const pl::Slot& one : slots) TEST_ASSERT_TRUE(h.liveSlot(one));
+    const uint16_t day = h.sinceDayNow(now);
+    sf::Fold::Plan made;
+    TEST_ASSERT_TRUE(h.plan(now, false, 0, &made));
+    *plannedOut = made.head.sinceDay;
+    return day;
+  };
+  uint16_t planned = 0;
+  const std::vector<pl::Slot> ahead = {slot(kDevB, kEpochB, 1, 1, 200000, 200000, 1, 1, at(900, 8))};
+  TEST_ASSERT_EQUAL_UINT16(313, firstSave(ahead, at(313, 9), &planned));
+  TEST_ASSERT_EQUAL_UINT16(313, planned);
+  TEST_ASSERT_EQUAL_UINT16(900, firstSave(ahead, 0, &planned));
+  TEST_ASSERT_EQUAL_UINT16(900, planned);
+  const std::vector<pl::Slot> undated = {slot(kDevA, kEpochA, 1, 1, 200000, 200000, 1, 1, 0)};
+  TEST_ASSERT_EQUAL_UINT16(313, firstSave(undated, at(313, 9), &planned));
+  TEST_ASSERT_EQUAL_UINT16(313, planned);
+  TEST_ASSERT_EQUAL_UINT16(sf::kUnsetDay, firstSave(undated, 0, &planned));
+  TEST_ASSERT_EQUAL_UINT16(sf::kUnsetDay, planned);
+  const std::vector<pl::Slot> two = {slot(kDevA, kEpochA, 1, 1, 200000, 200000, 1, 1, at(305, 8)),
+                                     slot(kDevA, kEpochA, 2, 1, 200000, 200000, 1, 1, at(301, 8))};
+  TEST_ASSERT_EQUAL_UINT16(301, firstSave(two, at(313, 9), &planned));
+  TEST_ASSERT_EQUAL_UINT16(301, planned);
+  // liveRound(): HEAD's round as loaded + 2, the lastOrd a live fold
+  // gives; a save raising HEAD's round leaves it (the session's rounds are
+  // of HEAD as loaded); saturating at the 24-bit top.
+  uint8_t head[sf::kHeadBytes];
+  sf::Head h7;
+  h7.round = 7;
+  sf::encodeHead(h7, head);
+  sf::Fold r;
+  r.loadHead(head);
+  TEST_ASSERT_EQUAL_UINT32(9, r.liveRound());
+  TEST_ASSERT_TRUE(r.liveSlot(slot(kDevA, kEpochA, 3, 3, 200000, 200000, 1, 1, 0)));
+  sf::Track t;
+  TEST_ASSERT_TRUE(r.track(3, &t));
+  TEST_ASSERT_EQUAL_UINT32(r.liveRound(), t.lastOrd);
+  sf::Fold::Plan p;
+  TEST_ASSERT_TRUE(r.plan(at(301, 9), false, 0, &p));
+  TEST_ASSERT_EQUAL_UINT32(9, p.head.round);
+  r.saved(p);
+  TEST_ASSERT_EQUAL_UINT32(9, r.head().round);
+  TEST_ASSERT_EQUAL_UINT32(9, r.liveRound());
+  sf::Head top;
+  top.round = sf::kMaxRound - 1;
+  sf::encodeHead(top, head);
+  sf::Fold z;
+  z.loadHead(head);
+  TEST_ASSERT_EQUAL_UINT32(sf::kMaxRound, z.liveRound());
+  top.round = sf::kMaxRound;
+  sf::encodeHead(top, head);
+  z.loadHead(head);
+  TEST_ASSERT_EQUAL_UINT32(sf::kMaxRound, z.liveRound());
+  TEST_ASSERT_TRUE(z.liveSlot(slot(kDevA, kEpochA, 9, 9, 200000, 200000)));
+  TEST_ASSERT_TRUE(z.track(9, &t));
+  TEST_ASSERT_EQUAL_UINT32(z.liveRound(), t.lastOrd);
+}
+
 // ---------------------------------------------------------------------------
 // MARK: the object's 16 rows and the extra block.
 // ---------------------------------------------------------------------------
@@ -2351,6 +2448,7 @@ int main(int, char**) {
   RUN_TEST(test_the_gap);
   RUN_TEST(test_rounds_and_the_live_fold);
   RUN_TEST(test_since_day);
+  RUN_TEST(test_since_day_now_and_live_round);
   RUN_TEST(test_mark_rows_and_the_extra_block);
   RUN_TEST(test_random_sessions_against_the_model);
   RUN_TEST(test_the_records_boundaries);

@@ -649,6 +649,20 @@ void Fold::fallBehind() {
 
 uint32_t Fold::roundOf(const Record& r) const { return round24(loadedRound_ + (r.what & kRecLive ? 2 : 1)); }
 
+uint32_t Fold::liveRound() const { return round24(loadedRound_ + 2); }
+
+uint16_t Fold::firstSaveDay(bool known, uint16_t today) const {
+  if (firstPlayDay_ != kUnsetDay) return known ? std::min(firstPlayDay_, today) : firstPlayDay_;
+  return known ? today : kUnsetDay;
+}
+
+uint16_t Fold::sinceDayNow(uint64_t nowMs) const {
+  if (head_.sinceDay != kUnsetDay) return head_.sinceDay;
+  uint16_t today = 0;
+  const bool known = todayOf(nowMs, &today);
+  return firstSaveDay(known, today);
+}
+
 void Fold::fold(const Slot& s, bool live) {
   const bool play = isPlay(s), skip = isSkip(s), isDated = dated(s.startedAt);
   const uint8_t src = sourceOf(s);
@@ -718,12 +732,9 @@ bool Fold::plan(uint64_t nowMs, bool hasCommit, uint64_t commitSec, Plan* out) {
   // sinceDay (4.1), set once: the earliest dated play folded, not after
   // today; else today; else the sync's commitTime, flagged; else unset.
   if (p.head.sinceDay == kUnsetDay) {
-    uint16_t first = firstPlayDay_;
-    if (first != kUnsetDay && known) first = std::min(first, today);
+    const uint16_t first = firstSaveDay(known, today);
     if (first != kUnsetDay) {
       p.head.sinceDay = first;
-    } else if (known) {
-      p.head.sinceDay = today;
     } else if (hasCommit && commitSec <= wallclock::kMaxMs / 1000 && dated(commitSec * 1000)) {
       p.head.sinceDay = dayOf(commitSec * 1000);
       p.head.flags |= kFlagSinceCommit;

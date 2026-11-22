@@ -145,6 +145,13 @@ static QueueStore queueStore(storage, queue, player, library.catalog(), library.
 // gapless window; flushed before every orderly power-off and restart.
 static PlayHistory playHistory(library, player);
 static DanceMode danceMode(audio, player);
+// The Dance tab's tracker scratch (4,096 B of PSRAM, carved at the boot and
+// kept) lent to the stats pages' snapshot while the tab is down, and taken
+// back as it comes up, the snapshot released first (the owner's "Borrow
+// Dance's block", 2026-11-21: the stats own no memory; StatsLists).
+void* statshold::borrow(size_t bytes) { return danceMode.lendScratch(bytes); }
+bool statshold::danceUp() { return danceMode.active(); }
+void dancelend::reclaim() { playHistory.statsRelease("the Dance tab"); }
 static Screenshot shot;
 static Haptics haptics;
 // The one input layer: the glass (corrected) and the button strip, as events.
@@ -3401,12 +3408,16 @@ static void stepAutoDj(uint32_t now) {
 // The listening stats' S2 asks (app/StatsLists: Hl, Hw): the walk's slices,
 // right after Auto DJ's step (docs/LISTENING-STATS.md 6.2: never in a pass
 // the join works, up to 8 ms a pass; the loop's idle wait short meanwhile).
-static void stepStatsMap(uint32_t now) {
+// S3a's visit asks walk up to 4 ms a pass while lit, none in a pass that
+// handled input (`input`: this pass's), and S2's way in the dark (9.7, 7.10).
+static void stepStatsMap(uint32_t now, bool input) {
   StatsLists* lists = playHistory.statsLists();
   if (!lists || !lists->walking()) return;
   StatsLists::Gates g = playHistory.listsGates(now, cardHeld);
   g.uiStarted = !userInterface || userInterface->started();
   g.listMoving = userInterface && userInterface->listMoving();
+  g.lit = userInterface && userInterface->coversAllowed();
+  g.input = input;
   lists->stepMap(g);
 }
 
@@ -3461,7 +3472,10 @@ static bool enterFence() {
   const size_t djFreed = autoDj ? autoDj->fence() : 0;
   // An S2 ask's block (the lists' ids are the old index's): never held here
   // (the update waits for it in Asked: statsWait), so this is the guard;
-  // given back, the ask begins again after the Live.
+  // given back, the ask begins again after the Live. And the stats pages'
+  // snapshot (S3a: its ids are the old index's), released here: the Dance
+  // tab's block, lent, so no heap bytes (none in the memory check's
+  // alsoFreed, none in the count this returns).
   StatsLists* lists = playHistory.statsLists();
   const size_t listsFreed = lists ? lists->drop() : 0;
   // 3. The old index (and the scan's memory); then the UI, which sees none.
@@ -3474,11 +3488,13 @@ static bool enterFence() {
   // only the since-boot lowest, 0 B from a moment outside the fence.
   fenceLowWindow = diag::beginLowWindow();
   if (userInterface) userInterface->libraryUpdating();
+  char listsText[80] = "";
+  if (listsFreed)
+    snprintf(listsText, sizeof(listsText), ", the listening stats %u B (an ask's block)", (unsigned)listsFreed);
   Serial.printf("[lib] the update step (%s): the fence is up; the build on the card worker (the loop goes on); PSRAM "
                 "free %u B before, %u B now (Auto DJ's join gave back %u B%s)\n",
                 library.update()->why(), (unsigned)fencePsramBefore,
-                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)djFreed,
-                listsFreed ? ", a listening stats ask its block" : "");
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)djFreed, listsText);
   return true;
 }
 
@@ -3547,14 +3563,17 @@ static void leaveFence() {
 // moves (the write holds the loop that draws its frames). Never while the
 // card is held for the guard's restart, nor (PlayHistory's own look at the
 // guard) while it is out of the slot or refuses every write: the plays
-// wait for the remount, or the end's flush.
-static void stepPlays(uint32_t now) {
+// wait for the remount, or the end's flush. `input`: this pass's (the
+// listening stats' visit asks take no turn in it: StatsLists).
+static void stepPlays(uint32_t now, bool input) {
   PlayHistory::Look look;
+  look.input = input;
   look.state = player.state();
   look.positionMs = audio.positionMs();
   look.positionKnown = audio.positionKnown();
   look.durationMs = audio.durationMs();
   look.restartAsked = restartPending();
+  look.lit = userInterface && userInterface->coversAllowed();
   playlog::WriteGate::In in;
   in.nowMs = now;
   in.playing = look.state == PlayState::Playing;
@@ -3633,8 +3652,11 @@ static void stepCard(uint32_t now, bool input) {
   env.trackLeftMs = trackLeftMs();
   env.seekSeq = player.seeks();
   env.alsoFreed = queue.memoryBytes() + queueStore.savingBytes() +
-                  (userInterface ? userInterface->thumbs().poolBytes() : 0) + (autoDj ? autoDj->fenceBytes() : 0);
-  // (An S2 ask's block isn't in it: the step waits for it, statsWait below.)
+                  (userInterface ? userInterface->thumbs().poolBytes() : 0) + (autoDj ? autoDj->fenceBytes() : 0) +
+                  playHistory.statsHeldBytes();
+  // (An S2 ask's block isn't in it: the step waits for it, statsWait below.
+  // The stats pages' snapshot's heap bytes are, which are none: it sits in
+  // the Dance tab's block, lent; the fence releases it, StatsLists::drop().)
   // A pick owed while Auto DJ's index joins: no fence until it lands
   // (autodj::decide(), this pass's: stepAutoDj() ran before).
   env.autoDjOwed = autoDj && autoDj->owed();
@@ -4163,9 +4185,9 @@ void loop() {
     userInterface->waves().remount(cardHeld, !userInterface->started() || userInterface->listMoving() || frozen.on);
   }
   stepAutoDj(now);
-  stepStatsMap(now);
+  stepStatsMap(now, anyInput);
   if (!cardHeld) queueStore.loop(now);
-  stepPlays(now);
+  stepPlays(now, anyInput);
   // What a track's length is, once the backend knows it (read from the
   // file; or its estimate 20 s in, exact for a constant bitrate): the
   // Queue's "49 min"; once per entry (each change redoes the Queue's sum).

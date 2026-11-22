@@ -84,6 +84,13 @@ public:
     // A restart asked (the update step's safe point says no to it too: the
     // stats' compaction keeps out of it the same way).
     bool restartAsked = false;
+    // The UI up and lit (CardTasks' covers): the stats pages' asks' lines
+    // (lit at the take).
+    bool lit = false;
+    // Input this pass (main.cpp's anyInput: a touch, a console line): the
+    // stats pages' asks take no turn in it (StatsLists::Gates::input; the
+    // Rank lane's Input wait reaches StatsLists only after this pass's turn).
+    bool input = false;
   };
   void loop(const Look& look, const playlog::WriteGate::In& gate, bool cardHeld);
 
@@ -122,8 +129,31 @@ public:
   StatsLists* statsLists() { return active_ ? &stats_.lists() : nullptr; }
   StatsLists::Gates listsGates(uint32_t nowMs, bool cardHeld);
   // An ask holds its block: the update step waits in Asked (as for
-  // statsScanHolds()), and Auto DJ's join doesn't begin.
+  // statsScanHolds()), and Auto DJ's join doesn't begin. The ask's block
+  // alone: the stats pages' held snapshot holds neither (S3a).
   bool listsHold() const { return active_ && stats_.lists().holds(); }
+  // S3a: the stats pages' asks (app/StatsLists' API, docs/LISTENING-STATS.md
+  // 9.7), for S3b's UiHost: a visit's or Not played yet's ask (`cardHeld`:
+  // main.cpp's; dropped at once with the card away or held), cancel, release
+  // (the snapshot released, `why` its [listen] line's), and what the pages read.
+  bool statsAsk(StatsLists::UiAsk a, bool cardHeld);
+  void statsCancel() {
+    if (active_) stats_.lists().cancel();
+  }
+  void statsRelease(const char* why) {
+    if (active_) stats_.lists().release(why);
+  }
+  const statsvisit::Snapshot* statsSnapshot() const { return active_ ? stats_.lists().snapshot() : nullptr; }
+  statsvisit::Phase statsPhase() const { return active_ ? stats_.lists().phase() : statsvisit::Phase::Idle; }
+  uint16_t statsVersion() const { return active_ ? stats_.lists().version() : 0; }
+  bool statsNews() { return active_ && stats_.lists().news(); }
+  void statsSetWindow(uint8_t w) {
+    if (active_) stats_.lists().setWindow(w);
+  }
+  // The held snapshot's heap bytes, for the update's memory check's
+  // alsoFreed (main.cpp; the fence releases it): none, as it sits in the
+  // Dance tab's block, lent (StatsLists::snapshotHeapBytes()).
+  size_t statsHeldBytes() const { return active_ ? stats_.lists().snapshotHeapBytes() : 0; }
 
   // The boot's scan: slots a pass (four reads: about 10 KB).
   static constexpr uint32_t kScanSlotsPerPass = 4 * playlog::kReadBytes / playlog::kSlot;
