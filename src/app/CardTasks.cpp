@@ -436,8 +436,12 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   // beside a visit already taken (from its rank's end through its walk,
   // about 3 s at most with the cap), with no decoder-room check, as main's
   // carves come. A floor met mid-rest that lifts during a visit's hold
-  // carves nothing new beside it (the memory is already carved): a queued
-  // visit gives its block back and waits again, one under way goes on.
+  // carves nothing new beside it (the memory is already carved). The word
+  // reaches the asks a pass late (they run before this, main.cpp's
+  // stepPlays()): a visit queued at the lift's own pass, or taken in its
+  // turn on the floor's word, is usually handed to the worker at step 6
+  // above and goes on, as one under way does; one still queued after it
+  // gives its block back and waits again.
   if (lists)
     lists->restAhead(active_ && statsvisit::restHolds(jobs_.scanHeld(), jobs_.scanStuck(), sched_.batteryLow()));
 }
