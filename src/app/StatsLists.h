@@ -80,7 +80,8 @@
 // snapshot() serves it once the visit has landed. Each ask:
 //   1. asked; before its turn it waits for S2's gates, the tag scan while
 //      it holds its memory (CardTasks' word each pass, restAhead(): the
-//      owner's "Only while held"; kWhyRest) and the Rank lane's own waits
+//      owner's "Only while held"; kWhyRest; not at the battery floor, the
+//      owner's "Don't wait at the floor") and the Rank lane's own waits
 //      (a lit list moving, input in the last 0.5 s, the ring, an underrun,
 //      a long decode pass, a track change, a seek, Bluetooth:
 //      ScanScheduler::yieldNow(), CardTasks' word each pass, rankWait();
@@ -243,12 +244,15 @@ public:
   // its work memory and any View; the owner's "Only while held",
   // 2026-11-21): a visit's ask (and the lean ask) waits it out before its
   // take, and one queued gives its block back (gateOf()'s kWhyRest); S2's
-  // asks don't wait for it. Each pass, CardTasks' word: not while the
-  // memory is one no step gives back (CardJobs::scanStuck()). A battery
-  // floor met mid-rest keeps the memory, so the asks wait out the floor
-  // (USB or 15%) and then the rest's end (a fresh card's or a Rescan's
-  // whole rest: minutes). It stops a take only: a scan that starts during
-  // a visit's hold (from its rank's end through its walk) carves beside it.
+  // asks don't wait for it. Each pass, CardTasks' word
+  // (statsvisit::restHolds()): a fresh card's or a Rescan's whole rest
+  // holds them (minutes); not while the memory is one no step gives back
+  // (CardJobs::scanStuck()), nor while the battery floor pauses the scan
+  // (ScanScheduler::batteryLow(): the memory carved mid-rest stays held
+  // there; the owner's "Don't wait at the floor", 2026-11-22). Then a
+  // visit goes ahead, and its take still checks there's room for a decoder
+  // (statshold::take()). It stops a take only: a scan that starts during a
+  // visit's hold (from its rank's end through its walk) carves beside it.
   void restAhead(bool held) { setAhead(kAheadRest, held); }
   // S3a: the Rank lane's own wait this pass (ScanScheduler::yieldNow()): a
   // visit's ask takes no block while it isn't None, and one queued gives its

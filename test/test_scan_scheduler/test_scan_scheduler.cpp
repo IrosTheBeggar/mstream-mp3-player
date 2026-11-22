@@ -1535,14 +1535,20 @@ void test_the_order_of_the_yields() {
 
 // U13: below 10% off USB the scan pauses; 10-15% keeps the state; above
 // 15%, or USB, lets it go. A reading not known keeps it. The rest doesn't
-// stop for it.
+// stop for it. batteryLow() follows it at every pass (the stats visits'
+// rest gate reads it: statsvisit::restHolds(), the owner's "Don't wait at
+// the floor", 2026-11-22).
 void test_the_battery_floor() {
   S s;
   S::In in = base(0);
+  in.battery = -1;  // no reading yet (main.cpp's batteryRaw until the UI's first): not low
+  TEST_ASSERT_EQUAL(J::Scan, s.update(in).job);
+  TEST_ASSERT_FALSE(s.batteryLow());
   in.battery = 10;
   S::Out o = s.update(in);
   TEST_ASSERT_EQUAL(J::Scan, o.job);
   TEST_ASSERT_FALSE(o.batteryHeld);
+  TEST_ASSERT_FALSE(s.batteryLow());
   in.battery = 9;
   o = s.update(in);
   TEST_ASSERT_TRUE(o.batteryHeld);
@@ -1554,26 +1560,36 @@ void test_the_battery_floor() {
     o = s.update(in);
     TEST_ASSERT_FALSE(o.batteryHeld || o.batteryReleased);
     TEST_ASSERT_EQUAL(W::Battery, o.wait);
+    TEST_ASSERT_TRUE(s.batteryLow());  // kept until a reading above resumeAbovePct
   }
   in.battery = 16;
   o = s.update(in);
   TEST_ASSERT_TRUE(o.batteryReleased);
   TEST_ASSERT_EQUAL(J::Scan, o.job);
+  TEST_ASSERT_FALSE(s.batteryLow());
   in.battery = -1;  // not known: stays let go
   TEST_ASSERT_EQUAL(J::Scan, s.update(in).job);
+  TEST_ASSERT_FALSE(s.batteryLow());
   // USB at 5%: runs; unplugged at 5%: held again; plugged: let go at once.
   in.battery = 5;
   in.usb = true;
   o = s.update(in);
   TEST_ASSERT_EQUAL(J::Scan, o.job);
   TEST_ASSERT_FALSE(o.batteryHeld);
+  TEST_ASSERT_FALSE(s.batteryLow());
   in.usb = false;
   o = s.update(in);
   TEST_ASSERT_TRUE(o.batteryHeld);
+  TEST_ASSERT_TRUE(s.batteryLow());
   in.usb = true;
   o = s.update(in);
   TEST_ASSERT_TRUE(o.batteryReleased);
   TEST_ASSERT_EQUAL(J::Scan, o.job);
+  TEST_ASSERT_FALSE(s.batteryLow());
+  in.battery = -1;  // on USB with no reading: still let go
+  s.update(in);
+  TEST_ASSERT_FALSE(s.batteryLow());
+  in.battery = 5;
   // Held: the walk, a compaction, the save, a cover, a waveform's read and the
   // build go on.
   in.usb = false;

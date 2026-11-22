@@ -45,7 +45,10 @@
 //   the check of the review's fixes never took it;
 // - the loan of the Dance tab's block (loanOk(), the owner's "Borrow
 //   Dance's block"): only while the block exists and the tab is down, and
-//   for a snapshot within kBound (4,096 B: to 18,432 albums).
+//   for a snapshot within kBound (4,096 B: to 18,432 albums);
+// - the tag scan's word for kWhyRest (restHolds(), the owner's "Only while
+//   held" and "Don't wait at the floor"): its truth table, and with the
+//   scheduler's own battery floor and its hysteresis.
 // Run: pio test -e native -f test_stats_visit
 #include <unity.h>
 
@@ -1490,6 +1493,55 @@ void test_the_dance_tab_s_block_lent() {
          static_cast<unsigned>(sv::bytesFor(18432)));
 }
 
+// ---------------------------------------------------------------------------
+// The tag scan's word for kWhyRest (restHolds(): CardTasks' restAhead()):
+// the owner's "Only while held" (2026-11-21) and "Don't wait at the floor"
+// (2026-11-22). The visits wait while the scan holds its memory, but not
+// for memory no step gives back (scanStuck(), kept as built: "Keep both as
+// built"), and not while the battery floor pauses the scan: memory carved
+// mid-rest stays held there with no step to give it back, so a visit goes
+// ahead and its take's decoder-room check guards playback.
+// ---------------------------------------------------------------------------
+void test_the_rest_gate_s_word() {
+  // The whole truth table: held only with the memory carved, not stuck, and
+  // the floor not holding the scan.
+  for (int i = 0; i < 8; ++i) {
+    const bool held = (i & 1) != 0, stuck = (i & 2) != 0, atFloor = (i & 4) != 0;
+    TEST_ASSERT_EQUAL_MESSAGE(held && !stuck && !atFloor, sv::restHolds(held, stuck, atFloor), "restHolds()");
+  }
+  TEST_ASSERT_TRUE(sv::restHolds(true, false, false));    // the rest's memory: a fresh card's, a Rescan's, the boot's
+  TEST_ASSERT_FALSE(sv::restHolds(true, false, true));    // at the floor: the visit goes ahead
+  TEST_ASSERT_FALSE(sv::restHolds(true, true, false));    // stuck: no step gives it back
+  TEST_ASSERT_FALSE(sv::restHolds(false, false, false));  // nothing carved (trimmed, a fence emptied it, none yet)
+  TEST_ASSERT_FALSE(sv::restHolds(false, false, true));   // a floor met before the scan's first step
+  static_assert(sv::restHolds(true, false, false) && !sv::restHolds(true, false, true), "restHolds() at compile time");
+
+  // With the scheduler's own floor (ScanScheduler::batteryLow(), as
+  // CardTasks hands it): the memory held, the word follows the floor's
+  // hysteresis (below 10% off USB; kept to 15%; let go above 15% or on USB).
+  ScanScheduler s;
+  ScanScheduler::In in;
+  in.restPending = true;
+  in.battery = 60;
+  uint32_t t = 0;
+  auto word = [&](int pct, bool usb) {
+    in.nowMs = (t += 100);
+    in.battery = pct;
+    in.usb = usb;
+    s.update(in);
+    return sv::restHolds(true, false, s.batteryLow());
+  };
+  TEST_ASSERT_TRUE(word(60, false));   // above the floor: the visits wait the rest out
+  TEST_ASSERT_TRUE(word(10, false));   // at 10%: not below it
+  TEST_ASSERT_FALSE(word(9, false));   // below it, off USB: the scan pauses, the visits don't wait
+  TEST_ASSERT_FALSE(word(15, false));  // kept to 15%
+  TEST_ASSERT_FALSE(word(-1, false));  // a reading not known keeps it
+  TEST_ASSERT_TRUE(word(16, false));   // above 15%: the scan goes on, the visits wait again
+  TEST_ASSERT_FALSE(word(5, false));
+  TEST_ASSERT_TRUE(word(5, true));     // USB: let go at once, whatever the reading
+  TEST_ASSERT_TRUE(word(-1, true));
+}
+
 int main(int, char**) {
   if (!cardfixtures::json("stats/index.json", &gIndex) || gIndex.size() == 0 ||
       !cardfixtures::json("stats/rank.json", &gRank) || gRank.size() == 0) {
@@ -1507,5 +1559,6 @@ int main(int, char**) {
   RUN_TEST(test_the_worker_s_give_up_holds_30_s_then_the_take);
   RUN_TEST(test_elapsed_ms_with_a_start_ahead_of_now);
   RUN_TEST(test_the_dance_tab_s_block_lent);
+  RUN_TEST(test_the_rest_gate_s_word);
   return UNITY_END();
 }

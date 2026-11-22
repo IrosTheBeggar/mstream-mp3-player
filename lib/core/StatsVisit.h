@@ -43,7 +43,8 @@
 //   - phaseOf(): the stats pages' phase from the ask's state (9.7's "Phase
 //     from why"), pure; stallHolds() and waitStartMoves(): the card
 //     worker's 30 s give-up's hold and the wait's start (StatsLists'
-//     gateOf() and loop()), pure.
+//     gateOf() and loop()), pure; restHolds(): whether the tag scan's
+//     memory holds the visits (CardTasks' word, kWhyRest), pure.
 // Portable, host-tested (test_stats_visit). No allocation.
 namespace statsvisit {
 
@@ -278,11 +279,30 @@ Outcome outcomeOf(statsrank::Outcome o);
 // S2's gate bits (StatsLists::turnWanted()'s why: one at a time, the first
 // that holds in this order), and S3a's own last: kWhyRest, the card
 // worker's tag scan holding its memory (its View or its work memory:
-// CardJobs::scanHeld(), not CardJobs::scanStuck(): app/CardTasks; the
-// owner's "Only while held", 2026-11-21), which only the visit's and lean
-// asks wait out (S2's asks don't).
+// CardJobs::scanHeld(), not CardJobs::scanStuck() nor at the battery
+// floor: restHolds(), app/CardTasks; the owner's "Only while held",
+// 2026-11-21, and "Don't wait at the floor", 2026-11-22), which only the
+// visit's and lean asks wait out (S2's asks don't).
 constexpr uint8_t kWhyOff = 1, kWhyBoot = 2, kWhyTmp = 4, kWhyUpdate = 8, kWhyCard = 16, kWhyJoin = 32,
                   kWhyWorker = 64, kWhyRest = 128;
+// kWhyRest's word (app/CardTasks hands it each pass as StatsLists'
+// restAhead(), with the card jobs on): the tag scan holds its memory
+// (`scanHeld`: CardJobs::scanHeld(), its work memory and any View in it; a
+// fresh card's or a Rescan's whole rest included), unless
+//   - no step will give it back (`scanStuck`: CardJobs::scanStuck(), a
+//     chunk the card refused after a failed compaction), or
+//   - the battery floor pauses the scan (`batteryFloor`:
+//     ScanScheduler::batteryLow(), below 10% off USB until USB or a reading
+//     above 15%; a reading not known keeps it; USB not known counts as in).
+//     Memory carved mid-rest stays held there with no scan step to give it
+//     back (the loop trims only once the rest is done), so a visit goes
+//     ahead (the owner's "Don't wait at the floor", 2026-11-22). Its take
+//     still checks there's room for a decoder (statshold::take()), so
+//     playback stays safe.
+// Pure (test_stats_visit), no state: the floor is the scheduler's own.
+constexpr bool restHolds(bool scanHeld, bool scanStuck, bool batteryFloor) {
+  return scanHeld && !scanStuck && !batteryFloor;
+}
 constexpr uint32_t kWaitingMs = 3000;  // held this long by a wait: Waiting
 // The phase of an ask made (Asked, under way, or ended with `outcome`; with
 // none made the page's phase is Idle, the caller's). `why`: the gate's bits

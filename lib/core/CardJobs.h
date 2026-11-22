@@ -239,12 +239,14 @@ public:
   // trim() gives it back (or the object goes). The walk and a compaction
   // carve none of it (one run mid-rest keeps what the scan holds). The
   // stats pages' visits wait it out (app/CardTasks, StatsLists' kWhyRest:
-  // the owner's "Only while held"). A battery floor met mid-rest doesn't
-  // give it back (the loop trims only once the rest is done: !restWork()),
-  // so the visits wait out the floor (USB or 15%) and then the rest's end
-  // (a fresh card's or a Rescan's whole rest: minutes); only a scan the
-  // floor held before its first step, or one a fence's prepareUpdate() and
-  // trim() emptied, holds nothing.
+  // the owner's "Only while held"), a fresh card's or a Rescan's whole rest
+  // included (minutes). A battery floor met mid-rest doesn't give it back
+  // (the loop trims only once the rest is done: !restWork()), and no scan
+  // step comes while the floor holds, so there the visits don't wait for it
+  // (statsvisit::restHolds(): the owner's "Don't wait at the floor",
+  // 2026-11-22; a visit's take still checks there's room for a decoder). A
+  // scan the floor held before its first step, or one a fence's
+  // prepareUpdate() and trim() emptied, holds nothing.
   bool scanHeld() const { return scan_ != nullptr; }
   // The scan's memory that no step gives back: a chunk the card refused
   // after a failed compaction. No compaction is handed (compactWork()), the

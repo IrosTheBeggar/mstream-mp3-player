@@ -412,9 +412,9 @@ void StatsLists::command(const char* arg) {
     beginAsk(k, flags, millis());
     Serial.printf("[listen] %s: %s, as a stats page asks: at the next pass the write gate lets through, the boot's "
                   "scan done, no library update asked, Auto DJ's join neither working nor due, no card worker's walk "
-                  "or compaction, no tag scan holding its memory (a battery floor met mid-rest keeps it: then until "
-                  "USB or 15%% and the rest's end), and the Rank lane's waits clear (none taken while one holds); its "
-                  "block given back when it ends%s\n",
+                  "or compaction, no tag scan holding its memory (not waited for while the battery floor pauses the "
+                  "scan: the take's decoder-room check then), and the Rank lane's waits clear (none taken while one "
+                  "holds); its block given back when it ends%s\n",
                   name(),
                   k == kLean        ? (flags ? "Not played yet's lean ask, without the folders' states (forced)"
                                              : "Not played yet's lean ask (the u40 set; without the folders' states if "
@@ -458,8 +458,11 @@ uint8_t StatsLists::gateOf(const Gates& g) const {
   if (kind_ != kTrack && (ahead_ & kAheadWalk)) return sv::kWhyWorker;
   // S3a's asks: the tag scan while it holds its memory (its work memory and
   // any View: 90-124 KB of PSRAM no gate counts; the owner's "Only while
-  // held", 2026-11-21; CardTasks' word, which leaves out memory no step
-  // gives back: CardJobs::scanStuck()). S2's asks don't wait for it.
+  // held", 2026-11-21; CardTasks' word, sv::restHolds(), which leaves out
+  // memory no step gives back, CardJobs::scanStuck(), and the battery
+  // floor's pause, the owner's "Don't wait at the floor", 2026-11-22: then
+  // the take's own decoder-room check guards playback). S2's asks don't
+  // wait for it.
   if (visiting() && (ahead_ & kAheadRest)) return sv::kWhyRest;
   // S3a's asks after the 30 s worker give-up (kStalled): in Asked, holding
   // nothing, sv::kStallMs from it (queuedMs_, which no pass moves while
