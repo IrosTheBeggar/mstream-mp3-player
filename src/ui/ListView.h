@@ -45,6 +45,10 @@ class PanelScan;
 //   - a top bar: the same buttons as the list's first item (a container's
 //     own Play / Play next / + Queue), or a row of the source's own in its
 //     place (topBarIsRow(): the Albums list's mood filters);
+//   - a top row: a row of the source's own ahead of the top bar (leadRow():
+//     Most played's tray, LISTENING-STATS.md 7.2 item 1);
+//   - inert rows: no control, but a tap says why (the stats hub's disabled
+//     rows, 7.2 item 2);
 //   - long press: the source's (a sheet, or selection mode), on rows it
 //     holds(); a long press on anything else ends as a tap when it lifts;
 //   - selection mode: a checkbox on every row, taps toggle;
@@ -83,11 +87,18 @@ class PanelScan;
 // above it, so the bar stays put while the list scrolls).
 //
 // An empty list shows its source's empty state (ui/EmptyState: "Your
-// queue is empty" with its buttons), or a line of text (under a top row,
-// always the line, below the row).
+// queue is empty" with its buttons), or a line of text (under lead items
+// that are rows, always the line, below them: listlayout::emptyLine()), or
+// a body the source draws itself (drawBody(): Last 7 days, 7.2 item 6).
+//
+// Rows that change under an open page without the whole band drawn again
+// in one pass (a stats shelf's rows arriving from its ask, a tray tap: 7.2
+// item 4) go through recountStaged(): one stale item a frame at a still
+// pass.
 //
 // Each page's scroll position and expanded row are kept in its nav entry
-// (NavModel::PageRef): attach() restores them, detach() saves them.
+// (NavModel::PageRef): attach() restores them, detach() saves them (not
+// while the source's rows are pending: 7.2, its place kept for them).
 // Presses highlight at once (the Down), act on the Tap (with the tap tick);
 // a drag never taps, nor does a press that stops a moving list.
 // Loop task only.
@@ -144,6 +155,22 @@ public:
       (void)x;
       (void)rightEdge;
     }
+    // A row of the source's own ahead of the top bar (ListLayout's
+    // Kind::TopRow, LISTENING-STATS.md 7.2 item 1: Most played's tray, over
+    // its top bar), beside the top bar as a row above (which stays: the
+    // Albums list's filters). It is item 0 when there is one. drawLeadRow()
+    // paints it as drawTopRow() does that one (over a row's press look, the
+    // divider drawn after; a cell of its own lit instead is the source's,
+    // as the filters' cross is), and a tap on it goes to onLeadRowTap(),
+    // after the tap tick. It scrolls with the list and presses whole (no
+    // buttons, no hold, no checkbox); with no data rows under it, the empty
+    // line shows below it (the line only).
+    virtual bool leadRow() { return false; }
+    virtual void drawLeadRow(Row& r) { (void)r; }
+    virtual void onLeadRowTap(int x, bool rightEdge) {
+      (void)x;
+      (void)rightEdge;
+    }
     // The buttons of the top bar (row -1) or of row's inline bar: up to 3
     // labels, the first is the primary. Returns how many.
     virtual int actions(int32_t row, const char* labels[3]) {
@@ -190,6 +217,16 @@ public:
       (void)row;
       return true;
     }
+    // A row that is no control but says why when tapped (7.2 item 2: the
+    // stats hub's disabled rows). A touch on it neither highlights it nor
+    // ticks, and a tap there with the list still at the touch (not one that
+    // stopped a moving list, nor a drag) calls onInertTap() with no tick:
+    // its buzz and toast are the source's. The list still scrolls from it.
+    virtual bool inert(uint32_t row) {
+      (void)row;
+      return false;
+    }
+    virtual void onInertTap(uint32_t row) { (void)row; }
     virtual void onHold(uint32_t row) { (void)row; }
     // Sorted by name: the A-Z rail, with each row's letter.
     virtual bool alphabetical() { return false; }
@@ -204,6 +241,23 @@ public:
     }
     // Shown in the band when there are no rows.
     virtual const char* emptyText() { return uistr::tr(uistr::S::library_empty_nothing); }
+    // The rows aren't here yet (a stats shelf before its visit's ask lands:
+    // 7.2). The list shows none, and the page's place stays in its ref as it
+    // was (no saveRef(): a 0-row scroll written over it would lose it), for
+    // the rows' arrival to put back (listlayout::arrival(), recountStaged()).
+    virtual bool pending() { return false; }
+    // A page with no items drawing a body of its own where the empty state
+    // draws (7.2 item 6: Last 7 days): into `c` (the shared strip, 320 x 56)
+    // and pushed (gfx::push()), strip by strip, every line of the band from
+    // screen line y0, h lines. True: drawn. The band isn't filled under it
+    // first (its push pays for its own strips alone), so it must cover the
+    // band whole. False: none (the empty state, or the line).
+    virtual bool drawBody(M5Canvas& c, int y0, int h) {
+      (void)c;
+      (void)y0;
+      (void)h;
+      return false;
+    }
     // The rail's rows: the first railRows() rows are sorted by name (the
     // rest, a folder's files after its folders, aren't in the jump grid).
     virtual uint32_t railRows() { return rows(); }
@@ -255,6 +309,40 @@ public:
   void refreshAll();
   // One row's look changed: drawn again in place.
   void refreshRow(uint32_t row);
+  // Item 0's look changed, a lead item (the tray's picked cell, the entry
+  // row's line: 7.2 item 3): drawn again in place, as refreshRow() draws a
+  // data row.
+  void refreshTopRow();
+  // The rows changed under the page, drawn again without the whole band in
+  // one pass (35-50 ms idle, 80-100 with an MP3), as reload() draws it
+  // (7.2 item 4 as decided: a shelf's rows arriving from its ask, a tray
+  // tap's window, the hub's Try again row). The layout is set again from
+  // the source (its lead items with it), the edge by listlayout::edgeOf()
+  // (the scrollbar's 312 px and the A-Z rail's 284 included), and what that
+  // leaves stale on screen (listlayout::staging()) is pushed one item a
+  // frame at a still pass: no finger on the list or the rail, the list not
+  // moving (and no modal: update() doesn't run under one). The list is
+  // animating() until then, so the passes come at the frame cadence. A bar
+  // opened or closed meanwhile, an overlay gone, a jump: the band is drawn
+  // whole by them, and nothing is owed after. A recount before the last
+  // one's items are all pushed keeps them owed too.
+  //   `target`: where the list stands after: arrival()'s offset at a
+  //   landing, kShowPlaying resolved by the caller (playingRow()); below 0,
+  //   where it stands now. Clamped to the new items, and ignored while the
+  //   list moves (a finger, a fling: it stays with them). How it gets there
+  //   is listlayout::wayOf()'s: in place, one move of up to kMaxStep, or
+  //   further the band in place there a row a pass (as a scrub's jump).
+  //   `expanded`: the row whose bar is open after (-1: none; arrival()
+  //   keeps it only within a visit).
+  //   `changedRow`: the first row whose picture may differ (0: all, at an
+  //   arrival or a tray tap; the old row count: only the new ones).
+  //   `leadChanged`: item 0, a lead item, looks different (the tray's
+  //   30-day cell reading "16 days" at a landing); else it stays as drawn.
+  // A finger on an item that changed no longer presses it (its tap would
+  // act on a row the listener didn't pick). With nothing on screen to keep
+  // (the first frame owed, the screen dark, a scrub's band under way) it is
+  // a reload(): the next frame draws the band whole anyway.
+  void recountStaged(int32_t target = -1, int32_t expanded = -1, uint32_t changedRow = 0, bool leadChanged = false);
   // Jumps (no animation).
   void scrollTo(int32_t offset);
   void scrollToRow(uint32_t row);  // that row at the top (as far as the list goes)
@@ -317,7 +405,8 @@ public:
   uint32_t rowUs() const { return rowUs_; }
   // The memory begin() takes from the block reserved at boot (ui/HotMem).
   static size_t hotBytes();
-  // Moving, or owing a frame: the UI keeps its frame cadence.
+  // Moving, or owing a frame (or a recount's stale items: recountStaged()):
+  // the UI keeps its frame cadence.
   bool animating() const;
   // A finger is on the A-Z rail: scrubbing, or resting on it to read the
   // letter (it still scrubs when it slides). The card worker is held
@@ -367,9 +456,11 @@ public:
   // Or a row of a scrub's band (Kind::Piece: the band is drawn a row a
   // loop pass under a finger on the rail; its last row's pass is the
   // Kind::Band frame, with the whole band's rows, and its time from its
-  // first row to its last in bandUs). `rail`: the thumb was drawn too.
+  // first row to its last in bandUs). Or a recount's stale item pushed in
+  // place (Kind::Stage: recountStaged(), one a frame; from and to the drawn
+  // offset). `rail`: the thumb was drawn too.
   struct FrameCost {
-    enum class Kind : uint8_t { Band, Rail, Piece };
+    enum class Kind : uint8_t { Band, Rail, Piece, Stage };
     Kind kind = Kind::Band;
     bool rail = false;
     uint32_t renders = 0, renderUs = 0;
@@ -422,8 +513,19 @@ private:
   int railX() const { return layoutWidth(); }
   // `it` is the source's top row (topBarIsRow()), not a bar of buttons.
   bool topRow(const ListLayout::Item& it) const { return it.kind == ListLayout::Kind::TopBar && src_->topBarIsRow(); }
-  // No data rows under a top row: the empty line goes below it.
-  bool emptyUnderTopRow() const { return src_ && layout_.rows() == 0 && layout_.topBar() && src_->topBarIsRow(); }
+  // `it` is a row the source draws itself at item 0: the lead top row
+  // (leadRow()), or the top bar as a row. Pressed whole, no buttons.
+  bool sourceRow(const ListLayout::Item& it) const { return it.kind == ListLayout::Kind::TopRow || topRow(it); }
+  // No data rows under lead items that are rows: the empty line goes below
+  // them (listlayout::emptyLine()).
+  bool emptyUnderLead() const;
+  // The band on the glass is the scroll map's as drawn (none owed whole):
+  // a piece can go where it shows.
+  bool inPlace() const;
+  // A recount's stale items are owed (recountStaged()).
+  bool staged() const { return stageLead_ || stageLeft_ > 0 || stageEmpty_; }
+  void dropStaging();
+  bool stageStep();
   void setEdge();
   void dropSlots();
   Slot* slotFor(uint32_t item);
@@ -440,7 +542,7 @@ private:
   uint32_t holdFor(int d) const;
   void noteRowTime(uint32_t us);
   void noteAddress(int line, int64_t readUs, int64_t sentUs);
-  void pushItemInPlace(uint32_t item);
+  bool pushItemInPlace(uint32_t item);
   void setPressed(int32_t item, int button);
   void tapItem(int32_t item, const InputEvent& e);
   void setExpanded(int32_t row);
@@ -479,7 +581,13 @@ private:
   bool railWanted_ = false;  // the rail should be on screen this pass
   bool railUp_ = false;      // it is
   bool railDue_ = false;     // prepareFixed() rendered it: pushFixed() pushes it
-  int32_t railOffset_ = -1;  // the offset the rail on screen was drawn for (-1: not up)
+  // A recount's stale items (recountStaged()), in the padding here: the
+  // lead item, then stageLeft_ positions from stageNext_ (below), then the
+  // empty line. (ui::Ui keeps main's carve: 7.2, "Where S3b's UI bytes live".)
+  bool stageLead_ = false;
+  bool stageEmpty_ = false;
+  uint8_t stageLeft_ = 0;
+  int32_t railOffset_ = -1;  // the offset the rail on screen was drawn for (-1: not up, or drawn again at rest)
   int railY_ = -1;           // the A-Z thumb's top row in the rail on screen (-1: none, or the scrollbar)
   // A scrub's band drawn a row a pass (bandStep()): what is left of it.
   struct Band {
@@ -497,8 +605,10 @@ private:
   int pressedButton_ = -1;
   int pressedX_ = -1;       // the finger on the pressed row
   int emptyPressed_ = -1;   // the empty state's button under a finger
-  int32_t downItem_ = -1;
+  int32_t downItem_ = -1;   // the item under a Down on a still list (-1: none): an inert row's tap
   bool dragged_ = false;  // this touch moved the list
+  bool stageBand_ = false;  // the jump owed is a recount's: drawn as a band a row a pass (listlayout::Way::Band)
+  bool bodyUp_ = false;     // render(): the source drew its body, push() fills nothing under it
   uint32_t keepFirst_ = 0, keepLast_ = 0;
   uint32_t frames_ = 0;
   FrameCost cost_;
@@ -512,6 +622,7 @@ private:
   ScanStats scanStats_;
   uint32_t lineUs_ = 140;       // a pushed line on the bus (320 px at 40 MHz, and its share of the hold)
   uint32_t rowUs_ = 4000;       // a row's render
+  uint32_t stageNext_ = 0;      // a recount's next stale position (an item index; the padding before lastHoldUs_)
   int64_t lastHoldUs_ = 0;      // when the last hold on the scan began (the next: a refresh later)
   int64_t lastShowUs_ = 0;      // the refresh its frame was for (its band's first row): one frame a refresh
 };

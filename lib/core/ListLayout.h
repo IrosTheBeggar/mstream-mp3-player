@@ -191,4 +191,45 @@ struct Staging {
 Staging staging(const ListLayout& from, Edge fromEdge, const ListLayout& to, Edge toEdge, int32_t drawn,
                 int32_t target, int32_t heightPx, uint32_t changedRow, bool leadChanged);
 
+// How ListView::recountStaged() draws a recount, from staging()'s answer
+// (`drawn` as given to it; `maxStep`: ListView::kMaxStep, the hardware
+// scroll's one-hold step). S3b's rule for a place that moves (7.2: "no
+// whole-band reload", the scroll kept):
+//   - InPlace: the list stays; its stale items are pushed one a pass.
+//   - Move: the new offset is at most `maxStep` lines away: one move there
+//     (one bus hold of new lines, from slots rendered for the new rows),
+//     then the stale items still on screen, one a pass.
+//   - Band: further (a shelf drawn at 0 while its rows were pending, its
+//     ref's 420 px, at a wake; a shrink from far down): the band is drawn
+//     in place at the new offset a row a pass, as a scrub's jump is
+//     (ListView::startBand()). Every line on screen is the new offset's
+//     after it, so nothing else is owed. Not a whole-band draw in one pass
+//     (35-50 ms idle, 80-100 with an MP3), nor a slide there in steps (the
+//     list would scroll by itself for five frames).
+enum class Way : uint8_t { InPlace, Move, Band };
+constexpr Way wayOf(const Staging& s, int32_t drawn, int32_t maxStep) {
+  const int32_t d = s.offset - (drawn > 0 ? drawn : 0);
+  if (!s.moves) return Way::InPlace;
+  return d <= maxStep && -d <= maxStep ? Way::Move : Way::Band;
+}
+
+// What an empty list draws in its band (7.2 item 5; ListView::drawEmpty()).
+//   - None: it has rows, or only a top bar of buttons over none (the bar
+//     alone, as before 7.2).
+//   - State: no items at all: the source's empty state (the disc, the
+//     title, the buttons), or its line.
+//   - Line: no rows under lead items that are rows (the top row; the top
+//     bar when it is a row: the Albums list's filters, Most played's tray):
+//     the line alone, below them. The empty state's buttons couldn't be
+//     pressed there (ListView::onEvent(): only with no items).
+enum class Empty : uint8_t { None, State, Line };
+struct EmptyLine {
+  Empty kind = Empty::None;
+  // The line's 56-line strip, from the band's top: under the lead items,
+  // 42 px each (114 on screen under one, 156 under two); else 40.
+  int32_t top = 40;
+  int32_t textY = 24;  // its text's centre in the strip: 36 under lead items, else 24
+};
+EmptyLine emptyLine(const ListLayout& l, bool topBarIsRow);
+
 }  // namespace listlayout

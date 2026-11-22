@@ -109,6 +109,11 @@ void sleepUntil(int64_t atUs) {
 }
 }  // namespace
 
+// ui::Ui holds one (Ui.h): S3b's staging state sits in its padding, so the
+// UI's object keeps main's carve (LISTENING-STATS.md 7.2, "Where S3b's UI
+// bytes live"; call 2).
+static_assert(sizeof(ListView) == 432, "ListView grew: ui::Ui's carve moves with it");
+
 size_t ListView::hotBytes() {
   return line32(kSlots * sizeof(Slot)) + kSlots * line32(kRowBytes) + line32(sizeof(M5Canvas)) + line32(kRailBytes);
 }
@@ -217,7 +222,7 @@ void ListView::attach(Source* src, NavModel::PageRef* ref, int32_t defaultOffset
   emptyPressed_ = -1;
   railKeyShown_ = -1;
   layout_ = ListLayout();
-  layout_.set(src->rows(), src->topBar());
+  layout_.set(src->rows(), src->topBar(), src->leadRow());
   const int32_t exp = ref ? ref->expanded : -1;
   if (exp >= 0 && static_cast<uint32_t>(exp) < layout_.rows()) layout_.setExpanded(exp, 0, height_);
   setEdge();
@@ -229,7 +234,10 @@ void ListView::attach(Source* src, NavModel::PageRef* ref, int32_t defaultOffset
 }
 
 void ListView::saveRef() {
-  if (!ref_) return;
+  // Rows pending (a stats shelf before its ask lands: 7.2): the 0-row
+  // scroll would be written over the place its rows land at. Here, so every
+  // caller is covered (detach(), the frames at rest, a band's end).
+  if (!ref_ || (src_ && src_->pending())) return;
   ref_->scrollPx = static_cast<int32_t>(std::lround(scroll_.rowTarget(scroll_.offset(), 0.0f)));
   ref_->expanded = layout_.expanded();
 }
@@ -250,6 +258,7 @@ void ListView::invalidate() {
   band_.active = false;  // (a band a row a pass: the frame draws it whole)
   railUp_ = false;  // the frame redraws the band; the rail with it if it's wanted
   railOffset_ = -1;
+  dropStaging();  // (and a recount's stale items with it)
 }
 
 void ListView::redraw() {
@@ -257,6 +266,23 @@ void ListView::redraw() {
   band_.active = false;
   railUp_ = false;
   railOffset_ = -1;
+  dropStaging();  // (a stale item's slot was dropped at the recount: rendered again)
+}
+
+void ListView::dropStaging() {
+  stageLead_ = false;
+  stageEmpty_ = false;
+  stageLeft_ = 0;
+  stageBand_ = false;
+}
+
+bool ListView::inPlace() const {
+  return vs_ && vs_->active() && vs_->map().valid() && drawnOffset_ >= 0 && !force_ && !gfx::dark();
+}
+
+bool ListView::emptyUnderLead() const {
+  return src_ && layout_.rows() == 0 &&
+         listlayout::emptyLine(layout_, layout_.topBar() && src_->topBarIsRow()).kind == listlayout::Empty::Line;
 }
 
 bool ListView::pushOnRow(uint32_t row, M5Canvas& c, int sx, int sy, int w, int h, int x, int y) {
@@ -283,7 +309,7 @@ int32_t ListView::pressedRow() const {
 void ListView::reload() {
   if (!src_) return;
   const int32_t exp = layout_.expanded();
-  layout_.set(src_->rows(), src_->topBar());
+  layout_.set(src_->rows(), src_->topBar(), src_->leadRow());
   if (exp >= 0 && layout_.expanded() < 0) pressedItem_ = -1;
   setEdge();
   scroll_.setExtent(static_cast<float>(layout_.contentPx()), height_);
@@ -303,6 +329,121 @@ void ListView::refreshRow(uint32_t row) {
     if (slots_[i].item == static_cast<int32_t>(item)) slots_[i].item = -1;
   }
   pushItemInPlace(item);
+}
+
+void ListView::refreshTopRow() {
+  if (!src_ || !slots_ || layout_.leads() == 0) return;
+  for (int i = 0; i < kSlots; ++i) {
+    if (slots_[i].item == 0) slots_[i].item = -1;
+  }
+  // (A recount's lead push owed: this is it. Not drawn now, the next frame
+  // draws the band whole.)
+  if (pushItemInPlace(0)) stageLead_ = false;
+}
+
+// 7.2 item 4 as decided: no whole-band reload() from an arrival, the edge
+// staged too, the scroll kept (listlayout::wayOf() for a place that moves).
+void ListView::recountStaged(int32_t target, int32_t expanded, uint32_t changedRow, bool leadChanged) {
+  if (!src_) return;
+  const ListLayout from = layout_;
+  const Edge fromEdge = edge_;
+  layout_.set(src_->rows(), src_->topBar(), src_->leadRow());
+  // (The offset is the caller's: arrival() counted the bar's item.)
+  if (layout_.expanded() != expanded) layout_.setExpanded(expanded, 0, height_);
+  setEdge();
+  scroll_.setExtent(static_cast<float>(layout_.contentPx()), height_);
+  emptyPressed_ = -1;
+  // A finger on an item the recount changed (its kind or row, or a data row
+  // from changedRow on) no longer presses it, nor is its Down an inert
+  // row's: its tap would act on a row the listener didn't pick, as a bar
+  // reopened across a new ask would (7.2).
+  auto pressKept = [&](int32_t at) {
+    if (at < 0) return false;
+    const ListLayout::Item was = from.item(static_cast<uint32_t>(at));
+    const ListLayout::Item is = layout_.item(static_cast<uint32_t>(at));
+    if (was.kind != is.kind || was.row != is.row) return false;
+    return (is.kind != ListLayout::Kind::Row && is.kind != ListLayout::Kind::InlineBar) ||
+           static_cast<uint32_t>(is.row) < changedRow;
+  };
+  if (!pressKept(pressedItem_)) {
+    pressedItem_ = -1;
+    pressedButton_ = -1;
+  }
+  if (!pressKept(downItem_)) downItem_ = -1;
+  const int32_t want = ListLayout::clamp(target >= 0 ? target : offset(), layout_.maxOffset(height_));
+  // Nothing on screen to keep (the first frame owed, the screen dark, a
+  // scrub's band half drawn): the next frame draws the band whole anyway.
+  if (!slots_ || band_.active || !inPlace()) {
+    if (!scroll_.moving()) {
+      scroll_.jumpTo(static_cast<float>(want));
+      jumped_ = true;
+    }
+    invalidate();
+    return;
+  }
+  // A list in motion stays with the finger or the fling (its frames bring
+  // the new lines on from slots rendered for the new rows); a still one
+  // stands at the target.
+  const bool inMotion = scroll_.moving();
+  const listlayout::Staging s = listlayout::staging(from, fromEdge, layout_, edge_, drawnOffset_,
+                                                    inMotion ? offset() : want, height_, changedRow, leadChanged);
+  // Every slot is rendered again when next needed (one rendered ahead, off
+  // screen, holds the old picture too), but an unchanged lead item's.
+  const bool leadKept = from.leads() > 0 && layout_.leads() > 0 && from.item(0).kind == layout_.item(0).kind &&
+                        !leadChanged && !s.edge;
+  for (int i = 0; i < kSlots; ++i) {
+    if (!(leadKept && slots_[i].item == 0)) slots_[i].item = -1;
+  }
+  // What a recount before this one still owes stays owed: those positions
+  // show what was there before both. A band owed and not begun owes every
+  // position on screen; else its positions still on screen (one the list
+  // moved off came back from a slot rendered since: as new).
+  const auto onTop = static_cast<uint32_t>(drawnOffset_ / kPitch);
+  const auto onEnd = static_cast<uint32_t>((drawnOffset_ + height_ + kPitch - 1) / kPitch);
+  uint32_t first = s.first, end = s.end;
+  auto owe = [&](uint32_t a, uint32_t b) {
+    a = std::max(a, onTop);
+    b = std::min(b, onEnd);
+    if (a >= b) return;
+    const bool none = first == end;
+    first = none ? a : std::min(first, a);
+    end = none ? b : std::max(end, b);
+  };
+  if (stageBand_) owe(onTop, onEnd);
+  if (stageLeft_ > 0) owe(stageNext_, stageNext_ + stageLeft_);
+  const bool leadOwed = stageLead_ || s.lead;
+  dropStaging();
+  stageLead_ = leadOwed;
+  stageNext_ = first;
+  stageLeft_ = static_cast<uint8_t>(end - first);  // (positions on screen: 5 at most)
+  stageEmpty_ = layout_.rows() == 0 &&
+                listlayout::emptyLine(layout_, layout_.topBar() && src_->topBarIsRow()).kind != listlayout::Empty::None;
+  // The scrollbar or the rail is drawn again once the items are (7.10: "the
+  // scrollbar at rest"): still up meanwhile, so the rows keep beside it,
+  // and hidden as ever if the list moves.
+  if (s.rail && railUp_) {
+    railOffset_ = -1;
+    railY_ = -1;  // (pushRail(): the whole rail, not the thumb's rows)
+  }
+  if (inMotion) return;
+  // (Still: the scroll stands at the target, whatever a jump owed before
+  // said.)
+  scroll_.jumpTo(static_cast<float>(s.offset));
+  switch (listlayout::wayOf(s, drawnOffset_, kMaxStep)) {
+    case listlayout::Way::InPlace:
+      break;
+    case listlayout::Way::Move:
+      // One move there at the next frame (one bus hold of new lines, on the
+      // panel's scan), then the stale items still on screen.
+      break;
+    case listlayout::Way::Band:
+      // The band in place there a row a pass (bandInRows(), startBand()):
+      // every line on screen is drawn again, so nothing else is owed.
+      dropStaging();
+      stageBand_ = true;
+      jumped_ = true;
+      break;
+  }
 }
 
 int32_t ListView::offset() const { return static_cast<int32_t>(std::lround(scroll_.offset())); }
@@ -398,9 +539,11 @@ void ListView::renderBar(M5Canvas& c, int32_t row, bool inline_) {
   if (n <= 0) return;
   const int x0 = 8, x1 = layoutWidth() - 8, gap = 6;
   const int bw = (x1 - x0 - gap * (n - 1)) / n;
-  const bool thisPressed = pressedItem_ >= 0 && layout_.item(static_cast<uint32_t>(pressedItem_)).row == row &&
-                           layout_.item(static_cast<uint32_t>(pressedItem_)).kind !=
-                               ListLayout::Kind::Row;
+  // This bar is the item pressed (the top bar, or row's inline bar; not the
+  // lead top row, whose row is -1 too).
+  const ListLayout::Item at = pressedItem_ >= 0 ? layout_.item(static_cast<uint32_t>(pressedItem_)) : ListLayout::Item{};
+  const bool thisPressed =
+      at.row == row && at.kind == (inline_ ? ListLayout::Kind::InlineBar : ListLayout::Kind::TopBar);
   for (int i = 0; i < n; ++i) {
     const int x = x0 + i * (bw + gap);
     const bool primary = i == 0;
@@ -418,15 +561,21 @@ void ListView::renderBar(M5Canvas& c, int32_t row, bool inline_) {
 void ListView::renderItem(M5Canvas& c, uint32_t item) {
   const ListLayout::Item it = layout_.item(item);
   switch (it.kind) {
+    case ListLayout::Kind::TopRow:
     case ListLayout::Kind::TopBar:
-      if (topRow(it)) {
-        // The source's row in the bar's place (MOOD-FILTERS.md 7.6): a
-        // row's press and divider, no checkbox, never expanded.
+      if (sourceRow(it)) {
+        // The source's row ahead of the top bar (LISTENING-STATS.md 7.2
+        // item 1), or in the bar's place (MOOD-FILTERS.md 7.6): a row's
+        // press and divider, no checkbox, never expanded.
         const bool pressed = pressedItem_ == static_cast<int32_t>(item);
         const uint16_t bg = pressed ? col::ROW_SEL : col::BG;
         c.fillSprite(bg);
         Row r{c, 0, 0, layoutWidth(), bg, pressed, false, false, pressed ? pressedX_ : -1};
-        src_->drawTopRow(r);
+        if (it.kind == ListLayout::Kind::TopRow) {
+          src_->drawLeadRow(r);
+        } else {
+          src_->drawTopRow(r);
+        }
         c.drawFastHLine(8, kRowH - 1, layoutWidth() - 8, col::ROW_DIV);
         return;
       }
@@ -470,13 +619,23 @@ void ListView::renderItem(M5Canvas& c, uint32_t item) {
 // `gate`: when a move's hold starts (ListScroller::Gate). Returns the
 // lines pushed.
 int ListView::render(int32_t off, ListScroller::Gate* gate) {
-  if (force_) vs_->invalidate();
   const uint32_t n = layout_.itemCount();
+  // A page with no items drawing its own body (7.2 item 6: Last 7 days)
+  // covers the band with it, so the band's lines aren't filled under it
+  // (push()): its push costs its own strips alone. It goes first, and the
+  // band is then planned in place (the start address kept), so the strips
+  // stay where they show.
+  bodyUp_ = n == 0 && src_->drawBody(gfx::strip(), kTop, height_);
+  if (force_ || bodyUp_) vs_->invalidate();
   const int32_t top = std::max<int32_t>(off, 0);
   keepFirst_ = static_cast<uint32_t>(top / kPitch);
   keepLast_ = std::min<uint32_t>(n ? n - 1 : 0, static_cast<uint32_t>((top + height_ - 1) / kPitch));
   const int lines = vs_->scrollTo(off, *this, nullptr, gate);
-  if (n == 0 || emptyUnderTopRow()) drawEmpty();
+  const bool body = bodyUp_;
+  bodyUp_ = false;
+  // The band drawn whole in place: nothing a recount left stale is.
+  if (vs_->map().lastPlanFull()) dropStaging();
+  if (!body && (n == 0 || emptyUnderLead())) drawEmpty();
   return lines;
 }
 
@@ -512,8 +671,10 @@ void ListView::push(const VScrollMap::Span& span, bool committing) {
     const int lines = static_cast<int>(stop - c);
     const int step = committing ? lines : kSlice;
     if (item < 0 || item >= items) {
-      LcdLock lock(&gfx::holds());
-      d.fillRect(0, g, w, lines, col::BG);
+      if (!bodyUp_) {  // (a body's strips are there already: render())
+        LcdLock lock(&gfx::holds());
+        d.fillRect(0, g, w, lines, col::BG);
+      }
     } else {
       Slot* slot = renderedSlot(static_cast<uint32_t>(item));
       const int spriteY = g - static_cast<int>(c - itemTop);
@@ -550,16 +711,19 @@ void ListView::pushFixed() {
 }
 
 // Redraws an item where the panel shows it now (a press, a toggle), without
-// moving anything: its lines go to the GRAM lines they live at.
-void ListView::pushItemInPlace(uint32_t item) {
+// moving anything: its lines go to the GRAM lines they live at. A position
+// past the items is the ground, filled (a recount's: where the old rows or
+// the old empty line were). False: nothing pushed (off screen, or the band
+// isn't as drawn).
+bool ListView::pushItemInPlace(uint32_t item) {
   // (The screen off: nothing drawn; the band is redrawn whole on the wake.)
-  if (!vs_->active() || !vs_->map().valid() || drawnOffset_ < 0 || force_ || gfx::dark()) return;
+  if (!inPlace()) return false;
   const int32_t off = vs_->map().offset();
   const int32_t top = static_cast<int32_t>(item) * kPitch;
   int32_t c = std::max(top, off);
   const int32_t end = std::min(top + kPitch, off + height_);
-  if (c >= end) return;
-  Slot* slot = renderedSlot(item);
+  if (c >= end) return false;
+  Slot* slot = item < layout_.itemCount() ? renderedSlot(item) : nullptr;
   auto& d = M5.Display;
   const int w = pushWidth();
   const int bandEnd = vs_->map().top() + vs_->map().height();
@@ -568,31 +732,74 @@ void ListView::pushItemInPlace(uint32_t item) {
     const int n = std::min<int32_t>(end - c, bandEnd - g);  // up to the wrap
     {
       LcdLock lock(&gfx::holds());
-      d.setClipRect(0, g, w, n);
-      slot->sprite.pushSprite(&d, 0, g - static_cast<int>(c - top));
-      d.clearClipRect();
+      if (slot) {
+        d.setClipRect(0, g, w, n);
+        slot->sprite.pushSprite(&d, 0, g - static_cast<int>(c - top));
+        d.clearClipRect();
+      } else {
+        d.fillRect(0, g, w, n, col::BG);
+      }
     }
     c += n;
   }
+  return true;
+}
+
+// A recount's next stale item, in place (recountStaged()): the lead item
+// first, then the positions top first, then the empty line. One the list
+// moved off screen meanwhile is passed over in the same pass. True:
+// something was pushed.
+bool ListView::stageStep() {
+  if (!inPlace()) {  // (not as drawn: the next frame draws the band whole)
+    invalidate();
+    return false;
+  }
+  cost_ = FrameCost{};
+  cost_.kind = FrameCost::Kind::Stage;
+  cost_.from = cost_.to = drawnOffset_;
+  bool pushed = false;
+  while (!pushed && staged()) {
+    if (stageLead_) {
+      stageLead_ = false;
+      pushed = pushItemInPlace(0);
+    } else if (stageLeft_ > 0) {
+      --stageLeft_;
+      pushed = pushItemInPlace(stageNext_++);
+    } else {
+      stageEmpty_ = false;
+      drawEmpty();
+      pushed = true;
+    }
+  }
+  if (pushed) ++frames_;
+  return pushed;
 }
 
 void ListView::drawEmpty() {
-  // Under a top row (the Albums list's filters, nothing fits: MOOD-FILTERS.md
-  // 7.6), the line alone: the strip from the row's foot (y 114), the text
-  // at y 150. Its buttons couldn't be pressed there (onEvent()).
-  const bool under = emptyUnderTopRow();
+  if (!src_) return;
+  // Under lead items that are rows (the Albums list's filters, nothing
+  // fits: MOOD-FILTERS.md 7.6; Most played's tray over no rows:
+  // LISTENING-STATS.md 7.2 item 5), the line alone: the strip from their
+  // foot (y 114 under one, the text at y 150; y 156 under two). Its buttons
+  // couldn't be pressed there (onEvent()). Else a page with no items draws
+  // its body (7.2 item 6), or its empty state, or the line at y 112.
+  const bool under = emptyUnderLead();
+  if (!under && layout_.itemCount() == 0 && src_->drawBody(gfx::strip(), kTop, height_)) return;
   EmptyState e;
-  if (!under && src_ && src_->emptyState(e)) {
+  if (!under && src_->emptyState(e)) {
     drawEmptyState(e, kTop, height_, src_->accent(), emptyPressed_);
     return;
   }
-  const int top = under ? kTop + kPitch : kTop + 40;  // the strip's
-  const int lineY = under ? 36 : 24;                   // in the strip: y 150, else 136
+  const listlayout::EmptyLine line = listlayout::emptyLine(layout_, layout_.topBar() && src_->topBarIsRow());
+  const int top = kTop + static_cast<int>(line.top);  // the strip's
+  // (Cut at the band's foot: under two lead items, a shorter band.)
+  const int h = std::min(gfx::kStripH, kTop + height_ - top);
+  if (h <= 0) return;
   M5Canvas& s = gfx::strip();
   s.fillSprite(col::BG);
-  Fonts::instance().draw(s, Font::Body, src_ ? src_->emptyText() : "", kW / 2, lineY, uitext::kListLineW, col::DIM,
-                         col::BG, Fonts::Align::Centre);
-  gfx::push(s, 0, top, kW, gfx::kStripH);
+  Fonts::instance().draw(s, Font::Body, src_->emptyText(), kW / 2, static_cast<int>(line.textY), uitext::kListLineW,
+                         col::DIM, col::BG, Fonts::Align::Centre);
+  gfx::push(s, 0, top, kW, h);
 }
 
 // ---- the rail / scrollbar ----
@@ -684,7 +891,9 @@ bool ListView::moving() const {
 }
 
 bool ListView::animating() const {
-  return src_ && (scroll_.moving() || force_ || band_.active || offset() != drawnOffset_);
+  // (A recount's stale items owed too: the passes come at the frame
+  // cadence until they are pushed, one a frame.)
+  return src_ && (scroll_.moving() || force_ || band_.active || offset() != drawnOffset_ || staged());
 }
 
 // ---- a scrub's band, a row a pass ----
@@ -700,16 +909,22 @@ bool ListView::animating() const {
 // did; the thumb never waits for it, and the next band starts when this
 // one is done (ScrubPacer's cadence, 0 here).
 
-// Whether a jump to `off` under the finger is drawn so (a jump the
-// hardware scroll takes as a move is one hold already).
+// Whether a jump to `off` is drawn so: under a finger on the rail (paced),
+// or a recount's (recountStaged(): listlayout::Way::Band, a shelf's rows
+// landing at a kept scroll more than kMaxStep from where it was drawn;
+// LISTENING-STATS.md 7.2, no whole-band reload from an arrival). A jump the
+// hardware scroll takes as a move is one hold already.
 bool ListView::bandInRows(int32_t off) const {
-  if (touchOn_ != TouchOn::Rail || !pacing_ || force_ || drawnOffset_ < 0 || gfx::dark()) return false;
+  if (!(touchOn_ == TouchOn::Rail && pacing_) && !stageBand_) return false;
+  if (force_ || drawnOffset_ < 0 || gfx::dark()) return false;
   if (!vs_->active() || !vs_->map().valid()) return false;
   const int32_t d = off - vs_->map().offset();
   return d > vs_->map().maxStep() || -d > vs_->map().maxStep();
 }
 
 void ListView::startBand(int32_t off) {
+  // (Every line on screen is drawn again: a recount's stale items with it.)
+  dropStaging();
   band_ = Band{};
   band_.spans = vs_->planInPlace(off, band_.span);
   if (band_.spans <= 0) return;
@@ -764,7 +979,7 @@ bool ListView::bandStep(bool frameDue) {
       cost_.renders = band_.renders;
       cost_.renderUs = band_.renderUs;
       cost_.bandUs = micros() - band_.startUs;
-      if (n == 0 || emptyUnderTopRow()) drawEmpty();
+      if (n == 0 || emptyUnderLead()) drawEmpty();
       pacer_.bandDrawn(millis());
       ++frames_;
       if (!moving() && ref_) saveRef();
@@ -811,6 +1026,7 @@ void ListView::drawFrame(int32_t off) {
   drawnOffset_ = off;
   force_ = false;
   jumped_ = false;
+  stageBand_ = false;  // (the jump it was for is drawn)
   ++frames_;
   if (!moving() && ref_) saveRef();
 }
@@ -970,6 +1186,7 @@ bool ListView::scanFrame(bool rows) {
   lastDir_ = d > 0 ? 1 : -1;
   lastStep_ = n;
   drawnOffset_ = off;
+  stageBand_ = false;
   ++frames_;
   if (!moving() && ref_) saveRef();
   return true;
@@ -1014,7 +1231,13 @@ bool ListView::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
     drawFrame(off);
     return true;
   }
-  if (!owed && railWanted_ && !railUp_) showRail(drawnOffset_);
+  // A recount's stale items (recountStaged()): one a frame, at a still
+  // pass (no finger on the list or the rail, the list not moving; no modal,
+  // or this wouldn't run). 7.2 item 4: never the whole band in one pass.
+  if (!owed && frameDue && staged() && !scroll_.moving() && touchOn_ == TouchOn::None && stageStep()) return true;
+  // The edge at rest, or drawn again for a recount once its items are
+  // (railOffset_ -1 with it up: 7.10, "the scrollbar at rest").
+  if (!owed && !staged() && railWanted_ && (!railUp_ || railOffset_ < 0)) showRail(drawnOffset_);
   return false;
 }
 
@@ -1221,6 +1444,12 @@ void ListView::tapItem(int32_t item, const InputEvent& e) {
   if (item < 0) return;
   const ListLayout::Item it = layout_.item(static_cast<uint32_t>(item));
   switch (it.kind) {
+    case ListLayout::Kind::TopRow:
+      // The source's row ahead of the top bar (LISTENING-STATS.md 7.2 item
+      // 1): its own zones (the tray's cells).
+      input_->tapTick();
+      src_->onLeadRowTap(e.x, e.atRightEdge());
+      break;
     case ListLayout::Kind::TopBar:
       if (topRow(it)) {
         // The source's row (7.6): its own zones (the cross, the editor).
@@ -1323,14 +1552,20 @@ void ListView::onEvent(const InputEvent& e) {
     touchOn_ = TouchOn::List;
     dragged_ = false;
     scroll_.press(e.ms, e.y);
-    // Highlight what's under the finger (only once the list is still).
-    downItem_ = layout_.itemAt(offset() + e.y - kTop);
+    // Highlight what's under the finger (only once the list is still). A
+    // Down that stopped the list, or with the frame behind the scroll, is
+    // on nothing: nor is its tap an inert row's (7.2 item 2).
+    downItem_ = !wasMoving && drawnOffset_ == offset() ? layout_.itemAt(offset() + e.y - kTop) : -1;
     pressedX_ = e.atRightEdge() ? kW - 1 : e.x;
-    if (downItem_ >= 0 && !wasMoving && drawnOffset_ == offset()) {
+    if (downItem_ >= 0) {
       const ListLayout::Item it = layout_.item(static_cast<uint32_t>(downItem_));
-      if (it.kind == ListLayout::Kind::Row && !src_->pressable(static_cast<uint32_t>(it.row))) return;
-      int button = -1;  // a row, or the source's top row: pressed whole
-      if (it.kind != ListLayout::Kind::Row && !topRow(it)) {
+      // A divider, or an inert row: no press look, no tick.
+      if (it.kind == ListLayout::Kind::Row && (!src_->pressable(static_cast<uint32_t>(it.row)) ||
+                                               src_->inert(static_cast<uint32_t>(it.row)))) {
+        return;
+      }
+      int button = -1;  // a row, or the source's own row at item 0: pressed whole
+      if (it.kind != ListLayout::Kind::Row && !sourceRow(it)) {
         const char* labels[3] = {"", "", ""};
         button = e.atRightEdge() ? src_->actions(it.row, labels) - 1 : buttonAt(e.x, src_->actions(it.row, labels));
       }
@@ -1369,7 +1604,17 @@ void ListView::onEvent(const InputEvent& e) {
       scroll_.release(e.ms, 0.0f);
       const int32_t item = pressedItem_;
       setPressed(-1, -1);
-      tapItem(item, e);
+      if (item >= 0) {
+        tapItem(item, e);
+      } else if (downItem_ >= 0 && !dragged_) {
+        // An inert row (7.2 item 2: a disabled hub row), the list still at
+        // the Down and not dragged since: no press, no tick, but the source
+        // says why (its buzz and toast).
+        const ListLayout::Item it = layout_.item(static_cast<uint32_t>(downItem_));
+        if (it.kind == ListLayout::Kind::Row && src_->inert(static_cast<uint32_t>(it.row))) {
+          src_->onInertTap(static_cast<uint32_t>(it.row));
+        }
+      }
       break;
     }
     case T::LongPress: {

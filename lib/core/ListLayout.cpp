@@ -177,4 +177,17 @@ Staging staging(const ListLayout& from, Edge fromEdge, const ListLayout& to, Edg
   return s;
 }
 
+EmptyLine emptyLine(const ListLayout& l, bool topBarIsRow) {
+  EmptyLine e;
+  if (l.rows() != 0) return e;
+  if (l.topRow() || (l.topBar() && topBarIsRow)) {
+    e.kind = Empty::Line;
+    e.top = static_cast<int32_t>(l.leads()) * ListLayout::kPitch;
+    e.textY = 36;
+    return e;
+  }
+  if (l.itemCount() == 0) e.kind = Empty::State;  // (else a top bar of buttons alone)
+  return e;
+}
+
 }  // namespace listlayout

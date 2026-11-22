@@ -556,6 +556,103 @@ void test_list_staging_order() {
   TEST_ASSERT_EQUAL_UINT32(4, s.end);
 }
 
+// How ListView::recountStaged() draws a recount whose place moves (7.2
+// item 4; S3b's rule): in place when it doesn't; one hardware-scroll move
+// of at most ListView::kMaxStep (84 lines, one bus hold), then the stale
+// items; further, the band in place at the new offset a row a pass (as a
+// scrub's jump), never the whole band in one pass, nor a slide there.
+void test_list_recount_way() {
+  using listlayout::Edge;
+  using listlayout::Way;
+  using listlayout::staging;
+  using listlayout::wayOf;
+  constexpr int32_t kMaxStep = 84;
+  ListLayout from, to;
+  // Most played's rows land (0 to 20) where the shelf was drawn: in place.
+  from.set(0, false, true);
+  to.set(20, true, true);
+  listlayout::Staging s = staging(from, Edge::None, to, Edge::Bar, 0, 0, 168, 0, false);
+  TEST_ASSERT_EQUAL_INT((int)Way::InPlace, (int)wayOf(s, 0, kMaxStep));
+  // Its ref kept a row or two down: one move first.
+  s = staging(from, Edge::None, to, Edge::Bar, 0, 42, 168, 0, false);
+  TEST_ASSERT_EQUAL_INT((int)Way::Move, (int)wayOf(s, 0, kMaxStep));
+  s = staging(from, Edge::None, to, Edge::Bar, 0, 84, 168, 0, false);
+  TEST_ASSERT_EQUAL_INT((int)Way::Move, (int)wayOf(s, 0, kMaxStep));
+  // A wake on a shelf scrolled to 420 (run 3b-3), or a line past two rows:
+  // the band, a row a pass, at the kept scroll.
+  s = staging(from, Edge::None, to, Edge::Bar, 0, 420, 168, 0, false);
+  TEST_ASSERT_EQUAL_INT((int)Way::Band, (int)wayOf(s, 0, kMaxStep));
+  s = staging(from, Edge::None, to, Edge::Bar, 0, 85, 168, 0, false);
+  TEST_ASSERT_EQUAL_INT((int)Way::Band, (int)wayOf(s, 0, kMaxStep));
+  // Up the list the same: a tray tap to 2 rows (4 items, 168 px: offset 0)
+  // from 60 is a move, from 300 the band.
+  from.set(20, true, true);
+  to.set(2, true, true);
+  s = staging(from, Edge::Bar, to, Edge::None, 60, 60, 168, 0, false);
+  TEST_ASSERT_TRUE(s.moves);
+  TEST_ASSERT_EQUAL_INT((int)Way::Move, (int)wayOf(s, 60, kMaxStep));
+  s = staging(from, Edge::Bar, to, Edge::None, 300, 300, 168, 0, false);
+  TEST_ASSERT_EQUAL_INT((int)Way::Band, (int)wayOf(s, 300, kMaxStep));
+  // A drawn offset below 0 reads as 0, as staging() reads it.
+  s = staging(from, Edge::Bar, to, Edge::None, -5, -5, 168, 0, false);
+  TEST_ASSERT_EQUAL_INT((int)Way::InPlace, (int)wayOf(s, -5, kMaxStep));
+}
+
+// What an empty list draws in its band (ListView::drawEmpty(), 7.2 item 5):
+// with no rows under lead items that are rows, the line alone below them,
+// at the lead count's 42 px each; with no items, the source's empty state.
+void test_list_empty_line_under_the_lead_items() {
+  using listlayout::Empty;
+  using listlayout::EmptyLine;
+  using listlayout::emptyLine;
+  ListLayout l;
+  // No items: the source's empty state, or its line in the strip from line
+  // 40, the text at 24 (screen y 112 and 136, as before).
+  l.set(0, false);
+  EmptyLine e = emptyLine(l, false);
+  TEST_ASSERT_EQUAL_INT((int)Empty::State, (int)e.kind);
+  TEST_ASSERT_EQUAL_INT32(40, e.top);
+  TEST_ASSERT_EQUAL_INT32(24, e.textY);
+  // A top bar of buttons over no rows: neither, the bar alone (as before;
+  // asked anyway, as ListView::redrawEmpty() can, the place is the same).
+  l.set(0, true);
+  e = emptyLine(l, false);
+  TEST_ASSERT_EQUAL_INT((int)Empty::None, (int)e.kind);
+  TEST_ASSERT_EQUAL_INT32(40, e.top);
+  TEST_ASSERT_EQUAL_INT32(24, e.textY);
+  // The top bar as a row (the Albums list's filters, nothing fits): the
+  // line under it, the strip from its foot (y 114), the text at y 150, as
+  // before.
+  e = emptyLine(l, true);
+  TEST_ASSERT_EQUAL_INT((int)Empty::Line, (int)e.kind);
+  TEST_ASSERT_EQUAL_INT32(42, e.top);
+  TEST_ASSERT_EQUAL_INT32(36, e.textY);
+  // The top row alone (Most played's tray, "Counting plays…" or "Nothing
+  // in this period." under it): the same place.
+  l.set(0, false, true);
+  e = emptyLine(l, false);
+  TEST_ASSERT_EQUAL_INT((int)Empty::Line, (int)e.kind);
+  TEST_ASSERT_EQUAL_INT32(42, e.top);
+  TEST_ASSERT_EQUAL_INT32(36, e.textY);
+  // Two lead items (the top row over a top bar, of buttons or a row): the
+  // line under both, from y 156.
+  l.set(0, true, true);
+  for (bool barIsRow : {false, true}) {
+    e = emptyLine(l, barIsRow);
+    TEST_ASSERT_EQUAL_INT((int)Empty::Line, (int)e.kind);
+    TEST_ASSERT_EQUAL_INT32(84, e.top);
+    TEST_ASSERT_EQUAL_INT32(36, e.textY);
+  }
+  // Rows: none of it, whatever leads them.
+  for (bool bar : {false, true}) {
+    for (bool row : {false, true}) {
+      l.set(3, bar, row);
+      TEST_ASSERT_EQUAL_INT((int)Empty::None, (int)emptyLine(l, false).kind);
+      TEST_ASSERT_EQUAL_INT((int)Empty::None, (int)emptyLine(l, true).kind);
+    }
+  }
+}
+
 void test_list_rail_geometry() {
   // Track 160 px, thumb 30: 130 px of travel over the whole list.
   TEST_ASSERT_EQUAL_INT(0, ListLayout::thumbTop(0, 4200, 160, 30));
@@ -1400,6 +1497,8 @@ int main(int, char**) {
   RUN_TEST(test_list_arrival_keeps_the_place);
   RUN_TEST(test_list_edge_of);
   RUN_TEST(test_list_staging_order);
+  RUN_TEST(test_list_recount_way);
+  RUN_TEST(test_list_empty_line_under_the_lead_items);
   RUN_TEST(test_list_rail_geometry);
   RUN_TEST(test_bitset_select_count_list);
   RUN_TEST(test_bitset_without_memory);
