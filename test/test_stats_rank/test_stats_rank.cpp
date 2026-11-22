@@ -1457,7 +1457,9 @@ void test_the_u40_set() {
   {
     const uint64_t a = 0x0123456789000001ull, b = 0x0123456789FFFFFFull, other = 0x0123456789800000ull;
     Bytes trkd;
-    for (const uint64_t h : {a, b, 0x7000000000000000ull}) {
+    // One type for the list: uint64_t is unsigned long on Linux's GCC, so a
+    // bare ull literal beside a and b leaves the list's type undeduced.
+    for (const uint64_t h : {a, b, uint64_t{0x7000000000000000ull}}) {
       sf::Track t;
       t.hash = h;
       t.plays = 1;
