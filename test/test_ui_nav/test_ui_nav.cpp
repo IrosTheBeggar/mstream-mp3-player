@@ -593,9 +593,19 @@ void test_list_recount_way() {
   TEST_ASSERT_EQUAL_INT((int)Way::Move, (int)wayOf(s, 60, kMaxStep));
   s = staging(from, Edge::Bar, to, Edge::None, 300, 300, 168, 0, false);
   TEST_ASSERT_EQUAL_INT((int)Way::Band, (int)wayOf(s, 300, kMaxStep));
-  // A drawn offset below 0 reads as 0, as staging() reads it.
+  // A drawn offset below 0 reads as 0, as staging() reads it: the place
+  // doesn't move (staging()'s own clamp).
   s = staging(from, Edge::Bar, to, Edge::None, -5, -5, 168, 0, false);
   TEST_ASSERT_EQUAL_INT((int)Way::InPlace, (int)wayOf(s, -5, kMaxStep));
+  // And wayOf()'s, with a place that moves: rows landing at 84 on a shelf
+  // whose drawn offset is given as -5 are one move of 84, where -5 taken as
+  // it is would be 89 lines, past kMaxStep: the band.
+  from.set(0, false, true);
+  to.set(20, true, true);
+  s = staging(from, Edge::None, to, Edge::Bar, -5, 84, 168, 0, false);
+  TEST_ASSERT_TRUE(s.moves);
+  TEST_ASSERT_EQUAL_INT(84, s.offset);
+  TEST_ASSERT_EQUAL_INT((int)Way::Move, (int)wayOf(s, -5, kMaxStep));
 }
 
 // What an empty list draws in its band (ListView::drawEmpty(), 7.2 item 5):

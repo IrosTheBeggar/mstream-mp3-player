@@ -1865,7 +1865,10 @@ void Ui::trackMotion(uint32_t nowMs) {
   // fling stopped by a finger on the rail that then opened the jump grid
   // logged 46 s of "rail scrub" on the device, the grid's whole stay.)
   const bool rail = list_.attached() && list_.railTouch();
-  const bool moving = page_ && !modalUp() && (page_->animating() || rail);
+  // (A recount's stale items pushed in place one a pass, the list still,
+  // aren't a motion, LISTENING-STATS.md 7.2: no "[ui] scroll" line reads
+  // as the list moving.)
+  const bool moving = page_ && !modalUp() && ((page_->animating() && !list_.stagingOnly()) || rail);
   if (moving && !motion_.on) {
     motion_ = Motion{};
     list_.takeScanStats();  // (counted from here)

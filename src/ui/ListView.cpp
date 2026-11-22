@@ -372,7 +372,9 @@ void ListView::recountStaged(int32_t target, int32_t expanded, uint32_t changedR
   if (!pressKept(downItem_)) downItem_ = -1;
   const int32_t want = ListLayout::clamp(target >= 0 ? target : offset(), layout_.maxOffset(height_));
   // Nothing on screen to keep (the first frame owed, the screen dark, a
-  // scrub's band half drawn): the next frame draws the band whole anyway.
+  // band half drawn: a scrub's, or a recount's own, Way::Band below): the
+  // next frame draws the band whole anyway. (Inside a recount's band that
+  // is one whole-band draw; no planned caller recounts there: ListView.h.)
   if (!slots_ || band_.active || !inPlace()) {
     if (!scroll_.moving()) {
       scroll_.jumpTo(static_cast<float>(want));
@@ -411,7 +413,15 @@ void ListView::recountStaged(int32_t target, int32_t expanded, uint32_t changedR
   };
   if (stageBand_) owe(onTop, onEnd);
   if (stageLeft_ > 0) owe(stageNext_, stageNext_ + stageLeft_);
-  const bool leadOwed = stageLead_ || s.lead;
+  bool leadOwed = stageLead_ || s.lead;
+  // No items now, and the source's empty state (or its body: drawEmpty())
+  // covers the band whole when it is drawn, last: the ground under it
+  // isn't filled a position a pass first, to be drawn over at once.
+  EmptyState es;
+  if (layout_.itemCount() == 0 && src_->emptyState(es)) {
+    first = end = 0;
+    leadOwed = false;
+  }
   dropStaging();
   stageLead_ = leadOwed;
   stageNext_ = first;
@@ -438,10 +448,19 @@ void ListView::recountStaged(int32_t target, int32_t expanded, uint32_t changedR
       break;
     case listlayout::Way::Band:
       // The band in place there a row a pass (bandInRows(), startBand()):
-      // every line on screen is drawn again, so nothing else is owed.
+      // every line on screen is drawn again, so nothing else is owed. The
+      // edge is drawn again at rest after it, for the new offset, whatever
+      // staging() said (the same content can stand elsewhere): the band
+      // pushes no thumb without a finger on the rail, and startBand()
+      // shows the rail only when it isn't up (a move's frame puts it back
+      // itself: prepareFixed(), pushFixed()).
       dropStaging();
       stageBand_ = true;
       jumped_ = true;
+      if (railUp_) {
+        railOffset_ = -1;
+        railY_ = -1;
+      }
       break;
   }
 }
@@ -635,7 +654,11 @@ int ListView::render(int32_t off, ListScroller::Gate* gate) {
   bodyUp_ = false;
   // The band drawn whole in place: nothing a recount left stale is.
   if (vs_->map().lastPlanFull()) dropStaging();
-  if (!body && (n == 0 || emptyUnderLead())) drawEmpty();
+  // A recount's empty line still owed is drawn after its stale items
+  // (stageStep()), not by a move's frame before them: their fills would cut
+  // it (a shrink to the tray alone, the line at y 114-169 and the fill of
+  // y 156-197) until it came again.
+  if (!body && !stageEmpty_ && (n == 0 || emptyUnderLead())) drawEmpty();
   return lines;
 }
 
@@ -894,6 +917,10 @@ bool ListView::animating() const {
   // (A recount's stale items owed too: the passes come at the frame
   // cadence until they are pushed, one a frame.)
   return src_ && (scroll_.moving() || force_ || band_.active || offset() != drawnOffset_ || staged());
+}
+
+bool ListView::stagingOnly() const {
+  return src_ && staged() && !(scroll_.moving() || force_ || band_.active || offset() != drawnOffset_);
 }
 
 // ---- a scrub's band, a row a pass ----
@@ -1234,10 +1261,18 @@ bool ListView::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   // A recount's stale items (recountStaged()): one a frame, at a still
   // pass (no finger on the list or the rail, the list not moving; no modal,
   // or this wouldn't run). 7.2 item 4: never the whole band in one pass.
+  // No bar is tested: one opened or folded meanwhile drew the band whole
+  // (setExpanded(): nothing is owed), and one up at the recount is its
+  // caller's (ListView.h, `expanded`): held here, the old pictures would
+  // stay over the new rows a tap acts on, and animating() true with them.
   if (!owed && frameDue && staged() && !scroll_.moving() && touchOn_ == TouchOn::None && stageStep()) return true;
   // The edge at rest, or drawn again for a recount once its items are
-  // (railOffset_ -1 with it up: 7.10, "the scrollbar at rest").
-  if (!owed && !staged() && railWanted_ && (!railUp_ || railOffset_ < 0)) showRail(drawnOffset_);
+  // (railOffset_ -1 with it up: 7.10, "the scrollbar at rest"). Under a
+  // finger resting on the A-Z rail it comes up at once, the thumb in the
+  // accent, whatever is owed (the items wait for the finger to go).
+  if (!owed && (touchOn_ == TouchOn::Rail || !staged()) && railWanted_ && (!railUp_ || railOffset_ < 0)) {
+    showRail(drawnOffset_);
+  }
   return false;
 }
 

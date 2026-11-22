@@ -325,7 +325,9 @@ public:
   // animating() until then, so the passes come at the frame cadence. A bar
   // opened or closed meanwhile, an overlay gone, a jump: the band is drawn
   // whole by them, and nothing is owed after. A recount before the last
-  // one's items are all pushed keeps them owed too.
+  // one's items are all pushed keeps them owed too. (7.2's "no bar or sheet
+  // open": a bar the listener opens or folds ends the staging, as above,
+  // and a bar up when the recount comes is the caller's: see `expanded`.)
   //   `target`: where the list stands after: arrival()'s offset at a
   //   landing, kShowPlaying resolved by the caller (playingRow()); below 0,
   //   where it stands now. Clamped to the new items, and ignored while the
@@ -333,15 +335,25 @@ public:
   //   is listlayout::wayOf()'s: in place, one move of up to kMaxStep, or
   //   further the band in place there a row a pass (as a scrub's jump).
   //   `expanded`: the row whose bar is open after (-1: none; arrival()
-  //   keeps it only within a visit).
+  //   keeps it only within a visit, where the landing found 0 rows drawn,
+  //   so no bar up: the one it puts back is staged with the rows). A
+  //   caller doesn't keep a bar that is up over rows it changes (a tray
+  //   tap: -1, the bar folds and its lines are staged with the rest), or
+  //   it recounts once the bar is closed: the pushes aren't held for a bar
+  //   (they would leave old pictures over the new rows a tap acts on, and
+  //   animating() true, so Ui::listMoving() would hold the card worker for
+  //   as long as the bar stays open).
   //   `changedRow`: the first row whose picture may differ (0: all, at an
   //   arrival or a tray tap; the old row count: only the new ones).
   //   `leadChanged`: item 0, a lead item, looks different (the tray's
   //   30-day cell reading "16 days" at a landing); else it stays as drawn.
   // A finger on an item that changed no longer presses it (its tap would
   // act on a row the listener didn't pick). With nothing on screen to keep
-  // (the first frame owed, the screen dark, a scrub's band under way) it is
-  // a reload(): the next frame draws the band whole anyway.
+  // (the first frame owed, the screen dark, a band under way: a scrub's, or
+  // a recount's own a row a pass) it is a reload(): the next frame draws
+  // the band whole anyway. So a second recount inside a recount's band
+  // (4-5 passes, the band at a kept scroll) costs one whole-band draw; no
+  // planned caller makes one (at a landing at 420 the tray is off screen).
   void recountStaged(int32_t target = -1, int32_t expanded = -1, uint32_t changedRow = 0, bool leadChanged = false);
   // Jumps (no animation).
   void scrollTo(int32_t offset);
@@ -408,6 +420,10 @@ public:
   // Moving, or owing a frame (or a recount's stale items: recountStaged()):
   // the UI keeps its frame cadence.
   bool animating() const;
+  // Animating for a recount's stale items alone, the list itself still: no
+  // motion of the list's (Ui::trackMotion() logs no "[ui] scroll" line for
+  // pushes in place).
+  bool stagingOnly() const;
   // A finger is on the A-Z rail: scrubbing, or resting on it to read the
   // letter (it still scrubs when it slides). The card worker is held
   // meanwhile, as for a moving list.
