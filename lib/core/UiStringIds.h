@@ -78,6 +78,8 @@ enum class S : uint16_t {
   toast_autodj_no_close,  // No close match: any track that fits
   toast_autodj_plays_once,  // Plays once, then the filters apply
   toast_autodj_no_mood,  // No mood data: sync this card from mStream
+  toast_stats_needs_dates,  // Needs dates: {0}
+  toast_stats_needs_month,  // Needs a month of plays: {0}
   hud_bluetooth,  // Bluetooth: {0}
   hud_bluetooth_connecting,  // Bluetooth: connecting...
   hud_speaker_paused,  // Speaker, paused: B plays
@@ -229,6 +231,57 @@ enum class S : uint16_t {
   mood_smart_filters,  // Smart filters
   mood_any,  // Any
   mood_no_data,  // No mood data
+  stats_title,  // Listening stats
+  stats_entry_empty,  // Plays show up as you listen
+  stats_counting,  // Counting plays…
+  stats_waiting,  // Waiting for the card…
+  stats_no_room,  // Not enough memory right now
+  stats_unread,  // Couldn't read the stats
+  stats_card_back,  // The card is back
+  stats_no_card,  // No card: plays can't be counted
+  stats_since,  // {0} since {1}
+  stats_since_only,  // since {0}
+  stats_last7,  // Last 7 days
+  stats_time_plays,  // {0} · {1}
+  stats_plays_n,  // {0} plays
+  stats_most_played,  // Most played
+  stats_new_finds,  // New finds
+  stats_new_finds_sub,  // {0} tracks first heard in 30 days
+  stats_new_finds_sub_short,  // {0} new in 30 days
+  stats_old_favourites,  // Old favourites
+  stats_old_favourites_sub,  // {0} tracks, played often, not lately
+  stats_not_played,  // Not played yet
+  stats_recent,  // Recently played
+  stats_no_dates,  // No dates yet: the clock isn't set
+  stats_clock_fix,  // Plug in to the MP3 Player tab
+  stats_needs_dates,  // Needs dates
+  stats_warming,  // Opens {0}, after a month of plays
+  stats_warming_short,  // Opens on {0}
+  stats_window_all,  // All time
+  stats_days_n,  // {0} days
+  stats_sub_last7,  // last 7 days
+  stats_sub_last30,  // last 30 days
+  stats_first_heard,  // first heard in 30 days
+  stats_not_in_30,  // not in 30 days
+  stats_found_autodj,  // found by Auto DJ
+  stats_found_shuffle,  // found by shuffle
+  stats_last_on,  // last {0}
+  stats_ago_min,  // {0} min ago
+  stats_ago_h,  // {0} h ago
+  stats_today,  // Today
+  stats_yesterday,  // Yesterday
+  stats_this_session,  // This session
+  stats_earlier,  // Earlier
+  stats_shelf_empty,  // Nothing in this period.
+  stats_utc,  // {0} (UTC)
+  stats_listened,  // Listening time
+  stats_plays_label,  // Plays
+  stats_big_day,  // {0} was your big day: {1}
+  stats_autodj_right,  // Auto DJ got it right {0} of the time
+  stats_empty_title,  // No plays yet
+  stats_empty_rule,  // Plays count from 30 s or half a track
+  stats_empty_rule_short,  // Plays count from 30 s
+  stats_empty_card,  // Your stats stay on this card
   card_another,  // Another card: restarting
   card_back,  // Card back: restarting
   queue_cap_full,  // No played track can make way: the queue holds {0} tracks
@@ -671,8 +724,37 @@ enum class S : uint16_t {
   format_khz,  // {0} kHz
   format_hz,  // {0} Hz
   format_list_sep,  // , 
+  format_day_month,  // {0} {1}
+  format_weekday_date,  // {0} {1}
+  format_day_range,  // {0}–{1}
+  day_mon,  // Mon
+  day_tue,  // Tue
+  day_wed,  // Wed
+  day_thu,  // Thu
+  day_fri,  // Fri
+  day_sat,  // Sat
+  day_sun,  // Sun
+  day_monday,  // Monday
+  day_tuesday,  // Tuesday
+  day_wednesday,  // Wednesday
+  day_thursday,  // Thursday
+  day_friday,  // Friday
+  day_saturday,  // Saturday
+  day_sunday,  // Sunday
+  month_jan,  // Jan
+  month_feb,  // Feb
+  month_mar,  // Mar
+  month_apr,  // Apr
+  month_may,  // May
+  month_jun,  // Jun
+  month_jul,  // Jul
+  month_aug,  // Aug
+  month_sep,  // Sep
+  month_oct,  // Oct
+  month_nov,  // Nov
+  month_dec,  // Dec
 };
-inline constexpr unsigned kStrings = 663;
+inline constexpr unsigned kStrings = 745;
 
 // The languages, English first: the mobile app's ten (one without a
 // catalogue yet draws English), and the pseudo-locale where UISTR_PSEUDO
