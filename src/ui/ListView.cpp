@@ -202,14 +202,9 @@ void ListView::dropSlots() {
 // ---- attaching, data changes ----
 
 void ListView::setEdge() {
-  const bool long_ = layout_.contentPx() > height_;
-  if (src_ && src_->alphabetical() && src_->railRows() > kRailMinRows && long_) {
-    edge_ = Edge::Rail;
-  } else if (long_) {
-    edge_ = Edge::Bar;
-  } else {
-    edge_ = Edge::None;
-  }
+  // (railRows() asked only of an A-Z source, as before the rule moved.)
+  const bool az = src_ && src_->alphabetical();
+  edge_ = listlayout::edgeOf(layout_.contentPx(), height_, az, az ? src_->railRows() : 0);
 }
 
 void ListView::attach(Source* src, NavModel::PageRef* ref, int32_t defaultOffset) {

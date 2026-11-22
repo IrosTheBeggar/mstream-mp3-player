@@ -102,8 +102,8 @@ public:
   // the scroll lab's setting); more is a full redraw in place.
   static constexpr int kMaxStep = 2 * 42;
   // A long alphabetical list gets the A-Z rail (the review: only above
-  // about 30 entries).
-  static constexpr uint32_t kRailMinRows = 30;
+  // about 30 entries; the rule is listlayout::edgeOf()).
+  static constexpr uint32_t kRailMinRows = listlayout::kRailMinRows;
 
   // What a row renderer gets: the sprite (cleared to `bg`), and the
   // columns: content from x to right (a checkbox before x in selection
@@ -408,7 +408,7 @@ public:
                     uint16_t titleColour, Font titleFont = Font::Body);
 
 private:
-  enum class Edge : uint8_t { None, Rail, Bar };
+  using Edge = listlayout::Edge;  // (lib/core: its rule host-tested, LISTENING-STATS.md 7.2)
   enum class TouchOn : uint8_t { None, List, Rail };
   struct Slot {
     M5Canvas sprite;
@@ -418,7 +418,7 @@ private:
   // The list moves on screen: flinging, snapping, or a finger dragging it
   // (a finger that is only down, for a tap, doesn't hide the rail).
   bool moving() const;
-  int layoutWidth() const { return edge_ == Edge::Rail ? 284 : edge_ == Edge::Bar ? 312 : 320; }
+  int layoutWidth() const { return listlayout::widthOf(edge_); }
   int pushWidth() const { return railUp_ || railWanted_ ? layoutWidth() : 320; }
   int railX() const { return layoutWidth(); }
   // `it` is the source's top row (topBarIsRow()), not a bar of buttons.
