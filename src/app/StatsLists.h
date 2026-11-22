@@ -176,7 +176,8 @@ public:
   void command(const char* arg);
 
   // ---- S3a: the stats pages' asks (docs/LISTENING-STATS.md 9.7's API) ----
-  enum class UiAsk : uint8_t { Visit, NotPlayed };
+  // (lib/core's since S3b, so ui/UiHost.h can name it.)
+  using UiAsk = statsvisit::UiAsk;
   using Phase = statsvisit::Phase;
   using Outcome = statsvisit::Outcome;
   // Queued (Asked): true. Behind a console ask under way, it waits for it;

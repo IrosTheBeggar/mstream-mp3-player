@@ -55,8 +55,6 @@ constexpr uint32_t kDarkSlice = 250;
 // A visit's walk that skips passes this long gives its block back (a lit
 // list moving, the card held: 9.7's hold bounds).
 constexpr uint32_t kWalkSkipMs = 1000;
-// Not played yet opens after this many counting days (call 4, O5).
-constexpr long kNotPlayedDays = 30;
 
 size_t up(size_t n) { return (n + kAlign - 1) & ~(kAlign - 1); }
 float msSince(int64_t t0) { return static_cast<float>(esp_timer_get_time() - t0) / 1000.0f; }
@@ -214,17 +212,17 @@ void listenedText(uint32_t ms, char* out, size_t cap) {
 
 const char* srcName(uint8_t s) { return s == sf::kAutoDj ? "Auto DJ" : s == sf::kShuffle ? "shuffle" : "you"; }
 
-// Whether Not played yet may open (call 4, O5: S3b's statsview::
-// notPlayedOpen() decides the shelf; this is the visit's grade): dated, 30
-// counting days or more; with no clock, perhaps (DAYS' span, the ask's
-// report, decides it), so the visit asks for its played set too.
+// Whether Not played yet may open (call 4, O5: statsview::notPlayedOpen()
+// decides the shelf; this is the visit's grade): dated, 30 counting days or
+// more; with no clock, perhaps (DAYS' span, the ask's report, decides it),
+// so the visit asks for its played set too. The rule is lib/core's
+// (statsvisit::notPlayedMayOpen(), host-tested), the shelf's too, so the
+// two can't disagree.
 bool notPlayedMayOpen(const sf::Fold& fold) {
   const uint64_t now = boardclock::now();
   uint16_t today = 0;
-  if (!sf::todayOf(now, &today)) return true;
-  const uint16_t since = fold.sinceDayNow(now);
-  if (since == sf::kUnsetDay) return false;
-  return static_cast<long>(today) - static_cast<long>(since) + 1 >= kNotPlayedDays;
+  if (!sf::todayOf(now, &today)) return sv::notPlayedMayOpen(false, 0, sf::kUnsetDay);
+  return sv::notPlayedMayOpen(true, today, fold.sinceDayNow(now));
 }
 
 }  // namespace

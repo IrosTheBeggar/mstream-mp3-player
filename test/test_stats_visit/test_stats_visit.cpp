@@ -1546,6 +1546,244 @@ void test_the_rest_gate_s_word() {
   TEST_ASSERT_TRUE(word(-1, true));
 }
 
+// ---------------------------------------------------------------------------
+// Not played yet's 30 days (call 4, O5): one rule in lib/core for the
+// visit's grade (StatsLists' notPlayedMayOpen(), which the native env
+// doesn't build) and the shelf (statsview::notPlayedOpen(): test_ui_stats).
+// The cases are S3a's code's rule: undated, perhaps (true: DAYS' span
+// decides the shelf); dated with no first day, never; dated, today - since
+// + 1 >= 30.
+// ---------------------------------------------------------------------------
+void test_the_shared_not_played_rule() {
+  // S3a's rule, as StatsLists.cpp had it before the move.
+  auto s3a = [](bool isDated, uint16_t today, uint16_t since) {
+    if (!isDated) return true;
+    if (since == sf::kUnsetDay) return false;
+    return static_cast<long>(today) - static_cast<long>(since) + 1 >= 30;
+  };
+  const uint16_t today = 313;
+  TEST_ASSERT_TRUE(sv::notPlayedMayOpen(false, 0, sf::kUnsetDay));
+  TEST_ASSERT_TRUE(sv::notPlayedMayOpen(false, today, 243));
+  TEST_ASSERT_FALSE(sv::notPlayedMayOpen(true, today, sf::kUnsetDay));
+  TEST_ASSERT_FALSE(sv::notPlayedMayOpen(true, today, today - 28));  // 29 days
+  TEST_ASSERT_TRUE(sv::notPlayedMayOpen(true, today, today - 29));   // 30
+  TEST_ASSERT_TRUE(sv::notPlayedMayOpen(true, today, today - 30));   // 31
+  TEST_ASSERT_FALSE(sv::notPlayedMayOpen(true, today, today));       // day 1
+  TEST_ASSERT_FALSE(sv::notPlayedMayOpen(true, today, today + 5));   // a first day after today
+  // Every first day around the month, and at the days' ends, as S3a's.
+  for (int t : {0, 29, 30, 313, 65534})
+    for (int d = -40; d <= 40; ++d) {
+      const int since = t + d;
+      if (since < 0 || since > 0xFFFF) continue;
+      const uint16_t day = static_cast<uint16_t>(t), s = static_cast<uint16_t>(since);
+      TEST_ASSERT_EQUAL(s3a(true, day, s), sv::notPlayedMayOpen(true, day, s));
+      TEST_ASSERT_EQUAL(s3a(false, day, s), sv::notPlayedMayOpen(false, day, s));
+    }
+  // The counting days (4.1): at least 1; 0 not known.
+  TEST_ASSERT_EQUAL_UINT32(71, sv::countingDaysOf(true, today, 243));
+  TEST_ASSERT_EQUAL_UINT32(1, sv::countingDaysOf(true, today, today));
+  TEST_ASSERT_EQUAL_UINT32(1, sv::countingDaysOf(true, today, today + 3));
+  TEST_ASSERT_EQUAL_UINT32(0, sv::countingDaysOf(true, today, sf::kUnsetDay));
+  TEST_ASSERT_EQUAL_UINT32(0, sv::countingDaysOf(false, today, 243));
+  TEST_ASSERT_EQUAL_UINT32(30, sv::kNotPlayedDays);
+  TEST_ASSERT_FALSE(sv::notPlayedDays(29));
+  TEST_ASSERT_TRUE(sv::notPlayedDays(30));
+  static_assert(sv::notPlayedMayOpen(true, 313, 284) && !sv::notPlayedMayOpen(true, 313, 285),
+                "notPlayedMayOpen() at compile time");
+  // UiAsk's values (StatsLists keeps its name: `using UiAsk`).
+  TEST_ASSERT_EQUAL_UINT8(0, static_cast<uint8_t>(sv::UiAsk::Visit));
+  TEST_ASSERT_EQUAL_UINT8(1, static_cast<uint8_t>(sv::UiAsk::NotPlayed));
+}
+
+// ---------------------------------------------------------------------------
+// The made-up snapshot (9.3's uiSx<n>: writeMadeUp()), read back through
+// every accessor; its mark (kFlagMadeUp, the flags' 16: 1, 2, 4 and 8 are
+// the rank's) cleared by a real ask's write().
+// ---------------------------------------------------------------------------
+void test_the_made_up_writer_reads_back() {
+  const uint32_t albums = 1706, tracks = 19417;
+  sv::MadeUp m;
+  m.buildStamp = 0x0123456789abcdefull;
+  m.trackCount = tracks;
+  m.albums = albums;
+  m.grade = sv::Grade::Full;
+  m.dated = true;
+  m.today = 313;
+  m.time = (313u * 1440 + 1300) * 60 + 1;  // 21:40 on day 313
+  m.liveRound = 9;
+  m.sinceDay = 243;
+  m.firstDay = 243;
+  m.newestDay = 313;
+  m.rcntFirstDay = 282;
+  m.window = sv::k30Days;
+  m.version = 42;
+  for (uint32_t i = 0; i < sr::kWeekDays; ++i) {
+    m.days[i].listenedMs = 60000u * (10 + i);
+    m.days[i].plays = static_cast<uint16_t>(i + 1);
+    m.days[i].autoDjPlays = static_cast<uint16_t>(i);
+    m.days[i].autoDjSkips = static_cast<uint16_t>(i / 2);
+  }
+  const uint32_t rows[sr::kLists] = {18, 50, 300, 23, 41, 60};  // All time past its cap and room: 50
+  const uint32_t totals[sr::kLists] = {18, 64, 212, 5, 41, 0};  // New finds' less than its rows: the rows
+  const uint32_t tops[sr::kLists] = {12, 23, 41, 20000, 70000, 0};
+  for (int l = 0; l < sr::kLists; ++l) {
+    m.rows[l] = rows[l];
+    m.totals[l] = totals[l];
+    m.topCount[l] = tops[l];
+  }
+  m.recentFirstAgoMin = 25;
+  m.recentStepMin = 97;
+  m.sessionRows = 3;
+  m.earlierRows = 2;
+  m.notPlayedEvery = 3;
+  Block b(sv::bytesFor(albums));
+  b.fill(0xA5);
+  sv::Snapshot* s = snapOf(b);
+  TEST_ASSERT_TRUE(sv::writeMadeUp(m, s, b.bytes));
+  TEST_ASSERT_TRUE(b.guarded());
+  // The header.
+  TEST_ASSERT_TRUE(s->valid());
+  TEST_ASSERT_TRUE(s->written());
+  TEST_ASSERT_TRUE(s->resolved());
+  TEST_ASSERT_TRUE(s->dated());
+  TEST_ASSERT_TRUE(s->hasNotPlayed());
+  TEST_ASSERT_TRUE(s->madeUp());
+  TEST_ASSERT_EQUAL_UINT8(16, sv::kFlagMadeUp);
+  TEST_ASSERT_EQUAL(sv::Grade::Full, s->grade());
+  TEST_ASSERT_EQUAL_UINT64(m.buildStamp, s->buildStamp());
+  TEST_ASSERT_EQUAL_UINT32(tracks, s->trackCount());
+  TEST_ASSERT_TRUE(s->matches(m.buildStamp, tracks));  // StatsLists::loop()'s key check keeps it
+  TEST_ASSERT_FALSE(s->matches(m.buildStamp, tracks + 1));
+  TEST_ASSERT_EQUAL_UINT32(m.time, s->time());
+  TEST_ASSERT_EQUAL_UINT16(313, s->today());
+  TEST_ASSERT_EQUAL_UINT32(9, s->liveRound());
+  TEST_ASSERT_EQUAL_UINT16(243, s->firstDay());
+  TEST_ASSERT_EQUAL_UINT16(313, s->newestDay());
+  TEST_ASSERT_EQUAL_UINT16(282, s->rcntFirstDay());
+  TEST_ASSERT_EQUAL_UINT16(243, s->sinceDay());
+  TEST_ASSERT_EQUAL_UINT32(71, s->spanDays());
+  TEST_ASSERT_EQUAL_UINT8(sv::k30Days, s->window());
+  TEST_ASSERT_EQUAL_UINT32(42, s->version());
+  TEST_ASSERT_EQUAL_UINT32(albums, s->albums());
+  TEST_ASSERT_EQUAL_UINT32(sv::bytesFor(albums), s->bytes());
+  for (uint32_t i = 0; i < sr::kWeekDays; ++i) {
+    const sr::Day d = s->day(i);
+    TEST_ASSERT_EQUAL_UINT32(m.days[i].listenedMs, d.listenedMs);
+    TEST_ASSERT_EQUAL_UINT16(m.days[i].plays, d.plays);
+    TEST_ASSERT_EQUAL_UINT16(m.days[i].autoDjPlays, d.autoDjPlays);
+    TEST_ASSERT_EQUAL_UINT16(m.days[i].autoDjSkips, d.autoDjSkips);
+  }
+  // Each list: its rows cut to its cap (All time's 300 to 50), its total
+  // at least its rows, ids inside the library spread over it, the counts
+  // falling from the first row's (saturating), the facts by list.
+  const uint32_t nowMin = 313u * 1440 + 1300;
+  for (sr::List l : kAll) {
+    const uint32_t want = l == sr::kRecent ? 60 + 3 + 2 : std::min(rows[l], sr::kCaps[l]);
+    TEST_ASSERT_EQUAL_UINT32(want, s->rows(l));
+    TEST_ASSERT_EQUAL_UINT32(std::max(totals[l], want), s->total(l));
+    TEST_ASSERT_EQUAL_PTR(b.p() + sv::offsetOf(l, albums), s->ids(l));
+    std::map<uint32_t, int> seen;
+    for (uint32_t i = 0; i < want; ++i) {
+      const sv::Row r = s->rowAt(l, i);
+      TEST_ASSERT_TRUE(r.id < tracks);
+      TEST_ASSERT_EQUAL_UINT32(r.id, cc::get16(s->ids(l) + i * sv::kStrides[l]));  // the queue's id view
+      ++seen[r.id];
+      const uint32_t count = tops[l] > i + 1 ? tops[l] - i : 1;
+      switch (l) {
+        case sr::kNewFinds:
+          TEST_ASSERT_EQUAL_UINT32(std::min<uint32_t>(count, sv::kNewFindsCountMax), r.count);
+          TEST_ASSERT_EQUAL_UINT8(i % 3, r.src);
+          break;
+        case sr::kOldFavourites:
+          TEST_ASSERT_EQUAL_UINT32(std::min<uint32_t>(count, sv::kCountMax), r.count);
+          TEST_ASSERT_EQUAL_UINT16(313 - 31 - 3 * i, r.lastDay);
+          break;
+        case sr::kRecent:
+          TEST_ASSERT_EQUAL_UINT32(0, r.count);
+          if (i < 60) {
+            TEST_ASSERT_EQUAL_UINT32(nowMin - 25 - 97 * i, r.when);
+          } else {
+            TEST_ASSERT_EQUAL_UINT32(i < 63 ? sv::kWhenSession : sv::kWhenEarlier, r.when);
+          }
+          break;
+        default:
+          TEST_ASSERT_EQUAL_UINT32(count, r.count);
+          break;
+      }
+    }
+    TEST_ASSERT_EQUAL_UINT32(want, seen.size());  // no id twice in a list
+    // The rows past it zero, as resolve() leaves them.
+    if (want < sv::roomOf(l, albums)) TEST_ASSERT_EQUAL_UINT16(0, s->rowAt(l, want).id);
+  }
+  // Not played yet: every third album in A-Z order, through the directory.
+  TEST_ASSERT_EQUAL_UINT32((albums + 2) / 3, s->notPlayedCount());
+  for (uint32_t k = 0; k < s->notPlayedCount(); ++k) TEST_ASSERT_EQUAL_UINT32(3 * k, s->albumAt(k));
+  TEST_ASSERT_EQUAL_UINT32(sv::kNoAlbum, s->albumAt(s->notPlayedCount()));
+  TEST_ASSERT_EQUAL_UINT32(sv::offsetOf(sr::kRecent, albums) + sv::roomOf(sr::kRecent, albums) * 5,
+                           s->bitsOffset());
+  TEST_ASSERT_EQUAL_UINT32(s->bitsOffset() + (albums + 7) / 8, s->directoryOffset());
+  // The UI's one write.
+  s->setWindow(sv::kAllTime);
+  TEST_ASSERT_EQUAL_UINT8(sv::kAllTime, s->window());
+
+  // No clock: the lists that need it have none, Recently played this
+  // session's then earlier rows, the 7 days zero; a Lists grade, no bits.
+  sv::MadeUp u = m;
+  u.dated = false;
+  u.grade = sv::Grade::Lists;
+  u.notPlayedEvery = 0;
+  Block c(sv::bytesFor(albums));
+  sv::Snapshot* t = snapOf(c);
+  TEST_ASSERT_TRUE(sv::writeMadeUp(u, t, c.bytes));
+  TEST_ASSERT_FALSE(t->dated());
+  TEST_ASSERT_TRUE(t->resolved() && t->madeUp());
+  TEST_ASSERT_FALSE(t->hasNotPlayed());
+  TEST_ASSERT_EQUAL_UINT32(0, t->notPlayedCount());
+  TEST_ASSERT_EQUAL_UINT32(0, t->time());
+  TEST_ASSERT_EQUAL_UINT16(sf::kUnsetDay, t->today());
+  for (sr::List l : {sr::kMost7, sr::kMost30, sr::kNewFinds, sr::kOldFavourites}) {
+    TEST_ASSERT_EQUAL_UINT32(0, t->rows(l));
+    TEST_ASSERT_EQUAL_UINT32(0, t->total(l));
+  }
+  TEST_ASSERT_EQUAL_UINT32(50, t->rows(sr::kMostAll));
+  TEST_ASSERT_EQUAL_UINT32(5, t->rows(sr::kRecent));
+  for (uint32_t i = 0; i < 5; ++i)
+    TEST_ASSERT_EQUAL_UINT32(i < 3 ? sv::kWhenSession : sv::kWhenEarlier, t->rowAt(sr::kRecent, i).when);
+  for (uint32_t i = 0; i < sr::kWeekDays; ++i) TEST_ASSERT_EQUAL_UINT32(0, t->day(i).listenedMs);
+  TEST_ASSERT_EQUAL_UINT32(71, t->spanDays());  // DAYS' span, clock or not (O5)
+
+  // A small library: the rows cut to its tracks.
+  sv::MadeUp small = m;
+  small.trackCount = 7;
+  small.albums = 2;
+  Block d(sv::bytesFor(2));
+  TEST_ASSERT_TRUE(sv::writeMadeUp(small, snapOf(d), d.bytes));
+  TEST_ASSERT_EQUAL_UINT32(7, snapOf(d)->rows(sr::kMostAll));
+  TEST_ASSERT_EQUAL_UINT32(1, snapOf(d)->notPlayedCount());  // album 0 of 2
+  // Refused, nothing written: no block, a block short, past the ids.
+  TEST_ASSERT_FALSE(sv::writeMadeUp(m, nullptr, b.bytes));
+  Block e(sv::bytesFor(albums) - 1);
+  e.fill(0x5A);
+  TEST_ASSERT_FALSE(sv::writeMadeUp(m, snapOf(e), e.bytes));
+  TEST_ASSERT_EQUAL_UINT8(0x5A, e.p()[0]);
+  sv::MadeUp big = m;
+  big.trackCount = sv::kMaxTracks + 1;
+  TEST_ASSERT_FALSE(sv::writeMadeUp(big, s, b.bytes));
+  TEST_ASSERT_TRUE(s->madeUp());  // untouched
+
+  // A real ask's write() over it: the mark goes with the rest of the flags.
+  Block mem(sr::Ranker::kBytes);
+  sr::Ranker k;
+  k.begin(mem.p(), true, 313);
+  k.finish();
+  WantedRegion w(k);
+  sr::Report rep;
+  TEST_ASSERT_TRUE(sv::write(k, w.w, rep, contextOf(albums, 9, 43), s, b.bytes));
+  TEST_ASSERT_TRUE(s->written());
+  TEST_ASSERT_FALSE(s->madeUp());
+  TEST_ASSERT_FALSE(s->resolved());
+}
+
 int main(int, char**) {
   if (!cardfixtures::json("stats/index.json", &gIndex) || gIndex.size() == 0 ||
       !cardfixtures::json("stats/rank.json", &gRank) || gRank.size() == 0) {
@@ -1564,5 +1802,7 @@ int main(int, char**) {
   RUN_TEST(test_elapsed_ms_with_a_start_ahead_of_now);
   RUN_TEST(test_the_dance_tab_s_block_lent);
   RUN_TEST(test_the_rest_gate_s_word);
+  RUN_TEST(test_the_shared_not_played_rule);
+  RUN_TEST(test_the_made_up_writer_reads_back);
   return UNITY_END();
 }

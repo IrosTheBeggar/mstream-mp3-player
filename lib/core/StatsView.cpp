@@ -1,0 +1,771 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
+#include "StatsView.h"
+
+#include "FilterGrid.h"
+#include "WallClock.h"
+
+namespace statsview {
+
+namespace sf = statsfold;
+namespace sr = statsrank;
+namespace sv = statsvisit;
+
+namespace {
+
+constexpr uint32_t kDayMin = 1440;  // a `when`'s minutes a UTC day
+constexpr uint32_t kTrayDays = 7;   // the tray from a week of counting (7.6)
+
+bool isCode(uint32_t when) { return when == sv::kWhenSession || when == sv::kWhenEarlier; }
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// The states
+// ---------------------------------------------------------------------------
+State stateOf(const Lifetime& l) {
+  if (!l.on) return State::Off;
+  if (!l.cardIn) return State::NoCard;
+  if (l.folding) return State::Folding;
+  if (l.plays == 0) return State::Empty;
+  if (!l.dated) return State::NoDates;
+  if (l.countingDays < sv::kNotPlayedDays) return State::FirstMonth;
+  return State::Ready;
+}
+
+const char* stateName(State s) {
+  switch (s) {
+    case State::Off: return "off";
+    case State::NoCard: return "no card";
+    case State::Folding: return "folding";
+    case State::Empty: return "empty";
+    case State::NoDates: return "no dates";
+    case State::FirstMonth: return "first month";
+    case State::Ready: return "ready";
+  }
+  return "?";
+}
+
+uint16_t opensDay(const Lifetime& l) {
+  const uint16_t from = l.sinceDay != sf::kUnsetDay ? l.sinceDay : l.dated ? l.today : sf::kUnsetDay;
+  const uint32_t day = static_cast<uint32_t>(from) + sv::kNotPlayedDays - 1;
+  return from == sf::kUnsetDay || day >= sf::kUnsetDay ? sf::kUnsetDay : static_cast<uint16_t>(day);
+}
+
+// ---------------------------------------------------------------------------
+// The look
+// ---------------------------------------------------------------------------
+const char* lookName(Look k) {
+  switch (k) {
+    case Look::Served: return "served";
+    case Look::Pending: return "pending";
+    case Look::Retry: return "retry";
+    case Look::NoCard: return "no card";
+    case Look::Off: return "off";
+    case Look::NoPlays: return "no plays";
+    case Look::Closed: return "closed";
+  }
+  return "?";
+}
+
+S phaseLine(Phase p) {
+  switch (p) {
+    case Phase::Waiting:
+    case Phase::Capped: return S::stats_waiting;
+    case Phase::NoRoom: return S::stats_no_room;
+    case Phase::Unread: return S::stats_unread;
+    case Phase::NoCard: return S::stats_no_card;
+    default: return S::stats_counting;
+  }
+}
+
+PageLook pageLook(const Lifetime& l, const PhaseInfo& p, bool served) {
+  PageLook k;
+  const State st = stateOf(l);
+  if (st == State::Off) {
+    k.look = Look::Off;
+    return k;
+  }
+  if (st == State::NoCard) {
+    k.look = Look::NoCard;
+    k.line = S::stats_no_card;
+    return k;
+  }
+  if (st == State::Empty) {
+    k.look = Look::NoPlays;
+    return k;
+  }
+  if (served) {
+    k.look = Look::Served;
+    return k;
+  }
+  switch (p.phase) {
+    case Phase::Working:
+    case Phase::Waiting:
+      k.look = Look::Pending;
+      k.line = phaseLine(p.phase);
+      break;
+    case Phase::NoRoom:
+    case Phase::Unread:
+    case Phase::Capped:
+      k.look = Look::Retry;
+      k.line = phaseLine(p.phase);
+      break;
+    case Phase::NoCard:
+      // The card in again (stateOf() read it in), the phase No card until
+      // the next ask: Try again, "The card is back" (the owner's call 3).
+      k.look = Look::Retry;
+      k.line = S::stats_card_back;
+      break;
+    default:
+      // Idle (a Cancelled ask, a landing released since; the stats off is
+      // Off above) and Ready over nothing served: the Working line and one
+      // ask (D9 as replaced: never "Couldn't read the stats", a read
+      // fault's alone).
+      k.look = Look::Pending;
+      k.line = S::stats_counting;
+      k.askDue = true;
+      break;
+  }
+  return k;
+}
+
+bool asksOnEdge(const Lifetime& l, bool madeUp) {
+  if (madeUp) return false;
+  const State st = stateOf(l);
+  return st != State::Off && st != State::NoCard && st != State::Empty;
+}
+
+// ---------------------------------------------------------------------------
+// The held condition
+// ---------------------------------------------------------------------------
+bool onStatsPages(const NavModel& nav, bool dark, bool suspended, bool synthetic) {
+  if (dark || suspended || synthetic || nav.tab() != NavModel::Tab::Library) return false;
+  const int depth = nav.depth(NavModel::Tab::Library);
+  for (int level = 0; level < depth; ++level)
+    if (statsKind(nav.at(NavModel::Tab::Library, level).kind)) return true;
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// The entry row
+// ---------------------------------------------------------------------------
+bool entryDue(const Lifetime& l, bool indexReady, bool synthetic, uint32_t artists) {
+  const State st = stateOf(l);
+  return st != State::Off && st != State::NoCard && indexReady && !synthetic && artists > 0;
+}
+
+size_t timeText(uint64_t ms, char* out, size_t size) {
+  const uint64_t min = ms / 60000;
+  if (min < 60) return uistr::trf(out, size, S::format_minutes, uistr::Arg(static_cast<unsigned long long>(min)));
+  return uistr::trf(out, size, S::format_hours_minutes, uistr::grouped(min / 60),
+                    uistr::Arg(static_cast<unsigned>(min % 60)));
+}
+
+size_t dayMonthText(uint16_t day, char* out, size_t size) {
+  const wallclock::Civil c = wallclock::toCivil(sf::kMinMs + static_cast<uint64_t>(day) * sf::kDayMs);
+  const int month = c.month >= 1 && c.month <= 12 ? c.month : 1;
+  const S m = static_cast<S>(static_cast<int>(S::month_jan) + month - 1);
+  return uistr::trf(out, size, S::format_day_month, uistr::Arg(c.day), uistr::tr(m));
+}
+
+EntryLine entryLine(const Lifetime& l, WidthFn width, void* ctx, char* out, size_t size) {
+  const State st = stateOf(l);
+  if (st == State::Folding) {
+    uistr::copy(out, size, uistr::tr(S::stats_counting));
+    return EntryLine::Counting;
+  }
+  if (st == State::Empty) {
+    uistr::copy(out, size, uistr::tr(S::stats_entry_empty));
+    return EntryLine::Empty;
+  }
+  char time[48];
+  timeText(l.listenedMs, time, sizeof(time));
+  if (l.sinceDay != sf::kUnsetDay) {
+    char day[32];
+    dayMonthText(l.sinceDay, day, sizeof(day));
+    uistr::trf(out, size, S::stats_since, time, day);
+    if (!width || width(out, ctx) <= kEntryRoom) return EntryLine::Since;
+  }
+  uistr::copy(out, size, time);
+  return EntryLine::Time;
+}
+
+// ---------------------------------------------------------------------------
+// The hub
+// ---------------------------------------------------------------------------
+namespace {
+
+// An open row's line by the look: the snapshot's, the phase's, else none.
+void openLine(const PageLook& k, HubItem* it) {
+  it->kind = RowKind::Open;
+  if (k.look == Look::Served) {
+    it->line = Line::Data;
+  } else if (k.look == Look::Pending) {
+    it->line = Line::Text;
+    it->text = k.line;
+  } else {
+    it->line = Line::None;
+  }
+}
+void disabled(Line line, S text, S toast, HubItem* it) {
+  it->kind = RowKind::Disabled;
+  it->line = line;
+  it->text = text;
+  it->toast = toast;
+}
+// A disabled row's reason (no clock: Needs dates; the first month: Opens 6
+// Dec), and its toast.
+void closedRow(const Lifetime& l, HubItem* it) {
+  if (!l.dated) {
+    disabled(Line::Text, S::stats_needs_dates, S::toast_stats_needs_dates, it);
+  } else {
+    disabled(Line::Warming, S::stats_warming, S::toast_stats_needs_month, it);
+  }
+}
+
+}  // namespace
+
+HubLook hubLook(const Lifetime& l, const PhaseInfo& p, const Snapshot* snap) {
+  HubLook h;
+  h.page = pageLook(l, p, snap != nullptr);
+  if (h.page.look == Look::NoCard || h.page.look == Look::NoPlays) return h;
+  const bool served = h.page.look == Look::Served;
+  for (uint32_t i = 0; i < kHubRows; ++i) {
+    HubItem& it = h.item[i];
+    it.row = static_cast<HubRow>(i);
+    openLine(h.page, &it);
+  }
+  // Row 1: the status row with no clock (Week isn't reached then).
+  if (!l.dated) {
+    HubItem& it = h.item[static_cast<int>(HubRow::Week)];
+    it.kind = RowKind::Status;
+    it.line = Line::Status;
+  }
+  // Rows 3-4: from 30 counting days, dated.
+  if (!l.dated || l.countingDays < sv::kNotPlayedDays) {
+    closedRow(l, &h.item[static_cast<int>(HubRow::NewFinds)]);
+    closedRow(l, &h.item[static_cast<int>(HubRow::OldFavourites)]);
+  }
+  // Row 5: O5. Dated, the counting days; with no clock, pending until the
+  // snapshot gives DAYS' span (D14). Served and open, its count only after
+  // a Full or lean landing (hasNotPlayed(), not the grade: 9.7).
+  HubItem& np = h.item[static_cast<int>(HubRow::NotPlayed)];
+  if (l.dated ? !notPlayedOpen(l.countingDays, true, 0) : served && !notPlayedOpen(0, false, snap->spanDays())) {
+    closedRow(l, &np);
+  } else if (served && !snap->hasNotPlayed()) {
+    np.line = Line::SinceOnly;
+  }
+  h.rows = kHubRows;
+  if (h.page.look == Look::Retry) {
+    HubItem& it = h.item[kHubRows];
+    it.row = HubRow::TryAgain;
+    it.kind = RowKind::TryAgain;
+    it.line = Line::Text;
+    it.text = h.page.line;
+    h.rows = kHubRows + 1;
+  }
+  return h;
+}
+
+// ---------------------------------------------------------------------------
+// The shelves
+// ---------------------------------------------------------------------------
+Shelf shelfOf(uint32_t id) {
+  const uint32_t s = id / 4;
+  return s < kShelves ? static_cast<Shelf>(s) : Shelf::Recent;
+}
+
+uint8_t windowOf(uint32_t id) {
+  if (shelfOf(id) != Shelf::MostPlayed) return sv::kAllTime;
+  const uint32_t w = id % 4;
+  return w <= sv::kAllTime ? static_cast<uint8_t>(w) : sv::kAllTime;
+}
+
+bool shelfOfRow(HubRow r, Shelf* out) {
+  switch (r) {
+    case HubRow::MostPlayed: *out = Shelf::MostPlayed; return true;
+    case HubRow::NewFinds: *out = Shelf::NewFinds; return true;
+    case HubRow::OldFavourites: *out = Shelf::OldFavourites; return true;
+    case HubRow::NotPlayed: *out = Shelf::NotPlayed; return true;
+    case HubRow::Recent: *out = Shelf::Recent; return true;
+    default: return false;
+  }
+}
+
+sr::List listOf(Shelf s, uint8_t window) {
+  switch (s) {
+    case Shelf::MostPlayed:
+      return window == sv::k7Days ? sr::kMost7 : window == sv::k30Days ? sr::kMost30 : sr::kMostAll;
+    case Shelf::NewFinds: return sr::kNewFinds;
+    case Shelf::OldFavourites: return sr::kOldFavourites;
+    case Shelf::Recent: return sr::kRecent;
+    default: return sr::kLists;
+  }
+}
+
+Tray trayOf(const Lifetime& l, const Snapshot* snap) {
+  Tray t;
+  if (!l.dated || l.countingDays < kTrayDays) return t;
+  if (l.countingDays < sv::kNotPlayedDays) {
+    t.cells = 2;
+    t.window[0] = sv::k7Days;
+    t.window[1] = sv::kAllTime;
+    return t;
+  }
+  t.cells = 3;
+  t.window[0] = sv::k7Days;
+  t.window[1] = sv::k30Days;
+  t.window[2] = sv::kAllTime;
+  // RCNT capped (5.2: whole days go past 4,096 rows): its oldest day inside
+  // the 30 days, the cell says the days it holds.
+  if (snap && snap->dated()) {
+    const uint16_t today = snap->today(), first = snap->rcntFirstDay();
+    if (first != sf::kUnsetDay && first <= today && today - first + 1u < 30u)
+      t.days30 = static_cast<uint8_t>(today - first + 1u);
+  }
+  return t;
+}
+
+int trayCellX(const Tray& t, int cell) {
+  if (cell < 0 || cell >= t.cells) return 0;
+  return t.cells == 3 ? kTrayCellX3[cell] : kTrayCellX2[cell];
+}
+
+int trayCellW(const Tray& t) { return t.cells == 3 ? kTrayCellW3 : t.cells == 2 ? kTrayCellW2 : 0; }
+
+int trayCellAt(const Tray& t, int x, bool rightEdge) {
+  if (t.cells == 0) return -1;
+  if (rightEdge) return t.cells - 1;
+  const int w = trayCellW(t);
+  // Each split at its gap's middle, right by the panel's skew there (7.9).
+  for (int k = 0; k + 1 < t.cells; ++k) {
+    const int mid = (trayCellX(t, k) + w + trayCellX(t, k + 1)) / 2;
+    if (x < mid + filtergrid::skew(mid)) return k;
+  }
+  return t.cells - 1;
+}
+
+uint8_t windowShown(uint8_t kept, const Tray& t) {
+  for (int k = 0; k < t.cells; ++k)
+    if (t.window[k] == kept) return kept;
+  return sv::kAllTime;
+}
+
+namespace {
+
+// A shelf the clock or the month keeps shut, from RAM (its hub row is
+// disabled): New finds and Old favourites with no clock or under 30 days;
+// Not played yet dated under 30 days (with no clock, the snapshot's span
+// decides: below).
+bool closedByRam(Shelf s, const Lifetime& l) {
+  switch (s) {
+    case Shelf::NewFinds:
+    case Shelf::OldFavourites: return !l.dated || l.countingDays < sv::kNotPlayedDays;
+    case Shelf::NotPlayed: return l.dated && !notPlayedOpen(l.countingDays, true, 0);
+    default: return false;
+  }
+}
+
+}  // namespace
+
+ShelfLook shelfLook(uint32_t id, const Lifetime& l, const PhaseInfo& p, const Snapshot* snap) {
+  ShelfLook k;
+  k.shelf = shelfOf(id);
+  const Tray tray = trayOf(l, snap);
+  if (k.shelf == Shelf::MostPlayed) {
+    k.tray = tray.cells > 0;
+    k.window = windowShown(windowOf(id), tray);
+  }
+  k.list = listOf(k.shelf, k.window);
+  k.page = pageLook(l, p, snap != nullptr);
+  switch (k.page.look) {
+    case Look::Off:
+    case Look::NoCard:
+    case Look::NoPlays: return k;
+    default: break;
+  }
+  if (closedByRam(k.shelf, l)) {
+    k.page.look = Look::Closed;
+    k.page.line = l.dated ? S::stats_warming : S::stats_needs_dates;
+    k.page.askDue = false;
+    return k;
+  }
+  if (k.page.look == Look::Served) {
+    if (k.shelf == Shelf::NotPlayed) {
+      // With no clock, DAYS' span decides (O5); landed shut: "Needs dates"
+      // as its one line (D14).
+      if (!l.dated && !notPlayedOpen(0, false, snap->spanDays())) {
+        k.page.look = Look::Closed;
+        k.page.line = S::stats_needs_dates;
+        return k;
+      }
+      if (!snap->hasNotPlayed()) {
+        // Its own state (7.6): the visit took Lists (Full refused) or its
+        // notPlayed() was refused. Try again makes the lean ask; while that
+        // runs the snapshot stays served, the phase its.
+        k.ask = UiAsk::NotPlayed;
+        switch (p.phase) {
+          case Phase::Working:
+          case Phase::Waiting:
+            k.page.look = Look::Pending;
+            k.page.line = phaseLine(p.phase);
+            return k;
+          case Phase::Unread:
+          case Phase::Capped:
+            k.page.line = phaseLine(p.phase);
+            break;
+          default:
+            k.page.line = S::stats_no_room;
+            break;
+        }
+        k.page.look = Look::Retry;
+        k.tryAgain = true;
+        k.rows = 1;
+        return k;
+      }
+      k.rows = snap->notPlayedCount();
+    } else if (k.shelf == Shelf::Recent) {
+      k.rows = recentCount(*snap);
+    } else {
+      k.rows = snap->rows(k.list);
+    }
+    k.topBar = k.rows > 0 && k.shelf != Shelf::NotPlayed;
+    if (k.rows == 0) k.page.line = S::stats_shelf_empty;
+    return k;
+  }
+  if (k.page.look == Look::Retry) {
+    k.tryAgain = true;
+    k.rows = 1;
+  }
+  return k;
+}
+
+// ---------------------------------------------------------------------------
+// Recently played's sections
+// ---------------------------------------------------------------------------
+namespace {
+
+struct Key {
+  Section section = Section::Today;
+  uint16_t day = sf::kUnsetDay;
+  bool operator==(const Key& o) const { return section == o.section && day == o.day; }
+};
+
+Key keyOf(const Snapshot& s, uint32_t when) {
+  Key k;
+  if (isCode(when)) {
+    // Dated: every undated row under one Earlier, last; undated: this
+    // session's, then earlier.
+    k.section = s.dated() || when == sv::kWhenEarlier ? Section::Earlier : Section::Session;
+    return k;
+  }
+  k.day = static_cast<uint16_t>(when / kDayMin);
+  if (s.dated() && k.day == s.today()) {
+    k.section = Section::Today;
+  } else if (s.dated() && k.day + 1u == s.today()) {
+    k.section = Section::Yesterday;
+  } else {
+    k.section = Section::Day;
+  }
+  return k;
+}
+
+// Walks the list: `fn(listRow, item)` for each, until it returns true.
+template <class Fn>
+bool walkRecent(const Snapshot& s, Fn fn) {
+  const uint32_t n = s.rows(sr::kRecent);
+  uint32_t at = 0;
+  Key prev;
+  for (uint32_t i = 0; i < n; ++i) {
+    const uint32_t when = s.rowAt(sr::kRecent, i).when;
+    const Key k = keyOf(s, when);
+    if (i == 0 || !(k == prev)) {
+      RecentItem head;
+      head.heading = true;
+      head.section = k.section;
+      head.day = k.day;
+      head.row = i;
+      if (fn(at++, head)) return true;
+    }
+    prev = k;
+    RecentItem row;
+    row.section = k.section;
+    row.day = k.day;
+    row.row = i;
+    row.timed = s.dated() && !isCode(when);
+    if (fn(at++, row)) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+uint32_t recentCount(const Snapshot& s) {
+  uint32_t n = 0;
+  walkRecent(s, [&n](uint32_t, const RecentItem&) {
+    ++n;
+    return false;
+  });
+  return n;
+}
+
+RecentItem recentAt(const Snapshot& s, uint32_t listRow) {
+  RecentItem out;
+  out.row = s.rows(sr::kRecent);
+  walkRecent(s, [&](uint32_t at, const RecentItem& it) {
+    if (at != listRow) return false;
+    out = it;
+    return true;
+  });
+  return out;
+}
+
+uint32_t recentListRow(const Snapshot& s, uint32_t snapRow) {
+  uint32_t found = 0;
+  walkRecent(s, [&](uint32_t at, const RecentItem& it) {
+    if (it.heading || it.row != snapRow) return false;
+    found = at;
+    return true;
+  });
+  return found;
+}
+
+// ---------------------------------------------------------------------------
+// Last 7 days
+// ---------------------------------------------------------------------------
+WeekLook weekLook(const Lifetime& l, const PhaseInfo& p, const Snapshot* snap) {
+  WeekLook w;
+  w.page = pageLook(l, p, snap != nullptr);
+  if (w.page.look == Look::Off || w.page.look == Look::NoCard || w.page.look == Look::NoPlays) return w;
+  if (!l.dated) {
+    w.page.look = Look::Closed;
+    w.page.line = S::stats_needs_dates;
+    w.page.askDue = false;
+    return w;
+  }
+  w.button = w.page.look == Look::Retry;
+  return w;
+}
+
+void barHeights(const uint32_t ms[sr::kWeekDays], uint16_t firstDay, uint16_t sinceDay, int maxPx,
+                uint8_t out[sr::kWeekDays]) {
+  // A day before the first day counted has no bar, nor one with nothing.
+  bool shown[sr::kWeekDays] = {};
+  uint32_t top = 0;
+  for (uint32_t i = 0; i < sr::kWeekDays; ++i) {
+    out[i] = 0;
+    shown[i] = firstDay != sf::kUnsetDay && ms[i] > 0 && (sinceDay == sf::kUnsetDay || firstDay + i >= sinceDay);
+    if (shown[i] && ms[i] > top) top = ms[i];
+  }
+  if (top == 0 || maxPx <= 0) return;
+  for (uint32_t i = 0; i < sr::kWeekDays; ++i) {
+    if (!shown[i]) continue;
+    // To the top day, rounded; any time at least 1 px.
+    const uint64_t h = (static_cast<uint64_t>(ms[i]) * static_cast<uint64_t>(maxPx) * 2 + top) / (uint64_t{2} * top);
+    out[i] = static_cast<uint8_t>(h == 0 ? 1 : h > static_cast<uint64_t>(maxPx) ? maxPx : h);
+  }
+}
+
+WeekFigures weekFigures(const Snapshot& s, int maxPx) {
+  WeekFigures w;
+  uint32_t ms[sr::kWeekDays] = {};
+  uint32_t adjPlays = 0, adjSkips = 0, top = 0;
+  for (uint32_t i = 0; i < sr::kWeekDays; ++i) {
+    const sr::Day d = s.day(i);
+    ms[i] = d.listenedMs;
+    w.listenedMs += d.listenedMs;
+    w.plays += d.plays;
+    adjPlays += d.autoDjPlays;
+    adjSkips += d.autoDjSkips;
+    // The big day by time; a tie goes to the later day.
+    if (d.listenedMs > 0 && d.listenedMs >= top) {
+      top = d.listenedMs;
+      w.bigDay = static_cast<int8_t>(i);
+    }
+  }
+  const uint16_t today = s.today();
+  if (s.dated() && today != sf::kUnsetDay && today >= sr::kWeekDays - 1)
+    w.firstDay = static_cast<uint16_t>(today - (sr::kWeekDays - 1));
+  barHeights(ms, w.firstDay, s.sinceDay(), maxPx, w.bar);
+  // Auto DJ's rate from 5 tracks it started (D11: its plays + skips).
+  const uint32_t tracks = adjPlays + adjSkips;
+  if (tracks >= 5) {
+    w.autoDj = true;
+    w.autoDjPct = static_cast<uint8_t>((uint64_t{200} * adjPlays + tracks) / (uint64_t{2} * tracks));
+  }
+  return w;
+}
+
+// ---------------------------------------------------------------------------
+// The made-up views
+// ---------------------------------------------------------------------------
+namespace {
+
+// The frames' card (docs/img/listening-stats): today Tue 10 Nov 2026 at
+// 21:40 UTC, counting since Tue 1 Sep, 1,204 plays and 74 h 10 min in all;
+// the week 4-10 Nov, 7 h 37 min and 118 plays, Saturday's 2 h 1 min the
+// big day, Auto DJ 46 of 53.
+constexpr uint16_t kFullToday = 313, kFullSince = 243;
+constexpr uint32_t kFullNowMin = kFullToday * kDayMin + 21 * 60 + 40;
+constexpr uint32_t kWeekMin[7] = {41, 58, 35, 121, 88, 64, 50};
+constexpr uint16_t kWeekPlays[7] = {10, 15, 9, 31, 23, 17, 13};
+constexpr uint16_t kWeekAdjPlays[7] = {4, 6, 3, 12, 9, 7, 5};
+constexpr uint16_t kWeekAdjSkips[7] = {1, 1, 0, 2, 1, 1, 1};
+
+Lifetime fullLife() {
+  Lifetime l;
+  l.on = true;
+  l.cardIn = true;
+  l.dated = true;
+  l.today = kFullToday;
+  l.sinceDay = kFullSince;
+  l.countingDays = sv::countingDaysOf(true, kFullToday, kFullSince);
+  l.plays = 1204;
+  l.listenedMs = (uint64_t{74} * 60 + 10) * 60000;
+  l.nowMin = kFullNowMin;
+  return l;
+}
+
+sv::MadeUp fullSpec(uint64_t stamp, uint32_t tracks, uint32_t albums) {
+  sv::MadeUp m;
+  m.buildStamp = stamp;
+  m.trackCount = tracks;
+  m.albums = albums;
+  m.grade = sv::Grade::Full;
+  m.dated = true;
+  m.time = kFullNowMin * 60 + 1;
+  m.today = kFullToday;
+  m.liveRound = 9;
+  m.sinceDay = kFullSince;
+  m.firstDay = kFullSince;
+  m.newestDay = kFullToday;
+  m.rcntFirstDay = static_cast<uint16_t>(kFullToday - 31);
+  m.window = sv::kAllTime;
+  m.version = 1;
+  for (uint32_t i = 0; i < sr::kWeekDays; ++i) {
+    m.days[i].listenedMs = kWeekMin[i] * 60000;
+    m.days[i].plays = kWeekPlays[i];
+    m.days[i].autoDjPlays = kWeekAdjPlays[i];
+    m.days[i].autoDjSkips = kWeekAdjSkips[i];
+  }
+  const uint32_t rows[sr::kLists] = {18, 50, 50, 23, 41, 60};
+  const uint32_t totals[sr::kLists] = {18, 64, 212, 23, 41, 60};
+  const uint32_t tops[sr::kLists] = {12, 23, 41, 9, 14, 0};
+  for (int i = 0; i < sr::kLists; ++i) {
+    m.rows[i] = rows[i];
+    m.totals[i] = totals[i];
+    m.topCount[i] = tops[i];
+  }
+  m.recentFirstAgoMin = 25;
+  m.recentStepMin = 97;
+  m.earlierRows = 2;
+  m.notPlayedEvery = 3;
+  return m;
+}
+
+}  // namespace
+
+bool madeUpView(uint8_t n, uint64_t buildStamp, uint32_t trackCount, uint32_t albums, MadeUpView* out) {
+  if (n == 0 || n >= kMadeUpViews || !out) return false;
+  MadeUpView v;
+  v.life = fullLife();
+  v.phase.phase = Phase::Ready;
+  v.phase.outcome = Outcome::Ok;
+  v.phase.version = 1;
+  switch (n) {
+    case 1:  // a full card
+      v.snapshot = true;
+      v.spec = fullSpec(buildStamp, trackCount, albums);
+      break;
+    case 2:  // nothing played: the first day today (the first save's)
+      v.life.plays = 0;
+      v.life.listenedMs = 0;
+      v.life.sinceDay = kFullToday;
+      v.life.countingDays = 1;
+      v.phase = PhaseInfo();
+      break;
+    case 3: {  // no clock: the first day kept, DAYS over 30 days (O5 open), Recently played by session
+      v.life.dated = false;
+      v.life.today = sf::kUnsetDay;
+      v.life.countingDays = 0;
+      v.life.nowMin = 0;
+      v.snapshot = true;
+      v.spec = fullSpec(buildStamp, trackCount, albums);
+      v.spec.dated = false;
+      v.spec.time = 0;
+      v.spec.newestDay = 309;
+      v.spec.sessionRows = 6;
+      v.spec.earlierRows = 40;
+      break;
+    }
+    case 4: {  // day 5 of counting, 11 Nov: opens 6 Dec; the Lists grade (Not played yet can't open)
+      const uint16_t today = 314, since = 310;
+      v.life.today = today;
+      v.life.sinceDay = since;
+      v.life.countingDays = sv::countingDaysOf(true, today, since);
+      v.life.plays = 37;
+      v.life.listenedMs = (uint64_t{2} * 60 + 41) * 60000;
+      v.life.nowMin = today * kDayMin + 18 * 60 + 5;
+      v.snapshot = true;
+      sv::MadeUp& m = v.spec;
+      m = fullSpec(buildStamp, trackCount, albums);
+      m.grade = sv::Grade::Lists;
+      m.notPlayedEvery = 0;
+      m.time = v.life.nowMin * 60 + 1;
+      m.today = today;
+      m.sinceDay = since;
+      m.firstDay = since;
+      m.newestDay = today;
+      m.rcntFirstDay = since;
+      const uint32_t mins[7] = {0, 0, 12, 47, 30, 41, 31};
+      const uint16_t plays[7] = {0, 0, 3, 11, 7, 9, 7};
+      for (uint32_t i = 0; i < sr::kWeekDays; ++i) {
+        m.days[i] = sr::Day();
+        m.days[i].listenedMs = mins[i] * 60000;
+        m.days[i].plays = plays[i];
+      }
+      const uint32_t rows[sr::kLists] = {20, 20, 20, 12, 0, 25};
+      const uint32_t tops[sr::kLists] = {4, 4, 4, 3, 0, 0};
+      for (int i = 0; i < sr::kLists; ++i) {
+        m.rows[i] = rows[i];
+        m.totals[i] = rows[i];
+        m.topCount[i] = tops[i];
+      }
+      m.recentStepMin = 61;
+      m.earlierRows = 0;
+      break;
+    }
+    case 5:  // folding: the boot's fold under way
+      v.life.folding = true;
+      v.phase = PhaseInfo();
+      v.phase.phase = Phase::Working;
+      v.phase.why = sv::kWhyBoot;
+      v.phase.version = 1;
+      break;
+    case 6:  // no card: the card out
+      v.life.cardIn = false;
+      v.phase.phase = Phase::NoCard;
+      v.phase.why = sv::kWhyCard;
+      v.phase.outcome = Outcome::CardAway;
+      break;
+    case 7:  // waiting: held past 3 s (Auto DJ's join)
+      v.phase.phase = Phase::Waiting;
+      v.phase.why = sv::kWhyJoin;
+      v.phase.outcome = Outcome::None;
+      break;
+    case 8:  // no room: every grade refused
+      v.phase.phase = Phase::NoRoom;
+      v.phase.outcome = Outcome::NoRoom;
+      break;
+    default:  // 9, unread: a read fault
+      v.phase.phase = Phase::Unread;
+      v.phase.outcome = Outcome::Io;
+      break;
+  }
+  *out = v;
+  return true;
+}
+
+}  // namespace statsview
