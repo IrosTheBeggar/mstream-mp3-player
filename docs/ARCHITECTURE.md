@@ -3136,10 +3136,14 @@ strings.
   worker's tag scan while it holds its memory (its work memory and any
   View in it, 90-124 KB of PSRAM no other gate counts:
   `CardJobs::scanHeld()`, which `CardTasks` hands over each pass as
-  `restAhead()`, leaving out memory no step will give back,
-  `scanStuck()`; the owner's "Only while held", 2026-11-21; S2's asks
-  don't wait for it) and for the Rank lane's own waits (a lit list
-  moving, input in the last 0.5 s, the ring, an underrun, a long decode
+  `restAhead()` by `statsvisit::restHolds()`, leaving out memory no
+  step will give back, `scanStuck()`, and the battery floor's pause:
+  memory carved mid-rest stays held there with no step to give it
+  back, so a visit goes ahead, its take's decoder-room check guarding
+  playback; the owner's "Only while held", 2026-11-21, and "Don't
+  wait at the floor", 2026-11-22; S2's asks don't wait for it) and
+  for the Rank lane's own waits (a lit list moving, input in the last
+  0.5 s, the ring, an underrun, a long decode
   pass, a track change, a seek, Bluetooth: `ScanScheduler::yieldNow()`,
   which `CardTasks` hands over as it hands `workerAhead()`, and the
   pass's own input), so no block is taken while one holds; the pages'
