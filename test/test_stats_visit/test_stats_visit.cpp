@@ -67,6 +67,7 @@
 #include "../support/CutFs.h"
 #include "CardContainer.h"
 #include "CardContract.h"
+#include "IdView.h"
 #include "LibraryIndex.h"
 #include "PathHashWalk.h"
 #include "ScanScheduler.h"
@@ -502,6 +503,9 @@ void test_write_and_resolve_on_the_rank_scenarios() {
         const sv::Row row = sn.rowAt(l, j);
         const std::string mj = m + " row " + std::to_string(j);
         TEST_ASSERT_EQUAL_UINT32_MESSAGE(40000 + 3 * static_cast<uint32_t>(wr.w.find(e.hash)), row.id, mj.c_str());
+        // The queue's id view over the list (7.6: a shelf acts through it)
+        // reads the same id.
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(row.id, IdView::u16(sn.ids(l), sn.rows(l), sv::kStrides[l])[j], mj.c_str());
         sameFacts(l, e, row, live, mj);
       }
       // The rows past them zeroed (none left of the ask's indices).

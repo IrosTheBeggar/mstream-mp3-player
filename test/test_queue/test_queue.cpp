@@ -8,7 +8,9 @@
 // (its timing; edits that never settle: an hour of Auto DJ appending a
 // track every second, written from snapshots) and QueueRemap (the queue
 // carried across a rebuild through queue.txt: docs/METADATA.md 3.4.2,
-// milestone N3). Run: pio test -e native
+// milestone N3), and the id view (IdView: a stats shelf's u16 ids read in
+// place by the queue's and the player's edits, against their span forms:
+// docs/LISTENING-STATS.md 7.6). Run: pio test -e native
 #include <unity.h>
 
 #include <algorithm>
@@ -26,6 +28,7 @@
 
 #include "../support/CutFs.h"
 #include "ByteStream.h"
+#include "IdView.h"
 #include "LibraryIndex.h"
 #include "PlaybackController.h"
 #include "QueueFile.h"
@@ -5907,6 +5910,343 @@ void test_a_read_again_that_fails_keeps_the_first() {
   }
 }
 
+// ---- the id view (IdView: docs/LISTENING-STATS.md 7.6, "How a shelf acts") ----
+
+namespace {
+
+// `ids` as a stats list packs them: a u16 (little-endian) every `stride`
+// bytes from `at` (1: an odd start), every other byte 0xFF (a row's facts,
+// as far as the view can tell).
+struct Packed {
+  std::vector<uint8_t> bytes;
+  size_t at = 0;
+  const uint8_t* first() const { return bytes.data() + at; }
+};
+
+Packed pack(const std::vector<uint32_t>& ids, uint32_t stride, size_t at) {
+  Packed p;
+  p.at = at;
+  p.bytes.assign(at + (ids.size() + 1) * stride, 0xFF);
+  for (size_t i = 0; i < ids.size(); ++i) {
+    p.bytes[at + i * stride] = static_cast<uint8_t>(ids[i]);
+    p.bytes[at + i * stride + 1] = static_cast<uint8_t>(ids[i] >> 8);
+  }
+  return p;
+}
+
+// The views a test runs each form through: u16 at strides 4, 5 and 6 (a
+// stats list's: 7.6), from an even and an odd start (stride 5 puts every
+// other id at an odd address either way), and u32 (a Library list's).
+struct Views {
+  std::vector<Packed> packed;  // (kept: the views point into it)
+  std::vector<IdView> views;
+  std::vector<std::string> names;
+  explicit Views(const std::vector<uint32_t>& ids) {
+    packed.reserve(6);
+    for (uint32_t stride : {4u, 5u, 6u}) {
+      for (size_t at : {size_t{0}, size_t{1}}) {
+        packed.push_back(pack(ids, stride, at));
+        views.push_back(IdView::u16(packed.back().first(), static_cast<uint32_t>(ids.size()), stride));
+        names.push_back("u16 stride " + std::to_string(stride) + (at ? " odd" : " even"));
+      }
+    }
+    views.push_back(IdView::of(ids.data(), static_cast<uint32_t>(ids.size())));
+    names.push_back("u32");
+  }
+};
+
+// Twin queues alike: each entry's track, key, rank and mark, the current
+// entry, the mode, the undo, the versions and the epoch.
+void expectTwins(const QueueModel& a, const QueueModel& b, const std::string& what) {
+  const char* m = what.c_str();
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(a.size(), b.size(), m);
+  TEST_ASSERT_EQUAL_INT_MESSAGE(a.current(), b.current(), m);
+  TEST_ASSERT_EQUAL_MESSAGE(a.shuffled(), b.shuffled(), m);
+  for (uint32_t i = 0; i < a.size(); ++i) {
+    if (a.trackAt(i) != b.trackAt(i) || a.keyAt(i) != b.keyAt(i) || a.rankAt(i) != b.rankAt(i) ||
+        a.heardAt(i) != b.heardAt(i)) {
+      const std::string at = what + " at " + std::to_string(i);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(a.trackAt(i), b.trackAt(i), at.c_str());
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(a.keyAt(i), b.keyAt(i), at.c_str());
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(a.rankAt(i), b.rankAt(i), at.c_str());
+      TEST_ASSERT_EQUAL_MESSAGE(a.heardAt(i), b.heardAt(i), at.c_str());
+    }
+  }
+  TEST_ASSERT_EQUAL_INT_MESSAGE(static_cast<int>(a.undoable()), static_cast<int>(b.undoable()), m);
+  TEST_ASSERT_EQUAL_MESSAGE(a.undoShuffled(), b.undoShuffled(), m);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(a.undoPushed(), b.undoPushed(), m);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(a.snapshots(), b.snapshots(), m);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(a.playEpoch(), b.playEpoch(), m);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(a.contentVersion(), b.contentVersion(), m);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(a.positionVersion(), b.positionVersion(), m);
+}
+
+// The queues the forms are tried on, the same for both twins (the fixed
+// draw sequence: no hook). 0 empty; 1 six, the 4th current; 2 that
+// shuffled; 3 two short of the cap with 100 played (an add of more than 2
+// pushes them out); 4 that shuffled.
+constexpr int kHistories = 5;
+void history(QueueModel& q, int h) {
+  if (h == 0) return;
+  if (h <= 2) {
+    fill(q, 6, 3);
+  } else {
+    fill(q, QueueModel::kMaxEntries - 2, 100);
+  }
+  if (h == 2 || h == 4) TEST_ASSERT_TRUE(q.setShuffled(true));
+}
+
+enum class Form { Replace, ReplaceIn, InsertNext, Append };
+const char* const kForms[] = {"replace", "replace in a mode", "insertNext", "append"};
+
+// The span form on `a`, the view form on `b`: the same result.
+void bothForms(QueueModel& a, QueueModel& b, Form f, const std::vector<uint32_t>& ids, const IdView& v,
+               uint32_t start, bool mode, const std::string& what) {
+  const auto n = static_cast<uint32_t>(ids.size());
+  bool ra = false, rb = false;
+  switch (f) {
+    case Form::Replace:
+      ra = a.replace(ids.data(), n, start);
+      rb = b.replace(v, start);
+      break;
+    case Form::ReplaceIn:
+      ra = a.replace(ids.data(), n, start, mode);
+      rb = b.replace(v, start, mode);
+      break;
+    case Form::InsertNext:
+      ra = a.insertNext(ids.data(), n);
+      rb = b.insertNext(v);
+      break;
+    case Form::Append:
+      ra = a.append(ids.data(), n);
+      rb = b.append(v);
+      break;
+  }
+  TEST_ASSERT_EQUAL_MESSAGE(ra, rb, what.c_str());
+  expectTwins(a, b, what);
+}
+
+}  // namespace
+
+// The view reads each id where its list keeps it: every stride, an odd
+// start, the 0xFF filler between ids, ids 0 and 65,533 (the last a shelf
+// can hold: 0xFFFF is none), both bytes of each.
+void test_an_id_view_reads_each_id_in_place() {
+  const std::vector<uint32_t> ids = {0, 65533, 0x1234, 7, 0x00FF, 0xFF00, 300, 65533, 0, 0x0102};
+  const Views vs(ids);
+  for (size_t k = 0; k < vs.views.size(); ++k) {
+    const IdView& v = vs.views[k];
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(ids.size(), v.count, vs.names[k].c_str());
+    for (uint32_t i = 0; i < v.count; ++i) TEST_ASSERT_EQUAL_UINT32_MESSAGE(ids[i], v[i], vs.names[k].c_str());
+  }
+  // A u32 view holds what a u16 can't.
+  const uint32_t wide[] = {70000, 0xFFFFFFFEu, 65535};
+  const IdView w = IdView::of(wide, 3);
+  TEST_ASSERT_EQUAL_UINT32(70000, w[0]);
+  TEST_ASSERT_EQUAL_UINT32(0xFFFFFFFEu, w[1]);
+  TEST_ASSERT_EQUAL_UINT32(65535, w[2]);
+  // The default: an empty u32 view.
+  const IdView none;
+  TEST_ASSERT_NULL(none.first);
+  TEST_ASSERT_EQUAL_UINT32(0, none.count);
+  TEST_ASSERT_EQUAL_UINT8(4, none.width);
+}
+
+// Each form (replace, in a mode, insertNext, append) through every view,
+// against its span form on a twin with the same history, shuffled and
+// not, past the end and kAnyStart; then both undone. The span forms run
+// the view forms themselves (IdView::of()), so this holds the u16 reads
+// to the u32's.
+void test_an_id_view_edits_as_its_span_does() {
+  const std::vector<uint32_t> ids = {0, 65533, 0x1234, 7, 0x00FF, 0xFF00, 300, 65533, 0, 0x0102};
+  const Views vs(ids);
+  const auto n = static_cast<uint32_t>(ids.size());
+  const uint32_t starts[] = {0, 3, n - 1, 99, QueueModel::kAnyStart};
+  uint32_t cases = 0;
+  for (int h = 0; h < kHistories; ++h) {
+    for (size_t k = 0; k < vs.views.size(); ++k) {
+      for (int fi = 0; fi < 4; ++fi) {
+        const auto f = static_cast<Form>(fi);
+        const bool replaces = f == Form::Replace || f == Form::ReplaceIn;
+        for (uint32_t s = 0; s < (replaces ? 5u : 1u); ++s) {
+          for (int mode = 0; mode < (f == Form::ReplaceIn ? 2 : 1); ++mode) {
+            QueueModel a, b;
+            history(a, h);
+            history(b, h);
+            const std::string what = std::string(kForms[fi]) + " through " + vs.names[k] + ", history " +
+                                     std::to_string(h) + ", start " + std::to_string(starts[s]) + ", mode " +
+                                     std::to_string(mode);
+            bothForms(a, b, f, ids, vs.views[k], starts[s], mode != 0, what);
+            TEST_ASSERT_EQUAL(a.undo(), b.undo());
+            expectTwins(a, b, what + ", undone");
+            ++cases;
+          }
+        }
+      }
+    }
+  }
+  // 5 histories x 7 views x (5 starts + 10 in a mode + 2 adds).
+  TEST_ASSERT_EQUAL_UINT32(5 * 7 * 17, cases);
+}
+
+// About 6,000 ids at stride 5 from an odd start (past the cap): a Play's
+// window that holds its start, and shuffled its sample (the chosen one,
+// then a random 4,999 of the rest, each ranked by its place in the whole
+// list); and the adds, which take the first that fit.
+void test_an_id_view_past_the_cap() {
+  constexpr uint32_t kN = 6000;
+  std::vector<uint32_t> ids(kN);
+  for (uint32_t i = 0; i < kN; ++i) ids[i] = (i * 7919u) % 65534u;
+  ids[kN - 1] = 65533;
+  const Packed p = pack(ids, 5, 1);
+  const IdView v = IdView::u16(p.first(), kN, 5);
+  for (const bool shuffled : {false, true}) {
+    for (const uint32_t start : {uint32_t{0}, uint32_t{5500}, kN - 1, QueueModel::kAnyStart}) {
+      QueueModel a, b;
+      const std::string what =
+          std::string(shuffled ? "shuffled" : "in order") + " from " + std::to_string(start);
+      TEST_ASSERT_TRUE(a.replace(ids.data(), kN, start, shuffled));
+      TEST_ASSERT_TRUE(b.replace(v, start, shuffled));
+      expectTwins(a, b, what);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(QueueModel::kMaxEntries, b.size(), what.c_str());
+      if (!shuffled) {
+        // The window: from the start's window on, the start current.
+        const QueueModel::Window w =
+            QueueModel::window(kN, static_cast<int32_t>(start == QueueModel::kAnyStart ? 0 : start));
+        for (uint32_t i = 0; i < b.size(); ++i) TEST_ASSERT_EQUAL_UINT32_MESSAGE(ids[w.first + i], b.trackAt(i), what.c_str());
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(start == QueueModel::kAnyStart ? 0 : start - w.first,
+                                         static_cast<uint32_t>(b.current()), what.c_str());
+      } else {
+        // The sample: each entry the list's track at its rank, the chosen
+        // one first.
+        if (start != QueueModel::kAnyStart) TEST_ASSERT_EQUAL_UINT32_MESSAGE(start, b.rankAt(0), what.c_str());
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, b.current(), what.c_str());
+        for (uint32_t i = 0; i < b.size(); ++i) {
+          TEST_ASSERT_TRUE_MESSAGE(b.rankAt(i) < kN, what.c_str());
+          TEST_ASSERT_EQUAL_UINT32_MESSAGE(ids[b.rankAt(i)], b.trackAt(i), what.c_str());
+        }
+      }
+    }
+  }
+  for (int h = 0; h < kHistories; ++h) {
+    for (const Form f : {Form::InsertNext, Form::Append}) {
+      QueueModel a, b;
+      history(a, h);
+      history(b, h);
+      const std::string what = std::string(kForms[static_cast<int>(f)]) + " of 6,000, history " + std::to_string(h);
+      bothForms(a, b, f, ids, v, 0, false, what);
+      TEST_ASSERT_TRUE(a.undo() == b.undo());
+      expectTwins(a, b, what + ", undone");
+    }
+  }
+}
+
+// A view with no ids' address but a count is refused, as a null array
+// is: false and nothing changed (no snapshot, no version). A count of 0 is
+// what it was: a Play of nothing a Clear (in its mode), an add of nothing
+// true and nothing changed, whatever the address.
+void test_a_null_id_view_is_refused_and_an_empty_one_as_today() {
+  const uint8_t some[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+  for (int h = 0; h < kHistories; ++h) {
+    for (const IdView v : {IdView::u16(nullptr, 3, 5), IdView::of(nullptr, 3)}) {
+      for (int fi = 0; fi < 4; ++fi) {
+        QueueModel a, b;
+        history(a, h);
+        history(b, h);
+        const std::string what = std::string("a null ") + (v.width == 2 ? "u16" : "u32") + " view's " + kForms[fi] +
+                                 ", history " + std::to_string(h);
+        bool r = true;
+        switch (static_cast<Form>(fi)) {
+          case Form::Replace: r = b.replace(v, 0); break;
+          case Form::ReplaceIn: r = b.replace(v, 0, !b.shuffled()); break;
+          case Form::InsertNext: r = b.insertNext(v); break;
+          case Form::Append: r = b.append(v); break;
+        }
+        TEST_ASSERT_FALSE_MESSAGE(r, what.c_str());
+        expectTwins(a, b, what);  // (a: nothing done)
+      }
+    }
+    for (const IdView v : {IdView::u16(nullptr, 0, 5), IdView::u16(some, 0, 5), IdView::of(nullptr, 0), IdView{}}) {
+      for (int fi = 0; fi < 4; ++fi) {
+        for (int mode = 0; mode < (static_cast<Form>(fi) == Form::ReplaceIn ? 2 : 1); ++mode) {
+          QueueModel a, b;
+          history(a, h);
+          history(b, h);
+          const std::string what = std::string("an empty view's ") + kForms[fi] + ", history " + std::to_string(h) +
+                                   ", mode " + std::to_string(mode);
+          bothForms(a, b, static_cast<Form>(fi), {}, v, 0, mode != 0, what);
+          TEST_ASSERT_TRUE(a.undo() == b.undo());
+          expectTwins(a, b, what + ", undone");
+        }
+      }
+    }
+  }
+}
+
+// The player's forms (playNow, in a mode, playNext, addToQueue) through
+// each view and through the span, on twin rigs (test_queue's QuietBackend
+// over a made-up library): the same queue, the same track started; both
+// refused while fenced, nothing changed.
+void test_the_player_through_an_id_view() {
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(buildSynth(idx, 40));
+  TrackCatalog c(&idx);
+  const LibraryIndex::Span all = idx.allTracks();
+  std::vector<uint32_t> ids;
+  for (uint32_t i : {3u, 17u, 0u, 39u, 22u, 8u}) ids.push_back(all.ids[i]);
+  const Views vs(ids);
+  const auto n = static_cast<uint32_t>(ids.size());
+  for (size_t k = 0; k < vs.views.size(); ++k) {
+    const IdView& v = vs.views[k];
+    QueueModel qa, qb;
+    QuietBackend aa, ab;
+    PlaybackController pa(aa, qa, c), pb(ab, qb, c);
+    auto same = [&](const std::string& step) {
+      const std::string what = vs.names[k] + ": " + step;
+      expectTwins(qa, qb, what);
+      TEST_ASSERT_EQUAL_STRING_MESSAGE(aa.lastPath.c_str(), ab.lastPath.c_str(), what.c_str());
+      TEST_ASSERT_EQUAL_INT_MESSAGE(aa.plays, ab.plays, what.c_str());
+      TEST_ASSERT_EQUAL_INT_MESSAGE(static_cast<int>(pa.state()), static_cast<int>(pb.state()), what.c_str());
+    };
+    TEST_ASSERT_TRUE(pa.playNow(ids.data(), n, 2));
+    TEST_ASSERT_TRUE(pb.playNow(v, 2));
+    same("Play from the 3rd");
+    TEST_ASSERT_EQUAL_STRING(pathOf(c, ids[2]).c_str(), ab.lastPath.c_str());
+    TEST_ASSERT_TRUE(pa.playNext(ids.data(), n));
+    TEST_ASSERT_TRUE(pb.playNext(v));
+    same("Play next");
+    TEST_ASSERT_TRUE(pa.addToQueue(ids.data(), n));
+    TEST_ASSERT_TRUE(pb.addToQueue(v));
+    same("+ Queue");
+    TEST_ASSERT_TRUE(pa.playNow(ids.data(), n, 4, true));
+    TEST_ASSERT_TRUE(pb.playNow(v, 4, true));
+    same("Play shuffled from the 5th");
+    TEST_ASSERT_EQUAL_STRING(pathOf(c, ids[4]).c_str(), ab.lastPath.c_str());
+    TEST_ASSERT_TRUE(pa.playNow(ids.data(), n, QueueModel::kAnyStart));
+    TEST_ASSERT_TRUE(pb.playNow(v, QueueModel::kAnyStart));
+    same("Play shuffled, any start");
+    TEST_ASSERT_TRUE(pa.undo());
+    TEST_ASSERT_TRUE(pb.undo());
+    same("its undo");
+    // Fenced: every form refused, nothing changed, nothing started.
+    pa.setFenced(true);
+    pb.setFenced(true);
+    const uint32_t version = qb.contentVersion();
+    const int plays = ab.plays;
+    TEST_ASSERT_FALSE(pa.playNow(ids.data(), n, 0));
+    TEST_ASSERT_FALSE(pb.playNow(v, 0));
+    TEST_ASSERT_FALSE(pa.playNow(ids.data(), n, 0, false));
+    TEST_ASSERT_FALSE(pb.playNow(v, 0, false));
+    TEST_ASSERT_FALSE(pa.playNext(ids.data(), n));
+    TEST_ASSERT_FALSE(pb.playNext(v));
+    TEST_ASSERT_FALSE(pa.addToQueue(ids.data(), n));
+    TEST_ASSERT_FALSE(pb.addToQueue(v));
+    same("fenced");
+    TEST_ASSERT_EQUAL_UINT32(version, qb.contentVersion());
+    TEST_ASSERT_EQUAL_INT(plays, ab.plays);
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_empty_queue);
@@ -6028,5 +6368,10 @@ int main(int, char**) {
   RUN_TEST(test_a_source_that_failed_is_no_whole_file);
   RUN_TEST(test_no_room_for_a_line_keeps_the_order_for_the_read_again);
   RUN_TEST(test_a_read_again_that_fails_keeps_the_first);
+  RUN_TEST(test_an_id_view_reads_each_id_in_place);
+  RUN_TEST(test_an_id_view_edits_as_its_span_does);
+  RUN_TEST(test_an_id_view_past_the_cap);
+  RUN_TEST(test_a_null_id_view_is_refused_and_an_empty_one_as_today);
+  RUN_TEST(test_the_player_through_an_id_view);
   return UNITY_END();
 }

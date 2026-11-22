@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "IdView.h"
+
 // The play queue: track ids (TrackCatalog's: library tracks and built-in
 // ones), a current position, and one level of undo. Portable, host-tested.
 //
@@ -67,7 +69,10 @@
 // Adding to an empty queue makes the first new entry current. Each edit
 // saves a snapshot first; undo() puts the queue back as it was before the
 // last one. What the player does about an edit (start the new current
-// track, stop) is PlaybackController's.
+// track, stop) is PlaybackController's. replace(), insertNext() and
+// append() take the tracks as a u32 array or as an id view (IdView.h: a
+// stats shelf's u16 ids read in place, docs/LISTENING-STATS.md 7.6); the
+// array forms are views of the array, and the ids are copied in either way.
 //
 // Auto DJ (the engine design's 2.12) adds one track at a time through
 // appendQuiet(): an append that is no edit of the listener's, so their
@@ -224,11 +229,20 @@ public:
   // window(n, start) (kAnyStart: the first kMaxEntries); shuffled, the
   // chosen track (kAnyStart: a random one) and a random kMaxEntries - 1 of
   // the others, picked in the given order (their ranks), then shuffled.
-  bool replace(const uint32_t* tracks, uint32_t n, uint32_t start) { return replace(tracks, n, start, shuffled_); }
+  bool replace(const uint32_t* tracks, uint32_t n, uint32_t start) {
+    return replace(IdView::of(tracks, n), start, shuffled_);
+  }
   // Play in a mode (Shuffle all: shuffled): the mode set and the queue
   // replaced as one edit, laid out as the mode's Play; undo() puts both
   // back. Nothing to play (`n` 0) is a Clear, in that mode.
-  bool replace(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffled);
+  bool replace(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffled) {
+    return replace(IdView::of(tracks, n), start, shuffled);
+  }
+  // The same through an id view (the class), its count the `n` above: a
+  // view with a count and no address is refused (false, nothing changed),
+  // as a null array is.
+  bool replace(IdView tracks, uint32_t start) { return replace(tracks, start, shuffled_); }
+  bool replace(IdView tracks, uint32_t start, bool shuffled);
   // The first room() of the tracks, in their order (all of them when they
   // fit), the played entries pushed out first, oldest first, as many as
   // the spare places lack (pushedBy()). False when none fit (room() 0: the
@@ -237,8 +251,11 @@ public:
   // memory for its snapshot as well (its undo is how what played comes
   // back): without it, refused as out of memory, the last edit's undo
   // kept.
-  bool insertNext(const uint32_t* tracks, uint32_t n);
-  bool append(const uint32_t* tracks, uint32_t n);
+  bool insertNext(const uint32_t* tracks, uint32_t n) { return insertNext(IdView::of(tracks, n)); }
+  bool append(const uint32_t* tracks, uint32_t n) { return append(IdView::of(tracks, n)); }
+  // The same through an id view (as replace()'s).
+  bool insertNext(IdView tracks);
+  bool append(IdView tracks);
   // Positions out of range and repeats are ignored; any order.
   Removed remove(const uint32_t* positions, uint32_t n);
   bool moveNext(const uint32_t* positions, uint32_t n);
@@ -358,7 +375,7 @@ private:
   // hooks; nullptr: no memory. `count`: how many distinct positions.
   uint32_t* selection(const uint32_t* positions, uint32_t n, uint32_t* count);
   void changed();
-  bool insertAt(uint32_t at, const uint32_t* tracks, uint32_t n, Edit edit);
+  bool insertAt(uint32_t at, IdView tracks, Edit edit);
   // The next draw from the hook (or the fixed sequence): its 32 bits for
   // `bound` 0 (a seed), else in [0, bound) by multiply-shift.
   uint32_t draw(uint32_t bound = 0);
