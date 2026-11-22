@@ -11,7 +11,7 @@ namespace detail {
 
 namespace {
 
-// en: 15240 bytes, 745 of 745 messages.
+// en: 15254 bytes, 746 of 746 messages.
 const char kBlob_en[] =
     "Touch trouble? Hold a finger on the screen.\0Tip {0} of {1}\0tap to go on\0Next\0Got it\0The three red dots\0"
     "Under the screen: a click, or a hold, anywhere\0Previous\0Play/pause\0hold:\0volume down\0speaker or\nheadphones\0"
@@ -164,9 +164,9 @@ const char kBlob_en[] =
     "OK\0Couldn't reach {0}\0Couldn't reach the headphones\0Couldn't reach them\0Are they on, out of the case, and not connected to your phone?\0"
     "{0}: on, out of the case, and not connected to your phone?\0the headphones: on, out of the case, and not connected to your phone?\0"
     "{0}%\0{0} min\0{0} s\0{0} min {1} s\0{0} h {1} min\0{0} d {1} h\0{0} MHz\0{0} MB\0{0} kHz\0"
-    "{0} Hz\0, \0{0} {1}\0{0}\xE2\x80\x93{1}\0Mon\0Tue\0Wed\0Thu\0Fri\0Sat\0Sun\0Monday\0Tuesday\0"
-    "Wednesday\0Thursday\0Friday\0Saturday\0Sunday\0Jan\0Feb\0Mar\0Apr\0May\0Jun\0Jul\0Aug\0Sep\0"
-    "Oct\0Nov\0Dec\0";
+    "{0} Hz\0, \0{0} {1}\0{0}\xE2\x80\x93{1}\0{0}\xE2\x80\x93{1} {2}\0Mon\0Tue\0Wed\0Thu\0Fri\0Sat\0"
+    "Sun\0Monday\0Tuesday\0Wednesday\0Thursday\0Friday\0Saturday\0Sunday\0Jan\0Feb\0Mar\0Apr\0May\0"
+    "Jun\0Jul\0Aug\0Sep\0Oct\0Nov\0Dec\0";
 const uint16_t kOff_en[kStrings] = {
     0, 44, 59, 72, 77, 84, 103, 150, 159, 72, 170, 176,
     188, 210, 220, 267, 358, 392, 400, 408, 414, 420, 427, 432,
@@ -228,12 +228,12 @@ const uint16_t kOff_en[kStrings] = {
     14329, 14354, 2375, 14384, 14401, 14425, 14480, 14540, 14607, 14643, 14667, 14701,
     14721, 14733, 14736, 14755, 14785, 14805, 14868, 14927, 6514, 14997, 15002, 15010,
     15016, 15030, 15044, 15056, 15064, 15071, 15079, 15086, 15089, 15089, 15097, 15107,
-    15111, 15115, 15119, 15123, 15127, 15131, 15135, 15142, 15150, 15160, 15169, 15176,
-    15185, 15192, 15196, 15200, 15204, 15208, 15212, 15216, 15220, 15224, 15228, 15232,
-    15236,
+    15121, 15125, 15129, 15133, 15137, 15141, 15145, 15149, 15156, 15164, 15174, 15183,
+    15190, 15199, 15206, 15210, 15214, 15218, 15222, 15226, 15230, 15234, 15238, 15242,
+    15246, 15250,
 };
 
-// de: 15360 bytes, 673 of 745 messages.
+// de: 15360 bytes, 673 of 746 messages.
 const char kBlob_de[] =
     "Touch-Probleme? Finger aufs Display halten.\0Tipp {0} von {1}\0tippen: weiter\0Weiter\0Alles klar\0"
     "Die drei roten Punkte\0Unterm Bildschirm: kurz dr\xC3\xBC" "cken oder halten\0Zur\xC3\xBC" "ck\0"
@@ -458,10 +458,10 @@ const uint16_t kOff_de[kStrings] = {
     15287, 15301, 15315, 15327, 15335, 15342, 15350, 15357, 65535, 65535, 65535, 65535,
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535,
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535,
-    65535,
+    65535, 65535,
 };
 
-// es: 15711 bytes, 670 of 745 messages.
+// es: 15711 bytes, 670 of 746 messages.
 const char kBlob_es[] =
     "\xC2\xBF" "Falla el t\xC3\xA1" "ctil? Mant\xC3\xA9n un dedo en la pantalla.\0Consejo {0} de {1}\0"
     "toca para seguir\0Siguiente\0Entendido\0Los tres puntos rojos\0Bajo la pantalla: clic o toque largo en cada uno\0"
@@ -693,10 +693,10 @@ const uint16_t kOff_es[kStrings] = {
     15638, 15652, 15666, 15678, 15686, 15693, 15701, 15708, 65535, 65535, 65535, 65535,
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535,
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535,
-    65535,
+    65535, 65535,
 };
 
-// fr: 15911 bytes, 671 of 745 messages.
+// fr: 15911 bytes, 671 of 746 messages.
 const char kBlob_fr[] =
     "Tactile d\xC3\xA9r\xC3\xA9gl\xC3\xA9\xC2\xA0? Gardez un doigt sur l'\xC3\xA9" "cran.\0Astuce {0} sur {1}\0"
     "touchez\xC2\xA0: suite\0Suivant\0Compris\0Les trois points rouges\0Sous l'\xC3\xA9" "cran\xC2\xA0: clic ou appui long, n'importe o\xC3\xB9\0"
@@ -940,10 +940,10 @@ const uint16_t kOff_fr[kStrings] = {
     15838, 15852, 15866, 15878, 15886, 15893, 15901, 15908, 65535, 65535, 65535, 65535,
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535,
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535,
-    65535,
+    65535, 65535,
 };
 
-// it: 15340 bytes, 673 of 745 messages.
+// it: 15340 bytes, 673 of 746 messages.
 const char kBlob_it[] =
     "Tocco impreciso? Tieni un dito sullo schermo.\0Consiglio {0} di {1}\0tocca e vai avanti\0Avanti\0"
     "Ho capito\0I tre punti rossi\0Sotto lo schermo: un clic o una pressione lunga\0Indietro\0Play/pausa\0"
@@ -1166,10 +1166,10 @@ const uint16_t kOff_it[kStrings] = {
     15267, 15281, 15295, 15307, 15315, 15322, 15330, 15337, 65535, 65535, 65535, 65535,
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535,
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535,
-    65535,
+    65535, 65535,
 };
 
-// ja: 17284 bytes, 674 of 745 messages.
+// ja: 17284 bytes, 674 of 746 messages.
 const char kBlob_ja[] =
     "\xE3\x82\xBF\xE3\x83\x83\xE3\x83\x81\xE3\x81\x8C\xE3\x81\x8A\xE3\x81\x8B\xE3\x81\x97\xE3\x81\x84? \xE7\x94\xBB\xE9\x9D\xA2\xE3\x82\x92\xE9\x95\xB7\xE6\x8A\xBC\xE3\x81\x97\0"
     "\xE3\x83\x92\xE3\x83\xB3\xE3\x83\x88 {0}/{1}\0\xE3\x82\xBF\xE3\x83\x83\xE3\x83\x97\xE3\x81\xA7\xE6\xAC\xA1\xE3\x81\xB8\0"
@@ -1587,10 +1587,10 @@ const uint16_t kOff_ja[kStrings] = {
     17196, 17212, 17231, 17250, 17258, 17265, 17273, 17280, 65535, 65535, 65535, 65535,
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535,
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535,
-    65535,
+    65535, 65535,
 };
 
-// pl: 16809 bytes, 673 of 745 messages.
+// pl: 16809 bytes, 673 of 746 messages.
 const char kBlob_pl[] =
     "Dotyk nie dzia\xC5\x82" "a? Trzymaj palec na ekranie.\0Porada {0} z {1}\0dotknij, by przej\xC5\x9B\xC4\x87\0"
     "Dalej\0Rozumiem\0Trzy czerwone kropki\0Pod ekranem: klikni\xC4\x99" "cie lub przytrzymanie\0"
@@ -1857,10 +1857,10 @@ const uint16_t kOff_pl[kStrings] = {
     16726, 16740, 16758, 16776, 16784, 16791, 16799, 16806, 65535, 65535, 65535, 65535,
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535,
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535,
-    65535,
+    65535, 65535,
 };
 
-// pt: 15157 bytes, 671 of 745 messages.
+// pt: 15157 bytes, 671 of 746 messages.
 const char kBlob_pt[] =
     "O toque falha? Segure um dedo na tela.\0Dica {0} de {1}\0toque para seguir\0Avan\xC3\xA7" "ar\0"
     "Entendi\0Os tr\xC3\xAAs pontos vermelhos\0Abaixo da tela: clique ou segure qualquer um\0Anterior\0"
@@ -2090,10 +2090,10 @@ const uint16_t kOff_pt[kStrings] = {
     15084, 15098, 15112, 15124, 15132, 15139, 15147, 15154, 65535, 65535, 65535, 65535,
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535,
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535,
-    65535,
+    65535, 65535,
 };
 
-// ru: 25440 bytes, 668 of 745 messages.
+// ru: 25440 bytes, 668 of 746 messages.
 const char kBlob_ru[] =
     "\xD0\x9A\xD0\xB0\xD1\x81\xD0\xB0\xD0\xBD\xD0\xB8\xD1\x8F \xD0\xBC\xD0\xB8\xD0\xBC\xD0\xBE? \xD0\x94\xD0\xB5\xD1\x80\xD0\xB6\xD0\xB8\xD1\x82\xD0\xB5 \xD0\xBF\xD0\xB0\xD0\xBB\xD0\xB5\xD1\x86 \xD0\xBD\xD0\xB0 \xD1\x8D\xD0\xBA\xD1\x80\xD0\xB0\xD0\xBD\xD0\xB5.\0"
     "\xD0\xA1\xD0\xBE\xD0\xB2\xD0\xB5\xD1\x82 {0} \xD0\xB8\xD0\xB7 {1}\0\xD1\x82\xD0\xB0\xD0\xBF: \xD0\xB4\xD0\xB0\xD0\xBB\xD1\x8C\xD1\x88\xD0\xB5\0"
@@ -2645,10 +2645,10 @@ const uint16_t kOff_ru[kStrings] = {
     25344, 25362, 25380, 25397, 25408, 25417, 25428, 25437, 65535, 65535, 65535, 65535,
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535,
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535,
-    65535,
+    65535, 65535,
 };
 
-// zh: 13659 bytes, 674 of 745 messages.
+// zh: 13659 bytes, 674 of 746 messages.
 const char kBlob_zh[] =
     "\xE8\xA7\xA6\xE6\x91\xB8\xE4\xB8\x8D\xE7\x81\xB5? \xE9\x95\xBF\xE6\x8C\x89\xE5\xB1\x8F\xE5\xB9\x95\xE3\x80\x82\0"
     "\xE6\x8F\x90\xE7\xA4\xBA {0} / {1}\0\xE7\x82\xB9\xE4\xB8\x80\xE4\xB8\x8B\xE7\xBB\xA7\xE7\xBB\xAD\0"
@@ -3021,11 +3021,11 @@ const uint16_t kOff_zh[kStrings] = {
     13571, 13587, 13606, 13625, 13633, 13640, 13648, 13655, 65535, 65535, 65535, 65535,
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535,
     65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535,
-    65535,
+    65535, 65535,
 };
 
 #ifdef UISTR_PSEUDO
-// en-XA: 36208 bytes, 745 of 745 messages.
+// en-XA: 36227 bytes, 746 of 746 messages.
 const char kBlob_en_XA[] =
     "[\xC5\xA2\xC3\xB6\xC3\xBC\xC3\xA7\xC4\xA5 \xC5\xA3\xC5\x95\xC3\xB6\xC3\xBC" "b\xC4\xBA\xC3\xA9? \xC4\xA4\xC3\xB6\xC4\xBA\xC4\x8F \xC3\xA1 f\xC3\xAD\xC3\xB1\xC4\x9D\xC3\xA9\xC5\x95 \xC3\xB6\xC3\xB1 \xC5\xA3\xC4\xA5\xC3\xA9 \xC5\xA1\xC3\xA7\xC5\x95\xC3\xA9\xC3\xA9\xC3\xB1. \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m \xC3\xADp\xC5\xA1\xC3\xBCm \xC4\x8F\xC3\xB6\xC4\xBA\xC3\xB6]\0"
     "[\xC5\xA2\xC3\xADp {0} \xC3\xB6" "f {1} \xC4\xBA\xC3\xB6\xC5\x95]\0[\xC5\xA3\xC3\xA1p \xC5\xA3\xC3\xB6 \xC4\x9D\xC3\xB6 \xC3\xB6\xC3\xB1 \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9m]\0"
@@ -3585,9 +3585,9 @@ const char kBlob_en_XA[] =
     "[{0} \xC4\xA5 {1} m\xC3\xAD\xC3\xB1 \xC4\xBA\xC3\xB6\xC5\x95]\0[{0} \xC4\x8F {1} \xC4\xA5 \xC4\xBA\xC3\xB6]\0"
     "[{0} M\xC4\xA4\xC5\xBE \xC4\xBA\xC3\xB6]\0[{0} MB \xC4\xBA\xC3\xB6]\0[{0} \xC4\xB7\xC4\xA4\xC5\xBE \xC4\xBA\xC3\xB6]\0"
     "[{0} \xC4\xA4\xC5\xBE \xC4\xBA\xC3\xB6]\0[,  \xC4\xBA]\0[{0} {1} \xC4\xBA]\0[{0}\xE2\x80\x93{1} \xC4\xBA]\0"
-    "[M\xC3\xB6\xC3\xB1 \xC4\xBA\xC3\xB6]\0[\xC5\xA2\xC3\xBC\xC3\xA9 \xC4\xBA\xC3\xB6]\0[\xC5\xB4\xC3\xA9\xC4\x8F \xC4\xBA\xC3\xB6]\0"
-    "[\xC5\xA2\xC4\xA5\xC3\xBC \xC4\xBA\xC3\xB6]\0[F\xC5\x95\xC3\xAD \xC4\xBA\xC3\xB6]\0[\xC5\xA0\xC3\xA1\xC5\xA3 \xC4\xBA\xC3\xB6]\0"
-    "[\xC5\xA0\xC3\xBC\xC3\xB1 \xC4\xBA\xC3\xB6]\0[M\xC3\xB6\xC3\xB1\xC4\x8F\xC3\xA1\xC3\xBD \xC4\xBA\xC3\xB6\xC5\x95]\0"
+    "[{0}\xE2\x80\x93{1} {2} \xC4\xBA]\0[M\xC3\xB6\xC3\xB1 \xC4\xBA\xC3\xB6]\0[\xC5\xA2\xC3\xBC\xC3\xA9 \xC4\xBA\xC3\xB6]\0"
+    "[\xC5\xB4\xC3\xA9\xC4\x8F \xC4\xBA\xC3\xB6]\0[\xC5\xA2\xC4\xA5\xC3\xBC \xC4\xBA\xC3\xB6]\0[F\xC5\x95\xC3\xAD \xC4\xBA\xC3\xB6]\0"
+    "[\xC5\xA0\xC3\xA1\xC5\xA3 \xC4\xBA\xC3\xB6]\0[\xC5\xA0\xC3\xBC\xC3\xB1 \xC4\xBA\xC3\xB6]\0[M\xC3\xB6\xC3\xB1\xC4\x8F\xC3\xA1\xC3\xBD \xC4\xBA\xC3\xB6\xC5\x95]\0"
     "[\xC5\xA2\xC3\xBC\xC3\xA9\xC5\xA1\xC4\x8F\xC3\xA1\xC3\xBD \xC4\xBA\xC3\xB6\xC5\x95]\0[\xC5\xB4\xC3\xA9\xC4\x8F\xC3\xB1\xC3\xA9\xC5\xA1\xC4\x8F\xC3\xA1\xC3\xBD \xC4\xBA\xC3\xB6\xC5\x95\xC3\xA9]\0"
     "[\xC5\xA2\xC4\xA5\xC3\xBC\xC5\x95\xC5\xA1\xC4\x8F\xC3\xA1\xC3\xBD \xC4\xBA\xC3\xB6\xC5\x95]\0"
     "[F\xC5\x95\xC3\xAD\xC4\x8F\xC3\xA1\xC3\xBD \xC4\xBA\xC3\xB6\xC5\x95]\0[\xC5\xA0\xC3\xA1\xC5\xA3\xC3\xBC\xC5\x95\xC4\x8F\xC3\xA1\xC3\xBD \xC4\xBA\xC3\xB6\xC5\x95]\0"
@@ -3657,9 +3657,9 @@ const uint16_t kOff_en_XA[kStrings] = {
     33984, 34046, 5616, 34115, 34156, 34219, 34349, 34486, 34645, 34723, 34785, 34865,
     34912, 34944, 34954, 34997, 35072, 35122, 35269, 35403, 15456, 35568, 35578, 35595,
     35607, 35633, 35659, 35680, 35697, 35711, 35729, 35745, 35753, 35753, 35766, 35781,
-    35794, 35808, 35822, 35836, 35849, 35863, 35877, 35898, 35922, 35952, 35978, 35999,
-    36025, 36047, 36061, 36073, 36086, 36099, 36112, 36126, 36140, 36154, 36167, 36181,
-    36194,
+    35800, 35813, 35827, 35841, 35855, 35868, 35882, 35896, 35917, 35941, 35971, 35997,
+    36018, 36044, 36066, 36080, 36092, 36105, 36118, 36131, 36145, 36159, 36173, 36186,
+    36200, 36213,
 };
 
 #endif

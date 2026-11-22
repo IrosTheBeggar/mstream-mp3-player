@@ -3106,7 +3106,8 @@
         "worst": 9999
       }
     },
-    "count": "0"
+    "count": "0",
+    "note": "Every form must leave stats.time_plays's line within its Small 232 px with the language's own format.hours_minutes at 168 h 59 min and 9,999 plays (test_ui_library measures it). The mobile app's Russian (\"{0} прослушиваний\") is 248 px there, and still 236 px at 118 plays, so ru draws English until a shorter form is written."
   },
   "stats.most_played": "Most played",
   "@stats.most_played": {
@@ -3491,9 +3492,12 @@
     },
     "placeholders": {
       "0": {
-        "means": "the seven days (format.day_range)",
+        "means": "the seven days (format.day_range_month in one month, \"4–10 Nov\"; format.day_range across a month's end, \"28 Sep–4 Oct\")",
         "type": "message",
-        "worst": "format.day_range"
+        "worst": "format.day_range",
+        "or": [
+          "format.day_range_month"
+        ]
       }
     },
     "bytes": 64
@@ -3540,7 +3544,8 @@
         "type": "text",
         "worst": "23 h 59 min"
       }
-    }
+    },
+    "note": "{1}'s worst here is English's \"23 h 59 min\", so test_ui_strings measures every language with it. The line drawn has the language's own format.hours_minutes, and it must fit 288 px with that at 23 h 59 min and the longest day (test_ui_library measures it). Until this text is translated, the English sentence with the language's own hours is too wide in pl (303 px, Wednesday), ja and zh (291 px): their translations must be shorter than that."
   },
   "stats.autodj_right": "Auto DJ got it right {0} of the time",
   "@stats.autodj_right": {
@@ -9142,7 +9147,7 @@
   },
   "format.day_month": "{0} {1}",
   "@format.day_month": {
-    "context": "A day and its month, short (\"1 Sep\": docs/LISTENING-STATS.md 8.2), in the listening stats' lines (stats.since, stats.since_only, stats.warming, stats.last_on), Last 7 days' days (format.day_range) and Recently played's sections (format.weekday_date). Ordered, and marked, as the language writes a date.",
+    "context": "A day and its month, short (\"1 Sep\": docs/LISTENING-STATS.md 8.2), in the listening stats' lines (stats.since, stats.since_only, stats.warming, stats.last_on), Last 7 days' days across a month's end (format.day_range) and Recently played's sections (format.weekday_date). Ordered, and marked, as the language writes a date.",
     "room": null,
     "placeholders": {
       "0": {
@@ -9201,14 +9206,14 @@
   },
   "format.day_range": "{0}–{1}",
   "@format.day_range": {
-    "context": "Last 7 days' seven days (docs/LISTENING-STATS.md 7.7), in stats.utc: the first and the last, \"4–10 Nov\" (\"28 Sep–4 Oct\" across a month's end). Small, 179 px.",
+    "context": "Last 7 days' seven days (docs/LISTENING-STATS.md 7.7), in stats.utc, when they run across a month's end: the first and the last, each with its month, \"28 Sep–4 Oct\". In one month, format.day_range_month is drawn instead. Small, 179 px.",
     "room": {
       "font": "Small",
       "px": 179
     },
     "placeholders": {
       "0": {
-        "means": "the first day: its number alone when both days are in one month, else format.day_month",
+        "means": "the first day (format.day_month)",
         "type": "message",
         "worst": "format.day_month"
       },
@@ -9216,6 +9221,44 @@
         "means": "the last day (format.day_month)",
         "type": "message",
         "worst": "format.day_month"
+      }
+    }
+  },
+  "format.day_range_month": "{0}–{1} {2}",
+  "@format.day_range_month": {
+    "context": "Last 7 days' seven days (docs/LISTENING-STATS.md 7.7), in stats.utc, when both are in one month: the first day's number, the last's, and their month once, \"4–10 Nov\" (across a month's end, format.day_range). Small, 179 px. Ordered, and marked, as the language writes such a span of dates: the month may come first, before both days.",
+    "room": {
+      "font": "Small",
+      "px": 179
+    },
+    "placeholders": {
+      "0": {
+        "means": "the first day of the month",
+        "type": "digits",
+        "worst": 25
+      },
+      "1": {
+        "means": "the last day of the month",
+        "type": "digits",
+        "worst": 31
+      },
+      "2": {
+        "means": "their month (month.jan ... month.dec)",
+        "type": "message",
+        "worst": "month.sep",
+        "or": [
+          "month.jan",
+          "month.feb",
+          "month.mar",
+          "month.apr",
+          "month.may",
+          "month.jun",
+          "month.jul",
+          "month.aug",
+          "month.oct",
+          "month.nov",
+          "month.dec"
+        ]
       }
     }
   },
@@ -9312,62 +9355,62 @@
   },
   "month.jan": "Jan",
   "@month.jan": {
-    "context": "January, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "context": "January, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
     "room": null
   },
   "month.feb": "Feb",
   "@month.feb": {
-    "context": "February, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "context": "February, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
     "room": null
   },
   "month.mar": "Mar",
   "@month.mar": {
-    "context": "March, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "context": "March, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
     "room": null
   },
   "month.apr": "Apr",
   "@month.apr": {
-    "context": "April, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "context": "April, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
     "room": null
   },
   "month.may": "May",
   "@month.may": {
-    "context": "May, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "context": "May, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
     "room": null
   },
   "month.jun": "Jun",
   "@month.jun": {
-    "context": "June, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "context": "June, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
     "room": null
   },
   "month.jul": "Jul",
   "@month.jul": {
-    "context": "July, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "context": "July, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
     "room": null
   },
   "month.aug": "Aug",
   "@month.aug": {
-    "context": "August, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "context": "August, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
     "room": null
   },
   "month.sep": "Sep",
   "@month.sep": {
-    "context": "September, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "context": "September, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
     "room": null
   },
   "month.oct": "Oct",
   "@month.oct": {
-    "context": "October, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "context": "October, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
     "room": null
   },
   "month.nov": "Nov",
   "@month.nov": {
-    "context": "November, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "context": "November, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
     "room": null
   },
   "month.dec": "Dec",
   "@month.dec": {
-    "context": "December, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2): as the language shortens a month in a date (its full stop too, where it takes one).",
+    "context": "December, short, in format.day_month (\"1 Sep\": docs/LISTENING-STATS.md 8.2) and format.day_range_month (\"4–10 Nov\"): as the language shortens a month in a date (its full stop too, where it takes one).",
     "room": null
   }
 }

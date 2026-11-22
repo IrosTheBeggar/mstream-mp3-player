@@ -727,6 +727,7 @@ enum class S : uint16_t {
   format_day_month,  // {0} {1}
   format_weekday_date,  // {0} {1}
   format_day_range,  // {0}–{1}
+  format_day_range_month,  // {0}–{1} {2}
   day_mon,  // Mon
   day_tue,  // Tue
   day_wed,  // Wed
@@ -754,7 +755,7 @@ enum class S : uint16_t {
   month_nov,  // Nov
   month_dec,  // Dec
 };
-inline constexpr unsigned kStrings = 745;
+inline constexpr unsigned kStrings = 746;
 
 // The languages, English first: the mobile app's ten (one without a
 // catalogue yet draws English), and the pseudo-locale where UISTR_PSEUDO
