@@ -225,20 +225,23 @@ public:
   size_t snapshotHeapBytes() const { return 0; }
   // S3b's made-up views (docs/LISTENING-STATS.md 9.3's uiSx<n>, look only:
   // statsview::madeUpView(), keyed on `index`, Library::index()). Views 1-9:
-  // whatever is held released first (a page's ask cancelled, its snapshot
-  // or Hu's released: a view's look never stands on a real snapshot), then
-  // for 1, 3 and 4 the view's snapshot written into the Dance tab's block,
-  // lent (statshold::borrow(), as a visit's), as a landed one reads
-  // (statsvisit::writeMadeUp(): the live index's key, so the key check
-  // keeps it; kFlagMadeUp in its header, as no StatsLists byte is free), and
-  // served at once; the version moves. 0: a made-up snapshot held released
-  // (a real one is left alone). False, nothing held: no such view; a console
-  // visit or lean ask under way (it writes into the held snapshot); for 1, 3
-  // and 4 no index ready (behind the fence), no loan (the Dance tab up, past
-  // kBound, no block) or the write refused; each said. Nothing asks: the
-  // pages' guard (D16; S12, with the selector and the console). The
-  // releases with no navigation (loop(): the stats off, the card, the key)
-  // and the fence's and the end's apply to it as to any snapshot.
+  // whatever is held released first (a page's ask cancelled; a console
+  // visit or lean ask under way ended, its result dropped, as it would
+  // write into the view's snapshot; the snapshot held released, a page's,
+  // Hu's or a console ask's: a view's look never stands on a real
+  // snapshot), then for 1, 3 and 4 the view's snapshot written into the
+  // Dance tab's block, lent (statshold::borrow(), as a visit's), as a landed
+  // one reads (statsvisit::writeMadeUp(): the live index's key, so the key
+  // check keeps it; kFlagMadeUp in its header, as no StatsLists byte is
+  // free), and served at once; the version moves. True for 2 and 5-9 (none
+  // to write). 0: a made-up snapshot held released (a real one is left
+  // alone), true. False: no such view (past 9: nothing done); for 1, 3 and 4
+  // no index ready (behind the fence), no loan (the Dance tab up, past
+  // kBound, no block) or the write refused, each said, with nothing held
+  // (the release above). Nothing asks: the pages' guard (D16; S12, with the
+  // selector and the console). The releases with no navigation (loop(): the
+  // stats off, the card, the key) and the fence's and the end's apply to it
+  // as to any snapshot.
   bool madeUp(uint8_t n, const LibraryIndex* index);
 
   // ---- the loop (app/PlayHistory, main.cpp) ----

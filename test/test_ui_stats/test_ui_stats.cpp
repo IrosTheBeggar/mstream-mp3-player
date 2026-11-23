@@ -1586,6 +1586,26 @@ void test_the_made_up_views() {
   }
 }
 
+// uiSx<n> from a host with no play log (UiHost::statsMadeUp()'s default and
+// app/PlayHistory's with none read the one rule): nothing served, so the
+// views with a snapshot (1, 3, 4) aren't written; the end and the views
+// with none are the pages' alone; past 9 no view at all.
+void test_the_made_up_views_with_no_play_log() {
+  // 0 the end; 1, 3 and 4 not written; 2 and 5-9 none to write.
+  const bool want[kMadeUpViews] = {true, false, true, false, false, true, true, true, true, true};
+  for (uint8_t n = 0; n < kMadeUpViews; ++n) {
+    char msg[24];
+    snprintf(msg, sizeof(msg), "view %u", static_cast<unsigned>(n));
+    TEST_ASSERT_EQUAL_MESSAGE(want[n], madeUpNoLog(n), msg);
+    // ... the views' own word for it: true exactly where none is written.
+    if (n == 0) continue;
+    MadeUpView v;
+    TEST_ASSERT_TRUE_MESSAGE(madeUpView(n, 0, 0, 0, &v), msg);
+    TEST_ASSERT_EQUAL_MESSAGE(!v.snapshot, madeUpNoLog(n), msg);
+  }
+  for (unsigned n = kMadeUpViews; n <= 0xFF; ++n) TEST_ASSERT_FALSE(madeUpNoLog(static_cast<uint8_t>(n)));
+}
+
 // ---------------------------------------------------------------------------
 // The words (StatsText)
 // ---------------------------------------------------------------------------
@@ -2173,6 +2193,7 @@ int main(int, char**) {
   RUN_TEST(test_recently_played_s_sections);
   RUN_TEST(test_week_from_a_made_up_snapshot);
   RUN_TEST(test_the_made_up_views);
+  RUN_TEST(test_the_made_up_views_with_no_play_log);
   RUN_TEST(test_the_forms_of_the_lines);
   RUN_TEST(test_a_ranked_row_keeps_its_count);
   RUN_TEST(test_relative_times);

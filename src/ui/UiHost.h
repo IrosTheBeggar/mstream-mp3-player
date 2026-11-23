@@ -357,15 +357,19 @@ public:
   // The lifetime from RAM (HEAD, the clock, the stats on or folding, the
   // card in: statsview::lifetimeOf()), read at each page's update().
   virtual void statsLifetime(statsview::Lifetime& out) { out = statsview::Lifetime(); }
-  // A made-up view (9.3's uiSx<n>, look only: 1-9; 0 ends it): what is held
-  // released, and for 1, 3 and 4 its made-up snapshot written into the
-  // Dance tab's block, lent. False: not written (no play log, the Dance tab
-  // up, no index ready: its [listen] line says why); the pages then draw
-  // the view's look with nothing served (S12).
-  virtual bool statsMadeUp(uint8_t n) {
-    (void)n;
-    return false;
-  }
+  // A made-up view (9.3's uiSx<n>, look only: 1-9; 0 ends it, a made-up
+  // snapshot released, a real one kept: true). For 1-9 whatever is held is
+  // released first (a page's ask cancelled, a console visit or lean ask
+  // under way ended, the snapshot held released), then for 1, 3 and 4 its
+  // made-up snapshot written into the Dance tab's block, lent, and served.
+  // True: written, or a view with none (2, 5-9). False: past 9 (no such
+  // view: nothing done), or for 1, 3 and 4 not written (no play log, no
+  // index ready, the Dance tab up, the write refused: its [listen] line says
+  // why), with nothing held; the pages then draw the view's look with
+  // nothing served (S12; statsview::pageLook(): Pending, nothing due). So
+  // for 1-9 no view stands on a real snapshot. The default is a host with
+  // no play log's (statsview::madeUpNoLog(), as app/PlayHistory's).
+  virtual bool statsMadeUp(uint8_t n) { return statsview::madeUpNoLog(n); }
 
 protected:
   ~UiHost() = default;

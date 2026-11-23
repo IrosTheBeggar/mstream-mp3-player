@@ -811,4 +811,10 @@ bool madeUpView(uint8_t n, uint64_t buildStamp, uint32_t trackCount, uint32_t al
   return true;
 }
 
+bool madeUpNoLog(uint8_t n) {
+  if (n == 0) return true;
+  MadeUpView v;
+  return madeUpView(n, 0, 0, 0, &v) && !v.snapshot;
+}
+
 }  // namespace statsview

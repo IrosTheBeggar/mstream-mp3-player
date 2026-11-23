@@ -158,8 +158,10 @@ public:
   //     as statsAsk() and the lists' gates read it: the page's No card line,
   //     and its Try again once the card is back). No play log: the stats off;
   //   - a made-up view (9.3's uiSx<n>, look only: StatsLists::madeUp() over
-  //     the library's index, `n` 0 its end). False: no play log, or its
-  //     snapshot not written (StatsLists' line says why).
+  //     the library's index, `n` 0 its end). No play log: statsview::
+  //     madeUpNoLog() (true for 0, 2 and 5-9; false for 1, 3, 4 and past 9,
+  //     said). False otherwise: past 9, or for 1, 3 and 4 its snapshot not
+  //     written, nothing held (StatsLists' line says why).
   void statsPhase(statsview::PhaseInfo& out) const;
   void statsLifetime(statsview::Lifetime& out, bool cardHeld) const;
   bool statsMadeUp(uint8_t n);

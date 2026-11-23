@@ -1656,16 +1656,19 @@ bool StatsLists::madeUp(uint8_t n, const LibraryIndex* index) {
     return false;
   }
   // A console visit or lean ask under way writes into the held snapshot (its
-  // rows, its count): it goes on, and no view is put under it.
+  // rows, its count) on the loop, and would write into the view's: it ends
+  // here, its result dropped, as the Dance tab's coming up ends one (the
+  // block's other claimant; stop(): on the card worker, at its step's end,
+  // its rank's block alone touched meanwhile). So every false below for 1-9
+  // leaves nothing held, as UiHost::statsMadeUp() says, and no view stands
+  // on a snapshot that isn't its own.
   if (visiting() && state_.load() != kIdle && !(flags_ & kFromUi)) {
-    Serial.printf("[listen] uiSx%u: %s under way (it writes into the held snapshot): no made-up view until it ends\n",
-                  view, name());
-    return false;
+    stop(Outcome::Cancelled, "a made-up view (uiSx) put on: dropped (it would write into the view's snapshot)");
   }
   // Whatever is held released first (a page's ask cancelled; a page's
-  // snapshot, Hu's or another view's), so a view's look never stands on a
-  // real snapshot: the views with none (2, 5-9) read their phase, not
-  // Served. (release()'s own lines.)
+  // snapshot, Hu's, a console ask's or another view's), so a view's look
+  // never stands on a real snapshot: the views with none (2, 5-9) read their
+  // phase, not Served. (release()'s own lines.)
   release("a made-up view (uiSx)");
   if (!v.snapshot) return true;
   if (!ready) {

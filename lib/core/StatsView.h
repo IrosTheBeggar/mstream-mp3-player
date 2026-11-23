@@ -435,5 +435,11 @@ struct MadeUpView {
 };
 // View `n` (1-9) over the live index's key; false for 0 and past 9.
 bool madeUpView(uint8_t n, uint64_t buildStamp, uint32_t trackCount, uint32_t albums, MadeUpView* out);
+// uiSx<n>'s answer from a host with no play log (UiHost::statsMadeUp()'s
+// default, app/PlayHistory's with none), which serves nothing and so writes
+// no snapshot: true for 0 (the end) and the views with none (2, 5-9); false
+// for those with one (1, 3, 4: not written) and past 9 (no such view). One
+// rule, so the two hosts read alike.
+bool madeUpNoLog(uint8_t n);
 
 }  // namespace statsview

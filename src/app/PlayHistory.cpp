@@ -216,13 +216,12 @@ bool PlayHistory::statsMadeUp(uint8_t n) {
   if (active_) return stats_.lists().madeUp(n, library_.index());
   // No play log (the flash, or no card's records): nothing is served
   // (statsSnapshot() null), so a view with a snapshot gets none; the end
-  // and the views without one are the pages' alone.
-  statsview::MadeUpView v;
-  const bool known = statsview::madeUpView(n, 0, 0, 0, &v);
-  if (n == 0 || (known && !v.snapshot)) return true;
+  // and the views without one are the pages' alone (statsview::
+  // madeUpNoLog(), UiHost's default too).
+  if (statsview::madeUpNoLog(n)) return true;
   Serial.printf("[listen] uiSx%u: %s\n", static_cast<unsigned>(n),
-                known ? "no made-up snapshot: no play log (the player's records aren't on a card)"
-                      : "no such made-up view (1-9; 0 the card's own)");
+                n < statsview::kMadeUpViews ? "no made-up snapshot: no play log (the player's records aren't on a card)"
+                                            : "no such made-up view (1-9; 0 the card's own)");
   return false;
 }
 
