@@ -34,11 +34,11 @@
 //   - The hub (7.4): its six rows by state, grade and phase (open, disabled
 //     with a reason and a toast, the status row with no clock), and the Try
 //     again row after them; the empty state with nothing played.
-//   - The shelves (7.6): ids, the tray by counting days and RCNT's oldest
-//     day, trayCellAt() with filtergrid::skew(), the kept window's
-//     fallback, Not played yet's own state (its bits, its lean ask), and
-//     Recently played's sections (the map between the list's rows and the
-//     snapshot's).
+//   - The shelves (7.6): ids, the tray by counting days and the rank's RCNT
+//     mark (rcntShort()), trayCellAt() with filtergrid::skew(), the kept
+//     window's fallback, Not played yet's own state (its bits, its lean
+//     ask), and Recently played's sections (the map between the list's rows
+//     and the snapshot's).
 //   - Last 7 days (7.7): its look, and its figures from the snapshot's 7
 //     days (the total, the plays, the bars to 44 px, the big day, Auto DJ's
 //     rate).
@@ -71,8 +71,13 @@ constexpr bool statsKind(uint8_t kind) { return kind == kKindHub || kind == kKin
 // statsvisit::countingDaysOf(dated, today, sinceDay); nowMin, with dated,
 // minutes since 2026-01-01 (Recently played's `when`'s, the relative times').
 struct Lifetime {
-  bool on = false;       // the stats on this session (StatsGlue::on()): else Off
-  bool folding = false;  // the boot's fold under way (StatsGlue::booting()): HEAD not whole
+  // The stats on this session: StatsGlue::on() || rereadPending(), as
+  // StatsLists' own off test (its loop()'s release and ask()'s drop read
+  // !on() && !rereadPending()). A remount's re-read waiting (on() false, HEAD
+  // cleared until the scan's next reserve()) is on, and folding (booting()),
+  // so the card back reads Try again, not Off. Else Off.
+  bool on = false;
+  bool folding = false;  // the boot's fold under way (StatsGlue::booting(): a re-read's among it): HEAD not whole
   bool cardIn = true;    // the card in and not held: else No card
   bool dated = false;    // the board's clock set (statsfold::todayOf())
   uint16_t today = statsfold::kUnsetDay;     // with dated
@@ -81,6 +86,12 @@ struct Lifetime {
   uint64_t plays = 0;       // HEAD's (this session's live folds among them)
   uint64_t listenedMs = 0;  // HEAD's
   uint32_t nowMin = 0;      // with dated
+  // A made-up view's (madeUpView(): 9.3's uiSx<n>, look only; never the
+  // host's): nothing asks (D16), so no look says an ask is due and the
+  // rising edge asks none. Its Try again rows still draw; their taps, as
+  // every act under a made-up view, are refused by the pages (S9, S12: the
+  // look-only toast, as uil<n>'s).
+  bool madeUp = false;
 };
 // StatsLists' phase, why, outcome and version (statsPhase()).
 struct PhaseInfo {
@@ -124,8 +135,16 @@ enum class Look : uint8_t {
 const char* lookName(Look k);
 struct PageLook {
   Look look = Look::Off;
-  S line = S::stats_counting;  // Pending's line, Retry's reason, NoCard's and Closed's line
-  bool askDue = false;         // Idle with the stats on (a Cancelled ask): one visit's ask due
+  // Pending's line, Retry's reason, NoCard's and Closed's line (a served
+  // shelf with none landed: stats.shelf_empty). Off and NoPlays draw no line
+  // at all: `line` is then the default and means nothing (ShelfLook's
+  // drawLine says when a shelf draws it).
+  S line = S::stats_counting;
+  // Idle with the stats on (a Cancelled ask): one visit's ask due. Never
+  // under a made-up view (Lifetime::madeUp): one whose snapshot wasn't
+  // written (the Dance tab up, past kBound, refused) reads Pending with
+  // nothing due, and uiSx says why (S12).
+  bool askDue = false;
 };
 // The page's look (served: the snapshot landed and held, StatsLists::
 // snapshot() non-null), in this order: the stats off: Off; the card out:
@@ -133,7 +152,7 @@ struct PageLook {
 // Working, Waiting: Pending; No room, Unread, Capped (stats.waiting): Retry;
 // No card with the card in again: Retry, stats.card_back (the owner's call
 // 3); Idle (and Ready, which needs a snapshot served): Pending's Working
-// line, askDue.
+// line, askDue (not under a made-up view).
 PageLook pageLook(const Lifetime& l, const PhaseInfo& p, bool served);
 // The phases' lines (7.11): Working stats.counting, Waiting and Capped
 // stats.waiting, No room stats.no_room, Unread stats.unread, No card
@@ -142,8 +161,9 @@ S phaseLine(Phase p);
 
 // The held condition's rising edge (D1, D3): asks a visit unless the stats
 // are off, the card is out (ask() would only drop it: No card), nothing is
-// played (Empty asks nothing), or a made-up view is on (look only).
-bool asksOnEdge(const Lifetime& l, bool madeUp);
+// played (Empty asks nothing), or a made-up view is on (l.madeUp: look
+// only, D16).
+bool asksOnEdge(const Lifetime& l);
 
 // ---------------------------------------------------------------------------
 // The held condition (7.1, 9.7): on the stats pages
@@ -229,7 +249,9 @@ struct HubLook {
 //     stats.needs_dates (D14). Its line, served, the count only after a
 //     Full or lean landing (hasNotPlayed()), else stats.since_only;
 //   - open rows' lines: Served the snapshot's, Pending the phase's line,
-//     else none;
+//     else none. So in Folding (Pending, the boot's Working) the open rows
+//     read Counting plays… while the disabled and status rows keep their
+//     RAM reasons (Opens 6 Dec, Needs dates, the status row's two lines);
 //   - Retry: a Try again row at index 6 (also with the status row in row 1).
 HubLook hubLook(const Lifetime& l, const PhaseInfo& p, const Snapshot* snap);
 
@@ -261,7 +283,7 @@ statsrank::List listOf(Shelf s, uint8_t window);
 struct Tray {
   uint8_t cells = 0;              // 0 (no tray), 2 or 3
   uint8_t window[3] = {};         // each cell's window
-  uint8_t days30 = 30;            // the 30-day cell's days: fewer when RCNT is capped ("16 days")
+  uint8_t days30 = 30;            // the 30-day cell's days: fewer when RCNT is short ("16 days")
 };
 constexpr int kTrayX = 6, kTrayY = 7, kTrayW = 300, kTrayH = 28, kTrayR = 10;
 constexpr int kTrayPlateY = 9, kTrayPlateH = 24, kTrayPlateR = 8, kTrayLabelY = 21;
@@ -269,10 +291,11 @@ constexpr int kTrayCellW3 = 96, kTrayCellW2 = 146;
 inline constexpr int kTrayCellX3[3] = {8, 108, 208};
 inline constexpr int kTrayCellX2[2] = {8, 158};
 // By the counting days (dated): under 7, or no clock, none; 7-29: 7 days
-// and All time; 30 on: 7 days, 30 days and All time. The 30-day cell
-// reads the days RCNT holds when its oldest day is inside the window (5.2:
-// past 4,096 rows whole days go; a window whose first days had no plays
-// reads the same: the days it holds), from the snapshot served (else 30).
+// and All time; 30 on: 7 days, 30 days and All time. The 30-day cell reads
+// the days RCNT holds (today - rcntFirstDay + 1) only when the snapshot
+// served says RCNT is short (rcntShort(): 5.2's cap, whole days gone, past
+// 4,096 rows), else 30: a window whose first days had no plays (a listener
+// away) holds all its plays, so it reads 30.
 Tray trayOf(const Lifetime& l, const Snapshot* snap);
 // A cell's left edge and width.
 int trayCellX(const Tray& t, int cell);
@@ -291,15 +314,20 @@ struct ShelfLook {
   Shelf shelf = Shelf::MostPlayed;
   uint8_t window = statsvisit::kAllTime;  // Most played's shown
   statsrank::List list = statsrank::kMostAll;  // the snapshot's (Not played yet: kLists)
-  bool tray = false;       // the lead TopRow (Most played with a tray)
+  bool tray = false;       // the lead TopRow (Most played with a tray; none in Off, NoCard, NoPlays)
   bool topBar = false;     // the container's bar: rows landed (none on Not played yet, nor on Try again)
   bool tryAgain = false;   // row 0 is Try again (first under the tray: 7.6)
   UiAsk ask = UiAsk::Visit;  // what Try again asks (Not played yet with no bits: its lean ask)
   uint32_t rows = 0;       // the list's rows (Recently played's with its sections; Not played
-                           // yet's albums); 1 for Try again; 0: `page.line` drawn under the lead items
+                           // yet's albums); 1 for Try again; 0 for a line or nothing
+  // `page.line` drawn under the lead items (rows 0): Pending, NoCard,
+  // Closed, a served shelf with none landed. Off and NoPlays draw none.
+  bool drawLine = false;
 };
 // A shelf's look:
-//   - Off, NoCard, NoPlays: 0 rows (NoCard's line);
+//   - Off, NoPlays: 0 rows, no line, no tray (D9 as replaced: no data);
+//   - NoCard: 0 rows, the No card line alone, no tray (the owner's call 3:
+//     while the card is out the page shows only that line);
 //   - Closed (RAM): New finds and Old favourites with no clock (stats.
 //     needs_dates) or under 30 counting days (stats.warming), Not played
 //     yet dated under 30 days (stats.warming), or served with no clock and
@@ -307,11 +335,15 @@ struct ShelfLook {
 //   - Served: the snapshot's rows, the top bar with any; none landed:
 //     stats.shelf_empty (D12). Not played yet with no bits (the visit took
 //     Lists, or its notPlayed() was refused): its own state by the phase,
-//     Working and Waiting its lean ask's line, Unread stats.unread, else
-//     stats.no_room, Try again its lean ask (7.6);
+//     Working and Waiting its lean ask's line, Unread and Capped their
+//     reasons, else stats.no_room, Try again its lean ask (7.6). Opening it
+//     asks nothing by itself (7.6), so a snapshot asked before the month
+//     (Lists, no Full asked) and held across the UTC midnight that opens
+//     the shelf reads No room too, its Try again the lean ask;
 //   - Pending: 0 rows, the phase's line;
 //   - Retry: row 0 Try again (no top bar), its reason.
-// Most played keeps its tray (RAM) in every look.
+// Most played's tray (RAM) is there in every other look, Retry and Closed
+// among them.
 ShelfLook shelfLook(uint32_t id, const Lifetime& l, const PhaseInfo& p, const Snapshot* snap);
 
 // Recently played's list (7.6, D10): section rows, then the snapshot's rows
@@ -321,9 +353,12 @@ ShelfLook shelfLook(uint32_t id, const Lifetime& l, const PhaseInfo& p, const Sn
 //     time relative to now. Undated rows (kWhenSession, kWhenEarlier) go
 //     last, under one Earlier.
 //   - Undated snapshot: This session (kWhenSession), then Earlier
-//     (kWhenEarlier), no times. A row dated before the clock was lost (its
-//     lastAt kept: the rank puts dated rows first) is under its day, with
-//     no Today or Yesterday (no today) and no time.
+//     (kWhenEarlier), no times. A row with a dated lastAt (the rank puts
+//     dated rows first: 4.3) is under its day, with no Today or Yesterday
+//     (no today) and no time. That is also a track replayed this session
+//     with no clock: an undated play leaves lastAt (5.9), and the copy-out
+//     codes kWhenSession only for lastAt 0, so it shows under its old day,
+//     not This session (an owner's call: S3b's review of S5).
 enum class Section : uint8_t { Today, Yesterday, Day, Session, Earlier };
 struct RecentItem {
   bool heading = false;
@@ -342,7 +377,8 @@ uint32_t recentListRow(const Snapshot& s, uint32_t snapRow);  // the list row of
 constexpr int kWeekBarPx = 44;  // the top day
 struct WeekLook {
   PageLook page;        // Served: the figures; Pending: A's value the line, B and C empty; Retry: the empty
-                        // state, its line and Try again's button; NoCard, Closed: the empty state, its line alone
+                        // state, its line and Try again's button; NoCard, Closed: the empty state, its line
+                        // alone; Off, NoPlays: no figures, no line
   bool button = false;  // the empty state's Try again
 };
 // As the hub's look; with no clock Closed (stats.needs_dates: never reached,
@@ -372,7 +408,7 @@ void barHeights(const uint32_t ms[statsrank::kWeekDays], uint16_t firstDay, uint
 // ---------------------------------------------------------------------------
 constexpr uint8_t kMadeUpViews = 10;
 struct MadeUpView {
-  Lifetime life;
+  Lifetime life;           // its madeUp true: nothing asks
   PhaseInfo phase;
   bool snapshot = false;     // a made-up snapshot to write (1, 3 and 4): `spec`
   statsvisit::MadeUp spec;   // keyed on the live index's buildStamp, trackCount and albums

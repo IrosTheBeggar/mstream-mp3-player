@@ -3315,7 +3315,7 @@
   },
   "stats.window_all": "All time",
   "@stats.window_all": {
-    "context": "Most played's tray (docs/LISTENING-STATS.md 7.6): the window of every play since the stats began, beside the 7 and 30 days' (stats.days_n). Bold, else Small, in its cell: 92 px of three, 144 of two. The mobile app's words (listeningPeriodAll).",
+    "context": "Most played's tray (docs/LISTENING-STATS.md 7.6): the window of every play since the stats began, beside the 7 and 30 days' (stats.days_n). Bold, else Small, in its cell: 92 px of three, 142 of two. The mobile app's words (listeningPeriodAll).",
     "room": [
       {
         "font": "Bold",
@@ -3325,7 +3325,7 @@
       {
         "font": "Bold",
         "else": "Small",
-        "px": 144
+        "px": 142
       }
     ]
   },
@@ -3334,7 +3334,7 @@
     "other": "{0} days"
   },
   "@stats.days_n": {
-    "context": "Most played's tray (docs/LISTENING-STATS.md 7.6): a window's length, \"7 days\", \"30 days\" (fewer when the card's recent counts hold less than 30 days: \"16 days\"). Bold, else Small, in its cell: 92 px of three, 144 of two. The mobile app's words (listeningDays).",
+    "context": "Most played's tray (docs/LISTENING-STATS.md 7.6): a window's length, \"7 days\", \"30 days\" (fewer when the card's recent counts hold less than 30 days: \"16 days\"). Bold, else Small, in its cell: 92 px of three, 142 of two. The mobile app's words (listeningDays).",
     "room": [
       {
         "font": "Bold",
@@ -3344,7 +3344,7 @@
       {
         "font": "Bold",
         "else": "Small",
-        "px": 144
+        "px": 142
       }
     ],
     "placeholders": {

@@ -318,15 +318,18 @@ void refFrom(const Bytes& bin, const Bytes& base, Ref* ref) {
 
 // The report's DAYS and RCNT fields as the reference has them: the 7 days,
 // oldest first (each field the ⊕'d row's), the first and newest DAYS day,
-// RCNT's oldest.
+// RCNT's oldest, and (S3b) the 30-day window's first day with a play.
 void sameDaysAsRef(const sr::Report& rep, const Ref& ref, int today, const std::string& what) {
   sr::Day want[sr::kWeekDays];
-  uint16_t first = sf::kUnsetDay, newest = sf::kUnsetDay, rcntFirst = sf::kUnsetDay;
+  uint16_t first = sf::kUnsetDay, newest = sf::kUnsetDay, rcntFirst = sf::kUnsetDay, first30 = sf::kUnsetDay;
   for (const auto& kv : ref.days) {
     const int day = kv.first;
     const uint8_t* row = kv.second.data();
     if (first == sf::kUnsetDay || day < first) first = static_cast<uint16_t>(day);
     if (newest == sf::kUnsetDay || day > newest) newest = static_cast<uint16_t>(day);
+    if (today >= 0 && day <= today && today - day < 30 && cc::get16(row + 2) > 0 &&
+        (first30 == sf::kUnsetDay || day < first30))
+      first30 = static_cast<uint16_t>(day);
     if (today < 0 || day > today || today - day >= static_cast<int>(sr::kWeekDays)) continue;
     sr::Day& d = want[sr::kWeekDays - 1 - (today - day)];
     d.listenedMs = cc::get32(row + 8);
@@ -346,6 +349,7 @@ void sameDaysAsRef(const sr::Report& rep, const Ref& ref, int today, const std::
   TEST_ASSERT_EQUAL_UINT16_MESSAGE(first, rep.firstDay, (what + " firstDay").c_str());
   TEST_ASSERT_EQUAL_UINT16_MESSAGE(newest, rep.newestDay, (what + " newestDay").c_str());
   TEST_ASSERT_EQUAL_UINT16_MESSAGE(rcntFirst, rep.rcntFirstDay, (what + " rcntFirstDay").c_str());
+  TEST_ASSERT_EQUAL_UINT16_MESSAGE(first30, rep.days30FirstDay, (what + " days30FirstDay").c_str());
 }
 
 // A list by the reference's rule, best first; `capped`: cut to its cap and
@@ -1349,7 +1353,10 @@ void test_the_seven_days_and_the_span() {
 
 // RCNT's oldest day (7.6's stats.days_n): with RCNT capped, inside the 30
 // days (rank-rcnt-cap; the fixture boot rcnt-cap); the clock unset still
-// reads it; a record's older row moves it.
+// reads it; a record's older row moves it. S3b's mark (rcntShort()): DAYS'
+// first played day in the window before RCNT's oldest; a records' DAYS
+// play inside the window gives it, a skip or a day outside doesn't, and the
+// fixture boot's cap (day 288 gone, 289 kept) leaves the window whole.
 void test_rcnt_first_day_with_rcnt_capped() {
   const minijson::Value& sc = rankScenario("rank-rcnt-cap");
   const RankCard c = rankCard(sc);
@@ -1371,6 +1378,36 @@ void test_rcnt_first_day_with_rcnt_capped() {
       TEST_ASSERT_EQUAL_UINT32(rep.rcntRows, rep.windowRows);
       sameTotals(r, sc["totals"], "rank-rcnt-cap");
     }
+    // S3b's mark (rcntShort(), the 30-day cell's "13 days"): DAYS played on
+    // the window's days before RCNT's oldest, or not. A records' DAYS row
+    // (the session's) with a play 20 days back marks it; one with only a
+    // skip, or a day before the window, doesn't.
+    if (day >= 0) {
+      const uint16_t d30 = rep.days30FirstDay;
+      TEST_ASSERT_EQUAL(d30 != sf::kUnsetDay && d30 < rep.rcntFirstDay, sr::rcntShort(rep));
+      const sr::Input keep = s.in;
+      for (const int k : {0, 1, 2}) {
+        uint8_t drow[16] = {};
+        cc::put16(drow, static_cast<uint16_t>(k == 2 ? today - 30 : today - 20));
+        cc::put16(drow + 2, static_cast<uint16_t>(k == 1 ? 0 : 1));  // plays
+        cc::put16(drow + 4, static_cast<uint16_t>(k == 1 ? 1 : 0));  // skips
+        cc::put32(drow + 8, 200000);
+        s.in.days = drow;
+        s.in.daysRows = 1;
+        sr::Ranker rd;
+        const sr::Report rr = sr::rank(card, s.in, mem.m, rd);
+        TEST_ASSERT_EQUAL_STRING("ok", sr::outcomeName(rr.outcome));
+        TEST_ASSERT_EQUAL_UINT16(today - 12, rr.rcntFirstDay);
+        if (k == 0) {
+          TEST_ASSERT_EQUAL_UINT16(std::min<int>(today - 20, d30 == sf::kUnsetDay ? today : d30), rr.days30FirstDay);
+          TEST_ASSERT_TRUE(sr::rcntShort(rr));
+        } else {
+          TEST_ASSERT_EQUAL_UINT16(d30, rr.days30FirstDay);
+          TEST_ASSERT_EQUAL(sr::rcntShort(rep), sr::rcntShort(rr));
+        }
+      }
+      s.in = keep;
+    }
     // A record's row 40 days back (the session's: RCNT not yet pruned).
     uint8_t row[12];
     cc::put16(row, static_cast<uint16_t>(today - 40));
@@ -1383,6 +1420,8 @@ void test_rcnt_first_day_with_rcnt_capped() {
     TEST_ASSERT_EQUAL_STRING("ok", sr::outcomeName(rep2.outcome));
     TEST_ASSERT_EQUAL_UINT16(today - 40, rep2.rcntFirstDay);
     TEST_ASSERT_EQUAL_UINT32(rep.windowRows, rep2.windowRows);  // (outside the window)
+    // ... RCNT's oldest now before the window: not short, whatever DAYS has.
+    TEST_ASSERT_FALSE(sr::rcntShort(rep2));
   }
   uint32_t boots = 0;
   for (const Card& k : gCards) {
@@ -1395,6 +1434,9 @@ void test_rcnt_first_day_with_rcnt_capped() {
     const Ref ref = refOf(k, run.s.in);
     TEST_ASSERT_EQUAL_UINT16(ref.rcnt.begin()->first.first, rep.rcntFirstDay);
     TEST_ASSERT_EQUAL_UINT16(289, rep.rcntFirstDay);  // day 288 dropped whole
+    // ... before the window (290-319): it holds 30 days still, no mark.
+    TEST_ASSERT_EQUAL_UINT16(290, rep.days30FirstDay);
+    TEST_ASSERT_FALSE(sr::rcntShort(rep));
     ++boots;
   }
   TEST_ASSERT_EQUAL_UINT32(1, boots);
@@ -1554,6 +1596,7 @@ void test_the_played_set_only_rank() {
       TEST_ASSERT_EQUAL_UINT16_MESSAGE(sf::kUnsetDay, lr.firstDay, what.c_str());
       TEST_ASSERT_EQUAL_UINT16_MESSAGE(sf::kUnsetDay, lr.newestDay, what.c_str());
       TEST_ASSERT_EQUAL_UINT16_MESSAGE(sf::kUnsetDay, lr.rcntFirstDay, what.c_str());
+      TEST_ASSERT_EQUAL_UINT16_MESSAGE(sf::kUnsetDay, lr.days30FirstDay, what.c_str());
       for (uint32_t i = 0; i < sr::kWeekDays; ++i)
         TEST_ASSERT_TRUE_MESSAGE(lr.days[i].listenedMs == 0 && lr.days[i].plays == 0, what.c_str());
       // Nothing offered: the full rank's lists and totals as they were.
@@ -1638,6 +1681,7 @@ void test_the_overlay() {
                                        wr.days[i].autoDjSkips == gr.days[i].autoDjSkips,
                                    mp.c_str());
         TEST_ASSERT_EQUAL_UINT16_MESSAGE(wr.rcntFirstDay, gr.rcntFirstDay, mp.c_str());
+        TEST_ASSERT_EQUAL_UINT16_MESSAGE(wr.days30FirstDay, gr.days30FirstDay, mp.c_str());
       }
     }
   }

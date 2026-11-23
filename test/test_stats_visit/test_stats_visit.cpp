@@ -1695,8 +1695,14 @@ void test_the_made_up_writer_reads_back() {
           TEST_ASSERT_EQUAL_UINT8(i % 3, r.src);
           break;
         case sr::kOldFavourites:
-          TEST_ASSERT_EQUAL_UINT32(std::min<uint32_t>(count, sv::kCountMax), r.count);
-          TEST_ASSERT_EQUAL_UINT16(313 - 31 - 3 * i, r.lastDay);
+          // 4.3's rule: plays at least 5; last played before the 30 days
+          // (282, today - 31, the first row's) and not before sinceDay
+          // (243, the last row's), spread, each no newer than the last.
+          TEST_ASSERT_EQUAL_UINT32(std::min<uint32_t>(std::max<uint32_t>(count, sr::kOldFavourite), sv::kCountMax),
+                                   r.count);
+          TEST_ASSERT_EQUAL_UINT16(282 - i * 39 / 40, r.lastDay);
+          TEST_ASSERT_TRUE(r.lastDay >= 243 && r.lastDay <= 313 - 30);
+          if (i > 0) TEST_ASSERT_TRUE(r.lastDay <= s->rowAt(l, i - 1).lastDay);
           break;
         case sr::kRecent:
           TEST_ASSERT_EQUAL_UINT32(0, r.count);
@@ -1714,6 +1720,34 @@ void test_the_made_up_writer_reads_back() {
     TEST_ASSERT_EQUAL_UINT32(want, seen.size());  // no id twice in a list
     // The rows past it zero, as resolve() leaves them.
     if (want < sv::roomOf(l, albums)) TEST_ASSERT_EQUAL_UINT16(0, s->rowAt(l, want).id);
+  }
+  TEST_ASSERT_FALSE(s->rcntShort());  // not asked (m.rcntShort false)
+  // Old favourites' plays at least 5 when the recipe's run lower (4.3).
+  {
+    sv::MadeUp low = m;
+    low.topCount[sr::kOldFavourites] = 14;  // view 1's: 14 down to 1 by the old recipe
+    Block lb(sv::bytesFor(albums));
+    sv::Snapshot* ls = snapOf(lb);
+    TEST_ASSERT_TRUE(sv::writeMadeUp(low, ls, lb.bytes));
+    for (uint32_t i = 0; i < ls->rows(sr::kOldFavourites); ++i)
+      TEST_ASSERT_EQUAL_UINT32(i < 9 ? 14 - i : sr::kOldFavourite, ls->rowAt(sr::kOldFavourites, i).count);
+  }
+  // A track count a multiple of 7,919 (a prime: the step's first try), and
+  // 7,919 itself: still no id twice in a list (the step coprime to it).
+  for (const uint32_t n : {7919u, 15838u, 63352u}) {
+    sv::MadeUp p = m;
+    p.trackCount = n;
+    Block pb(sv::bytesFor(albums));
+    sv::Snapshot* ps = snapOf(pb);
+    TEST_ASSERT_TRUE(sv::writeMadeUp(p, ps, pb.bytes));
+    for (sr::List l : kAll) {
+      std::map<uint32_t, int> seen;
+      for (uint32_t i = 0; i < ps->rows(l); ++i) {
+        TEST_ASSERT_TRUE(ps->rowAt(l, i).id < n);
+        ++seen[ps->rowAt(l, i).id];
+      }
+      TEST_ASSERT_EQUAL_UINT32(ps->rows(l), seen.size());
+    }
   }
   // Not played yet: every third album in A-Z order, through the directory.
   TEST_ASSERT_EQUAL_UINT32((albums + 2) / 3, s->notPlayedCount());
@@ -1771,6 +1805,56 @@ void test_the_made_up_writer_reads_back() {
   TEST_ASSERT_FALSE(sv::writeMadeUp(big, s, b.bytes));
   TEST_ASSERT_TRUE(s->madeUp());  // untouched
 
+  // A trimmed layout (past 3,216 albums Old favourites and Recently played
+  // give rows up: 5,000 albums, 190 each): every list asked past its room
+  // is cut to it, and Not played yet's bits and directory, right after
+  // Recently played's room, read back whole.
+  {
+    const uint32_t many = 5000;
+    TEST_ASSERT_EQUAL_UINT32(26, sv::trimFor(many));
+    TEST_ASSERT_EQUAL_UINT32(190, sv::roomOf(sr::kRecent, many));
+    TEST_ASSERT_EQUAL_UINT32(190, sv::roomOf(sr::kOldFavourites, many));
+    TEST_ASSERT_TRUE(sv::bytesFor(many) <= sv::kBound);
+    sv::MadeUp t5 = m;
+    t5.albums = many;
+    for (int l = 0; l < sr::kLists; ++l) t5.rows[l] = 216;
+    t5.rows[sr::kRecent] = 175;  // 175 dated, 10 this session's, 10 earlier: 195 asked
+    t5.sessionRows = 10;
+    t5.earlierRows = 10;
+    t5.notPlayedEvery = 7;
+    Block tb(sv::bytesFor(many));
+    tb.fill(0xA5);
+    sv::Snapshot* ts = snapOf(tb);
+    TEST_ASSERT_TRUE(sv::writeMadeUp(t5, ts, tb.bytes));
+    TEST_ASSERT_TRUE(tb.guarded());
+    for (sr::List l : kAll)
+      TEST_ASSERT_EQUAL_UINT32(std::min(sv::roomOf(l, many), sr::kCaps[l]), ts->rows(l));
+    TEST_ASSERT_EQUAL_UINT32(190, ts->rows(sr::kRecent));
+    TEST_ASSERT_EQUAL_UINT32(190, ts->rows(sr::kOldFavourites));
+    TEST_ASSERT_EQUAL_UINT32(sv::offsetOf(sr::kRecent, many) + 190u * sv::kStrides[sr::kRecent], ts->bitsOffset());
+    TEST_ASSERT_EQUAL_UINT32((many + 6) / 7, ts->notPlayedCount());
+    for (uint32_t k = 0; k < ts->notPlayedCount(); ++k) TEST_ASSERT_EQUAL_UINT32(7 * k, ts->albumAt(k));
+    // Recently played cut from its end: 175 dated, 10 this session's, 5 of
+    // the earlier; its last row whole, not under the bits.
+    TEST_ASSERT_TRUE(ts->rowAt(sr::kRecent, 174).when < sv::kWhenEarlier);
+    TEST_ASSERT_EQUAL_UINT32(sv::kWhenSession, ts->rowAt(sr::kRecent, 175).when);
+    TEST_ASSERT_EQUAL_UINT32(sv::kWhenEarlier, ts->rowAt(sr::kRecent, 189).when);
+  }
+
+  // RCNT short (the rank's mark, kFlagRcntShort: 32): the recipe's, dated
+  // only.
+  {
+    sv::MadeUp sh = m;
+    sh.rcntShort = true;
+    Block hb(sv::bytesFor(albums));
+    TEST_ASSERT_TRUE(sv::writeMadeUp(sh, snapOf(hb), hb.bytes));
+    TEST_ASSERT_TRUE(snapOf(hb)->rcntShort());
+    TEST_ASSERT_EQUAL_UINT8(32, sv::kFlagRcntShort);
+    sh.dated = false;
+    TEST_ASSERT_TRUE(sv::writeMadeUp(sh, snapOf(hb), hb.bytes));
+    TEST_ASSERT_FALSE(snapOf(hb)->rcntShort());
+  }
+
   // A real ask's write() over it: the mark goes with the rest of the flags.
   Block mem(sr::Ranker::kBytes);
   sr::Ranker k;
@@ -1782,6 +1866,18 @@ void test_the_made_up_writer_reads_back() {
   TEST_ASSERT_TRUE(s->written());
   TEST_ASSERT_FALSE(s->madeUp());
   TEST_ASSERT_FALSE(s->resolved());
+  TEST_ASSERT_FALSE(s->rcntShort());
+  // ... and the RCNT mark from its report (statsrank::rcntShort()): RCNT's
+  // oldest day after DAYS' first played day in the 30 days; a gap at the
+  // window's start (both the same day) none.
+  rep.rcntFirstDay = 298;
+  rep.days30FirstDay = 284;
+  TEST_ASSERT_TRUE(sv::write(k, w.w, rep, contextOf(albums, 9, 44), s, b.bytes));
+  TEST_ASSERT_TRUE(s->rcntShort());
+  TEST_ASSERT_EQUAL_UINT16(298, s->rcntFirstDay());
+  rep.days30FirstDay = 298;
+  TEST_ASSERT_TRUE(sv::write(k, w.w, rep, contextOf(albums, 9, 45), s, b.bytes));
+  TEST_ASSERT_FALSE(s->rcntShort());
 }
 
 int main(int, char**) {

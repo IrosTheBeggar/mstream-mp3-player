@@ -21,24 +21,32 @@
 // - the Try again row's place: after row 6 on the hub (with the status row
 //   in row 1 too), first under Most played's tray with no top bar, row 0 on
 //   a shelf without one, Not played yet's lean ask;
-// - the card back on all three page shapes;
+// - the card back on all three page shapes (the shelves with no tray while
+//   the card is out), and through a remount's re-read (Lifetime::on is
+//   StatsGlue's on() or rereadPending(): Try again, not Off);
 // - the rising edge's asks (D3: none for Off, the card out, Empty, a
 //   made-up view) and onStatsPages() over stacks (an album above a shelf
 //   counts; another tab, the dark, suspended and the synthetic library
 //   don't);
 // - the entry row: when it is there (D18 among it), its line and its
-//   fallback (the lifetime line in 204 px, else the time alone; no plays),
-//   the time and day texts, kEntryBars;
-// - the tray by counting days and RCNT's oldest day, its cells' boxes, its
-//   hits (each cell's centre at least 16 px inside its splits on the lab's
-//   panel and a true one) and the kept window's fallback;
-// - Recently played's sections: a dated snapshot's Today, Yesterday, days
-//   and one Earlier for its undated rows; an undated one's This session then
-//   Earlier, with no times;
+//   fallback (the lifetime line in 204 px, 204 fitting and 205 not, else
+//   the time alone; no plays), the time and day texts, kEntryBars;
+// - the month's edge (29 and 30 counting days) for the hub's rows 3-5, the
+//   shelves and the state alike; Folding's rows from RAM;
+// - Off and NoPlays drawing nothing on a shelf (no line, no tray);
+// - the tray by counting days and the rank's RCNT mark (a gap at the
+//   window's start stays 30), its cells' boxes, its hits (each cell's
+//   centre at least 16 px inside its splits on the lab's panel and a true
+//   one) and the kept window's fallback;
+// - Recently played's sections: a dated snapshot's Today, Yesterday, a
+//   heading a day and one Earlier for its undated rows; an undated one's
+//   This session then Earlier, with no times, and its dated rows under
+//   their days;
 // - Week's figures from a made-up snapshot: the total, the plays, the bars
-//   (none before sinceDay or for an empty day), the big day (a tie to the
-//   later day), Auto DJ's rate from 5 tracks (D11);
-// - the made-up views 0-9, 7-9's looks on every page.
+//   (none before sinceDay, sinceDay's own, none for an empty day), the big
+//   day (a tie to the later day), Auto DJ's rate from 5 tracks (D11);
+// - the made-up views 0-9, 7-9's looks on every page, none with an ask due
+//   (a view whose snapshot wasn't written among them).
 // The texts' widths in every language are test_ui_library's (S6).
 // Run: pio test -e native -f test_ui_stats
 #include <unity.h>
@@ -128,6 +136,8 @@ void put(Snap& b, const sv::MadeUp& m) { TEST_ASSERT_TRUE(sv::writeMadeUp(m, b.s
 
 // A monospace width: ctx is the px a byte.
 int monoWidth(const char* t, void* ctx) { return static_cast<int>(std::strlen(t)) * *static_cast<int*>(ctx); }
+// Any text the same width: ctx is it.
+int fixedWidth(const char*, void* ctx) { return *static_cast<int*>(ctx); }
 
 void lineIs(Line want, S text, const HubItem& it, const char* msg) {
   TEST_ASSERT_EQUAL_MESSAGE(static_cast<int>(want), static_cast<int>(it.line), msg);
@@ -271,6 +281,15 @@ void test_the_page_look_by_phase() {
   empty.plays = 0;
   TEST_ASSERT_EQUAL_STRING("no plays", lookName(pageLook(empty, phase(Phase::Idle), false).look));
   TEST_ASSERT_FALSE(pageLook(empty, phase(Phase::Idle), false).askDue);
+  // A made-up view (look only, D16): the same looks, never an ask due.
+  Lifetime madeUp = l;
+  madeUp.madeUp = true;
+  for (const Case& c : cases) {
+    const PageLook k = pageLook(madeUp, c.p, false);
+    TEST_ASSERT_EQUAL_STRING(lookName(c.look), lookName(k.look));
+    TEST_ASSERT_EQUAL(static_cast<int>(c.line), static_cast<int>(k.line));
+    TEST_ASSERT_FALSE(k.askDue);
+  }
   // The phases' lines (7.11).
   TEST_ASSERT_EQUAL(static_cast<int>(S::stats_counting), static_cast<int>(phaseLine(Phase::Working)));
   TEST_ASSERT_EQUAL(static_cast<int>(S::stats_waiting), static_cast<int>(phaseLine(Phase::Waiting)));
@@ -282,22 +301,35 @@ void test_the_page_look_by_phase() {
 
 // The rising edge's asks (D1, D3 with No card: ask() would only drop it).
 void test_the_rising_edge_s_asks() {
-  TEST_ASSERT_TRUE(asksOnEdge(dated(), false));
-  TEST_ASSERT_TRUE(asksOnEdge(dated(5), false));
-  TEST_ASSERT_TRUE(asksOnEdge(noClock(), false));
+  TEST_ASSERT_TRUE(asksOnEdge(dated()));
+  TEST_ASSERT_TRUE(asksOnEdge(dated(5)));
+  TEST_ASSERT_TRUE(asksOnEdge(noClock()));
   Lifetime l = dated();
   l.folding = true;  // the ask waits for the boot's scan (Working)
-  TEST_ASSERT_TRUE(asksOnEdge(l, false));
-  TEST_ASSERT_FALSE(asksOnEdge(dated(), true));  // a made-up view: look only
+  TEST_ASSERT_TRUE(asksOnEdge(l));
+  l = dated();
+  l.madeUp = true;  // a made-up view: look only
+  TEST_ASSERT_FALSE(asksOnEdge(l));
   l = dated();
   l.plays = 0;
-  TEST_ASSERT_FALSE(asksOnEdge(l, false));  // Empty
+  TEST_ASSERT_FALSE(asksOnEdge(l));  // Empty
   l = dated();
   l.cardIn = false;
-  TEST_ASSERT_FALSE(asksOnEdge(l, false));  // the card out
+  TEST_ASSERT_FALSE(asksOnEdge(l));  // the card out
   l = dated();
   l.on = false;
-  TEST_ASSERT_FALSE(asksOnEdge(l, false));  // Off
+  TEST_ASSERT_FALSE(asksOnEdge(l));  // Off
+  // A remount's re-read waiting (StatsGlue on() false, rereadPending():
+  // Lifetime::on is both, HEAD cleared, folding): on, so it asks (the ask
+  // waits for the scan, Working), as StatsLists' ask() takes it.
+  l = dated();
+  l.folding = true;
+  l.plays = 0;
+  l.listenedMs = 0;
+  l.sinceDay = sf::kUnsetDay;
+  l.countingDays = 0;
+  TEST_ASSERT_EQUAL(State::Folding, stateOf(l));
+  TEST_ASSERT_TRUE(asksOnEdge(l));
 }
 
 // ---------------------------------------------------------------------------
@@ -387,6 +419,14 @@ void test_the_entry_row_and_its_line() {
   TEST_ASSERT_EQUAL_STRING("74 h 10 min", b);
   px = 8;  // 184 px: fits again
   TEST_ASSERT_EQUAL(EntryLine::Since, entryLine(l, monoWidth, &px, b, sizeof(b)));
+  // The room's edge (the owner's call 1: 204 px): 204 fits, 205 doesn't.
+  int fixed = kEntryRoom;
+  TEST_ASSERT_EQUAL_INT(204, kEntryRoom);
+  TEST_ASSERT_EQUAL(EntryLine::Since, entryLine(l, fixedWidth, &fixed, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("74 h 10 min since 1 Sep", b);
+  fixed = kEntryRoom + 1;
+  TEST_ASSERT_EQUAL(EntryLine::Time, entryLine(l, fixedWidth, &fixed, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("74 h 10 min", b);
   // No first day: the time alone, whatever the width.
   Lifetime u = l;
   u.sinceDay = sf::kUnsetDay;
@@ -489,10 +529,19 @@ void test_hub_rows_in_each_state() {
     for (HubRow r : {HubRow::Week, HubRow::MostPlayed, HubRow::Recent})
       TEST_ASSERT_EQUAL(RowKind::Open, h.item[static_cast<int>(r)].kind);
   }
-  // At 29 days still disabled; at 30 open.
-  TEST_ASSERT_EQUAL(RowKind::Disabled, hubLook(dated(29), kReady, full.s()).item[4].kind);
-  TEST_ASSERT_EQUAL(RowKind::Open, hubLook(dated(30), kReady, full.s()).item[4].kind);
-  TEST_ASSERT_EQUAL(RowKind::Open, hubLook(dated(30), kReady, full.s()).item[2].kind);
+  // At 29 days still disabled; at 30 open: rows 3-5 at the same edge as the
+  // state's (First month to Ready), served or not.
+  for (const sv::Snapshot* snap : {static_cast<const sv::Snapshot*>(full.s()), static_cast<const sv::Snapshot*>(nullptr)}) {
+    const PhaseInfo p = snap ? kReady : phase(Phase::Working);
+    const HubLook h29 = hubLook(dated(29), p, snap), h30 = hubLook(dated(30), p, snap);
+    TEST_ASSERT_EQUAL(State::FirstMonth, stateOf(dated(29)));
+    TEST_ASSERT_EQUAL(State::Ready, stateOf(dated(30)));
+    for (HubRow r : {HubRow::NewFinds, HubRow::OldFavourites, HubRow::NotPlayed}) {
+      TEST_ASSERT_EQUAL(RowKind::Disabled, h29.item[static_cast<int>(r)].kind);
+      lineIs(Line::Warming, S::stats_warming, h29.item[static_cast<int>(r)], "29 days");
+      TEST_ASSERT_EQUAL(RowKind::Open, h30.item[static_cast<int>(r)].kind);
+    }
+  }
 
   // No dates, pending: row 1 the status row; New finds and Old favourites
   // disabled, "Needs dates" and its toast; Not played yet pending (open,
@@ -530,12 +579,35 @@ void test_hub_rows_in_each_state() {
   TEST_ASSERT_EQUAL(RowKind::Disabled, h.item[4].kind);
   lineIs(Line::Text, S::stats_needs_dates, h.item[4], "span 29");
 
-  // Folding: the rows from RAM, every line "Counting plays…".
+  // Folding: the rows from RAM, every open row's line "Counting plays…".
+  const PhaseInfo boot = phase(Phase::Working, Outcome::None, sv::kWhyBoot);
   Lifetime f = dated();
   f.folding = true;
-  h = hubLook(f, phase(Phase::Working, Outcome::None, sv::kWhyBoot), nullptr);
+  h = hubLook(f, boot, nullptr);
   TEST_ASSERT_EQUAL_UINT32(6, h.rows);
   for (uint32_t i = 0; i < 6; ++i) lineIs(Line::Text, S::stats_counting, h.item[i], "folding");
+  // ... in the first month the disabled rows keep "Opens 6 Dec"; with no
+  // clock the status row and "Needs dates" stay (7.4 as decided: RAM's).
+  f = dated(5);
+  f.folding = true;
+  h = hubLook(f, boot, nullptr);
+  for (HubRow r : {HubRow::Week, HubRow::MostPlayed, HubRow::Recent})
+    lineIs(Line::Text, S::stats_counting, h.item[static_cast<int>(r)], "folding, first month");
+  for (HubRow r : {HubRow::NewFinds, HubRow::OldFavourites, HubRow::NotPlayed}) {
+    TEST_ASSERT_EQUAL(RowKind::Disabled, h.item[static_cast<int>(r)].kind);
+    lineIs(Line::Warming, S::stats_warming, h.item[static_cast<int>(r)], "folding, first month");
+  }
+  f = noClock();
+  f.folding = true;
+  h = hubLook(f, boot, nullptr);
+  TEST_ASSERT_EQUAL(RowKind::Status, h.item[0].kind);
+  TEST_ASSERT_EQUAL(Line::Status, h.item[0].line);
+  for (HubRow r : {HubRow::NewFinds, HubRow::OldFavourites}) {
+    TEST_ASSERT_EQUAL(RowKind::Disabled, h.item[static_cast<int>(r)].kind);
+    lineIs(Line::Text, S::stats_needs_dates, h.item[static_cast<int>(r)], "folding, no clock");
+  }
+  for (HubRow r : {HubRow::MostPlayed, HubRow::NotPlayed, HubRow::Recent})
+    lineIs(Line::Text, S::stats_counting, h.item[static_cast<int>(r)], "folding, no clock");
 
   // Empty: no rows, the empty state (7.5).
   Lifetime e = dated();
@@ -665,6 +737,35 @@ void test_the_try_again_row_s_place() {
   k = shelfLook(np, dated(), phase(Phase::Unread, Outcome::Io), ls.s());
   TEST_ASSERT_EQUAL(static_cast<int>(S::stats_unread), static_cast<int>(k.page.line));
   TEST_ASSERT_EQUAL(UiAsk::NotPlayed, k.ask);
+  // Capped (the lit cap's 3 s): "Waiting for the card…" with its Try again,
+  // the lean ask.
+  k = shelfLook(np, dated(), phase(Phase::Capped), ls.s());
+  TEST_ASSERT_EQUAL_STRING("retry", lookName(k.page.look));
+  TEST_ASSERT_EQUAL(static_cast<int>(S::stats_waiting), static_cast<int>(k.page.line));
+  TEST_ASSERT_TRUE(k.tryAgain);
+  TEST_ASSERT_EQUAL(UiAsk::NotPlayed, k.ask);
+  TEST_ASSERT_EQUAL_UINT32(1, k.rows);
+  TEST_ASSERT_FALSE(k.drawLine);  // the reason is the row's
+  // A Lists snapshot asked on counting day 29 and held across the UTC
+  // midnight that opens the shelf (RAM's 30 days): opening it asks nothing
+  // by itself (7.6), so it reads its own No room with the lean ask's Try
+  // again (a departure kept: S3b's review of S5).
+  sv::MadeUp early = lists;
+  early.sinceDay = static_cast<uint16_t>(kToday - 28);
+  Snap es;
+  put(es, early);
+  TEST_ASSERT_FALSE(sv::notPlayedMayOpen(es->dated(), es->today(), es->sinceDay()));
+  Lifetime month = dated();
+  month.today = static_cast<uint16_t>(kToday + 1);  // the next UTC day
+  month.sinceDay = early.sinceDay;
+  month.countingDays = sv::countingDaysOf(true, month.today, month.sinceDay);
+  TEST_ASSERT_EQUAL_UINT32(30, month.countingDays);
+  TEST_ASSERT_EQUAL(RowKind::Open, hubLook(month, kReady, es.s()).item[4].kind);
+  k = shelfLook(np, month, kReady, es.s());
+  TEST_ASSERT_EQUAL_STRING("retry", lookName(k.page.look));
+  TEST_ASSERT_EQUAL(static_cast<int>(S::stats_no_room), static_cast<int>(k.page.line));
+  TEST_ASSERT_EQUAL(UiAsk::NotPlayed, k.ask);
+  TEST_ASSERT_FALSE(k.page.askDue);
   Snap full;
   put(full, fullCard());
   k = shelfLook(np, dated(), kReady, full.s());
@@ -694,7 +795,8 @@ void test_the_card_back_on_every_page() {
   TEST_ASSERT_EQUAL(RowKind::TryAgain, h.item[6].kind);
   lineIs(Line::Text, S::stats_card_back, h.item[6], "hub, card back");
   TEST_ASSERT_FALSE(h.page.askDue);
-  // The shelves (Most played's tray kept).
+  // The shelves: while the card is out the No card line alone, Most played
+  // with no tray over it (the owner's call 3); back, its tray and Try again.
   for (uint32_t s = 0; s < kShelves; ++s) {
     const uint32_t id = shelfId(static_cast<Shelf>(s));
     ShelfLook k = shelfLook(id, out, noCard, nullptr);
@@ -702,13 +804,16 @@ void test_the_card_back_on_every_page() {
     TEST_ASSERT_EQUAL(static_cast<int>(S::stats_no_card), static_cast<int>(k.page.line));
     TEST_ASSERT_FALSE(k.tryAgain);
     TEST_ASSERT_EQUAL_UINT32(0, k.rows);
-    TEST_ASSERT_EQUAL(s == 0, k.tray);
+    TEST_ASSERT_FALSE(k.tray);
+    TEST_ASSERT_TRUE(k.drawLine);
     k = shelfLook(id, back, noCard, nullptr);
     TEST_ASSERT_EQUAL_STRING("retry", lookName(k.page.look));
     TEST_ASSERT_EQUAL(static_cast<int>(S::stats_card_back), static_cast<int>(k.page.line));
     TEST_ASSERT_TRUE(k.tryAgain);
     TEST_ASSERT_EQUAL(UiAsk::Visit, k.ask);
     TEST_ASSERT_EQUAL_UINT32(1, k.rows);
+    TEST_ASSERT_EQUAL(s == 0, k.tray);
+    TEST_ASSERT_FALSE(k.drawLine);
   }
   // Week's empty state: its line alone, then with its button.
   WeekLook w = weekLook(out, noCard, nullptr);
@@ -718,6 +823,51 @@ void test_the_card_back_on_every_page() {
   w = weekLook(back, noCard, nullptr);
   TEST_ASSERT_TRUE(w.button);
   TEST_ASSERT_EQUAL(static_cast<int>(S::stats_card_back), static_cast<int>(w.page.line));
+
+  // The remount's re-read waiting (run 3b-9's window): StatsGlue's on() is
+  // false and HEAD cleared until the scan's next reserve(), but Lifetime::on
+  // is on() || rereadPending() (StatsLists' own off test) and folding is
+  // booting(). So the card back reads Try again with "The card is back" on
+  // every page, not Off, and Artists keeps its entry row, "Counting plays…".
+  Lifetime reread = dated();
+  reread.folding = true;
+  reread.plays = 0;
+  reread.listenedMs = 0;
+  reread.sinceDay = sf::kUnsetDay;
+  reread.countingDays = 0;
+  TEST_ASSERT_EQUAL(State::Folding, stateOf(reread));  // before Empty: HEAD cleared, not empty
+  h = hubLook(reread, noCard, nullptr);
+  TEST_ASSERT_EQUAL_STRING("retry", lookName(h.page.look));
+  TEST_ASSERT_EQUAL_UINT32(7, h.rows);
+  TEST_ASSERT_EQUAL(RowKind::TryAgain, h.item[6].kind);
+  lineIs(Line::Text, S::stats_card_back, h.item[6], "hub, re-read");
+  for (Shelf s : {Shelf::MostPlayed, Shelf::Recent}) {
+    const ShelfLook k = shelfLook(shelfId(s), reread, noCard, nullptr);
+    TEST_ASSERT_EQUAL_STRING("retry", lookName(k.page.look));
+    TEST_ASSERT_EQUAL(static_cast<int>(S::stats_card_back), static_cast<int>(k.page.line));
+    TEST_ASSERT_TRUE(k.tryAgain);
+  }
+  // (The month's shelves read RAM's reason meanwhile, as their hub rows: the
+  // re-read's first day not known yet, 0 counting days.)
+  for (Shelf s : {Shelf::NewFinds, Shelf::OldFavourites, Shelf::NotPlayed}) {
+    const ShelfLook k = shelfLook(shelfId(s), reread, noCard, nullptr);
+    TEST_ASSERT_EQUAL_STRING("closed", lookName(k.page.look));
+    TEST_ASSERT_EQUAL(static_cast<int>(S::stats_warming), static_cast<int>(k.page.line));
+    TEST_ASSERT_EQUAL(RowKind::Disabled, h.item[static_cast<int>(s) + 1].kind);
+  }
+  w = weekLook(reread, noCard, nullptr);
+  TEST_ASSERT_TRUE(w.button);
+  TEST_ASSERT_EQUAL(static_cast<int>(S::stats_card_back), static_cast<int>(w.page.line));
+  TEST_ASSERT_TRUE(entryDue(reread, true, false, 12));
+  char b[96];
+  int px = 6;
+  TEST_ASSERT_EQUAL(EntryLine::Counting, entryLine(reread, monoWidth, &px, b, sizeof(b)));
+  // (Read as StatsGlue::on() alone it would be Off: no rows' lines, no Try
+  // again, no entry row.)
+  Lifetime glueOn = reread;
+  glueOn.on = false;
+  TEST_ASSERT_EQUAL_STRING("off", lookName(hubLook(glueOn, noCard, nullptr).page.look));
+  TEST_ASSERT_FALSE(entryDue(glueOn, true, false, 12));
 }
 
 // ---------------------------------------------------------------------------
@@ -782,6 +932,7 @@ void test_the_shelves() {
   TEST_ASSERT_FALSE(k.topBar);
   TEST_ASSERT_TRUE(k.tray);
   TEST_ASSERT_EQUAL(static_cast<int>(S::stats_shelf_empty), static_cast<int>(k.page.line));
+  TEST_ASSERT_TRUE(k.drawLine);
   // Closed from RAM: New finds and Old favourites with no clock and in the
   // first month; Not played yet dated in the first month.
   for (Shelf c : {Shelf::NewFinds, Shelf::OldFavourites}) {
@@ -796,6 +947,17 @@ void test_the_shelves() {
   k = shelfLook(shelfId(Shelf::NotPlayed), dated(29), kReady, full.s());
   TEST_ASSERT_EQUAL_STRING("closed", lookName(k.page.look));
   TEST_ASSERT_EQUAL(static_cast<int>(S::stats_warming), static_cast<int>(k.page.line));
+  TEST_ASSERT_TRUE(k.drawLine);
+  // The month's edge, as the hub's rows and the state: closed at 29
+  // counting days, served at 30.
+  for (Shelf c : {Shelf::NewFinds, Shelf::OldFavourites, Shelf::NotPlayed}) {
+    k = shelfLook(shelfId(c), dated(29), kReady, full.s());
+    TEST_ASSERT_EQUAL_STRING("closed", lookName(k.page.look));
+    k = shelfLook(shelfId(c), dated(30), kReady, full.s());
+    TEST_ASSERT_EQUAL_STRING("served", lookName(k.page.look));
+    TEST_ASSERT_TRUE(k.rows > 0);
+    TEST_ASSERT_FALSE(k.drawLine);
+  }
   // Not played yet with no clock: pending before the landing (D14); landed,
   // by DAYS' span.
   k = shelfLook(shelfId(Shelf::NotPlayed), noClock(), phase(Phase::Working), nullptr);
@@ -814,17 +976,34 @@ void test_the_shelves() {
   k = shelfLook(shelfId(Shelf::NotPlayed), noClock(), kReady, nc.s());
   TEST_ASSERT_EQUAL_STRING("served", lookName(k.page.look));
   TEST_ASSERT_EQUAL_UINT32(nc->notPlayedCount(), k.rows);
-  // Off and Empty: no rows, no Try again.
+  // Off and Empty: no rows, no Try again, no line drawn (Off's `line` is
+  // the default and means nothing), no tray (D9 as replaced), served or not.
   Lifetime off = dated();
   off.on = false;
-  k = shelfLook(shelfId(Shelf::Recent), off, phase(Phase::Idle, Outcome::None, sv::kWhyOff), nullptr);
-  TEST_ASSERT_EQUAL_UINT32(0, k.rows);
-  TEST_ASSERT_FALSE(k.tryAgain);
-  TEST_ASSERT_FALSE(k.page.askDue);
+  Lifetime empty = dated();
+  empty.plays = 0;
+  for (const Lifetime& l : {off, empty}) {
+    for (const sv::Snapshot* snap : {static_cast<const sv::Snapshot*>(full.s()), static_cast<const sv::Snapshot*>(nullptr)}) {
+      for (uint32_t si = 0; si < kShelves; ++si) {
+        k = shelfLook(shelfId(static_cast<Shelf>(si)), l, phase(Phase::Idle, Outcome::None, sv::kWhyOff), snap);
+        TEST_ASSERT_EQUAL_STRING(l.on ? "no plays" : "off", lookName(k.page.look));
+        TEST_ASSERT_EQUAL_UINT32(0, k.rows);
+        TEST_ASSERT_FALSE(k.tryAgain);
+        TEST_ASSERT_FALSE(k.page.askDue);
+        TEST_ASSERT_FALSE(k.drawLine);
+        TEST_ASSERT_FALSE(k.tray);
+        TEST_ASSERT_FALSE(k.topBar);
+      }
+    }
+  }
   // Idle with the stats on: the Working line, one ask due.
   k = shelfLook(shelfId(Shelf::Recent), dated(), phase(Phase::Idle, Outcome::Cancelled), nullptr);
   TEST_ASSERT_EQUAL_STRING("pending", lookName(k.page.look));
   TEST_ASSERT_TRUE(k.page.askDue);
+  TEST_ASSERT_TRUE(k.drawLine);
+  // Served with rows: no line.
+  k = shelfLook(shelfId(Shelf::Recent), dated(), kReady, full.s());
+  TEST_ASSERT_FALSE(k.drawLine);
 }
 
 // ---------------------------------------------------------------------------
@@ -846,16 +1025,32 @@ void test_the_tray_by_days_and_its_hits() {
   TEST_ASSERT_EQUAL_UINT8(sv::k30Days, t.window[1]);
   TEST_ASSERT_EQUAL_UINT8(sv::kAllTime, t.window[2]);
   TEST_ASSERT_EQUAL_UINT8(30, t.days30);  // before the landing: 30
-  // RCNT capped: its oldest day inside the window gives the days held.
+  // RCNT short (the rank's mark, rcntShort(): capped, DAYS played on days it
+  // lost): its oldest day inside the window gives the days held.
   sv::MadeUp m = fullCard();
   Snap a;
   put(a, m);  // its RCNT reaches past the window: 30
+  TEST_ASSERT_FALSE(a->rcntShort());
   TEST_ASSERT_EQUAL_UINT8(30, trayOf(dated(), a.s()).days30);
   m.rcntFirstDay = static_cast<uint16_t>(kToday - 15);
+  m.rcntShort = true;
   Snap b;
   put(b, m);
+  TEST_ASSERT_TRUE(b->rcntShort());
   TEST_ASSERT_EQUAL_UINT8(16, trayOf(dated(), b.s()).days30);
-  m.rcntFirstDay = static_cast<uint16_t>(kToday - 29);
+  // A gap at the window's start, not capped (the listener away until 3 days
+  // ago: RCNT holds only days with plays, so its oldest is 3 days back): no
+  // mark, 30, never fewer than the 7-day cell.
+  for (const uint16_t back : {uint16_t{15}, uint16_t{2}}) {
+    m.rcntFirstDay = static_cast<uint16_t>(kToday - back);
+    m.rcntShort = false;
+    Snap g;
+    put(g, m);
+    TEST_ASSERT_FALSE(g->rcntShort());
+    TEST_ASSERT_EQUAL_UINT8(30, trayOf(dated(), g.s()).days30);
+  }
+  m.rcntShort = true;
+  m.rcntFirstDay = static_cast<uint16_t>(kToday - 29);  // the window's first day: all 30 held
   Snap c;
   put(c, m);
   TEST_ASSERT_EQUAL_UINT8(30, trayOf(dated(), c.s()).days30);
@@ -863,6 +1058,21 @@ void test_the_tray_by_days_and_its_hits() {
   Snap d;
   put(d, m);
   TEST_ASSERT_EQUAL_UINT8(30, trayOf(dated(), d.s()).days30);
+  // The mark comes from a real rank's report through write() (the rank's
+  // own test: test_stats_rank), and undated snapshots never carry it.
+  sr::Report rep;
+  rep.rcntFirstDay = static_cast<uint16_t>(kToday - 15);
+  rep.days30FirstDay = static_cast<uint16_t>(kToday - 29);
+  TEST_ASSERT_TRUE(sr::rcntShort(rep));
+  rep.days30FirstDay = rep.rcntFirstDay;  // the gap: DAYS' first played day is RCNT's
+  TEST_ASSERT_FALSE(sr::rcntShort(rep));
+  rep.days30FirstDay = sf::kUnsetDay;
+  TEST_ASSERT_FALSE(sr::rcntShort(rep));
+  m.dated = false;
+  m.rcntFirstDay = static_cast<uint16_t>(kToday - 15);
+  Snap u;
+  put(u, m);
+  TEST_ASSERT_FALSE(u->rcntShort());
 
   // The cells' boxes: three of 96 at 8, 108, 208; two of 146 at 8, 158 (7.6's 148
   // at 160 would end at 307); inside the tray (6-305), 2 px in from its ends.
@@ -937,89 +1147,102 @@ void test_the_tray_by_days_and_its_hits() {
 // ---------------------------------------------------------------------------
 // Recently played's sections (D10)
 // ---------------------------------------------------------------------------
+namespace {
+
+struct WantRecent {
+  bool heading;
+  Section section;
+  uint32_t row;
+  bool timed;
+  uint16_t day;  // Day's (kUnsetDay: not checked)
+};
+
+void sameRecent(const sv::Snapshot& s, const WantRecent* want, uint32_t n, const char* what) {
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(n, recentCount(s), what);
+  for (uint32_t i = 0; i < n; ++i) {
+    const RecentItem it = recentAt(s, i);
+    char msg[48];
+    snprintf(msg, sizeof(msg), "%s, list row %u", what, static_cast<unsigned>(i));
+    TEST_ASSERT_EQUAL_MESSAGE(want[i].heading, it.heading, msg);
+    TEST_ASSERT_EQUAL_MESSAGE(static_cast<int>(want[i].section), static_cast<int>(it.section), msg);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(want[i].row, it.row, msg);
+    TEST_ASSERT_EQUAL_MESSAGE(want[i].timed, it.timed, msg);
+    if (want[i].day != sf::kUnsetDay) TEST_ASSERT_EQUAL_UINT16_MESSAGE(want[i].day, it.day, msg);
+    if (!it.heading) TEST_ASSERT_EQUAL_UINT32_MESSAGE(i, recentListRow(s, it.row), msg);
+  }
+}
+
+// A Recently played row's `when` written over (a test's own row).
+void putWhen(Snap& b, uint32_t row, uint32_t when) {
+  uint8_t* p = reinterpret_cast<uint8_t*>(b.m.data()) + sv::offsetOf(sr::kRecent, kAlbums) +
+               static_cast<size_t>(row) * sv::kStrides[sr::kRecent];
+  p[2] = static_cast<uint8_t>(when);
+  p[3] = static_cast<uint8_t>(when >> 8);
+  p[4] = static_cast<uint8_t>(when >> 16);
+}
+
+}  // namespace
+
 void test_recently_played_s_sections() {
-  // Dated: now 10:00 on day 313; rows 30 min, 12 h 30, 24 h 30, 36 h 30
-  // and 48 h 30 ago (313; 312, 312; 311, 311), then one of this session and
-  // one earlier, undated: both under one Earlier, last.
+  // Dated: now 10:00 on day 313; rows 30 min, 12 h 30, 24 h 30, 36 h 30,
+  // 48 h 30, 60 h 30 and 72 h 30 ago (313; 312, 312; 311, 311; 310, 310):
+  // Today, Yesterday, then a heading a day, two days in a row; then one of
+  // this session and one earlier, undated: both under one Earlier, last.
+  constexpr uint16_t U = sf::kUnsetDay;
   sv::MadeUp m = fullCard();
   m.time = (kToday * 1440u + 600) * 60 + 1;
-  m.rows[sr::kRecent] = 5;
+  m.rows[sr::kRecent] = 7;
   m.recentFirstAgoMin = 30;
   m.recentStepMin = 720;
   m.sessionRows = 1;
   m.earlierRows = 1;
   Snap a;
   put(a, m);
-  TEST_ASSERT_EQUAL_UINT32(7, a->rows(sr::kRecent));
-  struct Want {
-    bool heading;
-    Section section;
-    uint32_t row;
-    bool timed;
-  } want[] = {{true, Section::Today, 0, false},    {false, Section::Today, 0, true},
-              {true, Section::Yesterday, 1, false}, {false, Section::Yesterday, 1, true},
-              {false, Section::Yesterday, 2, true}, {true, Section::Day, 3, false},
-              {false, Section::Day, 3, true},       {false, Section::Day, 4, true},
-              {true, Section::Earlier, 5, false},   {false, Section::Earlier, 5, false},
-              {false, Section::Earlier, 6, false}};
-  TEST_ASSERT_EQUAL_UINT32(11, recentCount(*a.s()));
-  for (uint32_t i = 0; i < 11; ++i) {
-    const RecentItem it = recentAt(*a.s(), i);
-    char msg[32];
-    snprintf(msg, sizeof(msg), "dated, list row %u", static_cast<unsigned>(i));
-    TEST_ASSERT_EQUAL_MESSAGE(want[i].heading, it.heading, msg);
-    TEST_ASSERT_EQUAL_MESSAGE(static_cast<int>(want[i].section), static_cast<int>(it.section), msg);
-    TEST_ASSERT_EQUAL_UINT32_MESSAGE(want[i].row, it.row, msg);
-    TEST_ASSERT_EQUAL_MESSAGE(want[i].timed, it.timed, msg);
-    if (it.section == Section::Day) TEST_ASSERT_EQUAL_UINT16_MESSAGE(311, it.day, msg);
-    if (!it.heading) TEST_ASSERT_EQUAL_UINT32_MESSAGE(i, recentListRow(*a.s(), it.row), msg);
-  }
+  TEST_ASSERT_EQUAL_UINT32(9, a->rows(sr::kRecent));
+  const WantRecent want[] = {
+      {true, Section::Today, 0, false, U},    {false, Section::Today, 0, true, U},
+      {true, Section::Yesterday, 1, false, U}, {false, Section::Yesterday, 1, true, U},
+      {false, Section::Yesterday, 2, true, U}, {true, Section::Day, 3, false, 311},
+      {false, Section::Day, 3, true, 311},     {false, Section::Day, 4, true, 311},
+      {true, Section::Day, 5, false, 310},     {false, Section::Day, 5, true, 310},
+      {false, Section::Day, 6, true, 310},     {true, Section::Earlier, 7, false, U},
+      {false, Section::Earlier, 7, false, U},  {false, Section::Earlier, 8, false, U}};
+  sameRecent(*a.s(), want, 14, "dated");
   TEST_ASSERT_EQUAL_UINT32(kToday * 1440u + 600 - 30, a->rowAt(sr::kRecent, 0).when);
-  TEST_ASSERT_EQUAL_UINT32(sv::kWhenSession, a->rowAt(sr::kRecent, 5).when);
-  TEST_ASSERT_EQUAL_UINT32(sv::kWhenEarlier, a->rowAt(sr::kRecent, 6).when);
+  TEST_ASSERT_EQUAL_UINT32(sv::kWhenSession, a->rowAt(sr::kRecent, 7).when);
+  TEST_ASSERT_EQUAL_UINT32(sv::kWhenEarlier, a->rowAt(sr::kRecent, 8).when);
 
   // Undated: This session, then Earlier, no times.
   MadeUpView v3;
   TEST_ASSERT_TRUE(madeUpView(3, kStamp, kTracks, kAlbums, &v3));
   sv::MadeUp u = v3.spec;
-  u.sessionRows = 2;
+  u.sessionRows = 3;
   u.earlierRows = 2;
   Snap b;
   put(b, u);
   TEST_ASSERT_FALSE(b->dated());
-  TEST_ASSERT_EQUAL_UINT32(4, b->rows(sr::kRecent));
-  const Want wantU[] = {{true, Section::Session, 0, false},  {false, Section::Session, 0, false},
-                        {false, Section::Session, 1, false}, {true, Section::Earlier, 2, false},
-                        {false, Section::Earlier, 2, false}, {false, Section::Earlier, 3, false}};
-  TEST_ASSERT_EQUAL_UINT32(6, recentCount(*b.s()));
-  for (uint32_t i = 0; i < 6; ++i) {
-    const RecentItem it = recentAt(*b.s(), i);
-    TEST_ASSERT_EQUAL(wantU[i].heading, it.heading);
-    TEST_ASSERT_EQUAL(static_cast<int>(wantU[i].section), static_cast<int>(it.section));
-    TEST_ASSERT_EQUAL_UINT32(wantU[i].row, it.row);
-    TEST_ASSERT_FALSE(it.timed);
-  }
-  // A row dated before the clock was lost (its lastAt kept: the rank puts
-  // it first): under its day, no Today, no time.
-  const size_t at = sv::offsetOf(sr::kRecent, kAlbums);
-  const uint32_t when = 300u * 1440 + 90;
-  uint8_t* p = reinterpret_cast<uint8_t*>(b.m.data()) + at;
-  p[2] = static_cast<uint8_t>(when);
-  p[3] = static_cast<uint8_t>(when >> 8);
-  p[4] = static_cast<uint8_t>(when >> 16);
-  TEST_ASSERT_EQUAL_UINT32(7, recentCount(*b.s()));
-  RecentItem it = recentAt(*b.s(), 0);
-  TEST_ASSERT_TRUE(it.heading);
-  TEST_ASSERT_EQUAL(Section::Day, it.section);
-  TEST_ASSERT_EQUAL_UINT16(300, it.day);
-  it = recentAt(*b.s(), 1);
-  TEST_ASSERT_FALSE(it.heading);
-  TEST_ASSERT_FALSE(it.timed);
-  TEST_ASSERT_EQUAL(Section::Session, recentAt(*b.s(), 2).section);
-  TEST_ASSERT_TRUE(recentAt(*b.s(), 2).heading);
+  TEST_ASSERT_EQUAL_UINT32(5, b->rows(sr::kRecent));
+  const WantRecent wantU[] = {{true, Section::Session, 0, false, U},  {false, Section::Session, 0, false, U},
+                              {false, Section::Session, 1, false, U}, {false, Section::Session, 2, false, U},
+                              {true, Section::Earlier, 3, false, U},  {false, Section::Earlier, 3, false, U},
+                              {false, Section::Earlier, 4, false, U}};
+  sameRecent(*b.s(), wantU, 7, "undated");
+  // Rows with a dated lastAt (the rank puts them first: 4.3), two days of
+  // them: under their days, a heading each, no Today, no time. A track
+  // replayed this session with no clock is such a row too (an undated play
+  // leaves lastAt: 5.9; the copy-out codes This session only for lastAt 0),
+  // so it reads under its old day, not This session: the owner's call.
+  putWhen(b, 0, 300u * 1440 + 90);
+  putWhen(b, 1, 299u * 1440 + 1300);
+  const WantRecent wantD[] = {{true, Section::Day, 0, false, 300},     {false, Section::Day, 0, false, 300},
+                              {true, Section::Day, 1, false, 299},     {false, Section::Day, 1, false, 299},
+                              {true, Section::Session, 2, false, U},   {false, Section::Session, 2, false, U},
+                              {true, Section::Earlier, 3, false, U},   {false, Section::Earlier, 3, false, U},
+                              {false, Section::Earlier, 4, false, U}};
+  sameRecent(*b.s(), wantD, 9, "undated, two dated days");
   // Past the end: no row.
-  TEST_ASSERT_FALSE(recentAt(*b.s(), 7).heading);
-  TEST_ASSERT_EQUAL_UINT32(b->rows(sr::kRecent), recentAt(*b.s(), 7).row);
+  TEST_ASSERT_FALSE(recentAt(*b.s(), 9).heading);
+  TEST_ASSERT_EQUAL_UINT32(b->rows(sr::kRecent), recentAt(*b.s(), 9).row);
 }
 
 // ---------------------------------------------------------------------------
@@ -1076,6 +1299,16 @@ void test_week_from_a_made_up_snapshot() {
   TEST_ASSERT_EQUAL_UINT8_ARRAY(bars24, out, 7);
   barHeights(ms, sf::kUnsetDay, 0, 24, out);
   for (uint8_t h : out) TEST_ASSERT_EQUAL_UINT8(0, h);
+  // sinceDay's own day has its bar (4.2: none for a day *before* it), the
+  // day before it none, though both have time.
+  const uint32_t edge[7] = {30 * 60000u, 20 * 60000u, 0, 0, 0, 0, 40 * 60000u};
+  barHeights(edge, static_cast<uint16_t>(kToday - 6), static_cast<uint16_t>(kToday - 5), 44, out);
+  const uint8_t edgeBars[7] = {0, 22, 0, 0, 0, 0, 44};
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(edgeBars, out, 7);
+  // ... and every day from it on, the window's first among them.
+  barHeights(edge, static_cast<uint16_t>(kToday - 6), static_cast<uint16_t>(kToday - 6), 44, out);
+  const uint8_t allBars[7] = {33, 22, 0, 0, 0, 0, 44};
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(allBars, out, 7);
 
   // A week with nothing: no big day, no bars, no Auto DJ.
   for (int i = 0; i < 7; ++i) m.days[i] = sr::Day();
@@ -1128,7 +1361,13 @@ void test_the_made_up_views() {
     TEST_ASSERT_EQUAL_STRING_MESSAGE(stateName(states[n]), stateName(stateOf(v.life)), msg);
     TEST_ASSERT_EQUAL_STRING_MESSAGE(sv::phaseName(phases[n]), sv::phaseName(v.phase.phase), msg);
     TEST_ASSERT_EQUAL_MESSAGE(n == 1 || n == 3 || n == 4, v.snapshot, msg);
-    TEST_ASSERT_FALSE_MESSAGE(asksOnEdge(v.life, true), msg);
+    TEST_ASSERT_TRUE_MESSAGE(v.life.madeUp, msg);
+    TEST_ASSERT_FALSE_MESSAGE(asksOnEdge(v.life), msg);
+    // Nothing due on any page (D16), its snapshot written or not.
+    TEST_ASSERT_FALSE_MESSAGE(hubLook(v.life, v.phase, nullptr).page.askDue, msg);
+    TEST_ASSERT_FALSE_MESSAGE(weekLook(v.life, v.phase, nullptr).page.askDue, msg);
+    for (uint32_t s = 0; s < kShelves; ++s)
+      TEST_ASSERT_FALSE_MESSAGE(shelfLook(shelfId(static_cast<Shelf>(s)), v.life, v.phase, nullptr).page.askDue, msg);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(sv::countingDaysOf(v.life.dated, v.life.today, v.life.sinceDay),
                                      v.life.countingDays, msg);
     if (!v.snapshot) continue;
@@ -1148,6 +1387,21 @@ void test_the_made_up_views() {
   for (uint32_t i = 0; i < 6; ++i) TEST_ASSERT_EQUAL(Line::Data, h.item[i].line);
   TEST_ASSERT_EQUAL_UINT8(3, trayOf(v.life, one.s()).cells);
   TEST_ASSERT_TRUE(one->hasNotPlayed());
+  // ... its snapshot not written (the Dance tab up, past kBound, refused:
+  // S12 says so on the console): Pending, "Counting plays…", nothing due,
+  // so no real visit is asked under a look-only view (D16).
+  h = hubLook(v.life, v.phase, nullptr);
+  TEST_ASSERT_EQUAL_STRING("pending", lookName(h.page.look));
+  TEST_ASSERT_FALSE(h.page.askDue);
+  for (uint32_t i = 0; i < 6; ++i) lineIs(Line::Text, S::stats_counting, h.item[i], "view 1, nothing written");
+  ShelfLook sk = shelfLook(shelfId(Shelf::MostPlayed), v.life, v.phase, nullptr);
+  TEST_ASSERT_EQUAL_STRING("pending", lookName(sk.page.look));
+  TEST_ASSERT_FALSE(sk.page.askDue);
+  TEST_ASSERT_FALSE(weekLook(v.life, v.phase, nullptr).page.askDue);
+  // The same view as the host's (madeUp false): one ask due.
+  Lifetime host = v.life;
+  host.madeUp = false;
+  TEST_ASSERT_TRUE(hubLook(host, v.phase, nullptr).page.askDue);
   // 3: no clock, Not played yet open (DAYS' 30 days or more: NoClock's
   // frame), Recently played by session.
   TEST_ASSERT_TRUE(madeUpView(3, kStamp, kTracks, kAlbums, &v));
@@ -1168,9 +1422,12 @@ void test_the_made_up_views() {
   h = hubLook(v.life, v.phase, four.s());
   TEST_ASSERT_EQUAL(RowKind::Disabled, h.item[2].kind);
   WeekFigures w = weekFigures(*four.s());
-  TEST_ASSERT_EQUAL_UINT8(0, w.bar[0]);  // before the first day
-  TEST_ASSERT_EQUAL_UINT8(0, w.bar[1]);
-  TEST_ASSERT_TRUE(w.bar[6] > 0);
+  // 5-11 Nov: no bar before the first day (5 and 6 Nov), the first day's
+  // own (7 Nov, 12 min), the top day 44 px (47 min) and the rest to it.
+  const uint8_t bars4[7] = {0, 0, 11, 44, 28, 38, 29};
+  TEST_ASSERT_EQUAL_UINT16(310, four->sinceDay());
+  TEST_ASSERT_EQUAL_UINT16(308, w.firstDay);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(bars4, w.bar, 7);
   // 2: nothing played, the empty state; 5: folding, every line counting;
   // 6: no card, the one line.
   TEST_ASSERT_TRUE(madeUpView(2, kStamp, kTracks, kAlbums, &v));
@@ -1204,6 +1461,9 @@ void test_the_made_up_views() {
     TEST_ASSERT_EQUAL_STRING_MESSAGE(lookName(x.look), lookName(h.page.look), msg);
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(retry ? 7 : 6, h.rows, msg);
     if (retry) {
+      // The Try again row drawn (look only); its tap, as every act under a
+      // made-up view, is the pages' to refuse (S9, S12).
+      TEST_ASSERT_EQUAL_MESSAGE(RowKind::TryAgain, h.item[6].kind, msg);
       lineIs(Line::Text, x.line, h.item[6], msg);
     } else {
       for (uint32_t i = 0; i < 6; ++i) lineIs(Line::Text, x.line, h.item[i], msg);

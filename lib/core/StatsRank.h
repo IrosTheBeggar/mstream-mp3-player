@@ -297,7 +297,24 @@ struct Report {
   uint16_t firstDay = statsfold::kUnsetDay;
   uint16_t newestDay = statsfold::kUnsetDay;
   uint16_t rcntFirstDay = statsfold::kUnsetDay;
+  // S3b: DAYS ⊕ the records': the oldest day of the 30-day window with a
+  // play (dated ranks only; kUnsetDay: none). RCNT's rows of a day are its
+  // DAYS row's plays by track (both the dated plays: StatsFold's Cursor), so
+  // RCNT's oldest day after it is days RCNT lost (rcntShort()). In the
+  // tail's 2 B pad: the report stays 136 B (StatsLists::Ask's 1,600).
+  uint16_t days30FirstDay = statsfold::kUnsetDay;
 };
+
+// RCNT short of the 30-day window (7.6: its cell then reads the days it
+// holds, "16 days"): its oldest day after DAYS' first played day there. The
+// cap does it (5.2: past 4,096 rows whole days go, oldest first), and so can
+// a save made with the clock ahead (5.2's pruning by date). RCNT holds only
+// days with plays and each save keeps 32 days, so an oldest day inside the
+// window alone is no sign: a listener away for its first days isn't short.
+inline bool rcntShort(const Report& r) {
+  return r.days30FirstDay != statsfold::kUnsetDay && r.rcntFirstDay != statsfold::kUnsetDay &&
+         r.rcntFirstDay > r.days30FirstDay;
+}
 
 // The files a rank (or a track's read) reads: stats.bin and the base HEAD
 // names, opened by the caller (the loop: a FatFile is a PSRAM carve, and the

@@ -68,6 +68,35 @@ constexpr uint32_t kTrimMost = sr::rowsOf(sr::kOldFavourites) < sr::rowsOf(sr::k
 
 uint16_t sat16(uint32_t v, uint32_t top) { return static_cast<uint16_t>(v > top ? top : v); }
 
+// The made-up ids' step: 7,919 or the next odd number coprime to the track
+// count, so i * step % tracks never repeats under the tracks (a count that
+// 7,919, a prime, divides, 7,919 itself among them, would give one id).
+uint32_t gcdOf(uint32_t a, uint32_t b) {
+  while (b) {
+    const uint32_t t = a % b;
+    a = b;
+    b = t;
+  }
+  return a;
+}
+uint32_t madeUpStep(uint32_t tracks) {
+  uint32_t step = 7919;
+  while (tracks > 1 && gcdOf(step, tracks) != 1) step += 2;
+  return step;
+}
+
+// Old favourites' made-up last days (4.3: before the 30-day window, within
+// the counting): today - 31 for row 0, down to sinceDay for the last row,
+// spread between, each row's no newer than the one before (the list's
+// order: plays, then lastAt, newest first). kUnsetDay undated.
+uint16_t madeUpLastDay(bool dated, uint16_t today, uint16_t sinceDay, uint32_t i, uint32_t n) {
+  if (!dated || today == sf::kUnsetDay || today < 31) return sf::kUnsetDay;
+  const uint32_t hi = today - 31u;
+  const uint32_t lo = sinceDay != sf::kUnsetDay && sinceDay <= hi ? sinceDay : hi;
+  const uint64_t back = n > 1 ? static_cast<uint64_t>(i) * (hi - lo) / (n - 1) : 0;
+  return static_cast<uint16_t>(hi - back);
+}
+
 }  // namespace
 
 const char* gradeName(Grade g) {
@@ -287,7 +316,8 @@ bool write(const sr::Ranker& ranker, const sm::Wanted& wanted, const sr::Report&
   cc::put16(p + kOffDir, static_cast<uint16_t>(bits + bitBytes(ctx.albums)));
   p[kOffWindow] = ctx.window <= kAllTime ? ctx.window : kAllTime;
   cc::put32(p + kOffVersion, ctx.version);
-  p[kOffFlags] = static_cast<uint8_t>((dated ? kFlagDated : 0) | kFlagWritten);
+  p[kOffFlags] =
+      static_cast<uint8_t>((dated ? kFlagDated : 0) | kFlagWritten | (sr::rcntShort(report) ? kFlagRcntShort : 0));
   return true;
 }
 
@@ -373,6 +403,7 @@ bool writeMadeUp(const MadeUp& m, Snapshot* snap, size_t bytes) {
   // The minute `time` falls in (a row's time is seconds plus 1), Recently
   // played's dated rows counted back from it.
   const uint32_t nowMin = m.dated && m.time ? (m.time - 1) / 60 : 0;
+  const uint32_t step = madeUpStep(m.trackCount);
   for (int li = 0; li < sr::kLists; ++li) {
     const List l = static_cast<List>(li);
     // The lists the clock unset doesn't offer have no rows (Ranker::offered()).
@@ -386,9 +417,10 @@ bool writeMadeUp(const MadeUp& m, Snapshot* snap, size_t bytes) {
     const uint32_t dated = l == sr::kRecent ? std::min(n, m.dated ? m.rows[li] : 0) : 0;
     const uint32_t session = l == sr::kRecent ? std::min(n - dated, m.sessionRows) : 0;
     for (uint32_t i = 0; i < n; ++i, row += kStrides[l]) {
-      // The ids spread over the library, each list from its own place.
+      // The ids spread over the library (the step coprime to its tracks),
+      // each list from its own place.
       const uint32_t id =
-          static_cast<uint32_t>((static_cast<uint64_t>(i) * 7919u + static_cast<uint64_t>(li) * 211u) % m.trackCount);
+          static_cast<uint32_t>((static_cast<uint64_t>(i) * step + static_cast<uint64_t>(li) * 211u) % m.trackCount);
       cc::put16(row, static_cast<uint16_t>(id));
       const uint32_t top = m.topCount[li];
       const uint32_t count = top > i + 1 ? top - i : 1;
@@ -396,14 +428,12 @@ bool writeMadeUp(const MadeUp& m, Snapshot* snap, size_t bytes) {
         case sr::kNewFinds:
           cc::put16(row + 2, static_cast<uint16_t>(sat16(count, kNewFindsCountMax) | (i % 3u) << 14));
           break;
-        case sr::kOldFavourites: {
-          // Last played over a month ago, each row a few days before the last.
-          const uint32_t back = 31u + 3u * i;
-          cc::put16(row + 2, sat16(count, kCountMax));
-          cc::put16(row + 4, m.dated && today != sf::kUnsetDay && today >= back ? static_cast<uint16_t>(today - back)
-                                                                                : sf::kUnsetDay);
+        case sr::kOldFavourites:
+          // 4.3's rule: plays at least 5, last played before the 30-day
+          // window and within the counting.
+          cc::put16(row + 2, sat16(std::max(count, sr::kOldFavourite), kCountMax));
+          cc::put16(row + 4, madeUpLastDay(m.dated, today, m.sinceDay, i, n));
           break;
-        }
         case sr::kRecent: {
           uint32_t when = 0;
           if (i < dated) {
@@ -445,7 +475,8 @@ bool writeMadeUp(const MadeUp& m, Snapshot* snap, size_t bytes) {
   cc::put16(p + kOffDir, static_cast<uint16_t>(dir));
   p[kOffWindow] = m.window <= kAllTime ? m.window : kAllTime;
   cc::put32(p + kOffVersion, m.version);
-  uint8_t flags = static_cast<uint8_t>(kFlagWritten | kFlagResolved | kFlagMadeUp | (m.dated ? kFlagDated : 0));
+  uint8_t flags = static_cast<uint8_t>(kFlagWritten | kFlagResolved | kFlagMadeUp | (m.dated ? kFlagDated : 0) |
+                                       (m.dated && m.rcntShort ? kFlagRcntShort : 0));
   if (m.notPlayedEvery) {
     // notPlayed()'s bytes: a set bit played (and every bit past the last
     // album), then each 64 albums' clear bits, and the count.

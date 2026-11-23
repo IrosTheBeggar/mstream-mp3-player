@@ -417,6 +417,11 @@ Outcome readDays(Read& r) {
       const uint16_t day = cc::get16(row);
       if (rep.firstDay == sf::kUnsetDay || day < rep.firstDay) rep.firstDay = day;
       if (rep.newestDay == sf::kUnsetDay || day > rep.newestDay) rep.newestDay = day;
+      // The 30-day window's first played day (Windows::add()'s days), for
+      // rcntShort().
+      if (r.in.hasToday && day <= r.in.today && static_cast<uint32_t>(r.in.today - day) < 30u &&
+          cc::get16(row + 2) > 0 && (rep.days30FirstDay == sf::kUnsetDay || day < rep.days30FirstDay))
+        rep.days30FirstDay = day;
       if (!r.in.hasToday || day > r.in.today || static_cast<uint32_t>(r.in.today - day) >= kWeekDays) continue;
       Day& d = rep.days[kWeekDays - 1 - (r.in.today - day)];
       d.plays = static_cast<uint16_t>(addAt(d.plays, cc::get16(row + 2), 0xFFFF));

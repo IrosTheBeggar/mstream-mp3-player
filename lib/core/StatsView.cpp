@@ -19,6 +19,11 @@ constexpr uint32_t kTrayDays = 7;   // the tray from a week of counting (7.6)
 
 bool isCode(uint32_t when) { return when == sv::kWhenSession || when == sv::kWhenEarlier; }
 
+// Dated and a month of counting (30 days, as Not played yet: call 4): the
+// first month's rows open (New finds, Old favourites) and the state leaves
+// First month. One test for all three places, from RAM in every state.
+bool pastMonth(const Lifetime& l) { return l.dated && sv::notPlayedDays(l.countingDays); }
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -30,7 +35,7 @@ State stateOf(const Lifetime& l) {
   if (l.folding) return State::Folding;
   if (l.plays == 0) return State::Empty;
   if (!l.dated) return State::NoDates;
-  if (l.countingDays < sv::kNotPlayedDays) return State::FirstMonth;
+  if (!pastMonth(l)) return State::FirstMonth;
   return State::Ready;
 }
 
@@ -122,17 +127,17 @@ PageLook pageLook(const Lifetime& l, const PhaseInfo& p, bool served) {
       // Idle (a Cancelled ask, a landing released since; the stats off is
       // Off above) and Ready over nothing served: the Working line and one
       // ask (D9 as replaced: never "Couldn't read the stats", a read
-      // fault's alone).
+      // fault's alone); none under a made-up view (D16).
       k.look = Look::Pending;
       k.line = S::stats_counting;
-      k.askDue = true;
+      k.askDue = !l.madeUp;
       break;
   }
   return k;
 }
 
-bool asksOnEdge(const Lifetime& l, bool madeUp) {
-  if (madeUp) return false;
+bool asksOnEdge(const Lifetime& l) {
+  if (l.madeUp) return false;
   const State st = stateOf(l);
   return st != State::Off && st != State::NoCard && st != State::Empty;
 }
@@ -244,7 +249,7 @@ HubLook hubLook(const Lifetime& l, const PhaseInfo& p, const Snapshot* snap) {
     it.line = Line::Status;
   }
   // Rows 3-4: from 30 counting days, dated.
-  if (!l.dated || l.countingDays < sv::kNotPlayedDays) {
+  if (!pastMonth(l)) {
     closedRow(l, &h.item[static_cast<int>(HubRow::NewFinds)]);
     closedRow(l, &h.item[static_cast<int>(HubRow::OldFavourites)]);
   }
@@ -308,7 +313,7 @@ sr::List listOf(Shelf s, uint8_t window) {
 Tray trayOf(const Lifetime& l, const Snapshot* snap) {
   Tray t;
   if (!l.dated || l.countingDays < kTrayDays) return t;
-  if (l.countingDays < sv::kNotPlayedDays) {
+  if (!pastMonth(l)) {
     t.cells = 2;
     t.window[0] = sv::k7Days;
     t.window[1] = sv::kAllTime;
@@ -318,9 +323,11 @@ Tray trayOf(const Lifetime& l, const Snapshot* snap) {
   t.window[0] = sv::k7Days;
   t.window[1] = sv::k30Days;
   t.window[2] = sv::kAllTime;
-  // RCNT capped (5.2: whole days go past 4,096 rows): its oldest day inside
-  // the 30 days, the cell says the days it holds.
-  if (snap && snap->dated()) {
+  // RCNT short (5.2's cap: whole days go past 4,096 rows; the rank's mark,
+  // DAYS played on a day RCNT no longer holds): the cell says the days it
+  // holds. An oldest day inside the window alone says nothing (RCNT holds
+  // days with plays only).
+  if (snap && snap->dated() && snap->rcntShort()) {
     const uint16_t today = snap->today(), first = snap->rcntFirstDay();
     if (first != sf::kUnsetDay && first <= today && today - first + 1u < 30u)
       t.days30 = static_cast<uint8_t>(today - first + 1u);
@@ -362,7 +369,7 @@ namespace {
 bool closedByRam(Shelf s, const Lifetime& l) {
   switch (s) {
     case Shelf::NewFinds:
-    case Shelf::OldFavourites: return !l.dated || l.countingDays < sv::kNotPlayedDays;
+    case Shelf::OldFavourites: return !pastMonth(l);
     case Shelf::NotPlayed: return l.dated && !notPlayedOpen(l.countingDays, true, 0);
     default: return false;
   }
@@ -381,15 +388,24 @@ ShelfLook shelfLook(uint32_t id, const Lifetime& l, const PhaseInfo& p, const Sn
   k.list = listOf(k.shelf, k.window);
   k.page = pageLook(l, p, snap != nullptr);
   switch (k.page.look) {
-    case Look::Off:
     case Look::NoCard:
-    case Look::NoPlays: return k;
+      // The No card line alone (the owner's call 3): no tray over it.
+      k.drawLine = true;
+      k.tray = false;
+      return k;
+    case Look::Off:
+    case Look::NoPlays:
+      // No data, no line (D9 as replaced), and no tray offering windows of
+      // nothing.
+      k.tray = false;
+      return k;
     default: break;
   }
   if (closedByRam(k.shelf, l)) {
     k.page.look = Look::Closed;
     k.page.line = l.dated ? S::stats_warming : S::stats_needs_dates;
     k.page.askDue = false;
+    k.drawLine = true;
     return k;
   }
   if (k.page.look == Look::Served) {
@@ -399,18 +415,21 @@ ShelfLook shelfLook(uint32_t id, const Lifetime& l, const PhaseInfo& p, const Sn
       if (!l.dated && !notPlayedOpen(0, false, snap->spanDays())) {
         k.page.look = Look::Closed;
         k.page.line = S::stats_needs_dates;
+        k.drawLine = true;
         return k;
       }
       if (!snap->hasNotPlayed()) {
-        // Its own state (7.6): the visit took Lists (Full refused) or its
-        // notPlayed() was refused. Try again makes the lean ask; while that
-        // runs the snapshot stays served, the phase its.
+        // Its own state (7.6): the visit took Lists (Full refused, or not
+        // asked: a snapshot held across the midnight that opens the shelf)
+        // or its notPlayed() was refused. Try again makes the lean ask;
+        // while that runs the snapshot stays served, the phase its.
         k.ask = UiAsk::NotPlayed;
         switch (p.phase) {
           case Phase::Working:
           case Phase::Waiting:
             k.page.look = Look::Pending;
             k.page.line = phaseLine(p.phase);
+            k.drawLine = true;
             return k;
           case Phase::Unread:
           case Phase::Capped:
@@ -432,12 +451,17 @@ ShelfLook shelfLook(uint32_t id, const Lifetime& l, const PhaseInfo& p, const Sn
       k.rows = snap->rows(k.list);
     }
     k.topBar = k.rows > 0 && k.shelf != Shelf::NotPlayed;
-    if (k.rows == 0) k.page.line = S::stats_shelf_empty;
+    if (k.rows == 0) {
+      k.page.line = S::stats_shelf_empty;
+      k.drawLine = true;
+    }
     return k;
   }
   if (k.page.look == Look::Retry) {
     k.tryAgain = true;
     k.rows = 1;
+  } else {
+    k.drawLine = true;  // Pending: the phase's line
   }
   return k;
 }
@@ -625,6 +649,7 @@ Lifetime fullLife() {
   l.plays = 1204;
   l.listenedMs = (uint64_t{74} * 60 + 10) * 60000;
   l.nowMin = kFullNowMin;
+  l.madeUp = true;  // every view's: look only
   return l;
 }
 

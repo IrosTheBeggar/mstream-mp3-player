@@ -90,6 +90,10 @@ constexpr uint8_t kFlagWritten = 8;    // write() ended
 // here, not in StatsLists (44 B, full: its static_assert), so whoever reads
 // the block can tell (Hk and Hv: S3b's S12).
 constexpr uint8_t kFlagMadeUp = 16;
+// RCNT short of the 30-day window (statsrank::rcntShort(): its oldest day
+// after DAYS' first played day there), set by write() from the report: the
+// 30-day cell then reads the days RCNT holds (7.6, S3b's review of S5).
+constexpr uint8_t kFlagRcntShort = 32;
 
 // The grades (9.7): the visit's Full (Not played yet's played set) and
 // Lists, and Not played yet's lean ask, with the folders' states or not.
@@ -129,6 +133,7 @@ public:
   bool dated() const { return (flags() & kFlagDated) != 0; }
   bool hasNotPlayed() const { return written() && (flags() & kFlagNotPlayed) != 0; }
   bool madeUp() const { return written() && (flags() & kFlagMadeUp) != 0; }
+  bool rcntShort() const { return written() && (flags() & kFlagRcntShort) != 0; }
   Grade grade() const;
   // The key (the index it was made over) and whether `stamp` and `tracks`
   // are it (a remount's index that isn't releases it: 9.7's "the snapshot's
@@ -150,7 +155,8 @@ public:
   uint32_t rows(List l) const;
   uint32_t total(List l) const;
   // DAYS ⊕ the records' first and newest day (O5's span: newest - first +
-  // 1, 0 with none), RCNT's oldest, sinceDay (Fold::sinceDayNow()).
+  // 1, 0 with none), RCNT's oldest (the days it holds, with rcntShort()),
+  // sinceDay (Fold::sinceDayNow()).
   uint16_t firstDay() const;
   uint16_t newestDay() const;
   uint16_t rcntFirstDay() const;
@@ -230,9 +236,11 @@ bool notPlayed(const statsmap::Map& map, const LibraryIndex& index, Snapshot* sn
 // written as a landed one reads: the header whole, the 7 days, each list's
 // rows at kStrides, the flags written and resolved (and kFlagMadeUp). Its
 // key is the live index's, so StatsLists::loop()'s key check keeps it, and
-// its ids are that index's tracks (spread over them, a list's rows apart),
-// so the pages draw real names. Nothing is ranked or read: the counts, days
-// and times are the recipe's.
+// its ids are that index's tracks (spread over them: a step coprime to the
+// track count, each list from its own place, so no id twice in a list), so
+// the pages draw real names. Nothing is ranked or read: the counts, days
+// and times are the recipe's, kept to 4.3's rules (Old favourites' plays
+// and last days).
 // ---------------------------------------------------------------------------
 struct MadeUp {
   uint64_t buildStamp = 0;  // the live index's key
@@ -247,13 +255,16 @@ struct MadeUp {
   uint16_t firstDay = statsfold::kUnsetDay;  // DAYS' first and newest dated day (O5's span)
   uint16_t newestDay = statsfold::kUnsetDay;
   uint16_t rcntFirstDay = statsfold::kUnsetDay;
+  bool rcntShort = false;   // with dated: kFlagRcntShort (RCNT capped: the 30-day cell its days)
   uint8_t window = kAllTime;
   uint32_t version = 0;
   statsrank::Day days[statsrank::kWeekDays];  // oldest first (written as 0 undated, as a rank's)
   // Each list: its rows (cut to its room, its cap and the tracks; none for
   // a list the clock unset doesn't offer: Ranker::offered()), its total (at
   // least the rows) and its first row's count (each next row one less, at
-  // least 1). Recently played's rows[] are its dated ones (none undated).
+  // least 1; Old favourites' at least 5, 4.3's rule, their last days from
+  // today - 31 down to sinceDay, spread, never before it). Recently
+  // played's rows[] are its dated ones (none undated).
   uint32_t rows[statsrank::kLists] = {};
   uint32_t totals[statsrank::kLists] = {};
   uint32_t topCount[statsrank::kLists] = {};
