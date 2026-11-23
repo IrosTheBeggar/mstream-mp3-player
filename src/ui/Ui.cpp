@@ -32,6 +32,16 @@ namespace ui {
 
 using uistr::S;
 
+// The UI's object, byte-exact: the owner's reading of call 2's "no growth"
+// for S3b (docs/LISTENING-STATS.md section 1) is main's size to the byte,
+// 9,416 B (gdb on 37ed055's core2 and core2-dio ELFs). main.cpp carves it in
+// PSRAM (psramNew: TLSF's 9,472 B carve, 9,416 + 12 B rounded to its class's
+// 256 B step), and the stats pages' few new bytes go in its padding holes
+// (Ui's after railHold_, ListView's before lastHoldUs_, LibraryPage's,
+// ListLayout's after topBar_), never on its end. A byte that can't fit
+// fails here: it goes to the owner with the figure, not into the carve.
+static_assert(sizeof(Ui) == 9416, "ui::Ui stays main's 9,416 B (S3b's byte-exact call: new bytes go in its holes)");
+
 namespace {
 
 NavModel::PageRef ref(PageKind kind, uint32_t id = NavModel::kNone) {

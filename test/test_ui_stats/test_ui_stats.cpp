@@ -7,6 +7,10 @@
 // - 4.4's states from the lifetime, in their order (Folding before Empty:
 //   HEAD is partial while the boot's fold runs), and the day a first-month
 //   row opens;
+// - the lifetime from RAM as the host fills it (lifetimeOf(): S3b's S7):
+//   HEAD's figures, the clock's day and minute (the minute a row's `when`
+//   gives), the counting days (a first day after today, none), the clock
+//   unset or not believed, and the host's flags into the states;
 // - notPlayedOpen()'s three inputs (O5: dated, the counting days; with no
 //   clock, DAYS' span), against statsvisit's rule for the visit's grade
 //   (one rule: 29, 30 and 31 days);
@@ -202,6 +206,87 @@ void test_the_states_of_the_lifetime() {
   TEST_ASSERT_EQUAL_UINT16(343, opensDay(f));
   f.today = sf::kUnsetDay;
   TEST_ASSERT_EQUAL_UINT16(sf::kUnsetDay, opensDay(f));
+}
+
+// ---------------------------------------------------------------------------
+// The lifetime from RAM (lifetimeOf(): the host's statsLifetime(), S3b's S7)
+// ---------------------------------------------------------------------------
+void test_the_lifetime_from_ram() {
+  sf::Head h;
+  h.plays = 1204;
+  h.skips = 99;  // (not the lifetime's)
+  h.listenedMs = (uint64_t{74} * 60 + 10) * 60000;
+  h.sinceDay = kSince;
+  // Tue 10 Nov 2026, 21:40:59.999 UTC: day 313, minute 21:40.
+  const uint64_t minute = sf::kMinMs + uint64_t{kToday} * sf::kDayMs + (uint64_t{21} * 60 + 40) * 60000;
+  const uint64_t now = minute + 59999;
+  Lifetime l = lifetimeOf(true, false, true, h, kSince, now);
+  TEST_ASSERT_TRUE(l.on);
+  TEST_ASSERT_FALSE(l.folding);
+  TEST_ASSERT_TRUE(l.cardIn);
+  TEST_ASSERT_TRUE(l.dated);
+  TEST_ASSERT_EQUAL_UINT16(kToday, l.today);
+  TEST_ASSERT_EQUAL_UINT16(kSince, l.sinceDay);
+  TEST_ASSERT_EQUAL_UINT32(71, l.countingDays);
+  TEST_ASSERT_TRUE(l.plays == 1204);
+  TEST_ASSERT_TRUE(l.listenedMs == h.listenedMs);
+  TEST_ASSERT_EQUAL_UINT32(kToday * 1440u + 21 * 60 + 40, l.nowMin);
+  TEST_ASSERT_FALSE(l.madeUp);  // (the host's: an ask may be due)
+  TEST_ASSERT_EQUAL(State::Ready, stateOf(l));
+  // As the fixture dated() has it, field for field that a page reads.
+  const Lifetime d = dated();
+  TEST_ASSERT_EQUAL_UINT32(d.countingDays, l.countingDays);
+  TEST_ASSERT_EQUAL_UINT32(d.nowMin, l.nowMin);
+  TEST_ASSERT_TRUE(d.listenedMs == l.listenedMs);
+  // nowMin is the minute a snapshot row's `when` gives a play started now
+  // (write(): (timeOf() - 1) / 60), the minute's first ms and its last alike,
+  // so "1 min ago" and the day's sections read the same clock.
+  TEST_ASSERT_EQUAL_UINT32((sf::timeOf(now) - 1) / 60, l.nowMin);
+  TEST_ASSERT_EQUAL_UINT32(l.nowMin, lifetimeOf(true, false, true, h, kSince, minute).nowMin);
+  TEST_ASSERT_EQUAL_UINT32(l.nowMin + 1, lifetimeOf(true, false, true, h, kSince, now + 1).nowMin);
+  // A first day after today (a clock set back since): one counting day.
+  TEST_ASSERT_EQUAL_UINT32(1, lifetimeOf(true, false, true, h, kToday + 3, now).countingDays);
+  TEST_ASSERT_EQUAL_UINT32(1, lifetimeOf(true, false, true, h, kToday, now).countingDays);
+  // No first day yet (nothing dated folded, no save): none known; the row
+  // opens from today (opensDay()).
+  l = lifetimeOf(true, false, true, h, sf::kUnsetDay, now);
+  TEST_ASSERT_TRUE(l.dated);
+  TEST_ASSERT_EQUAL_UINT32(0, l.countingDays);
+  TEST_ASSERT_EQUAL_UINT16(kToday + 29, opensDay(l));
+  // The clock's first ms (2026-01-01T00:00Z): day 0, minute 0.
+  l = lifetimeOf(true, false, true, h, 0, sf::kMinMs);
+  TEST_ASSERT_TRUE(l.dated);
+  TEST_ASSERT_EQUAL_UINT16(0, l.today);
+  TEST_ASSERT_EQUAL_UINT32(0, l.nowMin);
+  TEST_ASSERT_EQUAL_UINT32(1, l.countingDays);
+  // The clock unset (boardclock::now()'s 0), or not believed (before 2026,
+  // past 2099): undated, no today, no counting days, no minute; the first
+  // day kept (the entry line's "since 1 Sep" needs no clock).
+  for (uint64_t t : {uint64_t{0}, sf::kMinMs - 1, wallclock::kMaxMs + 1}) {
+    l = lifetimeOf(true, false, true, h, kSince, t);
+    TEST_ASSERT_FALSE(l.dated);
+    TEST_ASSERT_EQUAL_UINT16(sf::kUnsetDay, l.today);
+    TEST_ASSERT_EQUAL_UINT32(0, l.countingDays);
+    TEST_ASSERT_EQUAL_UINT32(0, l.nowMin);
+    TEST_ASSERT_EQUAL_UINT16(kSince, l.sinceDay);
+    TEST_ASSERT_EQUAL(State::NoDates, stateOf(l));
+  }
+  // The last believed ms is dated.
+  TEST_ASSERT_TRUE(lifetimeOf(true, false, true, h, kSince, wallclock::kMaxMs).dated);
+  // The flags as the host gives them, into 4.4's states: a remount's
+  // re-read waiting is on (StatsGlue::on() || rereadPending()); the boot's
+  // fold before Empty (HEAD partial); the card out; the stats off.
+  h.plays = 0;
+  TEST_ASSERT_EQUAL(State::Folding, stateOf(lifetimeOf(true, true, true, h, kSince, now)));
+  TEST_ASSERT_EQUAL(State::Empty, stateOf(lifetimeOf(true, false, true, h, kSince, now)));
+  TEST_ASSERT_EQUAL(State::NoCard, stateOf(lifetimeOf(true, true, false, h, kSince, now)));
+  TEST_ASSERT_EQUAL(State::Off, stateOf(lifetimeOf(false, true, false, h, kSince, now)));
+  // HEAD's figures whole, past 32 bits.
+  h.plays = uint64_t{0x100000000} + 5;
+  h.listenedMs = uint64_t{0x123456789AB};
+  l = lifetimeOf(true, false, true, h, kSince, now);
+  TEST_ASSERT_TRUE(l.plays == uint64_t{0x100000005});
+  TEST_ASSERT_TRUE(l.listenedMs == uint64_t{0x123456789AB});
 }
 
 // ---------------------------------------------------------------------------
@@ -2073,6 +2158,7 @@ void test_the_stat_value_s_segments() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_states_of_the_lifetime);
+  RUN_TEST(test_the_lifetime_from_ram);
   RUN_TEST(test_not_played_open_s_three_inputs);
   RUN_TEST(test_the_page_look_by_phase);
   RUN_TEST(test_the_rising_edge_s_asks);

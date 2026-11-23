@@ -7,6 +7,7 @@
 #include "CardRoot.h"
 #include "PlayLog.h"
 #include "StatsGlue.h"
+#include "StatsView.h"
 #include "TagStore.h"
 #include "app/StatsLists.h"
 
@@ -150,6 +151,14 @@ public:
   // S2's asks (Hr, Hl, Hw, Hp).
   StatsLists& lists() { return lists_; }
   const StatsLists& lists() const { return lists_; }
+  // S3b's: the stats pages' lifetime from RAM (UiHost's statsLifetime(),
+  // through PlayHistory, whose word `cardIn` is: docs/LISTENING-STATS.md
+  // 4.4, 7.11): statsview::lifetimeOf() over the glue (on: on() or a
+  // remount's re-read waiting, as StatsLists' own off test; folding:
+  // booting()), HEAD (the session's live folds in it), sinceDayNow() and the
+  // board's clock. No glue: the stats off. Each page's update() reads it (the
+  // minute's check): a few loads, no card, no lock.
+  statsview::Lifetime lifetime(bool cardIn) const;
   // A track's facts as Ht prints them (Hp's too: `who`, its ms).
   static void printTrackLook(const char* who, uint64_t hash, const statsglue::TrackLook& t, float ms);
 

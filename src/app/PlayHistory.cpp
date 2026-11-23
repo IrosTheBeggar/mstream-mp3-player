@@ -82,17 +82,12 @@ const char* outcomeName(uint8_t o) {
   return o == playlog::kCompleted ? "completed" : o == playlog::kSkipped ? "skipped" : "stopped";
 }
 
-// The card isn't one to ask now (docs/METADATA.md 3.8): the mount's card is
-// out of the slot, none answering or another in it (sectordisk::cardOut(),
-// what the player's card hold goes by), or it refuses every write until a
-// restart (the guard's writes off). Each ask of a card that is out is a
-// mount tried, a second or two of the SD driver's tries with the loop held,
-// and a slot's would only fail again.
-bool cardAway() {
+}  // namespace
+
+// (PlayHistory.h says what it means.)
+bool PlayHistory::cardAway() {
   return sectordisk::installed() && (sectordisk::cardOut() || sectordisk::guard().writesOff);
 }
-
-}  // namespace
 
 void PlayHistory::begin(AutoDj* autoDj) {
   autoDj_ = autoDj;
@@ -197,6 +192,38 @@ StatsLists::Gates PlayHistory::listsGates(uint32_t nowMs, bool cardHeld) {
 
 bool PlayHistory::statsAsk(StatsLists::UiAsk a, bool cardHeld) {
   return active_ && stats_.lists().ask(a, cardHeld || cardAway());
+}
+
+void PlayHistory::statsPhase(statsview::PhaseInfo& out) const {
+  out = statsview::PhaseInfo();
+  if (!active_) return;
+  const StatsLists& l = stats_.lists();
+  out.phase = l.phase();
+  out.why = l.why();
+  out.outcome = l.outcome();
+  out.version = l.version();
+}
+
+void PlayHistory::statsLifetime(statsview::Lifetime& out, bool cardHeld) const {
+  // (The card's word as statsAsk()'s, so the page's No card and the ask's
+  // drop agree; read with no play log too: the guard's RAM, no card I/O.)
+  const bool cardIn = !(cardHeld || cardAway());
+  out = active_ ? stats_.lifetime(cardIn) : statsview::lifetimeOf(false, false, cardIn, statsfold::Head(),
+                                                                  statsfold::kUnsetDay, 0);
+}
+
+bool PlayHistory::statsMadeUp(uint8_t n) {
+  if (active_) return stats_.lists().madeUp(n, library_.index());
+  // No play log (the flash, or no card's records): nothing is served
+  // (statsSnapshot() null), so a view with a snapshot gets none; the end
+  // and the views without one are the pages' alone.
+  statsview::MadeUpView v;
+  const bool known = statsview::madeUpView(n, 0, 0, 0, &v);
+  if (n == 0 || (known && !v.snapshot)) return true;
+  Serial.printf("[listen] uiSx%u: %s\n", static_cast<unsigned>(n),
+                known ? "no made-up snapshot: no play log (the player's records aren't on a card)"
+                      : "no such made-up view (1-9; 0 the card's own)");
+  return false;
 }
 
 void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, bool cardHeld) {

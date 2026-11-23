@@ -648,6 +648,21 @@ void ListeningStats::runHs(bool fenced) {
 }
 
 // ---------------------------------------------------------------------------
+// S3b: the stats pages' lifetime (RAM's: 4.4, 7.11)
+// ---------------------------------------------------------------------------
+statsview::Lifetime ListeningStats::lifetime(bool cardIn) const {
+  if (!glue_) return statsview::lifetimeOf(false, false, cardIn, sf::Head(), sf::kUnsetDay, 0);
+  // (The clock read once: its day, the counting days, the first day not
+  // after it and the minute all from the same ms.)
+  const uint64_t now = boardclock::now();  // (0 while the clock is unset)
+  const sf::Fold& f = glue_->fold();
+  // On: as StatsLists' own off test (its loop()'s release, ask()'s drop),
+  // so a remount's re-read waiting reads the card back's Try again, not Off.
+  return statsview::lifetimeOf(glue_->on() || glue_->rereadPending(), glue_->booting(), cardIn, f.head(),
+                               f.sinceDayNow(now), now);
+}
+
+// ---------------------------------------------------------------------------
 // statsglue::Env
 // ---------------------------------------------------------------------------
 uint64_t ListeningStats::monoMs() { return boardclock::monoMs(); }

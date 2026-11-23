@@ -13,6 +13,7 @@
 #include "PathHashWalk.h"
 #include "StatsFile.h"
 #include "StatsFold.h"
+#include "StatsView.h"
 #include "WallClock.h"
 #include "app/BoardClock.h"
 #include "app/ListeningStats.h"
@@ -1636,6 +1637,68 @@ void StatsLists::cancel() {
 void StatsLists::release(const char* why) {
   cancel();
   freeSnap(why);
+}
+
+// S3b's made-up views (9.3's uiSx<n>, look only: StatsLists.h). The
+// selector, the console and the pages' guards are S12's (D16: nothing asks
+// while one is on); this is the write and its release.
+bool StatsLists::madeUp(uint8_t n, const LibraryIndex* index) {
+  const unsigned view = n;
+  if (n == 0) {
+    if (snap_ && snap_->madeUp()) freeSnap("uiSx0: the made-up view ended");
+    return true;
+  }
+  const bool ready = index && index->ready();
+  statsview::MadeUpView v;
+  if (!statsview::madeUpView(n, ready ? index->buildStamp() : 0, ready ? index->trackCount() : 0,
+                             ready ? index->albumCount() : 0, &v)) {
+    Serial.printf("[listen] uiSx%u: no such made-up view (1-9; 0 the card's own)\n", view);
+    return false;
+  }
+  // A console visit or lean ask under way writes into the held snapshot (its
+  // rows, its count): it goes on, and no view is put under it.
+  if (visiting() && state_.load() != kIdle && !(flags_ & kFromUi)) {
+    Serial.printf("[listen] uiSx%u: %s under way (it writes into the held snapshot): no made-up view until it ends\n",
+                  view, name());
+    return false;
+  }
+  // Whatever is held released first (a page's ask cancelled; a page's
+  // snapshot, Hu's or another view's), so a view's look never stands on a
+  // real snapshot: the views with none (2, 5-9) read their phase, not
+  // Served. (release()'s own lines.)
+  release("a made-up view (uiSx)");
+  if (!v.snapshot) return true;
+  if (!ready) {
+    Serial.printf("[listen] uiSx%u: no made-up snapshot: the library's index isn't ready (behind the update's "
+                  "fence)\n",
+                  view);
+    return false;
+  }
+  // The Dance tab's block, lent as a visit's (refused while that tab is up,
+  // past 18,432 albums, or with no block), written whole as a landed one
+  // reads: nothing ranked or read, the live index's key (the key check in
+  // loop() keeps it), kFlagMadeUp in its header.
+  const size_t need = sv::bytesFor(index->albumCount());
+  void* s = statshold::borrow(need);
+  if (!s) {
+    Serial.printf("[listen] uiSx%u: no block for the made-up snapshot's %lu B: %s\n", view, static_cast<ul>(need),
+                  noLoanText(need));
+    return false;
+  }
+  sv::Snapshot* snap = sv::Snapshot::at(s);
+  if (!sv::writeMadeUp(v.spec, snap, sv::kBound)) {
+    Serial.printf("[listen] uiSx%u: the made-up snapshot refused (a library past 65,534 tracks or 65,535 "
+                  "albums)\n",
+                  view);
+    return false;
+  }
+  snap_ = snap;
+  ++version_;  // (what snapshot() serves changed: the pages' news())
+  Serial.printf("[listen] uiSx%u: a made-up snapshot, look only (nothing ranked or read), %lu B in the Dance tab's "
+                "block at 0x%08lx, lent: served over the library's index (%lu tracks, %lu albums)\n",
+                view, static_cast<ul>(need), static_cast<ul>(reinterpret_cast<uintptr_t>(s)),
+                static_cast<ul>(index->trackCount()), static_cast<ul>(index->albumCount()));
+  return true;
 }
 
 StatsLists::Phase StatsLists::phase() const { return phaseAt(millis(), static_cast<Wait>(rankWait_)); }

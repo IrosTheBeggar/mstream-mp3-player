@@ -27,6 +27,24 @@ bool pastMonth(const Lifetime& l) { return l.dated && sv::notPlayedDays(l.counti
 }  // namespace
 
 // ---------------------------------------------------------------------------
+// The host's lifetime
+// ---------------------------------------------------------------------------
+Lifetime lifetimeOf(bool on, bool folding, bool cardIn, const sf::Head& head, uint16_t sinceDay, uint64_t nowMs) {
+  constexpr uint64_t kMinuteMs = 60000;
+  Lifetime l;
+  l.on = on;
+  l.folding = folding;
+  l.cardIn = cardIn;
+  l.dated = sf::todayOf(nowMs, &l.today);  // (today left kUnsetDay undated)
+  l.sinceDay = sinceDay;
+  l.countingDays = sv::countingDaysOf(l.dated, l.today, sinceDay);
+  l.plays = head.plays;
+  l.listenedMs = head.listenedMs;
+  l.nowMin = l.dated ? static_cast<uint32_t>((nowMs - sf::kMinMs) / kMinuteMs) : 0;
+  return l;
+}
+
+// ---------------------------------------------------------------------------
 // The states
 // ---------------------------------------------------------------------------
 State stateOf(const Lifetime& l) {

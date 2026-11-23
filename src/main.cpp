@@ -1078,6 +1078,19 @@ struct MainUiHost : ui::UiHost {
   bool autoDjFromHere(uint32_t track) override { return autoDj && !frozen.on && autoDj->fromHere(track); }
   bool autoDjHasNeighbours(uint32_t track) override { return autoDj && !frozen.on && autoDj->hasNeighbours(track); }
   bool autoDjMarked(uint32_t key) const override { return autoDj && autoDj->marked(key); }
+  // The listening stats' pages (app/PlayHistory's forwarders of StatsLists'
+  // asks; docs/LISTENING-STATS.md 7.11, 9.7). The two that read the card's
+  // hold (cardHeld, with the card's swap below: a static can't be declared
+  // ahead) are defined after it, beside stepPlays().
+  bool statsAsk(statsview::UiAsk a) override;
+  void statsCancel() override { playHistory.statsCancel(); }
+  void statsRelease(const char* why) override { playHistory.statsRelease(why); }
+  void statsPhase(statsview::PhaseInfo& out) override { playHistory.statsPhase(out); }
+  bool statsNews() override { return playHistory.statsNews(); }
+  const statsvisit::Snapshot* statsSnapshot() const override { return playHistory.statsSnapshot(); }
+  void statsSetWindow(uint8_t window) override { playHistory.statsSetWindow(window); }
+  void statsLifetime(statsview::Lifetime& out) override;
+  bool statsMadeUp(uint8_t n) override { return playHistory.statsMadeUp(n); }
 };
 static MainUiHost uiHost;
 
@@ -3588,6 +3601,12 @@ static void stepPlays(uint32_t now, bool input) {
   in.listMoving = userInterface && userInterface->listMoving();
   playHistory.loop(look, in, cardHeld);
 }
+
+// The stats pages' calls that read the card's hold (MainUiHost's, declared
+// with it: cardHeld comes after it). The card's word as the play log's own
+// pass gives it (stepPlays()), so a page's No card and an ask's drop agree.
+bool MainUiHost::statsAsk(statsview::UiAsk a) { return playHistory.statsAsk(a, cardHeld); }
+void MainUiHost::statsLifetime(statsview::Lifetime& out) { playHistory.statsLifetime(out, cardHeld); }
 
 // Every loop pass, after the UI's (its covers taken in, its list's motion
 // known): what the card worker does next (ScanScheduler's inputs, as

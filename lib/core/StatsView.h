@@ -18,7 +18,8 @@
 // src/ui/LibraryStats draws from it, lib/core StatsText (S6) words its
 // lines.
 //   - The lifetime and the phase, as the host hands them (UiHost's
-//     statsLifetime(), statsPhase()), and 4.4's state from the lifetime.
+//     statsLifetime(), statsPhase(); the lifetime filled by lifetimeOf()
+//     from HEAD and the clock), and 4.4's state from the lifetime.
 //   - The look of a page from its phase (4.4 as decided): the snapshot's
 //     figures, the phase's line (Working, Waiting), a Try again row with
 //     its reason (No room, Unread, Capped, and the card back: the owner's
@@ -100,6 +101,23 @@ struct PhaseInfo {
   Outcome outcome = Outcome::None;
   uint16_t version = 0;
 };
+// The host's lifetime (UiHost::statsLifetime(): app/ListeningStats and
+// app/PlayHistory, S3b's S7), from RAM, read at each page's update() for the
+// minute's check, so a few loads and a division:
+//   - `on`, `folding` and `cardIn` as Lifetime has them (the caller's:
+//     StatsGlue::on() || rereadPending(), booting(), and neither main.cpp's
+//     cardHeld nor PlayHistory::cardAway());
+//   - `head`: Fold::head(), the session's live folds in it (4.2: Empty is
+//     its plays 0 once the fold is done); its plays and time;
+//   - `sinceDay`: Fold::sinceDayNow(nowMs);
+//   - `nowMs`: the board's clock (boardclock::now(): 0 while unset). Dated
+//     when believed (statsfold::todayOf(): 2026-01-01 to 2099-12-31), then
+//     today, the counting days (statsvisit::countingDaysOf()) and nowMin
+//     (its minute since 2026-01-01, the one a snapshot row's `when` gives a
+//     play started now); undated, today kUnsetDay and both 0.
+// madeUp stays false: the host's is never a made-up view's.
+Lifetime lifetimeOf(bool on, bool folding, bool cardIn, const statsfold::Head& head, uint16_t sinceDay,
+                    uint64_t nowMs);
 
 // 4.4's states, from RAM, in this order: the stats off; the card away or
 // held; the boot's fold under way (HEAD partial, so before Empty); nothing
