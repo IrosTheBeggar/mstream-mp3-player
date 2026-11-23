@@ -7,7 +7,8 @@
 // measured with the real fonts (the VLW DejaVu data the firmware draws
 // with) against the room TabBarModel gives it. The mood filters' editor
 // and first row (FilterGrid) in every language: the design's goldens, the
-// cells' fit, the lab panel's hits.
+// cells' fit, the lab panel's hits. The listening stats' texts (StatsText,
+// and StatsView's entry line) in every language, in their rooms.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -44,6 +45,8 @@
 #include "SeekBar.h"
 #include "SheetLayout.h"
 #include "SleepTimer.h"
+#include "StatsText.h"
+#include "StatsView.h"
 #include "TabBarModel.h"
 #include "TagScan.h"
 #include "TagText.h"
@@ -5023,6 +5026,557 @@ void test_filter_empty_line_fits() {
   uistr::setLang(uistr::Lang::En);
 }
 
+// ---- the listening stats (lib/core StatsText, StatsView: docs/LISTENING-STATS.md 7.3-7.7, 8.2) ----
+//
+// Each text the stats pages draw, in its room, with the firmware's fonts in
+// the ten languages (S3b's tests, S6): the entry row's line and where it
+// falls back to the time alone, the phases' lines, the hub's lines, the
+// headers' lines, the tray's labels, a ranked row's line with its count
+// kept, Last 7 days' texts and its stat value beside "Plays". Until S13
+// translates the stats' ids, a language draws their English with its own
+// numbers, times, album counts and percent, so for most of them these pass
+// as English does: they are run again after the translations.
+
+namespace {
+
+constexpr uint64_t statsHm(uint64_t h, uint64_t m) { return (h * 60 + m) * 60000; }
+
+// The times the stats show: none, under an hour, and hours of one to five
+// digits (99,999 h 59 min: format.hours_minutes' worst).
+const uint64_t kStatsTimes[] = {statsHm(0, 0),     statsHm(0, 59),    statsHm(1, 0),      statsHm(9, 59),
+                                statsHm(74, 10),   statsHm(99, 59),   statsHm(999, 59),   statsHm(1204, 5),
+                                statsHm(9999, 59), statsHm(99999, 59)};
+
+// Each month's first day, its 28th and its last (2026: day 0 is 1 Jan):
+// every month's name, and its widest day numbers.
+std::vector<uint16_t> statsDays() {
+  static const int kLen[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  std::vector<uint16_t> days;
+  int start = 0;
+  for (int m = 0; m < 12; ++m) {
+    days.push_back(static_cast<uint16_t>(start));
+    days.push_back(static_cast<uint16_t>(start + 27));
+    days.push_back(static_cast<uint16_t>(start + kLen[m] - 1));
+    start += kLen[m];
+  }
+  return days;
+}
+
+// A WidthFn over a Vlw (statsview::entryLine()'s).
+int statsVlwWidth(const char* t, void* ctx) { return static_cast<const Vlw*>(ctx)->width(t); }
+
+// The crumb's pill ("‹ Library") in the UI's language, as Ui::drawHeader()
+// draws it: its label Bold within kCrumbTextW, else Small.
+int crumbPillW(const Vlw& bold, const Vlw& small) {
+  const char* crumb = tr(S::library_crumb);
+  return (bold.width(crumb) <= uitext::kCrumbTextW ? bold : small).width(crumb) + uitext::kHeaderPillPad +
+         uitext::kHeaderChevronW;
+}
+
+bool statsEndsWith(const char* s, const char* tail) {
+  const size_t n = std::strlen(s), t = std::strlen(tail);
+  return n >= t && std::strcmp(s + n - t, tail) == 0;
+}
+
+// A note (Ui::warn): one Body line in the toast's room, else "what: why"
+// on two lines, Small before the ": " and Body (else Small) after it
+// (Toast::show(): src/ui/Overlays.cpp).
+void toastFits(const Vlw& body, const Vlw& small, const char* text) {
+  const int room = uitext::kToastTwoLineW;
+  if (body.width(text) <= room) {
+    fits(body, text, room);
+    return;
+  }
+  const char* colon = std::strstr(text, ": ");
+  TEST_ASSERT_NOT_NULL_MESSAGE(colon, text);
+  const std::string what(text, static_cast<size_t>(colon - text));
+  fits(small, what.c_str(), room);
+  fitsIn(body, small, colon + 2, room);
+}
+
+}  // namespace
+
+// The entry row's line (7.3, the owner's call 1): the lifetime line,
+// stats.since in Small 204, else the time alone (format.hours_minutes,
+// which always fits); the time alone too with no first day. The fallback is
+// taken exactly where the long form is wider than 204 px, at every time to
+// 99,999 h 59 min and every month's widest day; the line is in the page's
+// 64-byte buffer (LibraryPage's headerSub_) whole. The row's other lines and
+// its title in theirs.
+void test_stats_entry_line_fits() {
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  const std::vector<uint16_t> days = statsDays();
+  std::string report;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    fits(body, tr(S::stats_title), statsview::kEntryRoom);
+    fits(small, tr(S::stats_counting), statsview::kEntryRoom);
+    fits(small, tr(S::stats_entry_empty), statsview::kEntryRoom);
+    int longs = 0, falls = 0, widest = 0;
+    uint64_t firstFall = 0;
+    for (const uint64_t ms : kStatsTimes) {
+      char time[64];
+      statsview::timeText(ms, time, sizeof(time));
+      fits(small, time, statsview::kEntryRoom);
+      for (int d = -1; d < static_cast<int>(days.size()); ++d) {
+        statsview::Lifetime life;
+        life.on = true;
+        life.dated = true;
+        life.today = 364;
+        life.sinceDay = d < 0 ? statsfold::kUnsetDay : days[static_cast<size_t>(d)];
+        life.countingDays = statsvisit::countingDaysOf(true, life.today, life.sinceDay);
+        life.plays = 1204;
+        life.listenedMs = ms;
+        char out[64];
+        const statsview::EntryLine kind =
+            statsview::entryLine(life, statsVlwWidth, const_cast<Vlw*>(&small), out, sizeof(out));
+        if (d < 0) {
+          TEST_ASSERT_TRUE(kind == statsview::EntryLine::Time);
+          TEST_ASSERT_EQUAL_STRING(time, out);
+          continue;
+        }
+        char day[32], whole[128];
+        statsview::dayMonthText(life.sinceDay, day, sizeof(day));
+        uistr::trf(whole, sizeof(whole), S::stats_since, time, day);
+        TEST_ASSERT_TRUE_MESSAGE(std::strlen(whole) < sizeof(out), whole);
+        const int w = small.width(whole);
+        widest = std::max(widest, w);
+        if (w <= statsview::kEntryRoom) {
+          TEST_ASSERT_TRUE_MESSAGE(kind == statsview::EntryLine::Since, whole);
+          TEST_ASSERT_EQUAL_STRING(whole, out);
+          fits(small, out, statsview::kEntryRoom);
+          ++longs;
+        } else {
+          TEST_ASSERT_TRUE_MESSAGE(kind == statsview::EntryLine::Time, whole);
+          TEST_ASSERT_EQUAL_STRING(time, out);
+          if (!falls) firstFall = ms;
+          ++falls;
+        }
+      }
+    }
+    char m[160];
+    if (falls) {
+      snprintf(m, sizeof(m), "%s: %d lifetime lines, %d the time alone (from %llu h), the widest %d px; ",
+               uistr::tag(l), longs, falls, static_cast<unsigned long long>(firstFall / 3600000), widest);
+    } else {
+      snprintf(m, sizeof(m), "%s: %d lifetime lines, the widest %d px; ", uistr::tag(l), longs, widest);
+    }
+    report += m;
+    // English's frame: "74 h 10 min since 1 Sep" fits.
+    if (l == uistr::Lang::En) TEST_ASSERT_TRUE(small.width("74 h 10 min since 1 Sep") <= statsview::kEntryRoom);
+  }
+  TEST_MESSAGE(report.c_str());
+  uistr::setLang(uistr::Lang::En);
+}
+
+// The phases' lines (4.4 as decided): a hub row's line (Small 232) and a
+// list's lone line (Body 300); the reasons under Try again, and as Last 7
+// days' empty state's line (Small 304); the card back's (the owner's call
+// 3); the No card line; Try again as a row's title (Body 232); a shelf's
+// lone lines; the hub's empty state (7.5), its rule's long form where it
+// fits.
+void test_stats_phase_lines_fit() {
+  using namespace uitext;
+  const Vlw body(kVlwSans16), small(kVlwSans13), title(kVlwSansBold22);
+  const textfit::Font f = viewOf(small);
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    for (S id : {S::stats_counting, S::stats_waiting, S::stats_no_room, S::stats_unread}) {
+      fits(small, tr(id), statstext::kHubLineW);
+      fits(body, tr(id), kListLineW);
+    }
+    for (S id : {S::stats_waiting, S::stats_no_room, S::stats_unread, S::stats_card_back})
+      fits(small, tr(id), kEmptyLineW);
+    fits(small, tr(S::stats_card_back), statstext::kHubLineW);
+    fits(small, tr(S::stats_unread), statsview::kEntryRoom);
+    fits(body, tr(S::stats_no_card), kListLineW);
+    fits(body, tr(S::empty_try_again), statstext::kHubLineW);
+    fits(body, tr(S::stats_shelf_empty), kListLineW);
+    fits(body, tr(S::stats_needs_dates), kListLineW);
+    fits(title, tr(S::stats_empty_title), kEmptyTitleW);
+    fits(small, tr(statstext::emptyRule(f, kEmptyLineW)), kEmptyLineW);
+    fits(small, tr(S::stats_empty_card), kEmptyLineW);
+  }
+  uistr::setLang(uistr::Lang::En);
+  TEST_ASSERT_EQUAL(static_cast<int>(S::stats_empty_rule), static_cast<int>(statstext::emptyRule(f, kEmptyLineW)));
+}
+
+// The hub's rows (7.4): their titles (Body 232) and lines (Small 232): Last
+// 7 days' time to 168 h 59 min and plays to 9,999 in each plural form; Most
+// played's top three, whole when short, cut with "…" when not; New finds'
+// count in its long form or its short one, to the shelf's 50; Old
+// favourites' to 200 (hubCount(): past its cap, English's own is 236 px);
+// Not played yet's albums since every month's widest day, and the day alone;
+// Recently played's title cut and its time whole. The disabled rows'
+// reasons and the status row's lines in 250 (D13), "Opens 6 Dec" long or
+// short; the toasts, one line or two.
+void test_stats_hub_lines_fit() {
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  const textfit::Font f = viewOf(small);
+  const std::vector<uint16_t> days = statsDays();
+  const uint32_t counts[] = {1, 2, 3, 5, 21, 22, 25, 50, 118, 200, 216, 999, 1000, 9999, 19417};
+  std::string report;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    char b[160];
+    for (S id : {S::stats_last7, S::stats_most_played, S::stats_new_finds, S::stats_old_favourites, S::stats_not_played,
+                 S::stats_recent})
+      fits(body, tr(id), statstext::kHubLineW);
+    // Last 7 days.
+    for (const uint64_t ms : {statsHm(0, 59), statsHm(9, 59), statsHm(99, 59), statsHm(168, 59)}) {
+      for (const uint32_t plays : counts) {
+        if (plays > 9999) continue;
+        statstext::weekLine(ms, plays, b, sizeof(b));
+        fits(small, b, statstext::kHubLineW);
+      }
+    }
+    // Most played: short titles whole, long ones cut, a CJK one too.
+    const char* shortTitles[] = {"Air", "Go", "Up"};
+    statstext::topThreeLine(f, statstext::kHubLineW, shortTitles, 3, b, sizeof(b));
+    TEST_ASSERT_EQUAL_STRING("Air \xC2\xB7 Go \xC2\xB7 Up", b);
+    const char* longTitles[] = {"Night Ticket", "Glass Harbour", "Gulls Over Ninth Street"};
+    statstext::topThreeLine(f, statstext::kHubLineW, longTitles, 3, b, sizeof(b));
+    fits(small, b, statstext::kHubLineW);
+    TEST_ASSERT_TRUE_MESSAGE(statsEndsWith(b, "\xE2\x80\xA6"), b);
+    const char* cjkTitles[] = {"\xE5\xA4\x9C\xE3\x81\xAE\xE5\x88\x87\xE7\xAC\xA6",  // 夜の切符
+                               "\xE3\x82\xAC\xE3\x83\xA9\xE3\x82\xB9\xE3\x81\xAE\xE6\xB8\xAF",  // ガラスの港
+                               "\xE5\x8C\x97\xE3\x81\xAE\xE6\xB5\xB7\xE3\x81\xAE\xE3\x82\xAB\xE3\x83\xA2"
+                               "\xE3\x83\xA1\xE3\x81\x9F\xE3\x81\xA1\xE3\x81\xAE\xE6\xAD\x8C"};  // 北の海のカモメたちの歌
+    statstext::topThreeLine(f, statstext::kHubLineW, cjkTitles, 3, b, sizeof(b));
+    fits(small, b, statstext::kHubLineW);
+    // New finds and Old favourites, to their shelves' caps (hubCount()).
+    int shortFrom = 0;
+    for (const uint32_t n : counts) {
+      if (n <= statsrank::kCaps[statsrank::kNewFinds]) {
+        statstext::newFindsLine(f, statstext::kHubLineW, n, b, sizeof(b));
+        fits(small, b, statstext::kHubLineW);
+        char whole[160];
+        uistr::trnf(whole, sizeof(whole), S::stats_new_finds_sub, n, n);
+        if (std::strcmp(whole, b) != 0 && !shortFrom) shortFrom = static_cast<int>(n);
+      }
+      if (n <= statsrank::kCaps[statsrank::kOldFavourites]) {
+        statstext::oldFavouritesLine(n, b, sizeof(b));
+        fits(small, b, statstext::kHubLineW);
+      }
+    }
+    // Not played yet.
+    for (const uint16_t d : days) {
+      for (const uint32_t albums : {1u, 2u, 5u, 22u, 612u, 1500u, 18432u}) {
+        statstext::notPlayedLine(albums, d, b, sizeof(b));
+        fits(small, b, statstext::kHubLineW);
+      }
+      statstext::sinceOnlyLine(d, b, sizeof(b));
+      fits(small, b, statstext::kHubLineW);
+      // A first-month row's reason.
+      statstext::warmingLine(f, statstext::kReasonW, d, b, sizeof(b));
+      fits(small, b, statstext::kReasonW);
+      statstext::toastText(S::toast_stats_needs_month, d, b, sizeof(b));
+      toastFits(body, small, b);
+    }
+    // Recently played: a long title cut, the time whole after it.
+    const uint32_t now = 313u * 1440 + 600;
+    for (const uint32_t ago : {0u, 59u, 60u, 23u * 60 + 59}) {
+      char when[48];
+      statstext::agoText(now, now - ago, when, sizeof(when));
+      for (const char* t : {"Slow Lantern", "A Very Long Title That Goes On And On For Ever", cjkTitles[2]}) {
+        statstext::recentLine(f, statstext::kHubLineW, t, true, now, now - ago, b, sizeof(b));
+        fits(small, b, statstext::kHubLineW);
+        TEST_ASSERT_TRUE_MESSAGE(statsEndsWith(b, when), b);
+      }
+    }
+    // The status row and the other reasons.
+    fits(small, tr(S::stats_no_dates), statstext::kReasonW);
+    fits(small, tr(S::stats_clock_fix), statstext::kReasonW);
+    fits(small, tr(S::stats_needs_dates), statstext::kReasonW);
+    statstext::toastText(S::toast_stats_needs_dates, 0, b, sizeof(b));
+    toastFits(body, small, b);
+    if (shortFrom) {
+      char m[96];
+      snprintf(m, sizeof(m), "%s: New finds' short form from %d; ", uistr::tag(l), shortFrom);
+      report += m;
+    }
+  }
+  TEST_MESSAGE(report.c_str());
+  uistr::setLang(uistr::Lang::En);
+}
+
+// The headers' lines (as test_header_subs_fit), in what each language's
+// title and crumb leave them: the hub's lifetime line (depth 2, no crumb)
+// beside "Listening stats" whole or under it in 282 px, at every time to
+// 99,999 h and every month's widest day; a shelf's and Last 7 days' title
+// in what the crumb leaves, their lines beside it whole or under it, Last 7
+// days' range over every week of a year (across each month's end and the
+// year's); each line in the page's 64-byte buffer whole. English as the
+// frames: the hub's line under its title (7.4), Last 7 days' title 104 px
+// (its line from x 140) and "4–10 Nov (UTC)" under it.
+void test_stats_header_lines_fit() {
+  using namespace uitext;
+  const Vlw small(kVlwSans13), bold(kVlwSansBold16);
+  const std::vector<uint16_t> days = statsDays();
+  std::string report;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    char b[128];
+    // The hub.
+    const int hubRight = headerRight(0);
+    TEST_ASSERT_EQUAL_INT(statstext::kHubSubW, hubRight - 28);
+    fits(bold, tr(S::stats_title), hubRight - 28);
+    const int hubTitleW = bold.width(tr(S::stats_title));
+    int besides = 0, belows = 0;
+    for (const uint64_t ms : kStatsTimes) {
+      for (int d = -1; d < static_cast<int>(days.size()); ++d) {
+        statstext::hubSub(ms, d < 0 ? statsfold::kUnsetDay : days[static_cast<size_t>(d)], b, sizeof(b));
+        TEST_ASSERT_TRUE_MESSAGE(std::strlen(b) < 64, b);
+        const HeaderSub how = headerSub(28, hubTitleW, hubRight, small.width(b), false, true);
+        fits(small, b, how == HeaderSub::Beside ? headerSubRoom(28, hubTitleW, hubRight) : hubRight - 28);
+        ++(how == HeaderSub::Beside ? besides : belows);
+      }
+    }
+    // A shelf and Last 7 days, beside the crumb.
+    const int right = headerRight(crumbPillW(bold, small));
+    const S titles[statsview::kShelves] = {S::stats_most_played, S::stats_new_finds, S::stats_old_favourites,
+                                           S::stats_not_played, S::stats_recent};
+    for (uint32_t s = 0; s < statsview::kShelves; ++s) {
+      fits(bold, tr(titles[s]), right - 28);
+      const int titleW = bold.width(tr(titles[s]));
+      for (uint8_t w = 0; w <= statsvisit::kAllTime; ++w) {
+        for (const uint16_t d : days) {
+          if (!statstext::shelfSub(static_cast<statsview::Shelf>(s), w, d, b, sizeof(b))) continue;
+          TEST_ASSERT_TRUE_MESSAGE(std::strlen(b) < 64, b);
+          const HeaderSub how = headerSub(28, titleW, right, small.width(b), false, true);
+          fits(small, b, how == HeaderSub::Beside ? headerSubRoom(28, titleW, right) : right - 28);
+        }
+      }
+    }
+    fits(bold, tr(S::stats_last7), right - 28);
+    const int weekTitleW = bold.width(tr(S::stats_last7));
+    int weekBeside = 0;
+    for (uint16_t first = 0; first < 366; ++first) {
+      statstext::weekSub(first, b, sizeof(b));
+      TEST_ASSERT_TRUE_MESSAGE(std::strlen(b) < 64, b);
+      const HeaderSub how = statstext::weekSubPlace(weekTitleW, small.width(b), right);
+      fits(small, b, how == HeaderSub::Beside ? headerSubRoom(28, weekTitleW, right) : right - 28);
+      weekBeside += how == HeaderSub::Beside;
+    }
+    char m[160];
+    snprintf(m, sizeof(m), "%s: the hub's line beside %d, under %d; Last 7 days' beside %d of 366 weeks (room %d); ",
+             uistr::tag(l), besides, belows, weekBeside, headerSubRoom(28, weekTitleW, right));
+    report += m;
+  }
+  TEST_MESSAGE(report.c_str());
+  uistr::setLang(uistr::Lang::En);
+  // English, as the frames.
+  char b[64];
+  statstext::hubSub(statsHm(74, 10), 243, b, sizeof(b));
+  TEST_ASSERT_TRUE(headerSub(28, bold.width(tr(S::stats_title)), headerRight(0), small.width(b), false, true) ==
+                   HeaderSub::Below);
+  const int right = headerRight(crumbPillW(bold, small));
+  TEST_ASSERT_EQUAL_INT(207, right);
+  TEST_ASSERT_EQUAL_INT(140, 28 + bold.width(tr(S::stats_last7)) + kHeaderSubGap);
+  statstext::weekSub(307, b, sizeof(b));
+  TEST_ASSERT_TRUE(statstext::weekSubPlace(bold.width(tr(S::stats_last7)), small.width(b), right) ==
+                   HeaderSub::Below);
+}
+
+// The tray's labels (7.6): "7 days", each 30-day cell's days (1-30: RCNT
+// short), "All time", Bold in the cell's room, else Small, in three cells
+// and in two.
+void test_stats_tray_labels_fit() {
+  const Vlw small(kVlwSans13), bold(kVlwSansBold16);
+  TEST_ASSERT_EQUAL_INT(statsview::kTrayCellW3 - 4, statstext::kTrayLabelW3);
+  TEST_ASSERT_EQUAL_INT(statsview::kTrayCellW2 - 4, statstext::kTrayLabelW2);
+  std::string report;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    char b[48];
+    for (int w = statsvisit::k7Days; w <= statsvisit::kAllTime; ++w) {
+      for (int d = 1; d <= 30; ++d) {
+        statstext::trayLabel(static_cast<uint8_t>(w), static_cast<uint8_t>(d), b, sizeof(b));
+        fitsIn(bold, small, b, statstext::kTrayLabelW3);
+        fitsIn(bold, small, b, statstext::kTrayLabelW2);
+        if (bold.width(b) > statstext::kTrayLabelW3 && d == 30) {
+          char m[64];
+          snprintf(m, sizeof(m), "%s \"%s\" Small; ", uistr::tag(l), b);
+          report += m;
+        }
+      }
+    }
+  }
+  TEST_MESSAGE(report.c_str());
+  uistr::setLang(uistr::Lang::En);
+}
+
+// A ranked row's line (7.6) in 264 px on each list, with short, long,
+// Japanese and Russian artists, counts to 9,999 in each plural form, each
+// source, every month's widest last day, and the times from a minute to a
+// day: the parts after the artist (the count, the source, the day, the
+// time) whole at its end, never cut; the source or the last day beside
+// the count exactly when the pair leaves the artist kMinNameW px (German's
+// plays beside "found by shuffle" don't), so the artist is never left out
+// in any language; the artist cut with "…" only when the whole line
+// doesn't fit.
+void test_stats_row_lines_keep_their_counts() {
+  const Vlw small(kVlwSans13);
+  const textfit::Font f = viewOf(small);
+  const std::vector<uint16_t> days = statsDays();
+  const char* artists[] = {"Air", "The Lantern Choir", "The Lantern Choir and the Longest Name of All the Artists",
+                           "\xE5\x8C\x97\xE3\x81\xAE\xE6\xB5\xB7\xE3\x81\xAE\xE3\x82\xAB\xE3\x83\xA2\xE3\x83\xA1"
+                           "\xE3\x81\x9F\xE3\x81\xA1\xE3\x81\xAE\xE6\xAD\x8C\xE5\x9B\xA3",
+                           "\xD0\x9C\xD0\xBE\xD1\x81\xD0\xBA\xD0\xBE\xD0\xB2\xD1\x81\xD0\xBA\xD0\xB8\xD0\xB9 "
+                           "\xD0\xB3\xD0\xBE\xD1\x81\xD1\x83\xD0\xB4\xD0\xB0\xD1\x80\xD1\x81\xD1\x82\xD0\xB2"
+                           "\xD0\xB5\xD0\xBD\xD0\xBD\xD1\x8B\xD0\xB9 \xD0\xBE\xD1\x80\xD0\xBA\xD0\xB5\xD1\x81"
+                           "\xD1\x82\xD1\x80"};
+  const uint16_t counts[] = {1, 2, 3, 5, 22, 25, 9999};
+  const uint32_t now = 313u * 1440 + 600;
+  std::string report;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    int widestParts = 0, extrasDropped = 0;
+    auto check = [&](statsrank::List list, const statsvisit::Row& row, bool timed) {
+      // The parts a named row gets (an artist "A" leaves them as they are),
+      // and the pair with no artist (nothing to leave room for).
+      char named[160], pair[160], out[160], whole[320], plays[64];
+      statstext::rowLine(f, statstext::kRowLineW, list, row, "A", timed, now, named, sizeof(named));
+      statstext::rowLine(f, statstext::kRowLineW, list, row, "", timed, now, pair, sizeof(pair));
+      const size_t lead = std::strlen("A") + std::strlen(librarytext::kDot);
+      const char* parts = std::strlen(named) > lead ? named + lead : "";
+      uistr::trnf(plays, sizeof(plays), S::stats_plays_n, row.count, uistr::grouped(row.count));
+      if (list != statsrank::kRecent) {
+        // The count whole; the extra part (who found it, the last day)
+        // beside it only when the pair leaves the artist kMinNameW, else
+        // dropped.
+        const bool pairFits = small.width(pair) + small.width(librarytext::kDot) + statstext::kMinNameW <=
+                              statstext::kRowLineW;
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(pairFits ? pair : plays, parts, named);
+        extrasDropped += !pairFits;
+      } else {
+        TEST_ASSERT_EQUAL_STRING(pair, parts);
+      }
+      if (parts[0]) {
+        const int pw = small.width(parts);
+        widestParts = std::max(widestParts, pw);
+        // The artist always keeps kMinNameW px.
+        TEST_ASSERT_TRUE_MESSAGE(pw + small.width(librarytext::kDot) + statstext::kMinNameW <= statstext::kRowLineW,
+                                 parts);
+      }
+      for (const char* a : artists) {
+        statstext::rowLine(f, statstext::kRowLineW, list, row, a, timed, now, out, sizeof(out));
+        fits(small, out, statstext::kRowLineW);
+        TEST_ASSERT_TRUE_MESSAGE(statsEndsWith(out, parts), out);
+        snprintf(whole, sizeof(whole), "%s%s%s", a, parts[0] ? librarytext::kDot : "", parts);
+        if (std::strcmp(out, whole) != 0) {
+          TEST_ASSERT_TRUE_MESSAGE(small.width(whole) > statstext::kRowLineW, whole);
+          TEST_ASSERT_NOT_NULL_MESSAGE(std::strstr(out, "\xE2\x80\xA6"), out);
+        }
+      }
+    };
+    for (const statsrank::List list : {statsrank::kMost7, statsrank::kMost30, statsrank::kMostAll,
+                                       statsrank::kNewFinds, statsrank::kOldFavourites}) {
+      for (const uint16_t c : counts) {
+        statsvisit::Row row;
+        row.count = c;
+        if (list == statsrank::kNewFinds) {
+          for (const uint8_t src : {statsfold::kYou, statsfold::kShuffle, statsfold::kAutoDj}) {
+            row.src = src;
+            check(list, row, false);
+          }
+        } else if (list == statsrank::kOldFavourites) {
+          for (const uint16_t d : days) {
+            row.lastDay = d;
+            check(list, row, false);
+          }
+        } else {
+          check(list, row, false);
+        }
+      }
+    }
+    for (const uint32_t ago : {0u, 59u, 60u, 23u * 60 + 59, 24u * 60}) {
+      statsvisit::Row row;
+      row.when = now - ago;
+      check(statsrank::kRecent, row, true);
+      check(statsrank::kRecent, row, false);
+    }
+    char m[96];
+    snprintf(m, sizeof(m), "%s: the parts up to %d px, %d pairs the count alone; ", uistr::tag(l), widestParts,
+             extrasDropped);
+    report += m;
+  }
+  TEST_MESSAGE(report.c_str());
+  uistr::setLang(uistr::Lang::En);
+}
+
+// Last 7 days' texts (7.7): "Listening time" and "Plays" in their rooms,
+// the columns' day names in 41 px, Auto DJ's rate, the big day with each
+// weekday and its time to 23 h 59 min in 288 px, and A's stat value (the
+// week's most, 168 h 59 min: its numbers in Title, its words in Small)
+// beside the plays' count (9,999, Title) with kWeekGap between them, as
+// "Listening time" beside "Plays" (this replaces the device row: de, pl
+// and ja, their figures in the report). The big day is the English
+// sentence around each language's own hours until S13: in pl, ja and zh it
+// is wider than 288 px, and it must fit once their translation is in.
+void test_stats_week_texts_fit() {
+  const Vlw small(kVlwSans13), title(kVlwSansBold22);
+  const textfit::Font fSmall = viewOf(small), fTitle = viewOf(title);
+  std::string report;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    char b[160];
+    fits(small, tr(S::stats_listened), statstext::kListenedW);
+    fits(small, tr(S::stats_plays_label), statstext::kPlaysLabelW);
+    for (uint16_t d = 0; d < 7; ++d) fits(small, tr(statstext::dayShort(d)), statstext::kDayNameW);
+    for (const uint8_t pct : {0, 9, 10, 87, 99, 100}) {
+      statstext::autoDjLine(pct, b, sizeof(b));
+      fits(small, b, statstext::kWeekLineW);
+    }
+    int bigDay = 0;
+    for (uint16_t d = 0; d < 7; ++d) {
+      for (const uint64_t ms : {statsHm(0, 59), statsHm(9, 59), statsHm(23, 59)}) {
+        statstext::bigDayLine(d, ms, b, sizeof(b));
+        TEST_ASSERT_TRUE_MESSAGE(small.hasAll(b), b);
+        bigDay = std::max(bigDay, small.width(b));
+      }
+    }
+    const bool owed = !uistr::translated(S::stats_big_day) &&
+                      (l == uistr::Lang::Pl || l == uistr::Lang::Ja || l == uistr::Lang::Zh);
+    char m[192];
+    if (owed) {
+      snprintf(m, sizeof(m), "%s: the big day %d px, over 288 until S13's translation; ", uistr::tag(l), bigDay);
+      TEST_ASSERT_TRUE_MESSAGE(bigDay > statstext::kWeekLineW, m);  // (it fits now: take it off this list)
+      report += m;
+    } else {
+      snprintf(m, sizeof(m), "%s: the big day %d px in 288", uistr::tag(l), bigDay);
+      TEST_ASSERT_TRUE_MESSAGE(bigDay <= statstext::kWeekLineW, m);
+    }
+    // A: the value beside the plays, the labels beside each other.
+    statstext::StatValue v;
+    statstext::statValue(statsHm(168, 59), &v);
+    for (int k = 0; k < v.count; ++k)
+      TEST_ASSERT_TRUE_MESSAGE((v.seg[k].value ? title : small).hasAll(v.at(k)), v.at(k));
+    const int valueW = statstext::statWidth(v, fTitle, fSmall);
+    char plays[24], time[48];
+    uistr::format(plays, sizeof(plays), "{0}", uistr::grouped(9999));
+    statsview::timeText(statsHm(168, 59), time, sizeof(time));
+    const int playsW = title.width(plays);
+    snprintf(m, sizeof(m), "%s: \"%s\" %d px beside \"%s\" %d px", uistr::tag(l), time, valueW, plays, playsW);
+    TEST_ASSERT_TRUE_MESSAGE(statstext::fitsBeside(valueW, playsW), m);
+    TEST_ASSERT_TRUE(
+        statstext::fitsBeside(small.width(tr(S::stats_listened)), small.width(tr(S::stats_plays_label))));
+    if (l == uistr::Lang::De || l == uistr::Lang::Pl || l == uistr::Lang::Ja) {
+      report += m;
+      report += "; ";
+    }
+  }
+  TEST_MESSAGE(report.c_str());
+  uistr::setLang(uistr::Lang::En);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_jump_letters_match_the_index_buckets);
@@ -5094,5 +5648,12 @@ int main(int, char**) {
   RUN_TEST(test_filter_row_fits);
   RUN_TEST(test_filter_dot_clears_the_label);
   RUN_TEST(test_filter_empty_line_fits);
+  RUN_TEST(test_stats_entry_line_fits);
+  RUN_TEST(test_stats_phase_lines_fit);
+  RUN_TEST(test_stats_hub_lines_fit);
+  RUN_TEST(test_stats_header_lines_fit);
+  RUN_TEST(test_stats_tray_labels_fit);
+  RUN_TEST(test_stats_row_lines_keep_their_counts);
+  RUN_TEST(test_stats_week_texts_fit);
   return UNITY_END();
 }

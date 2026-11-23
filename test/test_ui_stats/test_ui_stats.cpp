@@ -47,6 +47,24 @@
 //   day (a tie to the later day), Auto DJ's rate from 5 tracks (D11);
 // - the made-up views 0-9, 7-9's looks on every page, none with an ask due
 //   (a view whose snapshot wasn't written among them).
+// And the words (lib/core/StatsText: S3b's C17b), in English with a made-up
+// font (each character the same px):
+// - each line's form and its short form where the room says so: the hub's
+//   header line, Last 7 days' time and plays, Most played's top three cut
+//   with "…", New finds' long or short count, Old favourites', Not played
+//   yet's albums since the first day (or the day alone), Recently played's
+//   title and how long ago, "Opens 6 Dec" long or short, the toasts, the
+//   empty state's rule; the shelves' header lines and tray labels;
+// - a ranked row's line on each list, "artist cut, count kept": the parts
+//   measured first and kept whole, the artist cut to what they leave, left
+//   out when that is under kMinNameW;
+// - relative times at 0 s, 59 s, 59 min, 23 h 59 and 24 h (D10);
+// - day labels: weekdays from day 0's Thursday, a section's date, Last 7
+//   days' range in one month, across a month's end and a year's, a
+//   minute's day with a time zone's offset either way;
+// - Last 7 days' big day and Auto DJ's line, where its header line goes,
+//   and the stat value's segments in English, Polish, Japanese and Chinese
+//   (numbers apart from words), with their width.
 // The texts' widths in every language are test_ui_library's (S6).
 // Run: pio test -e native -f test_ui_stats
 #include <unity.h>
@@ -63,8 +81,10 @@
 #include "NavModel.h"
 #include "StatsFold.h"
 #include "StatsRank.h"
+#include "StatsText.h"
 #include "StatsView.h"
 #include "StatsVisit.h"
+#include "TextFit.h"
 #include "TouchCalibration.h"
 #include "UiStrings.h"
 
@@ -1481,6 +1501,533 @@ void test_the_made_up_views() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// The words (StatsText)
+// ---------------------------------------------------------------------------
+namespace {
+
+#define DOT " \xC2\xB7 "         // librarytext::kDot
+#define ELLIPSIS "\xE2\x80\xA6"  // TextFit's cut
+
+// A made-up font: every character (a code point) *ctx px wide.
+int cpWidth(void* ctx, const char* s) {
+  int n = 0;
+  for (const unsigned char* p = reinterpret_cast<const unsigned char*>(s); *p; ++p) n += (*p & 0xC0) != 0x80;
+  return n * *static_cast<int*>(ctx);
+}
+textfit::Font mono(int* px) {
+  textfit::Font f;
+  f.ctx = px;
+  f.width = cpWidth;
+  return f;
+}
+bool endsWith(const char* s, const char* tail) {
+  const size_t n = std::strlen(s), t = std::strlen(tail);
+  return n >= t && std::strcmp(s + n - t, tail) == 0;
+}
+constexpr uint64_t hm(uint64_t h, uint64_t m) { return (h * 60 + m) * 60000; }
+
+}  // namespace
+
+void test_the_forms_of_the_lines() {
+  namespace st = statstext;
+  char b[160];
+  int px = 6;
+  const textfit::Font f = mono(&px);
+  // The hub's header line: lifetime, the time alone with no first day.
+  st::hubSub(hm(74, 10), kSince, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("74 h 10 min since 1 Sep", b);
+  st::hubSub(hm(0, 30), kSince, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("30 min since 1 Sep", b);
+  st::hubSub(hm(74, 10), sf::kUnsetDay, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("74 h 10 min", b);
+  // Last 7 days: the time and the plays (one; grouped).
+  st::weekLine(hm(7, 37), 118, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("7 h 37 min" DOT "118 plays", b);
+  st::weekLine(hm(0, 45), 1, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("45 min" DOT "1 play", b);
+  st::weekLine(hm(168, 59), 9999, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("168 h 59 min" DOT "9,999 plays", b);
+  // Not played yet: the albums since the first day, the albums alone with
+  // none; before its count, the day alone ("" with none).
+  st::notPlayedLine(612, kSince, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("612 albums since 1 Sep", b);
+  st::notPlayedLine(1, kSince, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("1 album since 1 Sep", b);
+  st::notPlayedLine(612, sf::kUnsetDay, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("612 albums", b);
+  st::sinceOnlyLine(kSince, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("since 1 Sep", b);
+  TEST_ASSERT_EQUAL_UINT32(0, st::sinceOnlyLine(sf::kUnsetDay, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("", b);
+  // Old favourites.
+  st::oldFavouritesLine(38, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("38 tracks, played often, not lately", b);
+  st::oldFavouritesLine(1, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("1 track, played often, not lately", b);
+  // Their counts: the snapshot's total, at most the shelf's cap (50, 200).
+  {
+    sv::MadeUp m = fullCard();
+    Snap a;
+    put(a, m);
+    TEST_ASSERT_EQUAL_UINT32(a->total(sr::kNewFinds), st::hubCount(*a.s(), sr::kNewFinds));
+    TEST_ASSERT_EQUAL_UINT32(a->total(sr::kOldFavourites), st::hubCount(*a.s(), sr::kOldFavourites));
+    TEST_ASSERT_TRUE(a->total(sr::kNewFinds) > 0 && a->total(sr::kOldFavourites) > 0);
+    m.totals[sr::kNewFinds] = 50;
+    m.totals[sr::kOldFavourites] = 1000;
+    Snap c;
+    put(c, m);
+    TEST_ASSERT_EQUAL_UINT32(50, st::hubCount(*c.s(), sr::kNewFinds));
+    TEST_ASSERT_EQUAL_UINT32(200, st::hubCount(*c.s(), sr::kOldFavourites));
+    m.totals[sr::kNewFinds] = 51;
+    Snap d;
+    put(d, m);
+    TEST_ASSERT_EQUAL_UINT32(50, st::hubCount(*d.s(), sr::kNewFinds));
+    TEST_ASSERT_EQUAL_UINT32(0, st::hubCount(*d.s(), sr::kLists));
+  }
+  // New finds: the long form where it fits 232 (32 characters: 192 px at 6,
+  // 256 at 8), else the short one; one track.
+  st::newFindsLine(f, st::kHubLineW, 41, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("41 tracks first heard in 30 days", b);
+  px = 8;
+  st::newFindsLine(f, st::kHubLineW, 41, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("41 new in 30 days", b);
+  px = 6;
+  st::newFindsLine(f, st::kHubLineW, 1, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("1 track first heard in 30 days", b);
+  px = 232 / 32;  // 7: 224 px, fits; one more character doesn't
+  st::newFindsLine(f, 224, 41, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("41 tracks first heard in 30 days", b);
+  st::newFindsLine(f, 223, 41, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("41 new in 30 days", b);
+  // A first-month row: "Opens 6 Dec, after a month of plays" (35
+  // characters) in 250, else its short form; the toasts.
+  px = 7;  // 245 px
+  st::warmingLine(f, st::kReasonW, 339, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Opens 6 Dec, after a month of plays", b);
+  px = 8;  // 280 px
+  st::warmingLine(f, st::kReasonW, 339, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Opens on 6 Dec", b);
+  st::toastText(S::toast_stats_needs_month, 339, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Needs a month of plays: Opens on 6 Dec", b);
+  st::toastText(S::toast_stats_needs_dates, 339, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Needs dates: Plug in to the MP3 Player tab", b);
+  // The empty state's rule (37 characters) in 304, else its short form.
+  TEST_ASSERT_EQUAL(static_cast<int>(S::stats_empty_rule), static_cast<int>(st::emptyRule(f, 304)));  // 296
+  px = 9;  // 333
+  TEST_ASSERT_EQUAL(static_cast<int>(S::stats_empty_rule_short), static_cast<int>(st::emptyRule(f, 304)));
+  px = 6;
+
+  // Most played: the top three, " · " between, cut at the end with "…".
+  const char* titles[] = {"Night Ticket", "Glass Harbour", "Gulls Over Ninth", "Fourth"};
+  st::topThreeLine(f, 400, titles, 3, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Night Ticket" DOT "Glass Harbour" DOT "Gulls Over Ninth", b);
+  st::topThreeLine(f, 400, titles, 4, b, sizeof(b));  // three at most
+  TEST_ASSERT_EQUAL_STRING("Night Ticket" DOT "Glass Harbour" DOT "Gulls Over Ninth", b);
+  st::topThreeLine(f, st::kHubLineW, titles, 3, b, sizeof(b));  // 47 characters: 282 px
+  TEST_ASSERT_TRUE(cpWidth(&px, b) <= st::kHubLineW);  // 38 characters at most: "Gulls " cut, its space dropped
+  TEST_ASSERT_EQUAL_STRING("Night Ticket" DOT "Glass Harbour" DOT "Gulls" ELLIPSIS, b);
+  st::topThreeLine(f, st::kHubLineW, titles, 2, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Night Ticket" DOT "Glass Harbour", b);
+  st::topThreeLine(f, st::kHubLineW, titles, 1, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Night Ticket", b);
+  TEST_ASSERT_EQUAL_UINT32(0, st::topThreeLine(f, st::kHubLineW, titles, 0, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("", b);
+  const char* odd[] = {nullptr, "Glass Harbour"};
+  st::topThreeLine(f, st::kHubLineW, odd, 2, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING(DOT "Glass Harbour", b);
+  // Long titles past the join's 255 bytes: still cut to the room.
+  std::string longTitle(200, 'x');
+  const char* longs[] = {longTitle.c_str(), longTitle.c_str(), longTitle.c_str()};
+  st::topThreeLine(f, st::kHubLineW, longs, 3, b, sizeof(b));
+  TEST_ASSERT_TRUE(cpWidth(&px, b) <= st::kHubLineW && endsWith(b, ELLIPSIS));
+
+  // Recently played: the title and how long ago; the title cut, the time
+  // kept; the title alone from 24 h, or undated.
+  const uint32_t now = kToday * 1440u + 600;
+  st::recentLine(f, st::kHubLineW, "Slow Lantern", true, now, now - 25, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Slow Lantern" DOT "25 min ago", b);
+  st::recentLine(f, st::kHubLineW, "Slow Lantern", true, now, now - 1440, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Slow Lantern", b);
+  st::recentLine(f, st::kHubLineW, "Slow Lantern", false, now, now - 25, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Slow Lantern", b);
+  st::recentLine(f, st::kHubLineW, "A Very Long Title That Goes On And On For Ever", true, now, now - 25, b,
+                 sizeof(b));
+  TEST_ASSERT_TRUE(cpWidth(&px, b) <= st::kHubLineW);
+  TEST_ASSERT_TRUE(endsWith(b, ELLIPSIS DOT "25 min ago"));
+  TEST_ASSERT_EQUAL_INT(0, std::strncmp(b, "A Very Long Title", 17));
+
+  // The shelves' header lines and the tray's labels.
+  st::shelfSub(Shelf::MostPlayed, sv::k7Days, kSince, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("last 7 days", b);
+  st::shelfSub(Shelf::MostPlayed, sv::k30Days, kSince, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("last 30 days", b);
+  st::shelfSub(Shelf::MostPlayed, sv::kAllTime, kSince, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("since 1 Sep", b);
+  TEST_ASSERT_EQUAL_UINT32(0, st::shelfSub(Shelf::MostPlayed, sv::kAllTime, sf::kUnsetDay, b, sizeof(b)));
+  st::shelfSub(Shelf::NewFinds, sv::kAllTime, kSince, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("first heard in 30 days", b);
+  st::shelfSub(Shelf::OldFavourites, sv::kAllTime, kSince, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("not in 30 days", b);
+  st::shelfSub(Shelf::NotPlayed, sv::kAllTime, kSince, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("since 1 Sep", b);
+  TEST_ASSERT_EQUAL_UINT32(0, st::shelfSub(Shelf::Recent, sv::kAllTime, kSince, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("", b);
+  st::trayLabel(sv::k7Days, 30, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("7 days", b);
+  st::trayLabel(sv::k30Days, 30, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("30 days", b);
+  st::trayLabel(sv::k30Days, 16, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("16 days", b);
+  st::trayLabel(sv::k30Days, 1, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("1 day", b);
+  st::trayLabel(sv::kAllTime, 30, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("All time", b);
+
+  // A short buffer cuts at a character boundary, as uistr does.
+  char small[12];
+  st::weekLine(hm(7, 37), 118, small, sizeof(small));
+  TEST_ASSERT_EQUAL_STRING("7 h 37 min ", small);
+  char tiny[13];
+  st::weekLine(hm(7, 37), 118, tiny, sizeof(tiny));  // the dot's two bytes don't fit: dropped whole
+  TEST_ASSERT_EQUAL_STRING("7 h 37 min ", tiny);
+  // Most played's line in a buffer shorter than its cut: cut there too,
+  // still ending with the ellipsis.
+  char line[20];
+  st::topThreeLine(f, 400, titles, 3, line, sizeof(line));
+  TEST_ASSERT_EQUAL_STRING("Night Ticket \xC2\xB7" ELLIPSIS, line);  // 16 bytes kept, the space before the mark dropped
+}
+
+void test_a_ranked_row_keeps_its_count() {
+  namespace st = statstext;
+  char b[160];
+  int px = 6;
+  const textfit::Font f = mono(&px);
+  sv::Row r;
+  r.count = 12;
+  // Most played, each window: the plays.
+  for (sr::List l : {sr::kMost7, sr::kMost30, sr::kMostAll}) {
+    st::rowLine(f, st::kRowLineW, l, r, "Lumen Ferry", false, 0, b, sizeof(b));
+    TEST_ASSERT_EQUAL_STRING("Lumen Ferry" DOT "12 plays", b);
+  }
+  r.count = 1;
+  st::rowLine(f, st::kRowLineW, sr::kMostAll, r, "Lumen Ferry", false, 0, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Lumen Ferry" DOT "1 play", b);
+  r.count = 9999;
+  st::rowLine(f, st::kRowLineW, sr::kMostAll, r, "Lumen Ferry", false, 0, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Lumen Ferry" DOT "9,999 plays", b);
+  // New finds: who found it (nothing when the listener picked it), then
+  // the plays.
+  r.count = 9;
+  r.src = sf::kAutoDj;
+  st::rowLine(f, st::kRowLineW, sr::kNewFinds, r, "Sefa Ilmar", false, 0, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Sefa Ilmar" DOT "found by Auto DJ" DOT "9 plays", b);
+  r.src = sf::kShuffle;
+  st::rowLine(f, st::kRowLineW, sr::kNewFinds, r, "Sefa Ilmar", false, 0, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Sefa Ilmar" DOT "found by shuffle" DOT "9 plays", b);
+  r.src = sf::kYou;
+  st::rowLine(f, st::kRowLineW, sr::kNewFinds, r, "Sefa Ilmar", false, 0, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Sefa Ilmar" DOT "9 plays", b);
+  // Old favourites: the plays and the last day (14 Sep).
+  r.lastDay = 256;
+  st::rowLine(f, st::kRowLineW, sr::kOldFavourites, r, "Halvard Moss", false, 0, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Halvard Moss" DOT "9 plays" DOT "last 14 Sep", b);
+  // Recently played: how long ago when timed and under a day, else the
+  // artist alone (no count: the list has none).
+  const uint32_t now = kToday * 1440u + 600;
+  r.when = now - 25;
+  st::rowLine(f, st::kRowLineW, sr::kRecent, r, "Lumen Ferry", true, now, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Lumen Ferry" DOT "25 min ago", b);
+  st::rowLine(f, st::kRowLineW, sr::kRecent, r, "Lumen Ferry", false, now, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Lumen Ferry", b);
+  r.when = now - 24 * 60;
+  st::rowLine(f, st::kRowLineW, sr::kRecent, r, "Lumen Ferry", true, now, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Lumen Ferry", b);
+  r.when = sv::kWhenSession;
+  st::rowLine(f, st::kRowLineW, sr::kRecent, r, "Lumen Ferry", true, now, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Lumen Ferry", b);
+
+  // A long artist: cut to what the parts leave, the parts whole at the end.
+  const char* longArtist = "The Lantern Choir and the Longest Name of All the Artists";
+  r.count = 9999;
+  r.src = sf::kAutoDj;
+  st::rowLine(f, st::kRowLineW, sr::kNewFinds, r, longArtist, false, 0, b, sizeof(b));
+  // (The parts and the dot: 33 characters, 198 px; the artist's 66: "The
+  // Lanter…".)
+  TEST_ASSERT_TRUE(cpWidth(&px, b) <= st::kRowLineW);
+  TEST_ASSERT_EQUAL_STRING("The Lanter" ELLIPSIS DOT "found by Auto DJ" DOT "9,999 plays", b);
+  // The artist cut alone (Recently played with no time).
+  st::rowLine(f, st::kRowLineW, sr::kRecent, r, longArtist, false, now, b, sizeof(b));
+  TEST_ASSERT_TRUE(cpWidth(&px, b) <= st::kRowLineW && endsWith(b, ELLIPSIS));
+  // Who found it, and the last day, give way to the count when the pair
+  // would leave the artist under kMinNameW: at 8 px "found by Auto DJ ·
+  // 9,999 plays" and the dot are 264 px (none left), the plays alone 112;
+  // at 9 px "9,999 plays · last 14 Sep" and the dot 252 (12 left). With no
+  // artist, the pair whole.
+  px = 8;
+  r.src = sf::kAutoDj;
+  r.count = 9;
+  st::rowLine(f, st::kRowLineW, sr::kNewFinds, r, "Sefa Ilmar", false, 0, b, sizeof(b));  // 32 px left: kept
+  TEST_ASSERT_EQUAL_STRING("Sef" ELLIPSIS DOT "found by Auto DJ" DOT "9 plays", b);
+  r.count = 9999;
+  st::rowLine(f, st::kRowLineW, sr::kNewFinds, r, "Sefa Ilmar", false, 0, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Sefa Ilmar" DOT "9,999 plays", b);
+  st::rowLine(f, st::kRowLineW, sr::kNewFinds, r, "", false, 0, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("found by Auto DJ" DOT "9,999 plays", b);
+  px = 9;
+  r.count = 9;
+  st::rowLine(f, st::kRowLineW, sr::kOldFavourites, r, "Halvard Moss", false, 0, b, sizeof(b));
+  TEST_ASSERT_TRUE(endsWith(b, DOT "9 plays" DOT "last 14 Sep"));
+  r.count = 9999;
+  st::rowLine(f, st::kRowLineW, sr::kOldFavourites, r, "Halvard Moss", false, 0, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Halvard Moss" DOT "9,999 plays", b);
+  px = 6;
+  // No artist (the files right under /music): the parts alone.
+  r.count = 12;
+  st::rowLine(f, st::kRowLineW, sr::kMostAll, r, "", false, 0, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("12 plays", b);
+  st::rowLine(f, st::kRowLineW, sr::kMostAll, r, nullptr, false, 0, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("12 plays", b);
+
+  // nameAndParts()'s edge: the name keeps kMinNameW px or is left out.
+  // " · " and "12 plays": 11 characters, 66 px; at 98 px 32 are left (5
+  // characters, "Lume…"), at 97 none.
+  st::nameAndParts(f, 66 + st::kMinNameW, "Lumen Ferry", "12 plays", b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Lume" ELLIPSIS DOT "12 plays", b);
+  st::nameAndParts(f, 66 + st::kMinNameW - 1, "Lumen Ferry", "12 plays", b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("12 plays", b);
+  // A whole name that fits: as it is.
+  st::nameAndParts(f, 66 + 66, "Lumen Ferry", "12 plays", b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Lumen Ferry" DOT "12 plays", b);
+  // A buffer short of the parts' bytes and five: the parts alone.
+  char shortBuf[16];
+  st::nameAndParts(f, 400, "Lumen Ferry", "12 plays", shortBuf, sizeof(shortBuf));
+  TEST_ASSERT_EQUAL_STRING("12 plays", shortBuf);
+  // A buffer that cuts the name (its pixels fit): the name cut there with
+  // "…", the parts whole after it.
+  char mid[24];
+  st::nameAndParts(f, 400, longArtist, "12 plays", mid, sizeof(mid));
+  TEST_ASSERT_EQUAL_STRING("The Lant" ELLIPSIS DOT "12 plays", mid);
+}
+
+void test_relative_times() {
+  namespace st = statstext;
+  char b[48];
+  const uint32_t now = kToday * 1440u + 600;
+  // By the minute: 0 s and 59 s ago are the same minute, "1 min ago" (a
+  // minute at least: D10).
+  TEST_ASSERT_TRUE(st::agoText(now, now, b, sizeof(b)) > 0);
+  TEST_ASSERT_EQUAL_STRING("1 min ago", b);
+  st::agoText(now, now - 1, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("1 min ago", b);
+  st::agoText(now, now - 59, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("59 min ago", b);
+  st::agoText(now, now - 60, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("1 h ago", b);
+  st::agoText(now, now - (23 * 60 + 59), b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("23 h ago", b);
+  // From 24 h: none (the name alone), as for an undated row or a time
+  // after now (a clock set back).
+  for (uint32_t when : {now - 24 * 60, now - 24 * 60 - 1, now - 5000, sv::kWhenSession, sv::kWhenEarlier, now + 1}) {
+    std::strcpy(b, "x");
+    TEST_ASSERT_EQUAL_UINT32(0, st::agoText(now, when, b, sizeof(b)));
+    TEST_ASSERT_EQUAL_STRING("", b);
+  }
+  // A made-up snapshot's row 0 (25 min before its time) against its now.
+  Snap a;
+  put(a, fullCard());
+  MadeUpView v;
+  TEST_ASSERT_TRUE(madeUpView(1, kStamp, kTracks, kAlbums, &v));
+  st::agoText(v.life.nowMin, a->rowAt(sr::kRecent, 0).when, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("25 min ago", b);
+  st::agoText(v.life.nowMin, a->rowAt(sr::kRecent, 1).when, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("2 h ago", b);  // 25 + 97 = 122 min
+}
+
+void test_day_labels() {
+  namespace st = statstext;
+  char b[64];
+  // Day 0, 2026-01-01, was a Thursday; 313 (10 Nov) a Tuesday.
+  TEST_ASSERT_EQUAL_UINT8(3, st::weekdayOf(0));
+  TEST_ASSERT_EQUAL_UINT8(1, st::weekdayOf(kToday));
+  TEST_ASSERT_EQUAL_UINT8(6, st::weekdayOf(311));
+  TEST_ASSERT_EQUAL(static_cast<int>(S::day_tue), static_cast<int>(st::dayShort(kToday)));
+  TEST_ASSERT_EQUAL(static_cast<int>(S::day_saturday), static_cast<int>(st::dayLong(310)));
+  TEST_ASSERT_EQUAL(static_cast<int>(S::day_monday), static_cast<int>(st::dayLong(312)));
+  TEST_ASSERT_EQUAL(static_cast<int>(S::day_fri), static_cast<int>(st::dayShort(365)));  // 2027-01-01, a Friday
+  // A section's older day.
+  st::weekdayDate(311, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Sun 8 Nov", b);
+  st::weekdayDate(0, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Thu 1 Jan", b);
+  // Last 7 days' range: one month, across a month's end, across a year's.
+  st::dayRange(307, 313, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("4\xE2\x80\x93" "10 Nov", b);
+  st::dayRange(270, 276, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("28 Sep\xE2\x80\x93" "4 Oct", b);
+  st::dayRange(361, 367, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("28 Dec\xE2\x80\x93" "3 Jan", b);
+  st::dayRange(334, 340, b, sizeof(b));  // 1-7 Dec
+  TEST_ASSERT_EQUAL_STRING("1\xE2\x80\x93" "7 Dec", b);
+  st::weekSub(307, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("4\xE2\x80\x93" "10 Nov (UTC)", b);
+  st::weekSub(270, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("28 Sep\xE2\x80\x93" "4 Oct (UTC)", b);
+  // A minute's day with a time zone's offset (0 in S3): 23:30 UTC on 10
+  // Nov is 11 Nov an hour east; 00:30 UTC is 9 Nov an hour west; 31 Oct
+  // 23:30 is 1 Nov an hour east (a month's end); before day 0, day 0.
+  TEST_ASSERT_EQUAL_UINT16(kToday, st::localDay(kToday * 1440u + 23 * 60 + 30, 0));
+  TEST_ASSERT_EQUAL_UINT16(kToday + 1, st::localDay(kToday * 1440u + 23 * 60 + 30, 60));
+  TEST_ASSERT_EQUAL_UINT16(kToday - 1, st::localDay(kToday * 1440u + 30, -60));
+  TEST_ASSERT_EQUAL_UINT16(kToday, st::localDay(kToday * 1440u + 30, 0));
+  const uint16_t nov1 = st::localDay(303u * 1440 + 23 * 60 + 30, 60);
+  TEST_ASSERT_EQUAL_UINT16(304, nov1);
+  st::weekdayDate(nov1, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Sun 1 Nov", b);
+  st::weekdayDate(st::localDay(303u * 1440 + 23 * 60 + 30, 0), b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Sat 31 Oct", b);
+  TEST_ASSERT_EQUAL_UINT16(0, st::localDay(30, -60));
+  TEST_ASSERT_EQUAL_UINT16(0, st::localDay(0, 0));
+  // Recently played's headings.
+  RecentItem it;
+  it.heading = true;
+  it.section = Section::Today;
+  st::sectionText(it, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Today", b);
+  it.section = Section::Yesterday;
+  st::sectionText(it, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Yesterday", b);
+  it.section = Section::Day;
+  it.day = 311;
+  st::sectionText(it, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Sun 8 Nov", b);
+  it.section = Section::Session;
+  st::sectionText(it, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("This session", b);
+  it.section = Section::Earlier;
+  st::sectionText(it, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Earlier", b);
+  // A dated snapshot's sections, worded.
+  sv::MadeUp m = fullCard();
+  m.time = (kToday * 1440u + 600) * 60 + 1;
+  m.rows[sr::kRecent] = 4;
+  m.recentFirstAgoMin = 30;
+  m.recentStepMin = 720;
+  m.sessionRows = 0;
+  m.earlierRows = 1;
+  Snap a;
+  put(a, m);
+  const char* want[] = {"Today", nullptr, "Yesterday", nullptr, nullptr, "Sun 8 Nov", nullptr, "Earlier", nullptr};
+  TEST_ASSERT_EQUAL_UINT32(9, recentCount(*a.s()));
+  for (uint32_t i = 0; i < 9; ++i) {
+    const RecentItem r = recentAt(*a.s(), i);
+    TEST_ASSERT_EQUAL_MESSAGE(want[i] != nullptr, r.heading, want[i] ? want[i] : "a row");
+    if (!r.heading) continue;
+    st::sectionText(r, b, sizeof(b));
+    TEST_ASSERT_EQUAL_STRING(want[i], b);
+  }
+}
+
+void test_the_week_texts() {
+  namespace st = statstext;
+  char b[96];
+  // The big day: its weekday's full name and its time; under an hour, the
+  // minutes.
+  st::bigDayLine(310, hm(2, 1), b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Saturday was your big day: 2 h 1 min", b);
+  st::bigDayLine(312, hm(0, 50), b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Monday was your big day: 50 min", b);
+  // Auto DJ's rate.
+  st::autoDjLine(87, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Auto DJ got it right 87% of the time", b);
+  st::autoDjLine(100, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Auto DJ got it right 100% of the time", b);
+  // From a made-up snapshot: the frames' week (4-10 Nov, Saturday 2 h 1
+  // min, 87%).
+  Snap a;
+  put(a, fullCard());
+  const WeekFigures w = weekFigures(*a.s());
+  st::weekSub(w.firstDay, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("4\xE2\x80\x93" "10 Nov (UTC)", b);
+  st::bigDayLine(static_cast<uint16_t>(w.firstDay + w.bigDay), a->day(static_cast<uint32_t>(w.bigDay)).listenedMs, b,
+                 sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Saturday was your big day: 2 h 1 min", b);
+  st::autoDjLine(w.autoDjPct, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("Auto DJ got it right 87% of the time", b);
+  st::weekLine(w.listenedMs, w.plays, b, sizeof(b));
+  TEST_ASSERT_EQUAL_STRING("7 h 37 min" DOT "118 plays", b);
+  // The columns' names, oldest first: Wed ... Tue.
+  const char* names[7] = {"Wed", "Thu", "Fri", "Sat", "Sun", "Mon", "Tue"};
+  for (uint32_t i = 0; i < 7; ++i)
+    TEST_ASSERT_EQUAL_STRING(names[i], uistr::tr(st::dayShort(static_cast<uint16_t>(w.firstDay + i))));
+  // Its header line: beside a 104 px title (from x 140) when it fits to
+  // 207, else under it.
+  TEST_ASSERT_TRUE(st::weekSubPlace(104, 67, 207) == uitext::HeaderSub::Beside);
+  TEST_ASSERT_TRUE(st::weekSubPlace(104, 68, 207) == uitext::HeaderSub::Below);
+  TEST_ASSERT_EQUAL_INT(140, 28 + 104 + uitext::kHeaderSubGap);
+  // A's two columns, 8 px apart at least.
+  TEST_ASSERT_TRUE(st::fitsBeside(100, 60));
+  TEST_ASSERT_TRUE(st::fitsBeside(304 - 16 - 8 - 60, 60));
+  TEST_ASSERT_FALSE(st::fitsBeside(304 - 16 - 8 - 60 + 1, 60));
+}
+
+void test_the_stat_value_s_segments() {
+  namespace st = statstext;
+  struct Want {
+    const char* text;
+    bool value;
+  };
+  auto same = [](const st::StatValue& v, const Want* want, int n, const char* what) {
+    TEST_ASSERT_EQUAL_INT_MESSAGE(n, v.count, what);
+    for (int k = 0; k < n && k < v.count; ++k) {
+      TEST_ASSERT_EQUAL_STRING_MESSAGE(want[k].text, v.at(k), what);
+      TEST_ASSERT_EQUAL_MESSAGE(want[k].value, v.seg[k].value, what);
+    }
+  };
+  st::StatValue v;
+  st::statValue(hm(7, 37), &v);
+  const Want en[] = {{"7", true}, {" h ", false}, {"37", true}, {" min", false}};
+  same(v, en, 4, "en 7 h 37 min");
+  // Its width: the numbers in one font, the words in another.
+  int big = 10, smallPx = 5;
+  TEST_ASSERT_EQUAL_INT(10 + 15 + 20 + 20, st::statWidth(v, mono(&big), mono(&smallPx)));
+  st::statValue(hm(0, 45), &v);
+  const Want enMin[] = {{"45", true}, {" min", false}};
+  same(v, enMin, 2, "en 45 min");
+  st::statValue(hm(0, 0), &v);
+  const Want enZero[] = {{"0", true}, {" min", false}};
+  same(v, enZero, 2, "en 0 min");
+  st::statValue(hm(1204, 5), &v);
+  const Want enGrouped[] = {{"1,204", true}, {" h ", false}, {"5", true}, {" min", false}};
+  same(v, enGrouped, 4, "en 1,204 h 5 min");
+  st::statValue(hm(99999, 59), &v);
+  TEST_ASSERT_EQUAL_STRING("99,999", v.at(0));
+  // In the UI's language: Polish's words between the numbers, Japanese's
+  // and Chinese's.
+  uistr::setLang(uistr::Lang::Pl);
+  st::statValue(hm(7, 37), &v);
+  const Want pl[] = {{"7", true}, {" godz. ", false}, {"37", true}, {" min", false}};
+  same(v, pl, 4, "pl");
+  uistr::setLang(uistr::Lang::Ja);
+  st::statValue(hm(7, 37), &v);
+  const Want ja[] = {{"7", true}, {" \xE6\x99\x82\xE9\x96\x93 ", false}, {"37", true}, {" \xE5\x88\x86", false}};
+  same(v, ja, 4, "ja");
+  uistr::setLang(uistr::Lang::Zh);
+  st::statValue(hm(0, 45), &v);
+  const Want zh[] = {{"45", true}, {" \xE5\x88\x86\xE9\x92\x9F", false}};
+  same(v, zh, 2, "zh");
+  uistr::setLang(uistr::Lang::En);
+  // The segments joined are timeText()'s.
+  char whole[64], joined[64] = "";
+  for (uint64_t ms : {hm(7, 37), hm(0, 45), hm(1204, 5), hm(168, 59)}) {
+    st::statValue(ms, &v);
+    joined[0] = 0;
+    for (int k = 0; k < v.count; ++k) std::strcat(joined, v.at(k));
+    timeText(ms, whole, sizeof(whole));
+    TEST_ASSERT_EQUAL_STRING(whole, joined);
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_states_of_the_lifetime);
@@ -1498,5 +2045,11 @@ int main(int, char**) {
   RUN_TEST(test_recently_played_s_sections);
   RUN_TEST(test_week_from_a_made_up_snapshot);
   RUN_TEST(test_the_made_up_views);
+  RUN_TEST(test_the_forms_of_the_lines);
+  RUN_TEST(test_a_ranked_row_keeps_its_count);
+  RUN_TEST(test_relative_times);
+  RUN_TEST(test_day_labels);
+  RUN_TEST(test_the_week_texts);
+  RUN_TEST(test_the_stat_value_s_segments);
   return UNITY_END();
 }
