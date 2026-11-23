@@ -3173,13 +3173,17 @@ void Ui::statsEdge(const char* why) {
     case statsview::Rise::MadeUp: {
       // A made-up view on (D16): its snapshot written again (whatever freed
       // it since: the fall, the card, the stats off), never an ask; before
-      // the page's first draw, as the rise's ask is (D1).
+      // the page's first draw, as the rise's ask is (D1). Its rows are there
+      // at enter()'s attach(), so a shelf's bar is folded first, as a new
+      // ask's landing folds it (7.2: statsview::foldShelfBars()).
+      const int folded = statsview::foldShelfBars(nav_);
       const bool ok = host_.statsMadeUp(statsView_);
-      Serial.printf("[ui] stats: on the stats pages under made-up view %u (%s), no ask (look only): %s\n",
+      Serial.printf("[ui] stats: on the stats pages under made-up view %u (%s), no ask (look only): %s%s\n",
                     static_cast<unsigned>(statsView_), statsview::madeUpName(statsView_),
                     !statsview::madeUpWrites(statsView_) ? "its lifetime and phase alone (no snapshot)"
                     : ok ? "its snapshot written again"
-                         : "its snapshot NOT written (the [listen] line says why): Pending, nothing due");
+                         : "its snapshot NOT written (the [listen] line says why): Pending, nothing due",
+                    folded ? "; a shelf's open bar folded (7.2)" : "");
       return;
     }
     case statsview::Rise::Ask:
@@ -3445,6 +3449,7 @@ void Ui::statsMadeUpCommand(uint8_t n) {
   statsView_ = n;
   statsCardOut_ = false;
   const char* how = "";
+  int folded = 0;
   if (!statsHeld_) {
     // (Nothing is held off the stats pages: the fall released it. A view's
     // snapshot is held exactly while the held condition is, as a visit's.)
@@ -3455,7 +3460,12 @@ void Ui::statsMadeUpCommand(uint8_t n) {
     // Now, before the page is entered again (D1's order: written before its
     // first draw): views 1-9 release whatever was held first (a page's ask
     // cancelled, a console ask ended: StatsLists::madeUp()); 0 releases a
-    // made-up snapshot alone.
+    // made-up snapshot alone. What the pages read changes under the shelves
+    // left (another view's rows, or a real snapshot a console ask left, the
+    // card's own and acted on once the view ends), so their bars are folded
+    // before enter()'s attach() would put them back by index: 7.2's rule for
+    // a new ask's landing (statsview::foldShelfBars()), the place kept.
+    folded = statsview::foldShelfBars(nav_);
     const bool ok = host_.statsMadeUp(n);
     if (n == 0) {
       // Ended while the pages are up: as a rise with the card's own
@@ -3475,10 +3485,10 @@ void Ui::statsMadeUpCommand(uint8_t n) {
                : "its snapshot NOT written (the [listen] line says why): the pages read Pending, nothing due";
     }
   }
-  Serial.printf("[ui] uiSx%u: made-up view %u (%s)%s: %s\n", static_cast<unsigned>(n), static_cast<unsigned>(n),
+  Serial.printf("[ui] uiSx%u: made-up view %u (%s)%s: %s%s\n", static_cast<unsigned>(n), static_cast<unsigned>(n),
                 statsview::madeUpName(n),
                 n ? ", look only (nothing asks; Play, Auto DJ, Shuffle all and Try again refused; uiSx0 ends it)" : "",
-                how);
+                how, folded ? "; a shelf's open bar folded (7.2)" : "");
   // ... drawn in the view (or out of it): entered again at its look.
   if (shown) statsEnter();
 }

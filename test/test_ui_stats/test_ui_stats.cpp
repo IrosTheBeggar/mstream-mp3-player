@@ -130,6 +130,7 @@
 
 #include "FilterGrid.h"
 #include "IdView.h"
+#include "ListLayout.h"
 #include "NavModel.h"
 #include "StatsFold.h"
 #include "StatsRank.h"
@@ -1920,6 +1921,86 @@ void test_the_made_up_views_as_the_ui_takes_them() {
   TEST_ASSERT_EQUAL_UINT32(kHubRows + 1, hubLook(v9.life, v9.phase, nullptr).rows);
 }
 
+// 7.2's "An open bar across a new ask" where a made-up view's snapshot is
+// written before the page's enter() (the rise's MadeUp, uiSx<n> with the
+// held condition up: S12's review). ListView::attach() puts the ref's bar
+// back whenever its row is under the rows there, as arrival() does within a
+// visit; so the fold first makes the attach land as a new ask's landing
+// does: the place kept, no bar.
+void test_a_view_s_write_folds_the_shelves_bars() {
+  // ui::PageKind's values: Library 2, Album 4.
+  const NavModel::PageRef root{2, 0, 40, 1}, album{4, 9, 80, 2}, hub{kKindHub, 0, 0, -1};
+  const NavModel::PageRef most{kKindShelf, shelfId(Shelf::MostPlayed), 120, 3};
+  const NavModel::PageRef notPlayed{kKindShelf, shelfId(Shelf::NotPlayed), 64, 5};
+  const NavModel::PageRef otherTab{kKindShelf, shelfId(Shelf::Recent), 10, 4};
+  NavModel nav;
+  nav.setRoot(NavModel::Tab::Library, root);
+  nav.setRoot(NavModel::Tab::Queue, otherTab);  // (a shelf's kind on another tab: not the Library's)
+  nav.select(NavModel::Tab::Library);
+  nav.push(hub);
+  nav.push(most);
+  // The harm: the ref as attach() reads it, its bar under another
+  // snapshot's rows, comes back on row 3.
+  constexpr uint32_t kRows = 40, kLeads = 1;
+  constexpr int32_t kH = 176;
+  TEST_ASSERT_EQUAL_INT32(3, listlayout::arrival(nav.top().scrollPx, nav.top().expanded, kRows, kLeads, true, kH)
+                                 .expanded);
+  TEST_ASSERT_EQUAL(1, foldShelfBars(nav));
+  const NavModel::PageRef& t = nav.top();
+  TEST_ASSERT_EQUAL_INT32(-1, t.expanded);
+  TEST_ASSERT_EQUAL_INT32(120, t.scrollPx);  // (the place kept)
+  TEST_ASSERT_EQUAL_UINT32(most.id, t.id);
+  // The folded ref read as attach() reads it lands as a new ask's landing
+  // from the ref as it was: the same place, no bar, over any rows.
+  for (const uint32_t rows : {0u, 2u, 4u, 40u, 400u}) {
+    const listlayout::Place landing = listlayout::arrival(120, 3, rows, kLeads, false, kH);
+    const listlayout::Place attached = listlayout::arrival(t.scrollPx, t.expanded, rows, kLeads, true, kH);
+    TEST_ASSERT_EQUAL_INT32(landing.offset, attached.offset);
+    TEST_ASSERT_EQUAL_INT32(-1, attached.expanded);
+    TEST_ASSERT_EQUAL_INT32(landing.expanded, attached.expanded);
+  }
+  // Again: nothing open, nothing folded.
+  TEST_ASSERT_EQUAL(0, foldShelfBars(nav));
+  // The root's and the hub's refs, and another tab's, are their own.
+  TEST_ASSERT_EQUAL_INT32(1, nav.at(NavModel::Tab::Library, 0).expanded);
+  TEST_ASSERT_EQUAL_INT32(40, nav.at(NavModel::Tab::Library, 0).scrollPx);
+  TEST_ASSERT_EQUAL_INT32(4, nav.top(NavModel::Tab::Queue).expanded);
+  // Every shelf in the stack, under another page too (an album pushed from
+  // Not played yet: its own bar kept, the card's album's).
+  nav.popToRoot(NavModel::Tab::Library);
+  nav.push(hub);
+  nav.push(notPlayed);
+  nav.push(album);
+  TEST_ASSERT_EQUAL(1, foldShelfBars(nav));
+  TEST_ASSERT_EQUAL_INT32(-1, nav.at(NavModel::Tab::Library, 2).expanded);
+  TEST_ASSERT_EQUAL_INT32(64, nav.at(NavModel::Tab::Library, 2).scrollPx);
+  TEST_ASSERT_EQUAL_INT32(2, nav.top().expanded);
+  TEST_ASSERT_EQUAL_INT32(80, nav.top().scrollPx);
+  // Two shelves, both folded (no page pushes a shelf over a shelf, but the
+  // rule reads the whole stack); a scroll below 0 (kShowPlaying, -2: Now
+  // Playing's jump) left as it is, for enter() to resolve.
+  nav.popToRoot(NavModel::Tab::Library);
+  nav.push(hub);
+  NavModel::PageRef showPlaying = most;
+  showPlaying.scrollPx = -2;
+  nav.push(showPlaying);
+  nav.push(notPlayed);
+  TEST_ASSERT_EQUAL(2, foldShelfBars(nav));
+  TEST_ASSERT_EQUAL_INT32(-1, nav.at(NavModel::Tab::Library, 2).expanded);
+  TEST_ASSERT_EQUAL_INT32(-2, nav.at(NavModel::Tab::Library, 2).scrollPx);
+  TEST_ASSERT_EQUAL_INT32(-1, nav.top().expanded);
+  // On another tab the Library's stack is folded all the same (the rise's
+  // write comes as the tab returns; uiSx set elsewhere writes then).
+  NavModel away;
+  away.setRoot(NavModel::Tab::Library, root);
+  away.select(NavModel::Tab::Library);
+  away.push(hub);
+  away.push(most);
+  away.select(NavModel::Tab::Queue);
+  TEST_ASSERT_EQUAL(1, foldShelfBars(away));
+  TEST_ASSERT_EQUAL_INT32(-1, away.top(NavModel::Tab::Library).expanded);
+}
+
 // ---------------------------------------------------------------------------
 // The words (StatsText)
 // ---------------------------------------------------------------------------
@@ -3578,6 +3659,7 @@ int main(int, char**) {
   RUN_TEST(test_the_made_up_views);
   RUN_TEST(test_the_made_up_views_with_no_play_log);
   RUN_TEST(test_the_made_up_views_as_the_ui_takes_them);
+  RUN_TEST(test_a_view_s_write_folds_the_shelves_bars);
   RUN_TEST(test_the_forms_of_the_lines);
   RUN_TEST(test_a_ranked_row_keeps_its_count);
   RUN_TEST(test_relative_times);

@@ -72,6 +72,7 @@ public:
   int depth(Tab t) const { return depth_[idx(t)]; }
   int depth() const { return depth_[idx(tab_)]; }
   const PageRef& at(Tab t, int level) const { return stack_[idx(t)][level]; }
+  PageRef& at(Tab t, int level) { return stack_[idx(t)][level]; }
 
   static const char* name(Tab t);
 

@@ -715,12 +715,18 @@ void StatsLists::turnVisit(const Gates& g) {
     }
     if (snap_) {
       // (A made-up view's among them: a console Hv or Hu under uiSx<n>.
-      // Its write() clears the mark, so the real snapshot replaces it; the
-      // pages read it once the view ends: Ui::statsSnapshot().)
+      // This ask's write() (finishVisit()) clears the mark, so the real
+      // snapshot replaces it; the pages read it once the view ends:
+      // Ui::statsSnapshot(). An ask that ends before its write (every grade
+      // refused, the rank's fault, the card's) leaves it as it was, still
+      // the view's: it didn't borrow it, so nothing frees it. So the line
+      // says what is to come, not what is done.)
       const int64_t p0 = esp_timer_get_time();
       Serial.printf("[listen] %s: the snapshot held at 0x%08lx (%lu B of the Dance tab's block): rewritten whole%s\n",
                     name(), static_cast<ul>(reinterpret_cast<uintptr_t>(snap_)), static_cast<ul>(need),
-                    snap_->madeUp() ? " (a made-up view's, uiSx: this ask's real one replaces it)" : "");
+                    snap_->madeUp() ? " (a made-up view's, uiSx: replaced by this ask's real one at its write; "
+                                      "kept, still the view's, if the ask ends before)"
+                                    : "");
       lineUs += esp_timer_get_time() - p0;
     } else {
       const size_t f0 = psramFreeBytes();
@@ -772,7 +778,12 @@ void StatsLists::turnVisit(const Gates& g) {
   }
   if (!p) {
     if ((flags_ & kCarved) && snap_) freeSnap("every grade refused (this ask borrowed it)");
-    endVisit(cr.why == autodj::Close::NoBlock ? Outcome::NoBlock : Outcome::NoRoom, "every grade refused: No room");
+    // (A made-up view's held, not borrowed by this ask: kept and still
+    // served under the view, as the turn's line said it may be.)
+    endVisit(cr.why == autodj::Close::NoBlock ? Outcome::NoBlock : Outcome::NoRoom,
+             snap_ && snap_->madeUp() ? "every grade refused: No room (the made-up view's snapshot kept, still served "
+                                        "under it)"
+                                      : "every grade refused: No room");
     return;
   }
   block_ = new (p) Ask;

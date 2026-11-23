@@ -752,6 +752,17 @@ inline bool viewServes(const Snapshot& s, bool viewOn) { return s.madeUp() == vi
 // nothing played).
 enum class Rise : uint8_t { None, Ask, MadeUp };
 Rise riseOf(const Lifetime& l, uint8_t view);
+// 7.2's "An open bar across a new ask", where a made-up view's snapshot is
+// written before the page's enter() (the rise's Rise::MadeUp; uiSx<n>, 0
+// among them, with the held condition up): every stats shelf in the
+// Library's stack has its bar folded (expanded -1), its place kept. A real
+// rise asks, so its shelf comes up at 0 rows and the landing folds the bar
+// (listlayout::arrival(), sameVisit false); a snapshot written first has its
+// rows there at ListView::attach(), which would put the ref's bar back on
+// another snapshot's row: a bar whose Play could act on a track nobody
+// picked once the view ends. Other pages' bars (an album's) are their own.
+// Returns how many were open.
+int foldShelfBars(NavModel& nav);
 // What a touch on a stats page does, as a made-up view takes it (look only,
 // as uil<n>'s synthetic library: refused, the look-only toast):
 //   - Queue: Play, Play next, + Queue (a ranked row's bar, the top bar, a

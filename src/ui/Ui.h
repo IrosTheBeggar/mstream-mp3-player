@@ -569,8 +569,10 @@ private:
   // edge asks the visit (D1: before the page's first draw; D3: none for the
   // stats off, the card out, nothing played), or with a made-up view on
   // writes the view's snapshot again (D16: never an ask; statsview::
-  // riseOf()); its falling edge releases the snapshot (D1: after the stats
-  // page's leave(), so its place is saved first; `why`, its [listen] words).
+  // riseOf()), the shelves' bars folded first (7.2: statsview::
+  // foldShelfBars()); its falling edge releases the snapshot (D1: after the
+  // stats page's leave(), so its place is saved first; `why`, its [listen]
+  // words).
   void statsEdge(const char* why);
   // Closes what reads the snapshot (D4): the Library's sheet and the jump
   // grid over its list; never a dialog or another's sheet. True: one went.
@@ -608,10 +610,10 @@ private:
   // writes a snapshot (1, 3, 4), with the Dance tab up (its block can't be
   // lent). While the held condition is up, the view written now (UiHost::
   // statsMadeUp(): whatever was held released first; 0 a made-up snapshot
-  // released), else at its next rise; the page that reads the stats (a
-  // stats page, the Artists root's entry row) entered again in it. Ending
-  // one while held: the page's one ask (D9 as replaced) or the rise's card
-  // mark, as a rise would.
+  // released) with the shelves' bars folded (7.2: foldShelfBars()), else at
+  // its next rise; the page that reads the stats (a stats page, the Artists
+  // root's entry row) entered again in it. Ending one while held: the page's
+  // one ask (D9 as replaced) or the rise's card mark, as a rise would.
   void statsMadeUpCommand(uint8_t n);
 
   UiHost& host_;

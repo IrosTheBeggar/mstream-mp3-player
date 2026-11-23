@@ -1079,4 +1079,16 @@ Rise riseOf(const Lifetime& l, uint8_t view) {
   return asksOnEdge(l) ? Rise::Ask : Rise::None;
 }
 
+int foldShelfBars(NavModel& nav) {
+  int folded = 0;
+  const int depth = nav.depth(NavModel::Tab::Library);
+  for (int level = 0; level < depth; ++level) {
+    NavModel::PageRef& r = nav.at(NavModel::Tab::Library, level);
+    if (r.kind != kKindShelf || r.expanded < 0) continue;
+    r.expanded = -1;
+    ++folded;
+  }
+  return folded;
+}
+
 }  // namespace statsview
