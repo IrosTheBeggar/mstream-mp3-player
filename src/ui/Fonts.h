@@ -10,6 +10,10 @@
 #include "TextFit.h"
 #include "TextInk.h"
 
+namespace statstext {
+struct StatValue;
+}
+
 // The UI's text layer: DejaVu Sans as anti-aliased VLW fonts from flash
 // (ui/VlwFonts, as the UI spike recommended: it looked best, ’ ‐ é É
 // included; Latin, Greek and Cyrillic since docs/I18N.md's phase 1), the
@@ -132,5 +136,19 @@ private:
   Slot* slots_ = nullptr;  // PSRAM, 4
   bool loaded_ = false;
 };
+
+// A stat value (docs/LISTENING-STATS.md 7.7: Last 7 days' A, "7 h 37 min")
+// standing on `baseline`, the row under its numbers: statstext::
+// statValue()'s segments side by side, each number in Title TXT and the
+// words between them in Small SOFT, each line centred so its font's
+// baseline is `baseline` (statstext::kStatValueRise, kStatWordsRise). From
+// `x` (Left), ending at `x` (Right) or centred on it; the pen moves by each
+// segment's width as Fonts::width() measures it, so the whole is
+// statstext::statWidth() in the firmware's fonts (test_ui_library checks it
+// beside the plays in ten languages). Nothing is cut. Glyphs only (bg ==
+// fg), blended over what is there: the strip is filled first, and "Listening
+// time" shares the value's rows (7.7). Returns the width.
+int drawStat(lgfx::LovyanGFX& g, int x, int baseline, const statstext::StatValue& v,
+             Fonts::Align align = Fonts::Align::Left);
 
 }  // namespace ui

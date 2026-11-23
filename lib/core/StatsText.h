@@ -246,6 +246,13 @@ void statValue(uint64_t ms, StatValue* out);
 // Its width: the value segments in `value` (Title), the words in `words`
 // (Small), side by side.
 int statWidth(const StatValue& v, const textfit::Font& value, const textfit::Font& words);
+// Where ui::drawStat() centres each segment's line (ui/Fonts draws a line
+// centred on its y), in rows above the value's baseline (the row under its
+// numbers): Title's 27-row line has its baseline 8 below its centre, and
+// Small's 17-row line 5 below, so the numbers and the words stand on one
+// row (test_ui_library checks it with the firmware's fonts). A's value on
+// baseline y 106 fills Title's rows y 85-111 (7.7).
+constexpr int kStatValueRise = 8, kStatWordsRise = 5;
 // A's two columns: the value (and "Listening time" over it) from x 16, the
 // plays ("Plays" over its count, both right-aligned at x 304) at the right,
 // at least kWeekGap apart on each line.

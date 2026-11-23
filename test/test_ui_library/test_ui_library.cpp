@@ -5633,6 +5633,51 @@ void test_stats_week_texts_fit() {
   uistr::setLang(uistr::Lang::En);
 }
 
+// The stat value's two rows (ui::drawStat(), 7.7: A): its numbers in Title,
+// centred statstext::kStatValueRise above the baseline, and its words in
+// Small, kStatWordsRise above it, stand on that baseline. ui/Fonts draws a
+// line from yAdvance / 2 above its y, and M5GFX puts the baseline maxAscent
+// below the line's top, so each role's baseline row is the value's. The
+// digits and the English words' letters end on the row above it, none
+// below (each box's dY is its height). On A's baseline, y 106, the Title
+// line is y 85-111 (7.7's rows) and the Small one y 93-109, inside A's y
+// 72-121. A word from the glyph store (ja, zh) stands on the Small row's
+// store baseline, a row lower, as in any Small line
+// (test_store_glyphs_sit_in_the_rows).
+void test_stats_value_rows_share_a_baseline() {
+  const Vlw small(kVlwSans13), title(kVlwSansBold22);
+  constexpr int kBaseline = 106;
+  const int titleTop = kBaseline - statstext::kStatValueRise - (title.yAdvance >> 1);
+  const int smallTop = kBaseline - statstext::kStatWordsRise - (small.yAdvance >> 1);
+  TEST_ASSERT_EQUAL_INT(kBaseline, titleTop + title.maxAscent);
+  TEST_ASSERT_EQUAL_INT(kBaseline, smallTop + small.maxAscent);
+  TEST_ASSERT_EQUAL_INT(85, titleTop);
+  TEST_ASSERT_EQUAL_INT(111, titleTop + title.yAdvance - 1);
+  TEST_ASSERT_EQUAL_INT(93, smallTop);
+  TEST_ASSERT_EQUAL_INT(109, smallTop + small.yAdvance - 1);
+  auto standsOn = [](const Vlw& f, const char* s) {
+    for (const char* p = s; *p;) {
+      const uint32_t cp = textfold::decode(p);
+      if (cp == ' ') continue;
+      int boxes = 0;
+      for (const Vlw::Box& b : f.boxes) {
+        if (b.cp != cp) continue;
+        ++boxes;
+        char m[24];
+        snprintf(m, sizeof(m), "U+%04X", static_cast<unsigned>(cp));
+        TEST_ASSERT_EQUAL_INT_MESSAGE(b.height, b.top, m);
+      }
+      TEST_ASSERT_EQUAL_INT(1, boxes);
+    }
+  };
+  standsOn(title, "0123456789");
+  uistr::setLang(uistr::Lang::En);
+  statstext::StatValue v;
+  statstext::statValue(statsHm(7, 37), &v);
+  TEST_ASSERT_EQUAL_INT(4, v.count);
+  for (int k = 0; k < v.count; ++k) standsOn(v.seg[k].value ? title : small, v.at(k));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_jump_letters_match_the_index_buckets);
@@ -5711,5 +5756,6 @@ int main(int, char**) {
   RUN_TEST(test_stats_tray_labels_fit);
   RUN_TEST(test_stats_row_lines_keep_their_counts);
   RUN_TEST(test_stats_week_texts_fit);
+  RUN_TEST(test_stats_value_rows_share_a_baseline);
   return UNITY_END();
 }
