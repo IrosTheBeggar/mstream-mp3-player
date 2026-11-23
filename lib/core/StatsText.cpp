@@ -441,6 +441,26 @@ size_t autoDjLine(uint8_t pct, char* out, size_t size) {
   return uistr::trf(out, size, S::stats_autodj_right, share);
 }
 
+size_t weekPlays(uint32_t plays, char* out, size_t size) {
+  if (!out || size == 0) return 0;
+  return uistr::format(out, size, "{0}", uistr::grouped(plays));
+}
+
+size_t weekBigDay(const sv::Snapshot& s, const statsview::WeekFigures& w, char* out, size_t size) {
+  if (!out || size == 0) return 0;
+  out[0] = 0;
+  if (w.bigDay < 0 || w.bigDay >= static_cast<int>(sr::kWeekDays) || w.firstDay == sf::kUnsetDay) return 0;
+  const uint32_t day = static_cast<uint32_t>(w.firstDay) + static_cast<uint32_t>(w.bigDay);
+  if (day >= sf::kUnsetDay) return 0;
+  return bigDayLine(static_cast<uint16_t>(day), s.day(static_cast<uint32_t>(w.bigDay)).listenedMs, out, size);
+}
+
+size_t weekAutoDj(const statsview::WeekFigures& w, char* out, size_t size) {
+  if (!out || size == 0) return 0;
+  out[0] = 0;
+  return w.autoDj ? autoDjLine(w.autoDjPct, out, size) : 0;
+}
+
 void statValue(uint64_t ms, StatValue* out) {
   if (!out) return;
   *out = StatValue();

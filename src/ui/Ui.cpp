@@ -292,7 +292,8 @@ Page* Ui::pageFor(uint8_t kind) {
     case PageKind::ArtistTracks:
     case PageKind::Folder:
     // (The stats pages are Library lists: the status band and shownTracks()
-    // as on any, 7.1; Week drawn through the list's body hook, 7.7.)
+    // as on any, 7.1; Week drawn through the list's body hook, never under
+    // the status band, and no tracks shown, 7.7: statusLineFor().)
     case PageKind::StatsHub:
     case PageKind::StatsShelf:
     case PageKind::StatsWeek: return &libraryPage_;
@@ -604,9 +605,10 @@ void Ui::showTop() {
   // gets its shorter band here, before the page's first frame: it used to
   // get it a pass later, a second full band draw and a flash on every
   // Library page open while the card worker had something to say (the
-  // whole boot's walk on a big card: 34 + 45 ms more, MEASURED).
+  // whole boot's walk on a big card: 34 + 45 ms more, MEASURED). Never on
+  // Last 7 days (statusLineFor()): its body takes the band whole.
   char status[64] = "";
-  if (next == &libraryPage_ && !browse_) librarytext::statusText(state_.libraryStatus, status, sizeof(status));
+  if (statusLineFor(next)) librarytext::statusText(state_.libraryStatus, status, sizeof(status));
   const int band = status[0] ? ListView::kHeight - kStatusH : ListView::kHeight;
   if (list_.height() != band) setListBand(band);
   statusBand_ = status[0] != 0;
@@ -1971,6 +1973,8 @@ void Ui::trackMotion(uint32_t nowMs) {
 
 LibraryIndex::Span Ui::shownTracks() const {
   if (!started_ || suspended_ || page_ != &libraryPage_ || browse_) return {};
+  // (The stats pages give none, Last 7 days among them: LibraryPage::
+  // pageTracks() has no tracks of a hub, a shelf or Week, 7.1.)
   return libraryPage_.shownTracks();
 }
 
@@ -1979,8 +1983,7 @@ LibraryIndex::Span Ui::shownTracks() const {
 // the card worker has something to say; the list's band ends above it.
 void Ui::updateStatus(uint32_t nowMs) {
   char text[64] = "";
-  const bool library = page_ == &libraryPage_ && !browse_;
-  if (library) librarytext::statusText(state_.libraryStatus, text, sizeof(text));
+  if (statusLineFor(page_)) librarytext::statusText(state_.libraryStatus, text, sizeof(text));
   // The band changes only while the list stands still (a fling isn't cut).
   if (list_.attached() && list_.animating()) return;
   // Under a modal the band stays as it is, even when the line ends: changing
@@ -2476,7 +2479,7 @@ void Ui::redrawAll() {
       if (list_.update(nowMs_, true, false)) clock_.drawn(nowMs_);
       if (statusBand_) {
         char text[64] = "";
-        if (page_ == &libraryPage_ && !browse_) librarytext::statusText(state_.libraryStatus, text, sizeof(text));
+        if (statusLineFor(page_)) librarytext::statusText(state_.libraryStatus, text, sizeof(text));
         drawStatusLine(text);
       }
     }
@@ -3103,7 +3106,7 @@ void Ui::command(const char* a) {
                    "uiBv the sprites' text checked against M5GFX's, uiBf0 / uiBf1 their fast text off / on; uiS the "
                    "listening stats' pages (no wake: a dark screen stays dark), uiSh their hub (as the entry row's "
                    "tap; the push's ms), uiS<shelf>[w] a shelf over it (0-4: Most played, its window w 0-2, New "
-                   "finds, Old favourites, Not played yet, Recently played)");
+                   "finds, Old favourites, Not played yet, Recently played), uiSw Last 7 days over it");
     return;
   }
   printState();
@@ -3263,6 +3266,37 @@ void Ui::statsCommand(const char* a) {
                   (micros() - t0) / 1000.0f);
     return;
   }
+  if (a[0] == 'w' && !a[1]) {
+    // uiSw: Last 7 days, as the hub's row 1 pushes it (from the hub shown);
+    // from elsewhere the Library tab on Artists with the hub and Week above
+    // it (showLibrary()), so Back reaches the hub. Refused as uiSh is. With
+    // no clock the hub's row 1 is the status row, so no touch reaches Week:
+    // pushed anyway, it shows its no-clock look ("Needs dates", as a shelf
+    // reached shut does: S5's departure 7), and the line says so.
+    statsview::Lifetime l;
+    statsLifetime(l);
+    const LibraryIndex* i = library_.index();
+    if (!statsview::hubReachable(l, i && i->ready(), browse_ != nullptr)) {
+      Serial.printf("[ui] uiSw: Last 7 days isn't reachable now (%s)\n",
+                    browse_                      ? "the Library browses a synthetic library: uil0 first"
+                    : !i || !i->ready()          ? "no index: the library is updating"
+                                                 : "the stats are off this session");
+      return;
+    }
+    const NavModel::PageRef pages[2] = {ref(PageKind::StatsHub, 0), ref(PageKind::StatsWeek, 0)};
+    const bool atHub = nav_.tab() == NavModel::Tab::Library && nav_.depth() == 2 &&
+                       nav_.top().kind == static_cast<uint8_t>(PageKind::StatsHub);
+    const uint32_t t0 = micros();
+    if (atHub) {
+      push(pages[1]);
+    } else {
+      showLibrary(LibrarySegment::Artists, pages, 2);
+    }
+    Serial.printf("[ui] uiSw: Last 7 days %s in %.1f ms (its header and body drawn)%s\n",
+                  atHub ? "pushed from the hub" : "shown over the hub", (micros() - t0) / 1000.0f,
+                  l.dated ? "" : "; no clock: the hub's row 1 is the status row, so no touch reaches it");
+    return;
+  }
   statsview::Shelf shelf = statsview::Shelf::MostPlayed;
   uint8_t window = statsvisit::kAllTime;
   bool windowGiven = false;
@@ -3303,7 +3337,7 @@ void Ui::statsCommand(const char* a) {
   Serial.println("[ui] uiS: the listening stats' pages (no wake: a dark screen stays dark); uiSh their hub (as the "
                  "entry row's tap, the push's ms); uiS<shelf>[w] a shelf over the hub (0 Most played, its window "
                  "w: 0 7 days, 1 30 days, 2 All time; 1 New finds, 2 Old favourites, 3 Not played yet, 4 Recently "
-                 "played; the push's ms)");
+                 "played; the push's ms); uiSw Last 7 days over the hub (the push's ms)");
 }
 
 }  // namespace ui

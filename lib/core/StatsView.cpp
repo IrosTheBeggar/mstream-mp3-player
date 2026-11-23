@@ -845,9 +845,7 @@ WeekFigures weekFigures(const Snapshot& s, int maxPx) {
       w.bigDay = static_cast<int8_t>(i);
     }
   }
-  const uint16_t today = s.today();
-  if (s.dated() && today != sf::kUnsetDay && today >= sr::kWeekDays - 1)
-    w.firstDay = static_cast<uint16_t>(today - (sr::kWeekDays - 1));
+  w.firstDay = weekFirstDay(s);
   barHeights(ms, w.firstDay, s.sinceDay(), maxPx, w.bar);
   // Auto DJ's rate from 5 tracks it started (D11: its plays + skips).
   const uint32_t tracks = adjPlays + adjSkips;
@@ -856,6 +854,16 @@ WeekFigures weekFigures(const Snapshot& s, int maxPx) {
     w.autoDjPct = static_cast<uint8_t>((uint64_t{200} * adjPlays + tracks) / (uint64_t{2} * tracks));
   }
   return w;
+}
+
+uint16_t weekFirstDay(const Snapshot& s) {
+  const uint16_t today = s.today();
+  if (!s.dated() || today == sf::kUnsetDay || today < sr::kWeekDays - 1) return sf::kUnsetDay;
+  return static_cast<uint16_t>(today - (sr::kWeekDays - 1));
+}
+
+uint16_t weekHeaderDay(Look k, const Snapshot* snap) {
+  return k == Look::Served && snap ? weekFirstDay(*snap) : sf::kUnsetDay;
 }
 
 // ---------------------------------------------------------------------------

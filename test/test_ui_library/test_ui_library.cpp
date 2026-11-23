@@ -5718,6 +5718,62 @@ void test_stats_value_rows_share_a_baseline() {
   for (int k = 0; k < v.count; ++k) standsOn(v.seg[k].value ? title : small, v.at(k));
 }
 
+// Last 7 days' lines in their regions (7.7: frame Week; S3b's S11, the
+// rows statstext names): each line centred on its y fills yAdvance rows
+// from y - yAdvance / 2 (ui/Fonts), so A's labels (Small on 84), its count
+// (Title on 106) and Pending's line (Body on 96) are inside A, y 72-121;
+// the tallest bar (44 px on the baseline at 170) inside B, y 122-189, and
+// the day names (Small on 180) under the baseline, inside B; C's two lines
+// (Small on 207 and 225) under its rule at 193, apart, inside C, y 190-239.
+// No line's fill (bg BG) touches a bar, the baseline or the rule. And the
+// texts each look draws in every language: Pending's lines as a list's
+// lone line (Body, kListLineW), the empty state's lines (Small, 304) and
+// its button (Bold 168: empty.try_again's room).
+void test_stats_week_lines_in_their_regions() {
+  const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
+  struct Line {
+    const Vlw* f;
+    int y, regionTop, regionBottom;
+    const char* name;
+  };
+  namespace st = statstext;
+  const Line lines[] = {
+      {&small, st::kWeekLabelY, 72, 121, "A's labels"},
+      {&title, st::kWeekCountY, 72, 121, "A's count"},
+      {&body, st::kWeekPendingY, 72, 121, "Pending's line"},
+      {&small, st::kWeekDayY, st::kWeekBaseY + 1, 189, "the day names"},
+      {&small, st::kWeekLine1Y, st::kWeekRuleY + 1, 239, "the big day"},
+      {&small, st::kWeekLine2Y, st::kWeekRuleY + 1, 239, "Auto DJ's line"},
+  };
+  int lastBottom = 0;
+  for (const Line& l : lines) {
+    const int top = l.y - (l.f->yAdvance >> 1), bottom = top + l.f->yAdvance - 1;
+    char m[96];
+    snprintf(m, sizeof(m), "%s: rows %d-%d in %d-%d", l.name, top, bottom, l.regionTop, l.regionBottom);
+    TEST_ASSERT_TRUE_MESSAGE(top >= l.regionTop && bottom <= l.regionBottom, m);
+    if (l.y >= st::kWeekLine1Y) {
+      TEST_ASSERT_TRUE_MESSAGE(top > lastBottom, m);  // (C's lines apart)
+      lastBottom = bottom;
+    }
+  }
+  // (The labels over the count: S8's rows, 76-92 over 93-119.)
+  TEST_ASSERT_EQUAL_INT(76, st::kWeekLabelY - (small.yAdvance >> 1));
+  TEST_ASSERT_EQUAL_INT(93, st::kWeekCountY - (title.yAdvance >> 1));
+  // The tallest bar, in B.
+  TEST_ASSERT_TRUE(st::kWeekBaseY - statsview::kWeekBarPx >= 122);
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    for (const S id : {S::stats_counting, S::stats_waiting}) fits(body, tr(id), uitext::kListLineW);
+    for (const S id : {S::stats_no_room, S::stats_unread, S::stats_waiting, S::stats_card_back, S::stats_no_card,
+                       S::stats_needs_dates}) {
+      fits(small, tr(id), uitext::kEmptyLineW);
+    }
+    fits(bold, tr(S::empty_try_again), 168);
+  }
+  uistr::setLang(uistr::Lang::En);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_jump_letters_match_the_index_buckets);
@@ -5797,5 +5853,6 @@ int main(int, char**) {
   RUN_TEST(test_stats_row_lines_keep_their_counts);
   RUN_TEST(test_stats_week_texts_fit);
   RUN_TEST(test_stats_value_rows_share_a_baseline);
+  RUN_TEST(test_stats_week_lines_in_their_regions);
   return UNITY_END();
 }

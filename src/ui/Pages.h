@@ -411,6 +411,12 @@ private:
 // copied). Before the ask lands a shelf has no rows and the phase's line,
 // its place kept in its ref (pending()), the rows then staged in one a
 // pass where it was; a tray tap stages the window's rows the same way.
+// Last 7 days (7.7): no items and no top bar, its picture the list's body
+// (drawBody(): "Listening time" and the week's time, "Plays" and its count;
+// seven bars and their days; the big day and Auto DJ's rate), drawn whole
+// in three strips; the phase's line alone while the ask runs; the empty
+// state (the chart's disc, the reason, Try again) when it came to nothing
+// or the card is out. No targets but that button; never the status band.
 class LibraryPage : public Page, public ListView::Source, public FilterOwner {
 public:
   explicit LibraryPage(Ui& ui);
@@ -504,6 +510,10 @@ public:
   void drawLeadRow(ListView::Row& r) override;
   void onLeadRowTap(int x, bool rightEdge) override;
   bool pending() override;
+  // ListView::Source: Last 7 days' picture, strip by strip, through the
+  // list's body hook (7.2 item 6, 7.7: no items; LibraryStats.cpp). False on
+  // every other page, and for Week's looks that draw the empty state.
+  bool drawBody(M5Canvas& c, int y0, int h) override;
 
 private:
   // Disc: an album's "Disc 2" divider (5.4), not a control. The stats
@@ -593,8 +603,9 @@ private:
   // What the stats page draws now, as its shape (the hub's
   // statsview::hubShape(), with kShapeSub when its header draws the
   // lifetime line; a shelf's statsview::shelfShape(); Week's its look,
-  // until S11 draws it) in bits 16-23 and its texts (statsview::lookText())
-  // in 0-15; and its look. statsShape_ and statsText_ keep what it drew.
+  // its header's days moving with its texts: statsview::weekHeaderMoved())
+  // in bits 16-23 and its texts (statsview::lookText()) in 0-15; and its
+  // look. statsShape_ and statsText_ keep what it drew.
   uint32_t statsSigNow(const statsview::Lifetime& l, statsview::PageLook* look = nullptr) const;
   uint32_t statsSigDrawn() const { return static_cast<uint32_t>(statsShape_) << 16 | statsText_; }
   void keepSig(uint32_t sig) {
@@ -645,9 +656,32 @@ private:
   // A new minute on Recently played: its rows on screen from the first
   // whose "25 min ago" moved, drawn again in place one a pass.
   void recentMinute(const statsview::Lifetime& l, uint32_t was);
-  // uiS's parts (printStats()): the hub's rows, a shelf's.
+  // ---- Last 7 days (7.7; LibraryStats.cpp, S3b's S11) ----
+  // A page of no items and no top bar, its picture the list's body (A's
+  // time and plays, B's seven bars and days, C's big day and Auto DJ's
+  // rate, from the snapshot's week), or the empty state (its reason, Try
+  // again with Retry). Its look as it is now (the lifetime `l`, the phase,
+  // the snapshot: Ui's).
+  statsview::WeekLook weekNow(const statsview::Lifetime& l) const;
+  // drawBody()'s for Week: the look read, then each 56-row strip filled and
+  // drawn whole at its offset (as drawEmptyState() does: the strip isn't
+  // kept) and pushed; the strip's A and B, and its C, each in a frame of
+  // its own (their texts' buffers never stacked under the glyph store's
+  // draw). False: the empty state's look.
+  __attribute__((noinline)) bool weekBody(M5Canvas& c, int y0, int h);
+  __attribute__((noinline)) void weekStrip(M5Canvas& c, int top, int h, const statsview::WeekFigures& w);
+  __attribute__((noinline)) void weekLines(M5Canvas& c, int top, int h, const statsvisit::Snapshot& s,
+                                           const statsview::WeekFigures& w);
+  // statsFollow()'s for Week: the header again when its days moved
+  // (statsview::weekHeaderMoved()), the body (or the empty state) whole at
+  // the next still pass.
+  void weekFollow(uint32_t drawn, uint32_t sig, statsview::Look now, const char* why);
+  // Its empty state's button (Retry: the visit asked again).
+  void weekTryAgain();
+  // uiS's parts (printStats()): the hub's rows, a shelf's, Week's.
   void printHub(const statsview::Lifetime& l);
   void printShelf(const statsview::Lifetime& l);
+  void printWeek(const statsview::Lifetime& l);
   const char* statsEmptyText();
   bool statsEmptyState(EmptyState& e);
   // A hub row's line (statstext::hubLine(), the catalog's titles).
@@ -666,8 +700,9 @@ private:
   NavModel::PageRef* ref_ = nullptr;
   bool touchInList_ = false;
   // The stats page's shape and texts as drawn (statsview::hubShape(),
-  // shelfShape(), lookText()): a change restages it, the news's or one no
-  // news brings (the card back: No card's line to Try again).
+  // shelfShape(), lookText(); Week's its look): a change restages it, the
+  // news's or one no news brings (the card back: No card's line to Try
+  // again).
   uint8_t statsShape_ = 0;
   uint16_t statsText_ = 0;
   int headerPressed_ = 0;  // Header::hit() of the finger on the header; the root: 10 + its segment

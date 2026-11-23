@@ -47,7 +47,8 @@
 //     polls (its tray's among it), and the console's uiS<shelf>[w] (S10).
 //   - Last 7 days (7.7): its look, and its figures from the snapshot's 7
 //     days (the total, the plays, the bars to 44 px, the big day, Auto DJ's
-//     rate).
+//     rate); which looks the page draws through the list's body hook and
+//     which as the empty state, and its header's days (S11).
 //   - The held condition (onStatsPages(): 7.1, 9.7's "The snapshot's
 //     life") and the asks its rising edge makes (none for Off, No card,
 //     Empty or a made-up view).
@@ -637,6 +638,41 @@ WeekFigures weekFigures(const Snapshot& s, int maxPx = kWeekBarPx);
 // none before `sinceDay`; kUnsetDay firstDay: none at all).
 void barHeights(const uint32_t ms[statsrank::kWeekDays], uint16_t firstDay, uint16_t sinceDay, int maxPx,
                 uint8_t out[statsrank::kWeekDays]);
+// The first of the snapshot's seven days (its today and the six before:
+// the columns, oldest first, the last today); kUnsetDay for an undated one
+// (its ask made with no clock: no day to name).
+uint16_t weekFirstDay(const Snapshot& s);
+// How Week shows each look (7.7 as decided; S3b's S11), as ui's LibraryPage
+// draws it with no items (ListView::drawEmpty()):
+//   - through the list's body hook (7.2 item 6): Served, its figures in A, B
+//     and C; Pending, the phase's line alone in A (B and C empty); Off and
+//     NoPlays, nothing (the band blank: no figures, no line);
+//   - else the firmware's empty state (Retry, NoCard, Closed): the chart's
+//     disc, no title, the look's line (Small, 304 px), and Try again's
+//     button with WeekLook::button (Retry: the card back among it; never
+//     with the card out, the owner's call 3).
+// Both cover the band whole, so a change of look draws it whole: no strip
+// of the old picture stays (as the list's lone line would leave).
+constexpr bool weekBody(Look k) {
+  return k == Look::Served || k == Look::Pending || k == Look::Off || k == Look::NoPlays;
+}
+// The header's line under or beside "Last 7 days" ("4–10 Nov (UTC)":
+// statstext::weekSub()) names the figures' days, the snapshot's: its first
+// day while they show (Served, a dated snapshot), else kUnsetDay (the title
+// alone: Pending, Try again, the card's lines).
+uint16_t weekHeaderDay(Look k, const Snapshot* snap);
+// ... so it moves with the texts a page keeps (lookText()'s, drawn and
+// now): the figures coming or going, or a new ask's snapshot (its
+// version). Its header is drawn again then (about 5 ms), with the body.
+constexpr bool weekHeaderMoved(uint16_t drawnText, uint16_t nowText) {
+  constexpr uint16_t kLook = 7, kServed = static_cast<uint16_t>(Look::Served);
+  const bool was = (drawnText & kLook) == kServed, is = (nowText & kLook) == kServed;
+  return was != is || (is && drawnText != nowText);
+}
+// The Library's status band (a scan, tags, an update: ui's status line)
+// shows on a Library list, the hub and the shelves among them, but never
+// on Last 7 days, a page of its own (4.4, 7.7): `kind` a ui::PageKind.
+constexpr bool statusLineOn(uint8_t kind) { return kind != kKindWeek; }
 
 // ---------------------------------------------------------------------------
 // The made-up views (9.3's uiSx<n>, look only; S12 wires them): 1 a full

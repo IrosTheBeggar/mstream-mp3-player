@@ -509,6 +509,16 @@ private:
   void sleepTitle(char* buf, size_t size) const;
   // The Library's status line: the band shortened under it while it shows.
   void updateStatus(uint32_t nowMs);
+  // It belongs on `p`, the page shown (or showTop()'s next: nav_.top() is
+  // its entry either way): the Library's (not the synthetic library's) on
+  // any of its lists, the stats hub and shelves among them, never Last 7
+  // days, a page of its own (statsview::statusLineOn(): 4.4, 7.7). The one
+  // rule for showTop(), updateStatus() and redrawAll(), so the band is
+  // never shortened by one and given back by another (no flash on a push
+  // or a Back between Week and the hub).
+  bool statusLineFor(const Page* p) const {
+    return p == &libraryPage_ && !browse_ && statsview::statusLineOn(nav_.top().kind);
+  }
   // The line itself, `text` in it (empty: the line's background alone).
   void drawStatusLine(const char* text);
   static constexpr int kStatusH = 20;

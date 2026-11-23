@@ -4139,7 +4139,7 @@ void setup() {
                  "(uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
                  "library of n tracks in the Library tab, uil0 the card's, uiM the Albums list's mood filter (uiMa<hex> "
                  "set it, uiMa0 clear it, uiMe the editor), uiS the listening stats' pages (no wake), uiSh their "
-                 "hub, uiS<shelf>[w] a shelf (0-4; Most played's window w 0-2)); "
+                 "hub, uiS<shelf>[w] a shelf (0-4; Most played's window w 0-2), uiSw Last 7 days); "
                  "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress, wm0/wm1 redraw/hw scroll, wp refill pacing), "
                  "g library index (g0 SD card, g<n> synthetic) and its tags (gs the scan's status, gt</music/...> a "
                  "file's tags, gr rescan tags, gc the sector cache, gl the card's bench, gm the mood words, gm<hex> a filter's "

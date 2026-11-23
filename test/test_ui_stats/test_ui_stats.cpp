@@ -102,6 +102,12 @@
 //   the tray and the header are drawn again; the console's uiS<shelf>[w];
 // - Recently played at a new minute: the first row on screen whose "25 min
 //   ago" moved.
+// And Last 7 days as the page draws it (S3b's S11): each look through the
+// list's body hook or as the empty state (Try again's button with Retry and
+// the card back, never with the card out), its header's days and when the
+// header is drawn again, its texts (the count, the big day, Auto DJ's rate;
+// none for a week with nothing or an undated one), its columns, and the
+// status band off on it alone.
 // Run: pio test -e native -f test_ui_stats
 #include <unity.h>
 
@@ -2230,6 +2236,194 @@ void test_the_week_texts() {
   TEST_ASSERT_FALSE(st::fitsBeside(304 - 16 - 8 - 60 + 1, 60));
 }
 
+// Last 7 days as ui's LibraryPage draws it (S3b's S11): each look through
+// the body hook or as the empty state (Try again's button with Retry, the
+// card back among it, never with the card out), the band covered whole by
+// one or the other; its header's days (the snapshot's, while its figures
+// show) and when the header is drawn again; its texts from a made-up
+// snapshot (the count grouped, the big day, Auto DJ's rate, none for a week
+// with nothing or an undated one); its columns' geometry; and the status
+// band off on it alone.
+void test_week_as_the_page_draws_it() {
+  namespace st = statstext;
+  // The body or the empty state, every look one of the two.
+  const Look looks[] = {Look::Served, Look::Pending, Look::Retry,  Look::NoCard,
+                        Look::Off,    Look::NoPlays, Look::Closed};
+  int bodies = 0;
+  for (const Look k : looks) bodies += weekBody(k);
+  TEST_ASSERT_EQUAL_INT(4, bodies);
+  TEST_ASSERT_TRUE(weekBody(Look::Served));
+  TEST_ASSERT_TRUE(weekBody(Look::Pending));
+  TEST_ASSERT_TRUE(weekBody(Look::Off));
+  TEST_ASSERT_TRUE(weekBody(Look::NoPlays));
+  TEST_ASSERT_FALSE(weekBody(Look::Retry));
+  TEST_ASSERT_FALSE(weekBody(Look::NoCard));
+  TEST_ASSERT_FALSE(weekBody(Look::Closed));
+
+  // Each phase's look on Week, and its empty state's line and button.
+  Snap a;
+  put(a, fullCard());
+  struct Case {
+    Lifetime l;
+    PhaseInfo p;
+    bool served;
+    Look look;
+    S line;
+    bool button;
+  };
+  Lifetime out = dated();
+  out.cardIn = false;
+  Lifetime off = dated();
+  off.on = false;
+  Lifetime none = dated();
+  none.plays = 0;
+  const Case cases[] = {
+      {dated(), kReady, true, Look::Served, S::stats_counting, false},
+      {dated(), phase(Phase::Working), false, Look::Pending, S::stats_counting, false},
+      {dated(), phase(Phase::Waiting), false, Look::Pending, S::stats_waiting, false},
+      {dated(), phase(Phase::NoRoom, Outcome::NoRoom), false, Look::Retry, S::stats_no_room, true},
+      {dated(), phase(Phase::Unread, Outcome::Io), false, Look::Retry, S::stats_unread, true},
+      {dated(), phase(Phase::Capped), false, Look::Retry, S::stats_waiting, true},
+      // The card back (the owner's call 3): Try again, "The card is back".
+      {dated(), phase(Phase::NoCard, Outcome::CardAway), false, Look::Retry, S::stats_card_back, true},
+      // The card out: its line alone, no button, nothing due.
+      {out, phase(Phase::NoCard, Outcome::CardAway), false, Look::NoCard, S::stats_no_card, false},
+      {noClock(), kReady, true, Look::Closed, S::stats_needs_dates, false},
+      {off, phase(Phase::Idle), false, Look::Off, S::stats_counting, false},
+      {none, phase(Phase::Idle), false, Look::NoPlays, S::stats_counting, false},
+  };
+  char msg[96];
+  for (const Case& c : cases) {
+    const WeekLook w = weekLook(c.l, c.p, c.served ? a.s() : nullptr);
+    snprintf(msg, sizeof(msg), "%s from %s", lookName(c.look), sv::phaseName(c.p.phase));
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(lookName(c.look), lookName(w.page.look), msg);
+    TEST_ASSERT_EQUAL_MESSAGE(c.button, w.button, msg);
+    if (!weekBody(w.page.look) || w.page.look == Look::Pending)
+      TEST_ASSERT_EQUAL_MESSAGE(static_cast<int>(c.line), static_cast<int>(w.page.line), msg);
+    // The button only on the empty state.
+    if (w.button) TEST_ASSERT_FALSE_MESSAGE(weekBody(w.page.look), msg);
+    // Its header's days: the snapshot's, with the figures alone.
+    const uint16_t day = weekHeaderDay(w.page.look, c.served ? a.s() : nullptr);
+    TEST_ASSERT_EQUAL_UINT16_MESSAGE(w.page.look == Look::Served && c.l.dated ? kToday - 6 : sf::kUnsetDay, day, msg);
+  }
+  // Idle with the stats on (D9 as replaced): the Working line, one ask due.
+  const WeekLook idle = weekLook(dated(), phase(Phase::Idle, Outcome::Cancelled), nullptr);
+  TEST_ASSERT_EQUAL_STRING("pending", lookName(idle.page.look));
+  TEST_ASSERT_TRUE(idle.page.askDue);
+  TEST_ASSERT_FALSE(idle.button);
+
+  // The first day: the snapshot's today and the six before (weekFigures()'s);
+  // an undated snapshot has none, nor its header (Closed in RAM anyway).
+  TEST_ASSERT_EQUAL_UINT16(kToday - 6, weekFirstDay(*a.s()));
+  TEST_ASSERT_EQUAL_UINT16(weekFigures(*a.s()).firstDay, weekFirstDay(*a.s()));
+  MadeUpView v3;
+  TEST_ASSERT_TRUE(madeUpView(3, kStamp, kTracks, kAlbums, &v3));
+  Snap u;
+  put(u, v3.spec);
+  TEST_ASSERT_EQUAL_UINT16(sf::kUnsetDay, weekFirstDay(*u.s()));
+  TEST_ASSERT_EQUAL_UINT16(sf::kUnsetDay, weekHeaderDay(Look::Served, u.s()));
+  TEST_ASSERT_EQUAL_UINT16(sf::kUnsetDay, weekHeaderDay(Look::Served, nullptr));
+  TEST_ASSERT_EQUAL_UINT16(sf::kUnsetDay, weekHeaderDay(Look::Pending, a.s()));
+
+  // The header drawn again: the figures coming (a landing) or going (a
+  // release, the card pulled), a new ask's snapshot; not a phase's line to
+  // another, nor a reason to another, nor the same snapshot.
+  PageLook served;
+  served.look = Look::Served;
+  PageLook working;
+  working.look = Look::Pending;
+  working.line = S::stats_counting;
+  PageLook waiting = working;
+  waiting.line = S::stats_waiting;
+  PageLook noRoom;
+  noRoom.look = Look::Retry;
+  noRoom.line = S::stats_no_room;
+  PageLook noCard;
+  noCard.look = Look::NoCard;
+  noCard.line = S::stats_no_card;
+  Snap b;
+  sv::MadeUp m = fullCard();
+  put(b, m);
+  TEST_ASSERT_TRUE(weekHeaderMoved(lookText(working, nullptr), lookText(served, a.s())));
+  TEST_ASSERT_TRUE(weekHeaderMoved(lookText(served, a.s()), lookText(noCard, nullptr)));
+  TEST_ASSERT_TRUE(weekHeaderMoved(lookText(served, a.s()), lookText(noRoom, nullptr)));
+  TEST_ASSERT_FALSE(weekHeaderMoved(lookText(served, a.s()), lookText(served, a.s())));
+  TEST_ASSERT_FALSE(weekHeaderMoved(lookText(working, nullptr), lookText(waiting, nullptr)));
+  TEST_ASSERT_FALSE(weekHeaderMoved(lookText(noRoom, nullptr), lookText(noCard, nullptr)));
+  TEST_ASSERT_FALSE(weekHeaderMoved(lookText(noCard, nullptr), lookText(working, nullptr)));
+  // (A new ask's snapshot is a new version: StatsLists' write.)
+  const uint16_t was = lookText(served, a.s());
+  TEST_ASSERT_TRUE(weekHeaderMoved(static_cast<uint16_t>(was ^ 8u), was));
+
+  // The texts from the frames' week: "118", Saturday's 2 h 1 min, 87%.
+  char t[160];
+  const WeekFigures w = weekFigures(*a.s());
+  st::weekPlays(w.plays, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("118", t);
+  st::weekPlays(1204, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("1,204", t);
+  st::weekPlays(0, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("0", t);
+  st::weekBigDay(*a.s(), w, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("Saturday was your big day: 2 h 1 min", t);
+  st::weekAutoDj(w, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("Auto DJ got it right 87% of the time", t);
+  // A week with nothing: no big day, no Auto DJ line (a dated week).
+  for (int i = 0; i < 7; ++i) m.days[i] = sr::Day();
+  Snap e;
+  put(e, m);
+  const WeekFigures nothing = weekFigures(*e.s());
+  TEST_ASSERT_EQUAL_UINT16(kToday - 6, nothing.firstDay);
+  TEST_ASSERT_EQUAL_UINT32(0, st::weekBigDay(*e.s(), nothing, t, sizeof(t)));
+  TEST_ASSERT_EQUAL_STRING("", t);
+  TEST_ASSERT_EQUAL_UINT32(0, st::weekAutoDj(nothing, t, sizeof(t)));
+  TEST_ASSERT_EQUAL_STRING("", t);
+  // Its last day the big one: Tuesday, today's column.
+  m.days[6].listenedMs = 45 * 60000u;
+  m.days[6].plays = 9;
+  Snap f;
+  put(f, m);
+  const WeekFigures last = weekFigures(*f.s());
+  TEST_ASSERT_EQUAL_INT8(6, last.bigDay);
+  st::weekBigDay(*f.s(), last, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("Tuesday was your big day: 45 min", t);
+  // An undated snapshot: a big day by time but no weekday to name.
+  WeekFigures undated = weekFigures(*u.s());
+  undated.bigDay = 3;
+  TEST_ASSERT_EQUAL_UINT32(0, st::weekBigDay(*u.s(), undated, t, sizeof(t)));
+  TEST_ASSERT_EQUAL_STRING("", t);
+
+  // The columns: seven of 41 px from x 16 to 303, inside A's right edge
+  // (x 304) as the rule is; each bar 24 px, 9 in (the frame's x 25, 66 ...
+  // 271), its day's name centred on it.
+  const int barX[7] = {25, 66, 107, 148, 189, 230, 271};
+  for (int i = 0; i < 7; ++i) {
+    TEST_ASSERT_EQUAL_INT(barX[i], st::weekBarX(i));
+    TEST_ASSERT_EQUAL_INT(barX[i] + 12, st::weekDayX(i));
+    TEST_ASSERT_TRUE(st::weekBarX(i) + st::kWeekBarW <= st::weekColumnX(i) + st::kWeekPitch);
+  }
+  TEST_ASSERT_EQUAL_INT(303, st::weekColumnX(6) + st::kWeekPitch);
+  TEST_ASSERT_TRUE(st::weekColumnX(6) + st::kWeekPitch <= st::kWeekPlaysRight);
+  TEST_ASSERT_EQUAL_INT(st::kWeekPlaysRight, st::kWeekValueX + st::kWeekLineW);
+  // B's tallest bar inside B (y 122-189), standing on the baseline; the
+  // rule in C (y 190-239).
+  TEST_ASSERT_TRUE(st::kWeekBaseY - kWeekBarPx >= 122);
+  TEST_ASSERT_TRUE(st::kWeekBaseY < 190 && st::kWeekRuleY >= 190);
+  // The count's room: what the value and the gap leave, so the two fit
+  // beside each other exactly when fitsBeside() says.
+  for (const int valueW : {60, 120, 200}) {
+    const int room = st::weekCountRoom(valueW);
+    TEST_ASSERT_TRUE(st::fitsBeside(valueW, room));
+    TEST_ASSERT_FALSE(st::fitsBeside(valueW, room + 1));
+  }
+
+  // The status band: on every Library list but Week.
+  TEST_ASSERT_FALSE(statusLineOn(kKindWeek));
+  TEST_ASSERT_TRUE(statusLineOn(kKindHub));
+  TEST_ASSERT_TRUE(statusLineOn(kKindShelf));
+  for (uint8_t k = 0; k < kKindHub; ++k) TEST_ASSERT_TRUE(statusLineOn(k));
+}
+
 void test_the_stat_value_s_segments() {
   namespace st = statstext;
   struct Want {
@@ -3063,6 +3257,7 @@ int main(int, char**) {
   RUN_TEST(test_relative_times);
   RUN_TEST(test_day_labels);
   RUN_TEST(test_the_week_texts);
+  RUN_TEST(test_week_as_the_page_draws_it);
   RUN_TEST(test_the_stat_value_s_segments);
   RUN_TEST(test_the_hub_rows_take_a_touch);
   RUN_TEST(test_the_hub_s_sub_reach_and_shape);

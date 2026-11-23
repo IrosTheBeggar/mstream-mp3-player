@@ -713,13 +713,18 @@ bool LibraryPage::emptyState(EmptyState& e) {
 
 void LibraryPage::onEmptyAction(int i) {
   // By the page's kind (7.5): the hub with nothing played has one button,
-  // Shuffle all (its toast, toast.shuffling, is shuffleAll()'s); the root's
-  // are the card's (Try again, Format...) or the music's (Try again).
+  // Shuffle all (its toast, toast.shuffling, is shuffleAll()'s); Last 7
+  // days', Try again (7.7: the visit asked again); the root's are the
+  // card's (Try again, Format...) or the music's (Try again).
   if (kind_ == PageKind::StatsHub) {
     ui_.shuffleAll();
     return;
   }
-  if (statsShown()) return;  // (Week's: S11; a shelf has none: its line, or its Try again row)
+  if (kind_ == PageKind::StatsWeek) {
+    weekTryAgain();
+    return;
+  }
+  if (statsShown()) return;  // (a shelf has none: its line, or its Try again row)
   const AppState& s = ui_.state();
   if (!s.card && s.libraryTracks == 0) {
     if (i == 1) {
@@ -748,7 +753,7 @@ void LibraryPage::drawRow(ListView::Row& r) {
       if (own) drawLibraryRow(*own);
       return;
     }
-    case PageKind::StatsWeek: return;  // (no rows: its body)
+    case PageKind::StatsWeek: return;  // (no rows: its body, drawBody())
     default: drawLibraryRow(r); return;
   }
 }

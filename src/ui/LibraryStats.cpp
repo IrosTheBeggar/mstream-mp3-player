@@ -11,8 +11,10 @@
 // it drew and the minute. The shelves (7.6, S10): their rows from the
 // snapshot (ranked tracks, Recently played's headings, Not played yet's
 // albums), Most played's tray, their acts through the queue's id view, and
-// their rows' arrival at the place kept for them. Last 7 days' body comes
-// with S11: until then it draws its header and its look's line.
+// their rows' arrival at the place kept for them. Last 7 days (7.7, S11):
+// its picture through the list's body hook, strip by strip, from the
+// snapshot's week, or the empty state with its reason and Try again.
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -24,7 +26,9 @@
 #include "StatsView.h"
 #include "UiStrings.h"
 #include "UiText.h"
+#include "ui/EmptyState.h"
 #include "ui/Fonts.h"
+#include "ui/Gfx.h"
 #include "ui/Icons.h"
 #include "ui/Pages.h"
 #include "ui/Theme.h"
@@ -158,6 +162,8 @@ uint32_t LibraryPage::statsSigNow(const sv::Lifetime& l, sv::PageLook* look) con
       break;
     }
     default:
+      // (Week: its look; its header's days move with its texts, the
+      // snapshot's version: statsview::weekHeaderMoved().)
       k = sv::weekLook(l, p, snap).page;
       shape = static_cast<uint8_t>(k.look);
       break;
@@ -202,6 +208,10 @@ void LibraryPage::statsFollow(const sv::Lifetime& l, const char* why) {
     shelfFollow(drawn, sig, l, why);  // (its shape's bits are its own: shelfShape())
     return;
   }
+  if (kind_ == PageKind::StatsWeek) {
+    weekFollow(drawn, sig, look.look, why);  // (no rows: its body or its empty state, whole)
+    return;
+  }
   const uint32_t moved = sig ^ drawn;
   constexpr uint32_t kSub = static_cast<uint32_t>(sv::kShapeSub) << 16;
   // The hub's header line came or went (the boot fold's end, a play counted
@@ -228,7 +238,7 @@ void LibraryPage::statsFollow(const sv::Lifetime& l, const char* why) {
   // The empty state to No card's line (the card pulled with nothing
   // played): no rows either way, so the recount owes nothing but the line's
   // strip; the band is drawn whole once (its disc, lines and Shuffle all
-  // gone). Week's own empty state is S11's.
+  // gone). (Week's body and empty state each cover the band: weekFollow().)
   if (kind_ == PageKind::StatsHub &&
       sv::hubDrawsWhole(static_cast<sv::Look>((drawn >> 16) & 7u), look.look)) {
     list.invalidate();
@@ -295,6 +305,14 @@ void LibraryPage::statsFrame() {
   if (c.kind != ListView::FrameCost::Kind::Stage) return;
   const char* name = pageKindName(static_cast<uint8_t>(kind_));
   if (c.item == ListView::FrameCost::kEmptyLine) {
+    if (kind_ == PageKind::StatsWeek) {
+      // (Its picture whole, three strips: what was drawn of it is no more.)
+      sv::Lifetime l;
+      ui_.statsLifetime(l);
+      Serial.printf("[ui] stats: %s: its %s drawn whole in place\n", name,
+                    sv::weekBody(weekNow(l).page.look) ? "body" : "empty state");
+      return;
+    }
     Serial.printf("[ui] stats: %s: its line staged in place\n", name);
     return;
   }
@@ -346,7 +364,7 @@ uint32_t LibraryPage::statsRows() {
   switch (kind_) {
     case PageKind::StatsHub: return hubNow(l).rows;
     case PageKind::StatsShelf: return shelfNow(l).rows;  // (its tracks, its headings, its albums; Try again)
-    default: return 0;                                   // (Week has none, its body: S11)
+    default: return 0;                                   // (Week has none: its body, drawBody())
   }
 }
 
@@ -444,7 +462,18 @@ Header LibraryPage::statsHeader() const {
       st::shelfSub(s, shelfNow(l).window, l.sinceDay, headerSub_, sizeof(headerSub_));
       break;
     }
-    default: h.title = tr(S::stats_last7); break;  // (its days: S11)
+    default: {
+      // "Last 7 days" and its figures' days, beside it when they fit whole
+      // there, else under it (7.7: "4–10 Nov (UTC)", 179 px in English: under
+      // it); the snapshot's days, so the title alone with no figures shown
+      // (statsview::weekHeaderDay()).
+      h.title = tr(S::stats_last7);
+      sv::Lifetime l;
+      ui_.statsLifetime(l);
+      const uint16_t first = sv::weekHeaderDay(weekNow(l).page.look, ui_.statsSnapshot());
+      if (first != statsfold::kUnsetDay) st::weekSub(first, headerSub_, sizeof(headerSub_));
+      break;
+    }
   }
   if (crumb()) {
     h.right = tr(S::library_crumb);
@@ -533,7 +562,8 @@ void LibraryPage::onInertTap(uint32_t row) {
 // The line under no rows: the hub's No card line (the card out: no Try
 // again, no ask); a shelf's look's line (the phase's, its reason; a closed
 // shelf's "Opens 6 Dec" from statstext::warmingLine() in Body 300, into
-// headerPath_, which no stats page's header uses); Week's (S11 draws it).
+// headerPath_, which no stats page's header uses); Week's empty state's
+// (uiS's: the list draws Week's body or its empty state, never this line).
 const char* LibraryPage::statsEmptyText() {
   sv::Lifetime l;
   ui_.statsLifetime(l);
@@ -564,11 +594,25 @@ const char* LibraryPage::statsEmptyText() {
 
 // The hub with nothing played (7.5, frame NoPlays): the chart on its disc,
 // "No plays yet", the rule and "Your stats stay on this card", and Shuffle
-// all (onEmptyAction()).
+// all (onEmptyAction()). Last 7 days when its ask came to nothing, the card
+// is out or the clock unset (7.7 as decided): the chart on its disc, no
+// title, the reason as its line (Small, 304 px), and Try again (Bold, 168
+// px) with Retry (the card back among it: the owner's call 3), none with
+// the card out (stats.no_card alone) nor with no clock.
 bool LibraryPage::statsEmptyState(EmptyState& e) {
-  if (kind_ != PageKind::StatsHub) return false;  // (Week's Try again: S11)
+  if (kind_ == PageKind::StatsShelf) return false;  // (its line, or its Try again row)
   sv::Lifetime l;
   ui_.statsLifetime(l);
+  if (kind_ == PageKind::StatsWeek) {
+    const sv::WeekLook w = weekNow(l);
+    if (sv::weekBody(w.page.look)) return false;  // (its picture: drawBody())
+    e.icon = &icons::kChart;
+    e.iconColour = col::SOFT;
+    e.title = "";
+    e.lines = tr(w.page.line);
+    if (w.button) e.buttons[0] = tr(S::empty_try_again);
+    return true;
+  }
   if (hubNow(l).page.look != sv::Look::NoPlays) return false;
   e.icon = &icons::kChart;
   e.iconColour = col::SOFT;
@@ -623,7 +667,7 @@ void LibraryPage::printStats() {
   } else if (kind_ == PageKind::StatsHub) {
     printHub(l);
   } else {
-    Serial.printf("[ui] stats:   its line: \"%s\"\n", statsEmptyText());
+    printWeek(l);
   }
 }
 
@@ -1077,6 +1121,193 @@ __attribute__((noinline)) void LibraryPage::printShelf(const sv::Lifetime& l) {
         break;
     }
   }
+}
+
+// ---- Last 7 days (7.7) ----
+
+namespace {
+
+// A line of `f` centred on screen row `y` reaches the strip of `h` rows
+// from screen row `top` (the sprite clips the rest; a line not there isn't
+// drawn at all).
+bool lineIn(Font f, int y, int top, int h) {
+  const int half = Fonts::instance().height(f) / 2 + 1;
+  return y + half > top && y - half < top + h;
+}
+
+// The columns, oldest first; the last is the snapshot's today.
+constexpr int kWeekDays = static_cast<int>(statsrank::kWeekDays);
+
+}  // namespace
+
+sv::WeekLook LibraryPage::weekNow(const sv::Lifetime& l) const {
+  sv::PhaseInfo p;
+  ui_.statsPhase(p);
+  return sv::weekLook(l, p, ui_.statsSnapshot());
+}
+
+bool LibraryPage::drawBody(M5Canvas& c, int y0, int h) { return kind_ == PageKind::StatsWeek && weekBody(c, y0, h); }
+
+// The page's picture (frame Week; 7.7 as decided), its figures the
+// snapshot's week as of the ask (no fold moves it): Served, A, B and C;
+// Pending, the phase's line alone in A, as a list's lone line ("Counting
+// plays…", "Waiting for the card…"); Off and nothing played, the band blank.
+// Each of the three 56-row strips (the shared strip: not kept between uses)
+// is filled, has whatever of the picture falls in it drawn at its offset,
+// as drawEmptyState() does, and is pushed: every line of the band, so the
+// list fills none under it (about 36 ms with the header, 7.10). The
+// snapshot read now (D6), each draw.
+bool LibraryPage::weekBody(M5Canvas& c, int y0, int h) {
+  sv::Lifetime l;
+  ui_.statsLifetime(l);
+  const sv::WeekLook w = weekNow(l);
+  if (!sv::weekBody(w.page.look)) return false;  // (the empty state: statsEmptyState())
+  const statsvisit::Snapshot* snap = ui_.statsSnapshot();
+  const bool served = w.page.look == sv::Look::Served && snap;
+  sv::WeekFigures f;
+  if (served) f = sv::weekFigures(*snap);
+  for (int sy = 0; sy < h; sy += gfx::kStripH) {
+    const int sh = std::min(gfx::kStripH, h - sy), top = y0 + sy;
+    c.fillRect(0, 0, kW, gfx::kStripH, col::BG);
+    if (served) {
+      weekStrip(c, top, sh, f);
+      weekLines(c, top, sh, *snap, f);
+    } else if (w.page.look == sv::Look::Pending && lineIn(Font::Body, st::kWeekPendingY, top, sh)) {
+      Fonts::instance().draw(c, Font::Body, tr(w.page.line), kW / 2, st::kWeekPendingY - top, uitext::kListLineW,
+                             col::DIM, col::BG, Fonts::Align::Centre);
+    }
+    gfx::push(c, 0, top, kW, sh);
+  }
+  return true;
+}
+
+// A and B in the strip from screen row `top`: "Listening time" (Small DIM,
+// x 16) and "Plays" (right at x 304) over the week's time (ui::drawStat():
+// its numbers in Title, its words in Small) and the plays' count (Title,
+// right at x 304), standing on one baseline; the bars on their DIV baseline
+// (past days DIM, today violet; none before the first day counted, nor for
+// a day with nothing) and each day's name under its bar (today's TXT).
+void LibraryPage::weekStrip(M5Canvas& c, int top, int h, const sv::WeekFigures& w) {
+  Fonts& f = Fonts::instance();
+  if (lineIn(Font::Small, st::kWeekLabelY, top, h)) {
+    f.draw(c, Font::Small, tr(S::stats_listened), st::kWeekValueX, st::kWeekLabelY - top, st::kListenedW, col::DIM,
+           col::BG);
+    f.draw(c, Font::Small, tr(S::stats_plays_label), st::kWeekPlaysRight, st::kWeekLabelY - top, st::kPlaysLabelW,
+           col::DIM, col::BG, Fonts::Align::Right);
+  }
+  if (lineIn(Font::Title, st::kWeekCountY, top, h)) {
+    st::StatValue v;
+    st::statValue(w.listenedMs, &v);
+    char plays[24];
+    st::weekPlays(w.plays, plays, sizeof(plays));
+    // The count in the room the value leaves (it fits beside it in every
+    // language: test_ui_library), its line's ground filled; then the value
+    // glyphs only over the filled strip (7.7), beside it.
+    const int valueW = st::statWidth(v, f.fit(Font::Title), f.fit(Font::Small));
+    f.draw(c, Font::Title, plays, st::kWeekPlaysRight, st::kWeekCountY - top, st::weekCountRoom(valueW), col::TXT,
+           col::BG, Fonts::Align::Right);
+    drawStat(c, st::kWeekValueX, st::kWeekValueBase - top, v);
+  }
+  if (st::kWeekBaseY - sv::kWeekBarPx < top + h && st::kWeekBaseY >= top) {
+    for (int i = 0; i < kWeekDays; ++i) {
+      const int bar = w.bar[i];
+      if (bar <= 0) continue;
+      c.fillRect(st::weekBarX(i), st::kWeekBaseY - bar - top, st::kWeekBarW, bar,
+                 i == kWeekDays - 1 ? accent::Library : col::DIM);
+    }
+    c.fillRect(st::kWeekValueX, st::kWeekBaseY - top, st::kWeekLineW, 1, col::DIV);
+  }
+  // (An undated snapshot, the clock set since its ask: no day to name.)
+  if (w.firstDay != statsfold::kUnsetDay && lineIn(Font::Small, st::kWeekDayY, top, h)) {
+    for (int i = 0; i < kWeekDays; ++i) {
+      const S day = st::dayShort(static_cast<uint16_t>(w.firstDay + i));
+      f.draw(c, Font::Small, tr(day), st::weekDayX(i), st::kWeekDayY - top, st::kDayNameW,
+             i == kWeekDays - 1 ? col::TXT : col::DIM, col::BG, Fonts::Align::Centre);
+    }
+  }
+}
+
+// C in the strip from screen row `top`: the DIV rule, the big day (Small
+// SOFT: "Saturday was your big day: 2 h 1 min"; none with nothing in the
+// week; cut with "…" where a language's line is wider than 288 px, as pl,
+// ja and zh are until their translations, S13) and Auto DJ's rate (Small
+// DIM, only when it started 5 tracks in the week: D11).
+void LibraryPage::weekLines(M5Canvas& c, int top, int h, const statsvisit::Snapshot& s,
+                            const sv::WeekFigures& w) {
+  if (st::kWeekRuleY >= top && st::kWeekRuleY < top + h) {
+    c.fillRect(st::kWeekValueX, st::kWeekRuleY - top, st::kWeekLineW, 1, col::DIV);
+  }
+  Fonts& f = Fonts::instance();
+  char line[160];
+  if (lineIn(Font::Small, st::kWeekLine1Y, top, h) && st::weekBigDay(s, w, line, sizeof(line))) {
+    f.draw(c, Font::Small, line, st::kWeekValueX, st::kWeekLine1Y - top, st::kWeekLineW, col::SOFT, col::BG);
+  }
+  if (lineIn(Font::Small, st::kWeekLine2Y, top, h) && st::weekAutoDj(w, line, sizeof(line))) {
+    f.draw(c, Font::Small, line, st::kWeekValueX, st::kWeekLine2Y - top, st::kWeekLineW, col::DIM, col::BG);
+  }
+}
+
+// What Week draws moved (a landing, the card pulled or back, a phase's
+// line, a new ask's snapshot): its header when its days did (the figures
+// coming or going, a new snapshot), while the page shows (else drawn whole
+// when it does); the band whole at the next still pass, its body or its
+// empty state (a recount of no items to none owes the list's drawEmpty()
+// alone: about 31 ms, three strips). Under a modal or in the dark, drawn
+// whole when the page shows again.
+void LibraryPage::weekFollow(uint32_t drawn, uint32_t sig, sv::Look now, const char* why) {
+  ListView& list = ui_.list();
+  if (list.source() != this) return;  // (not attached: drawn whole at its next enter())
+  const bool header = sv::weekHeaderMoved(static_cast<uint16_t>(drawn), static_cast<uint16_t>(sig));
+  if (header && ui_.pageShowing()) repaintHeader();
+  Serial.printf("[ui] stats: %s drawn again in place (%s): %s%s\n", pageKindName(static_cast<uint8_t>(kind_)), why,
+                sv::lookName(now), header ? ", its header's days too" : "");
+  list.recountStaged(-1, -1, 0, false);
+}
+
+// The empty state's Try again (after No room, Unread, Capped, the card
+// back): the visit asked again, its phase on the page from the next pass
+// (the news). A look that moved under the finger (no button now) asks
+// nothing.
+void LibraryPage::weekTryAgain() {
+  sv::Lifetime l;
+  ui_.statsLifetime(l);
+  const sv::WeekLook w = weekNow(l);
+  if (!w.button) return;
+  Serial.printf("[ui] stats: Last 7 days, Try again (\"%s\")\n", tr(w.page.line));
+  ui_.statsAsk(sv::UiAsk::Visit);
+}
+
+// uiS on Week: what it draws (the empty state and its button; Pending's
+// line; nothing), or its header's line, A's figures, B's bars and C's
+// lines as drawn.
+__attribute__((noinline)) void LibraryPage::printWeek(const sv::Lifetime& l) {
+  const sv::WeekLook w = weekNow(l);
+  const statsvisit::Snapshot* snap = ui_.statsSnapshot();
+  if (!sv::weekBody(w.page.look)) {
+    Serial.printf("[ui] stats:   the empty state: \"%s\"%s\n", tr(w.page.line),
+                  w.button ? ", Try again" : ", no button");
+    return;
+  }
+  if (w.page.look != sv::Look::Served || !snap) {
+    Serial.printf("[ui] stats:   %s%s%s\n", w.page.look == sv::Look::Pending ? "A: \"" : "nothing drawn (no figures, no line)",
+                  w.page.look == sv::Look::Pending ? tr(w.page.line) : "", w.page.look == sv::Look::Pending ? "\"" : "");
+    return;
+  }
+  const sv::WeekFigures f = sv::weekFigures(*snap);
+  char text[160], time[48], plays[24];
+  text[0] = 0;
+  if (f.firstDay != statsfold::kUnsetDay) st::weekSub(f.firstDay, text, sizeof(text));
+  sv::timeText(f.listenedMs, time, sizeof(time));
+  st::weekPlays(f.plays, plays, sizeof(plays));
+  Serial.printf("[ui] stats:   the header's line \"%s\"; A: \"%s\", %s plays; B (px, oldest first): %u %u %u %u %u %u "
+                "%u\n",
+                text, time, plays, static_cast<unsigned>(f.bar[0]), static_cast<unsigned>(f.bar[1]),
+                static_cast<unsigned>(f.bar[2]), static_cast<unsigned>(f.bar[3]), static_cast<unsigned>(f.bar[4]),
+                static_cast<unsigned>(f.bar[5]), static_cast<unsigned>(f.bar[6]));
+  st::weekBigDay(*snap, f, text, sizeof(text));
+  Serial.printf("[ui] stats:   C: \"%s\"", text);
+  st::weekAutoDj(f, text, sizeof(text));
+  Serial.printf(", \"%s\"\n", text);
 }
 
 }  // namespace ui

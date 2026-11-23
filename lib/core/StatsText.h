@@ -306,5 +306,46 @@ constexpr int kWeekValueX = 16, kWeekPlaysRight = 304, kWeekGap = 8;
 constexpr bool fitsBeside(int leftW, int rightW) {
   return kWeekValueX + leftW + kWeekGap <= kWeekPlaysRight - rightW;
 }
+// The count's room beside a value `valueW` px wide (A's right column, to x
+// 304): what the value and the gap leave (test_ui_library: the count fits
+// it in every language, 9,999 plays beside 168 h 59 min).
+constexpr int weekCountRoom(int valueW) { return kWeekPlaysRight - (kWeekValueX + valueW + kWeekGap); }
+
+// Last 7 days' picture (7.7, frame Week; S3b's S11), in screen rows, each
+// text line centred on its y (ui/Fonts):
+//   - A, y 72-121: "Listening time" and "Plays" (Small DIM) on kWeekLabelY;
+//     the stat value standing on kWeekValueBase (ui::drawStat()), the plays'
+//     count a Title line centred on kWeekCountY (the same baseline);
+//     Pending's line instead (the phase's, as a list's lone line: Body DIM
+//     centred on x 160 in uitext::kListLineW) on kWeekPendingY, A's middle;
+//   - B, y 122-189: seven columns kWeekPitch wide from x 16, oldest first;
+//     each bar kWeekBarW wide, kWeekBarInset into its column, standing on
+//     the 1 px DIV baseline at kWeekBaseY (statsview::kWeekBarPx tall at
+//     most); its day's name (Small, kDayNameW) centred under it on
+//     kWeekDayY;
+//   - C, y 190-239: the 1 px DIV rule at kWeekRuleY, kWeekLineW from x 16;
+//     the big day (Small SOFT) on kWeekLine1Y, Auto DJ's rate (Small DIM) on
+//     kWeekLine2Y, each in kWeekLineW.
+// test_ui_library puts each line's rows in its region with the firmware's
+// fonts, clear of the bars, the baseline and the rule.
+constexpr int kWeekLabelY = 84, kWeekValueBase = 114, kWeekCountY = 106, kWeekPendingY = 96;
+constexpr int kWeekPitch = 41, kWeekBarW = 24, kWeekBarInset = 9, kWeekBaseY = 170, kWeekDayY = 180;
+constexpr int kWeekRuleY = 193, kWeekLine1Y = 207, kWeekLine2Y = 225;
+constexpr int weekColumnX(int i) { return kWeekValueX + i * kWeekPitch; }
+constexpr int weekBarX(int i) { return weekColumnX(i) + kWeekBarInset; }
+// A day's name is centred on its bar.
+constexpr int weekDayX(int i) { return weekBarX(i) + kWeekBarW / 2; }
+
+// Its texts from the snapshot's week (statsview::weekFigures()):
+//   - the plays' count, grouped ("118", "1,204");
+//   - C's first line, the big day (bigDayLine() of its weekday and its
+//     time): "" with nothing in the week (no big day) or no first day (an
+//     undated snapshot: no weekday to name);
+//   - C's second, Auto DJ's rate (autoDjLine()): "" unless it started 5
+//     tracks in the week (D11).
+// Each returns the bytes.
+size_t weekPlays(uint32_t plays, char* out, size_t size);
+size_t weekBigDay(const statsvisit::Snapshot& s, const statsview::WeekFigures& w, char* out, size_t size);
+size_t weekAutoDj(const statsview::WeekFigures& w, char* out, size_t size);
 
 }  // namespace statstext
