@@ -5639,22 +5639,55 @@ void test_stats_week_texts_fit() {
 // line from yAdvance / 2 above its y, and M5GFX puts the baseline maxAscent
 // below the line's top, so each role's baseline row is the value's. The
 // digits and the English words' letters end on the row above it, none
-// below (each box's dY is its height). On A's baseline, y 106, the Title
-// line is y 85-111 (7.7's rows) and the Small one y 93-109, inside A's y
-// 72-121. A word from the glyph store (ja, zh) stands on the Small row's
+// below (each box's dY is its height). A's baseline is y 114: 7.7's "y 106"
+// is the value line's centre, as the Week frame draws it, so the Title line
+// is y 93-119 (as "118", a Title line centred on y 106) and the Small one y
+// 101-117, inside A's y 72-121. The digits ink rows 98-113, the frame's
+// (docs/img/listening-stats/Week.png). The labels over them ("Listening
+// time", "Plays": Small lines centred on y 84, rows 76-92) end above the
+// Title line, and their letters' tails above the digits' tops, in every
+// language; on a baseline of 106 the digits would start on row 90 and meet
+// them. A word from the glyph store (ja, zh) stands on the Small row's
 // store baseline, a row lower, as in any Small line
-// (test_store_glyphs_sit_in_the_rows).
+// (test_store_glyphs_sit_in_the_rows), and stays inside its line.
 void test_stats_value_rows_share_a_baseline() {
   const Vlw small(kVlwSans13), title(kVlwSansBold22);
-  constexpr int kBaseline = 106;
+  constexpr int kBaseline = 114, kLabelY = 84;
   const int titleTop = kBaseline - statstext::kStatValueRise - (title.yAdvance >> 1);
   const int smallTop = kBaseline - statstext::kStatWordsRise - (small.yAdvance >> 1);
   TEST_ASSERT_EQUAL_INT(kBaseline, titleTop + title.maxAscent);
   TEST_ASSERT_EQUAL_INT(kBaseline, smallTop + small.maxAscent);
-  TEST_ASSERT_EQUAL_INT(85, titleTop);
-  TEST_ASSERT_EQUAL_INT(111, titleTop + title.yAdvance - 1);
-  TEST_ASSERT_EQUAL_INT(93, smallTop);
-  TEST_ASSERT_EQUAL_INT(109, smallTop + small.yAdvance - 1);
+  TEST_ASSERT_EQUAL_INT(93, titleTop);
+  TEST_ASSERT_EQUAL_INT(119, titleTop + title.yAdvance - 1);
+  TEST_ASSERT_EQUAL_INT(101, smallTop);
+  TEST_ASSERT_EQUAL_INT(117, smallTop + small.yAdvance - 1);
+  // "118" beside it, as S11 draws it: Fonts::draw's Title line centred on
+  // 7.7's y 106 has this baseline.
+  TEST_ASSERT_EQUAL_INT(kBaseline, 106 - (title.yAdvance >> 1) + title.maxAscent);
+  int digitTop = kBaseline;
+  for (const Vlw::Box& b : title.boxes) {
+    if (b.cp >= '0' && b.cp <= '9') digitTop = std::min(digitTop, kBaseline - b.top);
+  }
+  TEST_ASSERT_EQUAL_INT(98, digitTop);
+  const int labelTop = kLabelY - (small.yAdvance >> 1), labelBase = labelTop + small.maxAscent;
+  TEST_ASSERT_EQUAL_INT(76, labelTop);
+  TEST_ASSERT_EQUAL_INT(titleTop - 1, labelTop + small.yAdvance - 1);
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    for (const S id : {S::stats_listened, S::stats_plays_label}) {
+      int lowest = 0;
+      for (const char* p = tr(id); *p;) {
+        const uint32_t cp = textfold::decode(p);
+        for (const Vlw::Box& b : small.boxes) {
+          if (b.cp == cp) lowest = std::max(lowest, labelBase - b.top + b.height - 1);
+        }
+      }
+      char m[96];
+      snprintf(m, sizeof(m), "%s: \"%s\" inks to row %d", uistr::tag(l), tr(id), lowest);
+      TEST_ASSERT_TRUE_MESSAGE(lowest < digitTop, m);
+    }
+  }
   auto standsOn = [](const Vlw& f, const char* s) {
     for (const char* p = s; *p;) {
       const uint32_t cp = textfold::decode(p);

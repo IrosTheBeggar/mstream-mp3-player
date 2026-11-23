@@ -146,8 +146,9 @@ private:
 // segment's width as Fonts::width() measures it, so the whole is
 // statstext::statWidth() in the firmware's fonts (test_ui_library checks it
 // beside the plays in ten languages). Nothing is cut. Glyphs only (bg ==
-// fg), blended over what is there: the strip is filled first, and "Listening
-// time" shares the value's rows (7.7). Returns the width.
+// fg), blended over what is there: the strip is filled first (7.7), so the
+// value needs no fill of its own. On A the baseline is y 114 (statstext::
+// kStatValueRise says why). Returns the width.
 int drawStat(lgfx::LovyanGFX& g, int x, int baseline, const statstext::StatValue& v,
              Fonts::Align align = Fonts::Align::Left);
 
