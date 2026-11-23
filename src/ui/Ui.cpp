@@ -1607,12 +1607,14 @@ void Ui::loop(uint32_t nowMs) {
     }
   } timed{*this, passT0, snapshotUs, tabUs, pageUs, statusUs, thumbsUs, frame};
   host_.snapshot(state_);
-  snapshotUs = micros() - passT0;
   // The stats' news (D4), once a pass, before the dark's return and the
   // modal's check: a release S3a made (the card away, the stats off, a
   // remount's key) reaches a stats page in this pass, dark or under a
-  // modal too, so it never draws rows of a block given back.
-  if (host_.statsNews()) statsNewsPass();
+  // modal too, so it never draws rows of a block given back. (Counted in
+  // the snapshot's part of a slow pass's line: a re-attach's enter(), its
+  // header and attach, would otherwise be in no part.)
+  if (host_.statsNews()) statsNewsPass("the stats' news");
+  snapshotUs = micros() - passT0;
   // The first boot, its language picked (or its picker left), and the
   // touch check main.cpp opened then closed (it suspended the UI until
   // now): the tips, and the language's note over them.
@@ -2430,8 +2432,13 @@ void Ui::setDark(bool on) {
   glanceWanted_ = false;
   if (!started_ || suspended_) return;
   // A wake on the stats pages asks the visit again (the held condition's
-  // rise, D1), before the page is drawn: it reads the ask's phase.
+  // rise, D1), before the page is drawn: it reads the ask's phase. A stats
+  // page shown follows its look before the draw, so what moved in the dark
+  // with no news (a play counted on the empty hub, the card back, that ask)
+  // is the layout drawn whole (the dark's attach owes the band: its recount
+  // is a reload()), not a blank band then rows staged a pass each.
   statsEdge("the wake");
+  statsNewsPass("the wake");
   redrawAll();
 }
 
@@ -3105,7 +3112,12 @@ void Ui::command(const char* a) {
 
 void Ui::statsLifetime(statsview::Lifetime& out) { host_.statsLifetime(out); }
 
-void Ui::statsPhase(statsview::PhaseInfo& out) { host_.statsPhase(out); }
+void Ui::statsPhase(statsview::PhaseInfo& out) {
+  host_.statsPhase(out);
+  // (The held condition's rise with the card out: Idle reads No card, so
+  // the card back offers Try again and nothing asks by itself. 4.4 (A).)
+  out = statsview::phaseSeen(out, statsCardOut_);
+}
 
 const statsvisit::Snapshot* Ui::statsSnapshot() const {
   const statsvisit::Snapshot* s = host_.statsSnapshot();
@@ -3117,6 +3129,7 @@ const statsvisit::Snapshot* Ui::statsSnapshot() const {
 }
 
 bool Ui::statsAsk(statsview::UiAsk a) {
+  statsCardOut_ = false;  // (a page's ask: its phase is the host's from now)
   statsview::Lifetime l;
   statsLifetime(l);
   if (l.madeUp) {
@@ -3130,6 +3143,7 @@ void Ui::statsEdge(const char* why) {
   const bool held = statsview::onStatsPages(nav_, dark_, suspended_, browse_ != nullptr);
   if (held == statsHeld_) return;
   statsHeld_ = held;
+  statsCardOut_ = false;
   if (!held) {
     host_.statsRelease(why);  // (a [listen] line when something was held or asked)
     return;
@@ -3140,8 +3154,14 @@ void Ui::statsEdge(const char* why) {
     statsAsk(statsview::UiAsk::Visit);  // (queued: its turn after the Rank lane's waits, input among them)
     return;
   }
-  Serial.printf("[ui] stats: on the stats pages, no ask (%s)\n",
-                l.madeUp ? "a made-up view: look only" : statsview::stateName(statsview::stateOf(l)));
+  // With the card out (D3: no ask) the phase reads No card from here, as an
+  // ask dropped at once would leave it: the card's return offers Try again
+  // with "The card is back", never an ask by itself (statsview::
+  // risesCardOut(), phaseSeen()).
+  statsCardOut_ = statsview::risesCardOut(l);
+  Serial.printf("[ui] stats: on the stats pages, no ask (%s)%s\n",
+                l.madeUp ? "a made-up view: look only" : statsview::stateName(statsview::stateOf(l)),
+                statsCardOut_ ? ": read as No card, Try again once the card is back" : "");
 }
 
 bool Ui::statsCloseReaders() {
@@ -3177,9 +3197,9 @@ void Ui::statsReattach(const char* why) {
   gfx::setDark(was);
 }
 
-void Ui::statsNewsPass() {
+void Ui::statsNewsPass(const char* why) {
   if (!started_ || suspended_ || page_ != &libraryPage_ || !libraryPage_.statsShown()) return;
-  if (libraryPage_.statsNews()) {
+  if (libraryPage_.statsNews(why)) {
     Serial.println("[ui] stats: the snapshot released under the page: attached again at 0 rows");
     statsReattach(nullptr);
   }
@@ -3190,14 +3210,18 @@ void Ui::statsPrint() {
   statsLifetime(l);
   statsview::PhaseInfo p;
   statsPhase(p);
+  statsview::PhaseInfo hostPhase;
+  host_.statsPhase(hostPhase);
   const statsvisit::Snapshot* s = statsSnapshot();
   const bool hostServes = host_.statsSnapshot() != nullptr;
-  Serial.printf("[ui] stats: %s; the held condition %s (the edge as last evaluated: %s); state %s%s; phase %s "
+  Serial.printf("[ui] stats: %s; the held condition %s (the edge as last evaluated: %s); state %s%s; phase %s%s "
                 "(why 0x%02X, outcome %s), version %u; snapshot %s%s\n",
                 !started_ ? "the UI not started" : suspended_ ? "the UI SUSPENDED" : dark_ ? "DARK" : "lit",
                 statsview::onStatsPages(nav_, dark_, suspended_, browse_ != nullptr) ? "true" : "false",
                 statsHeld_ ? "held" : "not held", statsview::stateName(statsview::stateOf(l)),
-                l.madeUp ? " (a made-up view)" : "", statsvisit::phaseName(p.phase), static_cast<unsigned>(p.why),
+                l.madeUp ? " (a made-up view)" : "", statsvisit::phaseName(p.phase),
+                hostPhase.phase != p.phase ? " (the host's Idle: the held condition rose with the card out)" : "",
+                static_cast<unsigned>(p.why),
                 statsvisit::outcomeName(p.outcome), static_cast<unsigned>(p.version),
                 s ? "served" : hostServes ? "served, not over the live index (D6: not read)" : "none served",
                 s && s->madeUp() ? " (made up: look only)" : "");

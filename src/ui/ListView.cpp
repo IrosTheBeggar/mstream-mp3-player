@@ -343,7 +343,8 @@ void ListView::refreshTopRow() {
 
 // 7.2 item 4 as decided: no whole-band reload() from an arrival, the edge
 // staged too, the scroll kept (listlayout::wayOf() for a place that moves).
-void ListView::recountStaged(int32_t target, int32_t expanded, uint32_t changedRow, bool leadChanged) {
+void ListView::recountStaged(int32_t target, int32_t expanded, uint32_t changedRow, bool leadChanged,
+                             bool keepPresses) {
   if (!src_) return;
   const ListLayout from = layout_;
   const Edge fromEdge = edge_;
@@ -356,13 +357,14 @@ void ListView::recountStaged(int32_t target, int32_t expanded, uint32_t changedR
   // A finger on an item the recount changed (its kind or row, or a data row
   // from changedRow on) no longer presses it, nor is its Down an inert
   // row's: its tap would act on a row the listener didn't pick, as a bar
-  // reopened across a new ask would (7.2).
+  // reopened across a new ask would (7.2). (`keepPresses`: the caller says
+  // each row is still the one it was, its texts alone moved.)
   auto pressKept = [&](int32_t at) {
     if (at < 0) return false;
     const ListLayout::Item was = from.item(static_cast<uint32_t>(at));
     const ListLayout::Item is = layout_.item(static_cast<uint32_t>(at));
     if (was.kind != is.kind || was.row != is.row) return false;
-    return (is.kind != ListLayout::Kind::Row && is.kind != ListLayout::Kind::InlineBar) ||
+    return keepPresses || (is.kind != ListLayout::Kind::Row && is.kind != ListLayout::Kind::InlineBar) ||
            static_cast<uint32_t>(is.row) < changedRow;
   };
   if (!pressKept(pressedItem_)) {

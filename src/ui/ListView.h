@@ -341,12 +341,17 @@ public:
   //   tap: -1, the bar folds and its lines are staged with the rest), or
   //   it recounts once the bar is closed: the pushes aren't held for a bar
   //   (they would leave old pictures over the new rows a tap acts on, and
-  //   animating() true, so Ui::listMoving() would hold the card worker for
-  //   as long as the bar stays open).
+  //   animating() true, the passes at the frame cadence, for as long as the
+  //   bar stays open; Ui::listMoving() counts staged pushes alone as no
+  //   motion: stagingOnly()).
   //   `changedRow`: the first row whose picture may differ (0: all, at an
   //   arrival or a tray tap; the old row count: only the new ones).
   //   `leadChanged`: item 0, a lead item, looks different (the tray's
   //   30-day cell reading "16 days" at a landing); else it stays as drawn.
+  //   `keepPresses`: every row is still the row it was, only its texts
+  //   moved (the stats hub's lines at a phase or a landing, its rows' kinds
+  //   the same): a finger on an item of the same kind and row keeps its
+  //   press, whatever `changedRow` restages.
   // A finger on an item that changed no longer presses it (its tap would
   // act on a row the listener didn't pick). With nothing on screen to keep
   // (the first frame owed, the screen dark, a band under way: a scrub's, or
@@ -354,7 +359,8 @@ public:
   // the band whole anyway. So a second recount inside a recount's band
   // (4-5 passes, the band at a kept scroll) costs one whole-band draw; no
   // planned caller makes one (at a landing at 420 the tray is off screen).
-  void recountStaged(int32_t target = -1, int32_t expanded = -1, uint32_t changedRow = 0, bool leadChanged = false);
+  void recountStaged(int32_t target = -1, int32_t expanded = -1, uint32_t changedRow = 0, bool leadChanged = false,
+                     bool keepPresses = false);
   // Jumps (no animation).
   void scrollTo(int32_t offset);
   void scrollToRow(uint32_t row);  // that row at the top (as far as the list goes)
@@ -422,7 +428,7 @@ public:
   bool animating() const;
   // Animating for a recount's stale items alone, the list itself still: no
   // motion of the list's (Ui::trackMotion() logs no "[ui] scroll" line for
-  // pushes in place).
+  // pushes in place, and Ui::listMoving() holds no card work for them).
   bool stagingOnly() const;
   // A finger is on the A-Z rail: scrubbing, or resting on it to read the
   // letter (it still scrubs when it slides). The card worker is held

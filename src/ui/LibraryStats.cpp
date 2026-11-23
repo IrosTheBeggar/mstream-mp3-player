@@ -92,10 +92,32 @@ void LibraryPage::latchEntry() {
 
 void LibraryPage::drawEntryRow(ListView::Row& r) {
   drawBars(r.c);
-  ListView::chevron(r);  // (FAINT, at right - 14)
+  // (FAINT, at right - 14.) None on "Couldn't read the stats": the row
+  // opens nothing then (onTopRowTap()).
+  if (entry_ != EntryRow::Unread) ListView::chevron(r);
   Fonts& f = Fonts::instance();
   f.draw(r.c, Font::Body, tr(S::stats_title), kTextX, 13, sv::kEntryRoom, col::TXT, r.bg);
   f.draw(r.c, Font::Small, headerSub_, kTextX, 31, sv::kEntryRoom, col::DIM, r.bg);
+}
+
+// The row's tap (after ListView's tick): the hub, when it can be shown now
+// (statsview::hubReachable(), uiSh's rule: 4.4's Off has no hub). A20's
+// "Couldn't read the stats", or a row whose stats went off since its latch,
+// opens nothing: the double buzz, no toast (its line says why). The ask is
+// the held condition's rise (Ui::showTop()), not the tap's.
+void LibraryPage::entryTap() {
+  if (entry_ == EntryRow::None) return;
+  sv::Lifetime l;
+  ui_.statsLifetime(l);
+  const LibraryIndex* i = index();
+  if (entry_ == EntryRow::Unread || !sv::hubReachable(l, i != nullptr, !real())) {
+    ui_.input().missBuzz();
+    Serial.printf("[ui] stats: the listening stats' row opens nothing now (%s)\n",
+                  entry_ == EntryRow::Unread ? "couldn't read the stats: off this session"
+                                             : "the hub isn't reachable: the stats are off");
+    return;
+  }
+  ui_.push(page(PageKind::StatsHub, 0));
 }
 
 // ---- a stats page's life ----
@@ -116,7 +138,9 @@ uint32_t LibraryPage::statsSigNow(const sv::Lifetime& l, sv::PageLook* look) con
     case PageKind::StatsHub: {
       const sv::HubLook h = sv::hubLook(l, p, snap);
       k = h.page;
-      shape = sv::hubShape(h);
+      // (Its header's lifetime line too: it comes and goes with the rows'
+      // looks, A19, 7.5, and the header follows: statsFollow().)
+      shape = static_cast<uint8_t>(sv::hubShape(h) | (sv::hubSubDue(l) ? sv::kShapeSub : 0u));
       break;
     }
     case PageKind::StatsShelf:
@@ -154,8 +178,18 @@ void LibraryPage::statsFollow(const sv::Lifetime& l, const char* why) {
   // ask the host would drop (the stats off, the card gone) is never due
   // (their looks are Off and No card).
   if (look.askDue && ui_.statsHeld()) ui_.statsAsk(sv::UiAsk::Visit);
-  if (sig == statsSigDrawn()) return;  // (nothing it draws moved: a landing's second version move, Idle to Working)
+  const uint32_t drawn = statsSigDrawn();
+  if (sig == drawn) return;  // (nothing it draws moved: a landing's second version move, Idle to Working)
   keepSig(sig);
+  const uint32_t moved = sig ^ drawn;
+  constexpr uint32_t kSub = static_cast<uint32_t>(sv::kShapeSub) << 16;
+  // The hub's header line came or went (the boot fold's end, a play counted
+  // on the empty hub, the stats off): the header again, about 5 ms, as 7.4
+  // has it ("At once: the header and its sub"). Under a modal or in the
+  // dark it is drawn whole when the page shows again (repaintUnder(),
+  // redrawAll()); a toast over it keeps its row (gfx's cover).
+  if ((moved & kSub) && ui_.pageShowing()) repaintHeader();
+  if (!(moved & ~kSub)) return;  // (the header alone)
   minute_ = static_cast<uint16_t>(l.nowMin);  // (row 6 drawn again with the rest)
   Serial.printf("[ui] stats: %s drawn again in place (%s): %s\n", pageKindName(static_cast<uint8_t>(kind_)), why,
                 sv::lookName(look.look));
@@ -163,11 +197,24 @@ void LibraryPage::statsFollow(const sv::Lifetime& l, const char* why) {
   // where it stands), no bar put back (-1: across a new ask none is, 7.2),
   // every row new (0), no lead item (the hub has none; a shelf's tray is
   // S10's). Under a modal or in the dark the page is drawn whole when it
-  // shows again.
-  ui_.list().recountStaged(-1, -1, 0, false);
+  // shows again. A text alone moved (the shape the same: each row still the
+  // kind it was, the Try again row there or not as before): a finger on a
+  // row keeps its press, its tap the row it was (a tap across a landing's
+  // news, or Working's line to Waiting's).
+  const bool sameRows = !((moved >> 16) & ~static_cast<uint32_t>(sv::kShapeSub) & 0xFFu);
+  ListView& list = ui_.list();
+  list.recountStaged(-1, -1, 0, false, sameRows);
+  // The empty state to No card's line (the card pulled with nothing
+  // played): no rows either way, so the recount owes nothing but the line's
+  // strip; the band is drawn whole once (its disc, lines and Shuffle all
+  // gone). Week's own empty state is S11's.
+  if (kind_ == PageKind::StatsHub &&
+      sv::hubDrawsWhole(static_cast<sv::Look>((drawn >> 16) & 7u), look.look)) {
+    list.invalidate();
+  }
 }
 
-bool LibraryPage::statsNews() {
+bool LibraryPage::statsNews(const char* why) {
   // A page that drew the snapshot's rows (a shelf's: S10) has none now:
   // attached again at 0 rows, by the Ui (what reads the snapshot closed
   // first). The hub and Week read the snapshot at each draw: drawn again.
@@ -177,7 +224,7 @@ bool LibraryPage::statsNews() {
   }
   sv::Lifetime l;
   ui_.statsLifetime(l);
-  statsFollow(l, "the stats' news");
+  statsFollow(l, why);
   return false;
 }
 
@@ -188,8 +235,8 @@ void LibraryPage::statsUpdate() {
     // The Artists root's row at the boot fold's end (7.3, 7.10, A20): its
     // line drawn again in place, once.
     if (!sv::entryFoldEnded(sv::EntryLine::Counting, l.folding)) return;
-    sv::entryLine(l, smallWidth, nullptr, headerSub_, sizeof(headerSub_));
-    entry_ = EntryRow::Shown;
+    const sv::EntryLine k = sv::entryLine(l, smallWidth, nullptr, headerSub_, sizeof(headerSub_));
+    entry_ = k == sv::EntryLine::Unread ? EntryRow::Unread : EntryRow::Shown;  // (Unread: no chevron, opens nothing)
     ui_.list().refreshTopRow();
     Serial.printf("[ui] stats: Artists' first row at the boot fold's end: \"%s\"\n", headerSub_);
     return;
@@ -221,12 +268,31 @@ void LibraryPage::statsFrame() {
   const char* name = pageKindName(static_cast<uint8_t>(kind_));
   if (c.item == ListView::FrameCost::kEmptyLine) {
     Serial.printf("[ui] stats: %s: its line staged in place\n", name);
-  } else if (kind_ == PageKind::StatsHub && c.item <= sv::kHubRows) {
-    Serial.printf("[ui] stats: %s: row %u (%s) staged in place\n", name, static_cast<unsigned>(c.item + 1),
-                  kHubRowNames[c.item]);
-  } else {
-    Serial.printf("[ui] stats: %s: item %u staged in place\n", name, static_cast<unsigned>(c.item));
+    return;
   }
+  // A position past the items is the ground filled where an old row was
+  // (Try again gone, the card pulled), not a row of the hub's.
+  if (c.item >= ui_.list().layout().itemCount()) {
+    Serial.printf("[ui] stats: %s: position %u, past the rows, filled in place\n", name,
+                  static_cast<unsigned>(c.item + 1));
+    return;
+  }
+  if (kind_ == PageKind::StatsHub) {
+    // (The hub has no lead items: its item is its row, named as hubLook()
+    // has it now: the status row with no clock, Try again at index 6.)
+    sv::Lifetime l;
+    ui_.statsLifetime(l);
+    const sv::HubLook h = hubNow(l);
+    if (c.item < h.rows) {
+      const sv::HubItem& it = h.item[c.item];
+      Serial.printf("[ui] stats: %s: row %u (%s) staged in place\n", name, static_cast<unsigned>(c.item + 1),
+                    it.kind == sv::RowKind::Status     ? "the status row"
+                    : it.kind == sv::RowKind::TryAgain ? kHubRowNames[sv::kHubRows]
+                                                       : kHubRowNames[static_cast<uint32_t>(it.row)]);
+      return;
+    }
+  }
+  Serial.printf("[ui] stats: %s: item %u staged in place\n", name, static_cast<unsigned>(c.item));
 }
 
 // ---- the list ----
@@ -448,6 +514,8 @@ void LibraryPage::printStats() {
                     entry_ == EntryRow::None ? "none (at its enter(): the stats off, the card out, behind the "
                                                "fence, uil's library, or no artists)"
                     : entry_ == EntryRow::Counting ? "the listening stats' row, folding: \""
+                    : entry_ == EntryRow::Unread   ? "the listening stats' row, opening nothing (the fold ended with "
+                                                     "the stats off): \""
                                                    : "the listening stats' row: \"",
                     entry_ == EntryRow::None ? "" : headerSub_, entry_ == EntryRow::None ? "" : "\"");
     } else {

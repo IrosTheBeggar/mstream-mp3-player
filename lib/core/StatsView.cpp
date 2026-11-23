@@ -160,6 +160,17 @@ bool asksOnEdge(const Lifetime& l) {
   return st != State::Off && st != State::NoCard && st != State::Empty;
 }
 
+bool risesCardOut(const Lifetime& l) { return !l.madeUp && stateOf(l) == State::NoCard; }
+
+PhaseInfo phaseSeen(const PhaseInfo& host, bool roseCardOut) {
+  PhaseInfo p = host;
+  if (roseCardOut && host.phase == Phase::Idle) {
+    p.phase = Phase::NoCard;
+    p.outcome = Outcome::CardAway;
+  }
+  return p;
+}
+
 // ---------------------------------------------------------------------------
 // The held condition
 // ---------------------------------------------------------------------------

@@ -180,10 +180,15 @@ public:
   // a fling a dialog that opened by itself caught: the headphones lost, a
   // play that failed), and on 2026-10-14 that held the library update's
   // save 260 s with the screen off. (ScanScheduler::listHolds() holds
-  // nothing for one in the dark either.)
+  // nothing for one in the dark either.) A still list pushing a recount's
+  // stale items alone (ListView::stagingOnly(): the stats pages' rows staged
+  // in place, one a pass) isn't moving: those are in-place pushes, as
+  // refreshRow()'s, which hold nothing. (Held, the hub's restage at a
+  // visit's take, Waiting's line to Working's, gave the Rank lane a list
+  // wait and the take put back its block: S9's review.)
   bool listMoving() const {
     return started_ && !suspended_ && !dark_ && !identifying_ && !modalUp() && page_ &&
-           (page_->animating() || (railHold_ && list_.attached() && list_.railTouch()));
+           ((page_->animating() && !list_.stagingOnly()) || (railHold_ && list_.attached() && list_.railTouch()));
   }
   // A cover may be made now: the UI is up and lit, the whole UI or the
   // glance (which shows the cover and the waveform: app/CardTasks gates
@@ -440,6 +445,10 @@ public:
   // The held condition as last evaluated (statsview::onStatsPages()): the
   // snapshot is held exactly while it is true.
   bool statsHeld() const { return statsHeld_; }
+  // The page's own pixels reach the panel now: lit, no modal over it, no
+  // banner (a stats page's header drawn again outside enter(); else the
+  // modal's end, repaintUnder(), or the wake's redrawAll() draws it whole).
+  bool pageShowing() const { return started_ && !suspended_ && !dark_ && !identifying_ && !modalUp(); }
 
 private:
   enum class TouchOn : uint8_t { None, Bar, Toast, Sheet, Volume, Jump, Dialog, Coach, Page, Sleep, Filters };
@@ -548,8 +557,11 @@ private:
   // is drawn whole when it goes.
   void statsReattach(const char* why);
   // The stats' news (UiHost::statsNews(), consumed here once a pass): the
-  // stats page shown follows it.
-  void statsNewsPass();
+  // stats page shown follows it. Also at the wake (`why` "the wake"),
+  // before redrawAll(): a look that moved in the dark with no news (a play
+  // counted on the empty hub, the card back, the wake's own ask) is the
+  // layout the wake's whole draw uses (7.10: "as the free left it").
+  void statsNewsPass(const char* why);
   // uiS (no wake: the dark's state can be read) and uiSh (the hub, as the
   // entry row's tap; its push's ms).
   void statsPrint();
@@ -728,6 +740,10 @@ private:
   // The stats pages' held condition as last evaluated (statsEdge()), in the
   // padding after railHold_ (ui::Ui stays main's 9,416 B: S3b's call 2).
   bool statsHeld_ = false;
+  // Its rise came with the card out, nothing asked since (statsview::
+  // risesCardOut(): statsPhase() reads Idle as No card, phaseSeen()), until
+  // a page's ask or the fall. In the same hole.
+  bool statsCardOut_ = false;
   // The list's current motion, for its "[ui] scroll:" line (a page without
   // a list, Now Playing's seek bar: "[ui] scrub:"; a finger on the A-Z
   // rail: "[ui] rail scrub:", its band frames and its rail-only frames

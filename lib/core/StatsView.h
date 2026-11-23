@@ -184,6 +184,21 @@ S phaseLine(Phase p);
 // played (Empty asks nothing), or a made-up view is on (l.madeUp: look
 // only, D16).
 bool asksOnEdge(const Lifetime& l);
+// The rise with the card out asks nothing (above), and StatsLists records
+// No card only for an ask asked or a snapshot held (its loop()'s card-gone
+// branch). So on the session's first visit made with the card out its
+// phase stays Idle, and once the card is back pageLook() would read Idle's
+// Working line with an ask due: the page would ask by itself, against 4.4
+// ("When the card comes back, the page offers Try again; nothing asks by
+// itself") and the owner's call 3. The Ui keeps the rise's mark
+// (risesCardOut(): the card out, not a made-up view) until a page's ask or
+// the held condition's fall, and the pages read the phase through
+// phaseSeen(): Idle under the mark reads No card, as 4.4's "An ask asked
+// while the card is away is dropped at once". The card back then offers
+// Try again with stats.card_back, no ask due. A phase the host has moved
+// (an ask under way, a console ask's outcome) is the host's.
+bool risesCardOut(const Lifetime& l);
+PhaseInfo phaseSeen(const PhaseInfo& host, bool roseCardOut);
 
 // ---------------------------------------------------------------------------
 // The held condition (7.1, 9.7): on the stats pages
@@ -309,8 +324,10 @@ Control controlOf(RowKind k);
 // the title alone) or with the stats off.
 bool hubSubDue(const Lifetime& l);
 // The hub can be shown (4.4: not with the stats off, behind the update's
-// fence, nor over uil's synthetic library): console uiSh's refusal. (The
-// card out still shows it, its No card line.)
+// fence, nor over uil's synthetic library): console uiSh's refusal, and the
+// Artists root's latched entry row's tap (A20's "Couldn't read the stats",
+// or a row whose stats went off since its latch, opens nothing: the double
+// buzz). (The card out still shows it, its No card line.)
 bool hubReachable(const Lifetime& l, bool indexReady, bool synthetic);
 // What the hub draws, as a byte: its look (which gives its row count: 0, 6,
 // or 7 with Try again; and its open rows' line kind) and each row's kind
@@ -321,8 +338,23 @@ bool hubReachable(const Lifetime& l, bool indexReady, bool synthetic);
 // (RAM): a change no news brings (the card back: No card's line to Try
 // again; a play counted on the empty hub; the stats off; the clock set; a
 // day that opens rows 3-5) restages it, so no row drawn later disagrees
-// with those on screen.
+// with those on screen. Bit 7 is never set: it is the page's, for its
+// header's line (kShapeSub).
 uint8_t hubShape(const HubLook& h);
+// The bit a page ORs into the hub's shape when its header draws the
+// lifetime line (hubSubDue()): the line comes and goes with the boot fold's
+// end (A19), a play counted on the empty hub (7.5) and the stats off, and
+// the header is drawn again then (7.4: "At once: the header and its sub"),
+// alone when nothing else moved.
+constexpr uint8_t kShapeSub = 0x80;
+// The hub drawn as its empty state (7.5: the band whole, Shuffle all live)
+// whose look now has no rows either (No card's line alone, the card pulled):
+// a recount from no items to none owes no position (listlayout::staging()
+// keeps the ground under an old empty line), so the page draws the band
+// whole once; else the disc, the lines and a dead Shuffle all would stay
+// around the new line. (The other way, the empty state covers the band as
+// it comes: ListView::drawEmpty(). To rows, every position is staged.)
+constexpr bool hubDrawsWhole(Look drawn, Look now) { return drawn == Look::NoPlays && now == Look::NoCard; }
 // ... and the texts a look draws, as a u16, exact: the look (3 bits) and
 // its line's id (Pending's phase line, a reason, the No card line, a
 // closed shelf's), or, served, the snapshot's version (its ask's: a new

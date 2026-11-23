@@ -1196,9 +1196,10 @@ void LibraryPage::drawTopRow(ListView::Row& r) {
 // top; the rest of the row opens the editor (7.4).
 void LibraryPage::onTopRowTap(int x, bool rightEdge) {
   if (root() && segment() == LibrarySegment::Artists) {
-    // The listening stats' row (7.3): the hub, after the tap's tick. It asks
-    // nothing itself: the held condition's rise does (Ui::showTop()).
-    if (entry_ != EntryRow::None) ui_.push(page(PageKind::StatsHub, 0));
+    // The listening stats' row (7.3): the hub, after the tap's tick, while
+    // it can be shown. It asks nothing itself: the held condition's rise
+    // does (Ui::showTop()).
+    entryTap();
     return;
   }
   if (!moodRow()) return;

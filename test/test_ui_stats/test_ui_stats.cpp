@@ -83,7 +83,13 @@
 // - a new minute: when "25 min ago" moves, and the minute from its low
 //   16 bits;
 // - the latched entry row at the boot fold's end (A20: "Couldn't read the
-//   stats" with the stats off since).
+//   stats" with the stats off since), and its tap's reach (that row opens
+//   nothing);
+// - S9's review: the card back after the session's first visit was made
+//   with the card out (the rise's mark through phaseSeen(): Try again with
+//   "The card is back", nothing due; a phase the host moved is its own);
+//   the shape's bit 7 left for the header's line; the empty state to No
+//   card's line drawn whole (hubDrawsWhole()).
 // Run: pio test -e native -f test_ui_stats
 #include <unity.h>
 
@@ -987,6 +993,85 @@ void test_the_card_back_on_every_page() {
   glueOn.on = false;
   TEST_ASSERT_EQUAL_STRING("off", lookName(hubLook(glueOn, noCard, nullptr).page.look));
   TEST_ASSERT_FALSE(entryDue(glueOn, true, false, 12));
+}
+
+// The session's first visit made with the card out (S9's review): the rise
+// asks nothing (D3), StatsLists records nothing (no ask, no snapshot), and
+// its phase stays Idle. Read through the rise's mark (phaseSeen()), the card
+// back offers Try again with "The card is back", nothing due, on every page.
+void test_the_card_back_after_a_rise_with_the_card_out() {
+  Lifetime out = dated();
+  out.cardIn = false;
+  const Lifetime back = dated();
+  // The mark: the card out at the rise; not for the stats off (Off first),
+  // the card in, nothing played, or a made-up view.
+  TEST_ASSERT_TRUE(risesCardOut(out));
+  TEST_ASSERT_FALSE(asksOnEdge(out));
+  TEST_ASSERT_FALSE(risesCardOut(back));
+  Lifetime offOut = out;
+  offOut.on = false;
+  TEST_ASSERT_FALSE(risesCardOut(offOut));
+  Lifetime emptyIn = dated();
+  emptyIn.plays = 0;
+  TEST_ASSERT_FALSE(risesCardOut(emptyIn));
+  Lifetime madeUpOut = out;
+  madeUpOut.madeUp = true;
+  TEST_ASSERT_FALSE(risesCardOut(madeUpOut));
+
+  const PhaseInfo idle = phase(Phase::Idle);
+  const PhaseInfo seen = phaseSeen(idle, true);
+  TEST_ASSERT_EQUAL(Phase::NoCard, seen.phase);
+  TEST_ASSERT_EQUAL(Outcome::CardAway, seen.outcome);
+  TEST_ASSERT_EQUAL_UINT16(idle.version, seen.version);
+  // Without the mark, Idle as ever (D9 as replaced: a later rise with the
+  // card in has asked; a Cancelled ask's one due).
+  TEST_ASSERT_EQUAL(Phase::Idle, phaseSeen(idle, false).phase);
+  HubLook h = hubLook(back, idle, nullptr);
+  TEST_ASSERT_TRUE(h.page.askDue);  // (what the page did before: an ask by itself)
+
+  // The card still out: the No card line alone, no ask.
+  h = hubLook(out, seen, nullptr);
+  TEST_ASSERT_EQUAL_STRING("no card", lookName(h.page.look));
+  TEST_ASSERT_EQUAL_UINT32(0, h.rows);
+  TEST_ASSERT_FALSE(h.page.askDue);
+  // Back: Try again with stats.card_back, nothing due; the shape moved, so
+  // the page restages with no news.
+  const HubLook was = h;
+  h = hubLook(back, seen, nullptr);
+  TEST_ASSERT_EQUAL_STRING("retry", lookName(h.page.look));
+  TEST_ASSERT_EQUAL_UINT32(7, h.rows);
+  TEST_ASSERT_EQUAL(RowKind::TryAgain, h.item[6].kind);
+  lineIs(Line::Text, S::stats_card_back, h.item[6], "hub, the first visit's card back");
+  TEST_ASSERT_FALSE(h.page.askDue);
+  TEST_ASSERT_NOT_EQUAL(hubShape(was), hubShape(h));
+  for (uint32_t s = 0; s < kShelves; ++s) {
+    const ShelfLook k = shelfLook(shelfId(static_cast<Shelf>(s)), back, seen, nullptr);
+    TEST_ASSERT_EQUAL_STRING("retry", lookName(k.page.look));
+    TEST_ASSERT_EQUAL(static_cast<int>(S::stats_card_back), static_cast<int>(k.page.line));
+    TEST_ASSERT_FALSE(k.page.askDue);
+  }
+  const WeekLook w = weekLook(back, seen, nullptr);
+  TEST_ASSERT_TRUE(w.button);
+  TEST_ASSERT_EQUAL(static_cast<int>(S::stats_card_back), static_cast<int>(w.page.line));
+  TEST_ASSERT_FALSE(w.page.askDue);
+  // Nothing played on the card back: the empty state, as ever.
+  Lifetime emptyBack = dated();
+  emptyBack.plays = 0;
+  TEST_ASSERT_EQUAL_STRING("no plays", lookName(hubLook(emptyBack, seen, nullptr).page.look));
+
+  // A phase the host has moved is the host's: an ask under way, a console
+  // ask's outcome, a landing.
+  for (const PhaseInfo& p : {phase(Phase::Working), phase(Phase::Waiting), phase(Phase::NoRoom, Outcome::NoRoom),
+                             phase(Phase::Unread, Outcome::Io), kReady,
+                             phase(Phase::NoCard, Outcome::CardAway, sv::kWhyCard)}) {
+    const PhaseInfo q = phaseSeen(p, true);
+    TEST_ASSERT_EQUAL(p.phase, q.phase);
+    TEST_ASSERT_EQUAL(p.outcome, q.outcome);
+    TEST_ASSERT_EQUAL_UINT8(p.why, q.why);
+  }
+  Snap full;
+  put(full, fullCard());
+  TEST_ASSERT_EQUAL_STRING("served", lookName(hubLook(back, phaseSeen(kReady, true), full.s()).page.look));
 }
 
 // ---------------------------------------------------------------------------
@@ -2273,6 +2358,21 @@ void test_the_hub_s_sub_reach_and_shape() {
   l = dated();
   l.plays = 0;
   TEST_ASSERT_TRUE(hubReachable(l, true, false));
+  // The latched entry row's tap opens what uiSh would: never with the stats
+  // off, so A20's "Couldn't read the stats" row (entryLine()'s Unread is
+  // exactly the stats off) opens nothing.
+  char entry[96];
+  int epx = 6;
+  for (int k = 0; k < 7; ++k) {
+    Lifetime e = k == 1 ? dated(5) : k == 2 ? noClock() : dated();
+    if (k == 3) e.cardIn = false;
+    if (k == 4) e.plays = 0;
+    if (k == 5) e.on = false;
+    if (k == 6) e.folding = true;
+    const bool unread = entryLine(e, monoWidth, &epx, entry, sizeof(entry)) == EntryLine::Unread;
+    TEST_ASSERT_EQUAL(!e.on, unread);
+    if (unread) TEST_ASSERT_FALSE(hubReachable(e, true, false));
+  }
 
   // The shape: one byte per structure.
   Snap full, lists, nc, ss;
@@ -2325,6 +2425,17 @@ void test_the_hub_s_sub_reach_and_shape() {
       TEST_ASSERT_NOT_EQUAL_MESSAGE(hubShape(looks[i]), hubShape(looks[j]), msg);
     }
   TEST_ASSERT_NOT_EQUAL(hubShape(looks[4]), hubShape(looks[5]));  // the card back restages
+  // Bit 7 is the page's (its header's line): no look sets it.
+  for (size_t i = 0; i < n; ++i) TEST_ASSERT_EQUAL_UINT8(0, hubShape(looks[i]) & kShapeSub);
+  // The empty state to No card's line (no rows either way: nothing staged)
+  // draws the band whole; every other pair stages (or covers it: the empty
+  // state's own draw).
+  for (int a = 0; a <= static_cast<int>(Look::Closed); ++a)
+    for (int b = 0; b <= static_cast<int>(Look::Closed); ++b)
+      TEST_ASSERT_EQUAL(a == static_cast<int>(Look::NoPlays) && b == static_cast<int>(Look::NoCard),
+                        hubDrawsWhole(static_cast<Look>(a), static_cast<Look>(b)));
+  TEST_ASSERT_EQUAL_UINT32(0, looks[6].rows);  // (nothing played: no rows)
+  TEST_ASSERT_EQUAL_UINT32(0, looks[4].rows);  // (the card out: no rows)
   // A text alone doesn't move it: Working against Waiting, one Retry
   // reason against another, a served snapshot against another's data.
   TEST_ASSERT_EQUAL_UINT8(hubShape(hubLook(dated(), phase(Phase::Working), nullptr)),
@@ -2552,6 +2663,7 @@ int main(int, char**) {
   RUN_TEST(test_the_phase_lines_on_every_page);
   RUN_TEST(test_the_try_again_row_s_place);
   RUN_TEST(test_the_card_back_on_every_page);
+  RUN_TEST(test_the_card_back_after_a_rise_with_the_card_out);
   RUN_TEST(test_the_shelves);
   RUN_TEST(test_the_tray_by_days_and_its_hits);
   RUN_TEST(test_recently_played_s_sections);

@@ -478,8 +478,10 @@ public:
   // release), once a pass from Ui::loop() while a stats page shows: the hub
   // restages its rows in place (one a pass). True: attach the page again at
   // 0 rows (Ui's, after closing what reads the snapshot): a page that drew
-  // the snapshot's rows has none to draw now (S3a released it).
-  bool statsNews();
+  // the snapshot's rows has none to draw now (S3a released it). `why`: its
+  // [ui] words ("the stats' news"; "the wake": Ui::setDark()'s, before the
+  // wake's whole draw).
+  bool statsNews(const char* why);
   // uiS: the page's part (its kind, look, the rows drawn and their lines;
   // the Artists root's entry row).
   void printStats();
@@ -531,15 +533,18 @@ private:
 
   // ---- the listening stats (LibraryStats.cpp) ----
   // The Artists root's entry row (7.3): none, its line drawn while the
-  // boot's fold runs ("Counting plays…": drawn again at its end, A20), or
-  // drawn (the lifetime line, "Plays show up as you listen", or "Couldn't
-  // read the stats").
-  enum class EntryRow : uint8_t { None, Counting, Shown };
+  // boot's fold runs ("Counting plays…": drawn again at its end, A20),
+  // drawn (the lifetime line, "Plays show up as you listen"), or the fold
+  // ended with the stats off ("Couldn't read the stats": no chevron, and a
+  // tap opens nothing, the hub being unreachable then: 4.4's Off).
+  enum class EntryRow : uint8_t { None, Counting, Shown, Unread };
   // Decided here (enter(), a segment switched to Artists), never while the
   // list shows (it would move every artist by 42 px): its line formatted
   // into headerSub_, which the root's header doesn't use.
   void latchEntry();
   void drawEntryRow(ListView::Row& r);
+  // Its tap: the hub, while it can be shown (statsview::hubReachable()).
+  void entryTap();
   // A stats page entered: its shape, the minute, an ask due (D9 as
   // replaced: Idle with nothing served and the stats on).
   void statsEntering();
@@ -552,14 +557,17 @@ private:
   void statsFrame();
   // The page follows what it reads (the news, each pass's look): an ask
   // due made (D9 as replaced); a moved shape or text drawn again in place,
-  // the rows staged one a pass (ListView::recountStaged()), and kept.
+  // the rows staged one a pass (ListView::recountStaged()), and kept; the
+  // header again when its line came or went; the band whole from the empty
+  // state to No card's line (statsview::hubDrawsWhole()).
   void statsFollow(const statsview::Lifetime& l, const char* why);
   // The hub as it is now (the phase, the snapshot: Ui's; `l` the lifetime).
   statsview::HubLook hubNow(const statsview::Lifetime& l) const;
   // What the stats page draws now, as its shape (the hub's
-  // statsview::hubShape(); a shelf's and Week's their look, until S10 and
-  // S11 draw them) in bits 16-23 and its texts (statsview::lookText()) in
-  // 0-15; and its look. statsShape_ and statsText_ keep what it drew.
+  // statsview::hubShape(), with kShapeSub when its header draws the
+  // lifetime line; a shelf's and Week's their look, until S10 and S11 draw
+  // them) in bits 16-23 and its texts (statsview::lookText()) in 0-15; and
+  // its look. statsShape_ and statsText_ keep what it drew.
   uint32_t statsSigNow(const statsview::Lifetime& l, statsview::PageLook* look = nullptr) const;
   uint32_t statsSigDrawn() const { return static_cast<uint32_t>(statsShape_) << 16 | statsText_; }
   void keepSig(uint32_t sig) {
