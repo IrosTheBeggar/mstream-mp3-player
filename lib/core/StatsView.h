@@ -212,6 +212,22 @@ PhaseInfo phaseSeen(const PhaseInfo& host, bool roseCardOut);
 // suspended (D2), and the library not uil's synthetic one. The snapshot is
 // held exactly while it is true: its edges ask and release.
 bool onStatsPages(const NavModel& nav, bool dark, bool suspended, bool synthetic);
+// A snapshot asked with no clock, the clock set since (a computer's @time
+// while the pages are up: the status row's "Plug in to the MP3 Player
+// tab"). Its 7 days were written as 0 and the lists that need the clock
+// (Most played's 7 and 30 days, New finds, Old favourites) weren't offered,
+// while the pages' kinds now come from a dated lifetime: the hub's row 1
+// open, Week reached, New finds and Old favourites open from 30 counting
+// days, the tray. None of it is their figures (7.7: no week without dates),
+// so the Ui releases it while the held condition is up, as a falling edge
+// would (S3b's review of S11). The page shown then reads Idle over nothing
+// served: the Working line and its one ask (D9 as replaced; D6: no Visit
+// ask over one served). The new ask is dated, its turn's clock (one whose
+// turn came before the clock lands undated and is released once more).
+// Never with no clock (the snapshot is the pages' own then: Week Closed,
+// the status row), nor for a made-up snapshot or under a made-up view's
+// lifetime (look only: view 3 is undated on purpose).
+bool undatedStale(const Lifetime& l, const Snapshot* snap);
 
 // ---------------------------------------------------------------------------
 // The entry row (7.3)
@@ -620,7 +636,9 @@ struct WeekLook {
   bool button = false;  // the empty state's Try again
 };
 // As the hub's look; with no clock Closed (stats.needs_dates: never reached,
-// the hub's row 1 is the status row then).
+// the hub's row 1 is the status row then). An undated snapshot under a
+// dated lifetime (the clock set since its ask) would read Served with zeros:
+// the Ui releases it before a page reads it (undatedStale()).
 WeekLook weekLook(const Lifetime& l, const PhaseInfo& p, const Snapshot* snap);
 struct WeekFigures {
   uint64_t listenedMs = 0;  // the 7 days'

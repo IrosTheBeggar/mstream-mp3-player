@@ -1217,7 +1217,9 @@ void LibraryPage::weekStrip(M5Canvas& c, int top, int h, const sv::WeekFigures& 
     }
     c.fillRect(st::kWeekValueX, st::kWeekBaseY - top, st::kWeekLineW, 1, col::DIV);
   }
-  // (An undated snapshot, the clock set since its ask: no day to name.)
+  // (No day to name: a snapshot of 2026's first six days, weekFirstDay().
+  // An undated one isn't drawn: with no clock Week is Closed, and one whose
+  // clock was set since its ask is released first, Ui::statsUndated().)
   if (w.firstDay != statsfold::kUnsetDay && lineIn(Font::Small, st::kWeekDayY, top, h)) {
     for (int i = 0; i < kWeekDays; ++i) {
       const S day = st::dayShort(static_cast<uint16_t>(w.firstDay + i));

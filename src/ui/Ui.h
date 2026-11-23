@@ -576,6 +576,11 @@ private:
   // counted on the empty hub, the card back, the wake's own ask) is the
   // layout the wake's whole draw uses (7.10: "as the free left it").
   void statsNewsPass(const char* why);
+  // A served snapshot asked with no clock while the clock is set now
+  // (statsview::undatedStale(): its week and dated lists aren't the pages'
+  // figures): released. Once a pass while the held condition is up, before
+  // the news, which then takes it to the page shown. True: released.
+  bool statsUndated();
   // uiS (no wake: the dark's state can be read), uiSh (the hub, as the
   // entry row's tap; its push's ms) and uiS<shelf>[w] (a shelf over the
   // hub: statsview::shelfArg(); its push's ms).

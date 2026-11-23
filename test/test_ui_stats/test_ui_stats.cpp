@@ -107,7 +107,10 @@
 // the card back, never with the card out), its header's days and when the
 // header is drawn again, its texts (the count, the big day, Auto DJ's rate;
 // none for a week with nothing or an undated one), its columns, and the
-// status band off on it alone.
+// status band off on it alone. S11's review: a real ask's undated snapshot
+// once the clock is set (undatedStale(): never with no clock, a dated or
+// made-up snapshot, or a made-up view's lifetime), released, then Week and
+// the hub's Working line with one ask due, and the dated landing not stale.
 // Run: pio test -e native -f test_ui_stats
 #include <unity.h>
 
@@ -2313,7 +2316,9 @@ void test_week_as_the_page_draws_it() {
   TEST_ASSERT_FALSE(idle.button);
 
   // The first day: the snapshot's today and the six before (weekFigures()'s);
-  // an undated snapshot has none, nor its header (Closed in RAM anyway).
+  // an undated snapshot has none, nor its header. (No page draws one: with
+  // no clock Week is Closed, and the clock set since its ask releases it
+  // first, undatedStale(): test_an_undated_snapshot_once_the_clock_is_set.)
   TEST_ASSERT_EQUAL_UINT16(kToday - 6, weekFirstDay(*a.s()));
   TEST_ASSERT_EQUAL_UINT16(weekFigures(*a.s()).firstDay, weekFirstDay(*a.s()));
   MadeUpView v3;
@@ -2422,6 +2427,133 @@ void test_week_as_the_page_draws_it() {
   TEST_ASSERT_TRUE(statusLineOn(kKindHub));
   TEST_ASSERT_TRUE(statusLineOn(kKindShelf));
   for (uint8_t k = 0; k < kKindHub; ++k) TEST_ASSERT_TRUE(statusLineOn(k));
+}
+
+namespace {
+
+// A real ask's snapshot (write(), not writeMadeUp(): no made-up mark): two
+// tracks played this session, none dated. Made with the clock unset (dated
+// false) it is ranked undated, so its 7 days are all 0 and the lists that
+// need the clock have no rows; else as an ask made today.
+void putReal(Snap& b, bool dated) {
+  std::vector<uint64_t> mem(sr::Ranker::kBytes / 8 + 1, 0);
+  sr::Ranker k;
+  k.begin(mem.data(), dated, kToday);
+  for (const uint64_t h : {uint64_t{0x51}, uint64_t{0x52}}) {
+    sf::Track t;
+    t.hash = h;
+    t.plays = 3;
+    t.firstAt = 0;  // (played, none dated)
+    t.lastOrd = 1;
+    k.track(t);
+  }
+  k.finish();
+  std::vector<uint64_t> wm(statsmap::Wanted::bytesFor(2) / 8 + 1, 0);
+  statsmap::Wanted w;
+  TEST_ASSERT_TRUE(w.region(reinterpret_cast<uint8_t*>(wm.data()), 2));
+  TEST_ASSERT_TRUE(w.add(0x51));
+  TEST_ASSERT_TRUE(w.add(0x52));
+  w.seal();
+  w.setId(0, 10);
+  w.setId(1, 11);
+  sv::Context ctx;
+  ctx.grade = sv::Grade::Lists;
+  ctx.buildStamp = kStamp;
+  ctx.trackCount = kTracks;
+  ctx.albums = kAlbums;
+  ctx.time = dated ? kToday * 86400u + 1 : 0;  // (a row's time: seconds since 2026, plus 1)
+  ctx.liveRound = 1;
+  ctx.sinceDay = kSince;
+  ctx.version = 9;
+  TEST_ASSERT_TRUE(sv::write(k, w, sr::Report(), ctx, b.s(), sv::kBound));
+  TEST_ASSERT_TRUE(sv::resolve(w, b.s()));
+}
+
+}  // namespace
+
+// S3b's review of S11: a snapshot asked with no clock, the clock set while
+// the pages are up (the status row's "Plug in to the MP3 Player tab" done).
+// Its week is 0 and its dated lists unoffered, so the Ui releases it
+// (undatedStale()) and the page asks once, dated.
+void test_an_undated_snapshot_once_the_clock_is_set() {
+  Snap u;
+  putReal(u, false);
+  TEST_ASSERT_TRUE(u->resolved());
+  TEST_ASSERT_FALSE(u->dated());
+  TEST_ASSERT_FALSE(u->madeUp());
+  for (uint32_t i = 0; i < sr::kWeekDays; ++i) {
+    TEST_ASSERT_EQUAL_UINT32(0, u->day(i).listenedMs);
+    TEST_ASSERT_EQUAL_UINT32(0, u->day(i).plays);
+  }
+  TEST_ASSERT_EQUAL_UINT32(2, u->rows(sr::kMostAll));
+  for (sr::List l : {sr::kMost7, sr::kMost30, sr::kNewFinds, sr::kOldFavourites})
+    TEST_ASSERT_EQUAL_UINT32(0, u->rows(l));
+
+  // What the pages would draw over it with the clock set (why it goes):
+  // Week served with no week (0 min, 0 plays, no bars, no day), the hub's
+  // row 1 open on the snapshot's line, New finds open on no rows.
+  const Lifetime now = dated();
+  const WeekLook w = weekLook(now, kReady, u.s());
+  TEST_ASSERT_EQUAL_STRING("served", lookName(w.page.look));
+  const WeekFigures f = weekFigures(*u.s());
+  TEST_ASSERT_EQUAL_UINT64(0, f.listenedMs);
+  TEST_ASSERT_EQUAL_UINT32(0, f.plays);
+  TEST_ASSERT_EQUAL_UINT16(sf::kUnsetDay, f.firstDay);
+  const HubLook h = hubLook(now, kReady, u.s());
+  TEST_ASSERT_EQUAL(RowKind::Open, h.item[static_cast<int>(HubRow::Week)].kind);
+  TEST_ASSERT_EQUAL(Line::Data, h.item[static_cast<int>(HubRow::Week)].line);
+  TEST_ASSERT_EQUAL(Line::Data, h.item[static_cast<int>(HubRow::NewFinds)].line);
+
+  // So it is stale: the clock set now, the snapshot undated, neither made up.
+  TEST_ASSERT_TRUE(undatedStale(now, u.s()));
+  TEST_ASSERT_TRUE(undatedStale(dated(5), u.s()));  // (the first month too: Week and row 1 open)
+  // Not with no clock: the pages' own (Week Closed, row 1 the status row).
+  TEST_ASSERT_FALSE(undatedStale(noClock(), u.s()));
+  TEST_ASSERT_EQUAL_STRING("closed", lookName(weekLook(noClock(), kReady, u.s()).page.look));
+  TEST_ASSERT_EQUAL(RowKind::Status, hubLook(noClock(), kReady, u.s()).item[0].kind);
+  // Nor with nothing served, a dated snapshot (either clock: one way only,
+  // the board's clock never unset within a boot), a made-up snapshot (view
+  // 3, no clock on purpose) or under a made-up view's lifetime.
+  TEST_ASSERT_FALSE(undatedStale(now, nullptr));
+  Snap d;
+  put(d, fullCard());
+  TEST_ASSERT_TRUE(d->dated());
+  TEST_ASSERT_FALSE(undatedStale(now, d.s()));
+  TEST_ASSERT_FALSE(undatedStale(noClock(), d.s()));
+  MadeUpView v3;
+  TEST_ASSERT_TRUE(madeUpView(3, kStamp, kTracks, kAlbums, &v3));
+  Snap m;
+  put(m, v3.spec);
+  TEST_ASSERT_TRUE(m->madeUp() && !m->dated());
+  TEST_ASSERT_FALSE(undatedStale(now, m.s()));
+  Lifetime view = now;
+  view.madeUp = true;
+  TEST_ASSERT_FALSE(undatedStale(view, u.s()));
+
+  // Released (StatsLists::release(): its landing's Ok kept, nothing
+  // served): the host's phase Idle, so Week and the hub read the Working
+  // line with one ask due (D9 as replaced), made with nothing served (D6).
+  const Phase idle = sv::phaseOf(0, Outcome::Ok, ScanScheduler::Wait::None, 0, false, false);
+  TEST_ASSERT_EQUAL_STRING("idle", sv::phaseName(idle));
+  const PhaseInfo after = phase(idle, Outcome::Ok);
+  const WeekLook wa = weekLook(now, after, nullptr);
+  TEST_ASSERT_EQUAL_STRING("pending", lookName(wa.page.look));
+  TEST_ASSERT_EQUAL(static_cast<int>(S::stats_counting), static_cast<int>(wa.page.line));
+  TEST_ASSERT_TRUE(wa.page.askDue);
+  TEST_ASSERT_FALSE(wa.button);
+  const HubLook ha = hubLook(now, after, nullptr);
+  TEST_ASSERT_TRUE(ha.page.askDue);
+  lineIs(Line::Text, S::stats_counting, ha.item[static_cast<int>(HubRow::Week)], "row 1 after the release");
+  // ... and the page's shape moved, so it is drawn again (the news).
+  TEST_ASSERT_NOT_EQUAL(lookText(w.page, u.s()), lookText(wa.page, nullptr));
+  // The new ask's landing, dated (its turn's clock): not stale, so once.
+  Snap r;
+  putReal(r, true);
+  TEST_ASSERT_TRUE(r->dated() && !r->madeUp());
+  TEST_ASSERT_EQUAL_UINT16(kToday, r->today());
+  TEST_ASSERT_FALSE(undatedStale(now, r.s()));
+  TEST_ASSERT_EQUAL_STRING("served", lookName(weekLook(now, kReady, r.s()).page.look));
+  TEST_ASSERT_EQUAL_UINT16(kToday - 6, weekFigures(*r.s()).firstDay);
 }
 
 void test_the_stat_value_s_segments() {
@@ -3258,6 +3390,7 @@ int main(int, char**) {
   RUN_TEST(test_day_labels);
   RUN_TEST(test_the_week_texts);
   RUN_TEST(test_week_as_the_page_draws_it);
+  RUN_TEST(test_an_undated_snapshot_once_the_clock_is_set);
   RUN_TEST(test_the_stat_value_s_segments);
   RUN_TEST(test_the_hub_rows_take_a_touch);
   RUN_TEST(test_the_hub_s_sub_reach_and_shape);

@@ -182,6 +182,10 @@ bool onStatsPages(const NavModel& nav, bool dark, bool suspended, bool synthetic
   return false;
 }
 
+bool undatedStale(const Lifetime& l, const Snapshot* snap) {
+  return snap && l.dated && !l.madeUp && !snap->dated() && !snap->madeUp();
+}
+
 // ---------------------------------------------------------------------------
 // The entry row
 // ---------------------------------------------------------------------------

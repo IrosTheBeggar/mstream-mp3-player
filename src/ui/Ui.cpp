@@ -1614,8 +1614,11 @@ void Ui::loop(uint32_t nowMs) {
   // remount's key) reaches a stats page in this pass, dark or under a
   // modal too, so it never draws rows of a block given back. (Counted in
   // the snapshot's part of a slow pass's line: a re-attach's enter(), its
-  // header and attach, would otherwise be in no part.)
-  if (host_.statsNews()) statsNewsPass("the stats' news");
+  // header and attach, would otherwise be in no part.) First, the pages'
+  // own release: a snapshot asked with no clock, the clock set since
+  // (statsUndated()), its news in this pass, before a page reads it.
+  const bool clockSet = statsHeld_ && statsUndated();
+  if (host_.statsNews()) statsNewsPass(clockSet ? "the clock set since its ask" : "the stats' news");
   snapshotUs = micros() - passT0;
   // The first boot, its language picked (or its picker left), and the
   // touch check main.cpp opened then closed (it suspended the UI until
@@ -3199,6 +3202,22 @@ void Ui::statsReattach(const char* why) {
   if (modalUp()) gfx::setDark(true);
   page_->enter(nav_.top());
   gfx::setDark(was);
+}
+
+// (Its own frame, kept off loop()'s: the lifetime is read only past the
+// pass's usual answers, nothing served or a dated snapshot.)
+__attribute__((noinline)) bool Ui::statsUndated() {
+  const statsvisit::Snapshot* s = statsSnapshot();
+  if (!s || s->dated()) return false;
+  statsview::Lifetime l;
+  statsLifetime(l);
+  if (!statsview::undatedStale(l, s)) return false;
+  // (A [listen] line; the version moves, so the pass's news follows. The
+  // page shown reads Idle's Working line and makes its one ask: D9 as
+  // replaced. Under a modal or with another page over the stats page, as
+  // for any release: statsNewsPass(), the next enter().)
+  host_.statsRelease("the clock set since its ask: an undated snapshot (no week, no dated lists)");
+  return true;
 }
 
 void Ui::statsNewsPass(const char* why) {
